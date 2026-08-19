@@ -1,0 +1,72 @@
+/* 工作区源代码管理面板（inspector）+ 中间栏的工作区 diff */
+
+.scm-panel { display:flex; min-height:0; height:100%; flex-direction:column; overflow:auto; }
+.scm-hint { margin:14px 10px; color:var(--faint); font-size:10.5px; line-height:1.6; }
+.scm-empty { display:flex; flex-direction:column; align-items:flex-start; gap:8px; margin:14px 10px; border:1px dashed var(--line2); border-radius:8px; padding:12px; color:var(--muted); font-size:10.5px; }
+.scm-empty > svg { color:var(--amber); }
+.scm-empty p { margin:0; line-height:1.6; }
+.scm-empty button { border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:3px 9px; color:var(--muted); font-size:10px; }
+.scm-empty button:hover { background:var(--raised); color:var(--ink); }
+
+.scm-branch { display:flex; flex:0 0 auto; flex-wrap:wrap; align-items:center; gap:6px; border-bottom:.5px solid var(--line); padding:8px 9px; }
+.scm-branch__name { display:inline-flex; min-width:0; align-items:center; gap:4px; }
+.scm-branch__name > svg { flex:0 0 auto; color:var(--accent); }
+.scm-branch__name b { overflow:hidden; color:var(--ink); font-size:11px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
+.scm-branch__upstream { display:inline-flex; align-items:center; gap:4px; border-radius:4px; background:var(--overlay); padding:1px 5px; color:var(--faint); font-size:9px; }
+.scm-branch__upstream i { color:var(--muted); font-style:normal; }
+.scm-branch__refresh { display:grid; width:22px; height:22px; margin-left:auto; place-items:center; border:1px solid var(--line2); border-radius:6px; background:var(--panel); color:var(--muted); }
+.scm-branch__refresh:hover:not(:disabled) { background:var(--raised); color:var(--ink); }
+.scm-branch__refresh:disabled { opacity:.5; }
+.scm-branch__root { width:100%; overflow:hidden; color:var(--faint); font-size:9px; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
+
+.scm-banner { display:flex; align-items:flex-start; gap:5px; margin:8px 9px 0; border:1px solid var(--line2); border-radius:7px; background:var(--overlay); padding:6px 8px; color:var(--muted); font-size:10px; line-height:1.55; }
+.scm-banner > svg { flex:0 0 auto; margin-top:1px; }
+.scm-banner.is-warning { border-color:color-mix(in lch,var(--amber) 30%,var(--line)); background:color-mix(in lch,var(--amber) 8%,var(--panel)); }
+
+.scm-commit { display:flex; flex:0 0 auto; flex-direction:column; gap:6px; padding:9px; }
+.scm-commit textarea { width:100%; min-height:46px; resize:vertical; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:6px 8px; color:var(--ink); font-size:11px; line-height:1.5; }
+.scm-commit textarea:focus { border-color:color-mix(in lch,var(--accent) 45%,var(--line2)); outline:none; }
+.scm-commit__submit { display:inline-flex; height:28px; align-items:center; justify-content:center; gap:5px; border:1px solid color-mix(in lch,var(--accent) 35%,var(--line2)); border-radius:7px; background:color-mix(in lch,var(--accent) 12%,var(--panel)); color:var(--accent); font-size:10.5px; font-weight:600; }
+.scm-commit__submit:hover:not(:disabled) { background:color-mix(in lch,var(--accent) 18%,var(--panel)); }
+.scm-commit__submit:disabled { border-color:var(--line2); background:var(--panel); color:var(--faint); }
+
+.scm-groups { display:flex; min-height:0; flex-direction:column; gap:2px; padding-bottom:14px; }
+.scm-group header { display:flex; align-items:center; gap:6px; padding:6px 9px 3px; }
+.scm-group header b { color:var(--muted); font-size:10px; font-weight:600; letter-spacing:.02em; }
+.scm-group.is-merge header b { color:var(--red); }
+.scm-group__count { border-radius:8px; background:var(--overlay); padding:0 5px; color:var(--faint); font-size:9px; }
+.scm-group__bulk { display:inline-flex; margin-left:auto; gap:2px; opacity:0; transition:opacity .12s; }
+.scm-group:hover .scm-group__bulk, .scm-group__bulk:focus-within { opacity:1; }
+.scm-group__bulk button, .scm-row__actions button { display:grid; width:20px; height:20px; place-items:center; border:0; border-radius:5px; background:transparent; color:var(--faint); }
+.scm-group__bulk button:hover, .scm-row__actions button:hover { background:var(--raised); color:var(--ink); }
+.scm-group__hint { margin:0 9px 4px; color:var(--faint); font-size:9.5px; line-height:1.5; }
+.scm-group ul { margin:0; padding:0; list-style:none; }
+
+.scm-row { display:flex; align-items:center; border-radius:5px; padding-right:4px; }
+.scm-row:hover { background:var(--raised); }
+.scm-row.is-active { background:color-mix(in lch,var(--accent) 12%,var(--panel)); box-shadow:inset 2px 0 var(--accent); }
+.scm-row__open { display:flex; min-width:0; min-height:24px; flex:1; align-items:center; gap:6px; border:0; background:transparent; padding:0 4px 0 9px; text-align:left; }
+.scm-row__name { flex:0 1 auto; overflow:hidden; color:var(--muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+.scm-row.is-active .scm-row__name { color:var(--ink); font-weight:600; }
+.scm-row__from { color:var(--faint); font-size:9px; font-style:normal; }
+.scm-row__dir { min-width:0; flex:1; overflow:hidden; color:var(--faint); font-size:9px; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
+.scm-row__meta { display:inline-flex; flex:0 0 auto; align-items:center; gap:4px; }
+.scm-row__conflict { border-radius:3px; background:color-mix(in lch,var(--red) 14%,var(--panel)); padding:0 4px; color:var(--red); font-size:8.5px; font-style:normal; }
+.scm-row__badge { display:grid; width:14px; place-items:center; color:var(--faint); font-family:var(--font-mono); font-size:9.5px; font-weight:700; }
+.scm-row__badge.is-added, .scm-row__badge.is-untracked { color:var(--green); }
+.scm-row__badge.is-deleted, .scm-row__badge.is-unmerged { color:var(--red); }
+.scm-row__badge.is-modified, .scm-row__badge.is-typechange { color:var(--amber); }
+.scm-row__actions { display:inline-flex; flex:0 0 auto; gap:2px; opacity:0; transition:opacity .12s; }
+.scm-row:hover .scm-row__actions, .scm-row__actions:focus-within { opacity:1; }
+
+.scm-commits { border-top:.5px solid var(--line); padding:8px 9px 16px; }
+.scm-commits header { display:flex; align-items:center; gap:5px; color:var(--faint); font-size:9.5px; }
+.scm-commits ul { margin:6px 0 0; padding:0; list-style:none; }
+.scm-commits li { display:flex; align-items:baseline; gap:6px; padding:2px 0; }
+.scm-commits code { flex:0 0 auto; color:var(--faint); font-family:var(--font-mono); font-size:9.5px; }
+.scm-commits span { min-width:0; flex:1; overflow:hidden; color:var(--muted); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
+.scm-commits small { flex:0 0 auto; color:var(--faint); font-size:9px; }
+
+.scm-diff__counts { display:inline-flex; flex:0 0 auto; gap:6px; font-family:var(--font-mono); font-size:10px; }
+.scm-diff__counts i { color:var(--green); font-style:normal; }
+.scm-diff__counts em { color:var(--red); font-style:normal; }

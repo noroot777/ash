@@ -1,9 +1,9 @@
-export type InspectorShortcutKey = "i" | "f" | "w" | "r" | "e";
+export type InspectorShortcutKey = "i" | "f" | "g" | "w" | "r" | "e";
 
 export const INSPECTOR_SHORTCUT_PREFIX = "i";
 export const INSPECTOR_SHORTCUT_TIMEOUT_MS = 1_000;
 
-const SHORTCUT_KEYS = new Set<InspectorShortcutKey>(["i", "f", "w", "r", "e"]);
+const SHORTCUT_KEYS = new Set<InspectorShortcutKey>(["i", "f", "g", "w", "r", "e"]);
 
 export function inspectorShortcutLabel(key: InspectorShortcutKey): string {
   return `${INSPECTOR_SHORTCUT_PREFIX.toUpperCase()} ${key.toUpperCase()}`;

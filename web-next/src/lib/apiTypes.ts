@@ -145,6 +145,86 @@ export type OpenerProbe = {
   note: string | null;
 };
 
+// ── 工作区源代码管理（SCM 面板）─────────────────────────────────────────────
+// 跟 `TaskDiffResult` 是两回事：那个是任务分支 vs 合入目标的只读 diff（给审查用），
+// 这里是**工作目录此刻**的暂存区/未暂存/未跟踪/冲突。字段与服务端 `git-status.ts`
+// 的同名类型一一对应。
+
+export type ScmChangeKind =
+  | "modified" | "added" | "deleted" | "renamed" | "copied" | "typechange" | "unmerged" | "untracked";
+
+export type ScmGroupId = "merge" | "staged" | "unstaged" | "untracked";
+export type ScmDiffSource = "staged" | "unstaged" | "untracked";
+
+export type ScmChange = {
+  path: string;
+  origPath: string | null;
+  kind: ScmChangeKind;
+  conflict: string | null;
+};
+
+export type ScmBranchInfo = {
+  head: string | null;
+  detached: boolean;
+  oid: string | null;
+  upstream: string | null;
+  ahead: number | null;
+  behind: number | null;
+};
+
+export type ScmCommit = {
+  sha: string;
+  shortSha: string;
+  subject: string;
+  author: string;
+  at: string;
+};
+
+export type ScmStatus = {
+  branch: ScmBranchInfo;
+  merge: ScmChange[];
+  staged: ScmChange[];
+  unstaged: ScmChange[];
+  untracked: ScmChange[];
+  truncated: boolean;
+  operation: "merge" | "rebase" | "cherry-pick" | "revert" | null;
+};
+
+export type ScmOverview = {
+  root: FileWorkspaceRoot;
+  /** 任务此刻在不在跑。写操作要不要弹「agent 正在写这个目录」的确认，看它。 */
+  taskRunning: boolean;
+  status: ScmStatus;
+  commits: ScmCommit[];
+};
+
+export type ScmFileDiff = {
+  path: string;
+  origPath: string | null;
+  source: ScmDiffSource;
+  diff: string;
+  truncated: boolean;
+  limitBytes: number;
+  binary: boolean;
+};
+
+/**
+ * 写操作的统一返回：各自的结果字段 + 一份**刷新后**的状态。
+ * 状态随写操作一起回来，面板不必再补一次 GET，也就没有「按钮已响应、列表还是旧的」那一帧。
+ */
+export type ScmWriteResult = {
+  ok: true;
+  affected: number;
+  status: ScmStatus;
+};
+
+export type ScmCommitResult = {
+  ok: true;
+  sha: string;
+  subject: string;
+  status: ScmStatus;
+};
+
 export type AcceptTaskWarning = {
   reason: "temporary_cleanup_failed";
   message: string;

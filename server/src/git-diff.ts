@@ -1,5 +1,6 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { cappedGitStdout } from "./git-exec.js";
 import { expandHome, isGitRepo, resolveTaskMergeTarget, worktreeBranchName } from "./git.js";
 
 const exec = promisify(execFile);
@@ -41,43 +42,6 @@ async function localBranchExists(repo: string, branch: string): Promise<boolean>
   } catch {
     return false;
   }
-}
-
-async function cappedGitStdout(
-  repo: string,
-  args: string[],
-  limitBytes: number,
-): Promise<{ text: string; truncated: boolean }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("git", ["-C", repo, ...args], { stdio: ["ignore", "pipe", "pipe"] });
-    const chunks: Buffer[] = [];
-    const errors: Buffer[] = [];
-    let size = 0;
-    let errorSize = 0;
-    let truncated = false;
-    child.stdout.on("data", (chunk: Buffer) => {
-      if (size >= limitBytes) {
-        truncated = true;
-        return;
-      }
-      const remaining = limitBytes - size;
-      const kept = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
-      chunks.push(kept);
-      size += kept.length;
-      if (kept.length < chunk.length) truncated = true;
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      if (errorSize >= 64 * 1024) return;
-      const kept = chunk.subarray(0, 64 * 1024 - errorSize);
-      errors.push(kept);
-      errorSize += kept.length;
-    });
-    child.once("error", reject);
-    child.once("close", (code) => {
-      if (code === 0) resolve({ text: Buffer.concat(chunks).toString("utf8"), truncated });
-      else reject(new Error(Buffer.concat(errors).toString("utf8").trim() || `git exited ${code}`));
-    });
-  });
 }
 
 export async function taskBranchDiff(
