@@ -36,3 +36,20 @@ export function requireTmpDb(name: string): void {
     process.exit(1);
   }
 }
+
+/**
+ * 删临时舞台**之前**先松开数据库文件。
+ *
+ * Windows 删不掉「还开着的文件」,而这些测试的 HARNESS_DB 就落在舞台目录里 ——
+ * import 任何碰库的模块时就连上了,收尾那句 `rmSync(stage)` 于是必然 EBUSY:
+ * 断言全过,却在最后一步把整条测试判红。POSIX 上删已打开的文件是合法的,所以这句
+ * 在开发机上是空转,只有真 Windows 上才救得到命(2026-08-18 实测:file-browser、
+ * local-open、review-flow、accept-merge、scheduled-messages、path-boundary 六条同病)。
+ *
+ * 故意吞掉异常:没连过库的测试调它也该是无害的。
+ */
+export async function releaseTmpDb(): Promise<void> {
+  await import("../src/db/index.js")
+    .then(({ dbClient }) => dbClient.close())
+    .catch(() => undefined);
+}

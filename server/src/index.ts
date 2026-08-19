@@ -4,7 +4,7 @@ import { existsSync, statSync, createReadStream, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { join, extname, normalize } from "node:path";
+import { join, extname, normalize, sep } from "node:path";
 import type { Context } from "hono";
 import {
   acquireDbSingletonLock,
@@ -179,7 +179,9 @@ app.get("/review/*", async (c) => {
   const rel = decodeURIComponent(new URL(c.req.url).pathname).replace(/^\/review\/?/, "");
   const target = normalize(join(REVIEW_ROOT, rel));
   // 防路径穿越:解析后必须仍落在 ROOT 内(软链的"目标"可以在 ROOT 外——那正是本方案的关键)。
-  if (target !== REVIEW_ROOT && !target.startsWith(REVIEW_ROOT + "/")) return c.notFound();
+  // 分隔符走 `sep`:`normalize` 在 Windows 上还的是反斜杠,拼 `/` 比前缀恒为假,整个
+  // /review/ 会全线 404(不是拒绝越界,是连界内的也进不去)。
+  if (target !== REVIEW_ROOT && !target.startsWith(REVIEW_ROOT + sep)) return c.notFound();
   if (!existsSync(target)) return c.notFound();
   const st = statSync(target); // 跟随软链
 
@@ -309,14 +311,17 @@ app.get("/mobile", (c) => (hasMobile ? c.html(PHONE_FRAME) : c.text(mobileMiss, 
 const cacheHeader = (file: string): string =>
   extname(file) === ".html"
     ? "no-cache"
-    : file.includes("/assets/")
+    : file.includes(`${sep}assets${sep}`)
       ? "public, max-age=31536000, immutable"
       : "no-cache";
 
 async function serveSpa(c: Context, dist: string, rel: string) {
   const candidate = normalize(join(dist, rel));
+  // 用 `sep` 而不是写死 `/`:Windows 上 `normalize` 还的是反斜杠,拼 `/` 比前缀恒为假,
+  // 于是**每一个** js/css 都判成界外、统统回退 index.html——浏览器按 text/html 收到
+  // 一份 HTML 当模块加载,整个前端白屏。判定本身没放松,只是让它在两个平台上都成立。
   const file =
-    (candidate === dist || candidate.startsWith(dist + "/")) &&
+    (candidate === dist || candidate.startsWith(dist + sep)) &&
     existsSync(candidate) &&
     statSync(candidate).isFile()
       ? candidate
@@ -333,7 +338,7 @@ app.get("/mobile/app/*", async (c) => {
   if (!hasMobile) return c.text(mobileMiss, 503);
   const rel = decodeURIComponent(new URL(c.req.url).pathname).replace(/^\/mobile\/app\/?/, "");
   const candidate = normalize(join(MOBILE_DIST, rel));
-  if (candidate !== MOBILE_DIST && !candidate.startsWith(MOBILE_DIST + "/")) return c.notFound();
+  if (candidate !== MOBILE_DIST && !candidate.startsWith(MOBILE_DIST + sep)) return c.notFound();
   // SPA 兜底:expo-router 的客户端路由路径(非真实文件)回退到 index.html。
   const file = existsSync(candidate) && statSync(candidate).isFile() ? candidate : join(MOBILE_DIST, "index.html");
   const body = await readFile(file);

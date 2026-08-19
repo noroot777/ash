@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
+import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "harness-free-lifecycle-"));
 process.env.HARNESS_DB = join(root, "harness.db");
@@ -16,6 +17,16 @@ process.env.HARNESS_RUNS_DIR = join(root, "runs");
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
+
+// 尾段那几站的命令得**跨 shell 字节一致**：这里钉的是「哪几站跑过」，不是 shell 的
+// 换行风格。`echo two >> f` 在 cmd.exe 下会把重定向符前的空格一起写进去(`two \r\n`),
+// `test -f` 在 Windows 上更是压根不存在——两条都是 POSIX 方言,搬到真 Windows 上就红。
+// node 一定在(测试本身就是它跑的),用它写一行,两个平台的字节完全相同。
+const appendLine = (file: string, text: string) =>
+  `node -e "require('fs').appendFileSync('${file}','${text}\\n')"`;
+// 存在则追加、不存在则失败(退出码非 0)——readFileSync 抛出即可,不必自己判分支。
+const appendIfExists = (flag: string, file: string, text: string) =>
+  `node -e "require('fs').readFileSync('${flag}');require('fs').appendFileSync('${file}','${text}\\n')"`;
 
 try {
   const { ensureSchema, db } = await import("../src/db/index.js");
@@ -100,8 +111,8 @@ try {
   const tailWorkflow = JSON.stringify({ workspace: "shared", steps: [
     { id: "s-run", kind: "run", p: { instruction: null, executorId: null, model: null, reasoningEffort: null }, fail: null },
     { id: "s-gate", kind: "human", p: { show: [], notify: [] }, fail: null },
-    { id: "s-c1", kind: "command", p: { cmd: "echo one >> tail.log", where: "repo" }, fail: null },
-    { id: "s-c2", kind: "command", p: { cmd: "echo two >> tail.log", where: "repo" }, fail: null },
+    { id: "s-c1", kind: "command", p: { cmd: appendLine("tail.log", "one"), where: "repo" }, fail: null },
+    { id: "s-c2", kind: "command", p: { cmd: appendLine("tail.log", "two"), where: "repo" }, fail: null },
   ] });
   await createTasks([{ ...baseTask, id: "tail-ledger-task", title: "tail ledger" }]);
   await db.update(tasks).set({
@@ -256,9 +267,9 @@ try {
   const tailFailWorkflow = JSON.stringify({ workspace: "shared", steps: [
     { id: "f-run", kind: "run", p: { instruction: null, executorId: null, model: null, reasoningEffort: null }, fail: null },
     { id: "f-gate", kind: "human", p: { show: [], notify: [] }, fail: null },
-    { id: "f-c1", kind: "command", p: { cmd: "echo one >> tail2.log", where: "repo" }, fail: null },
-    { id: "f-c2", kind: "command", p: { cmd: "test -f tail2.flag && echo two >> tail2.log", where: "repo" }, fail: null },
-    { id: "f-c3", kind: "command", p: { cmd: "echo three >> tail2.log", where: "repo" }, fail: null },
+    { id: "f-c1", kind: "command", p: { cmd: appendLine("tail2.log", "one"), where: "repo" }, fail: null },
+    { id: "f-c2", kind: "command", p: { cmd: appendIfExists("tail2.flag", "tail2.log", "two"), where: "repo" }, fail: null },
+    { id: "f-c3", kind: "command", p: { cmd: appendLine("tail2.log", "three"), where: "repo" }, fail: null },
   ] });
   await createTasks([{ ...baseTask, id: "tail-fail-task", title: "tail fail" }]);
   await db.update(tasks).set({
@@ -532,5 +543,7 @@ try {
 
   console.log("✓ 生命周期交错窗口：对账不提前结算活 reviewer；尾段逐站补跑不重复副作用；重启消费 write-ahead 基线整套挂回；fresh 重跑启动即摘牌；团队派活/删除/归档与验收互斥；删除级联收走审查链孤儿；派活占位互斥对称释放；验收锁内班次不丢不谎报；尾段失败保留补跑凭据；项目删除锁+级联；租约中消息不可取消；stateVersion 覆盖 status；并发 answer CAS；归档不留 archived+running；turn 窗口 run/retry/fire/班次不谎报不消费；团队验收不盖未执行的执行者；手动派验证原子互斥；内部组级联+孤儿回收；旧合并状态迁移不丢证据；turnHeld 占位传递；释放点竞争对称回滚；协议失败零半轮；权威重查挡归档/等待态；孤儿 worker 解绑");
 } finally {
+  // 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
+  await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
 }

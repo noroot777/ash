@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
+import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "harness-free-hardening-"));
 process.env.HARNESS_DB = join(root, "harness.db");
@@ -551,5 +552,7 @@ try {
 
   console.log("✓ turn 锁窗口拦验收与派审；结论必须携报告且出自活跃审查回合；symlink/硬链接被拒；验收快照按生命周期冻结且崩溃窗口不伪造区间；快路验证合并结果可达；归档只读；旧状态迁移保语义；重启对账收拾孤儿审查；过期意见与遗留提问受控；squash 重试可越过；排队消息保身份；stateVersion 为修订号；摘牌 write-ahead（claim 失败/验收互斥/解析失败三路不破坏验收事实）；DELETE 连带 children 探测与行同步");
 } finally {
+  // 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
+  await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
 }

@@ -12,7 +12,8 @@
 import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
+import { IS_WINDOWS } from "../src/platform.js";
 import { requireTmpDb } from "./tmp-db.js";
 
 requireTmpDb("test-cli-overrides");
@@ -161,13 +162,17 @@ assert.ok(
 // ── ②③ 真的进到子进程了吗 ──────────────────────────────────────────────────
 const sandbox = mkdtempSync(join(tmpdir(), "harness-cli-overrides-"));
 const probe = join(sandbox, "probe.txt");
-const fakeBin = join(sandbox, "claude");
-writeFileSync(
-  fakeBin,
-  `#!/bin/sh\nprintf '%s' "\${${spec.env}-<unset>}" > "$HARNESS_TEST_PROBE"\nexit 0\n`,
-);
+// 假 claude 得按平台换壳:Windows 内核不认 `#!/bin/sh`,PATH 查找只认 PATHEXT 里的
+// 后缀,所以那边写 `.cmd`(resolveBin 找 `claude` 时正是靠 PATHEXT 命中它)。
+// 两边都转手交给 node 干活 —— 测试本身就是它跑起来的,必然在;`??` 的语义跟 sh 的
+// `${X-<unset>}` 对齐:设过空串写空串,压根没设才写 `<unset>`(这正是 ③ 要分的两档)。
+const fakeBin = join(sandbox, IS_WINDOWS ? "claude.cmd" : "claude");
+const body = `require('fs').writeFileSync(process.env.HARNESS_TEST_PROBE, process.env.${spec.env} ?? '<unset>')`;
+writeFileSync(fakeBin, IS_WINDOWS ? `@node -e "${body}"\r\n` : `#!/bin/sh\nexec node -e "${body}"\n`);
 chmodSync(fakeBin, 0o755);
-process.env.PATH = `${sandbox}:${process.env.PATH ?? ""}`;
+// 分隔符用 `path.delimiter`:Windows 是 `;`,写死 `:` 会把整条 PATH 粘成一个不存在的
+// 目录名 —— 假 claude 找不到不说,连 node 自己都从 PATH 上消失。
+process.env.PATH = `${sandbox}${delimiter}${process.env.PATH ?? ""}`;
 process.env.HARNESS_TEST_PROBE = probe;
 
 const { db, ensureSchema } = await import("../src/db/index.js");
@@ -377,8 +382,16 @@ assert.equal(patched.status, 400, "PATCH 是另一条口子,同样得拦(对称�
 // 真实优先级),开发机上恰好写过这一项的话,下面这个 process.env 就赢不了,断言会变成
 // 「看谁的机器」。分层本身另有 ⑦b 直测。
 const realHome = process.env.HOME;
-process.env.HOME = join(sandbox, "empty-home");
-mkdirSync(process.env.HOME, { recursive: true });
+const realUserProfile = process.env.USERPROFILE;
+// 产品那边读的是 `os.homedir()`,而它认的变量**两个平台不是同一个**:POSIX 看 `HOME`,
+// Windows 看 `USERPROFILE`。只改 HOME 的话,Windows 上整段夹具形同没设 —— homedir()
+// 还是真人的家目录,断言变成「看谁的机器」,而且失败得像是产品读错了层。
+const setHome = (dir: string) => {
+  process.env.HOME = dir;
+  process.env.USERPROFILE = dir;
+};
+setHome(join(sandbox, "empty-home"));
+mkdirSync(join(sandbox, "empty-home"), { recursive: true });
 process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = "10000";
 const localPct = (await resolveExecutorFor({ executorId: "claude-pct-local", type: "claude" })).resumeFields(sandbox, "sid-1").resumeArgs ?? "";
 const remotePct = (await resolveExecutorFor({ executorId: "claude-pct-ssh", type: "claude" })).resumeFields(sandbox, "sid-1").resumeArgs ?? "";
@@ -409,7 +422,7 @@ const fakeProject = join(sandbox, "proj");
 mkdirSync(join(fakeHome, ".claude"), { recursive: true });
 mkdirSync(join(fakeProject, ".claude"), { recursive: true });
 writeFileSync(join(fakeHome, ".claude", "settings.json"), JSON.stringify({ env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "12000" } }));
-process.env.HOME = fakeHome;
+setHome(fakeHome);
 process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = "30000";
 assert.equal(claudeMaxOutputTokens(), 12000, "~/.claude/settings.json 的 env 压过继承来的环境变量");
 writeFileSync(join(fakeProject, ".claude", "settings.json"), JSON.stringify({ env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: 9000 } }));
@@ -470,6 +483,8 @@ if (realConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
 else process.env.CLAUDE_CONFIG_DIR = realConfigDir;
 if (realHome === undefined) delete process.env.HOME;
 else process.env.HOME = realHome;
+if (realUserProfile === undefined) delete process.env.USERPROFILE;
+else process.env.USERPROFILE = realUserProfile;
 
 assert.ok(
   cliConfigOverrideHints("claude", { autoCompactWindow: 200_000, autoCompactPercent: 80 }, UNKNOWN_CLI_HOST_ENV)

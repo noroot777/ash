@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import type { AgentEvent } from "@harness/shared";
 import { AGENT_TYPES } from "@harness/shared";
 import {
@@ -34,8 +34,26 @@ import { resumeCommandFor } from "../src/executors/resume.js";
 import { normalizeProfileExtraArgs } from "../src/executors/args.js";
 import { installCommandFor } from "../src/detect.js";
 import type { CliSpec } from "../src/executors/catalog/types.js";
+import { IS_WINDOWS } from "../src/platform.js";
 
 const MISSING_BIN = "harness-definitely-not-installed-cli";
+
+// 「一定装了的命令」这种东西不存在:`echo` 在 Windows 上是 cmd 的内建,PATH 上根本
+// 没有对应的文件,resolveBin 自然探不到(这不是 bug,是它该有的行为)。要探测就自己
+// 造一个桩 —— 而桩也得按平台换壳:Windows 内核不认 `#!/bin/sh`,PATH 查找只认
+// PATHEXT 里的后缀,所以那边写 `.cmd`。
+//
+// 两边行为完全一致:把**第一个参数**原样打回来。于是 `--version` 的输出天然含
+// "version"、天然不含别家 CLI 的名字,自证通过/不通过两条断言都不依赖本机装了什么。
+// 用 `%~1` 而不是 `%*`:后者展开的是原始命令行,连 cmd.exe 加的那对引号一起打出来
+// (`"fallback-works"`),`%~1` 才是去引号的单个参数,跟 sh 的 `"$1"` 对得上。
+// 顺带还替产品多验了一段:Windows 上命中的是批处理垫片,resolveLaunch 必须把它拆成
+// cmd.exe 调用而不是直接 execFile(bin-resolve.ts 里 CVE-2024-27980 那段)。
+function writeEchoStub(dir: string, name: string): string {
+  const file = join(dir, IS_WINDOWS ? `${name}.cmd` : name);
+  writeFileSync(file, IS_WINDOWS ? "@echo %~1\r\n" : '#!/bin/sh\necho "$1"\n', { mode: 0o755 });
+  return file;
+}
 
 assert.deepEqual(
   normalizeProfileExtraArgs(["--settings ~/test/claude-settings.json"], { kind: "local" }),
@@ -313,14 +331,21 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
 
 // ⑤ter 备用命令名:检测能命中 bins[1],执行就必须用同一个 —— 死认 bins[0] 会让
 // 「目录显示可用」的环境派任务稳定 ENOENT(cursor 的 agent、antigravity 的 agy)。
-// 用真实存在的 `echo` 当备用名,断言不依赖本机装了哪些 CLI:
-//   `echo --version` 会把参数原样打出来 → 版本自证含 "version" 通过、含 "cursor" 失败。
+// 备用名用自己造的回显桩(见 writeEchoStub),断言不依赖本机装了哪些 CLI。
 {
-  const bins = ["harness-missing-primary-bin", "echo"];
-  assert.equal(await execBinFor(fake({}, { bins })), "echo", "主 bin 缺失时应改用可用的备用名");
+  const stubDir = mkdtempSync(join(tmpdir(), "harness-echo-stub-"));
+  const stub = "harness-echo-stub";
+  writeEchoStub(stubDir, stub);
+  const originalPath = process.env.PATH;
+  // 桩目录得在 PATH 上 resolveBin 才找得到。分隔符用 `path.delimiter`:Windows 是
+  // `;`,写死 `:` 会把整条 PATH 拼成一个不存在的目录名,连本机真装的命令都探不到了。
+  process.env.PATH = `${stubDir}${delimiter}${originalPath ?? ""}`;
+  try {
+  const bins = ["harness-missing-primary-bin", stub];
+  assert.equal(await execBinFor(fake({}, { bins })), stub, "主 bin 缺失时应改用可用的备用名");
   assert.equal(
     await execBinFor(fake({}, { bins, fallbackVersionMatch: "version" })),
-    "echo",
+    stub,
     "备用名 --version 自证通过就认",
   );
   assert.equal(
@@ -342,21 +367,30 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
     "fallback-works",
   );
   assert.deepEqual(events.at(-1), { kind: "done", exitStatus: 0 });
+  } finally {
+    process.env.PATH = originalPath;
+    rmSync(stubDir, { recursive: true, force: true });
+  }
 }
 
 // ⑤quater 版本自证必须跑「已解析出的绝对路径」,不是裸命令名。
 // resolveBin 除 PATH 外还扫 EXTRA_PATHS(/opt/homebrew/bin、~/.local/bin、~/.bun/bin…),
 // 那是给「从 GUI/预览启动 server、PATH 缺 Homebrew 目录」准备的。自证若用裸名,就会
 // 「找得到文件、却证不了身份」—— cursor 的官方备用名 agent 在 GUI 环境下被误判不可用。
-// 造场景:把 fixture 放进 ~/.local/bin(EXTRA_PATHS 之一)、再把 PATH 清成不含它,
-// 于是只有走绝对路径才拿得到版本号。该目录不可写就跳过(别让测试依赖环境)。
+// 造场景:把 fixture 放进 EXTRA_PATHS 里的一个目录、再把 PATH 清成不含它,于是只有
+// 走绝对路径才拿得到版本号。该目录不可写就跳过(别让测试依赖环境)。
+//
+// 目录得按平台挑:`extraPaths()` 的两个分支根本不是同一批目录 —— Windows 那支没有
+// `~/.local/bin`,继续用它的话 fixture 写得进去、却永远不在扫描范围内,断言变成
+// 「EXTRA_PATHS 探不到」这种假红。那边改用 `%APPDATA%\npm`(npm -g 的垫片目录,
+// 同在 extraPaths 里)。桩的壳也按平台换,理由见 writeEchoStub。
 {
-  const dir = join(homedir(), ".local", "bin");
+  const dir = IS_WINDOWS ? join(process.env.APPDATA ?? homedir(), "npm") : join(homedir(), ".local", "bin");
   const name = `harness-probe-fixture-${process.pid}`;
-  const file = join(dir, name);
+  const file = join(dir, IS_WINDOWS ? `${name}.cmd` : name);
   let usable = false;
   try {
-    writeFileSync(file, "#!/bin/sh\necho 'fixture-cli 1.2.3'\n", { mode: 0o755 });
+    writeFileSync(file, IS_WINDOWS ? "@echo fixture-cli 1.2.3\r\n" : "#!/bin/sh\necho 'fixture-cli 1.2.3'\n", { mode: 0o755 });
     usable = true;
   } catch {
     console.log(`(跳过绝对路径自证用例:${dir} 不可写)`);
@@ -389,9 +423,19 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
   assert.deepEqual(events.at(-1), { kind: "done", exitStatus: 1 }, "事件流必须以 done 收尾");
 }
 
+// 下面三段要的是「一个能真跑起来、行为可控的外部命令」,`sh`/`echo` 只是随手抓的
+// POSIX 例子 —— Windows 上 `echo` 是 cmd 的内建(PATH 上没有这个文件,spawn 直接
+// ENOENT),`sh` 更是没装,三段全红。改用 `node`:测试本身就是它跑起来的,两个平台
+// 都必然在 PATH 上、都是真文件,而且是 execFile 直起的**亲**子进程 —— 不像 `.cmd`
+// 垫片那样中间垫一层 cmd.exe,手停那段的击杀语义两边才一致。
+const NODE = "node";
+
 // 真跑一次:stdout 转文本事件 + exit 0 收尾(textParser 的正常路径)
 {
-  const ex = new GenericCliExecutor(fake({ prompt: { via: "arg" } }), { bin: "echo" });
+  const ex = new GenericCliExecutor(
+    fake({ subcommand: ["-e", "console.log(process.argv[1])"], prompt: { via: "arg" } }),
+    { bin: NODE },
+  );
   const h = ex.run({ prompt: "hello-generic", cwd: process.cwd() });
   const events = await collect(h.events);
   const text = events.filter((e) => e.kind === "text").map((e) => (e as { text: string }).text).join("");
@@ -401,9 +445,10 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
 
 // 非 0 退出:报错文案带 exit 码,并且仍以 done 收尾
 {
-  const ex = new GenericCliExecutor(fake({ subcommand: ["-c", "echo boom >&2; exit 3"], prompt: { via: "stdin" } }), {
-    bin: "sh",
-  });
+  const ex = new GenericCliExecutor(
+    fake({ subcommand: ["-e", "console.error('boom'); process.exit(3)"], prompt: { via: "stdin" } }),
+    { bin: NODE },
+  );
   const h = ex.run({ prompt: "", cwd: process.cwd() });
   const events = await collect(h.events);
   const err = events.find((e) => e.kind === "error");
@@ -413,7 +458,10 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
 
 // 手停:被杀掉不算故障,不该往时间线塞错误
 {
-  const ex = new GenericCliExecutor(fake({ subcommand: ["-c", "sleep 30"], prompt: { via: "stdin" } }), { bin: "sh" });
+  const ex = new GenericCliExecutor(
+    fake({ subcommand: ["-e", "setTimeout(() => {}, 30000)"], prompt: { via: "stdin" } }),
+    { bin: NODE },
+  );
   const h = ex.run({ prompt: "", cwd: process.cwd() });
   setTimeout(() => h.kill(), 150);
   const events = await collect(h.events);

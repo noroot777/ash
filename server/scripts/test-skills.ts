@@ -16,11 +16,24 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = mkdtempSync(join(tmpdir(), "harness-skills-"));
-process.on("exit", () => rmSync(root, { recursive: true, force: true }));
 
 // 先把库指到临时目录再 import:init 校准的冷启动来源就落在库文件旁边(见
 // skill-calibration-store.ts),不这么做这条测试会去写真实的 data/。
 process.env.HARNESS_DB = join(root, "settings-test.db");
+
+// 收尾要删的目录里就装着那个库文件,而 Windows 删不掉还开着的文件(理由见
+// tmp-db.ts 的 releaseTmpDb)——断言全过,却在退出时抛 EBUSY 把整条测试判红。
+// exit 回调只能同步,`await import` 到那会儿来不及,所以现在就把句柄拿在手里。
+const { dbClient } = await import("../src/db/index.js");
+process.on("exit", () => {
+  try {
+    dbClient.close();
+  } catch {
+    // 没真连过库也算正常,照删不误。
+  }
+  rmSync(root, { recursive: true, force: true });
+});
+
 const { calibrateSkills, forgetLoadedCalibrations, listSkills, nativeCliCommand, resetSkillCache, scanOverview, withSkillInvocation } =
   await import("../src/skills.js");
 
@@ -163,7 +176,11 @@ assert.ok(!find(list, "cost"), "白名单之外的照旧不进菜单(落盘的�
 
 // 真·冷进程再验一次:上面那句 forget 只是等价物,这里是另起一个 node 进程从零 import。
 {
-  const skillsModule = fileURLToPath(new URL("../src/skills.ts", import.meta.url));
+  // 动态 import 的说明符必须是 file:// URL,不能是 `fileURLToPath` 还回来的本地路径:
+  // Windows 上那是 `D:\…`,ESM 解析器把开头的 `d:` 当成协议直接拒
+  // (ERR_UNSUPPORTED_ESM_URL_SCHEME)。POSIX 的 `/Users/…` 恰好是个合法说明符,
+  // 所以这处只在 Windows 上炸,而且炸在子进程里、只露出一句 `1 !== 0`。
+  const skillsModule = new URL("../src/skills.ts", import.meta.url).href;
   const probe = spawnSync(
     process.execPath,
     [

@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { eq } from "drizzle-orm";
+import { IS_WINDOWS } from "../src/platform.js";
+import { releaseTmpDb } from "./tmp-db.js";
 import { TEAM_DEFAULTS } from "@harness/shared";
 
 // ── 子进程分支:制造「进程死在投递中途」的真实现场 ────────────────────────────
@@ -27,17 +29,37 @@ const leadLog = join(root, "lead-input.jsonl");
 const originalPath = process.env.PATH;
 process.env.HARNESS_DB = join(root, "harness.db");
 process.env.HARNESS_TEST_LEAD_LOG = leadLog;
-process.env.PATH = `${fakeBin}:${originalPath ?? ""}`;
+// 分隔符用 `path.delimiter`:Windows 是 `;`,写死 `:` 会把整条 PATH 粘成一个不存在的
+// 目录名,假 claude 和真 node 一起从 PATH 上消失。
+process.env.PATH = `${fakeBin}${delimiter}${originalPath ?? ""}`;
 
 mkdirSync(fakeBin, { recursive: true });
+// 假 claude 的本体写成一份 .js,壳只负责把它交给 node —— 壳得按平台换:Windows 内核
+// 不认 `#!/bin/sh`,PATH 查找只认 PATHEXT 里的后缀,所以那边是 `.cmd`。
+// 原来整段是 sh 脚本(`read` / `printf` / `>>`),在真 Windows 上一句都跑不起来,而且
+// 失败得极隐蔽:投递那几段全部超时,最后被 finally 里的 EBUSY 盖成一句删不掉临时目录。
 writeFileSync(
-  join(fakeBin, "claude"),
-  `#!/bin/sh
-IFS= read -r line || exit 1
-printf '%s\\n' "$line" >> "$HARNESS_TEST_LEAD_LOG"
-printf '%s\\n' '{"type":"system","session_id":"scheduled-message-test"}'
-printf '%s\\n' '{"type":"result","subtype":"success","session_id":"scheduled-message-test"}'
+  join(fakeBin, "fake-claude.js"),
+  `const fs = require("fs");
+let buf = "";
+process.stdin.on("data", (d) => {
+  buf += d;
+  const i = buf.indexOf("\\n");
+  if (i < 0) return;
+  fs.appendFileSync(process.env.HARNESS_TEST_LEAD_LOG, buf.slice(0, i) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "system", session_id: "scheduled-message-test" }) + "\\n");
+  process.stdout.write(
+    JSON.stringify({ type: "result", subtype: "success", session_id: "scheduled-message-test" }) + "\\n",
+  );
+  process.exit(0);
+});
+// 一行都没等到就断了 = 上游没把 prompt 写进来,按失败退出(对应原来 sh 的 \`read || exit 1\`)
+process.stdin.on("end", () => process.exit(1));
 `,
+);
+writeFileSync(
+  join(fakeBin, IS_WINDOWS ? "claude.cmd" : "claude"),
+  IS_WINDOWS ? `@node "%~dp0fake-claude.js" %*\r\n` : `#!/bin/sh\nexec node "$(dirname "$0")/fake-claude.js" "$@"\n`,
   { mode: 0o755 },
 );
 
@@ -166,6 +188,11 @@ assert.equal(
 );
 console.log("✓ 投递判定:排队不看时间但等任务空闲,定时看时间,忙=等而不是取消");
 
+// 收尾里那句 `process.exit(0)` 是**无条件**的:没有这个 catch,try 里任何一条断言炸掉都会被
+// 它按 0 退出,`npm run test:*` 一律绿 —— 一份永远不会红的回归比没有回归更坏(实测:把 PATH
+// 指到不存在的目录,整轮只打出第一个 ✓,退出码照样 0)。这里接住、原样打出来、记账,
+// 由 finally 末尾按它决定退出码。
+let failure: unknown = null;
 try {
   await db.insert(projects).values({ id: projectId, name: "scheduled", repoPath: root, apiKeys: null, createdAt: at });
   await db.insert(tasks).values([
@@ -324,7 +351,18 @@ try {
     env: { ...process.env, HARNESS_TEST_CRASH_MESSAGE: "scheduled-crashed" },
     encoding: "utf8",
   });
-  assert.equal(crash.signal, "SIGKILL", `子进程应当在持有租约时被硬杀:${crash.stderr ?? ""}`);
+  // 「它确实是被硬杀的」这件事,两个平台的证据不一样:POSIX 下父进程拿得到 signal='SIGKILL',
+  // Windows 上没有信号这回事 —— Node 的 process.kill 落到 TerminateProcess,回来的是
+  // status=1 / signal=null。原来这里无条件断言 signal,于是真 Windows 上这条回归**固定**停在
+  // 这一行,后面「租约还挂着 / 开机回收 / 原话补发进时间线」三段核心断言一条都没跑过,
+  // 而那台机器正是我们唯一能验 Windows 行为的地方。
+  assert.ok(!crash.error, `子进程根本没起来:${crash.error?.message ?? ""}`);
+  assert.notEqual(crash.status, 3, "子进程没抢到租约,这一段的前提就不成立(beginDelivery 返回 false)");
+  if (IS_WINDOWS) {
+    assert.equal(crash.status, 1, `子进程应当在持有租约时被硬杀:status=${crash.status} ${crash.stderr ?? ""}`);
+  } else {
+    assert.equal(crash.signal, "SIGKILL", `子进程应当在持有租约时被硬杀:${crash.stderr ?? ""}`);
+  }
 
   const crashed = (await db.select().from(scheduledMessages)
     .where(eq(scheduledMessages.id, "scheduled-crashed"))).at(0)!;
@@ -369,6 +407,9 @@ try {
   );
   await new Promise((resolve) => setTimeout(resolve, 200));
   console.log("✓ 进程死在投递中途:行留在 pending + 租约,重启后开机第一件事就把它补发出去");
+} catch (e) {
+  failure = e;
+  console.error(e);
 } finally {
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
@@ -378,6 +419,23 @@ try {
   rmSync(join(paths.RUNS_DIR, queuedTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, lockedTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, crashTaskId), { recursive: true, force: true });
-  rmSync(root, { recursive: true, force: true });
-  process.exit(0); // startScheduler 的 interval 还挂着,不然进程不会自己退
+  // 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
+  await releaseTmpDb();
+  // 收尾**不许盖住正主**:这里跑在 finally 里,try 抛出的断言错会被这一句的异常顶掉,
+  // 于是「假 claude 起不来」在真机上显示成「删不掉临时目录」,白查一轮。Windows 还有
+  // 一层:被 SIGKILL 的那个子进程句柄要等系统回收,文件删了目录也可能一时删不掉
+  // (删除是延迟生效的),重试几次多半就过去了;实在删不掉就只提一句,让真错自己冒出来。
+  for (let i = 0; ; i++) {
+    try {
+      rmSync(root, { recursive: true, force: true });
+      break;
+    } catch (e) {
+      if (i >= 10) {
+        console.warn(`⚠︎ 临时目录没删掉(不影响结论):${root} — ${(e as Error).message}`);
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+  process.exit(failure ? 1 : 0); // startScheduler 的 interval 还挂着,不然进程不会自己退
 }

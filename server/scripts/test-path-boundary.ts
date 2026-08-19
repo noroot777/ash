@@ -47,7 +47,11 @@ try {
   // Linux）就只跑纯函数那一节——**不是跳过检查，是那台机器上根本构造不出这个
   // 场景**：realpath 会先一步 ENOENT。
   const caseInsensitiveFs = existsSync(join(stage, "repo", "src", "app.ts"));
-  const lower = (p: string) => p.replace(`${stage}${"/"}Repo`, `${stage}${"/"}repo`);
+  // 用 join 拼替换目标，别自己拼分隔符：真 Windows 上 stage 是 `C:\…\harness-boundary-xxx`，
+  // 写死 `/` 的目标串一次都命中不了，`lower()` 会原样返回，第 2/3 节送进去的还是原大小写 ——
+  // 断言照样绿，但它压根没在测大小写不敏感这件事。
+  const lower = (p: string) => p.replace(join(stage, "Repo"), join(stage, "repo"));
+  assert.notEqual(lower(join(stage, "Repo", "src", "app.ts")), join(stage, "Repo", "src", "app.ts"), "lower() 必须真的改到路径");
 
   const { boundaryKey, isInsidePath, windowsLongPathHint, windowsPathRejection } = await import("../src/platform.js");
 
@@ -167,5 +171,9 @@ try {
     `✅ 路径边界（大小写归一 / 兄弟目录 / UNC / 8.3 / 长路径提示）全部通过${caseInsensitiveFs ? "" : "（本机文件系统区分大小写，端到端的大小写用例已跳过）"}`,
   );
 } finally {
+  // 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
+  // 只能动态 import:tmp-db 静态引了 platform.js,而静态 import 会被提升到文件顶部的
+  // 平台伪造**之前**执行,IS_WINDOWS 就成了开发机的真值,整条测试白跑。
+  await (await import("./tmp-db.js")).releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });
 }

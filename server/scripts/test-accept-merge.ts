@@ -2,20 +2,29 @@
 // repository; no checkout or ref update can escape into the harness repo.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
+import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "harness-accept-merge-test-"));
 process.env.HARNESS_DB = join(root, "harness.db");
+// RUNS_DIR 指到临时目录,顺带把 guardAgentSpawn 打开:用例 13 那一轮**不会真起 CLI**,每一次
+// spawn 都被拦成 failedChild(executors/spawn.ts),回合照开照结算,只是没有真进程。
+// 原来这里还摆着一份没后缀的 `#!/bin/sh` 假 claude、PATH 用 `:` 拼 —— 两条都只在 Unix 成立
+// (Windows 用 `;` 分隔、查找只认 PATHEXT 后缀、内核不认 shebang),而且不管哪个平台它都从没
+// 被执行过:死代码,还让人误以为这一轮验的是 CLI 启动。真正验的是「有没有真发起这一轮」。
 process.env.HARNESS_RUNS_DIR = join(root, "runs");
-// 用例 13 会真的跑一轮：立刻 exit 0 的假 claude 让唤醒走完整条 spawn 路径而不联网。
-const fakeBin = join(root, "bin");
-mkdirSync(fakeBin, { recursive: true });
-writeFileSync(join(fakeBin, "claude"), "#!/bin/sh\nexit 0\n");
-chmodSync(join(fakeBin, "claude"), 0o755);
-process.env.PATH = `${fakeBin}:${process.env.PATH ?? ""}`;
+// 舞台的兜底清理挂在**建好它的下一行**,而不是靠尾部那个 finally。下面这条 fail-closed 断言
+// 就在 try 之前:它一响(HARNESS_ALLOW_REAL_AGENT=1 时正是要它响),脚本当场掀桌,尾部清理
+// 一行都执行不到,TEMP 里就躺下一个 harness-accept-merge-test-*。exit 钩子对**每条**早退
+// 路径都成立,成功路径那次 rmSync 照旧(它还得先 releaseTmpDb),这里只管兜底。
+process.on("exit", () => { try { rmSync(root, { recursive: true, force: true }); } catch {} });
+assert.ok(
+  process.env.HARNESS_ALLOW_REAL_AGENT !== "1",
+  "用例 13 靠 guardAgentSpawn 拦住真 CLI;拦截器一失效,测试就会拿用户的真额度跑 agent",
+);
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 
@@ -571,5 +580,7 @@ try {
 
   console.log("accept merge: git 场景 / 三种合并档位 / 清理档位 / 清理警告 / 脏工作区点名 / team 并发守卫 / 共享执行者验收口径 / 冲突交接真唤醒 全部通过");
 } finally {
+  // 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
+  await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
 }
