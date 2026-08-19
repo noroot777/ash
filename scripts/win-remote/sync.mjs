@@ -38,13 +38,65 @@ const WORKSPACE = process.env.WIN_REMOTE_WORKSPACE ?? ".worktrees/win-remote";
 const ADOPT = /^(1|true|yes)$/i.test(process.env.WIN_REMOTE_ADOPT ?? "");
 
 /**
+ * 把 WIN_REMOTE_WORKSPACE 收成一个「一定落在 repo 里、一定不是 repo 根」的相对路径。
+ *
+ * 拼字符串之前必须先过这一关。上一版直接 `repoPath + '\' + WORKSPACE`,于是
+ * `WIN_REMOTE_WORKSPACE=.` 和 `=''` 都解析成 repo 根本身 —— 那台机器上的 repo 根是**正在跑
+ * harness、带着用户未提交内容**的 live 主仓。sync 走的那条路会在所有权校验上拒掉它
+ * (git-dir = common-dir),但 exec 和 test --no-sync 不经过 sync,直接把它当 cwd 用,
+ * 于是「绝不动主工作区」这句承诺在两个入口上是空的。实测 doctor 报「测试 worktree
+ * D:\...\ash\. 已就绪」、exec 报 `CWD=D:\ai_workspace\ash`,都 exit 0。
+ *
+ * 判据只有一条:**它必须是 repo 下的一个真子目录**。绝对路径、UNC、`.`、`..`、空值一律拒 ——
+ * 拒在这里,后面每个入口就都不用再各自想一遍。至于「这个子目录是不是我建的那个 worktree」,
+ * 那是运行时才答得出来的问题,见 workspaceGuardPs。
+ */
+function workspaceRel() {
+  const raw = String(WORKSPACE).trim();
+  const bad = (why) =>
+    new Error(`WIN_REMOTE_WORKSPACE=${JSON.stringify(raw)} 不能用:${why}。它必须是 repo 下的相对子目录,比如 .worktrees/win-remote`);
+  if (!raw) throw bad("空值会解析成对端 repo 根,也就是那个正在跑 harness 的主工作区");
+  if (/^[a-zA-Z]:/.test(raw) || /^[\\/]/.test(raw)) throw bad("是绝对路径或 UNC 路径,越出了 repo");
+  const segs = raw.split(/[\\/]+/).filter(Boolean);
+  if (!segs.length) throw bad("规范化之后什么都不剩");
+  if (segs.some((s) => s === "." || s === "..")) throw bad("含 `.` 或 `..`,可能解析回 repo 根或 repo 之外");
+  return segs.join("\\");
+}
+
+/**
  * 对端那个 worktree 的绝对路径。**要用这个目录的地方一律从这儿取**,别再各自拼一遍字符串:
  * 上一版 CLI 的 doctor/exec/test 三处都把 `.worktrees\win-remote` 写死了,于是设了
  * WIN_REMOTE_WORKSPACE 之后同步的是 A、跑测试的是 B —— 同步报着新 SHA,测试跑的是上一次
  * 留在默认目录里的旧快照,而两边都各自「成功」,假绿假红都看不出来。
  */
-export const remoteWorkspacePath = (repoPath) =>
-  `${repoPath.replace(/[\\/]+$/, "")}\\${WORKSPACE.replace(/\//g, "\\").replace(/^\\+/, "")}`;
+export const remoteWorkspacePath = (repoPath) => {
+  const repo = String(repoPath ?? "").replace(/[\\/]+$/, "");
+  if (!repo) throw new Error("拿不到对端仓库路径,没法定位工作区目录");
+  return `${repo}\\${workspaceRel()}`;
+};
+
+/**
+ * 「这个目录确实是 win-remote 自己那个 worktree」的运行时断言,失败就 throw(命令非 0 退出)。
+ *
+ * sync 里那套所有权校验(见下面 $__magic 一段)原来是**只有 sync 有**的,而 exec 和
+ * `test --no-sync` 压根不经过 sync —— 保护逻辑存在,新的传播路径却没复用它。所以抽成这一段,
+ * 让每个会在对端目录里干活的入口都先跑一遍。
+ */
+export const workspaceGuardPs = (repoPath) => {
+  const wt = remoteWorkspacePath(repoPath).replace(/'/g, "''");
+  const repo = String(repoPath).replace(/[\\/]+$/, "").replace(/'/g, "''");
+  return [
+    `$__wt='${wt}'; $__repo='${repo}'`,
+    `if(-not (Test-Path -LiteralPath $__wt)){ throw ('工作区不存在:' + $__wt + ' —— 先跑一次 win-remote sync') }`,
+    `$__wti=New-Object IO.DirectoryInfo $__wt; if($__wti.Attributes -band [IO.FileAttributes]::ReparsePoint){ throw ('拒绝使用:' + $__wt + ' 是个链接(reparse point),不是 win-remote 建的 worktree') }`,
+    `$__gd=([string](git -C $__wt rev-parse --path-format=absolute --git-dir 2>$null)).Trim(); $__gc=([string](git -C $__wt rev-parse --path-format=absolute --git-common-dir 2>$null)).Trim(); $__rc=([string](git -C $__repo rev-parse --path-format=absolute --git-common-dir 2>$null)).Trim()`,
+    `if(-not $__gd -or -not $__gc -or -not $__rc){ throw ('拒绝使用:' + $__wt + ' 不是 git worktree(读不到 git-dir)') }`,
+    `if($__gd -eq $__gc){ throw ('拒绝使用:' + $__wt + ' 是主工作区(git-dir = common-dir),win-remote 绝不在主工作区里干活') }`,
+    `if($__gc.TrimEnd('\\','/') -ne $__rc.TrimEnd('\\','/')){ throw ('拒绝使用:' + $__wt + ' 不属于 ' + $__repo + '(common-dir=' + $__gc + ')') }`,
+    `if(-not (Test-Path -LiteralPath (Join-Path $__gd 'win-remote-owner'))){ throw ('拒绝使用:' + $__wt + ' 没有 win-remote 的所有权标记 —— 不知道是谁在上面干活。先跑一次 win-remote sync(必要时带 WIN_REMOTE_ADOPT=1)') }`,
+  ].join("\n");
+};
+
 // 这四个包在 workspace 里互相 import,靠 `node_modules/@harness/<pkg>` 找到对方。
 const HARNESS_LINKS = ["shared", "server", "web-next", "mcp"];
 
@@ -131,7 +183,7 @@ export async function syncToRemote({ repoPath, onLine = null, projectId = null, 
     const ps = String.raw`${guard ? `${guard}\n` : ""}
 $repo = '${repoPath}'
 # 规范化之后再用:'.'、'..'、多余的分隔符都得先塌掉,不然后面拿它做的任何比较都能被绕过。
-$wt   = [IO.Path]::GetFullPath((Join-Path $repo '${WORKSPACE.replace(/\//g, "\\")}'))
+$wt   = [IO.Path]::GetFullPath((Join-Path $repo '${workspaceRel()}'))
 # ============ 所有权校验:必须跑在 fetch / checkout / clean **之前** ============
 # 这一段要回答的不是「这是不是个 linked worktree」,而是「这是不是**我建的**那个」。
 # 前者谁都满足:随便哪个任务的 worktree 都 git-dir != common-dir,于是路径一配错

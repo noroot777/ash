@@ -15,8 +15,14 @@
 import { createServer } from "node:http";
 import { networkInterfaces } from "node:os";
 import { randomBytes } from "node:crypto";
+import { jobPreludeLines, jobAssignLine, jobCloseLine, killTreeLines } from "./kill-tree.mjs";
 
 const DEFAULT_HOST = process.env.WIN_REMOTE_HOST ?? "http://192.168.1.187:4317";
+
+// 命令期限之外,额外留给「杀树 + 确认退干净 + 把已经写下的输出捞回来 + 回传」的时间。
+// 对端那段收尾最长要:等 Kill 后确认 10s + 补刀 1.5s + 容器轮询 5s + 落盘等待 0.3s + 上传。
+// 30 秒是这条链路的上界再加一点余量 —— 它只在命令真的超时时才会用掉。
+const CLEANUP_GRACE = 30_000;
 
 /** 挑一个 Windows 那台连得回来的本机 IPv4。回传服务要绑它,127.0.0.1 对面够不着。 */
 export function detectLocalAddress() {
@@ -160,7 +166,9 @@ const echoFilter = (sent) => (line) => {
  *
  * @param cmd      PowerShell 命令(可多行)
  * @param cwd      在哪个目录跑;默认项目目录
- * @param timeout  毫秒,整次调用的期限(含查项目/建会话/发输入/收回传);超时按失败返回而不是抛
+ * @param timeout  毫秒,**那条命令**能跑多久;超时按失败(code 124)返回而不是抛。
+ *                 开发机这头的硬期限是 timeout + CLEANUP_GRACE —— 多出来的那段是留给对端
+ *                 杀树、确认、回传的,不是第二个 deadline。
  * @param onLine   实时预览回调 —— 传的是 PTY 画面(脏),只用来看进度,别拿它当结果
  */
 export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = null, host = DEFAULT_HOST, projectId = null } = {}) {
@@ -172,10 +180,16 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
   // 半开连接」这类**永不返回**的失败全都漏在保护之外:查项目、建会话、两次 /input 用的都是
   // 裸 fetch,调用者传的 timeout 一点约束力都没有,进程能挂到底层 TCP 自己想通为止。
   // 上一轮只修了「fetch 立刻抛错之后要清理」,没修「fetch 根本不返回」。
-  // 现在同一个 signal 串起控制面的每一跳,连收回传的兜底也挂在它的 abort 上 ——
-  // 一次调用最多活 timeout 那么久,不管卡在哪一步。
+  // 现在同一个 signal 串起控制面的每一跳,连收回传的兜底也挂在它的 abort 上。
+  //
+  // 硬期限**必须晚于对端那条命令的期限**,而且要晚出足够收尾的时间。上一版是反着来的:
+  // 外层 = timeout、对端 = max(5, timeout/1000 - 20) —— timeout 小于 25 秒时对端期限反而更长,
+  // 于是开发机先 abort、终端会话被 DELETE,对端那段杀树/删临时文件的代码一行都没跑到。
+  // 实测 timeout=3000:3.02 秒返回 124,10 秒后孙 pwsh 还活着、延迟 marker 照写,
+  // `%TEMP%` 里留着一整组 `<token>.ps1/.out/.err`(.ps1 是明文的远程命令)。
+  const hardMs = timeout + CLEANUP_GRACE;
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), timeout);
+  const timer = setTimeout(() => ac.abort(), hardMs);
 
   // 下面这一整段都得在 try 里:回传服务一 listen 就是个活着的 handle,只要还开着,
   // Node 事件循环就不会空 —— 而**建会话之前**的每一步都可能抛(对端重启、地址写错、
@@ -203,7 +217,9 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
     // 中途 throw 走不到这行,pwsh 自己会退 1。
     const script = `$LASTEXITCODE=0\n${cmd}\nexit $LASTEXITCODE`;
     const b64 = Buffer.from(script, "utf8").toString("base64");
-    const secs = Math.max(5, Math.floor(timeout / 1000) - 20);
+    // 对端那条命令的期限 = 调用者要的那个。收尾时间由开发机那头的 hardMs 额外让出来,
+    // 不从这里扣 —— 扣出来的下限(旧版是 5 秒)正是短 timeout 那条漏网路径的根。
+    const secs = Math.max(1, Math.round(timeout / 1000));
     // 为什么起独立进程而不是 `<cmd> *>&1 | Out-File`:管道要等**所有**持有 stdout 的句柄关闭
     // 才算结束,而 Windows 上留一个孙进程是常事 —— node-pty 的 conpty_console_list_agent
     // 崩了却不退,整条命令就永远等不到 EOF。实测 `npm run test:terminal` 明明 exit 0,
@@ -225,30 +241,17 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
       `[IO.File]::WriteAllText($__s,[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64}')),(New-Object Text.UTF8Encoding $false))`,
       `$__x=[Diagnostics.Process]::GetCurrentProcess().Path`,
       `$__nl=[Environment]::NewLine`,
+      // 容器要在起进程**之前**建好(见 kill-tree.mjs 顶部:事后按父链补拍快照够不着脱链后代)。
+      ...jobPreludeLines(),
       `$__p=Start-Process -FilePath $__x -ArgumentList '-NoProfile','-NonInteractive','-File',$__s -RedirectStandardOutput $__o -RedirectStandardError $__r -PassThru -NoNewWindow` + (cwd ? ` -WorkingDirectory $__d` : ``),
+      jobAssignLine(),
       `$null=$__p|Wait-Process -Timeout ${secs} -ErrorAction SilentlyContinue`,
       // 超时收尾要**连整棵进程树一起杀,而且确认它真的退干净了**再往下走。
       // 只 Kill 直接子进程是不够的:那条命令下面挂着 npm→node→tsx 一长串后代,它们活过这一刀,
       // 而 rexec 一返回,外面那把工作区锁当场就还回去了 —— 下一个人开始在同一个 worktree 上
       // checkout/clean,上一条命令的孙子还在里面写文件。两边都各自「正常」,谁也看不出结果为什么
-      // 是错的。实测:超时返回 code 124 之后,孙 pwsh 还活着,12 秒后照样把自己的产物写了出来。
-      //
-      // 先拍下整棵树的快照(杀完就再也问不出父子关系了,而且要连进程创建时间一起记 —— PID 会被
-      // 复用,只凭 PID 补刀有可能砍到一个刚好顶上这个号的无关进程)。
-      // 两个 scriptblock 都**直接往管道里吐**,不要写成 `,@(...)`。那个惯用法只在赋值给变量时
-      // 才对;这里外面已经套了 `@(& $__snap ...)`,再加逗号就多包一层 —— 拿到的是「长度 1、
-      // 唯一元素是数组」,于是 `$__tree.Count` 恒为 1、`$__alive` 里的 `$_.Id` 拿到的是整段数组、
-      // 拼进 CIM -Filter 变成语法错。实测表现:树其实杀干净了,报告却说「仍有 1 个没退出: 」
-      // 且 ID 是空的 —— 结论和 ID 自相矛盾,而两种错(误报残留、漏报残留)都不吵。
-      `$__snap={param($__r0) $__a=@(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate -ErrorAction SilentlyContinue); $__ids=@([int]$__r0); for($__i=0;$__i -lt 8;$__i++){ $__add=@($__a|Where-Object{ $__ids -contains [int]$_.ParentProcessId -and $__ids -notcontains [int]$_.ProcessId }|ForEach-Object{[int]$_.ProcessId}); if($__add.Count -eq 0){break}; $__ids+=$__add }; $__a|Where-Object{ $__ids -contains [int]$_.ProcessId }|ForEach-Object{ [pscustomobject]@{Id=[int]$_.ProcessId;Born=$_.CreationDate} }}`,
-      // 还活着的成员 = PID 还在,**且**创建时间跟快照里的一致。
-      `$__alive={param($__tr) $__tr|Where-Object{ $__c=Get-CimInstance Win32_Process -Filter ('ProcessId=' + $_.Id) -Property ProcessId,CreationDate -ErrorAction SilentlyContinue; $__c -and $__c.CreationDate -eq $_.Born }}`,
-      `$__tree=@(); $__left=@(); $__km=''`,
-      // Kill($true) 是「连整棵树一起收」(.NET 5+ / pwsh 7 有这个重载);老运行时抛
-      // MethodException,退回 taskkill /T /F。杀完等 10 秒确认,还有活着的就逐个补刀再确认一次。
-      `if(-not $__p.HasExited){ $__tree=@(& $__snap $__p.Id); try{ $__p.Kill($true) }catch{ try{ $null=& taskkill.exe /PID $__p.Id /T /F 2>&1 }catch{} }; $null=$__p.WaitForExit(10000); $__left=@(& $__alive $__tree); if($__left.Count -gt 0){ foreach($__k in $__left){ try{ $null=& taskkill.exe /PID $__k.Id /T /F 2>&1 }catch{} }; Start-Sleep -Milliseconds 1500; $__left=@(& $__alive $__tree) }; $__e=124 } else { $__e=$__p.ExitCode }`,
-      // 杀完的结论分三种,分开说 —— 「没杀干净」和「压根不知道有没有杀干净」不是一回事。
-      `if($__e -eq 124){ if($__left.Count -gt 0){ $__km = ';⚠ 仍有 ' + $__left.Count + ' 个没退出: ' + ((@($__left)|ForEach-Object{$_.Id}) -join ',') + ' —— 它们可能还在动对端工作区,本次之后的结果都不可信' } elseif($__tree.Count -eq 0){ $__km = ',但拿不到进程树快照(CIM 不可用),只确认了直接进程已退出' } else { $__km = '(' + $__tree.Count + ' 个进程),已确认全部退出' } }`,
+      // 是错的。三刀(容器 / 父链 / 逐个补刀)和三种结论措辞都在 kill-tree.mjs 里。
+      ...killTreeLines(secs),
       `Start-Sleep -Milliseconds 300`,
       `$__t=[string](Get-Content $__o -Raw -ErrorAction SilentlyContinue)`,
       `$__g=[string](Get-Content $__r -Raw -ErrorAction SilentlyContinue)`,
@@ -262,6 +265,9 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
       // **明文的远程命令**(`.ps1` 里是完整脚本,不只是磁盘垃圾)。现在删在前、发在后,
       // 本地收到回传时对端磁盘上已经一个 token 文件都没有,竞争这件事从根上不存在。
       `Remove-Item -LiteralPath $__o,$__r,$__s -Force -ErrorAction SilentlyContinue`,
+      // 关容器 —— 正常跑完那条路径也要关:命令回来了就意味着「对端工作区没人碰了」,
+      // 留个后台后代在里面写文件,下一次同步的 git clean 会跟它撞上(见 kill-tree.mjs)。
+      jobCloseLine(),
       `$__b=[Text.Encoding]::UTF8.GetBytes([string]$__t)`,
       `try { Invoke-WebRequest -Uri "http://${self}:${port}/${token}?code=$__e" -Method PUT -Body $__b -ContentType 'text/plain; charset=utf-8' -TimeoutSec 60 -UseBasicParsing | Out-Null } catch { }`,
     ].filter(Boolean).join("; ");
@@ -318,7 +324,7 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
     return await Promise.race([
       sink.done,
       new Promise((r) => {
-        const fire = () => r({ code: 124, out: `[win-remote] 超时 ${timeout}ms,未收到回传`, timedOut: true });
+        const fire = () => r({ code: 124, out: `[win-remote] 超时 ${hardMs}ms(命令期限 ${timeout}ms + 收尾 ${CLEANUP_GRACE}ms),未收到回传`, timedOut: true });
         if (ac.signal.aborted) fire();
         else ac.signal.addEventListener("abort", fire, { once: true });
       }),
@@ -327,7 +333,7 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
     // deadline 到点时,卡住的那一跳会以 AbortError 抛出来。但 rexec 对调用者的承诺是
     // 「超时按失败返回而不是抛」(收回传那条路径一直是这么做的),控制面卡住没道理换一种。
     if (ac.signal.aborted) {
-      return { code: 124, out: `[win-remote] 超时 ${timeout}ms,对端 harness 的控制面请求没在期限内返回`, timedOut: true };
+      return { code: 124, out: `[win-remote] 超时 ${hardMs}ms,对端 harness 的控制面请求没在期限内返回`, timedOut: true };
     }
     throw e;
   } finally {

@@ -8,9 +8,19 @@
 「实测」的是在那台机器上跑出来的,其余仍是读代码的推断。怎么在开发机上改、在那台机器上跑,
 见 `docs/win-remote.md`。
 
-## 〇、当前基线:14/14 绿(2026-08-18 实测)
+## 〇、当前基线
 
-一轮跑完的那 14 条,以及各自当初红在哪:
+**2026-08-19 实测这 6 条绿**:`win-launch`、`path-boundary`、`openers-windows`、
+`scheduled-messages`、`review`、`accept-merge`。**其余的绿是 2026-08-18 那轮留下的,
+夹具此后改过,没有重测就不作数** —— 别把下表当成「现在还是 14/14」。
+
+不作数的原因很具体:`test-accept-merge` / `test-review-flow` 的假 claude 已经删掉,改成
+「`HARNESS_RUNS_DIR` 一设就必须 fail-closed」的断言(见第三节);`test-scheduled-messages`
+当时那条绿更是假的 —— 它断言 `crash.signal === "SIGKILL"`,而 Windows 没有 POSIX 信号,
+`signal` 恒为 `null`,这条在真机上**只可能红**。它现在按平台分:Windows 断 `status === 1`,
+POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`)这个伪前提。
+
+下表是各条**首次**上真机时红在哪(2026-08-18),留作分类样本,不是当前状态:
 
 | 测试 | 首次上真机 | 红的是什么 |
 |---|---|---|
@@ -21,15 +31,15 @@
 | `terminal` | 绿 | (留一个孤儿进程,见第五节) |
 | `file-browser` | 绿 | |
 | `local-open` | 绿 | |
-| `review` | 绿 | |
-| `accept-merge` | 绿 | |
+| `review` | 绿 | 当时靠假 CLI;夹具已换,2026-08-19 重测仍绿 |
+| `accept-merge` | 绿 | 同上 |
 | `free-workflow` | 红 → 绿 | **产品 bug**:`free-review-files.ts` 拼 `/` 判边界 + 夹具是 POSIX 方言(B 类) |
 | `skills` | 红 → 绿 | 动态 `import` 说明符不是 `file://`(Windows 上 `d:` 被当协议拒);随后 A 类 |
 | `cli-catalog` | 红 → 绿 | 夹具依赖 `echo`/`sh`(B 类) |
 | `cli-overrides` | 红 → 绿 | 假 CLI 是 `#!/bin/sh` + 写死 `:`;夹具只设 `HOME`(Windows 认 `USERPROFILE`) |
-| `scheduled-messages` | 红 → 绿 | 假 CLI 是 sh 脚本(B 类),而且被 A 类盖住了 |
+| `scheduled-messages` | 红 → **假绿** | 假 CLI 是 sh 脚本(B 类)+ A 类;修完这两类之后才露出真正那条 POSIX 信号断言 |
 
-真机红的原因基本只有两类,认出类别比逐条查快得多:
+真机红的原因基本只有三类,认出类别比逐条查快得多:
 
 - **A 类:收尾 EBUSY。**断言全过,却在 `finally` / `process.on("exit")` 里删不掉临时目录或库文件。
   POSIX 删得掉还开着的文件,Windows 删不掉。危害不止于「多留个临时目录」——**它抛在收尾路径上,
@@ -40,6 +50,10 @@
   PATH 拼接写死 `:`、只设 `HOME`。**两边通吃的写法是转手交给 `node`**:测试本身就是它跑起来的,
   必然在、必然是 PATH 上的真文件,而且 execFile 直起是亲子进程(不像 `.cmd` 垫片中间垫一层
   cmd.exe,手停的击杀语义两边就不一样了)。
+- **C 类:断言写的是 POSIX 语义。**最典型的是「被 SIGKILL 杀掉」——Windows 上进程终止没有信号,
+  `child.signal` 恒为 `null`,退出码是 `TerminateProcess` 传进去的那个数。要断的其实是
+  「它是被硬杀死的、不是自己正常退出的」,两边各写各的判据(POSIX 看 `signal`,Windows 看
+  `status`),并且**先把「压根没进到那个状态」排除掉**,否则平台分支只是把假绿换个地方藏。
 
 **A/B 之外真找出来的产品 bug 只有一类,但它有五处**:`startsWith(x + "/")` 判路径边界。
 `path.resolve` 在 Windows 上还的是反斜杠,这个前缀比较**恒为假** —— 不是安全收紧,是整条功能
@@ -93,21 +107,28 @@
 已经统一代跑的人给一个临时库并在跑完删掉 —— 不给的话,红出来的样子是「Windows 上失败了」,
 而其实 mac 上不设照样红。
 
-## 三、假 CLI 夹具(已全部改成两边通吃)
+## 三、假 CLI 夹具
 
 这几条往 PATH 里塞一个**假 CLI** 来验执行链路。原先那批是 `#!/bin/sh` 脚本 + `chmod 755` + 写死
-的 `:`,在 Windows 上一句都跑不起来;现已逐条改成「壳按平台换(`.cmd` / shebang),本体交给 node」:
+的 `:`,在 Windows 上一句都跑不起来;留下来的这几条已改成「壳按平台换(`.cmd` / shebang),本体
+交给 node」:
 
 | 测试 | 假 CLI 干什么 |
 |---|---|
-| `test-accept-merge.ts` | `exit 0` |
 | `test-cli-catalog.ts` | 回显第一个参数(`%~1` / `"$1"`);另有三段直接用 `node -e` 当被测命令 |
 | `test-cli-overrides.ts` | 把收到的环境变量写进探针文件 |
-| `test-review-flow.ts` | `exit 0`(同时还用符号链接,见上一节) |
 | `test-scheduled-messages.ts` | 读一行 stdin、回两条 JSON,模拟一次完整回合 |
 
 `cli-catalog` 的回显桩在 Windows 上顺带多验了一段产品逻辑:命中的是批处理垫片,`resolveLaunch`
 必须把它拆成 cmd.exe 调用而不是直接 execFile(`bin-resolve.ts` 里 CVE-2024-27980 那段)。
+
+**`test-accept-merge.ts` 和 `test-review-flow.ts` 已经不摆假 CLI 了**,别再照着上面那张表去找。
+它们要的只是「别真起 claude」,而这件事 `spawn.ts` 的 `guardAgentSpawn` 已经在做:设了
+`HARNESS_RUNS_DIR` 且没显式给 `HARNESS_ALLOW_REAL_AGENT=1` 时,任何执行器启动都被换成一个立刻
+失败的假 child。于是这两条改成在开头断言这个隔离确实生效 —— 假 CLI 是「挡住了就没人知道有没有
+挡住」,fail-closed 断言是「没挡住就当场炸」。断言故意会响,所以这两条的临时目录清理挂在
+`process.on("exit")` 上,不能只放在 `finally` 里(2026-08-19 反证过:去掉钩子,`HARNESS_ALLOW_REAL_AGENT=1`
+跑一次就在 `os.tmpdir()` 留一个 `harness-review-flow-*`)。
 
 ## 四、验的是 Windows 上**有意不做**的功能
 
@@ -127,8 +148,11 @@
 其余(纯逻辑、Node 内置 API、`execFile("git", …)`)没有额外前提,应当直接绿。两处还没落实:
 
 - 团队 / duet 那批长链路测试只做了静态阅读,没有逐条推演会不会间接踩到上面几类前提。
-  **注意其中一批(`test:queue`、`test:review` 等端到端)会真 spawn `claude -p` 烧真额度**,
-  不适合拿来做无人值守的全量扫描 —— 要跑就挑着跑。
+  其中**有一批会真 spawn `claude -p` 烧真额度** —— 判据不是「名字看着像端到端」,而是
+  **它有没有设 `HARNESS_RUNS_DIR`**:设了的那批被 `guardAgentSpawn` fail-closed 挡着
+  (`review`、`accept-merge`、`free-workflow*`、`workflow-*`、`turn-*` 等),不设的那批没人挡
+  (`test:queue` 就是,`grep -L HARNESS_RUNS_DIR server/scripts/test-*.ts` 能列全)。
+  要无人值守地全量扫,先按这条筛一遍。
 - `test-terminal.ts` 已按平台分了 shell(Windows 走 `cmd.exe`,探针命令换成 `echo` + `cd`),
   ConPTY 那条路**实测绿**(2026-08-18,8.6s)。但它会在退出时留一个孤儿:node-pty 的
   `conpty_console_list_agent.ts:13` 抛 `Error: AttachConsole failed` 之后不退,继续攥着 stdout。

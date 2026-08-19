@@ -351,7 +351,18 @@ try {
     env: { ...process.env, HARNESS_TEST_CRASH_MESSAGE: "scheduled-crashed" },
     encoding: "utf8",
   });
-  assert.equal(crash.signal, "SIGKILL", `子进程应当在持有租约时被硬杀:${crash.stderr ?? ""}`);
+  // 「它确实是被硬杀的」这件事,两个平台的证据不一样:POSIX 下父进程拿得到 signal='SIGKILL',
+  // Windows 上没有信号这回事 —— Node 的 process.kill 落到 TerminateProcess,回来的是
+  // status=1 / signal=null。原来这里无条件断言 signal,于是真 Windows 上这条回归**固定**停在
+  // 这一行,后面「租约还挂着 / 开机回收 / 原话补发进时间线」三段核心断言一条都没跑过,
+  // 而那台机器正是我们唯一能验 Windows 行为的地方。
+  assert.ok(!crash.error, `子进程根本没起来:${crash.error?.message ?? ""}`);
+  assert.notEqual(crash.status, 3, "子进程没抢到租约,这一段的前提就不成立(beginDelivery 返回 false)");
+  if (IS_WINDOWS) {
+    assert.equal(crash.status, 1, `子进程应当在持有租约时被硬杀:status=${crash.status} ${crash.stderr ?? ""}`);
+  } else {
+    assert.equal(crash.signal, "SIGKILL", `子进程应当在持有租约时被硬杀:${crash.stderr ?? ""}`);
+  }
 
   const crashed = (await db.select().from(scheduledMessages)
     .where(eq(scheduledMessages.id, "scheduled-crashed"))).at(0)!;

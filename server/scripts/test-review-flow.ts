@@ -12,6 +12,11 @@ import { releaseTmpDb } from "./tmp-db.js";
 const root = mkdtempSync(join(tmpdir(), "harness-review-flow-"));
 process.env.HARNESS_DB = join(root, "harness.db");
 process.env.HARNESS_RUNS_DIR = join(root, "runs");
+// 这个脚本是线性的,没有包住全程的 try/finally —— 清理全靠跑到最后那几行。于是**任何**一条
+// 断言失败都会在 TEMP 里留下一个 harness-review-flow-*,fail-closed 那条(见下面 guardAgentSpawn
+// 的前提断言)尤其:它本来就是设计成要响的。exit 钩子对每条早退路径都成立;成功路径末尾那次
+// 清理照旧,它还得先 releaseTmpDb 才删得动库文件。
+process.on("exit", () => { try { rmSync(root, { recursive: true, force: true }); } catch {} });
 
 const { mountReviewRoutes } = await import("../src/review.js");
 // 证据落盘（路径边界、结论文件）住在 review-evidence.ts，措辞住在 review-prompts.ts。

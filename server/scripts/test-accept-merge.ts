@@ -16,6 +16,11 @@ process.env.HARNESS_DB = join(root, "harness.db");
 // (Windows 用 `;` 分隔、查找只认 PATHEXT 后缀、内核不认 shebang),而且不管哪个平台它都从没
 // 被执行过:死代码,还让人误以为这一轮验的是 CLI 启动。真正验的是「有没有真发起这一轮」。
 process.env.HARNESS_RUNS_DIR = join(root, "runs");
+// 舞台的兜底清理挂在**建好它的下一行**,而不是靠尾部那个 finally。下面这条 fail-closed 断言
+// 就在 try 之前:它一响(HARNESS_ALLOW_REAL_AGENT=1 时正是要它响),脚本当场掀桌,尾部清理
+// 一行都执行不到,TEMP 里就躺下一个 harness-accept-merge-test-*。exit 钩子对**每条**早退
+// 路径都成立,成功路径那次 rmSync 照旧(它还得先 releaseTmpDb),这里只管兜底。
+process.on("exit", () => { try { rmSync(root, { recursive: true, force: true }); } catch {} });
 assert.ok(
   process.env.HARNESS_ALLOW_REAL_AGENT !== "1",
   "用例 13 靠 guardAgentSpawn 拦住真 CLI;拦截器一失效,测试就会拿用户的真额度跑 agent",

@@ -21,7 +21,7 @@
 // 而不是测试结果,就得重启对端的 harness —— 那会连着把这条通道一起掐了(重启完自己会回来)。
 // 所以默认路线是「跑回归测试」,它是独立进程,不需要重启对端服务。
 import { rexec, resolveProject, controlSignal } from "./win-remote/transport.mjs";
-import { syncToRemote, remoteWorkspacePath } from "./win-remote/sync.mjs";
+import { syncToRemote, remoteWorkspacePath, workspaceGuardPs } from "./win-remote/sync.mjs";
 import { withRemoteLock } from "./win-remote/lock.mjs";
 
 // Windows 上「伪造 platform 也验不了」的那几条,才值得占用真机(docs/windows-testing.md)。
@@ -63,7 +63,10 @@ async function cmdDoctor() {
     `try { New-Item -ItemType SymbolicLink -Path (Join-Path $__st 'l') -Target $__st -ErrorAction Stop | Out-Null; Write-Output 'symlink=ok' } catch { Write-Output 'symlink=no' }`,
     `Remove-Item $__st -Recurse -Force -ErrorAction SilentlyContinue`,
     `Write-Output ('temp=' + $env:TEMP)`,
-    `Write-Output ('worktree=' + (Test-Path -LiteralPath '${remoteWorkspacePath(p.repoPath).replace(/'/g, "''")}'))`,
+    // 体检报的不是「那个路径下有东西」,而是「那个目录能用」—— 两者差着一整条安全边界:
+    // 上一版只做 Test-Path,于是 WIN_REMOTE_WORKSPACE=. 时它对着 live 主仓报「已就绪」。
+    // 跑真正的所有权断言,拿它的报错原文当结论。
+    `try { ${workspaceGuardPs(p.repoPath).split("\n").join("; ")}; Write-Output 'worktree=ok' } catch { Write-Output ('worktree=' + $_.Exception.Message) }`,
   ].join("\n");
   const res = await rexec(probe, { cwd: p.repoPath, projectId: p.id, timeout: 60_000 });
   // 退出码先看。体检这条命令**自己失败了**的时候(回传拿不到、pwsh 炸了、对端 harness 半死),
@@ -84,9 +87,18 @@ async function cmdDoctor() {
   console.log(`  node ${kv.node ?? "?"} ${nodeVersionOk ? green("✓") : red("✗ 需 >= 22.16.0(node:sqlite)")}`);
   console.log(`  git ${kv.git ?? "?"}   pwsh ${kv.pwsh ?? "?"}`);
   console.log(`  symlink ${kv.symlink === "ok" ? green("✓ 建得出来(夹具可用)") : red("✗ 建不出来 —— 开发者模式没开,symlink 夹具会红")}`);
-  console.log(`  测试 worktree ${remoteWorkspacePath(p.repoPath)} ${kv.worktree === "True" ? green("已就绪") : dim("尚未创建(首次 sync 时建)")}`);
+  const wt = kv.worktree ?? "";
+  const wtOk = wt === "ok";
+  const wtFresh = /工作区不存在/.test(wt);
+  console.log(
+    `  测试 worktree ${remoteWorkspacePath(p.repoPath)} ` +
+      (wtOk ? green("已就绪") : wtFresh ? dim("尚未创建(首次 sync 时建)") : red(`✗ ${wt || "校验没跑通"}`)),
+  );
+  // 目录不可用 ≠ 通道不可用,但也绝不能只算个提示:exec / test --no-sync 都会在那个目录里
+  // 干活,它没过所有权校验就是「这台机器上没有一个可用的落脚点」。通道那行照打 —— 它是真的通,
+  // 少了它反而看不出问题出在哪一层。
   console.log(bold("\n通道") + `  ${green("✓")} 终端 API 可用,输出回传正常`);
-  return 0;
+  return wtOk || wtFresh ? 0 : 1;
 }
 
 async function cmdSync() {
@@ -106,7 +118,10 @@ async function cmdExec(args) {
   const cmd = args.join(" ");
   if (!cmd) throw new Error("exec 需要一条命令");
   const cwd = remoteWorkspacePath(p.repoPath);
-  const res = await inWorkspace(p, ({ guard }) => rexec(`${guard}\n${cmd}`, { cwd, projectId: p.id, onLine: live }));
+  // 用户的命令跑在那个目录里,所以在它之前先断言那个目录确实是 win-remote 自己的 worktree ——
+  // exec 不经过 sync,原来一路上没有任何一处校验过归属(见 sync.mjs workspaceGuardPs)。
+  const res = await inWorkspace(p, ({ guard }) =>
+    rexec(`${guard}\n${workspaceGuardPs(p.repoPath)}\n${cmd}`, { cwd, projectId: p.id, onLine: live }));
   console.log(res.out);
   console.log(res.code === 0 ? green(`[exit 0]`) : red(`[exit ${res.code}]`));
   return res.code;
@@ -128,6 +143,13 @@ async function cmdTest(args) {
       const r = await syncToRemote({ repoPath: p.repoPath, projectId: p.id, onLine: live, guard });
       cwd = r.worktree;
       console.log(`  ${r.localSha} → ${green(r.remoteSha)}(清理 ${r.cleaned} 项快照外内容)\n`);
+    } else {
+      // --no-sync 跳过的是同步,不是**校验** —— 这条路原来完全绕开了所有权那一段,
+      // 于是 `WIN_REMOTE_WORKSPACE=.` 会把整批 npm 测试跑进对端的 live 主仓。
+      const chk = await rexec(`${guard}\n${workspaceGuardPs(p.repoPath)}\nWrite-Output 'WS=ok'`, {
+        cwd: p.repoPath, projectId: p.id, timeout: 60_000,
+      });
+      if (chk.code !== 0) throw new Error(`--no-sync 的目标目录不能用:\n${chk.out.split("\n").slice(-10).map((l) => `  ${l}`).join("\n")}`);
     }
 
     console.log(bold("② 在真 Windows 上跑回归"), dim(cwd));

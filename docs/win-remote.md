@@ -87,6 +87,14 @@ live 服务的源码换掉。放在主仓内部还白捡一个好处:Node 解析
    确实想覆盖它,`WIN_REMOTE_ADOPT=1` 跑一次接管,同步完会用红字说明「里面原有的未提交内容已被
    覆盖」。自己新建的 worktree 当场盖章,之后不需要任何确认。顺序同样是判据的一部分:上一版把检查
    放在 checkout 之后,就算最后拒绝了 clean,tracked 的未提交改动也已经被 `--force` 丢了。
+
+   这套判据原先**只有 sync 有**,而 `exec` 和 `test --no-sync` 压根不经过 sync —— 保护写好了,
+   新开的传播路径却没接上。现在抽成 `workspaceGuardPs()`,每个会在对端目录里干活的入口
+   (sync / exec / `test --no-sync` / doctor 的探针)都先跑一遍同一段。
+
+   `WIN_REMOTE_WORKSPACE` 本身也在**一个**地方规范化并校验(`workspaceRel()`):空串、`.`、`..`、
+   含 `..` 的路径、盘符开头、`/` 或 `\` 开头、UNC —— 一律拒绝并说明理由,CLI 以 1 退出。
+   空串尤其要拦:它拼出来的正是对端 repo 根,也就是那个**正在跑着 harness 的主工作区**。
 2. **先摘掉目录型 reparse point,再 clean。** `git clean` 的递归删除同样会穿过 junction ——
    那四个 `@harness/*` 指着的正是主仓的 `shared`/`server`/`web-next`/`mcp`。摘掉的链接紧接着
    就原地重建,所以顺带也免了「junction 指错」那一半。连**枚举**都不能进 junction:
@@ -106,6 +114,14 @@ token 文件都没有,原先「删文件 vs 开发机随手关掉终端会话」
 的 `abort` 上(而不是再起一个同样长的定时器,那会让总时长变成两倍)。超时仍然是**返回**
 `code: 124` 而不是抛。收尾那条删会话用自己的 `min(5s, timeout)`,因为它加在调用者的等待
 **之后**,而且主 signal 那时已经 abort 了,借用它等于必然删不掉、把会话留在对端。
+
+**开发机这条兜底期限要比远端那条晚,而不是早。** `timeout` 是给**命令**的期限,对端拿它去
+`Wait-Process -Timeout`;开发机这边的硬期限得留出收尾的时间 —— 杀树、等确认、读输出、删 token
+文件、回传,这一串在超时路径上少说十几秒。上一版远端是 `floor(timeout/1000) - 20` 秒、开发机
+就是 `timeout`,于是 `timeout` 小于 25 秒时两条期限倒挂:开发机先 abort,把终端会话 DELETE 掉,
+对端那条命令连「我超时了」都还没来得及说,回传自然收不到,报出来的是「没收到回传」而不是
+「超时被杀」,`%TEMP%` 里那组 token 文件也留下了。现在远端就是 `timeout` 本身
+(至少 1 秒),开发机是 `timeout + 30s`(`CLEANUP_GRACE`),超时消息里两段分开写清楚。
 
 期限还得覆盖**进 `rexec` 之前**那一跳。CLI 的四个子命令都先查一次项目拿 `repoPath`,那次查询在
 `rexec` 的 deadline 之外 —— 对端只接连接不回包时,`doctor/sync/exec/test` 全停在「对端 harness」
@@ -174,8 +190,21 @@ owner 带随机 id + ISO 时间戳也不会 ABA),并且**在句柄里重新算�
 npm→node→tsx 一长串后代,它们活过这一刀,而 `rexec` 一返回,外面那把工作区锁当场就还回去了 ——
 下一个人开始在同一个 worktree 上 checkout/clean,上一条命令的孙子还在里面写文件,两边都各自
 「正常」。实测复现过:超时返回 124 之后孙 pwsh 还活着,几十秒后照样把自己的产物写了出来。
-现在先拍一张整棵树的快照(连进程创建时间一起记,PID 会被复用,只凭 PID 补刀可能砍到刚顶上这个
-号的无关进程),`Process.Kill($true)` 收树(老运行时退回 `taskkill /T /F`),等 10 秒逐个确认,
-还有活着的就补刀再确认一次。结论分三种写进输出,分开说:「已确认全部退出(N 个进程)」、
-「⚠ 仍有 N 个没退出: <ID>」、「拿不到进程树快照(CIM 不可用),只确认了直接进程已退出」——
-「没杀干净」和「不知道有没有杀干净」不是一回事,后者也不能当成前者咽下去。
+
+**光靠事后遍历父链是够不着的。** 快照是「杀之前照着 `ParentProcessId` 往下走一遍」,而
+root→middle→grandchild 这条链上 middle 只要先退出,grandchild 的父指针就成了悬空(Windows 不做
+重新挂靠),它既不在任何一次遍历里,也就不在补刀名单里 —— 而它照样握着那个 worktree。实测:
+middle 起完孙子立刻 `exit 0`,超时那一刀过后孙子还在每秒往文件里写。
+
+所以主力换成 **Job Object**(`scripts/win-remote/kill-tree.mjs`):`Start-Process` 起 root 之后
+立刻 `AssignProcessToJobObject`,此后它的所有后代**自动进同一个容器**,跟父指针还在不在无关。
+用到三件事:`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 让「pwsh 自己没了(比如开发机中途 abort、
+把终端会话 DELETE 掉)」也由内核把整个容器带走;超时那一刀用 `TerminateJobObject` 一次收干净;
+收完再拿 `QueryInformationJobObject` 的 `ActiveProcesses` **数**着确认归零,而不是凭「我调过了」。
+CIM 快照保留下来当补充 —— 它覆盖 `Start-Process` 返回到 assign 之间那几毫秒。
+
+两种降级必须**如实说**,不能都写成「已确认全部退出」:`Add-Type` 编译不了或建不出 Job 时,
+只剩父链快照,输出里明说「Job 容器不可用,中间进程已退出的脱链后代看不见,可能仍在动对端工作区」;
+连 CIM 也拿不到时,说「只确认了直接进程已退出」。真有没退干净的,按「⚠ 仍有 N 个没退出」
+或「⚠ Job 容器里仍有 N 个进程没退出」报。「没杀干净」「不知道有没有杀干净」「确认杀干净了」
+是三件事,输出里就得是三种话。
