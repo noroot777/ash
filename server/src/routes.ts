@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
+import { getConnInfo } from "@hono/node-server/conninfo";
 import { eq, inArray } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
 import { rmSync, mkdirSync, writeFileSync } from "node:fs";
@@ -49,10 +50,12 @@ import { mountTerminalRoutes } from "./terminal.js";
 import { mountFreeWorkflowRoutes } from "./free-workflow-routes.js";
 import { mountReviewerProfileRoutes } from "./reviewer-profiles.js";
 import { mountLocalOpenRoutes } from "./local-open-routes.js";
+import { directoryPickerSupport, mountDirectoryPickerRoutes } from "./dir-picker.js";
 
 export const api = new Hono();
 mountNoteRoutes(api);
 mountLocalOpenRoutes(api);
+mountDirectoryPickerRoutes(api);
 
 // ── health ───────────────────────────────────────────────────────────────
 api.get("/health", (c) => c.json({ ok: true, ts: now() }));
@@ -69,7 +72,14 @@ api.get("/restart-impact", async (c) => {
 // 「server 跑在哪台机器上」。**不进 /settings** —— 那是一张可写的持久化设置表
 // (`app-settings.ts` 用 satisfies 钉住了键集),这条是只读的运行时事实。前端拿它
 // 决定路径提示按什么形状给(浏览器所在系统不算数,项目目录在服务端这台机器上)。
-api.get("/host", (c) => c.json(hostInfo()));
+//
+// `canPickDirectory` 得按**这一次请求**算:文件选择窗口弹在服务端桌面上,只有本机打开
+// 的浏览器用得上(见 dir-picker.ts)。所以它不进 hostInfo() —— 那是台机器的静态事实,
+// 这条跟调用方是谁有关。
+api.get("/host", (c) => c.json({
+  ...hostInfo(),
+  canPickDirectory: directoryPickerSupport(getConnInfo(c).remote.address).available,
+}));
 
 api.get("/settings", async (c) => c.json(await getAppSettings()));
 

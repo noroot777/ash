@@ -22,7 +22,16 @@ export type HostInfo = {
   sep: string;
   /** 服务端当前用户的家目录绝对路径。 */
   home: string;
+  /**
+   * 这次请求能不能弹系统文件选择窗口。窗口弹在**服务端桌面**上，所以远程浏览器
+   * （Tailscale / 局域网）拿到的是 `false` —— 那时按钮根本不该出现。
+   * 老服务端没有这个字段，读到 `undefined` 按「不能」处理。
+   */
+  canPickDirectory?: boolean;
 };
+
+/** `POST /api/host/pick-directory` 的结果。用户点了取消不是错误。 */
+export type DirectoryPick = { path: string; cancelled: false } | { path: null; cancelled: true };
 
 export type TaskWorkspaceProbe = TaskWorkspaceLeftover & {
   /** 有 Git 残留的 children（团队执行者 / duet 搭档），删除会连行一起删，探测必须一并报。 */
