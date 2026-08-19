@@ -47,13 +47,41 @@ export interface AppSettings {
   // 这是**前端轮询间隔**,不是服务端扫描周期:服务端每次请求都真扫盘(命中 mtime
   // 指纹就走缓存,~0.5ms)。按小时计:装新技能是低频动作,等不及有「立即重新扫描」。
   skillRefreshSeconds: number;
+  // 任务接力的候选目标:另一台跑着 harness 的机器。url 是对端根地址(http://host:4317)。
+  handoffTargets: HandoffTarget[];
 }
 
 export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
   worktreeDefault: true,
   defaultWorkflowId: "",
   skillRefreshSeconds: 3600,
+  handoffTargets: [],
 });
+
+// ── 任务接力（跨机器 handoff）──────────────────────────────────────────────
+// 把一个任务连同 git 分支、CLI 会话文件、会话产物整体迁到另一台 harness 上续跑。
+export interface HandoffTarget {
+  name: string;
+  url: string;
+}
+
+// 落在 tasks.handoff（json）上的持久接力标记:导出侧 direction:"out"（任务已交出去，
+// 本地这份只是历史），导入侧 direction:"in"（从别的机器接过来的）。刷新后横幅靠它。
+export interface TaskHandoff {
+  direction: "out" | "in";
+  // out: 对端 harness 根地址（横幅可点过去）；in: 源机自述不了地址,为 null。
+  peerUrl: string | null;
+  // out: 目标配置里的名字；in: 源机主机名。
+  peerName: string | null;
+  // 对端那份任务的 id（同 id 迁移,当前恒等于本任务 id;留字段防语义变化）。
+  peerTaskId: string;
+  at: string;
+  // 成功搬运的 CLI 会话文件数。0 = 对端只能全新起跑（吃一遍任务正文）。
+  sessions: number;
+  // 代码是否随任务走了:bundle = 分支打包带走;none = 没有可带的（非 worktree 任务等）。
+  git: "bundle" | "none";
+  note?: string;
+}
 
 // ── CLI skills (输入框的 `/` 补全) ────────────────────────────────────────
 export type { SkillEntry, SkillList, SkillScanOverview, SkillScanRow, SkillSource } from "./skills.ts";
@@ -347,6 +375,8 @@ export interface Task {
   questionOptions?: string[] | null;
   // 多问题列表；null/[] 沿用单问题 question + questionOptions。
   questionItems?: QuestionItem[] | null;
+  // 任务接力标记（见 TaskHandoff）。null = 从未接力。
+  handoff?: TaskHandoff | null;
 }
 
 export interface QuestionItem {

@@ -94,6 +94,7 @@ const toTask = (r: TaskRow, profiles: AgentLabelRow[] = []): Task => ({
   question: r.question ?? null,
   questionOptions: r.questionOptions ? (JSON.parse(r.questionOptions) as string[]) : null,
   questionItems: r.questionItems ? (JSON.parse(r.questionItems) as QuestionItem[]) : null,
+  handoff: r.handoff ? JSON.parse(r.handoff) : null,
 });
 
 // GET /tasks、task.created 和 task.updated 共用这一条序列化路径，保证派生的

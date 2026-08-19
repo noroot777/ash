@@ -19,6 +19,16 @@ const SETTING_SPECS = {
       typeof v === "number" && Number.isInteger(v) && (v === 0 || (v >= 3600 && v <= 86400)),
     hint: "必须是 0（关闭轮询）或 3600~86400 之间的整数秒（1~24 小时）",
   },
+  handoffTargets: {
+    ok: (v: unknown) =>
+      Array.isArray(v) && v.length <= 20 && v.every((t) => {
+        if (!t || typeof t !== "object") return false;
+        const { name, url } = t as { name?: unknown; url?: unknown };
+        return typeof name === "string" && name.length >= 1 && name.length <= 64
+          && typeof url === "string" && /^https?:\/\/\S+$/.test(url) && url.length <= 256;
+      }),
+    hint: "必须是 {name,url}[]（url 以 http(s):// 开头，最多 20 个目标）",
+  },
 } satisfies { [K in keyof AppSettings]: { ok: (v: unknown) => boolean; hint: string } };
 
 const SETTING_KEYS = Object.keys(SETTING_SPECS) as (keyof AppSettings)[];
