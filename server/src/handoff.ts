@@ -33,7 +33,12 @@ import { codexHome, findRollout } from "./executors/codex-rollout.js";
 import { sessionTranscriptPath, TURN_SENTINEL } from "./transcript.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { now } from "./util.js";
-import type { TaskHandoff } from "@harness/shared";
+import type {
+  HandoffExportResult, HandoffPingProject, HandoffPreflightResult, TaskHandoff,
+} from "@harness/shared";
+
+// 应答形状与前端共用,类型本体在 shared;这里转发给 handoff-routes 等服务端调用方。
+export type { HandoffExportResult, HandoffPingProject, HandoffPreflightResult } from "@harness/shared";
 
 const exec = promisify(execFile);
 
@@ -136,13 +141,6 @@ export interface HandoffManifest {
     bundleBase64: string;
   };
   files: HandoffFilePayload[];
-}
-
-export interface HandoffPingProject {
-  id: string;
-  name: string;
-  repoPath: string;
-  isRepo: boolean;
 }
 
 export interface HandoffPingResponse {
@@ -407,21 +405,6 @@ async function packGitState(
   });
 }
 
-export interface HandoffPreflightResult {
-  ok: true;
-  target: { url: string; host: string };
-  projects: HandoffPingProject[];
-  suggestedProjectId: string | null;
-  local: {
-    status: string;
-    running: boolean;
-    sessions: number;
-    sessionFilesFound: number;
-    git: "bundle" | "none";
-    notes: string[];
-  };
-}
-
 /** 接力预检:探测对端、匹配项目、盘点本地可搬运的东西。只读,不停任务不动文件。 */
 export async function preflightHandoff(taskId: string, targetUrlRaw: string): Promise<HandoffPreflightResult> {
   const { task, project } = await loadSingleTask(taskId);
@@ -456,16 +439,6 @@ export async function preflightHandoff(taskId: string, targetUrlRaw: string): Pr
       notes,
     },
   };
-}
-
-export interface HandoffExportResult {
-  ok: true;
-  remoteTaskId: string;
-  remoteUrl: string;
-  sessionsMigrated: number;
-  git: "bundle" | "none";
-  autoResume: boolean;
-  notes: string[];
 }
 
 export async function exportHandoff(

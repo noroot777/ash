@@ -1,0 +1,55 @@
+/* 任务接力:HandoffDialog(对话框)、HandoffBanner(详情页横幅)、
+   DefaultsSettings 里的接力目标编辑行。 */
+
+.handoff-dialog { width: min(540px, 94vw); }
+.handoff-dialog > p { margin: 12px 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+
+.handoff-field { display: grid; gap: 5px; margin: 10px 0; }
+.handoff-field label { color: var(--faint); font-size: 10.5px; }
+.handoff-field select {
+  min-width: 0;
+  height: 30px;
+  border: 1px solid var(--line2);
+  border-radius: 7px;
+  background: var(--canvas);
+  padding: 0 8px;
+  outline: 0;
+  color: var(--ink);
+  font-size: 11.5px;
+}
+.handoff-field select:disabled { cursor: not-allowed; opacity: 0.55; }
+
+.handoff-error,
+.handoff-probing { display: flex; align-items: center; gap: 5px; margin: 10px 0; font-size: 11px; }
+.handoff-error { color: var(--red); }
+.handoff-probing { color: var(--faint); }
+
+.handoff-summary,
+.handoff-notes { margin: 10px 0; padding-left: 18px; font-size: 11px; line-height: 1.7; }
+.handoff-summary { color: var(--muted); }
+.handoff-notes { color: var(--faint); }
+
+.handoff-check { display: flex; align-items: center; gap: 6px; margin: 12px 0 0; color: var(--ink); font-size: 11.5px; }
+
+.handoff-remote-link { display: inline-flex; align-items: center; gap: 3px; color: var(--accent); }
+
+/* 详情页横幅:接力标记持久落在 tasks.handoff 上,刷新后仍看得见。 */
+.task-handoff-banner {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 8px 18px 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in lch, var(--accent) 7%, var(--panel));
+  padding: 7px 12px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.task-handoff-banner > svg { flex: none; color: var(--accent); }
+.task-handoff-banner a { display: inline-flex; flex: none; align-items: center; gap: 3px; color: var(--accent); }
+
+/* 设置页的接力目标编辑行:名字窄、地址宽、删除按钮贴右。 */
+.handoff-target-row { gap: 7px; }
+.handoff-target-row .ui-input { flex: 1 1 0; min-width: 0; }
+.handoff-target-row .handoff-target-name { flex: 0 1 180px; }

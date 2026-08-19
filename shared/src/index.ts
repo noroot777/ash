@@ -83,6 +83,42 @@ export interface TaskHandoff {
   note?: string;
 }
 
+// 对端 /handoff/ping 报出的候选项目（接力对话框里选目标项目用）。
+export interface HandoffPingProject {
+  id: string;
+  name: string;
+  repoPath: string;
+  isRepo: boolean;
+}
+
+// POST /tasks/:id/handoff/preflight 的应答:探测对端 + 盘点本地可搬运的东西,只读。
+export interface HandoffPreflightResult {
+  ok: true;
+  target: { url: string; host: string };
+  projects: HandoffPingProject[];
+  // 按仓库目录名匹配出的对端项目;null = 没匹配上,让用户自己选。
+  suggestedProjectId: string | null;
+  local: {
+    status: string;
+    running: boolean;
+    sessions: number;
+    sessionFilesFound: number;
+    git: "bundle" | "none";
+    notes: string[];
+  };
+}
+
+// POST /tasks/:id/handoff 的应答。
+export interface HandoffExportResult {
+  ok: true;
+  remoteTaskId: string;
+  remoteUrl: string;
+  sessionsMigrated: number;
+  git: "bundle" | "none";
+  autoResume: boolean;
+  notes: string[];
+}
+
 // ── CLI skills (输入框的 `/` 补全) ────────────────────────────────────────
 export type { SkillEntry, SkillList, SkillScanOverview, SkillScanRow, SkillSource } from "./skills.ts";
 

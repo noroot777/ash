@@ -7,6 +7,8 @@ import type {
   FreeReviewDispatchInput,
   GateAction,
   Group,
+  HandoffExportResult,
+  HandoffPreflightResult,
   LlmProtocol,
   LlmProvider,
   Note,
@@ -220,6 +222,16 @@ export const api = {
     request(`/tasks/${id(taskId)}/team/kill-cua`, { method: "POST" }),
   iterateTeamDuet: (taskId: string): Promise<Task> =>
     request(`/tasks/${id(taskId)}/team/iterate-duet`, { method: "POST" }),
+
+  // 任务接力:preflight 只读探测对端与本地可搬运的东西;handoffTask 会真的停下任务、
+  // 打包 git 分支与 CLI 会话文件推给对端(可能上百 MB,调用点要给持续的忙碌反馈)。
+  handoffPreflight: (taskId: string, targetUrl: string): Promise<HandoffPreflightResult> =>
+    request(`/tasks/${id(taskId)}/handoff/preflight`, json("POST", { targetUrl })),
+  handoffTask: (
+    taskId: string,
+    body: { targetUrl: string; targetProjectId: string; targetName?: string; autoResume?: boolean },
+  ): Promise<HandoffExportResult> =>
+    request(`/tasks/${id(taskId)}/handoff`, json("POST", body)),
 
   taskWorkspace: (taskId: string): Promise<TaskWorkspaceProbe> =>
     request(`/tasks/${id(taskId)}/workspace`),
