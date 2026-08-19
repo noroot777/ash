@@ -1,0 +1,106 @@
+/* 设置页「技能扫描」那一节。原本住在 settings.css 里，那份已经 700+ 行，本轮又要
+   往里加东西，就顺手把这块整段搬出来（根 AGENTS.md「单个代码文件不超过 700 行」）。
+   选它是因为它自成一体：只被 SkillsSettings 用，选择器前缀独立（`.skill-scan-*`），
+   跟 `.settings-*` 那套壳/卡片/字段样式没有层叠上的往来，搬走不改变任何优先级。
+   在 global.css 里紧跟 settings.css 引入，顺序与原先在文件内的位置一致。 */
+
+/* 技能扫描：每个已注册执行器一行「扫到了什么」 */
+/* `.settings-row` 是 space-between 的 flex，左边说明文字会一直撑到没地方。中文可以
+   逐字断行，所以这一组操作若不自己护住，按钮会被算成「一个汉字宽」（第 1 轮验证实拍）。
+   规矩：按钮不参与收缩，挤压全部转嫁给旁边的下拉；这里刻意**不写 min-width:0**，
+   让容器的自动最小尺寸保住按钮那一档。文字不换行由全局 `.ui-button` 负责。 */
+.skill-scan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.skill-scan-actions select {
+  min-width: 0;
+  max-width: 220px;
+}
+
+.skill-scan-actions button {
+  flex: none;
+}
+
+.skill-scan-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.4fr) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 14px;
+}
+
+/* 左列两行：第一行是这一行的主语（CLI 类型），第二行列出被归并进来的 profile 名字。
+   四个 claude profile 合成一行之后，人得能确认「我注册的那几个都在这一行里」，
+   所以名字必须列出来，而且要允许换行——`claude@官方 · claude@公司自建 · …` 很容易超宽。 */
+.skill-scan-who {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.skill-scan-who b {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.skill-scan-who em {
+  overflow-wrap: anywhere;
+  color: var(--faint);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.skill-scan-tag {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 0 5px;
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.skill-scan-what {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.skill-scan-count {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.skill-scan-count i {
+  color: var(--faint);
+  font-size: 11px;
+  font-style: normal;
+}
+
+/* 样本只是给人一眼认出「扫的是不是我那批」，一行放不下就截断，不换行堆高 */
+.skill-scan-sample {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-scan-note {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+@media (max-width: 680px) {
+  .skill-scan-row { grid-template-columns: 1fr; }
+}
