@@ -292,14 +292,17 @@ async function ensureWorktreesIgnored(repo: string): Promise<void> {
 }
 
 /**
- * 「任务登记的那个 base 现在还解析得出来吗」。之所以单独拎出来，是因为它跟「这一次要不要
- * 拿它建分支」是两件事：复用 / 恢复现成 worktree 的路径压根用不到 base —— 可它同时还是
- * **验收目标**（diff 与合并各自拿 `tasks.worktreeBase` 再解析一次），只在「建新分支」那条
+ * 「任务登记的那个 base 现在还能当**验收目标**吗」。之所以单独拎出来，是因为它跟「这一次
+ * 拿什么建工作目录」是两件事：复用 / 恢复现成 worktree 的路径压根用不到 base —— 可它同时
+ * 还是合并目标（diff 与验收各自拿 `tasks.worktreeBase` 再解析一次），只在「建新分支」那条
  * 路上报降级的话，「worktree 还在、base 被删」的任务会一路正常跑，直到用户点验收才撞墙
  * （审查实测：worktree 复用成功，`taskBranchDiff` 仍是 target_branch_missing）。
  *
- * 判据用 `commitExists` 而不是「本地分支存在」：`origin/main`、某个 tag 或裸 sha 都仍然
- * 解析得出来，它们只是不能当合并目标，不该在这里被改写成别的名字。
+ * 判据必须是**本地分支还在不在**，跟下游 `git-diff.ts` / `task-accept.ts` 的真实要求对齐，
+ * 不能问「还解析得出一个 commit 吗」：仓库里留着一个同名 tag 就会把分支已删这件事整个遮
+ * 住 —— `rev-parse feat/x^{commit}` 照样成功，于是这里判定「没过期」，而 diff 和验收查的是
+ * `refs/heads/feat/x`，继续 target_branch_missing（审查实测）。「能不能拿它建目录」是另一个
+ * 判据（`commitExists`），在 prepareWorktreeLocked 里单独问。
  */
 export async function staleBaseFallback(
   repoPath: string,
@@ -310,7 +313,9 @@ export async function staleBaseFallback(
   const requested = (base ?? "").trim();
   if (!requested) return undefined;
   if (!(await isGitRepo(repo))) return undefined;
-  if (await commitExists(repo, requested)) return undefined;
+  // `refs/heads/main` 这种写法下游会先 normalize 掉前缀再查，这里跟着剥，免得把一个其实
+  // 好好的基线判成没了。
+  if (await localBranchExists(repo, normalizeBranchName(requested))) return undefined;
   return { requested, used: (await currentBranch(repo)) ?? "HEAD", rebuilt };
 }
 
@@ -359,17 +364,23 @@ async function prepareWorktreeLocked(
   await ensureWorktreesIgnored(repo);
   const restore = await branchExists(repo, branch);
   const args = ["-C", repo, "worktree", "add"];
+  // 这一轮的工作目录到底是**从 base 起的**，还是退回了仓库当前 HEAD。措辞要照它说话。
+  let builtFromBase = false;
   if (restore) {
     // 恢复：工作原样接回任务分支，跟 base 是谁无关（base 只在建分支那一刻用得上）。
     args.push(path, branch);
   } else {
     args.push("-b", branch, path);
     const trimmedBase = (base ?? "").trim();
-    // 拿一个已经没了的 base 去 `worktree add` 只会换来一句 "invalid reference" 并让整轮
-    // 起不来，而这一轮想做的事（在这个任务里接着说句话）跟 base 是谁其实无关。解析不
-    // 出来就退回仓库当前 HEAD —— 失败关闭在这里是错的方向：用户要的是能接着干活，不是
-    // 一个精确但起不来的 base。
-    if (trimmedBase && !stale) args.push(trimmedBase);
+    // 建目录问的是另一个问题：这个名字还解析得出一个提交吗（`worktree add <base>` 会不会
+    // 当场报 "invalid reference"）。它跟上面那个「还能不能当合并目标」不是一回事 —— 同名
+    // tag 遮住已删分支时，工作目录照样能从它起，要修的只是验收目标。
+    //
+    // 一个已经没了的 base 拿去 add 只会换来 "invalid reference" 并让整轮起不来，而这一轮
+    // 想做的事（在这个任务里接着说句话）跟 base 是谁其实无关。解析不出来就退回仓库当前
+    // HEAD —— 失败关闭在这里是错的方向：用户要的是能接着干活，不是一个精确但起不来的 base。
+    builtFromBase = !!trimmedBase && await commitExists(repo, trimmedBase);
+    if (builtFromBase) args.push(trimmedBase);
   }
   try {
     await exec("git", args);
@@ -382,9 +393,10 @@ async function prepareWorktreeLocked(
   }
   return {
     path, branch, isWorktree: true, fresh: !restore,
-    // 只有「新建分支」那条路是真按 used 重建的；恢复回来的工作目录跟 base 无关，别把
-    // 「顺带查出来 base 没了」说成「已按它重建」。
-    ...(stale ? { baseFallback: { ...stale, rebuilt: !restore } } : {}),
+    // 只有「真按仓库当前 HEAD 建了目录」那一档才算重建：恢复回来的工作目录跟 base 无关，
+    // 从一个仍解析得出的同名 tag 建出来的也不是「按 used 重建」—— 说成重建会让用户以为
+    // 自己的改动被挪到了另一个基线上。
+    ...(stale ? { baseFallback: { ...stale, rebuilt: !restore && !builtFromBase } } : {}),
   };
 }
 

@@ -216,6 +216,40 @@ try {
     assert.equal(restored.baseFallback?.persisted, true, "但登记的验收目标照样得修回来");
   }
 
+  // ── 同名 tag 遮住「分支已删」这件事 ─────────────────────────────────────────
+  // 判据要是「这个名字还解析得出一个提交吗」，仓库里留着一个同名 tag 就足以把分支被删整个
+  // 遮掉：worktree 从 tag 起得来，diff / 验收查的却是 refs/heads/<name>，继续 target_branch_
+  // missing —— 「起得来但交不掉」原样复活（审查实测）。所以过期判据必须跟下游一致，问的是
+  // 本地分支还在不在；而「拿什么建目录」是另一个判据，tag 解析得出来就照它建。
+  {
+    const seedSha = git(repo, "rev-parse", "HEAD");
+    git(repo, "branch", "feat/same-name");
+    await db.insert(tasks).values([{
+      ...common, id: "tagmask-task", parentId: null, mode: "single",
+      useWorktree: true, worktreeBase: "feat/same-name",
+    }]);
+    writeFileSync(join(repo, "moved-on.txt"), "main moved on\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-m", "main moves on");
+    git(repo, "branch", "-D", "feat/same-name");
+    git(repo, "tag", "feat/same-name", seedSha); // 同名 tag：rev-parse 照样成功
+
+    const ws = await taskWorkspace(await load("tagmask-task"), repo);
+    assert.equal(ws.baseFallback?.requested, "feat/same-name", "分支没了就是没了，别被同名 tag 骗过去");
+    assert.equal(ws.baseFallback?.persisted, true, "验收目标必须修回一个真的本地分支");
+    assert.equal((await load("tagmask-task")).worktreeBase, "main");
+    assert.equal(git(ws.path, "rev-parse", "HEAD"), seedSha, "目录仍按仍解析得出的 tag 建，不白扔用户选的起点");
+    assert.equal(ws.baseFallback?.rebuilt, false, "既然是从 tag 建的，就别说成「按仓库当前分支重建」");
+
+    const { taskBranchDiff } = await import("../src/git-diff.js");
+    writeFileSync(join(ws.path, "masked.txt"), "work on tag base\n");
+    git(ws.path, "add", "-A");
+    git(ws.path, "commit", "-m", "work on tag base");
+    const reloaded = await load("tagmask-task");
+    const diff = await taskBranchDiff(repo, reloaded.id, reloaded.worktreeBase);
+    assert.equal(diff.available, true, `同名 tag 场景下 diff 也必须能出来，实际 ${JSON.stringify(diff)}`);
+  }
+
   // ── 没登记过基线的任务不该被写上一个 ────────────────────────────────────────
   // 团队执行者默认就是这样：它传给 prepareWorktree 的是**领队的**分支，不是自己的登记
   // 值；跟着降级写库等于凭空给它按上一个显式基线，往后 diff/验收都会照着它走。
