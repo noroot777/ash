@@ -25,6 +25,8 @@
 //     **不许**再说「已确认全部退出」,得写明「脱链后代可能漏网」。
 //
 // 所有片段都必须是**单行** PowerShell:wrapper 是一整行喂进 PTY 的,任何裸换行都会被当成回车。
+import { psq } from "./ps.mjs";
+
 const JOB_CS = `
 using System;
 using System.Runtime.InteropServices;
@@ -158,7 +160,7 @@ const JOB_B64 = Buffer.from(JOB_CS, "utf8").toString("base64");
  */
 export const jobPreludeLines = () => [
   `$__job=[IntPtr]::Zero; $__jobok=$false`,
-  `try{ Add-Type -TypeDefinition ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${JOB_B64}'))) -ErrorAction Stop }catch{}`,
+  `try{ Add-Type -TypeDefinition ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(${psq(JOB_B64)}))) -ErrorAction Stop }catch{}`,
   `try{ $__job=[WinRemote.Job]::Create() }catch{ $__job=[IntPtr]::Zero }`,
 ];
 

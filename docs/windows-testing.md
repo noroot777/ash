@@ -54,6 +54,9 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
   `child.signal` 恒为 `null`,退出码是 `TerminateProcess` 传进去的那个数。要断的其实是
   「它是被硬杀死的、不是自己正常退出的」,两边各写各的判据(POSIX 看 `signal`,Windows 看
   `status`),并且**先把「压根没进到那个状态」排除掉**,否则平台分支只是把假绿换个地方藏。
+  夹具自己拼路径也算这一类:`test-path-boundary` 的 `lower()` 曾用 `` `${stage}/Repo` `` 当替换
+  目标,Mac 上伪造 win32 时命中,真机上 `stage` 是 `C:\…`,一次都换不成 —— 断言照样绿,测的却是
+  原大小写。现在它改用 `join()` 拼,并在原地断言这次变换确实改到了路径 —— 空转当场就红。
 
 **A/B 之外真找出来的产品 bug 只有一类,但它有五处**:`startsWith(x + "/")` 判路径边界。
 `path.resolve` 在 Windows 上还的是反斜杠,这个前缀比较**恒为假** —— 不是安全收紧,是整条功能
@@ -129,6 +132,11 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
 挡住」,fail-closed 断言是「没挡住就当场炸」。断言故意会响,所以这两条的临时目录清理挂在
 `process.on("exit")` 上,不能只放在 `finally` 里(2026-08-19 反证过:去掉钩子,`HARNESS_ALLOW_REAL_AGENT=1`
 跑一次就在 `os.tmpdir()` 留一个 `harness-review-flow-*`)。
+
+光挂钩子还不够,**断言本身要排在打开数据库之前**。exit 钩子是同步的,`await` 不了
+`releaseTmpDb()`;断言要是排在开库之后才响,Windows 上 `rmSync` 撞的是「文件还开着」的 EBUSY,
+被 `catch {}` 一吞,每跑一次照样多一个 TEMP 目录(2026-08-19 在真机上量到 3 个存量残留)。
+两条脚本现在都是「建舞台 → 挂钩子 → fail-closed 断言 → 才开始 import」。
 
 ## 四、验的是 Windows 上**有意不做**的功能
 

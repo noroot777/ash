@@ -23,6 +23,7 @@
 import { rexec, resolveProject, controlSignal } from "./win-remote/transport.mjs";
 import { syncToRemote, remoteWorkspacePath, workspaceGuardPs } from "./win-remote/sync.mjs";
 import { withRemoteLock } from "./win-remote/lock.mjs";
+import { psq } from "./win-remote/ps.mjs";
 
 // Windows 上「伪造 platform 也验不了」的那几条,才值得占用真机(docs/windows-testing.md)。
 const WINDOWS_SUITES = ["win-launch", "path-boundary", "openers-windows"];
@@ -163,7 +164,7 @@ async function cmdTest(args) {
       const db = `harness-wintest-${s}-${Date.now()}.db`;
       const cmd = [
         guard,
-        `$env:HARNESS_DB = Join-Path $env:TEMP '${db}'`,
+        `$env:HARNESS_DB = Join-Path $env:TEMP ${psq(db)}`,
         `npm -w server run test:${s} 2>&1`,
         `$__code = $LASTEXITCODE`,
         `Remove-Item $env:HARNESS_DB -Force -ErrorAction SilentlyContinue`,

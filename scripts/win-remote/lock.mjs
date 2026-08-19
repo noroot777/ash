@@ -17,6 +17,7 @@
 import { randomBytes } from "node:crypto";
 import { hostname } from "node:os";
 import { rexec } from "./transport.mjs";
+import { psq } from "./ps.mjs";
 
 const LOCK_REL = ".worktrees\\win-remote.lock";
 const STALE_MS = 25 * 60_000;
@@ -26,7 +27,6 @@ const WAIT_MS = 5_000;
 const WAIT_TRIES = 24; // 最多等 2 分钟,再久就该去看看那边到底谁在跑
 
 const lockPath = (repoPath) => `${repoPath.replace(/[\\/]+$/, "")}\\${LOCK_REL}`;
-const q = (s) => `'${s.replace(/'/g, "''")}'`;
 
 // 刷心跳 = 拿独占句柄、确认锁还是自己的、把内容里的 beat 换成当下时间,再写回去。
 // 全程在 FileShare::None 的句柄里做:同一时刻只有一个人开得了这个文件,所以竞争者的
@@ -78,12 +78,12 @@ export function lockGuardPs(repoPath, owner) {
     `$__r = 'busy'`,
     `for ($__i = 0; $__i -lt ${GUARD_TRIES} -and $__r -eq 'busy'; $__i++) {`,
     `  if ($__i -gt 0) { Start-Sleep -Milliseconds 400 }`,
-    `  $__r = Set-WinRemoteBeat ${q(lock)} '${owner}'`,
+    `  $__r = Set-WinRemoteBeat ${psq(lock)} ${psq(owner)}`,
     `}`,
-    `if ($__r -eq 'lost') { throw ('[win-remote] 对端工作区的锁已易主或已被删除(现在是: ' + [string](Get-Content ${q(lock)} -Raw -ErrorAction SilentlyContinue) + '),本次结果不可信,已中止') }`,
+    `if ($__r -eq 'lost') { throw ('[win-remote] 对端工作区的锁已易主或已被删除(现在是: ' + [string](Get-Content ${psq(lock)} -Raw -ErrorAction SilentlyContinue) + '),本次结果不可信,已中止') }`,
     `if ($__r -ne 'ok') { throw '[win-remote] 对端工作区的锁一直被别人独占着,刷不上心跳,本次结果不可信,已中止' }`,
     `if (Get-Command Start-ThreadJob -ErrorAction SilentlyContinue) {`,
-    `  $null = Start-ThreadJob -ArgumentList ${q(lock)},'${owner}' -ScriptBlock {`,
+    `  $null = Start-ThreadJob -ArgumentList ${psq(lock)},${psq(owner)} -ScriptBlock {`,
     `    param($p,$o)`,
     PS_BEAT_FN.split("\n").map((l) => `    ${l}`).join("\n"),
     `    while ($true) {`,
@@ -103,10 +103,10 @@ async function tryAcquire(repoPath, owner, opts) {
   const me = `owner=${owner} from=${hostname()} at=${new Date().toISOString()}`;
   const ps = [
     PS_AGE_FN,
-    `$__l = ${q(lock)}`,
+    `$__l = ${psq(lock)}`,
     `New-Item -ItemType Directory -Force -Path (Split-Path -Parent $__l) | Out-Null`,
     // beat 由对端的钟写,判过期也用对端的钟 —— 两台机器的时钟不用对齐。
-    `function New-WinRemoteMe { ${q(me)} + ' beat=' + (Get-Date).ToUniversalTime().ToString('o') }`,
+    `function New-WinRemoteMe { ${psq(me)} + ' beat=' + (Get-Date).ToUniversalTime().ToString('o') }`,
     // 建锁这一步是原子的:CreateNew 已存在就抛,内核保证只有一个人建得出来。
     `function New-WinRemoteLock { try { $f = [IO.File]::Open($__l,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None); $b = [Text.Encoding]::UTF8.GetBytes((New-WinRemoteMe)); $f.Write($b,0,$b.Length); $f.Close(); $true } catch { $false } }`,
     `if (New-WinRemoteLock) { Write-Output 'LOCK=acquired' }`,
@@ -192,7 +192,7 @@ export async function withRemoteLock({ repoPath, projectId, onNote = null }, fn)
     // (DeleteFile 要的 DELETE 访问正是我们让出去的那一种)。读、判、删因此是一段没人插得进来的
     // 临界区。打不开(别人正独占着)就退让重试,不硬删。
     const ps = [
-      `$__l = ${q(lockPath(repoPath))}`,
+      `$__l = ${psq(lockPath(repoPath))}`,
       `for ($__i = 0; $__i -lt ${GUARD_TRIES}; $__i++) {`,
       `  if (-not (Test-Path -LiteralPath $__l)) { break }`,
       `  $__fs = $null`,

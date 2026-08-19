@@ -53,6 +53,19 @@ sync 检出、exec 的 cwd、test 的 cwd、doctor 的探针都取同一个来�
 洁癖:共享一个固定 ref 时,两次调用交错会让 A 拉到 B 的快照,而 A 照样把结果记在自己的改动名下。
 同步完还会核对**完整** SHA,对端不是这份快照就当场中止,不往下跑测试。
 
+`add -A` 显式排除 `node_modules`,不能只靠 `.gitignore`:仓库里那条规则写的是 `node_modules/`,
+**带斜杠只匹配目录**,而在 worktree 里做 typecheck 的标准手法恰恰是往那儿挂一个指向主仓的
+**软链** —— 软链在 git 眼里不是目录,ignore 不生效,`add -A` 就把它收进快照;到了 Windows
+(git 默认不建符号链接)它被还原成一个内容是路径字符串的普通文件,名字正好占住 `node_modules`,
+后面 `mklink /J` 在它下面建 `@harness\*` 只报一句 "The system cannot find the path specified."。
+排除它本身也是对的:对端的 `node_modules` 一律由那边自己建。
+
+**所有进 PowerShell 单引号的插值都走 `ps.mjs` 的 `psq()`**(转义 `'` → `''`,连引号一起返回)。
+这条原本是「各处自己记得转义」,于是 `sync.mjs` 主模板漏了一处:路径里有一个 `'`
+(`O'Brien`、`foo'bar`,Windows 完全合法)就提前闭合字符串,整份 `.ps1` ParserError,而报错行
+落在八竿子打不着的提示语上。现在模板里不再出现裸的 `'${...}'`,`grep -F "'\$" scripts/win-remote/`
+应当只命中 `ps.mjs` 自己。
+
 两边的 ref 都是用完就删,而且删在 `finally` 里:开发机那份好办,对端那份要注意 checkout 失败、
 junction 修不好、校验没过这些**中途 throw** 的路径 —— 它们发生时 fetch 已经成功,ref 已经落在
 Windows 仓库里了。快照带着未提交和未跟踪的内容,留在那儿既攒垃圾,也可能把你随后从工作区删掉的

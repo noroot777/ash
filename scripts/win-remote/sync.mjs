@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { rexec, detectLocalAddress } from "./transport.mjs";
+import { psq } from "./ps.mjs";
 
 // ref 和端口都**按次唯一**。共享一个 `refs/win-remote/head` + 固定 9418 时,两次调用交错就是:
 // A 拍下快照 SHA-A 起 daemon,B 随后把同名 ref 改成 SHA-B(哪怕 B 自己因端口被占失败了,
@@ -83,10 +84,10 @@ export const remoteWorkspacePath = (repoPath) => {
  * 让每个会在对端目录里干活的入口都先跑一遍。
  */
 export const workspaceGuardPs = (repoPath) => {
-  const wt = remoteWorkspacePath(repoPath).replace(/'/g, "''");
-  const repo = String(repoPath).replace(/[\\/]+$/, "").replace(/'/g, "''");
+  const wt = remoteWorkspacePath(repoPath);
+  const repo = String(repoPath).replace(/[\\/]+$/, "");
   return [
-    `$__wt='${wt}'; $__repo='${repo}'`,
+    `$__wt=${psq(wt)}; $__repo=${psq(repo)}`,
     `if(-not (Test-Path -LiteralPath $__wt)){ throw ('工作区不存在:' + $__wt + ' —— 先跑一次 win-remote sync') }`,
     `$__wti=New-Object IO.DirectoryInfo $__wt; if($__wti.Attributes -band [IO.FileAttributes]::ReparsePoint){ throw ('拒绝使用:' + $__wt + ' 是个链接(reparse point),不是 win-remote 建的 worktree') }`,
     `$__gd=([string](git -C $__wt rev-parse --path-format=absolute --git-dir 2>$null)).Trim(); $__gc=([string](git -C $__wt rev-parse --path-format=absolute --git-common-dir 2>$null)).Trim(); $__rc=([string](git -C $__repo rev-parse --path-format=absolute --git-common-dir 2>$null)).Trim()`,
@@ -112,7 +113,16 @@ export function snapshotWorkspace(ref = `${WIP_PREFIX}${randomBytes(6).toString(
     // 用临时 index,真实 index 不受影响 —— 同步不该有副作用。
     const env = { ...process.env, GIT_INDEX_FILE: indexFile };
     git(["read-tree", "HEAD"], { cwd: root, env });
-    git(["add", "-A"], { cwd: root, env });
+    // node_modules 必须显式排除,不能只靠 .gitignore。仓库里那条规则写的是 `node_modules/`,
+    // **带斜杠只匹配目录**;而在 worktree 里做 typecheck 的标准手法是往这儿挂一个指向主仓的
+    // **软链**(见 shared 那条约定),软链在 git 眼里不是目录,于是这条 ignore 一点都不管用,
+    // `add -A` 把它当普通文件收进快照。到了 Windows(git 默认不建符号链接)它被还原成一个
+    // **内容是路径字符串的普通文件**,名字正好占住 `node_modules` —— 后面 `mklink /J` 要在
+    // 它下面建 `@harness\*`,报的是 "The system cannot find the path specified.",跟软链、
+    // 跟 ignore 规则看着都毫无关系。实测踩过一次,查了半小时。
+    // 排除本身也是对的:对端的 node_modules 一律由那边自己建(四个 junction),开发机这份
+    // 无论是软链还是真目录都不该跨机器搬。
+    git(["add", "-A", "--", ".", ":(exclude)node_modules", ":(exclude)*/node_modules"], { cwd: root, env });
     const tree = git(["write-tree"], { cwd: root, env });
     const head = git(["rev-parse", "HEAD"], { cwd: root });
     const sha = git(["commit-tree", tree, "-p", head, "-m", "win-remote: workspace snapshot"], { cwd: root, env });
@@ -181,9 +191,9 @@ export async function syncToRemote({ repoPath, onLine = null, projectId = null, 
   try {
     daemon = await serveRepo();
     const ps = String.raw`${guard ? `${guard}\n` : ""}
-$repo = '${repoPath}'
+$repo = ${psq(repoPath)}
 # 规范化之后再用:'.'、'..'、多余的分隔符都得先塌掉,不然后面拿它做的任何比较都能被绕过。
-$wt   = [IO.Path]::GetFullPath((Join-Path $repo '${workspaceRel()}'))
+$wt   = [IO.Path]::GetFullPath((Join-Path $repo ${psq(workspaceRel())}))
 # ============ 所有权校验:必须跑在 fetch / checkout / clean **之前** ============
 # 这一段要回答的不是「这是不是个 linked worktree」,而是「这是不是**我建的**那个」。
 # 前者谁都满足:随便哪个任务的 worktree 都 git-dir != common-dir,于是路径一配错
@@ -220,18 +230,18 @@ if (Test-Path -LiteralPath $wt) {
 # 它指着一个含未提交/未跟踪内容的快照 —— checkout 撞占用、junction 位置被真目录占了、
 # 输出校验不过,任何一条早退路径把它留下,那份内容就无限期躺在别人机器的仓库里。
 try {
-git -C $repo fetch --force --no-tags '${daemon.url}' '${ref}:${ref}'
+git -C $repo fetch --force --no-tags ${psq(daemon.url)} ${psq(`${ref}:${ref}`)}
 if ($LASTEXITCODE -ne 0) { throw 'fetch 失败:对端连不回开发机的 git daemon' }
 # 检出**钉死在 SHA 上**而不是 ref 名:ref 只是运输容器,认 SHA 才谈得上「测的就是这份快照」。
 if ($__fresh) {
-  git -C $repo worktree add --detach --force $wt '${sha}'
+  git -C $repo worktree add --detach --force $wt ${psq(sha)}
   if ($LASTEXITCODE -ne 0) { throw 'checkout 失败' }
   # 自己建的,当场盖章 —— 下一次同步就是靠这枚章认出「这是我的目录」。
   $__gd = ([string](git -C $wt rev-parse --path-format=absolute --git-dir 2>$null)).Trim()
   if (-not $__gd) { throw '新建 worktree 之后反而读不到它的 git-dir' }
   Set-Content -LiteralPath (Join-Path $__gd 'win-remote-owner') -Value $__magic -Encoding ascii
 } else {
-  git -C $wt checkout --detach --force '${sha}'
+  git -C $wt checkout --detach --force ${psq(sha)}
   if ($LASTEXITCODE -ne 0) { throw 'checkout 失败' }
 }
 # 那个 worktree 是**跨所有调用复用的固定目录**,而 checkout --force 只管 Git 跟踪的文件:
@@ -270,7 +280,7 @@ Write-Output ('CLEAN=' + $__cleaned.Count + '|' + $__links)
 # 开发机当成功判据的一部分(见下面的 LINK= 解析)。
 $scope = Join-Path $wt 'node_modules\@harness'
 New-Item -ItemType Directory -Force -Path $scope | Out-Null
-foreach ($p in @(${HARNESS_LINKS.map((p) => `'${p}'`).join(",")})) {
+foreach ($p in @(${HARNESS_LINKS.map(psq).join(",")})) {
   $link = Join-Path $scope $p
   $want = ([string](Join-Path $wt $p)).TrimEnd('\')
   $it = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
@@ -298,7 +308,7 @@ Write-Output ('HEAD=' + (git -C $wt rev-parse HEAD))
 $__st = @(git -C $wt status --porcelain=v1 --ignored | Where-Object { $_ -and ($_ -notmatch '^!!\s+node_modules[/\\]') })
 Write-Output ('RESIDUE=' + $__st.Count + '|' + (($__st | Select-Object -First 12) -join ' ;; '))
 } finally {
-  git -C $repo update-ref -d '${ref}' 2>$null
+  git -C $repo update-ref -d ${psq(ref)} 2>$null
 }
 `;
     const res = await rexec(ps, { cwd: repoPath, onLine, projectId, timeout: 5 * 60_000 });

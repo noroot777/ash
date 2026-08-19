@@ -16,6 +16,7 @@ import { createServer } from "node:http";
 import { networkInterfaces } from "node:os";
 import { randomBytes } from "node:crypto";
 import { jobPreludeLines, jobAssignLine, jobCloseLine, killTreeLines } from "./kill-tree.mjs";
+import { psq } from "./ps.mjs";
 
 const DEFAULT_HOST = process.env.WIN_REMOTE_HOST ?? "http://192.168.1.187:4317";
 
@@ -236,9 +237,9 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
       // 就删干净」都执行不到,总得有个不依赖任何一次会话的兜底。名字是 18 位 hex + 三种固定
       // 后缀,不会碰到别人的东西;一小时的门槛保证不会误删**正在跑**的另一条命令(单条上限 10 分钟)。
       `Get-ChildItem -LiteralPath $env:TEMP -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^[0-9a-f]{18}\\.(ps1|out|err)$' -and $_.LastWriteTime -lt (Get-Date).AddHours(-1) } | Remove-Item -Force -ErrorAction SilentlyContinue`,
-      `$__d='${(cwd ?? "").replace(/'/g, "''")}'`,
-      `$__o=Join-Path $env:TEMP '${token}.out'; $__r=Join-Path $env:TEMP '${token}.err'; $__s=Join-Path $env:TEMP '${token}.ps1'`,
-      `[IO.File]::WriteAllText($__s,[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64}')),(New-Object Text.UTF8Encoding $false))`,
+      `$__d=${psq(cwd ?? "")}`,
+      `$__o=Join-Path $env:TEMP ${psq(`${token}.out`)}; $__r=Join-Path $env:TEMP ${psq(`${token}.err`)}; $__s=Join-Path $env:TEMP ${psq(`${token}.ps1`)}`,
+      `[IO.File]::WriteAllText($__s,[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(${psq(b64)})),(New-Object Text.UTF8Encoding $false))`,
       `$__x=[Diagnostics.Process]::GetCurrentProcess().Path`,
       `$__nl=[Environment]::NewLine`,
       // 容器要在起进程**之前**建好(见 kill-tree.mjs 顶部:事后按父链补拍快照够不着脱链后代)。

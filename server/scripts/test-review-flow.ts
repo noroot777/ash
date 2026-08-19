@@ -17,6 +17,15 @@ process.env.HARNESS_RUNS_DIR = join(root, "runs");
 // 的前提断言)尤其:它本来就是设计成要响的。exit 钩子对每条早退路径都成立;成功路径末尾那次
 // 清理照旧,它还得先 releaseTmpDb 才删得动库文件。
 process.on("exit", () => { try { rmSync(root, { recursive: true, force: true }); } catch {} });
+// fail-closed 断言必须**赶在开库之前**响。它原来摆在下半场(那一节真正用到拦截器的地方),
+// 那时 better-sqlite3 已经把 harness.db 打开了,而 exit 钩子是同步的、`await` 不了
+// releaseTmpDb —— Windows 上删一个还开着的文件是 EBUSY,被 `catch {}` 一吞,
+// `HARNESS_ALLOW_REAL_AGENT=1` 每跑一次就在 TEMP 里留下一个 harness-review-flow-*。
+// 挪到这儿(和 test-accept-merge 同一套)之后,断言响的时候还没有任何句柄,rmSync 删得干净。
+assert.ok(
+  process.env.HARNESS_RUNS_DIR && process.env.HARNESS_ALLOW_REAL_AGENT !== "1",
+  "下半场靠 guardAgentSpawn 拦住真 CLI;拦截器一失效,测试就会拿用户的真额度跑 agent",
+);
 
 const { mountReviewRoutes } = await import("../src/review.js");
 // 证据落盘（路径边界、结论文件）住在 review-evidence.ts，措辞住在 review-prompts.ts。
@@ -463,11 +472,7 @@ await db.insert(projects).values({ id: "project", name: "native-turn", repoPath:
 // 原来这儿摆着一份没有后缀的 `#!/bin/sh` 假 claude,还把 PATH 用 `:` 拼起来 —— 那两条都只在
 // Unix 成立(Windows 的 PATH 用 `;` 分隔,查找只认 PATHEXT 后缀,内核不认 shebang),而且不管
 // 哪个平台它都从未被执行过:是死代码,却让人以为这一轮验的是 CLI 启动。真正验的是结算钩子。
-// 拦截器在不在,是下面几条断言成立的前提,所以直接钉住它。
-assert.ok(
-  process.env.HARNESS_RUNS_DIR && process.env.HARNESS_ALLOW_REAL_AGENT !== "1",
-  "这几轮靠 guardAgentSpawn 拦住真 CLI;拦截器一失效,测试就会拿用户的真额度跑 agent",
-);
+// 拦截器在不在是下面几条断言成立的前提 —— 那条断言钉在文件头部(开库之前),理由见那儿。
 
 const seedTurnTarget = async (rowId: string, verifyRound: number | null = 1) => {
   await db.insert(tasks).values({
