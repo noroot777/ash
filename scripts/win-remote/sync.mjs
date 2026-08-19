@@ -36,6 +36,15 @@ const WIP_PREFIX = "refs/win-remote/snap-";
 // 那一句就是「我知道这个目录会被整个覆盖」的确认。
 const WORKSPACE = process.env.WIN_REMOTE_WORKSPACE ?? ".worktrees/win-remote";
 const ADOPT = /^(1|true|yes)$/i.test(process.env.WIN_REMOTE_ADOPT ?? "");
+
+/**
+ * 对端那个 worktree 的绝对路径。**要用这个目录的地方一律从这儿取**,别再各自拼一遍字符串:
+ * 上一版 CLI 的 doctor/exec/test 三处都把 `.worktrees\win-remote` 写死了,于是设了
+ * WIN_REMOTE_WORKSPACE 之后同步的是 A、跑测试的是 B —— 同步报着新 SHA,测试跑的是上一次
+ * 留在默认目录里的旧快照,而两边都各自「成功」,假绿假红都看不出来。
+ */
+export const remoteWorkspacePath = (repoPath) =>
+  `${repoPath.replace(/[\\/]+$/, "")}\\${WORKSPACE.replace(/\//g, "\\").replace(/^\\+/, "")}`;
 // 这四个包在 workspace 里互相 import,靠 `node_modules/@harness/<pkg>` 找到对方。
 const HARNESS_LINKS = ["shared", "server", "web-next", "mcp"];
 

@@ -188,6 +188,11 @@ assert.equal(
 );
 console.log("✓ 投递判定:排队不看时间但等任务空闲,定时看时间,忙=等而不是取消");
 
+// 收尾里那句 `process.exit(0)` 是**无条件**的:没有这个 catch,try 里任何一条断言炸掉都会被
+// 它按 0 退出,`npm run test:*` 一律绿 —— 一份永远不会红的回归比没有回归更坏(实测:把 PATH
+// 指到不存在的目录,整轮只打出第一个 ✓,退出码照样 0)。这里接住、原样打出来、记账,
+// 由 finally 末尾按它决定退出码。
+let failure: unknown = null;
 try {
   await db.insert(projects).values({ id: projectId, name: "scheduled", repoPath: root, apiKeys: null, createdAt: at });
   await db.insert(tasks).values([
@@ -391,6 +396,9 @@ try {
   );
   await new Promise((resolve) => setTimeout(resolve, 200));
   console.log("✓ 进程死在投递中途:行留在 pending + 租约,重启后开机第一件事就把它补发出去");
+} catch (e) {
+  failure = e;
+  console.error(e);
 } finally {
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
@@ -418,5 +426,5 @@ try {
       await new Promise((r) => setTimeout(r, 100));
     }
   }
-  process.exit(0); // startScheduler 的 interval 还挂着,不然进程不会自己退
+  process.exit(failure ? 1 : 0); // startScheduler 的 interval 还挂着,不然进程不会自己退
 }

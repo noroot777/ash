@@ -139,7 +139,20 @@ const B64ISH = /^[A-Za-z0-9+/=]{24,}$/;
 const echoFilter = (sent) => (line) => {
   const s = line.trim();
   if (s.length < 24) return false; // 太短的片段容易误伤真输出,而它也淹没不了什么
-  return B64ISH.test(s) || sent.includes(s);
+  if (B64ISH.test(s) || sent.includes(s)) return true;
+  // 还有一类漏网的:PTY 把**两次输入**的回显挤进同一屏行(上一条命令 base64 的尾巴,
+  // 紧接着下一条命令的明文开头)。这种行既不是 sent 的连续子串,也不是纯 base64,
+  // 于是整整 13KB 又原样进了预览 —— 上一轮只按「连续子串」判,就是这么漏的。
+  // 改成看**这一行有多大比例是我们自己发出去的**:切成 64 字符的片段逐段回查,过半命中
+  // 就算回显。真实输出凑不出这种命中率(它得有一半内容逐字出现在我们发的命令里)。
+  if (s.length < 128) return false;
+  let hit = 0;
+  let total = 0;
+  for (let i = 0; i + 64 <= s.length; i += 64) {
+    total++;
+    if (sent.includes(s.slice(i, i + 64))) hit++;
+  }
+  return total > 0 && hit * 2 >= total;
 };
 
 /**
@@ -214,12 +227,35 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
       `$__nl=[Environment]::NewLine`,
       `$__p=Start-Process -FilePath $__x -ArgumentList '-NoProfile','-NonInteractive','-File',$__s -RedirectStandardOutput $__o -RedirectStandardError $__r -PassThru -NoNewWindow` + (cwd ? ` -WorkingDirectory $__d` : ``),
       `$null=$__p|Wait-Process -Timeout ${secs} -ErrorAction SilentlyContinue`,
-      `if(-not $__p.HasExited){ try{$__p.Kill()}catch{}; $__e=124 } else { $__e=$__p.ExitCode }`,
+      // 超时收尾要**连整棵进程树一起杀,而且确认它真的退干净了**再往下走。
+      // 只 Kill 直接子进程是不够的:那条命令下面挂着 npm→node→tsx 一长串后代,它们活过这一刀,
+      // 而 rexec 一返回,外面那把工作区锁当场就还回去了 —— 下一个人开始在同一个 worktree 上
+      // checkout/clean,上一条命令的孙子还在里面写文件。两边都各自「正常」,谁也看不出结果为什么
+      // 是错的。实测:超时返回 code 124 之后,孙 pwsh 还活着,12 秒后照样把自己的产物写了出来。
+      //
+      // 先拍下整棵树的快照(杀完就再也问不出父子关系了,而且要连进程创建时间一起记 —— PID 会被
+      // 复用,只凭 PID 补刀有可能砍到一个刚好顶上这个号的无关进程)。
+      // 两个 scriptblock 都**直接往管道里吐**,不要写成 `,@(...)`。那个惯用法只在赋值给变量时
+      // 才对;这里外面已经套了 `@(& $__snap ...)`,再加逗号就多包一层 —— 拿到的是「长度 1、
+      // 唯一元素是数组」,于是 `$__tree.Count` 恒为 1、`$__alive` 里的 `$_.Id` 拿到的是整段数组、
+      // 拼进 CIM -Filter 变成语法错。实测表现:树其实杀干净了,报告却说「仍有 1 个没退出: 」
+      // 且 ID 是空的 —— 结论和 ID 自相矛盾,而两种错(误报残留、漏报残留)都不吵。
+      `$__snap={param($__r0) $__a=@(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate -ErrorAction SilentlyContinue); $__ids=@([int]$__r0); for($__i=0;$__i -lt 8;$__i++){ $__add=@($__a|Where-Object{ $__ids -contains [int]$_.ParentProcessId -and $__ids -notcontains [int]$_.ProcessId }|ForEach-Object{[int]$_.ProcessId}); if($__add.Count -eq 0){break}; $__ids+=$__add }; $__a|Where-Object{ $__ids -contains [int]$_.ProcessId }|ForEach-Object{ [pscustomobject]@{Id=[int]$_.ProcessId;Born=$_.CreationDate} }}`,
+      // 还活着的成员 = PID 还在,**且**创建时间跟快照里的一致。
+      `$__alive={param($__tr) $__tr|Where-Object{ $__c=Get-CimInstance Win32_Process -Filter ('ProcessId=' + $_.Id) -Property ProcessId,CreationDate -ErrorAction SilentlyContinue; $__c -and $__c.CreationDate -eq $_.Born }}`,
+      `$__tree=@(); $__left=@(); $__km=''`,
+      // Kill($true) 是「连整棵树一起收」(.NET 5+ / pwsh 7 有这个重载);老运行时抛
+      // MethodException,退回 taskkill /T /F。杀完等 10 秒确认,还有活着的就逐个补刀再确认一次。
+      `if(-not $__p.HasExited){ $__tree=@(& $__snap $__p.Id); try{ $__p.Kill($true) }catch{ try{ $null=& taskkill.exe /PID $__p.Id /T /F 2>&1 }catch{} }; $null=$__p.WaitForExit(10000); $__left=@(& $__alive $__tree); if($__left.Count -gt 0){ foreach($__k in $__left){ try{ $null=& taskkill.exe /PID $__k.Id /T /F 2>&1 }catch{} }; Start-Sleep -Milliseconds 1500; $__left=@(& $__alive $__tree) }; $__e=124 } else { $__e=$__p.ExitCode }`,
+      // 杀完的结论分三种,分开说 —— 「没杀干净」和「压根不知道有没有杀干净」不是一回事。
+      `if($__e -eq 124){ if($__left.Count -gt 0){ $__km = ';⚠ 仍有 ' + $__left.Count + ' 个没退出: ' + ((@($__left)|ForEach-Object{$_.Id}) -join ',') + ' —— 它们可能还在动对端工作区,本次之后的结果都不可信' } elseif($__tree.Count -eq 0){ $__km = ',但拿不到进程树快照(CIM 不可用),只确认了直接进程已退出' } else { $__km = '(' + $__tree.Count + ' 个进程),已确认全部退出' } }`,
       `Start-Sleep -Milliseconds 300`,
       `$__t=[string](Get-Content $__o -Raw -ErrorAction SilentlyContinue)`,
       `$__g=[string](Get-Content $__r -Raw -ErrorAction SilentlyContinue)`,
       `if($__g){ $__t = $__t + $__nl + '--- stderr ---' + $__nl + $__g }`,
-      `if($__e -eq 124){ $__t = $__t + $__nl + '[win-remote] 超时 ${secs}s,已杀掉进程' }`,
+      // 没杀干净就照实说 —— 这时候「工作区已经没人碰了」这个前提不成立,后面那次同步/测试
+      // 的结果都得存疑,咽下去比报错更坏。
+      `if($__e -eq 124){ $__t = $__t + $__nl + '[win-remote] 超时 ${secs}s,已杀掉进程树' + $__km }`,
       // 三个临时文件在**上传之前**就删光,上传改从内存发字节(而不是 `-InFile` 指着磁盘)。
       // 原来的顺序是「先上传、再 Remove-Item」,而开发机一收到 body 就往下走、随手把终端
       // 会话 DELETE 掉 —— 删文件那句和杀会话是在赛跑,输的时候 `%TEMP%` 里就留下一份

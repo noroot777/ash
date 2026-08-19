@@ -451,13 +451,18 @@ rmSync(resolve(reviewRoundDir(failId, 1), "../.."), { recursive: true, force: tr
 //      白吃一轮配额还没有结论
 // 两条都只能在真跑一遍回合时才暴露,所以这里用一个立刻 exit 0 的假 claude 跑通全程。
 const { projects } = await import("../src/db/schema.js");
-const { chmodSync } = await import("node:fs");
 await db.insert(projects).values({ id: "project", name: "native-turn", repoPath: root, createdAt: at });
-const fakeBin = join(root, "bin");
-mkdirSync(fakeBin, { recursive: true });
-writeFileSync(join(fakeBin, "claude"), "#!/bin/sh\nexit 0\n");
-chmodSync(join(fakeBin, "claude"), 0o755);
-process.env.PATH = `${fakeBin}:${process.env.PATH ?? ""}`;
+// 这几轮**不会真的起 CLI**:HARNESS_RUNS_DIR 一设,guardAgentSpawn 就把每一次 spawn 都拦成
+// failedChild(executors/spawn.ts),回合照样开、照样结算,只是没有真进程。所以这里既不需要
+// 假 claude,也**不可能**摸到机器上真的 claude。
+// 原来这儿摆着一份没有后缀的 `#!/bin/sh` 假 claude,还把 PATH 用 `:` 拼起来 —— 那两条都只在
+// Unix 成立(Windows 的 PATH 用 `;` 分隔,查找只认 PATHEXT 后缀,内核不认 shebang),而且不管
+// 哪个平台它都从未被执行过:是死代码,却让人以为这一轮验的是 CLI 启动。真正验的是结算钩子。
+// 拦截器在不在,是下面几条断言成立的前提,所以直接钉住它。
+assert.ok(
+  process.env.HARNESS_RUNS_DIR && process.env.HARNESS_ALLOW_REAL_AGENT !== "1",
+  "这几轮靠 guardAgentSpawn 拦住真 CLI;拦截器一失效,测试就会拿用户的真额度跑 agent",
+);
 
 const seedTurnTarget = async (rowId: string, verifyRound: number | null = 1) => {
   await db.insert(tasks).values({

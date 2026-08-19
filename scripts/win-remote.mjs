@@ -12,6 +12,7 @@
 //   WIN_REMOTE_SELF=<ip>                        本机对外 IP(自动探测不准时用)
 //   WIN_REMOTE_PROJECT=<projectId>              对端项目 id(默认按 repoPath 猜)
 //   WIN_REMOTE_GIT_PORT=<port>                  钉死 git daemon 端口(默认每次现挑空闲端口)
+//   WIN_REMOTE_WORKSPACE=<相对路径>              对端 worktree 位置(默认 .worktrees/win-remote)
 //
 // 为什么是这套通道、为什么不动对端主工作区,见 scripts/win-remote/{transport,sync}.mjs 顶部;
 // 对端那个 worktree 是全局单份的,所以整段 sync+test 上锁,见 scripts/win-remote/lock.mjs 顶部。
@@ -20,7 +21,7 @@
 // 而不是测试结果,就得重启对端的 harness —— 那会连着把这条通道一起掐了(重启完自己会回来)。
 // 所以默认路线是「跑回归测试」,它是独立进程,不需要重启对端服务。
 import { rexec, resolveProject, controlSignal } from "./win-remote/transport.mjs";
-import { syncToRemote } from "./win-remote/sync.mjs";
+import { syncToRemote, remoteWorkspacePath } from "./win-remote/sync.mjs";
 import { withRemoteLock } from "./win-remote/lock.mjs";
 
 // Windows 上「伪造 platform 也验不了」的那几条,才值得占用真机(docs/windows-testing.md)。
@@ -62,9 +63,19 @@ async function cmdDoctor() {
     `try { New-Item -ItemType SymbolicLink -Path (Join-Path $__st 'l') -Target $__st -ErrorAction Stop | Out-Null; Write-Output 'symlink=ok' } catch { Write-Output 'symlink=no' }`,
     `Remove-Item $__st -Recurse -Force -ErrorAction SilentlyContinue`,
     `Write-Output ('temp=' + $env:TEMP)`,
-    `Write-Output ('worktree=' + (Test-Path '${p.repoPath}\\.worktrees\\win-remote'))`,
+    `Write-Output ('worktree=' + (Test-Path -LiteralPath '${remoteWorkspacePath(p.repoPath).replace(/'/g, "''")}'))`,
   ].join("\n");
   const res = await rexec(probe, { cwd: p.repoPath, projectId: p.id, timeout: 60_000 });
+  // 退出码先看。体检这条命令**自己失败了**的时候(回传拿不到、pwsh 炸了、对端 harness 半死),
+  // out 里根本没有那几个 kv,下面每一行都会打成 `?`/`✗` —— 上一版照打不误,然后无条件宣布
+  // 「通道 ✓ 输出回传正常」并 exit 0。于是一次「通道断了」的体检读起来像「机器缺 node、
+  // 开发者模式没开」,查的方向从一开始就是错的。
+  if (res.code !== 0) {
+    throw new Error(
+      `体检命令没跑通(exit ${res.code}) —— 下面的结论一条都不成立,先修通道:\n` +
+        res.out.split("\n").slice(-20).map((l) => `  ${l}`).join("\n"),
+    );
+  }
   const kv = Object.fromEntries(res.out.split("\n").filter((l) => l.includes("=")).map((l) => {
     const i = l.indexOf("="); return [l.slice(0, i).trim(), l.slice(i + 1).trim()];
   }));
@@ -73,7 +84,7 @@ async function cmdDoctor() {
   console.log(`  node ${kv.node ?? "?"} ${nodeVersionOk ? green("✓") : red("✗ 需 >= 22.16.0(node:sqlite)")}`);
   console.log(`  git ${kv.git ?? "?"}   pwsh ${kv.pwsh ?? "?"}`);
   console.log(`  symlink ${kv.symlink === "ok" ? green("✓ 建得出来(夹具可用)") : red("✗ 建不出来 —— 开发者模式没开,symlink 夹具会红")}`);
-  console.log(`  测试 worktree ${kv.worktree === "True" ? green("已就绪") : dim("尚未创建(首次 sync 时建)")}`);
+  console.log(`  测试 worktree ${remoteWorkspacePath(p.repoPath)} ${kv.worktree === "True" ? green("已就绪") : dim("尚未创建(首次 sync 时建)")}`);
   console.log(bold("\n通道") + `  ${green("✓")} 终端 API 可用,输出回传正常`);
   return 0;
 }
@@ -94,7 +105,7 @@ async function cmdExec(args) {
   const p = await target();
   const cmd = args.join(" ");
   if (!cmd) throw new Error("exec 需要一条命令");
-  const cwd = `${p.repoPath}\\.worktrees\\win-remote`;
+  const cwd = remoteWorkspacePath(p.repoPath);
   const res = await inWorkspace(p, ({ guard }) => rexec(`${guard}\n${cmd}`, { cwd, projectId: p.id, onLine: live }));
   console.log(res.out);
   console.log(res.code === 0 ? green(`[exit 0]`) : red(`[exit ${res.code}]`));
@@ -109,14 +120,17 @@ async function cmdTest(args) {
   // 锁罩的是**同步 + 跑完所有测试**这一整段,而不只是同步那几秒:中途被别人 checkout 掉,
   // 后面几条测的就已经不是这份快照了。
   return await inWorkspace(p, async ({ guard }) => {
+    // 测试跑在哪儿,只有一个来源:同步真正检出的那个目录(没同步时才退回按环境变量算出来的
+    // 路径)。上一版这里写死默认目录,同步到别处之后就变成「同步 A、测 B」。
+    let cwd = remoteWorkspacePath(p.repoPath);
     if (!args.includes("--no-sync")) {
       console.log(bold("① 同步"));
       const r = await syncToRemote({ repoPath: p.repoPath, projectId: p.id, onLine: live, guard });
+      cwd = r.worktree;
       console.log(`  ${r.localSha} → ${green(r.remoteSha)}(清理 ${r.cleaned} 项快照外内容)\n`);
     }
 
-    console.log(bold("② 在真 Windows 上跑回归"));
-    const cwd = `${p.repoPath}\\.worktrees\\win-remote`;
+    console.log(bold("② 在真 Windows 上跑回归"), dim(cwd));
     const results = [];
     for (const s of suites) {
       process.stdout.write(`  ${s} … `);

@@ -181,11 +181,29 @@ export async function withRemoteLock({ repoPath, projectId, onNote = null }, fn)
   try {
     return await fn({ owner, guard: lockGuardPs(repoPath, owner) });
   } finally {
-    // 只删自己的那把:万一已经被人正当接管(我们卡了太久),别顺手把别人的锁掀了。
+    // 只删自己的那把,而且**判和删必须在同一个句柄里**。
+    // 上一版是「Get-Content 读 owner → Remove-Item 按路径删」两步无锁操作:中间这段空当里
+    // 锁完全可能已被正当接管(我们卡太久、心跳断了、机器睡了),于是我们照着旧内容判完,
+    // 手起刀落删掉的是**别人刚拿到手的活锁** —— 第三个人转手就能 CreateNew 出第二把,
+    // 两个持有者同时在同一个 worktree 上 checkout。实测复现过:B 接管后 A 释放,锁没了。
+    //
+    // 用 FileShare::Delete 打开:这个共享模式下别人既开不出 ReadWrite 独占句柄(接管、刷心跳
+    // 都会 busy),也 CreateNew 不出来(文件还在),而我们自己可以在**握着句柄的同时**把它删掉
+    // (DeleteFile 要的 DELETE 访问正是我们让出去的那一种)。读、判、删因此是一段没人插得进来的
+    // 临界区。打不开(别人正独占着)就退让重试,不硬删。
     const ps = [
       `$__l = ${q(lockPath(repoPath))}`,
-      `$__c = [string](Get-Content $__l -Raw -ErrorAction SilentlyContinue)`,
-      `if ($__c -like 'owner=${owner}*') { Remove-Item $__l -Force -ErrorAction SilentlyContinue }`,
+      `for ($__i = 0; $__i -lt ${GUARD_TRIES}; $__i++) {`,
+      `  if (-not (Test-Path -LiteralPath $__l)) { break }`,
+      `  $__fs = $null`,
+      `  try { $__fs = [IO.File]::Open($__l,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Delete) } catch { Start-Sleep -Milliseconds 400; continue }`,
+      `  try {`,
+      `    $__b = New-Object byte[] $__fs.Length`,
+      `    $null = $__fs.Read($__b,0,$__b.Length)`,
+      `    if ([Text.Encoding]::UTF8.GetString($__b) -like 'owner=${owner}*') { [IO.File]::Delete($__l) }`,
+      `  } finally { $__fs.Close() }`,
+      `  break`,
+      `}`,
     ].join("\n");
     await rexec(ps, { cwd: repoPath, projectId, timeout: 60_000 }).catch(() => {});
   }
