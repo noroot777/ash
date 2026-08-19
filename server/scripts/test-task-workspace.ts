@@ -20,7 +20,7 @@ try {
   git(repo, "add", "seed.txt");
   git(repo, "commit", "-m", "seed");
 
-  const [{ db, ensureSchema }, { tasks }, { taskWorkspace }] = await Promise.all([
+  const [{ db, ensureSchema }, { tasks }, { refreshTaskBase, taskWorkspace }] = await Promise.all([
     import("../src/db/index.js"),
     import("../src/db/schema.js"),
     import("../src/task-workspace.js"),
@@ -121,9 +121,186 @@ try {
   assert.equal(isolatedReviewWorkspace.path, isolatedWorkspace.path);
   assert.equal(isolatedReviewWorkspace.branch, isolatedWorkspace.branch);
 
+  // ── 登记的 base 分支已经没了 → 降级要**落回任务行** ─────────────────────────
+  // 只在 worktree 创建处降级、库里仍留着那个已删的名字的话，这一轮是起来了，用户下一步
+  // 看 diff 会得到 target_branch_missing、验收被「目标本地分支不存在」挡回 —— 等于把
+  // 「起不来」换成了「起得来但交不掉」。所以连带验收目标一起钉住。
+  {
+    git(repo, "branch", "feat/gone-base");
+    await db.insert(tasks).values([{
+      ...common, id: "basegone-task", parentId: null, mode: "single",
+      useWorktree: true, worktreeBase: "feat/gone-base",
+    }]);
+    git(repo, "branch", "-D", "feat/gone-base"); // 验收合并之后目标分支被删
+
+    const ws = await taskWorkspace(await load("basegone-task"), repo);
+    assert.equal(ws.baseFallback?.requested, "feat/gone-base", "要说清原本想用哪个 base");
+    assert.equal(ws.baseFallback?.used, "main", "退回仓库当前分支");
+    assert.equal(ws.baseFallback?.workspaceRebuilt, true, "这一档确实新建了工作目录");
+    assert.equal(ws.baseFallback?.builtFromRequested, false, "名字整个没了，只能退回仓库当前分支起");
+    assert.equal(ws.baseFallback?.persisted, true, "落库了才敢对用户说 diff/验收跟着走");
+    {
+      // 三态措辞之一：名字整个没了 → 目录退回仓库当前分支新建。
+      const { WORKSPACE_BASE_FALLBACK_MARKER } = await import("../src/run-prompts.js");
+      const note = WORKSPACE_BASE_FALLBACK_MARKER(
+        ws.baseFallback!.requested, ws.baseFallback!.used, ws.baseFallback!, true,
+      );
+      assert.match(note, /改按仓库当前 main 新建/, "要说清这次的目录是从仓库当前分支起的");
+    }
+    assert.equal((await load("basegone-task")).worktreeBase, "main", "任务登记的基线必须跟着改");
+
+    const { resolveTaskMergeTarget } = await import("../src/git.js");
+    const { taskBranchDiff } = await import("../src/git-diff.js");
+    const reloaded = await load("basegone-task");
+    assert.equal(await resolveTaskMergeTarget(repo, reloaded.worktreeBase), "main", "验收目标要解析得出来");
+    writeFileSync(join(ws.path, "after.txt"), "after fallback\n");
+    git(ws.path, "add", "-A");
+    git(ws.path, "commit", "-m", "work after fallback");
+    const diff = await taskBranchDiff(repo, reloaded.id, reloaded.worktreeBase);
+    assert.equal(diff.available, true, `降级后 diff 必须能出来，实际 ${JSON.stringify(diff)}`);
+  }
+
+  // ── worktree 没被清掉、base 后来被删 ────────────────────────────────────────
+  // 上面那档走的是「目录不在了，重新建」。真实现场更常见的是目录好端端地留着（验收清理
+  // 策略保留 worktree、清理失败、或用户自己留着），只有 base 分支没了：复用路径要是不查
+  // 一遍，这一轮跑得好好的，用户到 diff / 验收那头才撞上 target_branch_missing。
+  {
+    git(repo, "branch", "feat/gone-while-worktree-stays");
+    await db.insert(tasks).values([{
+      ...common, id: "keptwt-task", parentId: null, mode: "single",
+      useWorktree: true, worktreeBase: "feat/gone-while-worktree-stays",
+    }]);
+    const first = await taskWorkspace(await load("keptwt-task"), repo);
+    assert.equal(first.baseFallback, undefined, "前提：这一步 base 还在，不该报降级");
+
+    git(repo, "branch", "-D", "feat/gone-while-worktree-stays");
+    const again = await taskWorkspace(await load("keptwt-task"), repo);
+    assert.equal(again.path, first.path, "前提：worktree 还在，这次走的是复用");
+    assert.equal(again.baseFallback?.requested, "feat/gone-while-worktree-stays");
+    assert.equal(again.baseFallback?.workspaceRebuilt, false, "复用路径什么都没重建，别说成重建了");
+    assert.equal(again.baseFallback?.builtFromRequested, false, "更不是从那个已删的名字建的");
+    assert.equal(again.baseFallback?.persisted, true, "复用路径同样要把降级落回任务行");
+    assert.equal((await load("keptwt-task")).worktreeBase, "main", "库里不能继续留着已删的名字");
+    {
+      // 三态措辞之二：目录压根没动 → 只说基线换了目标，别提任何「重建」。
+      const { WORKSPACE_BASE_FALLBACK_MARKER } = await import("../src/run-prompts.js");
+      const note = WORKSPACE_BASE_FALLBACK_MARKER(
+        again.baseFallback!.requested, again.baseFallback!.used, again.baseFallback!, true,
+      );
+      assert.match(note, /沿用原有的工作目录/, "目录原样留着就该这么说");
+      assert.doesNotMatch(note, /新建/, "什么都没建，别让用户以为改动被挪走了");
+    }
+
+    const { taskBranchDiff } = await import("../src/git-diff.js");
+    writeFileSync(join(again.path, "kept.txt"), "worktree kept\n");
+    git(again.path, "add", "-A");
+    git(again.path, "commit", "-m", "work in kept worktree");
+    const reloaded = await load("keptwt-task");
+    const diff = await taskBranchDiff(repo, reloaded.id, reloaded.worktreeBase);
+    assert.equal(diff.available, true, `复用路径降级后 diff 也必须能出来，实际 ${JSON.stringify(diff)}`);
+  }
+
+  // ── 续聊压根不重新解析工作目录，也得查一遍 ──────────────────────────────────
+  // orchestrator 的续聊只在 cwd 消失时才调 taskWorkspace。目录还在的那条路上没人查 base，
+  // 「起得来但交不掉」就会原样留着 —— 所以那条路直接调 refreshTaskBase。
+  {
+    git(repo, "branch", "feat/gone-during-chat");
+    await db.update(tasks).set({ worktreeBase: "feat/gone-during-chat" }).where(eq(tasks.id, "keptwt-task"));
+    git(repo, "branch", "-D", "feat/gone-during-chat");
+
+    const fallback = await refreshTaskBase(await load("keptwt-task"), repo);
+    assert.equal(fallback?.requested, "feat/gone-during-chat", "要说清原本想用哪个 base");
+    assert.equal(fallback?.workspaceRebuilt, false, "这条路径连工作目录都没碰");
+    assert.equal(fallback?.persisted, true, "续聊路径同样要落库");
+    assert.equal((await load("keptwt-task")).worktreeBase, "main");
+
+    assert.equal(
+      await refreshTaskBase(await load("keptwt-task"), repo), undefined,
+      "基线本来就解析得出来时不该报降级，更不该反复改它",
+    );
+  }
+
+  // ── 恢复档（目录没了、任务分支还在）同样别说成「按 base 重建」 ────────────────
+  // 这一档是拿任务分支把工作原样接回来，跟 base 是谁毫无关系；措辞里说成「改按 X 重建」
+  // 会让用户以为自己的改动被挪到了另一个基线上。
+  {
+    git(repo, "branch", "feat/gone-before-restore");
+    await db.update(tasks).set({ worktreeBase: "feat/gone-before-restore" }).where(eq(tasks.id, "keptwt-task"));
+    git(repo, "branch", "-D", "feat/gone-before-restore");
+    rmSync(join(repo, ".worktrees", "keptwt-task"), { recursive: true, force: true });
+
+    const restored = await taskWorkspace(await load("keptwt-task"), repo);
+    assert.equal(existsSync(join(restored.path, "kept.txt")), true, "前提：分支还在，工作被接回来了");
+    assert.equal(restored.fresh, false, "前提：这是恢复，不是建空壳");
+    assert.equal(restored.baseFallback?.workspaceRebuilt, false, "恢复回来的目录跟 base 无关，别说成新建的");
+    assert.equal(restored.baseFallback?.persisted, true, "但登记的验收目标照样得修回来");
+  }
+
+  // ── 同名 tag 遮住「分支已删」这件事 ─────────────────────────────────────────
+  // 判据要是「这个名字还解析得出一个提交吗」，仓库里留着一个同名 tag 就足以把分支被删整个
+  // 遮掉：worktree 从 tag 起得来，diff / 验收查的却是 refs/heads/<name>，继续 target_branch_
+  // missing —— 「起得来但交不掉」原样复活（审查实测）。所以过期判据必须跟下游一致，问的是
+  // 本地分支还在不在；而「拿什么建目录」是另一个判据，tag 解析得出来就照它建。
+  {
+    const seedSha = git(repo, "rev-parse", "HEAD");
+    git(repo, "branch", "feat/same-name");
+    await db.insert(tasks).values([{
+      ...common, id: "tagmask-task", parentId: null, mode: "single",
+      useWorktree: true, worktreeBase: "feat/same-name",
+    }]);
+    writeFileSync(join(repo, "moved-on.txt"), "main moved on\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-m", "main moves on");
+    git(repo, "branch", "-D", "feat/same-name");
+    git(repo, "tag", "feat/same-name", seedSha); // 同名 tag：rev-parse 照样成功
+
+    const ws = await taskWorkspace(await load("tagmask-task"), repo);
+    assert.equal(ws.baseFallback?.requested, "feat/same-name", "分支没了就是没了，别被同名 tag 骗过去");
+    assert.equal(ws.baseFallback?.persisted, true, "验收目标必须修回一个真的本地分支");
+    assert.equal((await load("tagmask-task")).worktreeBase, "main");
+    assert.equal(git(ws.path, "rev-parse", "HEAD"), seedSha, "目录仍按仍解析得出的 tag 建，不白扔用户选的起点");
+    assert.equal(ws.baseFallback?.workspaceRebuilt, true, "这一轮确实新建了工作目录");
+    assert.equal(ws.baseFallback?.builtFromRequested, true, "而且是从那个仍解析得出的名字建的，不是退回仓库当前分支");
+
+    // 这两条 marker 在同一个回合里紧挨着落进时间线（orchestrator.continueTask：旧 cwd 没了
+    // → 建新目录 → 先写 RESET 再写 FALLBACK）。曾经用一个布尔同时表示「新建了目录」和
+    // 「按 used 新建的」，于是这一档先说「已重建为空目录」又说「沿用原有的工作目录」，
+    // 用户刷新后判断不出这轮到底发生了什么（审查实测）。所以直接钉措辞，光改字段名不算修好。
+    const { WORKSPACE_BASE_FALLBACK_MARKER, WORKSPACE_RESET_MARKER } = await import("../src/run-prompts.js");
+    const note = WORKSPACE_BASE_FALLBACK_MARKER(
+      ws.baseFallback!.requested, ws.baseFallback!.used, ws.baseFallback!, !!ws.baseFallback?.persisted,
+    );
+    assert.match(WORKSPACE_RESET_MARKER, /重建/, "前提：同回合的另一条说的是「目录已重建」");
+    assert.doesNotMatch(note, /沿用原有的工作目录/, "同一回合刚说完已重建，不能紧接着说沿用原目录");
+    assert.match(note, /feat\/same-name（tag 或提交）新建/, "要说清新目录是从那个仍解析得出的名字起的");
+    assert.match(note, /基线也已一并更新为 main/, "同时说清验收目标已经改到哪");
+
+    const { taskBranchDiff } = await import("../src/git-diff.js");
+    writeFileSync(join(ws.path, "masked.txt"), "work on tag base\n");
+    git(ws.path, "add", "-A");
+    git(ws.path, "commit", "-m", "work on tag base");
+    const reloaded = await load("tagmask-task");
+    const diff = await taskBranchDiff(repo, reloaded.id, reloaded.worktreeBase);
+    assert.equal(diff.available, true, `同名 tag 场景下 diff 也必须能出来，实际 ${JSON.stringify(diff)}`);
+  }
+
+  // ── 没登记过基线的任务不该被写上一个 ────────────────────────────────────────
+  // 团队执行者默认就是这样：它传给 prepareWorktree 的是**领队的**分支，不是自己的登记
+  // 值；跟着降级写库等于凭空给它按上一个显式基线，往后 diff/验收都会照着它走。
+  {
+    const before = await load("isolated-worker-1");
+    assert.equal(before.worktreeBase, null, "前提：这个执行者本来没有登记基线");
+    await taskWorkspace(before, repo);
+    assert.equal((await load("isolated-worker-1")).worktreeBase, null, "没登记过基线就不该被写上一个");
+  }
+
   console.log("✓ team lead and default worker share one worktree");
   console.log("✓ explicitly isolated worker branches from the shared team branch");
   console.log("✓ reviewers reuse the exact shared or isolated workspace under review");
+  console.log("✓ deleted base falls back to the repo branch AND persists it for diff/accept");
+  console.log("✓ a kept worktree (and a plain follow-up turn) still notice a deleted base");
+  console.log("✓ reuse/restore report the fallback without claiming a rebuild");
+  console.log("✓ 三种工作目录去向各自的措辞对得上，同回合的两条 marker 不互相打架");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

@@ -151,6 +151,26 @@ export interface Workspace {
   // the worktree (~/.claude/projects/<escaped cwd>/), so a resumed agent would
   // otherwise keep building on files that no longer exist.
   fresh?: boolean;
+  // 请求的 base ref 已经不存在。典型现场：任务验收合并后目标分支被删，几天后用户又在
+  // 这个任务里发了一句话 —— 老做法是 `git worktree add` 直接抛 "invalid reference"，
+  // 整轮起不来，用户侧只看到「显示已发送，然后没反应」。
+  // 调用方拿它写一条持久可见的说明，别让分支基线被悄悄换掉。
+  //
+  // 这里存的是**三件互相独立的事实**，别再压成一个布尔：曾经用一个 `rebuilt` 同时表示
+  // 「新建了工作目录」和「按 used 新建的」，撞上「同名 tag 还在、旧目录没了」时它是 false，
+  // 于是同一条时间线先说「已重建为空目录」又说「沿用原有的工作目录」，用户刷新后根本判断
+  // 不出这轮到底发生了什么（审查实测）。措辞怎么读这三件事见 run-prompts.ts。
+  //   · workspaceRebuilt —— 这一轮新建了工作目录（等价于 `fresh`），而不是复用/接回原有的
+  //   · builtFromRequested —— 新建时仍从 requested 起（名字还解析得出提交，比如同名 tag）
+  //   · persisted —— 降级结果已由 task-workspace.ts 写回任务登记值；只有落了库，后面的
+  //     diff / 验收才会跟着走同一个目标，给用户的说明也才敢那么写
+  baseFallback?: {
+    requested: string;
+    used: string;
+    workspaceRebuilt: boolean;
+    builtFromRequested: boolean;
+    persisted?: boolean;
+  };
 }
 
 // Resolve where a run executes — and REPORT its git context, never creating
@@ -282,6 +302,40 @@ async function ensureWorktreesIgnored(repo: string): Promise<void> {
   }
 }
 
+/**
+ * 「任务登记的那个 base 现在还能当**验收目标**吗」。之所以单独拎出来，是因为它跟「这一次
+ * 拿什么建工作目录」是两件事：复用 / 恢复现成 worktree 的路径压根用不到 base —— 可它同时
+ * 还是合并目标（diff 与验收各自拿 `tasks.worktreeBase` 再解析一次），只在「建新分支」那条
+ * 路上报降级的话，「worktree 还在、base 被删」的任务会一路正常跑，直到用户点验收才撞墙
+ * （审查实测：worktree 复用成功，`taskBranchDiff` 仍是 target_branch_missing）。
+ *
+ * 判据必须是**本地分支还在不在**，跟下游 `git-diff.ts` / `task-accept.ts` 的真实要求对齐，
+ * 不能问「还解析得出一个 commit 吗」：仓库里留着一个同名 tag 就会把分支已删这件事整个遮
+ * 住 —— `rev-parse feat/x^{commit}` 照样成功，于是这里判定「没过期」，而 diff 和验收查的是
+ * `refs/heads/feat/x`，继续 target_branch_missing（审查实测）。「能不能拿它建目录」是另一个
+ * 判据（`commitExists`），在 prepareWorktreeLocked 里单独问。
+ */
+export async function staleBaseFallback(
+  repoPath: string,
+  base: string | null | undefined,
+  // 「这一轮的工作目录是怎么来的」由调用方告诉它 —— 本函数只回答基线还在不在，一个字都
+  // 推断不出工作目录的事。默认取「什么都没重建」，因为大多数调用方（refreshTaskBase、
+  // 复用/恢复路径）确实没动过目录。
+  workspace: Pick<
+    NonNullable<Workspace["baseFallback"]>,
+    "workspaceRebuilt" | "builtFromRequested"
+  > = { workspaceRebuilt: false, builtFromRequested: false },
+): Promise<Workspace["baseFallback"]> {
+  const repo = expandHome(repoPath);
+  const requested = (base ?? "").trim();
+  if (!requested) return undefined;
+  if (!(await isGitRepo(repo))) return undefined;
+  // `refs/heads/main` 这种写法下游会先 normalize 掉前缀再查，这里跟着剥，免得把一个其实
+  // 好好的基线判成没了。
+  if (await localBranchExists(repo, normalizeBranchName(requested))) return undefined;
+  return { requested, used: (await currentBranch(repo)) ?? "HEAD", ...workspace };
+}
+
 // 仓库级串行(见 repo-lock.ts):prune/add 改的是全仓共用的 worktree 注册表,
 // 两个任务同时起跑就会互相看见对方半成品的注册状态。
 export async function prepareWorktree(
@@ -307,11 +361,17 @@ async function prepareWorktreeLocked(
   // 一个不是 worktree 的目录里干活，它的 git 命令会上溯到主仓。清掉之后走下面的恢复
   // 路径，分支还在就把工作原样接回来。
   if (worktreeLeftoverAt(repo, path)) await discardWorktreeLeftover(repo, path);
+  // base 的死活先问一遍，再分路：三条路径（复用 / 恢复 / 新建）都要如实报出来，只有
+  // 「这一轮的工作目录是怎么来的」各不相同 —— 复用和恢复都没新建目录，用默认值即可。
+  const stale = await staleBaseFallback(repo, base);
   if (isDir(path)) {
     // Re-use: read whatever branch the existing worktree is actually on (might
     // differ if the user manipulated it manually). isWorktree=true so callers
     // know it's a linked worktree.
-    return { path, branch: (await currentBranch(path)) ?? branch, isWorktree: true };
+    return {
+      path, branch: (await currentBranch(path)) ?? branch, isWorktree: true,
+      ...(stale ? { baseFallback: stale } : {}),
+    };
   }
   // Drop registrations whose directory is gone. Without this, git still considers
   // the branch "checked out" at the missing path and refuses to touch it.
@@ -321,12 +381,23 @@ async function prepareWorktreeLocked(
   await ensureWorktreesIgnored(repo);
   const restore = await branchExists(repo, branch);
   const args = ["-C", repo, "worktree", "add"];
+  // 这一轮的工作目录到底是**从 base 起的**，还是退回了仓库当前 HEAD。措辞要照它说话。
+  let builtFromBase = false;
   if (restore) {
+    // 恢复：工作原样接回任务分支，跟 base 是谁无关（base 只在建分支那一刻用得上）。
     args.push(path, branch);
   } else {
     args.push("-b", branch, path);
     const trimmedBase = (base ?? "").trim();
-    if (trimmedBase) args.push(trimmedBase);
+    // 建目录问的是另一个问题：这个名字还解析得出一个提交吗（`worktree add <base>` 会不会
+    // 当场报 "invalid reference"）。它跟上面那个「还能不能当合并目标」不是一回事 —— 同名
+    // tag 遮住已删分支时，工作目录照样能从它起，要修的只是验收目标。
+    //
+    // 一个已经没了的 base 拿去 add 只会换来 "invalid reference" 并让整轮起不来，而这一轮
+    // 想做的事（在这个任务里接着说句话）跟 base 是谁其实无关。解析不出来就退回仓库当前
+    // HEAD —— 失败关闭在这里是错的方向：用户要的是能接着干活，不是一个精确但起不来的 base。
+    builtFromBase = !!trimmedBase && await commitExists(repo, trimmedBase);
+    if (builtFromBase) args.push(trimmedBase);
   }
   try {
     await exec("git", args);
@@ -337,7 +408,15 @@ async function prepareWorktreeLocked(
     const hint = windowsLongPathHint(path, stderr);
     throw new Error(`git worktree add 失败：${stderr}${hint ? `\n${hint}` : ""}`);
   }
-  return { path, branch, isWorktree: true, fresh: !restore };
+  return {
+    path, branch, isWorktree: true, fresh: !restore,
+    // 走到这里一定新建了工作目录（`fresh`），但「按谁建的」是另一回事：恢复回来的目录跟
+    // base 无关，从一个仍解析得出的同名 tag 建出来的也不是「按 used 重建」。两件事各报各的，
+    // 别再合并成一个布尔 —— 合并过一次，结果同一回合的时间线自相矛盾（见 baseFallback 注释）。
+    ...(stale
+      ? { baseFallback: { ...stale, workspaceRebuilt: !restore, builtFromRequested: builtFromBase } }
+      : {}),
+  };
 }
 
 // `git worktree remove [--force] <path>` — wired to the one-click cleanup button
@@ -463,6 +542,17 @@ export async function listBranches(repoPath: string): Promise<{ branches: string
 async function branchExists(repo: string, branch: string): Promise<boolean> {
   try {
     await exec("git", ["-C", repo, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// 这个名字现在还能解析成一个提交吗？分支、tag、远程分支、裸 SHA 一视同仁 —— 问的就是
+// `worktree add <base>` 会不会当场报 "invalid reference"。
+async function commitExists(repo: string, ref: string): Promise<boolean> {
+  try {
+    await exec("git", ["-C", repo, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
     return true;
   } catch {
     return false;

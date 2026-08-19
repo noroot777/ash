@@ -1,17 +1,57 @@
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
-import { prepareWorktree, resolveWorkspace, type Workspace } from "./git.js";
+import { prepareWorktree, resolveWorkspace, staleBaseFallback, type Workspace } from "./git.js";
+import { now } from "./util.js";
 
 type WorkspaceTask = Pick<
   typeof tasks.$inferSelect,
   "id" | "projectId" | "parentId" | "useWorktree" | "worktreeBase" | "reviewOf"
 >;
 
+// base 降级(登记的基线分支已经没了，这次按仓库当前 HEAD 起的)必须**落回任务行**，
+// 不能只在返回值里说一句：diff 和验收各自拿 `task.worktreeBase` 再解析一次目标分支
+// (`git-diff.ts` 的 resolveTaskMergeTarget、`task-accept.ts` 冻结验收目标)，库里还留着
+// 那个已删的名字的话，这一轮是起来了，用户下一步看 diff 会得到 target_branch_missing、
+// 点验收被「目标本地分支不存在」挡回 —— 等于把「起不来」换成了「起得来但交不掉」。
+//
+// 两处不写：
+//   · 降级的不是这个任务自己登记的那个 base(团队执行者那条路传的是共享分支)——那不是
+//     它的登记值，写进去等于凭空给它按了个显式基线。
+//   · 仓库处于 detached HEAD，`used` 是 "HEAD" 而不是分支名 —— 写进去只会把一个解析
+//     不出分支的值固化下来。
+async function persistBaseFallback(task: WorkspaceTask, ws: Workspace): Promise<void> {
+  const fallback = ws.baseFallback;
+  if (!fallback || fallback.used === "HEAD") return;
+  if ((task.worktreeBase ?? "").trim() !== fallback.requested) return;
+  await db
+    .update(tasks)
+    .set({ worktreeBase: fallback.used, updatedAt: now() })
+    .where(eq(tasks.id, task.id));
+  fallback.persisted = true;
+}
+
+/**
+ * 工作目录还在、这一轮压根没经过 `taskWorkspace` 的续聊，同样要查一遍登记的基线还在不在。
+ *
+ * 续聊只在 cwd 消失时才重新解析工作目录（见 orchestrator.ts），而「worktree 好端端地在、
+ * 登记的 base 分支被删了」正是最常见的一档：这一轮跑得好好的，直到用户去看 diff 或点验收
+ * 才撞上 target_branch_missing。降级决策跟 `prepareWorktree` 是同一套（`staleBaseFallback`），
+ * 这次没有重建任何目录，所以工作目录那两件事实都取默认的 false。
+ */
+export async function refreshTaskBase(task: WorkspaceTask, repoPath: string): Promise<Workspace["baseFallback"]> {
+  if (!task.useWorktree) return undefined;
+  const fallback = await staleBaseFallback(repoPath, task.worktreeBase);
+  if (!fallback) return undefined;
+  await persistBaseFallback(task, { path: "", branch: null, isWorktree: true, baseFallback: fallback });
+  return fallback;
+}
+
 async function directWorkspace(task: WorkspaceTask, repoPath: string): Promise<Workspace> {
-  return task.useWorktree
-    ? prepareWorktree(repoPath, task.id, task.worktreeBase)
-    : resolveWorkspace(repoPath, task.id);
+  if (!task.useWorktree) return resolveWorkspace(repoPath, task.id);
+  const ws = await prepareWorktree(repoPath, task.id, task.worktreeBase);
+  await persistBaseFallback(task, ws);
+  return ws;
 }
 
 // Resolve the cwd for every executable task through one path.
@@ -42,5 +82,7 @@ export async function taskWorkspace(task: WorkspaceTask, repoPath: string): Prom
   if (!task.useWorktree) return shared;
 
   const explicitBase = task.worktreeBase?.trim();
-  return prepareWorktree(repoPath, task.id, explicitBase || shared.branch);
+  const ws = await prepareWorktree(repoPath, task.id, explicitBase || shared.branch);
+  await persistBaseFallback(task, ws);
+  return ws;
 }
