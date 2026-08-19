@@ -23,12 +23,12 @@ import { withRepoLock } from "./repo-lock.js";
 //    暂存/丢弃本身不写 refs，但让它们和验收排同一条队是有意的——验收合并到一半时
 //    读到的工作区状态本来就不该拿来操作。白名单闸的那次 status 读也必须在锁内。
 //
-// ③ **分批是没得选的，所以「跑到一半失败」必须如实报账。** 路径多到一定程度会顶爆
-//    命令行长度上限（Windows 约 32K），只能拆成几次 git 调用；git 不提供跨调用的
-//    事务，前一批成功、后一批失败时前面那些是**真的已经生效了**——`git clean` 删掉
-//    的文件更是不进 reflog 也不进 stash，找不回来。这时候只回一句「失败」，用户会
-//    合理地以为整次操作没做。所以 `runAll` 在这种情况下抛 `ScmPartialError`，带上
-//    「哪些已生效、哪些没动」，路由再连同刷新后的状态一起回给面板。
+// ③ **改到一半停下时，已经生效的那部分必须如实报账。** 两种情形都真实存在：路径多到
+//    顶爆命令行长度上限（Windows 约 32K）只能拆成几次 git 调用，前一批成功后一批失败；
+//    以及提交——预暂存写完索引之后 commit 才跑，hook 拒绝时文件已经在索引里了。git 不
+//    提供跨调用的事务，`git clean` 删掉的更是不进 reflog 也不进 stash。这时候只回一句
+//    「失败」，用户会合理地以为整次操作没做，下一次提交就把没打算带的东西带上了。所以
+//    这两处都抛 `ScmPartialError`，带上「哪些已经生效」，路由再连同刷新后的状态回给面板。
 //
 // ④ **不做 push / pull / fetch / 切分支。** 前两个是外发到远程，后两个会把正在干活的
 //    agent 的脚下抽掉（harness 的整个 worktree 模型建立在「一个任务一条分支」上）。
@@ -39,24 +39,20 @@ const exec = promisify(execFile);
 export { ScmOperationError };
 
 /**
- * 批量操作跑到一半失败。
+ * 一次操作**没整个做完，但已经改动了工作区**。
  *
- * `done` 里的路径**已经生效了**，不是「本来要做的」——消息本身就得把这件事说清楚，
- * 因为它最终会原样出现在用户眼前的那条提示里。状态用 409：请求本身没错，是这次
+ * `done` 里的路径已经生效了，不是「本来要做的」。消息由抛出点自己写全，因为它会原样
+ * 出现在用户眼前那条横幅上，而「暂存了 200 个但第 201 个失败」和「文件全暂存上了、
+ * 提交没成」要说的是两件不同的事，套一个模板说不清。状态用 409：请求本身没错，是这次
  * 操作没能整个做完，客户端拿到清单后该做的是重看一眼状态、决定要不要重试剩下的。
  */
 export class ScmPartialError extends ScmOperationError {
   constructor(
-    action: string,
+    message: string,
     readonly done: readonly string[],
     readonly pending: readonly string[],
-    cause: string,
   ) {
-    super(
-      `${action}只做成了一部分：${done.length} 个已经生效、${pending.length} 个没动。`
-      + `失败原因：${oneLine(cause)}`,
-      409,
-    );
+    super(message, 409);
     this.name = "ScmPartialError";
   }
 }
@@ -72,6 +68,15 @@ export interface ScmWriteResult {
   /** 实际处理的路径数——前端据此报「已暂存 3 个文件」。 */
   affected: number;
 }
+
+/**
+ * 拿到仓库锁之后、动手之前再问一次「现在还能写吗」。
+ *
+ * 路由层进门时查过一次任务在不在飞，但排 `withRepoLock` 可能等上几秒（验收合并正占着
+ * 锁），这几秒里 agent 完全可能被唤醒开跑——进门时的判断到动手时已经过期。所以判据要在
+ * 锁内复查一次，抛出的错误由路由翻译成「需要 force」。
+ */
+export type ScmGuard = () => void | Promise<void>;
 
 async function git(root: string, args: string[]): Promise<string> {
   try {
@@ -96,8 +101,10 @@ interface ScmBatchGroup {
  * 一批都没成功就原样把错误抛出去（那才是「整次操作没生效」，多包一层只会让消息更绕）；
  * 已经落地过至少一批才升级成 `ScmPartialError`。分组之间也接着算——丢弃是先 restore
  * 已跟踪、再 clean 未跟踪，clean 中途炸了的时候，前面那些 restore 同样已经生效。
+ *
+ * `note` 是给这次操作补一句后果说明（丢弃的「找不回来」），随消息一起进横幅。
  */
-async function runAll(action: string, groups: readonly ScmBatchGroup[]): Promise<number> {
+async function runAll(action: string, groups: readonly ScmBatchGroup[], note?: string): Promise<number> {
   const all = groups.flatMap((group) => [...group.paths]);
   let done = 0;
   try {
@@ -110,7 +117,12 @@ async function runAll(action: string, groups: readonly ScmBatchGroup[]): Promise
     }
   } catch (error) {
     if (!done) throw error;
-    throw new ScmPartialError(action, all.slice(0, done), all.slice(done), (error as Error).message);
+    throw new ScmPartialError(
+      `${action}只做成了一部分：${done} 个已经生效${note ? `（${note}）` : ""}、${all.length - done} 个没动。`
+      + `失败原因：${oneLine((error as Error).message)}`,
+      all.slice(0, done),
+      all.slice(done),
+    );
   }
   return all.length;
 }
@@ -148,9 +160,15 @@ async function assertRemovable(root: string, paths: readonly string[]): Promise<
   }
 }
 
-export async function stagePaths(root: string, repoPath: string | null, paths: readonly string[]): Promise<ScmWriteResult> {
+export async function stagePaths(
+  root: string,
+  repoPath: string | null,
+  paths: readonly string[],
+  guard?: ScmGuard,
+): Promise<ScmWriteResult> {
   const targets = assertPathShape(paths);
   return withRepoLock(repoPath, async () => {
+    await guard?.();
     await gateScmPaths(root, { paths: targets });
     // `add -A` 而不是 `add`：只有前者会把「文件被删了」也记进索引，否则删除永远暂存不上。
     const affected = await runAll("暂存", [{
@@ -167,11 +185,18 @@ export async function stagePaths(root: string, repoPath: string | null, paths: r
  * **重命名要连原路径一起传**：`git mv old new` 之后索引里是两条记录（`old` 删除、`new`
  * 新增，status 合成一条 R 显示给用户）。只 restore `new`，索引里那条 `old` 的删除会原地
  * 留下——用户看到的是「取消暂存成功」，下一次提交却只提交了一个删除。前端 `pathsOf`
- * 因此对每个条目同时送 `path` 和 `origPath`。
+ * 因此对**重命名**条目同时送 `path` 和 `origPath`；复制（C）不在此列，它的 origPath 是
+ * 另一个独立存在的文件，捎带上等于替用户取消了他没点的那一个。
  */
-export async function unstagePaths(root: string, repoPath: string | null, paths: readonly string[]): Promise<ScmWriteResult> {
+export async function unstagePaths(
+  root: string,
+  repoPath: string | null,
+  paths: readonly string[],
+  guard?: ScmGuard,
+): Promise<ScmWriteResult> {
   const targets = assertPathShape(paths);
   return withRepoLock(repoPath, async () => {
+    await guard?.();
     await gateScmPaths(root, { paths: targets });
     const affected = await runAll("取消暂存", [{
       paths: targets,
@@ -206,11 +231,13 @@ export async function discardPaths(
   repoPath: string | null,
   paths: readonly string[],
   deleteUntracked: readonly string[] = [],
+  guard?: ScmGuard,
 ): Promise<ScmWriteResult> {
   const tracked = paths.length ? assertPathShape(paths) : [];
   const untracked = deleteUntracked.length ? assertPathShape(deleteUntracked) : [];
   if (!tracked.length && !untracked.length) throw new ScmOperationError("没有指定文件");
   return withRepoLock(repoPath, async () => {
+    await guard?.();
     // 一次读，两道闸：路径得在列表里，且不许是冲突中的文件。锁内读到的才是即将被操作的那份。
     await gateScmPaths(root, { paths: [...tracked, ...untracked], rejectConflicted: true });
     if (untracked.length) await assertRemovable(root, untracked);
@@ -220,7 +247,7 @@ export async function discardPaths(
       { paths: tracked, run: (batch) => git(root, ["restore", "--worktree", "--", ...batch.map(literalPathspec)]) },
       // `-f` 是必须的（clean 默认拒绝动手），`-d` 不给：只删点名的文件，不递归清目录。
       { paths: untracked, run: (batch) => git(root, ["clean", "-f", "--", ...batch.map(literalPathspec)]) },
-    ]);
+    ], "改动找不回来");
     return { ok: true as const, affected };
   });
 }
@@ -238,15 +265,30 @@ export interface ScmCommitResult {
   subject: string;
 }
 
+/**
+ * 提交。
+ *
+ * **预暂存和 commit 是两步，中间没有回滚。** `stagePaths` 先把点名的路径写进索引，之后
+ * commit 才跑；pre-commit hook 拒绝、提交身份没配、签名失败……任何一种都会让「文件已经
+ * 在索引里、但没有提交」成为事实。这时候只回一句「提交失败」，用户会合理地以为索引没
+ * 动，下一次提交就把这些本来没打算带上的东西一起带进去了。
+ *
+ * 所以失败时抛 `ScmPartialError` 把已暂存的清单交代清楚，而**不回滚**：用户原有的
+ * staged 内容和这次预暂存的混在同一个索引里，`restore --staged` 一刀切下去会连人家
+ * 之前挑好的暂存一起抹掉——那是拿一个静默的破坏去补另一个。要精确还原就得先把原索引
+ * 完整存下来，代价和风险都比「如实说清楚」大得多。
+ */
 export async function commitWorkspace(
   root: string,
   repoPath: string | null,
   options: ScmCommitOptions,
+  guard?: ScmGuard,
 ): Promise<ScmCommitResult> {
   const message = options.message.trim();
   if (!message) throw new ScmOperationError("提交信息不能为空");
   const toStage = options.stagePaths?.length ? assertPathShape(options.stagePaths) : [];
   return withRepoLock(repoPath, async () => {
+    await guard?.();
     if (toStage.length) {
       await gateScmPaths(root, { paths: toStage });
       await runAll("提交前的暂存", [{
@@ -256,12 +298,22 @@ export async function commitWorkspace(
     }
     // 消息走 stdin（`-F -`）而不是 argv：提交信息里的换行、引号、以及 Windows 上的
     // 命令行长度上限都不必再操心，而且它不会出现在进程列表里。
-    await new Promise<void>((resolve, reject) => {
-      const child = execFile("git", ["-C", root, "commit", ...(options.amend ? ["--amend"] : []), "-F", "-"], {
-        maxBuffer: 8 * 1024 * 1024,
-      }, (error) => (error ? reject(new ScmOperationError(gitError(error), 409)) : resolve()));
-      child.stdin?.end(`${message}\n`);
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const child = execFile("git", ["-C", root, "commit", ...(options.amend ? ["--amend"] : []), "-F", "-"], {
+          maxBuffer: 8 * 1024 * 1024,
+        }, (error) => (error ? reject(new ScmOperationError(gitError(error), 409)) : resolve()));
+        child.stdin?.end(`${message}\n`);
+      });
+    } catch (error) {
+      if (!toStage.length) throw error;
+      throw new ScmPartialError(
+        `提交没有成功，但这 ${toStage.length} 个文件已经暂存进索引了——不处理的话，`
+        + `下一次提交会把它们一起带上。失败原因：${oneLine((error as Error).message)}`,
+        toStage,
+        [],
+      );
+    }
     const { stdout } = await exec("git", ["-C", root, "log", "-1", "--format=%H%x1f%s"]);
     const [sha, subject] = stdout.trim().split("\x1f");
     return { ok: true as const, sha, subject: subject ?? message };

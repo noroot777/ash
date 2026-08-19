@@ -38,6 +38,7 @@
     "test:workflow-rail": "node --experimental-strip-types scripts/test-workflow-rail.mjs",
     "test:workflow-edit": "node --experimental-strip-types scripts/test-workflow-edit.mjs",
     "test:turn-retry": "node --experimental-strip-types scripts/test-turn-retry.mjs",
+    "test:scm-paths": "node --experimental-strip-types scripts/test-scm-paths.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "preview": "vite preview"
   },

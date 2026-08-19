@@ -11,6 +11,8 @@
 //   • 仓库外的路径不能被预览读出来
 //   • 空仓库（还没有任何提交）取消暂存要能走通，那条路上没有 HEAD 可以 restore
 //   • 分批操作跑到一半失败时，不许悄悄留下部分结果——删除整批拦下，索引如实报账
+//   • 预暂存成功但 commit 失败，同样要报账：文件已经在索引里，下一次提交会带上它们
+//   • 锁内复查（guard）拒绝时一步都不许做——排队等锁的几秒里 agent 可能刚被唤醒
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -357,6 +359,51 @@ if (!IS_WINDOWS) {
     }
     chmodSync(join(repo, "unreadable.txt"), 0o600);
   }
+}
+
+// ── 11. 提交失败时，预暂存已经生效这件事必须说出来 ──────────────────────────
+//
+// 预暂存和 commit 是两步，中间没有回滚：hook 拒绝 / 没得 amend / 签名失败，文件都已经
+// 在索引里了。只回一句「提交失败」，用户会以为索引没动，下一次提交就把它们带上了。
+// 这里用空仓库 `--amend` 造失败——不依赖 hook 的可执行位和 shell，两个平台上都成立。
+{
+  const repo = makeRepo("commit-partial");
+  write(repo, "a.txt", "a\n");
+  await assert.rejects(
+    () => commitWorkspace(repo, repo, { message: "无处可 amend", stagePaths: ["a.txt"], amend: true }),
+    (error: unknown) => error instanceof ScmPartialError
+      && error.done.length === 1 && error.done[0] === "a.txt"
+      && /已经暂存进索引/.test(error.message),
+    "提交失败但预暂存已生效时，必须报账而不是当成普通失败",
+  );
+  assert.deepEqual(paths((await readScmStatus(repo)).staged), ["a.txt"], "报账里说进了索引的，索引里就得真有");
+
+  // 没有预暂存的提交失败就是纯失败，不该套上「部分生效」的壳子——那样反而在说谎。
+  await assert.rejects(
+    () => commitWorkspace(repo, repo, { message: "无处可 amend", amend: true }),
+    (error: unknown) => error instanceof ScmOperationError && !(error instanceof ScmPartialError),
+    "没动过索引的提交失败必须保持普通失败",
+  );
+}
+
+// ── 12. 锁内复查：guard 说不行就一步都不做 ──────────────────────────────────
+//
+// 路由进门时查过「任务在不在飞」，但排 withRepoLock 可能等上几秒，这期间 agent 完全
+// 可能被唤醒开跑。判据因此要在锁内复查一次，且必须排在任何 git 写操作之前。
+{
+  const repo = makeRepo("guard");
+  write(repo, "a.txt", "a\n");
+  let called = 0;
+  await assert.rejects(
+    () => stagePaths(repo, repo, ["a.txt"], () => {
+      called += 1;
+      throw new ScmOperationError("任务开跑了", 409);
+    }),
+    (error: unknown) => error instanceof ScmOperationError && /任务开跑了/.test(error.message),
+    "guard 拒绝时整个操作必须中止",
+  );
+  assert.equal(called, 1, "guard 必须被调用");
+  assert.equal((await readScmStatus(repo)).staged.length, 0, "guard 拒绝之后索引一个字节都不许动");
 }
 
 // ── 10. 截断标记 ────────────────────────────────────────────────────────────

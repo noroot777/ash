@@ -20,8 +20,6 @@ import {
 
 const POLL_MS = 5000;
 
-export type ScmActionKind = "stage" | "unstage" | "discard" | "commit";
-
 /** 中间栏此刻摊开的是哪一份 diff。同一个文件在暂存/未暂存两侧的内容不同，source 是主键的一部分。 */
 export type ScmDiffTarget = {
   path: string;
@@ -140,8 +138,13 @@ async function runOne(taskId: string, action: ScmAction, force: boolean) {
   }
 }
 
-/** 部分生效的那次操作，留在面板上直到用户自己关掉——见 `run` 的注释。 */
-export type ScmPartialNotice = ScmWritePartial & { action: ScmActionKind };
+/**
+ * 上一次「改到一半停下」的操作，留在面板上直到用户自己关掉——见 `run` 的注释。
+ *
+ * `message` 直接用后端那句话：横幅要说清楚的是**这次到底发生了什么**（暂存了 200 个第
+ * 201 个失败 / 文件全暂存上了但提交没成），只有后端知道，前端按动作名硬拼准会拼错。
+ */
+export type ScmPartialNotice = ScmWritePartial & { message: string };
 
 export function useScmWorkspace(taskId: string) {
   const [overview, setOverview] = useState<ScmOverview | null>(null);
@@ -191,9 +194,9 @@ export function useScmWorkspace(taskId: string) {
    * 被 running 门禁挡下时**不抛错**，而是回一个 `needsForce`：那不是失败，是「这一步
    * 需要用户明知故犯」，调用点据此弹确认框再带 force 重来。其它错误照常抛。
    *
-   * 但「部分生效」这一种在抛出去之前先落一份 `partial`：一句 toast 飘过去就没了，而
-   * 已经被删掉的文件是找不回来的，用户得能在刷完屏之后还看得见「上次那下只做了一半、
-   * 是哪几个」。横幅由他自己关掉，不随下一次轮询消失。
+   * 但「改到一半停下」这一种在抛出去之前先落一份 `partial`：一句 toast 飘过去就没了，
+   * 而已经被删掉的文件找不回来、已经进了索引的文件会被下一次提交带上，用户得能在刷完屏
+   * 之后还看得见「上次那下做到哪儿、是哪几个」。横幅由他自己关掉，不随下一次轮询消失。
    */
   const run = useCallback(async (action: ScmAction, force = false): Promise<ScmActionOutcome> => {
     setBusy(true);
@@ -210,7 +213,7 @@ export function useScmWorkspace(taskId: string) {
       if (isNeedsForce(reason)) return { ok: false, needsForce: true, error: messageOf(reason) };
       const body = partialOf(reason);
       if (body?.partial) {
-        setPartial({ ...body.partial, action: action.kind });
+        setPartial({ ...body.partial, message: body.error ?? messageOf(reason) });
         // 已经生效的那部分必须立刻反映到列表上，否则界面停在旧状态，用户会以为整次都没做。
         if (body.status) setOverview((current) => (current ? { ...current, status: body.status! } : current));
         else void refresh(true);
@@ -229,13 +232,20 @@ export function useScmWorkspace(taskId: string) {
 /**
  * 分组里这些条目要送到后端的全部路径，按显示顺序。
  *
- * **重命名会展开成两条**（新路径 + 原路径）：`git mv old new` 在索引里是「删 old + 加
- * new」两条记录，status 才把它们合成一条 R 显示。只送 new 去取消暂存，索引里那条 old
+ * **只有重命名会展开成两条**（新路径 + 原路径）：`git mv old new` 在索引里是「删 old +
+ * 加 new」两条记录，status 才把它们合成一条 R 显示。只送 new 去取消暂存，索引里那条 old
  * 的删除会原地留下——界面报「已取消暂存」，用户下一次提交却只提交了一个删除。
  *
- * 「用户丢掉的正是他看见的那些」这条边界不受影响：origPath 本来就是那一行上写着的
- * `← old.txt`，是同一个改动的另一半，不是额外的文件。
+ * **复制（C）绝不能跟着展开。** 仓库配了 `status.renames=copies` 时，复制条目的 origPath
+ * 是**另一个仍然存在的文件**，不是同一个改动的另一半；连它一起送过去，用户点的是
+ * `copy.txt` 的减号，被取消暂存的却还有他精心挑好的 `source.txt`——静默地把别的东西移出
+ * 了下一次提交。所以判据是 `kind === "renamed"`，不是「有没有 origPath」。
+ *
+ * 「用户丢掉的正是他看见的那些」这条边界不受影响：重命名的 origPath 本来就是那一行上
+ * 写着的 `← old.txt`。
  */
 export function pathsOf(changes: readonly ScmChange[]): string[] {
-  return changes.flatMap((change) => (change.origPath ? [change.path, change.origPath] : [change.path]));
+  return changes.flatMap((change) => (
+    change.kind === "renamed" && change.origPath ? [change.path, change.origPath] : [change.path]
+  ));
 }

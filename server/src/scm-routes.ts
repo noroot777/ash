@@ -16,8 +16,10 @@ import {
   ScmPartialError,
   stagePaths,
   unstagePaths,
+  type ScmGuard,
 } from "./git-workspace-ops.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
+import { isTurnClaimed } from "./runs.js";
 import { assertInsideRoot, assertPathShape, gateScmPaths } from "./scm-paths.js";
 
 // 任务工作区的「源代码管理」面板。工作目录的解析**复用 taskFileRoot**（会话 cwd >
@@ -29,13 +31,29 @@ import { assertInsideRoot, assertPathShape, gateScmPaths } from "./scm-paths.js"
 //   • **预览实例一律拒绝**。预览连的是主库的快照，但库里那些任务行的 `worktree_path`
 //     指向的是**真仓库**（`preview-instance.ts` 顶部）。用户以为自己在沙盒里点着玩，
 //     一次 discard 就不可逆地删掉了真实工作区里没提交的东西。读侧不拦——看是安全的。
-//   • **任务正在跑**时默认拒绝，要带 `force` 才放行。理由是 agent 此刻正在同一个工作
+//   • **任务在飞**时默认拒绝，要带 `force` 才放行。理由是 agent 此刻正在同一个工作
 //     目录里写文件：这时候提交，提交进去的是它写到一半的中间状态；这时候丢弃，丢掉的
 //     可能是它三秒前刚写出来、还没来得及提交的成果。这不是禁止，是要求用户明知故犯——
 //     前端据此弹一次说明后果的确认框。
+//
+// 「在飞」的判据是 **DB status 或 turn 锁**，两个都要看：`claimTurn` 到 status 落
+// `running` 之间有一段真实窗口，只看 status 会在 agent 已经开跑时放行不可逆的 discard
+// （`task-accept-guard.ts` 因为同一个原因也是这么判的）。而且这个判断**在拿到仓库锁之后
+// 还要复查一次**：排队等锁可能等上几秒（验收合并正占着），进门时的结论到动手时早过期了。
 
 
 const RUNNING_STATES = new Set(["running", "queued"]);
+
+/**
+ * 任务在飞时挡下写操作。**不是错误，是要求用户明知故犯**——路由把它翻译成
+ * `needsForce`，前端弹一次说明后果的确认框，用户点了确认再带 `force` 重来。
+ */
+class ScmBusyError extends ScmOperationError {
+  constructor() {
+    super("任务正在运行，agent 此刻可能正在写这个工作目录；确认要继续请带 force", 409);
+    this.name = "ScmBusyError";
+  }
+}
 
 interface ScmRequestBody {
   paths?: unknown;
@@ -63,12 +81,18 @@ function publicRoot(root: WorkspaceRoot) {
 }
 
 export function mountScmRoutes(api: Hono) {
-  /** 工作目录 + 这个任务此刻在不在跑。两件事都要，合成一次数据库读。 */
+  /** 这个任务此刻在不在飞。DB status 和 turn 锁哪个说「在」都算在（见顶部注释）。 */
+  const inFlight = async (taskId: string) => {
+    if (isTurnClaimed(taskId)) return true;
+    const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+    return RUNNING_STATES.has(task?.status ?? "");
+  };
+
+  /** 工作目录 + 这个任务此刻在不在飞。两件事都要，合成一次数据库读。 */
   const contextFor = async (taskId: string) => {
     const root = await taskFileRoot(taskId);
     if (!root) return { root: null, running: false } as const;
-    const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-    return { root, running: RUNNING_STATES.has(task?.status ?? "") } as const;
+    return { root, running: await inFlight(taskId) } as const;
   };
 
   /** 读侧的公共前奏：解析目录、确认是 git 仓库，两者任一不成立就把响应交出去。 */
@@ -118,32 +142,37 @@ export function mountScmRoutes(api: Hono) {
     }
   });
 
-  /** 写操作的公共外壳：预览门禁 → 解析目录 → running 门禁 → 跑 → 回一份刷新后的状态。 */
+  /** 写操作的公共外壳：预览门禁 → 解析目录 → 在飞门禁 → 跑 → 回一份刷新后的状态。 */
   const write = (
     path: string,
-    run: (root: WorkspaceRoot, body: ScmRequestBody) => Promise<unknown>,
+    run: (root: WorkspaceRoot, body: ScmRequestBody, guard: ScmGuard) => Promise<unknown>,
   ) => {
     api.post(path, async (c) => {
       if (IS_PREVIEW_INSTANCE) return c.json({ error: previewRefusal("改任务的工作区") }, 403);
       // 路径是变量，Hono 推不出参数名，取值补一个空串兜底（空 id 走 taskFileRoot 的 404）。
-      const context = await gitRootOr(c.req.param("id") ?? "");
+      const taskId = c.req.param("id") ?? "";
+      const context = await gitRootOr(taskId);
       if ("error" in context) return c.json({ error: context.error }, context.status);
       const body = await c.req.json().catch(() => ({})) as ScmRequestBody;
-      if (context.running && body.force !== true) {
-        return c.json({
-          error: "任务正在运行，agent 此刻可能正在写这个工作目录；确认要继续请带 force",
-          needsForce: true,
-        }, 409);
-      }
+      const forced = body.force === true;
+      if (context.running && !forced) return c.json({ error: new ScmBusyError().message, needsForce: true }, 409);
+      // 带 force 就是用户已经明知故犯了，锁内不必再拦；没带 force 的才复查——排队期间
+      // agent 被唤醒开跑的话，进门时那次判断已经过期了。
+      const guard: ScmGuard = forced ? () => {} : async () => {
+        if (await inFlight(taskId)) throw new ScmBusyError();
+      };
       try {
-        const result = await run(context.root, body);
+        const result = await run(context.root, body, guard);
         // 每个写操作都把最新状态一起回去：面板不必再补一次请求，也不会出现
         // 「按钮已响应、列表还是旧的」那一帧。
         return c.json({ ...(result as object), status: await readScmStatus(context.root.path) });
       } catch (error) {
-        // 跑到一半失败的批量操作要额外回两样东西：**已经生效的清单**（`git clean` 删掉
-        // 的文件找不回来，只回一句「失败」等于把它藏了），以及**刷新后的状态**——否则
-        // 面板停在旧列表上，用户看到的是「操作失败了，所以什么都没变」。
+        // 锁内复查挡下的，和进门时挡下的走同一条路：这不是失败，是要用户确认一次。
+        if (error instanceof ScmBusyError) return c.json({ error: error.message, needsForce: true }, 409);
+        // 改到一半停下的操作要额外回两样东西：**已经生效的清单**（`git clean` 删掉的文件
+        // 找不回来、预暂存进索引的文件会被下一次提交带上，只回一句「失败」等于把它藏了），
+        // 以及**刷新后的状态**——否则面板停在旧列表上，用户看到的是「操作失败了，所以
+        // 什么都没变」。
         if (error instanceof ScmPartialError) {
           return c.json({
             error: errorMessage(error),
@@ -156,19 +185,19 @@ export function mountScmRoutes(api: Hono) {
     });
   };
 
-  write("/tasks/:id/scm/stage", (root, body) =>
-    stagePaths(root.path, root.repoPath, stringList(body.paths)));
+  write("/tasks/:id/scm/stage", (root, body, guard) =>
+    stagePaths(root.path, root.repoPath, stringList(body.paths), guard));
 
-  write("/tasks/:id/scm/unstage", (root, body) =>
-    unstagePaths(root.path, root.repoPath, stringList(body.paths)));
+  write("/tasks/:id/scm/unstage", (root, body, guard) =>
+    unstagePaths(root.path, root.repoPath, stringList(body.paths), guard));
 
-  write("/tasks/:id/scm/discard", (root, body) =>
-    discardPaths(root.path, root.repoPath, stringList(body.paths), stringList(body.deleteUntracked)));
+  write("/tasks/:id/scm/discard", (root, body, guard) =>
+    discardPaths(root.path, root.repoPath, stringList(body.paths), stringList(body.deleteUntracked), guard));
 
-  write("/tasks/:id/scm/commit", (root, body) =>
+  write("/tasks/:id/scm/commit", (root, body, guard) =>
     commitWorkspace(root.path, root.repoPath, {
       message: typeof body.message === "string" ? body.message : "",
       stagePaths: stringList(body.stagePaths),
       amend: body.amend === true,
-    }));
+    }, guard));
 }

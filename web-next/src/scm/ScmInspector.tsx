@@ -17,7 +17,6 @@ import {
   pathsOf,
   useScmWorkspace,
   type ScmAction,
-  type ScmActionKind,
   type ScmPartialNotice,
 } from "./scmModel.ts";
 
@@ -35,19 +34,15 @@ import {
 
 const DISCARD_HINT = "丢弃不可逆：restore 覆盖回原样、clean 直接删文件，都不进 reflog 也不进 stash。";
 
-const PARTIAL_VERB: Record<ScmActionKind, string> = {
-  stage: "暂存",
-  unstage: "取消暂存",
-  discard: "丢弃",
-  commit: "提交前的暂存",
-};
-
 /**
- * 「上一次批量操作只做成了一半」的横幅。
+ * 「上一次操作改到一半停下了」的横幅。
  *
- * 路径多到要分批时 git 给不了事务，中途失败就是**前面那些已经真的生效了**——丢弃未跟踪
- * 文件时它们已经从磁盘上没了。这种结果不能只靠一条飘过去的提示交代：横幅留在面板上，
- * 直到用户自己按「知道了」，或者下一次写操作成功。
+ * 两种情形都会到这里：分批跑的批量操作中途失败（git 给不了跨调用的事务，前面那些已经
+ * 真的生效了——丢弃未跟踪文件时它们已经从磁盘上没了），以及提交时预暂存成功但 commit
+ * 被拒（文件留在索引里，下一次提交会把它们带上）。这种结果不能只靠一条飘过去的提示
+ * 交代：横幅留在面板上，直到用户自己按「知道了」，或者下一次写操作成功。
+ *
+ * 主文案直接用后端那句话——发生了什么只有它说得准，前端按动作名硬拼准会拼错。
  */
 function PartialBanner({ notice, onDismiss }: { notice: ScmPartialNotice; onDismiss: () => void }) {
   const sample = notice.done.slice(0, 3).join("、");
@@ -55,13 +50,11 @@ function PartialBanner({ notice, onDismiss }: { notice: ScmPartialNotice; onDism
     <p className="scm-banner is-danger">
       <WarningCircle size={13} />
       <span className="scm-banner__body">
-        <span>
-          上一次「{PARTIAL_VERB[notice.action]}」只做成了一部分：
-          <b>{notice.done.length} 个已经生效</b>
-          {notice.action === "discard" && "（文件已删除或已还原，找不回来）"}
-          ，{notice.pending.length} 个没动。下面的列表已经是实际结果。
-        </span>
-        <code>已生效：{sample}{notice.done.length > 3 ? ` 等 ${notice.done.length} 个` : ""}</code>
+        <span>{notice.message}</span>
+        <span>下面的列表已经是实际结果。</span>
+        {notice.done.length > 0 && (
+          <code>已生效：{sample}{notice.done.length > 3 ? ` 等 ${notice.done.length} 个` : ""}</code>
+        )}
       </span>
       <button type="button" className="scm-banner__dismiss" onClick={onDismiss}>知道了</button>
     </p>
