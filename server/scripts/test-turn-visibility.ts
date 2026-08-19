@@ -8,12 +8,16 @@
 //   1. spawn 之前失败 → 会话里必须留下一条持久可见的说明，且把没送达的原文还给用户
 //   2. 原文要跟正常投递**同一份**：带附件的消息不能只还文字，附件路径得在里面
 //   3. 这条说明要落到**被 @ 的那位**的会话上，而不是任务里最新的那条会话
+//   4. 起跑失败之前**已经落库**的状态变更（登记的基线被换掉了）同样要说 —— 库里已经是
+//      新值，重试不会再触发，不在这一轮说就永远说不了了
 //
 // 跑：npm -w server run test:turn-visibility
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { eq } from "drizzle-orm";
 
 const root = mkdtempSync(join(tmpdir(), "harness-turn-visibility-"));
 // 断言失败是直接抛的，清理因此挂在进程退出上而不是写在末尾：写末尾的话失败一次就在
@@ -24,12 +28,24 @@ process.env.HARNESS_RUNS_DIR = join(root, "runs");
 
 const { ensureSchema, db } = await import("../src/db/index.js");
 const { projects, sessions, tasks } = await import("../src/db/schema.js");
-const { continueTask } = await import("../src/orchestrator.js");
+const { continueTask, runTask } = await import("../src/orchestrator.js");
+const { claimTurn, freezeStartingTurn } = await import("../src/runs.js");
 
 await ensureSchema();
 const stamp = new Date().toISOString();
+const repo = join(root, "repo");
+// ⑤ 要一个真仓库(建 worktree、删分支)。前四例用不上它，多一个空仓库也不碍事：
+// 它们的会话 cwd 钉在 root，`existsSync` 通得过，压根不会去解析工作目录。
+const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+execFileSync("git", ["init", "-b", "main", repo]);
+git("config", "user.name", "Harness Test");
+git("config", "user.email", "harness@example.test");
+writeFileSync(join(repo, "seed.txt"), "seed\n");
+git("add", "seed.txt");
+git("commit", "-m", "seed");
+
 await db.insert(projects).values({
-  id: "p1", name: "turn visibility", repoPath: join(root, "repo"), apiKeys: null, workflowId: null, createdAt: stamp,
+  id: "p1", name: "turn visibility", repoPath: repo, apiKeys: null, workflowId: null, createdAt: stamp,
 });
 
 const baseTask = {
@@ -134,5 +150,72 @@ const FAILING = { reasoningEffort: "ultra-fake-effort" };
   assert.doesNotMatch(md, /你刚发的这条消息/, "不是用户发的，就别说是他发的");
 }
 
+// ── ⑤ 起跑失败之前已经落库的基线变更，同样要说 ──────────────────────────────
+// 解析工作目录那一步就把 tasks.worktreeBase 从已删的分支改成了仓库当前分支，而说明
+// 原本只写在 spawn 成功之后。中间失败(执行器解析不过)时用户只看到「这一轮没能起跑」，
+// 而 diff / 验收的目标已经换了人 —— 库里已是新值，重试也不会再触发这条降级，这次变更
+// 从此无从知晓（审查实测）。所以失败那条路必须自己补上同一句话。
+{
+  await db.insert(tasks).values([{
+    ...baseTask, id: "t-base-fallback", title: "base fallback", agentType: "codex",
+    useWorktree: true, worktreeBase: "feat/gone", reasoningEffort: FAILING.reasoningEffort,
+  }]);
+  // 起跑失败的说明走 appendTaskTimeline，得有一条会话收着（跟前四例同一个投递口径）。
+  await db.insert(sessions).values([{
+    ...baseSession, id: "s-base", taskId: "t-base-fallback", agentType: "codex",
+    cwd: root, startedAt: stamp, turnStartedAt: stamp,
+  }]);
+  // 登记的基线分支建了又删：验收合并后目标分支被删是最常见的一种。
+  git("branch", "feat/gone");
+  git("branch", "-D", "feat/gone");
+
+  await runTask("t-base-fallback");
+
+  const row = (await db.select().from(tasks).where(eq(tasks.id, "t-base-fallback"))).at(0);
+  assert.equal(row?.worktreeBase, "main", "前提：这一轮确实把登记的基线落库换成了当前分支");
+  assert.equal(row?.status, "failed", "前提：它是在 spawn 之前失败的（执行器解析不过）");
+
+  const md = transcript("t-base-fallback", "s-base");
+  assert.match(md, /这一轮没能起跑/, "失败本身照旧要说");
+  assert.match(md, /任务登记的基线分支 feat\/gone 已不存在/, "基线被换掉了，起跑失败也要说");
+  assert.match(md, /后续查看 diff 与验收都以它为目标/, "落了库就要说清楚它改变了 diff/验收的目标");
+  assert.ok(
+    md.indexOf("已不存在") < md.indexOf("这一轮没能起跑"),
+    "基线在更早的时候就落了库，说明该排在失败交代之前",
+  );
+}
+
 console.log("✓ 起跑失败留下持久可见的说明，并把没送达的原文（含附件）还给用户");
+
+// ── ⑥ 续聊那条路同理：工作目录还在，登记的基线照样可能已经没了 ────────────────
+// 续聊只在 cwd 消失时才重新解析工作目录，「worktree 好端端地在、登记的 base 被删了」
+// 走的是 refreshTaskBase —— 它同样当场落库。这里的失败点必须排在它之后（执行器解析
+// 在它之前，用坏 effort 触发不到这个窗口），所以用「起跑前被撤回」那道闸。
+{
+  await db.insert(tasks).values([{
+    ...baseTask, id: "t-base-continue", title: "base fallback on reply", agentType: "codex",
+    useWorktree: true, worktreeBase: "feat/gone-too",
+  }]);
+  await db.insert(sessions).values([{
+    ...baseSession, id: "s-base-continue", taskId: "t-base-continue", agentType: "codex",
+    cwd: root, startedAt: stamp, turnStartedAt: stamp,
+  }]);
+  git("branch", "feat/gone-too");
+  git("branch", "-D", "feat/gone-too");
+
+  // 冻结标记只对「已占位、还没 spawn」的回合有效，所以先替调用方占住这一回合。
+  assert.ok(claimTurn("t-base-continue"), "前提：这一回合占得住");
+  assert.ok(freezeStartingTurn("t-base-continue"), "前提：撤回标记落在了这一回合上");
+  await continueTask("t-base-continue", "接着做", { agent: "codex", turnHeld: true });
+
+  const row = (await db.select().from(tasks).where(eq(tasks.id, "t-base-continue"))).at(0);
+  assert.equal(row?.worktreeBase, "main", "前提：这一轮同样把登记的基线落库换成了当前分支");
+
+  const md = transcript("t-base-continue", "s-base-continue");
+  assert.match(md, /启动前被撤回/, "前提：它是在 spawn 之前被撤回的");
+  assert.match(md, /任务登记的基线分支 feat\/gone-too 已不存在/, "续聊起跑失败也要说基线换了");
+  assert.match(md, /沿用原有的工作目录/, "这一档没重建目录，别说成重建");
+}
+
 console.log("✓ 说明落在被 @ / 被指名的那条会话上，不写进别人的时间线");
+console.log("✓ 起跑失败之前已落库的基线降级，fresh run 与续聊两条路都如实交代");

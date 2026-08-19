@@ -19,26 +19,28 @@ import { inspectProcess } from "./proc.js";
 import { RUNS_DIR } from "./paths.js";
 import { writeTurn, runTracePaths } from "./transcript.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
-import { startTeam, deliverToLead } from "./team/session.js";
+import { deliverToLead } from "./team/session.js";
 import { workerPreambleFor } from "./team/dispatch.js";
-import { clearAcceptedSnapshot, peekAcceptedStage, reopenAcceptedStage } from "./task-stage.js";
-import { reviewProtocolFor, reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
+import { clearAcceptedSnapshot, peekAcceptedStage } from "./task-stage.js";
+import { reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
 import { peerNoticeFor } from "./peer-context.js";
 import { reconcileTurnBaseline, recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
 import { abortIfFrozen } from "./turn-freeze.js";
 import { freeReviewReminder } from "./free-workflow.js";
 import { nativeCliCommand, withSkillInvocation } from "./skills.js";
-import { initialTaskObjective, invitedTaskBrief } from "./invited-task-brief.js";
+import { invitedTaskBrief } from "./invited-task-brief.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { reportTurnFailure } from "./turn-failure.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
 import {
-  AUTONOMY, COLLAB_INVITE, SYS_MARKER,
-  COMPLETION_PROTOCOL, COMPLETION_REMINDER, FOLLOW_UP_REMINDER, followUpRailNote,
-  WORKSPACE_RESET, WORKSPACE_RESET_MARKER, WORKSPACE_BASE_FALLBACK_MARKER,
+  COLLAB_INVITE, SYS_MARKER,
+  COMPLETION_REMINDER, FOLLOW_UP_REMINDER, followUpRailNote,
+  WORKSPACE_RESET, WORKSPACE_RESET_MARKER,
 } from "./run-prompts.js";
+// 「登记的基线被换掉了」这句话：说不说、怎么说、失败那条路怎么补，全在这一份里。
+import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
 
 // Why a task is being (re)started — only used to label the resume; all reasons
 // behave the same (resume if there's a resumable session, else fresh). Note: a
@@ -55,168 +57,9 @@ async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus
 export { reconcileInterrupted } from "./task-reconcile.js";
 
 
-// M1: execute a single-agent task in the project's working dir, stream output over
-// SSE, and persist a session credential.
-export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {}): Promise<void> {
-  // 团队任务(§Team)走常驻调度台,不占单飞锁 —— 它的「一次运行」是整段常驻,
-  // 不是一个回合。放在最前面,于是 /tasks/:id/run、retry、queue 推进都自动生效。
-  const mode = (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.mode;
-  // 验收互斥排在 team 分支**之前**:调度台同样会往工作目录里写(共享执行者跑在同一个
-  // cwd),验收正在合并/删 worktree 时把它拉起来,跟单飞撞上是同一类破坏。早先这道检查
-  // 排在 team 分支之后,team 完全绕过(审查实测:验收锁下仍真的 startTeam)。
-  if (isAcceptingTask(taskId)) {
-    if (opts.turnHeld) releaseTurn(taskId);
-    return; // 验收(含尾段)进行中,不与合并/清理抢工作区
-  }
-  if (mode === "team") {
-    if (opts.turnHeld) releaseTurn(taskId);
-    return startTeam(taskId);
-  }
-  // turnHeld:入口已原子占位(见 continueTask 同名选项),接管而不是再抢。
-  if (opts.turnHeld) reclaimTurn(taskId, "single");
-  else if (!claimTurn(taskId)) return;
-  let handle: RunHandle | undefined;
-  try {
-    const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-    if (!task) throw new Error("task not found");
-    if (task.mode !== "single") throw new Error("duet mode runs in M4");
-
-    const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
-    if (!project) throw new Error("project not found");
-
-    // 新回合起点:清掉上一轮可能残留的完成确认/续聊标记(fresh run 从来不是续聊,
-    // 也从来不是 CLI 原生命令 —— 上一轮崩在半路留下的标记必须在这里归零)。
-    await db
-      .update(tasks)
-      .set({ followUpFrom: null, nativeTurn: false, completeConfirmedAt: null, updatedAt: now() })
-      .where(eq(tasks.id, taskId));
-    await setStatus(taskId, "running");
-    // 已验收任务被 fresh 重跑（Cron 到点 / fire）：旧「已验收」牌子当场摘掉——新一版
-    // 产出不能躲在旧牌子下继续改（enterHumanGate 见 merged 会静默放行；审查实测：
-    // fire 后任务 failed 而 stage 仍 accepted）。fresh 重跑是「再做一版」的明确意图，
-    // 没有「纯询问挂回」一说，启动即摘；后续启动失败牌子也不放回——方向是保守的
-    // 「要求重新验收」，不是丢数据（合并事实在 git 历史与时间线里都有）。
-    await reopenAcceptedStage(taskId);
-
-    // Ordinary tasks resolve exactly as before. Team workers additionally inherit
-    // their lead's shared workspace unless they explicitly request another worktree.
-    const ws = await taskWorkspace(task, project.repoPath);
-    // 这一轮到底留下了什么:只服务「没交卷」时的通知措辞(turn-output.ts)。fresh run
-    // 也要记 —— 漏交卷最常发生在这一路,而 turn-baseline 只给真人续聊拍照。
-    await recordTurnStart(taskId, ws.path);
-    const agentType = (task.agentType as AgentType) ?? "claude";
-    const { executor: ex, profileId, profileFingerprint } = await resolveExecutorWithProfile({
-      executorId: task.executorId,
-      type: agentType,
-      model: task.model,
-      reasoningEffort: task.reasoningEffort,
-    });
-
-    const autoTitle = !!task.autoTitle;
-    const TITLE_HINT =
-      "请在正式开始前，第一行只输出：标题：<不超过14字、概括本次任务的简短标题>，然后换行，再正常完成下面的任务。\n\n任务：\n";
-    const reviewTask = !!task.reviewOf;
-    const objective = withSkillInvocation({ agentType, cwd: ws.path, text: initialTaskObjective(task.body, task.title, reviewTask), remote: ex.target.kind === "ssh" });
-    // 团队执行者多一段前言(卡住走 ask_question 直达调度者、别自己扩张边界)。
-    // 只拼进 prompt,不写进 tasks.body —— body 是调度者给的需求正文,界面展示那份。
-    const teamPreamble = await workerPreambleFor(task);
-    const sharedTeamWorker = !task.useWorktree && teamPreamble.length > 0;
-    const reviewProtocol = reviewTask ? await reviewProtocolFor(task, ws, project.repoPath) : "";
-    // fresh run 通常是任务里的头一个智能体，但不总是：任务跑过 codex 之后用户把
-    // agentType 换成 claude 再点运行，就会从这里起跑一条全新会话 —— 前面那位的
-    // 对话记录还在盘上，同样该告知。prev 传 undefined（这个智能体自己没跑过），
-    // 于是在场的都算新面孔；任务里只有它自己时返回空串，fresh run 一如往常。
-    const priorSessions = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
-    const peerNotice = peerNoticeFor({ taskId, self: agentType, all: priorSessions, prev: undefined });
-    const prompt = withGlobalBrowserPolicy(
-      AUTONOMY + COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask, task.workflowMode === "free") + teamPreamble + reviewProtocol +
-      peerNotice +
-      (autoTitle ? TITLE_HINT + objective : objective),
-      "full",
-    );
-    // 起跑前的最后一道闸（说明见 turn-freeze.ts）：这一句之后到 spawn 之间没有 await，
-    // 所以「已 claim、还没 spawn」的窗口里收到的暂停请求一定在这里被消费。fresh run 的
-    // 冻结事实由调度侧（scheduler/queue）负责，这里只消费内存标记。
-    await abortIfFrozen(taskId);
-    const turnStart = now();
-    const sessId = id();
-    const runDir = join(RUNS_DIR, taskId);
-    mkdirSync(runDir, { recursive: true });
-    // 解绑重启：输出落盘而不是走匿名管道，于是这个 agent 活得过 server 重启
-    // （见 executors/detached.ts）。ssh 目标会在 spawnForRun 里自动退回管道。
-    const detach = detachedPathsFor(runDir, sessId, turnStart);
-    handle = ex.run({ prompt, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart), detach });
-    trackRun(taskId, handle);
-
-    let cliSessionId = handle.sessionId;
-    const sessRow = {
-      id: sessId,
-      taskId,
-      role: "single",
-      agentType,
-      executor: ex.label,
-      // 这一轮真正跑在哪条 profile、哪个模型/思考强度上（见 db/schema.ts 的同名列）：
-      // 「原样再跑一遍上一回合」只认它们，不认可改名的展示名，也不认任务此刻的配置。
-      executorId: profileId,
-      turnModel: ex.model ?? null,
-      turnReasoningEffort: ex.reasoningEffort ?? null,
-      // 那一刻这套执行环境的指纹：重跑前用它认出「profile 后来被改过/删了」。
-      executorFingerprint: profileFingerprint,
-      // fresh run 从来不是旁路回合，也不可能带着上一轮的停止事实。
-      sideTurn: false,
-      stoppedAs: null as string | null,
-      target: sessionTargetKey(ex.target),
-      worktreePath: ws.isWorktree ? ws.path : null,
-      branch: ws.branch,
-      cwd: ws.path,
-      cliSessionId,
-      ...ex.resumeFields(ws.path, cliSessionId),
-      commandLine: handle.commandLine,
-      startedAt: turnStart,
-      turnStartedAt: turnStart,
-      activeMs: 0,
-      exitStatus: null as number | null,
-      // 重启后靠这几个字段找回并接管它。pid 为空 = 这一轮没走 detached
-      //（ssh 目标 / 预检失败），那就是老语义：重启即中断。
-      agentPid: handle.detached?.pid ?? null,
-      agentStartedAt: handle.detached ? inspectProcess(handle.detached.pid)?.startedAt ?? null : null,
-      agentOutPath: handle.detached ? detach.out : null,
-      agentErrPath: handle.detached ? detach.err : null,
-      agentRcPath: handle.detached ? detach.rc : null,
-      agentOffset: 0,
-    };
-    await db.insert(sessions).values(sessRow);
-
-    const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
-    if (ws.baseFallback && (ws.baseFallback.workspaceRebuilt || ws.baseFallback.persisted)) {
-      // fresh run 也会撞上「登记的 base 已经没了」（任务验收合并后分支被删，用户又点了
-      // 一次运行）。这一档不像续聊那样起不来，但基线被换掉、甚至跟着改了任务登记值，
-      // 只在日志里发生就等于没发生 —— 同样落一条持久可见的气泡。
-      // 既没重建目录也没改登记值时不吭声：那一轮什么都没变，每次都说一遍只是噪音，
-      // 而「这个 base 交不掉」在验收那头本来就会明说。
-      const note = WORKSPACE_BASE_FALLBACK_MARKER(
-        ws.baseFallback.requested, ws.baseFallback.used, ws.baseFallback, !!ws.baseFallback.persisted,
-      );
-      writeTurn(out, { t: "system", agent: agentType, text: note }, turnStart);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event: { kind: "system", text: note } });
-    }
-    await consumeSingleRun({
-      taskId, sessId, agentType, ex, cwd: ws.path,
-      handle, out, turnStart, cliSessionId, autoTitle,
-    });
-  } catch (err) {
-    const message = String(err instanceof Error ? err.message : err);
-    await reportTurnFailure({ taskId, message, role: "single" });
-    const status = takeStopped(taskId) ?? "failed";
-    await setStatus(taskId, status);
-    await afterSettlement(taskId, status, false, false);
-  } finally {
-    if (handle) untrackRun(taskId, handle);
-    releaseTurn(taskId);
-  }
-}
-
-
+// fresh run(从任务描述起一条全新会话)住在 task-run.ts；这里保留原路径的具名导出，
+// 免得 schedules / 路由 / 重试那几处调用方跟着改。
+export { runTask } from "./task-run.js";
 
 
 // Continue a single task. By default this resumes the task's own agent (answer
@@ -341,6 +184,10 @@ export async function continueTask(
   // 而不是硬写 "claude"（该任务是 codex 时，错误会挂到一个从没参与过的智能体名下）。
   const agentType = opts.agent ?? (head?.agentType as AgentType) ?? "claude";
   let handle: RunHandle | undefined;
+  // 同 runTask：基线降级在解析工作目录那一刻就落了库，说明却写在 spawn 之后，所以这两件
+  // 事挂在 try 外面，失败那条路才补得上（见 base-fallback-notice.ts）。
+  let baseFallback: Workspace["baseFallback"];
+  let baseFallbackTold = false;
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) throw new Error("task not found");
@@ -419,7 +266,6 @@ export async function continueTask(
     let cwd = recorded;
     let workspaceReset = false;
     let freshWorkspace = false;
-    let baseFallback: Workspace["baseFallback"];
     if (!existsSync(cwd)) {
       if (project) {
         const ws = await taskWorkspace(task, project.repoPath);
@@ -626,16 +472,14 @@ export async function continueTask(
       writeTurn(out, { t: "system", agent, text: WORKSPACE_RESET_MARKER }, turnStart);
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: sessionRole, agentType: agent, event: { kind: "system", text: WORKSPACE_RESET_MARKER } });
     }
-    if (baseFallback && (baseFallback.workspaceRebuilt || baseFallback.persisted)) {
+    const baseNote = baseFallbackNote(baseFallback);
+    if (baseNote) {
       // 同上,这一条说的是「基线去哪了」:任务登记的 base 已经没了(验收合并后分支被删是
       // 最常见的一种)。工作目录是不是跟着新建了、是从谁起的、登记值有没有一并改掉,措辞
       // 里三件分开说 —— 紧挨着上面那条 WORKSPACE_RESET_MARKER,含糊一点两条就会互相打架。
-      // 三件都没发生就不吭声,免得每一轮都重复一句什么也没变的话。
-      const note = WORKSPACE_BASE_FALLBACK_MARKER(
-        baseFallback.requested, baseFallback.used, baseFallback, !!baseFallback.persisted,
-      );
-      writeTurn(out, { t: "system", agent, text: note }, turnStart);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: sessionRole, agentType: agent, event: { kind: "system", text: note } });
+      writeTurn(out, { t: "system", agent, text: baseNote }, turnStart);
+      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: sessionRole, agentType: agent, event: { kind: "system", text: baseNote } });
+      baseFallbackTold = true;
     }
 
     // 跟 fresh run 共用同一份消费+结算(autoTitle=false:标题在第一轮就定了)。
@@ -647,6 +491,13 @@ export async function continueTask(
     });
   } catch (err) {
     const message = String(err instanceof Error ? err.message : err);
+    // 基线的事先说：它在这一轮更早的时候就**已经落库**了（解析工作目录那一刻），说在
+    // 失败交代之前才对得上发生顺序；没说过才补。
+    if (!baseFallbackTold) {
+      await announceBaseFallback(taskId, baseFallback, {
+        sessionId: opts.resumeSessionId, agentType, role: sessionRole,
+      });
+    }
     // handle 还没赋值 = 连 spawn 都没到，这句话一个字都没送出去（判据与措辞见
     // turn-failure.ts）；这条交代要落到被 @ 的那位、或指名续的那条会话上。
     await reportTurnFailure({
