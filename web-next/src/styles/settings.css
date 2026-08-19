@@ -610,6 +610,12 @@
   .settings-cli-grid article { border-right: 0; }
   .settings-group-main { grid-template-columns: 1fr 78px auto 28px; }
   .settings-group-main > span, .settings-group-main .settings-paused { display: none; }
+  /* 侧栏窄屏仍占 176px，390px 视口下内容列只剩约 214px；减掉 32px 内边距、128px 字段名和
+     28px 间距后控件几乎没有宽度可分，「工作目录」那行的「浏览…」按钮（flex: none）会被直接
+     顶出屏幕右侧，点不到。窄屏让字段名独占一行，输入框和按钮拿满整行。 */
+  .settings-field { flex-wrap: wrap; gap: 8px; }
+  .settings-field > span { width: 100%; }
+  .settings-field input, .settings-field > .path-field { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
