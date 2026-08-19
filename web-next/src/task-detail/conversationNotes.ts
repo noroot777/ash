@@ -42,7 +42,7 @@ export function noteTone(text: string): ConversationEventTone {
 // 跟 noteTone 一样**只认关键词**：措辞由服务端那两处定，判错了最多是竖条颜色不对，
 // 不会把会话切错段。
 export type VerifyNoteMark = {
-  kind: "inline" | "free";
+  kind: "inline" | "free" | "merge";
   round: number | null;
   phase: "start" | "end";
 };
@@ -50,6 +50,15 @@ export type VerifyNoteMark = {
 const VERIFY_NOTE = /(自由工作流)?第\s*(\d+)\s*轮(验证|审查)/;
 // 收尾时不带轮号的那几条：复审次数用完、验证打回本身报错。
 const TAILS = /自由工作流审查仍未通过|验证打回/;
+// 合并结果审查（post-merge-review.ts）跑在验收后的只读快照上，从头到尾没有轮号，
+// 所以只能按前缀认。这里**不能**跟上面一样只认关键词：「合并结果审查临时工作区清理
+// 失败」「已从合并结果审查创建独立修复任务」都带同一个词却不是这一轮的起止，认宽了
+// 会把审查段切碎。故起止各用一张白名单，只收服务端确实写过的那几句。
+const MERGE_START = /^合并结果审查(开始|重跑上一回合)/;
+const MERGE_END = /^合并结果审查(通过|未通过|未能正常给出结论|启动失败)/;
+// 开区间的词：「开始」，以及「重跑上一回合」——它开的是同一轮的新回合，把它判成收口
+// 的话，重跑后审查者的发言会整段掉出区间（没徽标、也进不了折叠卡）。
+const STARTS = /开始|重跑上一回合/;
 
 export function verifyNoteOf(text: string): VerifyNoteMark | null {
   const matched = VERIFY_NOTE.exec(text);
@@ -58,11 +67,13 @@ export function verifyNoteOf(text: string): VerifyNoteMark | null {
     return {
       kind: matched[1] ? "free" : "inline",
       round: Number.isFinite(round) ? round : null,
-      // 「开始」是唯一开区间的词：通过 / 未通过 / 以…结束 / 启动失败 / 按意见发起修复
-      // 全都是收区间，其中「启动失败」收的是一个根本没跑起来的区间。
-      phase: text.includes("开始") ? "start" : "end",
+      // 收区间的是：通过 / 未通过 / 以…结束 / 启动失败 / 按意见发起修复，其中
+      // 「启动失败」收的是一个根本没跑起来的区间。
+      phase: STARTS.test(text) ? "start" : "end",
     };
   }
+  if (MERGE_START.test(text)) return { kind: "merge", round: null, phase: "start" };
+  if (MERGE_END.test(text)) return { kind: "merge", round: null, phase: "end" };
   if (TAILS.test(text)) return { kind: "free", round: null, phase: "end" };
   return null;
 }

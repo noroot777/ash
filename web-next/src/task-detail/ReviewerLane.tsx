@@ -44,14 +44,19 @@ export function ReviewerLane({
   useEffect(() => setCollapsed(lane.defaultCollapsed), [lane.defaultCollapsed, lane.id]);
 
   const openReport = () => {
-    setReport({ name: "report.md", url: api.taskReviewFileUrl(taskId, lane.round, "report.md") });
+    const target = lane.report;
+    if (!target) return;
+    const url = target.kind === "inline"
+      ? api.taskReviewFileUrl(taskId, target.round, "report.md")
+      : api.freeReviewFileUrl(taskId, target.runId, target.round, "report.md");
+    setReport({ name: "report.md", url });
   };
 
   return (
-    <article className={`verify-lane${collapsed ? " is-collapsed" : ""}`} aria-label={`第 ${lane.round} 轮验证`}>
+    <article className={`verify-lane${collapsed ? " is-collapsed" : ""}`} aria-label={lane.title}>
       <header className="verify-lane-head">
         <span className="verify-lane-mark" aria-hidden="true"><ShieldCheck size={12} weight="fill" /></span>
-        <b>第 {lane.round} 轮验证</b>
+        <b>{lane.title}</b>
         <span className="verify-lane-by">
           {lane.reviewerLabel ? `${lane.reviewerLabel} 在审` : "审查中"}
           {reviewerModel ? ` · ${reviewerModel}` : ""}
@@ -59,7 +64,7 @@ export function ReviewerLane({
         <span className={`verify-lane-state ${state.className}`}>{state.label}</span>
         {time && <small className="verify-lane-time">{time}</small>}
         <span className="verify-lane-actions">
-          {lane.reportAvailable && (
+          {lane.reportAvailable && lane.report && (
             <button type="button" onClick={openReport}>
               <FileText size={11} aria-hidden="true" />审查报告
             </button>

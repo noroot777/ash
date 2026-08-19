@@ -374,6 +374,7 @@ export function TaskDetail({
                       }
                     }}
                     reviewRetryable={freeReviewRetryable(free.state?.reviews)}
+                    reviews={free.state?.reviews}
                     footer={task.question ? (
                       <QuestionCard
                         task={task}
