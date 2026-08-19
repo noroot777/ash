@@ -15,7 +15,10 @@ node scripts/win-remote.mjs test x --no-sync    # 跳过同步,重跑上次那�
 
 环境变量:`WIN_REMOTE_HOST`(默认 `http://192.168.1.187:4317`)、`WIN_REMOTE_SELF`(本机对外 IP,
 自动探测不准时用)、`WIN_REMOTE_PROJECT`(对端项目 id,自动按 `repoPath` 猜歪了时用;给了不存在的
-id 会把现有项目列出来)、`WIN_REMOTE_GIT_PORT`(钉死 git daemon 端口,默认每次现挑一个空闲的)。
+id 会把现有项目列出来)、`WIN_REMOTE_GIT_PORT`(钉死 git daemon 端口,默认每次现挑一个空闲的)、
+`WIN_REMOTE_WORKSPACE`(换个对端目录,默认 `.worktrees/win-remote`)、`WIN_REMOTE_ADOPT=1`(接管一个
+不是本工具建的 worktree —— 会覆盖里面所有未提交内容,见下面「只清自己的目录」)、
+`WIN_REMOTE_CONTROL_TIMEOUT`(控制面单跳的兜底期限,默认 15000ms)。
 
 ## 它是怎么通的
 
@@ -70,8 +73,15 @@ live 服务的源码换掉。放在主仓内部还白捡一个好处:Node 解析
 
 清理有两个前提,缺一不可,而且第二个搞错顺序**会删掉主仓的源码**:
 
-1. 先确认目标真是个**链接式** worktree(它自己的 `git-dir` 不等于 `common-dir`)。不然一次
-   `WIN_REMOTE_WORKSPACE` 写歪就是在别人的主工作区上跑 `git clean`,把人家没提交的东西清光。
+1. **只清自己的目录,而且在动手之前就认。** 判据不是「它是不是个链接式 worktree」—— 随便哪个
+   任务的 worktree 都满足,于是路径一配歪(`WIN_REMOTE_WORKSPACE` 写错、默认路径被别的 worktree
+   占了),别人没提交的活会先被 `checkout --force` 抹掉、再被 `git clean -xdff` 删光,全程 exit 0
+   还报「同步成功」。判据得是「**是不是我建的那个**」:凭证是一枚标记文件,放在 worktree 的管理
+   目录 `.git/worktrees/<name>/win-remote-owner` 里 —— 不能放工作区里,工作区正是等会儿要清掉的
+   东西,拿它自证等于没证。目录已存在却没有这枚章,就整个拒绝(还没 fetch 就退,不是清到一半才退);
+   确实想覆盖它,`WIN_REMOTE_ADOPT=1` 跑一次接管,同步完会用红字说明「里面原有的未提交内容已被
+   覆盖」。自己新建的 worktree 当场盖章,之后不需要任何确认。顺序同样是判据的一部分:上一版把检查
+   放在 checkout 之后,就算最后拒绝了 clean,tracked 的未提交改动也已经被 `--force` 丢了。
 2. **先摘掉目录型 reparse point,再 clean。** `git clean` 的递归删除同样会穿过 junction ——
    那四个 `@harness/*` 指着的正是主仓的 `shared`/`server`/`web-next`/`mcp`。摘掉的链接紧接着
    就原地重建,所以顺带也免了「junction 指错」那一半。连**枚举**都不能进 junction:
@@ -91,6 +101,20 @@ token 文件都没有,原先「删文件 vs 开发机随手关掉终端会话」
 的 `abort` 上(而不是再起一个同样长的定时器,那会让总时长变成两倍)。超时仍然是**返回**
 `code: 124` 而不是抛。收尾那条删会话用自己的 `min(5s, timeout)`,因为它加在调用者的等待
 **之后**,而且主 signal 那时已经 abort 了,借用它等于必然删不掉、把会话留在对端。
+
+期限还得覆盖**进 `rexec` 之前**那一跳。CLI 的四个子命令都先查一次项目拿 `repoPath`,那次查询在
+`rexec` 的 deadline 之外 —— 对端只接连接不回包时,`doctor/sync/exec/test` 全停在「对端 harness」
+那一行不动,只能外面 kill。教训是「带 signal」不能写成调用方的义务:漏一个调用点就等于漏一条永不
+返回的路。所以 `api()` 自己兜底 —— 调用方给了 signal 就用它(整次调用共享一个 deadline),没给就
+按 `WIN_REMOTE_CONTROL_TIMEOUT`(默认 15s)现建一个,不存在「没有期限」的路径。
+
+**发进 PTY 的东西一律不进预览。** wrapper 是一条几 KB 的长命令,PTY 会把它整条回显、再按 cols
+硬折成几十行。按关键字过滤只挡得住带 `FromBase64String` 的第一折,后面全是裸 base64:实测一次
+`sync` 有 67 行、13KB 可逆编码进了实时预览,既淹没真进度,又把 `exec` 的用户命令(可能含路径、
+token)以能还原的形式写进终端日志和审查记录。现在按**内容**认:每一折都是我们发出去那串字符的
+连续子串,拿原文一查便知,折在哪儿都无所谓;再加一条「纯 base64 长串」兜底,防某一折被插进光标
+控制码后对不上原文。顺带一提,程序输出本来就不经过屏幕(全部重定向到回传文件),所以这层抑制
+不可能吃掉真结果。
 
 **那个 worktree 是全局单份的,所以整段 sync+test 上锁。** 锁是对端的
 `.worktrees\win-remote.lock`(`CreateNew` 原子创建),被占时最多等 2 分钟。锁里写着本次调用的

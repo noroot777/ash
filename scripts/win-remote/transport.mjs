@@ -30,17 +30,41 @@ export function detectLocalAddress() {
   throw new Error("找不到可被对端访问的本机 IPv4,请用 WIN_REMOTE_SELF=<ip> 指定");
 }
 
-// 控制面的每一跳都走这里。**调用方必须在 init 里带 signal** —— 裸 fetch 没有任何超时,
-// 对端只接连接不回包时它能永远不返回,调用者传的 timeout 就成了摆设。
+// 控制面单跳的兜底期限。**不存在「没有期限」的调用路径**:上一版把「带 signal」写成调用方的
+// 义务,于是漏一个调用点就等于漏一条永不返回的路 —— CLI 的 `target()` 正是那个漏网的:
+// 它在进 rexec 之前先查一次项目,对端只接连接不回包时,`doctor/sync/exec/test` 四个子命令
+// 全都停在「对端 harness」那一行不动,只能外面 kill。义务型的约定挡不住这种事,默认值可以。
+const CONTROL_TIMEOUT = Number(process.env.WIN_REMOTE_CONTROL_TIMEOUT ?? 15_000);
+/** 一次控制面调用的期限。给不出更长命的 signal 时(CLI 的单发请求)就用它。 */
+export const controlSignal = () => AbortSignal.timeout(CONTROL_TIMEOUT);
+
+// 控制面的每一跳都走这里。裸 fetch 没有任何超时,对端只接连接不回包时它能永远不返回 ——
+// 所以这里给每一跳都补上 signal:调用方给了就用调用方的(整次调用共用一个 deadline),
+// 没给就兜一个 CONTROL_TIMEOUT,绝不让 fetch 裸奔。
 async function api(path, init = {}, host = DEFAULT_HOST) {
-  const res = await fetch(`${host}/api${path}`, init);
+  const fallback = !init.signal;
+  const signal = init.signal ?? controlSignal();
+  let res;
+  try {
+    res = await fetch(`${host}/api${path}`, { ...init, signal });
+  } catch (e) {
+    // 期限型 signal 到点时,DOMException 的原文是 "The operation was aborted due to timeout" ——
+    // 看不出是哪一跳、对着谁、等了多久。换成人话。
+    // AbortController.abort() 那种(rexec 整次调用的 deadline)要原样抛回去:
+    // rexec 靠 `ac.signal.aborted` 把它翻译成「按失败返回 code 124」,不能在这儿改写语义。
+    if (signal.aborted && signal.reason?.name === "TimeoutError") {
+      const limit = fallback ? `${CONTROL_TIMEOUT}ms` : "期限";
+      throw new Error(`${init.method ?? "GET"} ${path} → ${limit}内没等到 ${host} 的响应(对端 harness 没在跑,或者卡住了)`);
+    }
+    throw e;
+  }
   if (!res.ok) throw new Error(`${init.method ?? "GET"} ${path} → ${res.status} ${await res.text().catch(() => "")}`);
   return res.status === 204 ? null : res.json();
 }
 
 /** 找到对端 harness 里指向 harness 仓库自己的那个项目(终端会话必须挂在某个项目上)。 */
-export async function resolveProject(host = DEFAULT_HOST, signal = null) {
-  const projects = await api("/projects", signal ? { signal } : {}, host);
+export async function resolveProject(host = DEFAULT_HOST, signal = controlSignal()) {
+  const projects = await api("/projects", { signal }, host);
   if (!projects.length) throw new Error("对端 harness 里一个项目都没有,先在它的界面上添加 harness 仓库");
   const pick = process.env.WIN_REMOTE_PROJECT;
   if (pick) {
@@ -95,10 +119,28 @@ function collector(token) {
 const stripAnsi = (s) =>
   s.replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, "").replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "").replace(/\r/g, "");
 
-// PTY 画面里除了程序输出,还有 pwsh 的横幅、提示符、以及被整行回显的 wrapper 脚本
-// (那条 base64 有好几 KB)。预览只想看进度,这些一律不显示。
-const NOISE = /FromBase64String|Set-PSReadLineOption|Invoke-WebRequest|PS [A-Z]:\\|^PowerShell \d|^Copyright|^\s*$/;
+// PTY 画面里除了程序输出,还有 pwsh 的横幅和提示符。预览只想看进度,这些一律不显示。
+// 被回显的 wrapper 不在这条正则的职责里 —— 见下面 echoFilter。
+const NOISE = /Set-PSReadLineOption|Invoke-WebRequest|PS [A-Z]:\\|^PowerShell \d|^Copyright|^\s*$/;
 const isNoise = (line) => NOISE.test(line);
+
+const B64ISH = /^[A-Za-z0-9+/=]{24,}$/;
+/**
+ * 把「我们自己发进去、又被 PTY 回显出来的那几十行」挡在预览之外。
+ *
+ * 不能用关键字正则:wrapper 是**一条**几 KB 的长命令,PTY 按 cols 硬折成几十行,
+ * 只有第一折带得上 `FromBase64String` 之类的词,后面全是裸 base64 —— 上一版就这么漏的,
+ * 一次 sync 有 60 多行、13KB 可逆编码进了预览。除了淹没真进度,`exec` 的用户命令(可能含
+ * 路径、token)也在那串 base64 里,等于把它们以能还原的形式写进终端日志和审查记录。
+ *
+ * 改成按**内容**认:每一折都是我们发出去那串字符的连续子串,拿原文一查便知,折在哪儿都无所谓。
+ * 再加一条「纯 base64 长串」兜底,防某一折被插进光标控制码后对不上原文。
+ */
+const echoFilter = (sent) => (line) => {
+  const s = line.trim();
+  if (s.length < 24) return false; // 太短的片段容易误伤真输出,而它也淹没不了什么
+  return B64ISH.test(s) || sent.includes(s);
+};
 
 /**
  * 在对端 Windows 上跑一条命令。
@@ -188,6 +230,10 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
       `try { Invoke-WebRequest -Uri "http://${self}:${port}/${token}?code=$__e" -Method PUT -Body $__b -ContentType 'text/plain; charset=utf-8' -TimeoutSec 60 -UseBasicParsing | Out-Null } catch { }`,
     ].filter(Boolean).join("; ");
 
+    // 我们往 PTY 里塞的全部字符 —— 回显判定拿它当原文比对(见 echoFilter)。
+    const psreadline = "Set-PSReadLineOption -PredictionSource None";
+    const isEcho = echoFilter(`${psreadline}\n${wrapper}`);
+
     let preview = "";
     pump = (async () => {
       const res = await fetch(`${host}/api/projects/${pid}/terminal/sessions/${session.id}/events?after=0`, {
@@ -214,7 +260,7 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
             if (onLine) {
               const parts = preview.split("\n");
               preview = parts.pop() ?? "";
-              for (const p of parts) if (p.trim() && !isNoise(p)) onLine(p);
+              for (const p of parts) if (p.trim() && !isNoise(p) && !isEcho(p)) onLine(p);
             }
           } catch { /* 非 JSON 帧忽略 */ }
         }
@@ -227,7 +273,7 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ data }),
       signal: ac.signal,
     }, host);
-    await send("Set-PSReadLineOption -PredictionSource None\r");
+    await send(`${psreadline}\r`);
     await new Promise((r) => setTimeout(r, 300));
     await send(`${wrapper}\r`);
 

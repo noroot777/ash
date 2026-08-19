@@ -30,7 +30,12 @@ import { rexec, detectLocalAddress } from "./transport.mjs";
 // 改 ref 这步也已经做完),于是 A 的对端 fetch 拉到的是 SHA-B —— A 测的是 B 的代码,
 // 报告却记在 A 的改动名下。这个工具的全部意义就是「验当前工作区快照」,拉错快照即根本失效。
 const WIP_PREFIX = "refs/win-remote/snap-";
+// 目标目录可以改(调试、故障注入),但改到哪儿都要过所有权校验:同步会**强制检出 + git clean**,
+// 指错地方就是把别人未提交的活抹掉。判据不是「它是不是个 worktree」而是「是不是我建的那个」,
+// 见下面 PS 里的 $__magic 一段。已存在却没有标记的目录一律拒绝,除非显式 WIN_REMOTE_ADOPT=1 ——
+// 那一句就是「我知道这个目录会被整个覆盖」的确认。
 const WORKSPACE = process.env.WIN_REMOTE_WORKSPACE ?? ".worktrees/win-remote";
+const ADOPT = /^(1|true|yes)$/i.test(process.env.WIN_REMOTE_ADOPT ?? "");
 // 这四个包在 workspace 里互相 import,靠 `node_modules/@harness/<pkg>` 找到对方。
 const HARNESS_LINKS = ["shared", "server", "web-next", "mcp"];
 
@@ -116,7 +121,40 @@ export async function syncToRemote({ repoPath, onLine = null, projectId = null, 
     daemon = await serveRepo();
     const ps = String.raw`${guard ? `${guard}\n` : ""}
 $repo = '${repoPath}'
-$wt   = Join-Path $repo '${WORKSPACE.replace(/\//g, "\\")}'
+# 规范化之后再用:'.'、'..'、多余的分隔符都得先塌掉,不然后面拿它做的任何比较都能被绕过。
+$wt   = [IO.Path]::GetFullPath((Join-Path $repo '${WORKSPACE.replace(/\//g, "\\")}'))
+# ============ 所有权校验:必须跑在 fetch / checkout / clean **之前** ============
+# 这一段要回答的不是「这是不是个 linked worktree」,而是「这是不是**我建的**那个」。
+# 前者谁都满足:随便哪个任务的 worktree 都 git-dir != common-dir,于是路径一配错
+# (WIN_REMOTE_WORKSPACE 写歪、默认路径被别的 worktree 占了),先被 checkout --force
+# 抹掉未提交改动,再被 git clean -xdff 删掉未跟踪文件,全程 exit 0 还报「同步成功」。
+# 证据是一枚标记文件,放在 worktree 的**管理目录**(.git/worktrees/<name>/)里而不是工作区里 ——
+# 工作区里的东西正是我们等会儿要 clean 掉的,拿它当凭证等于自证。
+# 校验也必须在**动手之前**:上一版把检查放在 checkout 之后,就算最后拒绝了 clean,
+# tracked 的未提交改动也已经被 --force 丢了。
+$__magic = 'win-remote-workspace-v1'
+$__adopt = $${ADOPT ? "true" : "false"}
+$__fresh = $true
+if (Test-Path -LiteralPath $wt) {
+  $__wti = New-Object IO.DirectoryInfo $wt
+  if ($__wti.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw ('拒绝使用:' + $wt + ' 是个链接(reparse point),不是 win-remote 建的 worktree') }
+  $__gd = ([string](git -C $wt rev-parse --path-format=absolute --git-dir 2>$null)).Trim()
+  $__gc = ([string](git -C $wt rev-parse --path-format=absolute --git-common-dir 2>$null)).Trim()
+  $__rc = ([string](git -C $repo rev-parse --path-format=absolute --git-common-dir 2>$null)).Trim()
+  if (-not $__gd -or -not $__gc -or -not $__rc) { throw ('拒绝使用:' + $wt + ' 已存在但不是 git worktree(读不到 git-dir),不动它') }
+  if ($__gd -eq $__gc) { throw ('拒绝使用:' + $wt + ' 是主工作区(git-dir = common-dir = ' + $__gd + '),win-remote 绝不往主工作区上检出') }
+  if ($__gc.TrimEnd('\','/') -ne $__rc.TrimEnd('\','/')) { throw ('拒绝使用:' + $wt + ' 不属于 ' + $repo + '(common-dir=' + $__gc + ')') }
+  $__own = Join-Path $__gd 'win-remote-owner'
+  if (Test-Path -LiteralPath $__own) { $__tag = ([string](Get-Content -LiteralPath $__own -TotalCount 1 -ErrorAction SilentlyContinue)).Trim() } else { $__tag = '' }
+  if ($__tag -ne $__magic) {
+    if (-not $__adopt) {
+      throw ('拒绝接管:' + $wt + ' 是个已经存在的 worktree,但没有 win-remote 的所有权标记(' + $__own + ') —— 不知道是谁在上面干活,而同步会强制检出并 git clean 掉里面所有未提交内容。确认这个目录可以整个覆盖,就带 WIN_REMOTE_ADOPT=1 跑一次接管它;否则换个目录,或先 git worktree remove 它。')
+    }
+    Set-Content -LiteralPath $__own -Value $__magic -Encoding ascii
+    Write-Output ('ADOPTED=' + $wt)
+  }
+  $__fresh = $false
+}
 # 整段包在 try/finally 里,只为一件事:**这个 ref 无论怎么失败都不许留在对端**。
 # 它指着一个含未提交/未跟踪内容的快照 —— checkout 撞占用、junction 位置被真目录占了、
 # 输出校验不过,任何一条早退路径把它留下,那份内容就无限期躺在别人机器的仓库里。
@@ -124,26 +162,30 @@ try {
 git -C $repo fetch --force --no-tags '${daemon.url}' '${ref}:${ref}'
 if ($LASTEXITCODE -ne 0) { throw 'fetch 失败:对端连不回开发机的 git daemon' }
 # 检出**钉死在 SHA 上**而不是 ref 名:ref 只是运输容器,认 SHA 才谈得上「测的就是这份快照」。
-if (Test-Path (Join-Path $wt '.git')) {
-  git -C $wt checkout --detach --force '${sha}'
-} else {
+if ($__fresh) {
   git -C $repo worktree add --detach --force $wt '${sha}'
+  if ($LASTEXITCODE -ne 0) { throw 'checkout 失败' }
+  # 自己建的,当场盖章 —— 下一次同步就是靠这枚章认出「这是我的目录」。
+  $__gd = ([string](git -C $wt rev-parse --path-format=absolute --git-dir 2>$null)).Trim()
+  if (-not $__gd) { throw '新建 worktree 之后反而读不到它的 git-dir' }
+  Set-Content -LiteralPath (Join-Path $__gd 'win-remote-owner') -Value $__magic -Encoding ascii
+} else {
+  git -C $wt checkout --detach --force '${sha}'
+  if ($LASTEXITCODE -ne 0) { throw 'checkout 失败' }
 }
-if ($LASTEXITCODE -ne 0) { throw 'checkout 失败' }
 # 那个 worktree 是**跨所有调用复用的固定目录**,而 checkout --force 只管 Git 跟踪的文件:
 # 上一次跑测试/构建留下的未跟踪与 ignored 产物(data\harness.db、dist\、*.tsbuildinfo)
 # 原样活到下一次快照里。SHA 和 junction 全绿也照不出这类污染 —— 而 server 的生产入口直接跑
 # server\dist\index.js,验的可能是上一版构建产物,「测的就是这份快照」对文件树并不成立。
 # 两个前提缺一不可:
-#  ① 先确认这真是个**链接式** worktree(自己的 git-dir 不等于 common-dir),不敢在谁的
-#     主工作区上跑 git clean;
+#  ① 手上这个目录确实是 win-remote 自己的(上面已经验过所有权;这里再回读一次盖过的章,
+#     确保上面那条分支真的把章盖上了 —— 要 clean 谁,凭据就得在 clean 前一刻还在);
 #  ② 先把目录型 reparse point 摘掉再 clean —— git clean 的递归删除会**穿过** junction 去删
 #     目标目录里的东西(那头是主仓源码),而 [IO.Directory]::Delete($link,$false) 只删链接本体。
 #     摘掉的正是下面那四个 @harness junction,紧接着就原地重建。
-$gd = ([string](git -C $wt rev-parse --git-dir)).Trim()
-$gc = ([string](git -C $wt rev-parse --git-common-dir)).Trim()
-if ($LASTEXITCODE -ne 0 -or -not $gd -or $gd -eq $gc) {
-  throw ('拒绝清理:' + $wt + ' 看着不是链接式 worktree(git-dir=' + $gd + ' common-dir=' + $gc + '),不在它上面跑 git clean')
+$__gd2 = ([string](git -C $wt rev-parse --path-format=absolute --git-dir 2>$null)).Trim()
+if (-not $__gd2 -or -not (Test-Path -LiteralPath (Join-Path $__gd2 'win-remote-owner'))) {
+  throw ('拒绝清理:' + $wt + ' 上没有 win-remote 的所有权标记,不在别人的工作区上跑 git clean')
 }
 $__links = 0
 $__stack = New-Object System.Collections.Stack
@@ -241,7 +283,7 @@ Write-Output ('RESIDUE=' + $__st.Count + '|' + (($__st | Select-Object -First 12
     }
     return {
       localSha: sha.slice(0, 7), remoteSha: remoteSha.slice(0, 7), sha, worktree, links,
-      cleaned: Number(clean[1]), relinked: Number(clean[2]), out: res.out,
+      cleaned: Number(clean[1]), relinked: Number(clean[2]), adopted: /^ADOPTED=/m.test(res.out), out: res.out,
     };
   } finally {
     daemon?.stop();

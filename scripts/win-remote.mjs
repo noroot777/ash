@@ -19,7 +19,7 @@
 // 一个必须知道的边界:**通道本身就跑在被测的 harness 里**。改了 server 代码想看真实行为
 // 而不是测试结果,就得重启对端的 harness —— 那会连着把这条通道一起掐了(重启完自己会回来)。
 // 所以默认路线是「跑回归测试」,它是独立进程,不需要重启对端服务。
-import { rexec, resolveProject } from "./win-remote/transport.mjs";
+import { rexec, resolveProject, controlSignal } from "./win-remote/transport.mjs";
 import { syncToRemote } from "./win-remote/sync.mjs";
 import { withRemoteLock } from "./win-remote/lock.mjs";
 
@@ -35,7 +35,9 @@ const live = (line) => process.stdout.write(dim(`  │ ${line}\n`));
 const note = (line) => console.log(dim(`  · ${line}`));
 
 async function target() {
-  const p = await resolveProject();
+  // 期限在**第一次远端请求之前**就建好。这一跳原来是裸的:rexec 内部的 deadline 覆盖不到
+  // 它(那是进 rexec 之后才起算的),对端只接连接不回包时,四个子命令都停在这儿不动。
+  const p = await resolveProject(undefined, controlSignal());
   if (!p.repoPath) throw new Error("拿不到对端仓库路径,请用 WIN_REMOTE_PROJECT 指定正确的项目");
   return p;
 }
@@ -84,6 +86,7 @@ async function cmdSync() {
   console.log(`  本地 ${r.localSha} → 对端 ${green(r.remoteSha)}`);
   console.log(`  工作区 ${r.worktree}`);
   console.log(`  清理 ${r.cleaned} 项快照外内容,重建 ${r.relinked} 个软链`);
+  if (r.adopted) console.log(red(`  ⚠︎ WIN_REMOTE_ADOPT=1:接管了一个不是本工具建的 worktree,里面原有的未提交内容已被覆盖`));
   return 0;
 }
 
