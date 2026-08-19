@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import { Copy, File, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, Task } from "@harness/shared";
+import type { FreeReviewRun } from "@harness/shared";
 import { runActivityExecutor, runActivityPhase, runActivityTail } from "@harness/shared/run-activity";
 import type { ConversationItem } from "./conversationModel.ts";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
@@ -126,6 +127,7 @@ export function ConversationFeed({
   footer,
   onRetryTurn,
   reviewRetryable,
+  reviews,
 }: {
   task: Task;
   items: ConversationItem[];
@@ -139,6 +141,8 @@ export function ConversationFeed({
   onRetryTurn?: (target: TurnRetryTarget) => Promise<void> | void;
   /** 自由工作流的审查链停在「异常结束」——只有它为真，审查会话上才出重跑按钮。 */
   reviewRetryable?: boolean;
+  /** 自由派审的落盘记录：折叠卡靠它反查报告的 runId（旁注里只有轮号）。 */
+  reviews?: readonly FreeReviewRun[] | null;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const activityPhase = runActivityPhase(task.status, runActivityTail(items));
@@ -152,7 +156,7 @@ export function ConversationFeed({
   const retryItemId = retry
     ? [...items].reverse().find((item) => item.kind === "agent")?.id ?? null
     : null;
-  const rows = conversationFeedRows(items);
+  const rows = conversationFeedRows(items, { reviews });
 
   const renderItem = (item: ConversationItem) => {
     if (item.kind === "agent") {

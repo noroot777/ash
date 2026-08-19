@@ -49,6 +49,15 @@ try {
       body: `# 第 ${round} 轮审查报告\n\n报告已在应用内打开。`,
     });
   });
+  // 自由派审的报告是另一条路由，多带一个 runId —— 拼错的话点开就是 404。
+  await page.route(/\/api\/tasks\/t1\/free-workflow\/review-file/, async (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    await route.fulfill({
+      status: 200,
+      contentType: "text/markdown; charset=utf-8",
+      body: `# 自由派审报告 ${params.get("run")} 第 ${params.get("round")} 轮`,
+    });
+  });
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/reviewer-turn.html`);
 
   const messages = page.locator(".task-message--agent");
@@ -72,37 +81,59 @@ try {
   // 自由派审的轮次只写在时间线旁注里、从不进 run 事件，靠区间补上。
   assert.match(await badges.nth(2).innerText(), /审查者\s*·\s*第 1 轮/);
 
-  // D：有后续轮次且已有结论的历史卡默认折叠，最新轮展开；自由派审仍在卡片外。
+  // D：有后续轮次且已有结论的历史卡默认折叠，最新一张展开。自由派审同样折成一张卡，
+  // 只是它的报告要靠 free-workflow 状态反查 runId。
   const lanes = page.locator(".verify-lane");
-  assert.equal(await lanes.count(), 2);
+  assert.equal(await lanes.count(), 3, "两轮就地验证 + 一轮自由派审");
+  assert.deepEqual(
+    await lanes.evaluateAll((els) => els.map((el) => el.getAttribute("aria-label"))),
+    ["第 2 轮验证", "第 3 轮验证", "第 1 轮审查"],
+    "自由派审的卡不能沿用就地验证的「第 N 轮验证」标题",
+  );
   assert.equal(await lanes.nth(0).evaluate((el) => el.classList.contains("is-collapsed")), true);
-  assert.equal(await lanes.nth(1).evaluate((el) => el.classList.contains("is-collapsed")), false);
+  assert.equal(await lanes.nth(1).evaluate((el) => el.classList.contains("is-collapsed")), true);
+  assert.equal(await lanes.nth(2).evaluate((el) => el.classList.contains("is-collapsed")), false);
   assert.equal(await lanes.nth(0).locator(".verify-lane-body").isHidden(), true);
-  assert.equal(await lanes.nth(1).locator(".verify-lane-body").isVisible(), true);
+  assert.equal(await lanes.nth(2).locator(".verify-lane-body").isVisible(), true);
   assert.deepEqual(
     await lanes.nth(0).locator(".verify-lane-actions > button").allInnerTexts(),
     ["审查报告", "展开"],
     "审查报告必须在展开按钮左边",
   );
   assert.deepEqual(
-    await lanes.nth(1).locator(".verify-lane-actions > button").allInnerTexts(),
+    await lanes.nth(2).locator(".verify-lane-actions > button").allInnerTexts(),
     ["审查报告", "收起"],
   );
-  assert.equal(await messages.nth(4).evaluate((el) => el.closest(".verify-lane") === null), true);
+  assert.equal(
+    await messages.nth(4).evaluate((el) => el.closest(".verify-lane")?.getAttribute("aria-label")),
+    "第 1 轮审查",
+    "自由派审的正文归它自己那张卡",
+  );
 
   // 折叠状态不妨碍直接看报告；报告沿用现有应用内 Markdown 弹层，不另开标签页。
   const pageCount = page.context().pages().length;
   await lanes.nth(0).getByRole("button", { name: "审查报告" }).click();
   const reportDialog = page.getByRole("dialog", { name: /report\.md/ });
   await reportDialog.waitFor();
+  await reportDialog.getByText(/第 2 轮审查报告/).waitFor();
   assert.match(await reportDialog.innerText(), /第 2 轮审查报告/);
   assert.equal(page.context().pages().length, pageCount);
   assert.equal(await lanes.nth(0).evaluate((el) => el.classList.contains("is-collapsed")), true);
   await reportDialog.getByRole("button", { name: "关闭审查报告" }).click();
 
+  // 自由派审走的是另一条带 runId 的路由，报告内容必须是它自己那份。
+  await lanes.nth(2).getByRole("button", { name: "审查报告" }).click();
+  const freeDialog = page.getByRole("dialog", { name: /report\.md/ });
+  await freeDialog.waitFor();
+  await freeDialog.getByText(/自由派审报告 fr1 第 1 轮/).waitFor();
+  assert.match(await freeDialog.innerText(), /自由派审报告 fr1 第 1 轮/);
+  await freeDialog.getByRole("button", { name: "关闭审查报告" }).click();
+
   await lanes.nth(0).getByRole("button", { name: "展开" }).click();
   assert.equal(await lanes.nth(0).locator(".verify-lane-body").isVisible(), true);
   assert.equal(await lanes.nth(0).getByRole("button", { name: "收起" }).count(), 1);
+  // 下面量版式，三张卡都得摊开。
+  await lanes.nth(1).getByRole("button", { name: "展开" }).click();
 
   // 换身份是断点：验证回合和它后面的修复回合都得重新报执行器名，
   // 否则读者只看见「同一个人一口气说了三段」。
@@ -116,14 +147,14 @@ try {
 
   // 验证段的起止旁注跟审查者同一套颜色；打回那条仍归红。
   const verifyNotes = page.locator(".conversation-note.is-verify");
-  assert.equal(await verifyNotes.count(), 5, "两轮就地验证的起止四条 + 自由派审的开始那条");
+  assert.equal(await verifyNotes.count(), 6, "两轮就地验证的起止四条 + 自由派审的起止两条");
   assert.match(await verifyNotes.nth(0).innerText(), /第 2 轮验证开始/);
   assert.equal(await verifyNotes.nth(1).evaluate((el) => el.classList.contains("is-error")), true);
   const noteColors = await verifyNotes.evaluateAll((els) =>
     els.map((el) => getComputedStyle(el).borderLeftColor));
   assert.notEqual(noteColors[0], noteColors[1], "开始是青的、打回是红的，两条不能同色");
 
-  // D 的正文统一收进同一层泳道内边距；自由派审不属于 D，仍保持普通会话的原始宽度。
+  // D 的正文统一收进同一层泳道内边距 —— 自由派审现在也是一张卡，同样对齐。
   const boxes = await messages.evaluateAll((els) =>
     els.map((el) => {
       const body = el.querySelector(".task-message-content");
@@ -132,8 +163,9 @@ try {
     }));
   assert.equal(boxes[3].x, boxes[1].x, "两轮验证正文应使用同一条泳道内边距");
   assert.equal(boxes[3].width, boxes[1].width, "两轮验证正文宽度应一致");
-  assert.equal(boxes[4].x, boxes[0].x, "自由派审不能被就地验证泳道推进去");
-  assert.equal(boxes[4].width, boxes[0].width, "自由派审仍保持普通会话宽度");
+  assert.equal(boxes[4].x, boxes[1].x, "自由派审的正文也在泳道里，跟就地验证同一条内边距");
+  assert.equal(boxes[4].width, boxes[1].width);
+  assert.notEqual(boxes[4].x, boxes[0].x, "卡内正文比卡外窄，不然折叠卡的边界看不出来");
 
   // 头像换了个东西（盾形图标而不是首字母），但盘子本身大小不变。
   const avatars = await page.locator(".task-message-avatar").evaluateAll((els) =>

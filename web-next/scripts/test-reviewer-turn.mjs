@@ -138,7 +138,7 @@ assert.deepEqual(reviewed.at(-1).reviewer, { round: null }, "reviewer 会话是�
 assert.equal(
   conversationFeedRows(reviewed).some((row) => row.kind === "review-lane"),
   false,
-  "自由派审已有独立 reviewer 会话，不套进就地验证折叠卡",
+  "卡的边界只由起止旁注给：光有一条审查者会话，圈不出一轮的范围",
 );
 
 // —— 直播路径：SSE 的 agent.event 自带 verifyRound，跟落盘那份读出来必须一致 ——
@@ -253,6 +253,176 @@ const freeMain = buildConversationItems(
   [],
 );
 assert.equal(freeMain.at(-1).reviewer, undefined, "自由派审区间不能把主任务的发言变成审查者");
+
+// —— D 折叠卡：自由派审同样折成结论卡，但报告 URL 要靠 reviews 反查 runId ——
+// 报告落在 data/runs/<task>/free-review/<runId>/round-<N>/，而旁注里从头到尾只有轮号。
+const freeReviewer = { ...freeSession, startedAt: "2026-08-11T02:10:00.000Z" };
+const buildFreeLane = (notes, extra = []) => buildConversationItems(
+  [
+    {
+      session: { ...session, endedAt: null },
+      output: notes.join("\n"),
+      trace: [],
+    },
+    ...extra,
+  ],
+  [{ ...session, endedAt: null }, freeReviewer],
+  [],
+);
+const freeLaneItems = buildFreeLane(
+  [
+    turn("system", freeNotes[0], "2026-08-11T02:00:00.000Z"),
+    turn("system", freeNotes[1], "2026-08-11T02:40:00.000Z"),
+  ],
+  [{ session: freeReviewer, output: "审查意见正文。", trace: [] }],
+);
+const freeReviews = [{
+  id: "fr1",
+  reviewerName: "5.5审查",
+  model: "claude-sonnet-5",
+  target: { kind: "workspace" },
+  rounds: [{ round: 1, startedAt: "2026-08-11T02:00:00.000Z", reportMarkdown: "# 审查报告" }],
+}];
+const freeLane = conversationFeedRows(freeLaneItems, { reviews: freeReviews })
+  .find((row) => row.kind === "review-lane");
+assert.ok(freeLane, "自由派审的一轮同样要折成结论卡");
+assert.equal(freeLane.source, "free");
+assert.equal(freeLane.round, 1);
+assert.equal(freeLane.title, "第 1 轮审查", "标题不能沿用就地验证的「第 N 轮验证」");
+assert.equal(freeLane.conclusion, "verify_failed");
+assert.equal(freeLane.complete, true);
+assert.deepEqual(freeLane.report, { kind: "free", runId: "fr1", round: 1 });
+assert.equal(freeLane.reportAvailable, true);
+assert.deepEqual(
+  freeLane.items.map((item) => item.kind),
+  ["event", "agent", "event"],
+  "起旁注、审查正文、收尾旁注是同一张卡",
+);
+
+const freeLaneNoState = conversationFeedRows(freeLaneItems).find((row) => row.kind === "review-lane");
+assert.equal(freeLaneNoState.report, null);
+assert.equal(
+  freeLaneNoState.reportAvailable,
+  false,
+  "拿不到 reviews 就没有 runId，宁可不给入口也不能拼一个打不开的 URL",
+);
+
+// 还没落盘报告的那一轮（正在跑 / 异常收场）不给死入口，但审查者名字可以先补上。
+const freeLaneRunning = conversationFeedRows(freeLaneItems, {
+  reviews: [{ ...freeReviews[0], rounds: [{ round: 1, startedAt: "2026-08-11T02:00:00.000Z", reportMarkdown: "" }] }],
+}).find((row) => row.kind === "review-lane");
+assert.equal(freeLaneRunning.reportAvailable, false);
+assert.equal(freeLaneRunning.reviewerLabel, "codex@cpa", "会话里有气泡就用气泡上的执行器名");
+
+// 主任务在审查期间的发言绝不能折进审查卡 —— 折进去就跟着默认收起，等于凭空消失。
+const freeWithMain = buildFreeLane([
+  turn("system", freeNotes[0], "2026-08-11T02:00:00.000Z"),
+  "主任务在审查期间说的话。",
+]);
+const freeMainLane = conversationFeedRows(freeWithMain, { reviews: freeReviews })
+  .find((row) => row.kind === "review-lane");
+assert.equal(
+  freeMainLane.items.some((item) => item.kind === "agent"),
+  false,
+  "自由派审另开会话，主任务的发言只是恰好同时发生，不属于这一轮",
+);
+
+// 复审次数用完时服务端只写不带轮号的收尾，认不出来的话最后一轮永远收不了口。
+const freeTail = conversationFeedRows(buildFreeLane([
+  turn("system", "自由工作流第 2 轮审查开始：5.5审查 · 逻辑检查。", "2026-08-11T05:00:00.000Z"),
+  turn("system", "自由工作流审查仍未通过，自动复审次数已用完；现在由你决定验收通过、按意见修复或再开一轮审查。", "2026-08-11T05:40:00.000Z"),
+  turn("system", "已合并到 feat/example。", "2026-08-11T06:00:00.000Z"),
+])).find((row) => row.kind === "review-lane");
+assert.equal(freeTail.conclusion, "verify_failed");
+assert.equal(freeTail.complete, true);
+assert.equal(
+  freeTail.items.some((item) => item.kind === "event" && item.text.includes("已合并")),
+  false,
+  "不带轮号的收尾同样要收口，否则后续生命周期旁注全被吞进卡里",
+);
+
+// 「重跑上一回合」开的是同一轮的新回合：判成收口的话，重跑后的审查发言会整段掉出区间。
+const rerunNote = "自由工作流第 3 轮审查重跑上一回合：5.5审查。";
+assert.equal(isVerifyNote(rerunNote), true);
+const rerunLanes = conversationFeedRows(buildFreeLane([
+  turn("system", "自由工作流第 3 轮审查开始：5.5审查 · 逻辑检查。", "2026-08-11T07:00:00.000Z"),
+  turn("system", "自由工作流第 3 轮审查启动失败：执行器起不来", "2026-08-11T07:01:00.000Z"),
+  turn("system", rerunNote, "2026-08-11T07:10:00.000Z"),
+  turn("system", "自由工作流第 3 轮审查通过（5.5审查）。", "2026-08-11T07:40:00.000Z"),
+])).filter((row) => row.kind === "review-lane");
+assert.equal(rerunLanes.length, 2, "启动失败自成一张卡，重跑另起一张，不会互相顶掉");
+assert.equal(rerunLanes[0].conclusion, "inconclusive", "启动失败收的是一个根本没跑起来的区间");
+assert.equal(rerunLanes[1].conclusion, "verified");
+assert.equal(rerunLanes[1].title, "第 3 轮审查");
+
+// 多轮 + 重开的审查里轮号会重复，runId 只能按起始时间一一配对，配过的不复用。
+const twoRunReviews = [
+  { id: "fr1", reviewerName: "A", model: null, target: { kind: "workspace" }, rounds: [
+    { round: 1, startedAt: "2026-08-11T02:00:00.000Z", reportMarkdown: "一" },
+    { round: 2, startedAt: "2026-08-11T03:00:00.000Z", reportMarkdown: "二" },
+  ] },
+  { id: "fr2", reviewerName: "B", model: null, target: { kind: "workspace" }, rounds: [
+    { round: 1, startedAt: "2026-08-11T04:00:00.000Z", reportMarkdown: "三" },
+  ] },
+];
+const multiLanes = conversationFeedRows(buildFreeLane([
+  turn("system", "自由工作流第 1 轮审查开始：A · 逻辑检查。", "2026-08-11T02:00:00.000Z"),
+  turn("system", "自由工作流第 1 轮审查未通过，意见已发回会话；修复确认完成后自动复审。", "2026-08-11T02:40:00.000Z"),
+  turn("system", "自由工作流第 2 轮审查开始：A · 逻辑检查。", "2026-08-11T03:00:00.000Z"),
+  turn("system", "自由工作流第 2 轮审查通过（A）。", "2026-08-11T03:40:00.000Z"),
+  turn("system", "自由工作流第 1 轮审查开始：B · 语法检查。", "2026-08-11T04:00:00.000Z"),
+  turn("system", "自由工作流第 1 轮审查通过（B）。", "2026-08-11T04:40:00.000Z"),
+]), { reviews: twoRunReviews }).filter((row) => row.kind === "review-lane");
+assert.deepEqual(
+  multiLanes.map((lane) => lane.report),
+  [
+    { kind: "free", runId: "fr1", round: 1 },
+    { kind: "free", runId: "fr1", round: 2 },
+    { kind: "free", runId: "fr2", round: 1 },
+  ],
+  "重开的审查从 1 轮重新数，配错的话点开是上一次审查的报告",
+);
+assert.deepEqual(multiLanes.map((lane) => lane.conclusion), ["verify_failed", "verified", "verified"]);
+assert.deepEqual(
+  multiLanes.map((lane) => lane.defaultCollapsed),
+  [true, true, false],
+  "只有最新一张展开",
+);
+
+// —— 合并结果审查：跑在验收后的只读快照上，一次就是一次，没有轮号 ——
+assert.equal(isVerifyNote("合并结果审查开始：5.5审查 · feat/x@abc12345 · 逻辑检查。"), true);
+assert.equal(isVerifyNote("合并结果审查通过（5.5审查）；原任务继续保持已验收。"), true);
+assert.equal(
+  isVerifyNote("合并结果审查临时工作区清理失败：目录被占用"),
+  false,
+  "同前缀的杂音不能被当成一轮的起止，否则审查段会被切碎",
+);
+assert.equal(isVerifyNote("已从合并结果审查创建独立修复任务：t2"), false);
+
+const mergeLane = conversationFeedRows(buildFreeLane([
+  turn("system", "合并结果审查开始：5.5审查 · feat/x@abc12345 · 逻辑检查。", "2026-08-14T01:00:00.000Z"),
+  turn("system", "合并结果审查通过（5.5审查）；原任务继续保持已验收。", "2026-08-14T01:30:00.000Z"),
+  turn("system", "合并结果审查临时工作区清理失败：目录被占用", "2026-08-14T01:31:00.000Z"),
+]), {
+  reviews: [
+    ...freeReviews,
+    { id: "fr9", reviewerName: "5.5审查", model: "claude-sonnet-5", startedAt: "2026-08-14T01:00:00.000Z",
+      target: { kind: "accepted_merge", branch: "feat/x", baseCommit: "a", mergeCommit: "b", repairTaskId: null },
+      rounds: [{ round: 1, startedAt: "2026-08-14T01:00:00.000Z", reportMarkdown: "# 合并后复核" }] },
+  ],
+}).find((row) => row.kind === "review-lane" && row.source === "merge");
+assert.ok(mergeLane, "合并结果审查也要折成结论卡");
+assert.equal(mergeLane.round, null, "它跑在验收后的只读快照上，没有轮号");
+assert.equal(mergeLane.title, "合并结果审查");
+assert.equal(mergeLane.conclusion, "verified");
+assert.deepEqual(mergeLane.report, { kind: "free", runId: "fr9", round: 1 },
+  "target 是 accepted_merge 的那条 run 才是它的报告，不能配到工作区审查上");
+assert.equal(mergeLane.reviewerLabel, "5.5审查", "审查者会话还没落盘时，名字从 run 上补");
+assert.equal(
+  mergeLane.items.some((item) => item.kind === "event" && item.text.includes("清理失败")),
+  false,
+  "收尾之后的杂音留在卡外",
+);
 
 // —— 存量会话:trace 里一个 run marker 都没有(这次改动才开始写),身份只能按区间推 ——
 // 用的是真实历史会话 data/runs/eFjv9houajxX/lFGPlOrSnqt-.md 的原样拷贝,它那条 trace
