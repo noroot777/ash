@@ -105,11 +105,26 @@ export const WORKSPACE_RESET = (path: string) =>
 export const WORKSPACE_RESET_MARKER = "〔系统〕原工作目录(worktree 与分支)已不存在，已重建为空目录并提醒 agent 重新确认现状";
 // 任务登记的 base ref 已经不存在了（验收合并后目标分支被删是最常见的一种）。跟上面那条
 // 一样要落进会话：分支基线换了人得知道。
-export const WORKSPACE_BASE_FALLBACK_MARKER = (requested: string, used: string, rebuilt: boolean, persisted: boolean) =>
+//
+// 「工作目录这一轮是怎么来的」有**三种**，一句都不能混：曾经用一个布尔同时表示「新建了
+// 目录」和「按 used 新建的」，撞上「旧目录没了、同名 tag 还在」时它是 false，于是同一条
+// 时间线先写上面那条 WORKSPACE_RESET_MARKER（已重建），紧接着又写「沿用原有的工作目录」，
+// 用户刷新后根本判断不出这轮到底发生了什么（审查实测）。
+export const WORKSPACE_BASE_FALLBACK_MARKER = (
+  requested: string,
+  used: string,
+  workspace: { workspaceRebuilt: boolean; builtFromRequested: boolean },
+  persisted: boolean,
+) =>
   `〔系统〕任务登记的基线分支 ${requested} 已不存在，` +
-  // 只有真按 used 建过工作目录才敢说「重建」。worktree 本来就在（或按任务分支恢复回来）
-  // 时是顺带查出来的，说成已重建就是假话 —— 用户会以为自己的改动被挪到了另一个基线上。
-  (rebuilt ? `本次工作目录改按仓库当前 ${used} 重建` : `本次沿用原有的工作目录，未改动其内容`) +
+  // 没新建目录（worktree 本来就在，或按任务分支恢复回来）时说成已重建就是假话 —— 用户会
+  // 以为自己的改动被挪到了另一个基线上。新建了目录也还要分：名字还解析得出提交（同名
+  // tag/SHA）时目录仍是从用户选的那个起点建的，跟「退回仓库当前分支」是两回事。
+  (!workspace.workspaceRebuilt
+    ? `本次沿用原有的工作目录，未改动其内容`
+    : workspace.builtFromRequested
+      ? `本次工作目录仍从同名的 ${requested}（tag 或提交）新建`
+      : `本次工作目录改按仓库当前 ${used} 新建`) +
   // 说到底用户关心的是「那我这一轮做的东西还交得掉吗」。基线跟着落了库，diff 和验收就
   // 跟这次重建走同一个目标；没落库(团队执行者继承的共享分支、detached HEAD)时不能这么
   // 说 —— 那句话会变成一个到验收时才被戳穿的承诺。

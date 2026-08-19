@@ -37,11 +37,11 @@ async function persistBaseFallback(task: WorkspaceTask, ws: Workspace): Promise<
  * 续聊只在 cwd 消失时才重新解析工作目录（见 orchestrator.ts），而「worktree 好端端地在、
  * 登记的 base 分支被删了」正是最常见的一档：这一轮跑得好好的，直到用户去看 diff 或点验收
  * 才撞上 target_branch_missing。降级决策跟 `prepareWorktree` 是同一套（`staleBaseFallback`），
- * 这次没有重建任何目录，所以 `rebuilt: false`。
+ * 这次没有重建任何目录，所以工作目录那两件事实都取默认的 false。
  */
 export async function refreshTaskBase(task: WorkspaceTask, repoPath: string): Promise<Workspace["baseFallback"]> {
   if (!task.useWorktree) return undefined;
-  const fallback = await staleBaseFallback(repoPath, task.worktreeBase, false);
+  const fallback = await staleBaseFallback(repoPath, task.worktreeBase);
   if (!fallback) return undefined;
   await persistBaseFallback(task, { path: "", branch: null, isWorktree: true, baseFallback: fallback });
   return fallback;

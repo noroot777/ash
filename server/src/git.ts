@@ -155,11 +155,22 @@ export interface Workspace {
   // 这个任务里发了一句话 —— 老做法是 `git worktree add` 直接抛 "invalid reference"，
   // 整轮起不来，用户侧只看到「显示已发送，然后没反应」。
   // 调用方拿它写一条持久可见的说明，别让分支基线被悄悄换掉。
-  // `rebuilt` 分开「这次真按 used 建了工作目录」和「工作目录是复用/恢复来的，只是登记的
-  // base 顺带查出来已经没了」两档 —— 后者说成「已按 X 重建」是假话（措辞见 run-prompts.ts）。
-  // `persisted` 由 task-workspace.ts 在把降级结果写回任务登记值之后打上 —— 只有落了库，
-  // 后面的 diff / 验收才会跟着走同一个目标，给用户的说明也才敢那么写。
-  baseFallback?: { requested: string; used: string; rebuilt: boolean; persisted?: boolean };
+  //
+  // 这里存的是**三件互相独立的事实**，别再压成一个布尔：曾经用一个 `rebuilt` 同时表示
+  // 「新建了工作目录」和「按 used 新建的」，撞上「同名 tag 还在、旧目录没了」时它是 false，
+  // 于是同一条时间线先说「已重建为空目录」又说「沿用原有的工作目录」，用户刷新后根本判断
+  // 不出这轮到底发生了什么（审查实测）。措辞怎么读这三件事见 run-prompts.ts。
+  //   · workspaceRebuilt —— 这一轮新建了工作目录（等价于 `fresh`），而不是复用/接回原有的
+  //   · builtFromRequested —— 新建时仍从 requested 起（名字还解析得出提交，比如同名 tag）
+  //   · persisted —— 降级结果已由 task-workspace.ts 写回任务登记值；只有落了库，后面的
+  //     diff / 验收才会跟着走同一个目标，给用户的说明也才敢那么写
+  baseFallback?: {
+    requested: string;
+    used: string;
+    workspaceRebuilt: boolean;
+    builtFromRequested: boolean;
+    persisted?: boolean;
+  };
 }
 
 // Resolve where a run executes — and REPORT its git context, never creating
@@ -307,7 +318,13 @@ async function ensureWorktreesIgnored(repo: string): Promise<void> {
 export async function staleBaseFallback(
   repoPath: string,
   base: string | null | undefined,
-  rebuilt: boolean,
+  // 「这一轮的工作目录是怎么来的」由调用方告诉它 —— 本函数只回答基线还在不在，一个字都
+  // 推断不出工作目录的事。默认取「什么都没重建」，因为大多数调用方（refreshTaskBase、
+  // 复用/恢复路径）确实没动过目录。
+  workspace: Pick<
+    NonNullable<Workspace["baseFallback"]>,
+    "workspaceRebuilt" | "builtFromRequested"
+  > = { workspaceRebuilt: false, builtFromRequested: false },
 ): Promise<Workspace["baseFallback"]> {
   const repo = expandHome(repoPath);
   const requested = (base ?? "").trim();
@@ -316,7 +333,7 @@ export async function staleBaseFallback(
   // `refs/heads/main` 这种写法下游会先 normalize 掉前缀再查，这里跟着剥，免得把一个其实
   // 好好的基线判成没了。
   if (await localBranchExists(repo, normalizeBranchName(requested))) return undefined;
-  return { requested, used: (await currentBranch(repo)) ?? "HEAD", rebuilt };
+  return { requested, used: (await currentBranch(repo)) ?? "HEAD", ...workspace };
 }
 
 // 仓库级串行(见 repo-lock.ts):prune/add 改的是全仓共用的 worktree 注册表,
@@ -345,8 +362,8 @@ async function prepareWorktreeLocked(
   // 路径，分支还在就把工作原样接回来。
   if (worktreeLeftoverAt(repo, path)) await discardWorktreeLeftover(repo, path);
   // base 的死活先问一遍，再分路：三条路径（复用 / 恢复 / 新建）都要如实报出来，只有
-  // 「这次是不是真按它重建了工作目录」各不相同。
-  const stale = await staleBaseFallback(repo, base, false);
+  // 「这一轮的工作目录是怎么来的」各不相同 —— 复用和恢复都没新建目录，用默认值即可。
+  const stale = await staleBaseFallback(repo, base);
   if (isDir(path)) {
     // Re-use: read whatever branch the existing worktree is actually on (might
     // differ if the user manipulated it manually). isWorktree=true so callers
@@ -393,10 +410,12 @@ async function prepareWorktreeLocked(
   }
   return {
     path, branch, isWorktree: true, fresh: !restore,
-    // 只有「真按仓库当前 HEAD 建了目录」那一档才算重建：恢复回来的工作目录跟 base 无关，
-    // 从一个仍解析得出的同名 tag 建出来的也不是「按 used 重建」—— 说成重建会让用户以为
-    // 自己的改动被挪到了另一个基线上。
-    ...(stale ? { baseFallback: { ...stale, rebuilt: !restore && !builtFromBase } } : {}),
+    // 走到这里一定新建了工作目录（`fresh`），但「按谁建的」是另一回事：恢复回来的目录跟
+    // base 无关，从一个仍解析得出的同名 tag 建出来的也不是「按 used 重建」。两件事各报各的，
+    // 别再合并成一个布尔 —— 合并过一次，结果同一回合的时间线自相矛盾（见 baseFallback 注释）。
+    ...(stale
+      ? { baseFallback: { ...stale, workspaceRebuilt: !restore, builtFromRequested: builtFromBase } }
+      : {}),
   };
 }
 

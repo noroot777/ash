@@ -136,7 +136,17 @@ try {
     const ws = await taskWorkspace(await load("basegone-task"), repo);
     assert.equal(ws.baseFallback?.requested, "feat/gone-base", "要说清原本想用哪个 base");
     assert.equal(ws.baseFallback?.used, "main", "退回仓库当前分支");
+    assert.equal(ws.baseFallback?.workspaceRebuilt, true, "这一档确实新建了工作目录");
+    assert.equal(ws.baseFallback?.builtFromRequested, false, "名字整个没了，只能退回仓库当前分支起");
     assert.equal(ws.baseFallback?.persisted, true, "落库了才敢对用户说 diff/验收跟着走");
+    {
+      // 三态措辞之一：名字整个没了 → 目录退回仓库当前分支新建。
+      const { WORKSPACE_BASE_FALLBACK_MARKER } = await import("../src/run-prompts.js");
+      const note = WORKSPACE_BASE_FALLBACK_MARKER(
+        ws.baseFallback!.requested, ws.baseFallback!.used, ws.baseFallback!, true,
+      );
+      assert.match(note, /改按仓库当前 main 新建/, "要说清这次的目录是从仓库当前分支起的");
+    }
     assert.equal((await load("basegone-task")).worktreeBase, "main", "任务登记的基线必须跟着改");
 
     const { resolveTaskMergeTarget } = await import("../src/git.js");
@@ -167,9 +177,19 @@ try {
     const again = await taskWorkspace(await load("keptwt-task"), repo);
     assert.equal(again.path, first.path, "前提：worktree 还在，这次走的是复用");
     assert.equal(again.baseFallback?.requested, "feat/gone-while-worktree-stays");
-    assert.equal(again.baseFallback?.rebuilt, false, "复用路径什么都没重建，别说成重建了");
+    assert.equal(again.baseFallback?.workspaceRebuilt, false, "复用路径什么都没重建，别说成重建了");
+    assert.equal(again.baseFallback?.builtFromRequested, false, "更不是从那个已删的名字建的");
     assert.equal(again.baseFallback?.persisted, true, "复用路径同样要把降级落回任务行");
     assert.equal((await load("keptwt-task")).worktreeBase, "main", "库里不能继续留着已删的名字");
+    {
+      // 三态措辞之二：目录压根没动 → 只说基线换了目标，别提任何「重建」。
+      const { WORKSPACE_BASE_FALLBACK_MARKER } = await import("../src/run-prompts.js");
+      const note = WORKSPACE_BASE_FALLBACK_MARKER(
+        again.baseFallback!.requested, again.baseFallback!.used, again.baseFallback!, true,
+      );
+      assert.match(note, /沿用原有的工作目录/, "目录原样留着就该这么说");
+      assert.doesNotMatch(note, /新建/, "什么都没建，别让用户以为改动被挪走了");
+    }
 
     const { taskBranchDiff } = await import("../src/git-diff.js");
     writeFileSync(join(again.path, "kept.txt"), "worktree kept\n");
@@ -190,7 +210,7 @@ try {
 
     const fallback = await refreshTaskBase(await load("keptwt-task"), repo);
     assert.equal(fallback?.requested, "feat/gone-during-chat", "要说清原本想用哪个 base");
-    assert.equal(fallback?.rebuilt, false, "这条路径连工作目录都没碰");
+    assert.equal(fallback?.workspaceRebuilt, false, "这条路径连工作目录都没碰");
     assert.equal(fallback?.persisted, true, "续聊路径同样要落库");
     assert.equal((await load("keptwt-task")).worktreeBase, "main");
 
@@ -212,7 +232,7 @@ try {
     const restored = await taskWorkspace(await load("keptwt-task"), repo);
     assert.equal(existsSync(join(restored.path, "kept.txt")), true, "前提：分支还在，工作被接回来了");
     assert.equal(restored.fresh, false, "前提：这是恢复，不是建空壳");
-    assert.equal(restored.baseFallback?.rebuilt, false, "恢复回来的目录跟 base 无关，别说成按它重建");
+    assert.equal(restored.baseFallback?.workspaceRebuilt, false, "恢复回来的目录跟 base 无关，别说成新建的");
     assert.equal(restored.baseFallback?.persisted, true, "但登记的验收目标照样得修回来");
   }
 
@@ -239,7 +259,21 @@ try {
     assert.equal(ws.baseFallback?.persisted, true, "验收目标必须修回一个真的本地分支");
     assert.equal((await load("tagmask-task")).worktreeBase, "main");
     assert.equal(git(ws.path, "rev-parse", "HEAD"), seedSha, "目录仍按仍解析得出的 tag 建，不白扔用户选的起点");
-    assert.equal(ws.baseFallback?.rebuilt, false, "既然是从 tag 建的，就别说成「按仓库当前分支重建」");
+    assert.equal(ws.baseFallback?.workspaceRebuilt, true, "这一轮确实新建了工作目录");
+    assert.equal(ws.baseFallback?.builtFromRequested, true, "而且是从那个仍解析得出的名字建的，不是退回仓库当前分支");
+
+    // 这两条 marker 在同一个回合里紧挨着落进时间线（orchestrator.continueTask：旧 cwd 没了
+    // → 建新目录 → 先写 RESET 再写 FALLBACK）。曾经用一个布尔同时表示「新建了目录」和
+    // 「按 used 新建的」，于是这一档先说「已重建为空目录」又说「沿用原有的工作目录」，
+    // 用户刷新后判断不出这轮到底发生了什么（审查实测）。所以直接钉措辞，光改字段名不算修好。
+    const { WORKSPACE_BASE_FALLBACK_MARKER, WORKSPACE_RESET_MARKER } = await import("../src/run-prompts.js");
+    const note = WORKSPACE_BASE_FALLBACK_MARKER(
+      ws.baseFallback!.requested, ws.baseFallback!.used, ws.baseFallback!, !!ws.baseFallback?.persisted,
+    );
+    assert.match(WORKSPACE_RESET_MARKER, /重建/, "前提：同回合的另一条说的是「目录已重建」");
+    assert.doesNotMatch(note, /沿用原有的工作目录/, "同一回合刚说完已重建，不能紧接着说沿用原目录");
+    assert.match(note, /feat\/same-name（tag 或提交）新建/, "要说清新目录是从那个仍解析得出的名字起的");
+    assert.match(note, /基线也已一并更新为 main/, "同时说清验收目标已经改到哪");
 
     const { taskBranchDiff } = await import("../src/git-diff.js");
     writeFileSync(join(ws.path, "masked.txt"), "work on tag base\n");
@@ -266,6 +300,7 @@ try {
   console.log("✓ deleted base falls back to the repo branch AND persists it for diff/accept");
   console.log("✓ a kept worktree (and a plain follow-up turn) still notice a deleted base");
   console.log("✓ reuse/restore report the fallback without claiming a rebuild");
+  console.log("✓ 三种工作目录去向各自的措辞对得上，同回合的两条 marker 不互相打架");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

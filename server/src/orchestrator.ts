@@ -188,14 +188,14 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     await db.insert(sessions).values(sessRow);
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
-    if (ws.baseFallback && (ws.baseFallback.rebuilt || ws.baseFallback.persisted)) {
+    if (ws.baseFallback && (ws.baseFallback.workspaceRebuilt || ws.baseFallback.persisted)) {
       // fresh run 也会撞上「登记的 base 已经没了」（任务验收合并后分支被删，用户又点了
       // 一次运行）。这一档不像续聊那样起不来，但基线被换掉、甚至跟着改了任务登记值，
       // 只在日志里发生就等于没发生 —— 同样落一条持久可见的气泡。
       // 既没重建目录也没改登记值时不吭声：那一轮什么都没变，每次都说一遍只是噪音，
       // 而「这个 base 交不掉」在验收那头本来就会明说。
       const note = WORKSPACE_BASE_FALLBACK_MARKER(
-        ws.baseFallback.requested, ws.baseFallback.used, ws.baseFallback.rebuilt, !!ws.baseFallback.persisted,
+        ws.baseFallback.requested, ws.baseFallback.used, ws.baseFallback, !!ws.baseFallback.persisted,
       );
       writeTurn(out, { t: "system", agent: agentType, text: note }, turnStart);
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event: { kind: "system", text: note } });
@@ -626,12 +626,13 @@ export async function continueTask(
       writeTurn(out, { t: "system", agent, text: WORKSPACE_RESET_MARKER }, turnStart);
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: sessionRole, agentType: agent, event: { kind: "system", text: WORKSPACE_RESET_MARKER } });
     }
-    if (baseFallback && (baseFallback.rebuilt || baseFallback.persisted)) {
+    if (baseFallback && (baseFallback.workspaceRebuilt || baseFallback.persisted)) {
       // 同上,这一条说的是「基线去哪了」:任务登记的 base 已经没了(验收合并后分支被删是
-      // 最常见的一种)。工作目录是不是跟着重建了、登记值有没有一并改掉,措辞里分开说;
-      // 两件都没发生就不吭声,免得每一轮都重复一句什么也没变的话。
+      // 最常见的一种)。工作目录是不是跟着新建了、是从谁起的、登记值有没有一并改掉,措辞
+      // 里三件分开说 —— 紧挨着上面那条 WORKSPACE_RESET_MARKER,含糊一点两条就会互相打架。
+      // 三件都没发生就不吭声,免得每一轮都重复一句什么也没变的话。
       const note = WORKSPACE_BASE_FALLBACK_MARKER(
-        baseFallback.requested, baseFallback.used, baseFallback.rebuilt, !!baseFallback.persisted,
+        baseFallback.requested, baseFallback.used, baseFallback, !!baseFallback.persisted,
       );
       writeTurn(out, { t: "system", agent, text: note }, turnStart);
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: sessionRole, agentType: agent, event: { kind: "system", text: note } });
