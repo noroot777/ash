@@ -1,8 +1,35 @@
-import { eq, inArray } from "drizzle-orm";
+import { statSync } from "node:fs";
+import { desc, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { projects, tasks } from "./db/schema.js";
-import { prepareWorktree, repoKey, resolveWorkspace, staleBaseFallback, type Workspace } from "./git.js";
+import { projects, sessions, tasks } from "./db/schema.js";
+import {
+  expandHome,
+  prepareWorktree,
+  repoKey,
+  resolveWorkspace,
+  staleBaseFallback,
+  worktreePathFor,
+  type Workspace,
+} from "./git.js";
 import { now } from "./util.js";
+
+// `repoKey` 每次都要 realpath 一路走上去，`workspaceParticipants` 一次要问几百条路径，
+// 同一个目录会被反复问到。**只在一次调用里记账**（下面每次调用现建两张表）：目录和软链
+// 随时在增删，跨调用缓存等于拿上一秒的文件系统答这一秒的问题。
+const memo = <T>(fn: (p: string) => T) => {
+  const cache = new Map<string, T>();
+  return (p: string): T => {
+    const hit = cache.get(p);
+    if (hit !== undefined) return hit;
+    const value = fn(p);
+    cache.set(p, value);
+    return value;
+  };
+};
+
+const isDirSync = (p: string) => {
+  try { return statSync(p).isDirectory(); } catch { return false; }
+};
 
 type WorkspaceTask = Pick<
   typeof tasks.$inferSelect,
@@ -92,21 +119,30 @@ export async function isolatedWorkspaceOwner(
 export type WorkspacePeer = { id: string; title: string | null; status: string | null };
 
 /**
- * 跟这个项目**指向同一个仓库**的全部项目 id（含它自己）。
+ * 一个任务**下一次跑起来会落进哪个目录**。判据抄的是 orchestrator 起跑时那段取值
+ * （`opts.cwd || prev?.cwd || … `，路径没了才重新解析工作区），所以这里排在最前的也是
+ * 「自己名下最新的、目录还在的那条会话 cwd」。
  *
- * 同一个仓库路径可以被登记成两个项目：`POST /api/projects` 不去重、也不拒绝重复路径，
- * 用户把同一个仓库加两遍（换个名字、分两拨任务）是正常用法。归一按 `repoKey`——它答的
- * 正是「这两条路径是不是同一个物理仓库」：`~` 展开、尾斜杠、`.`/`..`、软链都算进去，
- * 所以换一种合法写法登记的项目也照样圈得进来（第 2 轮审查）。
+ * 只看它自己的会话：orchestrator 也只看自己的。归属任务的会话是 `taskFileRoot` 为了
+ * 「展示哪儿」额外查的一档，拿到这里会把还没跑过的执行者错判进领队的历史目录。
  *
- * 仓库路径为空的项目不跟任何人合并：它压根没有共用的目录可言（`repoKey` 对空值返回空，
- * 直接拿它当键会把所有无仓库项目糊成一堆）。
+ * 没跑过就按决策树推：有归属就是 `<repo>/.worktrees/<owner>`，否则项目仓库本身。这一档
+ * **不要求目录已存在**——它答的是「会落在哪」，而 worktree 正是那次启动才建出来的；要求
+ * 存在就会把一个还没起过的 worktree 任务算成主仓的共用者，凭空多出一个假在飞。
  */
-async function projectsSharingRepo(projectId: string): Promise<string[]> {
-  const rows = await db.select().from(projects);
-  const key = repoKey(rows.find((row) => row.id === projectId)?.repoPath);
-  if (!key) return [projectId];
-  return rows.filter((row) => repoKey(row.repoPath) === key).map((row) => row.id);
+function nextRunDirOf(
+  row: WorkspaceTask,
+  owner: string | null,
+  repoOf: (projectId: string) => string,
+  sessionDirs: Map<string, string[]>,
+  dirExists: (p: string) => boolean,
+): string {
+  for (const dir of sessionDirs.get(row.id) ?? []) {
+    if (dirExists(dir)) return dir;
+  }
+  const repo = repoOf(row.projectId);
+  if (!repo) return "";
+  return owner ? worktreePathFor(repo, owner) : repo;
 }
 
 /**
@@ -118,24 +154,24 @@ async function projectsSharingRepo(projectId: string): Promise<string[]> {
  * 的一个：兄弟执行者正在写文件，用户从这一位的面板上无 force 就能把它的成果丢掉
  * （第 4 轮审查在页面上真实复现）。
  *
- * 判据是「**真跑起来**会落在哪」（`isolatedWorkspaceOwner`，跟 `taskWorkspace` 同一棵
- * 决策树），不是「上一次跑在哪」：要挡的是接下来那次启动。归档任务不算——归档 = 冻结，
- * 它起不来（`task-archive-routes.ts`）。
+ * **圈定的键是 `rootPath` 这个物理目录本身，不是项目登记的 `repoPath`。** 展示解析
+ * （`taskFileRoot`）第一优先级是会话 cwd，而项目的 `repoPath` 随时可以被 PATCH 改掉：
+ * 任务在旧仓库里干着活，项目已经改指新仓库，按项目圈候选就看不见旧仓库里正在跑的那些
+ * 任务——面板不显示在飞横幅，无 force 的 discard 直接把对面的成果丢掉（第 2 轮审查复现）。
+ * 传进来的 root 必须是 `taskFileRoot` 最终选中的那个目录，展示、busy、turn 占位、repo
+ * lock 才会指向同一处。
  *
- * **候选按仓库圈，不按项目圈。** 共用的是一个物理目录，而目录属于仓库不属于项目：同一个
- * 仓库登记成两个项目时，两边的就地任务落在同一份工作区里，按 projectId 取候选就看不见
- * 对面那一个——面板不显示在飞横幅，无 force 的 discard 直接把对面正在跑的任务的成果丢掉
- * （第 1 轮审查用公共 API 复现）。圈定之后仍按 owner 分组是够的：候选已经同仓库，owner
- * 为 null 就是那个仓库本身，非 null 则是 `<repo>/.worktrees/<owner>`，而 task id 全局唯一。
+ * 判据是「**真跑起来**会落在哪」（`nextRunDirOf`，跟 `taskWorkspace` 同一棵决策树），
+ * 不是「上一次跑在哪」：要挡的是接下来那次启动。归档任务不算——归档 = 冻结，它起不来
+ * （`task-archive-routes.ts`）。归一按 `repoKey`：`~` 展开、尾斜杠、`.`/`..`、软链都算
+ * 进去，所以同一个目录换一种合法写法登记的项目也照样圈得进来。
  */
-export async function workspaceParticipants(task: OwnerTask): Promise<WorkspacePeer[]> {
-  const rows = await db
-    .select()
-    .from(tasks)
-    .where(inArray(tasks.projectId, await projectsSharingRepo(task.projectId)));
+export async function workspaceParticipants(task: OwnerTask, rootPath: string): Promise<WorkspacePeer[]> {
+  const rows = await db.select().from(tasks);
   const byId = new Map(rows.map((row) => [row.id, row] as const));
   const lookup: OwnerLookup = async (id) => byId.get(id) ?? await lookupFromDb(id);
-  const owner = await isolatedWorkspaceOwner(task, lookup);
+  const keyOf = memo(repoKey);
+  const dirExists = memo(isDirSync);
 
   const peers = new Map<string, WorkspacePeer>();
   const take = (row: { id: string; title: string | null; status: string | null }) =>
@@ -143,9 +179,26 @@ export async function workspaceParticipants(task: OwnerTask): Promise<WorkspaceP
   // 自己一定在里面：哪怕它已归档（写侧另有冻结门禁），锁也该覆盖到自己身上。
   const self = byId.get(task.id);
   take({ id: task.id, title: self?.title ?? null, status: self?.status ?? null });
+
+  const key = keyOf(rootPath);
+  // 空 root 不跟任何人合并：`repoKey` 对空值返回空，拿它当键会把所有解析不出目录的任务
+  // 糊成一堆。
+  if (!key) return [...peers.values()];
+
+  const projectRepos = new Map((await db.select().from(projects)).map((row) => [row.id, expandHome(row.repoPath)]));
+  const sessionDirs = new Map<string, string[]>();
+  for (const run of await db.select().from(sessions).orderBy(desc(sessions.startedAt))) {
+    const dir = expandHome(run.cwd ?? run.worktreePath);
+    if (!dir) continue;
+    const list = sessionDirs.get(run.taskId);
+    if (list) list.push(dir); else sessionDirs.set(run.taskId, [dir]);
+  }
+  const repoOf = (projectId: string) => projectRepos.get(projectId) ?? "";
+
   for (const row of rows) {
-    if (row.archived) continue;
-    if (await isolatedWorkspaceOwner(row, lookup) === owner) take(row);
+    if (row.archived || peers.has(row.id)) continue;
+    const dir = nextRunDirOf(row, await isolatedWorkspaceOwner(row, lookup), repoOf, sessionDirs, dirExists);
+    if (dir && keyOf(dir) === key) take(row);
   }
   return [...peers.values()];
 }

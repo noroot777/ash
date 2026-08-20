@@ -150,12 +150,26 @@ async function runOne(taskId: string, action: ScmAction, force: boolean) {
  */
 export type ScmPartialNotice = ScmWritePartial & { message: string };
 
+/**
+ * 「下面这份列表可能不是现在的样子」——写操作要按它冻住。
+ *
+ * 面板上的每一次点击都是**按列表内容下的判断**：勾这一行去暂存、按那一行去丢弃、看着
+ * 「暂存全部并提交（7）」按下提交。列表一旦落后于磁盘，这些判断作用的就是另一批文件：
+ * 补刷失败之后 agent 又写了三个文件，此时「暂存全部并提交」会把那三个一起提交进去；
+ * 而用户看到的仍是七个。所以状态一旦对不上，就必须**说出来并停掉写操作**，而不是把
+ * 一份可能过期的列表当现状继续操作（第 2 轮审查复现：提交成功但补刷失败之后，面板不声
+ * 不响地停在提交前的旧列表上，按钮照常可点）。
+ */
+const STALE_AFTER_WRITE = "这次操作已经落地，但没读到最新的工作区状态；下面这份列表可能是旧的。";
+const staleAfterRefresh = (reason: string) => `读不到最新的工作区状态（${reason}）；下面这份列表可能是旧的。`;
+
 export function useScmWorkspace(taskId: string) {
   const [overview, setOverview] = useState<ScmOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [partial, setPartial] = useState<ScmPartialNotice | null>(null);
+  const [stale, setStale] = useState<string | null>(null);
   // 写操作进行中不轮询：中途插进来的 GET 会拿到写到一半的状态，把刚点掉的条目闪回来。
   const busyRef = useRef(false);
   busyRef.current = busy;
@@ -165,8 +179,12 @@ export function useScmWorkspace(taskId: string) {
     try {
       setOverview(await api.taskScm(taskId));
       setError(null);
+      // 读到了 = 列表就是现状，之前那声「可能是旧的」到此为止。
+      setStale(null);
     } catch (reason) {
       setError(messageOf(reason));
+      // 静默轮询失败尤其要留痕：屏幕上什么都没变，用户以为自己看的是实时状态。
+      setStale(staleAfterRefresh(messageOf(reason)));
       if (!quiet) setOverview(null);
     } finally {
       setLoading(false);
@@ -176,6 +194,7 @@ export function useScmWorkspace(taskId: string) {
   useEffect(() => {
     setOverview(null);
     setError(null);
+    setStale(null);
     void refresh();
   }, [refresh]);
 
@@ -209,8 +228,14 @@ export function useScmWorkspace(taskId: string) {
       // 写操作自带刷新后的状态，直接就地更新：少一次往返，也不会出现「按钮已响应、
       // 列表还是旧的」那一帧。commits 不跟着变的只有提交，所以那一种额外补一次拉取。
       // 状态没跟回来（后端那次刷新读失败了，但写操作已经生效）就自己补一次——绝不能
-      // 因此把成功当失败，也不能让面板停在旧列表上。
-      if (result.status) setOverview((current) => (current ? { ...current, status: result.status! } : current));
+      // 因此把成功当失败；补上之前先亮明「这份列表可能是旧的」并冻住写操作，补刷成功
+      // 时它自己会撤掉。
+      if (result.status) {
+        setOverview((current) => (current ? { ...current, status: result.status! } : current));
+        setStale(null);
+      } else {
+        setStale(STALE_AFTER_WRITE);
+      }
       if (action.kind === "commit" || !result.status) void refresh(true);
       setError(null);
       setPartial(null);
@@ -221,8 +246,13 @@ export function useScmWorkspace(taskId: string) {
       if (body?.partial) {
         setPartial({ ...body.partial, message: body.error ?? messageOf(reason) });
         // 已经生效的那部分必须立刻反映到列表上，否则界面停在旧状态，用户会以为整次都没做。
-        if (body.status) setOverview((current) => (current ? { ...current, status: body.status! } : current));
-        else void refresh(true);
+        if (body.status) {
+          setOverview((current) => (current ? { ...current, status: body.status! } : current));
+          setStale(null);
+        } else {
+          setStale(STALE_AFTER_WRITE);
+          void refresh(true);
+        }
       }
       throw reason;
     } finally {
@@ -232,7 +262,7 @@ export function useScmWorkspace(taskId: string) {
 
   const dismissPartial = useCallback(() => setPartial(null), []);
 
-  return { overview, error, loading, busy, partial, refresh, run, dismissPartial };
+  return { overview, error, loading, busy, partial, stale, refresh, run, dismissPartial };
 }
 
 /**

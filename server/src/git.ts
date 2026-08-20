@@ -112,6 +112,29 @@ export function ensureWorkdir(repoPath: string | null | undefined, taskId: strin
   return scratch;
 }
 
+/**
+ * 这个工作目录**属于哪个仓库**：linked worktree 回主仓，主工作树回它自己。不是 git
+ * 目录（或 git 跑不起来）时返回 null。
+ *
+ * 为什么不能拿项目登记的 `repoPath` 顶替：任务实际在哪干活是**会话 cwd 说了算**
+ * （`taskFileRoot` 的第一优先级，跟 orchestrator 起跑时的取值一致），而项目的
+ * `repoPath` 是随时可以被 PATCH 改掉的一个登记值。两者一分家，「按仓库串行」的写型
+ * git 操作就会拿着新仓库的键去锁，实际却在旧仓库里跑 —— 等于没锁（本轮审查复现）。
+ *
+ * `--git-common-dir` 正是「refs 和 worktree 注册表住在哪」的答案，也就是 `repo-lock.ts`
+ * 那条队真正要保护的东西；主工作树里它回相对的 `.git`，所以要接着 dir 解一次。
+ */
+export async function owningRepoOf(dir: string): Promise<string | null> {
+  const p = expandHome(dir);
+  try {
+    const { stdout } = await exec("git", ["-C", p, "rev-parse", "--git-common-dir"]);
+    const common = resolve(p, stdout.trim());
+    return basename(common) === ".git" ? dirname(common) : common;
+  } catch {
+    return null;
+  }
+}
+
 export async function isGitRepo(repoPath: string): Promise<boolean> {
   const p = expandHome(repoPath);
   try {

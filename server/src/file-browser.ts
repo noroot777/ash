@@ -6,7 +6,7 @@ import { desc, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { projects, sessions, tasks } from "./db/schema.js";
 import { isInsidePath, windowsPathRejection } from "./platform.js";
-import { expandHome, isGitRepo, symbolicBranch, worktreePathFor } from "./git.js";
+import { expandHome, isGitRepo, owningRepoOf, symbolicBranch, worktreePathFor } from "./git.js";
 import { isolatedWorkspaceOwner } from "./task-workspace.js";
 
 // 任务的「文件浏览」只读地看一眼这个任务实际在哪干活。**绝不能调 prepareWorktree**：
@@ -38,7 +38,12 @@ export interface WorkspaceRoot {
   gitRepo: boolean;
   /** 这个根是怎么定下来的，界面上要说清楚「你看的是哪儿」。 */
   source: "session" | "worktree" | "repo";
-  repoPath: string | null;
+  /**
+   * `path` **这个目录自己**属于哪个仓库（linked worktree 记主仓）——写型 git 操作按它
+   * 串行。刻意不叫 `repoPath`：项目登记的那个 `repoPath` 是可以被 PATCH 改掉的登记值，
+   * 会话 cwd 一旦落在别处，两者就指向不同物理目录，锁与实际操作分家（第 2 轮审查复现）。
+   */
+  repo: string | null;
 }
 
 export interface FileEntry {
@@ -95,7 +100,9 @@ export async function taskFileRoot(taskId: string): Promise<WorkspaceRoot | null
       branch: gitRepo ? await symbolicBranch(candidate.path) : null,
       gitRepo,
       source: candidate.source,
-      repoPath,
+      // 从**选中的这个目录**问出来，不是项目登记的 repoPath：会话 cwd 可能落在另一个
+      // 仓库里，那时候锁项目 repoPath 等于没锁。问不出来（不是 git 目录）才退回登记值。
+      repo: (gitRepo ? await owningRepoOf(candidate.path) : null) ?? repoPath,
     };
   }
   return null;

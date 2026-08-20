@@ -370,6 +370,101 @@ try {
     await db.delete(projects).where(eq(projects.id, "project-v"));
   }
 
+  // ── 9. 项目改了 repoPath，任务还在旧仓库里干活 ──────────────────────────────
+  // 展示解析（`taskFileRoot`）第一优先级是**会话 cwd**，而项目的 `repoPath` 是随时能
+  // PATCH 改掉的登记值。两者一分家，按项目 repoPath 圈共用者、按项目 repoPath 上锁，就
+  // 等于拿一个跟眼前这份 git 状态毫无关系的仓库做判断：旧仓库里正在跑的任务完全不可见，
+  // 无 force 的 discard 直接穿透；锁也锁在了空仓库上（第 2 轮审查用隔离实例复现）。
+  {
+    const { withRepoLock } = await import("../src/repo-lock.js");
+    const oldRepo = join(root, "moved-old-repo");
+    const newRepo = join(root, "moved-new-repo");
+    for (const dir of [oldRepo, newRepo]) {
+      execFileSync("git", ["init", "-b", "main", dir]);
+      git(dir, "config", "user.name", "Harness SCM Guard Test");
+      git(dir, "config", "user.email", "scm@harness.test");
+      writeFileSync(join(dir, "a.txt"), "baseline\n");
+      git(dir, "add", "a.txt");
+      git(dir, "commit", "-m", "seed");
+    }
+
+    const { sessions } = await import("../src/db/schema.js");
+    await db.insert(projects).values([
+      // 项目**已经**改指新仓库了，任务上一轮跑的却是旧仓库
+      { id: "project-moved", name: "改过路径的项目", repoPath: newRepo, createdAt: ts },
+      { id: "project-old", name: "旧仓库项目", repoPath: oldRepo, createdAt: ts },
+    ]);
+    await db.insert(tasks).values([
+      { ...common, id: "moved", projectId: "project-moved", useWorktree: false },
+      { ...common, id: "old-runner", projectId: "project-old", title: "旧仓库里在跑的任务",
+        useWorktree: false, status: "running" },
+    ]);
+    await db.insert(sessions).values({
+      id: "sess-moved", taskId: "moved", role: "main", agentType: "claude", executor: "claude",
+      target: "local", cwd: oldRepo, startedAt: ts,
+    });
+
+    const movedNow = () => readFileSync(join(oldRepo, "a.txt"), "utf8");
+    const soilMoved = () => writeFileSync(join(oldRepo, "a.txt"), "agent in progress\n");
+
+    const overview = await api.request("/tasks/moved/scm");
+    const body = await overview.json() as { root: { path: string }; taskRunning: boolean };
+    assert.equal(body.root.path, oldRepo, "前提：会话 cwd 说了算，展示的是旧仓库");
+    assert.equal(body.taskRunning, true, "旧仓库里正在跑的任务必须出现在在飞判定里");
+
+    for (const { op, body: payload } of writeOps) {
+      soilMoved();
+      const head = git(oldRepo, "rev-parse", "HEAD");
+      const res = await post("moved", op, payload);
+      const json = await res.json() as { error?: string; needsForce?: boolean };
+      assert.equal(res.status, 409, `搬过家：${op} 必须 409，实际 ${res.status}`);
+      assert.equal(json.needsForce, true, `搬过家：${op} 要让面板弹确认框`);
+      assert.match(json.error ?? "", /旧仓库里在跑的任务/, `搬过家：${op} 要说清是哪个任务在跑`);
+      assert.equal(movedNow(), "agent in progress\n", `搬过家：${op} 之后文件不许变`);
+      assert.equal(git(oldRepo, "rev-parse", "HEAD"), head, `搬过家：${op} 之后不许多出提交`);
+    }
+
+    // 写型 git 操作要跟**旧仓库**的其它 git 操作串行：锁错了仓库等于没锁。占住旧仓库的
+    // 锁，这次写就该一直排在外面。
+    await db.update(tasks).set({ status: "backlog" }).where(eq(tasks.id, "old-runner"));
+    {
+      soilMoved();
+      let release = () => {};
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      const holding = withRepoLock(oldRepo, () => held);
+      const pending = post("moved", "stage", { paths: ["a.txt"] });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      assert.equal(
+        execFileSync("git", ["-C", oldRepo, "status", "--porcelain"], { encoding: "utf8" }).trimEnd(),
+        " M a.txt",
+        "旧仓库的锁被占着，这次暂存必须还排在外面（锁错仓库的话它早跑完了）",
+      );
+      release();
+      await holding;
+      assert.equal((await pending).status, 200, "锁一放就该跑完");
+      assert.equal(
+        execFileSync("git", ["-C", oldRepo, "status", "--porcelain"], { encoding: "utf8" }).trimEnd(),
+        "M  a.txt",
+        "排完队之后暂存要真的生效",
+      );
+      git(oldRepo, "restore", "--staged", "--worktree", "a.txt");
+    }
+
+    // 反向：新仓库里在跑的任务跟眼前这个目录无关，不该把这边挡住。
+    await db.insert(tasks).values({
+      ...common, id: "new-runner", projectId: "project-moved", title: "新仓库里在跑的任务",
+      useWorktree: false, status: "running",
+    });
+    soilMoved();
+    const free = await post("moved", "discard", { paths: ["a.txt"] });
+    assert.equal(free.status, 200, "登记的新仓库里有任务在跑，跟旧仓库这份状态无关");
+    assert.equal(movedNow(), "baseline\n");
+
+    for (const id of ["moved", "old-runner", "new-runner"]) await db.delete(tasks).where(eq(tasks.id, id));
+    await db.delete(sessions).where(eq(sessions.taskId, "moved"));
+    for (const id of ["project-moved", "project-old"]) await db.delete(projects).where(eq(projects.id, id));
+  }
+
   console.log("scm guard ok");
 } finally {
   rmSync(root, { recursive: true, force: true });

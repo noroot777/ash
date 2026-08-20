@@ -52,9 +52,15 @@ import { assertInsideRoot, assertPathShape, gateScmPaths } from "./scm-paths.js"
 //
 // 而**问的对象是「这个目录」而不是「这个任务」**：工作目录不是一个任务的私产，调度台、
 // 跟随它的执行者、它们各自的审查任务都落在同一个 worktree 里，同一个仓库被登记成两个
-// 项目时两边的就地任务也共用主仓（`workspaceParticipants`，候选按仓库圈而不是按项目圈）。
-// 只问当前这个 task id，兄弟执行者正写着文件，用户从这一位的面板上无 force 就能把它的
-// 成果丢掉（第 4 轮审查在页面上真实复现，跨项目那一档见第 1 轮）。
+// 项目时两边的就地任务也共用主仓。只问当前这个 task id，兄弟执行者正写着文件，用户从这
+// 一位的面板上无 force 就能把它的成果丢掉（第 4 轮审查在页面上真实复现，跨项目那一档见
+// 第 1 轮）。
+//
+// 「这个目录」的准星必须是 `taskFileRoot` **最终选中的那个 root**，不是项目登记的
+// `repoPath`：展示解析第一优先级是会话 cwd，而项目的 repoPath 随时能被 PATCH 改掉，两者
+// 一分家，圈出来的共用者和上的锁就都落在一个跟眼前这份 git 状态无关的仓库上（第 2 轮
+// 审查复现）。所以 `workspaceParticipants` 收 `root.path`（哪些任务下次会落进这个目录），
+// 写型 git 操作收 `root.repo`（这个目录**自己**属于哪个仓库，linked worktree 记主仓）。
 //
 // 进门时的结论到动手时可能早过期了（排 `withRepoLock` 可能等上几秒），所以**真正动手
 // 之前还要再来一道**——而那一道不能是「再查一次」：查完到 git 命令跑起来之间，一次启动
@@ -144,7 +150,7 @@ export function mountScmRoutes(api: Hono) {
     const root = await taskFileRoot(taskId);
     if (!root) return { error: "这个任务还没有可浏览的工作目录", status: 404 as const } as const;
     if (!root.gitRepo) return { error: "这个工作目录不是 Git 仓库", status: 409 as const } as const;
-    const peers = await workspaceParticipants(task);
+    const peers = await workspaceParticipants(task, root.path);
     return { task, root, peers, busy: busyPeer(peers) } as const;
   };
 
@@ -232,7 +238,7 @@ export function mountScmRoutes(api: Hono) {
             // 占住之后再过一遍共用者名单：**占住的那批只看 DB status**（turn 锁此刻在
             // 我们自己手里，问它只会得到「在飞」），团队调度台的常驻回合又根本不占锁，
             // status 是它唯一的凭据；名单是刚重读的，占位之后才建出来的任务两样都看。
-            const busy = (await workspaceParticipants(fresh)).find((peer) =>
+            const busy = (await workspaceParticipants(fresh, context.root.path)).find((peer) =>
               RUNNING_STATES.has(peer.status ?? "") || (!claimed.has(peer.id) && isTurnClaimed(peer.id)));
             if (busy) throw new ScmBusyError(busyLabel(taskId, busy));
           }
@@ -270,16 +276,16 @@ export function mountScmRoutes(api: Hono) {
   };
 
   write("/tasks/:id/scm/stage", (root, body, guard) =>
-    stagePaths(root.path, root.repoPath, stringList(body.paths), guard));
+    stagePaths(root.path, root.repo, stringList(body.paths), guard));
 
   write("/tasks/:id/scm/unstage", (root, body, guard) =>
-    unstagePaths(root.path, root.repoPath, stringList(body.paths), guard));
+    unstagePaths(root.path, root.repo, stringList(body.paths), guard));
 
   write("/tasks/:id/scm/discard", (root, body, guard) =>
-    discardPaths(root.path, root.repoPath, stringList(body.paths), stringList(body.deleteUntracked), guard));
+    discardPaths(root.path, root.repo, stringList(body.paths), stringList(body.deleteUntracked), guard));
 
   write("/tasks/:id/scm/commit", (root, body, guard) =>
-    commitWorkspace(root.path, root.repoPath, {
+    commitWorkspace(root.path, root.repo, {
       message: typeof body.message === "string" ? body.message : "",
       stagePaths: stringList(body.stagePaths),
       amend: body.amend === true,

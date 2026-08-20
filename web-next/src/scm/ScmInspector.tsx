@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowClockwise,
   ArrowsClockwise,
@@ -43,15 +43,18 @@ const DISCARD_HINT = "丢弃不可逆：restore 覆盖回原样、clean 直接�
  * 交代：横幅留在面板上，直到用户自己按「知道了」，或者下一次写操作成功。
  *
  * 主文案直接用后端那句话——发生了什么只有它说得准，前端按动作名硬拼准会拼错。
+ *
+ * 「下面的列表已经是实际结果」这句要看 `stale`：补刷也失败时列表并不是实际结果，那句话
+ * 会把用户按回错误的判断上，此时交给下面的 stale 横幅说实话。
  */
-function PartialBanner({ notice, onDismiss }: { notice: ScmPartialNotice; onDismiss: () => void }) {
+function PartialBanner({ notice, stale, onDismiss }: { notice: ScmPartialNotice; stale: boolean; onDismiss: () => void }) {
   const sample = notice.done.slice(0, 3).join("、");
   return (
     <p className="scm-banner is-danger">
       <WarningCircle size={13} />
       <span className="scm-banner__body">
         <span>{notice.message}</span>
-        <span>下面的列表已经是实际结果。</span>
+        {!stale && <span>下面的列表已经是实际结果。</span>}
         {notice.done.length > 0 && (
           <code>已生效：{sample}{notice.done.length > 3 ? ` 等 ${notice.done.length} 个` : ""}</code>
         )}
@@ -144,8 +147,18 @@ export function ScmInspector({
   const running = scm.overview?.taskRunning ?? false;
   // 只读时**不渲染**写按钮，而不是渲染出来再让用户吃 409：后端那两档（归档冻结、独立
   // 工作区还没建出来）不是「确认一下就能干」，点几次都不会成。理由原样摆在横幅上。
+  //
+  // 「列表可能是旧的」同样要冻住写操作，理由不同但同样硬：面板上的每一次点击都是**按
+  // 列表内容下的判断**（勾这行暂存、按那行丢弃、看着「暂存全部并提交（7）」按下去），
+  // 列表一落后于磁盘，作用的就是另一批文件。见 `scmModel.ts` 的 stale 注释。
   const readOnly = scm.overview?.readOnly ?? null;
-  const writable = <T,>(handler: T): T | undefined => (readOnly ? undefined : handler);
+  const frozen = readOnly ?? scm.stale;
+  const writable = <T,>(handler: T): T | undefined => (frozen ? undefined : handler);
+  // 确认框是**冻结前**那份列表上下的判断（「丢弃这 3 个文件」里的这 3 个）。冻结一旦
+  // 生效，它就不能留在屏幕上等人按：撤掉，让用户先刷新，再照新列表重新点一次。
+  useEffect(() => {
+    if (frozen) setConfirm(null);
+  }, [frozen]);
   const activeGroup = useMemo<ScmGroupId | null>(() => {
     if (!activeDiff) return null;
     if (activeDiff.source === "staged") return "staged";
@@ -216,7 +229,26 @@ export function ScmInspector({
         onRefresh={() => void scm.refresh()}
       />
 
-      {scm.partial && <PartialBanner notice={scm.partial} onDismiss={scm.dismissPartial} />}
+      {scm.partial && <PartialBanner notice={scm.partial} stale={!!scm.stale} onDismiss={scm.dismissPartial} />}
+      {scm.stale && (
+        // 不给「知道了」：这不是一条通知，是一个还没解除的状态。只有刷成功才算解除，
+        // 所以出口只有「重试」一个。写操作同时被 `frozen` 冻住（见上面 readOnly 那段）。
+        <p className="scm-banner is-danger">
+          <WarningCircle size={13} />
+          <span className="scm-banner__body">
+            <span>{scm.stale}</span>
+            <span>写操作已暂停，刷新成功后恢复。</span>
+          </span>
+          <button
+            type="button"
+            className="scm-banner__dismiss"
+            disabled={scm.loading || scm.busy}
+            onClick={() => void scm.refresh()}
+          >
+            重试
+          </button>
+        </p>
+      )}
       {readOnly && (
         <p className="scm-banner is-warning">
           <WarningCircle size={13} />
@@ -253,7 +285,7 @@ export function ScmInspector({
           <button
             type="button"
             className="scm-commit__submit"
-            disabled={!canCommit || scm.busy}
+            disabled={!canCommit || scm.busy || !!scm.stale}
             onClick={() => void perform({ kind: "commit", message, stagePaths: commitPaths })}
           >
             <GitCommit size={13} />
@@ -331,7 +363,7 @@ export function ScmInspector({
         </section>
       )}
 
-      {confirm && (
+      {confirm && !frozen && (
         <ConfirmDialog
           title={confirm.title}
           message={confirm.message}
