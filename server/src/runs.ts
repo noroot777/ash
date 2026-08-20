@@ -175,10 +175,37 @@ export function reclaimTurn(taskId: string, role: string): void {
 
 /** 回合结束：先放锁，再跑「等这一轮跑完」的回调（它们多半要立刻起下一轮）。 */
 export function releaseTurn(taskId: string): void {
-  turns.delete(taskId);
   // 起跑冻结标记只属于刚结束的这一回合（没被消费 = 那一轮已经自己结束了）。留着它，
   // 下一次运行会在起跑前被上一次的暂停莫名冻掉。
   startFreeze.delete(taskId);
+  endTurn(taskId);
+}
+
+/**
+ * SCM 面板要动这个任务的工作目录：**用同一把回合锁原子预占**，占不到返回 null。
+ *
+ * 为什么不是「再查一次在不在飞」：查是观察式的，`claimTurn` 不需要仓库锁，查完到真正
+ * 动手之间另一次启动完全可以合法插进来（第 2 轮审查确定性复现过：guard 观察到空闲，
+ * 其后的微任务里 claim 成功，git 命令仍照跑）。多查几次关不掉这个窗口——启动与工作区
+ * 写入必须争同一个原子对象。占住之后 `claimTurn` 会挡下新的启动，`isTurnClaimed` 也会
+ * 让归档/验收/派审这些既有守卫一并退避，不必在每个调用点再加一道。
+ *
+ * 和真回合的唯一差别是**不碰起跑冻结**：这不是一个回合，清掉它会把上一次真回合留下的
+ * 暂停意图吃掉。释放函数可重复调用（写操作的 finally 与错误路径可能都走到）。
+ */
+export function claimWorkspaceTurn(taskId: string): (() => void) | null {
+  if (!claimTurn(taskId, "scm")) return null;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    endTurn(taskId);
+  };
+}
+
+/** 放锁 + 跑「等这一轮跑完」的回调。回合与 SCM 预占共用（前者另外还要清起跑冻结）。 */
+function endTurn(taskId: string): void {
+  turns.delete(taskId);
   const waiting = afterTurn.get(taskId);
   if (!waiting) return;
   afterTurn.delete(taskId);

@@ -194,6 +194,12 @@ export type ScmOverview = {
   root: FileWorkspaceRoot;
   /** 任务此刻在不在跑。写操作要不要弹「agent 正在写这个目录」的确认，看它。 */
   taskRunning: boolean;
+  /**
+   * 这个工作目录**不能写**的理由（能写就是 null）。归档任务、以及独立工作区还没建出来
+   * 因而回退到项目主仓的任务都在此列——后端一律 409，面板据此收起写按钮并把这句话摆出来。
+   * 跟 `taskRunning` 不是一回事：那个是「确认一下就能干」，这个是冻结，force 也不解。
+   */
+  readOnly: string | null;
   status: ScmStatus;
   commits: ScmCommit[];
 };

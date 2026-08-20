@@ -13,6 +13,7 @@
 //   • 分批操作跑到一半失败时，不许悄悄留下部分结果——删除整批拦下，索引如实报账
 //   • 预暂存成功但 commit 失败，同样要报账：文件已经在索引里，下一次提交会带上它们
 //   • 锁内复查（guard）拒绝时一步都不许做——排队等锁的几秒里 agent 可能刚被唤醒
+//   • 锁内那道是**原子占位**而不是「再查一次」：占住期间新回合必须抢不进来
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -29,6 +30,7 @@ import {
   stagePaths,
   unstagePaths,
 } from "../src/git-workspace-ops.js";
+import { claimTurn, claimWorkspaceTurn, isTurnClaimed, releaseTurn } from "../src/runs.js";
 
 const root = mkdtempSync(join(tmpdir(), "harness-scm-test-"));
 const git = (cwd: string, ...args: string[]) =>
@@ -404,6 +406,38 @@ if (!IS_WINDOWS) {
   );
   assert.equal(called, 1, "guard 必须被调用");
   assert.equal((await readScmStatus(repo)).staged.length, 0, "guard 拒绝之后索引一个字节都不许动");
+}
+
+// ── 13. 锁内那道是「占位」，不是「再查一次」 ────────────────────────────────
+//
+// 观察式复查关不掉这个窗口：claimTurn 不需要仓库锁，guard 查完到 git 命令真跑起来之间，
+// 一次启动仍能合法插进来（第 2 轮审查按这个交错确定性复现，写照样落地）。所以 guard 要
+// 原子占住这个任务，占住期间 claimTurn 必须失败——反过来也一样。
+{
+  const repo = makeRepo("atomic");
+  write(repo, "a.txt", "a\n");
+  const taskId = "t-atomic";
+  const claimedAfterGuard: boolean[] = [];
+  await stagePaths(repo, repo, ["a.txt"], () => {
+    const release = claimWorkspaceTurn(taskId);
+    assert.ok(release, "空闲任务必须占得到");
+    // 复现那个交错：guard 已经返回、git 命令还没跑完，此时另一次启动来抢回合。
+    queueMicrotask(() => claimedAfterGuard.push(claimTurn(taskId)));
+    return release;
+  });
+  assert.deepEqual(claimedAfterGuard, [false], "占住之后不许有新的回合抢进来");
+  assert.equal(isTurnClaimed(taskId), false, "写完必须把占位还回去，否则任务再也起不来");
+  assert.deepEqual(paths((await readScmStatus(repo)).staged), ["a.txt"]);
+
+  // 反方向：回合已经在跑时占不到，路由据此回「需要 force」。
+  assert.equal(claimTurn(taskId, "single"), true);
+  assert.equal(claimWorkspaceTurn(taskId), null, "有回合在跑时 SCM 不许占住工作区");
+  releaseTurn(taskId);
+  const again = claimWorkspaceTurn(taskId);
+  assert.ok(again, "回合结束之后又该占得到了");
+  again();
+  again(); // 释放函数要能重复调用：错误路径与 finally 可能都走到
+  assert.equal(isTurnClaimed(taskId), false);
 }
 
 // ── 10. 截断标记 ────────────────────────────────────────────────────────────

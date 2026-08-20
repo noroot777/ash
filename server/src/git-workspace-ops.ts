@@ -70,13 +70,27 @@ export interface ScmWriteResult {
 }
 
 /**
- * 拿到仓库锁之后、动手之前再问一次「现在还能写吗」。
+ * 拿到仓库锁之后、动手之前**原子占住这个任务**，返回一个释放函数（写操作在 finally 里
+ * 调它）。
  *
  * 路由层进门时查过一次任务在不在飞，但排 `withRepoLock` 可能等上几秒（验收合并正占着
- * 锁），这几秒里 agent 完全可能被唤醒开跑——进门时的判断到动手时已经过期。所以判据要在
- * 锁内复查一次，抛出的错误由路由翻译成「需要 force」。
+ * 锁），这几秒里 agent 完全可能被唤醒开跑——进门时的判断到动手时已经过期。而**再查一次
+ * 也不够**：查是观察式的，任务启动那把锁不需要仓库锁，查完到 git 命令真跑起来之间，另
+ * 一次启动仍能合法插进来（第 2 轮审查确定性复现）。所以这一步必须是「占住」而不是
+ * 「看一眼」：占不到就抛，由路由翻译成「需要 force」。
  */
-export type ScmGuard = () => void | Promise<void>;
+export type ScmRelease = (() => void) | void;
+export type ScmGuard = () => ScmRelease | Promise<ScmRelease>;
+
+/** 占住 → 干活 → 无论成败都还回去。四个写操作的公共骨架。 */
+async function guarded<T>(guard: ScmGuard | undefined, run: () => Promise<T>): Promise<T> {
+  const release = await guard?.();
+  try {
+    return await run();
+  } finally {
+    release?.();
+  }
+}
 
 async function git(root: string, args: string[]): Promise<string> {
   try {
@@ -167,8 +181,7 @@ export async function stagePaths(
   guard?: ScmGuard,
 ): Promise<ScmWriteResult> {
   const targets = assertPathShape(paths);
-  return withRepoLock(repoPath, async () => {
-    await guard?.();
+  return withRepoLock(repoPath, () => guarded(guard, async () => {
     await gateScmPaths(root, { paths: targets });
     // `add -A` 而不是 `add`：只有前者会把「文件被删了」也记进索引，否则删除永远暂存不上。
     const affected = await runAll("暂存", [{
@@ -176,7 +189,7 @@ export async function stagePaths(
       run: (batch) => git(root, ["add", "-A", "--", ...batch.map(literalPathspec)]),
     }]);
     return { ok: true as const, affected };
-  });
+  }));
 }
 
 /**
@@ -195,8 +208,7 @@ export async function unstagePaths(
   guard?: ScmGuard,
 ): Promise<ScmWriteResult> {
   const targets = assertPathShape(paths);
-  return withRepoLock(repoPath, async () => {
-    await guard?.();
+  return withRepoLock(repoPath, () => guarded(guard, async () => {
     await gateScmPaths(root, { paths: targets });
     const affected = await runAll("取消暂存", [{
       paths: targets,
@@ -213,7 +225,7 @@ export async function unstagePaths(
       },
     }]);
     return { ok: true as const, affected };
-  });
+  }));
 }
 
 /**
@@ -236,8 +248,7 @@ export async function discardPaths(
   const tracked = paths.length ? assertPathShape(paths) : [];
   const untracked = deleteUntracked.length ? assertPathShape(deleteUntracked) : [];
   if (!tracked.length && !untracked.length) throw new ScmOperationError("没有指定文件");
-  return withRepoLock(repoPath, async () => {
-    await guard?.();
+  return withRepoLock(repoPath, () => guarded(guard, async () => {
     // 一次读，两道闸：路径得在列表里，且不许是冲突中的文件。锁内读到的才是即将被操作的那份。
     await gateScmPaths(root, { paths: [...tracked, ...untracked], rejectConflicted: true });
     if (untracked.length) await assertRemovable(root, untracked);
@@ -249,7 +260,7 @@ export async function discardPaths(
       { paths: untracked, run: (batch) => git(root, ["clean", "-f", "--", ...batch.map(literalPathspec)]) },
     ], "改动找不回来");
     return { ok: true as const, affected };
-  });
+  }));
 }
 
 export interface ScmCommitOptions {
@@ -287,8 +298,7 @@ export async function commitWorkspace(
   const message = options.message.trim();
   if (!message) throw new ScmOperationError("提交信息不能为空");
   const toStage = options.stagePaths?.length ? assertPathShape(options.stagePaths) : [];
-  return withRepoLock(repoPath, async () => {
-    await guard?.();
+  return withRepoLock(repoPath, () => guarded(guard, async () => {
     if (toStage.length) {
       await gateScmPaths(root, { paths: toStage });
       await runAll("提交前的暂存", [{
@@ -317,5 +327,5 @@ export async function commitWorkspace(
     const { stdout } = await exec("git", ["-C", root, "log", "-1", "--format=%H%x1f%s"]);
     const [sha, subject] = stdout.trim().split("\x1f");
     return { ok: true as const, sha, subject: subject ?? message };
-  });
+  }));
 }

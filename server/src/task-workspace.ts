@@ -47,6 +47,35 @@ export async function refreshTaskBase(task: WorkspaceTask, repoPath: string): Pr
   return fallback;
 }
 
+/** `isolatedWorkspaceOwner` 要读 mode（团队执行者是否跟随调度台），比执行路径多一个字段。 */
+type OwnerTask = WorkspaceTask & Pick<typeof tasks.$inferSelect, "mode">;
+
+/**
+ * 这个任务真跑起来时会落在**谁的独立工作区**里：返回那个 worktree 的归属任务 id，
+ * 直接在项目仓库里干活则返回 null。**只读，绝不建目录**。
+ *
+ * 判据必须跟下面 `taskWorkspace` 是同一棵决策树，不能拿 `task.useWorktree` 当答案：
+ * 那个字段在单飞任务和团队执行者身上语义相反（执行者的 false = 跟随调度台的工作区，
+ * 而调度台自己可能正开着 worktree）。审查任务同理，要跟到被审任务身上去。
+ *
+ * 用途是给只读解析（`taskFileRoot`）配一个「它本来该在哪」的对照：两者对不上——该有
+ * 独立工作区、实际却回退到了项目主仓——说明那个目录还没建出来，此时任何写操作都会打在
+ * 项目主工作区上。
+ */
+export async function isolatedWorkspaceOwner(task: OwnerTask): Promise<string | null> {
+  if (task.reviewOf) {
+    const target = (await db.select().from(tasks).where(eq(tasks.id, task.reviewOf))).at(0);
+    if (target && target.projectId === task.projectId && !target.reviewOf) {
+      return isolatedWorkspaceOwner(target);
+    }
+  }
+  if (task.useWorktree) return task.id;
+  if (!task.parentId) return null;
+  const parent = (await db.select().from(tasks).where(eq(tasks.id, task.parentId))).at(0);
+  if (!parent || parent.mode !== "team" || parent.projectId !== task.projectId) return null;
+  return parent.useWorktree ? parent.id : null;
+}
+
 async function directWorkspace(task: WorkspaceTask, repoPath: string): Promise<Workspace> {
   if (!task.useWorktree) return resolveWorkspace(repoPath, task.id);
   const ws = await prepareWorktree(repoPath, task.id, task.worktreeBase);

@@ -141,6 +141,10 @@ export function ScmInspector({
 
   const status = scm.overview?.status ?? null;
   const running = scm.overview?.taskRunning ?? false;
+  // 只读时**不渲染**写按钮，而不是渲染出来再让用户吃 409：后端那两档（归档冻结、独立
+  // 工作区还没建出来）不是「确认一下就能干」，点几次都不会成。理由原样摆在横幅上。
+  const readOnly = scm.overview?.readOnly ?? null;
+  const writable = <T,>(handler: T): T | undefined => (readOnly ? undefined : handler);
   const activeGroup = useMemo<ScmGroupId | null>(() => {
     if (!activeDiff) return null;
     if (activeDiff.source === "staged") return "staged";
@@ -212,6 +216,12 @@ export function ScmInspector({
       />
 
       {scm.partial && <PartialBanner notice={scm.partial} onDismiss={scm.dismissPartial} />}
+      {readOnly && (
+        <p className="scm-banner is-warning">
+          <WarningCircle size={13} />
+          {readOnly}
+        </p>
+      )}
       {status.operation && (
         <p className="scm-banner is-warning">
           <ArrowsClockwise size={13} />
@@ -231,23 +241,25 @@ export function ScmInspector({
         </p>
       )}
 
-      <section className="scm-commit">
-        <textarea
-          value={message}
-          rows={2}
-          placeholder={status.staged.length ? "提交信息（提交已暂存的改动）" : "提交信息（没有暂存内容时，提交全部改动）"}
-          onChange={(event) => setMessage(event.target.value)}
-        />
-        <button
-          type="button"
-          className="scm-commit__submit"
-          disabled={!canCommit || scm.busy}
-          onClick={() => void perform({ kind: "commit", message, stagePaths: commitPaths })}
-        >
-          <GitCommit size={13} />
-          {status.staged.length ? `提交已暂存（${status.staged.length}）` : `暂存全部并提交（${commitPaths?.length ?? 0}）`}
-        </button>
-      </section>
+      {!readOnly && (
+        <section className="scm-commit">
+          <textarea
+            value={message}
+            rows={2}
+            placeholder={status.staged.length ? "提交信息（提交已暂存的改动）" : "提交信息（没有暂存内容时，提交全部改动）"}
+            onChange={(event) => setMessage(event.target.value)}
+          />
+          <button
+            type="button"
+            className="scm-commit__submit"
+            disabled={!canCommit || scm.busy}
+            onClick={() => void perform({ kind: "commit", message, stagePaths: commitPaths })}
+          >
+            <GitCommit size={13} />
+            {status.staged.length ? `提交已暂存（${status.staged.length}）` : `暂存全部并提交（${commitPaths?.length ?? 0}）`}
+          </button>
+        </section>
+      )}
 
       {clean ? (
         <p className="scm-hint">工作区干净，没有未提交的改动。</p>
@@ -262,7 +274,7 @@ export function ScmInspector({
             hint="解决冲突后暂存，即等于标记为已解决。冲突文件不提供丢弃。"
             actions={{
               onOpen: (change) => onOpenDiff({ path: change.path, source: diffSourceOf("merge"), origPath: null }),
-              onStage: (paths) => void perform({ kind: "stage", paths }),
+              onStage: writable((paths: string[]) => void perform({ kind: "stage", paths })),
             }}
           />
           <ScmChangeGroup
@@ -273,7 +285,7 @@ export function ScmInspector({
             activeGroup={activeGroup}
             actions={{
               onOpen: (change) => onOpenDiff({ path: change.path, source: "staged", origPath: change.origPath }),
-              onUnstage: (paths) => void perform({ kind: "unstage", paths }),
+              onUnstage: writable((paths: string[]) => void perform({ kind: "unstage", paths })),
             }}
           />
           <ScmChangeGroup
@@ -284,8 +296,8 @@ export function ScmInspector({
             activeGroup={activeGroup}
             actions={{
               onOpen: (change) => onOpenDiff({ path: change.path, source: "unstaged", origPath: null }),
-              onStage: (paths) => void perform({ kind: "stage", paths }),
-              onDiscard: (changes) => askDiscard(changes, "unstaged"),
+              onStage: writable((paths: string[]) => void perform({ kind: "stage", paths })),
+              onDiscard: writable((changes: ScmChange[]) => askDiscard(changes, "unstaged")),
             }}
           />
           <ScmChangeGroup
@@ -296,8 +308,8 @@ export function ScmInspector({
             activeGroup={activeGroup}
             actions={{
               onOpen: (change) => onOpenDiff({ path: change.path, source: "untracked", origPath: null }),
-              onStage: (paths) => void perform({ kind: "stage", paths }),
-              onDiscard: (changes) => askDiscard(changes, "untracked"),
+              onStage: writable((paths: string[]) => void perform({ kind: "stage", paths })),
+              onDiscard: writable((changes: ScmChange[]) => askDiscard(changes, "untracked")),
             }}
           />
         </div>
