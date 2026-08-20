@@ -12,10 +12,11 @@ import { dirname, join } from "node:path";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { projects, sessions, tasks } from "./db/schema.js";
+import { claudeProjectSlug } from "./handoff.js";
 import {
-  claudeProjectSlug, HandoffError, safeRel,
+  HandoffError, MAX_FILE_BYTES, MB, safeRel,
   type HandoffManifest, type HandoffFilePayload,
-} from "./handoff.js";
+} from "./handoff-types.js";
 import { ensureWorkdir, expandHome, prepareWorktree, projectHealthLight, worktreePathFor } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { DATA_DIR, RUNS_DIR } from "./paths.js";
@@ -28,8 +29,6 @@ import { promisify } from "node:util";
 import type { TaskHandoff } from "@harness/shared";
 
 const exec = promisify(execFile);
-const MB = 1024 * 1024;
-const MAX_FILE_BYTES = 100 * MB;
 
 // 导入只接受**已结算**的状态;running/queued 混进来(理论上不该有)一律落 canceled,
 // 假 running 会骗过所有「在跑」判断却没有任何进程。

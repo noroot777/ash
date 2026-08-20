@@ -12,10 +12,8 @@ import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { projects, sessions, tasks } from "./db/schema.js";
 import { projectHealthLight } from "./git.js";
-import {
-  exportHandoff, HandoffError, preflightHandoff, repoRefTips,
-  type HandoffPingResponse,
-} from "./handoff.js";
+import { exportHandoff, preflightHandoff, repoRefTips } from "./handoff.js";
+import { HandoffError, type HandoffPingResponse } from "./handoff-types.js";
 import { importHandoff } from "./handoff-import.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { sessionTranscriptPath, TURN_SENTINEL } from "./transcript.js";

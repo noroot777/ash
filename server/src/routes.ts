@@ -42,6 +42,7 @@ import { hostInfo } from "./platform.js";
 import { mountSkillRoutes } from "./skill-routes.js";
 import { mountModelRoutes } from "./model-routes.js";
 import { mountTaskRoutes } from "./task-routes.js";
+import { mountGroupRoutes } from "./group-routes.js";
 import { mountTaskRunRoutes } from "./task-run-routes.js";
 import { mountHandoffRoutes } from "./handoff-routes.js";
 import { mountFileRoutes } from "./file-routes.js";
@@ -540,6 +541,8 @@ api.post("/groups/resolve", async (c) => {
 });
 
 mountTaskRoutes(api);
+// 分组(批次容器)路由:列表/运行/暂停/批量建任务(从 task-routes.ts 拆出)。
+mountGroupRoutes(api);
 mountTaskRunRoutes(api);
 // 任务接力:探活/预检/导出/导入(实现在 ./handoff.ts 与 ./handoff-import.ts)。
 mountHandoffRoutes(api);

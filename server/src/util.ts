@@ -3,6 +3,10 @@ import { nanoid } from "nanoid";
 export const id = () => nanoid(12);
 export const now = () => new Date().toISOString();
 
+// 任务正文里的 {{TASK_ID}} 占位符在建行时替换成真实 id（单建与批量两条路共用）。
+export const taskBody = (body: string | undefined, taskId: string): string =>
+  (body ?? "").replaceAll("{{TASK_ID}}", taskId);
+
 // Agents read attachments off disk, not stdin. Append the absolute paths of any
 // pasted images/files as a trailing block so the agent knows to Read them
 // (Read renders images and reads files alike).
