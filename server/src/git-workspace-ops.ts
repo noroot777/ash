@@ -7,7 +7,7 @@ import { literalPathspec, readScmStatus, type ScmChange, type ScmStatus } from "
 import { assertPathShape, gateScmPaths, scmNestedPaths, ScmOperationError } from "./scm-paths.js";
 import { withRepoLock } from "./repo-lock.js";
 
-// ── 工作区 SCM 的写侧：暂存 / 取消暂存 / 丢弃 / 提交 ─────────────────────────
+// ── 工作区 SCM 的写侧：暂存 / 取消暂存 / 丢弃 / 提交 / 推送 ───────────────────
 //
 // 四条贯穿全文件的决定：
 //
@@ -33,9 +33,10 @@ import { withRepoLock } from "./repo-lock.js";
 //    失败后**重读状态**逐条算出来的，不是「跑完几批」（见 `runAll`）——路由再连同刷新
 //    后的状态回给面板。
 //
-// ④ **不做 push / pull / fetch / 切分支。** 前两个是外发到远程，后两个会把正在干活的
-//    agent 的脚下抽掉（harness 的整个 worktree 模型建立在「一个任务一条分支」上）。
-//    面板的职责边界是「看清楚并收尾本地改动」，越过这条线的动作应该由用户显式发起。
+// ④ **只做显式 push，不做 pull / fetch / 切分支。** push 只发送当前 HEAD 到当前分支的
+//    upstream；没有 upstream 时必须点「发布分支」，并明确指定已配置的 remote。它不偷偷
+//    pull、不 force、不依赖 push.default，避免一次按钮把别的分支一起送出去。pull / fetch /
+//    切分支会改变 agent 脚下的历史或工作树，仍不属于这个面板。
 
 const exec = promisify(execFile);
 
@@ -72,6 +73,14 @@ export interface ScmWriteResult {
   affected: number;
   /** 这次**没**照做的那部分（目前只有嵌套仓），随成功提示一起说给用户听。 */
   note?: string;
+}
+
+export interface ScmPushResult {
+  ok: true;
+  remote: string;
+  branch: string;
+  published: boolean;
+  pushed: number | null;
 }
 
 const NESTED_WHY = "只能在它自己的仓库里操作";
@@ -457,5 +466,76 @@ export async function commitWorkspace(
         note,
       };
     }
+  }));
+}
+
+/**
+ * 推送当前分支。目标始终写全为 `remote HEAD:refs/heads/<branch>`，不读取 `push.default`；
+ * 发布时才写 upstream。禁掉终端凭据提示，避免无人值守的服务端请求永久挂住。
+ */
+export async function pushWorkspace(
+  root: string,
+  repoPath: string | null,
+  requestedRemote: string | null,
+  guard?: ScmGuard,
+): Promise<ScmPushResult> {
+  return withRepoLock(repoPath, () => guarded(guard, async () => {
+    const status = await readScmStatus(root);
+    const branch = status.branch.head;
+    if (!branch || status.branch.detached) {
+      throw new ScmOperationError("游离 HEAD 或尚未创建分支时不能推送；请先在终端创建分支。", 409);
+    }
+
+    const { stdout: remoteOutput } = await exec("git", ["-C", root, "remote"]);
+    const remotes = remoteOutput.split("\n").map((name) => name.trim()).filter(Boolean);
+    let remote: string;
+    let remoteBranch = branch;
+    let published = false;
+    if (status.branch.upstream) {
+      try {
+        const [{ stdout: remoteOutput }, { stdout: mergeOutput }] = await Promise.all([
+          exec("git", ["-C", root, "config", "--get", `branch.${branch}.remote`]),
+          exec("git", ["-C", root, "config", "--get", `branch.${branch}.merge`]),
+        ]);
+        remote = remoteOutput.trim();
+        const mergeRef = mergeOutput.trim();
+        if (!mergeRef.startsWith("refs/heads/")) throw new Error("unsupported upstream ref");
+        remoteBranch = mergeRef.slice("refs/heads/".length);
+      } catch {
+        throw new ScmOperationError(`分支 ${branch} 显示有 upstream，但读不到它对应的远端。`, 409);
+      }
+      if (!remote || remote === ".") {
+        throw new ScmOperationError(`分支 ${branch} 的 upstream 不是可推送的远端。`, 409);
+      }
+    } else {
+      remote = requestedRemote?.trim() || "";
+      if (!remote) throw new ScmOperationError("这个分支还没有 upstream；请选择远端后发布分支。", 409);
+      if (!remotes.includes(remote)) throw new ScmOperationError(`远端 ${remote} 不存在，请刷新后重试。`, 409);
+      published = true;
+    }
+
+    if (!remotes.includes(remote)) {
+      throw new ScmOperationError(`upstream 对应的远端 ${remote} 已不存在，请先修复分支配置。`, 409);
+    }
+
+    const args = ["-C", root, "push"];
+    if (published) args.push("--set-upstream");
+    args.push("--", remote, `HEAD:refs/heads/${remoteBranch}`);
+    try {
+      await exec("git", args, {
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+        timeout: 120_000,
+        maxBuffer: 8 * 1024 * 1024,
+      });
+    } catch (error) {
+      throw new ScmOperationError(`推送失败：${oneLine(gitError(error))}`, 409);
+    }
+    return {
+      ok: true,
+      remote,
+      branch: remoteBranch,
+      published,
+      pushed: status.branch.ahead,
+    };
   }));
 }

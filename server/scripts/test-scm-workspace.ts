@@ -21,12 +21,13 @@ import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, sy
 import { access, constants } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseStatusV2, readScmFileDiff, readScmStatus } from "../src/git-status.js";
+import { parseStatusV2, readScmFileDiff, readScmRemotes, readScmStatus } from "../src/git-status.js";
 import { IS_WINDOWS } from "../src/platform.js";
 import { assertInsideRoot, assertPathShape, gateScmPaths, ScmOperationError } from "../src/scm-paths.js";
 import {
   commitWorkspace,
   discardPaths,
+  pushWorkspace,
   ScmPartialError,
   stagePaths,
   unstagePaths,
@@ -623,6 +624,49 @@ if (!IS_WINDOWS) {
   const parsed = parseStatusV2(`# branch.head main\0${many}\0`);
   assert.equal(parsed.truncated, true, "超过上限必须报截断，面板要说清楚没列全");
   assert.equal(parsed.untracked.length, 2000);
+}
+
+// ── 15. 发布分支 / 推送只发送当前 HEAD，并正确维护 upstream ───────────────────
+{
+  const repo = makeRepo("push");
+  const remote = join(root, "push-remote.git");
+  execFileSync("git", ["init", "--bare", remote]);
+  git(repo, "remote", "add", "origin", remote);
+  write(repo, "one.txt", "one\n");
+  git(repo, "add", "one.txt");
+  git(repo, "commit", "-m", "one");
+
+  assert.deepEqual(await readScmRemotes(repo), ["origin"]);
+  await assert.rejects(
+    () => pushWorkspace(repo, repo, "missing"),
+    (error: unknown) => error instanceof ScmOperationError && /远端 missing 不存在/.test(error.message),
+  );
+  const published = await pushWorkspace(repo, repo, "origin");
+  assert.equal(published.published, true);
+  assert.equal(published.remote, "origin");
+  assert.equal(git(repo, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"), "origin/main");
+  assert.equal(git(remote, "rev-parse", "refs/heads/main"), git(repo, "rev-parse", "HEAD"));
+
+  write(repo, "two.txt", "two\n");
+  git(repo, "add", "two.txt");
+  git(repo, "commit", "-m", "two");
+  const pushed = await pushWorkspace(repo, repo, null);
+  assert.equal(pushed.published, false);
+  assert.equal(pushed.pushed, 1);
+  assert.equal(git(remote, "rev-parse", "refs/heads/main"), git(repo, "rev-parse", "HEAD"));
+
+  // upstream 的远端分支不一定和本地同名；不能看见 origin/release 却擅自推到 origin/main。
+  const mainBefore = git(remote, "rev-parse", "refs/heads/main");
+  git(remote, "update-ref", "refs/heads/release", mainBefore);
+  git(repo, "fetch", "origin", "release:refs/remotes/origin/release");
+  git(repo, "config", "branch.main.merge", "refs/heads/release");
+  write(repo, "three.txt", "three\n");
+  git(repo, "add", "three.txt");
+  git(repo, "commit", "-m", "three");
+  const tracked = await pushWorkspace(repo, repo, null);
+  assert.equal(tracked.branch, "release");
+  assert.equal(git(remote, "rev-parse", "refs/heads/release"), git(repo, "rev-parse", "HEAD"));
+  assert.equal(git(remote, "rev-parse", "refs/heads/main"), mainBefore, "不能顺手推进同名远端分支");
 }
 
 rmSync(root, { recursive: true, force: true });

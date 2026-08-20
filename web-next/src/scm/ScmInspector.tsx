@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ArrowClockwise,
+  ArrowUp,
   ArrowsClockwise,
   GitBranch,
   GitCommit,
@@ -76,12 +77,21 @@ interface PendingConfirm {
 
 /** 有任务在这个目录里跑时的二次确认。把「谁在写、写坏了会怎样」说完整，而不是一句「确定吗」。 */
 function forceConfirm(action: ScmAction, reason: string): PendingConfirm {
-  const verb = action.kind === "commit" ? "提交" : action.kind === "discard" ? "丢弃" : "改动暂存区";
+  const verb = action.kind === "commit"
+    ? "提交"
+    : action.kind === "discard"
+      ? "丢弃"
+      : action.kind === "push"
+        ? "推送"
+        : "改动暂存区";
+  const consequence = action.kind === "push"
+    ? "推送可能刚好撞上 agent 的新提交，远端收到哪一个 HEAD 会变得不可预测。"
+    : "提交可能收进它写到一半的文件，丢弃可能抹掉它刚写出来、还没提交的成果。";
   return {
     action,
     // 具体是谁在跑由后端那句 `reason` 说（可能是共用这个目录的兄弟任务），标题只管定性。
     title: "有任务正在这个工作目录里运行",
-    message: `${reason}\n\n继续会在 agent 干活的同时${verb}：提交可能收进它写到一半的文件，丢弃可能抹掉它刚写出来、还没提交的成果。`,
+    message: `${reason}\n\n继续会在 agent 干活的同时${verb}：${consequence}`,
     confirmLabel: `仍然${verb}`,
     danger: true,
     force: true,
@@ -92,15 +102,30 @@ function BranchBar({
   branch,
   rootPath,
   rootSource,
+  remotes,
+  onPush,
   onRefresh,
   refreshing,
+  pushing,
+  frozen,
 }: {
   branch: { head: string | null; detached: boolean; upstream: string | null; ahead: number | null; behind: number | null };
   rootPath: string;
   rootSource: keyof typeof ROOT_SOURCE_LABEL;
+  remotes: string[];
+  onPush: (remote: string | null) => void;
   onRefresh: () => void;
   refreshing: boolean;
+  pushing: boolean;
+  frozen: boolean;
 }) {
+  const [remote, setRemote] = useState("");
+  useEffect(() => {
+    if (remotes.includes(remote)) return;
+    setRemote(remotes.includes("origin") ? "origin" : remotes[0] ?? "");
+  }, [remote, remotes]);
+  const publish = !branch.upstream;
+  const canPush = !branch.detached && !!branch.head && (!publish || !!remote);
   return (
     <header className="scm-branch">
       <span className="scm-branch__name">
@@ -124,6 +149,25 @@ function BranchBar({
         <ArrowClockwise size={13} />
       </button>
       <small className="scm-branch__root">{ROOT_SOURCE_LABEL[rootSource]} · {rootPath}</small>
+      {!frozen && (
+        <span className="scm-branch__push-row">
+          {publish && remotes.length > 1 && (
+            <select aria-label="发布分支到远端" value={remote} onChange={(event) => setRemote(event.target.value)}>
+              {remotes.map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+          )}
+          {publish && remotes.length === 0 && <small>未配置 Git 远端，暂时不能发布分支。</small>}
+          <button
+            type="button"
+            className="scm-branch__push"
+            disabled={!canPush || pushing}
+            onClick={() => onPush(publish ? remote : null)}
+          >
+            {pushing ? <ArrowsClockwise size={13} className="is-spinning" /> : <ArrowUp size={13} weight="bold" />}
+            {publish ? `发布分支${remote ? `到 ${remote}` : ""}` : (branch.ahead ?? 0) > 0 ? `推送 ${branch.ahead} 个提交` : "推送"}
+          </button>
+        </span>
+      )}
     </header>
   );
 }
@@ -231,8 +275,12 @@ export function ScmInspector({
         branch={status.branch}
         rootPath={scm.overview.root.path}
         rootSource={scm.overview.root.source}
+        remotes={scm.overview.remotes}
+        onPush={(remote) => void perform({ kind: "push", remote })}
         refreshing={scm.loading || scm.busy}
         onRefresh={() => void scm.refresh()}
+        pushing={scm.busy}
+        frozen={!!frozen}
       />
 
       {scm.partial && <PartialBanner notice={scm.partial} stale={!!scm.stale} onDismiss={scm.dismissPartial} />}

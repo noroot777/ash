@@ -212,6 +212,8 @@ export type ScmOverview = {
   readOnly: string | null;
   status: ScmStatus;
   commits: ScmCommit[];
+  /** 仅含远端名；URL 可能带凭据，不下发。 */
+  remotes: string[];
 };
 
 export type ScmFileDiff = {
@@ -248,6 +250,16 @@ export type ScmCommitResult = {
   warning?: string;
   /** 预暂存时跳过的那部分——用户以为它们进了这次提交。 */
   note?: string;
+  status?: ScmStatus;
+};
+
+export type ScmPushResult = {
+  ok: true;
+  remote: string;
+  branch: string;
+  published: boolean;
+  /** 推送前相对 upstream 的领先提交数；首次发布时无法可靠计算。 */
+  pushed: number | null;
   status?: ScmStatus;
 };
 

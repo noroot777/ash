@@ -6,12 +6,14 @@ import { taskFileRoot, type WorkspaceRoot } from "./file-browser.js";
 import {
   readScmCommits,
   readScmFileDiff,
+  readScmRemotes,
   readScmStatus,
   type ScmDiffSource,
 } from "./git-status.js";
 import {
   commitWorkspace,
   discardPaths,
+  pushWorkspace,
   ScmOperationError,
   ScmPartialError,
   stagePaths,
@@ -93,6 +95,7 @@ interface ScmRequestBody {
   stagePaths?: unknown;
   amend?: unknown;
   force?: unknown;
+  remote?: unknown;
 }
 
 function stringList(value: unknown): string[] {
@@ -158,9 +161,10 @@ export function mountScmRoutes(api: Hono) {
     const context = await gitRootOr(c.req.param("id"));
     if ("error" in context) return c.json({ error: context.error }, context.status);
     try {
-      const [status, commits, readOnly] = await Promise.all([
+      const [status, commits, remotes, readOnly] = await Promise.all([
         readScmStatus(context.root.path),
         readScmCommits(context.root.path),
+        readScmRemotes(context.root.path),
         readOnlyReason(context.task, context.root),
       ]);
       return c.json({
@@ -171,6 +175,7 @@ export function mountScmRoutes(api: Hono) {
         readOnly,
         status,
         commits,
+        remotes,
       });
     } catch (error) {
       return c.json({ error: errorMessage(error) }, 500);
@@ -306,4 +311,7 @@ export function mountScmRoutes(api: Hono) {
       stagePaths: stringList(body.stagePaths),
       amend: body.amend === true,
     }, guard));
+
+  write("/tasks/:id/scm/push", (root, body, guard) =>
+    pushWorkspace(root.path, root.repo, typeof body.remote === "string" ? body.remote : null, guard));
 }

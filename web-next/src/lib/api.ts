@@ -53,6 +53,7 @@ import type {
   ScmDiffSource,
   ScmFileDiff,
   ScmOverview,
+  ScmPushResult,
   ScmWriteResult,
   SessionTraceEntry,
   TaskCommit,
@@ -340,6 +341,8 @@ export const api = {
     options: { stagePaths?: string[]; amend?: boolean; force?: boolean } = {},
   ): Promise<ScmCommitResult> =>
     request(`/tasks/${id(taskId)}/scm/commit`, json("POST", { message, ...options })),
+  scmPush: (taskId: string, remote: string | null, force = false): Promise<ScmPushResult> =>
+    request(`/tasks/${id(taskId)}/scm/push`, json("POST", { remote, force })),
 
   notes: (projectId?: string): Promise<Note[]> =>
     request(`/notes${projectId ? `?projectId=${id(projectId)}` : ""}`),

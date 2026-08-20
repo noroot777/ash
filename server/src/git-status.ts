@@ -235,6 +235,12 @@ export async function readScmCommits(root: string, limit = MAX_COMMITS): Promise
   }
 }
 
+/** 可用于发布当前分支的远端名。只返回名字，不把可能含凭据的 URL 带到前端。 */
+export async function readScmRemotes(root: string): Promise<string[]> {
+  const { stdout } = await exec("git", ["-C", root, "remote"]);
+  return stdout.split("\n").map((name) => name.trim()).filter(Boolean).sort();
+}
+
 /**
  * pathspec 一律加 `:(literal)` 前缀。
  *
