@@ -171,8 +171,27 @@ export interface HandoffImportResult {
   notes: string[];
 }
 
+// 同一 task id 的导入互斥闸:两个请求同时过掉下面的 existing 检查后,输家会撞
+// tasks.id UNIQUE,而它的补偿回滚曾按公共 task id 无条件清理,把赢家刚建好的任务
+// 也删掉(审查实测:req1 200、req2 500、最终 GET 404)。这种并发不需要恶意——应答
+// 丢失后用户重试时,上一次导入可能还在本机处理中。进程内按 task id 串行(本机 DB
+// 有单实例锁,不存在跨进程写方),后来者 409 让源机稍后原样重放收口。
+const importsInFlight = new Set<string>();
+
 export async function importHandoff(input: unknown): Promise<HandoffImportResult> {
   const m = validate(input);
+  if (importsInFlight.has(m.task.id)) {
+    throw new HandoffError("这个任务的另一次导入还在本机进行中,等它落定后再原样重试", 409);
+  }
+  importsInFlight.add(m.task.id);
+  try {
+    return await importValidated(m);
+  } finally {
+    importsInFlight.delete(m.task.id);
+  }
+}
+
+async function importValidated(m: HandoffManifest): Promise<HandoffImportResult> {
   const notes: string[] = [];
   const project = (await db.select().from(projects).where(eq(projects.id, m.targetProjectId))).at(0);
   if (!project) throw new HandoffError("目标项目不存在(对端项目清单可能过期,重新预检)", 404);
@@ -304,6 +323,9 @@ export async function importHandoff(input: unknown): Promise<HandoffImportResult
     git: useWorktree && m.git ? "bundle" : "none",
   };
   const status = SETTLED.has(m.task.status) ? m.task.status : "canceled";
+  // 任务行真的插进去了才置真:插入本身撞 UNIQUE 时,库里那行是别人(或历史)的,
+  // 补偿回滚绝不能按公共 task id 把它删掉。
+  let taskRowInserted = false;
   try {
     // sessions 作为 afterInsert 塞进 createTasks:会话插入失败时 task.created 广播还没发,
     // 回滚后前端不会闪过「幽灵任务」;成功时广播出去的任务已带全会话。
@@ -343,6 +365,8 @@ export async function importHandoff(input: unknown): Promise<HandoffImportResult
       handoff: JSON.stringify(marker),
       reportBack: false,
     }], async () => {
+      // createTasks 先 await 任务行插入、再调 afterInsert——走到这里说明任务行是本次建的。
+      taskRowInserted = true;
       if (!m.sessions.length) return;
       await db.insert(sessions).values(m.sessions.map((s) => ({
         id: s.id,
@@ -383,12 +407,15 @@ export async function importHandoff(input: unknown): Promise<HandoffImportResult
     });
   } catch (e) {
     // 补偿回滚:任务行 + 已插入的会话行一起清掉,不留半截任务(审查实测:UNIQUE 炸在
-    // 会话插入后,GET 200 但任务残废、重试永远 409)。git 分支/worktree/已写盘文件的
-    // 残留无害——重试会原样覆盖。
-    try {
-      await db.delete(sessions).where(eq(sessions.taskId, m.task.id));
-      await db.delete(tasks).where(eq(tasks.id, m.task.id));
-    } catch { /* 回滚自身失败没有更好的办法,错误照抛,让对端看到失败 */ }
+    // 会话插入后,GET 200 但任务残废、重试永远 409)。只清自己建的行——任务行没插成
+    // (taskRowInserted=false)说明库里那行属于别的导入,动不得。git 分支/worktree/
+    // 已写盘文件的残留无害——重试会原样覆盖。
+    if (taskRowInserted) {
+      try {
+        await db.delete(sessions).where(eq(sessions.taskId, m.task.id));
+        await db.delete(tasks).where(eq(tasks.id, m.task.id));
+      } catch { /* 回滚自身失败没有更好的办法,错误照抛,让对端看到失败 */ }
+    }
     const msg = e instanceof Error ? e.message : String(e);
     throw new HandoffError(`导入落库失败,已回滚,本机没有留下半截任务,可直接重试。原始错误:${msg.slice(0, 300)}`, 500);
   }

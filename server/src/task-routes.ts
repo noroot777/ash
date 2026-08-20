@@ -9,6 +9,7 @@ import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { agents, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks } from "./db/schema.js";
 import { repoKey } from "./git.js";
+import { handoffBlockReason } from "./handoff-guard.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 import { followUpsFor } from "./task-follow-up.js";
 import { advanceQueue, pauseGroup, runGroup } from "./scheduler.js";
@@ -264,6 +265,12 @@ api.patch("/tasks/:id", async (c) => {
       { error: "任务正在 running/queued，不能直接改状态——要停止/取消请用 stop_task（POST /tasks/:id/stop），它会终止整棵进程树并结算为 canceled", status: existing.status },
       409,
     );
+  }
+  // 接力出去的任务改 status 一律拦:改成 backlog/done 都会让「历史存档」重新参与
+  // 队列推进或验收判定,与对端正在跑的那份分叉。其它字段(标题/标签/置顶)照常可改。
+  if (b.status !== undefined) {
+    const handedOff = handoffBlockReason(existing.handoff);
+    if (handedOff) return c.json({ error: handedOff, handoff: true }, 409);
   }
   if (
     b.pinnedAt !== undefined &&

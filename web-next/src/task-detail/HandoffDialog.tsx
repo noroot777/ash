@@ -27,13 +27,17 @@ export function HandoffDialog({
   onTaskUpdate: (task: Task) => void;
 }) {
   const scrim = useRef<HTMLDivElement>(null);
+  // out+pending = 上次接力应答丢失,这次打开对话框是「原样重放收口」:目标机、对端项目、
+  // autoResume 一律沿用 pending 标记冻结的第一次参数(服务端同样硬校验,换参数 409)。
+  // 换 transferId 重发会把同一任务复制到多台机器——要换目标,先在横幅上移除接力标记。
+  const pendingHandoff = task.handoff?.direction === "out" && task.handoff.pending ? task.handoff : null;
   // null = 设置还没读回来;[] = 读回来了但一个目标都没配过。
   const [targets, setTargets] = useState<HandoffTarget[] | null>(null);
   const [targetUrl, setTargetUrl] = useState("");
   const [preflight, setPreflight] = useState<HandoffPreflightResult | null>(null);
   const [preflightError, setPreflightError] = useState<string | null>(null);
   const [projectId, setProjectId] = useState("");
-  const [autoResume, setAutoResume] = useState(true);
+  const [autoResume, setAutoResume] = useState(pendingHandoff?.autoResume ?? true);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<HandoffExportResult | null>(null);
 
@@ -45,7 +49,8 @@ export function HandoffDialog({
       .then((settings) => {
         if (!alive) return;
         setTargets(settings.handoffTargets);
-        if (settings.handoffTargets[0]) setTargetUrl(settings.handoffTargets[0].url);
+        if (pendingHandoff?.peerUrl) setTargetUrl(pendingHandoff.peerUrl);
+        else if (settings.handoffTargets[0]) setTargetUrl(settings.handoffTargets[0].url);
       })
       .catch((reason) => {
         if (!alive) return;
@@ -53,6 +58,8 @@ export function HandoffDialog({
         notify(reason instanceof Error ? reason.message : "接力目标读取失败");
       });
     return () => { alive = false; };
+    // pendingHandoff 只取对话框打开那一刻的值,任务更新不重读设置。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notify]);
 
   // 换目标就重新预检;预检只读,不停任务不动文件。
@@ -66,15 +73,20 @@ export function HandoffDialog({
       .then((probe) => {
         if (!alive) return;
         setPreflight(probe);
-        setProjectId(probe.suggestedProjectId ?? "");
+        setProjectId(pendingHandoff?.targetProjectId ?? probe.suggestedProjectId ?? "");
       })
       .catch((reason) => {
         if (alive) setPreflightError(reason instanceof Error ? reason.message : String(reason));
       });
     return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.id, targetUrl]);
 
   const target = targets?.find((item) => item.url === targetUrl) ?? null;
+  // 重放收口时冻结的目标机可能已经不在设置列表里(被删过),补一个选项让它仍可见可选。
+  const targetOptions = pendingHandoff?.peerUrl && !(targets ?? []).some((item) => item.url === pendingHandoff.peerUrl)
+    ? [{ name: pendingHandoff.peerName ?? pendingHandoff.peerUrl, url: pendingHandoff.peerUrl }, ...(targets ?? [])]
+    : targets ?? [];
   const missingFiles = preflight ? preflight.local.sessions - preflight.local.sessionFilesFound : 0;
 
   const run = async () => {
@@ -141,7 +153,7 @@ export function HandoffDialog({
               </a>
             </p>
           </>
-        ) : targets && targets.length === 0 ? (
+        ) : targets && targets.length === 0 && !pendingHandoff ? (
           <p>
             还没有配置接力目标。先到「设置 → 默认规则」里添加另一台 harness 的地址
             (形如 http://192.168.1.50:4317),再回来接力。
@@ -152,15 +164,21 @@ export function HandoffDialog({
               把这个任务连同 git 分支、CLI 会话历史整体迁到另一台 harness 上继续跑。
               {preflight?.local.running ? "任务正在运行,接力会先把它停下来。" : ""}
             </p>
+            {pendingHandoff && (
+              <p className="handoff-error">
+                <Warning size={13} aria-hidden="true" />
+                上次接力没收到确认,这次是原样重放收口:目标机、对端项目和续跑选项沿用第一次发送的参数,不能更改。确认对端没收到、想换目标,先在任务横幅上移除接力标记。
+              </p>
+            )}
             <div className="handoff-field">
               <label htmlFor="handoff-target">目标机器</label>
               <select
                 id="handoff-target"
                 value={targetUrl}
-                disabled={busy || targets === null}
+                disabled={busy || targets === null || !!pendingHandoff}
                 onChange={(event) => setTargetUrl(event.target.value)}
               >
-                {(targets ?? []).map((item) => (
+                {targetOptions.map((item) => (
                   <option key={item.url} value={item.url}>{item.name}（{item.url}）</option>
                 ))}
               </select>
@@ -178,10 +196,17 @@ export function HandoffDialog({
                   <select
                     id="handoff-project"
                     value={projectId}
-                    disabled={busy}
+                    disabled={busy || !!pendingHandoff?.targetProjectId}
                     onChange={(event) => setProjectId(event.target.value)}
                   >
                     <option value="">选择任务要落到的项目…</option>
+                    {pendingHandoff?.targetProjectId
+                      && !preflight.projects.some((project) => project.id === pendingHandoff.targetProjectId)
+                      && (
+                        <option value={pendingHandoff.targetProjectId}>
+                          上次接力的项目（{pendingHandoff.targetProjectId}）
+                        </option>
+                      )}
                     {preflight.projects.map((project) => (
                       <option key={project.id} value={project.id}>
                         {project.name}（{project.repoPath}{project.isRepo ? "" : " · 非 git"}）
@@ -209,7 +234,7 @@ export function HandoffDialog({
                   <input
                     type="checkbox"
                     checked={autoResume}
-                    disabled={busy}
+                    disabled={busy || pendingHandoff?.autoResume !== undefined}
                     onChange={(event) => setAutoResume(event.target.checked)}
                   />
                   导入完成后在对端立即续跑
@@ -220,14 +245,20 @@ export function HandoffDialog({
         )}
         <footer>
           <button type="button" disabled={busy} onClick={onClose}>{result ? "关闭" : "取消"}</button>
-          {!result && (targets?.length ?? 0) > 0 && (
+          {!result && targetOptions.length > 0 && (
             <button
               className="is-primary"
               type="button"
               disabled={busy || !preflight || !projectId}
               onClick={() => void run()}
             >
-              {busy ? "接力中…(打包并传输,可能要一会儿)" : preflight?.local.running ? "停止并接力" : "开始接力"}
+              {busy
+                ? "接力中…(打包并传输,可能要一会儿)"
+                : pendingHandoff
+                  ? "原样重发,幂等收口"
+                  : preflight?.local.running
+                    ? "停止并接力"
+                    : "开始接力"}
             </button>
           )}
         </footer>

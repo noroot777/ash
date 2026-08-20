@@ -481,8 +481,32 @@ export async function exportHandoff(
   if (prevMarker?.direction === "out" && !prevMarker.pending) {
     throw new HandoffError("任务已经接力出去了,别重复接力（对端已有一份同 id 任务）", 409);
   }
-  const transferId =
-    (prevMarker?.direction === "out" && prevMarker.pending && prevMarker.transferId) || id();
+  const pendingRetry = prevMarker?.direction === "out" && prevMarker.pending ? prevMarker : null;
+  // 收口重试只能**原样重放**:transferId 是幂等身份,换目标机/项目等于拿同一张身份证
+  // 往第二台机器投递——两边各自导入成功,同一任务被复制成多份(审查实测)。目标参数
+  // 一律以 pending 标记冻结的第一次为准;确要换目标,先在横幅上移除接力标记(终止这次
+  // transfer),再发起全新接力(新 transferId)。
+  if (pendingRetry) {
+    if (pendingRetry.peerUrl && pendingRetry.peerUrl !== targetUrl) {
+      throw new HandoffError(
+        `上次接力发往「${pendingRetry.peerName ?? pendingRetry.peerUrl}」(${pendingRetry.peerUrl})还没确认送达,收口重试必须发往同一台机器。确认对端没收到、要换目标,先在任务横幅上移除接力标记,再发起全新接力。`,
+        409,
+      );
+    }
+    // 老版本 pending 标记没有冻结字段,只能拦到机器级;新标记连项目一起锁。
+    if (pendingRetry.targetProjectId && pendingRetry.targetProjectId !== opts.targetProjectId) {
+      throw new HandoffError(
+        "上次接力还没确认送达,收口重试必须发往对端同一个项目(参数已按第一次发送冻结)。要换项目,先在任务横幅上移除接力标记,再发起全新接力。",
+        409,
+      );
+    }
+  }
+  const transferId = pendingRetry?.transferId || id();
+  // autoResume 同样冻结:重试时对端可能早已导入过(幂等分支零副作用),本次重新勾选
+  // 并不会让对端多做任何事——manifest 按第一次的值重放,返回值以对端实际应答为准。
+  const autoResume = pendingRetry && pendingRetry.autoResume !== undefined
+    ? pendingRetry.autoResume
+    : opts.autoResume ?? true;
   // 先探测对端与目标项目,确认可行再停任务——反过来会白停一个正在跑的任务。
   const ping = await fetchPeer<HandoffPingResponse>(`${targetUrl}/api/handoff/ping`);
   if (!ping?.ok || ping.service !== "harness") throw new HandoffError("对端不是 harness", 502);
@@ -518,7 +542,7 @@ export async function exportHandoff(
       sourceHost: hostname(),
       targetProjectId: targetProject.id,
       transferId,
-      autoResume: opts.autoResume ?? true,
+      autoResume,
       sourceWorkspace,
       task: {
         id: task.id, title: task.title, body: task.body,
@@ -558,6 +582,9 @@ export async function exportHandoff(
       direction: "out",
       pending: true,
       transferId,
+      // 冻结本次目标项目与 autoResume:收口重试必须原样重放(见上方 pendingRetry 校验)。
+      targetProjectId: targetProject.id,
+      autoResume,
       peerUrl: targetUrl,
       peerName: opts.targetName ?? ping.host,
       peerTaskId: taskId,
@@ -570,9 +597,9 @@ export async function exportHandoff(
       .where(eq(tasks.id, taskId));
     await publishTaskUpdated(taskId);
 
-    let result: { ok: boolean; taskId: string; notes?: string[]; error?: string };
+    let result: { ok: boolean; taskId: string; autoResume?: boolean; notes?: string[]; error?: string };
     try {
-      result = await fetchPeer<{ ok: boolean; taskId: string; notes?: string[]; error?: string }>(
+      result = await fetchPeer<{ ok: boolean; taskId: string; autoResume?: boolean; notes?: string[]; error?: string }>(
         `${targetUrl}/api/handoff/import`,
         {
           method: "POST",
@@ -628,7 +655,8 @@ export async function exportHandoff(
       remoteUrl: `${targetUrl}/tasks/${result.taskId}`,
       sessionsMigrated: found.size,
       git: gitState ? "bundle" : "none",
-      autoResume: opts.autoResume ?? true,
+      // 以对端实际应答为准:重试撞上幂等分支时对端并没有续跑,不能按本次请求参数谎报。
+      autoResume: result.autoResume ?? autoResume,
       notes,
     };
   } finally {

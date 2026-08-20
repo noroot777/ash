@@ -25,6 +25,8 @@ export function PreviewRestartButton({
 }) {
   const [busy, setBusy] = useState(false);
   const inFlight = task.status === "running" || task.status === "queued";
+  // 接力出去的任务在本机只是历史存档,重启预览会往它的工作区里跑启动命令,后端已 409。
+  const handedOff = task.handoff?.direction === "out";
 
   const restart = async () => {
     setBusy(true);
@@ -41,17 +43,19 @@ export function PreviewRestartButton({
   return (
     <>
       <div className="wf-vactions">
-        <button type="button" disabled={inFlight || busy} onClick={() => void restart()}>
+        <button type="button" disabled={inFlight || busy || handedOff} onClick={() => void restart()}>
           {busy ? <SpinnerGap size={13} className="is-spinning" /> : <ArrowClockwise size={13} />}
           <span>{busy ? "启动中" : "重启预览"}</span>
         </button>
       </div>
       <p className="wf-vnote">
-        {inFlight
-          ? "任务正在跑，跑完再重启——这会儿代码改到一半，起出来的页面谁也代表不了。"
-          : busy
-            ? "正在跑这一站的命令，等它打印出地址；起不来的话最多两分钟后报错。"
-            : "按原样再跑一次这一站，地址照常写进时间线（端口每次现借，跟上次不一样）。"}
+        {handedOff
+          ? "任务已接力到别的机器，本机这份是历史存档，不再起预览。"
+          : inFlight
+            ? "任务正在跑，跑完再重启——这会儿代码改到一半，起出来的页面谁也代表不了。"
+            : busy
+              ? "正在跑这一站的命令，等它打印出地址；起不来的话最多两分钟后报错。"
+              : "按原样再跑一次这一站，地址照常写进时间线（端口每次现借，跟上次不一样）。"}
       </p>
     </>
   );

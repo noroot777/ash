@@ -31,6 +31,7 @@ import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { agents, projects, sessions, tasks } from "./db/schema.js";
+import { handoffBlockReason } from "./handoff-guard.js";
 import {
   detectReviewCoverage,
   type ReviewCoverageFinding,
@@ -634,6 +635,9 @@ export function mountReviewRoutes(api: Hono): void {
     if (target.reviewOf) return c.json({ error: "审查任务自身不能再验" }, 409);
     if (target.mode !== "single") return c.json({ error: "当前只支持验证 single 任务", mode: target.mode }, 409);
     if (target.archived) return c.json({ error: "归档任务不能验证" }, 409);
+    // 接力出去的任务是历史存档:验证轮会真跑代码、往 worktree 里写证据,不给开。
+    const handedOff = handoffBlockReason(target.handoff);
+    if (handedOff) return c.json({ error: handedOff, handoff: true }, 409);
     if (target.status === "running" || target.status === "queued") {
       return c.json({ error: "目标仍在运行或排队，结束后再验", status: target.status }, 409);
     }

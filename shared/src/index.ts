@@ -75,6 +75,11 @@ export interface TaskHandoff {
   // 这一次接力的身份证(源机生成并持久化,导入侧存进 in 标记):重试时对端据此把
   // 「已有同 id 任务」识别成同一次接力。老版本导出的标记没有这个字段。
   transferId?: string | null;
+  // out+pending 专用:第一次发送时冻结的目标项目与 autoResume。收口重试沿用同一个
+  // transferId,所以只能对同一台机器、同一个项目原样重放——换目标会把任务复制到多台
+  // 机器(对端各自导入成功)。要换目标必须先移除标记,走全新 transferId。
+  targetProjectId?: string | null;
+  autoResume?: boolean;
   // out: 对端 harness 根地址（横幅可点过去）；in: 源机自述不了地址,为 null。
   peerUrl: string | null;
   // out: 目标配置里的名字；in: 源机主机名。

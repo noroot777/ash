@@ -5,6 +5,7 @@ import { eq, or } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import type { ConflictHandoff } from "./accept-conflict.js";
+import { handoffBlockReason } from "./handoff-guard.js";
 import { isTurnClaimed } from "./runs.js";
 
 export type AcceptWarning = {
@@ -97,6 +98,24 @@ export async function acceptanceGuard(
         taskId,
         reason: "task_archived",
         error: "任务已归档（只读）；先取消归档再验收",
+        status: state.task.status,
+        phase,
+      },
+    };
+  }
+  // 接力出去的任务(含 pending 未确认)同样每个阶段都拦:横幅定义它是「历史存档」,
+  // 验收却会把接力时刻的旧提交合入本机主分支、清掉 worktree——目标机还在同一分支上
+  // 继续干活,回程必然更难合(审查实测:out+pending 任务 accept 直接 200)。
+  const handedOff = handoffBlockReason(state.task.handoff);
+  if (handedOff) {
+    return {
+      task: state.task,
+      failure: {
+        accepted: false,
+        httpStatus: 409,
+        taskId,
+        reason: "task_handed_off",
+        error: handedOff,
         status: state.task.status,
         phase,
       },

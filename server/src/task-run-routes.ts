@@ -658,6 +658,9 @@ api.post("/tasks/:id/gate", async (c) => {
   // a decision, resume the duet from the gate and apply the action.
   const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (t?.status === "awaiting_review" && t.mode === "duet") {
+    // 重启后闸口重放会真的续跑讨论——接力出去的任务不给续(与 /run 同一条硬拦口径)。
+    const blocked = handoffBlockReason(t.handoff);
+    if (blocked) return c.json({ error: blocked, handoff: true }, 409);
     // 同 /run:先原子占位再启动,占不到说明确有回合在跑(闸口重放会真的续跑讨论)。
     if (!claimTurn(taskId, "duet")) {
       return c.json({ error: "任务回合正在进行，稍后再处理裁决", status: t.status }, 409);

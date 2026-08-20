@@ -7,12 +7,16 @@
 // 一个请求可能挂**两分钟**（预览的就绪超时），这是刻意的：起没起来只能等它自己说，
 // 提前返回一句「已开始」就等于骗人——用户点开地址是 404 才发现没起来。
 import type { Hono } from "hono";
+import { handoffBlockReasonById } from "./handoff-guard.js";
 import { restartTaskPreview } from "./workflow-steps.js";
 
 const STATUS = { gone: 404, nostep: 400, busy: 409, failed: 502 } as const;
 
 export function mountPreviewRoutes(api: Hono): void {
   api.post("/tasks/:id/preview/restart", async (c) => {
+    // 重开预览会在任务工作区里跑启动命令——接力出去的「历史存档」不给开。
+    const handedOff = await handoffBlockReasonById(c.req.param("id"));
+    if (handedOff) return c.json({ error: handedOff, handoff: true }, 409);
     // 只有一站预览时前端可以不传 stepId；传了就按 id 认，别猜。
     const body = (await c.req.json().catch(() => ({}))) as { stepId?: unknown };
     const stepId = typeof body.stepId === "string" ? body.stepId : null;
