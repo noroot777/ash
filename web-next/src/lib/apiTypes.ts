@@ -212,8 +212,8 @@ export type ScmOverview = {
   readOnly: string | null;
   status: ScmStatus;
   commits: ScmCommit[];
-  /** 仅含远端名；URL 可能带凭据，不下发。 */
-  remotes: string[];
+  /** 仅含远端名；URL 可能带凭据，不下发。旧服务端响应可能暂时缺少这个字段。 */
+  remotes?: string[];
 };
 
 export type ScmFileDiff = {

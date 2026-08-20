@@ -275,7 +275,7 @@ export function ScmInspector({
         branch={status.branch}
         rootPath={scm.overview.root.path}
         rootSource={scm.overview.root.source}
-        remotes={scm.overview.remotes}
+        remotes={scm.overview.remotes ?? []}
         onPush={(remote) => void perform({ kind: "push", remote })}
         refreshing={scm.loading || scm.busy}
         onRefresh={() => void scm.refresh()}
