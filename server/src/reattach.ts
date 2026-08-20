@@ -30,7 +30,7 @@ import { findMcpChannelHolders } from "./mcp-holders.js";
 //  · resumes     团队调度台 → 进程会断，但下次有人说话就 --resume 接回；
 //                丢的是当前这一轮，不是整个任务
 //  · interrupted 真会被判 failed 的：老代码起的（没 agent_pid）、queued 还没起
-//                进程的、ssh 目标的、进程已经不在的
+//                进程的、进程已经不在的
 //  · mcpDisrupted survives 里**手上还握着 harness MCP 子进程**的那几个。重启
 //                :4317 伤不到它们，但 restart.mjs 第 3 步杀旧 MCP 子进程时会当场掐断
 //                它们的交卷通道（2026-08-06 那次验证白跑就是这么来的）。这一类

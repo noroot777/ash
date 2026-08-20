@@ -208,7 +208,6 @@ try {
     role: "lead",
     agentType: "gemini",
     executor: "gemini@test",
-    target: "local",
     cwd: root,
     startedAt: at,
   });

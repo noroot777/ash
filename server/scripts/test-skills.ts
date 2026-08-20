@@ -1,5 +1,5 @@
 // `/` 技能补全的数据层回归测试(不起 CLI,读写全关在 mkdtemp 里):
-//   listSkills / withSkillInvocation —— 扫盘、调用注入、ssh 执行器不假装
+//   listSkills / withSkillInvocation —— 扫盘、调用注入、不认识的 CLI 不假装
 //   指纹 —— 改 SKILL.md 的 description,不重启也要跟着变
 //   calibrateSkills —— init 事件与磁盘取**并集**,内置命令走白名单
 //   scanOverview —— 设置页按已注册执行器逐行列出「谁扫到了什么」
@@ -74,7 +74,6 @@ assert.match(trailingInvocation, /已选择 skill/, "正文末尾独立一行的
 assert.equal(withSkillInvocation({ agentType: "claude", cwd: root, text: `路径 /${ALPHA}/file.txt` }), `路径 /${ALPHA}/file.txt`, "skill 名只是路径前缀时不误调用");
 assert.equal(withSkillInvocation({ agentType: "claude", cwd: root, text: `https://example.com/${ALPHA}` }), `https://example.com/${ALPHA}`, "URL 里的 skill 名不误调用");
 assert.equal(withSkillInvocation({ agentType: "claude", cwd: root, text: "/zz-not-installed 做事" }), "/zz-not-installed 做事", "未安装命令不改写");
-assert.equal(withSkillInvocation({ agentType: "claude", cwd: root, text: `/${ALPHA} 做事`, remote: true }), `/${ALPHA} 做事`, "ssh 不能注入本机路径");
 
 // ── 热加:不清缓存、不重启,新加的技能目录也要出现(指纹变了就重扫) ─────────
 
@@ -230,44 +229,38 @@ assert.ok(!find(list, "compact"), "resetSkillCache 之后连落盘那份也不�
   assert.ok(!readFileSync(store).includes(0), "skill-calibration-store.ts 里不能有裸 NUL:用 String.fromCharCode(0)");
 }
 
-// ── ssh 执行器 / 不认识的 CLI:宁可空,也不拿本机磁盘冒充 ─────────────────────
+// ── 不认识的 CLI:宁可空,也不拿本机磁盘冒充 ────────────────────────────────
 
-const remote = listSkills({ agentType: "claude", cwd: root, remote: true });
-assert.deepEqual(remote.skills, [], "ssh 执行器扫的是本机盘,那不是它要跑的地方");
-assert.equal(remote.remote, true, "要把 remote 如实告诉前端,好让菜单说人话而不是显示空");
 assert.deepEqual(listSkills({ agentType: "grok", cwd: root }).skills, [], "没有技能目录约定的 CLI 返回空清单");
 
-// ── 设置页的「谁扫到了什么」:按 CLI 类型 × 本机/远端归并 ──────────────────────
+// ── 设置页的「谁扫到了什么」:按 CLI 类型归并 ─────────────────────────────────
 // 同一个 CLI 的几个 profile 只差供应商,扫出来必然是同一份,逐行列出去是噪声。
 
 const overview = scanOverview({
   cwd: root,
   executors: [
-    { label: "claude@官方", agentType: "claude", remote: false },
-    { label: "claude@公司自建", agentType: "claude", remote: false },
-    { label: "claude@远端", agentType: "claude", remote: true },
-    { label: "grok@本机", agentType: "grok", remote: false },
+    { label: "claude@官方", agentType: "claude" },
+    { label: "claude@公司自建", agentType: "claude" },
+    { label: "grok@本机", agentType: "grok" },
   ],
 });
 assert.deepEqual(
-  overview.rows.map((row) => `${row.agentType}${row.remote ? "@ssh" : ""}`),
-  ["claude", "claude@ssh", "grok"],
-  "同类型的本机 profile 合成一行,ssh 的另算一行",
+  overview.rows.map((row) => row.agentType),
+  ["claude", "grok"],
+  "同类型的 profile 合成一行",
 );
 assert.deepEqual(
   overview.rows[0]!.executors,
   ["claude@官方", "claude@公司自建"],
   "被归并掉的 profile 名字要留在行里,好让人确认自己注册的那几个都在",
 );
-assert.ok(overview.rows[0]!.count >= 2, "本机那行要有条数");
+assert.ok(overview.rows[0]!.count >= 2, "claude 那行要有条数");
 assert.ok(overview.rows[0]!.bySource.project >= 2, "项目级技能要计进 project 桶");
 assert.ok(overview.rows[0]!.sample.every((command) => command.startsWith("/")), "样本是可直接补全的命令");
-assert.equal(overview.rows[1]!.count, 0, "ssh 那行不拿本机结果冒充");
-assert.equal(overview.rows[1]!.remote, true);
-assert.equal(overview.rows[2]!.scannable, false, "没有技能目录约定的 CLI 要标出来,而不是显示 0 条");
+assert.equal(overview.rows[1]!.scannable, false, "没有技能目录约定的 CLI 要标出来,而不是显示 0 条");
 
 // 一个 profile 都没注册时(路由那边兜的 fallback):不能凭空造出一个空名字
-const bare = scanOverview({ cwd: root, executors: [{ label: "", agentType: "claude", remote: false }] });
+const bare = scanOverview({ cwd: root, executors: [{ label: "", agentType: "claude" }] });
 assert.deepEqual(bare.rows[0]!.executors, [], "没有 profile 名字时给空数组,不是 ['']");
 
 // ── 刷新间隔:按小时计,0 或 1~24 小时 ────────────────────────────────────────

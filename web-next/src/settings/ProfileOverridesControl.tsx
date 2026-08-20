@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Sliders, X } from "@phosphor-icons/react";
 import type { AgentType } from "@harness/shared";
 import {
-  UNKNOWN_CLI_HOST_ENV,
   cliConfigOverrideConflict,
   cliConfigOverrideErrors,
   cliConfigOverrideHints,
@@ -36,7 +35,6 @@ export function ProfileOverridesControl({
   value,
   extraArgs,
   disabled,
-  remote,
   onSave,
 }: {
   profileName: string;
@@ -45,18 +43,12 @@ export function ProfileOverridesControl({
   /** 同一个 profile 的额外参数 —— 里面自带 `--settings` 时这一档会被整份顶掉。 */
   extraArgs: readonly string[];
   disabled: boolean;
-  /** 这个 profile 跑在 ssh 远端吗 —— 远端的环境读不到,换算得按「未知」走。 */
-  remote: boolean;
   onSave: (value: Record<string, number>) => Promise<boolean>;
 }) {
   const specs = useMemo(() => cliConfigOverridesFor(type), [type]);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>({});
-  const localEnv = useCliHostEnv();
-  // 远端 profile 的 CLI 跑在别的机器上,harness 只看得见自己这台的环境变量。拿本机的
-  // 值去算远端的触发点是编数,而且跟执行器真正注入的那份对不上(executors/cli-env.ts
-  // 同样按 UNKNOWN 走)—— 两边必须是同一个判断,提示里也会写明这是估的。
-  const hostEnv = remote ? UNKNOWN_CLI_HOST_ENV : localEnv;
+  const hostEnv = useCliHostEnv();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
 

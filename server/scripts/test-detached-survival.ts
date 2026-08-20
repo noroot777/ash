@@ -61,7 +61,7 @@ function consume(child, stopAfter) {
 }
 
 if (mode === "v1") {
-  const child = spawnDetachedAgent({ kind: "local" }, dir, process.execPath, [agentScript], "", paths);
+  const child = spawnDetachedAgent(dir, process.execPath, [agentScript], "", paths);
   // 读到第 6 行就「被重启」：记下 pid / 启动时间 / 已消费到的字节位置，然后硬退出。
   await consume(child, 6);
   const info = inspectProcess(child.pid);

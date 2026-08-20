@@ -105,7 +105,6 @@ try {
       role: "primary",
       agentType: "claude",
       executor: "claude",
-      target: "claude",
       startedAt: at,
     });
   }

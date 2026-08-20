@@ -327,7 +327,6 @@ export function listSkills(opts: {
   agentType: string;
   cwd: string;
   force?: boolean;
-  remote?: boolean;
 }): SkillList {
   const agentType = opts.agentType as AgentType;
   const base: SkillList = {
@@ -335,11 +334,9 @@ export function listSkills(opts: {
     cwd: opts.cwd,
     fingerprint: "empty",
     authoritative: false,
-    remote: !!opts.remote,
     skills: [],
   };
-  // ssh 执行器扫的是本机磁盘,那不是它将要跑的地方 —— 宁可不显示,也不假装有。
-  if (opts.remote || !isScannable(agentType)) return base;
+  if (!isScannable(agentType)) return base;
 
   const self = scan(agentType, opts.cwd, opts.force);
   // 同一个技能常常跨 CLI 软链共享(本机 78 个条目去重后只有 54 个物理技能)。标一个
@@ -395,7 +392,6 @@ export function withSkillInvocation(opts: {
   agentType: string;
   cwd: string;
   text: string;
-  remote?: boolean;
 }): string {
   if (!opts.text.includes("/")) return opts.text;
   // 原生命令由 CLI 自己拦下执行,前面垫一个字就不生效 —— 原样放行(见 NATIVE_COMMANDS)。
@@ -444,25 +440,23 @@ export function warmSkills(cwds: string[]): void {
 }
 
 /**
- * 设置页的「谁扫到了什么」:按 **CLI 类型 × 本机/远端** 归并后逐行给出条数与样本。
+ * 设置页的「谁扫到了什么」:按 **CLI 类型** 归并后逐行给出条数与样本。
  *
  * 归并这一维的理由写在 `SkillScanRow` 的注释里(一句话:换供应商不会换出另一份技能)。
- * 这里只强调实现上的一条:归并键必须带上 remote —— 同一个 CLI 既注册了本机 profile
- * 又注册了 ssh profile 时,那是**两行**,不能让本机那份的条数替远端说话。
  */
 export function scanOverview(opts: {
   cwd: string;
-  executors: { label: string; agentType: string; remote: boolean }[];
+  executors: { label: string; agentType: string }[];
   force?: boolean;
 }): SkillScanOverview {
-  const groups = new Map<string, { agentType: string; remote: boolean; executors: string[] }>();
+  const groups = new Map<string, { agentType: string; executors: string[] }>();
   for (const executor of opts.executors) {
-    const key = `${executor.agentType}|${executor.remote ? "ssh" : "local"}`;
+    const key = executor.agentType;
     // 空 label = 调用方在「一个 profile 都没注册」时兜的那几行,没有名字可署。
     const named = executor.label ? [executor.label] : [];
     const group = groups.get(key);
     if (group) group.executors.push(...named);
-    else groups.set(key, { agentType: executor.agentType, remote: executor.remote, executors: named });
+    else groups.set(key, { agentType: executor.agentType, executors: named });
   }
 
   const rows: SkillScanRow[] = [...groups.values()].map((group) => {
@@ -470,13 +464,11 @@ export function scanOverview(opts: {
       agentType: group.agentType,
       cwd: opts.cwd,
       force: opts.force,
-      remote: group.remote,
     });
     const bySource: Record<SkillSource, number> = { project: 0, user: 0, plugin: 0, builtin: 0 };
     for (const skill of list.skills) bySource[skill.source] += 1;
     return {
       agentType: list.agentType,
-      remote: list.remote,
       executors: group.executors,
       scannable: isScannable(group.agentType),
       count: list.skills.length,

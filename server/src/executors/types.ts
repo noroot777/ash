@@ -1,5 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import type { AgentEvent, AgentType, ExecTarget } from "@harness/shared";
+import type { AgentEvent, AgentType } from "@harness/shared";
 import type { RunTracePaths } from "./diagnostics.js";
 import type { DetachedPaths } from "./detached.js";
 
@@ -12,7 +12,7 @@ export interface RunOpts {
   trace?: RunTracePaths;
   // 非空 = 用「活得过 server 重启」的跑法：stdout/stderr 落到这几个文件而不是
   // 匿名管道（见 executors/detached.ts）。只有一次性 run() 该传；常驻会话
-  // （openResident）必须保留可写的 stdin，不适用。ssh 目标会自动退回管道。
+  // （openResident）必须保留可写的 stdin，不适用。
   detach?: DetachedPaths;
 }
 
@@ -72,7 +72,6 @@ export interface ExecutorBuildOpts {
   bin?: string;
   /** 预检已经确认无法启动时，由执行器走 failedChild 留下持久错误，不再起真实 CLI。 */
   startupError?: string;
-  target?: ExecTarget;
   relay?: RelayConfig;
   /**
    * 盖过 CLI 自己配置文件的那几项(以 env 注入)。已按 @harness/shared/cli-overrides
@@ -112,7 +111,6 @@ export interface AgentExecutor {
   readonly label: string; // e.g. "claude@local·opus"
   readonly model?: string;
   readonly reasoningEffort?: string;
-  readonly target: ExecTarget;
   run(opts: RunOpts): RunHandle;
   // 重启后接管一个**还活着**的 agent 进程：把它的输出流接回本执行器自己的
   // parser。child 是 detached.ts 造的合成 ChildProcess（按 pid+offset 接回来的）。

@@ -56,17 +56,17 @@ function writeEchoStub(dir: string, name: string): string {
 }
 
 assert.deepEqual(
-  normalizeProfileExtraArgs(["--settings ~/test/claude-settings.json"], { kind: "local" }),
+  normalizeProfileExtraArgs(["--settings ~/test/claude-settings.json"]),
   ["--settings", join(homedir(), "test/claude-settings.json")],
   "整段粘贴的 flag + 路径应拆成两个 argv，并展开本地 home",
 );
 assert.deepEqual(
-  normalizeProfileExtraArgs([`--settings '{"fastMode": true}'`], { kind: "local" }),
+  normalizeProfileExtraArgs([`--settings '{"fastMode": true}'`]),
   ["--settings", '{"fastMode": true}'],
   "带空格的引号值仍应保持为单个 argv",
 );
 assert.deepEqual(
-  normalizeProfileExtraArgs(["--define=hello world"], { kind: "local" }),
+  normalizeProfileExtraArgs(["--define=hello world"]),
   ["--define=hello world"],
   "带等号的单 token 不应被启发式拆分",
 );
@@ -314,19 +314,19 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
   // 从这一档毕业的),这条断言都不该跟着炸。
   const untrusted = CLI_SPECS.find((s) => !hasTrustedSessionId(s));
   if (untrusted) {
-    const shown = resumeCommandFor(untrusted.key, null, "/tmp/x", "made-up");
+    const shown = resumeCommandFor(untrusted.key, "/tmp/x", "made-up");
     assert.match(shown, /^# .*无法恢复会话/, `${untrusted.key}: 展示侧应退化成诚实说明`);
     assert.ok(!shown.includes("--resume made-up"), "展示侧同样不许拼出引用不存在会话的命令");
   }
 }
 {
   // 可信的两档照常给命令(claude 有 newIdFlag、codex 有 resumeArgs)
-  assert.equal(resumeCommandFor("claude", null, "/tmp/x", "sid"), "cd /tmp/x && claude --resume sid");
-  assert.equal(resumeCommandFor("codex", null, "/tmp/x", "sid"), "cd /tmp/x && codex resume sid");
+  assert.equal(resumeCommandFor("claude", "/tmp/x", "sid"), "cd /tmp/x && claude --resume sid");
+  assert.equal(resumeCommandFor("codex", "/tmp/x", "sid"), "cd /tmp/x && codex resume sid");
   // 未知类型不再回落到 claude 的模板(那会给一条跑到别家 CLI 上的命令)
-  assert.match(resumeCommandFor("no-such-cli", null, "/tmp/x", "sid"), /^# 未知的执行器类型/);
+  assert.match(resumeCommandFor("no-such-cli", "/tmp/x", "sid"), /^# 未知的执行器类型/);
   // id 还没拿到时也不给命令
-  assert.match(resumeCommandFor("codex", null, "/tmp/x", ""), /^# /);
+  assert.match(resumeCommandFor("codex", "/tmp/x", ""), /^# /);
 }
 
 // ⑤ter 备用命令名:检测能命中 bins[1],执行就必须用同一个 —— 死认 bins[0] 会让
@@ -353,7 +353,6 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
     undefined,
     "自证不过就当没探到(别把别家的命令认成自己)",
   );
-  assert.equal(await execBinFor(fake({}, { bins }), { kind: "ssh", host: "h" }), undefined, "ssh 目标不拿本机结果去猜");
   assert.equal(await execBinFor(CLI_SPEC_BY_KEY.claude), undefined, "单候选的 spec 不做任何探测");
 
   // 端到端:主 bin 不在本机、备用名可用 → 照样跑得通(第 1 轮审查的复现场景)

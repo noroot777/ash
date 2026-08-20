@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
-import type { AgentType, ExecTarget } from "@harness/shared";
+import type { AgentType } from "@harness/shared";
 import { isReasoningEffortSupported, reasoningEffortsFor } from "@harness/shared/cli-presets";
 import { readCliConfigOverrides } from "@harness/shared/cli-overrides";
 import { db } from "../db/index.js";
@@ -22,7 +22,7 @@ async function defaultProfile(type: AgentType): Promise<AgentRow | null> {
 
 // Resolve an AgentType to a concrete executor (two-level model:
 // you pick a *type*, the registry resolves the default executor profile under
-// it, including model + local/ssh target). Falls back to a built-in local
+// it, including model + overrides). Falls back to a built-in local
 // default when no profile is registered.
 export async function resolveExecutor(type: AgentType): Promise<AgentExecutor> {
   return build(await defaultProfile(type), type);
@@ -58,9 +58,8 @@ async function pickProfile(opts: ExecutorResolveOpts): Promise<{ profile: AgentR
 }
 
 // profile 主键只说得清「选中了谁」，说不清「它当时长什么样」——一条 profile 是可编辑、
-// 可删除的：改一次 target 就换了台机器，改一次 extraArgs / 供应商就换了套账号。所以
-// 「把上一回合原样再跑一遍」还要一个**当时那套执行环境的指纹**，两轮之间被改过就认得出来
-// （第 1 轮审查 finding 2：只存 id 时，重试拿旧 CLI session id 去连新 SSH 主机）。
+// 可删除的：改一次 extraArgs / 供应商就换了套账号。所以「把上一回合原样再跑一遍」还要一个
+// **当时那套执行环境的指纹**，两轮之间被改过就认得出来（第 1 轮审查 finding 2）。
 //
 // 进指纹的是**决定运行环境**的字段，不含展示名 —— 改个名字不该挡住重试。供应商只取
 // 「上游是谁、协议怎么说」，不取 key 本身：轮换密钥是用户明确要生效的事，不是换环境。
@@ -70,7 +69,10 @@ async function fingerprintOf(profile: AgentRow): Promise<string> {
     : undefined;
   const material = JSON.stringify([
     profile.type,
-    profile.target,
+    // 已退役的 `target` 列在这一位上待过(ssh 执行器时代)。位置留着、值钉死成它当年
+    // 唯一的取值,好让历史会话的指纹不因为删列而集体作废 —— 否则老会话一律被判
+    // "changed"，重跑全被拒。
+    '{"kind":"local"}',
     profile.extraArgs,
     profile.model ?? null,
     profile.reasoningEffort ?? null,
@@ -119,7 +121,6 @@ async function build(
   type: AgentType,
   overrides: ExecutorOverrides = {},
 ): Promise<AgentExecutor> {
-  const target = profile ? JSON.parse(profile.target) as ExecTarget : undefined;
   const model = overrides.model || profile?.model || undefined;
   const reasoningEffort = overrides.reasoningEffort || profile?.reasoningEffort || undefined;
   if (!isReasoningEffortSupported(type, model, reasoningEffort)) {
@@ -133,10 +134,9 @@ async function build(
     ? {
         name: profile.name,
         model,
-        extraArgs: normalizeProfileExtraArgs(JSON.parse(profile.extraArgs), target!),
+        extraArgs: normalizeProfileExtraArgs(JSON.parse(profile.extraArgs)),
         reasoningEffort,
         speed: profile.speed === "fast" ? ("fast" as const) : undefined,
-        target,
         bin: undefined as string | undefined,
         relay: await loadRelay(profile.providerId),
         // 存库时已归一过一次；这里再走一遍，是为了让「profile 建于该覆盖项声明之前 /
@@ -151,10 +151,10 @@ async function build(
       };
 
   const spec = cliSpec(type);
-  // Claude Code 旧版会在真正读 prompt 之前直接拒绝 --effort。对本机目标先问它自己的
-  // help；不支持时仍构造执行器，但 run/openResident 走 failedChild，把错误留进会话记录，
-  // 同时完全不启动真实 Claude 进程。SSH 的版本在远端，运行时 parser 另有同文案兜底。
-  if (type === "claude" && reasoningEffort && target?.kind !== "ssh") {
+  // Claude Code 旧版会在真正读 prompt 之前直接拒绝 --effort。先问它自己的 help；
+  // 不支持时仍构造执行器，但 run/openResident 走 failedChild，把错误留进会话记录，
+  // 同时完全不启动真实 Claude 进程。
+  if (type === "claude" && reasoningEffort) {
     const capability = await probeBinFlag(spec.bins, spec.fallbackVersionMatch, "--effort");
     if (capability) opts.bin ??= capability.bin;
     if (capability?.supported === false) {
@@ -168,7 +168,7 @@ async function build(
   if (spec.factory) return spec.factory(opts);
   // 检测能命中备用命令名(cursor 的 agent、antigravity 的 agy),执行就必须用同一个
   // —— 死认 bins[0] 会让「目录显示可用」的环境派任务稳定 ENOENT(第 1 轮审查)。
-  opts.bin ??= await execBinFor(spec, opts.target);
+  opts.bin ??= await execBinFor(spec);
   return new GenericCliExecutor(spec, opts);
 }
 

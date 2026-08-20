@@ -33,8 +33,7 @@ try {
 
   await db.insert(projects).values({ id: "p", name: "test", repoPath: root, apiKeys: null, workflowId: null, createdAt: new Date().toISOString() });
   await db.insert(agents).values({
-    id: "reviewer-executor", name: "codex@test", type: "codex", target: '{"kind":"local"}',
-    model: "gpt-test", extraArgs: "[]", reasoningEffort: "high", speed: null, providerId: null, isDefault: true,
+    id: "reviewer-executor", name: "codex@test", type: "codex",    model: "gpt-test", extraArgs: "[]", reasoningEffort: "high", speed: null, providerId: null, isDefault: true,
   });
 
   const api = new Hono();
@@ -100,11 +99,10 @@ try {
   await createTasks([freeTask("free-stale-override-task", "free stale override")]);
   await db.insert(sessions).values({
     id: "stale-override-session", taskId: "free-stale-override-task", role: "lead", agentType: "codex",
-    executor: "codex@test", target: '{"kind":"local"}', startedAt: new Date().toISOString(),
+    executor: "codex@test", startedAt: new Date().toISOString(),
   });
   await db.insert(agents).values({
-    id: "doomed-executor", name: "codex@doomed", type: "codex", target: '{"kind":"local"}',
-    model: "gpt-doomed-default", extraArgs: "[]", reasoningEffort: "low", speed: null, providerId: null, isDefault: false,
+    id: "doomed-executor", name: "codex@doomed", type: "codex",    model: "gpt-doomed-default", extraArgs: "[]", reasoningEffort: "low", speed: null, providerId: null, isDefault: false,
   });
   assert.equal((await api.request("/tasks/free-stale-override-task/free-workflow/review-reservation", {
     method: "PUT", headers: { "content-type": "application/json" },

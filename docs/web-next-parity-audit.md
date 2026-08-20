@@ -229,7 +229,7 @@
 - **随手记批量转任务**：`60ab85c` 已补回复选多条、按列表顺序合并正文、合并附件和逐条回链。
 - **任务来源返回**：`c488a83` 已补回来源普通任务/辩论和所属团队的显式跳转；反向派生清单也已随 P2-14 补齐。
 - **任务置顶、分组折叠、未读/状态指示、会话上下滚动按钮、会话元数据**：均有对应补回提交，不再列缺口。
-- **项目/分组/归档/Profile 设置**：项目改名/目录/删除，分组增删改/并串行/运行暂停，Profile 增删/默认/model/reasoning/speed/SSH target/provider/extraArgs，以及 Provider CRUD、Key 和模型探测均已对齐。
+- **项目/分组/归档/Profile 设置**：项目改名/目录/删除，分组增删改/并串行/运行暂停，Profile 增删/默认/model/reasoning/speed/provider/extraArgs，以及 Provider CRUD、Key 和模型探测均已对齐。
 
 ## 历史分类与取舍（审计时状态）
 

@@ -501,7 +501,7 @@ const { RUNS_DIR } = await import("../src/paths.js");
 const { sessions } = await import("../src/db/schema.js");
 await db.insert(sessions).values({
   id: "sess1", taskId: "t1", role: "single", agentType: "claude",
-  executor: "claude", target: "", startedAt: at,
+  executor: "claude", startedAt: at,
 });
 const timeline = () => {
   try {

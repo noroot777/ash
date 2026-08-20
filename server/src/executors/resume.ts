@@ -1,4 +1,4 @@
-import type { AgentType, ExecTarget } from "@harness/shared";
+import type { AgentType } from "@harness/shared";
 import { CLI_SPEC_BY_KEY } from "./catalog/index.js";
 import { resumeFor } from "./spawn.js";
 import { interactiveResumeInner, unknownResumeNote } from "./generic.js";
@@ -14,19 +14,8 @@ import { interactiveResumeInner, unknownResumeNote } from "./generic.js";
 //
 // 放在独立文件而不是 spawn.ts:spawn.ts 被目录里的 spec 间接 import(专用执行器
 // 用它 spawn),再让它反过来 import 目录就成环了。
-/**
- * `sessions.target` 存的那个字符串。**写入端必须用它**:这一列是恢复命令唯一的
- * 「这活在哪台机器上干」的凭据(读取端 `resumeCommandFor` 每次按它重算),硬写
- * "local" 的话,ssh profile 跑出来的会话会给用户一条在本机执行的命令 —— 连不上
- * 远端不说,cwd 还是远端的路径,本机压根不存在。
- */
-export function sessionTargetKey(target: ExecTarget): string {
-  return target.kind === "ssh" ? `ssh:${target.host}` : "local";
-}
-
 export function resumeCommandFor(
   agentType: string,
-  targetStr: string | null | undefined,
   cwd: string,
   cliSessionId: string,
   resumeEnv?: string | null,
@@ -36,11 +25,8 @@ export function resumeCommandFor(
   if (!spec) return `# 未知的执行器类型 ${agentType}（sessionId ${cliSessionId || "未记录"} 仅供追溯）`;
   const inner = interactiveResumeInner(spec, cliSessionId);
   if (!inner) return unknownResumeNote(spec, cliSessionId);
-  const target: ExecTarget = targetStr?.startsWith("ssh:")
-    ? { kind: "ssh", host: targetStr.slice(4) }
-    : { kind: "local" };
   // resumeArgs 是执行器当初拼好的那截参数(claude 的 `--settings '{…}'`)。它必须跟着
   // 恢复命令走:harness 每一轮都带着它跑,不带就等于让用户手跑的那次退回自己的
   // settings.json —— 压缩行为跟他在 harness 里看到的不是一回事(第 2 轮审查 finding 2)。
-  return resumeFor(target, cwd, resumeArgs ? `${inner} ${resumeArgs}` : inner, resumeEnv ?? "");
+  return resumeFor(cwd, resumeArgs ? `${inner} ${resumeArgs}` : inner, resumeEnv ?? "");
 }

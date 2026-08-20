@@ -128,7 +128,7 @@ await db.insert(tasks).values({
 // 就悄悄不写——补录留痕这条断言必须建在真有会话的前提上。
 await db.insert(sessions).values({
   id: "sessA", taskId: TASK, role: "main", agentType: "codex",
-  executor: "codex", target: "codex", startedAt: at,
+  executor: "codex", startedAt: at,
 });
 
 const applied = await replayUndeliveredMcpCalls({

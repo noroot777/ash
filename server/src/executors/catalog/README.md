@@ -85,7 +85,7 @@ export const fooSpec: CliSpec = {
 
 `fallbackVersionMatch` 存在的原因:`agent` 这种通用名在本机实测里命中的其实是 grok —— 备用名不自证身份就会把别家的命令连版本号一起认成自己。
 
-**候选顺序对执行也生效**:检测和执行共用 `probeBins`/`execBinFor`(`server/src/executors/bin-probe.ts`)—— 主 bin 不在本机、备用名可用时,派任务会自动用那个备用名(以前执行侧死认 `bins[0]`,于是「目录显示可用、派任务 ENOENT」)。例外是 ssh 目标:候选探测查的是本机 PATH,拿本机结果决定远端命令名只会更错,所以 ssh 一律用 `bins[0]`。
+**候选顺序对执行也生效**:检测和执行共用 `probeBins`/`execBinFor`(`server/src/executors/bin-probe.ts`)—— 主 bin 不在本机、备用名可用时,派任务会自动用那个备用名(以前执行侧死认 `bins[0]`,于是「目录显示可用、派任务 ENOENT」)。
 
 ### 执行(`exec`)
 

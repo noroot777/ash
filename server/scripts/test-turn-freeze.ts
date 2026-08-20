@@ -96,7 +96,7 @@ try {
   const { agents } = await import("../src/db/schema.js");
   const { bus } = await import("../src/bus.js");
   await db.insert(agents).values({
-    id: "a1", name: "claude@test", type: "claude", target: '{"kind":"local"}', model: null,
+    id: "a1", name: "claude@test", type: "claude", model: null,
     extraArgs: "[]", reasoningEffort: null, speed: null, providerId: null, isDefault: true,
   });
   const errors: string[] = [];

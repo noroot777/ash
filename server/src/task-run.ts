@@ -14,7 +14,6 @@ import type { Workspace } from "./git.js";
 import { resolveExecutorWithProfile } from "./executors/index.js";
 import type { RunHandle } from "./executors/types.js";
 import { detachedPathsFor } from "./executors/detached.js";
-import { sessionTargetKey } from "./executors/resume.js";
 import { inspectProcess } from "./proc.js";
 import { RUNS_DIR } from "./paths.js";
 import { writeTurn, runTracePaths } from "./transcript.js";
@@ -115,7 +114,7 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     const TITLE_HINT =
       "请在正式开始前，第一行只输出：标题：<不超过14字、概括本次任务的简短标题>，然后换行，再正常完成下面的任务。\n\n任务：\n";
     const reviewTask = !!task.reviewOf;
-    const objective = withSkillInvocation({ agentType, cwd: ws.path, text: initialTaskObjective(task.body, task.title, reviewTask), remote: ex.target.kind === "ssh" });
+    const objective = withSkillInvocation({ agentType, cwd: ws.path, text: initialTaskObjective(task.body, task.title, reviewTask) });
     // 团队执行者多一段前言(卡住走 ask_question 直达调度者、别自己扩张边界)。
     // 只拼进 prompt,不写进 tasks.body —— body 是调度者给的需求正文,界面展示那份。
     const teamPreamble = await workerPreambleFor(task);
@@ -142,7 +141,7 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     const runDir = join(RUNS_DIR, taskId);
     mkdirSync(runDir, { recursive: true });
     // 解绑重启：输出落盘而不是走匿名管道，于是这个 agent 活得过 server 重启
-    // （见 executors/detached.ts）。ssh 目标会在 spawnForRun 里自动退回管道。
+    // （见 executors/detached.ts）。
     const detach = detachedPathsFor(runDir, sessId, turnStart);
     handle = ex.run({ prompt, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart), detach });
     trackRun(taskId, handle);
@@ -164,7 +163,6 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
       // fresh run 从来不是旁路回合，也不可能带着上一轮的停止事实。
       sideTurn: false,
       stoppedAs: null as string | null,
-      target: sessionTargetKey(ex.target),
       worktreePath: ws.isWorktree ? ws.path : null,
       branch: ws.branch,
       cwd: ws.path,
@@ -176,7 +174,7 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
       activeMs: 0,
       exitStatus: null as number | null,
       // 重启后靠这几个字段找回并接管它。pid 为空 = 这一轮没走 detached
-      //（ssh 目标 / 预检失败），那就是老语义：重启即中断。
+      //（预检失败），那就是老语义：重启即中断。
       agentPid: handle.detached?.pid ?? null,
       agentStartedAt: handle.detached ? inspectProcess(handle.detached.pid)?.startedAt ?? null : null,
       agentOutPath: handle.detached ? detach.out : null,

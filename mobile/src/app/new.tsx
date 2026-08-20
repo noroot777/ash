@@ -145,7 +145,7 @@ export default function NewTask() {
   }, [detectedAgents]);
   // 哪些类型**有能力**当调度者(执行器实现了 openResident)。detect 只在 CLI 装了的时候才去
   // 问执行器,没装的一律报 resident:false —— 所以要并上一份已知能力名单兜底,否则「本机没装
-  // claude、但注册了 ssh 的 claude 调度者」会被误判成没有可用调度者(第二轮审查抓到)。
+  // claude、但注册了 claude 调度者 profile」会被误判成没有可用调度者(第二轮审查抓到)。
   // 这份名单是服务端 openResident 实现的镜像,与 web useDetectedAgents.residentTypes 同源。
   const residentTypes = useMemo<AgentType[]>(() => {
     const capable = new Set<string>(["claude"]);
@@ -153,7 +153,7 @@ export default function NewTask() {
     return AGENT_TYPES.filter((type) => capable.has(type));
   }, [detectedAgents]);
   // 「能不能常驻」与「本机装没装」是两个独立条件:按类型新选调度者要两个都满足,
-  // 但**已注册 profile 只按 resident 筛** —— 它可能是 ssh 远端,本机自然探不到。
+  // 但**已注册 profile 只按 resident 筛** —— 探测失败时它也不该凭空消失。
   const leadTypes = useMemo<AgentType[]>(
     () => residentTypes.filter((type) => availableTypes.includes(type)),
     [residentTypes, availableTypes],
@@ -162,8 +162,8 @@ export default function NewTask() {
     () => profiles.filter((profile) => residentTypes.includes(profile.type)),
     [profiles, residentTypes],
   );
-  // 这个选择在本机还成不成立：指名 profile 的看 profile 还在不在（可能是 ssh 远端，本机
-  // 探不到也照样能用），按类型默认的看类型探到没探到。
+  // 这个选择在本机还成不成立：指名 profile 的看 profile 还在不在（探测这一次没探到也
+  // 照样能用），按类型默认的看类型探到没探到。
   const pickable = (
     selection: ExecutorSelection,
     types: AgentType[],
@@ -416,7 +416,7 @@ export default function NewTask() {
                 本机没检测到「{unavailablePick}」这个 CLI，这单很可能起不来。
                 {detectFailed
                   ? "（这次检测请求本身失败了，也可能只是探不出来。）"
-                  : "装好后到桌面端「管理执行器」点检测，或注册一个（ssh 远端也算）。"}
+                  : "装好后到桌面端「管理执行器」点检测。"}
               </Text>
             ) : null}
           </Field>
@@ -499,7 +499,7 @@ export default function NewTask() {
         {/* 一个能干活的都没有 = 建了必然起不来,所以按钮也禁用;这条提示与模式无关,普通/团队都要看到。 */}
         {noExecutor ? (
           <Text style={{ color: "#F59E0B", fontSize: 11.5, lineHeight: 16 }}>
-            本机没检测到任何可用的智能体 CLI，也没有已注册的执行器 —— 建出来的任务起不来，所以先拦住了。装一个 CLI 后到桌面端「管理执行器」点检测，或注册一个（ssh 远端也算）。
+            本机没检测到任何可用的智能体 CLI，也没有已注册的执行器 —— 建出来的任务起不来，所以先拦住了。装一个 CLI 后到桌面端「管理执行器」点检测。
           </Text>
         ) : null}
 

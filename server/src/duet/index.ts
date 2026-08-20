@@ -14,7 +14,6 @@ import { reopenAcceptedStage } from "../task-stage.js";
 import { taskWorkspace } from "../task-workspace.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import type { AgentExecutor } from "../executors/types.js";
-import { sessionTargetKey } from "../executors/resume.js";
 import { RUNS_DIR } from "../paths.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import * as P from "./prompts.js";
@@ -59,7 +58,6 @@ export function reusedSessionPatch(executor: AgentExecutor, cwd: string, command
   return {
     commandLine,
     executor: executor.label,
-    target: sessionTargetKey(executor.target),
     cwd,
     // CLI 还没报出 session_id 时这三样都算不出来,那就一列都不碰 —— 写一条缺了 id 的
     // 恢复命令,比留着上一轮那条更糟。

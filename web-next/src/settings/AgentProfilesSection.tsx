@@ -10,7 +10,6 @@ import { MagnifyingGlass, Plus, Trash } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { api, type DetectedCli } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
-import { AddSshProfileDialog } from "./AddSshProfileDialog.tsx";
 import { AgentDetectionResults } from "./AgentDetectionResults.tsx";
 import { AgentProfileRow } from "./AgentProfileRow.tsx";
 
@@ -58,7 +57,6 @@ function AgentProfileGroup({
       const profile = await api.createAgent({
         type,
         name: nextLocalName(type, allProfiles),
-        target: { kind: "local" },
         isDefault: !allProfiles.some((candidate) => candidate.type === type),
       });
       onProfileAdded(profile);
@@ -190,7 +188,6 @@ export function AgentProfilesSection({
   onProfilesDeleted: (ids: string[]) => void;
   notify: (message: string) => void;
 }) {
-  const [addingSsh, setAddingSsh] = useState(false);
   const profileGroups = useMemo(() => AGENT_TYPES.map((type) => ({
     type,
     profiles: profiles.filter((profile) => profile.type === type),
@@ -201,9 +198,6 @@ export function AgentProfilesSection({
       <div className="agent-profiles-section-head">
         <h2>执行器 Profile</h2>
         <div>
-          <Button variant="ghost" onClick={() => setAddingSsh(true)}>
-            <Plus size={12} weight="bold" /> 新增 SSH 执行器
-          </Button>
           <Button disabled={detecting} onClick={onDetect}>
             <MagnifyingGlass size={13} />
             {detecting ? "检测中…" : "检测本地智能体"}
@@ -219,7 +213,7 @@ export function AgentProfilesSection({
         />
         {loading && <p className="settings-muted">读取中…</p>}
         {!loading && !profiles.length && (
-          <p className="settings-muted">还没有 Profile；检测本地智能体并注册，或新增 SSH 执行器。</p>
+          <p className="settings-muted">还没有 Profile；检测本地智能体并注册。</p>
         )}
         {!!profileGroups.length && (
           <div className="agent-profile-groups">
@@ -242,14 +236,6 @@ export function AgentProfilesSection({
           <span>供应商决定账号与模型目录；任务仍可逐个覆盖执行器、模型和智能水平。</span>
         </div>
       </div>
-      {addingSsh && (
-        <AddSshProfileDialog
-          profiles={profiles}
-          onAdded={onProfileAdded}
-          onClose={() => setAddingSsh(false)}
-          notify={notify}
-        />
-      )}
     </section>
   );
 }

@@ -180,7 +180,6 @@ export const agents = sqliteTable("agents", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   type: text("type").notNull(),
-  target: text("target").notNull().default('{"kind":"local"}'), // json ExecTarget
   model: text("model"),
   extraArgs: text("extra_args").notNull().default("[]"), // json
   reasoningEffort: text("reasoning_effort"), // null=跟随 CLI 默认
@@ -323,13 +322,12 @@ export const sessions = sqliteTable("sessions", {
   executorId: text("executor_id"),
   turnModel: text("turn_model"),
   turnReasoningEffort: text("turn_reasoning_effort"),
-  // 那一刻这条 profile 的**执行环境指纹**（target / extraArgs / 供应商 / 配置覆盖…，
+  // 那一刻这条 profile 的**执行环境指纹**（extraArgs / 供应商 / 配置覆盖…，
   // 算法见 executors/index.ts 的 fingerprintOf）。profile 是可编辑、可删除的，光有主键
-  // 说不清「它当时长什么样」：改一次 target 就换了台机器，重试会把旧机器上生成的 CLI
-  // session id 发到新主机去（第 1 轮审查 finding 2）。所以重跑前先拿它跟当前 profile
+  // 说不清「它当时长什么样」：换一次供应商就换了后端，重试会把旧配置下生成的 CLI
+  // session id 发到新后端去（第 1 轮审查 finding 2）。所以重跑前先拿它跟当前 profile
   // 对一次，对不上就 409，让用户明确决定要不要按新配置另起一轮。null = 老会话行。
   executorFingerprint: text("executor_fingerprint"),
-  target: text("target").notNull(),
   worktreePath: text("worktree_path"),
   branch: text("branch"),
   cwd: text("cwd"),

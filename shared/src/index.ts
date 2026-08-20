@@ -103,12 +103,12 @@ export type AgentType = (typeof AGENT_TYPES)[number];
 // REASONING_EFFORT_DETAIL)在 `./cli-presets.ts`,走子路径 `@harness/shared/cli-presets`。
 // 这里刻意不转发:服务端跑 shared 的 .ts 源码,index 转发运行时值会让它起不来。
 
-// Execution layer: a concrete executor under a type (CLI + target + model).
+// Execution layer: a concrete executor under a type (CLI + model)。
+// 执行位置永远是 harness 所在的这台机器;要换机器请用「接力」把整个任务交出去。
 export interface AgentExecutorProfile {
   id: string;
   name: string; // human label, e.g. "claude@local·opus"
   type: AgentType;
-  target: ExecTarget; // local spawn or ssh host
   model?: string;
   extraArgs?: string[];
   // 推理强度。缺省 = 跟随 CLI 默认;claude: --effort <v>;codex: -c model_reasoning_effort="<v>"。
@@ -125,10 +125,6 @@ export interface AgentExecutorProfile {
   configOverrides?: Record<string, number>;
   isDefault: boolean; // the default executor resolved for its type
 }
-
-export type ExecTarget =
-  | { kind: "local" }
-  | { kind: "ssh"; host: string; cwdPrefix?: string };
 
 // ── Hierarchy (§3) ──────────────────────────────────────────────────────────
 export interface Project {

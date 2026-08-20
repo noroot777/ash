@@ -14,7 +14,6 @@ import type { Workspace } from "./git.js";
 import { resolveExecutorWithProfile } from "./executors/index.js";
 import type { RunHandle } from "./executors/types.js";
 import { detachedPathsFor } from "./executors/detached.js";
-import { sessionTargetKey } from "./executors/resume.js";
 import { inspectProcess } from "./proc.js";
 import { RUNS_DIR } from "./paths.js";
 import { writeTurn, runTracePaths } from "./transcript.js";
@@ -320,7 +319,7 @@ export async function continueTask(
     await recordTurnStart(taskId, cwd);
     const invited = !prev; // first time this agent is pulled into the task
     const userTurnText = userText + attachmentsPrompt(opts.attachments);
-    const promptedUserTurnText = withSkillInvocation({ agentType: agent, cwd, text: userTurnText, remote: ex.target.kind === "ssh" });
+    const promptedUserTurnText = withSkillInvocation({ agentType: agent, cwd, text: userTurnText });
     const sharedTeamWorker = !task.useWorktree && (await workerPreambleFor(task)).length > 0;
     // 验证回合（旧的独立审查任务，或这个任务自己身上的就地验证轮）：完成协议的
     // 验收那一句要换掉 —— 这一轮的产出是结论和证据，不是「这个任务可以合并了」。
@@ -407,9 +406,6 @@ export async function continueTask(
           sideTurn,
           // 新回合开始 = 上一轮「是被停的」这件事翻篇，不清就会一直挡着重试入口。
           stoppedAs: null,
-          // profile 可能在两轮之间被改到别的机器上;这一列是恢复命令唯一的
-          // 「在哪台机器上跑」凭据,不刷新就会给出一条在本机执行的错命令。
-          target: sessionTargetKey(ex.target),
           // 恢复命令三件套整组刷新(cwd 也可能在两轮之间变):少刷一列就是一条
           // 恢复不了的恢复命令,见 ResumeFields。
           ...ex.resumeFields(cwd, cliSessionId),
@@ -436,7 +432,6 @@ export async function continueTask(
         turnModel: ex.model ?? null,
         turnReasoningEffort: ex.reasoningEffort ?? null,
         sideTurn,
-        target: sessionTargetKey(ex.target),
         worktreePath: base?.worktreePath ?? null,
         branch: base?.branch ?? null,
         cwd,

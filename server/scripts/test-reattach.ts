@@ -80,7 +80,7 @@ async function makeCase(taskId: string, live: boolean) {
   const runDir = join(RUNS_DIR, taskId);
   mkdirSync(runDir, { recursive: true });
   const paths = detachedPathsFor(runDir, sessId, "T0");
-  const child = spawnDetachedAgent({ kind: "local" }, dir, process.execPath, [agentScript], "", paths);
+  const child = spawnDetachedAgent(dir, process.execPath, [agentScript], "", paths);
   const pid = child.pid!;
   // 让它先吐几行再「重启」，这样接管时确实有历史内容与未读内容之分。
   await new Promise((r) => setTimeout(r, 450));
@@ -90,7 +90,7 @@ async function makeCase(taskId: string, live: boolean) {
   }
   await db.insert(sessions).values({
     id: sessId, taskId, role: "single", agentType: "claude", executor: "claude@local",
-    target: "local", cwd: dir, cliSessionId: "cli-sess-1", commandLine: "fake",
+    cwd: dir, cliSessionId: "cli-sess-1", commandLine: "fake",
     startedAt: now(), turnStartedAt: now(), activeMs: 0,
     // 模拟旧 server 在中文 locale 下落库、重启后新 server 用 C locale 读取 ps。
     // 两段字符串不同，但指向同一秒，必须仍能接管。

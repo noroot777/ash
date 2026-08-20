@@ -58,15 +58,6 @@
   font-style: normal;
 }
 
-.skill-scan-tag {
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  padding: 0 5px;
-  color: var(--faint);
-  font-size: 10px;
-  font-weight: 500;
-}
-
 .skill-scan-what {
   display: grid;
   gap: 3px;

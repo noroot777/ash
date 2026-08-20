@@ -59,7 +59,7 @@ const baseTask = {
 const baseSession = {
   taskId: "", role: "single", executor: "codex", executorId: null,
   turnModel: null, turnReasoningEffort: null, executorFingerprint: null,
-  sideTurn: false, stoppedAs: null, target: "local", worktreePath: null, branch: null,
+  sideTurn: false, stoppedAs: null, worktreePath: null, branch: null,
   cliSessionId: null, commandLine: null, activeMs: 0, exitStatus: null, agentOffset: 0,
 };
 

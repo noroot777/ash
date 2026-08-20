@@ -31,7 +31,6 @@ export function SlashMenu({
   hint,
   items,
   selectedIndex,
-  emptyText,
   token,
   onHover,
   onPick,
@@ -41,7 +40,6 @@ export function SlashMenu({
   hint: string;
   items: SlashItem[];
   selectedIndex: number;
-  emptyText?: string;
   /** 正在敲的斜杠 token，用来标出命中的那几个字；不给就不标。 */
   token?: string | null;
   onHover?: (index: number) => void;
@@ -58,7 +56,6 @@ export function SlashMenu({
   return (
     <div className={className} role="listbox" aria-label={ariaLabel}>
       <small>{hint}</small>
-      {!items.length && emptyText && <p className="slash-menu-empty">{emptyText}</p>}
       {items.map((item, index) => (
         <Fragment key={`${item.kind}:${item.command}`}>
           {index === firstSkillIndex && firstSkillIndex > 0 && (

@@ -23,11 +23,10 @@ function errorOf(child: ReturnType<typeof spawnAgent>): Promise<string> {
 }
 
 try {
-  const piped = spawnAgent({ kind: "local" }, root, process.execPath, ["-e", "process.exit(0)"], "");
+  const piped = spawnAgent(root, process.execPath, ["-e", "process.exit(0)"], "");
   assert.match(await errorOf(piped), /测试隔离环境禁止启动真执行器/);
 
   const detached = spawnDetachedAgent(
-    { kind: "local" },
     root,
     process.execPath,
     ["-e", "process.exit(0)"],
@@ -37,7 +36,7 @@ try {
   assert.match(await errorOf(detached), /测试隔离环境禁止启动真执行器/);
 
   process.env.HARNESS_ALLOW_REAL_AGENT = "1";
-  const allowed = spawnAgent({ kind: "local" }, root, process.execPath, ["-e", "process.exit(0)"], "");
+  const allowed = spawnAgent(root, process.execPath, ["-e", "process.exit(0)"], "");
   const exitCode = await new Promise<number | null>((resolve, reject) => {
     allowed.on("error", reject);
     allowed.on("close", resolve);

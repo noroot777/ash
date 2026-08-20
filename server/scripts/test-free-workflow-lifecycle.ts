@@ -50,8 +50,7 @@ try {
   git(repo, "commit", "-m", "base");
   await db.insert(projects).values({ id: "p-git", name: "git test", repoPath: repo, apiKeys: null, workflowId: null, createdAt: new Date().toISOString() });
   await db.insert(agents).values({
-    id: "reviewer-executor", name: "codex@test", type: "codex", target: '{"kind":"local"}',
-    model: "gpt-test", extraArgs: "[]", reasoningEffort: "high", speed: null, providerId: null, isDefault: true,
+    id: "reviewer-executor", name: "codex@test", type: "codex",    model: "gpt-test", extraArgs: "[]", reasoningEffort: "high", speed: null, providerId: null, isDefault: true,
   });
 
   const api = new Hono();

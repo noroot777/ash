@@ -36,7 +36,6 @@ try {
     id: "claude-broken",
     name: "claude@broken",
     type: "claude",
-    target: JSON.stringify({ kind: "local" }),
     extraArgs: "[]",
     model: "claude-opus-5",
     reasoningEffort: "根本没有这一档",
@@ -108,7 +107,7 @@ try {
     });
     await db.insert(sessions).values({
       id: `${taskId}-sess`, taskId, role: "single", agentType: "claude",
-      executor: "claude", target: "local", cwd: root, startedAt: at,
+      executor: "claude", cwd: root, startedAt: at,
     });
     const out = createWriteStream(join(root, `${taskId}.md`));
     await consumeSingleRun({

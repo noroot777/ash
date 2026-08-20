@@ -18,7 +18,7 @@ const SOURCE_LABEL: Record<SkillSource, string> = {
 };
 
 // 拉过的清单按「执行器+项目」记住:手机上每敲一次 `/` 都转一次圈太难看。
-const cache = new Map<string, { skills: SkillEntry[]; remote: boolean }>();
+const cache = new Map<string, { skills: SkillEntry[] }>();
 
 export function slashToken(text: string): string | null {
   return /^\s*(\/\S*)$/.exec(text)?.[1]?.toLowerCase() ?? null;
@@ -40,13 +40,11 @@ export function slashMatchIndex(command: string, token: string): number {
 export function SkillSuggestions({
   agentType,
   projectId,
-  executorId,
   value,
   onPick,
 }: {
   agentType?: string | null;
   projectId?: string | null;
-  executorId?: string | null;
   value: string;
   onPick: (command: string) => void;
 }) {
@@ -54,18 +52,18 @@ export function SkillSuggestions({
   const token = slashToken(value);
   const wants = token !== null;
   const cli = agentType || "claude";
-  const key = [cli, projectId ?? "", executorId ?? ""].join("|");
-  const [state, setState] = useState(() => cache.get(key) ?? { skills: [], remote: false });
+  const key = [cli, projectId ?? ""].join("|");
+  const [state, setState] = useState(() => cache.get(key) ?? { skills: [] });
 
   useEffect(() => {
-    setState(cache.get(key) ?? { skills: [], remote: false });
+    setState(cache.get(key) ?? { skills: [] });
     // 没敲斜杠就不发请求:这条带子是按需出现的,没必要每开一个任务就扫一遍磁盘。
     if (!wants) return;
     let alive = true;
     api
-      .skills({ agentType: cli, projectId: projectId ?? undefined, executorId: executorId ?? undefined })
+      .skills({ agentType: cli, projectId: projectId ?? undefined })
       .then((list) => {
-        const next = { skills: list.skills, remote: list.remote };
+        const next = { skills: list.skills };
         cache.set(key, next);
         if (alive) setState(next);
       })
@@ -75,17 +73,9 @@ export function SkillSuggestions({
     return () => {
       alive = false;
     };
-  }, [cli, executorId, key, projectId, wants]);
+  }, [cli, key, projectId, wants]);
 
   if (!token) return null;
-  if (state.remote) {
-    // ssh 执行器:技能装在远端盘上,本机列不出来。如实说,别装成「没装技能」。
-    return (
-      <Text style={{ color: theme.faint, fontSize: 11 }}>
-        这个执行器跑在 ssh 远端,技能清单只有它自己看得见——照常发 /名字,它认得。
-      </Text>
-    );
-  }
   // 命中位置升序:前缀命中排在中段命中前面;位置相同的保持原顺序(sort 稳定)。
   const matches = state.skills
     .map((skill) => ({ skill, at: slashMatchIndex(skill.command, token) }))

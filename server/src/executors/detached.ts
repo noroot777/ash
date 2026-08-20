@@ -20,7 +20,6 @@ import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { closeSync, openSync, readFileSync, readSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import type { ExecTarget } from "@harness/shared";
 import { IS_WINDOWS } from "../platform.js";
 import { isSameProcess } from "../proc.js";
 import {
@@ -195,7 +194,6 @@ export type DetachedChild = ChildProcess & {
 // stdin 仍是管道:prompt 写完立刻 end(),之后 agent 不再依赖它,所以 server 死了
 // 也不影响 —— 这一点跟常驻会话不同,后者要一直往 stdin 里塞消息,故不走这条路。
 export function spawnDetachedAgent(
-  target: ExecTarget,
   cwd: string,
   bin: string,
   args: string[],
@@ -205,11 +203,6 @@ export function spawnDetachedAgent(
 ): DetachedChild | ChildProcess {
   const blocked = guardAgentSpawn(bin);
   if (blocked) return blocked;
-  if (target.kind === "ssh") {
-    // ssh 那头的进程本来就不挂在本地 server 的管道上,不需要这套;调用方回退到
-    // 普通 spawnAgent。这里显式拒绝,免得以后有人以为它支持。
-    return failedChild("detached 模式暂不支持 ssh 目标");
-  }
   const abs = resolveBin(bin);
   if (!abs) return failedChild(`找不到 ${bin} 命令(不在 PATH，也不在常见目录)`);
 
@@ -265,7 +258,7 @@ export function spawnDetachedAgent(
 }
 
 // 各 executor 的 run() 统一走这个入口:给了落盘路径就用「活得过重启」的那条,
-// 没给(或 ssh 目标)就退回原来的匿名管道。放在这里而不是 spawn.ts,是因为
+// 没给就退回原来的匿名管道。放在这里而不是 spawn.ts,是因为
 // detached.ts 已经依赖 spawn.ts,反过来会成环。
 // **常驻会话不要用它** —— openResident 必须保留可写的 stdin。
 //
@@ -277,7 +270,6 @@ export function spawnDetachedAgent(
 // 老语义判 failed,用户重试即可。reattach.ts 那边也一并短路,免得它去认一个从来
 // 就不是这么起的进程。
 export function spawnForRun(
-  target: ExecTarget,
   cwd: string,
   bin: string,
   args: string[],
@@ -285,10 +277,10 @@ export function spawnForRun(
   extraEnv?: Record<string, string | undefined>,
   detach?: DetachedPaths,
 ): ChildProcess {
-  if (detach && target.kind === "local" && !IS_WINDOWS) {
-    return spawnDetachedAgent(target, cwd, bin, args, prompt, detach, extraEnv);
+  if (detach && !IS_WINDOWS) {
+    return spawnDetachedAgent(cwd, bin, args, prompt, detach, extraEnv);
   }
-  return spawnAgent(target, cwd, bin, args, prompt, extraEnv, { teeOut: detach?.out });
+  return spawnAgent(cwd, bin, args, prompt, extraEnv, { teeOut: detach?.out });
 }
 
 // 把「这个 child 是不是 detached 的」这一判断收在一处,executor 里不必各写一遍

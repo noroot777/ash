@@ -5,7 +5,7 @@ import { api } from "../lib/api.ts";
 
 // 设置页里的「技能扫描」一块：刷新间隔 + 立即重新扫描 + 每个 **CLI 类型**扫到了什么。
 //
-// 一行 = 一个 CLI 类型（ssh 上的另算一行），归并规则与理由写在 shared 的
+// 一行 = 一个 CLI 类型，归并规则与理由写在 shared 的
 // `SkillScanRow` 注释里。这里只说界面上的取舍：被归并掉的 profile 名字仍然列在副行，
 // 好让人确认「我注册的那几个都在这一行里」，而不是怀疑漏扫了谁。
 
@@ -117,8 +117,8 @@ export function SkillScanCard({
           <div>
             <b>每个 CLI 扫到了什么</b>
             <small>
-              技能目录按 CLI 类型定，同一个 CLI 换供应商不会换出另一份技能，所以按类型合成一行；
-              ssh 那台的技能在它自己的盘上，单列一行。项目级技能来自所选项目仓库根的{" "}
+              技能目录按 CLI 类型定，同一个 CLI 换供应商不会换出另一份技能，所以按类型合成一行。
+              项目级技能来自所选项目仓库根的{" "}
               <code>.claude/skills</code>
             </small>
           </div>
@@ -142,20 +142,13 @@ export function SkillScanCard({
         </div>
 
         {overview?.rows.map((row) => (
-          <div className="skill-scan-row" key={`${row.agentType}|${row.remote ? "ssh" : "local"}`}>
+          <div className="skill-scan-row" key={row.agentType}>
             <div className="skill-scan-who">
-              <b>
-                {row.agentType}
-                {row.remote && <span className="skill-scan-tag">ssh</span>}
-              </b>
+              <b>{row.agentType}</b>
               <em>{row.executors.length ? row.executors.join(" · ") : "未注册执行器"}</em>
             </div>
             <div className="skill-scan-what">
-              {row.remote ? (
-                <span className="skill-scan-note">
-                  跑在 ssh 远端，技能只有它自己看得见——照常敲 <code>/名字</code> 发过去，它认得
-                </span>
-              ) : !row.scannable ? (
+              {!row.scannable ? (
                 <span className="skill-scan-note">这个 CLI 没有技能目录约定，菜单里只有 harness 自己的命令</span>
               ) : row.count === 0 ? (
                 <span className="skill-scan-note">没扫到技能</span>

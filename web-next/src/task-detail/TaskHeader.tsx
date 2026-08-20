@@ -11,7 +11,6 @@ import {
   GitDiff,
   GitCommit,
   ListNumbers,
-  PaperPlaneTilt,
   Play,
   SpinnerGap,
   Stop,
@@ -85,7 +84,6 @@ export function TaskHeader({
   postMergeReviewLabel,
   onPostMergeReview,
   onDelete,
-  onHandoff,
   indicatorForTask,
   terminalToggle,
   inspectorToggle,
@@ -106,8 +104,6 @@ export function TaskHeader({
   postMergeReviewLabel?: string | null;
   onPostMergeReview?: () => void;
   onDelete: () => void;
-  // 只有单飞任务给(团队/讨论、已接力出去的任务不给),没给就不出现菜单项。
-  onHandoff?: () => void;
   indicatorForTask: IndicatorForTask;
   terminalToggle?: ReactNode;
   inspectorToggle?: ReactNode;
@@ -294,11 +290,6 @@ export function TaskHeader({
               <Copy size={14} />复制任务链接
             </button>
             {task.parentId === null && <span role="separator" />}
-            {task.parentId === null && onHandoff && (
-              <button type="button" role="menuitem" onClick={() => { setMenu(false); onHandoff(); }}>
-                <PaperPlaneTilt size={14} />接力到另一台机器
-              </button>
-            )}
             {task.parentId === null && (
               <button type="button" role="menuitem" onClick={() => { setMenu(false); onArchive(); }} disabled={!task.archived && !canArchive(task.status)}>
                 <Archive size={14} />{task.archived ? "取消归档" : "归档任务"}

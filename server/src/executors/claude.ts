@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
-import type { AgentEvent, AgentType, ExecTarget, TokenUsage } from "@harness/shared";
+import type { AgentEvent, AgentType, TokenUsage } from "@harness/shared";
 import { guessContextWindow } from "@harness/shared/usage";
 import { cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@harness/shared/cli-overrides";
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
@@ -26,7 +26,6 @@ export class ClaudeExecutor implements AgentExecutor {
   // finding 2 复现过:复制出来的命令带着 env 前缀跑,压缩行为退回用户文件里的那份数,
   // 跟他在 harness 里看到的不是一回事。既然打不过,就别放上去骗人。
   private readonly resumeEnvHint?: string;
-  readonly target: ExecTarget;
   private bin: string;
   private startupError?: string;
   readonly model?: string;
@@ -35,14 +34,13 @@ export class ClaudeExecutor implements AgentExecutor {
   private speed?: "fast";
   private relay?: RelayConfig;
   private configOverrides?: Record<string, number>;
-  constructor(opts: { model?: string; extraArgs?: string[]; reasoningEffort?: string; speed?: "fast"; bin?: string; startupError?: string; target?: ExecTarget; name?: string; relay?: RelayConfig; configOverrides?: Record<string, number> } = {}) {
+  constructor(opts: { model?: string; extraArgs?: string[]; reasoningEffort?: string; speed?: "fast"; bin?: string; startupError?: string; name?: string; relay?: RelayConfig; configOverrides?: Record<string, number> } = {}) {
     this.model = opts.model;
     this.extraArgs = opts.extraArgs ?? [];
     this.reasoningEffort = opts.reasoningEffort;
     this.speed = opts.speed;
     this.bin = opts.bin ?? "claude";
     this.startupError = opts.startupError;
-    this.target = opts.target ?? { kind: "local" };
     this.relay = opts.relay;
     this.configOverrides = opts.configOverrides;
     this.resumeEnvHint = resumeEnvHint(
@@ -51,16 +49,8 @@ export class ClaudeExecutor implements AgentExecutor {
       // 真正带着走的是 resumeFields() 里那个 `--settings`。
       undefined,
       this.relay ? `ANTHROPIC_BASE_URL=${relayRoot(this.relay.baseUrl)} ANTHROPIC_AUTH_TOKEN=<你的key> ` : undefined,
-      this.target,
     );
-    const where = this.target.kind === "ssh" ? this.target.host : "local";
-    this.label = opts.name ?? `claude@${where}${opts.model ? "·" + opts.model : ""}`;
-  }
-
-  // 只有跑在**本机**的 claude 才配校准技能缓存:ssh 上那份技能装在远端盘上,
-  // 本机扫不出来也对不上,拿它的清单去覆盖本机结果只会凭空多出一批点不动的技能。
-  private calibrateAs(): AgentType | undefined {
-    return this.target.kind === "local" ? this.type : undefined;
+    this.label = opts.name ?? `claude@local${opts.model ? "·" + opts.model : ""}`;
   }
 
   resumeCommand(cwd: string, sessionId: string): string {
@@ -79,7 +69,6 @@ export class ClaudeExecutor implements AgentExecutor {
     const inner = resumeInner.claude(sessionId);
     return {
       resumeCommand: resumeFor(
-        this.target,
         cwd,
         resumeArgs ? `${inner} ${resumeArgs}` : inner,
         this.resumeEnvHint ?? "",
@@ -104,7 +93,7 @@ export class ClaudeExecutor implements AgentExecutor {
   private settingsPayload(cwd: string): Record<string, unknown> | null {
     const settings = {
       ...(this.speed === "fast" ? { fastMode: true } : {}),
-      ...cliConfigOverrideSettings(this.type, this.configOverrides, cliHostEnv(this.target, cwd)),
+      ...cliConfigOverrideSettings(this.type, this.configOverrides, cliHostEnv(cwd)),
     };
     return Object.keys(settings).length ? settings : null;
   }
@@ -123,7 +112,7 @@ export class ClaudeExecutor implements AgentExecutor {
   // 返回值里允许出现 `undefined`:那是「把这个变量从子进程里删掉」,不是「没配」
   // (见 cliConfigOverrideEnvPatch)。所以这里不能再按 key 数量决定返不返回。
   private env(cwd?: string): Record<string, string | undefined> {
-    const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv(this.target, cwd));
+    const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv(cwd));
     if (this.relay) {
       env.ANTHROPIC_BASE_URL = relayRoot(this.relay.baseUrl);
       env.ANTHROPIC_AUTH_TOKEN = this.relay.apiKey;
@@ -137,15 +126,15 @@ export class ClaudeExecutor implements AgentExecutor {
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
     const child = this.startupError
       ? failedChild(this.startupError)
-      : spawnForRun(this.target, opts.cwd, this.bin, args, opts.prompt, this.env(opts.cwd), opts.detach);
-    return { sessionId, commandLine, events: parseClaudeStream(child, undefined, this.bin, this.calibrateAs()), kill: () => killChild(child), detached: detachedInfo(child) };
+      : spawnForRun(opts.cwd, this.bin, args, opts.prompt, this.env(opts.cwd), opts.detach);
+    return { sessionId, commandLine, events: parseClaudeStream(child, undefined, this.bin, this.type), kill: () => killChild(child), detached: detachedInfo(child) };
   }
 
   attach(child: ChildProcess, opts: { sessionId: string; commandLine: string }): RunHandle {
     return {
       sessionId: opts.sessionId,
       commandLine: opts.commandLine,
-      events: parseClaudeStream(child, undefined, this.bin, this.calibrateAs()),
+      events: parseClaudeStream(child, undefined, this.bin, this.type),
       kill: () => child.kill(),
       detached: detachedInfo(child),
     };
@@ -160,7 +149,7 @@ export class ClaudeExecutor implements AgentExecutor {
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`);
     const child = this.startupError
       ? failedChild(this.startupError)
-      : spawnAgent(this.target, opts.cwd, this.bin, args, userLine(opts.prompt), this.env(opts.cwd), {
+      : spawnAgent(opts.cwd, this.bin, args, userLine(opts.prompt), this.env(opts.cwd), {
           keepStdin: true,
         });
     const resident = { interruptPending: false };
@@ -168,7 +157,7 @@ export class ClaudeExecutor implements AgentExecutor {
     return {
       sessionId,
       commandLine,
-      events: parseClaudeStream(child, resident, this.bin, this.calibrateAs()),
+      events: parseClaudeStream(child, resident, this.bin, this.type),
       send: (text: string) => {
         child.stdin?.write(userLine(text));
       },
@@ -224,7 +213,7 @@ const userLine = (text: string) =>
 // 流要一直开着;只有进程真的没了才 done。
 // bin 只影响 spawn 报错文案 —— 导出是为了让目录里「输出格式跟 claude 一致」的
 // CLI(stream-json 的 --output-format)直接复用这一份解析,不必各写一遍。
-// calibrateAs:只有**确知自己是哪种 CLI 的本机进程**才传(见下面 init 分支)。
+// calibrateAs:只有**确知自己是哪种 CLI 的进程**才传(见下面 init 分支)。
 // 复用这份 parser 的第三方 CLI 一律不传 —— 它们的技能名跟 claude 的不是一回事,
 // 拿 bin 名去猜会把别人的技能塞进 claude 的缓存。
 export async function* parseClaudeStream(

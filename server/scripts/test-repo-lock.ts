@@ -251,7 +251,6 @@ try {
         role: "task",
         agentType: "claude",
         executor: "claude",
-        target: "task",
         startedAt: createdAt,
       });
       transcripts.push(join(RUNS_DIR, taskId));

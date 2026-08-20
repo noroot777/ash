@@ -412,7 +412,7 @@ try {
     ]);
     await db.insert(sessions).values({
       id: "sess-moved", taskId: "moved", role: "main", agentType: "claude", executor: "claude",
-      target: "local", cwd: oldRepo, startedAt: ts,
+      cwd: oldRepo, startedAt: ts,
     });
 
     const movedNow = () => readFileSync(join(oldRepo, "a.txt"), "utf8");

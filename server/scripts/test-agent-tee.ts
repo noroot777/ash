@@ -29,7 +29,6 @@ async function collect(opts: { delayMs: number }): Promise<{ seen: string; file:
   // 是 runs/<taskId>/… ,首次跑那个目录也是不存在的)。
   const file = join(root, `run-${opts.delayMs}`, "agent-out.jsonl");
   const child = spawnAgent(
-    { kind: "local" },
     root,
     process.execPath,
     ["-e", `process.stdout.write(${JSON.stringify(EXPECTED)});`],
@@ -65,7 +64,7 @@ async function collect(opts: { delayMs: number }): Promise<{ seen: string; file:
 
 // 没给 teeOut 就该完全是原来那条管道路径:不建目录、不留文件。
 {
-  const child = spawnAgent({ kind: "local" }, root, process.execPath, ["-e", "process.stdout.write('x')"], "");
+  const child = spawnAgent(root, process.execPath, ["-e", "process.stdout.write('x')"], "");
   let seen = "";
   child.stdout?.on("data", (c: Buffer) => {
     seen += c.toString();

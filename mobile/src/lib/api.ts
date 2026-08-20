@@ -231,11 +231,9 @@ export const api = {
   skills: (query: {
     agentType: string;
     projectId?: string;
-    executorId?: string;
   }): Promise<SkillList> => {
     const params = new URLSearchParams({ agentType: query.agentType });
     if (query.projectId) params.set("projectId", query.projectId);
-    if (query.executorId) params.set("executorId", query.executorId);
     return req(`/skills?${params.toString()}`).then(j);
   },
 

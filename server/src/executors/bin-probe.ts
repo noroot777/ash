@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import { statSync } from "node:fs";
 import { promisify } from "node:util";
-import type { ExecTarget } from "@harness/shared";
 import { resolveBin, resolveLaunch } from "./spawn.js";
 import type { CliSpec } from "./catalog/types.js";
 
@@ -130,16 +129,13 @@ async function versionOf(bin: string): Promise<string | null> {
  * 只在「主 bin 不在本机、而 spec 还留了备用名」时才真去探测:主 bin 命中是绝大多数
  * 情况,那条路只走一次同步的 accessSync 扫目录,不 exec 任何东西。
  *
- * ssh 目标一律返回 undefined:候选探测查的是**本机** PATH,拿本机结果去决定远端命令名
- * 只会更错。远端只装了备用名时,正解是让用户显式指定命令名 —— `ExecutorBuildOpts.bin`
- * 这个口子留着就是为它,但**执行器 profile 目前还没有这个字段**(`agents` 表无 bin 列,
- * `build()` 恒传 undefined)。这是已知缺口而不是回归(重构前 ssh 同样只用 bins[0]);
- * 补齐要动 DB schema + shared 的 AgentExecutorProfile + web/mobile 的执行器表单,
- * 属于「智能体面板」那条线的产品改动,不该由这里偷偷猜一个远端命令名来糊。
+ * 想显式指定命令名的口子是 `ExecutorBuildOpts.bin`,但**执行器 profile 目前还没有这个
+ * 字段**(`agents` 表无 bin 列,`build()` 恒传 undefined)。这是已知缺口:补齐要动 DB
+ * schema + shared 的 AgentExecutorProfile + web/mobile 的执行器表单,属于「智能体面板」
+ * 那条线的产品改动。
  */
-export async function execBinFor(spec: CliSpec, target?: ExecTarget): Promise<string | undefined> {
+export async function execBinFor(spec: CliSpec): Promise<string | undefined> {
   if (spec.bins.length < 2) return undefined;
-  if (target?.kind === "ssh") return undefined;
   if (resolveBin(spec.bins[0])) return undefined;
   const probe = await probeBins(spec.bins, spec.fallbackVersionMatch);
   // 一个都没命中就退回 bins[0]:让 spawnAgent 的预检报出「找不到 <主 bin>」,

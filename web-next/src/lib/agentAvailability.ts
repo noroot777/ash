@@ -74,8 +74,6 @@ export function availableAgentTypes(agents: DetectedAgent[]): AgentType[] {
 /**
  * 普通选择器只展示已经进入 agents 注册表的类型。类型默认项最终也会解析到该类型的
  * 默认 Profile，所以“本机装了但尚未注册”不应偷偷多出一个候选；要先去执行器设置注册。
- *
- * SSH 新增弹窗是刻意的例外：它需要从完整 AGENT_TYPES 目录里挑一个尚未注册的类型。
  */
 export function registeredAgentTypes(profiles: AgentExecutorProfile[]): AgentType[] {
   const registered = new Set(profiles.map((profile) => profile.type));

@@ -5,7 +5,6 @@ import { statSync, openSync, closeSync, unlinkSync, createWriteStream, mkdirSync
 import { dirname, join } from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough, Readable } from "node:stream";
-import type { ExecTarget } from "@harness/shared";
 import { IS_WINDOWS, isPidAlive, killOne, killTree, listProcesses } from "../platform.js";
 import { augmentedEnv, resolveBin, resolveLaunch } from "./bin-resolve.js";
 
@@ -14,7 +13,7 @@ import { augmentedEnv, resolveBin, resolveLaunch } from "./bin-resolve.js";
 export { augmentedEnv, resolveBin, resolveLaunch };
 export type { LaunchPlan } from "./bin-resolve.js";
 
-// shell-quote a single argument for a remote (ssh) command line
+// shell-quote a single argument for a copy-pasteable command line
 export const shq = (s: string) => (/^[\w./:@=-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
 
 
@@ -82,7 +81,7 @@ export function spawnErrorMessage(bin: string, err: NodeJS.ErrnoException): stri
 // 解法:spawn 时塞一个指向「本次运行专属追踪文件」的继承 fd(stdio[3])。所有
 // 后代都会带着这个 fd(bash/nohup 不关高位 fd),无论怎么改组、被谁收养;停止
 // 时 `lsof -t <file>` 反查持有者,再从每个持有者向下走 ppid 树补上被 python
-// close_fds 掐断继承的孙进程。局限:ssh 目标不适用(远端进程);双 fork 且中间
+// close_fds 掐断继承的孙进程。局限:双 fork 且中间
 // 层已死、又恰好隔着一层 close_fds 的深孤儿仍可能漏(实践中极少)。
 //
 // **Windows 上这一层是残的,而且必须承认它是残的。** 两个缺口都堵不上:
@@ -147,9 +146,8 @@ async function killEscapees(child: ChildProcess, sig: NodeJS.Signals): Promise<v
 // 额外收益:dev 终端 Ctrl-C 会连带把 agent 带走,正好补上下面那条「代价」的缺口。
 const DETACH = !IS_WINDOWS;
 
-// Spawn an agent CLI either locally or over ssh, feeding the prompt via stdin
-// (avoids escaping large prompts in argv, and works identically for both
-// targets: local spawn vs `ssh host "cd repo && <cli> …"`).
+// Spawn an agent CLI locally, feeding the prompt via stdin (avoids escaping
+// large prompts in argv).
 // detached: true 让 agent 自成进程组，killChild 才能对整棵进程树发 kill(-pid)。
 // 不这样的话 stop 只杀 CLI 本身，它拉起的孙进程(ffmpeg、打包器…)继承着我们的
 // stdout/stderr 管道不死，流永远不 EOF，run loop 收不到 close → 任务永远停不掉
@@ -157,13 +155,11 @@ const DETACH = !IS_WINDOWS;
 // 代价：dev 前台 Ctrl-C 不再连带杀掉 agent(生产是 nohup 跑法，不受影响)。
 // Windows 上反过来 —— 一律不 detached，理由见 DETACH。
 // extraEnv: per-executor 的环境变量(供应商的 base_url / key、覆盖 CLI 自己的配置)。
-// 本地合进 env,ssh 拼成远程命令的 `KEY=值 ` 前缀 —— 二者对 CLI 是等价的。
-// **值为 `undefined` = 把这个变量从子进程里删掉**(本地靠 Node 跳过 undefined,ssh 靠
-// `env -u`):harness 自己环境里带着的同名变量,不删就会盖掉「这里留空 = 跟随 CLI」。
+// **值为 `undefined` = 把这个变量从子进程里删掉**:harness 自己环境里带着的同名变量,
+// 不删就会盖掉「这里留空 = 跟随 CLI」(Node 会跳过值为 undefined 的项)。
 // keepStdin: 常驻会话(§Team 的调度台)用 —— 写完首条消息不关 stdin,管道留给
 // 调用方继续注入后续回合(见 executors/claude.ts 的 openResident)。
 export function spawnAgent(
-  target: ExecTarget,
   cwd: string,
   bin: string,
   args: string[],
@@ -173,22 +169,6 @@ export function spawnAgent(
 ): ChildProcess {
   const blocked = guardAgentSpawn(bin);
   if (blocked) return blocked;
-  const entries = Object.entries(extraEnv ?? {});
-  const unsets = entries.filter(([, v]) => v === undefined).map(([k]) => `-u ${shq(k)}`);
-  const assigns = entries.filter(([, v]) => v !== undefined).map(([k, v]) => `${k}=${shq(v!)}`);
-  // 有要删的就得借 `env -u`(shell 的 `K=v cmd` 只能赋值不能删);没有就维持原来的
-  // `K=v cmd` 形状,免得所有远端命令凭空多一层 env。
-  const envPrefix = unsets.length
-    ? `env ${[...unsets, ...assigns].join(" ")} `
-    : assigns.map((pair) => `${pair} `).join("");
-  if (target.kind === "ssh") {
-    const remote = `cd ${shq(cwd)} && ${envPrefix}${bin} ${args.map(shq).join(" ")}`;
-    const child = spawn("ssh", [target.host, remote], { stdio: ["pipe", "pipe", "pipe"], env: augmentedEnv(), detached: DETACH, windowsHide: true });
-    teeStdout(child, opts?.teeOut);
-    child.stdin?.write(prompt);
-    if (!opts?.keepStdin) child.stdin?.end();
-    return child;
-  }
   // Local pre-flight: distinguish "cwd missing" from "binary missing" so the
   // error never lies (both raise ENOENT from spawn, indistinguishable by code).
   if (!isDir(cwd)) return failedChild(`工作目录不存在：${cwd}`);
@@ -225,7 +205,7 @@ export function spawnAgent(
 // 静默变成空操作 —— 一个干完活的任务会被记成 failed,且失败得无声无息。
 //
 // Windows 上「活得过重启」这一档整个砍掉了(spawnForRun),所以那个 out 文件得由
-// 这里补上。顺带也覆盖了 ssh 目标 —— 它一直走管道,补捞在那条路上同样是空的。
+// 这里补上。
 //
 // 实现上不用 `stdout.pipe(ws)`:pipe 会立刻把原流切进 flowing 模式,而各 executor
 // 的解析器是**之后**才挂 'data' 的,中间这几个 tick 冒出来的字节就永久丢了。改成
@@ -295,17 +275,10 @@ export function registerTrackFd(child: ChildProcess, track: { fd: number | null;
   });
 }
 
-// Wrap a resume command for the target so it is copy-paste runnable (§13).
+// Wrap a resume command so it is copy-paste runnable (§13).
 // envPrefix(供应商的 `KEY=值 `,token 已换成占位符)拼在 CLI 前面 —— 不带它,
 // 粘到终端的命令会走 CLI 自己的官方账号,跟这次运行不是同一个来源。
-//
-// ssh 那支要把整条远端命令再包一层双引号,所以里面出现的 `"`(claude 的
-// `--settings '{"env":…}'` 就带着一串)必须转义,否则用户粘过去的命令在本机 shell
-// 就断在半截 —— `$` 和反引号一并转,免得本机 shell 抢先展开本该发给远端的字。
-const dq = (s: string) => s.replace(/([\\"$`])/g, "\\$1");
-
-export function resumeFor(target: ExecTarget, cwd: string, inner: string, envPrefix = ""): string {
-  if (target.kind === "ssh") return `ssh ${target.host} "${dq(`cd ${shq(cwd)} && ${envPrefix}${inner}`)}"`;
+export function resumeFor(cwd: string, inner: string, envPrefix = ""): string {
   return `cd ${shq(cwd)} && ${envPrefix}${inner}`;
 }
 

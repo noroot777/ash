@@ -19,13 +19,11 @@ await ensureSchema();
 await db.delete(sessions);
 await db.delete(agents);
 
-const localTarget = JSON.stringify({ kind: "local" });
 await db.insert(agents).values([
   {
     id: "grok-local",
     name: "grok@local",
     type: "grok",
-    target: localTarget,
     model: null,
     extraArgs: "[]",
     reasoningEffort: null,
@@ -41,7 +39,6 @@ const session = (over: Record<string, unknown>) => ({
   role: "single",
   agentType: "codex",
   executor: "codex@cpa·gpt-5.6-sol",
-  target: localTarget,
   startedAt: "2026-08-02T07:10:00.000Z",
   turnStartedAt: "2026-08-02T07:10:00.000Z",
   endedAt: "2026-08-02T07:40:00.000Z",

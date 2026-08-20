@@ -146,9 +146,6 @@ export function AgentProfileRow({
               {profile.name}
             </button>
           )}
-          <small title={profile.target.kind === "ssh" ? `ssh ${profile.target.host}` : "本地执行"}>
-            {profile.target.kind === "ssh" ? `ssh ${profile.target.host}` : "本地"}
-          </small>
         </div>
         <div className="agent-profile-cell">
           <Dropdown
@@ -213,7 +210,6 @@ export function AgentProfileRow({
               value={profile.configOverrides ?? {}}
               extraArgs={profile.extraArgs ?? []}
               disabled={busy}
-              remote={profile.target.kind === "ssh"}
               onSave={async (configOverrides) => {
                 const saved = await patch({ configOverrides });
                 if (saved) notify(`${profile.name} 的 CLI 配置覆盖已保存`);

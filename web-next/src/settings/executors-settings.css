@@ -467,44 +467,6 @@
   height: 24px;
 }
 
-.agent-ssh-form {
-  display: grid;
-  grid-template-columns: minmax(120px, 0.55fr) minmax(210px, 1fr);
-  gap: 10px;
-}
-
-.agent-ssh-form label {
-  display: grid;
-  gap: 5px;
-}
-
-.agent-ssh-form label > span {
-  color: var(--faint);
-  font-size: 9px;
-  font-weight: 650;
-  letter-spacing: 0.045em;
-  text-transform: uppercase;
-}
-
-.agent-ssh-form input,
-.agent-ssh-form select {
-  width: 100%;
-  min-width: 0;
-  height: 30px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--canvas);
-  padding: 0 8px;
-  color: var(--ink);
-  font-size: 11px;
-  outline: 0;
-}
-
-.agent-ssh-form input:focus,
-.agent-ssh-form select:focus {
-  border-color: var(--accent);
-}
-
 @media (max-width: 900px) {
   .agent-profile-table {
     overflow-x: auto;
@@ -532,10 +494,6 @@
 
   .agent-profile-group-actions {
     grid-column: 3;
-  }
-
-  .agent-ssh-form {
-    grid-template-columns: 1fr;
   }
 
   .agent-detection-results .settings-cli-grid article:nth-last-child(2) {

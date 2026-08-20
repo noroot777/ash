@@ -191,7 +191,6 @@ const toAgent = (r: typeof agents.$inferSelect) => ({
   id: r.id,
   name: r.name,
   type: r.type,
-  target: JSON.parse(r.target),
   model: r.model ?? undefined,
   extraArgs: JSON.parse(r.extraArgs),
   reasoningEffort: r.reasoningEffort ?? undefined,
@@ -215,7 +214,7 @@ api.get("/agents/catalog", async (c) => c.json(await detectKnownClis()));
 // 前端算不出来 —— 不报过去的话,页面上写的水位和 CLI 的实际行为会对不上。
 api.get("/agents/cli-env", (c) => c.json(cliHostEnv()));
 
-// `/技能` 的三个端点在 `skill-routes.ts`(cwd 取项目仓库根、ssh 执行器不拿本机盘冒充)。
+// `/技能` 的三个端点在 `skill-routes.ts`(cwd 取项目仓库根)。
 mountSkillRoutes(api);
 // 模型清单(现问 CLI + 刷新)在 `model-routes.ts`。
 mountModelRoutes(api);
@@ -239,7 +238,6 @@ api.post("/agents", async (c) => {
     id: id(),
     name: b.name,
     type,
-    target: JSON.stringify(b.target ?? { kind: "local" }),
     model,
     extraArgs: JSON.stringify(b.extraArgs ?? []),
     reasoningEffort: normalizeReasoningEffort(type, model, b.reasoningEffort),
@@ -272,7 +270,6 @@ api.patch("/agents/:id", async (c) => {
     }, 400);
   }
   if (b.model !== undefined) patch.model = nextModel;
-  if (b.target !== undefined) patch.target = JSON.stringify(b.target);
   if (b.extraArgs !== undefined) patch.extraArgs = JSON.stringify(b.extraArgs);
   if (b.reasoningEffort !== undefined || b.model !== undefined) {
     patch.reasoningEffort = normalizeReasoningEffort(type, nextModel, requestedEffort);

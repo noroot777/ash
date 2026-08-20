@@ -242,14 +242,12 @@ export function TaskDerivationComposer({
   const leadSkills = useSkills({
     agentType: leadSelection.agentType,
     projectId: task.projectId,
-    executorId: leadSelection.executorId,
     enabled: teamMode,
   });
   const noteSlash = useSlashCompletion({
     value: note,
     setValue: (next) => { noteTouched.current = true; setNote(next); },
     skills: leadSkills.skills,
-    remote: leadSkills.remote,
     disabled: !teamMode,
   });
 
@@ -461,13 +459,10 @@ export function TaskDerivationComposer({
                 <SlashMenu
                   className="task-derivation-slash-menu"
                   ariaLabel="技能补全"
-                  hint={leadSkills.remote
-                    ? "远端(ssh)调度者的技能装在那头，本机列不出来"
-                    : "已装技能 · 回车补全，原样写进调度者的 prompt"}
+                  hint="已装技能 · 回车补全，原样写进调度者的 prompt"
                   items={noteSlash.items}
                   selectedIndex={noteSlash.selectedIndex}
                   token={noteSlash.token}
-                  emptyText="这台调度者跑在 ssh 远端，技能清单只有它自己看得见——照常写 /名字，它认得。"
                   onHover={noteSlash.setIndex}
                   onPick={noteSlash.pick}
                 />

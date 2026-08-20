@@ -40,7 +40,6 @@ import { pauseGroup } from "../scheduler.js";
 import { taskWorkspace } from "../task-workspace.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import type { ResidentHandle } from "../executors/types.js";
-import { sessionTargetKey } from "../executors/resume.js";
 import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
 import { recordUserConversationTurn } from "../conversation-turn.js";
@@ -73,7 +72,6 @@ interface Lead {
   model: string | null;
   reasoningEffort: string | null;
   cwd: string;
-  remote: boolean;
   handle: ResidentHandle;
   out: WriteStream;
   busy: boolean;
@@ -253,7 +251,7 @@ function push(lead: Lead, text: string, kind: Kind): void {
   if (!text.trim()) return;
   clearIdle(lead);
   if (kind === "user") {
-    const promptedText = withSkillInvocation({ agentType: lead.agentType, cwd: lead.cwd, text, remote: lead.remote });
+    const promptedText = withSkillInvocation({ agentType: lead.agentType, cwd: lead.cwd, text });
     // 见头注 ②③:不打断的话用户要干等一整个回合,那就不是 steering 了。
     if (lead.busy) {
       lead.handle.interrupt();
@@ -301,9 +299,9 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
     .at(0);
   const resuming = !!prev?.cliSessionId;
-  const objective = withSkillInvocation({ agentType: cfg.lead, cwd: ws.path, text: task.body?.trim() || task.title, remote: ex.target.kind === "ssh" });
+  const objective = withSkillInvocation({ agentType: cfg.lead, cwd: ws.path, text: task.body?.trim() || task.title });
   const text = kind === "start" && resuming ? LEAD_NUDGE : rawText;
-  const promptedText = kind === "user" ? withSkillInvocation({ agentType: cfg.lead, cwd: ws.path, text, remote: ex.target.kind === "ssh" }) : text;
+  const promptedText = kind === "user" ? withSkillInvocation({ agentType: cfg.lead, cwd: ws.path, text }) : text;
   // 接回:上下文都在 CLI 会话里,只补一句「你被中断过」。全新开台:前言 + 目标
   // (哪怕这次是被一条消息带起来的,前言也必须有 —— 否则它不知道自己是调度者)。
   // ws.fresh = 原 worktree 连分支一起没了、这次是重建的空目录,接回的调度者记忆
@@ -323,9 +321,9 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   const cliSessionId = prev?.cliSessionId ?? handle.sessionId;
   if (resuming) {
     // 接回同一行会话:除了回合时间戳,**执行器那一组字段必须整组刷新** —— 用户完全
-    // 可以在两段常驻之间改掉团队的执行器 profile(换 CLI、换供应商、改 CLI 配置覆盖、
-    // 甚至改成 ssh 远端)。沿用上一段的值,会话详情就会拿旧 profile 的 env 前缀和
-    // 「在哪台机器上跑」去拼那条「复制去终端接着聊」的命令,直接是错的。
+    // 可以在两段常驻之间改掉团队的执行器 profile(换 CLI、换供应商、改 CLI 配置覆盖)。
+    // 沿用上一段的值,会话详情就会拿旧 profile 的 env 前缀去拼那条「复制去终端接着聊」
+    // 的命令,直接是错的。
     await db
       .update(sessions)
       .set({
@@ -334,7 +332,6 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
         exitStatus: null,
         commandLine: handle.commandLine,
         executor: ex.label,
-        target: sessionTargetKey(ex.target),
         ...ex.resumeFields(ws.path, cliSessionId),
       })
       .where(eq(sessions.id, sessId));
@@ -345,7 +342,6 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
       role: "lead",
       agentType: cfg.lead,
       executor: ex.label,
-      target: sessionTargetKey(ex.target),
       worktreePath: ws.isWorktree ? ws.path : null,
       branch: ws.branch,
       cwd: ws.path,
@@ -368,7 +364,6 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
     model: ex.model ?? null,
     reasoningEffort: ex.reasoningEffort ?? null,
     cwd: ws.path,
-    remote: ex.target.kind === "ssh",
     handle,
     out: createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" }),
     busy: false,

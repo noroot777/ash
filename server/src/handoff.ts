@@ -14,7 +14,7 @@
 // 是一段空白历史。
 //
 // V1 明确不做:鉴权(harness 全系统都没有,终端 API 本身就是一个 shell——只在可信内网
-// 用)、team/duet 模式、ssh 执行器会话。
+// 用)、team/duet 模式。
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { hostname, homedir } from "node:os";

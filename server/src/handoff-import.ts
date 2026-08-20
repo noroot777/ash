@@ -471,7 +471,6 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
           executorFingerprint: null,
           turnModel: s.turnModel,
           turnReasoningEffort: s.turnReasoningEffort,
-          target: "local",
           worktreePath: useWorktree ? workspace : null,
           branch: s.branch,
           cwd: workspace,

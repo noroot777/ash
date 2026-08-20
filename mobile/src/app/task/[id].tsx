@@ -550,7 +550,6 @@ export default function TaskDetail() {
         <SkillSuggestions
           agentType={task.agentType}
           projectId={task.projectId}
-          executorId={task.executorId}
           value={input}
           onPick={(command) => setInput(`${command} `)}
         />

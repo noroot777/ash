@@ -12,15 +12,12 @@ export function useSlashCompletion({
   setValue,
   skills,
   harness = [],
-  remote,
   disabled,
 }: {
   value: string;
   setValue: (next: string) => void;
   skills: SkillEntry[];
   harness?: SlashItem[];
-  /** 执行器在 ssh 那头:清单读不到，菜单照样弹一句实话，别装成「没装技能」。 */
-  remote?: boolean;
   disabled?: boolean;
 }) {
   const [index, setIndex] = useState(0);
@@ -29,7 +26,7 @@ export function useSlashCompletion({
   const token = disabled || dismissed ? null : slashToken(value);
   const items = mergeSlashItems(harness, skills, token);
   const selectedIndex = Math.min(index, Math.max(0, items.length - 1));
-  const open = items.length > 0 || (!!remote && token !== null);
+  const open = items.length > 0;
 
   const pick = (item: SlashItem) => {
     setValue(`${item.command} `);
@@ -46,14 +43,6 @@ export function useSlashCompletion({
   /** 返回 true = 这个按键已经被菜单吃掉了，调用方不要再处理。 */
   const onKeyDown = (event: KeyboardEvent): boolean => {
     if (!open) return false;
-    if (!items.length) {
-      // 只有一句「远端读不到」的提示时，除了 Esc 关掉它，别抢任何按键。
-      if (event.key !== "Escape") return false;
-      event.preventDefault();
-      event.stopPropagation();
-      setDismissed(true);
-      return true;
-    }
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       setIndex((selectedIndex + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length);

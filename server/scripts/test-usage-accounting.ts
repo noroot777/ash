@@ -117,7 +117,6 @@ try {
     role: "single",
     agentType: "claude",
     executor: "claude",
-    target: "claude",
     startedAt: new Date().toISOString(),
   });
 
@@ -173,7 +172,6 @@ try {
       role: "single",
       agentType: "codex",
       executor: "codex",
-      target: "local",
       cliSessionId: "legacy-thread",
       startedAt: "2026-08-07T01:00:00.000Z",
       usageInput: 9_000,
@@ -189,7 +187,6 @@ try {
       role: "single",
       agentType: "codex",
       executor: "codex",
-      target: "local",
       cliSessionId: "incomplete-thread",
       startedAt: "2026-08-07T01:00:00.000Z",
       usageInput: 20,
@@ -205,7 +202,6 @@ try {
       role: "single",
       agentType: "claude",
       executor: "claude",
-      target: "local",
       cliSessionId: "legacy-claude-thread",
       startedAt: "2026-08-07T01:00:00.000Z",
       usageInput: 1,

@@ -1,5 +1,13 @@
 /* 对话框底部的回复框（含 `/` 命令与 @ 提及菜单），以及 /team、/duet 弹出的派生面板。 */
 .task-reply-shell { position: relative; flex: 0 0 auto; border-top: 0.5px solid var(--line); padding: 10px clamp(14px, 3vw, 34px) 14px; background: var(--canvas); }
+/* 输入框正上方那条 rail：自由工作流按钮 + 接力入口，任务跑着也照常可点。 */
+.task-reply-rail { display: flex; flex-wrap: wrap; align-items: center; gap: 1px; margin: 0 0 2px; }
+.task-reply-rail > .free-workflow-toolbar { margin: 0; }
+.task-reply-rail-button { display: inline-flex; height: 26px; flex: 0 0 auto; align-items: center; gap: 5px; border: 0; border-radius: 7px; background: transparent; padding: 0 8px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: -.01em; transition: background .12s ease, color .12s ease; }
+.task-reply-rail-button svg { flex: 0 0 auto; opacity: .72; }
+.task-reply-rail-button:hover { background: color-mix(in lch, var(--raised) 85%, var(--panel)); color: var(--ink); }
+.task-reply-rail-button:hover svg { opacity: 1; }
+.task-reply-rail-button:focus-visible { outline: 2px solid color-mix(in lch, var(--accent) 48%, transparent); outline-offset: 1px; }
 .task-reply-box { overflow: hidden; border: 1px solid var(--line2); border-radius: 12px; background: var(--panel); box-shadow: var(--surface-shadow); }
 .task-reply-box textarea { display: block; width: 100%; min-height: 58px; max-height: 230px; resize: vertical; border: 0; background: transparent; padding: 10px 12px 2px; color: var(--ink); font-size: 12.5px; line-height: 1.55; outline: 0; }
 .task-reply-actions { display: flex; height: 38px; align-items: center; gap: 8px; padding: 0 7px 6px 8px; color: var(--faint); font-size: 9.5px; }

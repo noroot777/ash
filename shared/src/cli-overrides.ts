@@ -47,20 +47,9 @@ export interface CliConfigOverride {
 export interface CliHostEnv {
   /** `CLAUDE_CODE_MAX_OUTPUT_TOKENS`;没设 = null(CLI 用模型自己的上限)。 */
   maxOutputTokens: number | null;
-  /**
-   * 这份环境是**真读到的**吗。默认 true。
-   *
-   * false 的唯一来源是 ssh profile:CLI 跑在远端,harness 只能看见自己这台机器的
-   * 环境变量,拿本机的值去替远端算触发点是**编数**(本机没设、远端设了 10k,算出来
-   * 的水位能差 4~5 个百分点)。所以那种情况下一律按默认预留估算,并在提示里说明白
-   * 「这是估的」—— 宁可承认不知道,也不给一个看着精确的错数。
-   */
-  observed?: boolean;
 }
 
 export const NO_CLI_HOST_ENV: Readonly<CliHostEnv> = Object.freeze({ maxOutputTokens: null });
-/** 读不到的那份(ssh 远端)。换算跟「没设」一样,区别只在提示里会讲明这是估的。 */
-export const UNKNOWN_CLI_HOST_ENV: Readonly<CliHostEnv> = Object.freeze({ maxOutputTokens: null, observed: false });
 
 // ── claude 的自动压缩是怎么算的(2.1.220 反编译核对) ──────────────────────────
 // 触发点不是「窗口」本身,中间垫了两层:
@@ -105,7 +94,7 @@ const CLAUDE_AUTO_COMPACT_KILL_SWITCHES = ["DISABLE_COMPACT", "DISABLE_AUTO_COMP
 // 就**把同一个值钉进 `--settings.env`**:不钉的话,用户 settings.json 里的同名变量会在
 // 换算之后把分母改小,有效窗口变大、真实触发点比页面写的晚 5 个百分点左右(第 2 轮
 // 审查 finding 3)。钉的是「我们读到的那个赢家值」,所以对用户是原地不动,只是不许它
-// 在我们身后再变。读不到(ssh 远端)就不钉 —— 编一个数比不钉更糟。
+// 在我们身后再变。读不到就不钉 —— 编一个数比不钉更糟。
 const CLAUDE_MAX_OUTPUT_ENV = "CLAUDE_CODE_MAX_OUTPUT_TOKENS";
 
 /** 这个 profile 真的配了自动压缩(窗口是这一档的开关项,没它百分比也不注入)。 */
@@ -451,11 +440,7 @@ export function cliConfigOverrideHints(
   // 摁住总开关这件事得说出来:它盖的是用户自己配置文件里的开关,不说明白就等于
   // 「悄悄改了别人的配置」;而不摁的话上面这个触发点根本不会发生(见 JI())。
   const forced = [`这次调用里 harness 会强制打开自动压缩(顶掉 settings.json 的 autoCompactEnabled:false 与 ${CLAUDE_AUTO_COMPACT_KILL_SWITCHES.join(" / ")}),否则窗口和百分比填对了也一次都不会压。`];
-  // 远端读不到那个预留量,上面这个数是按默认 20k 估的 —— 不说清楚,用户会把它当准数。
-  const estimated = host.observed === false
-    ? ["这个 profile 跑在 ssh 远端:远端的 CLAUDE_CODE_MAX_OUTPUT_TOKENS 读不到,上面的触发点按默认 20k 预留估算,远端若设过这个变量会有几个百分点的偏差。"]
-    : [];
-  if (plan.percent === null) return [`${at}这是 claude 的默认触发点;想更早压就填下面的百分比。`, ...forced, ...estimated];
-  if (plan.capped) return [`${at}填的 ${plan.percent}% 比 claude 自己的下限还晚,已经按下限算 —— 想更早压请往小了填。`, ...forced, ...estimated];
-  return [at, ...forced, ...estimated];
+  if (plan.percent === null) return [`${at}这是 claude 的默认触发点;想更早压就填下面的百分比。`, ...forced];
+  if (plan.capped) return [`${at}填的 ${plan.percent}% 比 claude 自己的下限还晚,已经按下限算 —— 想更早压请往小了填。`, ...forced];
+  return [at, ...forced];
 }

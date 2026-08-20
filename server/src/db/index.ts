@@ -84,8 +84,7 @@ export async function ensureSchema() {
       archived INTEGER NOT NULL DEFAULT 0, archived_at TEXT
     );
     CREATE TABLE IF NOT EXISTS agents (
-      id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL,
-      target TEXT NOT NULL DEFAULT '{"kind":"local"}', model TEXT,
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL, model TEXT,
       extra_args TEXT NOT NULL DEFAULT '[]', reasoning_effort TEXT, speed TEXT,
       config_overrides TEXT NOT NULL DEFAULT '{}',
       is_default INTEGER NOT NULL DEFAULT 0
@@ -96,7 +95,7 @@ export async function ensureSchema() {
     );
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, role TEXT NOT NULL,
-      agent_type TEXT NOT NULL, executor TEXT NOT NULL, target TEXT NOT NULL,
+      agent_type TEXT NOT NULL, executor TEXT NOT NULL,
       worktree_path TEXT, branch TEXT, cwd TEXT, cli_session_id TEXT, resume_command TEXT,
       command_line TEXT, started_at TEXT NOT NULL, ended_at TEXT, exit_status INTEGER,
       active_ms INTEGER, turn_started_at TEXT
@@ -475,6 +474,10 @@ const RETIRED_COLUMNS: { table: string; column: string; why: string }[] = [
   { table: "free_workflow_states", column: "merge_status", why: "自由工作流合并已统一走验收" },
   { table: "free_workflow_states", column: "merge_message", why: "自由工作流合并已统一走验收" },
   { table: "free_workflow_states", column: "merged_at", why: "自由工作流合并已统一走验收" },
+  // ssh 执行器整个功能删掉了(换机器改走「接力」):profile 不再记执行位置,
+  // 会话也不再记 "local"/"ssh:host"。
+  { table: "agents", column: "target", why: "ssh 执行器已移除,执行位置永远是本机" },
+  { table: "sessions", column: "target", why: "ssh 执行器已移除,执行位置永远是本机" },
 ];
 
 // 退役整表与退役列遵循同一原则：新库不创建，老库启动时幂等清理，失败只告警。

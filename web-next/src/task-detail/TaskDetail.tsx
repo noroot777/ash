@@ -35,7 +35,7 @@ import { WorkflowInspector } from "../workflow/WorkflowInspector.tsx";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { DerivedTaskLinks } from "../components/DerivedTaskLinks.tsx";
 import { FreeWorkflowInspector } from "../free-workflow/FreeWorkflowInspector.tsx";
-import { FreeWorkflowToolbar } from "../free-workflow/FreeWorkflowToolbar.tsx";
+import { TaskReplyRail } from "./TaskReplyRail.tsx";
 import { FreeReviewDialog } from "../free-workflow/FreeReviewDialog.tsx";
 import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import { freeReviewRetryable } from "./turnRetry.ts";
@@ -189,6 +189,13 @@ export function TaskDetail({
     ? latestPostMerge?.status === "reviewing" ? "查看合并审查" : latestPostMerge ? "再次审查合并结果" : "审查合并结果"
     : null;
   const derivationAllowed = canDeriveTask(task);
+  // 接力入口:已接力出去的任务在本机是存档,除非那次还悬着(可以撤/重试)。
+  const canHandoff = task.mode === "single" && task.parentId === null && !task.archived && task.queueId == null
+    && (task.handoff?.direction !== "out" || !!task.handoff.pending);
+  // 与 FreeWorkflowToolbar 自己的判据一致:两处都得知道这一条 rail 里到底有没有东西,
+  // 空的时候不能给 ReplyBox 挂 has-top-rail(那会白留一条内边距)。
+  const freeToolbarVisible = task.workflowMode === "free" && task.mode === "single"
+    && !task.parentId && !task.reviewOf;
   const reviewFocused = REVIEW_FOCUS_STAGES.has(task.stage ?? "")
     || allTasks.some((candidate) => candidate.reviewOf === task.id);
   const inspectorPolicy = useMemo(() => ({
@@ -203,7 +210,6 @@ export function TaskDetail({
   const skills = useSkills({
     agentType: task.agentType,
     projectId: task.projectId,
-    executorId: task.executorId,
     enabled: task.mode === "single" && !task.archived,
   });
 
@@ -362,10 +368,6 @@ export function TaskDetail({
                 else setPostMergeDialogOpen(true);
               } : undefined}
               onDelete={() => setDeleteOpen(true)}
-              onHandoff={task.mode === "single" && !task.archived && task.queueId == null
-                && (task.handoff?.direction !== "out" || task.handoff.pending)
-                ? () => setHandoffOpen(true)
-                : undefined}
               indicatorForTask={indicatorForTask}
               terminalToggle={terminalToggle}
               inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
@@ -440,11 +442,18 @@ export function TaskDetail({
                   <ReplyBox
                     task={task}
                     hasConversation={hasConversation}
-                    topRail={task.workflowMode === "free" && task.mode === "single" && !task.parentId && !task.reviewOf
-                      ? <FreeWorkflowToolbar task={task} notify={notify} />
+                    topRail={freeToolbarVisible || canHandoff
+                      ? (
+                        <TaskReplyRail
+                          task={task}
+                          freeToolbar={freeToolbarVisible}
+                          canHandoff={canHandoff}
+                          onHandoff={() => setHandoffOpen(true)}
+                          notify={notify}
+                        />
+                      )
                       : undefined}
                     skills={skills.skills}
-                    skillsRemote={skills.remote}
                     onSend={async (text, attachments, { executorLabel, ...options }) => {
                       const result = await api.replyTask(task.id, text, { attachments, ...options });
                       // 按**结果**分支而不是按请求参数:任务正在跑时后端会把这条落成

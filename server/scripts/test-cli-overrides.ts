@@ -19,7 +19,7 @@ import { requireTmpDb } from "./tmp-db.js";
 requireTmpDb("test-cli-overrides");
 
 const {
-  UNKNOWN_CLI_HOST_ENV,
+  NO_CLI_HOST_ENV,
   claudeCompactionPlan,
   cliConfigOverrideEnv,
   cliConfigOverrideErrors,
@@ -113,10 +113,10 @@ const pinned = cliConfigOverrideEnv(
 );
 assert.equal(pinned.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "10000", "读到多少就钉多少(对用户是原地不动)");
 assert.equal(
-  cliConfigOverrideEnv("claude", { autoCompactWindow: 200_000 }, UNKNOWN_CLI_HOST_ENV)
+  cliConfigOverrideEnv("claude", { autoCompactWindow: 200_000 }, NO_CLI_HOST_ENV)
     .CLAUDE_CODE_MAX_OUTPUT_TOKENS,
   undefined,
-  "读不到(ssh 远端)就不钉 —— 编一个数比不钉更糟",
+  "读不到就不钉 —— 编一个数比不钉更糟",
 );
 
 // ── ①b 百分比:用户填「占窗口的百分之几」,claude 认的是「占有效窗口的百分之几」 ──
@@ -186,7 +186,6 @@ await db.insert(agents).values([
     id: "claude-overridden",
     name: "claude@overridden",
     type: "claude",
-    target: JSON.stringify({ kind: "local" }),
     extraArgs: "[]",
     // 故意存一个超范围的值:老 profile / 后来改过范围的声明都可能留下这种,
     // 解析时必须夹回去,而不是把一个 CLI 会忽略的数原样注进去。
@@ -197,26 +196,15 @@ await db.insert(agents).values([
     id: "claude-plain",
     name: "claude@plain",
     type: "claude",
-    target: JSON.stringify({ kind: "local" }),
     extraArgs: "[]",
     configOverrides: "{}",
     isDefault: false,
   },
-  // 同一份覆盖项,一个跑本机、一个跑 ssh 远端 —— 用来钉「远端不拿本机环境换算」。
+  // 配了百分比的一份 —— 用来钉「换算走的是真读到的那个预留量」。
   {
     id: "claude-pct-local",
     name: "claude@pct-local",
     type: "claude",
-    target: JSON.stringify({ kind: "local" }),
-    extraArgs: "[]",
-    configOverrides: JSON.stringify({ autoCompactWindow: 200_000, autoCompactPercent: 80 }),
-    isDefault: false,
-  },
-  {
-    id: "claude-pct-ssh",
-    name: "claude@pct-ssh",
-    type: "claude",
-    target: JSON.stringify({ kind: "ssh", host: "build.example" }),
     extraArgs: "[]",
     configOverrides: JSON.stringify({ autoCompactWindow: 200_000, autoCompactPercent: 80 }),
     isDefault: false,
@@ -227,7 +215,6 @@ await db.insert(agents).values([
     id: "claude-fast-overridden",
     name: "claude@fast",
     type: "claude",
-    target: JSON.stringify({ kind: "local" }),
     extraArgs: "[]",
     speed: "fast",
     configOverrides: JSON.stringify({ autoCompactWindow: 200_000, autoCompactPercent: 80 }),
@@ -238,7 +225,6 @@ await db.insert(agents).values([
     id: "claude-broken",
     name: "claude@broken",
     type: "claude",
-    target: JSON.stringify({ kind: "local" }),
     extraArgs: "[]",
     configOverrides: "{不是 JSON",
     isDefault: false,
@@ -314,20 +300,10 @@ assert.ok(!plainFields.resumeCommand.includes("--settings"), "没配就不该凭
 
 // 会话详情读取时是**重算**这条命令的(resumeCommandFor),那截参数从库里那列接回来 ——
 // 这条链断了的话上面两条仍然过,但用户在页面上看到的还是不带 --settings 的命令。
-const { resumeCommandFor, sessionTargetKey } = await import("../src/executors/resume.js");
+const { resumeCommandFor } = await import("../src/executors/resume.js");
 assert.ok(
-  resumeCommandFor("claude", "local", sandbox, "sid-1", null, args).includes("--settings"),
+  resumeCommandFor("claude", sandbox, "sid-1", null, args).includes("--settings"),
   "重算时要把持久化的那截参数接回去",
-);
-// ssh 目标下整条命令被裹进一层双引号,而 --settings 的 JSON 自带双引号 —— 不转义的话
-// 引号在这里断开,复制出去的命令直接是语法错的。
-const sshResume = resumeCommandFor("claude", "ssh:build.example", sandbox, "sid-1", null, args);
-assert.ok(sshResume.startsWith("ssh "), "ssh 目标要走 ssh");
-assert.ok(sshResume.includes('\\"'), `JSON 里的双引号要转义,实际 ${sshResume}`);
-assert.equal(
-  (sshResume.match(/(?<!\\)"/g) ?? []).length,
-  2,
-  `未转义的双引号只该是最外层那对,实际 ${sshResume}`,
 );
 
 // ── ⑥ 依赖项没配上的组合,存不进去 ──────────────────────────────────────────
@@ -374,9 +350,8 @@ const patched = await api.request(`/agents/${createdId}`, {
 });
 assert.equal(patched.status, 400, "PATCH 是另一条口子,同样得拦(对称端点只改一个是老毛病)");
 
-// ── ⑦ ssh profile:换算不许拿本机环境凑数 ────────────────────────────────────
-// 远端 CLI 读的是远端那份环境。本机设了 10k 预留就按 10k 算的话,注给远端的百分比会
-// 直接偏几个百分点,而页面上还写得像个准数。
+// ── ⑦ 换算走的必须是真读到的那个预留量 ──────────────────────────────────────
+// 预留量按默认值估的话,注出去的百分比会偏几个百分点,而页面上还写得像个准数。
 //
 // HOME 先支到一个空沙箱:分母的解析优先读 `~/.claude/settings.json`(那才是 CLI 的
 // 真实优先级),开发机上恰好写过这一项的话,下面这个 process.env 就赢不了,断言会变成
@@ -394,19 +369,17 @@ setHome(join(sandbox, "empty-home"));
 mkdirSync(join(sandbox, "empty-home"), { recursive: true });
 process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = "10000";
 const localPct = (await resolveExecutorFor({ executorId: "claude-pct-local", type: "claude" })).resumeFields(sandbox, "sid-1").resumeArgs ?? "";
-const remotePct = (await resolveExecutorFor({ executorId: "claude-pct-ssh", type: "claude" })).resumeFields(sandbox, "sid-1").resumeArgs ?? "";
 const pctOf = (hint: string) => hint.match(/CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\\?"[:=]\\?"?([\d.]+)/)?.[1];
 assert.equal(
   pctOf(localPct),
   String(claudeCompactionPlan({ autoCompactWindow: 200_000, autoCompactPercent: 80 }, { maxOutputTokens: 10_000 })!.envPercent),
-  "本机 profile 要按真读到的预留量换算",
+  "profile 要按真读到的预留量换算",
 );
-assert.equal(
-  pctOf(remotePct),
+assert.notEqual(
+  pctOf(localPct),
   String(claudeCompactionPlan({ autoCompactWindow: 200_000, autoCompactPercent: 80 })!.envPercent),
-  "ssh profile 要按默认预留估算,不能沿用本机那个值",
+  "跟按默认预留估出来的值相等,说明宿主环境根本没传进换算里",
 );
-assert.notEqual(pctOf(localPct), pctOf(remotePct), "两者本就该不同,相等说明 target 没传到换算里");
 delete process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
 
 // ── ⑦b 分母按 claude 自己的分层解:文件层压过继承来的环境变量 ──────────────────
@@ -485,21 +458,6 @@ if (realHome === undefined) delete process.env.HOME;
 else process.env.HOME = realHome;
 if (realUserProfile === undefined) delete process.env.USERPROFILE;
 else process.env.USERPROFILE = realUserProfile;
-
-assert.ok(
-  cliConfigOverrideHints("claude", { autoCompactWindow: 200_000, autoCompactPercent: 80 }, UNKNOWN_CLI_HOST_ENV)
-    .some((line) => line.includes("估算")),
-  "读不到远端环境时要明说这个触发点是估的",
-);
-
-// ssh 会话存进库的 target 必须带上主机名 —— 恢复命令每次按它重算,存 "local" 就会给出
-// 一条在本机执行、cwd 还指向远端路径的命令。
-assert.equal(sessionTargetKey({ kind: "ssh", host: "build.example" }), "ssh:build.example");
-assert.equal(sessionTargetKey({ kind: "local" }), "local");
-assert.ok(
-  resumeCommandFor("claude", "ssh:build.example", sandbox, "sid-1", "").startsWith("ssh "),
-  "库里记着 ssh:<host> 时,重算出来的命令要真的走 ssh",
-);
 
 // ── ⑧ 光有环境变量赢不了:必须同时走 claude 的 `--settings` ──────────────────
 // claude 启动时会把各层 settings 的 `env` 写回自己的进程环境,用户 settings.json 里的

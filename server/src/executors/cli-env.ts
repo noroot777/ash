@@ -1,5 +1,4 @@
-import { cliConfigOverrideEnvPrefix, UNKNOWN_CLI_HOST_ENV, type CliHostEnv } from "@harness/shared/cli-overrides";
-import type { ExecTarget } from "@harness/shared";
+import { cliConfigOverrideEnvPrefix, type CliHostEnv } from "@harness/shared/cli-overrides";
 import { claudeMaxOutputTokens } from "./claude-settings.js";
 
 // harness 起 CLI 时,那个子进程会看到的环境事实。**只读**,不是配置项 —— 它由 harness
@@ -12,12 +11,7 @@ import { claudeMaxOutputTokens } from "./claude-settings.js";
 // 只看 `process.env` 是不够的:CLI 会把各层 settings 的 `env` 写回自己的进程环境,用户
 // 在 `~/.claude/settings.json` 里写的那份**压过**我们看到的环境变量(第 2 轮审查
 // finding 3)。所以按 claude 自己的分层顺序解一遍,见 claude-settings.ts。
-//
-// **ssh profile 例外**:CLI 在远端跑,读的是远端那份环境和远端的配置文件,本机这些跟它
-// 没关系。拿本机的值替远端换算等于编数,所以那种情况一律回「读不到」,按默认预留估算并
-// 在提示里说明。
-export function cliHostEnv(target?: ExecTarget, cwd?: string): CliHostEnv {
-  if (target?.kind === "ssh") return UNKNOWN_CLI_HOST_ENV;
+export function cliHostEnv(cwd?: string): CliHostEnv {
   return { maxOutputTokens: claudeMaxOutputTokens(cwd) };
 }
 
@@ -31,8 +25,7 @@ export function resumeEnvHint(
   type: string,
   configOverrides: Record<string, number> | null | undefined,
   relayHint?: string,
-  target?: ExecTarget,
 ): string | undefined {
-  const hint = cliConfigOverrideEnvPrefix(type, configOverrides, cliHostEnv(target)) + (relayHint ?? "");
+  const hint = cliConfigOverrideEnvPrefix(type, configOverrides, cliHostEnv()) + (relayHint ?? "");
   return hint || undefined;
 }

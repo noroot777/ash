@@ -22,7 +22,6 @@
   white-space: nowrap;
 }
 .slash-menu-tag + .slash-menu-tag { margin-left: 4px; }
-.slash-menu-empty { margin: 4px 7px 7px; color: var(--faint); font-size: 10.5px; }
 /* 命中的那几个字：子串匹配下命中常落在名字中段，不标出来就看不出这条为什么在列表里。 */
 .slash-menu-hit {
   border-radius: 3px;

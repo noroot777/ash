@@ -244,7 +244,6 @@ export function TaskComposerPanel({
   const skills = useSkills({
     agentType: slashRun.agentType,
     projectId: project.id,
-    executorId: slashRun.executorId,
     enabled: mode !== "duet",
   });
   const slashQuery = slashDismissed ? null : slashToken(body);
@@ -379,7 +378,7 @@ export function TaskComposerPanel({
           : review && !isExecutorPickable(reviewerExecutor, workerTypes, profiles) ? "审查者" : null;
   const roleBlocked = !!unavailableRole;
   const availabilityMessage = noExecutor
-    ? "还没有已注册执行器，暂不能创建任务；请先到执行器设置注册本地 CLI 或新增 SSH 执行器。"
+    ? "还没有已注册执行器，暂不能创建任务；请先到执行器设置注册本地 CLI。"
     : unavailableRole
       ? mode === "single"
         ? workflowMode === "free"
@@ -599,9 +598,7 @@ export function TaskComposerPanel({
               <SlashMenu
                 className="composer-slash-menu"
                 ariaLabel="斜杠命令与技能"
-                hint={skills.remote
-                  ? "模式命令 · 远端(ssh)执行器的技能装在那头，本机列不出来"
-                  : "↑↓ 选择，回车确认，Esc 关闭"}
+                hint="↑↓ 选择，回车确认，Esc 关闭"
                 items={slashCandidates}
                 selectedIndex={slashSelected}
                 token={slashQuery}

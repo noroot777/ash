@@ -27,9 +27,7 @@ export function AgentDetectionResults({
       ) : (
         <div className="settings-cli-grid">
           {available.map((cli) => {
-            const registered = !!cli.type && profiles.some(
-              (profile) => profile.type === cli.type && profile.target.kind === "local",
-            );
+            const registered = !!cli.type && profiles.some((profile) => profile.type === cli.type);
             return (
               <article key={cli.key}>
                 <span className="settings-cli-state is-ready"><Check size={12} /></span>

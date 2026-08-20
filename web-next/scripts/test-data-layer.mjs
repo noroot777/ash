@@ -84,7 +84,6 @@ try {
     executor: "codex@local",
     model: "gpt-5.5",
     reasoningEffort: "medium",
-    target: "local",
     worktreePath: null,
     branch: null,
     cwd: null,
@@ -538,7 +537,7 @@ try {
 
   const registeredProfiles = [
     { id: "codex-local", name: "codex@local", type: "codex", model: "gpt-5.6-sol", reasoningEffort: "ultra", isDefault: true },
-    { id: "qwen-ssh", name: "qwen@remote", type: "qwen", model: "qwen3", isDefault: true },
+    { id: "qwen-local", name: "qwen@local", type: "qwen", model: "qwen3", isDefault: true },
   ];
   assert.deepEqual(
     executorRunSummary({ agentType: "codex", executorId: null }, registeredProfiles),

@@ -23,7 +23,6 @@ export const SOURCE_LABEL: Record<SkillSource, string> = {
 
 interface CacheEntry {
   skills: SkillEntry[];
-  remote: boolean;
   at: number;
 }
 
@@ -50,20 +49,20 @@ async function refreshSecondsOf(): Promise<number> {
   return settingsInflight;
 }
 
-function load(key: string, params: { agentType: string; projectId: string; executorId: string }, force: boolean): Promise<CacheEntry> {
+function load(key: string, params: { agentType: string; projectId: string }, force: boolean): Promise<CacheEntry> {
   if (!force) {
     const running = inflight.get(key);
     if (running) return running;
   }
   const task = api.skills({ ...params, refresh: force })
     .then((list): CacheEntry => {
-      const entry = { skills: list.skills, remote: list.remote, at: Date.now() };
+      const entry = { skills: list.skills, at: Date.now() };
       cache.set(key, entry);
       return entry;
     })
     .catch((): CacheEntry => {
       // 读不到就维持上一份(多半是服务端重启中)。技能补全坏掉不该让输入框看起来出事。
-      return cache.get(key) ?? { skills: [], remote: false, at: Date.now() };
+      return cache.get(key) ?? { skills: [], at: Date.now() };
     })
     .finally(() => { inflight.delete(key); });
   inflight.set(key, task);
@@ -77,30 +76,28 @@ function load(key: string, params: { agentType: string; projectId: string; execu
 export function useSkills(query: {
   agentType?: AgentType | string | null;
   projectId?: string | null;
-  executorId?: string | null;
   enabled?: boolean;
-}): { skills: SkillEntry[]; remote: boolean; refresh: () => void } {
+}): { skills: SkillEntry[]; refresh: () => void } {
   const agentType = query.agentType || "claude";
   const projectId = query.projectId || "";
-  const executorId = query.executorId || "";
   const enabled = query.enabled !== false;
-  const key = `${agentType}${projectId}${executorId}`;
+  const key = `${agentType}${projectId}`;
   const cached = cache.get(key);
-  const [entry, setEntry] = useState<CacheEntry>(cached ?? { skills: [], remote: false, at: 0 });
+  const [entry, setEntry] = useState<CacheEntry>(cached ?? { skills: [], at: 0 });
   const [seconds, setSeconds] = useState(settingsValue);
   const keyRef = useRef(key);
   keyRef.current = key;
 
   const pull = useCallback((force: boolean) => {
     const mine = keyRef.current;
-    void load(mine, { agentType, projectId, executorId }, force).then((next) => {
+    void load(mine, { agentType, projectId }, force).then((next) => {
       if (keyRef.current === mine) setEntry(next);
     });
-  }, [agentType, projectId, executorId]);
+  }, [agentType, projectId]);
 
   useEffect(() => {
     if (!enabled) return;
-    setEntry(cache.get(key) ?? { skills: [], remote: false, at: 0 });
+    setEntry(cache.get(key) ?? { skills: [], at: 0 });
     pull(false);
     void refreshSecondsOf().then(setSeconds);
   }, [enabled, key, pull]);
@@ -111,7 +108,7 @@ export function useSkills(query: {
     return () => clearInterval(timer);
   }, [enabled, seconds, pull]);
 
-  return { skills: entry.skills, remote: entry.remote, refresh: () => pull(true) };
+  return { skills: entry.skills, refresh: () => pull(true) };
 }
 
 /** 供菜单画分隔线:harness 命令与技能之间的那个下标。 */

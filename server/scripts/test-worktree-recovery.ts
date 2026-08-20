@@ -101,7 +101,7 @@ try {
   // ── 5. cwd 不存在时，预检必须干净地失败，而不是卡死 ─────────────────────
   {
     const { spawnAgent } = await import("../src/executors/spawn.js");
-    const child = spawnAgent({ kind: "local" }, join(root, "does-not-exist"), "claude", [], "hi");
+    const child = spawnAgent(join(root, "does-not-exist"), "claude", [], "hi");
     const message = await new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("预检的 error 事件没有送达 —— 任务会卡死")), 3000);
       // 监听器故意晚一拍才挂上，模拟惰性 async generator 的真实时序。

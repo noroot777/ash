@@ -129,7 +129,7 @@ try {
   const cli2 = "22222222-aaaa-4bbb-8ccc-000000000002";
   const sessionBase = {
     taskId, role: "implementer", agentType: "claude", executor: "claude",
-    target: "local", worktreePath: ws.path, branch: ws.branch, cwd: ws.path,
+    worktreePath: ws.path, branch: ws.branch, cwd: ws.path,
   };
   await db.insert(sessions).values([
     { ...sessionBase, id: "handoffsess1", cliSessionId: cli1, startedAt: "2026-08-19T08:01:00.000Z" },

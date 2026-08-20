@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
-import type { AgentEvent, ExecTarget, TokenUsage } from "@harness/shared";
+import type { AgentEvent, TokenUsage } from "@harness/shared";
 import { cliConfigOverrideEnvPatch } from "@harness/shared/cli-overrides";
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
@@ -28,7 +28,6 @@ export class CodexExecutor implements AgentExecutor {
   readonly label: string;
   // 恢复命令要带的 env 前缀:覆盖项 + 供应商(token 已换成占位符)。存进 sessions。
   private readonly resumeEnvHint?: string;
-  readonly target: ExecTarget;
   private bin: string;
   readonly model?: string;
   private extraArgs: string[];
@@ -36,29 +35,26 @@ export class CodexExecutor implements AgentExecutor {
   private speed?: "fast";
   private relay?: RelayConfig;
   private configOverrides?: Record<string, number>;
-  constructor(opts: { model?: string; extraArgs?: string[]; reasoningEffort?: string; speed?: "fast"; bin?: string; target?: ExecTarget; name?: string; relay?: RelayConfig; configOverrides?: Record<string, number> } = {}) {
+  constructor(opts: { model?: string; extraArgs?: string[]; reasoningEffort?: string; speed?: "fast"; bin?: string; name?: string; relay?: RelayConfig; configOverrides?: Record<string, number> } = {}) {
     this.model = opts.model;
     this.extraArgs = opts.extraArgs ?? [];
     this.reasoningEffort = opts.reasoningEffort;
     this.speed = opts.speed;
     this.bin = opts.bin ?? "codex";
-    this.target = opts.target ?? { kind: "local" };
     this.relay = opts.relay;
     this.configOverrides = opts.configOverrides;
     this.resumeEnvHint = resumeEnvHint(
       this.type,
       this.configOverrides,
       this.relay ? `${RELAY_ENV_KEY}=<你的key> ` : undefined,
-      this.target,
     );
-    const where = this.target.kind === "ssh" ? this.target.host : "local";
-    this.label = opts.name ?? `codex@${where}${opts.model ? "·" + opts.model : ""}`;
+    this.label = opts.name ?? `codex@local${opts.model ? "·" + opts.model : ""}`;
   }
 
   resumeCommand(cwd: string, sessionId: string): string {
     // Human-friendly copy command: interactive resume (shows the session + lets
     // you continue). The harness's own headless resume uses `exec resume` in run().
-    return resumeFor(this.target, cwd, resumeInner.codex(sessionId), this.resumeEnvHint ?? "");
+    return resumeFor(cwd, resumeInner.codex(sessionId), this.resumeEnvHint ?? "");
   }
 
   // codex 没有「盖掉自己配置文件」那一档覆盖(声明表里只有 claude),所以这里不带参数。
@@ -91,7 +87,7 @@ export class CodexExecutor implements AgentExecutor {
   // codex 目前一项都没声明,这里接住是为了「声明表加一项就生效」这句话是真的)。
   // `undefined` 值 = 从子进程环境里删掉那个变量(见 cliConfigOverrideEnvPatch)。
   private env(): Record<string, string | undefined> {
-    const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv(this.target));
+    const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv());
     if (this.relay) env[RELAY_ENV_KEY] = this.relay.apiKey;
     return env;
   }
@@ -119,7 +115,7 @@ export class CodexExecutor implements AgentExecutor {
     const contextNotBeforeMs = Date.now();
     const args = this.execArgs(opts, opts.sessionId ?? "");
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
-    const child = spawnForRun(this.target, opts.cwd, this.bin, args, opts.prompt, this.env(), opts.detach);
+    const child = spawnForRun(opts.cwd, this.bin, args, opts.prompt, this.env(), opts.detach);
     const lifecycle = { stopRequested: false };
     return {
       sessionId: opts.sessionId ?? "",
@@ -169,7 +165,7 @@ export class CodexExecutor implements AgentExecutor {
         const lifecycle = { stopRequested: false };
         // 常驻的每一轮都是**新进程**,所以 stdin 照旧读完即关(keepStdin 是
         // claude 那种「一个进程吃多个回合」才需要的)。
-        const child = spawnAgent(this.target, opts.cwd, this.bin, args, prompt, this.env());
+        const child = spawnAgent(opts.cwd, this.bin, args, prompt, this.env());
         return {
           child,
           commandLine: redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`),

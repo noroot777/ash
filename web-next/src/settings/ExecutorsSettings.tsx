@@ -55,7 +55,6 @@ export function ExecutorsSettings({ notify }: { notify: (message: string) => voi
       const created = await api.createAgent({
         type: cli.type,
         name: `${cli.type}@local`,
-        target: { kind: "local" },
         isDefault: !profiles.some((row) => row.type === cli.type),
       });
       setProfiles((current) => [...current, created]);
