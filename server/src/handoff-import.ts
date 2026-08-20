@@ -211,7 +211,10 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
         taskId: m.task.id,
         workspace: null,
         sessionsMigrated: h.sessions,
-        autoResume: false,
+        // 收口应答报的是**这次接力当初导入时的事实**(存在 in 标记里),不是本次重放
+        // 有没有再触发续跑(幂等收口零副作用,从不重复起跑)。老标记没存这个字段时
+        // 按 false 报——宁可让源机以为没续跑,也不能谎报「已在对端跑起来了」。
+        autoResume: h.autoResume ?? false,
         notes: ["本机已有这次接力导入的任务(应答曾丢失,本次为幂等收口),未重复导入"],
       };
     }
@@ -314,6 +317,9 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
     // 源机生成的接力身份证:应答丢失后源机原样重试时,靠它把「已有同 id 任务」识别成
     // 同一次接力并幂等收口(见上面 existing 分支)。
     transferId: m.transferId ?? null,
+    // 导入时有没有触发自动续跑,存成事实:应答丢失后的幂等收口靠它如实回答源机
+    // 「任务在对端跑起来了没有」,而不是一律回 false 误导用户去对端手动再点一次。
+    autoResume: m.autoResume,
     peerUrl: null,
     peerName: m.sourceHost || null,
     peerTaskId: m.task.id,

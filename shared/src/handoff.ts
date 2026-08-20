@@ -20,6 +20,8 @@ export interface TaskHandoff {
   // transferId,所以只能对同一台机器、同一个项目原样重放——换目标会把任务复制到多台
   // 机器(对端各自导入成功)。要换目标必须先移除标记,走全新 transferId。
   targetProjectId?: string | null;
+  // out+pending:冻结的重放参数(见上)。in:导入时有没有触发自动续跑,幂等收口
+  // 应答靠它如实报当初的事实。老标记没有这个字段。
   autoResume?: boolean;
   // out: 对端 harness 根地址（横幅可点过去）；in: 源机自述不了地址,为 null。
   peerUrl: string | null;
