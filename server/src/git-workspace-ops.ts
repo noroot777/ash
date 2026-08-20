@@ -115,6 +115,9 @@ interface ScmBatchGroup {
    *
    * 判据一律写成「这条路径还在不在它操作前所在的那个分组里」：不在了 = 这次操作对它
    * 生效了。没给这个函数的分组只能退回按批计数（见 `runAll`）。
+   *
+   * 冲突那一档不必在这里各写一遍：还留在 `merge` 里就一律算没动，`runAll` 统一挡在
+   * 所有判据之前。
    */
   done?: (path: string, after: ScmStatus) => boolean;
 }
@@ -164,7 +167,15 @@ async function runAll(
     const pending: string[] = [];
     for (const group of groups) {
       for (const path of group.paths) {
-        const settled = batched.has(path) || (!!after && !!group.done && group.done(path, after));
+        // 还在冲突里 = 这一条压根没解决，任何操作都谈不上落地。这一档必须在各组自己的
+        // 判据**之前**问：未解决的冲突只出现在 `merge` 组，既不在 `unstaged` 也不在
+        // `staged`，于是「不在 unstaged 里」这类判据会一律把它读成「已经暂存成功」——
+        // 面板一边说「已生效」、一边下面还挂着「冲突 2」，把「标记为已解决」这个关键
+        // 状态反着告诉用户（第 2 轮审查在函数级和页面上都复现）。
+        // 整批跑完那条证据不受这一档影响：`git add` 返回成功就意味着冲突真的落成了
+        // stage-0，那是事实，不是反推。
+        const settled = batched.has(path)
+          || (!!after && !listed(after.merge, path) && !!group.done && group.done(path, after));
         (settled ? done : pending).push(path);
       }
     }

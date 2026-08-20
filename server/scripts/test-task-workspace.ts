@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -171,6 +171,7 @@ try {
       { id: "proj-b", name: "同一个仓库 B", repoPath: `${repo}/`, apiKeys: null, workflowId: null, createdAt: ts },
       { id: "proj-c", name: "另一个仓库", repoPath: otherRepo, apiKeys: null, workflowId: null, createdAt: ts },
     ]);
+
     await db.insert(tasks).values([
       { ...common, id: "xproj-a", projectId: "proj-a", parentId: null, mode: "single", useWorktree: false },
       { ...common, id: "xproj-b", projectId: "proj-b", parentId: null, mode: "single", useWorktree: false },
@@ -183,6 +184,20 @@ try {
     assert.deepEqual(await ids("xproj-b"), ["xproj-a", "xproj-b"], "反过来也要看得见");
     assert.deepEqual(await ids("xproj-c"), ["xproj-c"], "别的仓库不能被顺带圈进来");
     assert.deepEqual(await ids("xproj-b-wt"), ["xproj-b-wt"], "独立 worktree 仍是自己一个目录");
+
+    // 去尾斜杠只挡得住最表面那一种写法：`repo/.`、`repo/sub/..` 和一条软链都是
+    // `POST /api/projects` 收得下的合法路径，指的还是同一个 `.git`（第 2 轮审查用公共
+    // API 复现：别名项目里正在跑的任务完全不在候选里，无 force 的丢弃直接穿透）。
+    // 故意用字符串拼而不是 `join`：`join` 自己会把 `.` / `..` 消掉，那样测的就不是 repoKey。
+    {
+      const link = join(root, "repo-alias-link");
+      symlinkSync(repo, link, "dir");
+      for (const alias of [`${repo}/.`, `${repo}/sub/..`, link, `${link}/./`]) {
+        await db.update(projects).set({ repoPath: alias }).where(eq(projects.id, "proj-b"));
+        assert.deepEqual(await ids("xproj-a"), ["xproj-a", "xproj-b"], `别名写法 ${alias} 仍是同一个仓库`);
+      }
+      await db.update(projects).set({ repoPath: `${repo}/` }).where(eq(projects.id, "proj-b"));
+    }
 
     for (const id of ["xproj-a", "xproj-b", "xproj-c", "xproj-b-wt"]) {
       await db.delete(tasks).where(eq(tasks.id, id));

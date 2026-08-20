@@ -403,6 +403,49 @@ if (!IS_WINDOWS) {
     }
     chmodSync(join(repo, "locked"), 0o700);
   }
+
+  // 9d. 报账不许把「还冲突着」读成「已经暂存成功」。
+  //
+  // 未解决的冲突在 `readScmStatus` 里**只出现在 merge 组**，既不在 unstaged 也不在
+  // untracked，于是「不在 unstaged 里」这类判据会一律把它算成已生效：面板一边挂着
+  // 「2 个已经生效」的报账横幅，一边下面还显示「冲突 2」，把「标记为已解决」这个关键
+  // 状态反着告诉用户（第 2 轮审查在函数级和页面上都复现）。
+  {
+    const repo = makeRepo("partial-stage-conflict");
+    write(repo, "a.txt", "base\n");
+    write(repo, "b.txt", "base\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-m", "base");
+    git(repo, "checkout", "-q", "-b", "other");
+    write(repo, "a.txt", "theirs\n");
+    write(repo, "b.txt", "theirs\n");
+    git(repo, "commit", "-qam", "theirs");
+    git(repo, "checkout", "-q", "main");
+    write(repo, "a.txt", "ours\n");
+    write(repo, "b.txt", "ours\n");
+    git(repo, "commit", "-qam", "ours");
+    try {
+      git(repo, "merge", "other");
+    } catch { /* 冲突是预期结果 */ }
+    assert.deepEqual(paths((await readScmStatus(repo)).merge), ["a.txt", "b.txt"], "前提：两个都还冲突着");
+
+    // 让 git 在读第二个文件时失败：整批调用抛错，索引一个 stage-0 都没落下。
+    chmodSync(join(repo, "b.txt"), 0o000);
+    const enforced = await access(join(repo, "b.txt"), constants.R_OK).then(() => false, () => true);
+    if (!enforced) {
+      console.log("scm: 当前用户可无视权限位，跳过冲突报账用例");
+    } else {
+      await assert.rejects(
+        () => stagePaths(repo, repo, ["a.txt", "b.txt"]),
+        (error: unknown) => error instanceof ScmOperationError && !(error instanceof ScmPartialError),
+        "一条都没解决时，这就是一次普通失败，不许套「部分生效」的壳子",
+      );
+      const after = await readScmStatus(repo);
+      assert.deepEqual(paths(after.merge), ["a.txt", "b.txt"], "报账说没生效，那两条就得还挂在冲突里");
+      assert.deepEqual(paths(after.staged), [], "更不许有谁被算进已暂存");
+    }
+    chmodSync(join(repo, "b.txt"), 0o600);
+  }
 }
 
 // ── 11. 提交失败时，预暂存已经生效这件事必须说出来 ──────────────────────────

@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { join, isAbsolute, dirname, resolve } from "node:path";
+import { join, isAbsolute, dirname, basename, normalize, resolve } from "node:path";
 import { homedir } from "node:os";
-import { mkdirSync, statSync, existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, statSync, existsSync, readFileSync, writeFileSync, realpathSync, rmSync } from "node:fs";
 import type { ProjectHealth } from "@harness/shared";
 import { DATA_DIR } from "./paths.js";
 import { IS_WINDOWS, windowsLongPathHint } from "./platform.js";
@@ -48,12 +48,48 @@ export function tidyRepoPath(p: string | null | undefined): string {
   return stripped || "/"; // a path of only slashes is root
 }
 
-// Canonical key for *comparing* two repoPaths that may be written differently —
-// `~/code/foo` vs `/Users/me/code/foo` (expandHome) and trailing slashes. Used to
-// find an existing project for a path without spawning a duplicate. Empty stays
-// empty, so path-less projects never collide with each other here.
+/**
+ * 这条路径在磁盘上的**物理身份**：软链跟到底、大小写按磁盘上的写法。
+ *
+ * 不存在的路径 `realpath` 会直接抛，所以从最深的那个存在的祖先开始解析，再把剩下的
+ * 段接回去。要的是「目录建出来的前后，键不会突然换一个」：仓库还没克隆下来时算出
+ * `/tmp/x`、克隆完变成 `/private/tmp/x`，等于同一个仓库前后拿了两把不同的锁。
+ */
+function physicalPath(abs: string): string {
+  let head = abs;
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      const real = realpathSync.native(head);
+      return tail.length ? join(real, ...tail.reverse()) : real;
+    } catch {
+      const parent = dirname(head);
+      if (parent === head) return abs; // 一路到根都不存在：只能按字面值算
+      tail.push(basename(head));
+      head = parent;
+    }
+  }
+}
+
+/**
+ * 比较两个 repoPath 是不是**同一个仓库**时用的键。空值仍是空：没有仓库路径的项目
+ * 不跟任何人合并。
+ *
+ * 判据必须是**物理身份**，不是字符串长得像不像：`~/code/foo`、`/Users/me/code/foo/`、
+ * `/Users/me/code/foo/.`、经由软链的另一条等价路径，指的都是同一个 `.git`。只做
+ * 「展开 `~` + 去掉尾斜杠」的话，随便换一种合法写法就能绕过所有按仓库归一的东西——
+ * 项目去重会放出一个重复项目，`withRepoLock` 会给同一个仓库开两条队列（并行的验收
+ * 撞 index.lock），SCM 门禁则看不见别名项目里正在跑的任务，无 force 的丢弃直接穿透
+ * （第 2 轮审查用公共 API 复现）。
+ *
+ * 所以顺序是：展开 `~` → 去尾斜杠 → 消 `.`/`..` → 跟软链到物理路径。相对路径只做
+ * 词法归一，不接 `process.cwd()`：那会让同一个字符串在不同工作目录下算出不同的键。
+ */
 export function repoKey(p: string | null | undefined): string {
-  return tidyRepoPath(expandHome(p));
+  const tidy = tidyRepoPath(expandHome(p));
+  if (!tidy) return "";
+  if (!isAbsolute(tidy)) return tidyRepoPath(normalize(tidy));
+  return tidyRepoPath(physicalPath(resolve(tidy)));
 }
 
 // Guarantee an existing working directory for a run. Prefer the project's
