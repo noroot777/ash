@@ -90,9 +90,17 @@ async function fetchPeer<T>(url: string, init?: RequestInit & { timeoutMs?: numb
     const msg = e instanceof Error ? e.message : String(e);
     throw new HandoffError(`连不上对端 harness（${url}）：${msg}`, 502, true);
   }
-  const body = (await res.json().catch(() => null)) as { error?: string } | null;
+  const body = (await res.json().catch(() => null)) as { error?: string; harness?: boolean } | null;
   if (!res.ok) {
-    throw new HandoffError(`对端返回 ${res.status}：${body?.error ?? "未知错误"}`, 502);
+    // 只有带 harness 标记的错误应答才可信为「对端业务层明确拒绝,可证明没落库」。
+    // 没有标记的非 2xx 可能是中间网关在对端已处理成功后伪造的(上游读超时回 502 等),
+    // 按网络类失败(network=true)处理,让调用方保留 pending 而不是回滚——宁可让用户
+    // 多点一次收口重试,也不能让同一个任务在两台机器上各跑一份。
+    throw new HandoffError(
+      `对端返回 ${res.status}：${body?.error ?? "未知错误"}`,
+      502,
+      body?.harness !== true,
+    );
   }
   if (body === null) {
     // 2xx 但应答体读不出来:对端多半已经处理成功,只是应答在路上断了——按网络类失败
@@ -482,14 +490,16 @@ export async function exportHandoff(
           timeoutMs: 600_000,
         },
       );
-      if (!result.ok) throw new HandoffError(`对端导入失败：${result.error ?? "未知错误"}`, 502);
+      // 2xx 但 ok:false:真 harness 的导入端点从不这样应答(要么 ok:true 要么抛错),
+      // 多半是中间层拼的怪应答——同样按「送达未知」处理,保留 pending。
+      if (!result.ok) throw new HandoffError(`对端导入失败：${result.error ?? "未知错误"}`, 502, true);
     } catch (e) {
       if (e instanceof HandoffError && e.network) {
         // 送没送到说不清:保留 pending 标记,把收口方法一并告诉用户。
         e.message += "。对端可能已经收到这份任务:本机保留「接力未确认」标记,原样重试会自动幂等收口;确认对端没收到的话,在任务横幅上移除接力标记即可在本机继续。";
         throw e;
       }
-      // 对端明确说没收下(4xx/5xx 应答、或 ok:false):恢复接力前的标记,本机照常可跑。
+      // 带 harness 标记的业务拒绝(对端可证明没落库):恢复接力前的标记,本机照常可跑。
       await db.update(tasks)
         .set({ handoff: prevHandoffRaw, updatedAt: now() })
         .where(eq(tasks.id, taskId));

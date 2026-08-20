@@ -21,11 +21,23 @@ import { now } from "./util.js";
 
 type ErrorStatus = 400 | 404 | 409 | 500 | 502;
 
+// 错误应答带 harness:true = 「harness 业务层的明确拒绝,本机可证明没留下这次接力的
+// 任务」——importHandoff 里任务行插入之后的失败都会补偿回滚再抛 HandoffError,没插
+// 之前的失败(含非 HandoffError 逃逸)本来就没落任何行,所以两个分支都能安全带标记。
+// 唯一的例外是补偿回滚自身失败(e.unsettled):那时本机可能留有半截任务,故意不带
+// 标记,让源机按「送达未知」保留 pending。源机 fetchPeer 只信这个标记:没有它的非
+// 2xx(网关/代理伪造的 502 等)一律按网络类失败处理,防止「对端已导入成功、网关却
+// 回 502」触发回滚造成双跑。
 const fail = (c: Context, e: unknown) => {
-  if (e instanceof HandoffError) return c.json({ error: e.message }, e.status as ErrorStatus);
+  if (e instanceof HandoffError) {
+    return c.json(
+      e.unsettled ? { error: e.message } : { error: e.message, harness: true },
+      e.status as ErrorStatus,
+    );
+  }
   const msg = e instanceof Error ? e.message : String(e);
   console.error("[handoff]", e);
-  return c.json({ error: `接力失败:${msg}` }, 500);
+  return c.json({ error: `接力失败:${msg}`, harness: true }, 500);
 };
 
 export function mountHandoffRoutes(api: Hono): void {
@@ -49,7 +61,7 @@ export function mountHandoffRoutes(api: Hono): void {
   // 分支尖清单,供源机协商 git bundle 的前置提交(对端已有的历史不重复打包)。
   api.get("/handoff/projects/:id/refs", async (c) => {
     const row = (await db.select().from(projects)).find((p) => p.id === c.req.param("id"));
-    if (!row) return c.json({ error: "项目不存在" }, 404);
+    if (!row) return c.json({ error: "项目不存在", harness: true }, 404);
     if (!projectHealthLight(row.repoPath).isRepo) return c.json({ refs: [] });
     try {
       return c.json({ refs: await repoRefTips(row.repoPath) });
@@ -64,7 +76,7 @@ export function mountHandoffRoutes(api: Hono): void {
     try {
       body = await c.req.json();
     } catch {
-      return c.json({ error: "导入体不是合法 JSON" }, 400);
+      return c.json({ error: "导入体不是合法 JSON", harness: true }, 400);
     }
     try {
       return c.json(await importHandoff(body));

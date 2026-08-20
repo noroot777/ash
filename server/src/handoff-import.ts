@@ -409,14 +409,20 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
     // 会话插入后,GET 200 但任务残废、重试永远 409)。只清自己建的行——任务行没插成
     // (taskRowInserted=false)说明库里那行属于别的导入,动不得。git 分支/worktree/
     // 已写盘文件的残留无害——重试会原样覆盖。
+    let rollbackFailed = false;
     if (taskRowInserted) {
       try {
         await db.delete(sessions).where(eq(sessions.taskId, m.task.id));
         await db.delete(tasks).where(eq(tasks.id, m.task.id));
-      } catch { /* 回滚自身失败没有更好的办法,错误照抛,让对端看到失败 */ }
+      } catch { rollbackFailed = true; /* 没有更好的办法,如实上报,让源机保留 pending */ }
     }
     const msg = e instanceof Error ? e.message : String(e);
-    throw new HandoffError(`导入落库失败,已回滚,本机没有留下半截任务,可直接重试。原始错误:${msg.slice(0, 300)}`, 500);
+    const err = rollbackFailed
+      ? new HandoffError(`导入落库失败,且补偿回滚也失败了——本机可能留有半截任务 ${m.task.id},请先在本机检查/清理再重试。原始错误:${msg.slice(0, 300)}`, 500)
+      : new HandoffError(`导入落库失败,已回滚,本机没有留下半截任务,可直接重试。原始错误:${msg.slice(0, 300)}`, 500);
+    // 回滚失败 = 不能再向源机保证「本机没落库」,应答不带 harness 标记(见 handoff-routes)。
+    err.unsettled = rollbackFailed;
+    throw err;
   }
 
   if (m.autoResume) {
