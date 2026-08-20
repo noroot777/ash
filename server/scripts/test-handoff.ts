@@ -15,16 +15,22 @@
 //   8. 并发导入互斥:同一 task id 两个在途导入,后到者 409,先到者的行毫发无损
 //   9. 源机写入口硬拦:接力出去的任务 accept/run/改 status/定时/stage/派审全 409,
 //      改标题照常、移除标记后恢复可写
+//  10. 上传附件迁移:preflight 盘点数量;正文/会话 JSONL 引用的 uploads 文件随任务
+//      到达对端,原始与 JSON 转义两种形态的路径都改写成对端路径,改完仍是合法 JSON
+//  11. Windows 源机的反斜杠 uploads 路径同样两种形态都改写;幂等收口如实报 in 标记
+//      里存的 autoResume 事实(而不是本次请求参数),老标记没这字段按 false 报
+//  12. 网关伪造失败应答(对端实已导入成功、502 不带 harness 标记):按「送达未知」
+//      保留 pending,重试走幂等收口——按业务拒绝回滚就是两台机器双跑
 // HARNESS_RUNS_DIR 指到临时目录顺带打开 guardAgentSpawn,即使哪里失手触发续跑也
 // 不会真拉起 CLI 烧额度;接力本身用 autoResume:false。
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
-import { execFileSync } from "node:child_process";
+import { execFileSync, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
+import { api, git, makeRepo, startPeer } from "./handoff-test-utils.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "harness-handoff-test-"));
@@ -33,6 +39,7 @@ mkdirSync(home, { recursive: true });
 process.env.HOME = home; // claude 会话文件读写全部落进临时 HOME,不碰真实 ~/.claude
 process.env.HARNESS_DB = join(root, "source.db");
 process.env.HARNESS_RUNS_DIR = join(root, "runs-src");
+process.env.HARNESS_UPLOADS_DIR = join(root, "uploads-src"); // 上传附件迁移用:源/对端各一个隔离目录
 assert.ok(
   process.env.HARNESS_ALLOW_REAL_AGENT !== "1",
   "本测试靠 guardAgentSpawn 兜底拦真 CLI;拦截器一失效就会烧用户的真额度",
@@ -44,61 +51,12 @@ process.on("exit", () => {
   try { rmSync(root, { recursive: true, force: true }); } catch {}
 });
 
-const git = (cwd: string, ...args: string[]) =>
-  execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
-
-function makeRepo(path: string): string {
-  execFileSync("git", ["init", "-b", "main", path]);
-  git(path, "config", "user.name", "Harness Handoff Test");
-  git(path, "config", "user.email", "handoff@example.test");
-  writeFileSync(join(path, ".gitignore"), ".worktrees/\n");
-  writeFileSync(join(path, "seed.txt"), "seed\n");
-  git(path, "add", "-A");
-  git(path, "commit", "-m", "seed");
-  return path;
-}
-
-/** 起对端 server(PORT=0),等 ready 行,返回 baseUrl。 */
-async function startPeer(env: Record<string, string>): Promise<string> {
-  const serverDir = join(import.meta.dirname, "..");
-  const tsxCli = join(serverDir, "..", "node_modules", "tsx", "dist", "cli.mjs");
-  peer = spawn(process.execPath, [tsxCli, "src/index.ts"], {
-    cwd: serverDir,
-    env: { ...process.env, ...env, PORT: "0" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let buf = "";
-  return new Promise<string>((resolvePort, reject) => {
-    const timer = setTimeout(() => reject(new Error(`对端 server 30s 没 ready,输出:\n${buf}`)), 30_000);
-    const onChunk = (chunk: Buffer) => {
-      buf += chunk.toString();
-      const m = buf.match(/server on http:\/\/localhost:(\d+)/);
-      if (m) {
-        clearTimeout(timer);
-        resolvePort(`http://127.0.0.1:${m[1]}`);
-      }
-    };
-    peer!.stdout!.on("data", onChunk);
-    peer!.stderr!.on("data", onChunk);
-    peer!.on("exit", (code) => {
-      clearTimeout(timer);
-      reject(new Error(`对端 server 提前退出(code ${code}),输出:\n${buf}`));
-    });
-  });
-}
-
-async function api<T>(base: string, path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${base}/api${path}`, init);
-  const body = (await res.json()) as T & { error?: string };
-  assert.ok(res.ok, `${path} 应答 ${res.status}: ${body?.error ?? JSON.stringify(body).slice(0, 200)}`);
-  return body;
-}
-
 try {
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { projects, sessions, tasks } = await import("../src/db/schema.js");
   const { prepareWorktree, worktreeBranchName, worktreePathFor } = await import("../src/git.js");
-  const { claudeProjectSlug, exportHandoff, HandoffError, preflightHandoff } = await import("../src/handoff.js");
+  const { claudeProjectSlug, exportHandoff, preflightHandoff } = await import("../src/handoff.js");
+  const { HandoffError } = await import("../src/handoff-types.js");
   const { handoffBlockReason } = await import("../src/handoff-guard.js");
   const { resumeOrRunTask } = await import("../src/task-resume.js");
   const { createTasks } = await import("../src/task-store.js");
@@ -117,8 +75,15 @@ try {
     createdAt: "2026-08-19T08:00:00.000Z",
   });
   const taskId = "handoff-e2e-task-01";
+  // 上传附件:attachmentsPrompt 会把 uploads 绝对路径写进任务正文,随后进入会话 JSONL。
+  // 正文放原始形态,JSONL 放 JSON 转义形态,接力后两种都该改写成对端路径。
+  const uploadName = "up001abc-notes.txt";
+  const uploadSrcPath = join(root, "uploads-src", uploadName);
+  mkdirSync(join(root, "uploads-src"), { recursive: true });
+  writeFileSync(uploadSrcPath, "附件内容 attachment-body\n");
   await createTasks([{
-    id: taskId, projectId, title: "接力回归任务", body: "把 feature.txt 写完并验证。",
+    id: taskId, projectId, title: "接力回归任务",
+    body: `把 feature.txt 写完并验证。\n\n[用户附带的文件,请用 Read 工具查看以下本地文件]\n- ${uploadSrcPath}`,
     mode: "single", status: "paused", agentType: "claude",
     useWorktree: true, worktreeBase: "main", workflowMode: "free",
     resumePrompt: "继续:完成第二步",
@@ -145,7 +110,11 @@ try {
   ]);
   const cliFileSrc = join(home, ".claude", "projects", claudeProjectSlug(ws.path), `${cli1}.jsonl`);
   mkdirSync(join(cliFileSrc, ".."), { recursive: true });
-  writeFileSync(cliFileSrc, `{"type":"user","text":"hello"}\n{"type":"assistant","text":"world"}\n`);
+  writeFileSync(cliFileSrc, [
+    JSON.stringify({ type: "user", text: `hello,附件在 ${uploadSrcPath}` }),
+    JSON.stringify({ type: "assistant", text: "world" }),
+    "",
+  ].join("\n"));
   for (const sid of ["handoffsess1", "handoffsess2"]) {
     const transcript = sessionTranscriptPath(taskId, sid);
     mkdirSync(join(transcript, ".."), { recursive: true });
@@ -156,7 +125,8 @@ try {
   const peerUrl = await startPeer({
     HARNESS_DB: join(root, "target.db"),
     HARNESS_RUNS_DIR: join(root, "runs-dst"),
-  });
+    HARNESS_UPLOADS_DIR: join(root, "uploads-dst"),
+  }, (proc) => { peer = proc; });
   const peerProject = await api<{ id: string }>(peerUrl, "/projects", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -171,6 +141,7 @@ try {
   assert.equal(probe.local.running, false);
   assert.equal(probe.local.sessions, 2);
   assert.equal(probe.local.sessionFilesFound, 1);
+  assert.equal(probe.local.uploads, 1, "preflight 应盘点出正文引用的上传附件");
   assert.equal(probe.local.git, "bundle");
   assert.ok(probe.local.notes.some((n) => n.includes("找不到 CLI 会话文件")), "s2 缺文件应记 note");
 
@@ -287,12 +258,15 @@ try {
     "接力说明应追加在最近一条会话的时间线上",
   );
 
-  // 对端:任务原状态原样落库,in 标记、resumePrompt 前言齐全。
+  // 对端:任务原状态原样落库,in 标记、resumePrompt 前言齐全;正文里的附件路径已改写。
   const peerTask = await api<{
-    status: string; resumePrompt: string | null; useWorktree: boolean;
+    status: string; body: string; resumePrompt: string | null; useWorktree: boolean;
     handoff: { direction: string; sessions: number; git: string; peerName: string | null };
   }>(peerUrl, `/tasks/${taskId}`);
+  const uploadDstPath = join(root, "uploads-dst", uploadName);
   assert.equal(peerTask.status, "paused");
+  assert.ok(peerTask.body.includes(uploadDstPath), "正文里的附件路径应改写为对端 uploads 路径");
+  assert.ok(!peerTask.body.includes(uploadSrcPath), "正文不该残留源机 uploads 路径");
   assert.equal(peerTask.useWorktree, true);
   assert.equal(peerTask.handoff.direction, "in");
   assert.equal(peerTask.handoff.sessions, 1);
@@ -308,10 +282,19 @@ try {
   assert.equal(existsSync(join(dstWs, "feature.txt")), true);
   assert.equal(existsSync(join(dstWs, "wip.txt")), true, "未提交改动应随 WIP 提交到达对端 worktree");
 
-  // 对端文件:claude 会话文件按对端 cwd 的 slug 归位、runs 产物归位。
+  // 对端文件:claude 会话文件按对端 cwd 的 slug 归位、runs 产物归位;
+  // 附件本体到达对端 uploads 目录,JSONL 里的转义形态路径改写后每行仍是合法 JSON。
   const cliFileDst = join(home, ".claude", "projects", claudeProjectSlug(dstWs), `${cli1}.jsonl`);
   assert.equal(existsSync(cliFileDst), true, "会话文件应落到对端 cwd 对应的 slug 目录");
-  assert.equal(readFileSync(cliFileDst, "utf8"), readFileSync(cliFileSrc, "utf8"));
+  const dstJsonl = readFileSync(cliFileDst, "utf8");
+  assert.ok(dstJsonl.includes(uploadDstPath), "会话 JSONL 里的附件路径应改写为对端路径");
+  assert.ok(!dstJsonl.includes(uploadSrcPath), "会话 JSONL 不该残留源机附件路径");
+  for (const line of dstJsonl.trim().split("\n")) JSON.parse(line);
+  assert.equal(
+    readFileSync(uploadDstPath, "utf8"), readFileSync(uploadSrcPath, "utf8"),
+    "附件内容应原样到达对端 uploads 目录",
+  );
+  assert.ok(result.notes.some((n) => n.includes("迁移上传附件")), "导入应答要说明附件迁移");
   assert.equal(existsSync(join(root, "runs-dst", taskId, "handoffsess1.md")), true);
 
   // 对端会话行:文件到货的保留 cliSessionId,没到货的置空;cwd 全部指到对端 worktree。
@@ -390,7 +373,9 @@ try {
     sessions: [{ ...probeSession, id: "handoffsess1" }],
   });
   assert.equal(conflictRes.status, 409);
-  assert.match(((await conflictRes.json()) as { error: string }).error, /会话 id 与本机已有会话冲突/);
+  const conflictBody = (await conflictRes.json()) as { error: string; harness?: boolean };
+  assert.match(conflictBody.error, /会话 id 与本机已有会话冲突/);
+  assert.equal(conflictBody.harness, true, "业务拒绝应答要带 harness 标记,源机才敢回滚 pending");
   assert.equal((await fetch(`${peerUrl}/api/tasks/handoff-e2e-task-02`)).status, 404, "预检拦下的导入不该留任务行");
   // 载荷内部两条同 id 会话:预检查不出(对端库里还没有),落库时 UNIQUE 炸 → 整体回滚。
   const dupRes = await rawImport({
@@ -524,6 +509,136 @@ try {
     "PUT", "/tasks/handoff-e2e-task-03/schedule", { kind: "once", at: "2026-08-21T00:00:00.000Z", enabled: false },
   );
   assert.equal(scheduleAfterClear.status, 200, `移除标记后写入口应恢复:${await scheduleAfterClear.text()}`);
+
+  // ── 10. Windows 源机的附件路径:原始/JSON 转义两种形态都改写 ────────────────
+  // 进程内直调 importHandoff(落进源库),附件写到本进程 UPLOADS_DIR(uploads-src)。
+  // 正文放原始形态(D:\a\b),run 产物 JSONL 放转义形态(D:\\a\\b),都该改写成本机
+  // 路径且 JSONL 改完仍是合法 JSON——只改原始形态会漏掉 Windows 源机的全部会话引用。
+  const winUpName = "up002xyz-shot.txt";
+  const winUpPath = `D:\\ai_workspace\\ash\\data\\uploads\\${winUpName}`;
+  const upManifest = (autoResume: boolean) => ({
+    version: 1, sourceHost: "win-src", sourceWorkspace: null,
+    targetProjectId: projectId, autoResume, git: null, transferId: "transfer-up-1",
+    task: {
+      id: "handoff-e2e-task-05", title: "Windows 附件用例",
+      body: `看这个附件:${winUpPath}`, status: "paused", createdAt: "2026-08-19T12:00:00.000Z",
+    },
+    sessions: [] as unknown[],
+    uploads: [{ name: winUpName, sourcePath: winUpPath, dataBase64: b64("win-upload\n") }],
+    files: [{
+      kind: "run-artifact", rel: "history.jsonl",
+      dataBase64: b64(JSON.stringify({ type: "user", text: `附件在 ${winUpPath}` }) + "\n"),
+    }],
+  });
+  const upResult = await importHandoff(upManifest(false));
+  assert.equal(upResult.ok, true);
+  const winUpLocal = join(root, "uploads-src", winUpName);
+  assert.equal(readFileSync(winUpLocal, "utf8"), "win-upload\n", "附件本体应落到本机 uploads 目录");
+  const upTask = (await db.select().from(tasks).where(eq(tasks.id, "handoff-e2e-task-05"))).at(0)!;
+  assert.ok(upTask.body!.includes(winUpLocal), "正文里的原始形态路径应改写为本机路径");
+  assert.ok(!upTask.body!.includes("D:"), "正文不该残留源机路径");
+  const upArtifact = readFileSync(join(root, "runs-src", "handoff-e2e-task-05", "history.jsonl"), "utf8");
+  const upParsed = JSON.parse(upArtifact.trim()) as { text: string };
+  assert.ok(upParsed.text.includes(winUpLocal), "JSONL 里的转义形态路径应改写,且改完仍是合法 JSON");
+  assert.ok(!upArtifact.includes("D:"), "JSONL 不该残留源机路径");
+
+  // ── 11. 幂等收口如实报 in 标记里存的 autoResume 事实 ─────────────────────────
+  // 缺陷形态(第 3 轮审查):幂等分支写死 autoResume:false,当初真续跑过的重放会
+  // 误导源机把「对端已在跑」当成「对端没跑」。收口应答只认 in 标记存的事实,与本次
+  // 请求参数无关;老版本标记没有这个字段,按 false 报(不谎报已续跑)。
+  const replayFact = await importHandoff(upManifest(true)); // 请求 true,事实是 false
+  assert.ok(replayFact.notes.some((n) => n.includes("幂等收口")));
+  assert.equal(replayFact.autoResume, false, "收口要报当初导入的事实(false),不能按本次请求报 true");
+  const upMarker = JSON.parse(
+    ((await db.select().from(tasks).where(eq(tasks.id, "handoff-e2e-task-05"))).at(0)!).handoff!,
+  ) as Record<string, unknown>;
+  assert.equal(upMarker.autoResume, false, "in 标记要把导入时的 autoResume 事实存下来");
+  await db.update(tasks)
+    .set({ handoff: JSON.stringify({ ...upMarker, autoResume: true }) })
+    .where(eq(tasks.id, "handoff-e2e-task-05"));
+  const replayTrue = await importHandoff(upManifest(false));
+  assert.equal(replayTrue.autoResume, true, "标记里的事实是 true 时,收口就要报 true——与请求参数无关");
+  const { autoResume: _dropped, ...legacyMarker } = upMarker;
+  await db.update(tasks)
+    .set({ handoff: JSON.stringify(legacyMarker) })
+    .where(eq(tasks.id, "handoff-e2e-task-05"));
+  const replayLegacy = await importHandoff(upManifest(true));
+  assert.equal(replayLegacy.autoResume, false, "老标记没有 autoResume 字段,按 false 报,不谎报已续跑");
+
+  // ── 12. 网关伪造失败应答:对端实已导入成功,502 却不带 harness 标记 ──────────
+  // 缺陷形态(第 3 轮审查实测):路径上的网关(nginx/frp)把上游 200 吃掉、自己回
+  // 502,源机按业务拒绝回滚标记 → 本机可再启动,而对端那份也在跑 → 双机双跑。
+  // 没有 harness 标记的失败应答证明不了对端没落库,必须按「送达未知」保留 pending。
+  const mangleTaskId = "handoff-e2e-task-07";
+  await createTasks([{
+    id: mangleTaskId, projectId, title: "网关伪造应答用例", body: "mangle 用例",
+    mode: "single", status: "paused", agentType: "claude",
+    useWorktree: false, workflowMode: "free",
+    createdAt: "2026-08-19T13:00:00.000Z", updatedAt: "2026-08-19T13:00:00.000Z",
+  }]);
+  let mangle = true;
+  let mangleUpstreamStatus = 0;
+  const mangler = createServer((req, res) => {
+    if (req.url?.endsWith("/api/handoff/ping")) {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({
+        ok: true, service: "harness", host: "mangler",
+        projects: [{ id: peerProject.id, name: "acme", repoPath: dstRepo, isRepo: true }],
+      }));
+    } else if (req.url?.includes("/refs")) {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ refs: [] }));
+    } else {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk) => chunks.push(chunk as Buffer));
+      req.on("end", () => {
+        void fetch(`${peerUrl}${req.url}`, {
+          method: req.method ?? "POST",
+          headers: { "content-type": "application/json" },
+          body: Buffer.concat(chunks),
+        }).then(async (upstream) => {
+          const payload = Buffer.from(await upstream.arrayBuffer());
+          mangleUpstreamStatus = upstream.status;
+          res.setHeader("content-type", "application/json");
+          if (mangle) {
+            res.statusCode = 502;
+            res.end(JSON.stringify({ error: "gateway lost upstream" }));
+          } else {
+            res.statusCode = upstream.status;
+            res.end(payload);
+          }
+        }).catch(() => req.socket.destroy());
+      });
+    }
+  });
+  await new Promise<void>((r) => mangler.listen(0, "127.0.0.1", r));
+  const manglerUrl = `http://127.0.0.1:${(mangler.address() as { port: number }).port}`;
+  await assert.rejects(
+    exportHandoff(mangleTaskId, { targetUrl: manglerUrl, targetProjectId: peerProject.id, autoResume: false }),
+    (e: unknown) => e instanceof HandoffError && e.network && /对端可能已经收到/.test(e.message),
+    "不带 harness 标记的 502 证明不了对端没落库,必须按「送达未知」处理而不是回滚",
+  );
+  assert.equal(mangleUpstreamStatus, 200, "前提:对端确实导入成功了(网关才有 200 可篡改)");
+  assert.equal((await fetch(`${peerUrl}/api/tasks/${mangleTaskId}`)).status, 200, "对端确实持有这份任务");
+  const mangledMarker = JSON.parse(
+    ((await db.select().from(tasks).where(eq(tasks.id, mangleTaskId))).at(0)!).handoff!,
+  ) as { pending?: boolean; transferId?: string };
+  assert.equal(mangledMarker.pending, true, "送达未知必须保留 pending——回滚标记就等于放任本机双跑");
+  assert.ok(handoffBlockReason(JSON.stringify(mangledMarker)), "pending 态继续硬拦本机启动");
+  // 网关恢复直通后原样重试:对端凭同一个 transferId 幂等收口,pending 改写成确认态。
+  mangle = false;
+  const mangleCloseout = await exportHandoff(mangleTaskId, {
+    targetUrl: manglerUrl, targetProjectId: peerProject.id, autoResume: false,
+  });
+  assert.equal(mangleCloseout.ok, true);
+  assert.ok(mangleCloseout.notes.some((n) => n.includes("幂等收口")), "重试应撞上幂等收口而不是重复导入");
+  const mangleSettled = JSON.parse(
+    ((await db.select().from(tasks).where(eq(tasks.id, mangleTaskId))).at(0)!).handoff!,
+  ) as { pending?: boolean; transferId?: string };
+  assert.ok(!mangleSettled.pending, "收口后 pending 改写成确认态");
+  assert.equal(mangleSettled.transferId, mangledMarker.transferId, "收口必须沿用同一个 transferId");
+  mangler.closeAllConnections();
+  await new Promise<void>((r) => mangler.close(() => r()));
 
   console.log("test-handoff ok");
 } finally {
