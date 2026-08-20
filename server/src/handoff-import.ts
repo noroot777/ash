@@ -11,11 +11,12 @@ import { writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { projects, sessions, tasks } from "./db/schema.js";
+import { projects, scheduledMessages, schedules, sessions, tasks } from "./db/schema.js";
 import { claudeProjectSlug } from "./handoff.js";
 import {
   HandoffError, MAX_FILE_BYTES, MB, safeRel,
-  type HandoffManifest, type HandoffFilePayload, type HandoffUploadPayload,
+  type HandoffManifest, type HandoffFilePayload, type HandoffMessagePayload,
+  type HandoffSchedulePayload, type HandoffUploadPayload,
 } from "./handoff-types.js";
 import {
   applyUploadRewrites, buildUploadRewrites, hasUploadRewrites, isTextRel,
@@ -25,9 +26,10 @@ import { ensureWorkdir, expandHome, prepareWorktree, projectHealthLight, worktre
 import { withRepoLock } from "./repo-lock.js";
 import { DATA_DIR, RUNS_DIR } from "./paths.js";
 import { codexHome, findRollout } from "./executors/codex-rollout.js";
+import { publishPendingMessages } from "./pending-messages.js";
 import { createTasks } from "./task-store.js";
 import { resumeOrRunTask } from "./task-resume.js";
-import { now } from "./util.js";
+import { id, now } from "./util.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { TaskHandoff } from "@harness/shared";
@@ -65,13 +67,26 @@ function validate(input: unknown): HandoffManifest {
       throw new HandoffError(`不认识的文件类型 ${String(f.kind)}`);
     }
   }
-  // uploads 宽容校验:老版本导出没有这个字段。
+  // uploads/messages/schedule 宽容校验:老版本导出没有这些字段。
   const ups = (m as { uploads?: unknown }).uploads;
   if (ups != null) {
     if (!Array.isArray(ups) || ups.length > MAX_UPLOADS) throw new HandoffError(`uploads 非法(最多 ${MAX_UPLOADS} 个)`);
     for (const u of ups as HandoffUploadPayload[]) {
       if (!isStr(u.name) || !isStr(u.sourcePath) || !isStr(u.dataBase64)) throw new HandoffError("upload 载荷字段缺失");
     }
+  }
+  const msgs = (m as { messages?: unknown }).messages;
+  if (msgs != null) {
+    if (!Array.isArray(msgs) || msgs.length > 200) throw new HandoffError("messages 非法(最多 200 条)");
+    for (const x of msgs as HandoffMessagePayload[]) {
+      if (!isStr(x.text) || !isStr(x.attachments) || !isStr(x.mode) || !isStr(x.sendAt) || !isStr(x.createdAt)) {
+        throw new HandoffError("message 载荷字段缺失");
+      }
+    }
+  }
+  const sch = (m as { schedule?: unknown }).schedule;
+  if (sch != null && (!sch || typeof sch !== "object" || !["once", "cron"].includes((sch as HandoffSchedulePayload).kind))) {
+    throw new HandoffError("schedule 载荷非法");
   }
   if (m.git !== null && (!m.git || !isStr(m.git.branch) || !isStr(m.git.bundleBase64))) {
     throw new HandoffError("git 载荷非法");
@@ -186,6 +201,9 @@ export interface HandoffImportResult {
   workspace: string | null;
   sessionsMigrated: number;
   autoResume: boolean;
+  // true = 本机已有这次接力导入的任务,本次是应答丢失后的幂等收口(零副作用)。
+  // 源机据此决定取消哪批待发送消息原件:幂等收口只对应第一次带走的那批。
+  idempotent?: boolean;
   notes: string[];
 }
 
@@ -234,6 +252,7 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
         // 有没有再触发续跑(幂等收口零副作用,从不重复起跑)。老标记没存这个字段时
         // 按 false 报——宁可让源机以为没续跑,也不能谎报「已在对端跑起来了」。
         autoResume: h.autoResume ?? false,
+        idempotent: true,
         notes: ["本机已有这次接力导入的任务(应答曾丢失,本次为幂等收口),未重复导入"],
       };
     }
@@ -285,6 +304,7 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
   // 会把 m.task.body 原文嵌进去。写盘失败的附件不进改写对,旧路径原样留着。
   const writtenUploads = await writeUploads(m.uploads ?? [], notes);
   const rewrites = buildUploadRewrites(writtenUploads);
+  const messages = m.messages ?? [];
   if (hasUploadRewrites(rewrites)) {
     const rwPlain = (s: string | null): string | null => (s == null ? null : applyUploadRewrites(s, rewrites, "plain"));
     const rwJson = (s: string | null): string | null => (s == null ? null : applyUploadRewrites(s, rewrites, "json"));
@@ -294,7 +314,35 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
     // questionOptions/questionItems 列本身是 JSON 文档,路径在其中以转义形态出现。
     m.task.questionOptions = rwJson(m.task.questionOptions);
     m.task.questionItems = rwJson(m.task.questionItems);
+    // 待发送消息:正文是纯文本,attachments 列是 JSON string[](路径以转义形态出现)。
+    for (const msg of messages) {
+      msg.text = applyUploadRewrites(msg.text, rewrites, "plain");
+      msg.attachments = applyUploadRewrites(msg.attachments, rewrites, "json");
+    }
     notes.push(`迁移上传附件 ${writtenUploads.length} 个,文本里的源机路径已改写为本机路径`);
+  }
+
+  // ── 定时计划:任务行之前落库(任务行要引用 scheduleId)────────────────────
+  // 先清孤儿:上一次导入若在「计划已插、任务行没插成」当口失败且补偿回滚也失败,
+  // 这里会残留同 taskId 的行——existing 预检刚证明本机没有这个任务,残留只能是孤儿;
+  // 不清的话重试会插出第二份同 taskId 计划,调度器按行遍历就是双触发。
+  await db.delete(schedules).where(eq(schedules.taskId, m.task.id));
+  await db.delete(scheduledMessages).where(eq(scheduledMessages.taskId, m.task.id));
+  let scheduleId: string | null = null;
+  if (m.schedule) {
+    scheduleId = id();
+    // enabled/lastRunAt 原样落库:触发过的一次性计划(enabled=false)不会在本机重跑一遍。
+    await db.insert(schedules).values({
+      id: scheduleId,
+      taskId: m.task.id,
+      kind: m.schedule.kind,
+      at: m.schedule.at ?? null,
+      cron: m.schedule.cron ?? null,
+      enabled: m.schedule.enabled !== false,
+      lastRunAt: m.schedule.lastRunAt ?? null,
+      createdAt: now(),
+    });
+    notes.push(`迁移定时计划(${m.schedule.kind === "cron" ? "周期" : "一次性"}),今后由本机触发`);
   }
 
   // ── 文件先落盘,再落库 ──────────────────────────────────────────────────
@@ -405,47 +453,71 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
       startedAt: m.task.startedAt,
       endedAt: m.task.endedAt,
       handoff: JSON.stringify(marker),
+      scheduleId,
       reportBack: false,
     }], async () => {
       // createTasks 先 await 任务行插入、再调 afterInsert——走到这里说明任务行是本次建的。
       taskRowInserted = true;
-      if (!m.sessions.length) return;
-      await db.insert(sessions).values(m.sessions.map((s) => ({
-        id: s.id,
-        taskId: m.task.id,
-        role: s.role,
-        agentType: s.agentType,
-        executor: s.executor,
-        // 本机档案/指纹/续跑命令全部重算或悬空:resumeCommand 读取时按目录重建,
-        // fingerprint 留空避免「换机器 = 换执行器」误报。
-        executorId: null,
-        executorFingerprint: null,
-        turnModel: s.turnModel,
-        turnReasoningEffort: s.turnReasoningEffort,
-        target: "local",
-        worktreePath: useWorktree ? workspace : null,
-        branch: s.branch,
-        cwd: workspace,
-        cliSessionId: usable.get(s.id) ? s.cliSessionId : null,
-        commandLine: s.commandLine,
-        startedAt: s.startedAt,
-        endedAt: s.endedAt,
-        exitStatus: s.exitStatus,
-        stoppedAs: s.stoppedAs,
-        sideTurn: s.sideTurn ?? false,
-        activeMs: s.activeMs,
-        turnStartedAt: s.turnStartedAt,
-        usageInput: s.usageInput,
-        usageOutput: s.usageOutput,
-        usageCacheRead: s.usageCacheRead,
-        usageCacheWrite: s.usageCacheWrite,
-        usageReasoning: s.usageReasoning,
-        usageCostUsd: s.usageCostUsd,
-        usageTurns: s.usageTurns,
-        contextUsed: s.contextUsed,
-        contextWindow: s.contextWindow,
-        contextWindowEstimated: s.contextWindowEstimated,
-      })));
+      if (m.sessions.length) {
+        await db.insert(sessions).values(m.sessions.map((s) => ({
+          id: s.id,
+          taskId: m.task.id,
+          role: s.role,
+          agentType: s.agentType,
+          executor: s.executor,
+          // 本机档案/指纹/续跑命令全部重算或悬空:resumeCommand 读取时按目录重建,
+          // fingerprint 留空避免「换机器 = 换执行器」误报。
+          executorId: null,
+          executorFingerprint: null,
+          turnModel: s.turnModel,
+          turnReasoningEffort: s.turnReasoningEffort,
+          target: "local",
+          worktreePath: useWorktree ? workspace : null,
+          branch: s.branch,
+          cwd: workspace,
+          cliSessionId: usable.get(s.id) ? s.cliSessionId : null,
+          commandLine: s.commandLine,
+          startedAt: s.startedAt,
+          endedAt: s.endedAt,
+          exitStatus: s.exitStatus,
+          stoppedAs: s.stoppedAs,
+          sideTurn: s.sideTurn ?? false,
+          activeMs: s.activeMs,
+          turnStartedAt: s.turnStartedAt,
+          usageInput: s.usageInput,
+          usageOutput: s.usageOutput,
+          usageCacheRead: s.usageCacheRead,
+          usageCacheWrite: s.usageCacheWrite,
+          usageReasoning: s.usageReasoning,
+          usageCostUsd: s.usageCostUsd,
+          usageTurns: s.usageTurns,
+          contextUsed: s.contextUsed,
+          contextWindow: s.contextWindow,
+          contextWindowEstimated: s.contextWindowEstimated,
+        })));
+      }
+      if (messages.length) {
+        // 导入即 pending:sent 只在原话真的进了会话之后才写,源机的 status/sentAt/
+        // 投递租约一概不带。id 重新生成——同一批消息可能曾在多台机器间来回接力。
+        await db.insert(scheduledMessages).values(messages.map((msg) => ({
+          id: id(),
+          taskId: m.task.id,
+          text: msg.text,
+          attachments: jsonOr(msg.attachments, "[]"),
+          agent: msg.agent,
+          // 源机 agents 表的外键在本机没有意义 → 按 agent 类型默认执行器解析。
+          executorId: null,
+          model: msg.model,
+          reasoningEffort: msg.reasoningEffort,
+          sessionRole: msg.sessionRole,
+          mode: msg.mode === "queued" ? "queued" : "timed",
+          sendAt: msg.sendAt,
+          status: "pending" as const,
+          createdAt: msg.createdAt,
+          sentAt: null,
+          deliveringSince: null,
+        })));
+      }
     });
   } catch (e) {
     // 补偿回滚:任务行 + 已插入的会话行一起清掉,不留半截任务(审查实测:UNIQUE 炸在
@@ -455,9 +527,15 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
     let rollbackFailed = false;
     if (taskRowInserted) {
       try {
+        await db.delete(scheduledMessages).where(eq(scheduledMessages.taskId, m.task.id));
         await db.delete(sessions).where(eq(sessions.taskId, m.task.id));
         await db.delete(tasks).where(eq(tasks.id, m.task.id));
       } catch { rollbackFailed = true; /* 没有更好的办法,如实上报,让源机保留 pending */ }
+    }
+    // 计划行在任务行之前插的,不管任务行插没插成都要清——留着就是孤儿,重试时上面的
+    // 孤儿清扫兜底,但能现在清干净就别指望兜底。
+    if (scheduleId) {
+      try { await db.delete(schedules).where(eq(schedules.id, scheduleId)); } catch { rollbackFailed = true; }
     }
     const msg = e instanceof Error ? e.message : String(e);
     const err = rollbackFailed
@@ -466,6 +544,11 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
     // 回滚失败 = 不能再向源机保证「本机没落库」,应答不带 harness 标记(见 handoff-routes)。
     err.unsettled = rollbackFailed;
     throw err;
+  }
+
+  if (messages.length) {
+    notes.push(`迁移待发送消息 ${messages.length} 条,到期后在本机照常投递`);
+    publishPendingMessages(m.task.id);
   }
 
   if (m.autoResume) {

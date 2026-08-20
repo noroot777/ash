@@ -36,6 +36,33 @@ export interface HandoffUploadPayload {
   dataBase64: string;
 }
 
+// 任务的待发送/排队消息(scheduled_messages 表),只带 status=pending 的行——它们在
+// 源机永远投不出去(接力守卫拦续跑),不迁移就是用户已提交消息的永久丢失(第 2 轮审查
+// 实测)。不带 id(导入侧重新生成)、不带 executorId(源机 agents 表外键,对端没有意义,
+// 按 agent 类型默认执行器解析)、不带 status/sentAt/deliveringSince(导入即 pending)。
+export interface HandoffMessagePayload {
+  text: string;
+  // JSON string[]:上传附件的源机绝对路径,导入侧按 JSON 上下文改写成本机路径。
+  attachments: string;
+  agent: string | null;
+  model: string | null;
+  reasoningEffort: string | null;
+  sessionRole: string | null;
+  mode: string; // timed | queued
+  sendAt: string;
+  createdAt: string;
+}
+
+// 任务的定时计划(schedules 表)。lastRunAt/enabled 原样带走:触发过的一次性计划
+// enabled=false,不会在对端重新触发;不带 id(导入侧重新生成)。
+export interface HandoffSchedulePayload {
+  kind: string; // once | cron
+  at: string | null;
+  cron: string | null;
+  enabled: boolean;
+  lastRunAt: string | null;
+}
+
 export interface HandoffSessionRow {
   id: string;
   role: string;
@@ -113,6 +140,9 @@ export interface HandoffManifest {
   sessions: HandoffSessionRow[];
   // 被任务文本/会话文件引用的上传附件。老版本导出的 manifest 没有这个字段。
   uploads?: HandoffUploadPayload[];
+  // 待发送/排队消息与定时计划。老版本导出的 manifest 没有这些字段。
+  messages?: HandoffMessagePayload[];
+  schedule?: HandoffSchedulePayload | null;
   git: null | {
     branch: string;
     head: string;

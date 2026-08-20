@@ -227,6 +227,12 @@ export function HandoffDialog({
                   {preflight.local.uploads > 0 && (
                     <li>上传附件 {preflight.local.uploads} 个随任务带走,文中路径自动改写为对端路径</li>
                   )}
+                  {preflight.local.pendingMessages > 0 && (
+                    <li>待发送消息 {preflight.local.pendingMessages} 条随任务迁移,到期后在对端投递;本机的原件会取消并留档在时间线</li>
+                  )}
+                  {preflight.local.schedule && (
+                    <li>定时计划({preflight.local.schedule === "cron" ? "周期" : "一次性"})随任务迁移,今后由对端触发</li>
+                  )}
                 </ul>
                 {preflight.local.notes.length > 0 && (
                   <ul className="handoff-notes">

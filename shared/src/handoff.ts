@@ -23,6 +23,10 @@ export interface TaskHandoff {
   // out+pending:冻结的重放参数(见上)。in:导入时有没有触发自动续跑,幂等收口
   // 应答靠它如实报当初的事实。老标记没有这个字段。
   autoResume?: boolean;
+  // out+pending 专用:第一次发送的 manifest 里带走的待发送消息 id。收口成功后只取消
+  // 这一批——pending 期间新建的消息没有随幂等重放迁移到对端,必须留在托盘里如实提醒,
+  // 按「当前所有 pending」取消就是静默丢消息。
+  messageIds?: string[];
   // out: 对端 harness 根地址（横幅可点过去）；in: 源机自述不了地址,为 null。
   peerUrl: string | null;
   // out: 目标配置里的名字；in: 源机主机名。
@@ -59,6 +63,10 @@ export interface HandoffPreflightResult {
     sessionFilesFound: number;
     // 任务文本/会话产物里引用的上传附件(data/uploads)数,接力时随任务打包并改写路径。
     uploads: number;
+    // 待发送/排队消息(scheduled_messages)数,随任务迁移,到期后在对端投递。
+    pendingMessages: number;
+    // 任务的定时计划(schedules):随任务迁移,今后由对端触发;null = 没有计划。
+    schedule: "once" | "cron" | null;
     git: "bundle" | "none";
     notes: string[];
   };
