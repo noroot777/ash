@@ -190,6 +190,9 @@ export async function startPreview(
       return { ok: false, reason: `${conflict}。\n\n${portHint(lent)}\n\n最后几行日志：\n${text.slice(-600)}` };
     }
     if (!alive(pid)) {
+      // 组长（外层 shell / scripts/dev.mjs）先退出，不代表同组的 vite/tsx 也退出了。
+      // pid 本身虽已不在，POSIX 的进程组 -pid 仍可存在；照样发组信号，别留下孤儿。
+      killByPid(pid);
       return { ok: false, reason: `预览进程已退出。最后几行日志：\n${text.slice(-800)}` };
     }
     if (!found) continue;
@@ -216,7 +219,8 @@ export async function stopPreview(
 ): Promise<boolean> {
   const record = readPreview(taskId);
   if (!record) return false;
-  if (alive(record.pid)) killByPid(record.pid);
+  // 不先看组长是否还活着：组长死、vite 仍留在同一进程组，正是必须回收的现场。
+  killByPid(record.pid);
   rmSync(recordPath(taskId), { force: true });
   if (reason) await appendTaskTimeline(taskId, `预览已回收（${reason}）：${record.url ?? record.cmd}`);
   await recordFreePreviewEventIfFree(taskId, {
@@ -272,6 +276,8 @@ export async function sweepPreviews(): Promise<void> {
       continue;
     }
     if (!alive(record.pid)) {
+      // 记录的组长死了也要向原进程组补发信号；直接删记录会永久失去唯一的 pgid 线索。
+      killByPid(record.pid);
       rmSync(recordPath(taskId), { force: true });
       await appendTaskTimeline(taskId, `预览进程已自行退出：${record.url ?? record.cmd}`);
       continue;
