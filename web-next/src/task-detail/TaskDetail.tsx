@@ -92,6 +92,7 @@ const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
         taskId={context.task.id}
         activeDiff={context.openScmDiff}
         onOpenDiff={context.onOpenScmDiff}
+        onOpenReview={context.onOpenReview}
         notify={context.notify}
       />
     ),

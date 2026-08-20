@@ -11,6 +11,7 @@ import type { ScmChange, ScmDiffSource, ScmGroupId } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { ROOT_SOURCE_LABEL } from "../files/fileModel.ts";
 import { ScmChangeGroup } from "./ScmChangeGroup.tsx";
+import { ScmCommittedChanges } from "./ScmCommittedChanges.tsx";
 import {
   OPERATION_LABEL,
   diffSourceOf,
@@ -131,11 +132,13 @@ export function ScmInspector({
   taskId,
   activeDiff,
   onOpenDiff,
+  onOpenReview,
   notify,
 }: {
   taskId: string;
   activeDiff: { path: string; source: ScmDiffSource } | null;
   onOpenDiff: (target: { path: string; source: ScmDiffSource; origPath: string | null }) => void;
+  onOpenReview?: () => void;
   notify: (message: string) => void;
 }) {
   const scm = useScmWorkspace(taskId);
@@ -294,11 +297,17 @@ export function ScmInspector({
             <GitCommit size={13} />
             {status.staged.length ? `提交已暂存（${status.staged.length}）` : `暂存全部并提交（${commitPaths?.length ?? 0}）`}
           </button>
+          {/* 「只提交其中几个」是这个面板本来就有的能力：逐条 + 暂存，按钮随即从「暂存全部
+              并提交」翻成「提交已暂存」。但逐条那颗 + 只在 hover 时浮出来、又是个纯图标，
+              不说一句就等于没有——用户只会看见「暂存全部」这一条路。 */}
+          {!clean && !status.staged.length && (
+            <p className="scm-commit__hint">只想提交其中几个：把鼠标移到文件那一行，点右侧的 + 逐个暂存，这颗按钮会变成「提交已暂存」。</p>
+          )}
         </section>
       )}
 
       {clean ? (
-        <p className="scm-hint">工作区干净，没有未提交的改动。</p>
+        <p className="scm-hint">工作区干净，没有未提交的改动。这个任务改了什么，看下面「已提交的改动」。</p>
       ) : (
         <div className="scm-groups">
           <ScmChangeGroup
@@ -350,6 +359,12 @@ export function ScmInspector({
           />
         </div>
       )}
+
+      <ScmCommittedChanges
+        taskId={taskId}
+        revision={scm.overview.commits[0]?.sha ?? null}
+        onOpenReview={onOpenReview}
+      />
 
       {scm.overview.commits.length > 0 && (
         <section className="scm-commits">
