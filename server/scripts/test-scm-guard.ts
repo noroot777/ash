@@ -184,6 +184,92 @@ try {
     assert.match(goneBody.readOnly ?? "", /还没建出来/, "归属工作区没了才该显示未创建");
   }
 
+  // ── 6. 共用同一个工作目录的**兄弟任务**在跑，也要挡 ─────────────────────────
+  // 第 5 条把共享工作区正式开放成可写之后冒出来的：门禁只问当前这个 task id，而工作目录
+  // 是领队、跟随执行者、各自审查任务共用的。兄弟执行者正写着文件，用户从这一位空闲执行者
+  // 的面板上无 force 就能把它没提交的成果丢掉（第 4 轮审查在页面上真实复现）。
+  {
+    const { claimTurn, isTurnClaimed, releaseTurn } = await import("../src/runs.js");
+    const leadWorktree = join(repo, ".worktrees", "lead");
+    git(repo, "worktree", "add", leadWorktree, "harness/lead");
+    writeFileSync(join(leadWorktree, "shared.txt"), "baseline\n");
+    git(leadWorktree, "add", "shared.txt");
+    git(leadWorktree, "commit", "-m", "shared baseline");
+    await db.insert(tasks).values([
+      { ...common, id: "worker2", title: "兄弟执行者", parentId: "lead", useWorktree: false },
+    ]);
+
+    const sharedNow = () => readFileSync(join(leadWorktree, "shared.txt"), "utf8");
+    const soilShared = () => {
+      writeFileSync(join(leadWorktree, "shared.txt"), "sibling agent in progress\n");
+      assert.equal(sharedNow(), "sibling agent in progress\n");
+    };
+    const sharedOps = [
+      { op: "stage", body: { paths: ["shared.txt"] } },
+      { op: "unstage", body: { paths: ["shared.txt"] } },
+      { op: "discard", body: { paths: ["shared.txt"] } },
+      { op: "commit", body: { message: "should need force", stagePaths: ["shared.txt"] } },
+    ];
+    const sharedDirty = () =>
+      execFileSync("git", ["-C", leadWorktree, "status", "--porcelain"], { encoding: "utf8" }).trimEnd();
+
+    // 「在飞」的两种凭据各来一遍：团队调度台的常驻回合不占 turn 锁（DB status 是唯一
+    // 凭据），刚 claim 还没落 running 的执行者反过来只有 turn 锁。少看一样就漏掉一类。
+    const evidences = [
+      {
+        hint: "DB 说兄弟在跑",
+        arm: async () => { await db.update(tasks).set({ status: "running" }).where(eq(tasks.id, "worker2")); },
+        disarm: async () => { await db.update(tasks).set({ status: "backlog" }).where(eq(tasks.id, "worker2")); },
+      },
+      {
+        hint: "兄弟刚占住回合",
+        arm: async () => { assert.equal(claimTurn("worker2", "single"), true); },
+        disarm: async () => { releaseTurn("worker2"); },
+      },
+    ];
+
+    for (const { hint, arm, disarm } of evidences) {
+      await arm();
+      const overview = await api.request("/tasks/worker/scm");
+      const body = await overview.json() as { taskRunning: boolean; readOnly: string | null };
+      assert.equal(body.taskRunning, true, `${hint}：空闲执行者的面板也得说「这个目录里有任务在跑」`);
+      assert.equal(body.readOnly, null, "在飞不是只读——是要用户确认一次");
+
+      for (const { op, body: payload } of sharedOps) {
+        soilShared();
+        const head = git(leadWorktree, "rev-parse", "HEAD");
+        const res = await post("worker", op, payload);
+        const json = await res.json() as { error?: string; needsForce?: boolean };
+        assert.equal(res.status, 409, `${hint}：${op} 必须 409，实际 ${res.status}`);
+        assert.equal(json.needsForce, true, `${hint}：${op} 要让面板弹确认框，而不是报一个死错`);
+        assert.match(json.error ?? "", /兄弟执行者/, `${hint}：${op} 要说清是哪个任务在跑`);
+        assert.equal(sharedNow(), "sibling agent in progress\n", `${hint}：${op} 之后文件不许变`);
+        assert.equal(sharedDirty(), " M shared.txt", `${hint}：${op} 之后索引不许变`);
+        assert.equal(git(leadWorktree, "rev-parse", "HEAD"), head, `${hint}：${op} 之后不许多出提交`);
+      }
+      await disarm();
+    }
+
+    // 兄弟停下之后照旧能写——上面那几条不能是「共享目录一律 409」。
+    soilShared();
+    const free = await post("worker", "discard", { paths: ["shared.txt"] });
+    assert.equal(free.status, 200, "没人在跑时共享目录必须能写");
+    assert.equal(sharedNow(), "baseline\n");
+
+    // 用户点了确认：带 force 要真能穿过去，否则「明知故犯」这一档等于没有。
+    await db.update(tasks).set({ status: "running" }).where(eq(tasks.id, "worker2"));
+    soilShared();
+    const forced = await post("worker", "discard", { paths: ["shared.txt"], force: true });
+    assert.equal(forced.status, 200, "带 force 必须放行");
+    assert.equal(sharedNow(), "baseline\n", "force 之后丢弃要真的生效");
+    await db.update(tasks).set({ status: "backlog" }).where(eq(tasks.id, "worker2"));
+
+    // 写完必须把整组占位都还回去，否则这几个任务再也起不来。
+    for (const id of ["lead", "worker", "worker2"]) {
+      assert.equal(isTurnClaimed(id), false, `${id} 的占位必须还回去`);
+    }
+  }
+
   console.log("scm guard ok");
 } finally {
   rmSync(root, { recursive: true, force: true });

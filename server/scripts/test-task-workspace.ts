@@ -121,6 +121,39 @@ try {
   assert.equal(isolatedReviewWorkspace.path, isolatedWorkspace.path);
   assert.equal(isolatedReviewWorkspace.branch, isolatedWorkspace.branch);
 
+  // ── 谁跟谁共用同一个工作目录 ────────────────────────────────────────────────
+  // 上面刚证明领队、跟随执行者、它俩的审查任务解析到**同一个路径**。SCM 面板要按这个
+  // 事实上锁：只锁自己那个 task id，兄弟执行者正写着文件，用户在这一位的面板上无 force
+  // 就能把它的成果丢掉（第 4 轮审查在页面上真实复现）。所以把分组关系单独钉一遍。
+  {
+    const { workspaceParticipants } = await import("../src/task-workspace.js");
+    const ids = async (id: string) => (await workspaceParticipants(await load(id))).map((p) => p.id).sort();
+
+    await db.insert(tasks).values([
+      { ...common, id: "in-place-a", parentId: null, mode: "single", useWorktree: false },
+      { ...common, id: "in-place-b", parentId: null, mode: "single", useWorktree: false },
+      // 归档 = 冻结，它起不来 → 不该把别人的写操作也一起挡住
+      { ...common, id: "in-place-archived", parentId: null, mode: "single", useWorktree: false,
+        archived: true, archivedAt: ts },
+    ]);
+
+    const teamShared = ["lead-task-1234", "review-shared-1", "shared-worker-1"];
+    assert.deepEqual(await ids("shared-worker-1"), teamShared, "跟随执行者要连同领队和审查任务一起算");
+    assert.deepEqual(await ids("lead-task-1234"), teamShared, "领队看到的是同一组");
+    assert.deepEqual(await ids("review-shared-1"), teamShared, "审查任务跟到被审任务所在的目录");
+    // 显式独立的执行者是另一个目录：别把整个团队都算进来，那会把无关任务一起冻住。
+    assert.deepEqual(await ids("isolated-worker-1"), ["isolated-worker-1", "review-isolated-1"]);
+
+    // 就地干活的那批共用项目主仓，是同一类共用，不是特例。
+    assert.deepEqual(await ids("in-place-a"), ["in-place-a", "in-place-b"]);
+    // 归档任务自己仍然在自己名单里（锁要覆盖到自己），但不出现在别人的名单里。
+    assert.deepEqual(await ids("in-place-archived"), ["in-place-a", "in-place-b", "in-place-archived"].sort());
+
+    await db.delete(tasks).where(eq(tasks.id, "in-place-a"));
+    await db.delete(tasks).where(eq(tasks.id, "in-place-b"));
+    await db.delete(tasks).where(eq(tasks.id, "in-place-archived"));
+  }
+
   // ── 登记的 base 分支已经没了 → 降级要**落回任务行** ─────────────────────────
   // 只在 worktree 创建处降级、库里仍留着那个已删的名字的话，这一轮是起来了，用户下一步
   // 看 diff 会得到 target_branch_missing、验收被「目标本地分支不存在」挡回 —— 等于把

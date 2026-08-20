@@ -427,7 +427,7 @@ if (!IS_WINDOWS) {
   const taskId = "t-atomic";
   const claimedAfterGuard: boolean[] = [];
   await stagePaths(repo, repo, ["a.txt"], () => {
-    const release = claimWorkspaceTurn(taskId);
+    const release = claimWorkspaceTurn([taskId]);
     assert.ok(release, "空闲任务必须占得到");
     // 复现那个交错：guard 已经返回、git 命令还没跑完，此时另一次启动来抢回合。
     queueMicrotask(() => claimedAfterGuard.push(claimTurn(taskId)));
@@ -439,13 +439,27 @@ if (!IS_WINDOWS) {
 
   // 反方向：回合已经在跑时占不到，路由据此回「需要 force」。
   assert.equal(claimTurn(taskId, "single"), true);
-  assert.equal(claimWorkspaceTurn(taskId), null, "有回合在跑时 SCM 不许占住工作区");
+  assert.equal(claimWorkspaceTurn([taskId]), null, "有回合在跑时 SCM 不许占住工作区");
   releaseTurn(taskId);
-  const again = claimWorkspaceTurn(taskId);
+  const again = claimWorkspaceTurn([taskId]);
   assert.ok(again, "回合结束之后又该占得到了");
   again();
   again(); // 释放函数要能重复调用：错误路径与 finally 可能都走到
   assert.equal(isTurnClaimed(taskId), false);
+
+  // 一个工作目录可能有好几位共用者（团队调度台 + 跟随它的执行者），要占就得**全有或
+  // 全无**：中途占不到还留着前面几把，那几个任务就再也起不来了（第 4 轮审查）。
+  const peers = [`${taskId}-lead`, `${taskId}-w1`, `${taskId}-w2`];
+  assert.equal(claimTurn(peers[2], "single"), true, "让最后一位先被真回合占住");
+  assert.equal(claimWorkspaceTurn(peers), null, "有一位在跑，整组都不许占");
+  assert.equal(isTurnClaimed(peers[0]), false, "占不到就要把已占的全还回去");
+  assert.equal(isTurnClaimed(peers[1]), false, "占不到就要把已占的全还回去");
+  releaseTurn(peers[2]);
+  const all = claimWorkspaceTurn(peers);
+  assert.ok(all, "都空闲时整组占得到");
+  assert.deepEqual(peers.map((id) => claimTurn(id)), [false, false, false], "占住期间谁都起不来");
+  all();
+  assert.deepEqual(peers.map((id) => isTurnClaimed(id)), [false, false, false], "释放要覆盖全组");
 }
 
 // ── 14. 写入期间「暂停分组」，不许把下一次真启动一起冻掉 ─────────────────────
@@ -459,7 +473,7 @@ if (!IS_WINDOWS) {
   write(repo, "a.txt", "a\n");
   const taskId = "t-pause-scm";
   await stagePaths(repo, repo, ["a.txt"], () => {
-    const release = claimWorkspaceTurn(taskId);
+    const release = claimWorkspaceTurn([taskId]);
     assert.ok(release, "空闲任务必须占得到");
     // 用户此刻点了「暂停分组」。SCM 占位不是回合，没有对象可冻。
     assert.equal(freezeStartingTurn(taskId, "paused"), false, "不许往 SCM 占位身上写冻结");

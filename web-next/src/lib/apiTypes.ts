@@ -192,7 +192,11 @@ export type ScmStatus = {
 
 export type ScmOverview = {
   root: FileWorkspaceRoot;
-  /** 任务此刻在不在跑。写操作要不要弹「agent 正在写这个目录」的确认，看它。 */
+  /**
+   * 这个**工作目录**里此刻有没有任务在跑——共用它的其它任务（团队调度台、跟随它的
+   * 兄弟执行者、各自的审查任务）算在内，不只是当前这一个。写操作要不要弹「agent 正在
+   * 写这个目录」的确认，看它。
+   */
   taskRunning: boolean;
   /**
    * 这个工作目录**不能写**的理由（能写就是 null）。归档任务、以及独立工作区还没建出来

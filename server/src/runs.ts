@@ -195,7 +195,7 @@ export function releaseTurn(taskId: string): void {
 }
 
 /**
- * SCM 面板要动这个任务的工作目录：**用同一把回合锁原子预占**，占不到返回 null。
+ * SCM 面板要动这个工作目录：**用同一把回合锁原子预占**，占不到返回 null。
  *
  * 为什么不是「再查一次在不在飞」：查是观察式的，`claimTurn` 不需要仓库锁，查完到真正
  * 动手之间另一次启动完全可以合法插进来（第 2 轮审查确定性复现过：guard 观察到空闲，
@@ -203,17 +203,30 @@ export function releaseTurn(taskId: string): void {
  * 写入必须争同一个原子对象。占住之后 `claimTurn` 会挡下新的启动，`isTurnClaimed` 也会
  * 让归档/验收/派审这些既有守卫一并退避，不必在每个调用点再加一道。
  *
+ * **要占的是这个目录的全部共用者，不是一个 task id**（`workspaceParticipants`）：团队
+ * 调度台和它那些跟随的执行者跑在同一个 worktree 里，只占自己那把锁，兄弟执行者照样能在
+ * 我们跑 git 的同一时刻起跑（第 4 轮审查复现）。所以这里是**全有或全无**：中途占不到就
+ * 把已占的全部还回去，让调用方按 `needsForce` 那一档处理。
+ *
  * 和真回合的唯一差别是**不碰起跑冻结**：这不是一个回合，清掉它会把上一次真回合留下的
  * 暂停意图吃掉；反过来，占住期间也不许有人往它身上写冻结（见 `freezeStartingTurn`），
  * 否则标记会漏给下一次真启动。释放函数可重复调用（写操作的 finally 与错误路径可能都走到）。
  */
-export function claimWorkspaceTurn(taskId: string): (() => void) | null {
-  if (!claimTurn(taskId, WORKSPACE_TURN_ROLE)) return null;
+export function claimWorkspaceTurn(taskIds: string[]): (() => void) | null {
+  const claimed: string[] = [];
+  for (const taskId of new Set(taskIds)) {
+    if (claimTurn(taskId, WORKSPACE_TURN_ROLE)) {
+      claimed.push(taskId);
+      continue;
+    }
+    for (const held of claimed) endTurn(held);
+    return null;
+  }
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    endTurn(taskId);
+    for (const taskId of claimed) endTurn(taskId);
   };
 }
 
@@ -269,8 +282,29 @@ export function continueWhenIdle(
       void onError?.("回合被其它执行抢占，消息未能投递");
       return;
     }
-    void import("./orchestrator.js")
-      .then(({ continueTask }) => continueTask(taskId, text, { ...opts, turnHeld: true }))
+    void import("./turn-freeze.js")
+      .then(async ({ turnFreezeReason }) => {
+        // 这条路上的启动**全是系统发起的**（就地验证、自由派审、修复、验收冲突叫醒），
+        // 而且都是「先占位登记、释放点之后才真起跑」的交接：从调用方那次预检查到这里，
+        // 中间隔着上一整轮，用户完全可能已经把分组暂停、把任务删了或归档了。
+        //
+        // 内存里的起跑冻结标记在这条路上**指望不上**：`pauseGroup` 冻的是占位那一个
+        // 回合（dispatch），占位方的 finally `releaseTurn` 会连着标记一起清掉——接棒的
+        // 真实回合什么都看不到，于是「暂停已经 200 返回，reviewer 照样被拉起来」
+        //（第 4 轮审查确定性复现）。所以这里按事实查库权威复查一次。
+        const freeze = await turnFreezeReason(taskId, true);
+        if (!freeze) {
+          return (await import("./orchestrator.js")).continueTask(taskId, text, { ...opts, turnHeld: true });
+        }
+        // 撤回，且**不标停止落位**：这一轮一个字都没送出去，任务状态还停在上一轮的终态，
+        // 标了就会被下一次真启动误读成「上一轮是被停的」。当作投递失败上报，调用方那套
+        // 回滚（清 verifyRound、复位 stage、写时间线）才跑得到——不然任务会永久卡在
+        // 「正在验证」而验证从未开始。
+        releaseTurn(taskId);
+        console.error(`[harness] continueWhenIdle(${taskId}) withdrawn: ${freeze.reason}`);
+        try { await onError?.(`${freeze.reason}，这一轮在启动前被撤回`); } catch { /* 上报失败不再连锁 */ }
+        return true;
+      })
       .then(
         async (delivered) => {
           // continueTask 返回 false = 一个字都没送出去（验收互斥退避等）。吞掉它，

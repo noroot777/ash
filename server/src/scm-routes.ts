@@ -20,7 +20,7 @@ import {
 } from "./git-workspace-ops.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { claimWorkspaceTurn, isTurnClaimed } from "./runs.js";
-import { isolatedWorkspaceOwner } from "./task-workspace.js";
+import { isolatedWorkspaceOwner, workspaceParticipants, type WorkspacePeer } from "./task-workspace.js";
 import { assertInsideRoot, assertPathShape, gateScmPaths } from "./scm-paths.js";
 
 // 任务工作区的「源代码管理」面板。工作目录的解析**复用 taskFileRoot**（会话 cwd >
@@ -47,22 +47,30 @@ import { assertInsideRoot, assertPathShape, gateScmPaths } from "./scm-paths.js"
 //
 // 「在飞」的判据是 **DB status 或 turn 锁**，两个都要看：`claimTurn` 到 status 落
 // `running` 之间有一段真实窗口，只看 status 会在 agent 已经开跑时放行不可逆的 discard
-// （`task-accept-guard.ts` 因为同一个原因也是这么判的）。而且进门时的结论到动手时可能
-// 早过期了（排 `withRepoLock` 可能等上几秒），所以**真正动手之前还要再来一道**——而那
-// 一道不能是「再查一次」：查完到 git 命令跑起来之间，一次启动仍能合法插进来。锁内那道
-// 是 `claimWorkspaceTurn`：用启动同一把回合锁**原子占住**，占住期间新的启动、归档、
-// 验收、派审都会被各自既有的守卫挡回去（它们查的都是这把锁）。归档同理在占住之后复查。
+// （`task-accept-guard.ts` 因为同一个原因也是这么判的）。团队调度台的常驻回合根本不占
+// turn 锁，它的 status 是唯一凭据，少看一样就漏掉整类共用者。
+//
+// 而**问的对象是「这个目录」而不是「这个任务」**：工作目录不是一个任务的私产，调度台、
+// 跟随它的执行者、它们各自的审查任务都落在同一个 worktree 里（`workspaceParticipants`）。
+// 只问当前这个 task id，兄弟执行者正写着文件，用户从这一位的面板上无 force 就能把它的
+// 成果丢掉（第 4 轮审查在页面上真实复现）。
+//
+// 进门时的结论到动手时可能早过期了（排 `withRepoLock` 可能等上几秒），所以**真正动手
+// 之前还要再来一道**——而那一道不能是「再查一次」：查完到 git 命令跑起来之间，一次启动
+// 仍能合法插进来。锁内那道是 `claimWorkspaceTurn`：用启动同一把回合锁**原子占住全部
+// 共用者**，占住期间他们的启动、归档、验收、派审都会被各自既有的守卫挡回去（它们查的
+// 都是这把锁）。归档同理在占住之后复查。
 
 
 const RUNNING_STATES = new Set(["running", "queued"]);
 
 /**
- * 任务在飞时挡下写操作。**不是错误，是要求用户明知故犯**——路由把它翻译成
+ * 有任务在飞时挡下写操作。**不是错误，是要求用户明知故犯**——路由把它翻译成
  * `needsForce`，前端弹一次说明后果的确认框，用户点了确认再带 `force` 重来。
  */
 class ScmBusyError extends ScmOperationError {
-  constructor() {
-    super("任务正在运行，agent 此刻可能正在写这个工作目录；确认要继续请带 force", 409);
+  constructor(who: string) {
+    super(`${who}，agent 此刻可能正在写这个工作目录；确认要继续请带 force`, 409);
     this.name = "ScmBusyError";
   }
 }
@@ -102,9 +110,20 @@ export function mountScmRoutes(api: Hono) {
 
   type TaskRow = NonNullable<Awaited<ReturnType<typeof loadTask>>>;
 
-  /** 这个任务此刻在不在飞。DB status 和 turn 锁哪个说「在」都算在（见顶部注释）。 */
-  const inFlight = (task: TaskRow) =>
-    isTurnClaimed(task.id) || RUNNING_STATES.has(task.status ?? "");
+  /**
+   * 这个工作目录此刻有没有任务在飞——有就回那一位，没有回 null。
+   *
+   * 判据见顶部注释：DB status 和 turn 锁哪个说「在」都算在，问的对象是**共用这个目录的
+   * 全部任务**而不是当前这一个。
+   */
+  const busyPeer = (peers: WorkspacePeer[]): WorkspacePeer | null =>
+    peers.find((peer) => isTurnClaimed(peer.id) || RUNNING_STATES.has(peer.status ?? "")) ?? null;
+
+  /** 「谁在飞」这句话：兄弟任务得报出名字，不然用户只会以为是自己这个任务在跑。 */
+  const busyLabel = (taskId: string, peer: WorkspacePeer): string =>
+    peer.id === taskId
+      ? "任务正在运行"
+      : `共用这个工作目录的另一个任务「${peer.title?.trim() || peer.id}」正在运行`;
 
   /**
    * 这个工作目录**能不能写**：不能写就回一句给用户看的话，能写回 null。
@@ -124,7 +143,8 @@ export function mountScmRoutes(api: Hono) {
     const root = await taskFileRoot(taskId);
     if (!root) return { error: "这个任务还没有可浏览的工作目录", status: 404 as const } as const;
     if (!root.gitRepo) return { error: "这个工作目录不是 Git 仓库", status: 409 as const } as const;
-    return { task, root, running: inFlight(task) } as const;
+    const peers = await workspaceParticipants(task);
+    return { task, root, peers, busy: busyPeer(peers) } as const;
   };
 
   api.get("/tasks/:id/scm", async (c) => {
@@ -138,7 +158,7 @@ export function mountScmRoutes(api: Hono) {
       ]);
       return c.json({
         root: publicRoot(context.root),
-        taskRunning: context.running,
+        taskRunning: !!context.busy,
         // 只读的理由要一起给：面板不光要收起按钮，还得说清楚为什么——「按钮不见了」
         // 和「按钮坏了」在用户那儿是同一件事。
         readOnly,
@@ -191,18 +211,30 @@ export function mountScmRoutes(api: Hono) {
       // 只读是**冻结**，不是「确认一下就能干」：force 不解这两道。
       const readOnly = await readOnlyReason(context.task, context.root);
       if (readOnly) return c.json({ error: readOnly, readOnly }, 409);
-      if (context.running && !forced) return c.json({ error: new ScmBusyError().message, needsForce: true }, 409);
+      if (context.busy && !forced) {
+        return c.json({ error: new ScmBusyError(busyLabel(taskId, context.busy)).message, needsForce: true }, 409);
+      }
       // 锁内这一道是**占位**不是复查（见顶部注释）：占住之后启动会被 claimTurn 挡回，
       // 归档会被 task-archive-routes 的 isTurnClaimed 挡回，于是接下来读到的归档位和
-      // 在飞状态到 git 命令跑完为止都不会再变。带 force 的照样占（占不到就是有回合在
-      // 跑，那正是用户明知故犯要覆盖的那一档），但归档不受 force 影响，一律复查。
+      // 在飞状态到 git 命令跑完为止都不会再变。占的是**全部共用者**——只占自己那把，
+      // 兄弟执行者照样能在我们跑 git 的同一时刻起跑。带 force 的照样占（占不到就是有
+      // 回合在跑，那正是用户明知故犯要覆盖的那一档），但归档不受 force 影响，一律复查。
       const guard: ScmGuard = async () => {
-        const release = claimWorkspaceTurn(taskId) ?? undefined;
+        const claimed = new Set(context.peers.map((peer) => peer.id));
+        const release = claimWorkspaceTurn([...claimed]) ?? undefined;
         try {
           const fresh = await loadTask(taskId);
           if (!fresh) throw new ScmOperationError("这个任务已经不在了", 404);
           if (fresh.archived) throw new ScmOperationError(ARCHIVED_REFUSAL, 409);
-          if (!forced && (!release || RUNNING_STATES.has(fresh.status ?? ""))) throw new ScmBusyError();
+          if (!forced) {
+            if (!release) throw new ScmBusyError("有任务正在这个工作目录里运行");
+            // 占住之后再过一遍共用者名单：**占住的那批只看 DB status**（turn 锁此刻在
+            // 我们自己手里，问它只会得到「在飞」），团队调度台的常驻回合又根本不占锁，
+            // status 是它唯一的凭据；名单是刚重读的，占位之后才建出来的任务两样都看。
+            const busy = (await workspaceParticipants(fresh)).find((peer) =>
+              RUNNING_STATES.has(peer.status ?? "") || (!claimed.has(peer.id) && isTurnClaimed(peer.id)));
+            if (busy) throw new ScmBusyError(busyLabel(taskId, busy));
+          }
           return release;
         } catch (error) {
           release?.();

@@ -70,12 +70,13 @@ interface PendingConfirm {
   force: boolean;
 }
 
-/** 任务正在跑时的二次确认。把「谁在写、写坏了会怎样」说完整，而不是一句「确定吗」。 */
+/** 有任务在这个目录里跑时的二次确认。把「谁在写、写坏了会怎样」说完整，而不是一句「确定吗」。 */
 function forceConfirm(action: ScmAction, reason: string): PendingConfirm {
   const verb = action.kind === "commit" ? "提交" : action.kind === "discard" ? "丢弃" : "改动暂存区";
   return {
     action,
-    title: "任务正在运行",
+    // 具体是谁在跑由后端那句 `reason` 说（可能是共用这个目录的兄弟任务），标题只管定性。
+    title: "有任务正在这个工作目录里运行",
     message: `${reason}\n\n继续会在 agent 干活的同时${verb}：提交可能收进它写到一半的文件，丢弃可能抹掉它刚写出来、还没提交的成果。`,
     confirmLabel: `仍然${verb}`,
     danger: true,
@@ -231,7 +232,7 @@ export function ScmInspector({
       {running && (
         <p className="scm-banner">
           <WarningCircle size={13} />
-          任务正在运行，agent 可能正在写这个目录。改动会随它变化，写操作需要额外确认。
+          有任务正在这个工作目录里运行（可能是共用它的其它任务），agent 可能正在写这里。改动会随它变化，写操作需要额外确认。
         </p>
       )}
       {status.truncated && (
