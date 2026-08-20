@@ -21,6 +21,7 @@
     "build:mobile": "cd mobile && npx expo export -p web",
     "restart": "node scripts/restart.mjs",
     "setup": "node scripts/setup.mjs",
+    "check:workspaces": "node scripts/workspace-check.mjs",
     "package": "node scripts/package.mjs",
     "test:restart": "node scripts/test-restart.mjs",
     "start": "npm -w server run start",
