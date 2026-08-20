@@ -1,0 +1,158 @@
+import { ArrowCounterClockwise, Minus, Plus, Trash } from "@phosphor-icons/react";
+import type { ScmChange, ScmGroupId } from "../lib/api.ts";
+import { CONFLICT_LABEL, KIND_BADGE, KIND_LABEL, dirName, fileName, pathsOf } from "./scmModel.ts";
+
+// 一个改动分组（冲突 / 已暂存 / 更改 / 未跟踪）。条目本身是按钮——点它开 diff，跟
+// 文件树点文件开查看器是同一套手势；逐条的操作按钮浮在右侧，不抢主点击区。
+
+export interface ScmGroupActions {
+  onOpen: (change: ScmChange) => void;
+  onStage?: (paths: string[]) => void;
+  onUnstage?: (paths: string[]) => void;
+  onDiscard?: (changes: ScmChange[]) => void;
+}
+
+function RowActions({
+  change,
+  group,
+  actions,
+}: {
+  change: ScmChange;
+  group: ScmGroupId;
+  actions: ScmGroupActions;
+}) {
+  const name = fileName(change.path);
+  // 嵌套 Git 仓库一个操作都给不了：暂存会变成建子模块、丢弃一个字节都删不掉、预览也读
+  // 不出来（后端一律摘出去/拒掉）。摆一个按不动的按钮不如不摆，改用一句话说清去哪操作。
+  if (change.nested) return <span className="scm-row__nested">嵌套仓库 · 请在它自己的仓库里操作</span>;
+  return (
+    <span className="scm-row__actions">
+      {actions.onDiscard && (
+        <button
+          type="button"
+          aria-label={group === "untracked" ? `删除 ${name}` : `丢弃 ${name} 的改动`}
+          onClick={() => actions.onDiscard?.([change])}
+        >
+          {group === "untracked" ? <Trash size={13} /> : <ArrowCounterClockwise size={13} />}
+        </button>
+      )}
+      {actions.onUnstage && (
+        <button
+          type="button"
+          aria-label={`取消暂存 ${name}`}
+          onClick={() => actions.onUnstage?.(pathsOf([change]))}
+        >
+          <Minus size={13} />
+        </button>
+      )}
+      {actions.onStage && (
+        <button
+          type="button"
+          aria-label={group === "merge" ? `把 ${name} 标记为已解决并暂存` : `暂存 ${name}`}
+          onClick={() => actions.onStage?.(pathsOf([change]))}
+        >
+          <Plus size={13} />
+        </button>
+      )}
+    </span>
+  );
+}
+
+export function ScmChangeGroup({
+  group,
+  title,
+  changes,
+  activePath,
+  activeGroup,
+  actions,
+  hint,
+}: {
+  group: ScmGroupId;
+  title: string;
+  changes: ScmChange[];
+  activePath: string | null;
+  activeGroup: ScmGroupId | null;
+  actions: ScmGroupActions;
+  hint?: string;
+}) {
+  if (!changes.length) return null;
+  return (
+    <section className={`scm-group is-${group}`}>
+      <header>
+        <b>{title}</b>
+        <span className="scm-group__count">{changes.length}</span>
+        <span className="scm-group__bulk">
+          {actions.onDiscard && (
+            <button
+              type="button"
+              aria-label={`${title}：全部${group === "untracked" ? "删除" : "丢弃"}`}
+              onClick={() => actions.onDiscard?.(changes)}
+            >
+              {group === "untracked" ? <Trash size={13} /> : <ArrowCounterClockwise size={13} />}
+            </button>
+          )}
+          {actions.onUnstage && (
+            <button
+              type="button"
+              aria-label={`${title}：全部取消暂存`}
+              onClick={() => actions.onUnstage?.(pathsOf(changes))}
+            >
+              <Minus size={13} />
+            </button>
+          )}
+          {actions.onStage && (
+            <button
+              type="button"
+              aria-label={`${title}：全部暂存`}
+              onClick={() => actions.onStage?.(pathsOf(changes))}
+            >
+              <Plus size={13} />
+            </button>
+          )}
+        </span>
+      </header>
+      {hint && <p className="scm-group__hint">{hint}</p>}
+      <ul>
+        {changes.map((change, index) => {
+          const dir = dirName(change.path);
+          const active = activeGroup === group && activePath === change.path;
+          const body = (
+            <>
+              <span className="scm-row__name">
+                {fileName(change.path)}
+                {change.origPath && <i className="scm-row__from">← {change.origPath}</i>}
+              </span>
+              {dir && <span className="scm-row__dir">{dir}</span>}
+              <span className="scm-row__meta">
+                {change.conflict && (
+                  <em className="scm-row__conflict">{CONFLICT_LABEL[change.conflict] ?? "冲突"}</em>
+                )}
+                <span className={`scm-row__badge is-${change.kind}`} aria-label={KIND_LABEL[change.kind]}>
+                  {KIND_BADGE[change.kind]}
+                </span>
+              </span>
+            </>
+          );
+          return (
+            <li key={`${change.path}-${index}`}>
+              {/* 操作按钮是主按钮的**兄弟**而不是子元素：按钮套按钮是非法 HTML，
+                  浏览器会把里层拎出去，点「丢弃」就变成点了整行。 */}
+              <div className={`scm-row${active ? " is-active" : ""}`}>
+                {/* 嵌套仓那一行不是按钮：它没有 diff 可开（后端明确拒绝预览），
+                    做成能点的只会换来一句报错。 */}
+                {change.nested ? (
+                  <span className="scm-row__open is-static">{body}</span>
+                ) : (
+                  <button type="button" className="scm-row__open" onClick={() => actions.onOpen(change)}>
+                    {body}
+                  </button>
+                )}
+                <RowActions change={change} group={group} actions={actions} />
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}

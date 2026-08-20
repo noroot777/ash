@@ -2,9 +2,9 @@
 // 每个用例自带临时仓库,任何 checkout / ref 更新都不会外溢到 harness 仓库。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 
 const root = mkdtempSync(join(tmpdir(), "harness-repo-lock-test-"));
 process.env.HARNESS_DB = join(root, "harness.db");
@@ -84,6 +84,42 @@ try {
       withRepoLock("/tmp/repo-b", async () => { concurrent += 1; otherPeak = Math.max(otherPeak, concurrent); await sleep(10); concurrent -= 1; }),
     ]);
     assert.equal(otherPeak, 2, "不同仓库应当并行,不该被同一条队列串起来");
+  }
+
+  // 2b. 路径别名(`.` / `..` / 软链)指的还是同一个仓库,必须落进同一把锁。
+  // 去尾斜杠只挡得住最表面那一种写法;`repo/.` 和一条软链都是公共 API 收得下的合法
+  // 路径,按字面值算键就会给同一个 `.git` 开两条队列 —— 并行验收撞 index.lock、
+  // SCM 门禁也看不见别名项目里在跑的任务(第 2 轮审查)。
+  {
+    const real = makeRepo("alias-repo");
+    const link = join(root, "alias-link");
+    symlinkSync(real, link, "dir");
+    // 故意用字符串拼而不是 `join`：`join` 自己就会把 `.` / `..` 消掉，那样测的就不是
+    // `repoKey` 了。公共 API 收到的正是这种没归一过的原样字符串。
+    // 相对路径也算一种别名：公共 API 收得下它,而 `git -C <相对路径>` 是按 server 进程的
+    // cwd 解释的,落的是同一个目录 —— 按字面值算键同样会开出第二条队列(第 1 轮审查)。
+    const aliases = [real, `${real}${sep}.`, `${real}${sep}sub${sep}..`, link, `${link}${sep}.${sep}`, relative(process.cwd(), real)];
+
+    let inside = 0;
+    let peak = 0;
+    await Promise.all(aliases.map((path) =>
+      withRepoLock(path, async () => {
+        inside += 1; peak = Math.max(peak, inside); await sleep(5); inside -= 1;
+      }),
+    ));
+    assert.equal(peak, 1, `别名写法不能变成多把锁：${aliases.join(" / ")}`);
+    assert.deepEqual(lockedRepoKeys(), [], "队列跑空后条目应被回收");
+
+    // 反向:确实是另一个目录时不能被并进来,否则上面那条用「只有一把锁」也能过。
+    const other = makeRepo("alias-other");
+    let together = 0;
+    let bothPeak = 0;
+    await Promise.all([`${real}${sep}.`, other].map((path) =>
+      withRepoLock(path, async () => {
+        together += 1; bothPeak = Math.max(bothPeak, together); await sleep(10); together -= 1;
+      }),
+    ));
+    assert.equal(bothPeak, 2, "两个真正不同的仓库不该被归一到一起");
   }
 
   // 3. 可重入:外层持锁时内层直接放行(否则 acceptTask → mergeTaskBranch 会自锁死)。

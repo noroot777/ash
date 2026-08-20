@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { eq } from "drizzle-orm";
 
 const root = mkdtempSync(join(tmpdir(), "harness-task-workspace-"));
@@ -92,6 +92,15 @@ try {
   const load = async (id: string) =>
     (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!;
 
+  {
+    // `workspaceParticipants` 现在按**眼前这个目录**圈人，圈定要靠项目登记的仓库路径解析
+    // 「没跑过的任务下次会落在哪」，所以这些任务的项目得真在库里。
+    const { projects } = await import("../src/db/schema.js");
+    await db.insert(projects).values([
+      { id: "project", name: "主项目", repoPath: repo, apiKeys: null, workflowId: null, createdAt: ts },
+    ]);
+  }
+
   const lead = await load("lead-task-1234");
   const leadWorkspace = await taskWorkspace(lead, repo);
   assert.equal(leadWorkspace.path, join(repo, ".worktrees", lead.id));
@@ -120,6 +129,176 @@ try {
   const isolatedReviewWorkspace = await taskWorkspace(await load("review-isolated-1"), repo);
   assert.equal(isolatedReviewWorkspace.path, isolatedWorkspace.path);
   assert.equal(isolatedReviewWorkspace.branch, isolatedWorkspace.branch);
+
+  // ── 谁跟谁共用同一个工作目录 ────────────────────────────────────────────────
+  // 上面刚证明领队、跟随执行者、它俩的审查任务解析到**同一个路径**。SCM 面板要按这个
+  // 事实上锁：只锁自己那个 task id，兄弟执行者正写着文件，用户在这一位的面板上无 force
+  // 就能把它的成果丢掉（第 4 轮审查在页面上真实复现）。所以把分组关系单独钉一遍。
+  //
+  // 圈人的准星是 `taskFileRoot` 最终选中的那个目录（路由就是这么配对的），不是项目登记
+  // 的 repoPath —— 所以这里也照着真实配对来问。
+  {
+    const { workspaceParticipants } = await import("../src/task-workspace.js");
+    const { taskFileRoot } = await import("../src/file-browser.js");
+    const ids = async (id: string) => {
+      const dir = await taskFileRoot(id);
+      assert.ok(dir, `前提：${id} 得解析得出工作目录`);
+      return (await workspaceParticipants(await load(id), dir.path)).map((p) => p.id).sort();
+    };
+
+    await db.insert(tasks).values([
+      { ...common, id: "in-place-a", parentId: null, mode: "single", useWorktree: false },
+      { ...common, id: "in-place-b", parentId: null, mode: "single", useWorktree: false },
+      // 归档 = 冻结，它起不来 → 不该把别人的写操作也一起挡住
+      { ...common, id: "in-place-archived", parentId: null, mode: "single", useWorktree: false,
+        archived: true, archivedAt: ts },
+    ]);
+
+    const teamShared = ["lead-task-1234", "review-shared-1", "shared-worker-1"];
+    assert.deepEqual(await ids("shared-worker-1"), teamShared, "跟随执行者要连同领队和审查任务一起算");
+    assert.deepEqual(await ids("lead-task-1234"), teamShared, "领队看到的是同一组");
+    assert.deepEqual(await ids("review-shared-1"), teamShared, "审查任务跟到被审任务所在的目录");
+    // 显式独立的执行者是另一个目录：别把整个团队都算进来，那会把无关任务一起冻住。
+    assert.deepEqual(await ids("isolated-worker-1"), ["isolated-worker-1", "review-isolated-1"]);
+
+    // 就地干活的那批共用项目主仓，是同一类共用，不是特例。
+    assert.deepEqual(await ids("in-place-a"), ["in-place-a", "in-place-b"]);
+    // 归档任务自己仍然在自己名单里（锁要覆盖到自己），但不出现在别人的名单里。
+    assert.deepEqual(await ids("in-place-archived"), ["in-place-a", "in-place-b", "in-place-archived"].sort());
+
+    await db.delete(tasks).where(eq(tasks.id, "in-place-a"));
+    await db.delete(tasks).where(eq(tasks.id, "in-place-b"));
+    await db.delete(tasks).where(eq(tasks.id, "in-place-archived"));
+  }
+
+  // ── 同一个仓库登记成两个项目 ────────────────────────────────────────────────
+  // `POST /api/projects` 不去重也不拒绝重复路径，把同一个仓库加两遍是正常用法。两边的
+  // 就地任务落在**同一个物理目录**里：按 projectId 圈候选，对面那个正在跑的任务在这边
+  // 完全不可见，面板不显示在飞横幅，无 force 的 discard 直接把它的成果丢掉（第 1 轮审查
+  // 用公共 API 复现）。所以候选按归一后的仓库路径圈，跨项目。
+  {
+    const { projects } = await import("../src/db/schema.js");
+    const { workspaceParticipants } = await import("../src/task-workspace.js");
+    const { taskFileRoot } = await import("../src/file-browser.js");
+    const ids = async (id: string) => {
+      const dir = await taskFileRoot(id);
+      assert.ok(dir, `前提：${id} 得解析得出工作目录`);
+      return (await workspaceParticipants(await load(id), dir.path)).map((p) => p.id).sort();
+    };
+    const otherRepo = join(root, "other-repo");
+    execFileSync("git", ["init", "-b", "main", otherRepo]);
+
+    await db.insert(projects).values([
+      { id: "proj-a", name: "同一个仓库 A", repoPath: repo, apiKeys: null, workflowId: null, createdAt: ts },
+      // 末尾斜杠 + `~` 之外的写法差异由 repoKey 归一：存成两种写法仍是同一个仓库。
+      { id: "proj-b", name: "同一个仓库 B", repoPath: `${repo}/`, apiKeys: null, workflowId: null, createdAt: ts },
+      { id: "proj-c", name: "另一个仓库", repoPath: otherRepo, apiKeys: null, workflowId: null, createdAt: ts },
+    ]);
+
+    await db.insert(tasks).values([
+      { ...common, id: "xproj-a", projectId: "proj-a", parentId: null, mode: "single", useWorktree: false },
+      { ...common, id: "xproj-b", projectId: "proj-b", parentId: null, mode: "single", useWorktree: false },
+      { ...common, id: "xproj-c", projectId: "proj-c", parentId: null, mode: "single", useWorktree: false },
+      // 独立 worktree 的那档不受影响：目录是 `<repo>/.worktrees/<id>`，task id 全局唯一。
+      { ...common, id: "xproj-b-wt", projectId: "proj-b", parentId: null, mode: "single", useWorktree: true },
+    ]);
+
+    assert.deepEqual(await ids("xproj-a"), ["xproj-a", "xproj-b"], "同一个仓库的两个项目，就地任务共用主仓");
+    assert.deepEqual(await ids("xproj-b"), ["xproj-a", "xproj-b"], "反过来也要看得见");
+    assert.deepEqual(await ids("xproj-c"), ["xproj-c"], "别的仓库不能被顺带圈进来");
+    // 它的 worktree 还没建出来，面板此刻展示的就是主仓（写侧另有「目录还没建出来」的只读
+    // 门禁）—— 圈人跟着展示走：眼前这份 git 状态确实是那两个就地任务在写。
+    assert.deepEqual(
+      await ids("xproj-b-wt"), ["xproj-a", "xproj-b", "xproj-b-wt"],
+      "没建出 worktree 时展示的是主仓，在飞判定要跟着主仓走",
+    );
+
+    // 去尾斜杠只挡得住最表面那一种写法：`repo/.`、`repo/sub/..` 和一条软链都是
+    // `POST /api/projects` 收得下的合法路径，指的还是同一个 `.git`（第 2 轮审查用公共
+    // API 复现：别名项目里正在跑的任务完全不在候选里，无 force 的丢弃直接穿透）。
+    // 故意用字符串拼而不是 `join`：`join` 自己会把 `.` / `..` 消掉，那样测的就不是 repoKey。
+    {
+      const link = join(root, "repo-alias-link");
+      symlinkSync(repo, link, "dir");
+      // 相对路径同理，而且它不是理论上的写法：`POST /api/projects` 原样收，真正干活的
+      // `git -C` 按 server 进程的 cwd 解释它——落的就是同一个物理目录（第 1 轮审查用
+      // 隔离实例复现：相对路径项目里在跑的任务完全不可见，无 force 的丢弃直接穿透）。
+      for (const alias of [`${repo}/.`, `${repo}/sub/..`, link, `${link}/./`, relative(process.cwd(), repo)]) {
+        await db.update(projects).set({ repoPath: alias }).where(eq(projects.id, "proj-b"));
+        assert.deepEqual(await ids("xproj-a"), ["xproj-a", "xproj-b"], `别名写法 ${alias} 仍是同一个仓库`);
+      }
+      await db.update(projects).set({ repoPath: `${repo}/` }).where(eq(projects.id, "proj-b"));
+    }
+
+    for (const id of ["xproj-a", "xproj-b", "xproj-c", "xproj-b-wt"]) {
+      await db.delete(tasks).where(eq(tasks.id, id));
+    }
+    for (const id of ["proj-a", "proj-b", "proj-c"]) {
+      await db.delete(projects).where(eq(projects.id, id));
+    }
+  }
+
+  // ── 项目改了 repoPath，任务还在旧仓库里干活 ─────────────────────────────────
+  // 项目的 `repoPath` 是个随时能 PATCH 改掉的登记值，而任务下一轮落在哪由**会话 cwd**
+  // 说了算（orchestrator 的取值顺序）。两者一分家，按项目 repoPath 圈候选就看不见旧仓库
+  // 里正在跑的那些任务：面板不显示在飞横幅，无 force 的 discard 直接穿透（第 2 轮审查用
+  // 隔离实例复现）。所以圈人的键必须是眼前这个 root 的物理路径。
+  {
+    const { projects, sessions } = await import("../src/db/schema.js");
+    const { workspaceParticipants } = await import("../src/task-workspace.js");
+    const { taskFileRoot } = await import("../src/file-browser.js");
+    const oldRepo = join(root, "moved-old");
+    const newRepo = join(root, "moved-new");
+    for (const dir of [oldRepo, newRepo]) execFileSync("git", ["init", "-b", "main", dir]);
+
+    await db.insert(projects).values([
+      { id: "proj-moved", name: "改过路径的项目", repoPath: newRepo, apiKeys: null, workflowId: null, createdAt: ts },
+      { id: "proj-old", name: "旧仓库项目", repoPath: oldRepo, apiKeys: null, workflowId: null, createdAt: ts },
+    ]);
+    await db.insert(tasks).values([
+      { ...common, id: "moved-task", projectId: "proj-moved", parentId: null, mode: "single", useWorktree: false },
+      { ...common, id: "new-inplace", projectId: "proj-moved", parentId: null, mode: "single", useWorktree: false },
+      { ...common, id: "old-inplace", projectId: "proj-old", parentId: null, mode: "single",
+        useWorktree: false, status: "running" },
+    ]);
+    await db.insert(sessions).values([{
+      id: "sess-moved", taskId: "moved-task", role: "main", agentType: "claude", executor: "claude",
+      target: "local", cwd: oldRepo, startedAt: ts,
+    }]);
+
+    const movedRoot = await taskFileRoot("moved-task");
+    assert.equal(movedRoot?.path, oldRepo, "前提：会话 cwd 说了算，展示的是旧仓库");
+    const peers = await workspaceParticipants(await load("moved-task"), movedRoot!.path);
+    assert.deepEqual(
+      peers.map((p) => p.id).sort(), ["moved-task", "old-inplace"],
+      "圈的是旧仓库里的共用者：项目登记的新仓库跟眼前这份 git 状态毫无关系",
+    );
+    assert.equal(
+      peers.find((p) => p.id === "old-inplace")?.status, "running",
+      "在飞状态得带出来，不然横幅和 force 门禁都判不了",
+    );
+
+    // 写型 git 操作按 `root.repo` 串行：它问的是**这个目录自己**属于哪个仓库。
+    assert.equal(movedRoot?.repo, oldRepo, "锁要落在旧仓库上，不是项目登记的新仓库");
+    {
+      // linked worktree 记主仓：refs 和 index 是跟主仓共用的，那才是要串行的东西。
+      const wt = join(oldRepo, ".worktrees", "probe");
+      execFileSync("git", ["-C", oldRepo, "-c", "user.name=t", "-c", "user.email=t@t.test",
+        "commit", "--allow-empty", "-m", "seed"]);
+      execFileSync("git", ["-C", oldRepo, "worktree", "add", "--detach", wt]);
+      // 按 repoKey 比：git 回的是 realpath 过的绝对路径（macOS 的 /var → /private/var），
+      // 而 repoKey 正是 repo lock 归一用的那把尺子。
+      const { owningRepoOf, repoKey } = await import("../src/git.js");
+      assert.equal(repoKey(await owningRepoOf(wt) ?? ""), repoKey(oldRepo), "linked worktree 的归属仓库是主仓");
+      execFileSync("git", ["-C", oldRepo, "worktree", "remove", "--force", wt]);
+    }
+
+    for (const id of ["moved-task", "new-inplace", "old-inplace"]) {
+      await db.delete(tasks).where(eq(tasks.id, id));
+    }
+    await db.delete(sessions).where(eq(sessions.taskId, "moved-task"));
+    for (const id of ["proj-moved", "proj-old"]) await db.delete(projects).where(eq(projects.id, id));
+  }
 
   // ── 登记的 base 分支已经没了 → 降级要**落回任务行** ─────────────────────────
   // 只在 worktree 创建处降级、库里仍留着那个已删的名字的话，这一轮是起来了，用户下一步
@@ -300,6 +479,7 @@ try {
   console.log("✓ deleted base falls back to the repo branch AND persists it for diff/accept");
   console.log("✓ a kept worktree (and a plain follow-up turn) still notice a deleted base");
   console.log("✓ reuse/restore report the fallback without claiming a rebuild");
+  console.log("✓ 项目改了 repoPath 之后，圈人和上锁跟着实际工作目录走");
   console.log("✓ 三种工作目录去向各自的措辞对得上，同回合的两条 marker 不互相打架");
 } finally {
   rmSync(root, { recursive: true, force: true });

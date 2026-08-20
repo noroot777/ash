@@ -47,6 +47,11 @@ import type {
   HostInfo,
   OpenerProbe,
   ReplyTaskResult,
+  ScmCommitResult,
+  ScmDiffSource,
+  ScmFileDiff,
+  ScmOverview,
+  ScmWriteResult,
   SessionTraceEntry,
   TaskCommit,
   TaskDiffResult,
@@ -283,8 +288,7 @@ export const api = {
   taskFileRawUrl: (taskId: string, path: string): string =>
     apiPath(`/tasks/${id(taskId)}/file/raw?path=${id(path)}`),
   taskFileOpeners: (taskId: string, path: string, refresh = false): Promise<OpenerProbe> =>
-    request(`/tasks/${id(taskId)}/file/openers?path=${id(path)}${refresh ? "&refresh=1" : ""}`),
-  revealTaskFile: (taskId: string, path: string): Promise<{ ok: true; absPath: string }> =>
+    request(`/tasks/${id(taskId)}/file/openers?path=${id(path)}${refresh ? "&refresh=1" : ""}`),  revealTaskFile: (taskId: string, path: string): Promise<{ ok: true; absPath: string }> =>
     request(`/tasks/${id(taskId)}/file/reveal`, json("POST", { path })),
   openTaskFile: (
     taskId: string,
@@ -292,6 +296,35 @@ export const api = {
     appId: string | null,
   ): Promise<{ ok: true; absPath: string }> =>
     request(`/tasks/${id(taskId)}/file/open`, json("POST", { path, appId })),
+
+  // 工作区源代码管理。写操作在任务运行中会被后端拦成 409（body 带 needsForce），
+  // 由调用点弹确认框后带 force 重试——别在这一层偷偷补 force。
+  taskScm: (taskId: string): Promise<ScmOverview> =>
+    request(`/tasks/${id(taskId)}/scm`),
+  taskScmDiff: (
+    taskId: string,
+    path: string,
+    source: ScmDiffSource,
+    origPath?: string | null,
+  ): Promise<ScmFileDiff> =>
+    request(`/tasks/${id(taskId)}/scm/diff?path=${id(path)}&source=${source}${origPath ? `&origPath=${id(origPath)}` : ""}`),
+  scmStage: (taskId: string, paths: string[], force = false): Promise<ScmWriteResult> =>
+    request(`/tasks/${id(taskId)}/scm/stage`, json("POST", { paths, force })),
+  scmUnstage: (taskId: string, paths: string[], force = false): Promise<ScmWriteResult> =>
+    request(`/tasks/${id(taskId)}/scm/unstage`, json("POST", { paths, force })),
+  scmDiscard: (
+    taskId: string,
+    paths: string[],
+    deleteUntracked: string[] = [],
+    force = false,
+  ): Promise<ScmWriteResult> =>
+    request(`/tasks/${id(taskId)}/scm/discard`, json("POST", { paths, deleteUntracked, force })),
+  scmCommit: (
+    taskId: string,
+    message: string,
+    options: { stagePaths?: string[]; amend?: boolean; force?: boolean } = {},
+  ): Promise<ScmCommitResult> =>
+    request(`/tasks/${id(taskId)}/scm/commit`, json("POST", { message, ...options })),
 
   notes: (projectId?: string): Promise<Note[]> =>
     request(`/notes${projectId ? `?projectId=${id(projectId)}` : ""}`),

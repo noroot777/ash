@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { join, isAbsolute, dirname, resolve } from "node:path";
+import { join, isAbsolute, dirname, basename, resolve } from "node:path";
 import { homedir } from "node:os";
-import { mkdirSync, statSync, existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, statSync, existsSync, readFileSync, writeFileSync, realpathSync, rmSync } from "node:fs";
 import type { ProjectHealth } from "@harness/shared";
 import { DATA_DIR } from "./paths.js";
 import { IS_WINDOWS, windowsLongPathHint } from "./platform.js";
@@ -48,12 +48,54 @@ export function tidyRepoPath(p: string | null | undefined): string {
   return stripped || "/"; // a path of only slashes is root
 }
 
-// Canonical key for *comparing* two repoPaths that may be written differently —
-// `~/code/foo` vs `/Users/me/code/foo` (expandHome) and trailing slashes. Used to
-// find an existing project for a path without spawning a duplicate. Empty stays
-// empty, so path-less projects never collide with each other here.
+/**
+ * 这条路径在磁盘上的**物理身份**：软链跟到底、大小写按磁盘上的写法。
+ *
+ * 不存在的路径 `realpath` 会直接抛，所以从最深的那个存在的祖先开始解析，再把剩下的
+ * 段接回去。要的是「目录建出来的前后，键不会突然换一个」：仓库还没克隆下来时算出
+ * `/tmp/x`、克隆完变成 `/private/tmp/x`，等于同一个仓库前后拿了两把不同的锁。
+ */
+function physicalPath(abs: string): string {
+  let head = abs;
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      const real = realpathSync.native(head);
+      return tail.length ? join(real, ...tail.reverse()) : real;
+    } catch {
+      const parent = dirname(head);
+      if (parent === head) return abs; // 一路到根都不存在：只能按字面值算
+      tail.push(basename(head));
+      head = parent;
+    }
+  }
+}
+
+/**
+ * 比较两个 repoPath 是不是**同一个仓库**时用的键。空值仍是空：没有仓库路径的项目
+ * 不跟任何人合并。
+ *
+ * 判据必须是**物理身份**，不是字符串长得像不像：`~/code/foo`、`/Users/me/code/foo/`、
+ * `/Users/me/code/foo/.`、经由软链的另一条等价路径，指的都是同一个 `.git`。只做
+ * 「展开 `~` + 去掉尾斜杠」的话，随便换一种合法写法就能绕过所有按仓库归一的东西——
+ * 项目去重会放出一个重复项目，`withRepoLock` 会给同一个仓库开两条队列（并行的验收
+ * 撞 index.lock），SCM 门禁则看不见别名项目里正在跑的任务，无 force 的丢弃直接穿透
+ * （第 2 轮审查用公共 API 复现）。
+ *
+ * 所以顺序是：展开 `~` → 去尾斜杠 → 消 `.`/`..` → 跟软链到物理路径。
+ *
+ * **相对路径也要接 `process.cwd()`**，不能只做词法归一。理由不是「相对路径有意义」，
+ * 而是**别处已经这么解释它了**：`POST/PATCH /api/projects` 收得下相对 `repoPath`，而
+ * 真正干活的 `git -C <repoPath>` 和 fs 调用都跑在 server 进程里，按的正是 server 的
+ * cwd。同一个仓库一个用绝对路径、一个用相对路径登记，落的是同一个物理目录，键却不同
+ * ——运行态门禁看不见对面那个在跑的任务，无 force 的丢弃直接穿透（本轮审查用隔离实例
+ * 复现）。键从不落库、全是运行时现算，所以「换个 cwd 算出不同键」不会跨进程串味：一个
+ * 进程内 cwd 是常量，而键的唯一用途就是在这一个进程里两两比较。
+ */
 export function repoKey(p: string | null | undefined): string {
-  return tidyRepoPath(expandHome(p));
+  const tidy = tidyRepoPath(expandHome(p));
+  if (!tidy) return "";
+  return tidyRepoPath(physicalPath(resolve(tidy)));
 }
 
 // Guarantee an existing working directory for a run. Prefer the project's
@@ -68,6 +110,29 @@ export function ensureWorkdir(repoPath: string | null | undefined, taskId: strin
   const scratch = join(DATA_DIR, "scratch", taskId);
   mkdirSync(scratch, { recursive: true });
   return scratch;
+}
+
+/**
+ * 这个工作目录**属于哪个仓库**：linked worktree 回主仓，主工作树回它自己。不是 git
+ * 目录（或 git 跑不起来）时返回 null。
+ *
+ * 为什么不能拿项目登记的 `repoPath` 顶替：任务实际在哪干活是**会话 cwd 说了算**
+ * （`taskFileRoot` 的第一优先级，跟 orchestrator 起跑时的取值一致），而项目的
+ * `repoPath` 是随时可以被 PATCH 改掉的一个登记值。两者一分家，「按仓库串行」的写型
+ * git 操作就会拿着新仓库的键去锁，实际却在旧仓库里跑 —— 等于没锁（本轮审查复现）。
+ *
+ * `--git-common-dir` 正是「refs 和 worktree 注册表住在哪」的答案，也就是 `repo-lock.ts`
+ * 那条队真正要保护的东西；主工作树里它回相对的 `.git`，所以要接着 dir 解一次。
+ */
+export async function owningRepoOf(dir: string): Promise<string | null> {
+  const p = expandHome(dir);
+  try {
+    const { stdout } = await exec("git", ["-C", p, "rev-parse", "--git-common-dir"]);
+    const common = resolve(p, stdout.trim());
+    return basename(common) === ".git" ? dirname(common) : common;
+  } catch {
+    return null;
+  }
 }
 
 export async function isGitRepo(repoPath: string): Promise<boolean> {

@@ -6,12 +6,15 @@ import { desc, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { projects, sessions, tasks } from "./db/schema.js";
 import { isInsidePath, windowsPathRejection } from "./platform.js";
-import { expandHome, isGitRepo, symbolicBranch, worktreePathFor } from "./git.js";
+import { expandHome, isGitRepo, owningRepoOf, symbolicBranch, worktreePathFor } from "./git.js";
+import { isolatedWorkspaceOwner } from "./task-workspace.js";
 
 // 任务的「文件浏览」只读地看一眼这个任务实际在哪干活。**绝不能调 prepareWorktree**：
 // 那是写型操作，会为一个只想看看文件的点击凭空建出 worktree 和分支来。
-// 解析顺序按可信度：跑过的会话记的 cwd > 约定的 worktree 目录 > 项目仓库本身。
-// （useWorktree 字段推不出答案：它在单飞任务和团队执行者身上语义相反。）
+// 解析顺序按可信度：跑过的会话记的 cwd > 约定的 worktree 目录 > 归属任务（团队调度台 /
+// 被审任务）的会话与 worktree > 项目仓库本身。
+// （useWorktree 字段推不出答案：它在单飞任务和团队执行者身上语义相反，所以归属一律问
+// `isolatedWorkspaceOwner`，它跟 `taskWorkspace` 是同一棵决策树。）
 
 const MAX_TEXT_BYTES = 2 * 1024 * 1024;
 const MAX_RAW_BYTES = 64 * 1024 * 1024;
@@ -35,7 +38,12 @@ export interface WorkspaceRoot {
   gitRepo: boolean;
   /** 这个根是怎么定下来的，界面上要说清楚「你看的是哪儿」。 */
   source: "session" | "worktree" | "repo";
-  repoPath: string | null;
+  /**
+   * `path` **这个目录自己**属于哪个仓库（linked worktree 记主仓）——写型 git 操作按它
+   * 串行。刻意不叫 `repoPath`：项目登记的那个 `repoPath` 是可以被 PATCH 改掉的登记值，
+   * 会话 cwd 一旦落在别处，两者就指向不同物理目录，锁与实际操作分家（第 2 轮审查复现）。
+   */
+  repo: string | null;
 }
 
 export interface FileEntry {
@@ -60,15 +68,29 @@ export async function taskFileRoot(taskId: string): Promise<WorkspaceRoot | null
   const repoPath = expandHome(project?.repoPath) || null;
 
   const candidates: { path: string; source: WorkspaceRoot["source"] }[] = [];
-  const runs = await db.select().from(sessions).where(eq(sessions.taskId, taskId)).orderBy(desc(sessions.startedAt));
-  for (const run of runs) {
-    const cwd = expandHome(run.cwd ?? run.worktreePath);
-    if (cwd) candidates.push({ path: cwd, source: "session" });
+  const pushSessionCwds = async (id: string) => {
+    const runs = await db.select().from(sessions).where(eq(sessions.taskId, id)).orderBy(desc(sessions.startedAt));
+    for (const run of runs) {
+      const cwd = expandHome(run.cwd ?? run.worktreePath);
+      if (cwd) candidates.push({ path: cwd, source: "session" });
+    }
+  };
+
+  await pushSessionCwds(taskId);
+  if (repoPath) candidates.push({ path: worktreePathFor(repoPath, taskId), source: "worktree" });
+
+  // 自己名下什么都没有，不代表它该看项目主仓：**共享工作区的归属任务不是它自己**
+  // （团队执行者跟随调度台、审查任务跟随被审任务）。一个还没跑过的执行者，真跑起来
+  // 就落进领队那个 worktree；不查它就会退到项目主仓，页面展示一份完全无关的 git 状态，
+  // 还谎称「那个目录还没建出来」——目录明明在，执行者的改动却看不到（第 3 轮审查复现）。
+  const owner = await isolatedWorkspaceOwner(task);
+  if (owner && owner !== taskId) {
+    await pushSessionCwds(owner);
+    if (repoPath) candidates.push({ path: worktreePathFor(repoPath, owner), source: "worktree" });
   }
-  if (repoPath) {
-    candidates.push({ path: worktreePathFor(repoPath, taskId), source: "worktree" });
-    candidates.push({ path: repoPath, source: "repo" });
-  }
+
+  // 归属工作区确实不存在时才落到这儿：只读门禁据 source === "repo" 判「还没建出来」。
+  if (repoPath) candidates.push({ path: repoPath, source: "repo" });
 
   for (const candidate of candidates) {
     if (!(await isDir(candidate.path))) continue;
@@ -78,7 +100,9 @@ export async function taskFileRoot(taskId: string): Promise<WorkspaceRoot | null
       branch: gitRepo ? await symbolicBranch(candidate.path) : null,
       gitRepo,
       source: candidate.source,
-      repoPath,
+      // 从**选中的这个目录**问出来，不是项目登记的 repoPath：会话 cwd 可能落在另一个
+      // 仓库里，那时候锁项目 repoPath 等于没锁。问不出来（不是 git 目录）才退回登记值。
+      repo: (gitRepo ? await owningRepoOf(candidate.path) : null) ?? repoPath,
     };
   }
   return null;
