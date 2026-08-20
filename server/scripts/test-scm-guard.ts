@@ -7,6 +7,9 @@
 //     得过去，冻结语义只能由后端守住。
 // 两条都不是「确认一下就能干」，所以带 force 也必须照样拒；且拒绝之后**磁盘一个字节都
 // 不许变**——只断言 HTTP 409 是不够的，第 2 轮审查里 discard 正是先回了 200 才被发现。
+//
+// 反过来，只读也不能滥发：**共享工作区的归属任务不是执行者自己**，还没跑过的团队执行者
+// 该看到领队那个真实存在的 worktree，而不是退到项目主仓再谎称「目录还没建出来」。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -144,6 +147,41 @@ try {
     assert.equal(fileNow(), "local edit\n", "被挡下之后文件一个字节都不许变");
     await db.update(tasks).set({ archived: false, archivedAt: null }).where(eq(tasks.id, "in-place"));
     git(repo, "restore", "--worktree", "a.txt");
+  }
+
+  // ── 5. 还没跑过的共享执行者，看的是**领队那个 worktree**，不是项目主仓 ─────────
+  // 团队执行者默认跟随调度台的工作区（`taskWorkspace`）。它自己名下没有 session、也没有
+  // `.worktrees/<workerId>`，但那不代表「还没建出来」——领队的目录好端端地在，执行者真跑
+  // 起来就落进去。解析只查它自己就会退到项目主仓：展示一份完全无关的 git 状态，还谎称
+  // 目录没建出来，执行者看不见自己的改动，也无法从面板收尾。
+  {
+    const leadWorktree = join(repo, ".worktrees", "lead");
+    git(repo, "worktree", "add", "-b", "harness/lead", leadWorktree);
+    writeFileSync(join(leadWorktree, "shared.txt"), "worker's work\n");
+
+    await db.insert(tasks).values([
+      { ...common, id: "lead", mode: "team", useWorktree: true },
+      // 默认执行者：useWorktree=false 在这里的语义是「跟随调度台」，不是「就地干活」
+      { ...common, id: "worker", parentId: "lead", useWorktree: false },
+    ]);
+
+    const res = await api.request("/tasks/worker/scm");
+    assert.equal(res.status, 200);
+    const body = await res.json() as {
+      root: { path: string; source: string }; readOnly: string | null;
+      status: { untracked: { path: string }[] };
+    };
+    assert.equal(body.root.path, leadWorktree, "共享执行者必须看到领队的工作区");
+    assert.equal(body.root.source, "worktree");
+    assert.equal(body.readOnly, null, "目录真实存在，没有理由只读");
+    assert.deepEqual(body.status.untracked.map((c) => c.path), ["shared.txt"]);
+
+    // 领队 worktree 确实不存在时才回退项目主仓并只读——「未建」那一档不能被这条抹掉。
+    git(repo, "worktree", "remove", "--force", leadWorktree);
+    const gone = await api.request("/tasks/worker/scm");
+    const goneBody = await gone.json() as { root: { source: string }; readOnly: string | null };
+    assert.equal(goneBody.root.source, "repo");
+    assert.match(goneBody.readOnly ?? "", /还没建出来/, "归属工作区没了才该显示未创建");
   }
 
   console.log("scm guard ok");

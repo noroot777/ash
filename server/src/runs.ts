@@ -65,9 +65,15 @@ export function isCanceling(taskId: string): boolean {
  *
  * 标记只对当前这一回合有效：回合退出时由 releaseTurn 清掉，绝不留给下一轮
  * （留下来就是「下一次运行刚起跑就被上一次的暂停冻掉」）。
+ *
+ * **SCM 占位不是回合**，所以一律不接：`claimWorkspaceTurn` 能占住就说明此刻没有 agent
+ * 在起跑（真回合占着锁时它压根占不到），冻它没有对象；而它释放时刻意不清起跑冻结（那是
+ * 真回合的东西），标记会活到下一次真启动，把一次正常的「运行」莫名撤回成 paused，时间线
+ * 还写成「所在分组已暂停」——分组其实早恢复了（第 3 轮审查稳定复现）。
  */
 export function freezeStartingTurn(taskId: string, settle: StopSettle = "paused"): boolean {
-  if (!turns.has(taskId)) return false;
+  const role = turns.get(taskId);
+  if (role === undefined || role === WORKSPACE_TURN_ROLE) return false;
   startFreeze.set(taskId, settle);
   return true;
 }
@@ -137,6 +143,13 @@ const turns = new Map<string, string>();
 const afterTurn = new Map<string, Array<() => void>>();
 
 /**
+ * SCM 面板占住工作区时写进 `turns` 的身份。它**不是一个回合**：没有 agent、没有 spawn、
+ * 不进结算。凡是「对正在起跑的回合做点什么」的逻辑都得按这个身份把它排除掉
+ * （目前是 `freezeStartingTurn`）。
+ */
+const WORKSPACE_TURN_ROLE = "scm";
+
+/**
  * 抢占这个任务的回合；已经有人在跑就返回 false（调用方直接放弃这一次）。
  * role 是这一回合的身份（"single" / "reviewer"…）——它是**运行时事实**，审查结论的
  * 归属检查（report_stage）读它，而不是查 sessions 表猜（session 行的 endedAt 语义
@@ -191,10 +204,11 @@ export function releaseTurn(taskId: string): void {
  * 让归档/验收/派审这些既有守卫一并退避，不必在每个调用点再加一道。
  *
  * 和真回合的唯一差别是**不碰起跑冻结**：这不是一个回合，清掉它会把上一次真回合留下的
- * 暂停意图吃掉。释放函数可重复调用（写操作的 finally 与错误路径可能都走到）。
+ * 暂停意图吃掉；反过来，占住期间也不许有人往它身上写冻结（见 `freezeStartingTurn`），
+ * 否则标记会漏给下一次真启动。释放函数可重复调用（写操作的 finally 与错误路径可能都走到）。
  */
 export function claimWorkspaceTurn(taskId: string): (() => void) | null {
-  if (!claimTurn(taskId, "scm")) return null;
+  if (!claimTurn(taskId, WORKSPACE_TURN_ROLE)) return null;
   let released = false;
   return () => {
     if (released) return;

@@ -14,6 +14,7 @@
 //   • 预暂存成功但 commit 失败，同样要报账：文件已经在索引里，下一次提交会带上它们
 //   • 锁内复查（guard）拒绝时一步都不许做——排队等锁的几秒里 agent 可能刚被唤醒
 //   • 锁内那道是**原子占位**而不是「再查一次」：占住期间新回合必须抢不进来
+//   • 占位期间暂停分组不许在任务身上留下冻结标记——那会把下一次真启动莫名撤回
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -30,7 +31,14 @@ import {
   stagePaths,
   unstagePaths,
 } from "../src/git-workspace-ops.js";
-import { claimTurn, claimWorkspaceTurn, isTurnClaimed, releaseTurn } from "../src/runs.js";
+import {
+  claimTurn,
+  claimWorkspaceTurn,
+  freezeStartingTurn,
+  isTurnClaimed,
+  releaseTurn,
+  takeStartFreeze,
+} from "../src/runs.js";
 
 const root = mkdtempSync(join(tmpdir(), "harness-scm-test-"));
 const git = (cwd: string, ...args: string[]) =>
@@ -438,6 +446,38 @@ if (!IS_WINDOWS) {
   again();
   again(); // 释放函数要能重复调用：错误路径与 finally 可能都走到
   assert.equal(isTurnClaimed(taskId), false);
+}
+
+// ── 14. 写入期间「暂停分组」，不许把下一次真启动一起冻掉 ─────────────────────
+//
+// pauseGroup 对「没有可杀进程、但 turn 已占用」的成员统一调 freezeStartingTurn。SCM 占位
+// 用的是同一把回合锁，于是一次慢提交期间点暂停，标记就写在了 SCM 头上；占位释放时**刻意
+// 不清起跑冻结**（那是真回合的东西），标记活到下一次真启动，把一次正常运行撤回成 paused，
+// 时间线还写「所在分组已暂停」——分组其实早恢复了（第 3 轮审查稳定复现）。
+{
+  const repo = makeRepo("pause-during-scm");
+  write(repo, "a.txt", "a\n");
+  const taskId = "t-pause-scm";
+  await stagePaths(repo, repo, ["a.txt"], () => {
+    const release = claimWorkspaceTurn(taskId);
+    assert.ok(release, "空闲任务必须占得到");
+    // 用户此刻点了「暂停分组」。SCM 占位不是回合，没有对象可冻。
+    assert.equal(freezeStartingTurn(taskId, "paused"), false, "不许往 SCM 占位身上写冻结");
+    return release;
+  });
+  assert.equal(isTurnClaimed(taskId), false);
+
+  // 用户随后点「运行」：这一轮必须正常起跑，而不是在 spawn 前被撤回。
+  assert.equal(claimTurn(taskId, "single"), true);
+  assert.equal(takeStartFreeze(taskId), null, "SCM 期间的暂停不许撤回下一次真启动");
+  releaseTurn(taskId);
+
+  // 反向对照：真回合正在起跑时暂停，照旧要冻得住——上面那条不能是「一律返回 false」。
+  assert.equal(claimTurn(taskId, "single"), true);
+  assert.equal(freezeStartingTurn(taskId, "paused"), true, "起跑中的真回合必须冻得住");
+  assert.equal(takeStartFreeze(taskId), "paused");
+  releaseTurn(taskId);
+  assert.equal(freezeStartingTurn(taskId, "paused"), false, "没有回合在跑时无事可做");
 }
 
 // ── 10. 截断标记 ────────────────────────────────────────────────────────────

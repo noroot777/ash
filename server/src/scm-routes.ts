@@ -24,8 +24,9 @@ import { isolatedWorkspaceOwner } from "./task-workspace.js";
 import { assertInsideRoot, assertPathShape, gateScmPaths } from "./scm-paths.js";
 
 // 任务工作区的「源代码管理」面板。工作目录的解析**复用 taskFileRoot**（会话 cwd >
-// 约定 worktree 目录 > 项目仓库），绝不调 prepareWorktree：为了看一眼 git 状态而凭空
-// 建出 worktree 和分支来，是 file-browser.ts 顶部那条注释写死的禁忌，这里同样适用。
+// 约定 worktree 目录 > 归属任务的工作区 > 项目仓库），绝不调 prepareWorktree：为了看一眼
+// git 状态而凭空建出 worktree 和分支来，是 file-browser.ts 顶部那条注释写死的禁忌，这里
+// 同样适用。
 //
 // 读侧只要目录存在就给看。写侧多三道门禁，管的是四件不同的事：
 //
