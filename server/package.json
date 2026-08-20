@@ -69,6 +69,7 @@
     "test:agent-spawn-guard": "tsx scripts/test-agent-spawn-guard.ts",
     "test:verify-override": "tsx scripts/test-verify-override.ts",
     "test:preview-log": "tsx scripts/test-preview-log.ts",
+    "test:preview-process": "tsx scripts/test-preview-process.ts",
     "test:preview-seed": "tsx scripts/test-preview-seed.ts",
     "test:preview-probe": "tsx scripts/test-preview-probe.ts",
     "test:openai-converter": "tsx scripts/test-openai-converter.ts",

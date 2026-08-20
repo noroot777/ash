@@ -28,22 +28,36 @@ import { fileURLToPath } from "node:url";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
+let tracked = [];
+let down = false;
 
-const lent = process.env.PORT;
-if (!lent) {
-  const child = spawn(NPM, ["run", "dev:all"], { stdio: "inherit", ...NPM_SPAWN_OPTS });
-  child.on("exit", (code, signal) => process.exit(signal ? 1 : code ?? 0));
-} else {
+async function main() {
+  const lent = process.env.PORT;
+  if (!lent) {
+    const child = spawn(NPM, ["run", "dev:all"], { stdio: "inherit", ...NPM_SPAWN_OPTS });
+    child.on("exit", (code, signal) => process.exit(signal ? 1 : code ?? 0));
+    return;
+  }
   const requested = process.env.HARNESS_PREVIEW_MODE;
   const mode = requested === "frontend" || requested === "full" || requested === "test" ? requested : "test";
   if (mode === "frontend") startFrontendOnly(Number(lent));
   else await startPreviewStack(Number(lent), mode);
 }
 
+function webDevArgs(webPort) {
+  // 不能只靠 worktree 里的 vite.config.ts：任务被清理后配置文件会消失，仍存活的 vite
+  // 会按默认 localhost/5173 重启，继而与 127.0.0.1:5173 形成 IPv4/IPv6 同号双占。
+  // CLI 参数在配置热重载时仍保留；strictPort 则保证借来的端口若被抢，只失败、不漂移。
+  return [
+    "-w", "web-next", "run", "dev", "--",
+    "--host", "127.0.0.1", "--port", String(webPort), "--strictPort",
+  ];
+}
+
 function startFrontendOnly(webPort) {
   const proxy = process.env.HARNESS_PROXY ?? "http://127.0.0.1:4317";
   console.log(`[dev] 预览：只起前端 ${webPort}，/api 打到 ${proxy}。`);
-  const web = spawn(NPM, ["-w", "web-next", "run", "dev"], {
+  const web = spawn(NPM, webDevArgs(webPort), {
     cwd: REPO,
     stdio: "inherit",
     env: {
@@ -106,7 +120,7 @@ async function startPreviewStack(webPort, mode) {
   forward(api.stdout);
   forward(api.stderr);
 
-  const web = spawn(NPM, ["-w", "web-next", "run", "dev"], {
+  const web = spawn(NPM, webDevArgs(webPort), {
     cwd: REPO,
     stdio: "inherit",
     env: {
@@ -122,8 +136,6 @@ async function startPreviewStack(webPort, mode) {
 
   watchChildren([["后端", api], ["前端", web]]);
 }
-
-let tracked = [];
 
 function watchChildren(children) {
   tracked = children;
@@ -157,7 +169,6 @@ function mainRepoDataDir() {
   }
 }
 
-let down = false;
 /**
  * 收摊得收干净：npm 不会把信号往下传给它拉起的 `tsx watch` / vite，逐个 `child.kill()`
  * 必留孤儿（一个 dev server 占着端口没人管）。而预览这条路上整棵树都在同一个进程组里
@@ -215,3 +226,7 @@ function forward(stream) {
   });
   stream.on("end", () => { if (buf) emit(buf); });
 }
+
+// 入口放在全部状态初始化和函数声明之后。预览分支会同步调用 watchChildren；放在文件
+// 顶部会在 tracked/down 仍处于 TDZ 时先拉起 vite、随后自己崩掉，把 vite 留成孤儿。
+await main();
