@@ -354,7 +354,11 @@ export async function ensureSchema() {
     console.warn("[harness] 已验收任务遗留预约清理失败,忽略:", e);
   }
   await reclaimOrphanOwnerGroups();
-  await dropRetiredColumns(mergeStatesMigrated ? undefined : MERGE_STATE_COLUMNS);
+  // 事实没迁走的那几列留到下次启动:它们各自是唯一还认得出旧状态的证据。
+  const keepColumns = new Set<string>();
+  if (!mergeStatesMigrated) for (const column of MERGE_STATE_COLUMNS) keepColumns.add(column);
+  if (!(await removeSshExecutorProfiles())) keepColumns.add("agents.target");
+  await dropRetiredColumns(keepColumns);
   await dropRetiredTables();
 }
 
@@ -475,7 +479,8 @@ const RETIRED_COLUMNS: { table: string; column: string; why: string }[] = [
   { table: "free_workflow_states", column: "merge_message", why: "自由工作流合并已统一走验收" },
   { table: "free_workflow_states", column: "merged_at", why: "自由工作流合并已统一走验收" },
   // ssh 执行器整个功能删掉了(换机器改走「接力」):profile 不再记执行位置,
-  // 会话也不再记 "local"/"ssh:host"。
+  // 会话也不再记 "local"/"ssh:host"。agents.target 删列前必须先清掉 ssh profile
+  // 本身,见 removeSshExecutorProfiles。
   { table: "agents", column: "target", why: "ssh 执行器已移除,执行位置永远是本机" },
   { table: "sessions", column: "target", why: "ssh 执行器已移除,执行位置永远是本机" },
 ];
@@ -554,6 +559,70 @@ async function migrateFreeWorkflowMergeStates(): Promise<boolean> {
     }
   }
   return allMigrated;
+}
+
+// ssh 执行器功能删掉后,老库里**已注册的 ssh profile 是删列前必须先处理掉的事实**:
+// 光 DROP COLUMN 会让那一行原样留下、只丢掉「它跑在别的机器上」这一件事 —— 名字还叫
+// claude@build.example、is_default 还挂着,派任务时被当成本机 profile 照常构造出来
+// (第 1 轮审查实测:label 仍是 claude@build.example,resume 却已经是本机的
+// `cd /repo && claude --resume sid`)。本来明确指向远端的活会**静默改在本机上跑**。
+//
+// 做法与用户在设置页手删一条 profile 完全一致(routes.ts 的 DELETE /agents/:id):删行,
+// 并把**决定以后派给谁**的那些 executor_id 清空——执行随即按 agentType 的默认 profile 降级,
+// 这条降级路径本来就是「这条 profile 没了」的既定语义(executors/index.ts 的 pickProfile)。
+// 界线是「配置清空、历史保留」:sessions / free_review_runs 记的是那一回合当时真的用了谁,
+// 改它就是改历史。sessions.executor_id 尤其不能清——重跑校验正是靠它认出「上一回合那条
+// profile 已经没了」并拒绝原样重放(task-retry-turn 的 profileDrift="missing");清成 null
+// 反而会让在远端跑过的会话被静默重放到本机,那正是这条迁移要挡的事。
+// tasks.duet / tasks.team / mode_presets.config 这类 JSON 里的 executorId 不动:悬空 id 在
+// pickProfile 里就是降级到类型默认,与手删 profile 后的现状一致,没必要再去改写用户的配置。
+const SSH_PROFILE_REFERENCES: { table: string; column: string; touchUpdatedAt?: boolean }[] = [
+  { table: "tasks", column: "executor_id", touchUpdatedAt: true },
+  { table: "reviewer_profiles", column: "executor_id" },
+  { table: "free_workflow_states", column: "review_executor_id" },
+  { table: "scheduled_messages", column: "executor_id" },
+];
+
+async function removeSshExecutorProfiles(): Promise<boolean> {
+  try {
+    const info = await client.execute("PRAGMA table_info(agents)");
+    if (!info.rows.some((r) => r.name === "target")) return true; // 列早清了 = 这一步早做完了
+    const rows = await client.execute("SELECT id, name, target FROM agents");
+    const ssh = rows.rows.filter((r) => {
+      try {
+        return (JSON.parse(String(r.target ?? "")) as { kind?: string }).kind === "ssh";
+      } catch {
+        return false; // 读不出来的当本机放过:宁可留一行,也不误删用户的本机 profile
+      }
+    });
+    if (!ssh.length) return true;
+    // 老到还没有某一列的库照样得清得动 profile 本身 —— 那种库里也不会有指向它的引用。
+    const present = new Set<string>();
+    for (const ref of SSH_PROFILE_REFERENCES) {
+      const columns = await client.execute(`PRAGMA table_info(${ref.table})`);
+      if (columns.rows.some((r) => r.name === ref.column)) present.add(`${ref.table}.${ref.column}`);
+    }
+    for (const row of ssh) {
+      const id = String(row.id);
+      for (const ref of SSH_PROFILE_REFERENCES) {
+        if (!present.has(`${ref.table}.${ref.column}`)) continue;
+        await client.execute({
+          sql: `UPDATE ${ref.table} SET ${ref.column} = NULL${ref.touchUpdatedAt ? ", updated_at = ?" : ""} WHERE ${ref.column} = ?`,
+          args: ref.touchUpdatedAt ? [new Date().toISOString(), id] : [id],
+        });
+      }
+      await client.execute({ sql: "DELETE FROM agents WHERE id = ?", args: [id] });
+      console.warn(
+        `[harness] 已删除 ssh 执行器 profile ${String(row.name ?? id)}(${id}):该功能已移除,换机器请改用「接力」;`
+        + "指向它的任务/审查者/待发送消息已改回按 CLI 类型的默认执行器",
+      );
+    }
+    return true;
+  } catch (e) {
+    // 清不干净就把 agents.target 留到下次启动重试:那一列是唯一还认得出 ssh profile 的证据。
+    console.warn("[harness] ssh 执行器 profile 清理失败,本轮保留 agents.target:", e);
+    return false;
+  }
 }
 
 // 团队派活自建的内部组：owner 任务已不存在的（旧版删除没做级联）没有任何入口可见或

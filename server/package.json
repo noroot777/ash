@@ -36,6 +36,7 @@
     "test:worktree-leftover": "tsx scripts/test-worktree-leftover.ts",
     "test:workspace-cleanup": "tsx scripts/test-workspace-cleanup.ts",
     "test:executor-resolution": "tsx scripts/test-executor-resolution.ts",
+    "test:ssh-retire": "tsx scripts/test-ssh-profile-retire.ts",
     "test:answer-routing": "tsx scripts/test-answer-routing.ts",
     "test:team-native": "tsx scripts/test-team-native-command.ts",
     "test:native-turn": "tsx scripts/test-native-command-turn.ts",
