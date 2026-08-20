@@ -329,7 +329,7 @@ export function TaskDetail({
                 else setPostMergeDialogOpen(true);
               } : undefined}
               onDelete={() => setDeleteOpen(true)}
-              onHandoff={task.mode === "single" && !task.archived
+              onHandoff={task.mode === "single" && !task.archived && task.queueId == null
                 && (task.handoff?.direction !== "out" || task.handoff.pending)
                 ? () => setHandoffOpen(true)
                 : undefined}

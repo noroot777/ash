@@ -23,7 +23,7 @@ import { readdir, readFile, appendFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { projects, scheduledMessages, schedules, sessions, tasks } from "./db/schema.js";
+import { projects, queueItems, scheduledMessages, schedules, sessions, tasks } from "./db/schema.js";
 import { claimTurn, isTurnClaimed, releaseTurn, stopTask } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { expandHome, isGitRepo, worktreePathFor } from "./git.js";
@@ -129,6 +129,13 @@ async function loadSingleTask(taskId: string): Promise<{ task: TaskRow; project:
   if (task.mode !== "single") throw new HandoffError("目前只支持单飞任务接力（team/duet 待后续版本）", 409);
   if (task.archived) throw new HandoffError("任务已归档,先取消归档再接力", 409);
   if (task.verifyRound != null) throw new HandoffError("就地验证轮进行中,等它出结论再接力", 409);
+  // 队列成员不能单独接力:导出会把它结算成 canceled,而队列推进对 canceled 是透明跳过
+  // (scheduler.ts selectNextInQueue),源机会立刻启动后继——「当前步骤搬去对面继续」被
+  // 误当成「当前步骤已完成」。整队迁移需要目标机完成后回通知源机推进的协议,待后续版本。
+  const queued = (await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
+  if (queued) {
+    throw new HandoffError("任务在队列里,接力会让源机误判本步骤已结束、提前启动队列后继;先从队列移出再接力", 409);
+  }
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   if (!project) throw new HandoffError("任务所属项目不存在", 404);
   return { task, project };

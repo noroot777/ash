@@ -7,6 +7,9 @@
 //      仍是合法 JSON——只改原始形态会漏掉 Windows 源机的全部会话引用
 //   3. 幂等收口如实报 in 标记里存的 autoResume 事实(而不是本次请求参数),
 //      老标记没这字段按 false 报(不谎报已续跑)
+//   4. 队列成员禁止接力:预检/导出双入口 409 且发生在停任务之前——running 队列头
+//      不被停,backlog 后继绝不启动。否则导出把队列头结算成 canceled,队列推进
+//      对 canceled 透明跳过,源机会提前拉起后继,与目标机上的当前步骤并行
 // 双机走真 HTTP 的端到端场景在 test-handoff.ts。HARNESS_RUNS_DIR 指到临时目录顺带
 // 打开 guardAgentSpawn,即使哪里失手触发续跑也不会真拉起 CLI 烧额度。
 import assert from "node:assert/strict";
@@ -31,7 +34,7 @@ assert.ok(
 
 try {
   const { db, ensureSchema } = await import("../src/db/index.js");
-  const { projects, tasks } = await import("../src/db/schema.js");
+  const { projects, queueItems, sessions, tasks } = await import("../src/db/schema.js");
   const { importHandoff } = await import("../src/handoff-import.js");
   const { applyUploadRewrites, buildUploadRewrites } = await import("../src/handoff-uploads.js");
   await ensureSchema();
@@ -131,6 +134,43 @@ try {
     .where(eq(tasks.id, "handoff-local-task-01"));
   const replayLegacy = await importHandoff(upManifest(true));
   assert.equal(replayLegacy.autoResume, false, "老标记没有 autoResume 字段,按 false 报,不谎报已续跑");
+
+  // ── 4. 队列成员禁止接力:预检/导出都 409,后继绝不启动 ───────────────────────
+  // 缺陷形态(第 3 轮审查双实例实测):接力 running 队列头会把它结算成 canceled,
+  // 队列推进对 canceled 透明跳过,源机立刻启动 backlog 后继——与目标机并行。
+  // 修法是入口级 409:队列头根本不会被停,后继自然停在 backlog。
+  const { exportHandoff, preflightHandoff } = await import("../src/handoff.js");
+  const qTs = "2026-08-20T08:00:00.000Z";
+  await db.insert(tasks).values([
+    { id: "handoffqhead01", projectId, title: "队列头", status: "running", createdAt: qTs, updatedAt: qTs },
+    { id: "handoffqnext01", projectId, title: "队列后继", status: "backlog", createdAt: qTs, updatedAt: qTs },
+  ]);
+  await db.insert(queueItems).values([
+    { taskId: "handoffqhead01", queueId: "handoffqueue01", position: 0, createdAt: qTs },
+    { taskId: "handoffqnext01", queueId: "handoffqueue01", position: 1, createdAt: qTs },
+  ]);
+  const isQueue409 = (err: unknown) =>
+    err instanceof Error && (err as { status?: number }).status === 409 && /队列/.test(err.message);
+  await assert.rejects(
+    preflightHandoff("handoffqhead01", "http://127.0.0.1:9"),
+    isQueue409,
+    "预检要用 409 给出队列原因(而不是通过后由导出翻车)",
+  );
+  await assert.rejects(
+    exportHandoff("handoffqhead01", { targetUrl: "http://127.0.0.1:9", targetProjectId: "whatever" }),
+    isQueue409,
+    "导出要在停任务之前 409(目标 URL 不通也不该先被探测)",
+  );
+  const qHead = (await db.select().from(tasks).where(eq(tasks.id, "handoffqhead01"))).at(0)!;
+  assert.equal(qHead.status, "running", "队列头不该被停:409 必须发生在 stopAndSettle 之前");
+  assert.equal(qHead.handoff, null, "队列头不该留下接力标记");
+  const qNext = (await db.select().from(tasks).where(eq(tasks.id, "handoffqnext01"))).at(0)!;
+  assert.equal(qNext.status, "backlog", "后继绝不能被启动");
+  assert.equal(
+    (await db.select().from(sessions).where(eq(sessions.taskId, "handoffqnext01"))).length,
+    0,
+    "后继不该出现任何会话",
+  );
 
   console.log("test-handoff-local ok");
 } finally {
