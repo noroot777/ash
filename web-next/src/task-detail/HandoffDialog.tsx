@@ -224,6 +224,9 @@ export function HandoffDialog({
                       ? "代码:worktree 分支(含未提交改动的 WIP 提交)会打包带走"
                       : "代码:没有可带的 git 状态,对端按任务正文重新开工"}
                   </li>
+                  {preflight.local.uploads > 0 && (
+                    <li>上传附件 {preflight.local.uploads} 个随任务带走,文中路径自动改写为对端路径</li>
+                  )}
                 </ul>
                 {preflight.local.notes.length > 0 && (
                   <ul className="handoff-notes">

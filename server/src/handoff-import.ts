@@ -15,8 +15,9 @@ import { projects, sessions, tasks } from "./db/schema.js";
 import { claudeProjectSlug } from "./handoff.js";
 import {
   HandoffError, MAX_FILE_BYTES, MB, safeRel,
-  type HandoffManifest, type HandoffFilePayload,
+  type HandoffManifest, type HandoffFilePayload, type HandoffUploadPayload,
 } from "./handoff-types.js";
+import { applyUploadRewrites, isTextRel, MAX_UPLOADS, uploadRewritePairs, writeUploads } from "./handoff-uploads.js";
 import { ensureWorkdir, expandHome, prepareWorktree, projectHealthLight, worktreePathFor } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { DATA_DIR, RUNS_DIR } from "./paths.js";
@@ -59,6 +60,14 @@ function validate(input: unknown): HandoffManifest {
     if (!isStr(f.rel) || !isStr(f.dataBase64)) throw new HandoffError("file 载荷字段缺失");
     if (!["claude-session", "codex-rollout", "run-artifact"].includes(f.kind)) {
       throw new HandoffError(`不认识的文件类型 ${String(f.kind)}`);
+    }
+  }
+  // uploads 宽容校验:老版本导出没有这个字段。
+  const ups = (m as { uploads?: unknown }).uploads;
+  if (ups != null) {
+    if (!Array.isArray(ups) || ups.length > MAX_UPLOADS) throw new HandoffError(`uploads 非法(最多 ${MAX_UPLOADS} 个)`);
+    for (const u of ups as HandoffUploadPayload[]) {
+      if (!isStr(u.name) || !isStr(u.sourcePath) || !isStr(u.dataBase64)) throw new HandoffError("upload 载荷字段缺失");
     }
   }
   if (m.git !== null && (!m.git || !isStr(m.git.branch) || !isStr(m.git.bundleBase64))) {
@@ -131,6 +140,7 @@ async function writePayloadFiles(
   files: HandoffFilePayload[],
   taskId: string,
   remoteCwd: string,
+  rewrites: { from: string; to: string }[],
   notes: string[],
 ): Promise<Set<string>> {
   const claudeDir = join(homedir(), ".claude", "projects", claudeProjectSlug(remoteCwd));
@@ -152,8 +162,13 @@ async function writePayloadFiles(
       if (!safeRel(f.rel)) { notes.push(`产物路径非法,跳过:${f.rel}`); continue; }
       dest = join(RUNS_DIR, taskId, ...segs);
     }
-    const data = Buffer.from(f.dataBase64, "base64");
+    let data = Buffer.from(f.dataBase64, "base64");
     if (data.byteLength > MAX_FILE_BYTES) { notes.push(`${f.rel} 解码后超限,跳过`); continue; }
+    if (rewrites.length && isTextRel(f.rel)) {
+      // 会话 JSONL/产物文本里的上传附件路径改写成本机路径(JSONL 里是转义形态,
+      // 改写对按形态配对,改完仍是合法 JSON;二进制文件不碰)。
+      data = Buffer.from(applyUploadRewrites(data.toString("utf8"), rewrites), "utf8");
+    }
     mkdirSync(dirname(dest), { recursive: true });
     await writeFile(dest, data);
     if (f.kind !== "run-artifact") arrived.add(segs.at(-1)!);
@@ -260,10 +275,26 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
     workspace = ensureWorkdir(project.repoPath, m.task.id);
   }
 
+  // ── 上传附件先落盘,算好路径改写对 ──────────────────────────────────────
+  // 附件写盘 → 生成「源机旧路径→本机新路径」改写对(原始/JSON 转义两种形态)→ 改写
+  // 任务文本字段和后面的文本类文件载荷。必须在拼 resumePrompt 前言**之前**改:前言
+  // 会把 m.task.body 原文嵌进去。写盘失败的附件不进改写对,旧路径原样留着。
+  const writtenUploads = await writeUploads(m.uploads ?? [], notes);
+  const rewrites = uploadRewritePairs(writtenUploads);
+  if (rewrites.length) {
+    const rw = (s: string | null): string | null => (s == null ? null : applyUploadRewrites(s, rewrites));
+    m.task.body = applyUploadRewrites(m.task.body, rewrites);
+    m.task.resumePrompt = rw(m.task.resumePrompt);
+    m.task.question = rw(m.task.question);
+    m.task.questionOptions = rw(m.task.questionOptions);
+    m.task.questionItems = rw(m.task.questionItems);
+    notes.push(`迁移上传附件 ${writtenUploads.length} 个,文本里的源机路径已改写为本机路径`);
+  }
+
   // ── 文件先落盘,再落库 ──────────────────────────────────────────────────
   // 顺序有讲究:文件写一半崩了只留下无害的磁盘残留(重试会原样覆盖);反过来先落库
   // 再写文件,「任务行在、文件没到」就是半截任务。arrived 是真正写盘成功的会话文件名。
-  const arrived = await writePayloadFiles(m.files, m.task.id, workspace ?? expandHome(project.repoPath), notes);
+  const arrived = await writePayloadFiles(m.files, m.task.id, workspace ?? expandHome(project.repoPath), rewrites, notes);
 
   // ── cliSessionId 只认「文件写盘成功、且 CLI 自己找得到」的会话 ────────────
   // claude 的文件名是 `<cliSessionId>.jsonl`,codex 是 `rollout-<ts>-<threadId>.jsonl`。

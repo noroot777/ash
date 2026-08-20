@@ -40,6 +40,7 @@ import type {
 // 传输协议类型/错误类/尺寸常量在 handoff-types.ts(导出、导入、HTTP 面三处共用)。
 import { HandoffError, MAX_BUNDLE_BYTES, MAX_FILE_BYTES, MB } from "./handoff-types.js";
 import type { HandoffFilePayload, HandoffManifest, HandoffPingResponse } from "./handoff-types.js";
+import { collectUploads, isTextRel } from "./handoff-uploads.js";
 
 const exec = promisify(execFile);
 
@@ -328,6 +329,22 @@ export async function preflightHandoff(taskId: string, targetUrlRaw: string): Pr
   const wt = worktreePathFor(project.repoPath, taskId);
   const gitReady = !!task.useWorktree && existsSync(wt);
   if (!ping.projects.length) notes.push("对端还没有任何项目——先在对端把同一个仓库添加为项目");
+  // 上传附件盘点:正文/续跑提示/提问 + run 产物文本就够了(回复回合的附件路径必然
+  // 出现在任务 transcript 里);会话 JSONL 留给真正导出时全量扫。
+  const uploadTexts = [task.body, task.resumePrompt ?? "", task.question ?? ""];
+  const runRoot = join(RUNS_DIR, taskId);
+  if (existsSync(runRoot)) {
+    const walkTexts = async (dir: string): Promise<void> => {
+      for (const entry of await readdir(dir, { withFileTypes: true })) {
+        const abs = join(dir, entry.name);
+        if (entry.isDirectory()) { await walkTexts(abs); continue; }
+        if (!entry.isFile() || !isTextRel(entry.name) || statSync(abs).size > MAX_FILE_BYTES) continue;
+        uploadTexts.push(await readFile(abs, "utf8"));
+      }
+    };
+    await walkTexts(runRoot);
+  }
+  const uploads = await collectUploads(uploadTexts, notes, true);
   return {
     ok: true,
     target: { url: targetUrl, host: ping.host },
@@ -338,6 +355,7 @@ export async function preflightHandoff(taskId: string, targetUrlRaw: string): Pr
       running: task.status === "running" || task.status === "queued",
       sessions: withCli.length,
       sessionFilesFound: found.size,
+      uploads: uploads.length,
       git: gitReady ? "bundle" : "none",
       notes,
     },
@@ -419,6 +437,20 @@ export async function exportHandoff(
     notes.push(...sessNotes);
     const artifacts = await collectRunArtifacts(taskId, notes);
 
+    // 任务文本和文本类载荷(会话 JSONL/产物)里引用的上传附件一并打包——不带走的话,
+    // 对端 agent 照着 prompt 里的源机绝对路径 Read 只会得到「文件不存在」。
+    const uploads = await collectUploads(
+      [
+        task.body, task.resumePrompt ?? "", task.question ?? "",
+        task.questionOptions ?? "", task.questionItems ?? "",
+        ...[...sessionFiles, ...artifacts]
+          .filter((f) => isTextRel(f.rel))
+          .map((f) => Buffer.from(f.dataBase64, "base64").toString("utf8")),
+      ],
+      notes,
+      false,
+    );
+
     const manifest: HandoffManifest = {
       version: 1,
       sourceHost: hostname(),
@@ -453,6 +485,7 @@ export async function exportHandoff(
         contextWindowEstimated: s.contextWindowEstimated,
       })),
       git: gitState,
+      uploads,
       files: [...sessionFiles, ...artifacts],
     };
 

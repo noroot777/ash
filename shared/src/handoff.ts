@@ -57,6 +57,8 @@ export interface HandoffPreflightResult {
     running: boolean;
     sessions: number;
     sessionFilesFound: number;
+    // 任务文本/会话产物里引用的上传附件(data/uploads)数,接力时随任务打包并改写路径。
+    uploads: number;
     git: "bundle" | "none";
     notes: string[];
   };
