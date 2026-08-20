@@ -31,3 +31,30 @@ export async function handoffBlockReasonById(taskId: string): Promise<string | n
     .where(eq(tasks.id, taskId))).at(0);
   return row ? handoffBlockReason(row.handoff) : null;
 }
+
+// ── 接力准备 barrier ─────────────────────────────────────────────────────────
+// 导出准备期(exportHandoff 从首个网络 await 到收尾)要求「任务不在队列」是稳定不变量:
+// 一次性的只读检查会被 TOCTOU 绕过——检查通过后,对端 ping 的网络等待里并发
+// POST /queues/:id/insert 把任务插进队列,随后导出把它结算成 canceled,队列推进对
+// canceled 透明跳过,源机提前启动后继(第 2 轮审查用延迟 2 秒的 ping 代理实测)。
+// 所以接力在首个网络 await 前占住 barrier,queues.ts 的 insert/create 在改成员前
+// 检查它;占到 barrier 后导出侧还要复查一次队列成员(占之前的检查可能已过期)。
+// 用进程内存而不是持久标记:singleton.ts 保证同一 DB 只有一个 server 进程,进程
+// 崩溃时 barrier 自然消失,不像持久标记那样留下要人工清理的残留。
+const preparing = new Set<string>();
+
+/** 占住接力准备 barrier;已被占(同任务并发第二次接力)返回 false。 */
+export function beginHandoffPrepare(taskId: string): boolean {
+  if (preparing.has(taskId)) return false;
+  preparing.add(taskId);
+  return true;
+}
+
+export function endHandoffPrepare(taskId: string): void {
+  preparing.delete(taskId);
+}
+
+/** 队列成员变更入口(queues.ts insert/create)用:任务是否正处于接力导出准备期。 */
+export function isHandoffPreparing(taskId: string): boolean {
+  return preparing.has(taskId);
+}

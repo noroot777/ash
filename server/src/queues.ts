@@ -12,6 +12,7 @@ import { db } from "./db/index.js";
 import { tasks, queueItems } from "./db/schema.js";
 import { id, now } from "./util.js";
 import { advanceQueue, queueStatus } from "./scheduler.js";
+import { isHandoffPreparing } from "./handoff-guard.js";
 
 // 内部:把 (queueId, [..items..]) 重排成 position 0..N-1,保持 dense
 export async function repackQueue(queueId: string, orderedTaskIds: string[]): Promise<void> {
@@ -216,6 +217,12 @@ export function mountQueueRoutes(api: Hono): void {
     const tr = (await db.select().from(tasks).where(eq(tasks.id, b.taskId))).at(0);
     if (!tr) return c.json({ error: "task not found" }, 404);
 
+    // 正在接力导出的任务不能入队:导出会把它结算成 canceled,队列对 canceled 透明跳过,
+    // 后继会被提前启动(TOCTOU 详见 handoff-guard.ts 接力准备 barrier 的注释)。
+    if (isHandoffPreparing(b.taskId)) {
+      return c.json({ error: `task ${b.taskId} 正在接力到另一台机器(导出准备中),不能加入队列` }, 409);
+    }
+
     // 候选 task 不能已在别的 queue 里(task_id PK 保证,但提前给个友好错误)
     const otherQueue = (
       await db.select().from(queueItems).where(eq(queueItems.taskId, b.taskId))
@@ -252,6 +259,11 @@ export function mountQueueRoutes(api: Hono): void {
     const rows = await db.select().from(tasks).where(inArray(tasks.id, want));
     if (rows.length !== want.length) {
       return c.json({ error: "部分 taskId 不存在" }, 400);
+    }
+    // 正在接力导出的任务不能入队(同 insert 端点,TOCTOU 见 handoff-guard.ts)
+    const preparing = want.filter((tid) => isHandoffPreparing(tid));
+    if (preparing.length > 0) {
+      return c.json({ error: `这些 task 正在接力到另一台机器(导出准备中),不能加入队列: ${preparing.join(", ")}` }, 409);
     }
     // 同 group(或都无 group)
     const gs = new Set(rows.map((r) => r.groupId));

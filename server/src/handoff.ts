@@ -41,6 +41,7 @@ import type {
 import { HandoffError, MAX_BUNDLE_BYTES, MAX_FILE_BYTES, MB } from "./handoff-types.js";
 import type { HandoffFilePayload, HandoffManifest, HandoffPingResponse } from "./handoff-types.js";
 import { collectUploads, isTextRel } from "./handoff-uploads.js";
+import { beginHandoffPrepare, endHandoffPrepare } from "./handoff-guard.js";
 import { cancelPendingMessage } from "./pending-messages.js";
 
 const exec = promisify(execFile);
@@ -123,19 +124,23 @@ export function normalizePeerUrl(raw: string): string {
 type TaskRow = typeof tasks.$inferSelect;
 type SessionRow = typeof sessions.$inferSelect;
 
+// 队列成员不能单独接力:导出会把它结算成 canceled,而队列推进对 canceled 是透明跳过
+// (scheduler.ts selectNextInQueue),源机会立刻启动后继——「当前步骤搬去对面继续」被
+// 误当成「当前步骤已完成」。整队迁移需要目标机完成后回通知源机推进的协议,待后续版本。
+async function assertNotQueueMember(taskId: string): Promise<void> {
+  const queued = (await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
+  if (queued) {
+    throw new HandoffError("任务在队列里,接力会让源机误判本步骤已结束、提前启动队列后继;先从队列移出再接力", 409);
+  }
+}
+
 async function loadSingleTask(taskId: string): Promise<{ task: TaskRow; project: typeof projects.$inferSelect }> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new HandoffError("任务不存在", 404);
   if (task.mode !== "single") throw new HandoffError("目前只支持单飞任务接力（team/duet 待后续版本）", 409);
   if (task.archived) throw new HandoffError("任务已归档,先取消归档再接力", 409);
   if (task.verifyRound != null) throw new HandoffError("就地验证轮进行中,等它出结论再接力", 409);
-  // 队列成员不能单独接力:导出会把它结算成 canceled,而队列推进对 canceled 是透明跳过
-  // (scheduler.ts selectNextInQueue),源机会立刻启动后继——「当前步骤搬去对面继续」被
-  // 误当成「当前步骤已完成」。整队迁移需要目标机完成后回通知源机推进的协议,待后续版本。
-  const queued = (await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
-  if (queued) {
-    throw new HandoffError("任务在队列里,接力会让源机误判本步骤已结束、提前启动队列后继;先从队列移出再接力", 409);
-  }
+  await assertNotQueueMember(taskId);
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   if (!project) throw new HandoffError("任务所属项目不存在", 404);
   return { task, project };
@@ -425,217 +430,230 @@ export async function exportHandoff(
   const autoResume = pendingRetry && pendingRetry.autoResume !== undefined
     ? pendingRetry.autoResume
     : opts.autoResume ?? true;
-  // 先探测对端与目标项目,确认可行再停任务——反过来会白停一个正在跑的任务。
-  const ping = await fetchPeer<HandoffPingResponse>(`${targetUrl}/api/handoff/ping`);
-  if (!ping?.ok || ping.service !== "harness") throw new HandoffError("对端不是 harness", 502);
-  const targetProject = ping.projects.find((p) => p.id === opts.targetProjectId);
-  if (!targetProject) throw new HandoffError("对端没有这个项目 id,先重新预检", 409);
-
-  task = await stopAndSettle(taskId);
-  // 占住回合:导出期间队列/调度器不能再把它拉起来;占不到 = 有回合在收尾,让用户重试。
-  if (!claimTurn(taskId, "handoff")) throw new HandoffError("任务回合还在收尾,稍等几秒再试", 409);
+  // 接力准备 barrier:从这里到导出收尾,「任务不在队列」必须保持成立——上面那次队列
+  // 检查是一次性的,后面 ping/import 的网络等待里并发 queue insert 可以完整绕过它
+  // (第 2 轮审查用延迟代理实测;TOCTOU 与「为什么用进程内存」见 handoff-guard.ts
+  // 顶部注释)。queues.ts 的 insert/create 在改成员前检查同一 barrier。
+  if (!beginHandoffPrepare(taskId)) {
+    throw new HandoffError("这个任务已有一次接力正在进行,等它结束或失败后再发起", 409);
+  }
   try {
-    const notes: string[] = [];
-    const rows = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
-      .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
-    // 待发送消息(只带 pending)与定时计划随任务走:接力守卫拦续跑、调度器跳过已接力
-    // 任务,它们留在源机就永远不会兑现——不迁移等于静默丢掉用户已提交的东西(第 2 轮
-    // 审查实测)。回合已占住,投递侧赢不了 markSent 需要的回合,这批行不会边导边发。
-    const pendingMsgs = (await db.select().from(scheduledMessages)
-      .where(and(eq(scheduledMessages.taskId, taskId), eq(scheduledMessages.status, "pending"))))
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    const scheduleRow = (await db.select().from(schedules).where(eq(schedules.taskId, taskId))).at(0);
-    const sourceWorkspace = rows.at(-1)?.cwd
-      ?? (task.useWorktree ? worktreePathFor(project.repoPath, taskId) : expandHome(project.repoPath));
+    // 拿到 barrier 后复查队列成员:loadSingleTask 那次检查到这里隔着若干 await,可能已过期。
+    await assertNotQueueMember(taskId);
+    // 先探测对端与目标项目,确认可行再停任务——反过来会白停一个正在跑的任务。
+    const ping = await fetchPeer<HandoffPingResponse>(`${targetUrl}/api/handoff/ping`);
+    if (!ping?.ok || ping.service !== "harness") throw new HandoffError("对端不是 harness", 502);
+    const targetProject = ping.projects.find((p) => p.id === opts.targetProjectId);
+    if (!targetProject) throw new HandoffError("对端没有这个项目 id,先重新预检", 409);
 
-    let gitState: HandoffManifest["git"] = null;
-    if (targetProject.isRepo) {
-      const refs = await fetchPeer<{ refs: { name: string; commit: string }[] }>(
-        `${targetUrl}/api/handoff/projects/${targetProject.id}/refs`,
-      );
-      gitState = await packGitState(task, project.repoPath, refs.refs ?? [], notes);
-    } else {
-      notes.push("对端项目不是 git 仓库,代码不随任务迁移");
-    }
-
-    const { files: sessionFiles, found, notes: sessNotes } = await collectSessionFiles(rows, sourceWorkspace, false);
-    notes.push(...sessNotes);
-    const artifacts = await collectRunArtifacts(taskId, notes);
-
-    // 任务文本和文本类载荷(会话 JSONL/产物)里引用的上传附件一并打包——不带走的话,
-    // 对端 agent 照着 prompt 里的源机绝对路径 Read 只会得到「文件不存在」。
-    const uploads = await collectUploads(
-      [
-        task.body, task.resumePrompt ?? "", task.question ?? "",
-        task.questionOptions ?? "", task.questionItems ?? "",
-        ...pendingMsgs.flatMap((x) => [x.text, x.attachments]),
-        ...[...sessionFiles, ...artifacts]
-          .filter((f) => isTextRel(f.rel))
-          .map((f) => Buffer.from(f.dataBase64, "base64").toString("utf8")),
-      ],
-      notes,
-      false,
-    );
-
-    const manifest: HandoffManifest = {
-      version: 1,
-      sourceHost: hostname(),
-      targetProjectId: targetProject.id,
-      transferId,
-      autoResume,
-      sourceWorkspace,
-      task: {
-        id: task.id, title: task.title, body: task.body,
-        status: task.status, stage: task.stage, labels: task.labels,
-        agentType: task.agentType, model: task.model, reasoningEffort: task.reasoningEffort,
-        autoTitle: task.autoTitle, useWorktree: task.useWorktree, worktreeBase: task.worktreeBase,
-        workflow: task.workflow, workflowMode: task.workflowMode, workflowAt: task.workflowAt,
-        reviewStep: task.reviewStep, verifyRounds: task.verifyRounds, verifyStationRounds: task.verifyStationRounds,
-        resumePrompt: task.resumePrompt, question: task.question,
-        questionOptions: task.questionOptions, questionItems: task.questionItems,
-        pinnedAt: task.pinnedAt, starredAt: task.starredAt,
-        createdAt: task.createdAt, startedAt: task.startedAt, endedAt: task.endedAt,
-      },
-      sessions: rows.map((s) => ({
-        id: s.id, role: s.role, agentType: s.agentType, executor: s.executor,
-        turnModel: s.turnModel, turnReasoningEffort: s.turnReasoningEffort,
-        worktreePath: s.worktreePath, branch: s.branch, cwd: s.cwd,
-        cliSessionId: found.has(s.id) ? s.cliSessionId : null,
-        commandLine: s.commandLine, startedAt: s.startedAt, endedAt: s.endedAt,
-        exitStatus: s.exitStatus, stoppedAs: s.stoppedAs, sideTurn: s.sideTurn,
-        activeMs: s.activeMs, turnStartedAt: s.turnStartedAt,
-        usageInput: s.usageInput, usageOutput: s.usageOutput,
-        usageCacheRead: s.usageCacheRead, usageCacheWrite: s.usageCacheWrite,
-        usageReasoning: s.usageReasoning, usageCostUsd: s.usageCostUsd, usageTurns: s.usageTurns,
-        contextUsed: s.contextUsed, contextWindow: s.contextWindow,
-        contextWindowEstimated: s.contextWindowEstimated,
-      })),
-      git: gitState,
-      uploads,
-      messages: pendingMsgs.map((x) => ({
-        text: x.text, attachments: x.attachments, agent: x.agent, model: x.model,
-        reasoningEffort: x.reasoningEffort, sessionRole: x.sessionRole,
-        mode: x.mode, sendAt: x.sendAt, createdAt: x.createdAt,
-      })),
-      schedule: scheduleRow
-        ? {
-            kind: scheduleRow.kind, at: scheduleRow.at, cron: scheduleRow.cron,
-            enabled: scheduleRow.enabled, lastRunAt: scheduleRow.lastRunAt,
-          }
-        : null,
-      files: [...sessionFiles, ...artifacts],
-    };
-
-    // POST 出去的那一刻起对端就可能已经收下这份任务——应答丢了/源进程死在半路都不能
-    // 让本机毫无痕迹(否则重试撞对端 409、本机任务还能再跑,正是双机分叉)。所以**先**
-    // 落一个「接力未确认」的 pending 标记(它同样触发 handoff-guard 的启动硬拦),成功
-    // 后改写成确认态;只有对端**明确应答失败**(没收下)才回滚到接力前的样子。
-    // 冻结这批消息 id:收口成功后只取消**第一次发送时带走的**那批。重试轮次里不能按
-    // 当前 pending 重算——pending 期间新建的消息没有随幂等重放迁移到对端,按当前全量
-    // 取消就是静默丢消息。中间某次重试若真的落成了全新导入(第一次根本没送到),对端
-    // 实际收下的是那一次的清单,这里可能少取消几条——留在托盘里如实提醒,方向安全。
-    const frozenMessageIds = pendingRetry
-      ? (pendingRetry.messageIds ?? [])
-      : pendingMsgs.map((x) => x.id);
-    const pendingMarker: TaskHandoff = {
-      direction: "out",
-      pending: true,
-      transferId,
-      // 冻结本次目标项目与 autoResume:收口重试必须原样重放(见上方 pendingRetry 校验)。
-      targetProjectId: targetProject.id,
-      autoResume,
-      ...(frozenMessageIds.length ? { messageIds: frozenMessageIds } : {}),
-      peerUrl: targetUrl,
-      peerName: opts.targetName ?? ping.host,
-      peerTaskId: taskId,
-      at: now(),
-      sessions: found.size,
-      git: gitState ? "bundle" : "none",
-    };
-    await db.update(tasks)
-      .set({ handoff: JSON.stringify(pendingMarker), updatedAt: now() })
-      .where(eq(tasks.id, taskId));
-    await publishTaskUpdated(taskId);
-
-    let result: { ok: boolean; taskId: string; autoResume?: boolean; idempotent?: boolean; notes?: string[]; error?: string };
+    task = await stopAndSettle(taskId);
+    // 占住回合:导出期间队列/调度器不能再把它拉起来;占不到 = 有回合在收尾,让用户重试。
+    if (!claimTurn(taskId, "handoff")) throw new HandoffError("任务回合还在收尾,稍等几秒再试", 409);
     try {
-      result = await fetchPeer<{ ok: boolean; taskId: string; autoResume?: boolean; idempotent?: boolean; notes?: string[]; error?: string }>(
-        `${targetUrl}/api/handoff/import`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(manifest),
-          timeoutMs: 600_000,
-        },
-      );
-      // 2xx 但 ok:false:真 harness 的导入端点从不这样应答(要么 ok:true 要么抛错),
-      // 多半是中间层拼的怪应答——同样按「送达未知」处理,保留 pending。
-      if (!result.ok) throw new HandoffError(`对端导入失败：${result.error ?? "未知错误"}`, 502, true);
-    } catch (e) {
-      if (e instanceof HandoffError && e.network) {
-        // 送没送到说不清:保留 pending 标记,把收口方法一并告诉用户。
-        e.message += "。对端可能已经收到这份任务:本机保留「接力未确认」标记,原样重试会自动幂等收口;确认对端没收到的话,在任务横幅上移除接力标记即可在本机继续。";
-        throw e;
+      const notes: string[] = [];
+      const rows = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
+        .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+      // 待发送消息(只带 pending)与定时计划随任务走:接力守卫拦续跑、调度器跳过已接力
+      // 任务,它们留在源机就永远不会兑现——不迁移等于静默丢掉用户已提交的东西(第 2 轮
+      // 审查实测)。回合已占住,投递侧赢不了 markSent 需要的回合,这批行不会边导边发。
+      const pendingMsgs = (await db.select().from(scheduledMessages)
+        .where(and(eq(scheduledMessages.taskId, taskId), eq(scheduledMessages.status, "pending"))))
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      const scheduleRow = (await db.select().from(schedules).where(eq(schedules.taskId, taskId))).at(0);
+      const sourceWorkspace = rows.at(-1)?.cwd
+        ?? (task.useWorktree ? worktreePathFor(project.repoPath, taskId) : expandHome(project.repoPath));
+
+      let gitState: HandoffManifest["git"] = null;
+      if (targetProject.isRepo) {
+        const refs = await fetchPeer<{ refs: { name: string; commit: string }[] }>(
+          `${targetUrl}/api/handoff/projects/${targetProject.id}/refs`,
+        );
+        gitState = await packGitState(task, project.repoPath, refs.refs ?? [], notes);
+      } else {
+        notes.push("对端项目不是 git 仓库,代码不随任务迁移");
       }
-      // 带 harness 标记的业务拒绝(对端可证明没落库):恢复接力前的标记,本机照常可跑。
+
+      const { files: sessionFiles, found, notes: sessNotes } = await collectSessionFiles(rows, sourceWorkspace, false);
+      notes.push(...sessNotes);
+      const artifacts = await collectRunArtifacts(taskId, notes);
+
+      // 任务文本和文本类载荷(会话 JSONL/产物)里引用的上传附件一并打包——不带走的话,
+      // 对端 agent 照着 prompt 里的源机绝对路径 Read 只会得到「文件不存在」。
+      const uploads = await collectUploads(
+        [
+          task.body, task.resumePrompt ?? "", task.question ?? "",
+          task.questionOptions ?? "", task.questionItems ?? "",
+          ...pendingMsgs.flatMap((x) => [x.text, x.attachments]),
+          ...[...sessionFiles, ...artifacts]
+            .filter((f) => isTextRel(f.rel))
+            .map((f) => Buffer.from(f.dataBase64, "base64").toString("utf8")),
+        ],
+        notes,
+        false,
+      );
+
+      const manifest: HandoffManifest = {
+        version: 1,
+        sourceHost: hostname(),
+        targetProjectId: targetProject.id,
+        transferId,
+        autoResume,
+        sourceWorkspace,
+        task: {
+          id: task.id, title: task.title, body: task.body,
+          status: task.status, stage: task.stage, labels: task.labels,
+          agentType: task.agentType, model: task.model, reasoningEffort: task.reasoningEffort,
+          autoTitle: task.autoTitle, useWorktree: task.useWorktree, worktreeBase: task.worktreeBase,
+          workflow: task.workflow, workflowMode: task.workflowMode, workflowAt: task.workflowAt,
+          reviewStep: task.reviewStep, verifyRounds: task.verifyRounds, verifyStationRounds: task.verifyStationRounds,
+          resumePrompt: task.resumePrompt, question: task.question,
+          questionOptions: task.questionOptions, questionItems: task.questionItems,
+          pinnedAt: task.pinnedAt, starredAt: task.starredAt,
+          createdAt: task.createdAt, startedAt: task.startedAt, endedAt: task.endedAt,
+        },
+        sessions: rows.map((s) => ({
+          id: s.id, role: s.role, agentType: s.agentType, executor: s.executor,
+          turnModel: s.turnModel, turnReasoningEffort: s.turnReasoningEffort,
+          worktreePath: s.worktreePath, branch: s.branch, cwd: s.cwd,
+          cliSessionId: found.has(s.id) ? s.cliSessionId : null,
+          commandLine: s.commandLine, startedAt: s.startedAt, endedAt: s.endedAt,
+          exitStatus: s.exitStatus, stoppedAs: s.stoppedAs, sideTurn: s.sideTurn,
+          activeMs: s.activeMs, turnStartedAt: s.turnStartedAt,
+          usageInput: s.usageInput, usageOutput: s.usageOutput,
+          usageCacheRead: s.usageCacheRead, usageCacheWrite: s.usageCacheWrite,
+          usageReasoning: s.usageReasoning, usageCostUsd: s.usageCostUsd, usageTurns: s.usageTurns,
+          contextUsed: s.contextUsed, contextWindow: s.contextWindow,
+          contextWindowEstimated: s.contextWindowEstimated,
+        })),
+        git: gitState,
+        uploads,
+        messages: pendingMsgs.map((x) => ({
+          text: x.text, attachments: x.attachments, agent: x.agent, model: x.model,
+          reasoningEffort: x.reasoningEffort, sessionRole: x.sessionRole,
+          mode: x.mode, sendAt: x.sendAt, createdAt: x.createdAt,
+        })),
+        schedule: scheduleRow
+          ? {
+              kind: scheduleRow.kind, at: scheduleRow.at, cron: scheduleRow.cron,
+              enabled: scheduleRow.enabled, lastRunAt: scheduleRow.lastRunAt,
+            }
+          : null,
+        files: [...sessionFiles, ...artifacts],
+      };
+
+      // POST 出去的那一刻起对端就可能已经收下这份任务——应答丢了/源进程死在半路都不能
+      // 让本机毫无痕迹(否则重试撞对端 409、本机任务还能再跑,正是双机分叉)。所以**先**
+      // 落一个「接力未确认」的 pending 标记(它同样触发 handoff-guard 的启动硬拦),成功
+      // 后改写成确认态;只有对端**明确应答失败**(没收下)才回滚到接力前的样子。
+      // 冻结这批消息 id:收口成功后只取消**第一次发送时带走的**那批。重试轮次里不能按
+      // 当前 pending 重算——pending 期间新建的消息没有随幂等重放迁移到对端,按当前全量
+      // 取消就是静默丢消息。中间某次重试若真的落成了全新导入(第一次根本没送到),对端
+      // 实际收下的是那一次的清单,这里可能少取消几条——留在托盘里如实提醒,方向安全。
+      const frozenMessageIds = pendingRetry
+        ? (pendingRetry.messageIds ?? [])
+        : pendingMsgs.map((x) => x.id);
+      const pendingMarker: TaskHandoff = {
+        direction: "out",
+        pending: true,
+        transferId,
+        // 冻结本次目标项目与 autoResume:收口重试必须原样重放(见上方 pendingRetry 校验)。
+        targetProjectId: targetProject.id,
+        autoResume,
+        ...(frozenMessageIds.length ? { messageIds: frozenMessageIds } : {}),
+        peerUrl: targetUrl,
+        peerName: opts.targetName ?? ping.host,
+        peerTaskId: taskId,
+        at: now(),
+        sessions: found.size,
+        git: gitState ? "bundle" : "none",
+      };
       await db.update(tasks)
-        .set({ handoff: prevHandoffRaw, updatedAt: now() })
+        .set({ handoff: JSON.stringify(pendingMarker), updatedAt: now() })
         .where(eq(tasks.id, taskId));
       await publishTaskUpdated(taskId);
-      throw e;
-    }
-    notes.push(...(result.notes ?? []));
 
-    // 确认送达:把 pending 标记改写成持久可见的「已接力」标记 + 时间线一条系统说明。
-    const marker: TaskHandoff = {
-      direction: "out",
-      transferId,
-      peerUrl: targetUrl,
-      peerName: opts.targetName ?? ping.host,
-      peerTaskId: result.taskId,
-      at: now(),
-      sessions: found.size,
-      git: gitState ? "bundle" : "none",
-    };
-    await db.update(tasks)
-      .set({ handoff: JSON.stringify(marker), updatedAt: now() })
-      .where(eq(tasks.id, taskId));
-    const latest = rows.at(-1);
-    if (latest) {
-      const line = {
-        t: "system" as const, agent: latest.agentType, by: "system" as const, at: now(),
-        text: `🔁 任务已接力到 ${marker.peerName}（${targetUrl}）继续执行,本机这份从此只是历史存档。`,
+      let result: { ok: boolean; taskId: string; autoResume?: boolean; idempotent?: boolean; notes?: string[]; error?: string };
+      try {
+        result = await fetchPeer<{ ok: boolean; taskId: string; autoResume?: boolean; idempotent?: boolean; notes?: string[]; error?: string }>(
+          `${targetUrl}/api/handoff/import`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(manifest),
+            timeoutMs: 600_000,
+          },
+        );
+        // 2xx 但 ok:false:真 harness 的导入端点从不这样应答(要么 ok:true 要么抛错),
+        // 多半是中间层拼的怪应答——同样按「送达未知」处理,保留 pending。
+        if (!result.ok) throw new HandoffError(`对端导入失败：${result.error ?? "未知错误"}`, 502, true);
+      } catch (e) {
+        if (e instanceof HandoffError && e.network) {
+          // 送没送到说不清:保留 pending 标记,把收口方法一并告诉用户。
+          e.message += "。对端可能已经收到这份任务:本机保留「接力未确认」标记,原样重试会自动幂等收口;确认对端没收到的话,在任务横幅上移除接力标记即可在本机继续。";
+          throw e;
+        }
+        // 带 harness 标记的业务拒绝(对端可证明没落库):恢复接力前的标记,本机照常可跑。
+        await db.update(tasks)
+          .set({ handoff: prevHandoffRaw, updatedAt: now() })
+          .where(eq(tasks.id, taskId));
+        await publishTaskUpdated(taskId);
+        throw e;
+      }
+      notes.push(...(result.notes ?? []));
+
+      // 确认送达:把 pending 标记改写成持久可见的「已接力」标记 + 时间线一条系统说明。
+      const marker: TaskHandoff = {
+        direction: "out",
+        transferId,
+        peerUrl: targetUrl,
+        peerName: opts.targetName ?? ping.host,
+        peerTaskId: result.taskId,
+        at: now(),
+        sessions: found.size,
+        git: gitState ? "bundle" : "none",
       };
-      await appendFile(sessionTranscriptPath(taskId, latest.id), `\n${TURN_SENTINEL}${JSON.stringify(line)}\n`)
-        .catch(() => { /* 产物目录可能不存在（从未跑过）,标记列已落库,不阻塞 */ });
-    }
-    // 源机原件收尾:已随任务迁走的待发送消息取消掉(时间线留档),否则用户移除接力
-    // 标记后同一条消息会在两台机器各投一次。幂等收口只取消冻结的那批(见上);对端
-    // 全新导入时收下的就是本次清单,按本次全量取消。
-    const migratedIds = new Set(result.idempotent ? frozenMessageIds : pendingMsgs.map((x) => x.id));
-    let msgsLeft = 0;
-    for (const msg of pendingMsgs) {
-      if (migratedIds.has(msg.id)) await cancelPendingMessage(msg, `已随任务接力到 ${marker.peerName ?? targetUrl}`);
-      else msgsLeft += 1;
-    }
-    if (msgsLeft) {
-      notes.push(`${msgsLeft} 条待发送消息是接力未确认期间新建的,没有随幂等收口迁移,仍留在本机托盘;需要对端执行的话,到对端重新发送,再取消本机这份`);
-    }
-    if (pendingMsgs.length > msgsLeft) notes.push(`迁移待发送消息 ${pendingMsgs.length - msgsLeft} 条,本机原件已取消并留档在时间线`);
-    if (scheduleRow) notes.push("定时计划已随任务迁移,今后由对端触发;本机这份在接力标记存在期间不会触发");
-    await publishTaskUpdated(taskId);
+      await db.update(tasks)
+        .set({ handoff: JSON.stringify(marker), updatedAt: now() })
+        .where(eq(tasks.id, taskId));
+      const latest = rows.at(-1);
+      if (latest) {
+        const line = {
+          t: "system" as const, agent: latest.agentType, by: "system" as const, at: now(),
+          text: `🔁 任务已接力到 ${marker.peerName}（${targetUrl}）继续执行,本机这份从此只是历史存档。`,
+        };
+        await appendFile(sessionTranscriptPath(taskId, latest.id), `\n${TURN_SENTINEL}${JSON.stringify(line)}\n`)
+          .catch(() => { /* 产物目录可能不存在（从未跑过）,标记列已落库,不阻塞 */ });
+      }
+      // 源机原件收尾:已随任务迁走的待发送消息取消掉(时间线留档),否则用户移除接力
+      // 标记后同一条消息会在两台机器各投一次。幂等收口只取消冻结的那批(见上);对端
+      // 全新导入时收下的就是本次清单,按本次全量取消。
+      const migratedIds = new Set(result.idempotent ? frozenMessageIds : pendingMsgs.map((x) => x.id));
+      let msgsLeft = 0;
+      for (const msg of pendingMsgs) {
+        if (migratedIds.has(msg.id)) await cancelPendingMessage(msg, `已随任务接力到 ${marker.peerName ?? targetUrl}`);
+        else msgsLeft += 1;
+      }
+      if (msgsLeft) {
+        notes.push(`${msgsLeft} 条待发送消息是接力未确认期间新建的,没有随幂等收口迁移,仍留在本机托盘;需要对端执行的话,到对端重新发送,再取消本机这份`);
+      }
+      if (pendingMsgs.length > msgsLeft) notes.push(`迁移待发送消息 ${pendingMsgs.length - msgsLeft} 条,本机原件已取消并留档在时间线`);
+      if (scheduleRow) notes.push("定时计划已随任务迁移,今后由对端触发;本机这份在接力标记存在期间不会触发");
+      await publishTaskUpdated(taskId);
 
-    return {
-      ok: true,
-      remoteTaskId: result.taskId,
-      remoteUrl: `${targetUrl}/tasks/${result.taskId}`,
-      sessionsMigrated: found.size,
-      git: gitState ? "bundle" : "none",
-      // 以对端实际应答为准:重试撞上幂等分支时对端并没有续跑,不能按本次请求参数谎报。
-      autoResume: result.autoResume ?? autoResume,
-      notes,
-    };
+      return {
+        ok: true,
+        remoteTaskId: result.taskId,
+        remoteUrl: `${targetUrl}/tasks/${result.taskId}`,
+        sessionsMigrated: found.size,
+        git: gitState ? "bundle" : "none",
+        // 以对端实际应答为准:重试撞上幂等分支时对端并没有续跑,不能按本次请求参数谎报。
+        autoResume: result.autoResume ?? autoResume,
+        notes,
+      };
+    } finally {
+      releaseTurn(taskId);
+    }
   } finally {
-    releaseTurn(taskId);
+    endHandoffPrepare(taskId);
   }
 }

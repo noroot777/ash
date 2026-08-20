@@ -10,6 +10,9 @@
 //   4. 队列成员禁止接力:预检/导出双入口 409 且发生在停任务之前——running 队列头
 //      不被停,backlog 后继绝不启动。否则导出把队列头结算成 canceled,队列推进
 //      对 canceled 透明跳过,源机会提前拉起后继,与目标机上的当前步骤并行
+//   5. 队列门禁无 TOCTOU:导出等待对端 ping 应答的窗口里并发 POST /queues/:id/insert
+//      必须被接力准备 barrier 拦成 409——否则插队成功后导出结算 canceled,后继照样
+//      被提前启动,静态门禁(第 4 条)形同虚设
 // 双机走真 HTTP 的端到端场景在 test-handoff.ts。HARNESS_RUNS_DIR 指到临时目录顺带
 // 打开 guardAgentSpawn,即使哪里失手触发续跑也不会真拉起 CLI 烧额度。
 import assert from "node:assert/strict";
@@ -171,6 +174,83 @@ try {
     0,
     "后继不该出现任何会话",
   );
+
+  // ── 5. 队列门禁的 TOCTOU:ping 等待窗口里的并发插队必须被 barrier 拦住 ───────
+  // 缺陷形态(第 2 轮审查用延迟 2 秒的 ping 代理实测):loadSingleTask 的队列检查是
+  // 一次性的,检查通过后导出在 /handoff/ping 的网络等待里被并发 queue insert 插队
+  // (返回 200),随后 stopAndSettle 结算 canceled → 队列跳过 canceled → 后继提前启动。
+  // 修法:导出全程持任务级接力准备 barrier,queue insert/create 改成员前查同一 barrier。
+  // fake peer 用门闩把 ping 应答挂起,精确复现「检查已过、还没停任务」的窗口;目标
+  // 项目 isRepo:false,导出走「代码不随任务迁移」分支,fake peer 只需 ping+import。
+  const { mountQueueRoutes } = await import("../src/queues.js");
+  const { Hono } = await import("hono");
+  const { createServer } = await import("node:http");
+  await db.insert(tasks).values([
+    { id: "handoffqhead02", projectId, title: "接力中(不在队列)", status: "running", createdAt: qTs, updatedAt: qTs },
+    { id: "handoffqnext02", projectId, title: "并发插队的后继", status: "backlog", createdAt: qTs, updatedAt: qTs },
+  ]);
+  await db.insert(queueItems).values([
+    { taskId: "handoffqnext02", queueId: "handoffqueue02", position: 0, createdAt: qTs },
+  ]);
+  let releasePing!: () => void;
+  const pingGate = new Promise<void>((r) => { releasePing = r; });
+  let pingSeen!: () => void;
+  const pingArrived = new Promise<void>((r) => { pingSeen = r; });
+  const peer = createServer((req, res) => {
+    res.setHeader("content-type", "application/json");
+    if (req.method === "GET" && req.url === "/api/handoff/ping") {
+      pingSeen();
+      void pingGate.then(() => res.end(JSON.stringify({
+        ok: true, service: "harness", host: "fake-peer",
+        projects: [{ id: "p-dst", name: "acme", repoPath: "/x/acme", isRepo: false }],
+      })));
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/handoff/import") {
+      req.resume();
+      req.on("end", () => res.end(JSON.stringify({ ok: true, taskId: "fake-remote-01", autoResume: false, notes: [] })));
+      return;
+    }
+    res.statusCode = 404;
+    res.end(JSON.stringify({ error: "unknown", harness: true }));
+  });
+  await new Promise<void>((r) => peer.listen(0, "127.0.0.1", r));
+  const peerPort = (peer.address() as { port: number }).port;
+  try {
+    const exporting = exportHandoff("handoffqhead02", {
+      targetUrl: `http://127.0.0.1:${peerPort}`, targetProjectId: "p-dst",
+    });
+    await pingArrived; // 此刻入口的队列检查已通过、任务还没被停——正是审查复现的窗口
+    const api = new Hono();
+    mountQueueRoutes(api);
+    const insertRes = await api.request("/queues/handoffqueue02/insert", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ taskId: "handoffqhead02", position: 0 }),
+    });
+    assert.equal(insertRes.status, 409, "ping 等待窗口里的插队必须 409,不能等导出翻车");
+    assert.match(((await insertRes.json()) as { error: string }).error, /接力/);
+    releasePing();
+    const exported = await exporting;
+    assert.equal(exported.ok, true, "插队被拒后导出应正常走完");
+    const head2 = (await db.select().from(tasks).where(eq(tasks.id, "handoffqhead02"))).at(0)!;
+    assert.equal(head2.status, "canceled", "导出把源机任务结算成 canceled(接力语义)");
+    assert.ok(!(JSON.parse(head2.handoff!) as { pending?: boolean }).pending, "导出走完标记应是确认态");
+    assert.equal(
+      (await db.select().from(queueItems).where(eq(queueItems.taskId, "handoffqhead02"))).length,
+      0,
+      "接力任务始终不该出现在任何队列里",
+    );
+    const next2 = (await db.select().from(tasks).where(eq(tasks.id, "handoffqnext02"))).at(0)!;
+    assert.equal(next2.status, "backlog", "后继绝不能被启动");
+    assert.equal(
+      (await db.select().from(sessions).where(eq(sessions.taskId, "handoffqnext02"))).length,
+      0,
+      "后继不该出现任何会话",
+    );
+  } finally {
+    await new Promise<void>((r) => peer.close(() => r()));
+  }
 
   console.log("test-handoff-local ok");
 } finally {
