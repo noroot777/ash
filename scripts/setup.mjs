@@ -130,7 +130,7 @@ if (!ws.ok) {
   say();
   say("  ✕ 这份代码不完整,npm install 一定会失败(而且会报成 404)。");
   for (const line of WORKSPACE_FAIL_HINT) say(`     ${line}`);
-  say("     重新解一次包,cd 到解出来的那个目录再跑一遍。");
+  for (const line of ws.fix) say(`     ${line}`);
   process.exit(1);
 }
 

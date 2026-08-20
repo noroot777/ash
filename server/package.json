@@ -10,6 +10,7 @@
     "postinstall": "node scripts/prepare-node-pty.mjs",
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
+    "prestart": "node ../scripts/check-built.mjs",
     "start": "node dist/index.js",
     "db:push": "drizzle-kit push",
     "test:diagnostics": "tsx scripts/test-codex-diagnostics.ts",

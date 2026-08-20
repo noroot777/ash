@@ -141,7 +141,8 @@ HARNESS_URL = "http://localhost:4317"
 | 界面打得开但一片空白/样式旧 | `web-next/dist` 没构建或过期:`npm run build`(server 从磁盘读 dist,**不用重启**) |
 | 派任务立刻 ENOENT | 那个 CLI 没装,或不在 server 进程的 PATH 里(从 GUI 启动的进程 PATH 常常更短——用终端起服务) |
 | `npm install` 卡住/失败 | 网络或 registry;node-pty、libsql 都要下预编译产物 |
-| `npm install` 报 404 找不到 `@harness/shared` | **不是网络问题**。`@harness/*` 是本仓库的 workspace,公共 registry 上没有;npm 拿着这个名字去公网找,只说明它没把 `shared/` 认成本地 workspace ——多半是包没解全、或者不是在仓库根跑的。`node scripts/workspace-check.mjs` 会直接指出缺哪个(`npm run setup` 在下载前已自动查这一遍) |
+| `npm install` 报 404 找不到 `@harness/shared` | **不是网络问题**。`@harness/*` 是本仓库的 workspace,公共 registry 上没有;npm 拿着这个名字去公网找,只说明它没把 `shared/` 认成本地 workspace ——多半是包没解全、或者不是在仓库根跑的。`node scripts/workspace-check.mjs` 会指出具体缺哪个、目录里还剩什么,并按「git 检出 / 解包目录」给出对应的恢复命令(`npm run setup` 在下载前已自动查这一遍) |
+| `npm start` 报 `Cannot find module .../server/dist/index.js` | 还没构建过。`npm run build`;要是连 `node_modules` 都没有,说明装机没走完,回去跑 `npm run setup` 并解决它报的那个错——别绕过它直接 `npm start` |
 | 「在本机打开文件」点了没反应 | `HARNESS_LOCAL_OPEN_ROOTS` 没设成他自己的路径 |
 | Windows 上建 worktree 报 `Filename too long` | 撞了 MAX_PATH(260)。两个开关缺一不可:管理员 PowerShell 里 `Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' LongPathsEnabled 1`,再 `git config --global core.longpaths true`(Git for Windows 走自带 msys 运行时,**不看**系统开关)。`npm run setup` 会替你查这两条 |
 

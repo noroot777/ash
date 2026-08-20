@@ -114,6 +114,7 @@ const ws = inspectWorkspaces(REPO);
 if (!ws.ok) {
   for (const p of ws.problems) say(`  ✕ ${p}`);
   for (const line of WORKSPACE_FAIL_HINT) say(`     ${line}`);
+  for (const line of ws.fix) say(`     ${line}`);
   say("✕ workspace 不完整,依赖同步一定失败,已中止——服务端未重启,跑的还是旧代码。");
   process.exit(1);
 }
