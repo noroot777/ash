@@ -473,6 +473,31 @@ if (!IS_WINDOWS) {
   );
 }
 
+// ── 11b. commit 一旦以 0 退出，之后什么都不许把它翻成失败 ───────────────────
+//
+// 提交写进 HEAD 那一刻是不可逆的；后面那句 `git log` 只为了显示 sha 和标题。让它的失败
+// 冒出去，用户看到的就是「提交失败」——于是再提交一次，或者继续按旧列表操作（第 1 轮
+// 审查用一个合法的 post-commit hook 复现：提交完把仓库目录挪走，接口回 500，真实 HEAD
+// 上提交却好好地在）。这里照抄那条复现路径：hook 要 shell 和可执行位，只在 POSIX 上跑。
+if (!IS_WINDOWS) {
+  const repo = makeRepo("commit-meta-lost");
+  const moved = `${repo}-moved`;
+  write(repo, "a.txt", "a\n");
+  writeFileSync(join(repo, ".git", "hooks", "post-commit"), `#!/bin/sh\nmv "${repo}" "${moved}"\n`);
+  chmodSync(join(repo, ".git", "hooks", "post-commit"), 0o755);
+
+  const result = await commitWorkspace(repo, repo, { message: "提交真的成功了", stagePaths: ["a.txt"] });
+  assert.equal(result.ok, true, "commit 已经落地，就得报成功");
+  assert.equal(result.sha, null, "读不到提交号就如实回 null，不许编一个");
+  assert.match(result.warning ?? "", /提交已经成功/, "读不到的那部分要说出来，而不是装作无事发生");
+  assert.equal(result.subject, "提交真的成功了", "标题回退到用户自己写的那句");
+  assert.equal(
+    execFileSync("git", ["-C", moved, "log", "-1", "--format=%s"], { encoding: "utf8" }).trim(),
+    "提交真的成功了",
+    "前提：提交确实落进了 HEAD——这正是不许报失败的理由",
+  );
+}
+
 // ── 12. 锁内复查：guard 说不行就一步都不做 ──────────────────────────────────
 //
 // 路由进门时查过「任务在不在飞」，但排 withRepoLock 可能等上几秒，这期间 agent 完全

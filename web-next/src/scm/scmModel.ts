@@ -133,7 +133,11 @@ async function runOne(taskId: string, action: ScmAction, force: boolean) {
         amend: action.amend,
         force,
       });
-      return { status: result.status, message: `已提交 ${result.sha.slice(0, 7)}：${result.subject}` };
+      // 提交成功但没读到提交号（后端把这一步降级成了警告），照样是**提交成功**：
+      // 报「提交失败」会让用户再提交一次，报得含糊也一样。所以摆事实——提交成功了，
+      // 加上那句读不到提交号的实话。
+      const done = result.sha ? `已提交 ${result.sha.slice(0, 7)}：${result.subject}` : `已提交：${result.subject}`;
+      return { status: result.status, message: result.warning ? `${done}（${result.warning}）` : done };
     }
   }
 }
@@ -204,8 +208,10 @@ export function useScmWorkspace(taskId: string) {
       const result = await runOne(taskId, action, force);
       // 写操作自带刷新后的状态，直接就地更新：少一次往返，也不会出现「按钮已响应、
       // 列表还是旧的」那一帧。commits 不跟着变的只有提交，所以那一种额外补一次拉取。
-      setOverview((current) => (current ? { ...current, status: result.status } : current));
-      if (action.kind === "commit") void refresh(true);
+      // 状态没跟回来（后端那次刷新读失败了，但写操作已经生效）就自己补一次——绝不能
+      // 因此把成功当失败，也不能让面板停在旧列表上。
+      if (result.status) setOverview((current) => (current ? { ...current, status: result.status! } : current));
+      if (action.kind === "commit" || !result.status) void refresh(true);
       setError(null);
       setPartial(null);
       return { ok: true, message: result.message };

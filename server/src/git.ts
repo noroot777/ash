@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { join, isAbsolute, dirname, basename, normalize, resolve } from "node:path";
+import { join, isAbsolute, dirname, basename, resolve } from "node:path";
 import { homedir } from "node:os";
 import { mkdirSync, statSync, existsSync, readFileSync, writeFileSync, realpathSync, rmSync } from "node:fs";
 import type { ProjectHealth } from "@harness/shared";
@@ -82,13 +82,19 @@ function physicalPath(abs: string): string {
  * 撞 index.lock），SCM 门禁则看不见别名项目里正在跑的任务，无 force 的丢弃直接穿透
  * （第 2 轮审查用公共 API 复现）。
  *
- * 所以顺序是：展开 `~` → 去尾斜杠 → 消 `.`/`..` → 跟软链到物理路径。相对路径只做
- * 词法归一，不接 `process.cwd()`：那会让同一个字符串在不同工作目录下算出不同的键。
+ * 所以顺序是：展开 `~` → 去尾斜杠 → 消 `.`/`..` → 跟软链到物理路径。
+ *
+ * **相对路径也要接 `process.cwd()`**，不能只做词法归一。理由不是「相对路径有意义」，
+ * 而是**别处已经这么解释它了**：`POST/PATCH /api/projects` 收得下相对 `repoPath`，而
+ * 真正干活的 `git -C <repoPath>` 和 fs 调用都跑在 server 进程里，按的正是 server 的
+ * cwd。同一个仓库一个用绝对路径、一个用相对路径登记，落的是同一个物理目录，键却不同
+ * ——运行态门禁看不见对面那个在跑的任务，无 force 的丢弃直接穿透（本轮审查用隔离实例
+ * 复现）。键从不落库、全是运行时现算，所以「换个 cwd 算出不同键」不会跨进程串味：一个
+ * 进程内 cwd 是常量，而键的唯一用途就是在这一个进程里两两比较。
  */
 export function repoKey(p: string | null | undefined): string {
   const tidy = tidyRepoPath(expandHome(p));
   if (!tidy) return "";
-  if (!isAbsolute(tidy)) return tidyRepoPath(normalize(tidy));
   return tidyRepoPath(physicalPath(resolve(tidy)));
 }
 

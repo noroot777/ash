@@ -12,9 +12,9 @@
 // 该看到领队那个真实存在的 worktree，而不是退到项目主仓再谎称「目录还没建出来」。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 
@@ -281,7 +281,10 @@ try {
     // 故意用字符串拼而不是 `join`：`join` 自己会把 `.` / `..` 消掉，那样测的就不是 `repoKey`。
     const link = join(root, "repo-link");
     symlinkSync(repo, link, "dir");
-    const aliases = [`${repo}/`, `${repo}/.`, `${repo}/sub/..`, link, `${link}/./`];
+    // 相对路径是同一类事：`POST /api/projects` 原样收，而 `git -C <相对路径>` 是按 server
+    // 进程的 cwd 解释的，落的正是这个仓库（第 1 轮审查用隔离实例复现：面板不显示在飞、
+    // 无 force 的 discard 直接 200 把文件还原了）。
+    const aliases = [`${repo}/`, `${repo}/.`, `${repo}/sub/..`, link, `${link}/./`, relative(process.cwd(), repo)];
 
     await db.insert(projects).values({
       id: "project-b", name: "同一个仓库的另一个项目", repoPath: aliases[0], createdAt: ts,
@@ -327,6 +330,44 @@ try {
 
     await db.delete(tasks).where(eq(tasks.id, "cross-proj"));
     await db.delete(projects).where(eq(projects.id, "project-b"));
+  }
+
+  // ── 8. 写操作已经落地之后，那次「顺手刷新状态」失败不许把它翻成失败 ────────
+  //
+  // 外壳在每个写操作之后补读一次 status，好让面板不用再补一次 GET。这一读本身也会失败
+  // （第 1 轮审查用一个合法的 post-commit hook 复现：提交完把仓库目录挪走，接口回 500，
+  // 而真实 HEAD 上提交好好地在）。提交不可逆，报成失败等于让用户再提交一次。
+  // hook 要 shell 和可执行位，Windows 上两样都不作数，那边跳过。
+  if (process.platform !== "win32") {
+    const repo8 = join(root, "vanishing-repo");
+    const moved8 = `${repo8}-moved`;
+    execFileSync("git", ["init", "-b", "main", repo8]);
+    git(repo8, "config", "user.name", "Harness SCM Guard Test");
+    git(repo8, "config", "user.email", "scm@harness.test");
+    writeFileSync(join(repo8, "a.txt"), "baseline\n");
+    git(repo8, "add", "a.txt");
+    git(repo8, "commit", "-m", "seed");
+    writeFileSync(join(repo8, "a.txt"), "to be committed\n");
+    writeFileSync(join(repo8, ".git", "hooks", "post-commit"), `#!/bin/sh\nmv "${repo8}" "${moved8}"\n`);
+    chmodSync(join(repo8, ".git", "hooks", "post-commit"), 0o755);
+
+    await db.insert(projects).values({ id: "project-v", name: "会消失的仓库", repoPath: repo8, createdAt: ts });
+    await db.insert(tasks).values({ ...common, id: "vanishing", projectId: "project-v", useWorktree: false });
+
+    const res = await post("vanishing", "commit", { message: "提交真的成功了", stagePaths: ["a.txt"] });
+    const json = await res.json() as { ok?: boolean; sha?: string | null; warning?: string; error?: string };
+    assert.equal(res.status, 200, `提交已经落地，刷新状态失败不许翻成 ${res.status}`);
+    assert.equal(json.ok, true, "回给面板的必须是「成功」");
+    assert.equal(json.sha, null, "读不到提交号就如实回 null");
+    assert.match(json.warning ?? "", /提交已经成功/, "读不到的那部分要说出来");
+    assert.equal(
+      execFileSync("git", ["-C", moved8, "log", "-1", "--format=%s"], { encoding: "utf8" }).trim(),
+      "提交真的成功了",
+      "前提：提交确实落进了 HEAD——这正是不许报失败的理由",
+    );
+
+    await db.delete(tasks).where(eq(tasks.id, "vanishing"));
+    await db.delete(projects).where(eq(projects.id, "project-v"));
   }
 
   console.log("scm guard ok");

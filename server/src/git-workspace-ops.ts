@@ -335,8 +335,11 @@ export interface ScmCommitOptions {
 
 export interface ScmCommitResult {
   ok: true;
-  sha: string;
+  /** 提交落地后补读到的 sha；补读失败就是 null——提交本身已经算数（见下）。 */
+  sha: string | null;
   subject: string;
+  /** 提交已经成功、但之后某一步只为显示服务的读取失败了，附一句实话。 */
+  warning?: string;
 }
 
 /**
@@ -388,8 +391,23 @@ export async function commitWorkspace(
         [],
       );
     }
-    const { stdout } = await exec("git", ["-C", root, "log", "-1", "--format=%H%x1f%s"]);
-    const [sha, subject] = stdout.trim().split("\x1f");
-    return { ok: true as const, sha, subject: subject ?? message };
+    // **`git commit` 以 0 退出的那一刻就是不可逆的成功边界。** 提交已经写进 HEAD，
+    // 之后这条 `git log` 只是为了把 sha 和标题显示出来。它照样可能失败——post-commit
+    // hook 把仓库目录挪走、磁盘瞬时出错、仓库被别的进程锁住……让这一步把已经落地的
+    // 提交翻成「提交失败」，是拿一个显示问题去撒一个关于事实的谎：用户会照这句话再提
+    // 交一次，或者继续按旧列表操作（第 1 轮审查用 post-commit hook 复现）。所以读不到
+    // 就回 sha=null 加一句警告，成功仍然是成功。
+    try {
+      const { stdout } = await exec("git", ["-C", root, "log", "-1", "--format=%H%x1f%s"]);
+      const [sha, subject] = stdout.trim().split("\x1f");
+      return { ok: true as const, sha: sha || null, subject: subject || message };
+    } catch (error) {
+      return {
+        ok: true as const,
+        sha: null,
+        subject: message,
+        warning: `提交已经成功，但没读到它的提交号：${oneLine(gitError(error))}`,
+      };
+    }
   }));
 }

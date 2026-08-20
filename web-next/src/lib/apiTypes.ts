@@ -221,18 +221,24 @@ export type ScmFileDiff = {
 /**
  * 写操作的统一返回：各自的结果字段 + 一份**刷新后**的状态。
  * 状态随写操作一起回来，面板不必再补一次 GET，也就没有「按钮已响应、列表还是旧的」那一帧。
+ *
+ * `status` 是**可选**的：写操作已经落地之后，那次只为显示服务的状态读取自己也可能失败，
+ * 后端不会为此把成功报成失败（见 `scm-routes.ts` 写外壳）。缺了就自己补一次刷新。
  */
 export type ScmWriteResult = {
   ok: true;
   affected: number;
-  status: ScmStatus;
+  status?: ScmStatus;
 };
 
 export type ScmCommitResult = {
   ok: true;
-  sha: string;
+  /** 提交号；`git commit` 成功之后补读元数据失败时是 null——提交仍然算数。 */
+  sha: string | null;
   subject: string;
-  status: ScmStatus;
+  /** 提交成功、但之后某一步只为显示服务的读取失败了的实话。 */
+  warning?: string;
+  status?: ScmStatus;
 };
 
 /**

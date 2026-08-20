@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { join, relative, sep } from "node:path";
 
 const root = mkdtempSync(join(tmpdir(), "harness-repo-lock-test-"));
 process.env.HARNESS_DB = join(root, "harness.db");
@@ -96,7 +96,9 @@ try {
     symlinkSync(real, link, "dir");
     // 故意用字符串拼而不是 `join`：`join` 自己就会把 `.` / `..` 消掉，那样测的就不是
     // `repoKey` 了。公共 API 收到的正是这种没归一过的原样字符串。
-    const aliases = [real, `${real}${sep}.`, `${real}${sep}sub${sep}..`, link, `${link}${sep}.${sep}`];
+    // 相对路径也算一种别名：公共 API 收得下它,而 `git -C <相对路径>` 是按 server 进程的
+    // cwd 解释的,落的是同一个目录 —— 按字面值算键同样会开出第二条队列(第 1 轮审查)。
+    const aliases = [real, `${real}${sep}.`, `${real}${sep}sub${sep}..`, link, `${link}${sep}.${sep}`, relative(process.cwd(), real)];
 
     let inside = 0;
     let peak = 0;

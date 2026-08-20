@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { eq } from "drizzle-orm";
 
 const root = mkdtempSync(join(tmpdir(), "harness-task-workspace-"));
@@ -192,7 +192,10 @@ try {
     {
       const link = join(root, "repo-alias-link");
       symlinkSync(repo, link, "dir");
-      for (const alias of [`${repo}/.`, `${repo}/sub/..`, link, `${link}/./`]) {
+      // 相对路径同理，而且它不是理论上的写法：`POST /api/projects` 原样收，真正干活的
+      // `git -C` 按 server 进程的 cwd 解释它——落的就是同一个物理目录（第 1 轮审查用
+      // 隔离实例复现：相对路径项目里在跑的任务完全不可见，无 force 的丢弃直接穿透）。
+      for (const alias of [`${repo}/.`, `${repo}/sub/..`, link, `${link}/./`, relative(process.cwd(), repo)]) {
         await db.update(projects).set({ repoPath: alias }).where(eq(projects.id, "proj-b"));
         assert.deepEqual(await ids("xproj-a"), ["xproj-a", "xproj-b"], `别名写法 ${alias} 仍是同一个仓库`);
       }

@@ -245,8 +245,11 @@ export function mountScmRoutes(api: Hono) {
       try {
         const result = await run(context.root, body, guard);
         // 每个写操作都把最新状态一起回去：面板不必再补一次请求，也不会出现
-        // 「按钮已响应、列表还是旧的」那一帧。
-        return c.json({ ...(result as object), status: await readScmStatus(context.root.path) });
+        // 「按钮已响应、列表还是旧的」那一帧。**但这一读是 best-effort**：写操作已经
+        // 落地了（提交尤其不可逆），再让一次只为显示服务的状态读取把它翻成 500，用户
+        // 看到的就是「失败了，所以什么都没变」——那是假的。读不到就不带 status，前端
+        // 自己补一次刷新。
+        return c.json({ ...(result as object), status: await readScmStatus(context.root.path).catch(() => undefined) });
       } catch (error) {
         // 锁内复查挡下的，和进门时挡下的走同一条路：这不是失败，是要用户确认一次。
         if (error instanceof ScmBusyError) return c.json({ error: error.message, needsForce: true }, 409);
