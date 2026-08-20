@@ -15,6 +15,8 @@
 //      被提前启动,静态门禁(第 4 条)形同虚设
 //   6. 接力成功、barrier 已释放后,持久 out 标记(pending 或已确认)继续拦住
 //      insert/create 重新入队——历史副本入队会被当 canceled 跳过,后继提前启动
+//   7. 项目自动匹配兼容 Windows 路径:对端仓库是 D:\...\acme 时,同目录名匹配
+//      仍要命中——只按 "/" 切目录名会把整条 Windows 路径当 basename,恒不匹配
 // 双机走真 HTTP 的端到端场景在 test-handoff.ts。HARNESS_RUNS_DIR 指到临时目录顺带
 // 打开 guardAgentSpawn,即使哪里失手触发续跑也不会真拉起 CLI 烧额度。
 import assert from "node:assert/strict";
@@ -204,7 +206,11 @@ try {
       pingSeen();
       void pingGate.then(() => res.end(JSON.stringify({
         ok: true, service: "harness", host: "fake-peer",
-        projects: [{ id: "p-dst", name: "acme", repoPath: "/x/acme", isRepo: false }],
+        projects: [
+          { id: "p-dst", name: "acme", repoPath: "/x/acme", isRepo: false },
+          // Windows 对端的同名仓库(第 7 节用):isRepo:true 才参与自动匹配。
+          { id: "p-win", name: "acme", repoPath: "D:\\dst-side\\acme", isRepo: true },
+        ],
       })));
       return;
     }
@@ -298,6 +304,22 @@ try {
       (await db.select().from(sessions).where(eq(sessions.taskId, "handoffqnext02"))).length,
       0,
       "后继依旧没有会话",
+    );
+
+    // ── 7. 项目自动匹配兼容 Windows 路径 ─────────────────────────────────────
+    // 缺陷形态(第 4 轮审查 Windows 真机实测):base() 只按 "/" 切目录名,D:\... 整条
+    // 被当成 basename,同名仓库恒不匹配,suggestedProjectId 为 null。两侧路径可能
+    // 来自不同操作系统,修法是统一按 win32 规则切(/ 和 \ 都认)。这里用对端侧钉住
+    // \ 分隔符的处理(本机侧走同一个函数);Windows 本机侧由 test-handoff.ts 在
+    // Windows 真机上跑时覆盖。
+    await db.insert(tasks).values({
+      id: "handoffwinmatch", projectId, title: "Windows 对端匹配",
+      status: "paused", createdAt: qTs, updatedAt: qTs,
+    });
+    const winProbe = await preflightHandoff("handoffwinmatch", `http://127.0.0.1:${peerPort}`);
+    assert.equal(
+      winProbe.suggestedProjectId, "p-win",
+      "对端 Windows 路径(D:\\dst-side\\acme)的同名仓库应被自动匹配",
     );
   } finally {
     await new Promise<void>((r) => peer.close(() => r()));

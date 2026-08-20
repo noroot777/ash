@@ -20,7 +20,7 @@ import { promisify } from "node:util";
 import { hostname, homedir } from "node:os";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { readdir, readFile, appendFile } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
+import { join, relative, sep, win32 } from "node:path";
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { projects, queueItems, scheduledMessages, schedules, sessions, tasks } from "./db/schema.js";
@@ -331,7 +331,10 @@ export async function preflightHandoff(taskId: string, targetUrlRaw: string): Pr
     throw new HandoffError("对端不是 harness（/api/handoff/ping 应答不对）", 502);
   }
   // 项目匹配靠仓库目录名:两台机器的绝对路径几乎必然不同,目录名是最稳的公共项。
-  const base = (p: string) => expandHome(p).replace(/\/+$/, "").split("/").pop() ?? "";
+  // 两侧路径可能来自不同操作系统(本机 Windows、对端 macOS,或反过来),所以不用
+  // 跟随运行平台的 basename,统一按 win32 规则切——/ 和 \ 都认、吃掉盘符和尾分隔符,
+  // 而 POSIX 目录名里不会出现 \,不受影响。只按 "/" 切会把 D:\a\b 整条当成目录名。
+  const base = (p: string) => win32.basename(expandHome(p));
   const localBase = base(project.repoPath);
   const suggested = localBase
     ? ping.projects.find((p) => p.isRepo && base(p.repoPath) === localBase) ?? null
