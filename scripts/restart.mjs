@@ -38,7 +38,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 import { IS_WINDOWS, isPidAlive, killPid, listenerPids, localJson, pidsRunningScript, sleep } from "./platform.mjs";
-import { WORKSPACE_FAIL_HINT, inspectWorkspaces } from "./workspace-check.mjs";
+import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces } from "./workspace-check.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 process.chdir(REPO);
@@ -115,6 +115,15 @@ if (!ws.ok) {
   for (const p of ws.problems) say(`  ✕ ${p}`);
   for (const line of WORKSPACE_FAIL_HINT) say(`     ${line}`);
   say("✕ workspace 不完整,依赖同步一定失败,已中止——服务端未重启,跑的还是旧代码。");
+  process.exit(1);
+}
+// npm 配置闸也要过:老机器撞上 workspaces=false 时,这里会先「装好」一个只有根依赖的
+// node_modules,再让人去看 build 阶段那条跟病因毫无关系的报错。
+const npmCfg = inspectNpmConfig();
+for (const w of npmCfg.warnings) say(`  ⚠ ${w}`);
+if (npmCfg.blockers.length) {
+  for (const b of npmCfg.blockers) say(`  ✕ ${b}`);
+  say("✕ npm 配置会让 workspace 装不对,已中止——服务端未重启,跑的还是旧代码。");
   process.exit(1);
 }
 npm(["install", "--no-audit", "--no-fund"], "✕ 依赖同步失败,已中止——服务端未重启。");

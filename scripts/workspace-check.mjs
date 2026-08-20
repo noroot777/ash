@@ -19,8 +19,10 @@
 // 判据不写死 `@harness`:先收集本地 workspace 的 name,取它们的 scope,再看有没有哪个
 // 依赖落在同一个 scope 下却找不到对应 workspace。以后换 scope 名不用回来改这里。
 import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 
 const DEP_FIELDS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
 
@@ -99,17 +101,59 @@ export function inspectWorkspaces(repo) {
   return { ok: problems.length === 0, problems, hints, names: [...found.keys()] };
 }
 
+/**
+ * 读一条 npm 配置。没设时 `npm config get` 回的是字符串 "null",这里统一成空串。
+ * 参数全是调用点写死的字面量,Windows 上 shell:true 也没有可注入的东西(见 npm.mjs 顶部)。
+ */
+export function npmConfigValue(key) {
+  const res = spawnSync(NPM, ["config", "get", key], { encoding: "utf8", windowsHide: true, ...NPM_SPAWN_OPTS });
+  const v = (res.stdout ?? "").trim();
+  return v && v !== "null" && v !== "undefined" ? v : "";
+}
+
+/**
+ * 上面那道文件自查够不着的盲区:目录齐全,npm 却不按 workspace 处理 —— 而且**不报错**。
+ *
+ * `workspaces=false` 实测下来最坏:npm 只装根 package 的依赖,workspace 的一个都不装,
+ * 然后正常退出说「装好了」。人要到后面构建时才撞上去,而那时的报错(`Cannot use
+ * --no-workspaces and --workspace at the same time`)跟真正的病因已经隔了十万八千里。
+ * 所以两个装依赖的入口(setup / restart)都必须在**下载之前**过这道闸,而不是只拦装机那次:
+ * 老机器上 `npm run restart` 撞见同一个配置,看到的错一样看不懂。
+ *
+ * @returns {{ blockers: string[], warnings: string[] }} blockers 非空就该直接停,别开始装。
+ */
+export function inspectNpmConfig() {
+  /** @type {string[]} */ const blockers = [];
+  /** @type {string[]} */ const warnings = [];
+
+  if (npmConfigValue("workspaces") === "false") {
+    blockers.push(
+      "npm 配置里 workspaces=false —— 这样装只会装根依赖,workspace 的依赖一个都不装(而且不报错)。" +
+        "\n     先 npm config delete workspaces(或去掉 npm_config_workspaces 环境变量)再重跑。",
+    );
+  }
+  if (npmConfigValue("install-links") === "true") {
+    warnings.push("npm 配置里 install-links=true:本地包会被复制安装而不是软链,改了 shared/ 得重装才生效。");
+  }
+  return { blockers, warnings };
+}
+
 // 直接 `node scripts/workspace-check.mjs` 跑时的入口;被 import 时这段不执行。
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const repo = fileURLToPath(new URL("..", import.meta.url));
   const res = inspectWorkspaces(repo);
+  const cfg = inspectNpmConfig();
   for (const h of res.hints) console.log(`  ⚠ ${h}`);
-  if (res.ok) {
+  for (const w of cfg.warnings) console.log(`  ⚠ ${w}`);
+  if (res.ok && !cfg.blockers.length) {
     console.log(`  ✓ workspace 齐全(${res.names.length} 个):${res.names.join("、")}`);
     process.exit(0);
   }
   for (const p of res.problems) console.error(`  ✕ ${p}`);
-  console.error("");
-  for (const line of WORKSPACE_FAIL_HINT) console.error(`     ${line}`);
+  for (const b of cfg.blockers) console.error(`  ✕ ${b}`);
+  if (res.problems.length) {
+    console.error("");
+    for (const line of WORKSPACE_FAIL_HINT) console.error(`     ${line}`);
+  }
   process.exit(1);
 }

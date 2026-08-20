@@ -21,7 +21,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 import { IS_WINDOWS, which, windowsLongPaths } from "./platform.mjs";
-import { WORKSPACE_FAIL_HINT, inspectWorkspaces } from "./workspace-check.mjs";
+import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces, npmConfigValue } from "./workspace-check.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 process.chdir(REPO);
@@ -134,28 +134,19 @@ if (!ws.ok) {
   process.exit(1);
 }
 
-// 再看两个 npm 配置。它们是上面那道文件自查够不着的盲区:目录齐全,npm 却不按 workspace
-// 处理 —— 而且**不会报错**。`workspaces=false` 实测下来最坏:npm 只装根 package 的依赖,
-// workspace 的一个都不装,然后正常退出说「装好了」,人要到 3/5 构建时才撞一堆找不到模块。
-// 与其让它静默毁掉这次装机,不如在开始下载之前就拦下来。
-const npmCfg = (key) => {
-  const v = run(NPM, ["config", "get", key]).stdout.trim();
-  return v && v !== "null" && v !== "undefined" ? v : "";
-};
-if (npmCfg("workspaces") === "false") {
-  bad("npm 配置里 workspaces=false —— 这样装只会装根依赖,workspace 的依赖一个都不装(而且不报错)");
-  say("     先 npm config delete workspaces(或去掉 npm_config_workspaces 环境变量)再重跑。");
+// 再过一道 npm 配置闸(为什么两个入口都要过,见 workspace-check.mjs 里 inspectNpmConfig 的注释)。
+const npmCfg = inspectNpmConfig();
+for (const w of npmCfg.warnings) warn(w);
+if (npmCfg.blockers.length) {
+  for (const b of npmCfg.blockers) bad(b);
   process.exit(1);
-}
-if (npmCfg("install-links") === "true") {
-  warn("npm 配置里 install-links=true:本地包会被复制安装而不是软链,改了 shared/ 得重装才生效。");
 }
 
 if (npm(["install"]) !== 0) {
   // workspace 和上面两个配置都自查过了,剩下的成因基本在网络那一侧 —— 但别只丢一句
   // 「检查网络」:把现场一起打出来,用户能直接贴回来,不用再来回问「你 npm 几、registry 指哪」。
-  const registry = npmCfg("registry") || "?";
-  const proxy = npmCfg("https-proxy") || "(没设)";
+  const registry = npmConfigValue("registry") || "?";
+  const proxy = npmConfigValue("https-proxy") || "(没设)";
   say("  ✕ npm install 失败。workspace 自查是通过的,所以多半真在网络这一侧:代理没配、");
   say("     registry 不通,或者 node-pty / libsql 的预编译产物下不来。");
   say(`     现场:npm ${npmVersion.stdout.trim()} · registry ${registry} · https-proxy ${proxy}`);
