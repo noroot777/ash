@@ -15,10 +15,13 @@
 //   8. 并发导入互斥:同一 task id 两个在途导入,后到者 409,先到者的行毫发无损
 //   9. 源机写入口硬拦:接力出去的任务 accept/run/改 status/定时/stage/派审全 409,
 //      改标题照常、移除标记后恢复可写
-//  10. 上传附件迁移:preflight 盘点数量;正文/会话 JSONL 引用的 uploads 文件随任务
-//      到达对端,原始与 JSON 转义两种形态的路径都改写成对端路径,改完仍是合法 JSON
-//  11. Windows 源机的反斜杠 uploads 路径同样两种形态都改写;幂等收口如实报 in 标记
-//      里存的 autoResume 事实(而不是本次请求参数),老标记没这字段按 false 报
+//  10. 上传附件迁移(织进 1/3 节):preflight 盘点数量;正文/会话 JSONL 引用的
+//      uploads 文件随任务到达对端,原始与 JSON 转义两种形态的路径都改写成对端路径,
+//      改完仍是合法 JSON(Windows 源机形态与纯函数上下文改写在 test-handoff-local.ts)
+//  11. 待发送消息与定时计划随任务迁移(织进 1/3/4 节):preflight 盘点数量;pending
+//      消息在对端原样落库(新 id、到期时间保留、附件路径改写),本机原件取消留档;
+//      幂等收口只取消 pending 标记冻结的那批,收口期间新建的留在托盘如实提醒;
+//      定时计划带 enabled/lastRunAt 落到对端并接上任务(schedule_id)
 //  12. 网关伪造失败应答(对端实已导入成功、502 不带 harness 标记):按「送达未知」
 //      保留 pending,重试走幂等收口——按业务拒绝回滚就是两台机器双跑
 // HARNESS_RUNS_DIR 指到临时目录顺带打开 guardAgentSpawn,即使哪里失手触发续跑也
@@ -53,7 +56,7 @@ process.on("exit", () => {
 
 try {
   const { db, ensureSchema } = await import("../src/db/index.js");
-  const { projects, sessions, tasks } = await import("../src/db/schema.js");
+  const { projects, scheduledMessages, schedules, sessions, tasks } = await import("../src/db/schema.js");
   const { prepareWorktree, worktreeBranchName, worktreePathFor } = await import("../src/git.js");
   const { claudeProjectSlug, exportHandoff, preflightHandoff } = await import("../src/handoff.js");
   const { HandoffError } = await import("../src/handoff-types.js");
@@ -79,8 +82,11 @@ try {
   // 正文放原始形态,JSONL 放 JSON 转义形态,接力后两种都该改写成对端路径。
   const uploadName = "up001abc-notes.txt";
   const uploadSrcPath = join(root, "uploads-src", uploadName);
+  const msgUpName = "up003msg-checklist.txt";
+  const msgUpPath = join(root, "uploads-src", msgUpName);
   mkdirSync(join(root, "uploads-src"), { recursive: true });
   writeFileSync(uploadSrcPath, "附件内容 attachment-body\n");
+  writeFileSync(msgUpPath, "验收清单\n");
   await createTasks([{
     id: taskId, projectId, title: "接力回归任务",
     body: `把 feature.txt 写完并验证。\n\n[用户附带的文件,请用 Read 工具查看以下本地文件]\n- ${uploadSrcPath}`,
@@ -89,6 +95,19 @@ try {
     resumePrompt: "继续:完成第二步",
     createdAt: "2026-08-19T08:00:00.000Z", updatedAt: "2026-08-19T08:00:00.000Z",
   }]);
+  // 定时计划 + 一条引用附件的待发送消息:都该随任务迁移(schedules 按 taskId 查,
+  // tasks.schedule_id 只是反向缓存,源机不设也得能搬走)。
+  await db.insert(schedules).values({
+    id: "handoffsched01", taskId, kind: "cron", at: null, cron: "0 9 * * *",
+    enabled: true, lastRunAt: null, createdAt: "2026-08-19T08:00:00.000Z",
+  });
+  await db.insert(scheduledMessages).values({
+    id: "handoffmsg01", taskId, text: `到点看一眼验收清单:${msgUpPath}`,
+    attachments: JSON.stringify([msgUpPath]), agent: "claude", executorId: null,
+    model: null, reasoningEffort: null, sessionRole: null, mode: "timed",
+    sendAt: "2027-01-01T09:00:00.000Z", status: "pending",
+    createdAt: "2026-08-19T08:10:00.000Z", sentAt: null, deliveringSince: null,
+  });
 
   // worktree 上一个已提交改动 + 一个未提交改动(该被 WIP 提交带走)。
   const ws = await prepareWorktree(srcRepo, taskId, "main");
@@ -141,7 +160,9 @@ try {
   assert.equal(probe.local.running, false);
   assert.equal(probe.local.sessions, 2);
   assert.equal(probe.local.sessionFilesFound, 1);
-  assert.equal(probe.local.uploads, 1, "preflight 应盘点出正文引用的上传附件");
+  assert.equal(probe.local.uploads, 2, "preflight 应盘点出正文与待发送消息引用的上传附件");
+  assert.equal(probe.local.pendingMessages, 1, "preflight 应盘点出待发送消息");
+  assert.equal(probe.local.schedule, "cron", "preflight 应盘点出定时计划类型");
   assert.equal(probe.local.git, "bundle");
   assert.ok(probe.local.notes.some((n) => n.includes("找不到 CLI 会话文件")), "s2 缺文件应记 note");
 
@@ -190,7 +211,7 @@ try {
     ((await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!).handoff!,
   ) as {
     direction: string; pending?: boolean; transferId?: string;
-    peerUrl?: string; targetProjectId?: string; autoResume?: boolean;
+    peerUrl?: string; targetProjectId?: string; autoResume?: boolean; messageIds?: string[];
   };
   assert.equal(pendingMarker.direction, "out");
   assert.equal(pendingMarker.pending, true, "应答丢失后必须留下「接力未确认」的持久标记");
@@ -213,6 +234,7 @@ try {
   assert.equal(pendingMarker.peerUrl, flakyUrl, "pending 标记要冻结目标机地址");
   assert.equal(pendingMarker.targetProjectId, peerProject.id, "pending 标记要冻结对端项目");
   assert.equal(pendingMarker.autoResume, false, "pending 标记要冻结 autoResume");
+  assert.deepEqual(pendingMarker.messageIds, ["handoffmsg01"], "pending 标记要冻结首次发送带走的消息 id");
   await assert.rejects(
     exportHandoff(taskId, { targetUrl: peerUrl, targetProjectId: peerProject.id, autoResume: false }),
     (e: unknown) => e instanceof HandoffError && e.status === 409 && /同一台机器/.test(e.message),
@@ -308,6 +330,40 @@ try {
   assert.equal(dstSessions[1]!.cli, null, "文件没到货的会话 cliSessionId 必须置空,否则 --resume 会当场报错");
   assert.ok(dstSessions.every((s) => s.cwd === dstWs));
 
+  // 待发送消息:对端新 id 原样落库,附件路径/本体一起到;源机原件取消留档且 sent_at
+  // 保持 null(sent 只在原话真的进了会话之后才写)。定时计划落到对端并接上任务。
+  const dstMsgs = (await dstDb.execute({
+    sql: "select id, status, mode, send_at as sendAt, text, attachments from scheduled_messages where task_id = ?",
+    args: [taskId],
+  })).rows as unknown as { id: string; status: string; mode: string; sendAt: string; text: string; attachments: string }[];
+  assert.equal(dstMsgs.length, 1, "待发送消息应随任务到达对端");
+  assert.equal(dstMsgs[0]!.status, "pending");
+  assert.equal(dstMsgs[0]!.mode, "timed");
+  assert.equal(dstMsgs[0]!.sendAt, "2027-01-01T09:00:00.000Z", "到期时间要原样保留");
+  assert.notEqual(dstMsgs[0]!.id, "handoffmsg01", "对端要发新 id,不能沿用源机 id");
+  const msgUpDst = join(root, "uploads-dst", msgUpName);
+  assert.ok(dstMsgs[0]!.text.includes(msgUpDst), "消息正文里的附件路径应改写为对端路径");
+  assert.deepEqual(JSON.parse(dstMsgs[0]!.attachments), [msgUpDst], "附件清单(JSON)同样改写为对端路径");
+  assert.equal(readFileSync(msgUpDst, "utf8"), "验收清单\n", "消息引用的附件本体应到达对端");
+  const dstSched = (await dstDb.execute({
+    sql: "select id, kind, cron, enabled, last_run_at as lastRunAt from schedules where task_id = ?",
+    args: [taskId],
+  })).rows as unknown as { id: string; kind: string; cron: string | null; enabled: number; lastRunAt: string | null }[];
+  assert.equal(dstSched.length, 1, "定时计划应随任务到达对端");
+  assert.equal(dstSched[0]!.kind, "cron");
+  assert.equal(dstSched[0]!.cron, "0 9 * * *");
+  assert.equal(Number(dstSched[0]!.enabled), 1, "enabled 要原样带过去");
+  assert.equal(dstSched[0]!.lastRunAt, null);
+  const dstTaskSched = (await dstDb.execute({
+    sql: "select schedule_id as sid from tasks where id = ?", args: [taskId],
+  })).rows as unknown as { sid: string | null }[];
+  assert.equal(dstTaskSched[0]!.sid, dstSched[0]!.id, "对端任务要接上新计划(schedule_id 反向缓存)");
+  const srcMsg = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, "handoffmsg01"))).at(0)!;
+  assert.equal(srcMsg.status, "canceled", "本机原件应取消,否则同一句话两台机器各发一遍");
+  assert.equal(srcMsg.sentAt, null, "取消不是发送,sent_at 必须保持 null");
+  assert.ok(result.notes.some((n) => n.includes("迁移待发送消息 1 条")), "应答要说明消息迁移");
+  assert.ok(result.notes.some((n) => n.includes("定时计划已随任务迁移")), "应答要说明计划迁移");
+
   // ── 4. 幂等收口:pending 重试撞上「对端已导入」→ 按成功收敛,零副作用 ──────
   // 模拟「上次 POST 其实送达了,只是应答丢了」:把源机标记改回 pending,原样重试。
   // 对端凭同一个 transferId 识别成同一次接力,直接返回成功,不重复导入。
@@ -316,6 +372,14 @@ try {
   await db.update(tasks)
     .set({ handoff: JSON.stringify({ ...marker, pending: true }) })
     .where(eq(tasks.id, taskId));
+  // 收口期间新建的待发送消息:settled 标记没冻结 messageIds(冻结批为空),幂等收口
+  // 一条都不能取消——它没迁移到对端,静默取消就是丢消息;只能留在托盘并如实提醒。
+  await db.insert(scheduledMessages).values({
+    id: "handoffmsg02", taskId, text: "接力未确认期间补的一句", attachments: "[]",
+    agent: null, executorId: null, model: null, reasoningEffort: null, sessionRole: null,
+    mode: "queued", sendAt: "2026-08-19T12:00:00.000Z", status: "pending",
+    createdAt: "2026-08-19T12:00:00.000Z", sentAt: null, deliveringSince: null,
+  });
   const replay = await exportHandoff(taskId, {
     targetUrl: flakyUrl, targetProjectId: peerProject.id, targetName: "测试机", autoResume: true,
   });
@@ -331,6 +395,13 @@ try {
     sql: "select count(*) as n from sessions where task_id = ?", args: [taskId],
   })).rows as unknown as { n: number }[];
   assert.equal(Number(replayCount[0]!.n), 2, "幂等重放不该在对端重复插会话");
+  assert.ok(replay.notes.some((n) => n.includes("没有随幂等收口迁移")), "收口期间新建的消息要如实提醒");
+  const msg02 = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, "handoffmsg02"))).at(0)!;
+  assert.equal(msg02.status, "pending", "没迁移到对端的消息必须留在本机托盘,不能静默取消");
+  const replayMsgs = (await dstDb.execute({
+    sql: "select count(*) as n from scheduled_messages where task_id = ?", args: [taskId],
+  })).rows as unknown as { n: number }[];
+  assert.equal(Number(replayMsgs[0]!.n), 1, "幂等重放不该在对端重复插消息");
   flaky.closeAllConnections();
   await new Promise<void>((r) => flaky.close(() => r()));
 
@@ -510,60 +581,8 @@ try {
   );
   assert.equal(scheduleAfterClear.status, 200, `移除标记后写入口应恢复:${await scheduleAfterClear.text()}`);
 
-  // ── 10. Windows 源机的附件路径:原始/JSON 转义两种形态都改写 ────────────────
-  // 进程内直调 importHandoff(落进源库),附件写到本进程 UPLOADS_DIR(uploads-src)。
-  // 正文放原始形态(D:\a\b),run 产物 JSONL 放转义形态(D:\\a\\b),都该改写成本机
-  // 路径且 JSONL 改完仍是合法 JSON——只改原始形态会漏掉 Windows 源机的全部会话引用。
-  const winUpName = "up002xyz-shot.txt";
-  const winUpPath = `D:\\ai_workspace\\ash\\data\\uploads\\${winUpName}`;
-  const upManifest = (autoResume: boolean) => ({
-    version: 1, sourceHost: "win-src", sourceWorkspace: null,
-    targetProjectId: projectId, autoResume, git: null, transferId: "transfer-up-1",
-    task: {
-      id: "handoff-e2e-task-05", title: "Windows 附件用例",
-      body: `看这个附件:${winUpPath}`, status: "paused", createdAt: "2026-08-19T12:00:00.000Z",
-    },
-    sessions: [] as unknown[],
-    uploads: [{ name: winUpName, sourcePath: winUpPath, dataBase64: b64("win-upload\n") }],
-    files: [{
-      kind: "run-artifact", rel: "history.jsonl",
-      dataBase64: b64(JSON.stringify({ type: "user", text: `附件在 ${winUpPath}` }) + "\n"),
-    }],
-  });
-  const upResult = await importHandoff(upManifest(false));
-  assert.equal(upResult.ok, true);
-  const winUpLocal = join(root, "uploads-src", winUpName);
-  assert.equal(readFileSync(winUpLocal, "utf8"), "win-upload\n", "附件本体应落到本机 uploads 目录");
-  const upTask = (await db.select().from(tasks).where(eq(tasks.id, "handoff-e2e-task-05"))).at(0)!;
-  assert.ok(upTask.body!.includes(winUpLocal), "正文里的原始形态路径应改写为本机路径");
-  assert.ok(!upTask.body!.includes("D:"), "正文不该残留源机路径");
-  const upArtifact = readFileSync(join(root, "runs-src", "handoff-e2e-task-05", "history.jsonl"), "utf8");
-  const upParsed = JSON.parse(upArtifact.trim()) as { text: string };
-  assert.ok(upParsed.text.includes(winUpLocal), "JSONL 里的转义形态路径应改写,且改完仍是合法 JSON");
-  assert.ok(!upArtifact.includes("D:"), "JSONL 不该残留源机路径");
-
-  // ── 11. 幂等收口如实报 in 标记里存的 autoResume 事实 ─────────────────────────
-  // 缺陷形态(第 3 轮审查):幂等分支写死 autoResume:false,当初真续跑过的重放会
-  // 误导源机把「对端已在跑」当成「对端没跑」。收口应答只认 in 标记存的事实,与本次
-  // 请求参数无关;老版本标记没有这个字段,按 false 报(不谎报已续跑)。
-  const replayFact = await importHandoff(upManifest(true)); // 请求 true,事实是 false
-  assert.ok(replayFact.notes.some((n) => n.includes("幂等收口")));
-  assert.equal(replayFact.autoResume, false, "收口要报当初导入的事实(false),不能按本次请求报 true");
-  const upMarker = JSON.parse(
-    ((await db.select().from(tasks).where(eq(tasks.id, "handoff-e2e-task-05"))).at(0)!).handoff!,
-  ) as Record<string, unknown>;
-  assert.equal(upMarker.autoResume, false, "in 标记要把导入时的 autoResume 事实存下来");
-  await db.update(tasks)
-    .set({ handoff: JSON.stringify({ ...upMarker, autoResume: true }) })
-    .where(eq(tasks.id, "handoff-e2e-task-05"));
-  const replayTrue = await importHandoff(upManifest(false));
-  assert.equal(replayTrue.autoResume, true, "标记里的事实是 true 时,收口就要报 true——与请求参数无关");
-  const { autoResume: _dropped, ...legacyMarker } = upMarker;
-  await db.update(tasks)
-    .set({ handoff: JSON.stringify(legacyMarker) })
-    .where(eq(tasks.id, "handoff-e2e-task-05"));
-  const replayLegacy = await importHandoff(upManifest(true));
-  assert.equal(replayLegacy.autoResume, false, "老标记没有 autoResume 字段,按 false 报,不谎报已续跑");
+  // (第 10/11 项的双机断言织在 1/3/4 节;单进程就能验的 Windows 源机附件形态、
+  //  纯函数上下文改写、幂等收口 autoResume 事实在 test-handoff-local.ts。)
 
   // ── 12. 网关伪造失败应答:对端实已导入成功,502 却不带 harness 标记 ──────────
   // 缺陷形态(第 3 轮审查实测):路径上的网关(nginx/frp)把上游 200 吃掉、自己回
