@@ -39,7 +39,11 @@ import { releaseTmpDb } from "./tmp-db.js";
 const root = mkdtempSync(join(tmpdir(), "harness-handoff-test-"));
 const home = join(root, "home");
 mkdirSync(home, { recursive: true });
-process.env.HOME = home; // claude 会话文件读写全部落进临时 HOME,不碰真实 ~/.claude
+// claude 会话文件读写全部落进临时 HOME,不碰真实 ~/.claude。产品代码走 os.homedir(),
+// 它认的变量两个平台不是同一个:POSIX 看 HOME,Windows 看 USERPROFILE——只改 HOME 的话
+// Windows 上夹具形同没设,断言变成「看谁的机器」(test-cli-overrides.ts 同款坑)。
+process.env.HOME = home;
+process.env.USERPROFILE = home;
 process.env.HARNESS_DB = join(root, "source.db");
 process.env.HARNESS_RUNS_DIR = join(root, "runs-src");
 process.env.HARNESS_UPLOADS_DIR = join(root, "uploads-src"); // 上传附件迁移用:源/对端各一个隔离目录
@@ -49,6 +53,9 @@ assert.ok(
 );
 
 let peer: ChildProcess | null = null;
+// 对端 DB 直连句柄的关闭器:Windows 删不掉仍被打开的文件(EBUSY),清理前必须关;
+// 挂在 finally 里,断言中途抛错也不会把句柄漏到 rmSync。
+let closeDstDb: (() => void) | null = null;
 process.on("exit", () => {
   try { peer?.kill("SIGKILL"); } catch {}
   try { rmSync(root, { recursive: true, force: true }); } catch {}
@@ -59,6 +66,7 @@ try {
   const { projects, scheduledMessages, schedules, sessions, tasks } = await import("../src/db/schema.js");
   const { prepareWorktree, worktreeBranchName, worktreePathFor } = await import("../src/git.js");
   const { claudeProjectSlug, exportHandoff, preflightHandoff } = await import("../src/handoff.js");
+  const { jsonEscaped } = await import("../src/handoff-uploads.js");
   const { HandoffError } = await import("../src/handoff-types.js");
   const { handoffBlockReason } = await import("../src/handoff-guard.js");
   const { resumeOrRunTask } = await import("../src/task-resume.js");
@@ -309,8 +317,10 @@ try {
   const cliFileDst = join(home, ".claude", "projects", claudeProjectSlug(dstWs), `${cli1}.jsonl`);
   assert.equal(existsSync(cliFileDst), true, "会话文件应落到对端 cwd 对应的 slug 目录");
   const dstJsonl = readFileSync(cliFileDst, "utf8");
-  assert.ok(dstJsonl.includes(uploadDstPath), "会话 JSONL 里的附件路径应改写为对端路径");
-  assert.ok(!dstJsonl.includes(uploadSrcPath), "会话 JSONL 不该残留源机附件路径");
+  // JSONL 里的路径是 JSON 转义形态:Windows 路径的 \ 在文件里是 \\,拿原始形态找永远
+  // 落空(POSIX 两种形态相同,平台假设不会暴露)。断言统一按转义形态查。
+  assert.ok(dstJsonl.includes(jsonEscaped(uploadDstPath)), "会话 JSONL 里的附件路径应改写为对端路径");
+  assert.ok(!dstJsonl.includes(jsonEscaped(uploadSrcPath)), "会话 JSONL 不该残留源机附件路径");
   for (const line of dstJsonl.trim().split("\n")) JSON.parse(line);
   assert.equal(
     readFileSync(uploadDstPath, "utf8"), readFileSync(uploadSrcPath, "utf8"),
@@ -321,6 +331,7 @@ try {
 
   // 对端会话行:文件到货的保留 cliSessionId,没到货的置空;cwd 全部指到对端 worktree。
   const dstDb = createClient({ url: join(root, "target.db") });
+  closeDstDb = () => dstDb.close();
   const dstSessions = (await dstDb.execute({
     sql: "select id, cli_session_id as cli, cwd from sessions where task_id = ? order by started_at",
     args: [taskId],
@@ -668,6 +679,8 @@ try {
       peer!.on("exit", () => { clearTimeout(t); resolve(); });
     });
   }
+  try { closeDstDb?.(); } catch {}
   await releaseTmpDb();
-  rmSync(root, { recursive: true, force: true });
+  // Windows 上句柄释放有滞后(对端进程刚被杀),EBUSY 时重试而不是把真实测试结果盖掉。
+  rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }

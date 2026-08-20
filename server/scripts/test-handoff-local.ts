@@ -30,7 +30,9 @@ import { releaseTmpDb } from "./tmp-db.js";
 const root = mkdtempSync(join(tmpdir(), "harness-handoff-local-"));
 const home = join(root, "home");
 mkdirSync(home, { recursive: true });
+// 沙箱家目录要两个变量一起支:os.homedir() POSIX 看 HOME、Windows 看 USERPROFILE。
 process.env.HOME = home;
+process.env.USERPROFILE = home;
 process.env.HARNESS_DB = join(root, "local.db");
 process.env.HARNESS_RUNS_DIR = join(root, "runs");
 process.env.HARNESS_UPLOADS_DIR = join(root, "uploads");

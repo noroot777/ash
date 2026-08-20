@@ -102,10 +102,13 @@ export async function writeUploads(
 type Pair = { from: string; to: string };
 const longestFirst = (a: Pair, b: Pair) => b.from.length - a.from.length;
 
-/** 目标路径按 uploadsDir 自己的分隔风格拼。生产环境 join 本来就是本机风格,单独处理
- * 反斜杠目录只为让纯函数测试能在 POSIX 机器上模拟 Windows 目标机。 */
+/** 目标路径一律按 uploadsDir 自己的分隔风格拼,与运行平台无关。生产环境 uploadsDir
+ * 就是本机 UPLOADS_DIR,结果与平台 join 相同;测试才会跨风格传(POSIX 机器模拟
+ * Windows 目标机,或反过来),用平台 join 会把对侧风格拼坏,断言变成「看谁的机器」。 */
 const joinUploads = (dir: string, name: string): string =>
-  dir.includes("\\") ? `${dir.replace(/[\\/]+$/, "")}\\${name}` : join(dir, name);
+  dir.includes("\\")
+    ? `${dir.replace(/[\\/]+$/, "")}\\${name}`
+    : `${dir.replace(/\/+$/, "")}/${name}`;
 
 export interface UploadRewrites {
   // 原始形态的改写对(纯文本上下文)与 JSON 转义形态的改写对(JSON 字符串上下文)。
