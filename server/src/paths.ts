@@ -24,4 +24,7 @@ export const RUNS_DIR = process.env.HARNESS_RUNS_DIR
 export const RUNS_FALLBACK_DIR = process.env.HARNESS_RUNS_FALLBACK?.trim() || null;
 // Pasted/uploaded images. Agents can't take binary on stdin, so we persist the
 // file here and pass its absolute path in the prompt for the agent to Read.
-export const UPLOADS_DIR = fileURLToPath(new URL("../../data/uploads", import.meta.url));
+// HARNESS_UPLOADS_DIR 只给测试用:接力测试的两个实例各需一份隔离的 uploads 目录。
+export const UPLOADS_DIR = process.env.HARNESS_UPLOADS_DIR
+  ? resolve(process.env.HARNESS_UPLOADS_DIR)
+  : fileURLToPath(new URL("../../data/uploads", import.meta.url));

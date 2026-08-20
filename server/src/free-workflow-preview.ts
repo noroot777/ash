@@ -9,6 +9,7 @@ import { projects, tasks } from "./db/schema.js";
 import { assertBeforeAcceptance } from "./free-workflow.js";
 import { recordFreePreviewEvent } from "./free-workflow-events.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
+import { handoffBlockReasonById } from "./handoff-guard.js";
 import { isTurnClaimed } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
@@ -66,6 +67,9 @@ async function startFreePreview(taskId: string) {
 
 export function mountFreePreviewRoutes(api: Hono): void {
   api.post("/tasks/:id/free-workflow/preview", async (c) => {
+    // 打开预览会在任务工作区里跑启动命令——接力出去的「历史存档」不给开(关闭不拦)。
+    const handedOff = await handoffBlockReasonById(c.req.param("id"));
+    if (handedOff) return c.json({ error: handedOff, handoff: true }, 409);
     try {
       const record = await startFreePreview(c.req.param("id"));
       return c.json({ running: true, url: record.url, port: record.port, command: record.cmd, startedAt: record.startedAt });

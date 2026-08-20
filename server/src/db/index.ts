@@ -333,6 +333,8 @@ export async function ensureSchema() {
     // profile 是可编辑可删除的,光记主键说不清「当时那套执行环境」。这一列存指纹,
     // 重跑前对不上就 409(说明见 db/schema.ts 的 sessions.executor_fingerprint)。
     "ALTER TABLE sessions ADD COLUMN executor_fingerprint TEXT",
+    // 任务接力(跨机器 handoff)的持久标记(json TaskHandoff,见 db/schema.ts)。
+    "ALTER TABLE tasks ADD COLUMN handoff TEXT",
   ]) {
     try {
       await client.execute(sql);

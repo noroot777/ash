@@ -19,7 +19,10 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
   // 取消预约、关闭预览是控制类动作，后端不设 waiting 门禁，不能一并锁死——预约挂着时
   // 用户必须能取消，预览开着时必须能收掉端口。
   const waiting = !!task.question || !!task.resumePrompt;
-  const locked = task.stage === "accepted" || task.stage === "merged" || task.archived;
+  // 接力出去的任务在本机是历史存档:派审/修复/开预览这些发起类动作后端一律 409,
+  // 这里按同一口径锁死(取消预约、关预览是清理,照常可点)。
+  const locked = task.stage === "accepted" || task.stage === "merged" || task.archived
+    || task.handoff?.direction === "out";
   const reservationMode = taskBusy || reservationArmed;
   const reviewLabel = reviewing
     ? "审查中"

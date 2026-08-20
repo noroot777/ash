@@ -5,6 +5,7 @@ import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { projects, schedules, sessions, tasks } from "./db/schema.js";
 import { taskCommits } from "./git.js";
+import { handoffBlockReason } from "./handoff-guard.js";
 import { id, now } from "./util.js";
 
 export function mountTaskScheduleRoutes(api: Hono): void {
@@ -18,6 +19,9 @@ api.put("/tasks/:id/schedule", async (c) => {
   const taskId = c.req.param("id");
   const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (t?.archived) return c.json({ error: "任务已归档，不能设置定时", archived: true }, 409);
+  // 定时班次到点就是一次启动——接力出去的任务连「预约启动」也不给设(删除班次不拦)。
+  const handedOff = handoffBlockReason(t?.handoff);
+  if (handedOff) return c.json({ error: handedOff, handoff: true }, 409);
   const b = await c.req.json<{ kind: "once" | "cron"; at?: string | null; cron?: string | null; enabled?: boolean }>();
   const existing = (await db.select().from(schedules).where(eq(schedules.taskId, taskId))).at(0);
   const row = {

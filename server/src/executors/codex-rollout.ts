@@ -20,15 +20,16 @@ type ParseOutcome =
 
 const warnedThreads = new Set<string>();
 
-function codexHome(): string {
+export function codexHome(): string {
   return process.env.CODEX_HOME || path.join(homedir(), ".codex");
 }
 
 /**
  * 按 thread id 找 rollout。当前布局是 sessions/YYYY/MM/DD/；布局变化时找不到即 null。
  * 倒序下钻让活跃会话通常在前几个目录内命中，避免每轮完整扫描所有历史文件。
+ * （任务接力 handoff.ts 也用它定位要搬走的会话文件。）
  */
-async function findRollout(threadId: string): Promise<string | null> {
+export async function findRollout(threadId: string): Promise<string | null> {
   const root = path.join(codexHome(), "sessions");
   const suffix = `-${threadId}.jsonl`;
 

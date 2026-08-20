@@ -20,6 +20,7 @@ import { STEP_LABELS } from "@harness/shared/workflow";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
+import { handoffBlockReason } from "./handoff-guard.js";
 import { setTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -57,6 +58,9 @@ export async function forcePassVerifyStation(
     return { error: "只有 single 任务有验证站", mode: task.mode, httpStatus: 409 };
   }
   if (task.archived) return { error: "归档任务不能强制通过验证", httpStatus: 409 };
+  // 接力出去的任务是历史存档:签字放行会推动后面的合并/清理段,不受理。
+  const handedOff = handoffBlockReason(task.handoff);
+  if (handedOff) return { error: handedOff, handoff: true, httpStatus: 409 };
   // 已经验收/合并完的任务不受理：游标此刻可能仍停在验证站上（放行之后才把剩下那段跑
   // 完），但再签一次字就是让后面的 accept 站**再合并一次**。前端同一条口径在
   // `verifyStationAtCursor`（web-next/src/workflow/workflowModel.ts）。

@@ -16,6 +16,7 @@ import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { conversationToMarkdown } from "./conversationModel.ts";
 import { ConversationFeed } from "./ConversationFeed.tsx";
 import { DeleteTaskDialog } from "./DeleteTaskDialog.tsx";
+import { HandoffBanner, HandoffDialog } from "./HandoffDialog.tsx";
 import { QuestionCard } from "./QuestionCard.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
 import { TaskDerivationComposer } from "./TaskDerivationComposer.tsx";
@@ -151,6 +152,7 @@ export function TaskDetail({
   const [openFilePath, setOpenFilePath] = useState<string | null>(null);
   const [openScmDiff, setOpenScmDiff] = useState<ScmDiffTarget | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [handoffOpen, setHandoffOpen] = useState(false);
   const [postMergeDialogOpen, setPostMergeDialogOpen] = useState(false);
   const [derivation, setDerivation] = useState<{
     command: TaskDerivationCommand;
@@ -212,6 +214,7 @@ export function TaskDetail({
   useEffect(() => {
     setReviewOpen(initialReviewOpen);
     setDeleteOpen(false);
+    setHandoffOpen(false);
     setPostMergeDialogOpen(false);
     setDerivation(null);
     setOpenFilePath(null);
@@ -358,11 +361,18 @@ export function TaskDetail({
                 else setPostMergeDialogOpen(true);
               } : undefined}
               onDelete={() => setDeleteOpen(true)}
+              onHandoff={task.mode === "single" && !task.archived && task.queueId == null
+                && (task.handoff?.direction !== "out" || task.handoff.pending)
+                ? () => setHandoffOpen(true)
+                : undefined}
               indicatorForTask={indicatorForTask}
               terminalToggle={terminalToggle}
               inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
               notify={notify}
             />
+            {task.handoff && (
+              <HandoffBanner taskId={task.id} handoff={task.handoff} notify={notify} onTaskUpdate={onTaskUpdate} />
+            )}
             {reviewOpen ? (
               <TaskReviewWorkspace
                 task={task}
@@ -494,6 +504,14 @@ export function TaskDetail({
                 notify={notify}
                 onDeleted={(ids) => ids.forEach(onDeleted)}
                 onClose={() => setDeleteOpen(false)}
+              />
+            )}
+            {handoffOpen && (
+              <HandoffDialog
+                task={task}
+                notify={notify}
+                onTaskUpdate={onTaskUpdate}
+                onClose={() => setHandoffOpen(false)}
               />
             )}
             {postMergeDialogOpen && postMergeTarget && (

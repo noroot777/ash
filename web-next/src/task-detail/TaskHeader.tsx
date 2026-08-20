@@ -11,6 +11,7 @@ import {
   GitDiff,
   GitCommit,
   ListNumbers,
+  PaperPlaneTilt,
   Play,
   SpinnerGap,
   Stop,
@@ -29,6 +30,11 @@ export type PrimaryAction = "run" | "retry" | "stop" | "accept" | "unarchive" | 
 function primaryAction(task: Task): { kind: PrimaryAction; label: string; danger?: boolean; disabled?: boolean } {
   if (task.archived) return { kind: "unarchive", label: "取消归档" };
   if (task.status === "running") return { kind: "stop", label: "停止", danger: true };
+  // 接力出去的任务在本机是历史存档:运行/重试/验收全部由服务端 handoff 守卫 409,
+  // 主按钮给禁用态而不是假按钮。要在本机继续,走横幅上的「在本机继续」移除标记。
+  if (task.handoff?.direction === "out") {
+    return { kind: null, label: task.handoff.pending ? "接力未确认" : "已接力", disabled: true };
+  }
   if (task.stage === "accepted") return { kind: null, label: "已验收", disabled: true };
   // 就地验证轮还没出结论、或有待答复的提问：任务的 status 是它原来的终态（旁路回合
   // 不改 status，提问停在 paused/done 上也一样），所以光看 status 会给出一个「验收」
@@ -57,6 +63,7 @@ function primaryAction(task: Task): { kind: PrimaryAction; label: string; danger
 /** 自由任务终态主按钮让位给「验收」后，重试/运行保留为次级按钮（一键可达）。 */
 function terminalRerunAction(task: Task): { kind: "retry" | "run"; label: string } | null {
   if (task.workflowMode !== "free" || task.archived) return null;
+  if (task.handoff?.direction === "out") return null;
   if (task.status === "failed") return { kind: "retry", label: "重试" };
   if (task.status === "canceled") return { kind: "run", label: "运行" };
   return null;
@@ -78,6 +85,7 @@ export function TaskHeader({
   postMergeReviewLabel,
   onPostMergeReview,
   onDelete,
+  onHandoff,
   indicatorForTask,
   terminalToggle,
   inspectorToggle,
@@ -98,6 +106,8 @@ export function TaskHeader({
   postMergeReviewLabel?: string | null;
   onPostMergeReview?: () => void;
   onDelete: () => void;
+  // 只有单飞任务给(团队/讨论、已接力出去的任务不给),没给就不出现菜单项。
+  onHandoff?: () => void;
   indicatorForTask: IndicatorForTask;
   terminalToggle?: ReactNode;
   inspectorToggle?: ReactNode;
@@ -117,6 +127,7 @@ export function TaskHeader({
   const rerun = terminalRerunAction(task);
   const canRequeue = task.parentId === null
     && !task.archived
+    && task.handoff?.direction !== "out"
     && !!task.queueId
     && (task.status === "failed" || task.status === "canceled");
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
@@ -283,6 +294,11 @@ export function TaskHeader({
               <Copy size={14} />复制任务链接
             </button>
             {task.parentId === null && <span role="separator" />}
+            {task.parentId === null && onHandoff && (
+              <button type="button" role="menuitem" onClick={() => { setMenu(false); onHandoff(); }}>
+                <PaperPlaneTilt size={14} />接力到另一台机器
+              </button>
+            )}
             {task.parentId === null && (
               <button type="button" role="menuitem" onClick={() => { setMenu(false); onArchive(); }} disabled={!task.archived && !canArchive(task.status)}>
                 <Archive size={14} />{task.archived ? "取消归档" : "归档任务"}

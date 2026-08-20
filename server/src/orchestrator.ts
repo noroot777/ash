@@ -32,6 +32,7 @@ import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
+import { handoffBlockReason } from "./handoff-guard.js";
 import { reportTurnFailure } from "./turn-failure.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
 import {
@@ -137,7 +138,7 @@ export async function continueTask(
   // 上下文」既会被打成 failed,也会顺手把已验收的牌子摘掉——旁路回合不拍工作目录快照,
   // 没有任何基线能把摘掉的牌子挂回去,压一次就永久丢掉一次验收。
   const head = (await db
-    .select({ mode: tasks.mode, agentType: tasks.agentType })
+    .select({ mode: tasks.mode, agentType: tasks.agentType, handoff: tasks.handoff })
     .from(tasks)
     .where(eq(tasks.id, taskId))).at(0);
   const nativeCommand = nativeCliCommand(
@@ -165,6 +166,12 @@ export async function continueTask(
       try { await opts.onDelivered(); } catch { /* 记账失败不拖累这一轮 */ }
     }
     return true;
+  }
+  // 接力出去的任务在本机只是历史存档 —— 路由层各有 409,但队列推进/排队消息投递等
+  // 程序化续聊全汇到这里,必须在占位之前收口(消息按「未投递」留在托盘,事实不丢)。
+  if (handoffBlockReason(head?.handoff)) {
+    if (opts.turnHeld) releaseTurn(taskId);
+    return false;
   }
   // 抢不到 = 这个任务此刻正跑着别的回合,这一句话没送出去。调用方必须知道(见函数注释)。
   // turnHeld = 调用方已在入口原子占好位(consulted continueWhenIdle / run 路由),这里

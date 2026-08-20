@@ -3,6 +3,7 @@ import type { TeamConfig } from "./team.ts";
 import type { DuetConfig } from "./duet.ts";
 import type { WorkflowDef } from "./workflow.ts";
 import type { TaskWorkflowMode } from "./free-workflow.ts";
+import type { HandoffTarget, TaskHandoff } from "./handoff.ts";
 export type { Session, SessionRole } from "./session.ts";
 // 归一化后的 token 用量。运行时函数(累加/格式化)走 "@harness/shared/usage" 子路径
 // 导出,这里同上只再导出类型。
@@ -47,13 +48,26 @@ export interface AppSettings {
   // 这是**前端轮询间隔**,不是服务端扫描周期:服务端每次请求都真扫盘(命中 mtime
   // 指纹就走缓存,~0.5ms)。按小时计:装新技能是低频动作,等不及有「立即重新扫描」。
   skillRefreshSeconds: number;
+  // 任务接力的候选目标:另一台跑着 harness 的机器。url 是对端根地址(http://host:4317)。
+  handoffTargets: HandoffTarget[];
 }
 
 export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
   worktreeDefault: true,
   defaultWorkflowId: "",
   skillRefreshSeconds: 3600,
+  handoffTargets: [],
 });
+
+// ── 任务接力（跨机器 handoff）──────────────────────────────────────────────
+// 类型本体在 ./handoff.ts（纯类型模块）,这里只做再导出,消费方 import 路径不变。
+export type {
+  HandoffExportResult,
+  HandoffPingProject,
+  HandoffPreflightResult,
+  HandoffTarget,
+  TaskHandoff,
+} from "./handoff.ts";
 
 // ── CLI skills (输入框的 `/` 补全) ────────────────────────────────────────
 export type { SkillEntry, SkillList, SkillScanOverview, SkillScanRow, SkillSource } from "./skills.ts";
@@ -347,6 +361,8 @@ export interface Task {
   questionOptions?: string[] | null;
   // 多问题列表；null/[] 沿用单问题 question + questionOptions。
   questionItems?: QuestionItem[] | null;
+  // 任务接力标记（见 TaskHandoff）。null = 从未接力。
+  handoff?: TaskHandoff | null;
 }
 
 export interface QuestionItem {

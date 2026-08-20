@@ -171,6 +171,9 @@ export const tasks = sqliteTable("tasks", {
   // 布尔位时，崩溃重试会整段重跑——已经执行过的发布/部署命令再来一遍（at-least-once
   // 变 at-least-twice，审查实测复现）。补跑按这份清单跳过已完成的站；随 pending 一起清。
   acceptedTailDone: text("accepted_tail_done").notNull().default("[]"),
+  // 任务接力（json TaskHandoff）：direction:"out" = 已交给另一台 harness 续跑（本地这份
+  // 是历史），"in" = 从别的机器接过来的。持久落库,刷新后的横幅靠它,不靠 toast。
+  handoff: text("handoff"),
 });
 
 export const agents = sqliteTable("agents", {

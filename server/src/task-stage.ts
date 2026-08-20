@@ -5,6 +5,7 @@ import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
+import { handoffBlockReason } from "./handoff-guard.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 
@@ -166,6 +167,9 @@ export function mountTaskStageRoutes(api: Hono): void {
       return c.json({ error: "团队调度台不适用验收阶段，请在被验任务的验证回合里上报", mode: task.mode }, 409);
     }
     if (task.archived) return c.json({ error: "归档任务不能再上报验收阶段" }, 409);
+    // 接力出去的任务不能再流转验收阶段:它在本机只是历史存档,阶段变化应发生在对端。
+    const handedOff = handoffBlockReason(task.handoff);
+    if (handedOff) return c.json({ error: handedOff, handoff: true }, 409);
 
     try {
       const { reportFreeReviewConclusion } = await import("./free-workflow.js");
