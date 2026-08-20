@@ -3,7 +3,7 @@ import { access, constants } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { promisify } from "node:util";
 import { gitError } from "./git.js";
-import { literalPathspec } from "./git-status.js";
+import { literalPathspec, readScmStatus, type ScmChange, type ScmStatus } from "./git-status.js";
 import { assertPathShape, gateScmPaths, ScmOperationError } from "./scm-paths.js";
 import { withRepoLock } from "./repo-lock.js";
 
@@ -23,12 +23,15 @@ import { withRepoLock } from "./repo-lock.js";
 //    暂存/丢弃本身不写 refs，但让它们和验收排同一条队是有意的——验收合并到一半时
 //    读到的工作区状态本来就不该拿来操作。白名单闸的那次 status 读也必须在锁内。
 //
-// ③ **改到一半停下时，已经生效的那部分必须如实报账。** 两种情形都真实存在：路径多到
+// ③ **改到一半停下时，已经生效的那部分必须如实报账。** 三种情形都真实存在：路径多到
 //    顶爆命令行长度上限（Windows 约 32K）只能拆成几次 git 调用，前一批成功后一批失败；
-//    以及提交——预暂存写完索引之后 commit 才跑，hook 拒绝时文件已经在索引里了。git 不
-//    提供跨调用的事务，`git clean` 删掉的更是不进 reflog 也不进 stash。这时候只回一句
-//    「失败」，用户会合理地以为整次操作没做，下一次提交就把没打算带的东西带上了。所以
-//    这两处都抛 `ScmPartialError`，带上「哪些已经生效」，路由再连同刷新后的状态回给面板。
+//    **一次 git 调用内部**做到哪算哪（pathspec 是逐个文件处理的，前几个已经改完才在
+//    后面某个上失败）；以及提交——预暂存写完索引之后 commit 才跑，hook 拒绝时文件已经
+//    在索引里了。git 不提供跨调用的事务，`git clean` 删掉的更是不进 reflog 也不进 stash。
+//    这时候只回一句「失败」，用户会合理地以为整次操作没做，下一次提交就把没打算带的
+//    东西带上了。所以这两处都抛 `ScmPartialError`，带上「哪些已经生效」——而这份清单是
+//    失败后**重读状态**逐条算出来的，不是「跑完几批」（见 `runAll`）——路由再连同刷新
+//    后的状态回给面板。
 //
 // ④ **不做 push / pull / fetch / 切分支。** 前两个是外发到远程，后两个会把正在干活的
 //    agent 的脚下抽掉（harness 的整个 worktree 模型建立在「一个任务一条分支」上）。
@@ -107,35 +110,70 @@ const BATCH = 200;
 interface ScmBatchGroup {
   paths: readonly string[];
   run: (batch: string[]) => Promise<unknown>;
+  /**
+   * 失败之后按**重读到的状态**回答「这一条到底动没动」。
+   *
+   * 判据一律写成「这条路径还在不在它操作前所在的那个分组里」：不在了 = 这次操作对它
+   * 生效了。没给这个函数的分组只能退回按批计数（见 `runAll`）。
+   */
+  done?: (path: string, after: ScmStatus) => boolean;
 }
+
+/** 状态里的一组改动含不含这条路径。重命名的原路径也算——取消暂存会连它一起点名。 */
+const listed = (changes: readonly ScmChange[], path: string): boolean =>
+  changes.some((change) => change.path === path || change.origPath === path);
 
 /**
  * 按顺序跑完若干组路径，返回处理总数。
  *
- * 一批都没成功就原样把错误抛出去（那才是「整次操作没生效」，多包一层只会让消息更绕）；
- * 已经落地过至少一批才升级成 `ScmPartialError`。分组之间也接着算——丢弃是先 restore
+ * 一条都没生效就原样把错误抛出去（那才是「整次操作没生效」，多包一层只会让消息更绕）；
+ * 已经落地过至少一条才升级成 `ScmPartialError`。分组之间也接着算——丢弃是先 restore
  * 已跟踪、再 clean 未跟踪，clean 中途炸了的时候，前面那些 restore 同样已经生效。
+ *
+ * **「已经生效的是哪些」不能拿批次数当答案。** git 对 pathspec 是逐个文件处理的，一批
+ * 之内做到哪算哪：`git restore --worktree a.txt locked/b.txt` 完全可能已经把 a.txt 覆盖
+ * 回去了，才在 b.txt 上撞见 Permission denied。按批计数这时 `done === 0`，于是抛的是
+ * 一句普通失败——用户看到的是「操作没成功」，而 a.txt 的改动已经不可逆地没了
+ * （第 1 轮审查在函数级和路由级都复现）。所以失败之后**重读一次状态**，按每条路径的
+ * 实际结果报账；重读不出来或状态被截断（`truncated` 时「不在列表里」不能证明它动过）
+ * 才退回按批计数，那是个下限而不是答案。
  *
  * `note` 是给这次操作补一句后果说明（丢弃的「找不回来」），随消息一起进横幅。
  */
-async function runAll(action: string, groups: readonly ScmBatchGroup[], note?: string): Promise<number> {
+async function runAll(
+  root: string,
+  action: string,
+  groups: readonly ScmBatchGroup[],
+  note?: string,
+): Promise<number> {
   const all = groups.flatMap((group) => [...group.paths]);
-  let done = 0;
+  const batched = new Set<string>();
   try {
     for (const group of groups) {
       for (let i = 0; i < group.paths.length; i += BATCH) {
         const batch = group.paths.slice(i, i + BATCH);
         await group.run([...batch]);
-        done += batch.length;
+        for (const path of batch) batched.add(path);
       }
     }
   } catch (error) {
-    if (!done) throw error;
+    // 两样证据取并集：跑完的整批是**事实**（它确实返回成功了），重读的状态补上批内
+    // 那一半。少算一条就是把一次不可逆的丢失藏起来，这里宁可算多不算少。
+    const after = await readScmStatus(root).then((s) => (s.truncated ? null : s), () => null);
+    const done: string[] = [];
+    const pending: string[] = [];
+    for (const group of groups) {
+      for (const path of group.paths) {
+        const settled = batched.has(path) || (!!after && !!group.done && group.done(path, after));
+        (settled ? done : pending).push(path);
+      }
+    }
+    if (!done.length) throw error;
     throw new ScmPartialError(
-      `${action}只做成了一部分：${done} 个已经生效${note ? `（${note}）` : ""}、${all.length - done} 个没动。`
+      `${action}只做成了一部分：${done.length} 个已经生效${note ? `（${note}）` : ""}、${pending.length} 个没动。`
       + `失败原因：${oneLine((error as Error).message)}`,
-      all.slice(0, done),
-      all.slice(done),
+      done,
+      pending,
     );
   }
   return all.length;
@@ -151,8 +189,8 @@ async function runAll(action: string, groups: readonly ScmBatchGroup[], note?: s
  *
  * **这是尽力预检，不是保证**：Windows 的 ACL 不体现在 `access` 上，文件被别的进程占用
  * 也测不出来，两次调用之间 agent 还可能把目录改掉。真漏过去了由 `ScmPartialError`
- * 兜底如实报账——两层各管一半，缺一个都不够。反过来说预检也不能省：一批之内 `git clean`
- * 是删到哪算哪的，`runAll` 只数得清「跑完几批」，单批内删了一半这件事它看不见。
+ * 兜底如实报账——两层各管一半，缺一个都不够。反过来说预检也不能省：报账是事后如实说
+ * 「这几个已经没了」，预检才能让它们压根不必没。
  */
 async function assertRemovable(root: string, paths: readonly string[]): Promise<void> {
   const writable = new Map<string, boolean>();
@@ -184,9 +222,11 @@ export async function stagePaths(
   return withRepoLock(repoPath, () => guarded(guard, async () => {
     await gateScmPaths(root, { paths: targets });
     // `add -A` 而不是 `add`：只有前者会把「文件被删了」也记进索引，否则删除永远暂存不上。
-    const affected = await runAll("暂存", [{
+    const affected = await runAll(root, "暂存", [{
       paths: targets,
       run: (batch) => git(root, ["add", "-A", "--", ...batch.map(literalPathspec)]),
+      // 暂存成功 = 这条不再有未暂存的那一半，未跟踪的则已经进了索引。
+      done: (path, after) => !listed(after.unstaged, path) && !listed(after.untracked, path),
     }]);
     return { ok: true as const, affected };
   }));
@@ -210,7 +250,7 @@ export async function unstagePaths(
   const targets = assertPathShape(paths);
   return withRepoLock(repoPath, () => guarded(guard, async () => {
     await gateScmPaths(root, { paths: targets });
-    const affected = await runAll("取消暂存", [{
+    const affected = await runAll(root, "取消暂存", [{
       paths: targets,
       run: async (batch) => {
         const pathspecs = batch.map(literalPathspec);
@@ -223,6 +263,8 @@ export async function unstagePaths(
           await git(root, ["rm", "--cached", "-r", "--", ...pathspecs]);
         }
       },
+      // 取消暂存成功 = 这条不再出现在暂存区那一侧（rm --cached 那条路会让它变回未跟踪）。
+      done: (path, after) => !listed(after.staged, path),
     }]);
     return { ok: true as const, affected };
   }));
@@ -252,12 +294,22 @@ export async function discardPaths(
     // 一次读，两道闸：路径得在列表里，且不许是冲突中的文件。锁内读到的才是即将被操作的那份。
     await gateScmPaths(root, { paths: [...tracked, ...untracked], rejectConflicted: true });
     if (untracked.length) await assertRemovable(root, untracked);
-    const affected = await runAll("丢弃", [
+    const affected = await runAll(root, "丢弃", [
       // `--worktree` 而不是连 `--staged` 一起：面板上「丢弃」丢的是未暂存那一份，
       // 已经暂存的内容要先取消暂存再丢——和 VSCode 一致，也让两步都可以停在中间。
-      { paths: tracked, run: (batch) => git(root, ["restore", "--worktree", "--", ...batch.map(literalPathspec)]) },
+      {
+        paths: tracked,
+        run: (batch) => git(root, ["restore", "--worktree", "--", ...batch.map(literalPathspec)]),
+        // 丢弃成功 = 工作区已经跟索引一致，这条不再出现在「未暂存」里（原本是 `MM` 的
+        // 只丢掉未暂存那一半，暂存侧那条还在，所以只能问未暂存这一侧）。
+        done: (path, after) => !listed(after.unstaged, path),
+      },
       // `-f` 是必须的（clean 默认拒绝动手），`-d` 不给：只删点名的文件，不递归清目录。
-      { paths: untracked, run: (batch) => git(root, ["clean", "-f", "--", ...batch.map(literalPathspec)]) },
+      {
+        paths: untracked,
+        run: (batch) => git(root, ["clean", "-f", "--", ...batch.map(literalPathspec)]),
+        done: (path, after) => !listed(after.untracked, path),
+      },
     ], "改动找不回来");
     return { ok: true as const, affected };
   }));
@@ -301,9 +353,10 @@ export async function commitWorkspace(
   return withRepoLock(repoPath, () => guarded(guard, async () => {
     if (toStage.length) {
       await gateScmPaths(root, { paths: toStage });
-      await runAll("提交前的暂存", [{
+      await runAll(root, "提交前的暂存", [{
         paths: toStage,
         run: (batch) => git(root, ["add", "-A", "--", ...batch.map(literalPathspec)]),
+        done: (path, after) => !listed(after.unstaged, path) && !listed(after.untracked, path),
       }]);
     }
     // 消息走 stdin（`-F -`）而不是 argv：提交信息里的换行、引号、以及 Windows 上的

@@ -369,6 +369,40 @@ if (!IS_WINDOWS) {
     }
     chmodSync(join(repo, "unreadable.txt"), 0o600);
   }
+
+  // 9c. **一次 git 调用内部**做到一半失败：报账不能拿「跑完几批」当答案。
+  //
+  // git 对 pathspec 是逐个文件处理的：`git restore --worktree a.txt locked/b.txt` 完全
+  // 可能已经把 a.txt 覆盖回去了，才在 b.txt 上撞见 Permission denied。这时候整批都没
+  // 「跑完」，按批计数得到的是 done=0 → 抛一句普通失败，用户看到「操作没成功」，而
+  // a.txt 的改动已经不可逆地没了（第 1 轮审查在函数级和路由级都复现）。
+  {
+    const repo = makeRepo("partial-restore");
+    write(repo, "a.txt", "base-a\n");
+    write(repo, "locked/b.txt", "base-b\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-m", "seed");
+    write(repo, "a.txt", "changed-a\n");
+    write(repo, "locked/b.txt", "changed-b\n");
+    chmodSync(join(repo, "locked"), 0o500);
+
+    const enforced = await access(join(repo, "locked"), constants.W_OK).then(() => false, () => true);
+    if (!enforced) {
+      console.log("scm: 当前用户可无视权限位，跳过单批内报账用例");
+    } else {
+      await assert.rejects(
+        () => discardPaths(repo, repo, ["a.txt", "locked/b.txt"]),
+        (error: unknown) => error instanceof ScmPartialError
+          && error.done.length === 1 && error.done[0] === "a.txt"
+          && error.pending.length === 1 && error.pending[0] === "locked/b.txt"
+          && /找不回来/.test(error.message),
+        "同一批里已经丢掉的那个必须报出来，不许当成普通失败",
+      );
+      assert.equal(readFileSync(join(repo, "a.txt"), "utf8"), "base-a\n", "前提：它确实已经被不可逆地丢掉了");
+      assert.deepEqual(paths((await readScmStatus(repo)).unstaged), ["locked/b.txt"], "没动的那个还在");
+    }
+    chmodSync(join(repo, "locked"), 0o700);
+  }
 }
 
 // ── 11. 提交失败时，预暂存已经生效这件事必须说出来 ──────────────────────────

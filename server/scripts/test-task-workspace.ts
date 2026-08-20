@@ -154,6 +154,44 @@ try {
     await db.delete(tasks).where(eq(tasks.id, "in-place-archived"));
   }
 
+  // ── 同一个仓库登记成两个项目 ────────────────────────────────────────────────
+  // `POST /api/projects` 不去重也不拒绝重复路径，把同一个仓库加两遍是正常用法。两边的
+  // 就地任务落在**同一个物理目录**里：按 projectId 圈候选，对面那个正在跑的任务在这边
+  // 完全不可见，面板不显示在飞横幅，无 force 的 discard 直接把它的成果丢掉（第 1 轮审查
+  // 用公共 API 复现）。所以候选按归一后的仓库路径圈，跨项目。
+  {
+    const { projects } = await import("../src/db/schema.js");
+    const { workspaceParticipants } = await import("../src/task-workspace.js");
+    const ids = async (id: string) => (await workspaceParticipants(await load(id))).map((p) => p.id).sort();
+    const otherRepo = join(root, "other-repo");
+
+    await db.insert(projects).values([
+      { id: "proj-a", name: "同一个仓库 A", repoPath: repo, apiKeys: null, workflowId: null, createdAt: ts },
+      // 末尾斜杠 + `~` 之外的写法差异由 repoKey 归一：存成两种写法仍是同一个仓库。
+      { id: "proj-b", name: "同一个仓库 B", repoPath: `${repo}/`, apiKeys: null, workflowId: null, createdAt: ts },
+      { id: "proj-c", name: "另一个仓库", repoPath: otherRepo, apiKeys: null, workflowId: null, createdAt: ts },
+    ]);
+    await db.insert(tasks).values([
+      { ...common, id: "xproj-a", projectId: "proj-a", parentId: null, mode: "single", useWorktree: false },
+      { ...common, id: "xproj-b", projectId: "proj-b", parentId: null, mode: "single", useWorktree: false },
+      { ...common, id: "xproj-c", projectId: "proj-c", parentId: null, mode: "single", useWorktree: false },
+      // 独立 worktree 的那档不受影响：目录是 `<repo>/.worktrees/<id>`，task id 全局唯一。
+      { ...common, id: "xproj-b-wt", projectId: "proj-b", parentId: null, mode: "single", useWorktree: true },
+    ]);
+
+    assert.deepEqual(await ids("xproj-a"), ["xproj-a", "xproj-b"], "同一个仓库的两个项目，就地任务共用主仓");
+    assert.deepEqual(await ids("xproj-b"), ["xproj-a", "xproj-b"], "反过来也要看得见");
+    assert.deepEqual(await ids("xproj-c"), ["xproj-c"], "别的仓库不能被顺带圈进来");
+    assert.deepEqual(await ids("xproj-b-wt"), ["xproj-b-wt"], "独立 worktree 仍是自己一个目录");
+
+    for (const id of ["xproj-a", "xproj-b", "xproj-c", "xproj-b-wt"]) {
+      await db.delete(tasks).where(eq(tasks.id, id));
+    }
+    for (const id of ["proj-a", "proj-b", "proj-c"]) {
+      await db.delete(projects).where(eq(projects.id, id));
+    }
+  }
+
   // ── 登记的 base 分支已经没了 → 降级要**落回任务行** ─────────────────────────
   // 只在 worktree 创建处降级、库里仍留着那个已删的名字的话，这一轮是起来了，用户下一步
   // 看 diff 会得到 target_branch_missing、验收被「目标本地分支不存在」挡回 —— 等于把

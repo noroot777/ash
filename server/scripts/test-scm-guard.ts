@@ -270,6 +270,55 @@ try {
     }
   }
 
+  // ── 7. 同一个仓库登记成两个项目，对面那个任务在跑也要挡 ─────────────────────
+  // 第 6 条按 projectId 圈共用者，于是同一份主仓被登记成两个项目时，两边的就地任务落在
+  // 同一个目录里却互相看不见：面板不显示在飞横幅，无 force 的 discard 直接把对面正在跑的
+  // 任务的成果丢掉（第 1 轮审查用公共 API 复现）。归一按 `repoKey`，所以这里故意把第二个
+  // 项目的路径写成带末尾斜杠的另一种写法。
+  {
+    await db.insert(projects).values({
+      id: "project-b", name: "同一个仓库的另一个项目", repoPath: `${repo}/`, createdAt: ts,
+    });
+    await db.insert(tasks).values({
+      ...common, id: "cross-proj", projectId: "project-b", title: "隔壁项目的任务",
+      useWorktree: false, status: "running",
+    });
+
+    // 第 6 条在主仓里留了个 `.worktrees/lead`，主仓的 porcelain 会多一行未跟踪目录；
+    // 这里要钉的是 a.txt 那一条有没有被动过，把它滤掉。
+    const repoDirty = () => dirty().split("\n").filter((line) => !line.includes(".worktrees/")).join("\n");
+
+    const overview = await api.request("/tasks/in-place/scm");
+    const body = await overview.json() as { taskRunning: boolean; readOnly: string | null };
+    assert.equal(body.taskRunning, true, "跨项目共用主仓：这边的面板也得说「这个目录里有任务在跑」");
+    assert.equal(body.readOnly, null, "在飞不是只读");
+
+    for (const { op, body: payload } of writeOps) {
+      soil();
+      const head = git(repo, "rev-parse", "HEAD");
+      const res = await post("in-place", op, payload);
+      const json = await res.json() as { error?: string; needsForce?: boolean };
+      assert.equal(res.status, 409, `跨项目：${op} 必须 409，实际 ${res.status}`);
+      assert.equal(json.needsForce, true, `跨项目：${op} 要让面板弹确认框`);
+      assert.match(json.error ?? "", /隔壁项目的任务/, `跨项目：${op} 要说清是哪个任务在跑`);
+      assert.equal(fileNow(), "local edit\n", `跨项目：${op} 之后文件不许变`);
+      assert.equal(repoDirty(), " M a.txt", `跨项目：${op} 之后索引不许变`);
+      assert.equal(git(repo, "rev-parse", "HEAD"), head, `跨项目：${op} 之后不许多出提交`);
+    }
+
+    // 反向：别的仓库不能被顺带圈进来，否则上面几条用「只要有任务在跑就挡」也能过。
+    await db.update(tasks).set({ status: "backlog" }).where(eq(tasks.id, "cross-proj"));
+    await db.update(projects).set({ repoPath: join(root, "other-repo") }).where(eq(projects.id, "project-b"));
+    await db.update(tasks).set({ status: "running" }).where(eq(tasks.id, "cross-proj"));
+    soil();
+    const free = await post("in-place", "discard", { paths: ["a.txt"] });
+    assert.equal(free.status, 200, "另一个仓库里的任务在跑，跟这个目录无关");
+    assert.equal(fileNow(), "baseline\n");
+
+    await db.delete(tasks).where(eq(tasks.id, "cross-proj"));
+    await db.delete(projects).where(eq(projects.id, "project-b"));
+  }
+
   console.log("scm guard ok");
 } finally {
   rmSync(root, { recursive: true, force: true });

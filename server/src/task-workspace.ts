@@ -1,7 +1,7 @@
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { tasks } from "./db/schema.js";
-import { prepareWorktree, resolveWorkspace, staleBaseFallback, type Workspace } from "./git.js";
+import { projects, tasks } from "./db/schema.js";
+import { prepareWorktree, repoKey, resolveWorkspace, staleBaseFallback, type Workspace } from "./git.js";
 import { now } from "./util.js";
 
 type WorkspaceTask = Pick<
@@ -92,6 +92,23 @@ export async function isolatedWorkspaceOwner(
 export type WorkspacePeer = { id: string; title: string | null; status: string | null };
 
 /**
+ * 跟这个项目**指向同一个仓库**的全部项目 id（含它自己）。
+ *
+ * 同一个仓库路径可以被登记成两个项目：`POST /api/projects` 不去重、也不拒绝重复路径，
+ * 用户把同一个仓库加两遍（换个名字、分两拨任务）是正常用法。归一按 `repoKey`——它管的
+ * 正是「`~/code/foo` 和 `/Users/me/code/foo/` 是不是同一个仓库」。
+ *
+ * 仓库路径为空的项目不跟任何人合并：它压根没有共用的目录可言（`repoKey` 对空值返回空，
+ * 直接拿它当键会把所有无仓库项目糊成一堆）。
+ */
+async function projectsSharingRepo(projectId: string): Promise<string[]> {
+  const rows = await db.select().from(projects);
+  const key = repoKey(rows.find((row) => row.id === projectId)?.repoPath);
+  if (!key) return [projectId];
+  return rows.filter((row) => repoKey(row.repoPath) === key).map((row) => row.id);
+}
+
+/**
  * 跟这个任务**共用同一个工作目录**的全部任务（含它自己）。
  *
  * 为什么需要它：工作目录不是一个任务的私产。团队调度台和它那些 `useWorktree=false` 的
@@ -103,9 +120,18 @@ export type WorkspacePeer = { id: string; title: string | null; status: string |
  * 判据是「**真跑起来**会落在哪」（`isolatedWorkspaceOwner`，跟 `taskWorkspace` 同一棵
  * 决策树），不是「上一次跑在哪」：要挡的是接下来那次启动。归档任务不算——归档 = 冻结，
  * 它起不来（`task-archive-routes.ts`）。
+ *
+ * **候选按仓库圈，不按项目圈。** 共用的是一个物理目录，而目录属于仓库不属于项目：同一个
+ * 仓库登记成两个项目时，两边的就地任务落在同一份工作区里，按 projectId 取候选就看不见
+ * 对面那一个——面板不显示在飞横幅，无 force 的 discard 直接把对面正在跑的任务的成果丢掉
+ * （第 1 轮审查用公共 API 复现）。圈定之后仍按 owner 分组是够的：候选已经同仓库，owner
+ * 为 null 就是那个仓库本身，非 null 则是 `<repo>/.worktrees/<owner>`，而 task id 全局唯一。
  */
 export async function workspaceParticipants(task: OwnerTask): Promise<WorkspacePeer[]> {
-  const rows = await db.select().from(tasks).where(eq(tasks.projectId, task.projectId));
+  const rows = await db
+    .select()
+    .from(tasks)
+    .where(inArray(tasks.projectId, await projectsSharingRepo(task.projectId)));
   const byId = new Map(rows.map((row) => [row.id, row] as const));
   const lookup: OwnerLookup = async (id) => byId.get(id) ?? await lookupFromDb(id);
   const owner = await isolatedWorkspaceOwner(task, lookup);
