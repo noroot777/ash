@@ -13,6 +13,8 @@
 //   5. 队列门禁无 TOCTOU:导出等待对端 ping 应答的窗口里并发 POST /queues/:id/insert
 //      必须被接力准备 barrier 拦成 409——否则插队成功后导出结算 canceled,后继照样
 //      被提前启动,静态门禁(第 4 条)形同虚设
+//   6. 接力成功、barrier 已释放后,持久 out 标记(pending 或已确认)继续拦住
+//      insert/create 重新入队——历史副本入队会被当 canceled 跳过,后继提前启动
 // 双机走真 HTTP 的端到端场景在 test-handoff.ts。HARNESS_RUNS_DIR 指到临时目录顺带
 // 打开 guardAgentSpawn,即使哪里失手触发续跑也不会真拉起 CLI 烧额度。
 import assert from "node:assert/strict";
@@ -247,6 +249,55 @@ try {
       (await db.select().from(sessions).where(eq(sessions.taskId, "handoffqnext02"))).length,
       0,
       "后继不该出现任何会话",
+    );
+
+    // ── 6. 接力成功、barrier 已释放:持久 out 标记继续拦住重新入队 ─────────────
+    // 缺陷形态(第 3 轮审查双实例真机实测):barrier 随导出结束释放,历史副本
+    // (canceled + direction:"out")再 insert 回队列返回 200,队列跳过 canceled
+    // 立刻启动后继。此刻 handoffqhead02 正是这个状态,直接复用。
+    const isHandoff409 = async (res: Response, label: string) => {
+      assert.equal(res.status, 409, label);
+      assert.match(((await res.json()) as { error: string }).error, /接力/, label);
+    };
+    await isHandoff409(
+      await api.request("/queues/handoffqueue02/insert", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ taskId: "handoffqhead02", position: 0 }),
+      }),
+      "接力成功后的历史副本不能 insert 回队列",
+    );
+    await isHandoff409(
+      await api.request("/queues", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ taskIds: ["handoffqhead02"] }),
+      }),
+      "POST /queues 也不能用历史副本建队",
+    );
+    // pending(发出去还没确认送达)的 out 标记同样要拦。
+    await db.update(tasks)
+      .set({ handoff: JSON.stringify({ direction: "out", pending: true, transferId: "t-pend", at: qTs }) })
+      .where(eq(tasks.id, "handoffqhead02"));
+    await isHandoff409(
+      await api.request("/queues/handoffqueue02/insert", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ taskId: "handoffqhead02", position: 0 }),
+      }),
+      "pending 未确认的接力副本同样不能入队",
+    );
+    assert.equal(
+      (await db.select().from(queueItems).where(eq(queueItems.taskId, "handoffqhead02"))).length,
+      0,
+      "各入口都被拒后,历史副本仍不在任何队列",
+    );
+    const next3 = (await db.select().from(tasks).where(eq(tasks.id, "handoffqnext02"))).at(0)!;
+    assert.equal(next3.status, "backlog", "后继依旧 backlog");
+    assert.equal(
+      (await db.select().from(sessions).where(eq(sessions.taskId, "handoffqnext02"))).length,
+      0,
+      "后继依旧没有会话",
     );
   } finally {
     await new Promise<void>((r) => peer.close(() => r()));
