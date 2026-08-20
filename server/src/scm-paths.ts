@@ -75,6 +75,22 @@ export function scmKnownPaths(status: ScmStatus): Set<string> {
   return known;
 }
 
+/**
+ * 状态里那些**嵌套 Git 仓库**的路径（自带 `.git` 的子目录）。
+ *
+ * 它们过得了白名单闸（确实在 status 里），但三个写操作没有一个对它们成立：`git add`
+ * 要么 exit 128 炸掉整批、要么静默建出一条 gitlink 子模块记录，`git clean -f` 一个字节
+ * 都不删却照样退 0。所以判据是**列出来、说清楚、不下手**：写侧按这张表把它们摘出去并
+ * 交代跳过了谁（`git-workspace-ops.ts` 的 `withoutNested`），读侧的预览直接拒绝。
+ */
+export function scmNestedPaths(status: ScmStatus): Set<string> {
+  const nested = new Set<string>();
+  for (const list of [status.merge, status.staged, status.unstaged, status.untracked]) {
+    for (const change of list) if (change.nested) nested.add(change.path);
+  }
+  return nested;
+}
+
 export interface ScmGateOptions {
   /** 必须出现在当前状态里的路径。 */
   paths: readonly string[];

@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { promisify } from "node:util";
 import { gitError } from "./git.js";
 import { literalPathspec, readScmStatus, type ScmChange, type ScmStatus } from "./git-status.js";
-import { assertPathShape, gateScmPaths, ScmOperationError } from "./scm-paths.js";
+import { assertPathShape, gateScmPaths, scmNestedPaths, ScmOperationError } from "./scm-paths.js";
 import { withRepoLock } from "./repo-lock.js";
 
 // ── 工作区 SCM 的写侧：暂存 / 取消暂存 / 丢弃 / 提交 ─────────────────────────
@@ -70,6 +70,43 @@ export interface ScmWriteResult {
   ok: true;
   /** 实际处理的路径数——前端据此报「已暂存 3 个文件」。 */
   affected: number;
+  /** 这次**没**照做的那部分（目前只有嵌套仓），随成功提示一起说给用户听。 */
+  note?: string;
+}
+
+const NESTED_WHY = "只能在它自己的仓库里操作";
+
+/**
+ * 把嵌套 Git 仓库从这次操作的路径里摘出去，并交代跳过了谁。
+ *
+ * 它们**过得了白名单闸**——`? vendor-lib/` 确实在 status 里，用户在面板上也确实看得见
+ * 这一行。但三个写操作没有一个对它们成立：`git add` 在没有提交的嵌套仓上 exit 128 炸掉
+ * 整批，在有提交的嵌套仓上静默建出一条 gitlink 子模块记录（用户点的是「暂存一个未跟踪
+ * 文件」，得到的是一个子模块）；`git clean -f` 一个字节都不删却照样退 0，面板于是报
+ * 「已丢弃 1 个文件」。
+ *
+ * 所以这里不是「拒绝」而是**摘出去**：组级操作（「全部暂存」「全部删除」「没有已暂存
+ * 时暂存全部并提交」）会把整份列表原样传上来，为一个下不了手的条目把其余文件一起 400
+ * ，用户就只能一条条手点（第 1 轮审查用公共 API 和页面都复现）。一个都不剩时才抛——
+ * 那不是「成功了 0 个」，得说清楚为什么。
+ */
+function withoutNested(
+  status: ScmStatus,
+  action: string,
+  groups: readonly (readonly string[])[],
+): { groups: string[][]; note?: string } {
+  const nested = scmNestedPaths(status);
+  const skipped = groups.flat().filter((path) => nested.has(path));
+  if (!skipped.length) return { groups: groups.map((group) => [...group]) };
+  const kept = groups.map((group) => group.filter((path) => !nested.has(path)));
+  if (!kept.some((group) => group.length)) {
+    throw new ScmOperationError(
+      `点名的这些路径都是嵌套 Git 仓库（自带 .git 的子目录），${NESTED_WHY}，这次${action}什么都没做：`
+      + skipped.join("、"),
+      409,
+    );
+  }
+  return { groups: kept, note: `已跳过 ${skipped.length} 个嵌套 Git 仓库（${NESTED_WHY}）：${skipped.join("、")}` };
 }
 
 /**
@@ -231,15 +268,16 @@ export async function stagePaths(
 ): Promise<ScmWriteResult> {
   const targets = assertPathShape(paths);
   return withRepoLock(repoPath, () => guarded(guard, async () => {
-    await gateScmPaths(root, { paths: targets });
+    const status = await gateScmPaths(root, { paths: targets });
+    const { groups: [staging], note } = withoutNested(status, "暂存", [targets]);
     // `add -A` 而不是 `add`：只有前者会把「文件被删了」也记进索引，否则删除永远暂存不上。
     const affected = await runAll(root, "暂存", [{
-      paths: targets,
+      paths: staging,
       run: (batch) => git(root, ["add", "-A", "--", ...batch.map(literalPathspec)]),
       // 暂存成功 = 这条不再有未暂存的那一半，未跟踪的则已经进了索引。
       done: (path, after) => !listed(after.unstaged, path) && !listed(after.untracked, path),
     }]);
-    return { ok: true as const, affected };
+    return { ok: true as const, affected, note };
   }));
 }
 
@@ -303,13 +341,15 @@ export async function discardPaths(
   if (!tracked.length && !untracked.length) throw new ScmOperationError("没有指定文件");
   return withRepoLock(repoPath, () => guarded(guard, async () => {
     // 一次读，两道闸：路径得在列表里，且不许是冲突中的文件。锁内读到的才是即将被操作的那份。
-    await gateScmPaths(root, { paths: [...tracked, ...untracked], rejectConflicted: true });
-    if (untracked.length) await assertRemovable(root, untracked);
+    const status = await gateScmPaths(root, { paths: [...tracked, ...untracked], rejectConflicted: true });
+    // 嵌套仓摘在预检**之前**：它的父目录可写与否跟这次删除无关，而它一定不会被删。
+    const { groups: [keepTracked, keepUntracked], note } = withoutNested(status, "丢弃", [tracked, untracked]);
+    if (keepUntracked.length) await assertRemovable(root, keepUntracked);
     const affected = await runAll(root, "丢弃", [
       // `--worktree` 而不是连 `--staged` 一起：面板上「丢弃」丢的是未暂存那一份，
       // 已经暂存的内容要先取消暂存再丢——和 VSCode 一致，也让两步都可以停在中间。
       {
-        paths: tracked,
+        paths: keepTracked,
         run: (batch) => git(root, ["restore", "--worktree", "--", ...batch.map(literalPathspec)]),
         // 丢弃成功 = 工作区已经跟索引一致，这条不再出现在「未暂存」里（原本是 `MM` 的
         // 只丢掉未暂存那一半，暂存侧那条还在，所以只能问未暂存这一侧）。
@@ -317,12 +357,12 @@ export async function discardPaths(
       },
       // `-f` 是必须的（clean 默认拒绝动手），`-d` 不给：只删点名的文件，不递归清目录。
       {
-        paths: untracked,
+        paths: keepUntracked,
         run: (batch) => git(root, ["clean", "-f", "--", ...batch.map(literalPathspec)]),
         done: (path, after) => !listed(after.untracked, path),
       },
     ], "改动找不回来");
-    return { ok: true as const, affected };
+    return { ok: true as const, affected, note };
   }));
 }
 
@@ -340,6 +380,8 @@ export interface ScmCommitResult {
   subject: string;
   /** 提交已经成功、但之后某一步只为显示服务的读取失败了，附一句实话。 */
   warning?: string;
+  /** 预暂存时跳过的那部分（目前只有嵌套仓）——用户以为它们进了这次提交。 */
+  note?: string;
 }
 
 /**
@@ -365,10 +407,15 @@ export async function commitWorkspace(
   if (!message) throw new ScmOperationError("提交信息不能为空");
   const toStage = options.stagePaths?.length ? assertPathShape(options.stagePaths) : [];
   return withRepoLock(repoPath, () => guarded(guard, async () => {
+    let staging: string[] = [];
+    let note: string | undefined;
     if (toStage.length) {
-      await gateScmPaths(root, { paths: toStage });
+      const status = await gateScmPaths(root, { paths: toStage });
+      const kept = withoutNested(status, "提交前的暂存", [toStage]);
+      [staging] = kept.groups;
+      note = kept.note;
       await runAll(root, "提交前的暂存", [{
-        paths: toStage,
+        paths: staging,
         run: (batch) => git(root, ["add", "-A", "--", ...batch.map(literalPathspec)]),
         done: (path, after) => !listed(after.unstaged, path) && !listed(after.untracked, path),
       }]);
@@ -383,11 +430,11 @@ export async function commitWorkspace(
         child.stdin?.end(`${message}\n`);
       });
     } catch (error) {
-      if (!toStage.length) throw error;
+      if (!staging.length) throw error;
       throw new ScmPartialError(
-        `提交没有成功，但这 ${toStage.length} 个文件已经暂存进索引了——不处理的话，`
+        `提交没有成功，但这 ${staging.length} 个文件已经暂存进索引了——不处理的话，`
         + `下一次提交会把它们一起带上。失败原因：${oneLine((error as Error).message)}`,
-        toStage,
+        staging,
         [],
       );
     }
@@ -400,13 +447,14 @@ export async function commitWorkspace(
     try {
       const { stdout } = await exec("git", ["-C", root, "log", "-1", "--format=%H%x1f%s"]);
       const [sha, subject] = stdout.trim().split("\x1f");
-      return { ok: true as const, sha: sha || null, subject: subject || message };
+      return { ok: true as const, sha: sha || null, subject: subject || message, note };
     } catch (error) {
       return {
         ok: true as const,
         sha: null,
         subject: message,
         warning: `提交已经成功，但没读到它的提交号：${oneLine(gitError(error))}`,
+        note,
       };
     }
   }));

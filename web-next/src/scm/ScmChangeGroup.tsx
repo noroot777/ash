@@ -22,6 +22,9 @@ function RowActions({
   actions: ScmGroupActions;
 }) {
   const name = fileName(change.path);
+  // 嵌套 Git 仓库一个操作都给不了：暂存会变成建子模块、丢弃一个字节都删不掉、预览也读
+  // 不出来（后端一律摘出去/拒掉）。摆一个按不动的按钮不如不摆，改用一句话说清去哪操作。
+  if (change.nested) return <span className="scm-row__nested">嵌套仓库 · 请在它自己的仓库里操作</span>;
   return (
     <span className="scm-row__actions">
       {actions.onDiscard && (
@@ -113,30 +116,37 @@ export function ScmChangeGroup({
         {changes.map((change, index) => {
           const dir = dirName(change.path);
           const active = activeGroup === group && activePath === change.path;
+          const body = (
+            <>
+              <span className="scm-row__name">
+                {fileName(change.path)}
+                {change.origPath && <i className="scm-row__from">← {change.origPath}</i>}
+              </span>
+              {dir && <span className="scm-row__dir">{dir}</span>}
+              <span className="scm-row__meta">
+                {change.conflict && (
+                  <em className="scm-row__conflict">{CONFLICT_LABEL[change.conflict] ?? "冲突"}</em>
+                )}
+                <span className={`scm-row__badge is-${change.kind}`} aria-label={KIND_LABEL[change.kind]}>
+                  {KIND_BADGE[change.kind]}
+                </span>
+              </span>
+            </>
+          );
           return (
             <li key={`${change.path}-${index}`}>
               {/* 操作按钮是主按钮的**兄弟**而不是子元素：按钮套按钮是非法 HTML，
                   浏览器会把里层拎出去，点「丢弃」就变成点了整行。 */}
               <div className={`scm-row${active ? " is-active" : ""}`}>
-                <button
-                  type="button"
-                  className="scm-row__open"
-                  onClick={() => actions.onOpen(change)}
-                >
-                  <span className="scm-row__name">
-                    {fileName(change.path)}
-                    {change.origPath && <i className="scm-row__from">← {change.origPath}</i>}
-                  </span>
-                  {dir && <span className="scm-row__dir">{dir}</span>}
-                  <span className="scm-row__meta">
-                    {change.conflict && (
-                      <em className="scm-row__conflict">{CONFLICT_LABEL[change.conflict] ?? "冲突"}</em>
-                    )}
-                    <span className={`scm-row__badge is-${change.kind}`} aria-label={KIND_LABEL[change.kind]}>
-                      {KIND_BADGE[change.kind]}
-                    </span>
-                  </span>
-                </button>
+                {/* 嵌套仓那一行不是按钮：它没有 diff 可开（后端明确拒绝预览），
+                    做成能点的只会换来一句报错。 */}
+                {change.nested ? (
+                  <span className="scm-row__open is-static">{body}</span>
+                ) : (
+                  <button type="button" className="scm-row__open" onClick={() => actions.onOpen(change)}>
+                    {body}
+                  </button>
+                )}
                 <RowActions change={change} group={group} actions={actions} />
               </div>
             </li>

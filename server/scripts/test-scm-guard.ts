@@ -189,7 +189,7 @@ try {
   // 是领队、跟随执行者、各自审查任务共用的。兄弟执行者正写着文件，用户从这一位空闲执行者
   // 的面板上无 force 就能把它没提交的成果丢掉（第 4 轮审查在页面上真实复现）。
   {
-    const { claimTurn, isTurnClaimed, releaseTurn } = await import("../src/runs.js");
+    const { claimTurn, isTurnClaimed, releaseTurn, turnRole } = await import("../src/runs.js");
     const leadWorktree = join(repo, ".worktrees", "lead");
     git(repo, "worktree", "add", leadWorktree, "harness/lead");
     writeFileSync(join(leadWorktree, "shared.txt"), "baseline\n");
@@ -263,6 +263,17 @@ try {
     assert.equal(forced.status, 200, "带 force 必须放行");
     assert.equal(sharedNow(), "baseline\n", "force 之后丢弃要真的生效");
     await db.update(tasks).set({ status: "backlog" }).where(eq(tasks.id, "worker2"));
+
+    // 另一种在飞凭据下的 force：兄弟占着**真回合锁**。这一档占的是「能占到的全部」，
+    // 所以要盯住两件事——占不到的那把不许被 SCM 顺手放掉（放掉就等于把别人的回合锁抹了），
+    // 闲置的共用者仍然要被锁住（见 test-scm-workspace 第 13 节的函数级复现）。
+    assert.equal(claimTurn("worker2", "single"), true);
+    soilShared();
+    const forcedHeld = await post("worker", "discard", { paths: ["shared.txt"], force: true });
+    assert.equal(forcedHeld.status, 200, "兄弟占着回合锁时带 force 也必须放行");
+    assert.equal(sharedNow(), "baseline\n", "force 之后丢弃要真的生效");
+    assert.equal(turnRole("worker2"), "single", "SCM 不许把没占到的那把回合锁放掉");
+    releaseTurn("worker2");
 
     // 写完必须把整组占位都还回去，否则这几个任务再也起不来。
     for (const id of ["lead", "worker", "worker2"]) {

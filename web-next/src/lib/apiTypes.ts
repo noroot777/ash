@@ -161,6 +161,12 @@ export type ScmChange = {
   origPath: string | null;
   kind: ScmChangeKind;
   conflict: string | null;
+  /**
+   * 这一条是**嵌套 Git 仓库**（自带 `.git` 的子目录）。列得出、看得见，但暂存/丢弃/提交
+   * 对它都不成立（后端一律摘出去，见 `git-workspace-ops.ts` 的 `withoutNested`），
+   * 所以面板上不给它出操作按钮，只说清楚为什么。
+   */
+  nested: boolean;
 };
 
 export type ScmBranchInfo = {
@@ -228,6 +234,8 @@ export type ScmFileDiff = {
 export type ScmWriteResult = {
   ok: true;
   affected: number;
+  /** 这次**没**照做的那部分（目前只有嵌套仓）——成功提示要连它一起说。 */
+  note?: string;
   status?: ScmStatus;
 };
 
@@ -238,6 +246,8 @@ export type ScmCommitResult = {
   subject: string;
   /** 提交成功、但之后某一步只为显示服务的读取失败了的实话。 */
   warning?: string;
+  /** 预暂存时跳过的那部分——用户以为它们进了这次提交。 */
+  note?: string;
   status?: ScmStatus;
 };
 

@@ -19,9 +19,9 @@ import {
   type ScmGuard,
 } from "./git-workspace-ops.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
-import { claimWorkspaceTurn, isTurnClaimed } from "./runs.js";
+import { claimIdleWorkspaceTurns, claimWorkspaceTurn, isTurnClaimed } from "./runs.js";
 import { isolatedWorkspaceOwner, workspaceParticipants, type WorkspacePeer } from "./task-workspace.js";
-import { assertInsideRoot, assertPathShape, gateScmPaths } from "./scm-paths.js";
+import { assertInsideRoot, assertPathShape, gateScmPaths, scmNestedPaths } from "./scm-paths.js";
 
 // 任务工作区的「源代码管理」面板。工作目录的解析**复用 taskFileRoot**（会话 cwd >
 // 约定 worktree 目录 > 归属任务的工作区 > 项目仓库），绝不调 prepareWorktree：为了看一眼
@@ -193,7 +193,17 @@ export function mountScmRoutes(api: Hono) {
       // 一个 `../` 就能把 harness 进程读得到的任何文本文件读出来。白名单闸挡住仓库外的
       // 路径，realpath 闸再挡住工作区里指向外面的软链。
       const targets = assertPathShape(origPath ? [path, origPath] : [path]);
-      await gateScmPaths(context.root.path, { paths: targets });
+      const status = await gateScmPaths(context.root.path, { paths: targets });
+      // 嵌套仓（自带 `.git` 的子目录）在白名单里，但没有可预览的内容：未跟踪预览走的
+      // `git diff --no-index -- /dev/null <dir>` 会以 1 退出并报 `Could not access`，
+      // 而 1 正是「有差异」的正常码，于是面板收到一份**空 diff**，看着像「这个文件没
+      // 内容」。宁可明说不能预览。
+      if (scmNestedPaths(status).has(path)) {
+        throw new ScmOperationError(
+          `${path} 是嵌套 Git 仓库（自带 .git 的子目录），这里预览不了它——请到它自己的仓库里看。`,
+          409,
+        );
+      }
       if (source === "untracked") await assertInsideRoot(context.root.path, path);
       const diff = await readScmFileDiff(context.root.path, path, source as ScmDiffSource, origPath);
       return c.json(diff);
@@ -224,11 +234,17 @@ export function mountScmRoutes(api: Hono) {
       // 锁内这一道是**占位**不是复查（见顶部注释）：占住之后启动会被 claimTurn 挡回，
       // 归档会被 task-archive-routes 的 isTurnClaimed 挡回，于是接下来读到的归档位和
       // 在飞状态到 git 命令跑完为止都不会再变。占的是**全部共用者**——只占自己那把，
-      // 兄弟执行者照样能在我们跑 git 的同一时刻起跑。带 force 的照样占（占不到就是有
-      // 回合在跑，那正是用户明知故犯要覆盖的那一档），但归档不受 force 影响，一律复查。
+      // 兄弟执行者照样能在我们跑 git 的同一时刻起跑。带 force 的也照样占，只是**占不到
+      // 的那几位跳过**（那正是用户明知故犯要覆盖的那一档），闲置的同伴仍然要锁住；但
+      // 归档不受 force 影响，一律复查。
       const guard: ScmGuard = async () => {
         const claimed = new Set(context.peers.map((peer) => peer.id));
-        const release = claimWorkspaceTurn([...claimed]) ?? undefined;
+        // 带 force 时占的是「能占到的全部」而不是全有或全无：一位共用者在跑就把整组锁
+        // 还回去的话，**还没起跑的闲置同伴照样能在这次 git 期间起跑**——用户确认放行的
+        // 是已经在写这个目录的那一位，不是整组（第 1 轮审查函数级复现）。
+        const release = (forced
+          ? claimIdleWorkspaceTurns([...claimed])
+          : claimWorkspaceTurn([...claimed])) ?? undefined;
         try {
           const fresh = await loadTask(taskId);
           if (!fresh) throw new ScmOperationError("这个任务已经不在了", 404);

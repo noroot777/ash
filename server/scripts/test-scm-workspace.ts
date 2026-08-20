@@ -32,12 +32,14 @@ import {
   unstagePaths,
 } from "../src/git-workspace-ops.js";
 import {
+  claimIdleWorkspaceTurns,
   claimTurn,
   claimWorkspaceTurn,
   freezeStartingTurn,
   isTurnClaimed,
   releaseTurn,
   takeStartFreeze,
+  turnRole,
 } from "../src/runs.js";
 
 const root = mkdtempSync(join(tmpdir(), "harness-scm-test-"));
@@ -562,6 +564,25 @@ if (!IS_WINDOWS) {
   assert.deepEqual(peers.map((id) => claimTurn(id)), [false, false, false], "占住期间谁都起不来");
   all();
   assert.deepEqual(peers.map((id) => isTurnClaimed(id)), [false, false, false], "释放要覆盖全组");
+
+  // 但**带 force 的那条路上全有或全无是反的**：用户点「仍然提交/丢弃」放行的是已经在写
+  // 这个目录的那一位，不是整组。整组还回去之后，还没起跑的闲置同伴照样能在这次 git 期间
+  // 起跑（第 1 轮审查函数级复现）。所以 force 走 claimIdleWorkspaceTurns：占到全部闲置的，
+  // 只跳过真在跑的那些。
+  assert.equal(claimTurn(peers[2], "single"), true, "让最后一位被真回合占住");
+  const idle = claimIdleWorkspaceTurns(peers);
+  assert.deepEqual(
+    [claimTurn(peers[0]), claimTurn(peers[1])],
+    [false, false],
+    "force 期间闲置的共用者仍然要锁住，不许趁这次 git 起跑",
+  );
+  assert.equal(turnRole(peers[2]), "single", "在跑的那位不受影响，回合身份不许被顶掉");
+  idle();
+  idle(); // 同样要能重复调用
+  assert.equal(isTurnClaimed(peers[0]), false, "释放只还自己占到的那几把");
+  assert.equal(isTurnClaimed(peers[1]), false);
+  assert.equal(isTurnClaimed(peers[2]), true, "没占到的那把不许被 SCM 顺手放掉");
+  releaseTurn(peers[2]);
 }
 
 // ── 14. 写入期间「暂停分组」，不许把下一次真启动一起冻掉 ─────────────────────

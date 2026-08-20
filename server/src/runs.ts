@@ -206,11 +206,12 @@ export function releaseTurn(taskId: string): void {
  * **要占的是这个目录的全部共用者，不是一个 task id**（`workspaceParticipants`）：团队
  * 调度台和它那些跟随的执行者跑在同一个 worktree 里，只占自己那把锁，兄弟执行者照样能在
  * 我们跑 git 的同一时刻起跑（第 4 轮审查复现）。所以这里是**全有或全无**：中途占不到就
- * 把已占的全部还回去，让调用方按 `needsForce` 那一档处理。
+ * 把已占的全部还回去，让调用方按 `needsForce` 那一档处理；用户确认过的 force 走
+ * `claimIdleWorkspaceTurns`。
  *
  * 和真回合的唯一差别是**不碰起跑冻结**：这不是一个回合，清掉它会把上一次真回合留下的
  * 暂停意图吃掉；反过来，占住期间也不许有人往它身上写冻结（见 `freezeStartingTurn`），
- * 否则标记会漏给下一次真启动。释放函数可重复调用（写操作的 finally 与错误路径可能都走到）。
+ * 否则标记会漏给下一次真启动。
  */
 export function claimWorkspaceTurn(taskIds: string[]): (() => void) | null {
   const claimed: string[] = [];
@@ -222,6 +223,30 @@ export function claimWorkspaceTurn(taskIds: string[]): (() => void) | null {
     for (const held of claimed) endTurn(held);
     return null;
   }
+  return releaserFor(claimed);
+}
+
+/**
+ * 同上，但**能占到几把就占几把**——只跳过此刻真有回合在跑的那些。带 `force` 的写操作走
+ * 这一条。
+ *
+ * force 的本意是覆盖「已经在写这个目录的那一位」，用户为此点过一次确认。全有或全无在这
+ * 里是反的：一位共用者在跑，整组锁就都还回去了，于是**还没起跑的闲置同伴照样能在这次
+ * git 期间起跑**（第 1 轮审查函数级复现：`claimWorkspaceTurn([running, idle]) === null`
+ * 之后 `claimTurn(idle)` 立刻成功）。用户放行的是一个明确的对象，不是整组。
+ *
+ * 占不到的那些不必回给调用方：force 路径本来就不再据此拒绝，知道也无事可做。
+ */
+export function claimIdleWorkspaceTurns(taskIds: string[]): () => void {
+  const claimed: string[] = [];
+  for (const taskId of new Set(taskIds)) {
+    if (claimTurn(taskId, WORKSPACE_TURN_ROLE)) claimed.push(taskId);
+  }
+  return releaserFor(claimed);
+}
+
+/** 释放函数可重复调用（写操作的 finally 与错误路径可能都走到）。 */
+function releaserFor(claimed: readonly string[]): () => void {
   let released = false;
   return () => {
     if (released) return;

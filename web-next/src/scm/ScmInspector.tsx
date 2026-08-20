@@ -214,9 +214,12 @@ export function ScmInspector({
   }
 
   const clean = !status.merge.length && !status.staged.length && !status.unstaged.length && !status.untracked.length;
+  // 「暂存全部并提交」的那个数字必须是**真会被提交的份数**：嵌套 Git 仓库列得出、下不了手
+  // （后端一律摘出去），算进去就是承诺 7 个、实际进去 6 个。所以这里先把它们剔掉，数字和
+  // 送上去的清单同源。
   const commitPaths = status.staged.length
     ? undefined
-    : pathsOf([...status.unstaged, ...status.untracked]);
+    : pathsOf([...status.unstaged, ...status.untracked].filter((change) => !change.nested));
   const canCommit = message.trim().length > 0 && (status.staged.length > 0 || (commitPaths?.length ?? 0) > 0);
 
   return (

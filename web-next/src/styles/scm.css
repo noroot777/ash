@@ -63,6 +63,8 @@
 .scm-row__badge.is-modified, .scm-row__badge.is-typechange { color:var(--amber); }
 .scm-row__actions { display:inline-flex; flex:0 0 auto; gap:2px; opacity:0; transition:opacity .12s; }
 .scm-row:hover .scm-row__actions, .scm-row__actions:focus-within { opacity:1; }
+/* 嵌套仓那一行：没有按钮，那句「去哪操作」是常驻的，不跟着 hover 出现。 */
+.scm-row__nested { flex:0 0 auto; color:var(--faint); font-size:9px; white-space:nowrap; }
 
 .scm-commits { border-top:.5px solid var(--line); padding:8px 9px 16px; }
 .scm-commits header { display:flex; align-items:center; gap:5px; color:var(--faint); font-size:9.5px; }

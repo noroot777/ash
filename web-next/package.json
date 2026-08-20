@@ -40,6 +40,8 @@
     "test:turn-retry": "node --experimental-strip-types scripts/test-turn-retry.mjs",
     "test:scm-paths": "node --experimental-strip-types scripts/test-scm-paths.mjs",
     "test:scm-stale": "node scripts/test-scm-stale.mjs",
+    "test:scm-race": "node scripts/test-scm-race.mjs",
+    "test:scm-nested-ui": "node scripts/test-scm-nested-ui.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "preview": "vite preview"
   },

@@ -38,6 +38,8 @@ export interface ScmChange {
   kind: ScmChangeKind;
   /** 冲突文件的具体形态，例如 both_modified；非冲突为 null。 */
   conflict: string | null;
+  /** 这一条是**嵌套 Git 仓库**（自带 `.git` 的子目录）：列得出，但下不了手，见下。 */
+  nested: boolean;
 }
 
 export interface ScmBranchInfo {
@@ -144,7 +146,20 @@ export function parseStatusV2(output: string): Omit<ScmStatus, "operation"> {
     count += 1;
 
     if (type === "?") {
-      untracked.push({ path: line.slice(2), origPath: null, kind: "untracked", conflict: null });
+      // **尾斜杠只有一种来源：嵌套 Git 仓库。** `-uall` 会把普通目录递归到文件，唯独
+      // 自带 `.git` 的子目录不进去，只回一条 `? vendor-lib/`。斜杠必须去掉——它是
+      // 「这是个目录」的排版记号，不是路径的一部分，留着会被路径闸当成目录 pathspec
+      // 拒掉，连同一批里的其它文件一起 400（`test-scm-nested.ts` 顶部有全部原委）。
+      // 但去掉之后也**不能真拿去操作**，所以打上标记，写侧据此跳过、读侧据此说明。
+      const raw = line.slice(2);
+      const nested = raw.endsWith("/");
+      untracked.push({
+        path: nested ? raw.slice(0, -1) : raw,
+        origPath: null,
+        kind: "untracked",
+        conflict: null,
+        nested,
+      });
       continue;
     }
 
@@ -156,6 +171,7 @@ export function parseStatusV2(output: string): Omit<ScmStatus, "operation"> {
         origPath: null,
         kind: "unmerged",
         conflict: CONFLICT_LABEL[xy] ?? "conflict",
+        nested: false,
       });
       continue;
     }
@@ -168,9 +184,9 @@ export function parseStatusV2(output: string): Omit<ScmStatus, "operation"> {
     if (type === "2") i += 1;
 
     const [x, y] = [xy[0], xy[1]];
-    if (x && x !== ".") staged.push({ path, origPath, kind: kindOf(x), conflict: null });
+    if (x && x !== ".") staged.push({ path, origPath, kind: kindOf(x), conflict: null, nested: false });
     // 未暂存侧永远看不到重命名（重命名是索引里的事），也拿不到原路径。
-    if (y && y !== ".") unstaged.push({ path, origPath: null, kind: kindOf(y), conflict: null });
+    if (y && y !== ".") unstaged.push({ path, origPath: null, kind: kindOf(y), conflict: null, nested: false });
   }
 
   return { branch, merge, staged, unstaged, untracked, truncated };

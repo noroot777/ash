@@ -113,19 +113,29 @@ function partialOf(reason: unknown): ScmErrorBody | null {
   return body.partial ? body : null;
 }
 
+/**
+ * 后端跳过了一部分（目前只有嵌套 Git 仓库）时，把它那句交代接在成功提示后面。
+ *
+ * 组级操作（「全部暂存」「暂存全部并提交」）会把整份列表原样送上去，其中的嵌套仓一定
+ * 不会被处理。只报「已暂存 5 个文件」而用户点的是 6 行，差的那一个就得他自己去数。
+ */
+function withNote(message: string, note?: string): string {
+  return note ? `${message}（${note}）` : message;
+}
+
 async function runOne(taskId: string, action: ScmAction, force: boolean) {
   switch (action.kind) {
     case "stage": {
       const result = await api.scmStage(taskId, action.paths, force);
-      return { status: result.status, message: `已暂存 ${result.affected} 个文件` };
+      return { status: result.status, message: withNote(`已暂存 ${result.affected} 个文件`, result.note) };
     }
     case "unstage": {
       const result = await api.scmUnstage(taskId, action.paths, force);
-      return { status: result.status, message: `已取消暂存 ${result.affected} 个文件` };
+      return { status: result.status, message: withNote(`已取消暂存 ${result.affected} 个文件`, result.note) };
     }
     case "discard": {
       const result = await api.scmDiscard(taskId, action.paths, action.deleteUntracked, force);
-      return { status: result.status, message: `已丢弃 ${result.affected} 个文件的改动` };
+      return { status: result.status, message: withNote(`已丢弃 ${result.affected} 个文件的改动`, result.note) };
     }
     case "commit": {
       const result = await api.scmCommit(taskId, action.message, {
@@ -137,7 +147,10 @@ async function runOne(taskId: string, action: ScmAction, force: boolean) {
       // 报「提交失败」会让用户再提交一次，报得含糊也一样。所以摆事实——提交成功了，
       // 加上那句读不到提交号的实话。
       const done = result.sha ? `已提交 ${result.sha.slice(0, 7)}：${result.subject}` : `已提交：${result.subject}`;
-      return { status: result.status, message: result.warning ? `${done}（${result.warning}）` : done };
+      return {
+        status: result.status,
+        message: withNote(result.warning ? `${done}（${result.warning}）` : done, result.note),
+      };
     }
   }
 }
@@ -171,23 +184,41 @@ export function useScmWorkspace(taskId: string) {
   const [partial, setPartial] = useState<ScmPartialNotice | null>(null);
   const [stale, setStale] = useState<string | null>(null);
   // 写操作进行中不轮询：中途插进来的 GET 会拿到写到一半的状态，把刚点掉的条目闪回来。
+  // **必须同步置位**——`setBusy` 要等下一帧才生效，这中间的定时器照样会开一次 GET。
   const busyRef = useRef(false);
-  busyRef.current = busy;
+  // 读请求的世代号。
+  //
+  // 「读」和「写」天然会交错：一次 GET 已经在飞（5 秒轮询、用户点的刷新、StrictMode 双
+  // 发都算），用户接着点了暂存，写先回来、读后回来——而这次读带的是**写之前**的快照。
+  // 无条件采信它，就等于把已经落地的写结果盖回去，或者把「列表可能是旧的」那道冻结拆掉；
+  // 用户接着按这份磁盘上已经不成立的列表点丢弃/提交（第 1 轮审查复现两条）。
+  //
+  // 所以每次读发一个号，落地时对不上就整份丢掉。写操作在**开始时**和**返回后**各作废
+  // 一次：前者管住写之前发出的，后者管住写期间发出的——冻结只能被这次写之后发起的那次
+  // 成功刷新解除。
+  const generation = useRef(0);
+  const invalidate = useCallback(() => { generation.current += 1; }, []);
 
   const refresh = useCallback(async (quiet = false) => {
+    const ticket = ++generation.current;
+    const current = () => ticket === generation.current;
     if (!quiet) setLoading(true);
     try {
-      setOverview(await api.taskScm(taskId));
+      const next = await api.taskScm(taskId);
+      if (!current()) return;
+      setOverview(next);
       setError(null);
       // 读到了 = 列表就是现状，之前那声「可能是旧的」到此为止。
       setStale(null);
     } catch (reason) {
+      if (!current()) return;
       setError(messageOf(reason));
       // 静默轮询失败尤其要留痕：屏幕上什么都没变，用户以为自己看的是实时状态。
       setStale(staleAfterRefresh(messageOf(reason)));
       if (!quiet) setOverview(null);
     } finally {
-      setLoading(false);
+      // 转圈这一格不跟世代走：过期的那次照样得把它收掉，否则面板会一直停在「正在读取」。
+      if (!quiet) setLoading(false);
     }
   }, [taskId]);
 
@@ -222,9 +253,14 @@ export function useScmWorkspace(taskId: string) {
    * 之后还看得见「上次那下做到哪儿、是哪几个」。横幅由他自己关掉，不随下一次轮询消失。
    */
   const run = useCallback(async (action: ScmAction, force = false): Promise<ScmActionOutcome> => {
+    busyRef.current = true;
     setBusy(true);
+    // 写之前发出的那些 GET 一律作废：它们带的是写之前的快照（见 `generation` 注释）。
+    invalidate();
     try {
       const result = await runOne(taskId, action, force);
+      // 写期间发出的也一样过期——写的结果才是最新的那份。
+      invalidate();
       // 写操作自带刷新后的状态，直接就地更新：少一次往返，也不会出现「按钮已响应、
       // 列表还是旧的」那一帧。commits 不跟着变的只有提交，所以那一种额外补一次拉取。
       // 状态没跟回来（后端那次刷新读失败了，但写操作已经生效）就自己补一次——绝不能
@@ -241,6 +277,7 @@ export function useScmWorkspace(taskId: string) {
       setPartial(null);
       return { ok: true, message: result.message };
     } catch (reason) {
+      invalidate();
       if (isNeedsForce(reason)) return { ok: false, needsForce: true, error: messageOf(reason) };
       const body = partialOf(reason);
       if (body?.partial) {
@@ -256,9 +293,10 @@ export function useScmWorkspace(taskId: string) {
       }
       throw reason;
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
-  }, [refresh, taskId]);
+  }, [invalidate, refresh, taskId]);
 
   const dismissPartial = useCallback(() => setPartial(null), []);
 
