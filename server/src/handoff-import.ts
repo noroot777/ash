@@ -17,7 +17,10 @@ import {
   HandoffError, MAX_FILE_BYTES, MB, safeRel,
   type HandoffManifest, type HandoffFilePayload, type HandoffUploadPayload,
 } from "./handoff-types.js";
-import { applyUploadRewrites, isTextRel, MAX_UPLOADS, uploadRewritePairs, writeUploads } from "./handoff-uploads.js";
+import {
+  applyUploadRewrites, buildUploadRewrites, hasUploadRewrites, isTextRel,
+  MAX_UPLOADS, rewriteKindFor, writeUploads, type UploadRewrites,
+} from "./handoff-uploads.js";
 import { ensureWorkdir, expandHome, prepareWorktree, projectHealthLight, worktreePathFor } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { DATA_DIR, RUNS_DIR } from "./paths.js";
@@ -140,7 +143,7 @@ async function writePayloadFiles(
   files: HandoffFilePayload[],
   taskId: string,
   remoteCwd: string,
-  rewrites: { from: string; to: string }[],
+  rewrites: UploadRewrites,
   notes: string[],
 ): Promise<Set<string>> {
   const claudeDir = join(homedir(), ".claude", "projects", claudeProjectSlug(remoteCwd));
@@ -164,10 +167,11 @@ async function writePayloadFiles(
     }
     let data = Buffer.from(f.dataBase64, "base64");
     if (data.byteLength > MAX_FILE_BYTES) { notes.push(`${f.rel} 解码后超限,跳过`); continue; }
-    if (rewrites.length && isTextRel(f.rel)) {
-      // 会话 JSONL/产物文本里的上传附件路径改写成本机路径(JSONL 里是转义形态,
-      // 改写对按形态配对,改完仍是合法 JSON;二进制文件不碰)。
-      data = Buffer.from(applyUploadRewrites(data.toString("utf8"), rewrites), "utf8");
+    if (hasUploadRewrites(rewrites) && isTextRel(f.rel)) {
+      // 会话 JSONL/产物文本里的上传附件路径改写成本机路径。上下文按扩展名声明
+      // (.jsonl/.json/.trace 整体是 JSON,.md/.txt 是混排文本),POSIX 源机接力到
+      // Windows 目标机时两种形态才能各改各的,JSONL 改完仍是合法 JSON;二进制不碰。
+      data = Buffer.from(applyUploadRewrites(data.toString("utf8"), rewrites, rewriteKindFor(f.rel)), "utf8");
     }
     mkdirSync(dirname(dest), { recursive: true });
     await writeFile(dest, data);
@@ -280,14 +284,16 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
   // 任务文本字段和后面的文本类文件载荷。必须在拼 resumePrompt 前言**之前**改:前言
   // 会把 m.task.body 原文嵌进去。写盘失败的附件不进改写对,旧路径原样留着。
   const writtenUploads = await writeUploads(m.uploads ?? [], notes);
-  const rewrites = uploadRewritePairs(writtenUploads);
-  if (rewrites.length) {
-    const rw = (s: string | null): string | null => (s == null ? null : applyUploadRewrites(s, rewrites));
-    m.task.body = applyUploadRewrites(m.task.body, rewrites);
-    m.task.resumePrompt = rw(m.task.resumePrompt);
-    m.task.question = rw(m.task.question);
-    m.task.questionOptions = rw(m.task.questionOptions);
-    m.task.questionItems = rw(m.task.questionItems);
+  const rewrites = buildUploadRewrites(writtenUploads);
+  if (hasUploadRewrites(rewrites)) {
+    const rwPlain = (s: string | null): string | null => (s == null ? null : applyUploadRewrites(s, rewrites, "plain"));
+    const rwJson = (s: string | null): string | null => (s == null ? null : applyUploadRewrites(s, rewrites, "json"));
+    m.task.body = applyUploadRewrites(m.task.body, rewrites, "plain");
+    m.task.resumePrompt = rwPlain(m.task.resumePrompt);
+    m.task.question = rwPlain(m.task.question);
+    // questionOptions/questionItems 列本身是 JSON 文档,路径在其中以转义形态出现。
+    m.task.questionOptions = rwJson(m.task.questionOptions);
+    m.task.questionItems = rwJson(m.task.questionItems);
     notes.push(`迁移上传附件 ${writtenUploads.length} 个,文本里的源机路径已改写为本机路径`);
   }
 

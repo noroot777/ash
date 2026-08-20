@@ -4,12 +4,16 @@
 // 回合的消息,这些路径随后进入 CLI 会话 JSONL 和 run 产物。接力后那是**源机**的
 // 路径,对端 agent 照着 Read 只会得到「文件不存在」。这里负责:
 //   导出侧 collectUploads —— 从任务文本与文本载荷里扫出被引用的附件并打包;
-//   导入侧 writeUploads + uploadRewritePairs/applyUploadRewrites —— 附件落到本机
+//   导入侧 writeUploads + buildUploadRewrites/applyUploadRewrites —— 附件落到本机
 //   uploads 目录,把所有文本(任务字段 + 文本类文件载荷)里的旧路径改写成新路径。
 //
 // 转义形态:路径出现在 JSON 文本(.jsonl)里时反斜杠是转义过的(D:\\a\\b),只扫/只改
 // 原始形态会漏掉 Windows 源机的所有会话文件引用。所以原始、转义两种形态都扫,改写
-// 对按「原始→原始、转义→转义」配对,JSON 文件改完仍是合法 JSON。
+// 对按「原始→原始、转义→转义」配对。坑在 POSIX 源机 → Windows 目标机:源路径没有
+// 需转义字符,两种形态的 from **完全相同**,而 to 不同——无上下文的全局替换只能二选
+// 一,把原始 Windows 路径写进 JSONL 就是非法 JSON(第 2 轮审查实测)。所以改写对按
+// 形态分组返回,替换时由调用方声明文本的上下文(纯文本还是 JSON),歧义时按上下文
+// 选组;.md 这类 markdown 正文和 JSON 哨兵行混排的文件,逐行判断是不是 JSON。
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join, sep } from "node:path";
@@ -95,25 +99,84 @@ export async function writeUploads(
   return written;
 }
 
-/** 改写对:源机旧路径(原始/转义两种形态)→ 本机新路径。长的先换,防前缀互吞。 */
-export function uploadRewritePairs(written: HandoffUploadPayload[]): { from: string; to: string }[] {
-  const pairs: { from: string; to: string }[] = [];
-  for (const u of written) {
-    const to = join(UPLOADS_DIR, u.name);
-    for (const [from, target] of [
-      [u.sourcePath, to],
-      [jsonEscaped(u.sourcePath), jsonEscaped(to)],
-    ] as const) {
-      if (from && from !== target) pairs.push({ from, to: target });
-    }
-  }
-  return pairs.sort((a, b) => b.from.length - a.from.length);
+type Pair = { from: string; to: string };
+const longestFirst = (a: Pair, b: Pair) => b.from.length - a.from.length;
+
+/** 目标路径按 uploadsDir 自己的分隔风格拼。生产环境 join 本来就是本机风格,单独处理
+ * 反斜杠目录只为让纯函数测试能在 POSIX 机器上模拟 Windows 目标机。 */
+const joinUploads = (dir: string, name: string): string =>
+  dir.includes("\\") ? `${dir.replace(/[\\/]+$/, "")}\\${name}` : join(dir, name);
+
+export interface UploadRewrites {
+  // 原始形态的改写对(纯文本上下文)与 JSON 转义形态的改写对(JSON 字符串上下文)。
+  raw: Pair[];
+  json: Pair[];
+  // true = 存在「两种形态的 from 相同、to 不同」的改写对(POSIX 源机 → Windows
+  // 目标机),全局替换会写坏其中一种上下文,必须按上下文分组替换。
+  ambiguous: boolean;
 }
 
-export function applyUploadRewrites(text: string, pairs: { from: string; to: string }[]): string {
+/** 改写对:源机旧路径 → 本机新路径,按形态分组;组内长的先换,防前缀互吞。 */
+export function buildUploadRewrites(
+  written: HandoffUploadPayload[],
+  uploadsDir: string = UPLOADS_DIR,
+): UploadRewrites {
+  const raw: Pair[] = [];
+  const json: Pair[] = [];
+  let ambiguous = false;
+  for (const u of written) {
+    if (!u.sourcePath) continue;
+    const to = joinUploads(uploadsDir, u.name);
+    const fromJson = jsonEscaped(u.sourcePath);
+    const toJson = jsonEscaped(to);
+    if (u.sourcePath !== to) raw.push({ from: u.sourcePath, to });
+    if (fromJson !== toJson) json.push({ from: fromJson, to: toJson });
+    if (u.sourcePath === fromJson && to !== toJson) ambiguous = true;
+  }
+  return { raw: raw.sort(longestFirst), json: json.sort(longestFirst), ambiguous };
+}
+
+export const hasUploadRewrites = (rw: UploadRewrites): boolean =>
+  rw.raw.length > 0 || rw.json.length > 0;
+
+const applyPairs = (text: string, pairs: Pair[]): string => {
   let out = text;
   for (const p of pairs) out = out.replaceAll(p.from, p.to);
   return out;
+};
+
+/**
+ * kind 声明文本的上下文:"json" = 整体是 JSON 文档/JSONL(路径以转义形态出现);
+ * "plain" = 纯文本或混排文本(任务正文、transcript .md——markdown 正文 + JSON 哨兵行)。
+ * 非歧义时两组的 from 互不冲突,合并去重后全局替换(即旧行为,所有非歧义方向不变);
+ * 歧义时 "json" 只用转义组,"plain" 逐行判断:能按 JSON 解析的行(哨兵行/纯 JSON 行)
+ * 用转义组,其余行用原始组。
+ */
+export function applyUploadRewrites(text: string, rw: UploadRewrites, kind: "json" | "plain"): string {
+  if (!rw.ambiguous) {
+    const merged: Pair[] = [];
+    const seen = new Set<string>();
+    for (const p of [...rw.raw, ...rw.json]) {
+      if (seen.has(p.from)) continue;
+      seen.add(p.from);
+      merged.push(p);
+    }
+    return applyPairs(text, merged.sort(longestFirst));
+  }
+  if (kind === "json") return applyPairs(text, rw.json);
+  return text
+    .split("\n")
+    .map((line) => {
+      const brace = line.indexOf("{");
+      if (brace !== -1) {
+        try {
+          JSON.parse(line.slice(brace));
+          return applyPairs(line, rw.json);
+        } catch { /* 不是 JSON 行,按纯文本处理 */ }
+      }
+      return applyPairs(line, rw.raw);
+    })
+    .join("\n");
 }
 
 // 只有文本类文件才做路径扫描/改写——二进制(截图等)碰一下就废。
@@ -122,4 +185,11 @@ const TEXT_EXT = new Set([".md", ".txt", ".json", ".jsonl", ".trace"]);
 export function isTextRel(rel: string): boolean {
   const dot = rel.lastIndexOf(".");
   return dot !== -1 && TEXT_EXT.has(rel.slice(dot).toLowerCase());
+}
+
+/** 文本类文件载荷的改写上下文:.md/.txt 是(混排)纯文本,其余整体是 JSON。 */
+export function rewriteKindFor(rel: string): "json" | "plain" {
+  const dot = rel.lastIndexOf(".");
+  const ext = dot === -1 ? "" : rel.slice(dot).toLowerCase();
+  return ext === ".md" || ext === ".txt" ? "plain" : "json";
 }
