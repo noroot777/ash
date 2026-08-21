@@ -3,8 +3,8 @@ import type { ProjectGitBranchRow, ProjectGitState } from "../lib/api.ts";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { checkoutBlocker } from "./projectGitModel.ts";
 
-// 分支清单。侧栏胶囊的浮层和命令面板 `/git` 共用——切分支是这两个入口里最容易点错的
-// 操作，行长什么样、灰的时候给什么理由，必须只有一份实现。
+// 项目 Git 浮层里的分支清单。切分支是这里最容易点错的操作，所以行长什么样、灰的时候
+// 给什么理由，都在这一处说清楚。
 
 function BranchRow({
   row,
@@ -51,19 +51,16 @@ export function ProjectGitBranchList({
   state,
   busy,
   loading,
-  roomy,
   onCheckout,
 }: {
   rows: ProjectGitBranchRow[];
   state: ProjectGitState | null;
   busy: boolean;
   loading: boolean;
-  /** 命令面板那种大格子里用宽松一档的行高。 */
-  roomy?: boolean;
   onCheckout: (branch: string) => void;
 }) {
   return (
-    <div className={`project-git-panel__branches${roomy ? " is-roomy" : ""}`}>
+    <div className="project-git-panel__branches">
       {rows.map((row) => (
         <BranchRow
           key={row.name}

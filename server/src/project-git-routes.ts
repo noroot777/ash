@@ -13,7 +13,7 @@ import {
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { ScmOperationError } from "./scm-paths.js";
 
-// 项目主仓的 git 面板（侧栏那颗分支胶囊 + 命令面板 `/git`）。跟任务面板的
+// 项目主仓的 git 面板（侧栏那颗分支胶囊）。跟任务面板的
 // `scm-routes.ts` 是**两个尺度**：那边的工作目录由 taskFileRoot 一路推导出来，这边的
 // 目标永远只有一个——项目行上登记的 `repoPath`，没有回退档，也就没有「以为在改自己的
 // worktree、其实在改主仓」那类错位。语义在 `git-project-ops.ts` 顶部。

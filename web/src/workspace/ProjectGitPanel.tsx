@@ -12,8 +12,8 @@ import { branchLabel, dirtyText } from "./projectGitModel.ts";
 // 它整个转成只读（`ScmInspector.tsx`）。把主仓的写操作塞进去，等于让同一块界面在两种
 // 尺度之间来回跳——用户分不清此刻改的是自己的 worktree 还是所有任务共用的那份仓库。
 //
-// 按钮和分支行都来自共享组件（`ProjectGitActions` / `ProjectGitBranchList`），命令面板
-// `/git` 用的是同一份；判据在 `projectGitModel.ts`，跟服务端那道硬门禁是同一套措辞。
+// 按钮和分支行拆在 `ProjectGitActions` / `ProjectGitBranchList`；判据在 `projectGitModel.ts`，
+// 跟服务端那道硬门禁是同一套措辞。命令面板 `/git` 只读，不在那儿开第二个操作面。
 
 export function ProjectGitPanel({
   projectId,

@@ -7,8 +7,8 @@ import { useDismissable } from "../lib/useDismissable.ts";
 import type { ProjectGitHandle } from "./useProjectGit.ts";
 import { defaultRemote, fetchBlocker, PULL_OPTIONS, pullBlocker, pushBlocker, pushLabelFor } from "./projectGitModel.ts";
 
-// ⟳ 更新 / ↓ 拉取 / ↑ 推送 这三颗按钮。侧栏胶囊的浮层和命令面板 `/git` 都用这一份——
-// 两个入口按同一颗按钮，得是同一段代码，否则迟早一边修了另一边没修。
+// ⟳ 更新 / ↓ 拉取 / ↑ 推送 这三颗按钮，住在侧栏那颗分支胶囊点开的浮层里——这是项目主仓
+// git 操作的唯一入口（命令面板 `/git` 只读，用户 2026-08-21 指定）。
 //
 // 按钮的禁用一律用 `aria-disabled` 而不是 `disabled`：Chrome 不给 `disabled` 元素派发
 // `mouseenter`，真按 `disabled` 写，「为什么这颗是灰的」那句话就永远没人看得到。

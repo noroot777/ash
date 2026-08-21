@@ -1,8 +1,7 @@
 import type { ProjectGitBranchRow, ProjectGitState, PullStrategy } from "../lib/api.ts";
 
-// 项目主仓 git 面板的措辞与判据。侧栏胶囊和命令面板 `/git` 两个入口共用这一份——同一
-// 件事在两处说法不一样，用户会以为是两回事。真正的门禁在服务端（`git-project-ops.ts`），
-// 这里只负责「提前把拦不住的原因说清楚」，让按钮在点下去之前就是灰的。
+// 项目主仓 git 面板的措辞与判据。真正的门禁在服务端（`git-project-ops.ts`），这里只负责
+// 「提前把拦不住的原因说清楚」，让按钮在点下去之前就是灰的，措辞跟服务端保持同一套。
 
 export const PULL_OPTIONS: { strategy: PullStrategy; label: string; hint: string }[] = [
   { strategy: "ff-only", label: "快进拉取", hint: "只在能快进时拉，分叉了就停手（推荐）" },

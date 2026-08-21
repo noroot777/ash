@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type ProjectGitResult, type ProjectGitState } from "../lib/api.ts";
 
-// 项目主仓 git 面板的数据层。侧栏那颗分支胶囊和命令面板 `/git` 共用它——同一份状态、
-// 同一套报错措辞，不该因为入口不同而说法不同。
+// 项目主仓 git 面板的数据层，供侧栏那颗分支胶囊点开的浮层用。
 //
 // 两条约定：
 // ① **只在面板开着时拉。** 关着的时候胶囊显示的是 `ProjectHealth` 里那份轻量分支名

@@ -115,7 +115,7 @@ export const api = {
   projectGitOverview: (projectId: string): Promise<GitOverview> =>
     request(`/projects/${id(projectId)}/git-overview`),
 
-  // 项目**主仓**的 git 操作（侧栏分支胶囊 / 命令面板 `/git`）。跟任务面板那套 `scm*`
+  // 项目**主仓**的 git 操作（侧栏那颗分支胶囊）。跟任务面板那套 `scm*`
   // 不是一回事：这里的目标永远是项目登记的仓库路径，改的是所有任务共用的那份 `.git`。
   projectGit: (projectId: string): Promise<ProjectGitState> =>
     request(`/projects/${id(projectId)}/git`),
