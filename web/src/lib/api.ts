@@ -48,6 +48,8 @@ import type {
   GitOverview,
   HostInfo,
   OpenerProbe,
+  ProjectGitConfig,
+  ProjectGitConfigPatch,
   ProjectGitResult,
   ProjectGitState,
   PullStrategy,
@@ -134,6 +136,22 @@ export const api = {
     request(`/projects/${id(projectId)}/git/pull`, json("POST", { strategy })),
   projectGitPush: (projectId: string, remote?: string | null): Promise<ProjectGitResult> =>
     request(`/projects/${id(projectId)}/git/push`, json("POST", { remote: remote ?? null })),
+
+  // 项目的 git 配置：提交署名 / SSH key 落在**仓库自己的 .git/config**（agent 和用户的
+  // 终端看到的是同一份），HTTPS 用户名+令牌落在 ash 的库里且只写不读。
+  projectGitConfig: (projectId: string): Promise<ProjectGitConfig> =>
+    request(`/projects/${id(projectId)}/git-config`),
+  saveProjectGitConfig: (projectId: string, patch: ProjectGitConfigPatch): Promise<ProjectGitConfig> =>
+    request(`/projects/${id(projectId)}/git-config`, json("PUT", patch)),
+  // `secret` 留空 = 沿用已存的令牌（界面读不回旧值，只改用户名时不该逼用户重填）。
+  saveProjectGitCredential: (
+    projectId: string,
+    username: string,
+    secret: string,
+  ): Promise<ProjectGitConfig> =>
+    request(`/projects/${id(projectId)}/git-credential`, json("PUT", { username, secret })),
+  deleteProjectGitCredential: (projectId: string): Promise<ProjectGitConfig> =>
+    request(`/projects/${id(projectId)}/git-credential`, json("DELETE")),
   createTerminalSession: (
     projectId: string,
     size: { cols: number; rows: number },

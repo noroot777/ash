@@ -15,6 +15,7 @@ import { isTurnClaimed } from "./runs.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { findWorkflow } from "./workflows.js";
 import { ensureProjectDir } from "./project-dir.js";
+import { deleteProjectGitCredential } from "./git-credentials.js";
 
 // 项目这张表自己的 CRUD 与体检端点。从 routes.ts 搬出来:那份文件是各模块 mount 的总表
 // 加上零散端点,项目这一段已经长到能自成一块了(建项目、按路径找回、删项目的级联、路径
@@ -138,6 +139,7 @@ export function mountProjectRoutes(api: Hono): void {
     const projectNotes = await db.select({ id: notes.id }).from(notes).where(eq(notes.projectId, pid));
     if (projectNotes.length) await db.delete(noteTasks).where(inArray(noteTasks.noteId, projectNotes.map((note) => note.id)));
     await db.delete(notes).where(eq(notes.projectId, pid));
+    await deleteProjectGitCredential(pid);
     await db.delete(projects).where(eq(projects.id, pid));
     return c.json({ deleted: true });
   });

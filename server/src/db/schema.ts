@@ -13,6 +13,18 @@ export const projects = sqliteTable("projects", {
   createdAt: text("created_at").notNull(),
 });
 
+// 项目走 HTTPS 远端时用的用户名 + 令牌。**一个项目一组**，故意不做成「一个项目多个
+// host」：需求是「这个项目用哪个账号推」，多 host 那层复杂度还没有人要过。
+//
+// 这份东西不写进仓库的 .git/config（那是明文、所有 worktree 和 agent 都读得到），也不
+// 回传给前端 —— 读侧只报 username 和「配没配」，见 git-credentials.ts 顶部。
+export const projectGitCredentials = sqliteTable("project_git_credentials", {
+  projectId: text("project_id").primaryKey(),
+  username: text("username").notNull(),
+  secret: text("secret").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 // Generic global settings store. Values are JSON-encoded text; the typed
 // read/write boundary lives in app-settings.ts so future settings can reuse the
 // same table without another schema change.

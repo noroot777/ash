@@ -1,4 +1,4 @@
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { projects } from "./db/schema.js";
@@ -10,6 +10,18 @@ import {
   readProjectGitState,
   type PullStrategy,
 } from "./git-project-ops.js";
+import {
+  checkSshKeyPath,
+  readGitIdentity,
+  sshCommandFor,
+  writeGitIdentity,
+  type WritableGitConfigKey,
+} from "./git-identity.js";
+import {
+  deleteProjectGitCredential,
+  readProjectGitCredential,
+  saveProjectGitCredential,
+} from "./git-credentials.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { ScmOperationError } from "./scm-paths.js";
 
@@ -25,6 +37,10 @@ import { ScmOperationError } from "./scm-paths.js";
 // 这里没有任务面板那三道（只读回退 / 归档冻结 / 任务在飞）：主仓不属于任何一个任务，
 // 归档与否是任务的属性。至于「别的任务此刻正踩在主仓上」，挡它的是 `withRepoLock` 排队
 // 加上锁内重读的脏检查，不是这一层。
+//
+// 后半段是**项目的 git 配置**（`/projects/:id/git-config`、`/git-credential`）：提交署名
+// 和 SSH key 落在仓库自己的 .git/config（`git-identity.ts`），HTTPS 用户名/令牌落在 ash
+// 的库里且只写不读（`git-credentials.ts`）。两个模块的顶部注释解释了为什么分开存。
 
 const errorStatus = (error: unknown) => (error instanceof ScmOperationError ? error.status : 500);
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -35,6 +51,15 @@ async function repoPathOf(id: string): Promise<string | null> {
 }
 
 const PULL_STRATEGIES: PullStrategy[] = ["ff-only", "merge", "rebase"];
+
+/** 读侧和写侧都返回这一份，前端存一个状态即可。 */
+async function gitConfigView(projectId: string, repoPath: string | null) {
+  const [identity, credential] = await Promise.all([
+    readGitIdentity(repoPath),
+    readProjectGitCredential(projectId),
+  ]);
+  return { identity, credential };
+}
 
 export function mountProjectGitRoutes(api: Hono) {
   api.get("/projects/:id/git", async (c) => {
@@ -47,21 +72,41 @@ export function mountProjectGitRoutes(api: Hono) {
     }
   });
 
+  api.get("/projects/:id/git-config", async (c) => {
+    const id = c.req.param("id");
+    const repoPath = await repoPathOf(id);
+    if (repoPath === null) return c.json({ error: "not found" }, 404);
+    try {
+      return c.json(await gitConfigView(id, repoPath));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, errorStatus(error) as 400);
+    }
+  });
+
+  /**
+   * 写型请求共用的外壳：预览实例拒绝 → 项目存在性 → 解析 body → 统一错误映射。
+   * `run` 拿得到项目 id，网络操作靠它取这个项目自己的凭证。
+   */
+  const handler = (
+    run: (repoPath: string, body: Record<string, unknown>, projectId: string) => Promise<unknown>,
+  ) => async (c: Context) => {
+    if (IS_PREVIEW_INSTANCE) return c.json({ error: previewRefusal("项目 Git 操作") }, 403);
+    const id = c.req.param("id") ?? "";
+    const repoPath = await repoPathOf(id);
+    if (repoPath === null) return c.json({ error: "not found" }, 404);
+    const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+    try {
+      return c.json(await run(repoPath, body ?? {}, id));
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, errorStatus(error) as 400);
+    }
+  };
+
   const write = (
     path: string,
-    run: (repoPath: string, body: Record<string, unknown>) => Promise<unknown>,
+    run: (repoPath: string, body: Record<string, unknown>, projectId: string) => Promise<unknown>,
   ) => {
-    api.post(path, async (c) => {
-      if (IS_PREVIEW_INSTANCE) return c.json({ error: previewRefusal("项目 Git 操作") }, 403);
-      const repoPath = await repoPathOf(c.req.param("id") ?? "");
-      if (repoPath === null) return c.json({ error: "not found" }, 404);
-      const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
-      try {
-        return c.json(await run(repoPath, body ?? {}));
-      } catch (error) {
-        return c.json({ error: errorMessage(error) }, errorStatus(error) as 400);
-      }
-    });
+    api.post(path, handler(run));
   };
 
   write("/projects/:id/git/checkout", (repoPath, body) => {
@@ -70,17 +115,43 @@ export function mountProjectGitRoutes(api: Hono) {
     return checkoutProjectBranch(repoPath, branch);
   });
 
-  write("/projects/:id/git/fetch", (repoPath, body) =>
-    fetchProject(repoPath, typeof body.remote === "string" && body.remote ? body.remote : null));
+  write("/projects/:id/git/fetch", (repoPath, body, projectId) =>
+    fetchProject(repoPath, typeof body.remote === "string" && body.remote ? body.remote : null, projectId));
 
-  write("/projects/:id/git/pull", (repoPath, body) => {
+  write("/projects/:id/git/pull", (repoPath, body, projectId) => {
     const strategy = typeof body.strategy === "string" ? body.strategy : "ff-only";
     if (!PULL_STRATEGIES.includes(strategy as PullStrategy)) {
       throw new ScmOperationError(`未知的拉取策略 ${strategy}`, 400);
     }
-    return pullProject(repoPath, strategy as PullStrategy);
+    return pullProject(repoPath, strategy as PullStrategy, projectId);
   });
 
-  write("/projects/:id/git/push", (repoPath, body) =>
-    pushProject(repoPath, typeof body.remote === "string" && body.remote ? body.remote : null));
+  write("/projects/:id/git/push", (repoPath, body, projectId) =>
+    pushProject(repoPath, typeof body.remote === "string" && body.remote ? body.remote : null, projectId));
+
+  // 提交署名 / SSH key：只带上的字段才动，**空字符串是「清掉它，跟着全局走」**，
+  // 跟「这次没提交这个字段」是两回事（`writeGitIdentity` 顶部）。
+  api.put("/projects/:id/git-config", handler(async (repoPath, body, projectId) => {
+    const patch: Partial<Record<WritableGitConfigKey, string>> = {};
+    if (typeof body.userName === "string") patch["user.name"] = body.userName;
+    if (typeof body.userEmail === "string") patch["user.email"] = body.userEmail;
+    if (typeof body.sshKeyPath === "string") {
+      const keyPath = checkSshKeyPath(body.sshKeyPath);
+      patch["core.sshCommand"] = keyPath ? sshCommandFor(keyPath) : "";
+    }
+    const identity = await writeGitIdentity(repoPath, patch);
+    return { identity, credential: await readProjectGitCredential(projectId) };
+  }));
+
+  api.put("/projects/:id/git-credential", handler(async (repoPath, body, projectId) => {
+    const username = typeof body.username === "string" ? body.username : "";
+    const secret = typeof body.secret === "string" ? body.secret : "";
+    const credential = await saveProjectGitCredential(projectId, username, secret);
+    return { identity: await readGitIdentity(repoPath), credential };
+  }));
+
+  api.delete("/projects/:id/git-credential", handler(async (repoPath, _body, projectId) => {
+    await deleteProjectGitCredential(projectId);
+    return { identity: await readGitIdentity(repoPath), credential: null };
+  }));
 }

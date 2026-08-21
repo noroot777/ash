@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { expandHome, gitError, isGitRepo } from "./git.js";
+import { gitNetInjection, type GitNetInjection } from "./git-credentials.js";
 import { readScmRemotes, readScmStatus, type ScmBranchInfo, type ScmStatus } from "./git-status.js";
 import { ScmOperationError } from "./scm-paths.js";
 import { withRepoLock } from "./repo-lock.js";
@@ -34,12 +35,23 @@ import { withRepoLock } from "./repo-lock.js";
 const exec = promisify(execFile);
 const NET_TIMEOUT_MS = 120_000;
 
-/** 联网命令统一的执行参数：禁掉终端凭据提示，否则无人值守的服务端会永久挂住。 */
-const NET_OPTIONS = {
-  env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-  timeout: NET_TIMEOUT_MS,
-  maxBuffer: 8 * 1024 * 1024,
-} as const;
+/**
+ * 联网命令统一的执行参数：禁掉终端凭据提示，否则无人值守的服务端会永久挂住。
+ *
+ * `injection` 是这个项目自己的 HTTPS 凭证（`git-credentials.ts`）。没配就是两个空的，
+ * 于是这里退回原样 —— 走 SSH 或者已经有系统级凭证的仓库不受任何影响。
+ */
+function netOptions(injection: GitNetInjection) {
+  return {
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...injection.env },
+    timeout: NET_TIMEOUT_MS,
+    maxBuffer: 8 * 1024 * 1024,
+  };
+}
+
+/** `-c` 只有排在子命令前面才算数，所以统一在这里拼，别在各个调用点手工插。 */
+const netArgs = (root: string, injection: GitNetInjection, rest: string[]) =>
+  ["-C", root, ...injection.args, ...rest];
 
 export type PullStrategy = "ff-only" | "merge" | "rebase";
 
@@ -214,17 +226,22 @@ export async function checkoutProjectBranch(repoPath: string, branch: string): P
   });
 }
 
-export async function fetchProject(repoPath: string, remote: string | null): Promise<ProjectGitResult> {
+export async function fetchProject(
+  repoPath: string,
+  remote: string | null,
+  projectId: string | null = null,
+): Promise<ProjectGitResult> {
   return withRepoLock(repoPath, async () => {
     const state = await requireRepo(repoPath);
     if (!state.remotes.length) throw new ScmOperationError("这个仓库没有配置 Git 远端。", 409);
     if (remote && !state.remotes.includes(remote)) {
       throw new ScmOperationError(`远端 ${remote} 不存在，请刷新后重试。`, 409);
     }
+    const injection = await gitNetInjection(projectId);
     // `--prune` 顺手清掉远端已删的分支引用，否则清单上的 upstream 会一直显示 `[gone]`。
-    const args = ["-C", state.root, "fetch", "--prune", ...(remote ? [remote] : ["--all"])];
+    const args = netArgs(state.root, injection, ["fetch", "--prune", ...(remote ? [remote] : ["--all"])]);
     try {
-      await exec("git", args, NET_OPTIONS);
+      await exec("git", args, netOptions(injection));
     } catch (error) {
       throw new ScmOperationError(`更新失败：${oneLine(gitError(error))}`, 409);
     }
@@ -259,7 +276,11 @@ const PULL_LABEL: Record<PullStrategy, string> = {
  * 失败后必须把仓库收干净：merge 冲突停在中途、rebase 冲突停在 detached HEAD 上，而这是
  * **项目主仓**——留着它，下一个建 worktree 的任务、下一次验收全都踩在半截状态上。
  */
-export async function pullProject(repoPath: string, strategy: PullStrategy): Promise<ProjectGitResult> {
+export async function pullProject(
+  repoPath: string,
+  strategy: PullStrategy,
+  projectId: string | null = null,
+): Promise<ProjectGitResult> {
   return withRepoLock(repoPath, async () => {
     const state = await requireRepo(repoPath);
     if (state.branch.detached || !state.branch.head) {
@@ -271,8 +292,9 @@ export async function pullProject(repoPath: string, strategy: PullStrategy): Pro
     const blocked = dirtyBlocker(state, "拉取");
     if (blocked) throw new ScmOperationError(blocked, 409);
     const before = state.branch.oid;
+    const injection = await gitNetInjection(projectId);
     try {
-      await exec("git", ["-C", state.root, "pull", ...PULL_ARGS[strategy]], NET_OPTIONS);
+      await exec("git", netArgs(state.root, injection, ["pull", ...PULL_ARGS[strategy]]), netOptions(injection));
     } catch (error) {
       const message = oneLine(gitError(error));
       const stuck = await readProjectGitState(repoPath);
@@ -317,7 +339,11 @@ export async function pullProject(repoPath: string, strategy: PullStrategy): Pro
  * 脏工作区**不拦**（推的是已提交的历史，未提交的改动本来就不参与），但 merge / rebase
  * 中途要拦：那时候的 HEAD 还不是用户认可的结果。
  */
-export async function pushProject(repoPath: string, requestedRemote: string | null): Promise<ProjectGitResult> {
+export async function pushProject(
+  repoPath: string,
+  requestedRemote: string | null,
+  projectId: string | null = null,
+): Promise<ProjectGitResult> {
   return withRepoLock(repoPath, async () => {
     const state = await requireRepo(repoPath);
     const midway = operationBlocker(state, "推送");
@@ -353,11 +379,12 @@ export async function pushProject(repoPath: string, requestedRemote: string | nu
     if (!state.remotes.includes(remote)) {
       throw new ScmOperationError(`远端 ${remote} 不存在，请刷新后重试。`, 409);
     }
-    const args = ["-C", state.root, "push"];
+    const injection = await gitNetInjection(projectId);
+    const args = netArgs(state.root, injection, ["push"]);
     if (published) args.push("--set-upstream");
     args.push("--", remote, `HEAD:refs/heads/${remoteBranch}`);
     try {
-      await exec("git", args, NET_OPTIONS);
+      await exec("git", args, netOptions(injection));
     } catch (error) {
       throw new ScmOperationError(`推送失败：${oneLine(gitError(error))}`, 409);
     }
