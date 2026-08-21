@@ -100,6 +100,11 @@ export const api = {
   projects: (): Promise<ProjectView[]> => request("/projects"),
   createProject: (name: string, repoPath: string): Promise<ProjectView> =>
     request("/projects", json("POST", { name, repoPath })),
+  // 在**服务端那台机器**上执行 git clone,成功后才登记项目。请求会一直挂到克隆结束
+  // (大仓库可能几分钟),调用点必须给出持续可见的进度反馈。
+  cloneProject: (
+    body: { url: string; targetPath: string; branch?: string; name?: string },
+  ): Promise<ProjectView> => request("/projects/clone", json("POST", body)),
   resolveProject: (repoPath: string, name?: string): Promise<ProjectView> =>
     request("/projects/resolve", json("POST", { repoPath, name })),
   updateProject: (

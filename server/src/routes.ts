@@ -56,11 +56,13 @@ import { mountFreeWorkflowRoutes } from "./free-workflow-routes.js";
 import { mountReviewerProfileRoutes } from "./reviewer-profiles.js";
 import { mountLocalOpenRoutes } from "./local-open-routes.js";
 import { directoryPickerSupport, mountDirectoryPickerRoutes } from "./dir-picker.js";
+import { mountProjectCloneRoutes } from "./project-clone.js";
 
 export const api = new Hono();
 mountNoteRoutes(api);
 mountLocalOpenRoutes(api);
 mountDirectoryPickerRoutes(api);
+mountProjectCloneRoutes(api);
 
 // ── health ───────────────────────────────────────────────────────────────
 api.get("/health", (c) => c.json({ ok: true, ts: now() }));
