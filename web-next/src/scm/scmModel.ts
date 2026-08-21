@@ -20,12 +20,41 @@ import {
 
 const POLL_MS = 5000;
 
-/** 中间栏此刻摊开的是哪一份 diff。同一个文件在暂存/未暂存两侧的内容不同，source 是主键的一部分。 */
+/**
+ * 中间栏此刻摊开的是哪一份 diff。
+ *
+ * 四档不是一个维度上的：`staged`/`unstaged`/`untracked` 读的是**工作目录此刻**的索引和
+ * 工作树（同一个文件在暂存/未暂存两侧内容不同，所以 source 是主键的一部分），`branch`
+ * 读的是**提交历史**——这条任务分支相对合入目标已经提交了什么。两边各走各的接口。
+ */
+export type ScmDiffKind = ScmDiffSource | "branch";
+
 export type ScmDiffTarget = {
   path: string;
-  source: ScmDiffSource;
+  source: ScmDiffKind;
   origPath: string | null;
 };
+
+/**
+ * 后端读不到分支 diff 时给的机器码 → 一句人话。
+ *
+ * 原样把 `source_branch_missing` 摆到面板上等于没说：用户看到的是一串英文下划线，
+ * 而这几种情形恰恰都有明确的下一步（去验收记录里看、去主仓拉一下目标分支……）。
+ */
+const BRANCH_DIFF_REASON: Record<string, string> = {
+  not_git_repo: "这个工作目录不是 Git 仓库",
+  target_unresolved: "解析不到这条任务的合入目标分支",
+  source_branch_missing: "任务分支已经不在了（多半是验收后清理掉了）",
+  target_branch_missing: "合入目标分支不在本地",
+  no_merge_base: "任务分支和合入目标没有共同祖先，比不出来",
+  accepted_snapshot_unreadable: "读不到验收时冻结的那段提交",
+};
+
+export function branchDiffReason(reason: string | null | undefined): string {
+  if (!reason) return "未解析到可比较的工作区";
+  // 认不出来的码原样透出去，比编一句体面的空话强——至少还能拿去搜代码。
+  return BRANCH_DIFF_REASON[reason] ?? reason;
+}
 
 export type ScmAction =
   | { kind: "stage"; paths: string[] }

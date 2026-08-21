@@ -1,7 +1,7 @@
-import { useRef, useState, type MouseEvent } from "react";
-import { createPortal } from "react-dom";
+import { type MouseEvent } from "react";
 import type { Task } from "@harness/shared";
 import { FileText, ChatsCircle, UsersThree } from "@phosphor-icons/react";
+import { HoverTip, useHoverTip } from "./HoverTip.tsx";
 
 export type TaskParentLink = {
   taskId: string;
@@ -50,46 +50,26 @@ export function OriginTaskChip({
   onOpen: (taskId: string) => void;
 }) {
   const link = taskParentLink(task, allTasks);
-  const root = useRef<HTMLSpanElement>(null);
-  const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
+  const tip = useHoverTip();
   if (!link) return null;
   const relation = taskParentRelation(link);
   const label = link.task ? `${relation}：${link.task.title}` : relation;
-  const showTip = () => {
-    const rect = root.current?.getBoundingClientRect();
-    if (!rect) return;
-    const edge = Math.min(140, window.innerWidth / 2);
-    setPosition({
-      x: Math.min(Math.max(rect.left + rect.width / 2, edge), window.innerWidth - edge),
-      y: rect.bottom,
-    });
-  };
   return (
-    <span
-      ref={root}
-      className="task-origin-chip"
-      onMouseEnter={showTip}
-      onMouseLeave={() => setPosition(null)}
-      onFocus={showTip}
-      onBlur={() => setPosition(null)}
-    >
+    <span className="task-origin-chip" {...tip.anchorProps}>
       <button
         type="button"
         aria-label={label}
         onClick={(event: MouseEvent<HTMLButtonElement>) => {
           event.stopPropagation();
-          setPosition(null);
+          // 点了就要跳走，气泡不能留在原地悬着——它是 portal 到 body 的，锚点那一片
+          // 内容马上就换了，没人再给它发 mouseleave。
+          tip.hide();
           onOpen(link.taskId);
         }}
       >
         <TaskModeIcon mode={taskParentMode(link)} size={12} />
       </button>
-      {position && createPortal(
-        <span className="task-origin-tooltip" role="tooltip" style={{ left: position.x, top: position.y + 6 }}>
-          {label}
-        </span>,
-        document.body,
-      )}
+      <HoverTip at={tip.at}>{label}</HoverTip>
     </span>
   );
 }

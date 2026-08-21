@@ -86,9 +86,28 @@ export type TaskDiffResult = {
   targetBranch: string | null;
   mergeBase: string | null;
   diff: string;
-  files: { path: string; additions: number | null; deletions: number | null }[];
+  /** `origPath` 是改名/复制的来源。要单独再 diff 这一个文件时，两头路径都得给 git。 */
+  files: { path: string; additions: number | null; deletions: number | null; origPath: string | null }[];
   truncated: boolean;
   limitBytes: number;
+  reason?: string;
+};
+
+/**
+ * 上面那份清单里点开的**一个**文件。
+ *
+ * 不在前端把 `TaskDiffResult.diff` 切开就算：那份文本是**带上限**读的（1 MB），大改动里
+ * 排在后面的文件在它里面根本不存在，切出来会是空的。单独问一次后端，谁都不会落空。
+ */
+export type TaskFileDiffResult = {
+  available: boolean;
+  path: string;
+  origPath: string | null;
+  diff: string;
+  truncated: boolean;
+  limitBytes: number;
+  binary: boolean;
+  /** `available:false` 时的机器码。人话在 `scm/scmModel.ts` 的 `branchDiffReason`。 */
   reason?: string;
 };
 

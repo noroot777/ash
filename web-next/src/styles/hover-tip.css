@@ -1,0 +1,18 @@
+/* 应用内悬停提示（`components/HoverTip.tsx`）。原生 title 被约定禁掉，这是它的替代品。 */
+
+.ui-hover-tip {
+  position: fixed;
+  z-index: 180;
+  display: block;
+  max-width: 280px;
+  transform: translateX(-50%);
+  border: 1px solid var(--line2);
+  border-radius: 6px;
+  background: var(--panel);
+  padding: 4px 7px;
+  color: var(--ink);
+  font-size: 10.5px;
+  line-height: 1.4;
+  pointer-events: none;
+  box-shadow: var(--menu-shadow);
+}

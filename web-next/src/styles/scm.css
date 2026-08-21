@@ -14,16 +14,19 @@
 .scm-branch__name b { overflow:hidden; color:var(--ink); font-size:11px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
 .scm-branch__upstream { display:inline-flex; align-items:center; gap:4px; border-radius:4px; background:var(--overlay); padding:1px 5px; color:var(--faint); font-size:9px; }
 .scm-branch__upstream i { color:var(--muted); font-style:normal; }
-.scm-branch__refresh { display:grid; width:22px; height:22px; margin-left:auto; place-items:center; border:1px solid var(--line2); border-radius:6px; background:var(--panel); color:var(--muted); }
-.scm-branch__refresh:hover:not(:disabled) { background:var(--raised); color:var(--ink); }
-.scm-branch__refresh:disabled { opacity:.5; }
+.scm-branch__tools { position:relative; display:inline-flex; margin-left:auto; align-items:center; gap:4px; }
+.scm-branch__refresh { display:grid; width:22px; height:22px; place-items:center; border:1px solid var(--line2); border-radius:6px; background:var(--panel); color:var(--muted); }
+.scm-branch__refresh:hover:not([aria-disabled="true"]) { background:var(--raised); color:var(--ink); }
+.scm-branch__refresh[aria-disabled="true"] { opacity:.5; cursor:default; }
 .scm-branch__root { width:100%; overflow:hidden; color:var(--faint); font-size:9px; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
-.scm-branch__push-row { display:flex; width:100%; align-items:center; justify-content:flex-end; gap:5px; }
-.scm-branch__push-row > small { margin-right:auto; color:var(--faint); font-size:9.5px; }
-.scm-branch__push-row select { min-width:0; height:26px; flex:1 1 auto; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:0 6px; color:var(--muted); font-size:10px; }
-.scm-branch__push { display:inline-flex; min-width:86px; height:26px; align-items:center; justify-content:center; gap:5px; border:1px solid color-mix(in lch,var(--accent) 35%,var(--line2)); border-radius:6px; background:color-mix(in lch,var(--accent) 10%,var(--panel)); padding:0 8px; color:var(--accent); font-size:10px; font-weight:600; white-space:nowrap; }
-.scm-branch__push:hover:not(:disabled) { background:color-mix(in lch,var(--accent) 17%,var(--panel)); }
-.scm-branch__push:disabled { border-color:var(--line2); background:var(--panel); color:var(--faint); }
+/* 推送/发布跟刷新同尺寸并排,只用底色区分「这颗会写远端」——说明归指上去的提示。 */
+.scm-branch__push { display:grid; width:22px; height:22px; place-items:center; border:1px solid color-mix(in lch,var(--accent) 35%,var(--line2)); border-radius:6px; background:color-mix(in lch,var(--accent) 10%,var(--panel)); color:var(--accent); }
+.scm-branch__push:hover:not([aria-disabled="true"]) { background:color-mix(in lch,var(--accent) 18%,var(--panel)); }
+.scm-branch__push[aria-disabled="true"] { border-color:var(--line2); background:var(--panel); color:var(--faint); cursor:default; }
+.scm-branch__remotes { position:absolute; top:calc(100% + 4px); right:0; z-index:20; display:flex; min-width:120px; flex-direction:column; gap:1px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:4px; box-shadow:var(--menu-shadow); }
+.scm-branch__remotes p { margin:0 0 2px; padding:0 4px; color:var(--faint); font-size:9px; }
+.scm-branch__remotes button { border-radius:5px; padding:3px 6px; color:var(--muted); font-size:10px; text-align:left; }
+.scm-branch__remotes button:hover { background:var(--raised); color:var(--ink); }
 
 .scm-banner { display:flex; align-items:flex-start; gap:5px; margin:8px 9px 0; border:1px solid var(--line2); border-radius:7px; background:var(--overlay); padding:6px 8px; color:var(--muted); font-size:10px; line-height:1.55; }
 .scm-banner > svg { flex:0 0 auto; margin-top:1px; }
@@ -48,8 +51,9 @@
 .scm-committed header .scm-diff__counts { margin-left:auto; font-size:9.5px; }
 .scm-committed__state { display:flex; align-items:center; gap:5px; margin:6px 0 0; color:var(--faint); font-size:10px; line-height:1.55; }
 .scm-committed ul { margin:6px 0 0; padding:0; list-style:none; }
-.scm-committed li { display:flex; min-width:0; align-items:baseline; gap:6px; border-radius:5px; padding:2px 4px; }
-.scm-committed li:hover { background:var(--raised); }
+/* 这一节自带 9px 内边距，行里不用再让出上半截那种「组标题缩进」，把 .scm-row__open
+   的左缩进收回来，否则条目会比这一节的标题多缩一截。 */
+.scm-committed .scm-row__open { min-height:22px; gap:6px; padding:0 4px; }
 .scm-committed .scm-diff__counts { flex:0 0 auto; font-size:9px; }
 .scm-committed__open { display:flex; width:100%; align-items:center; justify-content:space-between; gap:6px; margin-top:8px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:5px 8px; color:var(--muted); font-size:10.5px; }
 .scm-committed__open span { display:inline-flex; align-items:center; gap:5px; }

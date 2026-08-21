@@ -58,6 +58,7 @@ import type {
   SessionTraceEntry,
   TaskCommit,
   TaskDiffResult,
+  TaskFileDiffResult,
   TaskWorkspaceProbe,
   TeamCuaStatus,
   TerminalSessionInfo,
@@ -293,6 +294,10 @@ export const api = {
   },
   taskDiff: (taskId: string): Promise<TaskDiffResult> =>
     request(`/tasks/${id(taskId)}/diff`),
+  // 跟 `taskScmDiff` 是两个问题，别混：那个读的是工作目录此刻还没提交的东西（索引 + 工作树），
+  // 这个读的是提交历史上的一段区间。同一个文件两边的内容可以完全不同，路径也不通用。
+  taskBranchFileDiff: (taskId: string, path: string, origPath?: string | null): Promise<TaskFileDiffResult> =>
+    request(`/tasks/${id(taskId)}/diff/file?path=${id(path)}${origPath ? `&origPath=${id(origPath)}` : ""}`),
   taskCommits: (taskId: string): Promise<{ branch: string | null; commits: TaskCommit[] }> =>
     request(`/tasks/${id(taskId)}/commits`),
 

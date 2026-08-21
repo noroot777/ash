@@ -319,23 +319,6 @@
 
 .workspace-spread-dot--starred i svg { display: block; flex: 0 0 auto; }
 
-.workspace-spread-tip {
-  position: fixed;
-  z-index: 180;
-  display: block;
-  max-width: 240px;
-  transform: translateX(-50%);
-  border: 1px solid var(--line2);
-  border-radius: 6px;
-  background: var(--panel);
-  padding: 4px 7px;
-  color: var(--ink);
-  font-size: 10.5px;
-  line-height: 1.4;
-  white-space: nowrap;
-  pointer-events: none;
-  box-shadow: var(--menu-shadow);
-}
 
 @media (prefers-reduced-motion: reduce) {
   .workspace-spread-dots { animation: none; }

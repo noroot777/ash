@@ -1,7 +1,6 @@
-import { useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import type { Task } from "@harness/shared";
 import { Star } from "@phosphor-icons/react";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import {
   SPREAD_DOT_FILTERS,
   SPREAD_FILTERS,
@@ -54,33 +53,18 @@ function SpreadFilterDot({
   on: boolean;
   onToggle: () => void;
 }) {
-  const ref = useRef<HTMLButtonElement>(null);
-  const [tip, setTip] = useState<{ x: number; y: number } | null>(null);
+  const tip = useHoverTip();
   // 点太小，光靠颜色认不出是哪一档：指上去补一句状态名和条数。选中时还要说明再点一下能退回全集，
   // 否则窄态里看着像「列表突然少了一半」。
   const text = on ? `${label} · ${count}（再点看全部）` : `${label} · ${count}`;
-  const showTip = () => {
-    const rect = ref.current?.getBoundingClientRect();
-    if (!rect) return;
-    const edge = Math.min(120, window.innerWidth / 2);
-    setTip({
-      x: Math.min(Math.max(rect.left + rect.width / 2, edge), window.innerWidth - edge),
-      y: rect.bottom + 4,
-    });
-  };
-  const hideTip = () => setTip(null);
   return (
     <>
       <button
-        ref={ref}
         className={`workspace-spread-dot workspace-spread-dot--${bucketKey}${on ? " is-on" : ""}${count ? "" : " is-empty"}`}
         type="button"
         aria-label={text}
         aria-pressed={on}
-        onMouseEnter={showTip}
-        onMouseLeave={hideTip}
-        onFocus={showTip}
-        onBlur={hideTip}
+        {...tip.anchorProps}
         onClick={onToggle}
       >
         {/* 星标是手动记号不是状态桶,画成星形跟那排状态圆点分开 */}
@@ -88,10 +72,9 @@ function SpreadFilterDot({
           {bucketKey === "starred" && <Star size={7} weight="fill" />}
         </i>
       </button>
-      {tip && createPortal(
-        <span className="workspace-spread-tip" role="tooltip" style={{ left: tip.x, top: tip.y }}>{text}</span>,
-        document.body,
-      )}
+      {/* 点了不收气泡：这颗点一按就换档，那句话的内容跟着变（多出/去掉「再点看全部」），
+          鼠标还停在原地，正是最该让人读到新说法的时候。 */}
+      <HoverTip at={tip.at}>{text}</HoverTip>
     </>
   );
 }

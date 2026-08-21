@@ -26,7 +26,7 @@ export function splitDiff(result: TaskDiffResult): DiffSection[] {
   );
   if (!result.files.length && bodies.length) {
     return bodies.map((body, index) => ({
-      file: { path: `diff-${index + 1}`, additions: null, deletions: null },
+      file: { path: `diff-${index + 1}`, additions: null, deletions: null, origPath: null },
       body,
     }));
   }
