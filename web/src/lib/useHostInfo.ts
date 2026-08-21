@@ -74,3 +74,19 @@ export function hostSamplePath(host: HostInfo | null, segments: string[]): strin
   const home = (host?.home ?? "/Users/you").replace(/[\\/]+$/, "");
   return [home, ...segments].join(sep);
 }
+
+/**
+ * 按服务端那台机器的分隔符把「父目录 + 子目录名」拼成一条路径（克隆目标路径的预览用）。
+ *
+ * 两处根路径要单独照顾：POSIX 的 `/` 和 Windows 的 `C:\` 剥掉尾分隔符之后分别变成空串和
+ * `C:` —— 直接接分隔符会拼出 `//x` 和正确的 `C:\x`，所以只有前者需要特判。
+ */
+export function joinHostPath(host: HostInfo | null, parent: string, child: string): string {
+  const sep = host?.sep ?? "/";
+  const p = parent.trim();
+  const c = child.trim().replace(/^[\\/]+/, "").replace(/[\\/]+$/, "");
+  if (!p) return c;
+  if (!c) return p;
+  const left = p.replace(/[\\/]+$/, "");
+  return left ? `${left}${sep}${c}` : `${sep}${c}`;
+}

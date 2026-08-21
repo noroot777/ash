@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join, isAbsolute, dirname, basename, resolve } from "node:path";
 import { homedir } from "node:os";
-import { mkdirSync, statSync, existsSync, readFileSync, writeFileSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, statSync, existsSync, readdirSync, readFileSync, writeFileSync, realpathSync, rmSync } from "node:fs";
 import type { ProjectHealth } from "@ash/shared";
 import { DATA_DIR } from "./paths.js";
 import { IS_WINDOWS, windowsLongPathHint } from "./platform.js";
@@ -18,6 +18,14 @@ const isDir = (p: string) => {
 const isFile = (p: string) => {
   try { return statSync(p).isFile(); } catch { return false; }
 };
+
+/**
+ * 目录里一个条目都没有。读不出来（不存在、没权限）一律算「空」—— 这个判断只服务于
+ * 「能不能往里克隆」，读不出来的目录后面那步自然会失败，不该在这里替它下结论。
+ */
+export function isEmptyDir(p: string): boolean {
+  try { return readdirSync(p).length === 0; } catch { return true; }
+}
 
 // Users type `~/code/foo`, but Node's fs/git APIs don't understand `~` (only
 // shells do) — so expand a leading `~` to the home dir before any filesystem
@@ -186,20 +194,27 @@ export async function workspaceDirty(path: string): Promise<boolean | null> {
 export function projectHealthLight(repoPath: string | null | undefined): ProjectHealth {
   const p = expandHome(repoPath);
   const exists = !!p && isDir(p);
+  // 「路径上有东西，但它不是目录」要跟「什么都没有」分开报：两者的 `exists` 都是 false，
+  // 而下一步相反 —— 后者可以建出来，前者只能换路径（ensureProjectDir / cloneProject 都
+  // 会 409）。不分的话界面会照着 exists 承诺「会建出来」，用户按下去才吃拒绝。
+  const occupied = !!p && !exists && existsSync(p);
   const gitPath = join(p, ".git");
   const isRepo = exists && existsSync(gitPath);
   // A linked worktree (`git worktree add`) keeps `.git` as a FILE pointing back to
   // the main repo; the main working tree keeps `.git` as a DIR. Surface it so the
   // UI can show when a project's working dir is itself a user-managed worktree.
   const isWorktree = isRepo && isFile(gitPath);
-  return { exists, isRepo, isWorktree };
+  return { exists, occupied, isRepo, isWorktree };
 }
 
 // Full health — adds current branch + dirty state. Only spawns git when it's
 // actually a repo (so a bogus path like /tmp/demo returns instantly).
 export async function projectHealthFull(repoPath: string | null | undefined): Promise<ProjectHealth> {
   const light = projectHealthLight(repoPath);
-  if (!light.isRepo) return light;
+  // 「空不空」对不是仓库的目录同样有意义（克隆目标只认「不存在」或「空目录」），所以它
+  // 要算在 isRepo 的早退之前。读目录是一次 syscall，比下面那趟 git 便宜得多。
+  const empty = light.exists ? isEmptyDir(expandHome(repoPath)) : undefined;
+  if (!light.isRepo) return { ...light, empty };
   const p = expandHome(repoPath);
   let branch: string | null = null;
   try {
@@ -209,7 +224,7 @@ export async function projectHealthFull(repoPath: string | null | undefined): Pr
   // 脏判定跟自由工作流走同一口径（见 workspaceDirty）：这颗健康点不该被 ash 自己的
   // `.worktrees/` 和借来的 node_modules 软链点亮。
   const dirty = (await workspaceDirty(p)) ?? false;
-  return { ...light, branch, dirty };
+  return { ...light, empty, branch, dirty };
 }
 
 export interface Workspace {

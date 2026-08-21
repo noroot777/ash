@@ -638,52 +638,6 @@
   color: var(--muted);
 }
 
-.quick-create-fields {
-  display: grid;
-  gap: 10px;
-  margin-top: 12px;
-}
-
-.quick-create-fields.is-group {
-  grid-template-columns: minmax(0, 1fr) 120px;
-}
-
-.quick-create-fields label {
-  display: grid;
-  gap: 5px;
-}
-
-.quick-create-fields label > span {
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.quick-create-fields input,
-.quick-create-fields select {
-  width: 100%;
-  height: 32px;
-  border: 1px solid var(--line2);
-  border-radius: 8px;
-  background: var(--canvas);
-  padding: 0 9px;
-  outline: 0;
-  font-size: 12px;
-}
-
-.quick-create-fields input:focus,
-.quick-create-fields select:focus {
-  border-color: var(--accent);
-}
-
-.quick-create-fields .create-project-health {
-  margin: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--raised);
-  padding: 8px 10px;
-  line-height: 1.45;
-}
-
 @media (max-width: 700px) {
   .has-preview .palette-body { grid-template-columns: minmax(0, 1fr); }
   .palette-preview { display: none; }

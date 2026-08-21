@@ -3,6 +3,7 @@ import { access, constants } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { promisify } from "node:util";
 import { gitError } from "./git.js";
+import { gitNetInjection } from "./git-credentials.js";
 import { literalPathspec, readScmStatus, type ScmChange, type ScmStatus } from "./git-status.js";
 import { assertPathShape, gateScmPaths, scmNestedPaths, ScmOperationError } from "./scm-paths.js";
 import { withRepoLock } from "./repo-lock.js";
@@ -472,12 +473,16 @@ export async function commitWorkspace(
 /**
  * 推送当前分支。目标始终写全为 `remote HEAD:refs/heads/<branch>`，不读取 `push.default`；
  * 发布时才写 upstream。禁掉终端凭据提示，避免无人值守的服务端请求永久挂住。
+ *
+ * `projectId` 只用来取这个项目配的 HTTPS 凭证（`git-credentials.ts`）。任务工作区推的是
+ * 项目那个仓库，凭证配在项目上就得在这儿也生效——否则「项目面板能推、任务面板要密码」。
  */
 export async function pushWorkspace(
   root: string,
   repoPath: string | null,
   requestedRemote: string | null,
   guard?: ScmGuard,
+  projectId: string | null = null,
 ): Promise<ScmPushResult> {
   return withRepoLock(repoPath, () => guarded(guard, async () => {
     const status = await readScmStatus(root);
@@ -518,12 +523,14 @@ export async function pushWorkspace(
       throw new ScmOperationError(`upstream 对应的远端 ${remote} 已不存在，请先修复分支配置。`, 409);
     }
 
-    const args = ["-C", root, "push"];
+    const injection = await gitNetInjection(projectId);
+    // `-c` 只有排在子命令前面才算数。
+    const args = ["-C", root, ...injection.args, "push"];
     if (published) args.push("--set-upstream");
     args.push("--", remote, `HEAD:refs/heads/${remoteBranch}`);
     try {
       await exec("git", args, {
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...injection.env },
         timeout: 120_000,
         maxBuffer: 8 * 1024 * 1024,
       });

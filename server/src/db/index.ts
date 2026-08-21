@@ -172,6 +172,10 @@ export async function ensureSchema() {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS free_review_rounds_run_round_idx
       ON free_review_rounds (run_id, round);
+    CREATE TABLE IF NOT EXISTS project_git_credentials (
+      project_id TEXT PRIMARY KEY, username TEXT NOT NULL,
+      secret TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
   `);
   // Tolerant migration for DBs created before columns were added.
   try {

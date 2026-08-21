@@ -314,5 +314,11 @@ export function mountScmRoutes(api: Hono) {
     }, guard));
 
   write("/tasks/:id/scm/push", (root, body, guard) =>
-    pushWorkspace(root.path, root.repo, typeof body.remote === "string" ? body.remote : null, guard));
+    pushWorkspace(
+      root.path,
+      root.repo,
+      typeof body.remote === "string" ? body.remote : null,
+      guard,
+      root.projectId,
+    ));
 }

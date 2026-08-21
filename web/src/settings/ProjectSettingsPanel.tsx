@@ -5,6 +5,7 @@ import { DirectoryPickerButton } from "../components/DirectoryPickerButton.tsx";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { PathHealthStatus, useDebouncedPathHealth } from "./PathHealthStatus.tsx";
+import { ProjectGitSettings } from "./ProjectGitSettings.tsx";
 import { WorkflowPicker, useWorkflows } from "../workflow/WorkflowPicker.tsx";
 
 export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: {
@@ -64,6 +65,7 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
           />
         </div>
       </div></section>
+      <ProjectGitSettings projectId={project.id} notify={notify} />
       <section className="settings-section"><h2>危险操作</h2><div className="settings-card settings-danger-row"><div><b>删除项目</b><small>删除项目记录，以及它下面的任务、分组和运行记录；不会删除仓库目录。</small></div><Button variant="danger" disabled={busy} onClick={() => setConfirmDelete(true)}>删除项目</Button></div></section>
       {confirmDelete && <ConfirmDialog title="删除项目" message={`确定删除“${project.name}”？项目下的任务、分组和运行记录会一并删除，仓库目录不会被删除。`} confirmLabel="删除项目" danger busy={busy} onClose={() => setConfirmDelete(false)} onConfirm={() => void remove()} />}
     </>

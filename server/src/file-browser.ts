@@ -44,6 +44,12 @@ export interface WorkspaceRoot {
    * 会话 cwd 一旦落在别处，两者就指向不同物理目录，锁与实际操作分家（第 2 轮审查复现）。
    */
   repo: string | null;
+  /**
+   * 这个工作区归哪个项目。带上它是为了**推送时能拿到项目自己的 git 凭证**
+   * （`git-credentials.ts`）：任务工作区推的是项目那个仓库，凭证配在项目上，
+   * 从这儿一路带过去比在 scm 路由里再查一次任务省一趟。
+   */
+  projectId: string | null;
 }
 
 export interface FileEntry {
@@ -103,6 +109,7 @@ export async function taskFileRoot(taskId: string): Promise<WorkspaceRoot | null
       // 从**选中的这个目录**问出来，不是项目登记的 repoPath：会话 cwd 可能落在另一个
       // 仓库里，那时候锁项目 repoPath 等于没锁。问不出来（不是 git 目录）才退回登记值。
       repo: (gitRepo ? await owningRepoOf(candidate.path) : null) ?? repoPath,
+      projectId: task.projectId ?? null,
     };
   }
   return null;

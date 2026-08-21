@@ -622,3 +622,60 @@
   .settings-resume-dots .is-running,
   .settings-resume-dots .is-queued { animation: none; opacity: 1; transform: none; }
 }
+
+/* ── 项目设置页的 Git 一节 ─────────────────────────────────────────────────
+   `.git-scope` 是跟在输入框后面的说明（「本项目设定」/「继承自全局：…」），必须撤掉
+   上面 `.settings-field > span` 那条写给**字段名**的 128px 定宽，否则它会被压成一列
+   竖排的字。窄屏那条同名规则同理，所以这里用两段选择器压过去，别改上面那条——那条
+   是字段名在用的。 */
+.settings-field > .git-scope {
+  width: auto;
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.git-remote-list {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  justify-items: end;
+}
+
+.git-remote-row {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.git-remote-row b { font-weight: 550; }
+
+.git-remote-row code {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-remote-row em {
+  color: var(--faint);
+  font-size: 10px;
+  font-style: normal;
+  letter-spacing: 0.04em;
+}
+
+.git-cred-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 680px) {
+  .settings-field > .git-scope { width: 100%; flex: none; }
+  .git-remote-list { justify-items: start; }
+}

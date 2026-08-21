@@ -18,7 +18,8 @@ import { NotesPanel } from "../overlays/NotesPanel.tsx";
 import { GroupsPanel } from "../overlays/GroupsPanel.tsx";
 import { TaskComposerPanel, type ComposerDraft } from "../composer/TaskComposerPanel.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
-import { CreateGroupDialog, CreateProjectDialog } from "../overlays/CreateEntityDialog.tsx";
+import { CreateGroupDialog } from "../overlays/CreateEntityDialog.tsx";
+import { CreateProjectDialog } from "../overlays/CreateProjectDialog.tsx";
 import { useWorkspaceShortcuts } from "./useWorkspaceShortcuts.ts";
 import { spreadVisibleTasks, useSidebarSpread } from "./useSidebarSpread.ts";
 import {
@@ -270,7 +271,7 @@ export function WorkspaceShell() {
     {notes && notesProject && <NotesPanel key={`${notes.projectId}:${notes.noteId ?? "list"}`} project={notesProject} initialNoteId={notes.noteId} onClose={() => setNotes(null)} onTask={(nextTaskId) => { const task = tasks.find((row) => row.id === nextTaskId); if (task) selectTask(task); else api.task(nextTaskId).then(selectTask).catch(() => notify("关联任务读取失败")); setNotes(null); }} onConvert={(draft) => { setNotes(null); setSettingsSection(null); setComposer({ mode: "single", draft }); }} notify={notify} />}
     {groupsPanelOpen && currentProject && <GroupsPanel project={currentProject} groups={groups} tasks={tasks} onClose={() => setGroupsPanelOpen(false)} onChanged={refreshGroups} notify={notify} />}
     {deleteTarget && <DeleteTaskDialog task={deleteTarget} onClose={() => setDeleteTarget(null)} onDeleted={(ids) => { ids.forEach(deleteTask); setDeleteTarget(null); }} notify={notify} />}
-    {createDialog === "project" && <CreateProjectDialog notify={notify} onClose={() => setCreateDialog(null)} onCreate={async (name, repoPath) => { try { const created = await api.createProject(name, repoPath); setProjects((current) => [...current, created]); setProjectId(created.id); setTaskId(null); setSettingsSection(null); setCreateDialog(null); notify("项目已创建"); } catch (error) { notify(error instanceof Error ? error.message : "项目创建失败"); } }} />}
+    {createDialog === "project" && <CreateProjectDialog projects={projects} notify={notify} onClose={() => setCreateDialog(null)} onCreated={(created) => { setProjects((current) => [...current, created]); setProjectId(created.id); setTaskId(null); setSettingsSection(null); setCreateDialog(null); notify("项目已创建"); }} />}
     {createDialog === "group" && currentProject && <CreateGroupDialog onClose={() => setCreateDialog(null)} onCreate={async (name, mode) => { try { const created = await api.createGroup({ projectId: currentProject.id, name, mode }); setGroups((current) => [...current, created]); setCreateDialog(null); notify("分组已创建"); } catch (error) { notify(error instanceof Error ? error.message : "分组创建失败"); } }} />}
     <div className={`workspace-toast${toast ? " is-visible" : ""}`} role="status" aria-live="polite">{toast}</div>
   </>;

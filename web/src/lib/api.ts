@@ -48,6 +48,8 @@ import type {
   GitOverview,
   HostInfo,
   OpenerProbe,
+  ProjectGitConfig,
+  ProjectGitConfigPatch,
   ProjectGitResult,
   ProjectGitState,
   PullStrategy,
@@ -98,8 +100,24 @@ export const api = {
     request("/host/pick-directory", json("POST", { startIn })),
 
   projects: (): Promise<ProjectView[]> => request("/projects"),
-  createProject: (name: string, repoPath: string): Promise<ProjectView> =>
-    request("/projects", json("POST", { name, repoPath })),
+  // `createDir` 为真时服务端会把不存在的目录（连同缺失的上级）建出来；不带它就是老行为
+  // ——目录不存在也照记不误。只有在界面上明确告诉过用户「这个目录会被建出来」时才带上。
+  createProject: (name: string, repoPath: string, createDir = false): Promise<ProjectView> =>
+    request("/projects", json("POST", { name, repoPath, createDir })),
+  // 在**服务端那台机器**上执行 git clone,成功后才登记项目。请求会一直挂到克隆结束
+  // (大仓库可能几分钟),调用点必须给出持续可见的进度反馈。
+  cloneProject: (
+    body: {
+      url: string;
+      targetPath: string;
+      branch?: string;
+      name?: string;
+      // 私有 HTTPS 仓库的用户名 + 令牌。克隆当场用，成功后存到新项目上 —— 项目行要等
+      // 克隆成功才写，所以这一刻的凭证只能随请求递进来，没法先去设置页里配。
+      username?: string;
+      secret?: string;
+    },
+  ): Promise<ProjectView> => request("/projects/clone", json("POST", body)),
   resolveProject: (repoPath: string, name?: string): Promise<ProjectView> =>
     request("/projects/resolve", json("POST", { repoPath, name })),
   updateProject: (
@@ -127,6 +145,22 @@ export const api = {
     request(`/projects/${id(projectId)}/git/pull`, json("POST", { strategy })),
   projectGitPush: (projectId: string, remote?: string | null): Promise<ProjectGitResult> =>
     request(`/projects/${id(projectId)}/git/push`, json("POST", { remote: remote ?? null })),
+
+  // 项目的 git 配置：提交署名 / SSH key 落在**仓库自己的 .git/config**（agent 和用户的
+  // 终端看到的是同一份），HTTPS 用户名+令牌落在 ash 的库里且只写不读。
+  projectGitConfig: (projectId: string): Promise<ProjectGitConfig> =>
+    request(`/projects/${id(projectId)}/git-config`),
+  saveProjectGitConfig: (projectId: string, patch: ProjectGitConfigPatch): Promise<ProjectGitConfig> =>
+    request(`/projects/${id(projectId)}/git-config`, json("PUT", patch)),
+  // `secret` 留空 = 沿用已存的令牌（界面读不回旧值，只改用户名时不该逼用户重填）。
+  saveProjectGitCredential: (
+    projectId: string,
+    username: string,
+    secret: string,
+  ): Promise<ProjectGitConfig> =>
+    request(`/projects/${id(projectId)}/git-credential`, json("PUT", { username, secret })),
+  deleteProjectGitCredential: (projectId: string): Promise<ProjectGitConfig> =>
+    request(`/projects/${id(projectId)}/git-credential`, json("DELETE")),
   createTerminalSession: (
     projectId: string,
     size: { cols: number; rows: number },

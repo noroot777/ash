@@ -223,6 +223,46 @@ export type ProjectGitState = {
 
 export type ProjectGitResult = { ok: true; message: string; state: ProjectGitState };
 
+// ── 项目的 git 配置（设置页那一节）─────────────────────────────────────────
+// 跟上面的 ProjectGitState 是两回事：那个是「仓库现在什么状态」，这个是「这个项目
+// 用谁的身份、什么凭证去连远端」。
+
+export type GitConfigValue = {
+  value: string | null;
+  /** `local` = 写在这个仓库的 .git/config 里；`inherited` = 来自 --global/--system。 */
+  scope: "local" | "inherited" | null;
+};
+
+export type GitRemoteInfo = { name: string; url: string; https: boolean };
+
+export type ProjectGitIdentity = {
+  isRepo: boolean;
+  userName: GitConfigValue;
+  userEmail: GitConfigValue;
+  sshKeyPath: string | null;
+  sshCommand: GitConfigValue;
+  remotes: GitRemoteInfo[];
+};
+
+/** 令牌**永远不会**出现在这里：存进去就取不回来，前端只知道「配了、是谁、什么时候」。 */
+export type ProjectGitCredentialView = {
+  username: string;
+  configured: true;
+  updatedAt: string;
+};
+
+export type ProjectGitConfig = {
+  identity: ProjectGitIdentity;
+  credential: ProjectGitCredentialView | null;
+};
+
+/** 只带上的字段才会被写；**空串 = 清掉本仓设置、回去跟着全局走**，不是「写个空值」。 */
+export type ProjectGitConfigPatch = {
+  userName?: string;
+  userEmail?: string;
+  sshKeyPath?: string;
+};
+
 export type ScmCommit = {
   sha: string;
   shortSha: string;
