@@ -64,7 +64,7 @@
     "test:agent-attachments": "tsx scripts/test-agent-attachments.ts",
     "test:usage": "tsx scripts/test-usage-accounting.ts",
     "test:peer-context": "tsx scripts/test-peer-context.ts",
-    "test:auto-title": "tsx scripts/test-auto-title.ts",
+    "test:auto-title": "tsx scripts/test-auto-title.ts && tsx scripts/test-auto-title-run.ts",
     "test:workflow": "tsx scripts/test-workflow-def.ts",
     "test:workflow-library": "tsx scripts/test-workflow-library.ts",
     "test:workflow-run": "tsx scripts/test-workflow-run.ts",

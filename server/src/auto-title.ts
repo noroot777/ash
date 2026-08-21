@@ -18,7 +18,12 @@
 // 预算——那是 ash 自己注入的执行诊断（codex 重连提示就长这样），让它吃掉模型的额度
 // 是本末倒置。
 //
-// 回归测试：npm -w server run test:auto-title
+// 窗口还有**第三种关法，不在这个文件里**：缓冲里已经攒着正文时来了个非 text 事件
+// （tool/error/…），single-run.ts 会当场 flush 一次把正文放出去——否则那条事件会插到
+// 已经产生的正文前面，live 和 trace 的顺序就跟真实输出对不上了。也就是说这里的两个
+// 上限是**上界而非保证**：别写出「一定能看到前 5 行」的依赖。
+//
+// 回归测试：npm -w server run test:auto-title（纯解析 + 事件流两支）
 
 const MAX_LINES = 5;
 const MAX_BYTES = 1000;
