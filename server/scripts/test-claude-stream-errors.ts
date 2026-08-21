@@ -154,5 +154,19 @@ console.log("5) 旧版 Claude Code 的 --effort 参数错误要给出可操作�
   else fail(`仍在透传原始错误:${JSON.stringify(message)}`);
 }
 
+// 起因(2026-08-21):容器里以 root 跑的 ash(172.16.88.252:4317),每个 claude 回合都
+// 0s 结束,时间线上只有一行英文 —— 用户读不出这跟「ash 跑在 root 下」有关。
+console.log("6) root 下被拒绝跳过权限确认要说清成因和出路");
+{
+  const events = await collectStderr(
+    "--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons\n",
+  );
+  const message = events.find((e) => e.kind === "error")?.message ?? "";
+  if (message.includes("root") && message.includes("IS_SANDBOX=1")) ok("给出了成因与可操作的出路");
+  else fail(`没有翻成可操作提示:${JSON.stringify(message)}`);
+  if (!message.includes("for security reasons")) ok("不再透传生硬的 CLI 原始错误");
+  else fail(`仍在透传原始错误:${JSON.stringify(message)}`);
+}
+
 console.log(bad ? `\n✗ ${bad} 项未通过` : "\n✓ 全部通过");
 process.exit(bad ? 1 : 0);
