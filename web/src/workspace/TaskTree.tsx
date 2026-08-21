@@ -1,20 +1,25 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { ProjectView, Task } from "@ash/shared";
-import { statusCounts, workersOf } from "@ash/shared/team";
-import { CaretRight, ChatsCircle, Star, UsersThree } from "@phosphor-icons/react";
-import { OriginTaskChip, taskParentLink } from "../components/TaskOrigin.tsx";
-import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
-import { api } from "../lib/api.ts";
-import { readRenamedStorage } from "../lib/renamedStorage.ts";
+import { CaretRight } from "@phosphor-icons/react";
 import { useTaskReadState, type IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
-import { SpreadPeekLayer, SpreadRowCells, SpreadRowProvider, useSpreadPeek, useSpreadRow } from "./TaskSpread.tsx";
-import { matchesSpreadFilter, spreadBucket, SPREAD_FILTERS, type SidebarSpread, type SpreadFilter } from "./useSidebarSpread.ts";
-import { advanceHiddenReveal, buildTaskTree, orderedTopLevelTasks, previewTasksByAge } from "./taskTreeModel.ts";
+import { SpreadPeekLayer, SpreadRowProvider, useSpreadPeek } from "./TaskSpread.tsx";
+import {
+  TASK_PREVIEW_LIMIT,
+  TaskRow,
+  TaskTreeActionsProvider,
+  TeamRow,
+  useCollapsedSections,
+  useRevealHiddenSelection,
+} from "./TaskTreeRows.tsx";
+import { inScope, type TaskScope } from "./taskScope.ts";
+import { matchesSpreadFilter, SPREAD_FILTERS, type SidebarSpread, type SpreadFilter } from "./useSidebarSpread.ts";
+import { buildTaskTree, orderedTopLevelTasks, previewTasksByAge } from "./taskTreeModel.ts";
 
 type TaskTreeProps = {
   projects: ProjectView[];
   currentProjectId: string | null;
+  scope: TaskScope;
   tasks: Task[];
   selectedTaskId: string | null;
   spread: SidebarSpread;
@@ -23,269 +28,10 @@ type TaskTreeProps = {
   notify: (message: string) => void;
 };
 
-// 星标按钮埋在 TaskRow 里、TaskRow 又埋在三种列表里：回写和报错的通道用 context 递，
-// 免得每层组件都为它多两个 props。
-const TaskTreeActionsContext = createContext<{
-  onStarred: (taskId: string, starredAt: number | null) => void;
-  notify: (message: string) => void;
-} | null>(null);
-
-const TASK_PREVIEW_LIMIT = 12;
-const COLLAPSED_SECTIONS_STORAGE_KEY = "ash:task-tree:collapsed-sections";
-
-function useRevealHiddenSelection(revealKey: string | null, onReveal: () => void) {
-  const lastKey = useRef<string | null>(null);
-  useEffect(() => {
-    const next = advanceHiddenReveal(lastKey.current, revealKey);
-    lastKey.current = next.lastKey;
-    if (next.reveal) onReveal();
-  }, [onReveal, revealKey]);
-}
-
-function readCollapsedSections(): Set<string> {
-  try {
-    const raw = readRenamedStorage(COLLAPSED_SECTIONS_STORAGE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    return new Set(Array.isArray(parsed) ? parsed.filter((key): key is string => typeof key === "string") : []);
-  } catch {
-    return new Set();
-  }
-}
-
-function useCollapsedSections() {
-  const [collapsed, setCollapsed] = useState(readCollapsedSections);
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(COLLAPSED_SECTIONS_STORAGE_KEY, JSON.stringify([...collapsed]));
-    } catch {
-      // Section folding remains usable for the current session if storage is unavailable.
-    }
-  }, [collapsed]);
-  const toggle = (sectionKey: string) => setCollapsed((current) => {
-    const next = new Set(current);
-    if (next.has(sectionKey)) next.delete(sectionKey);
-    else next.add(sectionKey);
-    return next;
-  });
-  return { collapsed, toggle };
-}
-
-function StatusMarker({ indicator }: { indicator: ReturnType<IndicatorForTask> }) {
-  return indicator
-    ? <TaskStatusDot indicator={indicator} surface="workspace" />
-    : <i className="workspace-status-dot workspace-status-dot--quiet" aria-hidden="true" />;
-}
-
-// 星标：用户手动的软记号（与自动状态正交）。已标的常驻行尾，未标的 hover 才浮出。
-// 成功回写只取响应里的 starredAt（onStarred 合并进列表）—— HTTP 响应可能晚于更新
-// 的 SSE 到达，整条 Task 快照直接替换会把状态/标题回滚到点星那一刻。SSE 断线窗口
-// 里点的星也因此能立刻落到界面上；失败走 notify 让用户看得见。in-flight 期间忽略
-// 重复点击，避免拿同一份旧 props 连发同方向请求。
-function TaskStarButton({ task }: { task: Task }) {
-  const actions = useContext(TaskTreeActionsContext);
-  const [busy, setBusy] = useState(false);
-  const starred = task.starredAt != null;
-  return (
-    <button
-      className={`workspace-task-star${starred ? " is-starred" : ""}`}
-      type="button"
-      aria-pressed={starred}
-      aria-label={starred ? "取消星标" : "加星标"}
-      onClick={() => {
-        if (busy) return;
-        setBusy(true);
-        api.patchTask(task.id, { starredAt: starred ? null : Date.now() })
-          .then((updated) => actions?.onStarred(task.id, updated.starredAt ?? null))
-          .catch(() => actions?.notify(starred ? "取消星标失败" : "加星标失败"))
-          .finally(() => setBusy(false));
-      }}
-    >
-      <Star size={13} weight={starred ? "fill" : "regular"} aria-hidden="true" />
-    </button>
-  );
-}
-
-function WorkerSummary({ workers, indicatorForTask }: { workers: Task[]; indicatorForTask: IndicatorForTask }) {
-  if (!workers.length) return null;
-  const buckets = statusCounts(workers);
-  const summary = buckets.map((bucket) => `${bucket.n} ${bucket.label}`).join(" · ");
-  return (
-    <span className="workspace-worker-summary" title={`${workers.length} 个执行者 · ${summary}`}>
-      <span>{workers.length}</span>
-      <span className="workspace-worker-dots" aria-label={summary}>
-        {buckets.map((bucket) => {
-          const sample = workers.find((worker) =>
-            (bucket.awaitingAnswer
-              ? !!worker.question
-              : bucket.status === "queued"
-                ? !worker.question && (worker.status === "queued" || worker.status === "backlog")
-                : !worker.question && worker.status === bucket.status)
-            && indicatorForTask(worker) != null,
-          );
-          const indicator = sample ? indicatorForTask(sample) : null;
-          return sample && indicator
-            ? <TaskStatusDot key={bucket.label} indicator={indicator} surface="workspace" small />
-            : null;
-        })}
-      </span>
-    </span>
-  );
-}
-
-function TaskRow({
-  task,
-  allTasks,
-  selectedTaskId,
-  onTask,
-  indicatorForTask,
-  child = false,
-  showOrigin = true,
-  leading,
-  wrapperClassName = "",
-  trailing,
-}: {
-  task: Task;
-  allTasks: Task[];
-  selectedTaskId: string | null;
-  onTask: (task: Task) => void;
-  indicatorForTask: IndicatorForTask;
-  child?: boolean;
-  showOrigin?: boolean;
-  leading?: React.ReactNode;
-  wrapperClassName?: string;
-  trailing?: React.ReactNode;
-}) {
-  const selected = selectedTaskId === task.id;
-  const indicator = indicatorForTask(task);
-  const hasOrigin = showOrigin && taskParentLink(task, allTasks) !== null;
-  const hasMeta = task.mode === "duet" || trailing != null;
-  const canStar = task.parentId === null;
-  const spreadRow = useSpreadRow();
-  const spreadCells = spreadRow?.spread.laidOut ? spreadRow : null;
-  return (
-    <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}${spreadCells && spreadBucket(task) === "todo" ? " is-todo" : ""}${task.starredAt != null ? " has-star" : ""}${canStar ? " can-star" : ""}`}>
-      <span className="workspace-task-leading">
-        {leading ?? <StatusMarker indicator={indicator} />}
-      </span>
-      <button
-        className={`workspace-task-row${child ? " workspace-task-row--child" : ""}${hasOrigin ? " workspace-task-row--has-origin" : ""}`}
-        type="button"
-        aria-selected={selected}
-        data-task-id={task.id}
-        onClick={() => onTask(task)}
-        title={task.title}
-      >
-        <span className="workspace-task-title">{task.title || "未命名任务"}</span>
-        {hasMeta && (
-          <span className="workspace-task-meta">
-            {task.mode === "duet" && <ChatsCircle size={12} weight="bold" className="workspace-task-kind" aria-label="讨论" />}
-            {trailing}
-          </span>
-        )}
-      </button>
-      {canStar && <TaskStarButton task={task} />}
-      {spreadCells && <SpreadRowCells task={task} ctx={spreadCells} onOpen={() => onTask(task)} />}
-      {hasOrigin && (
-        <OriginTaskChip
-          task={task}
-          allTasks={allTasks}
-          onOpen={(taskId) => {
-            const linked = allTasks.find((item) => item.id === taskId);
-            if (linked) onTask(linked);
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-function TeamRow({
-  task,
-  tasks,
-  allTasks,
-  selectedTaskId,
-  onTask,
-  indicatorForTask,
-}: {
-  task: Task;
-  tasks: Task[];
-  allTasks: Task[];
-  selectedTaskId: string | null;
-  onTask: (task: Task) => void;
-  indicatorForTask: IndicatorForTask;
-}) {
-  const workers = workersOf(tasks, task.id);
-  const selectedWorkerIndex = workers.findIndex((worker) => worker.id === selectedTaskId);
-  const selectedWorker = selectedWorkerIndex >= 0;
-  const overflowSelectedId = selectedWorkerIndex >= TASK_PREVIEW_LIMIT ? workers[selectedWorkerIndex]?.id ?? null : null;
-  const [expanded, setExpanded] = useState(selectedWorker);
-  const [showAllWorkers, setShowAllWorkers] = useState(() => overflowSelectedId != null);
-  const revealOverflowWorkers = useCallback(() => setShowAllWorkers(true), []);
-  useRevealHiddenSelection(overflowSelectedId, revealOverflowWorkers);
-  const indicator = indicatorForTask(task);
-  const workersExpanded = showAllWorkers;
-  const visibleWorkers = workersExpanded ? workers : workers.slice(0, TASK_PREVIEW_LIMIT);
-  useEffect(() => {
-    if (selectedWorker) setExpanded(true);
-  }, [selectedWorker]);
-  return (
-    <>
-      <TaskRow
-        task={task}
-        allTasks={allTasks}
-        selectedTaskId={selectedTaskId}
-        onTask={onTask}
-        indicatorForTask={indicatorForTask}
-        wrapperClassName={`workspace-team-row${expanded ? " is-expanded" : ""}`}
-        leading={
-          <span className="workspace-team-leading">
-            <StatusMarker indicator={indicator} />
-            <button
-              className="workspace-team-caret"
-              type="button"
-              disabled={!workers.length}
-              aria-label={expanded ? "折叠执行者" : `展开 ${workers.length} 个执行者`}
-              aria-expanded={expanded}
-              onClick={() => setExpanded((value) => !value)}
-            >
-              <CaretRight size={10} weight="bold" className={expanded ? "is-open" : ""} aria-hidden="true" />
-            </button>
-          </span>
-        }
-        trailing={
-          <>
-            <WorkerSummary workers={workers} indicatorForTask={indicatorForTask} />
-            <UsersThree size={13} weight="fill" className="workspace-task-kind" aria-label="团队任务" />
-          </>
-        }
-      />
-      {expanded && workers.length > 0 && (
-        <div className="workspace-worker-list">
-          {visibleWorkers.map((worker) => (
-            <TaskRow
-              key={worker.id}
-              task={worker}
-              allTasks={allTasks}
-              child
-              showOrigin={false}
-              selectedTaskId={selectedTaskId}
-              onTask={onTask}
-              indicatorForTask={indicatorForTask}
-              trailing={<span className="workspace-worker-executor">{worker.executorLabel || worker.agentType || "执行者"}</span>}
-            />
-          ))}
-          {workers.length > TASK_PREVIEW_LIMIT && (
-            <button className="workspace-task-more" type="button" onClick={() => setShowAllWorkers((value) => !value)}>
-              {workersExpanded ? "收起" : `显示另外 ${workers.length - TASK_PREVIEW_LIMIT} 条`}
-            </button>
-          )}
-        </div>
-      )}
-    </>
-  );
-}
-
-function CurrentProjectTree({
+// 主列表：作用域里的顶层任务，按 taskTreeModel 的第一原则（更新时间倒序，置顶除外）分节。
+// 「当前项目」和「全部项目」共用它 —— 两态的区别只有喂进来的是哪一批任务，以及行首多不多
+// 一枚项目徽标；另起一套「全局列表」组件只会让排序、年龄闸、筛选空态三处各活一份。
+function ScopedTaskTree({
   tasks,
   allTasks,
   selectedTaskId,
@@ -413,6 +159,8 @@ function CurrentProjectTree({
   );
 }
 
+// 单项目态下方那一叠折叠起来的别家项目。全部项目态不画它 —— 那时候所有项目的任务
+// 已经混在上面同一份列表里了，再摆一遍等于同一条任务在侧栏出现两次。
 function OtherProject({
   project,
   tasks,
@@ -461,22 +209,32 @@ function OtherProject({
   );
 }
 
-export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, spread, onTask, onTaskStarred, notify }: TaskTreeProps) {
+export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTaskId, spread, onTask, onTaskStarred, notify }: TaskTreeProps) {
   const { indicatorForTask } = useTaskReadState(tasks, selectedTaskId);
   const activeTasks = useMemo(() => tasks.filter((task) => !task.archived), [tasks]);
-  const currentTasks = useMemo(
-    () => activeTasks.filter((task) => task.projectId === currentProjectId),
-    [activeTasks, currentProjectId],
+  // 主列表看哪些行只由作用域决定（inScope 是唯一判据，跟计数、筛选、J/K 遍历同源）。
+  const scopedTasks = useMemo(
+    () => activeTasks.filter((task) => inScope(task, scope)),
+    [activeTasks, scope],
   );
-  const otherProjects = projects.filter((project) => project.id !== currentProjectId);
+  const allProjects = scope.kind === "all";
+  const otherProjects = allProjects ? [] : projects.filter((project) => project.id !== currentProjectId);
+  // 徽标表只在全部项目态给：单项目态下每行都是同一个项目，标了纯属占地方。
+  const projectBadges = useMemo(
+    () => allProjects ? new Map(projects.map((project) => [project.id, project])) : null,
+    [allProjects, projects],
+  );
   const { peek, peekAt, peekOut, hold, hide } = useSpreadPeek(spread.laidOut);
   const rowContext = useMemo(() => ({ spread, peekAt, peekOut }), [peekAt, peekOut, spread]);
-  const treeActions = useMemo(() => ({ onStarred: onTaskStarred, notify }), [notify, onTaskStarred]);
+  const treeActions = useMemo(
+    () => ({ onStarred: onTaskStarred, notify, projectBadges }),
+    [notify, onTaskStarred, projectBadges],
+  );
   return (
-    <TaskTreeActionsContext.Provider value={treeActions}>
+    <TaskTreeActionsProvider value={treeActions}>
     <SpreadRowProvider value={rowContext}>
-      <nav className="workspace-task-tree" aria-label="任务树" onScroll={hide}>
-        <CurrentProjectTree tasks={currentTasks} allTasks={tasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} filter={spread.filter} onClearFilter={() => spread.setFilter("all")} />
+      <nav className="workspace-task-tree" aria-label={allProjects ? "全部项目任务" : "任务树"} onScroll={hide}>
+        <ScopedTaskTree tasks={scopedTasks} allTasks={tasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} filter={spread.filter} onClearFilter={() => spread.setFilter("all")} />
         {otherProjects.length > 0 && (
           <section className="workspace-other-projects">
             <header className="workspace-task-section-title">其他项目</header>
@@ -496,6 +254,6 @@ export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, sp
       </nav>
       <SpreadPeekLayer peek={peek} spread={spread} onHold={hold} onLeave={peekOut} onDismiss={hide} />
     </SpreadRowProvider>
-    </TaskTreeActionsContext.Provider>
+    </TaskTreeActionsProvider>
   );
 }

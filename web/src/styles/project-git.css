@@ -25,6 +25,11 @@
   flex:0 0 auto; border-radius:3px; background:var(--raised); padding:1px 3px;
   font-size:7.5px; font-style:normal; letter-spacing:.01em;
 }
+/* 「全部项目」时胶囊要自报归属：左边那颗按钮已经不写项目名了。头像按分支图标的尺寸收一收，
+   免得这颗小胶囊被 17px 的方块撑变形。 */
+.workspace-git-context.has-project .workspace-project-avatar {
+  width:13px; height:13px; flex-basis:13px; border-radius:4px; font-size:7px;
+}
 
 .project-git-panel {
   position:absolute; z-index:80; top:calc(100% + 5px); left:-4px;

@@ -70,6 +70,7 @@ function Ash() {
       <TaskTree
         projects={[project]}
         currentProjectId={project.id}
+        scope={{ kind: "project", projectId: project.id }}
         tasks={tasks}
         selectedTaskId={selectedTaskId}
         spread={spread}

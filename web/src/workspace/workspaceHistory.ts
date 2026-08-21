@@ -1,4 +1,5 @@
 import type { Task, TaskHandoff } from "@ash/shared";
+import type { TaskScopeKind } from "./taskScope.ts";
 
 type TaskSelection = Pick<Task, "id" | "projectId">;
 
@@ -7,8 +8,11 @@ type BrowserNavigation = {
   location: Pick<Location, "pathname" | "search">;
 };
 
-export function taskSelectionUrl(task: TaskSelection, pathname: string): string {
+// 作用域要一起写进 URL：在「全部项目」里点开一行也压一条历史，回退时 URL 上没有 scope=all
+// 的话会被读成单项目态 —— 按一下后退，列表悄悄从「全部项目」缩回一家，这不是后退该做的事。
+export function taskSelectionUrl(task: TaskSelection, pathname: string, scope: TaskScopeKind = "project"): string {
   const params = new URLSearchParams();
+  if (scope === "all") params.set("scope", "all");
   params.set("project", task.projectId);
   params.set("task", task.id);
   return `${pathname}?${params.toString()}`;
@@ -56,8 +60,9 @@ export function handoffTaskHref(taskId: string, handoff: Pick<TaskHandoff,
 export function pushTaskHistoryEntry(
   task: TaskSelection,
   browser: BrowserNavigation = window,
+  scope: TaskScopeKind = "project",
 ): boolean {
-  const nextUrl = taskSelectionUrl(task, browser.location.pathname);
+  const nextUrl = taskSelectionUrl(task, browser.location.pathname, scope);
   if (`${browser.location.pathname}${browser.location.search}` === nextUrl) return false;
   browser.history.pushState(null, "", nextUrl);
   return true;

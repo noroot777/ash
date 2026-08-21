@@ -1,6 +1,7 @@
 import type { Task } from "@ash/shared";
 import { Star } from "@phosphor-icons/react";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
+import { scopeHasTarget, type TaskScope } from "./taskScope.ts";
 import {
   SPREAD_DOT_FILTERS,
   SPREAD_FILTERS,
@@ -99,11 +100,12 @@ export function SpreadFilterDots({ spread, counts }: { spread: SidebarSpread; co
   );
 }
 
-export function SpreadFilterControls({ spread, tasks, projectId }: { spread: SidebarSpread; tasks: Task[]; projectId: string | null }) {
-  // 没选项目时没有可筛的东西。反过来，只要选了项目就一直画着 —— 哪怕这个项目一个任务都没有：
-  // 筛选是**生效中的状态**，把入口藏起来会出现「列表被筛空了，却没地方取消」。
-  if (!projectId) return null;
-  const counts = spreadCounts(tasks, projectId);
+export function SpreadFilterControls({ spread, tasks, scope }: { spread: SidebarSpread; tasks: Task[]; scope: TaskScope }) {
+  // 作用域里没有可筛的目标（一个项目都没选）时才收起来。反过来，只要有目标就一直画着 ——
+  // 哪怕这个项目一个任务都没有：筛选是**生效中的状态**，把入口藏起来会出现「列表被筛空
+  // 了，却没地方取消」。
+  if (!scopeHasTarget(scope)) return null;
+  const counts = spreadCounts(tasks, scope);
   return spread.open
     ? <SpreadFilterBar spread={spread} counts={counts} />
     : <SpreadFilterDots spread={spread} counts={counts} />;

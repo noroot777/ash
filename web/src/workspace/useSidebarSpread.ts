@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Task, TaskFollowUp } from "@ash/shared";
 import { api } from "../lib/api.ts";
 import { spreadBucket, type SpreadBucket } from "../lib/taskAttention.ts";
+import { inScope, type TaskScope } from "./taskScope.ts";
 import { orderedTopLevelTasks } from "./taskTreeModel.ts";
 
 // 桶的判据搬到了 lib/taskAttention.ts（任务树排序和状态点也要读它，留在这里会成环）。
@@ -44,11 +45,12 @@ export function matchesSpreadFilter(task: Task, filter: SpreadFilter): boolean {
 }
 
 // 筛选按钮（铺开态的胶囊、窄态的点）共用同一份计数：口径分两处写，早晚会对不上。
-// 口径 = 当前项目的顶层活任务，跟任务树里被筛的那批行是同一批。
-export function spreadCounts(tasks: Task[], projectId: string | null): SpreadCounts {
+// 口径 = **当前作用域**里的顶层活任务，跟任务树里被筛的那批行是同一批 —— 全部项目态
+// 下这个口径自然扩到所有项目，不必另开一套计数。
+export function spreadCounts(tasks: Task[], scope: TaskScope): SpreadCounts {
   const counts: SpreadCounts = { all: 0, starred: 0, todo: 0, run: 0, wait: 0, done: 0, accepted: 0 };
   for (const task of tasks) {
-    if (task.projectId !== projectId || task.archived || task.parentId) continue;
+    if (!inScope(task, scope) || task.archived || task.parentId) continue;
     counts.all += 1;
     if (task.starredAt != null) counts.starred += 1;
     counts[spreadBucket(task)] += 1;
@@ -59,9 +61,9 @@ export function spreadCounts(tasks: Task[], projectId: string | null): SpreadCou
 // J/K 快捷键遍历的「屏幕上可见的那份顶层列表」。筛选判据必须走 matchesSpreadFilter,
 // 别在调用点自己拼 `spreadBucket(task) === filter` —— starred 不是桶,那样星标筛选下
 // 快捷键会拿到空数组,按键被吞但选中不动。
-export function spreadVisibleTasks(tasks: Task[], projectId: string | null, filter: SpreadFilter): Task[] {
+export function spreadVisibleTasks(tasks: Task[], scope: TaskScope, filter: SpreadFilter): Task[] {
   return orderedTopLevelTasks(
-    tasks.filter((task) => task.projectId === projectId && !task.archived),
+    tasks.filter((task) => inScope(task, scope) && !task.archived),
     { unifiedPinned: true },
   ).filter((task) => matchesSpreadFilter(task, filter));
 }
@@ -85,7 +87,7 @@ export type SidebarSpread = {
 // 铺开是**每次从收起开始**的临时视角，不写 localStorage：它是「让我扫一眼」的动作，
 // 不是一种常驻布局；下次打开页面还停在铺开态的话，反而挡住了主区。
 // 筛选同理不落盘 —— 它会把列表藏掉大半，刷新后还留着的话，下次打开只会当成「任务没了」。
-export function useSidebarSpread(tasks: Task[], projectId: string | null, revision: number): SidebarSpread {
+export function useSidebarSpread(tasks: Task[], scope: TaskScope, revision: number): SidebarSpread {
   const [open, setOpen] = useState(false);
   const [laidOut, setLaidOut] = useState(false);
   const [filter, setFilter] = useState<SpreadFilter>("all");
@@ -105,10 +107,11 @@ export function useSidebarSpread(tasks: Task[], projectId: string | null, revisi
     return () => { if (closeTimer.current) window.clearTimeout(closeTimer.current); };
   }, [laidOut, open]);
 
-  // 只问当前项目的活任务 —— 其他项目默认是折叠的，铺开时也看不到那些行。
+  // 只问作用域里的活任务 —— 单项目态下别的项目默认是折叠的，铺开时也看不到那些行；
+  // 全部项目态下它们就在屏幕上，那三格得跟着有内容。
   const idsKey = useMemo(
-    () => tasks.filter((task) => task.projectId === projectId && !task.archived).map((task) => task.id).sort().join(","),
-    [projectId, tasks],
+    () => tasks.filter((task) => inScope(task, scope) && !task.archived).map((task) => task.id).sort().join(","),
+    [scope, tasks],
   );
 
   useEffect(() => {
