@@ -331,18 +331,24 @@ export function CommandPalette({
     resetActive();
     focusInput();
   };
-  const loadGitOverview = (projectId: string) => {
-    setGitProjectId(projectId);
-    setStep("git-overview");
-    setQuery("");
-    setGitOverview(null);
+  // keepPrevious=true 用于操作后的静默重拉：切完分支不该把整屏闪成「正在读取」。
+  const fetchGitOverview = (projectId: string, keepPrevious = false) => {
+    if (!keepPrevious) {
+      setGitOverview(null);
+      setGitLoading(true);
+    }
     setGitError(null);
-    setGitLoading(true);
-    resetActive();
     void api.projectGitOverview(projectId)
       .then(setGitOverview)
       .catch((error: unknown) => setGitError(error instanceof Error ? error.message : String(error)))
       .finally(() => setGitLoading(false));
+  };
+  const loadGitOverview = (projectId: string) => {
+    setGitProjectId(projectId);
+    setStep("git-overview");
+    setQuery("");
+    resetActive();
+    fetchGitOverview(projectId);
   };
   const chooseSlashCommand = (command: SlashCommand | undefined) => {
     if (!command) return;
@@ -463,7 +469,16 @@ export function CommandPalette({
         {step === "git-project" && (
           <div className="min-h-0 max-h-[min(58vh,520px)] flex-1 overflow-y-auto"><GitProjectStep projects={projects} active={active} onChoose={loadGitOverview} onHover={hover} /></div>
         )}
-        {step === "git-overview" && <GitOverviewPanel project={gitProject} overview={gitOverview} loading={gitLoading} error={gitError} />}
+        {step === "git-overview" && (
+          <GitOverviewPanel
+            project={gitProject}
+            projectId={gitProjectId}
+            overview={gitOverview}
+            loading={gitLoading}
+            error={gitError}
+            onChanged={() => { if (gitProjectId) fetchGitOverview(gitProjectId, true); }}
+          />
+        )}
 
         {step === "search" && slashMode && (
           <div className="min-h-0 max-h-[min(58vh,520px)] flex-1 overflow-y-auto p-1">

@@ -48,6 +48,9 @@ import type {
   GitOverview,
   HostInfo,
   OpenerProbe,
+  ProjectGitResult,
+  ProjectGitState,
+  PullStrategy,
   ReplyTaskResult,
   ScmCommitResult,
   ScmDiffSource,
@@ -111,6 +114,19 @@ export const api = {
     request(`/projects/${id(projectId)}/branches`),
   projectGitOverview: (projectId: string): Promise<GitOverview> =>
     request(`/projects/${id(projectId)}/git-overview`),
+
+  // 项目**主仓**的 git 操作（侧栏分支胶囊 / 命令面板 `/git`）。跟任务面板那套 `scm*`
+  // 不是一回事：这里的目标永远是项目登记的仓库路径，改的是所有任务共用的那份 `.git`。
+  projectGit: (projectId: string): Promise<ProjectGitState> =>
+    request(`/projects/${id(projectId)}/git`),
+  projectGitCheckout: (projectId: string, branch: string): Promise<ProjectGitResult> =>
+    request(`/projects/${id(projectId)}/git/checkout`, json("POST", { branch })),
+  projectGitFetch: (projectId: string, remote?: string | null): Promise<ProjectGitResult> =>
+    request(`/projects/${id(projectId)}/git/fetch`, json("POST", { remote: remote ?? null })),
+  projectGitPull: (projectId: string, strategy: PullStrategy): Promise<ProjectGitResult> =>
+    request(`/projects/${id(projectId)}/git/pull`, json("POST", { strategy })),
+  projectGitPush: (projectId: string, remote?: string | null): Promise<ProjectGitResult> =>
+    request(`/projects/${id(projectId)}/git/push`, json("POST", { remote: remote ?? null })),
   createTerminalSession: (
     projectId: string,
     size: { cols: number; rows: number },
