@@ -424,10 +424,36 @@ export function claudeEffortUnsupportedMessage(version?: string | null, effort?:
   return `${installed} 不支持 --effort${selected}。请先执行 claude update，或把智能水平改为“跟随执行器”后重试。`;
 }
 
+/**
+ * root 身份下 claude 拒绝跳过权限确认时的中文说明。
+ *
+ * CLI 那侧的判定是 `getuid() === 0 && IS_SANDBOX !== "1" && !CLAUDE_CODE_BUBBLEWRAP`
+ * （2.1.220 二进制里的 `isRootOutsideDeliberateSandbox`），报出来只有一行英文，用户
+ * 看到的是「0s 用时 + 1 异常」，看不出跟部署身份有关。ash 派活一律带
+ * `--dangerously-skip-permissions`（无人值守，没有终端能点确认），所以在 root 下跑
+ * ash 就是必然撞上这条，跟模型、网络、任务内容都无关。
+ *
+ * 三条出路里，②等于告诉 claude「这里就是沙箱」——它会以 root 无确认地执行 agent 的
+ * 一切命令，是不可逆且会外溢到整台机器的选择，所以只说明怎么做、由用户自己去设，
+ * ash 不替他注入。
+ */
+export function claudeRootBypassMessage(): string {
+  return "Claude Code 拒绝以 root 身份跳过权限确认（ash 无人值守派活，必须带 "
+    + "--dangerously-skip-permissions）。三条出路选一条：\n"
+    + "① 换个非 root 用户跑 ash（最干净，推荐）；\n"
+    + "② 确认这台机器是可丢弃的容器/沙箱，就在**启动 ash 的环境**里设 IS_SANDBOX=1"
+    + "（agent 子进程继承 ash 的环境变量），代价是 agent 从此能以 root 无确认地动整台机器；\n"
+    + "③ 把 ash 跑在 bubblewrap 沙箱里（CLAUDE_CODE_BUBBLEWRAP）。";
+}
+
 /** 远端目标或 help 探测失败时，仍把 CLI 的生硬参数错误翻成可操作提示。 */
 export function normalizeClaudeCliError(stderr: string): string {
   const message = stderr.trim();
   const lower = message.toLowerCase();
+  // 只认 CLI 真的报了这句才翻译：复用这份 parser 的第三方 CLI 未必有同一条检查。
+  if (lower.includes("dangerously-skip-permissions") && lower.includes("root/sudo")) {
+    return claudeRootBypassMessage();
+  }
   const unsupported = lower.includes("--effort") && (
     lower.includes("unknown option")
     || lower.includes("unrecognized option")

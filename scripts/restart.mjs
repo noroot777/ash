@@ -35,8 +35,9 @@
 // scripts/platform.mjs。
 import "./env.mjs";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 import { IS_WINDOWS, isPidAlive, killPid, listenerPids, localJson, pidsRunningScript, sleep } from "./platform.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces } from "./workspace-check.mjs";
@@ -56,6 +57,29 @@ const WAIT = !!process.env.WAIT;
 const WAIT_TIMEOUT = process.env.WAIT_TIMEOUT ? Number(process.env.WAIT_TIMEOUT) : null;
 
 const say = (line) => process.stdout.write(`${line}\n`);
+
+// 单实例锁:server 自己写的「谁占着这个 DB」,字段见 server/src/singleton.ts。
+// 路径口径要跟 server 一致(ASH_DB 覆盖,默认 data/ash.db),否则找错文件。
+const LOCK_FILE = `${process.env.ASH_DB ? resolve(process.env.ASH_DB) : join(REPO, "data", "ash.db")}.ash.lock`;
+
+/**
+ * 现在是哪个 pid 占着这个 DB。**端口探测只是旁证**:容器里 lsof/ss/fuser 可能一个
+ * 都没有(2026-08-21 的 Rocky 容器就是),listenerPids 返回空,旧进程于是被整个放过。
+ * 锁文件是 server 自己写的权威记录,跟它拒绝第二个实例启动时用的是同一份判据,拿它
+ * 兜底既零依赖又不会看走眼。
+ *
+ * **只认端口对得上的那把锁**:同一台机器上完全可能有别的 ash 守着别的 DB/端口
+ * (test-restart 就起在 14317),不加这道判据就会去杀不相干的进程。
+ */
+function lockOwnerPid() {
+  try {
+    const lock = JSON.parse(readFileSync(LOCK_FILE, "utf8"));
+    if (lock?.port !== PORT) return null;
+    return Number.isInteger(lock.pid) && lock.pid > 1 && isPidAlive(lock.pid) ? lock.pid : null;
+  } catch {
+    return null; // 没有锁文件 = 没有在跑的 ash,或者旧版本还不写锁
+  }
+}
 
 /**
  * 「现在重启会真正打断几个任务」。**不是** running/queued 的个数 —— agent 的输出
@@ -134,7 +158,9 @@ say("▶ 1/3 构建 (shared → web → server → mcp)…");
 npm(["run", "build"], "✕ 构建失败,已中止——服务端未重启,跑的还是旧代码。");
 
 say(`▶ 2/3 重启 :${PORT} 服务端…`);
-const old = listenerPids(PORT);
+// 端口 ∪ 锁文件:两条线索都用上,少一条就可能漏掉旧进程(见 lockOwnerPid 的注释)。
+const owner = lockOwnerPid();
+const old = [...new Set([...listenerPids(PORT), ...(owner ? [owner] : [])])];
 if (old.length) {
   // 别盲目打断会被打断的任务。判据是「重启会**真断**几个」而不是「有几个在跑」。
   let data = await impact();
@@ -162,7 +188,23 @@ if (old.length) {
   }
   if (busy > 0) say(`  ⚠ FORCE:打断 ${busy} 个**接管不了**的任务(判为 failed,可重试);会被接管的不受影响。`);
   for (const pid of old) killPid(pid);
-  for (let i = 0; i < 25 && listenerPids(PORT).length; i++) await sleep(200);
+}
+
+// 不管上面找没找到旧进程,端口都必须**彻底安静**才能起新的。这是全脚本唯一不依赖
+// 任何系统命令的判据,也是「谎报成功」的最后一道闸 ——
+// 2026-08-21 那台 Rocky 容器里 lsof/ss/fuser 一个都没有,`old` 是空的,旧进程原封
+// 不动;新进程起来撞上单实例锁当场退出,而 /api/health 由**老进程**照常回 200,脚本
+// 于是打印「✓ 已就绪」。用户看到的是成功,机器上跑的是三小时前的代码。
+for (let i = 0; i < 75 && (await localJson(PORT, "/api/health")); i++) await sleep(200);
+if (await localJson(PORT, "/api/health")) {
+  say(`  ✕ :${PORT} 上仍有一个 ash 在应答,没能让它下线 —— 已中止,未重启服务端。`);
+  say(`     (新代码已 build 进 dist,不会丢;继续跑的是旧代码。)`);
+  if (old.length) say(`     试过 kill:${old.join(", ")} —— 它没退,或者应答的根本是别的进程。`);
+  else say("     一个候选 pid 都没找到:这台机器上 lsof/ss/fuser 可能都没装,锁文件也没读到。");
+  say(`     手工确认它是谁:  cat ${LOCK_FILE}`);
+  say("                       ps -ef | grep server/dist/index.js");
+  say("     然后 kill 掉它,再重跑一次 npm run restart。");
+  process.exit(1);
 }
 
 // 起一个脱离本进程的 server:helper 自己退出后 child 归给 init/服务管理器,
@@ -178,18 +220,27 @@ if (started.status !== 0 || !Number.isInteger(serverPid) || serverPid <= 0) {
 }
 
 let ready = false;
+let impostor = 0;
 const deadline = Date.now() + START_TIMEOUT * 1000;
 while (Date.now() < deadline) {
-  if (await localJson(PORT, "/api/health")) {
+  const health = await localJson(PORT, "/api/health");
+  // 认「就绪」之前先认人:health 带 pid 是为了让这里能分辨「新进程起来了」和「端口
+  // 上还坐着另一个 ash」。旧版本 server 没有这个字段(undefined),那就退回只看通不通
+  // —— 上面那道「必须先安静」的闸已经保证了此刻端口上不会有别人。
+  if (health && (!health.pid || health.pid === serverPid)) {
     ready = true;
     break;
   }
+  if (health?.pid) impostor = health.pid;
   // 启动进程已经退出就别傻等满超时；反之给迁移/重启接管留足时间。
   if (!isPidAlive(serverPid)) break;
   await sleep(200);
 }
 if (ready) {
-  say(`  ✓ :${PORT} 已就绪(日志 ${LOG})`);
+  say(`  ✓ :${PORT} 已就绪(pid ${serverPid},日志 ${LOG})`);
+} else if (impostor) {
+  say(`  ✕ :${PORT} 上应答的是 pid ${impostor},不是刚起的 ${serverPid} —— 重启没生效,跑的还是旧代码。看 ${LOG}`);
+  process.exit(1);
 } else {
   say(isPidAlive(serverPid)
     ? `  ✕ :${PORT} 等待 ${START_TIMEOUT}s 仍未就绪,但启动进程还在运行;看 ${LOG}`

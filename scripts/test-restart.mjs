@@ -6,8 +6,8 @@
 // `--noproxy '*'`;现在探活走 node:http(压根不读代理环境变量),没有参数可查,于是
 // 改成端到端 —— 把 HTTP_PROXY/ALL_PROXY 指向黑洞,起一个**真的**假 server,看整条
 // 流程能不能跑通。这比查参数更靠谱:它测的是「结果对不对」而不是「实现长什么样」。
-import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,9 +21,13 @@ mkdirSync(FAKE_BIN);
 
 const PID_FILE = join(TMP, "server.pid");
 let serverPid = 0;
+// 后半段那个「吃掉 SIGTERM」的假 server:断言中途失败会直接 process.exit,而它既不是
+// detached 也杀不死自己,不在这里记一笔就会漏成僵尸,一直占着 :PORT 让下次跑不起来。
+let stubbornChild = null;
 
 function cleanup() {
   if (serverPid) killPid(serverPid);
+  try { stubbornChild?.kill("SIGKILL"); } catch { /* 已经没了 */ }
   try { rmSync(TMP, { recursive: true, force: true }); } catch { /* 临时目录,清不掉也无所谓 */ }
 }
 process.on("exit", cleanup);
@@ -57,7 +61,7 @@ import { createServer } from "node:http";
 createServer((req, res) => {
   const body = req.url?.startsWith("/api/restart-impact")
     ? '{"survives":[],"resumes":[],"interrupted":[],"mcpDisrupted":[]}'
-    : '{"ok":true}';
+    : JSON.stringify({ ok: true, pid: process.pid });
   res.writeHead(200, { "content-type": "application/json" });
   res.end(body);
 }).listen(${PORT}, "127.0.0.1", () => {
@@ -77,6 +81,9 @@ const env = {
   SERVER_ENTRY: fakeServer,
   START_TIMEOUT: "10",
   SKIP_MCP: "1",
+  // 单实例锁的路径跟着 DB 走。指到临时目录,免得脚本读到本机真 ash 的那把锁
+  // (它另有 port 判据兜着,但测试没道理去碰用户正在跑的东西)。
+  ASH_DB: join(TMP, "ash.db"),
 };
 
 const run = spawnSync(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
@@ -112,4 +119,46 @@ killPid(serverPid);
 await sleep(200);
 serverPid = 0;
 
+// ── 旧进程没下线时，绝不许报成功 ──────────────────────────────────────────────
+// 2026-08-21 的真实故障：Rocky 容器里没装 lsof(ss/fuser 也可能没有)，listenerPids
+// 返回空 → 旧进程被整个放过 → 新进程撞单实例锁当场退出 → 而 /api/health 由**老
+// 进程**回 200，脚本打印「✓ 已就绪」。用户以为重启成功，机器上跑的是三小时前的
+// 代码。这里用一个吃掉 SIGTERM 的赖着不走的 server 复现同一局面：不管平台上有没有
+// lsof，它都杀不死，端口始终有人应答 —— 脚本必须失败退出，而不是报就绪。
+const stubborn = join(TMP, "stubborn.mjs");
+const STUBBORN_PID = join(TMP, "stubborn.pid");
+writeFileSync(stubborn, `import { writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+process.on("SIGTERM", () => {});
+createServer((req, res) => {
+  const body = req.url?.startsWith("/api/restart-impact")
+    ? '{"survives":[],"resumes":[],"interrupted":[],"mcpDisrupted":[]}'
+    : JSON.stringify({ ok: true, pid: process.pid });
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(body);
+}).listen(${PORT}, "127.0.0.1", () => {
+  writeFileSync(${JSON.stringify(STUBBORN_PID)}, String(process.pid));
+});
+`);
+
+const stubbornProc = spawn(process.execPath, [stubborn], { stdio: "ignore", detached: false });
+for (let i = 0; i < 50 && !existsSync(STUBBORN_PID); i++) await sleep(100);
+if (!existsSync(STUBBORN_PID)) fail("赖着不走的假 server 没起来,这条回归没法测");
+
+const blocked = spawnSync(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
+  cwd: REPO,
+  env: { ...env, START_TIMEOUT: "3" },
+  encoding: "utf8",
+});
+const blockedOutput = (blocked.stdout ?? "") + (blocked.stderr ?? "");
+try { stubbornProc.kill("SIGKILL"); } catch { /* 已经没了 */ }
+await sleep(200);
+
+if (blocked.status === 0) fail("旧进程没下线,restart 却报了成功", blockedOutput);
+if (blockedOutput.includes("已就绪")) fail("旧进程还占着端口,却打印了「已就绪」", blockedOutput);
+if (!blockedOutput.includes("仍有一个 ash 在应答")) {
+  fail("失败信息没说清「旧的没下线」这个成因", blockedOutput);
+}
+
 process.stdout.write("✓ restart.mjs 的本机探测绕过代理，且脚本返回后 detached server 仍在运行\n");
+process.stdout.write("✓ 旧进程没能下线时 restart.mjs 明确失败，不再谎报「已就绪」\n");

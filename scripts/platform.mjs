@@ -90,14 +90,32 @@ function uniquePids(text) {
   return [...new Set(text.split(/\s+/).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
 }
 
-/** 谁在监听这个端口。查不到（命令不可用 / 竞态）返回空数组。 */
+/**
+ * 谁在监听这个端口。查不到（命令不可用 / 竞态）返回空数组。
+ *
+ * POSIX 上要依次退好几条：**`lsof` 是 macOS 自带、Linux 精简镜像普遍不装**。
+ * 2026-08-21 踩到的实例是一台 Rocky 容器里的 ash —— `lsof` 不在，这里返回空，
+ * restart.mjs 于是「没找到旧进程」直接放过，新进程撞单实例锁退出，而 `/api/health`
+ * 由**老进程**照常回 200，脚本打印「已就绪」。用户完全有理由以为重启成功了，实际
+ * 跑了三个多小时的旧代码。所以 lsof → ss(iproute2) → fuser(psmisc) 挨个试。
+ * `/usr/sbin` 常常不在非交互 shell 的 PATH 里，which 找不到就直接按绝对路径打。
+ */
 export function listenerPids(port) {
-  const out = IS_WINDOWS
-    ? powerShell(`$ErrorActionPreference='SilentlyContinue'
+  if (IS_WINDOWS) {
+    return uniquePids(powerShell(`$ErrorActionPreference='SilentlyContinue'
 try { (Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction Stop).OwningProcess }
-catch { netstat -ano | Select-String ':${port}\\s' | Select-String 'LISTENING' | ForEach-Object { ($_ -split '\\s+')[-1] } }`)
-    : capture("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"]);
-  return uniquePids(out);
+catch { netstat -ano | Select-String ':${port}\\s' | Select-String 'LISTENING' | ForEach-Object { ($_ -split '\\s+')[-1] } }`));
+  }
+  const lsof = uniquePids(capture("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"]));
+  if (lsof.length) return lsof;
+  // ss 的进程栏长这样：`users:(("node",pid=1751,fd=23))`。`-H` 去表头是新版才有的
+  // 选项，老版会多吐一行标题——照样不含 `pid=`，正则天然免疫。
+  const ss = capture(which("ss") ?? "/usr/sbin/ss", ["-lntpH", `sport = :${port}`]);
+  const fromSs = [...new Set([...ss.matchAll(/pid=(\d+)/g)].map((m) => Number(m[1])))]
+    .filter((n) => Number.isInteger(n) && n > 0);
+  if (fromSs.length) return fromSs;
+  // fuser 把 pid 打在 stdout、其余说明打在 stderr（capture 只收 stdout）。
+  return uniquePids(capture(which("fuser") ?? "/usr/sbin/fuser", ["-n", "tcp", String(port)]));
 }
 
 /** 全进程表的 `{ pid, command }`。查不到返回空数组。 */
