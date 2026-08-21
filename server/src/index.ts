@@ -164,6 +164,20 @@ async function initializeServer() {
 const app = new Hono();
 app.route("/api", api);
 
+// 没被上面任何一条 api 路由认领的 `/api/*`,到这里就停,不许落到下方的 SPA 兜底。
+// 兜底那条是 `app.get("/*")`,它会把 index.html 当 200 回给一个 GET 接口——前端
+// `parseBody` 拿到一坨 HTML 字符串,报错报在离现场十万八千里的地方。POST 则会撞上
+// Hono 默认的 `404 Not Found`(纯文本、没有 `error` 字段),前端只能显示
+// 「404 请求失败」,看不出是"路由不存在"还是"资源不存在"。
+// 这两种都指向同一个真实成因:**服务端跑的代码比前端旧**——web/dist 是从磁盘现读的
+// (重新 build 就生效),server 得重新 build 且重启进程才换代码,一旦只做了前者,新界面
+// 就会去调一个老服务端没有的接口。所以这里直接把成因说出来。
+app.all("/api/*", (c) =>
+  c.json({
+    error: `接口 ${c.req.method} ${new URL(c.req.url).pathname} 不存在。` +
+      `多半是服务端跑的代码比前端旧:重新 npm run build 并重启 ash 再试。`,
+  }, 404));
+
 // ── 待审视频预览(Tailscale 旁路)─────────────────────────────────────────────
 // 待审 mp4 软链到仓库根的 review/ 下,手机经 Tailscale 直接开
 // http://<tailnet-ip>:4317/review/current/ 审核,不必另起第二个服务。必须注册在下方
