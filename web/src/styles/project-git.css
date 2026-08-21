@@ -103,6 +103,8 @@
 }
 
 .project-git-panel__branches { display:flex; min-height:0; flex:1; flex-direction:column; gap:1px; overflow-y:auto; }
+/* 同 .scm-panel：列向滚动容器里的行不许被 flex 压扁，否则分支一多就叠印。 */
+.project-git-panel__branches > * { flex:0 0 auto; }
 .project-git-branch {
   display:flex; width:100%; min-width:0; align-items:center; gap:6px;
   border:0; border-radius:7px; background:transparent; padding:5px 7px;

@@ -1,6 +1,10 @@
 /* 工作区源代码管理面板（inspector）+ 中间栏的工作区 diff */
 
 .scm-panel { display:flex; min-height:0; height:100%; flex-direction:column; overflow:auto; }
+/* 这是个 flex 列向滚动容器：子块默认 flex-shrink:1，改动一多就会被压扁成一条，内容
+   原地溢出、叠印到下一块身上（文件列表画在「最近提交」上）。滚动容器里的块不该被
+   压，一律锁死 shrink，超出的部分交给 overflow 滚。 */
+.scm-panel > *, .scm-groups > * { flex:0 0 auto; }
 .scm-hint { margin:14px 10px; color:var(--faint); font-size:10.5px; line-height:1.6; }
 .scm-empty { display:flex; flex-direction:column; align-items:flex-start; gap:8px; margin:14px 10px; border:1px dashed var(--line2); border-radius:8px; padding:12px; color:var(--muted); font-size:10.5px; }
 .scm-empty > svg { color:var(--amber); }
@@ -59,7 +63,7 @@
 .scm-committed__open span { display:inline-flex; align-items:center; gap:5px; }
 .scm-committed__open:hover { background:var(--raised); color:var(--ink); }
 
-.scm-groups { display:flex; min-height:0; flex-direction:column; gap:2px; padding-bottom:14px; }
+.scm-groups { display:flex; flex-direction:column; gap:2px; padding-bottom:14px; }
 .scm-group header { display:flex; align-items:center; gap:6px; padding:6px 9px 3px; }
 .scm-group header b { color:var(--muted); font-size:10px; font-weight:600; letter-spacing:.02em; }
 .scm-group.is-merge header b { color:var(--red); }

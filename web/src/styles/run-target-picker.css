@@ -209,6 +209,7 @@
 }
 .effort-picker-panel > button {
   display: flex;
+  flex: 0 0 auto;
   align-items: baseline;
   gap: 8px;
   border: 0;
