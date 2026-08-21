@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { spawnAgent } from "../src/executors/spawn.js";
 
-const root = mkdtempSync(join(tmpdir(), "harness-tee-"));
+const root = mkdtempSync(join(tmpdir(), "ash-tee-"));
 process.on("exit", () => rmSync(root, { recursive: true, force: true }));
 
 const LINES = ["{\"type\":\"a\"}", "{\"type\":\"b\"}", "{\"type\":\"c\"}"];

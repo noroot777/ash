@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Note, NoteSearchHit, TaskSearchHit } from "@harness/shared";
+import type { Note, NoteSearchHit, TaskSearchHit } from "@ash/shared";
 import { createClient } from "../src/db/node-sqlite-client.js";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 
-const root = mkdtempSync(join(tmpdir(), "harness-note-history-"));
-const dbFile = join(root, "harness.db");
-process.env.HARNESS_DB = dbFile;
+const root = mkdtempSync(join(tmpdir(), "ash-note-history-"));
+const dbFile = join(root, "ash.db");
+process.env.ASH_DB = dbFile;
 
 // Start from the old single-link shape so this test also pins the startup migration.
 const legacy = createClient({ url: dbFile });

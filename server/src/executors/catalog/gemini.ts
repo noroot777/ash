@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import type { AgentEvent } from "@harness/shared";
+import type { AgentEvent } from "@ash/shared";
 import { RunTraceRecorder } from "../diagnostics.js";
 import { forceFinishOnExit, spawnErrorMessage } from "../spawn.js";
 import type { CliParser, CliSpec } from "./types.js";
@@ -192,14 +192,14 @@ export const geminiSpec: CliSpec = {
     "③`--output-format stream-json` 的 JSONL schema 是 init/message/tool_use/tool_result/error/result 平铺字段," +
     "与 claude 不同,故内联了自己的 parser;④`--model` 别名 auto/pro/flash/flash-lite;" +
     "⑤会话 id 由 CLI 生成、只在 init 事件里,续跑用 `--resume <uuid>`;" +
-    "⑥`--skip-trust` 会置 GEMINI_CLI_TRUST_WORKSPACE=true —— 必须带,因为 harness 跑在用户从没交互式信任过的仓库/worktree 里," +
+    "⑥`--skip-trust` 会置 GEMINI_CLI_TRUST_WORKSPACE=true —— 必须带,因为 ash 跑在用户从没交互式信任过的仓库/worktree 里," +
     "不带就落进「受限安全模式」,表现为 agent 静默失去改文件的能力(注意官方文档自相矛盾:" +
     "docs/cli/trusted-folders.md 说该特性默认关,而 settings 参考与源码 `?? true` 说默认开,这里按最坏情况处理)。" +
     "仍未确认(要装了 CLI 才能定):㈠assistant 文本是否只走 delta 分片、会不会另发一份完整消息导致正文翻倍;" +
     "㈡`--resume <uuid>` 与 `-p` 同时给时是否真的既续上历史又保持非交互;" +
     "㈢老版本没有 `--skip-trust`/`--approval-mode` 时会 exit 1 + 打 help(响亮失败,不是静默降级);" +
     "㈣未接 relay:gemini 的第三方通道是 GOOGLE_GEMINI_BASE_URL + GEMINI_API_KEY,但它要求对端讲 Google GenAI 协议" +
-    "(/v1beta/...:generateContent),而 harness 的 llm_providers 是 OpenAI 形状的 /v1,硬接必然 404,所以刻意不写 relay。",
+    "(/v1beta/...:generateContent),而 ash 的 llm_providers 是 OpenAI 形状的 /v1,硬接必然 404,所以刻意不写 relay。",
   exec: {
     // --approval-mode yolo:自动批准所有工具调用(不给就会停在交互确认,任务永不结束)。
     // --skip-trust:见 notes ⑥。--output-format stream-json:换来工具调用与 sessionId。
@@ -214,7 +214,7 @@ export const geminiSpec: CliSpec = {
     // 也没有 1.5x 加速档,故不设 fastArgs。
     session: {
       // (c) 档:id 由 gemini 自己产生,靠上面 parser 从 init 事件带回来,
-      // harness 不发 id(gemini 的 --session-id 只在源码里注册、未进官方 cheatsheet,
+      // ash 不发 id(gemini 的 --session-id 只在源码里注册、未进官方 cheatsheet,
       // 少赌一个 flag)。--resume 接受 latest / 序号 / 完整 uuid,这里只用 uuid。
       resumeArgs: (id) => ["--resume", id],
       interactive: (id) => `gemini --resume ${id}`,

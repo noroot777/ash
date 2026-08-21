@@ -6,7 +6,7 @@
 import { createWriteStream } from "node:fs";
 import { join } from "node:path";
 import { eq, inArray } from "drizzle-orm";
-import type { AgentType, SessionRole } from "@harness/shared";
+import type { AgentType, SessionRole } from "@ash/shared";
 import { db } from "./db/index.js";
 import { agents, tasks, sessions } from "./db/schema.js";
 import { claimTurn, releaseTurn, trackRun, untrackRun } from "./runs.js";
@@ -31,7 +31,7 @@ import { findMcpChannelHolders } from "./mcp-holders.js";
 //                丢的是当前这一轮，不是整个任务
 //  · interrupted 真会被判 failed 的：老代码起的（没 agent_pid）、queued 还没起
 //                进程的、进程已经不在的
-//  · mcpDisrupted survives 里**手上还握着 harness MCP 子进程**的那几个。重启
+//  · mcpDisrupted survives 里**手上还握着 ash MCP 子进程**的那几个。重启
 //                :4317 伤不到它们，但 restart.mjs 第 3 步杀旧 MCP 子进程时会当场掐断
 //                它们的交卷通道（2026-08-06 那次验证白跑就是这么来的）。这一类
 //                跟 survives 是**包含关系不是并列**：它们仍然活得过重启。
@@ -155,14 +155,14 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         cliSessionId: sess.cliSessionId ?? "",
         autoTitle: false, role: sess.role as SessionRole, // 标题在被打断之前那一段就已经解析过了
       })
-        .catch((err) => console.error(`[harness] 接管 ${task.id} 的消费循环出错:`, err))
+        .catch((err) => console.error(`[ash] 接管 ${task.id} 的消费循环出错:`, err))
         .finally(() => {
           untrackRun(task.id, handle);
           if (claimedTurn) releaseTurn(task.id);
         });
-      console.log(`[harness] 接管仍在运行的 agent:任务 ${task.id} pid=${sess.agentPid}(从字节 ${sess.agentOffset ?? 0} 继续)`);
+      console.log(`[ash] 接管仍在运行的 agent:任务 ${task.id} pid=${sess.agentPid}(从字节 ${sess.agentOffset ?? 0} 继续)`);
     } catch (err) {
-      console.error(`[harness] 接管 ${task.id} 失败:`, err);
+      console.error(`[ash] 接管 ${task.id} 失败:`, err);
       adopted.delete(task.id);
     }
   }

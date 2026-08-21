@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import type { AgentEvent } from "@harness/shared";
+import type { AgentEvent } from "@ash/shared";
 import { RunTraceRecorder } from "../diagnostics.js";
 import { forceFinishOnExit, spawnErrorMessage } from "../spawn.js";
 import type { CliParser, CliParserContext, CliSpec } from "./types.js";
@@ -198,7 +198,7 @@ export const qoderSpec: CliSpec = {
     "③`--output-format` 只收 text|json|stream-json,`--include-partial-messages` 有硬校验" +
     "「requires --print and --output-format=stream-json」(两条都满足),**没有 claude 那道 --verbose 门槛**;" +
     "④输出 schema 与 claude 同源但没复用 claudeStreamJsonParser,原因见文件头注释;" +
-    "⑤`--session-id` 收 UUID(正则 /^[0-9a-f]{8}-…$/,harness 的 randomUUID 合规),与 `-c`/`-r` " +
+    "⑤`--session-id` 收 UUID(正则 /^[0-9a-f]{8}-…$/,ash 的 randomUUID 合规),与 `-c`/`-r` " +
     "互斥(除非 `--fork-session`),id 撞上已有会话会报 already in use;续跑用 `--resume <id>`;" +
     "⑥`--model/-m` 的档位枚举是 auto|ultimate|performance|efficient|lite,前沿模型(qwen3.7-max 等)" +
     "和 BYOK 自定义模型只能在 TUI 的 /model 里配,配好后可手填 id;" +

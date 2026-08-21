@@ -5,11 +5,11 @@
 // 跟 review.ts 分开是因为它们是两件事：这里回答「该不该、几轮、找谁」，那边负责
 // 建审查任务、写证据、打回原任务。判定这一侧现在要读任务身上那条线，再挤在一个文件里
 // 会把一份七百行的文件推得更长。
-import type { ReviewDispatchInput, TaskStatus } from "@harness/shared";
-import type { WorkflowDef } from "@harness/shared/workflow";
+import type { ReviewDispatchInput, TaskStatus } from "@ash/shared";
+import type { WorkflowDef } from "@ash/shared/workflow";
 import {
   LEGACY_AUTO_REVIEW_ROUNDS, workflowPolicy, type WorkflowPolicy,
-} from "@harness/shared/workflow-policy";
+} from "@ash/shared/workflow-policy";
 import type { tasks } from "./db/schema.js";
 import { taskWorkflowDef } from "./workflows.js";
 

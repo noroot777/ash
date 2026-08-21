@@ -3,7 +3,7 @@
 // resume 却已经是本机的 `cd /repo && claude --resume`,默认 profile 还照样默认)。
 //
 // 跑法:
-//   HARNESS_DB=/tmp/test-ssh-profile-retire-$RANDOM.db npx tsx server/scripts/test-ssh-profile-retire.ts
+//   ASH_DB=/tmp/test-ssh-profile-retire-$RANDOM.db npx tsx server/scripts/test-ssh-profile-retire.ts
 import assert from "node:assert/strict";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 

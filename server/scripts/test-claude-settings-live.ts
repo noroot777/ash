@@ -1,7 +1,7 @@
 // 拿**真 claude** 对一遍 `claude-settings.ts` 里那套分层假设。
 //
 // 为什么单独一条:那份顺序不是照抄文档、是黑盒实测出来的(见该文件顶部注释),CLI 换个
-// 版本就可能漂。漂了之后 harness 仍然算得出一个数、页面仍然写着「已覆盖」,只是那个数
+// 版本就可能漂。漂了之后 ash 仍然算得出一个数、页面仍然写着「已覆盖」,只是那个数
 // 跟 CLI 真正用的对不上 —— 这种错没有任何纯函数测试能发现,只有让 claude 自己说出它
 // 看到的值才行(前三轮审查都是这么抓到的)。
 //
@@ -10,7 +10,7 @@
 // 阶段跑,模型一次都不会被调用。
 //
 // 跑法(本机没装 claude 会自己跳过,所以可以进 CI):
-//   HARNESS_DB=/tmp/test-claude-settings-live-$RANDOM.db npx tsx server/scripts/test-claude-settings-live.ts
+//   ASH_DB=/tmp/test-claude-settings-live-$RANDOM.db npx tsx server/scripts/test-claude-settings-live.ts
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -35,7 +35,7 @@ const managed =
     : "/etc/claude-code/managed-settings.json";
 if (existsSync(managed) && readFileSync(managed, "utf8").includes(NAME)) skip(`${managed} 里写过 ${NAME}`);
 
-const scratch = mkdtempSync(join(tmpdir(), "harness-claude-live-"));
+const scratch = mkdtempSync(join(tmpdir(), "ash-claude-live-"));
 const hookFile = join(scratch, "hook.txt");
 const repo = join(scratch, "repo");
 const wt = join(scratch, "wt"); // 跟 repo 平级:目录树上互不包含,才测得出「按 git 关系找主仓」
@@ -88,7 +88,7 @@ async function askClaude(cwd: string, extraEnv: Record<string, string | undefine
   return raw ? Number(raw) : null;
 }
 
-/** 同一个场景问两边:真 claude 一份、harness 的静态推算一份,必须一致。 */
+/** 同一个场景问两边:真 claude 一份、ash 的静态推算一份,必须一致。 */
 async function agree(what: string, cwd: string, extraEnv: Record<string, string | undefined> = {}) {
   const before = process.env.CLAUDE_CONFIG_DIR;
   const realHome = process.env.HOME;
@@ -99,7 +99,7 @@ async function agree(what: string, cwd: string, extraEnv: Record<string, string 
   }
   try {
     const truth = await askClaude(cwd, extraEnv);
-    assert.equal(claudeMaxOutputTokens(cwd), truth, `${what}:真 claude 用的是 ${truth},harness 却按别的值换算`);
+    assert.equal(claudeMaxOutputTokens(cwd), truth, `${what}:真 claude 用的是 ${truth},ash 却按别的值换算`);
     console.log(`  ✓ ${what} → ${truth ?? "读不到"}`);
     return truth;
   } finally {

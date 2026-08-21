@@ -96,7 +96,7 @@
     el.tplsel.innerHTML = "<b>" + esc(name) + "</b>" +
       dots(S.steps.map(function (s) { return s.kind; })) +
       "<small>" + esc(desc) + "</small><em>▾</em>";
-    el.src.textContent = own ? "这个任务自己定" : "跟随本项目 · harness";
+    el.src.textContent = own ? "这个任务自己定" : "跟随本项目 · ash";
     el.src.setAttribute("data-own", String(own));
     if (!own) return el.fork.setAttribute("hidden", "");
     el.fork.removeAttribute("hidden");

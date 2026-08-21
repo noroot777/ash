@@ -2,7 +2,7 @@
 // 读端(shared 的 parseAttachmentText)必须能把这段文本原样拆回来 —— 两端逐字对不上,
 // 界面上就是「用户发了图,气泡里只有一串本地路径」。
 import assert from "node:assert/strict";
-import { parseAttachmentText } from "@harness/shared/attachments";
+import { parseAttachmentText } from "@ash/shared/attachments";
 import { gateUserMessage } from "../src/duet/user-message.js";
 
 // 一句话 + 一张截图:正文在前,附件段在后。

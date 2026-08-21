@@ -13,10 +13,10 @@ import type {
   AgentType,
   LlmProvider,
   LlmProtocol,
-} from "@harness/shared";
-import { maxBytesFor, attachmentKind } from "@harness/shared";
-import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@harness/shared/cli-presets";
-import { normalizeCliConfigOverrides, cliConfigOverrideErrors, readCliConfigOverrides } from "@harness/shared/cli-overrides";
+} from "@ash/shared";
+import { maxBytesFor, attachmentKind } from "@ash/shared";
+import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@ash/shared/cli-presets";
+import { normalizeCliConfigOverrides, cliConfigOverrideErrors, readCliConfigOverrides } from "@ash/shared/cli-overrides";
 import { db } from "./db/index.js";
 import { projects, groups, tasks, agents, llmProviders, notes, noteTasks } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -210,7 +210,7 @@ api.get("/agents", async (c) => c.json((await db.select().from(agents)).map(toAg
 api.get("/agents/detect", async (c) => c.json(await detectLocalAgents()));
 // 已知 CLI 目录:含上面那几个可执行器(带 type),外加一批只做「装没装」展示的。
 api.get("/agents/catalog", async (c) => c.json(await detectKnownClis()));
-// harness 起 CLI 时它会看到的环境事实(只读,不是配置项)。设置页要拿它换算压缩触发点:
+// ash 起 CLI 时它会看到的环境事实(只读,不是配置项)。设置页要拿它换算压缩触发点:
 // 有效窗口 = 窗口 − min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, 20000),而那个变量在 server 进程里,
 // 前端算不出来 —— 不报过去的话,页面上写的水位和 CLI 的实际行为会对不上。
 api.get("/agents/cli-env", (c) => c.json(cliHostEnv()));
@@ -550,7 +550,7 @@ mountFileRoutes(api);
 mountScmRoutes(api);
 // 任务分支相对合入目标的只读 diff:整份 + 单文件(从 task-accept.ts 拆出,它管的是验收本身)。
 mountTaskDiffRoutes(api);
-// ── 供应商 (relay, system-level) — 挂给执行器用,harness 不直连它跑推理 ────────
+// ── 供应商 (relay, system-level) — 挂给执行器用,ash 不直连它跑推理 ────────
 const toProvider = (r: typeof llmProviders.$inferSelect): LlmProvider => ({
   id: r.id,
   name: r.name,

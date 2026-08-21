@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import type { SkillEntry, SkillSource } from "@harness/shared";
+import type { SkillEntry, SkillSource } from "@ash/shared";
 import { api } from "@/lib/api";
 import { useTheme, radius, fonts } from "@/lib/theme";
 
@@ -29,7 +29,7 @@ export function slashToken(text: string): string | null {
  *
  * 是**子串**匹配而不是前缀匹配:技能名的关键词经常不在开头(插件前缀 `codex:rescue`、
  * 动宾结构 `high-end-visual-design`),从头匹配等于逼人先背全名。桌面那份在
- * `web-next/src/lib/useSkills.ts`,两边口径要一致。
+ * `web/src/lib/useSkills.ts`,两边口径要一致。
  */
 export function slashMatchIndex(command: string, token: string): number {
   const needle = token.replace(/^\/+/, "").toLowerCase();

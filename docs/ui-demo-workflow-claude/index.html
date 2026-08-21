@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" href="data:,">
-<title>工作流编排 · Claude 方案 — Harness UI Demo</title>
+<title>工作流编排 · Claude 方案 — Ash UI Demo</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -37,7 +37,7 @@
         <b>生效层级</b>
         <div class="layer"><i>1</i>内置模板（只读）</div>
         <div class="layer"><i>2</i>系统默认（全局设置）</div>
-        <div class="layer"><i>3</i>项目覆盖（harness）</div>
+        <div class="layer"><i>3</i>项目覆盖（ash）</div>
         <div class="layer frozen"><i>4</i>建任务时冻结 snapshot</div>
         <div class="layer"><i>5</i>运行中只改「还没开始的关口」</div>
         <p class="note" style="margin-top:10px">已经跑过的关口不可改 —— 改了就等于伪造这一版产物的验收历史。</p>
@@ -80,7 +80,7 @@
         <h1>接入工作流编排与项目级覆盖</h1>
         <div class="metas">
           <span class="chip on">前端真实验收 · snapshot v2</span>
-          <span class="chip">来源：harness 项目覆盖</span>
+          <span class="chip">来源：ash 项目覆盖</span>
           <span class="chip">独立 worktree</span>
           <span class="chip warn">当前：等你验收</span>
         </div>
@@ -116,7 +116,7 @@
           <div class="stage-body">
             <div class="stage-card">
               <div class="stage-top"><b>预览就绪</b><code>preview.serve</code><span class="chip on">运行中 · 4 分 12 秒</span></div>
-              <div class="stage-desc">在本任务 worktree 里起服务，等你亲眼看过再关。端口由 harness 分配，不与其它任务撞。</div>
+              <div class="stage-desc">在本任务 worktree 里起服务，等你亲眼看过再关。端口由 ash 分配，不与其它任务撞。</div>
               <div class="preview-card">
                 <div class="preview-top">
                   <span class="preview-url">↗ localhost:14312</span>
@@ -127,7 +127,7 @@
                   </div>
                 </div>
                 <div class="preview-meta">
-                  <span>命令 <code>npm -w web-next run dev</code></span>
+                  <span>命令 <code>npm -w web run dev</code></span>
                   <span>就绪判据 端口可连 + 日志 <code>ready in</code></span>
                   <span>自动回收 人工关口结束时 / 闲置 30 分钟</span>
                 </div>
@@ -175,7 +175,7 @@
         <b>本任务工作流</b>
         <div class="kv"><span>模板</span><b>前端真实验收</b></div>
         <div class="kv"><span>快照</span><b>snapshot v2</b></div>
-        <div class="kv"><span>来源</span><b>harness 项目覆盖</b></div>
+        <div class="kv"><span>来源</span><b>ash 项目覆盖</b></div>
         <div class="kv"><span>失败策略</span><b>自动修复 × 2 → 停下</b></div>
         <div class="kv"><span>本地覆盖</span><b>无</b></div>
         <button class="btn" style="width:100%;margin-top:10px" data-act="adjust">调整还没开始的关口</button>

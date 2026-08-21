@@ -19,12 +19,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 
-const root = mkdtempSync(join(tmpdir(), "harness-turn-visibility-"));
+const root = mkdtempSync(join(tmpdir(), "ash-turn-visibility-"));
 // 断言失败是直接抛的，清理因此挂在进程退出上而不是写在末尾：写末尾的话失败一次就在
 // os.tmpdir() 下留一份 DB + runs 目录，反复跑越堆越多。
 process.on("exit", () => rmSync(root, { recursive: true, force: true }));
-process.env.HARNESS_DB = join(root, "harness.db");
-process.env.HARNESS_RUNS_DIR = join(root, "runs");
+process.env.ASH_DB = join(root, "ash.db");
+process.env.ASH_RUNS_DIR = join(root, "runs");
 
 const { ensureSchema, db } = await import("../src/db/index.js");
 const { projects, sessions, tasks } = await import("../src/db/schema.js");
@@ -38,8 +38,8 @@ const repo = join(root, "repo");
 // 它们的会话 cwd 钉在 root，`existsSync` 通得过，压根不会去解析工作目录。
 const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
 execFileSync("git", ["init", "-b", "main", repo]);
-git("config", "user.name", "Harness Test");
-git("config", "user.email", "harness@example.test");
+git("config", "user.name", "Ash Test");
+git("config", "user.email", "ash@example.test");
 writeFileSync(join(repo, "seed.txt"), "seed\n");
 git("add", "seed.txt");
 git("commit", "-m", "seed");

@@ -12,8 +12,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "harness-workflow-library-"));
-process.env.HARNESS_DB = join(root, "harness.db");
+const root = mkdtempSync(join(tmpdir(), "ash-workflow-library-"));
+process.env.ASH_DB = join(root, "ash.db");
 
 let failures = 0;
 function check(name: string, actual: unknown, expected: unknown) {
@@ -32,8 +32,8 @@ try {
   const { projects, workflows } = await import("../src/db/schema.js");
   const { patchAppSettings } = await import("../src/app-settings.js");
   const { findWorkflow, listWorkflows, resolveWorkflowDef } = await import("../src/workflows.js");
-  const { BUILTIN_WORKFLOWS, builtinWorkflowDef } = await import("@harness/shared/workflow-presets");
-  const { makeStep } = await import("@harness/shared/workflow");
+  const { BUILTIN_WORKFLOWS, builtinWorkflowDef } = await import("@ash/shared/workflow-presets");
+  const { makeStep } = await import("@ash/shared/workflow");
   const { eq, isNull } = await import("drizzle-orm");
   await ensureSchema();
 

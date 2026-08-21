@@ -1,7 +1,7 @@
 // 归档/取消归档（从 task-run-routes.ts 拆出，纯行数拆分）。归档 = 冻结（archived 位，
 // 不动 status），门禁与团队连带见各路由内注释。
-import type { TaskStatus } from "@harness/shared";
-import { canArchive } from "@harness/shared";
+import type { TaskStatus } from "@ash/shared";
+import { canArchive } from "@ash/shared";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";

@@ -1,4 +1,4 @@
-import type { QuestionItem } from "@harness/shared";
+import type { QuestionItem } from "@ash/shared";
 
 export function appendQuestionOption(value: string, option: string): string {
   return value.trim() ? `${value.trimEnd()}\n${option}` : option;

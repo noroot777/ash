@@ -3,7 +3,7 @@
 (function (global) {
   "use strict";
 
-  // 每一关运行期间，任务在列表里显示的状态（用 harness 真实的状态词）
+  // 每一关运行期间，任务在列表里显示的状态（用 ash 真实的状态词）
   var STATUS = {
     run: { text: "运行中", tone: "run", note: "智能体在干活，卡片上滚动它的输出" },
     verify: { text: "审查中", tone: "run", note: "独立审查者跑勾上的检查项" },

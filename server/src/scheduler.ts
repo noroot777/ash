@@ -1,5 +1,5 @@
 import { eq, asc, inArray } from "drizzle-orm";
-import type { TaskStatus } from "@harness/shared";
+import type { TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, groups, queueItems } from "./db/schema.js";
 import { setTaskStatus } from "./status.js";

@@ -15,7 +15,7 @@
 夹具此后改过,没有重测就不作数** —— 别把下表当成「现在还是 14/14」。
 
 不作数的原因很具体:`test-accept-merge` / `test-review-flow` 的假 claude 已经删掉,改成
-「`HARNESS_RUNS_DIR` 一设就必须 fail-closed」的断言(见第三节);`test-scheduled-messages`
+「`ASH_RUNS_DIR` 一设就必须 fail-closed」的断言(见第三节);`test-scheduled-messages`
 当时那条绿更是假的 —— 它断言 `crash.signal === "SIGKILL"`,而 Windows 没有 POSIX 信号,
 `signal` 恒为 `null`,这条在真机上**只可能红**。它现在按平台分:Windows 断 `status === 1`,
 POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`)这个伪前提。
@@ -25,7 +25,7 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
 | 测试 | 首次上真机 | 红的是什么 |
 |---|---|---|
 | `win-launch` | 红 → 绿 | 夹具写死 `cmd.exe`,真机 `COMSPEC` 是全路径 |
-| `path-boundary` | 红 → 绿 | 收尾 `EBUSY: unlink harness.db`(A 类) |
+| `path-boundary` | 红 → 绿 | 收尾 `EBUSY: unlink ash.db`(A 类) |
 | `openers-windows` | 绿 | |
 | `agent-tee` | 绿 | |
 | `terminal` | 绿 | (留一个孤儿进程,见第五节) |
@@ -79,8 +79,8 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
 - `win-launch` 断言 `plan.file === "cmd.exe"`,但真机上 `COMSPEC` 是 `C:\WINDOWS\system32\cmd.exe`,
   产品逻辑(`win-command.ts` 的 `process.env.COMSPEC || "cmd.exe"`)两边都对。第 6 节早就把 COMSPEC
   钉死了,第 5 节漏了。
-- `path-boundary` 断言全过,却在 `finally` 里 `EBUSY: unlink …harness.db` —— Windows 删不掉还开着的
-  文件,而 `HARNESS_DB` 指向的那个库是 import 时连上的。POSIX 上删已打开的文件合法,所以这条只在
+- `path-boundary` 断言全过,却在 `finally` 里 `EBUSY: unlink …ash.db` —— Windows 删不掉还开着的
+  文件,而 `ASH_DB` 指向的那个库是 import 时连上的。POSIX 上删已打开的文件合法,所以这条只在
   真机上现形。现在收尾前先 `dbClient.close()`。
 
 ## 二、需要先满足一个前提
@@ -100,13 +100,13 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
 值,据此报过一次假警。要回答的问题其实是「symlink 建不建得出来」—— 直接建一个再删掉最准
 (`scripts/win-remote.mjs` 的 doctor 就是这么做的)。
 
-**`HARNESS_DB` 指向临时目录**:下面几条会真写库,入口有守卫(`server/scripts/tmp-db.ts`)——
+**`ASH_DB` 指向临时目录**:下面几条会真写库,入口有守卫(`server/scripts/tmp-db.ts`)——
 
 `test-queue.ts`、`test-answer-routing.ts`、`test-executor-resolution.ts`、`test-cli-overrides.ts`、
 `test-duet-iteration.ts`
 
-守卫认 `os.tmpdir()`(POSIX 上额外认 `/tmp`)。Windows 上**别再照抄注释里的 `HARNESS_DB=/tmp/x.db`**:
-那会落到当前盘的 `\tmp\`,多半不存在。改用 `HARNESS_DB=%TEMP%\test-queue.db`。`win-remote.mjs test`
+守卫认 `os.tmpdir()`(POSIX 上额外认 `/tmp`)。Windows 上**别再照抄注释里的 `ASH_DB=/tmp/x.db`**:
+那会落到当前盘的 `\tmp\`,多半不存在。改用 `ASH_DB=%TEMP%\test-queue.db`。`win-remote.mjs test`
 已经统一代跑的人给一个临时库并在跑完删掉 —— 不给的话,红出来的样子是「Windows 上失败了」,
 而其实 mac 上不设照样红。
 
@@ -127,11 +127,11 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
 
 **`test-accept-merge.ts` 和 `test-review-flow.ts` 已经不摆假 CLI 了**,别再照着上面那张表去找。
 它们要的只是「别真起 claude」,而这件事 `spawn.ts` 的 `guardAgentSpawn` 已经在做:设了
-`HARNESS_RUNS_DIR` 且没显式给 `HARNESS_ALLOW_REAL_AGENT=1` 时,任何执行器启动都被换成一个立刻
+`ASH_RUNS_DIR` 且没显式给 `ASH_ALLOW_REAL_AGENT=1` 时,任何执行器启动都被换成一个立刻
 失败的假 child。于是这两条改成在开头断言这个隔离确实生效 —— 假 CLI 是「挡住了就没人知道有没有
 挡住」,fail-closed 断言是「没挡住就当场炸」。断言故意会响,所以这两条的临时目录清理挂在
-`process.on("exit")` 上,不能只放在 `finally` 里(2026-08-19 反证过:去掉钩子,`HARNESS_ALLOW_REAL_AGENT=1`
-跑一次就在 `os.tmpdir()` 留一个 `harness-review-flow-*`)。
+`process.on("exit")` 上,不能只放在 `finally` 里(2026-08-19 反证过:去掉钩子,`ASH_ALLOW_REAL_AGENT=1`
+跑一次就在 `os.tmpdir()` 留一个 `ash-review-flow-*`)。
 
 光挂钩子还不够,**断言本身要排在打开数据库之前**。exit 钩子是同步的,`await` 不了
 `releaseTmpDb()`;断言要是排在开库之后才响,Windows 上 `rmSync` 撞的是「文件还开着」的 EBUSY,
@@ -157,13 +157,13 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
 
 - 团队 / duet 那批长链路测试只做了静态阅读,没有逐条推演会不会间接踩到上面几类前提。
   其中**有一批会真 spawn `claude -p` 烧真额度** —— 判据不是「名字看着像端到端」,而是
-  **它有没有设 `HARNESS_RUNS_DIR`**:设了的那批被 `guardAgentSpawn` fail-closed 挡着
+  **它有没有设 `ASH_RUNS_DIR`**:设了的那批被 `guardAgentSpawn` fail-closed 挡着
   (`review`、`accept-merge`、`free-workflow*`、`workflow-*`、`turn-*` 等),不设的那批没人挡
-  (`test:queue` 就是,`grep -L HARNESS_RUNS_DIR server/scripts/test-*.ts` 能列全)。
+  (`test:queue` 就是,`grep -L ASH_RUNS_DIR server/scripts/test-*.ts` 能列全)。
   要无人值守地全量扫,先按这条筛一遍。
 - `test-terminal.ts` 已按平台分了 shell(Windows 走 `cmd.exe`,探针命令换成 `echo` + `cd`),
   ConPTY 那条路**实测绿**(2026-08-18,8.6s)。但它会在退出时留一个孤儿:node-pty 的
   `conpty_console_list_agent.ts:13` 抛 `Error: AttachConsole failed` 之后不退,继续攥着 stdout。
   测试本身 exit 0 不受影响,踩到的是**外面**的东西 —— 任何拿「管道关闭」当完成判据的调用方
-  (`<cmd> | Out-File`、CI 收集器)都会永远等不到 EOF。这是环境/上游的问题,不是 harness 的,
+  (`<cmd> | Out-File`、CI 收集器)都会永远等不到 EOF。这是环境/上游的问题,不是 ash 的,
   暂未处理;`scripts/win-remote/transport.mjs` 改用「进程退出」当判据来绕开它。

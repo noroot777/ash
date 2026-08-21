@@ -1,9 +1,9 @@
-import type { AgentType, Task, TaskStatus, TaskWorkspaceDiscardResult } from "@harness/shared";
-import { AGENT_TYPES, isUserSettableStatus } from "@harness/shared";
-import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@harness/shared/cli-presets";
-import { inheritExecutorOverrides, sameExecutor } from "@harness/shared/executors";
-import { normalizeWorkflowDef } from "@harness/shared/workflow";
-import { TASK_WORKFLOW_MODES } from "@harness/shared/free-workflow";
+import type { AgentType, Task, TaskStatus, TaskWorkspaceDiscardResult } from "@ash/shared";
+import { AGENT_TYPES, isUserSettableStatus } from "@ash/shared";
+import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@ash/shared/cli-presets";
+import { inheritExecutorOverrides, sameExecutor } from "@ash/shared/executors";
+import { normalizeWorkflowDef } from "@ash/shared/workflow";
+import { TASK_WORKFLOW_MODES } from "@ash/shared/free-workflow";
 import { asc, eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
@@ -371,7 +371,7 @@ api.patch("/tasks/:id", async (c) => {
   return c.json(updated!);
 });
 
-// 这个任务在磁盘/仓库里还留着什么(worktree 目录、harness/<id8> 分支)。删除
+// 这个任务在磁盘/仓库里还留着什么(worktree 目录、ash/<id8> 分支)。删除
 // 确认框在打开时先问一次:有残留才提示「要不要连它们一起删」,没有就是一句普通
 // 的确认。任务不在 worktree 模式下跑过也照查 —— useWorktree 后来被关掉、目录和
 // 分支却还在,是最容易被漏掉的那种残留。

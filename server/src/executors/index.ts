@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
-import type { AgentType } from "@harness/shared";
-import { isReasoningEffortSupported, reasoningEffortsFor } from "@harness/shared/cli-presets";
-import { readCliConfigOverrides } from "@harness/shared/cli-overrides";
+import type { AgentType } from "@ash/shared";
+import { isReasoningEffortSupported, reasoningEffortsFor } from "@ash/shared/cli-presets";
+import { readCliConfigOverrides } from "@ash/shared/cli-overrides";
 import { db } from "../db/index.js";
 import { agents, llmProviders } from "../db/schema.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig } from "./types.js";

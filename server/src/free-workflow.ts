@@ -3,7 +3,7 @@ import type {
   FreeReviewDispatchInput,
   SessionRole,
   TaskStatus,
-} from "@harness/shared";
+} from "@ash/shared";
 import { and, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";

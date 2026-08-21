@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import type { TaskStatus } from "@harness/shared";
+import type { TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -58,7 +58,7 @@ export async function setTaskStatus(taskId: string, status: TaskStatus): Promise
   if (status === "done" || status === "canceled" || status === "failed" || status === "paused") {
     void import("./scheduler.js").then(({ advanceQueueFromTask }) =>
       advanceQueueFromTask(taskId).catch((err) =>
-        console.error(`[harness] advanceQueueFromTask(${taskId}) failed:`, err),
+        console.error(`[ash] advanceQueueFromTask(${taskId}) failed:`, err),
       ),
     );
   }

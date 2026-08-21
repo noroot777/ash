@@ -5,7 +5,7 @@
 // CLI——它既没提过这个问题,也没有那一回合的上下文,而且没有任何报错。
 //
 // 跑法:
-//   HARNESS_DB=/tmp/test-answer-routing-$RANDOM.db npx tsx server/scripts/test-answer-routing.ts
+//   ASH_DB=/tmp/test-answer-routing-$RANDOM.db npx tsx server/scripts/test-answer-routing.ts
 import assert from "node:assert/strict";
 import { requireTmpDb } from "./tmp-db.js";
 

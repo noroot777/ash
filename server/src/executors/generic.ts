@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import type { AgentType } from "@harness/shared";
-import { cliConfigOverrideEnvPatch } from "@harness/shared/cli-overrides";
+import type { AgentType } from "@ash/shared";
+import { cliConfigOverrideEnvPatch } from "@ash/shared/cli-overrides";
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
@@ -152,8 +152,8 @@ export class GenericCliExecutor implements AgentExecutor {
 
 /**
  * 这个 CLI 的 sessionId **是不是 CLI 真实认得的 id**。判定与上面 `session()` 的三档
- * 一一对应:`newIdFlag` = harness 自己发的 id 已经告诉了 CLI;`resumeArgs` = id 只可能
- * 来自 parser 回报的 `{kind:"session"}`。两者都没有时,`session()` 发的是个**纯 harness
+ * 一一对应:`newIdFlag` = ash 自己发的 id 已经告诉了 CLI;`resumeArgs` = id 只可能
+ * 来自 parser 回报的 `{kind:"session"}`。两者都没有时,`session()` 发的是个**纯 ash
  * 侧运行记录**的 UUID,CLI 压根没听说过它 —— 拿它拼 `--resume` 就是给用户一条引用
  * 不存在会话的命令(第 1 轮审查抓到的 antigravity 就是这种)。
  */
@@ -173,7 +173,7 @@ export function unknownResumeNote(spec: CliSpec | { name: string }, sessionId: s
   // 三种原因分开说,否则用户看不出「这个 CLI 不支持」和「这条会话没接通」的区别。
   const why =
     s?.interactive && !("exec" in spec && hasTrustedSessionId(spec))
-      ? "harness 没把会话 id 交给它、它也没回报,所以这个 id 只是运行记录,不能用来 --resume"
+      ? "ash 没把会话 id 交给它、它也没回报,所以这个 id 只是运行记录,不能用来 --resume"
       : !sessionId
         ? "本次运行没有拿到 CLI 的会话 id"
         : "暂无已知的会话恢复命令";

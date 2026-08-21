@@ -4,7 +4,7 @@
 // files, ~10MB), so每次全量扫,不建索引.
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { SearchHit, SearchField, TaskStatus } from "@harness/shared";
+import type { SearchHit, SearchField, TaskStatus } from "@ash/shared";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { notes, noteTasks, projects, tasks } from "./db/schema.js";
@@ -16,8 +16,8 @@ const MAX_HITS = 50;
 const TASK_PREVIEW_LIMIT = 2_000;
 const NOTE_PREVIEW_LIMIT = 4_000;
 
-// 任务 id 是 nanoid(12),字母表 [A-Za-z0-9_-];harness 分支只带前 8 位
-// (`harness/<id8>`),所以 8 位以上的前缀同样算「就是这个任务」。
+// 任务 id 是 nanoid(12),字母表 [A-Za-z0-9_-];ash 分支只带前 8 位
+// (`ash/<id8>`),所以 8 位以上的前缀同样算「就是这个任务」。
 const TASK_ID_PATTERN = /^[a-z0-9_-]{8,12}$/;
 
 export type SearchTerm = {
@@ -131,7 +131,7 @@ function isExcluded(text: string, query: ParsedSearchQuery): boolean {
 export function taskIdCandidates(query: ParsedSearchQuery): string[] {
   const candidates = new Set<string>();
   for (const term of query.groups.flat()) {
-    // 按「id 里不可能出现的字符」切一刀,于是直接粘 `harness/<id8>`、
+    // 按「id 里不可能出现的字符」切一刀,于是直接粘 `ash/<id8>`、
     // `/tasks/<id>` 这类 URL 或 `taskId=<id>` 也能把 id 本体露出来。
     for (const part of term.value.split(/[^a-z0-9_-]+/)) {
       if (TASK_ID_PATTERN.test(part)) candidates.add(part);

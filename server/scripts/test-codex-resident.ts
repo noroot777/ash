@@ -15,11 +15,11 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent } from "@harness/shared";
+import type { AgentEvent } from "@ash/shared";
 
 const { openCodexResident } = await import("../src/executors/codex-resident.js");
 
-const dir = mkdtempSync(join(tmpdir(), "harness-codex-resident-"));
+const dir = mkdtempSync(join(tmpdir(), "ash-codex-resident-"));
 let bad = 0;
 const fail = (m: string) => { console.log("   ✕ " + m); bad++; };
 const ok = (m: string) => console.log("   ✓ " + m);

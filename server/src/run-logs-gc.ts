@@ -20,8 +20,8 @@ import { RUNS_DIR } from "./paths.js";
 const SUFFIXES = [".agent-out.jsonl", ".agent-err.log", ".agent-rc"];
 
 // 默认保留一天。跑完就没用了，留一天纯粹是给「任务刚挂、想翻原始输出查一眼」
-// 留窗口。HARNESS_RUNLOG_KEEP_H 可调，0 = 结束即删。
-const KEEP_HOURS = Number(process.env.HARNESS_RUNLOG_KEEP_H ?? 24);
+// 留窗口。ASH_RUNLOG_KEEP_H 可调，0 = 结束即删。
+const KEEP_HOURS = Number(process.env.ASH_RUNLOG_KEEP_H ?? 24);
 
 export async function sweepRunLogs(): Promise<{ removed: number; bytes: number }> {
   const cutoff = Date.now() - KEEP_HOURS * 3600_000;

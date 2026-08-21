@@ -2,8 +2,8 @@
 // 和 HandoffError → HTTP 状态码的翻译。
 //
 // 对端发现(/handoff/ping、/refs)与导入(/handoff/import)是**机器对机器**的端点:
-// 由源机的 harness 服务端来调,不给浏览器用——server→server 顺带绕开了 CORS。
-// V1 与 harness 其它端点一样没有鉴权,只在可信内网使用(终端 API 本身就是个 shell)。
+// 由源机的 ash 服务端来调,不给浏览器用——server→server 顺带绕开了 CORS。
+// V1 与 ash 其它端点一样没有鉴权,只在可信内网使用(终端 API 本身就是个 shell)。
 import { hostname } from "node:os";
 import { appendFile } from "node:fs/promises";
 import type { Hono } from "hono";
@@ -21,7 +21,7 @@ import { now } from "./util.js";
 
 type ErrorStatus = 400 | 404 | 409 | 500 | 502;
 
-// 错误应答带 harness:true = 「harness 业务层的明确拒绝,本机可证明没留下这次接力的
+// 错误应答带 ash:true = 「ash 业务层的明确拒绝,本机可证明没留下这次接力的
 // 任务」——importHandoff 里任务行插入之后的失败都会补偿回滚再抛 HandoffError,没插
 // 之前的失败(含非 HandoffError 逃逸)本来就没落任何行,所以两个分支都能安全带标记。
 // 唯一的例外是补偿回滚自身失败(e.unsettled):那时本机可能留有半截任务,故意不带
@@ -31,22 +31,22 @@ type ErrorStatus = 400 | 404 | 409 | 500 | 502;
 const fail = (c: Context, e: unknown) => {
   if (e instanceof HandoffError) {
     return c.json(
-      e.unsettled ? { error: e.message } : { error: e.message, harness: true },
+      e.unsettled ? { error: e.message } : { error: e.message, ash: true },
       e.status as ErrorStatus,
     );
   }
   const msg = e instanceof Error ? e.message : String(e);
   console.error("[handoff]", e);
-  return c.json({ error: `接力失败:${msg}`, harness: true }, 500);
+  return c.json({ error: `接力失败:${msg}`, ash: true }, 500);
 };
 
 export function mountHandoffRoutes(api: Hono): void {
-  // 对端探活:证明「我是一台 harness」,并报出可作为接力目的地的项目清单。
+  // 对端探活:证明「我是一台 ash」,并报出可作为接力目的地的项目清单。
   api.get("/handoff/ping", async (c) => {
     const rows = await db.select().from(projects);
     const body: HandoffPingResponse = {
       ok: true,
-      service: "harness",
+      service: "ash",
       host: hostname(),
       projects: rows.map((p) => ({
         id: p.id,
@@ -61,7 +61,7 @@ export function mountHandoffRoutes(api: Hono): void {
   // 分支尖清单,供源机协商 git bundle 的前置提交(对端已有的历史不重复打包)。
   api.get("/handoff/projects/:id/refs", async (c) => {
     const row = (await db.select().from(projects)).find((p) => p.id === c.req.param("id"));
-    if (!row) return c.json({ error: "项目不存在", harness: true }, 404);
+    if (!row) return c.json({ error: "项目不存在", ash: true }, 404);
     if (!projectHealthLight(row.repoPath).isRepo) return c.json({ refs: [] });
     try {
       return c.json({ refs: await repoRefTips(row.repoPath) });
@@ -76,7 +76,7 @@ export function mountHandoffRoutes(api: Hono): void {
     try {
       body = await c.req.json();
     } catch {
-      return c.json({ error: "导入体不是合法 JSON", harness: true }, 400);
+      return c.json({ error: "导入体不是合法 JSON", ash: true }, 400);
     }
     try {
       return c.json(await importHandoff(body));

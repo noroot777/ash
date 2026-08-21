@@ -1,6 +1,6 @@
 // E2E 测试:队列调度 + 迁移自检 + 跨 group 校验。
 // 跑法:
-//   HARNESS_DB=/tmp/test-queue-$RANDOM.db npx tsx server/scripts/test-queue.ts
+//   ASH_DB=/tmp/test-queue-$RANDOM.db npx tsx server/scripts/test-queue.ts
 //
 // 用 pickNextLaunchable 来验证"队列下一个该跑哪个"——绕开 resumeOrRunTask
 // 实际拉起 agent 的副作用(测试环境无 executor)。少量端到端走 advanceQueue。

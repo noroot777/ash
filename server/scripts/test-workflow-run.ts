@@ -6,13 +6,13 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "harness-workflow-run-"));
-process.env.HARNESS_DB = join(root, "harness.db");
-process.env.HARNESS_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "ash-workflow-run-"));
+process.env.ASH_DB = join(root, "ash.db");
+process.env.ASH_RUNS_DIR = join(root, "runs");
 
-const { builtinWorkflowDef } = await import("@harness/shared/workflow-presets");
-const { makeStep } = await import("@harness/shared/workflow");
-const { workflowPolicy } = await import("@harness/shared/workflow-policy");
+const { builtinWorkflowDef } = await import("@ash/shared/workflow-presets");
+const { makeStep } = await import("@ash/shared/workflow");
+const { workflowPolicy } = await import("@ash/shared/workflow-policy");
 const { reviewOutcomeAction, shouldAutoDispatchReview, withVerifyExecutor } =
   await import("../src/review-policy.js");
 
@@ -161,7 +161,7 @@ assert.deepEqual(
 console.log("workflow run policy tests passed");
 
 // ── 段落切分：哪几站跟在哪个锚点后面 ──────────────────────────────────────
-const { stepsAfterAnchor } = await import("@harness/shared/workflow-policy");
+const { stepsAfterAnchor } = await import("@ash/shared/workflow-policy");
 const line = {
   workspace: "isolated" as const,
   steps: [
@@ -193,7 +193,7 @@ assert.deepEqual(stepsAfterAnchor(null, "run"), []);
 // 段落按**站的 id** 切,不按锚点类型——这正是这两类站能出现多次的前提。以前按类型切
 // 的时候,第二个 verify 没有任何东西能把它跟第一个区分开,只会被静默跳过。
 const { segmentAfter, nextAnchor, prevAnchor, isFinalHumanGate, anchorAt } =
-  await import("@harness/shared/workflow-policy");
+  await import("@ash/shared/workflow-policy");
 const multi = {
   workspace: "isolated" as const,
   steps: [
@@ -313,7 +313,7 @@ assert.equal(
 );
 
 // ── 验收通过那一刻按线上写的做 ────────────────────────────────────────────
-const { acceptPlan, hasAcceptStation } = await import("@harness/shared/workflow-policy");
+const { acceptPlan, hasAcceptStation } = await import("@ash/shared/workflow-policy");
 assert.deepEqual(
   acceptPlan(null), { merge: "safe", clean: "all" },
   "老任务身上没有线：验收还是老规矩(安全合并 + worktree 和分支都删)，行为分毫不变",
@@ -443,7 +443,7 @@ const port = 14000 + (process.pid % 900);
 const previewStep = makeStep("preview", "pv");
 if (previewStep.kind === "preview") {
   previewStep.p = {
-    cmd: `node -e "if(process.env.HARNESS_PREVIEW!=='1'||process.env.HARNESS_PREVIEW_MODE!=='test')process.exit(12);require('http').createServer((q,s)=>s.end('ok')).listen(${port},()=>console.log('ready on http://localhost:${port}/'))"`,
+    cmd: `node -e "if(process.env.ASH_PREVIEW!=='1'||process.env.ASH_PREVIEW_MODE!=='test')process.exit(12);require('http').createServer((q,s)=>s.end('ok')).listen(${port},()=>console.log('ready on http://localhost:${port}/'))"`,
     mode: "test",
     ready: "http200",
     life: "gate",
@@ -458,7 +458,7 @@ if (started.ok) {
   const replacement = makeStep("preview", "pv-replacement");
   if (replacement.kind === "preview") {
     replacement.p = {
-      cmd: `node -e "if(process.env.HARNESS_PREVIEW_MODE!=='full')process.exit(13);require('http').createServer((q,s)=>s.end('next')).listen(${port + 1},()=>console.log('ready on http://localhost:${port + 1}/'))"`,
+      cmd: `node -e "if(process.env.ASH_PREVIEW_MODE!=='full')process.exit(13);require('http').createServer((q,s)=>s.end('next')).listen(${port + 1},()=>console.log('ready on http://localhost:${port + 1}/'))"`,
       mode: "full",
       ready: "http200",
       life: "gate",
@@ -474,7 +474,7 @@ if (started.ok) {
   const unsafe = makeStep("preview", "pv-unsafe");
   if (unsafe.kind === "preview") {
     unsafe.p = {
-      cmd: `node -e "console.log('[harness] scheduler started');require('http').createServer((q,s)=>s.end('bad')).listen(${port + 3},()=>console.log('ready on http://localhost:${port + 3}/'))"`,
+      cmd: `node -e "console.log('[ash] scheduler started');require('http').createServer((q,s)=>s.end('bad')).listen(${port + 3},()=>console.log('ready on http://localhost:${port + 3}/'))"`,
       mode: "command",
       ready: "http200",
       life: "gate",

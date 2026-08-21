@@ -1,7 +1,7 @@
 // 「运行/重试/队列推进」时选 resume 还是 fresh（从 orchestrator.ts 拆出，纯行数拆分）。
 // 依赖方向单向：这里 import orchestrator，orchestrator 不回头 import 这里。
 import { and, eq, isNull } from "drizzle-orm";
-import type { AgentType } from "@harness/shared";
+import type { AgentType } from "@ash/shared";
 import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
 import { now } from "./util.js";

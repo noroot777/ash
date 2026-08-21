@@ -1,6 +1,6 @@
-import type { AgentType, BatchCreateTasksBody, BatchTaskInput, Group } from "@harness/shared";
-import { AGENT_TYPES } from "@harness/shared";
-import { inheritExecutorOverrides, pickExecutor } from "@harness/shared/executors";
+import type { AgentType, BatchCreateTasksBody, BatchTaskInput, Group } from "@ash/shared";
+import { AGENT_TYPES } from "@ash/shared";
+import { inheritExecutorOverrides, pickExecutor } from "@ash/shared/executors";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";

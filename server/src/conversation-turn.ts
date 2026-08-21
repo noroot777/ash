@@ -1,4 +1,4 @@
-import type { AgentType, SessionRole } from "@harness/shared";
+import type { AgentType, SessionRole } from "@ash/shared";
 import { bus } from "./bus.js";
 import { writeTurn } from "./transcript.js";
 

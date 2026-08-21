@@ -15,7 +15,7 @@ import { IS_WINDOWS, capture, isPidAlive, killPid, sleep } from "./platform.mjs"
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const PORT = 14317;
-const TMP = mkdtempSync(join(tmpdir(), "harness-restart-test-"));
+const TMP = mkdtempSync(join(tmpdir(), "ash-restart-test-"));
 const FAKE_BIN = join(TMP, "bin");
 mkdirSync(FAKE_BIN);
 
@@ -73,7 +73,7 @@ const env = {
   HTTPS_PROXY: "http://127.0.0.1:1",
   ALL_PROXY: "socks5://127.0.0.1:1",
   PORT: String(PORT),
-  HARNESS_LOG: join(TMP, "harness.log"),
+  ASH_LOG: join(TMP, "ash.log"),
   SERVER_ENTRY: fakeServer,
   START_TIMEOUT: "10",
   SKIP_MCP: "1",
@@ -93,9 +93,11 @@ if (run.status !== 0) fail(`restart.mjs 退出码 ${run.status}`, output);
 if (!output.includes(`${PORT} 已就绪`)) fail("没等到「已就绪」——本机探活可能被代理劫走了", output);
 if (!output.includes("✅ 完成")) fail("没跑到最后一步", output);
 
-const npmLog = readFileSync(join(TMP, "npm.log"), "utf8").split("\n");
-if (npmLog[0] !== "install --no-audit --no-fund") fail(`第一条 npm 调用不对:${npmLog[0]}`);
-if (npmLog[1] !== "run build") fail(`第二条 npm 调用不对:${npmLog[1]}`);
+const npmLog = readFileSync(join(TMP, "npm.log"), "utf8")
+  .split("\n")
+  .filter((line) => line && !line.startsWith("config get "));
+if (npmLog[0] !== "install --no-audit --no-fund") fail(`第一条 npm 操作调用不对:${npmLog[0]}`);
+if (npmLog[1] !== "run build") fail(`第二条 npm 操作调用不对:${npmLog[1]}`);
 
 if (!serverPid || !isPidAlive(serverPid)) fail("脚本返回后 detached server 已经不在了", output);
 

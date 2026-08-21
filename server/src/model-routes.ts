@@ -6,8 +6,8 @@
 //   POST /agents/models/refresh  —— 用户点了「刷新」,绕过缓存重问
 // 探测与缓存的全部规矩在 `executors/model-probe.ts` 顶部,这里不复述。
 import type { Hono } from "hono";
-import type { AgentType } from "@harness/shared";
-import { AGENT_TYPES } from "@harness/shared";
+import type { AgentType } from "@ash/shared";
+import { AGENT_TYPES } from "@ash/shared";
 import { modelCatalogs } from "./executors/model-probe.js";
 
 // `?type=` 可给一个或多个(逗号分隔)。给了不认识的名字就当没给 —— 返回全部,

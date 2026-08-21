@@ -22,7 +22,7 @@ export const appSettings = sqliteTable("app_settings", {
 });
 
 // 外部 CLI 报“会话累计值”时的最后一份原始快照。它独立于 sessions：同一个 CLI
-// 会话可能跨多个 harness 行（例如讨论模式），按 source_id 才能正确算本轮差值。
+// 会话可能跨多个 ash 行（例如讨论模式），按 source_id 才能正确算本轮差值。
 export const usageCumulativeSnapshots = sqliteTable("usage_cumulative_snapshots", {
   sourceId: text("source_id").primaryKey(),
   input: integer("input_tokens").notNull(),
@@ -118,7 +118,7 @@ export const tasks = sqliteTable("tasks", {
   archived: integer("archived", { mode: "boolean" }).notNull().default(false),
   archivedAt: text("archived_at"), // when it was archived (orders the archive view)
   // Opt-in per-task worktree. true → orchestrator builds <repoPath>/.worktrees/<id>
-  // on branch `harness/<id8>` based off `worktreeBase` (null = current HEAD) before
+  // on branch `ash/<id8>` based off `worktreeBase` (null = current HEAD) before
   // running. False / missing repo → behaves like before (runs in repoPath).
   useWorktree: integer("use_worktree", { mode: "boolean" }).notNull().default(false),
   // 这个任务当初挑的那条线，**创建时拷进来的快照**（json WorkflowDef）。之后改起手式
@@ -171,7 +171,7 @@ export const tasks = sqliteTable("tasks", {
   // 布尔位时，崩溃重试会整段重跑——已经执行过的发布/部署命令再来一遍（at-least-once
   // 变 at-least-twice，审查实测复现）。补跑按这份清单跳过已完成的站；随 pending 一起清。
   acceptedTailDone: text("accepted_tail_done").notNull().default("[]"),
-  // 任务接力（json TaskHandoff）：direction:"out" = 已交给另一台 harness 续跑（本地这份
+  // 任务接力（json TaskHandoff）：direction:"out" = 已交给另一台 ash 续跑（本地这份
   // 是历史），"in" = 从别的机器接过来的。持久落库,刷新后的横幅靠它,不靠 toast。
   handoff: text("handoff"),
 });
@@ -188,7 +188,7 @@ export const agents = sqliteTable("agents", {
   // 非空时启动 CLI 前注入 base_url + key(claude: env;codex: -c model_providers)。
   providerId: text("provider_id"),
   // 覆盖 CLI 自己配置文件里的设置(json Record<string, number>,以 env 注入)。
-  // 声明表在 @harness/shared/cli-overrides —— 没在那儿声明过的 key 一律不落库。
+  // 声明表在 @ash/shared/cli-overrides —— 没在那儿声明过的 key 一律不落库。
   configOverrides: text("config_overrides").notNull().default("{}"),
   isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
 });
@@ -461,7 +461,7 @@ export const queueItems = sqliteTable(
 );
 
 // 供应商(relay), system-level. 挂给执行器用:启动 CLI 时注入 base_url + key,
-// 顶掉 CLI 自己的官方登录账号。harness 自己不再直连 HTTP 调模型。
+// 顶掉 CLI 自己的官方登录账号。ash 自己不再直连 HTTP 调模型。
 export const llmProviders = sqliteTable("llm_providers", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),

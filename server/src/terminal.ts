@@ -83,7 +83,7 @@ function ptyEnvironment(): Record<string, string> {
   const env = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
-  return { ...env, TERM: "xterm-256color", COLORTERM: "truecolor", HARNESS_TERMINAL: "1" };
+  return { ...env, TERM: "xterm-256color", COLORTERM: "truecolor", ASH_TERMINAL: "1" };
 }
 
 export class TerminalSessionManager {

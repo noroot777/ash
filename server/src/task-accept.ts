@@ -1,9 +1,9 @@
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
-import { acceptPlan, hasAcceptStation, isFinalHumanGate, nextAnchor } from "@harness/shared/workflow-policy";
-import type { AcceptBy } from "@harness/shared/workflow-policy";
-import { ACCEPT_CLEAN_LABELS, ACCEPT_STRATEGY_LABELS, STEP_LABELS } from "@harness/shared/workflow";
-import { STAGE_LABELS } from "@harness/shared";
+import { acceptPlan, hasAcceptStation, isFinalHumanGate, nextAnchor } from "@ash/shared/workflow-policy";
+import type { AcceptBy } from "@ash/shared/workflow-policy";
+import { ACCEPT_CLEAN_LABELS, ACCEPT_STRATEGY_LABELS, STEP_LABELS } from "@ash/shared/workflow";
+import { STAGE_LABELS } from "@ash/shared";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
@@ -228,7 +228,7 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   }
 
   // A task that deliberately ran in the project's existing checkout has no
-  // harness/<id> branch or harness-owned worktree to merge/delete.
+  // ash/<id> branch or ash-owned worktree to merge/delete.
   if (!task.useWorktree) {
     const guard = await acceptanceGuard(taskId, "before_accept");
     if (guard.failure) return guard.failure;

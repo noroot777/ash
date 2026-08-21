@@ -18,7 +18,7 @@ import { join } from "node:path";
 
 const { parseClaudeStream } = await import("../src/executors/claude.js");
 
-const dir = mkdtempSync(join(tmpdir(), "harness-claude-stream-"));
+const dir = mkdtempSync(join(tmpdir(), "ash-claude-stream-"));
 let bad = 0;
 const fail = (m: string) => { console.log("   ✕ " + m); bad++; };
 const ok = (m: string) => console.log("   ✓ " + m);

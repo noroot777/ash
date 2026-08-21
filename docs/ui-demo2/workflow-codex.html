@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:,">
-<title>工作流模板 · Codex 方案 — Harness UI Demo</title>
+<title>工作流模板 · Codex 方案 — Ash UI Demo</title>
 <link rel="stylesheet" href="style.css">
 <style>
   .wf-main{min-width:0;flex:1;overflow:hidden;border:.5px solid var(--line);border-radius:12px;background:var(--canvas);box-shadow:var(--surface-shadow)}
@@ -99,7 +99,7 @@
             <button class="wf-add" data-wf-action="duplicate">＋ 从当前模板复制</button>
             <div class="wf-pane-label">项目模板</div>
             <button class="wf-template" data-template="frontend" aria-selected="false"><b><i></i>前端真实验收</b><small>浏览器截图 · 人工体验 · 自动修复 1 次</small></button>
-            <div class="wf-inherit"><b>生效层级</b><code>系统默认</code><br>↓ harness 项目覆盖<br>↓ 创建任务时冻结 snapshot<br>↓ 运行中只改尚未开始的关口</div>
+            <div class="wf-inherit"><b>生效层级</b><code>系统默认</code><br>↓ ash 项目覆盖<br>↓ 创建任务时冻结 snapshot<br>↓ 运行中只改尚未开始的关口</div>
           </aside>
 
           <section class="wf-canvas">
@@ -133,14 +133,14 @@
             <section class="ins-panel is-on" data-panel="execute"><div class="ins-kicker">01 · agent.run</div><div class="ins-field"><span>执行器</span><div class="ins-select">codex@cpa<i>⌄</i></div></div><div class="ins-field"><span>模型</span><div class="ins-select">gpt-5.6-sol<i>⌄</i></div></div><div class="ins-field"><span>思考强度</span><div class="ins-select">xhigh<i>⌄</i></div></div><p class="ins-note">complete_task 只确认当前执行阶段完成；是否释放队列由工作流释放点决定。</p></section>
             <section class="ins-panel" data-panel="review"><div class="ins-kicker">02 · agent.verify</div><div class="ins-field"><span>自动验证</span><div class="ins-toggle"><button class="mini-toggle is-on" data-wf-toggle="review" aria-label="切换自动验证"></button><span id="reviewToggleLabel">已开启</span></div></div><div class="ins-field"><span>审查执行器</span><div class="ins-select">codex@review<i>⌄</i></div></div><div class="ins-field"><span>验证轮数</span><div class="ins-seg" data-control="rounds"><button data-value="1">1</button><button data-value="2" aria-pressed="true">2</button><button data-value="3">3</button></div></div><div class="ins-field"><span>失败处理</span><div class="ins-seg" data-control="failure"><button data-value="repair" aria-pressed="true">自动修复</button><button data-value="ask">询问</button><button data-value="stop">停下</button></div></div><p class="ins-note">“验证”固定要求真实运行、报告和必要截图；只读评议应使用不同节点语义。</p></section>
             <section class="ins-panel" data-panel="human"><div class="ins-kicker">03 · human.gate</div><div class="ins-field"><span>人工验收</span><div class="ins-toggle"><button class="mini-toggle is-on" data-wf-toggle="human" aria-label="切换人工验收"></button><span id="humanToggleLabel">已开启</span></div></div><div class="ins-field"><span>通过条件</span><div class="ins-select">必须已有 verified 结论<i>⌄</i></div></div><div class="ins-field"><span>队列释放点</span><div class="ins-seg" data-control="release"><button data-value="execute">实现后</button><button data-value="review" aria-pressed="true">验证后</button><button data-value="human">人工后</button></div></div><p class="ins-note">验收通过仍由人明确触发；工作流不会自动执行不可逆的 git 合并。</p></section>
-            <section class="ins-panel" data-panel="finalize"><div class="ins-kicker">04 · repo.accept</div><div class="ins-field"><span>合并策略</span><div class="ins-select">沿用 Harness 安全合并<i>⌄</i></div></div><div class="ins-field"><span>清理</span><div class="ins-select">合并后删除 worktree 与分支<i>⌄</i></div></div><p class="ins-note">该节点复用仓库锁、冲突交还来源任务和现有验收清理逻辑。</p></section>
+            <section class="ins-panel" data-panel="finalize"><div class="ins-kicker">04 · repo.accept</div><div class="ins-field"><span>合并策略</span><div class="ins-select">沿用 Ash 安全合并<i>⌄</i></div></div><div class="ins-field"><span>清理</span><div class="ins-select">合并后删除 worktree 与分支<i>⌄</i></div></div><p class="ins-note">该节点复用仓库锁、冲突交还来源任务和现有验收清理逻辑。</p></section>
           </aside>
         </div>
 
         <section class="runtime" id="runtime">
           <div class="runtime-shell">
           <aside class="task-index" aria-label="任务状态总览">
-            <header class="task-index-head"><span class="proj-avatar">H</span><b>harness</b><span>87 个任务</span></header>
+            <header class="task-index-head"><span class="proj-avatar">H</span><b>ash</b><span>87 个任务</span></header>
             <div class="task-buckets"><button data-task-filter="all" aria-pressed="true">全部</button><button data-task-filter="attention">需处理</button><button data-task-filter="active">进行中</button><button data-task-filter="ended">已结束</button></div>
             <div class="task-section">协作任务<button data-task-filter="attention">需处理 2</button></div>
             <button class="task-mini-row" data-bucket="attention" title="待人工验收"><span class="task-mini-dot"><i class="attention"></i></span><span class="task-mini-main"><b>发布策略需要你确认</b><em class="task-mini-label keep">待验收</em></span></button>
@@ -153,9 +153,9 @@
             <p class="task-index-note">列表只回答“现在要不要我管”；完整 WorkflowRun、节点尝试和证据留在任务详情。</p>
           </aside>
           <article class="runtime-card">
-            <header class="runtime-head"><div><h2>接入工作流编排与项目级覆盖</h2><p>标准交付 · snapshot v3 · harness 项目默认 · 独立 worktree</p></div><span class="runtime-badge">自动验证中 · 1/2</span></header>
+            <header class="runtime-head"><div><h2>接入工作流编排与项目级覆盖</h2><p>标准交付 · snapshot v3 · ash 项目默认 · 独立 worktree</p></div><span class="runtime-badge">自动验证中 · 1/2</span></header>
             <div class="runtime-route"><div class="run-step is-done"><b>实现</b><span>17:42 完成</span></div><div class="run-step is-live"><b>自动验证</b><span>codex@review</span></div><div class="run-step"><b>人工验收</b><span>等待验证结论</span></div><div class="run-step"><b>合并</b><span>尚未开始</span></div></div>
-            <div class="runtime-body"><section class="runtime-focus"><header><b>第 1 轮真实验证</b><span>NODE review · ATTEMPT 1</span></header><h3>正在启动本地服务并检查交互</h3><p>验证者正在读取 diff、运行构建，并通过浏览器确认工作流模板在窄屏和桌面上的行为。当前任务保持 awaiting_review，队列后继尚未放行。</p><div class="evidence"><span>report.md · 写入中</span><span>截图 · 0</span><span>端口 · 5173</span></div></section><aside class="runtime-side"><b>本任务工作流</b><p>来源：harness 项目默认<br>版本：安全交付 v3<br>本地覆盖：无<br>释放点：验证通过</p><div class="runtime-actions"><button class="ui-btn">调整后续流程</button><button class="ui-btn">查看定义</button></div></aside></div>
+            <div class="runtime-body"><section class="runtime-focus"><header><b>第 1 轮真实验证</b><span>NODE review · ATTEMPT 1</span></header><h3>正在启动本地服务并检查交互</h3><p>验证者正在读取 diff、运行构建，并通过浏览器确认工作流模板在窄屏和桌面上的行为。当前任务保持 awaiting_review，队列后继尚未放行。</p><div class="evidence"><span>report.md · 写入中</span><span>截图 · 0</span><span>端口 · 5173</span></div></section><aside class="runtime-side"><b>本任务工作流</b><p>来源：ash 项目默认<br>版本：安全交付 v3<br>本地覆盖：无<br>释放点：验证通过</p><div class="runtime-actions"><button class="ui-btn">调整后续流程</button><button class="ui-btn">查看定义</button></div></aside></div>
           </article></div>
         </section>
 
@@ -195,7 +195,7 @@
       fast:{name:"极速原型",desc:"直接在项目目录运行；不启动自动验证，实现完成后立即释放队列。",review:false,human:false,rounds:"1",failure:"stop",release:"execute",workspace:"shared",scope:"系统内置"},
       standard:{name:"标准交付",desc:"实现完成后启动独立验证；验证失败自动修复，验证通过才释放队列。",review:true,human:true,rounds:"2",failure:"repair",release:"review",workspace:"isolated",scope:"系统默认"},
       strict:{name:"严格验收",desc:"自动验证通过后仍保持屏障，必须由人查看证据并验收后才释放队列。",review:true,human:true,rounds:"3",failure:"ask",release:"human",workspace:"isolated",scope:"系统内置"},
-      frontend:{name:"前端真实验收",desc:"针对前端改动要求浏览器截图，失败自动修复一次，最后由人体验确认。",review:true,human:true,rounds:"1",failure:"repair",release:"human",workspace:"isolated",scope:"harness 项目"}
+      frontend:{name:"前端真实验收",desc:"针对前端改动要求浏览器截图，失败自动修复一次，最后由人体验确认。",review:true,human:true,rounds:"1",failure:"repair",release:"human",workspace:"isolated",scope:"ash 项目"}
     };
     var $=function(s){return document.querySelector(s)};var $$=function(s){return Array.from(document.querySelectorAll(s))};
     function text(id,value){var n=$(id);if(n)n.textContent=value}

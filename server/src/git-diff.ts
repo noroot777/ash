@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { cappedGitStdout } from "./git-exec.js";
 import { literalPathspec } from "./git-status.js";
-import { expandHome, isGitRepo, resolveTaskMergeTarget, worktreeBranchName } from "./git.js";
+import { expandHome, isGitRepo, resolveTaskMergeTarget, resolveWorktreeBranchName } from "./git.js";
 
 const exec = promisify(execFile);
 const DIFF_LIMIT_BYTES = 1024 * 1024;
@@ -125,7 +125,9 @@ async function taskBranchRange(
   taskId: string,
   requestedTarget: string | null | undefined,
 ): Promise<BranchRange> {
-  const sourceBranch = worktreeBranchName(taskId);
+  // 分支名走 resolveWorktreeBranchName：改名成 ash 之后新任务是 `ash/xxx`，改名前建的
+  // 老任务还挂在 `harness/xxx` 上，这里得两边都认，否则老任务一律报 source_branch_missing。
+  const sourceBranch = await resolveWorktreeBranchName(repo, taskId);
   const fail = (targetBranch: string | null, reason: string): BranchRange =>
     ({ ok: false, sourceBranch, targetBranch, reason });
   if (!(await isGitRepo(repo))) return fail(null, "not_git_repo");

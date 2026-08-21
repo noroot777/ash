@@ -1,5 +1,5 @@
-// 前端约定的 grep 闸，挂在 web-next build 前置（`npm -w web-next run build`）。
-// 挂这里而不是 pre-commit：这两条要在「前端代码上线前」拦住，而 server 从磁盘读 web-next/dist，
+// 前端约定的 grep 闸，挂在 web build 前置（`npm -w web run build`）。
+// 挂这里而不是 pre-commit：这两条要在「前端代码上线前」拦住，而 server 从磁盘读 web/dist，
 // 不 build 就不生效——build 是前端改动上线的唯一通道，等价于每次前端上线都跑一遍。
 // （根文件体积闸走的是另一个通道 .githooks/pre-commit：两条规则的触发时机不同，不捆一起。）
 import { readdirSync, statSync, readFileSync } from "node:fs";
@@ -8,11 +8,11 @@ import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const SRC = join(ROOT, "web-next/src");
+const SRC = join(ROOT, "web/src");
 
 // 原生 title 的存量。CLAUDE.md 的约定是「改到它时顺手迁移，不必专门做一轮」，
 // 所以这条是棘轮：存量不拦、新增才拦。顺手迁移几个之后把这个数字调低即可。
-const NATIVE_TITLE_BASELINE = 52;
+const NATIVE_TITLE_BASELINE = 51;
 
 // 行尾写 `// allow-native` 可豁免该行（误报时用，别拿来绕规则）。
 const EXEMPT = /\/\/\s*allow-native/;
@@ -189,7 +189,7 @@ if (dialogHits.length) {
   failed = true;
   console.error(`\n✗ 用了浏览器原生弹窗（${dialogHits.length} 处）：`);
   for (const h of dialogHits) console.error("   " + h);
-  console.error("   确认对话框复用 web-next/src/task-detail/ConfirmDialog.tsx，其它弹层和提示沿用现有应用内组件。");
+  console.error("   确认对话框复用 web/src/task-detail/ConfirmDialog.tsx，其它弹层和提示沿用现有应用内组件。");
   console.error("   原生弹窗样式不一致、阻塞、且无法做成应用风格。\n");
 }
 

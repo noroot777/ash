@@ -41,7 +41,7 @@
       '<aside class="sidebar">' +
       '<div class="side-top">' +
       '<button class="proj-trigger" data-action="project" aria-expanded="false" aria-label="切换项目">' +
-      '<span class="proj-avatar">H</span><span class="proj-name">harness</span><span class="proj-caret">▾</span></button>' +
+      '<span class="proj-avatar">H</span><span class="proj-name">ash</span><span class="proj-caret">▾</span></button>' +
       '<a class="tool-btn" href="palette.html" title="搜索 ⌘K" aria-label="搜索 ⌘K">⌕</a>' +
       '<a class="tool-btn" href="notes.html" title="随手记" aria-label="随手记">▤</a>' +
       '<a class="tool-btn" href="composer.html" title="新建任务" aria-label="新建任务">✎</a>' +
@@ -88,12 +88,12 @@
       '<div class="proj-scrim" data-action="project-close"></div>' +
       '<div class="proj-pop" role="menu" aria-label="项目切换">' +
       '<div class="pp-current"><span class="proj-avatar lg">H</span>' +
-      "<div><b>harness</b><small>~/code/harness</small></div>" +
+      "<div><b>ash</b><small>~/code/ash</small></div>" +
       '<a class="pp-gear" href="settings-project.html" aria-label="设置">⚙</a></div>' +
       '<a class="pp-row pp-settings" href="settings-project.html"><span class="pp-ico">⚙</span>设置<small>智能体 · 项目 · 分组 · 归档</small></a>' +
       '<input class="pp-search" placeholder="搜索项目…" aria-label="搜索项目">' +
       '<div class="pp-label">切换到</div>' +
-      '<div class="pp-row selectable selected"><span class="proj-avatar">H</span>harness<span class="pp-tag">当前</span></div>' +
+      '<div class="pp-row selectable selected"><span class="proj-avatar">H</span>ash<span class="pp-tag">当前</span></div>' +
       '<div class="pp-row selectable"><span class="proj-avatar g2">D</span>dr-pipeline<small>~/code/dr-pipeline</small></div>' +
       '<div class="pp-row selectable"><span class="proj-avatar g3">M</span>mobile-app<small>~/code/mobile-app</small></div>' +
       '<div class="pp-row selectable"><span class="proj-avatar g4">K</span>kb-vault<small>~/code/kb-vault</small></div>' +

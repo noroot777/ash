@@ -12,9 +12,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 
-const root = mkdtempSync(join(tmpdir(), "harness-turn-freeze-"));
-process.env.HARNESS_DB = join(root, "harness.db");
-process.env.HARNESS_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "ash-turn-freeze-"));
+process.env.ASH_DB = join(root, "ash.db");
+process.env.ASH_RUNS_DIR = join(root, "runs");
 
 try {
   const { db, ensureSchema } = await import("../src/db/index.js");

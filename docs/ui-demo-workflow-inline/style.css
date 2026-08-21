@@ -1,5 +1,5 @@
-/* 融进 harness 新建任务面板 —— 配色/字号/分节照抄 web-next 的 composer。
-   token 取自 web-next/src/styles/global.css，只把用到的那些搬过来。 */
+/* 融进 ash 新建任务面板 —— 配色/字号/分节照抄 web 的 composer。
+   token 取自 web/src/styles/global.css，只把用到的那些搬过来。 */
 :root{
   --chrome:lch(94.44% .5 282);
   --canvas:lch(97.94% .5 282);

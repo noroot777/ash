@@ -41,7 +41,7 @@ function loadSqlite(): typeof import("node:sqlite") {
     return nodeRequire("node:sqlite") as typeof import("node:sqlite");
   } catch {
     throw new Error(
-      `harness 的数据库用的是 Node 自带的 node:sqlite,当前 Node ${process.version} 没有这个模块。` +
+      `ash 的数据库用的是 Node 自带的 node:sqlite,当前 Node ${process.version} 没有这个模块。` +
       `升级到 >= ${MIN_NODE} 就好(node -v 看当前版本)。`,
     );
   }
@@ -60,7 +60,7 @@ function assertUsable(): void {
     if (typeof probe.prepare("select 1").setReturnArrays !== "function") {
       throw new Error(
         `当前 Node ${process.version} 自带的 node:sqlite 还没有 StatementSync.setReturnArrays,` +
-        `harness 读多表 join 会拿到错的列。升级到 >= ${MIN_NODE}。`,
+        `ash 读多表 join 会拿到错的列。升级到 >= ${MIN_NODE}。`,
       );
     }
   } finally {

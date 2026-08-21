@@ -1,4 +1,4 @@
-// REST client — the single-task subset of the harness web api (web/src/api.ts),
+// REST client — the single-task subset of the ash web api (web/src/api.ts),
 // re-pointed at a configurable base URL. RN's fetch is a native client (no
 // browser CORS), so it talks straight to the backend over Tailscale.
 import type {
@@ -19,8 +19,8 @@ import type {
   LlmProtocol,
   TaskWorkspaceLeftover,
   TaskWorkspaceDiscardResult,
-} from "@harness/shared";
-import type { CliModelCatalog } from "@harness/shared/cli-presets";
+} from "@ash/shared";
+import type { CliModelCatalog } from "@ash/shared/cli-presets";
 import { getBaseURL } from "./config";
 
 // 删除任务的返回:`leftover` 是清理之后**仍然剩下**的 worktree/分支(没勾选、或勾

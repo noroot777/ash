@@ -195,7 +195,7 @@ export function mountScmRoutes(api: Hono) {
     try {
       // 读也要过路径闸。`source=untracked` 的预览走 `git diff --no-index -- /dev/null
       // <path>`，是四条路里唯一绕开 git pathspec、直接按文件系统路径读盘的——不挡的话
-      // 一个 `../` 就能把 harness 进程读得到的任何文本文件读出来。白名单闸挡住仓库外的
+      // 一个 `../` 就能把 ash 进程读得到的任何文本文件读出来。白名单闸挡住仓库外的
       // 路径，realpath 闸再挡住工作区里指向外面的软链。
       const targets = assertPathShape(origPath ? [path, origPath] : [path]);
       const status = await gateScmPaths(context.root.path, { paths: targets });

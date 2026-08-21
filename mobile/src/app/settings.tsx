@@ -41,7 +41,7 @@ export default function Settings() {
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       <ScrollView style={{ flex: 1, backgroundColor: theme.bg }} contentContainerStyle={{ padding: 16, gap: 14 }}>
         <Text style={{ color: theme.muted, fontSize: 13, lineHeight: 19 }}>
-          填写 harness 后端地址（经 Tailscale 访问 Mac）。例如 http://100.x.x.x:4317 或
+          填写 ash 后端地址（经 Tailscale 访问 Mac）。例如 http://100.x.x.x:4317 或
           http://你的主机名:4317。
         </Text>
 

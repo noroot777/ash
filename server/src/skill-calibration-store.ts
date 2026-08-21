@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { resolveHarnessDbFile } from "./db/path.js";
+import { resolveAshDbFile } from "./db/path.js";
 
 // init 事件校准的**冷启动来源**。
 //
@@ -11,9 +11,9 @@ import { resolveHarnessDbFile } from "./db/path.js";
 // (第 3 轮审查 finding 4)。
 //
 // 所以把最近这些校准落一个小 JSON:内容全部来自真 CLI 自报,不是我们猜的名单。
-// 落在**库文件旁边**而不是写死 data/ —— 预览实例、测试各自把 HARNESS_DB 指到别处,
+// 落在**库文件旁边**而不是写死 data/ —— 预览实例、测试各自把 ASH_DB 指到别处,
 // 校准也就跟着分开,不会互相污染。
-const FILE = () => join(dirname(resolveHarnessDbFile()), "skill-calibrations.json");
+const FILE = () => join(dirname(resolveAshDbFile()), "skill-calibrations.json");
 
 /**
  * 缓存 key 的分隔符。key 的形状是 `<agentType>` + 这个字符 + `<cwd>`,由 skills.ts 的

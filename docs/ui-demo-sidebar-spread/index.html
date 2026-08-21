@@ -34,7 +34,7 @@
       <div class="side-top">
         <div class="proj">
           <span class="avatar">HA</span>
-          <span class="proj-name">harness</span>
+          <span class="proj-name">ash</span>
           <span class="caret">⌄</span>
         </div>
         <!-- 筛选条和快捷键提示塞进 side-top 本来就空着的右半边和第二行，
@@ -109,11 +109,11 @@
       </ul>
     </section>
     <section>
-      <h3>真做进 web-next 的话，动这几处</h3>
+      <h3>真做进 web 的话，动这几处</h3>
       <ul>
-        <li><code>web-next/src/workspace/useWorkspaceShortcuts.ts</code>：加一个裸键（走现有的 <code>isTextEntry</code> / <code>hasBlockingLayer</code> 护栏）。</li>
-        <li><code>web-next/src/workspace/WorkspaceShell.tsx</code>：持有 <code>spread</code> 状态，传给侧边栏；点任务时顺手关掉。</li>
-        <li><code>web-next/src/workspace/TaskTree.tsx</code>：<code>TaskRow</code> 多渲染三个格子（原始需求 / 最后一条消息 / 时间），窄态由 CSS 裁成 0 宽，行高和分组逻辑都不动。</li>
+        <li><code>web/src/workspace/useWorkspaceShortcuts.ts</code>：加一个裸键（走现有的 <code>isTextEntry</code> / <code>hasBlockingLayer</code> 护栏）。</li>
+        <li><code>web/src/workspace/WorkspaceShell.tsx</code>：持有 <code>spread</code> 状态，传给侧边栏；点任务时顺手关掉。</li>
+        <li><code>web/src/workspace/TaskTree.tsx</code>：<code>TaskRow</code> 多渲染三个格子（原始需求 / 最后一条消息 / 时间），窄态由 CSS 裁成 0 宽，行高和分组逻辑都不动。</li>
         <li><code>WorkspaceSidebar.tsx</code>：筛选条要放进 <code>workspace-sidebar-top</code> 里，不能新起一行，否则纵向就动了。</li>
         <li>「最后一条消息」需要一个列表接口能带上的字段（现在的 <code>Task</code> 上没有），要么服务端在列表里补一个摘要，要么前端按需拉。这块是唯一有后端改动的地方——顺带要带上<b>附件缩略图</b>（悬浮卡片里的 <code>▣ N</code> 和大图靠它），demo 里这些图是现画的 SVG 假图。</li>
       </ul>

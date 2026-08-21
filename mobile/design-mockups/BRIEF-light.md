@@ -2,7 +2,7 @@
 
 你之前已经生成了这个任务管理 App 的**深色版**设计图。现在请生成**完全对应的浅色 (light mode) 版本**。
 请**实际生成图片文件**（文生图），不要写描述、不要写代码。
-保存到目录：`/Users/fjh/code/harness/mobile/design-mockups/`，文件名：
+保存到目录：`/Users/fjh/code/ash/mobile/design-mockups/`，文件名：
 - `screen-1-task-list-light.png`
 - `screen-2-task-detail-light.png`
 - `screen-3-new-task-light.png`

@@ -4,7 +4,8 @@
 import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-const KEY = "harness.baseURL";
+const KEY = "ash.baseURL";
+const LEGACY_KEY = "harness.baseURL";
 let cached: string | null = null;
 
 const normalize = (url: string) => url.trim().replace(/\/+$/, "");
@@ -15,7 +16,14 @@ export function getBaseURL(): string | null {
 
 export async function loadBaseURL(): Promise<string | null> {
   cached = await AsyncStorage.getItem(KEY);
-  // On web (the desktop preview, served from the harness itself) default to the
+  if (!cached) {
+    cached = await AsyncStorage.getItem(LEGACY_KEY);
+    if (cached) {
+      await AsyncStorage.setItem(KEY, cached);
+      await AsyncStorage.removeItem(LEGACY_KEY);
+    }
+  }
+  // On web (the desktop preview, served from the ash itself) default to the
   // serving origin so the preview talks to that same backend with zero setup.
   // Native is left untouched — a phone can't assume the server's origin.
   if (!cached && Platform.OS === "web" && typeof window !== "undefined" && window.location?.origin) {

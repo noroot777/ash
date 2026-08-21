@@ -2,7 +2,7 @@
 //
 // 这一层只管**定义和校验**，不碰执行：server 的执行链读它，web 的编排器改它，
 // 两边共用同一份闸（checkWorkflow）。运行时值住在这里，所以走子路径导出
-// `@harness/shared/workflow`——index.ts 只再导出类型，转发运行时值会让服务端起不来。
+// `@ash/shared/workflow`——index.ts 只再导出类型，转发运行时值会让服务端起不来。
 //
 // 术语对齐产品口径：用户看到的是「起手式」（一条线的模板），代码里叫 workflow。
 import type { TaskStage, TaskStatus } from "./index.ts";
@@ -112,7 +112,7 @@ export const PREVIEW_MODE_LABELS: Record<PreviewMode, string> = {
 };
 export const PREVIEW_LIFE_LABELS: Record<PreviewLife, string> = {
   gate: "下一个人工关口结束时回收", task: "任务结束时回收",
-  // 口径按实现写：我们没法知道「有没有人在看」（预览进程的请求不经过 harness），
+  // 口径按实现写：我们没法知道「有没有人在看」（预览进程的请求不经过 ash），
   // 所以这一档是**起来满 30 分钟就回收**，不是「闲置 30 分钟」。宁可标签朴素，
   // 也不能让线上写着一件我们做不到的事。
   idle30: "起来满 30 分钟就回收",
@@ -307,7 +307,7 @@ function normalizeParams(kind: StepKind, raw: unknown): StepParams[StepKind] {
     return {
       cmd: pickText(r.cmd, d.preview().cmd),
       // 新建站由 DEFAULT_PARAMS 明确写 test；老数据没有 mode 时必须保持原来的
-      // 「照启动命令跑」语义，不能在一次 normalize 后静默变成 Harness 的测试库快照。
+      // 「照启动命令跑」语义，不能在一次 normalize 后静默变成 Ash 的测试库快照。
       mode: pickEnum(r.mode, PREVIEW_MODE, "command"),
       ready: pickEnum(r.ready, PREVIEW_READY, "port+log"),
       life: pickEnum(r.life, PREVIEW_LIFE, "gate"),

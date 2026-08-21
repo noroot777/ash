@@ -33,8 +33,8 @@ import { SignalBar } from "@/components/SignalBar";
 import { SkillSuggestions } from "@/components/SkillSuggestions";
 import { DateTimeButton } from "@/components/DateTimeField";
 import { TaskTimeChip, formatInstant } from "@/lib/time";
-import { canArchive } from "@harness/shared";
-import type { Session, ScheduledMessage } from "@harness/shared";
+import { canArchive } from "@ash/shared";
+import type { Session, ScheduledMessage } from "@ash/shared";
 import type { LogLine } from "@/lib/log";
 import { snapshotToLogLines } from "@/lib/log";
 
@@ -193,7 +193,7 @@ export default function TaskDetail() {
       })
       .catch((e) => Alert.alert("取消归档失败", e instanceof Error ? e.message : String(e)));
 
-  // 删除任务:worktree 目录和 harness/<id8> 分支不会跟着任务行一起没,所以先问
+  // 删除任务:worktree 目录和 ash/<id8> 分支不会跟着任务行一起没,所以先问
   // 一次服务端还留着什么 —— 留着就多给一个「连它们一起删」的选项。任务一删,这两
   // 样在界面上就再没有入口了,这一问是唯一的机会。
   const confirmDelete = async () => {

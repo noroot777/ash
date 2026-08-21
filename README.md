@@ -1,25 +1,25 @@
 <p align="center">
-  <strong>Harness</strong>
+  <strong>Ash</strong>
 </p>
 
 <p align="center">
   AI 编程智能体的本地调度台<br>
-  派活 · 排队 · 验证 · 合并 —— 一个进程搞定
+  派活 · 排队 · 验证 · 接力 · 合并 —— 一个进程搞定
 </p>
 
 <p align="center">
-  <a href="#快速开始">快速开始</a> · <a href="#核心能力">核心能力</a> · <a href="#编排模式">编排模式</a> · <a href="docs/install.md">部署文档</a>
+  <a href="#快速开始">快速开始</a> · <a href="#核心能力">核心能力</a> · <a href="#编排模式">编排模式</a> · <a href="#任务接力">任务接力</a> · <a href="docs/install.md">部署文档</a>
 </p>
 
 ---
 
-Harness 是一个自托管的编排控制台，用来管理本地的 AI 编程智能体 CLI（Claude Code、Codex、Gemini 等）。它不替代这些工具，也不需要你的 API key —— 它负责的是**调度**：把任务分配给 agent，在隔离的 worktree 中执行，自动验证结果，最终合并回主干。
+Ash 是一个自托管的编排控制台，用来管理本地的 AI 编程智能体 CLI（Claude Code、Codex、Gemini 等）。它不替代这些工具，也不需要你的 API key —— 它负责的是**调度**：把任务分配给 agent，在隔离的 worktree 中执行，自动验证结果，最终合并回主干。
 
 一个 Node 进程，一个端口，数据全在本地磁盘。macOS / Linux / Windows 原生支持。
 
 ## 快速开始
 
-**前置条件**：Node.js ≥ 22.16、git，至少一个已安装并登录过的 agent CLI。
+**前置条件**：Node.js >= 22.16、git，至少一个已安装并登录过的 agent CLI。
 
 ```bash
 # 安装 agent CLI（至少一个）
@@ -28,9 +28,9 @@ npm install -g @openai/codex && codex
 ```
 
 ```bash
-# 安装并启动 Harness
-git clone https://github.com/noroot777/ash.git harness
-cd harness
+# 安装并启动 Ash
+git clone https://github.com/noroot777/ash.git ash
+cd ash
 npm run setup        # 环境检查 → 依赖安装 → 构建 → MCP 接入
 npm start            # http://localhost:4317
 ```
@@ -38,21 +38,23 @@ npm start            # http://localhost:4317
 启动后：新建项目（填 git 仓库绝对路径）→ 创建任务 → 选择执行器 → 运行。
 
 > [!IMPORTANT]
-> **MCP 接入不可跳过。** agent 通过 MCP 工具 `complete_task` 提交完成状态。未接入 MCP 的 agent 无法交卷，所有任务将显示为失败。<br>验证：`claude mcp list` 中应显示 `harness: … ✔ Connected`。<br>手动接入方法见 [docs/install.md](docs/install.md)。
+> **MCP 接入不可跳过。** agent 通过 MCP 工具 `complete_task` 提交完成状态。未接入 MCP 的 agent 无法交卷，所有任务将显示为失败。<br>验证：`claude mcp list` 中应显示 `ash: … ✔ Connected`。<br>手动接入方法见 [docs/install.md](docs/install.md)。
 
 ## 核心能力
 
-🔀 **Worktree 隔离** — 每个任务自动创建独立的 git worktree 和分支，多任务并行互不干扰。
+**Worktree 隔离** — 每个任务自动创建独立的 git worktree 和分支，多任务并行互不干扰。
 
-✅ **完成协议** — agent 必须主动调用 `complete_task` 才算完成。进程退出 ≠ 任务完成，避免半成品被推进下游队列。
+**完成协议** — agent 必须主动调用 `complete_task` 才算完成。进程退出 ≠ 任务完成，避免半成品被推进下游队列。
 
-🔍 **自动验证** — 任务完成后触发验证轮，在同一会话中运行。未通过则打回修复，上下文完整保留。
+**自动验证** — 任务完成后触发验证轮，在同一会话中运行。未通过则打回修复，上下文完整保留。
 
-🔄 **重启存活** — agent 进程与 server 解耦，server 重启后自动接回正在运行的 agent。
+**重启存活** — agent 进程与 server 解耦，server 重启后自动接回正在运行的 agent。
 
-📋 **队列编排** — 串行队列按序推进，并行分组同时运行。失败任务自动跳过，重新排队时按规则归位。
+**队列编排** — 串行队列按序推进，并行分组同时运行。失败任务自动跳过，重新排队时按规则归位。
 
-🚀 **一键验收** — 确认通过后自动合并到主干、清理 worktree 和临时分支。遇到冲突会唤醒来源任务处理。
+**一键验收** — 确认通过后自动合并到主干、清理 worktree 和临时分支。遇到冲突会唤醒来源任务处理。
+
+**跨机器接力** — 把任务连同 git 进度、CLI 会话历史和附件迁移到另一台 Ash 上继续。详见[任务接力](#任务接力)。
 
 ## 支持的执行器
 
@@ -78,17 +80,51 @@ npm start            # http://localhost:4317
 
 **验证循环** — 实现 → 验证 → 打回 → 修复 → 再验证，循环至通过后由用户验收合并。
 
+## 任务接力
+
+跨机器任务迁移：把一台 Ash 上的任务——连同代码进度、对话历史和附件——接力到另一台 Ash 继续。
+
+### 接力什么
+
+- **git 状态**：任务分支上的提交打成增量 bundle 带走，未提交改动先做 WIP 提交
+- **CLI 会话**：claude / codex 的会话文件物理迁移，对端续跑时保留完整对话上下文
+- **附件和产物**：上传的图片、会话 trace、定时计划一并迁移，路径自动改写
+
+### 怎么用
+
+1. 设置 → 默认规则 → 添加目标机器地址（如 `http://192.168.1.50:4317`）
+2. 打开任务 → 输入框上方 → 「接力到另一台机器」
+3. 预检通过后确认发送，可选到达后自动续跑
+
+### 对端要求
+
+- 安装了 Ash 并运行中
+- 有同一个 git 仓库的克隆（**不要求提前同步到最新**——接力会协商增量传输）
+- 已建好指向该仓库的项目
+- 安装了对应的 agent CLI
+
+### 退化与兜底
+
+| 情况 | 结果 |
+|---|---|
+| 会话文件迁移失败 | agent 全新起跑，任务正文嵌入首条消息，git 进度仍在 |
+| 对端不是 git 仓库 | 退化为共享目录运行，代码不迁移 |
+| 网络中断 | 本机标记「接力未确认」，重试幂等不重复导入 |
+| 需要回到本机 | 横幅 → 「在本机继续」移除标记即可 |
+
+> 完整的流程说明、worktree 处理细节与故障排查见 **[docs/handoff.md](docs/handoff.md)**。
+
 ## 项目结构
 
 单 Node 进程（Hono），同时承载 API、SSE 事件推送和前端页面托管。
 
 ```
-server/      Hono 后端 — API、任务编排、进程管理、前端托管
-web-next/    React + Vite + Tailwind 前端
-shared/      前后端共享类型
-mcp/         MCP server — 提供 25 个工具供 agent 调用
-mobile/      Expo 移动端（查看任务、回复消息）
-scripts/     setup / restart / package（.mjs 脚本，跨平台）
+server/   Hono 后端 — API、任务编排、进程管理、前端托管
+web/      React + Vite + Tailwind 前端
+shared/   前后端共享类型
+mcp/      MCP server — 提供 25 个工具供 agent 调用
+mobile/   Expo 移动端（查看任务、回复消息）
+scripts/  setup / restart / package（.mjs 脚本，跨平台）
 ```
 
 <details>
@@ -107,7 +143,7 @@ scripts/     setup / restart / package（.mjs 脚本，跨平台）
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `PORT` | `4317` | 服务端口（界面与 API 共用） |
-| `HARNESS_DB` | `./data/harness.db` | SQLite 数据库路径 |
+| `ASH_DB` | `./data/ash.db` | SQLite 数据库路径 |
 
 所有持久化数据存放在 `data/` 目录（数据库、运行记录、上传文件），该目录不入 git。备份迁移只需拷贝此目录。
 
@@ -118,12 +154,12 @@ scripts/     setup / restart / package（.mjs 脚本，跨平台）
 
 ```bash
 npm run dev          # 后端 :4317 + 前端 :5173（HMR，/api 代理到后端）
-npm run build        # 全量构建（shared → web-next → server → mcp）
+npm run build        # 全量构建（shared → web → server → mcp）
 npm run restart      # 构建 + 后台常驻
 npm run package      # 生成分发包（仅入库文件，不含 data/）
 ```
 
-前端修改后仅需 `npm run build`，server 从磁盘读取 `web-next/dist`，无需重启。
+前端修改后仅需 `npm run build`，server 从磁盘读取 `web/dist`，无需重启。
 
 回归测试按主题拆分，独立运行：
 
@@ -142,7 +178,7 @@ npm -w server run test:detached       # agent 重启存活
 <details>
 <summary>所有任务运行后均显示 <b>failed</b></summary>
 
-MCP 未接入，agent 无法调用 `complete_task`。运行 `claude mcp list` 确认 harness 状态为 Connected。
+MCP 未接入，agent 无法调用 `complete_task`。运行 `claude mcp list` 确认 ash 状态为 Connected。
 
 </details>
 
@@ -170,5 +206,5 @@ MCP 未接入，agent 无法调用 `complete_task`。运行 `claude mcp list` �
 ---
 
 <p>
-  <a href="docs/install.md"><b>部署与运维</b></a> · <a href="docs/incidents.md"><b>事故与踩坑记录</b></a> · <a href="docs/windows-testing.md"><b>Windows 测试基线</b></a>
+  <a href="docs/install.md"><b>部署与运维</b></a> · <a href="docs/handoff.md"><b>任务接力指南</b></a> · <a href="docs/incidents.md"><b>事故与踩坑记录</b></a> · <a href="docs/windows-testing.md"><b>Windows 测试基线</b></a>
 </p>

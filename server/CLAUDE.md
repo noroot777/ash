@@ -41,6 +41,6 @@
 - **凡是对 `tasks.status` 做校验的地方，先问一句「这条对常驻调度台适用吗」。** 一次性任务是「跑→终态」，`status !== "running"` 约等于没在干活；常驻调度台的 status 只在 `beginTurn`/`endTurn` 之间来回切，重启接回时是 `idle`，**明明活着却会被这类挡板拦住**。已知需要 team 例外：`/ask` `/answer` `/reply` `/run`；明确不适用：`/complete` `/pause`。**改一处就 grep 一遍所有 status 校验点**——同一个文件里两个对称端点只改一个，靠通读发现不了（`docs/incidents.md`「对称端点只改了一个」）。
 - **新增任何「选谁干活」的表面，三件套一起上**：前端 `ExecutorPicker` + 持久化 `executorId` 字段 + 后端 `resolveExecutorFor`。自查时 grep 写死的 agent 类型列表，duet 链路曾因此漏过一次。
 - **密钥绝不进 argv**，只走 `spec.exec.relay` 的 `env`（`commandLine` 会存进 `sessions.command_line` 并在 UI 展示）。
-- **`shared/src/index.ts` 不能转发运行时函数**，只能 `import type`。服务端直接跑 shared 的 `.ts` 源码，Node 的类型擦除不会把 `"./x.js"` 说明符映射回 `"./x.ts"`，一加真正的运行时转发进程立刻起不来。要共享运行时函数就照 `@harness/shared/team` 开子路径导出。
+- **`shared/src/index.ts` 不能转发运行时函数**，只能 `import type`。服务端直接跑 shared 的 `.ts` 源码，Node 的类型擦除不会把 `"./x.js"` 说明符映射回 `"./x.ts"`，一加真正的运行时转发进程立刻起不来。要共享运行时函数就照 `@ash/shared/team` 开子路径导出。
 - **对 running/queued 任务 PATCH status 一律 409**（只改数据库不停进程会三连错，`docs/incidents.md`「只改数据库不停进程」）。取消走 `stop_task`。
 - 完成协议（**exit 0 ≠ done**）的规则本体由 prompt 前言 / 消息尾部注入，**别再往任何 md 里加拷贝**。

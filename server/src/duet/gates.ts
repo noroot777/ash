@@ -1,4 +1,4 @@
-import type { GateAction } from "@harness/shared";
+import type { GateAction } from "@ash/shared";
 
 // In-process HITL gate rendezvous. The duet orchestrator awaits
 // a human decision; the API resolves it. Lives in the long-running server.

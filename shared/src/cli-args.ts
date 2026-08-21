@@ -5,7 +5,7 @@
 //
 // 放在 shared 而不是 server：**执行器拆词、前端判「这条参数会不会顶掉别的配置」，
 // 必须是同一份拆法**。前端只按原始 token 判、执行器拆完再拼命令的话，
-// `["--settings {}"]` 这种在页面上看不出冲突、跑起来却把 harness 那份 `--settings`
+// `["--settings {}"]` 这种在页面上看不出冲突、跑起来却把 ash 那份 `--settings`
 // 整份顶掉（claude 只认最后一个），设置页照旧显示「已覆盖 200k · 80%」。
 // 这里只放纯字符串逻辑：`~` 展开要读 homedir，是 server 那侧的事。
 export function splitCombinedFlag(value: string): string[] {

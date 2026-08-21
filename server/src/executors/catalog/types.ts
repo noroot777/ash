@@ -1,5 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import type { AgentEvent, AgentType } from "@harness/shared";
+import type { AgentEvent, AgentType } from "@ash/shared";
 import type { RunTracePaths } from "../diagnostics.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig } from "../types.js";
 
@@ -42,12 +42,12 @@ export interface CliPromptSpec {
 /** 会话延续方案。整个字段缺省 = 该 CLI 没有已知的 resume 通道。 */
 export interface CliSessionSpec {
   /**
-   * harness 自己生成 sessionId 并用这个 flag 告知 CLI(claude 的 `--session-id`)。
+   * ash 自己生成 sessionId 并用这个 flag 告知 CLI(claude 的 `--session-id`)。
    * 缺省 = sessionId 由 CLI 自己产生,只能靠 parser 发 `{kind:"session"}` 带回来。
    */
   newIdFlag?: string;
   /**
-   * 无头续跑同一会话的 argv 片段。缺省 = 不支持无头续跑,harness 会忽略
+   * 无头续跑同一会话的 argv 片段。缺省 = 不支持无头续跑,ash 会忽略
    * `RunOpts.sessionId` 并起一个全新会话(诚实降级,不假装接上了)。
    * 插入位置:subcommand 与 baseArgs 之后、其余 flag 之前。顺序凑不出来的
    * (codex 那种 `exec <flags> resume <id>`)请改用自定义 factory。

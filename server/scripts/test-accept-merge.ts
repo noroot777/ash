@@ -1,5 +1,5 @@
 // Deterministic acceptance merge regression suite. Every case owns a temporary
-// repository; no checkout or ref update can escape into the harness repo.
+// repository; no checkout or ref update can escape into the ash repo.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -8,21 +8,21 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "harness-accept-merge-test-"));
-process.env.HARNESS_DB = join(root, "harness.db");
+const root = mkdtempSync(join(tmpdir(), "ash-accept-merge-test-"));
+process.env.ASH_DB = join(root, "ash.db");
 // RUNS_DIR 指到临时目录,顺带把 guardAgentSpawn 打开:用例 13 那一轮**不会真起 CLI**,每一次
 // spawn 都被拦成 failedChild(executors/spawn.ts),回合照开照结算,只是没有真进程。
 // 原来这里还摆着一份没后缀的 `#!/bin/sh` 假 claude、PATH 用 `:` 拼 —— 两条都只在 Unix 成立
 // (Windows 用 `;` 分隔、查找只认 PATHEXT 后缀、内核不认 shebang),而且不管哪个平台它都从没
 // 被执行过:死代码,还让人误以为这一轮验的是 CLI 启动。真正验的是「有没有真发起这一轮」。
-process.env.HARNESS_RUNS_DIR = join(root, "runs");
+process.env.ASH_RUNS_DIR = join(root, "runs");
 // 舞台的兜底清理挂在**建好它的下一行**,而不是靠尾部那个 finally。下面这条 fail-closed 断言
-// 就在 try 之前:它一响(HARNESS_ALLOW_REAL_AGENT=1 时正是要它响),脚本当场掀桌,尾部清理
-// 一行都执行不到,TEMP 里就躺下一个 harness-accept-merge-test-*。exit 钩子对**每条**早退
+// 就在 try 之前:它一响(ASH_ALLOW_REAL_AGENT=1 时正是要它响),脚本当场掀桌,尾部清理
+// 一行都执行不到,TEMP 里就躺下一个 ash-accept-merge-test-*。exit 钩子对**每条**早退
 // 路径都成立,成功路径那次 rmSync 照旧(它还得先 releaseTmpDb),这里只管兜底。
 process.on("exit", () => { try { rmSync(root, { recursive: true, force: true }); } catch {} });
 assert.ok(
-  process.env.HARNESS_ALLOW_REAL_AGENT !== "1",
+  process.env.ASH_ALLOW_REAL_AGENT !== "1",
   "用例 13 靠 guardAgentSpawn 拦住真 CLI;拦截器一失效,测试就会拿用户的真额度跑 agent",
 );
 const git = (cwd: string, ...args: string[]) =>
@@ -40,7 +40,7 @@ function hasRef(repo: string, branch: string): boolean {
 function makeRepo(name: string): string {
   const repo = join(root, name);
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Harness Accept Test");
+  git(repo, "config", "user.name", "Ash Accept Test");
   git(repo, "config", "user.email", "accept@example.test");
   writeFileSync(join(repo, ".gitignore"), ".worktrees/\n");
   writeFileSync(join(repo, "shared.txt"), "seed\n");
@@ -194,10 +194,10 @@ try {
 
   // 6. A failed temporary-worktree cleanup is a warning, not a merge failure.
   {
-    const worktreePath = "/tmp/harness-accept-test-cleanup/worktree";
+    const worktreePath = "/tmp/ash-accept-test-cleanup/worktree";
     const merged = withTemporaryCleanupOutcome({
       ok: true,
-      sourceBranch: "harness/cleanup",
+      sourceBranch: "ash/cleanup",
       targetBranch: "main",
       method: "merge_commit",
     }, "permission denied", worktreePath);
@@ -558,7 +558,7 @@ try {
     try {
       const handoff = await handOffConflict({ id: taskId, title: "conflict handoff silent" }, {
         reason: "merge_conflict",
-        sourceBranch: `harness/${taskId}`,
+        sourceBranch: `ash/${taskId}`,
         targetBranch: "main",
         conflictFiles: ["shared.txt"],
       });

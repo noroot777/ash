@@ -1,17 +1,17 @@
-# Ash — Harness 的 iPhone 客户端
+# Ash iPhone 客户端
 
-用 Expo / React Native 写的 harness 手机端：随时查看 / 新建 / 运行普通任务，看 agent
+用 Expo / React Native 写的 ash 手机端：随时查看 / 新建 / 运行普通任务，看 agent
 实时输出并回复会话；也支持团队任务，以及只读查看 `/duet` 的完整讨论记录与状态。
 
-后端不动——这是 harness 的第二个前端，经 REST + 一条全局 SSE（`server/`）通信。
+后端不动——这是 ash 的第二个前端，经 REST + 一条全局 SSE（`server/`）通信。
 
 ## 跑起来（开发，Expo Go）
 
-前提：iPhone 与 Mac 同在 Tailscale 网络；harness 后端在 Mac 上运行。
+前提：iPhone 与 Mac 同在 Tailscale 网络；ash 后端在 Mac 上运行。
 
 ```bash
-# 1) 起后端（在 harness 根目录）
-cd /Users/fjh/code/harness
+# 1) 起后端（在 ash 根目录）
+cd /Users/fjh/code/ash
 npm run dev          # 或 npm run build && npm start，监听 :4317（0.0.0.0）
 
 # 2) 起手机端
@@ -51,9 +51,9 @@ src/
     Conversation.tsx     LogLine[] → 气泡时间线
 ```
 
-## 复用 harness 共享类型（零漂移）
+## 复用 ash 共享类型（零漂移）
 
-`@harness/shared` 经 `file:../shared` 依赖（`node_modules/@harness/shared` 符号链接）指向
+`@ash/shared` 经 `file:../shared` 依赖（`node_modules/@ash/shared` 符号链接）指向
 `shared/src/index.ts`，Metro 直接转译其 TS 源码 —— 无构建步骤，类型与后端永不漂移。
 对应 `metro.config.js`：`watchFolders=[repo 根]` + `unstable_enableSymlinks`。
 
@@ -63,7 +63,7 @@ src/
 ## 已验证
 
 - `npx tsc --noEmit` 类型零报错。
-- `npx expo export --platform ios` 干净打包（含 `@harness/shared` 解析与转译）。
+- `npx expo export --platform ios` 干净打包（含 `@ash/shared` 解析与转译）。
 - 对照线上后端核对了 `/api/projects`、`/api/tasks`、`/api/agents`、`/api/tasks/:id/sessions`、
   `/api/sessions/:id/output`、SSE `/api/events` 的返回形态。
 - **待用户在真机（Expo Go）上跑一遍**：连后端 → 列表 → 新建并运行 → 看实时流 → 回复续接。

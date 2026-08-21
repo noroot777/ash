@@ -9,8 +9,8 @@
 // 会话。所以工作流的提问也**不需要另开一条决策链路** —— 用户答「重做一次，先修
 // 类型错误」，干活的 agent 就带着这句话接着干；答「先这样，我自己来」，它就停在那儿。
 import { eq } from "drizzle-orm";
-import { MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN } from "@harness/shared";
-import type { AgentType, QuestionItem, SessionRole } from "@harness/shared";
+import { MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN } from "@ash/shared";
+import type { AgentType, QuestionItem, SessionRole } from "@ash/shared";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { agents, sessions, tasks } from "./db/schema.js";

@@ -1,4 +1,4 @@
-import type { DuetConsensusBy } from "@harness/shared";
+import type { DuetConsensusBy } from "@ash/shared";
 
 export type DuetSettlementState = {
   raisedA: boolean;

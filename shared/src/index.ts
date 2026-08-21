@@ -5,7 +5,7 @@ import type { WorkflowDef } from "./workflow.ts";
 import type { TaskWorkflowMode } from "./free-workflow.ts";
 import type { HandoffTarget, TaskHandoff } from "./handoff.ts";
 export type { Session, SessionRole } from "./session.ts";
-// 归一化后的 token 用量。运行时函数(累加/格式化)走 "@harness/shared/usage" 子路径
+// 归一化后的 token 用量。运行时函数(累加/格式化)走 "@ash/shared/usage" 子路径
 // 导出,这里同上只再导出类型。
 export type { ContextUsage, TokenUsage } from "./usage.ts";
 export type {
@@ -30,8 +30,8 @@ export type {
   ReviewerProfile,
   TaskWorkflowMode,
 } from "./free-workflow.ts";
-// 执行器覆盖的继承规则住在 ./executor-overrides.ts,走 "@harness/shared/executors"
-// 子路径导出(跟 "@harness/shared/team" 同一套):index.ts 只做类型再导出,不能在这里
+// 执行器覆盖的继承规则住在 ./executor-overrides.ts,走 "@ash/shared/executors"
+// 子路径导出(跟 "@ash/shared/team" 同一套):index.ts 只做类型再导出,不能在这里
 // 转发运行时函数 —— 服务端直接跑 .ts 源码,而 Node 的类型擦除不会把 "./x.js" 映射
 // 回 "./x.ts",转发一加进程就起不来。
 
@@ -48,7 +48,7 @@ export interface AppSettings {
   // 这是**前端轮询间隔**,不是服务端扫描周期:服务端每次请求都真扫盘(命中 mtime
   // 指纹就走缓存,~0.5ms)。按小时计:装新技能是低频动作,等不及有「立即重新扫描」。
   skillRefreshSeconds: number;
-  // 任务接力的候选目标:另一台跑着 harness 的机器。url 是对端根地址(http://host:4317)。
+  // 任务接力的候选目标:另一台跑着 ash 的机器。url 是对端根地址(http://host:4317)。
   handoffTargets: HandoffTarget[];
 }
 
@@ -100,11 +100,11 @@ export const AGENT_TYPES = [
 export type AgentType = (typeof AGENT_TYPES)[number];
 
 // CLI 各自的模型别名(CLI_MODEL_PRESETS)与思考强度档位(REASONING_EFFORT_VALUES /
-// REASONING_EFFORT_DETAIL)在 `./cli-presets.ts`,走子路径 `@harness/shared/cli-presets`。
+// REASONING_EFFORT_DETAIL)在 `./cli-presets.ts`,走子路径 `@ash/shared/cli-presets`。
 // 这里刻意不转发:服务端跑 shared 的 .ts 源码,index 转发运行时值会让它起不来。
 
 // Execution layer: a concrete executor under a type (CLI + model)。
-// 执行位置永远是 harness 所在的这台机器;要换机器请用「接力」把整个任务交出去。
+// 执行位置永远是 ash 所在的这台机器;要换机器请用「接力」把整个任务交出去。
 export interface AgentExecutorProfile {
   id: string;
   name: string; // human label, e.g. "claude@local·opus"
@@ -120,8 +120,8 @@ export interface AgentExecutorProfile {
   // 挂载的供应商(LlmProvider.id)。缺省/null = 用 CLI 自己的官方登录账号。
   // 非空时启动 CLI 前注入供应商的 base_url + key(见 executors/index.ts)。
   providerId?: string | null;
-  // 覆盖 CLI 自己配置文件里的设置(以环境变量注入,只对 harness 起的进程生效)。
-  // 可覆盖哪些项、各自盖掉谁,声明在 @harness/shared/cli-overrides。
+  // 覆盖 CLI 自己配置文件里的设置(以环境变量注入,只对 ash 起的进程生效)。
+  // 可覆盖哪些项、各自盖掉谁,声明在 @ash/shared/cli-overrides。
   configOverrides?: Record<string, number>;
   isDefault: boolean; // the default executor resolved for its type
 }
@@ -153,12 +153,12 @@ export interface ProjectView extends Project {
   health: ProjectHealth;
 }
 
-// ── 任务留在磁盘上的工作区(worktree 目录 + harness/<id8> 分支) ──────────────
+// ── 任务留在磁盘上的工作区(worktree 目录 + ash/<id8> 分支) ──────────────
 // 删除任务前先问一次服务端「这两样还在不在」,在的话删除对话框才提示要不要连它们
 // 一起删。两个字段各自独立:目录被手删过、分支还留着是常见状态。
 export interface TaskWorkspaceLeftover {
   path: string | null; // worktree 目录,不存在为 null
-  branch: string | null; // 任务分支 harness/<id8>,本地不存在为 null
+  branch: string | null; // 任务分支 ash/<id8>,本地不存在为 null
 }
 
 // 一次清理的逐项结果。git 拒绝(worktree 有未提交改动 / 分支未合并)不是异常,
@@ -426,7 +426,7 @@ export const TEAM_DEFAULTS: TeamConfig = { lead: "claude", worker: "claude", rev
 // ── 供应商 (relay, system-level) ─────────────────────────────────────────────
 // 一个可挂到执行器上的模型来源:官方 API 端点,或第三方代理/聚合服务。挂上后启动 CLI 时注入
 // base_url + key,顶掉 CLI 自己的登录账号 —— 于是 claude@官方 和 claude@公司
-// 可以并存。全局(不分项目)。harness 自己不再直连它调模型。
+// 可以并存。全局(不分项目)。ash 自己不再直连它调模型。
 export type LlmProtocol = "anthropic" | "openai";
 
 // 选模型面板(对话框 @ 之后那一步、以及所有模型下拉)从哪里拿这家供应商的候选模型:
@@ -442,7 +442,7 @@ export interface LlmProvider {
   protocol: LlmProtocol; // anthropic-compatible (挂 claude) | openai-compatible (挂 codex)
   baseUrl: string; // 根地址,不含 /v1 —— e.g. https://your-relay.com
   model: string;
-  // OpenAI 兼容供应商若只实现 Chat Completions，开启后由 harness 把 Codex 的
+  // OpenAI 兼容供应商若只实现 Chat Completions，开启后由 ash 把 Codex 的
   // Responses API 请求/流式响应转换成 Chat Completions 再转回来。
   protocolConversionEnabled: boolean;
   modelListMode: ProviderModelListMode;
@@ -517,7 +517,7 @@ export interface BatchCreateTasksBody {
 
 // ── Duet 讨论 (§7) ───────────────────────────────────────────────────────────
 // 类型从 ./duet.ts 再导出(type-only,编译期抹掉,安全);DUET_DEFAULTS 与
-// normalizeDuetConfig 是运行时值,走子路径 `@harness/shared/duet`。
+// normalizeDuetConfig 是运行时值,走子路径 `@ash/shared/duet`。
 export type { DuetConfig, DuetConsensusBy, DuetStyle, HitlGate } from "./duet.ts";
 
 // ── Scheduling (§9) ──────────────────────────────────────────────────────────

@@ -27,8 +27,8 @@ Object.defineProperty(process, "platform", { value: "win32", configurable: true 
 // realpath 一次再用：macOS 的 /var → /private/var，Windows 的 tmp 常常是
 // `C:\Users\RUNNER~1\…` 这种 8.3 短名——不展开的话第 4 节的短名判据会把整个舞台
 // 都判成越界，测出来的全是假红。
-const stage = realpathSync(mkdtempSync(join(tmpdir(), "harness-boundary-")));
-process.env.HARNESS_DB = join(stage, "harness.db");
+const stage = realpathSync(mkdtempSync(join(tmpdir(), "ash-boundary-")));
+process.env.ASH_DB = join(stage, "ash.db");
 
 const status = (error: unknown) => (error as { status?: number }).status;
 
@@ -47,7 +47,7 @@ try {
   // Linux）就只跑纯函数那一节——**不是跳过检查，是那台机器上根本构造不出这个
   // 场景**：realpath 会先一步 ENOENT。
   const caseInsensitiveFs = existsSync(join(stage, "repo", "src", "app.ts"));
-  // 用 join 拼替换目标，别自己拼分隔符：真 Windows 上 stage 是 `C:\…\harness-boundary-xxx`，
+  // 用 join 拼替换目标，别自己拼分隔符：真 Windows 上 stage 是 `C:\…\ash-boundary-xxx`，
   // 写死 `/` 的目标串一次都命中不了，`lower()` 会原样返回，第 2/3 节送进去的还是原大小写 ——
   // 断言照样绿，但它压根没在测大小写不敏感这件事。
   const lower = (p: string) => p.replace(join(stage, "Repo"), join(stage, "repo"));
@@ -153,7 +153,7 @@ try {
 
   // ── 5. 长路径提示（MAX_PATH）─────────────────────────────────────────────
   // 不是安全边界，是**同一个平台上的另一条路径长度约束**：git 只会回一句
-  // "Filename too long"，不说该开哪两个开关，harness 得替它补上。这里钉的是
+  // "Filename too long"，不说该开哪两个开关，ash 得替它补上。这里钉的是
   // 「什么时候补、补的内容里有没有那两条命令」——开发机上永远走不到真分支。
   const shortPath = "C:\\code\\p\\.worktrees\\abc123";
   const deepPath = `C:\\Users\\someone\\Documents\\${"nested\\".repeat(30)}repo\\.worktrees\\abcdefgh`;

@@ -19,9 +19,9 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "harness-workflow-gate-"));
-process.env.HARNESS_DB = join(root, "harness.db");
-process.env.HARNESS_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "ash-workflow-gate-"));
+process.env.ASH_DB = join(root, "ash.db");
+process.env.ASH_RUNS_DIR = join(root, "runs");
 // 段落里那条命令要有地方跑：给一个真的 git 仓库当项目根目录。
 const repo = join(root, "repo");
 execFileSync("git", ["init", "-q", repo]);
@@ -117,7 +117,7 @@ const repo2 = join(root, "repo2");
 execFileSync("git", ["init", "-q", "-b", "main", repo2]);
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
-git(repo2, "config", "user.name", "Harness Gate Test");
+git(repo2, "config", "user.name", "Ash Gate Test");
 git(repo2, "config", "user.email", "gate@example.test");
 writeFileSync(join(repo2, ".gitignore"), ".worktrees/\n");
 git(repo2, "add", "-A");

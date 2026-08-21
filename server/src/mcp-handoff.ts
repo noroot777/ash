@@ -1,4 +1,4 @@
-// 交卷丢了就回头补捞：把 agent 那些「确定没送达」的 harness MCP 调用，在回合结算前替它重放。
+// 交卷丢了就回头补捞：把 agent 那些「确定没送达」的 ash MCP 调用，在回合结算前替它重放。
 //
 // 起因（2026-08-06）：codex 跑完一轮就地验证，报告写着「通过」，可 `report_stage(verified)`
 // 连调两次都撞上 `Transport closed` —— `scripts/restart.mjs` 那一刻正好重建并杀掉了所有
@@ -6,9 +6,9 @@
 // 处理」，12 分钟的验证白跑。同一条路上更常见的受害者是 `complete_task`：它丢了，严格结算
 // 就把一个**干完了活**的任务记成 failed。
 //
-// 为什么补捞必须在 harness 这一侧：`mcp/src/index.ts` 的 `call()` 早就有退避重试，但那是
+// 为什么补捞必须在 ash 这一侧：`mcp/src/index.ts` 的 `call()` 早就有退避重试，但那是
 // **在 MCP 进程自己肚子里**重试，只救得了「server 在重启、MCP 还活着」；MCP 进程本身被杀
-// 时，重试的代码跟着一起死了。能在事后说清「它想干什么、干成没有」的只剩 harness 自己写的
+// 时，重试的代码跟着一起死了。能在事后说清「它想干什么、干成没有」的只剩 ash 自己写的
 // 那份输出流。
 //
 // 三条口径：
@@ -24,9 +24,9 @@
 import { eq } from "drizzle-orm";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentType } from "@harness/shared";
-import { isTaskStage } from "@harness/shared";
-import { isReplayableMcpTool, isUndeliveredMcpFailure } from "@harness/shared/mcp-delivery";
+import type { AgentType } from "@ash/shared";
+import { isTaskStage } from "@ash/shared";
+import { isReplayableMcpTool, isUndeliveredMcpFailure } from "@ash/shared/mcp-delivery";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
@@ -37,7 +37,7 @@ import { setTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 
-/** 从输出流里认出来的一次 harness MCP 调用。 */
+/** 从输出流里认出来的一次 ash MCP 调用。 */
 export interface McpCallRecord {
   tool: string;
   args: Record<string, unknown>;
@@ -54,7 +54,7 @@ const asRecord = (value: unknown): Record<string, unknown> =>
  * codex：`codex exec --json` 的 item 事件。
  *
  * 形状实测：
- * `{"type":"item.completed","item":{"type":"mcp_tool_call","server":"harness","tool":"report_stage",
+ * `{"type":"item.completed","item":{"type":"mcp_tool_call","server":"ash","tool":"report_stage",
  *   "arguments":{...},"error":{"message":"…Transport closed"},"status":"failed"}}`
  * 同一次调用会先后出现 started/completed 两条（同 id），只认带最终 status 的那条。
  */
@@ -65,7 +65,7 @@ function parseCodexCalls(text: string): McpCallRecord[] {
     let parsed: unknown;
     try { parsed = JSON.parse(line); } catch { continue; }
     const item = asRecord(asRecord(parsed).item);
-    if (item.type !== "mcp_tool_call" || item.server !== "harness") continue;
+    if (item.type !== "mcp_tool_call" || item.server !== "ash") continue;
     if (item.status !== "failed" && item.status !== "completed") continue; // in_progress 那条跳过
     const tool = typeof item.tool === "string" ? item.tool : "";
     if (!tool) continue;
@@ -82,13 +82,13 @@ function parseCodexCalls(text: string): McpCallRecord[] {
   return out;
 }
 
-// claude 的 MCP 工具名形如 `mcp__harness__report_stage`。
-const CLAUDE_TOOL = /^mcp__harness__(.+)$/;
+// claude 的 MCP 工具名形如 `mcp__ash__report_stage`。
+const CLAUDE_TOOL = /^mcp__ash__(.+)$/;
 
 /**
  * claude：stream-json。调用与结果分在两条消息里，靠 `tool_use_id` 对上。
  *
- * · 调用：`{"type":"assistant","message":{"content":[{"type":"tool_use","id":…,"name":"mcp__harness__x","input":{…}}]}}`
+ * · 调用：`{"type":"assistant","message":{"content":[{"type":"tool_use","id":…,"name":"mcp__ash__x","input":{…}}]}}`
  * · 结果：`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":…,"is_error":true,"content":"…"}]}}`
  *
  * 只认 `type==="assistant"` 那条完整的调用；`stream_event` 里的 `content_block_start` 也带
@@ -98,7 +98,7 @@ function parseClaudeCalls(text: string): McpCallRecord[] {
   const pending = new Map<string, { tool: string; args: Record<string, unknown> }>();
   const out: McpCallRecord[] = [];
   for (const line of text.split("\n")) {
-    if (!line.includes("mcp__harness__") && !line.includes("tool_result")) continue;
+    if (!line.includes("mcp__ash__") && !line.includes("tool_result")) continue;
     let parsed: unknown;
     try { parsed = JSON.parse(line); } catch { continue; }
     const root = asRecord(parsed);
@@ -131,8 +131,8 @@ function parseClaudeCalls(text: string): McpCallRecord[] {
   return out;
 }
 
-/** 读这一轮的输出流，认出其中所有 harness MCP 调用。文件不在（非 detached 的老路径）就返回空。 */
-export function collectHarnessMcpCalls(outPath: string, agentType: AgentType): McpCallRecord[] {
+/** 读这一轮的输出流，认出其中所有 ash MCP 调用。文件不在（非 detached 的老路径）就返回空。 */
+export function collectAshMcpCalls(outPath: string, agentType: AgentType): McpCallRecord[] {
   let text: string;
   try { text = readFileSync(outPath, "utf8"); } catch { return []; }
   return agentType === "claude" ? parseClaudeCalls(text) : parseCodexCalls(text);
@@ -189,7 +189,7 @@ async function applyReplay(taskId: string, sessId: string, call: McpCallRecord):
         }
       } catch (error) {
         // 补录不满足业务门禁（比如报告缺失）就如实跳过，让结算按「没有结论」处理。
-        console.warn(`[harness] replay report_stage(${taskId}) rejected:`, error);
+        console.warn(`[ash] replay report_stage(${taskId}) rejected:`, error);
         return null;
       }
     }
@@ -228,7 +228,7 @@ export async function replayUndeliveredMcpCalls(a: {
   agentType: AgentType;
 }): Promise<number> {
   const { out } = detachedPathsFor(join(RUNS_DIR, a.taskId), a.sessId, a.turnStart);
-  const calls = collectHarnessMcpCalls(out, a.agentType);
+  const calls = collectAshMcpCalls(out, a.agentType);
   if (!calls.length) return 0;
   const plan = planReplay(calls, a.taskId);
   let done = 0;

@@ -1,4 +1,4 @@
-import type { FreeReviewDispatchInput, Task } from "@harness/shared";
+import type { FreeReviewDispatchInput, Task } from "@ash/shared";
 import { and, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";

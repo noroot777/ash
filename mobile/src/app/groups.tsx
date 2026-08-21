@@ -2,7 +2,7 @@ import { useState } from "react";
 import { View, Text, ScrollView, Pressable, TextInput, Alert } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import type { Group } from "@harness/shared";
+import type { Group } from "@ash/shared";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { refreshAll } from "@/lib/data";

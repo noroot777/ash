@@ -1,21 +1,21 @@
 #!/usr/bin/env node
-// Harness MCP server — a THIN adapter that exposes the harness HTTP API as MCP
+// Ash MCP server — a THIN adapter that exposes the ash HTTP API as MCP
 // tools so an LLM agent (Claude Code / Desktop / Cursor / a spawned `claude`)
 // can orchestrate tasks natively. It holds no logic of its own: every tool just
-// calls an existing endpoint on the harness server (default http://localhost:4317,
-// override with HARNESS_URL). The Hono server stays the single source of truth.
+// calls an existing endpoint on the ash server (default http://localhost:4317,
+// override with ASH_URL). The Hono server stays the single source of truth.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { AGENT_TYPES, MAX_QUESTION_ITEMS, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN, STAGE_ORDER } from "@harness/shared";
-import { UNDELIVERED_NET_CODES } from "@harness/shared/mcp-delivery";
+import { AGENT_TYPES, MAX_QUESTION_ITEMS, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN, STAGE_ORDER } from "@ash/shared";
+import { UNDELIVERED_NET_CODES } from "@ash/shared/mcp-delivery";
 
-const BASE = (process.env.HARNESS_URL ?? "http://localhost:4317").replace(/\/+$/, "");
+const BASE = (process.env.ASH_URL ?? process.env.HARNESS_URL ?? "http://localhost:4317").replace(/\/+$/, "");
 
 // 本机流量一律不走代理。Node 24+ 在 NODE_USE_ENV_PROXY=1(或显式 HTTP_PROXY)下
 // **连 localhost 也走代理** —— 实测本机 http_proxy=127.0.0.1:7897 时,打给
-// harness 的每一次工具调用都先绕到代理再回来。两个后果:①白白多一跳、还把
-// harness 的存活绑在代理上;②server 重启时拿到的是代理给的 UND_ERR_SOCKET
+// ash 的每一次工具调用都先绕到代理再回来。两个后果:①白白多一跳、还把
+// ash 的存活绑在代理上;②server 重启时拿到的是代理给的 UND_ERR_SOCKET
 // (「对端关闭」)而不是 ECONNREFUSED,下面那个「确定没送达才重试」的判断就永远
 // 命中不了。合并而不是覆盖已有的 NO_PROXY,别把用户自己的配置吃掉。
 // 必须在第一次 fetch 之前执行 —— 放模块顶层即可(工具调用都在之后)。
@@ -32,7 +32,7 @@ const BASE = (process.env.HARNESS_URL ?? "http://localhost:4317").replace(/\/+$/
 
 // 重启窗口的等待上限。scripts/restart.mjs 是「杀掉 → 等端口释放 → 起新进程 →
 // 轮询 /api/health」,正常几秒内回来;给到 60s 是留足构建慢、机器忙的余量。
-const RECONNECT_WINDOW_MS = Number(process.env.HARNESS_RECONNECT_MS ?? 60_000);
+const RECONNECT_WINDOW_MS = Number(process.env.ASH_RECONNECT_MS ?? process.env.HARNESS_RECONNECT_MS ?? 60_000);
 
 // 只对「明确没送达」的连接错误重试。ECONNREFUSED = 根本没人在监听那个端口
 // (server 重启期间的确切表现),请求一个字节都没发出去,重试绝不会重复执行。
@@ -84,12 +84,12 @@ async function call(method: string, path: string, body?: unknown): Promise<unkno
       if (!code || Date.now() >= deadline) {
         const waited = lastCode ? `（已重试 ${Math.round(RECONNECT_WINDOW_MS / 1000)}s，${lastCode}）` : "";
         throw new Error(
-          `连不上 harness server (${BASE})${waited}，确认它在运行（npm start）。原始错误：${e instanceof Error ? e.message : String(e)}`,
+          `连不上 ash server (${BASE})${waited}，确认它在运行（npm start）。原始错误：${e instanceof Error ? e.message : String(e)}`,
         );
       }
       lastCode = code;
       // stderr 才是 MCP 的日志通道(stdout 是协议帧,写脏了会直接搞崩会话)。
-      console.error(`[harness-mcp] ${code} — server 可能在重启，${delay}ms 后重试 ${method} ${path}`);
+      console.error(`[ash-mcp] ${code} — server 可能在重启，${delay}ms 后重试 ${method} ${path}`);
       await sleep(Math.min(delay, Math.max(0, deadline - Date.now())));
       delay = Math.min(delay * 2, 5_000);
     }
@@ -130,7 +130,7 @@ const taskShape = z.object({
   labels: z.array(z.string()).optional().describe("任务标签"),
 });
 
-const server = new McpServer({ name: "harness", version: "0.1.0" });
+const server = new McpServer({ name: "ash", version: "0.1.0" });
 
 server.registerTool(
   "resolve_project",
@@ -397,7 +397,7 @@ server.registerTool(
   {
     title: "确认任务完成(严格 done 协议)",
     description:
-      "在执行中调用,告诉 harness:「本任务的目标我确定已经达成了」。回合结束结算时读到这个确认才会把任务落成 done;**没有确认的正常退出(exit 0)会按未完成记为 failed**——因为正常退出不代表目标达成(报错后退出也是 exit 0),假 done 会误推进队列、错误唤醒下游任务。\n\n用法:当且仅当你核实任务目标已达成(产物在、校验过),在结束回合前调一次本工具,然后正常结束输出。**只能在任务正在跑时调用**。没完成就不要调:需要等外部条件用 pause_task;做不下去直接说明原因退出(会记 failed,用户可重试续跑)。",
+      "在执行中调用,告诉 ash:「本任务的目标我确定已经达成了」。回合结束结算时读到这个确认才会把任务落成 done;**没有确认的正常退出(exit 0)会按未完成记为 failed**——因为正常退出不代表目标达成(报错后退出也是 exit 0),假 done 会误推进队列、错误唤醒下游任务。\n\n用法:当且仅当你核实任务目标已达成(产物在、校验过),在结束回合前调一次本工具,然后正常结束输出。**只能在任务正在跑时调用**。没完成就不要调:需要等外部条件用 pause_task;做不下去直接说明原因退出(会记 failed,用户可重试续跑)。",
     inputSchema: {
       taskId: z.string().describe("当前正在执行的任务 id(任务 prompt 前言里有)"),
     },
@@ -413,7 +413,7 @@ server.registerTool(
   {
     title: "在检查点暂停(等续跑)",
     description:
-      "在执行中调用,告诉 harness:「我跑到一个检查点了,下次该继续时给我喂这段 prompt」。harness 会把 resumePrompt 写到 task 上;你这一回合自然结束后,状态落到 paused(而不是 done),队列推进规则会在前一个任务 done 时用 resumePrompt 把你叫醒、resume 同一个 CLI 会话。\n\n用法:先正常做完检查点前的所有工作;要暂停时调一次本工具,然后正常退出当前回合(return / 结束输出即可)。**只能在任务正在跑时调用**,且 resumePrompt 不能为空(否则 resume 时没东西喂你)。\n\n典型场景:dr-dig-ytb 一类「pre-tts 并行 + tts 串行」流水线 —— 把任务跑到 pre-tts 末尾时调本工具,resumePrompt 写下「现在做 tts 这一段」;后续每个任务都在自己 queue 位置上等前一个 done 后自动续跑。\n\n注意:被具体问题卡住、要等人拍板才能继续时,用 ask_question 而不是本工具——pause 是「到检查点等续跑」,ask 是「等答案」且会自动通知团队调度者。",
+      "在执行中调用,告诉 ash:「我跑到一个检查点了,下次该继续时给我喂这段 prompt」。ash 会把 resumePrompt 写到 task 上;你这一回合自然结束后,状态落到 paused(而不是 done),队列推进规则会在前一个任务 done 时用 resumePrompt 把你叫醒、resume 同一个 CLI 会话。\n\n用法:先正常做完检查点前的所有工作;要暂停时调一次本工具,然后正常退出当前回合(return / 结束输出即可)。**只能在任务正在跑时调用**,且 resumePrompt 不能为空(否则 resume 时没东西喂你)。\n\n典型场景:dr-dig-ytb 一类「pre-tts 并行 + tts 串行」流水线 —— 把任务跑到 pre-tts 末尾时调本工具,resumePrompt 写下「现在做 tts 这一段」;后续每个任务都在自己 queue 位置上等前一个 done 后自动续跑。\n\n注意:被具体问题卡住、要等人拍板才能继续时,用 ask_question 而不是本工具——pause 是「到检查点等续跑」,ask 是「等答案」且会自动通知团队调度者。",
     inputSchema: {
       taskId: z.string().describe("当前正在执行的任务 id"),
       resumePrompt: z.string().min(1).describe("下次被 resume 时喂给你的 user 消息 —— 就当成一条「继续：…」replied 写"),
@@ -444,7 +444,7 @@ server.registerTool(
   {
     title: "提问并暂停(等调度者/用户答复)",
     description:
-      `在执行中调用,告诉 harness:「我被不拍板就没法继续的决策卡住了」。调完后正常结束回合,任务落 paused 且**队列不会自动续跑**;问题会即时送达团队调度者(你是执行者时),没有调度者就停在那等用户答复。你自己是团队调度者时调它 = 问用户,界面上显示成「调度者在等你答复」。答复通过 answer_question 送达,会作为一段文本唤醒你的同一个 CLI 会话续跑。\n\n用法:只能在任务正在跑时调用;先把当下能做的都做完再提问。一个决策用 question + options;有几个**相关且都需要同一个人拍板**的决策时,用 question 写共同背景,再用 questionItems 一次问完(最多 ${MAX_QUESTION_ITEMS} 个),避免挤牙膏式来回。不要把无关问题硬凑在一起。\n\noptions / questionItems[i].options 都是**建议答案,不是单选题**:每条只写一句能直接当答复读的话,理由和取舍留在对应 question 里。网页点击候选只会填入该问题的输入框,已有内容会换行追加;答复者仍可修改、组合多条或完全自由作答。最终所有问题的答案会编号合并成一段文本,仍走原来的 answer_question 协议。跟 pause_task 的区别:pause 是「到检查点等续跑指令」,ask 是「等具体问题的答案」。`,
+      `在执行中调用,告诉 ash:「我被不拍板就没法继续的决策卡住了」。调完后正常结束回合,任务落 paused 且**队列不会自动续跑**;问题会即时送达团队调度者(你是执行者时),没有调度者就停在那等用户答复。你自己是团队调度者时调它 = 问用户,界面上显示成「调度者在等你答复」。答复通过 answer_question 送达,会作为一段文本唤醒你的同一个 CLI 会话续跑。\n\n用法:只能在任务正在跑时调用;先把当下能做的都做完再提问。一个决策用 question + options;有几个**相关且都需要同一个人拍板**的决策时,用 question 写共同背景,再用 questionItems 一次问完(最多 ${MAX_QUESTION_ITEMS} 个),避免挤牙膏式来回。不要把无关问题硬凑在一起。\n\noptions / questionItems[i].options 都是**建议答案,不是单选题**:每条只写一句能直接当答复读的话,理由和取舍留在对应 question 里。网页点击候选只会填入该问题的输入框,已有内容会换行追加;答复者仍可修改、组合多条或完全自由作答。最终所有问题的答案会编号合并成一段文本,仍走原来的 answer_question 协议。跟 pause_task 的区别:pause 是「到检查点等续跑指令」,ask 是「等具体问题的答案」。`,
     inputSchema: {
       taskId: z.string().describe("当前正在执行的任务 id(任务 prompt 前言里有)"),
       question: z.string().min(1).describe("单问题时就是问题本体；传 questionItems 时写共同引言/背景"),
@@ -633,4 +633,4 @@ server.registerTool(
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-console.error(`[harness-mcp] connected — tools ready (HARNESS_URL=${BASE})`);
+console.error(`[ash-mcp] connected — tools ready (ASH_URL=${BASE})`);

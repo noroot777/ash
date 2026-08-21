@@ -1,13 +1,13 @@
 // 仓库级串行锁回归测试:并行验收必须排队依次合并,而不是一起冲进同一个 `.git`。
-// 每个用例自带临时仓库,任何 checkout / ref 更新都不会外溢到 harness 仓库。
+// 每个用例自带临时仓库,任何 checkout / ref 更新都不会外溢到 ash 仓库。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "harness-repo-lock-test-"));
-process.env.HARNESS_DB = join(root, "harness.db");
+const root = mkdtempSync(join(tmpdir(), "ash-repo-lock-test-"));
+process.env.ASH_DB = join(root, "ash.db");
 // 会话 Markdown 落在仓库的 data/runs 下(RUNS_DIR 与 cwd 无关),用例结束时清掉。
 const transcripts: string[] = [];
 const git = (cwd: string, ...args: string[]) =>
@@ -27,7 +27,7 @@ function hasRef(repo: string, branch: string): boolean {
 function makeRepo(name: string): string {
   const repo = join(root, name);
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Harness Repo Lock Test");
+  git(repo, "config", "user.name", "Ash Repo Lock Test");
   git(repo, "config", "user.email", "lock@example.test");
   writeFileSync(join(repo, ".gitignore"), ".worktrees/\n");
   writeFileSync(join(repo, "seed.txt"), "seed\n");

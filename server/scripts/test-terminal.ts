@@ -7,7 +7,7 @@ import { resolveTerminalDirectory, TerminalSessionManager } from "../src/termina
 
 // realpath 一次:Windows 的 %TEMP% 常常是 8.3 短名(`C:\Users\RUNNER~1\…`),而
 // cmd 的 `cd` 回的是长名 —— 不展开的话下面那句 output.includes(cwd) 永远不成立。
-const cwd = realpathSync(mkdtempSync(join(tmpdir(), "harness-terminal-")));
+const cwd = realpathSync(mkdtempSync(join(tmpdir(), "ash-terminal-")));
 const manager = new TerminalSessionManager();
 
 // 起一个**确定的** shell(不走 shellCommand() 的回退链):这条测试要验的是会话管理
@@ -15,8 +15,8 @@ const manager = new TerminalSessionManager();
 // cmd 里 `printf`/`pwd` 都不存在,得换成 `echo` 和 `cd`(cmd 的 `cd` 不带参数就是打印当前目录)。
 const shell = IS_WINDOWS ? "cmd.exe" : "/bin/sh";
 const probeCommand = IS_WINDOWS
-  ? "echo __HARNESS_TERMINAL_OK__& cd\r\n"
-  : "printf '__HARNESS_TERMINAL_OK__\\n'; pwd\n";
+  ? "echo __ASH_TERMINAL_OK__& cd\r\n"
+  : "printf '__ASH_TERMINAL_OK__\\n'; pwd\n";
 
 try {
   assert.equal(resolveTerminalDirectory("~"), homedir());
@@ -35,7 +35,7 @@ try {
     unsubscribe = manager.subscribe(session.id, "project-test", (event) => {
       if (event.type !== "data") return;
       output += event.data;
-      if (output.includes("__HARNESS_TERMINAL_OK__") && output.includes(cwd)) {
+      if (output.includes("__ASH_TERMINAL_OK__") && output.includes(cwd)) {
         clearTimeout(timeout);
         resolve();
       }

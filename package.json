@@ -1,5 +1,5 @@
 {
-  "name": "harness",
+  "name": "ash",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -9,15 +9,15 @@
   "workspaces": [
     "shared",
     "server",
-    "web-next",
+    "web",
     "mcp"
   ],
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:all": "concurrently -n server,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "node scripts/dev-server.mjs",
-    "dev:web": "npm -w web-next run dev",
-    "build": "npm -w shared run build && npm -w web-next run build && npm -w server run build && npm -w mcp run build",
+    "dev:web": "npm -w web run dev",
+    "build": "npm -w shared run build && npm -w web run build && npm -w server run build && npm -w mcp run build",
     "build:mobile": "cd mobile && npx expo export -p web",
     "restart": "node scripts/restart.mjs",
     "setup": "node scripts/setup.mjs",

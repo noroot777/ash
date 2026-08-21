@@ -4,7 +4,7 @@
 // 从 `free-workflow.ts` 切出来的原因：那份文件已经贴着 700 行上限，而重跑审查回合需要
 // 复用 launchReviewRound/failReviewStart 这一组。依赖是单向的（free-workflow.ts →
 // 本文件），`task-retry-turn.ts` 直接从这里取重跑入口，不用绕回去。
-import type { AgentType } from "@harness/shared";
+import type { AgentType } from "@ash/shared";
 import { and, desc, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";

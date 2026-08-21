@@ -1,7 +1,7 @@
 import { open, stat } from "node:fs/promises";
-import type { ConvSeg, TaskFollowUp } from "@harness/shared";
-import { isUserFollowUp, parseSessionOutput } from "@harness/shared";
-import { parseAttachmentText } from "@harness/shared/attachments";
+import type { ConvSeg, TaskFollowUp } from "@ash/shared";
+import { isUserFollowUp, parseSessionOutput } from "@ash/shared";
+import { parseAttachmentText } from "@ash/shared/attachments";
 import { desc, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { sessions } from "./db/schema.js";

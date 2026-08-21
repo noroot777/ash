@@ -1,4 +1,4 @@
-/* 这份 demo 的会话区刻意复用 web-next 真实类名与数值(task-detail.css / system-turn.css /
+/* 这份 demo 的会话区刻意复用 web 真实类名与数值(task-detail.css / system-turn.css /
    agent-run-meta.css),好让「区分审查者」的几个方案能在真实密度下比较,而不是在一张
    放大的示意图上比较。上半段 = 抄真实样式;下半段 = 每个方案各自的覆盖。 */
 
@@ -95,7 +95,7 @@ code { font-family: var(--font-mono); }
 .demo-facts .is-good { color: var(--green); }
 .demo-facts .is-risk { color: var(--amber); }
 
-/* ── 会话窗口（模拟 web-next 的任务详情主区） ───────────────────────────── */
+/* ── 会话窗口（模拟 web 的任务详情主区） ───────────────────────────── */
 .app-window { overflow: hidden; border: 1px solid var(--line2); border-radius: 14px; background: var(--panel); box-shadow: var(--shadow); }
 .app-topbar { display: flex; min-height: 46px; align-items: center; gap: 9px; border-bottom: 1px solid var(--line); padding: 0 16px; }
 .app-topbar b { font-size: 12px; font-weight: 620; }
@@ -103,7 +103,7 @@ code { font-family: var(--font-mono); }
 .app-topbar .status-pill { border-radius: 999px; background: color-mix(in lch, var(--accent) 12%, var(--panel)); padding: 2px 8px; color: var(--accent); font-size: 9.5px; font-weight: 700; }
 .task-conversation { max-height: 640px; overflow-y: auto; background: var(--canvas); padding: 18px clamp(18px, 4vw, 44px) 26px; }
 
-/* ── 以下抄自 web-next 真实样式 ───────────────────────────────────────── */
+/* ── 以下抄自 web 真实样式 ───────────────────────────────────────── */
 .task-message { position: relative; max-width: 790px; margin-bottom: 20px; }
 .task-message--agent { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; }
 .task-message-avatar { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 50%; background: var(--overlay); color: var(--muted); font-size: 8px; font-weight: 750; }

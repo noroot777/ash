@@ -78,10 +78,10 @@ task.workflowMode === "free"
 
 | 文件 | 改动 |
 |------|------|
-| `web-next/src/styles/free-workflow.css` | **主战场**：重写 toolbar 相关规则；修正 `has-top-rail` 对输入框圆角的破坏 |
-| `web-next/src/free-workflow/FreeWorkflowToolbar.tsx` | 去掉 `free-workflow-action-icon` 包裹层；图标改更轻的 weight/size |
-| `web-next/src/task-detail/ReplyBox.tsx` | **通常不用改**（仍渲染 `topRail` 在 `task-reply-box` 之前） |
-| `web-next/src/task-detail/TaskDetail.tsx` | **不用改**（挂载条件已正确） |
+| `web/src/styles/free-workflow.css` | **主战场**：重写 toolbar 相关规则；修正 `has-top-rail` 对输入框圆角的破坏 |
+| `web/src/free-workflow/FreeWorkflowToolbar.tsx` | 去掉 `free-workflow-action-icon` 包裹层；图标改更轻的 weight/size |
+| `web/src/task-detail/ReplyBox.tsx` | **通常不用改**（仍渲染 `topRail` 在 `task-reply-box` 之前） |
+| `web/src/task-detail/TaskDetail.tsx` | **不用改**（挂载条件已正确） |
 
 demo 目录 `docs/ui-demo-free-toolbar/` 可保留作对照，实现时不必同步更新（可选：在 b2.html 顶部标「已拍板 B1」）。
 
@@ -354,7 +354,7 @@ button.is-preview:disabled/* 仅 previewBusy 时另加 class 或 */ { … }
 
 ## 7. TSX 改动要点
 
-文件：`web-next/src/free-workflow/FreeWorkflowToolbar.tsx`
+文件：`web/src/free-workflow/FreeWorkflowToolbar.tsx`
 
 ### 保持不变
 
@@ -437,8 +437,8 @@ button.is-preview:disabled/* 仅 previewBusy 时另加 class 或 */ { … }
 | `docs/ui-demo-free-toolbar/b2.html` `#b1` | **实现对照的视觉真源** |
 | `docs/ui-demo-free-toolbar/b2.css` `.fw-ghost` / `.gbtn` | demo 样式，可抄意图勿整文件 import |
 | `docs/ui-demo-free-toolbar/index.html` | 历史方案对照，非实现目标 |
-| `web-next/src/free-workflow/FreeWorkflowToolbar.tsx` | 行为真源 |
-| `web-next/src/styles/free-workflow.css` | 样式落点 |
+| `web/src/free-workflow/FreeWorkflowToolbar.tsx` | 行为真源 |
+| `web/src/styles/free-workflow.css` | 样式落点 |
 
 ---
 

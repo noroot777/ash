@@ -1,7 +1,7 @@
 // 重启后收拾被打断的任务（从 orchestrator.ts 拆出，纯行数拆分）。
 // **必须在 reattachRunningTasks 之后调用**（index.ts 保证顺序），理由见函数注释。
 import { eq, inArray } from "drizzle-orm";
-import type { TaskStatus } from "@harness/shared";
+import type { TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { isRunning } from "./runs.js";
@@ -51,7 +51,7 @@ export async function reconcileInterrupted(): Promise<void> {
   for (const teamId of teamIds) await setTaskStatus(teamId, "idle");
   const followUps = others.filter((t) => t.followUpFrom).length;
   console.log(
-    `[harness] reconciled ${others.length - followUps} interrupted task(s) → failed` +
+    `[ash] reconciled ${others.length - followUps} interrupted task(s) → failed` +
       (followUps ? `, ${followUps} follow-up turn(s) → 原终态` : "") +
       (teamIds.length ? `, ${teamIds.length} team task(s) → idle` : ""),
   );
@@ -76,10 +76,10 @@ function wakeInterruptedLeads(teamIds: string[]): void {
   const t = setTimeout(() => {
     for (const teamId of teamIds) {
       void startTeam(teamId).catch((err) =>
-        console.error(`[harness] 唤醒被打断的团队调度台 ${teamId} 失败:`, err),
+        console.error(`[ash] 唤醒被打断的团队调度台 ${teamId} 失败:`, err),
       );
     }
-    console.log(`[harness] 已叫醒 ${teamIds.length} 个被打断的团队调度台`);
+    console.log(`[ash] 已叫醒 ${teamIds.length} 个被打断的团队调度台`);
   }, 3000);
   (t as { unref?: () => void }).unref?.();
 }

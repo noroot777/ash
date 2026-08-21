@@ -1,6 +1,6 @@
 // 「现在刷新 MCP，会掐断谁手里的通道」——给 `scripts/restart.mjs` 第 3 步的预警。
 //
-// 背景（2026-08-06 事故）：harness MCP 不是常驻端口，而是**每个 agent 会话各自
+// 背景（2026-08-06 事故）：ash MCP 不是常驻端口，而是**每个 agent 会话各自
 // spawn 的 stdio 子进程**（`node <repo>/mcp/dist/index.js`）。restart 的第 3 步会
 // `pkill` 掉它们好让下次调用用上新代码——对闲着的会话这没代价，对**正在干活的**
 // agent 就是当场掐断它的交卷：那次 codex 跑完 12 分钟验证，`report_stage(verified)`
@@ -50,7 +50,7 @@ function tokenize(command: string): string[] {
 }
 
 /**
- * 这一行是不是一个 harness MCP 子进程。
+ * 这一行是不是一个 ash MCP 子进程。
  *
  * 判据比 restart 脚本的 `pkill -f "$REPO/mcp/dist/index.js\$"` 再紧一格：**必须是
  * `<node> <…/mcp/dist/index.js>` 这个形状**（脚本路径正好是第一个参数）。光靠
@@ -78,7 +78,7 @@ export function isMcpProcess(command: string): boolean {
 }
 
 /**
- * 哪些 agent 进程的后代里有 harness MCP。纯函数，ps 表怎么来的不关它的事（单测
+ * 哪些 agent 进程的后代里有 ash MCP。纯函数，ps 表怎么来的不关它的事（单测
  * `npm -w server run test:mcp-handoff`）。
  *
  * 从每个 MCP 进程**往上**走 ppid，比从 agent 往下遍历便宜得多：MCP 进程个位数，

@@ -1,5 +1,5 @@
 {
-  "name": "@harness/server",
+  "name": "@ash/server",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -88,7 +88,7 @@
     "test:no-libsql": "tsx scripts/test-no-libsql.ts"
   },
   "dependencies": {
-    "@harness/shared": "*",
+    "@ash/shared": "*",
     "@hono/node-server": "^1.13.7",
     "drizzle-orm": "^0.38.3",
     "hono": "^4.6.14",

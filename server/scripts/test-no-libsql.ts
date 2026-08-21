@@ -20,7 +20,7 @@ const hookUrl = pathToFileURL(join(here, "no-libsql-hook.mjs")).href;
 
 function run(entry: string): { ok: boolean; out: string } {
   // db/index.ts 一被 import 就会开库文件，给它临时库，别碰用户的。
-  const tmp = mkdtempSync(join(tmpdir(), "harness-no-libsql-"));
+  const tmp = mkdtempSync(join(tmpdir(), "ash-no-libsql-"));
   try {
     const res = spawnSync(
       process.execPath,
@@ -29,7 +29,7 @@ function run(entry: string): { ok: boolean; out: string } {
         cwd: serverRoot,
         encoding: "utf8",
         timeout: 120_000,
-        env: { ...process.env, HARNESS_DB: join(tmp, "probe.db") },
+        env: { ...process.env, ASH_DB: join(tmp, "probe.db") },
       },
     );
     const out = `${res.stdout ?? ""}${res.stderr ?? ""}`;

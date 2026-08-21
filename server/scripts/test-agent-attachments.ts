@@ -12,7 +12,7 @@ const GENERATED_BASE64 = Buffer.concat([
   Buffer.from(PNG_BASE64, "base64"),
   Buffer.alloc(64),
 ]).toString("base64");
-const root = mkdtempSync(join(tmpdir(), "harness-agent-attachments-"));
+const root = mkdtempSync(join(tmpdir(), "ash-agent-attachments-"));
 const uploads = join(root, "data", "uploads");
 const localImage = join(root, "local screenshot.png");
 

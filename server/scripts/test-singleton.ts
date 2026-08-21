@@ -3,10 +3,11 @@
 //   npm -w server run build && npm -w server run test:singleton
 import assert from "node:assert/strict";
 import { createServer } from "node:net";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { migrateLegacyDbFiles } from "../src/db/path.js";
 import { singletonLockFileForDb } from "../src/singleton.js";
 
 const serverRoot = resolve(new URL("..", import.meta.url).pathname);
@@ -18,16 +19,39 @@ type StartedServer = {
 };
 
 async function main() {
-  const root = mkdtempSync(join(tmpdir(), "harness-singleton-"));
+  const root = mkdtempSync(join(tmpdir(), "ash-singleton-"));
   console.log(`[singleton-test] temp root: ${root}`);
 
   try {
     await testSameDbRejected(root);
     await testDifferentDbsAllowed(root);
     await testStaleLockOverwritten(root);
+    await testLegacyEnvAllowed(root);
+    testLegacyDbMigration(root);
     console.log("[singleton-test] all checks passed");
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+}
+
+async function testLegacyEnvAllowed(root: string) {
+  const db = join(root, "legacy-env.db");
+  const server = await startServer(await freePort(), db, /server on/, "HARNESS_DB");
+  try {
+    assert.ok(server.child.pid, "旧环境变量仍应能启动升级后的服务");
+  } finally {
+    await server.stop();
+  }
+}
+
+function testLegacyDbMigration(root: string) {
+  const legacy = join(root, "harness.db");
+  const current = join(root, "ash.db");
+  for (const suffix of ["", "-wal", "-shm"]) writeFileSync(`${legacy}${suffix}`, suffix || "db");
+  migrateLegacyDbFiles(current, legacy);
+  for (const suffix of ["", "-wal", "-shm"]) {
+    assert.equal(existsSync(`${legacy}${suffix}`), false, `旧数据库${suffix}应已迁走`);
+    assert.equal(existsSync(`${current}${suffix}`), true, `新数据库${suffix}应已就位`);
   }
 }
 
@@ -100,16 +124,15 @@ async function testStaleLockOverwritten(root: string) {
   }
 }
 
-function spawnServer(port: number, db: string): StartedServer {
+function spawnServer(port: number, db: string, dbEnv = "ASH_DB"): StartedServer {
   const chunks: string[] = [];
+  const env = { ...process.env, PORT: String(port), ASH_ALLOW_MULTI: "" };
+  delete env.ASH_DB;
+  delete env.HARNESS_DB;
+  env[dbEnv] = db;
   const child = spawn(process.execPath, ["dist/index.js"], {
     cwd: serverRoot,
-    env: {
-      ...process.env,
-      PORT: String(port),
-      HARNESS_DB: db,
-      HARNESS_ALLOW_MULTI: "",
-    },
+    env,
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout.setEncoding("utf8");
@@ -127,8 +150,8 @@ function spawnServer(port: number, db: string): StartedServer {
   };
 }
 
-async function startServer(port: number, db: string, ready = /server on/) {
-  const server = spawnServer(port, db);
+async function startServer(port: number, db: string, ready = /server on/, dbEnv = "ASH_DB") {
+  const server = spawnServer(port, db, dbEnv);
   await waitForOutput(server, ready);
   return server;
 }

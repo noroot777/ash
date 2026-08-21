@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const stage = mkdtempSync(join(tmpdir(), "harness-local-open-"));
+const stage = mkdtempSync(join(tmpdir(), "ash-local-open-"));
 const repo = join(stage, "repo");
 const outside = join(stage, "outside");
-process.env.HARNESS_DB = join(stage, "harness.db");
+process.env.ASH_DB = join(stage, "ash.db");
 
 try {
   mkdirSync(join(repo, ".worktrees", "task", "docs"), { recursive: true });

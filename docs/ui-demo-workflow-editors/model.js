@@ -40,9 +40,9 @@
     },
     preview: {
       label: "打开预览", tag: "preview.serve", hasFail: false,
-      make: function () { return { cmd: "npm -w web-next run dev", ready: "端口可连 + 日志 ready", life: "下一个人工关口结束时回收" }; },
+      make: function () { return { cmd: "npm -w web run dev", ready: "端口可连 + 日志 ready", life: "下一个人工关口结束时回收" }; },
       fields: [
-        { key: "cmd", label: "启动命令", type: "select", options: ["npm -w web-next run dev", "npm run dev", "npm run preview", "docker compose up web"] },
+        { key: "cmd", label: "启动命令", type: "select", options: ["npm -w web run dev", "npm run dev", "npm run preview", "docker compose up web"] },
         { key: "ready", label: "怎么算起来了", type: "select", options: ["端口可连 + 日志 ready", "只要端口可连", "HTTP 200"] },
         { key: "life", label: "什么时候关掉", type: "select", options: ["下一个人工关口结束时回收", "任务结束时回收", "闲置 30 分钟回收"] },
       ],
@@ -76,9 +76,9 @@
     },
     accept: {
       label: "合并并清理", tag: "repo.accept", hasFail: true,
-      make: function () { return { strategy: "Harness 安全合并（仓库锁内）", clean: "删除 worktree 与任务分支" }; },
+      make: function () { return { strategy: "Ash 安全合并（仓库锁内）", clean: "删除 worktree 与任务分支" }; },
       fields: [
-        { key: "strategy", label: "怎么合", type: "select", options: ["Harness 安全合并（仓库锁内）", "squash 合并", "只打标签不合并"] },
+        { key: "strategy", label: "怎么合", type: "select", options: ["Ash 安全合并（仓库锁内）", "squash 合并", "只打标签不合并"] },
         { key: "clean", label: "合完清理", type: "select", options: ["删除 worktree 与任务分支", "只删 worktree", "都留着"] },
       ],
       title: function () { return "合并并清理"; },

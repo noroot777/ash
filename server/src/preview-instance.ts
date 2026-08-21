@@ -1,4 +1,4 @@
-// 「我是不是那个预览实例」的单点（`HARNESS_PREVIEW=1`，只有 scripts/dev.mjs 起预览时才带）。
+// 「我是不是那个预览实例」的单点（`ASH_PREVIEW=1`，只有 scripts/dev.mjs 起预览时才带）。
 //
 // 预览跑的是**主库的快照**（见 preview-seed.ts）：库是副本，可以随便点；但库里那一千条
 // 任务行带着的 `worktree_path` / 分支名指向的是**真仓库**，那些不是副本。所以这里要区分
@@ -11,7 +11,7 @@
 //
 // 顺带的第二件事：预览实例**不跑调度器**。schedules / scheduled_messages 两张表压根没
 // 进快照，加上这条就是双保险——预览绝不会替你到点派活、到点发消息。
-export const IS_PREVIEW_INSTANCE = process.env.HARNESS_PREVIEW === "1";
+export const IS_PREVIEW_INSTANCE = process.env.ASH_PREVIEW === "1";
 
 /** 预览横幅里也写着同一句话，这里是给报错用的短版。 */
 export function previewRefusal(what: string): string {

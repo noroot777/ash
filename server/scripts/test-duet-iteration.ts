@@ -3,7 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { DUET_DEFAULTS } from "@harness/shared";
+import { DUET_DEFAULTS } from "@ash/shared";
 import { requireTmpDb } from "./tmp-db.js";
 
 requireTmpDb("test-duet-iteration");

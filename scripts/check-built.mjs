@@ -26,8 +26,8 @@ const say = (line = "") => process.stderr.write(`${line}\n`);
 const serverEntry = join(REPO, "server", "dist", "index.js");
 if (existsSync(serverEntry)) {
   // 界面是从磁盘现读的,缺了服务照样起得来 —— 只提醒,不拦。
-  if (!existsSync(join(REPO, "web-next", "dist", "index.html"))) {
-    say("  ⚠ web-next/dist 还没构建:服务能起,但浏览器打开会是一片空白。补一句 npm run build 就好。");
+  if (!existsSync(join(REPO, "web", "dist", "index.html"))) {
+    say("  ⚠ web/dist 还没构建:服务能起,但浏览器打开会是一片空白。补一句 npm run build 就好。");
   }
   process.exit(0);
 }

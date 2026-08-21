@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ServerEvent } from "@harness/shared";
+import type { ServerEvent } from "@ash/shared";
 import { eq } from "drizzle-orm";
 
-const root = mkdtempSync(join(tmpdir(), "harness-task-event-timestamps-"));
-process.env.HARNESS_DB = join(root, "harness.db");
+const root = mkdtempSync(join(tmpdir(), "ash-task-event-timestamps-"));
+process.env.ASH_DB = join(root, "ash.db");
 
 try {
   const { bus } = await import("../src/bus.js");

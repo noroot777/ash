@@ -30,7 +30,7 @@ function parseStartedAt(raw: string): number | null {
 
 // ps 一次拿到启动时间和完整命令行。查不到(进程没了 / ps 不可用)一律 null,
 // 调用方按「不存在」处理 —— 宁可误判成死了(最多多做一次恢复),不能误判成活着
-// (那会让 harness 一直等一个永远不会有输出的进程)。
+// (那会让 ash 一直等一个永远不会有输出的进程)。
 export function inspectProcess(pid: number): ProcessInfo | null {
   if (!Number.isInteger(pid) || pid <= 0) return null;
   const raw = inspectProcessSync(pid);

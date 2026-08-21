@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import type { AgentEvent } from "@harness/shared";
+import type { AgentEvent } from "@ash/shared";
 import { RunTraceRecorder } from "../diagnostics.js";
 import { forceFinishOnExit, spawnErrorMessage } from "../spawn.js";
 import type { CliParser, CliParserContext, CliSpec } from "./types.js";
@@ -153,7 +153,7 @@ export const kimiSpec: CliSpec = {
     "kimi-code/kimi-for-coding-highspeed。Kimi API 另有 kimi-k3、kimi-k2.7-code 等原始 model id," +
     "但未把它们混进 CLI 托管服务的别名预设。" +
     "④`-S/--session <id>` 可无头续跑,隐藏别名是 `-r/--resume`;新会话产生的 id 由" +
-    "meta session.resume_hint 的 session_id 回传。`-c/--continue` 也能续最近会话,但 harness 按精确 id 恢复。" +
+    "meta session.resume_hint 的 session_id 回传。`-c/--continue` 也能续最近会话,但 ash 按精确 id 恢复。" +
     "⑤thinking effort 存在于 config.toml/KIMI_MODEL_THINKING_EFFORT 与 Kimi API,CLI 命令本身没有 effort flag," +
     "故不声明 reasoningEffort。第三方 provider 可走配置或 KIMI_MODEL_* 临时模型环境变量,但其模型别名与" +
     "`--model` 的组合尚未核实,按目录约定不写半确定的 relay。" +

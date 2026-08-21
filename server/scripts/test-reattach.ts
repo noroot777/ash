@@ -7,8 +7,8 @@
 //   ③ 调 reconcileInterrupted()：**绝不能**把它判成 failed
 //   ④ 等假 agent 自然结束：任务应按结算规则落位，且 .md 里能看到接管之后的输出
 // 反向用例：pid 是死的 → 不接管 → reconcile 照常把它判 failed（老语义不回退）。
-process.env.HARNESS_DB ||= `/tmp/test-reattach-${Math.random().toString(36).slice(2)}.db`;
-process.env.HARNESS_LAX_DONE = "1"; // 这里验的是接管，不是严格 done 协议
+process.env.ASH_DB ||= `/tmp/test-reattach-${Math.random().toString(36).slice(2)}.db`;
+process.env.ASH_LAX_DONE = "1"; // 这里验的是接管，不是严格 done 协议
 
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -26,7 +26,7 @@ const { RUNS_DIR } = await import("../src/paths.js");
 
 await ensureSchema();
 
-const dir = mkdtempSync(join(tmpdir(), "harness-reattach-"));
+const dir = mkdtempSync(join(tmpdir(), "ash-reattach-"));
 const TOTAL = 20;
 const agentScript = join(dir, "agent.mjs");
 // 冒充 claude 的 stream-json。**正文必须走 stream_event 增量**：claude 开了

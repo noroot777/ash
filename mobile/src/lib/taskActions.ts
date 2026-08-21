@@ -1,6 +1,6 @@
 // The single primary action for a task in a given status. Team is a resident
 // console, so its idle state is runnable and resumes the same CLI session.
-import type { TaskMode, TaskStatus } from "@harness/shared";
+import type { TaskMode, TaskStatus } from "@ash/shared";
 
 export type RunActionKind = "run" | "retry" | "busy" | "gate" | "done";
 export interface RunAction {

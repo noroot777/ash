@@ -8,9 +8,9 @@
 // 一个团队任务可以有多个内部组(先派一批串行、再派一批并行),所以每次 dispatch
 // 都新建一个组,不复用。
 import { eq } from "drizzle-orm";
-import type { AgentType, Task, TeamConfig } from "@harness/shared";
-import { TEAM_DEFAULTS } from "@harness/shared";
-import { inheritExecutorOverrides, pickExecutor } from "@harness/shared/executors";
+import type { AgentType, Task, TeamConfig } from "@ash/shared";
+import { TEAM_DEFAULTS } from "@ash/shared";
+import { inheritExecutorOverrides, pickExecutor } from "@ash/shared/executors";
 import { db } from "../db/index.js";
 import { tasks, groups, queueItems, agents } from "../db/schema.js";
 import { id, now } from "../util.js";

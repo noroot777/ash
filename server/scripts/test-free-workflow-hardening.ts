@@ -9,9 +9,9 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "harness-free-hardening-"));
-process.env.HARNESS_DB = join(root, "harness.db");
-process.env.HARNESS_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "ash-free-hardening-"));
+process.env.ASH_DB = join(root, "ash.db");
+process.env.ASH_RUNS_DIR = join(root, "runs");
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -35,7 +35,7 @@ try {
   mkdirSync(repo, { recursive: true });
   git(repo, "init", "-b", "main");
   git(repo, "config", "user.email", "test@example.com");
-  git(repo, "config", "user.name", "Harness Test");
+  git(repo, "config", "user.name", "Ash Test");
   writeFileSync(join(repo, "base.txt"), "base\n");
   git(repo, "add", "base.txt");
   git(repo, "commit", "-m", "base");

@@ -17,7 +17,7 @@
 //      insert/create 重新入队——历史副本入队会被当 canceled 跳过,后继提前启动
 //   7. 项目自动匹配兼容 Windows 路径:对端仓库是 D:\...\acme 时,同目录名匹配
 //      仍要命中——只按 "/" 切目录名会把整条 Windows 路径当 basename,恒不匹配
-// 双机走真 HTTP 的端到端场景在 test-handoff.ts。HARNESS_RUNS_DIR 指到临时目录顺带
+// 双机走真 HTTP 的端到端场景在 test-handoff.ts。ASH_RUNS_DIR 指到临时目录顺带
 // 打开 guardAgentSpawn,即使哪里失手触发续跑也不会真拉起 CLI 烧额度。
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -27,17 +27,17 @@ import { eq } from "drizzle-orm";
 import { makeRepo } from "./handoff-test-utils.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "harness-handoff-local-"));
+const root = mkdtempSync(join(tmpdir(), "ash-handoff-local-"));
 const home = join(root, "home");
 mkdirSync(home, { recursive: true });
 // 沙箱家目录要两个变量一起支:os.homedir() POSIX 看 HOME、Windows 看 USERPROFILE。
 process.env.HOME = home;
 process.env.USERPROFILE = home;
-process.env.HARNESS_DB = join(root, "local.db");
-process.env.HARNESS_RUNS_DIR = join(root, "runs");
-process.env.HARNESS_UPLOADS_DIR = join(root, "uploads");
+process.env.ASH_DB = join(root, "local.db");
+process.env.ASH_RUNS_DIR = join(root, "runs");
+process.env.ASH_UPLOADS_DIR = join(root, "uploads");
 assert.ok(
-  process.env.HARNESS_ALLOW_REAL_AGENT !== "1",
+  process.env.ASH_ALLOW_REAL_AGENT !== "1",
   "本测试靠 guardAgentSpawn 兜底拦真 CLI;拦截器一失效就会烧用户的真额度",
 );
 
@@ -52,7 +52,7 @@ try {
   // 缺陷形态(第 2 轮审查实测):POSIX 路径没有需转义字符,两种形态的 from 完全相同,
   // 无上下文的全局替换把原始 Windows 路径(单反斜杠)写进 JSONL 字符串 → 非法 JSON。
   const posixSrc = "/private/tmp/source/data/uploads/abc-proof.txt";
-  const winDir = "D:\\harness\\data\\uploads";
+  const winDir = "D:\\ash\\data\\uploads";
   const winRaw = `${winDir}\\abc-proof.txt`;
   const rw = buildUploadRewrites([{ name: "abc-proof.txt", sourcePath: posixSrc, dataBase64: "" }], winDir);
   assert.equal(rw.ambiguous, true, "POSIX from 两种形态相同、Windows to 不同,必须标记歧义");
@@ -207,7 +207,7 @@ try {
     if (req.method === "GET" && req.url === "/api/handoff/ping") {
       pingSeen();
       void pingGate.then(() => res.end(JSON.stringify({
-        ok: true, service: "harness", host: "fake-peer",
+        ok: true, service: "ash", host: "fake-peer",
         projects: [
           { id: "p-dst", name: "acme", repoPath: "/x/acme", isRepo: false },
           // Windows 对端的同名仓库(第 7 节用):isRepo:true 才参与自动匹配。
@@ -222,7 +222,7 @@ try {
       return;
     }
     res.statusCode = 404;
-    res.end(JSON.stringify({ error: "unknown", harness: true }));
+    res.end(JSON.stringify({ error: "unknown", ash: true }));
   });
   await new Promise<void>((r) => peer.listen(0, "127.0.0.1", r));
   const peerPort = (peer.address() as { port: number }).port;

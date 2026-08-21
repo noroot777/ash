@@ -3,10 +3,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "harness-search-"));
-process.env.HARNESS_DB = join(root, "harness.db");
+const root = mkdtempSync(join(tmpdir(), "ash-search-"));
+process.env.ASH_DB = join(root, "ash.db");
 
-// 动态 import:search.js 连带打开 DB,得等 HARNESS_DB 指到临时库之后再加载。
+// 动态 import:search.js 连带打开 DB,得等 ASH_DB 指到临时库之后再加载。
 const [{ db, ensureSchema }, { projects, tasks }, search, { parseWorktreePorcelain }] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
@@ -34,7 +34,7 @@ const TASK_ID = "Zx8Kq2mNrT4V";
 
 // 整串 id、分支短 id、以及粘贴 URL / 分支名 / kv 写法都要认出 id 本体。
 assert.deepEqual(candidates(TASK_ID), ["zx8kq2mnrt4v"]);
-assert.deepEqual(candidates("harness/Zx8Kq2mN"), ["zx8kq2mn"]);
+assert.deepEqual(candidates("ash/Zx8Kq2mN"), ["zx8kq2mn"]);
 assert.deepEqual(candidates(`http://localhost:4317/tasks/${TASK_ID}`), ["localhost", "zx8kq2mnrt4v"]);
 assert.deepEqual(candidates(`taskId=${TASK_ID}`), ["zx8kq2mnrt4v"]);
 // 太短的词不是 id,别拿它去撞任务。
@@ -51,11 +51,11 @@ assert.equal(isTaskIdMatch(TASK_ID, "x8kq2mnrt4v"), false, "只认前缀,不做�
 
 const worktrees = parseWorktreePorcelain(
   "worktree /repo\0HEAD abc123\0branch refs/heads/main\0\0" +
-    "worktree /repo/.worktrees/task\0HEAD def456\0branch refs/heads/harness/task\0\0",
+    "worktree /repo/.worktrees/task\0HEAD def456\0branch refs/heads/ash/task\0\0",
 );
 assert.deepEqual(worktrees, [
   { path: "/repo", branch: "main", head: "abc123", detached: false },
-  { path: "/repo/.worktrees/task", branch: "harness/task", head: "def456", detached: false },
+  { path: "/repo/.worktrees/task", branch: "ash/task", head: "def456", detached: false },
 ]);
 
 // ── searchAll:搜 id 时那个任务必须排第一,而且是「凭 id」排上来的 ──────────
@@ -77,7 +77,7 @@ try {
   assert.ok(mention, "正文里提到该 id 的任务照常命中,只是排在后面");
   assert.notEqual(mention?.field, "id", "别人提到它不等于别人就是它");
 
-  const byBranch = await searchAll(`harness/${TASK_ID.slice(0, 8)}`);
+  const byBranch = await searchAll(`ash/${TASK_ID.slice(0, 8)}`);
   assert.equal(byBranch[0]?.id, TASK_ID, "分支名里的 8 位短 id 也要能定位到任务");
   assert.equal(byBranch[0]?.field, "id");
 

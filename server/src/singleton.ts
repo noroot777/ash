@@ -8,12 +8,12 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { resolveHarnessDbFile, ensureHarnessDbDir } from "./db/path.js";
+import { resolveAshDbFile, ensureAshDbDir } from "./db/path.js";
 import { IS_WINDOWS, isPidAlive, killPidsCommand } from "./platform.js";
 import { inspectProcess as inspectProcessInfo, type ProcessInfo } from "./proc.js";
 
 const LOCK_VERSION = 1;
-const LOCK_SUFFIX = ".harness.lock";
+const LOCK_SUFFIX = ".ash.lock";
 const START_TIME_TOLERANCE_MS = 10_000;
 
 type LockFile = {
@@ -39,7 +39,7 @@ export class SingletonConflictError extends Error {
       port: number | null;
       command: string | null;
     },
-    reason = "database is already owned by another live harness server",
+    reason = "database is already owned by another live ash server",
   ) {
     super(formatConflictMessage(dbFile, lockFile, holder, reason));
     this.name = "SingletonConflictError";
@@ -52,27 +52,27 @@ export type SingletonLock = {
   release: () => void;
 };
 
-export function singletonLockFileForDb(dbFile = resolveHarnessDbFile()) {
+export function singletonLockFileForDb(dbFile = resolveAshDbFile()) {
   return `${dbFile}${LOCK_SUFFIX}`;
 }
 
 export function acquireDbSingletonLock(options: { port?: number | null } = {}): SingletonLock | null {
-  const dbFile = resolveHarnessDbFile();
+  const dbFile = resolveAshDbFile();
   const lockFile = singletonLockFileForDb(dbFile);
   const port = options.port ?? null;
 
-  if (process.env.HARNESS_ALLOW_MULTI === "1") {
+  if (process.env.ASH_ALLOW_MULTI === "1") {
     console.warn(
-      `[harness] WARNING: HARNESS_ALLOW_MULTI=1 set; skipping single-instance guard for DB ${dbFile}`,
+      `[ash] WARNING: ASH_ALLOW_MULTI=1 set; skipping single-instance guard for DB ${dbFile}`,
     );
     return null;
   }
 
-  ensureHarnessDbDir(dbFile);
+  ensureAshDbDir(dbFile);
   const ownLock = writeOwnLock(dbFile, lockFile, port);
 
   try {
-    const holders = findLiveHarnessDbHolders(dbFile).filter((p) => p.pid !== process.pid);
+    const holders = findLiveAshDbHolders(dbFile).filter((p) => p.pid !== process.pid);
     if (holders.length > 0) {
       ownLock.release();
       const holder = holders[0]!;
@@ -85,7 +85,7 @@ export function acquireDbSingletonLock(options: { port?: number | null } = {}): 
           port: null,
           command: holder.command,
         },
-        "database is already open in another live harness process",
+        "database is already open in another live ash process",
       );
     }
   } catch (e) {
@@ -129,7 +129,7 @@ function writeOwnLock(dbFile: string, lockFile: string, port: number | null): Si
         const holder = holderFromLock(lockFile);
         throw new SingletonConflictError(dbFile, lockFile, holder);
       }
-      console.warn(`[harness] stale singleton lock at ${lockFile}: ${staleReason}; overwriting`);
+      console.warn(`[ash] stale singleton lock at ${lockFile}: ${staleReason}; overwriting`);
       try {
         unlinkSync(lockFile);
       } catch (unlinkError) {
@@ -149,7 +149,7 @@ function writeOwnLock(dbFile: string, lockFile: string, port: number | null): Si
         const current = readLock(lockFile);
         if (current?.pid === lock.pid && current.token === lock.token) unlinkSync(lockFile);
       } catch (e) {
-        if (!isNotFound(e)) console.warn(`[harness] failed to release singleton lock ${lockFile}:`, e);
+        if (!isNotFound(e)) console.warn(`[ash] failed to release singleton lock ${lockFile}:`, e);
       }
     },
   };
@@ -164,8 +164,8 @@ function staleLockReason(lockFile: string): string | null {
 
   const info = inspectProcess(pid);
   if (!info) return `PID ${pid} is alive but cannot be inspected`;
-  if (!isHarnessServerCommand(info.command)) {
-    return `PID ${pid} is not a harness server process (${info.command ?? "unknown command"})`;
+  if (!isAshServerCommand(info.command)) {
+    return `PID ${pid} is not a ash server process (${info.command ?? "unknown command"})`;
   }
   if (typeof lock.processStartedAtMs === "number" && info.startedAtMs !== null) {
     const delta = Math.abs(info.startedAtMs - lock.processStartedAtMs);
@@ -207,7 +207,7 @@ function inspectProcess(pid: number): ProcessInfo | null {
 // 的 handle.exe 要单独装且要管理员权限,不能当成必备依赖。所以 Windows 上单实例保护
 // 只剩锁文件那一道(pid + 进程启动时间 + token,足以识别 pid 复用和陈旧锁),失去的是
 // 「锁文件被删掉之后还能兜住」这一层。如实降级,不假装有覆盖。
-function findLiveHarnessDbHolders(dbFile: string): ProcessInfo[] {
+function findLiveAshDbHolders(dbFile: string): ProcessInfo[] {
   if (IS_WINDOWS) return [];
   if (!existsSync(dbFile)) return [];
   let out = "";
@@ -222,15 +222,15 @@ function findLiveHarnessDbHolders(dbFile: string): ProcessInfo[] {
   const pids = [...new Set(out.split(/\s+/).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
   return pids
     .map((pid) => inspectProcess(pid))
-    .filter((info): info is ProcessInfo => Boolean(info && isHarnessServerCommand(info.command)));
+    .filter((info): info is ProcessInfo => Boolean(info && isAshServerCommand(info.command)));
 }
 
 // 命令行长什么样两个平台差很远,分隔符、`.exe` 后缀、带空格路径的引号全不一样:
-//   POSIX:   /opt/homebrew/bin/node /Users/fjh/code/harness/server/dist/index.js
-//   Windows: "C:\Program Files\nodejs\node.exe" C:\Users\fjh\harness\server\dist\index.js
+//   POSIX:   /opt/homebrew/bin/node /Users/fjh/code/ash/server/dist/index.js
+//   Windows: "C:\Program Files\nodejs\node.exe" C:\Users\fjh\ash\server\dist\index.js
 // 所以路径分隔符两种都认,可执行名允许 `.exe` 和前置引号。宁可放宽也不能收窄 ——
 // 认不出来的后果是「把活着的 server 判成陈旧锁然后覆盖掉」,那就双实例了。
-function isHarnessServerCommand(command: string | null) {
+function isAshServerCommand(command: string | null) {
   if (!command) return false;
   return (
     /(?:^|[\s"'])(?:[^\s"']*[\\/])?(?:node|tsx)(?:\.exe|\.cmd)?(?:[\s"']|$)/i.test(command) &&
@@ -262,19 +262,19 @@ function formatConflictMessage(
   reason: string,
 ) {
   const lines = [
-    `[harness] Refusing to start: ${reason}.`,
+    `[ash] Refusing to start: ${reason}.`,
     `  DB: ${dbFile}`,
     `  Lock: ${lockFile}`,
     `  PID: ${holder.pid}`,
     `  Started: ${holder.startedAt ?? "unknown"}`,
     `  Port: ${holder.port ?? "unknown"}`,
     `  Command: ${holder.command ?? "unknown"}`,
-    "Stop the existing harness server first, then retry:",
+    "Stop the existing ash server first, then retry:",
     `  ${killPidsCommand([holder.pid])}`,
     ...(IS_WINDOWS
       ? []
       : ["If it does not exit, use:", `  kill -9 ${holder.pid}`]),
-    "Emergency bypass: HARNESS_ALLOW_MULTI=1 (this can create duplicate schedulers for the same DB).",
+    "Emergency bypass: ASH_ALLOW_MULTI=1 (this can create duplicate schedulers for the same DB).",
   ];
   return lines.join("\n");
 }

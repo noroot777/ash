@@ -3,7 +3,7 @@
 //
 // 运行时函数住在这里而不是 index.ts:服务端直接跑 shared 的 .ts 源码,index 里
 // 转发运行时值会让进程起不来(见 index.ts 顶部注释),所以照 team / executors
-// 的办法开一个子路径导出 "@harness/shared/usage"。
+// 的办法开一个子路径导出 "@ash/shared/usage"。
 
 export interface TokenUsage {
   /** 未命中缓存的输入 token。 */

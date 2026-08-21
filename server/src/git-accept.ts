@@ -11,7 +11,7 @@ import { promisify } from "node:util";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
-import type { AcceptClean, AcceptStrategy } from "@harness/shared/workflow";
+import type { AcceptClean, AcceptStrategy } from "@ash/shared/workflow";
 import {
   dirtyFilesAt,
   expandHome,
@@ -22,8 +22,8 @@ import {
   porcelainFiles,
   removeWorktree,
   resolveTaskMergeTarget,
+  resolveWorktreeBranchName,
   symbolicBranch,
-  worktreeBranchName,
   worktreePathFor,
 } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
@@ -151,7 +151,7 @@ async function conflictFiles(cwd: string): Promise<string[]> {
 type TemporaryWorktree = { root: string; path: string };
 
 async function addTemporaryWorktree(repo: string, ref: string, detached: boolean): Promise<TemporaryWorktree> {
-  const root = mkdtempSync(join(tmpdir(), "harness-accept-"));
+  const root = mkdtempSync(join(tmpdir(), "ash-accept-"));
   const path = join(root, "worktree");
   const args = ["-C", repo, "worktree", "add"];
   if (detached) args.push("--detach");
@@ -366,7 +366,7 @@ async function squashInCheckedOutTarget(
 
 /** 「只打标签不合并」那一档的标签名。 */
 export function acceptTagName(taskId: string): string {
-  return `harness-accepted/${taskId.slice(0, 8)}`;
+  return `ash-accepted/${taskId.slice(0, 8)}`;
 }
 
 async function mergeTaskBranchLocked(
@@ -376,7 +376,7 @@ async function mergeTaskBranchLocked(
   strategy: AcceptStrategy,
 ): Promise<TaskMergeResult> {
   const repo = expandHome(repoPath);
-  const sourceBranch = worktreeBranchName(taskId);
+  const sourceBranch = await resolveWorktreeBranchName(repo, taskId);
   if (!(await isGitRepo(repo))) {
     return { ok: false, reason: "not_git_repo", message: `${repoPath} 不是 git 仓库`, sourceBranch, targetBranch: null };
   }
@@ -502,7 +502,7 @@ async function cleanupAcceptedTaskLocked(
   plan: CleanupPlan,
 ): Promise<TaskCleanupResult> {
   const repo = expandHome(repoPath);
-  const sourceBranch = worktreeBranchName(taskId);
+  const sourceBranch = await resolveWorktreeBranchName(repo, taskId);
   const worktreePath = worktreePathFor(repo, taskId);
   await exec("git", ["-C", repo, "worktree", "prune"]).catch(() => {});
   const hadWorktree = plan.worktree && isDir(worktreePath);

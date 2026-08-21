@@ -11,8 +11,8 @@
 //   ⑤ 缓存命中不重复起子进程,force 会绕过缓存,降级结果比成功结果短命;
 //   ⑥ 本机装了 grok 时的**真实**探测(装了才断言,没装就跳过并说明——不拿本机环境当硬前提)。
 import assert from "node:assert/strict";
-import { AGENT_TYPES } from "@harness/shared";
-import { CLI_MODEL_PRESETS, CLI_MODEL_PROBE_TYPES } from "@harness/shared/cli-presets";
+import { AGENT_TYPES } from "@ash/shared";
+import { CLI_MODEL_PRESETS, CLI_MODEL_PROBE_TYPES } from "@ash/shared/cli-presets";
 import { CLI_SPEC_BY_KEY } from "../src/executors/catalog/index.js";
 import { parseGrokModels } from "../src/executors/catalog/grok.js";
 import { parsePiModels } from "../src/executors/catalog/pi.js";

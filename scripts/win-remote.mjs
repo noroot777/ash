@@ -8,7 +8,7 @@
 //   node scripts/win-remote.mjs test --all          # 跑三条 Windows 专属回归
 //
 // 环境变量:
-//   WIN_REMOTE_HOST=http://192.168.1.187:4317   对端 harness 地址(默认就是它)
+//   WIN_REMOTE_HOST=http://192.168.1.187:4317   对端 ash 地址(默认就是它)
 //   WIN_REMOTE_SELF=<ip>                        本机对外 IP(自动探测不准时用)
 //   WIN_REMOTE_PROJECT=<projectId>              对端项目 id(默认按 repoPath 猜)
 //   WIN_REMOTE_GIT_PORT=<port>                  钉死 git daemon 端口(默认每次现挑空闲端口)
@@ -17,8 +17,8 @@
 // 为什么是这套通道、为什么不动对端主工作区,见 scripts/win-remote/{transport,sync}.mjs 顶部;
 // 对端那个 worktree 是全局单份的,所以整段 sync+test 上锁,见 scripts/win-remote/lock.mjs 顶部。
 //
-// 一个必须知道的边界:**通道本身就跑在被测的 harness 里**。改了 server 代码想看真实行为
-// 而不是测试结果,就得重启对端的 harness —— 那会连着把这条通道一起掐了(重启完自己会回来)。
+// 一个必须知道的边界:**通道本身就跑在被测的 ash 里**。改了 server 代码想看真实行为
+// 而不是测试结果,就得重启对端的 ash —— 那会连着把这条通道一起掐了(重启完自己会回来)。
 // 所以默认路线是「跑回归测试」,它是独立进程,不需要重启对端服务。
 import { rexec, resolveProject, controlSignal } from "./win-remote/transport.mjs";
 import { syncToRemote, remoteWorkspacePath, workspaceGuardPs } from "./win-remote/sync.mjs";
@@ -48,7 +48,7 @@ async function target() {
 const inWorkspace = (p, fn) => withRemoteLock({ repoPath: p.repoPath, projectId: p.id, onNote: note }, fn);
 
 async function cmdDoctor() {
-  console.log(bold("对端 harness"));
+  console.log(bold("对端 ash"));
   const p = await target();
   console.log(`  项目 ${p.id}  仓库 ${p.repoPath}`);
 
@@ -70,7 +70,7 @@ async function cmdDoctor() {
     `try { ${workspaceGuardPs(p.repoPath).split("\n").join("; ")}; Write-Output 'worktree=ok' } catch { Write-Output ('worktree=' + $_.Exception.Message) }`,
   ].join("\n");
   const res = await rexec(probe, { cwd: p.repoPath, projectId: p.id, timeout: 60_000 });
-  // 退出码先看。体检这条命令**自己失败了**的时候(回传拿不到、pwsh 炸了、对端 harness 半死),
+  // 退出码先看。体检这条命令**自己失败了**的时候(回传拿不到、pwsh 炸了、对端 ash 半死),
   // out 里根本没有那几个 kv,下面每一行都会打成 `?`/`✗` —— 上一版照打不误,然后无条件宣布
   // 「通道 ✓ 输出回传正常」并 exit 0。于是一次「通道断了」的体检读起来像「机器缺 node、
   // 开发者模式没开」,查的方向从一开始就是错的。
@@ -157,17 +157,17 @@ async function cmdTest(args) {
     const results = [];
     for (const s of suites) {
       process.stdout.write(`  ${s} … `);
-      // 好几条回归要求调用者自己给 HARNESS_DB(`tmp-db.ts` 的 requireTmpDb 会拦下来,
+      // 好几条回归要求调用者自己给 ASH_DB(`tmp-db.ts` 的 requireTmpDb 会拦下来,
       // 免得测试写进用户的真库),没给就直接拒跑。那不是 Windows 的毛病 —— mac 上不设
       // 照样红,只是从这里跑的人看到的是「Windows 上失败了」,白查一轮。统一在这儿给一个
       // 临时库,跑完删掉;`$__code` 先接住退出码,免得 Remove-Item 把它冲掉。
-      const db = `harness-wintest-${s}-${Date.now()}.db`;
+      const db = `ash-wintest-${s}-${Date.now()}.db`;
       const cmd = [
         guard,
-        `$env:HARNESS_DB = Join-Path $env:TEMP ${psq(db)}`,
+        `$env:ASH_DB = Join-Path $env:TEMP ${psq(db)}`,
         `npm -w server run test:${s} 2>&1`,
         `$__code = $LASTEXITCODE`,
-        `Remove-Item $env:HARNESS_DB -Force -ErrorAction SilentlyContinue`,
+        `Remove-Item $env:ASH_DB -Force -ErrorAction SilentlyContinue`,
         `exit $__code`,
       ].join("\n");
       const res = await rexec(cmd, { cwd, projectId: p.id, timeout: 10 * 60_000 });

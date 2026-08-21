@@ -1,4 +1,4 @@
-/* 数据是编的，但字段和词表都照 harness 现有的来：
+/* 数据是编的，但字段和词表都照 ash 现有的来：
    status（backlog/queued/running/paused/awaiting_review/done/failed/canceled）
    与 stage（implemented/verifying/verified/verify_failed/awaiting_acceptance/
    merged/accepted）正交。行里现在只剩状态点这一层 —— chip/step 留在数据里，
@@ -67,7 +67,7 @@ const TASKS = [
     chip: "暂停中", tone: "", step: "检查点 · 等 4317 重启", meta: "claude · 已跑 22m",
     bucket: "wait", time: "1h",
     body: "worktree 里没有 node_modules，改了 shared 的类型后 typecheck 和 server 的测试脚本测的都是主仓那份，改动等于没测。",
-    last: { who: "它说", cls: "", text: "已补 node_modules/@harness 软链（mobile 用 cp -Rc 克隆）。等你重启 4317 后我接着验证。" },
+    last: { who: "它说", cls: "", text: "已补 node_modules/@ash 软链（mobile 用 cp -Rc 克隆）。等你重启 4317 后我接着验证。" },
   },
   {
     sec: "普通任务", id: "t9", title: "随手记转任务保留历史回链", dot: "pending",
@@ -88,7 +88,7 @@ const TASKS = [
     chip: "失败", tone: "red", step: "工作流 2/5 · 干活时挂了", meta: "codex@cpa · 跑了 9m",
     bucket: "todo", time: "26m",
     body: "收工和被停止是两件事，分别决定时间轴收口和「恢复全组」入口。判据只许有一处，全都走 shared 的 isTeamSettled。",
-    last: { who: "它说", cls: "", text: "typecheck 失败：shared/team.ts:88 的 isTeamSettled 少了 idle 分支，web-next 里有两处旧判据没换。已停在这里。",
+    last: { who: "它说", cls: "", text: "typecheck 失败：shared/team.ts:88 的 isTeamSettled 少了 idle 分支，web 里有两处旧判据没换。已停在这里。",
       shots: ["typecheck 报错原文"] },
   },
   {
@@ -211,7 +211,7 @@ function renderMain() {
   $("mchip").className = `chip${t.tone ? ` chip--${t.tone}` : ""}`;
   $("mchip").textContent = t.chip;
   $("mtitle").textContent = t.title;
-  $("mpath").textContent = `harness · ${t.meta}`;
+  $("mpath").textContent = `ash · ${t.meta}`;
   $("mreply").textContent = `回复 ${t.meta.split(" · ")[0]}…`;
   const bubbles = [`<div class="msg msg--you"><em>你的原始需求</em><p>${esc(t.body)}</p>${thumbs(t.id, "body")}</div>`];
   if (t.last.text) {

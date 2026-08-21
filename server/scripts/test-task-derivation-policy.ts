@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 
-const root = mkdtempSync(join(tmpdir(), "harness-task-derivation-"));
-process.env.HARNESS_DB = join(root, "harness.db");
+const root = mkdtempSync(join(tmpdir(), "ash-task-derivation-"));
+process.env.ASH_DB = join(root, "ash.db");
 
 const [{ db, ensureSchema }, schema, { mountTaskRoutes }] = await Promise.all([
   import("../src/db/index.js"),

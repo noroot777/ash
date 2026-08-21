@@ -54,14 +54,14 @@ export function failedChild(message: string): ChildProcess {
 /**
  * 真库流程测试会把 RUNS_DIR 指到临时目录。这种进程默认绝不起真 CLI：测试只想
  * 验证游标/状态却误走生产副作用，就是 2026-08-07 一次泄漏 19 个 Claude 回合的根因。
- * 少数确实要验证进程管理的测试必须显式给 HARNESS_ALLOW_REAL_AGENT=1；不再依赖每个调用点
+ * 少数确实要验证进程管理的测试必须显式给 ASH_ALLOW_REAL_AGENT=1；不再依赖每个调用点
  * 记得注入 no-op。
  */
 export function guardAgentSpawn(bin: string): ChildProcess | null {
-  if (!process.env.HARNESS_RUNS_DIR || process.env.HARNESS_ALLOW_REAL_AGENT === "1") return null;
+  if (!process.env.ASH_RUNS_DIR || process.env.ASH_ALLOW_REAL_AGENT === "1") return null;
   return failedChild(
     `测试隔离环境禁止启动真执行器 ${bin}；`
-    + "这个测试若就是要验证进程管理，显式设 HARNESS_ALLOW_REAL_AGENT=1",
+    + "这个测试若就是要验证进程管理，显式设 ASH_ALLOW_REAL_AGENT=1",
   );
 }
 
@@ -155,7 +155,7 @@ const DETACH = !IS_WINDOWS;
 // 代价：dev 前台 Ctrl-C 不再连带杀掉 agent(生产是 nohup 跑法，不受影响)。
 // Windows 上反过来 —— 一律不 detached，理由见 DETACH。
 // extraEnv: per-executor 的环境变量(供应商的 base_url / key、覆盖 CLI 自己的配置)。
-// **值为 `undefined` = 把这个变量从子进程里删掉**:harness 自己环境里带着的同名变量,
+// **值为 `undefined` = 把这个变量从子进程里删掉**:ash 自己环境里带着的同名变量,
 // 不删就会盖掉「这里留空 = 跟随 CLI」(Node 会跳过值为 undefined 的项)。
 // keepStdin: 常驻会话(§Team 的调度台)用 —— 写完首条消息不关 stdin,管道留给
 // 调用方继续注入后续回合(见 executors/claude.ts 的 openResident)。
@@ -249,7 +249,7 @@ function teeStdout(child: ChildProcess, file: string | undefined): void {
 export function openTrackFd(): { fd: number | null; path: string | null } {
   if (IS_WINDOWS) return { fd: null, path: null };
   try {
-    const path = join(tmpdir(), `harness-track-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    const path = join(tmpdir(), `ash-track-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
     return { fd: openSync(path, "w"), path };
   } catch {
     return { fd: null, path: null };
@@ -368,7 +368,7 @@ export function forceFinishOnExit(
 // 供 claude.ts / codex.ts / catalog 复用同一份字符串。展示用的那条命令由
 // `executors/resume.ts` 的 resumeCommandFor 按目录重算(还要过一道「sessionId
 // 是不是 CLI 真认得的 id」的判定,见 generic.ts 的 hasTrustedSessionId)。
-// (The harness's own headless resume is built separately inside each executor's run().)
+// (The ash's own headless resume is built separately inside each executor's run().)
 export const resumeInner: Record<string, (id: string) => string> = {
   claude: (id) => `claude --resume ${id}`,
   codex: (id) => `codex resume ${id}`,
