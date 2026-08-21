@@ -21,6 +21,8 @@
 @import "./system-turn.css";
 @import "./reviewer-turn.css";
 @import "./inspector.css";
+@import "./team-info-panel.css";
+@import "./review-inspector.css";
 @import "./team-review.css";
 @import "./review.css";
 @import "./files.css";

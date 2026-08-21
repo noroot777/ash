@@ -20,7 +20,9 @@
   min-height: 0;
   min-width: var(--inspector-width);
   flex: 0 0 auto;
-  flex-direction: column;
+  /* 反向排：图标条在 DOM 里排头（Tab 键先到它），显示时贴在窗口右缘——
+     和 VS Code 把活动栏放在侧栏的外侧同一个道理。 */
+  flex-direction: row-reverse;
   border-left: 0.5px solid var(--line);
   background: var(--canvas);
   transition: width 160ms ease, min-width 160ms ease;
@@ -59,138 +61,106 @@
   opacity: 0.72;
 }
 
-.inspector-host__tabbar {
+.inspector-host__rail {
   position: relative;
   z-index: 10;
   display: flex;
-  height: 38px;
-  flex: 0 0 38px;
-  align-items: stretch;
-  border-bottom: 0.5px solid var(--line);
+  width: 40px;
+  min-height: 0;
+  flex: 0 0 40px;
+  flex-direction: column;
+  align-items: center;
+  border-left: 0.5px solid var(--line);
   background: color-mix(in lch, var(--canvas) 86%, var(--panel));
+  padding: 5px 0 6px;
 }
 
-.inspector-host__tabs {
+.inspector-host__rail-tabs {
   display: flex;
-  min-width: 0;
+  min-height: 0;
   flex: 1;
-  overflow-x: auto;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  overflow-x: hidden;
+  overflow-y: auto;
   scrollbar-width: none;
 }
 
-.inspector-host__tabs::-webkit-scrollbar {
+.inspector-host__rail-tabs::-webkit-scrollbar {
   display: none;
 }
 
-.inspector-tab {
+.inspector-rail__tab {
   position: relative;
-  display: flex;
-  min-width: 86px;
-  max-width: 180px;
-  flex: 1 1 124px;
-  align-items: center;
-  border-right: 0.5px solid var(--line);
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  padding: 0;
   color: var(--faint);
 }
 
-.inspector-tab::after {
+.inspector-rail__tab:hover {
+  background: var(--overlay);
+  color: var(--ink);
+}
+
+/* 选中态的那道竖条。贴在按钮外侧（朝窗口边缘那一侧），跟 VS Code 活动栏一致。 */
+.inspector-rail__tab::after {
   position: absolute;
-  right: 9px;
-  bottom: -0.5px;
-  left: 9px;
-  height: 2px;
-  border-radius: 2px 2px 0 0;
+  top: 6px;
+  right: 0;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 2px;
   background: var(--accent);
   content: "";
   opacity: 0;
 }
 
-.inspector-tab.is-active {
-  background: var(--canvas);
-  color: var(--ink);
+.inspector-rail__tab.is-active {
+  color: var(--accent);
 }
 
-.inspector-tab.is-active::after {
-  opacity: 0.8;
+.inspector-rail__tab.is-active::after {
+  opacity: 0.85;
 }
 
-.inspector-tab__trigger {
-  display: flex;
-  min-width: 0;
-  height: 100%;
-  flex: 1;
-  align-items: center;
-  gap: 6px;
-  border: 0;
-  background: transparent;
-  padding: 0 25px 0 10px;
-  color: inherit;
-  text-align: left;
-}
-
-.inspector-tab__icon {
+.inspector-rail__icon {
   display: inline-grid;
-  flex: 0 0 auto;
   place-items: center;
 }
 
-.inspector-tab__icon > svg,
+.inspector-rail__icon > svg {
+  width: 16px;
+  height: 16px;
+}
+
 .inspector-host__menu-label svg {
   width: 14px;
   height: 14px;
 }
 
-.inspector-tab__title {
-  min-width: 0;
-  overflow: hidden;
-  font-size: 10.5px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.inspector-tab__close {
-  position: absolute;
-  z-index: 2;
-  top: 9px;
-  right: 6px;
-  display: grid;
-  width: 20px;
-  height: 20px;
-  place-items: center;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  padding: 0;
-  color: var(--faint);
-  opacity: 0;
-}
-
-.inspector-tab:hover .inspector-tab__close,
-.inspector-tab__close:focus-visible {
-  opacity: 1;
-}
-
-.inspector-tab__close:hover {
-  background: var(--overlay);
-  color: var(--ink);
-}
-
 .inspector-host__add-root {
   position: relative;
   display: grid;
-  width: 38px;
-  flex: 0 0 38px;
+  flex: 0 0 auto;
   place-items: center;
+  margin-top: 4px;
 }
 
 .inspector-host__add {
   display: grid;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   place-items: center;
   border: 0;
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
   padding: 0;
   color: var(--muted);
@@ -202,11 +172,12 @@
   color: var(--ink);
 }
 
+/* 「+」在图标条底部，菜单只能往左上方开。 */
 .inspector-host__menu.ui-menu {
   position: absolute;
   z-index: 90;
-  top: 33px;
-  right: 4px;
+  right: calc(100% + 6px);
+  bottom: 0;
   width: 218px;
 }
 
@@ -216,14 +187,64 @@
   gap: 8px;
 }
 
+.inspector-host__panel {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+/* 图标条不写字，当前看的是哪一面板由这条头带说；关闭当前面板的入口也在这。 */
+.inspector-host__panel-head {
+  display: flex;
+  height: 34px;
+  flex: 0 0 34px;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 0.5px solid var(--line);
+  background: color-mix(in lch, var(--canvas) 86%, var(--panel));
+  padding: 0 6px 0 12px;
+}
+
+.inspector-host__panel-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector-host__panel-close {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 0;
+  color: var(--faint);
+}
+
+.inspector-host__panel-close:hover {
+  background: var(--overlay);
+  color: var(--ink);
+}
+
 .inspector-host__content {
   min-height: 0;
   flex: 1;
   overflow: auto;
 }
 
-.inspector-tab__trigger:focus-visible,
-.inspector-tab__close:focus-visible,
+.inspector-rail__tab:focus-visible,
+.inspector-host__panel-close:focus-visible,
 .inspector-host__add:focus-visible,
 .inspector-toggle:focus-visible,
 .inspector-host__menu .ui-menu-item:focus-visible {
@@ -306,231 +327,6 @@
   line-height: 1.65;
 }
 
-.team-info-panel {
-  min-height: 100%;
-  background: color-mix(in lch, var(--canvas) 96%, var(--chrome));
-}
-
-.team-info-panel__section {
-  border-bottom: 0.5px solid var(--line);
-  padding: 14px;
-}
-
-.team-info-panel__section > h2 {
-  margin: 0 0 9px;
-  color: var(--faint);
-  font-size: 9.5px;
-  font-weight: 750;
-  letter-spacing: 0.055em;
-  text-transform: uppercase;
-}
-
-.team-info-panel__roles {
-  display: grid;
-  gap: 7px;
-}
-
-.team-info-panel__role {
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--panel);
-  box-shadow: var(--surface-shadow);
-}
-
-.team-info-panel__role > header {
-  display: flex;
-  min-height: 34px;
-  align-items: center;
-  gap: 8px;
-  border-bottom: 0.5px solid var(--line);
-  padding: 6px 9px;
-}
-
-.team-info-panel__role > header span {
-  flex: 0 0 auto;
-  color: var(--faint);
-  font-size: 9.5px;
-  font-weight: 650;
-}
-
-.team-info-panel__role > header b {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  color: var(--ink);
-  font-size: 10.5px;
-  font-weight: 600;
-  text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.team-info-panel__role > dl,
-.team-info-panel__workspace {
-  margin: 0;
-}
-
-.team-info-panel__role > p {
-  margin: 0;
-  padding: 0 9px 8px;
-  color: var(--faint);
-  font-size: 9.5px;
-}
-
-.team-info-panel__role.is-disabled {
-  background: transparent;
-  box-shadow: none;
-}
-
-.team-info-panel__role.is-disabled > header {
-  border-bottom: 0;
-}
-
-.team-info-panel__config-value {
-  display: grid;
-  min-height: 27px;
-  grid-template-columns: 72px minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  padding: 4px 9px;
-}
-
-.team-info-panel__config-value + .team-info-panel__config-value {
-  border-top: 0.5px solid var(--line);
-}
-
-.team-info-panel__config-value dt {
-  color: var(--faint);
-  font-size: 9.5px;
-}
-
-.team-info-panel__config-value dd {
-  min-width: 0;
-  overflow: hidden;
-  margin: 0;
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.team-info-panel__workspace {
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
-}
-
-.team-info-panel__section > .task-message-footer {
-  margin-top: 8px;
-}
-
-.team-info-panel__section > .task-time-meta {
-  flex-wrap: wrap;
-  margin-top: 8px;
-  padding: 2px;
-  white-space: normal;
-}
-
-.team-info-panel__objective > summary {
-  cursor: pointer;
-  color: var(--faint);
-  font-size: 9.5px;
-  font-weight: 750;
-  letter-spacing: 0.055em;
-  list-style: none;
-  text-transform: uppercase;
-}
-
-.team-info-panel__objective > summary::-webkit-details-marker {
-  display: none;
-}
-
-.team-info-panel__objective > summary::after {
-  float: right;
-  content: "＋";
-}
-
-.team-info-panel__objective[open] > summary::after {
-  content: "－";
-}
-
-.team-info-panel__objective-body {
-  padding-top: 10px;
-}
-
-.team-info-panel__objective .task-markdown {
-  margin: 0;
-  color: var(--muted);
-  font-size: 11.5px;
-  line-height: 1.65;
-}
-
-.team-info-panel__objective .task-markdown p {
-  white-space: pre-wrap;
-}
-
-.team-info-panel__objective .task-message-attachments {
-  margin-top: 9px;
-}
-
-.team-info-panel__empty,
-.review-inspector__empty {
-  margin: 0;
-  color: var(--faint);
-  font-size: 10.5px;
-  line-height: 1.6;
-}
-
-.inspector-host__content > .team-timeline {
-  min-height: 100%;
-  border-bottom: 0;
-}
-
-.inspector-host__content > .team-timeline .team-timeline-summary {
-  display: grid;
-  min-height: 58px;
-  height: auto;
-  grid-template-columns: 12px minmax(0, 1fr) auto;
-  gap: 5px 7px;
-  padding: 8px 12px;
-}
-
-.inspector-host__content > .team-timeline .team-timeline-summary > b {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.inspector-host__content > .team-timeline .team-timeline-delivery {
-  grid-column: 2 / -1;
-}
-
-.inspector-host__content > .team-timeline .team-timeline-summary > span:last-child {
-  grid-column: 3;
-  grid-row: 1;
-  justify-self: end;
-  margin-left: 0;
-  white-space: nowrap;
-}
-
-.inspector-host__content > .team-timeline .team-gantt {
-  padding: 11px 12px 13px;
-}
-
-.inspector-host__content > .team-timeline .team-gantt-row {
-  grid-template-columns: 94px minmax(0, 1fr);
-  gap: 7px;
-}
-
-.inspector-host__content > .team-timeline .team-gantt-axis {
-  margin-left: 101px;
-}
-
 .team-worker-drawer > .inspector-layout {
   min-height: 0;
   flex: 1;
@@ -541,127 +337,6 @@
   min-width: min(var(--inspector-width), 100%);
 }
 
-.review-inspector { min-height: 100%; background: var(--canvas); }
-.review-inspector__overview { border-bottom: 0.5px solid var(--line); padding: 13px 14px; }
-.review-inspector__overview > header { display: flex; align-items: center; gap: 8px; }
-.review-inspector__overview > header > div { min-width: 0; }
-.review-inspector__overview b, .review-inspector__overview small { display: block; }
-.review-inspector__overview b { color: var(--ink); font-size: 11.5px; }
-.review-inspector__overview small { margin-top: 1px; color: var(--faint); font-size: 9.5px; }
-.review-inspector__status { display: grid; width: 27px; height: 27px; flex: 0 0 27px; place-items: center; border-radius: 8px; background: color-mix(in lch,var(--accent) 9%,var(--raised)); color: var(--accent); }
-.review-inspector__status.is-verified { background: var(--green-bg); color: var(--green); }
-.review-inspector__status.is-verify_failed { background: color-mix(in lch,var(--red) 9%,white); color: var(--red); }
-.review-inspector__actions { display: grid; gap: 4px; margin-top: 11px; }
-.review-inspector__actions button { display: flex; min-height: 31px; align-items: center; gap: 6px; border: 0; border-radius: 7px; background: transparent; padding: 5px 7px; color: var(--muted); font-size: 10.5px; text-align: left; }
-.review-inspector__actions button:first-child { background: color-mix(in lch,var(--accent) 8%,var(--panel)); color: var(--accent); font-weight: 650; }
-.review-inspector__actions button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
-.review-inspector__actions button:disabled { cursor: not-allowed; opacity: 0.48; }
-.review-inspector__actions button span { min-width: 0; flex: 1; }
-.review-inspector__actions button > svg:last-child { margin-left: auto; }
-/* 「人工强制通过」那颗。写在 hover 规则**之后**是必须的：同特异性时后写的赢，否则一
-   悬停就褪回中性灰，看着像换了一颗按钮。红色只在这一按会连带真合并时出现。 */
-.review-inspector__actions button.is-primary { background: color-mix(in lch,var(--accent) 8%,var(--panel)); color: var(--accent); font-weight: 650; }
-.review-inspector__actions button.is-primary:hover:not(:disabled) { background: color-mix(in lch,var(--accent) 15%,var(--panel)); color: var(--accent); }
-.review-inspector__actions button.is-danger { background: color-mix(in lch,var(--red) 8%,var(--panel)); color: var(--red); font-weight: 650; }
-.review-inspector__actions button.is-danger:hover:not(:disabled) { background: color-mix(in lch,var(--red) 15%,var(--panel)); color: var(--red); }
-.review-inspector__notice { margin: 7px 7px 0; color: var(--faint); font-size: 9.5px; line-height: 1.5; }
-.review-inspector__notice.is-warning { color: var(--red); }
-.review-inspector__dispatch { border-bottom: 0.5px solid var(--line); background: color-mix(in lch,var(--panel) 80%,var(--canvas)); padding: 12px 14px; }
-.review-inspector__dispatch > p { margin: 0 0 9px; color: var(--faint); font-size: 9.5px; line-height: 1.5; }
-.review-inspector__fields { display: grid; gap: 8px; }
-.review-inspector__fields label { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); gap: 4px; }
-.review-inspector__fields label > span { color: var(--faint); font-size: 9.5px; }
-.review-inspector__fields input, .review-inspector__fields select { width: 100%; height: 30px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 0 8px; color: var(--muted); font-size: 10.5px; outline: 0; }
-.review-inspector__fields input:focus, .review-inspector__fields select:focus { border-color: var(--accent); }
-.review-inspector__dispatch > button { display: inline-flex; min-height: 29px; align-items: center; gap: 5px; margin-top: 10px; border: 0; border-radius: 7px; background: var(--accent); padding: 0 10px; color: white; font-size: 10.5px; font-weight: 650; }
-.review-inspector__dispatch > button:disabled { cursor: not-allowed; opacity: 0.48; }
-/* 读取中 / 读取失败 / 空 —— 这三条也长在审查对象列表里，得躲开条目按钮那套强样式，
-   否则「重试」会长得像列表里多出来的一条。 */
-.review-inspector__targets .review-inspector__empty { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.review-inspector__targets .review-inspector__empty button { flex: 0 0 auto; border: 0; border-radius: 5px; background: var(--raised); padding: 3px 7px; color: var(--muted); font-size: 9.5px; }
-.review-inspector__targets .review-inspector__empty.is-error { color: var(--red); }
-
-.review-evidence { overflow: hidden; border: 1px solid color-mix(in lch,var(--accent) 20%,var(--line)); border-radius: 9px; background: color-mix(in lch,var(--accent) 3%,var(--panel)); }
-.review-evidence > header { display: flex; min-height: 42px; align-items: center; border-bottom: 0.5px solid color-mix(in lch,var(--accent) 14%,var(--line)); padding: 6px 10px; }
-.review-evidence > header b, .review-evidence > header small { display: block; }
-.review-evidence > header b { color: var(--ink); font-size: 11px; }
-.review-evidence > header small { color: var(--faint); font-size: 9.5px; }
-.review-evidence > p { display: flex; align-items: center; gap: 6px; margin: 0; padding: 10px; color: var(--faint); font-size: 10.5px; }
-.review-evidence > p.is-error { color: var(--red); }
-.review-evidence > p button { border: 0; background: transparent; color: inherit; text-decoration: underline; }
-.review-round { margin: 9px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
-.review-round.is-verified { border-color: color-mix(in lch,var(--green) 25%,var(--line)); }
-.review-round.is-verify-failed, .review-round.is-inconclusive { border-color: color-mix(in lch,var(--red) 30%,var(--line)); }
-.review-round > button { display: flex; width: 100%; min-height: 37px; align-items: center; gap: 7px; border: 0; background: transparent; padding: 5px 8px; text-align: left; }
-.review-round > button > span { display: grid; width: 22px; height: 22px; flex: 0 0 22px; place-items: center; border-radius: 50%; background: var(--raised); color: var(--muted); font-size: 9.5px; font-weight: 750; }
-.review-round > button > b { color: var(--ink); font-size: 10.5px; white-space: nowrap; }
-.review-round > button > em { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; background: color-mix(in lch,var(--accent) 9%,var(--raised)); padding: 2px 6px; color: var(--accent); font-size: 9.5px; font-style: normal; font-weight: 650; white-space: nowrap; }
-.review-round.is-verified > button > em { background: var(--green-bg); color: var(--green); }
-.review-round.is-verify-failed > button > em, .review-round.is-inconclusive > button > em { background: color-mix(in lch,var(--red) 9%,white); color: var(--red); }
-.review-round > button > small { min-width: 0; overflow: hidden; color: var(--faint); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
-.review-round > button > svg:last-child { margin-left: auto; flex: 0 0 auto; transition: transform 140ms ease; }
-.review-round > button[aria-expanded="false"] > svg:last-child { transform: rotate(-90deg); }
-.review-round > .review-round-body { border-top: 0.5px solid var(--line); padding: 9px 10px; }
-/* 正文排版跟「谁装着它」解耦：折叠卡片里是它，inspector 侧栏塞不下时抽屉里也是它。 */
-.review-round-body { color: var(--muted); font-size: 10.5px; line-height: 1.6; }
-.review-round-body > :first-child { margin-top: 0; }
-.review-round-body > :last-child { margin-bottom: 0; }
-.review-round-body .task-markdown { font-size: 10.5px; line-height: 1.6; }
-.review-shots { margin-top: 9px; border-top: 0.5px solid var(--line); padding-top: 8px; }
-.review-shots h5 { display: flex; align-items: center; gap: 5px; margin: 0 0 6px; color: var(--faint); font-size: 9.5px; text-transform: uppercase; }
-.review-shots > div { display: grid; grid-template-columns: repeat(auto-fill,minmax(120px,1fr)); gap: 7px; }
-.review-shot { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: var(--canvas); text-align: left; }
-.review-shot:hover { border-color: color-mix(in lch,var(--accent) 42%,var(--line)); }
-.review-shots img { display: block; width: 100%; aspect-ratio: 16/9; background: var(--raised); object-fit: cover; }
-.review-shots span { display: block; overflow: hidden; padding: 5px 6px; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.review-round__open-task { display: inline-flex; align-items: center; gap: 5px; margin-top: 8px; border: 0; border-radius: 6px; background: var(--raised); padding: 4px 7px; color: var(--muted); font-size: 9.5px; }
-.review-round__open-task:hover { color: var(--ink); }
-
-.review-inspector__targets { border-bottom: 0.5px solid var(--line); padding: 12px 14px; }
-.review-inspector__targets > header { margin-bottom: 7px; }
-.review-inspector__targets > header b, .review-inspector__targets > header small { display: block; }
-.review-inspector__targets > header b { color: var(--muted); font-size: 10.5px; }
-.review-inspector__targets > header small { color: var(--faint); font-size: 9px; }
-.review-inspector__targets > div { display: grid; gap: 5px; }
-.review-inspector__targets button { display: flex; min-width: 0; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 7px 8px; text-align: left; }
-.review-inspector__targets button:hover, .review-inspector__targets button.is-selected { border-color: color-mix(in lch,var(--accent) 38%,var(--line)); background: color-mix(in lch,var(--accent) 4%,var(--panel)); }
-.review-inspector__targets button.is-failed { border-color: color-mix(in lch,var(--red) 34%,var(--line)); }
-.review-inspector__targets button > span { min-width: 0; flex: 1; }
-.review-inspector__targets button b, .review-inspector__targets button small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.review-inspector__targets button b { color: var(--ink); font-size: 10.5px; }
-.review-inspector__targets button small { color: var(--faint); font-size: 9px; }
-.review-inspector__targets button em { flex: 0 0 auto; border-radius: 4px; background: var(--raised); padding: 2px 5px; color: var(--muted); font-size: 8.5px; font-style: normal; }
-.review-inspector__targets button.is-selected em { background: color-mix(in lch,var(--accent) 12%,var(--raised)); color: var(--accent); }
-
-/* 贴着审查侧边栏左边缘的那一屉，位置与尺寸由 ReviewEvidenceDrawer 量出来写在 style 上。
-   z 要压过执行者抽屉（95）：那一屉里也有 inspector，审查内容得浮在它上面才看得见。 */
-.review-evidence-drawer { position: fixed; z-index: 96; display: flex; overflow: hidden; flex-direction: column; border: 1px solid var(--line2); border-right: 0; border-radius: 12px 0 0 12px; background: var(--canvas); box-shadow: -18px 0 50px rgb(30 32 38 / 16%); animation: review-evidence-drawer-in 200ms cubic-bezier(.22,1,.36,1) both; }
-.review-evidence-drawer.is-overlay { border-right: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 18px 50px rgb(30 32 38 / 20%); }
-.review-evidence-drawer > header { display: flex; min-height: 38px; flex: 0 0 auto; align-items: center; gap: 8px; border-bottom: .5px solid var(--line); background: var(--raised); padding: 6px 8px 6px 12px; }
-.review-evidence-drawer > header > div { min-width: 0; flex: 1; }
-.review-evidence-drawer > header b, .review-evidence-drawer > header small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.review-evidence-drawer > header b { color: var(--ink); font-size: 11px; }
-.review-evidence-drawer > header small { color: var(--faint); font-size: 9px; }
-.review-evidence-drawer > header > button { display: inline-flex; height: 24px; flex: 0 0 auto; align-items: center; gap: 4px; border: 0; border-radius: 5px; background: transparent; padding: 0 7px; color: var(--muted); font-size: 10px; }
-.review-evidence-drawer > header > button:hover { background: var(--overlay); color: var(--ink); }
-.review-evidence-drawer__scroll { min-height: 0; flex: 1; overflow: auto; padding: 11px; }
-.review-evidence-drawer__footer { flex: 0 0 auto; border-top: .5px solid var(--line); background: var(--raised); padding: 8px 10px 9px; }
-
-/* 截图始终留在抽屉底边；数量只增加横向长度，不再把报告正文越顶越短。 */
-.review-screenshot-strip { min-width: 0; }
-.review-screenshot-strip > header { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; color: var(--faint); font-size: 9px; }
-.review-screenshot-strip > header > span { display: inline-flex; align-items: center; gap: 4px; font-weight: 650; }
-.review-screenshot-strip > header > em { border-radius: 999px; background: var(--overlay); padding: 1px 5px; color: var(--muted); font-style: normal; }
-.review-screenshot-strip > header > small { margin-left: auto; color: var(--faint); font-size: 8.5px; }
-.review-screenshot-strip__rail { display: flex; min-width: 0; gap: 7px; overflow-x: auto; overscroll-behavior-x: contain; padding-bottom: 2px; scroll-snap-type: x proximity; }
-.review-screenshot-strip__rail:focus-visible { border-radius: 6px; outline: 2px solid color-mix(in lch,var(--accent) 38%,transparent); outline-offset: 2px; }
-.review-screenshot-strip__item { width: 112px; min-width: 112px; overflow: hidden; flex: 0 0 112px; border: 1px solid var(--line); border-radius: 7px; background: var(--canvas); scroll-snap-align: start; }
-.review-screenshot-strip__item:hover { border-color: color-mix(in lch,var(--accent) 42%,var(--line)); }
-.review-screenshot-strip__item img { display: block; width: 100%; aspect-ratio: 16/9; background: var(--panel); object-fit: cover; }
-.review-screenshot-strip__item span { display: block; overflow: hidden; padding: 4px 5px; color: var(--muted); font-size: 8.5px; text-overflow: ellipsis; white-space: nowrap; }
-
-@keyframes review-evidence-drawer-in { from { transform: translateX(16px); opacity: 0; } to { transform: none; opacity: 1; } }
-
 @media (max-width: 720px) {
   .team-header-actions > .inspector-toggle {
     display: grid;
@@ -670,12 +345,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .inspector-host,
-  .inspector-host__resize-handle::after,
-  .review-round svg {
+  .inspector-host__resize-handle::after {
     transition: none;
-  }
-
-  .review-evidence-drawer {
-    animation: none;
   }
 }

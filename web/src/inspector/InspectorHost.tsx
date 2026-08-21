@@ -8,11 +8,10 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { Plus, Sidebar, SidebarSimple, X } from "@phosphor-icons/react";
-import { Menu, MenuItem } from "../components/ui.tsx";
+import { Sidebar, SidebarSimple, X } from "@phosphor-icons/react";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
-import { useDismissable } from "../lib/useDismissable.ts";
-import { inspectorShortcutLabel, registerInspectorShortcutTarget } from "./shortcuts.ts";
+import { InspectorRail } from "./InspectorRail.tsx";
+import { registerInspectorShortcutTarget } from "./shortcuts.ts";
 import type { InspectorDescriptor, InspectorHostControls, InspectorTabPolicy } from "./types.ts";
 
 export const INSPECTOR_MIN_WIDTH = 280;
@@ -177,7 +176,6 @@ function InspectorHostState<Context>({
 }) {
   const storageKey = storageKeyFor(contextKey);
   const [state, setState] = useState(() => readState(storageKey, descriptors, defaultVisible, tabPolicy));
-  const [menuOpen, setMenuOpen] = useState(false);
   const [resizing, setResizing] = useState(false);
   const descriptorById = useMemo(
     () => new Map(descriptors.map((descriptor) => [descriptor.id, descriptor])),
@@ -188,19 +186,12 @@ function InspectorHostState<Context>({
     .filter((descriptor): descriptor is InspectorDescriptor<Context> => descriptor !== undefined);
   const activeDescriptor = descriptorById.get(state.activeTab ?? "") ?? openedDescriptors[0] ?? null;
   const panelVisible = state.visible && activeDescriptor !== null;
-  const menuRoot = useRef<HTMLDivElement>(null);
-  const menuButton = useRef<HTMLButtonElement>(null);
   const dragStart = useRef<{ x: number; width: number } | null>(null);
   const previousBodyStyle = useRef<{ cursor: string; userSelect: string } | null>(null);
   const instanceId = useId();
   const panelId = `${safeDomId(instanceId)}-inspector`;
-
-  useDismissable({
-    enabled: menuOpen,
-    containerRef: menuRoot,
-    onClose: () => setMenuOpen(false),
-    restoreFocusRef: menuButton,
-  });
+  const tabIdFor = useCallback((id: string) => `${panelId}-tab-${safeDomId(id)}`, [panelId]);
+  const contentIdFor = useCallback((id: string) => `${panelId}-panel-${safeDomId(id)}`, [panelId]);
 
   useEffect(() => {
     setState((current) => {
@@ -259,7 +250,6 @@ function InspectorHostState<Context>({
   }, []);
 
   const toggle = () => {
-    setMenuOpen(false);
     setState((current) => {
       if (current.visible && current.openTabs.length > 0) return { ...current, visible: false };
       const firstId = descriptors[0]?.id ?? null;
@@ -298,7 +288,6 @@ function InspectorHostState<Context>({
       activeTab: id,
       visible: true,
     }));
-    setMenuOpen(false);
   }, [descriptors]);
 
   useEffect(() => registerInspectorShortcutTarget((shortcut) => {
@@ -358,87 +347,35 @@ function InspectorHostState<Context>({
             }}
             onDoubleClick={() => setState((current) => ({ ...current, width: INSPECTOR_DEFAULT_WIDTH }))}
           />
-          <div className="inspector-host__tabbar">
-            <div className="inspector-host__tabs" role="tablist" aria-label="已打开的 Inspector 面板">
-              {openedDescriptors.map((descriptor) => {
-                const active = descriptor.id === activeDescriptor.id;
-                const tabId = `${panelId}-tab-${safeDomId(descriptor.id)}`;
-                const contentId = `${panelId}-panel-${safeDomId(descriptor.id)}`;
-                return (
-                  <div key={descriptor.id} className={`inspector-tab${active ? " is-active" : ""}`}>
-                    <button
-                      id={tabId}
-                      type="button"
-                      className="inspector-tab__trigger"
-                      role="tab"
-                      aria-selected={active}
-                      aria-controls={contentId}
-                      aria-label={descriptor.shortcut
-                        ? `${descriptor.title}，快捷键 ${inspectorShortcutLabel(descriptor.shortcut)}`
-                        : descriptor.title}
-                      tabIndex={active ? 0 : -1}
-                      title={descriptor.title}
-                      onClick={() => setState((current) => ({ ...current, activeTab: descriptor.id }))}
-                    >
-                      <span className="inspector-tab__icon" aria-hidden="true">{descriptor.icon}</span>
-                      <span className="inspector-tab__title">{descriptor.title}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="inspector-tab__close"
-                      aria-label={`关闭${descriptor.title}`}
-                      title={`关闭${descriptor.title}`}
-                      onClick={() => closeTab(descriptor.id)}
-                    >
-                      <X size={11} weight="bold" aria-hidden="true" />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="inspector-host__add-root" ref={menuRoot}>
+          <InspectorRail
+            items={openedDescriptors}
+            allItems={descriptors}
+            activeId={activeDescriptor.id}
+            tabIdFor={tabIdFor}
+            contentIdFor={contentIdFor}
+            onSelect={(id) => setState((current) => ({ ...current, activeTab: id }))}
+            onOpen={openTab}
+          />
+          <div className="inspector-host__panel">
+            <div className="inspector-host__panel-head">
+              <span className="inspector-host__panel-title">{activeDescriptor.title}</span>
               <button
-                ref={menuButton}
                 type="button"
-                className="inspector-host__add"
-                aria-label="切换 Inspector 面板"
-                aria-haspopup="menu"
-                aria-expanded={menuOpen}
-                disabled={descriptors.length === 0}
-                title={descriptors.length > 0 ? "切换面板" : "没有可用面板"}
-                onClick={() => setMenuOpen((open) => !open)}
+                className="inspector-host__panel-close"
+                aria-label={`关闭${activeDescriptor.title}`}
+                onClick={() => closeTab(activeDescriptor.id)}
               >
-                <Plus size={14} weight="bold" aria-hidden="true" />
+                <X size={12} weight="bold" aria-hidden="true" />
               </button>
-              {menuOpen && (
-                <Menu className="inspector-host__menu">
-                  {descriptors.map((descriptor) => (
-                    <MenuItem
-                      key={descriptor.id}
-                      selected={descriptor.id === activeDescriptor?.id}
-                      shortcut={descriptor.shortcut ? inspectorShortcutLabel(descriptor.shortcut) : undefined}
-                      aria-label={descriptor.shortcut
-                        ? `${descriptor.title}，快捷键 ${inspectorShortcutLabel(descriptor.shortcut)}`
-                        : descriptor.title}
-                      onClick={() => openTab(descriptor.id)}
-                    >
-                      <span className="inspector-host__menu-label">
-                        <span aria-hidden="true">{descriptor.icon}</span>
-                        {descriptor.title}
-                      </span>
-                    </MenuItem>
-                  ))}
-                </Menu>
-              )}
             </div>
-          </div>
-          <div
-            id={`${panelId}-panel-${safeDomId(activeDescriptor.id)}`}
-            className="inspector-host__content"
-            role="tabpanel"
-            aria-labelledby={`${panelId}-tab-${safeDomId(activeDescriptor.id)}`}
-          >
-            {activeDescriptor.render(context)}
+            <div
+              id={contentIdFor(activeDescriptor.id)}
+              className="inspector-host__content"
+              role="tabpanel"
+              aria-labelledby={tabIdFor(activeDescriptor.id)}
+            >
+              {activeDescriptor.render(context)}
+            </div>
           </div>
         </aside>
       )}
