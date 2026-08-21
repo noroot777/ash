@@ -43,6 +43,7 @@ function AgentMessage({
 }) {
   const duration = durationBetween(item.at, item.endedAt);
   const reviewer = item.reviewer;
+  const showHeader = !item.continuation || !!duration;
   return (
     <article
       className={`task-message task-message--agent${item.continuation ? " is-continuation" : ""}${reviewer ? " is-reviewer" : ""}`}
@@ -51,24 +52,26 @@ function AgentMessage({
         {item.continuation ? "" : reviewer ? <ShieldCheck size={13} weight="fill" /> : item.label.slice(0, 1).toUpperCase()}
       </span>
       <div className="task-message-content">
-        <header>
-          {!item.continuation && (
-            <span className="agent-run-identity">
-              <b>{item.label}</b>
-              <AgentRunMeta run={item.run} />
-            </span>
-          )}
-          {reviewer && !item.continuation && <ReviewerBadge round={reviewer.round} />}
-          {item.at && <time>{formatInstant(item.at)}</time>}
-          {duration && (
-            <small className="task-turn-duration" title={`开始 ${formatInstant(item.at)} · 结束 ${formatInstant(item.endedAt)}`}>
-              · ⏱ {duration} 用时
-            </small>
-          )}
-          <button type="button" onClick={() => copyText(item.markdown)} aria-label="复制这条回复">
-            <Copy size={13} aria-hidden="true" />
-          </button>
-        </header>
+        {showHeader && (
+          <header>
+            {!item.continuation && (
+              <span className="agent-run-identity">
+                <b>{item.label}</b>
+                <AgentRunMeta run={item.run} />
+              </span>
+            )}
+            {reviewer && !item.continuation && <ReviewerBadge round={reviewer.round} />}
+            {!item.continuation && item.at && <time>{formatInstant(item.at)}</time>}
+            {duration && (
+              <small className="task-turn-duration" title={`开始 ${formatInstant(item.at)} · 结束 ${formatInstant(item.endedAt)}`}>
+                {item.continuation ? "" : "· "}⏱ {duration} 用时
+              </small>
+            )}
+            <button type="button" onClick={() => copyText(item.markdown)} aria-label="复制这条回复">
+              <Copy size={13} aria-hidden="true" />
+            </button>
+          </header>
+        )}
         {item.segments.map((segment, index) => (
           <section className="task-agent-segment" key={segment.id}>
             <ExecutionDetails events={segment.events} running={!item.endedAt && index === item.segments.length - 1} />

@@ -19,18 +19,21 @@ import { executorLabel, parseInbound, teamLeadLabel, workerStatusText, type Inbo
 function AgentRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"] }) {
   if (row.kind !== "agent") return null;
   const duration = durationBetween(row.at, row.endedAt);
+  const showHeader = !row.continuation || !!duration;
   return (
     <article className={`team-feed-agent${row.continuation ? " is-continuation" : ""}`}>
-      <header>
-        {!row.continuation && (
-          <span className="agent-run-identity">
-            <b>{row.label}</b>
-            <AgentRunMeta run={row.run} />
-          </span>
-        )}
-        {row.at && <time>{formatInstant(row.at)}</time>}
-        {duration && <small className="task-turn-duration" title={`开始 ${formatInstant(row.at)} · 结束 ${formatInstant(row.endedAt)}`}>· ⏱ {duration} 用时</small>}
-      </header>
+      {showHeader && (
+        <header>
+          {!row.continuation && (
+            <span className="agent-run-identity">
+              <b>{row.label}</b>
+              <AgentRunMeta run={row.run} />
+            </span>
+          )}
+          {!row.continuation && row.at && <time>{formatInstant(row.at)}</time>}
+          {duration && <small className="task-turn-duration" title={`开始 ${formatInstant(row.at)} · 结束 ${formatInstant(row.endedAt)}`}>{row.continuation ? "" : "· "}⏱ {duration} 用时</small>}
+        </header>
+      )}
       {row.segments.map((segment, index) => (
         <section className="task-agent-segment" key={segment.id}>
           <ExecutionDetails events={segment.events} running={!row.endedAt && index === row.segments.length - 1} />

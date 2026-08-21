@@ -66,6 +66,14 @@ try {
   assert.equal(await messages.nth(1).locator(".agent-run-identity").count(), 0, "旁注不该让会话重报身份");
   assert.equal(await messages.nth(2).locator(".agent-run-identity").count(), 0);
   assert.equal(await messages.nth(3).locator(".agent-run-identity").count(), 0);
+  assert.equal(
+    await page.locator(".task-message--agent.is-continuation header time").count(),
+    0,
+    "续写段的起点就是紧邻旁注的时间，不该再单独重复一遍",
+  );
+  for (const header of await page.locator(".task-message--agent.is-continuation header").all()) {
+    assert.match(await header.innerText(), /用时/, "续写段只有确实存在用时信息时才保留消息头");
+  }
   // 真人插过话之后是新的一段，身份要回来；回合边界之后同理。
   assert.equal(await messages.nth(4).locator(".agent-run-identity").count(), 1, "真人插话后必须重新报身份");
   assert.equal(await messages.nth(5).locator(".agent-run-identity").count(), 1, "回合边界之后必须重新报身份");
