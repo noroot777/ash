@@ -4,11 +4,12 @@
 // 单向的：orchestrator / reattach 都 import 这里，这里不回头 import 它们 ——
 // 结算规则是全局单点，谁也不该另造一份。
 import type { WriteStream } from "node:fs";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { AgentEvent, AgentType, SessionRole, TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
+import { scanForTitle } from "./auto-title.js";
 import { now } from "./util.js";
 import { setTaskStatus } from "./status.js";
 import { takeStopped, takeConfirmed, type StopSettle } from "./runs.js";
@@ -266,6 +267,34 @@ export async function consumeSingleRun(a: {
     pendingTraceText += text;
     publishEvent({ kind: "text", text });
   };
+  // 智能体自己起的标题（见 auto-title.ts）。没解析到就什么也不做：任务留着建它时那个
+  // 临时名（body 首行），下一次 fresh run 还会再试一次——autoTitle 只在真的改成时才关。
+  const applyAutoTitle = async (newTitle: string | null) => {
+    if (!newTitle) return;
+    const updatedAt = now();
+    // 条件里带上 auto_title=1:**这一轮跑到一半时任务可能已经被显式改过名了** —— 用户在
+    // 界面上改，或者 agent 自己调 patch_task 改。那句改名的语义是「这就是标题」，不该被
+    // 随后吐出来的 `标题：xxx` 盖回去。titleDone 是回合开头读的快照，答不了「此刻库里
+    // 还允不允许自动命名」，只有库自己答得了。没更新到行就当什么都没发生，连事件也不发。
+    const hit = await db
+      .update(tasks)
+      .set({ title: newTitle, autoTitle: false, updatedAt })
+      .where(and(eq(tasks.id, taskId), eq(tasks.autoTitle, true)))
+      .returning({ id: tasks.id });
+    if (!hit.length) return;
+    bus.publish({ type: "task.title", taskId, title: newTitle, updatedAt });
+  };
+  // 给标题窗口一个结论：命中就改名并把标题行摘掉，没命中就把攒下的正文原样放出去。
+  // 返回 false = 还没有结论（窗口没走完），继续攒。
+  const resolveTitle = async (flush: boolean) => {
+    const scan = scanForTitle(head, flush);
+    if (scan.kind === "buffer") return false;
+    await applyAutoTitle(scan.title);
+    titleDone = true;
+    head = "";
+    emitText(scan.text); // 命中的话标题行已被摘掉，其余原样放行
+    return true;
+  };
   const persistTrace = (event: AgentEvent, at?: string) => {
     // `context` 刻意不进 trace：trace 是「按回合回放各自的气泡」，而水位属于整条会话的
     // 此刻、只有最后一个值有意义，它的家在 sessions 行上（setSessionContext）。
@@ -307,26 +336,23 @@ export async function consumeSingleRun(a: {
       }
       if (event.kind === "text" && !titleDone) {
         head += event.text;
-        const nl = head.indexOf("\n");
-        if (nl < 0) continue; // still buffering the first line
-        const firstLine = head.slice(0, nl);
-        const rest = head.slice(nl + 1);
-        const m = firstLine.match(/标题[:：]\s*(.+)/);
-        if (m) {
-          const newTitle = m[1].trim().replace(/[`*"]/g, "").slice(0, 30);
-          if (newTitle) {
-            const updatedAt = now();
-            await db.update(tasks).set({ title: newTitle, autoTitle: false, updatedAt }).where(eq(tasks.id, taskId));
-            bus.publish({ type: "task.title", taskId, title: newTitle, updatedAt });
-          }
-        }
-        titleDone = true;
-        emitText(m ? rest : head); // matched: drop the title line; else flush buffer
+        await resolveTitle(false); // 还没结论就是继续攒，正文暂不放行
         continue;
       }
       if (event.kind === "text") {
         emitText(event.text);
       } else {
+        // 标题窗口正扣着正文，而这条事件（tool/thinking/error/usage/done…）马上就要落盘、
+        // 上屏。让它先走，攒着的正文就会排到它后面 —— live 和 trace 里的先后顺序都跟真实
+        // 输出对不上（`error` 更明显：writeRunError 会先写进 .md）。所以先给标题窗口一个
+        // 结论、把正文放出去，再处理这条事件。
+        //
+        // head 为空时不收窗口：没有正文被扣着，这条事件本来就该排在前面，顺序天生正确。
+        // 开场先读个文件、之后才写标题的那种（库里 XQWuZZwlG_KA 就是），全靠这一条才救
+        // 得回来。窗口就此关掉的代价是「tool 之后才出现的标题」认不出来——翻了那 15 个
+        // 现场，没有一例长这样（两例「先寒暄一句」的寒暄和标题同在一个 text 事件里），
+        // 拿这个换顺序永远正确，划算。
+        if (!titleDone && head) await resolveTitle(true);
         const emittedEvent = event.kind === "usage"
           ? await recordSessionUsageEvent(sessId, event, agentType, cliSessionId)
           : event;
@@ -341,7 +367,9 @@ export async function consumeSingleRun(a: {
   } finally {
     if (offsetTimer) clearInterval(offsetTimer);
   }
-  if (!titleDone && head) emitText(head); // agent never produced a newline
+  // 一个换行都没等到就收流了（整轮只吐了一行的那种）。这里补一次 flush 扫描：
+  // 老实现直接把缓冲原样吐出去，那一行哪怕就是标准的 `标题：xxx` 也白瞎。
+  if (!titleDone && head) await resolveTitle(true);
   flushTraceText();
 
   // A stop kills the subprocess → the stream ends like a normal exit; settle

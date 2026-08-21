@@ -289,7 +289,13 @@ api.patch("/tasks/:id", async (c) => {
     return c.json({ error: "星标只支持顶层任务，执行者/子任务不能设置 starredAt" }, 400);
   }
   const patch: Record<string, unknown> = {};
-  if (b.title !== undefined) patch.title = b.title;
+  // 显式改名 = 这就是标题。不关掉 autoTitle 的话，一个还没跑过的任务被改名后，首轮
+  // 起跑的自动命名（auto-title.ts）会把它悄悄覆盖回去 —— 智能体用 patch_task 改名尤其
+  // 容易撞上。同一次请求里明说 autoTitle 的以那个为准（下一行照常覆盖）。
+  if (b.title !== undefined) {
+    patch.title = b.title;
+    patch.autoTitle = false;
+  }
   if (b.body !== undefined) patch.body = b.body;
   if (b.autoTitle !== undefined) patch.autoTitle = b.autoTitle;
   if (b.pinnedAt !== undefined) patch.pinnedAt = b.pinnedAt;
