@@ -80,14 +80,14 @@ export function WorkspaceSidebar({
   return (
     <aside className={`workspace-sidebar${spread.laidOut ? " is-spread" : ""}${spread.open ? " is-spread-open" : ""}`} aria-label="项目和任务导航">
       <div className="workspace-sidebar-top">
-        <ProjectSwitcher
-          projects={projects}
-          current={currentProject}
-          onProject={onProject}
-          onCreate={onNewProject}
-          onSettings={onSettings}
-        />
-        <div className="workspace-sidebar-tools" role="toolbar" aria-label="任务工具">
+        <div className="workspace-sidebar-selectors">
+          <ProjectSwitcher
+            projects={projects}
+            current={currentProject}
+            onProject={onProject}
+            onCreate={onNewProject}
+            onSettings={onSettings}
+          />
           {currentProject && (
             <ProjectGitContext
               projectId={currentProject.id}
@@ -96,6 +96,8 @@ export function WorkspaceSidebar({
               onOpenTerminal={onOpenTerminal}
             />
           )}
+        </div>
+        <div className="workspace-sidebar-tools" role="toolbar" aria-label="任务工具">
           <SpreadFilterControls spread={spread} tasks={tasks} projectId={currentProject?.id ?? null} />
           <button className="workspace-side-icon" type="button" title={`搜索 ${modifier} K`} aria-label={`搜索 ${modifier} K`} onClick={onSearch}>
             <MagnifyingGlass size={15} aria-hidden="true" />

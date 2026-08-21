@@ -6,7 +6,7 @@ import { ProjectGitActions } from "./ProjectGitActions.tsx";
 import { ProjectGitBranchList } from "./ProjectGitBranchList.tsx";
 import { branchLabel, dirtyText } from "./projectGitModel.ts";
 
-// 项目**主仓**的 git 浮层：切分支 / 更新 / 拉取 / 推送。挂在侧栏项目名底下那颗分支胶囊上。
+// 项目**主仓**的 git 浮层：切分支 / 更新 / 拉取 / 推送。挂在侧栏项目名右边的分支下拉上。
 //
 // 为什么不做进任务的「改动」面板：那个面板的尺度是**一个任务的工作目录**，回退到主仓时
 // 它整个转成只读（`ScmInspector.tsx`）。把主仓的写操作塞进去，等于让同一块界面在两种

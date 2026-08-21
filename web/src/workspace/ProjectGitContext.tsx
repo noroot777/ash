@@ -4,8 +4,8 @@ import { CaretDown, GitBranch } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { ProjectGitPanel } from "./ProjectGitPanel.tsx";
 
-// 侧栏项目名底下那颗分支胶囊。它以前是一段死文本（只带个原生 `title`），现在是**项目
-// 级 git 操作的正门**：点开就能切分支 / 更新 / 拉取 / 推送。
+// 侧栏项目名右边的分支下拉。它以前是一段死文本（只带个原生 `title`），现在是**项目
+// 级 git 操作的正门**：和项目切换器并排，点开就能切分支 / 更新 / 拉取 / 推送。
 //
 // 胶囊自己不拉 git 状态——分支名和「有未提交改动」那颗点都从 `ProjectHealth` 来，
 // WorkspaceShell 已经在拉了。真正的状态（分支清单、ahead/behind、远端）只在浮层打开时

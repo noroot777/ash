@@ -1,8 +1,8 @@
-/* 侧栏项目名底下那颗分支胶囊，以及它点开的项目 Git 浮层。
-   胶囊住在工具栏那一行的最左边（`margin-right:auto` 把图标按钮顶到右边），
-   浮层从它底下展开——侧栏是 `overflow:visible`，所以浮层比侧栏宽也不会被裁掉。 */
+/* 侧栏项目名右边的分支下拉，以及它点开的项目 Git 浮层。
+   两个下拉并排住在顶行；浮层从分支下拉底下展开——侧栏是 `overflow:visible`，
+   所以浮层比侧栏宽也不会被裁掉。 */
 
-.workspace-git-context-host { position:relative; min-width:0; margin-right:auto; }
+.workspace-git-context-host { position:relative; min-width:0; max-width:46%; flex:0 1 auto; }
 
 /* 侧栏右边缘那条拖宽手柄（`.workspace-sidebar-resize-handle`，z-index 20）比顶部那一行
    （`.workspace-sidebar-top`，z-index 2）高，会横穿浮层、把落在它底下的按钮全部吃掉点击
@@ -12,9 +12,9 @@
 .workspace-sidebar-top:has(.workspace-project-menu) { z-index:30; }
 
 .workspace-git-context {
-  display:flex; max-width:100%; min-width:0; height:22px; align-items:center; gap:3px;
-  border:0; border-radius:6px; background:transparent; padding:0 4px;
-  color:var(--faint); font-size:9px; font-weight:500;
+  display:flex; max-width:100%; min-width:0; height:36px; align-items:center; gap:5px;
+  border:0; border-radius:9px; background:transparent; padding:0 7px;
+  color:var(--faint); font-size:11px; font-weight:550;
 }
 .workspace-git-context:hover,
 .workspace-git-context[aria-expanded="true"] { background:var(--hover-bg); color:var(--muted); }

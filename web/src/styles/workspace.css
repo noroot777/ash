@@ -53,6 +53,13 @@
   padding-right: 1px;
 }
 
+.workspace-sidebar-selectors {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 3px;
+}
+
 .workspace-project-switcher {
   position: relative;
   min-width: 0;

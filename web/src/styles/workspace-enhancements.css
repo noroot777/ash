@@ -6,7 +6,7 @@
   top: 44px;
 }
 
-/* 分支胶囊已经从项目名下面搬到工具栏那一行，成了一颗真按钮，样式在 project-git.css。 */
+/* 项目与分支两个下拉并排在顶行，分支按钮和浮层样式在 project-git.css。 */
 
 .workspace-sidebar-resize-handle {
   position: absolute;
