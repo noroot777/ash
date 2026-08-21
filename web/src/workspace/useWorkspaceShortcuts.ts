@@ -31,6 +31,14 @@ function hasBlockingLayer(): boolean {
   return document.querySelector('[role="dialog"][aria-modal="true"], [role="menu"]') !== null;
 }
 
+// 竖排 tablist（Inspector 的图标条）里，上下键是它自己的漫游键。这个监听挂在 window 的
+// **捕获**阶段，控件自己的 preventDefault 来不及拦，得在这里先让开。让开的只有方向键：
+// j/k 是全应用的任务导航，焦点在哪儿都照旧。
+function ownsArrowKeys(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement
+    && target.closest('[role="tablist"][aria-orientation="vertical"]') !== null;
+}
+
 function clickVisibleRunAction(): void {
   // The page owns eligibility and busy state; R only activates its opted-in button.
   const action = document.querySelector<HTMLButtonElement>("button[data-workspace-run-action]:not(:disabled)");
@@ -116,13 +124,14 @@ export function useWorkspaceShortcuts({
       }
 
       const index = orderedTasks.findIndex((task) => task.id === selectedTaskId);
-      if (event.key === "j" || event.key === "ArrowDown") {
+      const arrowsTaken = ownsArrowKeys(event.target);
+      if (event.key === "j" || (event.key === "ArrowDown" && !arrowsTaken)) {
         event.preventDefault();
         const next = orderedTasks[Math.min(index + 1, orderedTasks.length - 1)];
         if (next) onTask(next);
         return;
       }
-      if (event.key === "k" || event.key === "ArrowUp") {
+      if (event.key === "k" || (event.key === "ArrowUp" && !arrowsTaken)) {
         event.preventDefault();
         const previous = orderedTasks[Math.max(index - 1, 0)];
         if (previous) onTask(previous);

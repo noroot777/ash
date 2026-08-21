@@ -16,3 +16,22 @@
   pointer-events: none;
   box-shadow: var(--menu-shadow);
 }
+
+/* 挂在锚点左侧、垂直居中：给窗口右缘的竖排图标条用。 */
+.ui-hover-tip.is-left {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  transform: translate(-100%, -50%);
+  white-space: nowrap;
+}
+
+.ui-hover-tip kbd {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--raised);
+  padding: 0 4px;
+  color: var(--faint);
+  font-size: 9px;
+  font-family: inherit;
+}

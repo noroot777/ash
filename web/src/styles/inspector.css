@@ -20,7 +20,9 @@
   min-height: 0;
   min-width: var(--inspector-width);
   flex: 0 0 auto;
-  flex-direction: column;
+  /* 反向排：图标条在 DOM 里排头（Tab 键先到它），显示时贴在窗口右缘——
+     和 VS Code 把活动栏放在侧栏的外侧同一个道理。 */
+  flex-direction: row-reverse;
   border-left: 0.5px solid var(--line);
   background: var(--canvas);
   transition: width 160ms ease, min-width 160ms ease;
@@ -59,138 +61,106 @@
   opacity: 0.72;
 }
 
-.inspector-host__tabbar {
+.inspector-host__rail {
   position: relative;
   z-index: 10;
   display: flex;
-  height: 38px;
-  flex: 0 0 38px;
-  align-items: stretch;
-  border-bottom: 0.5px solid var(--line);
+  width: 40px;
+  min-height: 0;
+  flex: 0 0 40px;
+  flex-direction: column;
+  align-items: center;
+  border-left: 0.5px solid var(--line);
   background: color-mix(in lch, var(--canvas) 86%, var(--panel));
+  padding: 5px 0 6px;
 }
 
-.inspector-host__tabs {
+.inspector-host__rail-tabs {
   display: flex;
-  min-width: 0;
+  min-height: 0;
   flex: 1;
-  overflow-x: auto;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  overflow-x: hidden;
+  overflow-y: auto;
   scrollbar-width: none;
 }
 
-.inspector-host__tabs::-webkit-scrollbar {
+.inspector-host__rail-tabs::-webkit-scrollbar {
   display: none;
 }
 
-.inspector-tab {
+.inspector-rail__tab {
   position: relative;
-  display: flex;
-  min-width: 86px;
-  max-width: 180px;
-  flex: 1 1 124px;
-  align-items: center;
-  border-right: 0.5px solid var(--line);
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  padding: 0;
   color: var(--faint);
 }
 
-.inspector-tab::after {
+.inspector-rail__tab:hover {
+  background: var(--overlay);
+  color: var(--ink);
+}
+
+/* 选中态的那道竖条。贴在按钮外侧（朝窗口边缘那一侧），跟 VS Code 活动栏一致。 */
+.inspector-rail__tab::after {
   position: absolute;
-  right: 9px;
-  bottom: -0.5px;
-  left: 9px;
-  height: 2px;
-  border-radius: 2px 2px 0 0;
+  top: 6px;
+  right: 0;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 2px;
   background: var(--accent);
   content: "";
   opacity: 0;
 }
 
-.inspector-tab.is-active {
-  background: var(--canvas);
-  color: var(--ink);
+.inspector-rail__tab.is-active {
+  color: var(--accent);
 }
 
-.inspector-tab.is-active::after {
-  opacity: 0.8;
+.inspector-rail__tab.is-active::after {
+  opacity: 0.85;
 }
 
-.inspector-tab__trigger {
-  display: flex;
-  min-width: 0;
-  height: 100%;
-  flex: 1;
-  align-items: center;
-  gap: 6px;
-  border: 0;
-  background: transparent;
-  padding: 0 25px 0 10px;
-  color: inherit;
-  text-align: left;
-}
-
-.inspector-tab__icon {
+.inspector-rail__icon {
   display: inline-grid;
-  flex: 0 0 auto;
   place-items: center;
 }
 
-.inspector-tab__icon > svg,
+.inspector-rail__icon > svg {
+  width: 16px;
+  height: 16px;
+}
+
 .inspector-host__menu-label svg {
   width: 14px;
   height: 14px;
 }
 
-.inspector-tab__title {
-  min-width: 0;
-  overflow: hidden;
-  font-size: 10.5px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.inspector-tab__close {
-  position: absolute;
-  z-index: 2;
-  top: 9px;
-  right: 6px;
-  display: grid;
-  width: 20px;
-  height: 20px;
-  place-items: center;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  padding: 0;
-  color: var(--faint);
-  opacity: 0;
-}
-
-.inspector-tab:hover .inspector-tab__close,
-.inspector-tab__close:focus-visible {
-  opacity: 1;
-}
-
-.inspector-tab__close:hover {
-  background: var(--overlay);
-  color: var(--ink);
-}
-
 .inspector-host__add-root {
   position: relative;
   display: grid;
-  width: 38px;
-  flex: 0 0 38px;
+  flex: 0 0 auto;
   place-items: center;
+  margin-top: 4px;
 }
 
 .inspector-host__add {
   display: grid;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   place-items: center;
   border: 0;
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
   padding: 0;
   color: var(--muted);
@@ -202,11 +172,12 @@
   color: var(--ink);
 }
 
+/* 「+」在图标条底部，菜单只能往左上方开。 */
 .inspector-host__menu.ui-menu {
   position: absolute;
   z-index: 90;
-  top: 33px;
-  right: 4px;
+  right: calc(100% + 6px);
+  bottom: 0;
   width: 218px;
 }
 
@@ -216,14 +187,64 @@
   gap: 8px;
 }
 
+.inspector-host__panel {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+/* 图标条不写字，当前看的是哪一面板由这条头带说；关闭当前面板的入口也在这。 */
+.inspector-host__panel-head {
+  display: flex;
+  height: 34px;
+  flex: 0 0 34px;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 0.5px solid var(--line);
+  background: color-mix(in lch, var(--canvas) 86%, var(--panel));
+  padding: 0 6px 0 12px;
+}
+
+.inspector-host__panel-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector-host__panel-close {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 0;
+  color: var(--faint);
+}
+
+.inspector-host__panel-close:hover {
+  background: var(--overlay);
+  color: var(--ink);
+}
+
 .inspector-host__content {
   min-height: 0;
   flex: 1;
   overflow: auto;
 }
 
-.inspector-tab__trigger:focus-visible,
-.inspector-tab__close:focus-visible,
+.inspector-rail__tab:focus-visible,
+.inspector-host__panel-close:focus-visible,
 .inspector-host__add:focus-visible,
 .inspector-toggle:focus-visible,
 .inspector-host__menu .ui-menu-item:focus-visible {
