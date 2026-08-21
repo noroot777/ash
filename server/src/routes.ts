@@ -60,7 +60,10 @@ mountProjectRoutes(api);
 mountProjectCloneRoutes(api);
 
 // ── health ───────────────────────────────────────────────────────────────
-api.get("/health", (c) => c.json({ ok: true, ts: now() }));
+// `pid` 是给 scripts/restart.mjs 认人用的:它重启完要确认「端口上应答的是我刚起的
+// 那个进程」,而不是「端口上有人应答」。少了这个字段,旧进程没被杀掉时(容器里没有
+// lsof/ss 就会这样)整条重启会安静地失败成一句「✓ 已就绪」。
+api.get("/health", (c) => c.json({ ok: true, ts: now(), pid: process.pid }));
 
 // 「现在重启会打断谁」。scripts/restart.mjs 的安全闸靠它决定拦不拦 —— 只数
 // running/queued 的个数已经不对了：agent 输出走文件之后，多数单飞任务重启不会断。
