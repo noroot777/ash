@@ -141,6 +141,11 @@ export interface Project {
 // but not a git repo / 🟢 git repo (with branch + dirty in the full check).
 export interface ProjectHealth {
   exists: boolean;
+  // 路径存在，但它是个文件（或别的非目录条目）。`exists` 对它只能是 false，于是它跟
+  // 「什么都没有」长得一模一样 —— 而两者的下一步完全相反：不存在可以建出来，被文件占着
+  // 只能换一条路径。界面照着 `exists` 说「会建出来」，用户按下去却吃一个 409，就是漏了
+  // 这个字段。
+  occupied?: boolean;
   isRepo: boolean;
   isWorktree?: boolean; // repoPath is itself a linked git worktree (.git is a file, not a dir)
   branch?: string | null; // only in the full check (settings panel / path validation)

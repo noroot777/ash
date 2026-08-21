@@ -194,13 +194,17 @@ export async function workspaceDirty(path: string): Promise<boolean | null> {
 export function projectHealthLight(repoPath: string | null | undefined): ProjectHealth {
   const p = expandHome(repoPath);
   const exists = !!p && isDir(p);
+  // 「路径上有东西，但它不是目录」要跟「什么都没有」分开报：两者的 `exists` 都是 false，
+  // 而下一步相反 —— 后者可以建出来，前者只能换路径（ensureProjectDir / cloneProject 都
+  // 会 409）。不分的话界面会照着 exists 承诺「会建出来」，用户按下去才吃拒绝。
+  const occupied = !!p && !exists && existsSync(p);
   const gitPath = join(p, ".git");
   const isRepo = exists && existsSync(gitPath);
   // A linked worktree (`git worktree add`) keeps `.git` as a FILE pointing back to
   // the main repo; the main working tree keeps `.git` as a DIR. Surface it so the
   // UI can show when a project's working dir is itself a user-managed worktree.
   const isWorktree = isRepo && isFile(gitPath);
-  return { exists, isRepo, isWorktree };
+  return { exists, occupied, isRepo, isWorktree };
 }
 
 // Full health — adds current branch + dirty state. Only spawns git when it's

@@ -1,6 +1,6 @@
-// 「本地目录」这条路上唯一会动磁盘的那一小块：`createDir`。钉住三件靠通读发现不了的事：
+// 「本地目录」这条路上唯一会动磁盘的那一小块：`createDir`。钉住四件靠通读发现不了的事：
 // 不带这个标志位时**绝不建目录**（老行为，MCP / 手机端还在用）、带了才建、被文件占着或
-// 写成相对路径时拒绝且不留项目行。
+// 写成相对路径时拒绝且不留项目行、路径体检把「被文件占着」跟「什么都没有」分开报。
 //
 // 端点测试直接挂 project-routes 的 mount 函数，不起 server。
 import assert from "node:assert/strict";
@@ -36,6 +36,19 @@ try {
     assert.throws(() => ensureProjectDir("  "), /不能为空/, "空路径要拒绝");
   }
 
+  // ── 路径体检要把「被文件占着」跟「什么都没有」分开报 ──
+  // 两者的 `exists` 都是 false,而下一步相反:后者建得出来,前者只能换路径(上面那个 409)。
+  // 不分的话,界面会照着 `exists` 把按钮写成「创建目录并创建项目」,用户按下去才吃拒绝。
+  {
+    const { projectHealthLight } = await import("../src/git.js");
+    const file = join(root, "a-file"); // 上面建过
+    const occupied = projectHealthLight(file);
+    assert.equal(occupied.exists, false, "文件不是目录,exists 只能是 false");
+    assert.equal(occupied.occupied, true, "路径上是个文件,要如实报出来");
+    assert.equal(projectHealthLight(join(root, "nothing-here")).occupied, false, "真的空着不许报被占");
+    assert.equal(projectHealthLight(root).occupied, false, "目录不算被占");
+  }
+
   // ── POST /projects ──
   const api = new Hono();
   mountProjectRoutes(api);
@@ -45,6 +58,18 @@ try {
     body: JSON.stringify(body),
   });
   const countProjects = async () => (await db.select().from(projects)).length;
+
+  // 界面那条路径体检走的是 /projects/check,`occupied` 得能顺着它送到前端
+  {
+    const res = await api.request("/projects/check", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ repoPath: join(root, "a-file") }),
+    });
+    const health = await res.json() as { exists: boolean; occupied?: boolean };
+    assert.equal(health.exists, false);
+    assert.equal(health.occupied, true, "/projects/check 也要报 occupied,否则前端分不清");
+  }
 
   // 不带 createDir:目录不存在也照记不误,但**一个目录都不许建**——这个端点也服务 MCP 和
   // 手机端,那边路径没填好只意味着「还没填好」。

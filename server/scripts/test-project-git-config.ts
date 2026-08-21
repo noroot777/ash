@@ -1,15 +1,17 @@
-// 项目级 git 配置的回归。钉住的是四件靠通读发现不了的事：
+// 项目级 git 配置的回归。钉住的是五件靠通读发现不了的事：
 //
 // ① **令牌绝不进 argv**（`gitNetInjection` 的 args 里不许出现秘密本身）；
 // ② 那段 credential helper 在**真的 sh** 里跑出来的是什么——带空格/反斜杠的令牌是这段
 //    代码唯一会静默出错的地方，`printf` 换成 `echo` 测试就该红；
 // ③ 空字符串 = `--unset`（回去跟着全局走），跟「这次没动它」是两回事；
-// ④ 删项目要把凭证一起删掉，不然换个同 id 的项目会捡到上一个的令牌。
+// ④ 删项目要把凭证一起删掉，不然换个同 id 的项目会捡到上一个的令牌；
+// ⑤ **core.sshCommand 是被 shell 执行的**，私钥路径里能展开成命令的字符一律拒绝，而且
+//    拼串出口和写侧各拦一道（第 1 轮审查真的用 `$(touch …)` 建出过文件）。
 //
 // 全局配置用 GIT_CONFIG_GLOBAL 指到临时文件，scope 判定才不受跑测试这台机器的影响。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -22,6 +24,8 @@ process.env.GIT_CONFIG_NOSYSTEM = "1";
 
 const repo = join(root, "repo");
 const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+/** 注入成功的话它会被建出来。全程不许出现。 */
+const marker = join(root, "pwned");
 
 try {
   execFileSync("git", ["init", "-q", repo]);
@@ -66,6 +70,18 @@ try {
     assert.equal(sshKeyPath("ssh -i /no/quotes"), null, "认不出的形状要返回 null，不能瞎猜");
     assert.throws(() => checkSshKeyPath('/k/"evil'), /引号或换行/);
     assert.throws(() => checkSshKeyPath("/k\nevil"), /引号或换行/);
+
+    // 私钥路径会被拼进 core.sshCommand，而 git 是**交给 shell** 执行它的：双引号里
+    // `$(…)`、反引号、`!` 全是可执行代码，结尾的 `\` 则把我们加的右引号转义掉。
+    // 第 1 轮审查实测过 `$(touch …)` 那条 —— marker 文件真的被建了出来。
+    for (const evil of [`/k/$(touch ${marker})`, "/k/`touch /tmp/x`", "/k/x!!", "/k/trailing\\"]) {
+      assert.throws(() => checkSshKeyPath(evil), /私钥路径/, `${evil}: 必须拒绝`);
+      // 检查钉在**拼串这个出口**上，而不是只钉在路由那一个调用点上：将来多一个调用点也漏不掉。
+      assert.throws(() => sshCommandFor(evil), /私钥路径/, `${evil}: sshCommandFor 自己也要拦`);
+    }
+    assert.equal(existsSync(marker), false, "拒绝发生在任何 shell 执行之前");
+    // Windows 路径里的单个反斜杠是正常写法，不许误伤。
+    assert.equal(checkSshKeyPath("C:\\Users\\me\\.ssh\\id_ed25519"), "C:\\Users\\me\\.ssh\\id_ed25519");
   }
 
   // ── 读：local vs inherited ──
@@ -90,6 +106,16 @@ try {
     assert.equal((await readGitIdentity(repo)).sshKeyPath, "/home/x/.ssh/id_ed25519");
     await writeGitIdentity(repo, { "core.sshCommand": "" });
     assert.equal((await readGitIdentity(repo)).sshKeyPath, null);
+
+    // 写侧自己也认形状：不是 `sshCommandFor` 拼出来的那一种，一律拒绝。这样「往 config 里
+    // 塞一条任意命令」在这一层就没有通道，而不是靠每个调用点都记得先过 checkSshKeyPath。
+    await assert.rejects(
+      () => writeGitIdentity(repo, { "core.sshCommand": `ssh -i /k -o IdentitiesOnly=yes; touch ${marker}` }),
+      /只接受 ash 拼出来的形状/,
+      "陌生形状的 core.sshCommand 必须拒绝",
+    );
+    assert.equal((await readGitIdentity(repo)).sshCommand.value, null, "被拒的写入不许落进 config");
+    assert.equal(existsSync(marker), false, "被拒之后不许有任何东西被执行");
 
     const notRepo = await readGitIdentity(join(root, "nowhere"));
     assert.equal(notRepo.isRepo, false, "不是仓库要如实说，而不是抛");
@@ -172,6 +198,11 @@ try {
 
     const bad = await send(`/projects/${pid}/git-config`, "PUT", { sshKeyPath: '/tmp/"k' });
     assert.equal(bad.status, 400, "带引号的私钥路径要在写进 config 之前就被拒");
+
+    const rce = await send(`/projects/${pid}/git-config`, "PUT", { sshKeyPath: `/tmp/$(touch ${marker})` });
+    assert.equal(rce.status, 400, "会被 shell 展开的私钥路径同样要在写进 config 之前就被拒");
+    assert.equal(existsSync(marker), false, "从端点进来也不许执行到任何东西");
+    assert.equal((await readGitIdentity(repo)).sshKeyPath, "/tmp/key", "被拒的写入不许动已有的配置");
 
     const cred = await send(`/projects/${pid}/git-credential`, "PUT", { username: "octocat", secret: "s3cret" });
     assert.equal(cred.status, 200);

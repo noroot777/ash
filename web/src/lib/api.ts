@@ -107,7 +107,16 @@ export const api = {
   // 在**服务端那台机器**上执行 git clone,成功后才登记项目。请求会一直挂到克隆结束
   // (大仓库可能几分钟),调用点必须给出持续可见的进度反馈。
   cloneProject: (
-    body: { url: string; targetPath: string; branch?: string; name?: string },
+    body: {
+      url: string;
+      targetPath: string;
+      branch?: string;
+      name?: string;
+      // 私有 HTTPS 仓库的用户名 + 令牌。克隆当场用，成功后存到新项目上 —— 项目行要等
+      // 克隆成功才写，所以这一刻的凭证只能随请求递进来，没法先去设置页里配。
+      username?: string;
+      secret?: string;
+    },
   ): Promise<ProjectView> => request("/projects/clone", json("POST", body)),
   resolveProject: (repoPath: string, name?: string): Promise<ProjectView> =>
     request("/projects/resolve", json("POST", { repoPath, name })),

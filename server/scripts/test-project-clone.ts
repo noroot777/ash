@@ -1,5 +1,6 @@
-// 「从 Git 检出新项目」的回归测试。钉住 `project-clone.ts` 顶部那四条决定里靠通读发现
-// 不了的三条:非空目录一律拒绝、失败不留半个坑(且只收拾自己造的)、克隆成功才写库。
+// 「从 Git 检出新项目」的回归测试。钉住 `project-clone.ts` 顶部那五条决定里靠通读发现
+// 不了的四条:非空目录一律拒绝、失败不留半个坑(且只收拾自己造的,连上级目录一起)、
+// 克隆成功才写库、克隆当场用上的凭证要留在新项目上。
 //
 // 自带临时 bare 仓当远端,不联网、不碰 ash 自己的仓库。
 import assert from "node:assert/strict";
@@ -77,6 +78,33 @@ try {
     assert.ok(existsSync(join(target, "seed.txt")));
   }
 
+  // ── 私有仓库的凭证:克隆当场用上,成功之后留在新项目上 ──
+  {
+    const { gitNetInjection, readProjectGitCredential } = await import("../src/git-credentials.js");
+    const secret = 'tok en\\with "quotes" $and `ticks`';
+    const project = await cloneProject({
+      url: origin,
+      targetPath: join(root, "with-credential"),
+      name: "带凭证",
+      username: "tester",
+      secret,
+    });
+    const saved = await readProjectGitCredential(project.id);
+    assert.equal(saved?.username, "tester", "克隆能连上,后面的 fetch/push 就该跟着用同一对凭证");
+    const injection = await gitNetInjection(project.id);
+    assert.equal(injection.env.ASH_GIT_PASSWORD, secret, "令牌要一字不差地存下来");
+    assert.ok(!injection.args.some((arg) => arg.includes("tok en")), "令牌绝不进 argv");
+
+    // 只填一半等于没填(服务端 `credentialInjection` 就是这么判的),不许留下半截凭证
+    const half = await cloneProject({
+      url: origin,
+      targetPath: join(root, "half-credential"),
+      name: "只填了用户名",
+      username: "tester",
+    });
+    assert.equal(await readProjectGitCredential(half.id), null, "只填用户名不算配上了凭证");
+  }
+
   // ── 非空目录一律拒绝,而且拒绝之后目录里的东西一件不少 ──
   {
     const target = join(root, "occupied");
@@ -113,7 +141,23 @@ try {
       "源仓库不存在时要报克隆失败",
     );
     assert.equal(existsSync(target), false, "失败后不许留下残缺的目标目录");
+    // 目标目录只是最底下那一层。`mkdir -p` 顺手造出来的上级同样是这次失败的产物,
+    // 留着就等于在用户磁盘上攒空壳目录(而且下次体检还会说「这个目录已经存在」)。
+    assert.equal(existsSync(join(root, "will-fail")), false, "自己造的上级目录也要退回去");
     assert.equal(await countProjects(), before, "失败不许写库——项目行是成功的凭据");
+  }
+
+  // ── 退回上级只退自己造的那几层:用户原本就在的上级留着 ──
+  {
+    const parent = join(root, "user-parent");
+    mkdirSync(parent);
+    await rejects(
+      () => cloneProject({ url: join(root, "no-such-repo.git"), targetPath: join(parent, "a", "repo") }),
+      /克隆失败/,
+      "源仓库不存在时要报克隆失败",
+    );
+    assert.equal(existsSync(join(parent, "a")), false, "这一层是这次造的,要退回去");
+    assert.equal(existsSync(parent), true, "用户原本就有的上级目录不许被顺手删掉");
   }
 
   // ── 失败收拾只针对自己造的:用户原本就存在的空目录留在原地 ──

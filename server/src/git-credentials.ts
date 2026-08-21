@@ -93,19 +93,33 @@ export async function deleteProjectGitCredential(projectId: string): Promise<voi
 const EMPTY_INJECTION: GitNetInjection = { args: [], env: {} };
 
 /**
- * 给一次 git 网络命令配上这个项目的凭证。没配就原样返回空的，调用方一律 `...spread`。
+ * 把一对「用户名 + 令牌」配成一次 git 网络命令的注入。两者缺一就什么都不注入。
  *
  * 先那个**空的** `-c credential.helper=` 不是笔误：它清掉继承来的全局 helper
  * （macOS 钥匙串、Windows 的 manager-core）。不清的话，系统里那份旧凭证会抢在前面答，
  * 于是「我在项目里换了账号，推上去还是老账号」——而且报的错跟凭证毫无关系。
+ *
+ * 单独一个函数是因为有两个来源：**已登记的项目**从库里取（`gitNetInjection`），而
+ * **克隆**那一刻项目行还不存在，只能由调用方把用户现填的那对直接递进来。
+ */
+export function credentialInjection(
+  username: string | null | undefined,
+  secret: string | null | undefined,
+): GitNetInjection {
+  const user = (username ?? "").trim();
+  if (!user || !secret) return EMPTY_INJECTION;
+  return {
+    args: ["-c", "credential.helper=", "-c", `credential.helper=${CREDENTIAL_HELPER_SNIPPET}`],
+    env: { [USERNAME_ENV]: user, [SECRET_ENV]: secret },
+  };
+}
+
+/**
+ * 给一次 git 网络命令配上这个项目的凭证。没配就原样返回空的，调用方一律 `...spread`。
  */
 export async function gitNetInjection(projectId: string | null | undefined): Promise<GitNetInjection> {
   if (!projectId) return EMPTY_INJECTION;
   const row = (await db.select().from(projectGitCredentials)
     .where(eq(projectGitCredentials.projectId, projectId))).at(0);
-  if (!row) return EMPTY_INJECTION;
-  return {
-    args: ["-c", "credential.helper=", "-c", `credential.helper=${CREDENTIAL_HELPER_SNIPPET}`],
-    env: { [USERNAME_ENV]: row.username, [SECRET_ENV]: row.secret },
-  };
+  return row ? credentialInjection(row.username, row.secret) : EMPTY_INJECTION;
 }

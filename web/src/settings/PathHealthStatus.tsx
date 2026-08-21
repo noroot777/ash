@@ -26,7 +26,15 @@ export type PathHealthVerdict = {
   blocked: boolean;
 };
 
+/** 路径上是个文件时，三种问法给的都是同一句话：没有下一步，只能换一条路径。 */
+const OCCUPIED: PathHealthVerdict = {
+  text: "这条路径已经被一个文件占用了；换一条路径",
+  tone: "bad",
+  blocked: true,
+};
+
 function existingVerdict(health: ProjectHealth): PathHealthVerdict {
+  if (health.occupied) return OCCUPIED;
   if (!health.exists) return { text: "目录不存在；Ash 不会自动创建它", tone: "bad", blocked: false };
   // 非 git 目录不是错，只是能力少一截 —— 而少的那一截（worktree 隔离）用户在新建任务时
   // 根本看不到开关，不在这里说清楚，他只会以为是自己没找到。
@@ -43,6 +51,7 @@ function existingVerdict(health: ProjectHealth): PathHealthVerdict {
 }
 
 function cloneTargetVerdict(health: ProjectHealth): PathHealthVerdict {
+  if (health.occupied) return OCCUPIED;
   if (!health.exists) return { text: "目录还不存在，克隆时会连同上级目录一起建出来", tone: "good", blocked: false };
   if (health.isRepo) return { text: "这里已经是一个 Git 仓库了；换个目录名，或改用「本地目录」", tone: "bad", blocked: true };
   // `empty` 只有完整检查才带（/projects/check 走的正是它）；万一拿不到就别替服务端下
@@ -59,8 +68,9 @@ export function pathHealthVerdict(
   if (!health) return { text: "正在检查目录…", tone: "", blocked: false };
   if (purpose === "clone-target") return cloneTargetVerdict(health);
   // 目录会被建出来这件事，用户按下按钮之前就得知道 —— 按钮上那句「创建目录并创建项目」
-  // 和这一句说的是同一件事，两处一起改。
-  if (purpose === "existing-or-new" && !health.exists) {
+  // 和这一句说的是同一件事，两处一起改。被文件占着的路径不在此列：它建不出来（见
+  // `occupied`），走下面那条如实说被占了。
+  if (purpose === "existing-or-new" && !health.exists && !health.occupied) {
     return { text: "目录还不存在，创建项目时会连同上级目录一起建出来", tone: "", blocked: false };
   }
   return existingVerdict(health);

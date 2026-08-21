@@ -110,9 +110,13 @@ export async function readRemotes(root: string): Promise<GitRemoteInfo[]> {
  * ash 拼出来的 sshCommand 长这样，反过来也只认这一种形状。
  * `IdentitiesOnly=yes` 不是可选项：不加它，ssh 会先把 agent 里已加载的所有身份挨个试一遍，
  * 「配了这把 key 却仍然用着另一个账号推上去」就是这么来的。
+ *
+ * 路径在这里**再过一遍** `checkSshKeyPath`：这条函数是「把用户输入拼成一条会被 shell
+ * 执行的命令」的唯一出口，检查放在出口上，将来多一个调用点也漏不掉（路由那边先检查一次
+ * 是为了给 400 而不是 500，两处不是重复）。
  */
 export function sshCommandFor(keyPath: string): string {
-  return `ssh -i "${keyPath}" -o IdentitiesOnly=yes`;
+  return `ssh -i "${checkSshKeyPath(keyPath)}" -o IdentitiesOnly=yes`;
 }
 
 /** 从 core.sshCommand 里认出私钥路径；不是 ash 拼的那种形状就返回 null（原样保留，不动它）。 */
@@ -123,13 +127,26 @@ export function sshKeyPath(command: string | null): string | null {
 }
 
 /**
- * 私钥路径要拼进 core.sshCommand（git 按 shell 规则拆它），所以带引号或换行的路径一律
- * 拒绝，而不是想办法转义 —— 那条路上一个疏漏就等于让配置项变成一条可执行命令。
+ * 私钥路径要拼进 `core.sshCommand`，而 git 是**交给 shell 执行**这条命令的 —— 拼出来的
+ * 是 `ssh -i "<路径>" …`，于是双引号里所有对 shell 仍然有意义的字符都等于可执行代码：
+ *
+ *   · `$` / 反引号 —— `$(touch /tmp/pwned)` 在双引号里照样展开，下一次 fetch/pull/push
+ *     就替攻击者跑了一条命令（第 1 轮审查实测：marker 文件真的被建出来了）；
+ *   · `"` —— 提前闭合引号，后面随便接；
+ *   · 结尾的 `\` —— 把我们加的那个右引号转义掉，效果同上；
+ *   · 换行 —— git 的 config 是按行存的，一条变两条。
+ *
+ * 一律拒绝而不是想办法转义：这条路上一个疏漏就等于让一个配置项变成一条可执行命令，而
+ * 私钥路径里出现这些字符本来就没有正当理由。
  */
 export function checkSshKeyPath(raw: string): string {
   const path = raw.trim();
   if (!path) return path;
-  if (/["\n\r]/.test(path)) throw new ScmOperationError("私钥路径里不能有引号或换行", 400);
+  if (/["'\n\r]/.test(path)) throw new ScmOperationError("私钥路径里不能有引号或换行", 400);
+  if (/[$`!]/.test(path)) {
+    throw new ScmOperationError("私钥路径里不能有 $ ` ! —— git 用 shell 执行 core.sshCommand，它们会被当成命令展开", 400);
+  }
+  if (path.endsWith("\\")) throw new ScmOperationError("私钥路径不能以反斜杠结尾（它会把后面那个引号转义掉）", 400);
   return path;
 }
 
@@ -170,6 +187,12 @@ export async function writeGitIdentity(
     if (next === undefined) continue;
     if (!WRITABLE_KEYS.includes(key)) throw new ScmOperationError(`不允许设置 ${key}`, 400);
     const value = next.trim();
+    // core.sshCommand 是这三个键里唯一会被 shell 执行的，所以写侧只认 `sshCommandFor`
+    // 拼出来的那一种形状 —— 让「往 config 里塞一条任意命令」在这一层就没有通道，而不是
+    // 依赖每个调用点都记得先过 `checkSshKeyPath`。
+    if (key === "core.sshCommand" && value && sshKeyPath(value) === null) {
+      throw new ScmOperationError("core.sshCommand 只接受 ash 拼出来的形状（ssh -i \"<私钥>\" -o IdentitiesOnly=yes）", 400);
+    }
     try {
       await exec(
         "git",

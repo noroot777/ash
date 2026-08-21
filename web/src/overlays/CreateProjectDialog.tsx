@@ -50,6 +50,8 @@ export function CreateProjectDialog({ projects, onClose, onCreated, notify }: {
   const [folder, setFolder] = useState("");
   const [folderTouched, setFolderTouched] = useState(false);
   const [branch, setBranch] = useState("");
+  const [cloneUser, setCloneUser] = useState("");
+  const [cloneSecret, setCloneSecret] = useState("");
 
   const target = joinHostPath(host, parentDir, folder);
   const probePath = mode === "local" ? repoPath : target;
@@ -57,11 +59,16 @@ export function CreateProjectDialog({ projects, onClose, onCreated, notify }: {
   const pathHealth = useDebouncedPathHealth(probePath);
   const verdict = pathHealthState(pathHealth, probePath, purpose);
   const urlProblem = mode === "clone" ? repoUrlError(url) : null;
+  // 凭证只对 HTTPS 有意义：SSH 那条走的是私钥，填了用户名密码也没人会去问。
+  const httpsUrl = /^https?:\/\//i.test(url.trim());
 
   // 只在**确知**目录不存在时才请服务端建 —— 探测没回来/失败时按老行为走（照记不误，不动
   // 磁盘）。这样按钮上写的和真正会发生的事永远是同一件：写着「创建目录」就一定建，
-  // 写着「创建项目」就一定不建。
-  const willCreateDir = mode === "local" && pathHealth.health?.exists === false;
+  // 写着「创建项目」就一定不建。路径被一个文件占着时 `exists` 同样是 false，但那条路建
+  // 不出来（服务端 409），所以要把它排掉，否则按钮会承诺一件做不到的事。
+  const willCreateDir = mode === "local"
+    && pathHealth.health?.exists === false
+    && !pathHealth.health.occupied;
 
   const takenBy = useMemo(() => {
     const value = probePath.trim().replace(/[\\/]+$/, "");
@@ -94,7 +101,7 @@ export function CreateProjectDialog({ projects, onClose, onCreated, notify }: {
   };
 
   const canSubmit = mode === "local"
-    ? !!name.trim() && !!repoPath.trim()
+    ? !!name.trim() && !!repoPath.trim() && !verdict.blocked
     : !!name.trim() && !!url.trim() && !!parentDir.trim() && !!folder.trim() && !urlProblem && !verdict.blocked && !takenBy;
 
   const submit = async () => {
@@ -104,7 +111,17 @@ export function CreateProjectDialog({ projects, onClose, onCreated, notify }: {
     try {
       const created = mode === "local"
         ? await api.createProject(name.trim(), repoPath.trim(), willCreateDir)
-        : await api.cloneProject({ url: url.trim(), targetPath: target, branch: branch.trim(), name: name.trim() });
+        : await api.cloneProject({
+          url: url.trim(),
+          targetPath: target,
+          branch: branch.trim(),
+          name: name.trim(),
+          // 两个都填了才递 —— 服务端也是这么判的（`credentialInjection`），只填一半
+          // 等于没填，别让用户以为自己配上了。
+          ...(httpsUrl && cloneUser.trim() && cloneSecret
+            ? { username: cloneUser.trim(), secret: cloneSecret }
+            : {}),
+        });
       onCreated(created);
     } catch (e) {
       setError(e instanceof Error ? e.message : "项目创建失败");
@@ -171,6 +188,30 @@ export function CreateProjectDialog({ projects, onClose, onCreated, notify }: {
         </div>
         {/* 目标路径是两个字段拼出来的，紧跟在它们后面给一眼结果，别让用户自己在脑子里拼。 */}
         {target && <p className="create-project-target"><span>克隆到</span><code>{target}</code></p>}
+
+        {/* 私有仓库的凭证得在**这一刻**给：项目设置页里那份要等项目建出来才有，而克隆
+            正是最先撞上鉴权的一步。公开仓库留空即可。 */}
+        {httpsUrl && <>
+          <div className="create-project-row">
+            <label><span>用户名（可选）</span><input
+              value={cloneUser}
+              autoComplete="off"
+              onChange={(event) => setCloneUser(event.target.value)}
+              placeholder="私有仓库才需要"
+            /></label>
+            <label><span>令牌 / 密码</span><input
+              type="password"
+              value={cloneSecret}
+              autoComplete="new-password"
+              onChange={(event) => setCloneSecret(event.target.value)}
+              placeholder="GitHub / GitLab 的 access token"
+            /></label>
+          </div>
+          <p className="create-project-mode-hint">
+            填了就在克隆时用上，并存到新项目的 Git 凭证里，之后的拉取和推送都跟着用；只存在
+            ash 自己的库里，不写进仓库。
+          </p>
+        </>}
       </>}
 
       <label><span>项目名称</span><input
