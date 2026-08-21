@@ -58,6 +58,8 @@
   border:0; border-radius:5px; background:transparent; color:var(--faint);
 }
 .project-git-pull__more:hover, .project-git-pull__more[aria-expanded="true"] { background:var(--raised); color:var(--ink); }
+.project-git-pull__more[aria-disabled="true"] { opacity:.45; cursor:default; }
+.project-git-pull__more[aria-disabled="true"]:hover { background:transparent; color:var(--faint); }
 
 .project-git-menu {
   position:absolute; z-index:20; top:calc(100% + 4px); right:0;

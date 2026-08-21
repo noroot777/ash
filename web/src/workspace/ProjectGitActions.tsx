@@ -60,22 +60,33 @@ export function ProjectGitActions({
   const pullMenu = useRef<HTMLDivElement>(null);
   const pullButton = useRef<HTMLButtonElement>(null);
   const remoteMenu = useRef<HTMLDivElement>(null);
+  const pullTip = useHoverTip();
   useDismissable({ enabled: pulling, containerRef: pullMenu, onClose: () => setPulling(false), restoreFocusRef: pullButton });
   useDismissable({ enabled: publishing, containerRef: remoteMenu, onClose: () => setPublishing(false) });
 
   const run = async (kind: string, action: () => Promise<Awaited<ReturnType<typeof api.projectGitFetch>>>) => {
     if (await git.run(kind, action)) onChanged();
   };
+
+  const pullStop = pullBlocker(state);
+  const pullBusy = busy === "pull";
+  const pushStop = pushBlocker(state);
+  const pushBusy = busy === "push";
+
+  // 门禁同时落在按钮和提交函数上：菜单是先展开、后点的，展开期间状态可能已经变了（另一次
+  // 拉取跑起来、分支切到没有 upstream 的那条）。只锁按钮的话，菜单里那几条就成了绕过口，
+  // 服务端会退 409，用户看到的是一次莫名其妙的失败。
   const pull = (strategy: PullStrategy) => {
     setPulling(false);
+    if (pullStop || pullBusy) return;
     void run("pull", () => api.projectGitPull(projectId, strategy));
   };
   const push = (remote: string | null) => {
     setPublishing(false);
+    if (pushStop || pushBusy) return;
     void run("push", () => api.projectGitPush(projectId, remote));
   };
 
-  const pushStop = pushBlocker(state);
   // 还没 upstream 又配了多个远端时，「发布到哪儿」得让用户自己挑，不能替他猜。
   const needsRemotePick = !!state && !state.branch.upstream && state.remotes.length > 1;
 
@@ -93,8 +104,8 @@ export function ProjectGitActions({
       <div className="project-git-pull" ref={pullMenu}>
         <ActionButton
           label="快进拉取（--ff-only）"
-          blocked={pullBlocker(state)}
-          busy={busy === "pull"}
+          blocked={pullStop}
+          busy={pullBusy}
           onClick={() => pull("ff-only")}
         >
           <ArrowDown size={13} weight="bold" />
@@ -105,10 +116,13 @@ export function ProjectGitActions({
           className="project-git-pull__more"
           aria-label="选择拉取方式"
           aria-expanded={pulling}
-          onClick={() => setPulling((open) => !open)}
+          aria-disabled={!!pullStop || pullBusy}
+          {...pullTip.anchorProps}
+          onClick={() => { if (!pullStop && !pullBusy) setPulling((open) => !open); }}
         >
           <CaretDown size={9} weight="bold" aria-hidden="true" />
         </button>
+        <HoverTip at={pullTip.at}>{pullStop ?? "选择拉取方式"}</HoverTip>
         {pulling && (
           <div className="project-git-menu" role="menu" aria-label="拉取方式">
             {PULL_OPTIONS.map((option) => (
@@ -125,7 +139,7 @@ export function ProjectGitActions({
         <ActionButton
           label={pushStop ?? pushLabelFor(state)}
           blocked={pushStop}
-          busy={busy === "push"}
+          busy={pushBusy}
           onClick={() => {
             if (needsRemotePick) { setPublishing((open) => !open); return; }
             push(state?.branch.upstream ? null : defaultRemote(state));

@@ -29,8 +29,14 @@ export function useProjectGit(projectId: string | null, enabled: boolean): Proje
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
+  // StrictMode（开发态）会模拟一次「卸载再重挂」。cleanup 把 alive 置 false 之后必须在重挂时
+  // 置回 true，否则这个 ref 一去不回：往后 run() 的 setState / setMessage / setError / setBusy
+  // 全被当成「组件已经没了」跳过，面板永远停在操作之前那一份状态，错误也不显示。
   const alive = useRef(true);
-  useEffect(() => () => { alive.current = false; }, []);
+  useEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; };
+  }, []);
 
   // 换项目就把上一份状态和上一条消息一起丢掉：别让 A 项目的分支清单在 B 项目底下多显示
   // 一帧，那一帧足够让人点错分支。
