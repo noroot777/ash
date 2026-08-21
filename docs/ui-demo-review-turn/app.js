@@ -115,7 +115,7 @@ function buildStage(option) {
     <div class="app-topbar">
       <span class="status-pill">进行中</span>
       <div><b>拆分 controls.css</b></div>
-      <small>harness · feat/free-pipeline</small>
+      <small>ash · feat/free-pipeline</small>
     </div>
     <div class="task-conversation"></div>`;
   window_.querySelector(".task-conversation").append(template.content.cloneNode(true));

@@ -1,4 +1,4 @@
-// 预览进程的两条生命线：harness 自己的 dev 脚本不能在拉起 vite 后因 TDZ 崩掉；
+// 预览进程的两条生命线：ash 自己的 dev 脚本不能在拉起 vite 后因 TDZ 崩掉；
 // 外层组长即使先死，preview.ts 也必须把同组的长驻子进程收干净。
 // Run: npm -w server run test:preview-process
 import assert from "node:assert/strict";
@@ -9,8 +9,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = mkdtempSync(join(tmpdir(), "harness-preview-process-"));
-process.env.HARNESS_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "ash-preview-process-"));
+process.env.ASH_RUNS_DIR = join(root, "runs");
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const { startPreview } = await import("../src/preview.js");
@@ -67,8 +67,8 @@ try {
     env: {
       ...process.env,
       PORT: String(devPort),
-      HARNESS_PREVIEW: "1",
-      HARNESS_PREVIEW_MODE: "frontend",
+      ASH_PREVIEW: "1",
+      ASH_PREVIEW_MODE: "frontend",
       BROWSER: "none",
     },
   });
@@ -78,7 +78,7 @@ try {
   try {
     await waitFor(
       () => reachable(`http://127.0.0.1:${devPort}/`),
-      `harness 前端预览没有起来：\n${devOutput}`,
+      `ash 前端预览没有起来：\n${devOutput}`,
     );
     assert.equal(dev.exitCode, null, `dev 管理进程不该先退出：\n${devOutput}`);
     assert.doesNotMatch(devOutput, /Cannot access 'tracked' before initialization/);
@@ -105,8 +105,8 @@ try {
     env: {
       ...process.env,
       PORT: String(strictPort),
-      HARNESS_PREVIEW: "1",
-      HARNESS_PREVIEW_MODE: "frontend",
+      ASH_PREVIEW: "1",
+      ASH_PREVIEW_MODE: "frontend",
       BROWSER: "none",
     },
   });

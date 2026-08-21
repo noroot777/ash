@@ -3,20 +3,20 @@
 //
 //   node scripts/workspace-check.mjs        # 单独跑;不齐就列出缺什么并退 1
 //
-// 为什么值得单独一道闸:workspace 之间靠 `"@harness/shared": "*"` 互相引用,而
-// `@harness/*` 这些名字**公共 registry 上根本不存在**。只要 npm 没能把 shared/ 认成
+// 为什么值得单独一道闸:workspace 之间靠 `"@ash/shared": "*"` 互相引用,而
+// `@ash/*` 这些名字**公共 registry 上根本不存在**。只要 npm 没能把 shared/ 认成
 // 本地 workspace(目录没解出来、workspaces 数组漏了它、在子目录里跑的 install),它就
 // 会拿这个名字去 registry.npmjs.org 上找,然后报:
 //
 //   npm error code E404
-//   npm error 404 Not Found - GET https://registry.npmjs.org/@harness%2fshared
+//   npm error 404 Not Found - GET https://registry.npmjs.org/@ash%2fshared
 //
 // 这条错**读起来像断网**,于是人会去查代理、换镜像源、重装 node —— 而真正缺的是一个
 // 本地目录。2026-08-20 一台 Windows 新机装机就卡在这儿;当时 setup.mjs 给的提示
 // (「没网/代理没配/npm registry 不通」)还把方向指反了。所以在开始下载之前先自查,
 // 把这类失败翻译成人话 —— 顺带省掉「等几分钟才炸」。
 //
-// 判据不写死 `@harness`:先收集本地 workspace 的 name,取它们的 scope,再看有没有哪个
+// 判据不写死 `@ash`:先收集本地 workspace 的 name,取它们的 scope,再看有没有哪个
 // 依赖落在同一个 scope 下却找不到对应 workspace。以后换 scope 名不用回来改这里。
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";

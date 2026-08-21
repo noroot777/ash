@@ -9,10 +9,10 @@
       "@/assets/*": [
         "./assets/*"
       ],
-      "@harness/shared": [
+      "@ash/shared": [
         "../shared/src/index.ts"
       ],
-      "@harness/shared/duet": [
+      "@ash/shared/duet": [
         "../shared/src/duet.ts"
       ]
     },

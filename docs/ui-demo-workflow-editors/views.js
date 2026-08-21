@@ -105,7 +105,7 @@
       "<th>#</th><th>这一步做什么</th><th>谁来做</th><th>成功后</th><th>失败后</th><th></th>" +
       "</tr></thead><tbody>"];
     S.steps.forEach(function (s, i) {
-      var k = K[s.kind], who = s.p.executor || (s.kind === "human" ? "我" : "Harness");
+      var k = K[s.kind], who = s.p.executor || (s.kind === "human" ? "我" : "Ash");
       h.push("<tr>" +
         '<td class="n">' + (i + 1) + "</td>" +
         '<td class="what"><button class="cell" data-edit="' + s.id + '">' + esc(k.title(s.p)) + "</button></td>" +

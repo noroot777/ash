@@ -6,8 +6,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "harness-agent-guard-"));
-process.env.HARNESS_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "ash-agent-guard-"));
+process.env.ASH_RUNS_DIR = join(root, "runs");
 
 const { spawnAgent } = await import("../src/executors/spawn.js");
 const { detachedPathsFor, spawnDetachedAgent } = await import("../src/executors/detached.js");
@@ -35,7 +35,7 @@ try {
   );
   assert.match(await errorOf(detached), /测试隔离环境禁止启动真执行器/);
 
-  process.env.HARNESS_ALLOW_REAL_AGENT = "1";
+  process.env.ASH_ALLOW_REAL_AGENT = "1";
   const allowed = spawnAgent(root, process.execPath, ["-e", "process.exit(0)"], "");
   const exitCode = await new Promise<number | null>((resolve, reject) => {
     allowed.on("error", reject);
@@ -44,6 +44,6 @@ try {
   assert.equal(exitCode, 0, "显式放行的进程管理测试仍可启动假 CLI");
   console.log("agent spawn guard ok");
 } finally {
-  delete process.env.HARNESS_ALLOW_REAL_AGENT;
+  delete process.env.ASH_ALLOW_REAL_AGENT;
   rmSync(root, { recursive: true, force: true });
 }

@@ -2,10 +2,10 @@ import * as driverCore from "drizzle-orm/libsql/driver-core";
 import type { LibSQLDatabase } from "drizzle-orm/libsql/driver-core";
 import { createClient } from "./node-sqlite-client.js";
 import * as schema from "./schema.js";
-import { ensureHarnessDbDir, resolveHarnessDbFile } from "./path.js";
+import { ensureAshDbDir, resolveAshDbFile } from "./path.js";
 
-const dbFile = resolveHarnessDbFile();
-ensureHarnessDbDir(dbFile);
+const dbFile = resolveAshDbFile();
+ensureAshDbDir(dbFile);
 
 // Node 自带的 `node:sqlite`，零原生编译（Windows 不需要 Visual Studio Build Tools）。
 // 外壳把它伪装成 libsql 的 Client，drizzle 那一侧的用法一行不用改；细节见 node-sqlite-client.ts。
@@ -351,7 +351,7 @@ export async function ensureSchema() {
   try {
     await disarmReservationsOnAcceptedTasks();
   } catch (e) {
-    console.warn("[harness] 已验收任务遗留预约清理失败,忽略:", e);
+    console.warn("[ash] 已验收任务遗留预约清理失败,忽略:", e);
   }
   await reclaimOrphanOwnerGroups();
   // 事实没迁走的那几列留到下次启动:它们各自是唯一还认得出旧状态的证据。
@@ -409,7 +409,7 @@ async function migrateFreeReviewStatuses(): Promise<void> {
     );
     await disarmReservationsOnAcceptedTasks();
   } catch (e) {
-    console.warn("[harness] 自由审查旧状态收敛失败,忽略:", e);
+    console.warn("[ash] 自由审查旧状态收敛失败,忽略:", e);
   }
 }
 
@@ -435,7 +435,7 @@ async function disarmReservationsOnAcceptedTasks(): Promise<void> {
 async function migrateDebateToDuet(): Promise<void> {
   try {
     await client.execute("ALTER TABLE tasks RENAME COLUMN debate TO duet");
-    console.log("[harness] tasks.debate 列已更名为 duet");
+    console.log("[ash] tasks.debate 列已更名为 duet");
   } catch {
     /* 已迁移或新库 */
   }
@@ -547,14 +547,14 @@ async function migrateFreeWorkflowMergeStates(): Promise<boolean> {
         // 错误原文是唯一证据：时间线写不进去（任务从没跑过会话）就保留旧列，下次启动再试。
         const wrote = await appendTaskTimeline(taskId, `升级迁移：上一版「合并&清理」失败${message ? `，原始错误：${message}` : ""}；请从验收页重新验收或人工处理。`);
         if (!wrote) {
-          console.warn(`[harness] 旧合并失败原因写不进 ${taskId} 的时间线（无会话），本轮保留旧列`);
+          console.warn(`[ash] 旧合并失败原因写不进 ${taskId} 的时间线（无会话），本轮保留旧列`);
           allMigrated = false;
         }
       }
-      console.log(`[harness] 迁移旧自由工作流合并状态 ${taskId}: ${status}`);
+      console.log(`[ash] 迁移旧自由工作流合并状态 ${taskId}: ${status}`);
     } catch (e) {
       // 单条失败不拦启动，但这一轮不许删旧列（证据还没迁走），下次启动重试。
-      console.warn(`[harness] 旧合并状态迁移失败 ${taskId}(${status})，本轮保留旧列：`, e);
+      console.warn(`[ash] 旧合并状态迁移失败 ${taskId}(${status})，本轮保留旧列：`, e);
       allMigrated = false;
     }
   }
@@ -613,14 +613,14 @@ async function removeSshExecutorProfiles(): Promise<boolean> {
       }
       await client.execute({ sql: "DELETE FROM agents WHERE id = ?", args: [id] });
       console.warn(
-        `[harness] 已删除 ssh 执行器 profile ${String(row.name ?? id)}(${id}):该功能已移除,换机器请改用「接力」;`
+        `[ash] 已删除 ssh 执行器 profile ${String(row.name ?? id)}(${id}):该功能已移除,换机器请改用「接力」;`
         + "指向它的任务/审查者/待发送消息已改回按 CLI 类型的默认执行器",
       );
     }
     return true;
   } catch (e) {
     // 清不干净就把 agents.target 留到下次启动重试:那一列是唯一还认得出 ssh profile 的证据。
-    console.warn("[harness] ssh 执行器 profile 清理失败,本轮保留 agents.target:", e);
+    console.warn("[ash] ssh 执行器 profile 清理失败,本轮保留 agents.target:", e);
     return false;
   }
 }
@@ -632,7 +632,7 @@ async function reclaimOrphanOwnerGroups(): Promise<void> {
     const gone = await client.execute(
       "DELETE FROM groups WHERE owner_task_id IS NOT NULL AND owner_task_id NOT IN (SELECT id FROM tasks) RETURNING id",
     );
-    if (gone.rows.length) console.log(`[harness] 回收 ${gone.rows.length} 个 owner 任务已不存在的内部组`);
+    if (gone.rows.length) console.log(`[ash] 回收 ${gone.rows.length} 个 owner 任务已不存在的内部组`);
     // 组的成员也要处理：lead 行已不存在的 worker 挂着悬空 parent_id，前端只把
     // parentId===null 列为顶层，它们永久不可见（审查实测：主库 6 个 done+accepted 的
     // worker 藏在已消失的团队下）。解绑而不是删除——数据（会话/产物）保留，回到顶层
@@ -640,13 +640,13 @@ async function reclaimOrphanOwnerGroups(): Promise<void> {
     const unparented = await client.execute(
       "UPDATE tasks SET parent_id = NULL WHERE parent_id IS NOT NULL AND parent_id NOT IN (SELECT id FROM tasks) RETURNING id",
     );
-    if (unparented.rows.length) console.log(`[harness] 解绑 ${unparented.rows.length} 个 lead 已不存在的执行者（回到顶层可见）`);
+    if (unparented.rows.length) console.log(`[ash] 解绑 ${unparented.rows.length} 个 lead 已不存在的执行者（回到顶层可见）`);
     const ungrouped = await client.execute(
       "UPDATE tasks SET group_id = NULL WHERE group_id IS NOT NULL AND group_id NOT IN (SELECT id FROM groups) RETURNING id",
     );
-    if (ungrouped.rows.length) console.log(`[harness] 清理 ${ungrouped.rows.length} 个悬空的 group 引用`);
+    if (ungrouped.rows.length) console.log(`[ash] 清理 ${ungrouped.rows.length} 个悬空的 group 引用`);
   } catch (e) {
-    console.warn("[harness] 孤儿内部组回收失败，忽略：", e);
+    console.warn("[ash] 孤儿内部组回收失败，忽略：", e);
   }
 }
 
@@ -658,11 +658,11 @@ async function dropRetiredColumns(skip?: ReadonlySet<string>): Promise<void> {
     if (!info.rows.some((r) => r.name === column)) continue; // 早就清过了
     try {
       await client.execute(`ALTER TABLE ${table} DROP COLUMN ${column}`);
-      console.log(`[harness] 清理退役列 ${table}.${column}(${why})`);
+      console.log(`[ash] 清理退役列 ${table}.${column}(${why})`);
     } catch (e) {
       // 清不掉不该拦住启动(比如老 SQLite 不支持 DROP COLUMN):报一声继续跑,
       // 这列本来就没人读。
-      console.warn(`[harness] 退役列 ${table}.${column} 没能清掉,忽略:`, e);
+      console.warn(`[ash] 退役列 ${table}.${column} 没能清掉,忽略:`, e);
     }
   }
 }
@@ -676,9 +676,9 @@ async function dropRetiredTables(): Promise<void> {
       });
       if (!found.rows.length) continue;
       await client.execute(`DROP TABLE IF EXISTS ${table}`);
-      console.log(`[harness] 清理退役表 ${table}(${why})`);
+      console.log(`[ash] 清理退役表 ${table}(${why})`);
     } catch (e) {
-      console.warn(`[harness] 退役表 ${table} 没能清掉,忽略:`, e);
+      console.warn(`[ash] 退役表 ${table} 没能清掉,忽略:`, e);
     }
   }
 }

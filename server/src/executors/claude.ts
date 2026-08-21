@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
-import type { AgentEvent, AgentType, TokenUsage } from "@harness/shared";
-import { guessContextWindow } from "@harness/shared/usage";
-import { cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@harness/shared/cli-overrides";
+import type { AgentEvent, AgentType, TokenUsage } from "@ash/shared";
+import { guessContextWindow } from "@ash/shared/usage";
+import { cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@ash/shared/cli-overrides";
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
@@ -24,7 +24,7 @@ export class ClaudeExecutor implements AgentExecutor {
   // `--settings` 里。理由是同一条实测事实:CLI 会把各层 settings 的 `env` 写回
   // 自己的进程环境,命令行前缀那一份**打不过**用户的 settings.json。第 2 轮审查
   // finding 2 复现过:复制出来的命令带着 env 前缀跑,压缩行为退回用户文件里的那份数,
-  // 跟他在 harness 里看到的不是一回事。既然打不过,就别放上去骗人。
+  // 跟他在 ash 里看到的不是一回事。既然打不过,就别放上去骗人。
   private readonly resumeEnvHint?: string;
   private bin: string;
   private startupError?: string;
@@ -60,7 +60,7 @@ export class ClaudeExecutor implements AgentExecutor {
   /**
    * 恢复命令三件套。`--settings` 那截**按会话 cwd 现算**:项目那几层 settings 文件参与
    * 换算分母,而 executor 建出来的时候还不知道这活要在哪个目录跑 —— 先前它是构造器里
-   * 冻好的字段,于是 harness 自己带着项目层的值跑、复制出来的命令却少了那一截,两边的
+   * 冻好的字段,于是 ash 自己带着项目层的值跑、复制出来的命令却少了那一截,两边的
    * 压缩水位差着几千 token(第 3 轮审查 finding 2)。
    */
   resumeFields(cwd: string, sessionId: string): ResumeFields {
@@ -166,7 +166,7 @@ export class ClaudeExecutor implements AgentExecutor {
         child.stdin?.write(
           JSON.stringify({
             type: "control_request",
-            request_id: `harness_int_${++reqSeq}`,
+            request_id: `ash_int_${++reqSeq}`,
             request: { subtype: "interrupt" },
           }) + "\n",
         );

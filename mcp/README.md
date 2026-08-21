@@ -1,8 +1,8 @@
-# @harness/mcp
+# @ash/mcp
 
-把 harness 的 HTTP API 包成 **MCP 工具**，让智能体（Claude Code / Desktop / Cursor，或被 harness 拉起的 `claude`）能原生编排任务，而不用在 prompt 里教它 curl。
+把 ash 的 HTTP API 包成 **MCP 工具**，让智能体（Claude Code / Desktop / Cursor，或被 ash 拉起的 `claude`）能原生编排任务，而不用在 prompt 里教它 curl。
 
-这是一层**薄适配器**：本身不含逻辑，每个工具只转调 harness server 的现有接口。真源始终是 Hono server。
+这是一层**薄适配器**：本身不含逻辑，每个工具只转调 ash server 的现有接口。真源始终是 Hono server。
 
 ## 工具
 
@@ -21,19 +21,19 @@
 
 ```bash
 npm run build          # 含 mcp 的构建（产出 mcp/dist/index.js）
-npm start              # 起 harness server（默认 :4317）
+npm start              # 起 ash server（默认 :4317）
 ```
 
-MCP 进程通过 `HARNESS_URL` 找 server，默认 `http://localhost:4317`。
+MCP 进程通过 `ASH_URL` 找 server，默认 `http://localhost:4317`。
 
 ## 接入 Claude Code
 
 ```bash
 # 当前项目可用（local 作用域）
-claude mcp add harness -e HARNESS_URL=http://localhost:4317 -- node /Users/fjh/code/harness/mcp/dist/index.js
+claude mcp add ash -e ASH_URL=http://localhost:4317 -- node /Users/fjh/code/ash/mcp/dist/index.js
 
 # 或所有项目都可用（user 作用域）—— 推荐，编排别的仓库时也能用
-claude mcp add harness --scope user -e HARNESS_URL=http://localhost:4317 -- node /Users/fjh/code/harness/mcp/dist/index.js
+claude mcp add ash --scope user -e ASH_URL=http://localhost:4317 -- node /Users/fjh/code/ash/mcp/dist/index.js
 ```
 
 或提交进仓库、团队共享（项目根 `.mcp.json`）：
@@ -41,17 +41,17 @@ claude mcp add harness --scope user -e HARNESS_URL=http://localhost:4317 -- node
 ```json
 {
   "mcpServers": {
-    "harness": {
+    "ash": {
       "type": "stdio",
       "command": "node",
       "args": ["${CLAUDE_PROJECT_DIR}/mcp/dist/index.js"],
-      "env": { "HARNESS_URL": "http://localhost:4317" }
+      "env": { "ASH_URL": "http://localhost:4317" }
     }
   }
 }
 ```
 
-验证：会话里 `/mcp` 看连接状态与工具数；CLI 用 `claude mcp list` / `claude mcp get harness`。重建后开新会话即可（stdio 进程下次调用时重连）。
+验证：会话里 `/mcp` 看连接状态与工具数；CLI 用 `claude mcp list` / `claude mcp get ash`。重建后开新会话即可（stdio 进程下次调用时重连）。
 
 > Claude Desktop / Cursor 用同样的 `mcpServers` JSON，填到各自的配置文件即可。
 
@@ -60,21 +60,21 @@ claude mcp add harness --scope user -e HARNESS_URL=http://localhost:4317 -- node
 同一个 server 通用。Codex 的 `mcp add` 里**服务名是必填位置参数**，env 用 `--env`：
 
 ```bash
-codex mcp add harness --env HARNESS_URL=http://localhost:4317 -- node /Users/fjh/code/harness/mcp/dist/index.js
+codex mcp add ash --env ASH_URL=http://localhost:4317 -- node /Users/fjh/code/ash/mcp/dist/index.js
 ```
 
-查看 `codex mcp list` / `codex mcp get harness`；删除 `codex mcp remove harness`。写进 `~/.codex/config.toml`：
+查看 `codex mcp list` / `codex mcp get ash`；删除 `codex mcp remove ash`。写进 `~/.codex/config.toml`：
 
 ```toml
-[mcp_servers.harness]
+[mcp_servers.ash]
 command = "node"
-args = ["/Users/fjh/code/harness/mcp/dist/index.js"]
-env = { HARNESS_URL = "http://localhost:4317" }
+args = ["/Users/fjh/code/ash/mcp/dist/index.js"]
+env = { ASH_URL = "http://localhost:4317" }
 ```
 
 ## 给智能体的话术示例
 
-> 用 harness 在 `/Users/fjh/code/harness` 建一组依赖任务：先写测试、再实现、最后跑校验，三步串起来（A 完成才做 B），都用 claude，建完就开跑。
+> 用 ash 在 `/Users/fjh/code/ash` 建一组依赖任务：先写测试、再实现、最后跑校验，三步串起来（A 完成才做 B），都用 claude，建完就开跑。
 
 智能体会调 `create_task_chain(repoPath, tasks:[…], agentType:"claude", run:true)` 一次搞定。
 

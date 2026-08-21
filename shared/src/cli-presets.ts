@@ -1,13 +1,13 @@
 // CLI 各自的模型别名与思考强度档位。**从 index.ts 拆出来**的理由有两条:
 // ①它随「目录里有几个 CLI」线性增长,每个 type 一条带出处的注释,留在 index 里
 //   会把它顶过 700 行硬上限(2026-07-30 就顶过一次);
-// ②它主要给前端的模型选择器用(web-next 的 modelCatalog、mobile 的 ExecutionConfig);
+// ②它主要给前端的模型选择器用(web 的 modelCatalog、mobile 的 ExecutionConfig);
 //   服务端只有 `executors/model-probe.ts` 一处读它当兜底 —— 没必要让每个 import
 //   shared 的地方都带上这一大坨。
 //
-// 走子路径导出 `@harness/shared/cli-presets`,**不从 index 转发**:服务端直接跑
+// 走子路径导出 `@ash/shared/cli-presets`,**不从 index 转发**:服务端直接跑
 // shared 的 .ts 源码,Node 的类型擦除不会把 "./x.js" 说明符映射回 "./x.ts",
-// index 里转发运行时值会让 server 进程起不来(同 `@harness/shared/executors`)。
+// index 里转发运行时值会让 server 进程起不来(同 `@ash/shared/executors`)。
 import type { AgentType } from "./index.ts";
 
 /**
@@ -15,7 +15,7 @@ import type { AgentType } from "./index.ts";
  * `POST /api/agents/models/refresh` 的元素形状。
  *
  * 为什么要有它:`CLI_MODEL_PRESETS` 是发版时抄下来的**快照**,而各家 CLI 上新模型
- * 跟 harness 发版毫无关系 —— grok 4.6 上线后本机 CLI 早就能用,系统里却只有 4.5。
+ * 跟 ash 发版毫无关系 —— grok 4.6 上线后本机 CLI 早就能用,系统里却只有 4.5。
  * 所以凡是 CLI 自己给得出清单的(`grok models` 之类),一律现问 CLI;问不到才退回快照。
  *
  * 字段的诚实边界:`source` 说清这批模型是**问出来的**还是**兜底的**,`error` 保留
@@ -56,7 +56,7 @@ export const CLI_MODEL_PROBE_TYPES: ReadonlySet<AgentType> = new Set(["grok", "p
 // 全键 Record 是刻意的:新类型不填就编译不过,免得漏登记后下拉框静默空着。
 // 空数组 = 该 CLI 的模型别名还没实测(用户仍可在 profile 里手填任意模型名)。
 //
-// **这张表是兜底,不是权威**:CLI 自己有清单命令的(见 spec 的 `models` 字段),harness
+// **这张表是兜底,不是权威**:CLI 自己有清单命令的(见 spec 的 `models` 字段),ash
 // 会现问 CLI 并缓存,前端也给了「刷新」入口;探不到才退回这里。
 export const CLI_MODEL_PRESETS: Record<AgentType, readonly string[]> = {
   claude: ["opus", "sonnet", "haiku", "fable"],

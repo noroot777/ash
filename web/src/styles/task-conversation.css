@@ -1,0 +1,229 @@
+/* 任务会话流：气泡、markdown 正文、执行过程折叠块、账目胶囊、附件、提问卡。
+   外壳（头部、侧栏、抽屉）在 task-detail.css，回复框与派生面板在 task-reply.css，
+   执行块用到的两个动效在 task-motion.css。 */
+.task-message { position: relative; max-width: 790px; margin-bottom: 20px; }
+.task-message--agent { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; }
+.task-message-avatar { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 50%; background: var(--overlay); color: var(--muted); font-size: 8px; font-weight: 750; }
+.task-message-content { min-width: 0; }
+.task-message header,
+.task-user-bubble header { display: flex; min-height: 20px; align-items: center; gap: 6px; color: var(--faint); font-size: 10.5px; }
+.task-message header b,
+.task-user-bubble header b { color: var(--muted); font-weight: 650; }
+.task-turn-duration { color: var(--faint); font-size: inherit; font-weight: 450; }
+.task-message header button,
+.task-user-bubble header button { display: grid; width: 22px; height: 22px; margin-left: auto; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--faint); opacity: 0; }
+.task-message:hover header button,
+.task-user-bubble:hover header button,
+.task-message header button:focus-visible,
+.task-user-bubble header button:focus-visible { opacity: 1; }
+.task-message header button:hover,
+.task-user-bubble header button:hover { background: var(--raised); color: var(--ink); }
+
+.task-message--user { display: flex; max-width: none; justify-content: flex-end; padding-left: 38px; }
+.task-user-bubble { max-width: min(680px, 88%); border: 1px solid color-mix(in lch, var(--accent) 28%, var(--line)); border-radius: 9px; background: color-mix(in lch, var(--accent) 7%, var(--panel)); padding: 8px 11px; }
+.task-user-bubble p { margin: 2px 0 0; color: var(--ink); font-size: 12.5px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+
+.task-markdown { min-width: 0; color: var(--muted); font-size: 12.5px; line-height: 1.7; overflow-wrap: anywhere; }
+.task-markdown > :first-child { margin-top: 3px; }
+.task-markdown > :last-child { margin-bottom: 0; }
+.task-markdown p,
+.task-markdown ul,
+.task-markdown ol,
+.task-markdown blockquote,
+.task-markdown .task-markdown-table { margin: 8px 0; }
+.task-markdown p { white-space: normal; }
+.task-markdown ul,
+.task-markdown ol { padding-left: 1.65rem; }
+.task-markdown ul { list-style: disc outside; }
+.task-markdown ol { list-style: decimal outside; }
+.task-markdown ul ul { list-style-type: circle; }
+.task-markdown ul ul ul { list-style-type: square; }
+.task-markdown ol ol { list-style-type: lower-alpha; }
+.task-markdown ol ol ol { list-style-type: lower-roman; }
+.task-markdown li + li { margin-top: 3px; }
+.task-markdown li > ul,
+.task-markdown li > ol { margin-top: 3px; margin-bottom: 3px; }
+.task-markdown li > p { margin: 3px 0; }
+.task-markdown li::marker { color: var(--faint); font-variant-numeric: tabular-nums; }
+.task-markdown ul.contains-task-list { padding-left: 0; list-style: none; }
+.task-markdown .task-list-item { list-style: none; }
+.task-markdown .task-list-item > input { margin: 0 7px 0 0; vertical-align: -1px; accent-color: var(--accent); }
+.task-markdown h1,
+.task-markdown h2,
+.task-markdown h3,
+.task-markdown h4,
+.task-markdown h5,
+.task-markdown h6 { margin: 16px 0 7px; color: var(--ink); line-height: 1.35; }
+.task-markdown h1 { font-size: 18px; font-weight: 700; }
+.task-markdown h2 { font-size: 15px; font-weight: 700; }
+.task-markdown h3 { font-size: 13.5px; font-weight: 680; }
+.task-markdown h4 { font-size: 12.5px; font-weight: 680; }
+.task-markdown h5 { font-size: 11.5px; font-weight: 680; }
+.task-markdown h6 { color: var(--muted); font-size: 11px; font-weight: 680; }
+.task-markdown strong { color: var(--ink); font-weight: 650; }
+.task-markdown a { color: var(--accent); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+/* 引用块跟系统旁注（.conversation-note）是同一档「不是正文在说话」的东西：agent 输出里
+   的引用多半就是 ash 自己插的注记（「正在压缩上下文…」之类）。字号行高跟旁注对齐，
+   竖线的高度才跟着一样——竖线高度就是行高加这两像素 padding 撑出来的。 */
+.task-markdown blockquote { border-left: 2px solid var(--line2); padding: 1px 0 1px 11px; color: var(--faint); font-size: 11px; line-height: 1.6; }
+.task-markdown blockquote > :first-child { margin-top: 0; }
+.task-markdown blockquote > :last-child { margin-bottom: 0; }
+.task-markdown hr { height: 1px; margin: 15px 0; border: 0; background: var(--line); }
+.task-markdown-table { max-width: 100%; overflow-x: auto; }
+.task-markdown table { width: 100%; min-width: 420px; border-collapse: collapse; font-size: 11.5px; line-height: 1.5; }
+.task-markdown th,
+.task-markdown td { border: 1px solid var(--line2); padding: 6px 8px; text-align: left; vertical-align: top; }
+.task-markdown th { background: var(--raised); color: var(--ink); font-weight: 650; }
+.task-markdown td { background: color-mix(in lch, var(--panel) 82%, transparent); }
+.task-markdown th > :first-child,
+.task-markdown td > :first-child { margin-top: 0; }
+.task-markdown th > :last-child,
+.task-markdown td > :last-child { margin-bottom: 0; }
+.task-markdown code { border-radius: 4px; background: var(--raised); padding: 1px 4px; color: var(--ink); font-size: 11.5px; overflow-wrap: anywhere; }
+.task-code-block { overflow-x: auto; margin: 9px 0; border: 1px solid var(--line); border-radius: 8px; background: #f4f4f5; padding: 10px 12px; color: #27272a; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.6; white-space: pre; }
+.task-code-block code { background: transparent; padding: 0; color: inherit; overflow-wrap: normal; }
+.task-markdown-image { display: block; max-width: 100%; border: 0; background: transparent; padding: 0; }
+.task-markdown img { display: block; max-width: min(100%, 680px); max-height: 460px; border: 1px solid var(--line); border-radius: 8px; object-fit: contain; }
+.markdown-action-error { margin: 7px 0 0; color: var(--red); font-size: 10.5px; }
+
+.markdown-report-scrim { position: fixed; z-index: 180; inset: 0; display: grid; place-items: center; background: rgb(40 42 48 / 42%); padding: 20px; backdrop-filter: blur(1px); }
+.markdown-report-dialog { display: grid; width: min(880px, 94vw); max-height: min(760px, 90vh); grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: 1px solid var(--line2); border-radius: 13px; background: var(--panel); box-shadow: var(--shadow); }
+.markdown-report-dialog > header { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); padding: 11px 12px 11px 16px; }
+.markdown-report-dialog > header > div { min-width: 0; }
+.markdown-report-dialog > header span { display: block; color: var(--faint); font-size: 9px; font-weight: 650; letter-spacing: .04em; }
+.markdown-report-dialog h2 { overflow: hidden; margin: 2px 0 0; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.markdown-report-dialog > header button { display: grid; width: 28px; height: 28px; flex: none; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--muted); }
+.markdown-report-dialog > header button:hover { background: var(--raised); color: var(--ink); }
+.markdown-report-body { min-height: 180px; overflow-y: auto; padding: 16px 18px 20px; }
+.markdown-report-loading,
+.markdown-report-error { margin: 0; color: var(--faint); font-size: 12px; }
+.markdown-report-error { color: var(--red); }
+
+.task-agent-segment + .task-agent-segment { margin-top: 7px; }
+.task-execution-block { max-width: 680px; margin: 2px 0 1px; border: 0; color: color-mix(in srgb, var(--faint) 76%, transparent); font-size: 9.5px; }
+.task-execution-block > summary { display: inline-flex; max-width: 100%; cursor: pointer; align-items: center; gap: 4px; border-radius: 5px; padding: 2px 3px; list-style: none; opacity: .72; transition: color 150ms ease, opacity 150ms ease; }
+.task-execution-block > summary:hover { color: var(--faint); opacity: 1; }
+.task-execution-block > summary::-webkit-details-marker { display: none; }
+.task-execution-block > summary:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 38%, transparent); outline-offset: 1px; }
+.task-execution-caret { flex: none; opacity: .52; transition: transform 140ms ease; }
+.task-execution-block[open] > summary .task-execution-caret { transform: rotate(90deg); }
+.task-execution-label { max-width: min(58vw, 520px); overflow: hidden; font-weight: 450; text-overflow: ellipsis; white-space: nowrap; }
+.task-execution-block.has-error > summary { color: color-mix(in srgb, var(--red) 68%, var(--faint)); }
+.task-execution-block.has-error .t-shimmer { --shimmer-base: color-mix(in srgb, var(--red) 52%, transparent); --shimmer-highlight: color-mix(in srgb, var(--red) 72%, transparent); }
+.task-execution-pulse { width: 3px; height: 3px; flex: none; border-radius: 50%; background: currentColor; opacity: .72; }
+.task-execution-events { margin: 1px 0 1px 7px; border-left: 1px solid color-mix(in srgb, var(--line) 72%, transparent); padding: 1px 0 2px 6px; }
+.task-tool-line { margin-top: 2px; border: 0; color: color-mix(in srgb, var(--faint) 82%, transparent); font-size: 9.5px; }
+.task-tool-line summary,
+.task-tool-line .task-tool-head { display: flex; max-width: 100%; cursor: pointer; align-items: baseline; gap: 6px; border-radius: 6px; padding: 3px 6px; list-style: none; }
+.task-tool-line.is-flat .task-tool-head { cursor: default; }
+.task-tool-line summary:hover { color: var(--muted); }
+.task-tool-line summary::-webkit-details-marker { display: none; }
+.task-tool-line svg,
+.task-tool-line summary > span:first-child,
+.task-tool-line .task-tool-head > span:first-child { flex: none; align-self: center; }
+.task-tool-name { flex: none; font-weight: 500; }
+/* 展开后直接看见执行了什么:命令/文件走等宽,占满剩余宽度,超长省略。 */
+.task-tool-summary { flex: 1 1 auto; min-width: 0; overflow: hidden; color: color-mix(in srgb, var(--faint) 92%, transparent); font-family: var(--font-mono); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+.task-tool-line summary:hover .task-tool-summary { color: var(--muted); }
+.task-tool-line pre { max-height: 220px; overflow: auto; margin: 4px 0 2px 6px; border-left: 2px solid var(--line); padding: 4px 8px; white-space: pre-wrap; }
+.task-tool-line--error { color: var(--red); }
+/* 一条气泡的尾栏：会话 id、resume 命令、三颗账目胶囊全在这一行。 */
+.task-message-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 7px; }
+.task-message-footer button { max-width: 240px; overflow: hidden; border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 2px 6px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.task-message-footer button:hover { border-color: var(--line2); background: var(--raised); color: var(--muted); }
+/* 「重跑上一回合」：同一行里唯一的**动作**，其余都是元信息，所以给它红色描边——
+   出现的前提本来就是「上一回合崩了」，不该跟会话 id 一样灰。 */
+.task-message-footer button.is-retry { display: inline-flex; align-items: center; gap: 3px; border-color: color-mix(in lch, var(--red) 45%, var(--line)); color: var(--red); }
+.task-message-footer button.is-retry:hover { border-color: var(--red); background: color-mix(in lch, var(--red) 12%, var(--raised)); color: var(--red); }
+.task-message-footer button.is-retry:disabled { opacity: 0.55; }
+
+/* Token 用量。三颗都在尾栏里，跟 .task-message-footer 的按钮同款外形。 */
+.token-usage-chip { display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 2px 6px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; white-space: nowrap; }
+.token-usage-chip:hover { border-color: var(--line2); background: var(--raised); color: var(--muted); }
+
+/* 上下文水位。借 .token-usage-chip 的外形（两颗并排要长得像一家人），只多一条进度条；
+   进红区才变色 —— 中间再插一档黄色，「变色」这个信号就不值钱了。 */
+.context-meter-chip.is-tight { border-color: var(--red); color: var(--red); }
+.context-meter-bar { display: inline-block; width: 22px; height: 3px; overflow: hidden; border-radius: 2px; background: var(--line2); }
+.context-meter-bar > span { display: block; height: 100%; background: currentColor; opacity: 0.75; }
+
+.token-usage-panel {
+  position: fixed;
+  z-index: 60;
+  overflow-y: auto;
+  border: 1px solid var(--line2);
+  border-radius: 12px;
+  background: var(--panel);
+  padding: 8px 10px 7px;
+  box-shadow: var(--menu-shadow);
+  color: var(--muted);
+  font-size: 11px;
+  outline: none;
+}
+.token-usage-panel header,
+.token-usage-panel dl > div { display: grid; align-items: baseline; gap: 10px; }
+.token-usage-panel.is-cols-1 header,
+.token-usage-panel.is-cols-1 dl > div { grid-template-columns: 1fr 66px; }
+.token-usage-panel.is-cols-2 header,
+.token-usage-panel.is-cols-2 dl > div { grid-template-columns: 1fr 66px 66px; }
+.token-usage-panel header { margin-bottom: 5px; border-bottom: 1px solid var(--line); padding-bottom: 5px; color: var(--faint); font-size: 9.5px; }
+.token-usage-panel header span + span { text-align: right; }
+.token-usage-panel dl { margin: 0; }
+.token-usage-panel dl > div { padding: 1px 0; }
+.token-usage-panel dt { color: var(--faint); }
+.token-usage-panel dd { margin: 0; font-family: var(--font-mono); text-align: right; }
+.token-usage-panel .is-total { margin-top: 3px; border-top: 1px solid var(--line); padding-top: 4px; color: var(--ink); }
+.token-usage-panel .is-total dt { color: var(--ink); }
+.token-usage-panel footer { margin-top: 7px; color: var(--faint); font-size: 9.5px; line-height: 1.55; }
+
+.task-event-line { display: flex; max-width: 790px; align-items: center; gap: 9px; margin: 17px 0 17px 30px; color: var(--faint); font-size: 10.5px; }
+.task-event-line span { height: 1px; flex: 1; background: var(--line); }
+.task-event-line p { margin: 0; }
+.task-event-line.is-error { color: var(--red); }
+
+.task-conversation-empty { display: grid; min-height: 150px; place-content: center; justify-items: center; color: var(--faint); }
+.task-conversation-empty p,
+.task-conversation-note,
+.task-conversation-error { margin: 8px 0; color: var(--faint); font-size: 11.5px; }
+.task-conversation-error { color: var(--red); }
+.task-message-attachments,
+.task-upload-list { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+.task-message-image,
+.task-message-attachments > a,
+.task-message-file { display: flex; height: 54px; max-width: 220px; align-items: center; gap: 7px; overflow: hidden; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 9px; color: var(--muted); }
+.task-message-image { width: 54px; padding: 0; }
+.task-message-attachments img { width: 100%; height: 100%; object-fit: cover; }
+.task-message-attachments span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+
+.task-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.task-question-card { max-width: 790px; margin: 20px 0 8px 30px; overflow: hidden; border: 1px solid color-mix(in lch, var(--cyan) 38%, var(--line)); border-radius: 10px; background: color-mix(in lch, var(--cyan) 5%, var(--panel)); }
+.task-question-card > header { display: flex; gap: 9px; padding: 10px 11px 8px; }
+.task-question-card > header > span { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; border-radius: 7px; background: color-mix(in lch, var(--cyan) 15%, white); color: var(--cyan); }
+.task-question-card > header b { color: color-mix(in lch, var(--cyan) 65%, var(--ink)); font-size: 11.5px; }
+.task-question-card > header p { margin: 2px 0 0; color: var(--ink); font-size: 12px; white-space: pre-wrap; }
+.task-question-items > section { border-top: 0.5px solid color-mix(in lch, var(--cyan) 22%, var(--line)); padding: 9px 11px; }
+.task-question-title { display: flex; gap: 7px; margin-bottom: 6px; }
+.task-question-title > span,
+.task-question-options button > span { display: grid; width: 18px; height: 18px; flex: 0 0 18px; place-items: center; border-radius: 5px; background: color-mix(in lch, var(--cyan) 13%, white); color: var(--cyan); font-family: var(--font-mono); font-size: 9px; font-weight: 700; }
+.task-question-title p { margin: 0; color: var(--ink); font-size: 11.5px; }
+.task-question-options { display: grid; gap: 4px; margin-bottom: 6px; }
+.task-question-options button { display: flex; align-items: flex-start; gap: 7px; border: 1px solid color-mix(in lch, var(--cyan) 26%, var(--line)); border-radius: 7px; background: rgb(255 255 255 / 42%); padding: 5px 7px; text-align: left; }
+.task-question-options button:hover:not(:disabled) { background: color-mix(in lch, var(--cyan) 8%, white); }
+.task-question-options p { margin: 0; color: var(--ink); font-size: 11px; line-height: 1.45; }
+.task-question-options small { color: var(--faint); font-size: 9.5px; }
+.task-question-answer textarea { width: 100%; resize: vertical; border: 1px solid color-mix(in lch, var(--cyan) 22%, var(--line)); border-radius: 7px; background: rgb(255 255 255 / 44%); padding: 6px 8px; color: var(--ink); font-size: 11.5px; outline: 0; }
+.task-question-answer textarea:focus { border-color: color-mix(in lch, var(--cyan) 60%, var(--line)); }
+.task-question-card > footer { display: flex; min-height: 42px; align-items: center; gap: 10px; border-top: 0.5px solid color-mix(in lch, var(--cyan) 22%, var(--line)); padding: 7px 10px; color: var(--faint); font-size: 9.5px; }
+.task-question-card > footer span { margin-right: auto; }
+.task-question-card > footer span.is-error { color: var(--red); }
+.task-question-card > footer button { display: inline-flex; height: 28px; align-items: center; gap: 5px; border: 0; border-radius: 7px; background: var(--cyan); padding: 0 10px; color: white; font-size: 10.5px; font-weight: 650; }
+
+@media (max-width: 560px) {
+  .task-message--user { padding-left: 10px; }
+  .task-user-bubble { max-width: 96%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-execution-caret { transition: none; }
+}

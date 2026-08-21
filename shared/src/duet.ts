@@ -1,5 +1,5 @@
 // Duet(讨论)配置与归一 —— 从 index.ts 拆出的**含运行时值**模块。
-// 消费端走子路径 `@harness/shared/duet`(照 team/executors 的先例):index.ts 只
+// 消费端走子路径 `@ash/shared/duet`(照 team/executors 的先例):index.ts 只
 // type re-export,不转发运行时值 —— 服务端直接跑 shared 的 .ts 源码,index 转发
 // 运行时值会让进程起不来(见 server/CLAUDE.md「执行器与模型」最后一条)。
 import { AGENT_TYPES, type AgentType } from "./index.ts";

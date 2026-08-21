@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { statSync } from "node:fs";
-import type { TaskWorkspaceLeftover, TaskWorkspaceDiscardResult } from "@harness/shared";
-import { dirtyFilesAt, expandHome, gitError, listFiles, localBranchExists, removeWorktree, worktreeBranchName, worktreePathFor } from "./git.js";
+import type { TaskWorkspaceLeftover, TaskWorkspaceDiscardResult } from "@ash/shared";
+import { dirtyFilesAt, expandHome, gitError, listFiles, localBranchExists, removeWorktree, resolveWorktreeBranchName, worktreePathFor } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 
 const exec = promisify(execFile);
@@ -12,9 +12,9 @@ const isDir = (p: string) => {
 };
 
 // ── 删除任务时 worktree/分支的去留 ──────────────────────────────────────────
-// harness 建 worktree 但**从不自行删除**;唯二的例外都由用户显式点出:①验收通过
+// ash 建 worktree 但**从不自行删除**;唯二的例外都由用户显式点出:①验收通过
 // (accept,合并后清理,见 server/CLAUDE.md);②删除任务时勾选「连 worktree 和分支一起
-// 删」—— 就是这里。任务行一没,`.worktrees/<taskId>` 目录和 `harness/<id8>` 分支
+// 删」—— 就是这里。任务行一没,`.worktrees/<taskId>` 目录和 `ash/<id8>` 分支
 // 就成了没人认领的垃圾:用户在界面上再也看不见它们,只能靠自己记得去 git 里收拾。
 //
 // 两件东西各自独立存在:目录被手动 rm 过、分支还留着,或者反过来(分支被删、目录
@@ -28,7 +28,7 @@ export async function detectTaskWorkspace(
   const repo = expandHome(repoPath);
   if (!repo) return { path: null, branch: null };
   const path = worktreePathFor(repo, taskId);
-  const branch = worktreeBranchName(taskId);
+  const branch = await resolveWorktreeBranchName(repo, taskId);
   return {
     path: isDir(path) ? path : null,
     branch: (await localBranchExists(repo, branch)) ? branch : null,
@@ -64,7 +64,7 @@ export async function discardTaskWorkspace(
   if (!repo || (!opts.worktree && !opts.branch)) return out;
   return withRepoLock(repo, async () => {
     const path = worktreePathFor(repo, taskId);
-    const branch = worktreeBranchName(taskId);
+    const branch = await resolveWorktreeBranchName(repo, taskId);
     await exec("git", ["-C", repo, "worktree", "prune"]).catch(() => {});
     if (opts.worktree && isDir(path)) {
       out.path = path;

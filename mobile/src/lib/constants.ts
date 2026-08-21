@@ -1,7 +1,7 @@
 // Status metadata, ported from web. Tailwind class names are replaced with
 // plain hex colors for RN. `idle` is kept as precise
 // metadata but folded into the running section by the task list, just like web.
-import type { TaskStatus } from "@harness/shared";
+import type { TaskStatus } from "@ash/shared";
 
 type StatusMeta = { key: TaskStatus; label: string; color: string };
 

@@ -85,7 +85,7 @@ export async function recordTurnStart(taskId: string, cwd: string): Promise<void
     writeFileSync(startPath(taskId), JSON.stringify(snapshot));
   } catch (error) {
     // 记不下来 = 这一轮不提示，退回改动前的行为。绝不该拖垮起跑。
-    console.warn(`[harness] failed to record turn start for ${taskId}:`, error);
+    console.warn(`[ash] failed to record turn start for ${taskId}:`, error);
   }
 }
 

@@ -13,8 +13,8 @@ import { repairCoverageGuard } from "./review-coverage.js";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
-import { VERIFY_CHECK_LABELS } from "@harness/shared/workflow";
-import { workflowPolicy } from "@harness/shared/workflow-policy";
+import { VERIFY_CHECK_LABELS } from "@ash/shared/workflow";
+import { workflowPolicy } from "@ash/shared/workflow-policy";
 import { taskWorkflowDef } from "./workflows.js";
 import { reviewRoundDir } from "./review-evidence.js";
 import { reviewRequestReference } from "./review-request-context.js";
@@ -160,5 +160,5 @@ export function repairPrompt(input: {
     (coverageGuard ? `${coverageGuard}\n\n` : "") +
     `证据目录：${dir}\n\n` +
     `修完必须调用 complete_task(taskId="${target.id}") 确认完成；` +
-    (input.autoNext ? "确认后 harness 会自动再验一轮。" : "本轮不自动续验，确认后可由用户手动再验一轮。");
+    (input.autoNext ? "确认后 ash 会自动再验一轮。" : "本轮不自动续验，确认后可由用户手动再验一轮。");
 }

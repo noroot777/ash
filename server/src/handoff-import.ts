@@ -32,7 +32,7 @@ import { resumeOrRunTask } from "./task-resume.js";
 import { id, now } from "./util.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { TaskHandoff } from "@harness/shared";
+import type { TaskHandoff } from "@ash/shared";
 
 const exec = promisify(execFile);
 
@@ -51,7 +51,7 @@ function jsonOr(v: unknown, fallback: string): string {
 function validate(input: unknown): HandoffManifest {
   const m = input as HandoffManifest;
   if (!m || typeof m !== "object") throw new HandoffError("导入体必须是 JSON 对象");
-  if (m.version !== 1) throw new HandoffError(`不认识的接力协议版本 ${String((m as { version?: unknown }).version)},两边 harness 版本差太远`);
+  if (m.version !== 1) throw new HandoffError(`不认识的接力协议版本 ${String((m as { version?: unknown }).version)},两边 ash 版本差太远`);
   if (!isStr(m.targetProjectId)) throw new HandoffError("缺 targetProjectId");
   // transferId 宽容校验:老版本导出没有这个字段,缺了照收(只是失去幂等重放能力)。
   const tid = (m as { transferId?: unknown }).transferId;
@@ -540,7 +540,7 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
     const err = rollbackFailed
       ? new HandoffError(`导入落库失败,且补偿回滚也失败了——本机可能留有半截任务 ${m.task.id},请先在本机检查/清理再重试。原始错误:${msg.slice(0, 300)}`, 500)
       : new HandoffError(`导入落库失败,已回滚,本机没有留下半截任务,可直接重试。原始错误:${msg.slice(0, 300)}`, 500);
-    // 回滚失败 = 不能再向源机保证「本机没落库」,应答不带 harness 标记(见 handoff-routes)。
+    // 回滚失败 = 不能再向源机保证「本机没落库」,应答不带 ash 标记(见 handoff-routes)。
     err.unsettled = rollbackFailed;
     throw err;
   }

@@ -5,9 +5,9 @@
 
 ## 1. 目标
 
-用户在 harness 的**对话框**和**新建任务**里敲 `/`，能补全并调用「当前这一轮要派给的那个 CLI 自己已安装的技能」，选中后照常发送。附带在设置页给一个**技能清单刷新间隔**的设置项。
+用户在 ash 的**对话框**和**新建任务**里敲 `/`，能补全并调用「当前这一轮要派给的那个 CLI 自己已安装的技能」，选中后照常发送。附带在设置页给一个**技能清单刷新间隔**的设置项。
 
-价值判断：技能是 Claude Code / Codex 自带的能力，harness **一行提示词工程都不用写**，只要把入口露出来。
+价值判断：技能是 Claude Code / Codex 自带的能力，ash **一行提示词工程都不用写**，只要把入口露出来。
 
 ## 2. 已验证的事实（不要重复验证）
 
@@ -15,8 +15,8 @@
 
 | 探针 | 命令 | 结果 |
 |---|---|---|
-| claude | `claude -p "/harness-probe" --output-format stream-json --verbose --dangerously-skip-permissions`（即 harness 现用参数） | ✅ 技能被执行 |
-| codex | `codex exec "/harness-probe" --skip-git-repo-check -s read-only` | ✅ 命中 |
+| claude | `claude -p "/ash-probe" --output-format stream-json --verbose --dangerously-skip-permissions`（即 ash 现用参数） | ✅ 技能被执行 |
+| codex | `codex exec "/ash-probe" --skip-git-repo-check -s read-only` | ✅ 命中 |
 
 两者机制不同：claude 是 CLI 自己认这个 slash；**codex 是模型看着技能索引自己去 `sed` 读 SKILL.md**，效果一样但不是硬保证。
 
@@ -114,7 +114,7 @@ claude ∩ codex 的同名交集是 15 个。本机只装了 claude 和 codex �
 1. `shared/src/index.ts:23` `AppSettings` 接口加字段
 2. `shared/src/index.ts:30` `DEFAULT_APP_SETTINGS` 加默认值
 3. `server/src/app-settings.ts:9` `SETTING_SPECS` 加校验：`ok: (v) => typeof v === "number" && Number.isInteger(v) && (v === 0 || (v >= 10 && v <= 3600))`，hint 写"必须是 0（关闭）或 10~3600 的整数秒"
-4. `web-next/src/settings/DefaultsSettings.tsx:67` 之后加一个 `settings-row`。**不要用原生 `<input type=number>` 裸奔**——沿用该页现有形状（`Toggle` / `WorkflowPicker` 那种），做成几档预设的下拉（关闭 / 30 秒 / 1 分钟 / 5 分钟 / 15 分钟）比自由输入更好，用户不需要"37 秒"这种精度
+4. `web/src/settings/DefaultsSettings.tsx:67` 之后加一个 `settings-row`。**不要用原生 `<input type=number>` 裸奔**——沿用该页现有形状（`Toggle` / `WorkflowPicker` 那种），做成几档预设的下拉（关闭 / 30 秒 / 1 分钟 / 5 分钟 / 15 分钟）比自由输入更好，用户不需要"37 秒"这种精度
 
 ## 5. 实施清单
 
@@ -129,9 +129,9 @@ claude ∩ codex 的同名交集是 15 个。本机只装了 claude 和 codex �
 
 ### 前端（四个表面，缺一个就露馅）
 
-4. **`web-next/src/task-detail/ReplyBox.tsx:129`**：`command.items` 从静态两条变成"静态两条 + 动态技能表"。技能项要标成**透传**——不打开 inlinePanel，只把 `/名字 ` 补进正文照常发送。现有的候选过滤 / 上下键 / 回车选中逻辑（`ReplyBox.tsx:388-401`）直接复用
-5. **`web-next/src/composer/TaskComposerPanel.tsx:197`**：`SLASHES` 同样加动态项。⚠️ 它的 `changeBody`（第 205 行）会把 `/single|team|debate ` **从正文里吃掉**，技能项必须走另一条分支保留在正文里
-6. **`web-next/src/task-detail/TaskDerivationComposer.tsx`** 与团队 `dispatch` 的 body：同样支持，否则调度台派下去的活丢技能
+4. **`web/src/task-detail/ReplyBox.tsx:129`**：`command.items` 从静态两条变成"静态两条 + 动态技能表"。技能项要标成**透传**——不打开 inlinePanel，只把 `/名字 ` 补进正文照常发送。现有的候选过滤 / 上下键 / 回车选中逻辑（`ReplyBox.tsx:388-401`）直接复用
+5. **`web/src/composer/TaskComposerPanel.tsx:197`**：`SLASHES` 同样加动态项。⚠️ 它的 `changeBody`（第 205 行）会把 `/single|team|debate ` **从正文里吃掉**，技能项必须走另一条分支保留在正文里
+6. **`web/src/task-detail/TaskDerivationComposer.tsx`** 与团队 `dispatch` 的 body：同样支持，否则调度台派下去的活丢技能
 7. **`mobile/src/app/task/[id].tsx`** 的输入框同步（mobile 改动靠 Metro，别重启 :4317）
 
 ## 6. 坑清单（真正花时间的地方）
@@ -139,14 +139,14 @@ claude ∩ codex 的同名交集是 15 个。本机只装了 claude 和 codex �
 1. **技能按 CLI 分家**。菜单必须跟着"这一轮派给谁"实时变。否则给 codex 敲一个只有 claude 有的技能，它会**静默当成一句普通话执行**，用户还以为技能生效了——这是本功能最容易翻车的地方。
 2. **软链会被 `dirent.isDirectory()` 静默漏掉一半**。第一版扫描用 `readdirSync(withFileTypes)` + `isDirectory()`，78 个技能只扫出 39 个。必须用 `statSync`（它跟随软链）。
 3. **插件技能目录堆着历史版本**：hyperframes 一家躺着 10 个版本目录（0.7.70 → 0.7.92）。glob 一扫会把废弃版本一起列出来，**必须读 `~/.claude/plugins/installed_plugins.json` 拿 installPath**。
-4. **命名空间打架**：`/team` `/debate` `/single` 已被 harness 自己占用。建议 harness 自己的置顶 + 分隔线，技能在下面标来源；冲突时 harness 优先并给出提示。
+4. **命名空间打架**：`/team` `/debate` `/single` 已被 ash 自己占用。建议 ash 自己的置顶 + 分隔线，技能在下面标来源；冲突时 ash 优先并给出提示。
 5. **同一技能跨 CLI 共享**：78 条目去重后 54 个。菜单最好按 realpath 去重、标一个"claude/codex 都能用"的角标——否则用户切一次执行器看见列表变了一半，会以为技能丢了。
 6. **codex 那条路不是硬保证**（§2.1）。建议做一个"强注入"开关：服务端在 `server/src/orchestrator.ts:236` 附近拼 prompt 时把 `/名字` 改写成「先读取并遵循 `<绝对路径>/SKILL.md` 再执行下面任务」。这条对任何能读文件的 CLI 都成立。同一处逻辑还需覆盖 `team/dispatch.ts` 和 reply/resume 路径。
 
 ## 7. 边界：现在不做
 
 - 真正的增量拉取（只传变更）。越过下面任一条再说：技能数上千（现在 78，差一个数量级）／项目级技能随 worktree 漂移导致缓存 key 炸开。
-- 在 harness 里编辑、安装、删除技能。这一版只读。
+- 在 ash 里编辑、安装、删除技能。这一版只读。
 
 ## 8. 验收标准
 
@@ -156,4 +156,4 @@ claude ∩ codex 的同名交集是 15 个。本机只装了 claude 和 codex �
 4. 设置页能改刷新间隔，改完刷新页面仍然生效；设成 0 后不再轮询
 5. 手动往 `~/.claude/skills/` 加一个技能目录，不重启 server，菜单能出现它
 6. 改一个已有技能的 `description`，菜单里的副标题跟着变（验指纹逐文件 stat 这条）
-7. `npm -w web-next run build` 与 server typecheck 通过
+7. `npm -w web run build` 与 server typecheck 通过

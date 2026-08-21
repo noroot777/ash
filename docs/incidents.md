@@ -24,15 +24,15 @@
 
 点「停止全组」后端全做对了——进程 SIGTERM、内部组置 `paused`、会话写入系统提示——但按钮原样、状态徽标不动、`paused` 前端压根没渲染，用户只能得出「按钮坏了」。
 
-更坏的是它**掩盖了真问题**：界面若明说「已停止，0 个执行者被打断（都已完成）」，用户立刻就知道还在动的鼠标不归 harness 管，而不是把一个架构缺口误报成 UI bug。
+更坏的是它**掩盖了真问题**：界面若明说「已停止，0 个执行者被打断（都已完成）」，用户立刻就知道还在动的鼠标不归 ash 管，而不是把一个架构缺口误报成 UI bug。
 
 ---
 
-## CUA 旁路会话：harness 够不着的全局单例（2026-07-27）
+## CUA 旁路会话：ash 够不着的全局单例（2026-07-27）
 
-对应约定：`CLAUDE.md` 的「三层击杀只覆盖 harness 自己 spawn 的进程树」。
+对应约定：`CLAUDE.md` 的「三层击杀只覆盖 ash 自己 spawn 的进程树」。
 
-codex 的 computer use 由 `/Applications/ChatGPT.app` 侧拉起 `SkyComputerUseService`（**开机级全局单例**，跟着宿主 App 一起启动，不是每任务一个），harness 的进程组/fd/ppid 三条线索一条都够不着它。
+codex 的 computer use 由 `/Applications/ChatGPT.app` 侧拉起 `SkyComputerUseService`（**开机级全局单例**，跟着宿主 App 一起启动，不是每任务一个），ash 的进程组/fd/ppid 三条线索一条都够不着它。
 
 **已验证有效的手段**：`stopTask` 三层击杀掉执行者后，`SkyComputerUseService` 随即消失，屏幕指示器跟着走（CUA 服务有 `shouldTerminateWhenNoClientsRemain` 语义，codex 客户端一死它就自行退出）。
 
@@ -48,7 +48,7 @@ codex 的 computer use 由 `/Applications/ChatGPT.app` 侧拉起 `SkyComputerUse
 
 对应约定：`CLAUDE.md` 的「启动期的致命错误必须 `exit(1)`」「同一个数据库文件同一时刻只允许一个 server」。
 
-单实例守卫只挡「同一个 DB」，**端口撞车是另一条产幽灵的路**：`PORT=4317 HARNESS_DB=/tmp/x.db` 能顺利拿到 DB 锁，然后在 listen 那步撞死；旧代码里 scheduler 已经先起来了，EADDRINUSE 又被通用兜底接住只打日志不退出，于是留下「没有端口、但调度器在轮询生产 DB」的活死人。
+单实例守卫只挡「同一个 DB」，**端口撞车是另一条产幽灵的路**：`PORT=4317 ASH_DB=/tmp/x.db` 能顺利拿到 DB 锁，然后在 listen 那步撞死；旧代码里 scheduler 已经先起来了，EADDRINUSE 又被通用兜底接住只打日志不退出，于是留下「没有端口、但调度器在轮询生产 DB」的活死人。
 
 实测复现：修复前第二个实例在 EADDRINUSE 后照样存活并 `scheduler started`；修复后 exit 1、日志里 `scheduler started` 出现 0 次。
 
@@ -138,7 +138,7 @@ codex 的 computer use 由 `/Applications/ChatGPT.app` 侧拉起 `SkyComputerUse
 
 ## 关口画在验证前面就被跳过（2026-08-05）
 
-对应约定：`server/CLAUDE.md` 的「执行者彻底退出自我验证 / 就地验证」一条，以及推进器文件头（`server/src/workflow-advance.ts`）那三条不变量。回归：`npm -w server run test:workflow-gate`、`npm -w web-next run test:workflow-rail`。
+对应约定：`server/CLAUDE.md` 的「执行者彻底退出自我验证 / 就地验证」一条，以及推进器文件头（`server/src/workflow-advance.ts`）那三条不变量。回归：`npm -w server run test:workflow-gate`、`npm -w web run test:workflow-rail`。
 
 用户的原话是「等我点头这一步都没等我去打开预览瞅一眼，点个确认或补充点信息，就自动开始第四步的自动验证了」。任务 `bq3PLDuZzZOt` 的线是 **干活 → 打开预览 → 等我点头 → 自动验证 → 合并并清理**，关口画在验证**前面**。执行记录里的证据链：
 
@@ -157,7 +157,7 @@ codex 的 computer use 由 `/Applications/ChatGPT.app` 侧拉起 `SkyComputerUse
 
 第二期把段落切分改成按**站 id** 走（游标 `tasks.workflow_at`）之后，服务端这条路已经修好；但同一次排查里发现另外三处仍活着的同类错误，它们跟 dist 新旧无关：
 
-- **前端游标没跟着换**（`web-next/src/workflow/workflowModel.ts`）：文件头当时写着「第二期落了真游标就换掉这里」，游标落了、这里没换，仍从 stage 反推。`stage=verifying` 时反推指向 verify 站，排在它前面的 human 站于是被画成「✓ 已过」——用户看到的是「我压根没点头，它却说我点过了」。
+- **前端游标没跟着换**（`web/src/workflow/workflowModel.ts`）：文件头当时写着「第二期落了真游标就换掉这里」，游标落了、这里没换，仍从 stage 反推。`stage=verifying` 时反推指向 verify 站，排在它前面的 human 站于是被画成「✓ 已过」——用户看到的是「我压根没点头，它却说我点过了」。
 - **关口按钮只看 stage**（`WorkflowInspector.tsx` 的 `atHumanGate`）：`awaiting_acceptance` 只说明有人把任务标成了待验收，可能是 agent 按完成协议自报的，也可能属于线上**另一道**关口。照它给按钮，用户会在一道还没轮到的关口上按下不可逆的验收。
 - **关口静默停下**（`server/src/review.ts` 的 `enterHumanGate`）：stage 已是 `awaiting_acceptance`（agent 自报）时整个函数直接 return，那句「这条线走到「等我点头」」的时间线一个字都不写。任务停着不动，用户无从判断它是在等自己点头还是卡住了——这正是「停止/暂停必须留下持久可见的状态」那条规则的同一种病。
 
@@ -198,7 +198,7 @@ return !def.steps.slice(idx + 1).some((step) => step.kind === "human");   // ←
 两条推论：
 
 - **一个判断有几处实现，就要有几盏红灯**。推进器那条路修好之后，`acceptTask` 这条路上同名的判断仍是旧的：`test-workflow-gate.ts` 当时只测推进器，全绿，而用户点下去的正是没测的那条。所以这次的回归直接在真库 + 真 git 仓库上调 `acceptTask`，断言 main 的 ref 一动没动、worktree 还在、分支还在。
-- **worktree 里没有 `node_modules`，`@harness/shared` 会解析到主仓那份**（本次首跑就是这么撞出来的：改完 shared 测试照红，因为 server 读的是主仓的旧文件）。改 shared 时先 `ln -sfn ../../shared node_modules/@harness/shared`，否则验证的是别的分支的代码。
+- **worktree 里没有 `node_modules`，`@ash/shared` 会解析到主仓那份**（本次首跑就是这么撞出来的：改完 shared 测试照红，因为 server 读的是主仓的旧文件）。改 shared 时先 `ln -sfn ../../shared node_modules/@ash/shared`，否则验证的是别的分支的代码。
 
 ---
 

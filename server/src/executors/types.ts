@@ -1,5 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import type { AgentEvent, AgentType } from "@harness/shared";
+import type { AgentEvent, AgentType } from "@ash/shared";
 import type { RunTracePaths } from "./diagnostics.js";
 import type { DetachedPaths } from "./detached.js";
 
@@ -74,7 +74,7 @@ export interface ExecutorBuildOpts {
   startupError?: string;
   relay?: RelayConfig;
   /**
-   * 盖过 CLI 自己配置文件的那几项(以 env 注入)。已按 @harness/shared/cli-overrides
+   * 盖过 CLI 自己配置文件的那几项(以 env 注入)。已按 @ash/shared/cli-overrides
    * 的声明归一过,执行器直接 `cliConfigOverrideEnv()` 落成环境变量即可。
    */
   configOverrides?: Record<string, number>;
@@ -95,7 +95,7 @@ export interface ExecutorBuildOpts {
  *      duet 复用 session 行时漏掉了其中两列。
  *   ② `--settings` 的内容**跟会话 cwd 有关**(项目那几层 settings 文件参与换算),所以
  *      cwd 是必填参数。先前它是构造器里算好的字段,executor 建出来时还不知道要在哪个
- *      目录跑,于是 harness 自己带着项目层的值跑、复制出来的命令却少了那一截,两边压缩
+ *      目录跑,于是 ash 自己带着项目层的值跑、复制出来的命令却少了那一截,两边压缩
  *      水位差着几千 token(第 3 轮审查 finding 2)。签名里要 cwd,这个错就编译不过。
  */
 export interface ResumeFields {

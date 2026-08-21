@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Alert, Pressable, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { MAX_QUESTION_ITEMS, type Task } from "@harness/shared";
+import { MAX_QUESTION_ITEMS, type Task } from "@ash/shared";
 import { api } from "@/lib/api";
 import { appendQuestionOption, formatQuestionAnswers } from "@/lib/question";
 import { fonts, radius, useTheme } from "@/lib/theme";

@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import type { AgentEvent } from "@harness/shared";
+import type { AgentEvent } from "@ash/shared";
 import { RunTraceRecorder } from "../diagnostics.js";
 import { forceFinishOnExit, spawnErrorMessage } from "../spawn.js";
 import type { CliParser, CliParserContext, CliSpec } from "./types.js";
@@ -40,13 +40,13 @@ export const piSpec: CliSpec = {
     "modes/print-mode.ts、main.ts 的 resolveAppMode/readPipedStdin/session 解析、core/session-manager.ts)与 docs/json.md," +
     "**本机未装、未实测,故 untested 保留**。要点:" +
     "①非交互没有子命令:`--print/-p` 就是「处理完 prompt 就退出」,`--mode json` 直接进 JSON 打印模式;" +
-    "resolveAppMode 还会在 stdin/stdout 不是 TTY 时自动落到 print 模式,所以 harness 下三重保险不会卡交互;" +
+    "resolveAppMode 还会在 stdin/stdout 不是 TTY 时自动落到 print 模式,所以 ash 下三重保险不会卡交互;" +
     "②**没有权限确认这一环**,官方明说「不含内置权限系统,以启动它的用户权限运行」,所以不需要 --yolo 类 flag" +
     "(要隔离靠容器/沙箱);项目级信任(--approve/-a)在非交互模式下 confirm 直接返回 false、**不会阻塞**," +
     "代价只是不加载仓库自带的 extension/skill —— 需要就自己在 profile 里加 -a;" +
     "③prompt 走 stdin:main.ts 的 readPipedStdin() 在非 TTY 时读满 stdin,buildInitialMessage 把它拼成初始消息;" +
     "④`--session-id <id>` 语义与 claude 的完全一致(main.ts:先按 id 在本项目找,找到就 open 续聊,找不到就用这个 id 新建)," +
-    "且 assertValidSessionId 的正则接受 UUID,所以走 harness 自己发 id 那一档;它与 --continue/--resume/--session 互斥,故都不带;" +
+    "且 assertValidSessionId 的正则接受 UUID,所以走 ash 自己发 id 那一档;它与 --continue/--resume/--session 互斥,故都不带;" +
     "⑤`--thinking` 的合法档位是 off/minimal/low/medium/high/xhigh/max(args.ts 的 VALID_THINKING_LEVELS,docs/models.md 同口径);" +
     "⑥模型是「provider/id」或模糊匹配(`sonnet`、`sonnet:high` 都行),默认 provider 是 google,权威清单是 `pi --list-models`。" +
     "仍未确认/刻意不做的点:" +
@@ -60,7 +60,7 @@ export const piSpec: CliSpec = {
     "④auto_retry_* / compaction_* 事件只落 trace 不进时间线(长时间重试时界面会显得静默,实测后可再补)。" +
     "2026-08-13 补:本机确实装着这个 pi,`pi --list-models` 已实测(输出定宽表,前两列 provider/model)," +
     "所以模型清单走实时探测;但**执行链路仍未实测**,untested 保留。" +
-    "harness 这一半已验证(用一个假 `pi` 走完 GenericCliExecutor 全程):argv 装配为 " +
+    "ash 这一半已验证(用一个假 `pi` 走完 GenericCliExecutor 全程):argv 装配为 " +
     "`-p --mode json --session-id <uuid> --model … --thinking …`(-p 后面紧跟 flag,不会误吃参数)、" +
     "prompt 确实经 stdin 送达且子进程侧 isTTY=false、新建/续跑共用 --session-id、" +
     "恢复命令为 `cd <cwd> && pi --session-id <id>`、parser 能把合成事件流映射成 " +
@@ -81,7 +81,7 @@ export const piSpec: CliSpec = {
     // 没有 1.5x 加速档这个概念,故不写 fastArgs。
     //
     // --session-id 是「按 id 打开,没有就用这个 id 新建」,等于 claude 的 --session-id:
-    // harness 自己发 UUID 即可(assertValidSessionId 接受 UUID),新建和续跑用同一个 flag。
+    // ash 自己发 UUID 即可(assertValidSessionId 接受 UUID),新建和续跑用同一个 flag。
     session: {
       newIdFlag: "--session-id",
       resumeArgs: (id) => ["--session-id", id],

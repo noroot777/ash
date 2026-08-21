@@ -6,8 +6,8 @@ import type { CliSpec } from "./types.js";
 
 // codex 的 key 走 env_key 间接引用(TOML 里只出现变量名),真 key 只活在进程环境里 ——
 // `-c` 参数会原样进 commandLine,而 commandLine 存进 sessions.command_line 并在 UI 展示。
-const RELAY_ENV_KEY = "HARNESS_RELAY_KEY";
-const RELAY_PROVIDER_ID = "harness_relay";
+const RELAY_ENV_KEY = "ASH_RELAY_KEY";
+const RELAY_PROVIDER_ID = "ash_relay";
 
 // 检测字段原样来自旧 detect.ts 的 KNOWN_CLIS。执行部分由 CodexExecutor 接管(它还带
 // 每回合的失败证据链 diagnostics),下面的 exec 是同一套参数的声明式副本。

@@ -6,9 +6,9 @@ import { dirname, join, resolve, sep } from "node:path";
 //   企业策略 managed-settings.json > `--settings` > 项目 .claude/settings.local.json
 //   > 项目 .claude/settings.json > 用户配置目录 settings.json > 继承来的环境变量
 // 每一层的 `env` 对象在 CLI 初始化时会被**写回它自己的 process.env**,所以文件里的
-// 同名变量压过 harness 注入的环境变量(第 1 轮审查 finding 1 的根因)。
+// 同名变量压过 ash 注入的环境变量(第 1 轮审查 finding 1 的根因)。
 //
-// 「项目」和「用户配置目录」各有一条反直觉的实测事实,而且**两条都正打在 harness 的
+// 「项目」和「用户配置目录」各有一条反直觉的实测事实,而且**两条都正打在 ash 的
 // 主路径上**(第 3 轮审查 finding 3):
 //
 //   ① linked worktree 不是一个独立项目。测法:主仓 /tmp/probe/repo、linked worktree
@@ -19,7 +19,7 @@ import { dirname, join, resolve, sep } from "node:path";
 //        主仓 settings=8888 vs worktree settings=5000 → 5000(这一档反过来,就近赢)
 //        主仓 local=8000  vs worktree settings=5000   → 8000(local 整体高于 settings)
 //      数值对调重测结论不变。即 `settings.local.json` 认 canonical repo、
-//      `settings.json` 认当前目录,两档各自成对。harness 默认在 worktree 里干活,
+//      `settings.json` 认当前目录,两档各自成对。ash 默认在 worktree 里干活,
 //      只读 cwd 直下的话,主仓那份 `settings.local.json` 完全看不见 —— 而那正是
 //      「本机私有配置」最常写的地方。
 //   ② `CLAUDE_CONFIG_DIR` 设了就**整个取代** `~/.claude`,不回落:
@@ -27,7 +27,7 @@ import { dirname, join, resolve, sep } from "node:path";
 //        CLAUDE_CONFIG_DIR 指向空目录               → 读不到值(不会退回 HOME 的那份)
 //
 // 这里只解一件事:`CLAUDE_CODE_MAX_OUTPUT_TOKENS` 最终是多少。它是自动压缩换算的分母
-// (有效窗口 = 声明窗口 − min(它, 20000)),harness 必须按 CLI 真正会用的那个值换算,
+// (有效窗口 = 声明窗口 − min(它, 20000)),ash 必须按 CLI 真正会用的那个值换算,
 // 否则设置页写的触发点跟实际差一截 —— 用户 settings.json 里写 10000 时,填 80% 实际
 // 会在 ~84% 才压(第 2 轮审查 finding 3)。
 //

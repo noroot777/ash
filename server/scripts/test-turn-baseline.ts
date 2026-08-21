@@ -31,8 +31,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "harness-turn-baseline-"));
-process.env.HARNESS_DB = join(root, "harness.db");
+const root = mkdtempSync(join(tmpdir(), "ash-turn-baseline-"));
+process.env.ASH_DB = join(root, "ash.db");
 const repo = join(root, "repo");
 execFileSync("git", ["init", "-q", repo]);
 const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
@@ -280,7 +280,7 @@ try {
   // ── ⑥ 空壳工作间没被动过 → 拆屋 ──────────────────────────────────────────
   const shellId = "tb-shell01";
   const shellPath = join(repo, ".worktrees", shellId);
-  const shellBranch = `harness/${shellId.slice(0, 8)}`;
+  const shellBranch = `ash/${shellId.slice(0, 8)}`;
   execFileSync("git", ["-C", repo, "worktree", "add", "-q", "-b", shellBranch, shellPath]);
   await db.insert(tasks).values({
     id: shellId,

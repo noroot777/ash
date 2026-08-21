@@ -19,17 +19,17 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "harness-worktree-leftover-"));
+const root = mkdtempSync(join(tmpdir(), "ash-worktree-leftover-"));
 const repo = join(root, "repo");
-process.env.HARNESS_DB = join(root, "harness.db");
+process.env.ASH_DB = join(root, "ash.db");
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 
 try {
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Harness Test");
-  git(repo, "config", "user.email", "harness@example.test");
+  git(repo, "config", "user.name", "Ash Test");
+  git(repo, "config", "user.email", "ash@example.test");
   writeFileSync(join(repo, ".gitignore"), "node_modules/\n");
   writeFileSync(join(repo, "seed.txt"), "seed\n");
   git(repo, "add", "-A");
@@ -69,7 +69,7 @@ try {
       "注册项也要跟着没掉，否则分支还被 git 当成 checked out",
     );
     // 分支必须原样留着：删分支是验收清理后面那一步的事，这里越权删了就再也找不回来。
-    assert.match(git(repo, "branch", "--list", worktreeBranchName(taskId)), /harness\//);
+    assert.match(git(repo, "branch", "--list", worktreeBranchName(taskId)), /ash\//);
   }
 
   // ── 2. 已经是空壳 → 再删一次必须成功 ────────────────────────────────────
@@ -81,7 +81,7 @@ try {
     await removeWorktree(repo, ws.path, false);
     assert.equal(existsSync(ws.path), false, `空壳必须能被再删一次（注册项${unregister ? "已" : "未"}清），否则验收永远卡在 merged`);
     assert.equal(git(repo, "worktree", "list").includes(ws.path), false, "陈旧注册项要顺手 prune 掉");
-    assert.match(git(repo, "branch", "--list", worktreeBranchName(taskId)), /harness\//, "分支不归这一步管");
+    assert.match(git(repo, "branch", "--list", worktreeBranchName(taskId)), /ash\//, "分支不归这一步管");
   }
 
   // ── 3. 空壳被 prepareWorktree 撞见 → 恢复成真 worktree ──────────────────

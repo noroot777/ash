@@ -1,5 +1,5 @@
-import type { AppSettings } from "@harness/shared";
-import { DEFAULT_APP_SETTINGS } from "@harness/shared";
+import type { AppSettings } from "@ash/shared";
+import { DEFAULT_APP_SETTINGS } from "@ash/shared";
 import { db } from "./db/index.js";
 import { appSettings } from "./db/schema.js";
 

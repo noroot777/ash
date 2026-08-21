@@ -11,9 +11,9 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "harness-workspace-cleanup-"));
+const root = mkdtempSync(join(tmpdir(), "ash-workspace-cleanup-"));
 const repo = join(root, "repo");
-process.env.HARNESS_DB = join(root, "harness.db");
+process.env.ASH_DB = join(root, "ash.db");
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -29,8 +29,8 @@ const branchExists = (name: string) => {
 
 try {
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Harness Test");
-  git(repo, "config", "user.email", "harness@example.test");
+  git(repo, "config", "user.name", "Ash Test");
+  git(repo, "config", "user.email", "ash@example.test");
   writeFileSync(join(repo, "seed.txt"), "seed\n");
   git(repo, "add", "-A");
   git(repo, "commit", "-m", "seed");

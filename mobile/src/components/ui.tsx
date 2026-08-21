@@ -1,5 +1,5 @@
 import { View, Text, TextInput, Pressable, type ViewStyle, type StyleProp, type TextInputProps } from "react-native";
-import type { TaskStatus } from "@harness/shared";
+import type { TaskStatus } from "@ash/shared";
 import { STATUS_META } from "@/lib/constants";
 import { useTheme, radius, fonts } from "@/lib/theme";
 

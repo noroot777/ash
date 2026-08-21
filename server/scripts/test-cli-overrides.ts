@@ -8,7 +8,7 @@
 // 再走完整的 resolveExecutorFor → 执行器 → spawn 链路去读那个文件。
 //
 // 跑法:
-//   HARNESS_DB=/tmp/test-cli-overrides-$RANDOM.db npx tsx server/scripts/test-cli-overrides.ts
+//   ASH_DB=/tmp/test-cli-overrides-$RANDOM.db npx tsx server/scripts/test-cli-overrides.ts
 import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,7 +29,7 @@ const {
   cliSpeedOverrideConflict,
   ineffectiveCliConfigOverrides,
   normalizeCliConfigOverrides,
-} = await import("@harness/shared/cli-overrides");
+} = await import("@ash/shared/cli-overrides");
 
 // ── ① 归一化 ──────────────────────────────────────────────────────────────
 const spec = cliConfigOverridesFor("claude")[0];
@@ -103,7 +103,7 @@ assert.ok(
 );
 
 // ── ①c 换算分母也得钉住,否则算完还能被 settings.env 改掉 ────────────────────
-// 触发点 = f(窗口, 百分比, min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, 20000))。harness 按自己读到的
+// 触发点 = f(窗口, 百分比, min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, 20000))。ash 按自己读到的
 // 值算完百分比,用户 settings.env 再把这个变量改小,有效窗口就变大、真实触发点比页面写的
 // 晚几个百分点(第 2 轮审查 finding 3)。所以把「我们读到的那个赢家值」原样钉进 settings。
 const pinned = cliConfigOverrideEnv(
@@ -160,20 +160,20 @@ assert.ok(
 );
 
 // ── ②③ 真的进到子进程了吗 ──────────────────────────────────────────────────
-const sandbox = mkdtempSync(join(tmpdir(), "harness-cli-overrides-"));
+const sandbox = mkdtempSync(join(tmpdir(), "ash-cli-overrides-"));
 const probe = join(sandbox, "probe.txt");
 // 假 claude 得按平台换壳:Windows 内核不认 `#!/bin/sh`,PATH 查找只认 PATHEXT 里的
 // 后缀,所以那边写 `.cmd`(resolveBin 找 `claude` 时正是靠 PATHEXT 命中它)。
 // 两边都转手交给 node 干活 —— 测试本身就是它跑起来的,必然在;`??` 的语义跟 sh 的
 // `${X-<unset>}` 对齐:设过空串写空串,压根没设才写 `<unset>`(这正是 ③ 要分的两档)。
 const fakeBin = join(sandbox, IS_WINDOWS ? "claude.cmd" : "claude");
-const body = `require('fs').writeFileSync(process.env.HARNESS_TEST_PROBE, process.env.${spec.env} ?? '<unset>')`;
+const body = `require('fs').writeFileSync(process.env.ASH_TEST_PROBE, process.env.${spec.env} ?? '<unset>')`;
 writeFileSync(fakeBin, IS_WINDOWS ? `@node -e "${body}"\r\n` : `#!/bin/sh\nexec node -e "${body}"\n`);
 chmodSync(fakeBin, 0o755);
 // 分隔符用 `path.delimiter`:Windows 是 `;`,写死 `:` 会把整条 PATH 粘成一个不存在的
 // 目录名 —— 假 claude 找不到不说,连 node 自己都从 PATH 上消失。
 process.env.PATH = `${sandbox}${delimiter}${process.env.PATH ?? ""}`;
-process.env.HARNESS_TEST_PROBE = probe;
+process.env.ASH_TEST_PROBE = probe;
 
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { agents } = await import("../src/db/schema.js");
@@ -256,7 +256,7 @@ assert.equal(
   "没配的 profile 不该注入这个变量(注入空串会被 CLI 当成配过)",
 );
 
-// ── ④ harness 自己环境里带着同名变量时,「留空」必须真的是空 ──────────────────
+// ── ④ ash 自己环境里带着同名变量时,「留空」必须真的是空 ──────────────────
 // spawn 传的是 `{ ...process.env, ...补丁 }`。不显式删,这个变量就会穿过去盖掉 CLI 的
 // settings.json,而设置页还显示「未覆盖」—— 用户没有任何办法在界面上把它清掉。
 process.env[spec.env] = "123456";
@@ -273,7 +273,7 @@ assert.equal(
 delete process.env[spec.env];
 
 // ── ⑤ 「复制到终端接着聊」那条命令也得带上覆盖项 ────────────────────────────
-// 不带的话,用户手跑的那一次退回 settings.json:同一条会话在 harness 里会自动压缩、
+// 不带的话,用户手跑的那一次退回 settings.json:同一条会话在 ash 里会自动压缩、
 // 自己终端里不会 —— 而命令是从会话详情里原样复制走的,他不会想到还差一截参数。
 // **必须是 `--settings` 而不是 env 前缀**:CLI 会把各层 settings 的 env 写回自己的进程
 // 环境,命令行上的 env 前缀反而输给用户的 settings.json(第 2 轮审查 finding 2)。
@@ -384,7 +384,7 @@ delete process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
 
 // ── ⑦b 分母按 claude 自己的分层解:文件层压过继承来的环境变量 ──────────────────
 // 用户在 `~/.claude/settings.json` 里写了 10000,CLI 启动时会把它写回自己的进程环境 ——
-// harness 只看 process.env 就会按 32000 默认值算,填 80% 实际约 84% 才压(第 2 轮 finding 3)。
+// ash 只看 process.env 就会按 32000 默认值算,填 80% 实际约 84% 才压(第 2 轮 finding 3)。
 const { claudeMaxOutputTokens } = await import("../src/executors/claude-settings.js");
 // 开发机 / CI 要是带着 CLAUDE_CONFIG_DIR,用户层就指到别处去了,下面每一条都会误红误绿。
 // 先摘掉,要测它的场景自己往上设(第 4 轮审查建议 3)。
@@ -411,7 +411,7 @@ assert.equal(claudeMaxOutputTokens(fakeProject), null, "全都没有 = 读不到
 // ── ⑦c 两条反直觉的实测事实,离线也得覆盖 ────────────────────────────────────
 // 这两条只在 test:claude-settings-live 里对过真 CLI,而那条本机没装 claude 就整条跳过 ——
 // 于是「没装 claude 的机器」等于完全没测(第 4 轮审查建议 3)。这里按同样的场景钉住
-// harness 这一侧的解析:live 那条负责「假设还对不对」,这条负责「代码有没有照假设做」。
+// ash 这一侧的解析:live 那条负责「假设还对不对」,这条负责「代码有没有照假设做」。
 const layer = (dir: string, file: "settings.json" | "settings.local.json", value: number | null) => {
   const path = join(dir, ".claude", file);
   if (value === null) return rmSync(path, { force: true });
@@ -431,7 +431,7 @@ assert.equal(claudeMaxOutputTokens(), 7000, "settings.json 直接在 CLAUDE_CONF
 delete process.env.CLAUDE_CONFIG_DIR;
 
 // ② linked worktree 不是独立项目:local 档认主仓、shared 档认当前目录。
-// harness 默认就在 worktree 里干活,读漏主仓那份 settings.local.json = 分母整个错掉。
+// ash 默认就在 worktree 里干活,读漏主仓那份 settings.local.json = 分母整个错掉。
 const mainRepo = join(sandbox, "wt-main");
 const linkedWt = join(sandbox, "wt-linked"); // 跟主仓平级:目录树上互不包含,才测得出「按 git 关系找主仓」
 mkdirSync(join(mainRepo, ".git", "worktrees", "probe"), { recursive: true });
@@ -493,7 +493,7 @@ assert.equal(merged.env?.[spec.env], "200000", "覆盖项也不能因为合并�
 
 // 用户自己在额外参数里写了 --settings 时,我们这份会被整份顶掉 —— 设置页得说出来,
 // 不然界面上写着「已覆盖」而 CLI 那边一个字没收到。
-const { cliConfigOverrideConflict } = await import("@harness/shared/cli-overrides");
+const { cliConfigOverrideConflict } = await import("@ash/shared/cli-overrides");
 assert.ok(cliConfigOverrideConflict("claude", ["--settings", "{}"]), "自带 --settings 要给出警告");
 assert.ok(cliConfigOverrideConflict("claude", ["--settings={}"]), "= 形式的写法同样要认出来");
 assert.equal(cliConfigOverrideConflict("claude", ["--model", "opus"]), null, "无关参数不该报警");
@@ -521,10 +521,10 @@ assert.equal(cliSpeedOverrideConflict("claude", ["--settings", "{}"], "standard"
 assert.equal(cliSpeedOverrideConflict("claude", ["--model", "opus"], "fast"), null, "无关参数不该报警");
 assert.equal(cliSpeedOverrideConflict("codex", ["--settings"], "fast"), null, "别的 CLI 不走这一档");
 
-// ── ⑧b 粘贴出去的那条命令 = harness 自己真跑的那条 ─────────────────────────────
+// ── ⑧b 粘贴出去的那条命令 = ash 自己真跑的那条 ─────────────────────────────
 // 触发点是按「CLI 最终会看到的 max output tokens」换算的,而那个值要读**项目层**的
 // settings —— 于是同一个 profile 在不同 cwd 下算出来的百分比本就不同。先前恢复参数是
-// 建执行器时冻好的(没有 cwd),harness 按 pct=84.21 跑、复制出来的命令写着 pct=88.89,
+// 建执行器时冻好的(没有 cwd),ash 按 pct=84.21 跑、复制出来的命令写着 pct=88.89,
 // 同一条会话两边压缩水位差了几千 token(第 3 轮审查 finding 2)。
 const pctProject = join(sandbox, "pct-proj");
 mkdirSync(join(pctProject, ".claude"), { recursive: true });
@@ -553,7 +553,7 @@ assert.notEqual(
 );
 
 // ── ⑨ 库里的坏数据:读端一律按「没配」算,别把整页/整次执行拖下水 ───────────────
-const { readCliConfigOverrides } = await import("@harness/shared/cli-overrides");
+const { readCliConfigOverrides } = await import("@ash/shared/cli-overrides");
 assert.deepEqual(readCliConfigOverrides("claude", "{不是 JSON"), {}, "坏 JSON 按没配算");
 assert.deepEqual(readCliConfigOverrides("claude", null), {}, "空值按没配算");
 assert.deepEqual(

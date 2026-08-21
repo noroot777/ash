@@ -5,7 +5,7 @@
 // 结算规则是全局单点，谁也不该另造一份。
 import type { WriteStream } from "node:fs";
 import { eq, sql } from "drizzle-orm";
-import type { AgentEvent, AgentType, SessionRole, TaskStatus } from "@harness/shared";
+import type { AgentEvent, AgentType, SessionRole, TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -48,7 +48,7 @@ export async function afterSettlement(
   } catch (error) {
     // Review orchestration is a post-settlement side effect. A failure here must
     // never rewrite an already-settled worker/reviewer status.
-    console.error(`[harness] review settlement hook failed for ${taskId}:`, error);
+    console.error(`[ash] review settlement hook failed for ${taskId}:`, error);
   }
 }
 
@@ -61,15 +61,15 @@ export async function afterSettlement(
 // 协议：agent 必须在回合内调过 complete_task 确认
 // 「目标真的达成了」才落 done —— exit 0 只证明 CLI 进程正常退出,agent 报错后
 // 退出照样 exit 0,假 done 会误推进队列、错误唤醒下游。未确认 → failed(重试
-// 会 resume 续跑,代价低)。逃生口:HARNESS_LAX_DONE=1 退回「exit 0 即 done」
-// (接没配 harness MCP 的 agent 时用)。一处算清楚,run / continue 共用。
+// 会 resume 续跑,代价低)。逃生口:ASH_LAX_DONE=1 退回「exit 0 即 done」
+// (接没配 ash MCP 的 agent 时用)。一处算清楚,run / continue 共用。
 // 队列推进：done / canceled / failed / paused 进 setTaskStatus 后会触发同 queue 推进。
 // 返回落位状态 + note(未确认降级的说明,调用方写进时间线让用户知道为什么)。
-const STRICT_DONE = !process.env.HARNESS_LAX_DONE;
+const STRICT_DONE = !process.env.ASH_LAX_DONE;
 /**
  * 导出给 orchestrator：宽松模式下**连前言也别发**。
  *
- * 这个逃生口的适用场景是「对面的 agent 根本够不着这台 harness 的 MCP」——预览实例就是
+ * 这个逃生口的适用场景是「对面的 agent 根本够不着这台 ash 的 MCP」——预览实例就是
  * 现成一例（claude 只把配置文件里写死的 env 交给 MCP 子进程，不传父进程的环境变量，
  * 所以预览里跑的 agent 的 `complete_task` 一定打去主实例、拿一个 404）。这种时候还照旧
  * 交代「不确认就记 failed」，agent 会认真去调、失败、再花半个回合解释它没能确认——
@@ -112,7 +112,7 @@ export async function settleTaskStatus(
   const notify = (kind: Parameters<typeof notifyTeamLead>[1], q?: string, extra?: string) => {
     if (!t) return;
     void notifyTeamLead(t, kind, q, extra).catch((err) =>
-      console.error(`[harness] notifyTeamLead(${taskId}) failed:`, err),
+      console.error(`[ash] notifyTeamLead(${taskId}) failed:`, err),
     );
   };
   // 续聊(follow-up)回合:任务早就是终态,这一轮是终态之后的对话,不是任务的执行。
@@ -226,7 +226,7 @@ export async function consumeSingleRun(a: {
   const verifyRound = taskRow?.verifyRound ?? null;
   const executionEventId = role === "single" && !nativeTurn
     ? await recordFreeTaskExecutionStartIfFree(taskId, a.turnStart).catch((error) => {
-        console.warn(`[harness] failed to record free workflow execution start for ${taskId}:`, error);
+        console.warn(`[ash] failed to record free workflow execution start for ${taskId}:`, error);
         return null;
       })
     : null;
@@ -237,7 +237,7 @@ export async function consumeSingleRun(a: {
       await finishFreeTaskExecution(executionEventId, status, endedAt);
       executionFinished = true;
     } catch (error) {
-      console.warn(`[harness] failed to record free workflow execution end for ${taskId}:`, error);
+      console.warn(`[ash] failed to record free workflow execution end for ${taskId}:`, error);
     }
   };
   try {

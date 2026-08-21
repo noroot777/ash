@@ -26,7 +26,7 @@ const DIALOG_TIMEOUT_MS = 4 * 60_000;
 const PROMPT = "选择项目目录";
 
 /** Windows 侧把起始目录经环境变量递进去，绕开 PowerShell 的引号规则（脚本本身是常量）。 */
-const START_ENV = "HARNESS_DIR_PICKER_START";
+const START_ENV = "ASH_DIR_PICKER_START";
 
 /** 一次只准开一个窗口。模态窗口叠起来只会让服务端桌面没法用。 */
 let inFlight = false;
@@ -257,7 +257,7 @@ async function pickOnLinux(start: string): Promise<PickResult> {
 
 /**
  * 削掉路径末尾的分隔符。AppleScript 的 `POSIX path of` 给文件夹的路径**一律带尾斜杠**
- * （实测:选中 `server/src` 回来的是 `/Users/fjh/code/harness/server/src/`），原样填进
+ * （实测:选中 `server/src` 回来的是 `/Users/fjh/code/ash/server/src/`），原样填进
  * 输入框会让同一个目录在库里存出两种写法。根目录（`/`、`C:\`）本身就是分隔符,不能削。
  */
 export function normalizePickedPath(raw: string): string {

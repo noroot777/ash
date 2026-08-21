@@ -32,7 +32,7 @@ export function portHint(port: number | null): string {
   const name = port ? `PORT=${port}` : "PORT";
   return "启动命令里的端口多半是写死的，而同一个项目此刻往往已经有一份在跑"
     + "（你自己那份、或者别的任务的预览）。\n"
-    + `harness 已经给这次预览借了一个空闲端口，以环境变量 ${name} 传了进去 —— `
+    + `ash 已经给这次预览借了一个空闲端口，以环境变量 ${name} 传了进去 —— `
     + "把这一站的启动命令改成认它的写法就能错开，例如 `npm run dev -- --port $PORT`。";
 }
 

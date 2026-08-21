@@ -16,7 +16,7 @@
 //    真按钮同一条规矩——stage 可能是 agent 自报的，也可能属于线上另一站。
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
-import { STEP_LABELS } from "@harness/shared/workflow";
+import { STEP_LABELS } from "@ash/shared/workflow";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
@@ -63,7 +63,7 @@ export async function forcePassVerifyStation(
   if (handedOff) return { error: handedOff, handoff: true, httpStatus: 409 };
   // 已经验收/合并完的任务不受理：游标此刻可能仍停在验证站上（放行之后才把剩下那段跑
   // 完），但再签一次字就是让后面的 accept 站**再合并一次**。前端同一条口径在
-  // `verifyStationAtCursor`（web-next/src/workflow/workflowModel.ts）。
+  // `verifyStationAtCursor`（web/src/workflow/workflowModel.ts）。
   if (task.stage === "accepted" || task.stage === "merged") {
     return { error: "这个任务已经验收完成，不需要再强制通过验证", stage: task.stage, httpStatus: 409 };
   }

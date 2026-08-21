@@ -44,7 +44,7 @@ assert.deepEqual(classifyCodexExit(base({ exitStatus: 1, stopRequested: true }))
   failureReason: null,
 });
 
-const dir = mkdtempSync(join(tmpdir(), "harness-diagnostics-"));
+const dir = mkdtempSync(join(tmpdir(), "ash-diagnostics-"));
 try {
   const paths = {
     eventsPath: join(dir, "events.jsonl"),

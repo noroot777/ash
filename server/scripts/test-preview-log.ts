@@ -6,7 +6,7 @@
 //   · 漏判（该认出撞车却没认）= 用户干等 120 秒，再收到一句「等了 120 秒还没起来」，
 //     真原因埋在日志末尾要他自己翻。烦，但至少他知道这一站失败了。
 //   · 误判（把「我自己换个端口」当成撞车）= 一个**本来跑起来了**的预览被我们杀掉并
-//     判死。用户看到的是「harness 把好好的服务弄挂了」。
+//     判死。用户看到的是「ash 把好好的服务弄挂了」。
 //
 // 而漏判还有第三种更坏的下场（不在这份测试里，在 preview.ts 的顺序上）：占着端口的
 // 那个进程是活的，连得上、也印着 http://localhost:5173，于是会被误报成「预览已起」，
@@ -35,8 +35,8 @@ check(
   "端口 5173 已经被别的进程占着",
 );
 check(
-  "harness server 自己的拒绝启动",
-  portConflict("[server] [harness] Refusing to start: port 4317 is already in use.\n"),
+  "ash server 自己的拒绝启动",
+  portConflict("[server] [ash] Refusing to start: port 4317 is already in use.\n"),
   "端口 4317 已经被别的进程占着",
 );
 check(
@@ -86,23 +86,23 @@ check("同一份日志问两次答案一样", pickPreviewUrl(both, 54798), pickP
 // —— 撞车 + 自己的地址同时出现：preview.ts 的那个例外 ——
 // 后端撞上本机已在跑的那份、前端认了 $PORT 好好地起来了。两个纯函数各自照旧回答，
 // 由 preview.ts 组合成「这次不算失败」。这里钉的是它俩的输入。
-const mixed = "[server] [harness] Refusing to start: port 4317 is already in use.\n"
+const mixed = "[server] [ash] Refusing to start: port 4317 is already in use.\n"
   + "[web] ➜  Local:   http://localhost:54798/\n";
 check("撞车行照样认得出来", portConflict(mixed), "端口 4317 已经被别的进程占着");
 check("但预览本尊落在借来的端口上", pickPreviewUrl(mixed, 54798)?.lent, true);
 
-// —— harness 自己的预览：整套起（scripts/dev.mjs）——
+// —— ash 自己的预览：整套起（scripts/dev.mjs）——
 // 预览起的是这个分支的前端 **和** 后端（2026-08-07 改的，理由在 dev.mjs 头部）。于是
 // 日志里必然有两个本机地址，而后端那行往往先打出来。dev.mjs 转发后端日志时把 scheme
 // 去掉就是为这一条：`lent` 优先只在前端那行**已经打出来**之后才管用，在那之前 `first`
 // 会把用户领到 API 上（点开一片 JSON，还以为预览坏了）。所以钉的是更强的一条——
 // 后端那行**根本不该成为候选**，连兜底路径都够不着它。
-const stack = "[api] [harness] server on localhost:62398\n"
+const stack = "[api] [ash] server on localhost:62398\n"
   + "  ➜  Local:   http://127.0.0.1:62396/\n";
 check("后端那行进不了候选（scheme 已被 dev.mjs 去掉）", pickPreviewUrl(stack, null), {
   url: "http://127.0.0.1:62396/", port: 62396, lent: false,
 });
-check("前端那行还没打出来时也不会误挑后端", pickPreviewUrl("[api] [harness] server on localhost:62398\n", 62396), null);
+check("前端那行还没打出来时也不会误挑后端", pickPreviewUrl("[api] [ash] server on localhost:62398\n", 62396), null);
 
 console.log(failures ? `\n${failures} 条没过` : "\n全过");
 process.exit(failures ? 1 : 0);

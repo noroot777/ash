@@ -4,7 +4,7 @@
 // 从 `task-run-routes.ts` 抽出来的原因只有一个：那份文件已经贴着 700 行的上限，而这三条
 // 是里面唯一一块「只读、不碰回合所有权」的东西，切走对那边的并发不变量零影响。
 import { readFile } from "node:fs/promises";
-import type { Session } from "@harness/shared";
+import type { Session } from "@ash/shared";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";

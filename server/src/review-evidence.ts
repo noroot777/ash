@@ -7,7 +7,7 @@
 import { constants as fsConstants } from "node:fs";
 import { lstat, mkdir, open, readFile, readdir } from "node:fs/promises";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import type { ReviewConclusion } from "@harness/shared";
+import type { ReviewConclusion } from "@ash/shared";
 import { RUNS_DIR } from "./paths.js";
 import { now } from "./util.js";
 

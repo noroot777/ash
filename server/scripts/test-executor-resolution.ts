@@ -4,7 +4,7 @@
 //   executorId 缺省 → 按 type 默认执行器
 //
 // 跑法:
-//   HARNESS_DB=/tmp/test-executor-resolution-$RANDOM.db npx tsx server/scripts/test-executor-resolution.ts
+//   ASH_DB=/tmp/test-executor-resolution-$RANDOM.db npx tsx server/scripts/test-executor-resolution.ts
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import { requireTmpDb } from "./tmp-db.js";
@@ -73,7 +73,7 @@ assert.equal(validModelEffort.type, "codex", "模型能力规则允许的组合�
 // (cursor 的 cursor-agent → agent、antigravity 的 antigravity → agy)。
 // 这里临时把某个 generic spec 的候选改成「主 bin 不存在 + 备用 bin 是 node」,
 // 只改运行时值、跑完就还原,不碰任何 spec 文件(B 阶段有人在并行改它们)。
-const { AGENT_TYPES } = await import("@harness/shared");
+const { AGENT_TYPES } = await import("@ash/shared");
 const { CLI_SPEC_BY_KEY } = await import("../src/executors/catalog/index.js");
 const { cliHelpHasFlag } = await import("../src/executors/bin-probe.js");
 assert.equal(cliHelpHasFlag("  --effort <level>", "--effort"), true, "help 里的完整 flag 应命中");
@@ -103,7 +103,7 @@ const genericType = AGENT_TYPES.find((t) => !CLI_SPEC_BY_KEY[t].factory);
 if (!genericType) throw new Error("目录里没有一个走 GenericCliExecutor 的 spec,这条用例失去意义");
 const spec = CLI_SPEC_BY_KEY[genericType];
 const originalBins = spec.bins;
-spec.bins = ["harness-missing-primary-bin", "node"];
+spec.bins = ["ash-missing-primary-bin", "node"];
 try {
   const ex = await resolveExecutorFor({ type: genericType });
   const handle = ex.run({ prompt: "probe", cwd: process.cwd() });

@@ -8,7 +8,7 @@ import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import type { ContextUsage } from "@harness/shared";
+import type { ContextUsage } from "@ash/shared";
 
 /** rollout 可能很大；最新 token_count 通常就在文件尾部。找不到就安全退化成无水位。 */
 const TAIL_BYTES = 512 * 1024;
@@ -130,12 +130,12 @@ export async function readCodexContext(threadId: string, notBeforeMs = 0): Promi
     if (outcome.kind === "context") return outcome.value;
     if (outcome.kind === "incompatible" && !warnedThreads.has(threadId)) {
       warnedThreads.add(threadId);
-      console.warn(`[harness] Codex rollout 格式不兼容，已停用该会话的上下文水位：${outcome.reason}`);
+      console.warn(`[ash] Codex rollout 格式不兼容，已停用该会话的上下文水位：${outcome.reason}`);
     }
     return null;
   } catch (error) {
     // 私有诊断文件读失败不能改变 agent 的执行结果；没有水位比错误水位安全。
-    console.warn(`[harness] failed to read Codex context for thread ${threadId}:`, error);
+    console.warn(`[ash] failed to read Codex context for thread ${threadId}:`, error);
     return null;
   }
 }

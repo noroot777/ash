@@ -1,5 +1,5 @@
-import type { TaskStage } from "@harness/shared";
-import { isTaskStage, STAGE_LABELS, STAGE_ORDER } from "@harness/shared";
+import type { TaskStage } from "@ash/shared";
+import { isTaskStage, STAGE_LABELS, STAGE_ORDER } from "@ash/shared";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";

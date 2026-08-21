@@ -1,7 +1,7 @@
 // 在开发机上执行「那台 Windows 上的命令」,并拿回干净的输出和退出码。
 //
-// 为什么不是 SSH:那台机器只开了两个入站端口 —— 445(SMB,要凭证)和 4317(harness 自己)。
-// 装 OpenSSH Server 要管理员提权,无人值守时点不动 UAC。所以通道只能是 harness 自己的
+// 为什么不是 SSH:那台机器只开了两个入站端口 —— 445(SMB,要凭证)和 4317(ash 自己)。
+// 装 OpenSSH Server 要管理员提权,无人值守时点不动 UAC。所以通道只能是 ash 自己的
 // 终端 API(POST /projects/:id/terminal/sessions),它在 Windows 上起的是 ConPTY + pwsh。
 //
 // 为什么输出不直接从 PTY 读:PTY 回给你的是**终端画面**,不是程序输出 —— 命令本身会被
@@ -40,7 +40,7 @@ export function detectLocalAddress() {
 // 控制面单跳的兜底期限。**不存在「没有期限」的调用路径**:上一版把「带 signal」写成调用方的
 // 义务,于是漏一个调用点就等于漏一条永不返回的路 —— CLI 的 `target()` 正是那个漏网的:
 // 它在进 rexec 之前先查一次项目,对端只接连接不回包时,`doctor/sync/exec/test` 四个子命令
-// 全都停在「对端 harness」那一行不动,只能外面 kill。义务型的约定挡不住这种事,默认值可以。
+// 全都停在「对端 ash」那一行不动,只能外面 kill。义务型的约定挡不住这种事,默认值可以。
 const CONTROL_TIMEOUT = Number(process.env.WIN_REMOTE_CONTROL_TIMEOUT ?? 15_000);
 /** 一次控制面调用的期限。给不出更长命的 signal 时(CLI 的单发请求)就用它。 */
 export const controlSignal = () => AbortSignal.timeout(CONTROL_TIMEOUT);
@@ -61,7 +61,7 @@ async function api(path, init = {}, host = DEFAULT_HOST) {
     // rexec 靠 `ac.signal.aborted` 把它翻译成「按失败返回 code 124」,不能在这儿改写语义。
     if (signal.aborted && signal.reason?.name === "TimeoutError") {
       const limit = fallback ? `${CONTROL_TIMEOUT}ms` : "期限";
-      throw new Error(`${init.method ?? "GET"} ${path} → ${limit}内没等到 ${host} 的响应(对端 harness 没在跑,或者卡住了)`);
+      throw new Error(`${init.method ?? "GET"} ${path} → ${limit}内没等到 ${host} 的响应(对端 ash 没在跑,或者卡住了)`);
     }
     throw e;
   }
@@ -69,10 +69,10 @@ async function api(path, init = {}, host = DEFAULT_HOST) {
   return res.status === 204 ? null : res.json();
 }
 
-/** 找到对端 harness 里指向 harness 仓库自己的那个项目(终端会话必须挂在某个项目上)。 */
+/** 找到对端 ash 里指向 ash 仓库自己的那个项目(终端会话必须挂在某个项目上)。 */
 export async function resolveProject(host = DEFAULT_HOST, signal = controlSignal()) {
   const projects = await api("/projects", { signal }, host);
-  if (!projects.length) throw new Error("对端 harness 里一个项目都没有,先在它的界面上添加 harness 仓库");
+  if (!projects.length) throw new Error("对端 ash 里一个项目都没有,先在它的界面上添加 ash 仓库");
   const pick = process.env.WIN_REMOTE_PROJECT;
   if (pick) {
     // 指定了 id 也照样得把项目取回来:`repoPath` 是后面每条命令的 cwd,给不出来的话
@@ -82,13 +82,13 @@ export async function resolveProject(host = DEFAULT_HOST, signal = controlSignal
     const hit = projects.find((p) => p.id === pick);
     if (!hit) {
       throw new Error(
-        `WIN_REMOTE_PROJECT=${pick} 在对端 harness 里不存在。现有项目:\n` +
+        `WIN_REMOTE_PROJECT=${pick} 在对端 ash 里不存在。现有项目:\n` +
           projects.map((p) => `  ${p.id}  ${p.repoPath ?? "(无路径)"}`).join("\n"),
       );
     }
     return { id: hit.id, repoPath: hit.repoPath };
   }
-  const hit = projects.find((p) => /harness|ash/i.test(p.repoPath ?? "")) ?? projects[0];
+  const hit = projects.find((p) => /ash/i.test(p.repoPath ?? "")) ?? projects[0];
   return { id: hit.id, repoPath: hit.repoPath };
 }
 
@@ -177,7 +177,7 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
   const sink = collector(token);
 
   // deadline 从**第一次远端请求之前**开始,而且只有这一个。
-  // 原来它是在 session 建成之后才起算的,于是「对端 harness 卡死、代理只接连接不回包、
+  // 原来它是在 session 建成之后才起算的,于是「对端 ash 卡死、代理只接连接不回包、
   // 半开连接」这类**永不返回**的失败全都漏在保护之外:查项目、建会话、两次 /input 用的都是
   // 裸 fetch,调用者传的 timeout 一点约束力都没有,进程能挂到底层 TCP 自己想通为止。
   // 上一轮只修了「fetch 立刻抛错之后要清理」,没修「fetch 根本不返回」。
@@ -334,7 +334,7 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
     // deadline 到点时,卡住的那一跳会以 AbortError 抛出来。但 rexec 对调用者的承诺是
     // 「超时按失败返回而不是抛」(收回传那条路径一直是这么做的),控制面卡住没道理换一种。
     if (ac.signal.aborted) {
-      return { code: 124, out: `[win-remote] 超时 ${hardMs}ms,对端 harness 的控制面请求没在期限内返回`, timedOut: true };
+      return { code: 124, out: `[win-remote] 超时 ${hardMs}ms,对端 ash 的控制面请求没在期限内返回`, timedOut: true };
     }
     throw e;
   } finally {

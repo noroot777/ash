@@ -17,8 +17,8 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import type { AgentEvent } from "@harness/shared";
-import { AGENT_TYPES } from "@harness/shared";
+import type { AgentEvent } from "@ash/shared";
+import { AGENT_TYPES } from "@ash/shared";
 import {
   CLI_MODEL_PRESETS,
   MODEL_EFFORT_RULES,
@@ -26,7 +26,7 @@ import {
   normalizeReasoningEffort,
   reasoningEffortsFor,
   resolveReasoningEfforts,
-} from "@harness/shared/cli-presets";
+} from "@ash/shared/cli-presets";
 import { CLI_SPECS, CLI_SPEC_BY_KEY } from "../src/executors/catalog/index.js";
 import { GenericCliExecutor, hasTrustedSessionId, interactiveResumeInner } from "../src/executors/generic.js";
 import { execBinFor, probeBins } from "../src/executors/bin-probe.js";
@@ -36,7 +36,7 @@ import { installCommandFor } from "../src/detect.js";
 import type { CliSpec } from "../src/executors/catalog/types.js";
 import { IS_WINDOWS } from "../src/platform.js";
 
-const MISSING_BIN = "harness-definitely-not-installed-cli";
+const MISSING_BIN = "ash-definitely-not-installed-cli";
 
 // 「一定装了的命令」这种东西不存在:`echo` 在 Windows 上是 cmd 的内建,PATH 上根本
 // 没有对应的文件,resolveBin 自然探不到(这不是 bug,是它该有的行为)。要探测就自己
@@ -277,7 +277,7 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
   h.kill();
 }
 {
-  // (b) 声明了 newIdFlag:harness 自己发 id,resume 时按模板拼
+  // (b) 声明了 newIdFlag:ash 自己发 id,resume 时按模板拼
   const spec = fake({ session: { newIdFlag: "--session-id", resumeArgs: (id) => ["--resume", id] } });
   const fresh = new GenericCliExecutor(spec, {}).run({ prompt: "hi", cwd: process.cwd() });
   assert.ok(fresh.commandLine.includes(`--session-id ${fresh.sessionId}`));
@@ -297,7 +297,7 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
 
 // ⑤bis 恢复命令的**诚实性**:只有「CLI 真认得这个 id」时才给可执行命令。
 // 只写 interactive、却既没有 newIdFlag(我们把 id 告诉 CLI)也没有 resumeArgs
-// (id 由 parser 回报)的 spec,拿到的 id 是纯 harness 侧记录,拼出来的
+// (id 由 parser 回报)的 spec,拿到的 id 是纯 ash 侧记录,拼出来的
 // `--resume <uuid>` 引用的是一个不存在的会话 —— 用户会当真复制去执行。
 {
   const only = fake({ session: { interactive: (id) => `fake --resume ${id}` } });
@@ -309,7 +309,7 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
   assert.match(note, /不能用来 --resume/, "要讲清为什么不能恢复");
   // 展示侧(会话详情的 resumeCommand)走同一个判定,不能各写一套。目录里真实存在
   // 这一档 —— 典型是 kiro:它有 `--resume-id` 无头通道,但首轮 id 由 CLI 产生、纯文本
-  // 输出不回报,harness 捕获不到,所以刻意不声明 session。这里**动态挑**一个这样的
+  // 输出不回报,ash 捕获不到,所以刻意不声明 session。这里**动态挑**一个这样的
   // spec,不写死某个 key:B 阶段谁把自己那家的 id 通道查通了(antigravity 就是这么
   // 从这一档毕业的),这条断言都不该跟着炸。
   const untrusted = CLI_SPECS.find((s) => !hasTrustedSessionId(s));
@@ -333,15 +333,15 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
 // 「目录显示可用」的环境派任务稳定 ENOENT(cursor 的 agent、antigravity 的 agy)。
 // 备用名用自己造的回显桩(见 writeEchoStub),断言不依赖本机装了哪些 CLI。
 {
-  const stubDir = mkdtempSync(join(tmpdir(), "harness-echo-stub-"));
-  const stub = "harness-echo-stub";
+  const stubDir = mkdtempSync(join(tmpdir(), "ash-echo-stub-"));
+  const stub = "ash-echo-stub";
   writeEchoStub(stubDir, stub);
   const originalPath = process.env.PATH;
   // 桩目录得在 PATH 上 resolveBin 才找得到。分隔符用 `path.delimiter`:Windows 是
   // `;`,写死 `:` 会把整条 PATH 拼成一个不存在的目录名,连本机真装的命令都探不到了。
   process.env.PATH = `${stubDir}${delimiter}${originalPath ?? ""}`;
   try {
-  const bins = ["harness-missing-primary-bin", stub];
+  const bins = ["ash-missing-primary-bin", stub];
   assert.equal(await execBinFor(fake({}, { bins })), stub, "主 bin 缺失时应改用可用的备用名");
   assert.equal(
     await execBinFor(fake({}, { bins, fallbackVersionMatch: "version" })),
@@ -385,7 +385,7 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
 // 同在 extraPaths 里)。桩的壳也按平台换,理由见 writeEchoStub。
 {
   const dir = IS_WINDOWS ? join(process.env.APPDATA ?? homedir(), "npm") : join(homedir(), ".local", "bin");
-  const name = `harness-probe-fixture-${process.pid}`;
+  const name = `ash-probe-fixture-${process.pid}`;
   const file = join(dir, IS_WINDOWS ? `${name}.cmd` : name);
   let usable = false;
   try {
@@ -396,14 +396,14 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
   }
   if (usable) {
     const originalPath = process.env.PATH;
-    process.env.PATH = "/nonexistent-for-harness-test";
+    process.env.PATH = "/nonexistent-for-ash-test";
     try {
       const probe = await probeBins([name]);
       assert.ok(probe, "EXTRA_PATHS 里的命令必须能被探到(PATH 缺它也算装了)");
       assert.equal(probe!.path, file);
       assert.equal(probe!.version, "fixture-cli 1.2.3", "自证要跑绝对路径,裸命令名在这个 PATH 下必然拿不到版本");
       // 备用名的自证同理:PATH 缺目录时也得能证明身份,否则整项被判不可用
-      const alt = await probeBins(["harness-missing-primary-bin", name], "fixture-cli");
+      const alt = await probeBins(["ash-missing-primary-bin", name], "fixture-cli");
       assert.equal(alt?.bin, name, "备用名在 PATH 缺目录时仍应自证通过");
     } finally {
       process.env.PATH = originalPath;
@@ -471,7 +471,7 @@ const NODE = "node";
 // ⑧ Grok 原始流一个 thought token 一行。连续 token 合成一段，正文和 end
 // 都会收口；否则 377 个 token 就会在新版前端变成 377 个折叠块。
 {
-  const dir = mkdtempSync(join(tmpdir(), "harness-grok-stream-"));
+  const dir = mkdtempSync(join(tmpdir(), "ash-grok-stream-"));
   const script = join(dir, "stub.mjs");
   const lines = [
     { type: "thought", data: "first" },

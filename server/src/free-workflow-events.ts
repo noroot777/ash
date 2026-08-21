@@ -2,7 +2,7 @@ import type {
   FreeWorkflowExecutionStatus,
   FreeWorkflowPreviewEventKind,
   FreeWorkflowPreviewEventSource,
-} from "@harness/shared";
+} from "@ash/shared";
 import { and, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";

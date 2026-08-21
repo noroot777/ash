@@ -66,7 +66,7 @@ for (const f of FILES) {
   console.error("      2. 让检查脚本拦住（scripts/check-conventions.mjs）");
   console.error("      3. 用回归测试钉住（server/scripts/test-*.ts）");
   console.error("      4. 写成就近的代码注释（改这块代码的人一定会看到）");
-  console.error("      5. 写进目录级约定文件（server/CLAUDE.md、web-next/CLAUDE.md、mobile/AGENTS.md）");
+  console.error("      5. 写进目录级约定文件（server/CLAUDE.md、web/CLAUDE.md、mobile/AGENTS.md）");
   console.error("      6. 都不行，才写根文件——那就先搬走一条\n");
   if (fat.length) {
     console.error("    真要加就先腾地方。当前最占地方的几节（搬走任意一条都够）：\n");

@@ -1,4 +1,4 @@
-import type { AgentType } from "@harness/shared";
+import type { AgentType } from "@ash/shared";
 import { CLI_SPEC_BY_KEY } from "./catalog/index.js";
 import { resumeFor } from "./spawn.js";
 import { interactiveResumeInner, unknownResumeNote } from "./generic.js";
@@ -26,7 +26,7 @@ export function resumeCommandFor(
   const inner = interactiveResumeInner(spec, cliSessionId);
   if (!inner) return unknownResumeNote(spec, cliSessionId);
   // resumeArgs 是执行器当初拼好的那截参数(claude 的 `--settings '{…}'`)。它必须跟着
-  // 恢复命令走:harness 每一轮都带着它跑,不带就等于让用户手跑的那次退回自己的
-  // settings.json —— 压缩行为跟他在 harness 里看到的不是一回事(第 2 轮审查 finding 2)。
+  // 恢复命令走:ash 每一轮都带着它跑,不带就等于让用户手跑的那次退回自己的
+  // settings.json —— 压缩行为跟他在 ash 里看到的不是一回事(第 2 轮审查 finding 2)。
   return resumeFor(cwd, resumeArgs ? `${inner} ${resumeArgs}` : inner, resumeEnv ?? "");
 }

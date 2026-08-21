@@ -1,5 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import type { AgentEvent } from "@harness/shared";
+import type { AgentEvent } from "@ash/shared";
 import type { ResidentHandle } from "./types.js";
 
 // ── codex 的常驻会话:「会话级常驻」,不是「进程级常驻」────────────────────

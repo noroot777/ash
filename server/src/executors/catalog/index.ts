@@ -1,4 +1,4 @@
-import type { AgentType } from "@harness/shared";
+import type { AgentType } from "@ash/shared";
 import type { CliSpec } from "./types.js";
 // 15 个 spec 静态 import,一次列全 —— 这个文件在 B 阶段(各 CLI 分别实测校准)
 // 不需要再改,所以并行的执行者不会撞在这里。新增/删除一个智能体才动它,配套动作

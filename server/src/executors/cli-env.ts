@@ -1,7 +1,7 @@
-import { cliConfigOverrideEnvPrefix, type CliHostEnv } from "@harness/shared/cli-overrides";
+import { cliConfigOverrideEnvPrefix, type CliHostEnv } from "@ash/shared/cli-overrides";
 import { claudeMaxOutputTokens } from "./claude-settings.js";
 
-// harness 起 CLI 时,那个子进程会看到的环境事实。**只读**,不是配置项 —— 它由 harness
+// ash 起 CLI 时,那个子进程会看到的环境事实。**只读**,不是配置项 —— 它由 ash
 // 自己的启动环境**和用户自己的 claude 配置文件**共同决定。
 //
 // 为什么要单拎出来:覆盖项里那个百分比要换算成 claude 认的「占有效窗口的比例」,而有效

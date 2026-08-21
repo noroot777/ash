@@ -1,7 +1,7 @@
 // 端到端验证 MCP 的重启重试：
-//   1. 起真实的 mcp/dist/index.js，HARNESS_URL 指向一个没人监听的端口
+//   1. 起真实的 mcp/dist/index.js，ASH_URL 指向一个没人监听的端口
 //   2. 立刻发一个 tools/call（此刻必然 ECONNREFUSED）
-//   3. 3 秒后才把一个假 harness 拉起来
+//   3. 3 秒后才把一个假 ash 拉起来
 //   4. 断言：调用最终成功（说明它等过去了），且 stderr 里确实出现过重试
 // 对照组：把重试窗口设成 0，同样的时序必须失败——否则证明不了是重试起的作用。
 import { spawn } from "node:child_process";
@@ -12,10 +12,18 @@ import { dirname, join } from "node:path";
 const MCP_ENTRY = join(dirname(fileURLToPath(import.meta.url)), "../dist/index.js");
 const PORT = 14733;
 
-function runCase({ label, reconnectMs, startServerAfterMs }) {
+function runCase({ label, reconnectMs, startServerAfterMs, legacyEnv = false }) {
   return new Promise((resolve) => {
+    const endpointEnv = legacyEnv
+      ? { HARNESS_URL: `http://localhost:${PORT}`, HARNESS_RECONNECT_MS: String(reconnectMs) }
+      : { ASH_URL: `http://localhost:${PORT}`, ASH_RECONNECT_MS: String(reconnectMs) };
+    const env = { ...process.env };
+    delete env.ASH_URL;
+    delete env.ASH_RECONNECT_MS;
+    delete env.HARNESS_URL;
+    delete env.HARNESS_RECONNECT_MS;
     const child = spawn("node", [MCP_ENTRY], {
-      env: { ...process.env, HARNESS_URL: `http://localhost:${PORT}`, HARNESS_RECONNECT_MS: String(reconnectMs) },
+      env: { ...env, ...endpointEnv },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stderr = "";
@@ -53,7 +61,7 @@ function runCase({ label, reconnectMs, startServerAfterMs }) {
     });
     send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "t", version: "1" } } });
 
-    // 迟到的 harness：只有重试撑过这段空窗，调用才会成功。
+    // 迟到的 ash：只有重试撑过这段空窗，调用才会成功。
     setTimeout(() => {
       server = createServer((req, res) => {
         res.writeHead(200, { "content-type": "application/json" });
@@ -67,7 +75,12 @@ function runCase({ label, reconnectMs, startServerAfterMs }) {
 }
 
 const results = [];
-results.push(await runCase({ label: "重试窗口 20s，server 3s 后才起", reconnectMs: 20_000, startServerAfterMs: 3_000 }));
+results.push(await runCase({
+  label: "旧环境变量 + 重试窗口 20s，server 3s 后才起",
+  reconnectMs: 20_000,
+  startServerAfterMs: 3_000,
+  legacyEnv: true,
+}));
 await new Promise((r) => setTimeout(r, 500)); // 让端口彻底释放
 results.push(await runCase({ label: "对照：重试窗口 0，同样时序", reconnectMs: 0, startServerAfterMs: 3_000 }));
 

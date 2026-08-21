@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import { join, isAbsolute, dirname, basename, resolve } from "node:path";
 import { homedir } from "node:os";
 import { mkdirSync, statSync, existsSync, readFileSync, writeFileSync, realpathSync, rmSync } from "node:fs";
-import type { ProjectHealth } from "@harness/shared";
+import type { ProjectHealth } from "@ash/shared";
 import { DATA_DIR } from "./paths.js";
 import { IS_WINDOWS, windowsLongPathHint } from "./platform.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
@@ -156,7 +156,7 @@ export async function headCommit(path: string): Promise<string | null> {
 }
 
 /** 工作目录是否有未提交改动（含未跟踪文件）；取不到返回 null（调用方按未知处理，不当干净）。
- *  harness 自己的 `.worktrees/` 目录不算脏——它是本工具放任务 worktree 的惯例位置，
+ *  ash 自己的 `.worktrees/` 目录不算脏——它是本工具放任务 worktree 的惯例位置，
  *  不属于这个项目的改动（不滤掉的话，项目根跑过任何 worktree 任务后 dirty 永远 true）。 */
 export async function workspaceDirty(path: string): Promise<boolean | null> {
   try {
@@ -256,18 +256,30 @@ export async function resolveWorkspace(repoPath: string, taskId: string): Promis
 // ── Opt-in per-task worktree (§4) ────────────────────────────────────────────
 // The global factory default is ON; creation callers may explicitly override it.
 // When ON, runTask materializes
-// `<repoPath>/.worktrees/<taskId>` on branch `harness/<id8>` branched off the
+// `<repoPath>/.worktrees/<taskId>` on branch `ash/<id8>` branched off the
 // user-picked `base` (null = current HEAD) BEFORE handing the cwd to the agent.
-// harness creates worktrees but never removes them on its own — cleanup is a
+// ash creates worktrees but never removes them on its own — cleanup is a
 // one-click UI action.
 
 // Stable derived branch name. taskId is opaque to users but unique; the first
 // 8 chars are enough entropy in practice and keep the ref short/legible.
 export function worktreeBranchName(taskId: string): string {
+  return `ash/${taskId.slice(0, 8)}`;
+}
+
+function legacyWorktreeBranchName(taskId: string): string {
   return `harness/${taskId.slice(0, 8)}`;
 }
 
-// Conventional location for harness-managed worktrees: a dotfile dir at the repo
+export async function resolveWorktreeBranchName(repoPath: string, taskId: string): Promise<string> {
+  const repo = expandHome(repoPath);
+  const current = worktreeBranchName(taskId);
+  if (await localBranchExists(repo, current)) return current;
+  const legacy = legacyWorktreeBranchName(taskId);
+  return await localBranchExists(repo, legacy) ? legacy : current;
+}
+
+// Conventional location for ash-managed worktrees: a dotfile dir at the repo
 // root so it sits next to .git and stays out of the way. Each task gets its own
 // subdir keyed by taskId so re-runs of the same task land on the same worktree.
 export function worktreePathFor(repoPath: string, taskId: string): string {
@@ -281,7 +293,7 @@ export function worktreePathFor(repoPath: string, taskId: string): string {
 //   · 验收清理每次重试都撞 "is not a working tree"，任务永远卡在 merged 验收不掉；
 //   · prepareWorktree 看见目录还在就当成活 worktree 复用，agent 在里面跑 git，
 //     命令一路上溯到主仓 —— 提交和切分支直接打在主仓上。
-// 判据只认两条，宁可漏判也不误删：必须在 harness 自己的 `<repo>/.worktrees/` 底下，
+// 判据只认两条，宁可漏判也不误删：必须在 ash 自己的 `<repo>/.worktrees/` 底下，
 // 而且连 `.git` 都没有 —— 还挂着 `.git` 的目录是活工作树（或别人的仓库），不归这里管。
 function worktreeLeftoverAt(repoPath: string, path: string): boolean {
   if (!isDir(path) || existsSync(join(path, ".git"))) return false;
@@ -343,10 +355,10 @@ export async function taskCommits(
 // throw — the caller (runTask) lets the task settle as failed so the user sees it
 // rather than silently falling back to repoPath. `base` is the user-picked ref;
 // empty string / null defers to git's default (current HEAD of repoPath).
-// harness 把任务 worktree 建在 `<repo>/.worktrees/` —— 那是**用户仓库里的一个目录**，
+// ash 把任务 worktree 建在 `<repo>/.worktrees/` —— 那是**用户仓库里的一个目录**，
 // 不登记忽略的话 `git status --porcelain` 就永远不空，于是验收的原地合并一律被
 // `target_dirty` 挡掉：这个项目从此再也验收不成功。写进 `.git/info/exclude` 而不是
-// `.gitignore`：忽略是 harness 自己的实现细节，不该往用户仓库里塞一个待提交的改动。
+// `.gitignore`：忽略是 ash 自己的实现细节，不该往用户仓库里塞一个待提交的改动。
 // 幂等（已有同样一行就不再写），失败只警告——它不该拦住任务开工。
 async function ensureWorktreesIgnored(repo: string): Promise<void> {
   const entry = ".worktrees/";
@@ -360,10 +372,10 @@ async function ensureWorktreesIgnored(repo: string): Promise<void> {
     mkdirSync(dirname(excludePath), { recursive: true });
     writeFileSync(
       excludePath,
-      `${current}${current && !current.endsWith("\n") ? "\n" : ""}# harness 任务 worktree（本地忽略，不入库）\n${entry}\n`,
+      `${current}${current && !current.endsWith("\n") ? "\n" : ""}# ash 任务 worktree（本地忽略，不入库）\n${entry}\n`,
     );
   } catch (err) {
-    console.warn("[harness] 无法把 .worktrees/ 写进 .git/info/exclude：", err instanceof Error ? err.message : err);
+    console.warn("[ash] 无法把 .worktrees/ 写进 .git/info/exclude：", err instanceof Error ? err.message : err);
   }
 }
 
@@ -421,7 +433,7 @@ async function prepareWorktreeLocked(
     throw new Error(`项目 ${repoPath} 不是 git 仓库，无法创建 worktree`);
   }
   const path = worktreePathFor(repoPath, taskId);
-  const branch = worktreeBranchName(taskId);
+  const branch = await resolveWorktreeBranchName(repo, taskId);
   // 上一次清理留下的空壳（见 worktreeLeftoverAt）先抹掉再说：直接复用它等于让 agent 在
   // 一个不是 worktree 的目录里干活，它的 git 命令会上溯到主仓。清掉之后走下面的恢复
   // 路径，分支还在就把工作原样接回来。

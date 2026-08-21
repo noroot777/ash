@@ -2,7 +2,7 @@
 // `/{名字}` 原样留在正文里；server 运行前会用这份清单注入准确 SKILL.md。
 //
 // 从 `index.ts` 拆出来只有一个理由:那个文件到 700 行了。类型经 index 原样 re-export,
-// 调用方仍从 `@harness/shared` 拿(**只能是 type-only 转发**——server 直接跑 .ts 源码,
+// 调用方仍从 `@ash/shared` 拿(**只能是 type-only 转发**——server 直接跑 .ts 源码,
 // 运行时转发会因说明符扩展名对不上而起不来,见 server/CLAUDE.md)。
 import type { AgentType } from "./index.ts";
 

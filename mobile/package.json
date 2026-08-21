@@ -1,12 +1,12 @@
 {
-  "name": "mobile",
+  "name": "@ash/mobile",
   "main": "expo-router/entry",
   "version": "1.0.0",
   "dependencies": {
     "@expo-google-fonts/ibm-plex-mono": "^0.4.1",
     "@expo-google-fonts/inter": "^0.4.2",
     "@expo-google-fonts/space-grotesk": "^0.4.1",
-    "@harness/shared": "file:../shared",
+    "@ash/shared": "file:../shared",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/datetimepicker": "^8.4.4",
     "expo": "~54.0.0",

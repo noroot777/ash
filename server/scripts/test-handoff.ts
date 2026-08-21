@@ -1,5 +1,5 @@
 // 任务接力(handoff)端到端回归:测试进程自己当**源机**(进程内直调 preflight/export,
-// HARNESS_DB 指向临时源库),再真 spawn 一个 harness server 当**对端**(PORT=0 随机端口、
+// ASH_DB 指向临时源库),再真 spawn 一个 ash server 当**对端**(PORT=0 随机端口、
 // 独立临时库),两边走真 HTTP 协议。验的是:
 //   1. preflight 探测/项目匹配/会话文件盘点
 //   2. 应答丢失:pending 标记落库、本机启动被硬拦、重试沿用同一个 transferId
@@ -22,9 +22,9 @@
 //      消息在对端原样落库(新 id、到期时间保留、附件路径改写),本机原件取消留档;
 //      幂等收口只取消 pending 标记冻结的那批,收口期间新建的留在托盘如实提醒;
 //      定时计划带 enabled/lastRunAt 落到对端并接上任务(schedule_id)
-//  12. 网关伪造失败应答(对端实已导入成功、502 不带 harness 标记):按「送达未知」
+//  12. 网关伪造失败应答(对端实已导入成功、502 不带 ash 标记):按「送达未知」
 //      保留 pending,重试走幂等收口——按业务拒绝回滚就是两台机器双跑
-// HARNESS_RUNS_DIR 指到临时目录顺带打开 guardAgentSpawn,即使哪里失手触发续跑也
+// ASH_RUNS_DIR 指到临时目录顺带打开 guardAgentSpawn,即使哪里失手触发续跑也
 // 不会真拉起 CLI 烧额度;接力本身用 autoResume:false。
 import assert from "node:assert/strict";
 import { execFileSync, type ChildProcess } from "node:child_process";
@@ -36,7 +36,7 @@ import { eq } from "drizzle-orm";
 import { api, git, makeRepo, startPeer } from "./handoff-test-utils.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "harness-handoff-test-"));
+const root = mkdtempSync(join(tmpdir(), "ash-handoff-test-"));
 const home = join(root, "home");
 mkdirSync(home, { recursive: true });
 // claude 会话文件读写全部落进临时 HOME,不碰真实 ~/.claude。产品代码走 os.homedir(),
@@ -44,11 +44,11 @@ mkdirSync(home, { recursive: true });
 // Windows 上夹具形同没设,断言变成「看谁的机器」(test-cli-overrides.ts 同款坑)。
 process.env.HOME = home;
 process.env.USERPROFILE = home;
-process.env.HARNESS_DB = join(root, "source.db");
-process.env.HARNESS_RUNS_DIR = join(root, "runs-src");
-process.env.HARNESS_UPLOADS_DIR = join(root, "uploads-src"); // 上传附件迁移用:源/对端各一个隔离目录
+process.env.ASH_DB = join(root, "source.db");
+process.env.ASH_RUNS_DIR = join(root, "runs-src");
+process.env.ASH_UPLOADS_DIR = join(root, "uploads-src"); // 上传附件迁移用:源/对端各一个隔离目录
 assert.ok(
-  process.env.HARNESS_ALLOW_REAL_AGENT !== "1",
+  process.env.ASH_ALLOW_REAL_AGENT !== "1",
   "本测试靠 guardAgentSpawn 兜底拦真 CLI;拦截器一失效就会烧用户的真额度",
 );
 
@@ -150,9 +150,9 @@ try {
 
   // ── 起对端 ────────────────────────────────────────────────────────────────
   const peerUrl = await startPeer({
-    HARNESS_DB: join(root, "target.db"),
-    HARNESS_RUNS_DIR: join(root, "runs-dst"),
-    HARNESS_UPLOADS_DIR: join(root, "uploads-dst"),
+    ASH_DB: join(root, "target.db"),
+    ASH_RUNS_DIR: join(root, "runs-dst"),
+    ASH_UPLOADS_DIR: join(root, "uploads-dst"),
   }, (proc) => { peer = proc; });
   const peerProject = await api<{ id: string }>(peerUrl, "/projects", {
     method: "POST",
@@ -183,7 +183,7 @@ try {
     if (req.url?.endsWith("/api/handoff/ping")) {
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify({
-        ok: true, service: "harness", host: "flaky",
+        ok: true, service: "ash", host: "flaky",
         projects: [{ id: peerProject.id, name: "acme", repoPath: dstRepo, isRepo: true }],
       }));
     } else if (req.url?.includes("/refs")) {
@@ -455,9 +455,9 @@ try {
     sessions: [{ ...probeSession, id: "handoffsess1" }],
   });
   assert.equal(conflictRes.status, 409);
-  const conflictBody = (await conflictRes.json()) as { error: string; harness?: boolean };
+  const conflictBody = (await conflictRes.json()) as { error: string; ash?: boolean };
   assert.match(conflictBody.error, /会话 id 与本机已有会话冲突/);
-  assert.equal(conflictBody.harness, true, "业务拒绝应答要带 harness 标记,源机才敢回滚 pending");
+  assert.equal(conflictBody.ash, true, "业务拒绝应答要带 ash 标记,源机才敢回滚 pending");
   assert.equal((await fetch(`${peerUrl}/api/tasks/handoff-e2e-task-02`)).status, 404, "预检拦下的导入不该留任务行");
   // 载荷内部两条同 id 会话:预检查不出(对端库里还没有),落库时 UNIQUE 炸 → 整体回滚。
   const dupRes = await rawImport({
@@ -595,10 +595,10 @@ try {
   // (第 10/11 项的双机断言织在 1/3/4 节;单进程就能验的 Windows 源机附件形态、
   //  纯函数上下文改写、幂等收口 autoResume 事实在 test-handoff-local.ts。)
 
-  // ── 12. 网关伪造失败应答:对端实已导入成功,502 却不带 harness 标记 ──────────
+  // ── 12. 网关伪造失败应答:对端实已导入成功,502 却不带 ash 标记 ──────────
   // 缺陷形态(第 3 轮审查实测):路径上的网关(nginx/frp)把上游 200 吃掉、自己回
   // 502,源机按业务拒绝回滚标记 → 本机可再启动,而对端那份也在跑 → 双机双跑。
-  // 没有 harness 标记的失败应答证明不了对端没落库,必须按「送达未知」保留 pending。
+  // 没有 ash 标记的失败应答证明不了对端没落库,必须按「送达未知」保留 pending。
   const mangleTaskId = "handoff-e2e-task-07";
   await createTasks([{
     id: mangleTaskId, projectId, title: "网关伪造应答用例", body: "mangle 用例",
@@ -612,7 +612,7 @@ try {
     if (req.url?.endsWith("/api/handoff/ping")) {
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify({
-        ok: true, service: "harness", host: "mangler",
+        ok: true, service: "ash", host: "mangler",
         projects: [{ id: peerProject.id, name: "acme", repoPath: dstRepo, isRepo: true }],
       }));
     } else if (req.url?.includes("/refs")) {
@@ -646,7 +646,7 @@ try {
   await assert.rejects(
     exportHandoff(mangleTaskId, { targetUrl: manglerUrl, targetProjectId: peerProject.id, autoResume: false }),
     (e: unknown) => e instanceof HandoffError && e.network && /对端可能已经收到/.test(e.message),
-    "不带 harness 标记的 502 证明不了对端没落库,必须按「送达未知」处理而不是回滚",
+    "不带 ash 标记的 502 证明不了对端没落库,必须按「送达未知」处理而不是回滚",
   );
   assert.equal(mangleUpstreamStatus, 200, "前提:对端确实导入成功了(网关才有 200 可篡改)");
   assert.equal((await fetch(`${peerUrl}/api/tasks/${mangleTaskId}`)).status, 200, "对端确实持有这份任务");

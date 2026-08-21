@@ -2,39 +2,39 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "harness-dev",
+      "name": "ash-dev",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 5173
     },
     {
-      "name": "harness",
+      "name": "ash",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["start"],
       "port": 4317
     },
     {
-      "name": "harness-preview",
+      "name": "ash-preview",
       "runtimeExecutable": "bash",
-      "runtimeArgs": ["-c", "PORT=4400 HARNESS_DB=/tmp/hpreview.db node server/dist/index.js"],
+      "runtimeArgs": ["-c", "PORT=4400 ASH_DB=/tmp/ash-preview.db node server/dist/index.js"],
       "port": 4400
     },
     {
-      "name": "harness-web-preview",
+      "name": "ash-web-preview",
       "runtimeExecutable": "bash",
-      "runtimeArgs": ["-c", "HARNESS_PROXY=http://localhost:4400 npm -w web-next run dev -- --port 5273"],
+      "runtimeArgs": ["-c", "ASH_PROXY=http://localhost:4400 npm -w web run dev -- --port 5273"],
       "port": 5273
     },
     {
-      "name": "harness-web-live",
+      "name": "ash-web-live",
       "runtimeExecutable": "bash",
-      "runtimeArgs": ["-c", "HARNESS_PROXY=http://localhost:4317 npm -w web-next run dev -- --port 5274"],
+      "runtimeArgs": ["-c", "ASH_PROXY=http://localhost:4317 npm -w web run dev -- --port 5274"],
       "port": 5274
     },
     {
-      "name": "harness-web",
+      "name": "ash-web",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["-w", "web-next", "run", "dev"],
+      "runtimeArgs": ["-w", "web", "run", "dev"],
       "port": 5173
     },
     {

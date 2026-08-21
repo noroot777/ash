@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:,">
-<title>工作流 DAG · Codex 方案 — Harness UI Demo</title>
+<title>工作流 DAG · Codex 方案 — Ash UI Demo</title>
 <link rel="stylesheet" href="style.css">
 <style>
   .dag-main{min-width:0;flex:1;overflow:hidden;border:.5px solid var(--line);border-radius:12px;background:var(--canvas);box-shadow:var(--surface-shadow)}
@@ -128,7 +128,7 @@
       execute:{type:"agent.run",name:"实现任务",desc:"启动真实 CLI Session 执行当前任务；首个 Session 创建时冻结工作区策略。",label:"执行器 / 模型",value:"codex@cpa · gpt-5.6-sol",ports:[["completed","→ 自动验证",0],["failed","→ 停下",1]],note:"TaskStatus 负责调度；WorkflowRun 保存节点游标、尝试次数和释放点，stage 只做展示投影。"},
       verify:{type:"agent.verify",name:"自动验证",desc:"独立审查任务进行真实运行并沉淀报告与截图；只读评议不能产出 verified。",label:"验证执行器 / 模型",value:"codex@review · gpt-5.6-sol",ports:[["verified","→ 人工验收",0],["failed","→ 自动修复",1]],note:"验证任务是 NodeRun 的执行载体；节点只保存指针、证据和 outcome。"},
       human:{type:"human.gate",name:"人工验收",desc:"向人展示 diff、验证证据与风险；批准是进入不可逆合并动作的必要条件。",label:"通过条件",value:"必须已有 verified 结论",ports:[["approved","→ 合并与清理",0],["rejected","→ 自动修复",1]],note:"暂停必须持久可见；刷新后仍应显示“待人工验收”，而不是只弹 toast。"},
-      accept:{type:"repo.accept",name:"合并与清理",desc:"复用现有仓库锁和确定性验收动作，成功后清理 worktree 与任务分支。",label:"合并策略",value:"Harness 安全合并",ports:[["success","→ 完成",0],["conflict","→ 自动修复",1]],note:"不可逆动作不允许自动跨过人工关口；冲突回到来源任务处理。"},
+      accept:{type:"repo.accept",name:"合并与清理",desc:"复用现有仓库锁和确定性验收动作，成功后清理 worktree 与任务分支。",label:"合并策略",value:"Ash 安全合并",ports:[["success","→ 完成",0],["conflict","→ 自动修复",1]],note:"不可逆动作不允许自动跨过人工关口；冲突回到来源任务处理。"},
       repair:{type:"agent.repair",name:"自动修复",desc:"回到原任务和原工作区继续修复，完成后只重跑受影响的验证节点。",label:"最大尝试次数",value:"2 次；超限后停下",ports:[["completed","→ 自动验证",0],["exhausted","→ 停下",1]],note:"回路必须有静态上限；重启后从持久化 NodeRun attempt 恢复，不能靠内存计数。"}
     };
     var board=document.querySelector("#board"),viewport=document.querySelector("#panViewport"),studio=document.querySelector("#dagStudio"),toast=document.querySelector("#toast"),pan={x:0,y:0,dragging:false,moved:false,startX:0,startY:0,baseX:0,baseY:0},nodeDrag={node:null,moved:false,startX:0,startY:0,baseLeft:0,baseTop:0};

@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import type { AgentEvent } from "@harness/shared";
+import type { AgentEvent } from "@ash/shared";
 import { RunTraceRecorder } from "../diagnostics.js";
 import { forceFinishOnExit, spawnErrorMessage } from "../spawn.js";
 import { relayApi } from "../../llm.js";
@@ -197,7 +197,7 @@ export const qwenSpec: CliSpec = {
     "③`--output-format stream-json` 的对象形状与 claude 同源(system/assistant/user/result + session_id)," +
     "但 system 的 subtype 是 session_start 而非 init,且 `--include-partial-messages` 的增量包法文档没写清," +
     "所以没复用 claudeStreamJsonParser,内联了一份两种包法都认的(见文件头注释);" +
-    "④`--session-id` 收 UUID(harness 的 randomUUID 正好符合),`--resume/-r <id>` 续跑,`--continue/-c` 接最近一条;" +
+    "④`--session-id` 收 UUID(ash 的 randomUUID 正好符合),`--resume/-r <id>` 续跑,`--continue/-c` 接最近一条;" +
     "源码 .check 里 --session-id 与 resume/continue 互斥,generic 的装配二选一正好对上;" +
     "⑤会话按项目存在 ~/.qwen/projects/<转义 cwd>/chats,所以 resume 必须在同一 cwd 下(resumeFor 会带 cd);" +
     "⑥没有任何 reasoning/thinking effort 参数,也没有 1.5x 加速档;" +

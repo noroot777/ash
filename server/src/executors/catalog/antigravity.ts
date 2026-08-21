@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import type { AgentEvent } from "@harness/shared";
+import type { AgentEvent } from "@ash/shared";
 import { RunTraceRecorder } from "../diagnostics.js";
 import { forceFinishOnExit, spawnErrorMessage } from "../spawn.js";
 import type { CliParser, CliSpec } from "./types.js";
@@ -255,7 +255,7 @@ export const antigravitySpec: CliSpec = {
     "⑦`--effort` 取 low/medium/high(1.1.5 加入)。" +
     "仍未确认(要装了 CLI 才能定):" +
     "㈠**非 TTY 下 stdout 被丢弃/挂死**是这个 CLI 的历史顽疾(issue #76 已关但无修复说明、#318 仍开)," +
-    "changelog 只写了修 Windows 侧;harness 一律用管道 spawn,这是最可能翻车的一条,parser 已针对" +
+    "changelog 只写了修 Windows 侧;ash 一律用管道 spawn,这是最可能翻车的一条,parser 已针对" +
     "「exit 0 但零输出」给出指名道姓的提示;" +
     "㈡首次启动的 Workspace Trust 确认是交互式的,`--dangerously-skip-permissions` 是否连它一起跳过未知;" +
     "㈢model slug 的确切拼写(见 shared 的 CLI_MODEL_PRESETS 注释),且 slug 自带 effort 后缀时再叠 `--effort` 的行为未知;" +
@@ -267,7 +267,7 @@ export const antigravitySpec: CliSpec = {
     // --dangerously-skip-permissions:不给会被软拒绝工具,agent 静默改不了文件。
     // --add-dir .:agy 不隐式纳入 cwd(默认空列表),不给等于让 agent 空手干活。
     // --print-timeout 24h:默认 5m 会把长任务从中间截断(且截断后拿不到产物);
-    //   harness 自己有停止/超时机制,这里等于把 CLI 侧的闸让开。想收紧的在执行器
+    //   ash 自己有停止/超时机制,这里等于把 CLI 侧的闸让开。想收紧的在执行器
     //   profile 的固定参数里补一个 `--print-timeout 10m` 即可 —— 用户参数排在最后。
     baseArgs: [
       "--output-format",

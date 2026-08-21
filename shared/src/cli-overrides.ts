@@ -1,9 +1,9 @@
 import { splitProfileExtraArgs } from "./cli-args.ts";
 import type { AgentType } from "./index.ts";
 
-// ── harness 替你写进 CLI 的配置 ─────────────────────────────────────────────
-// 这里声明的每一项,harness 都是**绕过 CLI 自己的配置文件**、直接以环境变量的形式
-// 注入到它启动的进程里。语义是「只对 harness 起的这个进程生效」:
+// ── ash 替你写进 CLI 的配置 ─────────────────────────────────────────────
+// 这里声明的每一项,ash 都是**绕过 CLI 自己的配置文件**、直接以环境变量的形式
+// 注入到它启动的进程里。语义是「只对 ash 起的这个进程生效」:
 //   · 用户自己在终端敲 `claude` 时读到的还是他的 settings.json,原样不动
 //   · 不同 profile 可以给不同的值(官方账号那条不配,中转的那条配上)
 // 所以 `shadows` 字段是这张表的重点 —— 它写清楚「这一项盖掉了谁」,前端原样显示给
@@ -33,14 +33,14 @@ export interface CliConfigOverride {
   requires?: string;
   /**
    * 落环境变量前的换算。缺省 = 原样。第二个参数是同一 profile 上的其它覆盖项,
-   * 第三个是「harness 起 CLI 时它会看到的环境」(见 CliHostEnv)。
+   * 第三个是「ash 起 CLI 时它会看到的环境」(见 CliHostEnv)。
    * 返回 null = 这一项在当前组合下不起作用,干脆不注入。
    */
   toEnv?: (value: number, values: Record<string, number>, host: CliHostEnv) => string | null;
 }
 
 /**
- * harness 起 CLI 时,那个进程会看到的环境事实 —— **只读**,不是配置项。
+ * ash 起 CLI 时,那个进程会看到的环境事实 —— **只读**,不是配置项。
  * 前端算不出来(变量在 server 进程里),所以由服务端如实报一份给它,好让设置页
  * 显示的触发水位和 CLI 真正的行为对得上。
  */
@@ -90,7 +90,7 @@ const CLAUDE_COMPACT_FLOOR_GAP = 13_000;
 // 没配窗口就一个字都不碰:用户在自己机器上关掉自动压缩是他的事。
 const CLAUDE_AUTO_COMPACT_KILL_SWITCHES = ["DISABLE_COMPACT", "DISABLE_AUTO_COMPACT"] as const;
 
-// 百分比换算的分母(`min(它, 20000)` = 输出预留量)。harness 按自己读到的值算完触发点,
+// 百分比换算的分母(`min(它, 20000)` = 输出预留量)。ash 按自己读到的值算完触发点,
 // 就**把同一个值钉进 `--settings.env`**:不钉的话,用户 settings.json 里的同名变量会在
 // 换算之后把分母改小,有效窗口变大、真实触发点比页面写的晚 5 个百分点左右(第 2 轮
 // 审查 finding 3)。钉的是「我们读到的那个赢家值」,所以对用户是原地不动,只是不许它
@@ -165,7 +165,7 @@ const CLAUDE_OVERRIDES: CliConfigOverride[] = [
     label: "上下文窗口",
     env: "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
     shadows: "~/.claude/settings.json → autoCompactWindow",
-    help: `照实填这个模型的上下文窗口。留空 = 跟随 CLI 判断,而 CLI 对白名单外的模型(fable-5、走中转的第三方模型)判不出来,会整段跳过自动压缩,水位一路涨到炸 —— 所以这一项是这一档的开关,不填下面的百分比也不生效。填上之后 harness 会连 claude 的自动压缩总开关一起摁住(你 settings.json 里的 autoCompactEnabled:false / ${CLAUDE_AUTO_COMPACT_KILL_SWITCHES.map((key) => `${key}=1`).join(" / ")} 在这次调用里不算数),否则数填对了也一次都不会压。拿不准就往小了填:填小只是压得早一点,填大会压得太晚直接撞上限。`,
+    help: `照实填这个模型的上下文窗口。留空 = 跟随 CLI 判断,而 CLI 对白名单外的模型(fable-5、走中转的第三方模型)判不出来,会整段跳过自动压缩,水位一路涨到炸 —— 所以这一项是这一档的开关,不填下面的百分比也不生效。填上之后 ash 会连 claude 的自动压缩总开关一起摁住(你 settings.json 里的 autoCompactEnabled:false / ${CLAUDE_AUTO_COMPACT_KILL_SWITCHES.map((key) => `${key}=1`).join(" / ")} 在这次调用里不算数),否则数填对了也一次都不会压。拿不准就往小了填:填小只是压得早一点,填大会压得太晚直接撞上限。`,
     min: 100_000,
     max: 1_000_000,
     placeholder: "留空 = 跟随 CLI",
@@ -317,7 +317,7 @@ export function cliConfigOverrideEnv(
 /**
  * 落成子进程环境的**补丁**:配了的给值,**没配的显式给 `undefined` = 从子进程里删掉**。
  *
- * 后半句不是多余的。spawn 传的是 `{ ...process.env, ...补丁 }`,harness 自己启动时若
+ * 后半句不是多余的。spawn 传的是 `{ ...process.env, ...补丁 }`,ash 自己启动时若
  * 环境里已经带着同名变量(用户在 shell 里 export 过、launchd plist 里写过),不删就等于
  * 每个 profile 都被那份全局值悄悄覆盖 —— 而设置页还老老实实显示「留空 = 跟随 CLI」。
  * 这一档配置的语义是「只有这里配的才算数」,所以留空必须是真的空。
@@ -337,7 +337,7 @@ export function cliConfigOverrideEnvPatch(
  *
  * 为什么光有环境变量不够(2026-08-12 实测 claude 2.1.220):CLI 初始化时会把各层
  * settings 的 `env` 对象**再写回自己的进程环境**,于是用户 `~/.claude/settings.json`
- * 或项目 `.claude/settings.json` 里的同名变量反过来盖掉 harness 注入的那份 —— 设置页
+ * 或项目 `.claude/settings.json` 里的同名变量反过来盖掉 ash 注入的那份 —— 设置页
  * 上写着 200k · 80%,实际按他文件里的数跑,而且一声不吭。这一档配置对外的承诺正是
  * 「覆盖 settings.json」,所以必须赢下它。
  *
@@ -357,7 +357,7 @@ export function cliConfigOverrideSettings(
 }
 
 /**
- * profile 自带的额外参数里有没有 `--settings` —— 有就说明 harness 写进去的那份会被
+ * profile 自带的额外参数里有没有 `--settings` —— 有就说明 ash 写进去的那份会被
  * 整份顶掉(claude 只认最后一个)。
  *
  * **判定必须拆词后再做**:参数编辑器按 token 存,但历史配置和整段粘贴会留下
@@ -402,9 +402,9 @@ export function cliSpeedOverrideConflict(
 /**
  * 同一批变量拼成 shell 前缀(`K=v K2=v2 `),给「复制到终端接着聊」那条命令用。
  * 不带它的话,用户手跑的那一次会退回 CLI 自己的 settings.json —— 压缩行为跟他在
- * harness 里看到的不是一回事,而这恰恰是他复制命令时最不会想到的差异。
+ * ash 里看到的不是一回事,而这恰恰是他复制命令时最不会想到的差异。
  *
- * 只出赋值、不出 `env -u`:harness 起子进程时会把没配的项从环境里删掉(见上面的
+ * 只出赋值、不出 `env -u`:ash 起子进程时会把没配的项从环境里删掉(见上面的
  * 补丁),但用户自己终端里 export 了什么是他自己的事,替他 unset 属于越界。
  */
 export function cliConfigOverrideEnvPrefix(
@@ -439,7 +439,7 @@ export function cliConfigOverrideHints(
   const at = `上下文涨到 ~${fmtTokens(plan.trigger)} 时压缩(窗口 ${fmtTokens(plan.window)} 的 ${Math.round((plan.trigger / plan.window) * 100)}%)。`;
   // 摁住总开关这件事得说出来:它盖的是用户自己配置文件里的开关,不说明白就等于
   // 「悄悄改了别人的配置」;而不摁的话上面这个触发点根本不会发生(见 JI())。
-  const forced = [`这次调用里 harness 会强制打开自动压缩(顶掉 settings.json 的 autoCompactEnabled:false 与 ${CLAUDE_AUTO_COMPACT_KILL_SWITCHES.join(" / ")}),否则窗口和百分比填对了也一次都不会压。`];
+  const forced = [`这次调用里 ash 会强制打开自动压缩(顶掉 settings.json 的 autoCompactEnabled:false 与 ${CLAUDE_AUTO_COMPACT_KILL_SWITCHES.join(" / ")}),否则窗口和百分比填对了也一次都不会压。`];
   if (plan.percent === null) return [`${at}这是 claude 的默认触发点;想更早压就填下面的百分比。`, ...forced];
   if (plan.capped) return [`${at}填的 ${plan.percent}% 比 claude 自己的下限还晚,已经按下限算 —— 想更早压请往小了填。`, ...forced];
   return [at, ...forced];

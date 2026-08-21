@@ -3,8 +3,8 @@
 // 求差，Claude 继续逐轮相加。只有 trace 条数与数据库轮数完全吻合才动原账。
 import { readFileSync } from "node:fs";
 import { eq, isNotNull } from "drizzle-orm";
-import type { TokenUsage } from "@harness/shared";
-import { addUsage, sumUsage } from "@harness/shared/usage";
+import type { TokenUsage } from "@ash/shared";
+import { addUsage, sumUsage } from "@ash/shared/usage";
 import { db } from "./db/index.js";
 import { appSettings, sessions, usageCumulativeSnapshots } from "./db/schema.js";
 import { readableRunPath, parseSessionTrace, sessionTracePath } from "./transcript.js";

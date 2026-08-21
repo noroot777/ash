@@ -1,10 +1,10 @@
 {
-  "name": "@harness/mcp",
+  "name": "@ash/mcp",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "bin": {
-    "harness-mcp": "./dist/index.js"
+    "ash-mcp": "./dist/index.js"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -13,7 +13,7 @@
     "test:reconnect": "npm run build && node scripts/test-reconnect.mjs"
   },
   "dependencies": {
-    "@harness/shared": "*",
+    "@ash/shared": "*",
     "@modelcontextprotocol/sdk": "^1.13.0",
     "zod": "^3.23.8"
   },

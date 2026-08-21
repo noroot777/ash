@@ -15,17 +15,17 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "harness-worktree-recovery-"));
+const root = mkdtempSync(join(tmpdir(), "ash-worktree-recovery-"));
 const repo = join(root, "repo");
-process.env.HARNESS_DB = join(root, "harness.db");
+process.env.ASH_DB = join(root, "ash.db");
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 
 try {
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Harness Test");
-  git(repo, "config", "user.email", "harness@example.test");
+  git(repo, "config", "user.name", "Ash Test");
+  git(repo, "config", "user.email", "ash@example.test");
   writeFileSync(join(repo, "seed.txt"), "seed\n");
   git(repo, "add", "-A");
   git(repo, "commit", "-m", "seed");
@@ -78,6 +78,22 @@ try {
     assert.equal(rebuilt.fresh, true, "工作确实丢了，必须标记 fresh 让调用方警告 agent");
     assert.equal(existsSync(join(rebuilt.path, "agent-work.txt")), false, "空壳里不该有旧文件");
     assert.equal(existsSync(join(rebuilt.path, "seed.txt")), true, "应从 base 拉出干净副本");
+  }
+
+  // ── 3b. 改名前留下的任务分支 → 仍按原分支恢复 ───────────────────────────
+  {
+    const taskId = "legacybr003b";
+    const legacyBranch = `harness/${taskId.slice(0, 8)}`;
+    const path = join(repo, ".worktrees", taskId);
+    git(repo, "worktree", "add", "-b", legacyBranch, path, "main");
+    writeFileSync(join(path, "legacy-work.txt"), "legacy output\n");
+    git(path, "add", "-A");
+    git(path, "commit", "-m", "legacy work");
+    git(repo, "worktree", "remove", "--force", path);
+
+    const restored = await prepareWorktree(repo, taskId, "main");
+    assert.equal(restored.branch, legacyBranch, "旧任务应继续使用改名前的分支");
+    assert.equal(existsSync(join(restored.path, "legacy-work.txt")), true, "旧任务成果不能丢");
   }
 
   // ── 4. 登记的 base 分支已被删 → 退回仓库当前 HEAD，并如实交代 ────────────

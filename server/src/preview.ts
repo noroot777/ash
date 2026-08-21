@@ -14,8 +14,8 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { existsSync, mkdirSync, openSync, closeSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { PreviewLife, WorkflowStep } from "@harness/shared/workflow";
-import type { FreeWorkflowPreviewEventSource } from "@harness/shared";
+import type { PreviewLife, WorkflowStep } from "@ash/shared/workflow";
+import type { FreeWorkflowPreviewEventSource } from "@ash/shared";
 import { augmentedEnv, killByPid } from "./executors/spawn.js";
 import { recordFreePreviewEventIfFree } from "./free-workflow-events.js";
 import { RUNS_DIR } from "./paths.js";
@@ -44,7 +44,7 @@ const POLL_MS = 500;
 /** idle30 那一档：满这么久就回收（见 PREVIEW_LIFE_LABELS 的口径说明）。 */
 const IDLE_LIFE_MS = 30 * 60_000;
 const SWEEP_MS = 5 * 60_000;
-const UNSAFE_SCHEDULER_LOG = "[harness] scheduler started";
+const UNSAFE_SCHEDULER_LOG = "[ash] scheduler started";
 
 // 「端口撞车怎么认、日志里哪个地址才是预览本尊、认出来说什么」都在 preview-log.ts
 //（纯函数，回归 test:preview-log）；「连不连得上、算不算起来了」在 preview-probe.ts
@@ -127,10 +127,10 @@ export async function startPreview(
   const log = join(dir, "preview.log");
   const lent = await freePort();
   // 日志头把注入的环境变量照实写出来，不只写命令：用户翻 preview.log 时得能一眼看出
-  // 「harness 到底把什么交给了这条命令」，而不是去猜端口是谁定的。
+  // 「ash 到底把什么交给了这条命令」，而不是去猜端口是谁定的。
   const banner = lent
-    ? `$ PORT=${lent} BROWSER=none HARNESS_PREVIEW=1 HARNESS_PREVIEW_MODE=${step.p.mode} ${step.p.cmd}\n`
-    : `$ HARNESS_PREVIEW=1 HARNESS_PREVIEW_MODE=${step.p.mode} ${step.p.cmd}\n`;
+    ? `$ PORT=${lent} BROWSER=none ASH_PREVIEW=1 ASH_PREVIEW_MODE=${step.p.mode} ${step.p.cmd}\n`
+    : `$ ASH_PREVIEW=1 ASH_PREVIEW_MODE=${step.p.mode} ${step.p.cmd}\n`;
   writeFileSync(log, banner);
   const fd = openSync(log, "a");
   let pid: number;
@@ -150,8 +150,8 @@ export async function startPreview(
       // 那扇窗户没人要。PORT 的来由见 freePort 的注释。
       env: {
         ...augmentedEnv(),
-        HARNESS_PREVIEW: "1",
-        HARNESS_PREVIEW_MODE: step.p.mode,
+        ASH_PREVIEW: "1",
+        ASH_PREVIEW_MODE: step.p.mode,
         ...(lent ? { PORT: String(lent) } : {}),
         BROWSER: "none",
       },

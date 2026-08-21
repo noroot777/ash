@@ -21,11 +21,11 @@ import type {
   TaskStage,
   TaskStatus,
   TeamConfig,
-} from "@harness/shared";
-import { AGENT_TYPES, TEAM_DEFAULTS } from "@harness/shared";
-import { inheritExecutorOverrides, pickExecutor } from "@harness/shared/executors";
-import { STEP_LABELS } from "@harness/shared/workflow";
-import { anchorAt, firstAnchor, workflowPolicy } from "@harness/shared/workflow-policy";
+} from "@ash/shared";
+import { AGENT_TYPES, TEAM_DEFAULTS } from "@ash/shared";
+import { inheritExecutorOverrides, pickExecutor } from "@ash/shared/executors";
+import { STEP_LABELS } from "@ash/shared/workflow";
+import { anchorAt, firstAnchor, workflowPolicy } from "@ash/shared/workflow-policy";
 import { and, asc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";

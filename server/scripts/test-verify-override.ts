@@ -17,8 +17,8 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "harness-verify-override-"));
-process.env.HARNESS_DB = join(root, "harness.db");
+const root = mkdtempSync(join(tmpdir(), "ash-verify-override-"));
+process.env.ASH_DB = join(root, "ash.db");
 const repo = join(root, "repo");
 execFileSync("git", ["init", "-q", repo]);
 
@@ -135,7 +135,7 @@ const repo2 = join(root, "repo2");
 execFileSync("git", ["init", "-q", "-b", "main", repo2]);
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
-git(repo2, "config", "user.name", "Harness Override Test");
+git(repo2, "config", "user.name", "Ash Override Test");
 git(repo2, "config", "user.email", "override@example.test");
 writeFileSync(join(repo2, ".gitignore"), ".worktrees/\n");
 git(repo2, "add", "-A");

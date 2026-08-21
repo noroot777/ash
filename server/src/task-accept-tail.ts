@@ -1,9 +1,9 @@
 // 验收「点头之后」的尾段（发布命令等）与中途关口放行的续走（从 task-accept.ts 拆出，
 // 纯行数拆分）。为什么在仓库锁外跑、为什么逐站落账，见各函数头注释。
 import { eq } from "drizzle-orm";
-import { anchorAt, acceptPlan, segmentAfter } from "@harness/shared/workflow-policy";
-import type { AcceptBy } from "@harness/shared/workflow-policy";
-import { STEP_LABELS } from "@harness/shared/workflow";
+import { anchorAt, acceptPlan, segmentAfter } from "@ash/shared/workflow-policy";
+import type { AcceptBy } from "@ash/shared/workflow-policy";
+import { STEP_LABELS } from "@ash/shared/workflow";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { taskWorkflowDef } from "./workflows.js";

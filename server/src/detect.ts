@@ -1,4 +1,4 @@
-import type { AgentType } from "@harness/shared";
+import type { AgentType } from "@ash/shared";
 import { probeBins } from "./executors/bin-probe.js";
 import { CLI_SPECS } from "./executors/catalog/index.js";
 import { resolveExecutorFor } from "./executors/index.js";
@@ -47,7 +47,7 @@ export interface KnownCli {
    * 不是「各平台注意事项的合集」。
    */
   platformNote?: string;
-  /** 可作为 harness 执行器的 AgentType(= key)。 */
+  /** 可作为 ash 执行器的 AgentType(= key)。 */
   type: AgentType;
   /** true = 执行参数按官方文档写、本机未实测(前端据此打标)。 */
   untested?: boolean;
@@ -72,7 +72,7 @@ export interface DetectedCli extends KnownCli {
 
 // 安装命令在**这里**按宿主平台定死,而不是把两条都发给前端让浏览器挑:CLI 要装在
 // 跑 server 的这台机器上,只有服务端知道那是什么系统(用 Windows 浏览器连 mac 上的
-// harness 完全正常,那时该显示的是 mac 那条)。
+// ash 完全正常,那时该显示的是 mac 那条)。
 //
 // 单独抽成函数是为了能测 —— `IS_WINDOWS` 是模块级常量,mac 上跑的测试没法翻转它,
 // 内联写就等于 Windows 分支永远没人验。

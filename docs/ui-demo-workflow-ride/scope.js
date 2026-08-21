@@ -6,7 +6,7 @@
 
   var SCOPES = [
     { key: "sys", name: "系统默认", sub: "所有项目的兜底" },
-    { key: "proj", name: "本项目 · harness", sub: "这个仓库里的任务" },
+    { key: "proj", name: "本项目 · ash", sub: "这个仓库里的任务" },
     { key: "task", name: "这个任务 · #Sh2BRa8d", sub: "只影响它自己" },
   ];
   var ORDER = ["sys", "proj", "task"];

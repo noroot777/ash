@@ -5,7 +5,7 @@
 import { Agent as HttpAgent, request as httpRequest, type IncomingMessage } from "node:http";
 import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { connect } from "node:net";
-import type { PreviewReady } from "@harness/shared/workflow";
+import type { PreviewReady } from "@ash/shared/workflow";
 
 /** 日志里出现这些词才算「它自己说自己好了」。 */
 const READY_WORDS = /ready|listening|started|compiled|running at|server running/i;

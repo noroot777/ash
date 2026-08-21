@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { cappedGitStdout } from "./git-exec.js";
-import { expandHome, isGitRepo, resolveTaskMergeTarget, worktreeBranchName } from "./git.js";
+import { expandHome, isGitRepo, resolveTaskMergeTarget, resolveWorktreeBranchName } from "./git.js";
 
 const exec = promisify(execFile);
 const DIFF_LIMIT_BYTES = 1024 * 1024;
@@ -51,7 +51,7 @@ export async function taskBranchDiff(
   limitBytes = DIFF_LIMIT_BYTES,
 ): Promise<TaskDiffResult> {
   const repo = expandHome(repoPath);
-  const sourceBranch = worktreeBranchName(taskId);
+  const sourceBranch = await resolveWorktreeBranchName(repo, taskId);
   const empty = (targetBranch: string | null, reason: string): TaskDiffResult => ({
     available: false,
     sourceBranch,

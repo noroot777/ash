@@ -7,15 +7,15 @@ import { fileURLToPath } from "node:url";
 import { eq } from "drizzle-orm";
 import { IS_WINDOWS } from "../src/platform.js";
 import { releaseTmpDb } from "./tmp-db.js";
-import { TEAM_DEFAULTS } from "@harness/shared";
+import { TEAM_DEFAULTS } from "@ash/shared";
 
 // ── 子进程分支:制造「进程死在投递中途」的真实现场 ────────────────────────────
-// 父进程把自己 fork 出一份、指向同一个库(HARNESS_DB 从环境继承)。这里用**投递路径
+// 父进程把自己 fork 出一份、指向同一个库(ASH_DB 从环境继承)。这里用**投递路径
 // 自己那个函数**抢下租约,然后 SIGKILL 自己 —— 没有 finally、没有 catch、没有任何清理
 // 机会,库里就留下一条「pending + 有租约」的行。
 // 那正是 2026-08-07 消息死掉的当口:当时它已经被标成 sent,补发扫描只查 pending,于是
 // 再也没人管它。现在它还是 pending,重启后必须能自己回来。
-const crashMessageId = process.env.HARNESS_TEST_CRASH_MESSAGE;
+const crashMessageId = process.env.ASH_TEST_CRASH_MESSAGE;
 if (crashMessageId) {
   const { beginDelivery } = await import("../src/pending-messages.js");
   if (!(await beginDelivery(crashMessageId))) process.exit(3); // 没抢到 = 测试前提就不成立
@@ -23,12 +23,12 @@ if (crashMessageId) {
 }
 
 const selfPath = fileURLToPath(import.meta.url);
-const root = mkdtempSync(join(tmpdir(), "harness-scheduled-messages-"));
+const root = mkdtempSync(join(tmpdir(), "ash-scheduled-messages-"));
 const fakeBin = join(root, "bin");
 const leadLog = join(root, "lead-input.jsonl");
 const originalPath = process.env.PATH;
-process.env.HARNESS_DB = join(root, "harness.db");
-process.env.HARNESS_TEST_LEAD_LOG = leadLog;
+process.env.ASH_DB = join(root, "ash.db");
+process.env.ASH_TEST_LEAD_LOG = leadLog;
 // 分隔符用 `path.delimiter`:Windows 是 `;`,写死 `:` 会把整条 PATH 粘成一个不存在的
 // 目录名,假 claude 和真 node 一起从 PATH 上消失。
 process.env.PATH = `${fakeBin}${delimiter}${originalPath ?? ""}`;
@@ -46,7 +46,7 @@ process.stdin.on("data", (d) => {
   buf += d;
   const i = buf.indexOf("\\n");
   if (i < 0) return;
-  fs.appendFileSync(process.env.HARNESS_TEST_LEAD_LOG, buf.slice(0, i) + "\\n");
+  fs.appendFileSync(process.env.ASH_TEST_LEAD_LOG, buf.slice(0, i) + "\\n");
   process.stdout.write(JSON.stringify({ type: "system", session_id: "scheduled-message-test" }) + "\\n");
   process.stdout.write(
     JSON.stringify({ type: "result", subtype: "success", session_id: "scheduled-message-test" }) + "\\n",
@@ -347,7 +347,7 @@ try {
     messageRow("scheduled-crashed", crashTaskId, "重启也不许弄丢这句话", "queued"),
   ]);
   const crash = spawnSync(process.execPath, [...process.execArgv, selfPath], {
-    env: { ...process.env, HARNESS_TEST_CRASH_MESSAGE: "scheduled-crashed" },
+    env: { ...process.env, ASH_TEST_CRASH_MESSAGE: "scheduled-crashed" },
     encoding: "utf8",
   });
   // 「它确实是被硬杀的」这件事,两个平台的证据不一样:POSIX 下父进程拿得到 signal='SIGKILL',
@@ -412,7 +412,7 @@ try {
 } finally {
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
-  delete process.env.HARNESS_TEST_LEAD_LOG;
+  delete process.env.ASH_TEST_LEAD_LOG;
   rmSync(join(paths.RUNS_DIR, deliveredTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, unavailableTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, queuedTaskId), { recursive: true, force: true });

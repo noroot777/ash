@@ -1,5 +1,5 @@
 // ── 任务接力（跨机器 handoff）──────────────────────────────────────────────
-// 把一个任务连同 git 分支、CLI 会话文件、会话产物整体迁到另一台 harness 上续跑。
+// 把一个任务连同 git 分支、CLI 会话文件、会话产物整体迁到另一台 ash 上续跑。
 // 从 index.ts 拆出的纯类型模块;index.ts 做类型再导出,消费方 import 路径不变。
 export interface HandoffTarget {
   name: string;
@@ -27,7 +27,7 @@ export interface TaskHandoff {
   // 这一批——pending 期间新建的消息没有随幂等重放迁移到对端,必须留在托盘里如实提醒,
   // 按「当前所有 pending」取消就是静默丢消息。
   messageIds?: string[];
-  // out: 对端 harness 根地址（横幅可点过去）；in: 源机自述不了地址,为 null。
+  // out: 对端 ash 根地址（横幅可点过去）；in: 源机自述不了地址,为 null。
   peerUrl: string | null;
   // out: 目标配置里的名字；in: 源机主机名。
   peerName: string | null;

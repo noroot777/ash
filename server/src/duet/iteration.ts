@@ -1,10 +1,10 @@
 import { existsSync } from "node:fs";
-import { normalizeDuetConfig } from "@harness/shared/duet";
+import { normalizeDuetConfig } from "@ash/shared/duet";
 import { readFile } from "node:fs/promises";
 import type { Hono } from "hono";
 import { and, desc, eq } from "drizzle-orm";
-import type { Task } from "@harness/shared";
-import { isTeamSettled } from "@harness/shared/team";
+import type { Task } from "@ash/shared";
+import { isTeamSettled } from "@ash/shared/team";
 import { db } from "../db/index.js";
 import { sessions, tasks } from "../db/schema.js";
 import { RUNS_DIR } from "../paths.js";

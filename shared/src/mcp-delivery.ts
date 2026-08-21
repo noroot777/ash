@@ -29,7 +29,7 @@
 export const UNDELIVERED_NET_CODES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"]);
 
 // 各家 CLI 在 MCP 通道断掉时写进事件流的说法。全部小写后做子串匹配。
-// codex(rmcp) 实测：`tool call failed for \`harness/report_stage\`\n\nCaused by:\n    Transport closed`
+// codex(rmcp) 实测：`tool call failed for \`ash/report_stage\`\n\nCaused by:\n    Transport closed`
 //
 // 注意这里比 UNDELIVERED_NET_CODES 宽：`econnreset` / `socket hang up` 严格说是
 // 「连上了又断」，未必没送达。只有**叠着幂等白名单**的补捞侧能用这份（见文件头）。
@@ -65,7 +65,7 @@ export function isUndeliveredMcpFailure(input: { code?: string | null; message?:
  * 收进来的判据是三条同时成立：
  * ① **幂等**：重复执行一次结果不变（写同一个值），所以「其实送达了、只是回执丢了」
  *    的那种情况重放也不会出事；
- * ② **只写回本任务自己的状态**：它是 agent 在回合末尾「向 harness 交卷」的动作，丢了
+ * ② **只写回本任务自己的状态**：它是 agent 在回合末尾「向 ash 交卷」的动作，丢了
  *    就等于活白干（结论没写回、完成没确认）；
  * ③ **不凭空创造一个新的等待**：重放只是把 agent 已经做出的判断补录进来，不该让任务
  *    多出一个「有人在等你」的状态。

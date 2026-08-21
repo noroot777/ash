@@ -1,9 +1,9 @@
 // 预览实例的开局播种：从**你正在用的那个库**里搬一份数据进预览的空库。
 //
-// 两档，由 `HARNESS_SEED_MODE` 选（默认 snapshot）：
+// 两档，由 `ASH_SEED_MODE` 选（默认 snapshot）：
 //
 //   · `snapshot` —— 配置 + 运行态一起搬，搬完把运行态**洗一遍**（见 sanitize）。
-//     打开预览看到的就是你现在这台 harness 的样子：一样的任务列表、一样的分组、一样的
+//     打开预览看到的就是你现在这台 ash 的样子：一样的任务列表、一样的分组、一样的
 //     会话与 token 账。这是默认档，因为「预览里空无一物」本身就让人验不了东西：
 //     token 计数、列表密度、分组折叠……凡是得有数据才看得见的改动，空库里一概验不出来。
 //   · `config` —— 只搬设置那几张表（老行为）。快照这条路万一出问题时的退路。
@@ -28,7 +28,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { createClient, type Client } from "./db/node-sqlite-client.js";
 import { dbClient } from "./db/index.js";
-import { resolveHarnessDbFile } from "./db/path.js";
+import { resolveAshDbFile } from "./db/path.js";
 
 export type SeedMode = "snapshot" | "config";
 
@@ -114,7 +114,7 @@ export async function copyTables(
       }
       copied[table] = rows.length;
     } catch (e) {
-      console.error(`[harness] 预览播种：${table} 没搬成（跳过）:`, e);
+      console.error(`[ash] 预览播种：${table} 没搬成（跳过）:`, e);
     }
   }
   return copied;
@@ -151,7 +151,7 @@ export async function sanitizeSnapshot(dest: Client): Promise<string[]> {
       const res = await dest.execute(sql);
       done.push(`${label} ${res.rowsAffected}`);
     } catch (e) {
-      console.error(`[harness] 预览播种：洗「${label}」没成:`, e);
+      console.error(`[ash] 预览播种：洗「${label}」没成:`, e);
     }
   };
 
@@ -184,16 +184,16 @@ export async function sanitizeSnapshot(dest: Client): Promise<string[]> {
 }
 
 /**
- * 启动期入口，只有 `HARNESS_SEED_FROM` 非空时才走（也就是只有预览会走）。
+ * 启动期入口，只有 `ASH_SEED_FROM` 非空时才走（也就是只有预览会走）。
  *
  * 源库是**用户正在用的那份**，所以这里只 SELECT，绝不写。（libsql 的 file: URL 不认
  * `?mode=ro`，拦不住的那一层只能靠这一条自律 + 上面的白名单。）
  */
 export async function seedPreviewDb(sourceFile: string, mode: SeedMode = "snapshot"): Promise<void> {
   const src = resolve(sourceFile);
-  if (src === resolveHarnessDbFile()) return; // 自己搬自己
+  if (src === resolveAshDbFile()) return; // 自己搬自己
   if (!existsSync(src)) {
-    console.error(`[harness] 预览播种：源库不在（${src}），预览会是个空库。`);
+    console.error(`[ash] 预览播种：源库不在（${src}），预览会是个空库。`);
     return;
   }
   const tables = mode === "snapshot" ? [...CONFIG_TABLES, ...SNAPSHOT_TABLES] : CONFIG_TABLES;
@@ -202,16 +202,16 @@ export async function seedPreviewDb(sourceFile: string, mode: SeedMode = "snapsh
     const copied = await copyTables(source, dbClient, tables);
     const summary = Object.entries(copied).map(([table, n]) => `${table} ${n}`).join("、");
     if (!summary) {
-      console.log("[harness] 预览播种：没有需要搬的（库里已有内容，或主库也是空的）");
+      console.log("[ash] 预览播种：没有需要搬的（库里已有内容，或主库也是空的）");
       return;
     }
-    console.log(`[harness] 预览库已从主库搬来（${mode}）：${summary}`);
+    console.log(`[ash] 预览库已从主库搬来（${mode}）：${summary}`);
     if (mode === "snapshot") {
       const washed = await sanitizeSnapshot(dbClient);
-      console.log(`[harness] 预览快照已洗掉运行态：${washed.join("、") || "无"}（定时任务与定时消息压根没搬）`);
+      console.log(`[ash] 预览快照已洗掉运行态：${washed.join("、") || "无"}（定时任务与定时消息压根没搬）`);
     }
   } catch (e) {
-    console.error("[harness] 预览播种失败（预览照常起，只是库是空的）:", e);
+    console.error("[ash] 预览播种失败（预览照常起，只是库是空的）:", e);
   } finally {
     source.close();
   }

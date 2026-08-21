@@ -15,7 +15,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const dir = mkdtempSync(join(tmpdir(), "harness-detached-"));
+const dir = mkdtempSync(join(tmpdir(), "ash-detached-"));
 const TOTAL = 24;
 const EXIT_CODE = 7;
 
@@ -67,11 +67,11 @@ if (mode === "v1") {
   const info = inspectProcess(child.pid);
   writeFileSync(stateFile, JSON.stringify({
     pid: child.pid, startedAt: info?.startedAt ?? null,
-    offset: child.harnessCommitted(), lines,
+    offset: child.ashCommitted(), lines,
   }));
   process.exit(0); // 模拟 kill：不给任何收尾机会
 } else {
-  const prev = JSON.parse(process.env.HARNESS_PREV_STATE);
+  const prev = JSON.parse(process.env.ASH_PREV_STATE);
   const child = reattachDetachedAgent({ pid: prev.pid, startedAt: prev.startedAt, paths, offset: prev.offset });
   if (!child) { clearInterval(keepAlive); writeFileSync(stateFile, JSON.stringify({ reattached: false })); process.exit(0); }
   const how = await consume(child, 0);
@@ -106,7 +106,7 @@ try { process.kill(a.pid, 0); } catch { alive = false; }
 console.log(`   agent 还活着 = ${alive}   ← 管道模式下这里必然是 false`);
 
 console.log("③ 起 server-v2，按 pid+offset 接管…");
-await run(["v2", dir, agentScript, stateB], { HARNESS_PREV_STATE: JSON.stringify(a) });
+await run(["v2", dir, agentScript, stateB], { ASH_PREV_STATE: JSON.stringify(a) });
 const b = JSON.parse(readFileSync(stateB, "utf8"));
 console.log(`   接管成功 = ${b.reattached}，又读到 ${b.lines?.length ?? 0} 行，退出码 = ${b.exitCode}`);
 

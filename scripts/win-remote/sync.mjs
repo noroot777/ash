@@ -11,11 +11,11 @@
 //    而你的分支、index、stash 全程没被碰过。
 //
 // 3. **落到对端的 `.worktrees/win-remote`,绝不动它的主工作区。** 那台机器上的
-//    `D:\ai_workspace\ash` 是**正在跑着的 harness 自己**,而且有用户没提交的本地改动
+//    `D:\ai_workspace\ash` 是**正在跑着的 ash 自己**,而且有用户没提交的本地改动
 //    (`server/src/executors/claude.ts` 等)。往那儿 checkout 等于既覆盖别人的活,又把
 //    live 服务的源码换掉。放在主仓内部的 `.worktrees/` 下还白捡一个好处:Node 解析
 //    node_modules 会逐级向上,worktree 里不装依赖也能直接用主仓那份。
-//    唯一要补的是 `node_modules/@harness/*` —— 不补的话 `@harness/shared` 会解析到
+//    唯一要补的是 `node_modules/@ash/*` —— 不补的话 `@ash/shared` 会解析到
 //    **主仓的** shared,于是你改了 shared 却测的是旧代码(docs 里记过这个坑)。
 import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -43,7 +43,7 @@ const ADOPT = /^(1|true|yes)$/i.test(process.env.WIN_REMOTE_ADOPT ?? "");
  *
  * 拼字符串之前必须先过这一关。上一版直接 `repoPath + '\' + WORKSPACE`,于是
  * `WIN_REMOTE_WORKSPACE=.` 和 `=''` 都解析成 repo 根本身 —— 那台机器上的 repo 根是**正在跑
- * harness、带着用户未提交内容**的 live 主仓。sync 走的那条路会在所有权校验上拒掉它
+ * ash、带着用户未提交内容**的 live 主仓。sync 走的那条路会在所有权校验上拒掉它
  * (git-dir = common-dir),但 exec 和 test --no-sync 不经过 sync,直接把它当 cwd 用,
  * 于是「绝不动主工作区」这句承诺在两个入口上是空的。实测 doctor 报「测试 worktree
  * D:\...\ash\. 已就绪」、exec 报 `CWD=D:\ai_workspace\ash`,都 exit 0。
@@ -56,7 +56,7 @@ function workspaceRel() {
   const raw = String(WORKSPACE).trim();
   const bad = (why) =>
     new Error(`WIN_REMOTE_WORKSPACE=${JSON.stringify(raw)} 不能用:${why}。它必须是 repo 下的相对子目录,比如 .worktrees/win-remote`);
-  if (!raw) throw bad("空值会解析成对端 repo 根,也就是那个正在跑 harness 的主工作区");
+  if (!raw) throw bad("空值会解析成对端 repo 根,也就是那个正在跑 ash 的主工作区");
   if (/^[a-zA-Z]:/.test(raw) || /^[\\/]/.test(raw)) throw bad("是绝对路径或 UNC 路径,越出了 repo");
   const segs = raw.split(/[\\/]+/).filter(Boolean);
   if (!segs.length) throw bad("规范化之后什么都不剩");
@@ -98,8 +98,9 @@ export const workspaceGuardPs = (repoPath) => {
   ].join("\n");
 };
 
-// 这四个包在 workspace 里互相 import,靠 `node_modules/@harness/<pkg>` 找到对方。
-const HARNESS_LINKS = ["shared", "server", "web-next", "mcp"];
+// 这四个包在 workspace 里互相 import,靠 `node_modules/@ash/<pkg>` 找到对方。
+const ASH_LINKS = ["shared", "server", "web", "mcp"];
+const WORKSPACE_DEP_LINKS = ["server", "web", "mcp"];
 
 const git = (args, opts = {}) =>
   execFileSync("git", args, { encoding: "utf8", ...opts }).trim();
@@ -113,16 +114,17 @@ export function snapshotWorkspace(ref = `${WIP_PREFIX}${randomBytes(6).toString(
     // 用临时 index,真实 index 不受影响 —— 同步不该有副作用。
     const env = { ...process.env, GIT_INDEX_FILE: indexFile };
     git(["read-tree", "HEAD"], { cwd: root, env });
-    // node_modules 必须显式排除,不能只靠 .gitignore。仓库里那条规则写的是 `node_modules/`,
+    // node_modules 必须从临时 index 里显式摘掉,不能只靠 .gitignore。仓库里那条规则写的是 `node_modules/`,
     // **带斜杠只匹配目录**;而在 worktree 里做 typecheck 的标准手法是往这儿挂一个指向主仓的
     // **软链**(见 shared 那条约定),软链在 git 眼里不是目录,于是这条 ignore 一点都不管用,
     // `add -A` 把它当普通文件收进快照。到了 Windows(git 默认不建符号链接)它被还原成一个
     // **内容是路径字符串的普通文件**,名字正好占住 `node_modules` —— 后面 `mklink /J` 要在
-    // 它下面建 `@harness\*`,报的是 "The system cannot find the path specified.",跟软链、
+    // 它下面建 `@ash\*`,报的是 "The system cannot find the path specified.",跟软链、
     // 跟 ignore 规则看着都毫无关系。实测踩过一次,查了半小时。
-    // 排除本身也是对的:对端的 node_modules 一律由那边自己建(四个 junction),开发机这份
-    // 无论是软链还是真目录都不该跨机器搬。
-    git(["add", "-A", "--", ".", ":(exclude)node_modules", ":(exclude)*/node_modules"], { cwd: root, env });
+    // 先正常 add（真目录会被 ignore），再从临时 index 摘掉软链形态；把 ignored 真目录写进
+    // exclude pathspec 会让部分 Git 版本反而报「显式添加了 ignored path」，装过依赖就同步不了。
+    git(["add", "-A", "--", "."], { cwd: root, env });
+    git(["reset", "-q", "--", "node_modules", ":(glob)**/node_modules"], { cwd: root, env });
     const tree = git(["write-tree"], { cwd: root, env });
     const head = git(["rev-parse", "HEAD"], { cwd: root });
     const sha = git(["commit-tree", tree, "-p", head, "-m", "win-remote: workspace snapshot"], { cwd: root, env });
@@ -184,7 +186,7 @@ export async function serveRepo(port = 0) {
   throw lastErr ?? new Error("git daemon 起不来");
 }
 
-/** 对端拉取 + 检出到独立 worktree,并补齐 @harness 软链。返回对端的 HEAD sha。 */
+/** 对端拉取 + 检出到独立 worktree,并补齐 @ash 软链。返回对端的 HEAD sha。 */
 export async function syncToRemote({ repoPath, onLine = null, projectId = null, guard = "" } = {}) {
   const { sha, ref, root } = snapshotWorkspace();
   let daemon = null;
@@ -245,7 +247,7 @@ if ($__fresh) {
   if ($LASTEXITCODE -ne 0) { throw 'checkout 失败' }
 }
 # 那个 worktree 是**跨所有调用复用的固定目录**,而 checkout --force 只管 Git 跟踪的文件:
-# 上一次跑测试/构建留下的未跟踪与 ignored 产物(data\harness.db、dist\、*.tsbuildinfo)
+# 上一次跑测试/构建留下的未跟踪与 ignored 产物(data\ash.db、dist\、*.tsbuildinfo)
 # 原样活到下一次快照里。SHA 和 junction 全绿也照不出这类污染 —— 而 server 的生产入口直接跑
 # server\dist\index.js,验的可能是上一版构建产物,「测的就是这份快照」对文件树并不成立。
 # 两个前提缺一不可:
@@ -253,7 +255,7 @@ if ($__fresh) {
 #     确保上面那条分支真的把章盖上了 —— 要 clean 谁,凭据就得在 clean 前一刻还在);
 #  ② 先把目录型 reparse point 摘掉再 clean —— git clean 的递归删除会**穿过** junction 去删
 #     目标目录里的东西(那头是主仓源码),而 [IO.Directory]::Delete($link,$false) 只删链接本体。
-#     摘掉的正是下面那四个 @harness junction,紧接着就原地重建。
+#     摘掉的正是下面这些依赖 junction,紧接着就原地重建。
 $__gd2 = ([string](git -C $wt rev-parse --path-format=absolute --git-dir 2>$null)).Trim()
 if (-not $__gd2 -or -not (Test-Path -LiteralPath (Join-Path $__gd2 'win-remote-owner'))) {
   throw ('拒绝清理:' + $wt + ' 上没有 win-remote 的所有权标记,不在别人的工作区上跑 git clean')
@@ -274,18 +276,18 @@ while ($__stack.Count -gt 0) {
 $__cleaned = @(git -C $wt clean -xdff)
 if ($LASTEXITCODE -ne 0) { throw ('git clean 失败:' + ($__cleaned -join '; ')) }
 Write-Output ('CLEAN=' + $__cleaned.Count + '|' + $__links)
-# 不补这几个软链,@harness/shared 会向上解析到主仓那份 —— 改了 shared 却测旧代码。
+# 不补这几个软链,@ash/shared 会向上解析到主仓那份 —— 改了 shared 却测旧代码。
 # 「缺了就建」不够:junction **在**、却指着主仓,是同一个坑的另一半,而且更隐蔽 —— 检出、
 # SHA 校验全绿,测的却仍是主仓旧代码。所以每次同步都把四个目标读出来核对,并把它们回传给
 # 开发机当成功判据的一部分(见下面的 LINK= 解析)。
-$scope = Join-Path $wt 'node_modules\@harness'
+$scope = Join-Path $wt 'node_modules\@ash'
 New-Item -ItemType Directory -Force -Path $scope | Out-Null
-foreach ($p in @(${HARNESS_LINKS.map(psq).join(",")})) {
+foreach ($p in @(${ASH_LINKS.map(psq).join(",")})) {
   $link = Join-Path $scope $p
   $want = ([string](Join-Path $wt $p)).TrimEnd('\')
   $it = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
   # 真目录/真文件占了位置就停手报错:那可能是别人装的依赖或手工放的东西,自动删属于越权。
-  if ($it -and $it.LinkType -ne 'Junction') { throw ('node_modules\@harness\' + $p + ' 已存在且不是 junction(' + $it.LinkType + '),不敢自动删,请人工处理') }
+  if ($it -and $it.LinkType -ne 'Junction') { throw ('node_modules\@ash\' + $p + ' 已存在且不是 junction(' + $it.LinkType + '),不敢自动删,请人工处理') }
   if ($it) {
     $cur = ([string]($it.Target | Select-Object -First 1)) -replace '^\\\\\?\\',''
     if ($cur.TrimEnd('\') -ne $want) {
@@ -300,12 +302,35 @@ foreach ($p in @(${HARNESS_LINKS.map(psq).join(",")})) {
   if ($now -and $now.LinkType -eq 'Junction') { $tgt = ([string]($now.Target | Select-Object -First 1)) -replace '^\\\\\?\\','' } else { $tgt = '(不是 junction)' }
   Write-Output ('LINK=' + $p + '|' + $tgt.TrimEnd('\'))
 }
+# npm 会把一部分依赖放在 workspace 自己的 node_modules（例如 @types/node），只借根目录
+# 的 node_modules 不够。这里把构建会用到的三个 workspace 依赖目录也借过来；改名升级的
+# 第一次同步允许 web 暂时借主仓仍叫 web-next 的目录，主仓更新后会自动切到 web。
+foreach ($p in @(${WORKSPACE_DEP_LINKS.map(psq).join(",")})) {
+  $sourcePackage = $p
+  $want = Join-Path (Join-Path $repo $sourcePackage) 'node_modules'
+  if ($p -eq 'web' -and -not (Test-Path -LiteralPath $want)) {
+    $sourcePackage = 'web-next'
+    $want = Join-Path (Join-Path $repo $sourcePackage) 'node_modules'
+  }
+  if (-not (Test-Path -LiteralPath $want)) { throw ('主仓缺少 ' + $sourcePackage + '\node_modules，请先在主仓跑 npm install') }
+  $link = Join-Path (Join-Path $wt $p) 'node_modules'
+  $it = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
+  if ($it -and $it.LinkType -ne 'Junction') { throw ($p + '\node_modules 已存在且不是 junction(' + $it.LinkType + '),不敢自动删') }
+  if ($it) {
+    $cur = ([string]($it.Target | Select-Object -First 1)) -replace '^\\\\\?\\',''
+    if ($cur.TrimEnd('\') -ne $want.TrimEnd('\')) { [IO.Directory]::Delete($link, $false); $it = $null }
+  }
+  if (-not $it) { cmd /c mklink /J "$link" "$want" | Out-Null }
+  $now = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
+  if ($now -and $now.LinkType -eq 'Junction') { $tgt = ([string]($now.Target | Select-Object -First 1)) -replace '^\\\\\?\\','' } else { $tgt = '(不是 junction)' }
+  Write-Output ('PKGLINK=' + $p + '|' + $tgt.TrimEnd('\'))
+}
 Write-Output ('WORKTREE=' + $wt)
 Write-Output ('HEAD=' + (git -C $wt rev-parse HEAD))
 # 干不干净不靠「我调过 clean 了」自证 —— 回读一遍工作区状态。除了我们自己建的 node_modules
 # (那四个 junction 的家,本来就 ignored)之外还剩东西,就说明这次的文件树不是这份快照,
 # 和 SHA / junction 一样当场算失败。
-$__st = @(git -C $wt status --porcelain=v1 --ignored | Where-Object { $_ -and ($_ -notmatch '^!!\s+node_modules[/\\]') })
+$__st = @(git -C $wt status --porcelain=v1 --ignored | Where-Object { $_ -and ($_ -notmatch '^!!\s+(?:.+[/\\])?node_modules[/\\]') })
 Write-Output ('RESIDUE=' + $__st.Count + '|' + (($__st | Select-Object -First 12) -join ' ;; '))
 } finally {
   git -C $repo update-ref -d ${psq(ref)} 2>$null
@@ -323,21 +348,38 @@ Write-Output ('RESIDUE=' + $__st.Count + '|' + (($__st | Select-Object -First 12
           `  已中止:继续测下去,结果会被记在一份并不存在于对端的改动上。\n${res.out}`,
       );
     }
-    // SHA 对上只说明 worktree 自己是对的,不说明 Node 会从这儿解析 `@harness/*`。
-    // junction 指着主仓时:fetch、checkout、SHA 校验全绿,`import '@harness/shared'` 拿到的
+    // SHA 对上只说明 worktree 自己是对的,不说明 Node 会从这儿解析 `@ash/*`。
+    // junction 指着主仓时:fetch、checkout、SHA 校验全绿,`import '@ash/shared'` 拿到的
     // 却是主仓旧代码 —— 一个「全部通过」的假绿。所以四个目标同样是成功判据。
     if (!worktree) throw new Error(`同步没回传 worktree 路径,输出不完整:\n${res.out}`);
     const links = new Map(
-      [...res.out.matchAll(/LINK=([^|\r\n]+)\|([^\r\n]*)/g)].map((m) => [m[1].trim(), m[2].trim()]),
+      [...res.out.matchAll(/^LINK=([^|\r\n]+)\|([^\r\n]*)/gm)].map((m) => [m[1].trim(), m[2].trim()]),
     );
     const norm = (s) => s.replace(/\\+$/, "").toLowerCase(); // NTFS 不分大小写,比较也别分
-    const bad = HARNESS_LINKS.map((p) => ({ p, want: `${worktree}\\${p}`, got: links.get(p) ?? "(没回传)" }))
+    const bad = ASH_LINKS.map((p) => ({ p, want: `${worktree}\\${p}`, got: links.get(p) ?? "(没回传)" }))
       .filter(({ want, got }) => norm(got) !== norm(want));
     if (bad.length) {
       throw new Error(
-        `对端 node_modules/@harness 没指向本次 worktree:\n` +
+        `对端 node_modules/@ash 没指向本次 worktree:\n` +
           bad.map(({ p, want, got }) => `  ${p}: ${got}\n    应为 ${want}`).join("\n") +
-          `\n  已中止:这么跑下去 @harness/* 解析到的是别处的代码,测了也不算数。\n${res.out}`,
+          `\n  已中止:这么跑下去 @ash/* 解析到的是别处的代码,测了也不算数。\n${res.out}`,
+      );
+    }
+    const packageLinks = new Map(
+      [...res.out.matchAll(/^PKGLINK=([^|\r\n]+)\|([^\r\n]*)/gm)].map((m) => [m[1].trim(), m[2].trim()]),
+    );
+    const badPackageLinks = WORKSPACE_DEP_LINKS.map((p) => {
+      const got = packageLinks.get(p) ?? "(没回传)";
+      const wants = p === "web"
+        ? [`${repoPath}\\web\\node_modules`, `${repoPath}\\web-next\\node_modules`]
+        : [`${repoPath}\\${p}\\node_modules`];
+      return { p, got, wants };
+    }).filter(({ got, wants }) => !wants.some((want) => norm(got) === norm(want)));
+    if (badPackageLinks.length) {
+      throw new Error(
+        `对端 workspace 依赖目录没有借到主仓:\n` +
+          badPackageLinks.map(({ p, got, wants }) => `  ${p}: ${got}\n    应为 ${wants.join(" 或 ")}`).join("\n") +
+          `\n  已中止:继续构建会缺 workspace 局部依赖。\n${res.out}`,
       );
     }
     // 清理和 junction 一样是成功判据:固定 worktree 复用了几十次,残留一份旧 dist\ 就够让

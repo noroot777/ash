@@ -27,8 +27,8 @@ sync 检出、exec 的 cwd、test 的 cwd、doctor 的探针都取同一个来�
 
 ## 它是怎么通的
 
-那台机器只有两个入站端口:445(SMB,要凭证)和 4317(harness 自己)。装 OpenSSH Server 要点 UAC，
-无人值守时点不动 —— 所以**通道就是 harness 自己的终端 API**,不需要在 Windows 上装任何东西、
+那台机器只有两个入站端口:445(SMB,要凭证)和 4317(ash 自己)。装 OpenSSH Server 要点 UAC，
+无人值守时点不动 —— 所以**通道就是 ash 自己的终端 API**,不需要在 Windows 上装任何东西、
 也不需要管理员权限。
 
 ```
@@ -57,7 +57,7 @@ sync 检出、exec 的 cwd、test 的 cwd、doctor 的探针都取同一个来�
 **带斜杠只匹配目录**,而在 worktree 里做 typecheck 的标准手法恰恰是往那儿挂一个指向主仓的
 **软链** —— 软链在 git 眼里不是目录,ignore 不生效,`add -A` 就把它收进快照;到了 Windows
 (git 默认不建符号链接)它被还原成一个内容是路径字符串的普通文件,名字正好占住 `node_modules`,
-后面 `mklink /J` 在它下面建 `@harness\*` 只报一句 "The system cannot find the path specified."。
+后面 `mklink /J` 在它下面建 `@ash\*` 只报一句 "The system cannot find the path specified."。
 排除它本身也是对的:对端的 `node_modules` 一律由那边自己建。
 
 **所有进 PowerShell 单引号的插值都走 `ps.mjs` 的 `psq()`**(转义 `'` → `''`,连引号一起返回)。
@@ -72,18 +72,18 @@ Windows 仓库里了。快照带着未提交和未跟踪的内容,留在那儿�
 临时凭据一直存着,所以远端脚本整个包在 `try/finally` 里,失败路径也删。
 
 **落到对端的 `.worktrees/win-remote`,绝不动它的主工作区。** 那台机器上的 `D:\ai_workspace\ash`
-是**正在跑着的 harness 自己**,而且有未提交的本地改动。往那儿 checkout 等于既覆盖别人的活、又把
+是**正在跑着的 ash 自己**,而且有未提交的本地改动。往那儿 checkout 等于既覆盖别人的活、又把
 live 服务的源码换掉。放在主仓内部还白捡一个好处:Node 解析 node_modules 会逐级向上,worktree 里
-不装依赖也能跑。唯一要补的是 `node_modules/@harness/*` 的 junction —— 不补的话 `@harness/shared`
+不装依赖也能跑。唯一要补的是 `node_modules/@ash/*` 的 junction —— 不补的话 `@ash/shared`
 会解析到**主仓那份**,于是你改了 shared 却测的是旧代码。「缺了就建」不够:junction **在**、却指着
-主仓是同一个坑更隐蔽的那一半 —— fetch、checkout、完整 SHA 校验全绿,`import '@harness/shared'`
+主仓是同一个坑更隐蔽的那一半 —— fetch、checkout、完整 SHA 校验全绿,`import '@ash/shared'`
 拿到的仍是主仓旧代码,一个全部通过的假绿。所以每次同步都把四个 junction 的实际目标读出来回传,
 **和 SHA 一样算成功判据**:指错了就先删链接本体(只删链接,`Remove-Item -Recurse` 会穿过 junction
 去删目标目录)再重建;位置上蹲着的是真目录/真文件就直接中止报错,不替用户做主删东西。
 
 **每次同步都把那个 worktree 清回快照的样子。** 它是跨所有调用复用的固定目录,而
 `checkout --force` 只管 Git **跟踪**的文件 —— 上一次跑测试/构建留下的未跟踪与 ignored 产物
-(`data\harness.db`、`dist\`、`*.tsbuildinfo`)原样活到下一次快照里。SHA 和 junction 全绿也照不出
+(`data\ash.db`、`dist\`、`*.tsbuildinfo`)原样活到下一次快照里。SHA 和 junction 全绿也照不出
 这类污染,而 server 的生产入口直接跑 `server\dist\index.js`:验的可能是上一版构建产物,「测的就是
 这份快照」对文件树并不成立。所以 checkout 之后跑一次 `git clean -xdff`,清了几项跟 SHA 一起打印
 出来;清完再回读一遍 `git status --porcelain --ignored`,除了 `node_modules`(那四个 junction 的家)
@@ -107,9 +107,9 @@ live 服务的源码换掉。放在主仓内部还白捡一个好处:Node 解析
 
    `WIN_REMOTE_WORKSPACE` 本身也在**一个**地方规范化并校验(`workspaceRel()`):空串、`.`、`..`、
    含 `..` 的路径、盘符开头、`/` 或 `\` 开头、UNC —— 一律拒绝并说明理由,CLI 以 1 退出。
-   空串尤其要拦:它拼出来的正是对端 repo 根,也就是那个**正在跑着 harness 的主工作区**。
+   空串尤其要拦:它拼出来的正是对端 repo 根,也就是那个**正在跑着 ash 的主工作区**。
 2. **先摘掉目录型 reparse point,再 clean。** `git clean` 的递归删除同样会穿过 junction ——
-   那四个 `@harness/*` 指着的正是主仓的 `shared`/`server`/`web-next`/`mcp`。摘掉的链接紧接着
+   那四个 `@ash/*` 指着的正是主仓的 `shared`/`server`/`web`/`mcp`。摘掉的链接紧接着
    就原地重建,所以顺带也免了「junction 指错」那一半。连**枚举**都不能进 junction:
    `Get-ChildItem -Recurse` 会跟进去,那就是在遍历主仓。
 
@@ -120,7 +120,7 @@ token 文件都没有,原先「删文件 vs 开发机随手关掉终端会话」
 删除那步的情况(一小时的门槛保证不会误伤正在跑的另一条命令,单条上限 10 分钟)。
 
 **一次调用只有一个期限,而且从第一次远端请求之前就开始走。** 通道的控制面全是裸 `fetch`
-(查项目、建终端会话、两次 `/input`、删会话),而裸 `fetch` 没有任何超时:对端 harness 卡死、
+(查项目、建终端会话、两次 `/input`、删会话),而裸 `fetch` 没有任何超时:对端 ash 卡死、
 代理只接连接不回包、半开连接,这几种都不是「立刻抛错」而是**永不返回**,进程能挂到底层 TCP
 自己想通为止。早先的 `timeout` 只罩着「等回传」那一段(从会话建成之后才起算),上面这些全在
 保护之外。现在整次调用共用一个 `AbortController`:控制面每一跳都带着它,等回传的兜底也挂在它
@@ -137,7 +137,7 @@ token 文件都没有,原先「删文件 vs 开发机随手关掉终端会话」
 (至少 1 秒),开发机是 `timeout + 30s`(`CLEANUP_GRACE`),超时消息里两段分开写清楚。
 
 期限还得覆盖**进 `rexec` 之前**那一跳。CLI 的四个子命令都先查一次项目拿 `repoPath`,那次查询在
-`rexec` 的 deadline 之外 —— 对端只接连接不回包时,`doctor/sync/exec/test` 全停在「对端 harness」
+`rexec` 的 deadline 之外 —— 对端只接连接不回包时,`doctor/sync/exec/test` 全停在「对端 ash」
 那一行不动,只能外面 kill。教训是「带 signal」不能写成调用方的义务:漏一个调用点就等于漏一条永不
 返回的路。所以 `api()` 自己兜底 —— 调用方给了 signal 就用它(整次调用共享一个 deadline),没给就
 按 `WIN_REMOTE_CONTROL_TIMEOUT`(默认 15s)现建一个,不存在「没有期限」的路径。
@@ -189,7 +189,7 @@ owner 带随机 id + ISO 时间戳也不会 ABA),并且**在句柄里重新算�
 
 ## 两个边界
 
-**通道跑在被测的 harness 里。** 改了 server 代码想看真实行为(而不是测试结果),得重启对端 harness ——
+**通道跑在被测的 ash 里。** 改了 server 代码想看真实行为(而不是测试结果),得重启对端 ash ——
 那会连着把这条通道一起掐了。所以默认路线是跑回归测试:它们是独立进程,不需要重启对端服务。
 
 **`exec` 的完成判据是进程退出,不是管道 EOF。** 早先版本用 `<cmd> *>&1 | Out-File`,而管道要等

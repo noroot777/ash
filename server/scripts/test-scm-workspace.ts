@@ -43,7 +43,7 @@ import {
   turnRole,
 } from "../src/runs.js";
 
-const root = mkdtempSync(join(tmpdir(), "harness-scm-test-"));
+const root = mkdtempSync(join(tmpdir(), "ash-scm-test-"));
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 
@@ -51,8 +51,8 @@ function makeRepo(name: string): string {
   const repo = join(root, name);
   mkdirSync(repo, { recursive: true });
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Harness SCM Test");
-  git(repo, "config", "user.email", "scm@harness.test");
+  git(repo, "config", "user.name", "Ash SCM Test");
+  git(repo, "config", "user.email", "scm@ash.test");
   return repo;
 }
 

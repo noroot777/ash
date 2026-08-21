@@ -5,7 +5,7 @@
 | 去处 | 装什么 | 谁读得到 |
 |---|---|---|
 | `server/CLAUDE.md` | 改 server 代码时要知道的实现说明 | claude（懒加载：接触 `server/` 文件后才注入） |
-| `web-next/CLAUDE.md` | 改前端代码时要知道的说明 | claude（同上） |
+| `web/CLAUDE.md` | 改前端代码时要知道的说明 | claude（同上） |
 | `mobile/AGENTS.md` | mobile 约定 | claude / codex |
 | `docs/incidents.md` | 事故经过、踩坑记录、被证伪的路 | 想查「为什么非得这样」时自己翻 |
 | 代码注释 / 类型 / 检查脚本 / 回归测试 | 能做进系统的全部 | 所有执行器，无条件 |
@@ -51,9 +51,9 @@
 
 ## Windows 真机在 192.168.1.187（用户 2026-08-18 指定）
 
-跨平台的东西（路径分隔符、PowerShell、原生窗口、`.cmd` 启动）不许只在 macOS 上读代码断言「Windows 应该也对」。那台机器上跑着一套 harness（`:4317`，仓库 `D:\ai_workspace\ash`），碰了 win32 分支就上去真跑一遍再交付。
+跨平台的东西（路径分隔符、PowerShell、原生窗口、`.cmd` 启动）不许只在 macOS 上读代码断言「Windows 应该也对」。那台机器上跑着一套 ash（`:4317`，仓库 `D:\ai_workspace\ash`），碰了 win32 分支就上去真跑一遍再交付。
 
-它没开 SSH/WinRM，远程 shell 就用 harness 自己的终端 API：`POST /api/projects/<id>/terminal/sessions` 开会话 → `/input` 送命令 → `/events`(SSE) 收输出。控制台是 GBK，命令和结果都走 base64 进出，否则中文全是乱码。代码别 push 到 GitHub 中转，用 `git format-patch` + 局域网 `python3 -m http.server` 传，落进 `git worktree add --detach` 的独立目录（`node_modules` 用 `mklink /J` 借主仓的），别碰用户的检出。完事把会话、worktree、测试服务、临时文件全清掉。
+它没开 SSH/WinRM，远程 shell 就用 ash 自己的终端 API：`POST /api/projects/<id>/terminal/sessions` 开会话 → `/input` 送命令 → `/events`(SSE) 收输出。控制台是 GBK，命令和结果都走 base64 进出，否则中文全是乱码。代码别 push 到 GitHub 中转，用 `git format-patch` + 局域网 `python3 -m http.server` 传，落进 `git worktree add --detach` 的独立目录（`node_modules` 用 `mklink /J` 借主仓的），别碰用户的检出。完事把会话、worktree、测试服务、临时文件全清掉。
 
 ## 任务完成协议
 
@@ -63,9 +63,9 @@
 
 只弹一个 toast 不算数。判据：**用户刷新页面后仍能看出「我停过」**。反面案例（后端全做对了、用户却只能得出「按钮坏了」，而且它掩盖了真问题）见 `docs/incidents.md`「停止全组」。
 
-## 旁路会话：harness 杀不到的东西
+## 旁路会话：ash 杀不到的东西
 
-**三层击杀只覆盖 harness 自己 spawn 的进程树**，`killChild` 之外还有一类杀不到的：**旁路会话**——agent 通过 IPC 请求一个独立常驻应用代跑的活。实例：codex 的 computer use 由 `/Applications/ChatGPT.app` 侧拉起 `SkyComputerUseService`（**开机级全局单例**），harness 的进程组/fd/ppid 三条线索一条都够不着它。
+**三层击杀只覆盖 ash 自己 spawn 的进程树**，`killChild` 之外还有一类杀不到的：**旁路会话**——agent 通过 IPC 请求一个独立常驻应用代跑的活。实例：codex 的 computer use 由 `/Applications/ChatGPT.app` 侧拉起 `SkyComputerUseService`（**开机级全局单例**），ash 的进程组/fd/ppid 三条线索一条都够不着它。
 
 处理规矩：
 
@@ -73,4 +73,4 @@
 2. **`SkyComputerUseClient turn-ended` 这条路已被实测证伪，别再试**
 3. **兜底绝不自动杀 CUA 服务**——检测到残留只如实上报（`GET /tasks/:id/team/cua-status`），强杀走用户主动点的显式端点（`POST /tasks/:id/team/kill-cua`）并明示副作用
 
-理由：那是 harness 管辖范围之外的全局单例，杀它会外溢到用户在 ChatGPT 里的其它会话；这类不可逆又外溢的操作，默认必须是「告诉用户 + 给一个他自己按的开关」。另注意 `pauseGroup` 只处理 `running`/`queued` 成员，**已 `done` 执行者遗留的旁路会话是清理盲区**，所以 `haltTeam` 的扇出必须遍历全部执行者 session 而不限状态。（证伪实验的四种 payload、仍未验证的「正常完成会不会残留」，见 `docs/incidents.md`「CUA 旁路会话」）
+理由：那是 ash 管辖范围之外的全局单例，杀它会外溢到用户在 ChatGPT 里的其它会话；这类不可逆又外溢的操作，默认必须是「告诉用户 + 给一个他自己按的开关」。另注意 `pauseGroup` 只处理 `running`/`queued` 成员，**已 `done` 执行者遗留的旁路会话是清理盲区**，所以 `haltTeam` 的扇出必须遍历全部执行者 session 而不限状态。（证伪实验的四种 payload、仍未验证的「正常完成会不会残留」，见 `docs/incidents.md`「CUA 旁路会话」）

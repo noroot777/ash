@@ -1,6 +1,6 @@
 // 任务接力（跨机器 handoff）——导出侧与两端共用的协议/助手。
 //
-// 场景:下班前把本机还没跑完的任务「接力」到另一台跑着 harness 的机器上继续。
+// 场景:下班前把本机还没跑完的任务「接力」到另一台跑着 ash 的机器上继续。
 // 迁移三样东西,缺一样对端就续不上:
 //   1. 任务与会话的**元数据**（tasks/sessions 行,manifest 里按列原样带走）
 //   2. **git 状态**——任务 worktree 分支上的提交打成 `git bundle` 带走(接力前先把
@@ -13,7 +13,7 @@
 // 另外把 data/runs/<taskId>/ 的会话产物(.md/.trace)也搬走,否则对端界面上这个任务
 // 是一段空白历史。
 //
-// V1 明确不做:鉴权(harness 全系统都没有,终端 API 本身就是一个 shell——只在可信内网
+// V1 明确不做:鉴权(ash 全系统都没有,终端 API 本身就是一个 shell——只在可信内网
 // 用)、team/duet 模式。
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -35,7 +35,7 @@ import { publishTaskUpdated } from "./task-store.js";
 import { id, now } from "./util.js";
 import type {
   HandoffExportResult, HandoffPreflightResult, TaskHandoff,
-} from "@harness/shared";
+} from "@ash/shared";
 
 // 传输协议类型/错误类/尺寸常量在 handoff-types.ts(导出、导入、HTTP 面三处共用)。
 import { HandoffError, MAX_BUNDLE_BYTES, MAX_FILE_BYTES, MB } from "./handoff-types.js";
@@ -50,8 +50,8 @@ const exec = promisify(execFile);
 
 /**
  * claude CLI 存会话的项目目录名:cwd 中所有非字母数字字符替换成 `-`。
- * 实测样例:/Users/fjh/code/harness/.worktrees/KJN0ESTe5uBw
- *   → -Users-fjh-code-harness--worktrees-KJN0ESTe5uBw
+ * 实测样例:/Users/fjh/code/ash/.worktrees/KJN0ESTe5uBw
+ *   → -Users-fjh-code-ash--worktrees-KJN0ESTe5uBw
  * claude 代码里没有公开这个函数,格式一旦变化,后果只是对端找不到会话文件 →
  * 干净退化成全新起跑,不会出错误状态。
  */
@@ -91,18 +91,18 @@ async function fetchPeer<T>(url: string, init?: RequestInit & { timeoutMs?: numb
     res = await fetch(url, { ...init, signal: AbortSignal.timeout(init?.timeoutMs ?? 15_000) });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    throw new HandoffError(`连不上对端 harness（${url}）：${msg}`, 502, true);
+    throw new HandoffError(`连不上对端 ash（${url}）：${msg}`, 502, true);
   }
-  const body = (await res.json().catch(() => null)) as { error?: string; harness?: boolean } | null;
+  const body = (await res.json().catch(() => null)) as { error?: string; ash?: boolean } | null;
   if (!res.ok) {
-    // 只有带 harness 标记的错误应答才可信为「对端业务层明确拒绝,可证明没落库」。
+    // 只有带 ash 标记的错误应答才可信为「对端业务层明确拒绝,可证明没落库」。
     // 没有标记的非 2xx 可能是中间网关在对端已处理成功后伪造的(上游读超时回 502 等),
     // 按网络类失败(network=true)处理,让调用方保留 pending 而不是回滚——宁可让用户
     // 多点一次收口重试,也不能让同一个任务在两台机器上各跑一份。
     throw new HandoffError(
       `对端返回 ${res.status}：${body?.error ?? "未知错误"}`,
       502,
-      body?.harness !== true,
+      body?.ash !== true,
     );
   }
   if (body === null) {
@@ -262,7 +262,7 @@ async function packGitState(
       notes.push("worktree 处于 detached HEAD,无法按分支打包,代码不随任务迁移");
       return null;
     }
-    // WIP 提交:porcelain 非空才提交;身份缺失时补一个 harness 落款,别让接力卡在
+    // WIP 提交:porcelain 非空才提交;身份缺失时补一个 ash 落款,别让接力卡在
     // 一台没配 git identity 的机器上。
     if (await git(wt, ["status", "--porcelain"])) {
       await git(wt, ["add", "-A"]);
@@ -270,7 +270,7 @@ async function packGitState(
         await git(wt, ["commit", "-m", "chore(handoff): 接力前自动保存未提交改动"]);
       } catch {
         await git(wt, [
-          "-c", "user.name=harness", "-c", "user.email=harness@localhost",
+          "-c", "user.name=ash", "-c", "user.email=ash@localhost",
           "commit", "-m", "chore(handoff): 接力前自动保存未提交改动",
         ]);
       }
@@ -327,8 +327,8 @@ export async function preflightHandoff(taskId: string, targetUrlRaw: string): Pr
   const { task, project } = await loadSingleTask(taskId);
   const targetUrl = normalizePeerUrl(targetUrlRaw);
   const ping = await fetchPeer<HandoffPingResponse>(`${targetUrl}/api/handoff/ping`);
-  if (!ping?.ok || ping.service !== "harness") {
-    throw new HandoffError("对端不是 harness（/api/handoff/ping 应答不对）", 502);
+  if (!ping?.ok || ping.service !== "ash") {
+    throw new HandoffError("对端不是 ash（/api/handoff/ping 应答不对）", 502);
   }
   // 项目匹配靠仓库目录名:两台机器的绝对路径几乎必然不同,目录名是最稳的公共项。
   // 两侧路径可能来自不同操作系统(本机 Windows、对端 macOS,或反过来),所以不用
@@ -445,7 +445,7 @@ export async function exportHandoff(
     await assertNotQueueMember(taskId);
     // 先探测对端与目标项目,确认可行再停任务——反过来会白停一个正在跑的任务。
     const ping = await fetchPeer<HandoffPingResponse>(`${targetUrl}/api/handoff/ping`);
-    if (!ping?.ok || ping.service !== "harness") throw new HandoffError("对端不是 harness", 502);
+    if (!ping?.ok || ping.service !== "ash") throw new HandoffError("对端不是 ash", 502);
     const targetProject = ping.projects.find((p) => p.id === opts.targetProjectId);
     if (!targetProject) throw new HandoffError("对端没有这个项目 id,先重新预检", 409);
 
@@ -586,7 +586,7 @@ export async function exportHandoff(
             timeoutMs: 600_000,
           },
         );
-        // 2xx 但 ok:false:真 harness 的导入端点从不这样应答(要么 ok:true 要么抛错),
+        // 2xx 但 ok:false:真 ash 的导入端点从不这样应答(要么 ok:true 要么抛错),
         // 多半是中间层拼的怪应答——同样按「送达未知」处理,保留 pending。
         if (!result.ok) throw new HandoffError(`对端导入失败：${result.error ?? "未知错误"}`, 502, true);
       } catch (e) {
@@ -595,7 +595,7 @@ export async function exportHandoff(
           e.message += "。对端可能已经收到这份任务:本机保留「接力未确认」标记,原样重试会自动幂等收口;确认对端没收到的话,在任务横幅上移除接力标记即可在本机继续。";
           throw e;
         }
-        // 带 harness 标记的业务拒绝(对端可证明没落库):恢复接力前的标记,本机照常可跑。
+        // 带 ash 标记的业务拒绝(对端可证明没落库):恢复接力前的标记,本机照常可跑。
         await db.update(tasks)
           .set({ handoff: prevHandoffRaw, updatedAt: now() })
           .where(eq(tasks.id, taskId));

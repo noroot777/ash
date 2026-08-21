@@ -24,7 +24,7 @@ import { join } from "node:path";
 // 必须在 import 任何 src 模块之前翻平台：IS_WINDOWS 是模块加载期算的。
 Object.defineProperty(process, "platform", { value: "win32", configurable: true });
 
-const stage = mkdtempSync(join(tmpdir(), "harness-win-launch-"));
+const stage = mkdtempSync(join(tmpdir(), "ash-win-launch-"));
 
 /** npm 在 Windows 上生成的 bin 垫片，原样照抄结构（末行那条脚本路径是重点）。 */
 function npmShim(scriptRel: string): string {
@@ -163,7 +163,7 @@ try {
   delete process.env.Path;
 
   // ARM64 上三个 Program Files 各装各的架构;`%ProgramFiles%` 只指向与当前进程同架构
-  // 的那一个,少扫另外两个 = 一个 x64 版 node 起的 harness 看不见原生 ARM 装的 CLI。
+  // 的那一个,少扫另外两个 = 一个 x64 版 node 起的 ash 看不见原生 ARM 装的 CLI。
   process.env.ProgramFiles = "C:\\Program Files";
   process.env["ProgramFiles(x86)"] = "C:\\Program Files (x86)";
   process.env["ProgramFiles(Arm)"] = "C:\\Program Files (Arm)";

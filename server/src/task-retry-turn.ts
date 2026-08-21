@@ -29,9 +29,9 @@
 //    自己的重来入口，重投会顶着同一个轮号另跑一段普通回合（finding 6）；
 // ③ 就地验证轮还挂着（`verifyRound` 非空 = 那一轮没 concludeRound）→ 同上。
 import { open, stat } from "node:fs/promises";
-import type { AgentType, ConvSeg } from "@harness/shared";
-import { parseSessionOutput } from "@harness/shared";
-import { parseAttachmentText } from "@harness/shared/attachments";
+import type { AgentType, ConvSeg } from "@ash/shared";
+import { parseSessionOutput } from "@ash/shared";
+import { parseAttachmentText } from "@ash/shared/attachments";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { isAcceptingTask } from "./acceptance-lock.js";

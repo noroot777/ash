@@ -55,7 +55,7 @@ export function secretsEqual(left: string, right: string): boolean {
 }
 
 export function protocolConverterBaseUrl(providerId: string): string {
-  const configured = process.env.HARNESS_PROTOCOL_CONVERTER_URL?.trim();
+  const configured = process.env.ASH_PROTOCOL_CONVERTER_URL?.trim();
   const origin = (configured || `http://127.0.0.1:${Number(process.env.PORT ?? 4317)}`).replace(/\/+$/, "");
   return `${origin}/api/llm-providers/${encodeURIComponent(providerId)}/convert`;
 }

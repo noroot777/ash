@@ -5,7 +5,7 @@
 // 而它判错了界面上看不出来 —— 只会显示成「我说过的一句话」，所以在这里钉住。
 // 跑:npm -w server run test:follow-up
 import assert from "node:assert/strict";
-import { isUserFollowUp, parseSessionOutput } from "@harness/shared";
+import { isUserFollowUp, parseSessionOutput } from "@ash/shared";
 
 // ── 算我发的 ────────────────────────────────────────────────────────────────
 

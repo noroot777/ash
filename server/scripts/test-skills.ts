@@ -15,11 +15,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = mkdtempSync(join(tmpdir(), "harness-skills-"));
+const root = mkdtempSync(join(tmpdir(), "ash-skills-"));
 
 // 先把库指到临时目录再 import:init 校准的冷启动来源就落在库文件旁边(见
 // skill-calibration-store.ts),不这么做这条测试会去写真实的 data/。
-process.env.HARNESS_DB = join(root, "settings-test.db");
+process.env.ASH_DB = join(root, "settings-test.db");
 
 // 收尾要删的目录里就装着那个库文件,而 Windows 删不掉还开着的文件(理由见
 // tmp-db.ts 的 releaseTmpDb)——断言全过,却在退出时抛 EBUSY 把整条测试判红。
@@ -189,7 +189,7 @@ assert.ok(!find(list, "cost"), "白名单之外的照旧不进菜单(落盘的�
       `const { listSkills } = await import(${JSON.stringify(skillsModule)});` +
         `console.log(JSON.stringify(listSkills({ agentType: "claude", cwd: ${JSON.stringify(root)} }).skills.map((s) => s.name)));`,
     ],
-    { encoding: "utf8", env: { ...process.env, HARNESS_DB: process.env.HARNESS_DB } },
+    { encoding: "utf8", env: { ...process.env, ASH_DB: process.env.ASH_DB } },
   );
   assert.equal(probe.status, 0, `冷进程探针没跑起来:${probe.stderr}`);
   const names = JSON.parse(probe.stdout.trim().split("\n").at(-1)!) as string[];
@@ -208,7 +208,7 @@ rmSync(join(root, ".worktrees"), { recursive: true, force: true }); // 验收合
 // calibrationFor),记在 `<root>/*` 底下的话它天然比上提来的那条新,会把上提结果盖掉 ——
 // 于是这条测试就只在「两次校准撞进同一毫秒」时才绿(macOS 上约 5/6,Windows 慢得多,
 // 基本常红)。它的作用只是「任意一次新校准都会重写整份 JSON」,落在哪无所谓。
-const stillHere = mkdtempSync(join(tmpdir(), "harness-skills-other-"));
+const stillHere = mkdtempSync(join(tmpdir(), "ash-skills-other-"));
 process.on("exit", () => rmSync(stillHere, { recursive: true, force: true }));
 calibrateSkills("claude", stillHere, [ONLY_IN_INIT], []);
 forgetLoadedCalibrations(); // = server 重启:只剩盘上那份

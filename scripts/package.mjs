@@ -48,7 +48,7 @@ if (git(["rev-parse", "--verify", REF]).status !== 0) die(`✕ 找不到 ref: ${
 const sha = git(["rev-parse", "--short", REF]).stdout;
 const now = new Date();
 const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
-const name = `harness-${stamp}-${sha}`;
+const name = `ash-${stamp}-${sha}`;
 const archive = join(OUT, `${name}.${FORMAT}`);
 
 // 未提交的改动不会进包 —— 说清楚,别让人以为「我刚改的那行也发出去了」。

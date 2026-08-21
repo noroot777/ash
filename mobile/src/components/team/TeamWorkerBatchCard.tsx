@@ -1,7 +1,7 @@
 import { Pressable, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import type { Task } from "@harness/shared";
-import type { Batch } from "@harness/shared/team";
+import type { Task } from "@ash/shared";
+import type { Batch } from "@ash/shared/team";
 import { STATUS_META } from "@/lib/constants";
 import { formatInstant } from "@/lib/time";
 import { fonts, radius, useTheme } from "@/lib/theme";

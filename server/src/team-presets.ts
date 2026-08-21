@@ -1,7 +1,7 @@
 import type { Hono } from "hono";
 import { desc, eq } from "drizzle-orm";
-import type { AgentType, TeamPreset, TeamPresetConfig } from "@harness/shared";
-import { AGENT_TYPES } from "@harness/shared";
+import type { AgentType, TeamPreset, TeamPresetConfig } from "@ash/shared";
+import { AGENT_TYPES } from "@ash/shared";
 import { db } from "./db/index.js";
 import { agents, teamPresets } from "./db/schema.js";
 import { id, now } from "./util.js";

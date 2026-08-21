@@ -5,7 +5,7 @@
 // **这个文件里还住着上下文水位（setSessionContext），它是覆盖式的**——两组列摆在
 // 一起是为了让下一个人一眼看见「有两种账，加法只适用于其中一种」。
 import { eq, sql } from "drizzle-orm";
-import type { AgentEvent, AgentType, ContextUsage, TokenUsage } from "@harness/shared";
+import type { AgentEvent, AgentType, ContextUsage, TokenUsage } from "@ash/shared";
 import { db } from "./db/index.js";
 import { sessions, usageCumulativeSnapshots } from "./db/schema.js";
 
@@ -124,7 +124,7 @@ export async function addSessionUsage(
       return booked;
     });
   } catch (error) {
-    console.warn(`[harness] failed to record token usage for session ${sessId}:`, error);
+    console.warn(`[ash] failed to record token usage for session ${sessId}:`, error);
     return reported;
   }
 }
@@ -160,7 +160,7 @@ export async function setSessionContext(sessId: string, context: ContextUsage): 
       })
       .where(eq(sessions.id, sessId));
   } catch (error) {
-    console.warn(`[harness] failed to record context usage for session ${sessId}:`, error);
+    console.warn(`[ash] failed to record context usage for session ${sessId}:`, error);
   }
 }
 

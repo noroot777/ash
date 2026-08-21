@@ -265,7 +265,7 @@ function endTurn(taskId: string): void {
     try {
       fn();
     } catch (error) {
-      console.error(`[harness] after-turn hook failed for ${taskId}:`, error);
+      console.error(`[ash] after-turn hook failed for ${taskId}:`, error);
     }
   }
 }
@@ -303,7 +303,7 @@ export function continueWhenIdle(
     // 任务留在 stage=verifying 而验证从未启动）。
     const role = (opts.sessionRole as string | undefined) ?? "single";
     if (!claimTurn(taskId, role)) {
-      console.error(`[harness] continueWhenIdle(${taskId}) not delivered: turn re-claimed`);
+      console.error(`[ash] continueWhenIdle(${taskId}) not delivered: turn re-claimed`);
       void onError?.("回合被其它执行抢占，消息未能投递");
       return;
     }
@@ -326,7 +326,7 @@ export function continueWhenIdle(
         // 回滚（清 verifyRound、复位 stage、写时间线）才跑得到——不然任务会永久卡在
         // 「正在验证」而验证从未开始。
         releaseTurn(taskId);
-        console.error(`[harness] continueWhenIdle(${taskId}) withdrawn: ${freeze.reason}`);
+        console.error(`[ash] continueWhenIdle(${taskId}) withdrawn: ${freeze.reason}`);
         try { await onError?.(`${freeze.reason}，这一轮在启动前被撤回`); } catch { /* 上报失败不再连锁 */ }
         return true;
       })
@@ -335,7 +335,7 @@ export function continueWhenIdle(
           // continueTask 返回 false = 一个字都没送出去（验收互斥退避等）。吞掉它，
           // 调用方的时间线就会停在「意见已发回会话」而消息实际没了——必须当失败上报。
           if (delivered === false) {
-            console.error(`[harness] continueWhenIdle(${taskId}) not delivered`);
+            console.error(`[ash] continueWhenIdle(${taskId}) not delivered`);
             try { await onError?.("回合被其它执行抢占，消息未能投递"); } catch { /* 上报失败不再连锁 */ }
           }
         },
@@ -345,7 +345,7 @@ export function continueWhenIdle(
           // 失败路径都由它自己释放，不会落到这个分支）。
           releaseTurn(taskId);
           const message = error instanceof Error ? error.message : String(error);
-          console.error(`[harness] continueWhenIdle(${taskId}) failed:`, error);
+          console.error(`[ash] continueWhenIdle(${taskId}) failed:`, error);
           try { await onError?.(message); } catch { /* 上报失败不再连锁 */ }
         },
       );

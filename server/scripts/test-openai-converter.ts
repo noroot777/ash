@@ -3,8 +3,8 @@ import { createServer } from "node:http";
 import { rmSync } from "node:fs";
 import { once } from "node:events";
 
-const dbPath = `/tmp/harness-openai-converter-${process.pid}.db`;
-process.env.HARNESS_DB = dbPath;
+const dbPath = `/tmp/ash-openai-converter-${process.pid}.db`;
+process.env.ASH_DB = dbPath;
 process.env.PORT = "54321";
 
 const {

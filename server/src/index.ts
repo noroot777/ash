@@ -1,3 +1,4 @@
+import "./env.js";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { existsSync, statSync, createReadStream, readdirSync } from "node:fs";
@@ -25,11 +26,11 @@ let startupExitInProgress = false;
 // unhandled error means the server never became usable and must be fatal.
 process.on("unhandledRejection", (e) => {
   if (!startupComplete) exitAfterStartupFailure("unhandled rejection during startup", e);
-  console.error("[harness] unhandledRejection:", e);
+  console.error("[ash] unhandledRejection:", e);
 });
 process.on("uncaughtException", (e) => {
   if (!startupComplete) exitAfterStartupFailure("uncaught exception during startup", e);
-  console.error("[harness] uncaughtException:", e);
+  console.error("[ash] uncaughtException:", e);
 });
 
 const port = Number(process.env.PORT ?? 4317);
@@ -37,7 +38,7 @@ const port = Number(process.env.PORT ?? 4317);
 function exitAfterStartupFailure(message: string, error?: unknown): never {
   if (!startupExitInProgress) {
     startupExitInProgress = true;
-    console.error(`[harness] Refusing to start: ${message}`);
+    console.error(`[ash] Refusing to start: ${message}`);
     if (error) console.error(error);
 
     // The scheduler starts only after listen succeeds. If starting it throws
@@ -46,7 +47,7 @@ function exitAfterStartupFailure(message: string, error?: unknown): never {
       try {
         activeServer.close();
       } catch (closeError) {
-        console.error("[harness] failed to close server during startup cleanup:", closeError);
+        console.error("[ash] failed to close server during startup cleanup:", closeError);
       }
     }
     // release() verifies this process' PID + token before unlinking, so this
@@ -102,21 +103,21 @@ async function initializeServer() {
 
   await ensureSchema();
   // 测试库档第一次从主库播种，之后复用这个 worktree 自己的副本。
-  if (process.env.HARNESS_SEED_FROM) {
+  if (process.env.ASH_SEED_FROM) {
     const { seedPreviewDb } = await import("./preview-seed.js");
-    const mode = process.env.HARNESS_SEED_MODE === "config" ? "config" : "snapshot";
-    await seedPreviewDb(process.env.HARNESS_SEED_FROM, mode);
+    const mode = process.env.ASH_SEED_MODE === "config" ? "config" : "snapshot";
+    await seedPreviewDb(process.env.ASH_SEED_FROM, mode);
   }
   // 测试库会持久，所以每次启动都重新洗运行态；不能只在首次播种时洗。
   if (IS_PREVIEW_INSTANCE) {
     const { sanitizeSnapshot } = await import("./preview-seed.js");
     const washed = await sanitizeSnapshot((await import("./db/index.js")).dbClient);
-    console.log(`[harness] 预览库已洗运行态：${washed.join("、") || "无"}`);
+    console.log(`[ash] 预览库已洗运行态：${washed.join("、") || "无"}`);
   }
   const usageRepair = await (await import("./usage-repair.js")).repairLegacyUsageAccounting();
   if (!usageRepair.alreadyApplied) {
     console.log(
-      `[harness] Token 历史账已校正：Codex ${usageRepair.repairedCodexSessions} 条，`
+      `[ash] Token 历史账已校正：Codex ${usageRepair.repairedCodexSessions} 条，`
       + `Claude ${usageRepair.repairedClaudeSessions} 条，证据不足跳过 ${usageRepair.skippedSessions} 条`,
     );
   }
@@ -132,21 +133,21 @@ async function initializeServer() {
     // 自由审查对账要排在 reattach 之后：它以「有没有接回的 reviewer 会话」为判据，
     // 收拾死在投递链上的 reviewing run（详见 free-workflow.ts reconcileFreeReviews）。
     const { reconcileFreeReviews } = await import("./free-workflow.js");
-    await reconcileFreeReviews().catch((err) => console.error("[harness] 自由审查对账失败（不影响启动）:", err));
+    await reconcileFreeReviews().catch((err) => console.error("[ash] 自由审查对账失败（不影响启动）:", err));
   }
   // 回收上一轮遗留的原始输出文件（纯传输介质，正文早已进 .md）。放在接管之后：
   // 它靠 sessions 判断哪些文件仍在用，接管完那份名单才是准的。best-effort。
   void sweepRunLogs()
     .then(({ removed, bytes }) => {
-      if (removed) console.log(`[harness] 回收 ${removed} 个已结束运行的原始输出文件（${(bytes / 1048576).toFixed(1)} MB）`);
+      if (removed) console.log(`[ash] 回收 ${removed} 个已结束运行的原始输出文件（${(bytes / 1048576).toFixed(1)} MB）`);
     })
-    .catch((err) => console.error("[harness] 原始输出文件回收失败（不影响运行）:", err));
+    .catch((err) => console.error("[ash] 原始输出文件回收失败（不影响运行）:", err));
   stageModule.mountTaskStageRoutes(routesModule.api);
   acceptanceModule.mountTaskAcceptanceRoutes(routesModule.api);
   reviewModule.mountReviewRoutes(routesModule.api);
   // 人工替一站「自动验证」签字放行（验证器不认账时唯一的出路）。
   verifyOverrideModule.mountVerifyOverrideRoutes(routesModule.api);
-  // 预览进程是 harness 主动起的长驻服务，判据全落在盘上（data/runs/<task>/preview.json），
+  // 预览进程是 ash 主动起的长驻服务，判据全落在盘上（data/runs/<task>/preview.json），
   // 所以重启后照样收得掉：先扫一遍孤儿，之后定时收 idle 那一档。
   const { startPreviewSweeper } = await import("./preview.js");
   startPreviewSweeper();
@@ -169,10 +170,10 @@ app.route("/api", api);
 // catch-all "/*" 之前,否则被 SPA 兜底截走。SPA 那条 readFile 把整文件读进内存、不支持
 // Range;视频大且要拖动进度,所以这里单独用 createReadStream 流式 + 解析 Range 返回 206。
 // createReadStream 跟随软链,所以 review 目录放软链即可,无需拷贝原片。
-// 根目录默认跟随 harness 项目(review/ 在仓库根下,迁机器也不失效);可用 HARNESS_REVIEW_ROOT
+// 根目录默认跟随 ash 项目(review/ 在仓库根下,迁机器也不失效);可用 ASH_REVIEW_ROOT
 // 覆盖。src 与编译后的 dist 都在 server/ 下一层,../../ 均指向仓库根。
 const REVIEW_ROOT = normalize(
-  process.env.HARNESS_REVIEW_ROOT ?? fileURLToPath(new URL("../../review", import.meta.url)),
+  process.env.ASH_REVIEW_ROOT ?? fileURLToPath(new URL("../../review", import.meta.url)),
 );
 app.get("/review", (c) => c.redirect("/review/"));
 app.get("/review/*", async (c) => {
@@ -235,7 +236,7 @@ app.get("/review/*", async (c) => {
 // Serve the built SPA in production. The path is resolved relative to this module
 // (works regardless of cwd). API/review/mobile routes above remain higher-priority
 // than the final web catch-all below.
-const WEB_DIST = fileURLToPath(new URL("../../web-next/dist", import.meta.url));
+const WEB_DIST = fileURLToPath(new URL("../../web/dist", import.meta.url));
 const hasWebBuild = existsSync(join(WEB_DIST, "index.html"));
 
 const MIME: Record<string, string> = {
@@ -261,7 +262,7 @@ const MIME: Record<string, string> = {
 // 点着看手机 app,不用开真机。同源 → 预览里的 app 直接连本机 :4317 拿数据(mobile
 // config.ts 在 web 下默认用 location.origin)。app.json experiments.baseUrl="/mobile/app"
 // 让导出资源路径落在这个子前缀下。改了 mobile 代码要重新 build:mobile 再刷新。
-// 必须注册在下方 web-next/dist 的 "/*" catch-all 之前,否则被 SPA 兜底截走。
+// 必须注册在下方 web/dist 的 "/*" catch-all 之前,否则被 SPA 兜底截走。
 const MOBILE_DIST = fileURLToPath(new URL("../../mobile/dist", import.meta.url));
 const hasMobile = existsSync(join(MOBILE_DIST, "index.html"));
 const mobileMiss = "手机预览还没构建 —— 在仓库根跑 `npm run build:mobile` 生成 mobile/dist 后刷新。";
@@ -348,7 +349,7 @@ app.get("/mobile/app/*", async (c) => {
   });
 });
 
-const webMiss = "Harness web build not found — run `npm -w web-next run build`.";
+const webMiss = "Ash web build not found — run `npm -w web run build`.";
 app.get("/*", (c) => {
   if (!hasWebBuild) return c.text(webMiss, 503);
   const rel = decodeURIComponent(new URL(c.req.url).pathname).replace(/^\/+/, "");
@@ -361,7 +362,7 @@ activeServer = serve({ fetch: app.fetch, port }, (info) => {
   // 预览实例**不跑调度器**：它连的是主库的快照，一条 cron 到点就会拿真项目目录去派活。
   // 快照压根没搬 schedules / scheduled_messages，这里是同一件事的第二道保险（成本一行）。
   if (IS_PREVIEW_INSTANCE) {
-    console.log("[harness] 预览实例：调度器没启动（不会到点派活、不会到点发消息）");
+    console.log("[ash] 预览实例：调度器没启动（不会到点派活、不会到点发消息）");
   } else {
     try {
       startScheduler();
@@ -370,7 +371,7 @@ activeServer = serve({ fetch: app.fetch, port }, (info) => {
     }
   }
   startupComplete = true;
-  console.log(`[harness] server on http://localhost:${info.port}`);
+  console.log(`[ash] server on http://localhost:${info.port}`);
 });
 
 activeServer.on("error", (err: NodeJS.ErrnoException) => {

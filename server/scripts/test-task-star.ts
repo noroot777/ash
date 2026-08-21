@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Task } from "@harness/shared";
+import type { Task } from "@ash/shared";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 
-const root = mkdtempSync(join(tmpdir(), "harness-task-star-"));
-process.env.HARNESS_DB = join(root, "harness.db");
+const root = mkdtempSync(join(tmpdir(), "ash-task-star-"));
+process.env.ASH_DB = join(root, "ash.db");
 
 const [{ db, ensureSchema }, schema, { mountTaskRoutes }] = await Promise.all([
   import("../src/db/index.js"),

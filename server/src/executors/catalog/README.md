@@ -1,6 +1,6 @@
 # 智能体目录(catalog)
 
-harness 能派任务的 CLI 全部登记在这个目录里,**一个 CLI 一个 spec 文件**。这份 spec 同时喂三条链路:
+ash 能派任务的 CLI 全部登记在这个目录里,**一个 CLI 一个 spec 文件**。这份 spec 同时喂三条链路:
 
 | 链路 | 用到的字段 | 出口 |
 |---|---|---|
@@ -36,15 +36,15 @@ harness 能派任务的 CLI 全部登记在这个目录里,**一个 CLI 一个 s
    cd /tmp && mkdir -p probe && cd probe
    <bin> <你写进 spec 的那串参数> # prompt 用「创建 hello.txt,内容 hi」这种可验证的
    ```
-   看三件事:①有没有卡在交互确认(卡住 = 自动批准的 flag 没给对,harness 里会表现为任务永远不结束);②有没有真的动文件;③stdout 长什么样(决定 parser)。
+   看三件事:①有没有卡在交互确认(卡住 = 自动批准的 flag 没给对,ash 里会表现为任务永远不结束);②有没有真的动文件;③stdout 长什么样(决定 parser)。
 3. **把实测结果写进 spec**,去掉 `untested`,`notes` 改成「实测于 <日期> + 版本号 + 仍未确认的点」。**没实测通就别去掉 `untested`** —— 那个标记是给用户看的诚实声明,不是待办勾选框。
 4. **跑测试**:
    ```bash
    npx tsc -p server/tsconfig.json --noEmit     # typecheck(必须干净)
    npm -w server run test:cli-catalog           # 目录机制的回归测试
    ```
-   > worktree 里 typecheck 报 `@harness/shared` 是旧类型的话,说明该 worktree 没有自己的 `node_modules`(会走到主仓那份)。补一次软链即可:
-   > `mkdir -p node_modules/@harness && for p in shared server web mcp; do ln -sfn ../../$p node_modules/@harness/$p; done`
+   > worktree 里 typecheck 报 `@ash/shared` 是旧类型的话,说明该 worktree 没有自己的 `node_modules`(会走到主仓那份)。补一次软链即可:
+   > `mkdir -p node_modules/@ash && for p in shared server web mcp; do ln -sfn ../../$p node_modules/@ash/$p; done`
 
 ---
 
@@ -130,10 +130,10 @@ reasoningEffort: (v) => ["-c", `model_reasoning_effort="${v}"`]  // 拼不出来
 
 ```ts
 // (a) 整个 session 字段不写 = 没有 resume 通道。
-//     harness 会忽略 RunOpts.sessionId、生成一个新 sessionId 仅作追溯,
+//     ash 会忽略 RunOpts.sessionId、生成一个新 sessionId 仅作追溯,
 //     恢复命令给一句诚实说明。续聊时 agent 记忆是断的 —— 这是事实,不是 bug。
 
-// (b) harness 自己发 id(claude 的 --session-id):最省事,textParser 也能续跑
+// (b) ash 自己发 id(claude 的 --session-id):最省事,textParser 也能续跑
 session: {
   newIdFlag: "--session-id",
   resumeArgs: (id) => ["--resume", id],
@@ -141,11 +141,11 @@ session: {
 }
 
 // (c) id 由 CLI 自己产生:必须让 parser 发 {kind:"session", cliSessionId} 把 id 带回来,
-//     否则 harness 拿不到 id,永远起新会话
+//     否则 ash 拿不到 id,永远起新会话
 session: { resumeArgs: (id) => ["resume", id], interactive: (id) => `foo resume ${id}` }
 ```
 
-**只写 `interactive` 是无效的**(第 1 轮审查抓到过):没有 `newIdFlag` 也没有 `resumeArgs` 时,harness 手里那个 id 是它自己发的运行记录,CLI 压根没听说过 —— 拿它拼 `--resume <id>` 就是给用户一条引用不存在会话的命令。所以 `interactiveResumeInner`(`executors/generic.ts`)会判定它不可信、退化成诚实说明,`interactive` 等于白写。知道该 CLI 有 `--resume` 但还没查清 id 从哪来时,就走 (a) 档、把线索写进 `notes`。
+**只写 `interactive` 是无效的**(第 1 轮审查抓到过):没有 `newIdFlag` 也没有 `resumeArgs` 时,ash 手里那个 id 是它自己发的运行记录,CLI 压根没听说过 —— 拿它拼 `--resume <id>` 就是给用户一条引用不存在会话的命令。所以 `interactiveResumeInner`(`executors/generic.ts`)会判定它不可信、退化成诚实说明,`interactive` 等于白写。知道该 CLI 有 `--resume` 但还没查清 id 从哪来时,就走 (a) 档、把线索写进 `notes`。
 
 **供应商注入(`relay`)** —— **密钥绝不能进 argv**(`commandLine` 会存进 `sessions.command_line` 并在 UI 展示):
 
@@ -168,7 +168,7 @@ relay: (r) => ({
 - 自己写:**内联在自己的 spec 文件里**(别加到 `parsers.ts`,那是共享文件)。骨架照抄下面这份:
 
 ```ts
-import type { AgentEvent } from "@harness/shared";
+import type { AgentEvent } from "@ash/shared";
 import { forceFinishOnExit, spawnErrorMessage } from "../spawn.js";
 import type { CliParser } from "./types.js";
 

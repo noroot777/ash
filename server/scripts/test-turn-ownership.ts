@@ -14,9 +14,9 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 
-const root = mkdtempSync(join(tmpdir(), "harness-turn-ownership-"));
-process.env.HARNESS_DB = join(root, "harness.db");
-process.env.HARNESS_RUNS_DIR = join(root, "runs");
+const root = mkdtempSync(join(tmpdir(), "ash-turn-ownership-"));
+process.env.ASH_DB = join(root, "ash.db");
+process.env.ASH_RUNS_DIR = join(root, "runs");
 
 const { ensureSchema, db, dbClient } = await import("../src/db/index.js");
 const { freeWorkflowStates, projects, schedules, tasks } = await import("../src/db/schema.js");

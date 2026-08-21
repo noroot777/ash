@@ -1,11 +1,11 @@
 // 任务接力——两端共用的传输协议类型、错误类与尺寸常量(从 handoff.ts 拆出,
 // 导出/导入/HTTP 面三处共用;业务流程见 handoff.ts 顶部注释)。
 import { isAbsolute } from "node:path";
-import type { HandoffPingProject } from "@harness/shared";
+import type { HandoffPingProject } from "@ash/shared";
 
 export class HandoffError extends Error {
   // 导入侧专用:true = 这次失败**不证明**本机没留下半截产物(补偿回滚自身失败)。
-  // HTTP 面据此决定应答上还带不带「可证明业务拒绝」的 harness 标记——不带,源机就会
+  // HTTP 面据此决定应答上还带不带「可证明业务拒绝」的 ash 标记——不带,源机就会
   // 按「送达未知」保留 pending,不敢在本机重新起跑。
   unsettled = false;
   // network=true:请求没送达或应答没读全 —— 对端**可能已经**处理成功,调用方不能

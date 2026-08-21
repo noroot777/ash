@@ -17,9 +17,9 @@
 //   ② 一段跑砸了就地停下，**不往下推**：别在一条卡住的线上开验证、也别送进人工关口。
 //   ③ 验证站轮数用尽时是**停下**，不是跳过。绕过一个用户亲手画上去的验证站，比停下更坏。
 import { eq } from "drizzle-orm";
-import type { WorkflowDef, WorkflowStep } from "@harness/shared/workflow";
-import { STEP_LABELS } from "@harness/shared/workflow";
-import { firstAnchor, nextAnchor, prevAnchor } from "@harness/shared/workflow-policy";
+import type { WorkflowDef, WorkflowStep } from "@ash/shared/workflow";
+import { STEP_LABELS } from "@ash/shared/workflow";
+import { firstAnchor, nextAnchor, prevAnchor } from "@ash/shared/workflow-policy";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { publishTaskUpdated } from "./task-store.js";

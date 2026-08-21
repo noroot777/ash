@@ -1,8 +1,8 @@
 // 自由工作流派审/预约的**输入校验**（从 free-workflow.ts 拆出，纯行数拆分）：
 // 检查类型、复审轮数、附言，以及「这一次换个人/换个模型跑」的执行器覆盖。
-import type { AgentType, FreeReviewCheckMode, FreeReviewExecutorOverride } from "@harness/shared";
-import { AGENT_TYPES } from "@harness/shared";
-import { FREE_REVIEW_CHECK_MODES } from "@harness/shared/free-workflow";
+import type { AgentType, FreeReviewCheckMode, FreeReviewExecutorOverride } from "@ash/shared";
+import { AGENT_TYPES } from "@ash/shared";
+import { FREE_REVIEW_CHECK_MODES } from "@ash/shared/free-workflow";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { agents } from "./db/schema.js";

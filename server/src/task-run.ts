@@ -1,7 +1,7 @@
 import { mkdirSync, createWriteStream } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { AgentType } from "@harness/shared";
+import type { AgentType } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";

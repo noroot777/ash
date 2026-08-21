@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// 一条龙:重建全部 → 重启 :4317 服务端 → 刷新 harness MCP。
+// 一条龙:重建全部 → 重启 :4317 服务端 → 刷新 ash MCP。
 //
 //   npm run restart            # 或直接 node scripts/restart.mjs
 //   FORCE=1 npm run restart    # 即使有任务在跑也强制重启(会把它们判为 failed)
 //   WAIT=1 npm run restart     # 有任务在跑就【等】它们排空再重启,而不是中止
-//   SKIP_MCP=1 npm run restart # 只重建+重启 :4317,不刷新 MCP(不打断正在用 harness MCP 的会话)
+//   SKIP_MCP=1 npm run restart # 只重建+重启 :4317,不刷新 MCP(不打断正在用 ash MCP 的会话)
 //   FORCE_MCP=1 npm run restart # 明知有 agent 正握着 MCP 通道,也照样刷新(会掐断它们的交卷)
 //
 // 跑法说明:
@@ -21,18 +21,19 @@
 //    等待期间 Ctrl-C 随时可退。FORCE 优先于 WAIT(既然要强杀就不必等)。
 //    注意残留竞态:检查与 kill 之间仍可能有 queued 任务抢跑 —— 真正关死这个窗口
 //    需要服务端的 drain 模式(停止启动新任务并如实报告已排空),这里够不着。
-//  - harness MCP 是每个 Codex/Claude 会话各自 spawn 的 stdio 子进程(node mcp/dist/index.js),
+//  - ash MCP 是每个 Codex/Claude 会话各自 spawn 的 stdio 子进程(node mcp/dist/index.js),
 //    不是常驻端口。第 3 步杀掉这些"旧代码"子进程;客户端下次用到时会用新的 mcp/dist 重新拉起。
 //    **这一刀是本脚本唯一真能伤到正在干活的 agent 的地方**(重启 :4317 它们无感,见上一条):
 //    通道一断,它那轮的 report_stage/complete_task 就撞 `Transport closed`。所以第 3 步之前
 //    再问一次服务端「谁手里还握着 MCP」(restart-impact 的 mcpDisrupted),有人握着就**默认
 //    跳过刷新**并说明——改了 mcp/ 非要立刻生效再 FORCE_MCP=1 跑一遍。
-//    (兜底另有一层:harness 会在回合结算时补录那些"确定没送达"的交卷调用,见
+//    (兜底另有一层:ash 会在回合结算时补录那些"确定没送达"的交卷调用,见
 //     server/src/mcp-handoff.ts;但白名单只有三个工具,能不掐断还是不掐断。)
 //
 // 2026-08-14 从 restart.sh 改写成 .mjs:Windows 上没有 bash/lsof/pkill,而这条命令是
 // 「改完代码怎么让它生效」的唯一入口,不能只有一半机器跑得动。平台差异集中在
 // scripts/platform.mjs。
+import "./env.mjs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -44,7 +45,7 @@ const REPO = fileURLToPath(new URL("..", import.meta.url));
 process.chdir(REPO);
 
 const PORT = Number(process.env.PORT || 4317);
-const LOG = process.env.HARNESS_LOG || join(IS_WINDOWS ? (process.env.TEMP || ".") : "/tmp", `harness-${PORT}.log`);
+const LOG = process.env.ASH_LOG || join(IS_WINDOWS ? (process.env.TEMP || ".") : "/tmp", `ash-${PORT}.log`);
 const START_TIMEOUT = Number(process.env.START_TIMEOUT || 30);
 const SERVER_NODE = process.env.SERVER_NODE || process.execPath;
 // 起哪个入口。默认就是编译产物;留一个口子是为了 test-restart.mjs 能拿一个假 server
@@ -129,7 +130,7 @@ if (npmCfg.blockers.length) {
 }
 npm(["install", "--no-audit", "--no-fund"], "✕ 依赖同步失败,已中止——服务端未重启。");
 
-say("▶ 1/3 构建 (shared → web-next → server → mcp)…");
+say("▶ 1/3 构建 (shared → web → server → mcp)…");
 npm(["run", "build"], "✕ 构建失败,已中止——服务端未重启,跑的还是旧代码。");
 
 say(`▶ 2/3 重启 :${PORT} 服务端…`);
@@ -196,19 +197,19 @@ if (ready) {
   process.exit(1);
 }
 
-say("▶ 3/3 刷新 harness MCP…");
+say("▶ 3/3 刷新 ash MCP…");
 // 谁手里还握着 MCP 通道。**在服务端重启完之后才问**:此刻接管已经做完,答案是最新的。
 // 拿不到(server 没起来/老版本没这个字段)算 0,退回原来的行为。
 const after = await impact();
 const holders = countOf(after, "mcpDisrupted");
 if (process.env.SKIP_MCP) {
-  say("  ⏭ SKIP_MCP:跳过——不动 MCP 子进程,正在用 harness MCP 的会话不会被打断。");
+  say("  ⏭ SKIP_MCP:跳过——不动 MCP 子进程,正在用 ash MCP 的会话不会被打断。");
   say("     (代价:这些会话仍跑旧 mcp/dist;只有改了 mcp/ 才需去掉 SKIP_MCP 再跑一次。)");
 } else if (holders > 0 && !process.env.FORCE_MCP && !FORCE) {
   // 默认不掐断正在干活的 agent:刷新 MCP 的收益只是"旧会话用上新 mcp 代码",
   // 代价却是它这一轮的交卷调用当场失败(2026-08-06 验证白跑)。收益远小于代价,
   // 所以默认让路,并把出路说清楚。
-  say(`  ⏭ 有 ${holders} 个正在干活的 agent 手里握着 harness MCP 通道,已跳过刷新以免掐断它们的交卷。`);
+  say(`  ⏭ 有 ${holders} 个正在干活的 agent 手里握着 ash MCP 通道,已跳过刷新以免掐断它们的交卷。`);
   for (const t of after.mcpDisrupted.slice(0, 8)) say(`     · ${t.title} (pid ${t.pid})`);
   say(`     (:${PORT} 已经是新代码;这些会话仍跑旧 mcp/dist。)`);
   say("     改了 mcp/ 需要立刻生效:  FORCE_MCP=1 npm run restart");
@@ -223,4 +224,4 @@ if (process.env.SKIP_MCP) {
   }
 }
 
-say("✅ 完成。提示:已经开着的 Codex/Claude 会话要重连或重开,才会用上新的 harness MCP。");
+say("✅ 完成。提示:已经开着的 Codex/Claude 会话要重连或重开,才会用上新的 ash MCP。");

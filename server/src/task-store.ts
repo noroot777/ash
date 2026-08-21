@@ -1,6 +1,6 @@
 import { eq, inArray } from "drizzle-orm";
-import { normalizeDuetConfig } from "@harness/shared/duet";
-import type { AgentType, QuestionItem, Task, TaskStage, TaskStatus } from "@harness/shared";
+import { normalizeDuetConfig } from "@ash/shared/duet";
+import type { AgentType, QuestionItem, Task, TaskStage, TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { agents, projects, queueItems, sessions, tasks } from "./db/schema.js";
 import { bus } from "./bus.js";

@@ -20,13 +20,13 @@ import {
   type Group,
   type Session,
   type Task,
-} from "@harness/shared";
+} from "@ash/shared";
 import {
   batchesOf,
   isTeamSettled,
   teamGroupsOf,
   workersOf,
-} from "@harness/shared/team";
+} from "@ash/shared/team";
 import { api, type TeamCuaStatus } from "@/lib/api";
 import { refreshAll } from "@/lib/data";
 import type { LogLine } from "@/lib/log";

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:,">
-<title>总览 — Harness UI 讨论稿 v2</title>
+<title>总览 — Ash UI 讨论稿 v2</title>
 <link rel="stylesheet" href="style.css">
 <style>
   /* index 专属的文档版式,组件样式仍来自共享 style.css */
@@ -78,7 +78,7 @@
 </head>
 <body class="doc-page">
   <main class="doc">
-    <p class="eyebrow">Harness Web · 讨论稿 v2 · 第七轮 · 现行产品结构校准</p>
+    <p class="eyebrow">Ash Web · 讨论稿 v2 · 第七轮 · 现行产品结构校准</p>
     <h1>不止复刻控件，开始用同一种语言设计。</h1>
     <p class="lede"><b>本轮把验收与验证信息结构拉回现行产品：</b>团队验收恢复为“调度台共享分支卡 → 共享执行者验证 → 独立 worktree 执行者”的纵向层级；用户消息回到提交下方的左列，调度流中的用户发言回到原时序与右对齐气泡。Linear 只负责表面、间距、控件和导航壳。</p>
     <p class="callout"><b>信息结构原则：</b>信息结构以现行产品为准,重构只换视觉与导航壳。</p>
@@ -103,7 +103,7 @@
     </div>
 
     <h2>Linear 设计语言摘要</h2>
-    <p class="sub">这不是形容词清单，而是本轮重画 harness 特有组件时实际执行的约束。每一条都能直接落到 CSS 或版式判断。</p>
+    <p class="sub">这不是形容词清单，而是本轮重画 ash 特有组件时实际执行的约束。每一条都能直接落到 CSS 或版式判断。</p>
     <div class="language-grid">
       <div class="principle"><span class="mark">01 / 表面</span><b>无彩表面，亮度差代替粗边框</b><p>侧栏固定在 RGB 239/239/240，主内容固定在 249/249/250，白色只给输入、菜单和局部浮层。大块区域不使用抬升层或覆盖层。</p></div>
       <div class="principle"><span class="mark">02 / 节奏</span><b>4/8px 节奏，28/32/44px 控件带</b><p>行高与间距从 4px 倍数取值；侧栏行 28px、菜单项 32px、任务行 44px。信息密度靠节奏，不靠把字号压小。</p></div>
@@ -143,7 +143,7 @@
       <div><span class="tag">v2 · 第二轮</span><b>四栏:单一侧边栏</b><small>项目切换器和导航收进一条 240px 侧栏,但任务列表仍是独立第二栏。</small></div>
       <div><span class="tag">v3 · 信息架构定稿</span><b>三栏:任务树入侧栏</b><small>任务列表并进侧栏，设置改为单开页。</small></div>
       <div><span class="tag">v4 · 上轮</span><b>实测视觉 + 真实验收</b><small>统一基础 token，并补齐单任务/团队验收功能面。</small></div>
-      <div><span class="tag">v5 · 上轮</span><b>控件全状态 + 设计语言</b><small>校准默认亮度，并用 Linear 的组合规则重画 harness 特有组件。</small></div>
+      <div><span class="tag">v5 · 上轮</span><b>控件全状态 + 设计语言</b><small>校准默认亮度，并用 Linear 的组合规则重画 ash 特有组件。</small></div>
       <div><span class="tag">v6 · 上轮</span><b>团队验收尝试 + 单层焦点 ring</b><small>视觉校准完成，但验收台误造了执行者队列与底部调度流。</small></div>
       <div><span class="tag now">v7 · 本轮</span><b>信息结构完全服从现行产品</b><small>共享执行者验证、证据缩略图与用户消息全部归回真实层级。</small></div>
     </div>

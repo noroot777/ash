@@ -1,4 +1,4 @@
-// agent 进程与 harness 解绑:输出写**文件**而不是匿名管道。
+// agent 进程与 ash 解绑:输出写**文件**而不是匿名管道。
 //
 // 为什么这一层是必要的:spawn.ts 里的 agent 早就是 `detached: true`(自成进程组),
 // server 重启时那句 `kill $OLD` 根本打不到它们;真正杀死它们的是 **stdout 匿名
@@ -11,7 +11,7 @@
 // parseClaudeStream / parseCodexStream 全部按 ChildProcess 写的(stdout/stderr/
 // on('error'|'close'|'exit')),伪装之后它们一行都不用改。
 //
-// 不覆盖常驻会话(团队调度台):那是**双向**的,harness 还要往它 stdin 里塞后续
+// 不覆盖常驻会话(团队调度台):那是**双向**的,ash 还要往它 stdin 里塞后续
 // 消息,文件替代不了。调度台走另一条路 —— 它本来就有完整的 `--resume` 自动接回
 // (team/session.ts 的 deliver:内存里没有 lead 就自动 openLead 接回)。
 import { spawn } from "node:child_process";
@@ -153,7 +153,7 @@ function makeDetachedChild(opts: {
     opts.kill();
     return true;
   };
-  child.harnessCommitted = () => out.committed();
+  child.ashCommitted = () => out.committed();
 
   const timer = setInterval(() => {
     out.pump();
@@ -181,7 +181,7 @@ function makeDetachedChild(opts: {
 
 export type DetachedChild = ChildProcess & {
   /** 已安全消费到的 stdout 字节位置(换行边界),存进 DB 供重启后接着读。 */
-  harnessCommitted: () => number;
+  ashCommitted: () => number;
 };
 
 // 新起一个「活得过 server 重启」的 agent。
@@ -212,13 +212,13 @@ export function spawnDetachedAgent(
     try { closeSync(openSync(p, "a")); } catch { /* 目录不存在等,交给下面的 spawn 报错 */ }
   }
 
-  const script = '"$@" >>"$HARNESS_OUT" 2>>"$HARNESS_ERR"; printf %s $? >"$HARNESS_RC"';
+  const script = '"$@" >>"$ASH_OUT" 2>>"$ASH_ERR"; printf %s $? >"$ASH_RC"';
   const env = {
     ...augmentedEnv(),
     ...extraEnv,
-    HARNESS_OUT: paths.out,
-    HARNESS_ERR: paths.err,
-    HARNESS_RC: paths.rc,
+    ASH_OUT: paths.out,
+    ASH_ERR: paths.err,
+    ASH_RC: paths.rc,
   };
   // 逃逸追踪跟普通 spawn 走同一套(见 spawn.ts 的 openTrackFd 注释)。
   const track = openTrackFd();
@@ -287,8 +287,8 @@ export function spawnForRun(
 // instanceof/鸭子类型试探。
 export function detachedInfo(child: ChildProcess): { pid: number; committed: () => number } | undefined {
   const c = child as Partial<DetachedChild>;
-  if (typeof c.harnessCommitted !== "function" || !c.pid) return undefined;
-  return { pid: c.pid, committed: c.harnessCommitted };
+  if (typeof c.ashCommitted !== "function" || !c.pid) return undefined;
+  return { pid: c.pid, committed: c.ashCommitted };
 }
 
 // 重启后接管一个还活着的 agent。

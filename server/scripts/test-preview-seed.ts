@@ -16,10 +16,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createClient } from "../src/db/node-sqlite-client.js";
 
-const root = mkdtempSync(join(tmpdir(), "harness-preview-seed-"));
+const root = mkdtempSync(join(tmpdir(), "ash-preview-seed-"));
 // preview-seed 会 import db/index.js（模块加载时就打开库）。先把库指到临时目录，
 // 免得跑一次测试就在仓库的 data/ 下多一个文件。
-process.env.HARNESS_DB = join(root, "app.db");
+process.env.ASH_DB = join(root, "app.db");
 const { CONFIG_TABLES, SNAPSHOT_TABLES, copyConfigTables, copyTables, sanitizeSnapshot } =
   await import("../src/preview-seed.js");
 
@@ -76,7 +76,7 @@ try {
     INSERT INTO llm_providers VALUES ('p1', 'cpa', 'sk-real-key');
     INSERT INTO agents VALUES ('a1', 'claude@local', 'claude', NULL, 1, NULL);
     INSERT INTO agents VALUES ('a2', 'codex@cpa', 'codex', 'p1', 0, 'fast');
-    INSERT INTO projects VALUES ('proj', 'harness', '/repo');
+    INSERT INTO projects VALUES ('proj', 'ash', '/repo');
     INSERT INTO tasks VALUES ('t1', 'running', 'single', 2);
     INSERT INTO tasks VALUES ('t2', 'queued', 'single', NULL);
     INSERT INTO tasks VALUES ('t3', 'done', 'single', NULL);

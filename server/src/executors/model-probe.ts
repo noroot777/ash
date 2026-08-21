@@ -1,5 +1,5 @@
 // 「这个 CLI 现在有哪些模型」——现问 CLI,而不是只读发版时抄下的快照
-// (`shared/src/cli-presets.ts` 的 CLI_MODEL_PRESETS:各家上新模型跟 harness 发版
+// (`shared/src/cli-presets.ts` 的 CLI_MODEL_PRESETS:各家上新模型跟 ash 发版
 // 毫无关系,那张表必然滞后,且滞后多久取决于「有没有人想起来改它」)。
 //
 // 三条设计约束,都来自这个系统里已有的先例:
@@ -15,10 +15,10 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { AgentType } from "@harness/shared";
-import { AGENT_TYPES } from "@harness/shared";
-import type { CliModelCatalog } from "@harness/shared/cli-presets";
-import { CLI_MODEL_PRESETS } from "@harness/shared/cli-presets";
+import type { AgentType } from "@ash/shared";
+import { AGENT_TYPES } from "@ash/shared";
+import type { CliModelCatalog } from "@ash/shared/cli-presets";
+import { CLI_MODEL_PRESETS } from "@ash/shared/cli-presets";
 import { probeBins } from "./bin-probe.js";
 import { CLI_SPEC_BY_KEY } from "./catalog/index.js";
 

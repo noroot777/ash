@@ -1,5 +1,5 @@
 import { View, Text, Switch } from "react-native";
-import type { AgentExecutorProfile, AgentType, LlmProvider } from "@harness/shared";
+import type { AgentExecutorProfile, AgentType, LlmProvider } from "@ash/shared";
 import { Ionicons } from "@expo/vector-icons";
 import { useTheme, radius, fonts } from "@/lib/theme";
 import { ExecutionConfig, type ExecutorSelection } from "@/components/ExecutionConfig";

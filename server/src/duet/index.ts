@@ -1,8 +1,8 @@
 import { mkdirSync, createWriteStream, appendFileSync, readFileSync, writeFileSync } from "node:fs";
-import { normalizeDuetConfig } from "@harness/shared/duet";
+import { normalizeDuetConfig } from "@ash/shared/duet";
 import { join } from "node:path";
 import { eq, sql } from "drizzle-orm";
-import type { DuetConfig, DuetConsensusBy, DuetSpeaker, GateAction, SessionRole, TaskStatus, TurnTraceEvent } from "@harness/shared";
+import type { DuetConfig, DuetConsensusBy, DuetSpeaker, GateAction, SessionRole, TaskStatus, TurnTraceEvent } from "@ash/shared";
 import { db } from "../db/index.js";
 import { tasks, projects, sessions } from "../db/schema.js";
 import { bus } from "../bus.js";

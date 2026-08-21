@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { extname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { maxBytesFor } from "@harness/shared";
+import { maxBytesFor } from "@ash/shared";
 import { UPLOADS_DIR } from "./paths.js";
 import { id } from "./util.js";
 

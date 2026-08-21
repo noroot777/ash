@@ -17,7 +17,7 @@
 // docs/incidents.md「排队消息凭空消失」)。做法是把「有人正在送」拆成一个**独立的租约字段**
 // (`delivering_since`,行本身仍是 pending),而不是提前把状态改成 sent。
 import { and, eq, isNotNull, isNull } from "drizzle-orm";
-import type { AgentType, ScheduledMessageMode } from "@harness/shared";
+import type { AgentType, ScheduledMessageMode } from "@ash/shared";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
@@ -146,7 +146,7 @@ export async function cancelPendingMessage(message: Row, reason: string): Promis
   const quoted = text ? `\n原文：${text.length > 500 ? `${text.slice(0, 500)}…` : text}` : "";
   const note = `〔系统〕${label}未发送，已取消${when}：${reason}${quoted}`;
   if (!(await appendTaskTimeline(message.taskId, note))) {
-    console.warn(`[harness] ${note} task=${message.taskId} message=${message.id}`);
+    console.warn(`[ash] ${note} task=${message.taskId} message=${message.id}`);
   }
 }
 
@@ -201,7 +201,7 @@ export async function reclaimStaleDeliveries(): Promise<number> {
     .set({ deliveringSince: null })
     .where(and(eq(scheduledMessages.status, "pending"), isNotNull(scheduledMessages.deliveringSince)))
     .returning({ id: scheduledMessages.id });
-  if (reclaimed.length) console.log(`[harness] 回收 ${reclaimed.length} 条中断的待发送消息投递`);
+  if (reclaimed.length) console.log(`[ash] 回收 ${reclaimed.length} 条中断的待发送消息投递`);
   return reclaimed.length;
 }
 
@@ -314,6 +314,6 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
 // 「上一轮一结束就发出去」,而不是干等下一次 30s tick。
 export function flushPendingForTask(taskId: string): void {
   void deliverPendingMessages(taskId).catch((err) =>
-    console.error(`[harness] deliverPendingMessages(${taskId}) failed:`, err),
+    console.error(`[ash] deliverPendingMessages(${taskId}) failed:`, err),
   );
 }

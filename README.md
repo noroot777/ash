@@ -1,5 +1,5 @@
 <p align="center">
-  <strong>Harness</strong>
+  <strong>Ash</strong>
 </p>
 
 <p align="center">
@@ -13,7 +13,7 @@
 
 ---
 
-Harness 是一个自托管的编排控制台，用来管理本地的 AI 编程智能体 CLI（Claude Code、Codex、Gemini 等）。它不替代这些工具，也不需要你的 API key —— 它负责的是**调度**：把任务分配给 agent，在隔离的 worktree 中执行，自动验证结果，最终合并回主干。
+Ash 是一个自托管的编排控制台，用来管理本地的 AI 编程智能体 CLI（Claude Code、Codex、Gemini 等）。它不替代这些工具，也不需要你的 API key —— 它负责的是**调度**：把任务分配给 agent，在隔离的 worktree 中执行，自动验证结果，最终合并回主干。
 
 一个 Node 进程，一个端口，数据全在本地磁盘。macOS / Linux / Windows 原生支持。
 
@@ -28,9 +28,9 @@ npm install -g @openai/codex && codex
 ```
 
 ```bash
-# 安装并启动 Harness
-git clone https://github.com/noroot777/ash.git harness
-cd harness
+# 安装并启动 Ash
+git clone https://github.com/noroot777/ash.git ash
+cd ash
 npm run setup        # 环境检查 → 依赖安装 → 构建 → MCP 接入
 npm start            # http://localhost:4317
 ```
@@ -38,7 +38,7 @@ npm start            # http://localhost:4317
 启动后：新建项目（填 git 仓库绝对路径）→ 创建任务 → 选择执行器 → 运行。
 
 > [!IMPORTANT]
-> **MCP 接入不可跳过。** agent 通过 MCP 工具 `complete_task` 提交完成状态。未接入 MCP 的 agent 无法交卷，所有任务将显示为失败。<br>验证：`claude mcp list` 中应显示 `harness: … ✔ Connected`。<br>手动接入方法见 [docs/install.md](docs/install.md)。
+> **MCP 接入不可跳过。** agent 通过 MCP 工具 `complete_task` 提交完成状态。未接入 MCP 的 agent 无法交卷，所有任务将显示为失败。<br>验证：`claude mcp list` 中应显示 `ash: … ✔ Connected`。<br>手动接入方法见 [docs/install.md](docs/install.md)。
 
 ## 核心能力
 
@@ -83,12 +83,12 @@ npm start            # http://localhost:4317
 单 Node 进程（Hono），同时承载 API、SSE 事件推送和前端页面托管。
 
 ```
-server/      Hono 后端 — API、任务编排、进程管理、前端托管
-web-next/    React + Vite + Tailwind 前端
-shared/      前后端共享类型
-mcp/         MCP server — 提供 25 个工具供 agent 调用
-mobile/      Expo 移动端（查看任务、回复消息）
-scripts/     setup / restart / package（.mjs 脚本，跨平台）
+server/   Hono 后端 — API、任务编排、进程管理、前端托管
+web/      React + Vite + Tailwind 前端
+shared/   前后端共享类型
+mcp/      MCP server — 提供 25 个工具供 agent 调用
+mobile/   Expo 移动端（查看任务、回复消息）
+scripts/  setup / restart / package（.mjs 脚本，跨平台）
 ```
 
 <details>
@@ -107,7 +107,7 @@ scripts/     setup / restart / package（.mjs 脚本，跨平台）
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `PORT` | `4317` | 服务端口（界面与 API 共用） |
-| `HARNESS_DB` | `./data/harness.db` | SQLite 数据库路径 |
+| `ASH_DB` | `./data/ash.db` | SQLite 数据库路径 |
 
 所有持久化数据存放在 `data/` 目录（数据库、运行记录、上传文件），该目录不入 git。备份迁移只需拷贝此目录。
 
@@ -118,12 +118,12 @@ scripts/     setup / restart / package（.mjs 脚本，跨平台）
 
 ```bash
 npm run dev          # 后端 :4317 + 前端 :5173（HMR，/api 代理到后端）
-npm run build        # 全量构建（shared → web-next → server → mcp）
+npm run build        # 全量构建（shared → web → server → mcp）
 npm run restart      # 构建 + 后台常驻
 npm run package      # 生成分发包（仅入库文件，不含 data/）
 ```
 
-前端修改后仅需 `npm run build`，server 从磁盘读取 `web-next/dist`，无需重启。
+前端修改后仅需 `npm run build`，server 从磁盘读取 `web/dist`，无需重启。
 
 回归测试按主题拆分，独立运行：
 
@@ -142,7 +142,7 @@ npm -w server run test:detached       # agent 重启存活
 <details>
 <summary>所有任务运行后均显示 <b>failed</b></summary>
 
-MCP 未接入，agent 无法调用 `complete_task`。运行 `claude mcp list` 确认 harness 状态为 Connected。
+MCP 未接入，agent 无法调用 `complete_task`。运行 `claude mcp list` 确认 ash 状态为 Connected。
 
 </details>
 

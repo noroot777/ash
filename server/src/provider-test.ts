@@ -1,5 +1,5 @@
 import type { Hono } from "hono";
-import type { LlmProtocol } from "@harness/shared";
+import type { LlmProtocol } from "@ash/shared";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { llmProviders } from "./db/schema.js";
@@ -112,7 +112,7 @@ async function testOpenAi(config: ProviderTestConfig, signal: AbortSignal): Prom
     max_output_tokens: 256,
     stream: true,
   });
-  const request = new Request("http://harness.local/v1/responses", {
+  const request = new Request("http://ash.local/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${config.apiKey}` },
     body,

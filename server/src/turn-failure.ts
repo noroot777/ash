@@ -1,4 +1,4 @@
-import type { AgentType, SessionRole } from "@harness/shared";
+import type { AgentType, SessionRole } from "@ash/shared";
 import { bus } from "./bus.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { TURN_FAILED_TO_START } from "./run-prompts.js";

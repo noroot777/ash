@@ -53,9 +53,9 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
-import type { TaskStage } from "@harness/shared";
-import { STAGE_LABELS } from "@harness/shared";
-import { firstAnchor } from "@harness/shared/workflow-policy";
+import type { TaskStage } from "@ash/shared";
+import { STAGE_LABELS } from "@ash/shared";
+import { firstAnchor } from "@ash/shared/workflow-policy";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { RUNS_DIR } from "./paths.js";
@@ -167,7 +167,7 @@ export async function recordTurnBaseline(
     return true;
   } catch (error) {
     // 拍照失败不该拖垮起跑：没有基线 = 这一轮不做任何判断，退回改动前的行为。
-    console.warn(`[harness] failed to record turn baseline for ${taskId}:`, error);
+    console.warn(`[ash] failed to record turn baseline for ${taskId}:`, error);
     return false;
   }
 }
@@ -229,7 +229,7 @@ const restoreStageNote = (stage: TaskStage) =>
  * 三样东西一起清，少一样都还能让新代码溜过去：游标（`workflow_at`）搬回「让 AI 干活」
  * 那一站、这一站验过几轮（`verify_station_rounds` + `review_step`）归零、验收阶段
  * （`stage`）清空。**游标要搬回 run 站的 id，不能清成 null** —— 前端在没有游标时会按
- * status 猜位置（`web-next/src/workflow/workflowModel.ts` 的 `resolveCursor`：done 且
+ * status 猜位置（`web/src/workflow/workflowModel.ts` 的 `resolveCursor`：done 且
  * 无游标 → 落在 run 之后那一站），清成 null 反而显示成「已经走过第一站了」。
  */
 async function resetWorkflowLedger(taskId: string): Promise<LedgerSnapshot | null> {
@@ -348,6 +348,6 @@ export async function reconcileTurnBaseline(taskId: string, confirmedDone: boole
     if (!staged && base.ledger) await appendTaskTimeline(taskId, RESTORE_NOTE);
     if (base.fresh) await discardEmptyShell(taskId);
   } catch (error) {
-    console.warn(`[harness] failed to reconcile turn baseline for ${taskId}:`, error);
+    console.warn(`[ash] failed to reconcile turn baseline for ${taskId}:`, error);
   }
 }

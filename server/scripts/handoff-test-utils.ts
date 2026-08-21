@@ -9,7 +9,7 @@ export const git = (cwd: string, ...args: string[]) =>
 
 export function makeRepo(path: string): string {
   execFileSync("git", ["init", "-b", "main", path]);
-  git(path, "config", "user.name", "Harness Handoff Test");
+  git(path, "config", "user.name", "Ash Handoff Test");
   git(path, "config", "user.email", "handoff@example.test");
   writeFileSync(join(path, ".gitignore"), ".worktrees/\n");
   writeFileSync(join(path, "seed.txt"), "seed\n");

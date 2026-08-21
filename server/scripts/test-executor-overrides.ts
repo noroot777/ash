@@ -6,8 +6,8 @@
 // 只有 model/effort 没跟着走同一条 —— 这份测试就是钉住那条口径。
 //
 // 跑法：npm -w server run test:executor-overrides
-import { inheritExecutorOverrides, pickExecutor, sameExecutor } from "@harness/shared/executors";
-import type { AgentType } from "@harness/shared";
+import { inheritExecutorOverrides, pickExecutor, sameExecutor } from "@ash/shared/executors";
+import type { AgentType } from "@ash/shared";
 
 let failures = 0;
 function check(name: string, actual: unknown, expected: unknown) {

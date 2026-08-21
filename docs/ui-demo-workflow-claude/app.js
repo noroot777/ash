@@ -16,7 +16,7 @@
              human: true, accept: true, rounds: 2, onFail: "repair" },
     },
     frontend: {
-      name: "前端真实验收", scope: "项目 · harness · v2", desc: "验证通过后先把预览起起来，你点开看过真东西再验收；关口一结束预览自动回收。",
+      name: "前端真实验收", scope: "项目 · ash · v2", desc: "验证通过后先把预览起起来，你点开看过真东西再验收；关口一结束预览自动回收。",
       cfg: { workspace: "isolated", verify: true, verifiers: ["构建 + 类型检查", "浏览器真实点检"], preview: true,
              human: true, accept: true, rounds: 2, onFail: "repair" },
     },
@@ -120,8 +120,8 @@
       }
       if (s.key === "preview" && on) {
         extra = '<div class="parallel"><span class="parallel-label">预览进程</span>' +
-          '<span class="pact"><i></i>npm -w web-next run dev</span>' +
-          '<span class="pact"><i></i>端口由 harness 分配</span>' +
+          '<span class="pact"><i></i>npm -w web run dev</span>' +
+          '<span class="pact"><i></i>端口由 ash 分配</span>' +
           '<span class="pact"><i></i>就绪后才放行到人工关口</span></div>';
       }
 
@@ -191,8 +191,8 @@
         '<p class="note">「验证」固定要求真实运行 + 报告 + 必要截图；只读评议不能产出 verified。轮数上限持久化在 NodeRun.attempt 上，重启后从库里恢复。</p>';
     } else if (state.sel === "preview") {
       body = field("预览就绪", toggle("preview", c.preview, "预览就绪")) +
-        field("预览命令（项目级）", select("npm -w web-next run dev")) +
-        field("端口", select("由 harness 分配 · 14300–14399")) +
+        field("预览命令（项目级）", select("npm -w web run dev")) +
+        field("端口", select("由 ash 分配 · 14300–14399")) +
         field("就绪判据", select("端口可连 + 日志匹配 ready")) +
         field("回收时机", select("人工关口结束 / 闲置 30 分钟 / 任务终止")) +
         '<p class="note">这一关不产出结论，只负责「让人能看见」。起不来也不卡死流程：走 failed 出口进人工关口，标注「只能看 diff」。</p>' +
@@ -204,7 +204,7 @@
         '<p class="note">开着这一关，任务会长时间停在 <code>awaiting_review</code>。串行分组里这意味着后继一直等你 —— 这是既有的队列规则，工作流没有改它，只是把这段等待变明显了。急的话把这个模板换掉，或者让那条链别用带人工关口的模板。</p>';
     } else if (state.sel === "accept") {
       body = field("合并与清理", toggle("accept", c.accept, "合并与清理")) +
-        field("合并策略", select("Harness 安全合并（仓库锁内）")) +
+        field("合并策略", select("Ash 安全合并（仓库锁内）")) +
         field("清理", select("合并后删除 worktree 与任务分支")) +
         '<p class="note">冲突不自动解决，退回本任务处理。这一关不允许在没有 human.gate 的定义里存在 —— 编译期就拒。</p>';
     }

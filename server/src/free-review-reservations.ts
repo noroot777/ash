@@ -291,5 +291,5 @@ export async function startReservedFreeReview(
     }
     return;
   }
-  console.error(`[harness] free review reservation for ${taskId} kept being rewritten; left armed`);
+  console.error(`[ash] free review reservation for ${taskId} kept being rewritten; left armed`);
 }

@@ -1,4 +1,4 @@
-// 几个测试会 `ensureSchema()` 并往库里真写数据。HARNESS_DB 指错地方 = 直接改用户
+// 几个测试会 `ensureSchema()` 并往库里真写数据。ASH_DB 指错地方 = 直接改用户
 // 的真实任务库,所以每个都在入口挡一道「这个库必须是临时的」。
 //
 // 判据以前写死 `startsWith("/tmp/")`,那在 Windows 上是**永远为假**:那边根本没有
@@ -7,7 +7,7 @@
 // 以为自己命令写错了。
 //
 // 同时 `/tmp` 也不能删:macOS 的 `os.tmpdir()` 返回的是 `$TMPDIR`(`/var/folders/…`),
-// 跟 `/tmp` 不是一个目录,而现有的跑法全是 `HARNESS_DB=/tmp/xxx.db`。两个都认。
+// 跟 `/tmp` 不是一个目录,而现有的跑法全是 `ASH_DB=/tmp/xxx.db`。两个都认。
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { IS_WINDOWS, PATH_SEP, isInsidePath } from "../src/platform.js";
@@ -20,18 +20,18 @@ function underTemp(dbPath: string): boolean {
 }
 
 /**
- * 没设 HARNESS_DB、或者它不在临时目录下,就打印怎么跑并 `exit(1)`。
+ * 没设 ASH_DB、或者它不在临时目录下,就打印怎么跑并 `exit(1)`。
  * `name` 用来拼示例命令,给测试自己的名字即可。
  */
 export function requireTmpDb(name: string): void {
-  const dbPath = process.env.HARNESS_DB;
+  const dbPath = process.env.ASH_DB;
   const example = `${tmpdir()}${PATH_SEP}${name}-${Date.now()}.db`;
   if (!dbPath) {
-    console.error(`先设 HARNESS_DB 再跑,比如 HARNESS_DB=${example}`);
+    console.error(`先设 ASH_DB 再跑,比如 ASH_DB=${example}`);
     process.exit(1);
   }
   if (!underTemp(dbPath)) {
-    console.error(`HARNESS_DB 必须在临时目录下(防止误改真实数据):${tmpdir()}${IS_WINDOWS ? "" : " 或 /tmp"}`);
+    console.error(`ASH_DB 必须在临时目录下(防止误改真实数据):${tmpdir()}${IS_WINDOWS ? "" : " 或 /tmp"}`);
     console.error(`当前值:${dbPath}`);
     process.exit(1);
   }
@@ -40,7 +40,7 @@ export function requireTmpDb(name: string): void {
 /**
  * 删临时舞台**之前**先松开数据库文件。
  *
- * Windows 删不掉「还开着的文件」,而这些测试的 HARNESS_DB 就落在舞台目录里 ——
+ * Windows 删不掉「还开着的文件」,而这些测试的 ASH_DB 就落在舞台目录里 ——
  * import 任何碰库的模块时就连上了,收尾那句 `rmSync(stage)` 于是必然 EBUSY:
  * 断言全过,却在最后一步把整条测试判红。POSIX 上删已打开的文件是合法的,所以这句
  * 在开发机上是空转,只有真 Windows 上才救得到命(2026-08-18 实测:file-browser、

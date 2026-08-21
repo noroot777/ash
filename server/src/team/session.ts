@@ -28,8 +28,8 @@ import { mkdirSync, createWriteStream, existsSync } from "node:fs";
 import type { WriteStream } from "node:fs";
 import { join } from "node:path";
 import { eq, sql } from "drizzle-orm";
-import type { AgentEvent, AgentType, TeamConfig } from "@harness/shared";
-import { TEAM_DEFAULTS } from "@harness/shared";
+import type { AgentEvent, AgentType, TeamConfig } from "@ash/shared";
+import { TEAM_DEFAULTS } from "@ash/shared";
 import { db } from "../db/index.js";
 import { tasks, projects, sessions, groups } from "../db/schema.js";
 import { bus } from "../bus.js";
@@ -48,8 +48,8 @@ import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET } from ".
 import { withSkillInvocation, nativeCliCommand } from "../skills.js";
 import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 
-// 空闲多久回收进程(0/负数 = 永不回收)。测试用 HARNESS_TEAM_IDLE_MS=5000。
-const IDLE_MS = Number(process.env.HARNESS_TEAM_IDLE_MS ?? 30 * 60_000);
+// 空闲多久回收进程(0/负数 = 永不回收)。测试用 ASH_TEAM_IDLE_MS=5000。
+const IDLE_MS = Number(process.env.ASH_TEAM_IDLE_MS ?? 30 * 60_000);
 // close() 之后还赖着不走的宽限,超时硬杀。
 const CLOSE_GRACE_MS = 10_000;
 
@@ -65,7 +65,7 @@ type Kind = "user" | "inbound" | "start";
 
 interface Lead {
   taskId: string;
-  sessId: string; // harness 会话行 id,同时是 .md 文件名
+  sessId: string; // ash 会话行 id,同时是 .md 文件名
   cliSessionId: string;
   agentType: AgentType;
   executorId: string | null;
@@ -100,7 +100,7 @@ export async function deliverToLead(
   return deliver(taskId, text + attachmentsPrompt(opts.attachments), "user", opts.throwOnOpenFailure);
 }
 
-// 执行者汇报/提问,以及 harness 自己的唤醒语(inbox.ts 用)。
+// 执行者汇报/提问,以及 ash 自己的唤醒语(inbox.ts 用)。
 export async function sendInbound(taskId: string, text: string): Promise<void> {
   await deliver(taskId, text, "inbound");
 }
@@ -378,7 +378,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   if (kind === "user") recordUserConversationTurn({ taskId, sessionId: sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at: turnStart });
   else if (resuming) recordSystemTurn(lead, text, turnStart);
   void beginTurn(lead, turnStart);
-  void consume(lead).catch((err) => console.error(`[harness] team consume(${taskId}) failed:`, err));
+  void consume(lead).catch((err) => console.error(`[ash] team consume(${taskId}) failed:`, err));
   return lead;
 }
 

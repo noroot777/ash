@@ -20,7 +20,7 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
     ? `\n\n本轮审查的是已经验收后的合并快照，不是原任务工作区：\n` +
       `- 目标分支：${run.targetBranch}\n- 准确区间：${run.targetBaseCommit}..${run.targetCommit}\n` +
       "- 当前目录是 merge commit 上的 detached 临时 worktree；只审查和验证，不要提交、推送、改写目标分支或重新打开原任务。\n" +
-      "- 若未通过，只报告问题；Harness 会让用户另建独立修复任务。"
+      "- 若未通过，只报告问题；Ash 会让用户另建独立修复任务。"
     : "";
   const reviewLocation = acceptedMerge ? "当前 detached 临时 worktree" : repoPath;
   return `【自由工作流 · 第 ${round} 轮审查】\n` +
@@ -38,7 +38,7 @@ export function freeRepairPrompt(taskId: string, run: ReviewRunRow): string {
   const dir = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
   return `【自由工作流审查未通过 · 第 ${run.currentRound} 轮】\n` +
     `请先完整读取 [report.md](${freeReviewReportPath(taskId, run.id, run.currentRound)})，再按报告修复，不要扩大原任务边界。` +
-    `修复完成并验证后调用 complete_task(taskId="${taskId}")；harness 随后会自动派同一位审查者复审。\n\n` +
+    `修复完成并验证后调用 complete_task(taskId="${taskId}")；ash 随后会自动派同一位审查者复审。\n\n` +
     `证据目录：${dir}`;
 }
 

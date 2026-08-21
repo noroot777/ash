@@ -38,7 +38,7 @@ function extraPaths(): string[] {
   const { APPDATA, LOCALAPPDATA, ProgramFiles, ChocolateyInstall } = process.env;
   // `Program Files` 在 Windows 上不止一个:ARM64 机器上原生 ARM 程序在 `Program Files`、
   // x64 程序在 `Program Files (x86)`、32 位 ARM 在 `Program Files (Arm)`,而 `%ProgramFiles%`
-  // 只指向**与当前进程架构相同**的那一个 —— 一个 x64 版 node 起的 harness,看不见装在
+  // 只指向**与当前进程架构相同**的那一个 —— 一个 x64 版 node 起的 ash,看不见装在
   // 原生 ARM 目录里的 node/CLI。三个都扫,不存在的目录 resolveBin 自会跳过。
   const programFiles = [ProgramFiles, process.env["ProgramFiles(x86)"], process.env["ProgramFiles(Arm)"]];
   return [
@@ -159,9 +159,9 @@ export function resolveBin(bin: string): string | null {
 // 把那条脚本路径挖出来,就能 `node <script>` 直接跑,cmd.exe 全程不参与 ——
 // 没有二次解析,也就没有转义风险。挖不出来才退到 cmd.exe(见 win-command.ts)。
 //
-// 用的是**本 harness 进程的 node**(process.execPath),不是垫片里那个 `%_prog%`。
+// 用的是**本 ash 进程的 node**(process.execPath),不是垫片里那个 `%_prog%`。
 // 绝大多数情况下两者是同一个(Node 官方安装器把 node.exe 和 npm 全局 bin 放在同
-// 一个目录);不同的话,CLI 会跑在 harness 的 node 版本上 —— 记在这里,真出现
+// 一个目录);不同的话,CLI 会跑在 ash 的 node 版本上 —— 记在这里,真出现
 // 版本不兼容时先查这一条。
 const SHIM_SCRIPT = /"%~?dp0%?\\{1,2}([^"]+\.(?:js|mjs|cjs))"/i;
 const shimCache = new Map<string, string | null>();

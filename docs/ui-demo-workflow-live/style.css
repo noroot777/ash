@@ -1,6 +1,6 @@
-/* 执行态：和 ui-demo-workflow-inline 同一套 web-next 令牌，
+/* 执行态：和 ui-demo-workflow-inline 同一套 web 令牌，
    因为这两张页面在产品里是前后脚出现的（建完任务 → 看它跑）。
-   Inspector 那一栏（.insp 起）的尺寸、字号、分节线全部照 web-next
+   Inspector 那一栏（.insp 起）的尺寸、字号、分节线全部照 web
    的 inspector.css / task-detail.css 抄：38px tab bar、340px 宽、
    section 13/14 内边距、h2 11.5px、行动按钮 31px。 */
 *{margin:0;padding:0;box-sizing:border-box}

@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
-import type { AgentEvent, TokenUsage } from "@harness/shared";
-import { cliConfigOverrideEnvPatch } from "@harness/shared/cli-overrides";
+import type { AgentEvent, TokenUsage } from "@ash/shared";
+import { cliConfigOverrideEnvPatch } from "@ash/shared/cli-overrides";
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { openCodexResident } from "./codex-resident.js";
@@ -16,8 +16,8 @@ import { persistMarkdownImages, persistToolResultImages } from "../agent-attachm
 // 供应商的 key 走环境变量,不进命令行 —— `-c` 参数会原样进 commandLine,而后者存进
 // sessions.command_line 并在 UI 展示。codex 的 model_providers 正好支持 env_key
 // 指向一个环境变量名,于是 TOML 里只出现变量名,真 key 只活在进程环境里。
-const RELAY_ENV_KEY = "HARNESS_RELAY_KEY";
-const RELAY_PROVIDER_ID = "harness_relay";
+const RELAY_ENV_KEY = "ASH_RELAY_KEY";
+const RELAY_PROVIDER_ID = "ash_relay";
 
 // Drives the real `codex` CLI in non-interactive JSON mode (prompt via stdin, `-`).
 //   first:  codex exec --json --skip-git-repo-check -C <cwd>
@@ -53,7 +53,7 @@ export class CodexExecutor implements AgentExecutor {
 
   resumeCommand(cwd: string, sessionId: string): string {
     // Human-friendly copy command: interactive resume (shows the session + lets
-    // you continue). The harness's own headless resume uses `exec resume` in run().
+    // you continue). The ash's own headless resume uses `exec resume` in run().
     return resumeFor(cwd, resumeInner.codex(sessionId), this.resumeEnvHint ?? "");
   }
 
@@ -77,7 +77,7 @@ export class CodexExecutor implements AgentExecutor {
       "-c", `${p}.base_url="${baseUrl}"`,
       // codex 0.14x 起废弃了 wire_api="chat"(启动直接报错退出),只认 Responses API。
       // 供应商只有 /chat/completions 时，protocolConversionEnabled 会把 base_url 指到
-      // harness 内置转换端点，再由它转换请求、流式事件与最终响应。
+      // ash 内置转换端点，再由它转换请求、流式事件与最终响应。
       "-c", `${p}.wire_api="responses"`,
       "-c", `${p}.env_key="${RELAY_ENV_KEY}"`,
     ];

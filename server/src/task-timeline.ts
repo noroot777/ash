@@ -1,6 +1,6 @@
 import { createWriteStream, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { AgentType, SessionRole } from "@harness/shared";
+import type { AgentType, SessionRole } from "@ash/shared";
 import { desc, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -57,7 +57,7 @@ export async function appendTaskTimeline(
     });
     return true;
   } catch (error) {
-    console.warn(`[harness] failed to append task timeline for ${taskId}:`, error);
+    console.warn(`[ash] failed to append task timeline for ${taskId}:`, error);
     return false;
   }
 }

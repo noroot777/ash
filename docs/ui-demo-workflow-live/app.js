@@ -163,7 +163,7 @@
     if (got("run", "done") || got("verify", "done") || got("verify", "bad")) {
       h.push('<div class="msg"><span class="mt">codex@cpa · 14:05</span>' +
         "改完了，新增 <b>SettingsWorkflow.tsx</b>，接上 <b>useWorkflowDraft</b>。" +
-        "<pre>web-next/src/settings/SettingsWorkflow.tsx  +214\nweb-next/src/lib/workflow.ts               +86</pre></div>");
+        "<pre>web/src/settings/SettingsWorkflow.tsx  +214\nweb/src/lib/workflow.ts               +86</pre></div>");
     }
     if (got("verify", "bad")) {
       h.push('<div class="msg"><span class="mt">codex@review · 14:09</span>' +
@@ -229,7 +229,7 @@
     el.badge.textContent = w.text;
     var doneN = steps.filter(function (s) { return f.map[s.id].s === "done"; }).length;
     el.vtitle.textContent = "走到哪了 · " + doneN + "/" + steps.length;
-    el.ifrom.innerHTML = "前端真实验收 <em>· 跟随本项目 harness</em>";
+    el.ifrom.innerHTML = "前端真实验收 <em>· 跟随本项目 ash</em>";
     el.clock.textContent = hhmm(f.over ? ev.tot : (f.last ? f.last.at : 0));
     el.scrub.value = String(t);
     el.play.textContent = timer ? "❚❚ 停" : t >= ev.length ? "↻ 再放一遍" : "▶ 放一遍";

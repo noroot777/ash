@@ -4,7 +4,7 @@
 // 同时非正文事件绝不会混进 assistant Markdown。
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import type { AgentEvent, AgentType } from "@harness/shared";
+import type { AgentEvent, AgentType } from "@ash/shared";
 import { RUNS_DIR, RUNS_FALLBACK_DIR } from "./paths.js";
 
 type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
@@ -62,7 +62,7 @@ export function appendSessionTrace(
   } catch (error) {
     // Trace persistence is diagnostic UI state. A disk failure must not alter the
     // executor's outcome, but it must remain visible to operators.
-    console.warn(`[harness] failed to persist session trace ${sessionId}:`, error);
+    console.warn(`[ash] failed to persist session trace ${sessionId}:`, error);
   }
 }
 

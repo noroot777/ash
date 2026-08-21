@@ -5,17 +5,17 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { eq } from "drizzle-orm";
 
-const root = mkdtempSync(join(tmpdir(), "harness-task-workspace-"));
+const root = mkdtempSync(join(tmpdir(), "ash-task-workspace-"));
 const repo = join(root, "repo");
-process.env.HARNESS_DB = join(root, "harness.db");
+process.env.ASH_DB = join(root, "ash.db");
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 
 try {
   execFileSync("git", ["init", "-b", "main", repo]);
-  git(repo, "config", "user.name", "Harness Test");
-  git(repo, "config", "user.email", "harness@example.test");
+  git(repo, "config", "user.name", "Ash Test");
+  git(repo, "config", "user.email", "ash@example.test");
   writeFileSync(join(repo, "seed.txt"), "seed\n");
   git(repo, "add", "seed.txt");
   git(repo, "commit", "-m", "seed");
