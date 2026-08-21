@@ -31,6 +31,7 @@
     "test:repo-lock": "tsx scripts/test-repo-lock.ts",
     "test:project-git": "tsx scripts/test-project-git.ts",
     "test:project-clone": "tsx scripts/test-project-clone.ts",
+    "test:project-dir": "tsx scripts/test-project-dir.ts",
     "test:scm": "tsx scripts/test-scm-workspace.ts",
     "test:scm-guard": "tsx scripts/test-scm-guard.ts",
     "test:scm-nested": "tsx scripts/test-scm-nested.ts",

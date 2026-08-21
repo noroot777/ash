@@ -9,9 +9,10 @@ import { api } from "../lib/api.ts";
 
 // 新建项目的两条路。它们的差别不只是「多几个输入框」，而是**目录归谁管**：
 //
-//  · 本地已有目录 —— 目录是用户的，ash 只往库里记一行路径。目录不存在就是填错了。
-//  · 从 Git 检出 —— 目录由 ash 建（连同缺失的上级目录）。这里「目录不存在」反而是正常
-//    情况，「已经有东西」才是错。
+//  · 本地目录 —— 目录归用户。ash 只往库里记一行路径；填的目录还不存在时才顺手建出来
+//    （空目录一个，不放任何东西进去）。
+//  · 从 Git 检出 —— 目录由 ash 建（连同缺失的上级目录）并往里放一整个仓库。这里「目录
+//    不存在」是正常情况，「已经有东西」才是错。
 //
 // 所以两条路的路径提示、按钮门禁、失败后果全是相反的，不能压成一个表单加一个复选框。
 //
@@ -21,7 +22,7 @@ import { api } from "../lib/api.ts";
 type Mode = "local" | "clone";
 
 const MODES: { key: Mode; label: string; hint: string }[] = [
-  { key: "local", label: "本地已有目录", hint: "目录已经在这台机器上（不管是不是 Git 仓库）" },
+  { key: "local", label: "本地目录", hint: "指向这台机器上的目录；不存在的话会建出来" },
   { key: "clone", label: "从 Git 检出", hint: "输入仓库地址，ash 克隆到你指定的位置" },
 ];
 
@@ -52,9 +53,15 @@ export function CreateProjectDialog({ projects, onClose, onCreated, notify }: {
 
   const target = joinHostPath(host, parentDir, folder);
   const probePath = mode === "local" ? repoPath : target;
+  const purpose = mode === "local" ? "existing-or-new" : "clone-target";
   const pathHealth = useDebouncedPathHealth(probePath);
-  const verdict = pathHealthState(pathHealth, probePath, mode === "local" ? "existing" : "clone-target");
+  const verdict = pathHealthState(pathHealth, probePath, purpose);
   const urlProblem = mode === "clone" ? repoUrlError(url) : null;
+
+  // 只在**确知**目录不存在时才请服务端建 —— 探测没回来/失败时按老行为走（照记不误，不动
+  // 磁盘）。这样按钮上写的和真正会发生的事永远是同一件：写着「创建目录」就一定建，
+  // 写着「创建项目」就一定不建。
+  const willCreateDir = mode === "local" && pathHealth.health?.exists === false;
 
   const takenBy = useMemo(() => {
     const value = probePath.trim().replace(/[\\/]+$/, "");
@@ -96,7 +103,7 @@ export function CreateProjectDialog({ projects, onClose, onCreated, notify }: {
     setError(null);
     try {
       const created = mode === "local"
-        ? await api.createProject(name.trim(), repoPath.trim())
+        ? await api.createProject(name.trim(), repoPath.trim(), willCreateDir)
         : await api.cloneProject({ url: url.trim(), targetPath: target, branch: branch.trim(), name: name.trim() });
       onCreated(created);
     } catch (e) {
@@ -111,7 +118,7 @@ export function CreateProjectDialog({ projects, onClose, onCreated, notify }: {
   return <ConfirmDialog
     title="新建项目"
     message="项目目录会成为任务的默认运行位置。"
-    confirmLabel={mode === "local" ? "创建项目" : "克隆并创建"}
+    confirmLabel={mode === "clone" ? "克隆并创建" : willCreateDir ? "创建目录并创建项目" : "创建项目"}
     busy={busy}
     confirmDisabled={!canSubmit || pathHealth.checking}
     onClose={onClose}
@@ -189,7 +196,7 @@ export function CreateProjectDialog({ projects, onClose, onCreated, notify }: {
         : <PathHealthStatus
           path={probePath}
           state={pathHealth}
-          purpose={mode === "local" ? "existing" : "clone-target"}
+          purpose={purpose}
           className="create-project-health"
         />}
 

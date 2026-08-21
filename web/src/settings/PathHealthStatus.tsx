@@ -9,13 +9,15 @@ export type PathHealthState = {
 };
 
 /**
- * 同一条路径，两种问法：
- *  · `existing` —— 「这个已经存在的目录能不能当项目跑」。目录不存在是错，因为登记项目
- *    这条路不会替你创建它。
+ * 同一条路径，三种问法：
+ *  · `existing` —— 「这个已经存在的目录能不能当项目跑」。目录不存在是错，因为改项目路径
+ *    这条路（PATCH /projects/:id）不会替你创建它。
+ *  · `existing-or-new` —— 新建项目的本地目录。**不存在不是错**，提交时会连同缺失的上级
+ *    一起建出来；除此之外的判定跟 `existing` 一模一样，所以直接复用它。
  *  · `clone-target` —— 「能不能往这里克隆」。**不存在才是最理想的情况**，反过来「已经是
  *    个仓库」才是错。判定完全相反，所以不能共用一句文案。
  */
-export type PathHealthPurpose = "existing" | "clone-target";
+export type PathHealthPurpose = "existing" | "existing-or-new" | "clone-target";
 
 export type PathHealthVerdict = {
   text: string;
@@ -42,7 +44,7 @@ function existingVerdict(health: ProjectHealth): PathHealthVerdict {
 
 function cloneTargetVerdict(health: ProjectHealth): PathHealthVerdict {
   if (!health.exists) return { text: "目录还不存在，克隆时会连同上级目录一起建出来", tone: "good", blocked: false };
-  if (health.isRepo) return { text: "这里已经是一个 Git 仓库了；换个目录名，或改用「本地已有目录」", tone: "bad", blocked: true };
+  if (health.isRepo) return { text: "这里已经是一个 Git 仓库了；换个目录名，或改用「本地目录」", tone: "bad", blocked: true };
   // `empty` 只有完整检查才带（/projects/check 走的正是它）；万一拿不到就别替服务端下
   // 结论，说清楚「由它判」而不是编一个可能相反的答案。
   if (health.empty === false) return { text: "目录已存在且不是空的；只有空目录才能克隆进去", tone: "bad", blocked: true };
@@ -55,7 +57,13 @@ export function pathHealthVerdict(
   purpose: PathHealthPurpose = "existing",
 ): PathHealthVerdict {
   if (!health) return { text: "正在检查目录…", tone: "", blocked: false };
-  return purpose === "clone-target" ? cloneTargetVerdict(health) : existingVerdict(health);
+  if (purpose === "clone-target") return cloneTargetVerdict(health);
+  // 目录会被建出来这件事，用户按下按钮之前就得知道 —— 按钮上那句「创建目录并创建项目」
+  // 和这一句说的是同一件事，两处一起改。
+  if (purpose === "existing-or-new" && !health.exists) {
+    return { text: "目录还不存在，创建项目时会连同上级目录一起建出来", tone: "", blocked: false };
+  }
+  return existingVerdict(health);
 }
 
 export function useDebouncedPathHealth(path: string, delay = 350): PathHealthState {

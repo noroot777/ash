@@ -9,11 +9,12 @@ import { db } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import { id, now } from "./util.js";
 import { expandHome, gitError, isEmptyDir, projectHealthLight, repoKey, tidyRepoPath } from "./git.js";
+import { fail } from "./project-dir.js";
 
-// 「从 Git 检出一个新项目」。这是**唯一**会替用户在磁盘上创建目录的项目入口 —— 别的
-// 路径（POST /projects、/projects/resolve）都只是往库里记一行路径字符串，目录不存在
-// 也照记不误（前端那句「Ash 不会自动创建它」说的就是它们）。所以这条路要自己把
-// 「建目录」这件事的风险全担下来，四条决定：
+// 「从 Git 检出一个新项目」。项目那侧只有两条路会替用户动磁盘：这一条，和 POST /projects
+// 显式带 `createDir` 时那一条（它只是 mkdir，见 project-dir.ts）。剩下的入口
+// （/projects/resolve、PATCH）都只往库里记一行路径字符串，目录不存在也照记不误。
+// 这条路最重，四条决定：
 //
 // ① **绝不往非空目录里克隆。** git 自己也拒绝，但它的报错是英文的一行，而这里能在
 //    动手前就分清「路径已被占」和「已经有项目登记在这」两种情况，给中文原因。
@@ -41,11 +42,6 @@ function cloneEnv(): NodeJS.ProcessEnv {
     GIT_TERMINAL_PROMPT: "0",
     GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND || "ssh -o BatchMode=yes",
   };
-}
-
-/** 带 HTTP 状态码的错误，路由层照着回。 */
-function fail(message: string, status = 400): Error & { status: number } {
-  return Object.assign(new Error(message), { status });
 }
 
 /**
