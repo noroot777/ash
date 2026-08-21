@@ -119,6 +119,26 @@ export function normalizePeerUrl(raw: string): string {
   return trimmed.replace(/\/api$/, "");
 }
 
+export async function handoffRemoteUrl(taskId: string): Promise<string> {
+  const row = (await db.select({ handoff: tasks.handoff }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!row) throw new HandoffError("任务不存在", 404);
+  let marker: TaskHandoff | null = null;
+  try { marker = row.handoff ? JSON.parse(row.handoff) as TaskHandoff : null; } catch { marker = null; }
+  if (marker?.direction !== "out" || !marker.peerUrl || marker.pending) {
+    throw new HandoffError("任务没有已确认的对端接力记录", 409);
+  }
+  const targetUrl = normalizePeerUrl(marker.peerUrl);
+  let projectId = marker.targetProjectId;
+  if (!projectId) {
+    const peerTask = await fetchPeer<{ projectId?: string }>(
+      `${targetUrl}/api/tasks/${encodeURIComponent(marker.peerTaskId)}`,
+    );
+    if (!peerTask.projectId) throw new HandoffError("对端任务缺少项目信息", 502, true);
+    projectId = peerTask.projectId;
+  }
+  return `${targetUrl}/?${new URLSearchParams({ project: projectId, task: marker.peerTaskId })}`;
+}
+
 // ── 导出侧 ──────────────────────────────────────────────────────────────────
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -608,6 +628,7 @@ export async function exportHandoff(
       const marker: TaskHandoff = {
         direction: "out",
         transferId,
+        targetProjectId: targetProject.id,
         peerUrl: targetUrl,
         peerName: opts.targetName ?? ping.host,
         peerTaskId: result.taskId,
@@ -646,7 +667,7 @@ export async function exportHandoff(
       return {
         ok: true,
         remoteTaskId: result.taskId,
-        remoteUrl: `${targetUrl}/tasks/${result.taskId}`,
+        remoteUrl: `${targetUrl}/?${new URLSearchParams({ project: targetProject.id, task: result.taskId })}`,
         sessionsMigrated: found.size,
         git: gitState ? "bundle" : "none",
         // 以对端实际应答为准:重试撞上幂等分支时对端并没有续跑,不能按本次请求参数谎报。

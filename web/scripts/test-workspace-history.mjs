@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import {
+  handoffTaskHref,
   normalizedWorkspaceUrl,
   pushTaskHistoryEntry,
+  remoteTaskUrl,
   selectedTaskProjectId,
   taskSelectionUrl,
 } from "../src/workspace/workspaceHistory.ts";
@@ -32,6 +34,19 @@ assert.equal(
   "a task-only deep link must switch the workspace to that task's project",
 );
 assert.equal(selectedTaskProjectId([], "missing"), null);
+assert.equal(
+  remoteTaskUrl("http://peer:4317/", "task / 四", "project & one"),
+  "http://peer:4317/?project=project+%26+one&task=task+%2F+%E5%9B%9B",
+);
+assert.equal(remoteTaskUrl("http://peer:4317", "task-2"), "http://peer:4317/?task=task-2");
+assert.equal(
+  handoffTaskHref("local-task", { peerUrl: "http://peer:4317", peerTaskId: "remote-task", targetProjectId: null }),
+  "/api/tasks/local-task/handoff/open",
+);
+assert.equal(
+  handoffTaskHref("local-task", { peerUrl: "http://peer:4317", peerTaskId: "remote-task", targetProjectId: "remote-project" }),
+  "http://peer:4317/?project=remote-project&task=remote-task",
+);
 
 const entries = ["/?project=project-1"];
 const location = { pathname: "/", search: "?project=project-1" };

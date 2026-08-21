@@ -10,6 +10,7 @@ import type {
 import { ArrowSquareOut, PaperPlaneTilt, SpinnerGap, Warning } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
+import { handoffTaskHref } from "../workspace/workspaceHistory.ts";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 
 // 任务接力对话框:选目标机 → 预检(探测对端、匹配项目、盘点可搬运的东西)→ 执行。
@@ -294,8 +295,8 @@ export function HandoffBanner({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const out = handoff.direction === "out";
-  const link = out && handoff.peerUrl && !handoff.pending
-    ? `${handoff.peerUrl.replace(/\/+$/, "")}/tasks/${encodeURIComponent(handoff.peerTaskId)}`
+  const link = out && !handoff.pending
+    ? handoffTaskHref(taskId, handoff)
     : null;
   const peer = handoff.peerName ? `「${handoff.peerName}」` : "另一台机器";
   const clear = async () => {

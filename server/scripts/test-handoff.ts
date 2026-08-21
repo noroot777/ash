@@ -65,7 +65,7 @@ try {
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { projects, scheduledMessages, schedules, sessions, tasks } = await import("../src/db/schema.js");
   const { prepareWorktree, worktreeBranchName, worktreePathFor } = await import("../src/git.js");
-  const { claudeProjectSlug, exportHandoff, preflightHandoff } = await import("../src/handoff.js");
+  const { claudeProjectSlug, exportHandoff, handoffRemoteUrl, preflightHandoff } = await import("../src/handoff.js");
   const { jsonEscaped } = await import("../src/handoff-uploads.js");
   const { HandoffError } = await import("../src/handoff-types.js");
   const { handoffBlockReason } = await import("../src/handoff-guard.js");
@@ -266,6 +266,7 @@ try {
   });
   assert.equal(result.ok, true);
   assert.equal(result.remoteTaskId, taskId);
+  assert.equal(result.remoteUrl, `${flakyUrl}/?project=${peerProject.id}&task=${taskId}`);
   assert.equal(result.sessionsMigrated, 1);
   assert.equal(result.git, "bundle");
   assert.equal(result.autoResume, false);
@@ -275,13 +276,18 @@ try {
   assert.match(git(ws.path, "log", "-1", "--format=%s"), /chore\(handoff\)/);
   const srcTask = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
   const marker = JSON.parse(srcTask.handoff!) as {
-    direction: string; peerTaskId: string; peerName: string; pending?: boolean; transferId?: string;
+    direction: string; peerTaskId: string; peerName: string; pending?: boolean; transferId?: string; targetProjectId?: string;
   };
   assert.equal(marker.direction, "out");
   assert.ok(!marker.pending, "确认送达后 pending 必须改写成确认态");
   assert.equal(marker.transferId, pendingMarker.transferId, "重试必须沿用同一个 transferId(幂等身份)");
   assert.equal(marker.peerTaskId, taskId);
   assert.equal(marker.peerName, "测试机");
+  assert.equal(marker.targetProjectId, peerProject.id);
+  const legacyMarker = { ...marker, peerUrl, targetProjectId: undefined };
+  await db.update(tasks).set({ handoff: JSON.stringify(legacyMarker) }).where(eq(tasks.id, taskId));
+  assert.equal(await handoffRemoteUrl(taskId), `${peerUrl}/?project=${peerProject.id}&task=${taskId}`);
+  await db.update(tasks).set({ handoff: JSON.stringify(marker) }).where(eq(tasks.id, taskId));
   assert.match(
     readFileSync(sessionTranscriptPath(taskId, "handoffsess2"), "utf8"),
     /任务已接力到 测试机/,

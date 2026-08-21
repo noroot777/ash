@@ -12,7 +12,7 @@ import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { projects, sessions, tasks } from "./db/schema.js";
 import { projectHealthLight } from "./git.js";
-import { exportHandoff, preflightHandoff, repoRefTips } from "./handoff.js";
+import { exportHandoff, handoffRemoteUrl, preflightHandoff, repoRefTips } from "./handoff.js";
 import { HandoffError, type HandoffPingResponse } from "./handoff-types.js";
 import { importHandoff } from "./handoff-import.js";
 import { publishTaskUpdated } from "./task-store.js";
@@ -91,6 +91,16 @@ export function mountHandoffRoutes(api: Hono): void {
     if (!body.targetUrl) return c.json({ error: "缺 targetUrl" }, 400);
     try {
       return c.json(await preflightHandoff(c.req.param("id"), body.targetUrl));
+    } catch (e) {
+      return fail(c, e);
+    }
+  });
+
+  // 历史确认态标记没有 targetProjectId:服务端补查对端任务后跳到完整查询串,
+  // 避免横幅只能拼出缺少项目定位信息的链接。
+  api.get("/tasks/:id/handoff/open", async (c) => {
+    try {
+      return c.redirect(await handoffRemoteUrl(c.req.param("id")));
     } catch (e) {
       return fail(c, e);
     }

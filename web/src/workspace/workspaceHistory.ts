@@ -1,4 +1,4 @@
-import type { Task } from "@ash/shared";
+import type { Task, TaskHandoff } from "@ash/shared";
 
 type TaskSelection = Pick<Task, "id" | "projectId">;
 
@@ -36,6 +36,21 @@ export function selectedTaskProjectId(
   taskId: string | null,
 ): string | null {
   return taskId ? tasks.find((task) => task.id === taskId)?.projectId ?? null : null;
+}
+
+export function remoteTaskUrl(peerUrl: string, taskId: string, projectId?: string | null): string {
+  const params = new URLSearchParams();
+  if (projectId) params.set("project", projectId);
+  params.set("task", taskId);
+  return `${peerUrl.replace(/\/+$/, "")}/?${params.toString()}`;
+}
+
+export function handoffTaskHref(taskId: string, handoff: Pick<TaskHandoff,
+  "peerUrl" | "peerTaskId" | "targetProjectId">): string | null {
+  if (!handoff.peerUrl) return null;
+  return handoff.targetProjectId
+    ? remoteTaskUrl(handoff.peerUrl, handoff.peerTaskId, handoff.targetProjectId)
+    : `/api/tasks/${encodeURIComponent(taskId)}/handoff/open`;
 }
 
 export function pushTaskHistoryEntry(
