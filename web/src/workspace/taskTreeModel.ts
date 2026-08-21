@@ -1,13 +1,12 @@
 import type { Task } from "@ash/shared";
-import { needsAttention } from "../lib/taskAttention.ts";
 
-// 排序的第一原则：**更新时间倒序**。别的规矩只能在它内部做 ——
+// 排序的第一原则：**更新时间倒序**，而且只有这一条。
 // 从前这里把列表按状态切成八大块（运行中 / 暂停中 / … / 失败 / 已取消），
 // 时间序只在块内生效，于是刚炸的任务被扔到列表最末，找它得一路滚到底。
-// 现在只留一档提升：「需要你处理」（失败 / 等答复 / 待验收 / 没过验证）整体上浮，
-// 且这一档**内部照样按更新时间**。置顶（pinnedAt）仍是用户手动的最高档。
+// 现在不按状态提升任何一档 —— 失败、待验收这些靠行首圆点的颜色认，不靠位置。
+// 置顶（pinnedAt）是唯一的例外，那是用户手动摁下去的。
 
-export type TaskTreeSectionKey = "pinned" | "attention" | "rest";
+export type TaskTreeSectionKey = "pinned" | "rest";
 
 export type TaskTreeSection = {
   key: TaskTreeSectionKey;
@@ -78,19 +77,16 @@ export function advanceHiddenReveal(lastKey: string | null, revealKey: string | 
 export function buildTaskTree(tasks: Task[], options: TaskTreeOptions = {}): TaskTreeSection[] {
   const topLevel = tasks.filter((task) => task.parentId === null && !task.archived);
   const pinned = sortPinned(topLevel.filter((task) => task.pinnedAt != null));
-  const loose = topLevel.filter((task) => task.pinnedAt == null);
-  const attention = sortByUpdated(loose.filter((task) => needsAttention(task)));
-  const rest = sortByUpdated(loose.filter((task) => !needsAttention(task)));
+  const rest = sortByUpdated(topLevel.filter((task) => task.pinnedAt == null));
 
-  // 不分节时（其他项目那种折叠列表）只出一节，顺序仍是 置顶 → 需要你处理 → 其余。
+  // 不分节时（其他项目那种折叠列表）只出一节，置顶仍排在最前。
   if (!options.unifiedPinned) {
-    const all = [...pinned, ...attention, ...rest];
+    const all = [...pinned, ...rest];
     return all.length ? [{ key: "rest", label: "任务", count: all.length, tasks: all }] : [];
   }
 
   return ([
     { key: "pinned", label: "置顶", tasks: pinned },
-    { key: "attention", label: "需要你处理", tasks: attention },
     { key: "rest", label: "任务", tasks: rest },
   ] as const)
     .filter((section) => section.tasks.length > 0)

@@ -1,7 +1,8 @@
 import type { Task } from "@ash/shared";
 
-// 「轮到谁动」的判据集中在这里：任务树的排序、侧边栏筛选、状态点三处读的是同一份。
+// 「轮到谁动」的判据集中在这里：侧边栏筛选的分堆和行首圆点读的是同一份。
 // 放在 lib 而不是 workspace，是因为 lib/useTaskReadState 也要用它 —— 反过来引会成环。
+// 注意任务树的**排序**不看这里：那边只认更新时间（见 workspace/taskTreeModel.ts）。
 
 export type SpreadBucket = "todo" | "run" | "wait" | "done" | "accepted";
 
@@ -22,18 +23,6 @@ export function spreadBucket(task: Task): SpreadBucket {
   if (task.stage === "accepted" || task.stage === "merged") return "accepted";
   if (task.status === "done" || task.status === "canceled") return "done";
   return "wait";
-}
-
-// 「现在轮到我动手」= 任务树里要整档顶上去的那批：失败、被问住、审查打回。
-// 失败尤其不能沉底：它是最需要人立刻看见的一档，从前被按状态分组扔到列表最末。
-//
-// 待验收（awaitsAcceptance）刻意**不**在这一档里，虽然它同属侧边栏筛选的 todo 桶：
-// 它已经有自己的圆点标记且永不折叠，够看见了；再整档上浮，几周前攒下的一堆待盖章
-// 任务就会霸占列表顶部，把今天真正在动的挤到屏幕外（本机 harness 项目实测 33 条）。
-export function needsAttention(task: Task): boolean {
-  if (task.question) return true;
-  if (task.status === "failed") return true;
-  return task.stage === "verify_failed";
 }
 
 // 盖过章了吗。merged 也算 —— 合并即走完了验收链路（accept_task 的终点）。

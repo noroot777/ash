@@ -45,7 +45,7 @@ assert.deepEqual(orderedTopLevelTasks(mixed, { unifiedPinned: true }).map((row) 
   "collab-normal",
 ]);
 
-// 不分节时（其他项目的折叠列表）只出一节，顺序仍是 置顶 → 需要你处理 → 其余。
+// 不分节时（其他项目的折叠列表）只出一节，顺序仍是 置顶 → 更新时间。
 const flat = buildTaskTree(mixed);
 assert.deepEqual(flat.map((section) => section.key), ["rest"]);
 assert.deepEqual(flat[0].tasks.map((row) => row.id), [
@@ -61,8 +61,7 @@ const withoutPinned = buildTaskTree([
 ], { unifiedPinned: true });
 assert.deepEqual(withoutPinned.map((section) => section.key), ["rest"]);
 
-// —— 失败不许沉底：它属于「需要你处理」，整档上浮到普通任务之前，档内仍按更新时间。
-// 待验收不进这一档（它只拿圆点标记 + 豁免折叠），否则几周前的待盖章任务会霸占顶部。
+// —— 状态不再把列表切开，也不再提升任何一档：失败、待验收、在跑的全按更新时间混排。
 const withFailures = buildTaskTree([
   task("fresh-running", "single", { status: "running", updatedAt: "2026-08-20T10:00:00.000Z" }),
   task("failed-old", "single", { status: "failed", updatedAt: "2026-08-11T09:00:00.000Z" }),
@@ -72,16 +71,23 @@ const withFailures = buildTaskTree([
   task("await-accept", "team", { status: "idle", stage: "awaiting_acceptance", updatedAt: "2026-08-17T09:00:00.000Z" }),
   task("done-old", "single", { updatedAt: "2026-08-18T09:00:00.000Z" }),
 ], { unifiedPinned: true });
-assert.deepEqual(withFailures.map((section) => section.key), ["attention", "rest"]);
-assert.deepEqual(withFailures[0].tasks.map((row) => row.id), ["failed-new", "verify-failed", "asking", "failed-old"]);
-assert.deepEqual(withFailures[1].tasks.map((row) => row.id), ["fresh-running", "done-old", "await-accept"]);
+assert.deepEqual(withFailures.map((section) => section.key), ["rest"]);
+assert.deepEqual(withFailures[0].tasks.map((row) => row.id), [
+  "fresh-running",
+  "failed-new",
+  "done-old",
+  "await-accept",
+  "verify-failed",
+  "asking",
+  "failed-old",
+]);
 
-// 置顶仍压在「需要你处理」之上 —— 手动记号高于自动判据。
-const pinnedOverAttention = orderedTopLevelTasks([
+// 置顶是唯一压得住时间序的记号 —— 那是用户手动摁的。
+const pinnedOverRest = orderedTopLevelTasks([
   task("failed", "single", { status: "failed", updatedAt: "2026-08-20T09:00:00.000Z" }),
   task("pinned-old", "single", { pinnedAt: 5, updatedAt: "2026-08-01T09:00:00.000Z" }),
 ], { unifiedPinned: true }).map((row) => row.id);
-assert.deepEqual(pinnedOverAttention, ["pinned-old", "failed"]);
+assert.deepEqual(pinnedOverRest, ["pinned-old", "failed"]);
 
 const byLastUpdate = buildTaskTree([
   task("created-later", "single", {
