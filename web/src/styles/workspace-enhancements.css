@@ -2,60 +2,11 @@
   height: 36px;
 }
 
-.workspace-project-trigger-copy {
-  display: grid;
-  min-width: 0;
-  flex: 1;
-  gap: 1px;
-  line-height: 1.05;
-}
-
-.workspace-project-trigger-copy .workspace-project-trigger-name {
-  width: 100%;
-}
-
 .workspace-project-menu {
   top: 44px;
 }
 
-.workspace-git-context {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 3px;
-  overflow: hidden;
-  color: var(--faint);
-  font-size: 8.5px;
-  font-weight: 500;
-}
-
-.workspace-git-context > svg {
-  flex: 0 0 auto;
-}
-
-.workspace-git-context > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workspace-git-context > i {
-  width: 5px;
-  height: 5px;
-  flex: 0 0 5px;
-  border-radius: 50%;
-  background: var(--amber);
-}
-
-.workspace-git-context > em {
-  flex: 0 0 auto;
-  border-radius: 3px;
-  background: var(--raised);
-  padding: 1px 3px;
-  font-size: 7.5px;
-  font-style: normal;
-  letter-spacing: 0.01em;
-}
+/* 分支胶囊已经从项目名下面搬到工具栏那一行，成了一颗真按钮，样式在 project-git.css。 */
 
 .workspace-sidebar-resize-handle {
   position: absolute;

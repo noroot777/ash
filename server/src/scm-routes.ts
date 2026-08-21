@@ -86,7 +86,8 @@ class ScmBusyError extends ScmOperationError {
 
 const ARCHIVED_REFUSAL = "任务已归档。归档 = 冻结，工作区在归档期间只读；要改先取消归档。";
 const NOT_CREATED_REFUSAL = "这个任务应该在自己的独立工作区里干活，但那个目录还没建出来（任务还没跑过）。"
-  + "现在看到的是项目主仓，只读——在这里写会改到项目主工作区上，那不是这个任务的东西。";
+  + "现在看到的是项目主仓，只读——在这里写会改到项目主工作区上，那不是这个任务的东西。"
+  + "要对主仓切分支 / 拉取 / 推送，用侧栏项目名下面那颗分支胶囊。";
 
 interface ScmRequestBody {
   paths?: unknown;

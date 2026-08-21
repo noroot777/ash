@@ -4,7 +4,6 @@ import { CaretDown, Check, FolderPlus, GearSix, MagnifyingGlass } from "@phospho
 import { useDismissable } from "../lib/useDismissable.ts";
 import { shortenHomePath, useHostInfo } from "../lib/useHostInfo.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
-import { ProjectGitContext } from "./ProjectGitContext.tsx";
 
 export function ProjectSwitcher({
   projects,
@@ -52,10 +51,7 @@ export function ProjectSwitcher({
         onClick={() => setOpen((value) => !value)}
       >
         {current ? <ProjectAvatar project={current} /> : <span className="workspace-project-avatar" />}
-        <span className="workspace-project-trigger-copy">
-          <span className="workspace-project-trigger-name">{current?.name ?? "选择项目"}</span>
-          {current && <ProjectGitContext health={current.health} />}
-        </span>
+        <span className="workspace-project-trigger-name">{current?.name ?? "选择项目"}</span>
         <CaretDown size={11} weight="bold" aria-hidden="true" />
       </button>
 

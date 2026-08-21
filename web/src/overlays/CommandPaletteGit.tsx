@@ -50,6 +50,8 @@ function Section({ title, count, children }: { title: string; count: number; chi
   );
 }
 
+// `/git` 这一屏**只读**（用户 2026-08-21 指定）：切分支 / 更新 / 拉取 / 推送只有一个入口，
+// 就是侧栏项目名底下那颗分支胶囊。命令面板是「查一眼」的地方，不在这儿开第二个操作面。
 export function GitOverviewPanel({
   project,
   overview,

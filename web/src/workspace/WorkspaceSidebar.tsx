@@ -7,6 +7,7 @@ import {
   Stack,
 } from "@phosphor-icons/react";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
+import { ProjectGitContext } from "./ProjectGitContext.tsx";
 import { ProjectSwitcher } from "./ProjectSwitcher.tsx";
 import { SpreadFilterControls } from "./SpreadFilterControls.tsx";
 import { TaskTree } from "./TaskTree.tsx";
@@ -28,6 +29,8 @@ export function WorkspaceSidebar({
   onProject,
   onTask,
   onTaskStarred,
+  onGitChanged,
+  onOpenTerminal,
   notify,
   onToggleCollapsed,
   onSearch,
@@ -49,6 +52,9 @@ export function WorkspaceSidebar({
   onProject: (projectId: string) => void;
   onTask: (task: Task) => void;
   onTaskStarred: (taskId: string, starredAt: number | null) => void;
+  /** 项目主仓的 git 状态被改过了（切分支/拉取/推送），让上层重拉一次 ProjectHealth。 */
+  onGitChanged: () => void;
+  onOpenTerminal: (() => void) | null;
   notify: (message: string) => void;
   onToggleCollapsed: () => void;
   onSearch: () => void;
@@ -82,6 +88,14 @@ export function WorkspaceSidebar({
           onSettings={onSettings}
         />
         <div className="workspace-sidebar-tools" role="toolbar" aria-label="任务工具">
+          {currentProject && (
+            <ProjectGitContext
+              projectId={currentProject.id}
+              health={currentProject.health}
+              onChanged={onGitChanged}
+              onOpenTerminal={onOpenTerminal}
+            />
+          )}
           <SpreadFilterControls spread={spread} tasks={tasks} projectId={currentProject?.id ?? null} />
           <button className="workspace-side-icon" type="button" title={`搜索 ${modifier} K`} aria-label={`搜索 ${modifier} K`} onClick={onSearch}>
             <MagnifyingGlass size={15} aria-hidden="true" />

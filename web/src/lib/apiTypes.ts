@@ -197,6 +197,32 @@ export type ScmBranchInfo = {
   behind: number | null;
 };
 
+export type PullStrategy = "ff-only" | "merge" | "rebase";
+
+/** 项目主仓的一条本地分支。`worktree` 非空 = 正被别的工作区检出着，切不过去。 */
+export type ProjectGitBranchRow = {
+  name: string;
+  current: boolean;
+  upstream: string | null;
+  ahead: number | null;
+  behind: number | null;
+  gone: boolean;
+  worktree: string | null;
+};
+
+/** 项目**主仓**的 git 状态。跟 `ScmStatus` 的区别是尺度：那份说的是某个任务的工作目录。 */
+export type ProjectGitState = {
+  isRepo: boolean;
+  root: string;
+  branch: ScmBranchInfo;
+  dirty: { staged: number; unstaged: number; untracked: number; merge: number };
+  operation: ScmStatus["operation"];
+  remotes: string[];
+  branches: ProjectGitBranchRow[];
+};
+
+export type ProjectGitResult = { ok: true; message: string; state: ProjectGitState };
+
 export type ScmCommit = {
   sha: string;
   shortSha: string;
