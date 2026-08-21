@@ -8,6 +8,11 @@ import {
   spreadVisibleTasks,
 } from "../src/workspace/useSidebarSpread.ts";
 import { orderedTopLevelTasks } from "../src/workspace/taskTreeModel.ts";
+import { inScope, resolveScopeKind, scopeHasTarget } from "../src/workspace/taskScope.ts";
+
+const P1 = { kind: "project", projectId: "p1" };
+const P3 = { kind: "project", projectId: "p3" };
+const ALL = { kind: "all" };
 
 function task(id, extra = {}) {
   return {
@@ -53,7 +58,7 @@ const tasks = [
   task("other-project", { status: "running", projectId: "p2" }),
 ];
 
-const counts = spreadCounts(tasks, "p1");
+const counts = spreadCounts(tasks, P1);
 assert.equal(counts.all, 8);
 assert.equal(counts.starred, 2);
 assert.equal(counts.todo, 3);
@@ -71,7 +76,7 @@ assert.equal(
 
 // 计数和列表是两处代码：这里钉住它们同一个口径 —— 按钮上写 3 条，点开只剩 1 条是最难查的那种 bug。
 const rows = orderedTopLevelTasks(
-  tasks.filter((row) => row.projectId === "p1" && !row.archived),
+  tasks.filter((row) => inScope(row, P1) && !row.archived),
   { unifiedPinned: true },
 );
 assert.equal(rows.length, counts.all);
@@ -92,16 +97,48 @@ for (const row of rows) {
 // `spreadBucket === filter`：starred 不是桶，星标筛选下快捷键拿到空数组、按键被吞。
 for (const item of SPREAD_FILTERS) {
   assert.deepEqual(
-    spreadVisibleTasks(tasks, "p1", item.key).map((row) => row.id),
+    spreadVisibleTasks(tasks, P1, item.key).map((row) => row.id),
     rows.filter((row) => matchesSpreadFilter(row, item.key)).map((row) => row.id),
     `visible:${item.key}`,
   );
 }
-assert.equal(spreadVisibleTasks(tasks, "p1", "starred").length, counts.starred);
+assert.equal(spreadVisibleTasks(tasks, P1, "starred").length, counts.starred);
 
 // 空项目：每一档都是 0，点还是画满一排（画不出来就没地方取消筛选了）。
-const empty = spreadCounts(tasks, "p3");
+const empty = spreadCounts(tasks, P3);
 assert.equal(empty.all, 0);
 assert.equal(SPREAD_DOT_FILTERS.reduce((sum, item) => sum + empty[item.key], 0), 0);
+
+// 「全部项目」作用域：跨项目的顶层任务全都算进来（other-project 属 p2，单项目口径下不算），
+// 但执行者与归档行照旧排除 —— 换作用域只是放宽项目这一维，不是把树的规则也一起松了。
+const all = spreadCounts(tasks, ALL);
+assert.equal(all.all, counts.all + 1);
+assert.equal(all.run, counts.run + 1);
+assert.equal(all.starred, counts.starred);
+assert.equal(
+  BUCKET_FILTERS.reduce((sum, item) => sum + all[item.key], 0),
+  all.all,
+);
+const allRows = spreadVisibleTasks(tasks, ALL, "all").map((row) => row.id);
+assert.ok(allRows.includes("other-project"));
+assert.ok(!allRows.includes("worker"));
+assert.ok(!allRows.includes("archived"));
+assert.equal(allRows.length, all.all);
+
+// 作用域筛选的唯一判据：单项目认 projectId，all 一律放行。
+assert.equal(inScope({ projectId: "p2" }, P1), false);
+assert.equal(inScope({ projectId: "p2" }, ALL), true);
+// 还没选项目时，单项目态没有可显示的树；all 态永远有目标（筛选条因此照常画出来）。
+assert.equal(scopeHasTarget({ kind: "project", projectId: null }), false);
+assert.equal(scopeHasTarget(ALL), true);
+
+// URL 是权威：带 scope=all 就读 all，带深链（project/task）而没写 scope 的按单项目读，
+// 两者都没有才回落到上次的选择。顺序反了会出现「后退回到全部项目却缩成一家」。
+assert.equal(resolveScopeKind("?scope=all", "project"), "all");
+assert.equal(resolveScopeKind("?scope=project", "all"), "project");
+assert.equal(resolveScopeKind("?project=p1&task=t1", "all"), "project");
+assert.equal(resolveScopeKind("", "all"), "all");
+assert.equal(resolveScopeKind("", null), "project");
+assert.equal(resolveScopeKind("?scope=bogus", "all"), "all");
 
 console.log("spread filter counting tests passed");

@@ -135,6 +135,21 @@
 .workspace-project-avatar--tone-4 { background: #3078a8; }
 .workspace-project-avatar--tone-5 { background: #a84b68; }
 
+/* 「全部项目」不是某个项目，所以不给它分配某个项目色——用中性底色 + 宫格图标，
+   一眼就和下面那排彩色首字母区分开。 */
+.workspace-project-avatar--all {
+  background: var(--raised);
+  color: var(--muted);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.workspace-project-avatar--all.is-large {
+  width: 30px;
+  height: 30px;
+  flex-basis: 30px;
+  border-radius: 8px;
+}
+
 .workspace-side-icon {
   display: grid;
   width: 28px;

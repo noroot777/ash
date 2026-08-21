@@ -22,6 +22,15 @@ import { CreateGroupDialog, CreateProjectDialog } from "../overlays/CreateEntity
 import { useWorkspaceShortcuts } from "./useWorkspaceShortcuts.ts";
 import { spreadVisibleTasks, useSidebarSpread } from "./useSidebarSpread.ts";
 import {
+  ALL_PROJECTS_LABEL,
+  inScope,
+  readStoredScopeKind,
+  resolveScopeKind,
+  writeStoredScopeKind,
+  type TaskScope,
+  type TaskScopeKind,
+} from "./taskScope.ts";
+import {
   readWorkspaceSidebarWidth,
   WORKSPACE_SIDEBAR_STORAGE_KEY,
 } from "./WorkspaceResizeHandle.tsx";
@@ -66,7 +75,15 @@ export function WorkspaceShell() {
   // 改动」那颗点都从它来，不跟着刷就会停在操作之前的样子。
   const [gitVersion, setGitVersion] = useState(0);
   const { tasks, setTasks, loading: tasksLoading, error: tasksError, connected, settlementVersion, applyStar } = useTasks();
-  const spread = useSidebarSpread(tasks, projectId, settlementVersion);
+  // 侧栏在看哪些任务：当前项目一家，还是所有项目混着看。它只影响**列表**；下面的
+  // currentProject 仍是「新建任务 / 终端 / git 落在哪」的上下文，跟着选中的任务走。
+  const [scopeKind, setScopeKind] = useState<TaskScopeKind>(() => resolveScopeKind(window.location.search, readStoredScopeKind()));
+  const scope = useMemo<TaskScope>(
+    () => scopeKind === "all" ? { kind: "all" } : { kind: "project", projectId },
+    [projectId, scopeKind],
+  );
+  useEffect(() => { writeStoredScopeKind(scopeKind); }, [scopeKind]);
+  const spread = useSidebarSpread(tasks, scope, settlementVersion);
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -121,6 +138,7 @@ export function WorkspaceShell() {
   useEffect(() => {
     if (!projectsReady) return;
     const params = new URLSearchParams();
+    if (scopeKind === "all") params.set("scope", "all");
     if (projectId) params.set("project", projectId);
     if (taskId && !settingsSection) params.set("task", taskId);
     if (settingsSection) { params.set("view", "settings"); params.set("settings", settingsSection); }
@@ -130,11 +148,14 @@ export function WorkspaceShell() {
     else if (reviewTaskId && reviewTaskId === taskId) params.set("view", "review");
     const query = params.toString();
     window.history.replaceState(null, "", query ? `${window.location.pathname}?${query}` : window.location.pathname);
-  }, [composer, notes, paletteOpen, projectId, projectsReady, reviewTaskId, settingsSection, taskId]);
+  }, [composer, notes, paletteOpen, projectId, projectsReady, reviewTaskId, scopeKind, settingsSection, taskId]);
 
   useEffect(() => {
     const onPopState = () => {
       const next = readUrlSelection();
+      // 回退到的那条历史记录说了算，不回落 localStorage：它记的是「上次用的那档」，
+      // 拿它覆盖会让后退退回一个用户没去过的作用域。
+      setScopeKind(resolveScopeKind(window.location.search, null));
       setProjectId(next.projectId);
       setTaskId(next.taskId);
       setSettingsSection(next.settings);
@@ -163,12 +184,12 @@ export function WorkspaceShell() {
 
   const selectedTask = tasks.find((task) => task.id === taskId && task.projectId === projectId) ?? null;
   const loadError = projectsError ?? tasksError;
-  const activeTaskCount = useMemo(() => tasks.filter((task) => task.projectId === projectId && task.parentId === null && !task.archived).length, [projectId, tasks]);
+  const activeTaskCount = useMemo(() => tasks.filter((task) => inScope(task, scope) && task.parentId === null && !task.archived).length, [scope, tasks]);
   // J/K 走的是「屏幕上看得见的那些行」，所以筛选开着时它也得跟着筛 —— 否则按一下就跳到
   // 一个被隐藏的任务上，看着像选中丢了。判据与 TaskTree 共用（spreadVisibleTasks）。
   const orderedTasks = useMemo(
-    () => spreadVisibleTasks(tasks, projectId, spread.filter),
-    [projectId, spread.filter, tasks],
+    () => spreadVisibleTasks(tasks, scope, spread.filter),
+    [scope, spread.filter, tasks],
   );
   const updateTask = useCallback((updated: Task) => setTasks((current) => current.some((task) => task.id === updated.id)
     ? current.map((task) => task.id === updated.id ? updated : task)
@@ -177,11 +198,15 @@ export function WorkspaceShell() {
     setTasks((current) => current.filter((task) => task.id !== deletedId));
     setTaskId((current) => current === deletedId ? null : current);
   }, [setTasks]);
-  const selectProject = (nextProjectId: string) => { setProjectId(nextProjectId); setTaskId(null); setComposer(null); setNotes(null); setReviewTaskId(null); setSettingsSection(null); };
+  // 选具体项目 = 退回单项目态：在下拉里点了某个项目，还继续混着看所有项目的话，那次点击就白点了。
+  const selectProject = (nextProjectId: string) => { setScopeKind("project"); setProjectId(nextProjectId); setTaskId(null); setComposer(null); setNotes(null); setReviewTaskId(null); setSettingsSection(null); };
+  // 切到「全部项目」只换列表的口径，不动选中的任务和上下文项目 —— 你正看着的那条还在，
+  // 只是周围多出了别家的行。
+  const selectAllProjects = () => { setScopeKind("all"); setSettingsSection(null); };
   // keepSpread：J/K 在铺开态里只是挪选中行，右边那两列还得接着看；点行或按 Enter 才算「选定了」，
   // 那时候铺开自己收起来把主区还回去。
   const selectTask = (task: Task, options?: { keepSpread?: boolean }) => {
-    pushTaskHistoryEntry(task);
+    pushTaskHistoryEntry(task, window, scopeKind);
     setProjectId(task.projectId);
     setTaskId(task.id);
     setComposer(null);
@@ -205,7 +230,7 @@ export function WorkspaceShell() {
   };
   const createTask = (task: Task, draft?: ComposerDraft | null) => {
     setTasks((current) => current.some((row) => row.id === task.id) ? current.map((row) => row.id === task.id ? task : row) : [task, ...current]);
-    pushTaskHistoryEntry(task);
+    pushTaskHistoryEntry(task, window, scopeKind);
     setTaskId(task.id);
     setComposer(null);
     for (const noteId of draft?.noteIds ?? []) api.patchNote(noteId, { taskId: task.id }).catch(() => notify("任务已创建，但随手记回链写入失败"));
@@ -241,7 +266,7 @@ export function WorkspaceShell() {
     <TerminalToggle open={terminalOpen} onToggle={() => setTerminalOpen((open) => !open)} />
   ) : null;
   const overlays = <>
-    <CommandPalette open={paletteOpen} projects={projects} currentProject={currentProject} tasks={tasks} selectedTask={selectedTask} groups={groups} onClose={() => setPaletteOpen(false)} onProject={selectProject} onTask={selectTask} onTaskUpdated={updateTask} onNote={openNotes} onComposer={openComposer} onNewGroup={() => currentProject ? setCreateDialog("group") : notify("先选择一个项目")} onNewProject={() => setCreateDialog("project")} onDeleteTask={setDeleteTarget} onSettings={openSettings} notify={notify} />
+    <CommandPalette open={paletteOpen} projects={projects} currentProject={currentProject} tasks={tasks} selectedTask={selectedTask} groups={groups} onClose={() => setPaletteOpen(false)} onProject={selectProject} onAllProjects={() => { selectAllProjects(); setPaletteOpen(false); }} onTask={selectTask} onTaskUpdated={updateTask} onNote={openNotes} onComposer={openComposer} onNewGroup={() => currentProject ? setCreateDialog("group") : notify("先选择一个项目")} onNewProject={() => setCreateDialog("project")} onDeleteTask={setDeleteTarget} onSettings={openSettings} notify={notify} />
     {notes && notesProject && <NotesPanel key={`${notes.projectId}:${notes.noteId ?? "list"}`} project={notesProject} initialNoteId={notes.noteId} onClose={() => setNotes(null)} onTask={(nextTaskId) => { const task = tasks.find((row) => row.id === nextTaskId); if (task) selectTask(task); else api.task(nextTaskId).then(selectTask).catch(() => notify("关联任务读取失败")); setNotes(null); }} onConvert={(draft) => { setNotes(null); setSettingsSection(null); setComposer({ mode: "single", draft }); }} notify={notify} />}
     {groupsPanelOpen && currentProject && <GroupsPanel project={currentProject} groups={groups} tasks={tasks} onClose={() => setGroupsPanelOpen(false)} onChanged={refreshGroups} notify={notify} />}
     {deleteTarget && <DeleteTaskDialog task={deleteTarget} onClose={() => setDeleteTarget(null)} onDeleted={(ids) => { ids.forEach(deleteTask); setDeleteTarget(null); }} notify={notify} />}
@@ -265,7 +290,7 @@ export function WorkspaceShell() {
 
   return (
     <><div className={`workspace-shell${spread.laidOut ? " is-spread" : ""}`} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
-      <WorkspaceSidebar projects={projects} currentProject={currentProject} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTask={selectTask} onTaskStarred={applyStar} onGitChanged={() => setGitVersion((value) => value + 1)} onOpenTerminal={currentProject ? () => setTerminalOpen(true) : null} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={() => setGroupsPanelOpen(true)} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("executors")} />
+      <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onAllProjects={selectAllProjects} onTask={selectTask} onTaskStarred={applyStar} onGitChanged={() => setGitVersion((value) => value + 1)} onOpenTerminal={currentProject ? () => setTerminalOpen(true) : null} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={() => setGroupsPanelOpen(true)} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("executors")} />
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
         {composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onCancel={() => setComposer(null)} onCreated={createTask} onCreateGroup={createComposerGroup} notify={notify} /> : selectedTask?.mode === "team" ? (
@@ -274,7 +299,7 @@ export function WorkspaceShell() {
           <DuetView task={selectedTask} allTasks={tasks} onTaskUpdated={updateTask} onTaskCreated={(created) => setTasks((current) => current.some((task) => task.id === created.id) ? current.map((task) => task.id === created.id ? created : task) : [created, ...current])} onTaskDeleted={deleteTask} onSelectTask={selectTask} terminalToggle={terminalToggle} notify={notify} />
         ) : selectedTask ? (
           <TaskDetail task={selectedTask} allTasks={tasks} onTaskUpdate={updateTask} onDeleted={deleteTask} onOpenTask={selectTaskById} initialReviewOpen={reviewTaskId === selectedTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedTask.id : null)} terminalToggle={terminalToggle} notify={notify} />
-        ) : <><header className="workspace-app-bar"><span className="workspace-kind-chip">项目</span><span className="workspace-app-title">{currentProject?.name ?? "Ash"}</span>{currentProject && <span className="workspace-app-count">{activeTaskCount} 项任务</span>}{terminalToggle}</header><div className="workspace-columns"><section className="workspace-primary" aria-label="主工作区"><TaskPlaceholder project={currentProject} task={null} /></section><aside className="workspace-inspector-slot" aria-label="Inspector 占位"><div><span>Inspector</span><small>项目概览</small></div><p>选择任务后，这里会显示可操作属性、执行信息与队列。</p></aside></div></>}
+        ) : <><header className="workspace-app-bar"><span className="workspace-kind-chip">{scopeKind === "all" ? "任务" : "项目"}</span><span className="workspace-app-title">{scopeKind === "all" ? ALL_PROJECTS_LABEL : currentProject?.name ?? "Ash"}</span>{(scopeKind === "all" || currentProject) && <span className="workspace-app-count">{activeTaskCount} 项任务</span>}{terminalToggle}</header><div className="workspace-columns"><section className="workspace-primary" aria-label="主工作区"><TaskPlaceholder project={currentProject} task={null} /></section><aside className="workspace-inspector-slot" aria-label="Inspector 占位"><div><span>Inspector</span><small>项目概览</small></div><p>选择任务后，这里会显示可操作属性、执行信息与队列。</p></aside></div></>}
         {terminalOpen && currentProject && <Suspense fallback={null}><ProjectTerminal key={currentProject.id} project={currentProject} onClose={() => setTerminalOpen(false)} notify={notify} /></Suspense>}
       </main>
     </div>{overlays}</>

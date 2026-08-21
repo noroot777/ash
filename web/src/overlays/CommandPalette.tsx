@@ -15,6 +15,7 @@ import {
   ChatsCircle,
   Stack,
   Stop,
+  SquaresFour,
   Trash,
 } from "@phosphor-icons/react";
 import { api, type GitOverview } from "../lib/api.ts";
@@ -31,6 +32,7 @@ import {
   type SearchScopeType,
 } from "./CommandPaletteScope.tsx";
 import { filterSlashCommands, type SlashCommand, type SlashCommandId } from "./commandPaletteCommands.ts";
+import { ALL_PROJECTS_LABEL } from "../workspace/taskScope.ts";
 import { workspaceModifierLabel } from "../workspace/useWorkspaceShortcuts.ts";
 
 type PaletteStep = "search" | "scope-project" | "scope-type" | "git-project" | "git-overview";
@@ -54,6 +56,7 @@ type CommandPaletteProps = {
   groups: Group[];
   onClose: () => void;
   onProject: (projectId: string) => void;
+  onAllProjects: () => void;
   onTask: (task: Task) => void;
   onTaskUpdated: (task: Task) => void;
   onNote: (projectId: string, noteId: string | null) => void;
@@ -78,6 +81,7 @@ export function CommandPalette({
   groups,
   onClose,
   onProject,
+  onAllProjects,
   onTask,
   onTaskUpdated,
   onNote,
@@ -261,6 +265,16 @@ export function CommandPalette({
       { key: "manage:settings", group: "管理", label: "项目设置", icon: <GearSix size={15} />, run: closeRun(() => onSettings("project")) },
       { key: "manage:groups", group: "管理", label: "分组管理", icon: <Stack size={15} />, run: closeRun(() => onSettings("groups")) },
     );
+    // 「全部项目」和具体项目并排放在同一组里：它回答的是同一个问题（列表在看谁），
+    // 排在最前是因为它是唯一一条「谁都看」。
+    result.push({
+      key: "project:all",
+      group: "切换项目",
+      label: ALL_PROJECTS_LABEL,
+      detail: "把所有项目的任务混着看",
+      icon: <SquaresFour size={15} />,
+      run: closeRun(onAllProjects),
+    });
     projects.forEach((project) => result.push({
       key: `project:${project.id}`,
       group: "切换项目",
@@ -281,7 +295,7 @@ export function CommandPalette({
     return needle
       ? result.filter((item) => `${item.label} ${item.detail ?? ""} ${item.group} ${item.keys ?? ""}`.toLocaleLowerCase().includes(needle))
       : result;
-  }, [currentProject, groups, notify, onClose, onComposer, onDeleteTask, onNewGroup, onNewProject, onNote, onProject, onSettings, onTask, onTaskUpdated, projects, query, selectedTask, slashMode, step, tasks]);
+  }, [currentProject, groups, notify, onAllProjects, onClose, onComposer, onDeleteTask, onNewGroup, onNewProject, onNote, onProject, onSettings, onTask, onTaskUpdated, projects, query, selectedTask, slashMode, step, tasks]);
 
   const normalTotal = items.length + hits.length;
   const total = step === "scope-project" ? projects.length + 1
