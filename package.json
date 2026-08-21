@@ -3,11 +3,11 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "packageManager": "npm@11.9.0",
+  "//devEngines": "写范围不写精确版本:两台开发机的 npm 小版本不会一直一致,钉死会让其中一台的 npm install 直接 EBADDEVENGINES 退出,连带 npm run restart 断在依赖同步那一步。这里只拦真正过旧的 npm。corepack 用的 packageManager 字段只接受精确版本,跟范围约束天然打架,故不再声明。",
   "devEngines": {
     "packageManager": {
       "name": "npm",
-      "version": "11.9.0",
+      "version": ">=11.9.0",
       "onFail": "error"
     }
   },
