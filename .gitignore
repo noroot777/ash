@@ -1,4 +1,6 @@
-node_modules/
+# 不带尾斜杠：worktree 里的 node_modules 多半是借主仓那份的**软链**，
+# git 把软链当文件，`node_modules/` 这条只匹配目录、忽略不掉它。
+node_modules
 dist/
 *.log
 nohup.out

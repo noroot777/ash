@@ -35,6 +35,7 @@
     "test:worktree-recovery": "tsx scripts/test-worktree-recovery.ts",
     "test:worktree-leftover": "tsx scripts/test-worktree-leftover.ts",
     "test:workspace-cleanup": "tsx scripts/test-workspace-cleanup.ts",
+    "test:workspace-dirty": "tsx scripts/test-workspace-dirty.ts",
     "test:executor-resolution": "tsx scripts/test-executor-resolution.ts",
     "test:ssh-retire": "tsx scripts/test-ssh-profile-retire.ts",
     "test:answer-routing": "tsx scripts/test-answer-routing.ts",
