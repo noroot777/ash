@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node ../scripts/check-conventions.mjs && npm run test:conversation && tsc -b && vite build",
+    "build": "node ../scripts/check-conventions.mjs && npm run test:conversation && npm run test:task-read-state && tsc -b && vite build",
     "test:image-preview": "node scripts/test-image-preview.mjs",
     "test:inspector-shortcuts": "node --experimental-strip-types scripts/test-inspector-shortcuts.mjs",
     "test:inspector-attachments": "node scripts/test-inspector-attachments.mjs",
@@ -20,6 +20,7 @@
     "test:review-diff-zoom": "node scripts/test-review-diff-zoom.mjs",
     "test:data-layer": "node --experimental-strip-types scripts/test-data-layer.mjs",
     "test:task-sync": "node --experimental-strip-types scripts/test-task-sync.mjs",
+    "test:task-read-state": "node --experimental-strip-types scripts/test-task-read-state.mjs",
     "test:run-activity": "node --experimental-strip-types scripts/test-run-activity.mjs",
     "test:tool-summary": "node --experimental-strip-types scripts/test-tool-summary.mjs",
     "test:duet-timeline": "node --experimental-strip-types scripts/test-duet-timeline.mjs",
