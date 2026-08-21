@@ -143,15 +143,13 @@ function trimReadState(readState: ReadState): ReadState {
   );
 }
 
-function reconcileReadState(current: ReadState, tasks: Task[], selectedTaskId: string | null): ReadState {
+export function reconcileReadState(current: ReadState, tasks: Task[], selectedTaskId: string | null): ReadState {
   const index = buildTaskIndex(tasks);
-  // The task list is empty during the initial fetch. Preserve persisted reads until
-  // at least one server result arrives, then discard deleted and restarted tasks.
-  const entries = tasks.length === 0 ? Object.entries(current) : Object.entries(current).filter(([taskId]) => {
-    const task = index.byId.get(taskId);
-    return task != null && readEventForTask(task, index.workersByLead.get(task.id) ?? []) != null;
-  });
-  const next = Object.fromEntries(entries);
+  // 重启/重连时 SSE 可能先送来一条 task.updated，完整 GET 还在路上。此时 tasks
+  // 非空却只是临时子集，拿它清理“不存在”的任务会把其余已读记录全删掉；完整列表
+  // 一到，那些历史任务就一起重新亮成未读。记录本身有 MAX_READ_TASKS 上限，保留已
+  // 删除任务的少量陈旧项没有副作用；同 id 真有新一轮时 event 不同，照样会判未读。
+  const next = { ...current };
   const selectedTask = selectedTaskId ? index.byId.get(selectedTaskId) : undefined;
   for (const taskId of selectedTask ? readTaskIds(selectedTask) : []) {
     const task = index.byId.get(taskId);
