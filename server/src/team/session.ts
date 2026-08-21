@@ -40,6 +40,7 @@ import { pauseGroup } from "../scheduler.js";
 import { taskWorkspace } from "../task-workspace.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import type { ResidentHandle } from "../executors/types.js";
+import { LOST_SESSION_PATCH, SESSION_LOST_NOTE, isSessionLost } from "../executors/session-lost.js";
 import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
 import { recordUserConversationTurn } from "../conversation-turn.js";
@@ -385,6 +386,10 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
 // ── 事件消费 ────────────────────────────────────────────────────────────────
 async function consume(lead: Lead): Promise<void> {
   let exitStatus = 0;
+  // CLI 否认过这条会话吗(见 executors/session-lost.ts)。调度台是常驻会话,踩这个坑
+  // 比一次性任务更死:每次说话都 --resume 同一个不存在的 id,而收尾那句话还在告诉
+  // 用户「会话还在,再说一句就能接回」—— 他会照做,然后一次次撞同一堵墙。
+  let sessionLost = false;
   let pendingTraceText = "";
   const flushTraceText = () => {
     if (!pendingTraceText) return;
@@ -432,7 +437,10 @@ async function consume(lead: Lead): Promise<void> {
       // 水位相反：**覆盖**。常驻会话尤其需要它——流水一路加到几百万，只有水位能回答
       // 「这个调度台离上下文塞满还有多远」。
       if (emittedEvent.kind === "context") await setSessionContext(lead.sessId, emittedEvent.context);
-      if (emittedEvent.kind === "error") writeRunError(lead.out, emittedEvent.message);
+      if (emittedEvent.kind === "error") {
+        writeRunError(lead.out, emittedEvent.message);
+        if (isSessionLost(emittedEvent.message)) sessionLost = true;
+      }
       if (emittedEvent.kind === "done") exitStatus = emittedEvent.exitStatus;
       publish(lead, emittedEvent);
       continue;
@@ -440,7 +448,7 @@ async function consume(lead: Lead): Promise<void> {
     publish(lead, event);
   }
   flushTraceText();
-  await closeLead(lead, exitStatus);
+  await closeLead(lead, exitStatus, sessionLost);
 }
 
 function publish(lead: Lead, event: AgentEvent): void {
@@ -500,7 +508,7 @@ async function endTurn(lead: Lead): Promise<void> {
   armIdle(lead);
 }
 
-async function closeLead(lead: Lead, exitStatus: number): Promise<void> {
+async function closeLead(lead: Lead, exitStatus: number, sessionLost = false): Promise<void> {
   clearIdle(lead);
   takeStopped(lead.taskId); // 消费停止标记:团队不走 settleTaskStatus,别漏给下一次
   untrackRun(lead.taskId, lead.handle);
@@ -510,15 +518,27 @@ async function closeLead(lead: Lead, exitStatus: number): Promise<void> {
   if (!superseded) leads.delete(lead.taskId);
   const endIso = now();
   const spent = lead.turnStart ? Math.max(0, Date.parse(endIso) - Date.parse(lead.turnStart)) : 0;
+  // CLI 否认了这条会话:把失效的 id 连同由它派生的三件套恢复命令一起清掉,下一次说话
+  // 就会开一条全新会话(openResident 的判据就是「这行上有没有 cli_session_id」)。
+  // 退出码 0 也要求上:正常收尾的回合不该因为正文里出现过这句话就丢掉会话。
+  const dropSession = sessionLost && exitStatus !== 0;
   await db
     .update(sessions)
-    .set({ exitStatus, endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}` })
+    .set({
+      exitStatus,
+      endedAt: endIso,
+      activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}`,
+      ...(dropSession ? LOST_SESSION_PATCH : {}),
+    })
     .where(eq(sessions.id, lead.sessId));
   if (lead.closing === "recycle") {
     recordSystemTurn(lead, RECYCLE_NOTE(Math.round(IDLE_MS / 60_000)));
   } else if (!lead.closing && exitStatus !== 0) {
-    // 既不是回收也不是手停 —— 进程自己没了。会话还在,说句话就能接回。
-    const msg = `调度台进程意外退出(exit ${exitStatus})。CLI 会话还在,再说一句话会自动接回;需要的话也可以点「继续」。`;
+    // 既不是回收也不是手停 —— 进程自己没了。会话还在,说句话就能接回;除非 CLI 刚
+    // 否认过这条会话,那句「会话还在」就成了把用户推回同一堵墙的错误指路。
+    const msg = dropSession
+      ? `调度台进程意外退出(exit ${exitStatus})。${SESSION_LOST_NOTE}`
+      : `调度台进程意外退出(exit ${exitStatus})。CLI 会话还在,再说一句话会自动接回;需要的话也可以点「继续」。`;
     writeRunError(lead.out, msg);
     appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message: msg }, endIso);
     publish(lead, { kind: "error", message: msg });
