@@ -1,27 +1,23 @@
-import type { Task, TaskStatus } from "@ash/shared";
+import type { Task } from "@ash/shared";
+import { needsAttention } from "../lib/taskAttention.ts";
 
-type TaskGroup = {
-  key: string;
-  label: string;
-  matches: (task: Task) => boolean;
-};
+// 排序的第一原则：**更新时间倒序**。别的规矩只能在它内部做 ——
+// 从前这里把列表按状态切成八大块（运行中 / 暂停中 / … / 失败 / 已取消），
+// 时间序只在块内生效，于是刚炸的任务被扔到列表最末，找它得一路滚到底。
+// 现在只留一档提升：「需要你处理」（失败 / 等答复 / 待验收 / 没过验证）整体上浮，
+// 且这一档**内部照样按更新时间**。置顶（pinnedAt）仍是用户手动的最高档。
 
-type TaskSection = {
-  key: "collab" | "single";
-  label: string;
-  matches: (task: Task) => boolean;
-  groups: readonly TaskGroup[];
-};
+export type TaskTreeSectionKey = "pinned" | "attention" | "rest";
 
 export type TaskTreeSection = {
-  key: "pinned" | TaskSection["key"];
+  key: TaskTreeSectionKey;
   label: string;
-  matches: (task: Task) => boolean;
   count: number;
   tasks: Task[];
 };
 
 export type TaskTreeOptions = {
+  // true = 置顶单独成节（主工作区）；false = 不分节，置顶仍排在最前（其他项目的折叠列表）。
   unifiedPinned?: boolean;
 };
 
@@ -32,70 +28,33 @@ export type TaskPreview = {
 
 export const TASK_PREVIEW_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-const COLLAB_GROUPS: TaskGroup[] = [
-  {
-    key: "active",
-    label: "进行中",
-    matches: (task) => task.stage !== "accepted",
-  },
-  {
-    key: "accepted",
-    label: "已验收",
-    matches: (task) => task.stage === "accepted",
-  },
-];
-
-const STATUS_GROUPS: { key: Exclude<TaskStatus, "idle">; label: string }[] = [
-  { key: "running", label: "运行中" },
-  { key: "paused", label: "暂停中" },
-  { key: "awaiting_review", label: "等待审核" },
-  { key: "queued", label: "排队中" },
-  { key: "backlog", label: "待排期" },
-  { key: "done", label: "完成" },
-  { key: "failed", label: "失败" },
-  { key: "canceled", label: "已取消" },
-];
-
-const TASK_SECTIONS: readonly TaskSection[] = [
-  {
-    key: "collab",
-    label: "协作任务",
-    matches: (task) => task.mode === "team" || task.mode === "duet",
-    groups: COLLAB_GROUPS,
-  },
-  {
-    key: "single",
-    label: "普通任务",
-    matches: (task) => task.mode === "single",
-    groups: [
-      ...STATUS_GROUPS.map((status) => ({
-        key: status.key,
-        label: status.label,
-        matches: (task: Task) => groupedStatus(task) === status.key,
-      })),
-    ],
-  },
-];
-
-function groupedStatus(task: Task): TaskStatus {
-  return task.mode === "team" && task.status === "idle" ? "running" : task.status;
+function byUpdatedDesc(a: Task, b: Task): number {
+  return b.updatedAt.localeCompare(a.updatedAt);
 }
 
-function sortTasks(tasks: Task[], pinned: boolean): Task[] {
-  return [...tasks].sort(
-    (a, b) =>
-      (pinned ? (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0) : 0) ||
-      b.updatedAt.localeCompare(a.updatedAt),
-  );
+function sortByUpdated(tasks: Task[]): Task[] {
+  return [...tasks].sort(byUpdatedDesc);
 }
 
-export function previewTasksByAge(tasks: Task[], nowMs = Date.now()): TaskPreview {
+// 置顶区按用户置顶的先后，同刻再落回更新时间。
+function sortPinned(tasks: Task[]): Task[] {
+  return [...tasks].sort((a, b) => (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0) || byUpdatedDesc(a, b));
+}
+
+// keepVisible 命中的行**永不因为旧而被藏**（星标、待你验收的）——
+// 用户给的软记号和没盖的章都属于「我要一直看得见」，24 小时的年龄闸对它们不适用。
+export function previewTasksByAge(
+  tasks: Task[],
+  nowMs = Date.now(),
+  keepVisible?: (task: Task) => boolean,
+): TaskPreview {
   const cutoff = nowMs - TASK_PREVIEW_MAX_AGE_MS;
   const visible: Task[] = [];
   const hidden: Task[] = [];
   for (const task of tasks) {
     const updatedAt = Date.parse(task.updatedAt);
-    (Number.isFinite(updatedAt) && updatedAt < cutoff ? hidden : visible).push(task);
+    const stale = Number.isFinite(updatedAt) && updatedAt < cutoff && !keepVisible?.(task);
+    (stale ? hidden : visible).push(task);
   }
   if (visible.length > 0 || hidden.length === 0) return { visible, hidden };
 
@@ -118,28 +77,24 @@ export function advanceHiddenReveal(lastKey: string | null, revealKey: string | 
 
 export function buildTaskTree(tasks: Task[], options: TaskTreeOptions = {}): TaskTreeSection[] {
   const topLevel = tasks.filter((task) => task.parentId === null && !task.archived);
-  const pinnedTasks = sortTasks(topLevel.filter((task) => task.pinnedAt != null), true);
-  const sections: TaskTreeSection[] = TASK_SECTIONS.map((section) => {
-    const sectionTasks = topLevel.filter(
-      (task) => section.matches(task) && (!options.unifiedPinned || task.pinnedAt == null),
-    );
-    const ordered = [
-      ...(options.unifiedPinned ? [] : sortTasks(sectionTasks.filter((task) => task.pinnedAt != null), true)),
-      ...section.groups.flatMap((group) => sortTasks(
-        sectionTasks.filter((task) => task.pinnedAt == null && group.matches(task)),
-        false,
-      )),
-    ];
-    return { key: section.key, label: section.label, matches: section.matches, count: sectionTasks.length, tasks: ordered };
-  }).filter((section) => section.count > 0);
-  if (!options.unifiedPinned || pinnedTasks.length === 0) return sections;
-  return [{
-    key: "pinned",
-    label: "置顶",
-    matches: (task) => task.pinnedAt != null,
-    count: pinnedTasks.length,
-    tasks: pinnedTasks,
-  }, ...sections];
+  const pinned = sortPinned(topLevel.filter((task) => task.pinnedAt != null));
+  const loose = topLevel.filter((task) => task.pinnedAt == null);
+  const attention = sortByUpdated(loose.filter((task) => needsAttention(task)));
+  const rest = sortByUpdated(loose.filter((task) => !needsAttention(task)));
+
+  // 不分节时（其他项目那种折叠列表）只出一节，顺序仍是 置顶 → 需要你处理 → 其余。
+  if (!options.unifiedPinned) {
+    const all = [...pinned, ...attention, ...rest];
+    return all.length ? [{ key: "rest", label: "任务", count: all.length, tasks: all }] : [];
+  }
+
+  return ([
+    { key: "pinned", label: "置顶", tasks: pinned },
+    { key: "attention", label: "需要你处理", tasks: attention },
+    { key: "rest", label: "任务", tasks: rest },
+  ] as const)
+    .filter((section) => section.tasks.length > 0)
+    .map((section) => ({ key: section.key, label: section.label, count: section.tasks.length, tasks: section.tasks }));
 }
 
 export function orderedTopLevelTasks(tasks: Task[], options: TaskTreeOptions = {}): Task[] {

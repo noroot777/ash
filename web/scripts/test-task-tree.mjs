@@ -3,8 +3,10 @@ import { advanceHiddenReveal, buildTaskTree, orderedTopLevelTasks, previewTasksB
 
 function task(id, mode, {
   pinnedAt = null,
+  starredAt = null,
   status = "done",
   stage = null,
+  question = null,
   createdAt = "2026-08-01T00:00:00.000Z",
   updatedAt = createdAt,
 } = {}) {
@@ -12,8 +14,10 @@ function task(id, mode, {
     id,
     mode,
     pinnedAt,
+    starredAt,
     status,
     stage,
+    question,
     createdAt,
     updatedAt,
     parentId: null,
@@ -21,36 +25,63 @@ function task(id, mode, {
   };
 }
 
+// —— 第一原则：更新时间倒序。类型（团队 / 讨论 / 普通）不再把列表切开。
 const mixed = [
-  task("collab-pinned", "team", { pinnedAt: 100 }),
-  task("single-pinned", "single", { pinnedAt: 200 }),
-  task("collab-normal", "duet"),
-  task("single-normal", "single"),
+  task("collab-pinned", "team", { pinnedAt: 100, updatedAt: "2026-08-01T00:00:00.000Z" }),
+  task("single-pinned", "single", { pinnedAt: 200, updatedAt: "2026-08-02T00:00:00.000Z" }),
+  task("collab-normal", "duet", { updatedAt: "2026-08-05T00:00:00.000Z" }),
+  task("single-normal", "single", { updatedAt: "2026-08-06T00:00:00.000Z" }),
 ];
 
 const unified = buildTaskTree(mixed, { unifiedPinned: true });
-assert.deepEqual(unified.map((section) => section.key), ["pinned", "collab", "single"]);
+assert.deepEqual(unified.map((section) => section.key), ["pinned", "rest"]);
 assert.deepEqual(unified[0].tasks.map((row) => row.id), ["single-pinned", "collab-pinned"]);
-assert.deepEqual(unified[1].tasks.map((row) => row.id), ["collab-normal"]);
-assert.deepEqual(unified[2].tasks.map((row) => row.id), ["single-normal"]);
+assert.deepEqual(unified[1].tasks.map((row) => row.id), ["single-normal", "collab-normal"]);
 assert.equal(new Set(unified.flatMap((section) => section.tasks.map((row) => row.id))).size, mixed.length);
 assert.deepEqual(orderedTopLevelTasks(mixed, { unifiedPinned: true }).map((row) => row.id), [
   "single-pinned",
   "collab-pinned",
-  "collab-normal",
   "single-normal",
+  "collab-normal",
 ]);
 
-const original = buildTaskTree(mixed);
-assert.deepEqual(original.map((section) => section.key), ["collab", "single"]);
-assert.deepEqual(original[0].tasks.map((row) => row.id), ["collab-pinned", "collab-normal"]);
-assert.deepEqual(original[1].tasks.map((row) => row.id), ["single-pinned", "single-normal"]);
+// 不分节时（其他项目的折叠列表）只出一节，顺序仍是 置顶 → 需要你处理 → 其余。
+const flat = buildTaskTree(mixed);
+assert.deepEqual(flat.map((section) => section.key), ["rest"]);
+assert.deepEqual(flat[0].tasks.map((row) => row.id), [
+  "single-pinned",
+  "collab-pinned",
+  "single-normal",
+  "collab-normal",
+]);
 
 const withoutPinned = buildTaskTree([
   task("collab-normal", "team"),
   task("single-normal", "single"),
 ], { unifiedPinned: true });
-assert.deepEqual(withoutPinned.map((section) => section.key), ["collab", "single"]);
+assert.deepEqual(withoutPinned.map((section) => section.key), ["rest"]);
+
+// —— 失败不许沉底：它属于「需要你处理」，整档上浮到普通任务之前，档内仍按更新时间。
+// 待验收不进这一档（它只拿圆点标记 + 豁免折叠），否则几周前的待盖章任务会霸占顶部。
+const withFailures = buildTaskTree([
+  task("fresh-running", "single", { status: "running", updatedAt: "2026-08-20T10:00:00.000Z" }),
+  task("failed-old", "single", { status: "failed", updatedAt: "2026-08-11T09:00:00.000Z" }),
+  task("failed-new", "single", { status: "failed", updatedAt: "2026-08-19T09:00:00.000Z" }),
+  task("asking", "single", { status: "paused", question: "选哪个？", updatedAt: "2026-08-12T09:00:00.000Z" }),
+  task("verify-failed", "single", { status: "done", stage: "verify_failed", updatedAt: "2026-08-13T09:00:00.000Z" }),
+  task("await-accept", "team", { status: "idle", stage: "awaiting_acceptance", updatedAt: "2026-08-17T09:00:00.000Z" }),
+  task("done-old", "single", { updatedAt: "2026-08-18T09:00:00.000Z" }),
+], { unifiedPinned: true });
+assert.deepEqual(withFailures.map((section) => section.key), ["attention", "rest"]);
+assert.deepEqual(withFailures[0].tasks.map((row) => row.id), ["failed-new", "verify-failed", "asking", "failed-old"]);
+assert.deepEqual(withFailures[1].tasks.map((row) => row.id), ["fresh-running", "done-old", "await-accept"]);
+
+// 置顶仍压在「需要你处理」之上 —— 手动记号高于自动判据。
+const pinnedOverAttention = orderedTopLevelTasks([
+  task("failed", "single", { status: "failed", updatedAt: "2026-08-20T09:00:00.000Z" }),
+  task("pinned-old", "single", { pinnedAt: 5, updatedAt: "2026-08-01T09:00:00.000Z" }),
+], { unifiedPinned: true }).map((row) => row.id);
+assert.deepEqual(pinnedOverAttention, ["pinned-old", "failed"]);
 
 const byLastUpdate = buildTaskTree([
   task("created-later", "single", {
@@ -85,6 +116,25 @@ const allOld = previewTasksByAge([
 ], now);
 assert.deepEqual(allOld.visible.map((row) => row.id), ["latest"]);
 assert.deepEqual(allOld.hidden.map((row) => row.id), ["older", "oldest"]);
+
+// —— keepVisible 命中的行永不因为旧被折叠（星标、等你验收的），且不打乱原有顺序。
+const keepVisible = (row) => row.starredAt != null || row.id === "unaccepted-old";
+const withKeeps = previewTasksByAge([
+  task("recent", "single", { updatedAt: "2026-08-11T11:00:00.000Z" }),
+  task("starred-old", "single", { starredAt: 7, updatedAt: "2026-08-01T00:00:00.000Z" }),
+  task("unaccepted-old", "single", { updatedAt: "2026-08-02T00:00:00.000Z" }),
+  task("plain-old", "single", { updatedAt: "2026-08-03T00:00:00.000Z" }),
+], now, keepVisible);
+assert.deepEqual(withKeeps.visible.map((row) => row.id), ["recent", "starred-old", "unaccepted-old"]);
+assert.deepEqual(withKeeps.hidden.map((row) => row.id), ["plain-old"]);
+
+// 全是旧行时，被 keepVisible 留下的就够了，不该再额外顶出一条「最新的」。
+const onlyKeeps = previewTasksByAge([
+  task("starred-old", "single", { starredAt: 7, updatedAt: "2026-08-01T00:00:00.000Z" }),
+  task("plain-old", "single", { updatedAt: "2026-08-03T00:00:00.000Z" }),
+], now, keepVisible);
+assert.deepEqual(onlyKeeps.visible.map((row) => row.id), ["starred-old"]);
+assert.deepEqual(onlyKeeps.hidden.map((row) => row.id), ["plain-old"]);
 
 // 选中藏起来的旧任务只自动展开一次；同一条上点收起后不能再被顶开。
 assert.deepEqual(advanceHiddenReveal(null, "single:old"), { lastKey: "single:old", reveal: true });

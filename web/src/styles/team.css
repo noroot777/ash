@@ -127,6 +127,7 @@
 .team-status-dot--pending { border: 1px dashed var(--muted); background: transparent; }
 .team-status-dot--active { background: var(--muted); animation: task-status-dot-pulse 1.35s ease-in-out infinite; will-change: opacity, transform; }
 .team-status-dot--attention { background: var(--amber); }
+.team-status-dot--unaccepted { border: 1.5px solid var(--accent); background: color-mix(in lch, var(--accent) 16%, transparent); }
 .team-status-dot--success { background: var(--green); }
 .team-status-dot--error { background: var(--red); }
 .team-status-dot--pending.task-status-dot--has-icon {

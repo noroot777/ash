@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Task, TaskFollowUp } from "@ash/shared";
 import { api } from "../lib/api.ts";
+import { spreadBucket, type SpreadBucket } from "../lib/taskAttention.ts";
 import { orderedTopLevelTasks } from "./taskTreeModel.ts";
+
+// 桶的判据搬到了 lib/taskAttention.ts（任务树排序和状态点也要读它，留在这里会成环）。
+// 这里继续对外露出同一个名字，免得每个调用点都改 import。
+export { spreadBucket };
+export type { SpreadBucket };
 
 // 收起动画的时长，必须和 sidebar-spread.css 里 .workspace-sidebar 的 width 过渡对齐：
 // 动画期间仍按铺开态排版，否则列会先「啪」地塌回去、侧边栏再慢慢滑窄，看着像闪了一下。
 export const SPREAD_ANIM_MS = 260;
 
-export type SpreadBucket = "todo" | "run" | "wait" | "done" | "accepted";
 export type SpreadFilter = "all" | "starred" | SpreadBucket;
 
 export const SPREAD_FILTERS: { key: SpreadFilter; label: string }[] = [
@@ -28,24 +33,7 @@ export const SPREAD_DOT_FILTERS = SPREAD_FILTERS.filter(
 
 export type SpreadCounts = Record<SpreadFilter, number>;
 
-// 分堆的判据只问一句：这一行现在轮到谁动。轮到我 = todo（等答复 / 待验收 / 失败），
-// 机器在动 = run，谁也没轮到 = wait，收了尾 = done，走完验收 = accepted。
-//
-// accepted 是唯一一档看 stage 而不看 status 的 —— stage 与 status 正交（见 shared 的
-// TaskStage 注释），所以它只能**从 done 里切一刀**、不能跟别的桶并排，否则五个桶不再互斥，
-// 计数加起来会超过「全部」。位置也是判据的一部分：
-//   · 排在 run 之后 —— 「验收完成 + awaiting_review」（盖了章又派了审查）机器确实在动，
-//     事实高于记号，这种得留在「在跑」，不能被 stage 抢走。
-//   · 排在 done/wait 之前 —— team 没有 done 终态（收工只回到 idle，归档才结束），
-//     验收完的调度台以前只能兜进 wait，让「排着 / 暂停」里堆着几十个其实早就干完的团队。
-export function spreadBucket(task: Task): SpreadBucket {
-  if (task.question) return "todo";
-  if (task.status === "failed" || task.stage === "awaiting_acceptance" || task.stage === "verify_failed") return "todo";
-  if (task.status === "running" || task.status === "queued" || task.status === "awaiting_review") return "run";
-  if (task.stage === "accepted" || task.stage === "merged") return "accepted";
-  if (task.status === "done" || task.status === "canceled") return "done";
-  return "wait";
-}
+// 分堆的判据见 lib/taskAttention.ts 的 spreadBucket。
 
 // 星标不是第六个桶：它是用户手动的软记号，与自动状态正交（同一个任务既可以
 // 「在跑」也可以带星标）。所以筛选判据单独一条，不进 spreadBucket。

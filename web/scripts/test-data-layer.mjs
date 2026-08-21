@@ -453,9 +453,18 @@ try {
   assert.equal(deriveTaskStatusIndicator(statusTask({ parentId: "team-status" })), "pending");
   assert.equal(deriveTaskStatusIndicator(statusTask({ status: "running" })), "active");
   assert.equal(deriveTaskStatusIndicator(statusTask({ status: "paused" })), "attention");
-  assert.equal(deriveTaskStatusIndicator(statusTask({ status: "done" }), [], true), "success");
+  // 干完了但没盖章：跟读没读过无关，一直亮着「等你验收」。盖过章的才回到未读绿点。
+  assert.equal(deriveTaskStatusIndicator(statusTask({ status: "done" }), [], true), "unaccepted");
+  assert.equal(deriveTaskStatusIndicator(statusTask({ status: "done" }), [], false), "unaccepted");
+  assert.equal(deriveTaskStatusIndicator(statusTask({ status: "done", stage: "awaiting_acceptance" }), [], false), "unaccepted");
+  assert.equal(deriveTaskStatusIndicator(statusTask({ status: "done", stage: "accepted" }), [], true), "success");
+  assert.equal(deriveTaskStatusIndicator(statusTask({ status: "done", stage: "merged" }), [], true), "success");
+  assert.equal(deriveTaskStatusIndicator(statusTask({ status: "done", stage: "accepted" }), [], false), null);
+  // 执行者不进这一档：验收是顶层任务的事。
+  assert.equal(deriveTaskStatusIndicator(statusTask({ status: "done", parentId: "team-status" }), [], false), null);
   assert.equal(deriveTaskStatusIndicator(statusTask({ status: "failed" }), [], true), "error");
-  assert.equal(deriveTaskStatusIndicator(statusTask({ status: "done" }), [], false), null);
+  assert.equal(deriveTaskStatusIndicator(statusTask({ status: "failed" }), [], false), null);
+  assert.equal(deriveTaskStatusIndicator(statusTask({ status: "canceled" }), [], false), null);
   assert.deepEqual(readTaskIds({ id: "worker-status", parentId: "team-status" }), ["worker-status", "team-status"]);
   assert.deepEqual(readTaskIds({ id: "team-status", parentId: null }), ["team-status"]);
 
@@ -474,11 +483,20 @@ try {
   });
   assert.equal(deriveTaskStatusIndicator(teamLead, [runningWorker], true), "active");
   assert.equal(deriveTaskStatusIndicator(teamLead, [{ ...runningWorker, status: "paused" }], true), "attention");
-  assert.equal(deriveTaskStatusIndicator(teamLead, [{ ...runningWorker, status: "done" }], true), "success");
+  // 团队收工（lead idle + 执行者都停了）且没盖章 = 等你验收；盖过章才是未读绿点。
+  assert.equal(deriveTaskStatusIndicator(teamLead, [{ ...runningWorker, status: "done" }], true), "unaccepted");
+  assert.equal(deriveTaskStatusIndicator(teamLead, [{ ...runningWorker, status: "done" }], false), "unaccepted");
+  assert.equal(
+    deriveTaskStatusIndicator({ ...teamLead, stage: "accepted" }, [{ ...runningWorker, status: "done" }], true),
+    "success",
+  );
+  assert.equal(
+    deriveTaskStatusIndicator({ ...teamLead, stage: "accepted" }, [{ ...runningWorker, status: "done" }], false),
+    null,
+  );
   assert.equal(deriveTaskStatusIndicator(teamLead, [{ ...runningWorker, status: "failed" }], true), "error");
   assert.equal(deriveTaskStatusIndicator(teamLead, [{ ...runningWorker, status: "canceled" }], true), "error");
   assert.equal(deriveTaskStatusIndicator({ ...teamLead, status: "failed" }, [], true), "error");
-  assert.equal(deriveTaskStatusIndicator(teamLead, [{ ...runningWorker, status: "done" }], false), null);
   const runningTeamEvent = readEventForTask(teamLead, [runningWorker]);
   const settledTeamEvent = readEventForTask(teamLead, [{
     ...runningWorker,

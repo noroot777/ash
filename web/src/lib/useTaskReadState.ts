@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { Task } from "@ash/shared";
 import { isTeamSettled, teamNeverStarted, timeMs } from "@ash/shared/team";
 import { readRenamedStorage } from "./renamedStorage.ts";
+import { awaitsAcceptance } from "./taskAttention.ts";
 
 const STORAGE_KEY = "ash:task-read-state-v1";
 const MAX_READ_TASKS = 300;
@@ -19,7 +20,7 @@ type TaskIndex = {
   workersByLead: Map<string, Task[]>;
 };
 
-export type TaskStatusIndicator = "pending" | "active" | "attention" | "success" | "error";
+export type TaskStatusIndicator = "pending" | "active" | "attention" | "unaccepted" | "success" | "error";
 export type IndicatorForTask = (task: Task) => TaskStatusIndicator | null;
 
 function terminalEvent(task: Task): string | null {
@@ -72,16 +73,24 @@ export function deriveTaskStatusIndicator(
     if (task.status === "backlog" && workers.every((worker) => worker.status === "backlog")) {
       return "pending";
     }
-    if (!unread || !isTeamSettled(leadLive, workers)) return null;
+    const settled = isTeamSettled(leadLive, workers);
     const failed = task.status === "failed"
       || task.status === "canceled"
       || workers.some((worker) => worker.status === "failed" || worker.status === "canceled");
+    // 团队收工 = 它的「干完了」。没盖章就一直亮着未验收，跟读没读过无关。
+    // 从没开过台的（还停在 backlog）不算收工 —— 那是没开始，不是等验收。
+    if (!failed && !teamNeverStarted(task.status) && awaitsAcceptance(task, settled)) return "unaccepted";
+    if (!unread || !settled) return null;
     return failed ? "error" : "success";
   }
 
   if (task.question || task.status === "paused") return "attention";
   if (task.status === "running" || task.status === "queued") return "active";
   if (task.status === "backlog") return "pending";
+  // 「干完了但我还没验收」是持久事实，不是未读提醒：已读之后仍要标出来，
+  // 否则做完的任务全都塌成同一颗灰点，分不出哪些还等着我盖章。
+  // 执行者不进这一档 —— 验收是顶层任务的事（accept_task 拒绝共享执行者）。
+  if (!task.parentId && awaitsAcceptance(task, task.status === "done")) return "unaccepted";
   if (!unread) return null;
   if (task.status === "done") return "success";
   if (task.status === "failed" || task.status === "canceled") return "error";

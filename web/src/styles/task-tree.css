@@ -276,6 +276,13 @@
 }
 
 .workspace-status-dot--attention { background: var(--amber); }
+/* 未验收 = 干完了但还没盖章：靛蓝空心环。空心是刻意的 —— 实心点在这套界面里表示
+   「系统替你记的状态」，环表示「等你动手」，一眼能跟绿色的完成点分开。 */
+.workspace-status-dot--unaccepted {
+  border: 1.5px solid var(--accent);
+  background: color-mix(in lch, var(--accent) 16%, transparent);
+}
+.workspace-status-dot--unaccepted.workspace-status-dot--small { border-width: 1px; }
 .workspace-status-dot--success {
   border: 0;
   background: var(--green);

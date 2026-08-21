@@ -5,6 +5,7 @@ const INDICATOR_LABELS: Record<TaskStatusIndicator, string> = {
   pending: "尚未开始",
   active: "运行中或排队中",
   attention: "需要人工输入",
+  unaccepted: "已完成，等你验收",
   success: "已完成，有未读动态",
   error: "失败或取消，有未读动态",
 };

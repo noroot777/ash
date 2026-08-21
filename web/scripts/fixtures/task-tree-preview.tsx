@@ -20,7 +20,7 @@ const project: ProjectView = {
   health: { exists: true, isRepo: true },
 };
 
-function task(id: string, title: string, updatedAt: string): Task {
+function task(id: string, title: string, updatedAt: string, extra: Partial<Task> = {}): Task {
   return {
     id,
     projectId: project.id,
@@ -30,11 +30,14 @@ function task(id: string, title: string, updatedAt: string): Task {
     body: "",
     mode: "single",
     status: "done",
+    // 默认盖过章：不然「干完了没验收」会豁免年龄折叠，这个 fixture 就没有可折叠的行了。
+    stage: "accepted",
     labels: [],
     dependsOn: [],
     resumeDependsOn: [],
     createdAt: updatedAt,
     updatedAt,
+    ...extra,
   };
 }
 
@@ -43,6 +46,9 @@ const tasks: Task[] = [
   task("old-1", "很久以前的任务甲", old),
   task("old-2", "很久以前的任务乙", old),
   task("old-3", "很久以前的任务丙", old),
+  // 这两条是「永不折叠」的两种理由：用户加的星标，和还没盖的章。
+  task("old-starred", "很久以前但加了星", old, { starredAt: now - 5 * 60 * 1000 }),
+  task("old-unaccepted", "很久以前但没验收", old, { stage: null }),
 ];
 
 const idleSpread: SidebarSpread = {

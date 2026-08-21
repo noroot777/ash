@@ -304,6 +304,12 @@ function CurrentProjectTree({
 }) {
   const sections = useMemo(() => buildTaskTree(tasks, { unifiedPinned: true }), [tasks]);
   const { collapsed, toggle: toggleCollapsed } = useCollapsedSections();
+  // 星标和「等你验收」的行永不因为旧被藏起来：一个是用户手动按的记号，一个是没盖的章，
+  // 两者都属于「我要一直看得见」。判据跟行首那颗点同源，标出来的和留下来的必须是同一批。
+  const keepVisible = useCallback(
+    (task: Task) => task.starredAt != null || task.pinnedAt != null || indicatorForTask(task) === "unaccepted",
+    [indicatorForTask],
+  );
   const keptBySection = useMemo(
     () => sections.map((section) => ({
       section,
@@ -314,12 +320,12 @@ function CurrentProjectTree({
   const hiddenSelection = useMemo(() => {
     if (!selectedTaskId) return null;
     for (const { section, kept } of keptBySection) {
-      if (previewTasksByAge(kept).hidden.some((task) => task.id === selectedTaskId)) {
+      if (previewTasksByAge(kept, Date.now(), keepVisible).hidden.some((task) => task.id === selectedTaskId)) {
         return { sectionKey: section.key, taskId: selectedTaskId };
       }
     }
     return null;
-  }, [keptBySection, selectedTaskId]);
+  }, [keepVisible, keptBySection, selectedTaskId]);
   const [previewExpandedSections, setPreviewExpandedSections] = useState<Set<string>>(
     () => hiddenSelection ? new Set([hiddenSelection.sectionKey]) : new Set(),
   );
@@ -360,7 +366,7 @@ function CurrentProjectTree({
       {keptBySection.map(({ section, kept }) => {
         const sectionCollapsed = collapsed.has(section.key);
         if (!kept.length) return null;
-        const preview = previewTasksByAge(kept);
+        const preview = previewTasksByAge(kept, Date.now(), keepVisible);
         const previewExpanded = previewExpandedSections.has(section.key);
         const visibleTasks = previewExpanded ? kept : preview.visible;
         const hiddenCount = preview.hidden.length;

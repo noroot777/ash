@@ -48,11 +48,15 @@ try {
   const oldJia = page.getByRole("button", { name: "很久以前的任务甲" });
   const oldYi = page.getByRole("button", { name: "很久以前的任务乙" });
   const oldBing = page.getByRole("button", { name: "很久以前的任务丙" });
+  const oldStarred = page.getByRole("button", { name: "很久以前但加了星" });
+  const oldUnaccepted = page.getByRole("button", { name: "很久以前但没验收" });
   const expand = page.getByRole("button", { name: "显示另外 3 条" });
   const collapse = page.getByRole("button", { name: "收起", exact: true });
 
   await recent.waitFor();
   assert.equal(await oldJia.count(), 0, "默认只显示 24 小时内的任务");
+  assert.equal(await oldStarred.count(), 1, "星标的任务再旧也不进折叠");
+  assert.equal(await oldUnaccepted.count(), 1, "还没验收的任务再旧也不进折叠");
   await expand.click();
   await oldJia.waitFor();
   assert.equal(await oldYi.count(), 1);
@@ -67,6 +71,8 @@ try {
   assert.equal(await oldYi.count(), 0);
   assert.equal(await oldBing.count(), 0);
   assert.equal(await recent.count(), 1);
+  assert.equal(await oldStarred.count(), 1, "收起之后星标的仍然在");
+  assert.equal(await oldUnaccepted.count(), 1, "收起之后未验收的仍然在");
 
   console.log("✓ 任务树预览：展开后点旧任务，收起仍能收回去");
 } finally {
