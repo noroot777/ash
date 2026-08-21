@@ -8,6 +8,7 @@ import {
   type TimelineEntry,
 } from "../task-detail/conversationModel.ts";
 import { parseAttachmentText } from "../task-detail/utils.ts";
+import { createClientId } from "./clientId.ts";
 
 const settledStatuses = new Set(["done", "failed", "canceled", "idle"]);
 const SAME_TURN_WINDOW_MS = 30_000;
@@ -123,7 +124,7 @@ export function useConversation(taskId: string, revision = 0) {
       if (event.type === "agent.event" && event.taskId === taskId) {
         appendTimeline({
           kind: "server",
-          id: crypto.randomUUID(),
+          id: createClientId(),
           event,
           receivedAt: new Date().toISOString(),
         });
@@ -148,7 +149,7 @@ export function useConversation(taskId: string, revision = 0) {
   ) => {
     const entry: TimelineEntry = {
       kind: "user",
-      id: crypto.randomUUID(),
+      id: createClientId(),
       text,
       attachments,
       at: new Date().toISOString(),

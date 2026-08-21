@@ -5,6 +5,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { api, type TerminalEvent } from "../lib/api.ts";
+import { createClientId } from "../lib/clientId.ts";
 import {
   createTerminalTab,
   type ProjectTerminalTab,
@@ -31,7 +32,7 @@ function initialHeight(): number {
 }
 
 function clientTabId(): string {
-  return window.crypto.randomUUID();
+  return createClientId();
 }
 
 function statusLabel(status: TerminalStatus): string {
