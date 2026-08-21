@@ -156,15 +156,24 @@ export async function headCommit(path: string): Promise<string | null> {
 }
 
 /** 工作目录是否有未提交改动（含未跟踪文件）；取不到返回 null（调用方按未知处理，不当干净）。
- *  ash 自己的 `.worktrees/` 目录不算脏——它是本工具放任务 worktree 的惯例位置，
- *  不属于这个项目的改动（不滤掉的话，项目根跑过任何 worktree 任务后 dirty 永远 true）。 */
+ *  两类未跟踪条目**不算这个项目的改动**，滤掉：
+ *  - ash 自己的 `.worktrees/`：本工具放任务 worktree 的惯例位置（不滤的话，项目根跑过
+ *    任何 worktree 任务后 dirty 永远 true）。
+ *  - 依赖目录 `node_modules`：worktree 里没有它，agent 为了跑 typecheck/build 普遍用
+ *    `ln -s` 借主仓那份。而 `.gitignore` 里几乎都写成带尾斜杠的 `node_modules/`——那条
+ *    **只匹配目录，匹配不上软链**（git 把软链当文件），于是 `git status` 稳定报 `?? node_modules`，
+ *    工作区永远脏。后果不是「多一行提示」：自由工作流据此把刚出炉的审查结论判成过期，
+ *    「按意见修复」入口消失、按钮改口「审查新改动」，用户看到的是一次纯误判。 */
 export async function workspaceDirty(path: string): Promise<boolean | null> {
   try {
     const { stdout } = await exec("git", ["-C", expandHome(path), "status", "--porcelain"]);
     return stdout.split("\n").some((line) => {
       if (!line.trim()) return false;
       const file = line.slice(3);
-      return !(file === ".worktrees" || file.startsWith(".worktrees/"));
+      if (file === ".worktrees" || file.startsWith(".worktrees/")) return false;
+      // 只放过**未跟踪**的依赖路径；已跟踪文件里真出现 node_modules 变更仍照常算脏。
+      if (line.startsWith("??") && file.replace(/\/$/, "").split("/").includes("node_modules")) return false;
+      return true;
     });
   } catch {
     return null;
@@ -193,15 +202,13 @@ export async function projectHealthFull(repoPath: string | null | undefined): Pr
   if (!light.isRepo) return light;
   const p = expandHome(repoPath);
   let branch: string | null = null;
-  let dirty = false;
   try {
     const { stdout } = await exec("git", ["-C", p, "rev-parse", "--abbrev-ref", "HEAD"]);
     branch = stdout.trim() || null; // "HEAD" when detached
   } catch { /* leave null */ }
-  try {
-    const { stdout } = await exec("git", ["-C", p, "status", "--porcelain"]);
-    dirty = stdout.trim().length > 0;
-  } catch { /* leave false */ }
+  // 脏判定跟自由工作流走同一口径（见 workspaceDirty）：这颗健康点不该被 ash 自己的
+  // `.worktrees/` 和借来的 node_modules 软链点亮。
+  const dirty = (await workspaceDirty(p)) ?? false;
   return { ...light, branch, dirty };
 }
 
