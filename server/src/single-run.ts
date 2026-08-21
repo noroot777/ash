@@ -9,6 +9,7 @@ import type { AgentEvent, AgentType, SessionRole, TaskStatus } from "@ash/shared
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
+import { scanForTitle } from "./auto-title.js";
 import { now } from "./util.js";
 import { setTaskStatus } from "./status.js";
 import { takeStopped, takeConfirmed, type StopSettle } from "./runs.js";
@@ -266,6 +267,14 @@ export async function consumeSingleRun(a: {
     pendingTraceText += text;
     publishEvent({ kind: "text", text });
   };
+  // 智能体自己起的标题（见 auto-title.ts）。没解析到就什么也不做：任务留着建它时那个
+  // 临时名（body 首行），下一次 fresh run 还会再试一次——autoTitle 只在真的改成时才关。
+  const applyAutoTitle = async (newTitle: string | null) => {
+    if (!newTitle) return;
+    const updatedAt = now();
+    await db.update(tasks).set({ title: newTitle, autoTitle: false, updatedAt }).where(eq(tasks.id, taskId));
+    bus.publish({ type: "task.title", taskId, title: newTitle, updatedAt });
+  };
   const persistTrace = (event: AgentEvent, at?: string) => {
     // `context` 刻意不进 trace：trace 是「按回合回放各自的气泡」，而水位属于整条会话的
     // 此刻、只有最后一个值有意义，它的家在 sessions 行上（setSessionContext）。
@@ -307,21 +316,11 @@ export async function consumeSingleRun(a: {
       }
       if (event.kind === "text" && !titleDone) {
         head += event.text;
-        const nl = head.indexOf("\n");
-        if (nl < 0) continue; // still buffering the first line
-        const firstLine = head.slice(0, nl);
-        const rest = head.slice(nl + 1);
-        const m = firstLine.match(/标题[:：]\s*(.+)/);
-        if (m) {
-          const newTitle = m[1].trim().replace(/[`*"]/g, "").slice(0, 30);
-          if (newTitle) {
-            const updatedAt = now();
-            await db.update(tasks).set({ title: newTitle, autoTitle: false, updatedAt }).where(eq(tasks.id, taskId));
-            bus.publish({ type: "task.title", taskId, title: newTitle, updatedAt });
-          }
-        }
+        const scan = scanForTitle(head, false);
+        if (scan.kind === "buffer") continue; // 窗口还没走完，接着攒
+        await applyAutoTitle(scan.title);
         titleDone = true;
-        emitText(m ? rest : head); // matched: drop the title line; else flush buffer
+        emitText(scan.text); // 命中的话标题行已被摘掉，其余原样放行
         continue;
       }
       if (event.kind === "text") {
@@ -341,7 +340,15 @@ export async function consumeSingleRun(a: {
   } finally {
     if (offsetTimer) clearInterval(offsetTimer);
   }
-  if (!titleDone && head) emitText(head); // agent never produced a newline
+  // 一个换行都没等到就收流了（整轮只吐了一行的那种）。这里补一次 flush 扫描：
+  // 老实现直接把缓冲原样吐出去，那一行哪怕就是标准的 `标题：xxx` 也白瞎。
+  if (!titleDone && head) {
+    const scan = scanForTitle(head, true);
+    if (scan.kind === "resolved") {
+      await applyAutoTitle(scan.title);
+      emitText(scan.text);
+    } else emitText(head);
+  }
   flushTraceText();
 
   // A stop kills the subprocess → the stream ends like a normal exit; settle
