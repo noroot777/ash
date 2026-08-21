@@ -25,7 +25,7 @@ import {
   readWorkspaceSidebarWidth,
   WORKSPACE_SIDEBAR_STORAGE_KEY,
 } from "./WorkspaceResizeHandle.tsx";
-import { pushTaskHistoryEntry } from "./workspaceHistory.ts";
+import { pushTaskHistoryEntry, selectedTaskProjectId } from "./workspaceHistory.ts";
 import { TerminalToggle } from "./TerminalToggle.tsx";
 
 const ProjectTerminal = lazy(() => import("./ProjectTerminal.tsx").then((module) => ({ default: module.ProjectTerminal })));
@@ -87,13 +87,33 @@ export function WorkspaceShell() {
   useEffect(() => { refreshGroups(); }, [refreshGroups]);
 
   useEffect(() => {
-    if (!projectsReady || tasksLoading) return;
-    setTaskId((current) => {
-      if (!current) return null;
-      const task = tasks.find((item) => item.id === current && (!item.archived || settingsSection === "archive"));
-      return task?.projectId === projectId ? current : null;
+    if (!projectsReady || tasksLoading || !taskId) return;
+    const taskProjectId = selectedTaskProjectId(tasks, taskId);
+    if (taskProjectId && taskProjectId !== projectId) {
+      setProjectId(taskProjectId);
+      return;
+    }
+    const task = tasks.find((item) => item.id === taskId);
+    if (task) {
+      if (task.archived && settingsSection !== "archive") setTaskId(null);
+      return;
+    }
+    let alive = true;
+    api.task(taskId).then((loaded) => {
+      if (!alive) return;
+      if (loaded.archived && settingsSection !== "archive") {
+        setTaskId((current) => current === taskId ? null : current);
+        return;
+      }
+      setTasks((current) => current.some((item) => item.id === loaded.id)
+        ? current.map((item) => item.id === loaded.id ? loaded : item)
+        : [loaded, ...current]);
+      setProjectId(loaded.projectId);
+    }).catch(() => {
+      if (alive) setTaskId((current) => current === taskId ? null : current);
     });
-  }, [projectId, projectsReady, settingsSection, tasks, tasksLoading]);
+    return () => { alive = false; };
+  }, [projectId, projectsReady, setTasks, settingsSection, taskId, tasks, tasksLoading]);
 
   useEffect(() => {
     if (!projectsReady) return;

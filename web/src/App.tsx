@@ -1,11 +1,15 @@
 import { PreviewBadge } from "./components/PreviewBadge.tsx";
 import { TaskReplyDraftProvider } from "./task-detail/TaskReplyDrafts.tsx";
 import { WorkspaceShell } from "./workspace/WorkspaceShell.tsx";
+import { normalizedWorkspaceUrl } from "./workspace/workspaceHistory.ts";
 
 export function App() {
-  if (window.location.pathname !== "/") {
-    window.history.replaceState(null, "", `/${window.location.search}${window.location.hash}`);
-  }
+  const normalizedUrl = normalizedWorkspaceUrl(
+    window.location.pathname,
+    window.location.search,
+    window.location.hash,
+  );
+  if (normalizedUrl) window.history.replaceState(null, "", normalizedUrl);
   return (
     <>
       <TaskReplyDraftProvider>

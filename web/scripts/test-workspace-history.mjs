@@ -1,10 +1,37 @@
 import assert from "node:assert/strict";
-import { pushTaskHistoryEntry, taskSelectionUrl } from "../src/workspace/workspaceHistory.ts";
+import {
+  normalizedWorkspaceUrl,
+  pushTaskHistoryEntry,
+  selectedTaskProjectId,
+  taskSelectionUrl,
+} from "../src/workspace/workspaceHistory.ts";
 
 assert.equal(
   taskSelectionUrl({ id: "task / 四", projectId: "project & one" }, "/"),
   "/?project=project+%26+one&task=task+%2F+%E5%9B%9B",
 );
+
+assert.equal(
+  normalizedWorkspaceUrl("/tasks/task%20%2F%20%E5%9B%9B", "", "#reply"),
+  "/?task=task+%2F+%E5%9B%9B#reply",
+  "legacy handoff links must retain the task id when the SPA normalizes the path",
+);
+assert.equal(
+  normalizedWorkspaceUrl("/tasks/task-2", "?project=stale", ""),
+  "/?project=stale&task=task-2",
+);
+assert.equal(normalizedWorkspaceUrl("/tasks/bad%ZZ", "", ""), "/?task=bad%25ZZ");
+assert.equal(normalizedWorkspaceUrl("/", "?project=p1", ""), null);
+
+assert.equal(
+  selectedTaskProjectId([
+    { id: "task-1", projectId: "project-1" },
+    { id: "task-2", projectId: "project-2" },
+  ], "task-2"),
+  "project-2",
+  "a task-only deep link must switch the workspace to that task's project",
+);
+assert.equal(selectedTaskProjectId([], "missing"), null);
 
 const entries = ["/?project=project-1"];
 const location = { pathname: "/", search: "?project=project-1" };
