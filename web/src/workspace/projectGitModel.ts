@@ -40,9 +40,15 @@ export function dirtyText(state: ProjectGitState | null): string | null {
 /** 会改工作树的操作（切分支 / 拉取）此刻能不能做。能做返回 null。 */
 export function worktreeBlocker(state: ProjectGitState | null, what: string): string | null {
   if (!state?.isRepo) return "这个项目的路径不是 Git 仓库";
-  if (state.operation) return `仓库正停在 ${state.operation} 中途，先到终端收尾再${what}`;
+  const mid = midwayBlocker(state, what);
+  if (mid) return mid;
   if (dirtyCount(state) > 0) return `主仓有未提交的改动，${what}前请先提交或丢弃（这里不会替你 stash）`;
   return null;
+}
+
+/** 卡在 merge / rebase 中途——写型操作一律拦，推送也不例外（服务端同样 409）。 */
+function midwayBlocker(state: ProjectGitState, what: string): string | null {
+  return state.operation ? `仓库正停在 ${state.operation} 中途，先到终端收尾再${what}` : null;
 }
 
 export function pullBlocker(state: ProjectGitState | null): string | null {
@@ -52,11 +58,13 @@ export function pullBlocker(state: ProjectGitState | null): string | null {
   return worktreeBlocker(state, "拉取");
 }
 
+// 推送不看工作区脏不脏（推的是已提交的历史），但看 merge / rebase 中途：那时候的 HEAD
+// 是半成品，发布出去等于把用户还没认可的历史推给别人。
 export function pushBlocker(state: ProjectGitState | null): string | null {
   if (!state?.isRepo) return "这个项目的路径不是 Git 仓库";
   if (state.branch.detached || !state.branch.head) return "当前是游离 HEAD，没有可推送的分支";
   if (!state.branch.upstream && !state.remotes.length) return "这个仓库没有配置 Git 远端，暂时不能发布分支";
-  return null;
+  return midwayBlocker(state, "推送");
 }
 
 export function fetchBlocker(state: ProjectGitState | null): string | null {

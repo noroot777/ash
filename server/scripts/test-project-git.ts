@@ -259,6 +259,44 @@ try {
     await rejects(() => pushProject(repo, "origin"), /游离 HEAD/, "游离 HEAD 没有可推送的分支");
   }
 
+  // ── 推送的中途门禁:merge 卡住时不许把半成品 HEAD 发出去,但单纯脏工作区照推不误 ──
+  {
+    const { repo, origin } = makeRepo("push-midway");
+    // 脏工作区:推的是已提交的历史,未提交的改动本来就不参与,不该拦。
+    write(repo, "one.txt", "one\n");
+    commit(repo, "one");
+    write(repo, "seed.txt", "dirty\n");
+    write(repo, "scratch.txt", "untracked\n");
+    const dirtyPush = await pushProject(repo, null);
+    assert.match(dirtyPush.message, /已推送/, "脏工作区不该拦住推送");
+    assert.match(git(repo, "status", "--porcelain"), /seed\.txt/, "推送不许动工作区的改动");
+    git(repo, "checkout", "--", "seed.txt");
+
+    // merge 中途:HEAD 是半成品,拦住,且远端一步不许动。
+    git(repo, "checkout", "-b", "theirs");
+    write(repo, "seed.txt", "theirs\n");
+    commit(repo, "theirs");
+    git(repo, "checkout", "main");
+    write(repo, "seed.txt", "mine\n");
+    commit(repo, "mine");
+    const remoteBefore = git(origin, "rev-parse", "main");
+    try {
+      git(repo, "merge", "theirs");
+      assert.fail("这一步本该撞冲突");
+    } catch { /* 冲突正是我们要的:仓库停在 merge 中途 */ }
+    assert.equal((await readProjectGitState(repo)).operation, "merge", "前置条件:仓库确实停在 merge 中途");
+
+    const midway = await rejects(() => pushProject(repo, null), /merge 中途/, "merge 中途必须拦住推送");
+    assert.match(midway, /收尾或 abort/, "拒绝时要给出下一步怎么办");
+    assert.equal(git(origin, "rev-parse", "main"), remoteBefore, "被拒之后远端一步都不许动");
+    assert.equal((await readProjectGitState(repo)).operation, "merge", "拒绝不该顺手改变仓库状态");
+
+    // 收尾之后照常能推。
+    git(repo, "merge", "--abort");
+    const after = await pushProject(repo, null);
+    assert.match(after.message, /已推送/, "abort 之后应恢复可推送");
+  }
+
   console.log("project git ops ok");
 } finally {
   rmSync(root, { recursive: true, force: true });

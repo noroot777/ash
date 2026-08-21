@@ -164,11 +164,20 @@ export async function readProjectGitState(repoPath: string | null | undefined): 
   };
 }
 
+/**
+ * 仓库正卡在 merge / rebase / cherry-pick / revert 中途。**所有写型操作都要过这一道**，
+ * 包括不碰工作树的推送：中途状态下的 HEAD 是半成品（冲突还没解、变基只走了一半），
+ * 把它发布出去，远端就多了一份本地根本还没认可的历史。
+ */
+function operationBlocker(state: ProjectGitState, what: string): string | null {
+  if (!state.operation) return null;
+  return `仓库正处在 ${state.operation} 中途，先在终端把它收尾或 abort，再${what}。`;
+}
+
 /** 未跟踪文件不算脏：git 切分支不会碰它们。挡住的是已暂存 / 已修改 / 冲突中。 */
 function dirtyBlocker(state: ProjectGitState, what: string): string | null {
-  if (state.operation) {
-    return `仓库正处在 ${state.operation} 中途，先在终端把它收尾或 abort，再${what}。`;
-  }
+  const mid = operationBlocker(state, what);
+  if (mid) return mid;
   const { staged, unstaged, merge } = state.dirty;
   const total = staged + unstaged + merge;
   if (!total) return null;
@@ -304,10 +313,15 @@ export async function pullProject(repoPath: string, strategy: PullStrategy): Pro
 /**
  * 推送当前分支。目标写全为 `remote HEAD:refs/heads/<branch>`，不读 `push.default`，
  * 不 force，不偷偷先 pull —— 跟任务面板那颗 ↑ 是同一套规矩，只是作用在主仓上。
+ *
+ * 脏工作区**不拦**（推的是已提交的历史，未提交的改动本来就不参与），但 merge / rebase
+ * 中途要拦：那时候的 HEAD 还不是用户认可的结果。
  */
 export async function pushProject(repoPath: string, requestedRemote: string | null): Promise<ProjectGitResult> {
   return withRepoLock(repoPath, async () => {
     const state = await requireRepo(repoPath);
+    const midway = operationBlocker(state, "推送");
+    if (midway) throw new ScmOperationError(midway, 409);
     const branch = state.branch.head;
     if (!branch || state.branch.detached) {
       throw new ScmOperationError("当前是游离 HEAD 或还没有分支，没有可推送的东西。", 409);
