@@ -14,6 +14,7 @@ import { reopenAcceptedStage } from "../task-stage.js";
 import { taskWorkspace } from "../task-workspace.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import type { AgentExecutor } from "../executors/types.js";
+import { LOST_SESSION_PATCH, SESSION_LOST_NOTE, isSessionLost } from "../executors/session-lost.js";
 import { RUNS_DIR } from "../paths.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import * as P from "./prompts.js";
@@ -146,6 +147,10 @@ async function runTurn(args: {
   let text = "";
   let exit = 0;
   let errorMsg: string | undefined;
+  // CLI 否认过这条会话吗(见 executors/session-lost.ts)。duet 有自己的会话行与自己的
+  // 结算,不经过 single-run.ts —— 漏掉这里,duet 任务会一直 --resume 同一个死 id:
+  // 库里那份喂下一次 /retry,返回值里那份喂本次运行的后续轮次,两处都要清。
+  let sessionLost = false;
   // 本回合的执行过程,随回合一起落盘(见 TurnTraceEvent):刷新后时间线才展得开。
   const trace: TurnTraceEvent[] = [];
   const TRACE_CAP = 200;
@@ -172,6 +177,7 @@ async function runTurn(args: {
       } else if (event.kind === "error") {
         errorMsg = event.message;
         out.write("✕ " + event.message + "\n");
+        if (isSessionLost(event.message)) sessionLost = true;
       } else if (event.kind === "context") {
         await setSessionContext(rowId, event.context);
       } else if (event.kind === "done") {
@@ -202,9 +208,22 @@ async function runTurn(args: {
   }
   const endIso = now();
   const durationMs = Math.max(0, Date.parse(endIso) - Date.parse(turnStart));
+  // CLI 否认了这条会话:清掉失效 id 和由它派生的恢复命令,并把这件事写进本轮的错误
+  // 文本 —— 时间线和 transcript 都取自 errorMsg,不写进去用户只看得到一行英文,不知道
+  // 下一次重试会是全新会话(**上下文不带过来**)。
+  const dropSession = sessionLost && exit !== 0;
+  if (dropSession) {
+    errorMsg = `${errorMsg ?? ""}\n${SESSION_LOST_NOTE}`.trim();
+    out.write("✕ " + SESSION_LOST_NOTE + "\n");
+  }
   await db
     .update(sessions)
-    .set({ exitStatus: exit, endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${durationMs}` })
+    .set({
+      exitStatus: exit,
+      endedAt: endIso,
+      activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${durationMs}`,
+      ...(dropSession ? LOST_SESSION_PATCH : {}),
+    })
     .where(eq(sessions.id, rowId));
   // Persist the turn so a reloaded duet can rebuild its timeline (no live
   // events). Includes the error so a failed turn stays visibly failed on reload.
@@ -220,7 +239,9 @@ async function runTurn(args: {
   // A manual stop killed this turn's subprocess → unwind to canceled (the top of
   // each entry point catches CanceledRun).
   if (isCanceling(taskId)) throw new CanceledRun();
-  return { rowId, cliId, text, raised, agrees, conclusion, exit, error: errorMsg };
+  // cliId 清成空串,调用方的 `resumeCliId: ... || undefined` 就会退化成「开新会话」——
+  // 本次运行的后续轮次也不会再拿这个死 id 去 --resume。
+  return { rowId, cliId: dropSession ? "" : cliId, text, raised, agrees, conclusion, exit, error: errorMsg };
 }
 
 // A turn is unusable if the CLI errored, exited non-zero, or (for voices)
