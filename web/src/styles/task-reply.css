@@ -9,7 +9,14 @@
 .task-reply-rail-button:hover svg { opacity: 1; }
 .task-reply-rail-button:focus-visible { outline: 2px solid color-mix(in lch, var(--accent) 48%, transparent); outline-offset: 1px; }
 .task-reply-box { position: relative; overflow: hidden; border: 1px solid var(--line2); border-radius: 12px; background: var(--panel); box-shadow: var(--surface-shadow); }
-.task-reply-box textarea { display: block; width: 100%; min-height: 58px; max-height: 230px; resize: vertical; border: 0; background: transparent; padding: 10px 12px 2px; color: var(--ink); font-size: 12.5px; line-height: 1.55; outline: 0; }
+/* 高度改由顶边的拖动条控制(task-detail/ReplyResizeHandle.tsx),不再用浏览器原生的
+   右下角把手:两套机制都往 style.height 上写,会互相打架。 */
+.task-reply-box textarea { display: block; width: 100%; min-height: 58px; resize: none; border: 0; background: transparent; padding: 10px 12px 2px; color: var(--ink); font-size: 12.5px; line-height: 1.55; outline: 0; }
+.task-reply-resize { position: absolute; z-index: 5; top: -4px; right: 0; left: 0; height: 8px; cursor: row-resize; }
+.task-reply-resize::after { position: absolute; top: 3px; right: 0; left: 0; height: 1px; background: var(--accent); content: ""; opacity: 0; transition: opacity 120ms ease; }
+.task-reply-resize:hover::after,
+.task-reply-resize:focus-visible::after,
+.task-reply-resizing .task-reply-resize::after { opacity: .65; }
 .task-reply-actions { display: flex; height: 38px; align-items: center; gap: 8px; padding: 0 7px 6px 8px; color: var(--faint); font-size: 9.5px; }
 .task-reply-actions > span { margin-left: auto; }
 .task-reply-icon,

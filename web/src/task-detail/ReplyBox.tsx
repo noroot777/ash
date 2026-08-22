@@ -10,6 +10,11 @@ import {
 import { defaultOnceTime } from "../components/ScheduleControl.tsx";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
 import { AgentPlate } from "../components/AgentPlate.tsx";
+import {
+  ReplyResizeHandle,
+  readStoredReplyHeight,
+  storeReplyHeight,
+} from "./ReplyResizeHandle.tsx";
 import { executorRunSummary, registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { api, type ReplyTaskResult } from "../lib/api.ts";
 import { useProviders } from "../lib/modelCatalog.ts";
@@ -78,6 +83,8 @@ export function ReplyBox({
   const [sendAt, setSendAt] = useState("");
   const scheduleTriggerRef = useRef<HTMLButtonElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // null = 没拖过,交给 rows 撑出自然高度
+  const [replyHeight, setReplyHeight] = useState<number | null>(readStoredReplyHeight);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [profilesReady, setProfilesReady] = useState(false);
   const [profilesFailed, setProfilesFailed] = useState(false);
@@ -306,6 +313,14 @@ export function ReplyBox({
 
   return (
     <div className={`task-reply-shell${topRail ? " has-top-rail" : ""}`}>
+      <ReplyResizeHandle
+        targetRef={textareaRef}
+        height={replyHeight}
+        onChange={(next) => {
+          setReplyHeight(next);
+          storeReplyHeight(next);
+        }}
+      />
       {menuOpen && (
         <SlashMenu
           className="task-reply-command-menu"
@@ -383,6 +398,7 @@ export function ReplyBox({
           ref={textareaRef}
           value={value}
           rows={3}
+          style={replyHeight === null ? undefined : { height: replyHeight }}
           disabled={inputDisabled}
           placeholder={reason}
           aria-label="回复任务"
