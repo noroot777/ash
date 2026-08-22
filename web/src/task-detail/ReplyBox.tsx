@@ -9,6 +9,7 @@ import {
 } from "../components/ScheduledMessages.tsx";
 import { defaultOnceTime } from "../components/ScheduleControl.tsx";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
+import { AgentPlate } from "../components/AgentPlate.tsx";
 import { executorRunSummary, registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { api, type ReplyTaskResult } from "../lib/api.ts";
 import { useProviders } from "../lib/modelCatalog.ts";
@@ -377,6 +378,7 @@ export function ReplyBox({
       {sendError && <p className="task-reply-error">{sendError}</p>}
       {topRail}
       <div className="task-reply-box">
+        <AgentPlate name={activeAgent} />
         <textarea
           ref={textareaRef}
           value={value}

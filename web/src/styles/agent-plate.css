@@ -1,0 +1,55 @@
+/* 对话框底部的执行器水印,见 components/AgentPlate.tsx。字号由脚本按容器高度写进 --plate-size。
+   --agent-plate-bottom 由使用它的表面给出:底部有控件行时要让开,否则水印会被不透明的
+   执行器胶囊拦腰切断(实测三段胶囊正好压在字上,读起来像渲染坏了)。 */
+
+.agent-plate {
+  position: absolute;
+  right: 12px;
+  bottom: var(--agent-plate-bottom, 0);
+  left: 12px;
+  z-index: 0;
+  display: flex;
+  align-items: flex-end;
+  /* 比字略高的一条贴底带:字号是脚本按框高算的,用 em 才能跟着一起缩。 */
+  height: 1.24em;
+  overflow: hidden;
+  font-size: var(--plate-size, 30px);
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+
+.agent-plate-word {
+  display: block;
+  color: lch(85.8% 0.6 282);
+  font-weight: 800;
+  font-size: inherit;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  text-transform: uppercase;
+  animation: agent-plate-in 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes agent-plate-in {
+  from {
+    transform: translate3d(0, 0.22em, 0);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+/* 水印是底色,框里其它东西一律压在它上面 */
+.task-reply-box textarea,
+.task-reply-actions {
+  position: relative;
+  z-index: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-plate-word {
+    animation-duration: 1ms;
+  }
+}

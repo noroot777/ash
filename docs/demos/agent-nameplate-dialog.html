@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>对话框底部的执行器水印</title>
+<style>
+  /* 这份 demo 跟线上实现保持一致:数值取自 web/src/styles/agent-plate.css 与
+     components/AgentPlate.tsx。改样式时两边一起改,别让它漂走。 */
+  :root {
+    --canvas: lch(97.94% 0.5 282);
+    --panel: lch(100% 0 282);
+    --line: lch(90.55% 0 282);
+    --line2: lch(86.5% 0 282);
+    --ink: lch(9.794% 0 282);
+    --faint: lch(64.64% 1.25 282);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 48px 24px;
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: "Inter Variable", Inter, -apple-system, BlinkMacSystemFont,
+      "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+
+  .wrap { width: min(720px, 100%); }
+
+  .hint-line {
+    margin: 0 0 10px;
+    color: var(--faint);
+    font-size: 12px;
+  }
+
+  /* ── 对话框本体(对应 .task-reply-box) ── */
+  .box {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid var(--line2);
+    border-radius: 12px;
+    background: var(--panel);
+    box-shadow: 0 1px 2px rgba(20, 22, 28, 0.05);
+    --reply-actions-h: 38px;
+    --agent-plate-bottom: var(--reply-actions-h);
+  }
+
+  .box textarea {
+    display: block;
+    width: 100%;
+    min-height: 58px;
+    max-height: 230px;
+    resize: vertical;
+    border: 0;
+    background: transparent;
+    padding: 10px 12px 2px;
+    color: var(--ink);
+    font: inherit;
+    font-size: 12.5px;
+    line-height: 1.55;
+    outline: 0;
+    position: relative;
+    z-index: 1;
+  }
+
+  .actions {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    height: var(--reply-actions-h);
+    align-items: center;
+    gap: 8px;
+    padding: 0 7px 6px 8px;
+    color: var(--faint);
+    font-size: 9.5px;
+  }
+
+  .actions .spacer { margin-left: auto; }
+
+  .chip {
+    border: 1px solid var(--line2);
+    border-radius: 999px;
+    background: var(--panel);
+    padding: 3px 9px;
+    color: var(--ink);
+    font: inherit;
+    font-size: 10px;
+    cursor: pointer;
+  }
+
+  .send {
+    width: 22px;
+    height: 22px;
+    border: 0;
+    border-radius: 6px;
+    background: var(--ink);
+    color: #fff;
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  /* ── 水印(对应 .agent-plate) ── */
+  .agent-plate {
+    position: absolute;
+    right: 12px;
+    bottom: var(--agent-plate-bottom, 0);
+    left: 12px;
+    z-index: 0;
+    display: flex;
+    align-items: flex-end;
+    height: 1.24em;
+    overflow: hidden;
+    font-size: var(--plate-size, 30px);
+    white-space: nowrap;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .agent-plate-word {
+    display: block;
+    color: lch(85.8% 0.6 282);
+    font-weight: 800;
+    font-size: inherit;
+    line-height: 1;
+    letter-spacing: -0.03em;
+    text-transform: uppercase;
+    animation: agent-plate-in 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  @keyframes agent-plate-in {
+    from { transform: translate3d(0, 0.22em, 0); opacity: 0; }
+    to { transform: none; opacity: 1; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .agent-plate-word { animation-duration: 1ms; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <p class="hint-line">拖对话框右下角改高度,水印字号跟着变;点下面的名字换执行器。</p>
+
+  <div class="box" id="box">
+    <div class="agent-plate" id="plate" aria-hidden="true">
+      <span class="agent-plate-word" id="word">claude</span>
+    </div>
+    <textarea id="field" rows="3" placeholder="回复任务…"></textarea>
+    <div class="actions">
+      <span>📎</span>
+      <span>🕐</span>
+      <span class="chip" id="picker">claude · 跟随执行器</span>
+      <span class="spacer">⌘↵ 发送</span>
+      <button class="send" type="button">↑</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const AGENTS = ["claude", "codex", "gemini", "grok", "cursor", "kimi", "antigravity"];
+  const box = document.getElementById("box");
+  const plate = document.getElementById("plate");
+  const picker = document.getElementById("picker");
+  let index = 0;
+
+  // 与 AgentPlate.tsx 同一套规则:先按框高定字号,再按宽度收。
+  function resize() {
+    const word = plate.firstElementChild;
+    const byHeight = Math.min(Math.max(box.clientHeight * 0.34, 24), 92);
+    plate.style.setProperty("--plate-size", byHeight + "px");
+    const room = box.clientWidth - 24;
+    const natural = word.scrollWidth;
+    if (natural > room && room > 0) {
+      plate.style.setProperty("--plate-size", byHeight * (room / natural) + "px");
+    }
+  }
+
+  function setAgent(name) {
+    // 换字要重建节点,入场动画才会重跑
+    const next = document.createElement("span");
+    next.className = "agent-plate-word";
+    next.textContent = name;
+    plate.replaceChildren(next);
+    picker.textContent = name + " · 跟随执行器";
+    resize();
+  }
+
+  picker.addEventListener("click", () => {
+    index = (index + 1) % AGENTS.length;
+    setAgent(AGENTS[index]);
+  });
+
+  new ResizeObserver(resize).observe(box);
+  resize();
+</script>
+</body>
+</html>
