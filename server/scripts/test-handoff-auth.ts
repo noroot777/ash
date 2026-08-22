@@ -339,6 +339,34 @@ async function main(): Promise<void> {
   assert.equal(openPing.peerStatus, "open");
   assert.equal(openPing.projects.length, 1, "审批关掉时项目清单照报,否则旧版源机匹配不到项目");
 
+  // ── 11. manifest 里的分支名/提交号会直接进 git 的 argv ─────────────────────
+  // 挡的是「进 argv 的字符串」这一面:`-` 开头会被 git 当成选项,`..`/`:`/换行能把
+  // refspec 拆坏或指到仓库目录之外。文件落盘方向的路径穿越由 safeRel / SAFE_NAME 另挡。
+  const withGit = (taskId: string, branch: string, head: string) => {
+    const m = JSON.parse(manifest(taskId)) as Record<string, unknown>;
+    m.git = { branch, head, full: false, prereqs: [], bundleBase64: "" };
+    return JSON.stringify(m);
+  };
+  const postGit = (taskId: string, branch: string, head: string) => raw("/handoff/import", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: withGit(taskId, branch, head),
+  });
+  const evilBranches = [
+    ["--upload-pack=touch /tmp/ash-pwned", "`-` 开头会被 git 当成选项"],
+    ["../../../../etc/evil", "`..` 能把 ref 指到 .git 之外"],
+    ["main\nrefs/heads/x", "换行能把 refspec 拆成两条"],
+    ["main:refs/heads/x", "`:` 是 refspec 的分隔符"],
+  ] as const;
+  for (const [i, [branch, why]] of evilBranches.entries()) {
+    const res = await postGit(`auth-branch-${i}`, branch, "a".repeat(40));
+    assert.equal(res.status, 400, `分支名 ${JSON.stringify(branch)} 必须在落库前被拒:${why}`);
+  }
+  const badHead = await postGit("auth-head-bad", "main", "$(touch /tmp/ash-pwned)");
+  assert.equal(badHead.status, 400, "head 只收 40/64 位 hex 提交号,别的一律不进 git 命令");
+  const cnBranch = await postGit("auth-branch-cn", "功能/中文分支", "a".repeat(40));
+  assert.notEqual(cnBranch.status, 400, "中文分支名在 git 里合法,校验不能把它一起误伤");
+
   console.log("test-handoff-auth ok");
 }
 

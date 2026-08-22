@@ -88,10 +88,26 @@ function validate(input: unknown): HandoffManifest {
   if (sch != null && (!sch || typeof sch !== "object" || !["once", "cron"].includes((sch as HandoffSchedulePayload).kind))) {
     throw new HandoffError("schedule 载荷非法");
   }
-  if (m.git !== null && (!m.git || !isStr(m.git.branch) || !isStr(m.git.bundleBase64))) {
-    throw new HandoffError("git 载荷非法");
+  if (m.git !== null) {
+    if (!m.git || !isStr(m.git.branch) || !isStr(m.git.bundleBase64)) throw new HandoffError("git 载荷非法");
+    if (!safeRefName(m.git.branch)) throw new HandoffError(`git 分支名非法:${m.git.branch.slice(0, 80)}`);
+    if (!/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(String(m.git.head))) throw new HandoffError("git head 不是提交号");
   }
   return m;
+}
+
+/**
+ * 分支名与 head 会**原样进 git 的 argv**(`branch -f <branch> <head>`、refspec 拼接、
+ * `<head>^{commit}`),只判 `typeof === "string"` 不够:`-` 开头的值会被 git 当成选项
+ * (参数注入),含 `..`/控制字符的会把 refspec 拆坏或指向仓库目录之外。这里按 git 自己的
+ * refname 规则收窄——保留非 ASCII(中文分支名是合法的),只挡掉危险形状。
+ * 文件落盘方向的同类校验在 handoff-types.ts `safeRel` 与 handoff-uploads.ts `SAFE_NAME`。
+ */
+function safeRefName(name: string): boolean {
+  if (!name || name.length > 255) return false;
+  if (/^[-./]/.test(name) || /[/.]$/.test(name) || name.endsWith(".lock")) return false;
+  if (name.includes("..") || name.includes("//") || name.includes("@{")) return false;
+  return !/[\x00-\x20\x7f~^:?*[\\]/.test(name);
 }
 
 /** bundle 落进本地仓库:verify 确认前置提交齐全,再把分支强制 fetch 进来。 */
