@@ -88,6 +88,10 @@ try {
   const staleBanner = page.locator(".scm-banner.is-danger");
   await stageOne.waitFor();
 
+  const branchActions = page.locator(".scm-branch").getByRole("button");
+  assert.equal(await branchActions.count(), 1, "改动面板的分支栏只保留刷新，仓库推送统一从项目名旁执行");
+  assert.equal(await branchActions.getAttribute("aria-label"), "刷新 git 状态");
+
   await page.locator(".scm-commit textarea").fill("先写一句提交信息");
   assert.equal(await commit.isDisabled(), false, "正常状态下该能提交");
   assert.equal(await staleBanner.count(), 0, "状态读得到时不该有「列表可能是旧的」");

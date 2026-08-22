@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowClockwise,
-  ArrowUp,
   ArrowsClockwise,
   GitBranch,
   GitCommit,
@@ -10,7 +9,6 @@ import {
 } from "@phosphor-icons/react";
 import type { ScmChange, ScmGroupId } from "../lib/api.ts";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
-import { useDismissable } from "../lib/useDismissable.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { ROOT_SOURCE_LABEL } from "../files/fileModel.ts";
 import { ScmChangeGroup } from "./ScmChangeGroup.tsx";
@@ -101,86 +99,17 @@ function forceConfirm(action: ScmAction, reason: string): PendingConfirm {
   };
 }
 
-/**
- * 分支栏右上角那两颗图标：推送/发布 + 刷新。
- *
- * 推送原先是一颗独占一整行的带字宽按钮。这一栏本来就窄（分支名 + 上游 + 一行工作目录
- * 路径），那颗按钮把「这是干什么用的」放大成了整个面板最显眼的东西——而它其实是偶尔才
- * 按一次的动作。收成图标挨着刷新放，说明交给指上去的提示，措辞反而比按钮上那几个字更全
- * （推几个提交、推到哪儿、为什么此刻按不动）。
- *
- * **按不动时不用 `disabled`**：Chrome 不给 disabled 元素发 mouseenter，那样恰恰是最需要
- * 解释的两种情形（没配远端、正在推）指上去什么都不出。改用 `aria-disabled` + 点击时直接
- * 返回——语义一样是「不可用」，但事件照发。
- */
-function BranchTools({
-  branch,
-  remotes,
-  pushing,
+function BranchRefresh({
   refreshing,
-  onPush,
   onRefresh,
-  showPush,
 }: {
-  branch: { head: string | null; detached: boolean; upstream: string | null; ahead: number | null };
-  remotes: string[];
-  pushing: boolean;
   refreshing: boolean;
-  onPush: (remote: string | null) => void;
   onRefresh: () => void;
-  showPush: boolean;
 }) {
-  const pushTip = useHoverTip();
   const refreshTip = useHoverTip();
-  const [picking, setPicking] = useState(false);
-  const picker = useRef<HTMLDivElement>(null);
-  const pushButton = useRef<HTMLButtonElement>(null);
-  useDismissable({
-    enabled: picking,
-    containerRef: picker,
-    onClose: () => setPicking(false),
-    restoreFocusRef: pushButton,
-  });
-
-  const publish = !branch.upstream;
-  const defaultRemote = remotes.includes("origin") ? "origin" : remotes[0] ?? "";
-  // 远端不止一个时不替用户猜。原先那个下拉框跟着宽按钮一起没了，改成点开这颗图标再选。
-  const picks = publish && remotes.length > 1;
-  const blocked = pushing
-    ? "正在推送…"
-    : branch.detached
-      ? "当前是游离 HEAD，没有可推送的分支"
-      : !branch.head
-        ? "没有可推送的分支"
-        : publish && remotes.length === 0
-          ? "这个仓库没有配置 Git 远端，暂时不能发布分支"
-          : null;
-  const pushLabel = blocked ?? (publish
-    ? (picks ? "发布分支到…（选择远端）" : `发布分支到 ${defaultRemote}`)
-    : (branch.ahead ?? 0) > 0
-      ? `推送 ${branch.ahead} 个提交到 ${branch.upstream}`
-      : `推送到 ${branch.upstream}`);
 
   return (
     <span className="scm-branch__tools">
-      {showPush && (
-        <button
-          ref={pushButton}
-          type="button"
-          className="scm-branch__push"
-          aria-label={pushLabel}
-          aria-disabled={!!blocked}
-          aria-expanded={picks ? picking : undefined}
-          {...pushTip.anchorProps}
-          onClick={() => {
-            if (blocked) return;
-            if (picks) { pushTip.hide(); setPicking((open) => !open); return; }
-            onPush(publish ? defaultRemote : null);
-          }}
-        >
-          {pushing ? <ArrowsClockwise size={13} className="is-spinning" /> : <ArrowUp size={13} weight="bold" />}
-        </button>
-      )}
       <button
         type="button"
         className="scm-branch__refresh"
@@ -191,22 +120,6 @@ function BranchTools({
       >
         <ArrowClockwise size={13} />
       </button>
-      {picking && (
-        <div className="scm-branch__remotes" ref={picker} role="menu" aria-label="选择要发布到的远端">
-          <p>发布这条分支到</p>
-          {remotes.map((name) => (
-            <button
-              key={name}
-              type="button"
-              role="menuitem"
-              onClick={() => { setPicking(false); onPush(name); }}
-            >
-              {name}
-            </button>
-          ))}
-        </div>
-      )}
-      <HoverTip at={pushTip.at}>{pushLabel}</HoverTip>
       <HoverTip at={refreshTip.at}>{refreshing ? "正在刷新…" : "刷新 git 状态"}</HoverTip>
     </span>
   );
@@ -216,22 +129,14 @@ function BranchBar({
   branch,
   rootPath,
   rootSource,
-  remotes,
-  onPush,
   onRefresh,
   refreshing,
-  pushing,
-  frozen,
 }: {
   branch: { head: string | null; detached: boolean; upstream: string | null; ahead: number | null; behind: number | null };
   rootPath: string;
   rootSource: keyof typeof ROOT_SOURCE_LABEL;
-  remotes: string[];
-  onPush: (remote: string | null) => void;
   onRefresh: () => void;
   refreshing: boolean;
-  pushing: boolean;
-  frozen: boolean;
 }) {
   return (
     <header className="scm-branch">
@@ -246,14 +151,9 @@ function BranchBar({
           {(branch.behind ?? 0) > 0 && <i>↓{branch.behind}</i>}
         </span>
       )}
-      <BranchTools
-        branch={branch}
-        remotes={remotes}
-        pushing={pushing}
+      <BranchRefresh
         refreshing={refreshing}
-        onPush={onPush}
         onRefresh={onRefresh}
-        showPush={!frozen}
       />
       <small className="scm-branch__root">{ROOT_SOURCE_LABEL[rootSource]} · {rootPath}</small>
     </header>
@@ -365,12 +265,8 @@ export function ScmInspector({
         branch={status.branch}
         rootPath={scm.overview.root.path}
         rootSource={scm.overview.root.source}
-        remotes={scm.overview.remotes ?? []}
-        onPush={(remote) => void perform({ kind: "push", remote })}
         refreshing={scm.loading || scm.busy}
         onRefresh={() => void scm.refresh()}
-        pushing={scm.busy}
-        frozen={!!frozen}
       />
 
       {scm.partial && <PartialBanner notice={scm.partial} stale={!!scm.stale} onDismiss={scm.dismissPartial} />}
