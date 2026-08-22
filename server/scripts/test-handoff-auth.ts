@@ -374,13 +374,15 @@ async function main(): Promise<void> {
   // 签名管冒充和篡改,加密管的是**窃听** —— 载荷是整个 git bundle 加完整会话历史,同网段
   // 抓一次包就全拿走。所以这里不验「代码调了加密函数」,而是真架一个中间人把线上那串
   // 字节抄下来,断言它不含明文。
-  const sniffed: string[] = [];
+  // 抄下来的必须按**字节**留着:信封是二进制帧,转成 utf8 会把不可解码的字节替换掉,
+  // 那样「密文里读不到明文」就变成了一个被编码顺手弄出来的假阳性。
+  const sniffed: Buffer[] = [];
   const sniffer = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (chunk) => chunks.push(chunk as Buffer));
     req.on("end", () => {
       const raw = Buffer.concat(chunks);
-      if (req.url?.includes("/handoff/import")) sniffed.push(raw.toString("utf8"));
+      if (req.url?.includes("/handoff/import")) sniffed.push(raw);
       const forwarded: Record<string, string> = { "content-type": "application/json" };
       for (const [k, v] of Object.entries(req.headers)) {
         if (k.startsWith("x-ash-peer-") && typeof v === "string") forwarded[k] = v;
@@ -412,10 +414,10 @@ async function main(): Promise<void> {
       true,
       "加密之后照样要能被对端解开并导入 —— 不然就是把功能换成了故障",
     );
-    const encBody = sniffed.at(-1) ?? "";
-    assert.ok(encBody.includes("ash-handoff-enc-v1"), "线上传的应该是加密信封");
-    assert.ok(!encBody.includes(secret), "任务正文绝不能明文出现在线上");
-    assert.ok(!encBody.includes(encTask), "连任务 id 都不该露");
+    const encBody = sniffed.at(-1) ?? Buffer.alloc(0);
+    assert.ok(encBody.subarray(0, 8).equals(Buffer.from("ash-enc1")), "线上传的应该是加密信封");
+    assert.ok(!encBody.includes(Buffer.from(secret)), "任务正文绝不能明文出现在线上");
+    assert.ok(!encBody.includes(Buffer.from(encTask)), "连任务 id 都不该露");
 
     // 关掉开关 = 调试模式:明文上路,功能不变。
     await patchAppSettings({ handoffEncrypt: false });
@@ -432,8 +434,17 @@ async function main(): Promise<void> {
       (await exportHandoff(plainTask, { targetUrl: snifferUrl, targetProjectId: peerProject.id, autoResume: false })).ok,
       true,
     );
-    const plainBody = sniffed.at(-1) ?? "";
-    assert.ok(plainBody.includes(secret), "关掉加密就该是明文——调试时看得见才是这个开关的全部意义");
+    const plainBody = sniffed.at(-1) ?? Buffer.alloc(0);
+    assert.ok(plainBody.includes(Buffer.from(secret)), "关掉加密就该是明文——调试时看得见才是这个开关的全部意义");
+
+    // **加密不该让能搬的东西变小**。信封曾经是 JSON+base64,密文再套一层 base64,
+    // 明文 400 MiB 的 manifest 会膨胀成 533 MiB 顶穿 Node 的字符串上限,等于把
+    // 「几百 MB 的大任务能接力」这个既有能力弄没了。二进制帧之后只多几十字节帧头。
+    const overhead = encBody.length - plainBody.length;
+    assert.ok(
+      overhead >= 0 && overhead < 512,
+      `加密信封相对明文只该多一个小帧头,实测多了 ${overhead} 字节——又套上 base64 了`,
+    );
 
     // 封给别的机器的信封,本机解不开。密钥派生绑死了收件人指纹,所以换台机器必然失败。
     const { sealForPeer } = await import("../src/handoff-crypto.js");

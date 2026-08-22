@@ -153,8 +153,11 @@ export function verifyWithPeerKey(publicKeyB64: string, canonical: string, sigB6
   }
 }
 
-export const sha256Hex = (body: string): string =>
-  createHash("sha256").update(body, "utf8").digest("hex");
+/** body 可能是明文 JSON,也可能是加密信封的二进制帧 —— 两种都按**线上那串字节**哈希。 */
+export const sha256Hex = (body: string | Buffer): string =>
+  typeof body === "string"
+    ? createHash("sha256").update(body, "utf8").digest("hex")
+    : createHash("sha256").update(body).digest("hex");
 
 export const newNonce = (): string => randomBytes(16).toString("hex");
 

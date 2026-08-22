@@ -82,7 +82,7 @@ export interface VerifiedPeer {
  * 验签。没带签名头 → 返回 null(旧版对端,由调用方按审批开关决定收不收);
  * 带了但验不过 → 直接抛,不给「签坏了就当没签」的降级路径。
  */
-export function verifyPeerSignature(c: Context, rawBody: string): VerifiedPeer | null {
+export function verifyPeerSignature(c: Context, rawBody: string | Buffer): VerifiedPeer | null {
   const h = (name: string) => c.req.header(name)?.trim() ?? "";
   const publicKey = h(PEER_HEADERS.key);
   const sig = h(PEER_HEADERS.sig);
@@ -199,7 +199,7 @@ export async function peerStanceFor(peer: VerifiedPeer | null, requireApproval: 
  * 接力标记而不是留 pending —— 鉴权拒绝确实什么都没导入,让它在本机原地可跑才对。
  * 返回值:验过的对端(没开审批且对端没签名时为 null)。
  */
-export async function requireApprovedPeer(c: Context, rawBody: string): Promise<VerifiedPeer | null> {
+export async function requireApprovedPeer(c: Context, rawBody: string | Buffer): Promise<VerifiedPeer | null> {
   const settings = await getAppSettings();
   const peer = verifyPeerSignature(c, rawBody);
   if (peer) await touchPeer(peer, peerAddr(c));

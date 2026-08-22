@@ -23,7 +23,7 @@ import { repoRefTips } from "./handoff-collect.js";
 import { HandoffError, type HandoffPingResponse } from "./handoff-types.js";
 import { canonicalPingChallenge, localIdentity, shortFingerprint, signWithLocalKey } from "./handoff-identity.js";
 import { looksSealed, openSealed } from "./handoff-crypto.js";
-import { readCappedText } from "./handoff-body.js";
+import { readCappedBody } from "./handoff-body.js";
 import {
   deletePeer, listPeers, peerAddr, peerStanceFor, requireApprovedPeer, setPeerStatus, touchPeer,
   verifyPeerSignature,
@@ -120,30 +120,31 @@ export function mountHandoffRoutes(api: Hono): void {
   // 必须先拿原文验签再解析:签名覆盖 body 哈希,先 parse 后验等于验的是解析结果,
   // 中间人改字段照样过。
   api.post("/handoff/import", async (c) => {
-    let raw: string;
+    // 先按**字节**读:签名哈希的是线上那串字节,而加密信封是二进制帧,提前转成
+    // 字符串会把它毁掉。
+    let bytes: Buffer;
     try {
       // 上限闸必须在验签之前,而且是流式的:签名覆盖 body 哈希,验签只能排在读完之后,
       // 所以没有这一层,一个未鉴权的巨大 body 就能把内存吃光(见 handoff-body.ts)。
-      raw = await readCappedText(c.req.raw, (await getAppSettings()).handoffMaxBodyMb);
+      bytes = await readCappedBody(c.req.raw, (await getAppSettings()).handoffMaxBodyMb);
     } catch (e) {
       if (e instanceof HandoffError) return fail(c, e);
       return c.json({ error: "导入体读取失败", ash: true }, 400);
     }
     try {
-      await requireApprovedPeer(c, raw);
+      await requireApprovedPeer(c, bytes);
     } catch (e) {
       return fail(c, e);
     }
     // 验签之后才解密:签名覆盖的是线上真正传的那串字节(信封),先解密后验等于验的是
     // 解密结果。加密与否由**源机**的设置决定,本机两种都收 —— 这个开关管的是「我发出去
     // 的东西加不加密」,拦别人的明文既没意义(签名已保证来源和完整性)也会平白拆掉兼容性。
-    if (looksSealed(raw)) {
-      try {
-        raw = openSealed(raw, localIdentity().fingerprint);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return c.json({ error: `加密的接力载荷解不开(${msg})——多半是源机封给了别的机器,或者路上被改过`, ash: true }, 400);
-      }
+    let raw: string;
+    try {
+      raw = looksSealed(bytes) ? openSealed(bytes, localIdentity().fingerprint) : bytes.toString("utf8");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return c.json({ error: `加密的接力载荷解不开(${msg})——多半是源机封给了别的机器,或者路上被改过`, ash: true }, 400);
     }
     let body: unknown;
     try {

@@ -33,7 +33,7 @@ export function normalizePeerUrl(raw: string): string {
  * 导出是为了让回归测试发原始请求时也能走**同一份**签名实现 —— 测试自己拼一套
  * 就会和产品代码各自漂移,那样验的是拷贝而不是真货。
  */
-export function peerRequestHeaders(url: string, method: string, body: string): Record<string, string> {
+export function peerRequestHeaders(url: string, method: string, body: string | Buffer): Record<string, string> {
   const identity = localIdentity();
   const ts = String(Date.now());
   const nonce = newNonce();
@@ -62,13 +62,21 @@ export async function fetchPeer<T>(
   const method = init?.method ?? "GET";
   const plain = typeof init?.body === "string" ? init.body : "";
   // 加密在签名**之前**:线上传的是信封,验签方拿到的也是信封,两边哈希的是同一串字节。
+  // 信封是二进制帧(不再 base64),所以 content-type 也要跟着换。
   const body = init?.sealTo ? sealForPeer(init.sealTo.kx, init.sealTo.fingerprint, plain) : plain;
+  const headers: Record<string, string> = { ...(init?.headers as Record<string, string> | undefined) };
+  // Buffer 不在 fetch 的 BodyInit 里(DOM 的 BufferSource 只收非共享的 ArrayBuffer),
+  // 套一层零拷贝视图交出去 —— 签名仍按同一串字节算。
+  const wire: string | Uint8Array<ArrayBuffer> = typeof body === "string"
+    ? body
+    : new Uint8Array(body.buffer as ArrayBuffer, body.byteOffset, body.byteLength);
+  if (typeof body !== "string") headers["content-type"] = "application/octet-stream";
   let res: Response;
   try {
     res = await fetch(url, {
       ...init,
-      ...(init?.body === undefined ? {} : { body }),
-      headers: { ...(init?.headers as Record<string, string> | undefined), ...peerRequestHeaders(url, method, body) },
+      ...(init?.body === undefined ? {} : { body: wire }),
+      headers: { ...headers, ...peerRequestHeaders(url, method, body) },
       signal: AbortSignal.timeout(init?.timeoutMs ?? 15_000),
     });
   } catch (e) {

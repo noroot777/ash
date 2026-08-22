@@ -28,12 +28,11 @@
 // 不会真拉起 CLI 烧额度;接力本身用 autoResume:false。
 import assert from "node:assert/strict";
 import { execFileSync, type ChildProcess } from "node:child_process";
-import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { api, git, makeRepo, pairWithPeer, startPeer } from "./handoff-test-utils.js";
+import { api, git, makeRepo, pairWithPeer, startFakePeer, startPeer } from "./handoff-test-utils.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-handoff-test-"));
@@ -187,42 +186,17 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   // 应答没回来」的网络类失败;flakyForwards 打开后原样转发给真对端,模拟同一台机器
   // 恢复应答(收口重试的冻结校验只认同一 URL,所以恢复必须发生在同一个地址上)。
   let flakyForwards = false;
-  const flaky = createServer((req, res) => {
-    if (req.url?.includes("/api/handoff/ping")) {
-      res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({
-        ok: true, service: "ash", host: "flaky",
-        projects: [{ id: peerProject.id, name: "acme", repoPath: dstRepo, isRepo: true }],
-      }));
-    } else if (req.url?.includes("/refs")) {
-      res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ refs: [] }));
-    } else if (flakyForwards) {
-      const chunks: Buffer[] = [];
-      req.on("data", (chunk) => chunks.push(chunk as Buffer));
-      req.on("end", () => {
-        // 身份签名头必须原样转发:签名覆盖 method+path+body,少带一个头对端就 401。
-        // 转发代理天生会破坏「地址 = 那台机器」的直觉,而签名恰好只认身份不认地址。
-        const forwarded: Record<string, string> = { "content-type": "application/json" };
-        for (const [k, v] of Object.entries(req.headers)) {
-          if (k.startsWith("x-ash-peer-") && typeof v === "string") forwarded[k] = v;
-        }
-        void fetch(`${peerUrl}${req.url}`, {
-          method: req.method ?? "POST",
-          headers: forwarded,
-          body: Buffer.concat(chunks),
-        }).then(async (upstream) => {
-          res.statusCode = upstream.status;
-          res.setHeader("content-type", "application/json");
-          res.end(Buffer.from(await upstream.arrayBuffer()));
-        }).catch(() => req.socket.destroy());
-      });
-    } else {
-      req.socket.destroy();
-    }
+  const flaky = await startFakePeer({
+    host: "flaky",
+    upstream: peerUrl,
+    project: { id: peerProject.id, name: "acme", repoPath: dstRepo },
+    onImport: async (ctx) => {
+      if (!flakyForwards) return ctx.destroy();
+      const { status, body } = await ctx.forward();
+      ctx.reply(status, body);
+    },
   });
-  await new Promise<void>((r) => flaky.listen(0, "127.0.0.1", r));
-  const flakyUrl = `http://127.0.0.1:${(flaky.address() as { port: number }).port}`;
+  const flakyUrl = flaky.url;
   await assert.rejects(
     exportHandoff(taskId, { targetUrl: flakyUrl, targetProjectId: peerProject.id, autoResume: false }),
     (e: unknown) => e instanceof HandoffError && e.network && /对端可能已经收到/.test(e.message),
@@ -433,8 +407,7 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
     sql: "select count(*) as n from scheduled_messages where task_id = ?", args: [taskId],
   })).rows as unknown as { n: number }[];
   assert.equal(Number(replayMsgs[0]!.n), 1, "幂等重放不该在对端重复插消息");
-  flaky.closeAllConnections();
-  await new Promise<void>((r) => flaky.close(() => r()));
+  await flaky.close();
 
   // ── 5. 重复接力的两道闸 + 拒收回滚 ───────────────────────────────────────
   await assert.rejects(
@@ -634,45 +607,19 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   }]);
   let mangle = true;
   let mangleUpstreamStatus = 0;
-  const mangler = createServer((req, res) => {
-    if (req.url?.includes("/api/handoff/ping")) {
-      res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({
-        ok: true, service: "ash", host: "mangler",
-        projects: [{ id: peerProject.id, name: "acme", repoPath: dstRepo, isRepo: true }],
-      }));
-    } else if (req.url?.includes("/refs")) {
-      res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ refs: [] }));
-    } else {
-      const chunks: Buffer[] = [];
-      req.on("data", (chunk) => chunks.push(chunk as Buffer));
-      req.on("end", () => {
-        const forwarded: Record<string, string> = { "content-type": "application/json" };
-        for (const [k, v] of Object.entries(req.headers)) {
-          if (k.startsWith("x-ash-peer-") && typeof v === "string") forwarded[k] = v;
-        }
-        void fetch(`${peerUrl}${req.url}`, {
-          method: req.method ?? "POST",
-          headers: forwarded,
-          body: Buffer.concat(chunks),
-        }).then(async (upstream) => {
-          const payload = Buffer.from(await upstream.arrayBuffer());
-          mangleUpstreamStatus = upstream.status;
-          res.setHeader("content-type", "application/json");
-          if (mangle) {
-            res.statusCode = 502;
-            res.end(JSON.stringify({ error: "gateway lost upstream" }));
-          } else {
-            res.statusCode = upstream.status;
-            res.end(payload);
-          }
-        }).catch(() => req.socket.destroy());
-      });
-    }
+  const mangler = await startFakePeer({
+    host: "mangler",
+    upstream: peerUrl,
+    project: { id: peerProject.id, name: "acme", repoPath: dstRepo },
+    onImport: async (ctx) => {
+      const { status, body } = await ctx.forward();
+      mangleUpstreamStatus = status;
+      // mangle 期间:对端其实已经导入成功,网关却回一个不带 ash 标记的 502。
+      if (mangle) ctx.reply(502, { error: "gateway lost upstream" });
+      else ctx.reply(status, body);
+    },
   });
-  await new Promise<void>((r) => mangler.listen(0, "127.0.0.1", r));
-  const manglerUrl = `http://127.0.0.1:${(mangler.address() as { port: number }).port}`;
+  const manglerUrl = mangler.url;
   await assert.rejects(
     exportHandoff(mangleTaskId, { targetUrl: manglerUrl, targetProjectId: peerProject.id, autoResume: false }),
     (e: unknown) => e instanceof HandoffError && e.network && /对端可能已经收到/.test(e.message),
@@ -697,8 +644,7 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   ) as { pending?: boolean; transferId?: string };
   assert.ok(!mangleSettled.pending, "收口后 pending 改写成确认态");
   assert.equal(mangleSettled.transferId, mangledMarker.transferId, "收口必须沿用同一个 transferId");
-  mangler.closeAllConnections();
-  await new Promise<void>((r) => mangler.close(() => r()));
+  await mangler.close();
 
   console.log("test-handoff ok");
 } finally {
