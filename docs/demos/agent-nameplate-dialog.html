@@ -115,25 +115,25 @@
     white-space: nowrap;
     pointer-events: none;
     user-select: none;
-    --plate-tilt: -9deg;
   }
 
   .agent-plate-word {
     flex: 0 0 auto;
     color: lch(96.2% 0.8 282);
+    /* 线上从 main.tsx 引入 @fontsource-variable/inter/wght-italic 拿到真斜体字形;
+       这份 demo 不联网,没装 Inter 斜体时浏览器会合成假斜体,字形会略糙 */
+    font-style: italic;
     font-weight: 800;
     font-size: inherit;
     line-height: 1;
     letter-spacing: -0.03em;
     text-transform: uppercase;
-    transform: rotate(var(--plate-tilt));
     animation: agent-plate-in 380ms cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 
-  /* 位移要带上倾斜角,否则动画的 transform 会把 rotate 覆盖掉 */
   @keyframes agent-plate-in {
-    from { transform: rotate(var(--plate-tilt)) translate3d(0, 0.12em, 0) scale(0.96); opacity: 0; }
-    to { transform: rotate(var(--plate-tilt)); opacity: 1; }
+    from { transform: translate3d(0, 0.12em, 0) scale(0.96); opacity: 0; }
+    to { transform: none; opacity: 1; }
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -168,15 +168,14 @@
   const picker = document.getElementById("picker");
   let index = 0;
 
-  // 与 AgentPlate.tsx 同一套规则:按旋转后的外接框,同时满足宽、高两个约束。
-  const TILT_DEG = -9;
+  // 与 AgentPlate.tsx 同一套规则:取宽、高两个约束里更紧的那个。
   const FILL = 0.8;
   let probe = null;
 
   function inkPerPx(style, text) {
     const size = parseFloat(style.fontSize) || 1;
     probe = probe || document.createElement("canvas").getContext("2d");
-    probe.font = style.fontWeight + " " + style.fontSize + " " + style.fontFamily;
+    probe.font = style.fontStyle + " " + style.fontWeight + " " + style.fontSize + " " + style.fontFamily;
     const m = probe.measureText(text);
     const ink = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent;
     return ink > 0 ? ink / size : 0.73;
@@ -188,12 +187,7 @@
     const current = parseFloat(style.fontSize) || 1;
     const widthPerPx = word.offsetWidth / current;   // offsetWidth 不受 transform 影响
     const heightPerPx = inkPerPx(style, word.textContent);
-    const rad = TILT_DEG * Math.PI / 180;
-    const cos = Math.abs(Math.cos(rad));
-    const sin = Math.abs(Math.sin(rad));
-    const spanW = widthPerPx * cos + heightPerPx * sin;
-    const spanH = widthPerPx * sin + heightPerPx * cos;
-    const size = Math.min(box.clientWidth * FILL / spanW, box.clientHeight * FILL / spanH);
+    const size = Math.min(box.clientWidth * FILL / widthPerPx, box.clientHeight * FILL / heightPerPx);
     plate.style.setProperty("--plate-size", Math.max(12, size) + "px");
   }
 
@@ -213,6 +207,8 @@
   });
 
   new ResizeObserver(resize).observe(box);
+  // webfont 落地后字宽会变,而框没变、ResizeObserver 不会响,得自己补一次
+  if (document.fonts) document.fonts.ready.then(resize);
   resize();
 </script>
 </body>

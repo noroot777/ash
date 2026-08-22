@@ -1,4 +1,4 @@
-// 对话框的执行器水印:斜铺在框中心,按框的宽高一起定大小,换智能体跟着换字。
+// 对话框的执行器水印:斜体大字铺在框中心,按框的宽高一起定大小,换智能体跟着换字。
 // 跑法:npm -w web run test:agent-plate
 import assert from "node:assert/strict";
 import { access } from "node:fs/promises";
@@ -45,30 +45,32 @@ try {
   const word = page.locator(".agent-plate-word");
   const plate = page.locator(".agent-plate");
   await word.waitFor();
+  // 斜体 webfont 落地前后字宽不同,基准尺寸必须等字体就位再量,否则后面的比对会飘。
+  await page.evaluate(() => document.fonts.ready);
 
-  // 量旋转后的字形(ink)外接框,而不是行盒:行盒比大写字形高近三成,拿它判断会误判成溢出。
-  const metrics = () => page.evaluate(() => {
-    const el = document.querySelector(".agent-plate-word");
-    const box = document.querySelector(".task-reply-box");
-    const style = getComputedStyle(el);
-    const size = parseFloat(style.fontSize);
-    const ctx = document.createElement("canvas").getContext("2d");
-    ctx.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
-    const m = ctx.measureText(el.textContent.toUpperCase());
-    const ink = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent;
-    const deg = parseFloat(getComputedStyle(document.querySelector(".agent-plate")).getPropertyValue("--plate-tilt"));
-    const rad = Math.abs(deg) * Math.PI / 180;
-    return {
-      size,
-      tilt: deg,
-      spanW: el.offsetWidth * Math.cos(rad) + ink * Math.sin(rad),
-      spanH: el.offsetWidth * Math.sin(rad) + ink * Math.cos(rad),
-      boxW: box.clientWidth,
-      boxH: box.clientHeight,
-      transform: style.transform,
-      text: el.textContent,
-    };
-  });
+  // 量字形(ink)外接框,而不是行盒:行盒比大写字形高近三成,拿它判断会误判成溢出。
+  // 先等入场动画跑完:动画中间帧的 transform 是 matrix,会让「没被掰斜」这条断言误报。
+  const metrics = async () => {
+    await page.evaluate(() => Promise.allSettled(document.getAnimations().map((a) => a.finished)));
+    return page.evaluate(() => {
+      const el = document.querySelector(".agent-plate-word");
+      const box = document.querySelector(".task-reply-box");
+      const style = getComputedStyle(el);
+      const ctx = document.createElement("canvas").getContext("2d");
+      ctx.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      const m = ctx.measureText(el.textContent.toUpperCase());
+      return {
+        size: parseFloat(style.fontSize),
+        fontStyle: style.fontStyle,
+        transform: style.transform,
+        spanW: el.offsetWidth,
+        spanH: m.actualBoundingBoxAscent + m.actualBoundingBoxDescent,
+        boxW: box.clientWidth,
+        boxH: box.clientHeight,
+        text: el.textContent,
+      };
+    });
+  };
 
   // 调样式时用:PLATE_SHOT=/tmp/plate 会按状态存几张图,便于肉眼比对。
   // 必须等入场动画跑完再拍,否则拍到的是位移中的中间帧。
@@ -83,8 +85,15 @@ try {
 
   const short = await metrics();
   assert.equal(short.text, "claude");
-  assert.ok(short.tilt !== 0, "水印必须是斜的");
-  assert.match(short.transform, /^matrix\(/, "旋转应落在 transform 上");
+  // 斜必须来自字体本身,不是把正体旋转/切变
+  assert.equal(short.fontStyle, "italic", "水印要用斜体字形");
+  // transform 允许是单位矩阵(入场动画 fill 后的计算值就是它),但不许带斜切/旋转分量:
+  // matrix(a,b,c,d,..) 里 skewX 落在 c、rotate 同时动 b 和 c。
+  const skewed = (value) => {
+    const nums = value.match(/-?[\d.]+/g);
+    return !!nums && (Math.abs(Number(nums[1])) > 1e-6 || Math.abs(Number(nums[2])) > 1e-6);
+  };
+  assert.ok(!skewed(short.transform), `不该靠 transform 把字掰斜，实际 ${short.transform}`);
   await shot("short");
 
   // 铺开但要留白:两个方向都不许超出框,且受限的那一边要真的铺到 ~80%。

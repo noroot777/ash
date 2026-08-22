@@ -1,8 +1,11 @@
-// 对话框底部执行器水印的夹具:字号必须跟着框高走,换智能体时字要跟着换。
+// 对话框执行器水印的夹具:字号由框的宽高一起定,换智能体时字要跟着换。
 // 跑法:npm -w web run test:agent-plate
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AgentPlate } from "../../src/components/AgentPlate.tsx";
+import "@fontsource-variable/inter";
+// 夹具不走 main.tsx,斜体字形要自己引,否则量到的是浏览器合成的假斜体
+import "@fontsource-variable/inter/wght-italic.css";
 import "../../src/styles/global.css";
 
 function Demo() {
