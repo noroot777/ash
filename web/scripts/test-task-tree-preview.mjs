@@ -45,6 +45,10 @@ try {
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/task-tree-preview.html`);
 
   const recent = page.getByRole("button", { name: "今天刚改过" });
+  const handoffOutRow = page.getByRole("button", { name: "已经转出的接力任务" });
+  const handoffInRow = page.getByRole("button", { name: "刚刚转入的接力任务" });
+  const handoffOutMark = page.locator('[aria-label="接力转出"]');
+  const handoffInMark = page.locator('[aria-label="接力转入"]');
   const oldJia = page.getByRole("button", { name: "很久以前的任务甲" });
   const oldYi = page.getByRole("button", { name: "很久以前的任务乙" });
   const oldBing = page.getByRole("button", { name: "很久以前的任务丙" });
@@ -54,6 +58,15 @@ try {
   const collapse = page.getByRole("button", { name: "收起", exact: true });
 
   await recent.waitFor();
+  assert.equal(await handoffOutMark.count(), 1, "转出任务应带小飞机标记");
+  assert.equal(await handoffInMark.count(), 1, "转入任务应带小飞机标记");
+  assert.equal(await handoffOutMark.locator("..").evaluate((node) => getComputedStyle(node).opacity), "0");
+  await handoffOutRow.hover();
+  await page.waitForTimeout(180);
+  assert.equal(await handoffOutMark.locator("..").evaluate((node) => getComputedStyle(node).opacity), "1", "指向转出任务时标记应显示");
+  await handoffInRow.hover();
+  await page.waitForTimeout(180);
+  assert.equal(await handoffInMark.locator("..").evaluate((node) => getComputedStyle(node).opacity), "1", "指向转入任务时标记应显示");
   assert.equal(await oldJia.count(), 0, "默认只显示 24 小时内的任务");
   assert.equal(await oldStarred.count(), 1, "星标的任务再旧也不进折叠");
   assert.equal(await oldUnaccepted.count(), 1, "还没验收的任务再旧也不进折叠");
