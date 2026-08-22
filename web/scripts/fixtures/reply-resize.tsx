@@ -15,15 +15,15 @@ function Demo() {
 
   return (
     <div className="task-reply-shell" style={{ width: 720 }}>
-      <ReplyResizeHandle
-        targetRef={textareaRef}
-        height={height}
-        onChange={(next) => {
-          setHeight(next);
-          storeReplyHeight(next);
-        }}
-      />
       <div className="task-reply-box">
+        <ReplyResizeHandle
+          targetRef={textareaRef}
+          height={height}
+          onChange={(next) => {
+            setHeight(next);
+            storeReplyHeight(next);
+          }}
+        />
         <textarea
           ref={textareaRef}
           rows={3}

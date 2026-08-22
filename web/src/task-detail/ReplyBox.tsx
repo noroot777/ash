@@ -313,14 +313,6 @@ export function ReplyBox({
 
   return (
     <div className={`task-reply-shell${topRail ? " has-top-rail" : ""}`}>
-      <ReplyResizeHandle
-        targetRef={textareaRef}
-        height={replyHeight}
-        onChange={(next) => {
-          setReplyHeight(next);
-          storeReplyHeight(next);
-        }}
-      />
       {menuOpen && (
         <SlashMenu
           className="task-reply-command-menu"
@@ -393,6 +385,14 @@ export function ReplyBox({
       {sendError && <p className="task-reply-error">{sendError}</p>}
       {topRail}
       <div className="task-reply-box">
+        <ReplyResizeHandle
+          targetRef={textareaRef}
+          height={replyHeight}
+          onChange={(next) => {
+            setReplyHeight(next);
+            storeReplyHeight(next);
+          }}
+        />
         <AgentPlate name={activeAgent} />
         <textarea
           ref={textareaRef}

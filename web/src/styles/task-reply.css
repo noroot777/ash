@@ -12,8 +12,10 @@
 /* 高度改由顶边的拖动条控制(task-detail/ReplyResizeHandle.tsx),不再用浏览器原生的
    右下角把手:两套机制都往 style.height 上写,会互相打架。 */
 .task-reply-box textarea { display: block; width: 100%; min-height: 58px; resize: none; border: 0; background: transparent; padding: 10px 12px 2px; color: var(--ink); font-size: 12.5px; line-height: 1.55; outline: 0; }
-.task-reply-resize { position: absolute; z-index: 5; top: -4px; right: 0; left: 0; height: 8px; cursor: row-resize; }
-.task-reply-resize::after { position: absolute; top: 3px; right: 0; left: 0; height: 1px; background: var(--accent); content: ""; opacity: 0; transition: opacity 120ms ease; }
+/* 拖动条贴在回复框自己的上边(框内侧):框有 overflow:hidden 来裁圆角和水印,
+   所以热区不能像侧栏那样探出边界,只能贴着内沿。z-index 要压过 textarea 那一层。 */
+.task-reply-resize { position: absolute; z-index: 5; top: 0; right: 0; left: 0; height: 8px; cursor: row-resize; }
+.task-reply-resize::after { position: absolute; top: 0; right: 0; left: 0; height: 1px; background: var(--accent); content: ""; opacity: 0; transition: opacity 120ms ease; }
 .task-reply-resize:hover::after,
 .task-reply-resize:focus-visible::after,
 .task-reply-resizing .task-reply-resize::after { opacity: .65; }
