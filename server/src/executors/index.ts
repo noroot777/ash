@@ -6,6 +6,7 @@ import { readCliConfigOverrides } from "@ash/shared/cli-overrides";
 import { db } from "../db/index.js";
 import { agents, llmProviders } from "../db/schema.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig } from "./types.js";
+import { stripContext1mSuffix } from "../anthropic-context-1m.js";
 import { cliSpec } from "./catalog/index.js";
 import { execBinFor, probeBinFlag } from "./bin-probe.js";
 import { GenericCliExecutor } from "./generic.js";
@@ -79,7 +80,7 @@ async function fingerprintOf(profile: AgentRow): Promise<string> {
     profile.speed ?? null,
     profile.configOverrides ?? null,
     profile.providerId ?? null,
-    provider ? [provider.baseUrl, provider.protocol, provider.protocolConversionEnabled, !!provider.apiKey] : null,
+    provider ? [provider.baseUrl, provider.protocol, provider.model, provider.protocolConversionEnabled, provider.context1mModels, !!provider.apiKey] : null,
   ]);
   return createHash("sha256").update(material).digest("hex").slice(0, 16);
 }
@@ -121,7 +122,8 @@ async function build(
   type: AgentType,
   overrides: ExecutorOverrides = {},
 ): Promise<AgentExecutor> {
-  const model = overrides.model || profile?.model || undefined;
+  const relay = profile ? await loadRelay(profile.providerId) : undefined;
+  const model = overrides.model || profile?.model || relay?.defaultModel || undefined;
   const reasoningEffort = overrides.reasoningEffort || profile?.reasoningEffort || undefined;
   if (!isReasoningEffortSupported(type, model, reasoningEffort)) {
     const allowed = reasoningEffortsFor(type, model);
@@ -138,7 +140,7 @@ async function build(
         reasoningEffort,
         speed: profile.speed === "fast" ? ("fast" as const) : undefined,
         bin: undefined as string | undefined,
-        relay: await loadRelay(profile.providerId),
+        relay,
         // 存库时已归一过一次；这里再走一遍，是为了让「profile 建于该覆盖项声明之前 /
         // 声明后来改了范围」的老值也按当前声明夹一遍，而不是把一个 CLI 会静默忽略的
         // 数原样注进去。JSON 坏掉的老数据同样在这里被吃掉(否则整个 profile 派不出
@@ -184,6 +186,18 @@ async function loadRelay(providerId: string | null): Promise<RelayConfig | undef
     name: p.name,
     baseUrl: p.baseUrl.replace(/\/+$/, ""),
     apiKey: p.apiKey,
+    defaultModel: p.model.trim(),
     protocolConversionEnabled: p.protocol === "openai" && p.protocolConversionEnabled,
+    context1mModels: p.protocol === "anthropic" ? parseModelNames(p.context1mModels).map(stripContext1mSuffix) : [],
   };
+}
+
+function parseModelNames(raw: unknown): string[] {
+  if (typeof raw !== "string") return [];
+  try {
+    const value = JSON.parse(raw);
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && !!item.trim()).map((item) => item.trim()) : [];
+  } catch {
+    return [];
+  }
 }

@@ -33,6 +33,7 @@ import { mountPreviewRoutes } from "./preview-routes.js";
 import { getAppSettings, parseAppSettingsPatch, patchAppSettings } from "./app-settings.js";
 import { hostInfo } from "./platform.js";
 import { mountSkillRoutes } from "./skill-routes.js";
+import { mountAnthropicContext1mRoutes, stripContext1mSuffix } from "./anthropic-context-1m.js";
 import { mountModelRoutes } from "./model-routes.js";
 import { mountTaskRoutes } from "./task-routes.js";
 import { mountGroupRoutes } from "./group-routes.js";
@@ -404,25 +405,34 @@ const toProvider = (r: typeof llmProviders.$inferSelect): LlmProvider => ({
   model: r.model,
   protocolConversionEnabled: r.protocolConversionEnabled,
   modelListMode: r.modelListMode === "pinned" ? "pinned" : "api",
-  pinnedModels: parsePinnedModels(r.pinnedModels),
+  pinnedModels: parseModelNames(r.pinnedModels),
+  context1mModels: parseContext1mModels(r.context1mModels),
   hasKey: !!r.apiKey, // never return the key itself
   createdAt: r.createdAt,
 });
 
 // 固定模型列表:去空白、去重、保序。存的是 json string[],但老行/脏数据都得能读回来。
-function parsePinnedModels(raw: unknown): string[] {
+function parseModelNames(raw: unknown): string[] {
   const list = typeof raw === "string" ? (() => { try { return JSON.parse(raw); } catch { return []; } })() : raw;
   if (!Array.isArray(list)) return [];
-  return normalizePinnedModels(list);
+  return normalizeModelNames(list);
 }
 
-function normalizePinnedModels(list: unknown[]): string[] {
+function normalizeModelNames(list: unknown[]): string[] {
   const seen = new Set<string>();
   for (const item of list) {
     const model = typeof item === "string" ? item.trim() : "";
     if (model) seen.add(model);
   }
   return [...seen];
+}
+
+function parseContext1mModels(raw: unknown): string[] {
+  return normalizeModelNames(parseModelNames(raw).map(stripContext1mSuffix));
+}
+
+function normalizeContext1mModels(list: unknown[]): string[] {
+  return normalizeModelNames(normalizeModelNames(list).map(stripContext1mSuffix));
 }
 
 api.get("/llm-providers", async (c) => c.json((await db.select().from(llmProviders)).map(toProvider)));
@@ -467,7 +477,8 @@ api.post("/llm-providers", async (c) => {
     model: (b.model ?? "").trim(),
     protocolConversionEnabled: protocol === "openai" && b.protocolConversionEnabled === true,
     modelListMode: b.modelListMode === "pinned" ? "pinned" : "api",
-    pinnedModels: JSON.stringify(normalizePinnedModels(b.pinnedModels ?? [])),
+    pinnedModels: JSON.stringify(normalizeModelNames(b.pinnedModels ?? [])),
+    context1mModels: JSON.stringify(protocol === "anthropic" ? normalizeContext1mModels(b.context1mModels ?? []) : []),
     createdAt: now(),
   };
   await db.insert(llmProviders).values(row);
@@ -486,10 +497,15 @@ api.patch("/llm-providers/:id", async (c) => {
   if (b.model !== undefined) patch.model = b.model;
   // 模式与固定列表各自独立更新:切模式不清空已固定的模型,切回来还在(需求「随便切换」)。
   if (b.modelListMode !== undefined) patch.modelListMode = b.modelListMode === "pinned" ? "pinned" : "api";
-  if (b.pinnedModels !== undefined) patch.pinnedModels = JSON.stringify(normalizePinnedModels(b.pinnedModels ?? []));
+  if (b.pinnedModels !== undefined) patch.pinnedModels = JSON.stringify(normalizeModelNames(b.pinnedModels ?? []));
   const nextProtocol = b.protocol === undefined ? existing.protocol : b.protocol === "anthropic" ? "anthropic" : "openai";
-  if (nextProtocol === "anthropic") patch.protocolConversionEnabled = false;
-  else if (b.protocolConversionEnabled !== undefined) patch.protocolConversionEnabled = b.protocolConversionEnabled === true;
+  if (nextProtocol === "anthropic") {
+    patch.protocolConversionEnabled = false;
+    if (b.context1mModels !== undefined) patch.context1mModels = JSON.stringify(normalizeContext1mModels(b.context1mModels ?? []));
+  } else {
+    patch.context1mModels = "[]";
+    if (b.protocolConversionEnabled !== undefined) patch.protocolConversionEnabled = b.protocolConversionEnabled === true;
+  }
   if (b.apiKey) patch.apiKey = b.apiKey; // 只在传了非空 key 时更新(留空=不动)
   await db.update(llmProviders).set(patch).where(eq(llmProviders.id, pid));
   const updated = (await db.select().from(llmProviders).where(eq(llmProviders.id, pid))).at(0)!;
@@ -505,6 +521,7 @@ api.delete("/llm-providers/:id", async (c) => {
 });
 
 mountOpenAiConverterRoutes(api);
+mountAnthropicContext1mRoutes(api);
 mountProviderTestRoutes(api);
 mountTerminalRoutes(api);
 

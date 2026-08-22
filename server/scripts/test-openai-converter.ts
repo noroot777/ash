@@ -239,7 +239,9 @@ const relay = {
   name: "test",
   baseUrl: "https://upstream.example.com",
   apiKey: "secret-key",
+  defaultModel: "demo-model",
   protocolConversionEnabled: true,
+  context1mModels: [],
 };
 const { codexSpec } = await import("../src/executors/catalog/codex.js");
 const { qwenSpec } = await import("../src/executors/catalog/qwen.js");

@@ -540,6 +540,7 @@ export const api = {
     apiKey?: string;
     model?: string;
     protocolConversionEnabled?: boolean;
+    context1m?: boolean;
   }): Promise<{ ok: true; model: string; reply: string; elapsedMs: number; endpoint: string }> =>
     request("/llm-providers/test", json("POST", body)),
   createLlmProvider: (provider: {
@@ -551,6 +552,7 @@ export const api = {
     protocolConversionEnabled: boolean;
     modelListMode?: ProviderModelListMode;
     pinnedModels?: string[];
+    context1mModels?: string[];
   }): Promise<LlmProvider> => request("/llm-providers", json("POST", provider)),
   patchLlmProvider: (
     providerId: string,
@@ -563,6 +565,7 @@ export const api = {
       protocolConversionEnabled: boolean;
       modelListMode: ProviderModelListMode;
       pinnedModels: string[];
+      context1mModels: string[];
     }>,
   ): Promise<LlmProvider> => request(`/llm-providers/${id(providerId)}`, json("PATCH", patch)),
   deleteLlmProvider: (providerId: string): Promise<{ deleted: true }> =>

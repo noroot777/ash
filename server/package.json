@@ -82,6 +82,7 @@
     "test:preview-seed": "tsx scripts/test-preview-seed.ts",
     "test:preview-probe": "tsx scripts/test-preview-probe.ts",
     "test:openai-converter": "tsx scripts/test-openai-converter.ts",
+    "test:anthropic-context-1m": "tsx scripts/test-anthropic-context-1m.ts",
     "test:skills": "tsx scripts/test-skills.ts",
     "test:file-browser": "tsx scripts/test-file-browser.ts",
     "test:local-open": "tsx scripts/test-local-open.ts",

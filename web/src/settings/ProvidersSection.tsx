@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { LlmProtocol, LlmProvider, ProviderModelListMode } from "@ash/shared";
 import {
   ArrowsClockwise,
@@ -9,12 +9,14 @@ import {
   Trash,
 } from "@phosphor-icons/react";
 import { Button, Toggle } from "../components/ui.tsx";
+import { Dropdown, type DropdownOption } from "../components/Dropdown.tsx";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { protocolLabel } from "./agentProviderRules.ts";
 import { refreshProviders } from "../lib/modelCatalog.ts";
 import { clearProviderModelCache } from "./ProviderModelInput.tsx";
 import { ProviderPinnedModels } from "./ProviderPinnedModels.tsx";
+import { ProviderContext1mModels } from "./ProviderContext1mModels.tsx";
 
 type ProviderDraft = {
   name: string;
@@ -25,24 +27,33 @@ type ProviderDraft = {
   protocolConversionEnabled: boolean;
   modelListMode: ProviderModelListMode;
   pinnedModels: string[];
+  context1mModels: string[];
 };
 
 function ProviderModelField({
   providerId,
+  providerName,
   protocol,
   baseUrl,
   apiKey,
   model,
+  knownModels,
+  context1mModels,
   protocolConversionEnabled,
   onModelChange,
+  onModelsChange,
 }: {
   providerId?: string;
+  providerName: string;
   protocol: LlmProtocol;
   baseUrl: string;
   apiKey: string;
   model: string;
+  knownModels: string[];
+  context1mModels: string[];
   protocolConversionEnabled: boolean;
   onModelChange: (model: string) => void;
+  onModelsChange: (models: string[]) => void;
 }) {
   const [models, setModels] = useState<string[]>([]);
   const [probing, setProbing] = useState(false);
@@ -52,14 +63,13 @@ function ProviderModelField({
   const [testError, setTestError] = useState("");
   const probeRequest = useRef(0);
   const testRequest = useRef(0);
-  const fieldId = `provider-${providerId ?? "new"}-model`;
-  const datalistId = `provider-${providerId ?? "new"}-models`;
 
   useEffect(() => {
     probeRequest.current += 1;
     setModels([]);
     setProbing(false);
     setProbeError("");
+    onModelsChange([]);
   }, [apiKey, baseUrl, protocol, providerId]);
 
   useEffect(() => {
@@ -86,6 +96,7 @@ function ProviderModelField({
       });
       if (probeRequest.current !== request) return;
       setModels(result.models);
+      onModelsChange(result.models);
       if (!result.models.length) setProbeError("供应商未返回模型");
       else if (!model) onModelChange(result.models[0]);
     } catch (error) {
@@ -118,6 +129,7 @@ function ProviderModelField({
         apiKey: apiKey.trim() || undefined,
         model: model.trim(),
         protocolConversionEnabled: protocol === "openai" && protocolConversionEnabled,
+        context1m: protocol === "anthropic" && context1mModels.includes(model.trim()),
       });
       if (testRequest.current === request) {
         setTestResult(`${result.endpoint} · ${result.elapsedMs} ms · ${result.reply}`);
@@ -131,16 +143,42 @@ function ProviderModelField({
     }
   };
 
+  const options = useMemo<DropdownOption[]>(() => {
+    const seen = new Set<string>();
+    return [...(model ? [model] : []), ...knownModels, ...models].flatMap((candidate) => {
+      const value = candidate.trim();
+      if (!value || seen.has(value)) return [];
+      seen.add(value);
+      return [{
+        value,
+        label: value,
+        group: providerName.trim() || "供应商模型",
+        mono: true,
+        detail: [value === model ? "当前默认" : "", context1mModels.includes(value) ? "1M" : ""]
+          .filter(Boolean)
+          .join(" · "),
+      }];
+    });
+  }, [context1mModels, knownModels, model, models, providerName]);
+
   return (
     <div className="is-wide provider-model-field">
-      <label htmlFor={fieldId}>默认模型</label>
-      <div>
-        <input
-          id={fieldId}
-          list={datalistId}
+      <label>默认模型</label>
+      <div className="provider-model-control">
+        <Dropdown
+          label="默认模型"
           value={model}
-          onChange={(event) => onModelChange(event.target.value)}
+          options={options}
+          status={probing ? "loading" : probeError ? "failed" : models.length ? "ready" : "idle"}
+          note={probeError ? `探测失败：${probeError}（仍可直接填写模型名）` : ""}
+          allowCustom
+          mono
+          filterPlaceholder="筛选或直接填写模型名"
+          emptyText="没有匹配的模型，输入完整模型名即可直接使用"
           placeholder="可选；Profile 的模型覆盖优先"
+          onChange={onModelChange}
+          onClear={model ? () => onModelChange("") : undefined}
+          clearLabel="不设置默认模型"
         />
         <Button disabled={probing} onClick={() => void probe()}>
           <ArrowsClockwise size={12} className={probing ? "provider-spin" : ""} />
@@ -151,9 +189,6 @@ function ProviderModelField({
           {testing ? "测试中…" : "测试模型"}
         </Button>
       </div>
-      <datalist id={datalistId}>
-        {models.map((candidate) => <option value={candidate} key={candidate} />)}
-      </datalist>
       {(models.length > 0 || probeError) && (
         <small className={probeError ? "is-error" : ""}>
           {probeError || `已返回 ${models.length} 个完整模型名`}
@@ -191,7 +226,9 @@ function ProviderForm({
     protocolConversionEnabled: provider?.protocolConversionEnabled ?? false,
     modelListMode: provider?.modelListMode ?? "api",
     pinnedModels: provider?.pinnedModels ?? [],
+    context1mModels: provider?.context1mModels ?? [],
   });
+  const [probedModels, setProbedModels] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
   const set = <K extends keyof ProviderDraft>(key: K, value: ProviderDraft[K]) => {
@@ -215,6 +252,7 @@ function ProviderForm({
           protocolConversionEnabled: draft.protocol === "openai" && draft.protocolConversionEnabled,
           modelListMode: draft.modelListMode,
           pinnedModels: draft.pinnedModels,
+          context1mModels: draft.protocol === "anthropic" ? draft.context1mModels : [],
           ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
         });
         clearProviderModelCache(provider.id);
@@ -228,6 +266,7 @@ function ProviderForm({
           protocolConversionEnabled: draft.protocol === "openai" && draft.protocolConversionEnabled,
           modelListMode: draft.modelListMode,
           pinnedModels: draft.pinnedModels,
+          context1mModels: draft.protocol === "anthropic" ? draft.context1mModels : [],
         });
       }
       // 供应商是模型目录的来源:改完要让页面上其它选模型的地方当场跟着变。
@@ -287,12 +326,16 @@ function ProviderForm({
         )}
         <ProviderModelField
           providerId={provider?.id}
+          providerName={draft.name}
           protocol={draft.protocol}
           baseUrl={draft.baseUrl}
           apiKey={draft.apiKey}
           model={draft.model}
+          knownModels={draft.pinnedModels}
+          context1mModels={draft.context1mModels}
           protocolConversionEnabled={draft.protocolConversionEnabled}
           onModelChange={(model) => set("model", model)}
+          onModelsChange={setProbedModels}
         />
         <ProviderPinnedModels
           providerId={provider?.id}
@@ -305,6 +348,19 @@ function ProviderForm({
           onModeChange={(mode) => set("modelListMode", mode)}
           onPinnedChange={(models) => set("pinnedModels", models)}
         />
+        {draft.protocol === "anthropic" && (
+          <ProviderContext1mModels
+            providerId={provider?.id}
+            protocol={draft.protocol}
+            baseUrl={draft.baseUrl}
+            apiKey={draft.apiKey}
+            defaultModel={draft.model}
+            pinnedModels={draft.pinnedModels}
+            availableModels={probedModels}
+            selectedModels={draft.context1mModels}
+            onChange={(models) => set("context1mModels", models)}
+          />
+        )}
       </div>
       <div className="provider-form-actions">
         <Button variant="ghost" disabled={saving} onClick={onCancel}>取消</Button>
@@ -370,6 +426,7 @@ function ProviderRow({
             {provider.modelListMode === "pinned"
               ? ` · 固定 ${provider.pinnedModels.length} 个模型`
               : " · 选择器实时拉取模型"}
+            {provider.context1mModels.length ? ` · ${provider.context1mModels.length} 个 1M` : ""}
           </small>
         </div>
         <span className={`provider-key-state${provider.hasKey ? " is-ready" : ""}`}>

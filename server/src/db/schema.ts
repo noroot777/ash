@@ -485,5 +485,7 @@ export const llmProviders = sqliteTable("llm_providers", {
   // 选模型面板的候选来源:'api'=每次现调 /models;'pinned'=只用 pinned_models(json string[])。
   modelListMode: text("model_list_mode").notNull().default("api"),
   pinnedModels: text("pinned_models").notNull().default("[]"),
+  // Anthropic 供应商逐模型声明 1M；存干净模型名，运行时再加 [1m] 并按需走本地转发。
+  context1mModels: text("context_1m_models").notNull().default("[]"),
   createdAt: text("created_at").notNull(),
 });
