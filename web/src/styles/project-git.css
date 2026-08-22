@@ -117,7 +117,10 @@
 }
 .project-git-branch:hover { background:var(--hover-bg); color:var(--ink); }
 .project-git-branch > svg { flex:0 0 auto; color:var(--faint); }
-.project-git-branch > span { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.project-git-branch > span {
+  min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  cursor:text; user-select:text;
+}
 .project-git-branch > small { flex:0 0 auto; color:var(--faint); font-size:9px; }
 .project-git-branch > em {
   flex:0 0 auto; border-radius:3px; background:var(--raised); padding:1px 4px;
