@@ -43,6 +43,28 @@ function task(id: string, title: string, updatedAt: string, extra: Partial<Task>
 
 const tasks: Task[] = [
   task("recent", "今天刚改过", recent),
+  task("handoff-out", "已经转出的接力任务", recent, {
+    handoff: {
+      direction: "out",
+      peerUrl: "http://example.test",
+      peerName: "远端机器",
+      peerTaskId: "handoff-out",
+      at: recent,
+      sessions: 1,
+      git: "bundle",
+    },
+  }),
+  task("handoff-in", "刚刚转入的接力任务", recent, {
+    handoff: {
+      direction: "in",
+      peerUrl: null,
+      peerName: "来源机器",
+      peerTaskId: "handoff-in",
+      at: recent,
+      sessions: 1,
+      git: "bundle",
+    },
+  }),
   task("old-1", "很久以前的任务甲", old),
   task("old-2", "很久以前的任务乙", old),
   task("old-3", "很久以前的任务丙", old),

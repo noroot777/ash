@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { ProjectView, Task } from "@ash/shared";
 import { statusCounts, workersOf } from "@ash/shared/team";
-import { CaretRight, ChatsCircle, Star, UsersThree } from "@phosphor-icons/react";
+import { CaretRight, ChatsCircle, PaperPlaneTilt, Star, UsersThree } from "@phosphor-icons/react";
 import { OriginTaskChip, taskParentLink } from "../components/TaskOrigin.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api } from "../lib/api.ts";
@@ -141,7 +141,7 @@ export function TaskRow({
   const selected = selectedTaskId === task.id;
   const indicator = indicatorForTask(task);
   const hasOrigin = showOrigin && taskParentLink(task, allTasks) !== null;
-  const hasMeta = task.mode === "duet" || trailing != null;
+  const hasMeta = task.mode === "duet" || task.handoff != null || trailing != null;
   const canStar = task.parentId === null;
   const spreadRow = useSpreadRow();
   const spreadCells = spreadRow?.spread.laidOut ? spreadRow : null;
@@ -166,6 +166,14 @@ export function TaskRow({
         {hasMeta && (
           <span className="workspace-task-meta">
             {task.mode === "duet" && <ChatsCircle size={12} weight="bold" className="workspace-task-kind" aria-label="讨论" />}
+            {task.handoff && (
+              <PaperPlaneTilt
+                size={12}
+                weight="bold"
+                className="workspace-task-kind"
+                aria-label={task.handoff.direction === "out" ? "接力转出" : "接力转入"}
+              />
+            )}
             {trailing}
           </span>
         )}
