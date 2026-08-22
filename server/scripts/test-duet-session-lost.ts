@@ -10,6 +10,7 @@
  *   ② 补充说明真的落进了 `.md`(既没被丢弃,也没崩在半路)
  *   ③ 库里 id + 三件套恢复命令都清了 —— 下一次 /retry 才会开新会话
  *   ④ 返回值里的 cliId 也清了 —— 本次运行的后续轮次不会接着拿死 id 去 --resume
+ *   ⑤ 清完之后的下一轮开出新会话,那个新 id 要**写回库** —— 只清不写回,库里就一直是空
  * 跑:ASH_DB=/tmp/t.db npm -w server run test:duet-session-lost
  */
 import assert from "node:assert/strict";
@@ -114,6 +115,48 @@ ok("库里的 id + 三件套恢复命令都清了");
 assert.equal(turn.cliId, "", "返回值里的 cliId 没清,后续轮次会接着 --resume 死 id");
 assert.ok(turn.error?.includes("已经把这个失效的 id 清掉"), "错误文本里要带上说明(时间线/transcript 都取自它)");
 ok("返回值里的 cliId 也清了,后续轮次会开新会话");
+
+// ⑤ 清完之后的下一轮:开出来的新会话 id 必须**落库**。
+// 只清不写回,库里就停在「resume_command 指向新会话、cli_session_id 却是空」的自相矛盾
+// 状态:页面认为这条会话没有可恢复的 id,server 重启后 gate/retry 重建也只能再开一条新
+// 的,刚续起来的上下文一次都留不住。这一轮走的是 runTurn 的**复用旧行**分支(rowId 沿用、
+// 不带 resumeCliId),而带 newIdFlag 的 CLI 回报的 session 事件与本地 cliId 相同,不会触发
+// 事件分支里那次更新 —— 所以补写只能发生在复用旧行那条 update 上。(第 1 轮审查 P1)
+const NEW_ID = "0f2a1d7c-1f4b-4a2e-9c3d-8b5e7a1c2d3f";
+const healthy = {
+  type: "claude",
+  label: "claude@stub",
+  run: () => ({
+    sessionId: NEW_ID,
+    commandLine: `claude --session-id ${NEW_ID}`,
+    events: (async function* () {
+      // 与真机同构:CLI 回报的就是 ash 自己发下去的那个 id。
+      yield { kind: "session", cliSessionId: NEW_ID };
+      yield { kind: "text", text: "接着说。" };
+      yield { kind: "done", exitStatus: 0 };
+    })(),
+    kill() {},
+  }),
+  resumeCommand: () => `claude --resume ${NEW_ID}`,
+  resumeFields: (_cwd: string, sid: string) => ({ resumeCommand: `claude --resume ${sid}`, resumeEnv: null, resumeArgs: null }),
+} as unknown as Parameters<typeof duet.runTurn>[0]["executor"];
+
+const next = await duet.runTurn({
+  taskId, role: "voiceA", speaker: "A", round: 2, executor: healthy,
+  prompt: "继续", cwd: stage, rowId: turn.rowId, resumeCliId: turn.cliId || undefined,
+});
+assert.equal(next.cliId, NEW_ID, "新一轮该拿到新会话 id");
+const [row2] = await db.select().from(sessions).where(eq(sessions.id, turn.rowId));
+assert.equal(row2.cliSessionId, NEW_ID, "复用旧行开出的新会话 id 没写回库,下次重启/重试又得从头开");
+assert.equal(row2.resumeCommand, `claude --resume ${NEW_ID}`, "恢复命令要和库里的 id 指向同一条会话");
+ok("清空后下一轮的新会话 id 落了库,恢复命令与它一致");
+
+// 收尾前等这一轮的正文也落盘:写流是异步开的,先 rmSync 掉临时目录会让它开在一个已经
+// 不存在的路径上,抛一个跟被测代码无关的 ENOENT。
+for (let i = 0; i < 100; i++) {
+  try { if (readFileSync(mdPath, "utf8").includes("接着说。")) break; } catch { /* 还没 flush */ }
+  await new Promise((r) => setTimeout(r, 20));
+}
 
 await releaseTmpDb();
 rmSync(stage, { recursive: true, force: true });

@@ -41,9 +41,14 @@ export function reusedSessionPatch(executor: AgentExecutor, cwd: string, command
     commandLine,
     executor: executor.label,
     cwd,
-    // CLI 还没报出 session_id 时这三样都算不出来,那就一列都不碰 —— 写一条缺了 id 的
+    // id 本身也在这份补丁里,不能只写由它派生的那三件套:上一轮若因会话失效被清成 null
+    // (LOST_SESSION_PATCH),这一轮开出来的新 id 就只活在内存里 —— 带 newIdFlag 的 CLI
+    // 回报的 session 事件与本地 cliId 相同,下面那个 `!==` 分支不会触发,库里于是永远是
+    // 「resume_command 指向 new-session、cli_session_id 却为空」的自相矛盾状态,重启后
+    // 只能再开一条新会话。(第 1 轮审查 P1)
+    // CLI 还没报出 session_id 时这几样都算不出来,那就一列都不碰 —— 写一条缺了 id 的
     // 恢复命令,比留着上一轮那条更糟。
-    ...(cliSessionId ? executor.resumeFields(cwd, cliSessionId) : {}),
+    ...(cliSessionId ? { cliSessionId, ...executor.resumeFields(cwd, cliSessionId) } : {}),
   };
 }
 
