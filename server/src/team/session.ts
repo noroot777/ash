@@ -521,7 +521,10 @@ async function closeLead(lead: Lead, exitStatus: number, sessionLost = false): P
   // CLI 否认了这条会话:把失效的 id 连同由它派生的三件套恢复命令一起清掉,下一次说话
   // 就会开一条全新会话(openResident 的判据就是「这行上有没有 cli_session_id」)。
   // 退出码 0 也要求上:正常收尾的回合不该因为正文里出现过这句话就丢掉会话。
-  const dropSession = sessionLost && exitStatus !== 0;
+  // superseded 也要排除:这条会话行已经被新进程接管了(工作目录被抽走那条路会复用同一
+  // 行),晚到的旧收尾要是把新进程刚报上来的有效 id 抹掉,新常驻会话的 id 就永久丢了
+  // —— 内存里 lead.cliSessionId 已是新值,那条「id 变了才写库」的分支不会再补写一次。
+  const dropSession = sessionLost && exitStatus !== 0 && !superseded;
   await db
     .update(sessions)
     .set({
@@ -539,6 +542,15 @@ async function closeLead(lead: Lead, exitStatus: number, sessionLost = false): P
     const msg = dropSession
       ? `调度台进程意外退出(exit ${exitStatus})。${SESSION_LOST_NOTE}`
       : `调度台进程意外退出(exit ${exitStatus})。CLI 会话还在,再说一句话会自动接回;需要的话也可以点「继续」。`;
+    writeRunError(lead.out, msg);
+    appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message: msg }, endIso);
+    publish(lead, { kind: "error", message: msg });
+  }
+  // 回收和「停止全组」那两句都写着「再说一句话就能接回同一会话」,而这条会话刚被作废
+  // —— 不当场更正,用户刷新后看到的指引与真实状态正好相反,照做一次再撞一次墙。上面
+  // 那个「进程自己没了」的分支已经在 msg 里说过了,别重复。
+  if (dropSession && lead.closing) {
+    const msg = `更正上面那条:CLI 会话接不回了。${SESSION_LOST_NOTE}`;
     writeRunError(lead.out, msg);
     appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message: msg }, endIso);
     publish(lead, { kind: "error", message: msg });

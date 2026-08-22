@@ -180,7 +180,7 @@ try {
   // 复用同一条 session 行接着跑下一轮时,「这活在哪个目录、带什么参数跑」必须整组跟着
   // 刷新:门禁能等很久,这期间 profile 可能被换掉、worktree 可能被删后重建。漏掉哪一列,
   // 「复制到终端接着聊」就给出一条跑不起来的命令(第 2 轮 finding 6)。
-  const { reusedSessionPatch } = await import("../src/duet/index.js");
+  const { reusedSessionPatch } = await import("../src/duet/turn.js");
   const seen: string[] = [];
   const executor = {
     label: "claude@build",
@@ -194,6 +194,9 @@ try {
     commandLine: "claude --resume x",
     executor: "claude@build",
     cwd: "/repo/next",
+    // id 本身也在这份补丁里:上一轮若因会话失效被清空,只写三件套会让库里停在
+    // 「恢复命令有 id、cli_session_id 为空」的自相矛盾状态。
+    cliSessionId: "sess-9",
     resumeCommand: "cd /repo/next && claude --resume sess-9",
     resumeEnv: "K=v ",
     resumeArgs: "--settings '{}'",
@@ -201,8 +204,9 @@ try {
   // `--settings` 的内容跟 cwd 有关,所以必须拿**这一轮的** cwd 去算,不能用建执行器时
   // 冻好的那份(第 3 轮 finding 2)。
   assert.deepEqual(seen, ["/repo/next|sess-9"], "恢复三件套必须按本轮 cwd + 本轮会话 id 现算");
-  // 还没拿到 CLI 会话 id 时:三列一律不碰(写一条缺 id 的恢复命令,比留着上一轮那条更糟)。
+  // 还没拿到 CLI 会话 id 时:这几列一律不碰(写一条缺 id 的恢复命令,比留着上一轮那条更糟)。
   const withoutId = reusedSessionPatch(executor, "/repo/next", "claude --resume x", "");
+  assert.equal("cliSessionId" in withoutId, false, "没有会话 id 就不该拿空串去覆盖库里那条");
   assert.equal("resumeCommand" in withoutId, false, "没有会话 id 就不该产出 resumeCommand");
   assert.equal("resumeEnv" in withoutId, false);
   assert.equal("resumeArgs" in withoutId, false);
