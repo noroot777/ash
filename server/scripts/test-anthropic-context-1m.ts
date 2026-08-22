@@ -133,15 +133,35 @@ const relay = {
   protocolConversionEnabled: false,
   context1mModels: ["claude-opus-5"],
 };
-const oneMExecutor = new ClaudeExecutor({ model: "claude-opus-5", relay, startupError: "test only" });
+// 1M 只改变模型能力和请求路由，不能把执行器独立配置的自动压缩丢掉。
+// 用真实任务采用的 400k / 80% 组合钉住两条路径：运行命令与恢复命令都必须带着它。
+const configOverrides = { autoCompactWindow: 400_000, autoCompactPercent: 80 };
+const oneMExecutor = new ClaudeExecutor({
+  model: "claude-opus-5",
+  relay,
+  configOverrides,
+  startupError: "test only",
+});
 const oneMRun = oneMExecutor.run({ cwd: "/tmp", prompt: "test" });
 assert.match(oneMRun.commandLine, /--model claude-opus-5\[1m\]/);
-assert.match(oneMExecutor.resumeFields("/tmp", oneMRun.sessionId).resumeEnv ?? "", /context-1m/);
+assert.match(oneMRun.commandLine, /"autoCompactEnabled":true/);
+assert.match(oneMRun.commandLine, /"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"400000"/);
+assert.match(oneMRun.commandLine, /"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":"84\.21"/);
+const oneMResume = oneMExecutor.resumeFields("/tmp", oneMRun.sessionId);
+assert.match(oneMResume.resumeEnv ?? "", /context-1m/);
+assert.match(oneMResume.resumeArgs ?? "", /"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"400000"/);
+assert.match(oneMResume.resumeArgs ?? "", /"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":"84\.21"/);
 
-const directExecutor = new ClaudeExecutor({ model: "claude-haiku-4-5", relay, startupError: "test only" });
+const directExecutor = new ClaudeExecutor({
+  model: "claude-haiku-4-5",
+  relay,
+  configOverrides,
+  startupError: "test only",
+});
 const directRun = directExecutor.run({ cwd: "/tmp", prompt: "test" });
 assert.match(directRun.commandLine, /--model claude-haiku-4-5/);
 assert.doesNotMatch(directRun.commandLine, /\[1m\]/);
+assert.match(directRun.commandLine, /"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"400000"/);
 assert.match(directExecutor.resumeFields("/tmp", directRun.sessionId).resumeEnv ?? "", new RegExp(String(address.port)));
 assert.doesNotMatch(directExecutor.resumeFields("/tmp", directRun.sessionId).resumeEnv ?? "", /context-1m/);
 
