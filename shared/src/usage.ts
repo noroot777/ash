@@ -111,6 +111,11 @@ export interface ContextUsage {
   /** 上下文窗口。CLI 自报的优先;没人报就按模型名估;估不出是 null。 */
   window: number | null;
   /**
+   * 执行器显式设置的自动压缩窗口。它不改变模型能力上限，但决定任务页上真正有意义的
+   * “还剩多少”——达到这里就会开始压缩，所以显示比例和告警优先用它。
+   */
+  compactWindow?: number;
+  /**
    * window 是**估**出来的(按模型名猜),不是 CLI 自报。true 时界面必须说明白,
    * 别让人当准数用。claude 自报窗口时它是 false —— 分母准不准是数据本身的属性,
    * 界面那个 `~` 该跟着数据走,而不是靠改一处渲染逻辑记得取消。
@@ -118,10 +123,18 @@ export interface ContextUsage {
   windowEstimated: boolean;
 }
 
+/** 任务实际会先撞到的窗口：自动压缩设置优先，否则才是模型窗口。 */
+export function effectiveContextWindow(c: ContextUsage | null | undefined): number | null {
+  const compact = c?.compactWindow;
+  if (typeof compact === "number" && Number.isFinite(compact) && compact > 0) return compact;
+  return c?.window && c.window > 0 ? c.window : null;
+}
+
 /** 水位占窗口的比例 0..1。没有窗口就 null —— 调用方据此决定显不显示百分比。 */
 export function contextRatio(c: ContextUsage | null | undefined): number | null {
-  if (!c || !c.window || c.window <= 0) return null;
-  return Math.min(1, Math.max(0, c.used / c.window));
+  const window = effectiveContextWindow(c);
+  if (!c || window === null) return null;
+  return Math.min(1, Math.max(0, c.used / window));
 }
 
 /** 有没有真水位。0 表示没采到,跟 hasUsage 同一条口径。 */

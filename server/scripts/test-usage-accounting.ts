@@ -29,6 +29,7 @@ const { eq } = await import("drizzle-orm");
 const {
   addSessionUsage,
   recordSessionUsageEvent,
+  sessionCompactWindow,
   sessionUsage,
   setSessionContext,
   sessionContext,
@@ -41,13 +42,13 @@ const { appendSessionTrace, parseSessionTrace, sessionTracePath } = await import
 const { addUsage, sumUsage, usageTotal, hasUsage, formatTokens, formatCost, contextRatio, hasContext, guessContextWindow } = await import("@ash/shared/usage");
 
 /** 拿假 CLI stdout 真跑一遍解析器,把它吐出的 context 事件取回来(同 test-claude-stream-errors 的套路)。 */
-async function parseFakeClaude(lines: unknown[]) {
+async function parseFakeClaude(lines: unknown[], compactWindow: number | null = null) {
   const script = join(root, `stub-${lines.length}-${Math.random().toString(36).slice(2, 8)}.mjs`);
   writeFileSync(script, lines.map((l) => `process.stdout.write(${JSON.stringify(JSON.stringify(l) + "\n")});`).join("\n"));
   const child = spawn(process.execPath, [script], { stdio: ["pipe", "pipe", "pipe"] });
   child.stdin?.end();
   let context: unknown = null;
-  for await (const event of parseClaudeStream(child as any, undefined)) {
+  for await (const event of parseClaudeStream(child as any, undefined, "claude", undefined, compactWindow)) {
     if ((event as any).kind === "context") context = (event as any).context;
   }
   return context;
@@ -305,6 +306,22 @@ try {
   assert.equal(water.windowEstimated, true);
   assert.equal(Math.round(contextRatio(water)! * 100), 59);
 
+  const compactResumeArgs = `--settings '{"autoCompactEnabled":true,"env":{"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"400000"}}'`;
+  assert.equal(sessionCompactWindow(compactResumeArgs), 400_000);
+  await db.update(sessions).set({
+    contextUsed: 272_074,
+    contextWindow: 1_000_000,
+    contextWindowEstimated: false,
+    resumeArgs: compactResumeArgs,
+  }).where(eq(sessions.id, sessId));
+  const compactWater = sessionContext((await db.select().from(sessions).where(eq(sessions.id, sessId)).get())!);
+  assert.deepEqual(
+    compactWater,
+    { used: 272_074, window: 1_000_000, windowEstimated: false, compactWindow: 400_000 },
+    "历史会话也要从固化的 --settings 读回压缩窗口，同时保留模型真实的 1M 上限",
+  );
+  assert.equal(Math.round((1 - contextRatio(compactWater)!) * 100), 32, "任务页剩余量应按 400k 压缩窗口算");
+
   await setSessionContext(sessId, { used: 0, window: null, windowEstimated: false });
   assert.equal(
     sessionContext((await db.select().from(sessions).where(eq(sessions.id, sessId)).get())!),
@@ -371,6 +388,16 @@ try {
     oneMega,
     { used: 116_005, window: 1_000_000, windowEstimated: false },
     "自报 1M 必须原样传到 context 事件，且不许标成估算",
+  );
+
+  const oneMegaWithCompactWindow = await parseFakeClaude([
+    { type: "assistant", message: { model: "claude-opus-5", usage: { input_tokens: 5, cache_read_input_tokens: 272_069 }, content: [] } },
+    { type: "result", subtype: "success", modelUsage: { "claude-opus-5[1m]": { contextWindow: 1_000_000, inputTokens: 5 } } },
+  ], 400_000);
+  assert.deepEqual(
+    oneMegaWithCompactWindow,
+    { used: 272_074, window: 1_000_000, windowEstimated: false, compactWindow: 400_000 },
+    "直播事件应同时带模型上限与执行器压缩窗口，前端才能按后者显示剩余量",
   );
 
   const noReport = await parseFakeClaude([

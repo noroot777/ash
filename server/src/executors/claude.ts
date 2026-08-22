@@ -126,6 +126,11 @@ export class ClaudeExecutor implements AgentExecutor {
     return env;
   }
 
+  private compactWindow(): number | null {
+    const value = this.configOverrides?.autoCompactWindow;
+    return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : null;
+  }
+
   run(opts: RunOpts): RunHandle {
     const sessionId = opts.sessionId ?? randomUUID();
     const model = opts.model ?? this.model;
@@ -134,14 +139,14 @@ export class ClaudeExecutor implements AgentExecutor {
     const child = this.startupError
       ? failedChild(this.startupError)
       : spawnForRun(opts.cwd, this.bin, args, opts.prompt, this.env(opts.cwd, model), opts.detach);
-    return { sessionId, commandLine, events: parseClaudeStream(child, undefined, this.bin, this.type), kill: () => killChild(child), detached: detachedInfo(child) };
+    return { sessionId, commandLine, events: parseClaudeStream(child, undefined, this.bin, this.type, this.compactWindow()), kill: () => killChild(child), detached: detachedInfo(child) };
   }
 
   attach(child: ChildProcess, opts: { sessionId: string; commandLine: string }): RunHandle {
     return {
       sessionId: opts.sessionId,
       commandLine: opts.commandLine,
-      events: parseClaudeStream(child, undefined, this.bin, this.type),
+      events: parseClaudeStream(child, undefined, this.bin, this.type, this.compactWindow()),
       kill: () => child.kill(),
       detached: detachedInfo(child),
     };
@@ -165,7 +170,7 @@ export class ClaudeExecutor implements AgentExecutor {
     return {
       sessionId,
       commandLine,
-      events: parseClaudeStream(child, resident, this.bin, this.type),
+      events: parseClaudeStream(child, resident, this.bin, this.type, this.compactWindow()),
       send: (text: string) => {
         child.stdin?.write(userLine(text));
       },
@@ -231,6 +236,7 @@ export async function* parseClaudeStream(
   resident?: { interruptPending: boolean },
   bin = "claude",
   calibrateAs?: AgentType,
+  compactWindow: number | null = null,
 ): AsyncIterable<AgentEvent> {
   const queue: AgentEvent[] = [];
   let resolve: (() => void) | null = null;
@@ -353,15 +359,21 @@ export async function* parseClaudeStream(
       if (ev.session_id) push({ kind: "session", cliSessionId: ev.session_id });
       const usage = claudeUsage(ev);
       if (usage) push({ kind: "usage", usage });
-      // 水位跟着流水一起发。分母优先用 claude 自报的(见 claudeContextWindow ——
-      // 1M 窗口只有那儿认得出),自报缺失才退回按模型名估。
+      // 水位跟着流水一起发。模型窗口仍优先用 claude 自报的(1M 只有那儿认得出),
+      // 但执行器若显式配了自动压缩窗口就另带 compactWindow：模型能力与“先在哪压缩”
+      // 是两层数据，界面拿后者算真正的剩余量，不能为了显示 400k 把 1M 上限抹掉。
       if (contextUsed > 0) {
         const model = contextModel ?? ev.model ?? null;
         const reported = claudeContextWindow(ev, model);
         const window = reported ?? guessContextWindow(model);
         push({
           kind: "context",
-          context: { used: contextUsed, window, windowEstimated: reported === null && window !== null },
+          context: {
+            used: contextUsed,
+            window,
+            windowEstimated: reported === null && window !== null,
+            ...(compactWindow !== null ? { compactWindow } : {}),
+          },
         });
       }
       // 我们自己发的 interrupt 会把本回合收成 error_during_execution —— 那是

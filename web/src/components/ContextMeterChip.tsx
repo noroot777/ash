@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Gauge } from "@phosphor-icons/react";
 import type { ContextUsage } from "@ash/shared";
-import { contextRatio, formatTokens, formatTokensExact, hasContext } from "@ash/shared/usage";
+import { contextRatio, effectiveContextWindow, formatTokens, formatTokensExact, hasContext } from "@ash/shared/usage";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
 
@@ -18,8 +18,8 @@ import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
  * ① 显示的是**剩余**，因为用户要的是「还能聊多久」而不是「已经用了多少」；
  * ② **没有窗口就不显示百分比**，只显示绝对水位 —— 编一个分母出来比不显示更坏，
  *    「还剩 60%」是拿来做决定的；
- * ③ 窗口**估**出来的（没拿到 CLI 自报值，只能按模型名猜）时胶囊上带个 `~`，浮层里
- *    写明白。claude 自报窗口，所以它的会话通常没有 `~`。
+ * ③ 执行器配了自动压缩窗口时优先用它算剩余量；模型能力上限仍保留在明细里。没配时
+ *    才用 CLI 自报值，自报缺失又只能按模型名猜时胶囊上带个 `~`。
  */
 export function ContextMeterChip({ context, className }: {
   context?: ContextUsage | null;
@@ -48,15 +48,20 @@ export function ContextMeterChip({ context, className }: {
 
   if (!hasContext(context)) return null;
 
+  const window = effectiveContextWindow(context);
+  const usesCompactWindow = typeof context.compactWindow === "number"
+    && Number.isFinite(context.compactWindow)
+    && context.compactWindow > 0;
+  const displayWindowEstimated = !usesCompactWindow && context.windowEstimated;
   const ratio = contextRatio(context);
-  const approx = context.windowEstimated ? "~" : "";
+  const approx = displayWindowEstimated ? "~" : "";
   const label = ratio === null
     ? `上下文 ${formatTokens(context.used)}`
     : `上下文剩 ${approx}${Math.round((1 - ratio) * 100)}%`;
   const spoken = ratio === null
     ? `上下文已用 ${formatTokensExact(context.used)} token，窗口未知`
     : `上下文还剩 ${Math.round((1 - ratio) * 100)}%，已用 ${formatTokensExact(context.used)} / `
-      + `${formatTokensExact(context.window!)} token${context.windowEstimated ? "（窗口为估算）" : ""}`;
+      + `${formatTokensExact(window!)} token${displayWindowEstimated ? "（窗口为估算）" : ""}`;
   // 只有两档：进红区才变色。中间再插一档黄色只会让「变色」失去信号价值。
   const tone = ratio !== null && ratio >= 0.85 ? " is-tight" : "";
 
@@ -78,23 +83,31 @@ export function ContextMeterChip({ context, className }: {
           <dt>已装入</dt>
           <dd>{formatTokensExact(context.used)}</dd>
         </div>
-        {context.window !== null && (
+        {window !== null && (
           <>
             <div>
-              <dt>窗口{context.windowEstimated ? "（估算）" : ""}</dt>
-              <dd>{formatTokensExact(context.window)}</dd>
+              <dt>{usesCompactWindow ? "压缩窗口" : `窗口${displayWindowEstimated ? "（估算）" : ""}`}</dt>
+              <dd>{formatTokensExact(window)}</dd>
             </div>
+            {usesCompactWindow && context.window !== null && context.window !== window && (
+              <div>
+                <dt>模型上限</dt>
+                <dd>{formatTokensExact(context.window)}</dd>
+              </div>
+            )}
             <div className="is-total">
-              <dt>还可装</dt>
-              <dd>{formatTokensExact(Math.max(0, context.window - context.used))}</dd>
+              <dt>{usesCompactWindow ? "距压缩" : "还可装"}</dt>
+              <dd>{formatTokensExact(Math.max(0, window - context.used))}</dd>
             </div>
           </>
         )}
       </dl>
       <footer>
-        {context.window === null
+        {window === null
           ? "这家 CLI 没报窗口大小，也猜不出模型，所以只给绝对值、不给百分比。"
-          : context.windowEstimated
+          : usesCompactWindow
+            ? "窗口采用执行器的自动压缩设置；到达这里会开始压缩，不代表模型能力上限只有这么大。"
+          : displayWindowEstimated
             ? "这一轮没拿到 CLI 自报的窗口，只能按模型名估，仅供参考。"
             : "窗口由 CLI 自报。这是最近一次请求带进模型的输入量，压缩后会掉下来。"}
       </footer>
