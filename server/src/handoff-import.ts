@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { projects, scheduledMessages, schedules, sessions, tasks } from "./db/schema.js";
-import { claudeProjectSlug } from "./handoff.js";
+import { claudeProjectSlug } from "./handoff-collect.js";
 import {
   HandoffError, MAX_FILE_BYTES, MB, safeRel,
   type HandoffManifest, type HandoffFilePayload, type HandoffMessagePayload,

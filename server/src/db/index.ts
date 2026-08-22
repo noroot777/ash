@@ -176,6 +176,12 @@ export async function ensureSchema() {
       project_id TEXT PRIMARY KEY, username TEXT NOT NULL,
       secret TEXT NOT NULL, updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS handoff_peers (
+      fingerprint TEXT PRIMARY KEY, public_key TEXT NOT NULL,
+      name TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending',
+      first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
+      approved_at TEXT, last_addr TEXT NOT NULL DEFAULT ''
+    );
   `);
   // Tolerant migration for DBs created before columns were added.
   try {

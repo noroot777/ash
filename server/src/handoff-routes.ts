@@ -1,9 +1,14 @@
 // 任务接力的 HTTP 面。业务全在 handoff.ts / handoff-import.ts,这里只做参数搬运
 // 和 HandoffError → HTTP 状态码的翻译。
 //
-// 对端发现(/handoff/ping、/refs)与导入(/handoff/import)是**机器对机器**的端点:
-// 由源机的 ash 服务端来调,不给浏览器用——server→server 顺带绕开了 CORS。
-// V1 与 ash 其它端点一样没有鉴权,只在可信内网使用(终端 API 本身就是个 shell)。
+// 两类端点,别混:
+//  ① **机器对机器**(/handoff/ping、/refs、/import):由源机的 ash 服务端来调,不给
+//     浏览器用——server→server 顺带绕开了 CORS。这三个走身份签名:/refs 和 /import
+//     要求来源机器已被批准(handoff-peers.ts requireApprovedPeer),/ping 是配对入口
+//     本身,谁都能敲,但没获批准就不报项目清单。
+//  ② **本机设置面**(/handoff/identity、/handoff/peers*):给自己的网页用,和 ash 其它
+//     端点一样没有鉴权(整机在可信网络里用的既定取舍)。这里管的是「谁能把任务推进来」,
+//     不是「谁能打开这个网页」。
 import { hostname } from "node:os";
 import { appendFile } from "node:fs/promises";
 import type { Hono } from "hono";
@@ -12,14 +17,21 @@ import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { projects, sessions, tasks } from "./db/schema.js";
 import { projectHealthLight } from "./git.js";
-import { exportHandoff, handoffRemoteUrl, preflightHandoff, repoRefTips } from "./handoff.js";
+import { getAppSettings } from "./app-settings.js";
+import { exportHandoff, handoffRemoteUrl, preflightHandoff } from "./handoff.js";
+import { repoRefTips } from "./handoff-collect.js";
 import { HandoffError, type HandoffPingResponse } from "./handoff-types.js";
+import { canonicalPingChallenge, localIdentity, shortFingerprint, signWithLocalKey } from "./handoff-identity.js";
+import {
+  deletePeer, listPeers, peerAddr, peerStanceFor, requireApprovedPeer, setPeerStatus, touchPeer,
+  verifyPeerSignature,
+} from "./handoff-peers.js";
 import { importHandoff } from "./handoff-import.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { sessionTranscriptPath, TURN_SENTINEL } from "./transcript.js";
 import { now } from "./util.js";
 
-type ErrorStatus = 400 | 404 | 409 | 500 | 502;
+type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 500 | 502;
 
 // 错误应答带 ash:true = 「ash 业务层的明确拒绝,本机可证明没留下这次接力的
 // 任务」——importHandoff 里任务行插入之后的失败都会补偿回滚再抛 HandoffError,没插
@@ -41,13 +53,37 @@ const fail = (c: Context, e: unknown) => {
 };
 
 export function mountHandoffRoutes(api: Hono): void {
-  // 对端探活:证明「我是一台 ash」,并报出可作为接力目的地的项目清单。
+  // 对端探活 + **配对入口**:证明「我是一台 ash、我是哪一台」,并报出可作为接力目的地
+  // 的项目清单。源机带 ?nonce= 来,本机用私钥签它 —— 只报公钥证明不了持有私钥(公钥
+  // 是公开的,谁都能复制一份复读)。源机没批准过的话,项目清单故意为空:仓库布局不该
+  // 报给还没被认可的机器,而这次来访已经落进待批准列表,用户点一下就能放行。
   api.get("/handoff/ping", async (c) => {
-    const rows = await db.select().from(projects);
+    const { handoffRequireApproval } = await getAppSettings();
+    // ping 的签名头是可选的(旧版源机没有),验不过则一律当没带 —— 探活不是写入口,
+    // 没必要在这里把人拦死,真正的闸在 /refs 和 /import。
+    let peer = null;
+    try {
+      peer = verifyPeerSignature(c, "");
+    } catch {
+      peer = null;
+    }
+    if (peer) await touchPeer(peer, peerAddr(c));
+    const stance = await peerStanceFor(peer, handoffRequireApproval);
+    const identity = localIdentity();
+    const nonce = c.req.query("nonce") ?? "";
+    const rows = stance === "approved" || stance === "open" ? await db.select().from(projects) : [];
     const body: HandoffPingResponse = {
       ok: true,
       service: "ash",
       host: hostname(),
+      identity: {
+        publicKey: identity.publicKey,
+        fingerprint: identity.fingerprint,
+        // 没带 nonce 的老源机拿到的是对空串的签名:它本来也不会验,而带了 nonce 的
+        // 新源机永远验的是自己刚生成的那个,拿不到可复用的签名。
+        sig: signWithLocalKey(canonicalPingChallenge(nonce)),
+      },
+      peerStatus: stance,
       projects: rows.map((p) => ({
         id: p.id,
         name: p.name,
@@ -59,7 +95,13 @@ export function mountHandoffRoutes(api: Hono): void {
   });
 
   // 分支尖清单,供源机协商 git bundle 的前置提交(对端已有的历史不重复打包)。
+  // 它会泄露本机仓库的分支名和提交,和 /import 同一道闸。
   api.get("/handoff/projects/:id/refs", async (c) => {
+    try {
+      await requireApprovedPeer(c, "");
+    } catch (e) {
+      return fail(c, e);
+    }
     const row = (await db.select().from(projects)).find((p) => p.id === c.req.param("id"));
     if (!row) return c.json({ error: "项目不存在", ash: true }, 404);
     if (!projectHealthLight(row.repoPath).isRepo) return c.json({ refs: [] });
@@ -71,10 +113,23 @@ export function mountHandoffRoutes(api: Hono): void {
   });
 
   // 接收一整个任务(manifest 里带 git bundle 和会话文件,可能上百 MB)。
+  // 必须先拿原文验签再解析:签名覆盖 body 哈希,先 parse 后验等于验的是解析结果,
+  // 中间人改字段照样过。
   api.post("/handoff/import", async (c) => {
+    let raw: string;
+    try {
+      raw = await c.req.text();
+    } catch {
+      return c.json({ error: "导入体读取失败", ash: true }, 400);
+    }
+    try {
+      await requireApprovedPeer(c, raw);
+    } catch (e) {
+      return fail(c, e);
+    }
     let body: unknown;
     try {
-      body = await c.req.json();
+      body = JSON.parse(raw);
     } catch {
       return c.json({ error: "导入体不是合法 JSON", ash: true }, 400);
     }
@@ -83,6 +138,36 @@ export function mountHandoffRoutes(api: Hono): void {
     } catch (e) {
       return fail(c, e);
     }
+  });
+
+  // ── 本机设置面(给自己的网页用)────────────────────────────────────────────
+  // 本机身份:设置页展示,让用户拿去和另一台机器上记录的指纹肉眼核对。只出公钥侧。
+  api.get("/handoff/identity", (c) => {
+    const identity = localIdentity();
+    return c.json({
+      fingerprint: identity.fingerprint,
+      short: shortFingerprint(identity.fingerprint),
+      host: hostname(),
+    });
+  });
+
+  // 接力来源(入站信任表):谁来敲过门、批没批准。
+  api.get("/handoff/peers", async (c) => c.json({ peers: await listPeers() }));
+
+  api.post("/handoff/peers/:fingerprint/:action", async (c) => {
+    const action = c.req.param("action");
+    if (action !== "approve" && action !== "block") return c.json({ error: "只支持 approve / block" }, 400);
+    try {
+      return c.json(await setPeerStatus(c.req.param("fingerprint"), action === "approve" ? "approved" : "blocked"));
+    } catch (e) {
+      return fail(c, e);
+    }
+  });
+
+  // 删掉记录 = 忘记这台机器。它再来敲门会重新落进待批准列表(不是永久拉黑,拉黑用 block)。
+  api.delete("/handoff/peers/:fingerprint", async (c) => {
+    await deletePeer(c.req.param("fingerprint"));
+    return c.json({ deleted: true });
   });
 
   // 预检:探测目标机、匹配项目、盘点本地可搬运的东西。只读。

@@ -33,7 +33,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { api, git, makeRepo, startPeer } from "./handoff-test-utils.js";
+import { api, git, makeRepo, pairWithPeer, startPeer } from "./handoff-test-utils.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-handoff-test-"));
@@ -65,7 +65,11 @@ try {
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { projects, scheduledMessages, schedules, sessions, tasks } = await import("../src/db/schema.js");
   const { prepareWorktree, worktreeBranchName, worktreePathFor } = await import("../src/git.js");
-  const { claudeProjectSlug, exportHandoff, handoffRemoteUrl, preflightHandoff } = await import("../src/handoff.js");
+  const { exportHandoff, handoffRemoteUrl, preflightHandoff } = await import("../src/handoff.js");
+const { claudeProjectSlug } = await import("../src/handoff-collect.js");
+// 这些 src 模块必须**在环境变量设好之后**才加载:paths.ts 在模块求值那一刻就把
+// ASH_UPLOADS_DIR / ASH_RUNS_DIR 定死了,顶层 import 会被提升到赋值之前。
+const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   const { jsonEscaped } = await import("../src/handoff-uploads.js");
   const { HandoffError } = await import("../src/handoff-types.js");
   const { handoffBlockReason } = await import("../src/handoff-guard.js");
@@ -160,6 +164,10 @@ try {
     body: JSON.stringify({ name: "acme", repoPath: dstRepo }),
   });
 
+  // 配对:对端默认要求入站审批,先让它批准本进程的接力身份(等价于用户在对端设置页
+  // 点「批准」)。身份核对本身的用例在 test-handoff-auth.ts。
+  await pairWithPeer(peerUrl);
+
   // ── 1. preflight ─────────────────────────────────────────────────────────
   const probe = await preflightHandoff(taskId, peerUrl);
   assert.equal(probe.ok, true);
@@ -180,7 +188,7 @@ try {
   // 恢复应答(收口重试的冻结校验只认同一 URL,所以恢复必须发生在同一个地址上)。
   let flakyForwards = false;
   const flaky = createServer((req, res) => {
-    if (req.url?.endsWith("/api/handoff/ping")) {
+    if (req.url?.includes("/api/handoff/ping")) {
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify({
         ok: true, service: "ash", host: "flaky",
@@ -193,9 +201,15 @@ try {
       const chunks: Buffer[] = [];
       req.on("data", (chunk) => chunks.push(chunk as Buffer));
       req.on("end", () => {
+        // 身份签名头必须原样转发:签名覆盖 method+path+body,少带一个头对端就 401。
+        // 转发代理天生会破坏「地址 = 那台机器」的直觉,而签名恰好只认身份不认地址。
+        const forwarded: Record<string, string> = { "content-type": "application/json" };
+        for (const [k, v] of Object.entries(req.headers)) {
+          if (k.startsWith("x-ash-peer-") && typeof v === "string") forwarded[k] = v;
+        }
         void fetch(`${peerUrl}${req.url}`, {
           method: req.method ?? "POST",
-          headers: { "content-type": "application/json" },
+          headers: forwarded,
           body: Buffer.concat(chunks),
         }).then(async (upstream) => {
           res.statusCode = upstream.status;
@@ -441,7 +455,13 @@ try {
   // ── 6. 导入原子性:冲突预检 409 零副作用;落库半路炸掉整体回滚 ────────────
   const rawImport = (body: unknown) =>
     fetch(`${peerUrl}/api/handoff/import`, {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      method: "POST",
+      // 直接发原始请求也要签名:导入端点要求来源已获批准(配对在上面 pairWithPeer 做过)。
+      headers: {
+        "content-type": "application/json",
+        ...peerRequestHeaders(`${peerUrl}/api/handoff/import`, "POST", JSON.stringify(body)),
+      },
+      body: JSON.stringify(body),
     });
   const manifestBase = {
     version: 1, sourceHost: "test-src", sourceWorkspace: null,
@@ -615,7 +635,7 @@ try {
   let mangle = true;
   let mangleUpstreamStatus = 0;
   const mangler = createServer((req, res) => {
-    if (req.url?.endsWith("/api/handoff/ping")) {
+    if (req.url?.includes("/api/handoff/ping")) {
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify({
         ok: true, service: "ash", host: "mangler",
@@ -628,9 +648,13 @@ try {
       const chunks: Buffer[] = [];
       req.on("data", (chunk) => chunks.push(chunk as Buffer));
       req.on("end", () => {
+        const forwarded: Record<string, string> = { "content-type": "application/json" };
+        for (const [k, v] of Object.entries(req.headers)) {
+          if (k.startsWith("x-ash-peer-") && typeof v === "string") forwarded[k] = v;
+        }
         void fetch(`${peerUrl}${req.url}`, {
           method: req.method ?? "POST",
-          headers: { "content-type": "application/json" },
+          headers: forwarded,
           body: Buffer.concat(chunks),
         }).then(async (upstream) => {
           const payload = Buffer.from(await upstream.arrayBuffer());

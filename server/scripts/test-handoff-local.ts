@@ -204,7 +204,7 @@ try {
   const pingArrived = new Promise<void>((r) => { pingSeen = r; });
   const peer = createServer((req, res) => {
     res.setHeader("content-type", "application/json");
-    if (req.method === "GET" && req.url === "/api/handoff/ping") {
+    if (req.method === "GET" && req.url?.startsWith("/api/handoff/ping")) {
       pingSeen();
       void pingGate.then(() => res.end(JSON.stringify({
         ok: true, service: "ash", host: "fake-peer",

@@ -50,6 +50,11 @@ export interface AppSettings {
   skillRefreshSeconds: number;
   // 任务接力的候选目标:另一台跑着 ash 的机器。url 是对端根地址(http://host:4317)。
   handoffTargets: HandoffTarget[];
+  // 接力**入站**审批开关。开着(默认)时,别的机器要把任务接力进本机,必须先在
+  // 「设置 → 默认规则 → 接力来源」里被批准一次,且每个请求都要带本机认得的签名。
+  // 关掉 = 退回旧行为(谁连得上谁就能推任务进来),只有在两台机器版本不一致、
+  // 老版本源机没法签名时才临时用。
+  handoffRequireApproval: boolean;
 }
 
 export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
@@ -57,12 +62,16 @@ export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
   defaultWorkflowId: "",
   skillRefreshSeconds: 3600,
   handoffTargets: [],
+  handoffRequireApproval: true,
 });
 
 // ── 任务接力（跨机器 handoff）──────────────────────────────────────────────
 // 类型本体在 ./handoff.ts（纯类型模块）,这里只做再导出,消费方 import 路径不变。
 export type {
   HandoffExportResult,
+  HandoffIdentity,
+  HandoffPeer,
+  HandoffPeerIdentity,
   HandoffPingProject,
   HandoffPreflightResult,
   HandoffTarget,

@@ -13,111 +13,40 @@
 // 另外把 data/runs/<taskId>/ 的会话产物(.md/.trace)也搬走,否则对端界面上这个任务
 // 是一段空白历史。
 //
-// V1 明确不做:鉴权(ash 全系统都没有,终端 API 本身就是一个 shell——只在可信内网
-// 用)、team/duet 模式。
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { hostname, homedir } from "node:os";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+// V1 明确不做:team/duet 模式。跨机器的身份与鉴权见 handoff-identity.ts(本机身份)、
+// handoff-peer-client.ts(出站核对对端)、handoff-peers.ts(入站审批)。
+import { hostname } from "node:os";
+import { existsSync, statSync } from "node:fs";
 import { readdir, readFile, appendFile } from "node:fs/promises";
-import { join, relative, sep, win32 } from "node:path";
+import { join, win32 } from "node:path";
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { projects, queueItems, scheduledMessages, schedules, sessions, tasks } from "./db/schema.js";
 import { claimTurn, isTurnClaimed, releaseTurn, stopTask } from "./runs.js";
 import { setTaskStatus } from "./status.js";
-import { expandHome, isGitRepo, worktreePathFor } from "./git.js";
-import { withRepoLock } from "./repo-lock.js";
-import { DATA_DIR, RUNS_DIR } from "./paths.js";
-import { codexHome, findRollout } from "./executors/codex-rollout.js";
+import { expandHome, worktreePathFor } from "./git.js";
+import { RUNS_DIR } from "./paths.js";
 import { sessionTranscriptPath, TURN_SENTINEL } from "./transcript.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { id, now } from "./util.js";
 import type {
-  HandoffExportResult, HandoffPreflightResult, TaskHandoff,
+  HandoffExportResult, HandoffPreflightResult, HandoffPeerIdentity, TaskHandoff,
 } from "@ash/shared";
 
 // 传输协议类型/错误类/尺寸常量在 handoff-types.ts(导出、导入、HTTP 面三处共用)。
-import { HandoffError, MAX_BUNDLE_BYTES, MAX_FILE_BYTES, MB } from "./handoff-types.js";
-import type { HandoffFilePayload, HandoffManifest, HandoffPingResponse } from "./handoff-types.js";
+import { HandoffError, MAX_FILE_BYTES } from "./handoff-types.js";
+import type { HandoffManifest } from "./handoff-types.js";
+// 盘点与打包(会话文件、runs 产物、git bundle)在 handoff-collect.ts,这里只留流程编排。
+import { collectRunArtifacts, collectSessionFiles, packGitState } from "./handoff-collect.js";
+// 出站请求一律走 handoff-peer-client:每个请求带身份签名,且**打包前**先核对对端指纹
+// (地址会漂,而接力推的是整个仓库和会话历史)。原理见那个文件顶部。
+import {
+  fetchPeer, normalizePeerUrl, pingPeer, rememberedFingerprint, rememberPeerFingerprint,
+} from "./handoff-peer-client.js";
+import { localIdentity, shortFingerprint } from "./handoff-identity.js";
 import { collectUploads, isTextRel } from "./handoff-uploads.js";
 import { beginHandoffPrepare, endHandoffPrepare } from "./handoff-guard.js";
 import { cancelPendingMessage } from "./pending-messages.js";
-
-const exec = promisify(execFile);
-
-// ── 小助手 ──────────────────────────────────────────────────────────────────
-
-/**
- * claude CLI 存会话的项目目录名:cwd 中所有非字母数字字符替换成 `-`。
- * 实测样例:/Users/fjh/code/ash/.worktrees/KJN0ESTe5uBw
- *   → -Users-fjh-code-ash--worktrees-KJN0ESTe5uBw
- * claude 代码里没有公开这个函数,格式一旦变化,后果只是对端找不到会话文件 →
- * 干净退化成全新起跑,不会出错误状态。
- */
-export function claudeProjectSlug(cwd: string): string {
-  return cwd.replace(/[^A-Za-z0-9]/g, "-");
-}
-
-export function claudeSessionFilePath(cwd: string, cliSessionId: string): string {
-  return join(homedir(), ".claude", "projects", claudeProjectSlug(cwd), `${cliSessionId}.jsonl`);
-}
-
-async function git(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await exec("git", ["-C", cwd, ...args], { maxBuffer: 32 * MB });
-  return stdout.trim();
-}
-
-export async function repoRefTips(repoPath: string): Promise<{ name: string; commit: string }[]> {
-  const repo = expandHome(repoPath);
-  const refs: { name: string; commit: string }[] = [];
-  try {
-    const head = await git(repo, ["rev-parse", "HEAD"]);
-    if (head) refs.push({ name: "HEAD", commit: head });
-  } catch { /* 空仓库等,忽略 */ }
-  try {
-    const out = await git(repo, ["for-each-ref", "--format=%(refname:short)\x1f%(objectname)", "refs/heads"]);
-    for (const line of out.split("\n").filter(Boolean).slice(0, 200)) {
-      const [name, commit] = line.split("\x1f");
-      if (name && commit) refs.push({ name, commit });
-    }
-  } catch { /* 非 git 仓库,返回已有的 */ }
-  return refs;
-}
-
-async function fetchPeer<T>(url: string, init?: RequestInit & { timeoutMs?: number }): Promise<T> {
-  let res: Response;
-  try {
-    res = await fetch(url, { ...init, signal: AbortSignal.timeout(init?.timeoutMs ?? 15_000) });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    throw new HandoffError(`连不上对端 ash（${url}）：${msg}`, 502, true);
-  }
-  const body = (await res.json().catch(() => null)) as { error?: string; ash?: boolean } | null;
-  if (!res.ok) {
-    // 只有带 ash 标记的错误应答才可信为「对端业务层明确拒绝,可证明没落库」。
-    // 没有标记的非 2xx 可能是中间网关在对端已处理成功后伪造的(上游读超时回 502 等),
-    // 按网络类失败(network=true)处理,让调用方保留 pending 而不是回滚——宁可让用户
-    // 多点一次收口重试,也不能让同一个任务在两台机器上各跑一份。
-    throw new HandoffError(
-      `对端返回 ${res.status}：${body?.error ?? "未知错误"}`,
-      502,
-      body?.ash !== true,
-    );
-  }
-  if (body === null) {
-    // 2xx 但应答体读不出来:对端多半已经处理成功,只是应答在路上断了——按网络类失败
-    // 处理(network=true),让调用方按「可能已送达」收口而不是当确认失败。
-    throw new HandoffError(`对端应答不完整（${url}）:连接中断或应答不是 JSON`, 502, true);
-  }
-  return body as T;
-}
-
-export function normalizePeerUrl(raw: string): string {
-  const trimmed = raw.trim().replace(/\/+$/, "");
-  if (!/^https?:\/\//.test(trimmed)) throw new HandoffError("目标地址必须以 http(s):// 开头");
-  return trimmed.replace(/\/api$/, "");
-}
 
 export async function handoffRemoteUrl(taskId: string): Promise<string> {
   const row = (await db.select({ handoff: tasks.handoff }).from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -142,7 +71,6 @@ export async function handoffRemoteUrl(taskId: string): Promise<string> {
 // ── 导出侧 ──────────────────────────────────────────────────────────────────
 
 type TaskRow = typeof tasks.$inferSelect;
-type SessionRow = typeof sessions.$inferSelect;
 
 // 队列成员不能单独接力:导出会把它结算成 canceled,而队列推进对 canceled 是透明跳过
 // (scheduler.ts selectNextInQueue),源机会立刻启动后继——「当前步骤搬去对面继续」被
@@ -185,171 +113,35 @@ async function stopAndSettle(taskId: string): Promise<TaskRow> {
   return task;
 }
 
-/** 会话文件盘点:每条会话的文件在哪、能不能搬。dryRun 时不读内容（preflight 用）。 */
-async function collectSessionFiles(
-  rows: SessionRow[],
-  fallbackCwd: string | null,
-  dryRun: boolean,
-): Promise<{ files: HandoffFilePayload[]; found: Set<string>; notes: string[] }> {
-  const files: HandoffFilePayload[] = [];
-  const found = new Set<string>();
-  const notes: string[] = [];
-  for (const s of rows) {
-    if (!s.cliSessionId) continue;
-    let abs: string | null = null;
-    let rel = "";
-    let kind: HandoffFilePayload["kind"];
-    if (s.agentType === "claude") {
-      kind = "claude-session";
-      rel = `${s.cliSessionId}.jsonl`;
-      for (const cwd of [s.cwd, s.worktreePath, fallbackCwd]) {
-        if (!cwd) continue;
-        const candidate = claudeSessionFilePath(cwd, s.cliSessionId);
-        if (existsSync(candidate)) { abs = candidate; break; }
-      }
-    } else if (s.agentType === "codex") {
-      kind = "codex-rollout";
-      abs = await findRollout(s.cliSessionId);
-      // 协议里 rel 一律 `/` 分隔:Windows 上 relative 产出反斜杠,POSIX 导入侧会把
-      // 整串当成一个文件名落错地方(codex 按目录深度扫描,从此找不到这份会话)。
-      if (abs) rel = relative(join(codexHome(), "sessions"), abs).split(sep).join("/");
-    } else {
-      notes.push(`会话 ${s.id}（${s.agentType}）:该执行器的会话文件迁移暂不支持,对端只能全新起跑`);
-      continue;
-    }
-    if (!abs) {
-      notes.push(`会话 ${s.id}（${s.agentType}）:本机找不到 CLI 会话文件,对端只能全新起跑`);
-      continue;
-    }
-    const size = statSync(abs).size;
-    if (size > MAX_FILE_BYTES) {
-      notes.push(`会话 ${s.id}:会话文件 ${Math.round(size / MB)}MB 超限,跳过`);
-      continue;
-    }
-    found.add(s.id);
-    if (!dryRun) {
-      files.push({ kind, rel, dataBase64: (await readFile(abs)).toString("base64") });
-    }
-  }
-  return { files, found, notes };
-}
-
-async function collectRunArtifacts(taskId: string, notes: string[]): Promise<HandoffFilePayload[]> {
-  const root = join(RUNS_DIR, taskId);
-  if (!existsSync(root)) return [];
-  const out: HandoffFilePayload[] = [];
-  const walk = async (dir: string): Promise<void> => {
-    for (const entry of await readdir(dir, { withFileTypes: true })) {
-      const abs = join(dir, entry.name);
-      if (entry.isDirectory()) { await walk(abs); continue; }
-      if (!entry.isFile()) continue;
-      const size = statSync(abs).size;
-      if (size > MAX_FILE_BYTES) {
-        notes.push(`会话产物 ${entry.name} ${Math.round(size / MB)}MB 超限,跳过`);
-        continue;
-      }
-      out.push({ kind: "run-artifact", rel: relative(root, abs).split(sep).join("/"), dataBase64: (await readFile(abs)).toString("base64") });
-    }
-  };
-  await walk(root);
-  return out;
-}
-
 /**
- * git 状态打包。只在任务开了 worktree 且 worktree/分支真实存在时有货:
- * 未提交改动先做 WIP 提交（进的是任务自己的分支,不碰用户分支）,然后跟对端仓库的
- * 分支尖协商公共前置提交,打一个尽量薄的 bundle;协商不出就整条历史全量打包。
+ * 对端还没批准本机时,把「下一步该干什么」讲清楚再拦下来。
+ * 拦在**打包之前**:等到 /import 才被 401 顶回来的话,任务已经被停掉、bundle 也白打了
+ * 一遍。预检不拦(见 preflightHandoff),它只如实报状态,让对话框把指纹摆出来。
  */
-async function packGitState(
-  task: TaskRow,
-  repoPath: string,
-  remoteRefs: { name: string; commit: string }[],
-  notes: string[],
-): Promise<HandoffManifest["git"]> {
-  if (!task.useWorktree) {
-    notes.push("任务不在独立 worktree 中运行,代码不随任务迁移——对端仓库以它本地的状态为准");
-    return null;
+function assertPeerAcceptsUs(peer: HandoffPeerIdentity | null): void {
+  if (!peer) return;
+  const me = shortFingerprint(localIdentity().fingerprint);
+  if (peer.peerStatus === "pending") {
+    throw new HandoffError(
+      `目标机还没批准本机(本机指纹 ${me})。到目标机「设置 → 默认规则 → 接力来源」批准它再重试 —— 刚才的探测已经把本机送进对端的待批准列表了。`,
+      409,
+    );
   }
-  const repo = expandHome(repoPath);
-  const wt = worktreePathFor(repoPath, task.id);
-  if (!existsSync(wt) || !(await isGitRepo(wt))) {
-    notes.push("任务 worktree 尚未创建（还没跑过）,没有可迁移的代码状态");
-    return null;
+  if (peer.peerStatus === "blocked") {
+    throw new HandoffError(
+      `目标机把本机(指纹 ${me})列为已拒绝。要接力,先到目标机的「接力来源」列表里改掉。`,
+      409,
+    );
   }
-  return withRepoLock(repoPath, async () => {
-    const branch = await git(wt, ["rev-parse", "--abbrev-ref", "HEAD"]);
-    if (!branch || branch === "HEAD") {
-      notes.push("worktree 处于 detached HEAD,无法按分支打包,代码不随任务迁移");
-      return null;
-    }
-    // WIP 提交:porcelain 非空才提交;身份缺失时补一个 ash 落款,别让接力卡在
-    // 一台没配 git identity 的机器上。
-    if (await git(wt, ["status", "--porcelain"])) {
-      await git(wt, ["add", "-A"]);
-      try {
-        await git(wt, ["commit", "-m", "chore(handoff): 接力前自动保存未提交改动"]);
-      } catch {
-        await git(wt, [
-          "-c", "user.name=ash", "-c", "user.email=ash@localhost",
-          "commit", "-m", "chore(handoff): 接力前自动保存未提交改动",
-        ]);
-      }
-      notes.push("未提交改动已在任务分支上做了一个 WIP 提交随包带走");
-    }
-    const head = await git(wt, ["rev-parse", "HEAD"]);
-    // 前置提交协商:对端已有的提交（且是本分支祖先）不用重复打包。
-    const prereqs: string[] = [];
-    for (const ref of remoteRefs.slice(0, 100)) {
-      if (prereqs.includes(ref.commit)) continue;
-      try {
-        await git(repo, ["cat-file", "-e", `${ref.commit}^{commit}`]);
-        await git(repo, ["merge-base", "--is-ancestor", ref.commit, head]);
-        prereqs.push(ref.commit);
-      } catch { /* 对端这个提交本机没有,或不在本分支历史上 */ }
-    }
-    // 对端已有分支尖本身(重复接力/仓库已完全同步):`git bundle create ^HEAD HEAD`
-    // 会以 "Refusing to create empty bundle" 拒绝——用空 bundleBase64 表示「提交都在,
-    // 只需对齐分支指向」,导入侧不做 verify/fetch。
-    if (prereqs.includes(head)) {
-      notes.push("对端仓库已有本分支全部提交,git 数据无需传输");
-      return { branch, head, full: false, prereqs, bundleBase64: "" };
-    }
-    const tmpDir = join(DATA_DIR, "tmp");
-    mkdirSync(tmpDir, { recursive: true });
-    const bundlePath = join(tmpDir, `handoff-${task.id}-${Date.now()}.bundle`);
-    try {
-      const revArgs = prereqs.slice(0, 50).map((sha) => `^${sha}`);
-      await git(repo, ["bundle", "create", bundlePath, ...revArgs, branch]);
-      const size = statSync(bundlePath).size;
-      if (size > MAX_BUNDLE_BYTES) {
-        throw new HandoffError(
-          `git bundle ${Math.round(size / MB)}MB 超限——两边仓库差距太大。先在目标机器上把仓库 fetch/pull 到较新状态,再重试接力`,
-        );
-      }
-      if (!prereqs.length) {
-        notes.push(`对端仓库没有和本分支重合的提交,bundle 打包了整条历史（${Math.round(size / MB)}MB）`);
-      }
-      return {
-        branch,
-        head,
-        full: prereqs.length === 0,
-        prereqs,
-        bundleBase64: readFileSync(bundlePath).toString("base64"),
-      };
-    } finally {
-      rmSync(bundlePath, { force: true });
-    }
-  });
 }
 
-/** 接力预检:探测对端、匹配项目、盘点本地可搬运的东西。只读,不停任务不动文件。 */
+/** 接力预检:探测对端、核对身份、匹配项目、盘点本地可搬运的东西。只读,不停任务不动文件。 */
 export async function preflightHandoff(taskId: string, targetUrlRaw: string): Promise<HandoffPreflightResult> {
   const { task, project } = await loadSingleTask(taskId);
   const targetUrl = normalizePeerUrl(targetUrlRaw);
-  const ping = await fetchPeer<HandoffPingResponse>(`${targetUrl}/api/handoff/ping`);
-  if (!ping?.ok || ping.service !== "ash") {
-    throw new HandoffError("对端不是 ash（/api/handoff/ping 应答不对）", 502);
-  }
+  // 身份核对在最前面:指纹对不上就直接抛,连盘点都不做——用户要先解决「这台是不是
+  // 我那台机器」,别让一堆盘点数字把警告冲下去。
+  const { ping, peer } = await pingPeer(targetUrl, await rememberedFingerprint(targetUrl));
   // 项目匹配靠仓库目录名:两台机器的绝对路径几乎必然不同,目录名是最稳的公共项。
   // 两侧路径可能来自不同操作系统(本机 Windows、对端 macOS,或反过来),所以不用
   // 跟随运行平台的 basename,统一按 win32 规则切——/ 和 \ 都认、吃掉盘符和尾分隔符,
@@ -364,7 +156,22 @@ export async function preflightHandoff(taskId: string, targetUrlRaw: string): Pr
   const { found, notes } = await collectSessionFiles(rows, expandHome(project.repoPath), true);
   const wt = worktreePathFor(project.repoPath, taskId);
   const gitReady = !!task.useWorktree && existsSync(wt);
-  if (!ping.projects.length) notes.push("对端还没有任何项目——先在对端把同一个仓库添加为项目");
+  // 项目清单为空有两种原因,别混成一句话:对端真没建项目,还是它没批准本机所以不报。
+  if (!ping.projects.length) {
+    if (peer?.peerStatus === "pending") {
+      notes.push(`目标机还没批准本机(本机指纹 ${shortFingerprint(localIdentity().fingerprint)}),在批准之前它不会报出项目清单`);
+    } else if (peer?.peerStatus === "blocked") {
+      notes.push("目标机把本机列为已拒绝的接力来源");
+    } else {
+      notes.push("对端还没有任何项目——先在对端把同一个仓库添加为项目");
+    }
+  }
+  if (peer?.trust === "first-seen") {
+    notes.push(`第一次连这台目标机:身份指纹 ${peer.short}——和对端设置页上显示的那串核对一下,接力成功后本机会记住它`);
+  }
+  if (peer === null) {
+    notes.push("目标机没有报出身份(版本过旧),这次接力无法核对「对面是不是原来那台机器」");
+  }
   // 待发送消息与定时计划的盘点(对话框如实列出要随任务走的东西)。按 taskId 查而不是
   // tasks.scheduleId——路由与调度器都以 taskId 为准,scheduleId 只是反向缓存。
   const pendingMsgs = await db.select().from(scheduledMessages)
@@ -392,6 +199,7 @@ export async function preflightHandoff(taskId: string, targetUrlRaw: string): Pr
   return {
     ok: true,
     target: { url: targetUrl, host: ping.host },
+    peer,
     projects: ping.projects,
     suggestedProjectId: suggested?.id ?? null,
     local: {
@@ -464,8 +272,9 @@ export async function exportHandoff(
     // 拿到 barrier 后复查队列成员:loadSingleTask 那次检查到这里隔着若干 await,可能已过期。
     await assertNotQueueMember(taskId);
     // 先探测对端与目标项目,确认可行再停任务——反过来会白停一个正在跑的任务。
-    const ping = await fetchPeer<HandoffPingResponse>(`${targetUrl}/api/handoff/ping`);
-    if (!ping?.ok || ping.service !== "ash") throw new HandoffError("对端不是 ash", 502);
+    // pingPeer 同时做身份核对:指纹和上次记住的对不上就在这里抛,bundle 一个字节都不打。
+    const { ping, peer } = await pingPeer(targetUrl, await rememberedFingerprint(targetUrl));
+    assertPeerAcceptsUs(peer);
     const targetProject = ping.projects.find((p) => p.id === opts.targetProjectId);
     if (!targetProject) throw new HandoffError("对端没有这个项目 id,先重新预检", 409);
 
@@ -639,6 +448,14 @@ export async function exportHandoff(
       await db.update(tasks)
         .set({ handoff: JSON.stringify(marker), updatedAt: now() })
         .where(eq(tasks.id, taskId));
+      // TOFU 落地:接力真的成功了才把对端指纹记进设置(首次配对)。放在成功之后,
+      // 「点开对话框看一眼就退出」才不会静默改掉信任状态。记住之后,这个地址下次
+      // 换了机器就会被 pingPeer 当场拦住。
+      if (peer?.trust === "first-seen") {
+        await rememberPeerFingerprint(targetUrl, peer.fingerprint)
+          .catch(() => notes.push("对端身份没能记进设置(接力本身已成功),下次仍按首次配对处理"));
+        notes.push(`已记住目标机身份指纹 ${peer.short};以后这个地址换了机器,接力会当场拦下`);
+      }
       const latest = rows.at(-1);
       if (latest) {
         const line = {

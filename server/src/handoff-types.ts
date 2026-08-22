@@ -159,6 +159,13 @@ export interface HandoffPingResponse {
   ok: boolean;
   service: string;
   host: string;
+  // 对端的机器身份。老版本 ash 没有这个字段 —— 源机据此判定「无从核对」并如实提示。
+  // sig 是用私钥对源机 nonce 的签名:公钥是公开的,只报公钥证明不了持有私钥。
+  identity?: { publicKey: string; fingerprint: string; sig: string };
+  // 对端对**源机**的态度(入站方向):approved 放行 / pending 待批准 / blocked 已拒绝 /
+  // open 对端没开审批 / unknown 源机没签名或对端是旧版。
+  peerStatus?: "approved" | "pending" | "blocked" | "open" | "unknown";
+  // 未获批准时故意为空:项目清单是本机的仓库布局,不该报给还没被认可的机器。
   projects: HandoffPingProject[];
 }
 
