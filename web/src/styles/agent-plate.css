@@ -1,42 +1,42 @@
-/* 对话框底部的执行器水印,见 components/AgentPlate.tsx。字号由脚本按容器高度写进 --plate-size。
-   --agent-plate-bottom 由使用它的表面给出:底部有控件行时要让开,否则水印会被不透明的
-   执行器胶囊拦腰切断(实测三段胶囊正好压在字上,读起来像渲染坏了)。 */
+/* 对话框的执行器水印,见 components/AgentPlate.tsx。
+   字号由脚本按容器实测算好写进 --plate-size;--plate-tilt 要与组件里的 TILT_DEG 一致。 */
 
 .agent-plate {
   position: absolute;
-  right: 12px;
-  bottom: var(--agent-plate-bottom, 0);
-  left: 12px;
+  inset: 0;
   z-index: 0;
   display: flex;
-  align-items: flex-end;
-  /* 比字略高的一条贴底带:字号是脚本按框高算的,用 em 才能跟着一起缩。 */
-  height: 1.24em;
+  align-items: center;
+  justify-content: center;
   overflow: hidden;
   font-size: var(--plate-size, 30px);
   white-space: nowrap;
   pointer-events: none;
   user-select: none;
+  --plate-tilt: -9deg;
 }
 
 .agent-plate-word {
-  display: block;
-  color: lch(85.8% 0.6 282);
+  flex: 0 0 auto;
+  /* 淡到几乎只剩纹理:再淡一档就看不见了,要调只动这一个值 */
+  color: lch(96.2% 0.8 282);
   font-weight: 800;
   font-size: inherit;
   line-height: 1;
   letter-spacing: -0.03em;
   text-transform: uppercase;
-  animation: agent-plate-in 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform: rotate(var(--plate-tilt));
+  animation: agent-plate-in 380ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+/* 位移要带上倾斜角,否则动画的 transform 会把 rotate 覆盖掉 */
 @keyframes agent-plate-in {
   from {
-    transform: translate3d(0, 0.22em, 0);
+    transform: rotate(var(--plate-tilt)) translate3d(0, 0.12em, 0) scale(0.96);
     opacity: 0;
   }
   to {
-    transform: none;
+    transform: rotate(var(--plate-tilt));
     opacity: 1;
   }
 }

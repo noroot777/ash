@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>对话框底部的执行器水印</title>
+<title>对话框的执行器水印</title>
 <style>
   /* 这份 demo 跟线上实现保持一致:数值取自 web/src/styles/agent-plate.css 与
      components/AgentPlate.tsx。改样式时两边一起改,别让它漂走。 */
@@ -46,8 +46,6 @@
     border-radius: 12px;
     background: var(--panel);
     box-shadow: 0 1px 2px rgba(20, 22, 28, 0.05);
-    --reply-actions-h: 38px;
-    --agent-plate-bottom: var(--reply-actions-h);
   }
 
   .box textarea {
@@ -72,7 +70,7 @@
     position: relative;
     z-index: 1;
     display: flex;
-    height: var(--reply-actions-h);
+    height: 38px;
     align-items: center;
     gap: 8px;
     padding: 0 7px 6px 8px;
@@ -107,34 +105,35 @@
   /* ── 水印(对应 .agent-plate) ── */
   .agent-plate {
     position: absolute;
-    right: 12px;
-    bottom: var(--agent-plate-bottom, 0);
-    left: 12px;
+    inset: 0;
     z-index: 0;
     display: flex;
-    align-items: flex-end;
-    height: 1.24em;
+    align-items: center;
+    justify-content: center;
     overflow: hidden;
     font-size: var(--plate-size, 30px);
     white-space: nowrap;
     pointer-events: none;
     user-select: none;
+    --plate-tilt: -9deg;
   }
 
   .agent-plate-word {
-    display: block;
-    color: lch(85.8% 0.6 282);
+    flex: 0 0 auto;
+    color: lch(96.2% 0.8 282);
     font-weight: 800;
     font-size: inherit;
     line-height: 1;
     letter-spacing: -0.03em;
     text-transform: uppercase;
-    animation: agent-plate-in 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    transform: rotate(var(--plate-tilt));
+    animation: agent-plate-in 380ms cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 
+  /* 位移要带上倾斜角,否则动画的 transform 会把 rotate 覆盖掉 */
   @keyframes agent-plate-in {
-    from { transform: translate3d(0, 0.22em, 0); opacity: 0; }
-    to { transform: none; opacity: 1; }
+    from { transform: rotate(var(--plate-tilt)) translate3d(0, 0.12em, 0) scale(0.96); opacity: 0; }
+    to { transform: rotate(var(--plate-tilt)); opacity: 1; }
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -145,7 +144,7 @@
 <body>
 
 <div class="wrap">
-  <p class="hint-line">拖对话框右下角改高度,水印字号跟着变;点下面的名字换执行器。</p>
+  <p class="hint-line">拖对话框右下角改高度,水印跟着重新铺满;点下面的名字换执行器。</p>
 
   <div class="box" id="box">
     <div class="agent-plate" id="plate" aria-hidden="true">
@@ -169,16 +168,33 @@
   const picker = document.getElementById("picker");
   let index = 0;
 
-  // 与 AgentPlate.tsx 同一套规则:先按框高定字号,再按宽度收。
+  // 与 AgentPlate.tsx 同一套规则:按旋转后的外接框,同时满足宽、高两个约束。
+  const TILT_DEG = -9;
+  const FILL = 0.8;
+  let probe = null;
+
+  function inkPerPx(style, text) {
+    const size = parseFloat(style.fontSize) || 1;
+    probe = probe || document.createElement("canvas").getContext("2d");
+    probe.font = style.fontWeight + " " + style.fontSize + " " + style.fontFamily;
+    const m = probe.measureText(text);
+    const ink = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent;
+    return ink > 0 ? ink / size : 0.73;
+  }
+
   function resize() {
     const word = plate.firstElementChild;
-    const byHeight = Math.min(Math.max(box.clientHeight * 0.34, 24), 92);
-    plate.style.setProperty("--plate-size", byHeight + "px");
-    const room = box.clientWidth - 24;
-    const natural = word.scrollWidth;
-    if (natural > room && room > 0) {
-      plate.style.setProperty("--plate-size", byHeight * (room / natural) + "px");
-    }
+    const style = getComputedStyle(word);
+    const current = parseFloat(style.fontSize) || 1;
+    const widthPerPx = word.offsetWidth / current;   // offsetWidth 不受 transform 影响
+    const heightPerPx = inkPerPx(style, word.textContent);
+    const rad = TILT_DEG * Math.PI / 180;
+    const cos = Math.abs(Math.cos(rad));
+    const sin = Math.abs(Math.sin(rad));
+    const spanW = widthPerPx * cos + heightPerPx * sin;
+    const spanH = widthPerPx * sin + heightPerPx * cos;
+    const size = Math.min(box.clientWidth * FILL / spanW, box.clientHeight * FILL / spanH);
+    plate.style.setProperty("--plate-size", Math.max(12, size) + "px");
   }
 
   function setAgent(name) {

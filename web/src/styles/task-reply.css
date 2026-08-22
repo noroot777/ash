@@ -8,9 +8,9 @@
 .task-reply-rail-button:hover { background: color-mix(in lch, var(--raised) 85%, var(--panel)); color: var(--ink); }
 .task-reply-rail-button:hover svg { opacity: 1; }
 .task-reply-rail-button:focus-visible { outline: 2px solid color-mix(in lch, var(--accent) 48%, transparent); outline-offset: 1px; }
-.task-reply-box { position: relative; overflow: hidden; border: 1px solid var(--line2); border-radius: 12px; background: var(--panel); box-shadow: var(--surface-shadow); --reply-actions-h: 38px; --agent-plate-bottom: var(--reply-actions-h); }
+.task-reply-box { position: relative; overflow: hidden; border: 1px solid var(--line2); border-radius: 12px; background: var(--panel); box-shadow: var(--surface-shadow); }
 .task-reply-box textarea { display: block; width: 100%; min-height: 58px; max-height: 230px; resize: vertical; border: 0; background: transparent; padding: 10px 12px 2px; color: var(--ink); font-size: 12.5px; line-height: 1.55; outline: 0; }
-.task-reply-actions { display: flex; height: var(--reply-actions-h); align-items: center; gap: 8px; padding: 0 7px 6px 8px; color: var(--faint); font-size: 9.5px; }
+.task-reply-actions { display: flex; height: 38px; align-items: center; gap: 8px; padding: 0 7px 6px 8px; color: var(--faint); font-size: 9.5px; }
 .task-reply-actions > span { margin-left: auto; }
 .task-reply-icon,
 .task-send-button { display: grid; width: 29px; height: 29px; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--muted); }
