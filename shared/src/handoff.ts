@@ -51,6 +51,10 @@ export interface HandoffPeerIdentity {
   peerStatus: "approved" | "pending" | "blocked" | "open" | "unknown";
   /** mismatch 时:设置里记住的那个短指纹,摆出来给用户核对。 */
   expectedShort?: string | null;
+  /** 这次接力的载荷会不会加密传输(对端支持 + 本机没在设置里关掉)。 */
+  encrypted?: boolean;
+  /** 对端**有没有能力**收加密载荷。false 时 encrypted 一定是 false,原因是对端太旧。 */
+  canEncrypt?: boolean;
 }
 
 // 落在 tasks.handoff（json）上的持久接力标记:导出侧 direction:"out"（任务已交出去，

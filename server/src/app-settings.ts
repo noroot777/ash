@@ -32,6 +32,7 @@ const SETTING_SPECS = {
     hint: "必须是 {name,url,peerFp?}[]（url 以 http(s):// 开头，peerFp 是 64 位小写 hex 指纹，最多 20 个目标）",
   },
   handoffRequireApproval: { ok: (v: unknown) => typeof v === "boolean", hint: "必须是 boolean" },
+  handoffEncrypt: { ok: (v: unknown) => typeof v === "boolean", hint: "必须是 boolean" },
 } satisfies { [K in keyof AppSettings]: { ok: (v: unknown) => boolean; hint: string } };
 
 const SETTING_KEYS = Object.keys(SETTING_SPECS) as (keyof AppSettings)[];

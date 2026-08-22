@@ -203,6 +203,30 @@ export function HandoffSettings({
         </div>
         <div className="settings-row handoff-peer-head">
           <div>
+            <b>接力传输加密</b>
+            <small>
+              接力载荷（整个 git bundle + 完整 CLI 会话历史）出门前用对端公钥加密，
+              防同网段抓包。冒充和篡改本来就由签名挡着，这一条只管窃听，关掉不影响身份校验。
+              <br />
+              调试接力本身时可以关掉——密文在抓包工具里看不了。对端太旧收不了加密载荷时会自动回退成明文，
+              接力对话框里会写明这次是不是明文。
+            </small>
+          </div>
+          <Toggle
+            label={settings.handoffEncrypt ? "已开启" : "已关闭（明文）"}
+            checked={settings.handoffEncrypt}
+            disabled={loading || busy}
+            onChange={async (checked) => {
+              try {
+                onSettings(await api.patchSettings({ handoffEncrypt: checked }));
+              } catch (error) {
+                notify(error instanceof Error ? error.message : "接力加密开关保存失败");
+              }
+            }}
+          />
+        </div>
+        <div className="settings-row handoff-peer-head">
+          <div>
             <b>接力来源</b>
             <small>谁尝试过把任务接力进本机。身份看指纹，不看地址——地址会漂，指纹不会。</small>
           </div>

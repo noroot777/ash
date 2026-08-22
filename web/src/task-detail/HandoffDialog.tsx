@@ -215,6 +215,18 @@ export function HandoffDialog({
                     <span>目标机没有报出身份（版本过旧），这次接力无法核对「对面是不是原来那台机器」。</span>
                   </p>
                 )}
+                {preflight.peer && !preflight.peer.encrypted && (
+                  <p className="handoff-peer-line is-warn">
+                    <Warning size={13} aria-hidden="true" />
+                    <span>
+                      这次<b>明文传输</b>
+                      {preflight.peer.canEncrypt
+                        ? "（本机在「设置 → 默认规则 → 接力传输加密」里关掉了加密）"
+                        : "（目标机版本过旧，收不了加密载荷）"}
+                      。同网段抓包能读到整个仓库和会话历史。
+                    </span>
+                  </p>
+                )}
                 <div className="handoff-field">
                   <label htmlFor="handoff-project">对端项目（主机 {preflight.target.host}）</label>
                   <select

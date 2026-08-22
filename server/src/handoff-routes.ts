@@ -22,6 +22,7 @@ import { exportHandoff, handoffRemoteUrl, preflightHandoff } from "./handoff.js"
 import { repoRefTips } from "./handoff-collect.js";
 import { HandoffError, type HandoffPingResponse } from "./handoff-types.js";
 import { canonicalPingChallenge, localIdentity, shortFingerprint, signWithLocalKey } from "./handoff-identity.js";
+import { looksSealed, openSealed } from "./handoff-crypto.js";
 import {
   deletePeer, listPeers, peerAddr, peerStanceFor, requireApprovedPeer, setPeerStatus, touchPeer,
   verifyPeerSignature,
@@ -79,9 +80,11 @@ export function mountHandoffRoutes(api: Hono): void {
       identity: {
         publicKey: identity.publicKey,
         fingerprint: identity.fingerprint,
+        // 本机的加密公钥。签名覆盖它(见 canonicalPingChallenge),中间人换不掉也删不掉。
+        kxPublicKey: identity.kxPublicKey,
         // 没带 nonce 的老源机拿到的是对空串的签名:它本来也不会验,而带了 nonce 的
         // 新源机永远验的是自己刚生成的那个,拿不到可复用的签名。
-        sig: signWithLocalKey(canonicalPingChallenge(nonce)),
+        sig: signWithLocalKey(canonicalPingChallenge(nonce, identity.kxPublicKey)),
       },
       peerStatus: stance,
       projects: rows.map((p) => ({
@@ -126,6 +129,17 @@ export function mountHandoffRoutes(api: Hono): void {
       await requireApprovedPeer(c, raw);
     } catch (e) {
       return fail(c, e);
+    }
+    // 验签之后才解密:签名覆盖的是线上真正传的那串字节(信封),先解密后验等于验的是
+    // 解密结果。加密与否由**源机**的设置决定,本机两种都收 —— 这个开关管的是「我发出去
+    // 的东西加不加密」,拦别人的明文既没意义(签名已保证来源和完整性)也会平白拆掉兼容性。
+    if (looksSealed(raw)) {
+      try {
+        raw = openSealed(raw, localIdentity().fingerprint);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return c.json({ error: `加密的接力载荷解不开(${msg})——多半是源机封给了别的机器,或者路上被改过`, ash: true }, 400);
+      }
     }
     let body: unknown;
     try {

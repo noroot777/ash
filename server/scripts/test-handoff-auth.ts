@@ -15,6 +15,8 @@
 //   8. 首次配对(TOFU):接力成功后把对端指纹记进 handoffTargets
 //   9. 指纹对不上:预检和导出都在**打包之前**硬拒绝,且零副作用(任务没被停、没落标记)
 //  10. 对端突然不报身份(降级/冒充):本机记过指纹就一律拒绝
+//  11. manifest 里进 git argv 的分支名/提交号(参数注入面,和文件落盘的路径穿越并列)
+//  12. 传输加密:架一个中间人抄下线上字节,断言密文里读不到任务正文;关掉开关就是明文
 //
 // ASH_RUNS_DIR 指到临时目录顺带打开 guardAgentSpawn:即使哪里失手触发续跑也不会真
 // 拉起 CLI 烧额度;接力本身一律 autoResume:false。
@@ -366,6 +368,88 @@ async function main(): Promise<void> {
   assert.equal(badHead.status, 400, "head 只收 40/64 位 hex 提交号,别的一律不进 git 命令");
   const cnBranch = await postGit("auth-branch-cn", "功能/中文分支", "a".repeat(40));
   assert.notEqual(cnBranch.status, 400, "中文分支名在 git 里合法,校验不能把它一起误伤");
+
+  // ── 12. 传输加密:线上到底传的是不是密文 ──────────────────────────────────
+  // 签名管冒充和篡改,加密管的是**窃听** —— 载荷是整个 git bundle 加完整会话历史,同网段
+  // 抓一次包就全拿走。所以这里不验「代码调了加密函数」,而是真架一个中间人把线上那串
+  // 字节抄下来,断言它不含明文。
+  const sniffed: string[] = [];
+  const sniffer = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk) => chunks.push(chunk as Buffer));
+    req.on("end", () => {
+      const raw = Buffer.concat(chunks);
+      if (req.url?.includes("/handoff/import")) sniffed.push(raw.toString("utf8"));
+      const forwarded: Record<string, string> = { "content-type": "application/json" };
+      for (const [k, v] of Object.entries(req.headers)) {
+        if (k.startsWith("x-ash-peer-") && typeof v === "string") forwarded[k] = v;
+      }
+      void fetch(`${peerUrl}${req.url}`, {
+        method: req.method ?? "GET",
+        headers: forwarded,
+        ...(raw.length ? { body: raw } : {}),
+      }).then(async (upstream) => {
+        res.statusCode = upstream.status;
+        res.setHeader("content-type", "application/json");
+        res.end(Buffer.from(await upstream.arrayBuffer()));
+      }).catch(() => req.socket.destroy());
+    });
+  });
+  await new Promise<void>((r) => sniffer.listen(0, "127.0.0.1", r));
+  const snifferUrl = `http://127.0.0.1:${(sniffer.address() as { port: number }).port}`;
+  try {
+    // 中间人转发不影响身份核对:签名和 ping 挑战认的都是密钥,不是地址。
+    await patchAppSettings({ handoffTargets: [{ name: "嗅探", url: snifferUrl }], handoffEncrypt: true });
+    const secret = "SECRET-PAYLOAD-不该出现在线上";
+    const encTask = await mkTask("handoff-auth-enc");
+    await db.update(tasks).set({ body: secret }).where(eq(tasks.id, encTask));
+    const encProbe = await preflightHandoff(encTask, snifferUrl);
+    assert.equal(encProbe.peer?.encrypted, true, "对端支持且开关开着时,预检就该告诉用户这次会加密");
+    assert.equal(encProbe.peer?.canEncrypt, true);
+    assert.equal(
+      (await exportHandoff(encTask, { targetUrl: snifferUrl, targetProjectId: peerProject.id, autoResume: false })).ok,
+      true,
+      "加密之后照样要能被对端解开并导入 —— 不然就是把功能换成了故障",
+    );
+    const encBody = sniffed.at(-1) ?? "";
+    assert.ok(encBody.includes("ash-handoff-enc-v1"), "线上传的应该是加密信封");
+    assert.ok(!encBody.includes(secret), "任务正文绝不能明文出现在线上");
+    assert.ok(!encBody.includes(encTask), "连任务 id 都不该露");
+
+    // 关掉开关 = 调试模式:明文上路,功能不变。
+    await patchAppSettings({ handoffEncrypt: false });
+    const plainTask = await mkTask("handoff-auth-plain");
+    await db.update(tasks).set({ body: secret }).where(eq(tasks.id, plainTask));
+    const plainProbe = await preflightHandoff(plainTask, snifferUrl);
+    assert.equal(plainProbe.peer?.encrypted, false, "关掉之后预检要如实说这次是明文");
+    assert.equal(plainProbe.peer?.canEncrypt, true, "对端仍然有能力收加密载荷,原因是本机关了");
+    assert.ok(
+      plainProbe.local.notes.some((n) => n.includes("明文传输")),
+      "明文这件事必须写进预检结果,不能只在设置页里静悄悄生效",
+    );
+    assert.equal(
+      (await exportHandoff(plainTask, { targetUrl: snifferUrl, targetProjectId: peerProject.id, autoResume: false })).ok,
+      true,
+    );
+    const plainBody = sniffed.at(-1) ?? "";
+    assert.ok(plainBody.includes(secret), "关掉加密就该是明文——调试时看得见才是这个开关的全部意义");
+
+    // 封给别的机器的信封,本机解不开。密钥派生绑死了收件人指纹,所以换台机器必然失败。
+    const { sealForPeer } = await import("../src/handoff-crypto.js");
+    const strangerKx = generateKeyPairSync("x25519").publicKey
+      .export({ type: "spki", format: "der" }).toString("base64");
+    const sealedToStranger = sealForPeer(strangerKx, "f".repeat(64), manifest("auth-enc-wrong"));
+    const wrongRes = await raw("/handoff/import", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: sealedToStranger,
+    });
+    assert.equal(wrongRes.status, 400, "封给别的机器的信封必须解不开,而不是退回「当明文试试」");
+  } finally {
+    sniffer.closeAllConnections();
+    await new Promise<void>((r) => sniffer.close(() => r()));
+    await patchAppSettings({ handoffEncrypt: true });
+  }
 
   console.log("test-handoff-auth ok");
 }

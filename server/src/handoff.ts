@@ -172,6 +172,12 @@ export async function preflightHandoff(taskId: string, targetUrlRaw: string): Pr
   if (peer === null) {
     notes.push("目标机没有报出身份(版本过旧),这次接力无法核对「对面是不是原来那台机器」");
   }
+  // 载荷里有整个仓库和完整会话历史,加不加密是用户该在按下按钮之前就看到的事实。
+  if (peer && !peer.canEncrypt) {
+    notes.push("目标机版本过旧、收不了加密载荷,这次会明文传输(同网段抓包能读到仓库和会话历史)");
+  } else if (peer && !peer.encrypted) {
+    notes.push("本机在「设置 → 默认规则 → 接力传输加密」里关掉了加密,这次会明文传输");
+  }
   // 待发送消息与定时计划的盘点(对话框如实列出要随任务走的东西)。按 taskId 查而不是
   // tasks.scheduleId——路由与调度器都以 taskId 为准,scheduleId 只是反向缓存。
   const pendingMsgs = await db.select().from(scheduledMessages)
@@ -273,7 +279,7 @@ export async function exportHandoff(
     await assertNotQueueMember(taskId);
     // 先探测对端与目标项目,确认可行再停任务——反过来会白停一个正在跑的任务。
     // pingPeer 同时做身份核对:指纹和上次记住的对不上就在这里抛,bundle 一个字节都不打。
-    const { ping, peer } = await pingPeer(targetUrl, await rememberedFingerprint(targetUrl));
+    const { ping, peer, sealTo } = await pingPeer(targetUrl, await rememberedFingerprint(targetUrl));
     assertPeerAcceptsUs(peer);
     const targetProject = ping.projects.find((p) => p.id === opts.targetProjectId);
     if (!targetProject) throw new HandoffError("对端没有这个项目 id,先重新预检", 409);
@@ -412,6 +418,9 @@ export async function exportHandoff(
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(manifest),
+            // 非 null 时载荷封给对端公钥再上路(handoff-crypto.ts)。签名照旧覆盖线上
+            // 那串字节,所以加不加密对幂等收口和错误语义都没有影响。
+            sealTo,
             timeoutMs: 600_000,
           },
         );

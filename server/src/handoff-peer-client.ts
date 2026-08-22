@@ -19,6 +19,7 @@ import {
   sameFingerprint, sha256Hex, shortFingerprint, signWithLocalKey, verifyWithPeerKey,
 } from "./handoff-identity.js";
 import { PEER_HEADERS } from "./handoff-peers.js";
+import { sealForPeer } from "./handoff-crypto.js";
 import { hostname } from "node:os";
 
 export function normalizePeerUrl(raw: string): string {
@@ -54,13 +55,19 @@ export function peerRequestHeaders(url: string, method: string, body: string): R
   };
 }
 
-export async function fetchPeer<T>(url: string, init?: RequestInit & { timeoutMs?: number }): Promise<T> {
+export async function fetchPeer<T>(
+  url: string,
+  init?: RequestInit & { timeoutMs?: number; sealTo?: { kx: string; fingerprint: string } | null },
+): Promise<T> {
   const method = init?.method ?? "GET";
-  const body = typeof init?.body === "string" ? init.body : "";
+  const plain = typeof init?.body === "string" ? init.body : "";
+  // 加密在签名**之前**:线上传的是信封,验签方拿到的也是信封,两边哈希的是同一串字节。
+  const body = init?.sealTo ? sealForPeer(init.sealTo.kx, init.sealTo.fingerprint, plain) : plain;
   let res: Response;
   try {
     res = await fetch(url, {
       ...init,
+      ...(init?.body === undefined ? {} : { body }),
       headers: { ...(init?.headers as Record<string, string> | undefined), ...peerRequestHeaders(url, method, body) },
       signal: AbortSignal.timeout(init?.timeoutMs ?? 15_000),
     });
@@ -93,6 +100,11 @@ export interface PeerProbe {
   ping: HandoffPingResponse;
   /** null = 对端没报身份、本机也没记过指纹(两边都是旧版,无从核对)。 */
   peer: HandoffPeerIdentity | null;
+  /**
+   * 非 null = 这次接力的载荷要封给这把公钥。null 有两种成因,预检 notes 里已分别说明:
+   * 对端是旧版报不出加密公钥,或者本机在设置里把接力加密关了(调试用)。
+   */
+  sealTo: { kx: string; fingerprint: string } | null;
 }
 
 /**
@@ -119,11 +131,13 @@ export async function pingPeer(targetUrl: string, expectedFp?: string | null): P
         409,
       );
     }
-    return { ping, peer: null };
+    return { ping, peer: null, sealTo: null };
   }
   // 指纹一律按公钥现算,不信对端自报的那个字段。
   const fingerprint = fingerprintOf(identity.publicKey);
-  if (!verifyWithPeerKey(identity.publicKey, canonicalPingChallenge(nonce), identity.sig)) {
+  // 加密公钥在应答里就一起签,不在就退回老规范串 —— 中间人剥掉它不会换来明文,
+  // 只会让验签失败(新版对端签的永远是带 kx 的那一版)。
+  if (!verifyWithPeerKey(identity.publicKey, canonicalPingChallenge(nonce, identity.kxPublicKey), identity.sig)) {
     throw new HandoffError(
       "目标机的身份签名验不过 —— 它拿的是一份复制来的公钥,而不是对应的私钥。别把任务发过去。",
       409,
@@ -140,6 +154,8 @@ export async function pingPeer(targetUrl: string, expectedFp?: string | null): P
       409,
     );
   }
+  const { handoffEncrypt } = await getAppSettings();
+  const sealTo = handoffEncrypt && identity.kxPublicKey ? { kx: identity.kxPublicKey, fingerprint } : null;
   return {
     ping,
     peer: {
@@ -148,7 +164,10 @@ export async function pingPeer(targetUrl: string, expectedFp?: string | null): P
       trust,
       peerStatus: ping.peerStatus ?? "unknown",
       expectedShort: expectedFp ? shortFingerprint(expectedFp) : null,
+      encrypted: sealTo !== null,
+      canEncrypt: Boolean(identity.kxPublicKey),
     },
+    sealTo,
   };
 }
 

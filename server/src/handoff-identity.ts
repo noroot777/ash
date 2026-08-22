@@ -29,6 +29,8 @@ export interface LocalIdentity {
   fingerprint: string;
   /** base64(SPKI DER)。对端拿它验签,不是秘密。 */
   publicKey: string;
+  /** base64(SPKI DER) 的 X25519 公钥,给对端加密接力载荷用(见 handoff-crypto.ts)。 */
+  kxPublicKey: string;
 }
 
 interface IdentityFile {
@@ -37,6 +39,9 @@ interface IdentityFile {
   publicKey: string;
   fingerprint: string;
   createdAt: string;
+  /** 传输加密用的 X25519 密钥对。2026-08-22 之后新增,老身份文件里没有,读到就补写。 */
+  kxPrivateKeyPem?: string;
+  kxPublicKey?: string;
 }
 
 function identityFilePath(): string {
@@ -55,9 +60,25 @@ export function shortFingerprint(fingerprint: string): string {
   return (fingerprint.slice(0, 20).toUpperCase().match(/.{1,4}/g) ?? []).join("-");
 }
 
-let cached: { file: IdentityFile; key: KeyObject } | null = null;
+let cached: { file: IdentityFile; key: KeyObject; kxKey: KeyObject } | null = null;
 
-function loadOrCreate(): { file: IdentityFile; key: KeyObject } {
+/** 新造一对 X25519 密钥(传输加密用,和身份指纹无关)。 */
+function newKxPair(): { kxPrivateKeyPem: string; kxPublicKey: string } {
+  const { publicKey, privateKey } = generateKeyPairSync("x25519");
+  return {
+    kxPrivateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+    kxPublicKey: publicKey.export({ type: "spki", format: "der" }).toString("base64"),
+  };
+}
+
+function persist(file: IdentityFile, path: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(file, null, 2), { mode: 0o600 });
+  // 已存在的文件 writeFileSync 不会改权限,补一次 chmod(Windows 上是空操作)。
+  try { chmodSync(path, 0o600); } catch { /* 文件系统不支持权限位 */ }
+}
+
+function loadOrCreate(): { file: IdentityFile; key: KeyObject; kxKey: KeyObject } {
   if (cached) return cached;
   const path = identityFilePath();
   if (existsSync(path)) {
@@ -66,7 +87,14 @@ function loadOrCreate(): { file: IdentityFile; key: KeyObject } {
       if (file?.version === 1 && file.privateKeyPem && file.publicKey) {
         // 指纹按公钥现算,不信文件里那份:手改过的文件不能让本机拿着错指纹到处自我介绍。
         const fingerprint = fingerprintOf(file.publicKey);
-        cached = { file: { ...file, fingerprint }, key: createPrivateKey(file.privateKeyPem) };
+        // 加密密钥是后加的,老文件里没有就当场补一对写回去。**不动 ed25519 那对**,
+        // 所以指纹不变、对端已有的信任记录全部继续有效 —— 这是补字段,不是换身份。
+        const kx = file.kxPrivateKeyPem && file.kxPublicKey
+          ? { kxPrivateKeyPem: file.kxPrivateKeyPem, kxPublicKey: file.kxPublicKey }
+          : newKxPair();
+        const next: IdentityFile = { ...file, fingerprint, ...kx };
+        if (!file.kxPrivateKeyPem) persist(next, path);
+        cached = { file: next, key: createPrivateKey(file.privateKeyPem), kxKey: createPrivateKey(kx.kxPrivateKeyPem) };
         return cached;
       }
     } catch {
@@ -77,25 +105,29 @@ function loadOrCreate(): { file: IdentityFile; key: KeyObject } {
     throw new Error(`接力身份文件格式不认识:${path}`);
   }
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const kx = newKxPair();
   const file: IdentityFile = {
     version: 1,
     privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
     publicKey: publicKey.export({ type: "spki", format: "der" }).toString("base64"),
     fingerprint: "",
     createdAt: new Date().toISOString(),
+    ...kx,
   };
   file.fingerprint = fingerprintOf(file.publicKey);
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(file, null, 2), { mode: 0o600 });
-  // 已存在的文件 writeFileSync 不会改权限,补一次 chmod(Windows 上是空操作)。
-  try { chmodSync(path, 0o600); } catch { /* 文件系统不支持权限位 */ }
-  cached = { file, key: privateKey };
+  persist(file, path);
+  cached = { file, key: privateKey, kxKey: createPrivateKey(kx.kxPrivateKeyPem) };
   return cached;
 }
 
 export function localIdentity(): LocalIdentity {
   const { file } = loadOrCreate();
-  return { fingerprint: file.fingerprint, publicKey: file.publicKey };
+  return { fingerprint: file.fingerprint, publicKey: file.publicKey, kxPublicKey: file.kxPublicKey ?? "" };
+}
+
+/** 本机 X25519 私钥,只给 handoff-crypto.ts 解密用,不出这个进程。 */
+export function localKxPrivateKey(): KeyObject {
+  return loadOrCreate().kxKey;
 }
 
 /** 只给测试用:换 ASH_DB 之后强制重读身份(同进程里模拟两台机器)。 */
@@ -144,9 +176,15 @@ export function canonicalRequest(input: {
 /**
  * 探活挑战:源机发一个随机 nonce,对端必须用私钥签它。
  * 少了这一步,任何人都能复读一份抄来的公钥冒充对端 —— 公钥是公开的,持有它不算身份。
+ *
+ * **加密公钥也在签名里**:接力载荷是拿它做 ECDH 加密的,中间人若能替换成自己的
+ * X25519 公钥就能解开全部内容(裸 DH 的经典中间人)。签进去之后,替换会让验签直接失败;
+ * 整个字段被删掉也一样 —— 新版对端签的永远是带 kx 的那一版,验签方按应答里有没有 kx
+ * 选规范串,所以「剥掉 kx 逼两边退回明文」这条降级路径同样验不过。
  */
-export function canonicalPingChallenge(nonce: string): string {
-  return [SIG_V1, "ping", nonce].join("\n");
+export function canonicalPingChallenge(nonce: string, kxPublicKey?: string): string {
+  const base = [SIG_V1, "ping", nonce];
+  return (kxPublicKey ? [...base, kxPublicKey] : base).join("\n");
 }
 
 /** 指纹比对走定长常量时间比较,顺带把大小写/空白差异归一掉。 */

@@ -55,6 +55,10 @@ export interface AppSettings {
   // 关掉 = 退回旧行为(谁连得上谁就能推任务进来),只有在两台机器版本不一致、
   // 老版本源机没法签名时才临时用。
   handoffRequireApproval: boolean;
+  // 接力载荷(git bundle + 完整 CLI 会话历史)出门前用对端公钥加密,防同网段抓包。
+  // 签名机制本来就管冒充和篡改,这一条只管**窃听**,所以关掉不会削弱身份校验。
+  // 关掉的唯一用途是调试:密文在抓包工具里看不了,排查接力本身的问题时需要明文。
+  handoffEncrypt: boolean;
 }
 
 export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
@@ -63,6 +67,7 @@ export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
   skillRefreshSeconds: 3600,
   handoffTargets: [],
   handoffRequireApproval: true,
+  handoffEncrypt: true,
 });
 
 // ── 任务接力（跨机器 handoff）──────────────────────────────────────────────
