@@ -197,6 +197,19 @@ MCP 未接入，agent 无法调用 `complete_task`。运行 `claude mcp list` �
 </details>
 
 <details>
+<summary>claude 类任务/审查 0 秒退出，报 <code>--dangerously-skip-permissions cannot be used with root/sudo privileges</code></summary>
+
+ash 是无人值守派活，claude 一律带 `--dangerously-skip-permissions`，而 Claude Code 在 `root` 身份下拒绝这个参数（判定为 `getuid()===0 && IS_SANDBOX!=="1" && !CLAUDE_CODE_BUBBLEWRAP`）。以 root 跑 ash 时所有 claude 执行器必然 0 秒失败，与模型、网络、任务内容无关；codex 等其它 CLI 不受影响，所以现象常常是「codex 跑得好好的，一派 claude 审查就异常停止」。三条出路选一条：
+
+1. 换个非 root 用户跑 ash（最干净，推荐）；
+2. 确认这台机器是可丢弃的容器/沙箱，就在**启动 ash 的环境**里设 `IS_SANDBOX=1`（agent 子进程继承 ash 的环境变量），代价是 agent 从此能以 root 无确认地动整台机器；
+3. 把 ash 跑在 bubblewrap 沙箱里（`CLAUDE_CODE_BUBBLEWRAP`）。
+
+环境变量在 agent 启动时才读取，改完要重启 ash 才生效。
+
+</details>
+
+<details>
 <summary>Windows 上报 Filename too long</summary>
 
 触发了 260 字符路径限制。需在管理员 PowerShell 中启用 `LongPathsEnabled`，并执行 `git config --global core.longpaths true`。`npm run setup` 会自动检测这两项配置。
