@@ -164,16 +164,26 @@ export async function setSessionContext(sessId: string, context: ContextUsage): 
   }
 }
 
+/** 从本会话固化的 `--settings` 中读回当时真正注入的自动压缩窗口。 */
+export function sessionCompactWindow(resumeArgs: string | null | undefined): number | null {
+  const raw = resumeArgs?.match(/"CLAUDE_CODE_AUTO_COMPACT_WINDOW"\s*:\s*"(\d+)"/)?.[1];
+  if (!raw) return null;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : null;
+}
+
 /** 会话行 → ContextUsage。没采到(null)跟「水位是 0」是两回事，前者不显示。 */
 export function sessionContext(row: Pick<
   SessionRow,
-  "contextUsed" | "contextWindow" | "contextWindowEstimated"
+  "contextUsed" | "contextWindow" | "contextWindowEstimated" | "resumeArgs"
 >): ContextUsage | null {
   if (row.contextUsed === null || row.contextUsed === undefined) return null;
+  const compactWindow = sessionCompactWindow(row.resumeArgs);
   return {
     used: row.contextUsed,
     window: row.contextWindow ?? null,
     windowEstimated: row.contextWindowEstimated ?? false,
+    ...(compactWindow !== null ? { compactWindow } : {}),
   };
 }
 
