@@ -79,7 +79,9 @@ interface Turn {
 
 // Run one voice turn: stream events tagged with role+round, persist output +
 // credential, and detect the raise-hand marker.
-async function runTurn(args: {
+// 导出只为回归测试能直接喂一个假执行器驱动整轮(test:duet-session-lost);duet 内部
+// 仍是唯一调用方。
+export async function runTurn(args: {
   taskId: string;
   role: SessionRole;
   speaker: DuetSpeaker;
@@ -187,7 +189,6 @@ async function runTurn(args: {
   } finally {
     untrackRun(taskId, handle);
   }
-  out.end();
 
   let raised = RAISE_RE.test(text);
   let agrees = raised && AGREE_RE.test(text);
@@ -216,6 +217,10 @@ async function runTurn(args: {
     errorMsg = `${errorMsg ?? ""}\n${SESSION_LOST_NOTE}`.trim();
     out.write("✕ " + SESSION_LOST_NOTE + "\n");
   }
+  // 关流放在**所有** out.write 之后。写已 end 的流不是静默丢弃,是 stream 上一个没人听的
+  // 'error' 事件('ERR_STREAM_WRITE_AFTER_END'),会当场把整个 server 打崩 —— 而且只在
+  // 会话失效这条冷路径上崩,正常跑一百遍都碰不到。(第 1 轮审查 P1)
+  out.end();
   await db
     .update(sessions)
     .set({
