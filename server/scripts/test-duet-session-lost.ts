@@ -28,7 +28,7 @@ process.env.ASH_RUNS_DIR = join(stage, "runs");
 const [{ db, ensureSchema }, schema, duet] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
-  import("../src/duet/index.js"),
+  import("../src/duet/turn.js"),
 ]);
 const { projects, tasks, sessions } = schema;
 await ensureSchema();

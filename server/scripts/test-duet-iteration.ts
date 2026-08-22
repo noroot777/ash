@@ -180,7 +180,7 @@ try {
   // 复用同一条 session 行接着跑下一轮时,「这活在哪个目录、带什么参数跑」必须整组跟着
   // 刷新:门禁能等很久,这期间 profile 可能被换掉、worktree 可能被删后重建。漏掉哪一列,
   // 「复制到终端接着聊」就给出一条跑不起来的命令(第 2 轮 finding 6)。
-  const { reusedSessionPatch } = await import("../src/duet/index.js");
+  const { reusedSessionPatch } = await import("../src/duet/turn.js");
   const seen: string[] = [];
   const executor = {
     label: "claude@build",

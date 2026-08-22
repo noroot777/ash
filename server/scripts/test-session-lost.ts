@@ -84,7 +84,7 @@ const CHAIN_OWNER: Record<string, string> = {
   "reattach.ts": "single-run.ts",
   "orchestrator.ts": "single-run.ts",
   "team/session.ts": "team/session.ts",
-  "duet/index.ts": "duet/index.ts",
+  "duet/turn.ts": "duet/turn.ts",
 };
 const RESUME_CALL = /sessionId:[^,\n]*(cliSessionId|resumeCliId)/;
 const walk = (d: string): string[] =>

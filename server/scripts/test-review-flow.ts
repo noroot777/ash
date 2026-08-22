@@ -293,7 +293,7 @@ const globalPromptCallsites = [
   ["普通任务 fresh run", new URL("../src/task-run.ts", import.meta.url), 1],
   ["普通任务续聊/召唤", new URL("../src/orchestrator.ts", import.meta.url), 1],
   ["团队调度台", new URL("../src/team/session.ts", import.meta.url), 4],
-  ["duet 讨论者", new URL("../src/duet/index.ts", import.meta.url), 1],
+  ["duet 讨论者", new URL("../src/duet/turn.ts", import.meta.url), 1],
 ] as const;
 for (const [source, file, expected] of globalPromptCallsites) {
   const calls = [...readFileSync(file, "utf8").matchAll(/withGlobalBrowserPolicy\(/g)].length;
