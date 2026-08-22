@@ -23,6 +23,14 @@
 .scm-branch__refresh:hover:not([aria-disabled="true"]) { background:var(--raised); color:var(--ink); }
 .scm-branch__refresh[aria-disabled="true"] { opacity:.5; cursor:default; }
 .scm-branch__root { width:100%; overflow:hidden; color:var(--faint); font-size:9px; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
+/* 推送/发布跟刷新同尺寸并排,只用底色区分「这颗会写远端」——说明归指上去的提示。 */
+.scm-branch__push { display:grid; width:22px; height:22px; place-items:center; border:1px solid color-mix(in lch,var(--accent) 35%,var(--line2)); border-radius:6px; background:color-mix(in lch,var(--accent) 10%,var(--panel)); color:var(--accent); }
+.scm-branch__push:hover:not([aria-disabled="true"]) { background:color-mix(in lch,var(--accent) 18%,var(--panel)); }
+.scm-branch__push[aria-disabled="true"] { border-color:var(--line2); background:var(--panel); color:var(--faint); cursor:default; }
+.scm-branch__remotes { position:absolute; top:calc(100% + 4px); right:0; z-index:20; display:flex; min-width:120px; flex-direction:column; gap:1px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:4px; box-shadow:var(--menu-shadow); }
+.scm-branch__remotes p { margin:0 0 2px; padding:0 4px; color:var(--faint); font-size:9px; }
+.scm-branch__remotes button { border-radius:5px; padding:3px 6px; color:var(--muted); font-size:10px; text-align:left; }
+.scm-branch__remotes button:hover { background:var(--raised); color:var(--ink); }
 
 .scm-banner { display:flex; align-items:flex-start; gap:5px; margin:8px 9px 0; border:1px solid var(--line2); border-radius:7px; background:var(--overlay); padding:6px 8px; color:var(--muted); font-size:10px; line-height:1.55; }
 .scm-banner > svg { flex:0 0 auto; margin-top:1px; }
