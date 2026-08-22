@@ -136,6 +136,7 @@
 .task-message-footer button.is-retry { display: inline-flex; align-items: center; gap: 3px; border-color: color-mix(in lch, var(--red) 45%, var(--line)); color: var(--red); }
 .task-message-footer button.is-retry:hover { border-color: var(--red); background: color-mix(in lch, var(--red) 12%, var(--raised)); color: var(--red); }
 .task-message-footer button.is-retry:disabled { opacity: 0.55; }
+.task-message-footer button.task-message-copy-action { display: inline-flex; align-items: center; gap: 3px; }
 
 /* Token 用量。三颗都在尾栏里，跟 .task-message-footer 的按钮同款外形。 */
 .token-usage-chip { display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 2px 6px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; white-space: nowrap; }

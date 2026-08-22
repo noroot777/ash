@@ -25,7 +25,8 @@
     "test:tool-summary": "node --experimental-strip-types scripts/test-tool-summary.mjs",
     "test:duet-timeline": "node --experimental-strip-types scripts/test-duet-timeline.mjs",
     "test:conversation-notes": "node --experimental-strip-types scripts/test-conversation-notes.mjs",
-    "test:conversation": "npm run test:client-id && npm run test:conversation-notes && npm run test:reviewer-turn",
+    "test:conversation": "npm run test:client-id && npm run test:conversation-notes && npm run test:conversation-continuation && npm run test:reviewer-turn",
+    "test:conversation-continuation": "tsx scripts/test-conversation-continuation.tsx",
     "test:client-id": "node --experimental-strip-types scripts/test-client-id.mjs",
     "test:conversation-notes-dom": "node scripts/test-conversation-notes-dom.mjs",
     "test:reviewer-turn": "node --experimental-strip-types scripts/test-reviewer-turn.mjs",
@@ -66,6 +67,7 @@
     "@vitejs/plugin-react": "^4.3.4",
     "playwright-core": "^1.62.0",
     "tailwindcss": "^4.0.0",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vite": "^6.0.5"
   }

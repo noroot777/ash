@@ -66,6 +66,16 @@ try {
   assert.equal(await messages.nth(1).locator(".agent-run-identity").count(), 0, "旁注不该让会话重报身份");
   assert.equal(await messages.nth(2).locator(".agent-run-identity").count(), 0);
   assert.equal(await messages.nth(3).locator(".agent-run-identity").count(), 0);
+  assert.equal(
+    await page.locator(".task-message--agent.is-continuation header time").count(),
+    0,
+    "旁注已经显示同一时间时，续写段不该再重复",
+  );
+  assert.equal(
+    await page.locator('.task-message--agent button[aria-label="复制这条回复"]').count(),
+    await messages.count(),
+    "每段回复都必须保留复制入口",
+  );
   // 真人插过话之后是新的一段，身份要回来；回合边界之后同理。
   assert.equal(await messages.nth(4).locator(".agent-run-identity").count(), 1, "真人插话后必须重新报身份");
   assert.equal(await messages.nth(5).locator(".agent-run-identity").count(), 1, "回合边界之后必须重新报身份");
