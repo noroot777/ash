@@ -227,6 +227,38 @@ export function HandoffSettings({
         </div>
         <div className="settings-row handoff-peer-head">
           <div>
+            <b>接力载荷上限</b>
+            <small>
+              单次接力最多收多大的载荷（MB）。超过就在读取过程中掐断，不等读完——
+              验签必须等 body 读完（签名覆盖 body 哈希），没有这条闸，一个巨大的请求
+              不用带任何签名就能把内存吃光。
+              <br />
+              512 是硬顶：载荷最终要变成一个 JS 字符串，Node 的字符串最长就这么大。
+              接力失败提示「超过上限」而任务确实很大时，先在两边把仓库同步到相近的提交——
+              历史对齐了就只打增量包。
+            </small>
+          </div>
+          <input
+            type="number"
+            className="ui-input handoff-body-limit"
+            min={1}
+            max={512}
+            step={1}
+            value={settings.handoffMaxBodyMb}
+            disabled={loading || busy}
+            onChange={(e) => onSettings({ ...settings, handoffMaxBodyMb: Number(e.target.value) })}
+            onBlur={async (e) => {
+              const mb = Math.min(512, Math.max(1, Math.round(Number(e.target.value) || 512)));
+              try {
+                onSettings(await api.patchSettings({ handoffMaxBodyMb: mb }));
+              } catch (error) {
+                notify(error instanceof Error ? error.message : "接力载荷上限保存失败");
+              }
+            }}
+          />
+        </div>
+        <div className="settings-row handoff-peer-head">
+          <div>
             <b>接力来源</b>
             <small>谁尝试过把任务接力进本机。身份看指纹，不看地址——地址会漂，指纹不会。</small>
           </div>

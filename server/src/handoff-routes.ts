@@ -23,6 +23,7 @@ import { repoRefTips } from "./handoff-collect.js";
 import { HandoffError, type HandoffPingResponse } from "./handoff-types.js";
 import { canonicalPingChallenge, localIdentity, shortFingerprint, signWithLocalKey } from "./handoff-identity.js";
 import { looksSealed, openSealed } from "./handoff-crypto.js";
+import { readCappedText } from "./handoff-body.js";
 import {
   deletePeer, listPeers, peerAddr, peerStanceFor, requireApprovedPeer, setPeerStatus, touchPeer,
   verifyPeerSignature,
@@ -32,7 +33,7 @@ import { publishTaskUpdated } from "./task-store.js";
 import { sessionTranscriptPath, TURN_SENTINEL } from "./transcript.js";
 import { now } from "./util.js";
 
-type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 500 | 502;
+type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 500 | 502;
 
 // 错误应答带 ash:true = 「ash 业务层的明确拒绝,本机可证明没留下这次接力的
 // 任务」——importHandoff 里任务行插入之后的失败都会补偿回滚再抛 HandoffError,没插
@@ -121,8 +122,11 @@ export function mountHandoffRoutes(api: Hono): void {
   api.post("/handoff/import", async (c) => {
     let raw: string;
     try {
-      raw = await c.req.text();
-    } catch {
+      // 上限闸必须在验签之前,而且是流式的:签名覆盖 body 哈希,验签只能排在读完之后,
+      // 所以没有这一层,一个未鉴权的巨大 body 就能把内存吃光(见 handoff-body.ts)。
+      raw = await readCappedText(c.req.raw, (await getAppSettings()).handoffMaxBodyMb);
+    } catch (e) {
+      if (e instanceof HandoffError) return fail(c, e);
       return c.json({ error: "导入体读取失败", ash: true }, 400);
     }
     try {

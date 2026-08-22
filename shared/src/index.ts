@@ -59,6 +59,10 @@ export interface AppSettings {
   // 签名机制本来就管冒充和篡改,这一条只管**窃听**,所以关掉不会削弱身份校验。
   // 关掉的唯一用途是调试:密文在抓包工具里看不了,排查接力本身的问题时需要明文。
   handoffEncrypt: boolean;
+  // 接力入站载荷的大小上限(MB)。验签必须等 body 读完(签名覆盖 body 哈希),所以鉴权
+  // 天生排在缓冲之后 —— 没有这条闸,未鉴权的巨大 body 就能把内存吃光。
+  // 硬顶 512:body 最终要变成一个 JS 字符串,而 Node 的字符串最长就这么大。
+  handoffMaxBodyMb: number;
 }
 
 export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
@@ -68,6 +72,7 @@ export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
   handoffTargets: [],
   handoffRequireApproval: true,
   handoffEncrypt: true,
+  handoffMaxBodyMb: 512,
 });
 
 // ── 任务接力（跨机器 handoff）──────────────────────────────────────────────

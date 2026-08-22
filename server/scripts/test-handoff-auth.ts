@@ -17,6 +17,7 @@
 //  10. 对端突然不报身份(降级/冒充):本机记过指纹就一律拒绝
 //  11. manifest 里进 git argv 的分支名/提交号(参数注入面,和文件落盘的路径穿越并列)
 //  12. 传输加密:架一个中间人抄下线上字节,断言密文里读不到任务正文;关掉开关就是明文
+//  13. body 上限:验签只能排在读完之后,所以这道闸必须自己站在最前面且是流式的
 //
 // ASH_RUNS_DIR 指到临时目录顺带打开 guardAgentSpawn:即使哪里失手触发续跑也不会真
 // 拉起 CLI 烧额度;接力本身一律 autoResume:false。
@@ -450,6 +451,54 @@ async function main(): Promise<void> {
     await new Promise<void>((r) => sniffer.close(() => r()));
     await patchAppSettings({ handoffEncrypt: true });
   }
+
+  // ── 13. body 上限:鉴权排在缓冲之后,所以这道闸必须自己站在最前面 ──────────
+  // 验签要覆盖 body 哈希,只能等读完才验 —— 没有上限的话,一个不带任何签名的巨大请求
+  // 就能把内存吃光。所以验的是「有没有在读的过程中掐断」,不是「读完之后拒不拒」。
+  const setLimit = (mb: number) => api(peerUrl, "/settings", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ handoffMaxBodyMb: mb }),
+  });
+  await setLimit(1);
+  try {
+    // 带 content-length 的快路径:自报就超了,一个字节都不该收。
+    const declared = await raw("/handoff/import", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pad: "x".repeat(2 * 1024 * 1024) }),
+    });
+    assert.equal(declared.status, 413, "content-length 自报超限就该当场拒,不用把它收完");
+
+    // chunked(不带 content-length)的真闸:必须靠流式计数,否则快路径一绕就形同虚设。
+    let pushed = 0;
+    const streamed = await raw("/handoff/import", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: new ReadableStream<Uint8Array>({
+        pull(controller) {
+          // 上限 1 MB,这里最多推 8 MB:服务端及时掐断的话,推不到一半就该被 cancel。
+          if (pushed >= 8 * 1024 * 1024) { controller.close(); return; }
+          pushed += 64 * 1024;
+          controller.enqueue(new Uint8Array(64 * 1024).fill(0x78));
+        },
+      }),
+      // undici 要求带流的请求显式声明半双工
+      duplex: "half",
+    } as RequestInit & { duplex: string });
+    assert.equal(streamed.status, 413, "不带 content-length 的流式请求同样要被上限拦住");
+    assert.ok(
+      pushed < 8 * 1024 * 1024,
+      `超限后必须掐断连接,而不是收完再拒(实际推了 ${pushed} 字节,说明服务端一直在收)`,
+    );
+
+    // 上限之内的照常往下走(会栽在别的校验上,但不该是 413)。
+    const small = await postGit("auth-limit-ok", "main", "a".repeat(40));
+    assert.notEqual(small.status, 413, "上限之内的请求不该被这道闸误伤");
+  } finally {
+    await setLimit(512);
+  }
+  // 上限之内的真接力(几十 MB 的 bundle)照常能跑通 —— 上面第 12 节已经整轮验过。
 
   console.log("test-handoff-auth ok");
 }

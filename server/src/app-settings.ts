@@ -1,6 +1,7 @@
 import type { AppSettings } from "@ash/shared";
 import { DEFAULT_APP_SETTINGS } from "@ash/shared";
 import { db } from "./db/index.js";
+import { MAX_BODY_MB } from "./handoff-body.js";
 import { appSettings } from "./db/schema.js";
 
 // 加一个全局设置项**只改这一张表**：读取归一、PATCH 校验、报错文案全从这里派生。
@@ -33,6 +34,10 @@ const SETTING_SPECS = {
   },
   handoffRequireApproval: { ok: (v: unknown) => typeof v === "boolean", hint: "必须是 boolean" },
   handoffEncrypt: { ok: (v: unknown) => typeof v === "boolean", hint: "必须是 boolean" },
+  handoffMaxBodyMb: {
+    ok: (v: unknown) => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= MAX_BODY_MB,
+    hint: `必须是 1..${MAX_BODY_MB} 的整数（512 是硬顶：body 最终要变成一个 JS 字符串）`,
+  },
 } satisfies { [K in keyof AppSettings]: { ok: (v: unknown) => boolean; hint: string } };
 
 const SETTING_KEYS = Object.keys(SETTING_SPECS) as (keyof AppSettings)[];
