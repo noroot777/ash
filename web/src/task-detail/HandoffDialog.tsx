@@ -7,7 +7,7 @@ import type {
   Task,
   TaskHandoff,
 } from "@ash/shared";
-import { ArrowSquareOut, PaperPlaneTilt, SpinnerGap, Warning } from "@phosphor-icons/react";
+import { ArrowSquareOut, Fingerprint, PaperPlaneTilt, SpinnerGap, Warning } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { handoffTaskHref } from "../workspace/workspaceHistory.ts";
@@ -89,6 +89,8 @@ export function HandoffDialog({
     ? [{ name: pendingHandoff.peerName ?? pendingHandoff.peerUrl, url: pendingHandoff.peerUrl }, ...(targets ?? [])]
     : targets ?? [];
   const missingFiles = preflight ? preflight.local.sessions - preflight.local.sessionFilesFound : 0;
+  // 对端还没批准本机(或已拒绝):后端在打包前也会 409,这里先把按钮按住,省掉一次白等。
+  const blockedByPeer = preflight?.peer?.peerStatus === "pending" || preflight?.peer?.peerStatus === "blocked";
 
   const run = async () => {
     if (!projectId || busy) return;
@@ -192,6 +194,39 @@ export function HandoffDialog({
             )}
             {preflight && (
               <>
+                {preflight.peer ? (
+                  <p className={`handoff-peer-line${preflight.peer.peerStatus === "pending" || preflight.peer.peerStatus === "blocked" ? " is-warn" : ""}`}>
+                    <Fingerprint size={13} aria-hidden="true" />
+                    <span>
+                      目标机身份 <b>{preflight.peer.short}</b>
+                      {preflight.peer.trust === "first-seen"
+                        ? "（第一次连这台机器：和对端设置页上显示的那串核对一下，接力成功后本机会记住它）"
+                        : "（和上次记住的一致）"}
+                      {preflight.peer.peerStatus === "pending"
+                        ? "。对端还没批准本机，去它的「设置 → 默认规则 → 接力来源」放行后再接力。"
+                        : preflight.peer.peerStatus === "blocked"
+                          ? "。对端把本机列为已拒绝的接力来源。"
+                          : ""}
+                    </span>
+                  </p>
+                ) : (
+                  <p className="handoff-peer-line is-warn">
+                    <Warning size={13} aria-hidden="true" />
+                    <span>目标机没有报出身份（版本过旧），这次接力无法核对「对面是不是原来那台机器」。</span>
+                  </p>
+                )}
+                {preflight.peer && !preflight.peer.encrypted && (
+                  <p className="handoff-peer-line is-warn">
+                    <Warning size={13} aria-hidden="true" />
+                    <span>
+                      这次<b>明文传输</b>
+                      {preflight.peer.canEncrypt
+                        ? "（本机在「设置 → 默认规则 → 接力传输加密」里关掉了加密）"
+                        : "（目标机版本过旧，收不了加密载荷）"}
+                      。同网段抓包能读到整个仓库和会话历史。
+                    </span>
+                  </p>
+                )}
                 <div className="handoff-field">
                   <label htmlFor="handoff-project">对端项目（主机 {preflight.target.host}）</label>
                   <select
@@ -259,7 +294,7 @@ export function HandoffDialog({
             <button
               className="is-primary"
               type="button"
-              disabled={busy || !preflight || !projectId}
+              disabled={busy || !preflight || !projectId || blockedByPeer}
               onClick={() => void run()}
             >
               {busy

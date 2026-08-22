@@ -1,6 +1,7 @@
 import type { AppSettings } from "@ash/shared";
 import { DEFAULT_APP_SETTINGS } from "@ash/shared";
 import { db } from "./db/index.js";
+import { MAX_BODY_MB } from "./handoff-body.js";
 import { appSettings } from "./db/schema.js";
 
 // 加一个全局设置项**只改这一张表**：读取归一、PATCH 校验、报错文案全从这里派生。
@@ -23,11 +24,19 @@ const SETTING_SPECS = {
     ok: (v: unknown) =>
       Array.isArray(v) && v.length <= 20 && v.every((t) => {
         if (!t || typeof t !== "object") return false;
-        const { name, url } = t as { name?: unknown; url?: unknown };
+        const { name, url, peerFp } = t as { name?: unknown; url?: unknown; peerFp?: unknown };
+        // peerFp 是记住的对端公钥指纹(sha256 hex),可缺省/可为 null(还没配对过)。
+        if (peerFp != null && !(typeof peerFp === "string" && /^[0-9a-f]{64}$/.test(peerFp))) return false;
         return typeof name === "string" && name.length >= 1 && name.length <= 64
           && typeof url === "string" && /^https?:\/\/\S+$/.test(url) && url.length <= 256;
       }),
-    hint: "必须是 {name,url}[]（url 以 http(s):// 开头，最多 20 个目标）",
+    hint: "必须是 {name,url,peerFp?}[]（url 以 http(s):// 开头，peerFp 是 64 位小写 hex 指纹，最多 20 个目标）",
+  },
+  handoffRequireApproval: { ok: (v: unknown) => typeof v === "boolean", hint: "必须是 boolean" },
+  handoffEncrypt: { ok: (v: unknown) => typeof v === "boolean", hint: "必须是 boolean" },
+  handoffMaxBodyMb: {
+    ok: (v: unknown) => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= MAX_BODY_MB,
+    hint: `必须是 1..${MAX_BODY_MB} 的整数（512 是硬顶：body 最终要变成一个 JS 字符串）`,
   },
 } satisfies { [K in keyof AppSettings]: { ok: (v: unknown) => boolean; hint: string } };
 

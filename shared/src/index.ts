@@ -50,6 +50,19 @@ export interface AppSettings {
   skillRefreshSeconds: number;
   // 任务接力的候选目标:另一台跑着 ash 的机器。url 是对端根地址(http://host:4317)。
   handoffTargets: HandoffTarget[];
+  // 接力**入站**审批开关。开着(默认)时,别的机器要把任务接力进本机,必须先在
+  // 「设置 → 默认规则 → 接力来源」里被批准一次,且每个请求都要带本机认得的签名。
+  // 关掉 = 退回旧行为(谁连得上谁就能推任务进来),只有在两台机器版本不一致、
+  // 老版本源机没法签名时才临时用。
+  handoffRequireApproval: boolean;
+  // 接力载荷(git bundle + 完整 CLI 会话历史)出门前用对端公钥加密,防同网段抓包。
+  // 签名机制本来就管冒充和篡改,这一条只管**窃听**,所以关掉不会削弱身份校验。
+  // 关掉的唯一用途是调试:密文在抓包工具里看不了,排查接力本身的问题时需要明文。
+  handoffEncrypt: boolean;
+  // 接力入站载荷的大小上限(MB)。验签必须等 body 读完(签名覆盖 body 哈希),所以鉴权
+  // 天生排在缓冲之后 —— 没有这条闸,未鉴权的巨大 body 就能把内存吃光。
+  // 硬顶 512:body 最终要变成一个 JS 字符串,而 Node 的字符串最长就这么大。
+  handoffMaxBodyMb: number;
 }
 
 export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
@@ -57,12 +70,18 @@ export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
   defaultWorkflowId: "",
   skillRefreshSeconds: 3600,
   handoffTargets: [],
+  handoffRequireApproval: true,
+  handoffEncrypt: true,
+  handoffMaxBodyMb: 512,
 });
 
 // ── 任务接力（跨机器 handoff）──────────────────────────────────────────────
 // 类型本体在 ./handoff.ts（纯类型模块）,这里只做再导出,消费方 import 路径不变。
 export type {
   HandoffExportResult,
+  HandoffIdentity,
+  HandoffPeer,
+  HandoffPeerIdentity,
   HandoffPingProject,
   HandoffPreflightResult,
   HandoffTarget,
@@ -482,48 +501,8 @@ export const maxBytesFor = (mime: string): number =>
   attachmentKind(mime) === "image" ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
 
 // ── External batch API (agent-facing, § interfaces) ──────────────────────────
-// One call to create a whole batch of single-mode tasks into an EXISTING group,
-// wiring cross-task dependency edges that the in-group scheduler honors. The
-// chain case ("A 做完再做 B …") is the headline; arbitrary in-batch DAGs are
-// expressible via per-task `key` + `dependsOn`. projectId is inherited from the
-// group, so the caller never repeats it.
-export interface BatchTaskInput {
-  // Local id used ONLY to reference this task from a sibling's dependsOn within
-  // the same batch (ids don't exist yet at call time). Not persisted.
-  key?: string;
-  title?: string; // omitted → derived from body's first line, and autoTitle'd
-  body?: string; // the prompt / objective
-  agentType?: AgentType; // overrides defaults.agentType
-  executorId?: string | null; // overrides defaults.executorId; stale id degrades by agentType
-  model?: string | null; // overrides defaults.model; null follows the resolved executor profile
-  reasoningEffort?: string | null; // overrides defaults.reasoningEffort
-  useWorktree?: boolean; // overrides defaults.useWorktree; omitted follows the global setting
-  worktreeBase?: string | null; // base ref when this task uses a worktree
-  workflowId?: string | null; // 起手式 id；省略则按项目→全局默认解析，并拷成快照
-  labels?: string[];
-  // Each entry is resolved against sibling `key`s first; anything that doesn't
-  // match a sibling key is treated as an existing task id and passed through.
-  dependsOn?: string[];
-  // Same resolution as dependsOn, but checked only when resuming a paused task.
-  resumeDependsOn?: string[];
-}
-
-export interface BatchCreateTasksBody {
-  tasks: BatchTaskInput[];
-  chain?: boolean; // true → append the previous task's id to each task's deps (A→B→C→D)
-  run?: boolean; // true → kick off the group (runGroup) right after creating
-  defaults?: {
-    // applied to every task unless that task overrides the field
-    agentType?: AgentType;
-    executorId?: string | null;
-    model?: string | null;
-    reasoningEffort?: string | null;
-    useWorktree?: boolean; // omitted follows DEFAULT_APP_SETTINGS.worktreeDefault
-    workflowId?: string | null; // 这一批默认走哪条起手式
-    worktreeBase?: string | null;
-    labels?: string[];
-  };
-}
+// 形状住在 ./batch.ts(纯类型,这里只再导出)。
+export type { BatchCreateTasksBody, BatchTaskInput } from "./batch.ts";
 
 // ── Duet 讨论 (§7) ───────────────────────────────────────────────────────────
 // 类型从 ./duet.ts 再导出(type-only,编译期抹掉,安全);DUET_DEFAULTS 与
@@ -531,45 +510,8 @@ export interface BatchCreateTasksBody {
 export type { DuetConfig, DuetConsensusBy, DuetStyle, HitlGate } from "./duet.ts";
 
 // ── Scheduling (§9) ──────────────────────────────────────────────────────────
-// Schedules attach to a Task. Once = fire at a timestamp then disable; cron =
-// recurring 5-field expression in local time. The scheduler only enqueues.
-export interface Schedule {
-  id: string;
-  taskId: string;
-  kind: "once" | "cron";
-  at: string | null;
-  cron: string | null;
-  enabled: boolean;
-  lastRunAt: string | null;
-  createdAt: string;
-}
-
-// 一条「待发送消息」：不是重跑任务（那是 Schedule），而是等条件到了用
-// continueTask 把这句话送进任务**原来那个会话**。两种到期条件，也就是 mode：
-//   • timed  = 定时发送：等 `sendAt` 这个时刻到了再发（任务此刻在忙就继续等）
-//   • queued = 排队追问：不看时间，任务一空下来就发（运行中还想补一句时用）
-// 两者共用同一张表、同一条投递链路和同一个取消入口——区别只有「什么时候算到期」
-// 这一条，其余（附件、@指派的执行器/模型/思考强度、托盘展示、取消）完全一样。
-// 一个任务可以同时挂多条，按 `sendAt` 升序依次投递，每次只发一条。
-export type ScheduledMessageStatus = "pending" | "sent" | "canceled";
-export type ScheduledMessageMode = "timed" | "queued";
-export interface ScheduledMessage {
-  id: string;
-  taskId: string;
-  text: string;
-  attachments: string[];
-  agent: AgentType | null;
-  // @指派时一并选定的执行器/模型/思考强度；null = 按 agent 的默认执行器 / 跟随执行器。
-  executorId: string | null;
-  model: string | null;
-  reasoningEffort: string | null;
-  mode: ScheduledMessageMode;
-  // timed：ISO 到期发送时间。queued：入队时刻（排队消息不看时间，只用它排先后）。
-  sendAt: string;
-  status: ScheduledMessageStatus;
-  createdAt: string;
-  sentAt: string | null;
-}
+// 形状住在 ./schedule.ts(纯类型,这里只再导出)。
+export type { Schedule, ScheduledMessage, ScheduledMessageMode, ScheduledMessageStatus } from "./schedule.ts";
 
 // ── HITL gates (§7) / Executor streaming events (§12) ───────────────────────
 // 形状住在 ./events.ts(纯类型,这里只再导出);拆分理由见那个文件的头部注释。

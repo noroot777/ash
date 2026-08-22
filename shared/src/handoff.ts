@@ -4,6 +4,57 @@
 export interface HandoffTarget {
   name: string;
   url: string;
+  // 这台目标机的公钥指纹(sha256 hex),第一次接力成功后记住(TOFU)。
+  // 之后每次预检/导出都拿对端现报的指纹跟它比,对不上就**拒绝打包** —— 接力推的是
+  // 整个仓库和会话历史,地址漂到别人机器上时,这是唯一拦得住的东西。
+  // 空/缺失 = 还没记过(首次)或用户手动清除过。
+  peerFp?: string | null;
+}
+
+// ── 接力身份与配对 ─────────────────────────────────────────────────────────
+// 一台 ash = 一对 ed25519 密钥。指纹是公钥的 sha256,公开可传;私钥不出机器。
+// 为什么不是一把共享 key,见 server/src/handoff-identity.ts 顶部。
+
+/** GET /handoff/identity:本机身份(设置页展示,供另一台机器核对)。 */
+export interface HandoffIdentity {
+  fingerprint: string;
+  /** 给人看的短指纹,5 组 4 位 hex。 */
+  short: string;
+  host: string;
+}
+
+/** 入站信任表的一行:哪台机器可以把任务接力**进**本机。 */
+export interface HandoffPeer {
+  fingerprint: string;
+  short: string;
+  /** 对端自述的主机名,不可信,只帮人认出是哪台。 */
+  name: string;
+  status: "pending" | "approved" | "blocked";
+  firstSeenAt: string;
+  lastSeenAt: string;
+  approvedAt: string | null;
+  /** 最近一次来访地址,纯展示。 */
+  lastAddr: string;
+}
+
+/** 预检时对目标机做的身份核对结果(出站方向)。 */
+export interface HandoffPeerIdentity {
+  fingerprint: string;
+  short: string;
+  // matched    = 和设置里记住的指纹一致
+  // first-seen = 还没记过,这次接力成功后记住(TOFU)
+  // mismatch   = 记过但对不上 —— 预检和导出都硬拒绝
+  // legacy     = 对端没报身份(版本过旧),无法核对
+  trust: "matched" | "first-seen" | "mismatch" | "legacy";
+  // 对端对本机的态度(入站方向,由对端自述):
+  // approved 放行 / pending 待批准 / blocked 已拒绝 / open 对端没开审批 / unknown 旧版对端
+  peerStatus: "approved" | "pending" | "blocked" | "open" | "unknown";
+  /** mismatch 时:设置里记住的那个短指纹,摆出来给用户核对。 */
+  expectedShort?: string | null;
+  /** 这次接力的载荷会不会加密传输(对端支持 + 本机没在设置里关掉)。 */
+  encrypted?: boolean;
+  /** 对端**有没有能力**收加密载荷。false 时 encrypted 一定是 false,原因是对端太旧。 */
+  canEncrypt?: boolean;
 }
 
 // 落在 tasks.handoff（json）上的持久接力标记:导出侧 direction:"out"（任务已交出去，
@@ -52,6 +103,8 @@ export interface HandoffPingProject {
 export interface HandoffPreflightResult {
   ok: true;
   target: { url: string; host: string };
+  /** 对目标机做的身份核对(出站方向)。null = 对端连 ping 都没报身份且本机也没记过。 */
+  peer: HandoffPeerIdentity | null;
   projects: HandoffPingProject[];
   // 按仓库目录名匹配出的对端项目;null = 没匹配上,让用户自己选。
   suggestedProjectId: string | null;

@@ -489,3 +489,26 @@ export const llmProviders = sqliteTable("llm_providers", {
   context1mModels: text("context_1m_models").notNull().default("[]"),
   createdAt: text("created_at").notNull(),
 });
+
+// 接力来源(入站方向的信任表):哪些机器可以把任务接力**进**本机。
+//
+// 主键是公钥指纹而不是地址 —— 地址会随 DHCP/网络环境漂,身份不会;而且换了地址还是
+// 同一台机器,不该重新批准。存的全是公开信息(公钥、对端自述的主机名),泄露无害;
+// 本机自己的私钥在 `<db>.identity.json`,见 handoff-identity.ts 顶部注释。
+//
+// 出站方向(「我要发的这台是不是原来那台」)不在这里,而是 app_settings.handoffTargets
+// 每个目标上的 peerFp —— 那是「地址 → 期望身份」的绑定,和这张「身份 → 是否放行」是
+// 两件事,合成一张表反而说不清一台只出不进(或只进不出)的机器该是什么状态。
+export const handoffPeers = sqliteTable("handoff_peers", {
+  fingerprint: text("fingerprint").primaryKey(), // sha256(公钥 SPKI DER) 小写 hex
+  publicKey: text("public_key").notNull(), // base64(SPKI DER)
+  // 对端自述的主机名,**不可信**,只用来在批准列表里帮人认出是哪台;身份永远看指纹。
+  name: text("name").notNull().default(""),
+  // pending = 来敲过门还没批;approved = 放行;blocked = 明确拒绝(不再进待批列表打扰)。
+  status: text("status").notNull().default("pending"),
+  firstSeenAt: text("first_seen_at").notNull(),
+  lastSeenAt: text("last_seen_at").notNull(),
+  approvedAt: text("approved_at"),
+  // 最近一次来访的地址,纯展示(帮人判断「这是不是我那台台式机」)。
+  lastAddr: text("last_addr").notNull().default(""),
+});
