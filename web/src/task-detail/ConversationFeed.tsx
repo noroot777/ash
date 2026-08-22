@@ -36,14 +36,26 @@ function ReviewerBadge({ round }: { round: number | null }) {
 function AgentMessage({
   item,
   retry,
+  hideTime,
 }: {
   item: Extract<ConversationItem, { kind: "agent" }>;
   /** 这条气泡是不是「上一回合崩了」的那一条：给了就在尾栏挂重试按钮。 */
   retry?: React.ReactNode;
+  /** 紧邻的旁注已经显示了同一个时间。 */
+  hideTime?: boolean;
 }) {
   const duration = durationBetween(item.at, item.endedAt);
   const reviewer = item.reviewer;
-  const showHeader = !item.continuation || !!duration;
+  const compactContinuation = !!item.continuation && !!hideTime && !duration;
+  const footerActions = compactContinuation ? (
+    <>
+      <button className="task-message-copy-action" type="button" onClick={() => copyText(item.markdown)} aria-label="复制这条回复">
+        <Copy size={12} aria-hidden="true" />
+        复制这条回复
+      </button>
+      {retry}
+    </>
+  ) : retry;
   return (
     <article
       className={`task-message task-message--agent${item.continuation ? " is-continuation" : ""}${reviewer ? " is-reviewer" : ""}`}
@@ -52,7 +64,7 @@ function AgentMessage({
         {item.continuation ? "" : reviewer ? <ShieldCheck size={13} weight="fill" /> : item.label.slice(0, 1).toUpperCase()}
       </span>
       <div className="task-message-content">
-        {showHeader && (
+        {!compactContinuation && (
           <header>
             {!item.continuation && (
               <span className="agent-run-identity">
@@ -61,7 +73,7 @@ function AgentMessage({
               </span>
             )}
             {reviewer && !item.continuation && <ReviewerBadge round={reviewer.round} />}
-            {!item.continuation && item.at && <time>{formatInstant(item.at)}</time>}
+            {!hideTime && item.at && <time>{formatInstant(item.at)}</time>}
             {duration && (
               <small className="task-turn-duration" title={`开始 ${formatInstant(item.at)} · 结束 ${formatInstant(item.endedAt)}`}>
                 {item.continuation ? "" : "· "}⏱ {duration} 用时
@@ -86,7 +98,7 @@ function AgentMessage({
           session={item.showSessionMeta ? item.session : null}
           sessionUsage={item.sessionUsage}
           sessionContext={item.sessionContext}
-          actions={retry}
+          actions={footerActions}
         />
       </div>
     </article>
@@ -160,6 +172,19 @@ export function ConversationFeed({
     ? [...items].reverse().find((item) => item.kind === "agent")?.id ?? null
     : null;
   const rows = conversationFeedRows(items, { reviews });
+  const hiddenTimes = new Set<string>();
+  for (let index = 1; index < items.length; index += 1) {
+    const item = items[index]!;
+    const previous = items[index - 1]!;
+    if (
+      item.kind === "agent"
+      && item.continuation
+      && item.at
+      && previous.kind === "event"
+      && previous.variant === "note"
+      && previous.at === item.at
+    ) hiddenTimes.add(item.id);
+  }
 
   const renderItem = (item: ConversationItem) => {
     if (item.kind === "agent") {
@@ -167,6 +192,7 @@ export function ConversationFeed({
         <AgentMessage
           key={item.id}
           item={item}
+          hideTime={hiddenTimes.has(item.id)}
           retry={retry && item.id === retryItemId ? (
             <TurnRetryButton
               exitStatus={retry.exitStatus}
