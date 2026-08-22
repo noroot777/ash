@@ -120,11 +120,13 @@ export function ProviderModelInput({
         label: model,
         group: groupName,
         mono: true,
-        detail: model === defaultModel ? defaultDetail : "",
+        detail: [model === defaultModel ? defaultDetail : "", provider?.context1mModels.includes(model) ? "1M" : ""]
+          .filter(Boolean)
+          .join(" · "),
       });
     }
     return rows;
-  }, [candidates, defaultDetail, defaultModel, groupName, value]);
+  }, [candidates, defaultDetail, defaultModel, groupName, provider?.context1mModels, value]);
 
   const note = status === "loading"
     ? `正在从「${provider?.name ?? type}」探测模型…`

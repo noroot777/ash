@@ -171,7 +171,7 @@
 }
 
 .provider-mono-input,
-.provider-model-field input {
+.provider-model-field .ui-dropdown-trigger {
   font-family: var(--font-mono);
 }
 
@@ -180,8 +180,23 @@
   gap: 7px;
 }
 
-.provider-model-field > div input {
+.provider-model-control > .ui-dropdown {
+  min-width: 0;
   flex: 1;
+}
+
+.provider-model-control > .ui-dropdown .ui-dropdown-trigger {
+  height: 29px;
+  border-color: var(--line);
+  background: var(--canvas);
+  box-shadow: none;
+}
+
+.provider-model-control > .ui-dropdown .ui-dropdown-trigger:hover,
+.provider-model-control > .ui-dropdown .ui-dropdown-trigger[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: var(--canvas);
+  box-shadow: none;
 }
 
 .provider-model-field > div .ui-button {
@@ -235,6 +250,196 @@
 .provider-pinned-body {
   display: grid;
   gap: 8px;
+}
+
+/* transitions.dev accordion-expand：1M 设置默认收起，展开高度由内容决定。 */
+:root {
+  --acc-expand: 250ms;
+  --acc-collapse: 250ms;
+  --acc-chevron: 250ms;
+  --acc-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* grid-template-rows 0fr → 1fr gives a clean height animation
+   with no JS measurement; the inner element clips overflow. */
+.t-acc-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--acc-collapse) var(--acc-ease);
+}
+.t-acc[data-open="true"] .t-acc-panel {
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--acc-expand) var(--acc-ease);
+}
+.t-acc-panel-inner {
+  overflow: hidden;
+  opacity: 0;
+  filter: blur(2px);
+  transition:
+    opacity var(--acc-collapse) var(--acc-ease),
+    filter var(--acc-collapse) var(--acc-ease);
+}
+.t-acc[data-open="true"] .t-acc-panel-inner {
+  opacity: 1;
+  filter: blur(0);
+  transition:
+    opacity var(--acc-expand) var(--acc-ease),
+    filter var(--acc-expand) var(--acc-ease);
+}
+/* Flip the chevron vertically to turn the "v" into a "^".
+   scaleY(-1) about the centre passes through a flat line at
+   the midpoint (same look as a `d:` path morph) but animates
+   in every browser, unlike CSS `d:` morphing (Chromium only).
+   The chevron path is symmetric about the 16x16 viewBox
+   centre, so the flip lands exactly on the "^"; non-scaling
+   -stroke keeps the stroke width constant through the flip. */
+.t-acc-chevron {
+  display: inline-flex;
+  transform: scaleY(1);
+  transform-origin: center;
+  transition: transform var(--acc-chevron) var(--acc-ease);
+}
+.t-acc-chevron path { vector-effect: non-scaling-stroke; }
+.t-acc[data-open="true"] .t-acc-chevron {
+  transform: scaleY(-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-acc-panel, .t-acc-panel-inner, .t-acc-chevron {
+    transition: none !important;
+  }
+}
+
+.provider-context-1m {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--overlay);
+}
+
+.provider-context-head {
+  display: flex;
+  width: 100%;
+  min-height: 58px;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  background: transparent;
+  padding: 10px 12px;
+  color: var(--ink);
+  text-align: left;
+}
+
+.provider-context-head:hover {
+  background: color-mix(in lch, var(--raised) 74%, transparent);
+}
+
+.provider-context-title {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 3px;
+}
+
+.provider-context-title b {
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.provider-context-title small {
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.provider-context-summary {
+  flex: none;
+  border-radius: 999px;
+  background: var(--raised);
+  padding: 3px 8px;
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.provider-context-summary.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.provider-context-panel {
+  display: grid;
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+
+.provider-context-toolbar {
+  display: flex;
+  gap: 7px;
+}
+
+.provider-context-toolbar input {
+  min-width: 0;
+  flex: 1;
+}
+
+.provider-context-toolbar .ui-button {
+  flex: none;
+}
+
+.provider-context-panel > small.is-error {
+  color: var(--red);
+  font-size: 9px;
+}
+
+.provider-context-list {
+  display: grid;
+  max-height: 250px;
+  gap: 2px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0;
+  padding: 2px;
+  list-style: none;
+}
+
+.provider-context-list li {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  border-radius: 7px;
+  padding: 2px 7px;
+}
+
+.provider-context-list li:hover,
+.provider-context-list li.is-enabled {
+  background: var(--panel);
+}
+
+.provider-context-list .ui-choice {
+  min-width: 0;
+  flex: 1;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.provider-context-list .ui-choice > span:last-child {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-context-list li > span {
+  flex: none;
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.provider-context-list li.is-enabled > span {
+  color: var(--accent);
 }
 
 .provider-pinned-add {
@@ -377,6 +582,10 @@
     display: none;
   }
 
+  .provider-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .provider-test-action {
     min-width: 28px;
     font-size: 0;
@@ -390,7 +599,7 @@
     flex-wrap: wrap;
   }
 
-  .provider-model-field > div input {
+  .provider-model-control > .ui-dropdown {
     flex-basis: 100%;
   }
 

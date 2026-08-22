@@ -268,6 +268,8 @@ export async function ensureSchema() {
     // 选模型面板的候选来源：api=每次现调 /models；pinned=只用固定下来的这几个。
     "ALTER TABLE llm_providers ADD COLUMN model_list_mode TEXT NOT NULL DEFAULT 'api'",
     "ALTER TABLE llm_providers ADD COLUMN pinned_models TEXT NOT NULL DEFAULT '[]'",
+    // Anthropic 供应商中明确以 1M 上下文运行的模型名集合；未选模型继续直连。
+    "ALTER TABLE llm_providers ADD COLUMN context_1m_models TEXT NOT NULL DEFAULT '[]'",
     // 定时发送的 @指派：连执行器、模型、思考强度一起记住，到点还是跑用户当时选的那一套。
     "ALTER TABLE scheduled_messages ADD COLUMN executor_id TEXT",
     "ALTER TABLE scheduled_messages ADD COLUMN model TEXT",

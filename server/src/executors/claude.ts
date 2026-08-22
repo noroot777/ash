@@ -9,6 +9,7 @@ import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandl
 import { spawnForRun, detachedInfo } from "./detached.js";
 import { spawnAgent, resumeFor, resumeInner, shq, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets, failedChild } from "./spawn.js";
 import { relayRoot } from "../llm.js";
+import { anthropicContext1mBaseUrl, modelUsesContext1m, withContext1mSuffix } from "../anthropic-context-1m.js";
 import { calibrateSkills } from "../skills.js";
 import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
 
@@ -43,12 +44,15 @@ export class ClaudeExecutor implements AgentExecutor {
     this.startupError = opts.startupError;
     this.relay = opts.relay;
     this.configOverrides = opts.configOverrides;
+    const resumeBaseUrl = this.relay && modelUsesContext1m(this.model, this.relay.context1mModels)
+      ? anthropicContext1mBaseUrl(this.relay.providerId)
+      : this.relay ? relayRoot(this.relay.baseUrl) : undefined;
     this.resumeEnvHint = resumeEnvHint(
       this.type,
       // 覆盖项故意不进 env 前缀:它打不过用户的 settings.json(见 resumeEnvHint 字段注释),
       // 真正带着走的是 resumeFields() 里那个 `--settings`。
       undefined,
-      this.relay ? `ANTHROPIC_BASE_URL=${relayRoot(this.relay.baseUrl)} ANTHROPIC_AUTH_TOKEN=<你的key> ` : undefined,
+      this.relay ? `ANTHROPIC_BASE_URL=${resumeBaseUrl} ANTHROPIC_AUTH_TOKEN=<你的key> ` : undefined,
     );
     this.label = opts.name ?? `claude@local${opts.model ? "·" + opts.model : ""}`;
   }
@@ -111,10 +115,12 @@ export class ClaudeExecutor implements AgentExecutor {
   // shared/src/cli-overrides.ts,并原样显示在执行器设置里。
   // 返回值里允许出现 `undefined`:那是「把这个变量从子进程里删掉」,不是「没配」
   // (见 cliConfigOverrideEnvPatch)。所以这里不能再按 key 数量决定返不返回。
-  private env(cwd?: string): Record<string, string | undefined> {
+  private env(cwd?: string, model?: string): Record<string, string | undefined> {
     const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv(cwd));
     if (this.relay) {
-      env.ANTHROPIC_BASE_URL = relayRoot(this.relay.baseUrl);
+      env.ANTHROPIC_BASE_URL = modelUsesContext1m(model, this.relay.context1mModels)
+        ? anthropicContext1mBaseUrl(this.relay.providerId)
+        : relayRoot(this.relay.baseUrl);
       env.ANTHROPIC_AUTH_TOKEN = this.relay.apiKey;
     }
     return env;
@@ -122,11 +128,12 @@ export class ClaudeExecutor implements AgentExecutor {
 
   run(opts: RunOpts): RunHandle {
     const sessionId = opts.sessionId ?? randomUUID();
-    const args = this.buildArgs(opts, sessionId, false);
+    const model = opts.model ?? this.model;
+    const args = this.buildArgs(opts, sessionId, false, model);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
     const child = this.startupError
       ? failedChild(this.startupError)
-      : spawnForRun(opts.cwd, this.bin, args, opts.prompt, this.env(opts.cwd), opts.detach);
+      : spawnForRun(opts.cwd, this.bin, args, opts.prompt, this.env(opts.cwd, model), opts.detach);
     return { sessionId, commandLine, events: parseClaudeStream(child, undefined, this.bin, this.type), kill: () => killChild(child), detached: detachedInfo(child) };
   }
 
@@ -145,11 +152,12 @@ export class ClaudeExecutor implements AgentExecutor {
   // JSON)和不关 stdin。实测事实与坑写在 server/src/team/session.ts 头部注释。
   openResident(opts: RunOpts): ResidentHandle {
     const sessionId = opts.sessionId ?? randomUUID();
-    const args = this.buildArgs(opts, sessionId, true);
+    const model = opts.model ?? this.model;
+    const args = this.buildArgs(opts, sessionId, true, model);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`);
     const child = this.startupError
       ? failedChild(this.startupError)
-      : spawnAgent(opts.cwd, this.bin, args, userLine(opts.prompt), this.env(opts.cwd), {
+      : spawnAgent(opts.cwd, this.bin, args, userLine(opts.prompt), this.env(opts.cwd, model), {
           keepStdin: true,
         });
     const resident = { interruptPending: false };
@@ -177,8 +185,10 @@ export class ClaudeExecutor implements AgentExecutor {
   }
 
   // 两种形态共用的参数装配。resident 只多一个 --input-format。
-  private buildArgs(opts: RunOpts, sessionId: string, resident: boolean): string[] {
-    const model = opts.model ?? this.model;
+  private buildArgs(opts: RunOpts, sessionId: string, resident: boolean, selectedModel = opts.model ?? this.model): string[] {
+    const model = this.relay
+      ? withContext1mSuffix(selectedModel, this.relay.context1mModels)
+      : selectedModel;
     // --include-partial-messages turns on token-level streaming: the CLI emits
     // `stream_event` lines (content_block_delta) AS the model types, instead of
     // only one complete `assistant` message per turn. Without it the mobile/web

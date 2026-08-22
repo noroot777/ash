@@ -15,6 +15,7 @@ export type ProviderTestConfig = {
   apiKey: string;
   model: string;
   protocolConversionEnabled: boolean;
+  context1m?: boolean;
 };
 
 export type ProviderTestResult = {
@@ -90,6 +91,7 @@ async function testAnthropic(config: ProviderTestConfig, signal: AbortSignal): P
       "content-type": "application/json",
       "x-api-key": config.apiKey,
       "anthropic-version": "2023-06-01",
+      ...(config.context1m ? { "anthropic-beta": "context-1m-2025-08-07" } : {}),
     },
     body: JSON.stringify({
       model: config.model,
@@ -101,7 +103,7 @@ async function testAnthropic(config: ProviderTestConfig, signal: AbortSignal): P
   if (!response.ok) throw responseError(response.status, await response.text());
   const body = await response.json() as { content?: { type?: string; text?: string }[] };
   const reply = (body.content ?? []).filter((part) => part.type === "text").map((part) => part.text ?? "").join("");
-  return { reply, endpoint: "Anthropic Messages API" };
+  return { reply, endpoint: config.context1m ? "Anthropic Messages API · 1M" : "Anthropic Messages API" };
 }
 
 async function testOpenAi(config: ProviderTestConfig, signal: AbortSignal): Promise<{ reply: string; endpoint: string }> {
@@ -174,6 +176,7 @@ export function mountProviderTestRoutes(api: Hono) {
       model: body.model?.trim() || stored?.model || "",
       protocolConversionEnabled: protocol === "openai"
         && (body.protocolConversionEnabled ?? stored?.protocolConversionEnabled ?? false),
+      context1m: protocol === "anthropic" && body.context1m === true,
     };
     if (!config.baseUrl || !config.apiKey || !config.model) {
       return c.json({ error: "Base URL、API Key 和测试模型都必须填写" }, 400);

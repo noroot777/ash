@@ -456,6 +456,7 @@ export interface LlmProvider {
   protocolConversionEnabled: boolean;
   modelListMode: ProviderModelListMode;
   pinnedModels: string[]; // modelListMode === "pinned" 时的候选;另一模式下保留不动
+  context1mModels: string[]; // Anthropic:这些模型以 1M 变体运行;其余模型仍直连
   hasKey: boolean; // the key itself is never sent to the client; only whether one is set
   createdAt: string;
 }

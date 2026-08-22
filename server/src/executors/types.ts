@@ -37,7 +37,9 @@ export interface RelayConfig {
   name: string;
   baseUrl: string;
   apiKey: string;
+  defaultModel: string;
   protocolConversionEnabled: boolean;
+  context1mModels: string[];
 }
 
 // 常驻会话(§Team 的调度台):一个**会话**吃多个回合,会话全程同一个。
