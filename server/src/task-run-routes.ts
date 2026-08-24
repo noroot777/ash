@@ -10,7 +10,6 @@ import type {
   TaskStatus,
 } from "@ash/shared";
 import {
-  AGENT_TYPES,
   MAX_QUESTION_ITEMS,
   MAX_QUESTION_OPTION_LEN,
   MAX_QUESTION_OPTIONS,
@@ -39,9 +38,9 @@ import { claimTurn, confirmDone, releaseTurn, stopTask } from "./runs.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { advanceQueue } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
-import { nativeCliCommand } from "./skills.js";
+import { replyToTask } from "./task-reply.js";
 import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
-import { haltTeam, leadTypeOf } from "./team/session.js";
+import { haltTeam } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
 import { askingAgentFor, setTaskQuestion } from "./task-question.js";
 import { readableRunPath } from "./transcript.js";
@@ -455,86 +454,7 @@ api.post("/tasks/:id/team/kill-cua", async (c) => {
 // 团队(§Team)的「插话」也走这个端点,但两道给一次性会话设的挡板对它不适用:
 // 调度台是常驻进程,正在说话(running)时也接得住(continueTask → deliverToLead 直接
 // 写进 stdin),这就是「发出去当前会话就接住、看着从没断线」的手感。
-api.post("/tasks/:id/reply", async (c) => {
-  const taskId = c.req.param("id");
-  const b = await c.req.json<{
-    text?: string;
-    attachments?: string[];
-    agent?: AgentType;
-    executorId?: string | null;
-    model?: string | null;
-    reasoningEffort?: string | null;
-    sendAt?: string;
-  }>();
-  if (!b.text?.trim() && !b.attachments?.length) return c.json({ error: "empty" }, 400);
-  if (b.agent && !AGENT_TYPES.includes(b.agent)) return c.json({ error: "未知的 agent", agent: b.agent }, 400);
-  const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!r) return c.json({ error: "not found" }, 404);
-  if (r.archived) return c.json({ error: "任务已归档，先取消归档再回复", archived: true }, 409);
-  {
-    const blocked = handoffBlockReason(r.handoff);
-    if (blocked) return c.json({ error: blocked, handoff: true }, 409);
-  }
-  const isTeam = r.mode === "team";
-  if (!isTeam && r.mode !== "single") return c.json({ error: "仅单任务支持回复" }, 409);
-  // 定时发送 / 排队追问:都只是"现在不发",落库交给 pending-messages 投递。
-  const queueWhileRunning = !isTeam && (r.status === "running" || r.status === "queued");
-  if (b.sendAt || queueWhileRunning) {
-    // 排队的 sendAt 不表示"到点才发",只用来排先后,所以取此刻;定时的必须是将来。
-    let when = new Date();
-    if (b.sendAt) {
-      when = new Date(b.sendAt);
-      if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now())
-        return c.json({ error: "定时时间必须是将来的有效时间" }, 400);
-    }
-    const row = await enqueueMessage({
-      taskId,
-      text: (b.text ?? "").trim(),
-      attachments: b.attachments,
-      agent: b.agent ?? null,
-      executorId: b.executorId ?? null,
-      model: b.model?.trim() || null,
-      reasoningEffort: b.reasoningEffort?.trim() || null,
-      mode: b.sendAt ? "timed" : "queued",
-      sendAt: when,
-    });
-    return c.json({ scheduled: true, message: toScheduledMessage(row) }, 202);
-  }
-  const route = {
-    attachments: b.attachments,
-    agent: b.agent,
-    executorId: b.executorId ?? null,
-    model: b.model?.trim() || null,
-    reasoningEffort: b.reasoningEffort?.trim() || null,
-  };
-  // 上面那两道挡板看的是 tasks.status,而单飞锁是内存态的:结算已经把状态落成终态、
-  // 这一轮却还没退干净的那道缝里,continueTask 会被挡回并返回 false。**不能就这么把
-  // 用户的字丢了** —— 原样落成一条排队消息,任务一空下来照常发出去(托盘也会显示)。
-  //
-  // **但发给调度台的 CLI 原生命令不适用这条兜底**:它必须是消息的第一个字才生效,而
-  // 调度台离线时接回来一定会带唤醒前言 —— 拒收是**终局**,不是「等一会再试」。排进
-  // 队里只会有两个结果:要么 scheduler 稍后把它标成 canceled(用户先收到「已发送」再
-  // 被打脸),要么用户按提示先发一句普通消息把调度台接回来、那条 pending 随即被暗中
-  // 送出并标 sent —— 跟系统刚写下的「没有送出,请接回后再单独发」正面矛盾(第 2 轮
-  // 审查 finding 5)。所以这一类当场 await 出结果,拒收就答 409,前端的输入框会原样
-  // 留住用户的字并把理由显示在下面。
-  const teamNative = isTeam ? nativeCliCommand(await leadTypeOf(taskId), (b.text ?? "").trim()) : null;
-  if (teamNative) {
-    // 在线时这一条就是往 stdin 里写一行,await 不会拖慢;离线时是立刻抛,更快。
-    try {
-      const started = await continueTask(taskId, (b.text ?? "").trim(), { ...route, throwOnTeamUnavailable: true });
-      if (!started) return c.json({ error: `/${teamNative} 没有送出:调度台此刻接不住这条原生命令。`, started: false }, 409);
-    } catch (err) {
-      return c.json({ error: err instanceof Error ? err.message : String(err), started: false }, 409);
-    }
-    return c.json({ started: true }, 202);
-  }
-  void continueTask(taskId, (b.text ?? "").trim(), route).then(async (started) => {
-    if (started) return;
-    await enqueueMessage({ taskId, text: (b.text ?? "").trim(), ...route, agent: b.agent ?? null });
-  });
-  return c.json({ started: true }, 202);
-});
+api.post("/tasks/:id/reply", (c) => replyToTask(c, c.req.param("id")));
 
 // List a task's pending scheduled messages (soonest first).
 api.get("/tasks/:id/scheduled-messages", async (c) => {

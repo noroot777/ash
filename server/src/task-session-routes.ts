@@ -32,12 +32,32 @@ function toSession(
   };
 }
 
+export async function sessionsForTask(taskId: string): Promise<Session[]> {
+  const rows = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
+  const runMeta = await sessionRunMeta(taskId, rows);
+  return rows.map((row) => toSession(row, runMeta.get(row.id)));
+}
+
+export async function sessionOutputText(taskId: string, sessionId: string): Promise<string> {
+  try {
+    return await readFile(readableRunPath(sessionTranscriptPath(taskId, sessionId)), "utf8");
+  } catch {
+    return "";
+  }
+}
+
+export async function sessionTraceEntries(taskId: string, sessionId: string) {
+  try {
+    const raw = await readFile(readableRunPath(sessionTracePath(taskId, sessionId)), "utf8");
+    return parseSessionTrace(raw);
+  } catch {
+    return [];
+  }
+}
+
 export function mountTaskSessionRoutes(api: Hono): void {
   api.get("/tasks/:id/sessions", async (c) => {
-    const taskId = c.req.param("id");
-    const rows = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
-    const runMeta = await sessionRunMeta(taskId, rows);
-    return c.json(rows.map((row) => toSession(row, runMeta.get(row.id))));
+    return c.json(await sessionsForTask(c.req.param("id")));
   });
 
   // 会话落盘的输出（重载页面时读它；实时输出走 SSE）。
@@ -45,23 +65,13 @@ export function mountTaskSessionRoutes(api: Hono): void {
     const sid = c.req.param("id");
     const row = (await db.select().from(sessions).where(eq(sessions.id, sid))).at(0);
     if (!row) return c.json({ error: "not found" }, 404);
-    try {
-      const text = await readFile(readableRunPath(sessionTranscriptPath(row.taskId, sid)), "utf8");
-      return c.text(text);
-    } catch {
-      return c.text("");
-    }
+    return c.text(await sessionOutputText(row.taskId, sid));
   });
 
   api.get("/sessions/:id/trace", async (c) => {
     const sid = c.req.param("id");
     const row = (await db.select().from(sessions).where(eq(sessions.id, sid))).at(0);
     if (!row) return c.json({ error: "not found" }, 404);
-    try {
-      const raw = await readFile(readableRunPath(sessionTracePath(row.taskId, sid)), "utf8");
-      return c.json(parseSessionTrace(raw));
-    } catch {
-      return c.json([]);
-    }
+    return c.json(await sessionTraceEntries(row.taskId, sid));
   });
 }

@@ -100,7 +100,7 @@ async function main(): Promise<void> {
     ...(method === "GET" ? {} : { body }),
   });
   const manifest = (taskId: string) => JSON.stringify({
-    version: 1, sourceHost: "auth-test", sourceWorkspace: null,
+    version: 1, sourceHost: "auth-test", sourceFingerprint: localIdentity().fingerprint, sourceWorkspace: null,
     targetProjectId: peerProject.id, autoResume: false, git: null, files: [],
     transferId: `transfer-${taskId}`,
     task: {
@@ -184,6 +184,16 @@ async function main(): Promise<void> {
   const replayBody = manifest("auth-replay");
   const init5 = signedInit("/handoff/import", "POST", replayBody);
   assert.equal((await raw("/handoff/import", init5)).status, 200, "前提:第一次是正常导入");
+  const snapshotBody = JSON.stringify({ taskId: "auth-replay" });
+  const snapshot = await raw(
+    "/handoff/proxy/task/snapshot",
+    signedInit("/handoff/proxy/task/snapshot", "POST", snapshotBody),
+  );
+  assert.equal(snapshot.status, 200, "来源机应能通过签名代理读取自己交来的远端任务");
+  const snapshotJson = await snapshot.json() as { task: { id: string }; sessions: unknown[]; persisted: unknown[] };
+  assert.equal(snapshotJson.task.id, "auth-replay");
+  assert.deepEqual(snapshotJson.sessions, []);
+  assert.deepEqual(snapshotJson.persisted, []);
   const replayed = await raw("/handoff/import", init5);
   assert.equal(replayed.status, 401, "同一份签名重发必须被 nonce 挡住");
   assert.match((await replayed.json() as { error: string }).error, /重放/);
@@ -241,6 +251,28 @@ async function main(): Promise<void> {
     strangerRow?.name, "陌生机器·stranger",
     "主机名里的非 ASCII 要能原样还原:HTTP 头只装 ByteString,所以出站 percent 编码、入站解回来",
   );
+
+  await api(peerUrl, `/handoff/peers/${strangerFp}/approve`, { method: "POST" });
+  const foreignSnapshotBody = JSON.stringify({ taskId: "auth-replay" });
+  const foreignSnapshotTs = String(Date.now());
+  const foreignSnapshotNonce = randomBytes(16).toString("hex");
+  const foreignSnapshotCanonical = [
+    "ash-handoff-v1", "POST", "/api/handoff/proxy/task/snapshot", foreignSnapshotTs, foreignSnapshotNonce,
+    createHash("sha256").update(foreignSnapshotBody, "utf8").digest("hex"),
+  ].join("\n");
+  const foreignSnapshot = await raw("/handoff/proxy/task/snapshot", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-ash-peer-key": strangerPub,
+      "x-ash-peer-sig": edSign(null, Buffer.from(foreignSnapshotCanonical, "utf8"), stranger.privateKey).toString("base64"),
+      "x-ash-peer-ts": foreignSnapshotTs,
+      "x-ash-peer-nonce": foreignSnapshotNonce,
+    },
+    body: foreignSnapshotBody,
+  });
+  assert.equal(foreignSnapshot.status, 403, "另一台已批准机器也不能读取不属于它的远端任务");
+  assert.match((await foreignSnapshot.json() as { error: string }).error, /无权读取或操作/);
 
   // 拉黑之后是 403(明确拒绝),和「还没看过」区分得开。
   await api(peerUrl, `/handoff/peers/${strangerFp}/block`, { method: "POST" });

@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import type { ProjectView, Task } from "@ash/shared";
+import type { HandoffTarget, ProjectView, Task } from "@ash/shared";
 import { CaretRight } from "@phosphor-icons/react";
 import { useTaskReadState, type IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
@@ -23,8 +23,10 @@ type TaskTreeProps = {
   scope: TaskScope;
   tasks: Task[];
   selectedTaskId: string | null;
+  selectedRemoteTaskId: string | null;
   spread: SidebarSpread;
   onTask: (task: Task) => void;
+  onRemoteTask: (task: Task, target: HandoffTarget) => void;
   onTaskStarred: (taskId: string, starredAt: number | null) => void;
   onHandoffFinished: () => Promise<void> | void;
   notify: (message: string) => void;
@@ -226,7 +228,7 @@ function OtherProject({
   );
 }
 
-export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTaskId, spread, onTask, onTaskStarred, onHandoffFinished, notify }: TaskTreeProps) {
+export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTaskId, selectedRemoteTaskId, spread, onTask, onRemoteTask, onTaskStarred, onHandoffFinished, notify }: TaskTreeProps) {
   const { indicatorForTask } = useTaskReadState(tasks, selectedTaskId);
   const activeTasks = useMemo(() => tasks.filter((task) => !task.archived), [tasks]);
   // 主列表看哪些行只由作用域决定（inScope 是唯一判据，跟计数、筛选、J/K 遍历同源）。
@@ -260,7 +262,7 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
           indicatorForTask={indicatorForTask}
           filter={spread.filter}
           onClearFilter={() => spread.setFilter("all")}
-          machineSection={allProjects ? null : <HandoffMachines project={currentProject} tasks={tasks} notify={notify} onFinished={onHandoffFinished} />}
+          machineSection={allProjects ? null : <HandoffMachines project={currentProject} tasks={tasks} selectedRemoteTaskId={selectedRemoteTaskId} onRemoteTask={onRemoteTask} notify={notify} onFinished={onHandoffFinished} />}
         />
         {otherProjects.length > 0 && (
           <section className="workspace-other-projects">

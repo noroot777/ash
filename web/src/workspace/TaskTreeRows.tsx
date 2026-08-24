@@ -141,7 +141,10 @@ export function TaskRow({
   const selected = selectedTaskId === task.id;
   const indicator = indicatorForTask(task);
   const hasOrigin = showOrigin && taskParentLink(task, allTasks) !== null;
-  const hasMeta = task.mode === "duet" || task.handoff != null || trailing != null;
+  // 当前就在本机运行的任务（含接力转入、已经移回）按普通任务展示；接力只在真正
+  // 离开本机但尚未确认的存档行上留图标。确认转出的任务本来就只出现在“其他机器”。
+  const showHandoffMeta = task.handoff?.direction === "out";
+  const hasMeta = task.mode === "duet" || showHandoffMeta || trailing != null;
   const canStar = task.parentId === null;
   const spreadRow = useSpreadRow();
   const spreadCells = spreadRow?.spread.laidOut ? spreadRow : null;
@@ -166,14 +169,12 @@ export function TaskRow({
         {hasMeta && (
           <span className="workspace-task-meta">
             {task.mode === "duet" && <ChatsCircle size={12} weight="bold" className="workspace-task-kind" aria-label="讨论" />}
-            {task.handoff && (
+            {showHandoffMeta && task.handoff && (
               <PaperPlaneTilt
                 size={12}
                 weight="bold"
                 className="workspace-task-kind"
-                aria-label={task.handoff.direction === "out"
-                  ? "接力转出"
-                  : task.handoff.direction === "returned" ? "已移回" : "接力转入"}
+                aria-label="接力转出"
               />
             )}
             {trailing}

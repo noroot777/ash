@@ -100,12 +100,15 @@
   display: grid;
   min-width: 0;
   min-height: 30px;
-  grid-template-columns: 14px minmax(0, 1fr) 18px;
+  grid-template-columns: 14px minmax(0, 1fr);
   align-items: center;
   border-radius: 7px;
   color: color-mix(in lch, var(--ink) 52%, var(--muted));
   padding: 0 4px 0 2px;
   text-decoration: none;
+  border: 0;
+  background: transparent;
+  text-align: left;
 }
 
 .workspace-handoff-task > i {
@@ -124,22 +127,11 @@
   white-space: nowrap;
 }
 
-.workspace-handoff-task > svg {
-  justify-self: center;
-  color: var(--faint);
-  opacity: 0;
-  transition: opacity 130ms ease-out;
-}
-
 .workspace-handoff-task:hover,
-.workspace-handoff-task:focus-visible {
+.workspace-handoff-task:focus-visible,
+.workspace-handoff-task.is-selected {
   background: var(--hover-bg);
   color: var(--ink);
-}
-
-.workspace-handoff-task:hover > svg,
-.workspace-handoff-task:focus-visible > svg {
-  opacity: 1;
 }
 
 .workspace-task-section-title {

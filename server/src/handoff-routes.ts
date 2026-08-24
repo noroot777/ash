@@ -33,6 +33,7 @@ import { importHandoff } from "./handoff-import.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { sessionTranscriptPath, TURN_SENTINEL } from "./transcript.js";
 import { now } from "./util.js";
+import { mountHandoffRemoteRoutes } from "./handoff-remote.js";
 
 type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 500 | 502;
 
@@ -56,6 +57,7 @@ const fail = (c: Context, e: unknown) => {
 };
 
 export function mountHandoffRoutes(api: Hono): void {
+  mountHandoffRemoteRoutes(api);
   // 对端探活 + **配对入口**:证明「我是一台 ash、我是哪一台」,并报出可作为接力目的地
   // 的项目清单。源机带 ?nonce= 来,本机用私钥签它 —— 只报公钥证明不了持有私钥(公钥
   // 是公开的,谁都能复制一份复读)。源机没批准过的话,项目清单故意为空:仓库布局不该

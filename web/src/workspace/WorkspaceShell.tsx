@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
-import type { Group, GroupMode, ProjectView, Task, TaskMode } from "@ash/shared";
+import type { Group, GroupMode, HandoffTarget, ProjectView, Task, TaskMode } from "@ash/shared";
 import { api } from "../lib/api.ts";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import { useTasks } from "../lib/useTasks.ts";
@@ -40,6 +40,7 @@ import { TerminalToggle } from "./TerminalToggle.tsx";
 import { HandoffApprovalAlert } from "../handoff/HandoffApprovalAlert.tsx";
 import { visibleOnThisMachine } from "./taskTreeModel.ts";
 import { HandoffDialog } from "../task-detail/HandoffDialog.tsx";
+import { RemoteTaskDetail } from "../remote-task/RemoteTaskDetail.tsx";
 
 const ProjectTerminal = lazy(() => import("./ProjectTerminal.tsx").then((module) => ({ default: module.ProjectTerminal })));
 
@@ -62,6 +63,7 @@ export function WorkspaceShell() {
   const [projectsError, setProjectsError] = useState<Error | null>(null);
   const [projectId, setProjectId] = useState<string | null>(initial.projectId);
   const [taskId, setTaskId] = useState<string | null>(initial.taskId);
+  const [remoteSelection, setRemoteSelection] = useState<{ task: Task; target: HandoffTarget } | null>(null);
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(initial.settings);
   const [groups, setGroups] = useState<Group[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(initial.view === "palette");
@@ -204,7 +206,7 @@ export function WorkspaceShell() {
     setTaskId((current) => current === deletedId ? null : current);
   }, [setTasks]);
   // 选具体项目 = 退回单项目态：在下拉里点了某个项目，还继续混着看所有项目的话，那次点击就白点了。
-  const selectProject = (nextProjectId: string) => { setScopeKind("project"); setProjectId(nextProjectId); setTaskId(null); setComposer(null); setNotes(null); setReviewTaskId(null); setSettingsSection(null); };
+  const selectProject = (nextProjectId: string) => { setScopeKind("project"); setProjectId(nextProjectId); setTaskId(null); setRemoteSelection(null); setComposer(null); setNotes(null); setReviewTaskId(null); setSettingsSection(null); };
   // 切到「全部项目」只换列表的口径，不动选中的任务和上下文项目 —— 你正看着的那条还在，
   // 只是周围多出了别家的行。
   const selectAllProjects = () => { setScopeKind("all"); setSettingsSection(null); };
@@ -218,21 +220,33 @@ export function WorkspaceShell() {
     pushTaskHistoryEntry(task, window, scopeKind);
     setProjectId(task.projectId);
     setTaskId(task.id);
+    setRemoteSelection(null);
     setComposer(null);
     setNotes(null);
     setReviewTaskId(null);
     setSettingsSection(null);
     if (!options?.keepSpread) spread.close();
   };
+  const selectRemoteTask = (task: Task, target: HandoffTarget) => {
+    setProjectId(task.projectId);
+    setTaskId(null);
+    setRemoteSelection({ task, target });
+    setComposer(null);
+    setNotes(null);
+    setReviewTaskId(null);
+    setSettingsSection(null);
+    spread.close();
+  };
   const selectTaskById = (nextTaskId: string) => {
     const target = tasks.find((task) => task.id === nextTaskId);
     if (target) selectTask(target);
     else api.task(nextTaskId).then((task) => { updateTask(task); selectTask(task); }).catch(() => notify("关联任务不存在或读取失败"));
   };
-  const openNotes = (nextProjectId = projectId, noteId: string | null = null) => { if (nextProjectId) { setProjectId(nextProjectId); setSettingsSection(null); setComposer(null); setNotes({ projectId: nextProjectId, noteId }); } };
-  const openSettings = (section: SettingsSection = "executors") => { setSettingsSection(section); setComposer(null); setNotes(null); setPaletteOpen(false); };
+  const openNotes = (nextProjectId = projectId, noteId: string | null = null) => { if (nextProjectId) { setProjectId(nextProjectId); setRemoteSelection(null); setSettingsSection(null); setComposer(null); setNotes({ projectId: nextProjectId, noteId }); } };
+  const openSettings = (section: SettingsSection = "executors") => { setRemoteSelection(null); setSettingsSection(section); setComposer(null); setNotes(null); setPaletteOpen(false); };
   const openComposer = (mode: TaskMode = "single") => {
     if (!currentProject) return;
+    setRemoteSelection(null);
     setSettingsSection(null);
     setNotes(null);
     setComposer((current) => current ? { ...current, mode } : { mode });
@@ -241,6 +255,7 @@ export function WorkspaceShell() {
     setTasks((current) => current.some((row) => row.id === task.id) ? current.map((row) => row.id === task.id ? task : row) : [task, ...current]);
     pushTaskHistoryEntry(task, window, scopeKind);
     setTaskId(task.id);
+    setRemoteSelection(null);
     setComposer(null);
     for (const noteId of draft?.noteIds ?? []) api.patchNote(noteId, { taskId: task.id }).catch(() => notify("任务已创建，但随手记回链写入失败"));
   };
@@ -305,10 +320,22 @@ export function WorkspaceShell() {
 
   return (
     <><div className="workspace-system-layout">{handoffAlert}<div className={`workspace-shell${spread.laidOut ? " is-spread" : ""}`} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
-      <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onAllProjects={selectAllProjects} onTask={selectTask} onTaskStarred={applyStar} onHandoffFinished={() => refetchTasks({ silent: true }).then(() => {})} onGitChanged={() => setGitVersion((value) => value + 1)} onOpenTerminal={currentProject ? () => setTerminalOpen(true) : null} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={() => setGroupsPanelOpen(true)} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("executors")} />
+      <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} selectedRemoteTaskId={remoteSelection?.task.id ?? null} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onAllProjects={selectAllProjects} onTask={selectTask} onRemoteTask={selectRemoteTask} onTaskStarred={applyStar} onHandoffFinished={() => refetchTasks({ silent: true }).then(() => {})} onGitChanged={() => setGitVersion((value) => value + 1)} onOpenTerminal={currentProject ? () => setTerminalOpen(true) : null} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={() => setGroupsPanelOpen(true)} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("executors")} />
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
-        {composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onCancel={() => setComposer(null)} onCreated={createTask} onCreateGroup={createComposerGroup} notify={notify} /> : selectedTask?.mode === "team" ? (
+        {composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onCancel={() => setComposer(null)} onCreated={createTask} onCreateGroup={createComposerGroup} notify={notify} /> : remoteSelection ? (
+          <RemoteTaskDetail
+            archive={remoteSelection.task}
+            target={remoteSelection.target}
+            notify={notify}
+            onReturned={(returned) => {
+              updateTask(returned);
+              setRemoteSelection(null);
+              selectTask(returned);
+              void refetchTasks({ silent: true });
+            }}
+          />
+        ) : selectedTask?.mode === "team" ? (
           <TeamView task={selectedTask} allTasks={tasks} onTaskUpdate={updateTask} onTaskDeleted={deleteTask} onSelectTask={selectTask} initialReviewOpen={reviewTaskId === selectedTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedTask.id : null)} terminalToggle={terminalToggle} notify={notify} />
         ) : selectedTask?.mode === "duet" ? (
           <DuetView task={selectedTask} allTasks={tasks} onTaskUpdated={updateTask} onTaskCreated={(created) => setTasks((current) => current.some((task) => task.id === created.id) ? current.map((task) => task.id === created.id ? created : task) : [created, ...current])} onTaskDeleted={deleteTask} onSelectTask={selectTask} terminalToggle={terminalToggle} notify={notify} />

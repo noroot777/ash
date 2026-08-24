@@ -7,10 +7,9 @@ import type {
   ProjectView,
   Task,
 } from "@ash/shared";
-import { ArrowSquareOut, DesktopTower, Fingerprint, LockKey, PaperPlaneTilt, SpinnerGap, Warning } from "@phosphor-icons/react";
+import { DesktopTower, Fingerprint, LockKey, PaperPlaneTilt, SpinnerGap, Warning } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
-import { handoffTaskHref } from "./workspaceHistory.ts";
 import { outboundTasksForTarget, partitionBulkHandoffTasks } from "./bulkHandoff.ts";
 
 type TransferFailure = { task: Task; reason: string };
@@ -329,11 +328,15 @@ function BulkHandoffDialog({
 export function HandoffMachines({
   project,
   tasks,
+  selectedRemoteTaskId,
+  onRemoteTask,
   notify,
   onFinished,
 }: {
   project: ProjectView | null;
   tasks: Task[];
+  selectedRemoteTaskId: string | null;
+  onRemoteTask: (task: Task, target: HandoffTarget) => void;
   notify: (message: string) => void;
   onFinished: () => Promise<void> | void;
 }) {
@@ -379,16 +382,18 @@ export function HandoffMachines({
               </div>
               {outbound.length > 0 && (
                 <div className="workspace-handoff-task-list" aria-label={`${target.name}上的接力任务`}>
-                  {outbound.map((task) => {
-                    const href = handoffTaskHref(task.id, task.handoff!);
-                    return href ? (
-                      <a className="workspace-handoff-task" href={href} target="_blank" rel="noreferrer" key={task.id}>
-                        <i aria-hidden="true" />
-                        <span>{task.title || "未命名任务"}</span>
-                        <ArrowSquareOut size={11} aria-hidden="true" />
-                      </a>
-                    ) : null;
-                  })}
+                  {outbound.map((task) => (
+                    <button
+                      className={`workspace-handoff-task${selectedRemoteTaskId === task.id ? " is-selected" : ""}`}
+                      type="button"
+                      aria-current={selectedRemoteTaskId === task.id ? "page" : undefined}
+                      onClick={() => onRemoteTask(task, target)}
+                      key={task.id}
+                    >
+                      <i aria-hidden="true" />
+                      <span>{task.title || "未命名任务"}</span>
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
