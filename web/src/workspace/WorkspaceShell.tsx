@@ -201,6 +201,18 @@ export function WorkspaceShell() {
   const updateTask = useCallback((updated: Task) => setTasks((current) => current.some((task) => task.id === updated.id)
     ? current.map((task) => task.id === updated.id ? updated : task)
     : [updated, ...current]), [setTasks]);
+  const openLocalOwnership = useCallback((task: Task) => {
+    updateTask(task);
+    pushTaskHistoryEntry(task, window, scopeKind);
+    setRemoteSelection(null);
+    setProjectId(task.projectId);
+    setTaskId(task.id);
+    setComposer(null);
+    setNotes(null);
+    setReviewTaskId(null);
+    setSettingsSection(null);
+    void refetchTasks({ silent: true });
+  }, [refetchTasks, scopeKind, updateTask]);
   const deleteTask = useCallback((deletedId: string) => {
     setTasks((current) => current.filter((task) => task.id !== deletedId));
     setTaskId((current) => current === deletedId ? null : current);
@@ -328,12 +340,7 @@ export function WorkspaceShell() {
             archive={remoteSelection.task}
             target={remoteSelection.target}
             notify={notify}
-            onReturned={(returned) => {
-              updateTask(returned);
-              setRemoteSelection(null);
-              selectTask(returned);
-              void refetchTasks({ silent: true });
-            }}
+            onLocalOwnership={openLocalOwnership}
           />
         ) : selectedTask?.mode === "team" ? (
           <TeamView task={selectedTask} allTasks={tasks} onTaskUpdate={updateTask} onTaskDeleted={deleteTask} onSelectTask={selectTask} initialReviewOpen={reviewTaskId === selectedTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedTask.id : null)} terminalToggle={terminalToggle} notify={notify} />

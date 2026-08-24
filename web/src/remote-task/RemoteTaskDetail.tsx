@@ -6,18 +6,19 @@ import { api, type RemoteTaskSnapshot } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { ConversationFeed } from "../task-detail/ConversationFeed.tsx";
 import { buildConversationItems, type TimelineEntry } from "../task-detail/conversationModel.ts";
+import { QuestionCard } from "../task-detail/QuestionCard.tsx";
 
 const POLL_MS = 2_000;
 
 export function RemoteTaskDetail({
   archive,
   target,
-  onReturned,
+  onLocalOwnership,
   notify,
 }: {
   archive: Task;
   target: HandoffTarget;
-  onReturned: (task: Task) => void;
+  onLocalOwnership: (task: Task) => void;
   notify: (message: string) => void;
 }) {
   const [snapshot, setSnapshot] = useState<RemoteTaskSnapshot | null>(null);
@@ -37,11 +38,16 @@ export function RemoteTaskDetail({
       setSnapshot(next);
       setError(null);
     } catch (reason) {
+      const local = await api.task(archive.id).catch(() => null);
+      if (local && (local.handoff?.direction !== "out" || local.handoff.pending)) {
+        onLocalOwnership(local);
+        return;
+      }
       setError(reason instanceof Error ? reason : new Error(String(reason)));
     } finally {
       if (!quiet) setLoading(false);
     }
-  }, [archive.id, target.url]);
+  }, [archive.id, onLocalOwnership, target.url]);
 
   useEffect(() => {
     setSnapshot(null);
@@ -89,7 +95,7 @@ export function RemoteTaskDetail({
       const result = await api.remoteTaskReturn(archive.id, target.url);
       setReturnOpen(false);
       notify("任务已移回本机");
-      onReturned(result.task);
+      onLocalOwnership(result.task);
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -102,7 +108,7 @@ export function RemoteTaskDetail({
       <header className="task-detail-header remote-task-header">
         <span className="task-detail-kind">远程任务</span>
         <strong className="task-detail-title is-readonly">{task.title || "未命名任务"}</strong>
-        <span className="task-detail-status">{TASK_STATUS_LABELS[task.status]}</span>
+        <span className="task-detail-status">{task.question ? "等答复" : TASK_STATUS_LABELS[task.status]}</span>
         <button type="button" className="remote-task-refresh" onClick={() => void refresh()} disabled={loading} aria-label="刷新远程会话">
           <ArrowCounterClockwise size={14} className={loading ? "is-spinning" : ""} aria-hidden="true" />
         </button>
@@ -127,6 +133,16 @@ export function RemoteTaskDetail({
             sessions={snapshot?.sessions ?? []}
             loading={loading}
             error={error}
+            footer={task.question ? (
+              <QuestionCard
+                task={task}
+                onAnswer={async (answer) => {
+                  await api.remoteTaskAnswer(archive.id, target.url, answer);
+                  notify("已发送答复，任务正在远端续跑");
+                  await refresh(true);
+                }}
+              />
+            ) : undefined}
           />
           <div className="task-reply-shell remote-task-reply">
             {sendError && <p className="task-reply-error">{sendError}</p>}
@@ -134,8 +150,8 @@ export function RemoteTaskDetail({
               <textarea
                 value={text}
                 rows={3}
-                disabled={!snapshot || sending || !canReply}
-                placeholder={canReply ? `回复将发送到 ${target.name} 执行` : "该类型任务暂不支持从代理视图回复"}
+                disabled={!snapshot || sending || !canReply || Boolean(task.question)}
+                placeholder={task.question ? "请先答复上方问题" : canReply ? `回复将发送到 ${target.name} 执行` : "该类型任务暂不支持从代理视图回复"}
                 aria-label="回复远程任务"
                 onChange={(event) => setText(event.target.value)}
                 onKeyDown={(event) => {
@@ -147,7 +163,7 @@ export function RemoteTaskDetail({
               />
               <div className="task-reply-actions">
                 <span>上下文与执行位置：{target.name} · ⌘↵ 发送</span>
-                <button className="task-send-button" type="button" disabled={!snapshot || sending || !text.trim() || !canReply} onClick={() => void send()} aria-label="发送到远程任务">
+                <button className="task-send-button" type="button" disabled={!snapshot || sending || !text.trim() || !canReply || Boolean(task.question)} onClick={() => void send()} aria-label="发送到远程任务">
                   {sending ? <SpinnerGap size={15} className="is-spinning" /> : <ArrowUp size={15} weight="bold" />}
                 </button>
               </div>

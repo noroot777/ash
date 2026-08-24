@@ -297,6 +297,8 @@ export const api = {
     request(`/tasks/${id(taskId)}/remote-snapshot`, json("POST", { targetUrl })),
   remoteTaskReply: (taskId: string, targetUrl: string, text: string): Promise<ReplyTaskResult> =>
     request(`/tasks/${id(taskId)}/remote-reply`, json("POST", { targetUrl, text })),
+  remoteTaskAnswer: (taskId: string, targetUrl: string, answer: string): Promise<unknown> =>
+    request(`/tasks/${id(taskId)}/remote-answer`, json("POST", { targetUrl, answer })),
   remoteTaskReturn: (taskId: string, targetUrl: string): Promise<{ task: Task }> =>
     request(`/tasks/${id(taskId)}/remote-return`, json("POST", { targetUrl })),
   // 移除接力标记(「在本机继续」的逃生门):只清本机标记,对端那份任务不动。

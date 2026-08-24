@@ -11,11 +11,12 @@ import { requireApprovedPeer } from "./handoff-peers.js";
 import { HandoffError } from "./handoff-types.js";
 import { exportHandoff, preflightHandoff } from "./handoff.js";
 import { replyToTask, type TaskReplyBody } from "./task-reply.js";
+import { answerTask } from "./task-answer.js";
 import { sessionOutputText, sessionsForTask, sessionTraceEntries } from "./task-session-routes.js";
 import { enrichTasks } from "./task-store.js";
 
-type ProxyBody = TaskReplyBody & { taskId?: string };
-type BrowserProxyBody = TaskReplyBody & { targetUrl?: string };
+type ProxyBody = TaskReplyBody & { taskId?: string; answer?: string };
+type BrowserProxyBody = TaskReplyBody & { targetUrl?: string; answer?: string };
 
 function fail(c: Context, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -113,11 +114,20 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
     } catch (error) { return fail(c, error); }
   });
 
-  api.post("/handoff/proxy/task/return", async (c) => {
+  api.post("/handoff/proxy/task/answer", async (c) => {
     try {
       const { peer, body } = await signedBody(c);
       if (!body.taskId) throw new HandoffError("缺 taskId", 400);
       await ownedInboundTask(body.taskId, peer.fingerprint);
+      return answerTask(c, body.taskId, { answer: body.answer });
+    } catch (error) { return fail(c, error); }
+  });
+
+  api.post("/handoff/proxy/task/return", async (c) => {
+    try {
+      const { peer, body } = await signedBody(c);
+      if (!body.taskId) throw new HandoffError("缺 taskId", 400);
+      const owned = await ownedInboundTask(body.taskId, peer.fingerprint);
       const { handoffTargets } = await getAppSettings();
       const target = handoffTargets.find((item) => item.peerFp && sameFingerprint(item.peerFp, peer.fingerprint));
       if (!target) throw new HandoffError("远端没有登记与来源机指纹一致的移回目标", 409);
@@ -128,7 +138,7 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
         targetUrl: target.url,
         targetProjectId,
         targetName: target.name,
-        autoResume: true,
+        autoResume: !owned.row.question,
       }));
     } catch (error) { return fail(c, error); }
   });
@@ -159,6 +169,19 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
         { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...reply, taskId: remote.marker.peerTaskId }) },
       );
       return c.json(result, 202);
+    } catch (error) { return fail(c, error); }
+  });
+
+  api.post("/tasks/:id/remote-answer", async (c) => {
+    try {
+      const body = await c.req.json<BrowserProxyBody>();
+      if (!body.targetUrl) throw new HandoffError("缺 targetUrl", 400);
+      const remote = await outboundTask(c.req.param("id"), body.targetUrl);
+      const result = await fetchPeer<Record<string, unknown>>(
+        `${remote.targetUrl}/api/handoff/proxy/task/answer`,
+        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ taskId: remote.marker.peerTaskId, answer: body.answer }) },
+      );
+      return c.json(result);
     } catch (error) { return fail(c, error); }
   });
 
