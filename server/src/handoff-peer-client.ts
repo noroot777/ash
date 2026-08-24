@@ -10,7 +10,7 @@
 //      之后每次预检/导出都先核对,对不上就**拒绝打包**,连探测都不往下走。
 //
 // 入站方向(谁能推进本机)在 handoff-peers.ts。
-import type { HandoffPeerIdentity, HandoffTarget } from "@ash/shared";
+import type { HandoffApprovalResult, HandoffPeerIdentity, HandoffTarget } from "@ash/shared";
 import { getAppSettings, patchAppSettings } from "./app-settings.js";
 import { HandoffError } from "./handoff-types.js";
 import type { HandoffPingResponse } from "./handoff-types.js";
@@ -185,14 +185,31 @@ export async function rememberedFingerprint(targetUrl: string): Promise<string |
   return findTarget(handoffTargets, targetUrl)?.peerFp ?? null;
 }
 
+/**
+ * 显式发送接力申请。它只做带签名的 ping：对端据此把本机落进待审批列表，不读取
+ * 分支、不打包任务、更不会传输仓库。用户已经明确点了「申请」，所以首次见到的对端
+ * 身份可以在这一步记住；之后地址背后换了机器，连再次申请都会先被指纹校验拦下。
+ */
+export async function requestHandoffApproval(rawTargetUrl: string): Promise<HandoffApprovalResult> {
+  const targetUrl = normalizePeerUrl(rawTargetUrl);
+  const probe = await pingPeer(targetUrl, await rememberedFingerprint(targetUrl));
+  if (probe.peer) await rememberPeerFingerprint(targetUrl, probe.peer.fingerprint);
+  return {
+    ok: true,
+    target: { url: targetUrl, host: probe.ping.host },
+    peer: probe.peer,
+    projects: probe.ping.projects,
+  };
+}
+
 const findTarget = (targets: HandoffTarget[], url: string): HandoffTarget | undefined => {
   const want = url.replace(/\/+$/, "");
   return targets.find((t) => t.url.trim().replace(/\/+$/, "") === want);
 };
 
 /**
- * TOFU 落地:接力**成功之后**把对端指纹记进设置。放在成功之后而不是预检时,是为了
- * 「点开对话框看一眼就退出」不会静默改信任状态 —— 记住一台机器应该是一次明确的动作。
+ * TOFU 落地:显式申请或接力成功之后把对端指纹记进设置。普通预检仍然不调用它，避免
+ * 「点开对话框看一眼就退出」静默改信任状态 —— 记住一台机器必须对应一次明确动作。
  * 目标机不在设置列表里(临时地址)就跳过,不给它凭空建一条。
  */
 export async function rememberPeerFingerprint(targetUrl: string, fingerprint: string): Promise<void> {

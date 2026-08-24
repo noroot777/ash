@@ -37,6 +37,7 @@ import {
 } from "./WorkspaceResizeHandle.tsx";
 import { pushTaskHistoryEntry, selectedTaskProjectId } from "./workspaceHistory.ts";
 import { TerminalToggle } from "./TerminalToggle.tsx";
+import { HandoffApprovalAlert } from "../handoff/HandoffApprovalAlert.tsx";
 
 const ProjectTerminal = lazy(() => import("./ProjectTerminal.tsx").then((module) => ({ default: module.ProjectTerminal })));
 
@@ -266,6 +267,11 @@ export function WorkspaceShell() {
   const terminalToggle = currentProject ? (
     <TerminalToggle open={terminalOpen} onToggle={() => setTerminalOpen((open) => !open)} />
   ) : null;
+  const handoffAlert = (
+    <div className="handoff-approval-slot">
+      <HandoffApprovalAlert notify={notify} onOpenSettings={() => openSettings("defaults")} />
+    </div>
+  );
   const overlays = <>
     <CommandPalette open={paletteOpen} projects={projects} currentProject={currentProject} tasks={tasks} selectedTask={selectedTask} groups={groups} onClose={() => setPaletteOpen(false)} onProject={selectProject} onAllProjects={() => { selectAllProjects(); setPaletteOpen(false); }} onTask={selectTask} onTaskUpdated={updateTask} onNote={openNotes} onComposer={openComposer} onNewGroup={() => currentProject ? setCreateDialog("group") : notify("先选择一个项目")} onNewProject={() => setCreateDialog("project")} onDeleteTask={setDeleteTarget} onSettings={openSettings} notify={notify} />
     {notes && notesProject && <NotesPanel key={`${notes.projectId}:${notes.noteId ?? "list"}`} project={notesProject} initialNoteId={notes.noteId} onClose={() => setNotes(null)} onTask={(nextTaskId) => { const task = tasks.find((row) => row.id === nextTaskId); if (task) selectTask(task); else api.task(nextTaskId).then(selectTask).catch(() => notify("关联任务读取失败")); setNotes(null); }} onConvert={(draft) => { setNotes(null); setSettingsSection(null); setComposer({ mode: "single", draft }); }} notify={notify} />}
@@ -275,7 +281,7 @@ export function WorkspaceShell() {
     {createDialog === "group" && currentProject && <CreateGroupDialog onClose={() => setCreateDialog(null)} onCreate={async (name, mode) => { try { const created = await api.createGroup({ projectId: currentProject.id, name, mode }); setGroups((current) => [...current, created]); setCreateDialog(null); notify("分组已创建"); } catch (error) { notify(error instanceof Error ? error.message : "分组创建失败"); } }} />}
     <div className={`workspace-toast${toast ? " is-visible" : ""}`} role="status" aria-live="polite">{toast}</div>
   </>;
-  if (settingsSection) return <><SettingsPage
+  if (settingsSection) return <><div className="workspace-system-layout">{handoffAlert}<SettingsPage
     section={settingsSection}
     project={currentProject}
     tasks={tasks}
@@ -287,10 +293,10 @@ export function WorkspaceShell() {
     onTaskUpdated={updateTask}
     onGroupsChanged={refreshGroups}
     notify={notify}
-  />{overlays}</>;
+  /></div>{overlays}</>;
 
   return (
-    <><div className={`workspace-shell${spread.laidOut ? " is-spread" : ""}`} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
+    <><div className="workspace-system-layout">{handoffAlert}<div className={`workspace-shell${spread.laidOut ? " is-spread" : ""}`} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
       <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onAllProjects={selectAllProjects} onTask={selectTask} onTaskStarred={applyStar} onGitChanged={() => setGitVersion((value) => value + 1)} onOpenTerminal={currentProject ? () => setTerminalOpen(true) : null} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={() => setGroupsPanelOpen(true)} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("executors")} />
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
@@ -303,6 +309,6 @@ export function WorkspaceShell() {
         ) : <><header className="workspace-app-bar"><span className="workspace-kind-chip">{scopeKind === "all" ? "任务" : "项目"}</span><span className="workspace-app-title">{scopeKind === "all" ? ALL_PROJECTS_LABEL : currentProject?.name ?? "Ash"}</span>{(scopeKind === "all" || currentProject) && <span className="workspace-app-count">{activeTaskCount} 项任务</span>}{terminalToggle}</header><div className="workspace-columns"><section className="workspace-primary" aria-label="主工作区"><TaskPlaceholder project={currentProject} task={null} /></section><aside className="workspace-inspector-slot" aria-label="Inspector 占位"><div><span>Inspector</span><small>项目概览</small></div><p>选择任务后，这里会显示可操作属性、执行信息与队列。</p></aside></div></>}
         {terminalOpen && currentProject && <Suspense fallback={null}><ProjectTerminal key={currentProject.id} project={currentProject} onClose={() => setTerminalOpen(false)} notify={notify} /></Suspense>}
       </main>
-    </div>{overlays}</>
+    </div></div>{overlays}</>
   );
 }

@@ -7,6 +7,7 @@ import type {
   FreeReviewDispatchInput,
   GateAction,
   Group,
+  HandoffApprovalResult,
   HandoffExportResult,
   HandoffIdentity,
   HandoffPeer,
@@ -297,6 +298,8 @@ export const api = {
 
   // 接力身份与配对:本机身份(拿去和对端设置页上的指纹肉眼核对)、入站来源的审批。
   // 只有被批准的机器能把任务接力进本机 —— 出站方向的信任是 handoffTargets 上的 peerFp。
+  requestHandoffApproval: (targetUrl: string): Promise<HandoffApprovalResult> =>
+    request("/handoff/request", json("POST", { targetUrl })),
   handoffIdentity: (): Promise<HandoffIdentity> => request("/handoff/identity"),
   handoffPeers: async (): Promise<HandoffPeer[]> =>
     (await request<{ peers: HandoffPeer[] }>("/handoff/peers")).peers,

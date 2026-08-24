@@ -12,7 +12,7 @@
 //
 //  出站(我要发的这台还不是原来那台)——这半边才是接力最该防的,因为推出去的是整个
 //  仓库和完整会话历史:
-//   8. 首次配对(TOFU):接力成功后把对端指纹记进 handoffTargets
+//   8. 显式申请会送达待审批列表并记住对端指纹；首次接力成功同样会记住
 //   9. 指纹对不上:预检和导出都在**打包之前**硬拒绝,且零副作用(任务没被停、没落标记)
 //  10. 对端突然不报身份(降级/冒充):本机记过指纹就一律拒绝
 //  11. manifest 里进 git argv 的分支名/提交号(参数注入面,和文件落盘的路径穿越并列)
@@ -49,7 +49,7 @@ async function main(): Promise<void> {
   const { projects, tasks } = await import("../src/db/schema.js");
   const { eq } = await import("drizzle-orm");
   const { exportHandoff, preflightHandoff } = await import("../src/handoff.js");
-  const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
+  const { peerRequestHeaders, requestHandoffApproval } = await import("../src/handoff-peer-client.js");
   const { localIdentity, shortFingerprint } = await import("../src/handoff-identity.js");
   const { getAppSettings, patchAppSettings } = await import("../src/app-settings.js");
   const { HandoffError } = await import("../src/handoff-types.js");
@@ -111,6 +111,15 @@ async function main(): Promise<void> {
   });
 
   // ── 1. 陌生机器:能敲门,进不来 ───────────────────────────────────────────
+  await patchAppSettings({ handoffTargets: [{ name: "待申请对端", url: peerUrl }] });
+  const requested = await requestHandoffApproval(peerUrl);
+  assert.equal(requested.peer?.peerStatus, "pending", "显式申请应把本机送进对端待审批列表");
+  assert.equal(requested.projects.length, 0, "申请未获接受前不能借申请端点读到项目清单");
+  assert.equal(
+    (await getAppSettings()).handoffTargets[0]?.peerFp,
+    peerIdentity.fingerprint,
+    "用户明确申请后应记住目标机身份，地址背后换机器时再次申请就能拦住",
+  );
   const ping1 = await (await raw("/handoff/ping?nonce=n1", signedInit("/handoff/ping?nonce=n1", "GET", ""))).json() as {
     peerStatus: string; projects: unknown[]; identity?: { publicKey: string };
   };
