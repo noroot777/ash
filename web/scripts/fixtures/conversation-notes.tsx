@@ -13,6 +13,10 @@ const session = {
   executor: "codex@cpa·gpt-5.6-sol",
   model: "gpt-5.6-sol",
   reasoningEffort: "xhigh",
+  cliSessionId: "01a03152-a54f",
+  resumeCommand: "codex resume 01a03152-a54f",
+  usage: { input: 1_000, output: 200, cacheRead: 2_000, cacheWrite: 0, reasoning: 100, costUsd: null, turns: 1 },
+  context: { used: 28_000, window: 100_000, windowEstimated: false },
   startedAt: "2026-08-10T03:23:00.000Z",
   endedAt: "2026-08-10T14:04:00.000Z",
 } as unknown as Session;
@@ -74,8 +78,8 @@ const items = buildConversationItems([{ session, output, trace: [] }], [session]
       event: { kind: "text", text: "又被叫醒了，继续。" },
     },
   },
-  // 复现刷新前的实时态：旁注到达后同一回合又报了一条工具事件。旁注自带落盘时间，
-  // 后续续写沿用它，不能把旧的回合起点单独挤到下一行。
+  // 复现刷新前的实时态：旁注到达后同一回合又报了一条工具事件。工具仍并回当前回合，
+  // 统计条与执行过程都留在旁注之前，实时结构与刷新后的落盘结构一致。
   {
     kind: "server",
     id: "live:note",

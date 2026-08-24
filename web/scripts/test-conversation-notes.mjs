@@ -77,12 +77,25 @@ const boundary = live.find((item) => item.kind === "event");
 assert.equal(boundary.variant, "boundary", "回合边界仍是整宽分隔线");
 assert.equal(live.at(-1).continuation, false, "回合结束之后是新的一段，要重新报身份");
 
-// —— 实时旁注跟落盘 sentinel 共用时间：后续续写不能退回会话起跑时间另占一行 ——
+// —— 实时旁注跟落盘 sentinel 共用时间，且不能把当前回合的工具/统计拆到旁注后面 ——
 const liveNoteAt = "2026-08-10T03:27:00.000Z";
-const liveNote = buildConversationItems([{ session, output: "第一回合说的话。", trace: [] }], [{
+const activeSession = {
   ...session,
   turnStartedAt: session.startedAt,
-}], [
+  endedAt: null,
+  cliSessionId: "cli-s1",
+};
+const beforeNoteTrace = {
+  at: "2026-08-10T03:24:00.000Z",
+  turnStartedAt: session.startedAt,
+  event: { kind: "text", text: "第一回合说的话。" },
+};
+const afterNoteTool = {
+  at: "2026-08-10T03:28:00.000Z",
+  turnStartedAt: session.startedAt,
+  event: { kind: "tool", name: "exec", detail: "检查布局" },
+};
+const liveNote = buildConversationItems([{ session: activeSession, output: "第一回合说的话。", trace: [beforeNoteTrace] }], [activeSession], [
   {
     kind: "server",
     id: "live:note",
@@ -94,9 +107,21 @@ const liveNote = buildConversationItems([{ session, output: "第一回合说的�
     event: { type: "agent.event", taskId: "t1", sessionId: "s1", role: "main", agentType: "codex", event: { kind: "tool", name: "exec", detail: "检查布局" } },
   },
 ]);
-assert.deepEqual(liveNote.map((item) => item.kind), ["agent", "event", "agent"]);
+const persistedNote = buildConversationItems([{
+  session: activeSession,
+  output: ["第一回合说的话。", turn("system", "已预约完成后审查。", liveNoteAt)].join("\n"),
+  trace: [beforeNoteTrace, afterNoteTool],
+}], [activeSession], []);
+const shape = (rows) => rows.map((item) => item.kind === "agent" ? {
+  kind: item.kind,
+  tools: item.segments.flatMap((segment) => segment.events.map((event) => event.label)),
+  showSessionMeta: item.showSessionMeta,
+  endedAt: item.endedAt,
+} : { kind: item.kind, at: item.at });
+assert.deepEqual(shape(liveNote), shape(persistedNote), "实时旁注前后的工具与统计条位置必须和刷新后同构");
+assert.deepEqual(liveNote.map((item) => item.kind), ["agent", "event"]);
+assert.equal(liveNote[0].showSessionMeta, true, "会话统计条应留在旁注之前的当前回合上");
+assert.equal(liveNote[0].endedAt, null, "旁注不能把仍在运行的当前回合提前截断");
 assert.equal(liveNote[1].at, liveNoteAt, "实时旁注应直接带落盘时的精确时间");
-assert.equal(liveNote[2].at, liveNoteAt, "紧随旁注的续写应沿用旁注时间，不能显示旧回合起点");
-assert.equal(liveNote[2].continuation, true);
 
 console.log("conversation-notes ok");

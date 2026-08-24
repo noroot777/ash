@@ -60,7 +60,7 @@ try {
   assert.match(await page.locator(".conversation-note.is-error").innerText(), /审查未通过/);
 
   const messages = page.locator(".task-message--agent");
-  assert.equal(await messages.count(), 7, "七段发言各自成条（用时和用量还挂在各自那条上）");
+  assert.equal(await messages.count(), 6, "实时旁注后的工具应并回当前回合，不另拆第七段");
   // 第一段照常报身份；被旁注隔开的后几段接着上一段排版，不重报执行器名。
   assert.equal(await messages.nth(0).locator(".agent-run-identity").count(), 1);
   assert.equal(await messages.nth(1).locator(".agent-run-identity").count(), 0, "旁注不该让会话重报身份");
@@ -79,8 +79,19 @@ try {
   // 真人插过话之后是新的一段，身份要回来；回合边界之后同理。
   assert.equal(await messages.nth(4).locator(".agent-run-identity").count(), 1, "真人插话后必须重新报身份");
   assert.equal(await messages.nth(5).locator(".agent-run-identity").count(), 1, "回合边界之后必须重新报身份");
-  assert.equal(await messages.nth(6).locator("header time").count(), 0, "实时旁注后的续写不应把旧回合时间另起一行");
   assert.match(await notes.last().innerText(), /已预约完成后审查.*08\/10 15:02/, "实时旁注应在自身行内显示精确时间");
+  assert.equal(await messages.last().locator(".task-tool-line").count(), 1, "旁注后到达的工具应显示在旁注之前的当前回合里");
+  assert.equal(await messages.last().locator(".task-message-footer").count(), 1, "会话统计条应留在旁注之前的当前回合里");
+  assert.equal(await notes.last().evaluate((note) => note === note.parentElement?.lastElementChild), true, "实时旁注应稳定留在当前回合与统计条之后");
+
+  await page.setViewportSize({ width: 390, height: 1000 });
+  const narrowTime = await notes.last().locator("time").evaluate((time) => {
+    const range = document.createRange();
+    range.selectNodeContents(time);
+    return { whiteSpace: getComputedStyle(time).whiteSpace, lineCount: range.getClientRects().length };
+  });
+  assert.deepEqual(narrowTime, { whiteSpace: "nowrap", lineCount: 1 }, "窄屏日期与时分不能从中间拆成两行");
+  await page.setViewportSize({ width: 1000, height: 1400 });
 
   // agent 输出里的引用块（「正在压缩上下文…」这类 ash 注记）跟旁注是同一档，
   // 字号行高得对上，前面那道竖线的高度才会一样。

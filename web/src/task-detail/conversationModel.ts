@@ -347,9 +347,24 @@ function appendAgent(
   // 回合中途打开任务页时（快照的末尾还是上一轮实现正文，「第 N 轮验证开始」在订阅前
   // 就播完了），接着到的审查正文会直接写进实现者的气泡里 —— 正是这个功能要治的病。
   const reviewer = reviewerOf(event.verifyRound, event.role ?? session?.role);
-  if (last?.kind === "agent" && last.sessionId === event.sessionId && reviewerKey(last) === reviewerKeyOf(reviewer)) {
-    if (explicitRun) last.run = explicitRun;
-    return last;
+  const sameSpeaker = (item: ConversationItem): item is Extract<ConversationItem, { kind: "agent" }> => (
+    item.kind === "agent" && item.sessionId === event.sessionId && reviewerKey(item) === reviewerKeyOf(reviewer)
+  );
+  let current = last && sameSpeaker(last) ? last : undefined;
+  const turnStartedAt = session ? latestTurnStart(session) ?? session.startedAt : null;
+  // 旁注可能在当前回合仍流式输出时插进来；只跨过同会话旁注找“本回合起点一致”的气泡。
+  // 这样工具、用量和后续正文仍写回当前回合，而新一轮的系统起始提示不会吞掉上一回合。
+  if (!current && turnStartedAt) {
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const candidate = items[index]!;
+      if (candidate.kind === "event" && candidate.variant === "note" && candidate.sessionId === event.sessionId) continue;
+      if (sameSpeaker(candidate) && candidate.at === turnStartedAt && !candidate.markerEndedAt) current = candidate;
+      break;
+    }
+  }
+  if (current) {
+    if (explicitRun) current.run = explicitRun;
+    return current;
   }
   const run = explicitRun ?? sessionRun(session);
   const item: Extract<ConversationItem, { kind: "agent" }> = {
@@ -357,7 +372,7 @@ function appendAgent(
     id: `live:${event.sessionId}:${items.length}`,
     sessionId: event.sessionId,
     label: agentLabel(session, event),
-    at: session?.startedAt,
+    at: turnStartedAt,
     endedAt: null,
     markerEndedAt: null,
     session,
@@ -583,9 +598,10 @@ export function buildConversationItems(
     item.at = firstTurn
       ? item.session?.startedAt ?? item.at
       : adjacentInterjectionAt
-        ?? (item.at === item.session?.startedAt && turnStartedAt
-          ? turnStartedAt
-          : previousInterjectionAt ?? item.session?.startedAt ?? item.at);
+        ?? (item.at && item.at !== item.session?.startedAt ? item.at : null)
+        ?? turnStartedAt
+        ?? previousInterjectionAt
+        ?? item.session?.startedAt;
     previousItem = item;
   }
 
