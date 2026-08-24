@@ -1,8 +1,7 @@
 const hosts = [
   { id: "local", name: "本机", detail: "fjh’s MacBook · ~/code/harness", path: "~/code/harness", online: true, kind: "电脑" },
   { id: "mini", name: "Mac mini", detail: "工作室节点 · ~/workspace/harness", path: "~/workspace/harness", online: true, kind: "远程" },
-  { id: "windows", name: "Windows 工作站", detail: "Build tower · D:\\ai_workspace\\harness", path: "D:\\ai_workspace\\harness", online: true, kind: "远程" },
-  { id: "devbox", name: "devbox", detail: "SSH · /srv/repos/harness", path: "/srv/repos/harness", online: false, kind: "离线" },
+  { id: "windows", name: "Windows 工作站", detail: "Build tower · D:\\ai_workspace\\harness", path: "D:\\ai_workspace\\harness", online: false, kind: "离线" },
 ];
 
 const hostSvg = `
@@ -44,11 +43,11 @@ function showToast(message) {
 }
 
 function renderHosts() {
-  hostList.innerHTML = hosts.map((host) => `
-    <button class="host-option${host.id === state.location ? " current" : ""}" type="button" data-host="${host.id}" ${host.online ? "" : "disabled"}>
+  hostList.innerHTML = hosts.filter((host) => host.id !== state.location).map((host) => `
+    <button class="host-option" type="button" data-host="${host.id}" ${host.online ? "" : "disabled"}>
       <span class="host-icon">${hostSvg}</span>
       <span class="host-copy"><b>${host.name}</b><small>${host.detail}</small></span>
-      ${host.id === state.location ? '<span class="host-check">✓</span>' : `<span class="host-tag">${host.kind}</span>`}
+      <span class="host-tag">${host.kind}</span>
     </button>`).join("");
 
   $$(".host-option").forEach((button) => {
@@ -57,7 +56,7 @@ function renderHosts() {
 }
 
 function renderConnections() {
-  $("#connectionList").innerHTML = hosts.slice(1).map((host) => `
+  $("#connectionList").innerHTML = hosts.map((host) => `
     <div class="connection-row">
       <span class="host-icon">${hostSvg}</span>
       <div><b>${host.name}</b><small>${host.detail} · 项目 harness 已匹配</small></div>
@@ -75,27 +74,32 @@ function toggleLocationMenu(force) {
 function setExecutionState(mode) {
   const waiting = mode === "waiting";
   state.running = !waiting;
-  $("#executionState").classList.toggle("is-waiting", waiting);
-  $("#executionStateText").textContent = waiting ? "等待你的输入" : "正在执行";
-  $(".task-row.active .task-state").className = `task-state ${waiting ? "is-paused" : "is-running"}`;
-  $("#taskLocationMeta").textContent = `${waiting ? "等待输入" : "运行于"} · ${hostById(state.location).name}`;
+  $("#mainTaskRow .task-state").className = `task-state ${waiting ? "is-paused" : "is-running"}`;
+  $("#taskLocationMeta").textContent = waiting ? "等待输入" : "运行中";
+}
+
+function updateHostCounts() {
+  $("#localCount").textContent = $("#localTaskList").querySelectorAll(".task-row").length;
+  $("#miniCount").textContent = $("#miniTaskList").querySelectorAll(".task-row").length;
+}
+
+function moveTaskRowTo(hostId) {
+  $(`#${hostId}TaskList`).prepend($("#mainTaskRow"));
+  $$(".host-group").forEach((group) => group.classList.toggle("is-current", group.dataset.host === hostId));
+  updateHostCounts();
 }
 
 function updateLocationUI(current) {
   const remote = current.id !== "local";
-  $("#executionBanner").classList.toggle("is-remote", remote);
-  $("#executionHostName").textContent = current.name;
-  $("#executionDescription").textContent = remote
-    ? `远程代码位于 ${current.path}，对话和执行记录持续同步回来`
-    : "对话、工具记录和执行进度会实时同步到这个页面";
-  $("#locationButtonText").textContent = remote ? "切换或移回本机…" : "移至其他主机…";
-  $("#composerRoute").classList.toggle("is-remote", remote);
-  $("#composerRouteText").textContent = remote
-    ? `这条消息将发送给 ${current.name} 上的 Codex`
-    : "这条消息将在本机执行";
-  $("#composerSyncText").textContent = "上下文已同步";
-  $("#syncStatus").textContent = "实时";
-  $("#lastSyncLabel").textContent = "刚刚更新";
+  $("#headerHostName").textContent = current.name;
+  $("#mobileHostName").textContent = current.name;
+  $("#ownershipText").textContent = remote ? `来自本机 · 当前只存在于 ${current.name}` : "任务只存在于本机";
+  $("#locationButtonText").textContent = remote ? "↩ 移回本机" : "接力到…";
+  locationButton.querySelector("svg").hidden = remote;
+  locationButton.setAttribute("aria-haspopup", remote ? "false" : "dialog");
+  $("#composerNote").textContent = remote
+    ? `正在读取 ${current.name} 上的真实任务；消息直接发送到该主机。`
+    : "消息会直接发送给本机上的这个任务。";
   $("#workHostLabel").textContent = current.name;
 }
 
@@ -150,7 +154,6 @@ function appendSyncedContext(previous, current) {
       card.querySelector(".remote-live-row i").textContent = "✓";
       card.querySelector(".remote-live-row").classList.remove("is-live");
       card.querySelector(".remote-live-row span").textContent = "组合筛选回归测试已通过";
-      $("#lastSyncLabel").textContent = "测试结果刚刚同步";
       setExecutionState("waiting");
       showToast(`${current.name} 已完成当前步骤，可以继续追问`);
     }, 2600);
@@ -202,6 +205,10 @@ function closeHandoff() {
 
 function startHandoff() {
   if (!state.destination || transferTimer) return;
+  const destination = hostById(state.destination);
+  $("#mainTaskRow").classList.add("is-moving");
+  $("#taskLocationMeta").textContent = `正在移动到 ${destination.name}…`;
+  locationButton.disabled = true;
   const steps = $$("#progressSteps li");
   reviewView.hidden = true;
   progressView.hidden = false;
@@ -232,6 +239,9 @@ function completeHandoff() {
   state.transferCount += 1;
   const current = hostById(state.location);
 
+  moveTaskRowTo(current.id);
+  $("#mainTaskRow").classList.remove("is-moving");
+  locationButton.disabled = false;
   updateLocationUI(current);
   setExecutionState(current.id === "local" ? "waiting" : "running");
   $(".work-card-head b").textContent = "进度已保存";
@@ -256,6 +266,9 @@ function resetDemo() {
   handoffScrim.hidden = true;
   connectionsScrim.hidden = true;
   toggleLocationMenu(false);
+  moveTaskRowTo("local");
+  $("#mainTaskRow").classList.remove("is-moving");
+  locationButton.disabled = false;
   updateLocationUI(hostById("local"));
   setExecutionState("running");
   $(".work-card-head b").textContent = "正在处理";
@@ -276,16 +289,28 @@ function closeConnections() {
   connectionsScrim.hidden = true;
 }
 
-locationButton.addEventListener("click", () => toggleLocationMenu());
+locationButton.addEventListener("click", () => {
+  if (state.location === "local") toggleLocationMenu();
+  else {
+    state.destination = "local";
+    openReview();
+  }
+});
 $("#startHandoffButton").addEventListener("click", startHandoff);
 $("#resetButton").addEventListener("click", resetDemo);
 $("#connectionsButton").addEventListener("click", openConnections);
 $("#manageConnectionsButton").addEventListener("click", openConnections);
+$("#mobileHostButton").addEventListener("click", openConnections);
+$$('.secondary-task').forEach((button) => button.addEventListener("click", () => {
+  const host = button.closest(".host-group").querySelector(".host-heading b").textContent;
+  showToast(`这是 ${host} 上的另一条任务`);
+}));
+$(".offline-task").addEventListener("click", () => showToast("Windows 工作站离线，任务内容只读且不能追问"));
 $$('.modal-close').forEach((button) => button.addEventListener("click", closeHandoff));
 $$('.connections-close').forEach((button) => button.addEventListener("click", closeConnections));
 
 document.addEventListener("click", (event) => {
-  if (!locationMenu.hidden && !event.target.closest(".execution-actions")) toggleLocationMenu(false);
+  if (!locationMenu.hidden && !event.target.closest(".header-handoff-wrap")) toggleLocationMenu(false);
 });
 
 document.addEventListener("keydown", (event) => {
