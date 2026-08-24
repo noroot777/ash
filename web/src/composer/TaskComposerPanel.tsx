@@ -69,7 +69,6 @@ export function TaskComposerPanel({
   onCreateGroup: (name: string, mode: GroupMode) => Promise<Group>;
   notify: (message: string) => void;
 }) {
-  const [title, setTitle] = useState("");
   const [body, setBody] = useState(initialDraft?.body ?? "");
   const [seedAttachments, setSeedAttachments] = useState(initialDraft?.attachments ?? []);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
@@ -410,13 +409,12 @@ export function TaskComposerPanel({
     setBusy(true);
     let task: Task;
     try {
-      const explicitTitle = title.trim();
       const provisionalTitle = body.trim().split(/\r?\n/)[0]!.slice(0, 42)
         || (mode === "duet" ? "新建讨论" : "未命名任务");
       const common = {
         projectId: project.id,
-        title: explicitTitle || provisionalTitle,
-        autoTitle: !explicitTitle && mode === "single",
+        title: provisionalTitle,
+        autoTitle: mode === "single",
         groupId: groupId || null,
         labels,
       };
@@ -546,12 +544,6 @@ export function TaskComposerPanel({
             })}
             <span>切换模式不清空正文</span>
           </div>
-          <input
-            className="composer-title"
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="任务名称（可选；留空自动命名）"
-          />
           <div className="composer-objective">
             <textarea
               autoFocus

@@ -192,7 +192,7 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
       // 只在日志里发生就等于没发生 —— 同样落一条持久可见的气泡。说不说由
       // baseFallbackNote 判（见 base-fallback-notice.ts），跟失败那条路共用一套。
       writeTurn(out, { t: "system", agent: agentType, text: baseNote }, turnStart);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event: { kind: "system", text: baseNote } });
+      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event: { kind: "system", text: baseNote, at: turnStart } });
       baseFallbackTold = true;
     }
     await consumeSingleRun({

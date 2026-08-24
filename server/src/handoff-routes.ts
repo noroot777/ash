@@ -19,6 +19,7 @@ import { projects, sessions, tasks } from "./db/schema.js";
 import { projectHealthLight } from "./git.js";
 import { getAppSettings } from "./app-settings.js";
 import { exportHandoff, handoffRemoteUrl, preflightHandoff } from "./handoff.js";
+import { requestHandoffApproval } from "./handoff-peer-client.js";
 import { repoRefTips } from "./handoff-collect.js";
 import { HandoffError, type HandoffPingResponse } from "./handoff-types.js";
 import { canonicalPingChallenge, localIdentity, shortFingerprint, signWithLocalKey } from "./handoff-identity.js";
@@ -32,6 +33,7 @@ import { importHandoff } from "./handoff-import.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { sessionTranscriptPath, TURN_SENTINEL } from "./transcript.js";
 import { now } from "./util.js";
+import { mountHandoffRemoteRoutes } from "./handoff-remote.js";
 
 type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 500 | 502;
 
@@ -55,6 +57,7 @@ const fail = (c: Context, e: unknown) => {
 };
 
 export function mountHandoffRoutes(api: Hono): void {
+  mountHandoffRemoteRoutes(api);
   // 对端探活 + **配对入口**:证明「我是一台 ash、我是哪一台」,并报出可作为接力目的地
   // 的项目清单。源机带 ?nonce= 来,本机用私钥签它 —— 只报公钥证明不了持有私钥(公钥
   // 是公开的,谁都能复制一份复读)。源机没批准过的话,项目清单故意为空:仓库布局不该
@@ -189,6 +192,18 @@ export function mountHandoffRoutes(api: Hono): void {
     return c.json({ deleted: true });
   });
 
+  // 出站配对申请:只向目标机发一次带身份签名的 ping，让本机出现在它的待审批列表里。
+  // 与 preflight 分开，避免用户只是打开接力对话框就悄悄发出申请。
+  api.post("/handoff/request", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { targetUrl?: string };
+    if (!body.targetUrl) return c.json({ error: "缺 targetUrl" }, 400);
+    try {
+      return c.json(await requestHandoffApproval(body.targetUrl));
+    } catch (e) {
+      return fail(c, e);
+    }
+  });
+
   // 预检:探测目标机、匹配项目、盘点本地可搬运的东西。只读。
   api.post("/tasks/:id/handoff/preflight", async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as { targetUrl?: string };
@@ -233,9 +248,8 @@ export function mountHandoffRoutes(api: Hono): void {
     }
   });
 
-  // 移除接力标记:「在本机继续」的唯一逃生门(接力出去/接力未确认的任务被硬拦后走这里)。
-  // 只清本机标记,对端那份任务不动——两边并跑的风险由用户自担,所以前端必须走确认框,
-  // 时间线也留一条持久可见的系统说明。
+  // 移除接力标记只服务 pending（送达未知）的应急撤销。确认送达后本机是历史存档，
+  // 必须从对端那份发起移回，不能在源机清标记造出双跑。
   api.delete("/tasks/:id/handoff", async (c) => {
     const taskId = c.req.param("id");
     const row = (await db
@@ -243,12 +257,15 @@ export function mountHandoffRoutes(api: Hono): void {
       .from(tasks)
       .where(eq(tasks.id, taskId))).at(0);
     if (!row) return c.json({ error: "任务不存在" }, 404);
-    let marker: { direction?: string } | null = null;
+    let marker: { direction?: string; pending?: boolean } | null = null;
     if (row.handoff) {
-      try { marker = JSON.parse(row.handoff) as { direction?: string }; } catch { marker = null; }
+      try { marker = JSON.parse(row.handoff) as { direction?: string; pending?: boolean }; } catch { marker = null; }
     }
     if (marker?.direction !== "out") {
       return c.json({ error: "任务没有「接力出去」的标记;接力进来的任务本来就在本机跑,不用移除" }, 409);
+    }
+    if (!marker.pending) {
+      return c.json({ error: "任务已确认送达对端，只能从对端那份任务发起移回；本机不能恢复这份存档" }, 409);
     }
     await db.update(tasks).set({ handoff: null, updatedAt: now() }).where(eq(tasks.id, taskId));
     const latest = (await db

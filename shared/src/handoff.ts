@@ -4,7 +4,7 @@
 export interface HandoffTarget {
   name: string;
   url: string;
-  // 这台目标机的公钥指纹(sha256 hex),第一次接力成功后记住(TOFU)。
+  // 这台目标机的公钥指纹(sha256 hex),第一次明确申请或接力成功后记住(TOFU)。
   // 之后每次预检/导出都拿对端现报的指纹跟它比,对不上就**拒绝打包** —— 接力推的是
   // 整个仓库和会话历史,地址漂到别人机器上时,这是唯一拦得住的东西。
   // 空/缺失 = 还没记过(首次)或用户手动清除过。
@@ -57,10 +57,21 @@ export interface HandoffPeerIdentity {
   canEncrypt?: boolean;
 }
 
+/** POST /handoff/request:显式向目标机发送接力申请并读取对方当前态度。 */
+export interface HandoffApprovalResult {
+  ok: true;
+  target: { url: string; host: string };
+  /** null = 对端版本过旧，没有可核对的机器身份。 */
+  peer: HandoffPeerIdentity | null;
+  /** 只有对方已经接受申请（或关闭审批）时才会返回项目。 */
+  projects: HandoffPingProject[];
+}
+
 // 落在 tasks.handoff（json）上的持久接力标记:导出侧 direction:"out"（任务已交出去，
-// 本地这份只是历史），导入侧 direction:"in"（从别的机器接过来的）。刷新后横幅靠它。
+// 本地这份只是历史），首次导入侧 direction:"in"（在别人机器上帮原机继续），安全移回
+// 原机后 direction:"returned"（只保留历史/幂等信息，不再限制下一次接力目标）。
 export interface TaskHandoff {
-  direction: "out" | "in";
+  direction: "out" | "in" | "returned";
   // out 专用:true = 请求已发出但没收到对端确认(应答丢失/源机中途退出)。pending 态
   // 同样硬拦本机启动;原样重试接力会按 transferId 幂等收口,确认没送到也可手动移除标记。
   pending?: boolean;
@@ -81,6 +92,13 @@ export interface TaskHandoff {
   peerUrl: string | null;
   // out: 目标配置里的名字；in: 源机主机名。
   peerName: string | null;
+  // in:签名确认过的来源机器指纹。移回时只允许选择 handoffTargets 里指纹一致的机器，
+  // 防止把「移回」变成任意第三台机器的再次转送。returned 只用它展示移回来源；不锁目标。
+  // 老版本导入没有此字段。
+  peerFp?: string | null;
+  // 任务最初创建所在机器的指纹。它随每次接力原样传播；只有接收机指纹等于它时，
+  // 覆盖历史存档才算真正“回到原机”并写 returned。旧记录缺失时按当前方向保守推断。
+  originFp?: string | null;
   // 对端那份任务的 id（同 id 迁移,当前恒等于本任务 id;留字段防语义变化）。
   peerTaskId: string;
   at: string;

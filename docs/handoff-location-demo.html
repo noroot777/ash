@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ash · Handoff 运行位置原型</title>
+  <link rel="stylesheet" href="./handoff-location-demo.css" />
+</head>
+<body>
+  <div class="demo-shell">
+    <aside class="sidebar" aria-label="任务列表">
+      <div class="brand-row">
+        <div class="brand-mark" aria-hidden="true"><span></span><span></span></div>
+        <div><b>Ash</b><small>任务工作台</small></div>
+        <button class="icon-button" id="newTaskButton" type="button" aria-label="新建任务">＋</button>
+      </div>
+
+      <nav class="host-nav" aria-label="已注册主机">
+        <section class="host-group is-current" data-host="local">
+          <div class="host-heading">
+            <span class="sidebar-host-icon"><i></i></span>
+            <span><b>本机</b><small>fjh’s MacBook</small></span>
+            <span class="host-online">在线</span>
+            <span class="host-count" id="localCount">2</span>
+          </div>
+          <div class="host-task-list" id="localTaskList">
+            <button class="task-row active" id="mainTaskRow" type="button">
+              <span class="task-state is-running"></span>
+              <span class="task-copy">
+                <b>实现运营看板筛选器</b>
+                <small id="taskLocationMeta">运行中</small>
+              </span>
+              <span class="task-time">12m</span>
+            </button>
+            <button class="task-row secondary-task" type="button">
+              <span class="task-state is-done"></span>
+              <span class="task-copy"><b>修复导出文件名</b><small>已完成</small></span>
+              <span class="task-time">8m</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="host-group" data-host="mini">
+          <div class="host-heading">
+            <span class="sidebar-host-icon is-remote"><i></i></span>
+            <span><b>Mac mini</b><small>工作室节点</small></span>
+            <span class="host-online">在线</span>
+            <span class="host-count" id="miniCount">1</span>
+          </div>
+          <div class="host-task-list" id="miniTaskList">
+            <button class="task-row secondary-task" type="button">
+              <span class="task-state is-paused"></span>
+              <span class="task-copy"><b>整理远程连接说明</b><small>等待输入</small></span>
+              <span class="task-time">31m</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="host-group is-offline" data-host="windows">
+          <div class="host-heading">
+            <span class="sidebar-host-icon is-remote"><i></i></span>
+            <span><b>Windows 工作站</b><small>Build tower</small></span>
+            <span class="host-offline">离线</span>
+            <span class="host-count">1</span>
+          </div>
+          <div class="host-task-list">
+            <button class="task-row offline-task" type="button">
+              <span class="task-state"></span>
+              <span class="task-copy"><b>发布流程检查</b><small>上次同步 10:42</small></span>
+              <span class="task-time">—</span>
+            </button>
+          </div>
+        </section>
+      </nav>
+
+      <div class="sidebar-footer">
+        <button id="connectionsButton" type="button">
+          <span class="host-stack" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span><b>管理主机</b><small>3 台已注册</small></span>
+          <span>›</span>
+        </button>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="task-header">
+        <button class="mobile-host-button" id="mobileHostButton" type="button"><span id="mobileHostName">本机</span>⌄</button>
+        <div class="title-group">
+          <div class="title-line">
+            <span class="host-breadcrumb" id="headerHostName">本机</span><span class="breadcrumb-slash">/</span>
+            <h1>实现运营看板筛选器</h1>
+            <span class="same-chat-pill">唯一归属</span>
+          </div>
+          <div class="task-subline">
+            <span class="branch-chip"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3a2 2 0 1 1-1 1.73V11a1 1 0 0 0 1 1h4.27A2 2 0 1 1 11 13H5a2 2 0 0 1-2-2V4.73A2 2 0 0 1 5 3Zm6 1a2 2 0 0 1-1 1.73V7a2 2 0 0 1-2 2H6V8h2a1 1 0 0 0 1-1V5.73A2 2 0 1 1 11 4Z"/></svg>ash/filters-v2</span>
+            <span id="ownershipText">任务只存在于本机</span>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button class="quiet-button" id="resetButton" type="button">重置演示</button>
+          <div class="header-handoff-wrap">
+            <button class="handoff-action" id="locationButton" type="button" aria-haspopup="dialog" aria-expanded="false">
+              <span id="locationButtonText">接力到…</span>
+              <svg viewBox="0 0 12 12" aria-hidden="true"><path d="m3 4.5 3 3 3-3"/></svg>
+            </button>
+            <div class="location-menu" id="locationMenu" role="dialog" aria-label="选择运行位置" hidden>
+              <div class="menu-head">
+                <div><b>接力到已注册主机</b><small>任务确认到达后才会离开本机列表</small></div>
+                <span class="connection-count">2 可用</span>
+              </div>
+              <div class="host-list" id="hostList"></div>
+              <button class="manage-connections" id="manageConnectionsButton" type="button">
+                管理主机 <span>↗</span>
+              </button>
+            </div>
+          </div>
+          <button class="icon-button" type="button" aria-label="更多操作">•••</button>
+        </div>
+      </header>
+
+      <section class="chat" aria-label="任务对话">
+        <div class="chat-inner" id="chatFeed">
+          <article class="message user-message">
+            <div class="avatar user-avatar">你</div>
+            <div class="message-body">
+              <div class="message-meta">你 <time>09:42</time></div>
+              <div class="bubble">把运营看板的筛选器补齐：状态、负责人和日期可以组合筛选，刷新后要保留条件。</div>
+            </div>
+          </article>
+
+          <article class="message agent-message">
+            <div class="avatar agent-avatar" aria-hidden="true"><span></span><span></span></div>
+            <div class="message-body">
+              <div class="message-meta">Codex <time>09:43</time></div>
+              <div class="agent-copy">
+                我先梳理现有查询参数和列表状态，然后补组合筛选与持久化。当前已经定位到筛选状态在刷新时被默认值覆盖。
+              </div>
+              <div class="work-card">
+                <div class="work-card-head"><span class="live-dot"></span><b>正在处理</b><small id="workHostLabel">本机</small></div>
+                <div class="work-lines"><i style="width:82%"></i><i style="width:64%"></i><i style="width:73%"></i></div>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <footer class="composer-wrap">
+        <div class="composer" id="composer">
+          <textarea aria-label="回复 Codex" rows="1" placeholder="回复 Codex…"></textarea>
+          <div class="composer-toolbar">
+            <div class="composer-left">
+              <button class="tool-button" type="button" aria-label="添加附件">＋</button>
+              <button class="agent-button" type="button"><span class="mini-agent" aria-hidden="true"></span>Codex <span>⌄</span></button>
+            </div>
+            <button class="send-button" type="button" aria-label="发送">↑</button>
+          </div>
+        </div>
+        <p class="composer-note" id="composerNote">消息会直接发送给本机上的这个任务。</p>
+      </footer>
+    </main>
+  </div>
+
+  <div class="modal-scrim" id="handoffScrim" hidden>
+    <section class="handoff-modal" role="dialog" aria-modal="true" aria-labelledby="handoffTitle">
+      <div class="modal-view" id="reviewView">
+        <header class="modal-header">
+          <div class="handoff-symbol" aria-hidden="true"><i></i><i></i></div>
+          <div><span class="eyebrow">HANDOFF</span><h2 id="handoffTitle">移动这个聊天</h2></div>
+          <button class="icon-button modal-close" type="button" aria-label="关闭">×</button>
+        </header>
+
+        <div class="route-card">
+          <div class="route-node source-node">
+            <span>从</span><b id="sourceName">本机</b><small id="sourcePath">~/code/harness</small>
+          </div>
+          <div class="route-track" aria-hidden="true"><i></i><span>→</span></div>
+          <div class="route-node destination-node">
+            <span>到</span><b id="destinationName">Mac mini</b><small id="destinationPath">~/workspace/harness</small>
+          </div>
+        </div>
+
+        <div class="review-grid">
+          <div class="review-item"><span>项目</span><b>harness</b><small>仓库匹配</small></div>
+          <div class="review-item"><span>分支</span><b>ash/filters-v2</b><small>保留当前提交</small></div>
+          <div class="review-item"><span>目标环境</span><b id="worktreeLabel">复用工作区</b><small id="worktreePath">…/.worktrees/filters-v2</small></div>
+          <div class="review-item"><span>聊天</span><b>保持同一个</b><small>历史和附件一并移动</small></div>
+        </div>
+
+        <div class="interrupt-note" id="interruptNote">
+          <span class="pulse-ring" aria-hidden="true"></span>
+          <div><b>当前回复会先停止</b><small>移动完成后，你可以在目标主机继续这个聊天。</small></div>
+        </div>
+
+        <footer class="modal-actions">
+          <button class="quiet-button modal-close" type="button">取消</button>
+          <button class="primary-button" id="startHandoffButton" type="button">Hand off</button>
+        </footer>
+      </div>
+
+      <div class="modal-view progress-view" id="progressView" hidden>
+        <div class="progress-orbit" aria-hidden="true"><span></span><i></i></div>
+        <span class="eyebrow">MOVING CHAT</span>
+        <h2 id="progressTitle">正在移至 Mac mini</h2>
+        <p>聊天身份保持不变。完成后仍会停留在这个页面。</p>
+        <ol class="progress-steps" id="progressSteps">
+          <li><span></span><div><b>停止当前回复</b><small>保存当前进度</small></div></li>
+          <li><span></span><div><b>同步 Git 状态</b><small>分支 ash/filters-v2</small></div></li>
+          <li><span></span><div><b>移动聊天上下文</b><small>历史、附件与工具状态</small></div></li>
+          <li><span></span><div><b>切换运行位置</b><small id="finalStepHost">Mac mini</small></div></li>
+        </ol>
+      </div>
+    </section>
+  </div>
+
+  <div class="modal-scrim" id="connectionsScrim" hidden>
+    <section class="connections-modal" role="dialog" aria-modal="true" aria-labelledby="connectionsTitle">
+      <header class="modal-header">
+        <div><span class="eyebrow">CONNECTIONS</span><h2 id="connectionsTitle">已连接的主机</h2></div>
+        <button class="icon-button connections-close" type="button" aria-label="关闭">×</button>
+      </header>
+      <p class="connections-intro">Handoff 只显示保存了同一 Git 项目的主机。</p>
+      <div class="connection-list" id="connectionList"></div>
+      <footer class="modal-actions">
+        <button class="quiet-button connections-close" type="button">完成</button>
+      </footer>
+    </section>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="./handoff-location-demo.js"></script>
+</body>
+</html>

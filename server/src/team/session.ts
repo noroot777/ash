@@ -468,7 +468,7 @@ function publish(lead: Lead, event: AgentEvent): void {
 // 刷新走 .md 的哨兵行,两边长得一样。
 function recordSystemTurn(lead: Lead, text: string, at = now()): void {
   writeTurn(lead.out, { t: "system", agent: lead.agentType, text }, at);
-  publish(lead, { kind: "system", text });
+  publish(lead, { kind: "system", text, at });
 }
 
 async function beginTurn(lead: Lead, at = now()): Promise<void> {

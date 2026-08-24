@@ -11,7 +11,7 @@ import { writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { projects, scheduledMessages, schedules, sessions, tasks } from "./db/schema.js";
+import { noteTasks, projects, scheduledMessages, schedules, sessions, tasks } from "./db/schema.js";
 import { claudeProjectSlug } from "./handoff-collect.js";
 import {
   HandoffError, MAX_FILE_BYTES, MB, safeRel,
@@ -27,8 +27,10 @@ import { withRepoLock } from "./repo-lock.js";
 import { DATA_DIR, RUNS_DIR } from "./paths.js";
 import { codexHome, findRollout } from "./executors/codex-rollout.js";
 import { publishPendingMessages } from "./pending-messages.js";
-import { createTasks } from "./task-store.js";
+import { createTasks, publishTaskUpdated } from "./task-store.js";
+import { deleteTaskAssociations } from "./task-routes.js";
 import { resumeOrRunTask } from "./task-resume.js";
+import { localIdentity } from "./handoff-identity.js";
 import { id, now } from "./util.js";
 import type { TaskHandoff } from "@ash/shared";
 import { execFileText as exec } from "./exec.js";
@@ -50,6 +52,14 @@ function validate(input: unknown): HandoffManifest {
   if (!m || typeof m !== "object") throw new HandoffError("导入体必须是 JSON 对象");
   if (m.version !== 1) throw new HandoffError(`不认识的接力协议版本 ${String((m as { version?: unknown }).version)},两边 ash 版本差太远`);
   if (!isStr(m.targetProjectId)) throw new HandoffError("缺 targetProjectId");
+  const sourceFingerprint = (m as { sourceFingerprint?: unknown }).sourceFingerprint;
+  if (sourceFingerprint != null && (!isStr(sourceFingerprint) || !/^[0-9a-f]{64}$/.test(sourceFingerprint))) {
+    throw new HandoffError("sourceFingerprint 非法");
+  }
+  const originFingerprint = (m as { originFingerprint?: unknown }).originFingerprint;
+  if (originFingerprint != null && (!isStr(originFingerprint) || !/^[0-9a-f]{64}$/.test(originFingerprint))) {
+    throw new HandoffError("originFingerprint 非法");
+  }
   // transferId 宽容校验:老版本导出没有这个字段,缺了照收(只是失去幂等重放能力)。
   const tid = (m as { transferId?: unknown }).transferId;
   if (tid != null && (!isStr(tid) || tid.length > 64)) throw new HandoffError("transferId 非法");
@@ -248,39 +258,52 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
     .select({ id: tasks.id, handoff: tasks.handoff })
     .from(tasks)
     .where(eq(tasks.id, m.task.id))).at(0);
+  let existingMarker: TaskHandoff | null = null;
+  let returning = false;
   if (existing) {
     // 应答丢失后的原样重试:同一个 transferId 说明就是同一次接力,按成功收口、零副作用,
     // 让源机把 pending 标记改写成「已接力」。没有 transferId(老版本)或对不上才是真冲突。
-    let h: TaskHandoff | null = null;
     if (existing.handoff) {
-      try { h = JSON.parse(existing.handoff) as TaskHandoff; } catch { h = null; }
+      try { existingMarker = JSON.parse(existing.handoff) as TaskHandoff; } catch { existingMarker = null; }
     }
-    if (h?.direction === "in" && m.transferId && h.transferId === m.transferId) {
+    if ((existingMarker?.direction === "in" || existingMarker?.direction === "returned")
+      && m.transferId && existingMarker.transferId === m.transferId) {
       return {
         ok: true,
         taskId: m.task.id,
         workspace: null,
-        sessionsMigrated: h.sessions,
+        sessionsMigrated: existingMarker.sessions,
         // 收口应答报的是**这次接力当初导入时的事实**(存在 in 标记里),不是本次重放
         // 有没有再触发续跑(幂等收口零副作用,从不重复起跑)。老标记没存这个字段时
         // 按 false 报——宁可让源机以为没续跑,也不能谎报「已在对端跑起来了」。
-        autoResume: h.autoResume ?? false,
+        autoResume: existingMarker.autoResume ?? false,
         idempotent: true,
         notes: ["本机已有这次接力导入的任务(应答曾丢失,本次为幂等收口),未重复导入"],
       };
     }
-    throw new HandoffError("本机已有同 id 任务(可能已经接力过一次)。要重新接力,先在本机删掉那个任务。", 409);
+    // 安全移回：本机这行必须正是之前交给当前来源机器的确认态存档。两边指纹一致才
+    // 允许用返回的完整任务覆盖它；第三台机器拿同 id 来仍按冲突拒绝。
+    returning = existingMarker?.direction === "out" && !existingMarker.pending && Boolean(existingMarker.peerFp)
+      && existingMarker.peerFp === m.sourceFingerprint;
+    if (!returning) {
+      throw new HandoffError("本机已有同 id 任务，且不是从原接力目标安全移回。请在当前持有任务的机器上选择“移回”。", 409);
+    }
   }
+  // 优先信本机历史标记里的原机指纹；旧标记没有时，才接受签名 manifest 携带的值。
+  // returning 只表示“可安全覆盖旧存档”，并不等于回到原机：第二次 A→B 时 B 也有 out 存档。
+  const originFingerprint = existingMarker?.originFp ?? m.originFingerprint ?? null;
+  const returnedHome = returning && originFingerprint === localIdentity().fingerprint;
   // 会话 id 冲突预检:必须在任何副作用之前拦下,否则落库落到一半 UNIQUE 炸掉,
   // 留下没有会话的半截任务(审查实测:import 500 后 GET 200、重试永远 409)。
   if (m.sessions.length) {
     const conflicts = await db
-      .select({ id: sessions.id })
+      .select({ id: sessions.id, taskId: sessions.taskId })
       .from(sessions)
       .where(inArray(sessions.id, m.sessions.map((s) => s.id)));
-    if (conflicts.length) {
+    const foreignConflicts = returning ? conflicts.filter((row) => row.taskId !== m.task.id) : conflicts;
+    if (foreignConflicts.length) {
       throw new HandoffError(
-        `会话 id 与本机已有会话冲突(${conflicts.map((c) => c.id).join(", ")}),什么都没导入。这份任务可能曾从本机接力出去——先在本机删掉旧任务再试。`,
+        `会话 id 与本机其它任务冲突(${foreignConflicts.map((c) => c.id).join(", ")}),什么都没导入。`,
         409,
       );
     }
@@ -335,28 +358,26 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
     notes.push(`迁移上传附件 ${writtenUploads.length} 个,文本里的源机路径已改写为本机路径`);
   }
 
-  // ── 定时计划:任务行之前落库(任务行要引用 scheduleId)────────────────────
-  // 先清孤儿:上一次导入若在「计划已插、任务行没插成」当口失败且补偿回滚也失败,
-  // 这里会残留同 taskId 的行——existing 预检刚证明本机没有这个任务,残留只能是孤儿;
-  // 不清的话重试会插出第二份同 taskId 计划,调度器按行遍历就是双触发。
-  await db.delete(schedules).where(eq(schedules.taskId, m.task.id));
-  await db.delete(scheduledMessages).where(eq(scheduledMessages.taskId, m.task.id));
-  let scheduleId: string | null = null;
-  if (m.schedule) {
-    scheduleId = id();
-    // enabled/lastRunAt 原样落库:触发过的一次性计划(enabled=false)不会在本机重跑一遍。
-    await db.insert(schedules).values({
-      id: scheduleId,
-      taskId: m.task.id,
-      kind: m.schedule.kind,
-      at: m.schedule.at ?? null,
-      cron: m.schedule.cron ?? null,
-      enabled: m.schedule.enabled !== false,
-      lastRunAt: m.schedule.lastRunAt ?? null,
-      createdAt: now(),
-    });
-    notes.push(`迁移定时计划(${m.schedule.kind === "cron" ? "周期" : "一次性"}),今后由本机触发`);
+  // ── 定时计划 ────────────────────────────────────────────────────────────
+  // 普通首次导入仍在任务行之前清孤儿并落计划；安全移回要和“替换历史存档”放进同一个
+  // 事务，失败时原任务/会话/计划完整回滚，不能为了移回先把本机存档拆掉。
+  const scheduleId = m.schedule ? id() : null;
+  const scheduleValues = m.schedule && scheduleId ? {
+    id: scheduleId,
+    taskId: m.task.id,
+    kind: m.schedule.kind,
+    at: m.schedule.at ?? null,
+    cron: m.schedule.cron ?? null,
+    enabled: m.schedule.enabled !== false,
+    lastRunAt: m.schedule.lastRunAt ?? null,
+    createdAt: now(),
+  } : null;
+  if (!returning) {
+    await db.delete(schedules).where(eq(schedules.taskId, m.task.id));
+    await db.delete(scheduledMessages).where(eq(scheduledMessages.taskId, m.task.id));
+    if (scheduleValues) await db.insert(schedules).values(scheduleValues);
   }
+  if (m.schedule) notes.push(`迁移定时计划(${m.schedule.kind === "cron" ? "周期" : "一次性"}),今后由本机触发`);
 
   // ── 文件先落盘,再落库 ──────────────────────────────────────────────────
   // 顺序有讲究:文件写一半崩了只留下无害的磁盘残留(重试会原样覆盖);反过来先落库
@@ -411,7 +432,9 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
   }
 
   const marker: TaskHandoff = {
-    direction: "in",
+    // 覆盖旧 out 存档不一定是回家：任务再次交给曾持有机器时也会命中 returning。
+    // 只有接收机就是 originFp 对应的原机才解除来源锁；否则仍是 in，只能移回原机。
+    direction: returnedHome ? "returned" : "in",
     // 源机生成的接力身份证:应答丢失后源机原样重试时,靠它把「已有同 id 任务」识别成
     // 同一次接力并幂等收口(见上面 existing 分支)。
     transferId: m.transferId ?? null,
@@ -420,115 +443,138 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
     autoResume: m.autoResume,
     peerUrl: null,
     peerName: m.sourceHost || null,
+    peerFp: m.sourceFingerprint ?? null,
+    originFp: originFingerprint,
     peerTaskId: m.task.id,
     at: now(),
     sessions: migrated.length,
     git: useWorktree && m.git ? "bundle" : "none",
   };
   const status = SETTLED.has(m.task.status) ? m.task.status : "canceled";
+  const taskRow = {
+    id: m.task.id,
+    projectId: project.id,
+    title: m.task.title,
+    body: m.task.body,
+    mode: "single" as const,
+    status,
+    stage: m.task.stage,
+    labels: jsonOr(m.task.labels, "[]"),
+    agentType: m.task.agentType,
+    executorId: null,
+    model: m.task.model,
+    reasoningEffort: m.task.reasoningEffort,
+    autoTitle: m.task.autoTitle,
+    useWorktree,
+    worktreeBase: useWorktree ? m.task.worktreeBase : null,
+    workflow: jsonOr(m.task.workflow, "") || null,
+    workflowMode: (m.task.workflowMode as "free" | "workflow" | undefined) ?? "workflow",
+    workflowAt: m.task.workflowAt,
+    reviewStep: m.task.reviewStep,
+    verifyRounds: m.task.verifyRounds ?? 0,
+    verifyStationRounds: m.task.verifyStationRounds ?? 0,
+    resumePrompt,
+    question: m.task.question,
+    questionOptions: jsonOr(m.task.questionOptions, "") || null,
+    questionItems: jsonOr(m.task.questionItems, "") || null,
+    pinnedAt: m.task.pinnedAt,
+    starredAt: m.task.starredAt,
+    createdAt: m.task.createdAt,
+    updatedAt: now(),
+    startedAt: m.task.startedAt,
+    endedAt: m.task.endedAt,
+    handoff: JSON.stringify(marker),
+    scheduleId,
+    reportBack: false,
+  };
+  const sessionRows = m.sessions.map((s) => ({
+    id: s.id,
+    taskId: m.task.id,
+    role: s.role,
+    agentType: s.agentType,
+    executor: s.executor,
+    executorId: null,
+    executorFingerprint: null,
+    turnModel: s.turnModel,
+    turnReasoningEffort: s.turnReasoningEffort,
+    worktreePath: useWorktree ? workspace : null,
+    branch: s.branch,
+    cwd: workspace,
+    cliSessionId: usable.get(s.id) ? s.cliSessionId : null,
+    commandLine: s.commandLine,
+    startedAt: s.startedAt,
+    endedAt: s.endedAt,
+    exitStatus: s.exitStatus,
+    stoppedAs: s.stoppedAs,
+    sideTurn: s.sideTurn ?? false,
+    activeMs: s.activeMs,
+    turnStartedAt: s.turnStartedAt,
+    usageInput: s.usageInput,
+    usageOutput: s.usageOutput,
+    usageCacheRead: s.usageCacheRead,
+    usageCacheWrite: s.usageCacheWrite,
+    usageReasoning: s.usageReasoning,
+    usageCostUsd: s.usageCostUsd,
+    usageTurns: s.usageTurns,
+    contextUsed: s.contextUsed,
+    contextWindow: s.contextWindow,
+    contextWindowEstimated: s.contextWindowEstimated,
+  }));
+  const messageRows = messages.map((msg) => ({
+    id: id(),
+    taskId: m.task.id,
+    text: msg.text,
+    attachments: jsonOr(msg.attachments, "[]"),
+    agent: msg.agent,
+    executorId: null,
+    model: msg.model,
+    reasoningEffort: msg.reasoningEffort,
+    sessionRole: msg.sessionRole,
+    mode: msg.mode === "queued" ? "queued" as const : "timed" as const,
+    sendAt: msg.sendAt,
+    status: "pending" as const,
+    createdAt: msg.createdAt,
+    sentAt: null,
+    deliveringSince: null,
+  }));
+
+  if (returning) {
+    const preservedNoteLinks = await db.select().from(noteTasks).where(eq(noteTasks.taskId, m.task.id));
+    try {
+      await db.transaction(async (tx) => {
+        await deleteTaskAssociations(m.task.id);
+        await tx.delete(tasks).where(eq(tasks.id, m.task.id));
+        await tx.insert(tasks).values(taskRow);
+        if (scheduleValues) await tx.insert(schedules).values(scheduleValues);
+        if (sessionRows.length) await tx.insert(sessions).values(sessionRows);
+        if (messageRows.length) await tx.insert(scheduledMessages).values(messageRows);
+        if (preservedNoteLinks.length) await tx.insert(noteTasks).values(preservedNoteLinks);
+      });
+      await publishTaskUpdated(m.task.id);
+      notes.push(returnedHome
+        ? "任务已安全移回原机，本机原历史存档已由返回的最新上下文替换"
+        : "任务已接到本机，本机旧存档已由最新上下文替换；这仍是接入任务，只能移回原机");
+    } catch (e) {
+      throw new HandoffError(
+        `移回落库失败，事务已回滚，本机原历史存档仍完整保留。原始错误:${(e instanceof Error ? e.message : String(e)).slice(0, 300)}`,
+        500,
+      );
+    }
+  } else {
   // 任务行真的插进去了才置真:插入本身撞 UNIQUE 时,库里那行是别人(或历史)的,
   // 补偿回滚绝不能按公共 task id 把它删掉。
   let taskRowInserted = false;
   try {
     // sessions 作为 afterInsert 塞进 createTasks:会话插入失败时 task.created 广播还没发,
     // 回滚后前端不会闪过「幽灵任务」;成功时广播出去的任务已带全会话。
-    await createTasks([{
-      id: m.task.id,
-      projectId: project.id,
-      title: m.task.title,
-      body: m.task.body,
-      mode: "single",
-      status,
-      stage: m.task.stage,
-      labels: jsonOr(m.task.labels, "[]"),
-      agentType: m.task.agentType,
-      // executorId 是本机 agents 表的外键语义,对端的 id 在这边没有意义 → 走 agentType 默认。
-      executorId: null,
-      model: m.task.model,
-      reasoningEffort: m.task.reasoningEffort,
-      autoTitle: m.task.autoTitle,
-      useWorktree,
-      worktreeBase: useWorktree ? m.task.worktreeBase : null,
-      workflow: jsonOr(m.task.workflow, "") || null,
-      workflowMode: (m.task.workflowMode as "free" | "workflow" | undefined) ?? "workflow",
-      workflowAt: m.task.workflowAt,
-      reviewStep: m.task.reviewStep,
-      verifyRounds: m.task.verifyRounds ?? 0,
-      verifyStationRounds: m.task.verifyStationRounds ?? 0,
-      resumePrompt,
-      question: m.task.question,
-      questionOptions: jsonOr(m.task.questionOptions, "") || null,
-      questionItems: jsonOr(m.task.questionItems, "") || null,
-      pinnedAt: m.task.pinnedAt,
-      starredAt: m.task.starredAt,
-      createdAt: m.task.createdAt,
-      updatedAt: now(),
-      startedAt: m.task.startedAt,
-      endedAt: m.task.endedAt,
-      handoff: JSON.stringify(marker),
-      scheduleId,
-      reportBack: false,
-    }], async () => {
+    await createTasks([taskRow], async () => {
       // createTasks 先 await 任务行插入、再调 afterInsert——走到这里说明任务行是本次建的。
       taskRowInserted = true;
-      if (m.sessions.length) {
-        await db.insert(sessions).values(m.sessions.map((s) => ({
-          id: s.id,
-          taskId: m.task.id,
-          role: s.role,
-          agentType: s.agentType,
-          executor: s.executor,
-          // 本机档案/指纹/续跑命令全部重算或悬空:resumeCommand 读取时按目录重建,
-          // fingerprint 留空避免「换机器 = 换执行器」误报。
-          executorId: null,
-          executorFingerprint: null,
-          turnModel: s.turnModel,
-          turnReasoningEffort: s.turnReasoningEffort,
-          worktreePath: useWorktree ? workspace : null,
-          branch: s.branch,
-          cwd: workspace,
-          cliSessionId: usable.get(s.id) ? s.cliSessionId : null,
-          commandLine: s.commandLine,
-          startedAt: s.startedAt,
-          endedAt: s.endedAt,
-          exitStatus: s.exitStatus,
-          stoppedAs: s.stoppedAs,
-          sideTurn: s.sideTurn ?? false,
-          activeMs: s.activeMs,
-          turnStartedAt: s.turnStartedAt,
-          usageInput: s.usageInput,
-          usageOutput: s.usageOutput,
-          usageCacheRead: s.usageCacheRead,
-          usageCacheWrite: s.usageCacheWrite,
-          usageReasoning: s.usageReasoning,
-          usageCostUsd: s.usageCostUsd,
-          usageTurns: s.usageTurns,
-          contextUsed: s.contextUsed,
-          contextWindow: s.contextWindow,
-          contextWindowEstimated: s.contextWindowEstimated,
-        })));
-      }
-      if (messages.length) {
+      if (sessionRows.length) await db.insert(sessions).values(sessionRows);
+      if (messageRows.length) {
         // 导入即 pending:sent 只在原话真的进了会话之后才写,源机的 status/sentAt/
         // 投递租约一概不带。id 重新生成——同一批消息可能曾在多台机器间来回接力。
-        await db.insert(scheduledMessages).values(messages.map((msg) => ({
-          id: id(),
-          taskId: m.task.id,
-          text: msg.text,
-          attachments: jsonOr(msg.attachments, "[]"),
-          agent: msg.agent,
-          // 源机 agents 表的外键在本机没有意义 → 按 agent 类型默认执行器解析。
-          executorId: null,
-          model: msg.model,
-          reasoningEffort: msg.reasoningEffort,
-          sessionRole: msg.sessionRole,
-          mode: msg.mode === "queued" ? "queued" : "timed",
-          sendAt: msg.sendAt,
-          status: "pending" as const,
-          createdAt: msg.createdAt,
-          sentAt: null,
-          deliveringSince: null,
-        })));
+        await db.insert(scheduledMessages).values(messageRows);
       }
     });
   } catch (e) {
@@ -556,6 +602,7 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
     // 回滚失败 = 不能再向源机保证「本机没落库」,应答不带 ash 标记(见 handoff-routes)。
     err.unsettled = rollbackFailed;
     throw err;
+  }
   }
 
   if (messages.length) {

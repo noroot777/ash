@@ -79,19 +79,6 @@
   font-size: 9px;
 }
 
-.composer-title {
-  width: 100%;
-  height: 36px;
-  margin-top: 18px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--panel);
-  padding: 0 12px;
-  outline: 0;
-  font-size: 13px;
-}
-
-.composer-title:focus,
 .composer-objective textarea:focus,
 .composer-field input:focus,
 .composer-field select:focus {
@@ -100,7 +87,7 @@
 
 .composer-objective {
   position: relative;
-  margin-top: 10px;
+  margin-top: 18px;
 }
 
 .composer-objective textarea {

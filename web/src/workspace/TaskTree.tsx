@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import type { ProjectView, Task } from "@ash/shared";
+import type { HandoffTarget, ProjectView, Task } from "@ash/shared";
 import { CaretRight } from "@phosphor-icons/react";
 import { useTaskReadState, type IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
@@ -15,6 +15,7 @@ import {
 import { inScope, type TaskScope } from "./taskScope.ts";
 import { matchesSpreadFilter, SPREAD_FILTERS, type SidebarSpread, type SpreadFilter } from "./useSidebarSpread.ts";
 import { buildTaskTree, orderedTopLevelTasks, previewTasksByAge } from "./taskTreeModel.ts";
+import { HandoffMachines } from "./HandoffMachines.tsx";
 
 type TaskTreeProps = {
   projects: ProjectView[];
@@ -22,9 +23,12 @@ type TaskTreeProps = {
   scope: TaskScope;
   tasks: Task[];
   selectedTaskId: string | null;
+  selectedRemoteTaskId: string | null;
   spread: SidebarSpread;
   onTask: (task: Task) => void;
+  onRemoteTask: (task: Task, target: HandoffTarget) => void;
   onTaskStarred: (taskId: string, starredAt: number | null) => void;
+  onHandoffFinished: () => Promise<void> | void;
   notify: (message: string) => void;
 };
 
@@ -39,6 +43,7 @@ function ScopedTaskTree({
   indicatorForTask,
   filter,
   onClearFilter,
+  machineSection,
 }: {
   tasks: Task[];
   allTasks: Task[];
@@ -47,6 +52,7 @@ function ScopedTaskTree({
   indicatorForTask: IndicatorForTask;
   filter: SpreadFilter;
   onClearFilter: () => void;
+  machineSection: React.ReactNode;
 }) {
   const sections = useMemo(() => buildTaskTree(tasks, { unifiedPinned: true }), [tasks]);
   const { collapsed, toggle: toggleCollapsed } = useCollapsedSections();
@@ -96,7 +102,7 @@ function ScopedTaskTree({
     return next;
   });
   // 一条不剩时必须自己说出来，还得给条退路：窄态那排点很小，不说清楚的话看着就是「任务全没了」。
-  if (!keptBySection.some((entry) => entry.kept.length)) {
+  if (!keptBySection.some((entry) => entry.kept.length) && !machineSection) {
     const label = SPREAD_FILTERS.find((item) => item.key === filter)?.label ?? filter;
     return (
       <p className="workspace-task-empty">
@@ -107,17 +113,16 @@ function ScopedTaskTree({
       </p>
     );
   }
-  return (
-    <>
-      {keptBySection.map(({ section, kept }) => {
-        const sectionCollapsed = collapsed.has(section.key);
-        if (!kept.length) return null;
-        const preview = previewTasksByAge(kept, Date.now(), keepVisible);
-        const previewExpanded = previewExpandedSections.has(section.key);
-        const visibleTasks = previewExpanded ? kept : preview.visible;
-        const hiddenCount = preview.hidden.length;
-        return (
-          <section className={`workspace-task-section${sectionCollapsed ? " is-collapsed" : ""}`} data-task-section={section.key} key={section.key}>
+  const renderSection = (entry: (typeof keptBySection)[number] | undefined) => {
+    if (!entry?.kept.length) return null;
+    const { section, kept } = entry;
+    const sectionCollapsed = collapsed.has(section.key);
+    const preview = previewTasksByAge(kept, Date.now(), keepVisible);
+    const previewExpanded = previewExpandedSections.has(section.key);
+    const visibleTasks = previewExpanded ? kept : preview.visible;
+    const hiddenCount = preview.hidden.length;
+    return (
+      <section className={`workspace-task-section${sectionCollapsed ? " is-collapsed" : ""}`} data-task-section={section.key} key={section.key}>
             <button
               className="workspace-task-section-title workspace-task-section-toggle"
               type="button"
@@ -152,9 +157,23 @@ function ScopedTaskTree({
                 )}
               </>
             )}
-          </section>
-        );
-      })}
+      </section>
+    );
+  };
+  const pinned = keptBySection.find((entry) => entry.section.key === "pinned");
+  const rest = keptBySection.find((entry) => entry.section.key === "rest");
+  const noVisibleTasks = !keptBySection.some((entry) => entry.kept.length);
+  return (
+    <>
+      {renderSection(pinned)}
+      {machineSection}
+      {renderSection(rest)}
+      {noVisibleTasks && (
+        <p className="workspace-task-empty">
+          {filter === "all" ? "还没有任务" : `当前「${SPREAD_FILTERS.find((item) => item.key === filter)?.label ?? filter}」筛选下没有任务`}
+          {filter !== "all" && <button className="workspace-task-empty-action" type="button" onClick={onClearFilter}>显示全部</button>}
+        </p>
+      )}
     </>
   );
 }
@@ -209,7 +228,7 @@ function OtherProject({
   );
 }
 
-export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTaskId, spread, onTask, onTaskStarred, notify }: TaskTreeProps) {
+export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTaskId, selectedRemoteTaskId, spread, onTask, onRemoteTask, onTaskStarred, onHandoffFinished, notify }: TaskTreeProps) {
   const { indicatorForTask } = useTaskReadState(tasks, selectedTaskId);
   const activeTasks = useMemo(() => tasks.filter((task) => !task.archived), [tasks]);
   // 主列表看哪些行只由作用域决定（inScope 是唯一判据，跟计数、筛选、J/K 遍历同源）。
@@ -219,6 +238,7 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
   );
   const allProjects = scope.kind === "all";
   const otherProjects = allProjects ? [] : projects.filter((project) => project.id !== currentProjectId);
+  const currentProject = projects.find((project) => project.id === currentProjectId) ?? null;
   // 徽标表只在全部项目态给：单项目态下每行都是同一个项目，标了纯属占地方。
   const projectBadges = useMemo(
     () => allProjects ? new Map(projects.map((project) => [project.id, project])) : null,
@@ -234,7 +254,16 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
     <TaskTreeActionsProvider value={treeActions}>
     <SpreadRowProvider value={rowContext}>
       <nav className="workspace-task-tree" aria-label={allProjects ? "全部项目任务" : "任务树"} onScroll={hide}>
-        <ScopedTaskTree tasks={scopedTasks} allTasks={tasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} filter={spread.filter} onClearFilter={() => spread.setFilter("all")} />
+        <ScopedTaskTree
+          tasks={scopedTasks}
+          allTasks={tasks}
+          selectedTaskId={selectedTaskId}
+          onTask={onTask}
+          indicatorForTask={indicatorForTask}
+          filter={spread.filter}
+          onClearFilter={() => spread.setFilter("all")}
+          machineSection={allProjects ? null : <HandoffMachines project={currentProject} tasks={tasks} selectedRemoteTaskId={selectedRemoteTaskId} onRemoteTask={onRemoteTask} notify={notify} onFinished={onHandoffFinished} />}
+        />
         {otherProjects.length > 0 && (
           <section className="workspace-other-projects">
             <header className="workspace-task-section-title">其他项目</header>

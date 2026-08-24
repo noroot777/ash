@@ -7,6 +7,7 @@ import type {
   FreeReviewDispatchInput,
   GateAction,
   Group,
+  HandoffApprovalResult,
   HandoffExportResult,
   HandoffIdentity,
   HandoffPeer,
@@ -56,6 +57,7 @@ import type {
   ProjectGitState,
   PullStrategy,
   ReplyTaskResult,
+  RemoteTaskSnapshot,
   ScmCommitResult,
   ScmDiffSource,
   ScmFileDiff,
@@ -291,12 +293,22 @@ export const api = {
     body: { targetUrl: string; targetProjectId: string; targetName?: string; autoResume?: boolean },
   ): Promise<HandoffExportResult> =>
     request(`/tasks/${id(taskId)}/handoff`, json("POST", body)),
+  remoteTaskSnapshot: (taskId: string, targetUrl: string): Promise<RemoteTaskSnapshot> =>
+    request(`/tasks/${id(taskId)}/remote-snapshot`, json("POST", { targetUrl })),
+  remoteTaskReply: (taskId: string, targetUrl: string, text: string): Promise<ReplyTaskResult> =>
+    request(`/tasks/${id(taskId)}/remote-reply`, json("POST", { targetUrl, text })),
+  remoteTaskAnswer: (taskId: string, targetUrl: string, answer: string): Promise<unknown> =>
+    request(`/tasks/${id(taskId)}/remote-answer`, json("POST", { targetUrl, answer })),
+  remoteTaskReturn: (taskId: string, targetUrl: string): Promise<{ task: Task }> =>
+    request(`/tasks/${id(taskId)}/remote-return`, json("POST", { targetUrl })),
   // 移除接力标记(「在本机继续」的逃生门):只清本机标记,对端那份任务不动。
   clearHandoff: (taskId: string): Promise<{ cleared: true }> =>
     request(`/tasks/${id(taskId)}/handoff`, { method: "DELETE" }),
 
   // 接力身份与配对:本机身份(拿去和对端设置页上的指纹肉眼核对)、入站来源的审批。
   // 只有被批准的机器能把任务接力进本机 —— 出站方向的信任是 handoffTargets 上的 peerFp。
+  requestHandoffApproval: (targetUrl: string): Promise<HandoffApprovalResult> =>
+    request("/handoff/request", json("POST", { targetUrl })),
   handoffIdentity: (): Promise<HandoffIdentity> => request("/handoff/identity"),
   handoffPeers: async (): Promise<HandoffPeer[]> =>
     (await request<{ peers: HandoffPeer[] }>("/handoff/peers")).peers,

@@ -1,4 +1,4 @@
-import type { ProjectView, Task } from "@ash/shared";
+import type { HandoffTarget, ProjectView, Task } from "@ash/shared";
 import {
   MagnifyingGlass,
   NotePencil,
@@ -23,6 +23,7 @@ export function WorkspaceSidebar({
   scope,
   tasks,
   selectedTaskId,
+  selectedRemoteTaskId,
   connected,
   collapsed,
   spread,
@@ -31,7 +32,9 @@ export function WorkspaceSidebar({
   onProject,
   onAllProjects,
   onTask,
+  onRemoteTask,
   onTaskStarred,
+  onHandoffFinished,
   onGitChanged,
   onOpenTerminal,
   notify,
@@ -49,6 +52,7 @@ export function WorkspaceSidebar({
   scope: TaskScope;
   tasks: Task[];
   selectedTaskId: string | null;
+  selectedRemoteTaskId: string | null;
   connected: boolean;
   collapsed: boolean;
   spread: SidebarSpread;
@@ -57,7 +61,9 @@ export function WorkspaceSidebar({
   onProject: (projectId: string) => void;
   onAllProjects: () => void;
   onTask: (task: Task) => void;
+  onRemoteTask: (task: Task, target: HandoffTarget) => void;
   onTaskStarred: (taskId: string, starredAt: number | null) => void;
+  onHandoffFinished: () => Promise<void> | void;
   /** 项目主仓的 git 状态被改过了（切分支/拉取/推送），让上层重拉一次 ProjectHealth。 */
   onGitChanged: () => void;
   onOpenTerminal: (() => void) | null;
@@ -129,9 +135,12 @@ export function WorkspaceSidebar({
         scope={scope}
         tasks={tasks}
         selectedTaskId={selectedTaskId}
+        selectedRemoteTaskId={selectedRemoteTaskId}
         spread={spread}
         onTask={onTask}
+        onRemoteTask={onRemoteTask}
         onTaskStarred={onTaskStarred}
+        onHandoffFinished={onHandoffFinished}
         notify={notify}
       />
 

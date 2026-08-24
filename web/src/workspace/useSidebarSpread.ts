@@ -3,7 +3,7 @@ import type { Task, TaskFollowUp } from "@ash/shared";
 import { api } from "../lib/api.ts";
 import { spreadBucket, type SpreadBucket } from "../lib/taskAttention.ts";
 import { inScope, type TaskScope } from "./taskScope.ts";
-import { orderedTopLevelTasks } from "./taskTreeModel.ts";
+import { orderedTopLevelTasks, visibleOnThisMachine } from "./taskTreeModel.ts";
 
 // 桶的判据搬到了 lib/taskAttention.ts（任务树排序和状态点也要读它，留在这里会成环）。
 // 这里继续对外露出同一个名字，免得每个调用点都改 import。
@@ -50,7 +50,7 @@ export function matchesSpreadFilter(task: Task, filter: SpreadFilter): boolean {
 export function spreadCounts(tasks: Task[], scope: TaskScope): SpreadCounts {
   const counts: SpreadCounts = { all: 0, starred: 0, todo: 0, run: 0, wait: 0, done: 0, accepted: 0 };
   for (const task of tasks) {
-    if (!inScope(task, scope) || task.archived || task.parentId) continue;
+    if (!inScope(task, scope) || task.archived || task.parentId || !visibleOnThisMachine(task)) continue;
     counts.all += 1;
     if (task.starredAt != null) counts.starred += 1;
     counts[spreadBucket(task)] += 1;
@@ -110,7 +110,7 @@ export function useSidebarSpread(tasks: Task[], scope: TaskScope, revision: numb
   // 只问作用域里的活任务 —— 单项目态下别的项目默认是折叠的，铺开时也看不到那些行；
   // 全部项目态下它们就在屏幕上，那三格得跟着有内容。
   const idsKey = useMemo(
-    () => tasks.filter((task) => inScope(task, scope) && !task.archived).map((task) => task.id).sort().join(","),
+    () => tasks.filter((task) => inScope(task, scope) && !task.archived && visibleOnThisMachine(task)).map((task) => task.id).sort().join(","),
     [scope, tasks],
   );
 

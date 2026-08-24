@@ -1,0 +1,17 @@
+.remote-task-header .task-detail-title { cursor: default; }
+.remote-task-refresh { display: grid; width: 28px; height: 28px; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--muted); }
+.remote-task-refresh:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
+.remote-task-route { display: grid; min-height: 52px; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 8px; border-bottom: 0.5px solid var(--line); background: color-mix(in lch, var(--raised) 68%, var(--canvas)); padding: 7px 14px; color: var(--muted); }
+.remote-task-route > svg { color: var(--faint); }
+.remote-task-route > div { display: grid; min-width: 0; gap: 2px; }
+.remote-task-route b { color: var(--ink); font-size: 11.5px; font-weight: 650; }
+.remote-task-route span { overflow: hidden; color: var(--faint); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.remote-task-route > button { height: 28px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 9px; color: var(--muted); font-size: 10.5px; box-shadow: var(--control-shadow); }
+.remote-task-route > button:hover { background: var(--overlay); color: var(--ink); }
+.remote-task-route.is-offline b,
+.remote-task-route.is-offline > svg { color: var(--red); }
+.remote-task-reply .task-reply-actions > span { margin-left: auto; }
+@media (max-width: 720px) {
+  .remote-task-route { grid-template-columns: 22px minmax(0, 1fr); }
+  .remote-task-route > button { grid-column: 2; justify-self: start; }
+}

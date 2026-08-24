@@ -13,6 +13,10 @@ const session = {
   executor: "codex@cpa·gpt-5.6-sol",
   model: "gpt-5.6-sol",
   reasoningEffort: "xhigh",
+  cliSessionId: "01a03152-a54f",
+  resumeCommand: "codex resume 01a03152-a54f",
+  usage: { input: 1_000, output: 200, cacheRead: 2_000, cacheWrite: 0, reasoning: 100, costUsd: null, turns: 1 },
+  context: { used: 28_000, window: 100_000, windowEstimated: false },
   startedAt: "2026-08-10T03:23:00.000Z",
   endedAt: "2026-08-10T14:04:00.000Z",
 } as unknown as Session;
@@ -72,6 +76,32 @@ const items = buildConversationItems([{ session, output, trace: [] }], [session]
       role: "main",
       agentType: "codex",
       event: { kind: "text", text: "又被叫醒了，继续。" },
+    },
+  },
+  // 复现刷新前的实时态：旁注到达后同一回合又报了一条工具事件。工具仍并回当前回合，
+  // 统计条与执行过程都留在旁注之前，实时结构与刷新后的落盘结构一致。
+  {
+    kind: "server",
+    id: "live:note",
+    event: {
+      type: "agent.event",
+      taskId: "t1",
+      sessionId: "s1",
+      role: "main",
+      agentType: "codex",
+      event: { kind: "system", text: "已预约完成后审查：grok4.6 · 逻辑检查 · 自动复审 1 轮。", at: "2026-08-10T07:02:00.000Z" },
+    },
+  },
+  {
+    kind: "server",
+    id: "live:tool-after-note",
+    event: {
+      type: "agent.event",
+      taskId: "t1",
+      sessionId: "s1",
+      role: "main",
+      agentType: "codex",
+      event: { kind: "tool", name: "exec", detail: "检查同类时间布局" },
     },
   },
 ] as never);

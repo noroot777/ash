@@ -26,7 +26,7 @@ export function TaskReplyRail({
       {canHandoff && (
         <button type="button" className="task-reply-rail-button" onClick={onHandoff}>
           <PaperPlaneTilt size={13} />
-          <span>接力到另一台机器</span>
+          <span>{task.handoff?.direction === "in" ? "移回..." : "接力到..."}</span>
         </button>
       )}
     </div>

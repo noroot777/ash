@@ -61,6 +61,14 @@ const withoutPinned = buildTaskTree([
 ], { unifiedPinned: true });
 assert.deepEqual(withoutPinned.map((section) => section.key), ["rest"]);
 
+const ownership = buildTaskTree([
+  task("local", "single"),
+  { ...task("out", "single"), handoff: { direction: "out", pending: false } },
+  { ...task("pending", "single"), handoff: { direction: "out", pending: true } },
+  { ...task("in", "single"), handoff: { direction: "in" } },
+], { unifiedPinned: true });
+assert.deepEqual(ownership[0].tasks.map((row) => row.id), ["local", "pending", "in"]);
+
 // —— 状态不再把列表切开，也不再提升任何一档：失败、待验收、在跑的全按更新时间混排。
 const withFailures = buildTaskTree([
   task("fresh-running", "single", { status: "running", updatedAt: "2026-08-20T10:00:00.000Z" }),

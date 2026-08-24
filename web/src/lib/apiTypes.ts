@@ -4,6 +4,8 @@ import type {
   AgentType,
   FreeWorkflowState,
   ScheduledMessage,
+  Session,
+  Task,
   TaskWorkspaceDiscardResult,
   TaskWorkspaceLeftover,
   TokenUsage,
@@ -51,6 +53,14 @@ export type DeleteTaskResult = {
 export type FreeWorkflowApiState = Omit<FreeWorkflowState, "merge">;
 
 export type TaskCommit = { sha: string; subject: string; at: string };
+
+export type RemoteTaskSnapshot = {
+  task: Task;
+  sessions: Session[];
+  persisted: Array<{ session: Session; output: string; trace: SessionTraceEntry[] }>;
+  target: { name: string; url: string };
+  returnAvailable: boolean;
+};
 
 export type SessionTraceEntry = {
   at: string;

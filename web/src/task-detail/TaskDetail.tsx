@@ -16,7 +16,7 @@ import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { conversationToMarkdown } from "./conversationModel.ts";
 import { ConversationFeed } from "./ConversationFeed.tsx";
 import { DeleteTaskDialog } from "./DeleteTaskDialog.tsx";
-import { HandoffBanner, HandoffDialog } from "./HandoffDialog.tsx";
+import { HandoffBanner } from "./HandoffDialog.tsx";
 import { QuestionCard } from "./QuestionCard.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
 import { TaskDerivationComposer } from "./TaskDerivationComposer.tsx";
@@ -127,6 +127,7 @@ export function TaskDetail({
   onTaskUpdate,
   onDeleted,
   onOpenTask,
+  onHandoff,
   initialReviewOpen = false,
   onReviewOpenChange,
   inspectorMode = "page",
@@ -139,6 +140,7 @@ export function TaskDetail({
   onTaskUpdate: (task: Task) => void;
   onDeleted: (taskId: string) => void;
   onOpenTask: (taskId: string) => void;
+  onHandoff?: (task: Task) => void;
   initialReviewOpen?: boolean;
   onReviewOpenChange?: (open: boolean) => void;
   inspectorMode?: "page" | "drawer";
@@ -153,7 +155,6 @@ export function TaskDetail({
   const [openFilePath, setOpenFilePath] = useState<string | null>(null);
   const [openScmDiff, setOpenScmDiff] = useState<ScmDiffTarget | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [handoffOpen, setHandoffOpen] = useState(false);
   const [postMergeDialogOpen, setPostMergeDialogOpen] = useState(false);
   const [derivation, setDerivation] = useState<{
     command: TaskDerivationCommand;
@@ -192,6 +193,7 @@ export function TaskDetail({
   // 接力入口:已接力出去的任务在本机是存档,除非那次还悬着(可以撤/重试)。
   const canHandoff = task.mode === "single" && task.parentId === null && !task.archived && task.queueId == null
     && (task.handoff?.direction !== "out" || !!task.handoff.pending);
+  const handedOut = task.handoff?.direction === "out" && !task.handoff.pending;
   // 与 FreeWorkflowToolbar 自己的判据一致:两处都得知道这一条 rail 里到底有没有东西,
   // 空的时候不能给 ReplyBox 挂 has-top-rail(那会白留一条内边距)。
   const freeToolbarVisible = task.workflowMode === "free" && task.mode === "single"
@@ -221,7 +223,6 @@ export function TaskDetail({
   useEffect(() => {
     setReviewOpen(initialReviewOpen);
     setDeleteOpen(false);
-    setHandoffOpen(false);
     setPostMergeDialogOpen(false);
     setDerivation(null);
     setOpenFilePath(null);
@@ -439,7 +440,7 @@ export function TaskDetail({
                     ) : undefined}
                   />
                   <DerivedTaskLinks sourceTaskId={task.id} allTasks={allTasks} onOpen={onOpenTask} />
-                  <ReplyBox
+                  {!handedOut && <ReplyBox
                     task={task}
                     hasConversation={hasConversation}
                     topRail={freeToolbarVisible || canHandoff
@@ -448,7 +449,7 @@ export function TaskDetail({
                           task={task}
                           freeToolbar={freeToolbarVisible}
                           canHandoff={canHandoff}
-                          onHandoff={() => setHandoffOpen(true)}
+                          onHandoff={() => onHandoff?.(task)}
                           notify={notify}
                         />
                       )
@@ -504,7 +505,7 @@ export function TaskDetail({
                         notify={notify}
                       />
                     ) : undefined}
-                  />
+                  />}
                 </section>
               </div>
             )}
@@ -514,14 +515,6 @@ export function TaskDetail({
                 notify={notify}
                 onDeleted={(ids) => ids.forEach(onDeleted)}
                 onClose={() => setDeleteOpen(false)}
-              />
-            )}
-            {handoffOpen && (
-              <HandoffDialog
-                task={task}
-                notify={notify}
-                onTaskUpdate={onTaskUpdate}
-                onClose={() => setHandoffOpen(false)}
               />
             )}
             {postMergeDialogOpen && postMergeTarget && (

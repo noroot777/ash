@@ -72,6 +72,7 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   const { jsonEscaped } = await import("../src/handoff-uploads.js");
   const { HandoffError } = await import("../src/handoff-types.js");
   const { handoffBlockReason } = await import("../src/handoff-guard.js");
+  const { localIdentity } = await import("../src/handoff-identity.js");
   const { resumeOrRunTask } = await import("../src/task-resume.js");
   const { createTasks } = await import("../src/task-store.js");
   const { sessionTranscriptPath } = await import("../src/transcript.js");
@@ -207,11 +208,12 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
     ((await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!).handoff!,
   ) as {
     direction: string; pending?: boolean; transferId?: string;
-    peerUrl?: string; targetProjectId?: string; autoResume?: boolean; messageIds?: string[];
+    peerUrl?: string; targetProjectId?: string; autoResume?: boolean; messageIds?: string[]; originFp?: string | null;
   };
   assert.equal(pendingMarker.direction, "out");
   assert.equal(pendingMarker.pending, true, "应答丢失后必须留下「接力未确认」的持久标记");
   assert.ok(pendingMarker.transferId, "pending 标记要带 transferId,重试才有幂等身份");
+  assert.equal(pendingMarker.originFp, localIdentity().fingerprint, "首次导出要把本机记为任务原机并冻结进 pending 标记");
   assert.ok(handoffBlockReason(JSON.stringify(pendingMarker)), "pending 态必须触发启动硬拦");
 
   // 硬拦生效:resumeOrRunTask(队列推进/调度/HTTP 路由全汇到这条路)一个副作用都不留。
@@ -264,7 +266,8 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   assert.match(git(ws.path, "log", "-1", "--format=%s"), /chore\(handoff\)/);
   const srcTask = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
   const marker = JSON.parse(srcTask.handoff!) as {
-    direction: string; peerTaskId: string; peerName: string; pending?: boolean; transferId?: string; targetProjectId?: string;
+    direction: string; peerTaskId: string; peerName: string; pending?: boolean; transferId?: string;
+    targetProjectId?: string; originFp?: string | null;
   };
   assert.equal(marker.direction, "out");
   assert.ok(!marker.pending, "确认送达后 pending 必须改写成确认态");
@@ -272,6 +275,7 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   assert.equal(marker.peerTaskId, taskId);
   assert.equal(marker.peerName, "测试机");
   assert.equal(marker.targetProjectId, peerProject.id);
+  assert.equal(marker.originFp, localIdentity().fingerprint, "确认送达后的 out 标记要继续保留原机指纹");
   const legacyMarker = { ...marker, peerUrl, targetProjectId: undefined };
   await db.update(tasks).set({ handoff: JSON.stringify(legacyMarker) }).where(eq(tasks.id, taskId));
   assert.equal(await handoffRemoteUrl(taskId), `${peerUrl}/?project=${peerProject.id}&task=${taskId}`);
@@ -285,7 +289,7 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   // 对端:任务原状态原样落库,in 标记、resumePrompt 前言齐全;正文里的附件路径已改写。
   const peerTask = await api<{
     status: string; body: string; resumePrompt: string | null; useWorktree: boolean;
-    handoff: { direction: string; sessions: number; git: string; peerName: string | null };
+    handoff: { direction: string; sessions: number; git: string; peerName: string | null; peerFp?: string | null; originFp?: string | null };
   }>(peerUrl, `/tasks/${taskId}`);
   const uploadDstPath = join(root, "uploads-dst", uploadName);
   assert.equal(peerTask.status, "paused");
@@ -295,6 +299,8 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   assert.equal(peerTask.handoff.direction, "in");
   assert.equal(peerTask.handoff.sessions, 1);
   assert.equal(peerTask.handoff.git, "bundle");
+  assert.equal(peerTask.handoff.peerFp, localIdentity().fingerprint, "导入标记应记住来源指纹，供安全移回时锁定机器");
+  assert.equal(peerTask.handoff.originFp, localIdentity().fingerprint, "导入标记应保留任务原机指纹");
   assert.match(peerTask.resumePrompt!, /【任务接力】/);
   assert.match(peerTask.resumePrompt!, /继续:完成第二步/, "原 resumePrompt 应保留在前言之后");
   const dstWs = worktreePathFor(dstRepo, taskId);
@@ -455,7 +461,7 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   });
   assert.equal(conflictRes.status, 409);
   const conflictBody = (await conflictRes.json()) as { error: string; ash?: boolean };
-  assert.match(conflictBody.error, /会话 id 与本机已有会话冲突/);
+  assert.match(conflictBody.error, /会话 id 与本机.*任务冲突/);
   assert.equal(conflictBody.ash, true, "业务拒绝应答要带 ash 标记,源机才敢回滚 pending");
   assert.equal((await fetch(`${peerUrl}/api/tasks/handoff-e2e-task-02`)).status, 404, "预检拦下的导入不该留任务行");
   // 载荷内部两条同 id 会话:预检查不出(对端库里还没有),落库时 UNIQUE 炸 → 整体回滚。
@@ -549,7 +555,8 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   // ── 9. 接力出去的任务在源机是历史存档:非启动类写入口全被 handoff 守卫 409 ──
   // 缺陷形态(第 2 轮审查实测):out+pending 任务 accept 直接 200,把接力时刻的旧
   // 提交合入本机主分支——对端还在同一分支上继续干活,回程必然更难合。给对端库里的
-  // task-03 种一个 out 标记,走真 HTTP 验各写入口;只读、清理、移除标记照常放行。
+  // task-03 种一个 out 标记,走真 HTTP 验各写入口;确认送达后只能从对端移回，源机
+  // 不能再清标记造出双跑。只有送达未知的 pending 仍保留撤销逃生门。
   const outMarker = JSON.stringify({
     direction: "out", transferId: "transfer-out-guard", pending: false,
     peerUrl: "http://192.0.2.1:1", peerName: "另一台机器", peerTaskId: "handoff-e2e-task-03",
@@ -583,9 +590,14 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   // 非 status 字段照常可改:历史存档允许整理标题/标签。
   const titleRes = await peerCall("PATCH", "/tasks/handoff-e2e-task-03", { title: "Windows 源机用例(已接力)" });
   assert.equal(titleRes.status, 200, `接力出去的任务改标题不该被拦:${await titleRes.text()}`);
-  // 唯一逃生门:移除接力标记之后,同一个写入口恢复放行。
+  const confirmedClear = await peerCall("DELETE", "/tasks/handoff-e2e-task-03/handoff");
+  assert.equal(confirmedClear.status, 409, `确认送达的存档不允许在源机恢复:${await confirmedClear.text()}`);
+  await dstDb.execute({
+    sql: "update tasks set handoff = ? where id = ?",
+    args: [JSON.stringify({ ...JSON.parse(outMarker), pending: true }), "handoff-e2e-task-03"],
+  });
   const clearRes = await peerCall("DELETE", "/tasks/handoff-e2e-task-03/handoff");
-  assert.equal(clearRes.status, 200, `移除接力标记应成功:${await clearRes.text()}`);
+  assert.equal(clearRes.status, 200, `送达未知的 pending 标记应可移除:${await clearRes.text()}`);
   const scheduleAfterClear = await peerCall(
     "PUT", "/tasks/handoff-e2e-task-03/schedule", { kind: "once", at: "2026-08-21T00:00:00.000Z", enabled: false },
   );

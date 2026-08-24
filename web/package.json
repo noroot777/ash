@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node ../scripts/check-conventions.mjs && npm run test:conversation && npm run test:task-read-state && tsc -b && vite build",
+    "build": "node ../scripts/check-conventions.mjs && npm run test:bulk-handoff && npm run test:remote-task && npm run test:handoff-dialog-lifetime && npm run test:conversation && npm run test:task-read-state && tsc -b && vite build",
     "test:image-preview": "node scripts/test-image-preview.mjs",
     "test:inspector-shortcuts": "node --experimental-strip-types scripts/test-inspector-shortcuts.mjs",
     "test:inspector-attachments": "node scripts/test-inspector-attachments.mjs",
@@ -34,6 +34,9 @@
     "test:reviewer-turn-dom": "node scripts/test-reviewer-turn-dom.mjs",
     "test:task-tree": "node --experimental-strip-types scripts/test-task-tree.mjs",
     "test:task-tree-preview": "node scripts/test-task-tree-preview.mjs",
+    "test:bulk-handoff": "node --experimental-strip-types scripts/test-bulk-handoff.mjs",
+    "test:remote-task": "node scripts/test-remote-task.mjs",
+    "test:handoff-dialog-lifetime": "node scripts/test-handoff-dialog-lifetime.mjs",
     "test:spread-filter": "node --experimental-strip-types scripts/test-spread-filter.mjs",
     "test:notes-filter": "node --experimental-strip-types scripts/test-notes-filter.mjs",
     "test:slash-match": "node --experimental-strip-types scripts/test-slash-match.mjs",

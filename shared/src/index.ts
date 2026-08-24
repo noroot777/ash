@@ -78,6 +78,7 @@ export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
 // ── 任务接力（跨机器 handoff）──────────────────────────────────────────────
 // 类型本体在 ./handoff.ts（纯类型模块）,这里只做再导出,消费方 import 路径不变。
 export type {
+  HandoffApprovalResult,
   HandoffExportResult,
   HandoffIdentity,
   HandoffPeer,

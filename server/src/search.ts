@@ -41,6 +41,16 @@ type Token =
   | { type: "or" }
   | { type: "term"; term: SearchTerm; excluded: boolean };
 
+export function visibleLocalSearchTask(handoff: string | null): boolean {
+  if (!handoff) return true;
+  try {
+    const marker = JSON.parse(handoff) as { direction?: string; pending?: boolean };
+    return marker.direction !== "out" || Boolean(marker.pending);
+  } catch {
+    return true;
+  }
+}
+
 function tokenize(query: string): Token[] {
   const tokens: Token[] = [];
   let value = "";
@@ -206,7 +216,7 @@ export async function searchAll(query: string, options: SearchOptions = {}): Pro
     db.select({ noteId: noteTasks.noteId }).from(noteTasks).innerJoin(tasks, eq(noteTasks.taskId, tasks.id)),
   ]);
   const projectMatches = (projectId: string) => !options.projectId || projectId === options.projectId;
-  const taskRows = options.type === "notes" ? [] : allTaskRows.filter((task) => projectMatches(task.projectId));
+  const taskRows = options.type === "notes" ? [] : allTaskRows.filter((task) => projectMatches(task.projectId) && visibleLocalSearchTask(task.handoff));
   const noteRows = options.type === "tasks" ? [] : allNoteRows.filter((note) => projectMatches(note.projectId));
   const projName = new Map(projRows.map((project) => [project.id, project.name] as const));
   const noteTaskCounts = new Map<string, number>();

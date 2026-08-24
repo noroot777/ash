@@ -376,13 +376,12 @@ try {
       {
         kind: "server",
         id: "same-recycle-from-sse",
-        receivedAt: "2026-07-30T01:30:00.020Z",
         event: {
           type: "agent.event",
           taskId: task.id,
           sessionId: session.id,
           role: "lead",
-          event: { kind: "system", text: recycleNote },
+          event: { kind: "system", text: recycleNote, at: "2026-07-30T01:30:00.020Z" },
         },
       },
     ],
@@ -401,13 +400,12 @@ try {
     [{
       kind: "server",
       id: "later-recycle",
-      receivedAt: "2026-07-30T02:00:00.000Z",
       event: {
         type: "agent.event",
         taskId: task.id,
         sessionId: session.id,
         role: "lead",
-        event: { kind: "system", text: recycleNote },
+        event: { kind: "system", text: recycleNote, at: "2026-07-30T02:00:00.000Z" },
       },
     }],
   );

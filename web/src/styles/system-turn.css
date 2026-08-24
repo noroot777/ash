@@ -33,7 +33,7 @@
   font-size: 11px;
   line-height: 1.6;
 }
-.conversation-note time { margin-left: 7px; opacity: 0.72; font-variant-numeric: tabular-nums; }
+.conversation-note time { margin-left: 7px; opacity: 0.72; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .conversation-note.is-error {
   border-left-color: color-mix(in lch, var(--red) 45%, var(--line2));
   color: color-mix(in lch, var(--red) 76%, var(--faint));

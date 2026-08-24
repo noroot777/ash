@@ -14,6 +14,126 @@
   margin-top: 14px;
 }
 
+.workspace-handoff-machines {
+  margin-top: 14px;
+}
+
+.workspace-handoff-machine-list {
+  display: grid;
+  gap: 2px;
+}
+
+.workspace-handoff-machine-group {
+  min-width: 0;
+}
+
+.workspace-handoff-machine {
+  display: grid;
+  min-height: 38px;
+  grid-template-columns: 22px minmax(0, 1fr) 28px;
+  align-items: center;
+  color: var(--muted);
+}
+
+.workspace-handoff-machine > svg {
+  justify-self: center;
+  color: var(--faint);
+}
+
+.workspace-handoff-machine-copy {
+  display: grid;
+  min-width: 0;
+  line-height: 1.1;
+}
+
+.workspace-handoff-machine-copy b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-handoff-machine-copy b {
+  color: color-mix(in lch, var(--ink) 58%, var(--muted));
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.workspace-handoff-machine > button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--faint);
+  padding: 0;
+  opacity: 0.72;
+  transition: background-color 130ms ease-out, color 130ms ease-out, opacity 130ms ease-out;
+}
+
+.workspace-handoff-machine > button:hover,
+.workspace-handoff-machine > button:focus-visible {
+  background: color-mix(in lch, var(--ink) 8%, transparent);
+  color: var(--muted);
+  opacity: 1;
+}
+
+.workspace-handoff-machine > button:disabled {
+  cursor: not-allowed;
+  background: transparent;
+  color: var(--faint);
+  opacity: 0.2;
+}
+
+.workspace-sidebar.is-spread .workspace-handoff-machine {
+  width: calc(var(--spread-title-w) + 22px);
+}
+
+.workspace-handoff-task-list {
+  display: grid;
+  gap: 1px;
+  margin: 0 0 3px 22px;
+}
+
+.workspace-handoff-task {
+  display: grid;
+  min-width: 0;
+  min-height: 30px;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: center;
+  border-radius: 7px;
+  color: color-mix(in lch, var(--ink) 52%, var(--muted));
+  padding: 0 4px 0 2px;
+  text-decoration: none;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.workspace-handoff-task > i {
+  width: 5px;
+  height: 5px;
+  justify-self: center;
+  border-radius: 50%;
+  background: var(--faint);
+  opacity: 0.7;
+}
+
+.workspace-handoff-task > span {
+  overflow: hidden;
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-handoff-task:hover,
+.workspace-handoff-task:focus-visible,
+.workspace-handoff-task.is-selected {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
 .workspace-task-section-title {
   display: flex;
   height: 34px;

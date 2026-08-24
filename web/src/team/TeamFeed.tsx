@@ -16,21 +16,30 @@ import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { durationBetween, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
 import { executorLabel, parseInbound, teamLeadLabel, workerStatusText, type InboundMessage, type TeamFeedRow } from "./teamModel.ts";
 
-function AgentRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"] }) {
+function AgentRow({
+  row,
+  hideTime,
+}: {
+  row: Extract<TeamFeedRow, { kind: "conv" }>["item"];
+  hideTime?: boolean;
+}) {
   if (row.kind !== "agent") return null;
   const duration = durationBetween(row.at, row.endedAt);
+  const compactContinuation = !!row.continuation && !!hideTime && !duration;
   return (
     <article className={`team-feed-agent${row.continuation ? " is-continuation" : ""}`}>
-      <header>
-        {!row.continuation && (
-          <span className="agent-run-identity">
-            <b>{row.label}</b>
-            <AgentRunMeta run={row.run} />
-          </span>
-        )}
-        {row.at && <time>{formatInstant(row.at)}</time>}
-        {duration && <small className="task-turn-duration" title={`开始 ${formatInstant(row.at)} · 结束 ${formatInstant(row.endedAt)}`}>· ⏱ {duration} 用时</small>}
-      </header>
+      {!compactContinuation && (
+        <header>
+          {!row.continuation && (
+            <span className="agent-run-identity">
+              <b>{row.label}</b>
+              <AgentRunMeta run={row.run} />
+            </span>
+          )}
+          {!hideTime && row.at && <time>{formatInstant(row.at)}</time>}
+          {duration && <small className="task-turn-duration" title={`开始 ${formatInstant(row.at)} · 结束 ${formatInstant(row.endedAt)}`}>{row.continuation ? "" : "· "}⏱ {duration} 用时</small>}
+        </header>
+      )}
       {row.segments.map((segment, index) => (
         <section className="task-agent-segment" key={segment.id}>
           <ExecutionDetails events={segment.events} running={!row.endedAt && index === row.segments.length - 1} />
@@ -168,6 +177,21 @@ export function TeamFeed({
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const byId = new Map(workers.map((worker) => [worker.id, worker]));
+  const hiddenTimes = new Set<string>();
+  let previousConversationItem: Extract<TeamFeedRow, { kind: "conv" }>["item"] | null = null;
+  for (const row of rows) {
+    if (row.kind !== "conv") continue;
+    const item = row.item;
+    if (
+      item.kind === "agent"
+      && item.continuation
+      && item.at
+      && previousConversationItem?.kind === "event"
+      && previousConversationItem.variant === "note"
+      && previousConversationItem.at === item.at
+    ) hiddenTimes.add(item.id);
+    previousConversationItem = item;
+  }
   // 派活卡片和事件行都不是「消息」:夹在末尾不该把「已收到你的消息」冲掉。
   const activityPhase = runActivityPhase(
     task.status,
@@ -181,7 +205,7 @@ export function TeamFeed({
           {rows.map((row) => {
             if (row.kind === "batch") return <BatchCard key={row.key} batch={row.batch} allWorkers={workers} onOpenWorker={onOpenWorker} indicatorForTask={indicatorForTask} />;
             const item = row.item;
-            if (item.kind === "agent") return <AgentRow key={row.key} row={item} />;
+            if (item.kind === "agent") return <AgentRow key={row.key} row={item} hideTime={hiddenTimes.has(item.id)} />;
             if (item.kind === "user") return <UserRow key={row.key} row={item} />;
             const inbound = parseInbound(item.text);
             if (inbound) {
@@ -208,7 +232,12 @@ export function TeamFeed({
             if (item.variant === "boundary") {
               return <div className={`team-feed-event${item.tone === "error" ? " is-error" : ""}`} key={row.key}><span />{item.text}<span /></div>;
             }
-            return <p className={`conversation-note${item.tone === "error" ? " is-error" : ""}`} key={row.key}>{item.text}</p>;
+            return (
+              <p className={`conversation-note${item.tone === "error" ? " is-error" : ""}${item.verify ? " is-verify" : ""}`} key={row.key}>
+                {item.text}
+                {item.at && <time>{formatInstant(item.at)}</time>}
+              </p>
+            );
           })}
           {activityPhase && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} executor={teamLeadLabel(task)} queuePosition={task.queuePosition} />}
         </section>

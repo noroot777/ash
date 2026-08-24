@@ -26,8 +26,16 @@ const STATUS_ORDER: TaskStatus[] = [
   "running", "idle", "paused", "awaiting_review", "queued", "backlog", "done", "failed", "canceled",
 ];
 
-function InspectorRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return <div className="task-inspector-row"><span>{label}</span><div>{children}</div></div>;
+function InspectorRow({
+  label,
+  children,
+  danger = false,
+}: {
+  label: string;
+  children: React.ReactNode;
+  danger?: boolean;
+}) {
+  return <div className={`task-inspector-row${danger ? " is-danger" : ""}`}><span>{label}</span><div>{children}</div></div>;
 }
 
 function ResumePromptEditor({
@@ -347,7 +355,11 @@ export function TaskInspector({
               </span>
             </InspectorRow>
           ))}
-          {latestSession?.branch && <InspectorRow label="分支"><code>{latestSession.branch}</code></InspectorRow>}
+          {latestSession?.branch && (
+            <InspectorRow label="分支" danger={!task.useWorktree}>
+              <code>{latestSession.branch}</code>
+            </InspectorRow>
+          )}
           {latestSession?.worktreePath && <InspectorRow label="worktree"><code>{latestSession.worktreePath}</code></InspectorRow>}
           {latestSession?.resumeCommand && (
             <button className="task-inspector-action" type="button" onClick={async () => {

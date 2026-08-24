@@ -4,6 +4,21 @@
 .handoff-dialog { width: min(540px, 94vw); }
 .handoff-dialog > p { margin: 12px 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 
+.handoff-quick-add { display: grid; gap: 7px; margin: 12px 0; }
+.handoff-quick-add p { margin: 0 0 4px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.handoff-quick-add label { color: var(--faint); font-size: 10.5px; }
+.handoff-quick-add input {
+  height: 32px;
+  border: 1px solid var(--line2);
+  border-radius: 8px;
+  background: var(--canvas);
+  padding: 0 10px;
+  outline: 0;
+  color: var(--ink);
+}
+.handoff-quick-add input:focus { border-color: var(--accent); }
+.handoff-quick-add > button { justify-self: end; margin-top: 4px; }
+
 .handoff-field { display: grid; gap: 5px; margin: 10px 0; }
 .handoff-field label { color: var(--faint); font-size: 10.5px; }
 .handoff-field select {
@@ -75,6 +90,35 @@
 .handoff-target-row { gap: 7px; }
 .handoff-target-row .ui-input { flex: 1 1 0; min-width: 0; }
 .handoff-target-row .handoff-target-name { flex: 0 1 180px; }
+.handoff-target-request { flex: none; }
+
+.handoff-approval-state {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  border: 1px solid var(--line2);
+  border-radius: 7px;
+  background: var(--canvas);
+  padding: 3px 8px;
+  color: var(--faint);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+.handoff-approval-state.is-pending {
+  border-color: color-mix(in lch, var(--amber) 40%, var(--line));
+  background: color-mix(in lch, var(--amber) 10%, var(--panel));
+  color: var(--amber);
+}
+.handoff-approval-state.is-approved {
+  border-color: color-mix(in lch, var(--accent) 35%, var(--line));
+  background: color-mix(in lch, var(--accent) 8%, var(--panel));
+  color: var(--accent);
+}
+.handoff-approval-state.is-blocked {
+  border-color: color-mix(in lch, var(--red) 35%, var(--line));
+  background: color-mix(in lch, var(--red) 8%, var(--panel));
+  color: var(--red);
+}
 
 /* 身份指纹芯片:等宽字体,和另一台机器设置页上那串肉眼对得起来。 */
 .handoff-fingerprint {
@@ -95,7 +139,7 @@
 button.handoff-fingerprint { cursor: pointer; }
 button.handoff-fingerprint:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
-/* 还没配对过:不是错误,只是「首次接力后才会记住」,所以用最弱的一档。 */
+/* 还没配对过:不是错误,只是「首次申请后才会记住」,所以用最弱的一档。 */
 .handoff-fingerprint.is-unknown { border-style: dashed; color: var(--faint); font-family: inherit; }
 
 /* 接力来源(入站信任表)。待批准的那条要显眼——它是唯一需要用户动手的一档。 */
@@ -149,3 +193,275 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
 
 /* 接力载荷上限:数字输入框不需要跟着行宽走，够放三位数加单位就行。 */
 .handoff-body-limit { flex: 0 0 96px; width: 96px; text-align: right; }
+
+/* 系统级入站申请占一行布局空间，出现时把工作区整体下推，不遮任何操作面。 */
+.workspace-system-layout {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+.workspace-system-layout > .workspace-shell,
+.workspace-system-layout > .settings-shell { height: 100%; min-height: 0; }
+.handoff-approval-slot { min-height: 0; }
+
+.handoff-approval-alert {
+  position: relative;
+  z-index: 260;
+  display: grid;
+  width: 100%;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid color-mix(in lch, var(--amber) 55%, var(--line));
+  border-width: 0 0 1px;
+  background: var(--panel);
+  padding: 12px 16px;
+  box-shadow: 0 7px 22px rgb(30 24 10 / 10%);
+  animation: handoff-approval-enter 180ms ease-out both;
+}
+.handoff-approval-alert-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 11px;
+  background: color-mix(in lch, var(--amber) 18%, var(--panel));
+  color: var(--amber);
+}
+.handoff-approval-alert-copy { min-width: 0; }
+.handoff-approval-alert-copy strong { color: var(--ink); font-size: 13px; }
+.handoff-approval-alert-copy p { margin: 3px 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+.handoff-approval-alert-copy small {
+  color: var(--faint);
+  font-size: 10px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+.handoff-approval-alert-actions { display: flex; align-items: center; gap: 4px; }
+
+@keyframes handoff-approval-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (max-width: 760px) {
+  .handoff-approval-alert {
+    grid-template-columns: auto minmax(0, 1fr);
+    padding: 10px 12px;
+  }
+  .handoff-approval-alert-actions { grid-column: 1 / -1; justify-content: flex-end; }
+  .handoff-target-row { flex-wrap: wrap; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .handoff-approval-alert { animation: none; }
+}
+.handoff-bulk-body {
+  display: grid;
+  gap: 11px;
+  margin-top: 13px;
+}
+
+.handoff-bulk-body p {
+  margin: 0;
+}
+
+.handoff-bulk-scope {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.handoff-bulk-peer {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  border: 1px solid color-mix(in lch, var(--green) 24%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in lch, var(--green) 6%, var(--panel));
+  padding: 9px 10px;
+  color: color-mix(in lch, var(--green) 76%, var(--ink));
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.handoff-bulk-peer > svg,
+.handoff-bulk-warning > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.handoff-bulk-peer.is-warn {
+  border-color: color-mix(in lch, var(--amber) 25%, var(--line));
+  background: color-mix(in lch, var(--amber) 8%, var(--panel));
+  color: color-mix(in lch, var(--amber) 72%, var(--ink));
+}
+
+.handoff-bulk-field {
+  display: grid;
+  gap: 6px;
+}
+
+.handoff-bulk-field > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.handoff-bulk-field select {
+  width: 100%;
+  height: 34px;
+  border: 1px solid var(--line2);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0 9px;
+  color: var(--ink);
+  font: inherit;
+}
+
+.handoff-bulk-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.handoff-bulk-warning,
+.handoff-bulk-error {
+  border-radius: 9px;
+  padding: 9px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.handoff-bulk-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  background: color-mix(in lch, var(--amber) 10%, var(--panel));
+  color: color-mix(in lch, var(--amber) 72%, var(--ink));
+}
+
+.handoff-bulk-error {
+  background: color-mix(in lch, var(--red) 9%, var(--panel));
+  color: var(--red);
+}
+
+.handoff-bulk-skipped {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--raised);
+  padding: 8px 10px;
+}
+
+.handoff-bulk-skipped summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.handoff-bulk-skipped ul,
+.handoff-bulk-failures {
+  display: grid;
+  gap: 7px;
+  max-height: 150px;
+  overflow: auto;
+  margin: 9px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.handoff-bulk-skipped li,
+.handoff-bulk-failures li {
+  display: grid;
+  gap: 2px;
+  font-size: 10.5px;
+}
+
+.handoff-bulk-skipped li b,
+.handoff-bulk-failures li b {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.handoff-bulk-skipped li span,
+.handoff-bulk-failures li span {
+  color: var(--faint);
+}
+
+.handoff-bulk-summary,
+.handoff-bulk-notes {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.handoff-bulk-notes {
+  color: color-mix(in lch, var(--amber) 68%, var(--muted));
+}
+
+.handoff-bulk-progress {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 9px;
+  background: color-mix(in lch, var(--accent) 8%, var(--panel));
+  padding: 9px 10px;
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.handoff-bulk-progress span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.handoff-bulk-failures {
+  margin-top: 0;
+  border: 1px solid color-mix(in lch, var(--red) 24%, var(--line));
+  border-radius: 9px;
+  padding: 9px 10px;
+}
+
+.handoff-bulk-blocked {
+  border: 1px solid color-mix(in lch, var(--red) 24%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in lch, var(--red) 6%, var(--panel));
+  padding: 9px 10px;
+}
+
+.handoff-bulk-blocked > p {
+  color: var(--red);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.handoff-bulk-blocked ul {
+  display: grid;
+  gap: 7px;
+  max-height: 140px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.handoff-bulk-blocked li {
+  display: grid;
+  gap: 2px;
+  font-size: 10.5px;
+}
+
+.handoff-bulk-blocked li span {
+  color: var(--faint);
+}
