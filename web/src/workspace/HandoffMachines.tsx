@@ -42,6 +42,11 @@ function BulkHandoffDialog({
   // 对话框打开时冻结本次批量清单。正式接力会让 tasks 通过 SSE 实时变成 out；如果继续
   // 跟着重算，成功页会把刚搬走的任务反列成「不可接力」，甚至冒出“没有任务”的警告。
   const [{ eligible, skipped }] = useState(() => partitionBulkHandoffTasks(tasks, project.id, target.peerFp));
+  const returnOnly = eligible.length > 0 && eligible.every(
+    (task) => task.handoff?.direction === "in" && Boolean(task.handoff.peerFp)
+      && task.handoff.peerFp === target.peerFp,
+  );
+  const actionName = returnOnly ? "移回" : "接力";
   const sample = eligible[0] ?? null;
   const mounted = useRef(true);
   const autoProbeAttempted = useRef(false);
@@ -113,7 +118,7 @@ function BulkHandoffDialog({
       setApproval(nextApproval);
       const status = nextApproval.peer?.peerStatus;
       if (status === "pending") {
-        notify(`已向「${target.name}」发送接力申请，等待对方接受`);
+        notify(`已向「${target.name}」发送${actionName}申请，等待对方接受`);
         return;
       }
       if (status === "blocked") {
@@ -217,19 +222,21 @@ function BulkHandoffDialog({
   const confirmLabel = result
     ? "完成"
     : !firstProbe || blocked
-      ? target.peerFp && !blocked ? "重新检查" : blocked ? "检查申请状态" : "发送接力申请"
+      ? target.peerFp && !blocked ? `重新检查${returnOnly ? "来源机" : "目标机"}` : blocked ? `检查${actionName}申请状态` : `发送${actionName}申请`
       : !checkedAll
-        ? `${preflightFailures.length > 0 ? "重新检查" : "检查"} ${eligible.length} 个任务`
+        ? `${preflightFailures.length > 0 ? "重新检查" : "检查"} ${eligible.length} 个${actionName}任务`
         : runningCount > 0
-          ? `停止并接力 ${eligible.length} 个任务`
-          : `接力 ${eligible.length} 个任务`;
+          ? `停止并${actionName} ${eligible.length} 个任务`
+          : `${actionName} ${eligible.length} 个任务`;
   const message = result
-    ? `已完成批量接力：成功 ${result.successes.length} 个，失败 ${result.failures.length} 个。`
-    : `把本机「${project.name}」项目中 ${eligible.length} 个可接力任务顺序移到「${target.name}」。`;
+    ? `已完成批量${actionName}：成功 ${result.successes.length} 个，失败 ${result.failures.length} 个。`
+    : returnOnly
+      ? `把本机「${project.name}」项目中 ${eligible.length} 个接入任务顺序移回「${target.name}」。`
+      : `把本机「${project.name}」项目中 ${eligible.length} 个可接力任务顺序移到「${target.name}」。`;
 
   return (
     <ConfirmDialog
-      title={`接力到 ${target.name}`}
+      title={`${returnOnly ? "移回到" : "接力到"} ${target.name}`}
       message={message}
       confirmLabel={confirmLabel}
       busy={busy}
@@ -239,9 +246,9 @@ function BulkHandoffDialog({
       onConfirm={confirm}
     >
       <div className="handoff-bulk-body">
-        <p className="handoff-bulk-scope">会迁移完整 CLI 会话、附件与可带走的 Git 状态；本机任务确认送达后会从任务列表消失。</p>
+        <p className="handoff-bulk-scope">会迁移完整 CLI 会话、附件与可带走的 Git 状态；本机任务确认{actionName}后会从任务列表消失。</p>
         {runningCount > 0 && (
-          <p className="handoff-bulk-warning"><Warning size={13} aria-hidden="true" />其中 {runningCount} 个任务正在运行或排队，正式接力会先停止它们。</p>
+          <p className="handoff-bulk-warning"><Warning size={13} aria-hidden="true" />其中 {runningCount} 个任务正在运行或排队，正式{actionName}会先停止它们。</p>
         )}
         {!eligible.length && <p className="handoff-bulk-warning">这个项目目前没有可批量接力的顶层单飞任务。展开下方列表可查看原因。</p>}
         {skipped.length > 0 && (
@@ -289,7 +296,7 @@ function BulkHandoffDialog({
         {firstProbe && !blocked && (
           <label className="handoff-bulk-toggle">
             <input type="checkbox" checked={autoResume} disabled={busy} onChange={(event) => setAutoResume(event.target.checked)} />
-            <span>迁移完成后在目标机自动续跑</span>
+            <span>{actionName}完成后在目标机自动续跑</span>
           </label>
         )}
         {blocked && <p className="handoff-bulk-warning">目标机尚未批准本机。请在目标机接受申请后，再点击“检查申请状态”。</p>}
@@ -300,7 +307,7 @@ function BulkHandoffDialog({
             <span>
               {phase === "approval"
                 ? "正在联系目标机…"
-                : `${phase === "transferring" ? "正在接力" : "正在预检"} · ${progress!.done + 1}/${progress!.total} · ${progress!.title}`}
+                : `${phase === "transferring" ? `正在${actionName}` : "正在预检"} · ${progress!.done + 1}/${progress!.total} · ${progress!.title}`}
             </span>
           </div>
         )}

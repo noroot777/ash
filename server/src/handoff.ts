@@ -263,6 +263,12 @@ export async function exportHandoff(
     throw new HandoffError("任务已经接力出去了,别重复接力（对端已有一份同 id 任务）", 409);
   }
   const pendingRetry = prevMarker?.direction === "out" && prevMarker.pending ? prevMarker : null;
+  const localFingerprint = localIdentity().fingerprint;
+  // 原机指纹随任务走。旧版 in 标记没有 originFp 时，peerFp 就是它要移回的原机；
+  // 本机普通/returned 任务缺字段时，本机就是原机。pending 新标记会冻结此值供重试。
+  const originFingerprint = prevMarker?.originFp
+    ?? (prevMarker?.direction === "in" ? prevMarker.peerFp : null)
+    ?? localFingerprint;
   // 收口重试只能**原样重放**:transferId 是幂等身份,换目标机/项目等于拿同一张身份证
   // 往第二台机器投递——两边各自导入成功,同一任务被复制成多份(审查实测)。目标参数
   // 一律以 pending 标记冻结的第一次为准;确要换目标,先在横幅上移除接力标记(终止这次
@@ -355,7 +361,8 @@ export async function exportHandoff(
       const manifest: HandoffManifest = {
         version: 1,
         sourceHost: hostname(),
-        sourceFingerprint: localIdentity().fingerprint,
+        sourceFingerprint: localFingerprint,
+        originFingerprint,
         targetProjectId: targetProject.id,
         transferId,
         autoResume,
@@ -424,6 +431,7 @@ export async function exportHandoff(
         peerUrl: targetUrl,
         peerName: opts.targetName ?? ping.host,
         peerFp: peer?.fingerprint ?? null,
+        originFp: originFingerprint,
         peerTaskId: taskId,
         at: now(),
         sessions: found.size,
@@ -474,6 +482,7 @@ export async function exportHandoff(
         peerUrl: targetUrl,
         peerName: opts.targetName ?? ping.host,
         peerFp: peer?.fingerprint ?? null,
+        originFp: originFingerprint,
         peerTaskId: result.taskId,
         at: now(),
         sessions: found.size,

@@ -30,6 +30,7 @@ import { publishPendingMessages } from "./pending-messages.js";
 import { createTasks, publishTaskUpdated } from "./task-store.js";
 import { deleteTaskAssociations } from "./task-routes.js";
 import { resumeOrRunTask } from "./task-resume.js";
+import { localIdentity } from "./handoff-identity.js";
 import { id, now } from "./util.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -57,6 +58,10 @@ function validate(input: unknown): HandoffManifest {
   const sourceFingerprint = (m as { sourceFingerprint?: unknown }).sourceFingerprint;
   if (sourceFingerprint != null && (!isStr(sourceFingerprint) || !/^[0-9a-f]{64}$/.test(sourceFingerprint))) {
     throw new HandoffError("sourceFingerprint 非法");
+  }
+  const originFingerprint = (m as { originFingerprint?: unknown }).originFingerprint;
+  if (originFingerprint != null && (!isStr(originFingerprint) || !/^[0-9a-f]{64}$/.test(originFingerprint))) {
+    throw new HandoffError("originFingerprint 非法");
   }
   // transferId 宽容校验:老版本导出没有这个字段,缺了照收(只是失去幂等重放能力)。
   const tid = (m as { transferId?: unknown }).transferId;
@@ -256,36 +261,41 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
     .select({ id: tasks.id, handoff: tasks.handoff })
     .from(tasks)
     .where(eq(tasks.id, m.task.id))).at(0);
+  let existingMarker: TaskHandoff | null = null;
   let returning = false;
   if (existing) {
     // 应答丢失后的原样重试:同一个 transferId 说明就是同一次接力,按成功收口、零副作用,
     // 让源机把 pending 标记改写成「已接力」。没有 transferId(老版本)或对不上才是真冲突。
-    let h: TaskHandoff | null = null;
     if (existing.handoff) {
-      try { h = JSON.parse(existing.handoff) as TaskHandoff; } catch { h = null; }
+      try { existingMarker = JSON.parse(existing.handoff) as TaskHandoff; } catch { existingMarker = null; }
     }
-    if ((h?.direction === "in" || h?.direction === "returned") && m.transferId && h.transferId === m.transferId) {
+    if ((existingMarker?.direction === "in" || existingMarker?.direction === "returned")
+      && m.transferId && existingMarker.transferId === m.transferId) {
       return {
         ok: true,
         taskId: m.task.id,
         workspace: null,
-        sessionsMigrated: h.sessions,
+        sessionsMigrated: existingMarker.sessions,
         // 收口应答报的是**这次接力当初导入时的事实**(存在 in 标记里),不是本次重放
         // 有没有再触发续跑(幂等收口零副作用,从不重复起跑)。老标记没存这个字段时
         // 按 false 报——宁可让源机以为没续跑,也不能谎报「已在对端跑起来了」。
-        autoResume: h.autoResume ?? false,
+        autoResume: existingMarker.autoResume ?? false,
         idempotent: true,
         notes: ["本机已有这次接力导入的任务(应答曾丢失,本次为幂等收口),未重复导入"],
       };
     }
     // 安全移回：本机这行必须正是之前交给当前来源机器的确认态存档。两边指纹一致才
     // 允许用返回的完整任务覆盖它；第三台机器拿同 id 来仍按冲突拒绝。
-    returning = h?.direction === "out" && !h.pending && Boolean(h.peerFp)
-      && h.peerFp === m.sourceFingerprint;
+    returning = existingMarker?.direction === "out" && !existingMarker.pending && Boolean(existingMarker.peerFp)
+      && existingMarker.peerFp === m.sourceFingerprint;
     if (!returning) {
       throw new HandoffError("本机已有同 id 任务，且不是从原接力目标安全移回。请在当前持有任务的机器上选择“移回”。", 409);
     }
   }
+  // 优先信本机历史标记里的原机指纹；旧标记没有时，才接受签名 manifest 携带的值。
+  // returning 只表示“可安全覆盖旧存档”，并不等于回到原机：第二次 A→B 时 B 也有 out 存档。
+  const originFingerprint = existingMarker?.originFp ?? m.originFingerprint ?? null;
+  const returnedHome = returning && originFingerprint === localIdentity().fingerprint;
   // 会话 id 冲突预检:必须在任何副作用之前拦下,否则落库落到一半 UNIQUE 炸掉,
   // 留下没有会话的半截任务(审查实测:import 500 后 GET 200、重试永远 409)。
   if (m.sessions.length) {
@@ -425,9 +435,9 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
   }
 
   const marker: TaskHandoff = {
-    // 首次接到别人交来的任务要锁回来源机；安全移回原机后只留 returned 历史标记，
-    // 任务恢复成原机普通任务，可再次接力到任意已注册主机。
-    direction: returning ? "returned" : "in",
+    // 覆盖旧 out 存档不一定是回家：任务再次交给曾持有机器时也会命中 returning。
+    // 只有接收机就是 originFp 对应的原机才解除来源锁；否则仍是 in，只能移回原机。
+    direction: returnedHome ? "returned" : "in",
     // 源机生成的接力身份证:应答丢失后源机原样重试时,靠它把「已有同 id 任务」识别成
     // 同一次接力并幂等收口(见上面 existing 分支)。
     transferId: m.transferId ?? null,
@@ -437,6 +447,7 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
     peerUrl: null,
     peerName: m.sourceHost || null,
     peerFp: m.sourceFingerprint ?? null,
+    originFp: originFingerprint,
     peerTaskId: m.task.id,
     at: now(),
     sessions: migrated.length,
@@ -543,7 +554,9 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
         if (preservedNoteLinks.length) await tx.insert(noteTasks).values(preservedNoteLinks);
       });
       await publishTaskUpdated(m.task.id);
-      notes.push("任务已安全移回来源机器，本机原历史存档已由返回的最新上下文替换");
+      notes.push(returnedHome
+        ? "任务已安全移回原机，本机原历史存档已由返回的最新上下文替换"
+        : "任务已接到本机，本机旧存档已由最新上下文替换；这仍是接入任务，只能移回原机");
     } catch (e) {
       throw new HandoffError(
         `移回落库失败，事务已回滚，本机原历史存档仍完整保留。原始错误:${(e instanceof Error ? e.message : String(e)).slice(0, 300)}`,

@@ -46,7 +46,9 @@ try {
   const { projects, queueItems, sessions, tasks } = await import("../src/db/schema.js");
   const { importHandoff } = await import("../src/handoff-import.js");
   const { applyUploadRewrites, buildUploadRewrites } = await import("../src/handoff-uploads.js");
+  const { localIdentity } = await import("../src/handoff-identity.js");
   await ensureSchema();
+  const localFp = localIdentity().fingerprint;
 
   // ── 1. 纯函数:POSIX 源机 → Windows 目标机的上下文感知改写 ────────────────
   // 缺陷形态(第 2 轮审查实测):POSIX 路径没有需转义字符,两种形态的 from 完全相同,
@@ -96,7 +98,7 @@ try {
   const winUpName = "up002xyz-shot.txt";
   const winUpPath = `D:\\ai_workspace\\ash\\data\\uploads\\${winUpName}`;
   const upManifest = (autoResume: boolean) => ({
-    version: 1, sourceHost: "win-src", sourceFingerprint: "a".repeat(64), sourceWorkspace: null,
+    version: 1, sourceHost: "win-src", sourceFingerprint: "a".repeat(64), originFingerprint: "a".repeat(64), sourceWorkspace: null,
     targetProjectId: projectId, autoResume, git: null, transferId: "transfer-up-1",
     task: {
       id: "handoff-local-task-01", title: "Windows 附件用例",
@@ -115,6 +117,7 @@ try {
   assert.equal(readFileSync(winUpLocal, "utf8"), "win-upload\n", "附件本体应落到本机 uploads 目录");
   const upTask = (await db.select().from(tasks).where(eq(tasks.id, "handoff-local-task-01"))).at(0)!;
   assert.equal(JSON.parse(upTask.handoff!).peerFp, "a".repeat(64), "来源指纹应进入 in 标记");
+  assert.equal(JSON.parse(upTask.handoff!).originFp, "a".repeat(64), "原机指纹应随任务进入 in 标记");
   assert.ok(upTask.body!.includes(winUpLocal), "正文里的原始形态路径应改写为本机路径");
   assert.ok(!upTask.body!.includes("D:"), "正文不该残留源机路径");
   const upArtifact = readFileSync(join(root, "runs", "handoff-local-task-01", "history.jsonl"), "utf8");
@@ -128,7 +131,7 @@ try {
   await db.insert(tasks).values({
     id: returnId, projectId, title: "本机历史存档", body: "旧上下文", status: "done",
     handoff: JSON.stringify({
-      direction: "out", pending: false, peerFp: returningFp, peerUrl: "http://returning.invalid",
+      direction: "out", pending: false, peerFp: returningFp, originFp: localFp, peerUrl: "http://returning.invalid",
       peerName: "原目标机", peerTaskId: returnId, at: "2026-08-19T13:00:00.000Z", sessions: 0, git: "none",
     }),
     createdAt: "2026-08-19T13:00:00.000Z", updatedAt: "2026-08-19T13:00:00.000Z",
@@ -137,6 +140,7 @@ try {
     ...upManifest(false),
     sourceHost: "原目标机",
     sourceFingerprint: returningFp,
+    originFingerprint: localFp,
     transferId: "transfer-return-1",
     task: { ...upManifest(false).task, id: returnId, title: "移回后的最新任务", body: "远端产生的新上下文" },
     uploads: [],
@@ -147,8 +151,34 @@ try {
   const returnedRow = (await db.select().from(tasks).where(eq(tasks.id, returnId))).at(0)!;
   assert.equal(returnedRow.title, "移回后的最新任务");
   assert.equal(JSON.parse(returnedRow.handoff!).direction, "returned", "移回后本机恢复为可自由接力的原机任务");
+  assert.equal(JSON.parse(returnedRow.handoff!).originFp, localFp, "移回后仍要保留任务原机指纹");
   const returnedReplay = await importHandoff(returnManifest);
   assert.equal(returnedReplay.idempotent, true, "移回应答丢失后仍应按同 transferId 幂等收口");
+
+  // A→B→A 后再次 A→B：B 虽有自己上次移回时留下的 out 存档，但 B 不是原机，
+  // 覆盖存档后仍必须是 in，不能误写 returned 放开第三台目标。
+  const secondVisitId = "handoff-return-04";
+  const foreignOriginFp = "d".repeat(64);
+  await db.insert(tasks).values({
+    id: secondVisitId, projectId, title: "曾持有但不是原机", body: "旧存档", status: "done",
+    handoff: JSON.stringify({
+      direction: "out", pending: false, peerFp: returningFp, originFp: foreignOriginFp,
+      peerUrl: "http://returning.invalid", peerName: "当前持有机", peerTaskId: secondVisitId,
+      at: "2026-08-19T13:05:00.000Z", sessions: 0, git: "none",
+    }),
+    createdAt: "2026-08-19T13:05:00.000Z", updatedAt: "2026-08-19T13:05:00.000Z",
+  });
+  await importHandoff({
+    ...returnManifest,
+    transferId: "transfer-return-4",
+    originFingerprint: foreignOriginFp,
+    task: { ...returnManifest.task, id: secondVisitId, title: "第二次接到的最新任务" },
+  });
+  const secondVisitMarker = JSON.parse(
+    ((await db.select().from(tasks).where(eq(tasks.id, secondVisitId))).at(0)!).handoff!,
+  ) as { direction: string; originFp?: string | null };
+  assert.equal(secondVisitMarker.direction, "in", "曾持有机器第二次接到任务仍只能移回原机");
+  assert.equal(secondVisitMarker.originFp, foreignOriginFp, "第二次接力不能改写任务原机指纹");
 
   const mismatchId = "handoff-return-02";
   await db.insert(tasks).values({

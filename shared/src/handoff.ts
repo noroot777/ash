@@ -96,6 +96,9 @@ export interface TaskHandoff {
   // 防止把「移回」变成任意第三台机器的再次转送。returned 只用它展示移回来源；不锁目标。
   // 老版本导入没有此字段。
   peerFp?: string | null;
+  // 任务最初创建所在机器的指纹。它随每次接力原样传播；只有接收机指纹等于它时，
+  // 覆盖历史存档才算真正“回到原机”并写 returned。旧记录缺失时按当前方向保守推断。
+  originFp?: string | null;
   // 对端那份任务的 id（同 id 迁移,当前恒等于本任务 id;留字段防语义变化）。
   peerTaskId: string;
   at: string;

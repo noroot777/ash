@@ -208,11 +208,12 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
     ((await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!).handoff!,
   ) as {
     direction: string; pending?: boolean; transferId?: string;
-    peerUrl?: string; targetProjectId?: string; autoResume?: boolean; messageIds?: string[];
+    peerUrl?: string; targetProjectId?: string; autoResume?: boolean; messageIds?: string[]; originFp?: string | null;
   };
   assert.equal(pendingMarker.direction, "out");
   assert.equal(pendingMarker.pending, true, "应答丢失后必须留下「接力未确认」的持久标记");
   assert.ok(pendingMarker.transferId, "pending 标记要带 transferId,重试才有幂等身份");
+  assert.equal(pendingMarker.originFp, localIdentity().fingerprint, "首次导出要把本机记为任务原机并冻结进 pending 标记");
   assert.ok(handoffBlockReason(JSON.stringify(pendingMarker)), "pending 态必须触发启动硬拦");
 
   // 硬拦生效:resumeOrRunTask(队列推进/调度/HTTP 路由全汇到这条路)一个副作用都不留。
@@ -265,7 +266,8 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   assert.match(git(ws.path, "log", "-1", "--format=%s"), /chore\(handoff\)/);
   const srcTask = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
   const marker = JSON.parse(srcTask.handoff!) as {
-    direction: string; peerTaskId: string; peerName: string; pending?: boolean; transferId?: string; targetProjectId?: string;
+    direction: string; peerTaskId: string; peerName: string; pending?: boolean; transferId?: string;
+    targetProjectId?: string; originFp?: string | null;
   };
   assert.equal(marker.direction, "out");
   assert.ok(!marker.pending, "确认送达后 pending 必须改写成确认态");
@@ -273,6 +275,7 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   assert.equal(marker.peerTaskId, taskId);
   assert.equal(marker.peerName, "测试机");
   assert.equal(marker.targetProjectId, peerProject.id);
+  assert.equal(marker.originFp, localIdentity().fingerprint, "确认送达后的 out 标记要继续保留原机指纹");
   const legacyMarker = { ...marker, peerUrl, targetProjectId: undefined };
   await db.update(tasks).set({ handoff: JSON.stringify(legacyMarker) }).where(eq(tasks.id, taskId));
   assert.equal(await handoffRemoteUrl(taskId), `${peerUrl}/?project=${peerProject.id}&task=${taskId}`);
@@ -286,7 +289,7 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   // 对端:任务原状态原样落库,in 标记、resumePrompt 前言齐全;正文里的附件路径已改写。
   const peerTask = await api<{
     status: string; body: string; resumePrompt: string | null; useWorktree: boolean;
-    handoff: { direction: string; sessions: number; git: string; peerName: string | null; peerFp?: string | null };
+    handoff: { direction: string; sessions: number; git: string; peerName: string | null; peerFp?: string | null; originFp?: string | null };
   }>(peerUrl, `/tasks/${taskId}`);
   const uploadDstPath = join(root, "uploads-dst", uploadName);
   assert.equal(peerTask.status, "paused");
@@ -297,6 +300,7 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   assert.equal(peerTask.handoff.sessions, 1);
   assert.equal(peerTask.handoff.git, "bundle");
   assert.equal(peerTask.handoff.peerFp, localIdentity().fingerprint, "导入标记应记住来源指纹，供安全移回时锁定机器");
+  assert.equal(peerTask.handoff.originFp, localIdentity().fingerprint, "导入标记应保留任务原机指纹");
   assert.match(peerTask.resumePrompt!, /【任务接力】/);
   assert.match(peerTask.resumePrompt!, /继续:完成第二步/, "原 resumePrompt 应保留在前言之后");
   const dstWs = worktreePathFor(dstRepo, taskId);
