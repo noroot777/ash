@@ -76,6 +76,7 @@ export function HandoffDialog({
   // 一次，重开对话框可以直接检查审批状态并预检，避免日常接力每次都重复点申请。
   useEffect(() => {
     let alive = true;
+    setApplying(false);
     setPreflight(null);
     setPreflightError(null);
     setProjectId("");

@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { createPortal } from "react-dom";
 import type { HandoffPeer } from "@ash/shared";
 import { Check, Prohibit, ShieldWarning, SpinnerGap } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
@@ -56,7 +55,7 @@ export function HandoffApprovalAlert({
     }
   };
 
-  return createPortal(
+  return (
     <section className="handoff-approval-alert" role="alertdialog" aria-labelledby="handoff-approval-alert-title">
       <span className="handoff-approval-alert-icon"><ShieldWarning size={22} weight="fill" aria-hidden="true" /></span>
       <div className="handoff-approval-alert-copy">
@@ -77,7 +76,6 @@ export function HandoffApprovalAlert({
         </Button>
         <Button variant="ghost" disabled={busy} onClick={onOpenSettings}>查看设置</Button>
       </div>
-    </section>,
-    document.body,
+    </section>
   );
 }
