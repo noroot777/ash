@@ -368,7 +368,6 @@ export function HandoffMachines({
                 <DesktopTower size={14} aria-hidden="true" />
                 <span className="workspace-handoff-machine-copy">
                   <b>{target.name}</b>
-                  {outbound.length > 0 && <small>{outbound.length} 个接力任务</small>}
                 </span>
                 <button
                   type="button"

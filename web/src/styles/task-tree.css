@@ -46,8 +46,7 @@
   line-height: 1.1;
 }
 
-.workspace-handoff-machine-copy b,
-.workspace-handoff-machine-copy small {
+.workspace-handoff-machine-copy b {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -57,12 +56,6 @@
   color: color-mix(in lch, var(--ink) 58%, var(--muted));
   font-size: 12.5px;
   font-weight: 500;
-}
-
-.workspace-handoff-machine-copy small {
-  margin-top: 3px;
-  color: var(--faint);
-  font-size: 10px;
 }
 
 .workspace-handoff-machine > button {
