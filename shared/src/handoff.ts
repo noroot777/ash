@@ -4,7 +4,7 @@
 export interface HandoffTarget {
   name: string;
   url: string;
-  // 这台目标机的公钥指纹(sha256 hex),第一次接力成功后记住(TOFU)。
+  // 这台目标机的公钥指纹(sha256 hex),第一次明确申请或接力成功后记住(TOFU)。
   // 之后每次预检/导出都拿对端现报的指纹跟它比,对不上就**拒绝打包** —— 接力推的是
   // 整个仓库和会话历史,地址漂到别人机器上时,这是唯一拦得住的东西。
   // 空/缺失 = 还没记过(首次)或用户手动清除过。
@@ -55,6 +55,16 @@ export interface HandoffPeerIdentity {
   encrypted?: boolean;
   /** 对端**有没有能力**收加密载荷。false 时 encrypted 一定是 false,原因是对端太旧。 */
   canEncrypt?: boolean;
+}
+
+/** POST /handoff/request:显式向目标机发送接力申请并读取对方当前态度。 */
+export interface HandoffApprovalResult {
+  ok: true;
+  target: { url: string; host: string };
+  /** null = 对端版本过旧，没有可核对的机器身份。 */
+  peer: HandoffPeerIdentity | null;
+  /** 只有对方已经接受申请（或关闭审批）时才会返回项目。 */
+  projects: HandoffPingProject[];
 }
 
 // 落在 tasks.handoff（json）上的持久接力标记:导出侧 direction:"out"（任务已交出去，

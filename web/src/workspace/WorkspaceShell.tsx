@@ -37,6 +37,7 @@ import {
 } from "./WorkspaceResizeHandle.tsx";
 import { pushTaskHistoryEntry, selectedTaskProjectId } from "./workspaceHistory.ts";
 import { TerminalToggle } from "./TerminalToggle.tsx";
+import { HandoffApprovalAlert } from "../handoff/HandoffApprovalAlert.tsx";
 
 const ProjectTerminal = lazy(() => import("./ProjectTerminal.tsx").then((module) => ({ default: module.ProjectTerminal })));
 
@@ -273,6 +274,7 @@ export function WorkspaceShell() {
     {deleteTarget && <DeleteTaskDialog task={deleteTarget} onClose={() => setDeleteTarget(null)} onDeleted={(ids) => { ids.forEach(deleteTask); setDeleteTarget(null); }} notify={notify} />}
     {createDialog === "project" && <CreateProjectDialog projects={projects} notify={notify} onClose={() => setCreateDialog(null)} onCreated={(created) => { setProjects((current) => [...current, created]); setProjectId(created.id); setTaskId(null); setSettingsSection(null); setCreateDialog(null); notify("项目已创建"); }} />}
     {createDialog === "group" && currentProject && <CreateGroupDialog onClose={() => setCreateDialog(null)} onCreate={async (name, mode) => { try { const created = await api.createGroup({ projectId: currentProject.id, name, mode }); setGroups((current) => [...current, created]); setCreateDialog(null); notify("分组已创建"); } catch (error) { notify(error instanceof Error ? error.message : "分组创建失败"); } }} />}
+    <HandoffApprovalAlert notify={notify} onOpenSettings={() => openSettings("defaults")} />
     <div className={`workspace-toast${toast ? " is-visible" : ""}`} role="status" aria-live="polite">{toast}</div>
   </>;
   if (settingsSection) return <><SettingsPage

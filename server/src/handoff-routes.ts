@@ -19,6 +19,7 @@ import { projects, sessions, tasks } from "./db/schema.js";
 import { projectHealthLight } from "./git.js";
 import { getAppSettings } from "./app-settings.js";
 import { exportHandoff, handoffRemoteUrl, preflightHandoff } from "./handoff.js";
+import { requestHandoffApproval } from "./handoff-peer-client.js";
 import { repoRefTips } from "./handoff-collect.js";
 import { HandoffError, type HandoffPingResponse } from "./handoff-types.js";
 import { canonicalPingChallenge, localIdentity, shortFingerprint, signWithLocalKey } from "./handoff-identity.js";
@@ -187,6 +188,18 @@ export function mountHandoffRoutes(api: Hono): void {
   api.delete("/handoff/peers/:fingerprint", async (c) => {
     await deletePeer(c.req.param("fingerprint"));
     return c.json({ deleted: true });
+  });
+
+  // 出站配对申请:只向目标机发一次带身份签名的 ping，让本机出现在它的待审批列表里。
+  // 与 preflight 分开，避免用户只是打开接力对话框就悄悄发出申请。
+  api.post("/handoff/request", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { targetUrl?: string };
+    if (!body.targetUrl) return c.json({ error: "缺 targetUrl" }, 400);
+    try {
+      return c.json(await requestHandoffApproval(body.targetUrl));
+    } catch (e) {
+      return fail(c, e);
+    }
   });
 
   // 预检:探测目标机、匹配项目、盘点本地可搬运的东西。只读。
