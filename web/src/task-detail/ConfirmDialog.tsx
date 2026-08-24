@@ -9,6 +9,7 @@ export function ConfirmDialog({
   confirmLabel,
   cancelLabel = "取消",
   busy = false,
+  allowCloseWhenBusy = false,
   confirmDisabled = false,
   danger = false,
   children,
@@ -20,6 +21,7 @@ export function ConfirmDialog({
   confirmLabel: string;
   cancelLabel?: string;
   busy?: boolean;
+  allowCloseWhenBusy?: boolean;
   confirmDisabled?: boolean;
   danger?: boolean;
   children?: React.ReactNode;
@@ -32,11 +34,12 @@ export function ConfirmDialog({
   //    那一层的堆叠上下文困住；② 不在这摞层里的话，点确认框会被下面那层读成「点了外面」
   //    而把它连根关掉，Esc 也会被抢走。进了摞就按打开顺序处理：Esc 先关这一个。
   // 遮罩铺满全屏，所以「点外面」只可能是点遮罩本身，仍由下面的 onMouseDown 判定。
-  useDismissable({ enabled: !busy, containerRef: scrim, onClose });
+  const canClose = !busy || allowCloseWhenBusy;
+  useDismissable({ enabled: canClose, containerRef: scrim, onClose });
 
   return createPortal(
     <div className="task-modal-scrim" ref={scrim} role="presentation" onMouseDown={(event) => {
-      if (event.target === event.currentTarget && !busy) onClose();
+      if (event.target === event.currentTarget && canClose) onClose();
     }}>
       <section className="task-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="task-confirm-title">
         <header>
@@ -46,7 +49,7 @@ export function ConfirmDialog({
         <p>{message}</p>
         {children}
         <footer>
-          <button type="button" disabled={busy} onClick={onClose}>{cancelLabel}</button>
+          <button type="button" disabled={busy && !allowCloseWhenBusy} onClick={onClose}>{cancelLabel}</button>
           <button className={danger ? "is-danger" : "is-primary"} type="button" disabled={busy || confirmDisabled} onClick={onConfirm}>
             {busy ? "处理中…" : confirmLabel}
           </button>

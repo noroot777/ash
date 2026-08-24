@@ -1,17 +1,28 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  HandoffApprovalResult,
   HandoffExportResult,
   HandoffPreflightResult,
   HandoffTarget,
   ProjectView,
   Task,
 } from "@ash/shared";
-import { DesktopTower, PaperPlaneTilt, SpinnerGap } from "@phosphor-icons/react";
+import { DesktopTower, Fingerprint, LockKey, PaperPlaneTilt, SpinnerGap, Warning } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { partitionBulkHandoffTasks } from "./bulkHandoff.ts";
 
 type TransferFailure = { task: Task; reason: string };
+type BusyPhase = "idle" | "approval" | "preflight" | "transferring";
+
+function approvalText(result: HandoffApprovalResult): string {
+  const identity = result.peer ? `目标机身份 ${result.peer.short}。` : "目标机没有提供可核对的身份。";
+  if (result.peer?.peerStatus === "pending") return `${identity}申请已送达，等待对方接受。`;
+  if (result.peer?.peerStatus === "blocked") return `${identity}对方已拒绝本机的接力申请。`;
+  if (result.peer?.peerStatus === "approved") return `${identity}对方已经接受申请。`;
+  if (result.peer?.peerStatus === "open") return `${identity}对方没有开启接力审批。`;
+  return `${identity}目标机版本过旧，无法确认申请状态。`;
+}
 
 function BulkHandoffDialog({
   project,
@@ -33,70 +44,125 @@ function BulkHandoffDialog({
     [project.id, tasks],
   );
   const sample = eligible[0] ?? null;
-  const [preflight, setPreflight] = useState<HandoffPreflightResult | null>(null);
-  const [preflightError, setPreflightError] = useState<string | null>(null);
+  const mounted = useRef(true);
+  const autoProbeAttempted = useRef(false);
+  const [firstProbe, setFirstProbe] = useState<HandoffPreflightResult | null>(null);
+  const [preflights, setPreflights] = useState<Map<string, HandoffPreflightResult>>(new Map());
+  const [preflightFailures, setPreflightFailures] = useState<TransferFailure[]>([]);
+  const [checkedAll, setCheckedAll] = useState(false);
+  const [approval, setApproval] = useState<HandoffApprovalResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [projectId, setProjectId] = useState("");
   const [autoResume, setAutoResume] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState<BusyPhase>("idle");
   const [progress, setProgress] = useState<{ done: number; total: number; title: string } | null>(null);
   const [result, setResult] = useState<{ successes: HandoffExportResult[]; failures: TransferFailure[] } | null>(null);
 
-  const probe = async () => {
-    if (!sample || busy) return;
-    setBusy(true);
-    setPreflightError(null);
-    try {
-      const next = await api.handoffPreflight(sample.id, target.url);
-      setPreflight(next);
-      setProjectId(next.suggestedProjectId ?? next.projects[0]?.id ?? "");
-    } catch (reason) {
-      setPreflight(null);
-      setProjectId("");
-      setPreflightError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
-    }
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
+  const rememberFirstProbe = (taskId: string, probe: HandoffPreflightResult) => {
+    setFirstProbe(probe);
+    setPreflights(new Map([[taskId, probe]]));
+    setPreflightFailures([]);
+    setCheckedAll(eligible.length === 1);
+    setProjectId(probe.suggestedProjectId ?? probe.projects[0]?.id ?? "");
   };
 
-  useEffect(() => {
-    if (target.peerFp && sample) void probe();
-    // 对已记住身份的机器自动做只读预检；未申请过的机器必须等用户明确按按钮。
+  const probeFirst = useCallback(async () => {
+    if (!sample || phase !== "idle") return;
+    setPhase("preflight");
+    setProgress({ done: 0, total: eligible.length, title: sample.title });
+    setError(null);
+    try {
+      const probe = await api.handoffPreflight(sample.id, target.url);
+      if (mounted.current) rememberFirstProbe(sample.id, probe);
+    } catch (reason) {
+      if (mounted.current) {
+        setFirstProbe(null);
+        setPreflights(new Map());
+        setProjectId("");
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
+    } finally {
+      if (mounted.current) { setProgress(null); setPhase("idle"); }
+    }
+    // rememberFirstProbe only writes state derived from this request.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sample?.id, target.peerFp, target.url]);
+  }, [eligible.length, phase, sample?.id, target.url]);
 
-  const blocked = preflight?.peer?.peerStatus === "pending" || preflight?.peer?.peerStatus === "blocked";
+  useEffect(() => {
+    if (target.peerFp && sample && !firstProbe && phase === "idle" && !autoProbeAttempted.current) {
+      autoProbeAttempted.current = true;
+      void probeFirst();
+    }
+  }, [firstProbe, phase, probeFirst, sample, target.peerFp]);
+
+  const blocked = firstProbe?.peer?.peerStatus === "pending" || firstProbe?.peer?.peerStatus === "blocked";
+  const busy = phase !== "idle";
+  const runningCount = eligible.filter((task) => task.status === "running" || task.status === "queued").length;
 
   const requestApproval = async () => {
     if (busy) return;
-    setBusy(true);
-    setPreflightError(null);
+    setPhase("approval");
+    setError(null);
     try {
-      const approval = await api.requestHandoffApproval(target.url);
-      const status = approval.peer?.peerStatus;
+      const nextApproval = await api.requestHandoffApproval(target.url);
+      if (!mounted.current) return;
+      setApproval(nextApproval);
+      const status = nextApproval.peer?.peerStatus;
       if (status === "pending") {
-        setPreflight(null);
         notify(`已向「${target.name}」发送接力申请，等待对方接受`);
         return;
       }
       if (status === "blocked") {
-        setPreflight(null);
-        setPreflightError("目标机已拒绝本机的接力申请，请先在目标机修改接力来源状态");
+        setError("目标机已拒绝本机的接力申请，请先在目标机修改接力来源状态");
         return;
       }
       if (!sample) return;
-      const next = await api.handoffPreflight(sample.id, target.url);
-      setPreflight(next);
-      setProjectId(next.suggestedProjectId ?? next.projects[0]?.id ?? "");
+      setProgress({ done: 0, total: eligible.length, title: sample.title });
+      const probe = await api.handoffPreflight(sample.id, target.url);
+      if (mounted.current) rememberFirstProbe(sample.id, probe);
     } catch (reason) {
-      setPreflightError(reason instanceof Error ? reason.message : String(reason));
+      if (mounted.current) setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      setBusy(false);
+      if (mounted.current) { setProgress(null); setPhase("idle"); }
     }
   };
 
+  const preflightAll = async () => {
+    if (!firstProbe || !projectId || busy) return;
+    setPhase("preflight");
+    setError(null);
+    const checked = new Map(preflights);
+    const failures: TransferFailure[] = [];
+    for (let index = 0; index < eligible.length; index += 1) {
+      if (!mounted.current) return;
+      const task = eligible[index];
+      setProgress({ done: index, total: eligible.length, title: task.title });
+      try {
+        const probe = checked.get(task.id) ?? await api.handoffPreflight(task.id, target.url);
+        if (!probe.projects.some((candidate) => candidate.id === projectId)) {
+          throw new Error("目标项目已不可用，请重新选择");
+        }
+        checked.set(task.id, probe);
+      } catch (reason) {
+        failures.push({ task, reason: reason instanceof Error ? reason.message : String(reason) });
+      }
+    }
+    if (!mounted.current) return;
+    setPreflights(checked);
+    setPreflightFailures(failures);
+    setCheckedAll(failures.length === 0 && checked.size === eligible.length);
+    setProgress(null);
+    setPhase("idle");
+  };
+
   const run = async () => {
-    if (!projectId || busy || !eligible.length) return;
-    setBusy(true);
+    if (!projectId || busy || !eligible.length || !checkedAll) return;
+    setPhase("transferring");
     const successes: HandoffExportResult[] = [];
     const failures: TransferFailure[] = [];
     for (let index = 0; index < eligible.length; index += 1) {
@@ -113,28 +179,46 @@ function BulkHandoffDialog({
         failures.push({ task, reason: reason instanceof Error ? reason.message : String(reason) });
       }
     }
+    if (!mounted.current) return;
     setProgress(null);
     setResult({ successes, failures });
     await onFinished();
-    setBusy(false);
+    if (mounted.current) setPhase("idle");
   };
+
+  const aggregate = useMemo(() => {
+    const rows = [...preflights.values()];
+    return {
+      sessions: rows.reduce((sum, row) => sum + row.local.sessions, 0),
+      sessionFilesFound: rows.reduce((sum, row) => sum + row.local.sessionFilesFound, 0),
+      uploads: rows.reduce((sum, row) => sum + row.local.uploads, 0),
+      pendingMessages: rows.reduce((sum, row) => sum + row.local.pendingMessages, 0),
+      scheduled: rows.filter((row) => row.local.schedule).length,
+      gitBundles: rows.filter((row) => row.local.git === "bundle").length,
+      notes: [...new Set(rows.flatMap((row) => row.local.notes))],
+    };
+  }, [preflights]);
 
   const confirm = () => {
     if (result) { onClose(); return; }
-    if (preflight && !blocked) { void run(); return; }
-    if (target.peerFp && !blocked) { void probe(); return; }
-    void requestApproval();
+    if (!firstProbe || blocked) {
+      if (target.peerFp && !blocked) void probeFirst();
+      else void requestApproval();
+      return;
+    }
+    if (!checkedAll) { void preflightAll(); return; }
+    void run();
   };
 
   const confirmLabel = result
     ? "完成"
-    : preflight && !blocked
-      ? `接力 ${eligible.length} 个任务`
-      : target.peerFp && !blocked
-        ? "重新检查"
-        : blocked
-          ? "检查申请状态"
-          : "发送接力申请";
+    : !firstProbe || blocked
+      ? target.peerFp && !blocked ? "重新检查" : blocked ? "检查申请状态" : "发送接力申请"
+      : !checkedAll
+        ? `检查 ${eligible.length} 个任务`
+        : runningCount > 0
+          ? `停止并接力 ${eligible.length} 个任务`
+          : `接力 ${eligible.length} 个任务`;
   const message = result
     ? `已完成批量接力：成功 ${result.successes.length} 个，失败 ${result.failures.length} 个。`
     : `把本机「${project.name}」项目中 ${eligible.length} 个可接力任务顺序移到「${target.name}」。`;
@@ -145,47 +229,85 @@ function BulkHandoffDialog({
       message={message}
       confirmLabel={confirmLabel}
       busy={busy}
-      confirmDisabled={!result && (!eligible.length || (Boolean(preflight) && !blocked && !projectId))}
+      allowCloseWhenBusy={phase === "approval" || phase === "preflight"}
+      confirmDisabled={!result && (!eligible.length || (Boolean(firstProbe) && !blocked && !projectId) || preflightFailures.length > 0)}
       onClose={onClose}
       onConfirm={confirm}
     >
       <div className="handoff-bulk-body">
-        {!eligible.length && <p className="handoff-bulk-warning">这个项目目前没有可批量接力的顶层单飞任务。</p>}
+        <p className="handoff-bulk-scope">会迁移完整 CLI 会话、附件与可带走的 Git 状态；本机任务确认送达后会从任务列表消失。</p>
+        {runningCount > 0 && (
+          <p className="handoff-bulk-warning"><Warning size={13} aria-hidden="true" />其中 {runningCount} 个任务正在运行或排队，正式接力会先停止它们。</p>
+        )}
+        {!eligible.length && <p className="handoff-bulk-warning">这个项目目前没有可批量接力的顶层单飞任务。展开下方列表可查看原因。</p>}
         {skipped.length > 0 && (
-          <details className="handoff-bulk-skipped">
+          <details className="handoff-bulk-skipped" open={!eligible.length}>
             <summary>另有 {skipped.length} 个任务不会移动</summary>
-            <ul>
-              {skipped.map(({ task, reason }) => <li key={task.id}><b>{task.title}</b><span>{reason}</span></li>)}
-            </ul>
+            <ul>{skipped.map(({ task, reason }) => <li key={task.id}><b>{task.title}</b><span>{reason}</span></li>)}</ul>
           </details>
         )}
-        {preflight && !blocked && (
+        {approval && !firstProbe && <p className="handoff-bulk-peer"><Fingerprint size={13} aria-hidden="true" /><span>{approvalText(approval)}</span></p>}
+        {firstProbe?.peer ? (
+          <p className={`handoff-bulk-peer${blocked ? " is-warn" : ""}`}>
+            <Fingerprint size={13} aria-hidden="true" />
+            <span>目标机身份 <b>{firstProbe.peer.short}</b>{firstProbe.peer.trust === "first-seen" ? "（第一次核对，请和对端设置页指纹比对）" : "（和已记住的身份一致）"}</span>
+          </p>
+        ) : firstProbe ? (
+          <p className="handoff-bulk-peer is-warn"><Warning size={13} aria-hidden="true" /><span>目标机没有报出身份，无法核对对端是不是原来的机器，也无法加密；整个仓库和会话历史会明文传输。</span></p>
+        ) : null}
+        {firstProbe?.peer && (
+          <p className={`handoff-bulk-peer${firstProbe.peer.encrypted ? "" : " is-warn"}`}>
+            {firstProbe.peer.encrypted ? <LockKey size={13} aria-hidden="true" /> : <Warning size={13} aria-hidden="true" />}
+            <span>{firstProbe.peer.encrypted ? "仓库和会话将加密传输。" : "这次会明文传输整个仓库和会话历史，同网段抓包可读取内容。"}</span>
+          </p>
+        )}
+        {firstProbe && !blocked && (
           <label className="handoff-bulk-field">
-            <span>目标项目</span>
-            <select value={projectId} disabled={busy} onChange={(event) => setProjectId(event.target.value)}>
+            <span>目标项目（主机 {firstProbe.target.host}）</span>
+            <select value={projectId} disabled={busy} onChange={(event) => { setProjectId(event.target.value); setCheckedAll(false); setPreflightFailures([]); }}>
               <option value="">选择目标项目</option>
-              {preflight.projects.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
+              {firstProbe.projects.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}（{candidate.repoPath}{candidate.isRepo ? "" : " · 非 git"}）</option>)}
             </select>
           </label>
         )}
-        {preflight && !blocked && (
+        {checkedAll && (
+          <ul className="handoff-bulk-summary">
+            <li>
+              已逐个检查 {preflights.size} 个任务：CLI 会话 {aggregate.sessions} 个，找到会话文件 {aggregate.sessionFilesFound} 份
+              {aggregate.sessions > aggregate.sessionFilesFound ? `，缺失 ${aggregate.sessions - aggregate.sessionFilesFound} 份（对端会全新起跑对应会话）` : ""}
+            </li>
+            <li>{aggregate.gitBundles} 个任务会携带 Git 分支或未提交改动，附件共 {aggregate.uploads} 个</li>
+            {aggregate.pendingMessages > 0 && <li>待发送消息 {aggregate.pendingMessages} 条会迁移到目标机</li>}
+            {aggregate.scheduled > 0 && <li>带定时计划的任务 {aggregate.scheduled} 个，之后由目标机触发</li>}
+          </ul>
+        )}
+        {aggregate.notes.length > 0 && checkedAll && <ul className="handoff-bulk-notes">{aggregate.notes.map((note) => <li key={note}>{note}</li>)}</ul>}
+        {firstProbe && !blocked && (
           <label className="handoff-bulk-toggle">
             <input type="checkbox" checked={autoResume} disabled={busy} onChange={(event) => setAutoResume(event.target.checked)} />
             <span>迁移完成后在目标机自动续跑</span>
           </label>
         )}
         {blocked && <p className="handoff-bulk-warning">目标机尚未批准本机。请在目标机接受申请后，再点击“检查申请状态”。</p>}
-        {preflightError && <p className="handoff-bulk-error">{preflightError}</p>}
-        {progress && (
+        {error && <p className="handoff-bulk-error">{error}</p>}
+        {(progress || phase === "approval") && (
           <div className="handoff-bulk-progress" role="status">
             <SpinnerGap size={15} className="is-spinning" aria-hidden="true" />
-            <span>{progress.done + 1}/{progress.total} · {progress.title}</span>
+            <span>
+              {phase === "approval"
+                ? "正在联系目标机…"
+                : `${phase === "transferring" ? "正在接力" : "正在预检"} · ${progress!.done + 1}/${progress!.total} · ${progress!.title}`}
+            </span>
+          </div>
+        )}
+        {preflightFailures.length > 0 && (
+          <div className="handoff-bulk-blocked">
+            <p>有 {preflightFailures.length} 个任务预检失败，未开始迁移。处理后重新打开批量接力。</p>
+            <ul>{preflightFailures.map(({ task, reason }) => <li key={task.id}><b>{task.title}</b><span>{reason}</span></li>)}</ul>
           </div>
         )}
         {result?.failures.length ? (
-          <ul className="handoff-bulk-failures">
-            {result.failures.map(({ task, reason }) => <li key={task.id}><b>{task.title}</b><span>{reason}</span></li>)}
-          </ul>
+          <ul className="handoff-bulk-failures">{result.failures.map(({ task, reason }) => <li key={task.id}><b>{task.title}</b><span>{reason}</span></li>)}</ul>
         ) : null}
       </div>
     </ConfirmDialog>
@@ -210,16 +332,12 @@ export function HandoffMachines({
     let alive = true;
     api.settings()
       .then((settings) => { if (alive) setTargets(settings.handoffTargets); })
-      .catch((reason) => notify(reason instanceof Error ? reason.message : "接力目标读取失败"));
+      .catch((reason) => { if (alive) notify(reason instanceof Error ? reason.message : "接力目标读取失败"); });
     return () => { alive = false; };
   }, [notify]);
   useEffect(() => reloadTargets(), [reloadTargets]);
 
-  const eligibleCount = useMemo(
-    () => project ? partitionBulkHandoffTasks(tasks, project.id).eligible.length : 0,
-    [project, tasks],
-  );
-  if (!targets.length) return null;
+  if (!targets.length || !project) return null;
 
   return (
     <section className="workspace-task-section workspace-handoff-machines" aria-labelledby="workspace-handoff-machines-title">
@@ -231,8 +349,7 @@ export function HandoffMachines({
             <span className="workspace-handoff-machine-copy"><b>{target.name}</b><small>{target.url}</small></span>
             <button
               type="button"
-              disabled={!project || eligibleCount === 0}
-              aria-label={project ? `将本项目全部任务接力到 ${target.name}` : `接力到 ${target.name}`}
+              aria-label={`将本项目全部任务接力到 ${target.name}`}
               onClick={() => setSelected(target)}
             >
               <PaperPlaneTilt size={13} weight="bold" aria-hidden="true" />
@@ -240,7 +357,7 @@ export function HandoffMachines({
           </div>
         ))}
       </div>
-      {selected && project && (
+      {selected && (
         <BulkHandoffDialog
           project={project}
           target={selected}

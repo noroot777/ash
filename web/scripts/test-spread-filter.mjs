@@ -56,6 +56,7 @@ const tasks = [
   task("worker", { status: "running", parentId: "run-running", starredAt: 1754900002000 }),
   task("archived", { status: "done", archived: true, starredAt: 1754900003000 }),
   task("other-project", { status: "running", projectId: "p2" }),
+  task("handed-out", { status: "done", handoff: { direction: "out", pending: false }, starredAt: 1754900004000 }),
 ];
 
 const counts = spreadCounts(tasks, P1);
@@ -123,6 +124,7 @@ const allRows = spreadVisibleTasks(tasks, ALL, "all").map((row) => row.id);
 assert.ok(allRows.includes("other-project"));
 assert.ok(!allRows.includes("worker"));
 assert.ok(!allRows.includes("archived"));
+assert.ok(!allRows.includes("handed-out"));
 assert.equal(allRows.length, all.all);
 
 // 作用域筛选的唯一判据：单项目认 projectId，all 一律放行。

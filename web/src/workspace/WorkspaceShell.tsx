@@ -38,6 +38,7 @@ import {
 import { pushTaskHistoryEntry, selectedTaskProjectId } from "./workspaceHistory.ts";
 import { TerminalToggle } from "./TerminalToggle.tsx";
 import { HandoffApprovalAlert } from "../handoff/HandoffApprovalAlert.tsx";
+import { visibleOnThisMachine } from "./taskTreeModel.ts";
 
 const ProjectTerminal = lazy(() => import("./ProjectTerminal.tsx").then((module) => ({ default: module.ProjectTerminal })));
 
@@ -186,7 +187,7 @@ export function WorkspaceShell() {
 
   const selectedTask = tasks.find((task) => task.id === taskId && task.projectId === projectId) ?? null;
   const loadError = projectsError ?? tasksError;
-  const activeTaskCount = useMemo(() => tasks.filter((task) => inScope(task, scope) && task.parentId === null && !task.archived).length, [scope, tasks]);
+  const activeTaskCount = useMemo(() => tasks.filter((task) => inScope(task, scope) && task.parentId === null && !task.archived && visibleOnThisMachine(task)).length, [scope, tasks]);
   // J/K 走的是「屏幕上看得见的那些行」，所以筛选开着时它也得跟着筛 —— 否则按一下就跳到
   // 一个被隐藏的任务上，看着像选中丢了。判据与 TaskTree 共用（spreadVisibleTasks）。
   const orderedTasks = useMemo(

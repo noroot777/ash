@@ -27,6 +27,10 @@ export type TaskPreview = {
 
 export const TASK_PREVIEW_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
+export function visibleOnThisMachine(task: Task): boolean {
+  return task.handoff?.direction !== "out" || Boolean(task.handoff.pending);
+}
+
 function byUpdatedDesc(a: Task, b: Task): number {
   return b.updatedAt.localeCompare(a.updatedAt);
 }
@@ -75,7 +79,7 @@ export function advanceHiddenReveal(lastKey: string | null, revealKey: string | 
 }
 
 export function buildTaskTree(tasks: Task[], options: TaskTreeOptions = {}): TaskTreeSection[] {
-  const topLevel = tasks.filter((task) => task.parentId === null && !task.archived);
+  const topLevel = tasks.filter((task) => task.parentId === null && !task.archived && visibleOnThisMachine(task));
   const pinned = sortPinned(topLevel.filter((task) => task.pinnedAt != null));
   const rest = sortByUpdated(topLevel.filter((task) => task.pinnedAt == null));
 

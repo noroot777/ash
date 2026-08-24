@@ -268,6 +268,37 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   margin: 0;
 }
 
+.handoff-bulk-scope {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.handoff-bulk-peer {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  border: 1px solid color-mix(in lch, var(--green) 24%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in lch, var(--green) 6%, var(--panel));
+  padding: 9px 10px;
+  color: color-mix(in lch, var(--green) 76%, var(--ink));
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.handoff-bulk-peer > svg,
+.handoff-bulk-warning > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.handoff-bulk-peer.is-warn {
+  border-color: color-mix(in lch, var(--amber) 25%, var(--line));
+  background: color-mix(in lch, var(--amber) 8%, var(--panel));
+  color: color-mix(in lch, var(--amber) 72%, var(--ink));
+}
+
 .handoff-bulk-field {
   display: grid;
   gap: 6px;
@@ -307,6 +338,9 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
 }
 
 .handoff-bulk-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
   background: color-mix(in lch, var(--amber) 10%, var(--panel));
   color: color-mix(in lch, var(--amber) 72%, var(--ink));
 }
@@ -360,6 +394,21 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   color: var(--faint);
 }
 
+.handoff-bulk-summary,
+.handoff-bulk-notes {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.handoff-bulk-notes {
+  color: color-mix(in lch, var(--amber) 68%, var(--muted));
+}
+
 .handoff-bulk-progress {
   display: flex;
   align-items: center;
@@ -382,4 +431,37 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   border: 1px solid color-mix(in lch, var(--red) 24%, var(--line));
   border-radius: 9px;
   padding: 9px 10px;
+}
+
+.handoff-bulk-blocked {
+  border: 1px solid color-mix(in lch, var(--red) 24%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in lch, var(--red) 6%, var(--panel));
+  padding: 9px 10px;
+}
+
+.handoff-bulk-blocked > p {
+  color: var(--red);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.handoff-bulk-blocked ul {
+  display: grid;
+  gap: 7px;
+  max-height: 140px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.handoff-bulk-blocked li {
+  display: grid;
+  gap: 2px;
+  font-size: 10.5px;
+}
+
+.handoff-bulk-blocked li span {
+  color: var(--faint);
 }

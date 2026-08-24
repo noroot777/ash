@@ -210,7 +210,7 @@ export function HandoffDialog({
               已把任务交给{target?.name ? `「${target.name}」` : "对端"}:迁移会话文件 {result.sessionsMigrated} 份,
               代码{result.git === "bundle" ? "已随分支带过去" : "未随任务携带"};
               {result.autoResume ? "对端已自动续跑。" : "对端不会自动续跑,需要在对端手动点「运行」。"}
-              本机这份任务保留为历史存档。
+              本机会保留历史数据，但任务会从本机任务列表隐藏。
             </p>
             {result.notes.length > 0 && (
               <ul className="handoff-notes">

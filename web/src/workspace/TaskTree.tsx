@@ -260,7 +260,7 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
           indicatorForTask={indicatorForTask}
           filter={spread.filter}
           onClearFilter={() => spread.setFilter("all")}
-          machineSection={<HandoffMachines project={currentProject} tasks={tasks} notify={notify} onFinished={onHandoffFinished} />}
+          machineSection={allProjects ? null : <HandoffMachines project={currentProject} tasks={tasks} notify={notify} onFinished={onHandoffFinished} />}
         />
         {otherProjects.length > 0 && (
           <section className="workspace-other-projects">
