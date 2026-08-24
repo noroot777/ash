@@ -14,6 +14,86 @@
   margin-top: 14px;
 }
 
+.workspace-handoff-machines {
+  margin-top: 14px;
+}
+
+.workspace-handoff-machine-list {
+  display: grid;
+  gap: 2px;
+}
+
+.workspace-handoff-machine {
+  display: grid;
+  min-height: 38px;
+  grid-template-columns: 22px minmax(0, 1fr) 28px;
+  align-items: center;
+  color: var(--muted);
+}
+
+.workspace-handoff-machine > svg {
+  justify-self: center;
+  color: var(--faint);
+}
+
+.workspace-handoff-machine-copy {
+  display: grid;
+  min-width: 0;
+  line-height: 1.1;
+}
+
+.workspace-handoff-machine-copy b,
+.workspace-handoff-machine-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-handoff-machine-copy b {
+  color: color-mix(in lch, var(--ink) 58%, var(--muted));
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.workspace-handoff-machine-copy small {
+  margin-top: 3px;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.workspace-handoff-machine > button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--faint);
+  padding: 0;
+  opacity: 0.35;
+  transition: background-color 130ms ease-out, color 130ms ease-out, opacity 130ms ease-out;
+}
+
+.workspace-handoff-machine:hover > button,
+.workspace-handoff-machine > button:focus-visible {
+  background: color-mix(in lch, var(--accent) 10%, transparent);
+  color: var(--accent);
+  opacity: 1;
+}
+
+.workspace-handoff-machine > button:disabled {
+  cursor: not-allowed;
+  background: transparent;
+  color: var(--faint);
+  opacity: 0.2;
+}
+
+.workspace-sidebar.is-spread .workspace-handoff-machine {
+  width: calc(var(--spread-title-w) + 22px);
+}
+
 .workspace-task-section-title {
   display: flex;
   height: 34px;

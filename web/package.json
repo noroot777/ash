@@ -34,6 +34,7 @@
     "test:reviewer-turn-dom": "node scripts/test-reviewer-turn-dom.mjs",
     "test:task-tree": "node --experimental-strip-types scripts/test-task-tree.mjs",
     "test:task-tree-preview": "node scripts/test-task-tree-preview.mjs",
+    "test:bulk-handoff": "node --experimental-strip-types scripts/test-bulk-handoff.mjs",
     "test:spread-filter": "node --experimental-strip-types scripts/test-spread-filter.mjs",
     "test:notes-filter": "node --experimental-strip-types scripts/test-notes-filter.mjs",
     "test:slash-match": "node --experimental-strip-types scripts/test-slash-match.mjs",
