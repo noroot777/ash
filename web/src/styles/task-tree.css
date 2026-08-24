@@ -23,6 +23,10 @@
   gap: 2px;
 }
 
+.workspace-handoff-machine-group {
+  min-width: 0;
+}
+
 .workspace-handoff-machine {
   display: grid;
   min-height: 38px;
@@ -58,8 +62,7 @@
 .workspace-handoff-machine-copy small {
   margin-top: 3px;
   color: var(--faint);
-  font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .workspace-handoff-machine > button {
@@ -76,10 +79,10 @@
   transition: background-color 130ms ease-out, color 130ms ease-out, opacity 130ms ease-out;
 }
 
-.workspace-handoff-machine:hover > button,
+.workspace-handoff-machine > button:hover,
 .workspace-handoff-machine > button:focus-visible {
-  background: color-mix(in lch, var(--accent) 10%, transparent);
-  color: var(--accent);
+  background: color-mix(in lch, var(--ink) 8%, transparent);
+  color: var(--muted);
   opacity: 1;
 }
 
@@ -92,6 +95,58 @@
 
 .workspace-sidebar.is-spread .workspace-handoff-machine {
   width: calc(var(--spread-title-w) + 22px);
+}
+
+.workspace-handoff-task-list {
+  display: grid;
+  gap: 1px;
+  margin: 0 0 3px 22px;
+}
+
+.workspace-handoff-task {
+  display: grid;
+  min-width: 0;
+  min-height: 30px;
+  grid-template-columns: 14px minmax(0, 1fr) 18px;
+  align-items: center;
+  border-radius: 7px;
+  color: color-mix(in lch, var(--ink) 52%, var(--muted));
+  padding: 0 4px 0 2px;
+  text-decoration: none;
+}
+
+.workspace-handoff-task > i {
+  width: 5px;
+  height: 5px;
+  justify-self: center;
+  border-radius: 50%;
+  background: var(--faint);
+  opacity: 0.7;
+}
+
+.workspace-handoff-task > span {
+  overflow: hidden;
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-handoff-task > svg {
+  justify-self: center;
+  color: var(--faint);
+  opacity: 0;
+  transition: opacity 130ms ease-out;
+}
+
+.workspace-handoff-task:hover,
+.workspace-handoff-task:focus-visible {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
+.workspace-handoff-task:hover > svg,
+.workspace-handoff-task:focus-visible > svg {
+  opacity: 1;
 }
 
 .workspace-task-section-title {

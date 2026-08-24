@@ -5,6 +5,28 @@ export type BulkHandoffSkip = {
   reason: string;
 };
 
+const normalizedTargetUrl = (url: string): string => url.trim().replace(/\/+$/, "");
+
+export function outboundTasksForTarget(
+  tasks: Task[],
+  projectId: string,
+  targetUrl: string,
+  targetFingerprint?: string | null,
+): Task[] {
+  const normalized = normalizedTargetUrl(targetUrl);
+  return tasks
+    .filter((task) => task.projectId === projectId
+      && task.parentId === null
+      && !task.archived
+      && task.handoff?.direction === "out"
+      && !task.handoff.pending
+      && Boolean(task.handoff.peerUrl)
+      && (targetFingerprint && task.handoff.peerFp
+        ? task.handoff.peerFp === targetFingerprint
+        : normalizedTargetUrl(task.handoff.peerUrl!) === normalized))
+    .sort((a, b) => (b.handoff?.at ?? b.updatedAt).localeCompare(a.handoff?.at ?? a.updatedAt));
+}
+
 export function partitionBulkHandoffTasks(
   tasks: Task[],
   projectId: string,

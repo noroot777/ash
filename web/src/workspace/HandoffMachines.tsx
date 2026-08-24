@@ -7,10 +7,11 @@ import type {
   ProjectView,
   Task,
 } from "@ash/shared";
-import { DesktopTower, Fingerprint, LockKey, PaperPlaneTilt, SpinnerGap, Warning } from "@phosphor-icons/react";
+import { ArrowSquareOut, DesktopTower, Fingerprint, LockKey, PaperPlaneTilt, SpinnerGap, Warning } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
-import { partitionBulkHandoffTasks } from "./bulkHandoff.ts";
+import { handoffTaskHref } from "./workspaceHistory.ts";
+import { outboundTasksForTarget, partitionBulkHandoffTasks } from "./bulkHandoff.ts";
 
 type TransferFailure = { task: Task; reason: string };
 type BusyPhase = "idle" | "approval" | "preflight" | "transferring";
@@ -348,25 +349,52 @@ export function HandoffMachines({
   }, [notify]);
   useEffect(() => reloadTargets(), [reloadTargets]);
 
+  const outboundByTarget = useMemo(() => new Map(targets.map((target) => [
+    target.url,
+    project ? outboundTasksForTarget(tasks, project.id, target.url, target.peerFp) : [],
+  ])), [project, targets, tasks]);
+
   if (!targets.length || !project) return null;
 
   return (
     <section className="workspace-task-section workspace-handoff-machines" aria-labelledby="workspace-handoff-machines-title">
       <header className="workspace-task-section-title" id="workspace-handoff-machines-title">其他机器</header>
       <div className="workspace-handoff-machine-list">
-        {targets.map((target) => (
-          <div className="workspace-handoff-machine" key={target.url}>
-            <DesktopTower size={14} aria-hidden="true" />
-            <span className="workspace-handoff-machine-copy"><b>{target.name}</b><small>{target.url}</small></span>
-            <button
-              type="button"
-              aria-label={`将本项目全部任务接力到 ${target.name}`}
-              onClick={() => setSelected(target)}
-            >
-              <PaperPlaneTilt size={13} weight="bold" aria-hidden="true" />
-            </button>
-          </div>
-        ))}
+        {targets.map((target) => {
+          const outbound = outboundByTarget.get(target.url) ?? [];
+          return (
+            <div className="workspace-handoff-machine-group" key={target.url}>
+              <div className="workspace-handoff-machine">
+                <DesktopTower size={14} aria-hidden="true" />
+                <span className="workspace-handoff-machine-copy">
+                  <b>{target.name}</b>
+                  {outbound.length > 0 && <small>{outbound.length} 个接力任务</small>}
+                </span>
+                <button
+                  type="button"
+                  aria-label={`将本项目全部任务接力到 ${target.name}`}
+                  onClick={() => setSelected(target)}
+                >
+                  <PaperPlaneTilt size={13} weight="bold" aria-hidden="true" />
+                </button>
+              </div>
+              {outbound.length > 0 && (
+                <div className="workspace-handoff-task-list" aria-label={`${target.name}上的接力任务`}>
+                  {outbound.map((task) => {
+                    const href = handoffTaskHref(task.id, task.handoff!);
+                    return href ? (
+                      <a className="workspace-handoff-task" href={href} target="_blank" rel="noreferrer" key={task.id}>
+                        <i aria-hidden="true" />
+                        <span>{task.title || "未命名任务"}</span>
+                        <ArrowSquareOut size={11} aria-hidden="true" />
+                      </a>
+                    ) : null;
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
       {selected && (
         <BulkHandoffDialog

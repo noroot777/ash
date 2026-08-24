@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { partitionBulkHandoffTasks } from "../src/workspace/bulkHandoff.ts";
+import { outboundTasksForTarget, partitionBulkHandoffTasks } from "../src/workspace/bulkHandoff.ts";
 import { handoffTargetsForTask } from "../src/task-detail/handoffTargetPolicy.ts";
 
 const task = (id, overrides = {}) => ({
@@ -17,6 +17,17 @@ const task = (id, overrides = {}) => ({
 
 const sourceFp = "a".repeat(64);
 const thirdFp = "b".repeat(64);
+
+const outbound = outboundTasksForTarget([
+  task("older", { updatedAt: "2026-08-20T08:00:00.000Z", handoff: { direction: "out", peerUrl: "http://old-target:4317", peerFp: sourceFp, at: "2026-08-20T08:00:00.000Z" } }),
+  task("newer", { updatedAt: "2026-08-20T09:00:00.000Z", handoff: { direction: "out", peerUrl: "http://target:4317/", peerFp: sourceFp, at: "2026-08-20T09:00:00.000Z" } }),
+  task("pending", { handoff: { direction: "out", pending: true, peerUrl: "http://target:4317" } }),
+  task("other-target", { handoff: { direction: "out", peerUrl: "http://elsewhere:4317" } }),
+  task("reused-address", { handoff: { direction: "out", peerUrl: "http://target:4317", peerFp: thirdFp } }),
+  task("inbound", { handoff: { direction: "in", peerUrl: "http://target:4317" } }),
+  task("other-project", { projectId: "p2", handoff: { direction: "out", peerUrl: "http://target:4317" } }),
+], "p1", "http://target:4317/", sourceFp);
+assert.deepEqual(outbound.map((item) => item.id), ["newer", "older"]);
 
 const result = partitionBulkHandoffTasks([
   task("ready"),
