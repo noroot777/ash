@@ -34,6 +34,7 @@ export function AgentDetectionResults({
                 <div>
                   <b>{cli.name}</b>
                   <small>{cli.version || cli.path}</small>
+                  {cli.versionWarning ? <small className="settings-cli-version-warning">{cli.versionWarning}</small> : null}
                   {/* 本平台的前提/限制（目前只有 Windows 侧会有，例如「需要先装 Git for
                       Windows」）。装上了也仍然要知道，所以放在已安装卡片里。 */}
                   {cli.platformNote ? <small className="settings-cli-note">{cli.platformNote}</small> : null}

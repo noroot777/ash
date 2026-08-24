@@ -60,6 +60,11 @@
   white-space: nowrap;
 }
 
+.settings-cli-version-warning {
+  color: var(--amber) !important;
+  line-height: 1.45;
+}
+
 .agent-profile-group-head {
   min-height: 40px;
   grid-template-columns: 26px minmax(100px, auto) minmax(110px, 1fr) auto;

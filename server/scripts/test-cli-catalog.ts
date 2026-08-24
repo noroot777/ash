@@ -32,11 +32,18 @@ import { GenericCliExecutor, hasTrustedSessionId, interactiveResumeInner } from 
 import { execBinFor, probeBins } from "../src/executors/bin-probe.js";
 import { resumeCommandFor } from "../src/executors/resume.js";
 import { normalizeProfileExtraArgs } from "../src/executors/args.js";
-import { installCommandFor } from "../src/detect.js";
+import { installCommandFor, versionWarningFor } from "../src/detect.js";
 import type { CliSpec } from "../src/executors/catalog/types.js";
 import { IS_WINDOWS } from "../src/platform.js";
 
 const MISSING_BIN = "ash-definitely-not-installed-cli";
+
+assert.match(versionWarningFor("codex", "codex-cli 0.147.0") ?? "", /升级/);
+assert.match(versionWarningFor("codex", "0.147.9-beta.1") ?? "", /0\.148\.0/);
+assert.equal(versionWarningFor("codex", "codex-cli 0.146.0"), undefined);
+assert.equal(versionWarningFor("codex", "codex-cli 0.148.0"), undefined);
+assert.equal(versionWarningFor("claude", "0.147.0"), undefined);
+assert.equal(versionWarningFor("codex", "unknown"), undefined);
 
 // 「一定装了的命令」这种东西不存在:`echo` 在 Windows 上是 cmd 的内建,PATH 上根本
 // 没有对应的文件,resolveBin 自然探不到(这不是 bug,是它该有的行为)。要探测就自己

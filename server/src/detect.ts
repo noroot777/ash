@@ -10,6 +10,7 @@ export interface DetectedAgent {
   available: boolean;
   path: string | null;
   version: string | null;
+  versionWarning?: string;
   /** 支持常驻会话(openResident)——只有这类 CLI 能当 /team 的调度者。 */
   resident: boolean;
 }
@@ -66,8 +67,20 @@ export interface DetectedCli extends KnownCli {
   available: boolean;
   path: string | null;
   version: string | null;
+  versionWarning?: string;
   /** 该执行器支持常驻会话(能当 /team 调度者)—— 直接问执行器本人有没有 openResident。 */
   resident: boolean;
+}
+
+const CODEX_0147_WARNING = "Codex CLI 0.147.x 有已知工具注册/恢复异常，可能把终端调用路由到错误工具。请运行 npm install -g @openai/codex，升级到 0.148.0 或更高版本。";
+
+export function versionWarningFor(type: AgentType, version: string | null): string | undefined {
+  if (type !== "codex" || !version) return undefined;
+  const match = version.match(/(?:^|\s)(\d+)\.(\d+)\.(\d+)(?:\D|$)/);
+  if (!match) return undefined;
+  return Number(match[1]) === 0 && Number(match[2]) === 147
+    ? CODEX_0147_WARNING
+    : undefined;
 }
 
 // 安装命令在**这里**按宿主平台定死,而不是把两条都发给前端让浏览器挑:CLI 要装在
@@ -108,12 +121,14 @@ const KNOWN_CLIS: KnownCli[] = CLI_SPECS.map((s) => ({
 // bins[0],于是「目录显示可用、派任务 ENOENT」(第 1 轮审查抓到的问题)。
 async function detectOne(cli: KnownCli): Promise<DetectedCli> {
   const probe = await probeBins(cli.bins, cli.fallbackVersionMatch);
+  const version = probe?.version ?? null;
   return {
     ...cli,
     bin: probe?.bin ?? cli.bins[0],
     available: !!probe,
     path: probe?.path ?? null,
-    version: probe?.version ?? null,
+    version,
+    versionWarning: versionWarningFor(cli.type, version),
     // 没装的 CLI 不去解析执行器,直接算它不支持常驻 —— 反正启动器只在 available
     // 的里面挑。装了的才问执行器本人有没有 openResident(目前只有 claude 有;
     // GenericCliExecutor 一律不实现,「谁能当团队调度者」的过滤就靠这个)。
@@ -134,12 +149,13 @@ export function detectKnownClis(): Promise<DetectedCli[]> {
 // 这一个真相来源,前端照着过滤就行,不用在 shared 里再抄一张名单出来漂移。
 export async function detectLocalAgents(): Promise<DetectedAgent[]> {
   const all = await Promise.all(KNOWN_CLIS.map(detectOne));
-  return all.map(({ type, bin, available, path, version, resident }) => ({
+  return all.map(({ type, bin, available, path, version, versionWarning, resident }) => ({
     type,
     bin,
     available,
     path,
     version,
+    versionWarning,
     resident,
   }));
 }

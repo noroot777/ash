@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { Group, GroupMode, ProjectView, Task, TaskMode } from "@ash/shared";
 import { api } from "../lib/api.ts";
+import { useAgentAvailability } from "../lib/agentAvailability.ts";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import { useTasks } from "../lib/useTasks.ts";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
@@ -72,6 +73,10 @@ export function WorkspaceShell() {
   const [sidebarWidth, setSidebarWidth] = useState(readWorkspaceSidebarWidth);
   const [toast, setToast] = useState<string | null>(null);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const agentDetection = useAgentAvailability();
+  const cliVersionWarning = agentDetection.status === "ready"
+    ? agentDetection.agents.find((agent) => agent.versionWarning)?.versionWarning ?? null
+    : null;
   // 项目主仓被切分支/拉取过之后重拉一次 ProjectHealth：侧栏胶囊上的分支名和「有未提交
   // 改动」那颗点都从它来，不跟着刷就会停在操作之前的样子。
   const [gitVersion, setGitVersion] = useState(0);
@@ -275,7 +280,13 @@ export function WorkspaceShell() {
     {createDialog === "group" && currentProject && <CreateGroupDialog onClose={() => setCreateDialog(null)} onCreate={async (name, mode) => { try { const created = await api.createGroup({ projectId: currentProject.id, name, mode }); setGroups((current) => [...current, created]); setCreateDialog(null); notify("分组已创建"); } catch (error) { notify(error instanceof Error ? error.message : "分组创建失败"); } }} />}
     <div className={`workspace-toast${toast ? " is-visible" : ""}`} role="status" aria-live="polite">{toast}</div>
   </>;
-  if (settingsSection) return <><SettingsPage
+  const cliUpgradeNotice = cliVersionWarning ? (
+    <div className="workspace-cli-upgrade-notice" role="alert">
+      <span>{cliVersionWarning}</span>
+      <button type="button" onClick={() => openSettings("executors")}>查看执行器</button>
+    </div>
+  ) : null;
+  if (settingsSection) return <>{cliUpgradeNotice}<SettingsPage
     section={settingsSection}
     project={currentProject}
     tasks={tasks}
@@ -293,6 +304,7 @@ export function WorkspaceShell() {
     <><div className={`workspace-shell${spread.laidOut ? " is-spread" : ""}`} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
       <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onAllProjects={selectAllProjects} onTask={selectTask} onTaskStarred={applyStar} onGitChanged={() => setGitVersion((value) => value + 1)} onOpenTerminal={currentProject ? () => setTerminalOpen(true) : null} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={() => setGroupsPanelOpen(true)} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("executors")} />
       <main className="workspace-main">
+        {cliUpgradeNotice}
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
         {composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onCancel={() => setComposer(null)} onCreated={createTask} onCreateGroup={createComposerGroup} notify={notify} /> : selectedTask?.mode === "team" ? (
           <TeamView task={selectedTask} allTasks={tasks} onTaskUpdate={updateTask} onTaskDeleted={deleteTask} onSelectTask={selectTask} initialReviewOpen={reviewTaskId === selectedTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedTask.id : null)} terminalToggle={terminalToggle} notify={notify} />

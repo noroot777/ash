@@ -445,6 +445,7 @@ export type DetectedCli = {
   available: boolean;
   path: string | null;
   version: string | null;
+  versionWarning?: string;
   resident: boolean;
 };
 

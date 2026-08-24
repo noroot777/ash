@@ -440,7 +440,7 @@ export const api = {
 
   agents: (): Promise<AgentExecutorProfile[]> => request("/agents"),
   detectAgents: (): Promise<
-    { type: AgentType; bin: string; available: boolean; path: string | null; version: string | null; resident: boolean }[]
+    { type: AgentType; bin: string; available: boolean; path: string | null; version: string | null; versionWarning?: string; resident: boolean }[]
   > => request("/agents/detect"),
   detectClis: (): Promise<DetectedCli[]> => request("/agents/catalog"),
   // ash 起 CLI 时子进程会看到的环境事实(只读)。设置页拿它算压缩触发点 ——
