@@ -213,6 +213,44 @@ async function main(): Promise<void> {
   assert.equal(replayed.status, 401, "同一份签名重发必须被 nonce 挡住");
   assert.match((await replayed.json() as { error: string }).error, /重放/);
 
+  // 身份字段上线前已经导入的任务没有 peerFp。源机仍持有同一次接力的 transferId，
+  // 所以可以在获批并验签之后用它一次性补绑；光有 taskId 或猜错 transferId 都不行。
+  const legacyTaskId = "auth-legacy-owner";
+  const legacyManifest = JSON.parse(manifest(legacyTaskId)) as Record<string, unknown>;
+  delete legacyManifest.sourceFingerprint;
+  delete legacyManifest.originFingerprint;
+  const legacyImportBody = JSON.stringify(legacyManifest);
+  assert.equal(
+    (await raw("/handoff/import", signedInit("/handoff/import", "POST", legacyImportBody))).status,
+    200,
+    "旧版 manifest 应照常导入，留下待安全补绑的入站任务",
+  );
+  const legacyWithoutId = JSON.stringify({ taskId: legacyTaskId });
+  assert.equal(
+    (await raw("/handoff/proxy/task/snapshot",
+      signedInit("/handoff/proxy/task/snapshot", "POST", legacyWithoutId))).status,
+    403,
+    "缺少 transferId 时不能把旧任务认领给当前机器",
+  );
+  const legacyWrongId = JSON.stringify({ taskId: legacyTaskId, transferId: "transfer-wrong" });
+  assert.equal(
+    (await raw("/handoff/proxy/task/snapshot",
+      signedInit("/handoff/proxy/task/snapshot", "POST", legacyWrongId))).status,
+    403,
+    "transferId 对不上时不能把旧任务认领给当前机器",
+  );
+  const legacyTransferId = `transfer-${legacyTaskId}`;
+  const legacyClaim = JSON.stringify({ taskId: legacyTaskId, transferId: legacyTransferId });
+  assert.equal(
+    (await raw("/handoff/proxy/task/snapshot",
+      signedInit("/handoff/proxy/task/snapshot", "POST", legacyClaim))).status,
+    200,
+    "获批来源机应能用原接力 transferId 给旧任务安全补绑",
+  );
+  const legacyTask = await api<{ handoff: { peerFp?: string; originFp?: string } }>(peerUrl, `/tasks/${legacyTaskId}`);
+  assert.equal(legacyTask.handoff.peerFp, localIdentity().fingerprint, "补绑后应记住来源机指纹");
+  assert.equal(legacyTask.handoff.originFp, localIdentity().fingerprint, "直达旧任务的原机也应补成来源机");
+
   // ── 6. 时间戳超窗 ────────────────────────────────────────────────────────
   // 手工造一个 10 分钟前的签名(私钥是本机的,所以签名本身合法),只有时间不对。
   const staleBody = manifest("auth-stale");
@@ -268,7 +306,7 @@ async function main(): Promise<void> {
   );
 
   await api(peerUrl, `/handoff/peers/${strangerFp}/approve`, { method: "POST" });
-  const foreignSnapshotBody = JSON.stringify({ taskId: "auth-replay" });
+  const foreignSnapshotBody = JSON.stringify({ taskId: legacyTaskId, transferId: legacyTransferId });
   const foreignSnapshotTs = String(Date.now());
   const foreignSnapshotNonce = randomBytes(16).toString("hex");
   const foreignSnapshotCanonical = [
@@ -286,7 +324,7 @@ async function main(): Promise<void> {
     },
     body: foreignSnapshotBody,
   });
-  assert.equal(foreignSnapshot.status, 403, "另一台已批准机器也不能读取不属于它的远端任务");
+  assert.equal(foreignSnapshot.status, 403, "另一台已批准机器即使拿到 transferId 也不能覆盖已补绑的任务归属");
   assert.match((await foreignSnapshot.json() as { error: string }).error, /无权读取或操作/);
 
   // 拉黑之后是 403(明确拒绝),和「还没看过」区分得开。
