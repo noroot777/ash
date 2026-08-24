@@ -1,8 +1,5 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { expandHome, listBranches } from "./git.js";
-
-const exec = promisify(execFile);
+import { execFileText as exec } from "./exec.js";
 
 export type GitWorktreeOverview = {
   path: string;

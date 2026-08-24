@@ -144,6 +144,7 @@ export async function startPreview(
     const child = spawn(launch.file, launch.args, {
       cwd,
       detached: true,
+      windowsHide: true,
       windowsVerbatimArguments: launch.windowsVerbatimArguments,
       stdio: ["ignore", fd, fd],
       // BROWSER=none：dev server 的 `--open` 会去拉一个真浏览器窗口，预览是后台起的，

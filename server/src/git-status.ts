@@ -1,8 +1,7 @@
-import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { cappedGitStdout } from "./git-exec.js";
+import { execFileText as exec } from "./exec.js";
 
 // ── 工作区实时 git 状态：SCM 面板的读侧 ──────────────────────────────────────
 //
@@ -20,7 +19,6 @@ import { cappedGitStdout } from "./git-exec.js";
 // 代价是重命名记录（`2 `开头）的原路径是**紧跟其后的下一个 NUL 段**，所以只能顺序
 // 消费 token，不能按行 map。
 
-const exec = promisify(execFile);
 const DIFF_LIMIT_BYTES = 1024 * 1024;
 const MAX_ENTRIES = 2000;
 const MAX_COMMITS = 30;

@@ -30,11 +30,8 @@ import { publishPendingMessages } from "./pending-messages.js";
 import { createTasks } from "./task-store.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { id, now } from "./util.js";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { TaskHandoff } from "@ash/shared";
-
-const exec = promisify(execFile);
+import { execFileText as exec } from "./exec.js";
 
 // 导入只接受**已结算**的状态;running/queued 混进来(理论上不该有)一律落 canceled,
 // 假 running 会骗过所有「在跑」判断却没有任何进程。

@@ -17,15 +17,12 @@
 //     并且**只给真人续聊拍照**；
 //   这边是**给人看的提示**（干了多少；取不到就闭嘴），必须覆盖 fresh run —— 漏交卷最常
 //     发生在 fresh run，而那一路 turn-baseline 根本不拍照。
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { RUNS_DIR } from "./paths.js";
 import { now } from "./util.js";
-
-const exec = promisify(execFile);
+import { execFileText as exec } from "./exec.js";
 
 interface TurnStart {
   cwd: string;

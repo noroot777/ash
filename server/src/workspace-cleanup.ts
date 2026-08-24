@@ -1,11 +1,8 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { statSync } from "node:fs";
 import type { TaskWorkspaceLeftover, TaskWorkspaceDiscardResult } from "@ash/shared";
 import { dirtyFilesAt, expandHome, gitError, listFiles, localBranchExists, removeWorktree, resolveWorktreeBranchName, worktreePathFor } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
-
-const exec = promisify(execFile);
+import { execFileText as exec } from "./exec.js";
 
 const isDir = (p: string) => {
   try { return statSync(p).isDirectory(); } catch { return false; }

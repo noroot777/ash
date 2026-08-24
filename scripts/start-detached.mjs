@@ -18,6 +18,7 @@ const child = spawn(command, args, {
   cwd: process.cwd(),
   env: process.env,
   detached: true,
+  windowsHide: true,
   stdio: ["ignore", log, log],
 });
 closeSync(log);

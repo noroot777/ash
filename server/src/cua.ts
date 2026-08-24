@@ -87,7 +87,7 @@ async function execFileText(file: string, args: string[], timeout: number): Prom
   error?: string;
 }> {
   return new Promise((resolve) => {
-    execFile(file, args, { timeout, maxBuffer: 128 * 1024 }, (err, stdout, stderr) => {
+    execFile(file, args, { timeout, maxBuffer: 128 * 1024, windowsHide: true }, (err, stdout, stderr) => {
       resolve({
         ok: !err,
         stdout: stdout ?? "",

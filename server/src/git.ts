@@ -1,5 +1,3 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { join, isAbsolute, dirname, basename, resolve } from "node:path";
 import { homedir } from "node:os";
 import { mkdirSync, statSync, existsSync, readdirSync, readFileSync, writeFileSync, realpathSync, rmSync } from "node:fs";
@@ -8,8 +6,7 @@ import { DATA_DIR } from "./paths.js";
 import { IS_WINDOWS, windowsLongPathHint } from "./platform.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
-
-const exec = promisify(execFile);
+import { execFileText as exec } from "./exec.js";
 
 const isDir = (p: string) => {
   try { return statSync(p).isDirectory(); } catch { return false; }

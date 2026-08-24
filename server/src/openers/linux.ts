@@ -1,11 +1,8 @@
-import { execFile } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import type { AppOpener, OpenerProbe } from "./types.js";
-
-const exec = promisify(execFile);
+import { execFileText as exec } from "../exec.js";
 
 // Linux 侧的「谁能开这个文件」写在 .desktop 里（MimeType=），文件本身的 MIME
 // 由 xdg-mime 判定。两边都是 freedesktop 标准，桌面环境无关。

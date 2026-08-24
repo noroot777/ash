@@ -9,10 +9,8 @@
 //   ② 这一层**不碰队列、不碰分组**，也不改 status。一段跑砸了就把结论返回给调用方，
 //      由它按线上写的失败策略决定停下等人还是打回重做。
 import { eq } from "drizzle-orm";
-import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { segmentAfter } from "@ash/shared/workflow-policy";
 import type { WorkflowDef, WorkflowStep } from "@ash/shared/workflow";
 import { STEP_LABELS } from "@ash/shared/workflow";
@@ -27,8 +25,7 @@ import { askAboutFailure } from "./task-question.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { continueWhenIdle } from "./runs.js";
-
-const run = promisify(execFile);
+import { execFileText as run } from "./exec.js";
 
 /** 一条命令最多跑多久。跑构建、跑测试都算在内，再久基本是卡住了。 */
 const COMMAND_TIMEOUT_MS = 20 * 60_000;

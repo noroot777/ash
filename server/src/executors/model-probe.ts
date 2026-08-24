@@ -13,16 +13,13 @@
 // 为什么不落库:清单是**本机 CLI 当下的事实**,不是用户配置。落库要额外处理「换了
 // CLI 版本 / 换了登录账号 / 卸载了」的失效,而重启后重探一次的代价只有几百毫秒。
 
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { AgentType } from "@ash/shared";
 import { AGENT_TYPES } from "@ash/shared";
 import type { CliModelCatalog } from "@ash/shared/cli-presets";
 import { CLI_MODEL_PRESETS } from "@ash/shared/cli-presets";
 import { probeBins } from "./bin-probe.js";
 import { CLI_SPEC_BY_KEY } from "./catalog/index.js";
-
-const exec = promisify(execFile);
+import { execFileText as exec } from "../exec.js";
 
 /** 探测结果的保鲜期。到点后下一次读取会**等**一次重探(不做后台预热那套复杂度)。 */
 const TTL_MS = 6 * 60 * 60 * 1000;

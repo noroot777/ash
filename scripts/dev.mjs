@@ -61,6 +61,7 @@ function startFrontendOnly(webPort) {
   const web = spawn(NPM, webDevArgs(webPort), {
     cwd: REPO,
     stdio: "inherit",
+    windowsHide: true,
     env: {
       ...process.env,
       PORT: String(webPort),
@@ -105,6 +106,7 @@ async function startPreviewStack(webPort, mode) {
   const api = spawn(NPM, ["-w", "server", "run", "dev"], {
     cwd: REPO,
     stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
     env: {
       ...process.env,
       PORT: String(apiPort),
@@ -124,6 +126,7 @@ async function startPreviewStack(webPort, mode) {
   const web = spawn(NPM, webDevArgs(webPort), {
     cwd: REPO,
     stdio: "inherit",
+    windowsHide: true,
     env: {
       ...process.env,
       PORT: String(webPort),
@@ -162,7 +165,7 @@ function watchChildren(children) {
 function mainRepoDataDir() {
   try {
     const gitDir = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
-      cwd: REPO, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+      cwd: REPO, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true,
     }).trim();
     return join(dirname(gitDir), "data");
   } catch {
@@ -187,7 +190,7 @@ function teardown() {
     for (const [, child] of tracked) {
       if (!child.pid) continue;
       try {
-        execFileSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+        execFileSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
       } catch { /* 已经没了 */ }
     }
   } else {

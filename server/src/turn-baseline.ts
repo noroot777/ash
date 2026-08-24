@@ -47,11 +47,9 @@
 //   ② **stage 是 verify_failed 时不清账**（用户 2026-08-06 拍板）。验证没过、用户插进来
 //      指点两句，那还是**同一版在修**，不是新开一版；清零的话轮数上限就形同虚设 ——
 //      每被打回一次就有人说句话，可以无限重验。
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
 import type { TaskStage } from "@ash/shared";
 import { STAGE_LABELS } from "@ash/shared";
@@ -65,8 +63,7 @@ import { now } from "./util.js";
 import { setWorkflowAt } from "./workflow-advance.js";
 import { railStalledAtRun, taskWorkflowDef } from "./workflows.js";
 import { discardTaskWorkspace } from "./workspace-cleanup.js";
-
-const exec = promisify(execFile);
+import { execFileText as exec } from "./exec.js";
 
 interface TurnBaseline {
   cwd: string;

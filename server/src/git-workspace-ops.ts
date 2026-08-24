@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { access, constants } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { promisify } from "node:util";
+import { execFileText as exec } from "./exec.js";
 import { gitError } from "./git.js";
 import { gitNetInjection } from "./git-credentials.js";
 import { literalPathspec, readScmStatus, type ScmChange, type ScmStatus } from "./git-status.js";
@@ -38,8 +38,6 @@ import { withRepoLock } from "./repo-lock.js";
 //    upstream；没有 upstream 时必须点「发布分支」，并明确指定已配置的 remote。它不偷偷
 //    pull、不 force、不依赖 push.default，避免一次按钮把别的分支一起送出去。pull / fetch /
 //    切分支会改变 agent 脚下的历史或工作树，仍不属于这个面板。
-
-const exec = promisify(execFile);
 
 export { ScmOperationError };
 
@@ -436,6 +434,7 @@ export async function commitWorkspace(
       await new Promise<void>((resolve, reject) => {
         const child = execFile("git", ["-C", root, "commit", ...(options.amend ? ["--amend"] : []), "-F", "-"], {
           maxBuffer: 8 * 1024 * 1024,
+          windowsHide: true,
         }, (error) => (error ? reject(new ScmOperationError(gitError(error), 409)) : resolve()));
         child.stdin?.end(`${message}\n`);
       });

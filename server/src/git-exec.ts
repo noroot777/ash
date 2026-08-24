@@ -20,7 +20,10 @@ export function cappedGitStdout(
   allowExitCodes: readonly number[] = [0],
 ): Promise<CappedStdout> {
   return new Promise((resolve, reject) => {
-    const child = spawn("git", ["-C", repo, ...args], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("git", ["-C", repo, ...args], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
     const chunks: Buffer[] = [];
     const errors: Buffer[] = [];
     let size = 0;

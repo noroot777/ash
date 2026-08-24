@@ -1,12 +1,9 @@
-import { execFile } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { promisify } from "node:util";
 import { DATA_DIR } from "../paths.js";
 import type { AppOpener, OpenerProbe } from "./types.js";
-
-const exec = promisify(execFile);
+import { execFileText as exec } from "../exec.js";
 
 // LaunchServices 没有可直接调用的命令行入口（`lsregister -dump` 是几十 MB 的
 // 内部格式，且 Apple 明确说它不是 API）。所以这里走一条纯文件系统的路：把每个
