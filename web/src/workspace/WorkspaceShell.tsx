@@ -267,7 +267,11 @@ export function WorkspaceShell() {
   const terminalToggle = currentProject ? (
     <TerminalToggle open={terminalOpen} onToggle={() => setTerminalOpen((open) => !open)} />
   ) : null;
-  const handoffAlert = <HandoffApprovalAlert notify={notify} onOpenSettings={() => openSettings("defaults")} />;
+  const handoffAlert = (
+    <div className="handoff-approval-slot">
+      <HandoffApprovalAlert notify={notify} onOpenSettings={() => openSettings("defaults")} />
+    </div>
+  );
   const overlays = <>
     <CommandPalette open={paletteOpen} projects={projects} currentProject={currentProject} tasks={tasks} selectedTask={selectedTask} groups={groups} onClose={() => setPaletteOpen(false)} onProject={selectProject} onAllProjects={() => { selectAllProjects(); setPaletteOpen(false); }} onTask={selectTask} onTaskUpdated={updateTask} onNote={openNotes} onComposer={openComposer} onNewGroup={() => currentProject ? setCreateDialog("group") : notify("先选择一个项目")} onNewProject={() => setCreateDialog("project")} onDeleteTask={setDeleteTarget} onSettings={openSettings} notify={notify} />
     {notes && notesProject && <NotesPanel key={`${notes.projectId}:${notes.noteId ?? "list"}`} project={notesProject} initialNoteId={notes.noteId} onClose={() => setNotes(null)} onTask={(nextTaskId) => { const task = tasks.find((row) => row.id === nextTaskId); if (task) selectTask(task); else api.task(nextTaskId).then(selectTask).catch(() => notify("关联任务读取失败")); setNotes(null); }} onConvert={(draft) => { setNotes(null); setSettingsSection(null); setComposer({ mode: "single", draft }); }} notify={notify} />}
