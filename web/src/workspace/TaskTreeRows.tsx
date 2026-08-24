@@ -171,7 +171,9 @@ export function TaskRow({
                 size={12}
                 weight="bold"
                 className="workspace-task-kind"
-                aria-label={task.handoff.direction === "out" ? "接力转出" : "接力转入"}
+                aria-label={task.handoff.direction === "out"
+                  ? "接力转出"
+                  : task.handoff.direction === "returned" ? "已移回" : "接力转入"}
               />
             )}
             {trailing}

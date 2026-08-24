@@ -36,6 +36,7 @@ export function HandoffDialog({
   // 换 transferId 重发会把同一任务复制到多台机器——要换目标,先在横幅上移除接力标记。
   const pendingHandoff = task.handoff?.direction === "out" && task.handoff.pending ? task.handoff : null;
   const inboundHandoff = task.handoff?.direction === "in" ? task.handoff : null;
+  const actionName = inboundHandoff ? "移回" : "接力";
   // null = 设置还没读回来;[] = 读回来了但一个目标都没配过。
   const [targets, setTargets] = useState<HandoffTarget[] | null>(null);
   const [targetUrl, setTargetUrl] = useState("");
@@ -405,18 +406,18 @@ export function HandoffDialog({
               onClick={() => void (preflight && !blockedByPeer ? run() : requestApproval())}
             >
               {applying
-                ? target?.peerFp ? "正在检查目标机…" : "正在发送申请…"
+                ? target?.peerFp ? `正在检查${inboundHandoff ? "来源机" : "目标机"}…` : `正在发送${actionName}申请…`
                 : busy
-                ? "接力中…(打包并传输,可能要一会儿)"
+                ? `${actionName}中…(打包并传输,可能要一会儿)`
                 : !preflight || blockedByPeer
                   ? approval?.peer?.peerStatus === "pending" || approval?.peer?.peerStatus === "blocked" || blockedByPeer
-                    ? "检查申请状态"
-                    : target?.peerFp ? "重新检查目标机" : "申请接力"
-                : pendingHandoff
-                  ? "原样重发,幂等收口"
-                  : preflight?.local.running
-                    ? "停止并接力"
-                    : "开始接力"}
+                    ? `检查${actionName}申请状态`
+                    : target?.peerFp ? `重新检查${inboundHandoff ? "来源机" : "目标机"}` : `申请${actionName}`
+                  : pendingHandoff
+                    ? "原样重发,幂等收口"
+                    : preflight?.local.running
+                      ? `停止并${actionName}`
+                      : `开始${actionName}`}
             </button>
           )}
         </footer>
@@ -455,6 +456,7 @@ export function HandoffBanner({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const out = handoff.direction === "out";
+  const returned = handoff.direction === "returned";
   const link = out && !handoff.pending
     ? handoffTaskHref(taskId, handoff)
     : null;
@@ -480,7 +482,9 @@ export function HandoffBanner({
           ? handoff.pending
             ? `${new Date(handoff.at).toLocaleString()} 接力到${peer}后没收到确认,对端可能已收到这份任务。原样再接力一次会自动幂等收口;确认对端没收到,再移除标记在本机继续。`
             : `${new Date(handoff.at).toLocaleString()} 已接力到${peer},本机这份只是历史存档。`
-          : `${new Date(handoff.at).toLocaleString()} 从${peer}接力而来(会话文件 ${handoff.sessions} 份,代码${handoff.git === "bundle" ? "已随分支带来" : "未随任务携带"})。`}
+          : returned
+            ? `${new Date(handoff.at).toLocaleString()} 已从${peer}移回本机，最新上下文已接回；现在可继续运行或再次接力。`
+            : `${new Date(handoff.at).toLocaleString()} 从${peer}接力而来(会话文件 ${handoff.sessions} 份,代码${handoff.git === "bundle" ? "已随分支带来" : "未随任务携带"})。`}
       </span>
       {link && (
         <a href={link} target="_blank" rel="noreferrer">

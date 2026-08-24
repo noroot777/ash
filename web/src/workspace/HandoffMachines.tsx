@@ -41,7 +41,7 @@ function BulkHandoffDialog({
 }) {
   // 对话框打开时冻结本次批量清单。正式接力会让 tasks 通过 SSE 实时变成 out；如果继续
   // 跟着重算，成功页会把刚搬走的任务反列成「不可接力」，甚至冒出“没有任务”的警告。
-  const [{ eligible, skipped }] = useState(() => partitionBulkHandoffTasks(tasks, project.id));
+  const [{ eligible, skipped }] = useState(() => partitionBulkHandoffTasks(tasks, project.id, target.peerFp));
   const sample = eligible[0] ?? null;
   const mounted = useRef(true);
   const autoProbeAttempted = useRef(false);

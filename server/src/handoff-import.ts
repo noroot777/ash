@@ -264,7 +264,7 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
     if (existing.handoff) {
       try { h = JSON.parse(existing.handoff) as TaskHandoff; } catch { h = null; }
     }
-    if (h?.direction === "in" && m.transferId && h.transferId === m.transferId) {
+    if ((h?.direction === "in" || h?.direction === "returned") && m.transferId && h.transferId === m.transferId) {
       return {
         ok: true,
         taskId: m.task.id,
@@ -425,7 +425,9 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
   }
 
   const marker: TaskHandoff = {
-    direction: "in",
+    // 首次接到别人交来的任务要锁回来源机；安全移回原机后只留 returned 历史标记，
+    // 任务恢复成原机普通任务，可再次接力到任意已注册主机。
+    direction: returning ? "returned" : "in",
     // 源机生成的接力身份证:应答丢失后源机原样重试时,靠它把「已有同 id 任务」识别成
     // 同一次接力并幂等收口(见上面 existing 分支)。
     transferId: m.transferId ?? null,

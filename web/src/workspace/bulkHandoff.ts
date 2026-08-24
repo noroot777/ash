@@ -8,6 +8,7 @@ export type BulkHandoffSkip = {
 export function partitionBulkHandoffTasks(
   tasks: Task[],
   projectId: string,
+  targetFingerprint?: string | null,
 ): { eligible: Task[]; skipped: BulkHandoffSkip[] } {
   const eligible: Task[] = [];
   const skipped: BulkHandoffSkip[] = [];
@@ -21,7 +22,10 @@ export function partitionBulkHandoffTasks(
     else if (task.verifyRound != null) reason = "验证轮尚未结束";
     else if (task.handoff?.direction === "out" && task.handoff.pending) reason = "上次接力仍待确认，需单独收口";
     else if (task.handoff?.direction === "out") reason = "已经接力出去";
-    else if (task.handoff?.direction === "in") reason = "从别处接来的任务只能移回来源机器，不能批量转送";
+    else if (task.handoff?.direction === "in"
+      && (!task.handoff.peerFp || !targetFingerprint || task.handoff.peerFp !== targetFingerprint)) {
+      reason = "从别处接来的任务只能移回来源机器，当前所选主机不是来源机";
+    }
 
     if (reason) skipped.push({ task, reason });
     else eligible.push(task);

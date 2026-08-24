@@ -68,9 +68,10 @@ export interface HandoffApprovalResult {
 }
 
 // 落在 tasks.handoff（json）上的持久接力标记:导出侧 direction:"out"（任务已交出去，
-// 本地这份只是历史），导入侧 direction:"in"（从别的机器接过来的）。刷新后横幅靠它。
+// 本地这份只是历史），首次导入侧 direction:"in"（在别人机器上帮原机继续），安全移回
+// 原机后 direction:"returned"（只保留历史/幂等信息，不再限制下一次接力目标）。
 export interface TaskHandoff {
-  direction: "out" | "in";
+  direction: "out" | "in" | "returned";
   // out 专用:true = 请求已发出但没收到对端确认(应答丢失/源机中途退出)。pending 态
   // 同样硬拦本机启动;原样重试接力会按 transferId 幂等收口,确认没送到也可手动移除标记。
   pending?: boolean;
@@ -92,7 +93,8 @@ export interface TaskHandoff {
   // out: 目标配置里的名字；in: 源机主机名。
   peerName: string | null;
   // in:签名确认过的来源机器指纹。移回时只允许选择 handoffTargets 里指纹一致的机器，
-  // 防止把「移回」变成任意第三台机器的再次转送。老版本导入没有此字段。
+  // 防止把「移回」变成任意第三台机器的再次转送。returned 只用它展示移回来源；不锁目标。
+  // 老版本导入没有此字段。
   peerFp?: string | null;
   // 对端那份任务的 id（同 id 迁移,当前恒等于本任务 id;留字段防语义变化）。
   peerTaskId: string;

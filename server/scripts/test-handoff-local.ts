@@ -146,7 +146,9 @@ try {
   assert.equal(returned.ok, true);
   const returnedRow = (await db.select().from(tasks).where(eq(tasks.id, returnId))).at(0)!;
   assert.equal(returnedRow.title, "移回后的最新任务");
-  assert.equal(JSON.parse(returnedRow.handoff!).direction, "in", "移回后本机重新成为当前持有任务的机器");
+  assert.equal(JSON.parse(returnedRow.handoff!).direction, "returned", "移回后本机恢复为可自由接力的原机任务");
+  const returnedReplay = await importHandoff(returnManifest);
+  assert.equal(returnedReplay.idempotent, true, "移回应答丢失后仍应按同 transferId 幂等收口");
 
   const mismatchId = "handoff-return-02";
   await db.insert(tasks).values({
