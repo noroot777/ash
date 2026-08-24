@@ -9,6 +9,7 @@ import type {
   TaskHandoff,
 } from "@ash/shared";
 import { ArrowSquareOut, Fingerprint, PaperPlaneTilt, SpinnerGap, Warning } from "@phosphor-icons/react";
+import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { handoffTaskHref } from "../workspace/workspaceHistory.ts";
@@ -68,17 +69,33 @@ export function HandoffDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notify]);
 
-  // 换目标只重置本地状态，不自动探测。申请是一个需要用户明确点击的动作：带签名的
-  // ping 会让本机出现在对方待审批列表里，不能再由「只是打开对话框」暗中触发。
+  const target = targets?.find((item) => item.url === targetUrl) ?? null;
+  const shouldAutoPreflight = Boolean(target?.peerFp || pendingHandoff);
+
+  // 从未申请过的目标停在显式「申请接力」；已经记住身份的目标说明用户至少明确申请过
+  // 一次，重开对话框可以直接检查审批状态并预检，避免日常接力每次都重复点申请。
   useEffect(() => {
+    let alive = true;
     setPreflight(null);
     setPreflightError(null);
     setProjectId("");
     setApproval(null);
+    if (!targetUrl || !shouldAutoPreflight) return () => { alive = false; };
+    setApplying(true);
+    api.handoffPreflight(task.id, targetUrl)
+      .then((probe) => {
+        if (!alive) return;
+        setPreflight(probe);
+        setProjectId(pendingHandoff?.targetProjectId ?? probe.suggestedProjectId ?? "");
+      })
+      .catch((reason) => {
+        if (alive) setPreflightError(reason instanceof Error ? reason.message : String(reason));
+      })
+      .finally(() => { if (alive) setApplying(false); });
+    return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetUrl]);
+  }, [shouldAutoPreflight, targetUrl, task.id]);
 
-  const target = targets?.find((item) => item.url === targetUrl) ?? null;
   // 重放收口时冻结的目标机可能已经不在设置列表里(被删过),补一个选项让它仍可见可选。
   const targetOptions = pendingHandoff?.peerUrl && !(targets ?? []).some((item) => item.url === pendingHandoff.peerUrl)
     ? [{ name: pendingHandoff.peerName ?? pendingHandoff.peerUrl, url: pendingHandoff.peerUrl }, ...(targets ?? [])]
@@ -120,12 +137,6 @@ export function HandoffDialog({
     try {
       const requestResult = await api.requestHandoffApproval(targetUrl);
       setApproval(requestResult);
-      if (requestResult.peer) {
-        setTargets((current) => current?.map((item) =>
-          item.url.replace(/\/+$/, "") === targetUrl.replace(/\/+$/, "")
-            ? { ...item, peerFp: requestResult.peer!.fingerprint }
-            : item) ?? current);
-      }
       const status = requestResult.peer?.peerStatus;
       if (status === "pending") {
         notify("接力申请已发送，请等待对方接受申请后再接力");
@@ -230,14 +241,13 @@ export function HandoffDialog({
               placeholder="http://192.168.1.50:4317"
               onChange={(event) => setDraftTargetUrl(event.target.value)}
             />
-            <button
-              type="button"
-              className="is-primary"
+            <Button
+              variant="primary"
               disabled={busy || !draftTargetName.trim() || !HANDOFF_URL_RE.test(draftTargetUrl.trim())}
               onClick={() => void addTarget()}
             >
               添加远程主机
-            </button>
+            </Button>
           </div>
         ) : (
           <>
@@ -264,7 +274,7 @@ export function HandoffDialog({
                 ))}
               </select>
             </div>
-            {approval && (
+            {approval && !preflight && (
               <p className={`handoff-peer-line${approval.peer?.peerStatus === "pending" || approval.peer?.peerStatus === "blocked" ? " is-warn" : ""}`}>
                 <Fingerprint size={13} aria-hidden="true" />
                 <span>{approvalMessage(approval)}</span>
@@ -284,7 +294,7 @@ export function HandoffDialog({
                     <span>
                       目标机身份 <b>{preflight.peer.short}</b>
                       {preflight.peer.trust === "first-seen"
-                        ? "（第一次连这台机器：和对端设置页上显示的那串核对一下，接力成功后本机会记住它）"
+                        ? "（第一次核对这台机器：和对端设置页上的指纹对一下，明确申请后本机会记住它）"
                         : "（和上次记住的一致）"}
                       {preflight.peer.peerStatus === "pending"
                         ? "。申请已送达，等待对方接受后再接力。"
@@ -378,17 +388,17 @@ export function HandoffDialog({
             <button
               className="is-primary"
               type="button"
-              disabled={busy || !targetUrl || (!!preflight && (!projectId || blockedByPeer))}
-              onClick={() => void (preflight ? run() : requestApproval())}
+              disabled={busy || applying || !targetUrl || (!!preflight && !blockedByPeer && !projectId)}
+              onClick={() => void (preflight && !blockedByPeer ? run() : requestApproval())}
             >
-              {busy && applying
-                ? "正在发送申请…"
+              {applying
+                ? target?.peerFp ? "正在检查目标机…" : "正在发送申请…"
                 : busy
                 ? "接力中…(打包并传输,可能要一会儿)"
-                : !preflight
-                  ? approval?.peer?.peerStatus === "pending" || approval?.peer?.peerStatus === "blocked"
+                : !preflight || blockedByPeer
+                  ? approval?.peer?.peerStatus === "pending" || approval?.peer?.peerStatus === "blocked" || blockedByPeer
                     ? "检查申请状态"
-                    : "申请接力"
+                    : target?.peerFp ? "重新检查目标机" : "申请接力"
                 : pendingHandoff
                   ? "原样重发,幂等收口"
                   : preflight?.local.running

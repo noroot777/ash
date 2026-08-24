@@ -141,7 +141,7 @@ export function HandoffSettings({
           <div>
             <b>本机接力身份</b>
             <small>
-              别的机器第一次接力过来时会显示这串指纹，两边对上了再批准。私钥只存在本机数据目录，不随任何请求外传。
+              别的机器第一次申请接力时会显示这串指纹，两边对上了再批准。私钥只存在本机数据目录，不随任何请求外传。
             </small>
           </div>
           <span className="handoff-fingerprint">
@@ -156,7 +156,7 @@ export function HandoffSettings({
           <div>
             <b>接力目标机器</b>
             <small>
-              另一台 ash 的根地址。第一次接力成功后会记住它的身份指纹，之后这个地址要是换了机器，接力会在打包前被拦下。
+              另一台 ash 的根地址。第一次明确申请时会记住它的身份指纹，之后这个地址要是换了机器，申请和接力都会被拦下。
             </small>
           </div>
           <Button
@@ -205,7 +205,7 @@ export function HandoffSettings({
               {approvalBusyUrl === item.url.trim().replace(/\/+$/, "")
                 ? <SpinnerGap size={13} className="is-spinning" aria-hidden="true" />
                 : <PaperPlaneTilt size={13} aria-hidden="true" />}
-              {approvalByUrl[item.url.trim().replace(/\/+$/, "")] ? "检查状态" : "申请"}
+              {approvalByUrl[item.url.trim().replace(/\/+$/, "")] || item.peerFp ? "检查状态" : "申请"}
             </Button>
             {approvalByUrl[item.url.trim().replace(/\/+$/, "")] ? (
               <span className={`handoff-approval-state ${approvalStateClass(approvalByUrl[item.url.trim().replace(/\/+$/, "")])}`}>
@@ -323,7 +323,7 @@ export function HandoffSettings({
         </div>
         {peers.length === 0 ? (
           <p className="handoff-peer-empty">
-            还没有别的机器尝试接力进来。对方第一次接力时会自动出现在这里等你批准。
+            还没有别的机器申请接力进来。对方第一次申请时会自动出现在这里等你批准。
           </p>
         ) : (
           peers.map((peer) => (

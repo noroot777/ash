@@ -139,7 +139,7 @@
 button.handoff-fingerprint { cursor: pointer; }
 button.handoff-fingerprint:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
-/* 还没配对过:不是错误,只是「首次接力后才会记住」,所以用最弱的一档。 */
+/* 还没配对过:不是错误,只是「首次申请后才会记住」,所以用最弱的一档。 */
 .handoff-fingerprint.is-unknown { border-style: dashed; color: var(--faint); font-family: inherit; }
 
 /* 接力来源(入站信任表)。待批准的那条要显眼——它是唯一需要用户动手的一档。 */
@@ -194,18 +194,17 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
 /* 接力载荷上限:数字输入框不需要跟着行宽走，够放三位数加单位就行。 */
 .handoff-body-limit { flex: 0 0 96px; width: 96px; text-align: right; }
 
-/* 系统级入站申请：无论正在看任务还是设置页，都固定出现在工作区顶端。 */
+/* 系统级入站申请：固定在右下通知位，不和工作区/设置页标题叠字，并给 toast 留空。 */
 .handoff-approval-alert {
   position: fixed;
-  z-index: 150;
-  top: 18px;
-  left: 50%;
+  z-index: 260;
+  right: 16px;
+  bottom: 64px;
   display: grid;
-  width: min(720px, calc(100vw - 32px));
+  width: min(480px, calc(100vw - 32px));
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
-  transform: translateX(-50%);
   border: 1px solid color-mix(in lch, var(--amber) 55%, var(--line));
   border-radius: 14px;
   background: color-mix(in lch, var(--amber) 8%, var(--panel));
@@ -233,12 +232,17 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
 .handoff-approval-alert-actions { display: flex; align-items: center; gap: 4px; }
 
 @keyframes handoff-approval-enter {
-  from { transform: translate(-50%, -12px); opacity: 0; }
-  to { transform: translate(-50%, 0); opacity: 1; }
+  from { transform: translateY(12px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
 }
 
 @media (max-width: 760px) {
-  .handoff-approval-alert { grid-template-columns: auto minmax(0, 1fr); }
+  .handoff-approval-alert {
+    right: 12px;
+    bottom: 64px;
+    width: calc(100vw - 24px);
+    grid-template-columns: auto minmax(0, 1fr);
+  }
   .handoff-approval-alert-actions { grid-column: 1 / -1; justify-content: flex-end; }
   .handoff-target-row { flex-wrap: wrap; }
 }
