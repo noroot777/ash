@@ -1,5 +1,5 @@
 import type { HandoffTarget, TaskHandoff } from "@ash/shared";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Context, Hono } from "hono";
 import { getAppSettings } from "./app-settings.js";
 import { db } from "./db/index.js";
@@ -15,7 +15,7 @@ import { answerTask } from "./task-answer.js";
 import { sessionOutputText, sessionsForTask, sessionTraceEntries } from "./task-session-routes.js";
 import { enrichTasks } from "./task-store.js";
 
-type ProxyBody = TaskReplyBody & { taskId?: string; answer?: string };
+type ProxyBody = TaskReplyBody & { taskId?: string; transferId?: string; answer?: string };
 type BrowserProxyBody = TaskReplyBody & { targetUrl?: string; answer?: string };
 
 function fail(c: Context, error: unknown) {
@@ -71,18 +71,50 @@ async function signedBody(c: Context): Promise<{ peer: NonNullable<Awaited<Retur
   return { peer, body };
 }
 
-async function ownedInboundTask(taskId: string, peerFingerprint: string) {
+async function ownedInboundTask(taskId: string, peerFingerprint: string, transferId?: string) {
   const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!row) throw new HandoffError("远端任务不存在", 404);
   const marker = markerOf(row.handoff);
-  if (marker?.direction !== "in" || !marker.peerFp || !sameFingerprint(marker.peerFp, peerFingerprint)) {
+  if (marker?.direction !== "in") {
     throw new HandoffError("这台来源机无权读取或操作该任务", 403);
   }
-  return { row, marker };
+  if (marker.peerFp) {
+    if (!sameFingerprint(marker.peerFp, peerFingerprint)) {
+      throw new HandoffError("这台来源机无权读取或操作该任务", 403);
+    }
+    return { row, marker };
+  }
+
+  // 身份功能上线前导入的任务没有 peerFp，今天新增远程会话代理后会被一律挡成 403。
+  // 源机的 out 标记与目标机的 in 标记仍共同持有同一个随机 transferId；只有已获批准、
+  // 签名有效且能给出这枚接力身份证的来源机，才可把旧记录一次性绑定到自己的指纹。
+  if (!transferId || !marker.transferId || marker.transferId !== transferId) {
+    throw new HandoffError("这台来源机无权读取或操作该任务", 403);
+  }
+  const upgraded: TaskHandoff = {
+    ...marker,
+    peerFp: peerFingerprint,
+    originFp: marker.originFp ?? peerFingerprint,
+  };
+  const upgradedRaw = JSON.stringify(upgraded);
+  const claimed = await db.update(tasks)
+    .set({ handoff: upgradedRaw })
+    .where(and(eq(tasks.id, taskId), eq(tasks.handoff, row.handoff!)))
+    .returning({ id: tasks.id });
+  if (claimed.length) return { row: { ...row, handoff: upgradedRaw }, marker: upgraded };
+
+  // 并发请求可能已经先完成绑定：只接受同一个来源指纹，别让后到者覆盖归属。
+  const refreshed = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  const current = markerOf(refreshed?.handoff ?? null);
+  if (refreshed && current?.direction === "in" && current.peerFp
+    && sameFingerprint(current.peerFp, peerFingerprint)) {
+    return { row: refreshed, marker: current };
+  }
+  throw new HandoffError("这台来源机无权读取或操作该任务", 403);
 }
 
-async function snapshotFor(taskId: string, callerFingerprint: string) {
-  const { row } = await ownedInboundTask(taskId, callerFingerprint);
+async function snapshotFor(taskId: string, callerFingerprint: string, transferId?: string) {
+  const { row } = await ownedInboundTask(taskId, callerFingerprint, transferId);
   const task = (await enrichTasks([row]))[0];
   const sessions = await sessionsForTask(taskId);
   const persisted = await Promise.all(sessions.map(async (session) => ({
@@ -101,7 +133,7 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
     try {
       const { peer, body } = await signedBody(c);
       if (!body.taskId) throw new HandoffError("缺 taskId", 400);
-      return c.json(await snapshotFor(body.taskId, peer.fingerprint));
+      return c.json(await snapshotFor(body.taskId, peer.fingerprint, body.transferId));
     } catch (error) { return fail(c, error); }
   });
 
@@ -109,7 +141,7 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
     try {
       const { peer, body } = await signedBody(c);
       if (!body.taskId) throw new HandoffError("缺 taskId", 400);
-      await ownedInboundTask(body.taskId, peer.fingerprint);
+      await ownedInboundTask(body.taskId, peer.fingerprint, body.transferId);
       return replyToTask(c, body.taskId, body);
     } catch (error) { return fail(c, error); }
   });
@@ -118,7 +150,7 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
     try {
       const { peer, body } = await signedBody(c);
       if (!body.taskId) throw new HandoffError("缺 taskId", 400);
-      await ownedInboundTask(body.taskId, peer.fingerprint);
+      await ownedInboundTask(body.taskId, peer.fingerprint, body.transferId);
       return answerTask(c, body.taskId, { answer: body.answer });
     } catch (error) { return fail(c, error); }
   });
@@ -127,7 +159,7 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
     try {
       const { peer, body } = await signedBody(c);
       if (!body.taskId) throw new HandoffError("缺 taskId", 400);
-      const owned = await ownedInboundTask(body.taskId, peer.fingerprint);
+      const owned = await ownedInboundTask(body.taskId, peer.fingerprint, body.transferId);
       const { handoffTargets } = await getAppSettings();
       const target = handoffTargets.find((item) => item.peerFp && sameFingerprint(item.peerFp, peer.fingerprint));
       if (!target) throw new HandoffError("远端没有登记与来源机指纹一致的移回目标", 409);
@@ -151,7 +183,9 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
       const remote = await outboundTask(c.req.param("id"), body.targetUrl);
       const snapshot = await fetchPeer<Awaited<ReturnType<typeof snapshotFor>>>(
         `${remote.targetUrl}/api/handoff/proxy/task/snapshot`,
-        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ taskId: remote.marker.peerTaskId }) },
+        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+          taskId: remote.marker.peerTaskId, transferId: remote.marker.transferId,
+        }) },
       );
       return c.json({ ...snapshot, target: { name: remote.target.name, url: remote.targetUrl } });
     } catch (error) { return fail(c, error); }
@@ -166,7 +200,9 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
       const { targetUrl: _targetUrl, ...reply } = body;
       const result = await fetchPeer<Record<string, unknown>>(
         `${remote.targetUrl}/api/handoff/proxy/task/reply`,
-        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...reply, taskId: remote.marker.peerTaskId }) },
+        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+          ...reply, taskId: remote.marker.peerTaskId, transferId: remote.marker.transferId,
+        }) },
       );
       return c.json(result, 202);
     } catch (error) { return fail(c, error); }
@@ -179,7 +215,9 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
       const remote = await outboundTask(c.req.param("id"), body.targetUrl);
       const result = await fetchPeer<Record<string, unknown>>(
         `${remote.targetUrl}/api/handoff/proxy/task/answer`,
-        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ taskId: remote.marker.peerTaskId, answer: body.answer }) },
+        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+          taskId: remote.marker.peerTaskId, transferId: remote.marker.transferId, answer: body.answer,
+        }) },
       );
       return c.json(result);
     } catch (error) { return fail(c, error); }
@@ -192,7 +230,9 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
       const remote = await outboundTask(c.req.param("id"), body.targetUrl);
       await fetchPeer(
         `${remote.targetUrl}/api/handoff/proxy/task/return`,
-        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ taskId: remote.marker.peerTaskId }), timeoutMs: 600_000 },
+        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+          taskId: remote.marker.peerTaskId, transferId: remote.marker.transferId,
+        }), timeoutMs: 600_000 },
       );
       const refreshed = (await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
       if (!refreshed) throw new HandoffError("任务已移回，但本机记录读取失败", 500);
