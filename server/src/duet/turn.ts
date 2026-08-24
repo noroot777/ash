@@ -21,6 +21,7 @@ import { LOST_SESSION_PATCH, SESSION_LOST_NOTE, isSessionLost } from "../executo
 import { RUNS_DIR } from "../paths.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
+import { affectedCodexResumeWarning, announceAffectedSessionReplacement } from "../session-version-guard.js";
 import { recordTurnStart } from "./timeline.js";
 
 const RAISE_RE = /(^|\n)\s*\[可收敛\]/;
@@ -88,11 +89,24 @@ export async function runTurn(args: {
   const { taskId, role, speaker, round, executor, prompt, cwd } = args;
   // A stop requested between turns: don't even spawn the next one.
   if (isCanceling(taskId)) throw new CanceledRun();
+  let resumeCliId = args.resumeCliId;
+  const sessionUpgradeWarning = await affectedCodexResumeWarning(executor.type, resumeCliId);
+  if (sessionUpgradeWarning) {
+    if (args.rowId) {
+      await announceAffectedSessionReplacement({
+        taskId, sessionId: args.rowId, role, agentType: executor.type, warning: sessionUpgradeWarning,
+      });
+      await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, args.rowId));
+    }
+    resumeCliId = undefined;
+  }
+  // 版本读取与持久说明之间有 await；这期间收到停止请求也不能再起下一轮。
+  if (isCanceling(taskId)) throw new CanceledRun();
   const turnStart = now();
   const handle = executor.run({
-    prompt: withGlobalBrowserPolicy(prompt, args.resumeCliId ? "reminder" : "full"),
+    prompt: withGlobalBrowserPolicy(prompt, resumeCliId ? "reminder" : "full"),
     cwd,
-    sessionId: args.resumeCliId || undefined,
+    sessionId: resumeCliId,
   });
   trackRun(taskId, handle);
   let cliId = handle.sessionId;

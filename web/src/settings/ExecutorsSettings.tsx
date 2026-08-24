@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { AgentExecutorProfile, LlmProvider } from "@ash/shared";
 import { refreshAgentAvailability } from "../lib/agentAvailability.ts";
 import { api, type DetectedCli } from "../lib/api.ts";
@@ -36,7 +36,7 @@ export function ExecutorsSettings({ notify }: { notify: (message: string) => voi
       : current.filter((row) => row.id !== id));
   };
 
-  const detect = async () => {
+  const detect = useCallback(async () => {
     setDetecting(true);
     try {
       setDetected(await api.detectClis());
@@ -46,7 +46,13 @@ export function ExecutorsSettings({ notify }: { notify: (message: string) => voi
     } finally {
       setDetecting(false);
     }
-  };
+  }, [notify]);
+
+  // 横幅的「查看执行器」落到这里时，警告要自行出现，不能再要求用户猜到还得手动检测一次。
+  // 保留按钮作为刷新入口；自动检测与按钮共用同一条状态/错误处理路径。
+  useEffect(() => {
+    void detect();
+  }, [detect]);
 
   const register = async (cli: DetectedCli) => {
     if (!cli.type) return;

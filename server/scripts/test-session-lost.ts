@@ -15,11 +15,13 @@
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
+import { readCodexCliVersion } from "../src/executors/codex-rollout.js";
 import { LOST_SESSION_PATCH, isSessionLost } from "../src/executors/session-lost.js";
 import { parseClaudeStream } from "../src/executors/claude.js";
+import { affectedCodexResumeWarning } from "../src/session-version-guard.js";
 
 const dir = mkdtempSync(join(tmpdir(), "ash-session-lost-"));
 const ok = (m: string) => console.log("   ✓ " + m);
@@ -72,6 +74,30 @@ assert.deepEqual(
 );
 ok("清理覆盖 id + 三件套恢复命令");
 
+// ── ③bis 旧 Codex 会话在起跑前替换 ─────────────────────────────────────────
+// rollout 首部允许有 BOM、空行或少量旁注；只要紧随其后的 session_meta 能证明它由
+// 0.147 创建，三条真正 spawn --resume 的链都应走同一套版本守卫。
+const originalCodexHome = process.env.CODEX_HOME;
+const codexHome = join(dir, "codex-home");
+const codexThreadId = "01a032e5-c973-78c2-bbc7-a2ff7d10b3da";
+const rolloutDir = join(codexHome, "sessions", "2026", "08", "24");
+mkdirSync(rolloutDir, { recursive: true });
+writeFileSync(
+  join(rolloutDir, `rollout-2026-08-24T10-00-00-${codexThreadId}.jsonl`),
+  `\uFEFF\n${JSON.stringify({ type: "notice", payload: {} })}\n`
+    + `${JSON.stringify({ type: "session_meta", payload: { session_id: codexThreadId, cli_version: "0.147.0" } })}\n`,
+);
+process.env.CODEX_HOME = codexHome;
+try {
+  assert.equal(await readCodexCliVersion(codexThreadId), "0.147.0", "应越过文件头噪声读到创建版本");
+  assert.match(await affectedCodexResumeWarning("codex", codexThreadId) ?? "", /全新会话/);
+  assert.equal(await affectedCodexResumeWarning("claude", codexThreadId), undefined, "只替换 Codex 会话");
+} finally {
+  if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = originalCodexHome;
+}
+ok("能识别带文件头噪声的 0.147 Codex rollout");
+
 // ── ④ 没有第四条没接清理的续跑链 ────────────────────────────────────────────
 // 这个修复最容易坏的方式不是写错,是**再长出一条链**:谁都能写一行
 // `sessionId: <库里读出来的 id>` 把 CLI 的 --resume 接上,却不知道还得在自己的结算里
@@ -104,6 +130,17 @@ for (const [chain, owner] of Object.entries(CHAIN_OWNER)) {
   assert.ok(code.includes("LOST_SESSION_PATCH"), `${chain} 的结算方 ${owner} 没在清失效会话`);
 }
 ok("每条续跑链都有人负责清失效 id");
+
+for (const chain of ["orchestrator.ts", "team/session.ts", "duet/turn.ts"]) {
+  const code = readFileSync(join(SRC, chain), "utf8");
+  assert.ok(code.includes("affectedCodexResumeWarning"), `${chain} 没在起跑前识别受影响的 Codex 会话`);
+  assert.match(
+    code,
+    /announceAffectedSessionReplacement\([\s\S]*?db\.update\(sessions\)\.set\(LOST_SESSION_PATCH\)/,
+    `${chain} 应先持久说明，再清除旧会话凭据`,
+  );
+}
+ok("single / team / duet 都在持久说明后替换受影响的 Codex 会话");
 
 rmSync(dir, { recursive: true, force: true });
 console.log("session-lost: 全部通过");
