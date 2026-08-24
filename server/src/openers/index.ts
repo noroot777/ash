@@ -1,14 +1,12 @@
 import { execFile } from "node:child_process";
 import { dirname, extname } from "node:path";
-import { promisify } from "node:util";
+import { execFileText as exec } from "../exec.js";
 import { linuxOpenCommand, linuxRevealCommand, probeLinuxOpeners } from "./linux.js";
 import { macOpenCommand, macRevealCommand, probeMacOpeners } from "./macos.js";
 import { probeWindowsOpeners, windowsOpenCommand } from "./windows.js";
 import type { OpenerProbe } from "./types.js";
 
 export type { AppOpener, OpenerProbe } from "./types.js";
-
-const exec = promisify(execFile);
 
 interface Command {
   file: string;
@@ -44,7 +42,7 @@ export async function revealInFileManager(absPath: string): Promise<void> {
   if (process.platform === "darwin") return run(macRevealCommand(absPath));
   if (process.platform === "win32") {
     // explorer 定位成功时退出码也是 1，所以这条不看退出码。
-    return void execFile("explorer.exe", [`/select,${absPath}`], () => {});
+    return void execFile("explorer.exe", [`/select,${absPath}`], { windowsHide: true }, () => {});
   }
   if (process.platform === "linux") return run(linuxRevealCommand(absPath, dirname(absPath)));
   throw new Error(`${process.platform} 上没有可用的「在文件夹中显示」`);

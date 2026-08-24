@@ -1,10 +1,7 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { cappedGitStdout } from "./git-exec.js";
 import { literalPathspec } from "./git-status.js";
 import { expandHome, isGitRepo, resolveTaskMergeTarget, resolveWorktreeBranchName } from "./git.js";
-
-const exec = promisify(execFile);
+import { execFileText as exec } from "./exec.js";
 const DIFF_LIMIT_BYTES = 1024 * 1024;
 
 export interface TaskDiffFile {

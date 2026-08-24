@@ -1,8 +1,5 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { expandHome } from "./git.js";
-
-const exec = promisify(execFile);
+import { execFileText as exec } from "./exec.js";
 const FIELD_SEPARATOR = "\x1f";
 const MAX_COMMITS = 100;
 

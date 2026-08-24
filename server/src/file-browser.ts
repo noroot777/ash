@@ -156,6 +156,7 @@ async function ignoredPaths(root: string, relPaths: string[]): Promise<Set<strin
   return new Promise((done) => {
     const child = spawn("git", ["-C", root, "check-ignore", "-z", "--stdin"], {
       stdio: ["pipe", "pipe", "ignore"],
+      windowsHide: true,
     });
     let out = "";
     child.stdout.setEncoding("utf8");

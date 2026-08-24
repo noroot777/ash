@@ -1,15 +1,12 @@
 // 合并结果审查只读地检查验收时冻结的 commit。原任务 worktree 已被清理，所以为每条
 // review run 建一个 detached 临时 worktree；它没有分支，不会复活原任务，也不会跟着
 // 目标分支后续移动。所有 worktree 注册表写操作仍走仓库锁。
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expandHome, headCommit, isGitRepo } from "./git.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
-
-const exec = promisify(execFile);
+import { execFileText as exec } from "./exec.js";
 
 function isDir(path: string): boolean {
   try { return statSync(path).isDirectory(); } catch { return false; }

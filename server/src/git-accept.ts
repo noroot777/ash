@@ -6,8 +6,6 @@
 //
 // 怎么合、清到什么程度由**线上那一站**说了算（AcceptStrategy / AcceptClean），调用方
 // 在 task-accept.ts 里从任务的工作流快照读出来传进来；不传就是老规矩（安全合并 + 全清）。
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
@@ -28,8 +26,7 @@ import {
 } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
-
-const exec = promisify(execFile);
+import { execFileText as exec } from "./exec.js";
 
 const isDir = (p: string) => {
   try { return statSync(p).isDirectory(); } catch { return false; }
