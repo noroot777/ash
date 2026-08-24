@@ -56,7 +56,7 @@
           </div>
           <div class="task-subline">
             <span class="branch-chip"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3a2 2 0 1 1-1 1.73V11a1 1 0 0 0 1 1h4.27A2 2 0 1 1 11 13H5a2 2 0 0 1-2-2V4.73A2 2 0 0 1 5 3Zm6 1a2 2 0 0 1-1 1.73V7a2 2 0 0 1-2 2H6V8h2a1 1 0 0 0 1-1V5.73A2 2 0 1 1 11 4Z"/></svg>ash/filters-v2</span>
-            <span id="headerLocation">本机 · ~/code/harness</span>
+            <span>任务 #R4m8 · 单一执行权</span>
           </div>
         </div>
         <div class="header-actions">
@@ -64,6 +64,39 @@
           <button class="icon-button" type="button" aria-label="更多操作">•••</button>
         </div>
       </header>
+
+      <section class="execution-banner" id="executionBanner" aria-label="当前执行位置">
+        <div class="execution-mark" aria-hidden="true"><span></span><i></i></div>
+        <div class="execution-copy">
+          <span class="execution-kicker">当前执行位置</span>
+          <div class="execution-title">
+            <b id="executionHostName">本机</b>
+            <span class="execution-state" id="executionState"><i></i><span id="executionStateText">正在执行</span></span>
+          </div>
+          <small id="executionDescription">对话、工具记录和执行进度会实时同步到这个页面</small>
+        </div>
+        <div class="sync-proof">
+          <span>上下文同步</span>
+          <b id="syncStatus">实时</b>
+          <small id="lastSyncLabel">刚刚更新</small>
+        </div>
+        <div class="execution-actions">
+          <button class="location-button" id="locationButton" type="button" aria-haspopup="dialog" aria-expanded="false">
+            <span id="locationButtonText">移至其他主机…</span>
+            <svg viewBox="0 0 12 12" aria-hidden="true"><path d="m3 4.5 3 3 3-3"/></svg>
+          </button>
+          <div class="location-menu" id="locationMenu" role="dialog" aria-label="选择运行位置" hidden>
+            <div class="menu-head">
+              <div><b>移动这个聊天</b><small>选择新的执行位置</small></div>
+              <span class="connection-count">3 在线</span>
+            </div>
+            <div class="host-list" id="hostList"></div>
+            <button class="manage-connections" id="manageConnectionsButton" type="button">
+              管理连接 <span>↗</span>
+            </button>
+          </div>
+        </div>
+      </section>
 
       <section class="chat" aria-label="任务对话">
         <div class="chat-inner" id="chatFeed">
@@ -88,44 +121,26 @@
               </div>
             </div>
           </article>
-
-          <div class="location-event is-hidden" id="locationEvent" role="status">
-            <span class="event-line"></span>
-            <div class="event-token"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h3A2.5 2.5 0 0 1 12 5.5V7h1.5A2.5 2.5 0 0 1 16 9.5v5A2.5 2.5 0 0 1 13.5 17h-3A2.5 2.5 0 0 1 8 14.5V13H6.5A2.5 2.5 0 0 1 4 10.5v-5ZM6.5 4A1.5 1.5 0 0 0 5 5.5v5A1.5 1.5 0 0 0 6.5 12H8V9.5A2.5 2.5 0 0 1 10.5 7H11V5.5A1.5 1.5 0 0 0 9.5 4h-3Z"/></svg></div>
-            <div><b id="eventTitle">聊天已移至 Mac mini</b><small id="eventText">聊天和 Git 状态保持连续 · 09:48</small></div>
-          </div>
         </div>
       </section>
 
       <footer class="composer-wrap">
         <div class="composer" id="composer">
+          <div class="composer-route" id="composerRoute">
+            <span class="route-live"><i></i></span>
+            <span id="composerRouteText">这条消息将在本机执行</span>
+            <small id="composerSyncText">上下文已同步</small>
+          </div>
           <textarea aria-label="回复 Codex" rows="1" placeholder="回复 Codex…"></textarea>
           <div class="composer-toolbar">
             <div class="composer-left">
               <button class="tool-button" type="button" aria-label="添加附件">＋</button>
-              <button class="tool-button" type="button">@</button>
-            </div>
-            <div class="run-location-wrap">
-              <button class="location-button" id="locationButton" type="button" aria-haspopup="dialog" aria-expanded="false">
-                <span class="location-signal"><i></i></span>
-                <span id="locationButtonText">本机</span>
-                <svg viewBox="0 0 12 12" aria-hidden="true"><path d="m3 4.5 3 3 3-3"/></svg>
-              </button>
-              <div class="location-menu" id="locationMenu" role="dialog" aria-label="选择运行位置" hidden>
-                <div class="menu-head">
-                  <div><b>运行位置</b><small>移动这个聊天和它的 Git 状态</small></div>
-                  <span class="connection-count">3 在线</span>
-                </div>
-                <div class="host-list" id="hostList"></div>
-                <button class="manage-connections" id="manageConnectionsButton" type="button">
-                  管理连接 <span>↗</span>
-                </button>
-              </div>
+              <button class="agent-button" type="button"><span class="mini-agent" aria-hidden="true"></span>Codex <span>⌄</span></button>
             </div>
             <button class="send-button" type="button" aria-label="发送">↑</button>
           </div>
         </div>
-        <p class="composer-note">Handoff 会移动同一个聊天，不会创建副本。</p>
+        <p class="composer-note">你看到的是当前执行主机的同一份实时上下文。</p>
       </footer>
     </main>
   </div>
