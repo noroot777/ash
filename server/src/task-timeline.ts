@@ -53,7 +53,7 @@ export async function appendTaskTimeline(
       sessionId: session.id,
       role: session.role as SessionRole,
       agentType: session.agentType as AgentType,
-      event: { kind: "system", text },
+      event: { kind: "system", text, at },
     });
     return true;
   } catch (error) {

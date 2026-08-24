@@ -126,7 +126,6 @@ export function useConversation(taskId: string, revision = 0) {
           kind: "server",
           id: createClientId(),
           event,
-          receivedAt: new Date().toISOString(),
         });
         if (event.event.kind === "session") {
           void api.sessions(taskId).then(setSessions).catch(() => undefined);
