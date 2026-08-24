@@ -96,7 +96,7 @@ try {
   const winUpName = "up002xyz-shot.txt";
   const winUpPath = `D:\\ai_workspace\\ash\\data\\uploads\\${winUpName}`;
   const upManifest = (autoResume: boolean) => ({
-    version: 1, sourceHost: "win-src", sourceWorkspace: null,
+    version: 1, sourceHost: "win-src", sourceFingerprint: "a".repeat(64), sourceWorkspace: null,
     targetProjectId: projectId, autoResume, git: null, transferId: "transfer-up-1",
     task: {
       id: "handoff-local-task-01", title: "Windows 附件用例",
@@ -114,12 +114,92 @@ try {
   const winUpLocal = join(root, "uploads", winUpName);
   assert.equal(readFileSync(winUpLocal, "utf8"), "win-upload\n", "附件本体应落到本机 uploads 目录");
   const upTask = (await db.select().from(tasks).where(eq(tasks.id, "handoff-local-task-01"))).at(0)!;
+  assert.equal(JSON.parse(upTask.handoff!).peerFp, "a".repeat(64), "来源指纹应进入 in 标记");
   assert.ok(upTask.body!.includes(winUpLocal), "正文里的原始形态路径应改写为本机路径");
   assert.ok(!upTask.body!.includes("D:"), "正文不该残留源机路径");
   const upArtifact = readFileSync(join(root, "runs", "handoff-local-task-01", "history.jsonl"), "utf8");
   const upParsed = JSON.parse(upArtifact.trim()) as { text: string };
   assert.ok(upParsed.text.includes(winUpLocal), "JSONL 里的转义形态路径应改写,且改完仍是合法 JSON");
   assert.ok(!upArtifact.includes("D:"), "JSONL 不该残留源机路径");
+
+  // ── 已接力出去的历史存档，只接受原目标机按指纹移回 ────────────────────
+  const returnId = "handoff-return-01";
+  const returningFp = "b".repeat(64);
+  await db.insert(tasks).values({
+    id: returnId, projectId, title: "本机历史存档", body: "旧上下文", status: "done",
+    handoff: JSON.stringify({
+      direction: "out", pending: false, peerFp: returningFp, peerUrl: "http://returning.invalid",
+      peerName: "原目标机", peerTaskId: returnId, at: "2026-08-19T13:00:00.000Z", sessions: 0, git: "none",
+    }),
+    createdAt: "2026-08-19T13:00:00.000Z", updatedAt: "2026-08-19T13:00:00.000Z",
+  });
+  const returnManifest = {
+    ...upManifest(false),
+    sourceHost: "原目标机",
+    sourceFingerprint: returningFp,
+    transferId: "transfer-return-1",
+    task: { ...upManifest(false).task, id: returnId, title: "移回后的最新任务", body: "远端产生的新上下文" },
+    uploads: [],
+    files: [],
+  };
+  const returned = await importHandoff(returnManifest);
+  assert.equal(returned.ok, true);
+  const returnedRow = (await db.select().from(tasks).where(eq(tasks.id, returnId))).at(0)!;
+  assert.equal(returnedRow.title, "移回后的最新任务");
+  assert.equal(JSON.parse(returnedRow.handoff!).direction, "in", "移回后本机重新成为当前持有任务的机器");
+
+  const mismatchId = "handoff-return-02";
+  await db.insert(tasks).values({
+    id: mismatchId, projectId, title: "不可被第三台覆盖", body: "保留", status: "done",
+    handoff: JSON.stringify({
+      direction: "out", pending: false, peerFp: "c".repeat(64), peerUrl: "http://other.invalid",
+      peerName: "另一台", peerTaskId: mismatchId, at: "2026-08-19T13:10:00.000Z", sessions: 0, git: "none",
+    }),
+    createdAt: "2026-08-19T13:10:00.000Z", updatedAt: "2026-08-19T13:10:00.000Z",
+  });
+  await assert.rejects(
+    importHandoff({ ...returnManifest, transferId: "transfer-return-2", task: { ...returnManifest.task, id: mismatchId } }),
+    /不是从原接力目标安全移回/,
+  );
+  assert.equal((await db.select().from(tasks).where(eq(tasks.id, mismatchId))).at(0)?.title, "不可被第三台覆盖");
+
+  const rollbackId = "handoff-return-03";
+  const rollbackSessionId = "handoffreturnsess03";
+  const rollbackMarker = JSON.stringify({
+    direction: "out", pending: false, peerFp: returningFp, peerUrl: "http://returning.invalid",
+    peerName: "原目标机", peerTaskId: rollbackId, at: "2026-08-19T13:20:00.000Z", sessions: 1, git: "none",
+  });
+  await db.insert(tasks).values({
+    id: rollbackId, projectId, title: "事务回滚前的存档", body: "不能丢", status: "done",
+    handoff: rollbackMarker,
+    createdAt: "2026-08-19T13:20:00.000Z", updatedAt: "2026-08-19T13:20:00.000Z",
+  });
+  await db.insert(sessions).values({
+    id: rollbackSessionId, taskId: rollbackId, role: "implementer", agentType: "claude",
+    executor: "claude", startedAt: "2026-08-19T13:21:00.000Z",
+  });
+  const duplicateReturningSession = {
+    id: "handoffreturndup03", role: "implementer", agentType: "claude", executor: "claude",
+    startedAt: "2026-08-19T13:22:00.000Z",
+  };
+  await assert.rejects(
+    importHandoff({
+      ...returnManifest,
+      transferId: "transfer-return-3",
+      task: { ...returnManifest.task, id: rollbackId },
+      sessions: [duplicateReturningSession, duplicateReturningSession],
+    }),
+    /移回落库失败，事务已回滚/,
+  );
+  const rollbackRow = (await db.select().from(tasks).where(eq(tasks.id, rollbackId))).at(0)!;
+  assert.equal(rollbackRow.title, "事务回滚前的存档", "移回失败后必须保留原任务行");
+  assert.equal(rollbackRow.body, "不能丢", "移回失败后必须保留原上下文");
+  assert.equal(rollbackRow.handoff, rollbackMarker, "移回失败后必须保留原接力归属标记");
+  assert.equal(
+    (await db.select().from(sessions).where(eq(sessions.id, rollbackSessionId))).length,
+    1,
+    "移回失败后必须保留原会话",
+  );
 
   // ── 3. 幂等收口如实报 in 标记里存的 autoResume 事实 ─────────────────────────
   // 缺陷形态(第 3 轮审查):幂等分支写死 autoResume:false,当初真续跑过的重放会
@@ -243,6 +323,13 @@ try {
     releasePing();
     const exported = await exporting;
     assert.equal(exported.ok, true, "插队被拒后导出应正常走完");
+    await assert.rejects(
+      preflightHandoff("handoff-local-task-01", `http://127.0.0.1:${peerPort}`),
+      (err: unknown) => err instanceof Error
+        && (err as { status?: number }).status === 409
+        && /没有报出身份/.test(err.message),
+      "接进来的任务即使绕过页面直接调预检，也不能移往无法证明是来源机的目标",
+    );
     const head2 = (await db.select().from(tasks).where(eq(tasks.id, "handoffqhead02"))).at(0)!;
     assert.equal(head2.status, "canceled", "导出把源机任务结算成 canceled(接力语义)");
     assert.ok(!(JSON.parse(head2.handoff!) as { pending?: boolean }).pending, "导出走完标记应是确认态");

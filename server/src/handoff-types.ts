@@ -99,6 +99,8 @@ export interface HandoffSessionRow {
 export interface HandoffManifest {
   version: 1;
   sourceHost: string;
+  // 源机身份指纹；manifest 整体有签名保护。老版本没有，导入照常接受但无法安全“移回”。
+  sourceFingerprint?: string | null;
   targetProjectId: string;
   // 这一次接力的身份证:源机在发送前生成并持久化。应答丢失后重试会带**同一个**
   // transferId,导入侧据此把「已有同 id 任务」识别成同一次接力并幂等返回成功。

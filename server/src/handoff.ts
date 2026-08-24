@@ -94,6 +94,21 @@ async function loadSingleTask(taskId: string): Promise<{ task: TaskRow; project:
   return { task, project };
 }
 
+function parsedHandoff(raw: string | null): TaskHandoff | null {
+  if (!raw) return null;
+  try { return JSON.parse(raw) as TaskHandoff; } catch { return null; }
+}
+
+/**
+ * 接进来的任务只能回到来源机器。返回 undefined 表示普通接力；返回 null 表示老记录
+ * 没有来源指纹，无法安全识别原机器；返回 string 时把它直接交给 pingPeer 做实际身份核对。
+ */
+function inboundReturnFingerprint(raw: string | null): string | null | undefined {
+  const marker = parsedHandoff(raw);
+  if (marker?.direction !== "in") return undefined;
+  return marker.peerFp || null;
+}
+
 /** 停掉正在跑的回合并等结算收尾（镜像 /stop 端点的语义:没有活进程但状态是 running/queued 就直接标 canceled）。 */
 async function stopAndSettle(taskId: string): Promise<TaskRow> {
   const fresh = async () => (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
@@ -139,9 +154,14 @@ function assertPeerAcceptsUs(peer: HandoffPeerIdentity | null): void {
 export async function preflightHandoff(taskId: string, targetUrlRaw: string): Promise<HandoffPreflightResult> {
   const { task, project } = await loadSingleTask(taskId);
   const targetUrl = normalizePeerUrl(targetUrlRaw);
+  const returnFingerprint = inboundReturnFingerprint(task.handoff);
+  if (returnFingerprint === null) {
+    throw new HandoffError("这份接入任务缺少来源机器指纹，无法确认该移回哪台机器；请先升级来源机并重新接力", 409);
+  }
   // 身份核对在最前面:指纹对不上就直接抛,连盘点都不做——用户要先解决「这台是不是
   // 我那台机器」,别让一堆盘点数字把警告冲下去。
-  const { ping, peer } = await pingPeer(targetUrl, await rememberedFingerprint(targetUrl));
+  const expectedFingerprint = returnFingerprint ?? await rememberedFingerprint(targetUrl);
+  const { ping, peer } = await pingPeer(targetUrl, expectedFingerprint);
   // 项目匹配靠仓库目录名:两台机器的绝对路径几乎必然不同,目录名是最稳的公共项。
   // 两侧路径可能来自不同操作系统(本机 Windows、对端 macOS,或反过来),所以不用
   // 跟随运行平台的 basename,统一按 win32 规则切——/ 和 \ 都认、吃掉盘符和尾分隔符,
@@ -234,9 +254,10 @@ export async function exportHandoff(
   // 丢了,这次是重试收口——沿用同一个 transferId,对端据此把「已有同 id 任务」识别成
   // 同一次接力,幂等返回成功而不是 409。
   const prevHandoffRaw = task.handoff;
-  let prevMarker: TaskHandoff | null = null;
-  if (prevHandoffRaw) {
-    try { prevMarker = JSON.parse(prevHandoffRaw) as TaskHandoff; } catch { prevMarker = null; }
+  const prevMarker = parsedHandoff(prevHandoffRaw);
+  const returnFingerprint = inboundReturnFingerprint(prevHandoffRaw);
+  if (returnFingerprint === null) {
+    throw new HandoffError("这份接入任务缺少来源机器指纹，无法确认该移回哪台机器；请先升级来源机并重新接力", 409);
   }
   if (prevMarker?.direction === "out" && !prevMarker.pending) {
     throw new HandoffError("任务已经接力出去了,别重复接力（对端已有一份同 id 任务）", 409);
@@ -279,7 +300,8 @@ export async function exportHandoff(
     await assertNotQueueMember(taskId);
     // 先探测对端与目标项目,确认可行再停任务——反过来会白停一个正在跑的任务。
     // pingPeer 同时做身份核对:指纹和上次记住的对不上就在这里抛,bundle 一个字节都不打。
-    const { ping, peer, sealTo } = await pingPeer(targetUrl, await rememberedFingerprint(targetUrl));
+    const expectedFingerprint = returnFingerprint ?? await rememberedFingerprint(targetUrl);
+    const { ping, peer, sealTo } = await pingPeer(targetUrl, expectedFingerprint);
     assertPeerAcceptsUs(peer);
     const targetProject = ping.projects.find((p) => p.id === opts.targetProjectId);
     if (!targetProject) throw new HandoffError("对端没有这个项目 id,先重新预检", 409);
@@ -333,6 +355,7 @@ export async function exportHandoff(
       const manifest: HandoffManifest = {
         version: 1,
         sourceHost: hostname(),
+        sourceFingerprint: localIdentity().fingerprint,
         targetProjectId: targetProject.id,
         transferId,
         autoResume,
@@ -400,6 +423,7 @@ export async function exportHandoff(
         ...(frozenMessageIds.length ? { messageIds: frozenMessageIds } : {}),
         peerUrl: targetUrl,
         peerName: opts.targetName ?? ping.host,
+        peerFp: peer?.fingerprint ?? null,
         peerTaskId: taskId,
         at: now(),
         sessions: found.size,
@@ -449,6 +473,7 @@ export async function exportHandoff(
         targetProjectId: targetProject.id,
         peerUrl: targetUrl,
         peerName: opts.targetName ?? ping.host,
+        peerFp: peer?.fingerprint ?? null,
         peerTaskId: result.taskId,
         at: now(),
         sessions: found.size,

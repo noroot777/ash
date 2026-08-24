@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { partitionBulkHandoffTasks } from "../src/workspace/bulkHandoff.ts";
+import { handoffTargetsForTask } from "../src/task-detail/handoffTargetPolicy.ts";
 
 const task = (id, overrides = {}) => ({
   id,
@@ -28,7 +29,7 @@ const result = partitionBulkHandoffTasks([
 ], "p1");
 
 assert.deepEqual(result.eligible.map((item) => item.id), ["ready"]);
-assert.deepEqual(result.skipped.map((item) => item.task.id), ["team", "queued", "verifying", "pending", "moved", "inbound"]);
+assert.deepEqual(result.skipped.map((item) => item.task.id), ["team", "queued", "verifying", "pending", "inbound"]);
 assert.match(result.skipped.find((item) => item.task.id === "pending").reason, /单独收口/);
 assert.match(result.skipped.find((item) => item.task.id === "inbound").reason, /只能移回来源机器/);
 
@@ -45,5 +46,16 @@ const allSkipped = partitionBulkHandoffTasks([
 ], "p1");
 assert.equal(allSkipped.eligible.length, 0);
 assert.equal(allSkipped.skipped.length, 2);
+
+const targets = [
+  { name: "source", url: "http://source", peerFp: "a".repeat(64) },
+  { name: "third", url: "http://third", peerFp: "b".repeat(64) },
+];
+assert.deepEqual(handoffTargetsForTask(targets, null), targets);
+assert.deepEqual(
+  handoffTargetsForTask(targets, { direction: "in", peerFp: "a".repeat(64) }).map((target) => target.name),
+  ["source"],
+);
+assert.deepEqual(handoffTargetsForTask(targets, { direction: "in" }), []);
 
 console.log("bulk handoff eligibility tests passed");

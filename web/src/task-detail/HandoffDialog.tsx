@@ -14,6 +14,7 @@ import { api } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { handoffTaskHref } from "../workspace/workspaceHistory.ts";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
+import { handoffTargetsForTask } from "./handoffTargetPolicy.ts";
 
 // 任务接力对话框:选目标机 → 预检(探测对端、匹配项目、盘点可搬运的东西)→ 执行。
 // 执行会先停掉正在跑的任务,再打包 git 分支和 CLI 会话文件推给对端,所以预检结果里
@@ -34,6 +35,7 @@ export function HandoffDialog({
   // autoResume 一律沿用 pending 标记冻结的第一次参数(服务端同样硬校验,换参数 409)。
   // 换 transferId 重发会把同一任务复制到多台机器——要换目标,先在横幅上移除接力标记。
   const pendingHandoff = task.handoff?.direction === "out" && task.handoff.pending ? task.handoff : null;
+  const inboundHandoff = task.handoff?.direction === "in" ? task.handoff : null;
   // null = 设置还没读回来;[] = 读回来了但一个目标都没配过。
   const [targets, setTargets] = useState<HandoffTarget[] | null>(null);
   const [targetUrl, setTargetUrl] = useState("");
@@ -55,9 +57,10 @@ export function HandoffDialog({
     api.settings()
       .then((settings) => {
         if (!alive) return;
-        setTargets(settings.handoffTargets);
+        const available = handoffTargetsForTask(settings.handoffTargets, inboundHandoff);
+        setTargets(available);
         if (pendingHandoff?.peerUrl) setTargetUrl(pendingHandoff.peerUrl);
-        else if (settings.handoffTargets[0]) setTargetUrl(settings.handoffTargets[0].url);
+        else if (available[0]) setTargetUrl(available[0].url);
       })
       .catch((reason) => {
         if (!alive) return;
@@ -65,7 +68,7 @@ export function HandoffDialog({
         notify(reason instanceof Error ? reason.message : "接力目标读取失败");
       });
     return () => { alive = false; };
-    // pendingHandoff 只取对话框打开那一刻的值,任务更新不重读设置。
+    // 接力标记只取对话框打开那一刻的值,任务更新不重读设置。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notify]);
 
@@ -202,12 +205,12 @@ export function HandoffDialog({
       <section className="task-confirm-dialog handoff-dialog" role="dialog" aria-modal="true" aria-labelledby="handoff-title">
         <header>
           <span><PaperPlaneTilt size={16} weight="fill" /></span>
-          <h2 id="handoff-title">接力到另一台机器</h2>
+          <h2 id="handoff-title">{inboundHandoff ? "移回来源机器" : "接力到另一台机器"}</h2>
         </header>
         {result ? (
           <>
             <p>
-              已把任务交给{target?.name ? `「${target.name}」` : "对端"}:迁移会话文件 {result.sessionsMigrated} 份,
+              已把任务{inboundHandoff ? "移回" : "交给"}{target?.name ? `「${target.name}」` : "对端"}:迁移会话文件 {result.sessionsMigrated} 份,
               代码{result.git === "bundle" ? "已随分支带过去" : "未随任务携带"};
               {result.autoResume ? "对端已自动续跑。" : "对端不会自动续跑,需要在对端手动点「运行」。"}
               本机会保留历史数据，但任务会从本机任务列表隐藏。
@@ -223,6 +226,13 @@ export function HandoffDialog({
               </a>
             </p>
           </>
+        ) : inboundHandoff && targets && targets.length === 0 ? (
+          <div className="handoff-quick-add">
+            <p>
+              没有找到与来源机器{inboundHandoff.peerName ? `「${inboundHandoff.peerName}」` : ""}指纹一致的已注册主机。
+              为避免把“移回”误送到第三台机器，请先在设置中添加来源机并完成身份申请；指纹匹配后才能移回。
+            </p>
+          </div>
         ) : targets && targets.length === 0 && !pendingHandoff ? (
           <div className="handoff-quick-add">
             <p>还没有远程主机。在这里直接添加，保存后再向对方发送接力申请。</p>
@@ -253,7 +263,9 @@ export function HandoffDialog({
         ) : (
           <>
             <p>
-              把这个任务连同 git 分支、CLI 会话历史整体迁到另一台 ash 上继续跑。
+              {inboundHandoff
+                ? "把这个任务连同 git 分支、CLI 会话历史移回最初交出它的机器。目标已按来源机指纹锁定，不能转送到第三台机器。"
+                : "把这个任务连同 git 分支、CLI 会话历史整体迁到另一台 ash 上继续跑。"}
               {preflight?.local.running ? "任务正在运行,接力会先把它停下来。" : ""}
             </p>
             {pendingHandoff && (
@@ -263,7 +275,7 @@ export function HandoffDialog({
               </p>
             )}
             <div className="handoff-field">
-              <label htmlFor="handoff-target">目标机器</label>
+              <label htmlFor="handoff-target">{inboundHandoff ? "来源机器" : "目标机器"}</label>
               <select
                 id="handoff-target"
                 value={targetUrl}
@@ -427,8 +439,8 @@ const approvalMessage = (result: HandoffApprovalResult) => {
 };
 
 // 任务详情顶部的持久横幅:接力标记落在 tasks.handoff 上,刷新后仍然看得出这个任务
-// 已经交出去了(或是从别的机器接过来的)。接力出去的任务被服务端硬拦启动,横幅上的
-// 「在本机继续」是唯一逃生门——走确认框,因为对端那份不会消失,两边并跑会分叉。
+// 已经交出去了(或是从别的机器接过来的)。确认送达后本机只留不可运行的历史数据，
+// 移回必须从对端那份发起；只有 pending（送达未知）仍保留撤销标记的逃生门。
 export function HandoffBanner({
   taskId,
   handoff,
@@ -475,7 +487,7 @@ export function HandoffBanner({
           在对端打开<ArrowSquareOut size={12} aria-hidden="true" />
         </a>
       )}
-      {out && (
+      {out && handoff.pending && (
         <button
           type="button"
           className="task-handoff-clear"
@@ -488,9 +500,7 @@ export function HandoffBanner({
       {confirmOpen && (
         <ConfirmDialog
           title="移除接力标记"
-          message={handoff.pending
-            ? "对端可能已经收到这份任务。移除标记后本机恢复可运行,但如果对端其实收到了,两台机器会各跑一份、改动会分叉。确定要在本机继续吗?"
-            : `任务已接力到${peer},对端那份不会消失。移除标记后本机恢复可运行,两边同时跑会分叉。确定要在本机继续吗?`}
+          message="对端可能已经收到这份任务。移除标记后本机恢复可运行,但如果对端其实收到了,两台机器会各跑一份、改动会分叉。确定要在本机继续吗?"
           confirmLabel="移除标记,在本机继续"
           danger
           busy={busy}

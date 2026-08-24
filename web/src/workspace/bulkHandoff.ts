@@ -11,7 +11,8 @@ export function partitionBulkHandoffTasks(
 ): { eligible: Task[]; skipped: BulkHandoffSkip[] } {
   const eligible: Task[] = [];
   const skipped: BulkHandoffSkip[] = [];
-  const candidates = tasks.filter((task) => task.projectId === projectId && task.parentId === null && !task.archived);
+  const candidates = tasks.filter((task) => task.projectId === projectId && task.parentId === null && !task.archived
+    && (task.handoff?.direction !== "out" || Boolean(task.handoff.pending)));
 
   for (const task of candidates) {
     let reason: string | null = null;

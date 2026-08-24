@@ -192,6 +192,7 @@ export function TaskDetail({
   // 接力入口:已接力出去的任务在本机是存档,除非那次还悬着(可以撤/重试)。
   const canHandoff = task.mode === "single" && task.parentId === null && !task.archived && task.queueId == null
     && (task.handoff?.direction !== "out" || !!task.handoff.pending);
+  const handedOut = task.handoff?.direction === "out" && !task.handoff.pending;
   // 与 FreeWorkflowToolbar 自己的判据一致:两处都得知道这一条 rail 里到底有没有东西,
   // 空的时候不能给 ReplyBox 挂 has-top-rail(那会白留一条内边距)。
   const freeToolbarVisible = task.workflowMode === "free" && task.mode === "single"
@@ -439,7 +440,7 @@ export function TaskDetail({
                     ) : undefined}
                   />
                   <DerivedTaskLinks sourceTaskId={task.id} allTasks={allTasks} onOpen={onOpenTask} />
-                  <ReplyBox
+                  {!handedOut && <ReplyBox
                     task={task}
                     hasConversation={hasConversation}
                     topRail={freeToolbarVisible || canHandoff
@@ -504,7 +505,7 @@ export function TaskDetail({
                         notify={notify}
                       />
                     ) : undefined}
-                  />
+                  />}
                 </section>
               </div>
             )}

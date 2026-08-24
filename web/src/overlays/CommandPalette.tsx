@@ -34,6 +34,7 @@ import {
 import { filterSlashCommands, type SlashCommand, type SlashCommandId } from "./commandPaletteCommands.ts";
 import { ALL_PROJECTS_LABEL } from "../workspace/taskScope.ts";
 import { workspaceModifierLabel } from "../workspace/useWorkspaceShortcuts.ts";
+import { visibleOnThisMachine } from "../workspace/taskTreeModel.ts";
 
 type PaletteStep = "search" | "scope-project" | "scope-type" | "git-project" | "git-overview";
 
@@ -171,7 +172,7 @@ export function CommandPalette({
     };
     if (!query.trim()) {
       tasks
-        .filter((task) => task.status === "running" || task.status === "queued" || !!task.question)
+        .filter((task) => visibleOnThisMachine(task) && (task.status === "running" || task.status === "queued" || !!task.question))
         .slice(0, 6)
         .forEach((task) => result.push({
           key: `running:${task.id}`,

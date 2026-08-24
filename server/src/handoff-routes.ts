@@ -246,9 +246,8 @@ export function mountHandoffRoutes(api: Hono): void {
     }
   });
 
-  // 移除接力标记:「在本机继续」的唯一逃生门(接力出去/接力未确认的任务被硬拦后走这里)。
-  // 只清本机标记,对端那份任务不动——两边并跑的风险由用户自担,所以前端必须走确认框,
-  // 时间线也留一条持久可见的系统说明。
+  // 移除接力标记只服务 pending（送达未知）的应急撤销。确认送达后本机是历史存档，
+  // 必须从对端那份发起移回，不能在源机清标记造出双跑。
   api.delete("/tasks/:id/handoff", async (c) => {
     const taskId = c.req.param("id");
     const row = (await db
@@ -256,12 +255,15 @@ export function mountHandoffRoutes(api: Hono): void {
       .from(tasks)
       .where(eq(tasks.id, taskId))).at(0);
     if (!row) return c.json({ error: "任务不存在" }, 404);
-    let marker: { direction?: string } | null = null;
+    let marker: { direction?: string; pending?: boolean } | null = null;
     if (row.handoff) {
-      try { marker = JSON.parse(row.handoff) as { direction?: string }; } catch { marker = null; }
+      try { marker = JSON.parse(row.handoff) as { direction?: string; pending?: boolean }; } catch { marker = null; }
     }
     if (marker?.direction !== "out") {
       return c.json({ error: "任务没有「接力出去」的标记;接力进来的任务本来就在本机跑,不用移除" }, 409);
+    }
+    if (!marker.pending) {
+      return c.json({ error: "任务已确认送达对端，只能从对端那份任务发起移回；本机不能恢复这份存档" }, 409);
     }
     await db.update(tasks).set({ handoff: null, updatedAt: now() }).where(eq(tasks.id, taskId));
     const latest = (await db

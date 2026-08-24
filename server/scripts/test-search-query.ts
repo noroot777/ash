@@ -13,7 +13,7 @@ const [{ db, ensureSchema }, { projects, tasks }, search, { parseWorktreePorcela
   import("../src/search.js"),
   import("../src/git-overview.js"),
 ]);
-const { isTaskIdMatch, matchesSearchQuery, parseSearchQuery, searchAll, taskIdCandidates } = search;
+const { isTaskIdMatch, matchesSearchQuery, parseSearchQuery, searchAll, taskIdCandidates, visibleLocalSearchTask } = search;
 
 const matches = (text: string, query: string) => matchesSearchQuery(text, parseSearchQuery(query));
 
@@ -48,6 +48,10 @@ assert.equal(isTaskIdMatch(TASK_ID, "zx8kq2mnrt4v"), true, "整串 id 大小写�
 assert.equal(isTaskIdMatch(TASK_ID, "zx8kq2mn"), true, "分支短 id 是前缀命中");
 assert.equal(isTaskIdMatch("aBcDeFgHiJkL", "zx8kq2mnrt4v"), false);
 assert.equal(isTaskIdMatch(TASK_ID, "x8kq2mnrt4v"), false, "只认前缀,不做子串");
+assert.equal(visibleLocalSearchTask(null), true);
+assert.equal(visibleLocalSearchTask(JSON.stringify({ direction: "out", pending: false })), false);
+assert.equal(visibleLocalSearchTask(JSON.stringify({ direction: "out", pending: true })), true);
+assert.equal(visibleLocalSearchTask(JSON.stringify({ direction: "in" })), true);
 
 const worktrees = parseWorktreePorcelain(
   "worktree /repo\0HEAD abc123\0branch refs/heads/main\0\0" +
@@ -68,6 +72,7 @@ try {
     // 它是搜不到自己的(还没跑过的任务连会话记录都没有)。
     { id: TASK_ID, projectId: "project", title: "被搜的那个任务", body: "正文里不含自己的 id", createdAt: at, updatedAt: at },
     { id: "MentionsIt1", projectId: "project", title: "提到它的另一个任务", body: `派给 ${TASK_ID} 去做`, createdAt: at, updatedAt: at },
+    { id: "HandedOut01", projectId: "project", title: "已经交给另一台机器", body: "隐藏搜索词", handoff: JSON.stringify({ direction: "out", pending: false }), createdAt: at, updatedAt: at },
   ]);
 
   const byId = await searchAll(TASK_ID);
@@ -88,6 +93,7 @@ try {
   assert.equal(excluded.some((hit) => hit.field === "id"), false, "`-<id>` 是排除语法,不能反过来把它钉上来");
 
   assert.equal((await searchAll("修复")).length, 0, "普通词不该误撞任何任务 id");
+  assert.equal((await searchAll("隐藏搜索词")).length, 0, "已确认转出的本机存档不应出现在搜索结果");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

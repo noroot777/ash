@@ -39,10 +39,9 @@ function BulkHandoffDialog({
   onClose: () => void;
   onFinished: () => Promise<void> | void;
 }) {
-  const { eligible, skipped } = useMemo(
-    () => partitionBulkHandoffTasks(tasks, project.id),
-    [project.id, tasks],
-  );
+  // 对话框打开时冻结本次批量清单。正式接力会让 tasks 通过 SSE 实时变成 out；如果继续
+  // 跟着重算，成功页会把刚搬走的任务反列成「不可接力」，甚至冒出“没有任务”的警告。
+  const [{ eligible, skipped }] = useState(() => partitionBulkHandoffTasks(tasks, project.id));
   const sample = eligible[0] ?? null;
   const mounted = useRef(true);
   const autoProbeAttempted = useRef(false);
@@ -136,7 +135,12 @@ function BulkHandoffDialog({
     if (!firstProbe || !projectId || busy) return;
     setPhase("preflight");
     setError(null);
-    const checked = new Map(preflights);
+    // 上次有失败时必须真正重探全部任务，不能继续复用旧 probe；否则目标项目刚修好，
+    // “重新检查”仍会拿旧项目清单再次失败，看起来像按钮没作用。
+    const checked = preflightFailures.length > 0
+      ? new Map<string, HandoffPreflightResult>()
+      : new Map(preflights);
+    setPreflightFailures([]);
     const failures: TransferFailure[] = [];
     for (let index = 0; index < eligible.length; index += 1) {
       if (!mounted.current) return;
@@ -215,7 +219,7 @@ function BulkHandoffDialog({
     : !firstProbe || blocked
       ? target.peerFp && !blocked ? "重新检查" : blocked ? "检查申请状态" : "发送接力申请"
       : !checkedAll
-        ? `检查 ${eligible.length} 个任务`
+        ? `${preflightFailures.length > 0 ? "重新检查" : "检查"} ${eligible.length} 个任务`
         : runningCount > 0
           ? `停止并接力 ${eligible.length} 个任务`
           : `接力 ${eligible.length} 个任务`;
@@ -230,7 +234,7 @@ function BulkHandoffDialog({
       confirmLabel={confirmLabel}
       busy={busy}
       allowCloseWhenBusy={phase === "approval" || phase === "preflight"}
-      confirmDisabled={!result && (!eligible.length || (Boolean(firstProbe) && !blocked && !projectId) || preflightFailures.length > 0)}
+      confirmDisabled={!result && (!eligible.length || (Boolean(firstProbe) && !blocked && !projectId))}
       onClose={onClose}
       onConfirm={confirm}
     >
@@ -302,7 +306,7 @@ function BulkHandoffDialog({
         )}
         {preflightFailures.length > 0 && (
           <div className="handoff-bulk-blocked">
-            <p>有 {preflightFailures.length} 个任务预检失败，未开始迁移。处理后重新打开批量接力。</p>
+            <p>有 {preflightFailures.length} 个任务预检失败，未开始迁移。处理后可点击“重新检查”。</p>
             <ul>{preflightFailures.map(({ task, reason }) => <li key={task.id}><b>{task.title}</b><span>{reason}</span></li>)}</ul>
           </div>
         )}

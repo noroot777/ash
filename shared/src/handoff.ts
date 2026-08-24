@@ -91,6 +91,9 @@ export interface TaskHandoff {
   peerUrl: string | null;
   // out: 目标配置里的名字；in: 源机主机名。
   peerName: string | null;
+  // in:签名确认过的来源机器指纹。移回时只允许选择 handoffTargets 里指纹一致的机器，
+  // 防止把「移回」变成任意第三台机器的再次转送。老版本导入没有此字段。
+  peerFp?: string | null;
   // 对端那份任务的 id（同 id 迁移,当前恒等于本任务 id;留字段防语义变化）。
   peerTaskId: string;
   at: string;

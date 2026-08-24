@@ -118,13 +118,13 @@ export function WorkspaceShell() {
     }
     const task = tasks.find((item) => item.id === taskId);
     if (task) {
-      if (task.archived && settingsSection !== "archive") setTaskId(null);
+      if ((task.archived && settingsSection !== "archive") || !visibleOnThisMachine(task)) setTaskId(null);
       return;
     }
     let alive = true;
     api.task(taskId).then((loaded) => {
       if (!alive) return;
-      if (loaded.archived && settingsSection !== "archive") {
+      if ((loaded.archived && settingsSection !== "archive") || !visibleOnThisMachine(loaded)) {
         setTaskId((current) => current === taskId ? null : current);
         return;
       }
@@ -185,7 +185,7 @@ export function WorkspaceShell() {
     return () => { alive = false; };
   }, [currentProject?.repoPath, gitVersion, projectId, settlementVersion]);
 
-  const selectedTask = tasks.find((task) => task.id === taskId && task.projectId === projectId) ?? null;
+  const selectedTask = tasks.find((task) => task.id === taskId && task.projectId === projectId && visibleOnThisMachine(task)) ?? null;
   const loadError = projectsError ?? tasksError;
   const activeTaskCount = useMemo(() => tasks.filter((task) => inScope(task, scope) && task.parentId === null && !task.archived && visibleOnThisMachine(task)).length, [scope, tasks]);
   // J/K 走的是「屏幕上看得见的那些行」，所以筛选开着时它也得跟着筛 —— 否则按一下就跳到
@@ -209,6 +209,10 @@ export function WorkspaceShell() {
   // keepSpread：J/K 在铺开态里只是挪选中行，右边那两列还得接着看；点行或按 Enter 才算「选定了」，
   // 那时候铺开自己收起来把主区还回去。
   const selectTask = (task: Task, options?: { keepSpread?: boolean }) => {
+    if (!visibleOnThisMachine(task)) {
+      notify("任务已接力到另一台机器，请在当前持有它的机器上继续");
+      return;
+    }
     pushTaskHistoryEntry(task, window, scopeKind);
     setProjectId(task.projectId);
     setTaskId(task.id);
