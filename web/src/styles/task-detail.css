@@ -163,6 +163,7 @@
 .task-label-editor input { width: 44px; border: 0; background: transparent; padding: 0; outline: 0; font-size: 9.5px; }
 .task-inspector-note { margin: 5px 0 0; color: var(--faint); font-size: 10px; line-height: 1.5; }
 .task-inspector-note.is-error { color: var(--red); }
+.task-inspector-note.is-warning { color: var(--amber); }
 .task-inspector .review-dispatch-control { margin: 8px 0 0; }
 .task-inspector .review-dispatch-heading { flex-wrap: wrap; }
 .task-inspector .review-dispatch-heading > div { min-width: calc(100% - 33px); }

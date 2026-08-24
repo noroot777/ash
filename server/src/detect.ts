@@ -2,6 +2,7 @@ import type { AgentType } from "@ash/shared";
 import { probeBins } from "./executors/bin-probe.js";
 import { CLI_SPECS } from "./executors/catalog/index.js";
 import { resolveExecutorFor } from "./executors/index.js";
+import { isAffectedCodexVersion } from "./executors/version-policy.js";
 import { IS_WINDOWS } from "./platform.js";
 
 export interface DetectedAgent {
@@ -75,12 +76,7 @@ export interface DetectedCli extends KnownCli {
 const CODEX_0147_WARNING = "Codex CLI 0.147.x 有已知工具注册/恢复异常，可能把终端调用路由到错误工具。请运行 npm install -g @openai/codex，升级到 0.148.0 或更高版本。";
 
 export function versionWarningFor(type: AgentType, version: string | null): string | undefined {
-  if (type !== "codex" || !version) return undefined;
-  const match = version.match(/(?:^|\s)(\d+)\.(\d+)\.(\d+)(?:\D|$)/);
-  if (!match) return undefined;
-  return Number(match[1]) === 0 && Number(match[2]) === 147
-    ? CODEX_0147_WARNING
-    : undefined;
+  return type === "codex" && isAffectedCodexVersion(version) ? CODEX_0147_WARNING : undefined;
 }
 
 // 安装命令在**这里**按宿主平台定死,而不是把两条都发给前端让浏览器挑:CLI 要装在

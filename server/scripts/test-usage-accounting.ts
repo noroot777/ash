@@ -37,7 +37,20 @@ const {
 const { repairLegacyUsageAccounting } = await import("../src/usage-repair.js");
 const { claudeUsage, claudeContextUsed, claudeContextWindow, parseClaudeStream } = await import("../src/executors/claude.js");
 const { codexUsage, parseCodexStream } = await import("../src/executors/codex.js");
-const { parseCodexContextLines, readCodexContext } = await import("../src/executors/codex-rollout.js");
+const { parseCodexCliVersionLine, parseCodexContextLines, readCodexCliVersion, readCodexContext } = await import("../src/executors/codex-rollout.js");
+const { affectedCodexSessionWarning, isAffectedCodexVersion } = await import("../src/executors/version-policy.js");
+
+assert.equal(
+  parseCodexCliVersionLine(JSON.stringify({
+    type: "session_meta",
+    payload: { session_id: "thread-1", cli_version: "0.147.0" },
+  }), "thread-1"),
+  "0.147.0",
+);
+assert.equal(parseCodexCliVersionLine("not json", "thread-1"), null);
+assert.equal(isAffectedCodexVersion("codex-cli 0.147.9"), true);
+assert.equal(isAffectedCodexVersion("0.148.0"), false);
+assert.match(affectedCodexSessionWarning("0.147.0") ?? "", /全新会话/);
 const { appendSessionTrace, parseSessionTrace, sessionTracePath } = await import("../src/transcript.js");
 const { addUsage, sumUsage, usageTotal, hasUsage, formatTokens, formatCost, contextRatio, hasContext, guessContextWindow } = await import("@ash/shared/usage");
 
@@ -466,8 +479,10 @@ try {
   process.env.CODEX_HOME = codexHome;
   writeFileSync(
     join(rolloutDir, `rollout-2026-08-07T11-00-00-${threadId}.jsonl`),
-    `${tokenCount(oldAt, 117_016, 353_400)}\n${tokenCount(currentAt, 232_956, 353_400)}\n`,
+    `${JSON.stringify({ type: "session_meta", payload: { session_id: threadId, cli_version: "0.147.0" } })}\n`
+      + `${tokenCount(oldAt, 117_016, 353_400)}\n${tokenCount(currentAt, 232_956, 353_400)}\n`,
   );
+  assert.equal(await readCodexCliVersion(threadId), "0.147.0", "会话创建版本应从 rollout 首行读取");
   assert.deepEqual(
     await readCodexContext(threadId, currentTurn),
     { used: 232_956, window: 353_400, windowEstimated: false },

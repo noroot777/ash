@@ -13,11 +13,16 @@ import { resumeCommandFor } from "./executors/resume.js";
 import { sessionRunMeta } from "./session-run-meta.js";
 import { parseSessionTrace, readableRunPath, sessionTracePath, sessionTranscriptPath } from "./transcript.js";
 import { sessionContext, sessionUsage } from "./usage.js";
+import { readCodexCliVersion } from "./executors/codex-rollout.js";
+import { affectedCodexSessionWarning } from "./executors/version-policy.js";
 
-function toSession(
+async function toSession(
   r: typeof sessions.$inferSelect,
   run: { model: string | null; reasoningEffort: string | null } = { model: null, reasoningEffort: null },
-): Session {
+): Promise<Session> {
+  const cliVersion = r.agentType === "codex" && r.cliSessionId
+    ? await readCodexCliVersion(r.cliSessionId)
+    : null;
   return {
     ...r,
     role: r.role as Session["role"],
@@ -29,6 +34,8 @@ function toSession(
     ...run,
     usage: sessionUsage(r),
     context: sessionContext(r),
+    cliVersion,
+    versionWarning: affectedCodexSessionWarning(cliVersion),
   };
 }
 
@@ -37,7 +44,7 @@ export function mountTaskSessionRoutes(api: Hono): void {
     const taskId = c.req.param("id");
     const rows = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
     const runMeta = await sessionRunMeta(taskId, rows);
-    return c.json(rows.map((row) => toSession(row, runMeta.get(row.id))));
+    return c.json(await Promise.all(rows.map((row) => toSession(row, runMeta.get(row.id)))));
   });
 
   // 会话落盘的输出（重载页面时读它；实时输出走 SSE）。

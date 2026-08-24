@@ -29,6 +29,8 @@ export interface Session {
   cwd: string | null; // the actual working directory this run executed in (truth, incl. scratch fallback)
   transcriptPath: string; // absolute path to the persisted Markdown transcript for this session
   cliSessionId: string | null; // the CLI's own session/thread id = core credential
+  cliVersion?: string | null; // Codex rollout 记录的会话创建版本；其它 CLI / 旧格式为 null
+  versionWarning?: string; // 会话级兼容性提醒（与当前已安装版本不同）
   resumeCommand: string | null; // ready-to-paste resume command
   commandLine: string | null; // full command invoked
   startedAt: string;

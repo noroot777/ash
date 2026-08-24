@@ -334,6 +334,7 @@ export function TaskInspector({
             <span>{run.effort ? (REASONING_EFFORT_DETAIL[run.effort] ? `${run.effort}（${REASONING_EFFORT_DETAIL[run.effort]}）` : run.effort) : "跟随执行器"}</span>
           </InspectorRow>
           {availabilityMessage && <p className="task-inspector-note">{availabilityMessage}</p>}
+          {latestSession?.versionWarning && <p className="task-inspector-note is-warning">{latestSession.versionWarning}</p>}
           <InspectorRow label="创建时间"><span>{formatInstant(task.createdAt)}</span></InspectorRow>
           {task.startedAt && <InspectorRow label="开始时间"><span>{formatInstant(task.startedAt)}</span></InspectorRow>}
           {task.endedAt && <InspectorRow label="结束时间"><span>{formatInstant(task.endedAt)}</span></InspectorRow>}

@@ -8,6 +8,7 @@ import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import type { ContextUsage } from "@ash/shared";
 
 /** rollout 可能很大；最新 token_count 通常就在文件尾部。找不到就安全退化成无水位。 */
@@ -19,6 +20,7 @@ type ParseOutcome =
   | { kind: "incompatible"; reason: string };
 
 const warnedThreads = new Set<string>();
+const cliVersionCache = new Map<string, string>();
 
 export function codexHome(): string {
   return process.env.CODEX_HOME || path.join(homedir(), ".codex");
@@ -69,6 +71,42 @@ async function tailLines(file: string): Promise<string[]> {
   const lines = Buffer.concat(chunks).toString("utf8").split("\n");
   if (start > 0) lines.shift();
   return lines;
+}
+
+export function parseCodexCliVersionLine(line: string, threadId?: string): string | null {
+  let row: any;
+  try {
+    row = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  const sessionId = row?.payload?.session_id;
+  if (row?.type !== "session_meta" || typeof sessionId !== "string" || (threadId && sessionId !== threadId)) return null;
+  return typeof row.payload?.cli_version === "string" && row.payload.cli_version.trim()
+    ? row.payload.cli_version.trim()
+    : null;
+}
+
+export async function readCodexCliVersion(threadId: string): Promise<string | null> {
+  if (!threadId) return null;
+  const cached = cliVersionCache.get(threadId);
+  if (cached) return cached;
+  try {
+    const file = await findRollout(threadId);
+    if (!file) return null;
+    const stream = createReadStream(file, { encoding: "utf8" });
+    const lines = createInterface({ input: stream, crlfDelay: Infinity });
+    for await (const line of lines) {
+      lines.close();
+      stream.destroy();
+      const version = parseCodexCliVersionLine(line, threadId);
+      if (version) cliVersionCache.set(threadId, version);
+      return version;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function positiveInteger(value: unknown): number | null {

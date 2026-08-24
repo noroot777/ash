@@ -41,6 +41,9 @@ import {
 } from "./run-prompts.js";
 // 「登记的基线被换掉了」这句话：说不说、怎么说、失败那条路怎么补，全在这一份里。
 import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
+import { readCodexCliVersion } from "./executors/codex-rollout.js";
+import { affectedCodexSessionWarning } from "./executors/version-policy.js";
+import { LOST_SESSION_PATCH } from "./executors/session-lost.js";
 
 // Why a task is being (re)started — only used to label the resume; all reasons
 // behave the same (resume if there's a resumable session, else fresh). Note: a
@@ -252,13 +255,22 @@ export async function continueTask(
     // each invited via @-mention. Newest first.
     const all = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-    const prev = opts.freshSession
+    let prev = opts.freshSession
       ? undefined
       // 指名道姓要续哪一条会话行（「重跑上一回合」）：按 agentType+role 挑会在同一位
       // 智能体有多条会话时挑错人，而重投必须落回**崩掉的那一条**，否则等于换个人重说。
       : opts.resumeSessionId
         ? all.find((s) => s.id === opts.resumeSessionId)
         : all.find((s) => s.agentType === agent && s.role === sessionRole);
+    let sessionUpgradeNote: string | undefined;
+    if (agent === "codex" && prev?.cliSessionId) {
+      const warning = affectedCodexSessionWarning(await readCodexCliVersion(prev.cliSessionId));
+      if (warning) {
+        await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, prev.id));
+        sessionUpgradeNote = `${warning} 本轮已使用全新会话。`;
+        prev = undefined;
+      }
+    }
     const resuming = !!prev?.cliSessionId;
 
     // Where the work lives: the agent's own cwd, else any session's cwd (so the
@@ -473,6 +485,10 @@ export async function continueTask(
       // 刷新后仍要能看出来(见 AGENTS.md 关于持久可见状态的约定)。
       writeTurn(out, { t: "system", agent, text: WORKSPACE_RESET_MARKER }, turnStart);
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: sessionRole, agentType: agent, event: { kind: "system", text: WORKSPACE_RESET_MARKER } });
+    }
+    if (sessionUpgradeNote) {
+      writeTurn(out, { t: "system", agent, text: sessionUpgradeNote }, turnStart);
+      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: sessionRole, agentType: agent, event: { kind: "system", text: sessionUpgradeNote } });
     }
     const baseNote = baseFallbackNote(baseFallback);
     if (baseNote) {
