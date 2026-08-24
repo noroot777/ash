@@ -12,7 +12,7 @@ export type LiveAgentEvent = Extract<ServerEvent, { type: "agent.event" }>;
 
 export type TimelineEntry =
   | { kind: "user"; id: string; text: string; attachments: string[]; at: string; isAnswer?: boolean; bySystem?: boolean; source?: "optimistic" | "server" }
-  | { kind: "server"; id: string; event: LiveAgentEvent; receivedAt?: string };
+  | { kind: "server"; id: string; event: LiveAgentEvent };
 
 // 「执行过程」块里的一行(工具 / 思考 / 异常)。形状与渲染都归 lib/executionTrace,
 // 普通任务、团队、辩论共用同一份 —— 这里只保留旧名字的别名。
@@ -110,7 +110,7 @@ function recordPersistedTurn(
 
 // A settled-status refresh can finish just after the same system/user turn was
 // received over SSE. Keep the persisted copy and discard only the live copy
-// whose arrival time is close to that exact persisted sentinel. The timestamp
+// whose event time is close to that exact persisted sentinel. The timestamp
 // guard matters because idle-recycle notices legitimately repeat every 30 min.
 function timelineAfterPersistedTurns(
   timeline: TimelineEntry[],
@@ -120,8 +120,8 @@ function timelineAfterPersistedTurns(
   return timeline.filter((entry) => {
     const marker = entry.kind === "user"
       ? { key: turnKey("user", entry.text), at: entry.at }
-      : entry.event.event.kind === "system" && entry.receivedAt
-        ? { key: turnKey("system", entry.event.event.text, entry.event.sessionId), at: entry.receivedAt }
+      : entry.event.event.kind === "system"
+        ? { key: turnKey("system", entry.event.event.text, entry.event.sessionId), at: entry.event.event.at }
         : null;
     if (!marker) return true;
     const liveTime = Date.parse(marker.at);
@@ -517,6 +517,7 @@ export function buildConversationItems(
         kind: "event",
         id: entry.id,
         text: event.text,
+        at: event.at,
         sessionId: entry.event.sessionId,
         tone: noteTone(event.text),
         variant: "note",
@@ -568,18 +569,24 @@ export function buildConversationItems(
   });
 
   let previousInterjectionAt: string | null = null;
+  let previousItem: ConversationItem | null = null;
   const seenSessions = new Set<string>();
   for (const item of items) {
+    const adjacentInterjectionAt = previousItem?.kind === "user" || previousItem?.kind === "event"
+      ? previousItem.at ?? null
+      : null;
     if (item.kind === "user" || item.kind === "event") previousInterjectionAt = item.at ?? previousInterjectionAt;
-    if (item.kind !== "agent") continue;
+    if (item.kind !== "agent") { previousItem = item; continue; }
     const firstTurn = !seenSessions.has(item.sessionId);
     seenSessions.add(item.sessionId);
     const turnStartedAt = item.session ? latestTurnStart(item.session) : null;
     item.at = firstTurn
       ? item.session?.startedAt ?? item.at
-      : item.at === item.session?.startedAt && turnStartedAt
-        ? turnStartedAt
-        : previousInterjectionAt ?? item.session?.startedAt ?? item.at;
+      : adjacentInterjectionAt
+        ?? (item.at === item.session?.startedAt && turnStartedAt
+          ? turnStartedAt
+          : previousInterjectionAt ?? item.session?.startedAt ?? item.at);
+    previousItem = item;
   }
 
   let nextInterjectionAt: string | null = null;

@@ -27,7 +27,7 @@ export type AgentEvent =
   | { kind: "tool"; name: string; detail?: string }
   | { kind: "attachment"; path: string }
   | { kind: "session"; cliSessionId: string }
-  | { kind: "system"; text: string } // a backend-initiated 〔系统〕 trace (e.g. 继续) — its own bubble, not agent text
+  | { kind: "system"; text: string; at: string } // backend 旁注；时间与落盘 sentinel 共用，实时/刷新布局才不会漂
   // 本回合的 token 用量,由执行器从 CLI 的收尾事件(claude 的 result / codex 的
   // turn.completed)解析。每回合至多一条,恒在该回合的 turnEnd/done 之前。拿不到
   // 用量的 CLI 一条都不发 —— 展示端据此判断「这家报不报账」。

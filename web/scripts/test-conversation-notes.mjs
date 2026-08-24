@@ -77,4 +77,26 @@ const boundary = live.find((item) => item.kind === "event");
 assert.equal(boundary.variant, "boundary", "回合边界仍是整宽分隔线");
 assert.equal(live.at(-1).continuation, false, "回合结束之后是新的一段，要重新报身份");
 
+// —— 实时旁注跟落盘 sentinel 共用时间：后续续写不能退回会话起跑时间另占一行 ——
+const liveNoteAt = "2026-08-10T03:27:00.000Z";
+const liveNote = buildConversationItems([{ session, output: "第一回合说的话。", trace: [] }], [{
+  ...session,
+  turnStartedAt: session.startedAt,
+}], [
+  {
+    kind: "server",
+    id: "live:note",
+    event: { type: "agent.event", taskId: "t1", sessionId: "s1", role: "main", agentType: "codex", event: { kind: "system", text: "已预约完成后审查。", at: liveNoteAt } },
+  },
+  {
+    kind: "server",
+    id: "live:tool",
+    event: { type: "agent.event", taskId: "t1", sessionId: "s1", role: "main", agentType: "codex", event: { kind: "tool", name: "exec", detail: "检查布局" } },
+  },
+]);
+assert.deepEqual(liveNote.map((item) => item.kind), ["agent", "event", "agent"]);
+assert.equal(liveNote[1].at, liveNoteAt, "实时旁注应直接带落盘时的精确时间");
+assert.equal(liveNote[2].at, liveNoteAt, "紧随旁注的续写应沿用旁注时间，不能显示旧回合起点");
+assert.equal(liveNote[2].continuation, true);
+
 console.log("conversation-notes ok");

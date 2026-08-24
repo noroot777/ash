@@ -74,6 +74,32 @@ const items = buildConversationItems([{ session, output, trace: [] }], [session]
       event: { kind: "text", text: "又被叫醒了，继续。" },
     },
   },
+  // 复现刷新前的实时态：旁注到达后同一回合又报了一条工具事件。旁注自带落盘时间，
+  // 后续续写沿用它，不能把旧的回合起点单独挤到下一行。
+  {
+    kind: "server",
+    id: "live:note",
+    event: {
+      type: "agent.event",
+      taskId: "t1",
+      sessionId: "s1",
+      role: "main",
+      agentType: "codex",
+      event: { kind: "system", text: "已预约完成后审查：grok4.6 · 逻辑检查 · 自动复审 1 轮。", at: "2026-08-10T07:02:00.000Z" },
+    },
+  },
+  {
+    kind: "server",
+    id: "live:tool-after-note",
+    event: {
+      type: "agent.event",
+      taskId: "t1",
+      sessionId: "s1",
+      role: "main",
+      agentType: "codex",
+      event: { kind: "tool", name: "exec", detail: "检查同类时间布局" },
+    },
+  },
 ] as never);
 
 createRoot(document.getElementById("root")!).render(
