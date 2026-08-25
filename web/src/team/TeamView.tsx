@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { AgentEvent, Group, Task } from "@ash/shared";
+import type { AgentEvent, Group, Task, TaskListItem } from "@ash/shared";
 import { batchesOf, mergeFeed, teamGroupsOf, waitingWorkers, workerHaltStats, workersOf } from "@ash/shared/team";
 import { ArrowSquareOut, Broom, Clock, PaperPlaneTilt, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
 import {
@@ -12,6 +12,7 @@ import { SlashMenu } from "../components/SlashMenu.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { FileViewer } from "../files/FileViewer.tsx";
 import { api, type ReplyTaskResult, type TeamCuaStatus } from "../lib/api.ts";
+import { useTaskBody } from "../lib/useTaskBody.ts";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { useConversation } from "../lib/useConversation.ts";
 import { useServerEvents } from "../lib/events.ts";
@@ -42,7 +43,7 @@ function liveLineForEvent(event: AgentEvent, textBuffer: string): string | null 
   return null;
 }
 
-function useWorkerLiveLines(teamId: string, workers: Task[]) {
+function useWorkerLiveLines(teamId: string, workers: TaskListItem[]) {
   const [lines, setLines] = useState<Record<string, string>>({});
   const textBuffers = useRef<Record<string, string>>({});
   const workerIds = useMemo(() => new Set(workers.map((worker) => worker.id)), [workers]);
@@ -203,7 +204,7 @@ function TeamReplyBox({
   );
 }
 
-function HaltNotice({ workers, groupCount, historyOnly }: { workers: Task[]; groupCount: number; historyOnly: boolean }) {
+function HaltNotice({ workers, groupCount, historyOnly }: { workers: TaskListItem[]; groupCount: number; historyOnly: boolean }) {
   const stats = workerHaltStats(workers);
   return (
     <div className="team-halt-notice" role="status">
@@ -258,8 +259,8 @@ function WorkerDrawer({
   onDeleted,
   notify,
 }: {
-  worker: Task;
-  allTasks: Task[];
+  worker: TaskListItem;
+  allTasks: TaskListItem[];
   onClose: () => void;
   onOpenFull: () => void;
   onOpenTask: (taskId: string) => void;
@@ -269,6 +270,8 @@ function WorkerDrawer({
 }) {
   const [closing, setClosing] = useState(false);
   const [inspectorToggleTarget, setInspectorToggleTarget] = useState<HTMLSpanElement | null>(null);
+  // 抽屉里是完整的 TaskDetail，要正文；执行者行来自列表（不带正文），按需补。
+  const fullWorker = useTaskBody(worker);
   const closingRef = useRef(false);
   const closeTimer = useRef<number | null>(null);
   const requestClose = useCallback(() => {
@@ -302,7 +305,7 @@ function WorkerDrawer({
           <span className="team-worker-drawer__inspector-toggle" ref={setInspectorToggleTarget} />
           <button type="button" aria-label="关闭执行者抽屉" onClick={requestClose}><X size={14} weight="bold" /></button>
         </header>
-        <TaskDetail key={worker.id} task={worker} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} inspectorMode="drawer" inspectorToggleTarget={inspectorToggleTarget} notify={notify} />
+        {fullWorker && <TaskDetail key={fullWorker.id} task={fullWorker} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} inspectorMode="drawer" inspectorToggleTarget={inspectorToggleTarget} notify={notify} />}
       </aside>
     </>
   );
@@ -320,10 +323,10 @@ export function TeamView({
   notify,
 }: {
   task: Task;
-  allTasks: Task[];
+  allTasks: TaskListItem[];
   onTaskUpdate: (task: Task) => void;
   onTaskDeleted: (taskId: string) => void;
-  onSelectTask: (task: Task) => void;
+  onSelectTask: (task: TaskListItem) => void;
   initialReviewOpen?: boolean;
   onReviewOpenChange?: (open: boolean) => void;
   terminalToggle?: ReactNode;
@@ -485,7 +488,7 @@ export function TeamView({
       setIterateBusy(false);
     }
   };
-  const askLead = async (worker: Task) => {
+  const askLead = async (worker: TaskListItem) => {
     const question = worker.question?.trim();
     if (!question || delegatingRef.current.has(worker.id)) return;
     delegatingRef.current.add(worker.id);

@@ -5,20 +5,20 @@
 // Conversation content is NOT here: the task screen owns it locally, polled from
 // the session .md (see app/task/[id].tsx).
 import { create } from "zustand";
-import type { ProjectView, Task, Group } from "@ash/shared";
+import type { ProjectView, TaskListItem, Group } from "@ash/shared";
 
 interface State {
   online: boolean;
   projects: ProjectView[];
   projectId: string | null;
-  tasks: Task[];
+  tasks: TaskListItem[];
   groups: Group[];
 
   setOnline: (b: boolean) => void;
   setProjects: (p: ProjectView[]) => void;
   setProjectId: (id: string | null) => void;
-  setTasks: (t: Task[]) => void;
-  upsertTask: (t: Task) => void;
+  setTasks: (t: TaskListItem[]) => void;
+  upsertTask: (t: TaskListItem) => void;
   removeTask: (id: string) => void;
   setGroups: (g: Group[]) => void;
   upsertGroup: (g: Group) => void;

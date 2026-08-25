@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import { Copy, File, ShieldCheck } from "@phosphor-icons/react";
-import type { Session, Task } from "@ash/shared";
+import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
 import { runActivityExecutor, runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
 import type { ConversationItem } from "./conversationModel.ts";
@@ -144,7 +144,7 @@ export function ConversationFeed({
   reviewRetryable,
   reviews,
 }: {
-  task: Task;
+  task: TaskListItem;
   items: ConversationItem[];
   sessions: Session[];
   /** 刚发出去、服务端还没落下会话行的那一回合目标(见 runActivityExecutor)。 */

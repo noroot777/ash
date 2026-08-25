@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Task } from "@ash/shared";
+import type { TaskListItem } from "@ash/shared";
 import type { Waiting } from "@ash/shared/team";
 import { ChatCircleDots, SpinnerGap } from "@phosphor-icons/react";
 import { formatDuration } from "../task-detail/utils.ts";
@@ -18,10 +18,10 @@ export function TeamAttentionBar({
   onAskLead,
 }: {
   waiting: Waiting[];
-  workers: Task[];
+  workers: TaskListItem[];
   delegatingIds: ReadonlySet<string>;
   onOpenWorker: (taskId: string) => void;
-  onAskLead: (worker: Task) => void | Promise<void>;
+  onAskLead: (worker: TaskListItem) => void | Promise<void>;
 }) {
   const [now, setNow] = useState(() => Date.now());
 

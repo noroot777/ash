@@ -1,4 +1,4 @@
-import type { Task } from "@ash/shared";
+import type { TaskListItem } from "@ash/shared";
 import { Star } from "@phosphor-icons/react";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { scopeHasTarget, type TaskScope } from "./taskScope.ts";
@@ -100,7 +100,7 @@ export function SpreadFilterDots({ spread, counts }: { spread: SidebarSpread; co
   );
 }
 
-export function SpreadFilterControls({ spread, tasks, scope }: { spread: SidebarSpread; tasks: Task[]; scope: TaskScope }) {
+export function SpreadFilterControls({ spread, tasks, scope }: { spread: SidebarSpread; tasks: TaskListItem[]; scope: TaskScope }) {
   // 作用域里没有可筛的目标（一个项目都没选）时才收起来。反过来，只要有目标就一直画着 ——
   // 哪怕这个项目一个任务都没有：筛选是**生效中的状态**，把入口藏起来会出现「列表被筛空
   // 了，却没地方取消」。

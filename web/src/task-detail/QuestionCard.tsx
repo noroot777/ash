@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { QuestionItem, Task } from "@ash/shared";
+import type { QuestionItem, TaskListItem } from "@ash/shared";
 import { PaperPlaneTilt, Question } from "@phosphor-icons/react";
 
 function AnswerEditor({
@@ -59,7 +59,7 @@ export function QuestionCard({
   task,
   onAnswer,
 }: {
-  task: Task;
+  task: TaskListItem;
   onAnswer: (answer: string) => Promise<void>;
 }) {
   const multi = task.questionItems ?? [];

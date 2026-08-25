@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AgentExecutorProfile, Task, TaskReviewRound } from "@ash/shared";
+import type { AgentExecutorProfile, TaskListItem, TaskReviewRound } from "@ash/shared";
 import { MagnifyingGlass, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import {
@@ -15,7 +15,7 @@ import { api } from "../lib/api.ts";
 
 const REVIEW_IN_FLIGHT = new Set(["backlog", "queued", "running", "paused"]);
 
-function reviewDefaults(task: Task, parentTask: Task | null): {
+function reviewDefaults(task: TaskListItem, parentTask: TaskListItem | null): {
   selection: ExecutorSelection;
   model: string;
   effort: string;
@@ -48,8 +48,8 @@ export function ReviewDispatchControl({
   notify,
   onRefresh,
 }: {
-  task: Task;
-  parentTask?: Task | null;
+  task: TaskListItem;
+  parentTask?: TaskListItem | null;
   rounds: TaskReviewRound[];
   prominent?: boolean;
   notify: (message: string) => void;

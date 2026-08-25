@@ -12,7 +12,7 @@ import {
 } from "react-native";
 import { Stack } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { canArchive, type Task } from "@ash/shared";
+import { canArchive, type TaskListItem } from "@ash/shared";
 import {
   api,
   type DuetTranscriptEntry,
@@ -31,11 +31,14 @@ const TRANSCRIPT_POLL_MS = 3000;
 
 export function DuetTaskDetail({
   task,
+  body,
   onArchive,
   onUnarchive,
   onDelete,
 }: {
-  task: Task;
+  task: TaskListItem;
+  // 正文由任务页按 id 单取后传进来（列表接口不带它）；undefined = 还没读到。
+  body: string | undefined;
   onArchive: () => void;
   onUnarchive: () => void;
   onDelete: () => void;
@@ -172,7 +175,7 @@ export function DuetTaskDetail({
           </Text>
         </View>
 
-        {task.body || cfg.topic ? (
+        {body || cfg.topic ? (
           <View
             style={{
               backgroundColor: theme.panel,
@@ -184,7 +187,7 @@ export function DuetTaskDetail({
             }}
           >
             <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.monoMed }}>讨论议题</Text>
-            <MarkdownText value={task.body || cfg.topic} style={{ color: theme.muted, fontSize: 14, lineHeight: 20 }} />
+            <MarkdownText value={body || cfg.topic} style={{ color: theme.muted, fontSize: 14, lineHeight: 20 }} />
           </View>
         ) : null}
 

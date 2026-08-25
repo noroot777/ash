@@ -1,16 +1,16 @@
-import type { ProjectView, Task } from "@ash/shared";
+import type { ProjectView, Task, TaskListItem } from "@ash/shared";
 import { ArrowCounterClockwise, Archive } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 
 export function ArchiveSettings({ project, tasks, onTaskUpdated, notify }: {
   project: ProjectView;
-  tasks: Task[];
+  tasks: TaskListItem[];
   onTaskUpdated: (task: Task) => void;
   notify: (message: string) => void;
 }) {
   const archived = tasks.filter((task) => task.projectId === project.id && task.parentId === null && task.archived).sort((a, b) => (b.archivedAt ?? "").localeCompare(a.archivedAt ?? ""));
-  const restore = async (task: Task) => {
+  const restore = async (task: TaskListItem) => {
     try { onTaskUpdated(await api.unarchiveTask(task.id)); notify("任务已取回"); }
     catch (error) { notify(error instanceof Error ? error.message : "任务取回失败"); }
   };

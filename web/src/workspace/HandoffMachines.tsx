@@ -5,14 +5,14 @@ import type {
   HandoffPreflightResult,
   HandoffTarget,
   ProjectView,
-  Task,
+  TaskListItem,
 } from "@ash/shared";
 import { DesktopTower, Fingerprint, LockKey, PaperPlaneTilt, SpinnerGap, Warning } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { outboundTasksForTarget, partitionBulkHandoffTasks } from "./bulkHandoff.ts";
 
-type TransferFailure = { task: Task; reason: string };
+type TransferFailure = { task: TaskListItem; reason: string };
 type BusyPhase = "idle" | "approval" | "preflight" | "transferring";
 
 function approvalText(result: HandoffApprovalResult): string {
@@ -34,7 +34,7 @@ function BulkHandoffDialog({
 }: {
   project: ProjectView;
   target: HandoffTarget;
-  tasks: Task[];
+  tasks: TaskListItem[];
   notify: (message: string) => void;
   onClose: () => void;
   onFinished: () => Promise<void> | void;
@@ -334,9 +334,9 @@ export function HandoffMachines({
   onFinished,
 }: {
   project: ProjectView | null;
-  tasks: Task[];
+  tasks: TaskListItem[];
   selectedRemoteTaskId: string | null;
-  onRemoteTask: (task: Task, target: HandoffTarget) => void;
+  onRemoteTask: (task: TaskListItem, target: HandoffTarget) => void;
   notify: (message: string) => void;
   onFinished: () => Promise<void> | void;
 }) {

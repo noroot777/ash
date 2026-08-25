@@ -5,6 +5,7 @@ import type {
   AppSettings,
   ProjectView,
   Task,
+  TaskListItem,
   Session,
   AgentExecutorProfile,
   AgentType,
@@ -128,7 +129,8 @@ export const api = {
   createProject: (b: { name: string; repoPath?: string }): Promise<ProjectView> =>
     req("/projects", { method: "POST", body: JSON.stringify(b) }).then(j),
 
-  tasks: (): Promise<Task[]> => req("/tasks").then(j),
+  // 列表不带正文（shared 的 TaskListItem）；正文由 task(id) 单取。
+  tasks: (): Promise<TaskListItem[]> => req("/tasks").then(j),
   task: (id: string): Promise<Task> => req(`/tasks/${id}`).then(j),
   createTask: (t: Partial<Task> & { projectId: string; title: string }): Promise<Task> =>
     req("/tasks", { method: "POST", body: JSON.stringify(t) }).then(j),

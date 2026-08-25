@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ServerEvent, Task } from "@ash/shared";
+import type { ServerEvent, Task, TaskListItem } from "@ash/shared";
 import { api } from "./api.ts";
 import { useServerEvents } from "./events.ts";
 
-function upsert(tasks: Task[], task: Task, projectId?: string): Task[] {
+function upsert(tasks: TaskListItem[], task: Task, projectId?: string): TaskListItem[] {
   if (projectId && task.projectId !== projectId) {
     return tasks.filter((item) => item.id !== task.id);
   }
@@ -15,7 +15,7 @@ function upsert(tasks: Task[], task: Task, projectId?: string): Task[] {
 // 星标 PATCH 的成功回写只合并 starredAt：HTTP 响应和 SSE 走不同连接，响应里那份
 // Task 快照可能比已经到达的 SSE 旧 —— 整条替换会把完成状态/标题/计时回滚到点星
 // 那一刻。任务已不在列表里（被删了）就什么都不做，旧响应不复活死任务。
-export function applyStarredAt(tasks: Task[], taskId: string, starredAt: number | null): Task[] {
+export function applyStarredAt(tasks: TaskListItem[], taskId: string, starredAt: number | null): TaskListItem[] {
   return tasks.map((task) => (task.id === taskId ? { ...task, starredAt } : task));
 }
 
@@ -23,7 +23,7 @@ export function applyStarredAt(tasks: Task[], taskId: string, starredAt: number 
 // 后服务端同时回 HTTP 响应和发 task.updated，两条连接没有顺序保证 —— SSE 先到时
 // PATCH 回写（applyStar）还没登记，这个窗口里晚到的旧 GET 快照（同 updatedAt）会把
 // 星标清回去，直到 PATCH 响应到达才恢复。新行（本地还没有）不算变化，不用保护。
-export function starredAtChanged(current: Task[], incoming: Task): boolean {
+export function starredAtChanged(current: TaskListItem[], incoming: Task): boolean {
   const local = current.find((task) => task.id === incoming.id);
   return local !== undefined && local.starredAt !== incoming.starredAt;
 }
@@ -36,10 +36,10 @@ export function starredAtChanged(current: Task[], incoming: Task): boolean {
 // 完全相同，光比时间分不出新旧 —— 调用方把「快照发起之后本地又改过星标」的行报进来，
 // 字段级保留，其余字段照常按 updatedAt 规则取。
 export function mergeFetchedTasks(
-  current: Task[],
-  fetched: Task[],
+  current: TaskListItem[],
+  fetched: TaskListItem[],
   protectStars?: ReadonlySet<string>,
-): Task[] {
+): TaskListItem[] {
   const byId = new Map(current.map((task) => [task.id, task]));
   return fetched.map((task) => {
     const local = byId.get(task.id);
@@ -56,7 +56,7 @@ type TaskMetadataEvent = Extract<ServerEvent, {
   type: "task.stage" | "task.title" | "task.question";
 }>;
 
-export function applyTaskStatusEvent(task: Task, event: TaskStatusEvent): Task {
+export function applyTaskStatusEvent<T extends TaskListItem>(task: T, event: TaskStatusEvent): T {
   if (task.id !== event.taskId) return task;
   return {
     ...task,
@@ -69,7 +69,7 @@ export function applyTaskStatusEvent(task: Task, event: TaskStatusEvent): Task {
   };
 }
 
-export function applyTaskMetadataEvent(task: Task, event: TaskMetadataEvent): Task {
+export function applyTaskMetadataEvent<T extends TaskListItem>(task: T, event: TaskMetadataEvent): T {
   if (task.id !== event.taskId) return task;
   if (event.type === "task.stage") {
     return { ...task, stage: event.stage, updatedAt: event.updatedAt };
@@ -87,7 +87,7 @@ export function applyTaskMetadataEvent(task: Task, event: TaskMetadataEvent): Ta
 }
 
 export function useTasks(projectId?: string) {
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tasks, setTasks] = useState<TaskListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const [settlementVersion, setSettlementVersion] = useState(0);

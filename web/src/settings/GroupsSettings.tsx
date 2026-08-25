@@ -1,22 +1,22 @@
 import { useEffect, useState } from "react";
-import type { Group, GroupMode, ProjectView, Task } from "@ash/shared";
+import type { Group, GroupMode, ProjectView, TaskListItem } from "@ash/shared";
 import { Pause, Play, Plus, Trash } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { activeGroupTasks, resumeQueueModel } from "./groupQueueModel.ts";
 
-function ResumeQueue({ tasks }: { tasks: Task[] }) {
+function ResumeQueue({ tasks }: { tasks: TaskListItem[] }) {
   const queue = resumeQueueModel(tasks);
   if (!queue) return null;
-  const marker = (task: Task) => task.status === "done" ? "✓" : task.status === "running" || task.status === "queued" ? "●" : task.status === "failed" ? "×" : "○";
+  const marker = (task: TaskListItem) => task.status === "done" ? "✓" : task.status === "running" || task.status === "queued" ? "●" : task.status === "failed" ? "×" : "○";
   return <div className="settings-resume-queue"><span>续跑队列</span><div className="settings-resume-dots">{queue.ordered.map((task) => <span className={`is-${task.status}`} title={`${task.title} · ${task.status}`} key={task.id}>{marker(task)}</span>)}</div><strong>{queue.doneCount}/{tasks.length}</strong></div>;
 }
 
 type GroupManagerProps = {
   project: ProjectView;
   groups: Group[];
-  tasks: Task[];
+  tasks: TaskListItem[];
   onChanged: () => void;
   notify: (message: string) => void;
   onNestedDialogChange?: (open: boolean) => void;

@@ -1,11 +1,11 @@
 import { useMemo } from "react";
-import type { Group, Task } from "@ash/shared";
+import type { Group, TaskListItem } from "@ash/shared";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { formatDuration } from "../task-detail/utils.ts";
 import { executorLabel, workerStatusText } from "./teamModel.ts";
 
-function elapsed(task: Task): string | null {
+function elapsed(task: TaskListItem): string | null {
   if (!task.startedAt) return null;
   const start = Date.parse(task.startedAt);
   const end = task.endedAt ? Date.parse(task.endedAt) : Date.now();
@@ -20,7 +20,7 @@ export function WorkerRail({
   indicatorForTask,
   liveLines,
 }: {
-  workers: Task[];
+  workers: TaskListItem[];
   groups: Group[];
   selectedId: string | null;
   onSelect: (taskId: string) => void;

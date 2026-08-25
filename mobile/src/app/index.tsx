@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback } from "react";
 import { View, Text, Pressable, SectionList, RefreshControl } from "react-native";
 import { Redirect, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { Task, TaskStatus, Group } from "@ash/shared";
+import type { TaskListItem, TaskStatus, Group } from "@ash/shared";
 import { workersOf } from "@ash/shared/team";
 import { getBaseURL } from "@/lib/config";
 import { api } from "@/lib/api";
@@ -16,7 +16,7 @@ import { SideDrawer } from "@/components/SideDrawer";
 import { TaskListRow } from "@/components/TaskListRow";
 import { Ionicons } from "@expo/vector-icons";
 
-function groupedStatus(task: Task): TaskStatus {
+function groupedStatus(task: TaskListItem): TaskStatus {
   // A resident team console remains active while idle; keep it in the running
   // section while its own signal bar still communicates the precise idle state.
   return task.mode === "team" && task.status === "idle" ? "running" : task.status;
@@ -95,11 +95,11 @@ function TaskList() {
     setRefreshing(false);
   }, []);
 
-  const sections = useMemo<(SectionMeta & { data: Task[] })[]>(() => {
+  const sections = useMemo<(SectionMeta & { data: TaskListItem[] })[]>(() => {
     const mine = tasks.filter((t) => t.projectId === projectId);
     // 与 web 一致：执行者只挂在所属团队卡片下面，不独占状态/分组列表位置。
     const topLevel = mine.filter((task) => task.parentId === null);
-    const byLastUpdate = (a: Task, b: Task) => b.updatedAt.localeCompare(a.updatedAt);
+    const byLastUpdate = (a: TaskListItem, b: TaskListItem) => b.updatedAt.localeCompare(a.updatedAt);
 
     // 分组视图:每个分组一区(含空组,便于整组运行/查看结构) + 末尾「未分组」区。归档任务不出现。
     if (view === "group") {
@@ -188,7 +188,7 @@ function TaskList() {
         ) : null}
       </View>
 
-      <SectionList<Task, SectionMeta>
+      <SectionList<TaskListItem, SectionMeta>
         sections={sections}
         keyExtractor={(t) => t.id}
         renderItem={({ item }) => {

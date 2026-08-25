@@ -1,10 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import {
-  TASK_STATUS_LABELS,
-  type Task,
-  type TaskReviewInfo,
-  type TaskReviewRound,
-} from "@ash/shared";
+import { TASK_STATUS_LABELS, type TaskListItem, type TaskReviewInfo, type TaskReviewRound } from "@ash/shared";
 import {
   ArrowSquareOut,
   CaretDown,
@@ -199,8 +194,8 @@ export function DispatchReviewEvidence({
   parentTask = null,
   notify,
 }: {
-  task: Task;
-  parentTask?: Task | null;
+  task: TaskListItem;
+  parentTask?: TaskListItem | null;
   notify: (message: string) => void;
 }) {
   const { info, loading, error, load } = useDispatchReviewInfo(task.id);

@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import type { HandoffTarget, ProjectView, Task } from "@ash/shared";
+import type { HandoffTarget, ProjectView, TaskListItem } from "@ash/shared";
 import { CaretRight } from "@phosphor-icons/react";
 import { useTaskReadState, type IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
@@ -21,12 +21,12 @@ type TaskTreeProps = {
   projects: ProjectView[];
   currentProjectId: string | null;
   scope: TaskScope;
-  tasks: Task[];
+  tasks: TaskListItem[];
   selectedTaskId: string | null;
   selectedRemoteTaskId: string | null;
   spread: SidebarSpread;
-  onTask: (task: Task) => void;
-  onRemoteTask: (task: Task, target: HandoffTarget) => void;
+  onTask: (task: TaskListItem) => void;
+  onRemoteTask: (task: TaskListItem, target: HandoffTarget) => void;
   onTaskStarred: (taskId: string, starredAt: number | null) => void;
   onHandoffFinished: () => Promise<void> | void;
   notify: (message: string) => void;
@@ -45,10 +45,10 @@ function ScopedTaskTree({
   onClearFilter,
   machineSection,
 }: {
-  tasks: Task[];
-  allTasks: Task[];
+  tasks: TaskListItem[];
+  allTasks: TaskListItem[];
   selectedTaskId: string | null;
-  onTask: (task: Task) => void;
+  onTask: (task: TaskListItem) => void;
   indicatorForTask: IndicatorForTask;
   filter: SpreadFilter;
   onClearFilter: () => void;
@@ -59,7 +59,7 @@ function ScopedTaskTree({
   // 星标和「等你验收」的行永不因为旧被藏起来：一个是用户手动按的记号，一个是没盖的章，
   // 两者都属于「我要一直看得见」。判据跟行首那颗点同源，标出来的和留下来的必须是同一批。
   const keepVisible = useCallback(
-    (task: Task) => task.starredAt != null || task.pinnedAt != null || indicatorForTask(task) === "unaccepted",
+    (task: TaskListItem) => task.starredAt != null || task.pinnedAt != null || indicatorForTask(task) === "unaccepted",
     [indicatorForTask],
   );
   const keptBySection = useMemo(
@@ -189,10 +189,10 @@ function OtherProject({
   indicatorForTask,
 }: {
   project: ProjectView;
-  tasks: Task[];
-  allTasks: Task[];
+  tasks: TaskListItem[];
+  allTasks: TaskListItem[];
   selectedTaskId: string | null;
-  onTask: (task: Task) => void;
+  onTask: (task: TaskListItem) => void;
   indicatorForTask: IndicatorForTask;
 }) {
   const [expanded, setExpanded] = useState(false);

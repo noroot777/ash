@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { normalizeDuetConfig } from "@ash/shared/duet";
-import type { GateAction, Session, Task } from "@ash/shared";
+import type { GateAction, Session, Task, TaskListItem } from "@ash/shared";
 import { runActivityPhase } from "@ash/shared/run-activity";
 import { TEAM_DEFAULTS, canArchive, taskDisplayStatus } from "@ash/shared";
 import {
@@ -121,11 +121,11 @@ export function DuetView({
   notify,
 }: {
   task: Task;
-  allTasks: Task[];
+  allTasks: TaskListItem[];
   onTaskUpdated: (task: Task) => void;
   onTaskCreated: (task: Task) => void;
   onTaskDeleted: (taskId: string) => void;
-  onSelectTask: (task: Task) => void;
+  onSelectTask: (task: TaskListItem) => void;
   terminalToggle?: ReactNode;
   notify: (message: string) => void;
 }) {
@@ -254,7 +254,7 @@ export function DuetView({
     else notify(`团队已创建，但${followUpFailures.map(({ phase, reason }) => `${phase === "gate" ? "讨论自动收尾" : "启动"}失败（${reason instanceof Error ? reason.message : String(reason)}）`).join("、")}`);
     return true;
   };
-  const iterateTeam = async (team: Task) => {
+  const iterateTeam = async (team: TaskListItem) => {
     const iteration = teamDuetIterationState(team, allTasks);
     if (!iteration.eligible) return;
     if (iteration.existing) {

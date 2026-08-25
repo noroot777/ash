@@ -1,4 +1,4 @@
-import { taskDisplayStatus, type Task } from "@ash/shared";
+import { taskDisplayStatus, type TaskListItem } from "@ash/shared";
 import { ArrowRight } from "@phosphor-icons/react";
 import { StatusChip } from "./ui.tsx";
 import { TaskModeIcon, taskModeLabel } from "./TaskOrigin.tsx";
@@ -20,7 +20,7 @@ export function DerivedTaskLinks({
   onOpen,
 }: {
   sourceTaskId: string;
-  allTasks: Task[];
+  allTasks: TaskListItem[];
   onOpen: (taskId: string) => void;
 }) {
   const derived = allTasks

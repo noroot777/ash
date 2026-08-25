@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { Group, Session, Task } from "@ash/shared";
+import type { Group, Session, Task, TaskListItem } from "@ash/shared";
 import { isUserFollowUp } from "@ash/shared";
 import { FolderOpen, GitBranch, GitPullRequest, Info, MagnifyingGlass } from "@phosphor-icons/react";
 import { InspectorHost, type InspectorDescriptor } from "../inspector/index.ts";
@@ -44,7 +44,7 @@ interface TaskInspectorContext {
   task: Task;
   groups: Group[];
   sessions: Session[];
-  allTasks: Task[];
+  allTasks: TaskListItem[];
   followUps: { text: string; attachments: string[]; at?: string }[];
   onOpenTask: (taskId: string) => void;
   onOpenReview: () => void;
@@ -136,7 +136,7 @@ export function TaskDetail({
   notify,
 }: {
   task: Task;
-  allTasks: Task[];
+  allTasks: TaskListItem[];
   onTaskUpdate: (task: Task) => void;
   onDeleted: (taskId: string) => void;
   onOpenTask: (taskId: string) => void;

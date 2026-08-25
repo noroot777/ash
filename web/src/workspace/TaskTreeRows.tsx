@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import type { ProjectView, Task } from "@ash/shared";
+import type { ProjectView, TaskListItem } from "@ash/shared";
 import { statusCounts, workersOf } from "@ash/shared/team";
 import { CaretRight, ChatsCircle, PaperPlaneTilt, Star, UsersThree } from "@phosphor-icons/react";
 import { OriginTaskChip, taskParentLink } from "../components/TaskOrigin.tsx";
@@ -79,7 +79,7 @@ export function StatusMarker({ indicator }: { indicator: ReturnType<IndicatorFor
 // 的 SSE 到达，整条 Task 快照直接替换会把状态/标题回滚到点星那一刻。SSE 断线窗口
 // 里点的星也因此能立刻落到界面上；失败走 notify 让用户看得见。in-flight 期间忽略
 // 重复点击，避免拿同一份旧 props 连发同方向请求。
-function TaskStarButton({ task }: { task: Task }) {
+function TaskStarButton({ task }: { task: TaskListItem }) {
   const actions = useContext(TaskTreeActionsContext);
   const [busy, setBusy] = useState(false);
   const starred = task.starredAt != null;
@@ -127,10 +127,10 @@ export function TaskRow({
   wrapperClassName = "",
   trailing,
 }: {
-  task: Task;
-  allTasks: Task[];
+  task: TaskListItem;
+  allTasks: TaskListItem[];
   selectedTaskId: string | null;
-  onTask: (task: Task) => void;
+  onTask: (task: TaskListItem) => void;
   indicatorForTask: IndicatorForTask;
   child?: boolean;
   showOrigin?: boolean;
@@ -197,7 +197,7 @@ export function TaskRow({
   );
 }
 
-function WorkerSummary({ workers, indicatorForTask }: { workers: Task[]; indicatorForTask: IndicatorForTask }) {
+function WorkerSummary({ workers, indicatorForTask }: { workers: TaskListItem[]; indicatorForTask: IndicatorForTask }) {
   if (!workers.length) return null;
   const buckets = statusCounts(workers);
   const summary = buckets.map((bucket) => `${bucket.n} ${bucket.label}`).join(" · ");
@@ -232,11 +232,11 @@ export function TeamRow({
   onTask,
   indicatorForTask,
 }: {
-  task: Task;
-  tasks: Task[];
-  allTasks: Task[];
+  task: TaskListItem;
+  tasks: TaskListItem[];
+  allTasks: TaskListItem[];
   selectedTaskId: string | null;
-  onTask: (task: Task) => void;
+  onTask: (task: TaskListItem) => void;
   indicatorForTask: IndicatorForTask;
 }) {
   const workers = workersOf(tasks, task.id);
