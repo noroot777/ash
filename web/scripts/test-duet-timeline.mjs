@@ -19,6 +19,15 @@ assert.deepEqual(state.turns[0].events, [
 assert.equal(state.turns[0].text, "我的观点是…");
 assert.equal(state.turns[0].notice, "旧会话已轮换");
 
+// 一个回合出多条 error / 旁注：实时也要**累积**。服务端 runTurn 落 transcript 时就是
+// 拼接的，这里要是覆盖，同一个回合实时只剩最后一条、刷新后又变成全部，两个面读不一样。
+let multi = applyDuetEvent(emptyDuet(), start);
+multi = applyDuetEvent(multi, agent({ kind: "error", message: "第一条失败" }));
+multi = applyDuetEvent(multi, agent({ kind: "error", message: "第二条失败" }));
+multi = applyDuetEvent(multi, agent({ kind: "system", text: "会话已轮换", at: "2026-08-06T01:01:30.000Z" }));
+assert.equal(multi.turns[0].error, "第一条失败\n第二条失败");
+assert.equal(multi.turns[0].notice, "会话已轮换");
+
 // 刷新后从 transcript 重建:回合行带着 events,执行过程还在。
 const rebuilt = rebuildDuetState([
   start,

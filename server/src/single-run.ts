@@ -21,7 +21,7 @@ import {
   shouldDropSession,
   type SessionResumeFault,
 } from "./executors/session-lost.js";
-import { appendSessionTrace, writeTurnEnd, writeRunError } from "./transcript.js";
+import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "./transcript.js";
 import { notifyTeamLead } from "./team/inbox.js";
 import { handleTaskSettlement } from "./review.js";
 import { handleFreeWorkflowSettlement } from "./free-workflow.js";
@@ -272,6 +272,14 @@ export async function consumeSingleRun(a: {
     appendSessionTrace(taskId, sessId, a.turnStart, { kind: "text", text: pendingTraceText });
     pendingTraceText = "";
   };
+  // 会话轮换旁注：实时立刻播（用户正看着），落盘攒到 writeTurnEnd 之后再补 —— 见
+  // 事件循环里那段注释，夹在正文和 agentEnd 之间会让重建出来的回合用时失准。
+  const sessionNotices: { text: string; at: string }[] = [];
+  const noteSessionNotice = (text: string) => {
+    const at = now();
+    sessionNotices.push({ text, at });
+    publishEvent({ kind: "system", text, at });
+  };
   const emitText = (text: string) => {
     if (!text) return;
     out.write(text);
@@ -364,9 +372,20 @@ export async function consumeSingleRun(a: {
         // 现场，没有一例长这样（两例「先寒暄一句」的寒暄和标题同在一个 text 事件里），
         // 拿这个换顺序永远正确，划算。
         if (!titleDone && head) await resolveTitle(true);
+        // scope:"session" 说的是「这条恢复会话作废了」，不是「本回合失败了」（见
+        // executors/codex.ts 推它的地方）。当成普通 error 会把一个 exit 0、正常交卷的回合
+        // 记成「执行过程里有异常」；跟 duet 一样按 scope 分流，降成 system 旁注。
+        // **落盘要等到 writeTurnEnd 之后**：重建时 agentEnd 只往「最后一段是 agent」的
+        // 气泡上盖时间戳（shared/src/index.ts），夹在正文和 agentEnd 之间会让本回合用时失准。
+        const sessionNotice = event.kind === "error" && event.scope === "session";
         const emittedEvent = event.kind === "usage"
           ? await recordSessionUsageEvent(sessId, event, agentType, cliSessionId)
           : event;
+        if (sessionNotice && emittedEvent.kind === "error") {
+          sessionFault = mergeSessionResumeFault(sessionFault, emittedEvent.message);
+          noteSessionNotice(emittedEvent.message);
+          continue;
+        }
         persistTrace(emittedEvent);
         if (emittedEvent.kind === "error") {
           writeRunError(out, emittedEvent.message);
@@ -424,9 +443,15 @@ export async function consumeSingleRun(a: {
     // 只弹一句错误不算数：用户看不出 ash 已经替他把坏 id 清了、也看不出重试会丢
     // 上下文。跟别的诊断一样三处都落：
     // .md 原始产物、trace（刷新后还在）、SSE（实时）。
-    out.write(`\n> ${note}\n`);
-    persistTrace({ kind: "error", message: note }, endIso);
-    publishEvent({ kind: "error", message: note });
+    // 但 poisoned + exit 0 那一路本回合是**成功**的，只是会话不能再续：这时候跟着上面
+    // 那条诊断一起走 system 旁注，别在一个正常交卷的回合上记一笔「执行异常」。
+    if (sessionFault === "poisoned" && exitStatus === 0) {
+      noteSessionNotice(note);
+    } else {
+      out.write(`\n> ${note}\n`);
+      persistTrace({ kind: "error", message: note }, endIso);
+      publishEvent({ kind: "error", message: note });
+    }
   }
   // 这一轮有没有「交卷时通道断了」的调用：有就替它补录。**必须排在 settleTaskStatus
   // 之前** —— complete_task 的补录要赶在结算读确认标记之前落库，晚一步，一个干完活的
@@ -461,6 +486,11 @@ export async function consumeSingleRun(a: {
     publishEvent({ kind: "error", message: settled.note });
   }
   writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
+  // 会话轮换旁注排在 agentEnd **之后**：这样重建时 agentEnd 仍盖在 agent 那段上，
+  // 旁注自己是紧随其后的独立气泡，和实时看到的先后一致。
+  for (const notice of sessionNotices) {
+    writeTurn(out, { t: "system", agent: agentType, text: notice.text }, notice.at);
+  }
   out.end();
   } finally {
     await closeExecution("failed", now());

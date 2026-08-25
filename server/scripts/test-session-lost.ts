@@ -18,6 +18,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
+import { parseSessionOutput } from "@ash/shared";
 import { readCodexCliVersion } from "../src/executors/codex-rollout.js";
 import {
   LOST_SESSION_PATCH,
@@ -217,6 +218,84 @@ assert.match(
   "closeLead 写库失败后仍会沿用‘恢复字段已清掉’的旧文案",
 );
 ok("团队调度台写库失败时改用与事实一致的会话说明");
+
+// ── ⑤ 轮换旁注不是「本回合失败」,而且不能挤掉 agentEnd ──────────────────────
+// scope:"session" 那条诊断说的是「这条恢复会话作废了」,一个 exit 0、正常交卷的回合
+// 不该因此在执行过程里记一笔异常 —— 所以 single-run / team 都把它降成 system 旁注。
+// 但旁注是**落盘的 turn sentinel**,而重建时 agentEnd 只往「最后一段是 agent」的气泡上
+// 盖结束时间(parseSessionOutput)。写在正文和 agentEnd 之间,这一回合的用时就会退回到
+// 「算到下一次说话为止」。这里拿真解析器把两种写法都跑一遍,把顺序钉死。
+const ROTATION_NOTE = "ash 已清掉这条会话的恢复字段：下一次运行会开一条全新会话。";
+const AGENT_END_AT = "2026-08-25T10:00:05.000Z";
+const noticeTurn = (at: string) =>
+  `\n\x1e${JSON.stringify({ t: "system", agent: "codex", text: ROTATION_NOTE, at })}\n`;
+const agentEndTurn = `\n\x1e${JSON.stringify({ t: "agentEnd", at: AGENT_END_AT })}\n`;
+
+const afterEnd = parseSessionOutput(`活干完了。${agentEndTurn}${noticeTurn("2026-08-25T10:00:06.000Z")}`);
+assert.deepEqual(afterEnd.map((seg) => seg.kind), ["agent", "system"], "旁注要独立成段,不能糊进正文");
+assert.equal(
+  afterEnd.find((seg) => seg.kind === "agent")?.endedAt,
+  AGENT_END_AT,
+  "旁注排在 agentEnd 之后时,agent 气泡仍拿得到真实结束时间",
+);
+assert.equal(afterEnd.at(-1)?.text, ROTATION_NOTE, "旁注正文要原样留着");
+
+// 反面:夹在中间就会把 agentEnd 的落点抢走 —— 这正是要避免的写法。
+const beforeEnd = parseSessionOutput(`活干完了。${noticeTurn("2026-08-25T10:00:04.000Z")}${agentEndTurn}`);
+assert.equal(
+  beforeEnd.find((seg) => seg.kind === "agent")?.endedAt,
+  undefined,
+  "旁注夹在正文和 agentEnd 之间会让 agent 气泡丢掉结束时间(所以两条链都必须写在 agentEnd 之后)",
+);
+
+// 落盘顺序由代码保证:两条链都得先 writeTurnEnd,再补旁注。
+assert.match(
+  readFileSync(join(SRC, "single-run.ts"), "utf8"),
+  /writeTurnEnd\(out, endIso\);[\s\S]{0,400}?for \(const notice of sessionNotices\)/,
+  "single-run 的轮换旁注必须写在 writeTurnEnd 之后",
+);
+for (const fence of [/writeTurnEnd\(lead\.out, endIso\);\s*\n\s*flushSessionNotices\(lead\)/]) {
+  assert.match(teamSessionCode, fence, "team 的轮换旁注必须紧跟在 writeTurnEnd 之后落盘");
+}
+assert.equal(
+  (teamSessionCode.match(/flushSessionNotices\(lead\);/g) ?? []).length,
+  2, // endTurn + closeLead:回合正常结束和进程没了两条路都得把攒下的旁注落盘
+  "endTurn 与 closeLead 都要 flush 旁注,否则进程直接没了那一路会把旁注丢在内存里",
+);
+// scope 分流:三条链都得认这个字段,少一条就会在成功回合上记异常。
+for (const [chain, owner] of [["single", "single-run.ts"], ["team", "team/session.ts"], ["duet", "duet/turn.ts"]]) {
+  assert.match(
+    readFileSync(join(SRC, owner!), "utf8"),
+    /scope === "session"/,
+    `${chain} 没按 scope 分流会话轮换诊断,成功回合会被记成有异常`,
+  );
+}
+ok("会话轮换旁注按 scope 分流,且排在 agentEnd 之后不夺走回合用时");
+
+// ── ⑥ 中途已作废的会话,收尾不再重播整段说明 ────────────────────────────────
+assert.match(
+  teamSessionCode,
+  /rotationAnnounced \? ROTATION_ALREADY_ANNOUNCED : dropNote/,
+  "consume 里已经播过轮换说明时,closeLead 应只补指路而不是整段重复",
+);
+// 中途清库那一步也要认「这条会话行已被新进程接管」,否则会抹掉新进程刚写进去的 id。
+assert.match(
+  teamSessionCode,
+  /if \(leads\.get\(lead\.taskId\) === lead\) \{\s*\n\s*let note = sessionResumeFaultNote\("poisoned"\);\s*\n\s*try \{\s*\n\s*await db\.update\(sessions\)\.set\(LOST_SESSION_PATCH\)/,
+  "常驻中途作废会话前必须排除 superseded,否则会清掉新进程的有效 id",
+);
+// 「已说过」只能由**清成功**那一支置位:清失败还报喜,就是上一轮刚修掉的那个毛病。
+assert.match(
+  teamSessionCode,
+  /await db\.update\(sessions\)\.set\(LOST_SESSION_PATCH\)[\s\S]{0,300}?lead\.rotationAnnounced = true;\s*\n\s*\} catch \(error\) \{/,
+  "rotationAnnounced 必须只在恢复字段真的清掉之后置位",
+);
+assert.doesNotMatch(
+  teamSessionCode,
+  /note = SESSION_DROP_PERSISTENCE_FAILED_NOTE;[\s\S]{0,200}?lead\.rotationAnnounced = true/,
+  "写库失败那一支不能把自己标成‘已说过’,否则收尾会用报喜的短话盖掉真相",
+);
+ok("常驻中途作废:不重播说明,也不抹掉接管进程的新会话 id");
 
 rmSync(dir, { recursive: true, force: true });
 console.log("session-lost: 全部通过");
