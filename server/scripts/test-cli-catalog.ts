@@ -83,9 +83,10 @@ function writeVersionStub(dir: string, name: string, version: string): string {
     writeVersionStub(stubDir, "codex", "codex-cli 0.147.8");
     const blocked = await registrationBlockReason("codex") ?? "";
     assert.ok(blocked, "已安装的 0.147.x 必须拒绝注册");
-    // 拒绝理由跟升级文案是两件事:注册可以从「新增」按钮/API 直连发起,那些入口跟
-    // 「检测本地智能体」无关,所以这条不能带完整升级提示(否则没检测的用户也被提示了)。
-    assert.doesNotMatch(blocked, /npm install|0\.148\.0/, "拒绝理由不能提前泄出升级文案");
+    // 拒绝理由跟版本诊断是两件事:注册可以从「新增」按钮/API 直连发起,那些入口跟
+    // 「检测本地智能体」无关。用户的口径是「亲手点检测、并且检测出这个版本,才做版本
+    // 提示」,所以这条连「本机装的版本有缺陷」都不能说 —— 只说没注册成、去点检测。
+    assert.doesNotMatch(blocked, /版本|缺陷|npm install|0\.14/, "拒绝理由不能提前泄出任何版本诊断");
     assert.match(blocked, /检测本地智能体/, "拒绝理由要把人指回检测入口");
     const catalogCodex = (await detectKnownClis()).find((cli) => cli.type === "codex");
     assert.match(catalogCodex?.versionWarning ?? "", /npm install .*@openai\/codex/, "升级文案只走检测结果");

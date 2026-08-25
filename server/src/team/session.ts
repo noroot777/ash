@@ -65,9 +65,20 @@ const IDLE_MS = Number(process.env.ASH_TEAM_IDLE_MS ?? 30 * 60_000);
 const CLOSE_GRACE_MS = 10_000;
 
 const INTERRUPT_NOTE = "〔系统〕已打断调度者当前回合,插入你的新指令";
-const HALT_NOTE = "〔系统〕你按了「停止全组」:调度台进程与所有在跑的执行者都已停止,执行者可从中断处恢复。再说一句话就能把调度者接回同一会话。";
-const RECYCLE_NOTE = (min: number) =>
-  `〔系统〕调度台空闲超过 ${min} 分钟,进程已回收(待命)。你或执行者再说话时会自动接回同一会话,上下文不丢。`;
+// 「再说一句话就接回同一会话」只在会话**还在**时成立。刚被判 poisoned 作废过的话,
+// 这句就是把用户推回同一堵墙的错误指路 —— 以前靠事后补一条红色 error「更正上面那条」,
+// 于是一次 exit 0 的健康回合被停掉后照样挂着「执行过程 · 1 异常」(第 2 轮审查 P1)。
+// 现在按下按钮时就照实说,不留需要更正的话。
+const HALT_NOTE = (resumable: boolean) =>
+  "〔系统〕你按了「停止全组」:调度台进程与所有在跑的执行者都已停止,执行者可从中断处恢复。"
+  + (resumable
+    ? "再说一句话就能把调度者接回同一会话。"
+    : "调度者这条 CLI 会话已经作废,再说一句话会开一条全新会话(之前的上下文不带过去)。");
+const RECYCLE_NOTE = (min: number, resumable: boolean) =>
+  `〔系统〕调度台空闲超过 ${min} 分钟,进程已回收(待命)。`
+  + (resumable
+    ? "你或执行者再说话时会自动接回同一会话,上下文不丢。"
+    : "调度者这条 CLI 会话已经作废,再说话会开一条全新会话(之前的上下文不带过去)。");
 // 调度台脚下的工作目录没了(多半是它自己按吩咐删掉了所在的 worktree)。
 const WORKSPACE_GONE_NOTE = (cwd: string) =>
   `〔系统〕检测到调度台的工作目录 ${cwd} 已不存在(worktree 被删除),当前进程已无法继续执行命令,先收掉它。这条消息会用同一个 CLI 会话重新接回:能恢复的会原样恢复,恢复不了则会新建一个空目录并明确告知。`;
@@ -90,6 +101,11 @@ interface Lead {
   pending: string[]; // 回合进行中攒下的执行者消息,turnEnd 时合并成一条送
   idleTimer: NodeJS.Timeout | null;
   closing: "recycle" | "halt" | "workspace" | null;
+  /**
+   * 收尾那句话已经说过「会话作废了」吗。为 true 时 closeLead 就不必再补一条轮换说明
+   * —— 补了是重复,不补又会留下一句「再说一句话就接回同一会话」的错误指路。
+   */
+  closingSaidRotated?: boolean;
 }
 
 const leads = new Map<string, Lead>();
@@ -132,7 +148,10 @@ export async function haltTeam(taskId: string): Promise<void> {
   const lead = leads.get(taskId);
   if (lead) {
     lead.closing = "halt";
-    recordSystemTurn(lead, HALT_NOTE);
+    // 会话在 consume 里被判 poisoned 时就地作废过(lead.cliSessionId 清空),所以这里
+    // 问得出「还接得回吗」,不必等 closeLead 再去更正。
+    lead.closingSaidRotated = !lead.cliSessionId;
+    recordSystemTurn(lead, HALT_NOTE(!!lead.cliSessionId));
   }
   stopTask(taskId); // 常驻 handle 已 trackRun → killChild 三层击杀
   const owned = await db.select().from(groups).where(eq(groups.ownerTaskId, taskId));
@@ -600,25 +619,26 @@ async function closeLead(lead: Lead, exitStatus: number, sessionFault: SessionRe
     if (dropSession) dropNote = SESSION_DROP_PERSISTENCE_FAILED_NOTE;
   }
   if (lead.closing === "recycle") {
-    recordSystemTurn(lead, RECYCLE_NOTE(Math.round(IDLE_MS / 60_000)));
-  } else if (!lead.closing && (exitStatus !== 0 || dropSession)) {
-    // 既不是回收也不是手停 —— 进程自己没了。会话还在,说句话就能接回;除非 CLI 刚
-    // 否认过或判定 poisoned，那句「会话还在」就成了把用户推回同一堵墙的错误指路。
+    // 回收发生在这里,dropSession 已经算得出来 —— 直接照实写,不留需要更正的话。
+    recordSystemTurn(lead, RECYCLE_NOTE(Math.round(IDLE_MS / 60_000), !dropSession));
+  } else if (!lead.closing && exitStatus !== 0) {
+    // 进程自己崩了。这是真失败,照旧走 error;会话还在就说能接回,刚作废过就把
+    // 轮换说明接在后面(那句「会话还在」会把用户推回同一堵墙)。
     const msg = dropSession
-      ? `${exitStatus !== 0 ? `调度台进程意外退出(exit ${exitStatus})。` : ""}${dropNote}`
+      ? `调度台进程意外退出(exit ${exitStatus})。${dropNote}`
       : `调度台进程意外退出(exit ${exitStatus})。CLI 会话还在,再说一句话会自动接回;需要的话也可以点「继续」。`;
     writeRunError(lead.out, msg);
     appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message: msg }, endIso);
     publish(lead, { kind: "error", message: msg });
-  }
-  // 回收和「停止全组」那两句都写着「再说一句话就能接回同一会话」,而这条会话刚被作废
-  // —— 不当场更正,用户刷新后看到的指引与真实状态正好相反,照做一次再撞一次墙。上面
-  // 那个「进程自己没了」的分支已经在 msg 里说过了,别重复。
-  if (dropSession && lead.closing) {
-    const msg = `更正上面那条:CLI 会话接不回了。${dropNote}`;
-    writeRunError(lead.out, msg);
-    appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message: msg }, endIso);
-    publish(lead, { kind: "error", message: msg });
+  } else if (!lead.closing && dropSession) {
+    // exit 0 自己收尾、只是会话作废了 —— 换会话不等于这一轮失败,落 system 注记。
+    recordSystemTurn(lead, dropNote!);
+  } else if (lead.closing && dropSession && !lead.closingSaidRotated) {
+    // 手停/工作目录那两句是**按下按钮时**写的,那时会话可能还在;到这一步才作废的话
+    // 补一条,否则用户刷新后看到的指引与真实状态正好相反。这条同样是 system 注记:
+    // 用 error「更正上面那条」会让一次 exit 0 的健康回合挂上「执行过程 · 1 异常」
+    // (第 2 轮审查 P1 第二层)。
+    recordSystemTurn(lead, `更正上面那条:CLI 会话接不回了。${dropNote}`);
   }
   writeTurnEnd(lead.out, endIso);
   lead.out.end();

@@ -5,6 +5,11 @@
 import assert from "node:assert/strict";
 import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
 import { noteTone } from "../src/task-detail/conversationNotes.ts";
+import {
+  SESSION_DROP_PERSISTENCE_FAILED_NOTE,
+  SESSION_LOST_NOTE,
+  SESSION_POISONED_NOTE,
+} from "@ash/shared/session-notes";
 
 // —— 语气分类：办成了的事不报红，没办成的才报红 ——
 assert.equal(noteTone("自由工作流第 2 轮审查通过（5.5审查）。"), "neutral");
@@ -129,7 +134,14 @@ assert.equal(liveNote[1].at, liveNoteAt, "实时旁注应直接带落盘时的�
 // 所以落盘路和直播路都得渲染成 note；一个 exit 0、正文完整的回合不许出现红色「异常」。
 const rotationSession = { ...session, agentType: "codex", endedAt: null, turnStartedAt: session.startedAt };
 const diagnosis = "Codex 会话诊断：session=poisoned_session";
-const rotationNote = "ash 已清掉恢复字段，下一次运行会从任务正文自动开启一条全新会话。";
+const rotationNote = SESSION_POISONED_NOTE;
+// 轮换说明自己带着「异常」二字(它在转述 Codex 报的 rollout 异常),不专门认出来就会被
+// FAILED_HINTS 染红 —— 只断言 variant 会漏掉这一整层(自由工作流第 2 轮审查)。
+assert.equal(noteTone(SESSION_POISONED_NOTE), "neutral", "poisoned 轮换说明不许被关键词染红");
+assert.equal(noteTone(SESSION_LOST_NOTE), "neutral", "会话失效轮换说明不许被关键词染红");
+assert.equal(noteTone(`更正上面那条:CLI 会话接不回了。${SESSION_POISONED_NOTE}`), "neutral", "收尾更正说的是同一件事");
+// 这条不是轮换而是真出了问题:恢复字段没写进库,下一次可能再撞旧会话。该红就红。
+assert.equal(noteTone(SESSION_DROP_PERSISTENCE_FAILED_NOTE), "error", "清理写库失败仍必须报红");
 const rotationLive = buildConversationItems(
   [{ session: rotationSession, output: "这一轮正文已经完整产出。", trace: [] }],
   [rotationSession],
@@ -154,7 +166,11 @@ const rotationAux = rotationLive.flatMap((item) => item.kind === "agent"
   : []);
 assert.deepEqual(rotationAux, [], "会话轮换不该在气泡里留下红色「异常」");
 const rotationNotes = rotationLive.filter((item) => item.kind === "event" && item.variant === "note");
-assert.deepEqual(rotationNotes.map((item) => item.text), [diagnosis, rotationNote], "轮换诊断与说明都渲染成旁注");
+assert.deepEqual(
+  rotationNotes.map((item) => [item.tone, item.text]),
+  [["neutral", diagnosis], ["neutral", rotationNote]],
+  "轮换诊断与说明都渲染成中性旁注（只判 variant 会漏掉颜色）",
+);
 assert.equal(rotationLive.at(-1).text, "本轮执行结束", "exit 0 仍是正常收尾");
 
 // 落盘后同构：.md 里的 system 回合行走 persisted 那条路，措辞与结构必须一致。
@@ -168,9 +184,33 @@ const rotationPersisted = buildConversationItems([{
   trace: [],
 }], [rotationSession], []);
 assert.deepEqual(
-  rotationPersisted.filter((item) => item.kind === "event").map((item) => [item.variant, item.text]),
-  [["note", diagnosis], ["note", rotationNote]],
-  "刷新之后轮换说明仍是旁注",
+  rotationPersisted.filter((item) => item.kind === "event").map((item) => [item.variant, item.tone, item.text]),
+  [["note", "neutral", diagnosis], ["note", "neutral", rotationNote]],
+  "刷新之后轮换说明仍是中性旁注",
+);
+
+// 团队「停止全组」的收尾更正：轮换不该在这条路上又变回红色（第 2 轮审查 P1 第二层）。
+const haltCorrection = `更正上面那条:CLI 会话接不回了。${SESSION_POISONED_NOTE}`;
+const halted = buildConversationItems([{
+  session: rotationSession,
+  output: [
+    "这一轮正文已经完整产出。",
+    turn("system", "〔系统〕你按了「停止全组」:调度台进程与所有在跑的执行者都已停止,执行者可从中断处恢复。调度者这条 CLI 会话已经作废,再说一句话会开一条全新会话(之前的上下文不带过去)。", "2026-08-10T03:27:00.000Z"),
+    turn("system", haltCorrection, "2026-08-10T03:28:00.000Z"),
+  ].join("\n"),
+  trace: [],
+}], [rotationSession], []);
+assert.deepEqual(
+  halted.filter((item) => item.kind === "event").map((item) => [item.variant, item.tone]),
+  [["note", "neutral"], ["note", "neutral"]],
+  "停止全组之后的轮换说明不许报红",
+);
+assert.deepEqual(
+  halted.flatMap((item) => item.kind === "agent"
+    ? item.segments.flatMap((segment) => segment.events.filter((e) => e.kind === "error"))
+    : []),
+  [],
+  "停止全组不该给健康回合挂上「执行过程 · 1 异常」",
 );
 
 // 兜底：万一还有哪条直播路径漏转，模型自己也不许把 session-scope error 渲染成异常。
@@ -194,5 +234,6 @@ assert.deepEqual(
   "带 scope:\"session\" 的 error 不能落进气泡的异常折叠块",
 );
 assert.equal(rawScoped.find((item) => item.kind === "event")?.variant, "note");
+assert.equal(rawScoped.find((item) => item.kind === "event")?.tone, "neutral");
 
 console.log("conversation-notes ok");

@@ -94,27 +94,17 @@ export const LOST_SESSION_PATCH: { cliSessionId: null } & { [K in keyof ResumeFi
 };
 
 /**
- * 清掉失效 id 之后写给用户的那句话。
- *
- * 得说清三件事，少一件用户就会以为是随机失败：id 为什么会失效、ash 替他做了什么、
- * 下一次运行跟这一次有什么不同（**上下文不会带过来**——这是他有权提前知道的代价）。
+ * 三条说明的措辞与「这算不算轮换」的判据都住在 `@ash/shared/session-notes` ——
+ * 前端要按同一份判据决定旁注的语气(带「异常」二字的轮换说明不能被通用关键词染红)。
+ * 这里原样转出去,server 侧既有的 import 路径不变。
  */
-export const SESSION_LOST_NOTE =
-  "上一轮记下的 CLI 会话 id 在 CLI 那边已经不存在了（多半是第一次起跑就失败、"
-  + "会话压根没建起来，也可能是 CLI 的会话记录被清过或换了机器/目录）。"
-  + "ash 已经把这个失效的 id 清掉：再点一次运行会开一条**全新会话**，"
-  + "之前的上下文不会带过来，任务正文和历史记录都还在。";
-
-export const SESSION_POISONED_NOTE =
-  "Codex 已在本轮 stderr 中报告这条 thread 的回合关联、world-state 或 rollout 落盘异常；"
-  + "即使进程 exit 0 且发出 turn.completed，也不能再把它当作可恢复会话；"
-  + "会话轮换不改变本回合真实的退出原因。"
-  + "ash 已清掉这条会话的恢复字段：下一次运行会从任务正文自动开启一条**全新会话**，"
-  + "旧对话与执行记录仍保留，但之前的上下文不会带过去。";
-
-export const SESSION_DROP_PERSISTENCE_FAILED_NOTE =
-  "ash 已停止本次进程继续使用这条失效的 CLI 会话；但恢复字段写入数据库失败，"
-  + "下一次重新开台时可能再次尝试旧会话。";
+export {
+  SESSION_LOST_NOTE,
+  SESSION_POISONED_NOTE,
+  SESSION_DROP_PERSISTENCE_FAILED_NOTE,
+  isSessionRotationNote,
+} from "@ash/shared/session-notes";
+import { SESSION_LOST_NOTE, SESSION_POISONED_NOTE } from "@ash/shared/session-notes";
 
 export function sessionResumeFaultNote(fault: SessionResumeFault): string {
   return fault === "poisoned" ? SESSION_POISONED_NOTE : SESSION_LOST_NOTE;

@@ -5,9 +5,10 @@
 // 结构由 conversationModel 统一决定：
 //   note     旁注,贴着上一段说话继续,不重复头像/执行器名(system 时间线通告都归这档)
 //   boundary 回合边界(本轮执行结束 / 执行异常结束 / 本回合结束),保留整宽横线
+import { isSessionRotationNote } from "@ash/shared/session-notes";
+
 export type ConversationEventTone = "neutral" | "error";
 export type ConversationEventVariant = "note" | "boundary";
-
 // 只收「这件事没办成」的词。「未通过」是审查结论、也确实要显眼,归红;
 // 「通过」「完成」「开始」这类正常推进不进表。
 const FAILED_HINTS = [
@@ -27,6 +28,11 @@ const FAILED_HINTS = [
 ];
 
 export function noteTone(text: string): ConversationEventTone {
+  // 会话轮换先认出来再判关键词:那两条说明在**转述** Codex 报的 rollout/world-state
+  // 异常,自己带着「异常」二字,但讲的是「ash 已经替你换好会话了」——不是这一轮失败。
+  // 不先拦一道,一次 exit 0 的健康回合会拖着一条红旁注,用户读成执行失败(自由工作流
+  // 第 2 轮审查)。措辞与判据同住 @ash/shared/session-notes,不会两边漂移。
+  if (isSessionRotationNote(text)) return "neutral";
   return FAILED_HINTS.some((hint) => text.includes(hint)) ? "error" : "neutral";
 }
 
