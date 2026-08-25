@@ -109,7 +109,7 @@ export function classifyCodexExit(e: CodexExitEvidence): Pick<RunDiagnostics, "t
 export function formatFailureForTimeline(d: RunDiagnostics): string | null {
   if (!d.failureKind || !d.failureReason) return null;
   const failureReason = d.failureReason.length > 1200
-    ? `${d.failureReason.slice(0, 1200).trimEnd()}\n…（失败详情已截断）`
+    ? `${d.failureReason.slice(0, 300).trimEnd()}\n…（中间已截断 ${d.failureReason.length - 1100} 字，见原始日志）\n${d.failureReason.slice(-800).trimStart()}`
     : d.failureReason;
   const evidence = [
     `类型 ${d.failureKind}`,
