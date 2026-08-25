@@ -299,7 +299,7 @@ server.registerTool(
   {
     title: "更新任务",
     description:
-      "更新单个任务的可编辑字段:title/body/status/labels/groupId/agentType/executorId/model/reasoningEffort。model/reasoningEffort 覆盖执行器 profile 的模型/思考强度，缺省或 null=跟随执行器；可在运行中修改，下一回合解析执行器时生效。executorId 指具体执行器 profile(agents.id),指定则优先用它；为空/悬空时按 agentType 默认执行器降级。**不能**用此工具改任务的队列归属——请用 queue_insert / queue_remove / queue_reorder;**想让失败/取消的任务回队列等待用 requeue_task**(它会顺带处理位置:被越过就排到队尾)。也不能把任务手动设为 running/queued/awaiting_review。**running/queued 任务的 status 一律不可改(会被 409 拒绝)——要停止/取消用 stop_task**,它才会真正杀掉 agent 进程树;直接 patch canceled 只改数据库,是 2026-07-21「complete_task 409 → failed 错乱」事故的根因。**正在执行的任务要确认完成时,也不要用 status=done——用 complete_task**:回合结束的严格结算只认 complete_task 的确认。",
+      "更新单个任务的可编辑字段:title/body/status/labels/groupId/agentType/executorId/model/reasoningEffort。model/reasoningEffort 覆盖执行器 profile 的模型/思考强度，缺省或 null=跟随执行器；ash 拉起的当前 agent 可在运行中修改，下一回合解析执行器时生效；Claude Desktop/Cursor 等没有 ash 回合身份的外部 MCP 客户端只能在任务空闲后修改。executorId 指具体执行器 profile(agents.id),指定则优先用它；为空/悬空时按 agentType 默认执行器降级。**不能**用此工具改任务的队列归属——请用 queue_insert / queue_remove / queue_reorder;**想让失败/取消的任务回队列等待用 requeue_task**(它会顺带处理位置:被越过就排到队尾)。也不能把任务手动设为 running/queued/awaiting_review。**running/queued 任务的 status 一律不可改(会被 409 拒绝)——要停止/取消用 stop_task**,它才会真正杀掉 agent 进程树;直接 patch canceled 只改数据库,是 2026-07-21「complete_task 409 → failed 错乱」事故的根因。**正在执行的任务要确认完成时,也不要用 status=done——用 complete_task**:回合结束的严格结算只认 complete_task 的确认。",
     inputSchema: {
       taskId: z.string(),
       title: z.string().optional(),

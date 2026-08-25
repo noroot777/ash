@@ -27,6 +27,7 @@ import { join } from "node:path";
 import type { AgentType } from "@ash/shared";
 import { isTaskStage } from "@ash/shared";
 import { isReplayableMcpTool, isUndeliveredMcpFailure } from "@ash/shared/mcp-delivery";
+import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
@@ -65,7 +66,7 @@ function parseCodexCalls(text: string): McpCallRecord[] {
     let parsed: unknown;
     try { parsed = JSON.parse(line); } catch { continue; }
     const item = asRecord(asRecord(parsed).item);
-    if (item.type !== "mcp_tool_call" || item.server !== "ash") continue;
+    if (item.type !== "mcp_tool_call" || item.server !== ASH_MCP_SERVER_NAME) continue;
     if (item.status !== "failed" && item.status !== "completed") continue; // in_progress 那条跳过
     const tool = typeof item.tool === "string" ? item.tool : "";
     if (!tool) continue;
@@ -83,7 +84,7 @@ function parseCodexCalls(text: string): McpCallRecord[] {
 }
 
 // claude 的 MCP 工具名形如 `mcp__ash__report_stage`。
-const CLAUDE_TOOL = /^mcp__ash__(.+)$/;
+const CLAUDE_TOOL = new RegExp(`^mcp__${ASH_MCP_SERVER_NAME}__(.+)$`);
 
 /**
  * claude：stream-json。调用与结果分在两条消息里，靠 `tool_use_id` 对上。
@@ -98,7 +99,7 @@ function parseClaudeCalls(text: string): McpCallRecord[] {
   const pending = new Map<string, { tool: string; args: Record<string, unknown> }>();
   const out: McpCallRecord[] = [];
   for (const line of text.split("\n")) {
-    if (!line.includes("mcp__ash__") && !line.includes("tool_result")) continue;
+    if (!line.includes(`mcp__${ASH_MCP_SERVER_NAME}__`) && !line.includes("tool_result")) continue;
     let parsed: unknown;
     try { parsed = JSON.parse(line); } catch { continue; }
     const root = asRecord(parsed);

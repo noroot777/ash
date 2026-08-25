@@ -66,6 +66,10 @@
       "types": "./src/mcp-delivery.ts",
       "default": "./src/mcp-delivery.ts"
     },
+    "./mcp": {
+      "types": "./src/mcp.ts",
+      "default": "./src/mcp.ts"
+    },
     "./repo-url": {
       "types": "./src/repo-url.ts",
       "default": "./src/repo-url.ts"

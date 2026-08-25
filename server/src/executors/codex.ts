@@ -2,6 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { AgentEvent, TokenUsage } from "@ash/shared";
 import { cliConfigOverrideEnvPatch } from "@ash/shared/cli-overrides";
+import { ASH_MCP_IDENTITY_ENV_VARS } from "@ash/shared/mcp";
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { openCodexResident } from "./codex-resident.js";
@@ -12,6 +13,7 @@ import { relayApi } from "../llm.js";
 import { protocolConverterBaseUrl } from "../openai-converter/common.js";
 import { formatFailureForTimeline, RunTraceRecorder, type RunTracePaths } from "./diagnostics.js";
 import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
+import { codexAshMcpServerName } from "./codex-mcp.js";
 
 // 供应商的 key 走环境变量,不进命令行 —— `-c` 参数会原样进 commandLine,而后者存进
 // sessions.command_line 并在 UI 展示。codex 的 model_providers 正好支持 env_key
@@ -111,12 +113,12 @@ export class CodexExecutor implements AgentExecutor {
     // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。
     if (this.extraArgs.length) common.push(...this.extraArgs);
     if (opts.extraArgs?.length) common.push(...opts.extraArgs);
-    // codex 会过滤传给 MCP stdio 子进程的环境，ASH_* 只放在 CLI 进程环境里到不了
-    // harness MCP。用本次运行的配置覆盖显式注入；放在用户 extraArgs 之后，确保回合身份
-    // 不会被同 key 的自定义参数盖掉。commandLine 落库前会由 redactSecrets 隐去 token。
-    for (const key of ["ASH_TASK_ID", "ASH_TURN_TOKEN"] as const) {
-      const value = opts.env?.[key];
-      if (value) common.push("-c", `mcp_servers.harness.env.${key}=${JSON.stringify(value)}`);
+    // codex 默认会过滤 MCP stdio 子进程环境。env_vars 让它从父进程按**变量名**复制动态
+    // 身份：argv 里没有 token 值；放在用户 extraArgs 之后，避免白名单被同 key 覆盖。
+    const identityVars = ASH_MCP_IDENTITY_ENV_VARS.filter((key) => !!opts.env?.[key]);
+    if (identityVars.length) {
+      const serverName = codexAshMcpServerName(opts.env?.CODEX_HOME);
+      common.push("-c", `mcp_servers.${serverName}.env_vars=${JSON.stringify(identityVars)}`);
     }
     return sessionId ? ["exec", ...common, "resume", sessionId, "-"] : ["exec", ...common, "-"];
   }

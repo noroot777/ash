@@ -242,7 +242,13 @@ try {
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify({ title }),
   });
-  assert.equal((await patchTask("token", "stale-no-token")).status, 409, "无来源的运行中 PATCH 必须拒绝");
+  const noIdentityPatch = await patchTask("token", "stale-no-token");
+  assert.equal(noIdentityPatch.status, 409, "无来源的运行中 PATCH 必须拒绝");
+  assert.match(
+    ((await noIdentityPatch.json()) as { error: string }).error,
+    /缺少.*回合身份|外部 MCP/,
+    "没有身份的外部调用不能误报成旧回合",
+  );
   assert.equal((await patchTask("token", "stale-old-token", {
     "x-ash-source-task-id": "token",
     "x-ash-turn-token": "old-token",
