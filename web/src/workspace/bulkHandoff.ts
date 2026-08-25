@@ -1,18 +1,18 @@
-import type { Task } from "@ash/shared";
+import type { TaskListItem } from "@ash/shared";
 
 export type BulkHandoffSkip = {
-  task: Task;
+  task: TaskListItem;
   reason: string;
 };
 
 const normalizedTargetUrl = (url: string): string => url.trim().replace(/\/+$/, "");
 
-export function outboundTasksForTarget(
-  tasks: Task[],
+export function outboundTasksForTarget<T extends TaskListItem>(
+  tasks: T[],
   projectId: string,
   targetUrl: string,
   targetFingerprint?: string | null,
-): Task[] {
+): T[] {
   const normalized = normalizedTargetUrl(targetUrl);
   return tasks
     .filter((task) => task.projectId === projectId
@@ -27,12 +27,12 @@ export function outboundTasksForTarget(
     .sort((a, b) => (b.handoff?.at ?? b.updatedAt).localeCompare(a.handoff?.at ?? a.updatedAt));
 }
 
-export function partitionBulkHandoffTasks(
-  tasks: Task[],
+export function partitionBulkHandoffTasks<T extends TaskListItem>(
+  tasks: T[],
   projectId: string,
   targetFingerprint?: string | null,
-): { eligible: Task[]; skipped: BulkHandoffSkip[] } {
-  const eligible: Task[] = [];
+): { eligible: T[]; skipped: BulkHandoffSkip[] } {
+  const eligible: T[] = [];
   const skipped: BulkHandoffSkip[] = [];
   const candidates = tasks.filter((task) => task.projectId === projectId && task.parentId === null && !task.archived
     && (task.handoff?.direction !== "out" || Boolean(task.handoff.pending)));

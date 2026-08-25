@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import type { Task } from "@ash/shared";
+import type { Task, TaskListItem } from "@ash/shared";
 import { runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
 import type { Batch } from "@ash/shared/team";
 import { ArrowElbowDownRight, ArrowRight, SpinnerGap } from "@phosphor-icons/react";
@@ -83,11 +83,11 @@ function InboundRow({
   delegating,
 }: {
   message: InboundMessage;
-  worker?: Task;
+  worker?: TaskListItem;
   number: number;
   at?: string;
   onOpenWorker: (taskId: string) => void;
-  onAskLead: (worker: Task) => void | Promise<void>;
+  onAskLead: (worker: TaskListItem) => void | Promise<void>;
   delegating: boolean;
 }) {
   const body = message.kind === "question" && worker?.question ? worker.question : message.body;
@@ -128,7 +128,7 @@ function BatchCard({
   indicatorForTask,
 }: {
   batch: Batch;
-  allWorkers: Task[];
+  allWorkers: TaskListItem[];
   onOpenWorker: (taskId: string) => void;
   indicatorForTask: IndicatorForTask;
 }) {
@@ -169,9 +169,9 @@ export function TeamFeed({
 }: {
   task: Task;
   rows: TeamFeedRow[];
-  workers: Task[];
+  workers: TaskListItem[];
   onOpenWorker: (taskId: string) => void;
-  onAskLead: (worker: Task) => void | Promise<void>;
+  onAskLead: (worker: TaskListItem) => void | Promise<void>;
   delegatingIds: ReadonlySet<string>;
   indicatorForTask: IndicatorForTask;
 }) {

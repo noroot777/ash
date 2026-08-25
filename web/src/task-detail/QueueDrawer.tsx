@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Task } from "@ash/shared";
+import type { TaskListItem } from "@ash/shared";
 import { DotsSixVertical, Lock, X } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
@@ -21,7 +21,7 @@ export function QueueDrawer({
 }: {
   queueId: string;
   currentTaskId: string;
-  allTasks: Task[];
+  allTasks: TaskListItem[];
   onClose: () => void;
   onChanged?: () => void;
 }) {

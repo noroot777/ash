@@ -1,4 +1,4 @@
-import type { Task } from "@ash/shared";
+import type { Task, TaskListItem } from "@ash/shared";
 
 // 「轮到谁动」的判据集中在这里：侧边栏筛选的分堆和行首圆点读的是同一份。
 // 放在 lib 而不是 workspace，是因为 lib/useTaskReadState 也要用它 —— 反过来引会成环。
@@ -16,7 +16,7 @@ export type SpreadBucket = "todo" | "run" | "wait" | "done" | "accepted";
 //     事实高于记号，这种得留在「在跑」，不能被 stage 抢走。
 //   · 排在 done/wait 之前 —— team 没有 done 终态（收工只回到 idle，归档才结束），
 //     验收完的调度台以前只能兜进 wait，让「排着 / 暂停」里堆着几十个其实早就干完的团队。
-export function spreadBucket(task: Task): SpreadBucket {
+export function spreadBucket(task: TaskListItem): SpreadBucket {
   if (task.question) return "todo";
   if (task.status === "failed" || task.stage === "awaiting_acceptance" || task.stage === "verify_failed") return "todo";
   if (task.status === "running" || task.status === "queued" || task.status === "awaiting_review") return "run";

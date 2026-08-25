@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Group, Task } from "@ash/shared";
+import type { Group, Task, TaskListItem } from "@ash/shared";
 import { STAGE_LABELS } from "@ash/shared";
 import { isTeamSettled, timeMs } from "@ash/shared/team";
 import { CaretDown } from "@phosphor-icons/react";
@@ -19,7 +19,7 @@ function useClock(enabled: boolean): number {
   return now;
 }
 
-function DeliverySummary({ workers }: { workers: Task[] }) {
+function DeliverySummary({ workers }: { workers: TaskListItem[] }) {
   const tracked = workers.filter((worker) => worker.stage || worker.useWorktree);
   if (!tracked.length) return <span className="team-timeline-delivery">尚无验收阶段</span>;
   const failed = tracked.filter((worker) => worker.stage === "verify_failed").length;
@@ -61,7 +61,7 @@ export function TeamTimeline({
 }: {
   lead: Task;
   leadTurns: LeadTurn[];
-  workers: Task[];
+  workers: TaskListItem[];
   groups: Group[];
   onOpenWorker: (taskId: string) => void;
   defaultOpen?: boolean;

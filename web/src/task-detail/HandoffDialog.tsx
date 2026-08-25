@@ -5,7 +5,7 @@ import type {
   HandoffExportResult,
   HandoffPreflightResult,
   HandoffTarget,
-  Task,
+  Task, TaskListItem,
   TaskHandoff,
 } from "@ash/shared";
 import { ArrowSquareOut, Fingerprint, PaperPlaneTilt, SpinnerGap, Warning } from "@phosphor-icons/react";
@@ -25,7 +25,7 @@ export function HandoffDialog({
   onClose,
   onTaskUpdate,
 }: {
-  task: Task;
+  task: TaskListItem;
   notify: (message: string) => void;
   onClose: () => void;
   onTaskUpdate: (task: Task) => void;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Task, TaskFollowUp } from "@ash/shared";
+import type { TaskFollowUp, TaskListItem } from "@ash/shared";
 import { api } from "../lib/api.ts";
 import { spreadBucket, type SpreadBucket } from "../lib/taskAttention.ts";
 import { inScope, type TaskScope } from "./taskScope.ts";
@@ -38,7 +38,7 @@ export type SpreadCounts = Record<SpreadFilter, number>;
 
 // 星标不是第六个桶：它是用户手动的软记号，与自动状态正交（同一个任务既可以
 // 「在跑」也可以带星标）。所以筛选判据单独一条，不进 spreadBucket。
-export function matchesSpreadFilter(task: Task, filter: SpreadFilter): boolean {
+export function matchesSpreadFilter(task: TaskListItem, filter: SpreadFilter): boolean {
   if (filter === "all") return true;
   if (filter === "starred") return task.starredAt != null;
   return spreadBucket(task) === filter;
@@ -47,7 +47,7 @@ export function matchesSpreadFilter(task: Task, filter: SpreadFilter): boolean {
 // 筛选按钮（铺开态的胶囊、窄态的点）共用同一份计数：口径分两处写，早晚会对不上。
 // 口径 = **当前作用域**里的顶层活任务，跟任务树里被筛的那批行是同一批 —— 全部项目态
 // 下这个口径自然扩到所有项目，不必另开一套计数。
-export function spreadCounts(tasks: Task[], scope: TaskScope): SpreadCounts {
+export function spreadCounts(tasks: TaskListItem[], scope: TaskScope): SpreadCounts {
   const counts: SpreadCounts = { all: 0, starred: 0, todo: 0, run: 0, wait: 0, done: 0, accepted: 0 };
   for (const task of tasks) {
     if (!inScope(task, scope) || task.archived || task.parentId || !visibleOnThisMachine(task)) continue;
@@ -61,7 +61,7 @@ export function spreadCounts(tasks: Task[], scope: TaskScope): SpreadCounts {
 // J/K 快捷键遍历的「屏幕上可见的那份顶层列表」。筛选判据必须走 matchesSpreadFilter,
 // 别在调用点自己拼 `spreadBucket(task) === filter` —— starred 不是桶,那样星标筛选下
 // 快捷键会拿到空数组,按键被吞但选中不动。
-export function spreadVisibleTasks(tasks: Task[], scope: TaskScope, filter: SpreadFilter): Task[] {
+export function spreadVisibleTasks(tasks: TaskListItem[], scope: TaskScope, filter: SpreadFilter): TaskListItem[] {
   return orderedTopLevelTasks(
     tasks.filter((task) => inScope(task, scope) && !task.archived),
     { unifiedPinned: true },
@@ -77,6 +77,8 @@ export type SidebarSpread = {
   filter: SpreadFilter;
   setFilter: (filter: SpreadFilter) => void;
   followUps: Map<string, TaskFollowUp>;
+  // 「原始需求」列的正文。列表接口不带正文，铺开时才按需批量取（见 api.taskBodies）。
+  bodies: Map<string, string>;
   // 已经问过后端的任务 —— 「问过但我没追问过」和「还没问后端」得分开说，
   // 否则别的项目那些没问过的行会被写成「还没追问过」，是在编。
   loaded: Set<string>;
@@ -87,11 +89,12 @@ export type SidebarSpread = {
 // 铺开是**每次从收起开始**的临时视角，不写 localStorage：它是「让我扫一眼」的动作，
 // 不是一种常驻布局；下次打开页面还停在铺开态的话，反而挡住了主区。
 // 筛选同理不落盘 —— 它会把列表藏掉大半，刷新后还留着的话，下次打开只会当成「任务没了」。
-export function useSidebarSpread(tasks: Task[], scope: TaskScope, revision: number): SidebarSpread {
+export function useSidebarSpread(tasks: TaskListItem[], scope: TaskScope, revision: number): SidebarSpread {
   const [open, setOpen] = useState(false);
   const [laidOut, setLaidOut] = useState(false);
   const [filter, setFilter] = useState<SpreadFilter>("all");
   const [followUps, setFollowUps] = useState<Map<string, TaskFollowUp>>(new Map());
+  const [bodies, setBodies] = useState<Map<string, string>>(new Map());
   const [loaded, setLoaded] = useState<Set<string>>(new Set());
   const closeTimer = useRef<number | null>(null);
 
@@ -126,10 +129,17 @@ export function useSidebarSpread(tasks: Task[], scope: TaskScope, revision: numb
       })
       // 读不到就让那一列留白。铺开是个扫一眼的动作，为它弹一条错误提示更吵。
       .catch(() => {});
+    // 正文与追问各走各的（一个查库、一个摸盘），谁先回来谁先填上，互不拖累。
+    api.taskBodies(ids)
+      .then((rows) => {
+        if (!alive) return;
+        setBodies(new Map(rows.map((row) => [row.taskId, row.body])));
+      })
+      .catch(() => {});
     return () => { alive = false; };
   }, [idsKey, open, revision]);
 
   const toggle = useCallback(() => setOpen((value) => !value), []);
   const close = useCallback(() => setOpen(false), []);
-  return { open, laidOut: open || laidOut, filter, setFilter, followUps, loaded, toggle, close };
+  return { open, laidOut: open || laidOut, filter, setFilter, followUps, bodies, loaded, toggle, close };
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
-import type { Task } from "@ash/shared";
+import type { Task, TaskListItem } from "@ash/shared";
 import { isTeamSettled, teamNeverStarted, timeMs } from "@ash/shared/team";
 import { readRenamedStorage } from "./renamedStorage.ts";
 import { awaitsAcceptance } from "./taskAttention.ts";
@@ -16,19 +16,19 @@ type ReadEntry = {
 type ReadState = Record<string, ReadEntry>;
 
 type TaskIndex = {
-  byId: Map<string, Task>;
-  workersByLead: Map<string, Task[]>;
+  byId: Map<string, TaskListItem>;
+  workersByLead: Map<string, TaskListItem[]>;
 };
 
 export type TaskStatusIndicator = "pending" | "active" | "attention" | "unaccepted" | "success" | "error";
-export type IndicatorForTask = (task: Task) => TaskStatusIndicator | null;
+export type IndicatorForTask = (task: TaskListItem) => TaskStatusIndicator | null;
 
-function terminalEvent(task: Task): string | null {
+function terminalEvent(task: TaskListItem): string | null {
   if (task.status !== "done" && task.status !== "failed" && task.status !== "canceled") return null;
   return `${task.status}:${task.updatedAt}:${task.endedAt ?? ""}`;
 }
 
-function teamEvent(lead: Task, workers: Task[]): string | null {
+function teamEvent(lead: TaskListItem, workers: TaskListItem[]): string | null {
   const leadError = lead.status === "failed" || lead.status === "canceled";
   if (teamNeverStarted(lead.status) && !leadError && workers.length === 0) return null;
   const members = [lead, ...workers];
@@ -37,9 +37,9 @@ function teamEvent(lead: Task, workers: Task[]): string | null {
   return `team:${latestMs || latestRaw}`;
 }
 
-function buildTaskIndex(tasks: Task[]): TaskIndex {
+function buildTaskIndex(tasks: TaskListItem[]): TaskIndex {
   const byId = new Map(tasks.map((task) => [task.id, task]));
-  const workersByLead = new Map<string, Task[]>();
+  const workersByLead = new Map<string, TaskListItem[]>();
   for (const task of tasks) {
     if (!task.parentId) continue;
     const workers = workersByLead.get(task.parentId);
@@ -53,13 +53,13 @@ export function readTaskIds(task: Pick<Task, "id" | "parentId">): string[] {
   return task.parentId ? [task.id, task.parentId] : [task.id];
 }
 
-export function readEventForTask(task: Task, workers: Task[] = []): string | null {
+export function readEventForTask(task: TaskListItem, workers: TaskListItem[] = []): string | null {
   return task.mode === "team" && !task.parentId ? teamEvent(task, workers) : terminalEvent(task);
 }
 
 export function deriveTaskStatusIndicator(
-  task: Task,
-  workers: Task[] = [],
+  task: TaskListItem,
+  workers: TaskListItem[] = [],
   unread = false,
 ): TaskStatusIndicator | null {
   if (task.mode === "team" && !task.parentId) {
@@ -143,7 +143,7 @@ function trimReadState(readState: ReadState): ReadState {
   );
 }
 
-export function reconcileReadState(current: ReadState, tasks: Task[], selectedTaskId: string | null): ReadState {
+export function reconcileReadState(current: ReadState, tasks: TaskListItem[], selectedTaskId: string | null): ReadState {
   const index = buildTaskIndex(tasks);
   // 重启/重连时 SSE 可能先送来一条 task.updated，完整 GET 还在路上。此时 tasks
   // 非空却只是临时子集，拿它清理“不存在”的任务会把其余已读记录全删掉；完整列表
@@ -184,7 +184,7 @@ function updateReadState(update: (current: ReadState) => ReadState) {
   readStateListeners.forEach((listener) => listener());
 }
 
-export function useTaskReadState(tasks: Task[], selectedTaskId: string | null) {
+export function useTaskReadState(tasks: TaskListItem[], selectedTaskId: string | null) {
   const readState = useSyncExternalStore(subscribeReadState, getReadStateSnapshot, () => EMPTY_READ_STATE);
   const index = useMemo(() => buildTaskIndex(tasks), [tasks]);
 
@@ -192,7 +192,7 @@ export function useTaskReadState(tasks: Task[], selectedTaskId: string | null) {
     updateReadState((current) => reconcileReadState(current, tasks, selectedTaskId));
   }, [selectedTaskId, tasks]);
 
-  const markTaskRead = useCallback((task: Task) => {
+  const markTaskRead = useCallback((task: TaskListItem) => {
     updateReadState((current) => {
       let next = current;
       const readAt = Date.now();

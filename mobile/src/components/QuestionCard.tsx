@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Alert, Pressable, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { MAX_QUESTION_ITEMS, type Task } from "@ash/shared";
+import { MAX_QUESTION_ITEMS, type TaskListItem } from "@ash/shared";
 import { api } from "@/lib/api";
 import { appendQuestionOption, formatQuestionAnswers } from "@/lib/question";
 import { fonts, radius, useTheme } from "@/lib/theme";
@@ -12,7 +12,7 @@ const QUESTION_BORDER = "#22D3EE66";
 
 // ask_question answers remain one text payload. Multi-question UI only helps the
 // user compose that payload without losing the correspondence between questions.
-export function QuestionCard({ task }: { task: Task }) {
+export function QuestionCard({ task }: { task: TaskListItem }) {
   const theme = useTheme();
   const items = task.questionItems ?? [];
   const isMulti = items.length > 0;

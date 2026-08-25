@@ -390,6 +390,19 @@ export interface Task {
   handoff?: TaskHandoff | null;
 }
 
+/**
+ * 任务**列表**行：`Task` 去掉正文。
+ *
+ * `GET /tasks` 一次要吐一千多行，正文占了整个响应的一半（实测 2.45 MB 里 1.25 MB），
+ * 而侧栏、树、命令面板没有一处用得上它——正文只有选中那一个任务的详情面需要。列表
+ * 走这个类型，正文由 `GET /tasks/:id` 单取（见 web 的 useTaskBody）。
+ *
+ * 用 `Omit` 而不是把 `body` 改成可选，是要让边界**编译期就立住**：拿列表行去喂任何
+ * 需要正文的地方（详情、派生、导出、duet 议题）都过不了类型检查，不会在运行时静默
+ * 变成一句「这个任务没有正文说明」。
+ */
+export type TaskListItem = Omit<Task, "body">;
+
 export interface QuestionItem {
   question: string;
   options?: string[];

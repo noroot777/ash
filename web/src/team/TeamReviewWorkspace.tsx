@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Session, Task } from "@ash/shared";
+import type { Session, Task, TaskListItem } from "@ash/shared";
 import { taskDisplayStatus } from "@ash/shared";
 import { acceptPlan, hasAcceptStation, isFinalHumanGate, nextAnchor } from "@ash/shared/workflow-policy";
 import { STEP_LABELS } from "@ash/shared/workflow";
@@ -7,6 +7,7 @@ import { ArrowsClockwise, CaretDown, CheckCircle, SpinnerGap, WarningCircle } fr
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api, type AcceptTaskFailure, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
+import { useTaskBody } from "../lib/useTaskBody.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { parseAttachmentText } from "../task-detail/utils.ts";
 import { ChangeMetaBar, worktreeLabel } from "../review/ChangeMetaBar.tsx";
@@ -28,7 +29,7 @@ type ReviewData = {
 // 线上没画「合并并清理」时**手动验收照样合**（手按覆盖线上写没写，理由见 shared 的
 // acceptPlan）——这时更要把话说全：既说清会发生什么，也说清这不是线上写的。这道确认
 // 框就是那条规则的安全兜底，措辞含糊等于把兜底拆了。
-function acceptanceMessage(task: Task): string {
+function acceptanceMessage(task: TaskListItem): string {
   const team = task.mode === "team";
   // 后面还有站要走的那道「等我点头」：这一按只是放行，不合并、不清理，线接着往下走。措辞
   // 必须跟着变——拿「会合并会删分支」的话去描述一次放行，用户要么不敢按，要么按完发现什么
@@ -114,7 +115,7 @@ export function AcceptanceControls({
   notify,
   acceptanceBlock = null,
 }: {
-  task: Task;
+  task: TaskListItem;
   onTaskUpdated: (task: Task) => void;
   notify: (message: string) => void;
   acceptanceBlock?: string | null;
@@ -234,7 +235,7 @@ export function AcceptanceControls({
   );
 }
 
-function useReviewChanges(task: Task) {
+function useReviewChanges(task: TaskListItem) {
   const [data, setData] = useState<ReviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -254,7 +255,7 @@ function useReviewChanges(task: Task) {
   return { data, loading, error };
 }
 
-function ChangeSummary({ task, data, loading, error }: { task: Task; data: ReviewData | null; loading: boolean; error: string | null }) {
+function ChangeSummary({ task, data, loading, error }: { task: TaskListItem; data: ReviewData | null; loading: boolean; error: string | null }) {
   if (loading) return <p className="team-review-loading"><SpinnerGap size={13} className="is-spinning" />正在读取分支与提交…</p>;
   if (error) return <p className="team-review-loading is-error">改动信息读取失败：{error}</p>;
   if (!data) return null;
@@ -295,19 +296,22 @@ function ReviewRecord({
   onReadTask,
   notify,
 }: {
-  task: Task;
-  parentTask?: Task | null;
+  task: TaskListItem;
+  parentTask?: TaskListItem | null;
   role: string;
   actions?: boolean;
   defaultOpen?: boolean;
   onTaskUpdated: (task: Task) => void;
   indicatorForTask: IndicatorForTask;
-  onReadTask: (task: Task) => void;
+  onReadTask: (task: TaskListItem) => void;
   notify: (message: string) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const { data, loading, error } = useReviewChanges(task);
-  const objective = parseAttachmentText(task.body).body;
+  // 正文不在列表响应里，按需补（同一屏的多张卡合成一次请求）。没到手就不显示目标行，
+  // 而不是显示一条空的——空目标和还没读到是两回事。
+  const full = useTaskBody(task);
+  const objective = full ? parseAttachmentText(full.body).body : "";
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
   const indicator = indicatorForTask(task);
   const visibleIndicator = open && (indicator === "success" || indicator === "error") ? null : indicator;
@@ -344,10 +348,10 @@ export function TeamReviewWorkspace({
   notify,
 }: {
   lead: Task;
-  workers: Task[];
+  workers: TaskListItem[];
   onTaskUpdated: (task: Task) => void;
   indicatorForTask: IndicatorForTask;
-  onReadTask: (task: Task) => void;
+  onReadTask: (task: TaskListItem) => void;
   notify: (message: string) => void;
 }) {
   const sharedWorkers = useMemo(() => workers.filter((worker) => !worker.useWorktree), [workers]);

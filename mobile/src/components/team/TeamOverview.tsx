@@ -2,7 +2,7 @@ import { Pressable, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type {
   Group,
-  Task,
+  TaskListItem,
   TaskStatus,
 } from "@ash/shared";
 import {
@@ -30,8 +30,8 @@ export function TeamOverview({
   onResume,
   onKillCua,
 }: {
-  task: Task;
-  workers: Task[];
+  task: TaskListItem;
+  workers: TaskListItem[];
   pausedGroups: Group[];
   settled: boolean;
   stopped: boolean;
@@ -189,7 +189,7 @@ function ActionButton({
   );
 }
 
-function HaltNotice({ workers, pausedGroups }: { workers: Task[]; pausedGroups: Group[] }) {
+function HaltNotice({ workers, pausedGroups }: { workers: TaskListItem[]; pausedGroups: Group[] }) {
   const theme = useTheme();
   const stats = workerHaltStats(workers);
   const workerText =
@@ -275,7 +275,7 @@ function CuaNotice({ status, onKill }: { status: TeamCuaStatus; onKill: () => vo
   );
 }
 
-function leadStatusLabel(task: Task): string {
+function leadStatusLabel(task: TaskListItem): string {
   if (task.question) return "等待答复";
   if (task.status === "running") return "调度中";
   if (task.status === "idle") return "待命";

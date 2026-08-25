@@ -1,4 +1,4 @@
-import type { HandoffTarget, ProjectView, Task } from "@ash/shared";
+import type { HandoffTarget, ProjectView, TaskListItem } from "@ash/shared";
 import {
   MagnifyingGlass,
   NotePencil,
@@ -50,7 +50,7 @@ export function WorkspaceSidebar({
   currentProject: ProjectView | null;
   /** 任务列表看哪些行：当前项目一家，还是所有项目混着看。 */
   scope: TaskScope;
-  tasks: Task[];
+  tasks: TaskListItem[];
   selectedTaskId: string | null;
   selectedRemoteTaskId: string | null;
   connected: boolean;
@@ -60,8 +60,8 @@ export function WorkspaceSidebar({
   onWidthChange: (width: number) => void;
   onProject: (projectId: string) => void;
   onAllProjects: () => void;
-  onTask: (task: Task) => void;
-  onRemoteTask: (task: Task, target: HandoffTarget) => void;
+  onTask: (task: TaskListItem) => void;
+  onRemoteTask: (task: TaskListItem, target: HandoffTarget) => void;
   onTaskStarred: (taskId: string, starredAt: number | null) => void;
   onHandoffFinished: () => Promise<void> | void;
   /** 项目主仓的 git 状态被改过了（切分支/拉取/推送），让上层重拉一次 ProjectHealth。 */

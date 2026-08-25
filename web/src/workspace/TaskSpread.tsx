@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { Task, TaskFollowUp } from "@ash/shared";
+import type { TaskFollowUp, TaskListItem } from "@ash/shared";
 import { parseAttachmentText } from "@ash/shared/attachments";
 import { Image as ImageIcon } from "@phosphor-icons/react";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
@@ -14,7 +14,7 @@ const PEEK_GRACE = 140;
 const PEEK_MARGIN = 8;
 
 type PeekKind = "body" | "last";
-type Peek = { task: Task; kind: PeekKind; rect: DOMRect };
+type Peek = { task: TaskListItem; kind: PeekKind; rect: DOMRect };
 
 // 大图是盖在卡片上面的一层。它开着的时候卡片既不能被 Esc 收掉，也不能因为鼠标挪到
 // 大图上（卡片会收到 mouseleave）就自己消失 —— 大图是卡片这棵子树里渲染的，卡片一卸载
@@ -25,7 +25,7 @@ function lightboxOpen(): boolean {
 
 export type SpreadRowContext = {
   spread: SidebarSpread;
-  peekAt: (task: Task, kind: PeekKind, cell: HTMLElement) => void;
+  peekAt: (task: TaskListItem, kind: PeekKind, cell: HTMLElement) => void;
   peekOut: () => void;
 };
 
@@ -57,10 +57,19 @@ type Peeked = { title: string; subtitle: string; text: string; paths: string[] }
 // 那个「后续追问」列表同一份）：agent 说了什么、系统代发的继续提示，都不进来。
 const NO_FOLLOW_UP = "还没追问过";
 
-function peekContent(task: Task, kind: PeekKind, last: TaskFollowUp | undefined, known: boolean): Peeked {
+// raw 是这个任务的正文，undefined = 还没从后端读到（列表接口不带正文）。跟追问那一列
+// 同一条规矩：没读到就说没读到，不能写成「这个任务没有写需求」——那是在编。
+function peekContent(
+  task: TaskListItem,
+  kind: PeekKind,
+  last: TaskFollowUp | undefined,
+  known: boolean,
+  raw: string | undefined,
+): Peeked {
   if (kind === "body") {
-    const { body, paths } = parseAttachmentText(task.body ?? "");
-    return { title: "原始需求", subtitle: task.title || "未命名任务", text: body || "这个任务没有写需求。", paths };
+    const { body, paths } = parseAttachmentText(raw ?? "");
+    const text = raw === undefined ? "还没读到这个任务的需求。" : (body || "这个任务没有写需求。");
+    return { title: "原始需求", subtitle: task.title || "未命名任务", text, paths };
   }
   return {
     title: "后续追问",
@@ -82,11 +91,11 @@ function ClipMark({ count }: { count: number }) {
 
 // 铺开后每一行右边多出来的三格。窄态不渲染，宽态由 CSS 的列模板给出宽度；
 // 行高仍然是 34px，上方也不新增任何一行 —— 铺开是「露出右边」，不是「重排」。
-export function SpreadRowCells({ task, ctx, onOpen }: { task: Task; ctx: SpreadRowContext; onOpen: () => void }) {
+export function SpreadRowCells({ task, ctx, onOpen }: { task: TaskListItem; ctx: SpreadRowContext; onOpen: () => void }) {
   const last = ctx.spread.followUps.get(task.id);
   // 没问过后端的行（比如别的项目）只留一个破折号，不能写「还没追问过」——那是在编。
   const known = ctx.spread.loaded.has(task.id);
-  const { body, paths } = parseAttachmentText(task.body ?? "");
+  const { body, paths } = parseAttachmentText(ctx.spread.bodies.get(task.id) ?? "");
   const cell = (kind: PeekKind) => ({
     onClick: onOpen,
     onMouseEnter: (event: MouseEvent<HTMLSpanElement>) => ctx.peekAt(task, kind, event.currentTarget),
@@ -121,7 +130,7 @@ export function useSpreadPeek(enabled: boolean) {
     showTimer.current = hideTimer.current = null;
   };
 
-  const peekAt = useCallback((task: Task, kind: PeekKind, cell: HTMLElement) => {
+  const peekAt = useCallback((task: TaskListItem, kind: PeekKind, cell: HTMLElement) => {
     if (!enabled) return;
     // 大图开着的时候不弹：卡片会藏在遮罩背后偷偷占着焦点。
     if (lightboxOpen()) return;
@@ -157,6 +166,7 @@ export function SpreadPeekCard({
   peek,
   last,
   known,
+  body,
   onHold,
   onLeave,
   onDismiss,
@@ -164,13 +174,15 @@ export function SpreadPeekCard({
   peek: Peek;
   last: TaskFollowUp | undefined;
   known: boolean;
+  /** 正文；undefined = 还没读到。 */
+  body: string | undefined;
   onHold: () => void;
   onLeave: () => void;
   onDismiss: () => void;
 }) {
   const card = useRef<HTMLDivElement | null>(null);
   const [placed, setPlaced] = useState<{ left: number; top: number } | null>(null);
-  const { title, subtitle, text, paths } = peekContent(peek.task, peek.kind, last, known);
+  const { title, subtitle, text, paths } = peekContent(peek.task, peek.kind, last, known, body);
 
   // 排进全局的浮层栈：Esc 一次只退一层，所以这张卡片开着时那一下 Esc 归它，
   // 收起铺开得再按一次。大图开着时让给大图 —— 它是压在卡片上面的那一层。
@@ -228,6 +240,7 @@ export function SpreadPeekLayer({ peek, spread, onHold, onLeave, onDismiss }: {
       peek={peek}
       last={spread.followUps.get(peek.task.id)}
       known={spread.loaded.has(peek.task.id)}
+      body={spread.bodies.get(peek.task.id)}
       onHold={onHold}
       onLeave={onLeave}
       onDismiss={onDismiss}

@@ -1,6 +1,6 @@
 import { Pressable, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import type { Task } from "@ash/shared";
+import type { TaskListItem } from "@ash/shared";
 import type { Batch } from "@ash/shared/team";
 import { STATUS_META } from "@/lib/constants";
 import { formatInstant } from "@/lib/time";
@@ -89,7 +89,7 @@ function WorkerRow({
   groupPaused,
   onPress,
 }: {
-  worker: Task;
+  worker: TaskListItem;
   number: number;
   groupPaused: boolean;
   onPress: () => void;
@@ -145,7 +145,7 @@ function WorkerRow({
   );
 }
 
-function workerStatusText(worker: Task, groupPaused: boolean): string {
+function workerStatusText(worker: TaskListItem, groupPaused: boolean): string {
   if (worker.question) return "等待你的答复";
   if (groupPaused && worker.status === "paused") return "被停止全组打断";
   if (groupPaused && (worker.status === "queued" || worker.status === "backlog")) return "所属组已停止";

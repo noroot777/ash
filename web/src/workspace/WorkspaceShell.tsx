@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
-import type { Group, GroupMode, HandoffTarget, ProjectView, Task, TaskMode } from "@ash/shared";
+import type { Group, GroupMode, HandoffTarget, ProjectView, Task, TaskListItem, TaskMode } from "@ash/shared";
 import { api } from "../lib/api.ts";
 import { useAgentAvailability } from "../lib/agentAvailability.ts";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
@@ -8,6 +8,7 @@ import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { TeamView } from "../team/TeamView.tsx";
 import { DuetView } from "../duet/DuetView.tsx";
 import { TaskPlaceholder } from "./TaskPlaceholder.tsx";
+import { useTaskBody } from "../lib/useTaskBody.ts";
 import { WorkspaceSidebar } from "./WorkspaceSidebar.tsx";
 import {
   parseSettingsSection,
@@ -64,7 +65,7 @@ export function WorkspaceShell() {
   const [projectsError, setProjectsError] = useState<Error | null>(null);
   const [projectId, setProjectId] = useState<string | null>(initial.projectId);
   const [taskId, setTaskId] = useState<string | null>(initial.taskId);
-  const [remoteSelection, setRemoteSelection] = useState<{ task: Task; target: HandoffTarget } | null>(null);
+  const [remoteSelection, setRemoteSelection] = useState<{ task: TaskListItem; target: HandoffTarget } | null>(null);
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(initial.settings);
   const [groups, setGroups] = useState<Group[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(initial.view === "palette");
@@ -72,8 +73,8 @@ export function WorkspaceShell() {
   const [groupsPanelOpen, setGroupsPanelOpen] = useState(false);
   const [composer, setComposer] = useState<{ draft?: ComposerDraft | null; mode: TaskMode } | null>(initial.view === "create" ? { mode: initial.mode } : null);
   const [reviewTaskId, setReviewTaskId] = useState<string | null>(initial.view === "review" ? initial.taskId : null);
-  const [deleteTarget, setDeleteTarget] = useState<Task | null>(null);
-  const [handoffTarget, setHandoffTarget] = useState<Task | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<TaskListItem | null>(null);
+  const [handoffTarget, setHandoffTarget] = useState<TaskListItem | null>(null);
   const [createDialog, setCreateDialog] = useState<"group" | "project" | null>(null);
   const [collapsed, setCollapsed] = useState(() => readRenamedStorage("ash:sidebar-collapsed") === "1");
   const [sidebarWidth, setSidebarWidth] = useState(readWorkspaceSidebarWidth);
@@ -195,6 +196,10 @@ export function WorkspaceShell() {
   }, [currentProject?.repoPath, gitVersion, projectId, settlementVersion]);
 
   const selectedTask = tasks.find((task) => task.id === taskId && task.projectId === projectId && visibleOnThisMachine(task)) ?? null;
+  // 列表行不带正文（TaskListItem），详情面三种视图都要完整 Task —— 选中哪个补哪个。
+  // 补到之前 selectedFullTask 是 null，主区先用占位卡显示这个任务的身份（标题、状态），
+  // 不是空白：正文只是详情面的一小块，没到手不该让整个任务看起来还没打开。
+  const selectedFullTask = useTaskBody(selectedTask);
   const loadError = projectsError ?? tasksError;
   const activeTaskCount = useMemo(() => tasks.filter((task) => inScope(task, scope) && task.parentId === null && !task.archived && visibleOnThisMachine(task)).length, [scope, tasks]);
   // J/K 走的是「屏幕上看得见的那些行」，所以筛选开着时它也得跟着筛 —— 否则按一下就跳到
@@ -203,10 +208,10 @@ export function WorkspaceShell() {
     () => spreadVisibleTasks(tasks, scope, spread.filter),
     [scope, spread.filter, tasks],
   );
-  const updateTask = useCallback((updated: Task) => setTasks((current) => current.some((task) => task.id === updated.id)
+  const updateTask = useCallback((updated: TaskListItem) => setTasks((current) => current.some((task) => task.id === updated.id)
     ? current.map((task) => task.id === updated.id ? updated : task)
     : [updated, ...current]), [setTasks]);
-  const openLocalOwnership = useCallback((task: Task) => {
+  const openLocalOwnership = useCallback((task: TaskListItem) => {
     updateTask(task);
     pushTaskHistoryEntry(task, window, scopeKind);
     setRemoteSelection(null);
@@ -229,7 +234,7 @@ export function WorkspaceShell() {
   const selectAllProjects = () => { setScopeKind("all"); setSettingsSection(null); };
   // keepSpread：J/K 在铺开态里只是挪选中行，右边那两列还得接着看；点行或按 Enter 才算「选定了」，
   // 那时候铺开自己收起来把主区还回去。
-  const selectTask = (task: Task, options?: { keepSpread?: boolean }) => {
+  const selectTask = (task: TaskListItem, options?: { keepSpread?: boolean }) => {
     if (!visibleOnThisMachine(task)) {
       notify("任务已接力到另一台机器，请在当前持有它的机器上继续");
       return;
@@ -244,7 +249,7 @@ export function WorkspaceShell() {
     setSettingsSection(null);
     if (!options?.keepSpread) spread.close();
   };
-  const selectRemoteTask = (task: Task, target: HandoffTarget) => {
+  const selectRemoteTask = (task: TaskListItem, target: HandoffTarget) => {
     setProjectId(task.projectId);
     setTaskId(null);
     setRemoteSelection({ task, target });
@@ -354,12 +359,12 @@ export function WorkspaceShell() {
             notify={notify}
             onLocalOwnership={openLocalOwnership}
           />
-        ) : selectedTask?.mode === "team" ? (
-          <TeamView task={selectedTask} allTasks={tasks} onTaskUpdate={updateTask} onTaskDeleted={deleteTask} onSelectTask={selectTask} initialReviewOpen={reviewTaskId === selectedTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedTask.id : null)} terminalToggle={terminalToggle} notify={notify} />
-        ) : selectedTask?.mode === "duet" ? (
-          <DuetView task={selectedTask} allTasks={tasks} onTaskUpdated={updateTask} onTaskCreated={(created) => setTasks((current) => current.some((task) => task.id === created.id) ? current.map((task) => task.id === created.id ? created : task) : [created, ...current])} onTaskDeleted={deleteTask} onSelectTask={selectTask} terminalToggle={terminalToggle} notify={notify} />
-        ) : selectedTask ? (
-          <TaskDetail task={selectedTask} allTasks={tasks} onTaskUpdate={updateTask} onDeleted={deleteTask} onOpenTask={selectTaskById} onHandoff={setHandoffTarget} initialReviewOpen={reviewTaskId === selectedTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedTask.id : null)} terminalToggle={terminalToggle} notify={notify} />
+        ) : selectedFullTask?.mode === "team" ? (
+          <TeamView task={selectedFullTask} allTasks={tasks} onTaskUpdate={updateTask} onTaskDeleted={deleteTask} onSelectTask={selectTask} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} terminalToggle={terminalToggle} notify={notify} />
+        ) : selectedFullTask?.mode === "duet" ? (
+          <DuetView task={selectedFullTask} allTasks={tasks} onTaskUpdated={updateTask} onTaskCreated={(created) => setTasks((current) => current.some((task) => task.id === created.id) ? current.map((task) => task.id === created.id ? created : task) : [created, ...current])} onTaskDeleted={deleteTask} onSelectTask={selectTask} terminalToggle={terminalToggle} notify={notify} />
+        ) : selectedFullTask ? (
+          <TaskDetail task={selectedFullTask} allTasks={tasks} onTaskUpdate={updateTask} onDeleted={deleteTask} onOpenTask={selectTaskById} onHandoff={setHandoffTarget} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} terminalToggle={terminalToggle} notify={notify} />
         ) : <><header className="workspace-app-bar"><span className="workspace-kind-chip">{scopeKind === "all" ? "任务" : "项目"}</span><span className="workspace-app-title">{scopeKind === "all" ? ALL_PROJECTS_LABEL : currentProject?.name ?? "Ash"}</span>{(scopeKind === "all" || currentProject) && <span className="workspace-app-count">{activeTaskCount} 项任务</span>}{terminalToggle}</header><div className="workspace-columns"><section className="workspace-primary" aria-label="主工作区"><TaskPlaceholder project={currentProject} task={null} /></section><aside className="workspace-inspector-slot" aria-label="Inspector 占位"><div><span>Inspector</span><small>项目概览</small></div><p>选择任务后，这里会显示可操作属性、执行信息与队列。</p></aside></div></>}
         {terminalOpen && currentProject && <Suspense fallback={null}><ProjectTerminal key={currentProject.id} project={currentProject} onClose={() => setTerminalOpen(false)} notify={notify} /></Suspense>}
       </main>

@@ -1,11 +1,11 @@
 import { type MouseEvent } from "react";
-import type { Task } from "@ash/shared";
+import type { Task, TaskListItem } from "@ash/shared";
 import { FileText, ChatsCircle, UsersThree } from "@phosphor-icons/react";
 import { HoverTip, useHoverTip } from "./HoverTip.tsx";
 
 export type TaskParentLink = {
   taskId: string;
-  task: Task | undefined;
+  task: TaskListItem | undefined;
   kind: "team" | "origin";
 };
 
@@ -15,7 +15,7 @@ export function taskModeLabel(mode: Task["mode"]): string {
   return "任务";
 }
 
-export function taskParentLink(task: Task, allTasks: Task[]): TaskParentLink | null {
+export function taskParentLink(task: TaskListItem, allTasks: TaskListItem[]): TaskParentLink | null {
   // 执行者首先属于直接派出它的团队；旧数据即使同时带来源任务，也以团队为准。
   const taskId = task.parentId ?? task.originTaskId;
   if (!taskId) return null;
@@ -45,8 +45,8 @@ export function OriginTaskChip({
   allTasks,
   onOpen,
 }: {
-  task: Task;
-  allTasks: Task[];
+  task: TaskListItem;
+  allTasks: TaskListItem[];
   onOpen: (taskId: string) => void;
 }) {
   const link = taskParentLink(task, allTasks);
@@ -79,8 +79,8 @@ export function OriginTaskBar({
   allTasks,
   onOpen,
 }: {
-  task: Task;
-  allTasks: Task[];
+  task: TaskListItem;
+  allTasks: TaskListItem[];
   onOpen: (taskId: string) => void;
 }) {
   const link = taskParentLink(task, allTasks);

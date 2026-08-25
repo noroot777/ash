@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import type { Group, ProjectView, SearchHit, Task } from "@ash/shared";
+import type { Group, ProjectView, SearchHit, TaskListItem } from "@ash/shared";
 import { canArchive, canSingleRun, TASK_STATUS_LABELS } from "@ash/shared";
 import {
   Archive,
@@ -52,19 +52,19 @@ type CommandPaletteProps = {
   open: boolean;
   projects: ProjectView[];
   currentProject: ProjectView | null;
-  tasks: Task[];
-  selectedTask: Task | null;
+  tasks: TaskListItem[];
+  selectedTask: TaskListItem | null;
   groups: Group[];
   onClose: () => void;
   onProject: (projectId: string) => void;
   onAllProjects: () => void;
-  onTask: (task: Task) => void;
-  onTaskUpdated: (task: Task) => void;
+  onTask: (task: TaskListItem) => void;
+  onTaskUpdated: (task: TaskListItem) => void;
   onNote: (projectId: string, noteId: string | null) => void;
   onComposer: (mode?: "single" | "team" | "duet") => void;
   onNewGroup: () => void;
   onNewProject: () => void;
-  onDeleteTask: (task: Task) => void;
+  onDeleteTask: (task: TaskListItem) => void;
   onSettings: (section?: SettingsSection) => void;
   notify: (message: string) => void;
 };

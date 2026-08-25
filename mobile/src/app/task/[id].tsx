@@ -61,6 +61,8 @@ export default function TaskDetail() {
   const [input, setInput] = useState("");
   const [pending, setPending] = useState<ScheduledMessage[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  // 任务正文：列表不带，按 id 单取（见下面的 hydrate effect）。
+  const [body, setBody] = useState<string | undefined>(undefined);
   const scrollRef = useRef<ScrollView>(null);
   // 是否「粘」在底部。轮询拉到新内容时,只有粘底状态才自动滚到底,
   // 否则别打扰正在往回翻历史的用户。初始 true,所以首次内容到达会滚到底。
@@ -104,9 +106,19 @@ export default function TaskDetail() {
 
   // Hydrate the task if we navigated straight here (e.g. deep link) without it
   // already being in the store.
+  //
+  // 顺带把**正文**取回来：列表接口不再带正文（shared 的 TaskListItem），而正文只有
+  // 这一屏用得上。`undefined` = 还没读到，空串 = 这个任务确实没写需求 —— 界面上前者
+  // 什么都不显示，后者本来就不显示，两者都不会编出一段假需求。
   useEffect(() => {
-    if (!task && id) api.task(id).then(upsertTask).catch(() => {});
-  }, [id, task, upsertTask]);
+    if (!id) return;
+    let alive = true;
+    setBody(undefined);
+    api.task(id)
+      .then((full) => { if (alive) { setBody(full.body); upsertTask(full); } })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [id, upsertTask]);
 
   // Conversation polling — no live stream. Pull once on open; while the task is
   // running keep pulling every few seconds; when it settles the dependency change
@@ -320,6 +332,7 @@ export default function TaskDetail() {
     return (
       <TeamTaskDetail
         task={task}
+        body={body}
         lines={lines}
         sessions={sessions}
         input={input}
@@ -341,6 +354,7 @@ export default function TaskDetail() {
     return (
       <DuetTaskDetail
         task={task}
+        body={body}
         onArchive={onArchive}
         onUnarchive={onUnarchive}
         onDelete={confirmDelete}
@@ -461,7 +475,7 @@ export default function TaskDetail() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.muted} />}
       >
         {/* Objective */}
-        {task.body ? (
+        {body ? (
           <View
             style={{
               backgroundColor: theme.panel,
@@ -471,7 +485,7 @@ export default function TaskDetail() {
               padding: 12,
             }}
           >
-            <MarkdownText value={task.body} style={{ color: theme.muted, fontSize: 14, lineHeight: 20 }} />
+            <MarkdownText value={body} style={{ color: theme.muted, fontSize: 14, lineHeight: 20 }} />
           </View>
         ) : null}
 

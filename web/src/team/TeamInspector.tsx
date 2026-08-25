@@ -1,4 +1,4 @@
-import type { Group, Session, Task } from "@ash/shared";
+import type { Group, Session, Task, TaskListItem } from "@ash/shared";
 import { agentMix } from "@ash/shared/team";
 import { Clock, FolderOpen, Info, MagnifyingGlass, UsersThree } from "@phosphor-icons/react";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
@@ -22,7 +22,7 @@ import {
 
 export interface TeamInspectorContext {
   task: Task;
-  workers: Task[];
+  workers: TaskListItem[];
   groups: Group[];
   sessions: Session[];
   leadTurns: LeadTurn[];

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { GateAction, Task } from "@ash/shared";
+import type { GateAction, TaskListItem } from "@ash/shared";
 import { CheckCircle, Question, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
 import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
 import type { DuetGate } from "./duetState.ts";
@@ -23,13 +23,13 @@ export function DuetGateControls({
   round: number;
   maxRounds: number | null;
   busy: boolean;
-  linkedTeams: Task[];
-  allTasks: Task[];
+  linkedTeams: TaskListItem[];
+  allTasks: TaskListItem[];
   iterationBusyId?: string | null;
   onGate: (action: GateAction) => Promise<void>;
   onOpenTeam: () => void;
-  onOpenTask: (task: Task) => void;
-  onIterateTeam: (team: Task) => void;
+  onOpenTask: (task: TaskListItem) => void;
+  onIterateTeam: (team: TaskListItem) => void;
 }) {
   const [mode, setMode] = useState<"inject" | "ask" | null>(null);
   const [text, setText] = useState("");

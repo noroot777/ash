@@ -1,4 +1,4 @@
-import type { Group, ProjectView, Task } from "@ash/shared";
+import type { Group, ProjectView, Task, TaskListItem } from "@ash/shared";
 import {
   Archive,
   ArrowLeft,
@@ -111,7 +111,7 @@ export function SettingsPage({
 }: {
   section: SettingsSection;
   project: ProjectView | null;
-  tasks: Task[];
+  tasks: TaskListItem[];
   groups: Group[];
   onSection: (section: SettingsSection) => void;
   onBack: () => void;

@@ -1,5 +1,5 @@
 import { View, Text, Pressable } from "react-native";
-import type { Task } from "@ash/shared";
+import type { TaskListItem } from "@ash/shared";
 import { statusCounts } from "@ash/shared/team";
 import { Ionicons } from "@expo/vector-icons";
 import { SignalBar } from "@/components/SignalBar";
@@ -16,12 +16,12 @@ export function TaskListRow({
   onPress,
   onWorkerPress,
 }: {
-  task: Task;
-  workers: Task[];
+  task: TaskListItem;
+  workers: TaskListItem[];
   expanded: boolean;
   onToggle: () => void;
   onPress: () => void;
-  onWorkerPress: (worker: Task) => void;
+  onWorkerPress: (worker: TaskListItem) => void;
 }) {
   if (task.mode !== "team") return <TaskCard task={task} onPress={onPress} />;
   return (
@@ -48,8 +48,8 @@ function TeamCard({
   onToggle,
   onPress,
 }: {
-  task: Task;
-  workers: Task[];
+  task: TaskListItem;
+  workers: TaskListItem[];
   expanded: boolean;
   onToggle: () => void;
   onPress: () => void;
@@ -110,7 +110,7 @@ function TeamCard({
   );
 }
 
-function TaskCard({ task, parentTitle, onPress }: { task: Task; parentTitle?: string; onPress: () => void }) {
+function TaskCard({ task, parentTitle, onPress }: { task: TaskListItem; parentTitle?: string; onPress: () => void }) {
   const theme = useTheme();
   const nested = !!parentTitle;
   return (

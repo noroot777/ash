@@ -15,7 +15,7 @@ import { advanceQueue } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
 import { isTurnClaimed } from "./runs.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
-import { createTasks, enrichTasks, publishTaskUpdated } from "./task-store.js";
+import { createTasks, enrichTasks, publishTaskUpdated, toTaskListItem } from "./task-store.js";
 import { attachmentsPrompt, id, now, taskBody } from "./util.js";
 
 // 任务行删除时连关联状态一起收：自由审查链(run/round)、预约槽、事件、排队/定时消息、
@@ -51,9 +51,12 @@ export function mountTaskRoutes(api: Hono): void {
   };
 
 // ── tasks ───────────────────────────────────────────────────────────────
+// 列表**不带正文**（TaskListItem）：一千多行任务里正文占了响应的一半，而没有一处列表
+// UI 用得上它。正文由 `GET /tasks/:id` 单取。这条路由是全应用最大的一份响应，且每次
+// 开页面 + 每次 SSE 重连都要整份重拉，省下来的是首屏和断线恢复的直接成本。
 api.get("/tasks", async (c) => {
   const rows = await db.select().from(tasks);
-  return c.json(await enrichTasks(rows));
+  return c.json((await enrichTasks(rows)).map(toTaskListItem));
 });
 
 // 侧边栏铺开时才拉：一批任务各自「我发的最后一条追问」（读的是会话 .md，不是库）。
@@ -62,6 +65,23 @@ api.post("/tasks/follow-ups", async (c) => {
   const body = await c.req.json<{ taskIds?: unknown }>().catch(() => ({ taskIds: [] }));
   const ids = Array.isArray(body.taskIds) ? body.taskIds.filter((id): id is string => typeof id === "string") : [];
   return c.json(await followUpsFor(ids.slice(0, MAX_FOLLOW_UP_TASKS)));
+});
+
+// 正文批量取。跟上面那条同一个触发点（侧边栏铺开的「原始需求」列），同一套 id 上限，
+// 只是这份数据在库里而不在会话文件里，所以另开一条而不是塞进 follow-ups —— 后者按
+// 定义只有「追问过的任务」才有行，而正文是每个任务都有的。
+//
+// 列表接口（GET /tasks）不再带正文，所以需要正文的表面各自按需取：铺开走这条，详情
+// 面走 GET /tasks/:id。
+api.post("/tasks/bodies", async (c) => {
+  const body = await c.req.json<{ taskIds?: unknown }>().catch(() => ({ taskIds: [] }));
+  const ids = Array.isArray(body.taskIds) ? body.taskIds.filter((id): id is string => typeof id === "string") : [];
+  if (!ids.length) return c.json([]);
+  const rows = await db
+    .select({ taskId: tasks.id, body: tasks.body })
+    .from(tasks)
+    .where(inArray(tasks.id, ids.slice(0, MAX_FOLLOW_UP_TASKS)));
+  return c.json(rows.map((row) => ({ taskId: row.taskId, body: row.body ?? "" })));
 });
 
 api.get("/tasks/:id", async (c) => {

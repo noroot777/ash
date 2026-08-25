@@ -1,4 +1,4 @@
-import type { FreeReviewRun, Task } from "@ash/shared";
+import type { FreeReviewRun, TaskListItem } from "@ash/shared";
 import type { ConversationItem } from "./conversationModel.ts";
 
 // 「上一回合崩了」的判据，和会话尾栏那颗重试按钮共用一份。判据必须跟服务端
@@ -31,7 +31,7 @@ export function freeReviewRetryable(reviews: FreeReviewRun[] | undefined): boole
 }
 
 export function turnRetryTarget(
-  task: Task,
+  task: TaskListItem,
   items: ConversationItem[],
   // 自由工作流的审查链状态（来自共享缓存的 useFreeWorkflowState，不额外发请求）。
   // 不给 = 按「审查链不可重跑」处理，reviewer 会话上就不出按钮。

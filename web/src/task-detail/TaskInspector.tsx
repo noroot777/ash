@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AgentExecutorProfile, Group, Session, Task, TaskStatus, TokenUsage } from "@ash/shared";
+import type { AgentExecutorProfile, Group, Session, Task, TaskListItem, TaskStatus, TokenUsage } from "@ash/shared";
 import { isUserSettableStatus, TASK_STATUS_LABELS } from "@ash/shared";
 import { REASONING_EFFORT_DETAIL } from "@ash/shared/cli-presets";
 import { addUsage, formatTokens, formatTokensExact, hasUsage, usageTotal } from "@ash/shared/usage";
@@ -130,7 +130,7 @@ export function TaskInspector({
   task: Task;
   groups: Group[];
   sessions: Session[];
-  allTasks: Task[];
+  allTasks: TaskListItem[];
   followUps?: { text: string; attachments: string[]; at?: string }[];
   onOpenTask: (taskId: string) => void;
   onOpenReview: () => void;

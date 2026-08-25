@@ -1,4 +1,4 @@
-import type { Task, TaskStatus } from "@ash/shared";
+import type { Task, TaskListItem, TaskStatus } from "@ash/shared";
 import { isTeamSettled, teamNeverStarted, workersOf } from "@ash/shared/team";
 import type { DuetGate } from "./duetState.ts";
 
@@ -10,7 +10,7 @@ export function gateAllowsRevision(linkedTeam?: Pick<Task, "id"> | null): boolea
   return !linkedTeam;
 }
 
-export function teamDuetIterationState(team: Task, allTasks: Task[]) {
+export function teamDuetIterationState(team: TaskListItem, allTasks: TaskListItem[]) {
   const origin = allTasks.find((item) => item.id === team.originTaskId);
   const existing = allTasks.find((item) => item.mode === "duet" && item.originTaskId === team.id);
   const settled = isTeamSettled(team.status === "running", workersOf(allTasks, team.id));

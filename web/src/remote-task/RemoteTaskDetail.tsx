@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { HandoffTarget, Task } from "@ash/shared";
+import type { HandoffTarget, Task, TaskListItem } from "@ash/shared";
 import { TASK_STATUS_LABELS } from "@ash/shared";
 import { ArrowCounterClockwise, ArrowUp, DesktopTower, SpinnerGap } from "@phosphor-icons/react";
 import { api, type RemoteTaskSnapshot } from "../lib/api.ts";
@@ -16,7 +16,7 @@ export function RemoteTaskDetail({
   onLocalOwnership,
   notify,
 }: {
-  archive: Task;
+  archive: TaskListItem;
   target: HandoffTarget;
   onLocalOwnership: (task: Task) => void;
   notify: (message: string) => void;

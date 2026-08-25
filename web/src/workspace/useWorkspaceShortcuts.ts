@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { Task } from "@ash/shared";
+import type { TaskListItem } from "@ash/shared";
 import {
   activateInspectorShortcut,
   createInspectorShortcutSequence,
@@ -12,11 +12,11 @@ type ShortcutOptions = {
   paletteOpen: boolean;
   composerOpen: boolean;
   spreadOpen: boolean;
-  orderedTasks: Task[];
+  orderedTasks: TaskListItem[];
   selectedTaskId: string | null;
   onTogglePalette: () => void;
   onCreate: () => void;
-  onTask: (task: Task) => void;
+  onTask: (task: TaskListItem) => void;
   onToggleSpread: () => void;
   onCloseSpread: () => void;
 };
