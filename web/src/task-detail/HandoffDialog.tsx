@@ -3,17 +3,16 @@ import { createPortal } from "react-dom";
 import type {
   HandoffApprovalResult,
   HandoffExportResult,
-  HandoffPreflightResult,
   HandoffTarget,
   Task, TaskListItem,
   TaskHandoff,
 } from "@ash/shared";
 import { ArrowSquareOut, Fingerprint, PaperPlaneTilt, SpinnerGap, Warning } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
-import { api } from "../lib/api.ts";
+import { api, type TaskScopedHandoffPreflightResult } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
-import { handoffTargetsForTask } from "./handoffTargetPolicy.ts";
+import { handoffTargetsForTask, nextUntriedHandoffTarget } from "./handoffTargetPolicy.ts";
 import {
   HandoffDialogHeader,
   HandoffProgress,
@@ -48,7 +47,7 @@ export function HandoffDialog({
   // null = 设置还没读回来;[] = 读回来了但一个目标都没配过。
   const [targets, setTargets] = useState<HandoffTarget[] | null>(null);
   const [targetUrl, setTargetUrl] = useState("");
-  const [preflight, setPreflight] = useState<HandoffPreflightResult | null>(null);
+  const [preflight, setPreflight] = useState<TaskScopedHandoffPreflightResult | null>(null);
   const [preflightError, setPreflightError] = useState<string | null>(null);
   const [projectId, setProjectId] = useState("");
   const [autoResume, setAutoResume] = useState(pendingHandoff?.autoResume ?? true);
@@ -59,6 +58,9 @@ export function HandoffDialog({
   const [draftTargetUrl, setDraftTargetUrl] = useState("");
   const [result, setResult] = useState<HandoffExportResult | null>(null);
   const [transferring, setTransferring] = useState(false);
+  const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
+  const attemptedReturnTargets = useRef(new Set<string>());
+  const automaticReturnFallback = useRef(true);
 
   useDismissable({ enabled: !busy, containerRef: scrim, onClose });
 
@@ -72,6 +74,8 @@ export function HandoffDialog({
         if (!alive) return;
         const available = handoffTargetsForTask(settings.handoffTargets, inboundHandoff, automaticReturnTarget);
         setTargets(available);
+        attemptedReturnTargets.current.clear();
+        automaticReturnFallback.current = true;
         if (pendingHandoff?.peerUrl) setTargetUrl(pendingHandoff.peerUrl);
         else if (available[0]) setTargetUrl(available[0].url);
       })
@@ -107,11 +111,15 @@ export function HandoffDialog({
       })
       .catch((reason) => {
         if (!alive) return;
-        const fallback = inboundHandoff?.peerUrl
-          && normalizedHandoffUrl(targetUrl) === normalizedHandoffUrl(inboundHandoff.peerUrl)
-          ? (targets ?? []).find((item) => normalizedHandoffUrl(item.url) !== normalizedHandoffUrl(targetUrl))
+        attemptedReturnTargets.current.add(normalizedHandoffUrl(targetUrl));
+        const fallback = inboundHandoff && automaticReturnFallback.current
+          ? nextUntriedHandoffTarget(targets ?? [], attemptedReturnTargets.current)
           : null;
         if (fallback) {
+          const failedCount = attemptedReturnTargets.current.size;
+          setFallbackNotice(failedCount === 1
+            ? `来源机原地址不可达，已自动改用「${fallback.name}」（${fallback.url}）继续检查。`
+            : `已有 ${failedCount} 个来源机地址不可达，已自动改用「${fallback.name}」（${fallback.url}）继续检查。`);
           setTargetUrl(fallback.url);
           return;
         }
@@ -164,6 +172,9 @@ export function HandoffDialog({
       url,
       peerFp: inboundHandoff.peerFp,
     }]);
+    automaticReturnFallback.current = false;
+    attemptedReturnTargets.current.clear();
+    setFallbackNotice(null);
     setTargetUrl(url);
   };
 
@@ -359,7 +370,12 @@ export function HandoffDialog({
                 id="handoff-target"
                 value={targetUrl}
                 disabled={busy || targets === null || !!pendingHandoff}
-                onChange={(event) => setTargetUrl(event.target.value)}
+                onChange={(event) => {
+                  automaticReturnFallback.current = false;
+                  attemptedReturnTargets.current.clear();
+                  setFallbackNotice(null);
+                  setTargetUrl(event.target.value);
+                }}
               >
                 {targetOptions.map((item) => (
                   <option key={item.url} value={item.url}>{item.name}（{item.url}）</option>
@@ -374,6 +390,9 @@ export function HandoffDialog({
             )}
             {preflightError && (
               <p className="handoff-error"><Warning size={13} aria-hidden="true" />预检失败:{preflightError}</p>
+            )}
+            {fallbackNotice && (
+              <p className="handoff-peer-line is-warn"><Warning size={13} aria-hidden="true" /><span>{fallbackNotice}</span></p>
             )}
             {inboundHandoff && preflightError && (
               <div className="handoff-quick-add handoff-return-override">
@@ -398,9 +417,11 @@ export function HandoffDialog({
                       目标机身份 <b>{preflight.peer.short}</b>
                       {preflight.peer.trust === "first-seen"
                         ? "（第一次核对这台机器：和对端设置页上的指纹对一下，明确申请后本机会记住它）"
-                        : inboundHandoff
+                        : inboundHandoff && preflight.taskScopedReturn
                           ? "（与这条任务接入时记录的来源指纹一致，无需重复审批）"
-                          : "（和上次记住的一致）"}
+                          : inboundHandoff
+                            ? "（与这条任务接入时记录的来源指纹一致；原机存档不可用，本次按普通接力审批）"
+                            : "（和上次记住的一致）"}
                       {preflight.peer.peerStatus === "pending"
                         ? "。申请已送达，等待对方接受后再接力。"
                         : preflight.peer.peerStatus === "blocked"

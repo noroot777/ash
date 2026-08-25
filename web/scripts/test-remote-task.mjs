@@ -34,5 +34,8 @@ assert.match(handoff, /Boolean\(onOpenRemote\)/, "没有远程视图回调的团
 assert.match(taskDetail, /onOpenRemote=\{onRemoteTask \?/, "任务详情应只在远程视图能力存在时传入横幅回调");
 assert.match(handoff, /preflight\.local\.uploads > 0 \|\| preflight\.local\.pendingMessages/, "只有附件时也应显示路径改写说明");
 assert.match(handoff, /probe\.suggestedProjectId \?\? probe\.projects\[0\]\?\.id/, "唯一候选项目应自动选中");
+assert.match(handoff, /inboundHandoff && preflight\.taskScopedReturn/, "移回身份文案必须区分任务级免审批与普通接力降级");
+assert.match(handoff, /nextUntriedHandoffTarget/, "单任务移回应遍历全部同指纹备用地址");
+assert.match(handoff, /fallbackNotice/, "自动切换来源地址时必须向用户显示说明");
 
 console.log("remote task proxy UI tests passed");

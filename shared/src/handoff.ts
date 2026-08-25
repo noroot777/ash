@@ -122,6 +122,8 @@ export interface HandoffPingProject {
 export interface HandoffPreflightResult {
   ok: true;
   target: { url: string; host: string };
+  /** true = 本次移回仍使用任务存档限定的免审批通道；false = 普通接力或已降级为普通接力。 */
+  taskScopedReturn: boolean;
   /** 对目标机做的身份核对(出站方向)。null = 对端连 ping 都没报身份且本机也没记过。 */
   peer: HandoffPeerIdentity | null;
   projects: HandoffPingProject[];

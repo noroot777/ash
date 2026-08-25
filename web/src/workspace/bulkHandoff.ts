@@ -1,9 +1,41 @@
 import type { TaskListItem } from "@ash/shared";
+import type { TaskScopedHandoffPreflightResult } from "../lib/api.ts";
 
 export type BulkHandoffSkip = {
   task: TaskListItem;
   reason: string;
 };
+
+export function bulkPreflightIssue(
+  task: TaskListItem,
+  probe: TaskScopedHandoffPreflightResult,
+  projectId: string,
+): string | null {
+  const projectAvailable = projectId
+    ? probe.projects.some((candidate) => candidate.id === projectId)
+    : probe.projects.length > 0;
+  if (projectAvailable) return null;
+
+  const status = probe.peer?.peerStatus;
+  const downgradedReturn = task.handoff?.direction === "in" && !probe.taskScopedReturn;
+  if (status === "pending") {
+    return downgradedReturn
+      ? "原机没有可用的任务存档，已降级为普通接力；请先在原机批准本机，再重新检查"
+      : "目标机尚未批准本机，请先接受接力申请再重新检查";
+  }
+  if (status === "blocked") {
+    return downgradedReturn
+      ? "原机没有可用的任务存档，已降级为普通接力；原机当前拒绝本机，请先修改接力来源状态"
+      : "目标机已拒绝本机，请先修改接力来源状态";
+  }
+  return probe.projects.length === 0
+    ? "目标机没有可用项目，请先在目标机添加项目"
+    : "目标项目已不可用，请重新选择";
+}
+
+export function bulkPreflightAllowsRun(successCount: number, failureCount: number, total: number): boolean {
+  return successCount > 0 && successCount + failureCount === total;
+}
 
 const normalizedTargetUrl = (url: string): string => url.trim().replace(/\/+$/, "");
 const sameFingerprint = (left?: string | null, right?: string | null): boolean =>

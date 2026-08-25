@@ -1,5 +1,7 @@
 import type { HandoffTarget, TaskHandoff } from "@ash/shared";
 
+const normalizedTargetUrl = (url: string): string => url.trim().replace(/\/+$/, "");
+
 export function handoffTargetsForTask(
   targets: HandoffTarget[],
   handoff: TaskHandoff | null | undefined,
@@ -9,9 +11,16 @@ export function handoffTargetsForTask(
   if (!handoff.peerFp) return [];
   const registered = targets.filter((target) => target.peerFp === handoff.peerFp);
   if (!automaticReturnTarget || automaticReturnTarget.peerFp !== handoff.peerFp) return registered;
-  const automaticUrl = automaticReturnTarget.url.replace(/\/+$/, "");
+  const automaticUrl = normalizedTargetUrl(automaticReturnTarget.url);
   return [
     automaticReturnTarget,
-    ...registered.filter((target) => target.url.replace(/\/+$/, "") !== automaticUrl),
+    ...registered.filter((target) => normalizedTargetUrl(target.url) !== automaticUrl),
   ];
+}
+
+export function nextUntriedHandoffTarget(
+  targets: HandoffTarget[],
+  attemptedUrls: ReadonlySet<string>,
+): HandoffTarget | null {
+  return targets.find((target) => !attemptedUrls.has(normalizedTargetUrl(target.url))) ?? null;
 }

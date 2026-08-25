@@ -118,6 +118,7 @@ try {
   const firstProbe = await api<HandoffPreflightResult>(machineB, `/tasks/${task.id}/handoff/preflight`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetUrl: target.url }),
   });
+  assert.equal(firstProbe.taskScopedReturn, true, "存档存在时应明确标记为任务级免审批移回");
   assert.equal(firstProbe.peer?.peerStatus, "approved", "任务级安全移回不应要求原机再次批准整台机器");
   assert.deepEqual(firstProbe.projects.map((project) => project.id), [projectA.id], "免审批探测只应暴露原任务项目");
 
@@ -170,6 +171,7 @@ try {
   const pendingFallback = await api<HandoffPreflightResult>(machineB, `/tasks/${missingArchiveTask.id}/handoff/preflight`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetUrl: machineA }),
   });
+  assert.equal(pendingFallback.taskScopedReturn, false, "存档缺失后预检必须结构化标明已降级为普通接力");
   assert.equal(pendingFallback.peer?.peerStatus, "pending", "存档缺失后应降级为需要整机审批的普通接力");
   assert.deepEqual(pendingFallback.projects, [], "未批准前普通接力不能读取原机项目清单");
   assert.ok(pendingFallback.local.notes.some((note) => /普通接力/.test(note)), "预检应解释为何重新需要审批");
@@ -178,6 +180,7 @@ try {
   const approvedFallback = await api<HandoffPreflightResult>(machineB, `/tasks/${missingArchiveTask.id}/handoff/preflight`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetUrl: machineA }),
   });
+  assert.equal(approvedFallback.taskScopedReturn, false);
   assert.equal(approvedFallback.peer?.peerStatus, "approved");
   assert.ok(approvedFallback.projects.some((project) => project.id === projectA.id));
 
@@ -187,7 +190,7 @@ try {
   });
   const restoredWithoutArchive = await api<Task>(machineA, `/tasks/${missingArchiveTask.id}`);
   assert.equal(restoredWithoutArchive.projectId, projectA.id);
-  assert.equal(restoredWithoutArchive.handoff?.direction, "returned", "经审批回到原机后不应误标为仍需移回 B");
+  assert.equal(restoredWithoutArchive.handoff?.direction, "in", "本机没有历史存档时不能只凭来源机自报就标成 returned");
   console.log("test-handoff-return ok");
 } finally {
   for (const port of serverPorts) {

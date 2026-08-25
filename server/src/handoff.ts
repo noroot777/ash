@@ -33,6 +33,8 @@ import type {
   HandoffExportResult, HandoffPreflightResult, HandoffPeerIdentity, TaskHandoff,
 } from "@ash/shared";
 
+type TaskScopedPreflightResult = HandoffPreflightResult & { taskScopedReturn: boolean };
+
 // 传输协议类型/错误类/尺寸常量在 handoff-types.ts(导出、导入、HTTP 面三处共用)。
 import { HandoffError, MAX_FILE_BYTES } from "./handoff-types.js";
 import type { HandoffManifest } from "./handoff-types.js";
@@ -159,7 +161,7 @@ function assertPeerAcceptsUs(peer: HandoffPeerIdentity | null): void {
 }
 
 /** 接力预检:探测对端、核对身份、匹配项目、盘点本地可搬运的东西。只读,不停任务不动文件。 */
-export async function preflightHandoff(taskId: string, targetUrlRaw: string): Promise<HandoffPreflightResult> {
+export async function preflightHandoff(taskId: string, targetUrlRaw: string): Promise<TaskScopedPreflightResult> {
   const { task, project } = await loadSingleTask(taskId);
   const targetUrl = normalizePeerUrl(targetUrlRaw);
   const returnFingerprint = inboundReturnFingerprint(task.handoff);
@@ -237,6 +239,7 @@ export async function preflightHandoff(taskId: string, targetUrlRaw: string): Pr
   return {
     ok: true,
     target: { url: targetUrl, host: ping.host },
+    taskScopedReturn,
     peer,
     projects: ping.projects,
     suggestedProjectId: suggested?.id ?? null,

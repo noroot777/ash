@@ -36,6 +36,8 @@ import type {
   TeamPreset,
   TeamPresetConfig,
 } from "@ash/shared";
+
+export type TaskScopedHandoffPreflightResult = HandoffPreflightResult & { taskScopedReturn: boolean };
 import { DEFAULT_APP_SETTINGS } from "@ash/shared";
 import type { WorkflowDef, WorkflowItem } from "@ash/shared/workflow";
 import type { CliHostEnv } from "@ash/shared/cli-overrides";
@@ -295,7 +297,7 @@ export const api = {
 
   // 任务接力:preflight 只读探测对端与本地可搬运的东西;handoffTask 会真的停下任务、
   // 打包 git 分支与 CLI 会话文件推给对端(可能上百 MB,调用点要给持续的忙碌反馈)。
-  handoffPreflight: (taskId: string, targetUrl: string): Promise<HandoffPreflightResult> =>
+  handoffPreflight: (taskId: string, targetUrl: string): Promise<TaskScopedHandoffPreflightResult> =>
     request(`/tasks/${id(taskId)}/handoff/preflight`, json("POST", { targetUrl })),
   handoffTask: (
     taskId: string,

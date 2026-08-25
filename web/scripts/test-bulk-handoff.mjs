@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { outboundTasksForTarget, partitionBulkHandoffTasks } from "../src/workspace/bulkHandoff.ts";
-import { handoffTargetsForTask } from "../src/task-detail/handoffTargetPolicy.ts";
+import {
+  bulkPreflightAllowsRun,
+  bulkPreflightIssue,
+  outboundTasksForTarget,
+  partitionBulkHandoffTasks,
+} from "../src/workspace/bulkHandoff.ts";
+import { handoffTargetsForTask, nextUntriedHandoffTarget } from "../src/task-detail/handoffTargetPolicy.ts";
 
 const task = (id, overrides = {}) => ({
   id,
@@ -98,6 +103,28 @@ assert.deepEqual(
   ],
   "移回目标可由任务历史自动恢复，不要求先写入整机目标设置",
 );
+const attemptedTargets = new Set(["http://automatic"]);
+const fallbackTargets = [
+  { name: "自动来源", url: "http://automatic", peerFp: sourceFp },
+  { name: "失效登记地址", url: "http://dead", peerFp: sourceFp },
+  { name: "可用登记地址", url: "http://live", peerFp: sourceFp },
+];
+assert.equal(nextUntriedHandoffTarget(fallbackTargets, attemptedTargets)?.url, "http://dead");
+attemptedTargets.add("http://dead");
+assert.equal(nextUntriedHandoffTarget(fallbackTargets, attemptedTargets)?.url, "http://live", "地址回退应遍历全部同指纹候选");
+
+const downgradedProbe = {
+  taskScopedReturn: false,
+  peer: { peerStatus: "pending" },
+  projects: [],
+};
+assert.match(
+  bulkPreflightIssue(task("fallback", { handoff: { direction: "in", peerFp: sourceFp } }), downgradedProbe, "p1"),
+  /降级为普通接力.*原机批准/,
+  "批量预检应给出真实审批原因，而不是误报项目不可用",
+);
+assert.equal(bulkPreflightAllowsRun(1, 1, 2), true, "一条预检失败时应允许跳过并迁移其余任务");
+assert.equal(bulkPreflightAllowsRun(0, 2, 2), false, "没有任何可迁移任务时仍应禁止执行");
 
 const bulkDialog = readFileSync(new URL("../src/workspace/HandoffMachines.tsx", import.meta.url), "utf8");
 assert.doesNotMatch(bulkDialog, /<ConfirmDialog/, "批量接力不应继续使用旧确认框");
@@ -107,5 +134,6 @@ assert.match(bulkDialog, /handoff-result-panel handoff-bulk-result/, "批量接�
 assert.match(bulkDialog, /api\.handoffReturnTarget\(task\.id\)/, "批量移回应逐任务解析 marker 里的回程目标");
 assert.match(bulkDialog, /targetUrl: taskTarget\.url/, "批量正式移回应使用逐任务解析出的地址");
 assert.match(bulkDialog, /probeBulkTask/, "任务恢复地址不可达时批量移回应尝试同指纹登记地址");
+assert.match(bulkDialog, /preflightFailures/, "批量执行结果应保留被跳过任务的失败原因");
 
 console.log("bulk handoff eligibility tests passed");
