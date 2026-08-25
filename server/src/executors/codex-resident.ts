@@ -78,9 +78,12 @@ export function openCodexResident(params: {
 
   /** 把一个回合的事件转发出去。done 换成 turnEnd —— 流不能在这里断。 */
   async function consumeTurn(turn: CodexTurn, hadSession: boolean): Promise<void> {
+    let receivedSessionThisTurn = false;
+    let poisonedThisTurn = false;
     try {
       for await (const event of turn.events) {
         if (event.kind === "session") {
+          receivedSessionThisTurn = true;
           sessionId = event.cliSessionId;
           emit(event);
           continue;
@@ -89,6 +92,7 @@ export function openCodexResident(params: {
         // poisoned 诊断再 dropSession 就晚了，pump 会先 resume 一次。故在 resident
         // 自己转发诊断前同步作废，保证紧接着的排队回合也 fresh。
         if (event.kind === "error" && sessionResumeFault(event.message) === "poisoned") {
+          poisonedThisTurn = true;
           sessionId = "";
         }
         // 进程退出对「会话级常驻」只是一个回合说完了,不是调度台没了。
@@ -99,7 +103,7 @@ export function openCodexResident(params: {
       emit({ kind: "error", message: error instanceof Error ? error.message : String(error) });
     }
     current = null;
-    if (!hadSession && !sessionId && !warnedSessionLost) {
+    if (!hadSession && !sessionId && !receivedSessionThisTurn && !poisonedThisTurn && !warnedSessionLost) {
       warnedSessionLost = true;
       emit({
         kind: "error",

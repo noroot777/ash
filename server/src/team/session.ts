@@ -469,7 +469,16 @@ async function consume(lead: Lead): Promise<void> {
           // 这里先作废闭包里的 id 与持久恢复字段，所以下一个 startTurn 必然 fresh。
           lead.handle.dropSession();
           lead.cliSessionId = "";
-          await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, lead.sessId));
+          try {
+            await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, lead.sessId));
+          } catch (error) {
+            // 内存里的恢复 id 已经作废，不能让一次持久化故障杀掉常驻消费循环；同时明确
+            // 告知用户重启前数据库里可能还留着旧 id。
+            const message = `已停止续跑损坏的 Codex 会话，但清理数据库恢复字段失败：${error instanceof Error ? error.message : String(error)}`;
+            writeRunError(lead.out, message);
+            appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), { kind: "error", message });
+            publish(lead, { kind: "error", message });
+          }
           awaitingFreshSession = true;
           const note = sessionResumeFaultNote("poisoned");
           writeRunError(lead.out, note);
