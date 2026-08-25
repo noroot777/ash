@@ -21,7 +21,7 @@ import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { listModels } from "./llm.js";
 import { mountQueueRoutes } from "./queues.js";
-import { detectKnownClis, detectLocalAgents, registrationVersionWarning } from "./detect.js";
+import { detectKnownClis, detectLocalAgents, registrationBlockReason } from "./detect.js";
 import { cliHostEnv } from "./executors/cli-env.js";
 import { searchAll } from "./search.js";
 import { repoKey } from "./git.js";
@@ -225,8 +225,8 @@ mountModelRoutes(api);
 api.post("/agents", async (c) => {
   const b = await c.req.json<any>();
   const type = b.type as AgentType;
-  const versionWarning = await registrationVersionWarning(type);
-  if (versionWarning) return c.json({ error: versionWarning }, 409);
+  const blocked = await registrationBlockReason(type);
+  if (blocked) return c.json({ error: blocked }, 409);
   const model = b.model?.trim() || null;
   if (b.reasoningEffort && !isReasoningEffortSupported(type, model, b.reasoningEffort)) {
     return c.json({

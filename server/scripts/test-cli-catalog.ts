@@ -32,7 +32,7 @@ import { GenericCliExecutor, hasTrustedSessionId, interactiveResumeInner } from 
 import { execBinFor, probeBins } from "../src/executors/bin-probe.js";
 import { resumeCommandFor } from "../src/executors/resume.js";
 import { normalizeProfileExtraArgs } from "../src/executors/args.js";
-import { installCommandFor, registrationVersionWarning, versionWarningFor } from "../src/detect.js";
+import { installCommandFor, registrationBlockReason, versionWarningFor } from "../src/detect.js";
 import type { CliSpec } from "../src/executors/catalog/types.js";
 import { IS_WINDOWS } from "../src/platform.js";
 
@@ -75,10 +75,16 @@ function writeVersionStub(dir: string, name: string, version: string): string {
   process.env.PATH = `${stubDir}${delimiter}${originalPath ?? ""}`;
   try {
     writeVersionStub(stubDir, "codex", "codex-cli 0.147.8");
-    assert.match(await registrationVersionWarning("codex") ?? "", /升级/, "已安装的 0.147.x 必须拒绝注册");
+    const blocked = await registrationBlockReason("codex") ?? "";
+    assert.ok(blocked, "已安装的 0.147.x 必须拒绝注册");
+    // 拒绝理由跟升级文案是两件事:注册可以从「新增」按钮/API 直连发起,那些入口跟
+    // 「检测本地智能体」无关,所以这条不能带完整升级提示(否则没检测的用户也被提示了)。
+    assert.doesNotMatch(blocked, /npm install|0\.148\.0/, "拒绝理由不能提前泄出升级文案");
+    assert.match(blocked, /检测本地智能体/, "拒绝理由要把人指回检测入口");
+    assert.match(versionWarningFor("codex", "codex-cli 0.147.8") ?? "", /npm install .*@openai\/codex/, "升级文案只走检测结果");
     writeVersionStub(stubDir, "codex", "codex-cli 0.149.1");
-    assert.equal(await registrationVersionWarning("codex"), undefined, "非 0.147.x 不能拦注册");
-    assert.equal(await registrationVersionWarning("claude"), undefined, "只限制 Codex");
+    assert.equal(await registrationBlockReason("codex"), undefined, "非 0.147.x 不能拦注册");
+    assert.equal(await registrationBlockReason("claude"), undefined, "只限制 Codex");
   } finally {
     process.env.PATH = originalPath;
     rmSync(stubDir, { recursive: true, force: true });
