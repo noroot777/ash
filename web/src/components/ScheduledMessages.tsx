@@ -144,8 +144,6 @@ export function ScheduledMessageTray({
   if (!loading && !error && messages.length === 0) return null;
   const orderedMessages = bySendTime(messages);
   const steerable = orderedMessages.find((message) => message.mode === "queued");
-  const steering = steerable ? steeringIds?.has(steerable.id) ?? false : false;
-  const guideBusy = !!steerable && (steering || cancelingIds.has(steerable.id));
   return (
     <div className="scheduled-message-tray" aria-label="待发送消息">
       {loading && messages.length === 0 && <small>正在加载待发送消息…</small>}
@@ -167,6 +165,20 @@ export function ScheduledMessageTray({
             <b title={message.text || message.attachments.join("\n")}>
               {message.text || (message.attachments.length ? `[${message.attachments.length} 个附件]` : "[空消息]")}
             </b>
+            {message.id === steerable?.id && onSteer && (
+              <button
+                type="button"
+                className="scheduled-message-guide"
+                disabled={busy}
+                aria-label={`用最早的排队消息“${message.text || "附件"}”引导会话`}
+                onClick={() => onSteer(message.id)}
+              >
+                {steering
+                  ? <SpinnerGap size={13} className="is-spinning" aria-hidden="true" />
+                  : <ChatsCircle size={13} weight="duotone" aria-hidden="true" />}
+                <span>{steering ? "引导中" : "引导会话"}</span>
+              </button>
+            )}
             <button
               type="button"
               disabled={busy}
@@ -179,22 +191,6 @@ export function ScheduledMessageTray({
           </div>
         );
       })}
-      {steerable && onSteer && (
-        <div className="scheduled-message-guide-row">
-          <button
-            type="button"
-            className="scheduled-message-guide"
-            disabled={guideBusy}
-            aria-label={`用最早的排队消息“${steerable.text || "附件"}”引导会话`}
-            onClick={() => onSteer(steerable.id)}
-          >
-            {steering
-              ? <SpinnerGap size={13} className="is-spinning" aria-hidden="true" />
-              : <ChatsCircle size={13} weight="duotone" aria-hidden="true" />}
-            <span>{steering ? "引导中" : "引导会话"}</span>
-          </button>
-        </div>
-      )}
     </div>
   );
 }

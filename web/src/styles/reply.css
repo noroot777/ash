@@ -12,8 +12,7 @@
 .scheduled-message-row > button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .scheduled-message-row > button:focus-visible { outline: 2px solid color-mix(in lch, var(--accent) 55%, transparent); outline-offset: 1px; }
 .scheduled-message-row > button:disabled { opacity: .48; }
-.scheduled-message-guide-row { display: flex; justify-content: flex-end; padding-top: 1px; }
-.scheduled-message-guide { display: inline-flex; height: 24px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--overlay); padding: 0 8px; color: var(--muted); font-size: 9.5px; font-weight: 650; white-space: nowrap; }
+.scheduled-message-row > .scheduled-message-guide { display: inline-flex; width: auto; height: 24px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--overlay); padding: 0 8px; color: var(--muted); font-size: 9.5px; font-weight: 650; white-space: nowrap; }
 .scheduled-message-guide > svg { color: var(--accent); }
 .scheduled-message-guide:hover:not(:disabled) { border-color: color-mix(in lch, var(--accent) 38%, var(--line2)); background: var(--sel-bg); color: var(--ink); }
 .scheduled-message-guide:focus-visible { outline: 2px solid color-mix(in lch, var(--accent) 55%, transparent); outline-offset: 1px; }
