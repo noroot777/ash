@@ -10,7 +10,12 @@ import { spawnForRun, detachedInfo } from "./detached.js";
 import { cleanupAfterRun, spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
 import { relayApi } from "../llm.js";
 import { protocolConverterBaseUrl } from "../openai-converter/common.js";
-import { formatFailureForTimeline, RunTraceRecorder, type RunTracePaths } from "./diagnostics.js";
+import {
+  formatFailureForTimeline,
+  formatSessionPoisonForTimeline,
+  RunTraceRecorder,
+  type RunTracePaths,
+} from "./diagnostics.js";
 import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
 
 // 供应商的 key 走环境变量,不进命令行 —— `-c` 参数会原样进 commandLine,而后者存进
@@ -279,11 +284,11 @@ export async function* parseCodexStream(
       agentMessageCount,
     });
     const failure = formatFailureForTimeline(diagnostics);
-    // 手停通常不追加 CLI 失败诊断；但 poisoned thread 是恢复状态本身已经坏了，
-    // 即使恰好同时手停也要把信号交给结算方清掉，不能让下一轮继续 resume。
-    if (failure && (!lifecycle.stopRequested || diagnostics.failureKind === "poisoned_session")) {
-      push({ kind: "error", message: failure });
-    }
+    if (failure && !lifecycle.stopRequested) push({ kind: "error", message: failure });
+    // poisoned 是恢复会话的状态，不是本回合的退出原因：手停 / turn.failed / spawn
+    // error 仍保留自己的结论，同时另发一条诊断让结算方只清恢复字段。
+    const sessionPoison = formatSessionPoisonForTimeline(diagnostics);
+    if (sessionPoison) push({ kind: "error", message: sessionPoison });
     push({ kind: "done", exitStatus: opts.exitStatus });
     resolve?.();
     resolve = null;

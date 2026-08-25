@@ -52,14 +52,39 @@ const poisonedStderr = [
 ];
 for (const stderrTail of poisonedStderr) {
   const classified = classifyCodexExit(base({ stderrTail }));
-  assert.equal(classified.failureKind, "poisoned_session", "exit 0 + turn.completed 也必须判 poisoned");
+  assert.equal(classified.failureKind, null, "poisoned 不得篡改本回合的真实结束原因");
 }
 const resumableFlushWarning =
   "failed to flush rollout after emitting terminal turn event: thread 01a036d3-b959-7462-9f46-7b4b5e2327e3 not found\n";
+
+function finishWithStderr(stderr: string, overrides: Partial<CodexExitEvidence> = {}) {
+  const recorder = new RunTraceRecorder();
+  recorder.stderr(stderr);
+  const { stderrTail: _stderrTail, ...evidence } = base(overrides);
+  return recorder.finish(evidence);
+}
+
+for (const stderr of [...poisonedStderr, resumableFlushWarning]) {
+  const diagnostics = finishWithStderr(stderr);
+  assert.equal(diagnostics.terminationKind, "completed");
+  assert.ok(diagnostics.sessionPoisonedReason, "中毒/前兆信号必须正交记录并触发会话轮换");
+}
+
+const longStderr = finishWithStderr(poisonedStderr[1] + "x".repeat(8190));
+assert.doesNotMatch(longStderr.stderrTail ?? "", /dropping turn-scoped item/, "前置指纹应已被展示尾窗挤掉");
+assert.match(longStderr.sessionPoisonedReason ?? "", /unknown turn id/, "流式粘性判定不能随尾窗丢失");
+
+assert.deepEqual(
+  finishWithStderr(poisonedStderr[0], { stopRequested: true, exitStatus: 1 }).terminationKind,
+  "manual_stop",
+);
 assert.equal(
-  classifyCodexExit(base({ stderrTail: resumableFlushWarning })).failureKind,
-  null,
-  "真机已证明仅有 rollout flush warning 的 thread 仍可 resume 并使用终端，不得误清",
+  finishWithStderr(poisonedStderr[0], { turnFailedMessage: "Credit balance is too low" }).failureReason,
+  "Credit balance is too low",
+);
+assert.equal(
+  finishWithStderr(poisonedStderr[0], { spawnError: "找不到 codex 可执行文件", exitStatus: 1 }).failureReason,
+  "找不到 codex 可执行文件",
 );
 
 const dir = mkdtempSync(join(tmpdir(), "ash-diagnostics-"));
@@ -85,7 +110,7 @@ try {
       })) events.push(event);
       assert.equal(events.find((event) => event.kind === "done")?.exitStatus, 0, "假 Codex 前置条件必须是 exit 0");
       assert.ok(
-        events.some((event) => event.kind === "error" && /poisoned_session/.test(event.message)),
+        events.some((event) => event.kind === "error" && /session=poisoned_session/.test(event.message)),
         `exit 0 的 poisoned stderr 没进入 error 事件:${JSON.stringify(events)}`,
       );
     }

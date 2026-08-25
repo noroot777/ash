@@ -58,6 +58,8 @@ export interface ResidentHandle {
   // 插话要先 interrupt 再 send 才有 codex 那种当场转向的手感(见 team/session.ts)。
   // codex 侧没有原生打断,interrupt 就是杀掉当前回合的进程。
   interrupt(): void;
+  /** 忘掉恢复 id；Codex 常驻的下一回合会 fresh，进程级常驻执行器可不实现。 */
+  dropSession?(): void;
   close(): void; // 优雅收尾:关 stdin,等它自己退出
   kill(): void; // 硬杀,走 killChild 三层击杀
 }

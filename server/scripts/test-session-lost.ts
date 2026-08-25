@@ -74,17 +74,16 @@ assert.match(
 );
 assert.equal(sessionResumeFault(POISON_MISSING_WORLD_STATE), "poisoned");
 assert.equal(
-  codexSessionPoisonReason(POISON_FLUSH),
-  null,
-  "真机直接 resume 已证明 rollout flush warning 单独出现时会话仍可用，不得误判 poisoned",
+  sessionResumeFault(POISON_FLUSH),
+  "poisoned",
+  "rollout flush 前兆按用户口径只作废恢复 thread，不能再静默忽略",
 );
-assert.equal(sessionResumeFault(POISON_FLUSH), null);
 assert.equal(shouldDropSession("poisoned", 0), true, "poisoned thread 即使 exit 0 也必须作废");
 assert.equal(shouldDropSession("lost", 0), false, "普通会话不存在仍保留 exit 0 防误清语义");
 assert.equal(mergeSessionResumeFault("lost", POISON_UNKNOWN_TURN), "poisoned", "后到的 poisoned 信号必须升级判定");
 assert.match(SESSION_POISONED_NOTE, /exit 0/);
 assert.match(SESSION_POISONED_NOTE, /全新会话/);
-ok("Codex 缺 world-state / unknown-turn 指纹判 poisoned；可恢复的 rollout flush warning 不误清");
+ok("Codex 缺 world-state / unknown-turn / rollout flush 指纹都触发恢复 thread 轮换");
 
 // ── ① 执行器原样带出来 ──────────────────────────────────────────────────────
 // claude.ts 对 CLI 的 stderr 有一层措辞归一(normalizeClaudeCliError)。这句要是哪天

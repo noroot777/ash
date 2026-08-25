@@ -40,9 +40,13 @@ const CODEX_POISON_PATTERNS: ReadonlyArray<{ pattern: RegExp; reason: string }> 
     pattern: /dropping turn-scoped item for unknown turn id\b/i,
     reason: "Codex stderr 出现 `dropping turn-scoped item for unknown turn id`，恢复 thread 已无法对应旧回合。",
   },
+  {
+    pattern: /failed to flush rollout after emitting terminal turn event:\s*thread\b[^\r\n]*\bnot found\b/i,
+    reason: "Codex stderr 出现 `failed to flush rollout after emitting terminal turn event: thread … not found`，这条 thread 的 rollout 已出现恢复风险。",
+  },
 ];
 
-/** 真机证实会让 Codex thread 在后续恢复时永久缺工具的 stderr 指纹。 */
+/** 真机要求 ash 作废恢复 thread 的 stderr 指纹。 */
 export function codexSessionPoisonReason(message: string): string | null {
   return CODEX_POISON_PATTERNS.find(({ pattern }) => pattern.test(message))?.reason ?? null;
 }
@@ -102,8 +106,9 @@ export const SESSION_LOST_NOTE =
   + "之前的上下文不会带过来，任务正文和历史记录都还在。";
 
 export const SESSION_POISONED_NOTE =
-  "Codex 已在本轮 stderr 中报告这条 thread 的回合关联或 rollout 落盘已损坏；"
-  + "即使进程 exit 0 且发出 turn.completed，也不能再把它当作可恢复会话。"
+  "Codex 已在本轮 stderr 中报告这条 thread 的回合关联、world-state 或 rollout 落盘异常；"
+  + "即使进程 exit 0 且发出 turn.completed，也不能再把它当作可恢复会话；"
+  + "会话轮换不改变本回合真实的退出原因。"
   + "ash 已清掉这条会话的恢复字段：下一次运行会从任务正文自动开启一条**全新会话**，"
   + "旧对话与执行记录仍保留，但之前的上下文不会带过去。";
 

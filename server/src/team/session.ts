@@ -406,6 +406,9 @@ async function consume(lead: Lead): Promise<void> {
   // 每次说话都 --resume 同一个坏 id，而收尾那句话还在告诉
   // 用户「会话还在,再说一句就能接回」—— 他会照做,然后一次次撞同一堵墙。
   let sessionFault: SessionResumeFault | null = null;
+  // Codex 常驻在同一条 events 流里跑很多回合。poisoned 后先清内存与数据库；等 fresh
+  // 回合报上新 id，再撤掉本地故障水位，避免以后关闭常驻时误清新的健康 thread。
+  let awaitingFreshSession = false;
   let pendingTraceText = "";
   const flushTraceText = () => {
     if (!pendingTraceText) return;
@@ -434,6 +437,10 @@ async function consume(lead: Lead): Promise<void> {
           .update(sessions)
           .set({ cliSessionId: event.cliSessionId, ...ex.resumeFields(lead.cwd, event.cliSessionId) })
           .where(eq(sessions.id, lead.sessId));
+        if (awaitingFreshSession) {
+          awaitingFreshSession = false;
+          sessionFault = null;
+        }
       }
       publish(lead, event);
       continue;
@@ -455,7 +462,20 @@ async function consume(lead: Lead): Promise<void> {
       if (emittedEvent.kind === "context") await setSessionContext(lead.sessId, emittedEvent.context);
       if (emittedEvent.kind === "error") {
         writeRunError(lead.out, emittedEvent.message);
+        const previousFault = sessionFault;
         sessionFault = mergeSessionResumeFault(sessionFault, emittedEvent.message);
+        if (sessionFault === "poisoned" && previousFault !== "poisoned" && lead.handle.dropSession) {
+          // 不能等整条常驻 events 流关闭：pending 消息会在 turnEnd 后立刻开下一回合。
+          // 这里先作废闭包里的 id 与持久恢复字段，所以下一个 startTurn 必然 fresh。
+          lead.handle.dropSession();
+          lead.cliSessionId = "";
+          await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, lead.sessId));
+          awaitingFreshSession = true;
+          const note = sessionResumeFaultNote("poisoned");
+          writeRunError(lead.out, note);
+          appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), { kind: "error", message: note });
+          publish(lead, { kind: "error", message: note });
+        }
       }
       if (emittedEvent.kind === "done") exitStatus = emittedEvent.exitStatus;
       publish(lead, emittedEvent);

@@ -15,8 +15,7 @@ export type RunFailureKind =
   | "stream_flush_timeout"
   | "silent_nonzero_exit"
   | "nonzero_exit"
-  | "missing_turn_completion"
-  | "poisoned_session";
+  | "missing_turn_completion";
 
 export type RunTerminationKind = RunFailureKind | "completed" | "manual_stop";
 
@@ -26,6 +25,8 @@ export interface RunDiagnostics {
   terminationKind: RunTerminationKind;
   failureKind: RunFailureKind | null;
   failureReason: string | null;
+  /** 恢复 thread 是否必须作废；与本回合怎么结束正交。 */
+  sessionPoisonedReason: string | null;
   exitStatus: number;
   exitSignal: NodeJS.Signals | null;
   stopRequested: boolean;
@@ -57,10 +58,6 @@ export interface CodexExitEvidence {
 }
 
 export function classifyCodexExit(e: CodexExitEvidence): Pick<RunDiagnostics, "terminationKind" | "failureKind" | "failureReason"> {
-  const poisonReason = codexSessionPoisonReason(e.stderrTail);
-  if (poisonReason) {
-    return { terminationKind: "poisoned_session", failureKind: "poisoned_session", failureReason: poisonReason };
-  }
   if (e.stopRequested) {
     return { terminationKind: "manual_stop", failureKind: null, failureReason: null };
   }
@@ -123,10 +120,22 @@ export function formatFailureForTimeline(d: RunDiagnostics): string | null {
   return `执行诊断：${d.failureReason}\n证据：${evidence}${files ? `\n原始日志：${files}` : ""}`;
 }
 
+export function formatSessionPoisonForTimeline(d: RunDiagnostics): string | null {
+  if (!d.sessionPoisonedReason) return null;
+  const files = [d.eventsPath, d.stderrPath].filter(Boolean).join("；");
+  return `Codex 会话诊断：session=poisoned_session；${d.sessionPoisonedReason}`
+    + `\n本回合仍按 ${d.terminationKind} 结算，但这条恢复 thread 必须作废。`
+    + (files ? `\n原始日志：${files}` : "");
+}
+
 export class RunTraceRecorder {
   private eventsFd: number | null = null;
   private stderrFd: number | null = null;
   private stderrTail = "";
+  // 中毒指纹出现在 resume 刚开始的 stderr；给人看的 8K 尾窗会把它挤掉，所以边收边
+  // 判并粘住结果。scanTail 只为接住恰好跨 chunk 的短指纹，不承担日志展示。
+  private stderrScanTail = "";
+  private sessionPoisonedReason: string | null = null;
   private traceWriteError: string | null = null;
 
   constructor(private readonly paths?: RunTracePaths) {
@@ -146,6 +155,11 @@ export class RunTraceRecorder {
   }
 
   stderr(chunk: string): void {
+    if (!this.sessionPoisonedReason) {
+      const scan = this.stderrScanTail + chunk;
+      this.sessionPoisonedReason = codexSessionPoisonReason(scan);
+      this.stderrScanTail = scan.slice(-512);
+    }
     this.stderrTail = (this.stderrTail + chunk).slice(-8000);
     this.write(this.stderrFd, chunk);
   }
@@ -157,6 +171,7 @@ export class RunTraceRecorder {
       version: 1,
       recordedAt: new Date().toISOString(),
       ...classified,
+      sessionPoisonedReason: this.sessionPoisonedReason,
       exitStatus: evidence.exitStatus,
       exitSignal: evidence.exitSignal,
       stopRequested: evidence.stopRequested,

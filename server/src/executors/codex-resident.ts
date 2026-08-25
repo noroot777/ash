@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import type { AgentEvent } from "@ash/shared";
 import type { ResidentHandle } from "./types.js";
+import { sessionResumeFault } from "./session-lost.js";
 
 // ── codex 的常驻会话:「会话级常驻」,不是「进程级常驻」────────────────────
 //
@@ -83,6 +84,12 @@ export function openCodexResident(params: {
           sessionId = event.cliSessionId;
           emit(event);
           continue;
+        }
+        // 上层通过异步 outbox 消费事件；若用户消息已经排在 waiting 里，等上层收到
+        // poisoned 诊断再 dropSession 就晚了，pump 会先 resume 一次。故在 resident
+        // 自己转发诊断前同步作废，保证紧接着的排队回合也 fresh。
+        if (event.kind === "error" && sessionResumeFault(event.message) === "poisoned") {
+          sessionId = "";
         }
         // 进程退出对「会话级常驻」只是一个回合说完了,不是调度台没了。
         if (event.kind === "done") continue;
@@ -168,6 +175,11 @@ export function openCodexResident(params: {
       if (!turn) return;
       turn.lifecycle.stopRequested = true;
       params.killTurn(turn.child);
+    },
+    // 当前回合已经结束、上层从诊断确认恢复 thread 有问题时调用。只清闭包里的 id，
+    // 排队中的下一条消息照常由 pump 起跑，但 startTurn 会收到空串并开新 thread。
+    dropSession: () => {
+      sessionId = "";
     },
     // 优雅收尾:不再收新消息,手头这轮跑完就结束事件流。
     close: () => {
