@@ -38,7 +38,7 @@ export function bulkPreflightAllowsRun(successCount: number, failureCount: numbe
 }
 
 export function bulkTargetProjectId(
-  task: Task,
+  task: TaskListItem,
   probe: TaskScopedHandoffPreflightResult,
   selectedProjectId: string,
 ): string {
@@ -51,6 +51,20 @@ export function bulkTargetProjectId(
 const normalizedTargetUrl = (url: string): string => url.trim().replace(/\/+$/, "");
 const sameFingerprint = (left?: string | null, right?: string | null): boolean =>
   Boolean(left && right && left.toLowerCase() === right.toLowerCase());
+
+export function bulkTaskReturnsToTarget(
+  task: TaskListItem,
+  targetFingerprint: string | null | undefined,
+  targetUrl: string,
+): boolean {
+  if (task.handoff?.direction !== "in" || !task.handoff.peerFp) return false;
+  if (targetFingerprint) return sameFingerprint(task.handoff.peerFp, targetFingerprint);
+
+  // 未做过整机配对时设置项没有 peerFp，只把地址相同的接入任务送进正式预检。
+  // 真正的免审批授权仍由来源机按任务 marker 里的 peerFp 核验，地址相同不能绕过服务端身份校验。
+  if (!task.handoff.peerUrl) return false;
+  return normalizedTargetUrl(task.handoff.peerUrl) === normalizedTargetUrl(targetUrl);
+}
 
 export function outboundTasksForTarget<T extends TaskListItem>(
   tasks: T[],
@@ -79,6 +93,7 @@ export function partitionBulkHandoffTasks<T extends TaskListItem>(
   tasks: T[],
   projectId: string,
   targetFingerprint?: string | null,
+  targetUrl = "",
 ): { eligible: T[]; skipped: BulkHandoffSkip[] } {
   const eligible: T[] = [];
   const skipped: BulkHandoffSkip[] = [];
@@ -93,8 +108,8 @@ export function partitionBulkHandoffTasks<T extends TaskListItem>(
     else if (task.handoff?.direction === "out" && task.handoff.pending) reason = "上次接力仍待确认，需单独收口";
     else if (task.handoff?.direction === "out") reason = "已经接力出去";
     else if (task.handoff?.direction === "in"
-      && (!task.handoff.peerFp || !targetFingerprint || task.handoff.peerFp !== targetFingerprint)) {
-      reason = "从别处接来的任务只能移回来源机器，当前所选主机不是来源机";
+      && !bulkTaskReturnsToTarget(task, targetFingerprint, targetUrl)) {
+      reason = "任务记录的来源机与当前所选主机不一致";
     }
 
     if (reason) skipped.push({ task, reason });

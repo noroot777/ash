@@ -502,7 +502,9 @@ try {
     body: JSON.stringify({ targetUrl: machineA, targetProjectId: projectA.id, targetName: "A", autoResume: false }),
   });
   assert.equal(divergedReturn.status, 502);
-  assert.match(((await divergedReturn.json()) as { error: string }).error, /本地提交|分叉/);
+  const divergedError = ((await divergedReturn.json()) as { error: string }).error;
+  assert.match(divergedError, /目标机现有的任务 worktree.*(?:本地提交|分叉)/);
+  assert.doesNotMatch(divergedError, /原机保留|持有机|重试移回/, "分叉保护提示必须同时适用于普通接力和移回");
   assert.equal(execFileSync("git", ["-C", originWorktree, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(), originDivergedHead);
   assert.equal(existsSync(join(originWorktree, "origin-after-handoff.txt")), true, "被挡下时原机已提交工作必须原样保留");
   assert.equal((await api<Task>(machineB, `/tasks/${task.id}`)).handoff?.direction, "in");

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   bulkPreflightAllowsRun,
   bulkPreflightIssue,
+  bulkTaskReturnsToTarget,
   bulkTargetProjectId,
   outboundTasksForTarget,
   partitionBulkHandoffTasks,
@@ -53,7 +54,7 @@ const result = partitionBulkHandoffTasks([
 assert.deepEqual(result.eligible.map((item) => item.id), ["ready"]);
 assert.deepEqual(result.skipped.map((item) => item.task.id), ["team", "queued", "verifying", "pending", "inbound"]);
 assert.match(result.skipped.find((item) => item.task.id === "pending").reason, /单独收口/);
-assert.match(result.skipped.find((item) => item.task.id === "inbound").reason, /只能移回来源机器/);
+assert.match(result.skipped.find((item) => item.task.id === "inbound").reason, /来源机与当前所选主机不一致/);
 
 const statusResult = partitionBulkHandoffTasks([
   task("running", { status: "running" }),
@@ -75,6 +76,33 @@ const bulkReturn = partitionBulkHandoffTasks([
   task("return-home", { handoff: { direction: "in", peerFp: sourceFp } }),
 ], "p1", sourceFp);
 assert.deepEqual(bulkReturn.eligible.map((item) => item.id), ["local", "return-home"]);
+
+const returnByUrl = task("return-by-url", {
+  handoff: { direction: "in", peerFp: sourceFp, peerUrl: "http://source:4317/" },
+});
+assert.equal(
+  bulkTaskReturnsToTarget(returnByUrl, null, "http://source:4317"),
+  true,
+  "未做整机配对时，应允许同来源地址的任务进入正式移回预检",
+);
+assert.equal(
+  bulkTaskReturnsToTarget(returnByUrl, sourceFp.toUpperCase(), "http://stale-address:4317"),
+  true,
+  "有双方指纹时应优先使用大小写无关的身份比较",
+);
+assert.equal(
+  bulkTaskReturnsToTarget(returnByUrl, thirdFp, "http://source:4317"),
+  false,
+  "已知目标身份不匹配时不能用相同地址放行",
+);
+const bulkReturnWithoutRegisteredFingerprint = partitionBulkHandoffTasks([
+  returnByUrl,
+], "p1", null, "http://source:4317");
+assert.deepEqual(
+  bulkReturnWithoutRegisteredFingerprint.eligible.map((item) => item.id),
+  ["return-by-url"],
+  "设置目标只有 URL 时，来源地址一致的接入任务仍应可批量移回",
+);
 
 const returnedHome = partitionBulkHandoffTasks([
   task("returned-home", { handoff: { direction: "returned", peerFp: thirdFp } }),

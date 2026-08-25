@@ -14,6 +14,7 @@ import { HandoffDialogHeader, HandoffRouteCard } from "../task-detail/HandoffDia
 import {
   bulkPreflightAllowsRun,
   bulkPreflightIssue,
+  bulkTaskReturnsToTarget,
   bulkTargetProjectId,
   outboundTasksForTarget,
   partitionBulkHandoffTasks,
@@ -74,11 +75,16 @@ function BulkHandoffDialog({
 }) {
   // 对话框打开时冻结本次批量清单。正式接力会让 tasks 通过 SSE 实时变成 out；如果继续
   // 跟着重算，成功页会把刚搬走的任务反列成「不可接力」，甚至冒出“没有任务”的警告。
-  const [{ eligible, skipped }] = useState(() => partitionBulkHandoffTasks(tasks, project.id, target.peerFp));
+  const [{ eligible, skipped }] = useState(() => partitionBulkHandoffTasks(
+    tasks,
+    project.id,
+    target.peerFp,
+    target.url,
+  ));
   const returnOnly = eligible.length > 0 && eligible.every(
-    (task) => task.handoff?.direction === "in" && Boolean(task.handoff.peerFp)
-      && task.handoff.peerFp === target.peerFp,
+    (task) => bulkTaskReturnsToTarget(task, target.peerFp, target.url),
   );
+  const canProbeWithoutApproval = Boolean(target.peerFp) || returnOnly;
   const actionName = returnOnly ? "移回" : "接力";
   const sample = eligible[0] ?? null;
   const mounted = useRef(true);
@@ -176,11 +182,11 @@ function BulkHandoffDialog({
   }, [eligible.length, phase, sample?.id, target.url]);
 
   useEffect(() => {
-    if (target.peerFp && sample && !firstProbe && phase === "idle" && !autoProbeAttempted.current) {
+    if (canProbeWithoutApproval && sample && !firstProbe && phase === "idle" && !autoProbeAttempted.current) {
       autoProbeAttempted.current = true;
       void probeFirst();
     }
-  }, [firstProbe, phase, probeFirst, sample, target.peerFp]);
+  }, [canProbeWithoutApproval, firstProbe, phase, probeFirst, sample]);
 
   const blocked = firstProbe?.peer?.peerStatus === "pending" || firstProbe?.peer?.peerStatus === "blocked";
   const busy = phase !== "idle";
@@ -331,7 +337,7 @@ function BulkHandoffDialog({
   const confirm = () => {
     if (result) { onClose(); return; }
     if (!firstProbe || blocked) {
-      if (target.peerFp && !blocked) void probeFirst();
+      if (canProbeWithoutApproval && !blocked) void probeFirst();
       else void requestApproval();
       return;
     }
@@ -342,7 +348,7 @@ function BulkHandoffDialog({
   const confirmLabel = result
     ? "完成"
     : !firstProbe || blocked
-      ? target.peerFp && !blocked ? `重新检查${returnOnly ? "来源机" : "目标机"}` : blocked ? `检查${actionName}申请状态` : `发送${actionName}申请`
+      ? canProbeWithoutApproval && !blocked ? `重新检查${returnOnly ? "来源机" : "目标机"}` : blocked ? `检查${actionName}申请状态` : `发送${actionName}申请`
       : !checkedAll
         ? `${preflightFailures.length > 0 ? "重新检查" : "检查"} ${eligible.length} 个${actionName}任务`
         : readyRunningCount > 0
