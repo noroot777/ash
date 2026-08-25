@@ -61,10 +61,18 @@ ok("不误伤 root 闸 / 余额 / 404 / 格式错 等其它失败");
 
 const POISON_UNKNOWN_TURN =
   "dropping turn-scoped item for unknown turn id 01a03642-0000-7000-8000-000000000000";
+const POISON_MISSING_WORLD_STATE =
+  "ignored world-state patch without a full snapshot";
 const POISON_FLUSH =
   "failed to flush rollout after emitting terminal turn event: thread 01a03415-e32e-72d2-8510-26a3beb2832f not found";
 assert.ok(codexSessionPoisonReason(POISON_UNKNOWN_TURN), "应识别真机 unknown-turn poisoned stderr");
 assert.equal(sessionResumeFault(POISON_UNKNOWN_TURN), "poisoned");
+assert.match(
+  codexSessionPoisonReason(POISON_MISSING_WORLD_STATE) ?? "",
+  /world-state/,
+  "应在第一次无工具回合就识别真机缺失完整 world-state 的 stderr",
+);
+assert.equal(sessionResumeFault(POISON_MISSING_WORLD_STATE), "poisoned");
 assert.equal(
   codexSessionPoisonReason(POISON_FLUSH),
   null,
@@ -76,7 +84,7 @@ assert.equal(shouldDropSession("lost", 0), false, "普通会话不存在仍保�
 assert.equal(mergeSessionResumeFault("lost", POISON_UNKNOWN_TURN), "poisoned", "后到的 poisoned 信号必须升级判定");
 assert.match(SESSION_POISONED_NOTE, /exit 0/);
 assert.match(SESSION_POISONED_NOTE, /全新会话/);
-ok("Codex unknown-turn 指纹判 poisoned；可恢复的 rollout flush warning 不误清");
+ok("Codex 缺 world-state / unknown-turn 指纹判 poisoned；可恢复的 rollout flush warning 不误清");
 
 // ── ① 执行器原样带出来 ──────────────────────────────────────────────────────
 // claude.ts 对 CLI 的 stderr 有一层措辞归一(normalizeClaudeCliError)。这句要是哪天

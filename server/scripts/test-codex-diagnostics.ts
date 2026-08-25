@@ -47,6 +47,7 @@ assert.deepEqual(classifyCodexExit(base({ exitStatus: 1, stopRequested: true }))
 });
 
 const poisonedStderr = [
+  "ignored world-state patch without a full snapshot\n",
   "dropping turn-scoped item for unknown turn id 01a03642-0000-7000-8000-000000000000\n".repeat(15),
 ];
 for (const stderrTail of poisonedStderr) {

@@ -33,6 +33,10 @@ export function isSessionLost(message: string): boolean {
 
 const CODEX_POISON_PATTERNS: ReadonlyArray<{ pattern: RegExp; reason: string }> = [
   {
+    pattern: /ignored world-state patch without a full snapshot\b/i,
+    reason: "Codex stderr 出现 `ignored world-state patch without a full snapshot`，恢复 thread 缺少工具所需的完整 world-state。",
+  },
+  {
     pattern: /dropping turn-scoped item for unknown turn id\b/i,
     reason: "Codex stderr 出现 `dropping turn-scoped item for unknown turn id`，恢复 thread 已无法对应旧回合。",
   },
