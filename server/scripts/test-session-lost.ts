@@ -19,7 +19,15 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { readCodexCliVersion } from "../src/executors/codex-rollout.js";
-import { LOST_SESSION_PATCH, isSessionLost } from "../src/executors/session-lost.js";
+import {
+  LOST_SESSION_PATCH,
+  SESSION_POISONED_NOTE,
+  codexSessionPoisonReason,
+  isSessionLost,
+  mergeSessionResumeFault,
+  sessionResumeFault,
+  shouldDropSession,
+} from "../src/executors/session-lost.js";
 import { affectedCodexSessionReplacementNote } from "../src/executors/version-policy.js";
 import { parseClaudeStream } from "../src/executors/claude.js";
 import { affectedCodexResumeVersion } from "../src/session-version-guard.js";
@@ -50,6 +58,21 @@ for (const other of [
   assert.equal(isSessionLost(other), false, `不该误判:${other.slice(0, 40)}`);
 }
 ok("不误伤 root 闸 / 余额 / 404 / 格式错 等其它失败");
+
+const POISON_UNKNOWN_TURN =
+  "dropping turn-scoped item for unknown turn id 01a03642-0000-7000-8000-000000000000";
+const POISON_FLUSH =
+  "failed to flush rollout after emitting terminal turn event: thread 01a03415-e32e-72d2-8510-26a3beb2832f not found";
+for (const signal of [POISON_UNKNOWN_TURN, POISON_FLUSH]) {
+  assert.ok(codexSessionPoisonReason(signal), `应识别真机 poisoned stderr:${signal}`);
+  assert.equal(sessionResumeFault(signal), "poisoned");
+}
+assert.equal(shouldDropSession("poisoned", 0), true, "poisoned thread 即使 exit 0 也必须作废");
+assert.equal(shouldDropSession("lost", 0), false, "普通会话不存在仍保留 exit 0 防误清语义");
+assert.equal(mergeSessionResumeFault("lost", POISON_UNKNOWN_TURN), "poisoned", "后到的 poisoned 信号必须升级判定");
+assert.match(SESSION_POISONED_NOTE, /exit 0/);
+assert.match(SESSION_POISONED_NOTE, /全新会话/);
+ok("Codex 两类真机 stderr 均优先判为 poisoned，exit 0 仍清恢复字段");
 
 // ── ① 执行器原样带出来 ──────────────────────────────────────────────────────
 // claude.ts 对 CLI 的 stderr 有一层措辞归一(normalizeClaudeCliError)。这句要是哪天
@@ -152,11 +175,13 @@ assert.deepEqual(
   chains,
   Object.keys(CHAIN_OWNER).sort(),
   "server/src 里拿库存 id 续跑的地方变了。新增一条链的话:先在它自己的结算里接上 "
-    + "isSessionLost + LOST_SESSION_PATCH,再把它登记进 CHAIN_OWNER",
+    + "mergeSessionResumeFault + LOST_SESSION_PATCH,再把它登记进 CHAIN_OWNER",
 );
 for (const [chain, owner] of Object.entries(CHAIN_OWNER)) {
   const code = readFileSync(join(SRC, owner), "utf8");
   assert.ok(code.includes("LOST_SESSION_PATCH"), `${chain} 的结算方 ${owner} 没在清失效会话`);
+  assert.ok(code.includes("mergeSessionResumeFault"), `${chain} 的结算方 ${owner} 没识别 poisoned 会话`);
+  assert.ok(code.includes("shouldDropSession"), `${chain} 的结算方 ${owner} 没让 poisoned exit 0 作废`);
 }
 ok("每条续跑链都有人负责清失效 id");
 

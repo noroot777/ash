@@ -14,7 +14,13 @@ import { now } from "./util.js";
 import { setTaskStatus } from "./status.js";
 import { takeStopped, takeConfirmed, type StopSettle } from "./runs.js";
 import type { AgentExecutor, RunHandle } from "./executors/types.js";
-import { LOST_SESSION_PATCH, SESSION_LOST_NOTE, isSessionLost } from "./executors/session-lost.js";
+import {
+  LOST_SESSION_PATCH,
+  mergeSessionResumeFault,
+  sessionResumeFaultNote,
+  shouldDropSession,
+  type SessionResumeFault,
+} from "./executors/session-lost.js";
 import { appendSessionTrace, writeTurnEnd, writeRunError } from "./transcript.js";
 import { notifyTeamLead } from "./team/inbox.js";
 import { handleTaskSettlement } from "./review.js";
@@ -245,9 +251,10 @@ export async function consumeSingleRun(a: {
   try {
   let cliSessionId = a.cliSessionId;
   let exitStatus = 0;
-  // CLI 否认过这条会话吗（见 executors/session-lost.ts）。认下来的话这一轮收尾时要把
-  // 失效的 id 从库里清掉，否则每一次重试都在 --resume 同一个不存在的会话。
-  let sessionLost = false;
+  // CLI 否认过这条会话，或 Codex stderr 证明 thread 已 poisoned 吗（见
+  // executors/session-lost.ts）。认下来的话这一轮收尾时要把失效 id 从库里清掉，
+  // 否则每一次重试都在 --resume 同一条坏会话。
+  let sessionFault: SessionResumeFault | null = null;
   let titleDone = !a.autoTitle; // when autoTitle, swallow text until the title line is parsed
   let head = "";
   let pendingTraceText = "";
@@ -363,7 +370,7 @@ export async function consumeSingleRun(a: {
         persistTrace(emittedEvent);
         if (emittedEvent.kind === "error") {
           writeRunError(out, emittedEvent.message);
-          if (isSessionLost(emittedEvent.message)) sessionLost = true;
+          sessionFault = mergeSessionResumeFault(sessionFault, emittedEvent.message);
         }
         // 水位相反：**覆盖**。它属于整条会话的此刻，不属于某一个回合，所以也不进 trace。
         if (emittedEvent.kind === "context") await setSessionContext(sessId, emittedEvent.context);
@@ -390,8 +397,9 @@ export async function consumeSingleRun(a: {
   // CLI 否认了这条会话：把失效的 id 连同由它派生的三件套恢复命令一起清掉。清了之后
   // orchestrator 的 `resuming`（判据就是「这条会话行上有没有 cli_session_id」）自然为
   // 假，下一次运行走全新会话那条路 —— 不必在别处再加一个「要不要续」的开关。
-  // 退出码 0 也要求上：正常收尾的回合不该因为正文里出现过这句话就丢掉会话。
-  const dropSession = sessionLost && exitStatus !== 0;
+  // 普通 lost 仍要求非零退出，防止正文碰巧出现原话；poisoned 是 stderr 诊断生成的
+  // error，即使 exit 0 / turn.completed 也必须清掉。
+  const dropSession = shouldDropSession(sessionFault, exitStatus);
   await closeExecution(stopped ?? (exitStatus === 0 ? "completed" : "failed"), endIso);
   await db
     .update(sessions)
@@ -412,12 +420,13 @@ export async function consumeSingleRun(a: {
     })
     .where(eq(sessions.id, sessId));
   if (dropSession) {
-    // 只弹一句错误不算数：用户看到的是一行英文 `No conversation found with session ID`，
-    // 看不出 ash 已经替他把死 id 清了、也看不出重试会丢上下文。跟别的诊断一样三处都落：
+    const note = sessionResumeFaultNote(sessionFault!);
+    // 只弹一句错误不算数：用户看不出 ash 已经替他把坏 id 清了、也看不出重试会丢
+    // 上下文。跟别的诊断一样三处都落：
     // .md 原始产物、trace（刷新后还在）、SSE（实时）。
-    out.write(`\n> ${SESSION_LOST_NOTE}\n`);
-    persistTrace({ kind: "error", message: SESSION_LOST_NOTE }, endIso);
-    publishEvent({ kind: "error", message: SESSION_LOST_NOTE });
+    out.write(`\n> ${note}\n`);
+    persistTrace({ kind: "error", message: note }, endIso);
+    publishEvent({ kind: "error", message: note });
   }
   // 这一轮有没有「交卷时通道断了」的调用：有就替它补录。**必须排在 settleTaskStatus
   // 之前** —— complete_task 的补录要赶在结算读确认标记之前落库，晚一步，一个干完活的

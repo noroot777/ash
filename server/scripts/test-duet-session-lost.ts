@@ -47,6 +47,10 @@ const taskId = "duet-session-lost";
 const DEAD_ID = "6f8c7cdd-b820-416e-a4f3-96b516d6a8e2";
 // 真机原话(claude 2.1.220 对着一个不存在的 transcript 跑 `--resume`)。
 const REAL = `No conversation found with session ID: ${DEAD_ID}`;
+const POISONED_ID = "01a03415-e32e-72d2-8510-26a3beb2832f";
+const POISONED =
+  "Codex 运行诊断: termination=poisoned_session; failure=poisoned_session; "
+  + "reason=Codex stderr 出现 `dropping turn-scoped item for unknown turn id`，恢复 thread 已无法对应旧回合。";
 
 await db.insert(projects).values({ id: "p", name: "p", repoPath: stage, apiKeys: null, createdAt: at });
 await db.insert(tasks).values({
@@ -115,6 +119,51 @@ ok("库里的 id + 三件套恢复命令都清了");
 assert.equal(turn.cliId, "", "返回值里的 cliId 没清,后续轮次会接着 --resume 死 id");
 assert.ok(turn.error?.includes("已经把这个失效的 id 清掉"), "错误文本里要带上说明(时间线/transcript 都取自它)");
 ok("返回值里的 cliId 也清了,后续轮次会开新会话");
+
+// 真机 Codex 的 poisoned thread 会同时给 turn.completed / exit 0。不能沿用上面的
+// 非零退出前提：诊断 error 本身就是恢复状态已损坏的证据，四列照样清，并持久解释。
+const poisonedTaskId = "duet-session-poisoned";
+await db.insert(tasks).values({
+  id: poisonedTaskId, projectId: "p", groupId: null, parentId: null, title: "会话毒化", body: "", mode: "duet",
+  status: "running", labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: null, executorId: null,
+  autoTitle: false, duet: null, team: null, scheduleId: null, createdAt: at, updatedAt: at,
+  useWorktree: false, worktreeBase: null, originTaskId: null,
+});
+const poisonedExecutor = {
+  type: "codex",
+  label: "codex@stub",
+  run: () => ({
+    sessionId: POISONED_ID,
+    commandLine: `codex exec resume ${POISONED_ID}`,
+    events: (async function* () {
+      yield { kind: "error", message: POISONED };
+      yield { kind: "done", exitStatus: 0 };
+    })(),
+    kill() {},
+  }),
+  resumeCommand: () => `codex exec resume ${POISONED_ID}`,
+  resumeFields: () => ({ resumeCommand: `codex exec resume ${POISONED_ID}`, resumeEnv: "K=x", resumeArgs: "--json" }),
+} as unknown as Parameters<typeof duet.runTurn>[0]["executor"];
+const poisonedTurn = await duet.runTurn({
+  taskId: poisonedTaskId, role: "voiceA", speaker: "A", round: 1, executor: poisonedExecutor,
+  prompt: "继续旧 thread", cwd: stage, resumeCliId: POISONED_ID,
+});
+const [poisonedRow] = await db.select().from(sessions).where(eq(sessions.id, poisonedTurn.rowId));
+assert.equal(poisonedRow.cliSessionId, null, "poisoned exit 0 仍残留 cli_session_id");
+assert.equal(poisonedRow.resumeCommand, null, "poisoned exit 0 没清 resume_command");
+assert.equal(poisonedRow.resumeEnv, null, "poisoned exit 0 没清 resume_env");
+assert.equal(poisonedRow.resumeArgs, null, "poisoned exit 0 没清 resume_args");
+assert.equal(poisonedRow.exitStatus, 0, "poisoned 判断不能篡改 Codex 的真实 exit 0");
+assert.equal(poisonedTurn.cliId, "", "poisoned exit 0 的返回值仍会让下一轮 resume");
+assert.match(poisonedTurn.error ?? "", /下一次运行会从任务正文自动开启一条\*\*全新会话\*\*/);
+const poisonedMdPath = join(process.env.ASH_RUNS_DIR!, poisonedTaskId, `${poisonedTurn.rowId}.md`);
+let poisonedMd = "";
+for (let i = 0; i < 100 && !poisonedMd.includes("下一次运行会从任务正文自动开启"); i++) {
+  try { poisonedMd = readFileSync(poisonedMdPath, "utf8"); } catch { /* 还没建出来 */ }
+  if (!poisonedMd.includes("下一次运行会从任务正文自动开启")) await new Promise((r) => setTimeout(r, 20));
+}
+assert.match(poisonedMd, /即使进程 exit 0 且发出 turn\.completed/);
+ok("Codex poisoned stderr 即使 exit 0 也清恢复字段并持久提示下一次自动 fresh");
 
 // ⑤ 清完之后的下一轮:开出来的新会话 id 必须**落库**。
 // 只清不写回,库里就停在「resume_command 指向新会话、cli_session_id 却是空」的自相矛盾

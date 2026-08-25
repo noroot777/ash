@@ -279,7 +279,11 @@ export async function* parseCodexStream(
       agentMessageCount,
     });
     const failure = formatFailureForTimeline(diagnostics);
-    if (failure && !lifecycle.stopRequested) push({ kind: "error", message: failure });
+    // 手停通常不追加 CLI 失败诊断；但 poisoned thread 是恢复状态本身已经坏了，
+    // 即使恰好同时手停也要把信号交给结算方清掉，不能让下一轮继续 resume。
+    if (failure && (!lifecycle.stopRequested || diagnostics.failureKind === "poisoned_session")) {
+      push({ kind: "error", message: failure });
+    }
     push({ kind: "done", exitStatus: opts.exitStatus });
     resolve?.();
     resolve = null;

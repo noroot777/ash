@@ -1,5 +1,6 @@
 import { closeSync, mkdirSync, openSync, writeFileSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
+import { codexSessionPoisonReason } from "./session-lost.js";
 
 export interface RunTracePaths {
   eventsPath: string;
@@ -14,7 +15,8 @@ export type RunFailureKind =
   | "stream_flush_timeout"
   | "silent_nonzero_exit"
   | "nonzero_exit"
-  | "missing_turn_completion";
+  | "missing_turn_completion"
+  | "poisoned_session";
 
 export type RunTerminationKind = RunFailureKind | "completed" | "manual_stop";
 
@@ -55,6 +57,10 @@ export interface CodexExitEvidence {
 }
 
 export function classifyCodexExit(e: CodexExitEvidence): Pick<RunDiagnostics, "terminationKind" | "failureKind" | "failureReason"> {
+  const poisonReason = codexSessionPoisonReason(e.stderrTail);
+  if (poisonReason) {
+    return { terminationKind: "poisoned_session", failureKind: "poisoned_session", failureReason: poisonReason };
+  }
   if (e.stopRequested) {
     return { terminationKind: "manual_stop", failureKind: null, failureReason: null };
   }

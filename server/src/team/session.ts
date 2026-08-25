@@ -40,7 +40,13 @@ import { pauseGroup } from "../scheduler.js";
 import { taskWorkspace } from "../task-workspace.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import type { ResidentHandle } from "../executors/types.js";
-import { LOST_SESSION_PATCH, SESSION_LOST_NOTE, isSessionLost } from "../executors/session-lost.js";
+import {
+  LOST_SESSION_PATCH,
+  mergeSessionResumeFault,
+  sessionResumeFaultNote,
+  shouldDropSession,
+  type SessionResumeFault,
+} from "../executors/session-lost.js";
 import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
 import { recordUserConversationTurn } from "../conversation-turn.js";
@@ -395,10 +401,11 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
 // ── 事件消费 ────────────────────────────────────────────────────────────────
 async function consume(lead: Lead): Promise<void> {
   let exitStatus = 0;
-  // CLI 否认过这条会话吗(见 executors/session-lost.ts)。调度台是常驻会话,踩这个坑
-  // 比一次性任务更死:每次说话都 --resume 同一个不存在的 id,而收尾那句话还在告诉
+  // CLI 否认过这条会话，或 Codex stderr 证明 thread 已 poisoned 吗（见
+  // executors/session-lost.ts）。调度台是常驻会话，踩这个坑比一次性任务更死：
+  // 每次说话都 --resume 同一个坏 id，而收尾那句话还在告诉
   // 用户「会话还在,再说一句就能接回」—— 他会照做,然后一次次撞同一堵墙。
-  let sessionLost = false;
+  let sessionFault: SessionResumeFault | null = null;
   let pendingTraceText = "";
   const flushTraceText = () => {
     if (!pendingTraceText) return;
@@ -448,7 +455,7 @@ async function consume(lead: Lead): Promise<void> {
       if (emittedEvent.kind === "context") await setSessionContext(lead.sessId, emittedEvent.context);
       if (emittedEvent.kind === "error") {
         writeRunError(lead.out, emittedEvent.message);
-        if (isSessionLost(emittedEvent.message)) sessionLost = true;
+        sessionFault = mergeSessionResumeFault(sessionFault, emittedEvent.message);
       }
       if (emittedEvent.kind === "done") exitStatus = emittedEvent.exitStatus;
       publish(lead, emittedEvent);
@@ -457,7 +464,7 @@ async function consume(lead: Lead): Promise<void> {
     publish(lead, event);
   }
   flushTraceText();
-  await closeLead(lead, exitStatus, sessionLost);
+  await closeLead(lead, exitStatus, sessionFault);
 }
 
 function publish(lead: Lead, event: AgentEvent): void {
@@ -517,7 +524,7 @@ async function endTurn(lead: Lead): Promise<void> {
   armIdle(lead);
 }
 
-async function closeLead(lead: Lead, exitStatus: number, sessionLost = false): Promise<void> {
+async function closeLead(lead: Lead, exitStatus: number, sessionFault: SessionResumeFault | null = null): Promise<void> {
   clearIdle(lead);
   takeStopped(lead.taskId); // 消费停止标记:团队不走 settleTaskStatus,别漏给下一次
   untrackRun(lead.taskId, lead.handle);
@@ -533,7 +540,8 @@ async function closeLead(lead: Lead, exitStatus: number, sessionLost = false): P
   // superseded 也要排除:这条会话行已经被新进程接管了(工作目录被抽走那条路会复用同一
   // 行),晚到的旧收尾要是把新进程刚报上来的有效 id 抹掉,新常驻会话的 id 就永久丢了
   // —— 内存里 lead.cliSessionId 已是新值,那条「id 变了才写库」的分支不会再补写一次。
-  const dropSession = sessionLost && exitStatus !== 0 && !superseded;
+  const dropSession = shouldDropSession(sessionFault, exitStatus) && !superseded;
+  const dropNote = dropSession ? sessionResumeFaultNote(sessionFault!) : null;
   await db
     .update(sessions)
     .set({
@@ -545,11 +553,11 @@ async function closeLead(lead: Lead, exitStatus: number, sessionLost = false): P
     .where(eq(sessions.id, lead.sessId));
   if (lead.closing === "recycle") {
     recordSystemTurn(lead, RECYCLE_NOTE(Math.round(IDLE_MS / 60_000)));
-  } else if (!lead.closing && exitStatus !== 0) {
+  } else if (!lead.closing && (exitStatus !== 0 || dropSession)) {
     // 既不是回收也不是手停 —— 进程自己没了。会话还在,说句话就能接回;除非 CLI 刚
-    // 否认过这条会话,那句「会话还在」就成了把用户推回同一堵墙的错误指路。
+    // 否认过或判定 poisoned，那句「会话还在」就成了把用户推回同一堵墙的错误指路。
     const msg = dropSession
-      ? `调度台进程意外退出(exit ${exitStatus})。${SESSION_LOST_NOTE}`
+      ? `${exitStatus !== 0 ? `调度台进程意外退出(exit ${exitStatus})。` : ""}${dropNote}`
       : `调度台进程意外退出(exit ${exitStatus})。CLI 会话还在,再说一句话会自动接回;需要的话也可以点「继续」。`;
     writeRunError(lead.out, msg);
     appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message: msg }, endIso);
@@ -559,7 +567,7 @@ async function closeLead(lead: Lead, exitStatus: number, sessionLost = false): P
   // —— 不当场更正,用户刷新后看到的指引与真实状态正好相反,照做一次再撞一次墙。上面
   // 那个「进程自己没了」的分支已经在 msg 里说过了,别重复。
   if (dropSession && lead.closing) {
-    const msg = `更正上面那条:CLI 会话接不回了。${SESSION_LOST_NOTE}`;
+    const msg = `更正上面那条:CLI 会话接不回了。${dropNote}`;
     writeRunError(lead.out, msg);
     appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message: msg }, endIso);
     publish(lead, { kind: "error", message: msg });

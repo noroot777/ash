@@ -17,7 +17,13 @@ import { bus } from "../bus.js";
 import { id, now } from "../util.js";
 import { trackRun, untrackRun, isCanceling, CanceledRun } from "../runs.js";
 import type { AgentExecutor } from "../executors/types.js";
-import { LOST_SESSION_PATCH, SESSION_LOST_NOTE, isSessionLost } from "../executors/session-lost.js";
+import {
+  LOST_SESSION_PATCH,
+  mergeSessionResumeFault,
+  sessionResumeFaultNote,
+  shouldDropSession,
+  type SessionResumeFault,
+} from "../executors/session-lost.js";
 import { RUNS_DIR } from "../paths.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
@@ -149,10 +155,11 @@ export async function runTurn(args: {
   let text = "";
   let exit = 0;
   let errorMsg: string | undefined;
-  // CLI 否认过这条会话吗(见 executors/session-lost.ts)。duet 有自己的会话行与自己的
+  // CLI 否认过这条会话，或 Codex stderr 证明 thread 已 poisoned 吗（见
+  // executors/session-lost.ts）。duet 有自己的会话行与自己的
   // 结算,不经过 single-run.ts —— 漏掉这里,duet 任务会一直 --resume 同一个死 id:
   // 库里那份喂下一次 /retry,返回值里那份喂本次运行的后续轮次,两处都要清。
-  let sessionLost = false;
+  let sessionFault: SessionResumeFault | null = null;
   // 本回合的执行过程,随回合一起落盘(见 TurnTraceEvent):刷新后时间线才展得开。
   const trace: TurnTraceEvent[] = [];
   const TRACE_CAP = 200;
@@ -179,7 +186,7 @@ export async function runTurn(args: {
       } else if (event.kind === "error") {
         errorMsg = event.message;
         out.write("✕ " + event.message + "\n");
-        if (isSessionLost(event.message)) sessionLost = true;
+        sessionFault = mergeSessionResumeFault(sessionFault, event.message);
       } else if (event.kind === "context") {
         await setSessionContext(rowId, event.context);
       } else if (event.kind === "done") {
@@ -209,13 +216,14 @@ export async function runTurn(args: {
   }
   const endIso = now();
   const durationMs = Math.max(0, Date.parse(endIso) - Date.parse(turnStart));
-  // CLI 否认了这条会话:清掉失效 id 和由它派生的恢复命令,并把这件事写进本轮的错误
+  // CLI 否认或判定 poisoned：清掉失效 id 和由它派生的恢复命令，并把这件事写进本轮的错误
   // 文本 —— 时间线和 transcript 都取自 errorMsg,不写进去用户只看得到一行英文,不知道
   // 下一次重试会是全新会话(**上下文不带过来**)。
-  const dropSession = sessionLost && exit !== 0;
+  const dropSession = shouldDropSession(sessionFault, exit);
   if (dropSession) {
-    errorMsg = `${errorMsg ?? ""}\n${SESSION_LOST_NOTE}`.trim();
-    out.write("✕ " + SESSION_LOST_NOTE + "\n");
+    const note = sessionResumeFaultNote(sessionFault!);
+    errorMsg = `${errorMsg ?? ""}\n${note}`.trim();
+    out.write("✕ " + note + "\n");
   }
   // 关流放在**所有** out.write 之后。写已 end 的流不是静默丢弃,是 stream 上一个没人听的
   // 'error' 事件('ERR_STREAM_WRITE_AFTER_END'),会当场把整个 server 打崩 —— 而且只在
