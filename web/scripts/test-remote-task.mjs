@@ -26,6 +26,7 @@ assert.doesNotMatch(handoff, /href=\{result\.remoteUrl\}/, "接力完成态不�
 assert.match(handoff, /onOpenRemote=\{!inboundHandoff && target \?/, "移回完成态不能提供不可用的远程任务入口");
 assert.match(handoff, /id="handoff-return-source-url"/, "旧接入记录无法定位来源机时应允许临时补 URL");
 assert.match(handoff, /peerFp: inboundHandoff\.peerFp/, "手工来源地址仍须绑定任务记录的来源指纹");
+assert.match(handoff, /inboundHandoff && preflightError/, "旧记录被过期设置地址卡住时也应显示临时地址输入");
 assert.doesNotMatch(handoffViews, /index === 2|is-active/, "单任务传输不能展示伪造的精确阶段");
 assert.match(handoffViews, /本次将执行/, "单任务传输应把步骤表述为将执行清单");
 assert.match(handoff, /className="task-handoff-open" onClick=\{onOpenRemote\}/, "历史横幅也应复用本机代理视图");

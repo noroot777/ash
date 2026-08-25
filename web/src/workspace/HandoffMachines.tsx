@@ -17,6 +17,12 @@ import { outboundTasksForTarget, partitionBulkHandoffTasks } from "./bulkHandoff
 type TransferFailure = { task: TaskListItem; reason: string };
 type BusyPhase = "idle" | "approval" | "preflight" | "transferring";
 
+async function targetForBulkTask(task: Task, selected: HandoffTarget): Promise<HandoffTarget> {
+  // 接入任务的 marker.peerUrl 是这条任务最近一次导入时恢复的回程地址；设置项可能
+  // 已经过期。批量入口也必须像单任务弹窗一样逐任务解析，不能整批复用侧栏地址。
+  return task.handoff?.direction === "in" ? api.handoffReturnTarget(task.id) : selected;
+}
+
 function approvalText(result: HandoffApprovalResult): string {
   const identity = result.peer ? `目标机身份 ${result.peer.short}。` : "目标机没有提供可核对的身份。";
   if (result.peer?.peerStatus === "pending") return `${identity}申请已送达，等待对方接受。`;
@@ -55,6 +61,7 @@ function BulkHandoffDialog({
   const autoProbeAttempted = useRef(false);
   const [firstProbe, setFirstProbe] = useState<HandoffPreflightResult | null>(null);
   const [preflights, setPreflights] = useState<Map<string, HandoffPreflightResult>>(new Map());
+  const [taskTargets, setTaskTargets] = useState<Map<string, HandoffTarget>>(new Map());
   const [preflightFailures, setPreflightFailures] = useState<TransferFailure[]>([]);
   const [checkedAll, setCheckedAll] = useState(false);
   const [approval, setApproval] = useState<HandoffApprovalResult | null>(null);
@@ -70,9 +77,10 @@ function BulkHandoffDialog({
     return () => { mounted.current = false; };
   }, []);
 
-  const rememberFirstProbe = (taskId: string, probe: HandoffPreflightResult) => {
+  const rememberFirstProbe = (taskId: string, taskTarget: HandoffTarget, probe: HandoffPreflightResult) => {
     setFirstProbe(probe);
     setPreflights(new Map([[taskId, probe]]));
+    setTaskTargets(new Map([[taskId, taskTarget]]));
     setPreflightFailures([]);
     setCheckedAll(eligible.length === 1);
     setProjectId(probe.suggestedProjectId ?? probe.projects[0]?.id ?? "");
@@ -84,12 +92,14 @@ function BulkHandoffDialog({
     setProgress({ done: 0, total: eligible.length, title: sample.title });
     setError(null);
     try {
-      const probe = await api.handoffPreflight(sample.id, target.url);
-      if (mounted.current) rememberFirstProbe(sample.id, probe);
+      const taskTarget = await targetForBulkTask(sample, target);
+      const probe = await api.handoffPreflight(sample.id, taskTarget.url);
+      if (mounted.current) rememberFirstProbe(sample.id, taskTarget, probe);
     } catch (reason) {
       if (mounted.current) {
         setFirstProbe(null);
         setPreflights(new Map());
+        setTaskTargets(new Map());
         setProjectId("");
         setError(reason instanceof Error ? reason.message : String(reason));
       }
@@ -132,8 +142,9 @@ function BulkHandoffDialog({
       }
       if (!sample) return;
       setProgress({ done: 0, total: eligible.length, title: sample.title });
-      const probe = await api.handoffPreflight(sample.id, target.url);
-      if (mounted.current) rememberFirstProbe(sample.id, probe);
+      const taskTarget = await targetForBulkTask(sample, target);
+      const probe = await api.handoffPreflight(sample.id, taskTarget.url);
+      if (mounted.current) rememberFirstProbe(sample.id, taskTarget, probe);
     } catch (reason) {
       if (mounted.current) setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -150,6 +161,9 @@ function BulkHandoffDialog({
     const checked = preflightFailures.length > 0
       ? new Map<string, HandoffPreflightResult>()
       : new Map(preflights);
+    const resolvedTargets = preflightFailures.length > 0
+      ? new Map<string, HandoffTarget>()
+      : new Map(taskTargets);
     setPreflightFailures([]);
     const failures: TransferFailure[] = [];
     for (let index = 0; index < eligible.length; index += 1) {
@@ -157,10 +171,12 @@ function BulkHandoffDialog({
       const task = eligible[index];
       setProgress({ done: index, total: eligible.length, title: task.title });
       try {
-        const probe = checked.get(task.id) ?? await api.handoffPreflight(task.id, target.url);
+        const taskTarget = resolvedTargets.get(task.id) ?? await targetForBulkTask(task, target);
+        const probe = checked.get(task.id) ?? await api.handoffPreflight(task.id, taskTarget.url);
         if (!probe.projects.some((candidate) => candidate.id === projectId)) {
           throw new Error("目标项目已不可用，请重新选择");
         }
+        resolvedTargets.set(task.id, taskTarget);
         checked.set(task.id, probe);
       } catch (reason) {
         failures.push({ task, reason: reason instanceof Error ? reason.message : String(reason) });
@@ -168,6 +184,7 @@ function BulkHandoffDialog({
     }
     if (!mounted.current) return;
     setPreflights(checked);
+    setTaskTargets(resolvedTargets);
     setPreflightFailures(failures);
     setCheckedAll(failures.length === 0 && checked.size === eligible.length);
     setProgress(null);
@@ -183,10 +200,11 @@ function BulkHandoffDialog({
       const task = eligible[index];
       setProgress({ done: index, total: eligible.length, title: task.title });
       try {
+        const taskTarget = taskTargets.get(task.id) ?? await targetForBulkTask(task, target);
         successes.push(await api.handoffTask(task.id, {
-          targetUrl: target.url,
+          targetUrl: taskTarget.url,
           targetProjectId: projectId,
-          targetName: target.name,
+          targetName: taskTarget.name,
           autoResume,
         }));
       } catch (reason) {

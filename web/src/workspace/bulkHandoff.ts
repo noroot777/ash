@@ -6,6 +6,8 @@ export type BulkHandoffSkip = {
 };
 
 const normalizedTargetUrl = (url: string): string => url.trim().replace(/\/+$/, "");
+const sameFingerprint = (left?: string | null, right?: string | null): boolean =>
+  Boolean(left && right && left.toLowerCase() === right.toLowerCase());
 
 export function outboundTasksForTarget<T extends TaskListItem>(
   tasks: T[],
@@ -21,6 +23,9 @@ export function outboundTasksForTarget<T extends TaskListItem>(
       && task.handoff?.direction === "out"
       && !task.handoff.pending
       && Boolean(task.handoff.peerUrl)
+      // 非原机把任务安全移回原机后，本地 out 行只是历史存档；原机上的任务标记为
+      // returned，不再提供远程代理。把这类存档列进侧栏只会得到 401/409。
+      && !sameFingerprint(task.handoff.peerFp, task.handoff.originFp)
       && (targetFingerprint && task.handoff.peerFp
         ? task.handoff.peerFp === targetFingerprint
         : normalizedTargetUrl(task.handoff.peerUrl!) === normalized))

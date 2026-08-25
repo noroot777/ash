@@ -158,6 +158,33 @@ export function HandoffDialog({
     setTargetUrl(url);
   };
 
+  const manualReturnTargetFields = inboundHandoff?.peerFp ? (
+    <>
+      <label htmlFor="handoff-return-source-url">来源机 ash 地址</label>
+      <input
+        id="handoff-return-source-url"
+        value={draftTargetUrl}
+        disabled={busy}
+        placeholder={targetUrl || "http://mac-mini.local:4317"}
+        onChange={(event) => setDraftTargetUrl(event.target.value)}
+        onKeyDown={(event) => { if (event.key === "Enter") useManualReturnTarget(); }}
+      />
+      <small>仅用于这次移回，不会新增整机信任；连接后仍必须与任务记录的来源指纹一致。</small>
+      <Button
+        variant="primary"
+        disabled={busy || !HANDOFF_URL_RE.test(draftTargetUrl.trim())}
+        onClick={useManualReturnTarget}
+      >
+        检查来源机
+      </Button>
+    </>
+  ) : (
+    <p className="handoff-error">
+      <Warning size={13} aria-hidden="true" />
+      这条旧记录没有来源机指纹，无法安全判断该移回哪台机器。请从来源机重新接力一次。
+    </p>
+  );
+
   const requestApproval = async () => {
     if (!targetUrl || busy) return;
     setBusy(true);
@@ -274,32 +301,7 @@ export function HandoffDialog({
               无法自动定位来源机器{inboundHandoff.peerName ? `「${inboundHandoff.peerName}」` : ""}的可回连地址。
               旧接力记录没有保存端口，请填写来源机当前的 ash 地址。
             </p>
-            {inboundHandoff.peerFp ? (
-              <>
-                <label htmlFor="handoff-return-source-url">来源机 ash 地址</label>
-                <input
-                  id="handoff-return-source-url"
-                  value={draftTargetUrl}
-                  disabled={busy}
-                  placeholder="http://mac-mini.local:4317"
-                  onChange={(event) => setDraftTargetUrl(event.target.value)}
-                  onKeyDown={(event) => { if (event.key === "Enter") useManualReturnTarget(); }}
-                />
-                <small>仅用于这次移回，不会新增整机信任；连接后仍必须与任务记录的来源指纹一致。</small>
-                <Button
-                  variant="primary"
-                  disabled={busy || !HANDOFF_URL_RE.test(draftTargetUrl.trim())}
-                  onClick={useManualReturnTarget}
-                >
-                  检查来源机
-                </Button>
-              </>
-            ) : (
-              <p className="handoff-error">
-                <Warning size={13} aria-hidden="true" />
-                这条旧记录没有来源机指纹，无法安全判断该移回哪台机器。请从来源机重新接力一次。
-              </p>
-            )}
+            {manualReturnTargetFields}
           </div>
         ) : targets && targets.length === 0 && !pendingHandoff ? (
           <div className="handoff-quick-add">
@@ -363,6 +365,12 @@ export function HandoffDialog({
             )}
             {preflightError && (
               <p className="handoff-error"><Warning size={13} aria-hidden="true" />预检失败:{preflightError}</p>
+            )}
+            {inboundHandoff && preflightError && (
+              <div className="handoff-quick-add handoff-return-override">
+                <p>如果来源机地址已经变化，可在这里临时改用当前地址。</p>
+                {manualReturnTargetFields}
+              </div>
             )}
             {applying && targetUrl && (
               <p className="handoff-probing"><SpinnerGap size={13} className="is-spinning" aria-hidden="true" />正在探测对端…</p>

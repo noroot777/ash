@@ -25,6 +25,7 @@ const outbound = outboundTasksForTarget([
   task("pending", { handoff: { direction: "out", pending: true, peerUrl: "http://target:4317" } }),
   task("other-target", { handoff: { direction: "out", peerUrl: "http://elsewhere:4317" } }),
   task("reused-address", { handoff: { direction: "out", peerUrl: "http://target:4317", peerFp: thirdFp } }),
+  task("returned-archive", { handoff: { direction: "out", peerUrl: "http://target:4317", peerFp: sourceFp, originFp: sourceFp } }),
   task("inbound", { handoff: { direction: "in", peerUrl: "http://target:4317" } }),
   task("other-project", { projectId: "p2", handoff: { direction: "out", peerUrl: "http://target:4317" } }),
 ], "p1", "http://target:4317/", sourceFp);
@@ -96,5 +97,7 @@ assert.doesNotMatch(bulkDialog, /<ConfirmDialog/, "批量接力不应继续使�
 assert.match(bulkDialog, /<HandoffDialogHeader/, "批量接力应复用接力弹窗标题结构");
 assert.match(bulkDialog, /<HandoffRouteCard/, "批量接力应展示与单任务一致的机器路线");
 assert.match(bulkDialog, /handoff-result-panel handoff-bulk-result/, "批量接力结果页应使用同一套完成态视觉");
+assert.match(bulkDialog, /api\.handoffReturnTarget\(task\.id\)/, "批量移回应逐任务解析 marker 里的回程目标");
+assert.match(bulkDialog, /targetUrl: taskTarget\.url/, "批量正式移回应使用逐任务解析出的地址");
 
 console.log("bulk handoff eligibility tests passed");
