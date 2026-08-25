@@ -220,7 +220,21 @@ api.post("/tasks/:id/pause", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.status !== "running") return c.json({ error: "只能在任务正在运行时设置检查点", status: r.status }, 409);
-  await db.update(tasks).set({ resumePrompt: rp, updatedAt: now() }).where(eq(tasks.id, taskId));
+  if (r.activeTurnToken && c.req.header("x-ash-turn-token") !== r.activeTurnToken) {
+    return c.json({ error: "检查点来自已结束的回合，已拒绝写入当前会话" }, 409);
+  }
+  const updated = await db
+    .update(tasks)
+    .set({ resumePrompt: rp, updatedAt: now() })
+    .where(and(
+      eq(tasks.id, taskId),
+      eq(tasks.status, "running"),
+      r.activeTurnToken === null
+        ? isNull(tasks.activeTurnToken)
+        : eq(tasks.activeTurnToken, r.activeTurnToken),
+    ))
+    .returning({ id: tasks.id });
+  if (!updated.length) return c.json({ error: "当前回合已经结束或已被引导，检查点未写入" }, 409);
   return c.json({ paused: true, willSettleAs: "paused" });
 });
 
@@ -239,7 +253,18 @@ api.post("/tasks/:id/complete", async (c) => {
   if (r.activeTurnToken && c.req.header("x-ash-turn-token") !== r.activeTurnToken) {
     return c.json({ error: "完成确认来自已结束的回合，已拒绝写入当前会话" }, 409);
   }
-  await db.update(tasks).set({ completeConfirmedAt: now(), updatedAt: now() }).where(eq(tasks.id, taskId));
+  const updated = await db
+    .update(tasks)
+    .set({ completeConfirmedAt: now(), updatedAt: now() })
+    .where(and(
+      eq(tasks.id, taskId),
+      eq(tasks.status, "running"),
+      r.activeTurnToken === null
+        ? isNull(tasks.activeTurnToken)
+        : eq(tasks.activeTurnToken, r.activeTurnToken),
+    ))
+    .returning({ id: tasks.id });
+  if (!updated.length) return c.json({ error: "当前回合已经结束或已被引导，完成确认未写入" }, 409);
   confirmDone(taskId);
   // 续聊回合(followUpFrom 非空)确认完成 = 把任务推进到 done;正常回合就是 done。
   return c.json({ confirmed: true, willSettleAs: "done" });
@@ -320,7 +345,17 @@ api.post("/tasks/:id/ask", async (c) => {
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.mode !== "team" && r.status !== "running")
     return c.json({ error: "只能在任务正在运行时提问", status: r.status }, 409);
-  await setTaskQuestion({ taskId, question: q, options: opts, items: questionItems });
+  if (r.mode !== "team" && r.activeTurnToken && c.req.header("x-ash-turn-token") !== r.activeTurnToken) {
+    return c.json({ error: "提问来自已结束的回合，已拒绝写入当前会话" }, 409);
+  }
+  const asked = await setTaskQuestion({
+    taskId,
+    question: q,
+    options: opts,
+    items: questionItems,
+    ...(r.mode === "team" ? {} : { currentTurn: { token: r.activeTurnToken } }),
+  });
+  if (!asked) return c.json({ error: "当前回合已经结束或已被引导，提问未写入" }, 409);
   return c.json({
     asked: true,
     options: opts,

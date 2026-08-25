@@ -129,7 +129,8 @@ function sideTurnReason(task: typeof tasks.$inferSelect): string | null {
   if (task.verifyRound != null) return "当前正在进行验证回合，消息继续排队";
   if (task.reviewOf) return "当前是审查任务回合，消息继续排队";
   if (task.nativeTurn) return "当前正在执行 CLI 命令，消息继续排队";
-  if (turnRole(task.id) !== "single") return "当前是审查或系统旁路回合，消息继续排队";
+  const role = turnRole(task.id);
+  if (role && role !== "single") return "当前是审查或系统旁路回合，消息继续排队";
   return null;
 }
 

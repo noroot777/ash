@@ -98,6 +98,7 @@ try {
     task("reviewer-role"),
     task("ordered"),
     task("token", { activeTurnToken: "new-token" }),
+    task("team-ask", { mode: "team", status: "idle", activeTurnToken: null }),
   ]);
   await db.insert(scheduledMessages).values([
     message("m-verify", "verify"),
@@ -156,6 +157,54 @@ try {
   assert.equal(current.status, 200, "当前回合 token 应能确认完成");
   assert.ok((await db.select().from(tasks).where(eq(tasks.id, "token"))).at(0)!.completeConfirmedAt);
   runs.takeConfirmed("token");
+
+  const postTurnAction = (path: string, body: unknown, token?: string) => api.request(path, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(token ? { "x-ash-turn-token": token } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  await db.update(tasks).set({ completeConfirmedAt: null, resumePrompt: null, question: null })
+    .where(eq(tasks.id, "token"));
+  for (const token of ["old-token", undefined]) {
+    const paused = await postTurnAction("/tasks/token/pause", { resumePrompt: "stale checkpoint" }, token);
+    assert.equal(paused.status, 409, "旧 token 或缺 token 的 pause_task 必须被拒绝");
+  }
+  assert.equal(
+    (await db.select().from(tasks).where(eq(tasks.id, "token"))).at(0)!.resumePrompt,
+    null,
+    "旧回合不得写入检查点",
+  );
+  assert.equal(
+    (await postTurnAction("/tasks/token/pause", { resumePrompt: "current checkpoint" }, "new-token")).status,
+    200,
+    "当前回合 pause_task 应继续可用",
+  );
+  await db.update(tasks).set({ resumePrompt: null }).where(eq(tasks.id, "token"));
+
+  for (const token of ["old-token", undefined]) {
+    const asked = await postTurnAction("/tasks/token/ask", { question: "stale question" }, token);
+    assert.equal(asked.status, 409, "旧 token 或缺 token 的 ask_question 必须被拒绝");
+  }
+  assert.equal(
+    (await db.select().from(tasks).where(eq(tasks.id, "token"))).at(0)!.question,
+    null,
+    "旧回合不得写入提问",
+  );
+  assert.equal(
+    (await postTurnAction("/tasks/token/ask", { question: "current question" }, "new-token")).status,
+    200,
+    "当前回合 ask_question 应继续可用",
+  );
+  assert.equal(
+    (await postTurnAction("/tasks/team-ask/ask", { question: "team question" })).status,
+    200,
+    "团队常驻提问没有一次性回合 token，必须保持兼容",
+  );
+  console.log("✓ pause_task / ask_question 与 complete_task 一样绑定当前回合 token");
+
   await setTaskStatus("token", "failed");
   assert.equal(
     (await db.select().from(tasks).where(eq(tasks.id, "token"))).at(0)!.activeTurnToken,

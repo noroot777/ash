@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { eq } from "drizzle-orm";
+import { Hono } from "hono";
 import { IS_WINDOWS } from "../src/platform.js";
 import { releaseTmpDb } from "./tmp-db.js";
 import { TEAM_DEFAULTS } from "@ash/shared";
@@ -67,6 +68,12 @@ process.stdin.on("end", () => {
     setInterval(() => {}, 1000);
     return;
   }
+  if (buf.includes("保持新方向运行")) {
+    fs.appendFileSync(process.env.ASH_TEST_LEAD_LOG, buf + "\\n");
+    process.stdout.write(JSON.stringify({ type: "system", session_id: "scheduled-steer-cli-session" }) + "\\n");
+    setInterval(() => {}, 1000);
+    return;
+  }
   if (!buf) return process.exit(1);
   succeed(buf);
 });
@@ -78,7 +85,7 @@ writeFileSync(
   { mode: 0o755 },
 );
 
-const [{ db, ensureSchema }, schema, schedulesModule, pending, runs, status, steer, orchestrator, transcript, paths, { bus }, acceptance] = await Promise.all([
+const [{ db, ensureSchema }, schema, schedulesModule, pending, runs, status, steer, orchestrator, transcript, paths, { bus }, acceptance, runRoutes] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/schedules.js"),
@@ -91,6 +98,7 @@ const [{ db, ensureSchema }, schema, schedulesModule, pending, runs, status, ste
   import("../src/paths.js"),
   import("../src/bus.js"),
   import("../src/acceptance-lock.js"),
+  import("../src/task-run-routes.js"),
 ]);
 const { projects, scheduledMessages, sessions, tasks } = schema;
 await ensureSchema();
@@ -119,6 +127,7 @@ const lockedTaskId = "scheduled-single-locked";
 const crashTaskId = "scheduled-single-crashed";
 const steerTaskId = "scheduled-single-steer";
 const steerLockedTaskId = "scheduled-single-steer-locked";
+const steerLateTaskId = "scheduled-single-steer-late-tool";
 const steerUnavailableTaskId = "scheduled-single-steer-unavailable";
 const unavailableSessionId = "scheduled-team-unavailable-session";
 const unavailableTranscript = transcript.sessionTranscriptPath(unavailableTaskId, unavailableSessionId);
@@ -244,6 +253,7 @@ try {
       question: "仍属于当前回合的问题",
     },
     { ...taskRow(steerLockedTaskId, "claude", "running"), mode: "single", team: null },
+    { ...taskRow(steerLateTaskId, "claude", "running"), mode: "single", team: null },
   ]);
   await db.insert(sessions).values({
     id: unavailableSessionId,
@@ -461,6 +471,10 @@ try {
   // 活动 handle 不存在(启动缝隙/刚好结束)时不谎报成功，更不能把消息从队列拿走。
   const unavailableSteer = await steer.steerQueuedMessage("scheduled-steer-unavailable");
   assert.equal(unavailableSteer.ok, false, "没有可控活动进程时应拒绝升级");
+  if (!unavailableSteer.ok) {
+    assert.match(unavailableSteer.error, /启动|结束|引导/, "无活动回合不得误报成审查或旁路");
+    assert.doesNotMatch(unavailableSteer.error, /审查|旁路/);
+  }
   const retained = (await db.select().from(scheduledMessages)
     .where(eq(scheduledMessages.id, "scheduled-steer-unavailable"))).at(0)!;
   assert.equal(retained.status, "pending", "升级失败的消息必须继续留在队列");
@@ -491,6 +505,37 @@ try {
   assert.equal(lockedSteerMessage.status, "pending", "续送失败的原话必须继续排队");
   assert.equal(lockedSteerMessage.deliveringSince, null, "续送失败应在落位后归还租约");
   console.log("✓ 引导续送被挡回:任务离开假 running，原话保留并归还租约");
+
+  // 真引导成功后新方向仍在跑：旧回合迟到的 ask_question（旧 token 或无 token）都不能写入。
+  const lateOldRun = orchestrator.continueTask(steerLateTaskId, "保持运行等待引导");
+  await waitFor(() => runs.isRunning(steerLateTaskId), "迟到工具复现的旧回合没有进入 running");
+  const oldTurnToken = (await db.select().from(tasks).where(eq(tasks.id, steerLateTaskId))).at(0)!.activeTurnToken!;
+  await db.insert(scheduledMessages).values(
+    messageRow("scheduled-steer-late", steerLateTaskId, "保持新方向运行", "queued"),
+  );
+  assert.equal((await steer.steerQueuedMessage("scheduled-steer-late")).ok, true, "迟到工具复现应先成功引导");
+  assert.equal(await lateOldRun, true);
+  const newTurnToken = (await db.select().from(tasks).where(eq(tasks.id, steerLateTaskId))).at(0)!.activeTurnToken!;
+  assert.notEqual(newTurnToken, oldTurnToken, "新方向必须换一枚回合 token");
+  const api = new Hono();
+  runRoutes.mountTaskRunRoutes(api);
+  for (const token of [oldTurnToken, undefined]) {
+    const response = await api.request(`/tasks/${steerLateTaskId}/ask`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(token ? { "x-ash-turn-token": token } : {}) },
+      body: JSON.stringify({ question: "stale question from previous direction" }),
+    });
+    assert.equal(response.status, 409, "旧方向迟到的提问必须被拒绝");
+  }
+  assert.equal(
+    (await db.select().from(tasks).where(eq(tasks.id, steerLateTaskId))).at(0)!.question,
+    null,
+    "成功引导后旧方向不得污染新方向的问题卡",
+  );
+  assert.equal(runs.stopTask(steerLateTaskId), true, "测试收尾应停止挂起的新方向");
+  await waitFor(async () => (await db.select().from(tasks).where(eq(tasks.id, steerLateTaskId))).at(0)!.status !== "running",
+    "挂起的新方向没有完成停止结算");
+  console.log("✓ 成功引导后旧回合迟到的 ask_question 被拒绝，新方向保持干净");
 
   // ── 进程死在投递中途:重启后必须自己回来 ──────────────────────────────────
   // 上一段证明了「锁挡回不丢消息」,但锁不是唯一能掐断投递的东西 —— 服务重启会把内存里
@@ -574,6 +619,7 @@ try {
   rmSync(join(paths.RUNS_DIR, steerTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, steerUnavailableTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, steerLockedTaskId), { recursive: true, force: true });
+  rmSync(join(paths.RUNS_DIR, steerLateTaskId), { recursive: true, force: true });
   // 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
   await releaseTmpDb();
   // 收尾**不许盖住正主**:这里跑在 finally 里,try 抛出的断言错会被这一句的异常顶掉,
