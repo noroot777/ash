@@ -312,8 +312,8 @@ export const api = {
     request(`/tasks/${id(taskId)}/remote-answer`, json("POST", { targetUrl, answer })),
   remoteTaskReturn: (taskId: string, targetUrl: string): Promise<{ task: Task }> =>
     request(`/tasks/${id(taskId)}/remote-return`, json("POST", { targetUrl })),
-  // 移除接力标记(「在本机继续」的逃生门):只清本机标记,对端那份任务不动。
-  clearHandoff: (taskId: string): Promise<{ cleared: true }> =>
+  // 恢复送达未知的本机任务前，会先让目标机确认未收到并持久登记撤销，防止旧请求晚到。
+  clearHandoff: (taskId: string): Promise<{ cleared: true; restored: "in" | "local" }> =>
     request(`/tasks/${id(taskId)}/handoff`, { method: "DELETE" }),
 
   // 接力身份与配对:本机身份(拿去和对端设置页上的指纹肉眼核对)、入站来源的审批。

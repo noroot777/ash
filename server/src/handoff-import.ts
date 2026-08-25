@@ -26,6 +26,7 @@ import { ensureWorkdir, expandHome, prepareWorktree, projectHealthLight, workspa
 import { withRepoLock } from "./repo-lock.js";
 import { DATA_DIR, RUNS_DIR } from "./paths.js";
 import { codexHome, findRollout } from "./executors/codex-rollout.js";
+import { assertHandoffNotCanceled, beginHandoffImport, endHandoffImport } from "./handoff-transfer-state.js";
 import { publishPendingMessages } from "./pending-messages.js";
 import { createTasks, publishTaskUpdated } from "./task-store.js";
 import { deleteTaskAssociations } from "./task-routes.js";
@@ -267,26 +268,19 @@ export interface HandoffImportResult {
   notes: string[];
 }
 
-// 同一 task id 的导入互斥闸:两个请求同时过掉下面的 existing 检查后,输家会撞
-// tasks.id UNIQUE,而它的补偿回滚曾按公共 task id 无条件清理,把赢家刚建好的任务
-// 也删掉(审查实测:req1 200、req2 500、最终 GET 404)。这种并发不需要恶意——应答
-// 丢失后用户重试时,上一次导入可能还在本机处理中。进程内按 task id 串行(本机 DB
-// 有单实例锁,不存在跨进程写方),后来者 409 让源机稍后原样重放收口。
-const importsInFlight = new Set<string>();
-
 export async function importHandoff(
   input: unknown,
   context: { sourceUrl?: string | null } = {},
 ): Promise<HandoffImportResult> {
   const m = validate(input);
-  if (importsInFlight.has(m.task.id)) {
+  if (!beginHandoffImport(m.task.id)) {
     throw new HandoffError("这个任务的另一次导入还在本机进行中,等它落定后再原样重试", 409);
   }
-  importsInFlight.add(m.task.id);
   try {
+    assertHandoffNotCanceled(m.task.id, m.transferId, m.sourceFingerprint);
     return await importValidated(m, context);
   } finally {
-    importsInFlight.delete(m.task.id);
+    endHandoffImport(m.task.id);
   }
 }
 

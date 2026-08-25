@@ -29,7 +29,7 @@ assert.doesNotMatch(handoff, /href=\{result\.remoteUrl\}/, "接力完成态不�
 assert.match(handoff, /onOpenRemote=\{!returningHandoff && target \?/, "移回完成态与移回重放态都不能提供不可用的远程任务入口");
 assert.match(handoff, /id="handoff-return-source-url"/, "旧接入记录无法定位来源机时应允许临时补 URL");
 assert.match(handoff, /peerFp: inboundHandoff\.peerFp/, "手工来源地址仍须绑定任务记录的来源指纹");
-assert.match(handoff, /inboundHandoff && preflightError/, "旧记录被过期设置地址卡住时也应显示临时地址输入");
+assert.match(handoff, /inboundHandoff && returnAddressMayHelp\(preflightError\)/, "只有连接或身份地址问题才应显示临时来源地址输入");
 assert.doesNotMatch(handoffViews, /index === 2|is-active/, "单任务传输不能展示伪造的精确阶段");
 assert.match(handoffViews, /本次将执行/, "单任务传输应把步骤表述为将执行清单");
 assert.doesNotMatch(handoff, /const canOpenRemote|task-handoff-open/, "不可选中的历史存档横幅不能保留永远到不了且移回后不安全的远程入口");
@@ -37,6 +37,8 @@ assert.doesNotMatch(taskDetail, /onOpenRemote=|onRemoteTask/, "任务详情不�
 assert.match(handoff, /hasOwnProperty\.call\(pendingHandoff, "returnTransferId"\)/, "移回应答丢失后的重放弹窗仍应保持移回语义");
 assert.match(replyRail, /hasOwnProperty\.call\(task\.handoff, "returnTransferId"\)/, "移回应答丢失后的任务操作仍应显示移回而不是接力");
 assert.match(taskHeader, /pendingReturn \? "移回未确认" : "接力未确认"/, "移回应答丢失后的主状态不能误报成接力未确认");
+assert.match(handoff, /上次移回没收到确认/, "移回重放警告必须使用移回和来源机语义");
+assert.match(handoff, /核验并在本机继续/, "恢复本机任务前必须明确会先向对端安全核验");
 assert.match(handoff, /preflight\.local\.uploads > 0 \|\| preflight\.local\.pendingMessages/, "只有附件时也应显示路径改写说明");
 assert.match(handoff, /probe\.suggestedProjectId \?\? probe\.projects\[0\]\?\.id/, "唯一候选项目应自动选中");
 assert.match(handoff, /returningHandoff && preflight\.taskScopedReturn/, "移回与移回重放的身份文案必须区分任务级免审批与普通接力降级");

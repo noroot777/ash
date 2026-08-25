@@ -19,6 +19,7 @@ const children: ChildProcess[] = [];
 const serverPorts: number[] = [];
 const remember = (proc: ChildProcess) => children.push(proc);
 let returnProxy: { url: string; close(): Promise<void> } | null = null;
+const ordinaryProxies: { close(): Promise<void> }[] = [];
 
 async function startReturnProxy(upstream: string): Promise<{ url: string; close(): Promise<void> }> {
   let cutFirstImport = true;
@@ -57,6 +58,73 @@ async function startReturnProxy(upstream: string): Promise<{ url: string; close(
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   return {
     url: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+    close: async () => {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+async function startOrdinaryImportProxy(upstream: string, forwardBeforeCut: boolean): Promise<{
+  url: string;
+  deliverHeld(): Promise<{ status: number; body: { error?: string; ash?: boolean } }>;
+  close(): Promise<void>;
+}> {
+  let cutFirstImport = true;
+  let held: { path: string; method: string; headers: Record<string, string>; body: Buffer } | null = null;
+  const forward = async (request: NonNullable<typeof held>) => {
+    const response = await fetch(`${upstream}${request.path}`, {
+      method: request.method,
+      headers: request.headers,
+      ...(request.method === "GET" || request.method === "HEAD" ? {} : {
+        body: new Uint8Array(request.body.buffer as ArrayBuffer, request.body.byteOffset, request.body.byteLength),
+      }),
+    });
+    return {
+      status: response.status,
+      contentType: response.headers.get("content-type") ?? "application/json",
+      bytes: Buffer.from(await response.arrayBuffer()),
+    };
+  };
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk) => chunks.push(chunk as Buffer));
+    req.on("end", () => {
+      void (async () => {
+        const headers: Record<string, string> = {};
+        for (const [key, value] of Object.entries(req.headers)) {
+          if ((key === "content-type" || key.startsWith("x-ash-peer-")) && typeof value === "string") {
+            headers[key] = value;
+          }
+        }
+        const request = {
+          path: req.url ?? "/",
+          method: req.method ?? "POST",
+          headers,
+          body: Buffer.concat(chunks),
+        };
+        if (cutFirstImport && request.path.startsWith("/api/handoff/import")) {
+          cutFirstImport = false;
+          if (forwardBeforeCut) await forward(request);
+          else held = request;
+          req.socket.destroy();
+          return;
+        }
+        const upstreamResponse = await forward(request);
+        res.statusCode = upstreamResponse.status;
+        res.setHeader("content-type", upstreamResponse.contentType);
+        res.end(upstreamResponse.bytes);
+      })().catch(() => req.socket.destroy());
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return {
+    url: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+    deliverHeld: async () => {
+      if (!held) throw new Error("没有待投递的 import 请求");
+      const response = await forward(held);
+      return { status: response.status, body: JSON.parse(response.bytes.toString("utf8")) as { error?: string; ash?: boolean } };
+    },
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -113,6 +181,51 @@ try {
   });
   const identityA = await api<{ fingerprint: string }>(machineA, "/handoff/identity");
   await api(machineB, `/handoff/peers/${identityA.fingerprint}/approve`, { method: "POST" });
+
+  const createSimpleTask = (title: string) => api<Task>(machineA, "/tasks", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      projectId: projectA.id, title, body: title, mode: "single", workflowMode: "free", useWorktree: false,
+    }),
+  });
+
+  // 普通接力已送达但应答丢失：横幅的“在本机继续”必须被对端任务挡住，不能清标记造双跑。
+  const receivedTask = await createSimpleTask("对端已收到时禁止恢复本机");
+  const receivedProxy = await startOrdinaryImportProxy(machineB, true);
+  ordinaryProxies.push(receivedProxy);
+  const receivedInterrupted = await fetch(`${machineA}/api/tasks/${receivedTask.id}/handoff`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: receivedProxy.url, targetProjectId: projectB.id, targetName: "B", autoResume: false }),
+  });
+  assert.equal(receivedInterrupted.status, 502);
+  assert.equal((await fetch(`${machineB}/api/tasks/${receivedTask.id}`)).status, 200, "前提：对端实际已经收到任务");
+  const blockedClear = await fetch(`${machineA}/api/tasks/${receivedTask.id}/handoff`, { method: "DELETE" });
+  assert.equal(blockedClear.status, 409, "对端已有任务时必须阻止恢复本机旧副本");
+  assert.match(((await blockedClear.json()) as { error: string }).error, /已经收到|原样重试/);
+  assert.equal((await api<Task>(machineA, `/tasks/${receivedTask.id}`)).handoff?.pending, true, "被阻止后 pending 标记必须保留");
+  await api(machineA, `/tasks/${receivedTask.id}/handoff`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: receivedProxy.url, targetProjectId: projectB.id, targetName: "B", autoResume: false }),
+  });
+
+  // 请求尚未送达：目标机先登记撤销，源机才清标记；旧 import 即使随后到达也会被 tombstone 拒绝。
+  const delayedTask = await createSimpleTask("撤销后旧请求不能晚到");
+  const delayedProxy = await startOrdinaryImportProxy(machineB, false);
+  ordinaryProxies.push(delayedProxy);
+  const delayedInterrupted = await fetch(`${machineA}/api/tasks/${delayedTask.id}/handoff`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: delayedProxy.url, targetProjectId: projectB.id, targetName: "B", autoResume: false }),
+  });
+  assert.equal(delayedInterrupted.status, 502);
+  assert.equal((await fetch(`${machineB}/api/tasks/${delayedTask.id}`)).status, 404, "前提：旧 import 尚未送到目标机");
+  const safeClear = await fetch(`${machineA}/api/tasks/${delayedTask.id}/handoff`, { method: "DELETE" });
+  assert.equal(safeClear.status, 200, `目标机登记撤销后应允许恢复本机：${await safeClear.text()}`);
+  assert.equal((await api<Task>(machineA, `/tasks/${delayedTask.id}`)).handoff, null);
+  const lateDelivery = await delayedProxy.deliverHeld();
+  assert.equal(lateDelivery.status, 409, "已登记撤销的旧 import 不能在清标记后晚到");
+  assert.equal(lateDelivery.body.ash, true);
+  assert.match(lateDelivery.body.error ?? "", /安全撤销|不能再导入/);
+  assert.equal((await fetch(`${machineB}/api/tasks/${delayedTask.id}`)).status, 404, "旧请求被拒后目标机仍不能出现第二份任务");
 
   await api(machineA, `/tasks/${task.id}/handoff`, {
     method: "POST", headers: { "content-type": "application/json" },
@@ -246,6 +359,9 @@ try {
   assert.equal(returnedBeforeRetry.handoff?.returnTransferId, inbound.handoff?.transferId, "原机完成态应保留幂等探测凭据");
   const originHeadBeforeRetry = execFileSync("git", ["-C", worktreePathFor(repoA, task.id), "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   assert.equal(originHeadBeforeRetry, holderHead, "首次已送达的移回应更新原机 worktree");
+  const blockedReturnClear = await fetch(`${machineB}/api/tasks/${task.id}/handoff`, { method: "DELETE" });
+  assert.equal(blockedReturnClear.status, 409, "原机已接回任务时也不能撤销 pending 移回并恢复持有机旧副本");
+  assert.equal((await api<Task>(machineB, `/tasks/${task.id}`)).handoff?.pending, true);
 
   const retryProbe = await api<HandoffPreflightResult>(machineB, `/tasks/${task.id}/handoff/preflight`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetUrl: returnProxy.url }),
@@ -319,6 +435,7 @@ try {
   console.log("test-handoff-return ok");
 } finally {
   await returnProxy?.close().catch(() => {});
+  await Promise.all(ordinaryProxies.map((proxy) => proxy.close().catch(() => {})));
   for (const port of serverPorts) {
     for (const pid of listenerPidsSync(port)) killOne(pid, "SIGKILL");
   }

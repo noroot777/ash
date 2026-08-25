@@ -175,13 +175,16 @@ function assertPeerAcceptsUs(peer: HandoffPeerIdentity | null): void {
 export async function preflightHandoff(taskId: string, targetUrlRaw: string): Promise<TaskScopedPreflightResult> {
   const { task, project } = await loadSingleTask(taskId);
   const targetUrl = normalizePeerUrl(targetUrlRaw);
+  const currentMarker = parsedHandoff(task.handoff);
   const returnFingerprint = inboundReturnFingerprint(task.handoff);
   if (returnFingerprint === null) {
     throw new HandoffError("这份接入任务缺少来源机器指纹，无法确认该移回哪台机器；请先升级来源机并重新接力", 409);
   }
   // 身份核对在最前面:指纹对不上就直接抛,连盘点都不做——用户要先解决「这台是不是
   // 我那台机器」,别让一堆盘点数字把警告冲下去。
-  const expectedFingerprint = returnFingerprint ?? await rememberedFingerprint(targetUrl);
+  const pendingFingerprint = currentMarker?.direction === "out" && currentMarker.pending
+    ? currentMarker.peerFp : null;
+  const expectedFingerprint = returnFingerprint ?? pendingFingerprint ?? await rememberedFingerprint(targetUrl);
   const returnContext = inboundReturnContext(taskId, task.handoff);
   const { ping, peer, taskScopedReturn } = await pingPeer(targetUrl, expectedFingerprint, returnContext);
   // 项目匹配靠仓库目录名:两台机器的绝对路径几乎必然不同,目录名是最稳的公共项。
@@ -332,7 +335,7 @@ export async function exportHandoff(
     await assertNotQueueMember(taskId);
     // 先探测对端与目标项目,确认可行再停任务——反过来会白停一个正在跑的任务。
     // pingPeer 同时做身份核对:指纹和上次记住的对不上就在这里抛,bundle 一个字节都不打。
-    const expectedFingerprint = returnFingerprint ?? await rememberedFingerprint(targetUrl);
+    const expectedFingerprint = returnFingerprint ?? pendingRetry?.peerFp ?? await rememberedFingerprint(targetUrl);
     const returnContext = inboundReturnContext(taskId, prevHandoffRaw);
     const { ping, peer, sealTo, taskScopedReturn } = await pingPeer(targetUrl, expectedFingerprint, returnContext);
     assertPeerAcceptsUs(peer);

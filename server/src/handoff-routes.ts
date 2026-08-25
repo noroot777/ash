@@ -11,15 +11,16 @@
 //     不是「谁能打开这个网页」。
 import { hostname } from "node:os";
 import { appendFile } from "node:fs/promises";
+import type { TaskHandoff } from "@ash/shared";
 import type { Hono } from "hono";
 import type { Context } from "hono";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { projects, sessions, tasks } from "./db/schema.js";
 import { projectHealthLight } from "./git.js";
 import { getAppSettings } from "./app-settings.js";
 import { exportHandoff, handoffRemoteUrl, preflightHandoff } from "./handoff.js";
-import { requestHandoffApproval } from "./handoff-peer-client.js";
+import { fetchPeer, normalizePeerUrl, pingPeer, requestHandoffApproval } from "./handoff-peer-client.js";
 import { repoRefTips } from "./handoff-collect.js";
 import { HandoffError, type HandoffManifest, type HandoffPingResponse } from "./handoff-types.js";
 import { canonicalPingChallenge, localIdentity, sameFingerprint, shortFingerprint, signWithLocalKey } from "./handoff-identity.js";
@@ -56,6 +57,62 @@ const fail = (c: Context, e: unknown) => {
   console.error("[handoff]", e);
   return c.json({ error: `接力失败:${msg}`, ash: true }, 500);
 };
+
+async function cancelPendingAtPeer(marker: TaskHandoff): Promise<boolean> {
+  if (!marker.peerUrl || !marker.peerFp || !marker.transferId) {
+    throw new HandoffError("这条旧记录缺少目标机地址、身份或 transferId，无法安全证明对端没收到；本机标记未移除", 409);
+  }
+  const targetUrl = normalizePeerUrl(marker.peerUrl);
+  const returning = Object.prototype.hasOwnProperty.call(marker, "returnTransferId");
+  const returnTransferId = (marker as TaskHandoff & { returnTransferId?: string | null }).returnTransferId;
+  try {
+    await pingPeer(
+      targetUrl,
+      marker.peerFp,
+      returning ? { taskId: marker.peerTaskId, returnTransferId: returnTransferId ?? null } : undefined,
+      { allowReturnFallback: false },
+    );
+    await fetchPeer(`${targetUrl}/api/handoff/proxy/task/cancel-pending`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        taskId: marker.peerTaskId,
+        transferId: marker.transferId,
+        ...(returning ? { returnTransferId: returnTransferId ?? null } : {}),
+      }),
+    });
+    return returning;
+  } catch (error) {
+    if (error instanceof HandoffError && error.remoteAsh && error.remoteStatus === 409) {
+      throw new HandoffError(
+        "对端已经收到或正在导入这份任务，不能恢复本机旧副本；请关闭确认框，重新打开接力弹窗并原样重试以幂等收口",
+        409,
+      );
+    }
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new HandoffError(
+      `暂时无法让对端确认撤销这次接力，本机标记未移除。连接恢复后原样重试最安全；原始原因：${detail}`,
+      409,
+    );
+  }
+}
+
+function restoredInboundMarker(marker: TaskHandoff): TaskHandoff {
+  const returnTransferId = (marker as TaskHandoff & { returnTransferId?: string | null }).returnTransferId;
+  return {
+    direction: "in",
+    transferId: returnTransferId ?? null,
+    autoResume: marker.autoResume,
+    peerUrl: marker.peerUrl,
+    peerName: marker.peerName,
+    peerFp: marker.peerFp,
+    originFp: marker.originFp,
+    peerTaskId: marker.peerTaskId,
+    at: marker.at,
+    sessions: marker.sessions,
+    git: marker.git,
+  };
+}
 
 function pingPayload(
   nonce: string,
@@ -294,8 +351,8 @@ export function mountHandoffRoutes(api: Hono): void {
     }
   });
 
-  // 移除接力标记只服务 pending（送达未知）的应急撤销。确认送达后本机是历史存档，
-  // 必须从对端那份发起移回，不能在源机清标记造出双跑。
+  // 恢复本机任务只服务 pending（送达未知）的应急撤销。先让目标机确认尚未收到并
+  // 持久登记 tombstone，再清本机标记；确认送达后只能从对端发起移回。
   api.delete("/tasks/:id/handoff", async (c) => {
     const taskId = c.req.param("id");
     const row = (await db
@@ -303,9 +360,9 @@ export function mountHandoffRoutes(api: Hono): void {
       .from(tasks)
       .where(eq(tasks.id, taskId))).at(0);
     if (!row) return c.json({ error: "任务不存在" }, 404);
-    let marker: { direction?: string; pending?: boolean } | null = null;
+    let marker: TaskHandoff | null = null;
     if (row.handoff) {
-      try { marker = JSON.parse(row.handoff) as { direction?: string; pending?: boolean }; } catch { marker = null; }
+      try { marker = JSON.parse(row.handoff) as TaskHandoff; } catch { marker = null; }
     }
     if (marker?.direction !== "out") {
       return c.json({ error: "任务没有「接力出去」的标记;接力进来的任务本来就在本机跑,不用移除" }, 409);
@@ -313,7 +370,20 @@ export function mountHandoffRoutes(api: Hono): void {
     if (!marker.pending) {
       return c.json({ error: "任务已确认送达对端，只能从对端那份任务发起移回；本机不能恢复这份存档" }, 409);
     }
-    await db.update(tasks).set({ handoff: null, updatedAt: now() }).where(eq(tasks.id, taskId));
+    let returning: boolean;
+    try {
+      returning = await cancelPendingAtPeer(marker);
+    } catch (e) {
+      return fail(c, e);
+    }
+    const restored = returning ? restoredInboundMarker(marker) : null;
+    const updated = await db.update(tasks)
+      .set({ handoff: restored ? JSON.stringify(restored) : null, updatedAt: now() })
+      .where(and(eq(tasks.id, taskId), eq(tasks.handoff, row.handoff!)))
+      .returning({ id: tasks.id });
+    if (!updated.length) {
+      return c.json({ error: "核验期间任务的接力状态已经变化，请刷新后按最新状态处理" }, 409);
+    }
     const latest = (await db
       .select({ id: sessions.id, agentType: sessions.agentType })
       .from(sessions)
@@ -322,12 +392,14 @@ export function mountHandoffRoutes(api: Hono): void {
     if (latest) {
       const line = {
         t: "system" as const, agent: latest.agentType, by: "system" as const, at: now(),
-        text: "🔁 用户移除了接力标记,任务恢复为本机可运行(对端那份仍存在,注意别两边同时跑)。",
+        text: returning
+          ? "🔁 用户安全撤销了本次移回，任务继续由本机持有；原机已登记忽略这次旧移回请求。"
+          : "🔁 对端确认未收到任务并登记撤销后，用户移除了接力标记，任务恢复为本机可运行。",
       };
       await appendFile(sessionTranscriptPath(taskId, latest.id), `\n${TURN_SENTINEL}${JSON.stringify(line)}\n`)
         .catch(() => { /* 从未跑过就没有产物目录,标记已清,不阻塞 */ });
     }
     await publishTaskUpdated(taskId);
-    return c.json({ cleared: true });
+    return c.json({ cleared: true, restored: returning ? "in" : "local" });
   });
 }

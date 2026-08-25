@@ -556,7 +556,8 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   // 缺陷形态(第 2 轮审查实测):out+pending 任务 accept 直接 200,把接力时刻的旧
   // 提交合入本机主分支——对端还在同一分支上继续干活,回程必然更难合。给对端库里的
   // task-03 种一个 out 标记,走真 HTTP 验各写入口;确认送达后只能从对端移回，源机
-  // 不能再清标记造出双跑。只有送达未知的 pending 仍保留撤销逃生门。
+  // 不能再清标记造出双跑。送达未知的 pending 也必须先让记录中的目标机确认撤销；
+  // 旧记录缺地址/身份时宁可继续硬拦，不能仅凭本机确认框恢复成双跑。
   const outMarker = JSON.stringify({
     direction: "out", transferId: "transfer-out-guard", pending: false,
     peerUrl: "http://192.0.2.1:1", peerName: "另一台机器", peerTaskId: "handoff-e2e-task-03",
@@ -597,11 +598,11 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
     args: [JSON.stringify({ ...JSON.parse(outMarker), pending: true }), "handoff-e2e-task-03"],
   });
   const clearRes = await peerCall("DELETE", "/tasks/handoff-e2e-task-03/handoff");
-  assert.equal(clearRes.status, 200, `送达未知的 pending 标记应可移除:${await clearRes.text()}`);
-  const scheduleAfterClear = await peerCall(
+  assert.equal(clearRes.status, 409, `无法向目标机核验的 pending 标记不能仅凭本机操作移除:${await clearRes.text()}`);
+  const scheduleStillBlocked = await peerCall(
     "PUT", "/tasks/handoff-e2e-task-03/schedule", { kind: "once", at: "2026-08-21T00:00:00.000Z", enabled: false },
   );
-  assert.equal(scheduleAfterClear.status, 200, `移除标记后写入口应恢复:${await scheduleAfterClear.text()}`);
+  assert.equal(scheduleStillBlocked.status, 409, `安全核验失败后写入口仍应保持硬拦:${await scheduleStillBlocked.text()}`);
 
   // (第 10/11 项的双机断言织在 1/3/4 节;单进程就能验的 Windows 源机附件形态、
   //  纯函数上下文改写、幂等收口 autoResume 事实在 test-handoff-local.ts。)

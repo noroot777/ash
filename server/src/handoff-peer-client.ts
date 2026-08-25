@@ -135,6 +135,7 @@ export async function pingPeer(
   targetUrl: string,
   expectedFp?: string | null,
   returnContext?: HandoffReturnContext,
+  options: { allowReturnFallback?: boolean } = {},
 ): Promise<PeerProbe> {
   const nonce = newNonce();
   const pingUrl = returnContext ? `${targetUrl}/api/handoff/return/ping` : `${targetUrl}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`;
@@ -151,7 +152,7 @@ export async function pingPeer(
   } catch (error) {
     // 老版来源机没有任务级端点，或原机已删掉历史存档：退回普通接力通道。身份仍按
     // 任务来源指纹核对，但 refs/import 会恢复整机审批，不能借降级继续免审批写入。
-    if (!returnContext || !(error instanceof HandoffError)
+    if (!returnContext || options.allowReturnFallback === false || !(error instanceof HandoffError)
       || error.remoteStatus !== 404) throw error;
     taskScopedReturn = false;
     ping = await fetchPeer<HandoffPingResponse>(`${targetUrl}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`);

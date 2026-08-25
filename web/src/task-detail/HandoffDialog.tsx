@@ -370,7 +370,9 @@ export function HandoffDialog({
             {pendingHandoff && (
               <p className="handoff-error">
                 <Warning size={13} aria-hidden="true" />
-                上次接力没收到确认,这次是原样重放收口:目标机、对端项目和续跑选项沿用第一次发送的参数,不能更改。确认对端没收到、想换目标,先在任务横幅上移除接力标记。
+                {pendingReturn
+                  ? "上次移回没收到确认，这次会按同一来源机、原项目和续跑选项原样重放。若要放弃本次移回，请先关闭弹窗并使用横幅上的“核验后在本机继续”；系统会先确认原机尚未接回任务。"
+                  : "上次接力没收到确认，这次会按同一目标机、项目和续跑选项原样重放。若要放弃本次接力，请先关闭弹窗并使用横幅上的“核验后在本机继续”；系统会先确认对端尚未收到任务。"}
               </p>
             )}
             <div className="handoff-field">
@@ -403,7 +405,7 @@ export function HandoffDialog({
             {fallbackNotice && (
               <p className="handoff-peer-line is-warn"><Warning size={13} aria-hidden="true" /><span>{fallbackNotice}</span></p>
             )}
-            {inboundHandoff && preflightError && (
+            {inboundHandoff && returnAddressMayHelp(preflightError) && (
               <div className="handoff-quick-add handoff-return-override">
                 <p>如果来源机地址已经变化，可在这里临时改用当前地址。</p>
                 {manualReturnTargetFields}
@@ -552,6 +554,10 @@ export function HandoffDialog({
 
 const HANDOFF_URL_RE = /^https?:\/\/\S+$/;
 const normalizedHandoffUrl = (url: string) => url.trim().replace(/\/+$/, "");
+const returnAddressMayHelp = (message: string | null) => Boolean(message && (
+  /连不上对端|fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|连接中断|超时/i.test(message)
+  || /身份和上次不一样|没有报出身份/.test(message)
+));
 
 const approvalMessage = (result: HandoffApprovalResult) => {
   const identity = result.peer ? `目标机身份 ${result.peer.short}。` : "目标机没有提供可核对的身份。";
@@ -565,7 +571,7 @@ const approvalMessage = (result: HandoffApprovalResult) => {
 
 // 任务详情顶部的持久横幅:接力标记落在 tasks.handoff 上,刷新后仍然看得出这个任务
 // 已经交出去了(或是从别的机器接过来的)。确认送达后本机只留不可运行的历史数据，
-// 移回必须从对端那份发起；只有 pending（送达未知）仍保留撤销标记的逃生门。
+// 移回必须从对端那份发起；pending（送达未知）恢复本机前也必须先由目标机确认撤销。
 export function HandoffBanner({
   taskId,
   handoff,
@@ -589,7 +595,7 @@ export function HandoffBanner({
     try {
       await api.clearHandoff(taskId);
       onTaskUpdate(await api.task(taskId));
-      notify("已移除接力标记,任务恢复为本机可运行");
+      notify(pendingReturn ? "已安全撤销本次移回，任务继续留在本机" : "对端确认未收到，任务已安全恢复为本机可运行");
       setConfirmOpen(false);
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
@@ -604,8 +610,8 @@ export function HandoffBanner({
         {out
           ? handoff.pending
             ? pendingReturn
-              ? `${new Date(handoff.at).toLocaleString()} 移回${peer}后没收到确认,原机可能已接回这份任务。原样再移回一次会自动幂等收口;确认原机没收到,再移除标记在本机继续。`
-              : `${new Date(handoff.at).toLocaleString()} 接力到${peer}后没收到确认,对端可能已收到这份任务。原样再接力一次会自动幂等收口;确认对端没收到,再移除标记在本机继续。`
+              ? `${new Date(handoff.at).toLocaleString()} 移回${peer}后没收到确认,原机可能已接回这份任务。原样再移回一次会自动幂等收口;需要留在本机时,系统会先向原机核验并登记撤销。`
+              : `${new Date(handoff.at).toLocaleString()} 接力到${peer}后没收到确认,对端可能已收到这份任务。原样再接力一次会自动幂等收口;需要留在本机时,系统会先向对端核验并登记撤销。`
             : `${new Date(handoff.at).toLocaleString()} 已接力到${peer},本机这份只是历史存档。`
           : returned
             ? `${new Date(handoff.at).toLocaleString()} 已从${peer}移回本机，最新上下文已接回；现在可继续运行或再次接力。`
@@ -618,14 +624,16 @@ export function HandoffBanner({
           disabled={busy}
           onClick={() => setConfirmOpen(true)}
         >
-          在本机继续…
+          核验后在本机继续…
         </button>
       )}
       {confirmOpen && (
         <ConfirmDialog
-          title="移除接力标记"
-          message="对端可能已经收到这份任务。移除标记后本机恢复可运行,但如果对端其实收到了,两台机器会各跑一份、改动会分叉。确定要在本机继续吗?"
-          confirmLabel="移除标记,在本机继续"
+          title={pendingReturn ? "撤销本次移回" : "核验并恢复本机任务"}
+          message={pendingReturn
+            ? "系统会先联系原机：只有原机确认尚未接回任务并登记忽略旧请求后，才会撤销本次移回；如果原机已经接回，会阻止恢复本机旧副本。"
+            : "系统会先联系目标机：只有目标机确认尚未收到任务并登记忽略旧请求后，才会恢复本机；如果目标机已经收到，会阻止产生第二份可运行任务。"}
+          confirmLabel="核验并在本机继续"
           danger
           busy={busy}
           onConfirm={() => void clear()}

@@ -7,7 +7,7 @@ import { tasks } from "./db/schema.js";
 import { readCappedBody } from "./handoff-body.js";
 import { fetchPeer, normalizePeerUrl, pingPeer } from "./handoff-peer-client.js";
 import { sameFingerprint } from "./handoff-identity.js";
-import { requireApprovedPeer } from "./handoff-peers.js";
+import { requireApprovedPeer, verifyPeerSignature } from "./handoff-peers.js";
 import { HandoffError } from "./handoff-types.js";
 import { exportHandoff, preflightHandoff } from "./handoff.js";
 import { replyToTask, type TaskReplyBody } from "./task-reply.js";
@@ -15,8 +15,14 @@ import { answerTask } from "./task-answer.js";
 import { sessionOutputText, sessionsForTask, sessionTraceEntries } from "./task-session-routes.js";
 import { enrichTasks } from "./task-store.js";
 import { returnTargetForMarker } from "./handoff-return.js";
+import { cancelPendingInboundTransfer } from "./handoff-transfer-state.js";
 
-type ProxyBody = TaskReplyBody & { taskId?: string; transferId?: string; answer?: string };
+type ProxyBody = TaskReplyBody & {
+  taskId?: string;
+  transferId?: string;
+  returnTransferId?: string | null;
+  answer?: string;
+};
 type BrowserProxyBody = TaskReplyBody & { targetUrl?: string; answer?: string };
 
 function fail(c: Context, error: unknown) {
@@ -70,6 +76,21 @@ async function signedBody(c: Context): Promise<{ peer: NonNullable<Awaited<Retur
   let body: ProxyBody;
   try { body = JSON.parse(bytes.toString("utf8")) as ProxyBody; } catch { throw new HandoffError("请求体不是合法 JSON", 400); }
   return { peer, body };
+}
+
+async function signedCancellation(c: Context): Promise<{
+  peer: NonNullable<ReturnType<typeof verifyPeerSignature>>;
+  body: ProxyBody;
+  returning: boolean;
+}> {
+  const bytes = await readCappedBody(c.req.raw, 1);
+  let body: ProxyBody;
+  try { body = JSON.parse(bytes.toString("utf8")) as ProxyBody; }
+  catch { throw new HandoffError("请求体不是合法 JSON", 400); }
+  const returning = Object.prototype.hasOwnProperty.call(body, "returnTransferId");
+  const peer = returning ? verifyPeerSignature(c, bytes) : await requireApprovedPeer(c, bytes);
+  if (!peer) throw new HandoffError("撤销接力要求带机器身份签名", 401);
+  return { peer, body, returning };
 }
 
 async function ownedInboundTask(taskId: string, peerFingerprint: string, transferId?: string) {
@@ -134,6 +155,23 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
       const { peer, body } = await signedBody(c);
       if (!body.taskId) throw new HandoffError("缺 taskId", 400);
       return c.json(await snapshotFor(body.taskId, peer.fingerprint, body.transferId));
+    } catch (error) { return fail(c, error); }
+  });
+
+  // 来源机想恢复一条“送达未知”的本地任务时，先由当前目标机持久登记撤销。
+  // 这样即使旧 import 请求晚到，也会在落库前被 tombstone 拒绝，不会清完标记后又冒出第二份。
+  api.post("/handoff/proxy/task/cancel-pending", async (c) => {
+    try {
+      const { peer, body, returning } = await signedCancellation(c);
+      if (!body.taskId || !body.transferId) throw new HandoffError("缺 taskId / transferId", 400);
+      await cancelPendingInboundTransfer({
+        taskId: body.taskId,
+        transferId: body.transferId,
+        sourceFingerprint: peer.fingerprint,
+        returning,
+        ...(returning ? { returnTransferId: body.returnTransferId ?? null } : {}),
+      });
+      return c.json({ canceled: true });
     } catch (error) { return fail(c, error); }
   });
 
