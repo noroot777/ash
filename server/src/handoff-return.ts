@@ -67,6 +67,12 @@ export async function returnArchiveForPeer(
   };
 }
 
+export function assertReturnProject(targetProjectId: string, archiveProjectId: string): void {
+  if (targetProjectId !== archiveProjectId) {
+    throw new HandoffError("免审批移回只能落回原任务所属项目", 403);
+  }
+}
+
 export async function returnTargetForMarker(marker: TaskHandoff): Promise<HandoffTarget | null> {
   if (marker.direction !== "in" || !marker.peerFp) return null;
   // 任务本次导入时从真实 TCP 来源 + 对端自报端口恢复出的地址最新，也和这条任务绑定；

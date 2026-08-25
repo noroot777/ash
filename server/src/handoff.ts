@@ -170,7 +170,7 @@ export async function preflightHandoff(taskId: string, targetUrlRaw: string): Pr
   // 我那台机器」,别让一堆盘点数字把警告冲下去。
   const expectedFingerprint = returnFingerprint ?? await rememberedFingerprint(targetUrl);
   const returnContext = inboundReturnContext(taskId, task.handoff);
-  const { ping, peer } = await pingPeer(targetUrl, expectedFingerprint, returnContext);
+  const { ping, peer, taskScopedReturn } = await pingPeer(targetUrl, expectedFingerprint, returnContext);
   // 项目匹配靠仓库目录名:两台机器的绝对路径几乎必然不同,目录名是最稳的公共项。
   // 两侧路径可能来自不同操作系统(本机 Windows、对端 macOS,或反过来),所以不用
   // 跟随运行平台的 basename,统一按 win32 规则切——/ 和 \ 都认、吃掉盘符和尾分隔符,
@@ -183,6 +183,9 @@ export async function preflightHandoff(taskId: string, targetUrlRaw: string): Pr
   const rows = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
   const withCli = rows.filter((s) => s.cliSessionId);
   const { found, notes } = await collectSessionFiles(rows, expandHome(project.repoPath), true);
+  if (returnContext && !taskScopedReturn) {
+    notes.push("原机没有可用的任务存档，已切换为普通接力；需要原机批准当前机器后才能移回");
+  }
   const wt = worktreePathFor(project.repoPath, taskId);
   const gitReady = !!task.useWorktree && existsSync(wt);
   // 项目清单为空有两种原因,别混成一句话:对端真没建项目,还是它没批准本机所以不报。
@@ -317,7 +320,7 @@ export async function exportHandoff(
     // pingPeer 同时做身份核对:指纹和上次记住的对不上就在这里抛,bundle 一个字节都不打。
     const expectedFingerprint = returnFingerprint ?? await rememberedFingerprint(targetUrl);
     const returnContext = inboundReturnContext(taskId, prevHandoffRaw);
-    const { ping, peer, sealTo } = await pingPeer(targetUrl, expectedFingerprint, returnContext);
+    const { ping, peer, sealTo, taskScopedReturn } = await pingPeer(targetUrl, expectedFingerprint, returnContext);
     assertPeerAcceptsUs(peer);
     const targetProject = ping.projects.find((p) => p.id === opts.targetProjectId);
     if (!targetProject) throw new HandoffError("对端没有这个项目 id,先重新预检", 409);
@@ -327,6 +330,9 @@ export async function exportHandoff(
     if (!claimTurn(taskId, "handoff")) throw new HandoffError("任务回合还在收尾,稍等几秒再试", 409);
     try {
       const notes: string[] = [];
+      if (returnContext && !taskScopedReturn) {
+        notes.push("原机任务存档已删除，本次经整机审批通道重新导入原项目");
+      }
       const rows = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
         .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
       // 待发送消息(只带 pending)与定时计划随任务走:接力守卫拦续跑、调度器跳过已接力
@@ -343,7 +349,7 @@ export async function exportHandoff(
       if (targetProject.isRepo) {
         // 免审批移回只向原机暴露这一条任务所属项目，不放开常规 refs 端点；回程 bundle
         // 因而按全量打包，体积换取授权面严格收窄。
-        const refs = returnContext
+        const refs = taskScopedReturn
           ? { refs: [] as { name: string; commit: string }[] }
           : await fetchPeer<{ refs: { name: string; commit: string }[] }>(
               `${targetUrl}/api/handoff/projects/${targetProject.id}/refs`,
@@ -383,7 +389,7 @@ export async function exportHandoff(
         originFingerprint,
         targetProjectId: targetProject.id,
         transferId,
-        ...(returnContext ? { returnTransferId: returnContext.returnTransferId ?? null } : {}),
+        ...(taskScopedReturn ? { returnTransferId: returnContext?.returnTransferId ?? null } : {}),
         autoResume,
         sourceWorkspace,
         task: {
@@ -464,7 +470,7 @@ export async function exportHandoff(
       let result: { ok: boolean; taskId: string; autoResume?: boolean; idempotent?: boolean; notes?: string[]; error?: string };
       try {
         result = await fetchPeer<{ ok: boolean; taskId: string; autoResume?: boolean; idempotent?: boolean; notes?: string[]; error?: string }>(
-          `${targetUrl}/api/handoff/${returnContext ? "return/import" : "import"}`,
+          `${targetUrl}/api/handoff/${taskScopedReturn ? "return/import" : "import"}`,
           {
             method: "POST",
             headers: { "content-type": "application/json" },

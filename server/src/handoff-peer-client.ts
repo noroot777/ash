@@ -109,6 +109,8 @@ export async function fetchPeer<T>(
 
 export interface PeerProbe {
   ping: HandoffPingResponse;
+  /** true = 本次使用任务级免审批回程；false = 普通接力（缺存档/旧版时需整机审批）。 */
+  taskScopedReturn: boolean;
   /** null = 对端没报身份、本机也没记过指纹(两边都是旧版,无从核对)。 */
   peer: HandoffPeerIdentity | null;
   /**
@@ -137,6 +139,7 @@ export async function pingPeer(
   const nonce = newNonce();
   const pingUrl = returnContext ? `${targetUrl}/api/handoff/return/ping` : `${targetUrl}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`;
   let ping: HandoffPingResponse;
+  let taskScopedReturn = Boolean(returnContext);
   try {
     ping = returnContext
       ? await fetchPeer<HandoffPingResponse>(pingUrl, {
@@ -146,10 +149,11 @@ export async function pingPeer(
         })
       : await fetchPeer<HandoffPingResponse>(pingUrl);
   } catch (error) {
-    // 老版来源机没有任务级移回端点：退回常规 ping，仍按来源指纹核对；若它要求审批，
-    // UI 会继续走旧版的手工批准流程，不把升级变成“再也移不回去”。
+    // 老版来源机没有任务级端点，或原机已删掉历史存档：退回普通接力通道。身份仍按
+    // 任务来源指纹核对，但 refs/import 会恢复整机审批，不能借降级继续免审批写入。
     if (!returnContext || !(error instanceof HandoffError)
-      || error.remoteStatus !== 404 || error.remoteAsh) throw error;
+      || error.remoteStatus !== 404) throw error;
+    taskScopedReturn = false;
     ping = await fetchPeer<HandoffPingResponse>(`${targetUrl}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`);
   }
   if (!ping?.ok || ping.service !== "ash") {
@@ -165,7 +169,7 @@ export async function pingPeer(
         409,
       );
     }
-    return { ping, peer: null, sealTo: null };
+    return { ping, peer: null, sealTo: null, taskScopedReturn };
   }
   // 指纹一律按公钥现算,不信对端自报的那个字段。
   const fingerprint = fingerprintOf(identity.publicKey);
@@ -192,6 +196,7 @@ export async function pingPeer(
   const sealTo = handoffEncrypt && identity.kxPublicKey ? { kx: identity.kxPublicKey, fingerprint } : null;
   return {
     ping,
+    taskScopedReturn,
     peer: {
       fingerprint,
       short: shortFingerprint(fingerprint),

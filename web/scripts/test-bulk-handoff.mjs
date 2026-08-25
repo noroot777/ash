@@ -87,8 +87,15 @@ assert.deepEqual(
 assert.deepEqual(handoffTargetsForTask(targets, { direction: "in" }), []);
 assert.deepEqual(handoffTargetsForTask(targets, { direction: "returned", peerFp: thirdFp }), targets);
 assert.deepEqual(
-  handoffTargetsForTask([], { direction: "in", peerFp: sourceFp }, { name: "自动来源", url: "http://source", peerFp: sourceFp }),
-  [{ name: "自动来源", url: "http://source", peerFp: sourceFp }],
+  handoffTargetsForTask(
+    [{ name: "登记来源", url: "http://registered", peerFp: sourceFp }],
+    { direction: "in", peerFp: sourceFp },
+    { name: "自动来源", url: "http://automatic", peerFp: sourceFp },
+  ),
+  [
+    { name: "自动来源", url: "http://automatic", peerFp: sourceFp },
+    { name: "登记来源", url: "http://registered", peerFp: sourceFp },
+  ],
   "移回目标可由任务历史自动恢复，不要求先写入整机目标设置",
 );
 
@@ -99,5 +106,6 @@ assert.match(bulkDialog, /<HandoffRouteCard/, "批量接力应展示与单任务
 assert.match(bulkDialog, /handoff-result-panel handoff-bulk-result/, "批量接力结果页应使用同一套完成态视觉");
 assert.match(bulkDialog, /api\.handoffReturnTarget\(task\.id\)/, "批量移回应逐任务解析 marker 里的回程目标");
 assert.match(bulkDialog, /targetUrl: taskTarget\.url/, "批量正式移回应使用逐任务解析出的地址");
+assert.match(bulkDialog, /probeBulkTask/, "任务恢复地址不可达时批量移回应尝试同指纹登记地址");
 
 console.log("bulk handoff eligibility tests passed");

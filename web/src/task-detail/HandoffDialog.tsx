@@ -103,10 +103,19 @@ export function HandoffDialog({
       .then((probe) => {
         if (!alive) return;
         setPreflight(probe);
-        setProjectId(pendingHandoff?.targetProjectId ?? probe.suggestedProjectId ?? "");
+        setProjectId(pendingHandoff?.targetProjectId ?? probe.suggestedProjectId ?? probe.projects[0]?.id ?? "");
       })
       .catch((reason) => {
-        if (alive) setPreflightError(reason instanceof Error ? reason.message : String(reason));
+        if (!alive) return;
+        const fallback = inboundHandoff?.peerUrl
+          && normalizedHandoffUrl(targetUrl) === normalizedHandoffUrl(inboundHandoff.peerUrl)
+          ? (targets ?? []).find((item) => normalizedHandoffUrl(item.url) !== normalizedHandoffUrl(targetUrl))
+          : null;
+        if (fallback) {
+          setTargetUrl(fallback.url);
+          return;
+        }
+        setPreflightError(reason instanceof Error ? reason.message : String(reason));
       })
       .finally(() => { if (alive) setApplying(false); });
     return () => { alive = false; };
@@ -206,7 +215,7 @@ export function HandoffDialog({
       }
       const probe = await api.handoffPreflight(task.id, targetUrl);
       setPreflight(probe);
-      setProjectId(pendingHandoff?.targetProjectId ?? probe.suggestedProjectId ?? "");
+      setProjectId(pendingHandoff?.targetProjectId ?? probe.suggestedProjectId ?? probe.projects[0]?.id ?? "");
       notify(status === "approved" ? "对方已接受申请，可以选择项目并接力" : "目标机已就绪，可以继续接力");
     } catch (reason) {
       setPreflightError(reason instanceof Error ? reason.message : String(reason));
@@ -226,7 +235,7 @@ export function HandoffDialog({
     try {
       const probe = await api.handoffPreflight(task.id, targetUrl);
       setPreflight(probe);
-      setProjectId(pendingHandoff?.targetProjectId ?? probe.suggestedProjectId ?? "");
+      setProjectId(pendingHandoff?.targetProjectId ?? probe.suggestedProjectId ?? probe.projects[0]?.id ?? "");
     } catch (reason) {
       setPreflightError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -448,18 +457,18 @@ export function HandoffDialog({
                   autoResume={autoResume}
                   returning={Boolean(inboundHandoff)}
                 />
-                {(missingFiles > 0 || preflight.local.pendingMessages > 0 || preflight.local.schedule) && (
+                {(missingFiles > 0 || preflight.local.uploads > 0 || preflight.local.pendingMessages > 0 || preflight.local.schedule) && (
                   <ul className="handoff-summary">
                     {missingFiles > 0 && <li>{missingFiles} 个 CLI 会话找不到文件，到目标机后会全新起跑</li>}
-                  {preflight.local.uploads > 0 && (
-                    <li>附件中的本机绝对路径会自动改写为目标机路径</li>
-                  )}
-                  {preflight.local.pendingMessages > 0 && (
-                    <li>待发送消息 {preflight.local.pendingMessages} 条随任务迁移,到期后在对端投递;本机的原件会取消并留档在时间线</li>
-                  )}
-                  {preflight.local.schedule && (
-                    <li>定时计划({preflight.local.schedule === "cron" ? "周期" : "一次性"})随任务迁移,今后由对端触发</li>
-                  )}
+                    {preflight.local.uploads > 0 && (
+                      <li>附件中的本机绝对路径会自动改写为目标机路径</li>
+                    )}
+                    {preflight.local.pendingMessages > 0 && (
+                      <li>待发送消息 {preflight.local.pendingMessages} 条随任务迁移,到期后在对端投递;本机的原件会取消并留档在时间线</li>
+                    )}
+                    {preflight.local.schedule && (
+                      <li>定时计划({preflight.local.schedule === "cron" ? "周期" : "一次性"})随任务迁移,今后由对端触发</li>
+                    )}
                   </ul>
                 )}
                 {preflight.local.notes.length > 0 && (
@@ -512,6 +521,7 @@ export function HandoffDialog({
 }
 
 const HANDOFF_URL_RE = /^https?:\/\/\S+$/;
+const normalizedHandoffUrl = (url: string) => url.trim().replace(/\/+$/, "");
 
 const approvalMessage = (result: HandoffApprovalResult) => {
   const identity = result.peer ? `目标机身份 ${result.peer.short}。` : "目标机没有提供可核对的身份。";
@@ -537,13 +547,13 @@ export function HandoffBanner({
   handoff: TaskHandoff;
   notify: (message: string) => void;
   onTaskUpdate: (task: Task) => void;
-  onOpenRemote: () => void;
+  onOpenRemote?: (() => void) | null;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const out = handoff.direction === "out";
   const returned = handoff.direction === "returned";
-  const canOpenRemote = out && !handoff.pending && Boolean(handoff.peerUrl);
+  const canOpenRemote = out && !handoff.pending && Boolean(handoff.peerUrl) && Boolean(onOpenRemote);
   const peer = handoff.peerName ? `「${handoff.peerName}」` : "另一台机器";
   const clear = async () => {
     setBusy(true);
@@ -571,7 +581,7 @@ export function HandoffBanner({
             : `${new Date(handoff.at).toLocaleString()} 从${peer}接力而来(会话文件 ${handoff.sessions} 份,代码${handoff.git === "bundle" ? "已随分支带来" : "未随任务携带"})。`}
       </span>
       {canOpenRemote && (
-        <button type="button" className="task-handoff-open" onClick={onOpenRemote}>
+        <button type="button" className="task-handoff-open" onClick={() => onOpenRemote?.()}>
           在本机查看<ArrowSquareOut size={12} aria-hidden="true" />
         </button>
       )}

@@ -7,6 +7,7 @@ const detail = readFileSync(new URL("../src/remote-task/RemoteTaskDetail.tsx", i
 const rows = readFileSync(new URL("../src/workspace/TaskTreeRows.tsx", import.meta.url), "utf8");
 const handoff = readFileSync(new URL("../src/task-detail/HandoffDialog.tsx", import.meta.url), "utf8");
 const handoffViews = readFileSync(new URL("../src/task-detail/HandoffDialogViews.tsx", import.meta.url), "utf8");
+const taskDetail = readFileSync(new URL("../src/task-detail/TaskDetail.tsx", import.meta.url), "utf8");
 
 assert.doesNotMatch(machines, /target="_blank"/, "远程任务不应再打开新的远端浏览器标签");
 assert.match(machines, /onClick=\{\(\) => onRemoteTask\(task, target\)\}/, "远程任务行应交给工作区内联选择");
@@ -29,6 +30,9 @@ assert.match(handoff, /peerFp: inboundHandoff\.peerFp/, "手工来源地址仍�
 assert.match(handoff, /inboundHandoff && preflightError/, "旧记录被过期设置地址卡住时也应显示临时地址输入");
 assert.doesNotMatch(handoffViews, /index === 2|is-active/, "单任务传输不能展示伪造的精确阶段");
 assert.match(handoffViews, /本次将执行/, "单任务传输应把步骤表述为将执行清单");
-assert.match(handoff, /className="task-handoff-open" onClick=\{onOpenRemote\}/, "历史横幅也应复用本机代理视图");
+assert.match(handoff, /Boolean\(onOpenRemote\)/, "没有远程视图回调的团队抽屉不能渲染无效按钮");
+assert.match(taskDetail, /onOpenRemote=\{onRemoteTask \?/, "任务详情应只在远程视图能力存在时传入横幅回调");
+assert.match(handoff, /preflight\.local\.uploads > 0 \|\| preflight\.local\.pendingMessages/, "只有附件时也应显示路径改写说明");
+assert.match(handoff, /probe\.suggestedProjectId \?\? probe\.projects\[0\]\?\.id/, "唯一候选项目应自动选中");
 
 console.log("remote task proxy UI tests passed");

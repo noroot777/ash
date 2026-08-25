@@ -23,6 +23,26 @@ async function targetForBulkTask(task: Task, selected: HandoffTarget): Promise<H
   return task.handoff?.direction === "in" ? api.handoffReturnTarget(task.id) : selected;
 }
 
+const sameTargetUrl = (left: string, right: string) => left.replace(/\/+$/, "") === right.replace(/\/+$/, "");
+const sameTargetFingerprint = (left?: string | null, right?: string | null) =>
+  Boolean(left && right && left.toLowerCase() === right.toLowerCase());
+
+async function probeBulkTask(task: Task, selected: HandoffTarget): Promise<{
+  taskTarget: HandoffTarget;
+  probe: HandoffPreflightResult;
+}> {
+  const taskTarget = await targetForBulkTask(task, selected);
+  try {
+    return { taskTarget, probe: await api.handoffPreflight(task.id, taskTarget.url) };
+  } catch (reason) {
+    const canUseRegisteredFallback = task.handoff?.direction === "in"
+      && !sameTargetUrl(taskTarget.url, selected.url)
+      && sameTargetFingerprint(task.handoff.peerFp, selected.peerFp);
+    if (!canUseRegisteredFallback) throw reason;
+    return { taskTarget: selected, probe: await api.handoffPreflight(task.id, selected.url) };
+  }
+}
+
 function approvalText(result: HandoffApprovalResult): string {
   const identity = result.peer ? `目标机身份 ${result.peer.short}。` : "目标机没有提供可核对的身份。";
   if (result.peer?.peerStatus === "pending") return `${identity}申请已送达，等待对方接受。`;
@@ -92,8 +112,7 @@ function BulkHandoffDialog({
     setProgress({ done: 0, total: eligible.length, title: sample.title });
     setError(null);
     try {
-      const taskTarget = await targetForBulkTask(sample, target);
-      const probe = await api.handoffPreflight(sample.id, taskTarget.url);
+      const { taskTarget, probe } = await probeBulkTask(sample, target);
       if (mounted.current) rememberFirstProbe(sample.id, taskTarget, probe);
     } catch (reason) {
       if (mounted.current) {
@@ -142,8 +161,7 @@ function BulkHandoffDialog({
       }
       if (!sample) return;
       setProgress({ done: 0, total: eligible.length, title: sample.title });
-      const taskTarget = await targetForBulkTask(sample, target);
-      const probe = await api.handoffPreflight(sample.id, taskTarget.url);
+      const { taskTarget, probe } = await probeBulkTask(sample, target);
       if (mounted.current) rememberFirstProbe(sample.id, taskTarget, probe);
     } catch (reason) {
       if (mounted.current) setError(reason instanceof Error ? reason.message : String(reason));
@@ -171,8 +189,13 @@ function BulkHandoffDialog({
       const task = eligible[index];
       setProgress({ done: index, total: eligible.length, title: task.title });
       try {
-        const taskTarget = resolvedTargets.get(task.id) ?? await targetForBulkTask(task, target);
-        const probe = checked.get(task.id) ?? await api.handoffPreflight(task.id, taskTarget.url);
+        let taskTarget = resolvedTargets.get(task.id);
+        let probe = checked.get(task.id);
+        if (!taskTarget || !probe) {
+          const resolved = await probeBulkTask(task, target);
+          taskTarget = resolved.taskTarget;
+          probe = resolved.probe;
+        }
         if (!probe.projects.some((candidate) => candidate.id === projectId)) {
           throw new Error("目标项目已不可用，请重新选择");
         }

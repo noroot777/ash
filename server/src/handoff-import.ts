@@ -303,8 +303,10 @@ async function importValidated(
   }
   // 优先信本机历史标记里的原机指纹；旧标记没有时，才接受签名 manifest 携带的值。
   // returning 只表示“可安全覆盖旧存档”，并不等于回到原机：第二次 A→B 时 B 也有 out 存档。
+  // 原机存档被删除后会经整机审批走普通 import；没有冲突行且 originFp 指向本机时，
+  // 仍应恢复成 returned，而不是把任务误标成“从持有机接入、只能再移回持有机”。
   const originFingerprint = existingMarker?.originFp ?? m.originFingerprint ?? null;
-  const returnedHome = returning && originFingerprint === localIdentity().fingerprint;
+  const returnedHome = (returning || !existing) && originFingerprint === localIdentity().fingerprint;
   // 会话 id 冲突预检:必须在任何副作用之前拦下,否则落库落到一半 UNIQUE 炸掉,
   // 留下没有会话的半截任务(审查实测:import 500 后 GET 200、重试永远 409)。
   if (m.sessions.length) {

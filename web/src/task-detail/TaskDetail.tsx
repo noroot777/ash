@@ -382,14 +382,14 @@ export function TaskDetail({
                 handoff={task.handoff}
                 notify={notify}
                 onTaskUpdate={onTaskUpdate}
-                onOpenRemote={() => {
+                onOpenRemote={onRemoteTask ? () => {
                   if (!task.handoff?.peerUrl) return;
-                  onRemoteTask?.(task, {
+                  onRemoteTask(task, {
                     name: task.handoff.peerName ?? task.handoff.peerUrl,
                     url: task.handoff.peerUrl,
                     peerFp: task.handoff.peerFp,
                   });
-                }}
+                } : null}
               />
             )}
             {reviewOpen ? (

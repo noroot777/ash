@@ -34,7 +34,7 @@ import { publishTaskUpdated } from "./task-store.js";
 import { sessionTranscriptPath, TURN_SENTINEL } from "./transcript.js";
 import { now } from "./util.js";
 import { mountHandoffRemoteRoutes } from "./handoff-remote.js";
-import { returnArchiveForPeer, returnTargetForTask, sourceUrlFromPeer } from "./handoff-return.js";
+import { assertReturnProject, returnArchiveForPeer, returnTargetForTask, sourceUrlFromPeer } from "./handoff-return.js";
 
 type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 500 | 502;
 
@@ -114,7 +114,8 @@ async function handleImport(c: Context, returning: boolean) {
       if (!peer || !body.sourceFingerprint || !sameFingerprint(peer.fingerprint, body.sourceFingerprint)) {
         throw new HandoffError("移回载荷没有绑定到实际持有机器", 403);
       }
-      await returnArchiveForPeer(body.task?.id ?? "", peer.fingerprint, body.returnTransferId);
+      const archive = await returnArchiveForPeer(body.task?.id ?? "", peer.fingerprint, body.returnTransferId);
+      assertReturnProject(body.targetProjectId, archive.project.id);
     }
     return c.json(await importHandoff(body, {
       sourceUrl: sourceUrlFromPeer(peerAddr(c), body.sourcePort),

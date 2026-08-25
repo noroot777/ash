@@ -88,9 +88,16 @@ try {
   const { target: markerTarget } = await api<{ target: HandoffTarget }>(machineB, `/tasks/${task.id}/handoff/return-target`);
   assert.equal(markerTarget.url, machineA, "任务刚恢复的 peerUrl 不应被设置里的旧 URL 盖掉");
 
-  const { sourceUrlFromPeer } = await import("../src/handoff-return.js");
+  const { assertReturnProject, sourceUrlFromPeer } = await import("../src/handoff-return.js");
   assert.equal(sourceUrlFromPeer("mac-mini.local", 4317), "http://mac-mini.local:4317", "mDNS 主机名应能组成回程地址");
   assert.equal(sourceUrlFromPeer("bad host", 4317), null, "非法主机名不能进入 URL");
+  assert.throws(
+    () => assertReturnProject("other-project", projectA.id),
+    (error: unknown) => error instanceof Error
+      && (error as { status?: number }).status === 403
+      && /原任务所属项目/.test(error.message),
+    "免审批 return/import 不能接受持有机篡改的目标项目",
+  );
 
   const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   const forgedBody = JSON.stringify({
@@ -143,7 +150,7 @@ try {
   const peersOnA = await api<{ peers: { fingerprint: string }[] }>(machineA, "/handoff/peers");
   assert.ok(!peersOnA.peers.some((peer) => peer.fingerprint === identityB.fingerprint), "免审批移回不应暗中建立整机级批准记录");
 
-  // 新版 return/ping 的任务级 404 必须原样失败，不能误当成“旧版没有路由”再退回普通 ping。
+  // 原机存档被删后，任务级免审批凭据不再成立；允许退回普通接力，但必须恢复整机审批。
   const missingArchiveTask = await api<Task>(machineA, "/tasks", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -160,13 +167,27 @@ try {
     body: JSON.stringify({ targetUrl: machineB, targetProjectId: projectB.id, targetName: "B", autoResume: false }),
   });
   await api(machineA, `/tasks/${missingArchiveTask.id}`, { method: "DELETE" });
-  const missingArchive = await fetch(`${machineB}/api/tasks/${missingArchiveTask.id}/handoff/preflight`, {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ targetUrl: machineA }),
+  const pendingFallback = await api<HandoffPreflightResult>(machineB, `/tasks/${missingArchiveTask.id}/handoff/preflight`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetUrl: machineA }),
   });
-  const missingArchiveBody = (await missingArchive.json()) as { error?: string };
-  assert.equal(missingArchive.status, 502);
-  assert.match(missingArchiveBody.error ?? "", /原机没有这条任务的历史存档/);
+  assert.equal(pendingFallback.peer?.peerStatus, "pending", "存档缺失后应降级为需要整机审批的普通接力");
+  assert.deepEqual(pendingFallback.projects, [], "未批准前普通接力不能读取原机项目清单");
+  assert.ok(pendingFallback.local.notes.some((note) => /普通接力/.test(note)), "预检应解释为何重新需要审批");
+
+  await api(machineA, `/handoff/peers/${identityB.fingerprint}/approve`, { method: "POST" });
+  const approvedFallback = await api<HandoffPreflightResult>(machineB, `/tasks/${missingArchiveTask.id}/handoff/preflight`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetUrl: machineA }),
+  });
+  assert.equal(approvedFallback.peer?.peerStatus, "approved");
+  assert.ok(approvedFallback.projects.some((project) => project.id === projectA.id));
+
+  await api(machineB, `/tasks/${missingArchiveTask.id}/handoff`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: machineA, targetProjectId: projectA.id, targetName: "A", autoResume: false }),
+  });
+  const restoredWithoutArchive = await api<Task>(machineA, `/tasks/${missingArchiveTask.id}`);
+  assert.equal(restoredWithoutArchive.projectId, projectA.id);
+  assert.equal(restoredWithoutArchive.handoff?.direction, "returned", "经审批回到原机后不应误标为仍需移回 B");
   console.log("test-handoff-return ok");
 } finally {
   for (const port of serverPorts) {
