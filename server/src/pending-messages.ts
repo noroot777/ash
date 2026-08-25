@@ -124,7 +124,7 @@ const inFlight = new Set<string>();
 
 // 抢下之后最终没能送出去:把租约还回去(托盘里它压根没消失过),下一次触发再送。
 // **宁可晚发,不能不发。**
-async function abortDelivery(message: Row): Promise<void> {
+export async function abortDelivery(message: Row): Promise<void> {
   lastFiredAt.delete(message.taskId);
   await db
     .update(scheduledMessages)
@@ -182,7 +182,7 @@ export async function beginDelivery(messageId: string): Promise<boolean> {
 
 // 原话已经进会话了,这才落 sent。用 status='pending' 兜一道:等待期间用户手动取消过的
 // 消息不该被这一步复活。
-async function markSent(message: Row): Promise<void> {
+export async function markSent(message: Row): Promise<void> {
   await db
     .update(scheduledMessages)
     .set({ status: "sent", sentAt: now(), deliveringSince: null })
@@ -205,7 +205,7 @@ export async function reclaimStaleDeliveries(): Promise<number> {
   return reclaimed.length;
 }
 
-function deliveryOptions(m: Row) {
+export function deliveryOptions(m: Row) {
   return {
     attachments: JSON.parse(m.attachments) as string[],
     agent: (m.agent as AgentType) ?? undefined,

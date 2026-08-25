@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type { ScheduledMessage } from "@ash/shared";
-import { Clock, Queue, SpinnerGap, X } from "@phosphor-icons/react";
+import { Clock, FlowArrow, Queue, SpinnerGap, X } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
@@ -16,6 +16,7 @@ export function useScheduledMessages(taskId: string) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [cancelingIds, setCancelingIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [steeringIds, setSteeringIds] = useState<ReadonlySet<string>>(() => new Set());
 
   // quiet=true:不闪 loading 态。任务状态一变就重拉一次(排队消息可能刚被投递
   // 出去),托盘要么原样、要么少一行,不该在用户眼皮底下闪一下「正在加载」。
@@ -35,6 +36,7 @@ export function useScheduledMessages(taskId: string) {
     let alive = true;
     setMessages([]);
     setCancelingIds(new Set());
+    setSteeringIds(new Set());
     setLoading(true);
     setError(null);
     void api.scheduledMessages(taskId).then(
@@ -81,7 +83,27 @@ export function useScheduledMessages(taskId: string) {
     }
   }, []);
 
-  return { messages, loading, error, cancelingIds, add, cancel, reload };
+  const steer = useCallback(async (messageId: string) => {
+    setSteeringIds((current) => new Set(current).add(messageId));
+    setError(null);
+    try {
+      await api.steerScheduledMessage(messageId);
+      // 端点只有在原话真正落进同一会话、服务端已标 sent 后才返回成功；SSE 是权威
+      // 收口，这里同步少一行只是让按钮点击后的反馈不受网络事件时序影响。
+      setMessages((current) => current.filter((message) => message.id !== messageId));
+    } catch (reason) {
+      // 失败不做乐观删除：消息仍在队列，用户可以继续等或再次尝试引导。
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setSteeringIds((current) => {
+        const next = new Set(current);
+        next.delete(messageId);
+        return next;
+      });
+    }
+  }, []);
+
+  return { messages, loading, error, cancelingIds, steeringIds, add, cancel, steer, reload };
 }
 
 export function ScheduledMessageTray({
@@ -89,12 +111,16 @@ export function ScheduledMessageTray({
   loading,
   error,
   cancelingIds,
+  steeringIds,
+  onSteer,
   onCancel,
 }: {
   messages: ScheduledMessage[];
   loading: boolean;
   error: string | null;
   cancelingIds: ReadonlySet<string>;
+  steeringIds?: ReadonlySet<string>;
+  onSteer?: (messageId: string) => void;
   onCancel: (messageId: string) => void;
 }) {
   if (!loading && !error && messages.length === 0) return null;
@@ -104,6 +130,8 @@ export function ScheduledMessageTray({
       {error && <p role="alert">待发送消息：{error}</p>}
       {messages.map((message) => {
         const canceling = cancelingIds.has(message.id);
+        const steering = steeringIds?.has(message.id) ?? false;
+        const busy = canceling || steering;
         // 排队消息没有「几点发」可言——它等的是任务空下来,所以那一格写它在等什么。
         const queued = message.mode === "queued";
         const when = queued ? "排队中" : formatInstant(message.sendAt);
@@ -111,15 +139,29 @@ export function ScheduledMessageTray({
           <div className="scheduled-message-row" key={message.id}>
             {queued ? <Queue size={12} aria-hidden="true" /> : <Clock size={12} aria-hidden="true" />}
             {queued
-              ? <em>排队中 · 跑完自动发送</em>
+              ? <em>排队 · 当前回合结束后发送</em>
               : <time dateTime={message.sendAt}>{formatInstant(message.sendAt)}</time>}
             {message.agent && <span>@{message.agent}</span>}
             <b title={message.text || message.attachments.join("\n")}>
               {message.text || (message.attachments.length ? `[${message.attachments.length} 个附件]` : "[空消息]")}
             </b>
+            {queued && onSteer && (
+              <button
+                type="button"
+                className="scheduled-message-guide"
+                disabled={busy}
+                aria-label={`用排队消息“${message.text || "附件"}”引导方向`}
+                onClick={() => onSteer(message.id)}
+              >
+                {steering
+                  ? <SpinnerGap size={12} className="is-spinning" aria-hidden="true" />
+                  : <FlowArrow size={12} aria-hidden="true" />}
+                <span>{steering ? "正在引导" : "引导方向"}</span>
+              </button>
+            )}
             <button
               type="button"
-              disabled={canceling}
+              disabled={busy}
               title={queued ? "取消这条排队消息" : "取消定时发送"}
               aria-label={`取消${when}的待发送消息`}
               onClick={() => onCancel(message.id)}

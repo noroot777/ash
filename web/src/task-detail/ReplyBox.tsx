@@ -107,7 +107,7 @@ export function ReplyBox({
     : task.archived
       ? command ? "任务已归档；仍可输入 /team 或 /duet 创建派生任务…" : "任务已归档，无法继续回复"
       : queueing
-        ? command ? "任务进行中；发送即排队，也可输入 /team 或 /duet 派生任务…" : "任务进行中，发送即排队，这一轮结束自动发出（⌘↵）…"
+        ? command ? "任务进行中；发送即排队，也可输入 /team 或 /duet 派生任务…" : "任务进行中，发送即排队；需要立即改向可在队尾点“引导方向”（⌘↵）…"
         : !hasConversation
           ? command ? "可输入 /team 创建团队，或输入 /duet 发起讨论…" : "先运行任务，再继续回复"
           : command ? "回复并继续；输入 /team 或 /duet 可派生新任务…" : "回复并继续（⌘↵ 发送，可粘贴图片或文件）…";
@@ -379,6 +379,8 @@ export function ReplyBox({
         loading={scheduled.loading}
         error={scheduled.error}
         cancelingIds={scheduled.cancelingIds}
+        steeringIds={scheduled.steeringIds}
+        onSteer={(messageId) => void scheduled.steer(messageId)}
         onCancel={(messageId) => void scheduled.cancel(messageId)}
       />
       <UploadAttachmentList attachments={uploads.attachments} error={uploads.error} onRemove={uploads.remove} />

@@ -12,7 +12,7 @@ import { bus } from "./bus.js";
 import { scanForTitle } from "./auto-title.js";
 import { now } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { takeStopped, takeConfirmed, type StopSettle } from "./runs.js";
+import { takeSteered, takeStopped, takeConfirmed, type StopSettle } from "./runs.js";
 import type { AgentExecutor, RunHandle } from "./executors/types.js";
 import { LOST_SESSION_PATCH, SESSION_LOST_NOTE, isSessionLost } from "./executors/session-lost.js";
 import { appendSessionTrace, writeTurnEnd, writeRunError } from "./transcript.js";
@@ -382,14 +382,15 @@ export async function consumeSingleRun(a: {
   // A stop kills the subprocess → the stream ends like a normal exit; settle
   // by the stop kind (manual → canceled, group pause → paused) so it can be
   // re-run / continued.
+  const steered = takeSteered(taskId);
   const stopped = takeStopped(taskId);
   const endIso = now();
   // CLI 否认了这条会话：把失效的 id 连同由它派生的三件套恢复命令一起清掉。清了之后
   // orchestrator 的 `resuming`（判据就是「这条会话行上有没有 cli_session_id」）自然为
   // 假，下一次运行走全新会话那条路 —— 不必在别处再加一个「要不要续」的开关。
   // 退出码 0 也要求上：正常收尾的回合不该因为正文里出现过这句话就丢掉会话。
-  const dropSession = sessionLost && exitStatus !== 0;
-  await closeExecution(stopped ?? (exitStatus === 0 ? "completed" : "failed"), endIso);
+  const dropSession = !steered && sessionLost && exitStatus !== 0;
+  await closeExecution(steered ? "canceled" : stopped ?? (exitStatus === 0 ? "completed" : "failed"), endIso);
   await db
     .update(sessions)
     .set({
@@ -398,7 +399,7 @@ export async function consumeSingleRun(a: {
       // 光看 exitStatus 分不出「我停的」和「它崩了」，而停止事实只在内存里活一次
       // （takeStopped 消费即清）。不落这一列，续聊被手动停止之后，那颗「上一回合崩了
       // 快重试」的按钮就会稳定地把用户刚停下的指令再跑一遍（第 2 轮审查 finding 2）。
-      stoppedAs: stopped ?? null,
+      stoppedAs: steered ? "steered" : stopped ?? null,
       endedAt: endIso,
       activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${Math.max(0, Date.parse(endIso) - Date.parse(a.turnStart))}`,
       // 这一轮结束了，pid 不再有意义——留着会让下次重启去接一个早就没了的
@@ -408,6 +409,16 @@ export async function consumeSingleRun(a: {
       ...(dropSession ? LOST_SESSION_PATCH : {}),
     })
     .where(eq(sessions.id, sessId));
+  if (steered) {
+    // 「引导方向」只截断旧回合：任务仍是 running，新方向已持有 scheduled_messages
+    // 投递租约，并排在 releaseTurn 后用同一 cliSessionId 续送。这里若走普通 settle，
+    // 会把旧方向误记 failed/canceled、推进队列，还可能触发工作流/审查；若补放旧回合
+    // 的 complete_task，又会让新方向一开始就继承一张错误的完成票。
+    clearTurnStart(taskId);
+    writeTurnEnd(out, endIso);
+    out.end();
+    return;
+  }
   if (dropSession) {
     // 只弹一句错误不算数：用户看到的是一行英文 `No conversation found with session ID`，
     // 看不出 ash 已经替他把死 id 清了、也看不出重试会丢上下文。跟别的诊断一样三处都落：

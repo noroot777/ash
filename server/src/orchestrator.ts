@@ -7,7 +7,7 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, untrackRun, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
+import { trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun, afterSettlement } from "./single-run.js";
 import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
@@ -508,6 +508,9 @@ export async function continueTask(
       handle, out, turnStart, cliSessionId, autoTitle: false, role: sessionRole,
     });
   } catch (err) {
+    // 与 consumeSingleRun 的正常收流分支对称：有些 CLI 被 kill 后会让 parser 直接抛。
+    // 「引导方向」已经在 releaseTurn 后登记了同会话续送，这里不能再把旧回合结算成 failed。
+    if (takeSteered(taskId)) return true;
     const message = String(err instanceof Error ? err.message : err);
     // 基线的事先说：它在这一轮更早的时候就**已经落库**了（解析工作目录那一刻），说在
     // 失败交代之前才对得上发生顺序；没说过才补。

@@ -29,6 +29,7 @@ import { mountTaskArchiveRoutes } from "./task-archive-routes.js";
 import { mountTaskRetryTurnRoutes } from "./task-retry-turn.js";
 import { mountTaskScheduleRoutes } from "./task-schedule-routes.js";
 import { mountTaskSessionRoutes } from "./task-session-routes.js";
+import { mountTaskSteerRoutes } from "./task-steer.js";
 import { RUNS_DIR } from "./paths.js";
 import { publishPendingMessages } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
@@ -50,6 +51,7 @@ export function mountTaskRunRoutes(api: Hono): void {
   mountTaskRetryTurnRoutes(api);
   mountTaskScheduleRoutes(api);
   mountTaskSessionRoutes(api);
+  mountTaskSteerRoutes(api);
   const toScheduledMessage = (r: typeof scheduledMessages.$inferSelect): ScheduledMessage => ({
     ...r,
     attachments: JSON.parse(r.attachments),

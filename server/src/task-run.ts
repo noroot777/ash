@@ -7,7 +7,7 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, untrackRun, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
+import { trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun, afterSettlement } from "./single-run.js";
 import { taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
@@ -200,6 +200,9 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
       handle, out, turnStart, cliSessionId, autoTitle,
     });
   } catch (err) {
+    // handle 已登记后收到「引导方向」时，kill 可能恰好让 parser 抛而不是正常收流。
+    // 它仍是受控交接：旧回合不落 failed，releaseTurn 后由已登记的回调续送新方向。
+    if (takeSteered(taskId)) return;
     const message = String(err instanceof Error ? err.message : err);
     // 基线的事先说：它在这一轮更早的时候就**已经落库**了，说在失败交代之前才对得上
     // 发生顺序。没说过才补（spawn 成功后崩的那种，上面已经写过一条）。

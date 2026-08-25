@@ -550,6 +550,8 @@ export const api = {
     request(`/tasks/${id(taskId)}/scheduled-messages`),
   cancelScheduledMessage: (messageId: string): Promise<unknown> =>
     request(`/scheduled-messages/${id(messageId)}`, { method: "DELETE" }),
+  steerScheduledMessage: (messageId: string): Promise<{ steered: true; messageId: string }> =>
+    request(`/scheduled-messages/${id(messageId)}/steer`, json("POST", {})),
 
   llmProviders: (): Promise<LlmProvider[]> => request("/llm-providers"),
   probeModels: (body: {
