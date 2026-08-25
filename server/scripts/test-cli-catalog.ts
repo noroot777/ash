@@ -32,7 +32,13 @@ import { GenericCliExecutor, hasTrustedSessionId, interactiveResumeInner } from 
 import { execBinFor, probeBins } from "../src/executors/bin-probe.js";
 import { resumeCommandFor } from "../src/executors/resume.js";
 import { normalizeProfileExtraArgs } from "../src/executors/args.js";
-import { installCommandFor, versionWarningFor } from "../src/detect.js";
+import {
+  detectKnownClis,
+  detectLocalAgents,
+  installCommandFor,
+  registrationVersionWarning,
+  versionWarningFor,
+} from "../src/detect.js";
 import type { CliSpec } from "../src/executors/catalog/types.js";
 import { IS_WINDOWS } from "../src/platform.js";
 
@@ -42,6 +48,7 @@ assert.match(versionWarningFor("codex", "codex-cli 0.147.0") ?? "", /升级/);
 assert.match(versionWarningFor("codex", "0.147.9-beta.1") ?? "", /0\.148\.0/);
 assert.equal(versionWarningFor("codex", "codex-cli 0.146.0"), undefined);
 assert.equal(versionWarningFor("codex", "codex-cli 0.148.0"), undefined);
+assert.equal(versionWarningFor("codex", null), undefined);
 assert.equal(versionWarningFor("claude", "0.147.0"), undefined);
 assert.equal(versionWarningFor("codex", "unknown"), undefined);
 
@@ -60,6 +67,33 @@ function writeEchoStub(dir: string, name: string): string {
   const file = join(dir, IS_WINDOWS ? `${name}.cmd` : name);
   writeFileSync(file, IS_WINDOWS ? "@echo %~1\r\n" : '#!/bin/sh\necho "$1"\n', { mode: 0o755 });
   return file;
+}
+
+function writeVersionStub(dir: string, name: string, version: string): string {
+  const file = join(dir, IS_WINDOWS ? `${name}.cmd` : name);
+  writeFileSync(file, IS_WINDOWS ? `@echo ${version}\r\n` : `#!/bin/sh\necho ${JSON.stringify(version)}\n`, { mode: 0o755 });
+  return file;
+}
+
+{
+  const stubDir = mkdtempSync(join(tmpdir(), "ash-codex-version-stub-"));
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${stubDir}${delimiter}${originalPath ?? ""}`;
+  try {
+    writeVersionStub(stubDir, "codex", "codex-cli 0.147.8");
+    assert.match(await registrationVersionWarning("codex") ?? "", /升级/, "已安装的 0.147.x 必须拒绝注册");
+    const catalogCodex = (await detectKnownClis()).find((cli) => cli.type === "codex");
+    assert.match(catalogCodex?.versionWarning ?? "", /升级/, "手动检测结果必须带出版本警告");
+    const backgroundCodex = (await detectLocalAgents()).find((cli) => cli.type === "codex");
+    assert.ok(backgroundCodex, "后台执行器探测必须包含 Codex");
+    assert.equal("versionWarning" in backgroundCodex, false, "用户手动检测前不能从后台探测泄露升级提示");
+    writeVersionStub(stubDir, "codex", "codex-cli 0.149.1");
+    assert.equal(await registrationVersionWarning("codex"), undefined, "非 0.147.x 不能拦注册");
+    assert.equal(await registrationVersionWarning("claude"), undefined, "只限制 Codex");
+  } finally {
+    process.env.PATH = originalPath;
+    rmSync(stubDir, { recursive: true, force: true });
+  }
 }
 
 assert.deepEqual(

@@ -21,6 +21,7 @@ type ParseOutcome =
 
 const warnedThreads = new Set<string>();
 const cliVersionCache = new Map<string, string>();
+const CLI_VERSION_SCAN_LINES = 32;
 
 export function codexHome(): string {
   return process.env.CODEX_HOME || path.join(homedir(), ".codex");
@@ -76,7 +77,9 @@ async function tailLines(file: string): Promise<string[]> {
 export function parseCodexCliVersionLine(line: string, threadId?: string): string | null {
   let row: any;
   try {
-    row = JSON.parse(line);
+    // PowerShell/编辑器偶尔会在文件开头留下 BOM；JSON.parse 不接受它，但这不该让
+    // 后面的合法 session_meta 一起失效。
+    row = JSON.parse(line.trimStart());
   } catch {
     return null;
   }
@@ -96,14 +99,28 @@ export async function readCodexCliVersion(threadId: string): Promise<string | nu
     if (!file) return null;
     const stream = createReadStream(file, { encoding: "utf8" });
     const lines = createInterface({ input: stream, crlfDelay: Infinity });
-    for await (const line of lines) {
+    let inspected = 0;
+    try {
+      for await (const line of lines) {
+        inspected += 1;
+        if (!line.trim()) {
+          if (inspected >= CLI_VERSION_SCAN_LINES) return null;
+          continue;
+        }
+        const version = parseCodexCliVersionLine(line, threadId);
+        if (version) {
+          cliVersionCache.set(threadId, version);
+          return version;
+        }
+        // session_meta 应在文件开头；只容忍少量空行/旁注/格式噪声，避免坏文件触发
+        // 对整份巨大 rollout 的线性扫描。
+        if (inspected >= CLI_VERSION_SCAN_LINES) return null;
+      }
+      return null;
+    } finally {
       lines.close();
       stream.destroy();
-      const version = parseCodexCliVersionLine(line, threadId);
-      if (version) cliVersionCache.set(threadId, version);
-      return version;
     }
-    return null;
   } catch {
     return null;
   }
