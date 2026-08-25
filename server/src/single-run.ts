@@ -248,6 +248,17 @@ export async function consumeSingleRun(a: {
       console.warn(`[ash] failed to record free workflow execution end for ${taskId}:`, error);
     }
   };
+  // 会话轮换旁注的缓冲与落盘。**必须声明在 try 外面**：异常路径的兜底 flush 挂在
+  // finally 上，声明进 try 里它就不在作用域内了。
+  // 先取空再写：正常尾部（agentEnd 之后）跑一次，finally 再跑一次也只是空转 —— 既不会
+  // 把同一条写两遍，也不会往已经 end 掉的流上再写（写已 end 的流会当场打崩 server）。
+  const sessionNotices: { text: string; at: string }[] = [];
+  const flushSessionNotices = () => {
+    const notices = sessionNotices.splice(0);
+    for (const notice of notices) {
+      writeTurn(out, { t: "system", agent: agentType, text: notice.text }, notice.at);
+    }
+  };
   try {
   let cliSessionId = a.cliSessionId;
   let exitStatus = 0;
@@ -274,7 +285,6 @@ export async function consumeSingleRun(a: {
   };
   // 会话轮换旁注：实时立刻播（用户正看着），落盘攒到 writeTurnEnd 之后再补 —— 见
   // 事件循环里那段注释，夹在正文和 agentEnd 之间会让重建出来的回合用时失准。
-  const sessionNotices: { text: string; at: string }[] = [];
   const noteSessionNotice = (text: string) => {
     const at = now();
     sessionNotices.push({ text, at });
@@ -486,13 +496,15 @@ export async function consumeSingleRun(a: {
     publishEvent({ kind: "error", message: settled.note });
   }
   writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
-  // 会话轮换旁注排在 agentEnd **之后**：这样重建时 agentEnd 仍盖在 agent 那段上，
-  // 旁注自己是紧随其后的独立气泡，和实时看到的先后一致。
-  for (const notice of sessionNotices) {
-    writeTurn(out, { t: "system", agent: agentType, text: notice.text }, notice.at);
-  }
+  flushSessionNotices();
   out.end();
   } finally {
+    // 正常路径上上面那句已经把旁注清空了，这里是**异常路径**的保险：清库、重放、结算
+    // 任何一步抛错，都不能让「这条会话作废了、下次会丢上下文」只活在实时 SSE 里 ——
+    // 用户一刷新就什么都看不到，还会去重试同一条坏会话。flushSessionNotices 先取空再写，
+    // 所以正常路径走到这里必然是空的，绝不会往已经 end 掉的流上再写一次（写已 end 的
+    // 流会当场打崩 server，见 duet/turn.ts 里同样的告诫）。
+    flushSessionNotices();
     await closeExecution("failed", now());
   }
 }

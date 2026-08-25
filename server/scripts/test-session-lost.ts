@@ -34,6 +34,13 @@ import { affectedCodexSessionReplacementNote } from "../src/executors/version-po
 import { parseClaudeStream } from "../src/executors/claude.js";
 import { affectedCodexResumeVersion } from "../src/session-version-guard.js";
 import { latestTeamLeadSession } from "../src/team/session-selection.js";
+import {
+  idleRotation,
+  onFreshSession,
+  onRotationError,
+  onRotationNotPersisted,
+  onRotationPersisted,
+} from "../src/team/rotation-state.js";
 
 const dir = mkdtempSync(join(tmpdir(), "ash-session-lost-"));
 const ok = (m: string) => console.log("   ✓ " + m);
@@ -195,7 +202,13 @@ assert.deepEqual(
 for (const [chain, owner] of Object.entries(CHAIN_OWNER)) {
   const code = readFileSync(join(SRC, owner), "utf8");
   assert.ok(code.includes("LOST_SESSION_PATCH"), `${chain} 的结算方 ${owner} 没在清失效会话`);
-  assert.ok(code.includes("mergeSessionResumeFault"), `${chain} 的结算方 ${owner} 没识别 poisoned 会话`);
+  // 识别 poisoned 可以直接调合并规则,也可以走常驻那台状态机(它自己就架在同一条规则上,
+  // 见 team/rotation-state.ts 与本文件 ⑦)—— 但总得有一个,不能一个都没有。
+  assert.match(
+    code,
+    /mergeSessionResumeFault|onRotationError/,
+    `${chain} 的结算方 ${owner} 没识别 poisoned 会话`,
+  );
   assert.ok(code.includes("shouldDropSession"), `${chain} 的结算方 ${owner} 没让 poisoned exit 0 作废`);
 }
 ok("每条续跑链都有人负责清失效 id");
@@ -249,12 +262,27 @@ assert.equal(
 );
 
 // 落盘顺序由代码保证:两条链都得先 writeTurnEnd,再补旁注。
+const singleRunCode = readFileSync(join(SRC, "single-run.ts"), "utf8");
 assert.match(
-  readFileSync(join(SRC, "single-run.ts"), "utf8"),
-  /writeTurnEnd\(out, endIso\);[\s\S]{0,400}?for \(const notice of sessionNotices\)/,
+  singleRunCode,
+  /writeTurnEnd\(out, endIso\);[^\n]*\n\s*flushSessionNotices\(\);/,
   "single-run 的轮换旁注必须写在 writeTurnEnd 之后",
 );
-for (const fence of [/writeTurnEnd\(lead\.out, endIso\);\s*\n\s*flushSessionNotices\(lead\)/]) {
+// 而且不能只在正常尾部落盘:清库/重放/结算任何一步抛错,旁注就只活在实时 SSE 里,
+// 用户一刷新什么都看不到,还会去重试同一条坏会话。异常路径必须有兜底 flush。
+assert.match(
+  singleRunCode,
+  /\} finally \{[\s\S]{0,600}?flushSessionNotices\(\);[\s\S]{0,200}?await closeExecution\("failed", now\(\)\);/,
+  "single-run 的 finally 必须兜底把轮换旁注落盘,否则异常路径上这条证据会整个消失",
+);
+// 兜底能安全跑两次的前提:flush 先把缓冲取空。否则正常路径已经 end 掉流之后再写一次,
+// 会当场把整个 server 打崩(ERR_STREAM_WRITE_AFTER_END)。
+assert.match(
+  singleRunCode,
+  /const flushSessionNotices = \(\) => \{\s*\n\s*const notices = sessionNotices\.splice\(0\);/,
+  "flushSessionNotices 必须先取空再写,否则 finally 那次兜底会把同一条写两遍/写到已 end 的流上",
+);
+for (const fence of [/writeTurnEnd\(lead\.out, endIso\);[^\n]*\n\s*flushSessionNotices\(lead\)/]) {
   assert.match(teamSessionCode, fence, "team 的轮换旁注必须紧跟在 writeTurnEnd 之后落盘");
 }
 assert.equal(
@@ -270,12 +298,12 @@ for (const [chain, owner] of [["single", "single-run.ts"], ["team", "team/sessio
     `${chain} 没按 scope 分流会话轮换诊断,成功回合会被记成有异常`,
   );
 }
-ok("会话轮换旁注按 scope 分流,且排在 agentEnd 之后不夺走回合用时");
+ok("会话轮换旁注按 scope 分流,排在 agentEnd 之后,异常路径也落得下来");
 
 // ── ⑥ 中途已作废的会话,收尾不再重播整段说明 ────────────────────────────────
 assert.match(
   teamSessionCode,
-  /rotationAnnounced \? ROTATION_ALREADY_ANNOUNCED : dropNote/,
+  /rotation\.announced \? ROTATION_ALREADY_ANNOUNCED : dropNote/,
   "consume 里已经播过轮换说明时,closeLead 应只补指路而不是整段重复",
 );
 // 中途清库那一步也要认「这条会话行已被新进程接管」,否则会抹掉新进程刚写进去的 id。
@@ -284,18 +312,51 @@ assert.match(
   /if \(leads\.get\(lead\.taskId\) === lead\) \{\s*\n\s*let note = sessionResumeFaultNote\("poisoned"\);\s*\n\s*try \{\s*\n\s*await db\.update\(sessions\)\.set\(LOST_SESSION_PATCH\)/,
   "常驻中途作废会话前必须排除 superseded,否则会清掉新进程的有效 id",
 );
-// 「已说过」只能由**清成功**那一支置位:清失败还报喜,就是上一轮刚修掉的那个毛病。
-assert.match(
-  teamSessionCode,
-  /await db\.update\(sessions\)\.set\(LOST_SESSION_PATCH\)[\s\S]{0,300}?lead\.rotationAnnounced = true;\s*\n\s*\} catch \(error\) \{/,
-  "rotationAnnounced 必须只在恢复字段真的清掉之后置位",
-);
-assert.doesNotMatch(
-  teamSessionCode,
-  /note = SESSION_DROP_PERSISTENCE_FAILED_NOTE;[\s\S]{0,200}?lead\.rotationAnnounced = true/,
-  "写库失败那一支不能把自己标成‘已说过’,否则收尾会用报喜的短话盖掉真相",
-);
 ok("常驻中途作废:不重播说明,也不抹掉接管进程的新会话 id");
+
+// ── ⑦ 轮换状态机:标志位必须跟着会话一起翻篇 ────────────────────────────────
+// 常驻调度台在同一条 events 流里跑很多回合,所以「坏没坏 / 等不等新 id / 那句『已作废』
+// 说没说过」是**跨会话**活着的三个标志。真正的坏法不是写错一行,而是换了新会话却漏复位
+// 其中一个 —— 于是上一条会话的结论被串到下一条上。这是状态序列题,结构 grep 抓不到,所以
+// 逻辑抽在 team/rotation-state.ts 里按序列测。
+const POISON = "ignored world-state patch without a full snapshot";
+
+// 基线:干净状态什么都不认。
+assert.deepEqual(idleRotation(), { fault: null, awaitingFresh: false, announced: false });
+
+// ① 普通 error 不该升起任何轮换意图。
+assert.deepEqual(
+  onRotationError(idleRotation(), "Error: 余额不足"),
+  { fault: null, awaitingFresh: false, announced: false },
+  "不相干的失败不能被当成会话轮换",
+);
+
+// ② 第一条会话 poisoned + 清库成功 → 那句「已作废」可以说,而且属实。
+const firstRotated = onRotationPersisted(onRotationError(idleRotation(), POISON));
+assert.deepEqual(firstRotated, { fault: "poisoned", awaitingFresh: true, announced: true });
+
+// ③ 下一回合 fresh session 报上新 id → 三个标志一起归零。
+const afterFresh = onFreshSession(firstRotated);
+assert.deepEqual(
+  afterFresh,
+  { fault: null, awaitingFresh: false, announced: false },
+  "换上新会话后必须连 announced 一起复位,否则上一次的『已作废』会被算到新会话头上",
+);
+
+// ④ 新会话再次 poisoned,这次数据库写不进去 → 绝不能报喜。
+const secondFailed = onRotationNotPersisted(onRotationError(afterFresh, POISON));
+assert.equal(secondFailed.fault, "poisoned");
+assert.equal(
+  secondFailed.announced,
+  false,
+  "恢复字段没清成还标成『已说过』,收尾就会用一句报喜的短话盖掉真相(库里旧 id 还在)",
+);
+assert.equal(shouldDropSession(secondFailed.fault, 1), true, "poisoned 仍然要作废恢复会话");
+
+// ⑤ 没在等新 id 的时候收到 session 事件(第一回合的正常开台),不该动任何标志。
+const untouched = onRotationError(idleRotation(), REAL); // 普通 lost，没走轮换
+assert.deepEqual(onFreshSession(untouched), untouched, "没在等新 id 时,session 事件不该清掉既有判定");
+ok("轮换状态机:新会话建立后三个标志一起复位,第二次清库失败不报喜");
 
 rmSync(dir, { recursive: true, force: true });
 console.log("session-lost: 全部通过");

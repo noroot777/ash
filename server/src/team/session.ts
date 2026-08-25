@@ -42,11 +42,9 @@ import { resolveExecutorFor } from "../executors/index.js";
 import type { ResidentHandle } from "../executors/types.js";
 import {
   LOST_SESSION_PATCH,
-  mergeSessionResumeFault,
   SESSION_DROP_PERSISTENCE_FAILED_NOTE,
   sessionResumeFaultNote,
   shouldDropSession,
-  type SessionResumeFault,
 } from "../executors/session-lost.js";
 import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
@@ -57,6 +55,14 @@ import { withSkillInvocation, nativeCliCommand } from "../skills.js";
 import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
 import { latestTeamLeadSession } from "./session-selection.js";
+import {
+  idleRotation,
+  onFreshSession,
+  onRotationError,
+  onRotationNotPersisted,
+  onRotationPersisted,
+  type RotationState,
+} from "./rotation-state.js";
 
 // 空闲多久回收进程(0/负数 = 永不回收)。测试用 ASH_TEAM_IDLE_MS=5000。
 const IDLE_MS = Number(process.env.ASH_TEAM_IDLE_MS ?? 30 * 60_000);
@@ -91,7 +97,6 @@ interface Lead {
   // 「最后一段是 agent」的气泡上盖时间戳(shared/src/index.ts),夹在正文和 agentEnd
   // 之间会让这一回合的用时失准。
   notices: { text: string; at: string }[];
-  rotationAnnounced: boolean; // 中途已经说过「会话作废了」,收尾别再重播同一条
   idleTimer: NodeJS.Timeout | null;
   closing: "recycle" | "halt" | "workspace" | null;
 }
@@ -392,7 +397,6 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
     turnStart: null,
     pending: [],
     notices: [],
-    rotationAnnounced: false,
     idleTimer: null,
     closing: null,
   };
@@ -413,10 +417,11 @@ async function consume(lead: Lead): Promise<void> {
   // executors/session-lost.ts）。调度台是常驻会话，踩这个坑比一次性任务更死：
   // 每次说话都 --resume 同一个坏 id，而收尾那句话还在告诉
   // 用户「会话还在,再说一句就能接回」—— 他会照做,然后一次次撞同一堵墙。
-  let sessionFault: SessionResumeFault | null = null;
-  // Codex 常驻在同一条 events 流里跑很多回合。poisoned 后先清内存与数据库；等 fresh
-  // 回合报上新 id，再撤掉本地故障水位，避免以后关闭常驻时误清新的健康 thread。
-  let awaitingFreshSession = false;
+  //
+  // Codex 常驻在同一条 events 流里跑很多回合，所以这不是一个布尔而是一台小状态机：
+  // 「坏没坏 / 等不等新 id / 那句『已作废』说没说过且属不属实」三件事必须一起翻篇，
+  // 漏复位其中一个就会把上一条会话的结论串到下一条上（rotation-state.ts 顶部有现场）。
+  let rotation = idleRotation();
   let pendingTraceText = "";
   const flushTraceText = () => {
     if (!pendingTraceText) return;
@@ -445,10 +450,9 @@ async function consume(lead: Lead): Promise<void> {
           .update(sessions)
           .set({ cliSessionId: event.cliSessionId, ...ex.resumeFields(lead.cwd, event.cliSessionId) })
           .where(eq(sessions.id, lead.sessId));
-        if (awaitingFreshSession) {
-          awaitingFreshSession = false;
-          sessionFault = null;
-        }
+        // CLI 报上新的 thread id：上一条会话的轮换事宜就此翻篇（fault / 等新 id /
+        // 那句「已作废」说没说过，三个一起归零）。
+        rotation = onFreshSession(rotation);
       }
       publish(lead, event);
       continue;
@@ -474,11 +478,11 @@ async function consume(lead: Lead): Promise<void> {
       // 「这个调度台离上下文塞满还有多远」。
       if (emittedEvent.kind === "context") await setSessionContext(lead.sessId, emittedEvent.context);
       if (emittedEvent.kind === "error") {
-        const previousFault = sessionFault;
+        const previousFault = rotation.fault;
         if (sessionNotice) noteSessionNotice(lead, emittedEvent.message);
         else writeRunError(lead.out, emittedEvent.message);
-        sessionFault = mergeSessionResumeFault(sessionFault, emittedEvent.message);
-        if (sessionFault === "poisoned" && previousFault !== "poisoned" && lead.handle.dropSession) {
+        rotation = onRotationError(rotation, emittedEvent.message);
+        if (rotation.fault === "poisoned" && previousFault !== "poisoned" && lead.handle.dropSession) {
           // 不能等整条常驻 events 流关闭：pending 消息会在 turnEnd 后立刻开下一回合。
           // 这里先作废闭包里的 id 与持久恢复字段，所以下一个 startTurn 必然 fresh。
           lead.handle.dropSession();
@@ -491,22 +495,24 @@ async function consume(lead: Lead): Promise<void> {
             let note = sessionResumeFaultNote("poisoned");
             try {
               await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, lead.sessId));
-              // 只有真清成了才算「已经说过且属实」：收尾那两句据此不再重复整段
-              // （见 rotationAnnounced）。没清成就不置位——宁可让收尾再说一遍完整的，
-              // 也不能留下一句报喜的短话。
-              lead.rotationAnnounced = true;
+              // 只有真清成了才算「已经说过且属实」：收尾那两句据此不再重复整段。
+              rotation = onRotationPersisted(rotation);
             } catch (error) {
               // 内存里的恢复 id 已经作废，不能让一次持久化故障杀掉常驻消费循环；同时明确
-              // 告知用户重启前数据库里可能还留着旧 id。
+              // 告知用户重启前数据库里可能还留着旧 id。没清成就**不算说过** —— 宁可让收尾
+              // 把完整那句再说一遍，也不能留下一句报喜的短话。
               const message = `已停止续跑损坏的 Codex 会话，但清理数据库恢复字段失败：${error instanceof Error ? error.message : String(error)}`;
               writeRunError(lead.out, message);
               appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), { kind: "error", message });
               publish(lead, { kind: "error", message });
               note = SESSION_DROP_PERSISTENCE_FAILED_NOTE;
+              rotation = onRotationNotPersisted(rotation);
             }
             noteSessionNotice(lead, note);
+          } else {
+            // superseded：库里那份归新进程管，我们没清也不该说清了。
+            rotation = onRotationNotPersisted(rotation);
           }
-          awaitingFreshSession = true;
         }
       }
       if (emittedEvent.kind === "done") exitStatus = emittedEvent.exitStatus;
@@ -516,7 +522,7 @@ async function consume(lead: Lead): Promise<void> {
     publish(lead, event);
   }
   flushTraceText();
-  await closeLead(lead, exitStatus, sessionFault);
+  await closeLead(lead, exitStatus, rotation);
 }
 
 function publish(lead: Lead, event: AgentEvent): void {
@@ -596,7 +602,7 @@ async function endTurn(lead: Lead): Promise<void> {
 // 中途已经播过完整轮换说明后,收尾那两句只补一个指路,不重复整段。
 const ROTATION_ALREADY_ANNOUNCED = "这条 CLI 会话此前已被作废,下次运行会开全新会话。";
 
-async function closeLead(lead: Lead, exitStatus: number, sessionFault: SessionResumeFault | null = null): Promise<void> {
+async function closeLead(lead: Lead, exitStatus: number, rotation: RotationState = idleRotation()): Promise<void> {
   clearIdle(lead);
   takeStopped(lead.taskId); // 消费停止标记:团队不走 settleTaskStatus,别漏给下一次
   untrackRun(lead.taskId, lead.handle);
@@ -612,8 +618,8 @@ async function closeLead(lead: Lead, exitStatus: number, sessionFault: SessionRe
   // superseded 也要排除:这条会话行已经被新进程接管了(工作目录被抽走那条路会复用同一
   // 行),晚到的旧收尾要是把新进程刚报上来的有效 id 抹掉,新常驻会话的 id 就永久丢了
   // —— 内存里 lead.cliSessionId 已是新值,那条「id 变了才写库」的分支不会再补写一次。
-  const dropSession = shouldDropSession(sessionFault, exitStatus) && !superseded;
-  let dropNote = dropSession ? sessionResumeFaultNote(sessionFault!) : null;
+  const dropSession = shouldDropSession(rotation.fault, exitStatus) && !superseded;
+  let dropNote = dropSession ? sessionResumeFaultNote(rotation.fault!) : null;
   try {
     await db
       .update(sessions)
@@ -635,14 +641,14 @@ async function closeLead(lead: Lead, exitStatus: number, sessionFault: SessionRe
   }
   if (lead.closing === "recycle") {
     recordSystemTurn(lead, RECYCLE_NOTE(Math.round(IDLE_MS / 60_000)));
-  } else if (!lead.closing && (exitStatus !== 0 || (dropSession && !lead.rotationAnnounced))) {
+  } else if (!lead.closing && (exitStatus !== 0 || (dropSession && !rotation.announced))) {
     // 既不是回收也不是手停 —— 进程自己没了。会话还在,说句话就能接回;除非 CLI 刚
     // 否认过或判定 poisoned，那句「会话还在」就成了把用户推回同一堵墙的错误指路。
-    // rotationAnnounced:中途已经播过同一条轮换说明了,这里只补「进程意外退出」那半句,
-    // 别把整段话重复第二遍。
-    const rotation = dropSession ? (lead.rotationAnnounced ? ROTATION_ALREADY_ANNOUNCED : dropNote) : null;
-    const msg = rotation
-      ? `${exitStatus !== 0 ? `调度台进程意外退出(exit ${exitStatus})。` : ""}${rotation}`
+    // rotation.announced:中途已经播过同一条轮换说明**且属实**了,这里只补「进程意外
+    // 退出」那半句,别把整段话重复第二遍。
+    const rotationNote = dropSession ? (rotation.announced ? ROTATION_ALREADY_ANNOUNCED : dropNote) : null;
+    const msg = rotationNote
+      ? `${exitStatus !== 0 ? `调度台进程意外退出(exit ${exitStatus})。` : ""}${rotationNote}`
       : `调度台进程意外退出(exit ${exitStatus})。CLI 会话还在,再说一句话会自动接回;需要的话也可以点「继续」。`;
     writeRunError(lead.out, msg);
     appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message: msg }, endIso);
@@ -652,7 +658,7 @@ async function closeLead(lead: Lead, exitStatus: number, sessionFault: SessionRe
   // —— 不当场更正,用户刷新后看到的指引与真实状态正好相反,照做一次再撞一次墙。上面
   // 那个「进程自己没了」的分支已经在 msg 里说过了,别重复。
   if (dropSession && lead.closing) {
-    const msg = `更正上面那条:CLI 会话接不回了。${lead.rotationAnnounced ? ROTATION_ALREADY_ANNOUNCED : dropNote}`;
+    const msg = `更正上面那条:CLI 会话接不回了。${rotation.announced ? ROTATION_ALREADY_ANNOUNCED : dropNote}`;
     writeRunError(lead.out, msg);
     appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message: msg }, endIso);
     publish(lead, { kind: "error", message: msg });
