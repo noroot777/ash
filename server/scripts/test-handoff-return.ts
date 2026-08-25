@@ -65,7 +65,12 @@ async function startReturnProxy(upstream: string): Promise<{ url: string; close(
   };
 }
 
-async function startOrdinaryImportProxy(upstream: string, forwardBeforeCut: boolean, legacyCancel = false): Promise<{
+async function startOrdinaryImportProxy(
+  upstream: string,
+  forwardBeforeCut: boolean,
+  legacyCancel = false,
+  cutPath = "/api/handoff/import",
+): Promise<{
   url: string;
   deliverHeld(): Promise<{ status: number; body: { error?: string; ash?: boolean } }>;
   setUpstream(url: string): void;
@@ -112,7 +117,7 @@ async function startOrdinaryImportProxy(upstream: string, forwardBeforeCut: bool
           res.end(JSON.stringify({ error: "not found" }));
           return;
         }
-        if (cutFirstImport && request.path.startsWith("/api/handoff/import")) {
+        if (cutFirstImport && request.path.startsWith(cutPath)) {
           cutFirstImport = false;
           if (forwardBeforeCut) await forward(request);
           else held = request;
@@ -322,6 +327,20 @@ try {
   assert.equal(identityRecovered.handoffAudit?.forceReason, "identity");
   assert.deepEqual(await api<unknown[]>(machineA, `/tasks/${identityTask.id}/sessions`), [], "没有会话也必须靠任务行保留强制恢复审计");
 
+  await api(machineA, `/tasks/${identityTask.id}/handoff`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: machineB, targetProjectId: projectB.id, targetName: "B", autoResume: false }),
+  });
+  await api(machineB, `/tasks/${identityTask.id}/handoff`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: machineA, targetProjectId: projectA.id, targetName: "A", autoResume: false }),
+  });
+  const identityReturned = await api<Task>(machineA, `/tasks/${identityTask.id}`);
+  assert.equal(identityReturned.handoff?.direction, "returned");
+  assert.equal(identityReturned.handoffAudit?.forceReason, "identity", "正常接力往返不能清掉强制恢复风险记录");
+  await api(machineA, `/tasks/${identityTask.id}`, { method: "DELETE" });
+  await api(machineB, `/tasks/${identityTask.id}`, { method: "DELETE" });
+
   await api(machineA, `/tasks/${task.id}/handoff`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ targetUrl: machineB, targetProjectId: projectB.id, targetName: "B", autoResume: false }),
@@ -429,14 +448,35 @@ try {
   assert.equal(blocked.status, 502);
   assert.match(((await blocked.json()) as { error: string }).error, /明确拒绝|不能自动移回/);
 
-  // 忘记这条整机级记录后，不需要 approve；任务历史里的持有者指纹本身就是回程凭据。
-  await api(machineA, `/handoff/peers/${identityB.fingerprint}`, { method: "DELETE" });
+  // 纯回程占位的解除只删拉黑行，不建立整机批准；任务历史里的指纹仍是回程凭据。
+  await api(machineA, `/handoff/peers/${identityB.fingerprint}/unblock`, { method: "POST" });
   const grantsAfterUnblock = await api<{ grants: HandoffReturnGrant[] }>(machineA, "/handoff/return-grants");
   assert.equal(grantsAfterUnblock.grants.find((grant) => grant.fingerprint === identityB.fingerprint)?.blocked, false);
+  const peersAfterReturnOnlyUnblock = await api<{ peers: { fingerprint: string }[] }>(machineA, "/handoff/peers");
+  assert.ok(!peersAfterReturnOnlyUnblock.peers.some((peer) => peer.fingerprint === identityB.fingerprint));
   const probeAfterForget = await api<HandoffPreflightResult>(machineB, `/tasks/${task.id}/handoff/preflight`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetUrl: target.url }),
   });
   assert.equal(probeAfterForget.peer?.peerStatus, "approved");
+
+  // 已批准来源被历史回程区拒绝再解除时，必须恢复原批准；pending 来源则不能借此提权。
+  await api(machineB, "/handoff/request", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetUrl: machineA }),
+  });
+  await api(machineA, `/handoff/peers/${identityB.fingerprint}/approve`, { method: "POST" });
+  await api(machineA, `/handoff/peers/${identityB.fingerprint}/block`, { method: "POST" });
+  await api(machineA, `/handoff/peers/${identityB.fingerprint}/unblock`, { method: "POST" });
+  const peersAfterApprovedUnblock = await api<{ peers: { fingerprint: string; status: string }[] }>(machineA, "/handoff/peers");
+  assert.equal(peersAfterApprovedUnblock.peers.find((peer) => peer.fingerprint === identityB.fingerprint)?.status, "approved");
+  await api(machineA, `/handoff/peers/${identityB.fingerprint}`, { method: "DELETE" });
+  await api(machineB, "/handoff/request", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetUrl: machineA }),
+  });
+  await api(machineA, `/handoff/peers/${identityB.fingerprint}/block`, { method: "POST" });
+  await api(machineA, `/handoff/peers/${identityB.fingerprint}/unblock`, { method: "POST" });
+  const peersAfterPendingUnblock = await api<{ peers: { fingerprint: string; status: string }[] }>(machineA, "/handoff/peers");
+  assert.equal(peersAfterPendingUnblock.peers.find((peer) => peer.fingerprint === identityB.fingerprint)?.status, "pending");
+  await api(machineA, `/handoff/peers/${identityB.fingerprint}`, { method: "DELETE" });
 
   const holderWorktree = worktreePathFor(repoB, task.id);
   writeFileSync(join(holderWorktree, "remote-change.txt"), "commit created on holder\n");
@@ -510,6 +550,33 @@ try {
 
   const peersOnA = await api<{ peers: { fingerprint: string }[] }>(machineA, "/handoff/peers");
   assert.ok(!peersOnA.peers.some((peer) => peer.fingerprint === identityB.fingerprint), "免审批移回不应暗中建立整机级批准记录");
+
+  // 移回 pending 的地址若切到另一台新版 ash，404 表示存档不匹配，不是目标机版本过旧。
+  const changedReturnTask = await createSimpleTask("移回地址换机不能误报旧版");
+  await api(machineA, `/tasks/${changedReturnTask.id}/handoff`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: machineB, targetProjectId: projectB.id, targetName: "B", autoResume: false }),
+  });
+  const changedReturnProxy = await startOrdinaryImportProxy(machineA, false, false, "/api/handoff/return/import");
+  ordinaryProxies.push(changedReturnProxy);
+  const changedReturnInterrupted = await fetch(`${machineB}/api/tasks/${changedReturnTask.id}/handoff`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: changedReturnProxy.url, targetProjectId: projectA.id, targetName: "A", autoResume: false }),
+  });
+  assert.equal(changedReturnInterrupted.status, 502);
+  changedReturnProxy.setUpstream(machineC);
+  const changedReturnSafe = await fetch(`${machineB}/api/tasks/${changedReturnTask.id}/handoff`, { method: "DELETE" });
+  assert.equal(changedReturnSafe.status, 409);
+  const changedReturnSafeBody = (await changedReturnSafe.json()) as { error: string; forceReason?: string };
+  assert.equal(changedReturnSafeBody.forceReason, "identity");
+  assert.match(changedReturnSafeBody.error, /新版 ash.*没有对应的历史存档|地址已经换机|存档已删除/);
+  assert.doesNotMatch(changedReturnSafeBody.error, /版本过旧/);
+  await api(machineB, `/tasks/${changedReturnTask.id}/handoff`, {
+    method: "DELETE", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ force: true, acknowledgeDuplicateRisk: true }),
+  });
+  await api(machineA, `/tasks/${changedReturnTask.id}`, { method: "DELETE" });
+  await api(machineB, `/tasks/${changedReturnTask.id}`, { method: "DELETE" });
 
   // 原机存档被删后，任务级免审批凭据不再成立；允许退回普通接力，但必须恢复整机审批。
   const missingArchiveTask = await api<Task>(machineA, "/tasks", {

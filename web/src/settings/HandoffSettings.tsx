@@ -96,10 +96,14 @@ export function HandoffSettings({
     [notify, onSettings, settings.handoffTargets],
   );
 
-  const peerAction = async (peer: Pick<HandoffPeer, "fingerprint">, action: "approve" | "block" | "forget") => {
+  const peerAction = async (
+    peer: Pick<HandoffPeer, "fingerprint">,
+    action: "approve" | "block" | "unblock" | "forget",
+  ) => {
     setBusy(true);
     try {
       if (action === "forget") await api.forgetHandoffPeer(peer.fingerprint);
+      else if (action === "unblock") await api.unblockHandoffPeer(peer.fingerprint);
       else await api.setHandoffPeerStatus(peer.fingerprint, action);
       reloadPeers();
       window.dispatchEvent(new Event(HANDOFF_PEERS_CHANGED_EVENT));
@@ -394,7 +398,7 @@ export function HandoffSettings({
             </div>
             <div className="handoff-peer-actions">
               {grant.blocked ? (
-                <Button variant="ghost" disabled={busy} onClick={() => void peerAction(grant, "forget")}>
+                <Button variant="ghost" disabled={busy} onClick={() => void peerAction(grant, "unblock")}>
                   <Check size={13} aria-hidden="true" />解除拒绝
                 </Button>
               ) : (

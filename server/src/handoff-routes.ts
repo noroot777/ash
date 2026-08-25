@@ -27,7 +27,7 @@ import { looksSealed, openSealed } from "./handoff-crypto.js";
 import { readCappedBody } from "./handoff-body.js";
 import {
   deletePeer, listPeers, peerAddr, peerStanceFor, requireApprovedPeer, setPeerStatus, touchPeer,
-  verifyPeerSignature,
+  unblockPeer, verifyPeerSignature,
 } from "./handoff-peers.js";
 import { importHandoff } from "./handoff-import.js";
 import { publishTaskUpdated } from "./task-store.js";
@@ -100,6 +100,12 @@ async function cancelPendingAtPeer(marker: TaskHandoff): Promise<boolean> {
       );
     }
     const detail = error instanceof Error ? error.message : String(error);
+    if (error instanceof HandoffError && error.remoteStatus === 404 && error.remoteAsh) {
+      throw new PendingCancellationError(
+        `这个地址上的新版 ash 没有对应的历史存档，可能地址已经换机或存档已删除，原目标机的任务状态无法核验；本机标记未移除。请先找回原目标机或修正地址；也可显式承担双任务风险后强制恢复。原始原因：${detail}`,
+        "identity",
+      );
+    }
     if (error instanceof HandoffError && error.remoteStatus === 404) {
       throw new PendingCancellationError(
         `目标机版本过旧，不支持安全撤销核验；本机标记未移除。升级对端后可安全重试，或显式承担双任务风险后强制恢复。原始原因：${detail}`,
@@ -306,8 +312,11 @@ export function mountHandoffRoutes(api: Hono): void {
 
   api.post("/handoff/peers/:fingerprint/:action", async (c) => {
     const action = c.req.param("action");
-    if (action !== "approve" && action !== "block") return c.json({ error: "只支持 approve / block" }, 400);
+    if (action !== "approve" && action !== "block" && action !== "unblock") {
+      return c.json({ error: "只支持 approve / block / unblock" }, 400);
+    }
     try {
+      if (action === "unblock") return c.json({ unblocked: true, peer: await unblockPeer(c.req.param("fingerprint")) });
       return c.json(await setPeerStatus(c.req.param("fingerprint"), action === "approve" ? "approved" : "blocked"));
     } catch (e) {
       return fail(c, e);

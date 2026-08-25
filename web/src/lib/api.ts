@@ -335,6 +335,8 @@ export const api = {
     (await request<{ grants: HandoffReturnGrant[] }>("/handoff/return-grants")).grants,
   setHandoffPeerStatus: (fingerprint: string, action: "approve" | "block"): Promise<HandoffPeer> =>
     request(`/handoff/peers/${id(fingerprint)}/${action}`, { method: "POST" }),
+  unblockHandoffPeer: (fingerprint: string): Promise<{ unblocked: true; peer: HandoffPeer | null }> =>
+    request(`/handoff/peers/${id(fingerprint)}/unblock`, { method: "POST" }),
   // 忘记这台机器:它再来敲门会重新进待批准列表(要永久拒绝用 block)。
   forgetHandoffPeer: (fingerprint: string): Promise<{ deleted: true }> =>
     request(`/handoff/peers/${id(fingerprint)}`, { method: "DELETE" }),

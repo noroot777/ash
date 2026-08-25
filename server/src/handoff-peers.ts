@@ -198,9 +198,26 @@ export async function setPeerStatus(fingerprint: string, status: "approved" | "b
   if (status === "approved" && !row.publicKey) {
     throw new HandoffError("这条记录只用于拒绝历史回程，不能直接升级为整机批准；先让对方重新发送接力申请", 409);
   }
-  const approvedAt = status === "approved" ? now() : null;
+  // 拉黑不是忘记：保留已有批准时间，解除时才能恢复原来的 approved；从未批准过的
+  // pending 行 approvedAt 仍为空，解除后也只回 pending，不能借一次 block/unblock 提权。
+  const approvedAt = status === "approved" ? now() : row.approvedAt;
   await db.update(handoffPeers).set({ status, approvedAt }).where(eq(handoffPeers.fingerprint, normalized));
   return toPeer({ ...row, status, approvedAt });
+}
+
+export async function unblockPeer(fingerprint: string): Promise<HandoffPeer | null> {
+  const normalized = fingerprint.trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(normalized)) throw new HandoffError("机器指纹格式不正确", 400);
+  const row = (await db.select().from(handoffPeers).where(eq(handoffPeers.fingerprint, normalized))).at(0);
+  if (!row) throw new HandoffError("没有这台已拒绝的机器(指纹对不上)", 404);
+  if (row.status !== "blocked") throw new HandoffError("这台机器当前没有被拒绝", 409);
+  if (!row.publicKey) {
+    await db.delete(handoffPeers).where(eq(handoffPeers.fingerprint, normalized));
+    return null;
+  }
+  const status = row.approvedAt ? "approved" as const : "pending" as const;
+  await db.update(handoffPeers).set({ status }).where(eq(handoffPeers.fingerprint, normalized));
+  return toPeer({ ...row, status });
 }
 
 export async function deletePeer(fingerprint: string): Promise<void> {

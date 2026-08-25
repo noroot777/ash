@@ -594,12 +594,15 @@ async function importValidated(
   }));
 
   if (returning) {
-    const preservedNoteLinks = await db.select().from(noteTasks).where(eq(noteTasks.taskId, m.task.id));
+    const [preservedNoteLinks, preservedTask] = await Promise.all([
+      db.select().from(noteTasks).where(eq(noteTasks.taskId, m.task.id)),
+      db.select({ handoffAudit: tasks.handoffAudit }).from(tasks).where(eq(tasks.id, m.task.id)),
+    ]);
     try {
       await db.transaction(async (tx) => {
         await deleteTaskAssociations(m.task.id);
         await tx.delete(tasks).where(eq(tasks.id, m.task.id));
-        await tx.insert(tasks).values(taskRow);
+        await tx.insert(tasks).values({ ...taskRow, handoffAudit: preservedTask.at(0)?.handoffAudit ?? null });
         if (scheduleValues) await tx.insert(schedules).values(scheduleValues);
         if (sessionRows.length) await tx.insert(sessions).values(sessionRows);
         if (messageRows.length) await tx.insert(scheduledMessages).values(messageRows);
