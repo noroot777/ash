@@ -127,9 +127,15 @@ export async function touchPeer(peer: VerifiedPeer, addr: string): Promise<Hando
     .where(eq(handoffPeers.fingerprint, peer.fingerprint))).at(0);
   if (existing) {
     await db.update(handoffPeers)
-      .set({ lastSeenAt: at, lastAddr: addr, name: peer.name || existing.name })
+      .set({ publicKey: peer.publicKey, lastSeenAt: at, lastAddr: addr, name: peer.name || existing.name })
       .where(eq(handoffPeers.fingerprint, peer.fingerprint));
-    return toPeer({ ...existing, lastSeenAt: at, lastAddr: addr, name: peer.name || existing.name });
+    return toPeer({
+      ...existing,
+      publicKey: peer.publicKey,
+      lastSeenAt: at,
+      lastAddr: addr,
+      name: peer.name || existing.name,
+    });
   }
   const row = {
     fingerprint: peer.fingerprint,
@@ -154,6 +160,7 @@ const toPeer = (row: typeof handoffPeers.$inferSelect): HandoffPeer => ({
   lastSeenAt: row.lastSeenAt,
   approvedAt: row.approvedAt,
   lastAddr: row.lastAddr,
+  returnOnly: !row.publicKey,
 });
 
 export async function listPeers(): Promise<HandoffPeer[]> {
@@ -164,10 +171,32 @@ export async function listPeers(): Promise<HandoffPeer[]> {
 }
 
 export async function setPeerStatus(fingerprint: string, status: "approved" | "blocked"): Promise<HandoffPeer> {
-  const row = (await db.select().from(handoffPeers).where(eq(handoffPeers.fingerprint, fingerprint))).at(0);
-  if (!row) throw new HandoffError("没有这台接力来源机器(指纹对不上)", 404);
+  const normalized = fingerprint.trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(normalized)) throw new HandoffError("机器指纹格式不正确", 400);
+  const row = (await db.select().from(handoffPeers).where(eq(handoffPeers.fingerprint, normalized))).at(0);
+  if (!row) {
+    if (status !== "blocked") throw new HandoffError("没有这台接力来源机器(指纹对不上)", 404);
+    const at = now();
+    const blocked = {
+      fingerprint: normalized,
+      publicKey: "",
+      name: "",
+      status: "blocked",
+      firstSeenAt: at,
+      lastSeenAt: at,
+      approvedAt: null,
+      lastAddr: "",
+    };
+    await db.insert(handoffPeers).values(blocked).onConflictDoUpdate({
+      target: handoffPeers.fingerprint,
+      set: { status: "blocked", approvedAt: null },
+    });
+    const stored = (await db.select().from(handoffPeers)
+      .where(eq(handoffPeers.fingerprint, normalized))).at(0);
+    return toPeer(stored ?? blocked);
+  }
   const approvedAt = status === "approved" ? now() : null;
-  await db.update(handoffPeers).set({ status, approvedAt }).where(eq(handoffPeers.fingerprint, fingerprint));
+  await db.update(handoffPeers).set({ status, approvedAt }).where(eq(handoffPeers.fingerprint, normalized));
   return toPeer({ ...row, status, approvedAt });
 }
 

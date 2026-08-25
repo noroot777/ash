@@ -10,6 +10,7 @@ const handoffViews = readFileSync(new URL("../src/task-detail/HandoffDialogViews
 const taskDetail = readFileSync(new URL("../src/task-detail/TaskDetail.tsx", import.meta.url), "utf8");
 const replyRail = readFileSync(new URL("../src/task-detail/TaskReplyRail.tsx", import.meta.url), "utf8");
 const taskHeader = readFileSync(new URL("../src/task-detail/TaskHeader.tsx", import.meta.url), "utf8");
+const handoffSettings = readFileSync(new URL("../src/settings/HandoffSettings.tsx", import.meta.url), "utf8");
 
 assert.doesNotMatch(machines, /target="_blank"/, "远程任务不应再打开新的远端浏览器标签");
 assert.match(machines, /onClick=\{\(\) => onRemoteTask\(task, target\)\}/, "远程任务行应交给工作区内联选择");
@@ -44,5 +45,11 @@ assert.match(handoff, /probe\.suggestedProjectId \?\? probe\.projects\[0\]\?\.id
 assert.match(handoff, /returningHandoff && preflight\.taskScopedReturn/, "移回与移回重放的身份文案必须区分任务级免审批与普通接力降级");
 assert.match(handoff, /nextUntriedHandoffTarget/, "单任务移回应遍历全部同指纹备用地址");
 assert.match(handoff, /fallbackNotice/, "自动切换来源地址时必须向用户显示说明");
+assert.match(handoff, /drafted && normalizedHandoffUrl\(drafted\) !== normalizedHandoffUrl\(targetUrl\)/, "底部重新检查按钮必须优先应用手填的新来源地址");
+assert.match(handoff, /承担风险，强制恢复/, "安全核验失败后必须提供带双任务警告的显式强制恢复入口");
+assert.match(handoff, /forceHandoffReason/, "只有服务端明确标记可强制恢复的失败才显示风险入口");
+assert.match(handoffSettings, /历史回程权限/, "设置页必须列出任务历史授予的回程权限");
+assert.match(handoffSettings, /handoffReturnGrants/, "历史回程权限必须来自可审计的服务端清单");
+assert.match(handoffSettings, /拒绝这台机器/, "历史回程权限必须可由用户显式撤销");
 
 console.log("remote task proxy UI tests passed");

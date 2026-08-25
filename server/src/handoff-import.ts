@@ -22,7 +22,7 @@ import {
   applyUploadRewrites, buildUploadRewrites, hasUploadRewrites, isTextRel,
   MAX_UPLOADS, rewriteKindFor, writeUploads, type UploadRewrites,
 } from "./handoff-uploads.js";
-import { ensureWorkdir, expandHome, prepareWorktree, projectHealthLight, workspaceDirty, worktreePathFor } from "./git.js";
+import { ensureWorkdir, expandHome, prepareWorktree, projectHealthLight, workspaceTrackedDirty, worktreePathFor } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { DATA_DIR, RUNS_DIR } from "./paths.js";
 import { codexHome, findRollout } from "./executors/codex-rollout.js";
@@ -184,11 +184,11 @@ async function importGitBundle(
         return;
       }
 
-      const dirty = await workspaceDirty(taskWorktree);
+      const dirty = await workspaceTrackedDirty(taskWorktree);
       if (dirty !== false) {
         throw new HandoffError(
           dirty
-            ? `原机保留的任务 worktree 有未提交改动，不能用移回内容覆盖：${taskWorktree}。先提交或清理这些改动，再重试移回。`
+            ? `原机保留的任务 worktree 有已跟踪文件的未提交改动，不能用移回内容覆盖：${taskWorktree}。先提交或还原这些改动，再重试移回。`
             : `无法确认原机任务 worktree 是否干净：${taskWorktree}。先检查这个目录，再重试移回。`,
           409,
         );

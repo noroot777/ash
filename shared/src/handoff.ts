@@ -35,6 +35,18 @@ export interface HandoffPeer {
   approvedAt: string | null;
   /** 最近一次来访地址,纯展示。 */
   lastAddr: string;
+  /** true = 仅为撤销历史回程权限而建立的拒绝记录，并不代表这台机器曾申请整机接力。 */
+  returnOnly: boolean;
+}
+
+/** 历史 out 存档授予的任务级回程权限；它不等于整机入站批准。 */
+export interface HandoffReturnGrant {
+  fingerprint: string;
+  short: string;
+  name: string;
+  taskCount: number;
+  lastGrantedAt: string;
+  blocked: boolean;
 }
 
 /** 预检时对目标机做的身份核对结果(出站方向)。 */

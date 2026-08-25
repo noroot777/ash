@@ -1,17 +1,25 @@
-import type { HandoffPingProject, HandoffTarget, TaskHandoff } from "@ash/shared";
+import type { HandoffPingProject, HandoffReturnGrant, HandoffTarget, TaskHandoff } from "@ash/shared";
 import { isIP } from "node:net";
 import { domainToASCII } from "node:url";
 import { eq } from "drizzle-orm";
 import { getAppSettings } from "./app-settings.js";
 import { db } from "./db/index.js";
 import { handoffPeers, projects, tasks } from "./db/schema.js";
-import { sameFingerprint } from "./handoff-identity.js";
+import { sameFingerprint, shortFingerprint } from "./handoff-identity.js";
 import { HandoffError } from "./handoff-types.js";
 import { projectHealthLight } from "./git.js";
 
 function markerOf(raw: string | null): TaskHandoff | null {
   if (!raw) return null;
   try { return JSON.parse(raw) as TaskHandoff; } catch { return null; }
+}
+
+function grantsTaskReturn(marker: TaskHandoff | null): marker is TaskHandoff & { peerFp: string } {
+  if (!marker?.peerFp) return false;
+  const confirmedOut = marker.direction === "out" && !marker.pending;
+  const completedReturn = marker.direction === "returned"
+    && Object.prototype.hasOwnProperty.call(marker, "returnTransferId");
+  return confirmedOut || completedReturn;
 }
 
 function hostForUrl(address: string): string | null {
@@ -42,13 +50,10 @@ export async function returnArchiveForPeer(
   const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!row) throw new HandoffError("原机没有这条任务的历史存档", 404);
   const marker = markerOf(row.handoff);
-  const confirmedOut = marker?.direction === "out" && !marker.pending;
-  const completedReturn = marker?.direction === "returned"
-    && Object.prototype.hasOwnProperty.call(marker, "returnTransferId");
-  if ((!confirmedOut && !completedReturn) || !marker?.peerFp
-    || !sameFingerprint(marker.peerFp, callerFingerprint)) {
+  if (!grantsTaskReturn(marker) || !sameFingerprint(marker.peerFp, callerFingerprint)) {
     throw new HandoffError("只有这条任务当前记录的持有机器才能免审批移回", 403);
   }
+  const completedReturn = marker.direction === "returned";
   const completedReturnTransferId = (marker as TaskHandoff & { returnTransferId?: string | null }).returnTransferId;
   const expectedReturnTransferId = completedReturn ? completedReturnTransferId : marker.transferId;
   if (expectedReturnTransferId && expectedReturnTransferId !== returnTransferId) {
@@ -70,6 +75,40 @@ export async function returnArchiveForPeer(
       isRepo: projectHealthLight(project.repoPath).isRepo,
     },
   };
+}
+
+export async function listReturnGrants(): Promise<HandoffReturnGrant[]> {
+  const [taskRows, peerRows] = await Promise.all([
+    db.select({ handoff: tasks.handoff }).from(tasks),
+    db.select({ fingerprint: handoffPeers.fingerprint, status: handoffPeers.status }).from(handoffPeers),
+  ]);
+  const blocked = new Set(peerRows.filter((peer) => peer.status === "blocked")
+    .map((peer) => peer.fingerprint.trim().toLowerCase()));
+  const grants = new Map<string, HandoffReturnGrant>();
+  for (const row of taskRows) {
+    const marker = markerOf(row.handoff);
+    if (!grantsTaskReturn(marker)) continue;
+    const fingerprint = marker.peerFp.trim().toLowerCase();
+    const current = grants.get(fingerprint);
+    const at = marker.at || "";
+    if (!current) {
+      grants.set(fingerprint, {
+        fingerprint,
+        short: shortFingerprint(marker.peerFp),
+        name: marker.peerName || "历史持有机器",
+        taskCount: 1,
+        lastGrantedAt: at,
+        blocked: blocked.has(fingerprint),
+      });
+      continue;
+    }
+    current.taskCount += 1;
+    if (at > current.lastGrantedAt) {
+      current.lastGrantedAt = at;
+      current.name = marker.peerName || current.name;
+    }
+  }
+  return [...grants.values()].sort((a, b) => b.lastGrantedAt.localeCompare(a.lastGrantedAt));
 }
 
 export function assertReturnProject(targetProjectId: string, archiveProjectId: string): void {

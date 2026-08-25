@@ -185,6 +185,18 @@ export async function workspaceDirty(path: string): Promise<boolean | null> {
   }
 }
 
+/** 只检查已跟踪文件；给随后执行 reset --hard 的路径使用，未跟踪文件不会被该命令覆盖。 */
+export async function workspaceTrackedDirty(path: string): Promise<boolean | null> {
+  try {
+    const { stdout } = await exec("git", [
+      "-C", expandHome(path), "status", "--porcelain", "--untracked-files=no",
+    ]);
+    return Boolean(stdout.trim());
+  } catch {
+    return null;
+  }
+}
+
 // Cheap, synchronous health for a repoPath — exists + is-it-a-git-repo. Drives
 // the at-a-glance health dot everywhere a project is listed; no git spawn.
 // `.git` is a *file* in worktrees/submodules, so existsSync (not isDir).

@@ -9,7 +9,7 @@ import type {
 } from "@ash/shared";
 import { Fingerprint, PaperPlaneTilt, SpinnerGap, Warning } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
-import { api, type TaskScopedHandoffPreflightResult } from "../lib/api.ts";
+import { api, ApiError, type TaskScopedHandoffPreflightResult } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { handoffTargetsForTask, nextUntriedHandoffTarget } from "./handoffTargetPolicy.ts";
@@ -171,9 +171,14 @@ export function HandoffDialog({
     }
   };
 
-  const useManualReturnTarget = () => {
+  const manualReturnUrl = () => {
     const url = draftTargetUrl.trim().replace(/\/+$/, "");
-    if (!inboundHandoff?.peerFp || !HANDOFF_URL_RE.test(url) || busy) return;
+    return inboundHandoff?.peerFp && HANDOFF_URL_RE.test(url) ? url : null;
+  };
+
+  const useManualReturnTarget = () => {
+    const url = manualReturnUrl();
+    if (!url || !inboundHandoff?.peerFp || busy) return;
     // 只把用户补的地址留在当前弹窗里，不写入整机设置。真正预检仍从任务 marker 取
     // peerFp 做身份核对，所以换一个地址不会把任务转送给第三台机器。
     setTargets([{
@@ -200,7 +205,7 @@ export function HandoffDialog({
       />
       <small>仅用于这次移回，不会新增整机信任；连接后仍必须与任务记录的来源指纹一致。</small>
       <Button
-        variant="primary"
+        variant="secondary"
         disabled={busy || !HANDOFF_URL_RE.test(draftTargetUrl.trim())}
         onClick={useManualReturnTarget}
       >
@@ -246,6 +251,11 @@ export function HandoffDialog({
   };
 
   const checkTarget = async () => {
+    const drafted = manualReturnUrl();
+    if (drafted && normalizedHandoffUrl(drafted) !== normalizedHandoffUrl(targetUrl)) {
+      useManualReturnTarget();
+      return;
+    }
     if (!targetUrl || busy) return;
     setBusy(true);
     setApplying(true);
@@ -554,6 +564,10 @@ export function HandoffDialog({
 
 const HANDOFF_URL_RE = /^https?:\/\/\S+$/;
 const normalizedHandoffUrl = (url: string) => url.trim().replace(/\/+$/, "");
+const forceHandoffReason = (reason: unknown): string | null => {
+  if (!(reason instanceof ApiError) || typeof reason.body !== "object" || reason.body === null) return null;
+  return "needsForce" in reason.body && reason.body.needsForce === true ? reason.message : null;
+};
 const returnAddressMayHelp = (message: string | null) => Boolean(message && (
   /连不上对端|fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|连接中断|超时/i.test(message)
   || /身份和上次不一样|没有报出身份/.test(message)
@@ -585,19 +599,28 @@ export function HandoffBanner({
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [forceReason, setForceReason] = useState<string | null>(null);
   const out = handoff.direction === "out";
   const returned = handoff.direction === "returned";
   const pendingReturn = out && handoff.pending
     && Object.prototype.hasOwnProperty.call(handoff, "returnTransferId");
   const peer = handoff.peerName ? `「${handoff.peerName}」` : "另一台机器";
-  const clear = async () => {
+  const clear = async (force = false) => {
     setBusy(true);
     try {
-      await api.clearHandoff(taskId);
+      const cleared = await api.clearHandoff(taskId, force);
       onTaskUpdate(await api.task(taskId));
-      notify(pendingReturn ? "已安全撤销本次移回，任务继续留在本机" : "对端确认未收到，任务已安全恢复为本机可运行");
+      notify(cleared.forced
+        ? "已强制恢复本机任务；请在对端恢复联网后确认没有第二份任务继续运行"
+        : pendingReturn ? "已安全撤销本次移回，任务继续留在本机" : "对端确认未收到，任务已安全恢复为本机可运行");
       setConfirmOpen(false);
+      setForceReason(null);
     } catch (reason) {
+      const fallback = forceHandoffReason(reason);
+      if (!force && fallback) {
+        setForceReason(fallback);
+        return;
+      }
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusy(false);
@@ -622,22 +645,24 @@ export function HandoffBanner({
           type="button"
           className="task-handoff-clear"
           disabled={busy}
-          onClick={() => setConfirmOpen(true)}
+          onClick={() => { setForceReason(null); setConfirmOpen(true); }}
         >
           核验后在本机继续…
         </button>
       )}
       {confirmOpen && (
         <ConfirmDialog
-          title={pendingReturn ? "撤销本次移回" : "核验并恢复本机任务"}
-          message={pendingReturn
-            ? "系统会先联系原机：只有原机确认尚未接回任务并登记忽略旧请求后，才会撤销本次移回；如果原机已经接回，会阻止恢复本机旧副本。"
-            : "系统会先联系目标机：只有目标机确认尚未收到任务并登记忽略旧请求后，才会恢复本机；如果目标机已经收到，会阻止产生第二份可运行任务。"}
-          confirmLabel="核验并在本机继续"
+          title={forceReason ? "强制恢复可能产生双任务" : pendingReturn ? "撤销本次移回" : "核验并恢复本机任务"}
+          message={forceReason
+            ? `${forceReason} 强制恢复只会清除本机标记，无法让对端丢弃副本；对端现在或以后重新联网时，可能形成两份可运行任务。只有你准备好手工检查并停止另一份时才继续。`
+            : pendingReturn
+              ? "系统会先联系原机：只有原机确认尚未接回任务并登记忽略旧请求后，才会撤销本次移回；如果原机已经接回，会阻止恢复本机旧副本。"
+              : "系统会先联系目标机：只有目标机确认尚未收到任务并登记忽略旧请求后，才会恢复本机；如果目标机已经收到，会阻止产生第二份可运行任务。"}
+          confirmLabel={forceReason ? "承担风险，强制恢复" : "核验并在本机继续"}
           danger
           busy={busy}
-          onConfirm={() => void clear()}
-          onClose={() => setConfirmOpen(false)}
+          onConfirm={() => void clear(Boolean(forceReason))}
+          onClose={() => { setConfirmOpen(false); setForceReason(null); }}
         />
       )}
     </div>

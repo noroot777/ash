@@ -10,13 +10,12 @@
 //     端点一样没有鉴权(整机在可信网络里用的既定取舍)。这里管的是「谁能把任务推进来」,
 //     不是「谁能打开这个网页」。
 import { hostname } from "node:os";
-import { appendFile } from "node:fs/promises";
 import type { TaskHandoff } from "@ash/shared";
 import type { Hono } from "hono";
 import type { Context } from "hono";
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { projects, sessions, tasks } from "./db/schema.js";
+import { projects, tasks } from "./db/schema.js";
 import { projectHealthLight } from "./git.js";
 import { getAppSettings } from "./app-settings.js";
 import { exportHandoff, handoffRemoteUrl, preflightHandoff } from "./handoff.js";
@@ -32,10 +31,12 @@ import {
 } from "./handoff-peers.js";
 import { importHandoff } from "./handoff-import.js";
 import { publishTaskUpdated } from "./task-store.js";
-import { sessionTranscriptPath, TURN_SENTINEL } from "./transcript.js";
 import { now } from "./util.js";
 import { mountHandoffRemoteRoutes } from "./handoff-remote.js";
-import { assertReturnProject, returnArchiveForPeer, returnTargetForTask, sourceUrlFromPeer } from "./handoff-return.js";
+import {
+  assertReturnProject, listReturnGrants, returnArchiveForPeer, returnTargetForTask, sourceUrlFromPeer,
+} from "./handoff-return.js";
+import { appendTaskTimeline } from "./task-timeline.js";
 
 type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 500 | 502;
 
@@ -58,9 +59,18 @@ const fail = (c: Context, e: unknown) => {
   return c.json({ error: `接力失败:${msg}`, ash: true }, 500);
 };
 
+class PendingCancellationError extends HandoffError {
+  constructor(message: string, readonly forceReason: "legacy" | "unreachable" | "unverifiable") {
+    super(message, 409);
+  }
+}
+
 async function cancelPendingAtPeer(marker: TaskHandoff): Promise<boolean> {
   if (!marker.peerUrl || !marker.peerFp || !marker.transferId) {
-    throw new HandoffError("这条旧记录缺少目标机地址、身份或 transferId，无法安全证明对端没收到；本机标记未移除", 409);
+    throw new PendingCancellationError(
+      "这条旧记录缺少目标机地址、身份或 transferId，无法安全证明对端没收到；本机标记未移除",
+      "unverifiable",
+    );
   }
   const targetUrl = normalizePeerUrl(marker.peerUrl);
   const returning = Object.prototype.hasOwnProperty.call(marker, "returnTransferId");
@@ -90,9 +100,16 @@ async function cancelPendingAtPeer(marker: TaskHandoff): Promise<boolean> {
       );
     }
     const detail = error instanceof Error ? error.message : String(error);
-    throw new HandoffError(
-      `暂时无法让对端确认撤销这次接力，本机标记未移除。连接恢复后原样重试最安全；原始原因：${detail}`,
-      409,
+    if (error instanceof HandoffError && error.remoteStatus === 404) {
+      throw new PendingCancellationError(
+        `目标机版本过旧，不支持安全撤销核验；本机标记未移除。升级对端后可安全重试，或显式承担双任务风险后强制恢复。原始原因：${detail}`,
+        "legacy",
+      );
+    }
+    const unreachable = !(error instanceof HandoffError) || error.network || error.remoteStatus === null;
+    throw new PendingCancellationError(
+      `${unreachable ? "当前连不上对端" : "对端未能完成安全撤销核验"}，本机标记未移除。连接恢复后原样重试最安全；也可显式承担双任务风险后强制恢复。原始原因：${detail}`,
+      unreachable ? "unreachable" : "unverifiable",
     );
   }
 }
@@ -269,6 +286,8 @@ export function mountHandoffRoutes(api: Hono): void {
 
   // 接力来源(入站信任表):谁来敲过门、批没批准。
   api.get("/handoff/peers", async (c) => c.json({ peers: await listPeers() }));
+  // 历史 out 存档另行授予的任务级回程权限；只读展示，不会暗中建立整机 approved。
+  api.get("/handoff/return-grants", async (c) => c.json({ grants: await listReturnGrants() }));
 
   api.get("/tasks/:id/handoff/return-target", async (c) => {
     try {
@@ -355,6 +374,11 @@ export function mountHandoffRoutes(api: Hono): void {
   // 持久登记 tombstone，再清本机标记；确认送达后只能从对端发起移回。
   api.delete("/tasks/:id/handoff", async (c) => {
     const taskId = c.req.param("id");
+    const body = (await c.req.json().catch(() => ({}))) as {
+      force?: boolean;
+      acknowledgeDuplicateRisk?: boolean;
+    };
+    const force = body.force === true && body.acknowledgeDuplicateRisk === true;
     const row = (await db
       .select({ id: tasks.id, handoff: tasks.handoff })
       .from(tasks)
@@ -370,11 +394,17 @@ export function mountHandoffRoutes(api: Hono): void {
     if (!marker.pending) {
       return c.json({ error: "任务已确认送达对端，只能从对端那份任务发起移回；本机不能恢复这份存档" }, 409);
     }
-    let returning: boolean;
+    const returning = Object.prototype.hasOwnProperty.call(marker, "returnTransferId");
+    let forced = false;
     try {
-      returning = await cancelPendingAtPeer(marker);
+      await cancelPendingAtPeer(marker);
     } catch (e) {
-      return fail(c, e);
+      if (e instanceof PendingCancellationError) {
+        if (!force) return c.json({ error: e.message, needsForce: true, forceReason: e.forceReason }, 409);
+        forced = true;
+      } else {
+        return fail(c, e);
+      }
     }
     const restored = returning ? restoredInboundMarker(marker) : null;
     const updated = await db.update(tasks)
@@ -384,22 +414,14 @@ export function mountHandoffRoutes(api: Hono): void {
     if (!updated.length) {
       return c.json({ error: "核验期间任务的接力状态已经变化，请刷新后按最新状态处理" }, 409);
     }
-    const latest = (await db
-      .select({ id: sessions.id, agentType: sessions.agentType })
-      .from(sessions)
-      .where(eq(sessions.taskId, taskId))
-      .orderBy(sessions.startedAt)).at(-1);
-    if (latest) {
-      const line = {
-        t: "system" as const, agent: latest.agentType, by: "system" as const, at: now(),
-        text: returning
-          ? "🔁 用户安全撤销了本次移回，任务继续由本机持有；原机已登记忽略这次旧移回请求。"
-          : "🔁 对端确认未收到任务并登记撤销后，用户移除了接力标记，任务恢复为本机可运行。",
-      };
-      await appendFile(sessionTranscriptPath(taskId, latest.id), `\n${TURN_SENTINEL}${JSON.stringify(line)}\n`)
-        .catch(() => { /* 从未跑过就没有产物目录,标记已清,不阻塞 */ });
-    }
+    await appendTaskTimeline(taskId, forced
+      ? returning
+        ? "⚠️ 用户在无法核验原机状态时强制撤销了本次移回；任务继续由本机持有，但原机可能已有副本，恢复联网后必须人工确认只运行一份。"
+        : "⚠️ 用户在无法核验目标机状态时强制恢复了本机任务；目标机可能已有副本，恢复联网后必须人工确认只运行一份。"
+      : returning
+        ? "🔁 用户安全撤销了本次移回，任务继续由本机持有；原机已登记忽略这次旧移回请求。"
+        : "🔁 对端确认未收到任务并登记撤销后，用户移除了接力标记，任务恢复为本机可运行。");
     await publishTaskUpdated(taskId);
-    return c.json({ cleared: true, restored: returning ? "in" : "local" });
+    return c.json({ cleared: true, restored: returning ? "in" : "local", forced });
   });
 }

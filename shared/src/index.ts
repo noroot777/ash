@@ -82,6 +82,7 @@ export type {
   HandoffPeerIdentity,
   HandoffPingProject,
   HandoffPreflightResult,
+  HandoffReturnGrant,
   HandoffTarget,
   TaskHandoff,
 } from "./handoff.ts";

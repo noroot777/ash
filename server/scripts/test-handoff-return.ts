@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { HandoffPreflightResult, HandoffTarget, Task } from "@ash/shared";
+import type { HandoffPreflightResult, HandoffReturnGrant, HandoffTarget, Task } from "@ash/shared";
 import { api, makeRepo, startPeer } from "./handoff-test-utils.js";
 import { killOne, listenerPidsSync } from "../src/platform.js";
 
@@ -65,7 +65,7 @@ async function startReturnProxy(upstream: string): Promise<{ url: string; close(
   };
 }
 
-async function startOrdinaryImportProxy(upstream: string, forwardBeforeCut: boolean): Promise<{
+async function startOrdinaryImportProxy(upstream: string, forwardBeforeCut: boolean, legacyCancel = false): Promise<{
   url: string;
   deliverHeld(): Promise<{ status: number; body: { error?: string; ash?: boolean } }>;
   close(): Promise<void>;
@@ -86,6 +86,7 @@ async function startOrdinaryImportProxy(upstream: string, forwardBeforeCut: bool
       bytes: Buffer.from(await response.arrayBuffer()),
     };
   };
+  let closed = false;
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (chunk) => chunks.push(chunk as Buffer));
@@ -103,6 +104,12 @@ async function startOrdinaryImportProxy(upstream: string, forwardBeforeCut: bool
           headers,
           body: Buffer.concat(chunks),
         };
+        if (legacyCancel && request.path.startsWith("/api/handoff/proxy/task/cancel-pending")) {
+          res.statusCode = 404;
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ error: "not found" }));
+          return;
+        }
         if (cutFirstImport && request.path.startsWith("/api/handoff/import")) {
           cutFirstImport = false;
           if (forwardBeforeCut) await forward(request);
@@ -126,6 +133,8 @@ async function startOrdinaryImportProxy(upstream: string, forwardBeforeCut: bool
       return { status: response.status, body: JSON.parse(response.bytes.toString("utf8")) as { error?: string; ash?: boolean } };
     },
     close: async () => {
+      if (closed) return;
+      closed = true;
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
@@ -202,6 +211,11 @@ try {
   const blockedClear = await fetch(`${machineA}/api/tasks/${receivedTask.id}/handoff`, { method: "DELETE" });
   assert.equal(blockedClear.status, 409, "对端已有任务时必须阻止恢复本机旧副本");
   assert.match(((await blockedClear.json()) as { error: string }).error, /已经收到|原样重试/);
+  const forcedBlockedClear = await fetch(`${machineA}/api/tasks/${receivedTask.id}/handoff`, {
+    method: "DELETE", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ force: true, acknowledgeDuplicateRisk: true }),
+  });
+  assert.equal(forcedBlockedClear.status, 409, "即使直接调用强制端点，对端明确已收到时也不能绕过双任务硬拦截");
   assert.equal((await api<Task>(machineA, `/tasks/${receivedTask.id}`)).handoff?.pending, true, "被阻止后 pending 标记必须保留");
   await api(machineA, `/tasks/${receivedTask.id}/handoff`, {
     method: "POST", headers: { "content-type": "application/json" },
@@ -227,6 +241,52 @@ try {
   assert.match(lateDelivery.body.error ?? "", /安全撤销|不能再导入/);
   assert.equal((await fetch(`${machineB}/api/tasks/${delayedTask.id}`)).status, 404, "旧请求被拒后目标机仍不能出现第二份任务");
 
+  // 旧版目标机没有撤销路由时，默认仍不冒险清标记，但给用户显式承担双任务风险的逃生门。
+  const legacyTask = await createSimpleTask("旧版目标机允许显式强制恢复");
+  const legacyProxy = await startOrdinaryImportProxy(machineB, false, true);
+  ordinaryProxies.push(legacyProxy);
+  const legacyInterrupted = await fetch(`${machineA}/api/tasks/${legacyTask.id}/handoff`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: legacyProxy.url, targetProjectId: projectB.id, targetName: "旧版 B", autoResume: false }),
+  });
+  assert.equal(legacyInterrupted.status, 502);
+  const legacySafe = await fetch(`${machineA}/api/tasks/${legacyTask.id}/handoff`, { method: "DELETE" });
+  assert.equal(legacySafe.status, 409);
+  const legacySafeBody = (await legacySafe.json()) as { error: string; needsForce?: boolean; forceReason?: string };
+  assert.equal(legacySafeBody.needsForce, true);
+  assert.equal(legacySafeBody.forceReason, "legacy");
+  assert.match(legacySafeBody.error, /版本过旧/);
+  const legacyForced = await fetch(`${machineA}/api/tasks/${legacyTask.id}/handoff`, {
+    method: "DELETE", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ force: true, acknowledgeDuplicateRisk: true }),
+  });
+  assert.equal(legacyForced.status, 200);
+  assert.equal(((await legacyForced.json()) as { forced?: boolean }).forced, true);
+  assert.equal((await api<Task>(machineA, `/tasks/${legacyTask.id}`)).handoff, null);
+
+  // 永久离线与“版本过旧”必须给不同原因；仍只在第二次明确确认风险后恢复。
+  const offlineTask = await createSimpleTask("离线目标机允许显式强制恢复");
+  const offlineProxy = await startOrdinaryImportProxy(machineB, false);
+  ordinaryProxies.push(offlineProxy);
+  const offlineInterrupted = await fetch(`${machineA}/api/tasks/${offlineTask.id}/handoff`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: offlineProxy.url, targetProjectId: projectB.id, targetName: "离线 B", autoResume: false }),
+  });
+  assert.equal(offlineInterrupted.status, 502);
+  await offlineProxy.close();
+  const offlineSafe = await fetch(`${machineA}/api/tasks/${offlineTask.id}/handoff`, { method: "DELETE" });
+  assert.equal(offlineSafe.status, 409);
+  const offlineSafeBody = (await offlineSafe.json()) as { error: string; needsForce?: boolean; forceReason?: string };
+  assert.equal(offlineSafeBody.needsForce, true);
+  assert.equal(offlineSafeBody.forceReason, "unreachable");
+  assert.match(offlineSafeBody.error, /连不上对端/);
+  const offlineForced = await fetch(`${machineA}/api/tasks/${offlineTask.id}/handoff`, {
+    method: "DELETE", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ force: true, acknowledgeDuplicateRisk: true }),
+  });
+  assert.equal(offlineForced.status, 200);
+  assert.equal((await api<Task>(machineA, `/tasks/${offlineTask.id}`)).handoff, null);
+
   await api(machineA, `/tasks/${task.id}/handoff`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ targetUrl: machineB, targetProjectId: projectB.id, targetName: "B", autoResume: false }),
@@ -234,6 +294,13 @@ try {
   const inbound = await api<Task>(machineB, `/tasks/${task.id}`);
   assert.equal(inbound.handoff?.direction, "in");
   assert.equal(inbound.handoff?.peerUrl, machineA, "接收机应从真实来源地址与源端口恢复回程地址");
+  const identityB = await api<{ fingerprint: string }>(machineB, "/handoff/identity");
+  const grantsOnA = await api<{ grants: HandoffReturnGrant[] }>(machineA, "/handoff/return-grants");
+  const returnGrant = grantsOnA.grants.find((grant) => grant.fingerprint === identityB.fingerprint);
+  assert.equal(returnGrant?.taskCount, 2, "历史持有机应以任务级回程权限显式列出并聚合对应任务数");
+  assert.equal(returnGrant?.blocked, false);
+  const peersBeforeBlock = await api<{ peers: { fingerprint: string }[] }>(machineA, "/handoff/peers");
+  assert.ok(!peersBeforeBlock.peers.some((peer) => peer.fingerprint === identityB.fingerprint), "展示任务级回程权限不能暗中建立整机批准");
 
   const { target } = await api<{ target: HandoffTarget }>(machineB, `/tasks/${task.id}/handoff/return-target`);
   assert.equal(target.url, machineA);
@@ -313,12 +380,12 @@ try {
   assert.equal(firstProbe.peer?.peerStatus, "approved", "任务级安全移回不应要求原机再次批准整台机器");
   assert.deepEqual(firstProbe.projects.map((project) => project.id), [projectA.id], "免审批探测只应暴露原任务项目");
 
-  // 显式拉黑仍然优先：先用普通申请让 B 出现在 A 的来源列表，再拉黑它。
-  await api(machineB, "/handoff/request", {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetUrl: machineA }),
-  });
-  const identityB = await api<{ fingerprint: string }>(machineB, "/handoff/identity");
-  await api(machineA, `/handoff/peers/${identityB.fingerprint}/block`, { method: "POST" });
+  // 显式拉黑仍然优先；即使它从未申请整机接力，也能从历史回程权限列表直接撤销。
+  const returnOnlyBlock = await api<{ status: string; returnOnly: boolean }>(
+    machineA, `/handoff/peers/${identityB.fingerprint}/block`, { method: "POST" },
+  );
+  assert.equal(returnOnlyBlock.status, "blocked");
+  assert.equal(returnOnlyBlock.returnOnly, true);
   const blocked = await fetch(`${machineB}/api/tasks/${task.id}/handoff/preflight`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetUrl: target.url }),
   });
@@ -341,6 +408,17 @@ try {
     "commit", "-m", "holder commit",
   ]);
   const holderHead = execFileSync("git", ["-C", holderWorktree, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const originWorktree = worktreePathFor(repoA, task.id);
+  writeFileSync(join(originWorktree, "seed.txt"), "tracked local edit\n");
+  const trackedDirtyReturn = await fetch(`${machineB}/api/tasks/${task.id}/handoff`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: machineA, targetProjectId: projectA.id, targetName: "A", autoResume: false }),
+  });
+  assert.equal(trackedDirtyReturn.status, 502);
+  assert.match(((await trackedDirtyReturn.json()) as { error: string }).error, /已跟踪文件的未提交改动/);
+  assert.equal((await api<Task>(machineB, `/tasks/${task.id}`)).handoff?.direction, "in", "已跟踪改动挡下移回后持有机仍应可运行");
+  writeFileSync(join(originWorktree, "seed.txt"), "seed\n");
+  writeFileSync(join(originWorktree, ".DS_Store"), "finder metadata\n");
   returnProxy = await startReturnProxy(machineA);
   const interruptedResponse = await fetch(`${machineB}/api/tasks/${task.id}/handoff`, {
     method: "POST", headers: { "content-type": "application/json" },
@@ -359,6 +437,7 @@ try {
   assert.equal(returnedBeforeRetry.handoff?.returnTransferId, inbound.handoff?.transferId, "原机完成态应保留幂等探测凭据");
   const originHeadBeforeRetry = execFileSync("git", ["-C", worktreePathFor(repoA, task.id), "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   assert.equal(originHeadBeforeRetry, holderHead, "首次已送达的移回应更新原机 worktree");
+  assert.equal(existsSync(join(originWorktree, ".DS_Store")), true, "reset --hard 不应删除或阻止未跟踪的 .DS_Store");
   const blockedReturnClear = await fetch(`${machineB}/api/tasks/${task.id}/handoff`, { method: "DELETE" });
   assert.equal(blockedReturnClear.status, 409, "原机已接回任务时也不能撤销 pending 移回并恢复持有机旧副本");
   assert.equal((await api<Task>(machineB, `/tasks/${task.id}`)).handoff?.pending, true);
