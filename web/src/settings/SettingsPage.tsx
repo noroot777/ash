@@ -98,7 +98,6 @@ function SettingsNavItems({
 
 export function SettingsPage({
   section,
-  cliVersionWarning,
   project,
   tasks,
   groups,
@@ -111,7 +110,6 @@ export function SettingsPage({
   notify,
 }: {
   section: SettingsSection;
-  cliVersionWarning: string | null;
   project: ProjectView | null;
   tasks: Task[];
   groups: Group[];
@@ -145,7 +143,7 @@ export function SettingsPage({
       <main className="settings-main">
         <div className="settings-content" data-wide={WIDE_SECTIONS.includes(section) ? "yes" : "no"}>
           {section === "providers" && <ProvidersSettings notify={notify} />}
-          {section === "executors" && <ExecutorsSettings versionWarning={cliVersionWarning} notify={notify} />}
+          {section === "executors" && <ExecutorsSettings notify={notify} />}
           {section === "modes" && <ModesSettings notify={notify} />}
           {section === "workflows" && <WorkflowsSettings notify={notify} />}
           {section === "reviewers" && <ReviewerProfilesSettings notify={notify} />}

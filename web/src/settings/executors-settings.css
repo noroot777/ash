@@ -60,20 +60,6 @@
   white-space: nowrap;
 }
 
-.settings-cli-version-alert {
-  display: grid;
-  gap: 3px;
-  border-bottom: 1px solid color-mix(in lch, var(--amber) 28%, var(--line));
-  background: color-mix(in lch, var(--amber) 8%, var(--panel));
-  padding: 10px 12px;
-}
-
-.settings-cli-version-alert b {
-  color: var(--amber);
-  font-size: 11px;
-}
-
-.settings-cli-version-alert .settings-cli-version-warning,
 .settings-cli-grid .settings-cli-version-warning {
   overflow: visible;
   color: var(--amber);

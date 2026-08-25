@@ -12,13 +12,7 @@ function updateById(rows: AgentExecutorProfile[], updated: AgentExecutorProfile)
   });
 }
 
-export function ExecutorsSettings({
-  versionWarning,
-  notify,
-}: {
-  versionWarning: string | null;
-  notify: (message: string) => void;
-}) {
+export function ExecutorsSettings({ notify }: { notify: (message: string) => void }) {
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [providers, setProviders] = useState<LlmProvider[]>([]);
   const [loading, setLoading] = useState(true);
@@ -92,7 +86,6 @@ export function ExecutorsSettings({
         loading={loading}
         detecting={detecting}
         detected={detected}
-        versionWarning={versionWarning}
         registeringKey={registeringKey}
         onDetect={() => void detect()}
         onRegister={(cli) => void register(cli)}
