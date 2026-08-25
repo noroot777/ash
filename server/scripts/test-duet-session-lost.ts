@@ -49,8 +49,8 @@ const DEAD_ID = "6f8c7cdd-b820-416e-a4f3-96b516d6a8e2";
 const REAL = `No conversation found with session ID: ${DEAD_ID}`;
 const POISONED_ID = "01a03415-e32e-72d2-8510-26a3beb2832f";
 const POISONED =
-  "Codex 运行诊断: termination=poisoned_session; failure=poisoned_session; "
-  + "reason=Codex stderr 出现 `dropping turn-scoped item for unknown turn id`，恢复 thread 已无法对应旧回合。";
+  "Codex 会话诊断：session=poisoned_session；"
+  + "Codex stderr 出现 `dropping turn-scoped item for unknown turn id`，恢复 thread 已无法对应旧回合。";
 
 await db.insert(projects).values({ id: "p", name: "p", repoPath: stage, apiKeys: null, createdAt: at });
 await db.insert(tasks).values({
@@ -117,7 +117,8 @@ ok("库里的 id + 三件套恢复命令都清了");
 // ④ 返回值那份:喂本次运行的后续轮次(ctx.A.cliId → 下一轮的 resumeCliId)。只清库不清
 // 它,同一次 duet 跑下去照样撞同一堵墙。
 assert.equal(turn.cliId, "", "返回值里的 cliId 没清,后续轮次会接着 --resume 死 id");
-assert.ok(turn.error?.includes("已经把这个失效的 id 清掉"), "错误文本里要带上说明(时间线/transcript 都取自它)");
+assert.match(turn.error ?? "", /No conversation found/, "真实 CLI 失败原因必须保留");
+assert.ok(turn.sessionRotation?.includes("已经把这个失效的 id 清掉"), "轮换说明应与真实失败分栏保存");
 ok("返回值里的 cliId 也清了,后续轮次会开新会话");
 
 // 真机 Codex 的 poisoned thread 会同时给 turn.completed / exit 0。不能沿用上面的
@@ -137,6 +138,7 @@ const poisonedExecutor = {
     commandLine: `codex exec resume ${POISONED_ID}`,
     events: (async function* () {
       yield { kind: "error", message: POISONED };
+      yield { kind: "text", text: "我的观点是 A。[可收敛]" };
       yield { kind: "done", exitStatus: 0 };
     })(),
     kill() {},
@@ -155,7 +157,8 @@ assert.equal(poisonedRow.resumeEnv, null, "poisoned exit 0 没清 resume_env");
 assert.equal(poisonedRow.resumeArgs, null, "poisoned exit 0 没清 resume_args");
 assert.equal(poisonedRow.exitStatus, 0, "poisoned 判断不能篡改 Codex 的真实 exit 0");
 assert.equal(poisonedTurn.cliId, "", "poisoned exit 0 的返回值仍会让下一轮 resume");
-assert.match(poisonedTurn.error ?? "", /下一次运行会从任务正文自动开启一条\*\*全新会话\*\*/);
+assert.equal(poisonedTurn.error, undefined, "会话轮换不能把 exit 0 + 正常正文判成回合失败");
+assert.match(poisonedTurn.sessionRotation ?? "", /下一次运行会从任务正文自动开启一条\*\*全新会话\*\*/);
 const poisonedMdPath = join(process.env.ASH_RUNS_DIR!, poisonedTaskId, `${poisonedTurn.rowId}.md`);
 let poisonedMd = "";
 for (let i = 0; i < 100 && !poisonedMd.includes("下一次运行会从任务正文自动开启"); i++) {
@@ -164,6 +167,36 @@ for (let i = 0; i < 100 && !poisonedMd.includes("下一次运行会从任务正�
 }
 assert.match(poisonedMd, /即使进程 exit 0 且发出 turn\.completed/);
 ok("Codex poisoned stderr 即使 exit 0 也清恢复字段并持久提示下一次自动 fresh");
+
+// 真失败与轮换信号同场出现：后来的 poisoned 诊断只能决定下一轮 fresh，不能把前面的
+// 余额不足/turn.failed 覆盖成另一种病因。
+const mixedTaskId = "duet-session-poisoned-with-failure";
+await db.insert(tasks).values({
+  id: mixedTaskId, projectId: "p", groupId: null, parentId: null, title: "失败与轮换并存", body: "", mode: "duet",
+  status: "running", labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: null, executorId: null,
+  autoTitle: false, duet: null, team: null, scheduleId: null, createdAt: at, updatedAt: at,
+  useWorktree: false, worktreeBase: null, originTaskId: null,
+});
+const mixedExecutor = {
+  ...poisonedExecutor,
+  run: () => ({
+    sessionId: POISONED_ID,
+    commandLine: `codex exec resume ${POISONED_ID}`,
+    events: (async function* () {
+      yield { kind: "error", message: "Credit balance is too low" };
+      yield { kind: "error", message: POISONED };
+      yield { kind: "done", exitStatus: 1 };
+    })(),
+    kill() {},
+  }),
+} as unknown as Parameters<typeof duet.runTurn>[0]["executor"];
+const mixedTurn = await duet.runTurn({
+  taskId: mixedTaskId, role: "voiceA", speaker: "A", round: 1, executor: mixedExecutor,
+  prompt: "继续旧 thread", cwd: stage, resumeCliId: POISONED_ID,
+});
+assert.equal(mixedTurn.error, "Credit balance is too low", "后来的轮换诊断覆盖了真实失败原因");
+assert.match(mixedTurn.sessionRotation ?? "", /下一次运行会从任务正文自动开启一条\*\*全新会话\*\*/);
+ok("真实失败原因与会话轮换正交保存");
 
 // ⑤ 清完之后的下一轮:开出来的新会话 id 必须**落库**。
 // 只清不写回,库里就停在「resume_command 指向新会话、cli_session_id 却是空」的自相矛盾

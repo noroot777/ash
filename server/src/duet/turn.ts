@@ -68,6 +68,8 @@ export interface Turn {
   conclusion?: string; // self-declared one-line 结论 (for the gate display)
   exit: number;
   error?: string;
+  /** 恢复会话被作废的诊断与说明；不参与本回合成功/失败判定。 */
+  sessionRotation?: string;
 }
 
 // Run one voice turn: stream events tagged with role+round, persist output +
@@ -155,6 +157,7 @@ export async function runTurn(args: {
   let text = "";
   let exit = 0;
   let errorMsg: string | undefined;
+  const sessionRotationMessages: string[] = [];
   // CLI 否认过这条会话，或 Codex stderr 证明 thread 已 poisoned 吗（见
   // executors/session-lost.ts）。duet 有自己的会话行与自己的
   // 结算,不经过 single-run.ts —— 漏掉这里,duet 任务会一直 --resume 同一个死 id:
@@ -184,7 +187,11 @@ export async function runTurn(args: {
         if (trace.length < TRACE_CAP) trace.push({ kind: "thinking", label: "思考过程", detail: event.text });
         out.write("〔思考〕" + event.text + "\n");
       } else if (event.kind === "error") {
-        errorMsg = event.message;
+        const eventFault = mergeSessionResumeFault(null, event.message);
+        // poisoned 是恢复状态，不是本回合失败；真实错误只保留第一条，避免后来的
+        // 会话诊断覆盖余额不足 / turn.failed 等真正病因。
+        if (eventFault === "poisoned") sessionRotationMessages.push(event.message);
+        else errorMsg ??= event.message;
         out.write("✕ " + event.message + "\n");
         sessionFault = mergeSessionResumeFault(sessionFault, event.message);
       } else if (event.kind === "context") {
@@ -216,13 +223,14 @@ export async function runTurn(args: {
   }
   const endIso = now();
   const durationMs = Math.max(0, Date.parse(endIso) - Date.parse(turnStart));
-  // CLI 否认或判定 poisoned：清掉失效 id 和由它派生的恢复命令，并把这件事写进本轮的错误
-  // 文本 —— 时间线和 transcript 都取自 errorMsg,不写进去用户只看得到一行英文,不知道
-  // 下一次重试会是全新会话(**上下文不带过来**)。
+  // CLI 否认或判定 poisoned：清掉失效 id 和由它派生的恢复命令。轮换说明与 error
+  // 分开持久化：它影响下一轮从哪条会话起跑，不改变这一轮是否成功。
   const dropSession = shouldDropSession(sessionFault, exit);
+  let sessionRotation: string | undefined;
   if (dropSession) {
     const note = sessionResumeFaultNote(sessionFault!);
-    errorMsg = `${errorMsg ?? ""}\n${note}`.trim();
+    sessionRotationMessages.push(note);
+    sessionRotation = sessionRotationMessages.join("\n");
     out.write("✕ " + note + "\n");
   }
   // 关流放在**所有** out.write 之后。写已 end 的流不是静默丢弃,是 stream 上一个没人听的
@@ -243,7 +251,7 @@ export async function runTurn(args: {
   try {
     appendFileSync(
       join(runDir, "transcript.jsonl"),
-      JSON.stringify({ ...args.extra, round, speaker, text, raised, agrees, conclusion, error: errorMsg, startedAt: turnStart, at: endIso, durationMs, events: trace }) + "\n",
+      JSON.stringify({ ...args.extra, round, speaker, text, raised, agrees, conclusion, error: errorMsg, sessionRotation, startedAt: turnStart, at: endIso, durationMs, events: trace }) + "\n",
     );
   } catch {
     /* best effort */
@@ -254,5 +262,5 @@ export async function runTurn(args: {
   if (isCanceling(taskId)) throw new CanceledRun();
   // cliId 清成空串,调用方的 `resumeCliId: ... || undefined` 就会退化成「开新会话」——
   // 本次运行的后续轮次也不会再拿这个死 id 去 --resume。
-  return { rowId, cliId: dropSession ? "" : cliId, text, raised, agrees, conclusion, exit, error: errorMsg };
+  return { rowId, cliId: dropSession ? "" : cliId, text, raised, agrees, conclusion, exit, error: errorMsg, sessionRotation };
 }

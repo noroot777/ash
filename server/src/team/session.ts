@@ -469,9 +469,17 @@ async function consume(lead: Lead): Promise<void> {
           // 这里先作废闭包里的 id 与持久恢复字段，所以下一个 startTurn 必然 fresh。
           lead.handle.dropSession();
           lead.cliSessionId = "";
-          await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, lead.sessId));
+          let note = sessionResumeFaultNote("poisoned");
+          try {
+            await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, lead.sessId));
+          } catch (error) {
+            // 内存轮换已经生效，写库失败不能把整条常驻事件流打断。把真实状态留在
+            // 时间线：当前进程的下一回合仍 fresh，但 server 重启前旧凭据尚未清掉。
+            console.error(`[ash] failed to persist poisoned session rotation for ${lead.taskId}:`, error);
+            note = "Codex 的恢复 thread 已在当前调度台内作废，下一回合会开启全新会话；"
+              + "但恢复字段写入数据库失败，server 重启后可能再次尝试旧 thread。";
+          }
           awaitingFreshSession = true;
-          const note = sessionResumeFaultNote("poisoned");
           writeRunError(lead.out, note);
           appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), { kind: "error", message: note });
           publish(lead, { kind: "error", message: note });
