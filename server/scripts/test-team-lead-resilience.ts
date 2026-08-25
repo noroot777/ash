@@ -82,8 +82,8 @@ async function runLead(name: string, s: Scenario) {
     agentType: "codex",
     executor: "codex@test",
     cwd: root,
-    cliSessionId: s.cliSessionId,
-    resumeCommand: `codex exec resume ${s.cliSessionId}`,
+    cliSessionId: s.cliSessionId || null,
+    resumeCommand: s.cliSessionId ? `codex exec resume ${s.cliSessionId}` : null,
     startedAt: at,
     turnStartedAt: at,
     activeMs: 0,
@@ -220,6 +220,51 @@ try {
   );
   assert.equal(c.killed(), 1, "事件流没人消费了,那个进程必须收掉");
   ok("poisoned 后事件流异常:指引不自相矛盾,退出码不冒充成功");
+
+  // ── ④ 欠着凭据的那条会话随后被判 poisoned:欠账必须一起作废,不能把死会话复活 ──────
+  // 前面两条各自成立,交叉起来却能互相拆台:②留下的欠账 + ③判死的会话。补写一旦成功,
+  // 连 rotation 都会被翻篇,于是 closeLead 也不再清它 —— 用户看到的是「下次开全新会话」,
+  // 库里却又指回那条刚判死的 thread,下一次原样再撞一次。
+  const DOOMED = "fresh-thread-that-is-already-poisoned";
+  const d = await runLead("credential-then-poison", {
+    cliSessionId: "old-thread",
+    script: async function* () {
+      breakSessionWrites();
+      yield { kind: "session", cliSessionId: DOOMED }; // 凭据没写进去,欠着
+      healSessionWrites();
+      yield { kind: "error", message: POISON, scope: "session" }; // 同一条会话随即判死
+      yield { kind: "turnEnd" }; // 这一步会去补欠账 —— 绝不能补
+      yield { kind: "done", exitStatus: 0 };
+    },
+  });
+  const dRow = await d.session();
+  assert.ok(d.md.includes(SESSION_POISONED_NOTE), "判死这件事要落盘");
+  assert.equal(
+    dRow.cliSessionId,
+    null,
+    "已经判死的会话凭据被补写回库 —— 说明里写着「下次开全新会话」,库里却指回同一条坏 thread",
+  );
+  assert.equal(dRow.resumeCommand, null, "恢复命令是由那个 id 派生的,同样不能留");
+  ok("欠着的凭据随会话一起判死,不会被补写复活");
+
+  // ── ⑤ 还没拿到会话 id 就异常:别承诺「会话还在,再说一句就能接回」 ────────────────
+  const e = await runLead("abort-before-session", {
+    cliSessionId: "", // fresh 调度台:CLI 还没报上任何 thread id
+    script: async function* () {
+      throw new Error("injected failure before any session event");
+      // eslint-disable-next-line no-unreachable
+      yield { kind: "done", exitStatus: 0 };
+    },
+  });
+  assert.match(e.md, /调度台事件流异常中断/, "异常中断要如实写下来");
+  assert.doesNotMatch(
+    e.md,
+    /会话还在|自动接回/,
+    "手上压根没有会话 id,还说「再说一句话会自动接回」—— 用户照做只会开一条新会话,上下文一个字都回不来",
+  );
+  assert.match(e.md, /没有可续的 CLI 会话 id/, "没 id 时要明说下次是全新会话");
+  assert.equal((await e.session()).cliSessionId, null, "这一路本来就没有 id 可落");
+  ok("没拿到会话 id 就异常:如实说下次是全新会话");
 
   console.log("test:team-resilience ok");
 } finally {

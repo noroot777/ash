@@ -629,6 +629,14 @@ async function persistOrReport(
 async function flushPendingCredential(lead: Lead): Promise<boolean> {
   const patch = lead.pendingCredential;
   if (!patch) return false;
+  // 只补写**当前这一代**凭据。中途判过 poisoned 的话,内存 id 已经被清成空串、库里的恢复
+  // 字段也刚清掉 —— 这时候把欠账补回去等于把刚判死的 thread 复活:用户看到的持久说明是
+  // 「下次开全新会话」,库里却又指回同一条坏 thread,而且补写成功还会顺手把 rotation 翻篇,
+  // 让 closeLead 也不再清它(2026-08-25 第 4 轮审查)。同代校验顺带挡住其它过代的路子。
+  if (!lead.cliSessionId || patch.cliSessionId !== lead.cliSessionId) {
+    lead.pendingCredential = null;
+    return false;
+  }
   // 这条会话行可能已经被新进程接管了(工作目录被抽走那条路会复用同一行)。晚到的旧消费者
   // 不能拿自己攒的这笔凭据盖掉新进程刚报上来的有效 id —— 跟 closeLead 里那道闸同一个理由。
   // 欠账就此作废:那条行现在归新进程管,补不补轮不到这个已经出局的 handle 决定。
@@ -720,6 +728,11 @@ async function endTurn(lead: Lead): Promise<void> {
 
 // 中途已经播过完整轮换说明后,收尾那两句只补一个指路,不重复整段。
 const ROTATION_ALREADY_ANNOUNCED = "这条 CLI 会话此前已被作废,下次运行会开全新会话。";
+// 手上压根没有可续的会话 id 时的指路。跟上面那条的区别是**为什么**接不回:这条不是
+// 「作废了」,而是「还没建起来,或者建起来了却没写进库」。
+const NO_RESUMABLE_SESSION_NOTE =
+  "这台调度台没有可续的 CLI 会话 id(还没建起来,或者它没能写进数据库),"
+  + "下次运行会开一条全新会话:之前的上下文不会带过来,任务正文和历史记录都还在。";
 // 事件流被掀翻时,没有任何进程报过退出码。落 0 等于把异常中断记成成功收尾;落 null 又会
 // 让这条会话看起来还在跑(openLead 就是拿 null 表示「进行中」)。所以记一个明确的非零码,
 // 真正的原因写在时间线和 trace 里。
@@ -765,6 +778,11 @@ async function closeLead(
   );
   // 没写进去就不能沿用「恢复字段已清掉」的文案:库里那个坏 id 还在,下一次照样撞它。
   if (!persisted && dropSession) dropNote = SESSION_DROP_PERSISTENCE_FAILED_NOTE;
+  // 「再说一句话就能接回」成立要两个条件:手上真有一个 CLI 会话 id,而且它**已经落进库**
+  // —— openResident 的判据就是会话行上那一列。fresh 调度台在拿到 thread id 之前就异常,
+  // 或者凭据到最后一次补写也没写进去,照着那句话去点「继续」只会开一条全新会话,上下文
+  // 一个字都回不来(2026-08-25 第 4 轮审查)。
+  const resumable = !!lead.cliSessionId && !lead.pendingCredential;
   if (lead.closing === "recycle") {
     recordSystemTurn(lead, RECYCLE_NOTE(Math.round(IDLE_MS / 60_000)));
   } else if (!lead.closing && (aborted || exitStatus !== 0 || (dropSession && !rotation.announced))) {
@@ -780,18 +798,17 @@ async function closeLead(
       : exitStatus !== 0
         ? `调度台进程意外退出(exit ${exitStatus})。`
         : "";
-    const msg = rotationNote
-      ? `${how}${rotationNote}`
-      : `${how}CLI 会话还在,再说一句话会自动接回;需要的话也可以点「继续」。`;
+    const msg = `${how}${rotationNote ?? (resumable ? "CLI 会话还在,再说一句话会自动接回;需要的话也可以点「继续」。" : NO_RESUMABLE_SESSION_NOTE)}`;
     writeRunError(lead.out, msg);
     appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message: msg }, endIso);
     publish(lead, { kind: "error", message: msg });
   }
   // 回收和「停止全组」那两句都写着「再说一句话就能接回同一会话」,而这条会话刚被作废
-  // —— 不当场更正,用户刷新后看到的指引与真实状态正好相反,照做一次再撞一次墙。上面
-  // 那个「进程自己没了」的分支已经在 msg 里说过了,别重复。
-  if (dropSession && lead.closing) {
-    const msg = `更正上面那条:CLI 会话接不回了。${rotation.announced ? ROTATION_ALREADY_ANNOUNCED : dropNote}`;
+  // (或压根没建起来)—— 不当场更正,用户刷新后看到的指引与真实状态正好相反,照做一次
+  // 再撞一次墙。上面那个「进程自己没了」的分支已经在 msg 里说过了,别重复。
+  if (lead.closing && (dropSession || !resumable)) {
+    const why = dropSession ? (rotation.announced ? ROTATION_ALREADY_ANNOUNCED : dropNote) : NO_RESUMABLE_SESSION_NOTE;
+    const msg = `更正上面那条:CLI 会话接不回了。${why}`;
     writeRunError(lead.out, msg);
     appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message: msg }, endIso);
     publish(lead, { kind: "error", message: msg });
