@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import type { AgentExecutorProfile, LlmProvider } from "@ash/shared";
 import { refreshAgentAvailability } from "../lib/agentAvailability.ts";
 import { api, type DetectedCli } from "../lib/api.ts";
@@ -12,7 +12,13 @@ function updateById(rows: AgentExecutorProfile[], updated: AgentExecutorProfile)
   });
 }
 
-export function ExecutorsSettings({ notify }: { notify: (message: string) => void }) {
+export function ExecutorsSettings({
+  versionWarning,
+  notify,
+}: {
+  versionWarning: string | null;
+  notify: (message: string) => void;
+}) {
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [providers, setProviders] = useState<LlmProvider[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,7 +42,7 @@ export function ExecutorsSettings({ notify }: { notify: (message: string) => voi
       : current.filter((row) => row.id !== id));
   };
 
-  const detect = useCallback(async () => {
+  const detect = async () => {
     setDetecting(true);
     try {
       setDetected(await api.detectClis());
@@ -46,16 +52,14 @@ export function ExecutorsSettings({ notify }: { notify: (message: string) => voi
     } finally {
       setDetecting(false);
     }
-  }, [notify]);
-
-  // 横幅的「查看执行器」落到这里时，警告要自行出现，不能再要求用户猜到还得手动检测一次。
-  // 保留按钮作为刷新入口；自动检测与按钮共用同一条状态/错误处理路径。
-  useEffect(() => {
-    void detect();
-  }, [detect]);
+  };
 
   const register = async (cli: DetectedCli) => {
     if (!cli.type) return;
+    if (cli.versionWarning) {
+      notify(cli.versionWarning);
+      return;
+    }
     setRegisteringKey(cli.key);
     try {
       const created = await api.createAgent({
@@ -88,6 +92,7 @@ export function ExecutorsSettings({ notify }: { notify: (message: string) => voi
         loading={loading}
         detecting={detecting}
         detected={detected}
+        versionWarning={versionWarning}
         registeringKey={registeringKey}
         onDetect={() => void detect()}
         onRegister={(cli) => void register(cli)}

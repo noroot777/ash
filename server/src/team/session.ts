@@ -48,7 +48,8 @@ import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET } from "./prompts.js";
 import { withSkillInvocation, nativeCliCommand } from "../skills.js";
 import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
-import { affectedCodexResumeWarning, announceAffectedSessionReplacement } from "../session-version-guard.js";
+import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
+import { latestTeamLeadSession } from "./session-selection.js";
 
 // 空闲多久回收进程(0/负数 = 永不回收)。测试用 ASH_TEAM_IDLE_MS=5000。
 const IDLE_MS = Number(process.env.ASH_TEAM_IDLE_MS ?? 30 * 60_000);
@@ -296,16 +297,13 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   // 默认执行者会通过 taskWorkspace 继承这里得到的同一个目录。
   const ws = await taskWorkspace(task, project.repoPath);
   // 上一段常驻会话:同一个 CLI 会话可以 --resume 接回,.md 也接着往下写。
-  let prev = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
-    // 只看最新一条调度台会话：最新行的 id 被清掉时应开新会话，不能越过它复活更老的
-    // 上下文（会话失效和版本替换两条清理路径都依赖这个判据）。
-    .filter((s) => s.role === "lead")
-    .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
-    .at(0);
-  const sessionUpgradeWarning = await affectedCodexResumeWarning(cfg.lead, prev?.cliSessionId);
-  if (prev && sessionUpgradeWarning) {
+  // 只看最新一条调度台会话：最新行的 id 被清掉时应开新会话，不能越过它复活更老的
+  // 上下文（会话失效和版本替换两条清理路径都依赖这个判据）。
+  let prev = latestTeamLeadSession(await db.select().from(sessions).where(eq(sessions.taskId, taskId)));
+  const affectedSessionVersion = await affectedCodexResumeVersion(cfg.lead, prev?.cliSessionId);
+  if (prev && affectedSessionVersion) {
     await announceAffectedSessionReplacement({
-      taskId, sessionId: prev.id, role: "lead", agentType: cfg.lead, warning: sessionUpgradeWarning,
+      taskId, sessionId: prev.id, role: "lead", agentType: cfg.lead, version: affectedSessionVersion,
     });
     await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, prev.id));
     prev = undefined;

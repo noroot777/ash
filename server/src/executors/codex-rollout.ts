@@ -102,13 +102,16 @@ export async function readCodexCliVersion(threadId: string): Promise<string | nu
     let inspected = 0;
     try {
       for await (const line of lines) {
-        if (!line.trim()) continue;
+        inspected += 1;
+        if (!line.trim()) {
+          if (inspected >= CLI_VERSION_SCAN_LINES) return null;
+          continue;
+        }
         const version = parseCodexCliVersionLine(line, threadId);
         if (version) {
           cliVersionCache.set(threadId, version);
           return version;
         }
-        inspected += 1;
         // session_meta 应在文件开头；只容忍少量空行/旁注/格式噪声，避免坏文件触发
         // 对整份巨大 rollout 的线性扫描。
         if (inspected >= CLI_VERSION_SCAN_LINES) return null;

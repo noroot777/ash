@@ -140,6 +140,14 @@ export function detectKnownClis(): Promise<DetectedCli[]> {
   return Promise.all(KNOWN_CLIS.map(detectOne));
 }
 
+export async function registrationVersionWarning(type: AgentType): Promise<string | undefined> {
+  if (type !== "codex") return undefined;
+  const cli = KNOWN_CLIS.find((candidate) => candidate.type === type);
+  if (!cli) return undefined;
+  const probe = await probeBins(cli.bins, cli.fallbackVersionMatch);
+  return versionWarningFor(type, probe?.version ?? null);
+}
+
 // 派任务视角的精简形状(形状保持不变):团队/讨论的执行器选择器靠它决定谁能当
 // 调度者。`resident` 直接问执行器本人有没有 openResident —— 「谁能当调度者」只有
 // 这一个真相来源,前端照着过滤就行,不用在 shared 里再抄一张名单出来漂移。

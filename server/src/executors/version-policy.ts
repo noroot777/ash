@@ -9,5 +9,11 @@ export function isAffectedCodexVersion(version: string | null | undefined): bool
 export function affectedCodexSessionWarning(version: string | null | undefined): string | undefined {
   if (!isAffectedCodexVersion(version)) return undefined;
   return `这条 Codex 会话由受影响的 ${version} 创建，旧会话里的工具清单可能已经损坏。`
-    + "再次运行时 ash 会停止续用它，改从任务正文开启全新会话；旧的对话与执行记录仍会保留。";
+    + "下次运行时 ash 会停止续用它，改从任务正文开启全新会话；旧的对话与执行记录仍会保留。";
+}
+
+export function affectedCodexSessionReplacementNote(version: string | null | undefined): string | undefined {
+  if (!isAffectedCodexVersion(version)) return undefined;
+  return `这条 Codex 会话由受影响的 ${version} 创建，旧会话里的工具清单可能已经损坏。`
+    + "ash 已判定本轮不再续用它，将从任务正文开启全新会话；旧的对话与执行记录仍会保留。";
 }

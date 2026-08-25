@@ -329,6 +329,7 @@ export function WorkspaceShell() {
   ) : null;
   if (settingsSection) return <><div className="workspace-system-layout"><div>{handoffAlert}{cliUpgradeNotice}</div><SettingsPage
     section={settingsSection}
+    cliVersionWarning={cliVersionWarning}
     project={currentProject}
     tasks={tasks}
     groups={groups}

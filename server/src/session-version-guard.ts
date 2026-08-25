@@ -1,28 +1,24 @@
 import { createWriteStream, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname } from "node:path";
 import { finished } from "node:stream/promises";
 import type { AgentType, SessionRole } from "@ash/shared";
 import { bus } from "./bus.js";
 import { readCodexCliVersion } from "./executors/codex-rollout.js";
-import { affectedCodexSessionWarning } from "./executors/version-policy.js";
-import { RUNS_DIR } from "./paths.js";
-import { writeTurn } from "./transcript.js";
+import { affectedCodexSessionReplacementNote, isAffectedCodexVersion } from "./executors/version-policy.js";
+import { sessionTranscriptPath, writeTurn } from "./transcript.js";
 import { now } from "./util.js";
 
 /**
  * 无法读取 rollout 或无法证明版本受影响时保留原会话。这里刻意 fail-open：误删一条
  * 健康会话会直接丢上下文，而漏拦只会维持升级守卫加入前的恢复行为。
  */
-export async function affectedCodexResumeWarning(
+export async function affectedCodexResumeVersion(
   agentType: AgentType,
   cliSessionId: string | null | undefined,
 ): Promise<string | undefined> {
   if (agentType !== "codex" || !cliSessionId) return undefined;
-  return affectedCodexSessionWarning(await readCodexCliVersion(cliSessionId));
-}
-
-export function affectedSessionReplacementNote(warning: string): string {
-  return `${warning} 本轮不再续用它，将开启全新会话。`;
+  const version = await readCodexCliVersion(cliSessionId);
+  return isAffectedCodexVersion(version) ? version! : undefined;
 }
 
 /**
@@ -34,13 +30,14 @@ export async function announceAffectedSessionReplacement(args: {
   sessionId: string;
   role: SessionRole;
   agentType: AgentType;
-  warning: string;
+  version: string;
 }): Promise<string> {
   const at = now();
-  const text = affectedSessionReplacementNote(args.warning);
-  const runDir = join(RUNS_DIR, args.taskId);
-  mkdirSync(runDir, { recursive: true });
-  const out = createWriteStream(join(runDir, `${args.sessionId}.md`), { flags: "a" });
+  const text = affectedCodexSessionReplacementNote(args.version);
+  if (!text) throw new Error(`unsupported Codex replacement version: ${args.version}`);
+  const transcriptPath = sessionTranscriptPath(args.taskId, args.sessionId);
+  mkdirSync(dirname(transcriptPath), { recursive: true });
+  const out = createWriteStream(transcriptPath, { flags: "a" });
   writeTurn(out, { t: "system", agent: args.agentType, text }, at);
   out.end();
   await finished(out);

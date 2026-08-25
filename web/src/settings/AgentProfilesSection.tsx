@@ -167,6 +167,7 @@ export function AgentProfilesSection({
   loading,
   detecting,
   detected,
+  versionWarning,
   registeringKey,
   onDetect,
   onRegister,
@@ -180,6 +181,7 @@ export function AgentProfilesSection({
   loading: boolean;
   detecting: boolean;
   detected: DetectedCli[] | null;
+  versionWarning: string | null;
   registeringKey: string | null;
   onDetect: () => void;
   onRegister: (cli: DetectedCli) => void;
@@ -192,6 +194,7 @@ export function AgentProfilesSection({
     type,
     profiles: profiles.filter((profile) => profile.type === type),
   })).filter((group) => group.profiles.length > 0), [profiles]);
+  const showCachedVersionWarning = !!versionWarning && detected === null;
 
   return (
     <section className="settings-section">
@@ -205,6 +208,12 @@ export function AgentProfilesSection({
         </div>
       </div>
       <div className="settings-card agent-profiles-card">
+        {showCachedVersionWarning && (
+          <div className="settings-cli-version-alert" role="alert">
+            <b>当前 Codex CLI 暂不支持注册</b>
+            <small className="settings-cli-version-warning">{versionWarning}</small>
+          </div>
+        )}
         <AgentDetectionResults
           detected={detected}
           profiles={profiles}

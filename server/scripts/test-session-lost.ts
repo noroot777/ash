@@ -20,8 +20,10 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { readCodexCliVersion } from "../src/executors/codex-rollout.js";
 import { LOST_SESSION_PATCH, isSessionLost } from "../src/executors/session-lost.js";
+import { affectedCodexSessionReplacementNote } from "../src/executors/version-policy.js";
 import { parseClaudeStream } from "../src/executors/claude.js";
-import { affectedCodexResumeWarning } from "../src/session-version-guard.js";
+import { affectedCodexResumeVersion } from "../src/session-version-guard.js";
+import { latestTeamLeadSession } from "../src/team/session-selection.js";
 
 const dir = mkdtempSync(join(tmpdir(), "ash-session-lost-"));
 const ok = (m: string) => console.log("   ✓ " + m);
@@ -90,13 +92,40 @@ writeFileSync(
 process.env.CODEX_HOME = codexHome;
 try {
   assert.equal(await readCodexCliVersion(codexThreadId), "0.147.0", "应越过文件头噪声读到创建版本");
-  assert.match(await affectedCodexResumeWarning("codex", codexThreadId) ?? "", /全新会话/);
-  assert.equal(await affectedCodexResumeWarning("claude", codexThreadId), undefined, "只替换 Codex 会话");
+  assert.equal(await affectedCodexResumeVersion("codex", codexThreadId), "0.147.0");
+  assert.equal(await affectedCodexResumeVersion("claude", codexThreadId), undefined, "只替换 Codex 会话");
+  const replacementNote = affectedCodexSessionReplacementNote("0.147.0") ?? "";
+  assert.match(replacementNote, /本轮不再续用/);
+  assert.doesNotMatch(replacementNote, /下次运行|再次运行/, "替换事件不能混入尚未发生的时态");
 } finally {
   if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = originalCodexHome;
 }
 ok("能识别带文件头噪声的 0.147 Codex rollout");
+
+const cappedThreadId = "01b032e5-c973-78c2-bbc7-a2ff7d10b3da";
+writeFileSync(
+  join(rolloutDir, `rollout-2026-08-24T10-05-00-${cappedThreadId}.jsonl`),
+  "\n".repeat(32)
+    + `${JSON.stringify({ type: "session_meta", payload: { session_id: cappedThreadId, cli_version: "0.147.0" } })}\n`,
+);
+process.env.CODEX_HOME = codexHome;
+try {
+  assert.equal(await readCodexCliVersion(cappedThreadId), null, "32 行扫描上限必须把空行计入");
+} finally {
+  if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = originalCodexHome;
+}
+ok("Codex rollout 扫描上限包含空行");
+
+const latestLead = latestTeamLeadSession([
+  { id: "older-live", role: "lead", startedAt: "2026-08-24T08:00:00.000Z", cliSessionId: "old-id" },
+  { id: "newer-cleared", role: "lead", startedAt: "2026-08-24T09:00:00.000Z", cliSessionId: null },
+  { id: "newest-worker", role: "single", startedAt: "2026-08-24T10:00:00.000Z", cliSessionId: "worker-id" },
+]);
+assert.equal(latestLead?.id, "newer-cleared", "最新 lead 被清空后不能越过它复活更老上下文");
+assert.equal(latestLead?.cliSessionId, null, "最新 lead 无凭据时应由 openLead 开全新会话");
+ok("团队调度台只认最新 lead 行，不复活更老会话");
 
 // ── ④ 没有第四条没接清理的续跑链 ────────────────────────────────────────────
 // 这个修复最容易坏的方式不是写错,是**再长出一条链**:谁都能写一行
@@ -133,7 +162,7 @@ ok("每条续跑链都有人负责清失效 id");
 
 for (const chain of ["orchestrator.ts", "team/session.ts", "duet/turn.ts"]) {
   const code = readFileSync(join(SRC, chain), "utf8");
-  assert.ok(code.includes("affectedCodexResumeWarning"), `${chain} 没在起跑前识别受影响的 Codex 会话`);
+  assert.ok(code.includes("affectedCodexResumeVersion"), `${chain} 没在起跑前识别受影响的 Codex 会话`);
   assert.match(
     code,
     /announceAffectedSessionReplacement\([\s\S]*?db\.update\(sessions\)\.set\(LOST_SESSION_PATCH\)/,
