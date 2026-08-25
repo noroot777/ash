@@ -190,8 +190,9 @@ async function main(): Promise<void> {
     "/handoff/proxy/task/snapshot",
     signedInit("/handoff/proxy/task/snapshot", "POST", snapshotBody),
   );
-  assert.equal(snapshot.status, 200, "来源机应能通过签名代理读取自己交来的远端任务");
-  const snapshotJson = await snapshot.json() as { task: { id: string; question: string | null }; sessions: unknown[]; persisted: unknown[] };
+  const snapshotText = await snapshot.text();
+  assert.equal(snapshot.status, 200, `来源机应能通过签名代理读取自己交来的远端任务:${snapshotText}`);
+  const snapshotJson = JSON.parse(snapshotText) as { task: { id: string; question: string | null }; sessions: unknown[]; persisted: unknown[] };
   assert.equal(snapshotJson.task.id, "auth-replay");
   assert.equal(snapshotJson.task.question, "远程执行器在问：选哪条路？");
   assert.deepEqual(snapshotJson.sessions, []);

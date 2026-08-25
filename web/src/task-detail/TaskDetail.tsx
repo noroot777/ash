@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { Group, Session, Task, TaskListItem } from "@ash/shared";
+import type { Group, HandoffTarget, Session, Task, TaskListItem } from "@ash/shared";
 import { isUserFollowUp } from "@ash/shared";
 import { FolderOpen, GitBranch, GitPullRequest, Info, MagnifyingGlass } from "@phosphor-icons/react";
 import { InspectorHost, type InspectorDescriptor } from "../inspector/index.ts";
@@ -128,6 +128,7 @@ export function TaskDetail({
   onDeleted,
   onOpenTask,
   onHandoff,
+  onRemoteTask,
   initialReviewOpen = false,
   onReviewOpenChange,
   inspectorMode = "page",
@@ -141,6 +142,7 @@ export function TaskDetail({
   onDeleted: (taskId: string) => void;
   onOpenTask: (taskId: string) => void;
   onHandoff?: (task: Task) => void;
+  onRemoteTask?: (task: Task, target: HandoffTarget) => void;
   initialReviewOpen?: boolean;
   onReviewOpenChange?: (open: boolean) => void;
   inspectorMode?: "page" | "drawer";
@@ -375,7 +377,20 @@ export function TaskDetail({
               notify={notify}
             />
             {task.handoff && (
-              <HandoffBanner taskId={task.id} handoff={task.handoff} notify={notify} onTaskUpdate={onTaskUpdate} />
+              <HandoffBanner
+                taskId={task.id}
+                handoff={task.handoff}
+                notify={notify}
+                onTaskUpdate={onTaskUpdate}
+                onOpenRemote={() => {
+                  if (!task.handoff?.peerUrl) return;
+                  onRemoteTask?.(task, {
+                    name: task.handoff.peerName ?? task.handoff.peerUrl,
+                    url: task.handoff.peerUrl,
+                    peerFp: task.handoff.peerFp,
+                  });
+                }}
+              />
             )}
             {reviewOpen ? (
               <TaskReviewWorkspace

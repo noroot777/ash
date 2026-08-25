@@ -84,5 +84,10 @@ assert.deepEqual(
 );
 assert.deepEqual(handoffTargetsForTask(targets, { direction: "in" }), []);
 assert.deepEqual(handoffTargetsForTask(targets, { direction: "returned", peerFp: thirdFp }), targets);
+assert.deepEqual(
+  handoffTargetsForTask([], { direction: "in", peerFp: sourceFp }, { name: "自动来源", url: "http://source", peerFp: sourceFp }),
+  [{ name: "自动来源", url: "http://source", peerFp: sourceFp }],
+  "移回目标可由任务历史自动恢复，不要求先写入整机目标设置",
+);
 
 console.log("bulk handoff eligibility tests passed");

@@ -115,17 +115,39 @@ export interface PeerProbe {
   sealTo: { kx: string; fingerprint: string } | null;
 }
 
+export interface HandoffReturnContext {
+  taskId: string;
+  returnTransferId?: string | null;
+}
+
 /**
  * 探活 + 身份核对。任何一步对不上都直接抛(HandoffError,非 network)——**在打包之前**
  * 拦下来,不能等 bundle 都推出去了才发现推错了机器。
  *
  * `expectedFp` 由调用方从 handoffTargets 里取(按 url 匹配);没有就是首次配对(TOFU)。
  */
-export async function pingPeer(targetUrl: string, expectedFp?: string | null): Promise<PeerProbe> {
+export async function pingPeer(
+  targetUrl: string,
+  expectedFp?: string | null,
+  returnContext?: HandoffReturnContext,
+): Promise<PeerProbe> {
   const nonce = newNonce();
-  const ping = await fetchPeer<HandoffPingResponse>(
-    `${targetUrl}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`,
-  );
+  const pingUrl = returnContext ? `${targetUrl}/api/handoff/return/ping` : `${targetUrl}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`;
+  let ping: HandoffPingResponse;
+  try {
+    ping = returnContext
+      ? await fetchPeer<HandoffPingResponse>(pingUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ...returnContext, nonce }),
+        })
+      : await fetchPeer<HandoffPingResponse>(pingUrl);
+  } catch (error) {
+    // 老版来源机没有任务级移回端点：退回常规 ping，仍按来源指纹核对；若它要求审批，
+    // UI 会继续走旧版的手工批准流程，不把升级变成“再也移不回去”。
+    if (!returnContext || !(error instanceof HandoffError) || !/对端返回 404/.test(error.message)) throw error;
+    ping = await fetchPeer<HandoffPingResponse>(`${targetUrl}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`);
+  }
   if (!ping?.ok || ping.service !== "ash") {
     throw new HandoffError("对端不是 ash（/api/handoff/ping 应答不对）", 502);
   }

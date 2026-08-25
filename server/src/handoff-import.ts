@@ -63,6 +63,12 @@ function validate(input: unknown): HandoffManifest {
   // transferId 宽容校验:老版本导出没有这个字段,缺了照收(只是失去幂等重放能力)。
   const tid = (m as { transferId?: unknown }).transferId;
   if (tid != null && (!isStr(tid) || tid.length > 64)) throw new HandoffError("transferId 非法");
+  const returnTid = (m as { returnTransferId?: unknown }).returnTransferId;
+  if (returnTid != null && (!isStr(returnTid) || returnTid.length > 64)) throw new HandoffError("returnTransferId 非法");
+  const sourcePort = (m as { sourcePort?: unknown }).sourcePort;
+  if (sourcePort != null && (typeof sourcePort !== "number" || !Number.isInteger(sourcePort) || sourcePort < 1 || sourcePort > 65_535)) {
+    throw new HandoffError("sourcePort 非法");
+  }
   const t = m.task;
   if (!t || !isStr(t.id) || !/^[A-Za-z0-9_-]{6,64}$/.test(t.id)) throw new HandoffError("task.id 非法");
   if (!isStr(t.title) || !isStr(t.body) || !isStr(t.createdAt)) throw new HandoffError("task 关键字段缺失");
@@ -237,20 +243,26 @@ export interface HandoffImportResult {
 // 有单实例锁,不存在跨进程写方),后来者 409 让源机稍后原样重放收口。
 const importsInFlight = new Set<string>();
 
-export async function importHandoff(input: unknown): Promise<HandoffImportResult> {
+export async function importHandoff(
+  input: unknown,
+  context: { sourceUrl?: string | null } = {},
+): Promise<HandoffImportResult> {
   const m = validate(input);
   if (importsInFlight.has(m.task.id)) {
     throw new HandoffError("这个任务的另一次导入还在本机进行中,等它落定后再原样重试", 409);
   }
   importsInFlight.add(m.task.id);
   try {
-    return await importValidated(m);
+    return await importValidated(m, context);
   } finally {
     importsInFlight.delete(m.task.id);
   }
 }
 
-async function importValidated(m: HandoffManifest): Promise<HandoffImportResult> {
+async function importValidated(
+  m: HandoffManifest,
+  context: { sourceUrl?: string | null },
+): Promise<HandoffImportResult> {
   const notes: string[] = [];
   const project = (await db.select().from(projects).where(eq(projects.id, m.targetProjectId))).at(0);
   if (!project) throw new HandoffError("目标项目不存在(对端项目清单可能过期,重新预检)", 404);
@@ -441,7 +453,7 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
     // 导入时有没有触发自动续跑,存成事实:应答丢失后的幂等收口靠它如实回答源机
     // 「任务在对端跑起来了没有」,而不是一律回 false 误导用户去对端手动再点一次。
     autoResume: m.autoResume,
-    peerUrl: null,
+    peerUrl: context.sourceUrl ?? null,
     peerName: m.sourceHost || null,
     peerFp: m.sourceFingerprint ?? null,
     originFp: originFingerprint,

@@ -12,6 +12,7 @@ import type {
   HandoffIdentity,
   HandoffPeer,
   HandoffPreflightResult,
+  HandoffTarget,
   LlmProtocol,
   LlmProvider,
   Note,
@@ -318,6 +319,8 @@ export const api = {
   requestHandoffApproval: (targetUrl: string): Promise<HandoffApprovalResult> =>
     request("/handoff/request", json("POST", { targetUrl })),
   handoffIdentity: (): Promise<HandoffIdentity> => request("/handoff/identity"),
+  handoffReturnTarget: async (taskId: string): Promise<HandoffTarget> =>
+    (await request<{ target: HandoffTarget }>(`/tasks/${id(taskId)}/handoff/return-target`)).target,
   handoffPeers: async (): Promise<HandoffPeer[]> =>
     (await request<{ peers: HandoffPeer[] }>("/handoff/peers")).peers,
   setHandoffPeerStatus: (fingerprint: string, action: "approve" | "block"): Promise<HandoffPeer> =>

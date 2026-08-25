@@ -373,6 +373,9 @@ app.get("/*", (c) => {
 // Bind the port before starting the scheduler. A process that cannot accept
 // HTTP callbacks must never be allowed to poll schedules or launch agents.
 activeServer = serve({ fetch: app.fetch, port }, (info) => {
+  // PORT=0 的测试/临时实例在绑定后才知道真实端口；接力清单读取这个动态值，才能把
+  // 可回连地址带给对端，而不是把不可用的 0 端口写进任务历史。
+  process.env.PORT = String(info.port);
   // 预览实例**不跑调度器**：它连的是主库的快照，一条 cron 到点就会拿真项目目录去派活。
   // 快照压根没搬 schedules / scheduled_messages，这里是同一件事的第二道保险（成本一行）。
   if (IS_PREVIEW_INSTANCE) {

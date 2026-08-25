@@ -88,7 +88,8 @@ export interface TaskHandoff {
   // 这一批——pending 期间新建的消息没有随幂等重放迁移到对端,必须留在托盘里如实提醒,
   // 按「当前所有 pending」取消就是静默丢消息。
   messageIds?: string[];
-  // out: 对端 ash 根地址（横幅可点过去）；in: 源机自述不了地址,为 null。
+  // out: 对端 ash 根地址；in:接入时由真实来源地址 + 源机监听端口恢复出的回程候选地址。
+  // 地址只用于连接，移回仍会按 peerFp 实时验明身份。
   peerUrl: string | null;
   // out: 目标配置里的名字；in: 源机主机名。
   peerName: string | null;

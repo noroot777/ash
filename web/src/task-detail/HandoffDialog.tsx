@@ -12,9 +12,15 @@ import { ArrowSquareOut, Fingerprint, PaperPlaneTilt, SpinnerGap, Warning } from
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
-import { handoffTaskHref } from "../workspace/workspaceHistory.ts";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { handoffTargetsForTask } from "./handoffTargetPolicy.ts";
+import {
+  HandoffDialogHeader,
+  HandoffProgress,
+  HandoffResultPanel,
+  HandoffReviewGrid,
+  HandoffRouteCard,
+} from "./HandoffDialogViews.tsx";
 
 // 任务接力对话框:选目标机 → 预检(探测对端、匹配项目、盘点可搬运的东西)→ 执行。
 // 执行会先停掉正在跑的任务,再打包 git 分支和 CLI 会话文件推给对端,所以预检结果里
@@ -24,11 +30,13 @@ export function HandoffDialog({
   notify,
   onClose,
   onTaskUpdate,
+  onOpenRemote,
 }: {
   task: TaskListItem;
   notify: (message: string) => void;
   onClose: () => void;
   onTaskUpdate: (task: Task) => void;
+  onOpenRemote: (task: Task, target: HandoffTarget) => void;
 }) {
   const scrim = useRef<HTMLDivElement>(null);
   // out+pending = 上次接力应答丢失,这次打开对话框是「原样重放收口」:目标机、对端项目、
@@ -50,15 +58,19 @@ export function HandoffDialog({
   const [draftTargetName, setDraftTargetName] = useState("");
   const [draftTargetUrl, setDraftTargetUrl] = useState("");
   const [result, setResult] = useState<HandoffExportResult | null>(null);
+  const [transferring, setTransferring] = useState(false);
 
   useDismissable({ enabled: !busy, containerRef: scrim, onClose });
 
   useEffect(() => {
     let alive = true;
-    api.settings()
-      .then((settings) => {
+    Promise.all([
+      api.settings(),
+      inboundHandoff ? api.handoffReturnTarget(task.id).catch(() => null) : Promise.resolve(null),
+    ])
+      .then(([settings, automaticReturnTarget]) => {
         if (!alive) return;
-        const available = handoffTargetsForTask(settings.handoffTargets, inboundHandoff);
+        const available = handoffTargetsForTask(settings.handoffTargets, inboundHandoff, automaticReturnTarget);
         setTargets(available);
         if (pendingHandoff?.peerUrl) setTargetUrl(pendingHandoff.peerUrl);
         else if (available[0]) setTargetUrl(available[0].url);
@@ -106,6 +118,7 @@ export function HandoffDialog({
     ? [{ name: pendingHandoff.peerName ?? pendingHandoff.peerUrl, url: pendingHandoff.peerUrl }, ...(targets ?? [])]
     : targets ?? [];
   const missingFiles = preflight ? preflight.local.sessions - preflight.local.sessionFilesFound : 0;
+  const selectedProject = preflight?.projects.find((project) => project.id === projectId) ?? null;
   // 对端还没批准本机(或已拒绝):后端在打包前也会 409,这里先把按钮按住,省掉一次白等。
   const blockedByPeer = preflight?.peer?.peerStatus === "pending" || preflight?.peer?.peerStatus === "blocked";
 
@@ -163,9 +176,29 @@ export function HandoffDialog({
     }
   };
 
+  const checkTarget = async () => {
+    if (!targetUrl || busy) return;
+    setBusy(true);
+    setApplying(true);
+    setPreflight(null);
+    setPreflightError(null);
+    setProjectId("");
+    try {
+      const probe = await api.handoffPreflight(task.id, targetUrl);
+      setPreflight(probe);
+      setProjectId(pendingHandoff?.targetProjectId ?? probe.suggestedProjectId ?? "");
+    } catch (reason) {
+      setPreflightError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setApplying(false);
+      setBusy(false);
+    }
+  };
+
   const run = async () => {
     if (!projectId || busy) return;
     setBusy(true);
+    setTransferring(true);
     try {
       const exported = await api.handoffTask(task.id, {
         targetUrl,
@@ -190,6 +223,7 @@ export function HandoffDialog({
         // SSE 大概率也会把更新推过来。
       }
     } finally {
+      setTransferring(false);
       setBusy(false);
     }
   };
@@ -204,34 +238,28 @@ export function HandoffDialog({
       }}
     >
       <section className="task-confirm-dialog handoff-dialog" role="dialog" aria-modal="true" aria-labelledby="handoff-title">
-        <header>
-          <span><PaperPlaneTilt size={16} weight="fill" /></span>
-          <h2 id="handoff-title">{inboundHandoff ? "移回来源机器" : "接力到另一台机器"}</h2>
-        </header>
+        <HandoffDialogHeader
+          title={inboundHandoff ? "移回来源机器" : "移动这个任务"}
+          disabled={busy}
+          onClose={onClose}
+        />
         {result ? (
-          <>
-            <p>
-              已把任务{inboundHandoff ? "移回" : "交给"}{target?.name ? `「${target.name}」` : "对端"}:迁移会话文件 {result.sessionsMigrated} 份,
-              代码{result.git === "bundle" ? "已随分支带过去" : "未随任务携带"};
-              {result.autoResume ? "对端已自动续跑。" : "对端不会自动续跑,需要在对端手动点「运行」。"}
-              本机会保留历史数据，但任务会从本机任务列表隐藏。
-            </p>
-            {result.notes.length > 0 && (
-              <ul className="handoff-notes">
-                {result.notes.map((note) => <li key={note}>{note}</li>)}
-              </ul>
-            )}
-            <p>
-              <a className="handoff-remote-link" href={result.remoteUrl} target="_blank" rel="noreferrer">
-                在对端打开这个任务<ArrowSquareOut size={12} aria-hidden="true" />
-              </a>
-            </p>
-          </>
+          <HandoffResultPanel
+            result={result}
+            returning={Boolean(inboundHandoff)}
+            targetName={target?.name ?? "对端"}
+            onOpenRemote={target ? () => {
+                  onClose();
+                  onOpenRemote(task, target);
+                } : null}
+          />
+        ) : transferring ? (
+          <HandoffProgress targetName={target?.name ?? preflight?.target.host ?? "目标机器"} returning={Boolean(inboundHandoff)} />
         ) : inboundHandoff && targets && targets.length === 0 ? (
           <div className="handoff-quick-add">
             <p>
-              没有找到与来源机器{inboundHandoff.peerName ? `「${inboundHandoff.peerName}」` : ""}指纹一致的已注册主机。
-              为避免把“移回”误送到第三台机器，请先在设置中添加来源机并完成身份申请；指纹匹配后才能移回。
+              无法自动定位来源机器{inboundHandoff.peerName ? `「${inboundHandoff.peerName}」` : ""}的可回连地址。
+              旧接力记录没有保存端口、最近来访地址也不可用；添加来源机地址后仍会按原指纹核对，不会转送到第三台机器。
             </p>
           </div>
         ) : targets && targets.length === 0 && !pendingHandoff ? (
@@ -302,6 +330,11 @@ export function HandoffDialog({
             )}
             {preflight && (
               <>
+                <HandoffRouteCard
+                  sourcePath="当前任务工作区"
+                  targetName={target?.name ?? preflight.target.host}
+                  targetPath={selectedProject?.repoPath ?? "选择目标项目"}
+                />
                 {preflight.peer ? (
                   <p className={`handoff-peer-line${preflight.peer.peerStatus === "pending" || preflight.peer.peerStatus === "blocked" ? " is-warn" : ""}`}>
                     <Fingerprint size={13} aria-hidden="true" />
@@ -309,7 +342,9 @@ export function HandoffDialog({
                       目标机身份 <b>{preflight.peer.short}</b>
                       {preflight.peer.trust === "first-seen"
                         ? "（第一次核对这台机器：和对端设置页上的指纹对一下，明确申请后本机会记住它）"
-                        : "（和上次记住的一致）"}
+                        : inboundHandoff
+                          ? "（与这条任务接入时记录的来源指纹一致，无需重复审批）"
+                          : "（和上次记住的一致）"}
                       {preflight.peer.peerStatus === "pending"
                         ? "。申请已送达，等待对方接受后再接力。"
                         : preflight.peer.peerStatus === "blocked"
@@ -358,18 +393,18 @@ export function HandoffDialog({
                     ))}
                   </select>
                 </div>
-                <ul className="handoff-summary">
-                  <li>
-                    CLI 会话 {preflight.local.sessions} 个,找到会话文件 {preflight.local.sessionFilesFound} 份
-                    {missingFiles > 0 ? `;找不到文件的 ${missingFiles} 个到对端会全新起跑` : ""}
-                  </li>
-                  <li>
-                    {preflight.local.git === "bundle"
-                      ? "代码:worktree 分支(含未提交改动的 WIP 提交)会打包带走"
-                      : "代码:没有可带的 git 状态,对端按任务正文重新开工"}
-                  </li>
+                <HandoffReviewGrid
+                  project={selectedProject}
+                  sessions={preflight.local.sessionFilesFound}
+                  uploads={preflight.local.uploads}
+                  git={preflight.local.git}
+                  autoResume={autoResume}
+                />
+                {(missingFiles > 0 || preflight.local.pendingMessages > 0 || preflight.local.schedule) && (
+                  <ul className="handoff-summary">
+                    {missingFiles > 0 && <li>{missingFiles} 个 CLI 会话找不到文件，到目标机后会全新起跑</li>}
                   {preflight.local.uploads > 0 && (
-                    <li>上传附件 {preflight.local.uploads} 个随任务带走,文中路径自动改写为对端路径</li>
+                    <li>附件中的本机绝对路径会自动改写为目标机路径</li>
                   )}
                   {preflight.local.pendingMessages > 0 && (
                     <li>待发送消息 {preflight.local.pendingMessages} 条随任务迁移,到期后在对端投递;本机的原件会取消并留档在时间线</li>
@@ -377,7 +412,8 @@ export function HandoffDialog({
                   {preflight.local.schedule && (
                     <li>定时计划({preflight.local.schedule === "cron" ? "周期" : "一次性"})随任务迁移,今后由对端触发</li>
                   )}
-                </ul>
+                  </ul>
+                )}
                 {preflight.local.notes.length > 0 && (
                   <ul className="handoff-notes">
                     {preflight.local.notes.map((note) => <li key={note}>{note}</li>)}
@@ -396,14 +432,14 @@ export function HandoffDialog({
             )}
           </>
         )}
-        <footer>
+        {!transferring && <footer>
           <button type="button" disabled={busy} onClick={onClose}>{result ? "关闭" : "取消"}</button>
           {!result && targetOptions.length > 0 && (
             <button
               className="is-primary"
               type="button"
               disabled={busy || applying || !targetUrl || (!!preflight && !blockedByPeer && !projectId)}
-              onClick={() => void (preflight && !blockedByPeer ? run() : requestApproval())}
+              onClick={() => void (preflight && !blockedByPeer ? run() : target?.peerFp ? checkTarget() : requestApproval())}
             >
               {applying
                 ? target?.peerFp ? `正在检查${inboundHandoff ? "来源机" : "目标机"}…` : `正在发送${actionName}申请…`
@@ -420,7 +456,7 @@ export function HandoffDialog({
                       : `开始${actionName}`}
             </button>
           )}
-        </footer>
+        </footer>}
       </section>
     </div>,
     document.body,
@@ -447,19 +483,19 @@ export function HandoffBanner({
   handoff,
   notify,
   onTaskUpdate,
+  onOpenRemote,
 }: {
   taskId: string;
   handoff: TaskHandoff;
   notify: (message: string) => void;
   onTaskUpdate: (task: Task) => void;
+  onOpenRemote: () => void;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const out = handoff.direction === "out";
   const returned = handoff.direction === "returned";
-  const link = out && !handoff.pending
-    ? handoffTaskHref(taskId, handoff)
-    : null;
+  const canOpenRemote = out && !handoff.pending && Boolean(handoff.peerUrl);
   const peer = handoff.peerName ? `「${handoff.peerName}」` : "另一台机器";
   const clear = async () => {
     setBusy(true);
@@ -486,10 +522,10 @@ export function HandoffBanner({
             ? `${new Date(handoff.at).toLocaleString()} 已从${peer}移回本机，最新上下文已接回；现在可继续运行或再次接力。`
             : `${new Date(handoff.at).toLocaleString()} 从${peer}接力而来(会话文件 ${handoff.sessions} 份,代码${handoff.git === "bundle" ? "已随分支带来" : "未随任务携带"})。`}
       </span>
-      {link && (
-        <a href={link} target="_blank" rel="noreferrer">
-          在对端打开<ArrowSquareOut size={12} aria-hidden="true" />
-        </a>
+      {canOpenRemote && (
+        <button type="button" className="task-handoff-open" onClick={onOpenRemote}>
+          在本机查看<ArrowSquareOut size={12} aria-hidden="true" />
+        </button>
       )}
       {out && handoff.pending && (
         <button

@@ -14,6 +14,7 @@ import { replyToTask, type TaskReplyBody } from "./task-reply.js";
 import { answerTask } from "./task-answer.js";
 import { sessionOutputText, sessionsForTask, sessionTraceEntries } from "./task-session-routes.js";
 import { enrichTasks } from "./task-store.js";
+import { returnTargetForMarker } from "./handoff-return.js";
 
 type ProxyBody = TaskReplyBody & { taskId?: string; transferId?: string; answer?: string };
 type BrowserProxyBody = TaskReplyBody & { targetUrl?: string; answer?: string };
@@ -114,7 +115,7 @@ async function ownedInboundTask(taskId: string, peerFingerprint: string, transfe
 }
 
 async function snapshotFor(taskId: string, callerFingerprint: string, transferId?: string) {
-  const { row } = await ownedInboundTask(taskId, callerFingerprint, transferId);
+  const { row, marker } = await ownedInboundTask(taskId, callerFingerprint, transferId);
   const task = (await enrichTasks([row]))[0];
   const sessions = await sessionsForTask(taskId);
   const persisted = await Promise.all(sessions.map(async (session) => ({
@@ -122,8 +123,7 @@ async function snapshotFor(taskId: string, callerFingerprint: string, transferId
     output: await sessionOutputText(taskId, session.id),
     trace: await sessionTraceEntries(taskId, session.id),
   })));
-  const { handoffTargets } = await getAppSettings();
-  const returnTarget = handoffTargets.find((target) => target.peerFp && sameFingerprint(target.peerFp, callerFingerprint));
+  const returnTarget = await returnTargetForMarker(marker);
   return { task, sessions, persisted, returnAvailable: Boolean(returnTarget) };
 }
 
@@ -160,9 +160,8 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
       const { peer, body } = await signedBody(c);
       if (!body.taskId) throw new HandoffError("缺 taskId", 400);
       const owned = await ownedInboundTask(body.taskId, peer.fingerprint, body.transferId);
-      const { handoffTargets } = await getAppSettings();
-      const target = handoffTargets.find((item) => item.peerFp && sameFingerprint(item.peerFp, peer.fingerprint));
-      if (!target) throw new HandoffError("远端没有登记与来源机指纹一致的移回目标", 409);
+      const target = await returnTargetForMarker(owned.marker);
+      if (!target) throw new HandoffError("无法自动定位来源机器，请从来源机的本地远程任务视图重试", 409);
       const preflight = await preflightHandoff(body.taskId, target.url);
       const targetProjectId = preflight.suggestedProjectId ?? preflight.projects.at(0)?.id;
       if (!targetProjectId) throw new HandoffError("来源机没有可接收任务的项目", 409);

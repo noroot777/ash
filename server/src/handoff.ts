@@ -47,6 +47,7 @@ import { localIdentity, shortFingerprint } from "./handoff-identity.js";
 import { collectUploads, isTextRel } from "./handoff-uploads.js";
 import { beginHandoffPrepare, endHandoffPrepare } from "./handoff-guard.js";
 import { cancelPendingMessage } from "./pending-messages.js";
+import type { HandoffReturnContext } from "./handoff-peer-client.js";
 
 export async function handoffRemoteUrl(taskId: string): Promise<string> {
   const row = (await db.select({ handoff: tasks.handoff }).from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -109,6 +110,13 @@ function inboundReturnFingerprint(raw: string | null): string | null | undefined
   return marker.peerFp || null;
 }
 
+function inboundReturnContext(taskId: string, raw: string | null): HandoffReturnContext | undefined {
+  const marker = parsedHandoff(raw);
+  return marker?.direction === "in"
+    ? { taskId, returnTransferId: marker.transferId ?? null }
+    : undefined;
+}
+
 /** 停掉正在跑的回合并等结算收尾（镜像 /stop 端点的语义:没有活进程但状态是 running/queued 就直接标 canceled）。 */
 async function stopAndSettle(taskId: string): Promise<TaskRow> {
   const fresh = async () => (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
@@ -161,7 +169,8 @@ export async function preflightHandoff(taskId: string, targetUrlRaw: string): Pr
   // 身份核对在最前面:指纹对不上就直接抛,连盘点都不做——用户要先解决「这台是不是
   // 我那台机器」,别让一堆盘点数字把警告冲下去。
   const expectedFingerprint = returnFingerprint ?? await rememberedFingerprint(targetUrl);
-  const { ping, peer } = await pingPeer(targetUrl, expectedFingerprint);
+  const returnContext = inboundReturnContext(taskId, task.handoff);
+  const { ping, peer } = await pingPeer(targetUrl, expectedFingerprint, returnContext);
   // 项目匹配靠仓库目录名:两台机器的绝对路径几乎必然不同,目录名是最稳的公共项。
   // 两侧路径可能来自不同操作系统(本机 Windows、对端 macOS,或反过来),所以不用
   // 跟随运行平台的 basename,统一按 win32 规则切——/ 和 \ 都认、吃掉盘符和尾分隔符,
@@ -307,7 +316,8 @@ export async function exportHandoff(
     // 先探测对端与目标项目,确认可行再停任务——反过来会白停一个正在跑的任务。
     // pingPeer 同时做身份核对:指纹和上次记住的对不上就在这里抛,bundle 一个字节都不打。
     const expectedFingerprint = returnFingerprint ?? await rememberedFingerprint(targetUrl);
-    const { ping, peer, sealTo } = await pingPeer(targetUrl, expectedFingerprint);
+    const returnContext = inboundReturnContext(taskId, prevHandoffRaw);
+    const { ping, peer, sealTo } = await pingPeer(targetUrl, expectedFingerprint, returnContext);
     assertPeerAcceptsUs(peer);
     const targetProject = ping.projects.find((p) => p.id === opts.targetProjectId);
     if (!targetProject) throw new HandoffError("对端没有这个项目 id,先重新预检", 409);
@@ -331,9 +341,13 @@ export async function exportHandoff(
 
       let gitState: HandoffManifest["git"] = null;
       if (targetProject.isRepo) {
-        const refs = await fetchPeer<{ refs: { name: string; commit: string }[] }>(
-          `${targetUrl}/api/handoff/projects/${targetProject.id}/refs`,
-        );
+        // 免审批移回只向原机暴露这一条任务所属项目，不放开常规 refs 端点；回程 bundle
+        // 因而按全量打包，体积换取授权面严格收窄。
+        const refs = returnContext
+          ? { refs: [] as { name: string; commit: string }[] }
+          : await fetchPeer<{ refs: { name: string; commit: string }[] }>(
+              `${targetUrl}/api/handoff/projects/${targetProject.id}/refs`,
+            );
         gitState = await packGitState(task, project.repoPath, refs.refs ?? [], notes);
       } else {
         notes.push("对端项目不是 git 仓库,代码不随任务迁移");
@@ -361,10 +375,15 @@ export async function exportHandoff(
       const manifest: HandoffManifest = {
         version: 1,
         sourceHost: hostname(),
+        sourcePort: (() => {
+          const value = Number(process.env.PORT ?? 4317);
+          return Number.isInteger(value) && value > 0 && value <= 65_535 ? value : null;
+        })(),
         sourceFingerprint: localFingerprint,
         originFingerprint,
         targetProjectId: targetProject.id,
         transferId,
+        ...(returnContext ? { returnTransferId: returnContext.returnTransferId ?? null } : {}),
         autoResume,
         sourceWorkspace,
         task: {
@@ -445,7 +464,7 @@ export async function exportHandoff(
       let result: { ok: boolean; taskId: string; autoResume?: boolean; idempotent?: boolean; notes?: string[]; error?: string };
       try {
         result = await fetchPeer<{ ok: boolean; taskId: string; autoResume?: boolean; idempotent?: boolean; notes?: string[]; error?: string }>(
-          `${targetUrl}/api/handoff/import`,
+          `${targetUrl}/api/handoff/${returnContext ? "return/import" : "import"}`,
           {
             method: "POST",
             headers: { "content-type": "application/json" },

@@ -21,8 +21,8 @@ import { getAppSettings } from "./app-settings.js";
 import { exportHandoff, handoffRemoteUrl, preflightHandoff } from "./handoff.js";
 import { requestHandoffApproval } from "./handoff-peer-client.js";
 import { repoRefTips } from "./handoff-collect.js";
-import { HandoffError, type HandoffPingResponse } from "./handoff-types.js";
-import { canonicalPingChallenge, localIdentity, shortFingerprint, signWithLocalKey } from "./handoff-identity.js";
+import { HandoffError, type HandoffManifest, type HandoffPingResponse } from "./handoff-types.js";
+import { canonicalPingChallenge, localIdentity, sameFingerprint, shortFingerprint, signWithLocalKey } from "./handoff-identity.js";
 import { looksSealed, openSealed } from "./handoff-crypto.js";
 import { readCappedBody } from "./handoff-body.js";
 import {
@@ -34,6 +34,7 @@ import { publishTaskUpdated } from "./task-store.js";
 import { sessionTranscriptPath, TURN_SENTINEL } from "./transcript.js";
 import { now } from "./util.js";
 import { mountHandoffRemoteRoutes } from "./handoff-remote.js";
+import { returnArchiveForPeer, returnTargetForTask, sourceUrlFromPeer } from "./handoff-return.js";
 
 type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 500 | 502;
 
@@ -56,6 +57,73 @@ const fail = (c: Context, e: unknown) => {
   return c.json({ error: `接力失败:${msg}`, ash: true }, 500);
 };
 
+function pingPayload(
+  nonce: string,
+  peerStatus: NonNullable<HandoffPingResponse["peerStatus"]>,
+  rows: HandoffPingResponse["projects"],
+): HandoffPingResponse {
+  const identity = localIdentity();
+  return {
+    ok: true,
+    service: "ash",
+    host: hostname(),
+    identity: {
+      publicKey: identity.publicKey,
+      fingerprint: identity.fingerprint,
+      kxPublicKey: identity.kxPublicKey,
+      sig: signWithLocalKey(canonicalPingChallenge(nonce, identity.kxPublicKey)),
+    },
+    peerStatus,
+    projects: rows,
+  };
+}
+
+async function handleImport(c: Context, returning: boolean) {
+  let bytes: Buffer;
+  try {
+    bytes = await readCappedBody(c.req.raw, (await getAppSettings()).handoffMaxBodyMb);
+  } catch (e) {
+    if (e instanceof HandoffError) return fail(c, e);
+    return c.json({ error: "导入体读取失败", ash: true }, 400);
+  }
+  let peer: ReturnType<typeof verifyPeerSignature> = null;
+  try {
+    peer = returning ? verifyPeerSignature(c, bytes) : await requireApprovedPeer(c, bytes);
+    if (returning && !peer) throw new HandoffError("免审批移回必须带机器身份签名", 401);
+  } catch (e) {
+    return fail(c, e);
+  }
+  let raw: string;
+  try {
+    raw = looksSealed(bytes) ? openSealed(bytes, localIdentity().fingerprint) : bytes.toString("utf8");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return c.json({ error: `加密的接力载荷解不开(${msg})——多半是源机封给了别的机器,或者路上被改过`, ash: true }, 400);
+  }
+  let body: HandoffManifest;
+  try {
+    body = JSON.parse(raw) as HandoffManifest;
+  } catch {
+    return c.json({ error: "导入体不是合法 JSON", ash: true }, 400);
+  }
+  try {
+    if (peer && body.sourceFingerprint && !sameFingerprint(peer.fingerprint, body.sourceFingerprint)) {
+      throw new HandoffError("manifest 的来源指纹与实际签名机器不一致", 403);
+    }
+    if (returning) {
+      if (!peer || !body.sourceFingerprint || !sameFingerprint(peer.fingerprint, body.sourceFingerprint)) {
+        throw new HandoffError("移回载荷没有绑定到实际持有机器", 403);
+      }
+      await returnArchiveForPeer(body.task?.id ?? "", peer.fingerprint, body.returnTransferId);
+    }
+    return c.json(await importHandoff(body, {
+      sourceUrl: sourceUrlFromPeer(peerAddr(c), body.sourcePort),
+    }));
+  } catch (e) {
+    return fail(c, e);
+  }
+}
+
 export function mountHandoffRoutes(api: Hono): void {
   mountHandoffRemoteRoutes(api);
   // 对端探活 + **配对入口**:证明「我是一台 ash、我是哪一台」,并报出可作为接力目的地
@@ -74,31 +142,33 @@ export function mountHandoffRoutes(api: Hono): void {
     }
     if (peer) await touchPeer(peer, peerAddr(c));
     const stance = await peerStanceFor(peer, handoffRequireApproval);
-    const identity = localIdentity();
     const nonce = c.req.query("nonce") ?? "";
     const rows = stance === "approved" || stance === "open" ? await db.select().from(projects) : [];
-    const body: HandoffPingResponse = {
-      ok: true,
-      service: "ash",
-      host: hostname(),
-      identity: {
-        publicKey: identity.publicKey,
-        fingerprint: identity.fingerprint,
-        // 本机的加密公钥。签名覆盖它(见 canonicalPingChallenge),中间人换不掉也删不掉。
-        kxPublicKey: identity.kxPublicKey,
-        // 没带 nonce 的老源机拿到的是对空串的签名:它本来也不会验,而带了 nonce 的
-        // 新源机永远验的是自己刚生成的那个,拿不到可复用的签名。
-        sig: signWithLocalKey(canonicalPingChallenge(nonce, identity.kxPublicKey)),
-      },
-      peerStatus: stance,
-      projects: rows.map((p) => ({
+    return c.json(pingPayload(nonce, stance, rows.map((p) => ({
         id: p.id,
         name: p.name,
         repoPath: p.repoPath,
         isRepo: projectHealthLight(p.repoPath).isRepo,
-      })),
-    };
-    return c.json(body);
+      }))));
+  });
+
+  // 移回专用探测:不建立整机级入站授权，只验证“当前签名机器就是这条 out 存档记录的
+  // 持有者”，并且只返回原任务所属的一个项目。第三台机器没有对应私钥，拿不到清单。
+  api.post("/handoff/return/ping", async (c) => {
+    let bytes: Buffer;
+    try { bytes = await readCappedBody(c.req.raw, 1); } catch (e) { return fail(c, e); }
+    try {
+      const peer = verifyPeerSignature(c, bytes);
+      if (!peer) throw new HandoffError("移回探测必须带机器身份签名", 401);
+      let body: { taskId?: string; returnTransferId?: string | null; nonce?: string };
+      try { body = JSON.parse(bytes.toString("utf8")) as typeof body; }
+      catch { throw new HandoffError("移回探测体不是合法 JSON", 400); }
+      if (!body.taskId || typeof body.nonce !== "string") throw new HandoffError("移回探测参数不完整", 400);
+      const archive = await returnArchiveForPeer(body.taskId, peer.fingerprint, body.returnTransferId);
+      return c.json(pingPayload(body.nonce, "approved", [archive.project]));
+    } catch (e) {
+      return fail(c, e);
+    }
   });
 
   // 分支尖清单,供源机协商 git bundle 的前置提交(对端已有的历史不重复打包)。
@@ -122,45 +192,8 @@ export function mountHandoffRoutes(api: Hono): void {
   // 接收一整个任务(manifest 里带 git bundle 和会话文件,可能上百 MB)。
   // 必须先拿原文验签再解析:签名覆盖 body 哈希,先 parse 后验等于验的是解析结果,
   // 中间人改字段照样过。
-  api.post("/handoff/import", async (c) => {
-    // 先按**字节**读:签名哈希的是线上那串字节,而加密信封是二进制帧,提前转成
-    // 字符串会把它毁掉。
-    let bytes: Buffer;
-    try {
-      // 上限闸必须在验签之前,而且是流式的:签名覆盖 body 哈希,验签只能排在读完之后,
-      // 所以没有这一层,一个未鉴权的巨大 body 就能把内存吃光(见 handoff-body.ts)。
-      bytes = await readCappedBody(c.req.raw, (await getAppSettings()).handoffMaxBodyMb);
-    } catch (e) {
-      if (e instanceof HandoffError) return fail(c, e);
-      return c.json({ error: "导入体读取失败", ash: true }, 400);
-    }
-    try {
-      await requireApprovedPeer(c, bytes);
-    } catch (e) {
-      return fail(c, e);
-    }
-    // 验签之后才解密:签名覆盖的是线上真正传的那串字节(信封),先解密后验等于验的是
-    // 解密结果。加密与否由**源机**的设置决定,本机两种都收 —— 这个开关管的是「我发出去
-    // 的东西加不加密」,拦别人的明文既没意义(签名已保证来源和完整性)也会平白拆掉兼容性。
-    let raw: string;
-    try {
-      raw = looksSealed(bytes) ? openSealed(bytes, localIdentity().fingerprint) : bytes.toString("utf8");
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return c.json({ error: `加密的接力载荷解不开(${msg})——多半是源机封给了别的机器,或者路上被改过`, ash: true }, 400);
-    }
-    let body: unknown;
-    try {
-      body = JSON.parse(raw);
-    } catch {
-      return c.json({ error: "导入体不是合法 JSON", ash: true }, 400);
-    }
-    try {
-      return c.json(await importHandoff(body));
-    } catch (e) {
-      return fail(c, e);
-    }
-  });
+  api.post("/handoff/import", (c) => handleImport(c, false));
+  api.post("/handoff/return/import", (c) => handleImport(c, true));
 
   // ── 本机设置面(给自己的网页用)────────────────────────────────────────────
   // 本机身份:设置页展示,让用户拿去和另一台机器上记录的指纹肉眼核对。只出公钥侧。
@@ -175,6 +208,15 @@ export function mountHandoffRoutes(api: Hono): void {
 
   // 接力来源(入站信任表):谁来敲过门、批没批准。
   api.get("/handoff/peers", async (c) => c.json({ peers: await listPeers() }));
+
+  api.get("/tasks/:id/handoff/return-target", async (c) => {
+    try {
+      const target = await returnTargetForTask(c.req.param("id"));
+      return target ? c.json({ target }) : c.json({ error: "无法自动定位来源机器" }, 404);
+    } catch (e) {
+      return fail(c, e);
+    }
+  });
 
   api.post("/handoff/peers/:fingerprint/:action", async (c) => {
     const action = c.req.param("action");

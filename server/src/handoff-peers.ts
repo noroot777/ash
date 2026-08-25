@@ -13,6 +13,7 @@
 // 这里只管**入站**。出站方向(「我要发的这台还是不是原来那台」)在
 // handoff-peer-client.ts —— 那一半才是接力最该防的,见 handoff-identity.ts 顶部。
 import type { Context } from "hono";
+import { getConnInfo } from "@hono/node-server/conninfo";
 import { eq } from "drizzle-orm";
 import type { HandoffPeer } from "@ash/shared";
 import { db } from "./db/index.js";
@@ -174,12 +175,9 @@ export async function deletePeer(fingerprint: string): Promise<void> {
   await db.delete(handoffPeers).where(eq(handoffPeers.fingerprint, fingerprint));
 }
 
-/** 客户端地址,只用于展示(反代后面拿到的可能是网关地址,不当判据用)。 */
+/** 客户端真实 TCP 地址。反代场景会看到网关地址；不信任可伪造的 X-Forwarded-For。 */
 export function peerAddr(c: Context): string {
-  const forwarded = c.req.header("x-forwarded-for")?.split(",")[0]?.trim();
-  if (forwarded) return forwarded.slice(0, 64);
-  const info = (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming;
-  return (info?.socket?.remoteAddress ?? "").slice(0, 64);
+  try { return (getConnInfo(c).remote.address ?? "").slice(0, 64); } catch { return ""; }
 }
 
 /** ping 应答里对源机的态度自述(源机据此在预检结果里如实告诉用户下一步该干什么)。 */
