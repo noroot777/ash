@@ -78,6 +78,20 @@ try {
   assert.equal(target.url, machineA);
   assert.equal(target.peerFp, identityA.fingerprint);
 
+  // 设置里同指纹的地址可能已经过期；本次任务导入从 TCP 恢复出的 peerUrl 更新，必须优先。
+  await api(machineB, "/settings", {
+    method: "PATCH", headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      handoffTargets: [{ name: "过期的 A", url: "http://127.0.0.1:1", peerFp: identityA.fingerprint }],
+    }),
+  });
+  const { target: markerTarget } = await api<{ target: HandoffTarget }>(machineB, `/tasks/${task.id}/handoff/return-target`);
+  assert.equal(markerTarget.url, machineA, "任务刚恢复的 peerUrl 不应被设置里的旧 URL 盖掉");
+
+  const { sourceUrlFromPeer } = await import("../src/handoff-return.js");
+  assert.equal(sourceUrlFromPeer("mac-mini.local", 4317), "http://mac-mini.local:4317", "mDNS 主机名应能组成回程地址");
+  assert.equal(sourceUrlFromPeer("bad host", 4317), null, "非法主机名不能进入 URL");
+
   const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   const forgedBody = JSON.stringify({
     taskId: task.id,
@@ -128,6 +142,31 @@ try {
 
   const peersOnA = await api<{ peers: { fingerprint: string }[] }>(machineA, "/handoff/peers");
   assert.ok(!peersOnA.peers.some((peer) => peer.fingerprint === identityB.fingerprint), "免审批移回不应暗中建立整机级批准记录");
+
+  // 新版 return/ping 的任务级 404 必须原样失败，不能误当成“旧版没有路由”再退回普通 ping。
+  const missingArchiveTask = await api<Task>(machineA, "/tasks", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      projectId: projectA.id,
+      title: "原机存档缺失",
+      body: "验证业务 404 不被兼容分支吞掉",
+      mode: "single",
+      workflowMode: "free",
+      useWorktree: false,
+    }),
+  });
+  await api(machineA, `/tasks/${missingArchiveTask.id}/handoff`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: machineB, targetProjectId: projectB.id, targetName: "B", autoResume: false }),
+  });
+  await api(machineA, `/tasks/${missingArchiveTask.id}`, { method: "DELETE" });
+  const missingArchive = await fetch(`${machineB}/api/tasks/${missingArchiveTask.id}/handoff/preflight`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: machineA }),
+  });
+  const missingArchiveBody = (await missingArchive.json()) as { error?: string };
+  assert.equal(missingArchive.status, 502);
+  assert.match(missingArchiveBody.error ?? "", /原机没有这条任务的历史存档/);
   console.log("test-handoff-return ok");
 } finally {
   for (const port of serverPorts) {

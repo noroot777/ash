@@ -1,5 +1,6 @@
 import type { HandoffPingProject, HandoffTarget, TaskHandoff } from "@ash/shared";
 import { isIP } from "node:net";
+import { domainToASCII } from "node:url";
 import { eq } from "drizzle-orm";
 import { getAppSettings } from "./app-settings.js";
 import { db } from "./db/index.js";
@@ -14,9 +15,16 @@ function markerOf(raw: string | null): TaskHandoff | null {
 }
 
 function hostForUrl(address: string): string | null {
-  const normalized = address.replace(/^::ffff:/i, "").split("%")[0] ?? "";
-  if (!isIP(normalized)) return null;
-  return normalized.includes(":") ? `[${normalized}]` : normalized;
+  const raw = address.trim().replace(/^::ffff:/i, "");
+  const unwrapped = raw.startsWith("[") && raw.endsWith("]") ? raw.slice(1, -1) : raw;
+  const normalized = unwrapped.split("%")[0] ?? "";
+  if (isIP(normalized)) return normalized.includes(":") ? `[${normalized}]` : normalized;
+  const hostname = domainToASCII(normalized);
+  if (!hostname || hostname.length > 253
+    || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.?$/i.test(hostname)) {
+    return null;
+  }
+  return hostname;
 }
 
 export function sourceUrlFromPeer(address: string | undefined, port: unknown): string | null {
@@ -61,17 +69,18 @@ export async function returnArchiveForPeer(
 
 export async function returnTargetForMarker(marker: TaskHandoff): Promise<HandoffTarget | null> {
   if (marker.direction !== "in" || !marker.peerFp) return null;
+  // 任务本次导入时从真实 TCP 来源 + 对端自报端口恢复出的地址最新，也和这条任务绑定；
+  // 设置项可能是 DHCP 变化前的旧地址，只作为老记录的兜底。
+  if (marker.peerUrl) {
+    return { name: marker.peerName || "来源机器", url: marker.peerUrl, peerFp: marker.peerFp };
+  }
   const settings = await getAppSettings();
   const registered = settings.handoffTargets.find((target) => target.peerFp
     && sameFingerprint(target.peerFp, marker.peerFp));
   if (registered) return registered;
-  if (marker.peerUrl) {
-    return { name: marker.peerName || "来源机器", url: marker.peerUrl, peerFp: marker.peerFp };
-  }
-  const peer = (await db.select().from(handoffPeers)
-    .where(eq(handoffPeers.fingerprint, marker.peerFp))).at(0);
-  const fallback = sourceUrlFromPeer(peer?.lastAddr, Number(process.env.PORT ?? 4317));
-  return fallback ? { name: marker.peerName || peer?.name || "来源机器", url: fallback, peerFp: marker.peerFp } : null;
+  // handoff_peers 只保存最近 TCP 地址，没有来源机监听端口。不能拿本机 PORT 猜；
+  // 前端会让用户临时补一个 URL，服务端仍按 marker.peerFp 做任务级身份核对。
+  return null;
 }
 
 export async function returnTargetForTask(taskId: string): Promise<HandoffTarget | null> {

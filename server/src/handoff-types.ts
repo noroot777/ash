@@ -10,6 +10,10 @@ export class HandoffError extends Error {
   unsettled = false;
   // network=true:请求没送达或应答没读全 —— 对端**可能已经**处理成功,调用方不能
   // 当「确认失败」处理(exportHandoff 靠它决定保留 pending 标记还是回滚)。
+  // remoteStatus / remoteAsh 只由 fetchPeer 填：兼容逻辑据此区分「旧版没有这个路由」
+  // 和「新版路由明确返回业务错误」，避免靠错误文案做宽泛匹配。
+  remoteStatus: number | null = null;
+  remoteAsh = false;
   constructor(message: string, public status: number = 400, public network = false) {
     super(message);
   }

@@ -129,12 +129,11 @@
 .handoff-result-panel h3 { margin: 14px 0 0; color: var(--ink); font-size: 26px; letter-spacing: -0.04em; }
 .handoff-progress > p,
 .handoff-result-panel > p { margin: 10px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
-.handoff-progress ol { width: min(390px, 100%); margin: 30px auto 0; padding: 0; text-align: left; list-style: none; }
-.handoff-progress li { position: relative; display: grid; grid-template-columns: 32px 1fr; gap: 12px; min-height: 64px; }
-.handoff-progress li:not(:last-child)::after { position: absolute; width: 1px; top: 29px; bottom: -1px; left: 14px; background: var(--line); content: ""; }
-.handoff-progress li > span { z-index: 1; display: grid; width: 29px; height: 29px; place-items: center; border: 1px solid var(--line2); border-radius: 50%; background: var(--panel); color: var(--faint); font-family: var(--font-mono); font-size: 9px; }
-.handoff-progress li.is-active > span { border-color: transparent; background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 8px color-mix(in lch, var(--accent) 12%, transparent); animation: handoff-pulse 1.35s ease-in-out infinite; }
-.handoff-progress li div { display: grid; align-content: start; padding-top: 2px; }
+.handoff-progress-plan-title { width: min(420px, 100%); margin-top: 28px; color: var(--faint); font-size: 9.5px; font-weight: 700; text-align: left; letter-spacing: .08em; }
+.handoff-progress ul { display: grid; width: min(420px, 100%); grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 9px auto 0; padding: 0; text-align: left; list-style: none; }
+.handoff-progress li { display: grid; min-width: 0; grid-template-columns: 26px minmax(0, 1fr); gap: 9px; border: 1px solid var(--line); border-radius: 11px; background: var(--raised); padding: 11px; }
+.handoff-progress li > span { display: grid; width: 26px; height: 26px; place-items: center; border-radius: 8px; background: var(--accent-soft); color: var(--accent); }
+.handoff-progress li div { display: grid; align-content: start; }
 .handoff-progress li b { font-size: 12px; }
 .handoff-progress li small { margin-top: 5px; color: var(--faint); font-size: 10px; }
 
@@ -152,11 +151,11 @@
 
 @keyframes handoff-dialog-enter { from { opacity: 0; transform: translateY(10px) scale(.985); } }
 @keyframes handoff-orbit { to { transform: rotate(360deg); } }
-@keyframes handoff-pulse { 50% { box-shadow: inset 0 0 0 3px color-mix(in lch, var(--accent) 18%, transparent); } }
 
 .handoff-quick-add { display: grid; gap: 7px; margin: 12px 0; }
 .handoff-quick-add p { margin: 0 0 4px; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .handoff-quick-add label { color: var(--faint); font-size: 10.5px; }
+.handoff-quick-add small { color: var(--faint); font-size: 10px; line-height: 1.55; }
 .handoff-quick-add input {
   height: 32px;
   border: 1px solid var(--line2);
@@ -408,6 +407,7 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   .handoff-review-item:nth-child(odd) { border-right: 0; }
   .handoff-review-item:nth-child(n + 2) { border-top: 1px solid var(--line); }
   .handoff-progress { min-height: 520px; }
+  .handoff-progress ul { grid-template-columns: 1fr; }
   .handoff-progress h3,
   .handoff-result-panel h3 { font-size: 22px; }
   .handoff-approval-alert {
@@ -421,9 +421,12 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
 @media (prefers-reduced-motion: reduce) {
   .handoff-approval-alert,
   .handoff-dialog,
-  .handoff-progress-orbit i,
-  .handoff-progress li.is-active > span { animation: none; }
+  .handoff-progress-orbit i { animation: none; }
 }
+.handoff-bulk-dialog > .handoff-route-card { margin-bottom: 10px; }
+.handoff-bulk-lede { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.handoff-bulk-result { padding-bottom: 8px; }
+.handoff-bulk-result .handoff-bulk-failures { width: min(520px, 100%); margin-top: 18px; text-align: left; }
 .handoff-bulk-body {
   display: grid;
   gap: 11px;

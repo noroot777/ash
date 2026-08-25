@@ -23,6 +23,11 @@ assert.match(rows, /task\.handoff\?\.direction === "out"/, "当前在本机持�
 assert.doesNotMatch(rows, /aria-label=.*已移回/, "移回后的本机任务不应保留特殊行标");
 assert.match(handoffViews, /在本机查看远程任务/, "接力完成态应进入本机代理视图，而不是跳去远端 Web");
 assert.doesNotMatch(handoff, /href=\{result\.remoteUrl\}/, "接力完成态不能继续直连远端 Web 地址");
+assert.match(handoff, /onOpenRemote=\{!inboundHandoff && target \?/, "移回完成态不能提供不可用的远程任务入口");
+assert.match(handoff, /id="handoff-return-source-url"/, "旧接入记录无法定位来源机时应允许临时补 URL");
+assert.match(handoff, /peerFp: inboundHandoff\.peerFp/, "手工来源地址仍须绑定任务记录的来源指纹");
+assert.doesNotMatch(handoffViews, /index === 2|is-active/, "单任务传输不能展示伪造的精确阶段");
+assert.match(handoffViews, /本次将执行/, "单任务传输应把步骤表述为将执行清单");
 assert.match(handoff, /className="task-handoff-open" onClick=\{onOpenRemote\}/, "历史横幅也应复用本机代理视图");
 
 console.log("remote task proxy UI tests passed");

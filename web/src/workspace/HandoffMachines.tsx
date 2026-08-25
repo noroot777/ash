@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type {
   HandoffApprovalResult,
   HandoffExportResult,
@@ -7,9 +8,10 @@ import type {
   ProjectView,
   TaskListItem,
 } from "@ash/shared";
-import { DesktopTower, Fingerprint, LockKey, PaperPlaneTilt, SpinnerGap, Warning } from "@phosphor-icons/react";
+import { Check, DesktopTower, Fingerprint, LockKey, PaperPlaneTilt, SpinnerGap, Warning } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
-import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
+import { useDismissable } from "../lib/useDismissable.ts";
+import { HandoffDialogHeader, HandoffRouteCard } from "../task-detail/HandoffDialogViews.tsx";
 import { outboundTasksForTarget, partitionBulkHandoffTasks } from "./bulkHandoff.ts";
 
 type TransferFailure = { task: TaskListItem; reason: string };
@@ -49,6 +51,7 @@ function BulkHandoffDialog({
   const actionName = returnOnly ? "移回" : "接力";
   const sample = eligible[0] ?? null;
   const mounted = useRef(true);
+  const modalScrim = useRef<HTMLDivElement>(null);
   const autoProbeAttempted = useRef(false);
   const [firstProbe, setFirstProbe] = useState<HandoffPreflightResult | null>(null);
   const [preflights, setPreflights] = useState<Map<string, HandoffPreflightResult>>(new Map());
@@ -106,6 +109,8 @@ function BulkHandoffDialog({
 
   const blocked = firstProbe?.peer?.peerStatus === "pending" || firstProbe?.peer?.peerStatus === "blocked";
   const busy = phase !== "idle";
+  const canClose = !busy || phase === "approval" || phase === "preflight";
+  useDismissable({ enabled: canClose, containerRef: modalScrim, onClose });
   const runningCount = eligible.filter((task) => task.status === "running" || task.status === "queued").length;
 
   const requestApproval = async () => {
@@ -234,18 +239,45 @@ function BulkHandoffDialog({
       ? `把本机「${project.name}」项目中 ${eligible.length} 个接入任务顺序移回「${target.name}」。`
       : `把本机「${project.name}」项目中 ${eligible.length} 个可接力任务顺序移到「${target.name}」。`;
 
-  return (
-    <ConfirmDialog
-      title={`${returnOnly ? "移回到" : "接力到"} ${target.name}`}
-      message={message}
-      confirmLabel={confirmLabel}
-      busy={busy}
-      allowCloseWhenBusy={phase === "approval" || phase === "preflight"}
-      confirmDisabled={!result && (!eligible.length || (Boolean(firstProbe) && !blocked && !projectId))}
-      onClose={onClose}
-      onConfirm={confirm}
+  const selectedProject = firstProbe?.projects.find((candidate) => candidate.id === projectId) ?? null;
+
+  return createPortal(
+    <div
+      className="task-modal-scrim"
+      ref={modalScrim}
+      role="presentation"
+      onMouseDown={(event) => { if (event.target === event.currentTarget && canClose) onClose(); }}
     >
-      <div className="handoff-bulk-body">
+      <section className="task-confirm-dialog handoff-dialog handoff-bulk-dialog" role="dialog" aria-modal="true" aria-labelledby="handoff-title">
+        <HandoffDialogHeader
+          title={`${returnOnly ? "移回到" : "接力到"} ${target.name}`}
+          disabled={!canClose}
+          onClose={onClose}
+        />
+        {result ? (
+          <div className="handoff-result-panel handoff-bulk-result">
+            <span className="handoff-result-mark" aria-hidden="true"><Check size={22} weight="bold" /></span>
+            <span className="handoff-eyebrow">BATCH COMPLETE</span>
+            <h3>批量{actionName}已完成</h3>
+            <p>{message}</p>
+            <div className="handoff-result-facts">
+              <span><b>{result.successes.length}</b> 个成功</span>
+              <span><b>{result.failures.length}</b> 个失败</span>
+              <span><b>{eligible.length}</b> 个任务</span>
+            </div>
+            {result.failures.length > 0 && (
+              <ul className="handoff-bulk-failures">{result.failures.map(({ task, reason }) => <li key={task.id}><b>{task.title}</b><span>{reason}</span></li>)}</ul>
+            )}
+          </div>
+        ) : (
+          <>
+            <HandoffRouteCard
+              sourcePath={`${project.name} · ${eligible.length} 个任务`}
+              targetName={target.name}
+              targetPath={selectedProject?.repoPath ?? target.url}
+            />
+            <p className="handoff-bulk-lede">{message}</p>
+            <div className="handoff-bulk-body">
         <p className="handoff-bulk-scope">会迁移完整 CLI 会话、附件与可带走的 Git 状态；本机任务确认{actionName}后会从任务列表消失。</p>
         {runningCount > 0 && (
           <p className="handoff-bulk-warning"><Warning size={13} aria-hidden="true" />其中 {runningCount} 个任务正在运行或排队，正式{actionName}会先停止它们。</p>
@@ -317,11 +349,23 @@ function BulkHandoffDialog({
             <ul>{preflightFailures.map(({ task, reason }) => <li key={task.id}><b>{task.title}</b><span>{reason}</span></li>)}</ul>
           </div>
         )}
-        {result?.failures.length ? (
-          <ul className="handoff-bulk-failures">{result.failures.map(({ task, reason }) => <li key={task.id}><b>{task.title}</b><span>{reason}</span></li>)}</ul>
-        ) : null}
-      </div>
-    </ConfirmDialog>
+            </div>
+          </>
+        )}
+        <footer>
+          <button type="button" disabled={!canClose} onClick={onClose}>{result ? "关闭" : "取消"}</button>
+          <button
+            className="is-primary"
+            type="button"
+            disabled={busy || (!result && (!eligible.length || (Boolean(firstProbe) && !blocked && !projectId)))}
+            onClick={confirm}
+          >
+            {busy ? "处理中…" : confirmLabel}
+          </button>
+        </footer>
+      </section>
+    </div>,
+    document.body,
   );
 }
 

@@ -145,6 +145,19 @@ export function HandoffDialog({
     }
   };
 
+  const useManualReturnTarget = () => {
+    const url = draftTargetUrl.trim().replace(/\/+$/, "");
+    if (!inboundHandoff?.peerFp || !HANDOFF_URL_RE.test(url) || busy) return;
+    // 只把用户补的地址留在当前弹窗里，不写入整机设置。真正预检仍从任务 marker 取
+    // peerFp 做身份核对，所以换一个地址不会把任务转送给第三台机器。
+    setTargets([{
+      name: inboundHandoff.peerName || "来源机器",
+      url,
+      peerFp: inboundHandoff.peerFp,
+    }]);
+    setTargetUrl(url);
+  };
+
   const requestApproval = async () => {
     if (!targetUrl || busy) return;
     setBusy(true);
@@ -248,7 +261,7 @@ export function HandoffDialog({
             result={result}
             returning={Boolean(inboundHandoff)}
             targetName={target?.name ?? "对端"}
-            onOpenRemote={target ? () => {
+            onOpenRemote={!inboundHandoff && target ? () => {
                   onClose();
                   onOpenRemote(task, target);
                 } : null}
@@ -259,8 +272,34 @@ export function HandoffDialog({
           <div className="handoff-quick-add">
             <p>
               无法自动定位来源机器{inboundHandoff.peerName ? `「${inboundHandoff.peerName}」` : ""}的可回连地址。
-              旧接力记录没有保存端口、最近来访地址也不可用；添加来源机地址后仍会按原指纹核对，不会转送到第三台机器。
+              旧接力记录没有保存端口，请填写来源机当前的 ash 地址。
             </p>
+            {inboundHandoff.peerFp ? (
+              <>
+                <label htmlFor="handoff-return-source-url">来源机 ash 地址</label>
+                <input
+                  id="handoff-return-source-url"
+                  value={draftTargetUrl}
+                  disabled={busy}
+                  placeholder="http://mac-mini.local:4317"
+                  onChange={(event) => setDraftTargetUrl(event.target.value)}
+                  onKeyDown={(event) => { if (event.key === "Enter") useManualReturnTarget(); }}
+                />
+                <small>仅用于这次移回，不会新增整机信任；连接后仍必须与任务记录的来源指纹一致。</small>
+                <Button
+                  variant="primary"
+                  disabled={busy || !HANDOFF_URL_RE.test(draftTargetUrl.trim())}
+                  onClick={useManualReturnTarget}
+                >
+                  检查来源机
+                </Button>
+              </>
+            ) : (
+              <p className="handoff-error">
+                <Warning size={13} aria-hidden="true" />
+                这条旧记录没有来源机指纹，无法安全判断该移回哪台机器。请从来源机重新接力一次。
+              </p>
+            )}
           </div>
         ) : targets && targets.length === 0 && !pendingHandoff ? (
           <div className="handoff-quick-add">
@@ -399,6 +438,7 @@ export function HandoffDialog({
                   uploads={preflight.local.uploads}
                   git={preflight.local.git}
                   autoResume={autoResume}
+                  returning={Boolean(inboundHandoff)}
                 />
                 {(missingFiles > 0 || preflight.local.pendingMessages > 0 || preflight.local.schedule) && (
                   <ul className="handoff-summary">

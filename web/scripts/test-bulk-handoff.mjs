@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { outboundTasksForTarget, partitionBulkHandoffTasks } from "../src/workspace/bulkHandoff.ts";
 import { handoffTargetsForTask } from "../src/task-detail/handoffTargetPolicy.ts";
 
@@ -89,5 +90,11 @@ assert.deepEqual(
   [{ name: "自动来源", url: "http://source", peerFp: sourceFp }],
   "移回目标可由任务历史自动恢复，不要求先写入整机目标设置",
 );
+
+const bulkDialog = readFileSync(new URL("../src/workspace/HandoffMachines.tsx", import.meta.url), "utf8");
+assert.doesNotMatch(bulkDialog, /<ConfirmDialog/, "批量接力不应继续使用旧确认框");
+assert.match(bulkDialog, /<HandoffDialogHeader/, "批量接力应复用接力弹窗标题结构");
+assert.match(bulkDialog, /<HandoffRouteCard/, "批量接力应展示与单任务一致的机器路线");
+assert.match(bulkDialog, /handoff-result-panel handoff-bulk-result/, "批量接力结果页应使用同一套完成态视觉");
 
 console.log("bulk handoff eligibility tests passed");

@@ -90,11 +90,14 @@ export async function fetchPeer<T>(
     // 按网络类失败(network=true)处理,让调用方保留 pending 而不是回滚——宁可让用户
     // 多点一次收口重试,也不能让同一个任务在两台机器上各跑一份。
     // 鉴权拒绝(401/403)一律带 ash 标记,确实什么都没导入,回滚才是对的。
-    throw new HandoffError(
+    const error = new HandoffError(
       `对端返回 ${res.status}：${payload?.error ?? "未知错误"}`,
       502,
       payload?.ash !== true,
     );
+    error.remoteStatus = res.status;
+    error.remoteAsh = payload?.ash === true;
+    throw error;
   }
   if (payload === null) {
     // 2xx 但应答体读不出来:对端多半已经处理成功,只是应答在路上断了——按网络类失败
@@ -145,7 +148,8 @@ export async function pingPeer(
   } catch (error) {
     // 老版来源机没有任务级移回端点：退回常规 ping，仍按来源指纹核对；若它要求审批，
     // UI 会继续走旧版的手工批准流程，不把升级变成“再也移不回去”。
-    if (!returnContext || !(error instanceof HandoffError) || !/对端返回 404/.test(error.message)) throw error;
+    if (!returnContext || !(error instanceof HandoffError)
+      || error.remoteStatus !== 404 || error.remoteAsh) throw error;
     ping = await fetchPeer<HandoffPingResponse>(`${targetUrl}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`);
   }
   if (!ping?.ok || ping.service !== "ash") {

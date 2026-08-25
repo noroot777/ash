@@ -66,12 +66,14 @@ export function HandoffReviewGrid({
   uploads,
   git,
   autoResume,
+  returning = false,
 }: {
   project: HandoffPingProject | null;
   sessions: number;
   uploads: number;
   git: "bundle" | "none";
   autoResume: boolean;
+  returning?: boolean;
 }) {
   return (
     <div className="handoff-review-grid">
@@ -89,7 +91,8 @@ export function HandoffReviewGrid({
       </div>
       <div className="handoff-review-item">
         <ArrowRight size={15} aria-hidden="true" />
-        <span>完成后</span><b>{autoResume ? "立即续跑" : "等待手动运行"}</b><small>仍可在本机代理视图里继续查看</small>
+        <span>完成后</span><b>{autoResume ? "立即续跑" : "等待手动运行"}</b>
+        <small>{returning ? "任务回到来源机，当前机器保留历史" : "仍可在本机代理视图里继续查看"}</small>
       </div>
     </div>
   );
@@ -104,14 +107,19 @@ export function HandoffProgress({ targetName, returning }: { targetName: string;
       <div className="handoff-progress-orbit" aria-hidden="true"><span /><i /></div>
       <span className="handoff-eyebrow">MOVING TASK</span>
       <h3>{returning ? `正在移回 ${targetName}` : `正在接力到 ${targetName}`}</h3>
-      <p>任务身份保持不变。完成后会停留在结果页，可直接在本机继续查看。</p>
-      <ol>
-        {steps.map(([label, detail], index) => (
-          <li key={label} className={index === 2 ? "is-active" : ""}>
-            <span>{index + 1}</span><div><b>{label}</b><small>{detail}</small></div>
+      <p>
+        {returning
+          ? "正在安全交回来源机，完成后当前机器只保留历史记录。"
+          : "正在安全迁移，完成后会停留在结果页，可从本机代理视图继续查看。"}
+      </p>
+      <span className="handoff-progress-plan-title">本次将执行</span>
+      <ul>
+        {steps.map(([label, detail]) => (
+          <li key={label}>
+            <span><ArrowRight size={12} aria-hidden="true" /></span><div><b>{label}</b><small>{detail}</small></div>
           </li>
         ))}
-      </ol>
+      </ul>
     </div>
   );
 }
@@ -132,7 +140,7 @@ export function HandoffResultPanel({
       <span className="handoff-result-mark" aria-hidden="true"><Check size={22} weight="bold" /></span>
       <span className="handoff-eyebrow">HANDOFF COMPLETE</span>
       <h3>{returning ? `已移回 ${targetName}` : `已接力到 ${targetName}`}</h3>
-      <p>会话、任务记录和运行位置已经完成切换，本机保留历史存档。</p>
+      <p>{returning ? "任务已安全交回来源机，当前机器保留历史存档。" : "会话、任务记录和运行位置已经完成切换，本机保留历史存档。"}</p>
       <div className="handoff-result-facts">
         <span><b>{result.sessionsMigrated}</b> 份会话</span>
         <span><b>{result.git === "bundle" ? "已携带" : "未携带"}</b> 代码状态</span>
