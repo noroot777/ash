@@ -9,9 +9,9 @@ import { homedir } from "node:os";
 import { mkdirSync, rmSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { noteTasks, projects, scheduledMessages, schedules, sessions, tasks } from "./db/schema.js";
+import { projects, scheduledMessages, schedules, sessions, tasks } from "./db/schema.js";
 import { claudeProjectSlug } from "./handoff-collect.js";
 import {
   HandoffError, MAX_FILE_BYTES, MB, safeRel,
@@ -29,7 +29,6 @@ import { codexHome, findRollout } from "./executors/codex-rollout.js";
 import { assertHandoffNotCanceled, beginHandoffImport, endHandoffImport } from "./handoff-transfer-state.js";
 import { publishPendingMessages } from "./pending-messages.js";
 import { createTasks, publishTaskUpdated } from "./task-store.js";
-import { deleteTaskAssociations } from "./task-routes.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { localIdentity } from "./handoff-identity.js";
 import { untrackedOverwriteConflicts } from "./handoff-worktree-safety.js";
@@ -304,10 +303,7 @@ async function importValidated(
   const notes: string[] = [];
   const project = (await db.select().from(projects).where(eq(projects.id, m.targetProjectId))).at(0);
   if (!project) throw new HandoffError("目标项目不存在(对端项目清单可能过期,重新预检)", 404);
-  const existing = (await db
-    .select({ id: tasks.id, handoff: tasks.handoff })
-    .from(tasks)
-    .where(eq(tasks.id, m.task.id))).at(0);
+  const existing = (await db.select().from(tasks).where(eq(tasks.id, m.task.id))).at(0);
   let existingMarker: TaskHandoff | null = null;
   let returning = false;
   if (existing) {
@@ -506,17 +502,14 @@ async function importValidated(
     git: useWorktree && m.git ? "bundle" : "none",
   };
   const status = SETTLED.has(m.task.status) ? m.task.status : "canceled";
-  const taskRow = {
-    id: m.task.id,
+  const taskValues = {
     projectId: project.id,
     title: m.task.title,
     body: m.task.body,
-    mode: "single" as const,
     status,
     stage: m.task.stage,
     labels: jsonOr(m.task.labels, "[]"),
     agentType: m.task.agentType,
-    executorId: null,
     model: m.task.model,
     reasoningEffort: m.task.reasoningEffort,
     autoTitle: m.task.autoTitle,
@@ -540,7 +533,13 @@ async function importValidated(
     endedAt: m.task.endedAt,
     handoff: JSON.stringify(marker),
     scheduleId,
+  };
+  const taskRow = {
+    id: m.task.id,
+    mode: "single" as const,
+    executorId: null,
     reportBack: false,
+    ...taskValues,
   };
   const sessionRows = m.sessions.map((s) => ({
     id: s.id,
@@ -594,19 +593,26 @@ async function importValidated(
   }));
 
   if (returning) {
-    const [preservedNoteLinks, preservedTask] = await Promise.all([
-      db.select().from(noteTasks).where(eq(noteTasks.taskId, m.task.id)),
-      db.select({ handoffAudit: tasks.handoffAudit }).from(tasks).where(eq(tasks.id, m.task.id)),
-    ]);
     try {
       await db.transaction(async (tx) => {
-        await deleteTaskAssociations(m.task.id);
-        await tx.delete(tasks).where(eq(tasks.id, m.task.id));
-        await tx.insert(tasks).values({ ...taskRow, handoffAudit: preservedTask.at(0)?.handoffAudit ?? null });
+        // 安全移回只覆盖 manifest 真正携带的任务字段。分组、依赖、自由审查、验收落账等
+        // 原机独有状态不在协议里，整行删除再插入会把它们静默清空。
+        await tx.update(tasks).set({
+          ...taskValues,
+          // 执行器 id 只在本机有意义；agent 类型没变才保留原机选择，否则按类型重新解析。
+          executorId: existing?.agentType === m.task.agentType ? existing.executorId : null,
+        }).where(eq(tasks.id, m.task.id));
+        // 会话、计划和 pending 消息确实随 manifest 迁移，只替换这三类；已发送/取消的
+        // 本机消息仍是本机历史，不能和未迁移的自由工作流关联一起误删。
+        await tx.delete(sessions).where(eq(sessions.taskId, m.task.id));
+        await tx.delete(schedules).where(eq(schedules.taskId, m.task.id));
+        await tx.delete(scheduledMessages).where(and(
+          eq(scheduledMessages.taskId, m.task.id),
+          eq(scheduledMessages.status, "pending"),
+        ));
         if (scheduleValues) await tx.insert(schedules).values(scheduleValues);
         if (sessionRows.length) await tx.insert(sessions).values(sessionRows);
         if (messageRows.length) await tx.insert(scheduledMessages).values(messageRows);
-        if (preservedNoteLinks.length) await tx.insert(noteTasks).values(preservedNoteLinks);
       });
       await publishTaskUpdated(m.task.id);
       notes.push(returnedHome

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HandoffPreflightResult, HandoffReturnGrant, HandoffTarget, Task } from "@ash/shared";
 import { api, makeRepo, startPeer } from "./handoff-test-utils.js";
+import { readReturnLocalState, seedReturnLocalState } from "./handoff-return-state-fixture.js";
 import { killOne, listenerPidsSync } from "../src/platform.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-handoff-return-"));
@@ -341,6 +342,7 @@ try {
   await api(machineA, `/tasks/${identityTask.id}`, { method: "DELETE" });
   await api(machineB, `/tasks/${identityTask.id}`, { method: "DELETE" });
 
+  const localStateBeforeReturn = seedReturnLocalState(join(root, "a.db"), task.id, projectA.id);
   await api(machineA, `/tasks/${task.id}/handoff`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ targetUrl: machineB, targetProjectId: projectB.id, targetName: "B", autoResume: false }),
@@ -545,6 +547,11 @@ try {
   assert.ok(!returnResult.notes.some((note) => /整条历史|全量历史/.test(note)), "免审批移回不应误报为全量 git 历史");
   const returned = await api<Task>(machineA, `/tasks/${task.id}`);
   assert.equal(returned.handoff?.direction, "returned");
+  assert.deepEqual(
+    readReturnLocalState(join(root, "a.db"), task.id),
+    localStateBeforeReturn,
+    "安全移回只能替换迁移数据，不能抹掉原机分组、自由审查或 tasks 本地字段",
+  );
   const originHead = execFileSync("git", ["-C", worktreePathFor(repoA, task.id), "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   assert.equal(originHead, holderHead, "原机 worktree 应落到持有机返回的新提交");
 
