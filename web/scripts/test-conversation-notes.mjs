@@ -124,4 +124,75 @@ assert.equal(liveNote[0].showSessionMeta, true, "会话统计条应留在旁注�
 assert.equal(liveNote[0].endedAt, null, "旁注不能把仍在运行的当前回合提前截断");
 assert.equal(liveNote[1].at, liveNoteAt, "实时旁注应直接带落盘时的精确时间");
 
+// —— 会话轮换（Codex thread 被判 poisoned）是旁注，不是这一轮的失败 ——
+// 服务端把 `scope:"session"` 转成持久 system 注记（server/src/session-notice.ts），
+// 所以落盘路和直播路都得渲染成 note；一个 exit 0、正文完整的回合不许出现红色「异常」。
+const rotationSession = { ...session, agentType: "codex", endedAt: null, turnStartedAt: session.startedAt };
+const diagnosis = "Codex 会话诊断：session=poisoned_session";
+const rotationNote = "ash 已清掉恢复字段，下一次运行会从任务正文自动开启一条全新会话。";
+const rotationLive = buildConversationItems(
+  [{ session: rotationSession, output: "这一轮正文已经完整产出。", trace: [] }],
+  [rotationSession],
+  [diagnosis, rotationNote].map((text, index) => ({
+    kind: "server",
+    id: `live:rotation:${index}`,
+    event: {
+      type: "agent.event", taskId: "t1", sessionId: "s1", role: "main", agentType: "codex",
+      event: { kind: "system", text, at: `2026-08-10T03:2${5 + index}:00.000Z` },
+    },
+  })).concat([{
+    kind: "server",
+    id: "live:rotation:done",
+    event: {
+      type: "agent.event", taskId: "t1", sessionId: "s1", role: "main", agentType: "codex",
+      event: { kind: "done", exitStatus: 0 },
+    },
+  }]),
+);
+const rotationAux = rotationLive.flatMap((item) => item.kind === "agent"
+  ? item.segments.flatMap((segment) => segment.events.filter((e) => e.kind === "error"))
+  : []);
+assert.deepEqual(rotationAux, [], "会话轮换不该在气泡里留下红色「异常」");
+const rotationNotes = rotationLive.filter((item) => item.kind === "event" && item.variant === "note");
+assert.deepEqual(rotationNotes.map((item) => item.text), [diagnosis, rotationNote], "轮换诊断与说明都渲染成旁注");
+assert.equal(rotationLive.at(-1).text, "本轮执行结束", "exit 0 仍是正常收尾");
+
+// 落盘后同构：.md 里的 system 回合行走 persisted 那条路，措辞与结构必须一致。
+const rotationPersisted = buildConversationItems([{
+  session: rotationSession,
+  output: [
+    "这一轮正文已经完整产出。",
+    turn("system", diagnosis, "2026-08-10T03:25:00.000Z"),
+    turn("system", rotationNote, "2026-08-10T03:26:00.000Z"),
+  ].join("\n"),
+  trace: [],
+}], [rotationSession], []);
+assert.deepEqual(
+  rotationPersisted.filter((item) => item.kind === "event").map((item) => [item.variant, item.text]),
+  [["note", diagnosis], ["note", rotationNote]],
+  "刷新之后轮换说明仍是旁注",
+);
+
+// 兜底：万一还有哪条直播路径漏转，模型自己也不许把 session-scope error 渲染成异常。
+const rawScoped = buildConversationItems(
+  [{ session: rotationSession, output: "这一轮正文已经完整产出。", trace: [] }],
+  [rotationSession],
+  [{
+    kind: "server",
+    id: "live:scoped-error",
+    event: {
+      type: "agent.event", taskId: "t1", sessionId: "s1", role: "main", agentType: "codex",
+      event: { kind: "error", message: diagnosis, scope: "session" },
+    },
+  }],
+);
+assert.deepEqual(
+  rawScoped.flatMap((item) => item.kind === "agent"
+    ? item.segments.flatMap((segment) => segment.events.filter((e) => e.kind === "error"))
+    : []),
+  [],
+  "带 scope:\"session\" 的 error 不能落进气泡的异常折叠块",
+);
+assert.equal(rawScoped.find((item) => item.kind === "event")?.variant, "note");
+
 console.log("conversation-notes ok");

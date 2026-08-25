@@ -50,6 +50,7 @@ import {
 } from "../executors/session-lost.js";
 import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
+import { emitSessionNotice, isSessionScopeNotice } from "../session-notice.js";
 import { recordUserConversationTurn } from "../conversation-turn.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET } from "./prompts.js";
@@ -455,14 +456,21 @@ async function consume(lead: Lead): Promise<void> {
         ? await recordSessionUsageEvent(lead.sessId, event, lead.agentType, lead.cliSessionId)
         : event;
       flushTraceText();
-      if (emittedEvent.kind === "thinking" || emittedEvent.kind === "tool" || emittedEvent.kind === "error" || emittedEvent.kind === "usage" || emittedEvent.kind === "attachment") {
+      // 会话轮换与本回合成败正交（见 ../session-notice.ts）：它既不进 trace 的 error
+      // 折叠块，也不以 error 上 SSE，一律落成持久 system 注记。
+      const sessionNotice = isSessionScopeNotice(emittedEvent);
+      const notify = (text: string) => emitSessionNotice({
+        out: lead.out, agentType: lead.agentType, text, publish: (e) => publish(lead, e),
+      });
+      if (!sessionNotice && (emittedEvent.kind === "thinking" || emittedEvent.kind === "tool" || emittedEvent.kind === "error" || emittedEvent.kind === "usage" || emittedEvent.kind === "attachment")) {
         appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), emittedEvent);
       }
       // 水位相反：**覆盖**。常驻会话尤其需要它——流水一路加到几百万，只有水位能回答
       // 「这个调度台离上下文塞满还有多远」。
       if (emittedEvent.kind === "context") await setSessionContext(lead.sessId, emittedEvent.context);
       if (emittedEvent.kind === "error") {
-        writeRunError(lead.out, emittedEvent.message);
+        if (sessionNotice) notify(emittedEvent.message);
+        else writeRunError(lead.out, emittedEvent.message);
         const previousFault = sessionFault;
         sessionFault = mergeSessionResumeFault(sessionFault, emittedEvent.message);
         if (sessionFault === "poisoned" && previousFault !== "poisoned" && lead.handle.dropSession) {
@@ -475,7 +483,8 @@ async function consume(lead: Lead): Promise<void> {
             await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, lead.sessId));
           } catch (error) {
             // 内存里的恢复 id 已经作废，不能让一次持久化故障杀掉常驻消费循环；同时明确
-            // 告知用户重启前数据库里可能还留着旧 id。
+            // 告知用户重启前数据库里可能还留着旧 id。**这条保持 error**：清理真的失败了,
+            // 跟「换了条会话」不是一回事。
             const message = `已停止续跑损坏的 Codex 会话，但清理数据库恢复字段失败：${error instanceof Error ? error.message : String(error)}`;
             writeRunError(lead.out, message);
             appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), { kind: "error", message });
@@ -483,13 +492,11 @@ async function consume(lead: Lead): Promise<void> {
             note = SESSION_DROP_PERSISTENCE_FAILED_NOTE;
           }
           awaitingFreshSession = true;
-          writeRunError(lead.out, note);
-          appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), { kind: "error", message: note });
-          publish(lead, { kind: "error", message: note });
+          notify(note);
         }
       }
       if (emittedEvent.kind === "done") exitStatus = emittedEvent.exitStatus;
-      publish(lead, emittedEvent);
+      if (!sessionNotice) publish(lead, emittedEvent);
       continue;
     }
     publish(lead, event);

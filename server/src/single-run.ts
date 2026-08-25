@@ -22,6 +22,7 @@ import {
   type SessionResumeFault,
 } from "./executors/session-lost.js";
 import { appendSessionTrace, writeTurnEnd, writeRunError } from "./transcript.js";
+import { emitSessionNotice, isSessionScopeNotice } from "./session-notice.js";
 import { notifyTeamLead } from "./team/inbox.js";
 import { handleTaskSettlement } from "./review.js";
 import { handleFreeWorkflowSettlement } from "./free-workflow.js";
@@ -367,6 +368,14 @@ export async function consumeSingleRun(a: {
         const emittedEvent = event.kind === "usage"
           ? await recordSessionUsageEvent(sessId, event, agentType, cliSessionId)
           : event;
+        if (emittedEvent.kind === "error" && isSessionScopeNotice(emittedEvent)) {
+          // 会话轮换与本回合成败正交（见 session-notice.ts）：诊断照样要留痕、要清恢复
+          // 字段，但不走 trace/SSE 的 error 通道，否则一个 exit 0 的健康回合会同时显示
+          // 「本轮执行结束」和红色「异常」。
+          sessionFault = mergeSessionResumeFault(sessionFault, emittedEvent.message);
+          emitSessionNotice({ out, agentType, text: emittedEvent.message, publish: publishEvent });
+          continue;
+        }
         persistTrace(emittedEvent);
         if (emittedEvent.kind === "error") {
           writeRunError(out, emittedEvent.message);
@@ -421,12 +430,10 @@ export async function consumeSingleRun(a: {
     .where(eq(sessions.id, sessId));
   if (dropSession) {
     const note = sessionResumeFaultNote(sessionFault!);
-    // 只弹一句错误不算数：用户看不出 ash 已经替他把坏 id 清了、也看不出重试会丢
-    // 上下文。跟别的诊断一样三处都落：
-    // .md 原始产物、trace（刷新后还在）、SSE（实时）。
-    out.write(`\n> ${note}\n`);
-    persistTrace({ kind: "error", message: note }, endIso);
-    publishEvent({ kind: "error", message: note });
+    // 只弹一句话不算数：用户看不出 ash 已经替他把坏 id 清了、也看不出重试会丢上下文。
+    // 落成持久 system 注记（.md 原始产物 + SSE），刷新后还在；**不落 error** —— 换会话
+    // 不等于这一轮失败，真正的失败自有它自己的 error 和退出码（见 session-notice.ts）。
+    emitSessionNotice({ out, agentType, text: note, publish: publishEvent, at: endIso });
   }
   // 这一轮有没有「交卷时通道断了」的调用：有就替它补录。**必须排在 settleTaskStatus
   // 之前** —— complete_task 的补录要赶在结算读确认标记之前落库，晚一步，一个干完活的

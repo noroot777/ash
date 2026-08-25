@@ -28,6 +28,7 @@ import { RUNS_DIR } from "../paths.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
+import { isSessionScopeNotice } from "../session-notice.js";
 import { recordTurnStart } from "./timeline.js";
 
 const RAISE_RE = /(^|\n)\s*\[可收敛\]/;
@@ -175,12 +176,11 @@ export async function runTurn(args: {
   const TRACE_CAP = 200;
   try {
     for await (const event of handle.events) {
-      const sessionNotice = event.kind === "error"
-        && event.scope === "session";
+      const sessionNotice = isSessionScopeNotice(event);
       const emittedEvent = event.kind === "usage"
         ? await recordSessionUsageEvent(rowId, event, executor.type, cliId)
         : event;
-      const publishedEvent = sessionNotice
+      const publishedEvent = event.kind === "error" && sessionNotice
         ? { kind: "system" as const, text: event.message, at: now() }
         : emittedEvent;
       bus.publish({ type: "agent.event", taskId, sessionId: rowId, role, event: publishedEvent });
