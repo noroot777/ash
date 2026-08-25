@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type { ScheduledMessage } from "@ash/shared";
-import { Clock, FlowArrow, Queue, SpinnerGap, X } from "@phosphor-icons/react";
+import { ChatsCircle, Clock, Queue, SpinnerGap, X } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
@@ -150,13 +150,13 @@ export function ScheduledMessageTray({
                 type="button"
                 className="scheduled-message-guide"
                 disabled={busy}
-                aria-label={`用排队消息“${message.text || "附件"}”引导方向`}
+                aria-label={`用排队消息“${message.text || "附件"}”引导会话`}
                 onClick={() => onSteer(message.id)}
               >
                 {steering
                   ? <SpinnerGap size={12} className="is-spinning" aria-hidden="true" />
-                  : <FlowArrow size={12} aria-hidden="true" />}
-                <span>{steering ? "正在引导" : "引导方向"}</span>
+                  : <ChatsCircle size={12} aria-hidden="true" />}
+                <span>{steering ? "引导中" : "引导会话"}</span>
               </button>
             )}
             <button

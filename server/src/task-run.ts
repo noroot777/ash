@@ -200,7 +200,7 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
       handle, out, turnStart, cliSessionId, autoTitle,
     });
   } catch (err) {
-    // handle 已登记后收到「引导方向」时，kill 可能恰好让 parser 抛而不是正常收流。
+    // handle 已登记后收到「引导会话」时，kill 可能恰好让 parser 抛而不是正常收流。
     // 它仍是受控交接：旧回合不落 failed，releaseTurn 后由已登记的回调续送新方向。
     if (takeSteered(taskId)) return;
     const message = String(err instanceof Error ? err.message : err);

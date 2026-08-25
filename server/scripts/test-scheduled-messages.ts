@@ -389,7 +389,7 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 200));
   console.log("✓ 结算钩子里投递:锁还锁着不抢跑,锁一放立刻把原话送进会话");
 
-  // ── 引导方向:默认排队,点按钮后才受控截断并在同一会话续送 ──────────────
+  // ── 引导会话:默认排队,点按钮后才受控截断并在同一会话续送 ──────────────
   // 真起一个会一直运行到 SIGTERM 的一次性 Claude 回合；steerQueuedMessage 会走活动
   // RunHandle.kill，consumeSingleRun 必须自己消费 steering 标记、跳过旧回合结算，再由
   // releaseTurn 启动同会话续聊。若它误走普通 settle，status 事件里会先冒出 done/failed。
@@ -437,7 +437,7 @@ try {
     },
     "引导出去的新回合没有结算",
   );
-  console.log("✓ 引导方向:按钮点击后截断旧回合,清旧状态,同会话续送并在落盘后标 sent");
+  console.log("✓ 引导会话:按钮点击后截断旧回合,清旧状态,同会话续送并在落盘后标 sent");
 
   // 活动 handle 不存在(启动缝隙/刚好结束)时不谎报成功，更不能把消息从队列拿走。
   const unavailableSteer = await steer.steerQueuedMessage("scheduled-steer-unavailable");
@@ -450,7 +450,7 @@ try {
   assert.equal(retainedTaskState.completeConfirmedAt, at, "没有活动 handle 时不得提前清掉旧回合完成票");
   assert.equal(retainedTaskState.resumePrompt, "仍属于当前回合的检查点", "失败点击不得清掉检查点");
   assert.equal(retainedTaskState.question, "仍属于当前回合的问题", "失败点击不得清掉提问");
-  console.log("✓ 引导方向失败:消息保持 pending 并归还租约");
+  console.log("✓ 引导会话失败:消息保持 pending 并归还租约");
 
   // ── 进程死在投递中途:重启后必须自己回来 ──────────────────────────────────
   // 上一段证明了「锁挡回不丢消息」,但锁不是唯一能掐断投递的东西 —— 服务重启会把内存里

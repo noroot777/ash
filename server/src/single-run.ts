@@ -410,7 +410,7 @@ export async function consumeSingleRun(a: {
     })
     .where(eq(sessions.id, sessId));
   if (steered) {
-    // 「引导方向」只截断旧回合：任务仍是 running，新方向已持有 scheduled_messages
+    // 「引导会话」只截断旧回合：任务仍是 running，新消息已持有 scheduled_messages
     // 投递租约，并排在 releaseTurn 后用同一 cliSessionId 续送。这里若走普通 settle，
     // 会把旧方向误记 failed/canceled、推进队列，还可能触发工作流/审查；若补放旧回合
     // 的 complete_task，又会让新方向一开始就继承一张错误的完成票。

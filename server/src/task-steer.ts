@@ -1,4 +1,4 @@
-// 单飞任务的「引导方向」：消息先按普通 queued 规则落库，只有用户在托盘里明确点击后，
+// 单飞任务的「引导会话」：消息先按普通 queued 规则落库，只有用户在托盘里明确点击后，
 // 才受控截断当前回合并把这一条升级为同 CLI 会话的下一回合。它不把单飞任务改造成团队
 // 常驻会话，因此 Claude/Codex/其它可恢复 CLI 都保留 detached + 服务重启接管能力。
 //
@@ -91,7 +91,7 @@ function deliverSteeredMessage(message: MessageRow): Promise<SteerQueuedMessageR
         finish({
           ok: false,
           status: 500,
-          error: `引导方向失败，消息仍在排队：${error instanceof Error ? error.message : String(error)}`,
+          error: `引导会话失败，消息仍在排队：${error instanceof Error ? error.message : String(error)}`,
         });
       }
     })();
@@ -103,11 +103,11 @@ export async function steerQueuedMessage(messageId: string): Promise<SteerQueued
   const message = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, messageId))).at(0);
   if (!message) return { ok: false, status: 404, error: "待发送消息不存在" };
   if (message.status !== "pending" || message.mode !== "queued") {
-    return { ok: false, status: 409, error: "只有仍在排队的消息可以引导方向" };
+    return { ok: false, status: 409, error: "只有仍在排队的消息可以引导会话" };
   }
   const task = (await db.select().from(tasks).where(eq(tasks.id, message.taskId))).at(0);
   if (!task) return { ok: false, status: 404, error: "任务不存在" };
-  if (task.mode !== "single") return { ok: false, status: 409, error: "只有单飞任务支持引导方向" };
+  if (task.mode !== "single") return { ok: false, status: 409, error: "只有单飞任务支持引导会话" };
   if (task.archived) return { ok: false, status: 409, error: "任务已归档，消息继续保留在排队中" };
   if (task.status !== "running" && task.status !== "queued") {
     return { ok: false, status: 409, error: "当前回合已经结束，消息会按排队顺序自动发送" };
@@ -139,7 +139,7 @@ export async function steerQueuedMessage(messageId: string): Promise<SteerQueued
     return {
       ok: false,
       status: 500,
-      error: `引导方向失败，消息仍在排队：${error instanceof Error ? error.message : String(error)}`,
+      error: `引导会话失败，消息仍在排队：${error instanceof Error ? error.message : String(error)}`,
     };
   }
 }

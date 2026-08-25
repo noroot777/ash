@@ -509,7 +509,7 @@ export async function continueTask(
     });
   } catch (err) {
     // 与 consumeSingleRun 的正常收流分支对称：有些 CLI 被 kill 后会让 parser 直接抛。
-    // 「引导方向」已经在 releaseTurn 后登记了同会话续送，这里不能再把旧回合结算成 failed。
+    // 「引导会话」已经在 releaseTurn 后登记了同会话续送，这里不能再把旧回合结算成 failed。
     if (takeSteered(taskId)) return true;
     const message = String(err instanceof Error ? err.message : err);
     // 基线的事先说：它在这一轮更早的时候就**已经落库**了（解析工作目录那一刻），说在

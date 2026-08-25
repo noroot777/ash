@@ -15,7 +15,7 @@ export type StopSettle = "canceled" | "paused";
 
 const handles = new Map<string, Set<Killable>>();
 const stopping = new Map<string, StopSettle>();
-// 「引导方向」与手动停止不是一回事：它只结束**当前回合**，任务本身保持 running，
+// 「引导会话」与手动停止不是一回事：它只结束**当前回合**，任务本身保持 running，
 // 旧回合也不能触发完成结算、队列推进或工作流推进。新方向已经作为 pending 消息落库，
 // 当前回合 releaseTurn 后立刻用同一 CLI 会话续送（见 task-steer.ts）。
 const steering = new Set<string>();
@@ -125,7 +125,7 @@ export function steerTask(taskId: string, whenIdle: () => void): boolean {
   return true;
 }
 
-/** 当前回合是否因「引导方向」被受控截断；只消费一次，不能漏给下一回合。 */
+/** 当前回合是否因「引导会话」被受控截断；只消费一次，不能漏给下一回合。 */
 export function takeSteered(taskId: string): boolean {
   return steering.delete(taskId);
 }
