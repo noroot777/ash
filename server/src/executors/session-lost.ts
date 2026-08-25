@@ -20,7 +20,7 @@
 import type { ResumeFields } from "./types.js";
 
 /** 各 CLI 拒绝恢复会话时的原文。加一条前先在真机上跑出那句话。 */
-const PATTERNS: readonly RegExp[] = [
+const LOST_PATTERNS: readonly RegExp[] = [
   // Claude Code 2.1.x：`claude --resume <uuid>` 找不到 transcript 时打在 stderr，
   // 同时把同一句塞进 stream-json 的 `result.errors[]`。
   /no conversation found with session id/i,
@@ -28,7 +28,54 @@ const PATTERNS: readonly RegExp[] = [
 
 /** 这条错误信息是不是「你给的会话 id 不存在」。 */
 export function isSessionLost(message: string): boolean {
-  return PATTERNS.some((re) => re.test(message));
+  return LOST_PATTERNS.some((re) => re.test(message));
+}
+
+const CODEX_POISON_PATTERNS: ReadonlyArray<{ pattern: RegExp; reason: string }> = [
+  {
+    pattern: /ignored world-state patch without a full snapshot\b/i,
+    reason: "Codex stderr 出现 `ignored world-state patch without a full snapshot`，恢复 thread 缺少工具所需的完整 world-state。",
+  },
+  {
+    pattern: /dropping turn-scoped item for unknown turn id\b/i,
+    reason: "Codex stderr 出现 `dropping turn-scoped item for unknown turn id`，恢复 thread 已无法对应旧回合。",
+  },
+  {
+    pattern: /failed to flush rollout after emitting terminal turn event:\s*thread\b[^\r\n]*\bnot found\b/i,
+    reason: "Codex stderr 出现 `failed to flush rollout after emitting terminal turn event: thread … not found`，这条 thread 的 rollout 已出现恢复风险。",
+  },
+];
+
+/** 真机要求 ash 作废恢复 thread 的 stderr 指纹。 */
+export function codexSessionPoisonReason(message: string): string | null {
+  return CODEX_POISON_PATTERNS.find(({ pattern }) => pattern.test(message))?.reason ?? null;
+}
+
+export function isCodexSessionPoisoned(message: string): boolean {
+  return codexSessionPoisonReason(message) !== null;
+}
+
+export type SessionResumeFault = "lost" | "poisoned";
+
+/** poisoned 优先：它即使伴随 exit 0 / turn.completed 也必须作废恢复字段。 */
+export function sessionResumeFault(message: string): SessionResumeFault | null {
+  if (isCodexSessionPoisoned(message)) return "poisoned";
+  if (isSessionLost(message)) return "lost";
+  return null;
+}
+
+/** 多条 error 事件合并时 poisoned 不能被更早的普通 lost 覆盖。 */
+export function mergeSessionResumeFault(
+  current: SessionResumeFault | null,
+  message: string,
+): SessionResumeFault | null {
+  const next = sessionResumeFault(message);
+  if (current === "poisoned" || next === null) return current;
+  return next;
+}
+
+export function shouldDropSession(fault: SessionResumeFault | null, exitStatus: number): boolean {
+  return fault === "poisoned" || (fault === "lost" && exitStatus !== 0);
 }
 
 /**
@@ -57,3 +104,18 @@ export const SESSION_LOST_NOTE =
   + "会话压根没建起来，也可能是 CLI 的会话记录被清过或换了机器/目录）。"
   + "ash 已经把这个失效的 id 清掉：再点一次运行会开一条**全新会话**，"
   + "之前的上下文不会带过来，任务正文和历史记录都还在。";
+
+export const SESSION_POISONED_NOTE =
+  "Codex 已在本轮 stderr 中报告这条 thread 的回合关联、world-state 或 rollout 落盘异常；"
+  + "即使进程 exit 0 且发出 turn.completed，也不能再把它当作可恢复会话；"
+  + "会话轮换不改变本回合真实的退出原因。"
+  + "ash 已清掉这条会话的恢复字段：下一次运行会从任务正文自动开启一条**全新会话**，"
+  + "旧对话与执行记录仍保留，但之前的上下文不会带过去。";
+
+export const SESSION_DROP_PERSISTENCE_FAILED_NOTE =
+  "ash 已停止本次进程继续使用这条失效的 CLI 会话；但恢复字段写入数据库失败，"
+  + "下一次重新开台时可能再次尝试旧会话。";
+
+export function sessionResumeFaultNote(fault: SessionResumeFault): string {
+  return fault === "poisoned" ? SESSION_POISONED_NOTE : SESSION_LOST_NOTE;
+}

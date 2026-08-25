@@ -17,7 +17,13 @@ import { bus } from "../bus.js";
 import { id, now } from "../util.js";
 import { trackRun, untrackRun, isCanceling, CanceledRun } from "../runs.js";
 import type { AgentExecutor } from "../executors/types.js";
-import { LOST_SESSION_PATCH, SESSION_LOST_NOTE, isSessionLost } from "../executors/session-lost.js";
+import {
+  LOST_SESSION_PATCH,
+  mergeSessionResumeFault,
+  sessionResumeFaultNote,
+  shouldDropSession,
+  type SessionResumeFault,
+} from "../executors/session-lost.js";
 import { RUNS_DIR } from "../paths.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
@@ -62,6 +68,7 @@ export interface Turn {
   conclusion?: string; // self-declared one-line 结论 (for the gate display)
   exit: number;
   error?: string;
+  notice?: string;
 }
 
 // Run one voice turn: stream events tagged with role+round, persist output +
@@ -90,11 +97,13 @@ export async function runTurn(args: {
   // A stop requested between turns: don't even spawn the next one.
   if (isCanceling(taskId)) throw new CanceledRun();
   let resumeCliId = args.resumeCliId;
+  let versionReplacementNotice: string | undefined;
   const affectedSessionVersion = await affectedCodexResumeVersion(executor.type, resumeCliId);
   if (affectedSessionVersion) {
     if (args.rowId) {
-      await announceAffectedSessionReplacement({
+      versionReplacementNotice = await announceAffectedSessionReplacement({
         taskId, sessionId: args.rowId, role, agentType: executor.type, version: affectedSessionVersion,
+        publish: false,
       });
       await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, args.rowId));
     }
@@ -140,6 +149,12 @@ export async function runTurn(args: {
   }
 
   recordTurnStart({ type: "duet.progress", taskId, round, speaker, phase: "start", startedAt: turnStart });
+  if (versionReplacementNotice) {
+    bus.publish({
+      type: "agent.event", taskId, sessionId: rowId, role, agentType: executor.type,
+      event: { kind: "system", text: versionReplacementNotice, at: now() },
+    });
+  }
 
   const runDir = join(RUNS_DIR, taskId);
   mkdirSync(runDir, { recursive: true });
@@ -149,19 +164,26 @@ export async function runTurn(args: {
   let text = "";
   let exit = 0;
   let errorMsg: string | undefined;
-  // CLI 否认过这条会话吗(见 executors/session-lost.ts)。duet 有自己的会话行与自己的
+  let noticeMsg = versionReplacementNotice;
+  // CLI 否认过这条会话，或 Codex stderr 证明 thread 已 poisoned 吗（见
+  // executors/session-lost.ts）。duet 有自己的会话行与自己的
   // 结算,不经过 single-run.ts —— 漏掉这里,duet 任务会一直 --resume 同一个死 id:
   // 库里那份喂下一次 /retry,返回值里那份喂本次运行的后续轮次,两处都要清。
-  let sessionLost = false;
+  let sessionFault: SessionResumeFault | null = null;
   // 本回合的执行过程,随回合一起落盘(见 TurnTraceEvent):刷新后时间线才展得开。
   const trace: TurnTraceEvent[] = [];
   const TRACE_CAP = 200;
   try {
     for await (const event of handle.events) {
+      const sessionNotice = event.kind === "error"
+        && event.scope === "session";
       const emittedEvent = event.kind === "usage"
         ? await recordSessionUsageEvent(rowId, event, executor.type, cliId)
         : event;
-      bus.publish({ type: "agent.event", taskId, sessionId: rowId, role, event: emittedEvent });
+      const publishedEvent = sessionNotice
+        ? { kind: "system" as const, text: event.message, at: now() }
+        : emittedEvent;
+      bus.publish({ type: "agent.event", taskId, sessionId: rowId, role, event: publishedEvent });
       if (event.kind === "session" && event.cliSessionId !== cliId) {
         cliId = event.cliSessionId;
         await db
@@ -177,9 +199,14 @@ export async function runTurn(args: {
         if (trace.length < TRACE_CAP) trace.push({ kind: "thinking", label: "思考过程", detail: event.text });
         out.write("〔思考〕" + event.text + "\n");
       } else if (event.kind === "error") {
-        errorMsg = event.message;
-        out.write("✕ " + event.message + "\n");
-        if (isSessionLost(event.message)) sessionLost = true;
+        sessionFault = mergeSessionResumeFault(sessionFault, event.message);
+        if (sessionNotice) {
+          noticeMsg = `${noticeMsg ?? ""}\n${event.message}`.trim();
+          out.write("⚠ " + event.message + "\n");
+        } else {
+          errorMsg = `${errorMsg ?? ""}\n${event.message}`.trim();
+          out.write("✕ " + event.message + "\n");
+        }
       } else if (event.kind === "context") {
         await setSessionContext(rowId, event.context);
       } else if (event.kind === "done") {
@@ -209,13 +236,18 @@ export async function runTurn(args: {
   }
   const endIso = now();
   const durationMs = Math.max(0, Date.parse(endIso) - Date.parse(turnStart));
-  // CLI 否认了这条会话:清掉失效 id 和由它派生的恢复命令,并把这件事写进本轮的错误
-  // 文本 —— 时间线和 transcript 都取自 errorMsg,不写进去用户只看得到一行英文,不知道
-  // 下一次重试会是全新会话(**上下文不带过来**)。
-  const dropSession = sessionLost && exit !== 0;
+  // CLI 否认或判定 poisoned：清掉失效 id 和由它派生的恢复命令，并把这件事写进本轮通知。
+  // 会话轮换本身不等于本轮失败：Codex 可能已经 exit 0 且产出了完整正文，若塞进 error，
+  // duet 的 failed() 会错误中止整场讨论。
+  const dropSession = shouldDropSession(sessionFault, exit);
   if (dropSession) {
-    errorMsg = `${errorMsg ?? ""}\n${SESSION_LOST_NOTE}`.trim();
-    out.write("✕ " + SESSION_LOST_NOTE + "\n");
+    const note = sessionResumeFaultNote(sessionFault!);
+    noticeMsg = `${noticeMsg ?? ""}\n${note}`.trim();
+    out.write("⚠ " + note + "\n");
+    bus.publish({
+      type: "agent.event", taskId, sessionId: rowId, role,
+      event: { kind: "system", text: note, at: now() },
+    });
   }
   // 关流放在**所有** out.write 之后。写已 end 的流不是静默丢弃,是 stream 上一个没人听的
   // 'error' 事件('ERR_STREAM_WRITE_AFTER_END'),会当场把整个 server 打崩 —— 而且只在
@@ -231,11 +263,11 @@ export async function runTurn(args: {
     })
     .where(eq(sessions.id, rowId));
   // Persist the turn so a reloaded duet can rebuild its timeline (no live
-  // events). Includes the error so a failed turn stays visibly failed on reload.
+  // events). Includes errors and non-fatal notices so reload preserves the same meaning as live SSE.
   try {
     appendFileSync(
       join(runDir, "transcript.jsonl"),
-      JSON.stringify({ ...args.extra, round, speaker, text, raised, agrees, conclusion, error: errorMsg, startedAt: turnStart, at: endIso, durationMs, events: trace }) + "\n",
+      JSON.stringify({ ...args.extra, round, speaker, text, raised, agrees, conclusion, error: errorMsg, notice: noticeMsg, startedAt: turnStart, at: endIso, durationMs, events: trace }) + "\n",
     );
   } catch {
     /* best effort */
@@ -246,5 +278,5 @@ export async function runTurn(args: {
   if (isCanceling(taskId)) throw new CanceledRun();
   // cliId 清成空串,调用方的 `resumeCliId: ... || undefined` 就会退化成「开新会话」——
   // 本次运行的后续轮次也不会再拿这个死 id 去 --resume。
-  return { rowId, cliId: dropSession ? "" : cliId, text, raised, agrees, conclusion, exit, error: errorMsg };
+  return { rowId, cliId: dropSession ? "" : cliId, text, raised, agrees, conclusion, exit, error: errorMsg, notice: noticeMsg };
 }

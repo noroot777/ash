@@ -76,6 +76,7 @@
     "test:workflow-gate": "tsx scripts/test-workflow-gate.ts",
     "test:free-workflow": "tsx scripts/test-free-workflow.ts && tsx scripts/test-free-review-reservation.ts && tsx scripts/test-free-workflow-hardening.ts && tsx scripts/test-free-workflow-lifecycle.ts && tsx scripts/test-post-merge-review.ts",
     "test:agent-spawn-guard": "tsx scripts/test-agent-spawn-guard.ts",
+    "test:agent-cleanup": "tsx scripts/test-agent-descendant-cleanup.ts",
     "test:verify-override": "tsx scripts/test-verify-override.ts",
     "test:preview-log": "tsx scripts/test-preview-log.ts",
     "test:preview-process": "tsx scripts/test-preview-process.ts",

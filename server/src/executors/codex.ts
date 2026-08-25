@@ -7,10 +7,15 @@ import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandl
 import { openCodexResident } from "./codex-resident.js";
 import { readCodexContext } from "./codex-rollout.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
-import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
+import { cleanupAfterRun, spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
 import { relayApi } from "../llm.js";
 import { protocolConverterBaseUrl } from "../openai-converter/common.js";
-import { formatFailureForTimeline, RunTraceRecorder, type RunTracePaths } from "./diagnostics.js";
+import {
+  formatFailureForTimeline,
+  formatSessionPoisonForTimeline,
+  RunTraceRecorder,
+  type RunTracePaths,
+} from "./diagnostics.js";
 import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
 
 // 供应商的 key 走环境变量,不进命令行 —— `-c` 参数会原样进 commandLine,而后者存进
@@ -128,6 +133,7 @@ export class CodexExecutor implements AgentExecutor {
         lifecycle.stopRequested = true;
         killChild(child);
       },
+      cleanup: () => cleanupAfterRun(child),
       detached: detachedInfo(child),
     };
   }
@@ -147,6 +153,7 @@ export class CodexExecutor implements AgentExecutor {
         lifecycle.stopRequested = true;
         child.kill();
       },
+      cleanup: () => cleanupAfterRun(child),
       detached: detachedInfo(child),
     };
   }
@@ -278,6 +285,12 @@ export async function* parseCodexStream(
     });
     const failure = formatFailureForTimeline(diagnostics);
     if (failure && !lifecycle.stopRequested) push({ kind: "error", message: failure });
+    // poisoned 是恢复会话的状态，不是本回合的退出原因：手停 / turn.failed / spawn
+    // error 仍保留自己的结论，同时另发一条诊断让结算方只清恢复字段。
+    const sessionPoison = formatSessionPoisonForTimeline(diagnostics);
+    if (sessionPoison) {
+      push({ kind: "error", message: sessionPoison, scope: "session" });
+    }
     push({ kind: "done", exitStatus: opts.exitStatus });
     resolve?.();
     resolve = null;

@@ -32,7 +32,13 @@ import { GenericCliExecutor, hasTrustedSessionId, interactiveResumeInner } from 
 import { execBinFor, probeBins } from "../src/executors/bin-probe.js";
 import { resumeCommandFor } from "../src/executors/resume.js";
 import { normalizeProfileExtraArgs } from "../src/executors/args.js";
-import { installCommandFor, registrationBlockReason, versionWarningFor } from "../src/detect.js";
+import {
+  detectKnownClis,
+  detectLocalAgents,
+  installCommandFor,
+  registrationBlockReason,
+  versionWarningFor,
+} from "../src/detect.js";
 import type { CliSpec } from "../src/executors/catalog/types.js";
 import { IS_WINDOWS } from "../src/platform.js";
 
@@ -81,7 +87,11 @@ function writeVersionStub(dir: string, name: string, version: string): string {
     // 「检测本地智能体」无关,所以这条不能带完整升级提示(否则没检测的用户也被提示了)。
     assert.doesNotMatch(blocked, /npm install|0\.148\.0/, "拒绝理由不能提前泄出升级文案");
     assert.match(blocked, /检测本地智能体/, "拒绝理由要把人指回检测入口");
-    assert.match(versionWarningFor("codex", "codex-cli 0.147.8") ?? "", /npm install .*@openai\/codex/, "升级文案只走检测结果");
+    const catalogCodex = (await detectKnownClis()).find((cli) => cli.type === "codex");
+    assert.match(catalogCodex?.versionWarning ?? "", /npm install .*@openai\/codex/, "升级文案只走检测结果");
+    const backgroundCodex = (await detectLocalAgents()).find((cli) => cli.type === "codex");
+    assert.ok(backgroundCodex, "后台执行器探测必须包含 Codex");
+    assert.equal("versionWarning" in backgroundCodex, false, "用户手动检测前不能从后台探测泄露升级提示");
     writeVersionStub(stubDir, "codex", "codex-cli 0.149.1");
     assert.equal(await registrationBlockReason("codex"), undefined, "非 0.147.x 不能拦注册");
     assert.equal(await registrationBlockReason("claude"), undefined, "只限制 Codex");

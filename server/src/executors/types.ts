@@ -25,6 +25,8 @@ export interface RunHandle {
   commandLine: string;
   events: AsyncIterable<AgentEvent>;
   kill(): void;
+  /** 事件流结束后回收 CLI 甩出去的后台后代；没有真实进程的失败句柄可省略。 */
+  cleanup?: () => Promise<void>;
   // 只有走了 detach 的这一轮才有：agent 的 pid + 已消费到的字节位置。
   // 调用方把它们存进 sessions，重启后据此找回并接管这个还活着的进程。
   detached?: { pid: number; committed: () => number };
@@ -56,6 +58,8 @@ export interface ResidentHandle {
   // 插话要先 interrupt 再 send 才有 codex 那种当场转向的手感(见 team/session.ts)。
   // codex 侧没有原生打断,interrupt 就是杀掉当前回合的进程。
   interrupt(): void;
+  /** 忘掉恢复 id；Codex 常驻的下一回合会 fresh，进程级常驻执行器可不实现。 */
+  dropSession?(): void;
   close(): void; // 优雅收尾:关 stdin,等它自己退出
   kill(): void; // 硬杀,走 killChild 三层击杀
 }

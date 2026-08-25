@@ -5,7 +5,7 @@ import { cliConfigOverrideEnvPatch } from "@ash/shared/cli-overrides";
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
-import { killChild, redactSecrets, resumeFor } from "./spawn.js";
+import { cleanupAfterRun, killChild, redactSecrets, resumeFor } from "./spawn.js";
 import { textParser } from "./catalog/parsers.js";
 import { valueArgs, type CliSpec } from "./catalog/types.js";
 
@@ -71,6 +71,7 @@ export class GenericCliExecutor implements AgentExecutor {
         lifecycle.stopRequested = true;
         killChild(child);
       },
+      cleanup: () => cleanupAfterRun(child),
       detached: detachedInfo(child),
     };
   }
@@ -86,6 +87,7 @@ export class GenericCliExecutor implements AgentExecutor {
         lifecycle.stopRequested = true;
         child.kill();
       },
+      cleanup: () => cleanupAfterRun(child),
       detached: detachedInfo(child),
     };
   }

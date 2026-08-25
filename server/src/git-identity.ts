@@ -1,5 +1,4 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execFileText } from "./exec.js";
 import { expandHome, isGitRepo } from "./git.js";
 import { ScmOperationError } from "./scm-paths.js";
 
@@ -17,7 +16,7 @@ import { ScmOperationError } from "./scm-paths.js";
 // HTTPS 的用户名 / 令牌**不在**这里 —— 那个不能进仓库 config（明文、被所有 worktree 和
 // agent 读得到、`git config --list` 一打就出来），见 `git-credentials.ts`。
 
-const exec = promisify(execFile);
+const exec = execFileText;
 const CONFIG_TIMEOUT_MS = 15_000;
 
 /** 一个配置项的现值，外加「这个值是这个仓库自己设的，还是从全局/系统继承来的」。 */

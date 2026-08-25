@@ -97,6 +97,7 @@ function TurnBubble({
         <ExecutionDetails events={turn.events} running={!turn.done} />
         {!turn.done && !turn.text && !turn.events.length && <p className="duet-thinking">{side === "synthesis" ? "正在把讨论成果整理成共同方案…" : "正在组织本轮观点…"}</p>}
         {turn.text && <MarkdownBody text={turn.text} />}
+        {turn.notice && <p className="duet-turn-notice">{turn.notice}</p>}
         {turn.error && <p className="duet-turn-error">{turn.error}</p>}
       </article>
     </div>

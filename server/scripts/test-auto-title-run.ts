@@ -77,6 +77,7 @@ async function runFlow(taskId: string, steps: Step[]) {
   const closed = new Promise<void>((resolve) => out.on("close", resolve));
 
   const live: ServerEvent[] = [];
+  let cleanupCalls = 0;
   const unsubscribe = bus.subscribe((event) => live.push(event));
   try {
     await consumeSingleRun({
@@ -89,6 +90,7 @@ async function runFlow(taskId: string, steps: Step[]) {
         sessionId: sessId,
         commandLine: "fake",
         kill() {},
+        async cleanup() { cleanupCalls += 1; },
         events: (async function* () {
           for (const step of steps) {
             if (typeof step === "function") await step();
@@ -105,6 +107,7 @@ async function runFlow(taskId: string, steps: Step[]) {
     unsubscribe();
   }
   await closed;
+  assert.equal(cleanupCalls, 1, "一次性回合收流后必须恰好清扫一次逃逸后代");
 
   const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
   const traceRaw = readFileSync(join(RUNS_DIR, taskId, `${sessId}.trace.jsonl`), "utf8");

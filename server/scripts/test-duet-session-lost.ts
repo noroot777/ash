@@ -14,7 +14,8 @@
  * 跑:ASH_DB=/tmp/t.db npm -w server run test:duet-session-lost
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -26,11 +27,15 @@ requireTmpDb("test-duet-session-lost");
 const stage = mkdtempSync(join(tmpdir(), "ash-duet-session-lost-"));
 process.env.ASH_RUNS_DIR = join(stage, "runs");
 
-const [{ db, ensureSchema }, schema, duet] = await Promise.all([
+const [{ db, ensureSchema }, schema, duet, codex, busModule] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/duet/turn.js"),
+  import("../src/executors/codex.js"),
+  import("../src/bus.js"),
 ]);
+const { parseCodexStream } = codex;
+const { bus } = busModule;
 const { projects, tasks, sessions } = schema;
 await ensureSchema();
 
@@ -47,6 +52,10 @@ const taskId = "duet-session-lost";
 const DEAD_ID = "6f8c7cdd-b820-416e-a4f3-96b516d6a8e2";
 // 真机原话(claude 2.1.220 对着一个不存在的 transcript 跑 `--resume`)。
 const REAL = `No conversation found with session ID: ${DEAD_ID}`;
+const POISONED_ID = "01a03415-e32e-72d2-8510-26a3beb2832f";
+const POISONED =
+  "Codex 会话诊断：session=poisoned_session；"
+  + "Codex stderr 出现 `dropping turn-scoped item for unknown turn id`，恢复 thread 已无法对应旧回合。";
 
 await db.insert(projects).values({ id: "p", name: "p", repoPath: stage, apiKeys: null, createdAt: at });
 await db.insert(tasks).values({
@@ -113,8 +122,199 @@ ok("库里的 id + 三件套恢复命令都清了");
 // ④ 返回值那份:喂本次运行的后续轮次(ctx.A.cliId → 下一轮的 resumeCliId)。只清库不清
 // 它,同一次 duet 跑下去照样撞同一堵墙。
 assert.equal(turn.cliId, "", "返回值里的 cliId 没清,后续轮次会接着 --resume 死 id");
-assert.ok(turn.error?.includes("已经把这个失效的 id 清掉"), "错误文本里要带上说明(时间线/transcript 都取自它)");
+assert.ok(turn.error?.includes(REAL), "CLI 的真实失败要保留在错误文本里");
+assert.ok(turn.notice?.includes("已经把这个失效的 id 清掉"), "会话轮换说明要与执行错误分开持久化");
 ok("返回值里的 cliId 也清了,后续轮次会开新会话");
+
+// 真机 Codex 的 poisoned thread 会同时给 turn.completed / exit 0。不能沿用上面的
+// 非零退出前提：诊断 error 本身就是恢复状态已损坏的证据，四列照样清，并持久解释。
+const poisonedTaskId = "duet-session-poisoned";
+await db.insert(tasks).values({
+  id: poisonedTaskId, projectId: "p", groupId: null, parentId: null, title: "会话毒化", body: "", mode: "duet",
+  status: "running", labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: null, executorId: null,
+  autoTitle: false, duet: null, team: null, scheduleId: null, createdAt: at, updatedAt: at,
+  useWorktree: false, worktreeBase: null, originTaskId: null,
+});
+const poisonedExecutor = {
+  type: "codex",
+  label: "codex@stub",
+  run: () => ({
+    sessionId: POISONED_ID,
+    commandLine: `codex exec resume ${POISONED_ID}`,
+    events: (async function* () {
+      yield { kind: "error", message: POISONED, scope: "session" };
+      yield { kind: "text", text: "这一轮正文已经完整产出。" };
+      yield { kind: "done", exitStatus: 0 };
+    })(),
+    kill() {},
+  }),
+  resumeCommand: () => `codex exec resume ${POISONED_ID}`,
+  resumeFields: () => ({ resumeCommand: `codex exec resume ${POISONED_ID}`, resumeEnv: "K=x", resumeArgs: "--json" }),
+} as unknown as Parameters<typeof duet.runTurn>[0]["executor"];
+const poisonedTurn = await duet.runTurn({
+  taskId: poisonedTaskId, role: "voiceA", speaker: "A", round: 1, executor: poisonedExecutor,
+  prompt: "继续旧 thread", cwd: stage, resumeCliId: POISONED_ID,
+});
+const [poisonedRow] = await db.select().from(sessions).where(eq(sessions.id, poisonedTurn.rowId));
+assert.equal(poisonedRow.cliSessionId, null, "poisoned exit 0 仍残留 cli_session_id");
+assert.equal(poisonedRow.resumeCommand, null, "poisoned exit 0 没清 resume_command");
+assert.equal(poisonedRow.resumeEnv, null, "poisoned exit 0 没清 resume_env");
+assert.equal(poisonedRow.resumeArgs, null, "poisoned exit 0 没清 resume_args");
+assert.equal(poisonedRow.exitStatus, 0, "poisoned 判断不能篡改 Codex 的真实 exit 0");
+assert.equal(poisonedTurn.cliId, "", "poisoned exit 0 的返回值仍会让下一轮 resume");
+assert.equal(poisonedTurn.error, undefined, "成功产出正文的 poisoned 回合不应被标成执行失败");
+assert.match(poisonedTurn.notice ?? "", /下一次运行会从任务正文自动开启一条\*\*全新会话\*\*/);
+const poisonedMdPath = join(process.env.ASH_RUNS_DIR!, poisonedTaskId, `${poisonedTurn.rowId}.md`);
+let poisonedMd = "";
+for (let i = 0; i < 100 && !poisonedMd.includes("下一次运行会从任务正文自动开启"); i++) {
+  try { poisonedMd = readFileSync(poisonedMdPath, "utf8"); } catch { /* 还没建出来 */ }
+  if (!poisonedMd.includes("下一次运行会从任务正文自动开启")) await new Promise((r) => setTimeout(r, 20));
+}
+assert.match(poisonedMd, /即使进程 exit 0 且发出 turn\.completed/);
+ok("Codex poisoned stderr 即使 exit 0 也清恢复字段，但完整回合保持成功并提示下一次自动 fresh");
+
+// 0.147 版本守卫发生在回合 start 之前。旧实现虽然把说明写进 session .md，却把实时
+// system 事件发在 duet 回合创建之前，页面接不住；transcript 也没有 notice，刷新后仍消失。
+const versionTaskId = "duet-affected-version";
+const versionRowId = "duet-affected-version-row";
+const versionThreadId = "01a14700-e32e-72d2-8510-26a3beb2832f";
+const versionFreshId = "01a14800-e32e-72d2-8510-26a3beb2832f";
+await db.insert(tasks).values({
+  id: versionTaskId, projectId: "p", groupId: null, parentId: null, title: "受影响版本", body: "", mode: "duet",
+  status: "running", labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: null, executorId: null,
+  autoTitle: false, duet: null, team: null, scheduleId: null, createdAt: at, updatedAt: at,
+  useWorktree: false, worktreeBase: null, originTaskId: null,
+});
+await db.insert(sessions).values({
+  id: versionRowId, taskId: versionTaskId, role: "voiceA", agentType: "codex", executor: "codex@old",
+  cwd: stage, cliSessionId: versionThreadId, resumeCommand: `codex exec resume ${versionThreadId}`,
+  resumeEnv: null, resumeArgs: "--json", commandLine: `codex exec resume ${versionThreadId}`,
+  startedAt: at, turnStartedAt: at, activeMs: 0,
+});
+const codexHome = join(stage, "codex-home");
+const rolloutDir = join(codexHome, "sessions", "2026", "08", "25");
+mkdirSync(rolloutDir, { recursive: true });
+writeFileSync(
+  join(rolloutDir, `rollout-2026-08-25T10-00-00-${versionThreadId}.jsonl`),
+  JSON.stringify({ type: "session_meta", payload: { session_id: versionThreadId, cli_version: "0.147.0" } }) + "\n",
+);
+let versionRunSession: string | undefined = "not-called";
+const versionExecutor = {
+  type: "codex",
+  label: "codex@stub",
+  run: (opts: { sessionId?: string }) => {
+    versionRunSession = opts.sessionId;
+    return {
+      sessionId: versionFreshId,
+      commandLine: `codex exec ${versionFreshId}`,
+      events: (async function* () {
+        yield { kind: "text", text: "已在全新会话完成本轮。" };
+        yield { kind: "done", exitStatus: 0 };
+      })(),
+      kill() {},
+    };
+  },
+  resumeCommand: (_cwd: string, sid: string) => `codex exec resume ${sid}`,
+  resumeFields: (_cwd: string, sid: string) => ({ resumeCommand: `codex exec resume ${sid}`, resumeEnv: null, resumeArgs: "--json" }),
+} as unknown as Parameters<typeof duet.runTurn>[0]["executor"];
+const originalCodexHome = process.env.CODEX_HOME;
+process.env.CODEX_HOME = codexHome;
+const liveEvents: any[] = [];
+const unsubscribe = bus.subscribe((event) => liveEvents.push(event));
+const versionTurn = await (async () => {
+  try {
+    return await duet.runTurn({
+      taskId: versionTaskId, role: "voiceA", speaker: "A", round: 1, executor: versionExecutor,
+      prompt: "继续旧 thread", cwd: stage, rowId: versionRowId, resumeCliId: versionThreadId,
+    });
+  } finally {
+    unsubscribe();
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
+  }
+})();
+assert.equal(versionRunSession, undefined, "0.147 会话仍被传给执行器 resume");
+assert.equal(versionTurn.error, undefined, "版本替换说明不能把成功回合判成失败");
+assert.match(versionTurn.notice ?? "", /受影响的 0\.147\.0.*本轮不再续用/s, "版本替换说明没有进入本回合 notice");
+const versionTranscript = readFileSync(join(process.env.ASH_RUNS_DIR!, versionTaskId, "transcript.jsonl"), "utf8");
+assert.match(versionTranscript, /受影响的 0\.147\.0/, "版本替换说明没有落进 duet transcript，刷新后会消失");
+const versionStart = liveEvents.findIndex((event) => event.type === "duet.progress" && event.taskId === versionTaskId && event.phase === "start");
+const versionNotice = liveEvents.findIndex((event) => event.type === "agent.event" && event.taskId === versionTaskId
+  && event.event.kind === "system" && /受影响的 0\.147\.0/.test(event.event.text));
+assert.ok(versionStart >= 0 && versionNotice > versionStart, "版本替换 system 事件仍发在 duet 回合创建之前");
+ok("0.147 会话替换说明实时可见并随 transcript 持久化");
+
+// 真失败与轮换信号同场出现：真实失败文本本身也可能含 poisoned 指纹（nonzero_exit
+// 回落到 stderrTail 的真机路径）。分流必须看执行器给出的 scope，不能再从文本猜。
+const mixedTaskId = "duet-session-poisoned-with-failure";
+await db.insert(tasks).values({
+  id: mixedTaskId, projectId: "p", groupId: null, parentId: null, title: "失败与轮换并存", body: "", mode: "duet",
+  status: "running", labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: null, executorId: null,
+  autoTitle: false, duet: null, team: null, scheduleId: null, createdAt: at, updatedAt: at,
+  useWorktree: false, worktreeBase: null, originTaskId: null,
+});
+const mixedExecutor = {
+  ...poisonedExecutor,
+  run: () => ({
+    sessionId: POISONED_ID,
+    commandLine: `codex exec resume ${POISONED_ID}`,
+    events: (async function* () {
+      yield { kind: "error", message: `执行诊断：${POISONED}` };
+      yield { kind: "error", message: POISONED, scope: "session" };
+      yield { kind: "done", exitStatus: 1 };
+    })(),
+    kill() {},
+  }),
+} as unknown as Parameters<typeof duet.runTurn>[0]["executor"];
+const mixedTurn = await duet.runTurn({
+  taskId: mixedTaskId, role: "voiceA", speaker: "A", round: 1, executor: mixedExecutor,
+  prompt: "继续旧 thread", cwd: stage, resumeCliId: POISONED_ID,
+});
+assert.match(mixedTurn.error ?? "", /执行诊断：.*dropping turn-scoped item/, "含指纹的真实失败被误分流或吞掉");
+assert.match(mixedTurn.notice ?? "", /下一次运行会从任务正文自动开启一条\*\*全新会话\*\*/);
+ok("真实失败原因与会话轮换正交保存");
+
+// 真执行器解析器 → 真 duet 结算：防止两端各自测试都绿，scope 在中间传递时却丢掉。
+const parsedTaskId = "duet-parsed-poisoned-failure";
+const parsedThreadId = "01a14900-e32e-72d2-8510-26a3beb2832f";
+await db.insert(tasks).values({
+  id: parsedTaskId, projectId: "p", groupId: null, parentId: null, title: "真实解析链", body: "", mode: "duet",
+  status: "running", labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: null, executorId: null,
+  autoTitle: false, duet: null, team: null, scheduleId: null, createdAt: at, updatedAt: at,
+  useWorktree: false, worktreeBase: null, originTaskId: null,
+});
+const parsedStderr = "2026-08-25 ERROR dropping turn-scoped item for unknown turn id 01a14900\n".repeat(40);
+const parsedExecutor = {
+  type: "codex",
+  label: "codex@parsed-stub",
+  run: () => {
+    const stdout = JSON.stringify({ type: "thread.started", thread_id: parsedThreadId }) + "\n";
+    const child = spawn(process.execPath, ["-e", `process.stdout.write(${JSON.stringify(stdout)});process.stderr.write(${JSON.stringify(parsedStderr)});process.exitCode=1;`], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    child.stdin?.end();
+    return {
+      sessionId: parsedThreadId,
+      commandLine: `codex exec resume ${parsedThreadId}`,
+      events: parseCodexStream(child as any, undefined, { stopRequested: false }, {
+        initialThreadId: parsedThreadId,
+        contextNotBeforeMs: Date.now(),
+      }),
+      kill: () => child.kill(),
+    };
+  },
+  resumeCommand: (_cwd: string, sid: string) => `codex exec resume ${sid}`,
+  resumeFields: (_cwd: string, sid: string) => ({ resumeCommand: `codex exec resume ${sid}`, resumeEnv: null, resumeArgs: "--json" }),
+} as unknown as Parameters<typeof duet.runTurn>[0]["executor"];
+const parsedTurn = await duet.runTurn({
+  taskId: parsedTaskId, role: "voiceA", speaker: "A", round: 1, executor: parsedExecutor,
+  prompt: "继续 poisoned thread", cwd: stage, resumeCliId: parsedThreadId,
+});
+assert.match(parsedTurn.error ?? "", /执行诊断：.*dropping turn-scoped item/s, "真解析器的失败摘要在 duet 中丢失");
+assert.match(parsedTurn.notice ?? "", /session=poisoned_session/, "真解析器的 session scope 没进入 duet notice");
+assert.equal(parsedTurn.cliId, "", "真解析链没有作废 poisoned thread");
+assert.ok((parsedTurn.error?.length ?? 9999) < 1800, `duet 上屏失败摘要仍过长:${parsedTurn.error?.length}`);
+ok("真 Codex 解析器到 duet 结算保留失败、轮换 scope 与长度上限");
 
 // ⑤ 清完之后的下一轮:开出来的新会话 id 必须**落库**。
 // 只清不写回,库里就停在「resume_command 指向新会话、cli_session_id 却是空」的自相矛盾

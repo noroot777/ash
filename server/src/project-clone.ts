@@ -1,5 +1,3 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { existsSync, mkdirSync, rmSync, rmdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 import type { Hono } from "hono";
@@ -7,6 +5,7 @@ import type { ProjectView } from "@ash/shared";
 import { repoNameFromUrl } from "@ash/shared/repo-url";
 import { db } from "./db/index.js";
 import { projects } from "./db/schema.js";
+import { execFileText } from "./exec.js";
 import { id, now } from "./util.js";
 import { expandHome, gitError, isEmptyDir, projectHealthLight, repoKey, tidyRepoPath } from "./git.js";
 import { credentialInjection, saveProjectGitCredential } from "./git-credentials.js";
@@ -31,7 +30,7 @@ import { fail } from "./project-dir.js";
 //    上、项目行又要等克隆成功才写 —— 先有鸡还是先有蛋。解法是让调用方把用户现填的那对
 //    直接递进来：克隆时当场注入，成功之后再存到刚建出来的项目上（见 `saveCredential`）。
 
-const exec = promisify(execFile);
+const exec = execFileText;
 
 /** 克隆可能很慢（大仓库 + 慢网络），但也不能没有上限：请求挂着的是一个 HTTP 连接。 */
 const CLONE_TIMEOUT_MS = 15 * 60_000;

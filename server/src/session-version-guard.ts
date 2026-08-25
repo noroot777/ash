@@ -31,6 +31,7 @@ export async function announceAffectedSessionReplacement(args: {
   role: SessionRole;
   agentType: AgentType;
   version: string;
+  publish?: boolean;
 }): Promise<string> {
   const at = now();
   const text = affectedCodexSessionReplacementNote(args.version);
@@ -41,13 +42,15 @@ export async function announceAffectedSessionReplacement(args: {
   writeTurn(out, { t: "system", agent: args.agentType, text }, at);
   out.end();
   await finished(out);
-  bus.publish({
-    type: "agent.event",
-    taskId: args.taskId,
-    sessionId: args.sessionId,
-    role: args.role,
-    agentType: args.agentType,
-    event: { kind: "system", text, at },
-  });
+  if (args.publish !== false) {
+    bus.publish({
+      type: "agent.event",
+      taskId: args.taskId,
+      sessionId: args.sessionId,
+      role: args.role,
+      agentType: args.agentType,
+      event: { kind: "system", text, at },
+    });
+  }
   return text;
 }
