@@ -14,6 +14,7 @@ import { HandoffDialogHeader, HandoffRouteCard } from "../task-detail/HandoffDia
 import {
   bulkPreflightAllowsRun,
   bulkPreflightIssue,
+  bulkTargetProjectId,
   outboundTasksForTarget,
   partitionBulkHandoffTasks,
 } from "./bulkHandoff.ts";
@@ -217,7 +218,7 @@ function BulkHandoffDialog({
   };
 
   const preflightAll = async () => {
-    if (!firstProbe || !projectId || busy) return;
+    if (!firstProbe || (needsBatchProject && !projectId) || busy) return;
     setPhase("preflight");
     setError(null);
     // 上次有失败时必须真正重探全部任务，不能继续复用旧 probe；否则目标项目刚修好，
@@ -242,7 +243,8 @@ function BulkHandoffDialog({
           taskTarget = resolved.taskTarget;
           probe = resolved.probe;
         }
-        const issue = bulkPreflightIssue(task, probe, projectId);
+        const targetProjectId = bulkTargetProjectId(task, probe, projectId);
+        const issue = bulkPreflightIssue(task, probe, targetProjectId);
         if (issue) throw new Error(issue);
         resolvedTargets.set(task.id, taskTarget);
         checked.set(task.id, probe);
@@ -261,7 +263,7 @@ function BulkHandoffDialog({
 
   const run = async () => {
     const readyTasks = eligible.filter((task) => preflights.has(task.id) && taskTargets.has(task.id));
-    if (!projectId || busy || !readyTasks.length || !checkedAll) return;
+    if ((needsBatchProject && !projectId) || busy || !readyTasks.length || !checkedAll) return;
     setPhase("transferring");
     const successes: HandoffExportResult[] = [];
     const failures: TransferFailure[] = [...preflightFailures];
@@ -270,9 +272,12 @@ function BulkHandoffDialog({
       setProgress({ done: index, total: readyTasks.length, title: task.title });
       try {
         const taskTarget = taskTargets.get(task.id) ?? await targetForBulkTask(task, target);
+        const probe = preflights.get(task.id);
+        const targetProjectId = probe ? bulkTargetProjectId(task, probe, projectId) : projectId;
+        if (!targetProjectId) throw new Error("目标项目不可用，请重新检查");
         successes.push(await api.handoffTask(task.id, {
           targetUrl: taskTarget.url,
-          targetProjectId: projectId,
+          targetProjectId,
           targetName: taskTarget.name,
           autoResume,
         }));
@@ -301,6 +306,27 @@ function BulkHandoffDialog({
   }, [preflights]);
   const readyTasks = eligible.filter((task) => preflights.has(task.id) && taskTargets.has(task.id));
   const readyRunningCount = readyTasks.filter((task) => task.status === "running" || task.status === "queued").length;
+  const ordinaryReturnProjects = useMemo(() => {
+    const taskById = new Map(eligible.map((task) => [task.id, task]));
+    const unique = new Map<string, TaskScopedHandoffPreflightResult["projects"][number]>();
+    for (const [taskId, probe] of preflights) {
+      const task = taskById.get(taskId);
+      if (task?.handoff?.direction !== "in" || probe.taskScopedReturn) continue;
+      for (const candidate of probe.projects) unique.set(candidate.id, candidate);
+    }
+    return [...unique.values()];
+  }, [eligible, preflights]);
+  const hasOrdinaryReturn = [...preflights.entries()].some(([taskId, probe]) =>
+    eligible.find((task) => task.id === taskId)?.handoff?.direction === "in" && !probe.taskScopedReturn);
+  const needsBatchProject = !returnOnly || hasOrdinaryReturn;
+  const projectOptions = returnOnly ? ordinaryReturnProjects : firstProbe?.projects ?? [];
+  const selectedProject = projectOptions.find((candidate) => candidate.id === projectId) ?? null;
+  const fixedReturnProjectCount = new Set([...preflights.entries()].flatMap(([taskId, probe]) => {
+    const task = eligible.find((candidate) => candidate.id === taskId);
+    return task?.handoff?.direction === "in" && probe.taskScopedReturn
+      ? probe.projects.slice(0, 1).map((candidate) => candidate.id)
+      : [];
+  })).size;
 
   const confirm = () => {
     if (result) { onClose(); return; }
@@ -327,8 +353,6 @@ function BulkHandoffDialog({
     : returnOnly
       ? `把本机「${project.name}」项目中 ${eligible.length} 个接入任务顺序移回「${target.name}」。`
       : `把本机「${project.name}」项目中 ${eligible.length} 个可接力任务顺序移到「${target.name}」。`;
-
-  const selectedProject = firstProbe?.projects.find((candidate) => candidate.id === projectId) ?? null;
 
   return createPortal(
     <div
@@ -363,7 +387,9 @@ function BulkHandoffDialog({
             <HandoffRouteCard
               sourcePath={`${project.name} · ${eligible.length} 个任务`}
               targetName={target.name}
-              targetPath={selectedProject?.repoPath ?? target.url}
+              targetPath={returnOnly && !hasOrdinaryReturn && fixedReturnProjectCount > 0
+                ? `按任务归位 · ${fixedReturnProjectCount} 个原项目`
+                : selectedProject?.repoPath ?? target.url}
             />
             <p className="handoff-bulk-lede">{message}</p>
             <div className="handoff-bulk-body">
@@ -393,14 +419,20 @@ function BulkHandoffDialog({
             <span>{firstProbe.peer.encrypted ? "仓库和会话将加密传输。" : "这次会明文传输整个仓库和会话历史，同网段抓包可读取内容。"}</span>
           </p>
         )}
-        {firstProbe && !blocked && (
+        {firstProbe && !blocked && needsBatchProject && (
           <label className="handoff-bulk-field">
             <span>目标项目（主机 {firstProbe.target.host}）</span>
             <select value={projectId} disabled={busy} onChange={(event) => { setProjectId(event.target.value); setCheckedAll(false); setPreflightFailures([]); }}>
               <option value="">选择目标项目</option>
-              {firstProbe.projects.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}（{candidate.repoPath}{candidate.isRepo ? "" : " · 非 git"}）</option>)}
+              {projectOptions.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}（{candidate.repoPath}{candidate.isRepo ? "" : " · 非 git"}）</option>)}
             </select>
           </label>
+        )}
+        {firstProbe && !blocked && !needsBatchProject && (
+          <div className="handoff-bulk-field handoff-bulk-project-fixed">
+            <span>目标项目</span>
+            <strong>每个任务将自动回到它在来源机上的原项目</strong>
+          </div>
         )}
         {checkedAll && (
           <ul className="handoff-bulk-summary">
@@ -448,7 +480,8 @@ function BulkHandoffDialog({
           <button
             className="is-primary"
             type="button"
-            disabled={busy || (!result && (!eligible.length || (Boolean(firstProbe) && !blocked && !projectId)))}
+            disabled={busy || (!result && (!eligible.length
+              || (Boolean(firstProbe) && !blocked && needsBatchProject && !projectId)))}
             onClick={confirm}
           >
             {busy ? "处理中…" : confirmLabel}

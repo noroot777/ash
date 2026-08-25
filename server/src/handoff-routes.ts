@@ -61,6 +61,7 @@ function pingPayload(
   nonce: string,
   peerStatus: NonNullable<HandoffPingResponse["peerStatus"]>,
   rows: HandoffPingResponse["projects"],
+  returnRefs?: HandoffPingResponse["returnRefs"],
 ): HandoffPingResponse {
   const identity = localIdentity();
   return {
@@ -75,6 +76,7 @@ function pingPayload(
     },
     peerStatus,
     projects: rows,
+    ...(returnRefs ? { returnRefs } : {}),
   };
 }
 
@@ -166,7 +168,8 @@ export function mountHandoffRoutes(api: Hono): void {
       catch { throw new HandoffError("移回探测体不是合法 JSON", 400); }
       if (!body.taskId || typeof body.nonce !== "string") throw new HandoffError("移回探测参数不完整", 400);
       const archive = await returnArchiveForPeer(body.taskId, peer.fingerprint, body.returnTransferId);
-      return c.json(pingPayload(body.nonce, "approved", [archive.project]));
+      const refs = archive.project.isRepo ? await repoRefTips(archive.project.repoPath) : [];
+      return c.json(pingPayload(body.nonce, "approved", [archive.project], refs));
     } catch (e) {
       return fail(c, e);
     }

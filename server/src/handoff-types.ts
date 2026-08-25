@@ -181,6 +181,8 @@ export interface HandoffPingResponse {
   peerStatus?: "approved" | "pending" | "blocked" | "open" | "unknown";
   // 未获批准时故意为空:项目清单是本机的仓库布局,不该报给还没被认可的机器。
   projects: HandoffPingProject[];
+  // 任务级免审批移回时，只返回该任务原项目的 refs，供持有机生成增量 bundle。
+  returnRefs?: { name: string; commit: string }[];
 }
 
 /** 相对路径必须待在自己的目录里:拒绝绝对路径和 `..`（导入侧写盘前的通行证）。 */

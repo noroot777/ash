@@ -51,9 +51,11 @@ try {
       body: "验证接力回程只认原持有机",
       mode: "single",
       workflowMode: "free",
-      useWorktree: false,
+      useWorktree: true,
     }),
   });
+  const { prepareWorktree } = await import("../src/git.js");
+  await prepareWorktree(repoA, task.id, task.worktreeBase);
 
   await api(machineA, "/settings", {
     method: "PATCH", headers: { "content-type": "application/json" },
@@ -100,6 +102,36 @@ try {
   );
 
   const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
+  const { resetIdentityCache } = await import("../src/handoff-identity.js");
+  const attackerDb = process.env.ASH_DB!;
+  const refsBody = JSON.stringify({
+    taskId: task.id,
+    returnTransferId: inbound.handoff?.transferId,
+    nonce: "holder-return-refs-probe",
+  });
+  let refsStatus = 0;
+  let refsCount = 0;
+  try {
+    process.env.ASH_DB = join(root, "b.db");
+    resetIdentityCache();
+    const refsProbe = await fetch(`${machineA}/api/handoff/return/ping`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...peerRequestHeaders(`${machineA}/api/handoff/return/ping`, "POST", refsBody),
+      },
+      body: refsBody,
+    });
+    refsStatus = refsProbe.status;
+    const refsPayload = (await refsProbe.json()) as { returnRefs?: { name: string; commit: string }[] };
+    refsCount = refsPayload.returnRefs?.length ?? 0;
+  } finally {
+    process.env.ASH_DB = attackerDb;
+    resetIdentityCache();
+  }
+  assert.equal(refsStatus, 200);
+  assert.ok(refsCount > 0, "任务级移回探测应只返回原项目 refs 供增量 bundle 协商");
+
   const forgedBody = JSON.stringify({
     taskId: task.id,
     returnTransferId: inbound.handoff?.transferId,
@@ -141,10 +173,12 @@ try {
   });
   assert.equal(probeAfterForget.peer?.peerStatus, "approved");
 
-  await api(machineB, `/tasks/${task.id}/handoff`, {
+  const returnResult = await api<{ notes: string[] }>(machineB, `/tasks/${task.id}/handoff`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ targetUrl: target.url, targetProjectId: projectA.id, targetName: "A", autoResume: false }),
   });
+  assert.ok(returnResult.notes.some((note) => /git 数据无需传输/.test(note)), "免审批移回应使用原项目 refs 协商空 bundle");
+  assert.ok(!returnResult.notes.some((note) => /整条历史|全量历史/.test(note)), "免审批移回不应误报为全量 git 历史");
   const returned = await api<Task>(machineA, `/tasks/${task.id}`);
   assert.equal(returned.handoff?.direction, "returned");
 

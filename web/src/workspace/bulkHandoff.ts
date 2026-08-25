@@ -37,6 +37,17 @@ export function bulkPreflightAllowsRun(successCount: number, failureCount: numbe
   return successCount > 0 && successCount + failureCount === total;
 }
 
+export function bulkTargetProjectId(
+  task: Task,
+  probe: TaskScopedHandoffPreflightResult,
+  selectedProjectId: string,
+): string {
+  if (task.handoff?.direction === "in" && probe.taskScopedReturn) {
+    return probe.projects[0]?.id ?? "";
+  }
+  return selectedProjectId;
+}
+
 const normalizedTargetUrl = (url: string): string => url.trim().replace(/\/+$/, "");
 const sameFingerprint = (left?: string | null, right?: string | null): boolean =>
   Boolean(left && right && left.toLowerCase() === right.toLowerCase());

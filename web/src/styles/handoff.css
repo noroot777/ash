@@ -490,6 +490,12 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   font: inherit;
 }
 
+.handoff-bulk-project-fixed strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .handoff-bulk-toggle {
   display: flex;
   align-items: center;

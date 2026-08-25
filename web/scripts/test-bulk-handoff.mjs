@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   bulkPreflightAllowsRun,
   bulkPreflightIssue,
+  bulkTargetProjectId,
   outboundTasksForTarget,
   partitionBulkHandoffTasks,
 } from "../src/workspace/bulkHandoff.ts";
@@ -126,6 +127,20 @@ assert.match(
 assert.equal(bulkPreflightAllowsRun(1, 1, 2), true, "一条预检失败时应允许跳过并迁移其余任务");
 assert.equal(bulkPreflightAllowsRun(0, 2, 2), false, "没有任何可迁移任务时仍应禁止执行");
 
+const scopedOne = {
+  taskScopedReturn: true,
+  projects: [{ id: "origin-one", name: "one", repoPath: "/one", isRepo: true }],
+};
+const scopedTwo = {
+  taskScopedReturn: true,
+  projects: [{ id: "origin-two", name: "two", repoPath: "/two", isRepo: true }],
+};
+const fromOne = task("from-one", { handoff: { direction: "in", peerFp: sourceFp } });
+const fromTwo = task("from-two", { handoff: { direction: "in", peerFp: sourceFp } });
+assert.equal(bulkTargetProjectId(fromOne, scopedOne, "batch-project"), "origin-one");
+assert.equal(bulkTargetProjectId(fromTwo, scopedTwo, "batch-project"), "origin-two");
+assert.equal(bulkPreflightIssue(fromTwo, scopedTwo, bulkTargetProjectId(fromTwo, scopedTwo, "batch-project")), null);
+
 const bulkDialog = readFileSync(new URL("../src/workspace/HandoffMachines.tsx", import.meta.url), "utf8");
 assert.doesNotMatch(bulkDialog, /<ConfirmDialog/, "批量接力不应继续使用旧确认框");
 assert.match(bulkDialog, /<HandoffDialogHeader/, "批量接力应复用接力弹窗标题结构");
@@ -135,5 +150,7 @@ assert.match(bulkDialog, /api\.handoffReturnTarget\(task\.id\)/, "批量移回�
 assert.match(bulkDialog, /targetUrl: taskTarget\.url/, "批量正式移回应使用逐任务解析出的地址");
 assert.match(bulkDialog, /probeBulkTask/, "任务恢复地址不可达时批量移回应尝试同指纹登记地址");
 assert.match(bulkDialog, /preflightFailures/, "批量执行结果应保留被跳过任务的失败原因");
+assert.match(bulkDialog, /bulkTargetProjectId/, "批量移回应按任务使用各自预检锁定的原项目");
+assert.match(bulkDialog, /handoff-bulk-project-fixed/, "纯移回批次应只读说明按任务自动归位，而不是提供单一项目下拉框");
 
 console.log("bulk handoff eligibility tests passed");

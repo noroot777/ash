@@ -350,10 +350,8 @@ export async function exportHandoff(
 
       let gitState: HandoffManifest["git"] = null;
       if (targetProject.isRepo) {
-        // 免审批移回只向原机暴露这一条任务所属项目，不放开常规 refs 端点；回程 bundle
-        // 因而按全量打包，体积换取授权面严格收窄。
         const refs = taskScopedReturn
-          ? { refs: [] as { name: string; commit: string }[] }
+          ? { refs: ping.returnRefs ?? [] }
           : await fetchPeer<{ refs: { name: string; commit: string }[] }>(
               `${targetUrl}/api/handoff/projects/${targetProject.id}/refs`,
             );
