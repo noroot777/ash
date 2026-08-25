@@ -32,6 +32,7 @@ import { createTasks, publishTaskUpdated } from "./task-store.js";
 import { deleteTaskAssociations } from "./task-routes.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { localIdentity } from "./handoff-identity.js";
+import { untrackedOverwriteConflicts } from "./handoff-worktree-safety.js";
 import { id, now } from "./util.js";
 import type { TaskHandoff } from "@ash/shared";
 import { execFileText as exec } from "./exec.js";
@@ -198,6 +199,18 @@ async function importGitBundle(
         await exec("git", ["-C", repo, "fetch", bundlePath, `+refs/heads/${git.branch}:${tempRef}`], { maxBuffer: 4 * MB });
         const { stdout: fetchedHead } = await exec("git", ["-C", repo, "rev-parse", tempRef]);
         if (fetchedHead.trim() !== git.head) throw new HandoffError("接力 bundle 的分支尖与 manifest 不一致", 409);
+        const conflicts = await untrackedOverwriteConflicts(taskWorktree, tempRef);
+        if (conflicts === null) {
+          throw new HandoffError(`无法确认原机任务 worktree 的未跟踪文件是否会被覆盖：${taskWorktree}。先检查这个目录，再重试移回。`, 409);
+        }
+        if (conflicts.length) {
+          const shown = conflicts.slice(0, 8).join("、");
+          const more = conflicts.length > 8 ? ` 等 ${conflicts.length} 项` : "";
+          throw new HandoffError(
+            `原机保留的任务 worktree 有未跟踪文件会被移回内容覆盖：${shown}${more}。先移动、提交或删除这些文件，再重试移回。`,
+            409,
+          );
+        }
         await exec("git", ["-C", taskWorktree, "reset", "--hard", git.head]);
         updatedCheckedOutWorktree = true;
       } finally {

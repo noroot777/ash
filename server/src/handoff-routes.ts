@@ -10,7 +10,7 @@
 //     端点一样没有鉴权(整机在可信网络里用的既定取舍)。这里管的是「谁能把任务推进来」,
 //     不是「谁能打开这个网页」。
 import { hostname } from "node:os";
-import type { TaskHandoff } from "@ash/shared";
+import type { HandoffAudit, TaskHandoff } from "@ash/shared";
 import type { Hono } from "hono";
 import type { Context } from "hono";
 import { and, eq } from "drizzle-orm";
@@ -60,7 +60,7 @@ const fail = (c: Context, e: unknown) => {
 };
 
 class PendingCancellationError extends HandoffError {
-  constructor(message: string, readonly forceReason: "legacy" | "unreachable" | "unverifiable") {
+  constructor(message: string, readonly forceReason: HandoffAudit["forceReason"]) {
     super(message, 409);
   }
 }
@@ -106,7 +106,13 @@ async function cancelPendingAtPeer(marker: TaskHandoff): Promise<boolean> {
         "legacy",
       );
     }
-    const unreachable = !(error instanceof HandoffError) || error.network || error.remoteStatus === null;
+    if (error instanceof HandoffError && !error.network && error.remoteStatus === null) {
+      throw new PendingCancellationError(
+        `这个地址当前无法证明仍是原目标机，原目标机的任务状态无从核验；本机标记未移除。请先找回原目标机或修正地址；也可显式承担双任务风险后强制恢复。原始原因：${detail}`,
+        "identity",
+      );
+    }
+    const unreachable = !(error instanceof HandoffError) || error.network;
     throw new PendingCancellationError(
       `${unreachable ? "当前连不上对端" : "对端未能完成安全撤销核验"}，本机标记未移除。连接恢复后原样重试最安全；也可显式承担双任务风险后强制恢复。原始原因：${detail}`,
       unreachable ? "unreachable" : "unverifiable",
@@ -396,25 +402,39 @@ export function mountHandoffRoutes(api: Hono): void {
     }
     const returning = Object.prototype.hasOwnProperty.call(marker, "returnTransferId");
     let forced = false;
+    let forceReason: HandoffAudit["forceReason"] | null = null;
     try {
       await cancelPendingAtPeer(marker);
     } catch (e) {
       if (e instanceof PendingCancellationError) {
         if (!force) return c.json({ error: e.message, needsForce: true, forceReason: e.forceReason }, 409);
         forced = true;
+        forceReason = e.forceReason;
       } else {
         return fail(c, e);
       }
     }
     const restored = returning ? restoredInboundMarker(marker) : null;
+    const changedAt = now();
+    const audit: HandoffAudit | null = forced && forceReason ? {
+      kind: "forced-recovery",
+      at: changedAt,
+      returning,
+      peerName: marker.peerName,
+      forceReason,
+    } : null;
     const updated = await db.update(tasks)
-      .set({ handoff: restored ? JSON.stringify(restored) : null, updatedAt: now() })
+      .set({
+        handoff: restored ? JSON.stringify(restored) : null,
+        ...(audit ? { handoffAudit: JSON.stringify(audit) } : {}),
+        updatedAt: changedAt,
+      })
       .where(and(eq(tasks.id, taskId), eq(tasks.handoff, row.handoff!)))
       .returning({ id: tasks.id });
     if (!updated.length) {
       return c.json({ error: "核验期间任务的接力状态已经变化，请刷新后按最新状态处理" }, 409);
     }
-    await appendTaskTimeline(taskId, forced
+    await appendTaskTimeline(taskId, audit
       ? returning
         ? "⚠️ 用户在无法核验原机状态时强制撤销了本次移回；任务继续由本机持有，但原机可能已有副本，恢复联网后必须人工确认只运行一份。"
         : "⚠️ 用户在无法核验目标机状态时强制恢复了本机任务；目标机可能已有副本，恢复联网后必须人工确认只运行一份。"

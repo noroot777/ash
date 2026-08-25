@@ -11,6 +11,7 @@ const taskDetail = readFileSync(new URL("../src/task-detail/TaskDetail.tsx", imp
 const replyRail = readFileSync(new URL("../src/task-detail/TaskReplyRail.tsx", import.meta.url), "utf8");
 const taskHeader = readFileSync(new URL("../src/task-detail/TaskHeader.tsx", import.meta.url), "utf8");
 const handoffSettings = readFileSync(new URL("../src/settings/HandoffSettings.tsx", import.meta.url), "utf8");
+const handoffAudit = readFileSync(new URL("../src/task-detail/HandoffAuditBanner.tsx", import.meta.url), "utf8");
 
 assert.doesNotMatch(machines, /target="_blank"/, "远程任务不应再打开新的远端浏览器标签");
 assert.match(machines, /onClick=\{\(\) => onRemoteTask\(task, target\)\}/, "远程任务行应交给工作区内联选择");
@@ -51,5 +52,8 @@ assert.match(handoff, /forceHandoffReason/, "只有服务端明确标记可强�
 assert.match(handoffSettings, /历史回程权限/, "设置页必须列出任务历史授予的回程权限");
 assert.match(handoffSettings, /handoffReturnGrants/, "历史回程权限必须来自可审计的服务端清单");
 assert.match(handoffSettings, /拒绝这台机器/, "历史回程权限必须可由用户显式撤销");
+assert.match(handoffSettings, /解除拒绝/, "误拒绝历史回程机器后必须能在同一界面恢复");
+assert.match(taskDetail, /task\.handoffAudit && <HandoffAuditBanner/, "强制恢复清掉 marker 后仍须渲染持久风险记录");
+assert.match(handoffAudit, /对端恢复联网后，请人工确认只运行一份任务/, "风险记录必须明确提醒排查双任务");
 
 console.log("remote task proxy UI tests passed");

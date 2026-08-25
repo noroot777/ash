@@ -195,6 +195,9 @@ export async function setPeerStatus(fingerprint: string, status: "approved" | "b
       .where(eq(handoffPeers.fingerprint, normalized))).at(0);
     return toPeer(stored ?? blocked);
   }
+  if (status === "approved" && !row.publicKey) {
+    throw new HandoffError("这条记录只用于拒绝历史回程，不能直接升级为整机批准；先让对方重新发送接力申请", 409);
+  }
   const approvedAt = status === "approved" ? now() : null;
   await db.update(handoffPeers).set({ status, approvedAt }).where(eq(handoffPeers.fingerprint, normalized));
   return toPeer({ ...row, status, approvedAt });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -68,12 +68,14 @@ async function startReturnProxy(upstream: string): Promise<{ url: string; close(
 async function startOrdinaryImportProxy(upstream: string, forwardBeforeCut: boolean, legacyCancel = false): Promise<{
   url: string;
   deliverHeld(): Promise<{ status: number; body: { error?: string; ash?: boolean } }>;
+  setUpstream(url: string): void;
   close(): Promise<void>;
 }> {
+  let activeUpstream = upstream;
   let cutFirstImport = true;
   let held: { path: string; method: string; headers: Record<string, string>; body: Buffer } | null = null;
   const forward = async (request: NonNullable<typeof held>) => {
-    const response = await fetch(`${upstream}${request.path}`, {
+    const response = await fetch(`${activeUpstream}${request.path}`, {
       method: request.method,
       headers: request.headers,
       ...(request.method === "GET" || request.method === "HEAD" ? {} : {
@@ -132,6 +134,7 @@ async function startOrdinaryImportProxy(upstream: string, forwardBeforeCut: bool
       const response = await forward(held);
       return { status: response.status, body: JSON.parse(response.bytes.toString("utf8")) as { error?: string; ash?: boolean } };
     },
+    setUpstream: (url: string) => { activeUpstream = url; },
     close: async () => {
       if (closed) return;
       closed = true;
@@ -156,7 +159,12 @@ try {
     ASH_RUNS_DIR: join(root, "runs-b"),
     ASH_UPLOADS_DIR: join(root, "uploads-b"),
   }, remember);
-  serverPorts.push(Number(new URL(machineA).port), Number(new URL(machineB).port));
+  const machineC = await startPeer({
+    ASH_DB: join(root, "c.db"),
+    ASH_RUNS_DIR: join(root, "runs-c"),
+    ASH_UPLOADS_DIR: join(root, "uploads-c"),
+  }, remember);
+  serverPorts.push(Number(new URL(machineA).port), Number(new URL(machineB).port), Number(new URL(machineC).port));
 
   const projectA = await api<{ id: string }>(machineA, "/projects", {
     method: "POST", headers: { "content-type": "application/json" },
@@ -287,6 +295,33 @@ try {
   assert.equal(offlineForced.status, 200);
   assert.equal((await api<Task>(machineA, `/tasks/${offlineTask.id}`)).handoff, null);
 
+  // 地址可达但已经换成另一台机器时，不能误报网络离线；强制后无会话任务也必须留下持久风险记录。
+  const identityTask = await createSimpleTask("目标地址换机后的强制恢复审计");
+  const identityProxy = await startOrdinaryImportProxy(machineB, false);
+  ordinaryProxies.push(identityProxy);
+  const identityInterrupted = await fetch(`${machineA}/api/tasks/${identityTask.id}/handoff`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: identityProxy.url, targetProjectId: projectB.id, targetName: "原 B", autoResume: false }),
+  });
+  assert.equal(identityInterrupted.status, 502);
+  identityProxy.setUpstream(machineC);
+  const identitySafe = await fetch(`${machineA}/api/tasks/${identityTask.id}/handoff`, { method: "DELETE" });
+  assert.equal(identitySafe.status, 409);
+  const identitySafeBody = (await identitySafe.json()) as { error: string; needsForce?: boolean; forceReason?: string };
+  assert.equal(identitySafeBody.forceReason, "identity");
+  assert.match(identitySafeBody.error, /无法证明仍是原目标机|身份和上次不一样/);
+  assert.doesNotMatch(identitySafeBody.error, /当前连不上对端/);
+  const identityForced = await fetch(`${machineA}/api/tasks/${identityTask.id}/handoff`, {
+    method: "DELETE", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ force: true, acknowledgeDuplicateRisk: true }),
+  });
+  assert.equal(identityForced.status, 200);
+  const identityRecovered = await api<Task>(machineA, `/tasks/${identityTask.id}`);
+  assert.equal(identityRecovered.handoff, null);
+  assert.equal(identityRecovered.handoffAudit?.kind, "forced-recovery");
+  assert.equal(identityRecovered.handoffAudit?.forceReason, "identity");
+  assert.deepEqual(await api<unknown[]>(machineA, `/tasks/${identityTask.id}/sessions`), [], "没有会话也必须靠任务行保留强制恢复审计");
+
   await api(machineA, `/tasks/${task.id}/handoff`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ targetUrl: machineB, targetProjectId: projectB.id, targetName: "B", autoResume: false }),
@@ -386,6 +421,8 @@ try {
   );
   assert.equal(returnOnlyBlock.status, "blocked");
   assert.equal(returnOnlyBlock.returnOnly, true);
+  const hiddenApprove = await fetch(`${machineA}/api/handoff/peers/${identityB.fingerprint}/approve`, { method: "POST" });
+  assert.equal(hiddenApprove.status, 409, "纯回程拒绝记录不能被 API 偷偷升级成界面不可见的整机批准");
   const blocked = await fetch(`${machineB}/api/tasks/${task.id}/handoff/preflight`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetUrl: target.url }),
   });
@@ -394,6 +431,8 @@ try {
 
   // 忘记这条整机级记录后，不需要 approve；任务历史里的持有者指纹本身就是回程凭据。
   await api(machineA, `/handoff/peers/${identityB.fingerprint}`, { method: "DELETE" });
+  const grantsAfterUnblock = await api<{ grants: HandoffReturnGrant[] }>(machineA, "/handoff/return-grants");
+  assert.equal(grantsAfterUnblock.grants.find((grant) => grant.fingerprint === identityB.fingerprint)?.blocked, false);
   const probeAfterForget = await api<HandoffPreflightResult>(machineB, `/tasks/${task.id}/handoff/preflight`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetUrl: target.url }),
   });
@@ -410,6 +449,7 @@ try {
   const holderHead = execFileSync("git", ["-C", holderWorktree, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const originWorktree = worktreePathFor(repoA, task.id);
   writeFileSync(join(originWorktree, "seed.txt"), "tracked local edit\n");
+  writeFileSync(join(originWorktree, "remote-change.txt"), "LOCAL UNTRACKED DRAFT\n");
   const trackedDirtyReturn = await fetch(`${machineB}/api/tasks/${task.id}/handoff`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ targetUrl: machineA, targetProjectId: projectA.id, targetName: "A", autoResume: false }),
@@ -418,6 +458,15 @@ try {
   assert.match(((await trackedDirtyReturn.json()) as { error: string }).error, /已跟踪文件的未提交改动/);
   assert.equal((await api<Task>(machineB, `/tasks/${task.id}`)).handoff?.direction, "in", "已跟踪改动挡下移回后持有机仍应可运行");
   writeFileSync(join(originWorktree, "seed.txt"), "seed\n");
+  const untrackedConflictReturn = await fetch(`${machineB}/api/tasks/${task.id}/handoff`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: machineA, targetProjectId: projectA.id, targetName: "A", autoResume: false }),
+  });
+  assert.equal(untrackedConflictReturn.status, 502);
+  assert.match(((await untrackedConflictReturn.json()) as { error: string }).error, /未跟踪文件.*remote-change\.txt/);
+  assert.equal(readFileSync(join(originWorktree, "remote-change.txt"), "utf8"), "LOCAL UNTRACKED DRAFT\n", "冲突未跟踪文件的唯一内容不能被改写");
+  assert.equal((await api<Task>(machineB, `/tasks/${task.id}`)).handoff?.direction, "in");
+  rmSync(join(originWorktree, "remote-change.txt"));
   writeFileSync(join(originWorktree, ".DS_Store"), "finder metadata\n");
   returnProxy = await startReturnProxy(machineA);
   const interruptedResponse = await fetch(`${machineB}/api/tasks/${task.id}/handoff`, {

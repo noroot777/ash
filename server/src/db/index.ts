@@ -347,6 +347,7 @@ export async function ensureSchema() {
     "ALTER TABLE sessions ADD COLUMN executor_fingerprint TEXT",
     // 任务接力(跨机器 handoff)的持久标记(json TaskHandoff,见 db/schema.ts)。
     "ALTER TABLE tasks ADD COLUMN handoff TEXT",
+    "ALTER TABLE tasks ADD COLUMN handoff_audit TEXT",
   ]) {
     try {
       await client.execute(sql);

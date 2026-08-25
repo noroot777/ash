@@ -49,6 +49,15 @@ export interface HandoffReturnGrant {
   blocked: boolean;
 }
 
+/** 无法核验对端时由用户显式承担双任务风险的持久审计记录。 */
+export interface HandoffAudit {
+  kind: "forced-recovery";
+  at: string;
+  returning: boolean;
+  peerName: string | null;
+  forceReason: "legacy" | "unreachable" | "identity" | "unverifiable";
+}
+
 /** 预检时对目标机做的身份核对结果(出站方向)。 */
 export interface HandoffPeerIdentity {
   fingerprint: string;

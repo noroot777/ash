@@ -393,7 +393,11 @@ export function HandoffSettings({
               </small>
             </div>
             <div className="handoff-peer-actions">
-              {!grant.blocked && (
+              {grant.blocked ? (
+                <Button variant="ghost" disabled={busy} onClick={() => void peerAction(grant, "forget")}>
+                  <Check size={13} aria-hidden="true" />解除拒绝
+                </Button>
+              ) : (
                 <Button
                   variant="ghost"
                   disabled={busy}
