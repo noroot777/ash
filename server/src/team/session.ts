@@ -400,14 +400,26 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
     idleTimer: null,
     closing: null,
   };
-  leads.set(taskId, lead);
+  attachLead(lead);
   // 运行按钮带来的首个任务 prompt 不另记 turn；用户亲自发来的消息无论是否顺手
   // 打开了调度台，都必须成为可持久、可实时同步的一条 user turn。
   if (kind === "user") recordUserConversationTurn({ taskId, sessionId: sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at: turnStart });
   else if (resuming) recordSystemTurn(lead, text, turnStart);
   void beginTurn(lead, turnStart);
-  void consume(lead).catch((err) => console.error(`[ash] team consume(${taskId}) failed:`, err));
   return lead;
+}
+
+/**
+ * 把一台组装好的调度台挂上线并开始消费它的事件流。**这两件事必须在同一个地方做**:
+ * 「在 leads 里」的含义是「后续消息送进这个 handle 会被处理」,而那只有在 consume 那条
+ * 循环还活着时才成立。只挂不消费、或消费者退了它还挂着,就是一台吞消息的假在线调度台
+ * (consume 的兜底注释里有现场)。
+ * 导出只为回归测试能驱动真的消费循环(scripts/test-team-lead-resilience.ts),
+ * 生产路径只有 openLead 走这里。
+ */
+export function attachLead(lead: Lead): void {
+  leads.set(lead.taskId, lead);
+  void consume(lead).catch((err) => console.error(`[ash] team consume(${lead.taskId}) failed:`, err));
 }
 
 // ── 事件消费 ────────────────────────────────────────────────────────────────
@@ -431,95 +443,116 @@ async function consume(lead: Lead): Promise<void> {
     });
     pendingTraceText = "";
   };
-  for await (const event of lead.handle.events) {
-    if (event.kind === "turnEnd") {
-      flushTraceText();
-      await endTurn(lead);
-      continue;
-    }
-    if (event.kind === "session") {
-      if (event.cliSessionId !== lead.cliSessionId) {
-        lead.cliSessionId = event.cliSessionId;
-        const ex = await resolveExecutorFor({
-          executorId: lead.executorId,
-          type: lead.agentType,
-          model: lead.model,
-          reasoningEffort: lead.reasoningEffort,
-        });
-        await db
-          .update(sessions)
-          .set({ cliSessionId: event.cliSessionId, ...ex.resumeFields(lead.cwd, event.cliSessionId) })
-          .where(eq(sessions.id, lead.sessId));
-        // CLI 报上新的 thread id：上一条会话的轮换事宜就此翻篇（fault / 等新 id /
-        // 那句「已作废」说没说过，三个一起归零）。
-        rotation = onFreshSession(rotation);
+  // 兜底:上面每个写库点都已经各自把失败咽下了(persistOrReport),这里管的是**剩下**
+  // 那些没预料到的抛出 —— 执行器解析、用量记账、乃至 events 流自己炸掉。掀翻循环本身
+  // 不致命,**跳过 closeLead 才致命**(理由见 reportLeadFailure 顶部),所以这里只如实说
+  // 一句、收掉这台已经没人消费事件的进程,然后照常往下走那段收尾。
+  try {
+    for await (const event of lead.handle.events) {
+      if (event.kind === "turnEnd") {
+        flushTraceText();
+        await endTurn(lead);
+        continue;
       }
-      publish(lead, event);
-      continue;
-    }
-    if (event.kind === "text") {
-      lead.out.write(event.text);
-      pendingTraceText += event.text;
-    }
-    else {
-      const emittedEvent = event.kind === "usage"
-        ? await recordSessionUsageEvent(lead.sessId, event, lead.agentType, lead.cliSessionId)
-        : event;
-      flushTraceText();
-      // scope:"session" 说的是「这条恢复会话作废了」，不是「本回合失败了」（见
-      // executors/codex.ts）。当成普通 error 会让一个正常收尾的回合在执行过程里记一笔
-      // 异常；跟 duet、single-run 一样按 scope 分流，降成 system 旁注。
-      const sessionNotice = emittedEvent.kind === "error" && emittedEvent.scope === "session";
-      if (!sessionNotice
-        && (emittedEvent.kind === "thinking" || emittedEvent.kind === "tool" || emittedEvent.kind === "error" || emittedEvent.kind === "usage" || emittedEvent.kind === "attachment")) {
-        appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), emittedEvent);
+      if (event.kind === "session") {
+        if (event.cliSessionId !== lead.cliSessionId) {
+          lead.cliSessionId = event.cliSessionId;
+          const ex = await resolveExecutorFor({
+            executorId: lead.executorId,
+            type: lead.agentType,
+            model: lead.model,
+            reasoningEffort: lead.reasoningEffort,
+          });
+          await persistOrReport(
+            lead,
+            "新会话凭据",
+            () => db
+              .update(sessions)
+              .set({ cliSessionId: event.cliSessionId, ...ex.resumeFields(lead.cwd, event.cliSessionId) })
+              .where(eq(sessions.id, lead.sessId)),
+          );
+          // CLI 报上新的 thread id：上一条会话的轮换事宜就此翻篇（fault / 等新 id /
+          // 那句「已作废」说没说过，三个一起归零）。
+          rotation = onFreshSession(rotation);
+        }
+        publish(lead, event);
+        continue;
       }
-      // 水位相反：**覆盖**。常驻会话尤其需要它——流水一路加到几百万，只有水位能回答
-      // 「这个调度台离上下文塞满还有多远」。
-      if (emittedEvent.kind === "context") await setSessionContext(lead.sessId, emittedEvent.context);
-      if (emittedEvent.kind === "error") {
-        const previousFault = rotation.fault;
-        if (sessionNotice) noteSessionNotice(lead, emittedEvent.message);
-        else writeRunError(lead.out, emittedEvent.message);
-        rotation = onRotationError(rotation, emittedEvent.message);
-        if (rotation.fault === "poisoned" && previousFault !== "poisoned" && lead.handle.dropSession) {
-          // 不能等整条常驻 events 流关闭：pending 消息会在 turnEnd 后立刻开下一回合。
-          // 这里先作废闭包里的 id 与持久恢复字段，所以下一个 startTurn 必然 fresh。
-          lead.handle.dropSession();
-          lead.cliSessionId = "";
-          // 这条会话行可能已经被新进程接管了（工作目录被抽走那条路会复用同一行）。跟
-          // closeLead 里那道闸同一个理由：晚到的旧进程不能抹掉新进程刚报上来的有效 id。
-          // 内存里的 id 照样作废——那只影响这个已经出局的 handle；但一个字都不写进时间线：
-          // 那条会话现在归新进程管，说「已作废」既不属实也没人该照做。
-          if (leads.get(lead.taskId) === lead) {
-            let note = sessionResumeFaultNote("poisoned");
-            try {
-              await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, lead.sessId));
-              // 只有真清成了才算「已经说过且属实」：收尾那两句据此不再重复整段。
-              rotation = onRotationPersisted(rotation);
-            } catch (error) {
-              // 内存里的恢复 id 已经作废，不能让一次持久化故障杀掉常驻消费循环；同时明确
-              // 告知用户重启前数据库里可能还留着旧 id。没清成就**不算说过** —— 宁可让收尾
-              // 把完整那句再说一遍，也不能留下一句报喜的短话。
-              const message = `已停止续跑损坏的 Codex 会话，但清理数据库恢复字段失败：${error instanceof Error ? error.message : String(error)}`;
-              writeRunError(lead.out, message);
-              appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), { kind: "error", message });
-              publish(lead, { kind: "error", message });
-              note = SESSION_DROP_PERSISTENCE_FAILED_NOTE;
+      if (event.kind === "text") {
+        lead.out.write(event.text);
+        pendingTraceText += event.text;
+      }
+      else {
+        const emittedEvent = event.kind === "usage"
+          ? await recordSessionUsageEvent(lead.sessId, event, lead.agentType, lead.cliSessionId)
+          : event;
+        flushTraceText();
+        // scope:"session" 说的是「这条恢复会话作废了」，不是「本回合失败了」（见
+        // executors/codex.ts）。当成普通 error 会让一个正常收尾的回合在执行过程里记一笔
+        // 异常；跟 duet、single-run 一样按 scope 分流，降成 system 旁注。
+        const sessionNotice = emittedEvent.kind === "error" && emittedEvent.scope === "session";
+        if (!sessionNotice
+          && (emittedEvent.kind === "thinking" || emittedEvent.kind === "tool" || emittedEvent.kind === "error" || emittedEvent.kind === "usage" || emittedEvent.kind === "attachment")) {
+          appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), emittedEvent);
+        }
+        // 水位相反：**覆盖**。常驻会话尤其需要它——流水一路加到几百万，只有水位能回答
+        // 「这个调度台离上下文塞满还有多远」。
+        if (emittedEvent.kind === "context") await setSessionContext(lead.sessId, emittedEvent.context);
+        if (emittedEvent.kind === "error") {
+          const previousFault = rotation.fault;
+          if (sessionNotice) noteSessionNotice(lead, emittedEvent.message);
+          else writeRunError(lead.out, emittedEvent.message);
+          rotation = onRotationError(rotation, emittedEvent.message);
+          if (rotation.fault === "poisoned" && previousFault !== "poisoned" && lead.handle.dropSession) {
+            // 不能等整条常驻 events 流关闭：pending 消息会在 turnEnd 后立刻开下一回合。
+            // 这里先作废闭包里的 id 与持久恢复字段，所以下一个 startTurn 必然 fresh。
+            lead.handle.dropSession();
+            lead.cliSessionId = "";
+            // 这条会话行可能已经被新进程接管了（工作目录被抽走那条路会复用同一行）。跟
+            // closeLead 里那道闸同一个理由：晚到的旧进程不能抹掉新进程刚报上来的有效 id。
+            // 内存里的 id 照样作废——那只影响这个已经出局的 handle；但一个字都不写进时间线：
+            // 那条会话现在归新进程管，说「已作废」既不属实也没人该照做。
+            if (leads.get(lead.taskId) === lead) {
+              let note = sessionResumeFaultNote("poisoned");
+              try {
+                await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, lead.sessId));
+                // 只有真清成了才算「已经说过且属实」：收尾那两句据此不再重复整段。
+                rotation = onRotationPersisted(rotation);
+              } catch (error) {
+                // 内存里的恢复 id 已经作废，不能让一次持久化故障杀掉常驻消费循环；同时明确
+                // 告知用户重启前数据库里可能还留着旧 id。没清成就**不算说过** —— 宁可让收尾
+                // 把完整那句再说一遍，也不能留下一句报喜的短话。
+                const message = `已停止续跑损坏的 Codex 会话，但清理数据库恢复字段失败：${error instanceof Error ? error.message : String(error)}`;
+                writeRunError(lead.out, message);
+                appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), { kind: "error", message });
+                publish(lead, { kind: "error", message });
+                note = SESSION_DROP_PERSISTENCE_FAILED_NOTE;
+                rotation = onRotationNotPersisted(rotation);
+              }
+              noteSessionNotice(lead, note);
+            } else {
+              // superseded：库里那份归新进程管，我们没清也不该说清了。
               rotation = onRotationNotPersisted(rotation);
             }
-            noteSessionNotice(lead, note);
-          } else {
-            // superseded：库里那份归新进程管，我们没清也不该说清了。
-            rotation = onRotationNotPersisted(rotation);
           }
         }
+        if (emittedEvent.kind === "done") exitStatus = emittedEvent.exitStatus;
+        if (!sessionNotice) publish(lead, emittedEvent);
+        continue;
       }
-      if (emittedEvent.kind === "done") exitStatus = emittedEvent.exitStatus;
-      if (!sessionNotice) publish(lead, emittedEvent);
-      continue;
+      publish(lead, event);
     }
-    publish(lead, event);
+  } catch (error) {
+    console.error(`[ash] team consume(${lead.taskId}) aborted:`, error);
+    reportLeadFailure(
+      lead,
+      `调度台事件流异常中断：${error instanceof Error ? error.message : String(error)}。进程已收掉,再说一句话会用同一条 CLI 会话接回。`,
+    );
+    try {
+      lead.handle.kill();
+    } catch {
+      // 多半是它自己先没的,收尾照走。
+    }
   }
   flushTraceText();
   await closeLead(lead, exitStatus, rotation);
@@ -536,6 +569,36 @@ function publish(lead: Lead, event: AgentEvent): void {
     reasoningEffort: lead.reasoningEffort,
     event,
   });
+}
+
+// 收尾链上的持久化失败:如实落到三处(.md / trace / SSE),然后**咽回去**。
+//
+// 常驻调度台跟一次性任务不一样 —— 它的每一次写库都跑在 consume 那条 for-await 里面。
+// 抛出去掀掉的不是一个回合,是整台调度台:closeLead 再也不会跑,于是 leads 里留着一台
+// 没人消费事件的**假在线**调度台(后续消息照送进去,一个字都不落盘也不广播),任务永远
+// 停在 running,攒下的轮换旁注烂在内存里 —— 只能靠重启恢复(2026-08-25 第 2 轮审查)。
+// 一次写库失败该丢的只是那一行状态,不是这台调度台。
+function reportLeadFailure(lead: Lead, message: string, at = now()): void {
+  writeRunError(lead.out, message);
+  appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? at, { kind: "error", message }, at);
+  publish(lead, { kind: "error", message });
+}
+
+/** 跑一次写库;失败只上报不外抛,返回它成没成。**只能在 lead.out.end() 之前调**。 */
+async function persistOrReport(
+  lead: Lead,
+  what: string,
+  run: () => PromiseLike<unknown>,
+  at = now(),
+): Promise<boolean> {
+  try {
+    await run();
+    return true;
+  } catch (error) {
+    console.error(`[ash] team ${what}(${lead.taskId}) persistence failed:`, error);
+    reportLeadFailure(lead, `${what}写入数据库失败：${error instanceof Error ? error.message : String(error)}`, at);
+    return false;
+  }
 }
 
 // 入站消息(执行者汇报/提问、系统提示)记成 system turn:实时走 system 事件、
@@ -564,13 +627,18 @@ function flushSessionNotices(lead: Lead): void {
 async function beginTurn(lead: Lead, at = now()): Promise<void> {
   lead.busy = true;
   lead.turnStart = at;
-  await db.update(sessions).set({ turnStartedAt: at, endedAt: null }).where(eq(sessions.id, lead.sessId));
+  await persistOrReport(
+    lead,
+    "回合开始状态",
+    () => db.update(sessions).set({ turnStartedAt: at, endedAt: null }).where(eq(sessions.id, lead.sessId)),
+    at,
+  );
   appendSessionTrace(lead.taskId, lead.sessId, at, {
     kind: "run",
     model: lead.model,
     reasoningEffort: lead.reasoningEffort,
   });
-  await setTaskStatus(lead.taskId, "running");
+  await persistOrReport(lead, "调度台运行状态", () => setTaskStatus(lead.taskId, "running"), at);
 }
 
 // 一个回合说完了(进程还活着)。有攒下的执行者消息就立刻合并成一条继续跑,
@@ -580,10 +648,17 @@ async function endTurn(lead: Lead): Promise<void> {
   const spent = lead.turnStart ? Math.max(0, Date.parse(endIso) - Date.parse(lead.turnStart)) : 0;
   lead.busy = false;
   lead.turnStart = null;
-  await db
-    .update(sessions)
-    .set({ endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}` })
-    .where(eq(sessions.id, lead.sessId));
+  // 写库失败绝不能把下面整段收尾一起带走 —— writeTurnEnd、旁注落盘、待送消息、落 idle
+  // 全在后面(理由见 persistOrReport)。丢的只是这一行用时统计。
+  await persistOrReport(
+    lead,
+    "回合收尾状态",
+    () => db
+      .update(sessions)
+      .set({ endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}` })
+      .where(eq(sessions.id, lead.sessId)),
+    endIso,
+  );
   writeTurnEnd(lead.out, endIso);
   flushSessionNotices(lead);
   if (lead.pending.length) {
@@ -595,7 +670,7 @@ async function endTurn(lead: Lead): Promise<void> {
     await beginTurn(lead, at);
     return;
   }
-  await setTaskStatus(lead.taskId, "idle");
+  await persistOrReport(lead, "调度台待命状态", () => setTaskStatus(lead.taskId, "idle"), endIso);
   armIdle(lead);
 }
 
@@ -620,8 +695,11 @@ async function closeLead(lead: Lead, exitStatus: number, rotation: RotationState
   // —— 内存里 lead.cliSessionId 已是新值,那条「id 变了才写库」的分支不会再补写一次。
   const dropSession = shouldDropSession(rotation.fault, exitStatus) && !superseded;
   let dropNote = dropSession ? sessionResumeFaultNote(rotation.fault!) : null;
-  try {
-    await db
+  // 收尾不能因为会话字段写库失败停在半路:事件流、写流与内存 lead 仍须正常释放。
+  const persisted = await persistOrReport(
+    lead,
+    "调度台收尾状态",
+    () => db
       .update(sessions)
       .set({
         exitStatus,
@@ -629,16 +707,11 @@ async function closeLead(lead: Lead, exitStatus: number, rotation: RotationState
         activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}`,
         ...(dropSession ? LOST_SESSION_PATCH : {}),
       })
-      .where(eq(sessions.id, lead.sessId));
-  } catch (error) {
-    // 收尾不能因为会话字段写库失败停在半路：事件流、写流与内存 lead 仍须正常释放。
-    const message = `调度台收尾状态写入数据库失败：${error instanceof Error ? error.message : String(error)}`;
-    console.error(`[ash] closeLead(${lead.taskId}) persistence failed:`, error);
-    writeRunError(lead.out, message);
-    appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message }, endIso);
-    publish(lead, { kind: "error", message });
-    if (dropSession) dropNote = SESSION_DROP_PERSISTENCE_FAILED_NOTE;
-  }
+      .where(eq(sessions.id, lead.sessId)),
+    endIso,
+  );
+  // 没写进去就不能沿用「恢复字段已清掉」的文案:库里那个坏 id 还在,下一次照样撞它。
+  if (!persisted && dropSession) dropNote = SESSION_DROP_PERSISTENCE_FAILED_NOTE;
   if (lead.closing === "recycle") {
     recordSystemTurn(lead, RECYCLE_NOTE(Math.round(IDLE_MS / 60_000)));
   } else if (!lead.closing && (exitStatus !== 0 || (dropSession && !rotation.announced))) {
@@ -666,7 +739,19 @@ async function closeLead(lead: Lead, exitStatus: number, rotation: RotationState
   writeTurnEnd(lead.out, endIso);
   flushSessionNotices(lead); // 回合中途攒下的轮换旁注:流关掉之前必须落盘
   lead.out.end();
-  if (!superseded) await setTaskStatus(lead.taskId, "idle"); // 团队没有终态,进程没了就是待命
+  // 团队没有终态,进程没了就是待命。注意 lead.out 已经 end 了 —— 这一步失败只能走日志
+  // 和 SSE,再往那条流里写一个字会当场 ERR_STREAM_WRITE_AFTER_END 打崩整个 server。
+  if (!superseded) {
+    try {
+      await setTaskStatus(lead.taskId, "idle");
+    } catch (error) {
+      console.error(`[ash] closeLead(${lead.taskId}) idle status failed:`, error);
+      publish(lead, {
+        kind: "error",
+        message: `调度台待命状态写入数据库失败：${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
 }
 
 // ── 空闲回收 ────────────────────────────────────────────────────────────────
