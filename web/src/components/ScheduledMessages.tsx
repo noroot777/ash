@@ -7,8 +7,14 @@ import { useDismissable } from "../lib/useDismissable.ts";
 import { toLocalDateTime } from "./ScheduleControl.tsx";
 import { formatInstant } from "../task-detail/utils.ts";
 
+function messageOrder(left: ScheduledMessage, right: ScheduledMessage): number {
+  return left.sendAt.localeCompare(right.sendAt)
+    || left.createdAt.localeCompare(right.createdAt)
+    || left.id.localeCompare(right.id);
+}
+
 function bySendTime(messages: ScheduledMessage[]): ScheduledMessage[] {
-  return [...messages].sort((left, right) => left.sendAt.localeCompare(right.sendAt));
+  return [...messages].sort(messageOrder);
 }
 
 export function useScheduledMessages(taskId: string) {
@@ -124,11 +130,15 @@ export function ScheduledMessageTray({
   onCancel: (messageId: string) => void;
 }) {
   if (!loading && !error && messages.length === 0) return null;
+  const orderedMessages = bySendTime(messages);
+  const steerable = orderedMessages.find((message) => message.mode === "queued");
+  const steering = steerable ? steeringIds?.has(steerable.id) ?? false : false;
+  const guideBusy = !!steerable && (steering || cancelingIds.has(steerable.id));
   return (
     <div className="scheduled-message-tray" aria-label="待发送消息">
       {loading && messages.length === 0 && <small>正在加载待发送消息…</small>}
       {error && <p role="alert">待发送消息：{error}</p>}
-      {messages.map((message) => {
+      {orderedMessages.map((message) => {
         const canceling = cancelingIds.has(message.id);
         const steering = steeringIds?.has(message.id) ?? false;
         const busy = canceling || steering;
@@ -145,20 +155,6 @@ export function ScheduledMessageTray({
             <b title={message.text || message.attachments.join("\n")}>
               {message.text || (message.attachments.length ? `[${message.attachments.length} 个附件]` : "[空消息]")}
             </b>
-            {queued && onSteer && (
-              <button
-                type="button"
-                className="scheduled-message-guide"
-                disabled={busy}
-                aria-label={`用排队消息“${message.text || "附件"}”引导会话`}
-                onClick={() => onSteer(message.id)}
-              >
-                {steering
-                  ? <SpinnerGap size={12} className="is-spinning" aria-hidden="true" />
-                  : <ChatsCircle size={12} aria-hidden="true" />}
-                <span>{steering ? "引导中" : "引导会话"}</span>
-              </button>
-            )}
             <button
               type="button"
               disabled={busy}
@@ -171,6 +167,22 @@ export function ScheduledMessageTray({
           </div>
         );
       })}
+      {steerable && onSteer && (
+        <div className="scheduled-message-guide-row">
+          <button
+            type="button"
+            className="scheduled-message-guide"
+            disabled={guideBusy}
+            aria-label={`用最早的排队消息“${steerable.text || "附件"}”引导会话`}
+            onClick={() => onSteer(steerable.id)}
+          >
+            {steering
+              ? <SpinnerGap size={13} className="is-spinning" aria-hidden="true" />
+              : <ChatsCircle size={13} weight="duotone" aria-hidden="true" />}
+            <span>{steering ? "引导中" : "引导会话"}</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -11,9 +11,13 @@
 .scheduled-message-row > button { display: grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--faint); }
 .scheduled-message-row > button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .scheduled-message-row > button:focus-visible { outline: 2px solid color-mix(in lch, var(--accent) 55%, transparent); outline-offset: 1px; }
-.scheduled-message-row > .scheduled-message-guide { display: inline-flex; width: auto; height: 22px; align-items: center; gap: 4px; border: 1px solid var(--line2); border-radius: 6px; padding: 0 7px; color: var(--muted); font-size: 9.5px; font-weight: 600; white-space: nowrap; }
-.scheduled-message-row > .scheduled-message-guide:hover:not(:disabled) { border-color: color-mix(in lch, var(--accent) 35%, var(--line2)); background: var(--sel-bg); color: var(--ink); }
 .scheduled-message-row > button:disabled { opacity: .48; }
+.scheduled-message-guide-row { display: flex; justify-content: flex-end; padding-top: 1px; }
+.scheduled-message-guide { display: inline-flex; height: 24px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--overlay); padding: 0 8px; color: var(--muted); font-size: 9.5px; font-weight: 650; white-space: nowrap; }
+.scheduled-message-guide > svg { color: var(--accent); }
+.scheduled-message-guide:hover:not(:disabled) { border-color: color-mix(in lch, var(--accent) 38%, var(--line2)); background: var(--sel-bg); color: var(--ink); }
+.scheduled-message-guide:focus-visible { outline: 2px solid color-mix(in lch, var(--accent) 55%, transparent); outline-offset: 1px; }
+.scheduled-message-guide:disabled { opacity: .48; }
 .scheduled-send-panel { position: absolute; z-index: 26; right: clamp(14px, 3vw, 34px); bottom: 100%; width: min(300px, calc(100% - 28px)); margin-bottom: 7px; border: 1px solid var(--line2); border-radius: 11px; background: var(--panel); padding: 11px; box-shadow: var(--menu-shadow); }
 .scheduled-send-panel > b { display: block; margin-bottom: 9px; font-size: 11.5px; }
 .scheduled-send-panel > label > span { display: block; margin-bottom: 4px; color: var(--faint); font-size: 9.5px; }

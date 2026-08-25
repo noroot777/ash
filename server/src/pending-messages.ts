@@ -262,7 +262,9 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
     .from(scheduledMessages)
     .where(and(eq(scheduledMessages.status, "pending"), isNull(scheduledMessages.deliveringSince)));
   const pending = (taskId ? all.filter((m) => m.taskId === taskId) : all)
-    .sort((a, b) => a.sendAt.localeCompare(b.sendAt)); // 排队消息的 sendAt=入队时刻,天然是先来后到
+    .sort((a, b) => a.sendAt.localeCompare(b.sendAt)
+      || a.createdAt.localeCompare(b.createdAt)
+      || a.id.localeCompare(b.id));
   const fired = new Set<string>(); // 每个任务每轮至多投递一条
   for (const m of pending) {
     try {

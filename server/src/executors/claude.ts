@@ -138,7 +138,7 @@ export class ClaudeExecutor implements AgentExecutor {
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
     const child = this.startupError
       ? failedChild(this.startupError)
-      : spawnForRun(opts.cwd, this.bin, args, opts.prompt, this.env(opts.cwd, model), opts.detach);
+      : spawnForRun(opts.cwd, this.bin, args, opts.prompt, { ...this.env(opts.cwd, model), ...opts.env }, opts.detach);
     return { sessionId, commandLine, events: parseClaudeStream(child, undefined, this.bin, this.type, this.compactWindow()), kill: () => killChild(child), detached: detachedInfo(child) };
   }
 

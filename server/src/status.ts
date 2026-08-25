@@ -33,6 +33,7 @@ export async function setTaskStatus(taskId: string, status: TaskStatus): Promise
   } else if (TERMINAL.includes(status)) {
     patch.endedAt = endedAt = updatedAt;
   }
+  if (status !== "running") patch.activeTurnToken = null;
 
   await db.update(tasks).set(patch).where(eq(tasks.id, taskId));
   // Carry execution-time fields so every surface updates live with the status —

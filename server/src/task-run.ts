@@ -83,9 +83,10 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
 
     // 新回合起点:清掉上一轮可能残留的完成确认/续聊标记(fresh run 从来不是续聊,
     // 也从来不是 CLI 原生命令 —— 上一轮崩在半路留下的标记必须在这里归零)。
+    const turnToken = id();
     await db
       .update(tasks)
-      .set({ followUpFrom: null, nativeTurn: false, completeConfirmedAt: null, updatedAt: now() })
+      .set({ followUpFrom: null, nativeTurn: false, completeConfirmedAt: null, activeTurnToken: turnToken, updatedAt: now() })
       .where(eq(tasks.id, taskId));
     await setTaskStatus(taskId, "running");
     // 已验收任务被 fresh 重跑（Cron 到点 / fire）：旧「已验收」牌子当场摘掉——新一版
@@ -143,7 +144,10 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     // 解绑重启：输出落盘而不是走匿名管道，于是这个 agent 活得过 server 重启
     // （见 executors/detached.ts）。
     const detach = detachedPathsFor(runDir, sessId, turnStart);
-    handle = ex.run({ prompt, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart), detach });
+    handle = ex.run({
+      prompt, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart), detach,
+      env: { ASH_TURN_TOKEN: turnToken },
+    });
     trackRun(taskId, handle);
 
     let cliSessionId = handle.sessionId;
@@ -202,7 +206,7 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
   } catch (err) {
     // handle 已登记后收到「引导会话」时，kill 可能恰好让 parser 抛而不是正常收流。
     // 它仍是受控交接：旧回合不落 failed，releaseTurn 后由已登记的回调续送新方向。
-    if (takeSteered(taskId)) return;
+    if (await takeSteered(taskId)) return;
     const message = String(err instanceof Error ? err.message : err);
     // 基线的事先说：它在这一轮更早的时候就**已经落库**了，说在失败交代之前才对得上
     // 发生顺序。没说过才补（spawn 成功后崩的那种，上面已经写过一条）。

@@ -164,6 +164,9 @@ export const tasks = sqliteTable("tasks", {
   // 落库而不只放内存 —— 确认与结算若不在同一个进程里（历史事故：僵尸实例跑任务、
   // HTTP 打到监听进程），内存标记会静默丢掉，agent 明明确认了却记 failed。
   completeConfirmedAt: text("complete_confirmed_at"),
+  // 当前一次性回合的身份。MCP complete_task 必须带同一 token，旧回合被引导后即使
+  // 迟到也不能把完成票写进新方向；null 只给升级前已经在跑的老回合兼容。
+  activeTurnToken: text("active_turn_token"),
   // 这一轮是 CLI 原生命令（`/compact`）：整条消息由 CLI 本地执行，不进模型 —— 既不是
   // 任务的执行，也不是一轮验证。结算钩子（派验证 / 收验证轮 / 推工作流）必须整段跳过，
   // 否则「压一下上下文」会被记成一轮验证跑完，还白吃一轮配额。开跑时写，结算后清空；

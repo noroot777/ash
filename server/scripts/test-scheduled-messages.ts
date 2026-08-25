@@ -60,6 +60,7 @@ process.stdin.on("data", (d) => {
 });
 process.stdin.on("end", () => {
   if (resident) return process.exit(1);
+  if (!process.env.ASH_TURN_TOKEN) return process.exit(9);
   if (buf.includes("保持运行等待引导")) {
     fs.appendFileSync(process.env.ASH_TEST_LEAD_LOG, buf + "\\n");
     process.stdout.write(JSON.stringify({ type: "system", session_id: "scheduled-steer-cli-session" }) + "\\n");
@@ -77,7 +78,7 @@ writeFileSync(
   { mode: 0o755 },
 );
 
-const [{ db, ensureSchema }, schema, schedulesModule, pending, runs, status, steer, orchestrator, transcript, paths, { bus }] = await Promise.all([
+const [{ db, ensureSchema }, schema, schedulesModule, pending, runs, status, steer, orchestrator, transcript, paths, { bus }, acceptance] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/schedules.js"),
@@ -89,6 +90,7 @@ const [{ db, ensureSchema }, schema, schedulesModule, pending, runs, status, ste
   import("../src/transcript.js"),
   import("../src/paths.js"),
   import("../src/bus.js"),
+  import("../src/acceptance-lock.js"),
 ]);
 const { projects, scheduledMessages, sessions, tasks } = schema;
 await ensureSchema();
@@ -98,9 +100,11 @@ await ensureSchema();
 // 挂着「排队中」(2026-08-13)。所以每一次 status 变化都必须吱一声。
 const trayEvents: string[] = [];
 const statusEvents: Array<{ taskId: string; status: string }> = [];
+const agentEvents: Array<{ taskId: string; event: { kind: string; exitStatus?: number; text?: string } }> = [];
 bus.subscribe((event) => {
   if (event.type === "task.pendingMessages") trayEvents.push(event.taskId);
   if (event.type === "task.status") statusEvents.push({ taskId: event.taskId, status: event.status });
+  if (event.type === "agent.event") agentEvents.push({ taskId: event.taskId, event: event.event });
 });
 const trayEventCount = (taskId: string) => trayEvents.filter((id) => id === taskId).length;
 
@@ -114,6 +118,7 @@ const queuedTaskId = "scheduled-single-queued";
 const lockedTaskId = "scheduled-single-locked";
 const crashTaskId = "scheduled-single-crashed";
 const steerTaskId = "scheduled-single-steer";
+const steerLockedTaskId = "scheduled-single-steer-locked";
 const steerUnavailableTaskId = "scheduled-single-steer-unavailable";
 const unavailableSessionId = "scheduled-team-unavailable-session";
 const unavailableTranscript = transcript.sessionTranscriptPath(unavailableTaskId, unavailableSessionId);
@@ -238,6 +243,7 @@ try {
       resumePrompt: "仍属于当前回合的检查点",
       question: "仍属于当前回合的问题",
     },
+    { ...taskRow(steerLockedTaskId, "claude", "running"), mode: "single", team: null },
   ]);
   await db.insert(sessions).values({
     id: unavailableSessionId,
@@ -406,10 +412,21 @@ try {
     messageRow("scheduled-steer", steerTaskId, "先停下旧方案，改做更稳妥的新方向", "queued"),
   );
   const statusEventStart = statusEvents.length;
+  const agentEventStart = agentEvents.length;
 
   const steered = await steer.steerQueuedMessage("scheduled-steer");
   assert.equal(steered.ok, true, "活动单飞回合上的 queued 消息应能升级为引导");
   assert.equal(await oldRun, true, "旧回合应由原 run loop 完整接管并受控收口");
+  const steeringAgentEvents = agentEvents.slice(agentEventStart).filter((event) => event.taskId === steerTaskId);
+  assert.equal(
+    steeringAgentEvents.some(({ event }) => event.kind === "done" && (event.exitStatus ?? 0) !== 0),
+    false,
+    "受控截断不得向 SSE 发布红色非零 done 边界",
+  );
+  assert.ok(
+    steeringAgentEvents.some(({ event }) => event.kind === "system" && event.text?.includes("引导会话")),
+    "受控截断应发布中性的系统说明",
+  );
   const steeringStatuses = statusEvents.slice(statusEventStart).filter((event) => event.taskId === steerTaskId);
   assert.equal(steeringStatuses.at(0)?.status, "running",
     `旧回合不得先结算成终态再续跑，实际事件：${JSON.stringify(steeringStatuses)}`);
@@ -430,6 +447,8 @@ try {
   );
   assert.match(readFileSync(steerTranscript, "utf8"), /先停下旧方案，改做更稳妥的新方向/,
     "引导消息应落回旧 CLI 会话对应的同一条 session 时间线");
+  assert.match(readFileSync(steerTranscript, "utf8"), /当前回合已由“引导会话”结束/,
+    "刷新后仍应看见旧回合是被引导结束，而不是崩溃");
   await waitFor(
     async () => {
       const current = (await db.select().from(tasks).where(eq(tasks.id, steerTaskId))).at(0)!;
@@ -451,6 +470,27 @@ try {
   assert.equal(retainedTaskState.resumePrompt, "仍属于当前回合的检查点", "失败点击不得清掉检查点");
   assert.equal(retainedTaskState.question, "仍属于当前回合的问题", "失败点击不得清掉提问");
   console.log("✓ 引导会话失败:消息保持 pending 并归还租约");
+
+  // 旧回合已跳过结算、但新回合被验收锁挡回：任务必须离开假 running，消息仍 pending。
+  const lockedOldRun = orchestrator.continueTask(steerLockedTaskId, "保持运行等待引导");
+  await waitFor(() => runs.isRunning(steerLockedTaskId), "验收锁复现的旧回合没有进入 running");
+  await db.insert(scheduledMessages).values(
+    messageRow("scheduled-steer-locked", steerLockedTaskId, "验收结束后再执行这条新方向", "queued"),
+  );
+  assert.equal(acceptance.beginAccepting(steerLockedTaskId), true, "测试前提:验收锁应能占住");
+  const lockedSteer = await steer.steerQueuedMessage("scheduled-steer-locked");
+  acceptance.endAccepting(steerLockedTaskId);
+  assert.equal(lockedSteer.ok, false, "续送被验收锁挡回应如实失败");
+  assert.equal(await lockedOldRun, true, "旧回合应完成受控收口");
+  const lockedSteerTask = (await db.select().from(tasks).where(eq(tasks.id, steerLockedTaskId))).at(0)!;
+  const lockedSteerMessage = (await db.select().from(scheduledMessages)
+    .where(eq(scheduledMessages.id, "scheduled-steer-locked"))).at(0)!;
+  assert.equal(lockedSteerTask.status, "failed", "无 handle/turn 时不得残留假 running");
+  assert.equal(runs.isRunning(steerLockedTaskId), false, "续送失败后不得残留活动 handle");
+  assert.equal(runs.isTurnClaimed(steerLockedTaskId), false, "续送失败后不得残留回合占位");
+  assert.equal(lockedSteerMessage.status, "pending", "续送失败的原话必须继续排队");
+  assert.equal(lockedSteerMessage.deliveringSince, null, "续送失败应在落位后归还租约");
+  console.log("✓ 引导续送被挡回:任务离开假 running，原话保留并归还租约");
 
   // ── 进程死在投递中途:重启后必须自己回来 ──────────────────────────────────
   // 上一段证明了「锁挡回不丢消息」,但锁不是唯一能掐断投递的东西 —— 服务重启会把内存里
@@ -533,6 +573,7 @@ try {
   rmSync(join(paths.RUNS_DIR, crashTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, steerTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, steerUnavailableTaskId), { recursive: true, force: true });
+  rmSync(join(paths.RUNS_DIR, steerLockedTaskId), { recursive: true, force: true });
   // 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
   await releaseTmpDb();
   // 收尾**不许盖住正主**:这里跑在 finally 里,try 抛出的断言错会被这一句的异常顶掉,

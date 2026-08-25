@@ -15,10 +15,14 @@ export type StopSettle = "canceled" | "paused";
 
 const handles = new Map<string, Set<Killable>>();
 const stopping = new Map<string, StopSettle>();
-// 「引导会话」与手动停止不是一回事：它只结束**当前回合**，任务本身保持 running，
-// 旧回合也不能触发完成结算、队列推进或工作流推进。新方向已经作为 pending 消息落库，
-// 当前回合 releaseTurn 后立刻用同一 CLI 会话续送（见 task-steer.ts）。
-const steering = new Set<string>();
+// 「引导会话」是两阶段操作：先预约，让旧回合即使自然结束也等数据库清理结果；清理成功
+// 才提交并 kill，失败则撤销并按普通回合结算。这样 handle 在 await 窗口里消失也不会漏结算。
+type SteeringReservation = {
+  state: "pending" | "committed" | "canceled";
+  decision: Promise<boolean>;
+  decide(value: boolean): void;
+};
+const steering = new Map<string, SteeringReservation>();
 // 「回合已占位、进程还没起来」时收到的冻结请求。这一段窗口里 `handles` 是空的、
 // `tasks.status` 也可能还停在上一轮的终态 —— 只有回合锁看得见它，所以分组暂停既杀不到
 // 也拦不住（第 1 轮审查 finding 1：pause 已经 200 返回，重试仍把 CLI 拉起来了）。
@@ -103,31 +107,56 @@ export function takeStopped(taskId: string): StopSettle | null {
   return s;
 }
 
-/**
- * 受控结束当前单飞回合，并把回调排在它真正释放 turn 之后。
- *
- * 返回 false 表示当前没有可杀的活动进程；调用方必须让消息继续留在队列。先登记
- * steering 和 after-turn，再 kill：即便 killChild 同一拍就让事件流收口，结算侧也能
- * 先看见「这是引导，不是崩溃」，释放点也不会漏掉续送回调。
- */
-export function steerTask(taskId: string, whenIdle: () => void): boolean {
+/** 预约受控结束；调用方完成 DB 清理后 commit，失败时 cancel。 */
+export function reserveSteerTask(
+  taskId: string,
+  whenIdle: () => void,
+): { commit(): void; cancel(): void } | null {
   const set = handles.get(taskId);
-  if (!set || !set.size) return false;
-  steering.add(taskId);
-  whenTurnIdle(taskId, whenIdle);
-  for (const h of set) {
-    try {
-      h.kill();
-    } catch {
-      /* best effort；事件流若仍活着，消息继续持有投递租约，不会被误标 sent */
-    }
-  }
-  return true;
+  if (!set?.size || steering.has(taskId)) return null;
+  let decide!: (value: boolean) => void;
+  const reservation: SteeringReservation = {
+    state: "pending",
+    decision: new Promise<boolean>((resolve) => { decide = resolve; }),
+    decide: (value) => decide(value),
+  };
+  steering.set(taskId, reservation);
+  whenTurnIdle(taskId, () => {
+    if (steering.get(taskId) === reservation) steering.delete(taskId);
+    if (reservation.state === "committed") whenIdle();
+  });
+  return {
+    commit() {
+      if (reservation.state !== "pending") return;
+      reservation.state = "committed";
+      reservation.decide(true);
+      for (const h of handles.get(taskId) ?? []) {
+        try {
+          h.kill();
+        } catch {
+          /* best effort；事件流若仍活着，消息继续持有投递租约，不会被误标 sent */
+        }
+      }
+    },
+    cancel() {
+      if (reservation.state !== "pending") return;
+      reservation.state = "canceled";
+      reservation.decide(false);
+      if (steering.get(taskId) === reservation) steering.delete(taskId);
+    },
+  };
 }
 
-/** 当前回合是否因「引导会话」被受控截断；只消费一次，不能漏给下一回合。 */
-export function takeSteered(taskId: string): boolean {
-  return steering.delete(taskId);
+/**
+ * 当前回合结束时读取引导决定。预约尚在 DB await 中就等待：commit 跳过旧结算，cancel
+ * 继续普通结算。异步是关闭“自然结束恰好撞上清理窗口”竞态的关键。
+ */
+export async function takeSteered(taskId: string): Promise<boolean> {
+  const reservation = steering.get(taskId);
+  if (!reservation) return false;
+  const committed = await reservation.decision;
+  if (!committed && steering.get(taskId) === reservation) steering.delete(taskId);
+  return committed;
 }
 
 // 兼容旧语义(duet 用):是否被主动停止,不区分落位。消费标记,同 takeStopped。

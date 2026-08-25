@@ -230,6 +230,9 @@ export async function continueTask(
     // 模型 —— 没有产出、也不可能交卷,所以必须当旁路回合,否则「压一下上下文」会把任务
     // 打成 failed。
     const sideTurn = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn || !!nativeCommand;
+    // DB 里的 verifyRound/nativeTurn 会在结算中途先清，handle/turn 要到 finally 才释放。
+    // 把旁路身份也钉进运行时 turn role，关闭那段“标记已清、进程仍可被引导”的小窗口。
+    if (sideTurn && sessionRole === "single") reclaimTurn(taskId, nativeCommand ? "native" : "side");
     const followUpFrom = sideTurn
       ? (task.status === "running" || task.status === "queued" ? null : task.status)
       : !opts.system && ["done", "failed", "canceled"].includes(task.status)
@@ -238,9 +241,10 @@ export async function continueTask(
     // 新回合起点:顺手清掉上一轮残留的完成确认(确认只在本回合内有效)。
     // nativeTurn 落库而不是只留在内存里:结算钩子跟这里可能不在同一个进程(重启后由
     // reattach 接着消费同一条流),内存标记会丢,而丢了就等于「压缩被算成一轮验证跑完」。
+    const turnToken = id();
     await db
       .update(tasks)
-      .set({ followUpFrom, nativeTurn: !!nativeCommand, completeConfirmedAt: null, updatedAt: now() })
+      .set({ followUpFrom, nativeTurn: !!nativeCommand, completeConfirmedAt: null, activeTurnToken: turnToken, updatedAt: now() })
       .where(eq(tasks.id, taskId));
 
     const { executor: ex, profileId, profileFingerprint } = await resolveExecutorWithProfile({
@@ -391,6 +395,7 @@ export async function continueTask(
       sessionId: resuming ? prev!.cliSessionId! : undefined,
       trace: runTracePaths(runDir, sessId, turnStart),
       detach,
+      env: { ASH_TURN_TOKEN: turnToken },
     });
     trackRun(taskId, handle);
 
@@ -407,6 +412,7 @@ export async function continueTask(
         .set({
           turnStartedAt: turnStart,
           endedAt: null,
+          exitStatus: null,
           commandLine: handle.commandLine,
           executor: ex.label,
           // 回合保真四件套整组刷新（说明见 db/schema.ts）：profile / 环境指纹 / 模型 /
@@ -510,7 +516,7 @@ export async function continueTask(
   } catch (err) {
     // 与 consumeSingleRun 的正常收流分支对称：有些 CLI 被 kill 后会让 parser 直接抛。
     // 「引导会话」已经在 releaseTurn 后登记了同会话续送，这里不能再把旧回合结算成 failed。
-    if (takeSteered(taskId)) return true;
+    if (await takeSteered(taskId)) return true;
     const message = String(err instanceof Error ? err.message : err);
     // 基线的事先说：它在这一轮更早的时候就**已经落库**了（解析工作目录那一刻），说在
     // 失败交代之前才对得上发生顺序；没说过才补。

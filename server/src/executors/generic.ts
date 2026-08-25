@@ -60,7 +60,7 @@ export class GenericCliExecutor implements AgentExecutor {
     const commandLine = redactSecrets(
       `${this.bin} ${shown.join(" ")}${stdin ? " <prompt via stdin>" : ""}`,
     );
-    const child = spawnForRun(opts.cwd, this.bin, args, stdin ? opts.prompt : "", this.env(), opts.detach);
+    const child = spawnForRun(opts.cwd, this.bin, args, stdin ? opts.prompt : "", { ...this.env(), ...opts.env }, opts.detach);
     const lifecycle = { stopRequested: false };
     const parser = this.spec.exec.parser ?? textParser;
     return {

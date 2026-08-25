@@ -15,7 +15,7 @@ import { setTaskStatus } from "./status.js";
 import { takeSteered, takeStopped, takeConfirmed, type StopSettle } from "./runs.js";
 import type { AgentExecutor, RunHandle } from "./executors/types.js";
 import { LOST_SESSION_PATCH, SESSION_LOST_NOTE, isSessionLost } from "./executors/session-lost.js";
-import { appendSessionTrace, writeTurnEnd, writeRunError } from "./transcript.js";
+import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "./transcript.js";
 import { notifyTeamLead } from "./team/inbox.js";
 import { handleTaskSettlement } from "./review.js";
 import { handleFreeWorkflowSettlement } from "./free-workflow.js";
@@ -82,6 +82,7 @@ const UNCONFIRMED_NOTE =
   "回合正常结束,但本回合内没有收到 complete_task 的完成确认 —— 按严格完成协议记为 failed。可能是 agent 没调用;也可能它调了但被拒(409,如任务状态在运行中被外部改动)。若任务其实已完成,可手动把状态改成已完成;重试则会从中断处续跑。";
 const GROUP_PAUSED_NOTE =
   "分组被暂停,本回合被中止 —— 任务落为已暂停;点「运行/继续」恢复分组时会从当前会话接着跑。";
+const STEERED_NOTE = "〔系统〕当前回合已由“引导会话”结束。";
 export async function settleTaskStatus(
   taskId: string,
   exitStatus: number,
@@ -245,6 +246,8 @@ export async function consumeSingleRun(a: {
   try {
   let cliSessionId = a.cliSessionId;
   let exitStatus = 0;
+  let doneEvent: AgentEvent | null = null;
+  let streamError: unknown = null;
   // CLI 否认过这条会话吗（见 executors/session-lost.ts）。认下来的话这一轮收尾时要把
   // 失效的 id 从库里清掉，否则每一次重试都在 --resume 同一个不存在的会话。
   let sessionLost = false;
@@ -360,6 +363,11 @@ export async function consumeSingleRun(a: {
         const emittedEvent = event.kind === "usage"
           ? await recordSessionUsageEvent(sessId, event, agentType, cliSessionId)
           : event;
+        if (emittedEvent.kind === "done") {
+          exitStatus = emittedEvent.exitStatus;
+          doneEvent = emittedEvent;
+          continue;
+        }
         persistTrace(emittedEvent);
         if (emittedEvent.kind === "error") {
           writeRunError(out, emittedEvent.message);
@@ -368,9 +376,12 @@ export async function consumeSingleRun(a: {
         // 水位相反：**覆盖**。它属于整条会话的此刻，不属于某一个回合，所以也不进 trace。
         if (emittedEvent.kind === "context") await setSessionContext(sessId, emittedEvent.context);
         publishEvent(emittedEvent);
-        if (emittedEvent.kind === "done") exitStatus = emittedEvent.exitStatus;
       }
     }
+  } catch (error) {
+    // 先保留异常，等 steering 的两阶段决定：已提交的引导是受控结束，不该冒成 parser
+    // 崩溃；预约若撤销，再把原异常交回原来的失败路径。
+    streamError = error;
   } finally {
     if (offsetTimer) clearInterval(offsetTimer);
   }
@@ -382,7 +393,8 @@ export async function consumeSingleRun(a: {
   // A stop kills the subprocess → the stream ends like a normal exit; settle
   // by the stop kind (manual → canceled, group pause → paused) so it can be
   // re-run / continued.
-  const steered = takeSteered(taskId);
+  const steered = await takeSteered(taskId);
+  if (streamError && !steered) throw streamError;
   const stopped = takeStopped(taskId);
   const endIso = now();
   // CLI 否认了这条会话：把失效的 id 连同由它派生的三件套恢复命令一起清掉。清了之后
@@ -415,9 +427,15 @@ export async function consumeSingleRun(a: {
     // 会把旧方向误记 failed/canceled、推进队列，还可能触发工作流/审查；若补放旧回合
     // 的 complete_task，又会让新方向一开始就继承一张错误的完成票。
     clearTurnStart(taskId);
+    writeTurn(out, { t: "system", agent: agentType, text: STEERED_NOTE }, endIso);
+    publishEvent({ kind: "system", text: STEERED_NOTE, at: endIso });
     writeTurnEnd(out, endIso);
     out.end();
     return;
+  }
+  if (doneEvent) {
+    persistTrace(doneEvent, endIso);
+    publishEvent(doneEvent);
   }
   if (dropSession) {
     // 只弹一句错误不算数：用户看到的是一行英文 `No conversation found with session ID`，

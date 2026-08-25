@@ -78,7 +78,7 @@ export async function ensureSchema() {
       verify_station_rounds INTEGER NOT NULL DEFAULT 0,
       labels TEXT NOT NULL DEFAULT '[]', depends_on TEXT NOT NULL DEFAULT '[]',
       resume_depends_on TEXT NOT NULL DEFAULT '[]',
-      agent_type TEXT, executor_id TEXT, model TEXT, reasoning_effort TEXT,
+      agent_type TEXT, executor_id TEXT, model TEXT, reasoning_effort TEXT, active_turn_token TEXT,
       auto_title INTEGER NOT NULL DEFAULT 0, duet TEXT, schedule_id TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL, started_at TEXT, ended_at TEXT,
       archived INTEGER NOT NULL DEFAULT 0, archived_at TEXT
@@ -234,6 +234,7 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN follow_up_from TEXT",
     // 完成确认落库（严格 done 协议），确认与结算跨进程也不丢
     "ALTER TABLE tasks ADD COLUMN complete_confirmed_at TEXT",
+    "ALTER TABLE tasks ADD COLUMN active_turn_token TEXT",
     // 正交验收阶段，只用于展示与协作，不进入 TaskStatus 调度/结算
     "ALTER TABLE tasks ADD COLUMN stage TEXT",
     // 正交列表展示字段：null=未置顶，整数毫秒时间戳用于多个置顶任务排序

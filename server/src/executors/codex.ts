@@ -115,7 +115,7 @@ export class CodexExecutor implements AgentExecutor {
     const contextNotBeforeMs = Date.now();
     const args = this.execArgs(opts, opts.sessionId ?? "");
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
-    const child = spawnForRun(opts.cwd, this.bin, args, opts.prompt, this.env(), opts.detach);
+    const child = spawnForRun(opts.cwd, this.bin, args, opts.prompt, { ...this.env(), ...opts.env }, opts.detach);
     const lifecycle = { stopRequested: false };
     return {
       sessionId: opts.sessionId ?? "",

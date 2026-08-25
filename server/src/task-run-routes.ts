@@ -236,6 +236,9 @@ api.post("/tasks/:id/complete", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.status !== "running") return c.json({ error: "只能在任务正在运行时确认完成", status: r.status }, 409);
+  if (r.activeTurnToken && c.req.header("x-ash-turn-token") !== r.activeTurnToken) {
+    return c.json({ error: "完成确认来自已结束的回合，已拒绝写入当前会话" }, 409);
+  }
   await db.update(tasks).set({ completeConfirmedAt: now(), updatedAt: now() }).where(eq(tasks.id, taskId));
   confirmDone(taskId);
   // 续聊回合(followUpFrom 非空)确认完成 = 把任务推进到 done;正常回合就是 done。
@@ -405,9 +408,14 @@ api.post("/tasks/:id/reply", (c) => replyToTask(c, c.req.param("id")));
 
 // List a task's pending scheduled messages (soonest first).
 api.get("/tasks/:id/scheduled-messages", async (c) => {
-  const rows = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.taskId, c.req.param("id"))))
-    .filter((m) => m.status === "pending")
-    .sort((a, b) => a.sendAt.localeCompare(b.sendAt));
+  const rows = await db
+    .select()
+    .from(scheduledMessages)
+    .where(and(
+      eq(scheduledMessages.taskId, c.req.param("id")),
+      eq(scheduledMessages.status, "pending"),
+    ))
+    .orderBy(asc(scheduledMessages.sendAt), asc(scheduledMessages.createdAt), asc(scheduledMessages.id));
   return c.json(rows.map(toScheduledMessage));
 });
 
