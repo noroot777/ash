@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { CodexExecutor } from "../src/executors/codex.js";
 import { codexAshMcpServerName } from "../src/executors/codex-mcp.js";
@@ -15,6 +16,9 @@ const oldOutput = process.env.ASH_FAKE_MCP_OUTPUT;
 
 try {
   assert.equal(ASH_MCP_SERVER_NAME, "ash", "安装器约定的规范 MCP 名必须是 ash");
+  const setupSource = readFileSync(fileURLToPath(new URL("../../scripts/setup.mjs", import.meta.url)), "utf8");
+  assert.doesNotMatch(setupSource, /from\s+["'][^"']+\.ts["']/, "setup 必须兼容不能裸导入 TS 的 Node 22.16");
+  assert.match(setupSource, /const ASH_MCP_SERVER_NAME = "ash"/, "安装器的规范名必须与运行时一致");
   writeFileSync(join(root, "config.toml"), `
 [mcp_servers.${ASH_MCP_SERVER_NAME}]
 command = "node"
@@ -29,7 +33,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const args = process.argv.slice(2);
-const config = readFileSync(join(process.env.CODEX_HOME, "config.toml"), "utf8");
+let config = "";
+try { config = readFileSync(join(process.env.CODEX_HOME, "config.toml"), "utf8"); } catch {}
 let configured = {};
 for (let i = 0; i < args.length - 1; i += 1) {
   if (args[i] !== "-c") continue;
@@ -76,6 +81,23 @@ process.stdout.write(JSON.stringify({ type: "turn.completed" }) + "\\n");
   assert.ok(!handle.commandLine.includes(turnToken), "sessions.commandLine 不得泄露回合 token");
   assert.match(handle.commandLine, /mcp_servers\.ash\.env_vars=/, "参数必须写到规范 ash MCP 条目");
   assert.ok(!handle.commandLine.includes("mcp_servers.harness"), "规范安装不能被历史 harness 名盖回去");
+
+  const unconfigured = join(root, "unconfigured");
+  mkdirSync(unconfigured);
+  assert.equal(codexAshMcpServerName(unconfigured), null, "没有声明 MCP server 时不得凭空补一个 ash 条目");
+  const noMcpHandle = executor.run({
+    cwd: root,
+    prompt: "probe without registered MCP",
+    env: { CODEX_HOME: unconfigured, ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken },
+  });
+  for await (const _event of noMcpHandle.events) {
+    // 等假 Codex 完整退出。
+  }
+  assert.ok(!noMcpHandle.commandLine.includes("mcp_servers."), "未配置 MCP 时 Codex argv 不得出现无效 server 覆盖");
+  assert.ok(!noMcpHandle.commandLine.includes(turnToken), "未配置 MCP 的降级路径同样不得泄露 token");
+  const noMcpChildEnv = JSON.parse(readFileSync(output, "utf8")) as Record<string, string>;
+  assert.equal(noMcpChildEnv.ASH_TASK_ID, undefined);
+  assert.equal(noMcpChildEnv.ASH_TURN_TOKEN, undefined, "未注册 MCP 时只能降级，不能伪造一个无效 transport");
 
   writeFileSync(join(root, "config.toml"), `
 [mcp_servers.${LEGACY_ASH_MCP_SERVER_NAME}]

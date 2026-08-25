@@ -220,8 +220,13 @@ api.post("/tasks/:id/pause", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.status !== "running") return c.json({ error: "只能在任务正在运行时设置检查点", status: r.status }, 409);
-  if (r.activeTurnToken && c.req.header("x-ash-turn-token") !== r.activeTurnToken) {
-    return c.json({ error: "检查点来自已结束的回合，已拒绝写入当前会话" }, 409);
+  const pauseToken = c.req.header("x-ash-turn-token");
+  if (r.activeTurnToken && pauseToken !== r.activeTurnToken) {
+    return c.json({
+      error: pauseToken
+        ? "检查点来自已结束的回合，已拒绝写入当前会话"
+        : "MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），检查点已拒绝写入",
+    }, 409);
   }
   const updated = await db
     .update(tasks)
@@ -250,8 +255,13 @@ api.post("/tasks/:id/complete", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.status !== "running") return c.json({ error: "只能在任务正在运行时确认完成", status: r.status }, 409);
-  if (r.activeTurnToken && c.req.header("x-ash-turn-token") !== r.activeTurnToken) {
-    return c.json({ error: "完成确认来自已结束的回合，已拒绝写入当前会话" }, 409);
+  const completeToken = c.req.header("x-ash-turn-token");
+  if (r.activeTurnToken && completeToken !== r.activeTurnToken) {
+    return c.json({
+      error: completeToken
+        ? "完成确认来自已结束的回合，已拒绝写入当前会话"
+        : "MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），完成确认已拒绝写入",
+    }, 409);
   }
   const updated = await db
     .update(tasks)
@@ -345,8 +355,13 @@ api.post("/tasks/:id/ask", async (c) => {
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.mode !== "team" && r.status !== "running")
     return c.json({ error: "只能在任务正在运行时提问", status: r.status }, 409);
-  if (r.mode !== "team" && r.activeTurnToken && c.req.header("x-ash-turn-token") !== r.activeTurnToken) {
-    return c.json({ error: "提问来自已结束的回合，已拒绝写入当前会话" }, 409);
+  const askToken = c.req.header("x-ash-turn-token");
+  if (r.mode !== "team" && r.activeTurnToken && askToken !== r.activeTurnToken) {
+    return c.json({
+      error: askToken
+        ? "提问来自已结束的回合，已拒绝写入当前会话"
+        : "MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），提问已拒绝写入",
+    }, 409);
   }
   const asked = await setTaskQuestion({
     taskId,

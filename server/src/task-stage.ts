@@ -181,8 +181,13 @@ export function mountTaskStageRoutes(api: Hono): void {
     // 接力出去的任务不能再流转验收阶段:它在本机只是历史存档,阶段变化应发生在对端。
     const handedOff = handoffBlockReason(task.handoff);
     if (handedOff) return c.json({ error: handedOff, handoff: true }, 409);
-    if (task.status === "running" && task.activeTurnToken && c.req.header("x-ash-turn-token") !== task.activeTurnToken) {
-      return c.json({ error: "验收阶段来自已结束的回合，已拒绝写入当前会话" }, 409);
+    const stageToken = c.req.header("x-ash-turn-token");
+    if (task.status === "running" && task.activeTurnToken && stageToken !== task.activeTurnToken) {
+      return c.json({
+        error: stageToken
+          ? "验收阶段来自已结束的回合，已拒绝写入当前会话"
+          : "MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），验收阶段已拒绝写入",
+      }, 409);
     }
 
     try {

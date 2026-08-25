@@ -206,13 +206,15 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
   } catch (err) {
     // handle 已登记后收到「引导会话」时，kill 可能恰好让 parser 抛而不是正常收流。
     // 它仍是受控交接：旧回合不落 failed，releaseTurn 后由已登记的回调续送新方向。
-    if (await takeSteered(taskId)) return;
+    const steered = await takeSteered(taskId);
+    const stopped = takeStopped(taskId);
+    if (steered && !stopped) return;
     const message = String(err instanceof Error ? err.message : err);
     // 基线的事先说：它在这一轮更早的时候就**已经落库**了，说在失败交代之前才对得上
     // 发生顺序。没说过才补（spawn 成功后崩的那种，上面已经写过一条）。
     if (!baseFallbackTold) await announceBaseFallback(taskId, baseFallback, { role: "single" });
     await reportTurnFailure({ taskId, message, role: "single" });
-    const status = takeStopped(taskId) ?? "failed";
+    const status = stopped ?? "failed";
     await setTaskStatus(taskId, status);
     await afterSettlement(taskId, status, false, false);
   } finally {

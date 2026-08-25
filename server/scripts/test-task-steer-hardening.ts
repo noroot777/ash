@@ -64,6 +64,13 @@ const message = (
   sentAt: null,
   deliveringSince: null,
 });
+const waitFor = async (predicate: () => boolean, label: string): Promise<void> => {
+  for (let i = 0; i < 100; i += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`等待超时：${label}`);
+};
 
 try {
   // 两阶段预约：旧流先结束时必须等 commit；cancel 则回到普通结算，不 kill、不续送。
@@ -81,7 +88,7 @@ try {
   });
   await Promise.resolve();
   assert.equal(decided, false, "DB 清理尚未提交时，已结束的旧流必须等待决定");
-  reservation.commit();
+  assert.equal(reservation.commit(), "committed");
   assert.equal(kills, 1, "提交后才 kill 当前 handle");
   assert.equal(await decision, true, "提交后旧回合跳过普通结算");
   runs.untrackRun("reservation", handle);
@@ -100,6 +107,46 @@ try {
   runs.releaseTurn("reservation-cancel");
   assert.equal(kills, 1, "撤销不得 kill");
   assert.equal(continued, 1, "撤销不得续送");
+
+  assert.equal(runs.claimTurn("reservation-stop", "single"), true);
+  const stopHandle = { kill: () => { kills++; } };
+  runs.trackRun("reservation-stop", stopHandle);
+  let stoppedOutcome: { stopped: "canceled" | "paused" | null; needsSettlement: boolean } | null = null;
+  const stoppedReservation = runs.reserveSteerTask("reservation-stop", (outcome) => { stoppedOutcome = outcome; });
+  assert.ok(stoppedReservation);
+  assert.equal(runs.stopTask("reservation-stop"), true);
+  assert.equal(stoppedReservation.commit(), "stopping", "停止发生后预约不得再提交引导");
+  assert.equal(await runs.takeSteered("reservation-stop"), false, "停止必须压过 pending 引导决定");
+  assert.equal(runs.takeStopped("reservation-stop"), "canceled");
+  runs.untrackRun("reservation-stop", stopHandle);
+  runs.releaseTurn("reservation-stop");
+  assert.deepEqual(stoppedOutcome, { stopped: "canceled", needsSettlement: false });
+
+  assert.equal(runs.claimTurn("reservation-late-stop", "single"), true);
+  const lateStopHandle = { kill: () => { kills++; } };
+  runs.trackRun("reservation-late-stop", lateStopHandle);
+  let lateStopOutcome: { stopped: "canceled" | "paused" | null; needsSettlement: boolean } | null = null;
+  const lateStopReservation = runs.reserveSteerTask("reservation-late-stop", (outcome) => { lateStopOutcome = outcome; });
+  assert.ok(lateStopReservation);
+  assert.equal(lateStopReservation.commit(), "committed");
+  assert.equal(await runs.takeSteered("reservation-late-stop"), true);
+  assert.equal(runs.stopTask("reservation-late-stop", "paused"), true, "提交后晚到的分组暂停仍须优先");
+  runs.untrackRun("reservation-late-stop", lateStopHandle);
+  runs.releaseTurn("reservation-late-stop");
+  assert.deepEqual(lateStopOutcome, { stopped: "paused", needsSettlement: true });
+  assert.equal(runs.takeStopped("reservation-late-stop"), null, "释放回调应消费旧回合漏掉的停止落位");
+
+  assert.equal(runs.claimTurn("reservation-lost", "single"), true);
+  const lostHandle = { kill: () => { kills++; } };
+  runs.trackRun("reservation-lost", lostHandle);
+  let lostDelivered = false;
+  const lostReservation = runs.reserveSteerTask("reservation-lost", () => { lostDelivered = true; });
+  assert.ok(lostReservation);
+  runs.releaseTurn("reservation-lost");
+  assert.equal(lostReservation.commit(), "lost", "idle 回调已在 pending 阶段烧掉时必须拒绝假提交");
+  assert.equal(await runs.takeSteered("reservation-lost"), false);
+  assert.equal(lostDelivered, false, "丢失续送机会后不能无界等待或误报已投递");
+  runs.untrackRun("reservation-lost", lostHandle);
   console.log("✓ steering reservation 覆盖自然结束竞态，并支持无副作用撤销");
 
   await db.insert(tasks).values([
@@ -108,6 +155,8 @@ try {
     task("review-task", { reviewOf: "target" }),
     task("reviewer-role"),
     task("ordered"),
+    task("stopping", { activeTurnToken: "stopping-token" }),
+    task("late-stop-db", { activeTurnToken: "late-stop-token" }),
     task("token", { activeTurnToken: "new-token" }),
     task("patch-source", { activeTurnToken: "source-token" }),
     task("patch-target", { activeTurnToken: "target-token" }),
@@ -121,6 +170,8 @@ try {
     message("m-reviewer-role", "reviewer-role"),
     message("ordered-a", "ordered"),
     message("ordered-b", "ordered"),
+    message("m-stopping", "stopping"),
+    message("m-late-stop-db", "late-stop-db"),
   ]);
 
   for (const [messageId, pattern] of [
@@ -154,6 +205,40 @@ try {
   runs.releaseTurn("ordered");
   console.log("✓ 引导只能消费队首，API 无法把较晚消息反序提前");
 
+  assert.equal(runs.claimTurn("stopping", "single"), true);
+  const stoppingHandle = { kill: () => { kills++; } };
+  runs.trackRun("stopping", stoppingHandle);
+  assert.equal(runs.stopTask("stopping"), true);
+  const stoppingResult = await steer.steerQueuedMessage("m-stopping");
+  assert.equal(stoppingResult.ok, false, "已经点停止后不得再接受引导");
+  if (!stoppingResult.ok) assert.match(stoppingResult.error, /停止|暂停/);
+  const stoppingMessage = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, "m-stopping"))).at(0)!;
+  assert.equal(stoppingMessage.deliveringSince, null, "停止优先的拒绝不得占消息租约");
+  assert.equal((await db.select().from(tasks).where(eq(tasks.id, "stopping"))).at(0)!.activeTurnToken, "stopping-token");
+  assert.equal(runs.takeStopped("stopping"), "canceled");
+  runs.untrackRun("stopping", stoppingHandle);
+  runs.releaseTurn("stopping");
+
+  assert.equal(runs.claimTurn("late-stop-db", "single"), true);
+  let lateDbKills = 0;
+  const lateDbHandle = { kill: () => { lateDbKills++; } };
+  runs.trackRun("late-stop-db", lateDbHandle);
+  const lateDbSteer = steer.steerQueuedMessage("m-late-stop-db");
+  await waitFor(() => lateDbKills === 1, "引导提交并 kill 旧回合");
+  assert.equal(await runs.takeSteered("late-stop-db"), true, "模拟旧回合已读到 committed 引导");
+  assert.equal(runs.stopTask("late-stop-db", "paused"), true, "旧回合收尾窗口里的分组暂停应被记录");
+  runs.untrackRun("late-stop-db", lateDbHandle);
+  runs.releaseTurn("late-stop-db");
+  const lateDbResult = await lateDbSteer;
+  assert.equal(lateDbResult.ok, false, "晚到停止应让正在等待的引导请求明确失败");
+  if (!lateDbResult.ok) assert.match(lateDbResult.error, /暂停|停止/);
+  assert.equal((await db.select().from(tasks).where(eq(tasks.id, "late-stop-db"))).at(0)!.status, "paused");
+  const lateDbMessage = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, "m-late-stop-db"))).at(0)!;
+  assert.equal(lateDbMessage.status, "pending");
+  assert.equal(lateDbMessage.deliveringSince, null);
+  assert.equal(runs.takeStopped("late-stop-db"), null, "补结算后停止标记不得泄漏给下一回合");
+  console.log("✓ 停止/分组暂停优先于引导，停止标记不丢失也不泄漏给新回合");
+
   const api = new Hono();
   mountTaskRunRoutes(api);
   mountTaskRoutes(api);
@@ -162,6 +247,13 @@ try {
     method: "POST",
     headers: token ? { "x-ash-turn-token": token } : undefined,
   });
+  const missingComplete = await complete();
+  assert.equal(missingComplete.status, 409);
+  assert.match(
+    ((await missingComplete.json()) as { error: string }).error,
+    /MCP.*回合身份|ASH_TURN_TOKEN/,
+    "没收到 token 时应提示执行器/MCP 传递问题，而不是误报旧回合",
+  );
   const stale = await complete("old-token");
   assert.equal(stale.status, 409, "旧回合完成确认必须被拒绝");
   assert.equal(

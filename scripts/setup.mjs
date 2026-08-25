@@ -22,7 +22,11 @@ import { fileURLToPath } from "node:url";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 import { IS_WINDOWS, which, windowsLongPaths } from "./platform.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces, npmConfigValue } from "./workspace-check.mjs";
-import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "../shared/src/mcp.ts";
+
+// setup 必须能在声明支持的 Node 22.16 上裸跑；那一版不能无 flag 导入 .ts。
+// 运行时代码的同名常量在 shared/src/mcp.ts，回归测试会把规范名钉为 ash。
+const ASH_MCP_SERVER_NAME = "ash";
+const LEGACY_ASH_MCP_SERVER_NAME = "harness";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 process.chdir(REPO);

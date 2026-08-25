@@ -516,7 +516,9 @@ export async function continueTask(
   } catch (err) {
     // 与 consumeSingleRun 的正常收流分支对称：有些 CLI 被 kill 后会让 parser 直接抛。
     // 「引导会话」已经在 releaseTurn 后登记了同会话续送，这里不能再把旧回合结算成 failed。
-    if (await takeSteered(taskId)) return true;
+    const steered = await takeSteered(taskId);
+    const stopped = takeStopped(taskId);
+    if (steered && !stopped) return true;
     const message = String(err instanceof Error ? err.message : err);
     // 基线的事先说：它在这一轮更早的时候就**已经落库**了（解析工作目录那一刻），说在
     // 失败交代之前才对得上发生顺序；没说过才补。
@@ -552,7 +554,7 @@ export async function continueTask(
         .set({ ...(back ? { followUpFrom: null } : {}), ...(nativeTurn ? { nativeTurn: false } : {}), updatedAt: now() })
         .where(eq(tasks.id, taskId));
     }
-    const status = takeStopped(taskId) ?? back ?? "failed";
+    const status = stopped ?? back ?? "failed";
     await setStatus(taskId, status);
     // 压缩连启动都没启动,更谈不上有结论 —— 跟正常结算同一口径(single-run.ts):整段
     // 跳过结算钩子。交给它的话,正在跑的那轮就地验证会被当成「验完了」收掉(清 verifyRound、

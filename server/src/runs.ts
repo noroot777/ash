@@ -19,6 +19,7 @@ const stopping = new Map<string, StopSettle>();
 // 才提交并 kill，失败则撤销并按普通回合结算。这样 handle 在 await 窗口里消失也不会漏结算。
 type SteeringReservation = {
   state: "pending" | "committed" | "canceled";
+  stopSettle: StopSettle | null;
   decision: Promise<boolean>;
   decide(value: boolean): void;
 };
@@ -53,6 +54,15 @@ export function stopTask(taskId: string, settle: StopSettle = "canceled"): boole
   const set = handles.get(taskId);
   if (!set || !set.size) return false;
   stopping.set(taskId, settle);
+  // 停止优先于已经预约/提交的引导：pending 要唤醒正在等决定的旧回合，committed 要
+  // 阻止 releaseTurn 后续送。预约回调会判断停止是否已由旧回合结算，漏掉才补结算。
+  const reservation = steering.get(taskId);
+  if (reservation) {
+    const wasPending = reservation.state === "pending";
+    reservation.state = "canceled";
+    reservation.stopSettle = settle;
+    if (wasPending) reservation.decide(false);
+  }
   for (const h of set) {
     try {
       h.kill();
@@ -110,24 +120,46 @@ export function takeStopped(taskId: string): StopSettle | null {
 /** 预约受控结束；调用方完成 DB 清理后 commit，失败时 cancel。 */
 export function reserveSteerTask(
   taskId: string,
-  whenIdle: () => void,
-): { commit(): void; cancel(): void } | null {
+  whenIdle: (outcome: { stopped: StopSettle | null; needsSettlement: boolean }) => void,
+): { commit(): "committed" | "stopping" | "lost"; cancel(): void } | null {
   const set = handles.get(taskId);
-  if (!set?.size || steering.has(taskId)) return null;
+  if (!set?.size || steering.has(taskId) || stopping.has(taskId)) return null;
   let decide!: (value: boolean) => void;
   const reservation: SteeringReservation = {
     state: "pending",
+    stopSettle: null,
     decision: new Promise<boolean>((resolve) => { decide = resolve; }),
     decide: (value) => decide(value),
   };
   steering.set(taskId, reservation);
   whenTurnIdle(taskId, () => {
     if (steering.get(taskId) === reservation) steering.delete(taskId);
-    if (reservation.state === "committed") whenIdle();
+    if (reservation.stopSettle) {
+      // 旧回合正常停止路径会先 takeStopped；还留着说明停止晚到、旧回合已按 steered
+      // 收尾，必须由引导回调补结算，不能让 running 和停止标记一起漏给下一轮。
+      const lateStop = takeStopped(taskId);
+      whenIdle({ stopped: lateStop ?? reservation.stopSettle, needsSettlement: !!lateStop });
+    } else if (reservation.state === "committed") {
+      whenIdle({ stopped: null, needsSettlement: false });
+    }
   });
   return {
     commit() {
-      if (reservation.state !== "pending") return;
+      if (reservation.state !== "pending") return reservation.stopSettle ? "stopping" : "lost";
+      const stopped = stopping.get(taskId);
+      if (stopped) {
+        reservation.state = "canceled";
+        reservation.stopSettle = stopped;
+        reservation.decide(false);
+        return "stopping";
+      }
+      // turn 在数据库 await 期间已经释放，whenTurnIdle 那次机会也已经烧掉；此时不能
+      // 假提交后无界等待 delivery，交给调用方恢复状态并归还消息租约。
+      if (steering.get(taskId) !== reservation) {
+        reservation.state = "canceled";
+        reservation.decide(false);
+        return "lost";
+      }
       reservation.state = "committed";
       reservation.decide(true);
       for (const h of handles.get(taskId) ?? []) {
@@ -137,6 +169,7 @@ export function reserveSteerTask(
           /* best effort；事件流若仍活着，消息继续持有投递租约，不会被误标 sent */
         }
       }
+      return "committed";
     },
     cancel() {
       if (reservation.state !== "pending") return;
@@ -155,8 +188,11 @@ export async function takeSteered(taskId: string): Promise<boolean> {
   const reservation = steering.get(taskId);
   if (!reservation) return false;
   const committed = await reservation.decision;
-  if (!committed && steering.get(taskId) === reservation) steering.delete(taskId);
-  return committed;
+  if ((!committed || reservation.state !== "committed") && steering.get(taskId) === reservation) {
+    // 回调已经闭包持有 reservation；从 map 摘掉不会丢停止后的清理通知。
+    steering.delete(taskId);
+  }
+  return committed && reservation.state === "committed";
 }
 
 // 兼容旧语义(duet 用):是否被主动停止,不区分落位。消费标记,同 takeStopped。

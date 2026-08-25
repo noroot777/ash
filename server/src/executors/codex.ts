@@ -118,7 +118,7 @@ export class CodexExecutor implements AgentExecutor {
     const identityVars = ASH_MCP_IDENTITY_ENV_VARS.filter((key) => !!opts.env?.[key]);
     if (identityVars.length) {
       const serverName = codexAshMcpServerName(opts.env?.CODEX_HOME);
-      common.push("-c", `mcp_servers.${serverName}.env_vars=${JSON.stringify(identityVars)}`);
+      if (serverName) common.push("-c", `mcp_servers.${serverName}.env_vars=${JSON.stringify(identityVars)}`);
     }
     return sessionId ? ["exec", ...common, "resume", sessionId, "-"] : ["exec", ...common, "-"];
   }

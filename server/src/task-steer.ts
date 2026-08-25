@@ -14,12 +14,15 @@ import { continueTask } from "./orchestrator.js";
 import { abortDelivery, beginDelivery, deliveryOptions, markSent } from "./pending-messages.js";
 import {
   isRunning,
+  isCanceling,
   isTurnClaimed,
   reserveSteerTask,
+  type StopSettle,
   takeConfirmed,
   turnRole,
 } from "./runs.js";
 import { setTaskStatus } from "./status.js";
+import { appendTaskTimeline } from "./task-timeline.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { id, now } from "./util.js";
 
@@ -125,6 +128,48 @@ function deliverSteeredMessage(message: MessageRow): Promise<SteerQueuedMessageR
   });
 }
 
+async function finishStoppedSteer(
+  message: MessageRow,
+  stopped: StopSettle,
+  needsSettlement: boolean,
+): Promise<SteerQueuedMessageResult> {
+  try {
+    if (needsSettlement) {
+      const { settleTaskStatus, afterSettlement } = await import("./single-run.js");
+      const settled = await settleTaskStatus(message.taskId, 1, stopped);
+      const { clearTurnStart } = await import("./turn-output.js");
+      clearTurnStart(message.taskId);
+      await reconcileTurnBaseline(message.taskId, settled.confirmedDone);
+      if (!settled.nativeTurn) {
+        await afterSettlement(message.taskId, settled.status, settled.confirmedDone, false);
+      }
+      await appendTaskTimeline(
+        message.taskId,
+        stopped === "paused"
+          ? "分组暂停发生在引导收尾期间：引导已取消，任务已暂停，排队消息仍保留。"
+          : "手动停止发生在引导收尾期间：引导已取消，停止已落账，排队消息仍保留。",
+      );
+    }
+    // 停止结算会触发一次“任务空闲，扫描排队消息”；租约必须一直持有到结算完成，
+    // 否则扫描会在停止刚落库时把同一条消息重新抢走，看起来仍像停止被吞了。
+    await abortDelivery(message);
+    return {
+      ok: false,
+      status: 409,
+      error: stopped === "paused"
+        ? "所在分组正在暂停，引导已取消，消息继续排队"
+        : "任务正在停止，引导已取消，消息继续排队",
+    };
+  } catch (error) {
+    await abortDelivery(message).catch(() => undefined);
+    return {
+      ok: false,
+      status: 500,
+      error: `停止已优先于引导，但清理排队消息失败：${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
 function sideTurnReason(task: typeof tasks.$inferSelect): string | null {
   if (task.verifyRound != null) return "当前正在进行验证回合，消息继续排队";
   if (task.reviewOf) return "当前是审查任务回合，消息继续排队";
@@ -150,6 +195,9 @@ export async function steerQueuedMessage(messageId: string): Promise<SteerQueued
   }
   const blocked = sideTurnReason(task);
   if (blocked) return { ok: false, status: 409, error: blocked };
+  if (isCanceling(task.id)) {
+    return { ok: false, status: 409, error: "任务正在停止或所在分组正在暂停，消息继续排队" };
+  }
 
   const first = (await db
     .select({ id: scheduledMessages.id })
@@ -167,8 +215,11 @@ export async function steerQueuedMessage(messageId: string): Promise<SteerQueued
 
   let resolveDelivery!: (result: SteerQueuedMessageResult) => void;
   const delivery = new Promise<SteerQueuedMessageResult>((resolve) => { resolveDelivery = resolve; });
-  const reservation = reserveSteerTask(task.id, () => {
-    void deliverSteeredMessage(message).then(resolveDelivery);
+  const reservation = reserveSteerTask(task.id, (outcome) => {
+    const result = outcome.stopped
+      ? finishStoppedSteer(message, outcome.stopped, outcome.needsSettlement)
+      : deliverSteeredMessage(message);
+    void result.then(resolveDelivery);
   });
   if (!reservation) {
     return { ok: false, status: 409, error: "当前回合正在启动、已经结束或正在引导，消息仍在排队" };
@@ -180,7 +231,18 @@ export async function steerQueuedMessage(messageId: string): Promise<SteerQueued
       return { ok: false, status: 409, error: "消息正在投递或已被处理，请稍后查看" };
     }
     await clearPreviousDirectionState(task.id);
-    reservation.commit();
+    const committed = reservation.commit();
+    if (committed !== "committed") {
+      if (committed === "lost") await recoverUndeliveredSteer(task.id);
+      await abortDelivery(message);
+      return {
+        ok: false,
+        status: 409,
+        error: committed === "stopping"
+          ? "任务正在停止或所在分组正在暂停，引导已取消，消息继续排队"
+          : "当前回合已在引导提交前结束，消息继续排队",
+      };
+    }
     return await delivery;
   } catch (error) {
     reservation.cancel();
