@@ -473,9 +473,12 @@ async function consume(lead: Lead): Promise<void> {
           try {
             await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, lead.sessId));
           } catch (error) {
-            // 内存轮换已经生效，写库失败不能把整条常驻事件流打断。把真实状态留在
-            // 时间线：当前进程的下一回合仍 fresh，但 server 重启前旧凭据尚未清掉。
-            console.error(`[ash] failed to persist poisoned session rotation for ${lead.taskId}:`, error);
+            // 内存里的恢复 id 已经作废，不能让一次持久化故障杀掉常驻消费循环；同时明确
+            // 告知用户重启前数据库里可能还留着旧 id。
+            const message = `已停止续跑损坏的 Codex 会话，但清理数据库恢复字段失败：${error instanceof Error ? error.message : String(error)}`;
+            writeRunError(lead.out, message);
+            appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), { kind: "error", message });
+            publish(lead, { kind: "error", message });
             note = "Codex 的恢复 thread 已在当前调度台内作废，下一回合会开启全新会话；"
               + "但恢复字段写入数据库失败，server 重启后可能再次尝试旧 thread。";
           }
@@ -570,15 +573,24 @@ async function closeLead(lead: Lead, exitStatus: number, sessionFault: SessionRe
   // —— 内存里 lead.cliSessionId 已是新值,那条「id 变了才写库」的分支不会再补写一次。
   const dropSession = shouldDropSession(sessionFault, exitStatus) && !superseded;
   const dropNote = dropSession ? sessionResumeFaultNote(sessionFault!) : null;
-  await db
-    .update(sessions)
-    .set({
-      exitStatus,
-      endedAt: endIso,
-      activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}`,
-      ...(dropSession ? LOST_SESSION_PATCH : {}),
-    })
-    .where(eq(sessions.id, lead.sessId));
+  try {
+    await db
+      .update(sessions)
+      .set({
+        exitStatus,
+        endedAt: endIso,
+        activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}`,
+        ...(dropSession ? LOST_SESSION_PATCH : {}),
+      })
+      .where(eq(sessions.id, lead.sessId));
+  } catch (error) {
+    // 收尾不能因为会话字段写库失败停在半路：事件流、写流与内存 lead 仍须正常释放。
+    const message = `调度台收尾状态写入数据库失败：${error instanceof Error ? error.message : String(error)}`;
+    console.error(`[ash] closeLead(${lead.taskId}) persistence failed:`, error);
+    writeRunError(lead.out, message);
+    appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message }, endIso);
+    publish(lead, { kind: "error", message });
+  }
   if (lead.closing === "recycle") {
     recordSystemTurn(lead, RECYCLE_NOTE(Math.round(IDLE_MS / 60_000)));
   } else if (!lead.closing && (exitStatus !== 0 || dropSession)) {

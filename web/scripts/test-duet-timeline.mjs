@@ -11,11 +11,13 @@ let state = applyDuetEvent(emptyDuet(), start);
 state = applyDuetEvent(state, agent({ kind: "tool", name: "exec", detail: "rg -n ExecutionDetails" }));
 state = applyDuetEvent(state, agent({ kind: "thinking", text: "先看现状" }));
 state = applyDuetEvent(state, agent({ kind: "text", text: "我的观点是…" }));
+state = applyDuetEvent(state, agent({ kind: "system", text: "旧会话已轮换", at: "2026-08-06T01:01:00.000Z" }));
 assert.deepEqual(state.turns[0].events, [
   { kind: "tool", label: "exec", detail: "rg -n ExecutionDetails" },
   { kind: "thinking", label: "思考过程", detail: "先看现状" },
 ]);
 assert.equal(state.turns[0].text, "我的观点是…");
+assert.equal(state.turns[0].notice, "旧会话已轮换");
 
 // 刷新后从 transcript 重建:回合行带着 events,执行过程还在。
 const rebuilt = rebuildDuetState([

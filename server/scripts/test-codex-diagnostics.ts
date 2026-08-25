@@ -110,7 +110,7 @@ try {
       })) events.push(event);
       assert.equal(events.find((event) => event.kind === "done")?.exitStatus, 0, "假 Codex 前置条件必须是 exit 0");
       assert.ok(
-        events.some((event) => event.kind === "error" && /session=poisoned_session/.test(event.message)),
+        events.some((event) => event.kind === "error" && event.scope === "session" && /session=poisoned_session/.test(event.message)),
         `exit 0 的 poisoned stderr 没进入 error 事件:${JSON.stringify(events)}`,
       );
     }

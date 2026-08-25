@@ -14,6 +14,7 @@ export type DuetTurn = {
   conclusion?: string;
   done: boolean;
   error?: string;
+  notice?: string;
   at?: string;
   startedAt?: string;
   durationMs?: number;
@@ -131,6 +132,7 @@ export function applyDuetEvent(state: DuetState, event: ServerEvent): DuetState 
       if (event.event.kind === "tool") turn.events = [...turn.events, { kind: "tool", label: event.event.name, detail: event.event.detail }];
       if (event.event.kind === "thinking") turn.events = [...turn.events, { kind: "thinking", label: "思考过程", detail: event.event.text }];
       if (event.event.kind === "error") turn.error = event.event.message;
+      if (event.event.kind === "system") turn.notice = `${turn.notice ?? ""}\n${event.event.text}`.trim();
       turns[index] = turn;
       break;
     }

@@ -288,7 +288,10 @@ export async function* parseCodexStream(
     // poisoned 是恢复会话的状态，不是本回合的退出原因：手停 / turn.failed / spawn
     // error 仍保留自己的结论，同时另发一条诊断让结算方只清恢复字段。
     const sessionPoison = formatSessionPoisonForTimeline(diagnostics);
-    if (sessionPoison) push({ kind: "error", message: sessionPoison });
+    if (sessionPoison) {
+      const sessionEvent = { kind: "error" as const, message: sessionPoison, scope: "session" as const };
+      push(sessionEvent);
+    }
     push({ kind: "done", exitStatus: opts.exitStatus });
     resolve?.();
     resolve = null;

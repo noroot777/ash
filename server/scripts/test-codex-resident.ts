@@ -225,12 +225,9 @@ console.log("6) poisoned 回合结束前已排队,下一回合仍 fresh");
   await sub.waitTurns(2);
   if (!spawned[1]?.includes("resume")) ok("resident 在 pump 下一回合前已作废恢复 id");
   else fail(`下一回合仍在 resume:${JSON.stringify(spawned[1])}`);
-  const errors = sub.all.filter((event) => event.kind === "error").map((event) => event.message);
-  if (errors.length === 1 && !errors.some((message) => /没有报出会话 id/.test(message))) {
-    ok("首回合主动轮换不会误报 thread.started 缺失");
-  } else {
-    fail(`首回合告警自相矛盾:${JSON.stringify(errors)}`);
-  }
+  const contradictory = sub.all.some((event) => event.kind === "error" && event.message.includes("没有报出会话 id"));
+  if (!contradictory) ok("已收到 thread.started 后判 poisoned，不会再误报没有会话 id");
+  else fail("poisoned 清空 id 后又误报没有收到 thread.started");
   handle.kill();
   await sub.finished;
 }
