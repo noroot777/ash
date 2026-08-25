@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TaskFollowUp, TaskListItem } from "@ash/shared";
+import { TASK_BATCH_LIMIT } from "@ash/shared";
 import { api } from "../lib/api.ts";
 import { spreadBucket, type SpreadBucket } from "../lib/taskAttention.ts";
 import { inScope, type TaskScope } from "./taskScope.ts";
@@ -112,30 +113,56 @@ export function useSidebarSpread(tasks: TaskListItem[], scope: TaskScope, revisi
 
   // 只问作用域里的活任务 —— 单项目态下别的项目默认是折叠的，铺开时也看不到那些行；
   // 全部项目态下它们就在屏幕上，那三格得跟着有内容。
-  const idsKey = useMemo(
-    () => tasks.filter((task) => inScope(task, scope) && !task.archived && visibleOnThisMachine(task)).map((task) => task.id).sort().join(","),
+  //
+  // **按最近更新排在前**：下面是分批取的，谁在前谁先填上，而任务树也是这个顺序 ——
+  // 用户先看到的那几屏最先有内容。按 id 排（曾经的写法）等于随机决定谁先亮。
+  const orderedIds = useMemo(
+    () => tasks
+      .filter((task) => inScope(task, scope) && !task.archived && visibleOnThisMachine(task))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .map((task) => task.id),
     [scope, tasks],
   );
+  // effect 的身份看的是**这批 id 是哪些**，不是它们的顺序 —— 否则任何一个任务的
+  // updatedAt 一动（跑起来的任务每秒都在动）就重排、重取一遍。
+  const idsKey = useMemo(() => [...orderedIds].sort().join(","), [orderedIds]);
+  const orderedRef = useRef(orderedIds);
+  orderedRef.current = orderedIds;
 
   useEffect(() => {
     if (!open || !idsKey) return;
     let alive = true;
-    const ids = idsKey.split(",");
-    api.followUps(ids)
+    const ids = orderedRef.current;
+    // 追问那一列**只问头一批**：每条都要摸一次盘，一千多个任务全问一遍就是把铺开
+    // 这个「扫一眼」的动作变成一次全盘扫描。`loaded` 只记真问过的那批，剩下的行显示
+    // 「还没读到」而不是「还没追问过」—— 后者是在编。
+    const asked = ids.slice(0, TASK_BATCH_LIMIT);
+    setLoaded(new Set());
+    api.followUps(asked)
       .then((rows) => {
         if (!alive) return;
         setFollowUps(new Map(rows.map((row) => [row.taskId, row])));
-        setLoaded(new Set(ids));
+        setLoaded(new Set(asked));
       })
       // 读不到就让那一列留白。铺开是个扫一眼的动作，为它弹一条错误提示更吵。
       .catch(() => {});
     // 正文与追问各走各的（一个查库、一个摸盘），谁先回来谁先填上，互不拖累。
-    api.taskBodies(ids)
-      .then((rows) => {
+    //
+    // 正文**分批取完整批**：它只是一次按主键的查询，不摸盘，所以没有理由让第
+    // TASK_BATCH_LIMIT 行之后的任务永远显示「还没读到」。一批填一次，边到边显示。
+    setBodies(new Map());
+    void (async () => {
+      for (let at = 0; at < ids.length; at += TASK_BATCH_LIMIT) {
+        const rows = await api.taskBodies(ids.slice(at, at + TASK_BATCH_LIMIT)).catch(() => []);
         if (!alive) return;
-        setBodies(new Map(rows.map((row) => [row.taskId, row.body])));
-      })
-      .catch(() => {});
+        if (!rows.length) continue;
+        setBodies((current) => {
+          const next = new Map(current);
+          for (const row of rows) next.set(row.taskId, row.body);
+          return next;
+        });
+      }
+    })();
     return () => { alive = false; };
   }, [idsKey, open, revision]);
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Task, TaskListItem } from "@ash/shared";
+import { TASK_BATCH_LIMIT } from "@ash/shared";
 import { api } from "./api.ts";
 import { useServerEvents } from "./events.ts";
 
@@ -23,9 +24,14 @@ function flush(): void {
   const waiters = new Map(pending);
   pending.clear();
   if (!ids.length) return;
-  api.taskBodies(ids)
-    .then((rows) => {
-      for (const row of rows) cache.set(row.taskId, row.body);
+  // 分批发：服务端一次只收 TASK_BATCH_LIMIT 个 id，超了会 400（它宁可报错也不肯静默
+  // 少返几行 —— 那会被渲染成「还没读到」）。合批本来就是为了少发请求，撞上限时该做的
+  // 是切几批，不是把一批塞爆。
+  const batches: string[][] = [];
+  for (let at = 0; at < ids.length; at += TASK_BATCH_LIMIT) batches.push(ids.slice(at, at + TASK_BATCH_LIMIT));
+  Promise.all(batches.map((batch) => api.taskBodies(batch)))
+    .then((results) => {
+      for (const rows of results) for (const row of rows) cache.set(row.taskId, row.body);
       for (const [id, callbacks] of waiters) {
         const body = cache.get(id);
         // 请求成功但这个 id 没回来 = 任务已经不在了；给 null 让调用方停在「还没读到」，

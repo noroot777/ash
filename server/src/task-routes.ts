@@ -1,5 +1,5 @@
 import type { AgentType, Task, TaskStatus, TaskWorkspaceDiscardResult } from "@ash/shared";
-import { AGENT_TYPES, isUserSettableStatus } from "@ash/shared";
+import { AGENT_TYPES, isUserSettableStatus, TASK_BATCH_LIMIT } from "@ash/shared";
 import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@ash/shared/cli-presets";
 import { inheritExecutorOverrides, sameExecutor } from "@ash/shared/executors";
 import { normalizeWorkflowDef } from "@ash/shared/workflow";
@@ -41,9 +41,14 @@ export async function deleteTaskAssociations(taskId: string): Promise<void> {
 }
 
 export function mountTaskRoutes(api: Hono): void {
-  // 一次最多问这么多任务的追问 —— 每个都要摸一次盘，别让一个手抖的请求
-  // 把整个进程钉在 I/O 上。侧边栏一屏也放不下这么多行。
-  const MAX_FOLLOW_UP_TASKS = 200;
+  // 一次最多问这么多任务的追问 / 正文（判据和常量本体在 shared 的 TASK_BATCH_LIMIT）：
+  // 追问每个都要摸一次盘，别让一个手抖的请求把整个进程钉在 I/O 上。
+  // **超了返 400，不截断** —— 静默少返几行会被前端渲染成「还没读到」，一条永远不会
+  // 消失的假状态；请求方分批才是对的做法。
+  const overBatchLimit = (ids: string[]) =>
+    ids.length > TASK_BATCH_LIMIT
+      ? { error: `一次最多问 ${TASK_BATCH_LIMIT} 个任务，请分批`, limit: TASK_BATCH_LIMIT, requested: ids.length }
+      : null;
   const agentTypeForExecutor = async (executorId?: string | null): Promise<AgentType | null> => {
     if (!executorId) return null;
     const row = (await db.select({ type: agents.type }).from(agents).where(eq(agents.id, executorId))).at(0);
@@ -64,7 +69,9 @@ api.get("/tasks", async (c) => {
 api.post("/tasks/follow-ups", async (c) => {
   const body = await c.req.json<{ taskIds?: unknown }>().catch(() => ({ taskIds: [] }));
   const ids = Array.isArray(body.taskIds) ? body.taskIds.filter((id): id is string => typeof id === "string") : [];
-  return c.json(await followUpsFor(ids.slice(0, MAX_FOLLOW_UP_TASKS)));
+  const over = overBatchLimit(ids);
+  if (over) return c.json(over, 400);
+  return c.json(await followUpsFor(ids));
 });
 
 // 正文批量取。跟上面那条同一个触发点（侧边栏铺开的「原始需求」列），同一套 id 上限，
@@ -77,10 +84,12 @@ api.post("/tasks/bodies", async (c) => {
   const body = await c.req.json<{ taskIds?: unknown }>().catch(() => ({ taskIds: [] }));
   const ids = Array.isArray(body.taskIds) ? body.taskIds.filter((id): id is string => typeof id === "string") : [];
   if (!ids.length) return c.json([]);
+  const over = overBatchLimit(ids);
+  if (over) return c.json(over, 400);
   const rows = await db
     .select({ taskId: tasks.id, body: tasks.body })
     .from(tasks)
-    .where(inArray(tasks.id, ids.slice(0, MAX_FOLLOW_UP_TASKS)));
+    .where(inArray(tasks.id, ids));
   return c.json(rows.map((row) => ({ taskId: row.taskId, body: row.body ?? "" })));
 });
 
