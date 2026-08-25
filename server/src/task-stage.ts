@@ -1,6 +1,6 @@
 import type { TaskStage } from "@ash/shared";
 import { isTaskStage, STAGE_LABELS, STAGE_ORDER } from "@ash/shared";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -12,9 +12,20 @@ import { now } from "./util.js";
 export async function setTaskStage(
   taskId: string,
   stage: TaskStage,
-): Promise<{ updatedAt: string; timelineRecorded: boolean }> {
+  currentTurn?: { token: string | null },
+): Promise<{ updatedAt: string; timelineRecorded: boolean } | null> {
   const updatedAt = now();
-  await db.update(tasks).set({ stage, updatedAt }).where(eq(tasks.id, taskId));
+  const where = currentTurn
+    ? and(
+        eq(tasks.id, taskId),
+        eq(tasks.status, "running"),
+        currentTurn.token === null
+          ? isNull(tasks.activeTurnToken)
+          : eq(tasks.activeTurnToken, currentTurn.token),
+      )
+    : eq(tasks.id, taskId);
+  const updated = await db.update(tasks).set({ stage, updatedAt }).where(where).returning({ id: tasks.id });
+  if (!updated.length) return null;
   bus.publish({ type: "task.stage", taskId, stage, updatedAt });
   const timelineRecorded = await appendTaskTimeline(taskId, `验收阶段更新：${STAGE_LABELS[stage]}（${stage}）`);
   return { updatedAt, timelineRecorded };
@@ -170,6 +181,9 @@ export function mountTaskStageRoutes(api: Hono): void {
     // 接力出去的任务不能再流转验收阶段:它在本机只是历史存档,阶段变化应发生在对端。
     const handedOff = handoffBlockReason(task.handoff);
     if (handedOff) return c.json({ error: handedOff, handoff: true }, 409);
+    if (task.status === "running" && task.activeTurnToken && c.req.header("x-ash-turn-token") !== task.activeTurnToken) {
+      return c.json({ error: "验收阶段来自已结束的回合，已拒绝写入当前会话" }, 409);
+    }
 
     try {
       const { reportFreeReviewConclusion } = await import("./free-workflow.js");
@@ -196,7 +210,13 @@ export function mountTaskStageRoutes(api: Hono): void {
       );
     }
 
-    const { updatedAt, timelineRecorded } = await setTaskStage(taskId, body.stage);
+    const result = await setTaskStage(
+      taskId,
+      body.stage,
+      task.status === "running" ? { token: task.activeTurnToken } : undefined,
+    );
+    if (!result) return c.json({ error: "当前回合已经结束或已被引导，验收阶段未写入" }, 409);
+    const { updatedAt, timelineRecorded } = result;
     return c.json({ reported: true, taskId, stage: body.stage, updatedAt, timelineRecorded });
   });
 }

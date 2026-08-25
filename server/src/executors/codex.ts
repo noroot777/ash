@@ -96,7 +96,10 @@ export class CodexExecutor implements AgentExecutor {
   // `codex exec` 的选项;`resume` 是子命令,只吃自己的 flag + [SESSION_ID]
   // [PROMPT] —— 所以 exec 选项必须排在 `resume` **前面**(否则 "unexpected
   // argument '-C'")。
-  private execArgs(opts: { cwd: string; model?: string; extraArgs?: string[] }, sessionId: string): string[] {
+  private execArgs(
+    opts: Pick<RunOpts, "cwd" | "model" | "extraArgs" | "env">,
+    sessionId: string,
+  ): string[] {
     const model = opts.model ?? this.model;
     const common = ["--json", "--skip-git-repo-check", "-C", opts.cwd, "--dangerously-bypass-approvals-and-sandbox"];
     if (model) common.push("-m", model);
@@ -108,6 +111,13 @@ export class CodexExecutor implements AgentExecutor {
     // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。
     if (this.extraArgs.length) common.push(...this.extraArgs);
     if (opts.extraArgs?.length) common.push(...opts.extraArgs);
+    // codex 会过滤传给 MCP stdio 子进程的环境，ASH_* 只放在 CLI 进程环境里到不了
+    // harness MCP。用本次运行的配置覆盖显式注入；放在用户 extraArgs 之后，确保回合身份
+    // 不会被同 key 的自定义参数盖掉。commandLine 落库前会由 redactSecrets 隐去 token。
+    for (const key of ["ASH_TASK_ID", "ASH_TURN_TOKEN"] as const) {
+      const value = opts.env?.[key];
+      if (value) common.push("-c", `mcp_servers.harness.env.${key}=${JSON.stringify(value)}`);
+    }
     return sessionId ? ["exec", ...common, "resume", sessionId, "-"] : ["exec", ...common, "-"];
   }
 
@@ -165,7 +175,7 @@ export class CodexExecutor implements AgentExecutor {
         const lifecycle = { stopRequested: false };
         // 常驻的每一轮都是**新进程**,所以 stdin 照旧读完即关(keepStdin 是
         // claude 那种「一个进程吃多个回合」才需要的)。
-        const child = spawnAgent(opts.cwd, this.bin, args, prompt, this.env());
+        const child = spawnAgent(opts.cwd, this.bin, args, prompt, { ...this.env(), ...opts.env });
         return {
           child,
           commandLine: redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`),

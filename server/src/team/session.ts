@@ -316,7 +316,12 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   const sessId = resuming ? prev!.id : id();
   const runDir = join(RUNS_DIR, taskId);
   mkdirSync(runDir, { recursive: true });
-  const handle = openResident({ prompt: message, cwd: ws.path, sessionId: prev?.cliSessionId ?? undefined });
+  const handle = openResident({
+    prompt: message,
+    cwd: ws.path,
+    sessionId: prev?.cliSessionId ?? undefined,
+    env: { ASH_TASK_ID: taskId },
+  });
   trackRun(taskId, handle);
 
   const cliSessionId = prev?.cliSessionId ?? handle.sessionId;

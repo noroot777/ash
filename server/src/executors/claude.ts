@@ -162,7 +162,7 @@ export class ClaudeExecutor implements AgentExecutor {
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`);
     const child = this.startupError
       ? failedChild(this.startupError)
-      : spawnAgent(opts.cwd, this.bin, args, userLine(opts.prompt), this.env(opts.cwd, model), {
+      : spawnAgent(opts.cwd, this.bin, args, userLine(opts.prompt), { ...this.env(opts.cwd, model), ...opts.env }, {
           keepStdin: true,
         });
     const resident = { interruptPending: false };

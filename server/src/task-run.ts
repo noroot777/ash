@@ -146,7 +146,7 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     const detach = detachedPathsFor(runDir, sessId, turnStart);
     handle = ex.run({
       prompt, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart), detach,
-      env: { ASH_TURN_TOKEN: turnToken },
+      env: { ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken },
     });
     trackRun(taskId, handle);
 

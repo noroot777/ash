@@ -395,7 +395,7 @@ export async function continueTask(
       sessionId: resuming ? prev!.cliSessionId! : undefined,
       trace: runTracePaths(runDir, sessId, turnStart),
       detach,
-      env: { ASH_TURN_TOKEN: turnToken },
+      env: { ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken },
     });
     trackRun(taskId, handle);
 

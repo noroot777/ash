@@ -11,6 +11,7 @@ import { AGENT_TYPES, MAX_QUESTION_ITEMS, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPT
 import { UNDELIVERED_NET_CODES } from "@ash/shared/mcp-delivery";
 
 const BASE = (process.env.ASH_URL ?? process.env.HARNESS_URL ?? "http://localhost:4317").replace(/\/+$/, "");
+const SOURCE_TASK_ID = process.env.ASH_TASK_ID?.trim() ?? "";
 const TURN_TOKEN = process.env.ASH_TURN_TOKEN?.trim() ?? "";
 
 // 本机流量一律不走代理。Node 24+ 在 NODE_USE_ENV_PROXY=1(或显式 HTTP_PROXY)下
@@ -76,6 +77,7 @@ async function call(method: string, path: string, body?: unknown): Promise<unkno
     try {
       const headers: Record<string, string> = {};
       if (body !== undefined) headers["content-type"] = "application/json";
+      if (SOURCE_TASK_ID) headers["x-ash-source-task-id"] = SOURCE_TASK_ID;
       if (TURN_TOKEN) headers["x-ash-turn-token"] = TURN_TOKEN;
       res = await fetch(`${BASE}/api${path}`, {
         method,

@@ -226,7 +226,10 @@ export const api = {
     },
   ): Promise<Task> => request("/tasks", json("POST", task)),
   patchTask: (taskId: string, patch: Partial<Task>): Promise<Task> =>
-    request(`/tasks/${id(taskId)}`, json("PATCH", patch)),
+    request(`/tasks/${id(taskId)}`, {
+      ...json("PATCH", patch),
+      headers: { "content-type": "application/json", "x-ash-user-action": "1" },
+    }),
   deleteTask: (
     taskId: string,
     cleanup?: { worktree?: boolean; branch?: boolean; force?: boolean },

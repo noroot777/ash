@@ -10,12 +10,23 @@ const root = mkdtempSync(join(tmpdir(), "ash-task-steer-hardening-"));
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 
-const [{ db, ensureSchema }, schema, runs, steer, { mountTaskRunRoutes }, { setTaskStatus }] = await Promise.all([
+const [
+  { db, ensureSchema },
+  schema,
+  runs,
+  steer,
+  { mountTaskRunRoutes },
+  { mountTaskRoutes },
+  { mountTaskStageRoutes },
+  { setTaskStatus },
+] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/runs.js"),
   import("../src/task-steer.js"),
   import("../src/task-run-routes.js"),
+  import("../src/task-routes.js"),
+  import("../src/task-stage.js"),
   import("../src/status.js"),
 ]);
 const { projects, scheduledMessages, tasks } = schema;
@@ -98,6 +109,9 @@ try {
     task("reviewer-role"),
     task("ordered"),
     task("token", { activeTurnToken: "new-token" }),
+    task("patch-source", { activeTurnToken: "source-token" }),
+    task("patch-target", { activeTurnToken: "target-token" }),
+    task("team-patcher", { mode: "team", status: "idle", activeTurnToken: null }),
     task("team-ask", { mode: "team", status: "idle", activeTurnToken: null }),
   ]);
   await db.insert(scheduledMessages).values([
@@ -142,6 +156,8 @@ try {
 
   const api = new Hono();
   mountTaskRunRoutes(api);
+  mountTaskRoutes(api);
+  mountTaskStageRoutes(api);
   const complete = (token?: string) => api.request("/tasks/token/complete", {
     method: "POST",
     headers: token ? { "x-ash-turn-token": token } : undefined,
@@ -204,6 +220,54 @@ try {
     "团队常驻提问没有一次性回合 token，必须保持兼容",
   );
   console.log("✓ pause_task / ask_question 与 complete_task 一样绑定当前回合 token");
+
+  const reportStage = (token?: string) => api.request("/tasks/token/stage", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(token ? { "x-ash-turn-token": token } : {}),
+    },
+    body: JSON.stringify({ stage: "implemented" }),
+  });
+  for (const token of ["old-token", undefined]) {
+    assert.equal((await reportStage(token)).status, 409, "旧 token 或缺 token 的 report_stage 必须被拒绝");
+  }
+  assert.equal((await db.select().from(tasks).where(eq(tasks.id, "token"))).at(0)!.stage, null);
+  assert.equal((await reportStage("new-token")).status, 200, "当前回合 report_stage 应继续可用");
+  assert.equal((await db.select().from(tasks).where(eq(tasks.id, "token"))).at(0)!.stage, "implemented");
+  await db.update(tasks).set({ stage: null }).where(eq(tasks.id, "token"));
+
+  const patchTask = (taskId: string, title: string, headers: Record<string, string> = {}) => api.request(`/tasks/${taskId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify({ title }),
+  });
+  assert.equal((await patchTask("token", "stale-no-token")).status, 409, "无来源的运行中 PATCH 必须拒绝");
+  assert.equal((await patchTask("token", "stale-old-token", {
+    "x-ash-source-task-id": "token",
+    "x-ash-turn-token": "old-token",
+  })).status, 409, "旧回合 PATCH 必须拒绝");
+  assert.equal((await patchTask("token", "current-turn", {
+    "x-ash-source-task-id": "token",
+    "x-ash-turn-token": "new-token",
+  })).status, 200, "当前回合 PATCH 应继续可用");
+  assert.equal((await patchTask("token", "human-edit", {
+    "x-ash-user-action": "1",
+  })).status, 200, "真人界面修改运行中任务必须保持兼容");
+  assert.equal((await patchTask("patch-target", "cross-task", {
+    "x-ash-source-task-id": "patch-source",
+    "x-ash-turn-token": "source-token",
+  })).status, 200, "当前回合应能跨任务 PATCH");
+  await db.update(tasks).set({ activeTurnToken: "source-next-token" }).where(eq(tasks.id, "patch-source"));
+  assert.equal((await patchTask("patch-target", "stale-cross-task", {
+    "x-ash-source-task-id": "patch-source",
+    "x-ash-turn-token": "source-token",
+  })).status, 409, "跨任务 PATCH 也必须绑定发起者当前回合");
+  assert.equal((await patchTask("patch-target", "team-cross-task", {
+    "x-ash-source-task-id": "team-patcher",
+  })).status, 200, "团队常驻调度者跨任务 PATCH 必须保持兼容");
+  assert.equal((await db.select().from(tasks).where(eq(tasks.id, "patch-target"))).at(0)!.title, "team-cross-task");
+  console.log("✓ report_stage / patch_task 拒绝旧回合，并保留用户操作与团队跨任务修改");
 
   await setTaskStatus("token", "failed");
   assert.equal(

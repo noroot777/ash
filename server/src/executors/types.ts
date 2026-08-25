@@ -10,7 +10,8 @@ export interface RunOpts {
   model?: string;
   extraArgs?: string[];
   trace?: RunTracePaths;
-  // 只作用于这一回合的进程环境（例如 ASH_TURN_TOKEN）；不得拼进 commandLine。
+  // 只作用于这一回合的进程环境（例如 ASH_TURN_TOKEN）。执行器负责安全传给 CLI/MCP；
+  // 若 CLI 只支持 argv 配置覆盖，持久化 commandLine 前必须遮盖其中的 token。
   env?: Record<string, string | undefined>;
   // 非空 = 用「活得过 server 重启」的跑法：stdout/stderr 落到这几个文件而不是
   // 匿名管道（见 executors/detached.ts）。只有一次性 run() 该传；常驻会话

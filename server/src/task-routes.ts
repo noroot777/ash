@@ -4,7 +4,7 @@ import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsF
 import { inheritExecutorOverrides, sameExecutor } from "@ash/shared/executors";
 import { normalizeWorkflowDef } from "@ash/shared/workflow";
 import { TASK_WORKFLOW_MODES } from "@ash/shared/free-workflow";
-import { asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { agents, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks } from "./db/schema.js";
@@ -248,6 +248,51 @@ api.patch("/tasks/:id", async (c) => {
   // is unarchived (which goes through the dedicated endpoint, not PATCH).
   if (existing.archived) return c.json({ error: "任务已归档，先取消归档再编辑", archived: true }, 409);
   const b = await c.req.json<Partial<Task>>();
+  // 运行中的 PATCH 既可能来自真人界面，也可能来自 agent 的 patch_task。真人客户端显式
+  // 标记 user-action；MCP 则携带发起任务 id + 回合 token。校验的是「发起者当前仍是这
+  // 一回合」，因此团队调度者可以跨任务改执行者，而被“引导会话”结束的旧单飞回合会被拒。
+  let updateWhere: SQL = eq(tasks.id, tid);
+  if ((existing.status === "running" || existing.status === "queued") && c.req.header("x-ash-user-action") !== "1") {
+    const sourceTaskId = c.req.header("x-ash-source-task-id")?.trim() ?? "";
+    const turnToken = c.req.header("x-ash-turn-token")?.trim() ?? "";
+    if (sourceTaskId) {
+      const source = (await db.select({
+        mode: tasks.mode,
+        status: tasks.status,
+        activeTurnToken: tasks.activeTurnToken,
+      }).from(tasks).where(eq(tasks.id, sourceTaskId))).at(0);
+      if (!source) return c.json({ error: "PATCH 的发起任务不存在，已拒绝写入" }, 409);
+      if (source.mode === "team") {
+        if (source.status !== "running" && source.status !== "idle") {
+          return c.json({ error: "团队调度者当前不在线，PATCH 已拒绝写入" }, 409);
+        }
+        updateWhere = and(
+          eq(tasks.id, tid),
+          eq(tasks.status, existing.status),
+          sql`exists (select 1 from tasks as source_task where source_task.id = ${sourceTaskId} and source_task.mode = 'team' and source_task.status in ('running', 'idle'))`,
+        )!;
+      } else {
+        if (source.status !== "running" || !source.activeTurnToken || turnToken !== source.activeTurnToken) {
+          return c.json({ error: "PATCH 来自已结束的回合，已拒绝写入当前会话" }, 409);
+        }
+        updateWhere = and(
+          eq(tasks.id, tid),
+          eq(tasks.status, existing.status),
+          sql`exists (select 1 from tasks as source_task where source_task.id = ${sourceTaskId} and source_task.status = 'running' and source_task.active_turn_token = ${source.activeTurnToken})`,
+        )!;
+      }
+    } else {
+      // 兼容已启动、尚未带 source-task-id 的本任务 MCP：仍须用目标任务的当前 token。
+      if (!existing.activeTurnToken || turnToken !== existing.activeTurnToken) {
+        return c.json({ error: "PATCH 来自已结束的回合，已拒绝写入当前会话" }, 409);
+      }
+      updateWhere = and(
+        eq(tasks.id, tid),
+        eq(tasks.status, existing.status),
+        eq(tasks.activeTurnToken, existing.activeTurnToken),
+      )!;
+    }
+  }
   // running/queued/awaiting_review are system-owned — refuse manual changes so a
   // human can't desync the state (e.g. mark a task "running" when nothing runs).
   if (b.status !== undefined && !isUserSettableStatus(b.status)) {
@@ -365,7 +410,8 @@ api.patch("/tasks/:id", async (c) => {
   // task.updated 事件照发(下方 publishTaskUpdated),前端仍实时回流。
   const starOnly = "starredAt" in patch && Object.keys(patch).length === 1 && b.status === undefined;
   if (!starOnly) patch.updatedAt = now();
-  await db.update(tasks).set(patch).where(eq(tasks.id, tid));
+  const written = await db.update(tasks).set(patch).where(updateWhere).returning({ id: tasks.id });
+  if (!written.length) return c.json({ error: "任务或发起回合已经变化，PATCH 未写入" }, 409);
   // Status goes through the shared helper so manual changes maintain the run-time
   // columns (startedAt/endedAt) and broadcast them just like a real run does.
   // setTaskStatus 内部在 done/canceled 时会自动触发 queue 推进(DESIGN §3),

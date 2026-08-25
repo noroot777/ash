@@ -133,7 +133,11 @@ export const api = {
   createTask: (t: Partial<Task> & { projectId: string; title: string }): Promise<Task> =>
     req("/tasks", { method: "POST", body: JSON.stringify(t) }).then(j),
   patchTask: (id: string, patch: Partial<Task>): Promise<Task> =>
-    req(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }).then(j),
+    req(`/tasks/${id}`, {
+      method: "PATCH",
+      headers: { "x-ash-user-action": "1" },
+      body: JSON.stringify(patch),
+    }).then(j),
   // 删除任务。cleanup 里勾了什么就一起删什么(worktree 目录 / 分支);force 是看过
   // 第一次失败之后的再来一次(--force / -D)。
   deleteTask: (
