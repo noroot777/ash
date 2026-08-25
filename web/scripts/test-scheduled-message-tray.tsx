@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ScheduledMessage } from "@ash/shared";
@@ -41,4 +42,8 @@ assert.ok(
   html.lastIndexOf("scheduled-message-guide-row") > html.lastIndexOf("scheduled-message-row"),
   "引导动作应位于队列末尾，而不是塞进每一行",
 );
+const source = readFileSync(new URL("../src/components/ScheduledMessages.tsx", import.meta.url), "utf8");
+const reloadSource = source.slice(source.indexOf("const reload"), source.indexOf("useEffect", source.indexOf("const reload")));
+assert.match(source, /const \[actionError, setActionError\]/, "动作错误必须与加载错误分开保存");
+assert.doesNotMatch(reloadSource, /setActionError/, "quiet reload 不得清掉刚返回的引导失败原因");
 console.log("✓ 待发送托盘末尾只显示一个“引导会话”，并作用于队首消息");

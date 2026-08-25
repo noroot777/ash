@@ -357,7 +357,9 @@ export async function steerQueuedMessage(messageId: string): Promise<SteerQueued
   const blocked = sideTurnReason(task);
   if (blocked) return { ok: false, status: 409, error: blocked };
   if (isCanceling(task.id)) {
-    return { ok: false, status: 409, error: "任务正在停止或所在分组正在暂停，消息继续排队" };
+    const error = "任务正在停止或所在分组正在暂停，消息继续排队";
+    await appendTaskTimeline(task.id, `引导会话未执行：${error}`);
+    return { ok: false, status: 409, error };
   }
 
   const first = (await db

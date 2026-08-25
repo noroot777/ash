@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -31,7 +31,7 @@ const [
   import("../src/task-stage.js"),
   import("../src/status.js"),
 ]);
-const { projects, scheduledMessages, tasks } = schema;
+const { projects, scheduledMessages, sessions, tasks } = schema;
 await ensureSchema();
 
 const at = new Date().toISOString();
@@ -197,6 +197,15 @@ try {
     message("m-late-stop-db", "late-stop-db"),
     message("m-lost-db", "lost-db"),
   ]);
+  await db.insert(sessions).values({
+    id: "s-stopping",
+    taskId: "stopping",
+    role: "single",
+    agentType: "claude",
+    executor: "claude",
+    cwd: root,
+    startedAt: at,
+  });
 
   for (const [messageId, pattern] of [
     ["m-verify", /验证/],
@@ -239,6 +248,11 @@ try {
   const stoppingMessage = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, "m-stopping"))).at(0)!;
   assert.equal(stoppingMessage.deliveringSince, null, "停止优先的拒绝不得占消息租约");
   assert.equal((await db.select().from(tasks).where(eq(tasks.id, "stopping"))).at(0)!.activeTurnToken, "stopping-token");
+  assert.match(
+    readFileSync(join(root, "runs", "stopping", "s-stopping.md"), "utf8"),
+    /引导会话未执行：任务正在停止或所在分组正在暂停，消息继续排队/,
+    "停止/暂停抢占引导的原因必须写进会话，刷新后仍可见",
+  );
   assert.equal(runs.takeStopped("stopping"), "canceled");
   runs.untrackRun("stopping", stoppingHandle);
   runs.releaseTurn("stopping");
