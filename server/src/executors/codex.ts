@@ -7,7 +7,7 @@ import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandl
 import { openCodexResident } from "./codex-resident.js";
 import { readCodexContext } from "./codex-rollout.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
-import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
+import { cleanupAfterRun, spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
 import { relayApi } from "../llm.js";
 import { protocolConverterBaseUrl } from "../openai-converter/common.js";
 import { formatFailureForTimeline, RunTraceRecorder, type RunTracePaths } from "./diagnostics.js";
@@ -128,6 +128,7 @@ export class CodexExecutor implements AgentExecutor {
         lifecycle.stopRequested = true;
         killChild(child);
       },
+      cleanup: () => cleanupAfterRun(child),
       detached: detachedInfo(child),
     };
   }
@@ -147,6 +148,7 @@ export class CodexExecutor implements AgentExecutor {
         lifecycle.stopRequested = true;
         child.kill();
       },
+      cleanup: () => cleanupAfterRun(child),
       detached: detachedInfo(child),
     };
   }

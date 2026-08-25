@@ -373,6 +373,9 @@ export async function consumeSingleRun(a: {
     }
   } finally {
     if (offsetTimer) clearInterval(offsetTimer);
+    await a.handle.cleanup?.().catch((error) => {
+      console.warn(`[ash] failed to clean descendants after task ${taskId}:`, error);
+    });
   }
   // 一个换行都没等到就收流了（整轮只吐了一行的那种）。这里补一次 flush 扫描：
   // 老实现直接把缓冲原样吐出去，那一行哪怕就是标准的 `标题：xxx` 也白瞎。

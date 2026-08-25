@@ -6,7 +6,7 @@
 //
 // 怎么合、清到什么程度由**线上那一站**说了算（AcceptStrategy / AcceptClean），调用方
 // 在 task-accept.ts 里从任务的工作流快照读出来传进来；不传就是老规矩（安全合并 + 全清）。
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
 import type { AcceptClean, AcceptStrategy } from "@ash/shared/workflow";
@@ -27,6 +27,7 @@ import {
 import { withRepoLock } from "./repo-lock.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
 import { execFileText as exec } from "./exec.js";
+import { findProcessesReferencingPath, type ProcessRow } from "./platform.js";
 
 const isDir = (p: string) => {
   try { return statSync(p).isDirectory(); } catch { return false; }
@@ -35,6 +36,33 @@ const isDir = (p: string) => {
 function sameFilesystemPath(a: string, b: string): boolean {
   try { return realpathSync(resolve(a)) === realpathSync(resolve(b)); }
   catch { return resolve(a) === resolve(b); }
+}
+
+function processName(command: string): string {
+  const token = command.startsWith('"')
+    ? /^"([^"]+)"/.exec(command)?.[1]
+    : /^(\S+)/.exec(command)?.[1];
+  return basename(token || "process");
+}
+
+/** 删除 worktree 失败时给用户的下一步。导出只为回归测试,业务调用仍只有下方一处。 */
+export function worktreeRemovalBlocker(
+  worktreePath: string,
+  error: unknown,
+  dirtyFiles: readonly string[],
+  blockers: readonly ProcessRow[] = [],
+): string {
+  if ((error as NodeJS.ErrnoException)?.code === "EBUSY") {
+    const visible = blockers.slice(0, 6);
+    const holders = visible.length
+      ? `，已认出 ${visible.map((row) => `${processName(row.command)}（PID ${row.pid}）`).join("、")}`
+      : "";
+    return `这个目录正被运行中的进程或打开句柄占用${holders}；结束在此 worktree 里运行的终端、dev server 或 agent 后再点一次验收`;
+  }
+  if (dirtyFiles.length > 0) {
+    return `挡路的是 ${worktreePath} 里这 ${dirtyFiles.length} 个文件：${listFiles([...dirtyFiles])}；提交或丢弃它们之后再点一次验收`;
+  }
+  return `删除失败，但没有发现未提交改动；请检查 ${worktreePath} 的权限、占用进程或文件系统状态后再点一次验收`;
 }
 
 // ── Deterministic acceptance merge / cleanup ───────────────────────────────
@@ -507,15 +535,13 @@ async function cleanupAcceptedTaskLocked(
     try {
       await removeWorktree(repo, worktreePath, false);
     } catch (error) {
-      // 走到这儿只剩一种情形：工作区真脏（半删除的空壳已经由 removeWorktree 自己收拾了）。
-      // 那是该拦的——里面可能有没提交的东西，自动流程不替用户拍板扔掉。但 git 只会说一句
-      // "contains modified or untracked files"，不说是哪个文件；这障碍又不会自己消失，于是
-      // 每点一次验收都撞同一堵墙、还是同一句看不出所以然的话。所以当场把挡路的清单查出来
-      // 一起报——跟合并失败报冲突文件是同一副样子。
+      // 真脏时列文件；Windows 的 EBUSY 则列能从命令行认出的占用进程。两者不能混:
+      // 把「dev server 还在跑」说成「多半有未提交改动」只会让用户翻遍 git status 仍无解。
       const dirtyFiles = await dirtyFilesAt(worktreePath);
-      const blocking = dirtyFiles.length > 0
-        ? `挡路的是 ${worktreePath} 里这 ${dirtyFiles.length} 个文件：${listFiles(dirtyFiles)}；提交或丢弃它们之后再点一次验收`
-        : `多半是 ${worktreePath} 里还有没提交的改动：去看一眼，提交或丢弃之后再点一次验收`;
+      const blockers = (error as NodeJS.ErrnoException)?.code === "EBUSY"
+        ? await findProcessesReferencingPath(worktreePath).catch(() => [])
+        : [];
+      const blocking = worktreeRemovalBlocker(worktreePath, error, dirtyFiles, blockers);
       return {
         ok: false,
         reason: "worktree_remove_failed",

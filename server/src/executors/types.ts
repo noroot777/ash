@@ -25,6 +25,8 @@ export interface RunHandle {
   commandLine: string;
   events: AsyncIterable<AgentEvent>;
   kill(): void;
+  /** 事件流结束后回收 CLI 甩出去的后台后代；没有真实进程的失败句柄可省略。 */
+  cleanup?: () => Promise<void>;
   // 只有走了 detach 的这一轮才有：agent 的 pid + 已消费到的字节位置。
   // 调用方把它们存进 sessions，重启后据此找回并接管这个还活着的进程。
   detached?: { pid: number; committed: () => number };

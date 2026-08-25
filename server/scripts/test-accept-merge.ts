@@ -1,7 +1,8 @@
 // Deterministic acceptance merge regression suite. Every case owns a temporary
 // repository; no checkout or ref update can escape into the ash repo.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { once } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -56,6 +57,7 @@ try {
     cleanupAcceptedTask,
     cleanupPlanFor,
     mergeTaskBranch,
+    worktreeRemovalBlocker,
     withTemporaryCleanupOutcome,
   } = await import("../src/git-accept.js");
   const { taskBranchDiff } = await import("../src/git-diff.js");
@@ -66,6 +68,23 @@ try {
   const { flushConflictHandoff, handOffConflict } = await import("../src/accept-conflict.js");
   const { acceptTask } = await import("../src/task-accept.js");
   await ensureSchema();
+
+  // EBUSY 是进程/句柄占用,绝不能再猜成「多半有未提交改动」。命令行只拿来认进程名,
+  // 不整段回显(里面可能带 token)。
+  {
+    const error = Object.assign(new Error("resource busy"), { code: "EBUSY" });
+    const hint = worktreeRemovalBlocker("D:\\repo\\.worktrees\\task", error, ["main-repo-change.txt"], [{
+      pid: 4321,
+      ppid: 1,
+      startedAt: null,
+      command: '"C:\\Program Files\\nodejs\\node.exe" scripts/dev.mjs',
+    }]);
+    assert.match(hint, /进程或打开句柄占用/);
+    assert.match(hint, /node\.exe（PID 4321）/);
+    assert.doesNotMatch(hint, /未提交改动/);
+    assert.doesNotMatch(hint, /main-repo-change/, "空壳里的 git status 会上溯主仓,EBUSY 必须优先于这份假脏文件清单");
+    assert.equal(hint.includes("scripts/dev.mjs"), false, "不许把可能带密钥的完整命令行回显到 UI");
+  }
 
   // 1. Pure ref-only fast-forward, followed by worktree + `branch -d` cleanup.
   {
@@ -444,6 +463,42 @@ try {
     git(ws.path, "checkout", "--", "done.txt");
     const retried = await cleanupAcceptedTask(repo, taskId, "main");
     assert.equal(retried.ok, true, "障碍清掉后重试要能过");
+    assert.equal(existsSync(ws.path), false);
+  }
+
+  // Windows 上进程把 cwd 留在 worktree 里时,git 会先删注册项/.git,最后 rmdir 才报
+  // EBUSY。这里要说出占用 PID,不能把半删除空壳误诊成脏文件；进程结束后重试能收干净。
+  if (process.platform === "win32") {
+    const repo = makeRepo("busy-worktree");
+    const taskId = "acceptbusy12";
+    const ws = await prepareWorktree(repo, taskId, "main");
+    writeFileSync(join(ws.path, "done.txt"), "done\n");
+    git(ws.path, "add", "-A");
+    git(ws.path, "commit", "-m", "task done");
+    git(repo, "checkout", "-b", "parking");
+    assert.equal((await mergeTaskBranch(repo, taskId, "main")).ok, true);
+
+    const holder = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", ws.path], {
+      cwd: ws.path,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    await once(holder, "spawn");
+    try {
+      const blocked = await cleanupAcceptedTask(repo, taskId, "main");
+      assert.equal(blocked.ok, false, "cwd 被占时 Windows 必须如实停在清理失败");
+      if (blocked.ok) throw new Error("EBUSY worktree 竟然被删掉了");
+      assert.match(blocked.message, /进程或打开句柄占用/);
+      assert.match(blocked.message, new RegExp(`PID ${holder.pid}`));
+      assert.doesNotMatch(blocked.message, /未提交改动/);
+    } finally {
+      const closed = once(holder, "close");
+      holder.kill();
+      await closed;
+    }
+
+    const retried = await cleanupAcceptedTask(repo, taskId, "main");
+    assert.equal(retried.ok, true, "占用者退出后,半删除空壳要能在重试时收干净");
     assert.equal(existsSync(ws.path), false);
   }
 
