@@ -49,7 +49,7 @@ async function main(): Promise<void> {
   const { projects, tasks } = await import("../src/db/schema.js");
   const { eq } = await import("drizzle-orm");
   const { exportHandoff, preflightHandoff } = await import("../src/handoff.js");
-  const { peerRequestHeaders, requestHandoffApproval } = await import("../src/handoff-peer-client.js");
+  const { peerRequestHeaders, pingPeer, requestHandoffApproval } = await import("../src/handoff-peer-client.js");
   const { localIdentity, shortFingerprint } = await import("../src/handoff-identity.js");
   const { getAppSettings, patchAppSettings } = await import("../src/app-settings.js");
   const { HandoffError } = await import("../src/handoff-types.js");
@@ -414,6 +414,14 @@ async function main(): Promise<void> {
   await assert.rejects(
     exportHandoff(mismatchTask, { targetUrl: peerUrl, targetProjectId: peerProject.id, autoResume: false }),
     (e: unknown) => e instanceof HandoffError && /身份和上次不一样/.test(e.message),
+  );
+  await assert.rejects(
+    pingPeer(peerUrl, wrongFp, { taskId: "missing-return-archive", returnTransferId: null }),
+    (e: unknown) => e instanceof HandoffError
+      && /接力记录里/.test(e.message)
+      && /设置页没有可清除项/.test(e.message)
+      && !/清掉记住的指纹/.test(e.message),
+    "任务 marker 提供的指纹不能误导用户去设置页清理不存在的整机指纹",
   );
   const untouched = (await db.select().from(tasks).where(eq(tasks.id, mismatchTask))).at(0)!;
   assert.equal(untouched.status, "paused", "被身份核对拦下的导出不该停任务");

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { Group, HandoffTarget, Session, Task, TaskListItem } from "@ash/shared";
+import type { Group, Session, Task, TaskListItem } from "@ash/shared";
 import { isUserFollowUp } from "@ash/shared";
 import { FolderOpen, GitBranch, GitPullRequest, Info, MagnifyingGlass } from "@phosphor-icons/react";
 import { InspectorHost, type InspectorDescriptor } from "../inspector/index.ts";

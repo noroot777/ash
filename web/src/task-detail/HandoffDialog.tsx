@@ -35,7 +35,7 @@ export function HandoffDialog({
   notify: (message: string) => void;
   onClose: () => void;
   onTaskUpdate: (task: Task) => void;
-  onOpenRemote: (task: Task, target: HandoffTarget) => void;
+  onOpenRemote: (task: TaskListItem, target: HandoffTarget) => void;
 }) {
   const scrim = useRef<HTMLDivElement>(null);
   // out+pending = 上次接力应答丢失,这次打开对话框是「原样重放收口」:目标机、对端项目、

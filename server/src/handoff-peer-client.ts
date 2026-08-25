@@ -125,11 +125,16 @@ export interface HandoffReturnContext {
   returnTransferId?: string | null;
 }
 
+const identityRecoveryGuidance = (returnContext?: HandoffReturnContext): string => returnContext
+  ? "任务来源指纹保存在这条任务的接力记录里，设置页没有可清除项。确认是同一台来源机时，请先恢复来源机原来的 ash 数据和身份；若身份无法恢复，不要忽略校验直接移回，应在本机继续任务并手工迁移。"
+  : "确认无误再到「设置 → 默认规则」清掉记住的指纹重新配对。";
+
 /**
  * 探活 + 身份核对。任何一步对不上都直接抛(HandoffError,非 network)——**在打包之前**
  * 拦下来,不能等 bundle 都推出去了才发现推错了机器。
  *
- * `expectedFp` 由调用方从 handoffTargets 里取(按 url 匹配);没有就是首次配对(TOFU)。
+ * `expectedFp` 来自整机目标设置或任务 marker；`returnContext` 非空表示后者。
+ * 两者都没有才是首次配对(TOFU)。
  */
 export async function pingPeer(
   targetUrl: string,
@@ -166,7 +171,7 @@ export async function pingPeer(
     // 直接断掉);**记过就一律拒绝** —— 一台报过身份的机器突然不报了,不是降级就是冒充。
     if (expectedFp) {
       throw new HandoffError(
-        `目标机这次没有报出身份,但本机记着它的指纹是 ${shortFingerprint(expectedFp)}。这可能是对端被降级/换了机器,也可能是有人冒充它。确认无误再到「设置 → 默认规则」清掉记住的指纹重新配对。`,
+        `目标机这次没有报出身份,但本机记着它的指纹是 ${shortFingerprint(expectedFp)}。这可能是对端被降级/换了机器,也可能是有人冒充它。${identityRecoveryGuidance(returnContext)}`,
         409,
       );
     }
@@ -189,7 +194,7 @@ export async function pingPeer(
     throw new HandoffError(
       `目标机的身份和上次不一样:记住的是 ${shortFingerprint(expectedFp!)},这次是 ${shortFingerprint(fingerprint)}。`
       + "可能是那台机器重装过、也可能是这个地址现在指向了别的机器 —— 接力会把整个仓库和对话历史发过去,所以先核对对端设置页上的指纹。"
-      + "确认是同一台机器,到「设置 → 默认规则」清掉记住的指纹再接力。",
+      + identityRecoveryGuidance(returnContext),
       409,
     );
   }

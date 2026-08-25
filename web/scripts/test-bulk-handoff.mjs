@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   bulkPreflightAllowsRun,
   bulkPreflightIssue,
+  bulkReturnCandidates,
   bulkTaskReturnsToTarget,
   bulkTargetProjectId,
   outboundTasksForTarget,
@@ -54,7 +55,7 @@ const result = partitionBulkHandoffTasks([
 assert.deepEqual(result.eligible.map((item) => item.id), ["ready"]);
 assert.deepEqual(result.skipped.map((item) => item.task.id), ["team", "queued", "verifying", "pending", "inbound"]);
 assert.match(result.skipped.find((item) => item.task.id === "pending").reason, /单独收口/);
-assert.match(result.skipped.find((item) => item.task.id === "inbound").reason, /来源机与当前所选主机不一致/);
+assert.match(result.skipped.find((item) => item.task.id === "inbound").reason, /未能确认任务来源机/);
 
 const statusResult = partitionBulkHandoffTasks([
   task("running", { status: "running" }),
@@ -77,32 +78,34 @@ const bulkReturn = partitionBulkHandoffTasks([
 ], "p1", sourceFp);
 assert.deepEqual(bulkReturn.eligible.map((item) => item.id), ["local", "return-home"]);
 
-const returnByUrl = task("return-by-url", {
+const returnCandidate = task("return-candidate", {
   handoff: { direction: "in", peerFp: sourceFp, peerUrl: "http://source:4317/" },
 });
 assert.equal(
-  bulkTaskReturnsToTarget(returnByUrl, null, "http://source:4317"),
+  bulkTaskReturnsToTarget(returnCandidate, sourceFp.toUpperCase()),
   true,
-  "未做整机配对时，应允许同来源地址的任务进入正式移回预检",
+  "解析出目标身份后应按大小写无关的指纹比较认出移回任务",
 );
 assert.equal(
-  bulkTaskReturnsToTarget(returnByUrl, sourceFp.toUpperCase(), "http://stale-address:4317"),
-  true,
-  "有双方指纹时应优先使用大小写无关的身份比较",
-);
-assert.equal(
-  bulkTaskReturnsToTarget(returnByUrl, thirdFp, "http://source:4317"),
+  bulkTaskReturnsToTarget(returnCandidate, thirdFp),
   false,
-  "已知目标身份不匹配时不能用相同地址放行",
+  "目标身份不匹配时不能靠地址相同放行",
 );
-const bulkReturnWithoutRegisteredFingerprint = partitionBulkHandoffTasks([
-  returnByUrl,
-], "p1", null, "http://source:4317");
 assert.deepEqual(
-  bulkReturnWithoutRegisteredFingerprint.eligible.map((item) => item.id),
-  ["return-by-url"],
-  "设置目标只有 URL 时，来源地址一致的接入任务仍应可批量移回",
+  bulkReturnCandidates([task("local"), returnCandidate], "p1").map((item) => item.id),
+  ["return-candidate"],
+  "未配对目标应先找出可做只读任务级身份预检的接入任务",
 );
+const unpairedMixedReturn = partitionBulkHandoffTasks([
+  task("local"),
+  returnCandidate,
+], "p1", sourceFp, true);
+assert.deepEqual(
+  unpairedMixedReturn.eligible.map((item) => item.id),
+  ["return-candidate"],
+  "未获整机审批的混合批次应先移回接入任务，不让本地任务拖回审批流程",
+);
+assert.match(unpairedMixedReturn.skipped[0].reason, /接入任务移回权限/);
 
 const returnedHome = partitionBulkHandoffTasks([
   task("returned-home", { handoff: { direction: "returned", peerFp: thirdFp } }),
@@ -175,6 +178,8 @@ assert.match(bulkDialog, /<HandoffDialogHeader/, "批量接力应复用接力弹
 assert.match(bulkDialog, /<HandoffRouteCard/, "批量接力应展示与单任务一致的机器路线");
 assert.match(bulkDialog, /handoff-result-panel handoff-bulk-result/, "批量接力结果页应使用同一套完成态视觉");
 assert.match(bulkDialog, /api\.handoffReturnTarget\(task\.id\)/, "批量移回应逐任务解析 marker 里的回程目标");
+assert.match(bulkDialog, /api\.handoffPreflight\(task\.id, target\.url\)/, "未配对批次应通过所选地址做只读身份预检，不能比较 URL 字符串");
+assert.match(bulkDialog, /probe\.taskScopedReturn/, "只有服务端确认任务级移回授权后才能建立免审批批次");
 assert.match(bulkDialog, /targetUrl: taskTarget\.url/, "批量正式移回应使用逐任务解析出的地址");
 assert.match(bulkDialog, /probeBulkTask/, "任务恢复地址不可达时批量移回应尝试同指纹登记地址");
 assert.match(bulkDialog, /preflightFailures/, "批量执行结果应保留被跳过任务的失败原因");

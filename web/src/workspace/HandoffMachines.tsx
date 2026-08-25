@@ -14,6 +14,7 @@ import { HandoffDialogHeader, HandoffRouteCard } from "../task-detail/HandoffDia
 import {
   bulkPreflightAllowsRun,
   bulkPreflightIssue,
+  bulkReturnCandidates,
   bulkTaskReturnsToTarget,
   bulkTargetProjectId,
   outboundTasksForTarget,
@@ -23,17 +24,41 @@ import {
 type TransferFailure = { task: TaskListItem; reason: string };
 type BusyPhase = "idle" | "approval" | "preflight" | "transferring";
 
-async function targetForBulkTask(task: Task, selected: HandoffTarget): Promise<HandoffTarget> {
+async function targetForBulkTask(task: TaskListItem, selected: HandoffTarget): Promise<HandoffTarget> {
   // 接入任务的 marker.peerUrl 是这条任务最近一次导入时恢复的回程地址；设置项可能
   // 已经过期。批量入口也必须像单任务弹窗一样逐任务解析，不能整批复用侧栏地址。
   return task.handoff?.direction === "in" ? api.handoffReturnTarget(task.id) : selected;
 }
 
-const sameTargetUrl = (left: string, right: string) => left.replace(/\/+$/, "") === right.replace(/\/+$/, "");
+const normalizedTargetUrl = (url: string) => url.trim().replace(/\/+$/, "").replace(/\/api$/, "");
+const sameTargetUrl = (left: string, right: string) => normalizedTargetUrl(left) === normalizedTargetUrl(right);
 const sameTargetFingerprint = (left?: string | null, right?: string | null) =>
   Boolean(left && right && left.toLowerCase() === right.toLowerCase());
 
-async function probeBulkTask(task: Task, selected: HandoffTarget): Promise<{
+async function resolveBulkReturnFingerprint(
+  tasks: TaskListItem[],
+  projectId: string,
+  target: HandoffTarget,
+): Promise<string | null> {
+  if (target.peerFp) return target.peerFp;
+  const candidates = bulkReturnCandidates(tasks, projectId);
+  for (const task of candidates) {
+    try {
+      // 用用户登记的地址做一次只读任务级预检：主机名、IP、/api 等价写法都由
+      // 服务端统一归一化并按 marker.peerFp 核验，成功后才把这批任务认作同一来源机。
+      const probe = await api.handoffPreflight(task.id, target.url);
+      if (probe.taskScopedReturn
+        && sameTargetFingerprint(task.handoff?.peerFp, probe.peer?.fingerprint)) {
+        return probe.peer!.fingerprint;
+      }
+    } catch { /* 可能是别的来源机或当前不可达，继续找同批其他接入任务 */ }
+  }
+  // 来源机暂时离线时保留旧的直连地址体验；正式预检仍会再次核验任务指纹。
+  return candidates.find((task) => task.handoff?.peerUrl
+    && sameTargetUrl(task.handoff.peerUrl, target.url))?.handoff?.peerFp ?? null;
+}
+
+async function probeBulkTask(task: TaskListItem, selected: HandoffTarget): Promise<{
   taskTarget: HandoffTarget;
   probe: TaskScopedHandoffPreflightResult;
 }> {
@@ -61,6 +86,7 @@ function approvalText(result: HandoffApprovalResult): string {
 function BulkHandoffDialog({
   project,
   target,
+  returnFingerprint,
   tasks,
   notify,
   onClose,
@@ -68,6 +94,7 @@ function BulkHandoffDialog({
 }: {
   project: ProjectView;
   target: HandoffTarget;
+  returnFingerprint: string | null;
   tasks: TaskListItem[];
   notify: (message: string) => void;
   onClose: () => void;
@@ -75,14 +102,16 @@ function BulkHandoffDialog({
 }) {
   // 对话框打开时冻结本次批量清单。正式接力会让 tasks 通过 SSE 实时变成 out；如果继续
   // 跟着重算，成功页会把刚搬走的任务反列成「不可接力」，甚至冒出“没有任务”的警告。
+  const batchFingerprint = target.peerFp ?? returnFingerprint;
+  const returnOnlyMode = !target.peerFp && Boolean(returnFingerprint);
   const [{ eligible, skipped }] = useState(() => partitionBulkHandoffTasks(
     tasks,
     project.id,
-    target.peerFp,
-    target.url,
+    batchFingerprint,
+    returnOnlyMode,
   ));
   const returnOnly = eligible.length > 0 && eligible.every(
-    (task) => bulkTaskReturnsToTarget(task, target.peerFp, target.url),
+    (task) => bulkTaskReturnsToTarget(task, batchFingerprint),
   );
   const canProbeWithoutApproval = Boolean(target.peerFp) || returnOnly;
   const actionName = returnOnly ? "移回" : "接力";
@@ -130,7 +159,7 @@ function BulkHandoffDialog({
     setPhase("preflight");
     setError(null);
     const failures: TransferFailure[] = [];
-    let approvalCandidate: { task: Task; taskTarget: HandoffTarget; probe: TaskScopedHandoffPreflightResult } | null = null;
+    let approvalCandidate: { task: TaskListItem; taskTarget: HandoffTarget; probe: TaskScopedHandoffPreflightResult } | null = null;
     try {
       for (let index = 0; index < eligible.length; index += 1) {
         const task = eligible[index];
@@ -517,7 +546,8 @@ export function HandoffMachines({
   onFinished: () => Promise<void> | void;
 }) {
   const [targets, setTargets] = useState<HandoffTarget[]>([]);
-  const [selected, setSelected] = useState<HandoffTarget | null>(null);
+  const [selected, setSelected] = useState<{ target: HandoffTarget; returnFingerprint: string | null } | null>(null);
+  const [resolvingTargetUrl, setResolvingTargetUrl] = useState<string | null>(null);
 
   const reloadTargets = useCallback(() => {
     let alive = true;
@@ -532,6 +562,17 @@ export function HandoffMachines({
     target.url,
     project ? outboundTasksForTarget(tasks, project.id, target.url, target.peerFp) : [],
   ])), [project, targets, tasks]);
+
+  const openBulkDialog = async (target: HandoffTarget) => {
+    if (!project || resolvingTargetUrl) return;
+    setResolvingTargetUrl(target.url);
+    try {
+      const returnFingerprint = await resolveBulkReturnFingerprint(tasks, project.id, target);
+      setSelected({ target, returnFingerprint });
+    } finally {
+      setResolvingTargetUrl(null);
+    }
+  };
 
   if (!targets.length || !project) return null;
 
@@ -551,9 +592,12 @@ export function HandoffMachines({
                 <button
                   type="button"
                   aria-label={`将本项目全部任务接力到 ${target.name}`}
-                  onClick={() => setSelected(target)}
+                  disabled={resolvingTargetUrl !== null}
+                  onClick={() => void openBulkDialog(target)}
                 >
-                  <PaperPlaneTilt size={13} weight="bold" aria-hidden="true" />
+                  {resolvingTargetUrl === target.url
+                    ? <SpinnerGap size={13} className="is-spinning" aria-hidden="true" />
+                    : <PaperPlaneTilt size={13} weight="bold" aria-hidden="true" />}
                 </button>
               </div>
               {outbound.length > 0 && (
@@ -579,7 +623,8 @@ export function HandoffMachines({
       {selected && (
         <BulkHandoffDialog
           project={project}
-          target={selected}
+          target={selected.target}
+          returnFingerprint={selected.returnFingerprint}
           tasks={tasks}
           notify={notify}
           onClose={() => { setSelected(null); reloadTargets(); }}

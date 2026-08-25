@@ -55,15 +55,27 @@ const sameFingerprint = (left?: string | null, right?: string | null): boolean =
 export function bulkTaskReturnsToTarget(
   task: TaskListItem,
   targetFingerprint: string | null | undefined,
-  targetUrl: string,
 ): boolean {
-  if (task.handoff?.direction !== "in" || !task.handoff.peerFp) return false;
-  if (targetFingerprint) return sameFingerprint(task.handoff.peerFp, targetFingerprint);
+  return task.handoff?.direction === "in"
+    && sameFingerprint(task.handoff.peerFp, targetFingerprint);
+}
 
-  // 未做过整机配对时设置项没有 peerFp，只把地址相同的接入任务送进正式预检。
-  // 真正的免审批授权仍由来源机按任务 marker 里的 peerFp 核验，地址相同不能绕过服务端身份校验。
-  if (!task.handoff.peerUrl) return false;
-  return normalizedTargetUrl(task.handoff.peerUrl) === normalizedTargetUrl(targetUrl);
+const bulkTaskBaseReason = (task: TaskListItem): string | null => {
+  if (task.mode !== "single") return "目前只支持单飞任务";
+  if (task.queueId != null) return "仍在任务队列中";
+  if (task.verifyRound != null) return "验证轮尚未结束";
+  if (task.handoff?.direction === "out" && task.handoff.pending) return "上次接力仍待确认，需单独收口";
+  if (task.handoff?.direction === "out") return "已经接力出去";
+  return null;
+};
+
+export function bulkReturnCandidates<T extends TaskListItem>(tasks: T[], projectId: string): T[] {
+  return tasks.filter((task) => task.projectId === projectId
+    && task.parentId === null
+    && !task.archived
+    && !bulkTaskBaseReason(task)
+    && task.handoff?.direction === "in"
+    && Boolean(task.handoff.peerFp));
 }
 
 export function outboundTasksForTarget<T extends TaskListItem>(
@@ -93,7 +105,7 @@ export function partitionBulkHandoffTasks<T extends TaskListItem>(
   tasks: T[],
   projectId: string,
   targetFingerprint?: string | null,
-  targetUrl = "",
+  returnOnly = false,
 ): { eligible: T[]; skipped: BulkHandoffSkip[] } {
   const eligible: T[] = [];
   const skipped: BulkHandoffSkip[] = [];
@@ -101,15 +113,13 @@ export function partitionBulkHandoffTasks<T extends TaskListItem>(
     && (task.handoff?.direction !== "out" || Boolean(task.handoff.pending)));
 
   for (const task of candidates) {
-    let reason: string | null = null;
-    if (task.mode !== "single") reason = "目前只支持单飞任务";
-    else if (task.queueId != null) reason = "仍在任务队列中";
-    else if (task.verifyRound != null) reason = "验证轮尚未结束";
-    else if (task.handoff?.direction === "out" && task.handoff.pending) reason = "上次接力仍待确认，需单独收口";
-    else if (task.handoff?.direction === "out") reason = "已经接力出去";
-    else if (task.handoff?.direction === "in"
-      && !bulkTaskReturnsToTarget(task, targetFingerprint, targetUrl)) {
-      reason = "任务记录的来源机与当前所选主机不一致";
+    let reason = bulkTaskBaseReason(task);
+    if (!reason && returnOnly && task.handoff?.direction !== "in") {
+      reason = "当前目标仅授予接入任务移回权限，本地任务不会随本批次发送";
+    }
+    if (!reason && task.handoff?.direction === "in"
+      && !bulkTaskReturnsToTarget(task, targetFingerprint)) {
+      reason = "未能确认任务来源机就是当前所选主机";
     }
 
     if (reason) skipped.push({ task, reason });
