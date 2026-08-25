@@ -48,12 +48,18 @@ assert.deepEqual(classifyCodexExit(base({ exitStatus: 1, stopRequested: true }))
 
 const poisonedStderr = [
   "dropping turn-scoped item for unknown turn id 01a03642-0000-7000-8000-000000000000\n".repeat(15),
-  "failed to flush rollout after emitting terminal turn event: thread 01a03415-e32e-72d2-8510-26a3beb2832f not found\n",
 ];
 for (const stderrTail of poisonedStderr) {
   const classified = classifyCodexExit(base({ stderrTail }));
   assert.equal(classified.failureKind, "poisoned_session", "exit 0 + turn.completed 也必须判 poisoned");
 }
+const resumableFlushWarning =
+  "failed to flush rollout after emitting terminal turn event: thread 01a036d3-b959-7462-9f46-7b4b5e2327e3 not found\n";
+assert.equal(
+  classifyCodexExit(base({ stderrTail: resumableFlushWarning })).failureKind,
+  null,
+  "真机已证明仅有 rollout flush warning 的 thread 仍可 resume 并使用终端，不得误清",
+);
 
 const dir = mkdtempSync(join(tmpdir(), "ash-diagnostics-"));
 try {

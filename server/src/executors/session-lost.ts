@@ -36,13 +36,9 @@ const CODEX_POISON_PATTERNS: ReadonlyArray<{ pattern: RegExp; reason: string }> 
     pattern: /dropping turn-scoped item for unknown turn id\b/i,
     reason: "Codex stderr 出现 `dropping turn-scoped item for unknown turn id`，恢复 thread 已无法对应旧回合。",
   },
-  {
-    pattern: /failed to flush rollout after emitting terminal turn event:\s*thread\b[^\r\n]*\bnot found\b/i,
-    reason: "Codex stderr 出现 `failed to flush rollout after emitting terminal turn event: thread … not found`，thread 的终局事件无法落盘。",
-  },
 ];
 
-/** 真机证实会让 Codex thread 永久缺工具/无法落盘的 stderr 指纹。 */
+/** 真机证实会让 Codex thread 在后续恢复时永久缺工具的 stderr 指纹。 */
 export function codexSessionPoisonReason(message: string): string | null {
   return CODEX_POISON_PATTERNS.find(({ pattern }) => pattern.test(message))?.reason ?? null;
 }

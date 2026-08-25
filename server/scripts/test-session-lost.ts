@@ -63,16 +63,20 @@ const POISON_UNKNOWN_TURN =
   "dropping turn-scoped item for unknown turn id 01a03642-0000-7000-8000-000000000000";
 const POISON_FLUSH =
   "failed to flush rollout after emitting terminal turn event: thread 01a03415-e32e-72d2-8510-26a3beb2832f not found";
-for (const signal of [POISON_UNKNOWN_TURN, POISON_FLUSH]) {
-  assert.ok(codexSessionPoisonReason(signal), `应识别真机 poisoned stderr:${signal}`);
-  assert.equal(sessionResumeFault(signal), "poisoned");
-}
+assert.ok(codexSessionPoisonReason(POISON_UNKNOWN_TURN), "应识别真机 unknown-turn poisoned stderr");
+assert.equal(sessionResumeFault(POISON_UNKNOWN_TURN), "poisoned");
+assert.equal(
+  codexSessionPoisonReason(POISON_FLUSH),
+  null,
+  "真机直接 resume 已证明 rollout flush warning 单独出现时会话仍可用，不得误判 poisoned",
+);
+assert.equal(sessionResumeFault(POISON_FLUSH), null);
 assert.equal(shouldDropSession("poisoned", 0), true, "poisoned thread 即使 exit 0 也必须作废");
 assert.equal(shouldDropSession("lost", 0), false, "普通会话不存在仍保留 exit 0 防误清语义");
 assert.equal(mergeSessionResumeFault("lost", POISON_UNKNOWN_TURN), "poisoned", "后到的 poisoned 信号必须升级判定");
 assert.match(SESSION_POISONED_NOTE, /exit 0/);
 assert.match(SESSION_POISONED_NOTE, /全新会话/);
-ok("Codex 两类真机 stderr 均优先判为 poisoned，exit 0 仍清恢复字段");
+ok("Codex unknown-turn 指纹判 poisoned；可恢复的 rollout flush warning 不误清");
 
 // ── ① 执行器原样带出来 ──────────────────────────────────────────────────────
 // claude.ts 对 CLI 的 stderr 有一层措辞归一(normalizeClaudeCliError)。这句要是哪天
