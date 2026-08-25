@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HandoffPreflightResult, HandoffTarget, Task } from "@ash/shared";
@@ -17,6 +18,51 @@ process.env.ASH_DB = join(root, "attacker.db");
 const children: ChildProcess[] = [];
 const serverPorts: number[] = [];
 const remember = (proc: ChildProcess) => children.push(proc);
+let returnProxy: { url: string; close(): Promise<void> } | null = null;
+
+async function startReturnProxy(upstream: string): Promise<{ url: string; close(): Promise<void> }> {
+  let cutFirstImport = true;
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk) => chunks.push(chunk as Buffer));
+    req.on("end", () => {
+      void (async () => {
+        const body = Buffer.concat(chunks);
+        const headers: Record<string, string> = {};
+        for (const [key, value] of Object.entries(req.headers)) {
+          if ((key === "content-type" || key.startsWith("x-ash-peer-")) && typeof value === "string") {
+            headers[key] = value;
+          }
+        }
+        const method = req.method ?? "GET";
+        const upstreamResponse = await fetch(`${upstream}${req.url}`, {
+          method,
+          headers,
+          ...(method === "GET" || method === "HEAD"
+            ? {}
+            : { body: new Uint8Array(body.buffer as ArrayBuffer, body.byteOffset, body.byteLength) }),
+        });
+        const responseBody = Buffer.from(await upstreamResponse.arrayBuffer());
+        if (cutFirstImport && req.url?.startsWith("/api/handoff/return/import")) {
+          cutFirstImport = false;
+          req.socket.destroy();
+          return;
+        }
+        res.statusCode = upstreamResponse.status;
+        res.setHeader("content-type", upstreamResponse.headers.get("content-type") ?? "application/json");
+        res.end(responseBody);
+      })().catch(() => req.socket.destroy());
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return {
+    url: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+    close: async () => {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
 
 try {
   const repoA = makeRepo(join(root, "repo-a"));
@@ -182,11 +228,36 @@ try {
     "commit", "-m", "holder commit",
   ]);
   const holderHead = execFileSync("git", ["-C", holderWorktree, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  returnProxy = await startReturnProxy(machineA);
+  const interruptedResponse = await fetch(`${machineB}/api/tasks/${task.id}/handoff`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: returnProxy.url, targetProjectId: projectA.id, targetName: "A", autoResume: false }),
+  });
+  assert.equal(interruptedResponse.status, 502, "移回已落到原机但应答中断时应保留送达未知态");
+  assert.match(((await interruptedResponse.json()) as { error: string }).error, /原样重试.*幂等收口/);
+  const pendingReturnTask = await api<Task>(machineB, `/tasks/${task.id}`);
+  assert.equal(pendingReturnTask.handoff?.direction, "out");
+  assert.equal(pendingReturnTask.handoff?.pending, true);
+  assert.equal(pendingReturnTask.handoff?.returnTransferId, inbound.handoff?.transferId, "pending 标记必须冻结任务级移回凭据");
+  assert.equal(pendingReturnTask.handoff?.peerFp, identityA.fingerprint, "移回重放必须继续钉死原机身份");
+
+  const returnedBeforeRetry = await api<Task>(machineA, `/tasks/${task.id}`);
+  assert.equal(returnedBeforeRetry.handoff?.direction, "returned", "代理断响应前原机已完成导入");
+  assert.equal(returnedBeforeRetry.handoff?.returnTransferId, inbound.handoff?.transferId, "原机完成态应保留幂等探测凭据");
+  const originHeadBeforeRetry = execFileSync("git", ["-C", worktreePathFor(repoA, task.id), "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  assert.equal(originHeadBeforeRetry, holderHead, "首次已送达的移回应更新原机 worktree");
+
+  const retryProbe = await api<HandoffPreflightResult>(machineB, `/tasks/${task.id}/handoff/preflight`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetUrl: returnProxy.url }),
+  });
+  assert.equal(retryProbe.taskScopedReturn, true, "移回 pending 重试仍必须走 return/ping");
+  assert.equal(retryProbe.peer?.peerStatus, "approved", "移回 pending 重试不能退化成整机审批");
+
   const returnResult = await api<{ notes: string[] }>(machineB, `/tasks/${task.id}/handoff`, {
     method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ targetUrl: target.url, targetProjectId: projectA.id, targetName: "A", autoResume: false }),
+    body: JSON.stringify({ targetUrl: returnProxy.url, targetProjectId: projectA.id, targetName: "A", autoResume: false }),
   });
-  assert.ok(returnResult.notes.some((note) => /已导入\(增量\).*worktree 已更新/.test(note)), "移回应把增量提交安全更新到原机已检出的 worktree");
+  assert.ok(returnResult.notes.some((note) => /幂等收口/.test(note)), "应答中断后的原样移回应安全收口而不是重复导入");
   assert.ok(!returnResult.notes.some((note) => /整条历史|全量历史/.test(note)), "免审批移回不应误报为全量 git 历史");
   const returned = await api<Task>(machineA, `/tasks/${task.id}`);
   assert.equal(returned.handoff?.direction, "returned");
@@ -236,8 +307,18 @@ try {
   const restoredWithoutArchive = await api<Task>(machineA, `/tasks/${missingArchiveTask.id}`);
   assert.equal(restoredWithoutArchive.projectId, projectA.id);
   assert.equal(restoredWithoutArchive.handoff?.direction, "in", "本机没有历史存档时不能只凭来源机自报就标成 returned");
+
+  const previousPort = process.env.PORT;
+  process.env.PORT = "0";
+  const { currentListeningPort, recordListeningPort } = await import("../src/listening-port.js");
+  recordListeningPort(54_321);
+  assert.equal(currentListeningPort(), 54_321);
+  assert.equal(process.env.PORT, "0", "记录实际监听端口不能污染终端和 agent 继承的 PORT");
+  if (previousPort === undefined) delete process.env.PORT;
+  else process.env.PORT = previousPort;
   console.log("test-handoff-return ok");
 } finally {
+  await returnProxy?.close().catch(() => {});
   for (const port of serverPorts) {
     for (const pid of listenerPidsSync(port)) killOne(pid, "SIGKILL");
   }

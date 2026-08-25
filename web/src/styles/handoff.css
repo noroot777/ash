@@ -211,10 +211,9 @@
   font-size: 11.5px;
 }
 .task-handoff-banner > svg { flex: none; color: var(--accent); }
-.task-handoff-open { display: inline-flex; flex: none; align-items: center; gap: 3px; border: 0; background: transparent; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }
 .task-handoff-banner span { flex: 1 1 auto; min-width: 0; }
 
-/* 接力未确认(应答丢失):琥珀色警示,提醒用户先重试收口或确认后移除标记。 */
+/* 接力/移回送达未确认(应答丢失):琥珀色警示,提醒用户先重试收口或确认后移除标记。 */
 .task-handoff-banner.is-pending {
   border-color: color-mix(in lch, var(--amber) 45%, var(--line));
   background: color-mix(in lch, var(--amber) 9%, var(--panel));

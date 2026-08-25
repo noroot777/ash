@@ -483,6 +483,9 @@ async function importValidated(
     // 源机生成的接力身份证:应答丢失后源机原样重试时,靠它把「已有同 id 任务」识别成
     // 同一次接力并幂等收口(见上面 existing 分支)。
     transferId: m.transferId ?? null,
+    // 任务级移回完成后仍保留原 out 存档的 transfer id：如果成功应答在路上丢失，
+    // 持有机可以用同一凭据重新探测并让 importHandoff 按 m.transferId 幂等收口。
+    ...(m.returnTransferId !== undefined ? { returnTransferId: m.returnTransferId } : {}),
     // 导入时有没有触发自动续跑,存成事实:应答丢失后的幂等收口靠它如实回答源机
     // 「任务在对端跑起来了没有」,而不是一律回 false 误导用户去对端手动再点一次。
     autoResume: m.autoResume,

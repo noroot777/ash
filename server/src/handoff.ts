@@ -50,6 +50,7 @@ import { collectUploads, isTextRel } from "./handoff-uploads.js";
 import { beginHandoffPrepare, endHandoffPrepare } from "./handoff-guard.js";
 import { cancelPendingMessage } from "./pending-messages.js";
 import type { HandoffReturnContext } from "./handoff-peer-client.js";
+import { currentListeningPort } from "./listening-port.js";
 
 export async function handoffRemoteUrl(taskId: string): Promise<string> {
   const row = (await db.select({ handoff: tasks.handoff }).from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -108,15 +109,25 @@ function parsedHandoff(raw: string | null): TaskHandoff | null {
  */
 function inboundReturnFingerprint(raw: string | null): string | null | undefined {
   const marker = parsedHandoff(raw);
-  if (marker?.direction !== "in") return undefined;
-  return marker.peerFp || null;
+  if (marker?.direction === "in") return marker.peerFp || null;
+  if (marker?.direction === "out" && marker.pending
+    && Object.prototype.hasOwnProperty.call(marker, "returnTransferId")) {
+    return marker.peerFp || null;
+  }
+  return undefined;
 }
 
 function inboundReturnContext(taskId: string, raw: string | null): HandoffReturnContext | undefined {
   const marker = parsedHandoff(raw);
-  return marker?.direction === "in"
-    ? { taskId, returnTransferId: marker.transferId ?? null }
-    : undefined;
+  if (marker?.direction === "in") {
+    return { taskId, returnTransferId: marker.transferId ?? null };
+  }
+  if (marker?.direction === "out" && marker.pending
+    && Object.prototype.hasOwnProperty.call(marker, "returnTransferId")) {
+    const returnTransferId = (marker as TaskHandoff & { returnTransferId?: string | null }).returnTransferId;
+    return { taskId, returnTransferId: returnTransferId ?? null };
+  }
+  return undefined;
 }
 
 /** 停掉正在跑的回合并等结算收尾（镜像 /stop 端点的语义:没有活进程但状态是 running/queued 就直接标 canceled）。 */
@@ -382,10 +393,7 @@ export async function exportHandoff(
       const manifest: HandoffManifest = {
         version: 1,
         sourceHost: hostname(),
-        sourcePort: (() => {
-          const value = Number(process.env.PORT ?? 4317);
-          return Number.isInteger(value) && value > 0 && value <= 65_535 ? value : null;
-        })(),
+        sourcePort: currentListeningPort(),
         sourceFingerprint: localFingerprint,
         originFingerprint,
         targetProjectId: targetProject.id,
@@ -450,6 +458,9 @@ export async function exportHandoff(
         direction: "out",
         pending: true,
         transferId,
+        // 任务级移回应答丢失后，direction 会暂时变成 out+pending；把原始移回凭据
+        // 一起冻结，重试才能继续走 return/*，而不是退化成需要整机审批的普通接力。
+        ...(taskScopedReturn ? { returnTransferId: returnContext?.returnTransferId ?? null } : {}),
         // 冻结本次目标项目与 autoResume:收口重试必须原样重放(见上方 pendingRetry 校验)。
         targetProjectId: targetProject.id,
         autoResume,
@@ -488,7 +499,8 @@ export async function exportHandoff(
       } catch (e) {
         if (e instanceof HandoffError && e.network) {
           // 送没送到说不清:保留 pending 标记,把收口方法一并告诉用户。
-          e.message += "。对端可能已经收到这份任务:本机保留「接力未确认」标记,原样重试会自动幂等收口;确认对端没收到的话,在任务横幅上移除接力标记即可在本机继续。";
+          const pendingLabel = taskScopedReturn ? "移回未确认" : "接力未确认";
+          e.message += `。对端可能已经收到这份任务:本机保留「${pendingLabel}」标记,原样重试会自动幂等收口;确认对端没收到的话,在任务横幅上移除接力标记即可在本机继续。`;
           throw e;
         }
         // 带 ash 标记的业务拒绝(对端可证明没落库):恢复接力前的标记,本机照常可跑。

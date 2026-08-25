@@ -128,7 +128,6 @@ export function TaskDetail({
   onDeleted,
   onOpenTask,
   onHandoff,
-  onRemoteTask,
   initialReviewOpen = false,
   onReviewOpenChange,
   inspectorMode = "page",
@@ -142,7 +141,6 @@ export function TaskDetail({
   onDeleted: (taskId: string) => void;
   onOpenTask: (taskId: string) => void;
   onHandoff?: (task: Task) => void;
-  onRemoteTask?: (task: Task, target: HandoffTarget) => void;
   initialReviewOpen?: boolean;
   onReviewOpenChange?: (open: boolean) => void;
   inspectorMode?: "page" | "drawer";
@@ -382,14 +380,6 @@ export function TaskDetail({
                 handoff={task.handoff}
                 notify={notify}
                 onTaskUpdate={onTaskUpdate}
-                onOpenRemote={onRemoteTask ? () => {
-                  if (!task.handoff?.peerUrl) return;
-                  onRemoteTask(task, {
-                    name: task.handoff.peerName ?? task.handoff.peerUrl,
-                    url: task.handoff.peerUrl,
-                    peerFp: task.handoff.peerFp,
-                  });
-                } : null}
               />
             )}
             {reviewOpen ? (

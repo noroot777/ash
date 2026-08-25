@@ -42,11 +42,16 @@ export async function returnArchiveForPeer(
   const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!row) throw new HandoffError("原机没有这条任务的历史存档", 404);
   const marker = markerOf(row.handoff);
-  if (marker?.direction !== "out" || marker.pending || !marker.peerFp
+  const confirmedOut = marker?.direction === "out" && !marker.pending;
+  const completedReturn = marker?.direction === "returned"
+    && Object.prototype.hasOwnProperty.call(marker, "returnTransferId");
+  if ((!confirmedOut && !completedReturn) || !marker?.peerFp
     || !sameFingerprint(marker.peerFp, callerFingerprint)) {
     throw new HandoffError("只有这条任务当前记录的持有机器才能免审批移回", 403);
   }
-  if (marker.transferId && marker.transferId !== returnTransferId) {
+  const completedReturnTransferId = (marker as TaskHandoff & { returnTransferId?: string | null }).returnTransferId;
+  const expectedReturnTransferId = completedReturn ? completedReturnTransferId : marker.transferId;
+  if (expectedReturnTransferId && expectedReturnTransferId !== returnTransferId) {
     throw new HandoffError("移回凭据与原接力记录不一致", 403);
   }
   const peer = (await db.select({ status: handoffPeers.status }).from(handoffPeers)
