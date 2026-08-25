@@ -15,6 +15,7 @@ const [
   schema,
   runs,
   steer,
+  { bus },
   { mountTaskRunRoutes },
   { mountTaskRoutes },
   { mountTaskStageRoutes },
@@ -24,6 +25,7 @@ const [
   import("../src/db/schema.js"),
   import("../src/runs.js"),
   import("../src/task-steer.js"),
+  import("../src/bus.js"),
   import("../src/task-run-routes.js"),
   import("../src/task-routes.js"),
   import("../src/task-stage.js"),
@@ -71,6 +73,12 @@ const waitFor = async (predicate: () => boolean, label: string): Promise<void> =
   }
   throw new Error(`等待超时：${label}`);
 };
+const previousQuestion = "要不要改成方案 B？";
+const previousQuestionOptions = JSON.stringify(["改成 B", "保留 A"]);
+const previousQuestionItems = JSON.stringify([
+  { question: "先迁移哪一块？", options: ["API", "UI"] },
+]);
+const previousResumePrompt = "继续：把 B 方案的迁移脚本写完";
 
 try {
   // 两阶段预约：旧流先结束时必须等 commit；cancel 则回到普通结算，不 kill、不续送。
@@ -156,7 +164,22 @@ try {
     task("reviewer-role"),
     task("ordered"),
     task("stopping", { activeTurnToken: "stopping-token" }),
-    task("late-stop-db", { activeTurnToken: "late-stop-token" }),
+    task("late-stop-db", {
+      activeTurnToken: "late-stop-token",
+      completeConfirmedAt: at,
+      resumePrompt: previousResumePrompt,
+      question: previousQuestion,
+      questionOptions: previousQuestionOptions,
+      questionItems: previousQuestionItems,
+    }),
+    task("lost-db", {
+      activeTurnToken: "lost-token",
+      completeConfirmedAt: at,
+      resumePrompt: previousResumePrompt,
+      question: previousQuestion,
+      questionOptions: previousQuestionOptions,
+      questionItems: previousQuestionItems,
+    }),
     task("token", { activeTurnToken: "new-token" }),
     task("patch-source", { activeTurnToken: "source-token" }),
     task("patch-target", { activeTurnToken: "target-token" }),
@@ -172,6 +195,7 @@ try {
     message("ordered-b", "ordered"),
     message("m-stopping", "stopping"),
     message("m-late-stop-db", "late-stop-db"),
+    message("m-lost-db", "lost-db"),
   ]);
 
   for (const [messageId, pattern] of [
@@ -223,6 +247,17 @@ try {
   let lateDbKills = 0;
   const lateDbHandle = { kill: () => { lateDbKills++; } };
   runs.trackRun("late-stop-db", lateDbHandle);
+  runs.confirmDone("late-stop-db");
+  const lateQuestionEvents: Array<{ question: string | null; questionOptions: unknown; questionItems: unknown }> = [];
+  const unsubscribeLateQuestion = bus.subscribe((event) => {
+    if (event.type === "task.question" && event.taskId === "late-stop-db") {
+      lateQuestionEvents.push({
+        question: event.question,
+        questionOptions: event.questionOptions,
+        questionItems: event.questionItems,
+      });
+    }
+  });
   const lateDbSteer = steer.steerQueuedMessage("m-late-stop-db");
   await waitFor(() => lateDbKills === 1, "引导提交并 kill 旧回合");
   assert.equal(await runs.takeSteered("late-stop-db"), true, "模拟旧回合已读到 committed 引导");
@@ -230,14 +265,61 @@ try {
   runs.untrackRun("late-stop-db", lateDbHandle);
   runs.releaseTurn("late-stop-db");
   const lateDbResult = await lateDbSteer;
+  unsubscribeLateQuestion();
   assert.equal(lateDbResult.ok, false, "晚到停止应让正在等待的引导请求明确失败");
   if (!lateDbResult.ok) assert.match(lateDbResult.error, /暂停|停止/);
-  assert.equal((await db.select().from(tasks).where(eq(tasks.id, "late-stop-db"))).at(0)!.status, "paused");
+  const lateDbTask = (await db.select().from(tasks).where(eq(tasks.id, "late-stop-db"))).at(0)!;
+  assert.equal(lateDbTask.status, "paused");
+  assert.equal(lateDbTask.question, previousQuestion, "晚到暂停不得吞掉旧提问");
+  assert.equal(lateDbTask.questionOptions, previousQuestionOptions);
+  assert.equal(lateDbTask.questionItems, previousQuestionItems);
+  assert.equal(lateDbTask.resumePrompt, previousResumePrompt, "晚到暂停不得吞掉旧检查点");
+  assert.equal(lateDbTask.completeConfirmedAt, at, "晚到暂停不得吞掉旧完成票");
+  assert.equal(runs.takeConfirmed("late-stop-db"), true, "内存完成确认也应恢复");
+  assert.deepEqual(
+    lateQuestionEvents.map((event) => event.question),
+    [null, previousQuestion],
+    "清掉问题卡后必须广播恢复事件",
+  );
+  assert.deepEqual(lateQuestionEvents.at(-1)?.questionOptions, JSON.parse(previousQuestionOptions));
+  assert.deepEqual(lateQuestionEvents.at(-1)?.questionItems, JSON.parse(previousQuestionItems));
   const lateDbMessage = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, "m-late-stop-db"))).at(0)!;
   assert.equal(lateDbMessage.status, "pending");
   assert.equal(lateDbMessage.deliveringSince, null);
   assert.equal(runs.takeStopped("late-stop-db"), null, "补结算后停止标记不得泄漏给下一回合");
-  console.log("✓ 停止/分组暂停优先于引导，停止标记不丢失也不泄漏给新回合");
+  console.log("✓ 晚到暂停优先于引导，并完整恢复旧提问、检查点和完成确认");
+
+  assert.equal(runs.claimTurn("lost-db", "single"), true);
+  const lostDbHandle = { kill: () => { throw new Error("lost 预约不得提交或 kill"); } };
+  runs.trackRun("lost-db", lostDbHandle);
+  runs.confirmDone("lost-db");
+  let lostReleased = false;
+  const lostQuestionEvents: Array<string | null> = [];
+  const unsubscribeLostQuestion = bus.subscribe((event) => {
+    if (event.type !== "task.question" || event.taskId !== "lost-db") return;
+    lostQuestionEvents.push(event.question);
+    if (event.question === null && !lostReleased) {
+      lostReleased = true;
+      runs.untrackRun("lost-db", lostDbHandle);
+      runs.releaseTurn("lost-db");
+    }
+  });
+  const lostDbResult = await steer.steerQueuedMessage("m-lost-db");
+  unsubscribeLostQuestion();
+  assert.equal(lostDbResult.ok, false, "turn 在清理后释放时不得假报引导成功");
+  if (!lostDbResult.ok) assert.match(lostDbResult.error, /结束|排队/);
+  const lostDbTask = (await db.select().from(tasks).where(eq(tasks.id, "lost-db"))).at(0)!;
+  assert.equal(lostDbTask.question, previousQuestion, "lost 回滚不得吞掉旧提问");
+  assert.equal(lostDbTask.questionOptions, previousQuestionOptions);
+  assert.equal(lostDbTask.questionItems, previousQuestionItems);
+  assert.equal(lostDbTask.resumePrompt, previousResumePrompt, "lost 回滚不得吞掉旧检查点");
+  assert.equal(lostDbTask.completeConfirmedAt, at, "lost 回滚不得吞掉旧完成票");
+  assert.equal(runs.takeConfirmed("lost-db"), true, "lost 回滚应恢复内存完成确认");
+  assert.deepEqual(lostQuestionEvents, [null, previousQuestion], "lost 回滚也必须恢复问题卡广播");
+  const lostDbMessage = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, "m-lost-db"))).at(0)!;
+  assert.equal(lostDbMessage.status, "pending");
+  assert.equal(lostDbMessage.deliveringSince, null);
+  console.log("✓ commit lost 后消息继续排队，旧方向状态通过 CAS 完整恢复");
 
   const api = new Hono();
   mountTaskRunRoutes(api);

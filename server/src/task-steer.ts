@@ -4,8 +4,8 @@
 //
 // 两条硬不变量：① 清旧状态前先预约 steering，数据库失败可撤销；② 原话真正落盘前消息
 // 始终 pending，续送失败先把假 running 拉回真实状态，再归还投递租约。
-import type { TaskStatus } from "@ash/shared";
-import { and, asc, eq } from "drizzle-orm";
+import type { QuestionItem, TaskStatus } from "@ash/shared";
+import { and, asc, eq, isNull, ne } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -16,6 +16,7 @@ import {
   isRunning,
   isCanceling,
   isTurnClaimed,
+  confirmDone,
   reserveSteerTask,
   type StopSettle,
   takeConfirmed,
@@ -28,29 +29,82 @@ import { id, now } from "./util.js";
 
 type MessageRow = typeof scheduledMessages.$inferSelect;
 
+interface PreviousDirectionState {
+  activeTurnToken: string | null;
+  clearedTurnToken: string;
+  completeConfirmedAt: string | null;
+  resumePrompt: string | null;
+  question: string | null;
+  questionOptions: string | null;
+  questionItems: string | null;
+  memoryConfirmed: boolean;
+}
+
 export type SteerQueuedMessageResult =
   | { ok: true; taskId: string; messageId: string }
   | { ok: false; status: 404 | 409 | 500; error: string };
 
-async function clearPreviousDirectionState(taskId: string): Promise<void> {
+async function clearPreviousDirectionState(taskId: string): Promise<PreviousDirectionState> {
   // 先换 token 再 kill：旧回合早到的确认会被本次 UPDATE 清掉，晚到的确认会因 token
   // 不匹配被 409；更新前后各清一次内存快路，盖住 HTTP 与 DB await 的交错。
-  takeConfirmed(taskId);
-  const updatedAt = now();
-  const current = (await db.select({ question: tasks.question }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-  await db
-    .update(tasks)
-    .set({
-      activeTurnToken: id(),
-      completeConfirmedAt: null,
-      resumePrompt: null,
-      question: null,
-      questionOptions: null,
-      questionItems: null,
-      updatedAt,
+  const confirmedBefore = takeConfirmed(taskId);
+  const current = (await db
+    .select({
+      activeTurnToken: tasks.activeTurnToken,
+      completeConfirmedAt: tasks.completeConfirmedAt,
+      resumePrompt: tasks.resumePrompt,
+      question: tasks.question,
+      questionOptions: tasks.questionOptions,
+      questionItems: tasks.questionItems,
     })
-    .where(eq(tasks.id, taskId));
-  takeConfirmed(taskId);
+    .from(tasks)
+    .where(eq(tasks.id, taskId))).at(0);
+  if (!current) {
+    if (confirmedBefore) confirmDone(taskId);
+    throw new Error("任务不存在");
+  }
+  const clearedTurnToken = id();
+  const updatedAt = now();
+  let memoryConfirmed = confirmedBefore;
+  try {
+    const updated = await db
+      .update(tasks)
+      .set({
+        activeTurnToken: clearedTurnToken,
+        completeConfirmedAt: null,
+        resumePrompt: null,
+        question: null,
+        questionOptions: null,
+        questionItems: null,
+        updatedAt,
+      })
+      .where(and(
+        eq(tasks.id, taskId),
+        current.activeTurnToken === null
+          ? isNull(tasks.activeTurnToken)
+          : eq(tasks.activeTurnToken, current.activeTurnToken),
+        current.completeConfirmedAt === null
+          ? isNull(tasks.completeConfirmedAt)
+          : eq(tasks.completeConfirmedAt, current.completeConfirmedAt),
+        current.resumePrompt === null
+          ? isNull(tasks.resumePrompt)
+          : eq(tasks.resumePrompt, current.resumePrompt),
+        current.question === null ? isNull(tasks.question) : eq(tasks.question, current.question),
+        current.questionOptions === null
+          ? isNull(tasks.questionOptions)
+          : eq(tasks.questionOptions, current.questionOptions),
+        current.questionItems === null
+          ? isNull(tasks.questionItems)
+          : eq(tasks.questionItems, current.questionItems),
+      ))
+      .returning({ id: tasks.id });
+    memoryConfirmed = takeConfirmed(taskId) || memoryConfirmed;
+    if (!updated.length) throw new Error("当前回合状态已变化，请重试引导");
+  } catch (error) {
+    memoryConfirmed = takeConfirmed(taskId) || memoryConfirmed;
+    if (memoryConfirmed) confirmDone(taskId);
+    throw error;
+  }
   if (current?.question) {
     try {
       bus.publish({
@@ -65,6 +119,110 @@ async function clearPreviousDirectionState(taskId: string): Promise<void> {
       console.warn(`[ash] 引导会话已清提问，但实时通知失败 ${taskId}:`, error);
     }
   }
+  return { ...current, clearedTurnToken, memoryConfirmed };
+}
+
+async function restorePreviousDirectionState(
+  taskId: string,
+  previous: PreviousDirectionState,
+): Promise<boolean> {
+  const updatedAt = now();
+  let restored = await db
+    .update(tasks)
+    .set({
+      activeTurnToken: previous.activeTurnToken,
+      completeConfirmedAt: previous.completeConfirmedAt,
+      resumePrompt: previous.resumePrompt,
+      question: previous.question,
+      questionOptions: previous.questionOptions,
+      questionItems: previous.questionItems,
+      updatedAt,
+    })
+    .where(and(
+      eq(tasks.id, taskId),
+      eq(tasks.activeTurnToken, previous.clearedTurnToken),
+      isNull(tasks.completeConfirmedAt),
+      isNull(tasks.resumePrompt),
+      isNull(tasks.question),
+      isNull(tasks.questionOptions),
+      isNull(tasks.questionItems),
+    ))
+    .returning({ id: tasks.id });
+  if (!restored.length) {
+    // 旧回合可能已按停止/自然结束完成结算：setTaskStatus 会把 token 置 null，但清掉的
+    // 方向字段仍全是 null。只在任务已离开运行态且这些字段仍未被新写入时恢复，避免
+    // 覆盖停止窗口里新产生的提问、检查点或完成票。
+    restored = await db
+      .update(tasks)
+      .set({
+        completeConfirmedAt: previous.completeConfirmedAt,
+        resumePrompt: previous.resumePrompt,
+        question: previous.question,
+        questionOptions: previous.questionOptions,
+        questionItems: previous.questionItems,
+        updatedAt,
+      })
+      .where(and(
+        eq(tasks.id, taskId),
+        isNull(tasks.activeTurnToken),
+        ne(tasks.status, "running"),
+        ne(tasks.status, "queued"),
+        isNull(tasks.completeConfirmedAt),
+        isNull(tasks.resumePrompt),
+        isNull(tasks.question),
+        isNull(tasks.questionOptions),
+        isNull(tasks.questionItems),
+      ))
+      .returning({ id: tasks.id });
+  }
+  if (!restored.length) return false;
+  if (previous.memoryConfirmed) confirmDone(taskId);
+  if (previous.question) {
+    try {
+      bus.publish({
+        type: "task.question",
+        taskId,
+        updatedAt,
+        question: previous.question,
+        questionOptions: previous.questionOptions
+          ? JSON.parse(previous.questionOptions) as string[]
+          : null,
+        questionItems: previous.questionItems
+          ? JSON.parse(previous.questionItems) as QuestionItem[]
+          : null,
+      });
+    } catch (error) {
+      console.warn(`[ash] 引导会话已恢复提问，但实时通知失败 ${taskId}:`, error);
+    }
+  }
+  return true;
+}
+
+async function restorePreviousCompletionState(
+  taskId: string,
+  previous: PreviousDirectionState,
+): Promise<void> {
+  if (!previous.completeConfirmedAt && !previous.memoryConfirmed) return;
+  const restored = await db
+    .update(tasks)
+    .set({ completeConfirmedAt: previous.completeConfirmedAt, updatedAt: now() })
+    .where(and(
+      eq(tasks.id, taskId),
+      isNull(tasks.activeTurnToken),
+      isNull(tasks.completeConfirmedAt),
+      previous.resumePrompt === null
+        ? isNull(tasks.resumePrompt)
+        : eq(tasks.resumePrompt, previous.resumePrompt),
+      previous.question === null ? isNull(tasks.question) : eq(tasks.question, previous.question),
+      previous.questionOptions === null
+        ? isNull(tasks.questionOptions)
+        : eq(tasks.questionOptions, previous.questionOptions),
+      previous.questionItems === null
+        ? isNull(tasks.questionItems)
+        : eq(tasks.questionItems, previous.questionItems),
+    ))
+    .returning({ id: tasks.id });
+  if (restored.length && previous.memoryConfirmed) confirmDone(taskId);
 }
 
 async function recoverUndeliveredSteer(taskId: string): Promise<void> {
@@ -132,8 +290,10 @@ async function finishStoppedSteer(
   message: MessageRow,
   stopped: StopSettle,
   needsSettlement: boolean,
+  previous: PreviousDirectionState | null,
 ): Promise<SteerQueuedMessageResult> {
   try {
+    if (previous) await restorePreviousDirectionState(message.taskId, previous);
     if (needsSettlement) {
       const { settleTaskStatus, afterSettlement } = await import("./single-run.js");
       const settled = await settleTaskStatus(message.taskId, 1, stopped);
@@ -150,6 +310,7 @@ async function finishStoppedSteer(
           : "手动停止发生在引导收尾期间：引导已取消，停止已落账，排队消息仍保留。",
       );
     }
+    if (previous) await restorePreviousCompletionState(message.taskId, previous);
     // 停止结算会触发一次“任务空闲，扫描排队消息”；租约必须一直持有到结算完成，
     // 否则扫描会在停止刚落库时把同一条消息重新抢走，看起来仍像停止被吞了。
     await abortDelivery(message);
@@ -215,9 +376,10 @@ export async function steerQueuedMessage(messageId: string): Promise<SteerQueued
 
   let resolveDelivery!: (result: SteerQueuedMessageResult) => void;
   const delivery = new Promise<SteerQueuedMessageResult>((resolve) => { resolveDelivery = resolve; });
+  let previousDirectionState: PreviousDirectionState | null = null;
   const reservation = reserveSteerTask(task.id, (outcome) => {
     const result = outcome.stopped
-      ? finishStoppedSteer(message, outcome.stopped, outcome.needsSettlement)
+      ? finishStoppedSteer(message, outcome.stopped, outcome.needsSettlement, previousDirectionState)
       : deliverSteeredMessage(message);
     void result.then(resolveDelivery);
   });
@@ -230,10 +392,11 @@ export async function steerQueuedMessage(messageId: string): Promise<SteerQueued
       reservation.cancel();
       return { ok: false, status: 409, error: "消息正在投递或已被处理，请稍后查看" };
     }
-    await clearPreviousDirectionState(task.id);
+    previousDirectionState = await clearPreviousDirectionState(task.id);
     const committed = reservation.commit();
     if (committed !== "committed") {
       if (committed === "lost") await recoverUndeliveredSteer(task.id);
+      await restorePreviousDirectionState(task.id, previousDirectionState);
       await abortDelivery(message);
       return {
         ok: false,
@@ -245,6 +408,9 @@ export async function steerQueuedMessage(messageId: string): Promise<SteerQueued
     }
     return await delivery;
   } catch (error) {
+    if (previousDirectionState) {
+      await restorePreviousDirectionState(task.id, previousDirectionState).catch(() => undefined);
+    }
     reservation.cancel();
     await abortDelivery(message).catch(() => undefined);
     return {
