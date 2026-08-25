@@ -39,7 +39,7 @@ import { trackRun, untrackRun, takeStopped, stopTask } from "../runs.js";
 import { pauseGroup } from "../scheduler.js";
 import { taskWorkspace } from "../task-workspace.js";
 import { resolveExecutorFor } from "../executors/index.js";
-import type { ResidentHandle } from "../executors/types.js";
+import type { ResidentHandle, ResumeFields } from "../executors/types.js";
 import {
   LOST_SESSION_PATCH,
   SESSION_DROP_PERSISTENCE_FAILED_NOTE,
@@ -97,6 +97,9 @@ interface Lead {
   // 「最后一段是 agent」的气泡上盖时间戳(shared/src/index.ts),夹在正文和 agentEnd
   // 之间会让这一回合的用时失准。
   notices: { text: string; at: string }[];
+  // CLI 刚报上来、但还没写进库的会话凭据。内存里的 id 换得比库快,这一笔补不上,进程
+  // 一回收或 server 一重启就只能 fresh —— 刚建立的上下文无声消失(flushPendingCredential)。
+  pendingCredential: ({ cliSessionId: string } & ResumeFields) | null;
   idleTimer: NodeJS.Timeout | null;
   closing: "recycle" | "halt" | "workspace" | null;
 }
@@ -397,6 +400,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
     turnStart: null,
     pending: [],
     notices: [],
+    pendingCredential: null,
     idleTimer: null,
     closing: null,
   };
@@ -425,6 +429,8 @@ export function attachLead(lead: Lead): void {
 // ── 事件消费 ────────────────────────────────────────────────────────────────
 async function consume(lead: Lead): Promise<void> {
   let exitStatus = 0;
+  // 事件流被掀翻了吗 —— 跟「进程报了个非零退出码」是两回事,收尾那句话的措辞不一样。
+  let aborted = false;
   // CLI 否认过这条会话，或 Codex stderr 证明 thread 已 poisoned 吗（见
   // executors/session-lost.ts）。调度台是常驻会话，踩这个坑比一次性任务更死：
   // 每次说话都 --resume 同一个坏 id，而收尾那句话还在告诉
@@ -452,6 +458,8 @@ async function consume(lead: Lead): Promise<void> {
       if (event.kind === "turnEnd") {
         flushTraceText();
         await endTurn(lead);
+        // 上一回合欠着的新会话凭据在这儿补:补上了,轮换事宜这才算真翻篇。
+        if (await flushPendingCredential(lead)) rotation = onFreshSession(rotation);
         continue;
       }
       if (event.kind === "session") {
@@ -463,18 +471,16 @@ async function consume(lead: Lead): Promise<void> {
             model: lead.model,
             reasoningEffort: lead.reasoningEffort,
           });
-          await persistOrReport(
-            lead,
-            "新会话凭据",
-            () => db
-              .update(sessions)
-              .set({ cliSessionId: event.cliSessionId, ...ex.resumeFields(lead.cwd, event.cliSessionId) })
-              .where(eq(sessions.id, lead.sessId)),
-          );
-          // CLI 报上新的 thread id：上一条会话的轮换事宜就此翻篇（fault / 等新 id /
-          // 那句「已作废」说没说过，三个一起归零）。
-          rotation = onFreshSession(rotation);
+          lead.pendingCredential = {
+            cliSessionId: event.cliSessionId,
+            ...ex.resumeFields(lead.cwd, event.cliSessionId),
+          };
         }
+        // CLI 报上新的 thread id：上一条会话的轮换事宜就此翻篇（fault / 等新 id /
+        // 那句「已作废」说没说过，三个一起归零）—— 但**只有凭据真写进库了才算数**。
+        // 没写进去还翻篇的话,收尾会按「一切正常」处理:既不补写凭据也不再作废旧的,
+        // 库里就永远不知道这条会话(见 flushPendingCredential)。
+        if (await flushPendingCredential(lead)) rotation = onFreshSession(rotation);
         publish(lead, event);
         continue;
       }
@@ -544,10 +550,13 @@ async function consume(lead: Lead): Promise<void> {
     }
   } catch (error) {
     console.error(`[ash] team consume(${lead.taskId}) aborted:`, error);
-    reportLeadFailure(
-      lead,
-      `调度台事件流异常中断：${error instanceof Error ? error.message : String(error)}。进程已收掉,再说一句话会用同一条 CLI 会话接回。`,
-    );
+    aborted = true;
+    // 事件流被掀翻时我们从没拿到过 done —— 那个初值 0 是「还没人报过退出码」,不是
+    // 「正常收尾」。照原样落库就是把异常中断记成成功退出(第 3 轮审查)。
+    if (exitStatus === 0) exitStatus = ABORTED_EXIT_STATUS;
+    // 这句只说发生了什么。「会话还接不接得回」由 closeLead 按 rotation 统一给 ——
+    // 在这儿写死「用同一条 CLI 会话接回」,碰上刚判过 poisoned 的会话就是自相矛盾的指路。
+    reportLeadFailure(lead, `调度台事件流异常中断：${error instanceof Error ? error.message : String(error)}`);
     try {
       lead.handle.kill();
     } catch {
@@ -555,7 +564,9 @@ async function consume(lead: Lead): Promise<void> {
     }
   }
   flushTraceText();
-  await closeLead(lead, exitStatus, rotation);
+  // 关台前最后一次补欠账:补上了就不该再按「这条会话作废了」收尾。
+  if (await flushPendingCredential(lead)) rotation = onFreshSession(rotation);
+  await closeLead(lead, exitStatus, rotation, aborted);
 }
 
 function publish(lead: Lead, event: AgentEvent): void {
@@ -599,6 +610,39 @@ async function persistOrReport(
     reportLeadFailure(lead, `${what}写入数据库失败：${error instanceof Error ? error.message : String(error)}`, at);
     return false;
   }
+}
+
+/**
+ * 把 CLI 报上来的新会话凭据补进库,**返回「这一次真的补上了」**。
+ *
+ * 为什么不是写一次就算完:`lead.cliSessionId` 是内存里当场换掉的,库里那笔靠这次写入。
+ * 写失败还当它成了的话,后面三层会一起替它兜底失效 —— 内存 id 已是新值,同一个 id 再报
+ * 一次会被「变了才写」挡掉;轮换状态机已经翻篇,不再记得欠着账;closeLead 的正常收尾只
+ * 写退出码/用时,不补凭据。于是一次瞬时故障就永久留下「进程还能跑、数据库不知道这条
+ * 会话」的分叉:一旦空闲回收或重启,下一次只能 fresh,刚建立的上下文无提示丢失,库里要是
+ * 还留着更老的 id 甚至会去续跑旧会话(2026-08-25 第 3 轮审查)。
+ *
+ * 所以欠账留在 lead 上,由 consume 在**每个回合收尾和关台前**再试;调用点都在 consume
+ * 里,是因为补上之后必须连带把 rotation 翻篇 —— 那个状态是 consume 的局部变量,而且
+ * 「凭据立住了」和「不必再按作废收尾」本来就是同一件事。
+ */
+async function flushPendingCredential(lead: Lead): Promise<boolean> {
+  const patch = lead.pendingCredential;
+  if (!patch) return false;
+  // 这条会话行可能已经被新进程接管了(工作目录被抽走那条路会复用同一行)。晚到的旧消费者
+  // 不能拿自己攒的这笔凭据盖掉新进程刚报上来的有效 id —— 跟 closeLead 里那道闸同一个理由。
+  // 欠账就此作废:那条行现在归新进程管,补不补轮不到这个已经出局的 handle 决定。
+  if (leads.get(lead.taskId) !== lead) {
+    lead.pendingCredential = null;
+    return false;
+  }
+  const ok = await persistOrReport(
+    lead,
+    "新会话凭据",
+    () => db.update(sessions).set(patch).where(eq(sessions.id, lead.sessId)),
+  );
+  if (ok) lead.pendingCredential = null;
+  return ok;
 }
 
 // 入站消息(执行者汇报/提问、系统提示)记成 system turn:实时走 system 事件、
@@ -676,8 +720,17 @@ async function endTurn(lead: Lead): Promise<void> {
 
 // 中途已经播过完整轮换说明后,收尾那两句只补一个指路,不重复整段。
 const ROTATION_ALREADY_ANNOUNCED = "这条 CLI 会话此前已被作废,下次运行会开全新会话。";
+// 事件流被掀翻时,没有任何进程报过退出码。落 0 等于把异常中断记成成功收尾;落 null 又会
+// 让这条会话看起来还在跑(openLead 就是拿 null 表示「进行中」)。所以记一个明确的非零码,
+// 真正的原因写在时间线和 trace 里。
+const ABORTED_EXIT_STATUS = 1;
 
-async function closeLead(lead: Lead, exitStatus: number, rotation: RotationState = idleRotation()): Promise<void> {
+async function closeLead(
+  lead: Lead,
+  exitStatus: number,
+  rotation: RotationState = idleRotation(),
+  aborted = false,
+): Promise<void> {
   clearIdle(lead);
   takeStopped(lead.taskId); // 消费停止标记:团队不走 settleTaskStatus,别漏给下一次
   untrackRun(lead.taskId, lead.handle);
@@ -714,15 +767,22 @@ async function closeLead(lead: Lead, exitStatus: number, rotation: RotationState
   if (!persisted && dropSession) dropNote = SESSION_DROP_PERSISTENCE_FAILED_NOTE;
   if (lead.closing === "recycle") {
     recordSystemTurn(lead, RECYCLE_NOTE(Math.round(IDLE_MS / 60_000)));
-  } else if (!lead.closing && (exitStatus !== 0 || (dropSession && !rotation.announced))) {
+  } else if (!lead.closing && (aborted || exitStatus !== 0 || (dropSession && !rotation.announced))) {
     // 既不是回收也不是手停 —— 进程自己没了。会话还在,说句话就能接回;除非 CLI 刚
     // 否认过或判定 poisoned，那句「会话还在」就成了把用户推回同一堵墙的错误指路。
     // rotation.announced:中途已经播过同一条轮换说明**且属实**了,这里只补「进程意外
     // 退出」那半句,别把整段话重复第二遍。
     const rotationNote = dropSession ? (rotation.announced ? ROTATION_ALREADY_ANNOUNCED : dropNote) : null;
+    // 「它是怎么没的」这半句要如实:事件流被掀翻时我们从没收到过退出码,不能编一个
+    // 「exit N」冒充进程自报;dropSession 独自成立那一路(exit 0、正常收尾)则一个字都不加。
+    const how = aborted
+      ? "调度台事件流异常中断,进程已收掉。"
+      : exitStatus !== 0
+        ? `调度台进程意外退出(exit ${exitStatus})。`
+        : "";
     const msg = rotationNote
-      ? `${exitStatus !== 0 ? `调度台进程意外退出(exit ${exitStatus})。` : ""}${rotationNote}`
-      : `调度台进程意外退出(exit ${exitStatus})。CLI 会话还在,再说一句话会自动接回;需要的话也可以点「继续」。`;
+      ? `${how}${rotationNote}`
+      : `${how}CLI 会话还在,再说一句话会自动接回;需要的话也可以点「继续」。`;
     writeRunError(lead.out, msg);
     appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message: msg }, endIso);
     publish(lead, { kind: "error", message: msg });
