@@ -23,7 +23,7 @@
 // 拉起 CLI 烧额度;接力本身一律 autoResume:false。
 import assert from "node:assert/strict";
 import { type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateKeyPairSync, createHash, randomBytes, sign as edSign } from "node:crypto";
@@ -277,6 +277,23 @@ async function main(): Promise<void> {
   // 冒充:另一对现造的密钥(合法签名、陌生指纹)→ 待批准,进不来。
   const stranger = generateKeyPairSync("ed25519");
   const strangerPub = stranger.publicKey.export({ type: "spki", format: "der" }).toString("base64");
+  const strangerSigned = (path: string, body: string) => {
+    const ts = String(Date.now());
+    const nonce = randomBytes(16).toString("hex");
+    const canonical = [
+      "ash-handoff-v1", "POST", `/api${path}`, ts, nonce,
+      createHash("sha256").update(body, "utf8").digest("hex"),
+    ].join("\n");
+    return raw(path, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json", "x-ash-peer-key": strangerPub,
+        "x-ash-peer-sig": edSign(null, Buffer.from(canonical, "utf8"), stranger.privateKey).toString("base64"),
+        "x-ash-peer-ts": ts, "x-ash-peer-nonce": nonce,
+      },
+      body,
+    });
+  };
   const strangerBody = manifest("auth-stranger");
   const sTs = String(Date.now());
   const sNonce = randomBytes(16).toString("hex");
@@ -305,6 +322,24 @@ async function main(): Promise<void> {
     strangerRow?.name, "陌生机器·stranger",
     "主机名里的非 ASCII 要能原样还原:HTTP 头只装 ByteString,所以出站 percent 编码、入站解回来",
   );
+
+  const tombstoneDir = join(root, "handoff-canceled");
+  const tombstones = () => existsSync(tombstoneDir) ? readdirSync(tombstoneDir).length : 0;
+  const tombstonesBefore = tombstones();
+  const strangerCancel = await strangerSigned("/handoff/proxy/task/cancel-pending", JSON.stringify({
+    taskId: "missing-return-task", transferId: "missing-transfer", returnTransferId: "missing-return-transfer",
+  }));
+  assert.equal(strangerCancel.status, 404, "未获批准机器不能为不存在的移回存档制造 tombstone");
+  assert.equal(tombstones(), tombstonesBefore);
+  const hugeCancel = await strangerSigned("/handoff/proxy/task/cancel-pending", JSON.stringify({
+    taskId: "B".repeat(100_000), transferId: "missing-transfer", returnTransferId: "missing-return-transfer",
+  }));
+  assert.equal(hugeCancel.status, 400, "超长 taskId 必须在写盘前拒绝");
+  const longTransfer = await strangerSigned("/handoff/proxy/task/cancel-pending", JSON.stringify({
+    taskId: "missing-return-task", transferId: "T".repeat(65), returnTransferId: "missing-return-transfer",
+  }));
+  assert.equal(longTransfer.status, 400, "超长 transferId 必须在写盘前拒绝");
+  assert.equal(tombstones(), tombstonesBefore);
 
   await api(peerUrl, `/handoff/peers/${strangerFp}/approve`, { method: "POST" });
   const foreignSnapshotBody = JSON.stringify({ taskId: legacyTaskId, transferId: legacyTransferId });

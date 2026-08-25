@@ -11,6 +11,8 @@ import { DATA_DIR } from "./paths.js";
 
 const importsInFlight = new Set<string>();
 const cancellationsInFlight = new Set<string>();
+const SAFE_TASK_ID = /^[A-Za-z0-9_-]{6,64}$/;
+const SAFE_TRANSFER_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 const stateRoot = (() => {
   const dbPath = process.env.ASH_DB?.trim();
@@ -56,12 +58,18 @@ export async function cancelPendingInboundTransfer(input: {
   returnTransferId?: string | null;
 }): Promise<void> {
   const { taskId, transferId, sourceFingerprint, returning, returnTransferId } = input;
+  if (!SAFE_TASK_ID.test(taskId)) throw new HandoffError("taskId 非法", 400);
+  if (!SAFE_TRANSFER_ID.test(transferId)
+    || (returnTransferId != null && !SAFE_TRANSFER_ID.test(returnTransferId))) {
+    throw new HandoffError("transferId 非法", 400);
+  }
   if (importsInFlight.has(taskId) || cancellationsInFlight.has(taskId)) {
     throw new HandoffError("对端正处理这次导入或撤销，暂时不能恢复本机任务；稍后再试", 409);
   }
   cancellationsInFlight.add(taskId);
   try {
     const row = (await db.select({ handoff: tasks.handoff }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+    if (returning && !row) throw new HandoffError("原机没有这条任务的历史存档", 404);
     if (row) {
       const marker = markerOf(row.handoff);
       const unchangedReturnArchive = returning

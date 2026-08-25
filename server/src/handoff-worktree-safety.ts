@@ -2,6 +2,7 @@ import { lstatSync } from "node:fs";
 import { join } from "node:path";
 import { execFileText as exec } from "./exec.js";
 import { expandHome } from "./git.js";
+import { HandoffError } from "./handoff-types.js";
 
 const nulPaths = (raw: string): string[] => raw.split("\0").filter(Boolean);
 
@@ -37,5 +38,25 @@ export async function untrackedOverwriteConflicts(
     return nulPaths(targetRaw).filter((rel) => !tracked.has(rel) && pathConflicts(root, rel, tracked));
   } catch {
     return null;
+  }
+}
+
+/** reset --hard 只允许快进：原机接力后新增/分叉的已提交工作同样不能被静默覆盖。 */
+export async function assertWorktreeHeadCanAdvance(worktree: string, targetRef: string): Promise<void> {
+  const root = expandHome(worktree);
+  let head: string;
+  try {
+    const result = await exec("git", ["-C", root, "rev-parse", "HEAD"]);
+    head = result.stdout.trim();
+  } catch {
+    throw new HandoffError(`无法确认原机任务 worktree 的当前提交：${root}。先检查这个目录，再重试移回。`, 409);
+  }
+  try {
+    await exec("git", ["-C", root, "merge-base", "--is-ancestor", head, targetRef]);
+  } catch {
+    throw new HandoffError(
+      `原机保留的任务 worktree 在接力后产生了本地提交或分叉（当前 ${head.slice(0, 8)}），不能用移回内容覆盖。先把这些提交合并到持有机，或另建分支保存后再重试移回。`,
+      409,
+    );
   }
 }

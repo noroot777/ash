@@ -481,6 +481,15 @@ try {
   await api(machineA, `/handoff/peers/${identityB.fingerprint}`, { method: "DELETE" });
 
   const holderWorktree = worktreePathFor(repoB, task.id);
+  const originWorktree = worktreePathFor(repoA, task.id);
+  writeFileSync(join(originWorktree, "origin-after-handoff.txt"), "local commit after handoff\n");
+  execFileSync("git", ["-C", originWorktree, "add", "origin-after-handoff.txt"]);
+  execFileSync("git", [
+    "-C", originWorktree,
+    "-c", "user.name=Ash Handoff Test", "-c", "user.email=handoff@example.test",
+    "commit", "-m", "origin commit after handoff",
+  ]);
+  const originDivergedHead = execFileSync("git", ["-C", originWorktree, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   writeFileSync(join(holderWorktree, "remote-change.txt"), "commit created on holder\n");
   execFileSync("git", ["-C", holderWorktree, "add", "remote-change.txt"]);
   execFileSync("git", [
@@ -488,8 +497,18 @@ try {
     "-c", "user.name=Ash Handoff Test", "-c", "user.email=handoff@example.test",
     "commit", "-m", "holder commit",
   ]);
+  const divergedReturn = await fetch(`${machineB}/api/tasks/${task.id}/handoff`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: machineA, targetProjectId: projectA.id, targetName: "A", autoResume: false }),
+  });
+  assert.equal(divergedReturn.status, 502);
+  assert.match(((await divergedReturn.json()) as { error: string }).error, /本地提交|分叉/);
+  assert.equal(execFileSync("git", ["-C", originWorktree, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(), originDivergedHead);
+  assert.equal(existsSync(join(originWorktree, "origin-after-handoff.txt")), true, "被挡下时原机已提交工作必须原样保留");
+  assert.equal((await api<Task>(machineB, `/tasks/${task.id}`)).handoff?.direction, "in");
+  execFileSync("git", ["-C", holderWorktree, "fetch", repoA, originDivergedHead]);
+  execFileSync("git", ["-C", holderWorktree, "merge", "--no-edit", "FETCH_HEAD"]);
   const holderHead = execFileSync("git", ["-C", holderWorktree, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  const originWorktree = worktreePathFor(repoA, task.id);
   writeFileSync(join(originWorktree, "seed.txt"), "tracked local edit\n");
   writeFileSync(join(originWorktree, "remote-change.txt"), "LOCAL UNTRACKED DRAFT\n");
   const trackedDirtyReturn = await fetch(`${machineB}/api/tasks/${task.id}/handoff`, {
