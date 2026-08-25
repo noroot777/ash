@@ -22,7 +22,7 @@ import {
   applyUploadRewrites, buildUploadRewrites, hasUploadRewrites, isTextRel,
   MAX_UPLOADS, rewriteKindFor, writeUploads, type UploadRewrites,
 } from "./handoff-uploads.js";
-import { ensureWorkdir, expandHome, prepareWorktree, projectHealthLight, worktreePathFor } from "./git.js";
+import { ensureWorkdir, expandHome, prepareWorktree, projectHealthLight, workspaceDirty, worktreePathFor } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { DATA_DIR, RUNS_DIR } from "./paths.js";
 import { codexHome, findRollout } from "./executors/codex-rollout.js";
@@ -126,6 +126,7 @@ function safeRefName(name: string): boolean {
 /** bundle 落进本地仓库:verify 确认前置提交齐全,再把分支强制 fetch 进来。 */
 async function importGitBundle(
   repoPath: string,
+  taskId: string,
   git: NonNullable<HandoffManifest["git"]>,
   notes: string[],
 ): Promise<void> {
@@ -156,6 +157,7 @@ async function importGitBundle(
   const bundlePath = join(tmpDir, `handoff-in-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.bundle`);
   try {
     await writeFile(bundlePath, Buffer.from(git.bundleBase64, "base64"));
+    let updatedCheckedOutWorktree = false;
     await withRepoLock(repoPath, async () => {
       try {
         await exec("git", ["-C", repo, "bundle", "verify", bundlePath], { maxBuffer: 4 * MB });
@@ -166,13 +168,42 @@ async function importGitBundle(
           409,
         );
       }
-      // `+` 强制更新:重复接力同一任务(先删了旧任务)时分支可能已存在旧尖。
-      await exec("git", [
-        "-C", repo, "fetch", bundlePath,
-        `+refs/heads/${git.branch}:refs/heads/${git.branch}`,
-      ], { maxBuffer: 4 * MB });
+      const taskWorktree = worktreePathFor(repoPath, taskId);
+      let checkedOutHere = false;
+      try {
+        const { stdout } = await exec("git", ["-C", taskWorktree, "symbolic-ref", "--quiet", "--short", "HEAD"]);
+        checkedOutHere = stdout.trim() === git.branch;
+      } catch { /* worktree 不存在或不在这个分支，走普通 fetch */ }
+      if (!checkedOutHere) {
+        // `+` 强制更新:重复接力同一任务(先删了旧任务)时分支可能已存在旧尖。
+        await exec("git", [
+          "-C", repo, "fetch", bundlePath,
+          `+refs/heads/${git.branch}:refs/heads/${git.branch}`,
+        ], { maxBuffer: 4 * MB });
+        return;
+      }
+
+      const dirty = await workspaceDirty(taskWorktree);
+      if (dirty !== false) {
+        throw new HandoffError(
+          dirty
+            ? `原机保留的任务 worktree 有未提交改动，不能用移回内容覆盖：${taskWorktree}。先提交或清理这些改动，再重试移回。`
+            : `无法确认原机任务 worktree 是否干净：${taskWorktree}。先检查这个目录，再重试移回。`,
+          409,
+        );
+      }
+      const tempRef = `refs/ash-handoff/import/${taskId}-${Date.now().toString(36)}`;
+      try {
+        await exec("git", ["-C", repo, "fetch", bundlePath, `+refs/heads/${git.branch}:${tempRef}`], { maxBuffer: 4 * MB });
+        const { stdout: fetchedHead } = await exec("git", ["-C", repo, "rev-parse", tempRef]);
+        if (fetchedHead.trim() !== git.head) throw new HandoffError("接力 bundle 的分支尖与 manifest 不一致", 409);
+        await exec("git", ["-C", taskWorktree, "reset", "--hard", git.head]);
+        updatedCheckedOutWorktree = true;
+      } finally {
+        await exec("git", ["-C", repo, "update-ref", "-d", tempRef]).catch(() => {});
+      }
     });
-    notes.push(`git 分支 ${git.branch} 已导入(${git.full ? "全量历史" : "增量"})`);
+    notes.push(`git 分支 ${git.branch} 已导入(${git.full ? "全量历史" : "增量"})${updatedCheckedOutWorktree ? "，原机保留的 worktree 已更新到返回提交" : ""}`);
   } finally {
     rmSync(bundlePath, { force: true });
   }
@@ -331,7 +362,7 @@ async function importValidated(
   // ── git:先分支进仓库,再恢复 worktree ────────────────────────────────────
   let workspace: string | null = null;
   if (useWorktree && m.git) {
-    await importGitBundle(project.repoPath, m.git, notes);
+    await importGitBundle(project.repoPath, m.task.id, m.git, notes);
     const ws = await prepareWorktree(project.repoPath, m.task.id, m.task.worktreeBase);
     workspace = ws.path;
     if (ws.branch !== m.git.branch) {

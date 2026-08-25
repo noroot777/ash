@@ -152,5 +152,6 @@ assert.match(bulkDialog, /probeBulkTask/, "任务恢复地址不可达时批量�
 assert.match(bulkDialog, /preflightFailures/, "批量执行结果应保留被跳过任务的失败原因");
 assert.match(bulkDialog, /bulkTargetProjectId/, "批量移回应按任务使用各自预检锁定的原项目");
 assert.match(bulkDialog, /handoff-bulk-project-fixed/, "纯移回批次应只读说明按任务自动归位，而不是提供单一项目下拉框");
+assert.match(bulkDialog, /原项目待逐项确认/, "逐项检查完成前不能把首个 probe 误报成整批只有一个原项目");
 
 console.log("bulk handoff eligibility tests passed");

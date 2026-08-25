@@ -388,7 +388,9 @@ function BulkHandoffDialog({
               sourcePath={`${project.name} · ${eligible.length} 个任务`}
               targetName={target.name}
               targetPath={returnOnly && !hasOrdinaryReturn && fixedReturnProjectCount > 0
-                ? `按任务归位 · ${fixedReturnProjectCount} 个原项目`
+                ? checkedAll
+                  ? `按任务归位 · ${fixedReturnProjectCount} 个原项目`
+                  : "按任务归位 · 原项目待逐项确认"
                 : selectedProject?.repoPath ?? target.url}
             />
             <p className="handoff-bulk-lede">{message}</p>

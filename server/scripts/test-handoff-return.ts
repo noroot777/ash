@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HandoffPreflightResult, HandoffTarget, Task } from "@ash/shared";
@@ -54,7 +54,7 @@ try {
       useWorktree: true,
     }),
   });
-  const { prepareWorktree } = await import("../src/git.js");
+  const { prepareWorktree, worktreePathFor } = await import("../src/git.js");
   await prepareWorktree(repoA, task.id, task.worktreeBase);
 
   await api(machineA, "/settings", {
@@ -173,14 +173,25 @@ try {
   });
   assert.equal(probeAfterForget.peer?.peerStatus, "approved");
 
+  const holderWorktree = worktreePathFor(repoB, task.id);
+  writeFileSync(join(holderWorktree, "remote-change.txt"), "commit created on holder\n");
+  execFileSync("git", ["-C", holderWorktree, "add", "remote-change.txt"]);
+  execFileSync("git", [
+    "-C", holderWorktree,
+    "-c", "user.name=Ash Handoff Test", "-c", "user.email=handoff@example.test",
+    "commit", "-m", "holder commit",
+  ]);
+  const holderHead = execFileSync("git", ["-C", holderWorktree, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const returnResult = await api<{ notes: string[] }>(machineB, `/tasks/${task.id}/handoff`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ targetUrl: target.url, targetProjectId: projectA.id, targetName: "A", autoResume: false }),
   });
-  assert.ok(returnResult.notes.some((note) => /git 数据无需传输/.test(note)), "免审批移回应使用原项目 refs 协商空 bundle");
+  assert.ok(returnResult.notes.some((note) => /已导入\(增量\).*worktree 已更新/.test(note)), "移回应把增量提交安全更新到原机已检出的 worktree");
   assert.ok(!returnResult.notes.some((note) => /整条历史|全量历史/.test(note)), "免审批移回不应误报为全量 git 历史");
   const returned = await api<Task>(machineA, `/tasks/${task.id}`);
   assert.equal(returned.handoff?.direction, "returned");
+  const originHead = execFileSync("git", ["-C", worktreePathFor(repoA, task.id), "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  assert.equal(originHead, holderHead, "原机 worktree 应落到持有机返回的新提交");
 
   const peersOnA = await api<{ peers: { fingerprint: string }[] }>(machineA, "/handoff/peers");
   assert.ok(!peersOnA.peers.some((peer) => peer.fingerprint === identityB.fingerprint), "免审批移回不应暗中建立整机级批准记录");
