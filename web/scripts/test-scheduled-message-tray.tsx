@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ScheduledMessage } from "@ash/shared";
-import { ScheduledMessageTray } from "../src/components/ScheduledMessages.tsx";
+import {
+  retainScheduledMessageActionError,
+  ScheduledMessageTray,
+} from "../src/components/ScheduledMessages.tsx";
 
 const row = (id: string, text: string, sendAt: string): ScheduledMessage => ({
   id,
@@ -48,8 +51,21 @@ assert.ok(
   firstRow.indexOf("scheduled-message-guide") < firstRow.indexOf("取消排队中的待发送消息"),
   "引导动作应位于取消按钮左侧",
 );
+const actionError = { messageId: "first", message: "消息继续排队" };
+assert.deepEqual(
+  retainScheduledMessageActionError(actionError, [row("first", "第一条", "2026-08-25T10:00:00.000Z")]),
+  actionError,
+  "对应消息仍在排队时应保留动作错误",
+);
+assert.equal(
+  retainScheduledMessageActionError(actionError, [row("later", "第二条", "2026-08-25T10:00:01.000Z")]),
+  null,
+  "对应消息离队后必须清掉陈旧动作错误",
+);
 const source = readFileSync(new URL("../src/components/ScheduledMessages.tsx", import.meta.url), "utf8");
 const reloadSource = source.slice(source.indexOf("const reload"), source.indexOf("useEffect", source.indexOf("const reload")));
 assert.match(source, /const \[actionError, setActionError\]/, "动作错误必须与加载错误分开保存");
-assert.doesNotMatch(reloadSource, /setActionError/, "quiet reload 不得清掉刚返回的引导失败原因");
-console.log("✓ 队首消息行内、取消按钮左侧只显示一个“引导会话”");
+assert.match(reloadSource, /retainScheduledMessageActionError/, "reload 必须按消息是否仍在队列决定错误存活");
+const css = readFileSync(new URL("../src/styles/reply.css", import.meta.url), "utf8");
+assert.match(css, /@container \(max-width: 520px\)[\s\S]*scheduled-message-guide[\s\S]*display: none/, "窄托盘必须把引导按钮降级成纯图标");
+console.log("✓ 引导按钮位置、错误失效与窄托盘降级均受回归保护");

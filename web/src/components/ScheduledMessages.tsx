@@ -17,11 +17,20 @@ function bySendTime(messages: ScheduledMessage[]): ScheduledMessage[] {
   return [...messages].sort(messageOrder);
 }
 
+type ScheduledMessageActionError = { messageId: string; message: string };
+
+export function retainScheduledMessageActionError(
+  error: ScheduledMessageActionError | null,
+  messages: Pick<ScheduledMessage, "id">[],
+): ScheduledMessageActionError | null {
+  return error && messages.some((message) => message.id === error.messageId) ? error : null;
+}
+
 export function useScheduledMessages(taskId: string) {
   const [messages, setMessages] = useState<ScheduledMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<ScheduledMessageActionError | null>(null);
   const [cancelingIds, setCancelingIds] = useState<ReadonlySet<string>>(() => new Set());
   const [steeringIds, setSteeringIds] = useState<ReadonlySet<string>>(() => new Set());
 
@@ -30,7 +39,9 @@ export function useScheduledMessages(taskId: string) {
   const reload = useCallback(async (options?: { quiet?: boolean }) => {
     if (!options?.quiet) setLoading(true);
     try {
-      setMessages(bySendTime(await api.scheduledMessages(taskId)));
+      const next = bySendTime(await api.scheduledMessages(taskId));
+      setMessages(next);
+      setActionError((current) => retainScheduledMessageActionError(current, next));
       setLoadError(null);
     } catch (reason) {
       setLoadError(reason instanceof Error ? reason.message : String(reason));
@@ -63,6 +74,7 @@ export function useScheduledMessages(taskId: string) {
   }, [taskId]);
 
   const add = useCallback((message: ScheduledMessage) => {
+    setActionError(null);
     setMessages((current) => bySendTime([...current.filter((item) => item.id !== message.id), message]));
   }, []);
 
@@ -81,7 +93,8 @@ export function useScheduledMessages(taskId: string) {
       await api.cancelScheduledMessage(messageId);
       setMessages((current) => current.filter((message) => message.id !== messageId));
     } catch (reason) {
-      setActionError(reason instanceof Error ? reason.message : String(reason));
+      setActionError({ messageId, message: reason instanceof Error ? reason.message : String(reason) });
+      void reload({ quiet: true });
     } finally {
       setCancelingIds((current) => {
         const next = new Set(current);
@@ -89,7 +102,7 @@ export function useScheduledMessages(taskId: string) {
         return next;
       });
     }
-  }, []);
+  }, [reload]);
 
   const steer = useCallback(async (messageId: string) => {
     setSteeringIds((current) => new Set(current).add(messageId));
@@ -101,7 +114,8 @@ export function useScheduledMessages(taskId: string) {
       setMessages((current) => current.filter((message) => message.id !== messageId));
     } catch (reason) {
       // 失败不做乐观删除：消息仍在队列，用户可以继续等或再次尝试引导。
-      setActionError(reason instanceof Error ? reason.message : String(reason));
+      setActionError({ messageId, message: reason instanceof Error ? reason.message : String(reason) });
+      void reload({ quiet: true });
     } finally {
       setSteeringIds((current) => {
         const next = new Set(current);
@@ -109,12 +123,12 @@ export function useScheduledMessages(taskId: string) {
         return next;
       });
     }
-  }, []);
+  }, [reload]);
 
   return {
     messages,
     loading,
-    error: actionError ?? loadError,
+    error: actionError?.message ?? loadError,
     cancelingIds,
     steeringIds,
     add,
