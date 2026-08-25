@@ -3,7 +3,8 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { classifyCodexExit, RunTraceRecorder, type CodexExitEvidence } from "../src/executors/diagnostics.js";
+import type { AgentEvent } from "@ash/shared";
+import { classifyCodexExit, formatFailureForTimeline, RunTraceRecorder, type CodexExitEvidence } from "../src/executors/diagnostics.js";
 import { parseCodexStream } from "../src/executors/codex.js";
 
 const base = (overrides: Partial<CodexExitEvidence> = {}): CodexExitEvidence => ({
@@ -103,7 +104,7 @@ try {
         stdio: ["pipe", "pipe", "pipe"],
       });
       child.stdin?.end();
-      const events: any[] = [];
+      const events: AgentEvent[] = [];
       for await (const event of parseCodexStream(child as any, undefined, { stopRequested: false }, {
         initialThreadId: `poisoned-thread-${index}`,
         contextNotBeforeMs: Date.now(),
@@ -133,6 +134,10 @@ try {
   assert.equal(readFileSync(paths.stderrPath, "utf8"), "connection closed\n");
   assert.equal(JSON.parse(readFileSync(paths.diagnosticsPath, "utf8")).failureReason, "connection closed");
   assert.equal(diagnostics.failureKind, "nonzero_exit");
+  const longTimeline = formatFailureForTimeline({ ...diagnostics, failureReason: "重复 stderr 行\n".repeat(1000) }) ?? "";
+  assert.match(longTimeline, /失败详情已截断/, "时间线失败摘要没有截断长 stderr");
+  assert.match(longTimeline, /原始日志：.*events\.jsonl.*stderr\.log/, "截断后必须保留原始日志入口");
+  assert.ok(longTimeline.length < 1800, `时间线失败摘要仍过长:${longTimeline.length}`);
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

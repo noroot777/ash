@@ -289,8 +289,7 @@ export async function* parseCodexStream(
     // error 仍保留自己的结论，同时另发一条诊断让结算方只清恢复字段。
     const sessionPoison = formatSessionPoisonForTimeline(diagnostics);
     if (sessionPoison) {
-      const sessionEvent = { kind: "error" as const, message: sessionPoison, scope: "session" as const };
-      push(sessionEvent);
+      push({ kind: "error", message: sessionPoison, scope: "session" });
     }
     push({ kind: "done", exitStatus: opts.exitStatus });
     resolve?.();

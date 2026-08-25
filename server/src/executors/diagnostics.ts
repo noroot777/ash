@@ -108,6 +108,9 @@ export function classifyCodexExit(e: CodexExitEvidence): Pick<RunDiagnostics, "t
 
 export function formatFailureForTimeline(d: RunDiagnostics): string | null {
   if (!d.failureKind || !d.failureReason) return null;
+  const failureReason = d.failureReason.length > 1200
+    ? `${d.failureReason.slice(0, 1200).trimEnd()}\n…（失败详情已截断）`
+    : d.failureReason;
   const evidence = [
     `类型 ${d.failureKind}`,
     `exit ${d.exitStatus}`,
@@ -117,7 +120,7 @@ export function formatFailureForTimeline(d: RunDiagnostics): string | null {
     d.stderrTail ? "stderr 有内容" : "stderr 为空",
   ].filter(Boolean).join("；");
   const files = [d.eventsPath, d.stderrPath].filter(Boolean).join("；");
-  return `执行诊断：${d.failureReason}\n证据：${evidence}${files ? `\n原始日志：${files}` : ""}`;
+  return `执行诊断：${failureReason}\n证据：${evidence}${files ? `\n原始日志：${files}` : ""}`;
 }
 
 export function formatSessionPoisonForTimeline(d: RunDiagnostics): string | null {

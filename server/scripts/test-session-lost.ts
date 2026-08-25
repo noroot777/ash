@@ -21,6 +21,7 @@ import { join, relative, sep } from "node:path";
 import { readCodexCliVersion } from "../src/executors/codex-rollout.js";
 import {
   LOST_SESSION_PATCH,
+  SESSION_DROP_PERSISTENCE_FAILED_NOTE,
   SESSION_POISONED_NOTE,
   codexSessionPoisonReason,
   isSessionLost,
@@ -43,6 +44,8 @@ const REAL = "No conversation found with session ID: 6f8c7cdd-b820-416e-a4f3-96b
 
 assert.equal(isSessionLost(REAL), true, "真机原话");
 assert.equal(isSessionLost(`Error: ${REAL}\n`), true, "被包在别的话里也算");
+assert.doesNotMatch(SESSION_DROP_PERSISTENCE_FAILED_NOTE, /已清掉|已经把.*清掉/, "写库失败时不能谎称恢复字段已清");
+assert.match(SESSION_DROP_PERSISTENCE_FAILED_NOTE, /可能再次尝试旧会话/, "写库失败时必须说明下一次仍可能撞旧会话");
 assert.equal(isSessionLost(REAL.toLowerCase()), true, "大小写不敏感");
 ok("认得 claude 的「这条会话我不认识」");
 
@@ -206,6 +209,14 @@ for (const chain of ["orchestrator.ts", "team/session.ts", "duet/turn.ts"]) {
   );
 }
 ok("single / team / duet 都在持久说明后替换受影响的 Codex 会话");
+
+const teamSessionCode = readFileSync(join(SRC, "team/session.ts"), "utf8");
+assert.match(
+  teamSessionCode,
+  /async function closeLead[\s\S]*?catch \(error\)[\s\S]*?if \(dropSession\) dropNote = SESSION_DROP_PERSISTENCE_FAILED_NOTE/,
+  "closeLead 写库失败后仍会沿用‘恢复字段已清掉’的旧文案",
+);
+ok("团队调度台写库失败时改用与事实一致的会话说明");
 
 rmSync(dir, { recursive: true, force: true });
 console.log("session-lost: 全部通过");

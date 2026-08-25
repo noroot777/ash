@@ -97,11 +97,13 @@ export async function runTurn(args: {
   // A stop requested between turns: don't even spawn the next one.
   if (isCanceling(taskId)) throw new CanceledRun();
   let resumeCliId = args.resumeCliId;
+  let versionReplacementNotice: string | undefined;
   const affectedSessionVersion = await affectedCodexResumeVersion(executor.type, resumeCliId);
   if (affectedSessionVersion) {
     if (args.rowId) {
-      await announceAffectedSessionReplacement({
+      versionReplacementNotice = await announceAffectedSessionReplacement({
         taskId, sessionId: args.rowId, role, agentType: executor.type, version: affectedSessionVersion,
+        publish: false,
       });
       await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, args.rowId));
     }
@@ -147,6 +149,12 @@ export async function runTurn(args: {
   }
 
   recordTurnStart({ type: "duet.progress", taskId, round, speaker, phase: "start", startedAt: turnStart });
+  if (versionReplacementNotice) {
+    bus.publish({
+      type: "agent.event", taskId, sessionId: rowId, role, agentType: executor.type,
+      event: { kind: "system", text: versionReplacementNotice, at: now() },
+    });
+  }
 
   const runDir = join(RUNS_DIR, taskId);
   mkdirSync(runDir, { recursive: true });
@@ -156,7 +164,7 @@ export async function runTurn(args: {
   let text = "";
   let exit = 0;
   let errorMsg: string | undefined;
-  let noticeMsg: string | undefined;
+  let noticeMsg = versionReplacementNotice;
   // CLI 否认过这条会话，或 Codex stderr 证明 thread 已 poisoned 吗（见
   // executors/session-lost.ts）。duet 有自己的会话行与自己的
   // 结算,不经过 single-run.ts —— 漏掉这里,duet 任务会一直 --resume 同一个死 id:
@@ -168,7 +176,7 @@ export async function runTurn(args: {
   try {
     for await (const event of handle.events) {
       const sessionNotice = event.kind === "error"
-        && (event as typeof event & { scope?: string }).scope === "session";
+        && event.scope === "session";
       const emittedEvent = event.kind === "usage"
         ? await recordSessionUsageEvent(rowId, event, executor.type, cliId)
         : event;

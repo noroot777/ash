@@ -43,6 +43,7 @@ import type { ResidentHandle } from "../executors/types.js";
 import {
   LOST_SESSION_PATCH,
   mergeSessionResumeFault,
+  SESSION_DROP_PERSISTENCE_FAILED_NOTE,
   sessionResumeFaultNote,
   shouldDropSession,
   type SessionResumeFault,
@@ -479,8 +480,7 @@ async function consume(lead: Lead): Promise<void> {
             writeRunError(lead.out, message);
             appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), { kind: "error", message });
             publish(lead, { kind: "error", message });
-            note = "Codex 的恢复 thread 已在当前调度台内作废，下一回合会开启全新会话；"
-              + "但恢复字段写入数据库失败，server 重启后可能再次尝试旧 thread。";
+            note = SESSION_DROP_PERSISTENCE_FAILED_NOTE;
           }
           awaitingFreshSession = true;
           writeRunError(lead.out, note);
@@ -572,7 +572,7 @@ async function closeLead(lead: Lead, exitStatus: number, sessionFault: SessionRe
   // 行),晚到的旧收尾要是把新进程刚报上来的有效 id 抹掉,新常驻会话的 id 就永久丢了
   // —— 内存里 lead.cliSessionId 已是新值,那条「id 变了才写库」的分支不会再补写一次。
   const dropSession = shouldDropSession(sessionFault, exitStatus) && !superseded;
-  const dropNote = dropSession ? sessionResumeFaultNote(sessionFault!) : null;
+  let dropNote = dropSession ? sessionResumeFaultNote(sessionFault!) : null;
   try {
     await db
       .update(sessions)
@@ -590,6 +590,7 @@ async function closeLead(lead: Lead, exitStatus: number, sessionFault: SessionRe
     writeRunError(lead.out, message);
     appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message }, endIso);
     publish(lead, { kind: "error", message });
+    if (dropSession) dropNote = SESSION_DROP_PERSISTENCE_FAILED_NOTE;
   }
   if (lead.closing === "recycle") {
     recordSystemTurn(lead, RECYCLE_NOTE(Math.round(IDLE_MS / 60_000)));

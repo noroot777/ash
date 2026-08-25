@@ -112,6 +112,10 @@ export const SESSION_POISONED_NOTE =
   + "ash 已清掉这条会话的恢复字段：下一次运行会从任务正文自动开启一条**全新会话**，"
   + "旧对话与执行记录仍保留，但之前的上下文不会带过去。";
 
+export const SESSION_DROP_PERSISTENCE_FAILED_NOTE =
+  "ash 已停止本次进程继续使用这条失效的 CLI 会话；但恢复字段写入数据库失败，"
+  + "下一次重新开台时可能再次尝试旧会话。";
+
 export function sessionResumeFaultNote(fault: SessionResumeFault): string {
   return fault === "poisoned" ? SESSION_POISONED_NOTE : SESSION_LOST_NOTE;
 }
