@@ -641,3 +641,78 @@
   color: var(--faint);
   font-size: 10.5px;
 }
+
+/* 任务模式下「任务」那一节里的项目分层。**要求就是别显眼**（用户原话：千万不要太显眼、
+   视觉上弱化一些）：它只是给列表分个段，不是一级导航。所以 —— 没有底色、没有边框、
+   没有分隔线；字号比分节标题（11.5px）还小一档，颜色压到 --faint；项目身份只留一颗
+   6px 的色点，不用带首字母的方块（那玩意儿在一行高的弱化标题上太重）。
+   这一节自己不再顶「任务」标题，见 TaskTree.tsx —— 三级帽子叠着才是真的乱。 */
+.workspace-task-section--grouped {
+  margin-top: 8px;
+}
+
+.workspace-task-project-group + .workspace-task-project-group {
+  margin-top: 7px;
+}
+
+.workspace-task-project-head {
+  display: flex;
+  width: 100%;
+  height: 24px;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  padding: 0 7px;
+  color: var(--faint);
+  text-align: left;
+}
+
+.workspace-task-project-head b {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 条数：只是「这里面有多少」，比名字还该退后一步。 */
+.workspace-task-project-head em {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-style: normal;
+  opacity: 0.6;
+}
+
+/* 箭头一直在（这是个新出现的可折叠件，藏起来就没人知道能收），但平时压得很淡。 */
+.workspace-task-project-head svg {
+  flex: 0 0 auto;
+  opacity: 0.45;
+  transition: opacity 130ms ease-out, transform 150ms ease-out;
+}
+
+.workspace-task-project-head[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.workspace-task-project-head:hover,
+.workspace-task-project-head:focus-visible {
+  background: var(--hover-bg);
+  color: var(--muted);
+}
+
+.workspace-task-project-head:hover svg,
+.workspace-task-project-head:focus-visible svg {
+  opacity: 1;
+}
+
+/* 色点在展开时更淡：展开着的时候项目名就在旁边，点只是个记号；收起后它是这一段
+   仅剩的颜色线索，还回满度。 */
+.workspace-task-project-head[aria-expanded="true"] .workspace-project-avatar--dot {
+  opacity: 0.65;
+}

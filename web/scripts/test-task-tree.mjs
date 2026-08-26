@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { advanceHiddenReveal, buildTaskTree, orderedTopLevelTasks, previewTasksByAge } from "../src/workspace/taskTreeModel.ts";
+import { advanceHiddenReveal, buildTaskTree, groupTasksByProject, orderedTopLevelTasks, previewTasksByAge } from "../src/workspace/taskTreeModel.ts";
 
 function task(id, mode, {
   pinnedAt = null,
@@ -22,6 +22,7 @@ function task(id, mode, {
     updatedAt,
     parentId: null,
     archived: false,
+    projectId: "p1",
   };
 }
 
@@ -156,5 +157,20 @@ assert.deepEqual(advanceHiddenReveal("single:old", "single:old"), { lastKey: "si
 assert.deepEqual(advanceHiddenReveal("single:old", null), { lastKey: null, reveal: false });
 assert.deepEqual(advanceHiddenReveal(null, "single:old"), { lastKey: "single:old", reveal: true });
 assert.deepEqual(advanceHiddenReveal("single:old", "single:older"), { lastKey: "single:older", reveal: true });
+
+// —— 任务模式里「任务」那一节再按项目分一层：项目的先后**跟着行走**（喂进来的是更新
+// 时间倒序，谁的最新一条更近谁排前），不按名字也不按创建时间 —— 否则最活跃的那家会
+// 沉到底下，而这个列表就是拿来看「现在谁在动」的。同项目的行保持原有相对顺序。
+const byProject = groupTasksByProject([
+  { ...task("b-new", "single"), projectId: "beta" },
+  { ...task("a-1", "single"), projectId: "alpha" },
+  { ...task("b-old", "single"), projectId: "beta" },
+  { ...task("a-2", "single"), projectId: "alpha" },
+]);
+assert.deepEqual(byProject.map((group) => group.projectId), ["beta", "alpha"]);
+assert.deepEqual(byProject.map((group) => group.tasks.map((row) => row.id)), [["b-new", "b-old"], ["a-1", "a-2"]]);
+// 一条不落：分组只是把同一批行换个排法，不许顺手筛掉谁。
+assert.equal(byProject.reduce((sum, group) => sum + group.tasks.length, 0), 4);
+assert.deepEqual(groupTasksByProject([]), []);
 
 console.log("task tree grouping tests passed");

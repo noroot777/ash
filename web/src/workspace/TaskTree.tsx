@@ -22,7 +22,7 @@ import {
   type SpreadFilter,
   type WorkerIndex,
 } from "./useSidebarSpread.ts";
-import { buildTaskTree, orderedTopLevelTasks, previewTasksByAge } from "./taskTreeModel.ts";
+import { buildTaskTree, groupTasksByProject, orderedTopLevelTasks, previewTasksByAge } from "./taskTreeModel.ts";
 import { HandoffMachines } from "./HandoffMachines.tsx";
 
 type TaskTreeProps = {
@@ -41,8 +41,8 @@ type TaskTreeProps = {
 };
 
 // 主列表：作用域里的顶层任务，按 taskTreeModel 的第一原则（更新时间倒序，置顶除外）分节。
-// 「当前项目」和「任务模式」共用它 —— 两态的区别只有喂进来的是哪一批任务，以及行首多不多
-// 一枚项目徽标；另起一套「全局列表」组件只会让排序、年龄闸、筛选空态三处各活一份。
+// 「当前项目」和「任务模式」共用它 —— 两态的区别只有喂进来的是哪一批任务，以及「任务」那
+// 一节要不要再按项目分一层；另起一套「全局列表」组件只会让排序、年龄闸、筛选空态三处各活一份。
 function ScopedTaskTree({
   tasks,
   allTasks,
@@ -54,6 +54,7 @@ function ScopedTaskTree({
   emptyText,
   machineSection,
   workerIndex,
+  projectIndex,
 }: {
   tasks: TaskListItem[];
   allTasks: TaskListItem[];
@@ -68,6 +69,9 @@ function ScopedTaskTree({
   machineSection: React.ReactNode;
   // 团队的桶写在执行者身上（见 lib/taskAttention 的 spreadBucket），筛选这一层也要它。
   workerIndex: WorkerIndex;
+  // 给了表就把「任务」那一节再按项目分组（任务模式）；null = 不分组（单项目态，
+  // 一节里全是同一个项目，分了等于给每一行加个没信息量的帽子）。
+  projectIndex: Map<string, ProjectView> | null;
 }) {
   const sections = useMemo(() => buildTaskTree(tasks, { unifiedPinned: true }), [tasks]);
   const { collapsed, toggle: toggleCollapsed } = useCollapsedSections();
@@ -84,15 +88,40 @@ function ScopedTaskTree({
     })),
     [filter, sections, workerIndex],
   );
+  // 真正画出来的一个个「行块」。分组与否只改这一层：下面的年龄闸、展开状态、选中揭示
+  // 全按 group.key 走，所以两种排法共用同一套逻辑，不会一边修好另一边还漏着。
+  //
+  // 只有「任务」那一节分组。置顶不分 —— 它是用户手动摁下去的一小撮，按项目切开等于
+  // 把「我要一直盯着这几条」拆成好几段。
+  const layout = useMemo(
+    () => keptBySection.map(({ section, kept }) => {
+      const grouped = !!projectIndex && section.key === "rest";
+      return {
+        section,
+        kept,
+        grouped,
+        groups: grouped
+          ? groupTasksByProject(kept).map((group) => ({
+            key: `project:${group.projectId}`,
+            project: projectIndex?.get(group.projectId) ?? null,
+            tasks: group.tasks,
+          }))
+          : [{ key: section.key, project: null as ProjectView | null, tasks: kept }],
+      };
+    }),
+    [keptBySection, projectIndex],
+  );
   const hiddenSelection = useMemo(() => {
     if (!selectedTaskId) return null;
-    for (const { section, kept } of keptBySection) {
-      if (previewTasksByAge(kept, Date.now(), keepVisible).hidden.some((task) => task.id === selectedTaskId)) {
-        return { sectionKey: section.key, taskId: selectedTaskId };
+    for (const entry of layout) {
+      for (const group of entry.groups) {
+        if (previewTasksByAge(group.tasks, Date.now(), keepVisible).hidden.some((task) => task.id === selectedTaskId)) {
+          return { sectionKey: group.key, taskId: selectedTaskId };
+        }
       }
     }
     return null;
-  }, [keepVisible, keptBySection, selectedTaskId]);
+  }, [keepVisible, layout, selectedTaskId]);
   const [previewExpandedSections, setPreviewExpandedSections] = useState<Set<string>>(
     () => hiddenSelection ? new Set([hiddenSelection.sectionKey]) : new Set(),
   );
@@ -117,7 +146,7 @@ function ScopedTaskTree({
     return next;
   });
   // 一条不剩时必须自己说出来，还得给条退路：窄态那排点很小，不说清楚的话看着就是「任务全没了」。
-  if (!keptBySection.some((entry) => entry.kept.length) && !machineSection) {
+  if (!layout.some((entry) => entry.kept.length) && !machineSection) {
     const label = SPREAD_FILTERS.find((item) => item.key === filter)?.label ?? filter;
     return (
       <p className="workspace-task-empty">
@@ -128,56 +157,92 @@ function ScopedTaskTree({
       </p>
     );
   }
-  const renderSection = (entry: (typeof keptBySection)[number] | undefined) => {
-    if (!entry?.kept.length) return null;
-    const { section, kept } = entry;
-    const sectionCollapsed = collapsed.has(section.key);
-    const preview = previewTasksByAge(kept, Date.now(), keepVisible);
-    const previewExpanded = previewExpandedSections.has(section.key);
-    const visibleTasks = previewExpanded ? kept : preview.visible;
+  type RenderGroup = (typeof layout)[number]["groups"][number];
+  // 一个行块的内容：年龄闸筛过的那几行 +「显示另外 N 条」。分节和项目分组共用它。
+  const renderRows = (group: RenderGroup, showProject: boolean) => {
+    const preview = previewTasksByAge(group.tasks, Date.now(), keepVisible);
+    const previewExpanded = previewExpandedSections.has(group.key);
+    const visibleTasks = previewExpanded ? group.tasks : preview.visible;
     const hiddenCount = preview.hidden.length;
     return (
-      <section className={`workspace-task-section${sectionCollapsed ? " is-collapsed" : ""}`} data-task-section={section.key} key={section.key}>
-            <button
-              className="workspace-task-section-title workspace-task-section-toggle"
-              type="button"
-              aria-expanded={!sectionCollapsed}
-              aria-label={`${sectionCollapsed ? "展开" : "折叠"}${section.label}`}
-              onClick={() => toggleCollapsed(section.key)}
-            >
-              <span>{section.label}</span>
-              <CaretRight size={10} weight="bold" aria-hidden="true" />
-            </button>
-            {!sectionCollapsed && (
-              <>
-                {visibleTasks.map((task) =>
-                  task.mode === "team" ? (
-                    <TeamRow
-                      key={task.id}
-                      task={task}
-                      tasks={tasks}
-                      allTasks={allTasks}
-                      selectedTaskId={selectedTaskId}
-                      onTask={onTask}
-                      indicatorForTask={indicatorForTask}
-                    />
-                  ) : (
-                    <TaskRow key={task.id} task={task} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
-                  ),
-                )}
-                {hiddenCount > 0 && (
-                  <button className="workspace-task-more" type="button" onClick={() => togglePreview(section.key)}>
-                    {previewExpanded ? "收起" : `显示另外 ${hiddenCount} 条`}
-                  </button>
-                )}
-              </>
-            )}
+      <>
+        {visibleTasks.map((task) =>
+          task.mode === "team" ? (
+            <TeamRow
+              key={task.id}
+              task={task}
+              tasks={tasks}
+              allTasks={allTasks}
+              selectedTaskId={selectedTaskId}
+              onTask={onTask}
+              indicatorForTask={indicatorForTask}
+              showProject={showProject}
+            />
+          ) : (
+            <TaskRow key={task.id} task={task} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} showProject={showProject} />
+          ),
+        )}
+        {hiddenCount > 0 && (
+          <button className="workspace-task-more" type="button" onClick={() => togglePreview(group.key)}>
+            {previewExpanded ? "收起" : `显示另外 ${hiddenCount} 条`}
+          </button>
+        )}
+      </>
+    );
+  };
+  // 项目分组头。**要求就是别显眼**：它给列表分段，不是一级导航，所以没有底色没有边框，
+  // 字比分节标题还小一号，一颗 6px 的项目色圆点代替带首字母的方块。折叠状态跟分节共用
+  // 同一份 localStorage（键加了 `project:` 前缀），刷新后还记得你收起过谁。
+  const renderProjectGroup = (group: RenderGroup) => {
+    const name = group.project?.name ?? "未知项目";
+    const groupCollapsed = collapsed.has(group.key);
+    return (
+      <div className={`workspace-task-project-group${groupCollapsed ? " is-collapsed" : ""}`} key={group.key}>
+        <button
+          className="workspace-task-project-head"
+          type="button"
+          aria-expanded={!groupCollapsed}
+          aria-label={`${groupCollapsed ? "展开" : "折叠"}项目 ${name}`}
+          onClick={() => toggleCollapsed(group.key)}
+        >
+          <CaretRight size={9} weight="bold" aria-hidden="true" />
+          {group.project && <ProjectAvatar project={group.project} size="dot" />}
+          <b>{name}</b>
+          <em>{group.tasks.length}</em>
+        </button>
+        {!groupCollapsed && renderRows(group, false)}
+      </div>
+    );
+  };
+  const renderSection = (entry: (typeof layout)[number] | undefined) => {
+    if (!entry?.kept.length) return null;
+    const { section, grouped, groups } = entry;
+    // 分组时这一节自己不再顶一个「任务」标题：项目那一行已经在分段了，再压一层标题
+    // 就是三级帽子叠在一起，跟「弱化」正好反着来。
+    const sectionCollapsed = !grouped && collapsed.has(section.key);
+    return (
+      <section className={`workspace-task-section${sectionCollapsed ? " is-collapsed" : ""}${grouped ? " workspace-task-section--grouped" : ""}`} data-task-section={section.key} key={section.key}>
+        {!grouped && (
+          <button
+            className="workspace-task-section-title workspace-task-section-toggle"
+            type="button"
+            aria-expanded={!sectionCollapsed}
+            aria-label={`${sectionCollapsed ? "展开" : "折叠"}${section.label}`}
+            onClick={() => toggleCollapsed(section.key)}
+          >
+            <span>{section.label}</span>
+            <CaretRight size={10} weight="bold" aria-hidden="true" />
+          </button>
+        )}
+        {grouped
+          ? groups.map(renderProjectGroup)
+          : !sectionCollapsed && renderRows(groups[0]!, true)}
       </section>
     );
   };
-  const pinned = keptBySection.find((entry) => entry.section.key === "pinned");
-  const rest = keptBySection.find((entry) => entry.section.key === "rest");
-  const noVisibleTasks = !keptBySection.some((entry) => entry.kept.length);
+  const pinned = layout.find((entry) => entry.section.key === "pinned");
+  const rest = layout.find((entry) => entry.section.key === "rest");
+  const noVisibleTasks = !layout.some((entry) => entry.kept.length);
   return (
     <>
       {renderSection(pinned)}
@@ -279,6 +344,7 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
           onClearFilter={() => spread.setFilter("all")}
           emptyText={taskMode ? "没有在跑或待验收的任务" : "还没有任务"}
           workerIndex={workerIndex}
+          projectIndex={projectBadges}
           machineSection={taskMode ? null : <HandoffMachines project={currentProject} tasks={tasks} selectedRemoteTaskId={selectedRemoteTaskId} onRemoteTask={onRemoteTask} notify={notify} onFinished={onHandoffFinished} />}
         />
         {otherProjects.length > 0 && (

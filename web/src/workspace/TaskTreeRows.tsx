@@ -126,6 +126,7 @@ export function TaskRow({
   indicatorForTask,
   child = false,
   showOrigin = true,
+  showProject = true,
   leading,
   wrapperClassName = "",
   trailing,
@@ -137,6 +138,9 @@ export function TaskRow({
   indicatorForTask: IndicatorForTask;
   child?: boolean;
   showOrigin?: boolean;
+  // 行首那枚项目徽标画不画。默认画（有徽标表就说明是任务模式）；**被项目分组装着的行
+  // 传 false** —— 组头已经写着项目名，每行再标一次就是把「弱化」做反了。
+  showProject?: boolean;
   leading?: React.ReactNode;
   wrapperClassName?: string;
   trailing?: React.ReactNode;
@@ -153,7 +157,7 @@ export function TaskRow({
   const spreadCells = spreadRow?.spread.laidOut ? spreadRow : null;
   // 执行者行不挂徽标：它缩进在团队行底下，跟着上面那行走，同一个项目再标一次只是噪音。
   const actions = useContext(TaskTreeActionsContext);
-  const project = canStar ? actions?.projectBadges?.get(task.projectId) : undefined;
+  const project = canStar && showProject ? actions?.projectBadges?.get(task.projectId) : undefined;
   const bucket = spreadCells ? spreadBucket(task, workersFrom(actions?.workerIndex, task.id)) : null;
   return (
     <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}${bucket === "todo" ? " is-todo" : ""}${task.starredAt != null ? " has-star" : ""}${canStar ? " can-star" : ""}`}>
@@ -235,6 +239,7 @@ export function TeamRow({
   selectedTaskId,
   onTask,
   indicatorForTask,
+  showProject = true,
 }: {
   task: TaskListItem;
   tasks: TaskListItem[];
@@ -242,6 +247,7 @@ export function TeamRow({
   selectedTaskId: string | null;
   onTask: (task: TaskListItem) => void;
   indicatorForTask: IndicatorForTask;
+  showProject?: boolean;
 }) {
   const workers = workersOf(tasks, task.id);
   const selectedWorkerIndex = workers.findIndex((worker) => worker.id === selectedTaskId);
@@ -265,6 +271,7 @@ export function TeamRow({
         selectedTaskId={selectedTaskId}
         onTask={onTask}
         indicatorForTask={indicatorForTask}
+        showProject={showProject}
         wrapperClassName={`workspace-team-row${expanded ? " is-expanded" : ""}`}
         leading={
           <span className="workspace-team-leading">

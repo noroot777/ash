@@ -100,3 +100,23 @@ export function buildTaskTree<T extends TaskListItem>(tasks: T[], options: TaskT
 export function orderedTopLevelTasks<T extends TaskListItem>(tasks: T[], options: TaskTreeOptions = {}): T[] {
   return buildTaskTree(tasks, options).flatMap((section) => section.tasks);
 }
+
+export type TaskProjectGroup<T extends TaskListItem = TaskListItem> = {
+  projectId: string;
+  tasks: T[];
+};
+
+// 任务模式下「任务」那一节再按项目分一层。
+//
+// 项目的先后**跟着行走**：喂进来的 tasks 已经是更新时间倒序，所以谁的最新一条更近，
+// 谁就排在最前。按名字或创建时间排会把最活跃的那家沉到底下，而这个列表存在的意义
+// 就是「现在谁在动」—— 排序原则跟行一样只认更新时间，不为分组另立一套。
+export function groupTasksByProject<T extends TaskListItem>(tasks: T[]): TaskProjectGroup<T>[] {
+  const groups = new Map<string, T[]>();
+  for (const task of tasks) {
+    const bucket = groups.get(task.projectId);
+    if (bucket) bucket.push(task);
+    else groups.set(task.projectId, [task]);
+  }
+  return [...groups].map(([projectId, rows]) => ({ projectId, tasks: rows }));
+}
