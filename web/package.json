@@ -39,6 +39,7 @@
     "test:remote-task": "node scripts/test-remote-task.mjs",
     "test:handoff-dialog-lifetime": "node scripts/test-handoff-dialog-lifetime.mjs",
     "test:spread-filter": "node --experimental-strip-types scripts/test-spread-filter.mjs",
+    "test:outbound-state": "node --experimental-strip-types scripts/test-outbound-state.mjs",
     "test:notes-filter": "node --experimental-strip-types scripts/test-notes-filter.mjs",
     "test:slash-match": "node --experimental-strip-types scripts/test-slash-match.mjs",
     "test:workspace-history": "node --experimental-strip-types scripts/test-workspace-history.mjs",

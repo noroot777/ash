@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { HandoffPeerOffline, HandoffRemoteState, HandoffTarget, TaskListItem } from "@ash/shared";
 import { api } from "../lib/api.ts";
+import { applyRemoteStates, handedOut, peersOf, remoteStateMap } from "./outboundStateModel.ts";
 
 // 接力出去的任务，在本机那一行的 status 停在**交出去那一刻**（导出前会先停掉任务，所以
 // 多半是 canceled）。对端后来跑完没有、有没有卡在提问上，本机一个字都不知道。
@@ -11,24 +12,11 @@ import { api } from "../lib/api.ts";
 //
 // 20 秒一轮：接力出去的任务本机插不上手，看的是「它那边到哪一步了」，不是秒级跟随；
 // 一轮要跨机器往返，问太勤只会在对端上堆请求。**没有出站任务就一次都不问。**
+//
+// 合并判据（每轮整份重建、问不到就没有实时状态）在 outboundStateModel.ts，那里有测试钉着。
 const POLL_MS = 20_000;
 
-export function handedOut(task: Pick<TaskListItem, "handoff">): boolean {
-  return task.handoff?.direction === "out" && !task.handoff.pending;
-}
-
-// 出站行自己就记着持有机的地址和名字（接力时冻进 handoff 标记的），所以一台都问不到时
-// 仍然报得出「联系不上谁」，不必等设置读回来。
-function peersOf(tasks: TaskListItem[], reason: unknown): HandoffPeerOffline[] {
-  const text = reason instanceof Error ? reason.message : String(reason);
-  const peers = new Map<string, HandoffPeerOffline>();
-  for (const task of tasks) {
-    const url = task.handoff?.peerUrl;
-    if (!url || peers.has(url)) continue;
-    peers.set(url, { url, name: task.handoff?.peerName || url, reason: text });
-  }
-  return [...peers.values()];
-}
+export { handedOut };
 
 export type OutboundState = {
   /** 合并了对端实时状态的任务列表；没接力出去的行原样返回（同一个对象引用）。 */
@@ -58,19 +46,14 @@ export function useOutboundState(tasks: TaskListItem[]): OutboundState {
     const pull = () => {
       api.outboundState().then((result) => {
         if (!alive) return;
-        // 只覆盖问回来的那些。整轮失败（网络抖一下）就留着上一轮的状态，别把已知的
-        // 真状态清成空白 —— 那会让行在「有状态」和「没状态」之间闪。
-        setStates((current) => {
-          const next = new Map(current);
-          for (const row of result.rows) next.set(row.taskId, row);
-          return next;
-        });
+        setStates(remoteStateMap(result.rows));
         setOffline(result.offline);
       }).catch((reason) => {
         // 连本机这个接口都没应答（对端一台都问不着、或者本机 server 还是旧版本没这个
-        // 路由）：那就是**每一台**持有机的状态都问不到。照样得说出来 —— 不说的话，
-        // 屏幕上那几行显示的是接力当时冻住的状态，看着却跟实时状态一模一样。
+        // 路由）：那就是**每一台**持有机的状态都问不到。实时状态一并清空，再把这句话
+        // 说出来 —— 留着上一轮的状态又写着「联系不上」，是自己打自己。
         if (!alive) return;
+        setStates(new Map());
         setOffline(peersOf(outboundRef.current, reason));
       });
     };
@@ -86,22 +69,7 @@ export function useOutboundState(tasks: TaskListItem[]): OutboundState {
     return () => { alive = false; };
   }, [outboundKey]);
 
-  const merged = useMemo(() => {
-    if (!states.size) return tasks;
-    return tasks.map((task) => {
-      const state = handedOut(task) ? states.get(task.id) : undefined;
-      if (!state) return task;
-      // 标题也一起接过来：对端起过自动标题、或者用户在那边改过名，本机存档还写着老的。
-      return {
-        ...task,
-        status: state.status,
-        stage: state.stage,
-        question: state.question,
-        title: state.title,
-        updatedAt: state.updatedAt,
-      };
-    });
-  }, [states, tasks]);
+  const merged = useMemo(() => applyRemoteStates(tasks, states), [states, tasks]);
 
   return { tasks: merged, targets, offline };
 }
