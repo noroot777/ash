@@ -124,4 +124,50 @@ assert.equal(liveNote[0].showSessionMeta, true, "会话统计条应留在旁注�
 assert.equal(liveNote[0].endedAt, null, "旁注不能把仍在运行的当前回合提前截断");
 assert.equal(liveNote[1].at, liveNoteAt, "实时旁注应直接带落盘时的精确时间");
 
+// —— 原生引导：同一个 turnStartedAt 横跨 user sentinel，刷新后仍须 agent → user → agent ——
+const steerAt = "2026-08-10T03:30:00.000Z";
+const steeredOutput = [
+  "旧方向回复。",
+  turn("user", "改按新方向", steerAt),
+  "新方向回复。",
+].join("\n");
+const steeredTrace = [
+  {
+    at: "2026-08-10T03:24:00.000Z",
+    turnStartedAt: session.startedAt,
+    event: { kind: "tool", name: "exec", detail: "旧方向工具" },
+  },
+  {
+    at: "2026-08-10T03:25:00.000Z",
+    turnStartedAt: session.startedAt,
+    event: { kind: "text", text: "旧方向回复。" },
+  },
+  {
+    at: "2026-08-10T03:31:00.000Z",
+    turnStartedAt: session.startedAt,
+    event: { kind: "tool", name: "edit", detail: "新方向工具" },
+  },
+  {
+    at: "2026-08-10T03:32:00.000Z",
+    turnStartedAt: session.startedAt,
+    event: { kind: "text", text: "新方向回复。" },
+  },
+];
+const steered = buildConversationItems([{
+  session: activeSession,
+  output: steeredOutput,
+  trace: steeredTrace,
+}], [activeSession], []);
+assert.deepEqual(steered.map((item) => item.kind), ["agent", "user", "agent"]);
+assert.equal(steered.filter((item) => item.kind === "agent" && item.markdown.includes("新方向回复。")).length, 1,
+  "引导后的回答只能出现一次");
+assert.equal(steered.some((item) => item.id.startsWith("persisted:trace:")), false,
+  "同回合引导后的执行 trace 不得掉进孤立兜底气泡");
+assert.deepEqual(
+  steered.filter((item) => item.kind === "agent").map((item) =>
+    item.segments.flatMap((segment) => segment.events.map((event) => event.label))),
+  [["exec"], ["edit"]],
+  "用户消息前后的工具必须留在各自可见位置",
+);
+
 console.log("conversation-notes ok");

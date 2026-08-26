@@ -1,11 +1,18 @@
 import type { AgentEvent, ContextUsage, ServerEvent, Session, Task, TokenUsage } from "@ash/shared";
 import { ANSWER_PREFIX, parseSessionOutput } from "@ash/shared";
-import { addUsage, sumUsage, usageTotal } from "@ash/shared/usage";
+import { addUsage, usageTotal } from "@ash/shared/usage";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ExecutionEvent } from "../lib/executionTrace.ts";
 import type { ConversationEventTone, ConversationEventVariant } from "./conversationNotes.ts";
 import { isVerifyNote, noteTone } from "./conversationNotes.ts";
 import { applyVerifySpans, reviewerKey, reviewerKeyOf, reviewerOf, traceVerifyRound } from "./conversationReviewer.ts";
+import {
+  groupedTrace,
+  normalizedPersistedTrace,
+  takeTraceGroup,
+  traceRun,
+  traceUsage,
+} from "./conversationTraceGroups.ts";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
 
 export type LiveAgentEvent = Extract<ServerEvent, { type: "agent.event" }>;
@@ -141,88 +148,6 @@ function auxEvent(event: AgentTraceEvent): AgentAuxEvent {
   if (event.kind === "tool") return { kind: "tool", label: event.name, detail: event.detail };
   if (event.kind === "thinking") return { kind: "thinking", label: "思考过程", detail: event.text };
   return { kind: "error", label: event.message };
-}
-
-function groupedTrace(trace: SessionTraceEntry[]): Map<string, SessionTraceEntry[]> {
-  const groups = new Map<string, SessionTraceEntry[]>();
-  for (const entry of trace) {
-    const current = groups.get(entry.turnStartedAt) ?? [];
-    current.push(entry);
-    groups.set(entry.turnStartedAt, current);
-  }
-  return groups;
-}
-
-function legacyCodexUsageDelta(current: TokenUsage, previous: TokenUsage | null): TokenUsage {
-  const reset = !!previous && (
-    current.input < previous.input
-    || current.output < previous.output
-    || current.cacheRead < previous.cacheRead
-    || current.cacheWrite < previous.cacheWrite
-    || current.reasoning < previous.reasoning
-  );
-  if (!previous || reset) return { ...current, turns: 1 };
-  return {
-    input: current.input - previous.input,
-    output: current.output - previous.output,
-    cacheRead: current.cacheRead - previous.cacheRead,
-    cacheWrite: current.cacheWrite - previous.cacheWrite,
-    reasoning: current.reasoning - previous.reasoning,
-    costUsd: null,
-    turns: 1,
-  };
-}
-
-// 7c274c0 之前的 Codex trace 保存的是 turn.completed 的线程累计快照。sessions 汇总
-// 虽已由启动迁移校正，旧气泡若仍把这些快照相加，刷新后又会显示虚高。新 trace 带
-// accounting=incremental；只有无标记的 Codex 历史事件需要在读侧求差。
-function normalizedPersistedTrace(trace: SessionTraceEntry[], session: Session): SessionTraceEntry[] {
-  if (session.agentType !== "codex") return trace;
-  let previous: TokenUsage | null = null;
-  return trace.map((entry) => {
-    if (entry.event.kind !== "usage" || entry.event.accounting === "incremental") return entry;
-    const usage = legacyCodexUsageDelta(entry.event.usage, previous);
-    previous = entry.event.usage;
-    return { ...entry, event: { ...entry.event, usage, accounting: "incremental" } };
-  });
-}
-
-function takeTraceGroup(
-  groups: Map<string, SessionTraceEntry[]>,
-  consumed: Set<string>,
-  turnStartedAt: string,
-): SessionTraceEntry[] {
-  if (groups.has(turnStartedAt) && !consumed.has(turnStartedAt)) {
-    consumed.add(turnStartedAt);
-    return groups.get(turnStartedAt) ?? [];
-  }
-  // Older in-flight sessions may have written the user sentinel and run start a
-  // few milliseconds apart. A small nearest-time fallback keeps that trace on
-  // the correct turn without merging genuinely separate replies.
-  const target = Date.parse(turnStartedAt);
-  const nearest = [...groups.keys()]
-    .filter((key) => !consumed.has(key))
-    .map((key) => ({ key, distance: Math.abs(Date.parse(key) - target) }))
-    .filter(({ distance }) => Number.isFinite(distance) && distance <= 2_000)
-    .sort((left, right) => left.distance - right.distance)
-    .at(0)?.key;
-  if (!nearest) return [];
-  consumed.add(nearest);
-  return groups.get(nearest) ?? [];
-}
-
-// 这一回合报了多少 token。同一回合理论上只有一条(执行器每轮至多推一次),多条时
-// 按累计处理,免得将来某家 CLI 分批报账时这里悄悄少算。
-function traceUsage(entries: SessionTraceEntry[]): TokenUsage | null {
-  return sumUsage(entries.map((entry) => (entry.event.kind === "usage" ? entry.event.usage : null)));
-}
-
-function traceRun(entries: SessionTraceEntry[]): { model: string | null; reasoningEffort: string | null } | undefined {
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const event = entries[index]?.event;
-    if (event?.kind === "run") return { model: event.model, reasoningEffort: event.reasoningEffort };
-  }
-  return undefined;
 }
 
 function liveRun(event: LiveAgentEvent): { model: string | null; reasoningEffort: string | null } | undefined {
@@ -433,7 +358,8 @@ export function buildConversationItems(
     const segments = parseSessionOutput(output);
     const traceGroups = groupedTrace(normalizedPersistedTrace(trace, session));
     const consumedTrace = new Set<string>();
-    let turnStartedAt = session.startedAt;
+    let itemStartedAt = session.startedAt;
+    let traceTurnStartedAt = session.startedAt;
     segments.forEach((segment, index) => {
       if (segment.kind === "user") {
         recordPersistedTurn(persistedTurns, "user", segment.text, segment.at);
@@ -448,7 +374,8 @@ export function buildConversationItems(
           // 但「后续追问」不收它 —— 判据统一在 shared 的 isUserFollowUp。
           bySystem: segment.bySystem,
         });
-        turnStartedAt = segment.at ?? turnStartedAt;
+        itemStartedAt = segment.at ?? itemStartedAt;
+        traceTurnStartedAt = segment.at ?? traceTurnStartedAt;
       } else if (segment.kind === "system") {
         recordPersistedTurn(persistedTurns, "system", segment.text, segment.at, session.id);
         items.push({
@@ -461,15 +388,18 @@ export function buildConversationItems(
           variant: "note",
           verify: isVerifyNote(segment.text),
         });
-        turnStartedAt = segment.at ?? turnStartedAt;
+        itemStartedAt = segment.at ?? itemStartedAt;
+        traceTurnStartedAt = segment.at ?? traceTurnStartedAt;
       } else {
-        const traceEntries = takeTraceGroup(traceGroups, consumedTrace, turnStartedAt);
+        const next = segments[index + 1];
+        const boundary = next?.kind === "user" ? next.at : undefined;
+        const traceEntries = takeTraceGroup(traceGroups, consumedTrace, traceTurnStartedAt, boundary);
         items.push({
           kind: "agent",
           id: `persisted:agent:${session.id}:${index}`,
           sessionId: session.id,
           label: agentLabel(session),
-          at: turnStartedAt,
+          at: itemStartedAt,
           endedAt: null,
           markerEndedAt: segment.endedAt ?? null,
           session,

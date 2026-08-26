@@ -6,7 +6,7 @@ import { guessContextWindow } from "@ash/shared/usage";
 import { cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@ash/shared/cli-overrides";
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
-import { spawnForRun, detachedInfo } from "./detached.js";
+import { spawnControllableForRun, spawnForRun, detachedInfo } from "./detached.js";
 import { spawnAgent, resumeFor, resumeInner, shq, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets, failedChild } from "./spawn.js";
 import { relayRoot } from "../llm.js";
 import { anthropicContext1mBaseUrl, modelUsesContext1m, withContext1mSuffix } from "../anthropic-context-1m.js";
@@ -145,10 +145,35 @@ export class ClaudeExecutor implements AgentExecutor {
   // 单飞只把进程保留到当前任务回合结束：用户引导时 interrupt + send，同一进程继续；
   // 最终 result 到来就关 stdin 并把常驻流收成普通 RunHandle 的 done。
   runSteerable(opts: RunOpts): RunHandle {
-    return singleRunFromResident(this.openResident(opts));
+    const sessionId = opts.sessionId ?? randomUUID();
+    const model = opts.model ?? this.model;
+    const args = this.buildArgs(opts, sessionId, true, model);
+    const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`);
+    const child = this.startupError
+      ? failedChild(this.startupError)
+      : spawnControllableForRun(
+          opts.cwd,
+          this.bin,
+          args,
+          userLine(opts.prompt),
+          { ...this.env(opts.cwd, model), ...opts.env },
+          opts.detach,
+        );
+    const detached = detachedInfo(child);
+    return singleRunFromResident(
+      this.residentFromChild(child, sessionId, commandLine, !!detached),
+      detached,
+    );
   }
 
   attach(child: ChildProcess, opts: { sessionId: string; commandLine: string }): RunHandle {
+    const detached = detachedInfo(child);
+    if (child.stdin && opts.commandLine.includes("--input-format")) {
+      return singleRunFromResident(
+        this.residentFromChild(child, opts.sessionId, opts.commandLine, true),
+        detached,
+      );
+    }
     return {
       sessionId: opts.sessionId,
       commandLine: opts.commandLine,
@@ -171,6 +196,15 @@ export class ClaudeExecutor implements AgentExecutor {
       : spawnAgent(opts.cwd, this.bin, args, userLine(opts.prompt), { ...this.env(opts.cwd, model), ...opts.env }, {
           keepStdin: true,
         });
+    return this.residentFromChild(child, sessionId, commandLine, false);
+  }
+
+  private residentFromChild(
+    child: ChildProcess,
+    sessionId: string,
+    commandLine: string,
+    closeByKill: boolean,
+  ): ResidentHandle {
     const resident = { interruptPending: false };
     let reqSeq = 0;
     return {
@@ -190,7 +224,10 @@ export class ClaudeExecutor implements AgentExecutor {
           }) + "\n",
         );
       },
-      close: () => child.stdin?.end(),
+      close: () => {
+        child.stdin?.end();
+        if (closeByKill) killChild(child);
+      },
       kill: () => killChild(child),
     };
   }
@@ -226,7 +263,10 @@ export class ClaudeExecutor implements AgentExecutor {
   }
 }
 
-export function singleRunFromResident(resident: ResidentHandle): RunHandle {
+export function singleRunFromResident(
+  resident: ResidentHandle,
+  detached?: RunHandle["detached"],
+): RunHandle {
   let intermediateEnds = 0;
   let accepting = true;
   const events = (async function* (): AsyncIterable<AgentEvent> {
@@ -250,6 +290,7 @@ export function singleRunFromResident(resident: ResidentHandle): RunHandle {
     sessionId: resident.sessionId,
     commandLine: resident.commandLine,
     events,
+    detached,
     async steer(text: string) {
       if (!accepting) throw new Error("Claude 当前回合已经结束");
       intermediateEnds += 1;

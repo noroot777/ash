@@ -473,6 +473,10 @@ export async function continueTask(
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
     bindNativeSteer(taskId, handle, {
       agentType: agent,
+      prepare: (text) => withGlobalBrowserPolicy(
+        withSkillInvocation({ agentType: agent, cwd, text }),
+        "reminder",
+      ),
       record: (text, at) => recordUserConversationTurn({
         taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text, at,
       }),

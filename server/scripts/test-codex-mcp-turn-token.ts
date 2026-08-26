@@ -47,16 +47,51 @@ for (let i = 0; i < args.length - 1; i += 1) {
 
 // 模拟 codex 0.144 的 MCP 环境白名单：父进程里的 ASH_* 全丢，只把 -c 中显式配置的
 // env_vars 按变量名选中的值加回来，再真正跨一层子进程启动 MCP probe。
-const filtered = {};
-for (const key of ["HOME", "LANG", "PATH", "SHELL", "TMPDIR", "USER"]) {
-  if (process.env[key]) filtered[key] = process.env[key];
+const runProbe = () => {
+  const filtered = {};
+  for (const key of ["HOME", "LANG", "PATH", "SHELL", "TMPDIR", "USER"]) {
+    if (process.env[key]) filtered[key] = process.env[key];
+  }
+  const child = spawnSync(process.execPath, [process.env.ASH_FAKE_MCP_PROBE, process.env.ASH_FAKE_MCP_OUTPUT], {
+    env: { ...filtered, ...configured },
+  });
+  if (child.status !== 0) process.exit(child.status ?? 2);
+};
+
+if (args.includes("app-server")) {
+  let input = "";
+  const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+  const receive = (message) => {
+    if (message.id === undefined) return;
+    if (message.method === "initialize") send({ id: message.id, result: { userAgent: "fake" } });
+    else if (message.method === "thread/start") {
+      send({ id: message.id, result: { thread: { id: "fake-thread" } } });
+      send({ method: "thread/started", params: { thread: { id: "fake-thread" } } });
+    } else if (message.method === "turn/start") {
+      runProbe();
+      send({ id: message.id, result: { turn: { id: "fake-turn" } } });
+      send({ method: "turn/started", params: { threadId: "fake-thread", turn: { id: "fake-turn" } } });
+      setTimeout(() => send({ method: "turn/completed", params: {
+        threadId: "fake-thread", turn: { id: "fake-turn", status: "completed", error: null },
+      } }), 10);
+    }
+  };
+  process.stdin.on("data", (chunk) => {
+    input += chunk.toString();
+    for (;;) {
+      const newline = input.indexOf("\\n");
+      if (newline < 0) break;
+      const line = input.slice(0, newline);
+      input = input.slice(newline + 1);
+      if (line) receive(JSON.parse(line));
+    }
+  });
+  process.stdin.on("end", () => process.exit(0));
+} else {
+  runProbe();
+  process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "fake-thread" }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "turn.completed" }) + "\\n");
 }
-const child = spawnSync(process.execPath, [process.env.ASH_FAKE_MCP_PROBE, process.env.ASH_FAKE_MCP_OUTPUT], {
-  env: { ...filtered, ...configured },
-});
-if (child.status !== 0) process.exit(child.status ?? 2);
-process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "fake-thread" }) + "\\n");
-process.stdout.write(JSON.stringify({ type: "turn.completed" }) + "\\n");
 `);
   chmodSync(fakeCodex, 0o755);
   process.env.ASH_FAKE_MCP_PROBE = probe;
@@ -65,7 +100,7 @@ process.stdout.write(JSON.stringify({ type: "turn.completed" }) + "\\n");
   const turnToken = "turn-token-secret-123456";
   const taskId = "task-codex-boundary";
   const executor = new CodexExecutor({ bin: fakeCodex });
-  const handle = executor.run({
+  const handle = executor.runSteerable({
     cwd: root,
     prompt: "probe",
     extraArgs: ["-c", `mcp_servers.${ASH_MCP_SERVER_NAME}.env_vars=["ASH_TASK_ID"]`],
@@ -85,7 +120,7 @@ process.stdout.write(JSON.stringify({ type: "turn.completed" }) + "\\n");
   const unconfigured = join(root, "unconfigured");
   mkdirSync(unconfigured);
   assert.equal(codexAshMcpServerName(unconfigured), null, "没有声明 MCP server 时不得凭空补一个 ash 条目");
-  const noMcpHandle = executor.run({
+  const noMcpHandle = executor.runSteerable({
     cwd: root,
     prompt: "probe without registered MCP",
     env: { CODEX_HOME: unconfigured, ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken },

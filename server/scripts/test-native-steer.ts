@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import type { AgentEvent } from "@ash/shared";
-import { singleRunFromResident } from "../src/executors/claude.js";
+import { ClaudeExecutor, singleRunFromResident } from "../src/executors/claude.js";
 import { openCodexAppServer } from "../src/executors/codex-app-server.js";
+import { CodexExecutor } from "../src/executors/codex.js";
+import { detachedPathsFor } from "../src/executors/detached.js";
 import type { ResidentHandle } from "../src/executors/types.js";
 import * as runs from "../src/runs.js";
 
@@ -176,3 +181,44 @@ assert.equal(codexEvents.find((event) => event.kind === "done")?.exitStatus, 0);
 assert.equal(codexEvents.filter((event) => event.kind === "text").map((event) => event.text).join(""), "NEW\n\n");
 assert.ok(codexEvents.some((event) => event.kind === "session" && event.cliSessionId === "codex-thread"));
 console.log("✓ Codex App Server 使用同一 threadId/expectedTurnId 执行 turn/steer");
+
+const detachedRoot = mkdtempSync(join(tmpdir(), "ash-native-steer-detached-"));
+const detachedPids: number[] = [];
+try {
+  const fakeBin = join(detachedRoot, "fake-agent.mjs");
+  writeFileSync(fakeBin, `#!/usr/bin/env node
+process.stdin.resume();
+setInterval(() => {}, 1000);
+`);
+  chmodSync(fakeBin, 0o755);
+
+  const claudeDir = join(detachedRoot, "claude");
+  mkdirSync(claudeDir);
+  const claudeHandle = new ClaudeExecutor({ bin: fakeBin }).runSteerable({
+    cwd: detachedRoot,
+    prompt: "OLD",
+    detach: detachedPathsFor(claudeDir, "claude-session", "T0"),
+  });
+  assert.ok(claudeHandle.detached?.pid, "Claude runSteerable(detach) 必须留下可接管 pid");
+  detachedPids.push(claudeHandle.detached!.pid);
+  claudeHandle.kill();
+
+  const codexDir = join(detachedRoot, "codex");
+  mkdirSync(codexDir);
+  const codexHandle = new CodexExecutor({ bin: fakeBin }).runSteerable({
+    cwd: detachedRoot,
+    prompt: "OLD",
+    detach: detachedPathsFor(codexDir, "codex-session", "T0"),
+  });
+  assert.ok(codexHandle.detached?.pid, "Codex runSteerable(detach) 必须留下可接管 pid");
+  detachedPids.push(codexHandle.detached!.pid);
+  codexHandle.kill();
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  console.log("✓ Claude/Codex 新生产路径都保留 detached 接管信息");
+} finally {
+  for (const pid of detachedPids) {
+    try { process.kill(-pid, "SIGKILL"); } catch { /* 已退出 */ }
+  }
+  rmSync(detachedRoot, { recursive: true, force: true });
+}
+process.exit(0);

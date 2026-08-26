@@ -7,14 +7,14 @@ import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { openCodexResident } from "./codex-resident.js";
 import { readCodexContext } from "./codex-rollout.js";
-import { spawnForRun, detachedInfo } from "./detached.js";
+import { spawnForRun, detachedInfo, type DetachedChild } from "./detached.js";
 import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
 import { relayApi } from "../llm.js";
 import { protocolConverterBaseUrl } from "../openai-converter/common.js";
 import { formatFailureForTimeline, RunTraceRecorder, type RunTracePaths } from "./diagnostics.js";
 import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
 import { codexAshMcpServerName } from "./codex-mcp.js";
-import { openCodexAppServer } from "./codex-app-server.js";
+import { openCodexAppServer, readCodexAppServerState } from "./codex-app-server.js";
 
 // 供应商的 key 走环境变量,不进命令行 —— `-c` 参数会原样进 commandLine,而后者存进
 // sessions.command_line 并在 UI 展示。codex 的 model_providers 正好支持 env_key
@@ -146,7 +146,7 @@ export class CodexExecutor implements AgentExecutor {
   }
 
   runSteerable(opts: RunOpts): RunHandle {
-    const args = this.appServerArgs(opts);
+    const { args, ignored } = this.appServerArgs(opts);
     return openCodexAppServer({
       bin: this.bin,
       args,
@@ -158,13 +158,18 @@ export class CodexExecutor implements AgentExecutor {
       serviceTier: this.speed === "fast" ? "priority" : undefined,
       env: { ...this.env(), ...opts.env },
       trace: opts.trace,
+      detach: opts.detach,
+      notices: ignored.length
+        ? [`Codex 原生引导回合不支持以下执行器固定参数，已忽略：${ignored.join("、")}`]
+        : undefined,
     });
   }
 
-  private appServerArgs(opts: Pick<RunOpts, "extraArgs" | "env">): string[] {
+  private appServerArgs(opts: Pick<RunOpts, "extraArgs" | "env">): { args: string[]; ignored: string[] } {
     const args = ["app-server", "--stdio", ...this.relayArgs()];
-    args.push(...appServerCompatibleArgs(this.extraArgs));
-    if (opts.extraArgs?.length) args.push(...appServerCompatibleArgs(opts.extraArgs));
+    const profile = appServerCompatibleArgs(this.extraArgs);
+    const turn = appServerCompatibleArgs(opts.extraArgs ?? []);
+    args.push(...profile.args, ...turn.args);
     // App Server 同样由它自己拉起 MCP 子进程；身份变量仍只按名字进 TOML，真 token
     // 留在父进程 env，既不进 commandLine，也不会被 Codex 的 MCP 环境过滤掉。
     const identityVars = ASH_MCP_IDENTITY_ENV_VARS.filter((key) => !!opts.env?.[key]);
@@ -172,10 +177,27 @@ export class CodexExecutor implements AgentExecutor {
       const serverName = codexAshMcpServerName(opts.env?.CODEX_HOME);
       if (serverName) args.push("-c", `mcp_servers.${serverName}.env_vars=${JSON.stringify(identityVars)}`);
     }
-    return args;
+    return { args, ignored: [...new Set([...profile.ignored, ...turn.ignored])] };
   }
 
   attach(child: ChildProcess, opts: { sessionId: string; commandLine: string }): RunHandle {
+    const detached = child as Partial<DetachedChild>;
+    if (child.stdin && opts.commandLine.includes("app-server") && detached.ashPaths) {
+      const recovered = readCodexAppServerState(detached.ashPaths.out, opts.sessionId);
+      return openCodexAppServer({
+        bin: this.bin,
+        args: [],
+        cwd: ".",
+        prompt: "",
+        sessionId: opts.sessionId,
+        commandLine: opts.commandLine,
+        reattach: {
+          threadId: recovered.threadId ?? opts.sessionId,
+          turnId: recovered.turnId ?? "",
+        },
+        startProcess: () => child,
+      });
+    }
     const lifecycle = { stopRequested: false };
     return {
       sessionId: opts.sessionId,
@@ -226,17 +248,21 @@ export class CodexExecutor implements AgentExecutor {
 
 // exec 的 profile 参数里只有 Codex 全局配置项能原样交给 app-server；`--search`、
 // `--output-schema` 之类 exec 专属 flag 不能塞过去，否则整个原生回合启动即退出。
-function appServerCompatibleArgs(input: string[]): string[] {
+function appServerCompatibleArgs(input: string[]): { args: string[]; ignored: string[] } {
   const out: string[] = [];
+  const ignored: string[] = [];
   for (let i = 0; i < input.length; i += 1) {
     const arg = input[i]!;
     if (["-c", "--config", "--enable", "--disable"].includes(arg) && input[i + 1] !== undefined) {
       out.push(arg, input[++i]!);
     } else if (/^--(?:config|enable|disable)=/.test(arg) || arg === "--strict-config") {
       out.push(arg);
+    } else if (arg.startsWith("-")) {
+      // 只展示 flag 名，不展示值：固定参数可能来自用户 profile，值里不排除 token。
+      ignored.push(arg.split("=", 1)[0]!);
     }
   }
-  return out;
+  return { args: out, ignored };
 }
 
 export async function* parseCodexStream(

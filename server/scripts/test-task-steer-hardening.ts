@@ -163,6 +163,7 @@ try {
     task("review-task", { reviewOf: "target" }),
     task("reviewer-role"),
     task("ordered"),
+    task("codex-native-state", { activeTurnToken: "codex-native-token" }),
     task("stopping", { activeTurnToken: "stopping-token" }),
     task("late-stop-db", {
       activeTurnToken: "late-stop-token",
@@ -193,6 +194,7 @@ try {
     message("m-reviewer-role", "reviewer-role"),
     message("ordered-a", "ordered"),
     message("ordered-b", "ordered"),
+    message("m-codex-native-state", "codex-native-state"),
     message("m-stopping", "stopping"),
     message("m-late-stop-db", "late-stop-db"),
     message("m-lost-db", "lost-db"),
@@ -237,6 +239,35 @@ try {
   runs.untrackRun("ordered", orderedHandle);
   runs.releaseTurn("ordered");
   console.log("✓ 引导只能消费队首，API 无法把较晚消息反序提前");
+
+  assert.equal(runs.claimTurn("codex-native-state", "single"), true);
+  const codexNativeHandle = {
+    kill: () => {},
+    steer: async () => {
+      // Codex 的 turn/steer ACK 后旧工作仍可能继续并合法写入这些字段；投递返回后再
+      // 无条件清一次，会把真正发生在 ACK 之后的状态误删。
+      await db.update(tasks).set({
+        completeConfirmedAt: "2026-08-26T12:00:00.000Z",
+        resumePrompt: "ACK 后写入的检查点",
+        question: "ACK 后写入的问题",
+      }).where(eq(tasks.id, "codex-native-state"));
+    },
+  };
+  runs.trackRun("codex-native-state", codexNativeHandle);
+  runs.bindNativeSteer("codex-native-state", codexNativeHandle, {
+    agentType: "codex",
+    record: () => {},
+  });
+  const codexNativeResult = await steer.steerQueuedMessage("m-codex-native-state");
+  assert.equal(codexNativeResult.ok, true);
+  const codexNativeState = (await db.select().from(tasks)
+    .where(eq(tasks.id, "codex-native-state"))).at(0)!;
+  assert.equal(codexNativeState.completeConfirmedAt, "2026-08-26T12:00:00.000Z");
+  assert.equal(codexNativeState.resumePrompt, "ACK 后写入的检查点");
+  assert.equal(codexNativeState.question, "ACK 后写入的问题");
+  runs.untrackRun("codex-native-state", codexNativeHandle);
+  runs.releaseTurn("codex-native-state");
+  console.log("✓ Codex steer ACK 后产生的合法完成、检查点与提问不会被二次清理抹掉");
 
   assert.equal(runs.claimTurn("stopping", "single"), true);
   const stoppingHandle = { kill: () => { kills++; } };

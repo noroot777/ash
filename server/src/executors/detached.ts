@@ -11,14 +11,13 @@
 // parseClaudeStream / parseCodexStream 全部按 ChildProcess 写的(stdout/stderr/
 // on('error'|'close'|'exit')),伪装之后它们一行都不用改。
 //
-// 不覆盖常驻会话(团队调度台):那是**双向**的,ash 还要往它 stdin 里塞后续
-// 消息,文件替代不了。调度台走另一条路 —— 它本来就有完整的 `--resume` 自动接回
-// (team/session.ts 的 deliver:内存里没有 lead 就自动 openLead 接回)。
-import { spawn } from "node:child_process";
+// 团队调度台仍不走这一层；单飞原生引导则用本文件的 FIFO 变体：输出照旧落文件，
+// stdin 从匿名管道换成可重开的具名管道，因此 server 重启后两边都能接回。
+import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import { closeSync, openSync, readFileSync, readSync, existsSync } from "node:fs";
+import { closeSync, createWriteStream, openSync, readFileSync, readSync, existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { IS_WINDOWS } from "../platform.js";
 import { isSameProcess } from "../proc.js";
@@ -154,6 +153,7 @@ function makeDetachedChild(opts: {
     return true;
   };
   child.ashCommitted = () => out.committed();
+  child.ashPaths = opts.paths;
 
   const timer = setInterval(() => {
     out.pump();
@@ -171,6 +171,7 @@ function makeDetachedChild(opts: {
     // 退出信息了。
     out.finish();
     err.finish();
+    try { child.stdin?.destroy(); } catch { /* 已关闭 */ }
     child.exitCode = code;
     child.emit("exit", code, null);
     child.emit("close", code);
@@ -182,7 +183,99 @@ function makeDetachedChild(opts: {
 export type DetachedChild = ChildProcess & {
   /** 已安全消费到的 stdout 字节位置(换行边界),存进 DB 供重启后接着读。 */
   ashCommitted: () => number;
+  /** 可重连 stdin 与 App Server 恢复都从同一组路径派生，不另加数据库列。 */
+  ashPaths: DetachedPaths;
 };
+
+const controlPath = (paths: DetachedPaths) => `${paths.rc}.stdin.fifo`;
+
+function fifoWriter(path: string): ChildProcess["stdin"] {
+  // FIFO 的纯写 open 会等待读端；若进程恰在异步 open 完成前被停止，libuv worker 会
+  // 永久卡在 open()，连 server 自己退出都要等它。O_RDWR 跟 agent shell 的 3<> 一样
+  // 不阻塞，同时仍能在 server 重启时独立关闭/重开 writer。
+  let fd: number;
+  try { fd = openSync(path, "r+"); } catch { return null; }
+  const writer = createWriteStream(path, { fd, autoClose: true });
+  // agent 已结束或被杀时 FIFO 会断；parser 的 close/rc 才是权威收尾，这里不另报错。
+  writer.on("error", () => {});
+  return writer;
+}
+
+/**
+ * 双向单飞回合的 detached 形态：shell 自己用 3<> 长持 FIFO，server 重启只会让当前
+ * writer 消失，不会给 CLI stdin 送 EOF；新 server 按 rc 路径即可重新打开同一根管子。
+ */
+export function spawnControllableDetachedAgent(
+  cwd: string,
+  bin: string,
+  args: string[],
+  initialInput: string,
+  paths: DetachedPaths,
+  extraEnv?: Record<string, string | undefined>,
+): DetachedChild | ChildProcess {
+  const blocked = guardAgentSpawn(bin);
+  if (blocked) return blocked;
+  const abs = resolveBin(bin);
+  if (!abs) return failedChild(`找不到 ${bin} 命令(不在 PATH，也不在常见目录)`);
+  for (const p of [paths.out, paths.err]) {
+    try { closeSync(openSync(p, "a")); } catch { /* 交给 spawn 报 */ }
+  }
+  const input = controlPath(paths);
+  try { unlinkSync(input); } catch { /* 首次创建 */ }
+  const made = spawnSync("mkfifo", [input]);
+  if (made.status !== 0) return failedChild(`创建可重连 stdin 失败：${input}`);
+
+  const script = [
+    'trap \'rm -f "$ASH_IN"\' EXIT',
+    'exec 3<>"$ASH_IN"',
+    '"$@" <&3 >>"$ASH_OUT" 2>>"$ASH_ERR"',
+    'rc=$?',
+    'printf %s "$rc" >"$ASH_RC"',
+    'exit "$rc"',
+  ].join("; ");
+  const env = {
+    ...augmentedEnv(),
+    ...extraEnv,
+    ASH_IN: input,
+    ASH_OUT: paths.out,
+    ASH_ERR: paths.err,
+    ASH_RC: paths.rc,
+  };
+  const track = openTrackFd();
+  const stdio: Array<"ignore" | number> =
+    track.fd === null ? ["ignore", "ignore", "ignore"] : ["ignore", "ignore", "ignore", track.fd];
+  const real = spawn("/bin/sh", ["-c", script, "sh", abs, ...args], {
+    cwd,
+    stdio,
+    env,
+    detached: true,
+  });
+  registerTrackFd(real, track);
+  if (!real.pid) return failedChild(`起不来:${shq(bin)}`);
+  const writer = fifoWriter(input);
+  if (!writer) {
+    killChild(real);
+    return failedChild(`打开可重连 stdin 失败：${input}`);
+  }
+  writer?.write(initialInput);
+
+  return makeDetachedChild({
+    pid: real.pid,
+    paths,
+    startOffset: 0,
+    stdin: writer,
+    kill: () => killChild(real),
+    onExit: (cb) => {
+      real.on("error", () => cb(1));
+      real.on("exit", (code, sig) => {
+        const fallback = code ?? (sig ? 1 : 0);
+        const rc = readExitCode(paths.rc);
+        if (rc !== null) return cb(rc);
+        setTimeout(() => cb(readExitCode(paths.rc) ?? fallback), 50);
+      });
+    },
+  });
+}
 
 // 新起一个「活得过 server 重启」的 agent。
 //
@@ -260,7 +353,7 @@ export function spawnDetachedAgent(
 // 各 executor 的 run() 统一走这个入口:给了落盘路径就用「活得过重启」的那条,
 // 没给就退回原来的匿名管道。放在这里而不是 spawn.ts,是因为
 // detached.ts 已经依赖 spawn.ts,反过来会成环。
-// **常驻会话不要用它** —— openResident 必须保留可写的 stdin。
+// **常驻会话不要用它** —— 双向单飞走下面的 spawnControllableForRun。
 //
 // **Windows 走管道**:这条路的实现是 `/bin/sh -c '"$@" >>out 2>>err; …'`,一个
 // 无 shell 的等价物在那边写不出来(cmd.exe 的重定向拼不出同样的语义,PowerShell
@@ -281,6 +374,21 @@ export function spawnForRun(
     return spawnDetachedAgent(cwd, bin, args, prompt, detach, extraEnv);
   }
   return spawnAgent(cwd, bin, args, prompt, extraEnv, { teeOut: detach?.out });
+}
+
+/** 双向 stdin 的当前单飞回合；POSIX 走可重连 FIFO，Windows 保持既有管道语义。 */
+export function spawnControllableForRun(
+  cwd: string,
+  bin: string,
+  args: string[],
+  initialInput: string,
+  extraEnv?: Record<string, string | undefined>,
+  detach?: DetachedPaths,
+): ChildProcess {
+  if (detach && !IS_WINDOWS) {
+    return spawnControllableDetachedAgent(cwd, bin, args, initialInput, detach, extraEnv);
+  }
+  return spawnAgent(cwd, bin, args, initialInput, extraEnv, { keepStdin: true, teeOut: detach?.out });
 }
 
 // 把「这个 child 是不是 detached 的」这一判断收在一处,executor 里不必各写一遍
@@ -307,8 +415,8 @@ export function reattachDetachedAgent(opts: {
     pid: opts.pid,
     paths: opts.paths,
     startOffset: opts.offset,
-    // 接管不回 stdin:prompt 早在当初就写完并 end 了,现在也没有管道可写。
-    stdin: null,
+    // 普通一次性 detached 没有 FIFO，仍是 null；原生引导回合从约定路径重开 writer。
+    stdin: existsSync(controlPath(opts.paths)) ? fifoWriter(controlPath(opts.paths)) : null,
     kill: () => killByPid(opts.pid),
     onExit: (cb) => {
       // 没有 ChildProcess 可听,只能探。kill(pid,0) 抛 ESRCH = 确实没了

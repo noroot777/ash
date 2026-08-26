@@ -193,6 +193,10 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
     bindNativeSteer(taskId, handle, {
       agentType,
+      prepare: (text) => withGlobalBrowserPolicy(
+        withSkillInvocation({ agentType, cwd: ws.path, text }),
+        "reminder",
+      ),
       record: (text, at) => recordUserConversationTurn({
         taskId, sessionId: sessId, role: "single", agentType, out, text, at,
       }),

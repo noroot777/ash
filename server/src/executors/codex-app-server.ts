@@ -1,9 +1,11 @@
 import type { ChildProcess } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import type { AgentEvent, TokenUsage } from "@ash/shared";
 import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
 import { formatFailureForTimeline, RunTraceRecorder, type RunTracePaths } from "./diagnostics.js";
-import { forceFinishOnExit, killChild, redactSecrets, shq, spawnAgent, spawnErrorMessage } from "./spawn.js";
+import { detachedInfo, spawnControllableForRun, type DetachedPaths } from "./detached.js";
+import { forceFinishOnExit, killChild, redactSecrets, shq, spawnErrorMessage } from "./spawn.js";
 import type { RunHandle } from "./types.js";
 
 type TokenBreakdown = {
@@ -31,13 +33,17 @@ export type CodexAppServerOpts = {
   serviceTier?: string;
   env?: Record<string, string | undefined>;
   trace?: RunTracePaths;
+  detach?: DetachedPaths;
+  commandLine?: string;
+  notices?: string[];
+  reattach?: { threadId: string; turnId: string };
   startProcess?: () => ChildProcess;
 };
 
 /** 一个 app-server 进程只承载当前单飞回合；turn/completed 后立即关闭。 */
 export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const child = opts.startProcess?.()
-    ?? spawnAgent(opts.cwd, opts.bin, opts.args, "", opts.env, { keepStdin: true });
+    ?? spawnControllableForRun(opts.cwd, opts.bin, opts.args, "", opts.env, opts.detach);
   const trace = new RunTraceRecorder(opts.trace);
   const queue: AgentEvent[] = [];
   const pending = new Map<string, { resolve(value: any): void; reject(error: Error): void }>();
@@ -45,10 +51,10 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const seenReasoningDeltas = new Set<string>();
   const seenImages = new Set<string>();
   let wake: (() => void) | null = null;
-  let requestId = 0;
-  let threadId = opts.sessionId ?? "";
-  let turnId = "";
-  let sessionEmitted = false;
+  let requestId = opts.reattach ? Date.now() : 0;
+  let threadId = opts.reattach?.threadId ?? opts.sessionId ?? "";
+  let turnId = opts.reattach?.turnId ?? "";
+  let sessionEmitted = !!opts.sessionId;
   let finished = false;
   let stopRequested = false;
   let turnCompleted = false;
@@ -121,6 +127,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     threadId = id;
     push({ kind: "session", cliSessionId: id });
   };
+  if (opts.reattach && threadId && !sessionEmitted) emitSession(threadId);
   const handleServerRequest = (message: any) => {
     if (message.method === "currentTime/read") {
       write({ id: message.id, result: { currentTimeAt: Math.floor(Date.now() / 1000) } });
@@ -253,7 +260,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   });
   forceFinishOnExit(child, () => finished, (exit) => finish(exit, "Codex App Server 输出流未正常收尾"));
 
-  const ready = (async () => {
+  const ready = opts.reattach ? Promise.resolve() : (async () => {
     await request("initialize", {
       clientInfo: { name: "ash", title: "ash", version: "0.0.0" },
       capabilities: { experimentalApi: true, requestAttestation: false },
@@ -294,12 +301,16 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   })();
   return {
     sessionId: opts.sessionId ?? "",
-    commandLine: redactSecrets(`${opts.bin} ${opts.args.map(shq).join(" ")} <App Server JSONL via stdin>`),
+    commandLine: opts.commandLine
+      ?? redactSecrets(`${opts.bin} ${opts.args.map(shq).join(" ")} <App Server JSONL via stdin>`),
     events,
+    notices: opts.notices,
+    detached: detachedInfo(child),
     steer(text: string) {
       const operation = steerTail.then(async () => {
         await ready;
         if (finished || stopRequested) throw new Error("Codex 当前回合已经结束");
+        if (!threadId || !turnId) throw new Error("Codex App Server 重连后缺少当前 thread/turn 标识");
         const result = await request("turn/steer", {
           threadId,
           expectedTurnId: turnId,
@@ -355,3 +366,28 @@ const short = (value: unknown): string => {
   const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
   return text.length > 1_500 ? `${text.slice(0, 1_497)}…` : text;
 };
+
+/** 重启接管时从完整协议日志找回当前 turn id；stdout offset 可能早已越过启动通知。 */
+export function readCodexAppServerState(
+  path: string,
+  knownThreadId = "",
+): { threadId: string | null; turnId: string | null } {
+  let threadId: string | null = knownThreadId || null;
+  let turnId: string | null = null;
+  let raw = "";
+  try { raw = readFileSync(path, "utf8"); } catch { return { threadId, turnId }; }
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let message: any;
+    try { message = JSON.parse(line); } catch { continue; }
+    if (message.method === "thread/started" && typeof message.params?.thread?.id === "string") {
+      threadId = message.params.thread.id;
+    } else if (message.method === "turn/started"
+      && (!threadId || message.params?.threadId === threadId)
+      && typeof message.params?.turn?.id === "string") {
+      threadId = message.params?.threadId ?? threadId;
+      turnId = message.params.turn.id;
+    }
+  }
+  return { threadId, turnId };
+}

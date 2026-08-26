@@ -9,7 +9,7 @@ import { eq, inArray } from "drizzle-orm";
 import type { AgentType, SessionRole } from "@ash/shared";
 import { db } from "./db/index.js";
 import { agents, tasks, sessions } from "./db/schema.js";
-import { claimTurn, releaseTurn, trackRun, untrackRun } from "./runs.js";
+import { bindNativeSteer, claimTurn, releaseTurn, trackRun, untrackRun } from "./runs.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import { reattachDetachedAgent } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
@@ -17,6 +17,9 @@ import { consumeSingleRun } from "./single-run.js";
 import { isSameProcess } from "./proc.js";
 import { IS_WINDOWS } from "./platform.js";
 import { findMcpChannelHolders } from "./mcp-holders.js";
+import { recordUserConversationTurn } from "./conversation-turn.js";
+import { withSkillInvocation } from "./skills.js";
+import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 
 // 「现在重启会打断谁」——给 scripts/restart.mjs 的安全闸用。
 //
@@ -142,6 +145,22 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
       // 不恢复的话接回的 reviewer 交卷必被拒，一条本可有结论的审查被错杀成异常失败。
       const claimedTurn = claimTurn(task.id, sess.role);
       const out = createWriteStream(join(RUNS_DIR, task.id, `${sess.id}.md`), { flags: "a" });
+      bindNativeSteer(task.id, handle, {
+        agentType: sess.agentType as AgentType,
+        prepare: (text) => withGlobalBrowserPolicy(
+          withSkillInvocation({ agentType: sess.agentType as AgentType, cwd: sess.cwd ?? "", text }),
+          "reminder",
+        ),
+        record: (text, at) => recordUserConversationTurn({
+          taskId: task.id,
+          sessionId: sess.id,
+          role: sess.role as SessionRole,
+          agentType: sess.agentType as AgentType,
+          out,
+          text,
+          at,
+        }),
+      });
       // 不 await：多个任务并行接管，各自跑各自的（跟正常运行时一样）。
       void consumeSingleRun({
         taskId: task.id,
