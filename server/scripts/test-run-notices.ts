@@ -96,15 +96,21 @@ process.stdin.on("end", () => process.exit(0));
   try {
     running = runTask("t");
     let inFlight: typeof sessions.$inferSelect | undefined;
-    for (let i = 0; i < 200 && !inFlight?.agentPid; i += 1) {
+    for (let i = 0; i < 200 && !(inFlight?.commandLine && (IS_WINDOWS || inFlight.agentPid)); i += 1) {
       await new Promise((resolve) => setTimeout(resolve, 10));
       inFlight = (await db.select().from(sessions).where(eq(sessions.taskId, "t"))).at(0);
     }
     const taskState = (await db.select().from(tasks).where(eq(tasks.id, "t"))).at(0);
-    assert.ok(inFlight?.agentPid,
-      `真实 runTask 必须把原生引导进程 pid 落进 session；session=${JSON.stringify(inFlight)} task=${JSON.stringify(taskState)}`);
-    assert.ok(inFlight.agentOutPath && inFlight.agentErrPath && inFlight.agentRcPath,
-      "真实 runTask 必须整组落下 detached 输出路径");
+    assert.ok(inFlight?.commandLine,
+      `真实 runTask 必须先落 session；session=${JSON.stringify(inFlight)} task=${JSON.stringify(taskState)}`);
+    if (IS_WINDOWS) {
+      assert.equal(inFlight.agentPid, null, "Windows 原生回合按平台约定不 detached");
+      assert.equal(inFlight.agentOutPath, null, "Windows 不得伪造不可接管的 detached 输出路径");
+    } else {
+      assert.ok(inFlight.agentPid, "POSIX 原生引导进程 pid 必须落进 session");
+      assert.ok(inFlight.agentOutPath && inFlight.agentErrPath && inFlight.agentRcPath,
+        "POSIX 原生 runTask 必须整组落下 detached 输出路径");
+    }
     assert.match(inFlight.commandLine ?? "", /-c foo=1/, "App Server 兼容的 -c 必须保留");
     assert.doesNotMatch(inFlight.commandLine ?? "", /--search|--profile|--api-key|my-profile/);
     assert.doesNotMatch(inFlight.commandLine ?? "", new RegExp(secret));
