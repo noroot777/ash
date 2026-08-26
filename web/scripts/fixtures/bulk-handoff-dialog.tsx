@@ -40,7 +40,8 @@ const RESULTS: Record<string, { status: number; body: unknown }> = {
     body: preflight({ local: { sessions: 2, sessionFilesFound: 1, uploads: 3, git: "bundle", pendingMessages: 1 } }),
   },
   "t-plain": { status: 200, body: preflight() },
-  "t-broken": { status: 409, body: { error: "目标项目已不可用，请重新选择" } },
+  // 真实里逐任务预检失败最常见的一档：对端半路连不上。
+  "t-broken": { status: 502, body: { error: "连不上对端 mac-mini（fetch failed）" } },
 };
 
 const nativeFetch = window.fetch.bind(window);
@@ -72,16 +73,17 @@ const task = (id: string, title: string, status: string): TaskListItem => ({
 const tasks: TaskListItem[] = [
   task("t-git", "把批量接力弹窗的信息层级重排", "running"),
   task("t-plain", "抓一遍 outbound-state 的超时分支", "queued"),
-  task("t-broken", "预检会失败的那条", "running"),
+  task("t-broken", "补 handoff-return 的重试用例", "running"),
   task("t-idle", "早就跑完的历史任务", "done"),
   task("t-idle2", "另一条收工的任务", "failed"),
   task("t-live-team", "在跑的团队任务", "running"),
 ];
 (tasks[5] as { mode: string }).mode = "team";
 
-// ?empty=1 造「项目里此刻没有在跑的任务」这一档空态。
+// ?empty=1 造「一个都搬不了」这一档空态：只剩收工的任务，外加一个在跑但不支持的团队任务
+// —— 这时必须解释清楚，否则「明明有任务在跑」和「没有可接力的」看起来自相矛盾。
 const liveTasks = new URLSearchParams(window.location.search).has("empty")
-  ? tasks.filter((item) => item.status !== "running" && item.status !== "queued")
+  ? tasks.filter((item) => item.mode === "team" || (item.status !== "running" && item.status !== "queued"))
   : tasks;
 
 const project = { id: "p1", name: "knowledge-base", repoPath: "/Users/fjh/code/kb" } as unknown as ProjectView;

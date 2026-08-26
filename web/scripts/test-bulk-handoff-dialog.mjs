@@ -42,23 +42,23 @@ try {
   const page = await browser.newPage({ viewport: { width: 1000, height: 1000 } });
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/bulk-handoff-dialog.html`);
 
-  const picks = page.locator(".handoff-bulk-picks");
+  const picks = page.locator(".handoff-bulk-list");
   await picks.waitFor();
 
   // 1. 主体是任务清单：每条要接力的任务都点名列出，历史任务和搬不了的不混进来。
   const rows = picks.locator("li");
   await assert.doesNotReject(rows.nth(2).waitFor(), "三条在跑的单飞任务都应列出来");
   assert.equal(await rows.count(), 3);
-  const titles = await picks.locator(".handoff-bulk-pick-title").allInnerTexts();
+  const titles = await picks.locator("li b").allInnerTexts();
   assert.deepEqual(titles, [
     "把批量接力弹窗的信息层级重排",
     "抓一遍 outbound-state 的超时分支",
-    "预检会失败的那条",
+    "补 handoff-return 的重试用例",
   ]);
-  assert.match(await picks.locator("header").innerText(), /3 个正在跑的任务[\s\S]*mac-mini 接着跑/);
+  assert.match(await picks.locator("summary").innerText(), /接力 3 个正在跑的任务[\s\S]*mac-mini 接着跑/);
 
   // 打开时只探第一条（拿目标项目清单），其余行如实说「待检查」，不装作已经查过。
-  const states = () => picks.locator(".handoff-bulk-pick-state").allInnerTexts();
+  const states = () => picks.locator("li > span").allInnerTexts();
   assert.deepEqual((await states()).slice(1), ["待检查", "待检查"]);
 
   // 2. 逐个检查后，每行讲清楚这条任务带走什么，失败的就地给原因（而不是另开一个底部块）。
@@ -70,7 +70,7 @@ try {
   assert.match(checked[0], /带 Git 分支\/改动 · 附件 3 个 · 待发消息 1 条/);
   assert.match(checked[1], /会话 1 个/);
   assert.equal(await failedRow.count(), 1, "预检失败的任务应就地标红");
-  assert.match(await failedRow.innerText(), /目标项目已不可用/);
+  assert.match(await failedRow.innerText(), /连不上对端 mac-mini/);
   assert.match(
     await page.locator(".handoff-bulk-dialog footer .is-primary").innerText(),
     /停止并接力 2 个任务（跳过 1 个）/,
@@ -93,8 +93,9 @@ try {
     "跳过结论也走同一档小字，别再开红色大块",
   );
 
-  // 4. 在跑但搬不了的任务另计，折叠着讲原因，不和「会被接力」的清单混在一起。
-  assert.match(await page.locator(".handoff-bulk-skipped summary").innerText(), /1 个在跑的任务这次搬不了/);
+  // 4. 「在跑但搬不了」的那条日常不占版面（清单里搬得走的才是用户要的信息）。
+  assert.equal(await page.locator(".handoff-bulk-skipped").count(), 0);
+  assert.doesNotMatch(await page.locator(".handoff-bulk-body").innerText(), /搬不了/);
 
   const shot = process.env.BULK_HANDOFF_SHOT;
   if (shot) await page.locator(".handoff-bulk-dialog").screenshot({ path: shot });
@@ -103,8 +104,11 @@ try {
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/bulk-handoff-dialog.html?empty=1`);
   const empty = page.locator(".handoff-bulk-body .handoff-bulk-warning");
   await empty.waitFor();
-  assert.match(await empty.innerText(), /没有正在跑的任务可接力[\s\S]*单任务接力/);
-  assert.equal(await page.locator(".handoff-bulk-picks").count(), 0);
+  // 一个都搬不了时反而要说清楚：否则「明明有任务在跑」和「没有可接力的」自相矛盾。
+  assert.match(await empty.innerText(), /没有正在跑的任务可接力/);
+  assert.match(await empty.innerText(), /在跑的 1 个都搬不了：目前只支持单飞任务/);
+  assert.match(await empty.innerText(), /单任务接力/);
+  assert.equal(await page.locator(".handoff-bulk-list").count(), 0);
   assert.equal(await page.locator(".handoff-bulk-dialog footer .is-primary").isDisabled(), true);
   const emptyShot = process.env.BULK_HANDOFF_SHOT_EMPTY;
   if (emptyShot) await page.locator(".handoff-bulk-dialog").screenshot({ path: emptyShot });

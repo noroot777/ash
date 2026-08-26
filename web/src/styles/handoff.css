@@ -523,17 +523,6 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   color: var(--red);
 }
 
-.handoff-bulk-skipped {
-  padding: 0 2px;
-}
-
-.handoff-bulk-skipped summary {
-  color: var(--faint);
-  cursor: pointer;
-  font-size: 10.5px;
-}
-
-.handoff-bulk-skipped ul,
 .handoff-bulk-failures {
   display: grid;
   gap: 7px;
@@ -544,14 +533,12 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   list-style: none;
 }
 
-.handoff-bulk-skipped li,
 .handoff-bulk-failures li {
   display: grid;
   gap: 2px;
   font-size: 10.5px;
 }
 
-.handoff-bulk-skipped li b,
 .handoff-bulk-failures li b {
   overflow: hidden;
   font-weight: 600;
@@ -559,7 +546,6 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   white-space: nowrap;
 }
 
-.handoff-bulk-skipped li span,
 .handoff-bulk-failures li span {
   color: var(--faint);
 }
@@ -602,79 +588,57 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   padding: 9px 10px;
 }
 
-.handoff-bulk-picks {
-  border: 1px solid var(--line);
-  border-radius: 11px;
-  background: var(--panel);
-  overflow: hidden;
+/* 会被接力的任务清单：默认展开的轻量折叠列表，和底部那些次要信息同一档视觉，
+   靠加粗标题而不是卡片边框做重点。任务多了用户可以自己收起来。 */
+.handoff-bulk-list {
+  padding: 0 2px;
 }
 
-.handoff-bulk-picks > header {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  flex-wrap: wrap;
-  border-bottom: 1px solid var(--line);
-  background: var(--raised);
-  padding: 9px 12px;
+.handoff-bulk-list > summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
 }
 
-.handoff-bulk-picks > header b { font-size: 12.5px; font-weight: 680; }
-.handoff-bulk-picks > header span { color: var(--muted); font-size: 11px; }
+/* 保留原生 ▸ 标记（summary 一旦变 flex 就没了），让"可以收起来"这件事自己说出来。 */
+.handoff-bulk-list > summary b {
+  margin-right: 7px;
+  color: var(--ink);
+  font-size: 11.5px;
+  font-weight: 650;
+}
 
-.handoff-bulk-picks ul {
+.handoff-bulk-list ul {
   display: grid;
-  max-height: 260px;
+  gap: 8px;
+  max-height: 230px;
   overflow: auto;
-  margin: 0;
+  margin: 8px 0 0;
   padding: 0;
   list-style: none;
 }
 
-.handoff-bulk-picks li {
+.handoff-bulk-list li {
   display: grid;
-  grid-template-columns: 8px minmax(0, 1fr);
-  align-items: start;
-  gap: 3px 9px;
-  padding: 10px 12px;
+  gap: 2px;
+  border-left: 2px solid color-mix(in lch, var(--green) 45%, transparent);
+  padding-left: 8px;
 }
 
-.handoff-bulk-picks li + li { border-top: 1px solid color-mix(in lch, var(--line) 60%, transparent); }
-.handoff-bulk-picks li.is-active { background: color-mix(in lch, var(--accent) 5%, transparent); }
-.handoff-bulk-picks li.is-failed { background: color-mix(in lch, var(--red) 5%, transparent); }
+.handoff-bulk-list li.is-failed { border-left-color: var(--red); }
+.handoff-bulk-list li b { color: var(--ink); font-size: 11.5px; font-weight: 600; overflow-wrap: anywhere; }
 
-.handoff-bulk-pick-dot {
-  width: 7px;
-  height: 7px;
-  margin-top: 5px;
-  border-radius: 50%;
-  background: var(--green);
-  box-shadow: 0 0 0 3px color-mix(in lch, var(--green) 18%, transparent);
-}
-
-.handoff-bulk-pick-title {
-  color: var(--ink);
-  font-size: 12.5px;
-  font-weight: 600;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-
-.handoff-bulk-pick-state {
+.handoff-bulk-list li > span {
   display: flex;
   align-items: center;
   gap: 5px;
-  grid-column: 2;
-  color: var(--muted);
+  color: var(--faint);
   font-size: 10.5px;
   line-height: 1.45;
 }
 
-.handoff-bulk-pick-state > svg { flex: 0 0 auto; color: var(--green); }
-.handoff-bulk-picks li.is-active .handoff-bulk-pick-state > svg { color: var(--accent); }
-.handoff-bulk-picks li.is-failed .handoff-bulk-pick-state { color: var(--red); }
-.handoff-bulk-picks li.is-failed .handoff-bulk-pick-state > svg { color: var(--red); }
-.handoff-bulk-pick-state .is-muted { color: var(--faint); }
+.handoff-bulk-list li.is-failed > span { color: var(--red); }
+.handoff-bulk-list li > span > svg { flex: 0 0 auto; color: var(--accent); }
 
 /* 身份/加密核对通过、以及"带走什么"这类背景说明，都退到一行安静的元信息里，
    把视觉重量留给上面的任务清单。出问题时仍走 handoff-bulk-warning 的显眼样式。 */

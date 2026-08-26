@@ -1,4 +1,4 @@
-import { CheckCircle, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
+import { SpinnerGap } from "@phosphor-icons/react";
 import type { TaskListItem } from "@ash/shared";
 import type { TaskScopedHandoffPreflightResult } from "../lib/api.ts";
 
@@ -18,6 +18,8 @@ export function bulkTaskFacts(probe: TaskScopedHandoffPreflightResult): string[]
   return facts;
 }
 
+// 默认展开的轻量折叠列表：要回答的是「哪几个任务会被搬走、各带走什么」，
+// 用不着卡片、表头和分隔线那一套重装修——嫌长了自己收起来。
 export function BulkHandoffTaskList({
   tasks,
   preflights,
@@ -37,44 +39,32 @@ export function BulkHandoffTaskList({
 }) {
   const failureByTask = new Map(failures.map((failure) => [failure.task.id, failure.reason]));
   return (
-    <section className="handoff-bulk-picks" aria-label={`将${actionName}的任务`}>
-      <header>
-        <b>{tasks.length} 个正在跑的任务</b>
+    <details className="handoff-bulk-list" open>
+      <summary>
+        <b>{actionName} {tasks.length} 个正在跑的任务</b>
         <span>先在本机停止，到 {targetName} 接着跑</span>
-      </header>
+      </summary>
       <ul>
         {tasks.map((task) => {
           const failure = failureByTask.get(task.id);
           const probe = preflights.get(task.id);
           const active = activeTaskId === task.id;
           return (
-            <li key={task.id} className={failure ? "is-failed" : active ? "is-active" : ""}>
-              <i className="handoff-bulk-pick-dot" aria-hidden="true" />
-              <span className="handoff-bulk-pick-title">{task.title || "未命名任务"}</span>
-              <span className="handoff-bulk-pick-state">
-                {failure ? (
-                  <>
-                    <WarningCircle size={13} weight="fill" aria-hidden="true" />
-                    <span>{failure}</span>
-                  </>
-                ) : active ? (
-                  <>
-                    <SpinnerGap size={13} className="is-spinning" aria-hidden="true" />
-                    <span>{transferring ? `正在${actionName}…` : "正在检查…"}</span>
-                  </>
-                ) : probe ? (
-                  <>
-                    <CheckCircle size={13} weight="fill" aria-hidden="true" />
-                    <span>{bulkTaskFacts(probe).join(" · ") || "无附加数据"}</span>
-                  </>
-                ) : (
-                  <span className="is-muted">待检查</span>
-                )}
+            <li key={task.id} className={failure ? "is-failed" : ""}>
+              <b>{task.title || "未命名任务"}</b>
+              <span>
+                {active && <SpinnerGap size={11} className="is-spinning" aria-hidden="true" />}
+                {failure
+                  ?? (active
+                    ? `正在${transferring ? actionName : "检查"}…`
+                    : probe
+                      ? bulkTaskFacts(probe).join(" · ") || "无附加数据"
+                      : "待检查")}
               </span>
             </li>
           );
         })}
       </ul>
-    </section>
+    </details>
   );
 }

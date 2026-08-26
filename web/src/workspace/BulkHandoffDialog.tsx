@@ -475,7 +475,12 @@ export function BulkHandoffDialog({
             targetName={target.name}
           />
         ) : (
-          <p className="handoff-bulk-warning">这个项目现在没有正在跑的任务可{actionName}。已经收工的任务留在本机就行；真要单独搬某一条，去它的任务详情用单任务接力。</p>
+          <p className="handoff-bulk-warning">
+            这个项目现在没有正在跑的任务可{actionName}
+            {blockedSkipped.length > 0
+              ? `（在跑的 ${blockedSkipped.length} 个都搬不了：${[...new Set(blockedSkipped.map((skip) => skip.reason))].join("；")}）`
+              : ""}。已经收工的任务留在本机就行；真要单独搬某一条，去它的任务详情用单任务接力。
+          </p>
         )}
         {preflightFailures.length > 0 && (
           <p className="handoff-bulk-meta is-alert">{checkedAll
@@ -548,12 +553,6 @@ export function BulkHandoffDialog({
               {idleSkipped.length > 0 && ` 另有 ${idleSkipped.length} 个任务没在跑，不参与批量${actionName}。`}
             </span>
           </p>
-        )}
-        {blockedSkipped.length > 0 && (
-          <details className="handoff-bulk-skipped">
-            <summary>{blockedSkipped.length} 个在跑的任务这次搬不了</summary>
-            <ul>{blockedSkipped.map(({ task, reason }) => <li key={task.id}><b>{task.title}</b><span>{reason}</span></li>)}</ul>
-          </details>
         )}
             </div>
           </>
