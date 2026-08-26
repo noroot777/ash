@@ -154,10 +154,11 @@ export async function continueTask(
   if (head?.mode === "team") {
     if (opts.turnHeld) releaseTurn(taskId); // 占位对常驻调度台无意义，原样还回
     if (isAcceptingTask(taskId)) return false;
-    // 调度台明确拒收(离线时收到 `/compact` 这类原生命令,拼上唤醒前言就不再是命令)
-    // 时,这一句**一个字都没送出去** —— 绝不能顺手 onDelivered():那是 pending → sent
-    // 的唯一写点,标了 sent 排队/定时的那条就从托盘里消失、会话里也没有,用户的话凭空
-    // 蒸发(docs/incidents.md「排队消息凭空消失」)。跟单飞锁挡回同一口径:返回 false。
+    // 调度台明确拒收(离线时收到 `/compact` 这类原生命令,拼上唤醒前言就不再是命令;
+    // 或者进程正在收尾、stdin 已经关了)时,这一句**一个字都没送出去** —— 绝不能顺手
+    // onDelivered():那是 pending → sent 的唯一写点,标了 sent 排队/定时的那条就从托盘里
+    // 消失、会话里也没有,用户的话凭空蒸发(docs/incidents.md「排队消息凭空消失」)。
+    // 跟单飞锁挡回同一口径:返回 false。
     const delivered = await deliverToLead(taskId, userText, {
       attachments: opts.attachments,
       throwOnOpenFailure: opts.throwOnTeamUnavailable,

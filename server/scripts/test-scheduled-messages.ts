@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,7 +63,7 @@ writeFileSync(
   { mode: 0o755 },
 );
 
-const [{ db, ensureSchema }, schema, schedulesModule, pending, runs, status, transcript, paths, { bus }] = await Promise.all([
+const [{ db, ensureSchema }, schema, schedulesModule, pending, runs, status, transcript, paths, { bus }, team] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/schedules.js"),
@@ -73,6 +73,7 @@ const [{ db, ensureSchema }, schema, schedulesModule, pending, runs, status, tra
   import("../src/transcript.js"),
   import("../src/paths.js"),
   import("../src/bus.js"),
+  import("../src/team/session.js"),
 ]);
 const { projects, scheduledMessages, sessions, tasks } = schema;
 await ensureSchema();
@@ -92,10 +93,12 @@ const dueAt = new Date(now.getTime() - 60_000).toISOString();
 const projectId = "scheduled-project";
 const deliveredTaskId = "scheduled-team-delivered";
 const unavailableTaskId = "scheduled-team-unavailable";
+const closingTaskId = "scheduled-team-closing";
 const queuedTaskId = "scheduled-single-queued";
 const lockedTaskId = "scheduled-single-locked";
 const crashTaskId = "scheduled-single-crashed";
 const unavailableSessionId = "scheduled-team-unavailable-session";
+const closingSessionId = "scheduled-team-closing-session";
 const unavailableTranscript = transcript.sessionTranscriptPath(unavailableTaskId, unavailableSessionId);
 
 // 「调度台不可用」这一档必须与本机装了什么 CLI 无关:claude/codex 都实现了常驻会话,
@@ -198,6 +201,7 @@ try {
   await db.insert(tasks).values([
     taskRow(deliveredTaskId, "claude", "running"),
     taskRow(unavailableTaskId, "gemini", "idle"),
+    taskRow(closingTaskId, "claude", "running"),
     { ...taskRow(queuedTaskId, "claude", "running"), mode: "single", team: null },
     { ...taskRow(lockedTaskId, "claude", "running"), mode: "single", team: null },
     { ...taskRow(crashTaskId, "claude", "done"), mode: "single", team: null },
@@ -210,6 +214,19 @@ try {
     executor: "gemini@test",
     cwd: root,
     startedAt: at,
+  });
+  await db.insert(sessions).values({
+    id: closingSessionId,
+    taskId: closingTaskId,
+    role: "lead",
+    agentType: "claude",
+    executor: "claude@test",
+    cwd: root,
+    cliSessionId: closingSessionId,
+    resumeCommand: `claude --resume ${closingSessionId}`,
+    startedAt: at,
+    turnStartedAt: at,
+    activeMs: 0,
   });
   mkdirSync(dirname(unavailableTranscript), { recursive: true });
   await db.insert(scheduledMessages).values([
@@ -250,6 +267,76 @@ try {
   // 投递成功和取消都得让托盘知道 —— 这两条是它「少一行」的唯一权威信号。
   assert.ok(trayEventCount(deliveredTaskId) > 0, "消息标成 sent 却没通知托盘,前端会一直挂着「排队中」");
   assert.ok(trayEventCount(unavailableTaskId) > 0, "消息取消了却没通知托盘");
+
+  // ── 调度台在收尾窗口里明确拒收:行留在 pending,下一台接手时补送 ──────────────
+  // 「lead 不可用」上面已经测了,但那一档是**开不起来**(执行器不支持常驻会话)。真实
+  // 生命周期里还有一档更窄的:空闲回收已经 close() 了 stdin / codex resident 已经进
+  // closing,但 closeLead 还没把它从 leads 里摘掉 —— 调度台「看起来在线」,两种 resident
+  // 都会按 ResidentHandle.send 的回执契约明确返回 false。这一句一个字都没进去,却曾经被
+  // 上层无条件当成投递成功:行标 sent、租约清掉,全表扫描只看 pending,于是它从托盘里消失
+  // 再没人补送,而同一份事实在时间线里写着「没能送进调度台进程」(2026-08-26 第 14 轮审查)。
+  const closingText = "定时指令:调度台收尾窗口也必须真正送达";
+  // 接手的那台是**真开出来的**(假 claude 在 PATH 上):旧台一收台,closeLead 把任务落回
+  // idle,status 钩子就地把托盘排空 —— 走的正是生产那条路。resume 会复用同一行会话,
+  // 所以补送前后是同一份 .md,「原文只能出现一遍」在这一个文件上就验得干净。
+  const closingMd = transcript.sessionTranscriptPath(closingTaskId, closingSessionId);
+  const countIn = (path: string, needle: string) =>
+    (existsSync(path) ? readFileSync(path, "utf8") : "").split(needle).length - 1;
+  mkdirSync(dirname(closingMd), { recursive: true });
+  let closingAttempts = 0;
+  let releaseClosing!: () => void;
+  const closingGate = new Promise<void>((resolve) => { releaseClosing = resolve; });
+  async function* closingEvents() {
+    await closingGate;
+    yield { kind: "done", exitStatus: 0 } as const;
+  }
+  team.attachLead({
+    taskId: closingTaskId, sessId: closingSessionId, cliSessionId: closingSessionId,
+    agentType: "claude", executorId: null, model: null, reasoningEffort: null, cwd: root,
+    handle: {
+      sessionId: closingSessionId, commandLine: `claude --resume ${closingSessionId}`,
+      events: closingEvents(),
+      // 收尾窗口里的 resident 就是这么回执的:stdin 已经关了,一个字都进不去。
+      send: () => { closingAttempts += 1; return false; },
+      interrupt: () => {}, dropSession: () => {}, close: () => {}, kill: () => {},
+    },
+    out: createWriteStream(closingMd, { flags: "a" }),
+    busy: false, turnStart: null, pending: [], notices: [], pendingCredential: null,
+    wantedStatus: null, statusTimer: null, retired: false, idleTimer: null, closing: "recycle",
+  });
+
+  await db.insert(scheduledMessages).values([messageRow("scheduled-closing", closingTaskId, closingText)]);
+  await pending.deliverPendingMessages(closingTaskId);
+  await waitFor(() => closingAttempts === 1, "这一档的前提是真的尝试送过一次并被拒收");
+  await new Promise((resolve) => setTimeout(resolve, 150));
+
+  const rejected = (await db.select().from(scheduledMessages)
+    .where(eq(scheduledMessages.id, "scheduled-closing"))).at(0)!;
+  assert.equal(rejected.status, "pending", "调度台一个字都没收下,这条却被标成 sent —— 它从此从托盘里消失,再没人补送");
+  assert.equal(rejected.sentAt, null, "没送出去的消息不得记 sentAt");
+  assert.equal(rejected.deliveringSince, null, "拒收之后必须把租约还回去,否则这条永远卡在「正在投递」");
+  assert.match(readFileSync(closingMd, "utf8"), /没能送进调度台进程/, "拒收必须持久可见,不能只弹个 toast");
+  assert.equal(
+    countIn(closingMd, closingText),
+    0,
+    "被拒的那一次就把原文当成「用户已经说过」落了盘 —— 下一台补送时同一句话会在会话里出现两遍",
+  );
+
+  releaseClosing(); // 旧台收台 → closeLead → 落 idle → status 钩子排空托盘
+  await waitFor(
+    async () => (await db.select().from(scheduledMessages)
+      .where(eq(scheduledMessages.id, "scheduled-closing"))).at(0)!.status === "sent",
+    "换上一台健康调度台之后仍然没人补送这条 —— 用户预定的指令永久不执行",
+  );
+  await waitFor(() => countIn(closingMd, closingText) > 0, "补送成功了,原话却没落进会话时间线");
+  await waitFor(() => !team.teamIsLive(closingTaskId), "补送那一台没有收台");
+  await new Promise((resolve) => setTimeout(resolve, 200)); // 让可能的第二次投递自己冒出来
+  const resent = (await db.select().from(scheduledMessages)
+    .where(eq(scheduledMessages.id, "scheduled-closing"))).at(0)!;
+  assert.ok(resent.sentAt, "补送成功必须记 sentAt");
+  assert.equal(countIn(leadLog, closingText), 1, "补送必须恰好一次 —— 送两遍等于调度者被同一条指令支使两回");
+  assert.equal(countIn(closingMd, closingText), 1, "同一句话在会话时间线里落了不止一遍");
+  console.log("✓ 调度台收尾窗口拒收:行留在 pending + 租约清空,下一台接手时恰好补送一次");
 
   // ── 排队追问:运行中不插队,任务一落终态由 status 钩子立刻发出 ────────────
   const queuedAfterTick = (await db.select().from(scheduledMessages)
@@ -415,6 +502,7 @@ try {
   delete process.env.ASH_TEST_LEAD_LOG;
   rmSync(join(paths.RUNS_DIR, deliveredTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, unavailableTaskId), { recursive: true, force: true });
+  rmSync(join(paths.RUNS_DIR, closingTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, queuedTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, lockedTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, crashTaskId), { recursive: true, force: true });

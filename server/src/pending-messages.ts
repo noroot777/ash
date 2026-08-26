@@ -289,7 +289,7 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
               await markSent(m);
             },
           });
-          if (!started) await abortDelivery(m); // 理论上团队路径不会被挡回,租约也不留悬
+          if (!started) await abortDelivery(m); // 调度台明确拒收:清租约、保持 pending,下一台接手时补送
         } catch (reason) {
           if (delivered) throw reason; // 已经进调度台了,不是「未发送」,交给外层日志
           const detail = reason instanceof Error ? reason.message : String(reason);

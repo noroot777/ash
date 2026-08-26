@@ -128,9 +128,9 @@ export function teamIsLive(taskId: string): boolean {
 }
 
 // 用户插话(continueTask 顶部分流过来)。
-// **返回值 = 这句话有没有真的进到调度台**。false 只有一种来源:离线时收到 CLI 原生
-// 命令,被下面明确拒收(理由写进了会话)。上层拿它决定要不要记「已送达」—— 记了就
-// 等于把一句从未送出的话标成 sent(见 continueTask 里那段)。
+// **返回值 = 这句话有没有真的进到调度台**。false 有两种来源:离线时收到 CLI 原生命令
+// 被明确拒收,以及在线的调度台进程正在收尾、stdin 已经关了。上层拿它决定要不要记
+// 「已送达」—— 记了就等于把一句从未送出的话标成 sent(见 continueTask 里那段)。
 export async function deliverToLead(
   taskId: string,
   text: string,
@@ -170,7 +170,8 @@ export async function haltTeam(taskId: string): Promise<void> {
 
 // ── 投递 ────────────────────────────────────────────────────────────────────
 // 返回 true = 这句话进了调度台(或者由 open 带着它开台);false = **明确拒收**,
-// 一个字都没送出去(见下面的原生命令分支)。调用方必须分得清这两者。
+// 一个字都没送出去。两个来源:离线时收到 CLI 原生命令(见下面的分支),以及在线的
+// 调度台进程已经关了 stdin(见 push)。调用方必须分得清这两者。
 async function deliver(
   taskId: string,
   text: string,
@@ -235,8 +236,8 @@ async function deliver(
       return true;
     }
   }
-  await push(lead, text, kind);
-  return true;
+  // 拒收的回执一路往上传:调用方拿它决定「这句话到底算不算送出去了」(见 push)。
+  return push(lead, text, kind);
 }
 
 
@@ -288,32 +289,44 @@ function open(taskId: string, text: string, kind: Kind): Promise<Lead> {
   return p;
 }
 
-async function push(lead: Lead, text: string, kind: Kind): Promise<void> {
-  if (!text.trim()) return;
+/**
+ * 把一句话交给这台调度台。**返回值 = 它到底有没有被接住**。
+ *
+ * false 只有一个来源:进程明确拒收(收尾窗口里 stdin 已经关了,见 ResidentHandle.send)。
+ * 这个回执必须一路传回上层 —— `deliver` → `deliverToLead` → `continueTask` 的
+ * `onDelivered` 是排队/定时消息 pending → sent 的**唯一写点**。标了 sent,那条就从待发送
+ * 托盘里消失、全表扫描也不会再看它(只扫 pending),用户预定的指令从此没人执行,而时间线
+ * 上只有一句「没送进去」跟它自相矛盾(2026-08-26 第 14 轮审查)。
+ *
+ * 执行者汇报(inbound)被拒仍算 true:它有自己的持久待送队列接着(见 queueInbound),
+ * 已经被接住了,不需要上层再管第二遍。
+ */
+async function push(lead: Lead, text: string, kind: Kind): Promise<boolean> {
+  if (!text.trim()) return true;
   clearIdle(lead);
   if (kind === "user") {
     const promptedText = withSkillInvocation({ agentType: lead.agentType, cwd: lead.cwd, text });
     // 见头注 ②③:不打断的话用户要干等一整个回合,那就不是 steering 了。
-    if (lead.busy) {
-      lead.handle.interrupt();
-      recordSystemTurn(lead, INTERRUPT_NOTE);
-    }
+    const interrupted = lead.busy;
+    if (interrupted) lead.handle.interrupt();
     const at = now();
-    recordUserConversationTurn({ taskId: lead.taskId, sessionId: lead.sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at });
-    // 用户那句话无论如何都要留在时间线上,但**送没送进去要如实说**:进程正在收尾时
-    // stdin 已经关了,这条消息一个字都进不去(见 ResidentHandle.send)。
+    // **先确认进程收下了,再往时间线上落**。落早了这一句会以「用户已经说过」的样子留在
+    // .md 里,可它接着还要由下一台补送 —— 同一句话在会话里出现两遍,而中间那一遍模型
+    // 根本没收到。被拒时只留失败说明:原文还在待发送托盘里,用户看得见也等得到。
     if (!sendToLead(lead, promptedText)) {
-      reportLeadFailure(lead, "这条消息没能送进调度台进程 —— 它正在收尾。等它收完台,再说一遍就会重新接回会话送进去。", at);
-      return;
+      reportLeadFailure(lead, "这条消息没能送进调度台进程 —— 它正在收尾。这一句留在待发送托盘里,等下一台调度台接手时自动补送。", at);
+      return false;
     }
+    if (interrupted) recordSystemTurn(lead, INTERRUPT_NOTE, at);
+    recordUserConversationTurn({ taskId: lead.taskId, sessionId: lead.sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at });
     void beginTurn(lead, at);
-    return;
+    return true;
   }
   if (lead.busy) {
     // 回合结束再合并成一条,省一轮模型调用 —— 但**先落库**:这一等横跨换台、关台和重启,
     // 只压在内存里的话,进程一换这条汇报就没了(见 team/inbound-queue.ts)。
     lead.pending.push(await queueInbound(lead, text));
-    return;
+    return true;
   }
   const at = now();
   // 跟 endTurn 同一条规矩:**先确认进程收下了,再算它送出去了**。还挂在 leads 里不等于
@@ -322,10 +335,11 @@ async function push(lead: Lead, text: string, kind: Kind): Promise<void> {
   if (!sendToLead(lead, text)) {
     lead.pending.push(await queueInbound(lead, text, at));
     reportLeadFailure(lead, "执行者消息没能送进调度台进程(它正在收尾),先排进待送队列交给下一台接手的调度台。", at);
-    return;
+    return true;
   }
   recordSystemTurn(lead, text, at);
   void beginTurn(lead, at);
+  return true;
 }
 
 // ── 开台 / 接回 ─────────────────────────────────────────────────────────────
