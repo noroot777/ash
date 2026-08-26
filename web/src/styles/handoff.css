@@ -588,10 +588,13 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   padding: 9px 10px;
 }
 
-/* 会被接力的任务清单：默认展开的轻量折叠列表，和底部那些次要信息同一档视觉，
-   靠加粗标题而不是卡片边框做重点。任务多了用户可以自己收起来。 */
+/* 会被接力的任务清单：就是弹窗里那种最普通的可折叠列表——一行 summary 加若干
+   「标题 + 一行小字」，默认展开。除了标题加粗，不额外加任何装饰。 */
 .handoff-bulk-list {
-  padding: 0 2px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--raised);
+  padding: 8px 10px;
 }
 
 .handoff-bulk-list > summary {
@@ -600,20 +603,12 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   font-size: 11px;
 }
 
-/* 保留原生 ▸ 标记（summary 一旦变 flex 就没了），让"可以收起来"这件事自己说出来。 */
-.handoff-bulk-list > summary b {
-  margin-right: 7px;
-  color: var(--ink);
-  font-size: 11.5px;
-  font-weight: 650;
-}
-
 .handoff-bulk-list ul {
   display: grid;
-  gap: 8px;
-  max-height: 230px;
+  gap: 7px;
+  max-height: 210px;
   overflow: auto;
-  margin: 8px 0 0;
+  margin: 9px 0 0;
   padding: 0;
   list-style: none;
 }
@@ -621,20 +616,20 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
 .handoff-bulk-list li {
   display: grid;
   gap: 2px;
-  border-left: 2px solid color-mix(in lch, var(--green) 45%, transparent);
-  padding-left: 8px;
+  font-size: 10.5px;
 }
 
-.handoff-bulk-list li.is-failed { border-left-color: var(--red); }
-.handoff-bulk-list li b { color: var(--ink); font-size: 11.5px; font-weight: 600; overflow-wrap: anywhere; }
+.handoff-bulk-list li b {
+  font-size: 12px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
 
 .handoff-bulk-list li > span {
   display: flex;
   align-items: center;
   gap: 5px;
   color: var(--faint);
-  font-size: 10.5px;
-  line-height: 1.45;
 }
 
 .handoff-bulk-list li.is-failed > span { color: var(--red); }

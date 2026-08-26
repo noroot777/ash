@@ -77,8 +77,7 @@ assert.deepEqual(result.skipped.map((item) => item.task.id), ["team", "queued", 
 assert.match(result.skipped.find((item) => item.task.id === "pending").reason, /单独收口/);
 assert.match(result.skipped.find((item) => item.task.id === "inbound").reason, /未能确认任务来源机/);
 
-// 接力是把「正在跑的活」挪到另一台机器接着跑，不是搬项目历史：收工的任务一律落选，
-// 而且要和「在跑但搬不了」区分开（弹窗把前者压成一行，后者才逐条列原因）。
+// 接力是把「正在跑的活」挪到另一台机器接着跑，不是搬项目历史：收工的任务一律落选。
 const statusResult = partitionBulkHandoffTasks([
   task("running", { status: "running" }),
   task("queued-status", { status: "queued" }),
@@ -94,16 +93,11 @@ assert.deepEqual(
   "只有占着执行槽的任务才进批量接力清单",
 );
 assert.deepEqual(
-  statusResult.skipped.filter((item) => item.kind === "idle").map((item) => item.task.id),
-  ["paused", "done", "failed", "awaiting-review"],
-  "没在跑的任务标成 idle，好让弹窗压成一行计数",
+  statusResult.skipped.map((item) => item.task.id),
+  ["paused", "done", "failed", "awaiting-review", "live-team"],
+  "落选的任务都留在 skipped 里（弹窗只报个数，不铺开讲原因）",
 );
 assert.match(statusResult.skipped[0].reason, /没有在运行/, "落选原因要说人话");
-assert.deepEqual(
-  statusResult.skipped.filter((item) => item.kind !== "idle").map((item) => item.task.id),
-  ["live-team"],
-  "在跑但搬不了的任务必须逐条留原因，不能混进 idle 计数",
-);
 assert.equal(isLiveBulkTask(task("q", { status: "queued" })), true, "排队中同样占执行槽");
 assert.equal(isLiveBulkTask(task("r", { status: "awaiting_review" })), false);
 
@@ -268,6 +262,7 @@ assert.match(bulkDialog, /bulkTargetProjectId/, "批量移回应按任务使用�
 assert.match(bulkDialog, /handoff-bulk-project-fixed/, "纯移回批次应只读说明按任务自动归位，而不是提供单一项目下拉框");
 assert.match(bulkDialog, /原项目待逐项确认/, "逐项检查完成前不能把首个 probe 误报成整批只有一个原项目");
 assert.doesNotMatch(bulkDialog, /全部可|BulkHandoffScope/, "批量接力没有「整项目搬家」这一档，不该再出现范围选择");
-assert.match(bulkDialog, /idleSkipped/, "没在跑的任务压成一行计数，不塞进逐条列表");
+assert.match(bulkDialog, /skipped\.length > 0 && ` 项目里另外/, "搬不走的任务只报个数，不逐条讲原因");
+assert.doesNotMatch(bulkDialog, /idleSkipped|blockedSkipped/, "落选任务不再分档展示");
 
 console.log("bulk handoff eligibility tests passed");

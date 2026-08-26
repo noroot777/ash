@@ -18,8 +18,7 @@ export function bulkTaskFacts(probe: TaskScopedHandoffPreflightResult): string[]
   return facts;
 }
 
-// 默认展开的轻量折叠列表：要回答的是「哪几个任务会被搬走、各带走什么」，
-// 用不着卡片、表头和分隔线那一套重装修——嫌长了自己收起来。
+// 就是一个默认展开的普通折叠列表：一行 summary，下面每条任务一行标题加一行小字。
 export function BulkHandoffTaskList({
   tasks,
   preflights,
@@ -40,10 +39,7 @@ export function BulkHandoffTaskList({
   const failureByTask = new Map(failures.map((failure) => [failure.task.id, failure.reason]));
   return (
     <details className="handoff-bulk-list" open>
-      <summary>
-        <b>{actionName} {tasks.length} 个正在跑的任务</b>
-        <span>先在本机停止，到 {targetName} 接着跑</span>
-      </summary>
+      <summary>{actionName} {tasks.length} 个正在跑的任务，先在本机停止，到 {targetName} 接着跑</summary>
       <ul>
         {tasks.map((task) => {
           const failure = failureByTask.get(task.id);

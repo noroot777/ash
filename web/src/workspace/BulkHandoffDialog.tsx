@@ -113,8 +113,6 @@ export function BulkHandoffDialog({
   const returnOnly = eligible.length > 0 && eligible.every(
     (task) => bulkTaskReturnsToTarget(task, batchFingerprint),
   );
-  const idleSkipped = skipped.filter((skip) => skip.kind === "idle");
-  const blockedSkipped = skipped.filter((skip) => skip.kind !== "idle");
   const canProbeWithoutApproval = Boolean(target.peerFp) || returnOnly;
   const actionName = returnOnly ? "移回" : "接力";
   const sample = eligible[0] ?? null;
@@ -475,12 +473,7 @@ export function BulkHandoffDialog({
             targetName={target.name}
           />
         ) : (
-          <p className="handoff-bulk-warning">
-            这个项目现在没有正在跑的任务可{actionName}
-            {blockedSkipped.length > 0
-              ? `（在跑的 ${blockedSkipped.length} 个都搬不了：${[...new Set(blockedSkipped.map((skip) => skip.reason))].join("；")}）`
-              : ""}。已经收工的任务留在本机就行；真要单独搬某一条，去它的任务详情用单任务接力。
-          </p>
+          <p className="handoff-bulk-warning">这个项目现在没有正在跑的任务可{actionName}。已经收工的任务留在本机就行；真要单独搬某一条，去它的任务详情用单任务接力。</p>
         )}
         {preflightFailures.length > 0 && (
           <p className="handoff-bulk-meta is-alert">{checkedAll
@@ -545,12 +538,12 @@ export function BulkHandoffDialog({
             )}
           </>
         )}
-        {(eligible.length > 0 || idleSkipped.length > 0) && (
+        {(eligible.length > 0 || skipped.length > 0) && (
           <p className="handoff-bulk-meta is-quiet">
             <span>
               {eligible.length > 0
                 && `每个任务带走完整 CLI 会话、附件与可带走的 Git 状态，本机这份确认${actionName}后从列表消失。`}
-              {idleSkipped.length > 0 && ` 另有 ${idleSkipped.length} 个任务没在跑，不参与批量${actionName}。`}
+              {skipped.length > 0 && ` 项目里另外 ${skipped.length} 个任务不参与本次${actionName}。`}
             </span>
           </p>
         )}

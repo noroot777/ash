@@ -55,7 +55,7 @@ try {
     "抓一遍 outbound-state 的超时分支",
     "补 handoff-return 的重试用例",
   ]);
-  assert.match(await picks.locator("summary").innerText(), /接力 3 个正在跑的任务[\s\S]*mac-mini 接着跑/);
+  assert.match(await picks.locator("summary").innerText(), /接力 3 个正在跑的任务，先在本机停止，到 mac-mini 接着跑/);
 
   // 打开时只探第一条（拿目标项目清单），其余行如实说「待检查」，不装作已经查过。
   const states = () => picks.locator("li > span").allInnerTexts();
@@ -85,17 +85,20 @@ try {
     "身份+加密压成一行元信息",
   );
   assert.ok(
-    meta.some((line) => /另有 2 个任务没在跑，不参与批量接力/.test(line)),
-    "没在跑的任务只报一个数，不铺开列",
+    meta.some((line) => /项目里另外 3 个任务不参与本次接力/.test(line)),
+    "搬不走的任务只报一个数，不铺开讲原因",
   );
   assert.ok(
     meta.some((line) => /1 个任务没通过检查，本次跳过；其余 2 个照常接力/.test(line)),
     "跳过结论也走同一档小字，别再开红色大块",
   );
 
-  // 4. 「在跑但搬不了」的那条日常不占版面（清单里搬得走的才是用户要的信息）。
+  // 4. 落选原因一律不铺开：用户要的是搬得走的那些，不是一份「为什么不能搬」的清单。
   assert.equal(await page.locator(".handoff-bulk-skipped").count(), 0);
-  assert.doesNotMatch(await page.locator(".handoff-bulk-body").innerText(), /搬不了/);
+  assert.doesNotMatch(
+    await page.locator(".handoff-bulk-body").innerText(),
+    /搬不了|只支持单飞任务|不会移动/,
+  );
 
   const shot = process.env.BULK_HANDOFF_SHOT;
   if (shot) await page.locator(".handoff-bulk-dialog").screenshot({ path: shot });
@@ -104,10 +107,8 @@ try {
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/bulk-handoff-dialog.html?empty=1`);
   const empty = page.locator(".handoff-bulk-body .handoff-bulk-warning");
   await empty.waitFor();
-  // 一个都搬不了时反而要说清楚：否则「明明有任务在跑」和「没有可接力的」自相矛盾。
-  assert.match(await empty.innerText(), /没有正在跑的任务可接力/);
-  assert.match(await empty.innerText(), /在跑的 1 个都搬不了：目前只支持单飞任务/);
-  assert.match(await empty.innerText(), /单任务接力/);
+  assert.match(await empty.innerText(), /没有正在跑的任务可接力[\s\S]*单任务接力/);
+  assert.doesNotMatch(await empty.innerText(), /只支持单飞任务/, "空态也不铺开落选原因");
   assert.equal(await page.locator(".handoff-bulk-list").count(), 0);
   assert.equal(await page.locator(".handoff-bulk-dialog footer .is-primary").isDisabled(), true);
   const emptyShot = process.env.BULK_HANDOFF_SHOT_EMPTY;

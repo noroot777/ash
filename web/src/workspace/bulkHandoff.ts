@@ -4,8 +4,6 @@ import type { TaskScopedHandoffPreflightResult } from "../lib/api.ts";
 export type BulkHandoffSkip = {
   task: TaskListItem;
   reason: string;
-  // "idle" = 只是没在跑，不是哪里出了问题；弹窗把这类压成一行计数。
-  kind?: "idle";
 };
 
 // 与「正式接力会先停止它们」的警告同一套判据：只有这两种状态的任务真的占着执行槽。
@@ -96,15 +94,10 @@ export function bulkTaskReturnsToTarget(
     && sameFingerprint(task.handoff.peerFp, targetFingerprint);
 }
 
-// 「没在跑」是批量接力最常见也最无聊的落选原因（一个老项目里有几百条），
-// 单独标出来，好让弹窗把它压成一行，而不是塞满「不会移动」清单。
-type BulkTaskBlock = { reason: string; kind?: "idle" };
-
-const bulkTaskBaseReason = (task: TaskListItem): BulkTaskBlock | null => {
+const bulkTaskBaseReason = (task: TaskListItem): { reason: string } | null => {
   // 先划候选池：批量接力搬的是「此刻还在跑的活」，不是项目搬家。已经收工的任务留在
-  // 本机就行；真要单独搬某一条历史任务，走任务详情里的单任务接力。放在最前面，
-  // 剩下的落选原因就都是「在跑但搬不了」，弹窗可以照这个分法讲。
-  if (!isLiveBulkTask(task)) return { reason: "没有在运行，批量接力只移动正在跑的任务", kind: "idle" };
+  // 本机就行；真要单独搬某一条历史任务，走任务详情里的单任务接力。
+  if (!isLiveBulkTask(task)) return { reason: "没有在运行，批量接力只移动正在跑的任务" };
   if (task.mode !== "single") return { reason: "目前只支持单飞任务" };
   if (task.queueId != null) return { reason: "仍在任务队列中" };
   if (task.verifyRound != null) return { reason: "验证轮尚未结束" };
