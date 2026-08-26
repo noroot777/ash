@@ -28,6 +28,7 @@ export function AgentDetectionResults({
         <div className="settings-cli-grid">
           {available.map((cli) => {
             const registered = !!cli.type && profiles.some((profile) => profile.type === cli.type);
+            const registrationBlocked = !!cli.versionWarning;
             return (
               <article key={cli.key}>
                 <span className="settings-cli-state is-ready"><Check size={12} /></span>
@@ -46,10 +47,10 @@ export function AgentDetectionResults({
                 ) : (
                   <button
                     type="button"
-                    disabled={registeringKey !== null}
+                    disabled={registeringKey !== null || registrationBlocked}
                     onClick={() => onRegister(cli)}
                   >
-                    {registeringKey === cli.key ? "注册中…" : "注册"}
+                    {registrationBlocked ? "请先升级" : registeringKey === cli.key ? "注册中…" : "注册"}
                   </button>
                 )}
               </article>

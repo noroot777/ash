@@ -14,12 +14,19 @@ import { now } from "./util.js";
 import { setTaskStatus } from "./status.js";
 import { takeSteered, takeStopped, takeConfirmed, type StopSettle } from "./runs.js";
 import type { AgentExecutor, RunHandle } from "./executors/types.js";
-import { LOST_SESSION_PATCH, SESSION_LOST_NOTE, isSessionLost } from "./executors/session-lost.js";
+import {
+  LOST_SESSION_PATCH,
+  mergeSessionResumeFault,
+  sessionResumeFaultNote,
+  shouldDropSession,
+  type SessionResumeFault,
+} from "./executors/session-lost.js";
 import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "./transcript.js";
+import { isSessionScopeNotice } from "./session-notice.js";
 import { notifyTeamLead } from "./team/inbox.js";
 import { handleTaskSettlement } from "./review.js";
 import { handleFreeWorkflowSettlement } from "./free-workflow.js";
-import { finishFreeTaskExecution, recordFreeTaskExecutionStartIfFree } from "./free-workflow-events.js";
+import { createExecutionCloser, recordFreeTaskExecutionStartIfFree } from "./free-workflow-events.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { clearTurnStart, turnOutputHint } from "./turn-output.js";
@@ -233,14 +240,17 @@ export async function consumeSingleRun(a: {
         return null;
       })
     : null;
-  let executionFinished = false;
-  const closeExecution = async (status: "completed" | "failed" | "canceled" | "paused", endedAt: string) => {
-    if (!executionEventId || executionFinished) return;
-    try {
-      await finishFreeTaskExecution(executionEventId, status, endedAt);
-      executionFinished = true;
-    } catch (error) {
-      console.warn(`[ash] failed to record free workflow execution end for ${taskId}:`, error);
+  // 终态只认第一次请求的那个,finally 那次兜底只准重试它 —— 理由见 createExecutionCloser。
+  const closeExecution = createExecutionCloser(executionEventId, taskId);
+  // 会话轮换旁注的缓冲与落盘。**必须声明在 try 外面**：异常路径的兜底 flush 挂在
+  // finally 上，声明进 try 里它就不在作用域内了。
+  // 先取空再写：正常尾部（agentEnd 之后）跑一次，finally 再跑一次也只是空转 —— 既不会
+  // 把同一条写两遍，也不会往已经 end 掉的流上再写（写已 end 的流会当场打崩 server）。
+  const sessionNotices: { text: string; at: string }[] = [];
+  const flushSessionNotices = () => {
+    const notices = sessionNotices.splice(0);
+    for (const notice of notices) {
+      writeTurn(out, { t: "system", agent: agentType, text: notice.text }, notice.at);
     }
   };
   try {
@@ -248,9 +258,10 @@ export async function consumeSingleRun(a: {
   let exitStatus = 0;
   let doneEvent: AgentEvent | null = null;
   let streamError: unknown = null;
-  // CLI 否认过这条会话吗（见 executors/session-lost.ts）。认下来的话这一轮收尾时要把
-  // 失效的 id 从库里清掉，否则每一次重试都在 --resume 同一个不存在的会话。
-  let sessionLost = false;
+  // CLI 否认过这条会话，或 Codex stderr 证明 thread 已 poisoned 吗（见
+  // executors/session-lost.ts）。认下来的话这一轮收尾时要把失效 id 从库里清掉，
+  // 否则每一次重试都在 --resume 同一条坏会话。
+  let sessionFault: SessionResumeFault | null = null;
   let titleDone = !a.autoTitle; // when autoTitle, swallow text until the title line is parsed
   let head = "";
   let pendingTraceText = "";
@@ -267,6 +278,12 @@ export async function consumeSingleRun(a: {
     if (!pendingTraceText) return;
     appendSessionTrace(taskId, sessId, a.turnStart, { kind: "text", text: pendingTraceText });
     pendingTraceText = "";
+  };
+  // 会话轮换旁注：实时立刻播（用户正看着），落盘攒到 writeTurnEnd 之后再补 —— 见
+  // 事件循环里那段注释，夹在正文和 agentEnd 之间会让重建出来的回合用时失准。
+  const noteSessionNotice = (text: string, at = now()) => {
+    sessionNotices.push({ text, at });
+    publishEvent({ kind: "system", text, at });
   };
   const emitText = (text: string) => {
     if (!text) return;
@@ -360,6 +377,12 @@ export async function consumeSingleRun(a: {
         // 现场，没有一例长这样（两例「先寒暄一句」的寒暄和标题同在一个 text 事件里），
         // 拿这个换顺序永远正确，划算。
         if (!titleDone && head) await resolveTitle(true);
+        // scope:"session" 说的是「这条恢复会话作废了」，不是「本回合失败了」（见
+        // executors/codex.ts 推它的地方）。当成普通 error 会把一个 exit 0、正常交卷的回合
+        // 记成「执行过程里有异常」；跟 duet/team 一样按 scope 分流（判据共用
+        // session-notice.ts 那一个，别再各自内联一份），降成 system 旁注。
+        // **落盘要等到 writeTurnEnd 之后**：重建时 agentEnd 只往「最后一段是 agent」的
+        // 气泡上盖时间戳（shared/src/index.ts），夹在正文和 agentEnd 之间会让本回合用时失准。
         const emittedEvent = event.kind === "usage"
           ? await recordSessionUsageEvent(sessId, event, agentType, cliSessionId)
           : event;
@@ -368,10 +391,15 @@ export async function consumeSingleRun(a: {
           doneEvent = emittedEvent;
           continue;
         }
+        if (emittedEvent.kind === "error" && isSessionScopeNotice(emittedEvent)) {
+          sessionFault = mergeSessionResumeFault(sessionFault, emittedEvent.message);
+          noteSessionNotice(emittedEvent.message);
+          continue;
+        }
         persistTrace(emittedEvent);
         if (emittedEvent.kind === "error") {
           writeRunError(out, emittedEvent.message);
-          if (isSessionLost(emittedEvent.message)) sessionLost = true;
+          sessionFault = mergeSessionResumeFault(sessionFault, emittedEvent.message);
         }
         // 水位相反：**覆盖**。它属于整条会话的此刻，不属于某一个回合，所以也不进 trace。
         if (emittedEvent.kind === "context") await setSessionContext(sessId, emittedEvent.context);
@@ -384,6 +412,9 @@ export async function consumeSingleRun(a: {
     streamError = error;
   } finally {
     if (offsetTimer) clearInterval(offsetTimer);
+    await a.handle.cleanup?.().catch((error) => {
+      console.warn(`[ash] failed to clean descendants after task ${taskId}:`, error);
+    });
   }
   // 一个换行都没等到就收流了（整轮只吐了一行的那种）。这里补一次 flush 扫描：
   // 老实现直接把缓冲原样吐出去，那一行哪怕就是标准的 `标题：xxx` 也白瞎。
@@ -401,8 +432,9 @@ export async function consumeSingleRun(a: {
   // CLI 否认了这条会话：把失效的 id 连同由它派生的三件套恢复命令一起清掉。清了之后
   // orchestrator 的 `resuming`（判据就是「这条会话行上有没有 cli_session_id」）自然为
   // 假，下一次运行走全新会话那条路 —— 不必在别处再加一个「要不要续」的开关。
-  // 退出码 0 也要求上：正常收尾的回合不该因为正文里出现过这句话就丢掉会话。
-  const dropSession = !steered && sessionLost && exitStatus !== 0;
+  // 普通 lost 仍要求非零退出，防止正文碰巧出现原话；poisoned 是 stderr 诊断生成的
+  // error，即使 exit 0 / turn.completed 也必须清掉。
+  const dropSession = !steered && shouldDropSession(sessionFault, exitStatus);
   await closeExecution(steered ? "canceled" : stopped ?? (exitStatus === 0 ? "completed" : "failed"), endIso);
   await db
     .update(sessions)
@@ -439,12 +471,13 @@ export async function consumeSingleRun(a: {
     publishEvent(doneEvent);
   }
   if (dropSession) {
-    // 只弹一句错误不算数：用户看到的是一行英文 `No conversation found with session ID`，
-    // 看不出 ash 已经替他把死 id 清了、也看不出重试会丢上下文。跟别的诊断一样三处都落：
-    // .md 原始产物、trace（刷新后还在）、SSE（实时）。
-    out.write(`\n> ${SESSION_LOST_NOTE}\n`);
-    persistTrace({ kind: "error", message: SESSION_LOST_NOTE }, endIso);
-    publishEvent({ kind: "error", message: SESSION_LOST_NOTE });
+    const note = sessionResumeFaultNote(sessionFault!);
+    // 只弹一句话不算数：用户看不出 ash 已经替他把坏 id 清了、也看不出重试会丢上下文。
+    // 落成持久 system 旁注（.md 原始产物 + SSE），刷新后还在；**不落 error** —— 换会话
+    // 不等于这一轮失败，真正的失败自有它自己的 error 和退出码（见 session-notice.ts）。
+    // 落盘仍走缓冲：这里已经在收尾链上，正文早写完了，夹在 writeTurnEnd 前面会让重建
+    // 出来的回合用时失准（见 noteSessionNotice）。
+    noteSessionNotice(note, endIso);
   }
   // 这一轮有没有「交卷时通道断了」的调用：有就替它补录。**必须排在 settleTaskStatus
   // 之前** —— complete_task 的补录要赶在结算读确认标记之前落库，晚一步，一个干完活的
@@ -479,8 +512,15 @@ export async function consumeSingleRun(a: {
     publishEvent({ kind: "error", message: settled.note });
   }
   writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
+  flushSessionNotices();
   out.end();
   } finally {
+    // 正常路径上上面那句已经把旁注清空了，这里是**异常路径**的保险：清库、重放、结算
+    // 任何一步抛错，都不能让「这条会话作废了、下次会丢上下文」只活在实时 SSE 里 ——
+    // 用户一刷新就什么都看不到，还会去重试同一条坏会话。flushSessionNotices 先取空再写，
+    // 所以正常路径走到这里必然是空的，绝不会往已经 end 掉的流上再写一次（写已 end 的
+    // 流会当场打崩 server，见 duet/turn.ts 里同样的告诫）。
+    flushSessionNotices();
     await closeExecution("failed", now());
   }
 }

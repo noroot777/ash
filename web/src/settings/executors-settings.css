@@ -60,9 +60,11 @@
   white-space: nowrap;
 }
 
-.settings-cli-version-warning {
-  color: var(--amber) !important;
+.settings-cli-grid .settings-cli-version-warning {
+  overflow: visible;
+  color: var(--amber);
   line-height: 1.45;
+  white-space: normal;
 }
 
 .agent-profile-group-head {

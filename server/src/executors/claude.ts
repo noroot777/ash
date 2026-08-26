@@ -7,7 +7,7 @@ import { cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@ash/share
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
-import { spawnAgent, resumeFor, resumeInner, shq, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets, failedChild } from "./spawn.js";
+import { cleanupAfterRun, spawnAgent, resumeFor, resumeInner, shq, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets, failedChild } from "./spawn.js";
 import { relayRoot } from "../llm.js";
 import { anthropicContext1mBaseUrl, modelUsesContext1m, withContext1mSuffix } from "../anthropic-context-1m.js";
 import { calibrateSkills } from "../skills.js";
@@ -139,7 +139,14 @@ export class ClaudeExecutor implements AgentExecutor {
     const child = this.startupError
       ? failedChild(this.startupError)
       : spawnForRun(opts.cwd, this.bin, args, opts.prompt, { ...this.env(opts.cwd, model), ...opts.env }, opts.detach);
-    return { sessionId, commandLine, events: parseClaudeStream(child, undefined, this.bin, this.type, this.compactWindow()), kill: () => killChild(child), detached: detachedInfo(child) };
+    return {
+      sessionId,
+      commandLine,
+      events: parseClaudeStream(child, undefined, this.bin, this.type, this.compactWindow()),
+      kill: () => killChild(child),
+      cleanup: () => cleanupAfterRun(child),
+      detached: detachedInfo(child),
+    };
   }
 
   attach(child: ChildProcess, opts: { sessionId: string; commandLine: string }): RunHandle {
@@ -148,6 +155,7 @@ export class ClaudeExecutor implements AgentExecutor {
       commandLine: opts.commandLine,
       events: parseClaudeStream(child, undefined, this.bin, this.type, this.compactWindow()),
       kill: () => child.kill(),
+      cleanup: () => cleanupAfterRun(child),
       detached: detachedInfo(child),
     };
   }
@@ -172,7 +180,11 @@ export class ClaudeExecutor implements AgentExecutor {
       commandLine,
       events: parseClaudeStream(child, resident, this.bin, this.type, this.compactWindow()),
       send: (text: string) => {
-        child.stdin?.write(userLine(text));
+        // stdin 没了/已经关掉 = 这条消息一个字都进不去,如实说不(见 ResidentHandle.send)。
+        const stdin = child.stdin;
+        if (!stdin || stdin.destroyed || stdin.writableEnded) return false;
+        stdin.write(userLine(text));
+        return true;
       },
       interrupt: () => {
         resident.interruptPending = true;

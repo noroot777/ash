@@ -32,6 +32,7 @@ function AgentProfileGroup({
   profiles,
   allProfiles,
   providers,
+  blockedByVersion,
   onProfileChanged,
   onProfileAdded,
   onProfilesDeleted,
@@ -41,6 +42,16 @@ function AgentProfileGroup({
   profiles: AgentExecutorProfile[];
   allProfiles: AgentExecutorProfile[];
   providers: LlmProvider[];
+  /**
+   * 本次检测判定这个类型不能注册的理由(= 检测结果里那条 versionWarning);没检测过、
+   * 或检测下来没问题就是 undefined。
+   *
+   * 服务端的 409 才是权威闸,这里只管**指引**:检测前它按用户口径只说「先去点检测」,
+   * 用户照做之后要是「新增」还开着,点下去又被同一句话打回,就成了走不出去的死循环
+   * (自由工作流第 1 轮审查)。所以检测结果一旦判 blocked,这个入口就跟检测卡片里那颗
+   * 按钮同步改口。
+   */
+  blockedByVersion?: string;
   onProfileChanged: (id: string, profile: AgentExecutorProfile | null) => void;
   onProfileAdded: (profile: AgentExecutorProfile) => void;
   onProfilesDeleted: (ids: string[]) => void;
@@ -52,6 +63,12 @@ function AgentProfileGroup({
   const defaultProfile = profiles.find((profile) => profile.isDefault);
 
   const addLocal = async () => {
+    // 门禁同时落在按钮和提交函数上(web/CLAUDE.md「主工作区」那条同款理由):
+    // 只 disable 按钮的话,键盘/程序化触发照样能把请求发出去,又拿回那句「先去检测」。
+    if (blockedByVersion) {
+      notify(blockedByVersion);
+      return;
+    }
     setAdding(true);
     try {
       const profile = await api.createAgent({
@@ -103,10 +120,14 @@ function AgentProfileGroup({
           <Button
             variant="ghost"
             className="agent-profile-group-add"
-            disabled={adding || deleting}
+            disabled={adding || deleting || !!blockedByVersion}
             onClick={() => void addLocal()}
           >
-            <Plus size={12} weight="bold" /> {adding ? "新增中…" : "新增"}
+            {/* 措辞跟检测卡片那颗按钮保持一致 —— 同一页两个注册入口给不同说法,用户会
+                以为其中一个还有戏。完整升级说明就在上面那张卡片里,这里不重复。 */}
+            {blockedByVersion
+              ? <>请先升级</>
+              : <><Plus size={12} weight="bold" /> {adding ? "新增中…" : "新增"}</>}
           </Button>
           <button
             type="button"
@@ -192,6 +213,15 @@ export function AgentProfilesSection({
     type,
     profiles: profiles.filter((profile) => profile.type === type),
   })).filter((group) => group.profiles.length > 0), [profiles]);
+  // 只认**本次检测**的结论:`detected` 为 null(还没点过检测)时这张表是空的,
+  // 「新增」照常可点,拒绝仍由服务端 409 兜底 —— 用户没检测就不该在界面上看见版本判断。
+  const blockedByVersion = useMemo(() => {
+    const map = new Map<AgentType, string>();
+    for (const cli of detected ?? []) {
+      if (cli.type && cli.versionWarning) map.set(cli.type, cli.versionWarning);
+    }
+    return map;
+  }, [detected]);
 
   return (
     <section className="settings-section">
@@ -224,6 +254,7 @@ export function AgentProfilesSection({
                 profiles={typeProfiles}
                 allProfiles={profiles}
                 providers={providers}
+                blockedByVersion={blockedByVersion.get(type)}
                 onProfileChanged={onProfileChanged}
                 onProfileAdded={onProfileAdded}
                 onProfilesDeleted={onProfilesDeleted}

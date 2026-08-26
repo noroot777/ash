@@ -3,6 +3,7 @@ import type { LibSQLDatabase } from "drizzle-orm/libsql/driver-core";
 import { createClient } from "./node-sqlite-client.js";
 import * as schema from "./schema.js";
 import { ensureAshDbDir, resolveAshDbFile } from "./path.js";
+import { dropRetiredTables } from "./retired-schema.js";
 
 const dbFile = resolveAshDbFile();
 ensureAshDbDir(dbFile);
@@ -129,6 +130,13 @@ export async function ensureSchema() {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS queue_items_queue_pos_idx
       ON queue_items (queue_id, position);
+    CREATE TABLE IF NOT EXISTS team_inbound (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id TEXT NOT NULL,
+      text TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS team_inbound_task_idx ON team_inbound (task_id, seq);
     CREATE TABLE IF NOT EXISTS workflows (
       id TEXT PRIMARY KEY, builtin_key TEXT, name TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '', def TEXT NOT NULL,
@@ -373,7 +381,7 @@ export async function ensureSchema() {
   if (!mergeStatesMigrated) for (const column of MERGE_STATE_COLUMNS) keepColumns.add(column);
   if (!(await removeSshExecutorProfiles())) keepColumns.add("agents.target");
   await dropRetiredColumns(keepColumns);
-  await dropRetiredTables();
+  await dropRetiredTables(client, RETIRED_TABLES);
 }
 
 // 审查链状态瘦身（2026-08-11）：叙事状态改为推导，持久值只剩 reviewing/passed/failed/stopped。
@@ -677,22 +685,6 @@ async function dropRetiredColumns(skip?: ReadonlySet<string>): Promise<void> {
       // 清不掉不该拦住启动(比如老 SQLite 不支持 DROP COLUMN):报一声继续跑,
       // 这列本来就没人读。
       console.warn(`[ash] 退役列 ${table}.${column} 没能清掉,忽略:`, e);
-    }
-  }
-}
-
-async function dropRetiredTables(): Promise<void> {
-  for (const { table, why } of RETIRED_TABLES) {
-    try {
-      const found = await client.execute({
-        sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
-        args: [table],
-      });
-      if (!found.rows.length) continue;
-      await client.execute(`DROP TABLE IF EXISTS ${table}`);
-      console.log(`[ash] 清理退役表 ${table}(${why})`);
-    } catch (e) {
-      console.warn(`[ash] 退役表 ${table} 没能清掉,忽略:`, e);
     }
   }
 }

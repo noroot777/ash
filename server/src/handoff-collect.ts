@@ -1,13 +1,12 @@
 // 任务接力——导出侧的**盘点与打包**:会话文件在哪、能不能搬,runs 产物有哪些,
 // git 状态怎么打成一个尽量薄的 bundle。从 handoff.ts 拆出来,那边只留流程编排
 // (停任务 → 打包 → 推送 → 落标记),业务背景见 handoff.ts 顶部注释。
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { homedir } from "node:os";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import type { sessions, tasks } from "./db/schema.js";
+import { execFileText } from "./exec.js";
 import { expandHome, isGitRepo, worktreePathFor } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { DATA_DIR, RUNS_DIR } from "./paths.js";
@@ -18,7 +17,7 @@ import type { HandoffFilePayload, HandoffManifest } from "./handoff-types.js";
 type TaskRow = typeof tasks.$inferSelect;
 type SessionRow = typeof sessions.$inferSelect;
 
-const exec = promisify(execFile);
+const exec = execFileText;
 
 /**
  * claude CLI 存会话的项目目录名:cwd 中所有非字母数字字符替换成 `-`。

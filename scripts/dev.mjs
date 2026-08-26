@@ -35,7 +35,11 @@ let down = false;
 async function main() {
   const lent = process.env.PORT;
   if (!lent) {
-    const child = spawn(NPM, ["run", "dev:all"], { stdio: "inherit", ...NPM_SPAWN_OPTS });
+    const child = spawn(NPM, ["run", "dev:all"], {
+      stdio: "inherit",
+      windowsHide: true,
+      ...NPM_SPAWN_OPTS,
+    });
     child.on("exit", (code, signal) => process.exit(signal ? 1 : code ?? 0));
     return;
   }
@@ -176,9 +180,9 @@ function mainRepoDataDir() {
 /**
  * 收摊得收干净：npm 不会把信号往下传给它拉起的 `tsx watch` / vite，逐个 `child.kill()`
  * 必留孤儿（一个 dev server 占着端口没人管）。而预览这条路上整棵树都在同一个进程组里
- * （preview.ts 用 `sh -lc` detached 起的那个组），所以直接对**整组**发信号——一发全中，
- * 包括我们自己，正好就是「一个死了整套收」。只在预览分支这么干：你自己开发时那个组是
- * 终端的前台作业组，轰整组会连着把别的东西一起带走。
+ * （POSIX 上 preview.ts 用 `sh -lc` detached 起的那个组），所以直接对**整组**发信号——
+ * 一发全中，包括我们自己，正好就是「一个死了整套收」。只在预览分支这么干：你自己开发
+ * 时那个组是终端的前台作业组，轰整组会连着把别的东西一起带走。
  *
  * Windows 上没有进程组信号（`process.kill(0, …)` 打不出去），换成对每个直接子进程
  * `taskkill /T /F`——它靠 ppid 关系往下走，够得着 npm → tsx/vite 这一层。

@@ -45,7 +45,7 @@ try {
 
   const notes = page.locator(".conversation-note");
   await notes.first().waitFor();
-  assert.equal(await notes.count(), 7, "七条时间线通告都该渲染成旁注");
+  assert.equal(await notes.count(), 8, "八条时间线通告都该渲染成旁注");
 
   // 通告不再借用回合边界那条横贯的分隔线；边界事件本身仍然是那条线。
   const boundary = page.locator(".task-event-line");
@@ -58,6 +58,17 @@ try {
   // 「没办成」的那条要看得出来不一样。
   assert.equal(await page.locator(".conversation-note.is-error").count(), 1);
   assert.match(await page.locator(".conversation-note.is-error").innerText(), /审查未通过/);
+
+  // 会话轮换旁注是中性事实：一个 exit 0 的成功回合、甚至用户自己点的「停止全组」都会带
+  // 一句。它既不该是红的，也不该把 Markdown 标记原样露给用户（旁注是纯文本渲染）。
+  const rotation = notes.filter({ hasText: "ash 已经把这个失效的 id 清掉" });
+  assert.equal(await rotation.count(), 1, "会话轮换旁注没渲染出来");
+  assert.equal(
+    await rotation.evaluate((el) => el.classList.contains("is-error")),
+    false,
+    "会话轮换旁注被渲染成红色执行异常 —— 用户会以为这一回合失败了",
+  );
+  assert.doesNotMatch(await rotation.innerText(), /\*\*/, "旁注是纯文本，Markdown 标记会原样露给用户");
 
   const messages = page.locator(".task-message--agent");
   assert.equal(await messages.count(), 6, "实时旁注后的工具应并回当前回合，不另拆第七段");
