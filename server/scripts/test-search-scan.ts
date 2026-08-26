@@ -196,7 +196,50 @@ try {
   const nothing = await searchAll("omega", { signal: aborted.signal });
   assert.equal(nothing.length, 0, "已经取消的搜索不该再下盘扫会话");
 
-  console.log("✓ search scan: 早停等价 + 跨字段 AND + 排除词 + 多词 + 纯排除 + 本项目优先 + 流式一致 + 可中断");
+  // 掐掉的那一刻就得停，**不能只停在批次边界**：一批是 SCAN_CONCURRENCY 个任务，
+  // 单个任务目录实测能到 586 MB，「把这一批读完再说」就是旧查询继续占着 I/O。
+  // 查询词故意超过 12 个字符：8-12 位的纯 [a-z0-9_-] 会被当成任务 id 候选，那条路根本不
+  // 下盘（settled 档），测不到这里要测的东西。
+  const abortRows = [];
+  for (let i = 0; i < 40; i += 1) abortRows.push(taskRow(`abortrow-${i}`, `只在会话里 ${i}`, "", 600 + i));
+  await db.insert(tasks).values(abortRows);
+  for (const row of abortRows) writeRun(row.id, "这段会话里提到了 abortonlyinconversation。");
+  const midway = new AbortController();
+  let emitted = 0;
+  const partialRun = await searchAll("abortonlyinconversation", {
+    signal: midway.signal,
+    onHit: () => { emitted += 1; midway.abort(); },
+  });
+  assert.ok(partialRun.length < abortRows.length, "掐掉之后不该把 40 个任务全扫完");
+  assert.equal(emitted, 1, "第一条吐出去就被掐掉了，同一批里剩下的不该再吐（只在批次边界检查的话，这一批剩下的全会吐出去）");
+
+  // ── 11. 按 id 命中只满足它自己那一个词，AND 语义不能被它绕过 ────────────
+  // `<id> 另一个词` 是 AND。曾经把所有正向词的 id 候选拍平成全局集合、任一撞上就整条命中，
+  // 于是 `<id> 根本不存在的词` 也会返回那个任务 —— 用户回车打开的是一个并不满足他查询的
+  // 任务，界面还给它挂着「就是这个任务」。
+  await db.insert(tasks).values([taskRow("abcdefgh1234", "id 快路径 kappa", "", 700)]);
+  writeRun("abcdefgh1234", "这段会话里提到了 lambdaword。");
+
+  const plainId = await searchAll("abcdefgh1234");
+  assert.equal(plainId.length, 1, "光给 id 要能命中（任务自己的 id 不在自己的标题/正文里）");
+  assert.equal(plainId[0]?.kind === "task" ? plainId[0].field : "", "id");
+
+  const idAndMissing = await searchAll("abcdefgh1234 definitelyabsent");
+  assert.equal(idAndMissing.length, 0, "同组另一个词哪儿都没有，就不该命中");
+
+  const idAndTitle = await searchAll("abcdefgh1234 kappa");
+  assert.equal(idAndTitle.length, 1, "同组另一个词在标题里，命中");
+  assert.equal(idAndTitle[0]?.kind === "task" ? idAndTitle[0].field : "", "id", "按 id 那一档仍然钉在最前");
+
+  // id 满足一个词、会话满足另一个词 —— 它必须落进 partial 全扫，不能因为「有 id」
+  // 就被当成 settled 而不下盘（那样这条永远搜不到）。
+  const idAndConversation = await searchAll("abcdefgh1234 lambdaword");
+  assert.equal(idAndConversation.length, 1, "另一个词只在会话里，仍要读会话才能确认命中");
+
+  const idExcluded = await searchAll("abcdefgh1234 -lambdaword");
+  assert.equal(idExcluded.length, 0, "排除词命中会话时，按 id 钉也要让位");
+
+  console.log("✓ search scan: 早停等价 + 跨字段 AND + 排除词 + 多词 + 纯排除 + 本项目优先 + 流式一致 + 中断即停 + id 不绕过 AND");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

@@ -178,13 +178,32 @@ function hasExcluded(lower: string, query: ParsedSearchQuery): boolean {
 export function taskIdCandidates(query: ParsedSearchQuery): string[] {
   const candidates = new Set<string>();
   for (const term of query.groups.flat()) {
-    // 按「id 里不可能出现的字符」切一刀,于是直接粘 `ash/<id8>`、
-    // `/tasks/<id>` 这类 URL 或 `taskId=<id>` 也能把 id 本体露出来。
-    for (const part of term.value.split(/[^a-z0-9_-]+/)) {
-      if (TASK_ID_PATTERN.test(part)) candidates.add(part);
-    }
+    for (const part of idPartsOf(term)) candidates.add(part);
   }
   return [...candidates];
+}
+
+// 按「id 里不可能出现的字符」切一刀,于是直接粘 `ash/<id8>`、`/tasks/<id>`
+// 这类 URL 或 `taskId=<id>` 也能把 id 本体露出来。
+function idPartsOf(term: SearchTerm): string[] {
+  return term.value.split(/[^a-z0-9_-]+/).filter((part) => TASK_ID_PATTERN.test(part));
+}
+
+/**
+ * 这一个**词**能不能凭「它就是这个任务的 id」算满足。
+ *
+ * **按词算,不能按整条查询算。** `<id> 另一个词` 是 AND:id 只满足它自己那一个词,
+ * 另一个词仍得在标题/正文/会话里找到。把所有正向词的 id 候选拍平成一个全局集合、
+ * 再用「任一候选撞上就整条命中」,`<id> 根本不存在的词` 也会把那个任务返回回来 ——
+ * 用户回车打开的是一个并不满足他那条查询的任务,界面还给它挂着「就是这个任务」。
+ */
+function termMatchesTaskId(term: SearchTerm, taskId: string): boolean {
+  return idPartsOf(term).some((part) => isTaskIdMatch(taskId, part));
+}
+
+// 一个 OR 分组是否成立:组里每个词要么在语料里,要么就是这个任务的 id。
+function groupSatisfied(group: SearchTerm[], lower: string, taskId: string): boolean {
+  return group.every((term) => lower.includes(term.value) || termMatchesTaskId(term, taskId));
 }
 
 // 整串 id 或 8 位以上的前缀都算「就是这个任务」。两边都压小写:候选来自
@@ -198,10 +217,11 @@ function matchingTerms(text: string, query: ParsedSearchQuery): SearchTerm[] {
 }
 
 function matchingTermsLowered(lower: string, query: ParsedSearchQuery): SearchTerm[] {
-  const matches = query.groups
-    .filter((group) => group.every((term) => lower.includes(term.value)))
-    .flat();
-  return matches.filter((term, index) => matches.findIndex((candidate) => candidate.value === term.value) === index);
+  return dedupeTerms(query.groups.filter((group) => group.every((term) => lower.includes(term.value))).flat());
+}
+
+function dedupeTerms(terms: SearchTerm[]): SearchTerm[] {
+  return terms.filter((term, index) => terms.findIndex((candidate) => candidate.value === term.value) === index);
 }
 
 // Context slice around the earliest positive match, collapsed to one line.
@@ -224,21 +244,26 @@ function findSnippet(text: string, terms: SearchTerm[]): string | null {
 }
 
 // Read a task's searchable run files as one logical conversation corpus.
-async function readRunText(taskId: string): Promise<string> {
+// `signal` 一定要往下传到 readFile：单个任务目录实测能到 586 MB，用户又敲了一个字之后
+// 还把它读完，正是「十几个全盘扫叠在一起」的那份 I/O（实测 6 × 60 MB：不传 signal 时
+// 掐掉之后仍要 682 ms 才收手，传了是 1 ms）。readdir 不收 signal（Node 没给这个口子），
+// 所以在它之后再问一次。
+async function readRunText(taskId: string, signal?: AbortSignal): Promise<string> {
   let files: string[];
   try {
     files = await readdir(join(RUNS_DIR, taskId));
   } catch {
     return "";
   }
+  if (signal?.aborted) return "";
   const chunks = await Promise.all(
     files
       .filter((file) => file.endsWith(".md") || file.endsWith(".jsonl"))
       .map(async (file) => {
         try {
-          return await readFile(join(RUNS_DIR, taskId, file), "utf8");
+          return await readFile(join(RUNS_DIR, taskId, file), { encoding: "utf8", signal });
         } catch {
-          return ""; // file vanished mid-scan
+          return ""; // file vanished mid-scan，或者这次搜索已经被掐掉（AbortError）
         }
       }),
   );
@@ -261,7 +286,6 @@ export async function searchAll(query: string, options: SearchOptions = {}): Pro
   const projName = new Map(projRows.map((project) => [project.id, project.name] as const));
   const noteTaskCounts = new Map<string, number>();
   for (const link of allNoteTaskRows) noteTaskCounts.set(link.noteId, (noteTaskCounts.get(link.noteId) ?? 0) + 1);
-  const idCandidates = taskIdCandidates(parsed);
 
   type TaskRow = (typeof taskRows)[number];
   type TaskHit = Extract<SearchHit, { kind: "task" }>;
@@ -270,17 +294,19 @@ export async function searchAll(query: string, options: SearchOptions = {}): Pro
     // 大字符串只压一次小写。原先 matchesSearchQuery / isExcluded / matchingTerms /
     // findSnippet 各压一遍，语料上了 GB 之后这四遍就是四份垃圾。
     const lower = corpus.toLowerCase();
-    // 按 id 命中的那条要能凭空冒出来:任务自己的 id 不在自己的标题/正文里,
-    // 还没跑过的任务连会话都没有,靠 corpus 匹配永远搜不到它自己。排除词
-    // 仍然有效——用户显式说了别看这条,就别钉它。
-    const byId = idCandidates.some((candidate) => isTaskIdMatch(task.id, candidate))
-      && !hasExcluded(lower, parsed);
-    if (!byId && !matchesLowered(lower, parsed)) return null;
+    // 排除词优先:用户显式说了别看这条,按 id 钉也不行。
+    if (hasExcluded(lower, parsed)) return null;
+    // 按 id 命中的那个**词**要能凭空成立:任务自己的 id 不在自己的标题/正文里,
+    // 还没跑过的任务连会话都没有,靠 corpus 匹配永远搜不到它自己。但它只满足自己
+    // 那一个词 —— 同组的其他词照样得在语料里找到(见 termMatchesTaskId)。
+    const satisfied = parsed.groups.filter((group) => groupSatisfied(group, lower, task.id));
+    if (parsed.groups.length ? !satisfied.length : !parsed.excluded.length) return null;
 
+    const terms = dedupeTerms(satisfied.flat());
+    const byId = terms.some((term) => termMatchesTaskId(term, task.id));
     let field: SearchField = "id";
     let snippet = "";
     if (!byId) {
-      const terms = matchingTermsLowered(lower, parsed);
       const bodyTerms = terms.filter((term) => task.body.toLowerCase().includes(term.value));
       const conversationTerms = terms.filter((term) => conversation.toLowerCase().includes(term.value));
       field = "title";
@@ -363,12 +389,15 @@ export async function searchAll(query: string, options: SearchOptions = {}): Pro
     const none: TaskRow[] = [];
     for (const task of ordered) {
       const lower = `${task.title}\n${task.body}`.toLowerCase();
-      const byIdCandidate = idCandidates.some((candidate) => isTaskIdMatch(task.id, candidate));
-      const groupsHere = parsed.groups.map((group) => group.filter((term) => lower.includes(term.value)).length / group.length);
+      // 一个词算「库里就能定」有两种:在标题/正文里,或者它就是这个任务的 id。后者只
+      // 满足它自己那一个词 —— 拿它给整个分组打满分,`<id> 另一个词` 就会被误判成 settled,
+      // 于是既不下盘、又被当成完整命中。
+      const groupsHere = parsed.groups.map((group) =>
+        group.filter((term) => lower.includes(term.value) || termMatchesTaskId(term, task.id)).length / group.length);
       // 纯排除查询（只写了 `-foo`）没有正向词可分类：它命中的是「所有没被排除的任务」，
       // 档位算标题档，不是会话档，早停那套推导对它不成立 —— 整批当 partial 全扫。
       if (!parsed.groups.length) partial.push(task);
-      else if (byIdCandidate || groupsHere.some((ratio) => ratio === 1)) settled.push(task);
+      else if (groupsHere.some((ratio) => ratio === 1)) settled.push(task);
       else if (groupsHere.some((ratio) => ratio > 0)) partial.push(task);
       else none.push(task);
     }
@@ -383,8 +412,12 @@ export async function searchAll(query: string, options: SearchOptions = {}): Pro
     for (let at = 0; at < rows.length; at += SCAN_CONCURRENCY) {
       if (options.signal?.aborted) return;
       const batch = rows.slice(at, at + SCAN_CONCURRENCY);
-      const batchHits = await Promise.all(batch.map(async (task) => hitOf(task, await readRunText(task.id))));
-      for (const hit of batchHits) if (hit) { sink.push(hit); emit(hit); found += 1; }
+      const batchHits = await Promise.all(batch.map(async (task) => hitOf(task, await readRunText(task.id, options.signal))));
+      // 一批读完再问一次：这一批开跑之后用户很可能又敲了一个字，那这些命中已经没人要了。
+      for (const hit of batchHits) {
+        if (options.signal?.aborted) return;
+        if (hit) { sink.push(hit); emit(hit); found += 1; }
+      }
       if (ahead !== null && ahead + found >= MAX_HITS) return;
       await new Promise<void>((resolve) => { setImmediate(resolve); });
     }
@@ -401,6 +434,7 @@ export async function searchAll(query: string, options: SearchOptions = {}): Pro
       await scan(settled, sink, null);
     } else {
       for (const task of settled) {
+        if (options.signal?.aborted) return sink;
         const hit = hitOf(task, "");
         if (hit) { sink.push(hit); emit(hit); }
       }
