@@ -12,6 +12,7 @@ import {
   bulkTargetProjectId,
   outboundTasksForTarget,
   partitionBulkHandoffTasks,
+  resolveBulkTargetIdentity,
 } from "../src/workspace/bulkHandoff.ts";
 import { handoffTargetsForTask, nextUntriedHandoffTarget } from "../src/task-detail/handoffTargetPolicy.ts";
 
@@ -105,6 +106,21 @@ assert.equal(
   bulkTaskReturnsToTarget(returnCandidate, thirdFp),
   false,
   "目标身份不匹配时不能靠地址相同放行",
+);
+assert.deepEqual(
+  resolveBulkTargetIdentity([returnCandidate], "http://fresh-target:4317", thirdFp),
+  { returnFingerprint: null, mismatchExpectedFingerprints: [] },
+  "全新出站目标没有声称是接入任务来源机，不能被误报为地址换机",
+);
+assert.deepEqual(
+  resolveBulkTargetIdentity([returnCandidate], "http://source:4317/api", thirdFp),
+  { returnFingerprint: null, mismatchExpectedFingerprints: [sourceFp] },
+  "只有目标地址等价于接入任务保存的来源地址时，指纹变化才属于真换机",
+);
+assert.deepEqual(
+  resolveBulkTargetIdentity([returnCandidate], "http://source-lan-ip:4317", sourceFp),
+  { returnFingerprint: sourceFp, mismatchExpectedFingerprints: [] },
+  "地址写法不同但在线身份相同，应继续认出原来源机",
 );
 assert.deepEqual(
   bulkReturnCandidates([task("local"), returnCandidate], "p1").map((item) => item.id),
@@ -211,6 +227,7 @@ assert.match(bulkDialog, /api\.handoffReturnTarget\(task\.id\)/, "批量移回�
 assert.match(bulkDialog, /api\.handoffTargetIdentity\(target\.url\)/, "打开弹窗只能读取目标机公开身份，不能拿其他来源任务做 preflight");
 assert.match(bulkDialog, /allowReturnFallback: false/, "批量移回预检不能降级成会落待审批记录的普通 ping");
 assert.match(bulkDialog, /identityResolving/, "目标身份探测期间必须先打开可取消的弹窗");
+assert.match(bulkDialog, /resolveBulkTargetIdentity/, "身份不匹配必须先区分新目标与同址换机");
 assert.match(bulkDialog, /kind: "mismatch"/, "目标身份不匹配时必须进入显式警告状态");
 assert.match(bulkDialog, /identityMismatch \|\| busy/, "身份不匹配时不能继续发送接力申请");
 assert.doesNotMatch(bulkDialog, /已降级为普通接力/, "批量移回禁止降级后不应保留不可达的审批引导");

@@ -23,6 +23,7 @@ import {
   bulkTargetProjectId,
   outboundTasksForTarget,
   partitionBulkHandoffTasks,
+  resolveBulkTargetIdentity,
 } from "./bulkHandoff.ts";
 
 type TransferFailure = { task: TaskListItem; reason: string };
@@ -142,22 +143,22 @@ function BulkHandoffDialog({
     api.handoffTargetIdentity(target.url)
       .then((identity) => {
         if (!alive) return;
-        const matched = returnCandidates.some((task) =>
-          sameTargetFingerprint(task.handoff?.peerFp, identity.fingerprint));
-        if (matched) {
-          setResolvedReturnFingerprint(identity.fingerprint);
+        const resolution = resolveBulkTargetIdentity(returnCandidates, target.url, identity.fingerprint);
+        if (resolution.returnFingerprint) {
+          setResolvedReturnFingerprint(resolution.returnFingerprint);
           setIdentityNotice(null);
-        } else {
+        } else if (resolution.mismatchExpectedFingerprints.length > 0) {
           setResolvedReturnFingerprint(null);
           setIdentityNotice({
             kind: "mismatch",
             message: bulkIdentityMismatchWarning(
-              addressHintFingerprint
-                ? [addressHintFingerprint]
-                : returnCandidates.map((task) => task.handoff?.peerFp),
+              resolution.mismatchExpectedFingerprints,
               identity.fingerprint,
             ),
           });
+        } else {
+          setResolvedReturnFingerprint(null);
+          setIdentityNotice(null);
         }
       })
       .catch(() => {
@@ -165,7 +166,7 @@ function BulkHandoffDialog({
       })
       .finally(() => { if (alive) setIdentityResolving(false); });
     return () => { alive = false; };
-  }, [addressHintFingerprint, identityResolving, returnCandidates, target.url]);
+  }, [identityResolving, returnCandidates, target.url]);
 
   const rememberFirstProbe = (
     taskId: string,

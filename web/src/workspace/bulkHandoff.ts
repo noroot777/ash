@@ -108,6 +108,29 @@ export function bulkReturnCandidates<T extends TaskListItem>(tasks: T[], project
     && Boolean(task.handoff.peerFp));
 }
 
+export function resolveBulkTargetIdentity<T extends TaskListItem>(
+  candidates: T[],
+  targetUrl: string,
+  actualFingerprint: string,
+): { returnFingerprint: string | null; mismatchExpectedFingerprints: string[] } {
+  if (candidates.some((task) => sameFingerprint(task.handoff?.peerFp, actualFingerprint))) {
+    // 地址可能换了写法（LAN IP / 主机名），在线时仍以真实身份认出原来源机。
+    return { returnFingerprint: actualFingerprint, mismatchExpectedFingerprints: [] };
+  }
+  const expectedAtAddress = candidates
+    .filter((task) => task.handoff?.peerUrl
+      && bulkTargetAddressHintMatches(task.handoff.peerUrl, targetUrl))
+    .flatMap((task) => task.handoff?.peerFp ? [task.handoff.peerFp] : []);
+  if (expectedAtAddress.length === 0) {
+    // 目标地址从未声称是这些接入任务的来源：这是正常的新出站目标，不是换机。
+    return { returnFingerprint: null, mismatchExpectedFingerprints: [] };
+  }
+  return {
+    returnFingerprint: null,
+    mismatchExpectedFingerprints: [...new Set(expectedAtAddress)],
+  };
+}
+
 export function groupBulkHandoffFailures<T extends TaskListItem>(
   failures: { task: T; reason: string }[],
 ): { reason: string; tasks: T[] }[] {
