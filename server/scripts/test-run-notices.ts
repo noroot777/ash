@@ -128,10 +128,16 @@ process.stdin.on("end", () => process.exit(0));
   console.log("✓ runTask 原生路径落 detached 接管字段；忽略参数提示持久可见且不泄露值");
 } finally {
   await releaseTmpDb();
-  rmSync(root, {
-    recursive: true,
-    force: true,
-    maxRetries: IS_WINDOWS ? 20 : 0,
-    retryDelay: 100,
-  });
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      rmSync(root, { recursive: true, force: true });
+      break;
+    } catch (error) {
+      if (attempt >= 10) {
+        console.warn(`⚠︎ 临时目录没删掉(不影响结论):${root} — ${(error as Error).message}`);
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
 }
