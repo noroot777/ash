@@ -40,7 +40,6 @@ export type CodexAppServerOpts = {
   trace?: RunTracePaths;
   detach?: DetachedPaths;
   commandLine?: string;
-  notices?: string[];
   reattach?: { threadId: string; turnId: string };
   startProcess?: () => ChildProcess;
 };
@@ -319,7 +318,6 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     commandLine: opts.commandLine
       ?? redactSecrets(`${opts.bin} ${opts.args.map(shq).join(" ")} <App Server JSONL via stdin>`),
     events,
-    notices: opts.notices,
     detached: detachedInfo(child),
     cleanup: () => cleanupAfterRun(child),
     steer(text: string) {

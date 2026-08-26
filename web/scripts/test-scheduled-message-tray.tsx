@@ -68,4 +68,10 @@ assert.match(source, /const \[actionError, setActionError\]/, "动作错误必�
 assert.match(reloadSource, /retainScheduledMessageActionError/, "reload 必须按消息是否仍在队列决定错误存活");
 const css = readFileSync(new URL("../src/styles/reply.css", import.meta.url), "utf8");
 assert.match(css, /@container \(max-width: 520px\)[\s\S]*scheduled-message-guide[\s\S]*display: none/, "窄托盘必须把引导按钮降级成纯图标");
+const replySource = readFileSync(new URL("../src/task-detail/ReplyBox.tsx", import.meta.url), "utf8");
+assert.match(
+  replySource,
+  /command \? "任务进行中；发送即排队，队尾可点“引导会话”/,
+  "普通顶层任务即使支持派生命令，运行中提示也必须让用户发现队尾引导动作",
+);
 console.log("✓ 引导按钮位置、错误失效与窄托盘降级均受回归保护");

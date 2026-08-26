@@ -282,6 +282,7 @@ console.log("✓ Codex App Server 失败收尾会发 session poison 与 context 
 const detachedRoot = mkdtempSync(join(tmpdir(), "ash-native-steer-detached-"));
 const detachedPids: number[] = [];
 let stickyPid: number | null = null;
+let stickyEscapePid: number | null = null;
 try {
   const fakeBin = join(detachedRoot, "fake-agent.mjs");
   writeFileSync(fakeBin, `#!/usr/bin/env node
@@ -291,11 +292,23 @@ setInterval(() => {}, 1000);
   chmodSync(fakeBin, 0o755);
 
   const stickyPidPath = join(detachedRoot, "sticky.pid");
+  const stickyEscapePidPath = join(detachedRoot, "sticky-escape.pid");
   const stickyScript = join(detachedRoot, "sticky-claude.mjs");
   const stickyBin = IS_WINDOWS ? join(detachedRoot, "sticky-claude.cmd") : stickyScript;
   writeFileSync(stickyScript, `#!/usr/bin/env node
 import { writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 writeFileSync(${JSON.stringify(stickyPidPath)}, String(process.pid));
+const escape = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+  detached: true,
+  windowsHide: true,
+  stdio: process.platform === "win32"
+    ? ["ignore", "ignore", "ignore"]
+    : ["ignore", "ignore", "ignore", 3],
+});
+if (!escape.pid) process.exit(2);
+writeFileSync(${JSON.stringify(stickyEscapePidPath)}, String(escape.pid));
+escape.unref();
 let replied = false;
 process.stdin.on("data", () => {
   if (replied) return;
@@ -307,16 +320,26 @@ setInterval(() => {}, 1000);
 `);
   if (IS_WINDOWS) writeFileSync(stickyBin, `@node "%~dp0sticky-claude.mjs" %*\r\n`);
   else chmodSync(stickyBin, 0o755);
-  const stickyClaude = new ClaudeExecutor({ bin: stickyBin }).runSteerable({ cwd: detachedRoot, prompt: "OLD" });
+  const stickyDir = join(detachedRoot, "sticky-run");
+  mkdirSync(stickyDir);
+  const stickyClaude = new ClaudeExecutor({ bin: stickyBin }).runSteerable({
+    cwd: detachedRoot,
+    prompt: "OLD",
+    detach: detachedPathsFor(stickyDir, "sticky-session", "T0"),
+  });
   assert.ok(stickyClaude.cleanup, "Claude runSteerable 必须暴露 cleanup");
   for await (const event of stickyClaude.events) {
     if (event.kind === "done") break;
   }
   stickyPid = Number(readFileSync(stickyPidPath, "utf8"));
+  stickyEscapePid = Number(readFileSync(stickyEscapePidPath, "utf8"));
+  assert.equal(isPidAlive(stickyEscapePid), true, "前置条件:CLI 已甩出自成进程组的后台后代");
   await stickyClaude.cleanup?.();
   assert.equal(isPidAlive(stickyPid), false,
     "最终 result 后即使 CLI 忽略 stdin EOF，单飞收尾也必须杀掉根进程");
-  console.log("✓ Claude 单飞最终 result 会 kill 并 cleanup，不在 Windows/POSIX 留常驻根进程");
+  assert.equal(isPidAlive(stickyEscapePid), false,
+    "Claude 原生引导收尾必须在根进程消失前找回并回收逃逸后代");
+  console.log("✓ Claude 单飞最终 result 会 cleanup 根进程与逃逸后代");
 
   const deadBin = join(detachedRoot, "dead-agent.mjs");
   writeFileSync(deadBin, "#!/usr/bin/env node\nsetTimeout(() => process.exit(0), 20);\n");
@@ -364,6 +387,9 @@ setInterval(() => {}, 1000);
 } finally {
   if (stickyPid && isPidAlive(stickyPid)) {
     try { process.kill(stickyPid, "SIGKILL"); } catch { /* 已退出 */ }
+  }
+  if (stickyEscapePid && isPidAlive(stickyEscapePid)) {
+    try { process.kill(stickyEscapePid, "SIGKILL"); } catch { /* 已退出 */ }
   }
   if (!IS_WINDOWS) {
     for (const pid of detachedPids) {

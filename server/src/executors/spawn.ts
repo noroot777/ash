@@ -314,6 +314,13 @@ export function registerTrackFd(child: ChildProcess, track: { fd: number | null;
   });
 }
 
+// detached.ts 对外返回的是合成 ChildProcess；把真进程上的追踪文件映射复制过去，
+// cleanupAfterRun 才能在根进程退出后继续按继承 fd 找回已经 reparent 的后代。
+export function shareTrackFdRegistration(source: ChildProcess, target: ChildProcess): void {
+  const path = trackFiles.get(source);
+  if (path) trackFiles.set(target, path);
+}
+
 // Wrap a resume command so it is copy-paste runnable (§13).
 // envPrefix(供应商的 `KEY=值 `,token 已换成占位符)拼在 CLI 前面 —— 不带它,
 // 粘到终端的命令会走 CLI 自己的官方账号,跟这次运行不是同一个来源。

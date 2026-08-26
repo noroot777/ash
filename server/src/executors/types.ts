@@ -26,8 +26,6 @@ export interface RunHandle {
   sessionId: string;
   commandLine: string;
   events: AsyncIterable<AgentEvent>;
-  /** 本回合起跑时必须持久展示的兼容性提示；消费层统一写 transcript + SSE。 */
-  notices?: string[];
   kill(): void;
   // 单飞当前回合的原生引导通道。存在时调用方把新 user 消息送进同一个活动回合，
   // 不结束任务、不释放单飞锁；回合自然结束后这根通道随 RunHandle 一起关闭。

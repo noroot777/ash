@@ -23,7 +23,7 @@ import { IS_WINDOWS } from "../platform.js";
 import { isSameProcess } from "../proc.js";
 import {
   shq, resolveBin, augmentedEnv, failedChild, guardAgentSpawn,
-  openTrackFd, registerTrackFd, killChild, killByPid, spawnAgent,
+  openTrackFd, registerTrackFd, shareTrackFdRegistration, killChild, killByPid, spawnAgent,
 } from "./spawn.js";
 
 // 一次运行的三个落盘文件。rc 是退出码 —— 管道模式下退出码是 close 事件白送的,
@@ -259,7 +259,7 @@ export function spawnControllableDetachedAgent(
   }
   writer?.write(initialInput);
 
-  return makeDetachedChild({
+  const child = makeDetachedChild({
     pid: real.pid,
     paths,
     startOffset: 0,
@@ -275,6 +275,8 @@ export function spawnControllableDetachedAgent(
       });
     },
   });
+  shareTrackFdRegistration(real, child);
+  return child;
 }
 
 // 新起一个「活得过 server 重启」的 agent。
@@ -347,6 +349,7 @@ export function spawnDetachedAgent(
       });
     },
   });
+  shareTrackFdRegistration(real, child);
   return child;
 }
 

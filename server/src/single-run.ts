@@ -284,10 +284,6 @@ export async function consumeSingleRun(a: {
   const publishEvent = (event: AgentEvent) => bus.publish({
     type: "agent.event", taskId, sessionId: sessId, role, agentType, ...runMeta, event,
   });
-  for (const notice of a.handle.notices ?? []) {
-    writeTurn(out, { t: "system", agent: agentType, text: notice }, a.turnStart);
-    publishEvent({ kind: "system", text: notice, at: a.turnStart });
-  }
   const flushTraceText = (at?: string) => {
     if (!pendingTraceText) return;
     appendSessionTrace(taskId, sessId, a.turnStart, { kind: "text", text: pendingTraceText }, at);

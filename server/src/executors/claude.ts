@@ -18,6 +18,8 @@ export class ClaudeExecutor implements AgentExecutor {
   readonly type = "claude" as const;
   readonly label: string;
   // 恢复命令的 env 前缀只留供应商；覆盖项必须走能压过 settings.json 的 --settings。
+  // CLI 会把 settings.env 写回进程环境，普通 env 前缀反而会输给用户配置；把覆盖项
+  // 留在前缀里会让复制出来的命令与 ash 实际运行不一致。
   private readonly resumeEnvHint?: string;
   private bin: string;
   private startupError?: string;
@@ -53,7 +55,9 @@ export class ClaudeExecutor implements AgentExecutor {
     return this.resumeFields(cwd, sessionId).resumeCommand;
   }
 
-  /** 恢复参数按会话 cwd 现算，保证项目 settings 与 ash 实际运行一致。 */
+  /**
+   * 恢复参数按会话 cwd 现算；executor 构造时还不知道任务目录，提前冻结会漏掉项目 settings。
+   */
   resumeFields(cwd: string, sessionId: string): ResumeFields {
     const settings = this.settingsPayload(cwd);
     const resumeArgs = settings ? `--settings ${shq(JSON.stringify(settings))}` : null;
@@ -71,6 +75,7 @@ export class ClaudeExecutor implements AgentExecutor {
 
   /**
    * fastMode 与 CLI 覆盖合成同一份 --settings：多个参数不会合并，最后一份整包胜出。
+   * 因此加速档、覆盖项和复制到终端的恢复参数必须共用这个 payload。
    * cwd 必填，因为项目 settings 会参与压缩窗口换算。
    */
   private settingsPayload(cwd: string): Record<string, unknown> | null {
@@ -146,7 +151,7 @@ export class ClaudeExecutor implements AgentExecutor {
         );
     const detached = detachedInfo(child);
     return singleRunFromResident(
-      this.residentFromChild(child, sessionId, commandLine, true),
+      this.residentFromChild(child, sessionId, commandLine),
       detached,
     );
   }
@@ -155,7 +160,7 @@ export class ClaudeExecutor implements AgentExecutor {
     const detached = detachedInfo(child);
     if (child.stdin && opts.commandLine.includes("--input-format")) {
       return singleRunFromResident(
-        this.residentFromChild(child, opts.sessionId, opts.commandLine, true),
+        this.residentFromChild(child, opts.sessionId, opts.commandLine),
         detached,
       );
     }
@@ -182,14 +187,13 @@ export class ClaudeExecutor implements AgentExecutor {
       : spawnAgent(opts.cwd, this.bin, args, userLine(opts.prompt), { ...this.env(opts.cwd, model), ...opts.env }, {
           keepStdin: true,
         });
-    return this.residentFromChild(child, sessionId, commandLine, false);
+    return this.residentFromChild(child, sessionId, commandLine);
   }
 
   private residentFromChild(
     child: ChildProcess,
     sessionId: string,
     commandLine: string,
-    closeByKill: boolean,
   ): ResidentHandle {
     const resident = { interruptPending: false };
     let reqSeq = 0;
@@ -238,7 +242,6 @@ export class ClaudeExecutor implements AgentExecutor {
       },
       close: () => {
         child.stdin?.end();
-        if (closeByKill) killChild(child);
       },
       kill: () => killChild(child),
       cleanup: () => cleanupAfterRun(child),
