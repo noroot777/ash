@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
-import { chromeExecutablePath } from "./chrome-path.mjs";
+import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { createServer } from "vite";
 
 // **嵌套 Git 仓库那一行：看得见，但一个操作都不给。**
@@ -49,7 +49,7 @@ try {
   assert(address && typeof address === "object", "Vite test server did not expose a port");
   const url = `http://127.0.0.1:${address.port}/scripts/fixtures/scm-stale.html`;
 
-  browser = await chromium.launch({ executablePath: await chromeExecutablePath(), headless: true });
+  browser = await chromium.launch(await chromeLaunchOptions());
   const page = await browser.newPage();
 
   let stagedPaths = null;

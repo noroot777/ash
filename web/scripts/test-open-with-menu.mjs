@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
-import { chromeExecutablePath } from "./chrome-path.mjs";
+import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { createServer } from "vite";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -37,7 +37,7 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
-  browser = await chromium.launch({ executablePath: await chromeExecutablePath(), headless: true });
+  browser = await chromium.launch(await chromeLaunchOptions());
   const page = await browser.newPage();
 
   const probeCalls = [];

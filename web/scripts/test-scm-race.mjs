@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
-import { chromeExecutablePath } from "./chrome-path.mjs";
+import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { createServer } from "vite";
 
 // **写之前发出的那次 GET 后到时，不许它说了算。**
@@ -135,7 +135,7 @@ try {
   assert(address && typeof address === "object", "Vite test server did not expose a port");
   const url = `http://127.0.0.1:${address.port}/scripts/fixtures/scm-stale.html`;
 
-  browser = await chromium.launch({ executablePath: await chromeExecutablePath(), headless: true });
+  browser = await chromium.launch(await chromeLaunchOptions());
   await race(browser, url, { writeStatus: true });
   await race(browser, url, { writeStatus: false });
 

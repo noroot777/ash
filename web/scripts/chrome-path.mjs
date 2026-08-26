@@ -57,3 +57,11 @@ export async function chromeExecutablePath() {
     `找不到可执行的 Chrome/Chromium；可通过 CHROME_BIN 指定路径。已尝试：\n  ${candidates.join("\n  ")}`,
   );
 }
+
+export async function chromeLaunchOptions() {
+  return {
+    executablePath: await chromeExecutablePath(),
+    headless: true,
+    args: ["--no-proxy-server"],
+  };
+}
