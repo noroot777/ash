@@ -6,6 +6,7 @@ import type { SidebarSpread } from "../../src/workspace/useSidebarSpread.ts";
 import "../../src/styles/global.css";
 import "../../src/styles/workspace.css";
 import "../../src/styles/task-tree.css";
+import "../../src/styles/task-mode.css";
 
 // 任务模式里唯一的候选是「接力出去、持有机这一轮联系不上」的那种任务：它退回本机冻住的
 // 状态（canceled）后一行都不剩，这时候**空态和离线提示必须同时在**。回归的那个 bug：
