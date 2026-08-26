@@ -25,7 +25,7 @@
 //   • 执行者汇报/提问 → 不打断(它手上的活更重要);忙就缓冲,回合结束合并成
 //     一条送 —— 天然聚合,N 个执行者只花一次模型调用。
 import { mkdirSync, createWriteStream, existsSync } from "node:fs";
-import type { WriteStream } from "node:fs";
+import { Writable } from "node:stream";
 import { join } from "node:path";
 import { eq, sql } from "drizzle-orm";
 import type { AgentEvent, AgentType, TeamConfig } from "@ash/shared";
@@ -49,6 +49,7 @@ import {
 import { NO_RESUMABLE_SESSION_NOTE, ROTATION_ALREADY_ANNOUNCED } from "@ash/shared/session-notes";
 import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
+import type { SessionTraceEvent } from "../transcript.js";
 import { recordUserConversationTurn } from "../conversation-turn.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET } from "./prompts.js";
@@ -90,7 +91,9 @@ interface Lead {
   reasoningEffort: string | null;
   cwd: string;
   handle: ResidentHandle;
-  out: WriteStream;
+  // 这一段常驻会话的 .md 落盘流。**摘牌后会被换成一个丢弃流**(见 retireLead):
+  // 文件名就是 sessId,接管的新台开着同一个文件在写。
+  out: Writable;
   busy: boolean;
   turnStart: string | null;
   pending: string[]; // 回合进行中攒下的执行者消息,turnEnd 时合并成一条送
@@ -458,10 +461,7 @@ async function consume(lead: Lead): Promise<void> {
   let pendingTraceText = "";
   const flushTraceText = () => {
     if (!pendingTraceText) return;
-    appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), {
-      kind: "text",
-      text: pendingTraceText,
-    });
+    traceLead(lead, lead.turnStart ?? now(), { kind: "text", text: pendingTraceText });
     pendingTraceText = "";
   };
   // 兜底:上面每个写库点都已经各自把失败咽下了(persistOrReport),这里管的是**剩下**
@@ -514,11 +514,12 @@ async function consume(lead: Lead): Promise<void> {
         const sessionNotice = emittedEvent.kind === "error" && emittedEvent.scope === "session";
         if (!sessionNotice
           && (emittedEvent.kind === "thinking" || emittedEvent.kind === "tool" || emittedEvent.kind === "error" || emittedEvent.kind === "usage" || emittedEvent.kind === "attachment")) {
-          appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), emittedEvent);
+          traceLead(lead, lead.turnStart ?? now(), emittedEvent);
         }
         // 水位相反：**覆盖**。常驻会话尤其需要它——流水一路加到几百万，只有水位能回答
-        // 「这个调度台离上下文塞满还有多远」。
-        if (emittedEvent.kind === "context") await setSessionContext(lead.sessId, emittedEvent.context);
+        // 「这个调度台离上下文塞满还有多远」。正因为是覆盖,摘牌后就不能再写:那一行现在
+        // 归接管的那台,旧进程的水位盖上去就是错的(用量是累加的真实开销,照记不误)。
+        if (emittedEvent.kind === "context" && !lead.retired) await setSessionContext(lead.sessId, emittedEvent.context);
         if (emittedEvent.kind === "error") {
           const previousFault = rotation.fault;
           if (sessionNotice) noteSessionNotice(lead, emittedEvent.message);
@@ -545,7 +546,7 @@ async function consume(lead: Lead): Promise<void> {
                 // 把完整那句再说一遍，也不能留下一句报喜的短话。
                 const message = `已停止续跑损坏的 Codex 会话，但清理数据库恢复字段失败：${error instanceof Error ? error.message : String(error)}`;
                 writeRunError(lead.out, message);
-                appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), { kind: "error", message });
+                traceLead(lead, lead.turnStart ?? now(), { kind: "error", message });
                 publish(lead, { kind: "error", message });
                 note = SESSION_DROP_PERSISTENCE_FAILED_NOTE;
                 rotation = onRotationNotPersisted(rotation);
@@ -585,6 +586,9 @@ async function consume(lead: Lead): Promise<void> {
 }
 
 function publish(lead: Lead, event: AgentEvent): void {
+  // 摘牌后一个字都不再广播:这条 sessionId 现在归接管的那台,用户正看着它说话,
+  // 收到旧进程的「执行异常结束/意外退出」只会当成新会话出了事(见 retireLead)。
+  if (lead.retired) return;
   bus.publish({
     type: "agent.event",
     taskId: lead.taskId,
@@ -597,6 +601,13 @@ function publish(lead: Lead, event: AgentEvent): void {
   });
 }
 
+// 执行过程面板那条流。跟 publish / lead.out 同一块牌子:摘牌之后这条 sessId 的 trace
+// 归接管的那台,旧进程晚到的事件不许再插进去(见 retireLead)。
+function traceLead(lead: Lead, turnStart: string, event: SessionTraceEvent, at?: string): void {
+  if (lead.retired) return;
+  appendSessionTrace(lead.taskId, lead.sessId, turnStart, event, at);
+}
+
 // 收尾链上的持久化失败:如实落到三处(.md / trace / SSE),然后**咽回去**。
 //
 // 常驻调度台跟一次性任务不一样 —— 它的每一次写库都跑在 consume 那条 for-await 里面。
@@ -606,7 +617,7 @@ function publish(lead: Lead, event: AgentEvent): void {
 // 一次写库失败该丢的只是那一行状态,不是这台调度台。
 function reportLeadFailure(lead: Lead, message: string, at = now()): void {
   writeRunError(lead.out, message);
-  appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? at, { kind: "error", message }, at);
+  traceLead(lead, lead.turnStart ?? at, { kind: "error", message }, at);
   publish(lead, { kind: "error", message });
 }
 
@@ -696,17 +707,27 @@ async function setLeadStatus(lead: Lead, status: "running" | "idle", at = now())
 
 /**
  * 这台调度台从此不再代表这个任务(被新进程接管,或工作目录没了被抛弃)。手上那笔待写状态
- * 就地作废。
+ * 就地作废,**所有共享产物一并断开**。
  *
  * 为什么不能只在计时器里查一下 `leads` 有没有人:**map 是空的不等于旧台还有话语权**。
  * 旧台的 running 写失败留下重试 → 新台接管 → 新台正常收尾、写了 idle 并把自己摘牌 →
  * 旧计时器这才到点,看到 map 是空的就把过期的 running 写了回去。这一次比原来那个坑更
  * 难自愈:已经没有任何在线调度台或下一个回合会来覆盖它(2026-08-25 第 6 轮审查)。
+ *
+ * 共享的不止 tasks.status:接管那条路(工作目录被抽走)**复用同一条会话行,连 .md 都是
+ * 同一个文件**(文件名就是 sessId)。旧台晚到的正文、执行诊断和 agentEnd 会插进新台还
+ * 没说完的那一段里 —— parseSessionOutput 见到 agentEnd 就收口,一条回复被切成两个气泡,
+ * 用时也跟着算错(2026-08-26 第 8 轮审查)。所以这里把写流换成丢弃流:**换而不是 end,**
+ * 因为消费循环还在跑,往已经 end 的流里写一个字就是 ERR_STREAM_WRITE_AFTER_END,当场
+ * 打崩整个 server。trace 与 SSE 由 traceLead / publish 各自认这块牌子。
  */
 function retireLead(lead: Lead): void {
   lead.retired = true;
   clearStatusRetry(lead);
   lead.wantedStatus = null;
+  const out = lead.out;
+  lead.out = new Writable({ write(_chunk, _enc, done) { done(); } });
+  out.end();
 }
 
 function clearStatusRetry(lead: Lead): void {
@@ -765,7 +786,7 @@ async function beginTurn(lead: Lead, at = now()): Promise<void> {
     () => db.update(sessions).set({ turnStartedAt: at, endedAt: null }).where(eq(sessions.id, lead.sessId)),
     at,
   );
-  appendSessionTrace(lead.taskId, lead.sessId, at, {
+  traceLead(lead, at, {
     kind: "run",
     model: lead.model,
     reasoningEffort: lead.reasoningEffort,
@@ -820,13 +841,18 @@ async function closeLead(
   aborted = false,
 ): Promise<void> {
   clearIdle(lead);
-  takeStopped(lead.taskId); // 消费停止标记:团队不走 settleTaskStatus,别漏给下一次
   untrackRun(lead.taskId, lead.handle);
   // 工作目录被抽走时我们会主动收掉旧进程、立刻开新的,旧进程的 close 事件晚一步
   // 才到 —— 它不能把已经接管的新会话摘掉,更不能把新回合的 running 改回 idle。
+  // 停止标记同理:那是任务级的共享状态,被接管的一方吞掉它,真正在跑的那台收尾时
+  // 就当没被停过。
   const superseded = leads.get(lead.taskId) !== lead;
-  if (!superseded) leads.delete(lead.taskId);
-  else retireLead(lead); // 被接管的一方从此不写状态:遗留重试一律作废(见 retireLead)
+  if (!superseded) {
+    leads.delete(lead.taskId);
+    takeStopped(lead.taskId); // 消费停止标记:团队不走 settleTaskStatus,别漏给下一次
+  } else {
+    retireLead(lead); // 被接管的一方从此不写任何共享产物(状态/.md/trace/SSE),见 retireLead
+  }
   const endIso = now();
   const spent = lead.turnStart ? Math.max(0, Date.parse(endIso) - Date.parse(lead.turnStart)) : 0;
   // CLI 否认了这条会话:把失效的 id 连同由它派生的三件套恢复命令一起清掉,下一次说话
@@ -886,7 +912,7 @@ async function closeLead(
     // 里记一笔异常。
     if (aborted || exitStatus !== 0) {
       writeRunError(lead.out, msg);
-      appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message: msg }, endIso);
+      traceLead(lead, lead.turnStart ?? endIso, { kind: "error", message: msg }, endIso);
       publish(lead, { kind: "error", message: msg });
     } else {
       noteSessionNotice(lead, msg);

@@ -19,6 +19,7 @@ import { createWriteStream, mkdirSync, mkdtempSync, readFileSync, rmSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
+import { parseSessionOutput } from "@ash/shared";
 import type { ResidentHandle } from "../src/executors/types.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-team-resilience-"));
@@ -34,6 +35,7 @@ const POISON = "ignored world-state patch without a full snapshot";
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { projects, sessions, tasks } = await import("../src/db/schema.js");
 const { attachLead, haltTeam, sendInbound, teamIsLive } = await import("../src/team/session.js");
+const { bus } = await import("../src/bus.js");
 const { SESSION_POISONED_NOTE } = await import("../src/executors/session-lost.js");
 const { eq } = await import("drizzle-orm");
 
@@ -488,6 +490,70 @@ try {
   );
   assert.doesNotMatch(g.trace, /更正上面那条/, "这不是执行异常,不该记进执行过程面板");
   ok("停止全组后的会话更正走 system 旁注,不冒充执行异常");
+
+  // ── ⑩ 共用的 .md 与实时事件流:旧台不许插进新台还没说完的那一段 ──────────────────
+  // 复用的不只是 sessions 行 —— .md 的文件名就是 sessId,两台开着同一个文件在写。旧台
+  // 晚到的执行诊断和 agentEnd 插进去之后,parseSessionOutput 见到 agentEnd 就收口:用户
+  // 的一条回复被切成两个气泡,前半段还被旧台的时间戳提前判了结束(用时也跟着错)。
+  // 实时那头同样:旧进程的 done/error 顶着同一个 sessionId 广播,正看着新会话的用户会
+  // 收到一条「执行异常结束」。
+  const SHARED_MD = "task-shared-transcript";
+  const SHARED_MD_SESS = "sess-shared-md";
+  await seedTeamTask(SHARED_MD);
+  const seen: AgentEvent[] = [];
+  const unsubscribe = bus.subscribe((ev) => {
+    if (ev.type === "agent.event" && ev.sessionId === SHARED_MD_SESS) seen.push(ev.event);
+  });
+  let releaseMdOld!: () => void;
+  const holdMdOld = new Promise<void>((r) => { releaseMdOld = r; });
+  async function* mdOldScript(): AsyncGenerator<AgentEvent> {
+    await holdMdOld;
+    yield { kind: "done", exitStatus: 7 }; // 非零退出:收尾会想写一笔执行诊断
+  }
+  const mdOld = await startLead({
+    taskId: SHARED_MD, sessId: SHARED_MD_SESS, cliSessionId: "old-thread", events: mdOldScript(),
+  });
+  let mdNewSpoke!: () => void;
+  const newHasSpoken = new Promise<void>((r) => { mdNewSpoke = r; });
+  let releaseMdNew!: () => void;
+  const holdMdNew = new Promise<void>((r) => { releaseMdNew = r; });
+  async function* mdNewScript(): AsyncGenerator<AgentEvent> {
+    yield { kind: "text", text: "NEW-REPLY-BEGIN" };
+    mdNewSpoke();
+    await holdMdNew; // 中间这段时间正是旧台收尾的窗口
+    yield { kind: "text", text: "-AND-END" };
+    yield { kind: "done", exitStatus: 0 };
+  }
+  await startLead({
+    taskId: SHARED_MD, sessId: SHARED_MD_SESS, cliSessionId: "new-thread", events: mdNewScript(), reuse: true,
+  });
+  await newHasSpoken;
+  releaseMdOld();
+  // 旧台这就收尾。它要写的东西是同步落的,给足一个宽裕的窗口再让新台继续说。
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(teamIsLive(SHARED_MD), true, "断言要在新台还在线、这一段还没说完时进行");
+  releaseMdNew();
+  const mdDeadline = Date.now() + 15_000;
+  while (teamIsLive(SHARED_MD) && Date.now() < mdDeadline) await new Promise((r) => setTimeout(r, 20));
+  await new Promise((r) => setTimeout(r, 200));
+  unsubscribe();
+
+  const sharedMd = readFileSync(join(mdOld.runDir, `${SHARED_MD_SESS}.md`), "utf8");
+  assert.doesNotMatch(sharedMd, /执行诊断/, "旧台把自己的执行诊断写进了新台正在用的 .md");
+  const segments = parseSessionOutput(sharedMd).filter((seg) => seg.kind === "agent");
+  assert.equal(
+    segments.length,
+    1,
+    "新台的一条回复被旧台的 agentEnd 从中间截断了 —— 页面上会显示成两个气泡,前半段用时还被算错",
+  );
+  assert.match(segments[0].text, /NEW-REPLY-BEGIN[\s\S]*-AND-END/, "这一段回复必须完整");
+  assert.deepEqual(
+    seen.filter((e) => e.kind === "done").map((e) => e.exitStatus),
+    [0],
+    "旧进程的退出码顶着同一个 sessionId 广播出去了 —— 用户会看到新会话「执行异常结束」",
+  );
+  assert.deepEqual(seen.filter((e) => e.kind === "error"), [], "旧台的收尾诊断不该广播给正在看新会话的用户");
+  ok("被接管的旧调度台不再污染共用的 .md 与实时事件流");
 
   console.log("test:team-resilience ok");
 } finally {

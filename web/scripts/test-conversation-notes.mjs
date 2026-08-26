@@ -3,7 +3,7 @@
 //   2) 旁注不打断同一会话的连续发言 —— 这正是「预约个审查就把会话劈成上下两段」的病根
 //   3) 真人插话、回合边界、换会话，这三种才重新报身份
 import assert from "node:assert/strict";
-import { NEUTRAL_SESSION_NOTES, SESSION_POISONED_NOTE } from "@ash/shared/session-notes";
+import { NEUTRAL_SESSION_NOTES, SESSION_POISONED_NOTE, normalizeSessionNoteText } from "@ash/shared/session-notes";
 import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
 import { noteTone } from "../src/task-detail/conversationNotes.ts";
 
@@ -39,6 +39,34 @@ assert.equal(
   "error",
   "拼在中性文案后面的真失败被一起洗白了",
 );
+
+// —— 升级前已经落盘的旧版文案：一字不改地照抄用户 .md 里的原文 ——
+// 只改常量只对「以后写的数据」有效；用户抱怨的那条记录刷新后还在，必须一并归一。
+const LEGACY_POISONED =
+  "Codex 已在本轮 stderr 中报告这条 thread 的回合关联、world-state 或 rollout 落盘异常；"
+  + "即使进程 exit 0 且发出 turn.completed，也不能再把它当作可恢复会话；"
+  + "会话轮换不改变本回合真实的退出原因。"
+  + "ash 已清掉这条会话的恢复字段：下一次运行会从任务正文自动开启一条**全新会话**，"
+  + "旧对话与执行记录仍保留，但之前的上下文不会带过去。";
+const LEGACY_LOST =
+  "上一轮记下的 CLI 会话 id 在 CLI 那边已经不存在了（多半是第一次起跑就失败、"
+  + "会话压根没建起来，也可能是 CLI 的会话记录被清过或换了机器/目录）。"
+  + "ash 已经把这个失效的 id 清掉：再点一次运行会开一条**全新会话**，"
+  + "之前的上下文不会带过来，任务正文和历史记录都还在。";
+for (const legacy of [LEGACY_POISONED, LEGACY_LOST]) {
+  assert.equal(noteTone(legacy), "neutral", "升级前落盘的轮换旁注刷新后仍是红的");
+  assert.doesNotMatch(
+    normalizeSessionNoteText(legacy),
+    /\*\*/,
+    "升级前落盘的轮换旁注刷新后仍把 Markdown 星号露给用户",
+  );
+}
+assert.equal(
+  normalizeSessionNoteText("前言。" + LEGACY_POISONED + "后话。"),
+  "前言。" + SESSION_POISONED_NOTE + "后话。",
+  "旧文案要就地换成当前文案，前后文原样保留",
+);
+assert.equal(normalizeSessionNoteText("跟轮换无关的一句话"), "跟轮换无关的一句话", "认不出来的文本必须原样返回");
 
 const session = {
   id: "s1",

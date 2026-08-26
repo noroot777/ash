@@ -1,6 +1,7 @@
 import type { AgentEvent, ContextUsage, ServerEvent, Session, Task, TokenUsage } from "@ash/shared";
 import { ANSWER_PREFIX, parseSessionOutput } from "@ash/shared";
 import { addUsage, sumUsage, usageTotal } from "@ash/shared/usage";
+import { normalizeSessionNoteText } from "@ash/shared/session-notes";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ExecutionEvent } from "../lib/executionTrace.ts";
 import type { ConversationEventTone, ConversationEventVariant } from "./conversationNotes.ts";
@@ -451,15 +452,18 @@ export function buildConversationItems(
         turnStartedAt = segment.at ?? turnStartedAt;
       } else if (segment.kind === "system") {
         recordPersistedTurn(persistedTurns, "system", segment.text, segment.at, session.id);
+        // 旧版轮换文案落在用户 .md 里的原文带 Markdown 标记、措辞也不一样；旁注是纯文本
+        // 渲染，不归一就会把星号原样露出来（@ash/shared/session-notes）。
+        const text = normalizeSessionNoteText(segment.text);
         items.push({
           kind: "event",
           id: `persisted:system:${session.id}:${index}`,
-          text: segment.text,
+          text,
           at: segment.at,
           sessionId: session.id,
-          tone: noteTone(segment.text),
+          tone: noteTone(text),
           variant: "note",
-          verify: isVerifyNote(segment.text),
+          verify: isVerifyNote(text),
         });
         turnStartedAt = segment.at ?? turnStartedAt;
       } else {
@@ -528,15 +532,16 @@ export function buildConversationItems(
     }
     const event = entry.event.event;
     if (event.kind === "system") {
+      const text = normalizeSessionNoteText(event.text);
       appendEvent(items, {
         kind: "event",
         id: entry.id,
-        text: event.text,
+        text,
         at: event.at,
         sessionId: entry.event.sessionId,
-        tone: noteTone(event.text),
+        tone: noteTone(text),
         variant: "note",
-        verify: isVerifyNote(event.text),
+        verify: isVerifyNote(text),
       });
       continue;
     }

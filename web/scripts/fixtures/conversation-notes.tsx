@@ -1,7 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import type { Session, Task } from "@ash/shared";
-import { SESSION_LOST_NOTE } from "@ash/shared/session-notes";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import { buildConversationItems } from "../../src/task-detail/conversationModel.ts";
 import "../../src/styles/global.css";
@@ -34,6 +33,14 @@ const task = {
 const turn = (kind: string, text: string, at: string) =>
   `${JSON.stringify({ t: kind, text, at })}`;
 
+// 升级前已经落在用户 .md 里的轮换旁注原文（一字不改）。渲染层要把它归一成当前文案：
+// 刷新之后不能还是红的，也不能把 Markdown 星号原样露出来。
+const LEGACY_SESSION_LOST_NOTE =
+  "上一轮记下的 CLI 会话 id 在 CLI 那边已经不存在了（多半是第一次起跑就失败、"
+  + "会话压根没建起来，也可能是 CLI 的会话记录被清过或换了机器/目录）。"
+  + "ash 已经把这个失效的 id 清掉：再点一次运行会开一条**全新会话**，"
+  + "之前的上下文不会带过来，任务正文和历史记录都还在。";
+
 // 图二 + 图三那一串：一段说话被各种系统通告反复劈开。
 const output = [
   "我会直接实现到现有自由工作流 Inspector，并严格保留当前卡片、颜色、间距等 UI：只补真实事件字段、时间展示、审查节点点击联动与底部整体收起/弹出行为。",
@@ -47,7 +54,8 @@ const output = [
   turn("system", "自由工作流第 3 轮审查未通过，意见已发回会话；修复完成后自动复审。", "2026-08-10T06:10:00.000Z"),
   // 会话轮换旁注：中性事实（这条 CLI 会话接不回了），不是本回合失败。渲染上有两条硬要求
   // —— 不能是红的，也不能把 Markdown 标记原样露出来（服务端文案见 @ash/shared/session-notes）。
-  turn("system", SESSION_LOST_NOTE, "2026-08-10T06:10:30.000Z"),
+  // 这里用的是**修复前落盘的原文**：历史记录刷新后同样要满足这两条。
+  turn("system", LEGACY_SESSION_LOST_NOTE, "2026-08-10T06:10:30.000Z"),
   "收到审查意见，开始修复。",
   // ash 自己插在 agent 输出里的注记走 markdown 引用块，视觉上要跟系统旁注同档。
   "\n> 正在压缩上下文…\n",
