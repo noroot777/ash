@@ -103,6 +103,8 @@ interface Lead {
   // 该写进 tasks.status 的值,以及还没写成功时的重试计时(见 setLeadStatus)。
   wantedStatus: "running" | "idle" | null;
   statusTimer: NodeJS.Timeout | null;
+  // 已经不代表这个任务了(被接管/被抛弃)。摘牌后一个字都不许再写状态 —— 见 retireLead。
+  retired: boolean;
   idleTimer: NodeJS.Timeout | null;
   closing: "recycle" | "halt" | "workspace" | null;
 }
@@ -174,6 +176,7 @@ async function deliver(
     lead.closing = "workspace";
     recordSystemTurn(lead, WORKSPACE_GONE_NOTE(lead.cwd));
     leads.delete(taskId); // 立刻腾位置,别让下面的 open 以为还在线
+    retireLead(lead); // 它从此不代表这个任务:遗留的状态重试就地作废
     try {
       lead.handle.kill();
     } catch {
@@ -406,6 +409,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
     pendingCredential: null,
     wantedStatus: null,
     statusTimer: null,
+    retired: false,
     idleTimer: null,
     closing: null,
   };
@@ -427,6 +431,11 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
  * 生产路径只有 openLead 走这里。
  */
 export function attachLead(lead: Lead): void {
+  // 换台的那一刻就把老的摘牌。「谁说了算」不能只靠「此刻 leads 里是谁」现算 ——
+  // 新台完全可能先于老台的遗留计时器正常收尾并把自己从 map 里删掉,那时 map 是空的,
+  // 老台反而会被当成还有话语权(retireLead 顶部有现场)。
+  const previous = leads.get(lead.taskId);
+  if (previous && previous !== lead) retireLead(previous);
   leads.set(lead.taskId, lead);
   void consume(lead).catch((err) => console.error(`[ash] team consume(${lead.taskId}) failed:`, err));
 }
@@ -674,6 +683,7 @@ const STATUS_RETRY_MS = Number(process.env.ASH_TEAM_STATUS_RETRY_MS ?? 5_000);
  */
 async function setLeadStatus(lead: Lead, status: "running" | "idle", at = now()): Promise<void> {
   clearStatusRetry(lead);
+  if (lead.retired) return; // 已经不代表这个任务了,状态归接管的那台管
   lead.wantedStatus = status;
   const what = status === "idle" ? "调度台待命状态" : "调度台运行状态";
   if (await persistOrReport(lead, what, () => setTaskStatus(lead.taskId, status), at)) {
@@ -681,6 +691,21 @@ async function setLeadStatus(lead: Lead, status: "running" | "idle", at = now())
     return;
   }
   armStatusRetry(lead);
+}
+
+/**
+ * 这台调度台从此不再代表这个任务(被新进程接管,或工作目录没了被抛弃)。手上那笔待写状态
+ * 就地作废。
+ *
+ * 为什么不能只在计时器里查一下 `leads` 有没有人:**map 是空的不等于旧台还有话语权**。
+ * 旧台的 running 写失败留下重试 → 新台接管 → 新台正常收尾、写了 idle 并把自己摘牌 →
+ * 旧计时器这才到点,看到 map 是空的就把过期的 running 写了回去。这一次比原来那个坑更
+ * 难自愈:已经没有任何在线调度台或下一个回合会来覆盖它(2026-08-25 第 6 轮审查)。
+ */
+function retireLead(lead: Lead): void {
+  lead.retired = true;
+  clearStatusRetry(lead);
+  lead.wantedStatus = null;
 }
 
 function clearStatusRetry(lead: Lead): void {
@@ -691,13 +716,12 @@ function clearStatusRetry(lead: Lead): void {
 function armStatusRetry(lead: Lead): void {
   clearStatusRetry(lead);
   const status = lead.wantedStatus;
-  if (!status) return;
+  if (!status || lead.retired) return;
   const t = setTimeout(() => {
     lead.statusTimer = null;
-    // 期间要么这台调度台自己改了主意(开了新回合/关了台),要么整个任务已经换了新调度台
-    // 接管 —— 两种情况下最新那次写入才是真相,别拿这个旧值盖回去。
+    // 摘过牌就永远不再写(retireLead);没摘牌但已经换了新台在线,也是新台说了算。
     const owner = leads.get(lead.taskId);
-    if (lead.wantedStatus !== status || (owner && owner !== lead)) return;
+    if (lead.retired || lead.wantedStatus !== status || (owner && owner !== lead)) return;
     void setTaskStatus(lead.taskId, status)
       .then(() => {
         if (lead.wantedStatus === status) lead.wantedStatus = null;
@@ -806,6 +830,7 @@ async function closeLead(
   // 才到 —— 它不能把已经接管的新会话摘掉,更不能把新回合的 running 改回 idle。
   const superseded = leads.get(lead.taskId) !== lead;
   if (!superseded) leads.delete(lead.taskId);
+  else retireLead(lead); // 被接管的一方从此不写状态:遗留重试一律作废(见 retireLead)
   const endIso = now();
   const spent = lead.turnStart ? Math.max(0, Date.parse(endIso) - Date.parse(lead.turnStart)) : 0;
   // CLI 否认了这条会话:把失效的 id 连同由它派生的三件套恢复命令一起清掉,下一次说话

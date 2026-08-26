@@ -33,7 +33,7 @@ const POISON = "ignored world-state patch without a full snapshot";
 // env 要在这些模块被求值之前定好(db/paths 在模块顶层就读它们),所以走动态 import。
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { projects, sessions, tasks } = await import("../src/db/schema.js");
-const { attachLead, teamIsLive } = await import("../src/team/session.js");
+const { attachLead, sendInbound, teamIsLive } = await import("../src/team/session.js");
 const { SESSION_POISONED_NOTE } = await import("../src/executors/session-lost.js");
 const { eq } = await import("drizzle-orm");
 
@@ -64,10 +64,71 @@ interface Scenario {
   whileLive?: (taskId: string) => Promise<void>;
 }
 
-/** 起一台真的调度台,喂完 script 里的事件,等它自己收完台。 */
-async function runLead(name: string, s: Scenario) {
-  const taskId = `task-${name}`;
-  const sessId = `sess-${name}`;
+/** 组装一台调度台并挂上线。返回它的 handle 计数,方便断言「有没有往进程里塞过话」。 */
+async function startLead(opts: {
+  taskId: string;
+  sessId: string;
+  cliSessionId: string;
+  events: AsyncGenerator<AgentEvent>;
+}) {
+  await db.insert(sessions).values({
+    id: opts.sessId,
+    taskId: opts.taskId,
+    role: "lead",
+    agentType: "codex",
+    executor: "codex@test",
+    cwd: root,
+    cliSessionId: opts.cliSessionId || null,
+    resumeCommand: opts.cliSessionId ? `codex exec resume ${opts.cliSessionId}` : null,
+    startedAt: at,
+    turnStartedAt: at,
+    activeMs: 0,
+    exitStatus: null,
+  });
+  const runDir = join(root, "runs", opts.taskId);
+  mkdirSync(runDir, { recursive: true });
+  let sent = 0;
+  let killed = 0;
+  attachLead({
+    taskId: opts.taskId,
+    sessId: opts.sessId,
+    cliSessionId: opts.cliSessionId,
+    agentType: "codex",
+    executorId: null,
+    model: null,
+    reasoningEffort: null,
+    cwd: root,
+    handle: {
+      sessionId: opts.cliSessionId,
+      commandLine: `codex exec resume ${opts.cliSessionId}`,
+      events: opts.events,
+      send: () => { sent++; },
+      interrupt: () => {},
+      dropSession: () => {},
+      close: () => {},
+      kill: () => { killed++; },
+    },
+    out: createWriteStream(join(runDir, `${opts.sessId}.md`), { flags: "a" }),
+    busy: true,
+    turnStart: at,
+    pending: [],
+    notices: [],
+    pendingCredential: null,
+    wantedStatus: null,
+    statusTimer: null,
+    retired: false,
+    idleTimer: null,
+    closing: null,
+  });
+  return {
+    runDir,
+    sent: () => sent,
+    killed: () => killed,
+  };
+}
+
+/** 建一条 mode:"team" 的任务行(状态 running,回合进行中)。 */
+async function seedTeamTask(taskId: string) {
   await db.insert(tasks).values({
     id: taskId,
     projectId: "project",
@@ -84,53 +145,18 @@ async function runLead(name: string, s: Scenario) {
     createdAt: at,
     updatedAt: at,
   });
-  await db.insert(sessions).values({
-    id: sessId,
-    taskId,
-    role: "lead",
-    agentType: "codex",
-    executor: "codex@test",
-    cwd: root,
-    cliSessionId: s.cliSessionId || null,
-    resumeCommand: s.cliSessionId ? `codex exec resume ${s.cliSessionId}` : null,
-    startedAt: at,
-    turnStartedAt: at,
-    activeMs: 0,
-    exitStatus: null,
-  });
-  const runDir = join(root, "runs", taskId);
-  mkdirSync(runDir, { recursive: true });
+}
 
-  let sent = 0;
-  let killed = 0;
-  const handle: ResidentHandle = {
-    sessionId: s.cliSessionId,
-    commandLine: `codex exec resume ${s.cliSessionId}`,
-    events: s.script(),
-    send: () => { sent++; },
-    interrupt: () => {},
-    dropSession: () => {},
-    close: () => {},
-    kill: () => { killed++; },
-  };
-  attachLead({
+/** 起一台真的调度台,喂完 script 里的事件,等它自己收完台。 */
+async function runLead(name: string, s: Scenario) {
+  const taskId = `task-${name}`;
+  const sessId = `sess-${name}`;
+  await seedTeamTask(taskId);
+  const { runDir, sent, killed } = await startLead({
     taskId,
     sessId,
     cliSessionId: s.cliSessionId,
-    agentType: "codex",
-    executorId: null,
-    model: null,
-    reasoningEffort: null,
-    cwd: root,
-    handle,
-    out: createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" }),
-    busy: true,
-    turnStart: at,
-    pending: [],
-    notices: [],
-    pendingCredential: null,
-    idleTimer: null,
-    closing: null,
+    events: s.script(),
   });
 
   const deadline = Date.now() + 15_000;
@@ -152,8 +178,8 @@ async function runLead(name: string, s: Scenario) {
     trace: (() => { try { return readFileSync(join(runDir, `${sessId}.trace.jsonl`), "utf8"); } catch { return ""; } })(),
     task: async () => (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!,
     session: async () => (await db.select().from(sessions).where(eq(sessions.id, sessId))).at(0)!,
-    sent: () => sent,
-    killed: () => killed,
+    sent,
+    killed,
   };
 }
 
@@ -317,6 +343,52 @@ try {
   assert.match(f.md, /调度台待命状态写入数据库失败/, "第一次失败要如实说出来");
   assert.equal((await f.task()).status, "idle", "收台后同样应是待命");
   ok("落 idle 写库瞬时失败:事件流在线时也会自己补上");
+
+  // ── ⑦ 被接管的旧调度台:遗留的状态重试不许在新台退场后复活过期的 running ──────────
+  // 上一条那套重试最容易坏的地方不是重试本身,是**「谁说了算」判错**:只看 leads 里此刻
+  // 有没有人的话,新台正常收尾把自己摘牌之后 map 就是空的,旧台的计时器一到点就会把过期
+  // 的 running 写回去。这一次没有任何在线调度台或下一个回合会来覆盖它 ——
+  // teamIsLive=false 而库里写着 running,页面永远显示「运行中/可停止」。
+  const HAND_OVER = "task-supersede-status";
+  await seedTeamTask(HAND_OVER);
+  let oldArmed!: () => void;
+  const oldRetryArmed = new Promise<void>((r) => { oldArmed = r; });
+  let releaseOld!: () => void;
+  const holdOld = new Promise<void>((r) => { releaseOld = r; });
+  async function* oldScript(): AsyncGenerator<AgentEvent> {
+    breakTaskWrites();
+    yield { kind: "turnEnd" }; // 攒着的执行者消息会立刻开下一回合 → 写 running,失败
+    healTaskWrites();
+    oldArmed();
+    await holdOld; // 旧台的消费循环留在线上,还没轮到它收尾
+    yield { kind: "done", exitStatus: 0 };
+  }
+  await startLead({ taskId: HAND_OVER, sessId: "sess-old", cliSessionId: "old-thread", events: oldScript() });
+  // 让它这一回合有活要接着干:turnEnd 时会 beginTurn,那一笔 running 正好撞上故障。
+  await sendInbound(HAND_OVER, "执行者汇报:干完了");
+  await oldRetryArmed;
+
+  // 新台接管,并且**先于**旧计时器到点正常收尾(写 idle 后把自己摘牌)。
+  async function* newScript(): AsyncGenerator<AgentEvent> {
+    yield { kind: "done", exitStatus: 0 };
+  }
+  await startLead({ taskId: HAND_OVER, sessId: "sess-new", cliSessionId: "new-thread", events: newScript() });
+  const handOverDeadline = Date.now() + 15_000;
+  while (teamIsLive(HAND_OVER) && Date.now() < handOverDeadline) await new Promise((r) => setTimeout(r, 20));
+  assert.equal(teamIsLive(HAND_OVER), false, "新台应当已经收完台并摘牌");
+
+  // 旧计时器现在到点。等足几个重试周期,它一个字都不该再写。
+  await new Promise((r) => setTimeout(r, Number(process.env.ASH_TEAM_STATUS_RETRY_MS) * 5 + 200));
+  releaseOld();
+  while (teamIsLive(HAND_OVER) && Date.now() < handOverDeadline) await new Promise((r) => setTimeout(r, 20));
+  await new Promise((r) => setTimeout(r, Number(process.env.ASH_TEAM_STATUS_RETRY_MS) * 5 + 200));
+  assert.equal(teamIsLive(HAND_OVER), false, "两台都收完了,不该还有人在线");
+  assert.equal(
+    (await db.select().from(tasks).where(eq(tasks.id, HAND_OVER))).at(0)!.status,
+    "idle",
+    "被接管的旧调度台把过期的 running 写了回去 —— 没有在线调度台了,这个假状态再也不会自愈",
+  );
+  ok("被接管的旧调度台不会在新台退场后复活过期状态");
 
   console.log("test:team-resilience ok");
 } finally {
