@@ -656,6 +656,63 @@ try {
   );
   ok("换台时攒着的轮换旁注照样落盘,刷新后还看得见");
 
+  // ── ⑬ 换台时攒着的执行者汇报要跟着走,而且只送一次 ────────────────────────────────
+  // 调度台忙着的时候,执行者的汇报/提问只进 lead.pending —— 既没送进 CLI,也没落盘(要等
+  // endTurn 合并投递时才 recordSystemTurn)。工作目录被抽走那条路会当场摘牌并杀掉旧进程,
+  // 那批消息就烂在一个已经出局的对象里:新台在线、页面刷新,一份执行结果或一个待回答的
+  // 提问无声消失,调度者接着在缺这些事实的情况下做决定。
+  // 反过来也得钉住:搬走时不从旧台清空的话,晚一步到的 turnEnd 会照原样再送一遍。
+  const PENDING_KEEP = "task-pending-on-handover";
+  const PENDING_SESS = "sess-pending-on-handover";
+  const WORKER_REPORT = "执行者汇报:这条必须活过换台";
+  await seedTeamTask(PENDING_KEEP);
+  let releasePendingOld!: () => void;
+  const holdPendingOld = new Promise<void>((r) => { releasePendingOld = r; });
+  async function* pendingOldScript(): AsyncGenerator<AgentEvent> {
+    await holdPendingOld; // 等新台接管之后再收这个回合
+    yield { kind: "turnEnd" }; // 晚到的收尾:没清空的话会把同一条汇报再送一次
+    yield { kind: "done", exitStatus: 0 };
+  }
+  const pendingOld = await startLead({
+    taskId: PENDING_KEEP, sessId: PENDING_SESS, cliSessionId: "old-thread", events: pendingOldScript(),
+  });
+  await sendInbound(PENDING_KEEP, WORKER_REPORT); // 旧台正忙 → 只进 pending,没进 CLI 也没落盘
+  let releasePendingNew!: () => void;
+  const holdPendingNew = new Promise<void>((r) => { releasePendingNew = r; });
+  async function* pendingNewScript(): AsyncGenerator<AgentEvent> {
+    yield { kind: "turnEnd" }; // 新台这一回合收尾 —— 攒着的汇报该在这儿合并送出去
+    await holdPendingNew;
+    yield { kind: "done", exitStatus: 0 };
+  }
+  const pendingNew = await startLead({
+    taskId: PENDING_KEEP, sessId: PENDING_SESS, cliSessionId: "new-thread", events: pendingNewScript(), reuse: true,
+  });
+  releasePendingOld();
+  const pendingDeadline = Date.now() + 10_000;
+  while (pendingNew.sent() === 0 && Date.now() < pendingDeadline) await new Promise((r) => setTimeout(r, 20));
+  await new Promise((r) => setTimeout(r, 200)); // 给旧台那条晚到的 turnEnd 走完的时间
+  assert.equal(teamIsLive(PENDING_KEEP), true, "这一条要在新台还在线时验");
+  assert.equal(
+    pendingNew.sent(),
+    1,
+    "换台把攒着的执行者汇报丢了 —— 那份执行结果/待回答的提问既没进 CLI 也没落盘,调度者不知道它发生过",
+  );
+  assert.equal(
+    pendingOld.sent(),
+    0,
+    "搬走时没从旧台清空 —— 晚到的 turnEnd 把同一条汇报又塞进了那个已经出局(且已被杀)的 handle",
+  );
+  releasePendingNew();
+  while (teamIsLive(PENDING_KEEP) && Date.now() < pendingDeadline) await new Promise((r) => setTimeout(r, 20));
+  await new Promise((r) => setTimeout(r, 200));
+  const pendingMd = readFileSync(join(pendingOld.runDir, `${PENDING_SESS}.md`), "utf8");
+  assert.equal(
+    pendingMd.split(WORKER_REPORT).length - 1,
+    1,
+    "这条汇报在共用的 .md 里只该出现一次 —— 刷新后看得见,又不能重复成两条",
+  );
+  ok("换台时攒着的执行者汇报跟着走,只送一次且刷新后看得见");
+
   console.log("test:team-resilience ok");
 } finally {
   healSessionWrites();

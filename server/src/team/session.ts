@@ -96,7 +96,9 @@ interface Lead {
   out: Writable;
   busy: boolean;
   turnStart: string | null;
-  pending: string[]; // 回合进行中攒下的执行者消息,turnEnd 时合并成一条送
+  // 回合进行中攒下的执行者消息,turnEnd 时合并成一条送。**它们不属于这台调度台**:
+  // 换台或关台时会被交到托盘上等下一台认领(strandPending / adoptStranded)。
+  pending: string[];
   // 会话轮换旁注:实时立刻播,落盘攒到 writeTurnEnd 之后再补 —— 重建时 agentEnd 只往
   // 「最后一段是 agent」的气泡上盖时间戳(shared/src/index.ts),夹在正文和 agentEnd
   // 之间会让这一回合的用时失准。
@@ -115,6 +117,11 @@ interface Lead {
 
 const leads = new Map<string, Lead>();
 const opening = new Map<string, Promise<Lead>>();
+// 旧台交出去时手上那批还没送出的执行者汇报(见 strandPending)。它们既没进 CLI 也没落盘
+// —— 入站消息是等 endTurn 合并投递时才 recordSystemTurn 的,所以没人接住就等于一份执行
+// 结果、一句失败说明或一个待回答的提问凭空消失,而调度者会在缺这些事实的情况下接着做
+// 决定(2026-08-26 第 10 轮审查)。下一台调度台一挂上线就认领(adoptStranded)。
+const strandedInbound = new Map<string, string[]>();
 
 export function teamIsLive(taskId: string): boolean {
   return leads.has(taskId) || opening.has(taskId);
@@ -441,6 +448,9 @@ export function attachLead(lead: Lead): void {
   const previous = leads.get(lead.taskId);
   if (previous && previous !== lead) retireLead(previous);
   leads.set(lead.taskId, lead);
+  // 认领在**这台之前**交班留下的入站消息。要排在 consume 之前:万一这台的事件流当场就
+  // 结束了,closeLead 会把它们原样放回托盘,而不是跟着这台一起没。
+  adoptStranded(lead);
   void consume(lead).catch((err) => console.error(`[ash] team consume(${lead.taskId}) failed:`, err));
 }
 
@@ -743,6 +753,7 @@ function retireLead(lead: Lead): void {
   lead.retired = true;
   clearStatusRetry(lead);
   lead.wantedStatus = null;
+  strandPending(lead); // 还没送出的执行者汇报交给接管的那台,别烂在出局的对象里
   // 攒着的轮换旁注必须**在断流之前**落盘。它为了不夹在正文和 agentEnd 之间才缓存下来
   // (见 Lead.notices),可摘牌之后 turnEnd/closeLead 的那次 flush 只会写进丢弃流 ——
   // 「这条会话已作废、下次会丢上下文」这句关键说明就只活在 SSE 里,用户刷新一次就再也
@@ -755,6 +766,34 @@ function retireLead(lead: Lead): void {
   const out = lead.out;
   lead.out = new Writable({ write(_chunk, _enc, done) { done(); } });
   out.end();
+}
+
+/**
+ * 旧台交班时把手上那批还没送出的入站消息挪到托盘上,等下一台认领。
+ *
+ * **必须同时清空 `lead.pending`**:摘牌不会让旧进程闭嘴,它晚一步吐出的 turnEnd 照样会走
+ * endTurn 那段合并投递,不清就是同一条汇报朝一个已经被杀的 handle 再送一遍。
+ */
+function strandPending(lead: Lead): void {
+  if (!lead.pending.length) return;
+  const queue = strandedInbound.get(lead.taskId) ?? [];
+  queue.push(...lead.pending);
+  strandedInbound.set(lead.taskId, queue);
+  lead.pending = [];
+}
+
+/**
+ * 新台挂上线时认领托盘。
+ *
+ * 挂进 `pending` 而不是当场 send:attachLead 的下一步就是这台自己的第一个回合(openLead
+ * 里紧跟着 beginTurn),当场送等于往一个正在跑的回合里插话 —— 合并投递本来就是为这种
+ * 情况设计的。放在队头是因为它们比这台后来收到的消息更早发生。
+ */
+function adoptStranded(lead: Lead): void {
+  const queue = strandedInbound.get(lead.taskId);
+  if (!queue?.length) return;
+  strandedInbound.delete(lead.taskId);
+  lead.pending.unshift(...queue);
 }
 
 function clearStatusRetry(lead: Lead): void {
@@ -874,6 +913,10 @@ async function closeLead(
   } else {
     retireLead(lead); // 被接管的一方从此不写任何共享产物(状态/.md/trace/SSE),见 retireLead
   }
+  // 进程没了,这一回合攒下的执行者汇报还没送出去(崩在回合中间、或者用户按了「停止全组」)。
+  // 它们既没进 CLI 也没落盘,跟着这个 Lead 一起消失就是无声丢账 —— 放回托盘,下一次开台时
+  // 由接手的那台合并送出。superseded 那一路 retireLead 已经搬过,这里是空转。
+  strandPending(lead);
   const endIso = now();
   const spent = lead.turnStart ? Math.max(0, Date.parse(endIso) - Date.parse(lead.turnStart)) : 0;
   // CLI 否认了这条会话:把失效的 id 连同由它派生的三件套恢复命令一起清掉,下一次说话
