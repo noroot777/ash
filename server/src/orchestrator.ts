@@ -41,9 +41,8 @@ import {
 } from "./run-prompts.js";
 // 「登记的基线被换掉了」这句话：说不说、怎么说、失败那条路怎么补，全在这一份里。
 import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
-import { readCodexCliVersion } from "./executors/codex-rollout.js";
-import { affectedCodexSessionWarning } from "./executors/version-policy.js";
 import { LOST_SESSION_PATCH } from "./executors/session-lost.js";
+import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "./session-version-guard.js";
 
 // Why a task is being (re)started — only used to label the resume; all reasons
 // behave the same (resume if there's a resumable session, else fresh). Note: a
@@ -155,10 +154,11 @@ export async function continueTask(
   if (head?.mode === "team") {
     if (opts.turnHeld) releaseTurn(taskId); // 占位对常驻调度台无意义，原样还回
     if (isAcceptingTask(taskId)) return false;
-    // 调度台明确拒收(离线时收到 `/compact` 这类原生命令,拼上唤醒前言就不再是命令)
-    // 时,这一句**一个字都没送出去** —— 绝不能顺手 onDelivered():那是 pending → sent
-    // 的唯一写点,标了 sent 排队/定时的那条就从托盘里消失、会话里也没有,用户的话凭空
-    // 蒸发(docs/incidents.md「排队消息凭空消失」)。跟单飞锁挡回同一口径:返回 false。
+    // 调度台明确拒收(离线时收到 `/compact` 这类原生命令,拼上唤醒前言就不再是命令;
+    // 或者进程正在收尾、stdin 已经关了)时,这一句**一个字都没送出去** —— 绝不能顺手
+    // onDelivered():那是 pending → sent 的唯一写点,标了 sent 排队/定时的那条就从托盘里
+    // 消失、会话里也没有,用户的话凭空蒸发(docs/incidents.md「排队消息凭空消失」)。
+    // 跟单飞锁挡回同一口径:返回 false。
     const delivered = await deliverToLead(taskId, userText, {
       attachments: opts.attachments,
       throwOnOpenFailure: opts.throwOnTeamUnavailable,
@@ -268,14 +268,15 @@ export async function continueTask(
       : opts.resumeSessionId
         ? all.find((s) => s.id === opts.resumeSessionId)
         : all.find((s) => s.agentType === agent && s.role === sessionRole);
-    let sessionUpgradeNote: string | undefined;
-    if (agent === "codex" && prev?.cliSessionId) {
-      const warning = affectedCodexSessionWarning(await readCodexCliVersion(prev.cliSessionId));
-      if (warning) {
-        await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, prev.id));
-        sessionUpgradeNote = `${warning} 本轮已使用全新会话。`;
-        prev = undefined;
-      }
+    const affectedSessionVersion = await affectedCodexResumeVersion(agent, prev?.cliSessionId);
+    if (prev && affectedSessionVersion) {
+      // 说明必须先持久写进旧会话，凭据后清；否则下面任一 await 抛错都会留下一个
+      // 「上下文没了、但没有解释」的永久状态。
+      await announceAffectedSessionReplacement({
+        taskId, sessionId: prev.id, role: sessionRole, agentType: agent, version: affectedSessionVersion,
+      });
+      await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, prev.id));
+      prev = undefined;
     }
     const resuming = !!prev?.cliSessionId;
 
@@ -513,10 +514,6 @@ export async function continueTask(
       // 刷新后仍要能看出来(见 AGENTS.md 关于持久可见状态的约定)。
       writeTurn(out, { t: "system", agent, text: WORKSPACE_RESET_MARKER }, turnStart);
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: sessionRole, agentType: agent, event: { kind: "system", text: WORKSPACE_RESET_MARKER, at: turnStart } });
-    }
-    if (sessionUpgradeNote) {
-      writeTurn(out, { t: "system", agent, text: sessionUpgradeNote }, turnStart);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: sessionRole, agentType: agent, event: { kind: "system", text: sessionUpgradeNote, at: turnStart } });
     }
     const baseNote = baseFallbackNote(baseFallback);
     if (baseNote) {

@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
-import { access } from "node:fs/promises";
-import { constants } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { createServer } from "vite";
 
 // 写操作落地了、但「现在的工作区长什么样」没读到时，面板必须**说出来并停掉写操作**。
@@ -13,24 +12,6 @@ import { createServer } from "vite";
 // 「暂存全部并提交（7）」，作用的却是磁盘上的另一批文件（第 2 轮审查的 P2）。
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const chromeCandidates = [
-  process.env.CHROME_BIN,
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  chromium.executablePath(),
-].filter(Boolean);
-
-async function executablePath() {
-  for (const candidate of chromeCandidates) {
-    try {
-      await access(candidate, constants.X_OK);
-      return candidate;
-    } catch {
-      // Try the next local Chrome/Chromium candidate.
-    }
-  }
-  throw new Error("找不到可执行的 Chrome/Chromium；可通过 CHROME_BIN 指定路径");
-}
-
 const change = (path, kind) => ({ path, origPath: null, kind, conflict: null });
 const statusOf = (staged) => ({
   branch: { head: "main", detached: false, oid: "abc1234", upstream: null, ahead: null, behind: null },
@@ -61,7 +42,7 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
-  browser = await chromium.launch({ executablePath: await executablePath(), headless: true });
+  browser = await chromium.launch(await chromeLaunchOptions());
   const page = await browser.newPage();
 
   // 服务端的两个开关：状态读得到吗、暂存生效了没。

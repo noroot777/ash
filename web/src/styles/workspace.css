@@ -162,31 +162,6 @@
   box-shadow: var(--surface-shadow);
 }
 
-.workspace-cli-upgrade-notice {
-  display: flex;
-  min-height: 36px;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  border-bottom: 1px solid color-mix(in lch, var(--amber) 42%, var(--line));
-  background: color-mix(in lch, var(--amber) 10%, var(--panel));
-  padding: 7px 14px;
-  color: var(--ink);
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-.workspace-cli-upgrade-notice button {
-  flex: none;
-  border: 0;
-  background: transparent;
-  padding: 2px 4px;
-  color: var(--amber);
-  font: inherit;
-  font-weight: 650;
-  cursor: pointer;
-}
-
 .workspace-app-bar {
   display: flex;
   height: 44px;

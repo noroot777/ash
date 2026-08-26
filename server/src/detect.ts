@@ -11,7 +11,6 @@ export interface DetectedAgent {
   available: boolean;
   path: string | null;
   version: string | null;
-  versionWarning?: string;
   /** 支持常驻会话(openResident)——只有这类 CLI 能当 /team 的调度者。 */
   resident: boolean;
 }
@@ -68,6 +67,11 @@ export interface DetectedCli extends KnownCli {
   available: boolean;
   path: string | null;
   version: string | null;
+  /**
+   * 升级提醒只挂在这份**目录**形状上,不挂 `DetectedAgent`:`/agents/catalog` 只有用户
+   * 亲手点「检测本地智能体」才会请求,而 `/agents/detect` 是执行器选择器在后台常拉的。
+   * 挂到后台那条上,用户还没检测就会被糊一条升级横幅(用户 2026-08-25 明确否掉了这个)。
+   */
   versionWarning?: string;
   /** 该执行器支持常驻会话(能当 /team 调度者)—— 直接问执行器本人有没有 openResident。 */
   resident: boolean;
@@ -140,18 +144,35 @@ export function detectKnownClis(): Promise<DetectedCli[]> {
   return Promise.all(KNOWN_CLIS.map(detectOne));
 }
 
+/**
+ * 注册闸:装的是受影响版本就不让它注册(用户 2026-08-25「而且不让它注册」)。
+ *
+ * 返回的是**拒绝理由**,而且刻意**不带任何版本诊断** —— 连「本机装的版本有缺陷」都不能
+ * 说。注册可以从任何入口发起(Profile 组里的「新增」、API 直连、旧前端),那些入口跟
+ * 「检测本地智能体」无关;用户的口径是**亲手点了检测、并且检测出 0.147.x,才做版本提示**,
+ * 所以这里只说「这次没注册成,先去点检测」,把版本这件事整个留给检测结果。
+ * 升级怎么做由 `DetectedCli.versionWarning` 在检测结果卡片里讲。
+ */
+export async function registrationBlockReason(type: AgentType): Promise<string | undefined> {
+  if (type !== "codex") return undefined;
+  const cli = KNOWN_CLIS.find((candidate) => candidate.type === type);
+  if (!cli) return undefined;
+  const probe = await probeBins(cli.bins, cli.fallbackVersionMatch);
+  if (!isAffectedCodexVersion(probe?.version ?? null)) return undefined;
+  return "暂时不能把 Codex 注册为执行器。请先在「执行器」页点「检测本地智能体」，按检测结果处理。";
+}
+
 // 派任务视角的精简形状(形状保持不变):团队/讨论的执行器选择器靠它决定谁能当
 // 调度者。`resident` 直接问执行器本人有没有 openResident —— 「谁能当调度者」只有
 // 这一个真相来源,前端照着过滤就行,不用在 shared 里再抄一张名单出来漂移。
 export async function detectLocalAgents(): Promise<DetectedAgent[]> {
   const all = await Promise.all(KNOWN_CLIS.map(detectOne));
-  return all.map(({ type, bin, available, path, version, versionWarning, resident }) => ({
+  return all.map(({ type, bin, available, path, version, resident }) => ({
     type,
     bin,
     available,
     path,
     version,
-    versionWarning,
     resident,
   }));
 }

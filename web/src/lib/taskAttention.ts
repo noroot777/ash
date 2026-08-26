@@ -68,7 +68,10 @@ export function isTeamSettledLead(task: TaskListItem, workers: TaskListItem[] = 
 //     否则「排着 / 暂停」里会堆着几十个其实早就干完的团队。
 export function spreadBucket(task: TaskListItem, workers: TaskListItem[] = []): SpreadBucket {
   if (task.question) return "todo";
-  if (task.status === "failed" || task.stage === "awaiting_acceptance" || task.stage === "verify_failed") return "todo";
+  if (task.status === "failed" || task.stage === "verify_failed") return "todo";
+  // 等我盖章 = 轮到我动，判据跟任务模式共用一份（见下面 isTaskAwaitingAcceptance）。
+  // 干完没点头的因此落「需要你处理」，而不是「已收尾」—— 后者是「这事翻篇了」的意思。
+  if (isTaskAwaitingAcceptance(task, workers)) return "todo";
   if (isTaskLive(task, workers)) return "run";
   // 调度台自己没在说话，底下却有执行者卡在提问上 —— 那句话最后是要你来答的。排在
   // isTaskLive 之后：调度台还在跑就由它自己去答，那种时候事实是「机器在动」。
@@ -114,13 +117,24 @@ export function awaitsYourWord(task: TaskListItem, workers: TaskListItem[] = [])
   return isTeamLead(task) && workers.some((worker) => worker.question || worker.status === "paused");
 }
 
-// 「等我盖章」。只认**显式的** stage=awaiting_acceptance —— 这一档从前回落到「干完了且
-// 没盖过章」，可 stage 多数时候是 null（自由工作流只调 complete_task），于是三百多条早就
-// 收尾的历史任务全被当成待验收堆在任务模式里，模式想说的「还没落地的活」就被淹了。
-// 行首那颗未验收的圆点仍按老口径走（useTaskReadState 的 awaitsAcceptance），两者分工：
-// 点是「我还没点过头」的长期记号，这一档是「这条线现在停在验收关口上」。
-export function isTaskAwaitingAcceptance(task: Pick<TaskListItem, "stage">): boolean {
-  return !isAcceptedStage(task) && task.stage === "awaiting_acceptance";
+// 「等我盖章」= 干完了、没盖过章。**不设时限**，跟行首那颗未验收圆点（useTaskReadState
+// 的 awaitsAcceptance）同一个口径：没点过头的活就是没落地的活，搁多久都算。
+//
+// 这一档来回改过两次，原委记在这儿免得再绕：
+//   · 起初回落到「done 且没盖章」，于是三百多条历史任务把任务模式淹了；
+//   · 收窄成只认显式 stage=awaiting_acceptance —— 可自由工作流只调 complete_task，
+//     stage 多数时候是 null，今天刚干完、界面上写着「完成待验收」的任务反而进不来；
+//   · 2026-08-26 查明淹掉列表的是 daily-report 那条流水线（541 条里它占 518 条，
+//     连 28 条显式 awaiting_acceptance 也全是它的）。用户把那批一次性标成已验收，
+//     并明确「以后不会发生这种事情」，剩下的一共 22 条 —— 到这里时限就没有存在理由了。
+// 所以真正的判据只有「盖没盖章」这一条，别再往里加年龄、条数之类的兜底：那是拿口径
+// 去补数据的问题，历史证明补不对。
+//
+// 团队的「干完了」写在执行者身上（调度台自己没有 done 终态），所以要连执行者一起判。
+export function isTaskAwaitingAcceptance(task: TaskListItem, workers: TaskListItem[] = []): boolean {
+  if (isAcceptedStage(task)) return false;
+  if (task.stage === "awaiting_acceptance") return true;
+  return awaitsAcceptance(task, task.status === "done" || isTeamSettledLead(task, workers));
 }
 
 export function inTaskMode(task: TaskListItem, workers: TaskListItem[] = []): boolean {
@@ -128,5 +142,5 @@ export function inTaskMode(task: TaskListItem, workers: TaskListItem[] = []): bo
   // 盖过章的一律出局，跟 spreadBucket 把 accepted 排在 run 之后同一个道理：事实高于
   // 记号（验收完又重新开工的上一条已经放行），但只剩记号时它就是「落地了」。
   if (isAcceptedStage(task)) return false;
-  return isTaskAwaitingAcceptance(task) || awaitsYourWord(task, workers);
+  return isTaskAwaitingAcceptance(task, workers) || awaitsYourWord(task, workers);
 }

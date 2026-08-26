@@ -50,6 +50,10 @@ export function ExecutorsSettings({ notify }: { notify: (message: string) => voi
 
   const register = async (cli: DetectedCli) => {
     if (!cli.type) return;
+    if (cli.versionWarning) {
+      notify(cli.versionWarning);
+      return;
+    }
     setRegisteringKey(cli.key);
     try {
       const created = await api.createAgent({

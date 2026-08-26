@@ -84,17 +84,17 @@ export function spawnErrorMessage(bin: string, err: NodeJS.ErrnoException): stri
 // close_fds 掐断继承的孙进程。局限:双 fork 且中间
 // 层已死、又恰好隔着一层 close_fds 的深孤儿仍可能漏(实践中极少)。
 //
-// **Windows 上这一层是残的,而且必须承认它是残的。** 两个缺口都堵不上:
+// **Windows 上这一层仍然比 POSIX 弱,但正常收尾那条路可以补。** 两个差异:
 //  · 继承 fd 反查没有零依赖等价物(handle.exe 要单独装、要管理员),所以
 //    Windows 上根本不开追踪文件,只剩 ppid 树遍历这一半。
 //  · Windows 不做 reparent,孤儿的 ParentProcessId 保留着已死父进程的号 ——
-//    ppid 树从活着的根走不到它们。也就是说 codex 用 `start /b` 之类甩出去的
-//    孙进程,停止时**杀不到**。
-// 结论:Windows 上 stop 覆盖「CLI 及其还连着的后代」,不覆盖已经甩脱的孤儿。
-// 这是能力缺口,不是 bug —— 别在别处写「Windows 上停止等价」。
+//    CLI 活着时从它往下走得到;CLI 已死以后如果把它的 pid 一起忘了,就再也找不到入口。
+//    RunHandle 因此在事件流收尾时调用 cleanupAfterRun:ChildProcess 还握在手里,哪怕根
+//    进程刚退出,仍能拿它的旧 pid 走这棵保留下来的 ppid 树。server 重启后句柄丢了、
+//    或 pid 已经被复用的深孤儿仍然无解,所以 Windows 依旧是尽力而为,不是等价保证。
 const trackFiles = new WeakMap<ChildProcess, string>();
 
-async function killEscapees(child: ChildProcess, sig: NodeJS.Signals): Promise<void> {
+async function killEscapees(child: ChildProcess, sig: NodeJS.Signals): Promise<number[]> {
   const targets = new Set<number>();
   const trackPath = trackFiles.get(child);
   if (trackPath) {
@@ -133,6 +133,45 @@ async function killEscapees(child: ChildProcess, sig: NodeJS.Signals): Promise<v
     if (pid <= 1) continue;
     killOne(pid, sig);
   }
+  return [...targets].filter((pid) => pid > 1);
+}
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function waitForPidsGone(pids: readonly number[], timeoutMs: number): Promise<number[]> {
+  const deadline = Date.now() + timeoutMs;
+  let alive = pids.filter(isPidAlive);
+  while (alive.length && Date.now() < deadline) {
+    await wait(50);
+    alive = pids.filter(isPidAlive);
+  }
+  return alive;
+}
+
+/**
+ * 一次性 agent 的事件流已经收完:CLI 本体按理已经退出,但它用 `&` / `start /b`
+ * 甩出去的后台后代可能还活着。此刻 ChildProcess 还在手里,是 Windows 上利用已死
+ * ParentProcessId 找回它们的最后窗口;再往后只剩一个 worktree 路径,已经无法可靠
+ * 区分「agent 遗留」和「用户自己开的终端」。
+ *
+ * 先给 SIGTERM/Windows taskkill,最多等 2 秒;残存者再补 SIGKILL。正常没有逃逸者时
+ * 只做一次进程表快照,不会给每个回合平白加等待。
+ */
+export async function cleanupAfterRun(child: ChildProcess): Promise<void> {
+  const targets = new Set(await killEscapees(child, "SIGTERM"));
+  if (child.pid && isPidAlive(child.pid)) {
+    targets.add(child.pid);
+    killTree(child.pid, "SIGTERM");
+  }
+  if (!targets.size) return;
+
+  const survivors = await waitForPidsGone([...targets], 2000);
+  if (!survivors.length) return;
+  if (child.pid && survivors.includes(child.pid)) killTree(child.pid, "SIGKILL");
+  for (const pid of survivors) {
+    if (pid !== child.pid) killOne(pid, "SIGKILL");
+  }
+  await waitForPidsGone(survivors, 2000);
 }
 
 // Windows 上一律不 detached。三点理由:

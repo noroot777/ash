@@ -6,9 +6,11 @@ import { fileURLToPath } from "node:url";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { CodexExecutor } from "../src/executors/codex.js";
 import { codexAshMcpServerName } from "../src/executors/codex-mcp.js";
+import { IS_WINDOWS } from "../src/platform.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-codex-mcp-token-"));
-const fakeCodex = join(root, "fake-codex.mjs");
+const fakeCodexScript = join(root, "fake-codex.mjs");
+const fakeCodex = IS_WINDOWS ? join(root, "fake-codex.cmd") : fakeCodexScript;
 const probe = join(root, "mcp-probe.mjs");
 const output = join(root, "mcp-env.json");
 const oldProbe = process.env.ASH_FAKE_MCP_PROBE;
@@ -27,7 +29,7 @@ command = "node"
 import { writeFileSync } from "node:fs";
 writeFileSync(process.argv[2], JSON.stringify(process.env));
 `);
-  writeFileSync(fakeCodex, `#!/usr/bin/env node
+  writeFileSync(fakeCodexScript, `#!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -93,7 +95,8 @@ if (args.includes("app-server")) {
   process.stdout.write(JSON.stringify({ type: "turn.completed" }) + "\\n");
 }
 `);
-  chmodSync(fakeCodex, 0o755);
+  if (IS_WINDOWS) writeFileSync(fakeCodex, `@node "%~dp0fake-codex.mjs" %*\r\n`);
+  else chmodSync(fakeCodex, 0o755);
   process.env.ASH_FAKE_MCP_PROBE = probe;
   process.env.ASH_FAKE_MCP_OUTPUT = output;
 

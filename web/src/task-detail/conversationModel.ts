@@ -1,6 +1,7 @@
-import type { AgentEvent, ContextUsage, ServerEvent, Session, Task, TokenUsage } from "@ash/shared";
+import type { AgentEvent, ContextUsage, ServerEvent, Session, TokenUsage } from "@ash/shared";
 import { ANSWER_PREFIX, parseSessionOutput } from "@ash/shared";
 import { addUsage, usageTotal } from "@ash/shared/usage";
+import { normalizeSessionNoteText } from "@ash/shared/session-notes";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ExecutionEvent } from "../lib/executionTrace.ts";
 import type { ConversationEventTone, ConversationEventVariant } from "./conversationNotes.ts";
@@ -13,7 +14,7 @@ import {
   traceRun,
   traceUsage,
 } from "./conversationTraceGroups.ts";
-import { formatInstant, parseAttachmentText } from "./utils.ts";
+export { conversationToMarkdown } from "./conversationMarkdown.ts";
 
 export type LiveAgentEvent = Extract<ServerEvent, { type: "agent.event" }>;
 
@@ -378,15 +379,18 @@ export function buildConversationItems(
         traceTurnStartedAt = segment.at ?? traceTurnStartedAt;
       } else if (segment.kind === "system") {
         recordPersistedTurn(persistedTurns, "system", segment.text, segment.at, session.id);
+        // 旧版轮换文案落在用户 .md 里的原文带 Markdown 标记、措辞也不一样；旁注是纯文本
+        // 渲染，不归一就会把星号原样露出来（@ash/shared/session-notes）。
+        const text = normalizeSessionNoteText(segment.text);
         items.push({
           kind: "event",
           id: `persisted:system:${session.id}:${index}`,
-          text: segment.text,
+          text,
           at: segment.at,
           sessionId: session.id,
-          tone: noteTone(segment.text),
+          tone: noteTone(text),
           variant: "note",
-          verify: isVerifyNote(segment.text),
+          verify: isVerifyNote(text),
         });
         itemStartedAt = segment.at ?? itemStartedAt;
         traceTurnStartedAt = segment.at ?? traceTurnStartedAt;
@@ -458,15 +462,30 @@ export function buildConversationItems(
     }
     const event = entry.event.event;
     if (event.kind === "system") {
+      const text = normalizeSessionNoteText(event.text);
       appendEvent(items, {
         kind: "event",
         id: entry.id,
-        text: event.text,
+        text,
         at: event.at,
         sessionId: entry.event.sessionId,
-        tone: noteTone(event.text),
+        tone: noteTone(text),
         variant: "note",
-        verify: isVerifyNote(event.text),
+        verify: isVerifyNote(text),
+      });
+      continue;
+    }
+    // 会话轮换信号（`scope:"session"`，见 server 的 session-notice.ts）不是本回合的
+    // 失败：服务端已经把它转成持久 system 注记，这里再兜一道，免得任何漏转的直播事件
+    // 把一次 exit 0 的健康回合渲染成红色「异常」。
+    if (event.kind === "error" && event.scope === "session") {
+      appendEvent(items, {
+        kind: "event",
+        id: entry.id,
+        text: event.message,
+        sessionId: entry.event.sessionId,
+        tone: noteTone(event.message),
+        variant: "note",
       });
       continue;
     }
@@ -594,30 +613,4 @@ export function buildConversationItems(
     item.sessionContext = liveContext.get(item.sessionId) ?? item.session?.context ?? null;
   }
   return items;
-}
-
-export function conversationToMarkdown(items: ConversationItem[], task: Task): string {
-  const parts = [`# ${task.title || "未命名任务"}`];
-  if (task.body.trim()) parts.push(`> ${task.body.trim().replace(/\n/g, "\n> ")}`);
-  for (const item of items) {
-    if (item.kind === "event") {
-      parts.push(`_${item.text}${item.at ? ` · ${formatInstant(item.at)}` : ""}_`);
-      continue;
-    }
-    if (item.kind === "user") {
-      const parsed = parseAttachmentText(item.text);
-      const paths = [...parsed.paths, ...item.attachments];
-      const body = [parsed.body, ...paths.map((path) => `- ${path}`)].filter(Boolean).join("\n");
-      if (body) parts.push(`## ${item.bySystem ? "系统" : "你"}${item.at ? ` · ${formatInstant(item.at)}` : ""}\n\n${body}`);
-      continue;
-    }
-    const body = item.markdown.trim();
-    // 审查者的身份要跟着导出走：复制出去的会话同样是同一个执行器名说了好几段，
-    // 界面上认得出、粘出去认不出，等于没做。
-    const who = item.reviewer
-      ? `${item.label}（审查者${item.reviewer.round ? ` · 第 ${item.reviewer.round} 轮` : ""}）`
-      : item.label;
-    if (body) parts.push(`## ${who}${item.at ? ` · ${formatInstant(item.at)}` : ""}\n\n${body}`);
-  }
-  return `${parts.join("\n\n")}\n`;
 }
