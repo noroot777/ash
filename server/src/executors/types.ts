@@ -27,6 +27,9 @@ export interface RunHandle {
   commandLine: string;
   events: AsyncIterable<AgentEvent>;
   kill(): void;
+  // 单飞当前回合的原生引导通道。存在时调用方把新 user 消息送进同一个活动回合，
+  // 不结束任务、不释放单飞锁；回合自然结束后这根通道随 RunHandle 一起关闭。
+  steer?(text: string): Promise<void>;
   // 只有走了 detach 的这一轮才有：agent 的 pid + 已消费到的字节位置。
   // 调用方把它们存进 sessions，重启后据此找回并接管这个还活着的进程。
   detached?: { pid: number; committed: () => number };
@@ -116,6 +119,9 @@ export interface AgentExecutor {
   readonly model?: string;
   readonly reasoningEffort?: string;
   run(opts: RunOpts): RunHandle;
+  // 单飞专用的可引导运行。没有这项的执行器继续走 run()，用户点「引导会话」时由
+  // 上层沿用 kill + resume 降级；它不等于团队常驻，也不影响 openResident 的筛选。
+  runSteerable?(opts: RunOpts): RunHandle;
   // 重启后接管一个**还活着**的 agent 进程：把它的输出流接回本执行器自己的
   // parser。child 是 detached.ts 造的合成 ChildProcess（按 pid+offset 接回来的）。
   // 不实现 = 该执行器不支持接管，重启对它仍是「这一轮被打断」。

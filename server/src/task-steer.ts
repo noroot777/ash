@@ -17,7 +17,9 @@ import {
   isCanceling,
   isTurnClaimed,
   confirmDone,
+  reserveNativeSteerTask,
   reserveSteerTask,
+  type NativeSteerReservation,
   type StopSettle,
   takeConfirmed,
   turnRole,
@@ -26,6 +28,8 @@ import { setTaskStatus } from "./status.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { id, now } from "./util.js";
+import { nativeCliCommand } from "./skills.js";
+import { isAcceptingTask } from "./acceptance-lock.js";
 
 type MessageRow = typeof scheduledMessages.$inferSelect;
 
@@ -44,9 +48,12 @@ export type SteerQueuedMessageResult =
   | { ok: true; taskId: string; messageId: string }
   | { ok: false; status: 404 | 409 | 500; error: string };
 
-async function clearPreviousDirectionState(taskId: string): Promise<PreviousDirectionState> {
-  // 先换 token 再 kill：旧回合早到的确认会被本次 UPDATE 清掉，晚到的确认会因 token
-  // 不匹配被 409；更新前后各清一次内存快路，盖住 HTTP 与 DB await 的交错。
+async function clearPreviousDirectionState(
+  taskId: string,
+  rotateTurnToken = true,
+): Promise<PreviousDirectionState> {
+  // 硬切降级先换 token 再 kill；原生 steer 仍是同一个活动 turn，必须保留 token，让同一
+  // 进程里后续的 complete_task / ask_question 继续有效。两种路径都清两次内存快路。
   const confirmedBefore = takeConfirmed(taskId);
   const current = (await db
     .select({
@@ -63,7 +70,11 @@ async function clearPreviousDirectionState(taskId: string): Promise<PreviousDire
     if (confirmedBefore) confirmDone(taskId);
     throw new Error("任务不存在");
   }
-  const clearedTurnToken = id();
+  const clearedTurnToken = rotateTurnToken ? id() : current.activeTurnToken;
+  if (!clearedTurnToken) {
+    if (confirmedBefore) confirmDone(taskId);
+    throw new Error("当前回合缺少身份 token，无法原生引导");
+  }
   const updatedAt = now();
   let memoryConfirmed = confirmedBefore;
   try {
@@ -120,6 +131,43 @@ async function clearPreviousDirectionState(taskId: string): Promise<PreviousDire
     }
   }
   return { ...current, clearedTurnToken, memoryConfirmed };
+}
+
+async function discardLateDirectionState(taskId: string, turnToken: string): Promise<void> {
+  // 原生请求确认接收前，旧方向已经发出的完成/提问/检查点仍可能刚好落库；成功 ACK 后
+  // 再清一遍。此刻新消息还没开始执行，因此不会误删新方向自己产生的状态。token 不旋转。
+  takeConfirmed(taskId);
+  const late = (await db
+    .select({ question: tasks.question })
+    .from(tasks)
+    .where(and(eq(tasks.id, taskId), eq(tasks.activeTurnToken, turnToken)))).at(0);
+  const updatedAt = now();
+  await db
+    .update(tasks)
+    .set({
+      completeConfirmedAt: null,
+      resumePrompt: null,
+      question: null,
+      questionOptions: null,
+      questionItems: null,
+      updatedAt,
+    })
+    .where(and(eq(tasks.id, taskId), eq(tasks.activeTurnToken, turnToken)));
+  takeConfirmed(taskId);
+  if (late?.question) {
+    try {
+      bus.publish({
+        type: "task.question",
+        taskId,
+        updatedAt,
+        question: null,
+        questionOptions: null,
+        questionItems: null,
+      });
+    } catch (error) {
+      console.warn(`[ash] 原生引导已清迟到提问，但实时通知失败 ${taskId}:`, error);
+    }
+  }
 }
 
 async function restorePreviousDirectionState(
@@ -286,6 +334,57 @@ function deliverSteeredMessage(message: MessageRow): Promise<SteerQueuedMessageR
   });
 }
 
+type NativeReservation = Extract<NativeSteerReservation, { kind: "native" }>;
+
+function nativeMessageCanSteer(message: MessageRow, agentType: Parameters<typeof nativeCliCommand>[0]): boolean {
+  let attachments: unknown[] = [];
+  try { attachments = JSON.parse(message.attachments) as unknown[]; } catch { return false; }
+  return attachments.length === 0
+    && !message.agent
+    && !message.executorId
+    && !message.model
+    && !message.reasoningEffort
+    && !message.sessionRole
+    && !nativeCliCommand(agentType, message.text);
+}
+
+async function deliverNativeSteer(
+  message: MessageRow,
+  reservation: NativeReservation,
+): Promise<SteerQueuedMessageResult> {
+  let previous: PreviousDirectionState | null = null;
+  let delivered = false;
+  try {
+    if (!(await beginDelivery(message.id))) {
+      reservation.cancel();
+      return { ok: false, status: 409, error: "消息正在投递或已被处理，请稍后查看" };
+    }
+    previous = await clearPreviousDirectionState(message.taskId, false);
+    await reservation.deliver(message.text, now());
+    delivered = true;
+    await discardLateDirectionState(message.taskId, previous.activeTurnToken!);
+    await markSent(message);
+    return { ok: true, taskId: message.taskId, messageId: message.id };
+  } catch (error) {
+    if (!delivered) {
+      if (previous) await restorePreviousDirectionState(message.taskId, previous).catch(() => undefined);
+      await abortDelivery(message).catch(() => undefined);
+    } else {
+      // provider 已经接收，不能把原话退回队列再投一次；尽力把 sent 记账补齐。
+      await markSent(message).catch(() => undefined);
+    }
+    return {
+      ok: false,
+      status: isCanceling(message.taskId) ? 409 : 500,
+      error: delivered
+        ? `新方向已送达，但清理或记账失败：${error instanceof Error ? error.message : String(error)}`
+        : `引导会话失败，消息仍在排队：${error instanceof Error ? error.message : String(error)}`,
+    };
+  } finally {
+    reservation.cancel();
+  }
+}
+
 async function finishStoppedSteer(
   message: MessageRow,
   stopped: StopSettle,
@@ -361,6 +460,9 @@ export async function steerQueuedMessage(messageId: string): Promise<SteerQueued
     await appendTaskTimeline(task.id, `引导会话未执行：${error}`);
     return { ok: false, status: 409, error };
   }
+  if (isAcceptingTask(task.id)) {
+    return { ok: false, status: 409, error: "任务正在验收，引导未执行，消息继续排队" };
+  }
 
   const first = (await db
     .select({ id: scheduledMessages.id })
@@ -374,6 +476,15 @@ export async function steerQueuedMessage(messageId: string): Promise<SteerQueued
     .limit(1)).at(0);
   if (first?.id !== message.id) {
     return { ok: false, status: 409, error: "只能按排队顺序引导最早的一条消息" };
+  }
+
+  const native = reserveNativeSteerTask(task.id);
+  if (native.kind === "busy") {
+    return { ok: false, status: 409, error: "当前原生引导正在启动、投递或停止，消息仍在排队" };
+  }
+  if (native.kind === "native") {
+    if (nativeMessageCanSteer(message, native.agentType)) return deliverNativeSteer(message, native);
+    native.cancel();
   }
 
   let resolveDelivery!: (result: SteerQueuedMessageResult) => void;

@@ -1,3 +1,5 @@
+import type { AgentType } from "@ash/shared";
+
 // Registry of in-flight agent subprocesses, keyed by task, so a running task can
 // be killed on demand (manual stop / group pause) — the orchestrator/duet
 // register each live run here and the /stop API calls stopTask. A `stopping` map
@@ -7,6 +9,7 @@
 
 export interface Killable {
   kill(): void;
+  steer?(text: string): Promise<void>;
 }
 
 // 被杀回合的结算落位:手动停 → canceled(队列把它当离队);分组暂停 → paused
@@ -15,6 +18,13 @@ export type StopSettle = "canceled" | "paused";
 
 const handles = new Map<string, Set<Killable>>();
 const stopping = new Map<string, StopSettle>();
+type NativeSteerTarget = {
+  handle: Killable & { steer(text: string): Promise<void> };
+  agentType: AgentType;
+  record(text: string, at: string): void;
+};
+const nativeSteerTargets = new Map<string, NativeSteerTarget>();
+const nativeSteering = new Map<string, symbol>();
 // 「引导会话」是两阶段操作：先预约，让旧回合即使自然结束也等数据库清理结果；清理成功
 // 才提交并 kill，失败则撤销并按普通回合结算。这样 handle 在 await 窗口里消失也不会漏结算。
 type SteeringReservation = {
@@ -37,10 +47,80 @@ export function trackRun(taskId: string, h: Killable): void {
 }
 
 export function untrackRun(taskId: string, h: Killable): void {
+  if (nativeSteerTargets.get(taskId)?.handle === h) nativeSteerTargets.delete(taskId);
   const set = handles.get(taskId);
   if (!set) return;
   set.delete(h);
   if (!set.size) handles.delete(taskId);
+}
+
+/**
+ * 把执行器的原生 steer 管子与当前 transcript 绑定。trackRun 仍然先发生，让停止按钮在
+ * session 落库期间也能工作；绑定完成前若用户恰好点引导，只返回「正在启动」，绝不误降级
+ * 成 kill + resume。
+ */
+export function bindNativeSteer(
+  taskId: string,
+  handle: Killable,
+  input: { agentType: AgentType; record(text: string, at: string): void },
+): void {
+  if (!handle.steer || !handles.get(taskId)?.has(handle)) return;
+  nativeSteerTargets.set(taskId, {
+    handle: handle as Killable & { steer(text: string): Promise<void> },
+    agentType: input.agentType,
+    record: input.record,
+  });
+}
+
+export type NativeSteerReservation = {
+  kind: "native";
+  agentType: AgentType;
+  deliver(text: string, at: string): Promise<void>;
+  cancel(): void;
+} | { kind: "busy" } | { kind: "unsupported" };
+
+/** 原生引导只串行占用当前 RunHandle；它不结束 turn，也不碰旧的硬切 steering 状态机。 */
+export function reserveNativeSteerTask(taskId: string): NativeSteerReservation {
+  const set = handles.get(taskId);
+  const hasSteerable = [...(set ?? [])].some((handle) => !!handle.steer);
+  if (!hasSteerable) return { kind: "unsupported" };
+  const target = nativeSteerTargets.get(taskId);
+  if (!target || !set?.has(target.handle) || nativeSteering.has(taskId) || stopping.has(taskId)) {
+    return { kind: "busy" };
+  }
+  const token = Symbol(taskId);
+  nativeSteering.set(taskId, token);
+  let consumed = false;
+  const release = () => {
+    if (nativeSteering.get(taskId) === token) nativeSteering.delete(taskId);
+  };
+  return {
+    kind: "native",
+    agentType: target.agentType,
+    async deliver(text, at) {
+      if (consumed) throw new Error("本次引导预约已经使用");
+      consumed = true;
+      try {
+        if (stopping.has(taskId)) throw new Error("任务正在停止或暂停");
+        if (nativeSteerTargets.get(taskId) !== target || !handles.get(taskId)?.has(target.handle)) {
+          throw new Error("当前活动回合已经结束");
+        }
+        await target.handle.steer(text);
+        // provider 已确认收到以后，消息就已经是真实投递；实时广播失败不能把它退回队列
+        // 再投一次，否则同一句会进入模型两遍。
+        try { target.record(text, at); } catch (error) {
+          console.warn(`[ash] 原生引导已送达，但会话记录失败 ${taskId}:`, error);
+        }
+      } finally {
+        release();
+      }
+    },
+    cancel() {
+      if (consumed) return;
+      consumed = true;
+      release();
+    },
+  };
 }
 
 // True if the task has at least one live subprocess (i.e. it can be stopped).

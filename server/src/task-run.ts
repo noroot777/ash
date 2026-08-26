@@ -7,7 +7,7 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
+import { bindNativeSteer, trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun, afterSettlement } from "./single-run.js";
 import { taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
@@ -32,6 +32,7 @@ import { handoffBlockReason } from "./handoff-guard.js";
 import { reportTurnFailure } from "./turn-failure.js";
 import { AUTONOMY, COMPLETION_PROTOCOL } from "./run-prompts.js";
 import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
+import { recordUserConversationTurn } from "./conversation-turn.js";
 
 // 单任务的 **fresh run**:从任务描述起一条全新会话。续聊/召唤那一路(resume 已有会话、
 // 把用户原话送进去)在 orchestrator.ts 的 continueTask —— 两条路的前置条件、prompt 拼法
@@ -144,7 +145,8 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     // 解绑重启：输出落盘而不是走匿名管道，于是这个 agent 活得过 server 重启
     // （见 executors/detached.ts）。
     const detach = detachedPathsFor(runDir, sessId, turnStart);
-    handle = ex.run({
+    const run = ex.runSteerable?.bind(ex) ?? ex.run.bind(ex);
+    handle = run({
       prompt, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart), detach,
       env: { ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken },
     });
@@ -189,6 +191,12 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     await db.insert(sessions).values(sessRow);
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
+    bindNativeSteer(taskId, handle, {
+      agentType,
+      record: (text, at) => recordUserConversationTurn({
+        taskId, sessionId: sessId, role: "single", agentType, out, text, at,
+      }),
+    });
     const baseNote = baseFallbackNote(ws.baseFallback);
     if (baseNote) {
       // fresh run 也会撞上「登记的 base 已经没了」（任务验收合并后分支被删，用户又点了

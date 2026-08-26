@@ -142,6 +142,12 @@ export class ClaudeExecutor implements AgentExecutor {
     return { sessionId, commandLine, events: parseClaudeStream(child, undefined, this.bin, this.type, this.compactWindow()), kill: () => killChild(child), detached: detachedInfo(child) };
   }
 
+  // 单飞只把进程保留到当前任务回合结束：用户引导时 interrupt + send，同一进程继续；
+  // 最终 result 到来就关 stdin 并把常驻流收成普通 RunHandle 的 done。
+  runSteerable(opts: RunOpts): RunHandle {
+    return singleRunFromResident(this.openResident(opts));
+  }
+
   attach(child: ChildProcess, opts: { sessionId: string; commandLine: string }): RunHandle {
     return {
       sessionId: opts.sessionId,
@@ -218,6 +224,48 @@ export class ClaudeExecutor implements AgentExecutor {
     if (opts.extraArgs?.length) args.push(...opts.extraArgs);
     return args;
   }
+}
+
+export function singleRunFromResident(resident: ResidentHandle): RunHandle {
+  let intermediateEnds = 0;
+  let accepting = true;
+  const events = (async function* (): AsyncIterable<AgentEvent> {
+    for await (const event of resident.events) {
+      if (event.kind === "turnEnd") {
+        if (intermediateEnds > 0) {
+          intermediateEnds -= 1;
+          continue;
+        }
+        accepting = false;
+        resident.close();
+        yield { kind: "done", exitStatus: 0 };
+        return;
+      }
+      if (event.kind === "done") accepting = false;
+      yield event;
+      if (event.kind === "done") return;
+    }
+  })();
+  return {
+    sessionId: resident.sessionId,
+    commandLine: resident.commandLine,
+    events,
+    async steer(text: string) {
+      if (!accepting) throw new Error("Claude 当前回合已经结束");
+      intermediateEnds += 1;
+      try {
+        resident.interrupt();
+        resident.send(text);
+      } catch (error) {
+        intermediateEnds -= 1;
+        throw error;
+      }
+    },
+    kill() {
+      accepting = false;
+      resident.kill();
+    },
+  };
 }
 
 // stream-json 的入站格式:一条 user 消息 = 一行 JSON。

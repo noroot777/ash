@@ -7,7 +7,7 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
+import { bindNativeSteer, trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun, afterSettlement } from "./single-run.js";
 import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
@@ -389,7 +389,8 @@ export async function continueTask(
     // 回合，而任务被 resume 的次数远多于第一次起跑（实测:重启时在跑的任务里
     // 一半是 resume 回合，全都还挂在匿名管道上）。
     const detach = detachedPathsFor(runDir, sessId, turnStart);
-    handle = ex.run({
+    const run = ex.runSteerable?.bind(ex) ?? ex.run.bind(ex);
+    handle = run({
       prompt,
       cwd,
       sessionId: resuming ? prev!.cliSessionId! : undefined,
@@ -470,6 +471,12 @@ export async function continueTask(
     }
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
+    bindNativeSteer(taskId, handle, {
+      agentType: agent,
+      record: (text, at) => recordUserConversationTurn({
+        taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text, at,
+      }),
+    });
     if (opts.system) {
       // Backend-initiated 继续: a 〔系统〕 trace (its own bubble), NOT a 你→ reply.
       // Persist as a structured turn (reload) and emit a matching system event (live).

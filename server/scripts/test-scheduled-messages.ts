@@ -44,23 +44,47 @@ writeFileSync(
   `const fs = require("fs");
 let buf = "";
 const resident = process.argv.includes("--input-format");
-function succeed(input) {
-  fs.appendFileSync(process.env.ASH_TEST_LEAD_LOG, input + "\\n");
+let initialized = false;
+function init() {
+  if (initialized) return;
+  initialized = true;
   process.stdout.write(JSON.stringify({ type: "system", session_id: "scheduled-message-test" }) + "\\n");
-  process.stdout.write(
-    JSON.stringify({ type: "result", subtype: "success", session_id: "scheduled-message-test" }) + "\\n",
-  );
-  process.exit(0);
+}
+function result(subtype = "success") {
+  process.stdout.write(JSON.stringify({
+    type: "result", subtype, session_id: "scheduled-message-test",
+    ...(subtype === "success" ? {} : { is_error: true, result: "interrupted" }),
+  }) + "\\n");
+}
+function succeed(input, exit = true) {
+  fs.appendFileSync(process.env.ASH_TEST_LEAD_LOG, input + "\\n");
+  init();
+  result();
+  if (exit) process.exit(0);
+}
+function handleResident(line) {
+  let message;
+  try { message = JSON.parse(line); } catch { return; }
+  if (message.type === "control_request") return result("error_during_execution");
+  const text = message.message?.content?.map((part) => part.text || "").join("") || "";
+  fs.appendFileSync(process.env.ASH_TEST_LEAD_LOG, line + "\\n");
+  init();
+  if (text.includes("保持运行等待引导") || text.includes("保持新方向运行")) return;
+  result();
 }
 process.stdin.on("data", (d) => {
   buf += d;
   if (!resident) return;
-  const i = buf.indexOf("\\n");
-  if (i < 0) return;
-  succeed(buf.slice(0, i));
+  for (;;) {
+    const i = buf.indexOf("\\n");
+    if (i < 0) return;
+    const line = buf.slice(0, i);
+    buf = buf.slice(i + 1);
+    handleResident(line);
+  }
 });
 process.stdin.on("end", () => {
-  if (resident) return process.exit(1);
+  if (resident) return process.exit(0);
   if (!process.env.ASH_TURN_TOKEN) return process.exit(9);
   if (buf.includes("保持运行等待引导")) {
     fs.appendFileSync(process.env.ASH_TEST_LEAD_LOG, buf + "\\n");
@@ -405,10 +429,7 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 200));
   console.log("✓ 结算钩子里投递:锁还锁着不抢跑,锁一放立刻把原话送进会话");
 
-  // ── 引导会话:默认排队,点按钮后才受控截断并在同一会话续送 ──────────────
-  // 真起一个会一直运行到 SIGTERM 的一次性 Claude 回合；steerQueuedMessage 会走活动
-  // RunHandle.kill，consumeSingleRun 必须自己消费 steering 标记、跳过旧回合结算，再由
-  // releaseTurn 启动同会话续聊。若它误走普通 settle，status 事件里会先冒出 done/failed。
+  // ── 引导会话:默认排队,点按钮后在同一 Claude 进程里 interrupt + send ───────
   const oldRun = orchestrator.continueTask(steerTaskId, "保持运行等待引导");
   await waitFor(() => runs.isRunning(steerTaskId), "旧方向的一次性回合没有进入 running");
   await db.update(tasks).set({
@@ -431,15 +452,16 @@ try {
   assert.equal(
     steeringAgentEvents.some(({ event }) => event.kind === "done" && (event.exitStatus ?? 0) !== 0),
     false,
-    "受控截断不得向 SSE 发布红色非零 done 边界",
+    "原生引导的中间 interrupt 不得向 SSE 发布红色 done 边界",
   );
-  assert.ok(
-    steeringAgentEvents.some(({ event }) => event.kind === "system" && event.text?.includes("引导会话")),
-    "受控截断应发布中性的系统说明",
+  assert.equal(
+    steeringAgentEvents.some(({ event }) => event.kind === "system" && event.text?.includes("当前回合已由")),
+    false,
+    "原生引导不应伪装成旧回合结束后重启",
   );
   const steeringStatuses = statusEvents.slice(statusEventStart).filter((event) => event.taskId === steerTaskId);
-  assert.equal(steeringStatuses.at(0)?.status, "running",
-    `旧回合不得先结算成终态再续跑，实际事件：${JSON.stringify(steeringStatuses)}`);
+  assert.equal(steeringStatuses.filter((event) => event.status !== "running").length, 1,
+    `同一活动回合只允许最终结算一次，实际事件：${JSON.stringify(steeringStatuses)}`);
   const steeredMessage = (await db.select().from(scheduledMessages)
     .where(eq(scheduledMessages.id, "scheduled-steer"))).at(0)!;
   assert.equal(steeredMessage.status, "sent", "新方向真正落进会话后才标 sent");
@@ -457,8 +479,8 @@ try {
   );
   assert.match(readFileSync(steerTranscript, "utf8"), /先停下旧方案，改做更稳妥的新方向/,
     "引导消息应落回旧 CLI 会话对应的同一条 session 时间线");
-  assert.match(readFileSync(steerTranscript, "utf8"), /当前回合已由“引导会话”结束/,
-    "刷新后仍应看见旧回合是被引导结束，而不是崩溃");
+  assert.doesNotMatch(readFileSync(steerTranscript, "utf8"), /当前回合已由“引导会话”结束/,
+    "原生引导不应写入一次假的回合结束边界");
   await waitFor(
     async () => {
       const current = (await db.select().from(tasks).where(eq(tasks.id, steerTaskId))).at(0)!;
@@ -466,7 +488,7 @@ try {
     },
     "引导出去的新回合没有结算",
   );
-  console.log("✓ 引导会话:按钮点击后截断旧回合,清旧状态,同会话续送并在落盘后标 sent");
+  console.log("✓ 引导会话:Claude 同进程 interrupt + send,清旧状态并在落盘后标 sent");
 
   // 活动 handle 不存在(启动缝隙/刚好结束)时不谎报成功，更不能把消息从队列拿走。
   const unavailableSteer = await steer.steerQueuedMessage("scheduled-steer-unavailable");
@@ -495,16 +517,14 @@ try {
   const lockedSteer = await steer.steerQueuedMessage("scheduled-steer-locked");
   acceptance.endAccepting(steerLockedTaskId);
   assert.equal(lockedSteer.ok, false, "续送被验收锁挡回应如实失败");
-  assert.equal(await lockedOldRun, true, "旧回合应完成受控收口");
-  const lockedSteerTask = (await db.select().from(tasks).where(eq(tasks.id, steerLockedTaskId))).at(0)!;
+  assert.equal(runs.isRunning(steerLockedTaskId), true, "验收挡回不应强行切断当前原生回合");
   const lockedSteerMessage = (await db.select().from(scheduledMessages)
     .where(eq(scheduledMessages.id, "scheduled-steer-locked"))).at(0)!;
-  assert.equal(lockedSteerTask.status, "failed", "无 handle/turn 时不得残留假 running");
-  assert.equal(runs.isRunning(steerLockedTaskId), false, "续送失败后不得残留活动 handle");
-  assert.equal(runs.isTurnClaimed(steerLockedTaskId), false, "续送失败后不得残留回合占位");
   assert.equal(lockedSteerMessage.status, "pending", "续送失败的原话必须继续排队");
   assert.equal(lockedSteerMessage.deliveringSince, null, "续送失败应在落位后归还租约");
-  console.log("✓ 引导续送被挡回:任务离开假 running，原话保留并归还租约");
+  assert.equal(runs.stopTask(steerLockedTaskId), true);
+  assert.equal(await lockedOldRun, true);
+  console.log("✓ 引导被验收挡回:当前回合不断线，原话保留并归还租约");
 
   // 真引导成功后新方向仍在跑：旧回合迟到的 ask_question（旧 token 或无 token）都不能写入。
   const lateOldRun = orchestrator.continueTask(steerLateTaskId, "保持运行等待引导");
@@ -514,28 +534,28 @@ try {
     messageRow("scheduled-steer-late", steerLateTaskId, "保持新方向运行", "queued"),
   );
   assert.equal((await steer.steerQueuedMessage("scheduled-steer-late")).ok, true, "迟到工具复现应先成功引导");
-  assert.equal(await lateOldRun, true);
   const newTurnToken = (await db.select().from(tasks).where(eq(tasks.id, steerLateTaskId))).at(0)!.activeTurnToken!;
-  assert.notEqual(newTurnToken, oldTurnToken, "新方向必须换一枚回合 token");
+  assert.equal(newTurnToken, oldTurnToken, "原生引导仍属于同一个活动回合，必须保留 turn token");
   const api = new Hono();
   runRoutes.mountTaskRunRoutes(api);
-  for (const token of [oldTurnToken, undefined]) {
-    const response = await api.request(`/tasks/${steerLateTaskId}/ask`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...(token ? { "x-ash-turn-token": token } : {}) },
-      body: JSON.stringify({ question: "stale question from previous direction" }),
-    });
-    assert.equal(response.status, 409, "旧方向迟到的提问必须被拒绝");
-  }
+  const currentAsk = await api.request(`/tasks/${steerLateTaskId}/ask`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-ash-turn-token": oldTurnToken },
+    body: JSON.stringify({ question: "current question after native steer" }),
+  });
+  assert.equal(currentAsk.status, 200, "同一进程后续工具调用必须继续使用原 turn token");
+  await db.update(tasks).set({ question: null, questionOptions: null, questionItems: null })
+    .where(eq(tasks.id, steerLateTaskId));
   assert.equal(
     (await db.select().from(tasks).where(eq(tasks.id, steerLateTaskId))).at(0)!.question,
     null,
-    "成功引导后旧方向不得污染新方向的问题卡",
+    "测试收尾前应清掉问题卡",
   );
   assert.equal(runs.stopTask(steerLateTaskId), true, "测试收尾应停止挂起的新方向");
+  assert.equal(await lateOldRun, true);
   await waitFor(async () => (await db.select().from(tasks).where(eq(tasks.id, steerLateTaskId))).at(0)!.status !== "running",
     "挂起的新方向没有完成停止结算");
-  console.log("✓ 成功引导后旧回合迟到的 ask_question 被拒绝，新方向保持干净");
+  console.log("✓ 原生引导保留 turn token，同一进程的后续工具调用仍然有效");
 
   // ── 进程死在投递中途:重启后必须自己回来 ──────────────────────────────────
   // 上一段证明了「锁挡回不丢消息」,但锁不是唯一能掐断投递的东西 —— 服务重启会把内存里
