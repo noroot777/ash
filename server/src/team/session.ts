@@ -118,6 +118,10 @@ interface Lead {
 
 const leads = new Map<string, Lead>();
 const opening = new Map<string, Promise<Lead>>();
+// 落库失败时的**最后一档**:没能写进 team_inbound 的入站消息只剩这一份内存副本。换台时
+// 跟着它走(releasePending → adoptInbound),server 一重启就真没了 —— 但那是数据库当时
+// 拒收的直接后果,总好过当场丢掉还一声不吭(2026-08-26 第 13 轮审查)。
+const unqueuedFallback = new Map<string, string[]>();
 
 export function teamIsLive(taskId: string): boolean {
   return leads.has(taskId) || opening.has(taskId);
@@ -308,7 +312,7 @@ async function push(lead: Lead, text: string, kind: Kind): Promise<void> {
   if (lead.busy) {
     // 回合结束再合并成一条,省一轮模型调用 —— 但**先落库**:这一等横跨换台、关台和重启,
     // 只压在内存里的话,进程一换这条汇报就没了(见 team/inbound-queue.ts)。
-    lead.pending.push(await enqueueInbound(lead.taskId, text));
+    lead.pending.push(await queueInbound(lead, text));
     return;
   }
   const at = now();
@@ -316,7 +320,7 @@ async function push(lead: Lead, text: string, kind: Kind): Promise<void> {
   // stdin 还开着 —— 空闲回收 close() 到 closeLead 之间就是这么一个窗口。没收下就排进持久
   // 队列等下一台送(这时候别落盘正文,否则下一台真送成时同一条汇报会在 .md 里出现两遍)。
   if (!sendToLead(lead, text)) {
-    lead.pending.push(await enqueueInbound(lead.taskId, text));
+    lead.pending.push(await queueInbound(lead, text, at));
     reportLeadFailure(lead, "执行者消息没能送进调度台进程(它正在收尾),先排进待送队列交给下一台接手的调度台。", at);
     return;
   }
@@ -471,17 +475,81 @@ export function attachLead(lead: Lead): void {
  * 按 seq 去重是防这一手:认领读库的这段时间里,并发的 push 可能刚好把同一行也塞进了 pending。
  */
 async function adoptInbound(lead: Lead): Promise<void> {
-  let rows: PendingInbound[];
+  // 最后一档先取走:它只活在这个进程的内存里,没别的地方能等。
+  const fallback = unqueuedFallback.get(lead.taskId) ?? [];
+  unqueuedFallback.delete(lead.taskId);
+  let rows: { seq: number; text: string }[] = [];
   try {
     rows = await pendingInbound(lead.taskId);
   } catch (error) {
     // 读不到不能当成「没有」:那等于把这些消息判死。如实说一句,它们仍在库里等下一台。
     reportLeadFailure(lead, `读取待送的执行者消息失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (lead.retired) {
+    // 读库这段时间里被换掉了。库里那些自有下一台去认领,内存这一份得放回最后一档。
+    if (fallback.length) unqueuedFallback.set(lead.taskId, [...fallback, ...(unqueuedFallback.get(lead.taskId) ?? [])]);
     return;
   }
-  if (!rows.length || lead.retired) return;
   const have = new Set(lead.pending.map((m) => m.seq));
-  lead.pending.unshift(...rows.filter((r) => !have.has(r.seq)));
+  lead.pending.unshift(
+    ...rows.filter((r) => !have.has(r.seq)),
+    // 落库失败过的排在有 seq 的之后 —— 它们没有序号,精确的先后早在写库被拒时就丢了。
+    ...fallback.map((text) => ({ seq: null, text })),
+  );
+}
+
+/**
+ * 排进持久待送队列,**写库失败不抛**。
+ *
+ * 抛出去没有意义:这条链是 fire-and-forget 的(执行者结算侧 `notifyTeamLead(...)` 只
+ * `.catch(console.error)`),异常最终只变成一行控制台日志,而执行者已经结算,没有任何补送
+ * 入口 —— 一次瞬时故障就永久吃掉一份执行结果、一句失败说明或一个待回答的提问,用户刷新
+ * 也看不到发生过什么(2026-08-26 第 13 轮审查)。
+ *
+ * 写不进去就退回内存副本(seq=null):这一回合照样送得出去,下一次回合收尾还会重试落库
+ * (flushUnqueued),换台也带得走(releasePending)。失败本身如实落进会话。
+ */
+async function queueInbound(lead: Lead, text: string, at = now()): Promise<PendingInbound> {
+  try {
+    return await enqueueInbound(lead.taskId, text);
+  } catch (error) {
+    console.error(`[ash] team enqueueInbound(${lead.taskId}) failed:`, error);
+    reportLeadFailure(
+      lead,
+      `执行者消息写入待送队列失败：${error instanceof Error ? error.message : String(error)}。`
+        + `这条消息眼下只有一份内存副本,回合收尾时会重试落库;在那之前 server 重启就会丢。`,
+      at,
+    );
+    return { seq: null, text };
+  }
+}
+
+/** 重试把还没落库的那几条写进去。库一恢复它们就重新变成持久的;还是不行就照旧只有内存副本。 */
+async function flushUnqueued(lead: Lead): Promise<void> {
+  for (const message of lead.pending) {
+    if (message.seq !== null) continue;
+    try {
+      message.seq = (await enqueueInbound(lead.taskId, message.text)).seq;
+    } catch {
+      // 还写不进去。第一次已经如实报过了,别每个回合再刷一遍屏 —— 内存副本还在,照样送。
+      return;
+    }
+  }
+}
+
+/**
+ * 交出这台手上的待送消息。有 seq 的留在 team_inbound 里等下一台认领;**没 seq 的只有内存
+ * 这一份**,交给进程内的最后一档,别跟着这台一起没(见 unqueuedFallback)。
+ *
+ * 必须清空 `lead.pending`:摘牌不让旧进程闭嘴,它晚一步吐出的 turnEnd 照样会走 endTurn 那段
+ * 合并投递,不清就是同一条汇报朝一个已经被杀的 handle 再送一遍,送「成」了还会把行删掉。
+ */
+function releasePending(lead: Lead): void {
+  const unqueued = lead.pending.filter((m) => m.seq === null).map((m) => m.text);
+  if (unqueued.length) {
+    unqueuedFallback.set(lead.taskId, [...(unqueuedFallback.get(lead.taskId) ?? []), ...unqueued]);
+  }
+  lead.pending = [];
 }
 
 // ── 事件消费 ────────────────────────────────────────────────────────────────
@@ -784,11 +852,8 @@ function retireLead(lead: Lead): void {
   lead.retired = true;
   clearStatusRetry(lead);
   lead.wantedStatus = null;
-  // 手上这批待送消息的**所有权**跟着牌子一起交出去:行还在 team_inbound 里,由接管的
-  // 那台认领(adoptInbound)。这里必须清干净 —— 摘牌不让旧进程闭嘴,它晚一步吐出的
-  // turnEnd 照样会走 endTurn 那段合并投递,不清就是同一条汇报朝一个已经被杀的 handle
-  // 再送一遍,送「成」了还会把行删掉。
-  lead.pending = [];  // 攒着的轮换旁注必须**在断流之前**落盘。它为了不夹在正文和 agentEnd 之间才缓存下来
+  // 手上这批待送消息的**所有权**跟着牌子一起交出去(见 releasePending)。
+  releasePending(lead);  // 攒着的轮换旁注必须**在断流之前**落盘。它为了不夹在正文和 agentEnd 之间才缓存下来
   // (见 Lead.notices),可摘牌之后 turnEnd/closeLead 的那次 flush 只会写进丢弃流 ——
   // 「这条会话已作废、下次会丢上下文」这句关键说明就只活在 SSE 里,用户刷新一次就再也
   // 看不到发生过什么(2026-08-26 第 9 轮审查)。
@@ -897,6 +962,7 @@ async function endTurn(lead: Lead): Promise<void> {
   writeTurnEnd(lead.out, endIso);
   flushSessionNotices(lead);
   if (lead.pending.length) {
+    await flushUnqueued(lead); // 上次写库被拒的那几条,趁这会儿补进队列
     const batch = lead.pending;
     const merged = batch.map((m) => m.text).join("\n\n---\n\n");
     const at = now();
@@ -908,7 +974,9 @@ async function endTurn(lead: Lead): Promise<void> {
       lead.pending = [];
       // 销账失败宁可重送不可丢:行还在就是下一台会再送一遍(.md 里会多一条),而删早了
       // 是永久消失。所以这里只上报,不回滚也不掀掉这台调度台。
-      await persistOrReport(lead, "待送消息销账", () => consumeInbound(batch.map((m) => m.seq)), at);
+      // seq=null 的压根没进过队列(写库被拒),没有账可销。
+      const seqs = batch.map((m) => m.seq).filter((seq): seq is number => seq !== null);
+      await persistOrReport(lead, "待送消息销账", () => consumeInbound(seqs), at);
       recordSystemTurn(lead, merged, at);
       await beginTurn(lead, at);
       return;
@@ -945,6 +1013,9 @@ async function closeLead(
   } else {
     retireLead(lead); // 被接管的一方从此不写任何共享产物(状态/.md/trace/SSE),见 retireLead
   }
+  // 进程没了,手上还没送出去的消息交出去:有 seq 的库里等着,没 seq 的进内存最后一档。
+  // superseded 那一路 retireLead 已经交过,这里是空转。
+  releasePending(lead);
   const endIso = now();
   const spent = lead.turnStart ? Math.max(0, Date.parse(endIso) - Date.parse(lead.turnStart)) : 0;
   // CLI 否认了这条会话:把失效的 id 连同由它派生的三件套恢复命令一起清掉,下一次说话

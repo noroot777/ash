@@ -36,6 +36,7 @@ const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { projects, sessions, tasks } = await import("../src/db/schema.js");
 const { attachLead, haltTeam, sendInbound, teamIsLive } = await import("../src/team/session.js");
 const { bus } = await import("../src/bus.js");
+const { pendingInbound } = await import("../src/team/inbound-queue.js");
 const { SESSION_POISONED_NOTE } = await import("../src/executors/session-lost.js");
 const { eq } = await import("drizzle-orm");
 
@@ -55,6 +56,12 @@ const breakTaskWrites = () =>
     "CREATE TRIGGER injected_tasks_failure BEFORE UPDATE ON tasks BEGIN SELECT RAISE(ABORT, 'injected idle status failure'); END;",
   );
 const healTaskWrites = () => dbClient.executeMultiple("DROP TRIGGER IF EXISTS injected_tasks_failure;");
+// 只让持久待送队列的 INSERT 失败 —— 复现「执行者汇报连排队都排不进去」。
+const breakInboundWrites = () =>
+  dbClient.executeMultiple(
+    "CREATE TRIGGER injected_inbound_failure BEFORE INSERT ON team_inbound BEGIN SELECT RAISE(ABORT, 'injected team_inbound failure'); END;",
+  );
+const healInboundWrites = () => dbClient.executeMultiple("DROP TRIGGER IF EXISTS injected_inbound_failure;");
 
 interface Scenario {
   /** 这台调度台开台时手上那条 CLI 会话 id(同时写进库)。 */
@@ -781,10 +788,155 @@ try {
   assert.match(resendMd, /没能送进调度台进程/, "投递失败这件事必须持久可见,不能只在日志里");
   ok("接手的调度台没送成时,汇报继续往下传且只落盘一次");
 
+  // ── ⑮ 待送队列写库瞬时失败:消息不丢,库一恢复就补上,失败本身也看得见 ────────────────
+  // 持久化本身也会失败。而这条投递链是 fire-and-forget 的(执行者结算侧只
+  // `notifyTeamLead(...).catch(console.error)`),异常抛出去只剩一行控制台日志:内存里没有、
+  // 库里也没有、.md 和 SSE 一个字都没有,而执行者已经结算,再没有任何补送入口 —— 一次瞬时
+  // 故障就永久吃掉一份执行结果或一个待回答的提问。
+  const ENQ = "task-inbound-enqueue-fail";
+  const ENQ_SESS = "sess-inbound-enqueue-fail";
+  const ENQ_REPORT = "执行者汇报:入队写库失败也不许丢";
+  await seedTeamTask(ENQ);
+  let releaseEnq!: () => void;
+  const holdEnq = new Promise<void>((r) => { releaseEnq = r; });
+  async function* enqScript(): AsyncGenerator<AgentEvent> {
+    await holdEnq; // 等这条汇报撞上写库故障、并且库已经恢复
+    yield { kind: "turnEnd" }; // 这一步要把它补进队列,再合并送出去
+    yield { kind: "done", exitStatus: 0 };
+  }
+  const enq = await startLead({
+    taskId: ENQ, sessId: ENQ_SESS, cliSessionId: "enq-thread", events: enqScript(),
+  });
+  breakInboundWrites();
+  await assert.doesNotReject(
+    () => sendInbound(ENQ, ENQ_REPORT),
+    "写库失败把整条投递链掀了 —— 上游是 fire-and-forget 的,异常只会变成一行控制台日志",
+  );
+  healInboundWrites(); // 瞬时故障:库这就好了
+  releaseEnq();
+  const enqDeadline = Date.now() + 15_000;
+  while (teamIsLive(ENQ) && Date.now() < enqDeadline) await new Promise((r) => setTimeout(r, 20));
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(
+    enq.sent(),
+    1,
+    "入队写库失败后这条汇报就此消失 —— 内存里没有、库里也没有,调度者永远不知道它发生过",
+  );
+  const enqMd = readFileSync(join(enq.runDir, `${ENQ_SESS}.md`), "utf8");
+  assert.equal(enqMd.split(ENQ_REPORT).length - 1, 1, "这条汇报在 .md 里只该出现一次");
+  assert.match(enqMd, /写入待送队列失败/, "写库失败必须持久可见,不能只在控制台日志里");
+  assert.equal(
+    (await pendingInbound(ENQ)).length,
+    0,
+    "库恢复后补进队列的那一行,送成之后同样要销账",
+  );
+  ok("待送队列写库瞬时失败:消息留在内存照送,库一恢复就补上,失败也看得见");
+
+  // ── ⑯ 库恢复之后,只剩内存副本的那条必须重新变成持久的 ──────────────────────────────
+  // ⑮ 那一路运气好:同一台调度台当场就把它送出去了,内存副本够用。可要是这一回合送不出去
+  // (进程正在收尾),它就得接着等下一台 —— 这时候「只有内存一份」和「已经回到队列里」的
+  // 区别就是 server 一重启还在不在。所以库一恢复就得把欠账补回队列,别等到需要它的时候。
+  const REQ = "task-inbound-requeue";
+  const REQ_SESS = "sess-inbound-requeue";
+  const REQ_REPORT = "执行者汇报:库一恢复就该重新变成持久的";
+  await seedTeamTask(REQ);
+  let releaseReqA!: () => void;
+  const holdReqA = new Promise<void>((r) => { releaseReqA = r; });
+  async function* reqAScript(): AsyncGenerator<AgentEvent> {
+    await holdReqA;
+    yield { kind: "turnEnd" }; // 补队列就在这一步;紧接着的投递会被拒收
+    yield { kind: "done", exitStatus: 0 };
+  }
+  const reqA = await startLead({
+    taskId: REQ, sessId: REQ_SESS, cliSessionId: "requeue-a", events: reqAScript(),
+    send: () => false, // 这台的进程已经在收尾:明确拒收
+  });
+  breakInboundWrites();
+  await sendInbound(REQ, REQ_REPORT);
+  healInboundWrites();
+  releaseReqA();
+  const reqDeadline = Date.now() + 15_000;
+  while (teamIsLive(REQ) && Date.now() < reqDeadline) await new Promise((r) => setTimeout(r, 20));
+  assert.equal(reqA.sent(), 1, "这台该试着投递一次");
+  assert.equal(
+    (await pendingInbound(REQ)).length,
+    1,
+    "库恢复后没把只剩内存副本的那条补回队列 —— 这条消息还得等下一台,而 server 一重启它就没了",
+  );
+  let releaseReqB!: () => void;
+  const holdReqB = new Promise<void>((r) => { releaseReqB = r; });
+  async function* reqBScript(): AsyncGenerator<AgentEvent> {
+    yield { kind: "turnEnd" };
+    await holdReqB;
+    yield { kind: "done", exitStatus: 0 };
+  }
+  const reqB = await startLead({
+    taskId: REQ, sessId: REQ_SESS, cliSessionId: "requeue-b", events: reqBScript(), reuse: true,
+  });
+  while (reqB.sent() === 0 && Date.now() < reqDeadline) await new Promise((r) => setTimeout(r, 20));
+  assert.equal(reqB.sent(), 1, "补回队列的那条汇报没能交给下一台健康调度台");
+  releaseReqB();
+  while (teamIsLive(REQ) && Date.now() < reqDeadline) await new Promise((r) => setTimeout(r, 20));
+  await new Promise((r) => setTimeout(r, 200));
+  const reqMd = readFileSync(join(reqA.runDir, `${REQ_SESS}.md`), "utf8");
+  assert.equal(reqMd.split(REQ_REPORT).length - 1, 1, "这条汇报在 .md 里只该出现一次");
+  assert.equal((await pendingInbound(REQ)).length, 0, "送成之后要销账");
+  ok("库恢复后欠账补回队列,下一台照样能拿到且只送一次");
+
+  // ── ⑰ 库一直不恢复:内存那一份也得跟着换台走,不能跟着旧台一起没 ────────────────────
+  // ⑯ 里库很快就好了,欠账补回队列就有下一台去认领。可要是库一直拒收,这条消息**只有内存
+  // 这一份** —— 摘牌时它没有持久的地方可去,再不接住就是当场丢掉。重启仍然会丢(那是数据库
+  // 拒收的直接后果,已经如实说过了),但同一个进程里的换台没有任何理由丢。
+  const KEEP = "task-inbound-memory-handover";
+  const KEEP_SESS = "sess-inbound-memory-handover";
+  const KEEP_REPORT = "执行者汇报:库一直坏着也得跟着换台走";
+  await seedTeamTask(KEEP);
+  let releaseKeepA!: () => void;
+  const holdKeepA = new Promise<void>((r) => { releaseKeepA = r; });
+  async function* keepAScript(): AsyncGenerator<AgentEvent> {
+    await holdKeepA;
+    yield { kind: "turnEnd" }; // 补队列还是失败,投递又被拒收 —— 只剩内存那一份
+    yield { kind: "done", exitStatus: 0 };
+  }
+  const keepA = await startLead({
+    taskId: KEEP, sessId: KEEP_SESS, cliSessionId: "keep-a", events: keepAScript(),
+    send: () => false,
+  });
+  breakInboundWrites(); // 这一路全程不恢复
+  await sendInbound(KEEP, KEEP_REPORT);
+  releaseKeepA();
+  const keepDeadline = Date.now() + 15_000;
+  while (teamIsLive(KEEP) && Date.now() < keepDeadline) await new Promise((r) => setTimeout(r, 20));
+  assert.equal((await pendingInbound(KEEP)).length, 0, "库还坏着,这一条本来就进不了队列");
+  let releaseKeepB!: () => void;
+  const holdKeepB = new Promise<void>((r) => { releaseKeepB = r; });
+  async function* keepBScript(): AsyncGenerator<AgentEvent> {
+    yield { kind: "turnEnd" };
+    await holdKeepB;
+    yield { kind: "done", exitStatus: 0 };
+  }
+  const keepB = await startLead({
+    taskId: KEEP, sessId: KEEP_SESS, cliSessionId: "keep-b", events: keepBScript(), reuse: true,
+  });
+  while (keepB.sent() === 0 && Date.now() < keepDeadline) await new Promise((r) => setTimeout(r, 20));
+  assert.equal(
+    keepB.sent(),
+    1,
+    "写不进库的那条汇报跟着旧台一起没了 —— 同一个进程里换个台而已,没有任何理由丢",
+  );
+  releaseKeepB();
+  while (teamIsLive(KEEP) && Date.now() < keepDeadline) await new Promise((r) => setTimeout(r, 20));
+  await new Promise((r) => setTimeout(r, 200));
+  healInboundWrites();
+  const keepMd = readFileSync(join(keepA.runDir, `${KEEP_SESS}.md`), "utf8");
+  assert.equal(keepMd.split(KEEP_REPORT).length - 1, 1, "这条汇报在 .md 里只该出现一次");
+  ok("库一直坏着:内存那一份也跟着换台走,只送一次");
+
   console.log("test:team-resilience ok");
 } finally {
   healSessionWrites();
   healTaskWrites();
+  healInboundWrites();
   // Windows 上 sqlite 的文件句柄不放,临时目录就删不掉(EBUSY),会把一次通过的测试
   // 报成失败。先关库再删。
   try {

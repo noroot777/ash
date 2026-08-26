@@ -11,14 +11,15 @@ import { db } from "../db/index.js";
 import { teamInbound } from "../db/schema.js";
 import { now } from "../util.js";
 
-/** 队列里的一条:`seq` 是到达序号,送成之后拿它销账。 */
+/** 队列里的一条。`seq` 是到达序号,送成之后拿它销账;**null = 这条还没落库**(写库失败过,
+ * 眼下只有一份内存副本,见 team/session.ts 的 queueInbound)。 */
 export interface PendingInbound {
-  seq: number;
+  seq: number | null;
   text: string;
 }
 
 /** 排进待送队列。返回值带着 seq —— 调用方得拿它才能在真送出去之后销账。 */
-export async function enqueueInbound(taskId: string, text: string): Promise<PendingInbound> {
+export async function enqueueInbound(taskId: string, text: string): Promise<{ seq: number; text: string }> {
   const [row] = await db
     .insert(teamInbound)
     .values({ taskId, text, createdAt: now() })
@@ -27,7 +28,7 @@ export async function enqueueInbound(taskId: string, text: string): Promise<Pend
 }
 
 /** 这条任务名下还没送出去的消息,按到达顺序。 */
-export function pendingInbound(taskId: string): Promise<PendingInbound[]> {
+export function pendingInbound(taskId: string): Promise<{ seq: number; text: string }[]> {
   return db
     .select({ seq: teamInbound.seq, text: teamInbound.text })
     .from(teamInbound)
