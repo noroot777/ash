@@ -6,6 +6,29 @@ export type BulkHandoffSkip = {
   reason: string;
 };
 
+// 批量接力的默认对象是「此刻还在跑的活」——把整个项目几百个已完成任务一起搬过去，
+// 传输代价和误伤面都远大于收益。想整体搬家时再显式切到 all。
+export type BulkHandoffScope = "live" | "all";
+
+// 与「正式接力会先停止它们」的警告同一套判据：只有这两种状态的任务真的占着执行槽。
+export const isLiveBulkTask = (task: TaskListItem): boolean =>
+  task.status === "running" || task.status === "queued";
+
+export function applyBulkHandoffScope<T extends TaskListItem>(
+  partition: { eligible: T[]; skipped: BulkHandoffSkip[] },
+  scope: BulkHandoffScope,
+): { eligible: T[]; skipped: BulkHandoffSkip[] } {
+  if (scope === "all") return partition;
+  return {
+    eligible: partition.eligible.filter(isLiveBulkTask),
+    skipped: [
+      ...partition.skipped,
+      ...partition.eligible.filter((task) => !isLiveBulkTask(task))
+        .map((task) => ({ task, reason: "没有在运行，本次范围只含运行中或排队的任务" })),
+    ],
+  };
+}
+
 export function bulkPreflightIssue(
   probe: TaskScopedHandoffPreflightResult,
   projectId: string,

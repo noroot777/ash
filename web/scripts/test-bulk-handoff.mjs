@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
+  applyBulkHandoffScope,
   bulkIdentityMismatchWarning,
   bulkIdentityUnavailableWarning,
   bulkPreflightAllowsRun,
@@ -10,6 +11,7 @@ import {
   bulkReturnCandidates,
   bulkTaskReturnsToTarget,
   bulkTargetProjectId,
+  isLiveBulkTask,
   outboundTasksForTarget,
   partitionBulkHandoffTasks,
   resolveBulkTargetIdentity,
@@ -79,6 +81,29 @@ const statusResult = partitionBulkHandoffTasks([
   task("done", { status: "done" }),
 ], "p1");
 assert.deepEqual(statusResult.eligible.map((item) => item.id), ["running", "paused", "done"]);
+
+// 批量接力的默认对象是「此刻还在跑的活」：整项目几百条历史任务不该被顺手搬走。
+const scopedLive = applyBulkHandoffScope(statusResult, "live");
+assert.deepEqual(scopedLive.eligible.map((item) => item.id), ["running"], "live 范围只留正在运行或排队的任务");
+assert.deepEqual(
+  scopedLive.skipped.map((item) => item.task.id),
+  ["paused", "done"],
+  "被范围挡下的任务必须进入不会移动清单，而不是凭空消失",
+);
+assert.match(scopedLive.skipped[0].reason, /没有在运行/, "范围跳过要给出可读原因");
+assert.equal(
+  applyBulkHandoffScope(statusResult, "all"),
+  statusResult,
+  "all 范围不改动分区结果",
+);
+assert.equal(isLiveBulkTask(task("q", { status: "queued" })), true, "排队中同样占执行槽，算在运行范围内");
+assert.equal(isLiveBulkTask(task("r", { status: "awaiting_review" })), false);
+const liveSkipsBase = applyBulkHandoffScope(
+  partitionBulkHandoffTasks([task("team-only", { mode: "team" }), task("idle-local", { status: "done" })], "p1"),
+  "live",
+);
+assert.equal(liveSkipsBase.eligible.length, 0);
+assert.equal(liveSkipsBase.skipped.length, 2, "基础不可接力原因和范围原因要并存，不互相覆盖");
 
 const allSkipped = partitionBulkHandoffTasks([
   task("team-only", { mode: "team" }),
@@ -218,7 +243,10 @@ assert.equal(bulkTargetProjectId(fromOne, scopedOne, "batch-project"), "origin-o
 assert.equal(bulkTargetProjectId(fromTwo, scopedTwo, "batch-project"), "origin-two");
 assert.equal(bulkPreflightIssue(scopedTwo, bulkTargetProjectId(fromTwo, scopedTwo, "batch-project")), null);
 
-const bulkDialog = readFileSync(new URL("../src/workspace/HandoffMachines.tsx", import.meta.url), "utf8");
+const bulkDialog = readFileSync(new URL("../src/workspace/BulkHandoffDialog.tsx", import.meta.url), "utf8");
+const machines = readFileSync(new URL("../src/workspace/HandoffMachines.tsx", import.meta.url), "utf8");
+assert.match(machines, /<BulkHandoffDialog/, "侧栏「其他机器」仍应是批量接力弹窗的唯一入口");
+assert.doesNotMatch(machines, /handoff-bulk-body/, "弹窗实现拆出去后不应留在侧栏文件里");
 assert.doesNotMatch(bulkDialog, /<ConfirmDialog/, "批量接力不应继续使用旧确认框");
 assert.match(bulkDialog, /<HandoffDialogHeader/, "批量接力应复用接力弹窗标题结构");
 assert.match(bulkDialog, /<HandoffRouteCard/, "批量接力应展示与单任务一致的机器路线");
@@ -237,5 +265,9 @@ assert.match(bulkDialog, /preflightFailures/, "批量执行结果应保留被跳
 assert.match(bulkDialog, /bulkTargetProjectId/, "批量移回应按任务使用各自预检锁定的原项目");
 assert.match(bulkDialog, /handoff-bulk-project-fixed/, "纯移回批次应只读说明按任务自动归位，而不是提供单一项目下拉框");
 assert.match(bulkDialog, /原项目待逐项确认/, "逐项检查完成前不能把首个 probe 误报成整批只有一个原项目");
+assert.match(bulkDialog, /applyBulkHandoffScope/, "批量弹窗必须按选中的范围裁剪清单");
+assert.match(bulkDialog, /liveCount > 0 \? "live" : "all"/, "有任务在跑时默认只接力运行中的任务");
+assert.match(bulkDialog, /scopedPreflights/, "换范围后旧清单的预检结果不能继续参与计数");
+assert.match(bulkDialog, /lastScope\.current/, "范围一变必须退回待检查状态");
 
 console.log("bulk handoff eligibility tests passed");
