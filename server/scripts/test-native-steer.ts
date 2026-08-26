@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
@@ -11,7 +11,7 @@ import { openCodexAppServer } from "../src/executors/codex-app-server.js";
 import { CodexExecutor } from "../src/executors/codex.js";
 import { detachedPathsFor } from "../src/executors/detached.js";
 import type { ResidentHandle } from "../src/executors/types.js";
-import { IS_WINDOWS } from "../src/platform.js";
+import { IS_WINDOWS, isPidAlive } from "../src/platform.js";
 import * as runs from "../src/runs.js";
 
 function eventQueue() {
@@ -33,14 +33,16 @@ function eventQueue() {
 
 const claudeEvents = eventQueue();
 const claudeCalls: string[] = [];
+let claudeCleanupCalls = 0;
 const resident: ResidentHandle = {
   sessionId: "claude-thread",
   commandLine: "claude resident",
   events: claudeEvents.stream,
   interrupt: () => { claudeCalls.push("interrupt"); },
-  send: (text) => { claudeCalls.push(`send:${text}`); },
+  send: (text) => { claudeCalls.push(`send:${text}`); return true; },
   close: () => { claudeCalls.push("close"); claudeEvents.end(); },
   kill: () => { claudeCalls.push("kill"); claudeEvents.end(); },
+  cleanup: async () => { claudeCleanupCalls += 1; },
 };
 const claude = singleRunFromResident(resident);
 const claudeIterator = claude.events[Symbol.asyncIterator]();
@@ -55,11 +57,12 @@ assert.deepEqual(await claudeIterator.next(), { value: { kind: "text", text: "NE
 claudeEvents.push({ kind: "turnEnd" });
 assert.deepEqual(await claudeIterator.next(), { value: { kind: "done", exitStatus: 0 }, done: false });
 assert.equal(claudeCalls.at(-1), "close", "最终 turnEnd 才关闭当前单飞连接");
+await claude.cleanup?.();
+assert.equal(claudeCleanupCalls, 1, "单飞适配器必须保留底层进程的 cleanup");
 console.log("✓ Claude 原生引导保持同一进程，中间 turnEnd 不结算");
 
 const partialEvents = eventQueue();
 const partialCalls: string[] = [];
-let partialAttempt = 0;
 const partialResident: ResidentHandle = {
   sessionId: "claude-partial-thread",
   commandLine: "claude partial resident",
@@ -67,14 +70,11 @@ const partialResident: ResidentHandle = {
   interrupt: () => { throw new Error("checked steer path should be used"); },
   send: () => { throw new Error("checked steer path should be used"); },
   steer: async (text, onInterrupted) => {
-    partialAttempt += 1;
     partialCalls.push(`interrupt:${text}`);
     onInterrupted?.();
     partialEvents.push({ kind: "turnEnd" });
     await new Promise<void>((resolve) => setImmediate(resolve));
-    if (partialAttempt === 1) throw new Error("Claude 当前回合 stdin 已关闭");
-    partialCalls.push(`send:${text}`);
-    partialEvents.push({ kind: "text", text });
+    throw new Error("Claude 当前回合 stdin 已关闭");
   },
   close: () => { partialCalls.push("close"); partialEvents.end(); },
   kill: () => { partialCalls.push("kill"); partialEvents.end(); },
@@ -88,20 +88,39 @@ partialEvents.push({ kind: "text", text: "OLD" });
 await new Promise<void>((resolve) => setImmediate(resolve));
 await assert.rejects(partialClaude.steer!("FIRST"), /stdin 已关闭/,
   "interrupt 已写出而新消息写失败时，引导应如实失败");
-await partialClaude.steer!("RETRY");
-partialEvents.push({ kind: "turnEnd" });
 await Promise.race([
   partialConsuming,
   new Promise((_, reject) => setTimeout(() => reject(new Error("partial steer stream did not finish")), 1_000)),
 ]);
 assert.deepEqual(
   partialSeen.map((event) => event.kind === "text" ? `text:${event.text}` : event.kind),
-  ["text:OLD", "text:RETRY", "done"],
-  "第一次 interrupt 的 turnEnd 已被消费后，失败回滚不得把计数减成负数",
+  ["text:OLD"],
+  "新消息未写入时必须停止残缺的常驻流，不能永久吞住中间 turnEnd",
 );
-assert.deepEqual(partialCalls, ["interrupt:FIRST", "interrupt:RETRY", "send:RETRY", "close"],
-  "重试时必须先送入新消息，最终 turnEnd 才允许关闭连接");
-console.log("✓ Claude 部分写失败不会让 intermediateEnds 下溢或提前关闭连接");
+assert.deepEqual(partialCalls, ["interrupt:FIRST", "kill"], "部分写失败必须立即停止当前 resident");
+await assert.rejects(partialClaude.steer!("RETRY"), /已经结束/,
+  "已被停止的残缺 resident 不得在同一 handle 上重试");
+console.log("✓ Claude 部分写失败会停止残缺 resident，不再让任务永久 running");
+
+const deliveryOrder: string[] = [];
+const orderedHandle = {
+  kill: () => {},
+  steer: async (text: string) => { deliveryOrder.push(`steer:${text}`); },
+};
+runs.trackRun("native-delivery-order", orderedHandle);
+runs.bindNativeSteer("native-delivery-order", orderedHandle, {
+  agentType: "codex",
+  prepare: (text) => `prepared:${text}`,
+  beforeDeliver: () => { deliveryOrder.push("before"); },
+  record: () => { deliveryOrder.push("record"); },
+});
+const ordered = runs.reserveNativeSteerTask("native-delivery-order");
+assert.equal(ordered.kind, "native");
+if (ordered.kind === "native") await ordered.deliver("NEW", new Date().toISOString());
+assert.deepEqual(deliveryOrder, ["before", "steer:prepared:NEW", "record"],
+  "旧方向 trace 必须在 provider 收到新方向、用户边界落盘之前先 flush");
+runs.untrackRun("native-delivery-order", orderedHandle);
+console.log("✓ 原生引导按 trace flush → provider steer → 用户边界的顺序投递");
 
 let nativeKills = 0;
 let nativeRecords = 0;
@@ -134,7 +153,7 @@ class FakeAppServer extends EventEmitter {
   requests: WireMessage[] = [];
   private input = "";
 
-  constructor() {
+  constructor(private readonly mode: "success" | "poison" = "success") {
     super();
     this.stdin = new Writable({
       write: (chunk, _encoding, done) => {
@@ -174,6 +193,13 @@ class FakeAppServer extends EventEmitter {
       this.send({ id: message.id, result: { thread: { id: "codex-thread" } } });
     } else if (message.method === "turn/start") {
       this.send({ id: message.id, result: { turn: { id: "codex-turn" } } });
+      if (this.mode === "poison") queueMicrotask(() => {
+        this.stderr.write("dropping turn-scoped item for unknown turn id codex-turn\n");
+        this.send({ method: "turn/completed", params: {
+          threadId: "codex-thread",
+          turn: { id: "codex-turn", status: "failed", error: { message: "upstream 503" } },
+        } });
+      });
     } else if (message.method === "turn/steer") {
       this.send({ id: message.id, result: { turnId: "codex-turn" } });
       queueMicrotask(() => {
@@ -229,8 +255,33 @@ assert.equal(codexEvents.filter((event) => event.kind === "text").map((event) =>
 assert.ok(codexEvents.some((event) => event.kind === "session" && event.cliSessionId === "codex-thread"));
 console.log("✓ Codex App Server 使用同一 threadId/expectedTurnId 执行 turn/steer");
 
+const poisonedFake = new FakeAppServer("poison");
+const poisonedCodex = openCodexAppServer({
+  bin: "codex",
+  args: ["app-server", "--stdio"],
+  cwd: process.cwd(),
+  prompt: "FAIL",
+  startProcess: () => poisonedFake as unknown as ChildProcess,
+});
+const poisonedEvents: AgentEvent[] = [];
+for await (const event of poisonedCodex.events) poisonedEvents.push(event);
+assert.ok(poisonedEvents.some((event) => event.kind === "error" && event.scope === "session"),
+  "App Server stderr 中毒指纹必须作废恢复 thread");
+const zeroContext = poisonedEvents.find((event) => event.kind === "context");
+assert.deepEqual(zeroContext, {
+  kind: "context",
+  context: { used: 0, window: null, windowEstimated: false },
+}, "没有 usage 的失败回合也必须清零旧 context 水位");
+assert.ok(
+  poisonedEvents.findIndex((event) => event.kind === "context")
+    < poisonedEvents.findIndex((event) => event.kind === "done"),
+  "context 哨兵必须先于 done",
+);
+console.log("✓ Codex App Server 失败收尾会发 session poison 与 context 清零哨兵");
+
 const detachedRoot = mkdtempSync(join(tmpdir(), "ash-native-steer-detached-"));
 const detachedPids: number[] = [];
+let stickyPid: number | null = null;
 try {
   const fakeBin = join(detachedRoot, "fake-agent.mjs");
   writeFileSync(fakeBin, `#!/usr/bin/env node
@@ -238,6 +289,34 @@ process.stdin.resume();
 setInterval(() => {}, 1000);
 `);
   chmodSync(fakeBin, 0o755);
+
+  const stickyPidPath = join(detachedRoot, "sticky.pid");
+  const stickyScript = join(detachedRoot, "sticky-claude.mjs");
+  const stickyBin = IS_WINDOWS ? join(detachedRoot, "sticky-claude.cmd") : stickyScript;
+  writeFileSync(stickyScript, `#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(stickyPidPath)}, String(process.pid));
+let replied = false;
+process.stdin.on("data", () => {
+  if (replied) return;
+  replied = true;
+  process.stdout.write(JSON.stringify({ type: "system", session_id: "sticky-session" }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "result", subtype: "success", session_id: "sticky-session" }) + "\\n");
+});
+setInterval(() => {}, 1000);
+`);
+  if (IS_WINDOWS) writeFileSync(stickyBin, `@node "%~dp0sticky-claude.mjs" %*\r\n`);
+  else chmodSync(stickyBin, 0o755);
+  const stickyClaude = new ClaudeExecutor({ bin: stickyBin }).runSteerable({ cwd: detachedRoot, prompt: "OLD" });
+  assert.ok(stickyClaude.cleanup, "Claude runSteerable 必须暴露 cleanup");
+  for await (const event of stickyClaude.events) {
+    if (event.kind === "done") break;
+  }
+  stickyPid = Number(readFileSync(stickyPidPath, "utf8"));
+  await stickyClaude.cleanup?.();
+  assert.equal(isPidAlive(stickyPid), false,
+    "最终 result 后即使 CLI 忽略 stdin EOF，单飞收尾也必须杀掉根进程");
+  console.log("✓ Claude 单飞最终 result 会 kill 并 cleanup，不在 Windows/POSIX 留常驻根进程");
 
   const deadBin = join(detachedRoot, "dead-agent.mjs");
   writeFileSync(deadBin, "#!/usr/bin/env node\nsetTimeout(() => process.exit(0), 20);\n");
@@ -283,6 +362,9 @@ setInterval(() => {}, 1000);
     ? "✓ Windows Claude/Codex 新生产路径按设计降级为普通管道"
     : "✓ Claude/Codex 新生产路径都保留 detached 接管信息");
 } finally {
+  if (stickyPid && isPidAlive(stickyPid)) {
+    try { process.kill(stickyPid, "SIGKILL"); } catch { /* 已退出 */ }
+  }
   if (!IS_WINDOWS) {
     for (const pid of detachedPids) {
       try { process.kill(-pid, "SIGKILL"); } catch { /* 已退出 */ }

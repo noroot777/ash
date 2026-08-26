@@ -22,6 +22,12 @@ function result(subtype = "success") {
     ...(subtype === "success" ? {} : { is_error: true, result: "interrupted" }),
   }) + "\\n");
 }
+function delta(text) {
+  process.stdout.write(JSON.stringify({
+    type: "stream_event",
+    event: { type: "content_block_delta", delta: { type: "text_delta", text } },
+  }) + "\\n");
+}
 function succeed(input, exit = true) {
   fs.appendFileSync(process.env.ASH_TEST_LEAD_LOG, input + "\\n");
   init();
@@ -35,7 +41,12 @@ function handleResident(line) {
   const text = message.message?.content?.map((part) => part.text || "").join("") || "";
   fs.appendFileSync(process.env.ASH_TEST_LEAD_LOG, line + "\\n");
   init();
-  if (text.includes("保持运行等待引导") || text.includes("保持新方向运行")) return;
+  if (text.includes("保持运行等待引导")) {
+    delta("旧方向最后一段正文。\\n");
+    return;
+  }
+  if (text.includes("保持新方向运行")) return;
+  if (text.includes("先停下旧方案")) delta("新方向第一段正文。\\n");
   result();
   // 团队调度台夹具沿用原行为：一轮结束后进程退出，方便验证收台与补送。
   // 测试进程本身可能继承外层任务的 ASH_TURN_TOKEN，按本测试的任务类型区分才可靠。

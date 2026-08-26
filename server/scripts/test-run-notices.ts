@@ -41,6 +41,7 @@ try {
   const fakeCodex = join(root, IS_WINDOWS ? "codex.cmd" : "codex");
   writeFileSync(fakeCodexScript, `#!/usr/bin/env node
 import { existsSync } from "node:fs";
+const isExec = process.argv.includes("exec");
 let input = "";
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
 const receive = (message) => {
@@ -58,17 +59,33 @@ const receive = (message) => {
     }, 10);
   }
 };
-process.stdin.on("data", (chunk) => {
-  input += chunk.toString();
-  for (;;) {
-    const newline = input.indexOf("\\n");
-    if (newline < 0) break;
-    const line = input.slice(0, newline);
-    input = input.slice(newline + 1);
-    if (line) receive(JSON.parse(line));
-  }
-});
-process.stdin.on("end", () => process.exit(0));
+if (isExec) {
+  process.stdin.resume();
+  process.stdin.on("end", () => {
+    const timer = setInterval(() => {
+      if (!existsSync(process.env.ASH_NOTICE_TRIGGER)) return;
+      clearInterval(timer);
+      send({ type: "thread.started", thread_id: "notice-thread" });
+      send({ type: "item.completed", item: { type: "agent_message", text: "兼容参数已保留" } });
+      send({ type: "turn.completed", usage: {
+        input_tokens: 2, cached_input_tokens: 0, output_tokens: 2, reasoning_output_tokens: 0,
+      } });
+      process.exit(0);
+    }, 10);
+  });
+} else {
+  process.stdin.on("data", (chunk) => {
+    input += chunk.toString();
+    for (;;) {
+      const newline = input.indexOf("\\n");
+      if (newline < 0) break;
+      const line = input.slice(0, newline);
+      input = input.slice(newline + 1);
+      if (line) receive(JSON.parse(line));
+    }
+  });
+  process.stdin.on("end", () => process.exit(0));
+}
 `);
   if (IS_WINDOWS) writeFileSync(fakeCodex, `@node "%~dp0fake-codex.mjs" %*\r\n`);
   else chmodSync(fakeCodex, 0o755);
@@ -111,8 +128,10 @@ process.stdin.on("end", () => process.exit(0));
       assert.ok(inFlight.agentOutPath && inFlight.agentErrPath && inFlight.agentRcPath,
         "POSIX 原生 runTask 必须整组落下 detached 输出路径");
     }
-    assert.match(inFlight.commandLine ?? "", /-c foo=1/, "App Server 兼容的 -c 必须保留");
-    assert.doesNotMatch(inFlight.commandLine ?? "", /--search|--profile|--api-key|my-profile/);
+    assert.match(inFlight.commandLine ?? "", /\bexec\b/, "含 exec 专属参数时必须回退到 codex exec");
+    assert.match(inFlight.commandLine ?? "", /--search/, "--search 不得因原生引导被静默丢弃");
+    assert.match(inFlight.commandLine ?? "", /--profile my-profile/, "profile 参数及其值必须原样保留");
+    assert.match(inFlight.commandLine ?? "", /-c foo=1/, "exec 与 App Server 共用的 -c 也必须保留");
     assert.doesNotMatch(inFlight.commandLine ?? "", new RegExp(secret));
     writeFileSync(process.env.ASH_NOTICE_TRIGGER!, "finish");
     await running;
@@ -123,15 +142,14 @@ process.stdin.on("end", () => process.exit(0));
   const session = (await db.select().from(sessions).where(eq(sessions.taskId, "t"))).at(0)!;
   const transcriptPath = join(root, "runs", "t", `${session.id}.md`);
   assert.equal(existsSync(transcriptPath), true);
-  const expectedNotice = "Codex 原生引导回合不支持以下执行器固定参数，已忽略：--search、--profile、--api-key";
-  const notice = parseSessionOutput(readFileSync(transcriptPath, "utf8"))
-    .find((segment) => segment.kind === "system");
-  assert.equal(notice?.text, expectedNotice, "兼容性提示必须写进 transcript，刷新后仍可见");
-  assert.doesNotMatch(notice?.text ?? "", new RegExp(`${secret}|my-profile`), "提示不得泄露参数值");
-  assert.ok(events.some((event) => event.type === "agent.event"
-    && event.event.kind === "system" && event.event.text === expectedNotice),
-  "兼容性提示也必须实时发布");
-  console.log("✓ runTask 原生路径落 detached 接管字段；忽略参数提示持久可见且不泄露值");
+  const ignoredNotice = "Codex 原生引导回合不支持以下执行器固定参数，已忽略";
+  assert.equal(parseSessionOutput(readFileSync(transcriptPath, "utf8"))
+    .some((segment) => segment.kind === "system" && segment.text.includes(ignoredNotice)), false,
+  "exec 专属参数不应再以旁注形式宣告被忽略");
+  assert.equal(events.some((event) => event.type === "agent.event"
+    && event.event.kind === "system" && event.event.text?.includes(ignoredNotice)), false,
+  "实时事件也不应声称兼容参数已被丢弃");
+  console.log("✓ Codex 含 exec 专属参数时保留完整 CLI 语义并安全回退硬引导");
 } finally {
   await releaseTmpDb();
   for (let attempt = 0; ; attempt += 1) {

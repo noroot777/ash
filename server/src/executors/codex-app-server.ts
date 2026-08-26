@@ -3,7 +3,12 @@ import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import type { AgentEvent, TokenUsage } from "@ash/shared";
 import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
-import { formatFailureForTimeline, RunTraceRecorder, type RunTracePaths } from "./diagnostics.js";
+import {
+  formatFailureForTimeline,
+  formatSessionPoisonForTimeline,
+  RunTraceRecorder,
+  type RunTracePaths,
+} from "./diagnostics.js";
 import { detachedInfo, spawnControllableForRun, type DetachedPaths } from "./detached.js";
 import { cleanupAfterRun, forceFinishOnExit, killChild, redactSecrets, shq, spawnErrorMessage } from "./spawn.js";
 import type { RunHandle } from "./types.js";
@@ -59,6 +64,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   let stopRequested = false;
   let turnCompleted = false;
   let latestUsage: ThreadUsage | null = null;
+  let contextEmitted = false;
   let stderr = "";
   let lastEventType: string | null = null;
   let lastEventSummary: string | null = null;
@@ -96,6 +102,20 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     (timer as { unref?: () => void }).unref?.();
     child.once("close", () => clearTimeout(timer));
   };
+  const emitContext = () => {
+    if (contextEmitted) return;
+    contextEmitted = true;
+    push({
+      kind: "context",
+      context: latestUsage
+        ? {
+            used: latestUsage.last.totalTokens,
+            window: latestUsage.modelContextWindow,
+            windowEstimated: false,
+          }
+        : { used: 0, window: null, windowEstimated: false },
+    });
+  };
   const finish = (exitStatus: number, message?: string) => {
     if (finished) return;
     finished = true;
@@ -118,6 +138,9 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     });
     const failure = formatFailureForTimeline(diagnostics);
     if (failure && !stopRequested && failure !== message) push({ kind: "error", message: failure });
+    const sessionPoison = formatSessionPoisonForTimeline(diagnostics);
+    if (sessionPoison) push({ kind: "error", message: sessionPoison, scope: "session" });
+    emitContext();
     push({ kind: "done", exitStatus });
   };
 
@@ -177,14 +200,6 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     }
     if (latestUsage) {
       push({ kind: "usage", usage: usageEvent(latestUsage.total) });
-      push({
-        kind: "context",
-        context: {
-          used: latestUsage.last.totalTokens,
-          window: latestUsage.modelContextWindow,
-          windowEstimated: false,
-        },
-      });
     }
     finish(status === "completed" ? 0 : 1);
     closeProcess();

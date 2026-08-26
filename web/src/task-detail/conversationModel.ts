@@ -359,8 +359,7 @@ export function buildConversationItems(
     const segments = parseSessionOutput(output);
     const traceGroups = groupedTrace(normalizedPersistedTrace(trace, session));
     const consumedTrace = new Set<string>();
-    let itemStartedAt = session.startedAt;
-    let traceTurnStartedAt = session.startedAt;
+    let turnStartedAt = session.startedAt;
     segments.forEach((segment, index) => {
       if (segment.kind === "user") {
         recordPersistedTurn(persistedTurns, "user", segment.text, segment.at);
@@ -375,8 +374,7 @@ export function buildConversationItems(
           // 但「后续追问」不收它 —— 判据统一在 shared 的 isUserFollowUp。
           bySystem: segment.bySystem,
         });
-        itemStartedAt = segment.at ?? itemStartedAt;
-        traceTurnStartedAt = segment.at ?? traceTurnStartedAt;
+        turnStartedAt = segment.at ?? turnStartedAt;
       } else if (segment.kind === "system") {
         recordPersistedTurn(persistedTurns, "system", segment.text, segment.at, session.id);
         // 旧版轮换文案落在用户 .md 里的原文带 Markdown 标记、措辞也不一样；旁注是纯文本
@@ -392,18 +390,17 @@ export function buildConversationItems(
           variant: "note",
           verify: isVerifyNote(text),
         });
-        itemStartedAt = segment.at ?? itemStartedAt;
-        traceTurnStartedAt = segment.at ?? traceTurnStartedAt;
+        turnStartedAt = segment.at ?? turnStartedAt;
       } else {
         const next = segments[index + 1];
         const boundary = next?.kind === "user" ? next.at : undefined;
-        const traceEntries = takeTraceGroup(traceGroups, consumedTrace, traceTurnStartedAt, boundary);
+        const traceEntries = takeTraceGroup(traceGroups, consumedTrace, turnStartedAt, boundary);
         items.push({
           kind: "agent",
           id: `persisted:agent:${session.id}:${index}`,
           sessionId: session.id,
           label: agentLabel(session),
-          at: itemStartedAt,
+          at: turnStartedAt,
           endedAt: null,
           markerEndedAt: segment.endedAt ?? null,
           session,

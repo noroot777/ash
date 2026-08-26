@@ -13,19 +13,11 @@ import { anthropicContext1mBaseUrl, modelUsesContext1m, withContext1mSuffix } fr
 import { calibrateSkills } from "../skills.js";
 import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
 
-// Drives the real `claude` CLI in headless stream-json mode (prompt via stdin).
-//   claude -p --output-format stream-json --verbose --dangerously-skip-permissions
-//          (--session-id <uuid> | --resume <uuid>) [--model <m>]
+// Drives the real `claude` CLI in headless stream-json mode.
 export class ClaudeExecutor implements AgentExecutor {
   readonly type = "claude" as const;
   readonly label: string;
-  // 恢复命令要带的 env 前缀:**只剩供应商那一截**(token 已换成占位符)。存进 sessions。
-  //
-  // 覆盖项(窗口 / 压缩触发点 / 总开关)不走这里 —— 它们在 resumeFields() 的
-  // `--settings` 里。理由是同一条实测事实:CLI 会把各层 settings 的 `env` 写回
-  // 自己的进程环境,命令行前缀那一份**打不过**用户的 settings.json。第 2 轮审查
-  // finding 2 复现过:复制出来的命令带着 env 前缀跑,压缩行为退回用户文件里的那份数,
-  // 跟他在 ash 里看到的不是一回事。既然打不过,就别放上去骗人。
+  // 恢复命令的 env 前缀只留供应商；覆盖项必须走能压过 settings.json 的 --settings。
   private readonly resumeEnvHint?: string;
   private bin: string;
   private startupError?: string;
@@ -61,12 +53,7 @@ export class ClaudeExecutor implements AgentExecutor {
     return this.resumeFields(cwd, sessionId).resumeCommand;
   }
 
-  /**
-   * 恢复命令三件套。`--settings` 那截**按会话 cwd 现算**:项目那几层 settings 文件参与
-   * 换算分母,而 executor 建出来的时候还不知道这活要在哪个目录跑 —— 先前它是构造器里
-   * 冻好的字段,于是 ash 自己带着项目层的值跑、复制出来的命令却少了那一截,两边的
-   * 压缩水位差着几千 token(第 3 轮审查 finding 2)。
-   */
+  /** 恢复参数按会话 cwd 现算，保证项目 settings 与 ash 实际运行一致。 */
   resumeFields(cwd: string, sessionId: string): ResumeFields {
     const settings = this.settingsPayload(cwd);
     const resumeArgs = settings ? `--settings ${shq(JSON.stringify(settings))}` : null;
@@ -83,16 +70,8 @@ export class ClaudeExecutor implements AgentExecutor {
   }
 
   /**
-   * `--settings` 里那一整份。1.5x 加速档和「覆盖 CLI 自己的配置」都只能从这个参数进,
-   * 而**两个 `--settings` 不合并、最后一个整份胜出**(2026-08-12 实测 2.1.220:前一份
-   * 连同它的 env 被静默丢掉),所以两件事必须拼进同一份。运行时和「复制到终端接着聊」
-   * 共用它,两边不会漂。
-   *   • fastMode:headless 下开 fast mode 的唯一官方通道(无 --fast flag、无启用型
-   *     环境变量;仅 Opus 系列生效,其余模型 CLI 自行忽略)。
-   *   • autoCompactEnabled + env:压过用户 settings.json 里的同名开关与变量 —— 同一次
-   *     实测里各层 env 是按 key 合并的,他其余的变量原样保留(见 shared/cli-overrides)。
-   * cwd **必填**:换算分母要读项目那几层 settings 文件,少了它算出来的是另一个数
-   * (第 3 轮审查 finding 2 就是构造器里少这一个参数造成的)。
+   * fastMode 与 CLI 覆盖合成同一份 --settings：多个参数不会合并，最后一份整包胜出。
+   * cwd 必填，因为项目 settings 会参与压缩窗口换算。
    */
   private settingsPayload(cwd: string): Record<string, unknown> | null {
     const settings = {
@@ -149,8 +128,7 @@ export class ClaudeExecutor implements AgentExecutor {
     };
   }
 
-  // 单飞只把进程保留到当前任务回合结束：用户引导时 interrupt + send，同一进程继续；
-  // 最终 result 到来就关 stdin 并把常驻流收成普通 RunHandle 的 done。
+  // 单飞只把进程保留到当前任务回合结束：引导时 interrupt + send；最终 result 收台。
   runSteerable(opts: RunOpts): RunHandle {
     const sessionId = opts.sessionId ?? randomUUID();
     const model = opts.model ?? this.model;
@@ -168,7 +146,7 @@ export class ClaudeExecutor implements AgentExecutor {
         );
     const detached = detachedInfo(child);
     return singleRunFromResident(
-      this.residentFromChild(child, sessionId, commandLine, !!detached),
+      this.residentFromChild(child, sessionId, commandLine, true),
       detached,
     );
   }
@@ -263,6 +241,7 @@ export class ClaudeExecutor implements AgentExecutor {
         if (closeByKill) killChild(child);
       },
       kill: () => killChild(child),
+      cleanup: () => cleanupAfterRun(child),
     };
   }
 
@@ -338,6 +317,10 @@ export function singleRunFromResident(
         }
       } catch (error) {
         if (!interrupted) intermediateEnds = Math.max(0, intermediateEnds - 1);
+        else {
+          accepting = false;
+          resident.kill();
+        }
         throw error;
       }
     },
@@ -345,6 +328,7 @@ export function singleRunFromResident(
       accepting = false;
       resident.kill();
     },
+    cleanup: resident.cleanup,
   };
 }
 

@@ -12,7 +12,7 @@ import { bus } from "./bus.js";
 import { scanForTitle } from "./auto-title.js";
 import { now } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { takeSteered, takeStopped, takeConfirmed, type StopSettle } from "./runs.js";
+import { bindNativeSteer, takeSteered, takeStopped, takeConfirmed, type StopSettle } from "./runs.js";
 import type { AgentExecutor, RunHandle } from "./executors/types.js";
 import {
   LOST_SESSION_PATCH,
@@ -226,6 +226,10 @@ export async function consumeSingleRun(a: {
   cliSessionId: string;
   autoTitle: boolean;
   role?: SessionRole;
+  nativeSteer?: {
+    prepare?(text: string): string;
+    record(text: string, at: string): void;
+  };
 }): Promise<void> {
   const { taskId, sessId, agentType, ex, out } = a;
   const role = a.role ?? "single";
@@ -284,9 +288,9 @@ export async function consumeSingleRun(a: {
     writeTurn(out, { t: "system", agent: agentType, text: notice }, a.turnStart);
     publishEvent({ kind: "system", text: notice, at: a.turnStart });
   }
-  const flushTraceText = () => {
+  const flushTraceText = (at?: string) => {
     if (!pendingTraceText) return;
-    appendSessionTrace(taskId, sessId, a.turnStart, { kind: "text", text: pendingTraceText });
+    appendSessionTrace(taskId, sessId, a.turnStart, { kind: "text", text: pendingTraceText }, at);
     pendingTraceText = "";
   };
   // 会话轮换旁注：实时立刻播（用户正看着），落盘攒到 writeTurnEnd 之后再补 —— 见
@@ -339,6 +343,19 @@ export async function consumeSingleRun(a: {
       flushTraceText();
     }
   };
+
+  if (a.nativeSteer) {
+    bindNativeSteer(taskId, a.handle, {
+      agentType,
+      prepare: a.nativeSteer.prepare,
+      beforeDeliver: async (at) => {
+        if (!titleDone && head) await resolveTitle(true);
+        const boundary = Date.parse(at);
+        flushTraceText(Number.isFinite(boundary) ? new Date(boundary - 1).toISOString() : undefined);
+      },
+      record: a.nativeSteer.record,
+    });
+  }
 
   // 定期把「已消费到哪个字节」写进库。真正重要的是**崩溃/被杀时**那一份——
   // 正常收尾会在下面再写一次终值。1s 一次：最坏情况重启后重放不到 1 秒的输出，

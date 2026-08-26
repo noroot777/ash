@@ -79,6 +79,8 @@ export interface ResidentHandle {
   dropSession?(): void;
   close(): void; // 优雅收尾:关 stdin,等它自己退出
   kill(): void; // 硬杀,走 killChild 三层击杀
+  /** 单飞适配器收流后继续清理 CLI 遗留的后台后代。 */
+  cleanup?: () => Promise<void>;
 }
 
 // 从执行器 profile(agents 表一行)解析出来的构造参数 —— 单点在

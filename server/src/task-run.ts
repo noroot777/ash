@@ -7,7 +7,7 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { bindNativeSteer, trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
+import { trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun, afterSettlement } from "./single-run.js";
 import { taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
@@ -191,16 +191,6 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     await db.insert(sessions).values(sessRow);
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
-    bindNativeSteer(taskId, handle, {
-      agentType,
-      prepare: (text) => withGlobalBrowserPolicy(
-        withSkillInvocation({ agentType, cwd: ws.path, text }),
-        "reminder",
-      ),
-      record: (text, at) => recordUserConversationTurn({
-        taskId, sessionId: sessId, role: "single", agentType, out, text, at,
-      }),
-    });
     const baseNote = baseFallbackNote(ws.baseFallback);
     if (baseNote) {
       // fresh run 也会撞上「登记的 base 已经没了」（任务验收合并后分支被删，用户又点了
@@ -214,6 +204,15 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     await consumeSingleRun({
       taskId, sessId, agentType, ex, cwd: ws.path,
       handle, out, turnStart, cliSessionId, autoTitle,
+      nativeSteer: {
+        prepare: (text) => withGlobalBrowserPolicy(
+          withSkillInvocation({ agentType, cwd: ws.path, text }),
+          "reminder",
+        ),
+        record: (text, at) => recordUserConversationTurn({
+          taskId, sessionId: sessId, role: "single", agentType, out, text, at,
+        }),
+      },
     });
   } catch (err) {
     // handle 已登记后收到「引导会话」时，kill 可能恰好让 parser 抛而不是正常收流。

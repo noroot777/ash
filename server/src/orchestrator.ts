@@ -7,7 +7,7 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { bindNativeSteer, trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
+import { trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun, afterSettlement } from "./single-run.js";
 import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
@@ -474,16 +474,6 @@ export async function continueTask(
     }
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
-    bindNativeSteer(taskId, handle, {
-      agentType: agent,
-      prepare: (text) => withGlobalBrowserPolicy(
-        withSkillInvocation({ agentType: agent, cwd, text }),
-        "reminder",
-      ),
-      record: (text, at) => recordUserConversationTurn({
-        taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text, at,
-      }),
-    });
     if (opts.system) {
       // Backend-initiated 继续: a 〔系统〕 trace (its own bubble), NOT a 你→ reply.
       // Persist as a structured turn (reload) and emit a matching system event (live).
@@ -531,6 +521,15 @@ export async function continueTask(
     await consumeSingleRun({
       taskId, sessId, agentType: agent, ex, cwd,
       handle, out, turnStart, cliSessionId, autoTitle: false, role: sessionRole,
+      nativeSteer: {
+        prepare: (text) => withGlobalBrowserPolicy(
+          withSkillInvocation({ agentType: agent, cwd, text }),
+          "reminder",
+        ),
+        record: (text, at) => recordUserConversationTurn({
+          taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text, at,
+        }),
+      },
     });
   } catch (err) {
     // 与 consumeSingleRun 的正常收流分支对称：有些 CLI 被 kill 后会让 parser 直接抛。

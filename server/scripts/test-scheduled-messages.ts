@@ -8,15 +8,10 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { IS_WINDOWS } from "../src/platform.js";
 import { releaseTmpDb } from "./tmp-db.js";
-import { TEAM_DEFAULTS } from "@ash/shared";
+import { parseSessionOutput, TEAM_DEFAULTS } from "@ash/shared";
 import { installFakeClaude } from "./scheduled-messages-fixture.js";
 
-// ── 子进程分支:制造「进程死在投递中途」的真实现场 ────────────────────────────
-// 父进程把自己 fork 出一份、指向同一个库(ASH_DB 从环境继承)。这里用**投递路径
-// 自己那个函数**抢下租约,然后 SIGKILL 自己 —— 没有 finally、没有 catch、没有任何清理
-// 机会,库里就留下一条「pending + 有租约」的行。
-// 那正是 2026-08-07 消息死掉的当口:当时它已经被标成 sent,补发扫描只查 pending,于是
-// 再也没人管它。现在它还是 pending,重启后必须能自己回来。
+// 子进程抢下投递租约后 SIGKILL，留下可由重启回收的「pending + 租约」现场。
 const crashMessageId = process.env.ASH_TEST_CRASH_MESSAGE;
 if (crashMessageId) {
   const { beginDelivery } = await import("../src/pending-messages.js");
@@ -31,8 +26,7 @@ const originalPath = process.env.PATH;
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_TEST_LEAD_LOG = leadLog;
 const fakeBin = installFakeClaude(root);
-// 分隔符用 `path.delimiter`:Windows 是 `;`,写死 `:` 会把整条 PATH 粘成一个不存在的
-// 目录名,假 claude 和真 node 一起从 PATH 上消失。
+// Windows PATH 使用 `;`，必须走 path.delimiter。
 process.env.PATH = `${fakeBin}${delimiter}${originalPath ?? ""}`;
 
 const [{ db, ensureSchema }, schema, schedulesModule, pending, runs, status, steer, orchestrator, transcript, paths, { bus }, acceptance, runRoutes, team] = await Promise.all([
@@ -54,9 +48,7 @@ const [{ db, ensureSchema }, schema, schedulesModule, pending, runs, status, ste
 const { projects, scheduledMessages, sessions, tasks } = schema;
 await ensureSchema();
 
-// 托盘靠这条事件收口。**没有它,前端只能从任务状态跃迁里猜**:排队消息一发出去任务
-// 立刻又回到 running,那个空档常常一次都观察不到,于是已经进了会话的消息还在托盘上
-// 挂着「排队中」(2026-08-13)。所以每一次 status 变化都必须吱一声。
+// 托盘靠显式事件收口，不能从一闪而过的任务状态跃迁推断。
 const trayEvents: string[] = [];
 const statusEvents: Array<{ taskId: string; status: string }> = [];
 const agentEvents: Array<{ taskId: string; event: { kind: string; exitStatus?: number; text?: string } }> = [];
@@ -87,9 +79,7 @@ const unavailableSessionId = "scheduled-team-unavailable-session";
 const closingSessionId = "scheduled-team-closing-session";
 const unavailableTranscript = transcript.sessionTranscriptPath(unavailableTaskId, unavailableSessionId);
 
-// 「调度台不可用」这一档必须与本机装了什么 CLI 无关:claude/codex 都实现了常驻会话,
-// 装了真 codex 的机器上它会真的开起来。用一个走 GenericCliExecutor 的类型(它们一律
-// 不实现 openResident,这正是「谁能当调度者」的过滤条件),失败点就锁死在协议上。
+// 用不实现 openResident 的 GenericCliExecutor 固定复现「调度台不可用」。
 const taskRow = (id: string, lead: "claude" | "gemini", status: "idle" | "running" | "done" | "paused") => ({
   id,
   projectId,
@@ -130,9 +120,7 @@ const messageRow = (id: string, taskId: string, text: string, mode: "timed" | "q
   deliveringSince: null,
 });
 
-// 15s 而不是 3s:每一步都是「真的起一个进程 + 真的写盘」,而这个脚本常常与前端构建、
-// 其它回归测试挤在同一台机器上跑。超时是用来兜死锁的,不是用来卡性能的 —— 定太紧,
-// 失败信息会指向一个根本没坏的地方。
+// 真实起进程并写盘，15s 只用于兜死锁，避免并行构建造成假超时。
 const waitFor = async (predicate: () => boolean | Promise<boolean>, message: string) => {
   const deadline = Date.now() + 15_000;
   while (!(await predicate())) {
@@ -141,9 +129,7 @@ const waitFor = async (predicate: () => boolean | Promise<boolean>, message: str
   }
 };
 
-// ── 投递判定(纯函数,不碰 DB)───────────────────────────────────────────────
-// 排队(queued)与定时(timed)只差「什么时候算到期」这一条:前者不看钟点,但必须
-// 等单任务空下来;后者看钟点。「任务在忙」永远是等,不是取消。
+// 投递判定：queued 等任务空闲，timed 等钟点；任务忙都只是等待。
 const future = new Date(now.getTime() + 60_000).toISOString();
 const single = (s: string) => ({ mode: "single", status: s, archived: false });
 assert.equal(pending.deliveryVerdict({ mode: "queued", sendAt: future }, single("done"), now).action, "deliver",
@@ -177,10 +163,7 @@ assert.equal(
 );
 console.log("✓ 投递判定:排队不看时间但等任务空闲,定时看时间,忙=等而不是取消");
 
-// 收尾里那句 `process.exit(0)` 是**无条件**的:没有这个 catch,try 里任何一条断言炸掉都会被
-// 它按 0 退出,`npm run test:*` 一律绿 —— 一份永远不会红的回归比没有回归更坏(实测:把 PATH
-// 指到不存在的目录,整轮只打出第一个 ✓,退出码照样 0)。这里接住、原样打出来、记账,
-// 由 finally 末尾按它决定退出码。
+// 保存断言错误，避免 finally 的 process.exit 覆盖真实失败。
 let failure: unknown = null;
 try {
   await db.insert(projects).values({ id: projectId, name: "scheduled", repoPath: root, apiKeys: null, createdAt: at });
@@ -427,10 +410,7 @@ try {
   console.log("✓ 排队追问:运行中原地等待,任务一空闲立即投递进原会话");
 
   // ── 结算钩子里投递:单飞锁还锁着,消息也一个字都不能丢 ────────────────────
-  // 真实链路是 run loop 的 try 里 setTaskStatus → flushPendingForTask,**那一刻这一轮
-  // 的单飞锁还锁着**。上面那一段是在锁外调的,所以它测不到这个格:2026-08-07 就是在
-  // 这里丢的消息——claim 已经把它标成 sent,continueTask 却被锁静默挡回,托盘和时间线
-  // 同时没有,用户那句话凭空蒸发。这里把锁真的锁上复现它。
+  // 真实结算钩子触发补送时单飞锁仍在；这里锁住复现，防止消息被提前标 sent。
   assert.equal(runs.claimTurn(lockedTaskId), true, "测试自身前提:这一轮的锁应该抢得到");
   await status.setTaskStatus(lockedTaskId, "done");
   await new Promise((resolve) => setTimeout(resolve, 300));
@@ -439,9 +419,7 @@ try {
     0,
     "锁还锁着就不该起下一轮(会跟当前这一轮撞在一起)",
   );
-  // 等待期间那一行必须**还是 pending**:这段等待只活在内存里,服务此刻重启就随之
-  // 蒸发。行要是已经标成 sent,开机第一次 tick 的补发扫描就看不见它了——同一个消息
-  // 消失,只是触发条件从「锁」换成了「重启」。
+  // 等待只活在内存里，因此数据库行必须保持 pending，供重启后的扫描补送。
   assert.equal(
     (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, "scheduled-locked"))).at(0)!.status,
     "pending",
@@ -461,7 +439,6 @@ try {
       .where(eq(tasks.id, lockedTaskId))).at(0)?.resumePrompt,
     null, "排队真人消息真正送进会话时必须消费旧检查点，不能继续阻塞完成与预约派审",
   );
-  // 「送到了」的判据是**刷新后仍看得见**:原话作为一个真人回合落进会话时间线。
   const lockedSession = (await db.select().from(sessions).where(eq(sessions.taskId, lockedTaskId))).at(0)!;
   const lockedTranscript = transcript.sessionTranscriptPath(lockedTaskId, lockedSession.id);
   await waitFor(
@@ -482,6 +459,7 @@ try {
   // ── 引导会话:默认排队,点按钮后在同一 Claude 进程里 interrupt + send ───────
   const oldRun = orchestrator.continueTask(steerTaskId, "保持运行等待引导");
   await waitFor(() => runs.isRunning(steerTaskId), "旧方向的一次性回合没有进入 running");
+  await waitFor(() => agentEvents.some(({ taskId, event }) => taskId === steerTaskId && event.text?.includes("旧方向最后一段正文")), "旧方向正文尚未到达消费层");
   await db.update(tasks).set({
     completeConfirmedAt: at,
     resumePrompt: "旧方向留下的续跑指令",
@@ -531,6 +509,15 @@ try {
     "引导消息应落回旧 CLI 会话对应的同一条 session 时间线");
   assert.doesNotMatch(readFileSync(steerTranscript, "utf8"), /当前回合已由“引导会话”结束/,
     "原生引导不应写入一次假的回合结束边界");
+  const steeredOutput = parseSessionOutput(readFileSync(steerTranscript, "utf8"));
+  const steeredUser = steeredOutput.find((segment) => segment.kind === "user" && segment.text.includes("先停下旧方案"));
+  assert.ok(steeredUser?.at, "引导消息必须带精确用户边界时间");
+  const steerTrace = transcript.parseSessionTrace(
+    readFileSync(transcript.sessionTracePath(steerTaskId, "scheduled-steer-session"), "utf8"),
+  );
+  const oldTextTrace = steerTrace.find((entry) => entry.event.kind === "text" && entry.event.text.includes("旧方向最后一段正文"));
+  assert.ok(oldTextTrace, "旧方向最后一段正文必须进入结构化 trace");
+  assert.ok(Date.parse(oldTextTrace.at) < Date.parse(steeredUser!.at!), "旧方向正文必须在用户边界前 flush");
   await waitFor(
     async () => {
       const current = (await db.select().from(tasks).where(eq(tasks.id, steerTaskId))).at(0)!;

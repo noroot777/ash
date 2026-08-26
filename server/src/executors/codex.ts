@@ -153,6 +153,9 @@ export class CodexExecutor implements AgentExecutor {
 
   runSteerable(opts: RunOpts): RunHandle {
     const { args, ignored } = this.appServerArgs(opts);
+    // App Server 不认识 exec 专属参数；删掉会改变每一轮的能力（例如 --search）。
+    // 这类 profile 保留原 exec 语义，引导按钮沿用上层既有的 kill + resume 降级。
+    if (ignored.length) return this.run(opts);
     return openCodexAppServer({
       bin: this.bin,
       args,
@@ -165,9 +168,6 @@ export class CodexExecutor implements AgentExecutor {
       env: { ...this.env(), ...opts.env },
       trace: opts.trace,
       detach: opts.detach,
-      notices: ignored.length
-        ? [`Codex 原生引导回合不支持以下执行器固定参数，已忽略：${ignored.join("、")}`]
-        : undefined,
     });
   }
 

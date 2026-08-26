@@ -22,6 +22,7 @@ type NativeSteerTarget = {
   handle: Killable & { steer(text: string): Promise<void> };
   agentType: AgentType;
   prepare(text: string): string;
+  beforeDeliver?(at: string): void | Promise<void>;
   record(text: string, at: string): void;
 };
 const nativeSteerTargets = new Map<string, NativeSteerTarget>();
@@ -63,13 +64,19 @@ export function untrackRun(taskId: string, h: Killable): void {
 export function bindNativeSteer(
   taskId: string,
   handle: Killable,
-  input: { agentType: AgentType; prepare?(text: string): string; record(text: string, at: string): void },
+  input: {
+    agentType: AgentType;
+    prepare?(text: string): string;
+    beforeDeliver?(at: string): void | Promise<void>;
+    record(text: string, at: string): void;
+  },
 ): void {
   if (!handle.steer || !handles.get(taskId)?.has(handle)) return;
   nativeSteerTargets.set(taskId, {
     handle: handle as Killable & { steer(text: string): Promise<void> },
     agentType: input.agentType,
     prepare: input.prepare ?? ((text) => text),
+    beforeDeliver: input.beforeDeliver,
     record: input.record,
   });
 }
@@ -107,6 +114,7 @@ export function reserveNativeSteerTask(taskId: string): NativeSteerReservation {
         if (nativeSteerTargets.get(taskId) !== target || !handles.get(taskId)?.has(target.handle)) {
           throw new Error("当前活动回合已经结束");
         }
+        await target.beforeDeliver?.(at);
         await target.handle.steer(target.prepare(text));
         // provider 已确认收到以后，消息就已经是真实投递；实时广播失败不能把它退回队列
         // 再投一次，否则同一句会进入模型两遍。
