@@ -69,8 +69,8 @@ export function isTeamSettledLead(task: TaskListItem, workers: TaskListItem[] = 
 export function spreadBucket(task: TaskListItem, workers: TaskListItem[] = []): SpreadBucket {
   if (task.question) return "todo";
   if (task.status === "failed" || task.stage === "verify_failed") return "todo";
-  // 等我盖章 = 轮到我动。判据跟任务模式共用一份（见下面 isTaskAwaitingAcceptance）：
-  // 刚收尾还没点头的落这一档，过了窗口的老账落回下面的「已收尾」。
+  // 等我盖章 = 轮到我动，判据跟任务模式共用一份（见下面 isTaskAwaitingAcceptance）。
+  // 干完没点头的因此落「需要你处理」，而不是「已收尾」—— 后者是「这事翻篇了」的意思。
   if (isTaskAwaitingAcceptance(task, workers)) return "todo";
   if (isTaskLive(task, workers)) return "run";
   // 调度台自己没在说话，底下却有执行者卡在提问上 —— 那句话最后是要你来答的。排在
@@ -117,36 +117,24 @@ export function awaitsYourWord(task: TaskListItem, workers: TaskListItem[] = [])
   return isTeamLead(task) && workers.some((worker) => worker.question || worker.status === "paused");
 }
 
-// 「等我盖章」。两种都算，判据一份，spreadBucket 和任务模式共用：
-//   · 显式 stage=awaiting_acceptance —— 明着停在验收关口上，多久都算；
-//   · 收了尾、没盖过章、而且是**最近**收的 —— 自由工作流只调 complete_task，stage 多数
-//     时候是 null，这种「已完成，等你点头」占了绝大多数（实测 335 条对 28 条）。
+// 「等我盖章」= 干完了、没盖过章。**不设时限**，跟行首那颗未验收圆点（useTaskReadState
+// 的 awaitsAcceptance）同一个口径：没点过头的活就是没落地的活，搁多久都算。
 //
-// 时限是这一档的全部要害。不设时限，三百多条历史任务会把任务模式淹掉（那正是收窄前
-// 的样子）；只认显式的章，今天刚干完的活又一条都进不来 —— 用户看着一条 0.2 小时前
-// 收尾、写着「完成待验收」的任务问「它不该在列表里吗」，问的就是这个。实测这一周内
-// 收尾且没盖章的只有 4 条：一周的窗口接住手头的活，接不住三个月前那批。
+// 这一档来回改过两次，原委记在这儿免得再绕：
+//   · 起初回落到「done 且没盖章」，于是三百多条历史任务把任务模式淹了；
+//   · 收窄成只认显式 stage=awaiting_acceptance —— 可自由工作流只调 complete_task，
+//     stage 多数时候是 null，今天刚干完、界面上写着「完成待验收」的任务反而进不来；
+//   · 2026-08-26 查明淹掉列表的是 daily-report 那条流水线（541 条里它占 518 条，
+//     连 28 条显式 awaiting_acceptance 也全是它的）。用户把那批一次性标成已验收，
+//     并明确「以后不会发生这种事情」，剩下的一共 22 条 —— 到这里时限就没有存在理由了。
+// 所以真正的判据只有「盖没盖章」这一条，别再往里加年龄、条数之类的兜底：那是拿口径
+// 去补数据的问题，历史证明补不对。
 //
-// 读 updatedAt 而不是 endedAt：侧栏的年龄闸（taskTreeModel 的 TASK_PREVIEW_MAX_AGE_MS）
-// 也读它，一个列表里只该有一口时钟；续聊过的老任务因此按「最近碰过」算，这也对。
-//
-// 行首那颗未验收的圆点**不受这个时限管**（useTaskReadState 的 awaitsAcceptance）：
-// 那是「我还没点过头」的长期记号，翻到哪条都得看得见；这一档说的是「这条线现在停在
-// 验收关口上」，过了一周还没人管，它就不再是「现在」的事了。
-export const TASK_MODE_ACCEPTANCE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-
-export function isTaskAwaitingAcceptance(
-  task: TaskListItem,
-  workers: TaskListItem[] = [],
-  nowMs = Date.now(),
-): boolean {
+// 团队的「干完了」写在执行者身上（调度台自己没有 done 终态），所以要连执行者一起判。
+export function isTaskAwaitingAcceptance(task: TaskListItem, workers: TaskListItem[] = []): boolean {
   if (isAcceptedStage(task)) return false;
   if (task.stage === "awaiting_acceptance") return true;
-  // 团队的「干完了」写在执行者身上，调度台自己没有 done 终态。
-  const settled = task.status === "done" || isTeamSettledLead(task, workers);
-  if (!settled) return false;
-  const updatedAt = Date.parse(task.updatedAt);
-  return Number.isFinite(updatedAt) && nowMs - updatedAt < TASK_MODE_ACCEPTANCE_WINDOW_MS;
+  return awaitsAcceptance(task, task.status === "done" || isTeamSettledLead(task, workers));
 }
 
 export function inTaskMode(task: TaskListItem, workers: TaskListItem[] = []): boolean {

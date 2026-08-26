@@ -17,11 +17,11 @@ const P1 = { kind: "project", projectId: "p1" };
 const P3 = { kind: "project", projectId: "p3" };
 const TASKS = { kind: "tasks" };
 
-// 「待验收」这一档带时限（见 taskAttention 的 TASK_MODE_ACCEPTANCE_WINDOW_MS），所以
-// 固定日期不够用：下面的 fixture 分两种年龄——不写 updatedAt 的是 2026-08-01 那种老账，
-// 写 FRESH 的是刚收尾的。测试跟着真实时钟走，两边永远隔着一整个窗口。
+// 「待验收」不看年龄（见 taskAttention 的 isTaskAwaitingAcceptance），所以 fixture 里
+// 特意准备了两种年龄：STALE 是两个月前收的老账,FRESH 是刚收的。两者必须落在同一档 ——
+// 这一档曾经带过 7 天时限,那是拿口径去补 daily-report 的数据,数据清干净后就撤了。
 const FRESH = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-const STALE = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+const STALE = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
 
 function task(id, extra = {}) {
   return {
@@ -55,13 +55,15 @@ const tasks = [
   task("todo-question", { status: "running", question: "选哪个？", starredAt: 1754900000000 }),
   task("todo-failed", { status: "failed" }),
   task("todo-await", { status: "done", stage: "awaiting_acceptance" }),
-  // 刚干完、没盖章：自由工作流只调 complete_task,stage 是 null —— 这才是「完成待验收」的常态。
+  // 干完了没盖章的两种年龄。stage 是 null 才是常态 —— 自由工作流只调 complete_task。
   task("todo-fresh-done", { status: "done", updatedAt: FRESH }),
+  task("todo-stale-done", { status: "done" }),
   task("run-running", { status: "running" }),
   task("run-accepted-review", { status: "awaiting_review", stage: "accepted" }),
   task("wait-backlog", { status: "backlog", starredAt: 1754900001000 }),
   task("wait-paused", { status: "paused" }),
-  task("done-done", { status: "done" }),
+  // 「已收尾」这一档现在只剩取消掉的：干完的要么盖了章（验收完成）、要么还等着我（需要你处理）。
+  task("done-canceled", { status: "canceled" }),
   task("accepted-merged", { status: "done", stage: "merged" }),
   // 下面三条都不该进计数：执行者不是顶层行、归档的不在树里、别的项目也不在。
   // 执行者/归档行就算带着星也不算——它们根本不在树里。
@@ -73,25 +75,26 @@ const tasks = [
 ];
 
 const counts = spreadCounts(tasks, P1);
-assert.equal(counts.all, 10);
+assert.equal(counts.all, 11);
 assert.equal(counts.starred, 2);
-assert.equal(counts.todo, 4);
+assert.equal(counts.todo, 5);
 assert.equal(counts.run, 2);
 assert.equal(counts.wait, 2);
 assert.equal(counts.done, 1);
 assert.equal(counts.accepted, 1);
 
-// 时限本身：同一条任务，老账落「已收尾」、刚收尾的落「需要你处理」。这两行钉住的是
-// 「凭什么不是全都进来」——不设时限,三百多条历史任务会把任务模式重新淹掉。
-assert.equal(spreadBucket(task("x", { status: "done" })), "done");
-assert.equal(spreadBucket(task("x", { status: "done", updatedAt: FRESH })), "todo");
-assert.ok(!isTaskAwaitingAcceptance(task("x", { status: "done" })));
+// 「等我盖章」只问一件事：盖没盖章。年龄不参与 —— 老账和刚收尾的必须同档,否则又会变成
+// 「界面写着完成待验收、列表里却找不到」。
+assert.ok(isTaskAwaitingAcceptance(task("x", { status: "done" })), "两个月前干完没盖章的照样是等我盖章");
 assert.ok(isTaskAwaitingAcceptance(task("x", { status: "done", updatedAt: FRESH })));
-// 显式盖着「待验收」的章不受时限管：那是明着停在关口上，搁多久都还停在那儿。
+assert.equal(spreadBucket(task("x", { status: "done" })), "todo");
+assert.equal(spreadBucket(task("x", { status: "done", updatedAt: FRESH })), "todo");
 assert.ok(isTaskAwaitingAcceptance(task("x", { status: "done", stage: "awaiting_acceptance" })));
-// 盖过章的一律不算,哪怕是刚盖的。
+// 盖过章的一律不算。
 assert.ok(!isTaskAwaitingAcceptance(task("x", { status: "done", stage: "accepted", updatedAt: FRESH })));
+assert.ok(!isTaskAwaitingAcceptance(task("x", { status: "done", stage: "merged" })));
 assert.ok(!isTaskAwaitingAcceptance(task("x", { status: "canceled", updatedAt: FRESH })), "取消掉的不是等我盖章");
+assert.ok(!isTaskAwaitingAcceptance(task("x", { status: "running" })), "还在跑的不是等我盖章");
 
 // 五个桶互斥且铺满：加起来必须正好是「全部」，否则筛选条上的数字自己就打架了。
 // 星标不进这笔账 —— 它跟桶正交，进来就会重复计。
@@ -146,7 +149,7 @@ assert.equal(empty.all, 0);
 assert.equal(SPREAD_DOT_FILTERS.reduce((sum, item) => sum + empty[item.key], 0), 0);
 
 // 「任务模式」作用域：跨项目，但只收三类顶层行 —— 在跑、等我说句话（提问 / 停在检查点）、
-// 停在验收关口上（显式盖章的，或刚收尾还没点头的）。它回答的是「此刻还没落地的活有哪些」，
+// 等我盖章（干完了没点头，不看年龄）。它回答的是「此刻还没落地的活有哪些」，
 // 而不是「所有项目的任务摊开」。执行者与归档行照旧排除。
 const taskMode = spreadCounts(tasks, TASKS);
 const taskModeRows = spreadVisibleTasks(tasks, TASKS, "all").map((row) => row.id);
@@ -154,16 +157,15 @@ assert.deepEqual(taskModeRows.sort(), [
   "other-project",   // 别的项目，在跑 —— 单项目口径下看不见，任务模式里要看见
   "run-accepted-review", // awaiting_review：机器确实在动
   "run-running",
-  "todo-await",      // stage=awaiting_acceptance，就是「待验收」
-  "todo-fresh-done", // 刚干完、没盖章 —— 这才是「完成待验收」的常态形状
+  "todo-await",      // stage=awaiting_acceptance，明着停在验收关口上
+  "todo-fresh-done", // 刚干完、没盖章 —— 这才是「完成待验收」的常态形状（stage 是 null）
+  "todo-stale-done", // 两个月前干完、也没盖章 —— 同样没落地，年龄不是判据
   "todo-question",   // status=running，在跑（被问住也还挂在 running 上）
   "wait-paused",     // 停在检查点，等我说句话才走得下去
   "handed-out",      // 接力出去了，但它在持有机上跑着 —— 一样是「还没落地的活」
 ].sort());
-// 排着的、失败的、已验收的、归档的、执行者、接力走了的，一个都不进。
-// **收了尾很久又没人盖章的也不进**（done-done）：那种「还没落地」是名义上的,三百多条
-// 历史任务倒进来,模式想说的那句话就被淹了 —— 见上面那对时限断言。
-for (const id of ["wait-backlog", "todo-failed", "accepted-merged", "archived", "worker", "done-done"]) {
+// 排着的、失败的、已验收的、归档的、执行者、接力走了的、取消掉的，一个都不进。
+for (const id of ["wait-backlog", "todo-failed", "accepted-merged", "archived", "worker", "done-canceled"]) {
   assert.ok(!taskModeRows.includes(id), `任务模式不该收 ${id}`);
 }
 assert.equal(taskMode.all, taskModeRows.length);
@@ -196,8 +198,7 @@ const teamTasks = [
   // 刚收工、还没盖章的团队：调度台自己没有 done 终态，「干完了」只写在执行者身上，
   // 所以这一档也得连执行者一起判，否则团队永远进不了「待验收」。
   task("team-fresh", { mode: "team", status: "idle", updatedAt: FRESH }),
-  task("team-fresh-w", { status: "done", parentId: "team-fresh", updatedAt: FRESH }),
-  task("team-accepted", { mode: "team", status: "idle", stage: "accepted" }),
+  task("team-fresh-w", { status: "done", parentId: "team-fresh", updatedAt: FRESH }),  task("team-accepted", { mode: "team", status: "idle", stage: "accepted" }),
   task("team-accepted-w", { status: "done", parentId: "team-accepted" }),
   task("team-asking", { mode: "team", status: "idle" }),
   task("team-asking-w", { status: "paused", question: "选哪个？", parentId: "team-asking" }),
@@ -207,14 +208,14 @@ const teamRows = scopeTasks(teamTasks, TASKS).map((row) => row.id);
 assert.ok(teamRows.includes("team-live"), "执行者在跑 = 团队在跑");
 assert.ok(teamRows.includes("team-asking"), "执行者卡在提问上 = 这个团队等我说句话");
 assert.ok(teamRows.includes("team-fresh"), "刚收工没盖章的团队 = 等我盖章");
-assert.ok(!teamRows.includes("team-settled"), "收工很久又没人盖章的团队算落地了，不再占着这一档");
+assert.ok(teamRows.includes("team-settled"), "收工很久也没盖章的团队一样 = 等我盖章");
 assert.ok(!teamRows.includes("team-accepted"), "盖过章的团队不再出现");
 assert.ok(!teamRows.includes("team-never"), "从没开过台的团队不算还没落地的活");
 // 留下的团队要把自己的执行者一起带上，否则团队行的展开箭头是灰的、执行者摘要空一片。
 assert.ok(teamRows.includes("team-live-w"));
 assert.ok(teamRows.includes("team-asking-w"));
 assert.ok(teamRows.includes("team-fresh-w"));
-assert.ok(!teamRows.includes("team-settled-w"));
+assert.ok(teamRows.includes("team-settled-w"));
 assert.ok(!teamRows.includes("team-accepted-w"));
 
 // **入选判据和状态桶必须是同一套。** 团队调度台自己常年停在 idle，只读它那一行的话
@@ -223,16 +224,16 @@ assert.ok(!teamRows.includes("team-accepted-w"));
 const teamIndex = indexWorkers(teamTasks);
 const bucketOf = (id) => spreadBucket(teamTasks.find((row) => row.id === id), workersFrom(teamIndex, id));
 assert.equal(bucketOf("team-live"), "run", "执行者在跑的团队要读作「在跑」");
-assert.equal(bucketOf("team-settled"), "done", "收工很久的团队跟单飞 done 同义，不是「排着 / 暂停」");
-assert.equal(bucketOf("team-fresh"), "todo", "刚收工没盖章 = 需要你处理，跟单飞刚 done 一个待遇");
+assert.equal(bucketOf("team-settled"), "todo", "收了工没盖章 = 需要你处理，跟单飞 done 一个待遇");
+assert.equal(bucketOf("team-fresh"), "todo", "刚收工没盖章同理，年龄不是判据");
 assert.equal(bucketOf("team-accepted"), "accepted", "盖过章的团队仍归「验收完成」，别被 done 抢走");
 assert.equal(bucketOf("team-asking"), "todo", "执行者的问题最后要你来答 = 需要你处理");
 assert.equal(bucketOf("team-never"), "wait", "从没开过台的团队才是真的「排着」");
 
 const teamCounts = spreadCounts(teamTasks, TASKS);
 assert.equal(teamCounts.run, 1);
-assert.equal(teamCounts.todo, 2, "卡在提问上的 + 刚收工等盖章的");
-assert.equal(teamCounts.done, 0, "收工很久的团队不进任务模式，自然也不该在这里计数");
+assert.equal(teamCounts.todo, 3, "卡在提问上的 + 两个收了工等盖章的");
+assert.equal(teamCounts.done, 0, "干完的团队要么等我盖章、要么已验收，落不到「已收尾」");
 assert.equal(teamCounts.accepted, 0);
 
 // 任务模式的口径承诺落在筛选条上就是这一条：**进得来的行只会落在 在跑 / 需要你处理 /
