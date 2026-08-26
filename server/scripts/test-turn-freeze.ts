@@ -19,7 +19,7 @@ process.env.ASH_RUNS_DIR = join(root, "runs");
 try {
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { groups, projects, sessions: sessionsTable, tasks } = await import("../src/db/schema.js");
-  const { claimTurn, continueWhenIdle, freezeStartingTurn, isTurnClaimed, releaseTurn, takeStopped } =
+  const { claimTurn, continueWhenIdle, freezeStartingTurn, isTurnClaimed, releaseTurn, takeStopped, trackRun, untrackRun } =
     await import("../src/runs.js");
   const { abortIfFrozen, FrozenTurn, turnFreezeReason } = await import("../src/turn-freeze.js");
   const { pauseGroup } = await import("../src/scheduler.js");
@@ -85,6 +85,17 @@ try {
   await pauseGroup("g");
   assert.equal(await turnFreezeReason("solo"), null, "别的分组暂停不该冻住不相干的任务");
   releaseTurn("solo");
+
+  // 即使 status 被别的交错写成 queued，只要活 handle 还在，暂停必须优先杀进程。
+  await db.update(groups).set({ paused: false }).where(eq(groups.id, "g"));
+  await db.insert(tasks).values(task("masked-live", { status: "queued", followUpFrom: "paused" }) as never);
+  let maskedKills = 0;
+  const maskedHandle = { kill: () => { maskedKills += 1; } };
+  trackRun("masked-live", maskedHandle);
+  await pauseGroup("g");
+  assert.equal(maskedKills, 1, "有活 handle 时不能因为 status=queued 而漏杀 agent");
+  assert.equal(takeStopped("masked-live"), "paused", "被暂停的活回合必须按 paused 结算");
+  untrackRun("masked-live", maskedHandle);
 
   console.log("✓ turn freeze gate");
 

@@ -3,7 +3,7 @@
 //   isOvertaken / tailOrder —— 重新排队该不该去队尾、去了以后顺序对不对
 // 跑:npm -w server run test:queue
 import assert from "node:assert/strict";
-import { selectNextInQueue, type QueueMember } from "../src/scheduler.js";
+import { queueStatus, selectNextInQueue, type QueueMember } from "../src/scheduler.js";
 import { isOvertaken, tailOrder } from "../src/queues.js";
 
 const m = (id: string, status: string, extra: Partial<QueueMember> = {}): QueueMember => ({
@@ -78,6 +78,13 @@ assert.equal(
   selectNextInQueue([m("01", "running", { followUpFrom: "failed", question: "选 A 还是 B?" }), m("02", "backlog")])?.id,
   "02",
   "续聊里提问也不挡路(任务本体仍是终态)",
+);
+assert.equal(queueStatus(m("01", "running", { followUpFrom: "paused" })), "running",
+  "非终态 followUpFrom 不得遮住真实 running 状态");
+assert.equal(
+  selectNextInQueue([m("01", "running", { followUpFrom: "paused" }), m("02", "backlog")]),
+  null,
+  "checkpoint-paused 的真人续聊仍是活回合，队列不得把它重新拉起或并跑后项",
 );
 
 // ── isOvertaken ──────────────────────────────────────────────────────────────
