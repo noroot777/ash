@@ -53,7 +53,15 @@ export interface ResidentHandle {
   sessionId: string;
   commandLine: string;
   events: AsyncIterable<AgentEvent>; // 直到 close()/kill() 才结束
-  send(text: string): void; // 注入一条 user 消息(即时,无 tick)
+  /**
+   * 注入一条 user 消息(即时,无 tick)。
+   *
+   * **返回值 = 这个进程收下了没有**,调用方必须看:false 代表这条消息一个字都没进去
+   * (进程正在收尾、stdin 已经关掉),而不是「稍后会处理」。团队调度台把执行者汇报攒在
+   * 内存里等回合收尾合并投递,拿不到这个回执就只能假定送到了 —— 一次拒收就是一份执行
+   * 结果或一个待回答的提问无声消失(2026-08-26 第 11 轮审查)。
+   */
+  send(text: string): boolean;
   // 打断正在跑的回合。claude 的 stdin 注入是「排到回合结束才处理」,所以用户
   // 插话要先 interrupt 再 send 才有 codex 那种当场转向的手感(见 team/session.ts)。
   // codex 侧没有原生打断,interrupt 就是杀掉当前回合的进程。

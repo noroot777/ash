@@ -168,9 +168,11 @@ export function openCodexResident(params: {
     },
     events: stream(),
     send: (text: string) => {
-      if (ended || closing) return;
+      // 收尾中/已结束就明确拒收:排进 waiting 也没人会跑它了(见 ResidentHandle.send)。
+      if (ended || closing) return false;
       waiting.push(text);
       void pump();
+      return true;
     },
     // codex 没有 claude 那种 control_request:打断 = 杀掉当前回合的进程。
     // stopRequested 让 parseCodexStream 把这次非零退出当预期结果,不报成故障。

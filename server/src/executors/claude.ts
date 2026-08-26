@@ -180,7 +180,11 @@ export class ClaudeExecutor implements AgentExecutor {
       commandLine,
       events: parseClaudeStream(child, resident, this.bin, this.type, this.compactWindow()),
       send: (text: string) => {
-        child.stdin?.write(userLine(text));
+        // stdin 没了/已经关掉 = 这条消息一个字都进不去,如实说不(见 ResidentHandle.send)。
+        const stdin = child.stdin;
+        if (!stdin || stdin.destroyed || stdin.writableEnded) return false;
+        stdin.write(userLine(text));
+        return true;
       },
       interrupt: () => {
         resident.interruptPending = true;

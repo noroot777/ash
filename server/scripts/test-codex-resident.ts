@@ -211,7 +211,10 @@ console.log("5) close 等手头这轮跑完;kill 立刻收摊");
   handle.kill();
   await sub.finished;
   ok("kill 之后事件流立刻结束");
-  handle.send("死了之后不该再起回合");
+  // 拒收必须**说出来**:调度台靠这个回执决定「这条汇报还欠着」还是「已经送到了」,
+  // 拿不到 false 就会把一份执行者汇报当成已投递丢掉(见 ResidentHandle.send)。
+  if (handle.send("死了之后不该再起回合") === false) ok("kill 之后 send 明确回执拒收");
+  else fail("kill 之后 send 仍报「收下了」—— 调用方会把这条消息当成已投递");
   await new Promise((r) => setTimeout(r, 200));
   if (spawned.length === 1) ok("kill 之后 send 不再起回合");
   else fail(`kill 之后又起了 ${spawned.length - 1} 个回合`);

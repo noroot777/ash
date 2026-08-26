@@ -299,7 +299,12 @@ function push(lead: Lead, text: string, kind: Kind): void {
     }
     const at = now();
     recordUserConversationTurn({ taskId: lead.taskId, sessionId: lead.sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at });
-    lead.handle.send(withGlobalBrowserPolicy(promptedText, "reminder"));
+    // 用户那句话无论如何都要留在时间线上,但**送没送进去要如实说**:进程正在收尾时
+    // stdin 已经关了,这条消息一个字都进不去(见 ResidentHandle.send)。
+    if (!sendToLead(lead, promptedText)) {
+      reportLeadFailure(lead, "这条消息没能送进调度台进程 —— 它正在收尾。等它收完台,再说一遍就会重新接回会话送进去。", at);
+      return;
+    }
     void beginTurn(lead, at);
     return;
   }
@@ -308,8 +313,16 @@ function push(lead: Lead, text: string, kind: Kind): void {
     return;
   }
   const at = now();
+  // 跟 endTurn 同一条规矩:**先确认进程收下了,再算它送出去了**。还挂在 leads 里不等于
+  // stdin 还开着 —— 空闲回收 close() 到 closeLead 之间就是这么一个窗口。没收下就当它还
+  // 欠着:攒进 pending,由 closeLead 交回托盘等下一台送(这时候别落盘,否则下一台真送成
+  // 时同一条汇报会在 .md 里出现两遍)。
+  if (!sendToLead(lead, text)) {
+    lead.pending.push(text);
+    reportLeadFailure(lead, "执行者消息没能送进调度台进程(它正在收尾),先留着交给下一台接手的调度台。", at);
+    return;
+  }
   recordSystemTurn(lead, text, at);
-  lead.handle.send(withGlobalBrowserPolicy(text, "reminder"));
   void beginTurn(lead, at);
 }
 
@@ -796,6 +809,22 @@ function adoptStranded(lead: Lead): void {
   lead.pending.unshift(...queue);
 }
 
+/**
+ * 把一条消息交给这台调度台的进程,**返回它收下了没有**(见 ResidentHandle.send)。
+ *
+ * 拿不到回执就只能假定送到了,而两种常驻实现都会静默拒收:codex 在 `ended || closing`
+ * 时直接返回,claude 在 stdin 已关时写不进去。抛错同样按「没收下」算 —— 一次注入失败不该
+ * 掀掉整台调度台(理由同 persistOrReport),但更不能被当成送到了。
+ */
+function sendToLead(lead: Lead, text: string): boolean {
+  try {
+    return lead.handle.send(withGlobalBrowserPolicy(text, "reminder"));
+  } catch (error) {
+    console.error(`[ash] team send(${lead.taskId}) failed:`, error);
+    return false;
+  }
+}
+
 function clearStatusRetry(lead: Lead): void {
   if (lead.statusTimer) clearTimeout(lead.statusTimer);
   lead.statusTimer = null;
@@ -876,12 +905,19 @@ async function endTurn(lead: Lead): Promise<void> {
   flushSessionNotices(lead);
   if (lead.pending.length) {
     const merged = lead.pending.join("\n\n---\n\n");
-    lead.pending = [];
     const at = now();
-    recordSystemTurn(lead, merged, at);
-    lead.handle.send(withGlobalBrowserPolicy(merged, "reminder"));
-    await beginTurn(lead, at);
-    return;
+    // 原来是先清队列、先落盘,再 send。可 send 完全可能拒收(进程正在收尾),那一步之后
+    // 队列已经空了 —— closeLead 想把这批汇报交回托盘都拿不到东西,下一台健康调度台永远
+    // 等不到(2026-08-26 第 11 轮审查)。所以顺序反过来:**收下了才算送出去**,没收下就
+    // 原样留在 pending 里,由 closeLead 交回托盘。落盘也要等收下之后 —— 没送成还记一条
+    // 「已投递」的 system turn,下一台真送成时同一份汇报在 .md 里就是两条。
+    if (sendToLead(lead, merged)) {
+      lead.pending = [];
+      recordSystemTurn(lead, merged, at);
+      await beginTurn(lead, at);
+      return;
+    }
+    reportLeadFailure(lead, "攒着的执行者汇报没能送进调度台进程(它正在收尾),先留着交给下一台接手的调度台。", at);
   }
   await setLeadStatus(lead, "idle", endIso);
   armIdle(lead);

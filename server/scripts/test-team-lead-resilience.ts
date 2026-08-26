@@ -74,6 +74,8 @@ async function startLead(opts: {
   events: AsyncGenerator<AgentEvent>;
   /** 复用一条已有的会话行(openLead 的 resuming 分支就是这么干的),而不是新插一行。 */
   reuse?: boolean;
+  /** 覆盖 handle 的收件行为:返回 false = 明确拒收,抛错 = 进程已经不可写。缺省全收。 */
+  send?: (text: string) => boolean;
 }) {
   const row = {
     cliSessionId: opts.cliSessionId || null,
@@ -113,7 +115,10 @@ async function startLead(opts: {
       sessionId: opts.cliSessionId,
       commandLine: `codex exec resume ${opts.cliSessionId}`,
       events: opts.events,
-      send: () => { sent++; },
+      send: (text: string) => {
+        sent++; // 计的是**尝试**次数,拒收/抛错也算 —— 断言要分得清「没试」和「试了没进去」
+        return opts.send ? opts.send(text) : true;
+      },
       interrupt: () => {},
       dropSession: () => {},
       close: () => {},
@@ -712,6 +717,69 @@ try {
     "这条汇报在共用的 .md 里只该出现一次 —— 刷新后看得见,又不能重复成两条",
   );
   ok("换台时攒着的执行者汇报跟着走,只送一次且刷新后看得见");
+
+  // ── ⑭ 接手的那台没送成:这批汇报要继续往下传,而且 .md 里只留一条 ────────────────────
+  // ⑬ 只覆盖了「接手的那台一切正常」。可 endTurn 原来是先清队列、先落盘再 send —— 而
+  // send 完全可能拒收:codex 在 ended||closing 时直接返回,claude 在 stdin 已关时写不进去,
+  // 两个都不抛错。那一步之后队列已经空了,closeLead 想把汇报交回托盘都拿不到东西:第三台
+  // 健康调度台在线却一个字都收不到,自动协作接着在缺执行结果的情况下往下做决定。
+  const RESEND = "task-pending-resend";
+  const RESEND_SESS = "sess-pending-resend";
+  const RESEND_REPORT = "执行者汇报:第一台没送成也不许丢";
+  await seedTeamTask(RESEND);
+  let releaseResendOld!: () => void;
+  const holdResendOld = new Promise<void>((r) => { releaseResendOld = r; });
+  async function* resendOldScript(): AsyncGenerator<AgentEvent> {
+    await holdResendOld;
+    yield { kind: "done", exitStatus: 0 };
+  }
+  const resendOld = await startLead({
+    taskId: RESEND, sessId: RESEND_SESS, cliSessionId: "old-thread", events: resendOldScript(),
+  });
+  await sendInbound(RESEND, RESEND_REPORT); // 旧台正忙 → 只进 pending
+  // 接管的第二台认领了这条汇报,可它的进程已经不可写了。
+  async function* brokenScript(): AsyncGenerator<AgentEvent> {
+    yield { kind: "turnEnd" }; // 就在这儿投递,而它送不出去
+    yield { kind: "done", exitStatus: 0 };
+  }
+  const broken = await startLead({
+    taskId: RESEND, sessId: RESEND_SESS, cliSessionId: "broken-thread", events: brokenScript(), reuse: true,
+    send: () => { throw new Error("resident handle is no longer writable"); },
+  });
+  releaseResendOld();
+  const resendDeadline = Date.now() + 15_000;
+  while (teamIsLive(RESEND) && Date.now() < resendDeadline) await new Promise((r) => setTimeout(r, 20));
+  assert.equal(broken.sent(), 1, "第二台该试着投递一次");
+  // 第三台健康调度台接手,这批汇报必须落到它手上。
+  let releaseThird!: () => void;
+  const holdThird = new Promise<void>((r) => { releaseThird = r; });
+  async function* thirdScript(): AsyncGenerator<AgentEvent> {
+    yield { kind: "turnEnd" };
+    await holdThird;
+    yield { kind: "done", exitStatus: 0 };
+  }
+  const third = await startLead({
+    taskId: RESEND, sessId: RESEND_SESS, cliSessionId: "third-thread", events: thirdScript(), reuse: true,
+  });
+  while (third.sent() === 0 && Date.now() < resendDeadline) await new Promise((r) => setTimeout(r, 20));
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(teamIsLive(RESEND), true, "这一条要在第三台还在线时验");
+  assert.equal(
+    third.sent(),
+    1,
+    "上一台没送成的执行者汇报没能接着往下传 —— 第三台健康调度台在线却一个字都没收到",
+  );
+  releaseThird();
+  while (teamIsLive(RESEND) && Date.now() < resendDeadline) await new Promise((r) => setTimeout(r, 20));
+  await new Promise((r) => setTimeout(r, 200));
+  const resendMd = readFileSync(join(resendOld.runDir, `${RESEND_SESS}.md`), "utf8");
+  assert.equal(
+    resendMd.split(RESEND_REPORT).length - 1,
+    1,
+    "同一条汇报在 .md 里出现了两次 —— 没送成的那一次也当「已投递」记了一笔",
+  );
+  assert.match(resendMd, /没能送进调度台进程/, "投递失败这件事必须持久可见,不能只在日志里");
+  ok("接手的调度台没送成时,汇报继续往下传且只落盘一次");
 
   console.log("test:team-resilience ok");
 } finally {
