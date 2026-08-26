@@ -18,6 +18,9 @@ export type TaskTreeSection<T extends TaskListItem = TaskListItem> = {
 export type TaskTreeOptions = {
   // true = 置顶单独成节（主工作区）；false = 不分节，置顶仍排在最前（其他项目的折叠列表）。
   unifiedPinned?: boolean;
+  // true = 接力出去的行也留在树里（任务模式）。默认摘掉：单项目态下它们归下方
+  // 「其他机器」那一节，留在主列表里就是同一条任务在侧栏出现两次。
+  includeElsewhere?: boolean;
 };
 
 export type TaskPreview<T extends TaskListItem = TaskListItem> = {
@@ -79,7 +82,8 @@ export function advanceHiddenReveal(lastKey: string | null, revealKey: string | 
 }
 
 export function buildTaskTree<T extends TaskListItem>(tasks: T[], options: TaskTreeOptions = {}): TaskTreeSection<T>[] {
-  const topLevel = tasks.filter((task) => task.parentId === null && !task.archived && visibleOnThisMachine(task));
+  const topLevel = tasks.filter((task) => task.parentId === null && !task.archived
+    && (options.includeElsewhere || visibleOnThisMachine(task)));
   const pinned = sortPinned(topLevel.filter((task) => task.pinnedAt != null));
   const rest = sortByUpdated(topLevel.filter((task) => task.pinnedAt == null));
 

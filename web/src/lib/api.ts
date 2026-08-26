@@ -10,6 +10,7 @@ import type {
   HandoffApprovalResult,
   HandoffExportResult,
   HandoffIdentity,
+  HandoffOutboundStateResult,
   HandoffPeer,
   HandoffPreflightResult,
   LlmProtocol,
@@ -301,6 +302,10 @@ export const api = {
     body: { targetUrl: string; targetProjectId: string; targetName?: string; autoResume?: boolean },
   ): Promise<HandoffExportResult> =>
     request(`/tasks/${id(taskId)}/handoff`, json("POST", body)),
+  // 侧栏定时问一次「我交出去的那些任务，在对端现在什么样」。本机那一行的 status 停在
+  // 交出去的那一刻，不问就只能拿冻住的旧状态当真。联系不上的机器进 offline，不算失败。
+  outboundState: (): Promise<HandoffOutboundStateResult> =>
+    request("/tasks/outbound-state", json("POST", {})),
   remoteTaskSnapshot: (taskId: string, targetUrl: string): Promise<RemoteTaskSnapshot> =>
     request(`/tasks/${id(taskId)}/remote-snapshot`, json("POST", { targetUrl })),
   remoteTaskReply: (taskId: string, targetUrl: string, text: string): Promise<ReplyTaskResult> =>

@@ -60,7 +60,8 @@ const tasks = [
   task("worker", { status: "running", parentId: "run-running", starredAt: 1754900002000 }),
   task("archived", { status: "done", archived: true, starredAt: 1754900003000 }),
   task("other-project", { status: "running", projectId: "p2" }),
-  task("handed-out", { status: "done", handoff: { direction: "out", pending: false }, starredAt: 1754900004000 }),
+  // 接力出去、此刻在持有机上跑着（status 是 useOutboundState 从对端问回来合并进去的）。
+  task("handed-out", { status: "running", handoff: { direction: "out", pending: false }, starredAt: 1754900004000 }),
 ];
 
 const counts = spreadCounts(tasks, P1);
@@ -136,11 +137,12 @@ assert.deepEqual(taskModeRows.sort(), [
   "todo-await",      // stage=awaiting_acceptance，就是「待验收」
   "todo-question",   // status=running，在跑（被问住也还挂在 running 上）
   "wait-paused",     // 停在检查点，等我说句话才走得下去
+  "handed-out",      // 接力出去了，但它在持有机上跑着 —— 一样是「还没落地的活」
 ].sort());
 // 排着的、失败的、已验收的、归档的、执行者、接力走了的，一个都不进。
 // **done 但没盖过章的也不进**：stage 多数时候是 null，把「收了尾且没盖章」当待验收会把
 // 三百多条历史任务倒进来，模式想说的那句话就被淹了 —— 待验收只认显式的章。
-for (const id of ["wait-backlog", "todo-failed", "accepted-merged", "archived", "worker", "handed-out", "done-done"]) {
+for (const id of ["wait-backlog", "todo-failed", "accepted-merged", "archived", "worker", "done-done"]) {
   assert.ok(!taskModeRows.includes(id), `任务模式不该收 ${id}`);
 }
 assert.equal(taskMode.all, taskModeRows.length);
@@ -156,6 +158,12 @@ for (const item of SPREAD_DOT_FILTERS) {
     `taskMode:${item.key}`,
   );
 }
+
+// 接力出去的行：单项目态里不进主列表（它们归下方「其他机器」那一节，两处都画就是同一条
+// 任务在侧栏出现两次），任务模式里照收 —— 那一档问的是「还没落地的活」，活在哪台机器上
+// 不是它关心的维度。这是同一个判据的两面，谁漂了另一面就自相矛盾。
+assert.ok(!rows.some((row) => row.id === "handed-out"), "单项目态的主列表不收接力出去的行");
+assert.equal(counts.run, 2, "单项目态的计数也不该把它算进来");
 
 // 团队要连执行者一起判：调度台派完活自己落回 idle，只盯它会把正在干活的团队判成静止，
 // 也会把「执行者卡在提问上」的团队判成没事发生。

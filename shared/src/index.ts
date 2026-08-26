@@ -81,10 +81,13 @@ export type {
   HandoffApprovalResult,
   HandoffExportResult,
   HandoffIdentity,
+  HandoffOutboundStateResult,
   HandoffPeer,
   HandoffPeerIdentity,
+  HandoffPeerOffline,
   HandoffPingProject,
   HandoffPreflightResult,
+  HandoffRemoteState,
   HandoffTarget,
   TaskHandoff,
 } from "./handoff.ts";

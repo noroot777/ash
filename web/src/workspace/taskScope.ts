@@ -1,6 +1,7 @@
 import type { TaskListItem } from "@ash/shared";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import { indexWorkers, inTaskMode, workersFrom } from "../lib/taskAttention.ts";
+import { visibleOnThisMachine } from "./taskTreeModel.ts";
 
 // 侧栏任务列表的**作用域**：只看当前项目一家，还是进「任务模式」。
 //
@@ -38,6 +39,13 @@ export function scopeTasks<T extends TaskListItem>(tasks: T[], scope: TaskScope)
     if (inTaskMode(task, workersFrom(workers, task.id))) leads.add(task.id);
   }
   return tasks.filter((task) => leads.has(task.parentId ?? task.id));
+}
+
+// 「这一行本机看得见吗」。单项目态里接力出去的任务不进主列表 —— 它们在下方「其他机器」
+// 那一节里按持有机分开列。任务模式反过来：它问的是「此刻还没落地的活」，活在哪台机器上
+// 不是它关心的维度，所以出站行照收，状态由 useOutboundState 从持有机实时问回来。
+export function visibleInScope(task: TaskListItem, scope: TaskScope): boolean {
+  return scope.kind === "tasks" || visibleOnThisMachine(task);
 }
 
 // 筛选控件画不画。任务模式永远画（它天生有可筛的东西）；单项目态下只有一个项目都

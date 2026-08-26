@@ -4,6 +4,7 @@ import { api } from "../lib/api.ts";
 import { useAgentAvailability } from "../lib/agentAvailability.ts";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import { useTasks } from "../lib/useTasks.ts";
+import { useOutboundState } from "./useOutboundState.ts";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { TeamView } from "../team/TeamView.tsx";
 import { DuetView } from "../duet/DuetView.tsx";
@@ -29,6 +30,7 @@ import {
   resolveScopeKind,
   scopeTasks,
   TASK_MODE_LABEL,
+  visibleInScope,
   writeStoredScopeKind,
   type TaskScope,
   type TaskScopeKind,
@@ -87,7 +89,10 @@ export function WorkspaceShell() {
   // 项目主仓被切分支/拉取过之后重拉一次 ProjectHealth：侧栏胶囊上的分支名和「有未提交
   // 改动」那颗点都从它来，不跟着刷就会停在操作之前的样子。
   const [gitVersion, setGitVersion] = useState(0);
-  const { tasks, setTasks, loading: tasksLoading, error: tasksError, connected, settlementVersion, refetch: refetchTasks, applyStar } = useTasks();
+  const { tasks: localTasks, setTasks, loading: tasksLoading, error: tasksError, connected, settlementVersion, refetch: refetchTasks, applyStar } = useTasks();
+  // 接力出去的行，状态从持有机实时问回来再合并进列表 —— 本机那一行停在交出去那一刻，
+  // 不合并的话它在任务模式里就是一条冻住的假状态（见 useOutboundState 顶部）。
+  const { tasks, targets: handoffTargets, offline: offlinePeers } = useOutboundState(localTasks);
   // 侧栏在看哪些任务：当前项目一家，还是进「任务模式」看所有项目里在跑 / 待验收的那些。
   // 它只影响**列表**；下面的 currentProject 仍是「新建任务 / 终端 / git 落在哪」的上下文，
   // 跟着选中的任务走。
@@ -203,7 +208,7 @@ export function WorkspaceShell() {
   const selectedFullTask = useTaskBody(selectedTask);
   const loadError = projectsError ?? tasksError;
   const activeTaskCount = useMemo(
-    () => scopeTasks(tasks.filter((task) => !task.archived && visibleOnThisMachine(task)), scope)
+    () => scopeTasks(tasks.filter((task) => !task.archived && visibleInScope(task, scope)), scope)
       .filter((task) => task.parentId === null).length,
     [scope, tasks],
   );
@@ -241,6 +246,10 @@ export function WorkspaceShell() {
   // 那时候铺开自己收起来把主区还回去。
   const selectTask = (task: TaskListItem, options?: { keepSpread?: boolean }) => {
     if (!visibleOnThisMachine(task)) {
+      // 任务模式里出站行就摆在列表里，点开当然得能进去 —— 进的是持有机上那份实时会话
+      // （RemoteTaskDetail），跟点开本机任务一样是「打开这条任务」，只是活在别的机器上。
+      const holder = handoffTargets.find((item) => item.url.replace(/\/+$/, "") === (task.handoff?.peerUrl ?? "").replace(/\/+$/, ""));
+      if (holder) { selectRemoteTask(task, holder); return; }
       notify("任务已接力到另一台机器，请在当前持有它的机器上继续");
       return;
     }
@@ -353,7 +362,7 @@ export function WorkspaceShell() {
 
   return (
     <><div className="workspace-system-layout">{handoffAlert}<div className={`workspace-shell${spread.laidOut ? " is-spread" : ""}`} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
-      <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} selectedRemoteTaskId={remoteSelection?.task.id ?? null} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTaskMode={selectTaskMode} onTask={selectTask} onRemoteTask={selectRemoteTask} onTaskStarred={applyStar} onHandoffFinished={() => refetchTasks({ silent: true }).then(() => {})} onGitChanged={() => setGitVersion((value) => value + 1)} onOpenTerminal={currentProject ? () => setTerminalOpen(true) : null} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={() => setGroupsPanelOpen(true)} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("executors")} />
+      <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} selectedRemoteTaskId={remoteSelection?.task.id ?? null} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTaskMode={selectTaskMode} onTask={selectTask} onRemoteTask={selectRemoteTask} onTaskStarred={applyStar} onHandoffFinished={() => refetchTasks({ silent: true }).then(() => {})} offlinePeers={offlinePeers} onGitChanged={() => setGitVersion((value) => value + 1)} onOpenTerminal={currentProject ? () => setTerminalOpen(true) : null} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={() => setGroupsPanelOpen(true)} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("executors")} />
       <main className="workspace-main">
         {cliUpgradeNotice}
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}

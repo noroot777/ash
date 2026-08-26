@@ -34,7 +34,6 @@ import {
 import { filterSlashCommands, type SlashCommand, type SlashCommandId } from "./commandPaletteCommands.ts";
 import { TASK_MODE_LABEL, TASK_MODE_SUMMARY } from "../workspace/taskScope.ts";
 import { workspaceModifierLabel } from "../workspace/useWorkspaceShortcuts.ts";
-import { visibleOnThisMachine } from "../workspace/taskTreeModel.ts";
 
 type PaletteStep = "search" | "scope-project" | "scope-type" | "git-project" | "git-overview";
 
@@ -172,7 +171,9 @@ export function CommandPalette({
     };
     if (!query.trim()) {
       tasks
-        .filter((task) => visibleOnThisMachine(task) && (task.status === "running" || task.status === "queued" || !!task.question))
+        // 接力出去的行也算 —— 它们的状态是从持有机实时问回来的（useOutboundState），
+        // 点开进的是那台机器上的会话页。「现在有什么在跑」不该因为活在别的机器上就漏掉。
+        .filter((task) => task.status === "running" || task.status === "queued" || !!task.question)
         .slice(0, 6)
         .forEach((task) => result.push({
           key: `running:${task.id}`,

@@ -1,6 +1,8 @@
 // ── 任务接力（跨机器 handoff）──────────────────────────────────────────────
 // 把一个任务连同 git 分支、CLI 会话文件、会话产物整体迁到另一台 ash 上续跑。
 // 从 index.ts 拆出的纯类型模块;index.ts 做类型再导出,消费方 import 路径不变。
+import type { TaskStage, TaskStatus } from "./index.ts";
+
 export interface HandoffTarget {
   name: string;
   url: string;
@@ -151,4 +153,34 @@ export interface HandoffExportResult {
   git: "bundle" | "none";
   autoResume: boolean;
   notes: string[];
+}
+
+// ── 出站存档的实时状态 ─────────────────────────────────────────────────────
+// 接力出去之后，本机那一行的 status 就停在**交出去那一刻**（导出前会先停掉任务，所以
+// 多半是 canceled/idle）。对端后来跑没跑完、有没有卡在提问上，本机一个字都不知道。
+// 侧栏要把这些行跟本机任务同等对待（同一份列表、同一套状态点和筛选），前提就是先把
+// 真状态问回来 —— 否则等于把一批冻住的假状态铺在最该可信的那个列表里。
+//
+// 一次一台机器批量问，只回状态不回会话内容（会话仍走按需的 remote-snapshot）。
+export interface HandoffRemoteState {
+  /** 对端任务 id（同 id 迁移，等于本机这一行的 id）。 */
+  taskId: string;
+  status: TaskStatus;
+  stage: TaskStage | null;
+  question: string | null;
+  title: string;
+  updatedAt: string;
+}
+
+/** 联系不上的持有机：这台机器上的出站行只能显示接力当时的旧状态，得如实说出来。 */
+export interface HandoffPeerOffline {
+  url: string;
+  name: string;
+  reason: string;
+}
+
+/** POST /tasks/outbound-state（浏览器面）的应答。 */
+export interface HandoffOutboundStateResult {
+  rows: HandoffRemoteState[];
+  offline: HandoffPeerOffline[];
 }

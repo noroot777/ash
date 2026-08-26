@@ -1,4 +1,10 @@
-import type { HandoffTarget, TaskHandoff } from "@ash/shared";
+import type {
+  HandoffOutboundStateResult,
+  HandoffPeerOffline,
+  HandoffRemoteState,
+  HandoffTarget,
+  TaskHandoff,
+} from "@ash/shared";
 import { and, eq } from "drizzle-orm";
 import type { Context, Hono } from "hono";
 import { getAppSettings } from "./app-settings.js";
@@ -15,7 +21,12 @@ import { answerTask } from "./task-answer.js";
 import { sessionOutputText, sessionsForTask, sessionTraceEntries } from "./task-session-routes.js";
 import { enrichTasks } from "./task-store.js";
 
-type ProxyBody = TaskReplyBody & { taskId?: string; transferId?: string; answer?: string };
+type ProxyBody = TaskReplyBody & {
+  taskId?: string;
+  transferId?: string;
+  answer?: string;
+  items?: { taskId: string; transferId?: string }[];
+};
 type BrowserProxyBody = TaskReplyBody & { targetUrl?: string; answer?: string };
 
 function fail(c: Context, error: unknown) {
@@ -127,8 +138,89 @@ async function snapshotFor(taskId: string, callerFingerprint: string, transferId
   return { task, sessions, persisted, returnAvailable: Boolean(returnTarget) };
 }
 
+// 出站存档的实时状态:一次一台机器批量问,只回状态不回会话内容。
+// 逐个任务鉴权,读不到的**静默跳过**而不是整批 403 —— 对端可能已经把其中一个移回/删掉,
+// 一颗坏果子不该让整台机器的行全部退回冻住的旧状态。
+async function remoteStatesFor(
+  items: { taskId: string; transferId?: string }[],
+  callerFingerprint: string,
+): Promise<HandoffRemoteState[]> {
+  const rows: HandoffRemoteState[] = [];
+  for (const item of items) {
+    if (!item?.taskId) continue;
+    const owned = await ownedInboundTask(item.taskId, callerFingerprint, item.transferId).catch(() => null);
+    if (!owned) continue;
+    const task = (await enrichTasks([owned.row]))[0];
+    rows.push({
+      taskId: task.id,
+      status: task.status,
+      stage: task.stage ?? null,
+      question: task.question ?? null,
+      title: task.title,
+      updatedAt: task.updatedAt,
+    });
+  }
+  return rows;
+}
+
+// 本机所有「确认接力出去」的行,按持有机分组。pending(应答丢失、没确认送到)的不算:
+// 那种任务本机还硬拦着不让跑,状态归本机自己说,问对端只会问出个 404。
+async function outboundByPeer(): Promise<Map<string, { target: HandoffTarget; items: { taskId: string; transferId?: string }[] }>> {
+  const { handoffTargets } = await getAppSettings();
+  const rows = await db.select({ id: tasks.id, handoff: tasks.handoff }).from(tasks);
+  const byPeer = new Map<string, { target: HandoffTarget; items: { taskId: string; transferId?: string }[] }>();
+  for (const row of rows) {
+    const marker = markerOf(row.handoff);
+    if (marker?.direction !== "out" || marker.pending || !marker.peerUrl) continue;
+    const url = normalizedUrl(marker.peerUrl);
+    const target = handoffTargets.find((item) => normalizedUrl(item.url) === url);
+    // 已经从接力设置里删掉的机器:没有名字也没有指纹,连签名都发不出去,当它不存在。
+    if (!target) continue;
+    const bucket = byPeer.get(url) ?? { target, items: [] };
+    bucket.items.push({ taskId: marker.peerTaskId || row.id, transferId: marker.transferId ?? undefined });
+    byPeer.set(url, bucket);
+  }
+  return byPeer;
+}
+
+// 问一圈持有机：我交出去的那些任务，在它们那儿现在什么样。
+// 联系不上的机器只列进 offline **不抛错** —— 一台机器关机不该让整个侧栏读不出状态，
+// 而侧栏拿到 offline 才能如实说「这几行显示的是接力当时的状态」。
+export async function outboundRemoteStates(): Promise<HandoffOutboundStateResult> {
+  const rows: HandoffRemoteState[] = [];
+  const offline: HandoffPeerOffline[] = [];
+  for (const [url, { target, items }] of await outboundByPeer()) {
+    try {
+      const answer = await fetchPeer<{ rows: HandoffRemoteState[] }>(
+        `${url}/api/handoff/proxy/tasks/state`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ items }),
+          timeoutMs: 10_000,
+        },
+      );
+      rows.push(...(answer.rows ?? []));
+    } catch (error) {
+      offline.push({ url, name: target.name, reason: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return { rows, offline };
+}
+
 export function mountHandoffRemoteRoutes(api: Hono): void {
   // 机器面：只接受获批且签名的来源机，并且只允许它访问自己交来的入站任务。
+  api.post("/handoff/proxy/tasks/state", async (c) => {
+    try {
+      const { peer, body } = await signedBody(c);
+      const items = Array.isArray(body.items) ? body.items : [];
+      return c.json({ rows: await remoteStatesFor(items, peer.fingerprint) });
+    } catch (error) { return fail(c, error); }
+  });
+
+  // 浏览器面：侧栏定时问一次「我交出去的那些任务，在对端现在什么样」。
+  api.post("/tasks/outbound-state", async (c) => c.json(await outboundRemoteStates()));
+
   api.post("/handoff/proxy/task/snapshot", async (c) => {
     try {
       const { peer, body } = await signedBody(c);

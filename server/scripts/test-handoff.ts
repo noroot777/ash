@@ -22,6 +22,8 @@
 //      消息在对端原样落库(新 id、到期时间保留、附件路径改写),本机原件取消留档;
 //      幂等收口只取消 pending 标记冻结的那批,收口期间新建的留在托盘如实提醒;
 //      定时计划带 enabled/lastRunAt 落到对端并接上任务(schedule_id)
+//  13. 出站存档的实时状态:签名代理问一圈持有机(逐个任务鉴权、pending 不问、
+//      联系不上如实进 offline、设置里删掉的机器当不存在)
 //  12. 网关伪造失败应答(对端实已导入成功、502 不带 ash 标记):按「送达未知」
 //      保留 pending,重试走幂等收口——按业务拒绝回滚就是两台机器双跑
 // ASH_RUNS_DIR 指到临时目录顺带打开 guardAgentSpawn,即使哪里失手触发续跑也
@@ -73,6 +75,8 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   const { HandoffError } = await import("../src/handoff-types.js");
   const { handoffBlockReason } = await import("../src/handoff-guard.js");
   const { localIdentity } = await import("../src/handoff-identity.js");
+  const { outboundRemoteStates } = await import("../src/handoff-remote.js");
+  const { getAppSettings, patchAppSettings } = await import("../src/app-settings.js");
   const { resumeOrRunTask } = await import("../src/task-resume.js");
   const { createTasks } = await import("../src/task-store.js");
   const { sessionTranscriptPath } = await import("../src/transcript.js");
@@ -602,6 +606,60 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
     "PUT", "/tasks/handoff-e2e-task-03/schedule", { kind: "once", at: "2026-08-21T00:00:00.000Z", enabled: false },
   );
   assert.equal(scheduleAfterClear.status, 200, `移除标记后写入口应恢复:${await scheduleAfterClear.text()}`);
+
+  // ── 13. 出站存档的实时状态:侧栏问一圈持有机 ──────────────────────────────
+  // 接力出去之后,源机那一行的 status 停在**交出去那一刻**(导出前先停任务,所以多半是
+  // canceled/paused)。侧栏要把这些行跟本机任务同等对待——同一份列表、同一颗状态点、
+  // 同一套筛选——就必须先把真状态问回来,否则等于把一批冻住的假状态铺在最该可信的那个
+  // 列表里。这一节验的就是那一圈:签名代理、逐个任务鉴权、联系不上的机器如实进 offline。
+  const peerFingerprint = (await api<{ fingerprint: string }>(peerUrl, "/handoff/identity")).fingerprint;
+  const beforeTargets = (await getAppSettings()).handoffTargets;
+  await patchAppSettings({ handoffTargets: [{ name: "测试机", url: peerUrl, peerFp: peerFingerprint }] });
+  // 把 out 标记指回真对端(第 3 节走的是假对端那个地址,同一台机器换个门牌)。
+  await db.update(tasks)
+    .set({ handoff: JSON.stringify({ ...marker, peerUrl }) })
+    .where(eq(tasks.id, taskId));
+  // 对端把这份任务改个名:标题也要跟着状态一起接回来,否则源机列表里挂的是老名字。
+  const renamed = "接力过来的任务(对端改名)";
+  const renameRes = await fetch(`${peerUrl}/api/tasks/${taskId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ title: renamed }),
+  });
+  assert.equal(renameRes.status, 200, `对端改标题应成功:${await renameRes.text()}`);
+
+  const live = await outboundRemoteStates();
+  assert.deepEqual(live.offline, [], "对端活着的时候不该有 offline");
+  const liveRow = live.rows.find((row) => row.taskId === taskId);
+  assert.ok(liveRow, `出站行应问回实时状态,实得 ${JSON.stringify(live.rows)}`);
+  assert.equal(liveRow.status, "paused", "状态要以持有机为准");
+  assert.equal(liveRow.title, renamed, "标题也一起接回来");
+
+  // pending(送达未知)的不问:那种任务源机还硬拦着不让跑,状态归源机自己说。
+  await db.update(tasks)
+    .set({ handoff: JSON.stringify({ ...marker, peerUrl, pending: true }) })
+    .where(eq(tasks.id, taskId));
+  assert.deepEqual(await outboundRemoteStates(), { rows: [], offline: [] }, "pending 的出站行不该去问对端");
+  await db.update(tasks)
+    .set({ handoff: JSON.stringify({ ...marker, peerUrl }) })
+    .where(eq(tasks.id, taskId));
+
+  // 持有机联系不上:整轮不抛错,那台机器进 offline,侧栏据此说明「这几行是旧状态」。
+  const deadUrl = "http://127.0.0.1:1";
+  await patchAppSettings({ handoffTargets: [{ name: "关着的机器", url: deadUrl, peerFp: peerFingerprint }] });
+  await db.update(tasks)
+    .set({ handoff: JSON.stringify({ ...marker, peerUrl: deadUrl }) })
+    .where(eq(tasks.id, taskId));
+  const dead = await outboundRemoteStates();
+  assert.deepEqual(dead.rows, [], "联系不上就没有实时状态可报");
+  assert.equal(dead.offline.length, 1);
+  assert.equal(dead.offline[0].name, "关着的机器", "offline 要报出用户认得的机器名");
+
+  // 已经从接力设置里删掉的机器:连签名都发不出去,当它不存在(既不问也不报 offline)。
+  await patchAppSettings({ handoffTargets: [] });
+  assert.deepEqual(await outboundRemoteStates(), { rows: [], offline: [] }, "设置里没有的机器不该报成离线");
+  await patchAppSettings({ handoffTargets: beforeTargets });
+  await db.update(tasks).set({ handoff: JSON.stringify(marker) }).where(eq(tasks.id, taskId));
 
   // (第 10/11 项的双机断言织在 1/3/4 节;单进程就能验的 Windows 源机附件形态、
   //  纯函数上下文改写、幂等收口 autoResume 事实在 test-handoff-local.ts。)

@@ -716,3 +716,15 @@
 .workspace-task-project-head[aria-expanded="true"] .workspace-project-avatar--dot {
   opacity: 0.65;
 }
+
+/* 联系不上持有机时的一行说明。它不是错误 —— 那台机器关着很正常 —— 只是把「这几行的
+   状态是旧的」说出来，所以按提示的分量画，不做成红色警告。 */
+.workspace-task-offline-peers {
+  margin: 6px 8px 0;
+  padding: 5px 8px;
+  border-radius: 7px;
+  background: var(--hover-bg);
+  color: var(--faint);
+  font-size: 10.5px;
+  line-height: 1.45;
+}

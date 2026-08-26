@@ -3,8 +3,8 @@ import type { TaskFollowUp, TaskListItem } from "@ash/shared";
 import { TASK_BATCH_LIMIT } from "@ash/shared";
 import { api } from "../lib/api.ts";
 import { indexWorkers, spreadBucket, workersFrom, type SpreadBucket, type WorkerIndex } from "../lib/taskAttention.ts";
-import { scopeTasks, type TaskScope } from "./taskScope.ts";
-import { orderedTopLevelTasks, visibleOnThisMachine } from "./taskTreeModel.ts";
+import { scopeTasks, visibleInScope, type TaskScope } from "./taskScope.ts";
+import { orderedTopLevelTasks } from "./taskTreeModel.ts";
 
 // 桶的判据搬到了 lib/taskAttention.ts（任务树排序和状态点也要读它，留在这里会成环）。
 // 这里继续对外露出同一个名字，免得每个调用点都改 import。
@@ -57,7 +57,7 @@ export function spreadCounts(tasks: TaskListItem[], scope: TaskScope): SpreadCou
   // 但别指望这一点 —— 桶的判据要的是这个团队真实的执行者集合。
   const workers = indexWorkers(tasks);
   for (const task of scopeTasks(tasks, scope)) {
-    if (task.archived || task.parentId || !visibleOnThisMachine(task)) continue;
+    if (task.archived || task.parentId || !visibleInScope(task, scope)) continue;
     counts.all += 1;
     if (task.starredAt != null) counts.starred += 1;
     counts[spreadBucket(task, workersFrom(workers, task.id))] += 1;
@@ -72,7 +72,7 @@ export function spreadVisibleTasks(tasks: TaskListItem[], scope: TaskScope, filt
   const workers = indexWorkers(tasks);
   return orderedTopLevelTasks(
     scopeTasks(tasks.filter((task) => !task.archived), scope),
-    { unifiedPinned: true },
+    { unifiedPinned: true, includeElsewhere: scope.kind === "tasks" },
   ).filter((task) => matchesSpreadFilter(task, filter, workersFrom(workers, task.id)));
 }
 
@@ -124,7 +124,7 @@ export function useSidebarSpread(tasks: TaskListItem[], scope: TaskScope, revisi
   // **按最近更新排在前**：下面是分批取的，谁在前谁先填上，而任务树也是这个顺序 ——
   // 用户先看到的那几屏最先有内容。按 id 排（曾经的写法）等于随机决定谁先亮。
   const orderedIds = useMemo(
-    () => scopeTasks(tasks.filter((task) => !task.archived && visibleOnThisMachine(task)), scope)
+    () => scopeTasks(tasks.filter((task) => !task.archived && visibleInScope(task, scope)), scope)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .map((task) => task.id),
     [scope, tasks],
