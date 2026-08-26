@@ -46,6 +46,7 @@ import {
   sessionResumeFaultNote,
   shouldDropSession,
 } from "../executors/session-lost.js";
+import { NO_RESUMABLE_SESSION_NOTE, ROTATION_ALREADY_ANNOUNCED } from "@ash/shared/session-notes";
 import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
 import { recordUserConversationTurn } from "../conversation-turn.js";
@@ -805,13 +806,8 @@ async function endTurn(lead: Lead): Promise<void> {
   armIdle(lead);
 }
 
-// 中途已经播过完整轮换说明后,收尾那两句只补一个指路,不重复整段。
-const ROTATION_ALREADY_ANNOUNCED = "这条 CLI 会话此前已被作废,下次运行会开全新会话。";
-// 手上压根没有可续的会话 id 时的指路。跟上面那条的区别是**为什么**接不回:这条不是
-// 「作废了」,而是「还没建起来,或者建起来了却没写进库」。
-const NO_RESUMABLE_SESSION_NOTE =
-  "这台调度台没有可续的 CLI 会话 id(还没建起来,或者它没能写进数据库),"
-  + "下次运行会开一条全新会话:之前的上下文不会带过来,任务正文和历史记录都还在。";
+// 中途已经播过完整轮换说明后,收尾那两句只补一个指路,不重复整段。文案与前端判色的
+// 共同真相源在 @ash/shared/session-notes(见那份文件顶部)。
 // 事件流被掀翻时,没有任何进程报过退出码。落 0 等于把异常中断记成成功收尾;落 null 又会
 // 让这条会话看起来还在跑(openLead 就是拿 null 表示「进行中」)。所以记一个明确的非零码,
 // 真正的原因写在时间线和 trace 里。
@@ -841,8 +837,14 @@ async function closeLead(
   // —— 内存里 lead.cliSessionId 已是新值,那条「id 变了才写库」的分支不会再补写一次。
   const dropSession = shouldDropSession(rotation.fault, exitStatus) && !superseded;
   let dropNote = dropSession ? sessionResumeFaultNote(rotation.fault!) : null;
+  // 被接管的一方连这条会话行也不许再 finalize:工作目录被抽走那条路会**复用同一行**
+  // (openLead 的 resuming 分支),新进程刚把 endedAt/exitStatus 清成 null 表示「这一段
+  // 正在跑」。晚到的旧收尾一写,页面就同时看到「调度台在线」和「这条会话已退出」;
+  // activeMs 还会把两段重叠的墙钟时间重复计一遍(2026-08-26 第 7 轮审查)。摘牌的那条
+  // 规矩(retireLead)本来就是「不代表这个任务了就一个字都不写」,只是当时只覆盖了
+  // tasks.status。内存、handle、写流照常释放。
   // 收尾不能因为会话字段写库失败停在半路:事件流、写流与内存 lead 仍须正常释放。
-  const persisted = await persistOrReport(
+  const persisted = superseded || await persistOrReport(
     lead,
     "调度台收尾状态",
     () => db
@@ -879,19 +881,28 @@ async function closeLead(
         ? `调度台进程意外退出(exit ${exitStatus})。`
         : "";
     const msg = `${how}${rotationNote ?? (resumable ? "CLI 会话还在,再说一句话会自动接回;需要的话也可以点「继续」。" : NO_RESUMABLE_SESSION_NOTE)}`;
-    writeRunError(lead.out, msg);
-    appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message: msg }, endIso);
-    publish(lead, { kind: "error", message: msg });
+    // 「进程自己没了」是真失败,红着走 error;剩下那一路(exit 0、没被掀翻,只是这条会话
+    // 不能再续)跟中途 scope:"session" 的旁注同一档 —— 一个正常交卷的回合不该在执行过程
+    // 里记一笔异常。
+    if (aborted || exitStatus !== 0) {
+      writeRunError(lead.out, msg);
+      appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message: msg }, endIso);
+      publish(lead, { kind: "error", message: msg });
+    } else {
+      noteSessionNotice(lead, msg);
+    }
   }
   // 回收和「停止全组」那两句都写着「再说一句话就能接回同一会话」,而这条会话刚被作废
   // (或压根没建起来)—— 不当场更正,用户刷新后看到的指引与真实状态正好相反,照做一次
   // 再撞一次墙。上面那个「进程自己没了」的分支已经在 msg 里说过了,别重复。
+  //
+  // 这是**用户自己点的停止/自然回收**,本回合没有任何失败:所以是 system 旁注,不是
+  // 红色执行诊断(2026-08-26 第 7 轮审查)。真失败仍然红 —— 恢复字段没清成那一路,
+  // persistOrReport 已经把写库失败如实报过一笔,`why` 里那句也带着「失败」二字,前端
+  // 摘掉中性文案后照样判红(见 @ash/shared/session-notes)。
   if (lead.closing && (dropSession || !resumable)) {
     const why = dropSession ? (rotation.announced ? ROTATION_ALREADY_ANNOUNCED : dropNote) : NO_RESUMABLE_SESSION_NOTE;
-    const msg = `更正上面那条:CLI 会话接不回了。${why}`;
-    writeRunError(lead.out, msg);
-    appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message: msg }, endIso);
-    publish(lead, { kind: "error", message: msg });
+    noteSessionNotice(lead, `更正上面那条:CLI 会话接不回了。${why}`);
   }
   writeTurnEnd(lead.out, endIso);
   flushSessionNotices(lead); // 回合中途攒下的轮换旁注:流关掉之前必须落盘

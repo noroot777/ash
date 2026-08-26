@@ -22,6 +22,10 @@
       "types": "./src/team.ts",
       "default": "./src/team.ts"
     },
+    "./session-notes": {
+      "types": "./src/session-notes.ts",
+      "default": "./src/session-notes.ts"
+    },
     "./run-activity": {
       "types": "./src/run-activity.ts",
       "default": "./src/run-activity.ts"

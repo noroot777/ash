@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import type { Session, Task } from "@ash/shared";
+import { SESSION_LOST_NOTE } from "@ash/shared/session-notes";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import { buildConversationItems } from "../../src/task-detail/conversationModel.ts";
 import "../../src/styles/global.css";
@@ -44,6 +45,9 @@ const output = [
   turn("system", "升级迁移：上一版「合并&清理」已记录合并完成，验收标记已补上（合并区间无从考证，未伪造）。", "2026-08-10T05:52:40.000Z"),
   "实现已落到产品代码，现有视觉类名和卡片样式都保留。",
   turn("system", "自由工作流第 3 轮审查未通过，意见已发回会话；修复完成后自动复审。", "2026-08-10T06:10:00.000Z"),
+  // 会话轮换旁注：中性事实（这条 CLI 会话接不回了），不是本回合失败。渲染上有两条硬要求
+  // —— 不能是红的，也不能把 Markdown 标记原样露出来（服务端文案见 @ash/shared/session-notes）。
+  turn("system", SESSION_LOST_NOTE, "2026-08-10T06:10:30.000Z"),
   "收到审查意见，开始修复。",
   // ash 自己插在 agent 输出里的注记走 markdown 引用块，视觉上要跟系统旁注同档。
   "\n> 正在压缩上下文…\n",

@@ -3,6 +3,7 @@
 //   2) 旁注不打断同一会话的连续发言 —— 这正是「预约个审查就把会话劈成上下两段」的病根
 //   3) 真人插话、回合边界、换会话，这三种才重新报身份
 import assert from "node:assert/strict";
+import { NEUTRAL_SESSION_NOTES, SESSION_POISONED_NOTE } from "@ash/shared/session-notes";
 import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
 import { noteTone } from "../src/task-detail/conversationNotes.ts";
 
@@ -16,6 +17,28 @@ assert.equal(noteTone("自由工作流第 1 轮审查未通过，意见已发回
 assert.equal(noteTone("完成后审查启动失败：审查者不可用"), "error");
 assert.equal(noteTone("已取消完成后审查预约。"), "error");
 assert.equal(noteTone("合并清理警告：worktree 未能删除"), "error");
+
+// —— 会话轮换旁注：中性事实，不是本回合失败 ——
+// 这几句会出现在一个 exit 0 的成功回合、甚至用户自己点的「停止全组」上。判据不是「文案
+// 里恰好没踩到关键词」（`SESSION_POISONED_NOTE` 讲的就是 Codex 报了问题），而是
+// @ash/shared/session-notes 那份服务端也在用的同一源文本。
+for (const note of NEUTRAL_SESSION_NOTES) {
+  assert.equal(noteTone(note), "neutral", `会话轮换旁注被判成执行异常：${note.slice(0, 24)}…`);
+  // 旁注是纯文本一行小字（ConversationFeed 的 <p>{item.text}</p>），Markdown 不会被解析：
+  // 文案里写 `**全新会话**`，用户看到的就是两侧的星号。
+  assert.doesNotMatch(note, /\*\*|`|^[-*] /m, `会话轮换旁注带了 Markdown 标记：${note.slice(0, 24)}…`);
+}
+// 「中性事实 + 真失败」拼起来的收尾句仍然要红 —— 摘掉中性部分再判，就是为了这个。
+assert.equal(
+  noteTone(`更正上面那条：CLI 会话接不回了。${SESSION_POISONED_NOTE}`),
+  "neutral",
+  "用户主动停止后的会话更正不该显示成执行异常",
+);
+assert.equal(
+  noteTone("更正上面那条：CLI 会话接不回了。ash 已停止本次进程继续使用这条失效的 CLI 会话；但恢复字段写入数据库失败，下一次重新开台时可能再次尝试旧会话。"),
+  "error",
+  "拼在中性文案后面的真失败被一起洗白了",
+);
 
 const session = {
   id: "s1",

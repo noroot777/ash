@@ -17,6 +17,7 @@
  * 不值当 —— 认不出来时的退化行为（照旧报错、id 留着）本来就是今天的行为。
  */
 
+import { SESSION_LOST_NOTE, SESSION_POISONED_NOTE } from "@ash/shared/session-notes";
 import type { ResumeFields } from "./types.js";
 
 /** 各 CLI 拒绝恢复会话时的原文。加一条前先在真机上跑出那句话。 */
@@ -94,23 +95,13 @@ export const LOST_SESSION_PATCH: { cliSessionId: null } & { [K in keyof ResumeFi
 };
 
 /**
- * 清掉失效 id 之后写给用户的那句话。
+ * 清掉失效 id 之后写给用户的那两句话。
  *
- * 得说清三件事，少一件用户就会以为是随机失败：id 为什么会失效、ash 替他做了什么、
- * 下一次运行跟这一次有什么不同（**上下文不会带过来**——这是他有权提前知道的代价）。
+ * 正文住在 `@ash/shared/session-notes` —— 前端 `noteTone` 要拿同一份文本判「这是会话
+ * 轮换，不是执行失败」，两边各写一份就会漂移（那头一红，一个 exit 0 的正常回合在用户
+ * 眼里就成了异常）。这里只做转发，服务端各处照旧从这个模块引。
  */
-export const SESSION_LOST_NOTE =
-  "上一轮记下的 CLI 会话 id 在 CLI 那边已经不存在了（多半是第一次起跑就失败、"
-  + "会话压根没建起来，也可能是 CLI 的会话记录被清过或换了机器/目录）。"
-  + "ash 已经把这个失效的 id 清掉：再点一次运行会开一条**全新会话**，"
-  + "之前的上下文不会带过来，任务正文和历史记录都还在。";
-
-export const SESSION_POISONED_NOTE =
-  "Codex 已在本轮 stderr 中报告这条 thread 的回合关联、world-state 或 rollout 落盘异常；"
-  + "即使进程 exit 0 且发出 turn.completed，也不能再把它当作可恢复会话；"
-  + "会话轮换不改变本回合真实的退出原因。"
-  + "ash 已清掉这条会话的恢复字段：下一次运行会从任务正文自动开启一条**全新会话**，"
-  + "旧对话与执行记录仍保留，但之前的上下文不会带过去。";
+export { SESSION_LOST_NOTE, SESSION_POISONED_NOTE };
 
 export const SESSION_DROP_PERSISTENCE_FAILED_NOTE =
   "ash 已停止本次进程继续使用这条失效的 CLI 会话；但恢复字段写入数据库失败，"

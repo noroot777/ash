@@ -33,7 +33,7 @@ const POISON = "ignored world-state patch without a full snapshot";
 // env 要在这些模块被求值之前定好(db/paths 在模块顶层就读它们),所以走动态 import。
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { projects, sessions, tasks } = await import("../src/db/schema.js");
-const { attachLead, sendInbound, teamIsLive } = await import("../src/team/session.js");
+const { attachLead, haltTeam, sendInbound, teamIsLive } = await import("../src/team/session.js");
 const { SESSION_POISONED_NOTE } = await import("../src/executors/session-lost.js");
 const { eq } = await import("drizzle-orm");
 
@@ -70,21 +70,30 @@ async function startLead(opts: {
   sessId: string;
   cliSessionId: string;
   events: AsyncGenerator<AgentEvent>;
+  /** 复用一条已有的会话行(openLead 的 resuming 分支就是这么干的),而不是新插一行。 */
+  reuse?: boolean;
 }) {
-  await db.insert(sessions).values({
-    id: opts.sessId,
-    taskId: opts.taskId,
-    role: "lead",
-    agentType: "codex",
-    executor: "codex@test",
-    cwd: root,
+  const row = {
     cliSessionId: opts.cliSessionId || null,
     resumeCommand: opts.cliSessionId ? `codex exec resume ${opts.cliSessionId}` : null,
-    startedAt: at,
     turnStartedAt: at,
-    activeMs: 0,
+    endedAt: null,
     exitStatus: null,
-  });
+  };
+  if (opts.reuse) await db.update(sessions).set(row).where(eq(sessions.id, opts.sessId));
+  else {
+    await db.insert(sessions).values({
+      id: opts.sessId,
+      taskId: opts.taskId,
+      role: "lead",
+      agentType: "codex",
+      executor: "codex@test",
+      cwd: root,
+      startedAt: at,
+      activeMs: 0,
+      ...row,
+    });
+  }
   const runDir = join(root, "runs", opts.taskId);
   mkdirSync(runDir, { recursive: true });
   let sent = 0;
@@ -389,6 +398,96 @@ try {
     "被接管的旧调度台把过期的 running 写了回去 —— 没有在线调度台了,这个假状态再也不会自愈",
   );
   ok("被接管的旧调度台不会在新台退场后复活过期状态");
+
+  // ── ⑧ 同一条会话行被新台接管:晚到的旧收尾不许把它 finalize 掉 ────────────────────
+  // 工作目录被抽走那条路上,openLead 的 resuming 分支**复用同一行 sessions**,并把
+  // endedAt/exitStatus 清成 null 表示「这一段正在跑」。旧进程的 close 晚一步才到,它要是
+  // 照常写 exitStatus/endedAt,页面就同时看到「调度台在线」和「这条会话已退出」;
+  // activeMs 还会把两段重叠的墙钟时间重复计一遍。⑦ 用的是两条不同 session,钉不住这条。
+  const SHARED = "task-shared-session-row";
+  const SHARED_SESS = "sess-shared";
+  await seedTeamTask(SHARED);
+  let sharedOldReady!: () => void;
+  const sharedOldWaiting = new Promise<void>((r) => { sharedOldReady = r; });
+  let releaseSharedOld!: () => void;
+  const holdSharedOld = new Promise<void>((r) => { releaseSharedOld = r; });
+  async function* sharedOldScript(): AsyncGenerator<AgentEvent> {
+    sharedOldReady();
+    await holdSharedOld; // 新台接管之后才轮到它收尾
+    yield { kind: "done", exitStatus: 7 };
+  }
+  await startLead({ taskId: SHARED, sessId: SHARED_SESS, cliSessionId: "old-thread", events: sharedOldScript() });
+  await sharedOldWaiting;
+
+  let releaseSharedNew!: () => void;
+  const holdSharedNew = new Promise<void>((r) => { releaseSharedNew = r; });
+  async function* sharedNewScript(): AsyncGenerator<AgentEvent> {
+    await holdSharedNew; // 断言期间新台必须一直在线
+    yield { kind: "done", exitStatus: 0 };
+  }
+  // 同一行会话被新进程接回:凭据换成新 thread,回合重新开着。
+  await startLead({
+    taskId: SHARED, sessId: SHARED_SESS, cliSessionId: "new-thread", events: sharedNewScript(), reuse: true,
+  });
+  releaseSharedOld();
+  // 旧台收完台(它已被接管,leads 里仍是新台)。
+  const sharedDeadline = Date.now() + 15_000;
+  while (Date.now() < sharedDeadline) {
+    const row = (await db.select().from(sessions).where(eq(sessions.id, SHARED_SESS))).at(0)!;
+    if (row.endedAt || row.exitStatus !== null) break; // 坏掉了,下面的断言会说清楚
+    await new Promise((r) => setTimeout(r, 20));
+    if (Date.now() > sharedDeadline - 14_500) break; // 给旧台一点时间跑完 closeLead
+  }
+  await new Promise((r) => setTimeout(r, 200));
+  const sharedRow = (await db.select().from(sessions).where(eq(sessions.id, SHARED_SESS))).at(0)!;
+  assert.equal(teamIsLive(SHARED), true, "新台还该在线 —— 这一条要在「在线」和「已退出」能同时出现时验");
+  assert.equal(
+    sharedRow.endedAt,
+    null,
+    "被接管的旧调度台把共用的会话行 finalize 了 —— 页面同时看到「调度台在线」和「这条会话已退出」",
+  );
+  assert.equal(sharedRow.exitStatus, null, "旧进程的退出码混进了新进程正在用的那一行");
+  assert.equal(sharedRow.cliSessionId, "new-thread", "新台刚报上来的凭据不能被晚到的旧收尾覆盖");
+  releaseSharedNew();
+  while (teamIsLive(SHARED) && Date.now() < sharedDeadline) await new Promise((r) => setTimeout(r, 20));
+  ok("被接管的旧调度台不会把共用的会话行提前写成已结束");
+
+  // ── ⑨ 用户点「停止全组」后的会话更正:是 system 旁注,不是红色执行诊断 ──────────────
+  // 停止一个正常回合本身不是失败。可这一路必须补一句「刚才那条『再说一句就能接回』
+  // 作废了」—— 要是照旧走 writeRunError,用户主动停一次就在时间线上收获一笔红色
+  // 「执行异常」,正是这次改动想消除的症状。
+  let haltReady!: () => void;
+  const haltWaiting = new Promise<void>((r) => { haltReady = r; });
+  let releaseHalt!: () => void;
+  const holdHalt = new Promise<void>((r) => { releaseHalt = r; });
+  const g = await runLead("halt-correction", {
+    cliSessionId: "poisoned-thread",
+    script: async function* () {
+      yield { kind: "error", message: POISON, scope: "session" }; // 会话判死并清库成功
+      haltReady();
+      await holdHalt; // 等用户按下「停止全组」
+      yield { kind: "done", exitStatus: 0 };
+    },
+    whileLive: async (taskId) => {
+      await haltWaiting;
+      await new Promise((r) => setTimeout(r, 50)); // 让上一条 poisoned 走完清库
+      await haltTeam(taskId);
+      releaseHalt();
+    },
+  });
+  assert.match(g.md, /更正上面那条/, "会话已作废却不更正「再说一句就能接回」,用户照做只会再撞一次墙");
+  assert.doesNotMatch(
+    g.md,
+    /^> .*更正上面那条/m,
+    "用户主动停止一个正常回合,更正却写成了红色执行诊断 —— 时间线上凭空多一笔「执行异常」",
+  );
+  assert.match(
+    g.md,
+    /\x1e[^\n]*"t":"system"[^\n]*更正上面那条/,
+    "更正要落成 system 旁注,刷新后才跟实时看到的是同一档",
+  );
+  assert.doesNotMatch(g.trace, /更正上面那条/, "这不是执行异常,不该记进执行过程面板");
+  ok("停止全组后的会话更正走 system 旁注,不冒充执行异常");
 
   console.log("test:team-resilience ok");
 } finally {

@@ -163,7 +163,10 @@ assert.equal(poisonedRow.resumeArgs, null, "poisoned exit 0 没清 resume_args")
 assert.equal(poisonedRow.exitStatus, 0, "poisoned 判断不能篡改 Codex 的真实 exit 0");
 assert.equal(poisonedTurn.cliId, "", "poisoned exit 0 的返回值仍会让下一轮 resume");
 assert.equal(poisonedTurn.error, undefined, "成功产出正文的 poisoned 回合不应被标成执行失败");
-assert.match(poisonedTurn.notice ?? "", /下一次运行会从任务正文自动开启一条\*\*全新会话\*\*/);
+assert.match(poisonedTurn.notice ?? "", /下一次运行会从任务正文自动开启一条全新会话/);
+// 旁注在会话流里是纯文本一行小字(ConversationFeed 的 conversation-note),文案带 Markdown
+// 标记就会把星号原样露给用户 —— 真相源在 @ash/shared/session-notes。
+assert.doesNotMatch(poisonedTurn.notice ?? "", /\*\*/, "会话轮换旁注不能带 Markdown 标记");
 const poisonedMdPath = join(process.env.ASH_RUNS_DIR!, poisonedTaskId, `${poisonedTurn.rowId}.md`);
 let poisonedMd = "";
 for (let i = 0; i < 100 && !poisonedMd.includes("下一次运行会从任务正文自动开启"); i++) {
@@ -271,7 +274,8 @@ const mixedTurn = await duet.runTurn({
   prompt: "继续旧 thread", cwd: stage, resumeCliId: POISONED_ID,
 });
 assert.match(mixedTurn.error ?? "", /执行诊断：.*dropping turn-scoped item/, "含指纹的真实失败被误分流或吞掉");
-assert.match(mixedTurn.notice ?? "", /下一次运行会从任务正文自动开启一条\*\*全新会话\*\*/);
+assert.match(mixedTurn.notice ?? "", /下一次运行会从任务正文自动开启一条全新会话/);
+assert.doesNotMatch(mixedTurn.notice ?? "", /\*\*/, "会话轮换旁注不能带 Markdown 标记");
 ok("真实失败原因与会话轮换正交保存");
 
 // 真执行器解析器 → 真 duet 结算：防止两端各自测试都绿，scope 在中间传递时却丢掉。
