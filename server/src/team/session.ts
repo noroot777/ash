@@ -638,6 +638,27 @@ async function persistOrReport(
   }
 }
 
+const sessionUpdate = () => db.update(sessions);
+type SessionPatch = Parameters<ReturnType<typeof sessionUpdate>["set"]>[0];
+
+/**
+ * 这台调度台名下那条会话行的**唯一写入口**。
+ *
+ * 摘牌之后一个字都不写:接管那条路会复用同一行(openLead 的 resuming 分支),新台刚把
+ * endedAt/exitStatus 清成 null 表示「这一段正在跑」。旧台晚到的 turnEnd 一写,在线的
+ * 会话就被标成已结束,activeMs 还把两段重叠的墙钟时间重复计一遍(2026-08-26 第 9 轮
+ * 审查)。**收口成一个函数是刻意的**:上一轮只在 closeLead 补了闸,beginTurn/endTurn
+ * 就漏了,而漏哪一个都是同一个坏结果。
+ *
+ * 「查完到写进去之间又换了台」这个窗口不存在:retireLead 是同步的,只能从别的同步代码
+ * 里跑(attachLead / deliver / closeLead);而这里从判断到 drizzle 把语句递给 node:sqlite
+ * 中间没有 await,谁也插不进来。
+ */
+async function updateOwnSession(lead: Lead, what: string, patch: SessionPatch, at = now()): Promise<boolean> {
+  if (lead.retired) return false;
+  return persistOrReport(lead, what, () => sessionUpdate().set(patch).where(eq(sessions.id, lead.sessId)), at);
+}
+
 /**
  * 把 CLI 报上来的新会话凭据补进库,**返回「这一次真的补上了」**。
  *
@@ -670,11 +691,7 @@ async function flushPendingCredential(lead: Lead): Promise<boolean> {
     lead.pendingCredential = null;
     return false;
   }
-  const ok = await persistOrReport(
-    lead,
-    "新会话凭据",
-    () => db.update(sessions).set(patch).where(eq(sessions.id, lead.sessId)),
-  );
+  const ok = await updateOwnSession(lead, "新会话凭据", patch);
   if (ok) lead.pendingCredential = null;
   return ok;
 }
@@ -722,9 +739,19 @@ async function setLeadStatus(lead: Lead, status: "running" | "idle", at = now())
  * 打崩整个 server。trace 与 SSE 由 traceLead / publish 各自认这块牌子。
  */
 function retireLead(lead: Lead): void {
+  if (lead.retired) return; // 摘过一次就够了:再摘一次时新台可能正说到一半,不能往共享 .md 里补写
   lead.retired = true;
   clearStatusRetry(lead);
   lead.wantedStatus = null;
+  // 攒着的轮换旁注必须**在断流之前**落盘。它为了不夹在正文和 agentEnd 之间才缓存下来
+  // (见 Lead.notices),可摘牌之后 turnEnd/closeLead 的那次 flush 只会写进丢弃流 ——
+  // 「这条会话已作废、下次会丢上下文」这句关键说明就只活在 SSE 里,用户刷新一次就再也
+  // 看不到发生过什么(2026-08-26 第 9 轮审查)。
+  //
+  // 这里不补 agentEnd:摘牌的这一回合本来就不会再有收尾,那条排序约束针对的是正常收尾。
+  // 时机也是安全的 —— retireLead 只从同步代码里跑,且都排在新台开口之前(deliver 里先
+  // 摘牌再 open,attachLead 里先摘旧台再启动新台的消费循环),插不进别人的正文中间。
+  flushSessionNotices(lead);
   const out = lead.out;
   lead.out = new Writable({ write(_chunk, _enc, done) { done(); } });
   out.end();
@@ -762,8 +789,10 @@ function recordSystemTurn(lead: Lead, text: string, at = now()): void {
 }
 
 // 会话轮换旁注:实时立刻播(用户正看着),落盘等 writeTurnEnd 之后由 flushSessionNotices
-// 补 —— 理由见 Lead.notices。
+// 补 —— 理由见 Lead.notices。摘牌之后一句都不再说:那条会话现在归接管的那台,这台既不
+// 该广播,攒下的也没有能落盘的地方(见 retireLead)。
 function noteSessionNotice(lead: Lead, text: string): void {
+  if (lead.retired) return;
   const at = now();
   lead.notices.push({ text, at });
   publish(lead, { kind: "system", text, at });
@@ -780,12 +809,7 @@ function flushSessionNotices(lead: Lead): void {
 async function beginTurn(lead: Lead, at = now()): Promise<void> {
   lead.busy = true;
   lead.turnStart = at;
-  await persistOrReport(
-    lead,
-    "回合开始状态",
-    () => db.update(sessions).set({ turnStartedAt: at, endedAt: null }).where(eq(sessions.id, lead.sessId)),
-    at,
-  );
+  await updateOwnSession(lead, "回合开始状态", { turnStartedAt: at, endedAt: null }, at);
   traceLead(lead, at, {
     kind: "run",
     model: lead.model,
@@ -803,13 +827,10 @@ async function endTurn(lead: Lead): Promise<void> {
   lead.turnStart = null;
   // 写库失败绝不能把下面整段收尾一起带走 —— writeTurnEnd、旁注落盘、待送消息、落 idle
   // 全在后面(理由见 persistOrReport)。丢的只是这一行用时统计。
-  await persistOrReport(
+  await updateOwnSession(
     lead,
     "回合收尾状态",
-    () => db
-      .update(sessions)
-      .set({ endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}` })
-      .where(eq(sessions.id, lead.sessId)),
+    { endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}` },
     endIso,
   );
   writeTurnEnd(lead.out, endIso);
@@ -863,28 +884,25 @@ async function closeLead(
   // —— 内存里 lead.cliSessionId 已是新值,那条「id 变了才写库」的分支不会再补写一次。
   const dropSession = shouldDropSession(rotation.fault, exitStatus) && !superseded;
   let dropNote = dropSession ? sessionResumeFaultNote(rotation.fault!) : null;
-  // 被接管的一方连这条会话行也不许再 finalize:工作目录被抽走那条路会**复用同一行**
-  // (openLead 的 resuming 分支),新进程刚把 endedAt/exitStatus 清成 null 表示「这一段
-  // 正在跑」。晚到的旧收尾一写,页面就同时看到「调度台在线」和「这条会话已退出」;
-  // activeMs 还会把两段重叠的墙钟时间重复计一遍(2026-08-26 第 7 轮审查)。摘牌的那条
-  // 规矩(retireLead)本来就是「不代表这个任务了就一个字都不写」,只是当时只覆盖了
-  // tasks.status。内存、handle、写流照常释放。
-  // 收尾不能因为会话字段写库失败停在半路:事件流、写流与内存 lead 仍须正常释放。
-  const persisted = superseded || await persistOrReport(
+  // 被接管的一方连这条会话行也不许再 finalize:接管那条路会**复用同一行**(openLead 的
+  // resuming 分支),新进程刚把 endedAt/exitStatus 清成 null 表示「这一段正在跑」。晚到的
+  // 旧收尾一写,页面就同时看到「调度台在线」和「这条会话已退出」;activeMs 还会把两段
+  // 重叠的墙钟时间重复计一遍(2026-08-26 第 7 轮审查)。这道闸现在住在 updateOwnSession
+  // 里(第 9 轮审查:只在这儿挡,beginTurn/endTurn 就漏了),这里只管别把收尾停在半路 ——
+  // 事件流、写流与内存 lead 仍须正常释放。
+  const persisted = await updateOwnSession(
     lead,
     "调度台收尾状态",
-    () => db
-      .update(sessions)
-      .set({
-        exitStatus,
-        endedAt: endIso,
-        activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}`,
-        ...(dropSession ? LOST_SESSION_PATCH : {}),
-      })
-      .where(eq(sessions.id, lead.sessId)),
+    {
+      exitStatus,
+      endedAt: endIso,
+      activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}`,
+      ...(dropSession ? LOST_SESSION_PATCH : {}),
+    },
     endIso,
   );
   // 没写进去就不能沿用「恢复字段已清掉」的文案:库里那个坏 id 还在,下一次照样撞它。
+  // (superseded 那一路 dropSession 恒为 false,所以「摘牌导致没写」不会走进这句。)
   if (!persisted && dropSession) dropNote = SESSION_DROP_PERSISTENCE_FAILED_NOTE;
   // 「再说一句话就能接回」成立要两个条件:手上真有一个 CLI 会话 id,而且它**已经落进库**
   // —— openResident 的判据就是会话行上那一列。fresh 调度台在拿到 thread id 之前就异常,

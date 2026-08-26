@@ -555,6 +555,107 @@ try {
   assert.deepEqual(seen.filter((e) => e.kind === "error"), [], "旧台的收尾诊断不该广播给正在看新会话的用户");
   ok("被接管的旧调度台不再污染共用的 .md 与实时事件流");
 
+  // ── ⑪ 摘牌之后的 turnEnd:同样不许把在线的那条会话行写成已结束 ────────────────────
+  // ⑧ 只让旧台直接 done,走的是 closeLead 那道闸。可旧进程完全可能在被接管之后还吐一条
+  // turnEnd —— 那条路写的是同一行的 endedAt/activeMs,却从来没人挡过:新台明明在线,
+  // 页面拿到的会话行已经标成结束,用时还被重复计了一遍。
+  const LATE_TURN = "task-late-turn-end";
+  const LATE_SESS = "sess-late-turn-end";
+  await seedTeamTask(LATE_TURN);
+  let lateOldReady!: () => void;
+  const lateOldWaiting = new Promise<void>((r) => { lateOldReady = r; });
+  let releaseLateOld!: () => void;
+  const holdLateOld = new Promise<void>((r) => { releaseLateOld = r; });
+  async function* lateOldScript(): AsyncGenerator<AgentEvent> {
+    lateOldReady();
+    await holdLateOld; // 等新台接管之后再收这个回合
+    yield { kind: "turnEnd" };
+    yield { kind: "done", exitStatus: 0 };
+  }
+  await startLead({ taskId: LATE_TURN, sessId: LATE_SESS, cliSessionId: "old-thread", events: lateOldScript() });
+  await lateOldWaiting;
+  let releaseLateNew!: () => void;
+  const holdLateNew = new Promise<void>((r) => { releaseLateNew = r; });
+  async function* lateNewScript(): AsyncGenerator<AgentEvent> {
+    await holdLateNew;
+    yield { kind: "done", exitStatus: 0 };
+  }
+  await startLead({
+    taskId: LATE_TURN, sessId: LATE_SESS, cliSessionId: "new-thread", events: lateNewScript(), reuse: true,
+  });
+  releaseLateOld();
+  await new Promise((r) => setTimeout(r, 400)); // 旧台这就走 turnEnd → closeLead
+  const lateRow = (await db.select().from(sessions).where(eq(sessions.id, LATE_SESS))).at(0)!;
+  assert.equal(teamIsLive(LATE_TURN), true, "这一条要在新台还在线时验");
+  assert.equal(
+    lateRow.endedAt,
+    null,
+    "摘牌的旧台用 turnEnd 把在线的会话行写成了已结束 —— 页面会显示这条会话已经退出",
+  );
+  assert.equal(lateRow.activeMs, 0, "旧回合的用时被累加进了新台正在用的那一行");
+  assert.equal(lateRow.cliSessionId, "new-thread", "凭据仍应是新台报上来的那条");
+  releaseLateNew();
+  const lateDeadline = Date.now() + 15_000;
+  while (teamIsLive(LATE_TURN) && Date.now() < lateDeadline) await new Promise((r) => setTimeout(r, 20));
+  ok("摘牌之后的 turnEnd 不会把在线的会话行写成已结束");
+
+  // ── ⑫ 摘牌时攒着的轮换旁注必须落盘,不能只活在 SSE ────────────────────────────────
+  // 旁注为了不夹在正文和 agentEnd 之间,是先实时播、再攒着等收尾落盘的。换台把写流一断,
+  // 「这条会话已作废、下次会丢上下文」这句话就只剩实时那一份:用户刷新一次,页面上再也
+  // 看不出发生过什么 —— 正是本任务反复强调的「停下来的事必须持久可见」。
+  const NOTICE_KEEP = "task-notice-on-handover";
+  const NOTICE_SESS = "sess-notice-on-handover";
+  await seedTeamTask(NOTICE_KEEP);
+  let poisoned!: () => void;
+  const poisonAnnounced = new Promise<void>((r) => { poisoned = r; });
+  let releaseNoticeOld!: () => void;
+  const holdNoticeOld = new Promise<void>((r) => { releaseNoticeOld = r; });
+  async function* noticeOldScript(): AsyncGenerator<AgentEvent> {
+    yield { kind: "error", message: POISON, scope: "session" }; // 旁注攒进 lead.notices
+    poisoned();
+    await holdNoticeOld;
+    yield { kind: "done", exitStatus: 0 };
+  }
+  const noticeOld = await startLead({
+    taskId: NOTICE_KEEP, sessId: NOTICE_SESS, cliSessionId: "poisoned-thread", events: noticeOldScript(),
+  });
+  await poisonAnnounced;
+  await new Promise((r) => setTimeout(r, 50)); // 让那一轮清库和攒旁注走完
+  let releaseNoticeNew!: () => void;
+  const holdNoticeNew = new Promise<void>((r) => { releaseNoticeNew = r; });
+  async function* noticeNewScript(): AsyncGenerator<AgentEvent> {
+    await holdNoticeNew;
+    yield { kind: "done", exitStatus: 0 };
+  }
+  await startLead({
+    taskId: NOTICE_KEEP, sessId: NOTICE_SESS, cliSessionId: "new-thread", events: noticeNewScript(), reuse: true,
+  });
+  // 摘牌时就该把它落下去:此刻旧台还没收尾,新台也还在线。
+  const noticeMdPath = join(noticeOld.runDir, `${NOTICE_SESS}.md`);
+  const noticeDeadline = Date.now() + 10_000;
+  let noticeMd = "";
+  while (Date.now() < noticeDeadline) {
+    try { noticeMd = readFileSync(noticeMdPath, "utf8"); } catch { /* 还没建出来 */ }
+    if (noticeMd.includes(SESSION_POISONED_NOTE)) break;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  assert.equal(teamIsLive(NOTICE_KEEP), true, "这一条要在新台还在线时验");
+  assert.ok(
+    noticeMd.includes(SESSION_POISONED_NOTE),
+    "换台把攒着的轮换旁注丢了 —— 那句话只播给了正在看的人,刷新之后一个字都不剩",
+  );
+  releaseNoticeOld();
+  releaseNoticeNew();
+  while (teamIsLive(NOTICE_KEEP) && Date.now() < noticeDeadline) await new Promise((r) => setTimeout(r, 20));
+  await new Promise((r) => setTimeout(r, 200));
+  const finalNoticeMd = readFileSync(noticeMdPath, "utf8");
+  assert.equal(
+    finalNoticeMd.split(SESSION_POISONED_NOTE).length - 1,
+    1,
+    "同一条旁注落了两遍 —— 摘牌时补了一次,收尾时又写了一次",
+  );
+  ok("换台时攒着的轮换旁注照样落盘,刷新后还看得见");
+
   console.log("test:team-resilience ok");
 } finally {
   healSessionWrites();

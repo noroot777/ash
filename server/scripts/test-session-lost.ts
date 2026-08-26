@@ -227,7 +227,7 @@ ok("single / team / duet 都在持久说明后替换受影响的 Codex 会话");
 const teamSessionCode = readFileSync(join(SRC, "team/session.ts"), "utf8");
 assert.match(
   teamSessionCode,
-  /async function closeLead[\s\S]*?persistOrReport\([\s\S]*?if \(!persisted && dropSession\) dropNote = SESSION_DROP_PERSISTENCE_FAILED_NOTE/,
+  /async function closeLead[\s\S]*?updateOwnSession\([\s\S]*?if \(!persisted && dropSession\) dropNote = SESSION_DROP_PERSISTENCE_FAILED_NOTE/,
   "closeLead 写库失败后仍会沿用‘恢复字段已清掉’的旧文案",
 );
 ok("团队调度台写库失败时改用与事实一致的会话说明");
@@ -287,8 +287,8 @@ for (const fence of [/writeTurnEnd\(lead\.out, endIso\);[^\n]*\n\s*flushSessionN
 }
 assert.equal(
   (teamSessionCode.match(/flushSessionNotices\(lead\);/g) ?? []).length,
-  2, // endTurn + closeLead:回合正常结束和进程没了两条路都得把攒下的旁注落盘
-  "endTurn 与 closeLead 都要 flush 旁注,否则进程直接没了那一路会把旁注丢在内存里",
+  3, // endTurn + closeLead + retireLead:回合正常结束、进程没了、被接管换台,三条路都得落盘
+  "endTurn / closeLead / retireLead 都要 flush 旁注,漏一条那一路的旁注就只活在 SSE 里",
 );
 // 但「flush 排在 writeTurnEnd 之后」还不够:那一行写库一旦**抛出去**,flush 根本轮不到
 // —— 而它跑在 consume 的 for-await 里,抛出去掀掉的是整台调度台(第 2 轮审查现场,理由
@@ -296,8 +296,8 @@ assert.equal(
 // persistOrReport;真失败下的行为由 test-team-lead-resilience.ts 注入触发器实测。
 assert.match(
   teamSessionCode,
-  /async function endTurn[\s\S]*?await persistOrReport\(\s*lead,\s*"回合收尾状态"/,
-  "endTurn 的回合收尾写库必须走 persistOrReport,否则一次写库失败会掀掉整台调度台",
+  /async function endTurn[\s\S]*?await updateOwnSession\(\s*lead,\s*"回合收尾状态"/,
+  "endTurn 的回合收尾写库必须走 updateOwnSession(它内含 persistOrReport),否则一次写库失败会掀掉整台调度台",
 );
 // scope 分流:三条链都得认这个字段,少一条就会在成功回合上记异常。
 for (const [chain, owner] of [["single", "single-run.ts"], ["team", "team/session.ts"], ["duet", "duet/turn.ts"]]) {
