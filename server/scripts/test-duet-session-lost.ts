@@ -163,7 +163,7 @@ assert.equal(poisonedRow.resumeArgs, null, "poisoned exit 0 没清 resume_args")
 assert.equal(poisonedRow.exitStatus, 0, "poisoned 判断不能篡改 Codex 的真实 exit 0");
 assert.equal(poisonedTurn.cliId, "", "poisoned exit 0 的返回值仍会让下一轮 resume");
 assert.equal(poisonedTurn.error, undefined, "成功产出正文的 poisoned 回合不应被标成执行失败");
-assert.match(poisonedTurn.notice ?? "", /下一次运行会从任务正文自动开启一条\*\*全新会话\*\*/);
+assert.match(poisonedTurn.notice ?? "", /下一次运行会从任务正文自动开启一条全新会话/);
 const poisonedMdPath = join(process.env.ASH_RUNS_DIR!, poisonedTaskId, `${poisonedTurn.rowId}.md`);
 let poisonedMd = "";
 for (let i = 0; i < 100 && !poisonedMd.includes("下一次运行会从任务正文自动开启"); i++) {
@@ -271,7 +271,7 @@ const mixedTurn = await duet.runTurn({
   prompt: "继续旧 thread", cwd: stage, resumeCliId: POISONED_ID,
 });
 assert.match(mixedTurn.error ?? "", /执行诊断：.*dropping turn-scoped item/, "含指纹的真实失败被误分流或吞掉");
-assert.match(mixedTurn.notice ?? "", /下一次运行会从任务正文自动开启一条\*\*全新会话\*\*/);
+assert.match(mixedTurn.notice ?? "", /下一次运行会从任务正文自动开启一条全新会话/);
 ok("真实失败原因与会话轮换正交保存");
 
 // 真执行器解析器 → 真 duet 结算：防止两端各自测试都绿，scope 在中间传递时却丢掉。

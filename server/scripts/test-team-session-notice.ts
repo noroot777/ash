@@ -161,6 +161,10 @@ try {
   );
   assert.ok(systemTurns.some((text) => text.includes("停止全组")), ".md 里没有停止说明");
   assert.doesNotMatch(md, /执行诊断/, ".md 里仍写了红色执行诊断");
+  // 旁注三处渲染点都是纯文本,措辞里带 `**` 用户就会看到字面量的星号(第 1 轮审查 P2)。
+  for (const text of systemTurns) {
+    assert.doesNotMatch(text, /\*\*/, `落盘的 system 注记带了 Markdown 标记:${text}`);
+  }
   assert.equal(row.cliSessionId, null, "poisoned 会话仍必须清 cli_session_id");
   ok(".md 只留 system 注记，恢复字段照清");
 } finally {
