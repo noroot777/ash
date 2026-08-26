@@ -1,7 +1,19 @@
 // Global search (⌘K): one query across tasks (title/body) and their session
 // transcripts on disk (data/runs/<taskId>/*.md|jsonl — run artifacts like
-// output directory names only ever appear here). Corpus is small (hundreds of
-// files, ~10MB), so每次全量扫,不建索引.
+// output directory names only ever appear here).
+//
+// **语料早就不小了**：2026-08-26 实测 1269 个任务目录 / 4500 个文件 / 2.2 GB，其中
+// .jsonl（事件轨迹）占 1.33 GB，单个任务目录最大 586 MB。这个文件原本写着「corpus is
+// small (~10MB), 每次全量扫」并用 `Promise.all` 把 1123 个任务的全文一次性读进内存 ——
+// 于是 ⌘K 里每敲几个字就把 1.3 GB 读成 JS 字符串、再 toLowerCase 好几遍。实测一次
+// `?q=harness` 要 20 秒，**而且把整个事件循环占死**：同一时刻本该 33 ms 的
+// `/projects/:id/health` 被拖到 9.2 s，用户看到的是「切完项目打开任务要等十几秒」。
+//
+// 所以扫描按两条规矩来：
+//   1. **先用库里的字段判**（id / 标题 / 正文），一个文件都不读。命中够了就根本不下盘。
+//   2. 真要下盘时**有界并发 + 每批让出事件循环**，并按最终排序的顺序扫、够 MAX_HITS
+//      就停 —— 结果集与全量扫一字不差（见 canStopEarly 那段的推导），只是不再把
+//      整个进程钉在 I/O 和 GC 上。
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SearchHit, SearchField, TaskStatus } from "@ash/shared";
@@ -15,6 +27,9 @@ const SNIPPET_RADIUS = 60;
 const MAX_HITS = 50;
 const TASK_PREVIEW_LIMIT = 2_000;
 const NOTE_PREVIEW_LIMIT = 4_000;
+// 同时读几个任务目录。这个数决定「一次最多有多少份会话全文同时待在内存里」——
+// 原先是全部 1123 份，几个 GB 的字符串一起进老生代，GC 和 swap 都得跟着遭殃。
+const SCAN_CONCURRENCY = 6;
 
 // 任务 id 是 nanoid(12),字母表 [A-Za-z0-9_-];ash 分支只带前 8 位
 // (`ash/<id8>`),所以 8 位以上的前缀同样算「就是这个任务」。
@@ -124,14 +139,18 @@ export function parseSearchQuery(query: string): ParsedSearchQuery {
 }
 
 export function matchesSearchQuery(text: string, query: ParsedSearchQuery): boolean {
-  if (isExcluded(text, query)) return false;
+  return matchesLowered(text.toLowerCase(), query);
+}
+
+// 下面三个 `*Lowered` 收的是**已经压过小写**的文本。语料上了 GB 之后，
+// 「每个判据自己 toLowerCase 一遍」就是每次搜索多几份 GB 级垃圾。
+function matchesLowered(lower: string, query: ParsedSearchQuery): boolean {
+  if (hasExcluded(lower, query)) return false;
   if (!query.groups.length) return query.excluded.length > 0;
-  const lower = text.toLowerCase();
   return query.groups.some((group) => group.every((term) => lower.includes(term.value)));
 }
 
-function isExcluded(text: string, query: ParsedSearchQuery): boolean {
-  const lower = text.toLowerCase();
+function hasExcluded(lower: string, query: ParsedSearchQuery): boolean {
   return query.excluded.some((term) => lower.includes(term.value));
 }
 
@@ -157,7 +176,10 @@ export function isTaskIdMatch(taskId: string, candidate: string): boolean {
 }
 
 function matchingTerms(text: string, query: ParsedSearchQuery): SearchTerm[] {
-  const lower = text.toLowerCase();
+  return matchingTermsLowered(text.toLowerCase(), query);
+}
+
+function matchingTermsLowered(lower: string, query: ParsedSearchQuery): SearchTerm[] {
   const matches = query.groups
     .filter((group) => group.every((term) => lower.includes(term.value)))
     .flat();
@@ -224,50 +246,111 @@ export async function searchAll(query: string, options: SearchOptions = {}): Pro
   const taskHits: Extract<SearchHit, { kind: "task" }>[] = [];
   const idCandidates = taskIdCandidates(parsed);
 
-  await Promise.all(
-    taskRows.map(async (task) => {
-      const conversation = await readRunText(task.id);
-      const corpus = `${task.title}\n${task.body}\n${conversation}`;
-      // 按 id 命中的那条要能凭空冒出来:任务自己的 id 不在自己的标题/正文里,
-      // 还没跑过的任务连会话都没有,靠 corpus 匹配永远搜不到它自己。排除词
-      // 仍然有效——用户显式说了别看这条,就别钉它。
-      const byId = idCandidates.some((candidate) => isTaskIdMatch(task.id, candidate))
-        && !isExcluded(corpus, parsed);
-      if (!byId && !matchesSearchQuery(corpus, parsed)) return;
+  type TaskRow = (typeof taskRows)[number];
+  const hitOf = (task: TaskRow, conversation: string): Extract<SearchHit, { kind: "task" }> | null => {
+    const corpus = `${task.title}\n${task.body}\n${conversation}`;
+    // 大字符串只压一次小写。原先 matchesSearchQuery / isExcluded / matchingTerms /
+    // findSnippet 各压一遍，语料上了 GB 之后这四遍就是四份垃圾。
+    const lower = corpus.toLowerCase();
+    // 按 id 命中的那条要能凭空冒出来:任务自己的 id 不在自己的标题/正文里,
+    // 还没跑过的任务连会话都没有,靠 corpus 匹配永远搜不到它自己。排除词
+    // 仍然有效——用户显式说了别看这条,就别钉它。
+    const byId = idCandidates.some((candidate) => isTaskIdMatch(task.id, candidate))
+      && !hasExcluded(lower, parsed);
+    if (!byId && !matchesLowered(lower, parsed)) return null;
 
-      let field: SearchField = "id";
-      let snippet = "";
-      if (!byId) {
-        const terms = matchingTerms(corpus, parsed);
-        const bodyTerms = terms.filter((term) => task.body.toLowerCase().includes(term.value));
-        const conversationTerms = terms.filter((term) => conversation.toLowerCase().includes(term.value));
-        field = "title";
-        if (!terms.some((term) => task.title.toLowerCase().includes(term.value))) {
-          if (bodyTerms.length) {
-            field = "body";
-            snippet = findSnippet(task.body, bodyTerms) ?? "";
-          } else if (conversationTerms.length) {
-            field = "conversation";
-            snippet = findSnippet(conversation, conversationTerms) ?? "";
-          }
+    let field: SearchField = "id";
+    let snippet = "";
+    if (!byId) {
+      const terms = matchingTermsLowered(lower, parsed);
+      const bodyTerms = terms.filter((term) => task.body.toLowerCase().includes(term.value));
+      const conversationTerms = terms.filter((term) => conversation.toLowerCase().includes(term.value));
+      field = "title";
+      if (!terms.some((term) => task.title.toLowerCase().includes(term.value))) {
+        if (bodyTerms.length) {
+          field = "body";
+          snippet = findSnippet(task.body, bodyTerms) ?? "";
+        } else if (conversationTerms.length) {
+          field = "conversation";
+          snippet = findSnippet(conversation, conversationTerms) ?? "";
         }
       }
-      taskHits.push({
-        kind: "task",
-        id: task.id,
-        title: task.title,
-        status: task.status as TaskStatus,
-        projectId: task.projectId,
-        projectName: projName.get(task.projectId) ?? null,
-        archived: task.archived,
-        field,
-        snippet,
-        preview: task.body.slice(0, TASK_PREVIEW_LIMIT),
-        createdAt: task.createdAt,
-        updatedAt: task.updatedAt,
-      });
-    }),
-  );
+    }
+    return {
+      kind: "task",
+      id: task.id,
+      title: task.title,
+      status: task.status as TaskStatus,
+      projectId: task.projectId,
+      projectName: projName.get(task.projectId) ?? null,
+      archived: task.archived,
+      field,
+      snippet,
+      preview: task.body.slice(0, TASK_PREVIEW_LIMIT),
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+    };
+  };
+
+  // ── 谁必须下盘 ─────────────────────────────────────────────────────────
+  //
+  // 一个任务的命中能落在哪一档，光看库里的字段（标题 / 正文 / id）就能分成三类：
+  //
+  //   settled  某个 OR 分组的词**全都**在标题/正文里（或按 id 命中）→ 判定和档位都定了，
+  //            不用读会话。带排除词时例外：排除词可能只出现在会话里，得读了才敢留。
+  //   partial  某个分组只命中了一部分词 → 补上会话才可能成立，而且成立时档位可能是
+  //            标题/正文（跨字段 AND）。这类必须全扫，不能因为「已经够 50 条」就跳过。
+  //   none     标题/正文里一个词都没有 → 真命中的话所有词都在会话里，档位必然是
+  //            conversation（FIELD_RANK 最末一档）。
+  //
+  // 于是：settled + partial 扫完之后，如果**能排在会话档之前的**命中已经够 MAX_HITS，
+  // none 那一堆整个可以不读；否则按 updatedAt 倒序补，够数就停 —— 剩下没读的都比已收的
+  // 更旧、且同为最末档，不可能挤进前 50。结果集与全量扫一字不差。
+  const ordered = [...taskRows].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const settled: TaskRow[] = [];
+  const partial: TaskRow[] = [];
+  const none: TaskRow[] = [];
+  for (const task of ordered) {
+    const lower = `${task.title}\n${task.body}`.toLowerCase();
+    const byIdCandidate = idCandidates.some((candidate) => isTaskIdMatch(task.id, candidate));
+    const groupsHere = parsed.groups.map((group) => group.filter((term) => lower.includes(term.value)).length / group.length);
+    // 纯排除查询（只写了 `-foo`）没有正向词可分类：它命中的是「所有没被排除的任务」，
+    // 档位算标题档，不是会话档，早停那套推导对它不成立 —— 整批当 partial 全扫。
+    if (!parsed.groups.length) partial.push(task);
+    else if (byIdCandidate || groupsHere.some((ratio) => ratio === 1)) settled.push(task);
+    else if (groupsHere.some((ratio) => ratio > 0)) partial.push(task);
+    else none.push(task);
+  }
+
+  // 有界并发 + 每批之间让出事件循环：搜索是个「顺手敲几个字」的动作，不该让同时在飞的
+  // 会话请求、健康检查跟着一起卡住（那正是这次要修的现象）。
+  // `ahead` 给的是「已经收了多少条铁定排在会话档之前的命中」，给了就够数即停。
+  const scan = async (rows: TaskRow[], ahead: number | null): Promise<void> => {
+    let found = 0;
+    for (let at = 0; at < rows.length; at += SCAN_CONCURRENCY) {
+      const batch = rows.slice(at, at + SCAN_CONCURRENCY);
+      const hits = await Promise.all(batch.map(async (task) => hitOf(task, await readRunText(task.id))));
+      for (const hit of hits) if (hit) { taskHits.push(hit); found += 1; }
+      if (ahead !== null && ahead + found >= MAX_HITS) return;
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+    }
+  };
+
+  if (parsed.excluded.length) {
+    // 排除词只在会话里出现也算数，所以 settled 这批同样得读一遍才敢留。
+    await scan(settled, null);
+  } else {
+    for (const task of settled) {
+      const hit = hitOf(task, "");
+      if (hit) taskHits.push(hit);
+    }
+  }
+  await scan(partial, null);
+  // none 这批命中必然是会话档（标题/正文里一个词都没有），所以只有「铁定排在会话档
+  // 之前的那些命中」才算数 —— settled/partial 里那些会话档命中不能拿来抵，它们可能比
+  // 还没扫到的 none 更旧，本就该被挤下去。
+  const ahead = taskHits.filter((hit) => hit.field !== "conversation").length;
+  if (ahead < MAX_HITS) await scan(none, ahead);
 
   taskHits.sort(
     (a, b) => FIELD_RANK[a.field] - FIELD_RANK[b.field] || b.updatedAt.localeCompare(a.updatedAt),
