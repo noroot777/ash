@@ -80,15 +80,21 @@ export function takeTraceGroup(
     consumed.add(key);
     return entries;
   }
+  // ±2 秒兜底若正好挑中 boundary 自己，这组本来就属于后一个 agent 段：当前段不领、
+  // 也不拆。继续往下会把 entries 与自己的 later 子集拼起来，工具调用原地翻倍。
+  if (key === userBoundary) return [];
 
   const earlier = entries.filter((entry) => Date.parse(entry.at) < boundary);
   const later = entries.filter((entry) => Date.parse(entry.at) >= boundary);
   consumed.add(key);
   if (later.length && userBoundary) {
+    const createdBoundaryGroup = !groups.has(userBoundary);
     const next = [...(groups.get(userBoundary) ?? []), ...later]
       .sort((left, right) => left.at.localeCompare(right.at));
     groups.set(userBoundary, next);
-    consumed.delete(userBoundary);
+    // 只放开本次新建的组。已有组若早已被上游气泡消费，不能因为这次拆分重新开放，
+    // 否则同一批 trace 会被后面的 agent 段再领一次。
+    if (createdBoundaryGroup) consumed.delete(userBoundary);
   }
   return earlier;
 }

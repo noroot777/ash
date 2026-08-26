@@ -1,6 +1,6 @@
 import { mkdirSync, createWriteStream, existsSync } from "node:fs";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { AgentType, SessionRole, TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
@@ -490,6 +490,14 @@ export async function continueTask(
       // 你→@agent reply, persisted as a structured turn so a reloaded thread shows
       // the human/backend turn as its own bubble; the matching event keeps every client live.
       recordUserConversationTurn({ taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text: userTurnText, at: turnStart, bySystem: opts.byBackend });
+    }
+    // 真人消息真正进会话的这一刻才消费旧检查点。放在 HTTP 接受回复时会漏掉“先排队、
+    // 空闲后投递”这条路；放在起跑前又会在解析/spawn 失败时吞掉恢复指令。CAS 只清本轮
+    // 起点读到的那一份，agent 若已写下新检查点则原样保留。
+    if (!opts.system && !opts.byBackend && task.resumePrompt) {
+      await db.update(tasks)
+        .set({ resumePrompt: null, updatedAt: now() })
+        .where(and(eq(tasks.id, taskId), eq(tasks.resumePrompt, task.resumePrompt)));
     }
     // 到这里这句话已经**两处落地**:agent 进程早在上面就带着它起来了,原文也刚写进会话
     // 落盘文件。排队/定时消息就是在这一刻、而不是更早,才把库里那条标成 sent。

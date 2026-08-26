@@ -1,6 +1,6 @@
 import type { AgentType, ScheduledMessage } from "@ash/shared";
 import { AGENT_TYPES } from "@ash/shared";
-import { and, eq, isNull } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { Context } from "hono";
 import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
@@ -9,7 +9,6 @@ import { continueTask } from "./orchestrator.js";
 import { enqueueMessage } from "./pending-messages.js";
 import { nativeCliCommand } from "./skills.js";
 import { leadTypeOf } from "./team/session.js";
-import { now } from "./util.js";
 
 export type TaskReplyBody = {
   text?: string;
@@ -78,22 +77,6 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
     reasoningEffort: b.reasoningEffort?.trim() || null,
   };
   const text = (b.text ?? "").trim();
-  // 真人直接回复一个检查点暂停的任务时，这条新消息就是新的续跑指令。旧 resumePrompt
-  // 若继续挂着，本轮即使 complete_task 成功也会被结算/自由派审当成“仍在等续跑”，
-  // 任务回到 paused、预约审查永久不启动。先按快照 CAS 消费；若回合锁没抢到、原话改为
-  // 排队，再把旧检查点放回，避免消息尚未送出就把恢复指令吞掉。
-  const checkpoint = !isTeam && r.resumePrompt
-    ? (await db.update(tasks)
-      .set({ resumePrompt: null, updatedAt: now() })
-      .where(and(eq(tasks.id, taskId), eq(tasks.resumePrompt, r.resumePrompt)))
-      .returning({ id: tasks.id })).length > 0 ? r.resumePrompt : null
-    : null;
-  const restoreCheckpoint = async () => {
-    if (!checkpoint) return;
-    await db.update(tasks)
-      .set({ resumePrompt: checkpoint, updatedAt: now() })
-      .where(and(eq(tasks.id, taskId), isNull(tasks.resumePrompt)));
-  };
   const teamNative = isTeam ? nativeCliCommand(await leadTypeOf(taskId), text) : null;
   if (teamNative) {
     try {
@@ -106,10 +89,6 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
   }
   void continueTask(taskId, text, route).then(async (started) => {
     if (started) return;
-    await restoreCheckpoint();
-    await enqueueMessage({ taskId, text, ...route, agent: b.agent ?? null });
-  }).catch(async () => {
-    await restoreCheckpoint();
     await enqueueMessage({ taskId, text, ...route, agent: b.agent ?? null });
   });
   return c.json({ started: true }, 202);

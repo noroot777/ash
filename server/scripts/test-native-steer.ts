@@ -192,6 +192,18 @@ setInterval(() => {}, 1000);
 `);
   chmodSync(fakeBin, 0o755);
 
+  const deadBin = join(detachedRoot, "dead-agent.mjs");
+  writeFileSync(deadBin, "#!/usr/bin/env node\nsetTimeout(() => process.exit(0), 20);\n");
+  chmodSync(deadBin, 0o755);
+  const deadClaude = new ClaudeExecutor({ bin: deadBin }).runSteerable({
+    cwd: detachedRoot,
+    prompt: "OLD",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await assert.rejects(deadClaude.steer!("NEW"), /stdin 已关闭|stream|write/i,
+    "agent 已退出但 done 尚未消费时，Claude 引导必须报投递失败，不能把消息记成 sent");
+  console.log("✓ Claude 原生引导会观察 stdin 写失败，不把死进程当成已送达");
+
   const claudeDir = join(detachedRoot, "claude");
   mkdirSync(claudeDir);
   const claudeHandle = new ClaudeExecutor({ bin: fakeBin }).runSteerable({

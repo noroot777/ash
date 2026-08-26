@@ -257,7 +257,7 @@ try {
     taskRow(deliveredTaskId, "claude", "running"),
     taskRow(unavailableTaskId, "gemini", "idle"),
     { ...taskRow(queuedTaskId, "claude", "running"), mode: "single", team: null },
-    { ...taskRow(lockedTaskId, "claude", "running"), mode: "single", team: null },
+    { ...taskRow(lockedTaskId, "claude", "running"), mode: "single", team: null, resumePrompt: "旧检查点" },
     { ...taskRow(crashTaskId, "claude", "done"), mode: "single", team: null },
     {
       ...taskRow(steerTaskId, "claude", "done"),
@@ -411,6 +411,11 @@ try {
   const locked = (await db.select().from(scheduledMessages)
     .where(eq(scheduledMessages.id, "scheduled-locked"))).at(0)!;
   assert.equal(locked.status, "sent", "真送进会话之后才算 sent");
+  assert.equal(
+    (await db.select({ resumePrompt: tasks.resumePrompt }).from(tasks)
+      .where(eq(tasks.id, lockedTaskId))).at(0)?.resumePrompt,
+    null, "排队真人消息真正送进会话时必须消费旧检查点，不能继续阻塞完成与预约派审",
+  );
   // 「送到了」的判据是**刷新后仍看得见**:原话作为一个真人回合落进会话时间线。
   const lockedSession = (await db.select().from(sessions).where(eq(sessions.taskId, lockedTaskId))).at(0)!;
   const lockedTranscript = transcript.sessionTranscriptPath(lockedTaskId, lockedSession.id);

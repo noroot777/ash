@@ -233,25 +233,6 @@ try {
   const runApi = new Hono();
   mountTaskRunRoutes(runApi);
 
-  // 真人在检查点暂停后直接补一句继续，不走 /run 的 resumeOrRunTask；这条回复本身必须
-  // 消费旧 resumePrompt，否则完成结算和预约派审都会误判成“仍在等待续跑”。
-  await createTasks([{
-    ...baseTask, id: "checkpoint-human-reply", title: "checkpoint human reply",
-    status: "paused", workflowMode: "free", resumePrompt: "Windows 打开后继续验证",
-    reasoningEffort: "ultra-fake",
-  }]);
-  const checkpointReply = await runApi.request("/tasks/checkpoint-human-reply/reply", {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text: "Windows 已打开，继续" }),
-  });
-  assert.equal(checkpointReply.status, 202);
-  assert.equal(
-    (await db.select({ resumePrompt: tasks.resumePrompt }).from(tasks)
-      .where(eq(tasks.id, "checkpoint-human-reply"))).at(0)?.resumePrompt,
-    null, "真人回复已接管检查点时必须清掉旧 resumePrompt，不能继续阻塞完成与预约派审",
-  );
-  await new Promise((resolve) => setTimeout(resolve, 100));
-
   // ⑧ dispatch 与验收共用一把占位互斥：派活结束锁必须释放，期间验收按在途拒绝。
   await createTasks([{ ...baseTask, id: "cas-lead", title: "cas lead", mode: "team" }]);
   assert.equal(beginAccepting("cas-lead"), true);

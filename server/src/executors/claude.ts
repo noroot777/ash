@@ -207,6 +207,19 @@ export class ClaudeExecutor implements AgentExecutor {
   ): ResidentHandle {
     const resident = { interruptPending: false };
     let reqSeq = 0;
+    const interruptLine = () => JSON.stringify({
+      type: "control_request",
+      request_id: `ash_int_${++reqSeq}`,
+      request: { subtype: "interrupt" },
+    }) + "\n";
+    const writeChecked = (data: string): Promise<void> => new Promise((resolve, reject) => {
+      const input = child.stdin;
+      if (!input || input.destroyed || input.writableEnded || !input.writable) {
+        reject(new Error("Claude 当前回合 stdin 已关闭"));
+        return;
+      }
+      input.write(data, (error) => error ? reject(error) : resolve());
+    });
     return {
       sessionId,
       commandLine,
@@ -216,13 +229,17 @@ export class ClaudeExecutor implements AgentExecutor {
       },
       interrupt: () => {
         resident.interruptPending = true;
-        child.stdin?.write(
-          JSON.stringify({
-            type: "control_request",
-            request_id: `ash_int_${++reqSeq}`,
-            request: { subtype: "interrupt" },
-          }) + "\n",
-        );
+        child.stdin?.write(interruptLine());
+      },
+      steer: async (text: string) => {
+        resident.interruptPending = true;
+        try {
+          await writeChecked(interruptLine());
+          await writeChecked(userLine(text));
+        } catch (error) {
+          resident.interruptPending = false;
+          throw error;
+        }
       },
       close: () => {
         child.stdin?.end();
@@ -295,8 +312,11 @@ export function singleRunFromResident(
       if (!accepting) throw new Error("Claude 当前回合已经结束");
       intermediateEnds += 1;
       try {
-        resident.interrupt();
-        resident.send(text);
+        if (resident.steer) await resident.steer(text);
+        else {
+          resident.interrupt();
+          resident.send(text);
+        }
       } catch (error) {
         intermediateEnds -= 1;
         throw error;
