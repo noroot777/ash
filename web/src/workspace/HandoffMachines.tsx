@@ -12,6 +12,8 @@ import { api, type TaskScopedHandoffPreflightResult } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { HandoffDialogHeader, HandoffRouteCard } from "../task-detail/HandoffDialogViews.tsx";
 import {
+  bulkIdentityMismatchWarning,
+  bulkIdentityUnavailableWarning,
   bulkPreflightAllowsRun,
   bulkPreflightIssue,
   groupBulkHandoffFailures,
@@ -24,6 +26,7 @@ import {
 } from "./bulkHandoff.ts";
 
 type TransferFailure = { task: TaskListItem; reason: string };
+type IdentityNotice = { kind: "mismatch" | "unverified"; message: string };
 type BusyPhase = "idle" | "approval" | "preflight" | "transferring";
 
 async function targetForBulkTask(task: TaskListItem, selected: HandoffTarget): Promise<HandoffTarget> {
@@ -93,6 +96,7 @@ function BulkHandoffDialog({
   const [identityResolving, setIdentityResolving] = useState(
     !target.peerFp && returnCandidates.length > 0,
   );
+  const [identityNotice, setIdentityNotice] = useState<IdentityNotice | null>(null);
   const batchFingerprint = target.peerFp ?? resolvedReturnFingerprint;
   const taskSelectedTarget = target.peerFp || !batchFingerprint
     ? target
@@ -140,12 +144,28 @@ function BulkHandoffDialog({
         if (!alive) return;
         const matched = returnCandidates.some((task) =>
           sameTargetFingerprint(task.handoff?.peerFp, identity.fingerprint));
-        setResolvedReturnFingerprint(matched ? identity.fingerprint : null);
+        if (matched) {
+          setResolvedReturnFingerprint(identity.fingerprint);
+          setIdentityNotice(null);
+        } else {
+          setResolvedReturnFingerprint(null);
+          setIdentityNotice({
+            kind: "mismatch",
+            message: bulkIdentityMismatchWarning(
+              addressHintFingerprint
+                ? [addressHintFingerprint]
+                : returnCandidates.map((task) => task.handoff?.peerFp),
+              identity.fingerprint,
+            ),
+          });
+        }
       })
-      .catch(() => { /* 离线/旧版：结束核对，按本地地址提示结果展示可用项 */ })
+      .catch(() => {
+        if (alive) setIdentityNotice({ kind: "unverified", message: bulkIdentityUnavailableWarning() });
+      })
       .finally(() => { if (alive) setIdentityResolving(false); });
     return () => { alive = false; };
-  }, [identityResolving, returnCandidates, target.url]);
+  }, [addressHintFingerprint, identityResolving, returnCandidates, target.url]);
 
   const rememberFirstProbe = (
     taskId: string,
@@ -158,6 +178,7 @@ function BulkHandoffDialog({
     setPreflights(new Map([[taskId, probe]]));
     setTaskTargets(new Map([[taskId, taskTarget]]));
     setPreflightFailures(failures);
+    if (probe.peer?.trust === "matched") setIdentityNotice(null);
     setCheckedAll(probe.projects.length > 0
       && bulkPreflightAllowsRun(1, failures.length, eligible.length));
     setProjectId(probe.suggestedProjectId ?? probe.projects[0]?.id ?? "");
@@ -168,7 +189,6 @@ function BulkHandoffDialog({
     setPhase("preflight");
     setError(null);
     const failures: TransferFailure[] = [];
-    let approvalCandidate: { task: TaskListItem; taskTarget: HandoffTarget; probe: TaskScopedHandoffPreflightResult } | null = null;
     try {
       for (let index = 0; index < eligible.length; index += 1) {
         if (!mounted.current) return;
@@ -176,14 +196,7 @@ function BulkHandoffDialog({
         setProgress({ done: index, total: eligible.length, title: task.title });
         try {
           const { taskTarget, probe } = await probeBulkTask(task, taskSelectedTarget);
-          const issue = bulkPreflightIssue(task, probe, "");
-          const downgradedApproval = task.handoff?.direction === "in" && !probe.taskScopedReturn
-            && (probe.peer?.peerStatus === "pending" || probe.peer?.peerStatus === "blocked");
-          if (issue && downgradedApproval) {
-            failures.push({ task, reason: issue });
-            approvalCandidate ??= { task, taskTarget, probe };
-            continue;
-          }
+          const issue = bulkPreflightIssue(probe, "");
           if (issue && probe.projects.length === 0
             && probe.peer?.peerStatus !== "pending" && probe.peer?.peerStatus !== "blocked") {
             failures.push({ task, reason: issue });
@@ -201,23 +214,13 @@ function BulkHandoffDialog({
         }
       }
       if (!mounted.current) return;
-      if (approvalCandidate) {
-        const remaining = failures.filter(({ task }) => task.id !== approvalCandidate!.task.id);
-        rememberFirstProbe(
-          approvalCandidate.task.id,
-          approvalCandidate.taskTarget,
-          approvalCandidate.probe,
-          remaining,
-        );
-      } else {
-        setFirstProbe(null);
-        setFirstProbeTaskId(null);
-        setPreflights(new Map());
-        setTaskTargets(new Map());
-        setPreflightFailures(failures);
-        setProjectId("");
-        setError(failures[0]?.reason ?? "没有任务通过预检");
-      }
+      setFirstProbe(null);
+      setFirstProbeTaskId(null);
+      setPreflights(new Map());
+      setTaskTargets(new Map());
+      setPreflightFailures(failures);
+      setProjectId("");
+      setError(failures[0]?.reason ?? "没有任务通过预检");
     } finally {
       if (mounted.current) { setProgress(null); setPhase("idle"); }
     }
@@ -295,7 +298,7 @@ function BulkHandoffDialog({
           probe = resolved.probe;
         }
         const targetProjectId = bulkTargetProjectId(task, probe, projectId);
-        const issue = bulkPreflightIssue(task, probe, targetProjectId);
+        const issue = bulkPreflightIssue(probe, targetProjectId);
         if (issue) throw new Error(issue);
         resolvedTargets.set(task.id, taskTarget);
         checked.set(task.id, probe);
@@ -362,20 +365,8 @@ function BulkHandoffDialog({
   }, [preflights]);
   const readyTasks = eligible.filter((task) => preflights.has(task.id) && taskTargets.has(task.id));
   const readyRunningCount = readyTasks.filter((task) => task.status === "running" || task.status === "queued").length;
-  const ordinaryReturnProjects = useMemo(() => {
-    const taskById = new Map(eligible.map((task) => [task.id, task]));
-    const unique = new Map<string, TaskScopedHandoffPreflightResult["projects"][number]>();
-    for (const [taskId, probe] of preflights) {
-      const task = taskById.get(taskId);
-      if (task?.handoff?.direction !== "in" || probe.taskScopedReturn) continue;
-      for (const candidate of probe.projects) unique.set(candidate.id, candidate);
-    }
-    return [...unique.values()];
-  }, [eligible, preflights]);
-  const hasOrdinaryReturn = [...preflights.entries()].some(([taskId, probe]) =>
-    eligible.find((task) => task.id === taskId)?.handoff?.direction === "in" && !probe.taskScopedReturn);
-  const needsBatchProject = !returnOnly || hasOrdinaryReturn;
-  const projectOptions = returnOnly ? ordinaryReturnProjects : firstProbe?.projects ?? [];
+  const needsBatchProject = !returnOnly;
+  const projectOptions = returnOnly ? [] : firstProbe?.projects ?? [];
   const selectedProject = projectOptions.find((candidate) => candidate.id === projectId) ?? null;
   const fixedReturnProjectCount = new Set([...preflights.entries()].flatMap(([taskId, probe]) => {
     const task = eligible.find((candidate) => candidate.id === taskId);
@@ -391,9 +382,10 @@ function BulkHandoffDialog({
     () => groupBulkHandoffFailures(result?.failures ?? []),
     [result],
   );
+  const identityMismatch = identityNotice?.kind === "mismatch";
 
   const confirm = () => {
-    if (identityResolving) return;
+    if (identityResolving || identityMismatch) return;
     if (result) { onClose(); return; }
     if (!firstProbe || blocked) {
       if (canProbeWithoutApproval && !blocked) void probeFirst();
@@ -408,6 +400,8 @@ function BulkHandoffDialog({
     ? "完成"
     : identityResolving
       ? "正在核对来源机…"
+    : identityMismatch
+      ? "先核对目标机身份"
     : !firstProbe || blocked
       ? canProbeWithoutApproval && !blocked ? `重新检查${returnOnly ? "来源机" : "目标机"}` : blocked ? `检查${actionName}申请状态` : `发送${actionName}申请`
       : !checkedAll
@@ -430,7 +424,9 @@ function BulkHandoffDialog({
     >
       <section className="task-confirm-dialog handoff-dialog handoff-bulk-dialog" role="dialog" aria-modal="true" aria-labelledby="handoff-title">
         <HandoffDialogHeader
-          title={identityResolving ? `核对 ${target.name}` : `${returnOnly ? "移回到" : "接力到"} ${target.name}`}
+          title={identityResolving
+            ? `核对 ${target.name}`
+            : identityMismatch ? `身份不匹配 · ${target.name}` : `${returnOnly ? "移回到" : "接力到"} ${target.name}`}
           disabled={!canClose}
           onClose={onClose}
         />
@@ -464,7 +460,7 @@ function BulkHandoffDialog({
             <HandoffRouteCard
               sourcePath={`${project.name} · ${eligible.length} 个任务`}
               targetName={target.name}
-              targetPath={returnOnly && !hasOrdinaryReturn && fixedReturnProjectCount > 0
+              targetPath={returnOnly && fixedReturnProjectCount > 0
                 ? checkedAll
                   ? `按任务归位 · ${fixedReturnProjectCount} 个原项目`
                   : "按任务归位 · 原项目待逐项确认"
@@ -472,6 +468,12 @@ function BulkHandoffDialog({
             />
             <p className="handoff-bulk-lede">{message}</p>
             <div className="handoff-bulk-body">
+        {identityNotice && (
+          <p className="handoff-bulk-warning" role="alert">
+            <Warning size={13} aria-hidden="true" />
+            <span>{identityNotice.message}</span>
+          </p>
+        )}
         <p className="handoff-bulk-scope">会迁移完整 CLI 会话、附件与可带走的 Git 状态；本机任务确认{actionName}后会从任务列表消失。</p>
         {runningCount > 0 && (
           <p className="handoff-bulk-warning"><Warning size={13} aria-hidden="true" />其中 {runningCount} 个任务正在运行或排队，正式{actionName}会先停止它们。</p>
@@ -561,7 +563,7 @@ function BulkHandoffDialog({
           <button
             className="is-primary"
             type="button"
-            disabled={identityResolving || busy || (!result && (!eligible.length
+            disabled={identityResolving || identityMismatch || busy || (!result && (!eligible.length
               || (Boolean(firstProbe) && !blocked && needsBatchProject && !projectId)))}
             onClick={confirm}
           >

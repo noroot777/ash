@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
+  bulkIdentityMismatchWarning,
+  bulkIdentityUnavailableWarning,
   bulkPreflightAllowsRun,
   bulkPreflightIssue,
   bulkTargetAddressHintMatches,
@@ -28,6 +30,17 @@ const task = (id, overrides = {}) => ({
 
 const sourceFp = "a".repeat(64);
 const thirdFp = "b".repeat(64);
+
+assert.match(
+  bulkIdentityMismatchWarning([sourceFp, sourceFp], thirdFp),
+  /目标机的身份和上次不一样.*AAAA-AAAA-AAAA-AAAA-AAAA.*BBBB-BBBB-BBBB-BBBB-BBBB.*不要向它发送接力申请/,
+  "地址换机时应展示记住和当前的短指纹，并阻止误导用户继续配对",
+);
+assert.match(
+  bulkIdentityUnavailableWarning(),
+  /未能核对目标机身份.*仅按本机保存的地址推断.*再次校验指纹/,
+  "身份端点不可达时不能静默吞掉核对失败",
+);
 
 const outbound = outboundTasksForTarget([
   task("older", { updatedAt: "2026-08-20T08:00:00.000Z", handoff: { direction: "out", peerUrl: "http://old-target:4317", peerFp: sourceFp, at: "2026-08-20T08:00:00.000Z" } }),
@@ -162,15 +175,15 @@ assert.equal(nextUntriedHandoffTarget(fallbackTargets, attemptedTargets)?.url, "
 attemptedTargets.add("http://dead");
 assert.equal(nextUntriedHandoffTarget(fallbackTargets, attemptedTargets)?.url, "http://live", "地址回退应遍历全部同指纹候选");
 
-const downgradedProbe = {
+const pendingProbe = {
   taskScopedReturn: false,
   peer: { peerStatus: "pending" },
   projects: [],
 };
 assert.match(
-  bulkPreflightIssue(task("fallback", { handoff: { direction: "in", peerFp: sourceFp } }), downgradedProbe, "p1"),
-  /降级为普通接力.*原机批准/,
-  "批量预检应给出真实审批原因，而不是误报项目不可用",
+  bulkPreflightIssue(pendingProbe, "p1"),
+  /目标机尚未批准本机/,
+  "普通接力的待审批提示仍应保留",
 );
 assert.equal(bulkPreflightAllowsRun(1, 1, 2), true, "一条预检失败时应允许跳过并迁移其余任务");
 assert.equal(bulkPreflightAllowsRun(0, 2, 2), false, "没有任何可迁移任务时仍应禁止执行");
@@ -187,7 +200,7 @@ const fromOne = task("from-one", { handoff: { direction: "in", peerFp: sourceFp 
 const fromTwo = task("from-two", { handoff: { direction: "in", peerFp: sourceFp } });
 assert.equal(bulkTargetProjectId(fromOne, scopedOne, "batch-project"), "origin-one");
 assert.equal(bulkTargetProjectId(fromTwo, scopedTwo, "batch-project"), "origin-two");
-assert.equal(bulkPreflightIssue(fromTwo, scopedTwo, bulkTargetProjectId(fromTwo, scopedTwo, "batch-project")), null);
+assert.equal(bulkPreflightIssue(scopedTwo, bulkTargetProjectId(fromTwo, scopedTwo, "batch-project")), null);
 
 const bulkDialog = readFileSync(new URL("../src/workspace/HandoffMachines.tsx", import.meta.url), "utf8");
 assert.doesNotMatch(bulkDialog, /<ConfirmDialog/, "批量接力不应继续使用旧确认框");
@@ -198,6 +211,9 @@ assert.match(bulkDialog, /api\.handoffReturnTarget\(task\.id\)/, "批量移回�
 assert.match(bulkDialog, /api\.handoffTargetIdentity\(target\.url\)/, "打开弹窗只能读取目标机公开身份，不能拿其他来源任务做 preflight");
 assert.match(bulkDialog, /allowReturnFallback: false/, "批量移回预检不能降级成会落待审批记录的普通 ping");
 assert.match(bulkDialog, /identityResolving/, "目标身份探测期间必须先打开可取消的弹窗");
+assert.match(bulkDialog, /kind: "mismatch"/, "目标身份不匹配时必须进入显式警告状态");
+assert.match(bulkDialog, /identityMismatch \|\| busy/, "身份不匹配时不能继续发送接力申请");
+assert.doesNotMatch(bulkDialog, /已降级为普通接力/, "批量移回禁止降级后不应保留不可达的审批引导");
 assert.match(bulkDialog, /targetUrl: taskTarget\.url/, "批量正式移回应使用逐任务解析出的地址");
 assert.match(bulkDialog, /probeBulkTask/, "任务恢复地址不可达时批量移回应尝试同指纹登记地址");
 assert.match(bulkDialog, /preflightFailures/, "批量执行结果应保留被跳过任务的失败原因");

@@ -7,7 +7,6 @@ export type BulkHandoffSkip = {
 };
 
 export function bulkPreflightIssue(
-  task: TaskListItem,
   probe: TaskScopedHandoffPreflightResult,
   projectId: string,
 ): string | null {
@@ -17,16 +16,11 @@ export function bulkPreflightIssue(
   if (projectAvailable) return null;
 
   const status = probe.peer?.peerStatus;
-  const downgradedReturn = task.handoff?.direction === "in" && !probe.taskScopedReturn;
   if (status === "pending") {
-    return downgradedReturn
-      ? "原机没有可用的任务存档，已降级为普通接力；请先在原机批准本机，再重新检查"
-      : "目标机尚未批准本机，请先接受接力申请再重新检查";
+    return "目标机尚未批准本机，请先接受接力申请再重新检查";
   }
   if (status === "blocked") {
-    return downgradedReturn
-      ? "原机没有可用的任务存档，已降级为普通接力；原机当前拒绝本机，请先修改接力来源状态"
-      : "目标机已拒绝本机，请先修改接力来源状态";
+    return "目标机已拒绝本机，请先修改接力来源状态";
   }
   return probe.projects.length === 0
     ? "目标机没有可用项目，请先在目标机添加项目"
@@ -63,6 +57,28 @@ const normalizedTargetUrl = (raw: string): string => {
 };
 export const bulkTargetAddressHintMatches = (left: string, right: string): boolean =>
   normalizedTargetUrl(left) === normalizedTargetUrl(right);
+
+const shortFingerprint = (fingerprint: string): string =>
+  (fingerprint.slice(0, 20).toUpperCase().match(/.{1,4}/g) ?? []).join("-");
+
+export function bulkIdentityMismatchWarning(
+  expectedFingerprints: (string | null | undefined)[],
+  actualFingerprint: string,
+): string {
+  const expected = [...new Set(expectedFingerprints.filter((item): item is string => Boolean(item)))]
+    .map(shortFingerprint);
+  const remembered = expected.length === 1
+    ? expected[0]
+    : expected.length > 1 ? expected.join("、") : "未知";
+  return `目标机的身份和上次不一样：接入任务记住的是 ${remembered}，这次是 ${shortFingerprint(actualFingerprint)}。`
+    + "可能是来源机重装过，也可能是这个地址现在指向了别的机器。不要向它发送接力申请；请先核对对端设置页指纹。";
+}
+
+export function bulkIdentityUnavailableWarning(): string {
+  return "未能核对目标机身份（可能离线、地址不可达或版本过旧）。以下移回任务仅按本机保存的地址推断；"
+    + "正式移回仍会再次校验指纹。请恢复连接并先核对来源机设置页指纹。";
+}
+
 const sameFingerprint = (left?: string | null, right?: string | null): boolean =>
   Boolean(left && right && left.toLowerCase() === right.toLowerCase());
 
