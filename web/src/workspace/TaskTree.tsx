@@ -13,7 +13,15 @@ import {
   useRevealHiddenSelection,
 } from "./TaskTreeRows.tsx";
 import { scopeTasks, type TaskScope } from "./taskScope.ts";
-import { matchesSpreadFilter, SPREAD_FILTERS, type SidebarSpread, type SpreadFilter } from "./useSidebarSpread.ts";
+import {
+  indexWorkers,
+  matchesSpreadFilter,
+  SPREAD_FILTERS,
+  workersFrom,
+  type SidebarSpread,
+  type SpreadFilter,
+  type WorkerIndex,
+} from "./useSidebarSpread.ts";
 import { buildTaskTree, orderedTopLevelTasks, previewTasksByAge } from "./taskTreeModel.ts";
 import { HandoffMachines } from "./HandoffMachines.tsx";
 
@@ -45,6 +53,7 @@ function ScopedTaskTree({
   onClearFilter,
   emptyText,
   machineSection,
+  workerIndex,
 }: {
   tasks: TaskListItem[];
   allTasks: TaskListItem[];
@@ -57,6 +66,8 @@ function ScopedTaskTree({
   // 否则空列表看着像「所有项目的任务都不见了」。
   emptyText: string;
   machineSection: React.ReactNode;
+  // 团队的桶写在执行者身上（见 lib/taskAttention 的 spreadBucket），筛选这一层也要它。
+  workerIndex: WorkerIndex;
 }) {
   const sections = useMemo(() => buildTaskTree(tasks, { unifiedPinned: true }), [tasks]);
   const { collapsed, toggle: toggleCollapsed } = useCollapsedSections();
@@ -69,9 +80,9 @@ function ScopedTaskTree({
   const keptBySection = useMemo(
     () => sections.map((section) => ({
       section,
-      kept: section.tasks.filter((task) => matchesSpreadFilter(task, filter)),
+      kept: section.tasks.filter((task) => matchesSpreadFilter(task, filter, workersFrom(workerIndex, task.id))),
     })),
-    [filter, sections],
+    [filter, sections, workerIndex],
   );
   const hiddenSelection = useMemo(() => {
     if (!selectedTaskId) return null;
@@ -248,9 +259,11 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
   );
   const { peek, peekAt, peekOut, hold, hide } = useSpreadPeek(spread.laidOut);
   const rowContext = useMemo(() => ({ spread, peekAt, peekOut }), [peekAt, peekOut, spread]);
+  // 执行者表按**全量**建（不是 scopedTasks）：团队的桶要它真实的执行者集合。
+  const workerIndex = useMemo(() => indexWorkers(tasks), [tasks]);
   const treeActions = useMemo(
-    () => ({ onStarred: onTaskStarred, notify, projectBadges }),
-    [notify, onTaskStarred, projectBadges],
+    () => ({ onStarred: onTaskStarred, notify, projectBadges, workerIndex }),
+    [notify, onTaskStarred, projectBadges, workerIndex],
   );
   return (
     <TaskTreeActionsProvider value={treeActions}>
@@ -265,6 +278,7 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
           filter={spread.filter}
           onClearFilter={() => spread.setFilter("all")}
           emptyText={taskMode ? "没有在跑或待验收的任务" : "还没有任务"}
+          workerIndex={workerIndex}
           machineSection={taskMode ? null : <HandoffMachines project={currentProject} tasks={tasks} selectedRemoteTaskId={selectedRemoteTaskId} onRemoteTask={onRemoteTask} notify={notify} onFinished={onHandoffFinished} />}
         />
         {otherProjects.length > 0 && (

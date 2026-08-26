@@ -2,14 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TaskFollowUp, TaskListItem } from "@ash/shared";
 import { TASK_BATCH_LIMIT } from "@ash/shared";
 import { api } from "../lib/api.ts";
-import { spreadBucket, type SpreadBucket } from "../lib/taskAttention.ts";
+import { indexWorkers, spreadBucket, workersFrom, type SpreadBucket, type WorkerIndex } from "../lib/taskAttention.ts";
 import { scopeTasks, type TaskScope } from "./taskScope.ts";
 import { orderedTopLevelTasks, visibleOnThisMachine } from "./taskTreeModel.ts";
 
 // 桶的判据搬到了 lib/taskAttention.ts（任务树排序和状态点也要读它，留在这里会成环）。
 // 这里继续对外露出同一个名字，免得每个调用点都改 import。
-export { spreadBucket };
-export type { SpreadBucket };
+export { indexWorkers, spreadBucket, workersFrom };
+export type { SpreadBucket, WorkerIndex };
 
 // 收起动画的时长，必须和 sidebar-spread.css 里 .workspace-sidebar 的 width 过渡对齐：
 // 动画期间仍按铺开态排版，否则列会先「啪」地塌回去、侧边栏再慢慢滑窄，看着像闪了一下。
@@ -39,10 +39,13 @@ export type SpreadCounts = Record<SpreadFilter, number>;
 
 // 星标不是第六个桶：它是用户手动的软记号，与自动状态正交（同一个任务既可以
 // 「在跑」也可以带星标）。所以筛选判据单独一条，不进 spreadBucket。
-export function matchesSpreadFilter(task: TaskListItem, filter: SpreadFilter): boolean {
+//
+// workers 必须一路传到这里：团队的桶写在执行者身上（见 spreadBucket），漏传的话
+// 筛选条上会冒出「排着 / 暂停」，点开却是一条已经干完等你验收的团队。
+export function matchesSpreadFilter(task: TaskListItem, filter: SpreadFilter, workers: TaskListItem[] = []): boolean {
   if (filter === "all") return true;
   if (filter === "starred") return task.starredAt != null;
-  return spreadBucket(task) === filter;
+  return spreadBucket(task, workers) === filter;
 }
 
 // 筛选按钮（铺开态的胶囊、窄态的点）共用同一份计数：口径分两处写，早晚会对不上。
@@ -50,11 +53,14 @@ export function matchesSpreadFilter(task: TaskListItem, filter: SpreadFilter): b
 // 下这个口径自然收窄到「在跑 / 待验收」，不必另开一套计数。
 export function spreadCounts(tasks: TaskListItem[], scope: TaskScope): SpreadCounts {
   const counts: SpreadCounts = { all: 0, starred: 0, todo: 0, run: 0, wait: 0, done: 0, accepted: 0 };
+  // 执行者表按**全量**建：作用域筛过的列表里，团队的执行者虽然也在（scopeTasks 会带上），
+  // 但别指望这一点 —— 桶的判据要的是这个团队真实的执行者集合。
+  const workers = indexWorkers(tasks);
   for (const task of scopeTasks(tasks, scope)) {
     if (task.archived || task.parentId || !visibleOnThisMachine(task)) continue;
     counts.all += 1;
     if (task.starredAt != null) counts.starred += 1;
-    counts[spreadBucket(task)] += 1;
+    counts[spreadBucket(task, workersFrom(workers, task.id))] += 1;
   }
   return counts;
 }
@@ -63,10 +69,11 @@ export function spreadCounts(tasks: TaskListItem[], scope: TaskScope): SpreadCou
 // 别在调用点自己拼 `spreadBucket(task) === filter` —— starred 不是桶,那样星标筛选下
 // 快捷键会拿到空数组,按键被吞但选中不动。
 export function spreadVisibleTasks(tasks: TaskListItem[], scope: TaskScope, filter: SpreadFilter): TaskListItem[] {
+  const workers = indexWorkers(tasks);
   return orderedTopLevelTasks(
     scopeTasks(tasks.filter((task) => !task.archived), scope),
     { unifiedPinned: true },
-  ).filter((task) => matchesSpreadFilter(task, filter));
+  ).filter((task) => matchesSpreadFilter(task, filter, workersFrom(workers, task.id)));
 }
 
 export type SidebarSpread = {

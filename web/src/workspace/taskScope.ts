@@ -1,6 +1,6 @@
 import type { TaskListItem } from "@ash/shared";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
-import { inTaskMode } from "../lib/taskAttention.ts";
+import { indexWorkers, inTaskMode, workersFrom } from "../lib/taskAttention.ts";
 
 // 侧栏任务列表的**作用域**：只看当前项目一家，还是进「任务模式」。
 //
@@ -30,17 +30,11 @@ export const TASK_MODE_SUMMARY = "所有项目里在跑和待验收的任务";
 // 算摘要、展开子行，按顶层判据把它们一起筛掉的话，展开箭头会变成灰的、摘要空一片。
 export function scopeTasks<T extends TaskListItem>(tasks: T[], scope: TaskScope): T[] {
   if (scope.kind === "project") return tasks.filter((task) => task.projectId === scope.projectId);
-  const workersByLead = new Map<string, T[]>();
-  for (const task of tasks) {
-    if (!task.parentId) continue;
-    const workers = workersByLead.get(task.parentId);
-    if (workers) workers.push(task);
-    else workersByLead.set(task.parentId, [task]);
-  }
+  const workers = indexWorkers(tasks);
   const leads = new Set<string>();
   for (const task of tasks) {
     if (task.parentId) continue;
-    if (inTaskMode(task, workersByLead.get(task.id) ?? [])) leads.add(task.id);
+    if (inTaskMode(task, workersFrom(workers, task.id))) leads.add(task.id);
   }
   return tasks.filter((task) => leads.has(task.parentId ?? task.id));
 }

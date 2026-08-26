@@ -2,13 +2,16 @@ import assert from "node:assert/strict";
 import {
   SPREAD_DOT_FILTERS,
   SPREAD_FILTERS,
+  indexWorkers,
   matchesSpreadFilter,
   spreadBucket,
   spreadCounts,
   spreadVisibleTasks,
+  workersFrom,
 } from "../src/workspace/useSidebarSpread.ts";
 import { orderedTopLevelTasks } from "../src/workspace/taskTreeModel.ts";
 import { resolveScopeKind, scopeHasTarget, scopeTasks } from "../src/workspace/taskScope.ts";
+import { inTaskMode } from "../src/lib/taskAttention.ts";
 
 const P1 = { kind: "project", projectId: "p1" };
 const P3 = { kind: "project", projectId: "p3" };
@@ -82,16 +85,26 @@ const rows = orderedTopLevelTasks(
 );
 assert.equal(rows.length, counts.all);
 for (const item of SPREAD_DOT_FILTERS) {
-  assert.equal(rows.filter((row) => matchesSpreadFilter(row, item.key)).length, counts[item.key], item.key);
+  assert.equal(
+    rows.filter((row) => matchesSpreadFilter(row, item.key, workersFrom(indexWorkers(tasks), row.id))).length,
+    counts[item.key],
+    item.key,
+  );
 }
 
 // matchesSpreadFilter 与 spreadBucket 对桶档同口径；星标档只认 starredAt。
+const workerIndex = indexWorkers(tasks);
 for (const row of rows) {
+  const rowWorkers = workersFrom(workerIndex, row.id);
   for (const item of BUCKET_FILTERS) {
-    assert.equal(matchesSpreadFilter(row, item.key), spreadBucket(row) === item.key, `${row.id}:${item.key}`);
+    assert.equal(
+      matchesSpreadFilter(row, item.key, rowWorkers),
+      spreadBucket(row, rowWorkers) === item.key,
+      `${row.id}:${item.key}`,
+    );
   }
-  assert.equal(matchesSpreadFilter(row, "starred"), row.starredAt != null, `${row.id}:starred`);
-  assert.equal(matchesSpreadFilter(row, "all"), true);
+  assert.equal(matchesSpreadFilter(row, "starred", rowWorkers), row.starredAt != null, `${row.id}:starred`);
+  assert.equal(matchesSpreadFilter(row, "all", rowWorkers), true);
 }
 
 // J/K 快捷键遍历的可见列表（spreadVisibleTasks）必须与树同口径。它曾在调用点自己拼
@@ -99,7 +112,7 @@ for (const row of rows) {
 for (const item of SPREAD_FILTERS) {
   assert.deepEqual(
     spreadVisibleTasks(tasks, P1, item.key).map((row) => row.id),
-    rows.filter((row) => matchesSpreadFilter(row, item.key)).map((row) => row.id),
+    rows.filter((row) => matchesSpreadFilter(row, item.key, workersFrom(indexWorkers(tasks), row.id))).map((row) => row.id),
     `visible:${item.key}`,
   );
 }
@@ -160,6 +173,54 @@ assert.ok(!teamRows.includes("team-never"), "从没开过台的团队不算收�
 assert.ok(teamRows.includes("team-live-w"));
 assert.ok(teamRows.includes("team-settled-w"));
 assert.ok(!teamRows.includes("team-accepted-w"));
+
+// **入选判据和状态桶必须是同一套。** 团队调度台自己常年停在 idle，只读它那一行的话
+// 满负荷的团队和早就干完的团队都会落进 wait，于是任务模式的筛选条上冒出一档
+// 「排着 / 暂停 · 1」—— 点开是一条「已完成，等你验收」。桶也得问执行者。
+const teamIndex = indexWorkers(teamTasks);
+const bucketOf = (id) => spreadBucket(teamTasks.find((row) => row.id === id), workersFrom(teamIndex, id));
+assert.equal(bucketOf("team-live"), "run", "执行者在跑的团队要读作「在跑」");
+assert.equal(bucketOf("team-settled"), "done", "收了工的团队跟单飞 done 同义，不是「排着 / 暂停」");
+assert.equal(bucketOf("team-accepted"), "accepted", "盖过章的团队仍归「验收完成」，别被 done 抢走");
+assert.equal(bucketOf("team-never"), "wait", "从没开过台的团队才是真的「排着」");
+
+// 任务模式的口径承诺（只收在跑 / 待验收）落在筛选条上就是这一条：**wait 恒为 0**。
+// 一旦它非零，用户就会在一个自称「只有在跑和待验收」的模式里读到「排着 / 暂停」。
+const teamCounts = spreadCounts(teamTasks, TASKS);
+assert.equal(teamCounts.wait, 0, "任务模式里不该出现「排着 / 暂停」");
+assert.equal(spreadVisibleTasks(teamTasks, TASKS, "wait").length, 0);
+assert.equal(taskMode.wait, 0, "任务模式里不该出现「排着 / 暂停」");
+assert.equal(spreadVisibleTasks(tasks, TASKS, "wait").length, 0);
+assert.equal(teamCounts.run, 1);
+assert.equal(teamCounts.done, 1);
+
+// 穷举一遍把上面那条不变式钉死：**进得了任务模式的行，绝不会落进 wait 桶**。
+// 两处判据（inTaskMode / spreadBucket）以后各自演化时，谁先漂了这里就红。
+const STATUSES = ["backlog", "queued", "running", "idle", "awaiting_review", "paused", "done", "failed", "canceled"];
+const STAGES = [null, "implemented", "verifying", "verified", "verify_failed", "awaiting_acceptance", "merged", "accepted"];
+const WORKER_SETS = [[], ["running"], ["queued"], ["paused"], ["done"], ["done", "failed"], ["running", "done"]];
+let checked = 0;
+for (const mode of ["single", "team"]) {
+  for (const status of STATUSES) {
+    for (const stage of STAGES) {
+      for (const question of [null, "选哪个？"]) {
+        for (const workerStatuses of WORKER_SETS) {
+          const lead = task("lead", { mode, status, stage, question });
+          const workers = workerStatuses.map((workerStatus, at) =>
+            task(`w${at}`, { parentId: "lead", status: workerStatus }));
+          if (!inTaskMode(lead, workers)) continue;
+          checked += 1;
+          assert.notEqual(
+            spreadBucket(lead, workers),
+            "wait",
+            `任务模式收了 ${mode}/${status}/${stage}/${question ? "问" : "不问"}/[${workerStatuses}]，桶却是 wait`,
+          );
+        }
+      }
+    }
+  }
+}
+assert.ok(checked > 100, `穷举样本太少（${checked}），这条不变式等于没钉`);
 
 // 还没选项目时，单项目态没有可显示的树；任务模式永远有目标（筛选条因此照常画出来）。
 assert.equal(scopeHasTarget({ kind: "project", projectId: null }), false);

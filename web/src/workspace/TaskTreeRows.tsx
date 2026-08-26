@@ -10,7 +10,7 @@ import { type IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { SpreadRowCells, useSpreadRow } from "./TaskSpread.tsx";
 import { advanceHiddenReveal } from "./taskTreeModel.ts";
-import { spreadBucket } from "./useSidebarSpread.ts";
+import { spreadBucket, workersFrom, type WorkerIndex } from "./useSidebarSpread.ts";
 
 // 侧栏任务树的**一行**长什么样：状态点、星标、团队展开、铺开后多出来的那几格。
 // 分节、排序和「哪些行进来」在 TaskTree.tsx / taskTreeModel.ts。
@@ -25,6 +25,9 @@ type TaskTreeActions = {
   onStarred: (taskId: string, starredAt: number | null) => void;
   notify: (message: string) => void;
   projectBadges: Map<string, ProjectView> | null;
+  // 团队的状态桶写在执行者身上（见 lib/taskAttention 的 spreadBucket），行也要读它，
+  // 否则「需要你处理」的底色在团队行上判据跟筛选条不是同一套。
+  workerIndex: WorkerIndex;
 };
 
 const TaskTreeActionsContext = createContext<TaskTreeActions | null>(null);
@@ -149,10 +152,11 @@ export function TaskRow({
   const spreadRow = useSpreadRow();
   const spreadCells = spreadRow?.spread.laidOut ? spreadRow : null;
   // 执行者行不挂徽标：它缩进在团队行底下，跟着上面那行走，同一个项目再标一次只是噪音。
-  const badges = useContext(TaskTreeActionsContext)?.projectBadges;
-  const project = canStar ? badges?.get(task.projectId) : undefined;
+  const actions = useContext(TaskTreeActionsContext);
+  const project = canStar ? actions?.projectBadges?.get(task.projectId) : undefined;
+  const bucket = spreadCells ? spreadBucket(task, workersFrom(actions?.workerIndex, task.id)) : null;
   return (
-    <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}${spreadCells && spreadBucket(task) === "todo" ? " is-todo" : ""}${task.starredAt != null ? " has-star" : ""}${canStar ? " can-star" : ""}`}>
+    <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}${bucket === "todo" ? " is-todo" : ""}${task.starredAt != null ? " has-star" : ""}${canStar ? " can-star" : ""}`}>
       <span className="workspace-task-leading">
         {leading ?? <StatusMarker indicator={indicator} />}
       </span>
