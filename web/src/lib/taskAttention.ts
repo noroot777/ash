@@ -68,7 +68,10 @@ export function isTeamSettledLead(task: TaskListItem, workers: TaskListItem[] = 
 //     否则「排着 / 暂停」里会堆着几十个其实早就干完的团队。
 export function spreadBucket(task: TaskListItem, workers: TaskListItem[] = []): SpreadBucket {
   if (task.question) return "todo";
-  if (task.status === "failed" || task.stage === "awaiting_acceptance" || task.stage === "verify_failed") return "todo";
+  if (task.status === "failed" || task.stage === "verify_failed") return "todo";
+  // 等我盖章 = 轮到我动。判据跟任务模式共用一份（见下面 isTaskAwaitingAcceptance）：
+  // 刚收尾还没点头的落这一档，过了窗口的老账落回下面的「已收尾」。
+  if (isTaskAwaitingAcceptance(task, workers)) return "todo";
   if (isTaskLive(task, workers)) return "run";
   // 调度台自己没在说话，底下却有执行者卡在提问上 —— 那句话最后是要你来答的。排在
   // isTaskLive 之后：调度台还在跑就由它自己去答，那种时候事实是「机器在动」。
@@ -114,13 +117,36 @@ export function awaitsYourWord(task: TaskListItem, workers: TaskListItem[] = [])
   return isTeamLead(task) && workers.some((worker) => worker.question || worker.status === "paused");
 }
 
-// 「等我盖章」。只认**显式的** stage=awaiting_acceptance —— 这一档从前回落到「干完了且
-// 没盖过章」，可 stage 多数时候是 null（自由工作流只调 complete_task），于是三百多条早就
-// 收尾的历史任务全被当成待验收堆在任务模式里，模式想说的「还没落地的活」就被淹了。
-// 行首那颗未验收的圆点仍按老口径走（useTaskReadState 的 awaitsAcceptance），两者分工：
-// 点是「我还没点过头」的长期记号，这一档是「这条线现在停在验收关口上」。
-export function isTaskAwaitingAcceptance(task: Pick<TaskListItem, "stage">): boolean {
-  return !isAcceptedStage(task) && task.stage === "awaiting_acceptance";
+// 「等我盖章」。两种都算，判据一份，spreadBucket 和任务模式共用：
+//   · 显式 stage=awaiting_acceptance —— 明着停在验收关口上，多久都算；
+//   · 收了尾、没盖过章、而且是**最近**收的 —— 自由工作流只调 complete_task，stage 多数
+//     时候是 null，这种「已完成，等你点头」占了绝大多数（实测 335 条对 28 条）。
+//
+// 时限是这一档的全部要害。不设时限，三百多条历史任务会把任务模式淹掉（那正是收窄前
+// 的样子）；只认显式的章，今天刚干完的活又一条都进不来 —— 用户看着一条 0.2 小时前
+// 收尾、写着「完成待验收」的任务问「它不该在列表里吗」，问的就是这个。实测这一周内
+// 收尾且没盖章的只有 4 条：一周的窗口接住手头的活，接不住三个月前那批。
+//
+// 读 updatedAt 而不是 endedAt：侧栏的年龄闸（taskTreeModel 的 TASK_PREVIEW_MAX_AGE_MS）
+// 也读它，一个列表里只该有一口时钟；续聊过的老任务因此按「最近碰过」算，这也对。
+//
+// 行首那颗未验收的圆点**不受这个时限管**（useTaskReadState 的 awaitsAcceptance）：
+// 那是「我还没点过头」的长期记号，翻到哪条都得看得见；这一档说的是「这条线现在停在
+// 验收关口上」，过了一周还没人管，它就不再是「现在」的事了。
+export const TASK_MODE_ACCEPTANCE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function isTaskAwaitingAcceptance(
+  task: TaskListItem,
+  workers: TaskListItem[] = [],
+  nowMs = Date.now(),
+): boolean {
+  if (isAcceptedStage(task)) return false;
+  if (task.stage === "awaiting_acceptance") return true;
+  // 团队的「干完了」写在执行者身上，调度台自己没有 done 终态。
+  const settled = task.status === "done" || isTeamSettledLead(task, workers);
+  if (!settled) return false;
+  const updatedAt = Date.parse(task.updatedAt);
+  return Number.isFinite(updatedAt) && nowMs - updatedAt < TASK_MODE_ACCEPTANCE_WINDOW_MS;
 }
 
 export function inTaskMode(task: TaskListItem, workers: TaskListItem[] = []): boolean {
@@ -128,5 +154,5 @@ export function inTaskMode(task: TaskListItem, workers: TaskListItem[] = []): bo
   // 盖过章的一律出局，跟 spreadBucket 把 accepted 排在 run 之后同一个道理：事实高于
   // 记号（验收完又重新开工的上一条已经放行），但只剩记号时它就是「落地了」。
   if (isAcceptedStage(task)) return false;
-  return isTaskAwaitingAcceptance(task) || awaitsYourWord(task, workers);
+  return isTaskAwaitingAcceptance(task, workers) || awaitsYourWord(task, workers);
 }
