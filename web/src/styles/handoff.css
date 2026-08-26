@@ -423,7 +423,6 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   .handoff-progress-orbit i { animation: none; }
 }
 .handoff-bulk-dialog > .handoff-route-card { margin-bottom: 10px; }
-.handoff-bulk-lede { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .handoff-bulk-result { padding-bottom: 8px; }
 .handoff-bulk-result .handoff-bulk-failures { width: min(520px, 100%); margin-top: 18px; text-align: left; }
 .handoff-bulk-body {
@@ -525,16 +524,13 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
 }
 
 .handoff-bulk-skipped {
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--raised);
-  padding: 8px 10px;
+  padding: 0 2px;
 }
 
 .handoff-bulk-skipped summary {
-  color: var(--muted);
+  color: var(--faint);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 10.5px;
 }
 
 .handoff-bulk-skipped ul,
@@ -568,7 +564,6 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   color: var(--faint);
 }
 
-.handoff-bulk-summary,
 .handoff-bulk-notes {
   display: grid;
   gap: 5px;
@@ -607,35 +602,91 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   padding: 9px 10px;
 }
 
-.handoff-bulk-blocked {
-  border: 1px solid color-mix(in lch, var(--red) 24%, var(--line));
-  border-radius: 9px;
-  background: color-mix(in lch, var(--red) 6%, var(--panel));
-  padding: 9px 10px;
+.handoff-bulk-picks {
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--panel);
+  overflow: hidden;
 }
 
-.handoff-bulk-blocked > p {
-  color: var(--red);
-  font-size: 11px;
-  line-height: 1.45;
+.handoff-bulk-picks > header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--line);
+  background: var(--raised);
+  padding: 9px 12px;
 }
 
-.handoff-bulk-blocked ul {
+.handoff-bulk-picks > header b { font-size: 12.5px; font-weight: 680; }
+.handoff-bulk-picks > header span { color: var(--muted); font-size: 11px; }
+
+.handoff-bulk-picks ul {
   display: grid;
-  gap: 7px;
-  max-height: 140px;
+  max-height: 260px;
   overflow: auto;
-  margin: 8px 0 0;
+  margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.handoff-bulk-blocked li {
+.handoff-bulk-picks li {
   display: grid;
-  gap: 2px;
-  font-size: 10.5px;
+  grid-template-columns: 8px minmax(0, 1fr);
+  align-items: start;
+  gap: 3px 9px;
+  padding: 10px 12px;
 }
 
-.handoff-bulk-blocked li span {
-  color: var(--faint);
+.handoff-bulk-picks li + li { border-top: 1px solid color-mix(in lch, var(--line) 60%, transparent); }
+.handoff-bulk-picks li.is-active { background: color-mix(in lch, var(--accent) 5%, transparent); }
+.handoff-bulk-picks li.is-failed { background: color-mix(in lch, var(--red) 5%, transparent); }
+
+.handoff-bulk-pick-dot {
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0 3px color-mix(in lch, var(--green) 18%, transparent);
 }
+
+.handoff-bulk-pick-title {
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.handoff-bulk-pick-state {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.handoff-bulk-pick-state > svg { flex: 0 0 auto; color: var(--green); }
+.handoff-bulk-picks li.is-active .handoff-bulk-pick-state > svg { color: var(--accent); }
+.handoff-bulk-picks li.is-failed .handoff-bulk-pick-state { color: var(--red); }
+.handoff-bulk-picks li.is-failed .handoff-bulk-pick-state > svg { color: var(--red); }
+.handoff-bulk-pick-state .is-muted { color: var(--faint); }
+
+/* 身份/加密核对通过、以及"带走什么"这类背景说明，都退到一行安静的元信息里，
+   把视觉重量留给上面的任务清单。出问题时仍走 handoff-bulk-warning 的显眼样式。 */
+.handoff-bulk-meta {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.handoff-bulk-meta > svg { flex: 0 0 auto; margin-top: 2px; color: var(--green); }
+.handoff-bulk-meta.is-quiet { color: var(--faint); }
+.handoff-bulk-meta.is-alert { color: var(--red); }

@@ -11,6 +11,7 @@ import { Check, Fingerprint, LockKey, SpinnerGap, Warning } from "@phosphor-icon
 import { api, type TaskScopedHandoffPreflightResult } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { HandoffDialogHeader, HandoffRouteCard } from "../task-detail/HandoffDialogViews.tsx";
+import { BulkHandoffTaskList } from "./BulkHandoffTaskList.tsx";
 import {
   bulkIdentityMismatchWarning,
   bulkIdentityUnavailableWarning,
@@ -131,7 +132,7 @@ export function BulkHandoffDialog({
   const [projectId, setProjectId] = useState("");
   const [autoResume, setAutoResume] = useState(true);
   const [phase, setPhase] = useState<BusyPhase>("idle");
-  const [progress, setProgress] = useState<{ done: number; total: number; title: string } | null>(null);
+  const [progress, setProgress] = useState<{ done: number; total: number; taskId: string } | null>(null);
   const [result, setResult] = useState<{ successes: HandoffExportResult[]; failures: TransferFailure[] } | null>(null);
 
   useEffect(() => {
@@ -196,7 +197,7 @@ export function BulkHandoffDialog({
       for (let index = 0; index < eligible.length; index += 1) {
         if (!mounted.current) return;
         const task = eligible[index];
-        setProgress({ done: index, total: eligible.length, title: task.title });
+        setProgress({ done: index, total: eligible.length, taskId: task.id });
         try {
           const { taskTarget, probe } = await probeBulkTask(task, taskSelectedTarget);
           const issue = bulkPreflightIssue(probe, "");
@@ -263,7 +264,7 @@ export function BulkHandoffDialog({
       }
       const probeTask = eligible.find((task) => task.id === firstProbeTaskId) ?? sample;
       if (!probeTask) return;
-      setProgress({ done: 0, total: eligible.length, title: probeTask.title });
+      setProgress({ done: 0, total: eligible.length, taskId: probeTask.id });
       const { taskTarget, probe } = await probeBulkTask(probeTask, taskSelectedTarget);
       if (mounted.current) rememberFirstProbe(probeTask.id, taskTarget, probe);
     } catch (reason) {
@@ -290,7 +291,7 @@ export function BulkHandoffDialog({
     for (let index = 0; index < eligible.length; index += 1) {
       if (!mounted.current) return;
       const task = eligible[index];
-      setProgress({ done: index, total: eligible.length, title: task.title });
+      setProgress({ done: index, total: eligible.length, taskId: task.id });
       try {
         let taskTarget = resolvedTargets.get(task.id);
         let probe = checked.get(task.id);
@@ -330,7 +331,7 @@ export function BulkHandoffDialog({
     const failures: TransferFailure[] = [...preflightFailures];
     for (let index = 0; index < runnable.length; index += 1) {
       const task = runnable[index];
-      setProgress({ done: index, total: runnable.length, title: task.title });
+      setProgress({ done: index, total: runnable.length, taskId: task.id });
       try {
         const taskTarget = taskTargets.get(task.id) ?? await targetForBulkTask(task, target);
         const probe = preflights.get(task.id);
@@ -353,18 +354,11 @@ export function BulkHandoffDialog({
     if (mounted.current) setPhase("idle");
   };
 
-  const aggregate = useMemo(() => {
-    const rows = [...preflights.values()];
-    return {
-      sessions: rows.reduce((sum, row) => sum + row.local.sessions, 0),
-      sessionFilesFound: rows.reduce((sum, row) => sum + row.local.sessionFilesFound, 0),
-      uploads: rows.reduce((sum, row) => sum + row.local.uploads, 0),
-      pendingMessages: rows.reduce((sum, row) => sum + row.local.pendingMessages, 0),
-      scheduled: rows.filter((row) => row.local.schedule).length,
-      gitBundles: rows.filter((row) => row.local.git === "bundle").length,
-      notes: [...new Set(rows.flatMap((row) => row.local.notes))],
-    };
-  }, [preflights]);
+  // 每个任务带走什么已经逐行写在清单里，这里只汇总服务端给的额外提醒。
+  const notes = useMemo(
+    () => [...new Set([...preflights.values()].flatMap((row) => row.local.notes))],
+    [preflights],
+  );
   const readyTasks = eligible.filter((task) => preflights.has(task.id) && taskTargets.has(task.id));
   const needsBatchProject = !returnOnly;
   const projectOptions = returnOnly ? [] : firstProbe?.projects ?? [];
@@ -375,15 +369,13 @@ export function BulkHandoffDialog({
       ? probe.projects.slice(0, 1).map((candidate) => candidate.id)
       : [];
   })).size;
-  const groupedPreflightFailures = useMemo(
-    () => groupBulkHandoffFailures(preflightFailures),
-    [preflightFailures],
-  );
   const groupedResultFailures = useMemo(
     () => groupBulkHandoffFailures(result?.failures ?? []),
     [result],
   );
   const identityMismatch = identityNotice?.kind === "mismatch";
+  // 身份核对通过又加密时不值得占两张卡：压成一行元信息，出问题才展开成警告。
+  const peerQuiet = Boolean(firstProbe?.peer && firstProbe.peer.trust === "matched" && firstProbe.peer.encrypted);
 
   const confirm = () => {
     if (identityResolving || identityMismatch) return;
@@ -465,7 +457,6 @@ export function BulkHandoffDialog({
                   : "按任务归位 · 原项目待逐项确认"
                 : selectedProject?.repoPath ?? target.url}
             />
-            <p className="handoff-bulk-lede">{message}</p>
             <div className="handoff-bulk-body">
         {identityNotice && (
           <p className="handoff-bulk-warning" role="alert">
@@ -473,38 +464,23 @@ export function BulkHandoffDialog({
             <span>{identityNotice.message}</span>
           </p>
         )}
-        <p className="handoff-bulk-scope">只搬此刻正在跑的任务；会迁移完整 CLI 会话、附件与可带走的 Git 状态，本机任务确认{actionName}后会从任务列表消失。</p>
-        {eligible.length > 0 && (
-          <p className="handoff-bulk-warning"><Warning size={13} aria-hidden="true" />
-            这 {eligible.length} 个任务正在运行或排队，正式{actionName}会先停止它们，再由目标机接着跑。
-          </p>
-        )}
-        {!eligible.length && (
+        {eligible.length > 0 ? (
+          <BulkHandoffTaskList
+            tasks={eligible}
+            preflights={preflights}
+            failures={preflightFailures}
+            activeTaskId={phase === "preflight" || phase === "transferring" ? progress?.taskId ?? null : null}
+            transferring={phase === "transferring"}
+            actionName={actionName}
+            targetName={target.name}
+          />
+        ) : (
           <p className="handoff-bulk-warning">这个项目现在没有正在跑的任务可{actionName}。已经收工的任务留在本机就行；真要单独搬某一条，去它的任务详情用单任务接力。</p>
         )}
-        {idleSkipped.length > 0 && (
-          <p className="handoff-bulk-scope">另有 {idleSkipped.length} 个任务没在跑，不参与批量{actionName}。</p>
-        )}
-        {blockedSkipped.length > 0 && (
-          <details className="handoff-bulk-skipped" open={!eligible.length}>
-            <summary>另有 {blockedSkipped.length} 个在跑的任务不会移动</summary>
-            <ul>{blockedSkipped.map(({ task, reason }) => <li key={task.id}><b>{task.title}</b><span>{reason}</span></li>)}</ul>
-          </details>
-        )}
-        {approval && !firstProbe && <p className="handoff-bulk-peer"><Fingerprint size={13} aria-hidden="true" /><span>{approvalText(approval)}</span></p>}
-        {firstProbe?.peer ? (
-          <p className={`handoff-bulk-peer${blocked ? " is-warn" : ""}`}>
-            <Fingerprint size={13} aria-hidden="true" />
-            <span>目标机身份 <b>{firstProbe.peer.short}</b>{firstProbe.peer.trust === "first-seen" ? "（第一次核对，请和对端设置页指纹比对）" : "（和已记住的身份一致）"}</span>
-          </p>
-        ) : firstProbe ? (
-          <p className="handoff-bulk-peer is-warn"><Warning size={13} aria-hidden="true" /><span>目标机没有报出身份，无法核对对端是不是原来的机器，也无法加密；整个仓库和会话历史会明文传输。</span></p>
-        ) : null}
-        {firstProbe?.peer && (
-          <p className={`handoff-bulk-peer${firstProbe.peer.encrypted ? "" : " is-warn"}`}>
-            {firstProbe.peer.encrypted ? <LockKey size={13} aria-hidden="true" /> : <Warning size={13} aria-hidden="true" />}
-            <span>{firstProbe.peer.encrypted ? "仓库和会话将加密传输。" : "这次会明文传输整个仓库和会话历史，同网段抓包可读取内容。"}</span>
-          </p>
+        {preflightFailures.length > 0 && (
+          <p className="handoff-bulk-meta is-alert">{checkedAll
+            ? `${preflightFailures.length} 个任务没通过检查，本次跳过；其余 ${readyTasks.length} 个照常${actionName}。`
+            : `${preflightFailures.length} 个任务检查失败，原因见上面各行。处理后点“重新检查”。`}</p>
         )}
         {firstProbe && !blocked && needsBatchProject && (
           <label className="handoff-bulk-field">
@@ -521,45 +497,63 @@ export function BulkHandoffDialog({
             <strong>每个任务将自动回到它在来源机上的原项目</strong>
           </div>
         )}
-        {checkedAll && (
-          <ul className="handoff-bulk-summary">
-            <li>
-              已逐个检查 {preflights.size} 个任务：CLI 会话 {aggregate.sessions} 个，找到会话文件 {aggregate.sessionFilesFound} 份
-              {aggregate.sessions > aggregate.sessionFilesFound ? `，缺失 ${aggregate.sessions - aggregate.sessionFilesFound} 份（对端会全新起跑对应会话）` : ""}
-            </li>
-            <li>{aggregate.gitBundles} 个任务会携带 Git 分支或未提交改动，附件共 {aggregate.uploads} 个</li>
-            {aggregate.pendingMessages > 0 && <li>待发送消息 {aggregate.pendingMessages} 条会迁移到目标机</li>}
-            {aggregate.scheduled > 0 && <li>带定时计划的任务 {aggregate.scheduled} 个，之后由目标机触发</li>}
-          </ul>
-        )}
-        {aggregate.notes.length > 0 && checkedAll && <ul className="handoff-bulk-notes">{aggregate.notes.map((note) => <li key={note}>{note}</li>)}</ul>}
         {firstProbe && !blocked && (
           <label className="handoff-bulk-toggle">
             <input type="checkbox" checked={autoResume} disabled={busy} onChange={(event) => setAutoResume(event.target.checked)} />
             <span>{actionName}完成后在目标机自动续跑</span>
           </label>
         )}
+        {notes.length > 0 && checkedAll && <ul className="handoff-bulk-notes">{notes.map((note) => <li key={note}>{note}</li>)}</ul>}
         {blocked && <p className="handoff-bulk-warning">目标机尚未批准本机。请在目标机接受申请后，再点击“检查申请状态”。</p>}
         {error && <p className="handoff-bulk-error">{error}</p>}
-        {(progress || phase === "approval") && (
+        {(phase === "approval" || phase === "transferring") && (
           <div className="handoff-bulk-progress" role="status">
             <SpinnerGap size={15} className="is-spinning" aria-hidden="true" />
             <span>
               {phase === "approval"
                 ? "正在联系目标机…"
-                : `${phase === "transferring" ? `正在${actionName}` : "正在预检"} · ${progress!.done + 1}/${progress!.total} · ${progress!.title}`}
+                : `正在${actionName} · ${(progress?.done ?? 0) + 1}/${progress?.total ?? eligible.length}`}
             </span>
           </div>
         )}
-        {preflightFailures.length > 0 && (
-          <div className="handoff-bulk-blocked">
-            <p>{checkedAll
-              ? `有 ${preflightFailures.length} 个任务未通过预检，将跳过；其余 ${readyTasks.length} 个可以继续迁移。`
-              : `有 ${preflightFailures.length} 个任务预检失败。处理后可点击“重新检查”。`}</p>
-            <ul>{groupedPreflightFailures.map(({ tasks: failedTasks, reason }) => (
-              <li key={reason}><b>{failureTaskLabel(failedTasks)}</b><span>{reason}</span></li>
-            ))}</ul>
-          </div>
+        {approval && !firstProbe && <p className="handoff-bulk-peer"><Fingerprint size={13} aria-hidden="true" /><span>{approvalText(approval)}</span></p>}
+        {peerQuiet ? (
+          <p className="handoff-bulk-meta">
+            <LockKey size={12} aria-hidden="true" />
+            <span>目标机身份 {firstProbe!.peer!.short} 已核对，仓库和会话加密传输。</span>
+          </p>
+        ) : (
+          <>
+            {firstProbe?.peer ? (
+              <p className={`handoff-bulk-peer${blocked ? " is-warn" : ""}`}>
+                <Fingerprint size={13} aria-hidden="true" />
+                <span>目标机身份 <b>{firstProbe.peer.short}</b>{firstProbe.peer.trust === "first-seen" ? "（第一次核对，请和对端设置页指纹比对）" : "（和已记住的身份一致）"}</span>
+              </p>
+            ) : firstProbe ? (
+              <p className="handoff-bulk-peer is-warn"><Warning size={13} aria-hidden="true" /><span>目标机没有报出身份，无法核对对端是不是原来的机器，也无法加密；整个仓库和会话历史会明文传输。</span></p>
+            ) : null}
+            {firstProbe?.peer && !firstProbe.peer.encrypted && (
+              <p className="handoff-bulk-peer is-warn">
+                <Warning size={13} aria-hidden="true" />
+                <span>这次会明文传输整个仓库和会话历史，同网段抓包可读取内容。</span>
+              </p>
+            )}
+          </>
+        )}
+        {(eligible.length > 0 || idleSkipped.length > 0) && (
+          <p className="handoff-bulk-meta is-quiet">
+            <span>
+              {eligible.length > 0
+                && `每个任务带走完整 CLI 会话、附件与可带走的 Git 状态，本机这份确认${actionName}后从列表消失。`}
+              {idleSkipped.length > 0 && ` 另有 ${idleSkipped.length} 个任务没在跑，不参与批量${actionName}。`}
+            </span>
+          </p>
+        )}
+        {blockedSkipped.length > 0 && (
+          <details className="handoff-bulk-skipped">
+            <summary>{blockedSkipped.length} 个在跑的任务这次搬不了</summary>
+            <ul>{blockedSkipped.map(({ task, reason }) => <li key={task.id}><b>{task.title}</b><span>{reason}</span></li>)}</ul>
+          </details>
         )}
             </div>
           </>

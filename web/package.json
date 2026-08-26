@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node ../scripts/check-conventions.mjs && npm run test:bulk-handoff && npm run test:remote-task && npm run test:handoff-dialog-lifetime && npm run test:conversation && npm run test:task-read-state && npm run test:scheduled-message-tray && tsc -b && vite build",
+    "build": "node ../scripts/check-conventions.mjs && npm run test:bulk-handoff && npm run test:bulk-handoff-dialog && npm run test:remote-task && npm run test:handoff-dialog-lifetime && npm run test:conversation && npm run test:task-read-state && npm run test:scheduled-message-tray && tsc -b && vite build",
     "test:image-preview": "node scripts/test-image-preview.mjs",
     "test:inspector-shortcuts": "node --experimental-strip-types scripts/test-inspector-shortcuts.mjs",
     "test:inspector-attachments": "node scripts/test-inspector-attachments.mjs",
@@ -55,7 +55,8 @@
     "typecheck": "tsc -p tsconfig.json",
     "preview": "vite preview",
     "test:agent-plate": "node scripts/test-agent-plate.mjs",
-    "test:reply-resize": "node scripts/test-reply-resize.mjs"
+    "test:reply-resize": "node scripts/test-reply-resize.mjs",
+    "test:bulk-handoff-dialog": "node scripts/test-bulk-handoff-dialog.mjs"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",
