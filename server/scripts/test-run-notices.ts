@@ -126,5 +126,10 @@ process.stdin.on("end", () => process.exit(0));
   "兼容性提示也必须实时发布");
   console.log("✓ runTask 原生路径落 detached 接管字段；忽略参数提示持久可见且不泄露值");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  rmSync(root, {
+    recursive: true,
+    force: true,
+    maxRetries: IS_WINDOWS ? 20 : 0,
+    retryDelay: 100,
+  });
 }
