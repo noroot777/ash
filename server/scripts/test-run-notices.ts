@@ -7,6 +7,7 @@ import type { ServerEvent } from "@ash/shared";
 import { parseSessionOutput } from "@ash/shared";
 import { eq } from "drizzle-orm";
 import { IS_WINDOWS } from "../src/platform.js";
+import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-run-notices-"));
 process.env.ASH_DB = join(root, "ash.db");
@@ -126,6 +127,7 @@ process.stdin.on("end", () => process.exit(0));
   "兼容性提示也必须实时发布");
   console.log("✓ runTask 原生路径落 detached 接管字段；忽略参数提示持久可见且不泄露值");
 } finally {
+  await releaseTmpDb();
   rmSync(root, {
     recursive: true,
     force: true,
