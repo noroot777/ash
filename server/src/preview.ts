@@ -15,9 +15,8 @@ import { createServer } from "node:net";
 import { existsSync, mkdirSync, openSync, closeSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PreviewLife, WorkflowStep } from "@ash/shared/workflow";
-import type { FreeWorkflowPreviewEventSource } from "@ash/shared";
+import { bus } from "./bus.js";
 import { augmentedEnv, killByPid } from "./executors/spawn.js";
-import { recordFreePreviewEventIfFree } from "./free-workflow-events.js";
 import { RUNS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
 import { portConflict, pickPreviewUrl, portHint } from "./preview-log.js";
@@ -121,7 +120,7 @@ export async function startPreview(
   step: PreviewStep,
   cwd: string,
 ): Promise<PreviewResult> {
-  await stopPreview(taskId, null, "system");
+  await stopPreview(taskId, null);
   const dir = join(RUNS_DIR, taskId);
   mkdirSync(dir, { recursive: true });
   const log = join(dir, "preview.log");
@@ -213,22 +212,17 @@ export async function startPreview(
 
 // 收掉一个任务的预览。reason 非空才往时间线写一行——刷新后仍能看出「预览被收了、
 // 为什么收的」，这是停止/暂停那条规矩的同一条判据。
-export async function stopPreview(
-  taskId: string,
-  reason: string | null,
-  source: FreeWorkflowPreviewEventSource = "system",
-): Promise<boolean> {
+export async function stopPreview(taskId: string, reason: string | null): Promise<boolean> {
   const record = readPreview(taskId);
   if (!record) return false;
   // 不先看组长是否还活着：组长死、vite 仍留在同一进程组，正是必须回收的现场。
   killByPid(record.pid);
   rmSync(recordPath(taskId), { force: true });
   if (reason) await appendTaskTimeline(taskId, `预览已回收（${reason}）：${record.url ?? record.cmd}`);
-  await recordFreePreviewEventIfFree(taskId, {
-    kind: "preview_closed",
-    source,
-    detail: record.url ?? record.cmd,
-  });
+  // 自由工作流状态里的 preview.running 变了就必须发事件：那份快照的版本号只由
+  // task.review / task.status 递增，不发的话前端拿到的新快照版本相等，会被当成
+  // 「不比现值新」丢掉——按钮就一直停在「关闭预览」上。
+  bus.publish({ type: "task.review", taskId });
   return true;
 }
 
@@ -253,7 +247,7 @@ export async function stopPreviewAtAccept(taskId: string): Promise<void> {
 
 /** 任务又开跑了：预览指向的是上一版代码，一律收掉，免得对着旧页面验新改动。 */
 export async function stopPreviewOnRerun(taskId: string): Promise<void> {
-  if (readPreview(taskId)) await stopPreview(taskId, "任务重新开跑，旧预览指向的是上一版代码", "rerun");
+  if (readPreview(taskId)) await stopPreview(taskId, "任务重新开跑，旧预览指向的是上一版代码");
 }
 
 // 清扫：进程早死了的记录、以及 idle30 那一档到点的。启动时先扫一遍，之后每 5 分钟一次

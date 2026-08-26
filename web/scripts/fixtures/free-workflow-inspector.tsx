@@ -17,7 +17,6 @@ const state = {
   workspaceDirty: false,
   reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null, runId: null },
   preview: { running: false, url: null, port: null, command: null, startedAt: null },
-  previewEvents: [],
   executions: [
     { id: "execution-1", status: "completed", startedAt: "2026-08-09T00:00:00.000Z", endedAt: "2026-08-09T00:09:00.000Z" },
     { id: "execution-2", status: "completed", startedAt: "2026-08-09T00:20:00.000Z", endedAt: "2026-08-09T00:29:00.000Z" },
@@ -87,7 +86,6 @@ const acceptanceState = {
   workspaceDirty: false,
   reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null, runId: null },
   preview: { running: false, url: null, port: null, command: null, startedAt: null },
-  previewEvents: [],
   executions: [{
     id: "execution-accept",
     status: "completed",
@@ -172,7 +170,6 @@ const repairState: FreeWorkflowApiState = {
   workspaceDirty: false,
   reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null, runId: null },
   preview: { running: false, url: null, port: null, command: null, startedAt: null },
-  previewEvents: [],
   executions: [{
     id: "repair-execution", status: "completed",
     startedAt: "2026-08-09T01:00:00.000Z", endedAt: "2026-08-09T01:09:00.000Z",
