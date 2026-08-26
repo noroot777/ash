@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import type { ServerEvent } from "@ash/shared";
 import { parseSessionOutput } from "@ash/shared";
 import { eq } from "drizzle-orm";
+import { IS_WINDOWS } from "../src/platform.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-run-notices-"));
 process.env.ASH_DB = join(root, "ash.db");
@@ -13,7 +14,7 @@ process.env.ASH_RUNS_DIR = join(root, "runs");
 process.env.ASH_LAX_DONE = "1";
 process.env.ASH_ALLOW_REAL_AGENT = "1";
 process.env.ASH_NOTICE_TRIGGER = join(root, "finish");
-process.env.PATH = `${root}:${process.env.PATH ?? ""}`;
+process.env.PATH = `${root}${delimiter}${process.env.PATH ?? ""}`;
 
 const [
   { db, ensureSchema },
@@ -35,8 +36,9 @@ try {
   writeFileSync(join(root, "seed.txt"), "seed\n");
   execFileSync("git", ["-C", root, "add", "seed.txt"]);
   execFileSync("git", ["-C", root, "commit", "-m", "seed"]);
-  const fakeCodex = join(root, "codex");
-  writeFileSync(fakeCodex, `#!/usr/bin/env node
+  const fakeCodexScript = join(root, IS_WINDOWS ? "fake-codex.mjs" : "codex");
+  const fakeCodex = join(root, IS_WINDOWS ? "codex.cmd" : "codex");
+  writeFileSync(fakeCodexScript, `#!/usr/bin/env node
 import { existsSync } from "node:fs";
 let input = "";
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
@@ -67,7 +69,8 @@ process.stdin.on("data", (chunk) => {
 });
 process.stdin.on("end", () => process.exit(0));
 `);
-  chmodSync(fakeCodex, 0o755);
+  if (IS_WINDOWS) writeFileSync(fakeCodex, `@node "%~dp0fake-codex.mjs" %*\r\n`);
+  else chmodSync(fakeCodex, 0o755);
 
   const at = new Date().toISOString();
   await db.insert(projects).values({ id: "p", name: "notice", repoPath: root, apiKeys: null, createdAt: at });
