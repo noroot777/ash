@@ -9,6 +9,7 @@
 @import "./task-tree.css";
 @import "./task-mode.css";
 @import "./workspace.css";
+@import "./project-switcher.css";
 @import "./workspace-enhancements.css";
 @import "./project-git.css";
 @import "./terminal.css";

@@ -5,6 +5,7 @@ import { TaskTree } from "../../src/workspace/TaskTree.tsx";
 import type { SidebarSpread } from "../../src/workspace/useSidebarSpread.ts";
 import "../../src/styles/global.css";
 import "../../src/styles/workspace.css";
+import "../../src/styles/project-switcher.css";
 import "../../src/styles/task-tree.css";
 import "../../src/styles/task-mode.css";
 
