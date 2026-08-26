@@ -12,7 +12,6 @@ import { api, type TaskScopedHandoffPreflightResult } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { HandoffDialogHeader, HandoffRouteCard } from "../task-detail/HandoffDialogViews.tsx";
 import {
-  applyBulkHandoffScope,
   bulkIdentityMismatchWarning,
   bulkIdentityUnavailableWarning,
   bulkPreflightAllowsRun,
@@ -22,10 +21,8 @@ import {
   bulkTargetAddressHintMatches,
   bulkTaskReturnsToTarget,
   bulkTargetProjectId,
-  isLiveBulkTask,
   partitionBulkHandoffTasks,
   resolveBulkTargetIdentity,
-  type BulkHandoffScope,
 } from "./bulkHandoff.ts";
 
 type TransferFailure = { task: TaskListItem; reason: string };
@@ -105,23 +102,18 @@ export function BulkHandoffDialog({
     ? target
     : { ...target, peerFp: batchFingerprint };
   const returnOnlyMode = !target.peerFp && Boolean(resolvedReturnFingerprint);
-  const partition = useMemo(() => partitionBulkHandoffTasks(
+  // 清单只含此刻还在跑的任务：接力是把活挪到别的机器上继续，不是搬项目历史。
+  const { eligible, skipped } = useMemo(() => partitionBulkHandoffTasks(
     frozenTasks,
     project.id,
     batchFingerprint,
     returnOnlyMode,
   ), [batchFingerprint, frozenTasks, project.id, returnOnlyMode]);
-  const liveCount = useMemo(() => partition.eligible.filter(isLiveBulkTask).length, [partition]);
-  // 没选过就跟着清单走（身份解析后可接力集合会变）；用户选过之后以他的选择为准。
-  const [scopeChoice, setScopeChoice] = useState<BulkHandoffScope | null>(null);
-  const scope: BulkHandoffScope = scopeChoice ?? (liveCount > 0 ? "live" : "all");
-  const { eligible, skipped } = useMemo(
-    () => applyBulkHandoffScope(partition, scope),
-    [partition, scope],
-  );
   const returnOnly = eligible.length > 0 && eligible.every(
     (task) => bulkTaskReturnsToTarget(task, batchFingerprint),
   );
+  const idleSkipped = skipped.filter((skip) => skip.kind === "idle");
+  const blockedSkipped = skipped.filter((skip) => skip.kind !== "idle");
   const canProbeWithoutApproval = Boolean(target.peerFp) || returnOnly;
   const actionName = returnOnly ? "移回" : "接力";
   const sample = eligible[0] ?? null;
@@ -146,18 +138,6 @@ export function BulkHandoffDialog({
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
-
-  // 范围一变，"已检查 N 个"就不再对应当前清单：预检结果按任务 id 留着复用，
-  // 但必须退回"待检查"，否则跳过计数和可执行判据都会拿旧清单的数字。
-  const lastScope = useRef(scope);
-  useEffect(() => {
-    if (lastScope.current === scope) return;
-    lastScope.current = scope;
-    setCheckedAll(false);
-    setPreflightFailures([]);
-    setError(null);
-    if (!firstProbe) autoProbeAttempted.current = false;
-  }, [firstProbe, scope]);
 
   useEffect(() => {
     if (!identityResolving) return;
@@ -263,12 +243,6 @@ export function BulkHandoffDialog({
   const busy = phase !== "idle";
   const canClose = !busy || phase === "approval" || phase === "preflight";
   useDismissable({ enabled: canClose, containerRef: modalScrim, onClose });
-  const runningCount = eligible.filter(isLiveBulkTask).length;
-  // 换过范围之后旧清单的预检结果还留在 map 里，参与计数就会把"已检查"算爆。
-  const scopedPreflights = useMemo(() => {
-    const inScope = new Set(eligible.map((task) => task.id));
-    return new Map([...preflights].filter(([taskId]) => inScope.has(taskId)));
-  }, [eligible, preflights]);
 
   const requestApproval = async () => {
     if (busy) return;
@@ -307,7 +281,7 @@ export function BulkHandoffDialog({
     // “重新检查”仍会拿旧项目清单再次失败，看起来像按钮没作用。
     const checked = preflightFailures.length > 0
       ? new Map<string, TaskScopedHandoffPreflightResult>()
-      : new Map(scopedPreflights);
+      : new Map(preflights);
     const resolvedTargets = preflightFailures.length > 0
       ? new Map<string, HandoffTarget>()
       : new Map(taskTargets);
@@ -349,7 +323,7 @@ export function BulkHandoffDialog({
   };
 
   const run = async () => {
-    const runnable = eligible.filter((task) => scopedPreflights.has(task.id) && taskTargets.has(task.id));
+    const runnable = eligible.filter((task) => preflights.has(task.id) && taskTargets.has(task.id));
     if ((needsBatchProject && !projectId) || busy || !runnable.length || !checkedAll) return;
     setPhase("transferring");
     const successes: HandoffExportResult[] = [];
@@ -359,7 +333,7 @@ export function BulkHandoffDialog({
       setProgress({ done: index, total: runnable.length, title: task.title });
       try {
         const taskTarget = taskTargets.get(task.id) ?? await targetForBulkTask(task, target);
-        const probe = scopedPreflights.get(task.id);
+        const probe = preflights.get(task.id);
         const targetProjectId = probe ? bulkTargetProjectId(task, probe, projectId) : projectId;
         if (!targetProjectId) throw new Error("目标项目不可用，请重新检查");
         successes.push(await api.handoffTask(task.id, {
@@ -380,7 +354,7 @@ export function BulkHandoffDialog({
   };
 
   const aggregate = useMemo(() => {
-    const rows = [...scopedPreflights.values()];
+    const rows = [...preflights.values()];
     return {
       sessions: rows.reduce((sum, row) => sum + row.local.sessions, 0),
       sessionFilesFound: rows.reduce((sum, row) => sum + row.local.sessionFilesFound, 0),
@@ -390,13 +364,12 @@ export function BulkHandoffDialog({
       gitBundles: rows.filter((row) => row.local.git === "bundle").length,
       notes: [...new Set(rows.flatMap((row) => row.local.notes))],
     };
-  }, [scopedPreflights]);
-  const readyTasks = eligible.filter((task) => scopedPreflights.has(task.id) && taskTargets.has(task.id));
-  const readyRunningCount = readyTasks.filter(isLiveBulkTask).length;
+  }, [preflights]);
+  const readyTasks = eligible.filter((task) => preflights.has(task.id) && taskTargets.has(task.id));
   const needsBatchProject = !returnOnly;
   const projectOptions = returnOnly ? [] : firstProbe?.projects ?? [];
   const selectedProject = projectOptions.find((candidate) => candidate.id === projectId) ?? null;
-  const fixedReturnProjectCount = new Set([...scopedPreflights.entries()].flatMap(([taskId, probe]) => {
+  const fixedReturnProjectCount = new Set([...preflights.entries()].flatMap(([taskId, probe]) => {
     const task = eligible.find((candidate) => candidate.id === taskId);
     return task?.handoff?.direction === "in" && probe.taskScopedReturn
       ? probe.projects.slice(0, 1).map((candidate) => candidate.id)
@@ -434,15 +407,12 @@ export function BulkHandoffDialog({
       ? canProbeWithoutApproval && !blocked ? `重新检查${returnOnly ? "来源机" : "目标机"}` : blocked ? `检查${actionName}申请状态` : `发送${actionName}申请`
       : !checkedAll
         ? `${preflightFailures.length > 0 ? "重新检查" : "检查"} ${eligible.length} 个${actionName}任务`
-        : readyRunningCount > 0
-          ? `停止并${actionName} ${readyTasks.length} 个任务${preflightFailures.length ? `（跳过 ${preflightFailures.length} 个）` : ""}`
-          : `${actionName} ${readyTasks.length} 个任务${preflightFailures.length ? `（跳过 ${preflightFailures.length} 个）` : ""}`;
-  const scopeSuffix = scope === "live" ? "正在运行或排队的" : "可";
+        : `停止并${actionName} ${readyTasks.length} 个任务${preflightFailures.length ? `（跳过 ${preflightFailures.length} 个）` : ""}`;
   const message = result
     ? `已完成批量${actionName}：成功 ${result.successes.length} 个，失败 ${result.failures.length} 个。`
     : returnOnly
-      ? `把本机「${project.name}」项目中 ${eligible.length} 个${scope === "live" ? "正在运行或排队的" : ""}接入任务顺序移回「${target.name}」。`
-      : `把本机「${project.name}」项目中 ${eligible.length} 个${scopeSuffix}${actionName}任务顺序移到「${target.name}」。`;
+      ? `把本机「${project.name}」项目中 ${eligible.length} 个正在跑的接入任务顺序移回「${target.name}」。`
+      : `把本机「${project.name}」项目中 ${eligible.length} 个正在跑的任务顺序${actionName}到「${target.name}」。`;
 
   return createPortal(
     <div
@@ -503,34 +473,22 @@ export function BulkHandoffDialog({
             <span>{identityNotice.message}</span>
           </p>
         )}
-        <label className="handoff-bulk-field">
-          <span>本次{actionName}范围</span>
-          <select
-            value={scope}
-            disabled={busy}
-            onChange={(event) => setScopeChoice(event.target.value as BulkHandoffScope)}
-          >
-            <option value="live" disabled={liveCount === 0}>
-              只移动正在运行或排队的任务（{liveCount} 个）
-            </option>
-            <option value="all">全部可{actionName}任务（{partition.eligible.length} 个）</option>
-          </select>
-        </label>
-        <p className="handoff-bulk-scope">会迁移完整 CLI 会话、附件与可带走的 Git 状态；本机任务确认{actionName}后会从任务列表消失。</p>
-        {runningCount > 0 && (
+        <p className="handoff-bulk-scope">只搬此刻正在跑的任务；会迁移完整 CLI 会话、附件与可带走的 Git 状态，本机任务确认{actionName}后会从任务列表消失。</p>
+        {eligible.length > 0 && (
           <p className="handoff-bulk-warning"><Warning size={13} aria-hidden="true" />
-            {runningCount === eligible.length ? `这 ${runningCount} 个任务都` : `其中 ${runningCount} 个任务`}正在运行或排队，正式{actionName}会先停止它们。
+            这 {eligible.length} 个任务正在运行或排队，正式{actionName}会先停止它们，再由目标机接着跑。
           </p>
         )}
         {!eligible.length && (
-          <p className="handoff-bulk-warning">{scope === "live"
-            ? "这个项目当前没有正在运行或排队的可接力任务。切换到“全部”可查看其余任务。"
-            : "这个项目目前没有可批量接力的顶层单飞任务。展开下方列表可查看原因。"}</p>
+          <p className="handoff-bulk-warning">这个项目现在没有正在跑的任务可{actionName}。已经收工的任务留在本机就行；真要单独搬某一条，去它的任务详情用单任务接力。</p>
         )}
-        {skipped.length > 0 && (
+        {idleSkipped.length > 0 && (
+          <p className="handoff-bulk-scope">另有 {idleSkipped.length} 个任务没在跑，不参与批量{actionName}。</p>
+        )}
+        {blockedSkipped.length > 0 && (
           <details className="handoff-bulk-skipped" open={!eligible.length}>
-            <summary>另有 {skipped.length} 个任务不会移动</summary>
-            <ul>{skipped.map(({ task, reason }) => <li key={task.id}><b>{task.title}</b><span>{reason}</span></li>)}</ul>
+            <summary>另有 {blockedSkipped.length} 个在跑的任务不会移动</summary>
+            <ul>{blockedSkipped.map(({ task, reason }) => <li key={task.id}><b>{task.title}</b><span>{reason}</span></li>)}</ul>
           </details>
         )}
         {approval && !firstProbe && <p className="handoff-bulk-peer"><Fingerprint size={13} aria-hidden="true" /><span>{approvalText(approval)}</span></p>}
@@ -566,7 +524,7 @@ export function BulkHandoffDialog({
         {checkedAll && (
           <ul className="handoff-bulk-summary">
             <li>
-              已逐个检查 {scopedPreflights.size} 个任务：CLI 会话 {aggregate.sessions} 个，找到会话文件 {aggregate.sessionFilesFound} 份
+              已逐个检查 {preflights.size} 个任务：CLI 会话 {aggregate.sessions} 个，找到会话文件 {aggregate.sessionFilesFound} 份
               {aggregate.sessions > aggregate.sessionFilesFound ? `，缺失 ${aggregate.sessions - aggregate.sessionFilesFound} 份（对端会全新起跑对应会话）` : ""}
             </li>
             <li>{aggregate.gitBundles} 个任务会携带 Git 分支或未提交改动，附件共 {aggregate.uploads} 个</li>

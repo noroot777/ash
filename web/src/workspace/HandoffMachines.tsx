@@ -54,7 +54,7 @@ export function HandoffMachines({
                 </span>
                 <button
                   type="button"
-                  aria-label={`批量接力本项目任务到 ${target.name}`}
+                  aria-label={`把本项目正在跑的任务接力到 ${target.name}`}
                   onClick={() => setSelected(target)}
                 >
                   <PaperPlaneTilt size={13} weight="bold" aria-hidden="true" />

@@ -4,30 +4,13 @@ import type { TaskScopedHandoffPreflightResult } from "../lib/api.ts";
 export type BulkHandoffSkip = {
   task: TaskListItem;
   reason: string;
+  // "idle" = 只是没在跑，不是哪里出了问题；弹窗把这类压成一行计数。
+  kind?: "idle";
 };
-
-// 批量接力的默认对象是「此刻还在跑的活」——把整个项目几百个已完成任务一起搬过去，
-// 传输代价和误伤面都远大于收益。想整体搬家时再显式切到 all。
-export type BulkHandoffScope = "live" | "all";
 
 // 与「正式接力会先停止它们」的警告同一套判据：只有这两种状态的任务真的占着执行槽。
 export const isLiveBulkTask = (task: TaskListItem): boolean =>
   task.status === "running" || task.status === "queued";
-
-export function applyBulkHandoffScope<T extends TaskListItem>(
-  partition: { eligible: T[]; skipped: BulkHandoffSkip[] },
-  scope: BulkHandoffScope,
-): { eligible: T[]; skipped: BulkHandoffSkip[] } {
-  if (scope === "all") return partition;
-  return {
-    eligible: partition.eligible.filter(isLiveBulkTask),
-    skipped: [
-      ...partition.skipped,
-      ...partition.eligible.filter((task) => !isLiveBulkTask(task))
-        .map((task) => ({ task, reason: "没有在运行，本次范围只含运行中或排队的任务" })),
-    ],
-  };
-}
 
 export function bulkPreflightIssue(
   probe: TaskScopedHandoffPreflightResult,
@@ -113,12 +96,22 @@ export function bulkTaskReturnsToTarget(
     && sameFingerprint(task.handoff.peerFp, targetFingerprint);
 }
 
-const bulkTaskBaseReason = (task: TaskListItem): string | null => {
-  if (task.mode !== "single") return "目前只支持单飞任务";
-  if (task.queueId != null) return "仍在任务队列中";
-  if (task.verifyRound != null) return "验证轮尚未结束";
-  if (task.handoff?.direction === "out" && task.handoff.pending) return "上次接力仍待确认，需单独收口";
-  if (task.handoff?.direction === "out") return "已经接力出去";
+// 「没在跑」是批量接力最常见也最无聊的落选原因（一个老项目里有几百条），
+// 单独标出来，好让弹窗把它压成一行，而不是塞满「不会移动」清单。
+type BulkTaskBlock = { reason: string; kind?: "idle" };
+
+const bulkTaskBaseReason = (task: TaskListItem): BulkTaskBlock | null => {
+  // 先划候选池：批量接力搬的是「此刻还在跑的活」，不是项目搬家。已经收工的任务留在
+  // 本机就行；真要单独搬某一条历史任务，走任务详情里的单任务接力。放在最前面，
+  // 剩下的落选原因就都是「在跑但搬不了」，弹窗可以照这个分法讲。
+  if (!isLiveBulkTask(task)) return { reason: "没有在运行，批量接力只移动正在跑的任务", kind: "idle" };
+  if (task.mode !== "single") return { reason: "目前只支持单飞任务" };
+  if (task.queueId != null) return { reason: "仍在任务队列中" };
+  if (task.verifyRound != null) return { reason: "验证轮尚未结束" };
+  if (task.handoff?.direction === "out" && task.handoff.pending) {
+    return { reason: "上次接力仍待确认，需单独收口" };
+  }
+  if (task.handoff?.direction === "out") return { reason: "已经接力出去" };
   return null;
 };
 
@@ -201,16 +194,16 @@ export function partitionBulkHandoffTasks<T extends TaskListItem>(
     && (task.handoff?.direction !== "out" || Boolean(task.handoff.pending)));
 
   for (const task of candidates) {
-    let reason = bulkTaskBaseReason(task);
-    if (!reason && returnOnly && task.handoff?.direction !== "in") {
-      reason = "当前目标仅授予接入任务移回权限，本地任务不会随本批次发送";
+    let block = bulkTaskBaseReason(task);
+    if (!block && returnOnly && task.handoff?.direction !== "in") {
+      block = { reason: "当前目标仅授予接入任务移回权限，本地任务不会随本批次发送" };
     }
-    if (!reason && task.handoff?.direction === "in"
+    if (!block && task.handoff?.direction === "in"
       && !bulkTaskReturnsToTarget(task, targetFingerprint)) {
-      reason = "未能确认任务来源机就是当前所选主机";
+      block = { reason: "未能确认任务来源机就是当前所选主机" };
     }
 
-    if (reason) skipped.push({ task, reason });
+    if (block) skipped.push({ task, ...block });
     else eligible.push(task);
   }
 
