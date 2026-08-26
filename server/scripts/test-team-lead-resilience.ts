@@ -466,10 +466,13 @@ try {
   while (teamIsLive(SHARED) && Date.now() < sharedDeadline) await new Promise((r) => setTimeout(r, 20));
   ok("被接管的旧调度台不会把共用的会话行提前写成已结束");
 
-  // ── ⑨ 用户点「停止全组」后的会话更正:是 system 旁注,不是红色执行诊断 ──────────────
-  // 停止一个正常回合本身不是失败。可这一路必须补一句「刚才那条『再说一句就能接回』
-  // 作废了」—— 要是照旧走 writeRunError,用户主动停一次就在时间线上收获一笔红色
-  // 「执行异常」,正是这次改动想消除的症状。
+  // ── ⑨ 「停止全组」之后才作废的会话:收尾必须更正,而且是 system 旁注不是红色诊断 ─────
+  // 按下按钮那一刻会话还在,所以 haltTeam 照实写了「再说一句话就能接回同一会话」——
+  // 紧接着 CLI 判死了这条会话。不补一句「上面那条不作数了」,用户刷新后看到的指引与真实
+  // 状态正好相反,照做一次再撞一次墙。但停止一个正常回合本身不是失败:补的这一句要是照旧
+  // 走 writeRunError,用户主动停一次就在时间线上收获一笔红色「执行异常」。
+  // (会话在按下按钮**之前**就作废的那一档由 haltTeam 当场照实说,不留更正 ——
+  //  test-team-session-notice.ts 从那头钉着。)
   let haltReady!: () => void;
   const haltWaiting = new Promise<void>((r) => { haltReady = r; });
   let releaseHalt!: () => void;
@@ -477,18 +480,18 @@ try {
   const g = await runLead("halt-correction", {
     cliSessionId: "poisoned-thread",
     script: async function* () {
-      yield { kind: "error", message: POISON, scope: "session" }; // 会话判死并清库成功
       haltReady();
-      await holdHalt; // 等用户按下「停止全组」
+      await holdHalt; // 会话还好好的,用户先按下「停止全组」
+      yield { kind: "error", message: POISON, scope: "session" }; // 按完才判死并清库成功
       yield { kind: "done", exitStatus: 0 };
     },
     whileLive: async (taskId) => {
       await haltWaiting;
-      await new Promise((r) => setTimeout(r, 50)); // 让上一条 poisoned 走完清库
       await haltTeam(taskId);
       releaseHalt();
     },
   });
+  assert.match(g.md, /再说一句话就能把调度者接回同一会话/, "这一档的前提是按下按钮时会话还在,停止说明照实承诺了接回");
   assert.match(g.md, /更正上面那条/, "会话已作废却不更正「再说一句就能接回」,用户照做只会再撞一次墙");
   assert.doesNotMatch(
     g.md,

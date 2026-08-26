@@ -144,12 +144,22 @@ export function detectKnownClis(): Promise<DetectedCli[]> {
   return Promise.all(KNOWN_CLIS.map(detectOne));
 }
 
-export async function registrationVersionWarning(type: AgentType): Promise<string | undefined> {
+/**
+ * 注册闸:装的是受影响版本就不让它注册(用户 2026-08-25「而且不让它注册」)。
+ *
+ * 返回的是**拒绝理由**,而且刻意**不带任何版本诊断** —— 连「本机装的版本有缺陷」都不能
+ * 说。注册可以从任何入口发起(Profile 组里的「新增」、API 直连、旧前端),那些入口跟
+ * 「检测本地智能体」无关;用户的口径是**亲手点了检测、并且检测出 0.147.x,才做版本提示**,
+ * 所以这里只说「这次没注册成,先去点检测」,把版本这件事整个留给检测结果。
+ * 升级怎么做由 `DetectedCli.versionWarning` 在检测结果卡片里讲。
+ */
+export async function registrationBlockReason(type: AgentType): Promise<string | undefined> {
   if (type !== "codex") return undefined;
   const cli = KNOWN_CLIS.find((candidate) => candidate.type === type);
   if (!cli) return undefined;
   const probe = await probeBins(cli.bins, cli.fallbackVersionMatch);
-  return versionWarningFor(type, probe?.version ?? null);
+  if (!isAffectedCodexVersion(probe?.version ?? null)) return undefined;
+  return "暂时不能把 Codex 注册为执行器。请先在「执行器」页点「检测本地智能体」，按检测结果处理。";
 }
 
 // 派任务视角的精简形状(形状保持不变):团队/讨论的执行器选择器靠它决定谁能当

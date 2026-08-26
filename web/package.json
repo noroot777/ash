@@ -12,6 +12,7 @@
     "test:open-with": "node scripts/test-open-with-menu.mjs",
     "test:run-target-picker": "node scripts/test-run-target-picker.mjs",
     "test:executor-picker-field": "node scripts/test-executor-picker-field.mjs",
+    "test:agent-profile-add-gate": "node scripts/test-agent-profile-add-gate.mjs",
     "test:team-review-inspector": "node scripts/test-team-review-inspector.mjs",
     "test:free-review-copy": "node --experimental-strip-types scripts/test-free-review-copy.mjs",
     "test:reviewer-profile-summary": "node scripts/test-reviewer-profile-summary.mjs",

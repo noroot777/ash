@@ -545,6 +545,20 @@ export function buildConversationItems(
       });
       continue;
     }
+    // 会话轮换信号（`scope:"session"`，见 server 的 session-notice.ts）不是本回合的
+    // 失败：服务端已经把它转成持久 system 注记，这里再兜一道，免得任何漏转的直播事件
+    // 把一次 exit 0 的健康回合渲染成红色「异常」。
+    if (event.kind === "error" && event.scope === "session") {
+      appendEvent(items, {
+        kind: "event",
+        id: entry.id,
+        text: event.message,
+        sessionId: entry.event.sessionId,
+        tone: noteTone(event.message),
+        variant: "note",
+      });
+      continue;
+    }
     if (event.kind === "done") {
       appendEvent(items, {
         kind: "event",

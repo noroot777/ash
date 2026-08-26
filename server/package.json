@@ -62,6 +62,7 @@
     "test:claude-stream": "tsx scripts/test-claude-stream-errors.ts",
     "test:session-lost": "tsx scripts/test-session-lost.ts",
     "test:duet-session-lost": "tsx scripts/test-duet-session-lost.ts",
+    "test:session-notice": "tsx scripts/test-session-notice.ts && tsx scripts/test-team-session-notice.ts",
     "test:codex-resident": "tsx scripts/test-codex-resident.ts",
     "test:session-trace": "tsx scripts/test-session-trace.ts",
     "test:conversation-turn": "tsx scripts/test-conversation-turn.ts",

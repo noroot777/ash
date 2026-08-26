@@ -299,11 +299,13 @@ assert.match(
   /async function endTurn[\s\S]*?await updateOwnSession\(\s*lead,\s*"回合收尾状态"/,
   "endTurn 的回合收尾写库必须走 updateOwnSession(它内含 persistOrReport),否则一次写库失败会掀掉整台调度台",
 );
-// scope 分流:三条链都得认这个字段,少一条就会在成功回合上记异常。
+// scope 分流:三条链都得认这个字段,少一条就会在成功回合上记异常。判据只有 session-notice.ts
+// 那一份 —— 谁在自己那条链上再内联写一次 `scope === "session"`,改一处就会漏一处
+// (test-session-notice.ts 从反面钉着同一条)。
 for (const [chain, owner] of [["single", "single-run.ts"], ["team", "team/session.ts"], ["duet", "duet/turn.ts"]]) {
   assert.match(
     readFileSync(join(SRC, owner!), "utf8"),
-    /scope === "session"/,
+    /isSessionScopeNotice/,
     `${chain} 没按 scope 分流会话轮换诊断,成功回合会被记成有异常`,
   );
 }

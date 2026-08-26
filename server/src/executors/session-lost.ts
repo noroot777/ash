@@ -95,17 +95,18 @@ export const LOST_SESSION_PATCH: { cliSessionId: null } & { [K in keyof ResumeFi
 };
 
 /**
- * 清掉失效 id 之后写给用户的那两句话。
- *
- * 正文住在 `@ash/shared/session-notes` —— 前端 `noteTone` 要拿同一份文本判「这是会话
- * 轮换，不是执行失败」，两边各写一份就会漂移（那头一红，一个 exit 0 的正常回合在用户
- * 眼里就成了异常）。这里只做转发，服务端各处照旧从这个模块引。
+/**
+ * 三条说明的措辞与「这算不算轮换」的判据都住在 `@ash/shared/session-notes` —— 前端
+ * `noteTone` 要拿同一份文本判「这是会话轮换,不是执行失败」,两边各写一份就会漂移
+ * (那头一红,一个 exit 0 的正常回合在用户眼里就成了异常)。这里只做转发,服务端各处
+ * 照旧从这个模块引。
  */
-export { SESSION_LOST_NOTE, SESSION_POISONED_NOTE };
-
-export const SESSION_DROP_PERSISTENCE_FAILED_NOTE =
-  "ash 已停止本次进程继续使用这条失效的 CLI 会话；但恢复字段写入数据库失败，"
-  + "下一次重新开台时可能再次尝试旧会话。";
+export {
+  SESSION_LOST_NOTE,
+  SESSION_POISONED_NOTE,
+  SESSION_DROP_PERSISTENCE_FAILED_NOTE,
+  isSessionRotationNote,
+} from "@ash/shared/session-notes";
 
 export function sessionResumeFaultNote(fault: SessionResumeFault): string {
   return fault === "poisoned" ? SESSION_POISONED_NOTE : SESSION_LOST_NOTE;

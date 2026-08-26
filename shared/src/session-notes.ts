@@ -46,6 +46,23 @@ export const NO_RESUMABLE_SESSION_NOTE =
   "这台调度台没有可续的 CLI 会话 id（还没建起来，或者它没能写进数据库），"
   + "下次运行会开一条全新会话：之前的上下文不会带过来，任务正文和历史记录都还在。";
 
+/**
+ * 这条**不是**轮换说明：恢复字段没写进数据库，下一次可能再撞旧会话 —— 真出了问题，
+ * 该红就红。所以它刻意不进 `NEUTRAL_SESSION_NOTES`，也不进 `isSessionRotationNote`。
+ */
+export const SESSION_DROP_PERSISTENCE_FAILED_NOTE =
+  "ash 已停止本次进程继续使用这条失效的 CLI 会话；但恢复字段写入数据库失败，"
+  + "下一次重新开台时可能再次尝试旧会话。";
+
+/**
+ * `executors/diagnostics.ts` 里 poisoned 诊断的固定前缀 —— 跟上面两条说的是同一件事的
+ * 另一半（诊断说「为什么判它坏了」，说明说「ash 替你做了什么」），两条都要中性。
+ *
+ * 单拎出来当判据，是因为诊断正文由 stderr 指纹拼出来、以后还会加新指纹：哪天有一条
+ * 写了「异常」，这条中性旁注就会无声地变红。认前缀就不吃这个亏。
+ */
+export const SESSION_POISON_DIAGNOSIS_PREFIX = "Codex 会话诊断：session=poisoned_session";
+
 /** 这几句是「会话换了」的中性事实，不是失败。前端据此判中性。 */
 export const NEUTRAL_SESSION_NOTES: readonly string[] = [
   SESSION_LOST_NOTE,
@@ -55,13 +72,13 @@ export const NEUTRAL_SESSION_NOTES: readonly string[] = [
 ];
 
 /**
- * 修好之前那两句的原文，一字不改地留在这里。
+ * 修好之前那几句的原文，一字不改地留在这里。
  *
- * 上面那两条常量改了措辞（去掉 Markdown 标记、把「落盘异常」换成「落盘出了问题」），
+ * 上面那两条常量改过措辞（去掉 Markdown 标记、把「落盘异常」换成「落盘出了问题」），
  * 可**用户 `.md` 里已经落着的是旧文案**：升级之后刷新页面，那条记录仍然按关键词命中
  * 「异常」判红，星号也照样露着 —— 一次修复只覆盖了以后要写的数据，用户抱怨的那条一个
- * 字都没变（2026-08-26 第 8 轮审查）。所以判色和渲染都得认这两句旧的，把它们归一成当前
- * 文案。这不是「兼容任意历史措辞」：只收发布过的这两句原文，认不出来的照旧走关键词表。
+ * 字都没变（2026-08-26 第 8 轮审查）。所以判色和渲染都得认这几句旧的，把它们归一成当前
+ * 文案。这不是「兼容任意历史措辞」：只收发布过的原文，认不出来的照旧走关键词表。
  */
 const LEGACY_SESSION_LOST_NOTE =
   "上一轮记下的 CLI 会话 id 在 CLI 那边已经不存在了（多半是第一次起跑就失败、"
@@ -69,16 +86,22 @@ const LEGACY_SESSION_LOST_NOTE =
   + "ash 已经把这个失效的 id 清掉：再点一次运行会开一条**全新会话**，"
   + "之前的上下文不会带过来，任务正文和历史记录都还在。";
 
-const LEGACY_SESSION_POISONED_NOTE =
+/** 带 Markdown 标记的那一版 poisoned 说明。 */
+const LEGACY_SESSION_POISONED_STARRED =
   "Codex 已在本轮 stderr 中报告这条 thread 的回合关联、world-state 或 rollout 落盘异常；"
   + "即使进程 exit 0 且发出 turn.completed，也不能再把它当作可恢复会话；"
   + "会话轮换不改变本回合真实的退出原因。"
   + "ash 已清掉这条会话的恢复字段：下一次运行会从任务正文自动开启一条**全新会话**，"
   + "旧对话与执行记录仍保留，但之前的上下文不会带过去。";
 
+/** 星号已经去掉、但「落盘异常」还在的那一版（`639b5775` 到本次归并之间写下的）。 */
+const LEGACY_SESSION_POISONED_PLAIN = LEGACY_SESSION_POISONED_STARRED.split("**").join("");
+
 const LEGACY_REWRITES: ReadonlyArray<readonly [string, string]> = [
   [LEGACY_SESSION_LOST_NOTE, SESSION_LOST_NOTE],
-  [LEGACY_SESSION_POISONED_NOTE, SESSION_POISONED_NOTE],
+  // 长的排在前面:短的那条是长的去掉星号,先换长的才不会把星号版切成两半。
+  [LEGACY_SESSION_POISONED_STARRED, SESSION_POISONED_NOTE],
+  [LEGACY_SESSION_POISONED_PLAIN, SESSION_POISONED_NOTE],
 ];
 
 /**
@@ -95,8 +118,8 @@ export function normalizeSessionNoteText(text: string): string {
  * 把中性轮换旁注从一句话里摘掉，剩下的才交给关键词表判语气。
  *
  * 为什么不是「含轮换旁注就中性」：收尾那句是拼出来的（`更正上面那条：…` + 一段说明），
- * 而那段说明可能正是「恢复字段写入数据库失败」这类**真失败**。整句判中性就把真失败也
- * 洗白了；摘掉中性部分再判，两种句子各归各位。
+ * 而那段说明可能正是 `SESSION_DROP_PERSISTENCE_FAILED_NOTE` 这类**真失败**。整句判中性
+ * 就把真失败也洗白了；摘掉中性部分再判，两种句子各归各位。
  *
  * 先归一再摘：调用方未必记得先 normalize（时间线通告、直播事件都会走到这里），而漏掉
  * 一处的后果就是那条历史记录继续红着。
@@ -105,4 +128,20 @@ export function stripSessionNotes(text: string): string {
   let rest = normalizeSessionNoteText(text);
   for (const note of NEUTRAL_SESSION_NOTES) rest = rest.split(note).join("");
   return rest;
+}
+
+/**
+ * 这条旁注在讲「ash 已经替你换了一条会话」吗。
+ *
+ * 用 `includes` 而不是相等：服务端会在前面接一句上下文（「更正上面那条…」「调度台进程
+ * 意外退出(exit 1)。」），说的还是同一件事。先归一，历史文案才认得出来。
+ *
+ * **它不是判色用的**：判色走 `stripSessionNotes` + 关键词表 —— 拼出来的那种句子里可能
+ * 还夹着一段真失败，「含轮换说明就中性」会把它一起洗白。
+ */
+export function isSessionRotationNote(text: string): boolean {
+  const normalized = normalizeSessionNoteText(text);
+  return normalized.includes(SESSION_LOST_NOTE)
+    || normalized.includes(SESSION_POISONED_NOTE)
+    || normalized.includes(SESSION_POISON_DIAGNOSIS_PREFIX);
 }

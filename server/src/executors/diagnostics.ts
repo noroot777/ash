@@ -1,5 +1,6 @@
 import { closeSync, mkdirSync, openSync, writeFileSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
+import { SESSION_POISON_DIAGNOSIS_PREFIX } from "@ash/shared/session-notes";
 import { codexSessionPoisonReason } from "./session-lost.js";
 
 export interface RunTracePaths {
@@ -126,7 +127,9 @@ export function formatFailureForTimeline(d: RunDiagnostics): string | null {
 export function formatSessionPoisonForTimeline(d: RunDiagnostics): string | null {
   if (!d.sessionPoisonedReason) return null;
   const files = [d.eventsPath, d.stderrPath].filter(Boolean).join("；");
-  return `Codex 会话诊断：session=poisoned_session；${d.sessionPoisonedReason}`
+  // 前缀取自 shared:前端靠它认出「这条旁注在讲会话轮换」并保持中性,自己拼一份
+  // 字面量就会在改文案时无声地漂移(见 @ash/shared/session-notes)。
+  return `${SESSION_POISON_DIAGNOSIS_PREFIX}；${d.sessionPoisonedReason}`
     + `\n本回合仍按 ${d.terminationKind} 结算，但这条恢复 thread 必须作废。`
     + (files ? `\n原始日志：${files}` : "");
 }
