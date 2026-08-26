@@ -5,7 +5,7 @@ import type { AgentEvent, TokenUsage } from "@ash/shared";
 import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
 import { formatFailureForTimeline, RunTraceRecorder, type RunTracePaths } from "./diagnostics.js";
 import { detachedInfo, spawnControllableForRun, type DetachedPaths } from "./detached.js";
-import { forceFinishOnExit, killChild, redactSecrets, shq, spawnErrorMessage } from "./spawn.js";
+import { cleanupAfterRun, forceFinishOnExit, killChild, redactSecrets, shq, spawnErrorMessage } from "./spawn.js";
 import type { RunHandle } from "./types.js";
 
 type TokenBreakdown = {
@@ -306,6 +306,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     events,
     notices: opts.notices,
     detached: detachedInfo(child),
+    cleanup: () => cleanupAfterRun(child),
     steer(text: string) {
       const operation = steerTail.then(async () => {
         await ready;

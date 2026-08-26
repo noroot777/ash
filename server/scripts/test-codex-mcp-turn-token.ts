@@ -112,6 +112,7 @@ if (args.includes("app-server")) {
   for await (const _event of handle.events) {
     // 消费到进程退出，确保 probe 已写完。
   }
+  await handle.cleanup?.();
 
   const childEnv = JSON.parse(readFileSync(output, "utf8")) as Record<string, string>;
   assert.equal(childEnv.ASH_TASK_ID, taskId, "Codex MCP 子进程应收到发起任务 id");
@@ -131,6 +132,7 @@ if (args.includes("app-server")) {
   for await (const _event of noMcpHandle.events) {
     // 等假 Codex 完整退出。
   }
+  await noMcpHandle.cleanup?.();
   assert.ok(!noMcpHandle.commandLine.includes("mcp_servers."), "未配置 MCP 时 Codex argv 不得出现无效 server 覆盖");
   assert.ok(!noMcpHandle.commandLine.includes(turnToken), "未配置 MCP 的降级路径同样不得泄露 token");
   const noMcpChildEnv = JSON.parse(readFileSync(output, "utf8")) as Record<string, string>;
