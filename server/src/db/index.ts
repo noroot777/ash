@@ -129,6 +129,13 @@ export async function ensureSchema() {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS queue_items_queue_pos_idx
       ON queue_items (queue_id, position);
+    CREATE TABLE IF NOT EXISTS team_inbound (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id TEXT NOT NULL,
+      text TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS team_inbound_task_idx ON team_inbound (task_id, seq);
     CREATE TABLE IF NOT EXISTS workflows (
       id TEXT PRIMARY KEY, builtin_key TEXT, name TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '', def TEXT NOT NULL,

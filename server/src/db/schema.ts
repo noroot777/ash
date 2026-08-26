@@ -472,6 +472,28 @@ export const queueItems = sqliteTable(
   }),
 );
 
+// 团队调度台**还没送进 CLI**的入站消息(执行者汇报/提问、ash 的唤醒语)。
+//
+// 调度台忙着的时候这些消息只能等它这一回合说完再合并送进去(见 team/session.ts 头注),
+// 而「等着」这段时间横跨换台、关台和 server 重启 —— 全放内存里的话,进程一换就什么都
+// 不剩:落回 idle 的团队任务开机时不会被唤醒(task-reconcile.ts 只叫醒还在跑的),那份
+// 执行结果、失败说明或待回答的提问就永久消失了(2026-08-26 第 12 轮审查)。
+//
+// 删行的唯一条件是 ResidentHandle.send() 明确回执「收下了」——拒收、抛错、换台、重启
+// 一律留着,由下一台调度台认领。写入/认领/销账都在 team/inbound-queue.ts。
+export const teamInbound = sqliteTable(
+  "team_inbound",
+  {
+    // 自增整数就是到达序号。执行者汇报必须按到达顺序合并送出,而同一毫秒来两条是常态
+    // (一批执行者同时收工),靠时间戳 + nanoid 排不出确定的先后。
+    seq: integer("seq").primaryKey({ autoIncrement: true }),
+    taskId: text("task_id").notNull(),
+    text: text("text").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => ({ taskIdx: index("team_inbound_task_idx").on(t.taskId, t.seq) }),
+);
+
 // 供应商(relay), system-level. 挂给执行器用:启动 CLI 时注入 base_url + key,
 // 顶掉 CLI 自己的官方登录账号。ash 自己不再直连 HTTP 调模型。
 export const llmProviders = sqliteTable("llm_providers", {

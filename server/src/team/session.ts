@@ -57,6 +57,7 @@ import { withSkillInvocation, nativeCliCommand } from "../skills.js";
 import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
 import { latestTeamLeadSession } from "./session-selection.js";
+import { consumeInbound, enqueueInbound, pendingInbound, type PendingInbound } from "./inbound-queue.js";
 import {
   idleRotation,
   onFreshSession,
@@ -96,9 +97,9 @@ interface Lead {
   out: Writable;
   busy: boolean;
   turnStart: string | null;
-  // 回合进行中攒下的执行者消息,turnEnd 时合并成一条送。**它们不属于这台调度台**:
-  // 换台或关台时会被交到托盘上等下一台认领(strandPending / adoptStranded)。
-  pending: string[];
+  // 回合进行中攒下的执行者消息,turnEnd 时合并成一条送。**这里只是持久队列的内存镜像**:
+  // 真相在 team_inbound 表里,送成之前谁也不许销账(见 team/inbound-queue.ts)。
+  pending: PendingInbound[];
   // 会话轮换旁注:实时立刻播,落盘攒到 writeTurnEnd 之后再补 —— 重建时 agentEnd 只往
   // 「最后一段是 agent」的气泡上盖时间戳(shared/src/index.ts),夹在正文和 agentEnd
   // 之间会让这一回合的用时失准。
@@ -117,11 +118,6 @@ interface Lead {
 
 const leads = new Map<string, Lead>();
 const opening = new Map<string, Promise<Lead>>();
-// 旧台交出去时手上那批还没送出的执行者汇报(见 strandPending)。它们既没进 CLI 也没落盘
-// —— 入站消息是等 endTurn 合并投递时才 recordSystemTurn 的,所以没人接住就等于一份执行
-// 结果、一句失败说明或一个待回答的提问凭空消失,而调度者会在缺这些事实的情况下接着做
-// 决定(2026-08-26 第 10 轮审查)。下一台调度台一挂上线就认领(adoptStranded)。
-const strandedInbound = new Map<string, string[]>();
 
 export function teamIsLive(taskId: string): boolean {
   return leads.has(taskId) || opening.has(taskId);
@@ -235,9 +231,10 @@ async function deliver(
       return true;
     }
   }
-  push(lead, text, kind);
+  await push(lead, text, kind);
   return true;
 }
+
 
 // 调度台此刻不在线时,配置里写的是哪种 CLI(判定 `/compact` 这类原生命令要用)。
 // 导出给路由层用:立即回复端点要先认出「这是发给调度台的原生命令」,才能把「送不出去」
@@ -287,7 +284,7 @@ function open(taskId: string, text: string, kind: Kind): Promise<Lead> {
   return p;
 }
 
-function push(lead: Lead, text: string, kind: Kind): void {
+async function push(lead: Lead, text: string, kind: Kind): Promise<void> {
   if (!text.trim()) return;
   clearIdle(lead);
   if (kind === "user") {
@@ -309,17 +306,18 @@ function push(lead: Lead, text: string, kind: Kind): void {
     return;
   }
   if (lead.busy) {
-    lead.pending.push(text); // 回合结束再合并成一条,省一轮模型调用
+    // 回合结束再合并成一条,省一轮模型调用 —— 但**先落库**:这一等横跨换台、关台和重启,
+    // 只压在内存里的话,进程一换这条汇报就没了(见 team/inbound-queue.ts)。
+    lead.pending.push(await enqueueInbound(lead.taskId, text));
     return;
   }
   const at = now();
   // 跟 endTurn 同一条规矩:**先确认进程收下了,再算它送出去了**。还挂在 leads 里不等于
-  // stdin 还开着 —— 空闲回收 close() 到 closeLead 之间就是这么一个窗口。没收下就当它还
-  // 欠着:攒进 pending,由 closeLead 交回托盘等下一台送(这时候别落盘,否则下一台真送成
-  // 时同一条汇报会在 .md 里出现两遍)。
+  // stdin 还开着 —— 空闲回收 close() 到 closeLead 之间就是这么一个窗口。没收下就排进持久
+  // 队列等下一台送(这时候别落盘正文,否则下一台真送成时同一条汇报会在 .md 里出现两遍)。
   if (!sendToLead(lead, text)) {
-    lead.pending.push(text);
-    reportLeadFailure(lead, "执行者消息没能送进调度台进程(它正在收尾),先留着交给下一台接手的调度台。", at);
+    lead.pending.push(await enqueueInbound(lead.taskId, text));
+    reportLeadFailure(lead, "执行者消息没能送进调度台进程(它正在收尾),先排进待送队列交给下一台接手的调度台。", at);
     return;
   }
   recordSystemTurn(lead, text, at);
@@ -461,14 +459,34 @@ export function attachLead(lead: Lead): void {
   const previous = leads.get(lead.taskId);
   if (previous && previous !== lead) retireLead(previous);
   leads.set(lead.taskId, lead);
-  // 认领在**这台之前**交班留下的入站消息。要排在 consume 之前:万一这台的事件流当场就
-  // 结束了,closeLead 会把它们原样放回托盘,而不是跟着这台一起没。
-  adoptStranded(lead);
   void consume(lead).catch((err) => console.error(`[ash] team consume(${lead.taskId}) failed:`, err));
+}
+
+/**
+ * 认领这条任务名下还没送出去的入站消息 —— 上一台没送成的、换台丢下的、上一个 server
+ * 进程留下的,都在这儿接回来(队列本身见 team/inbound-queue.ts)。
+ *
+ * 放在 consume 的开头而不是 attachLead 里,是因为读库要 await 而 attachLead 必须同步返回;
+ * 排在 for-await 之前就够了 —— 事件都在 generator 里排着,turnEnd 一定在认领之后才处理。
+ * 按 seq 去重是防这一手:认领读库的这段时间里,并发的 push 可能刚好把同一行也塞进了 pending。
+ */
+async function adoptInbound(lead: Lead): Promise<void> {
+  let rows: PendingInbound[];
+  try {
+    rows = await pendingInbound(lead.taskId);
+  } catch (error) {
+    // 读不到不能当成「没有」:那等于把这些消息判死。如实说一句,它们仍在库里等下一台。
+    reportLeadFailure(lead, `读取待送的执行者消息失败：${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+  if (!rows.length || lead.retired) return;
+  const have = new Set(lead.pending.map((m) => m.seq));
+  lead.pending.unshift(...rows.filter((r) => !have.has(r.seq)));
 }
 
 // ── 事件消费 ────────────────────────────────────────────────────────────────
 async function consume(lead: Lead): Promise<void> {
+  await adoptInbound(lead); // 上一台/上一个进程没送出去的消息,先接回来
   let exitStatus = 0;
   // 事件流被掀翻了吗 —— 跟「进程报了个非零退出码」是两回事,收尾那句话的措辞不一样。
   let aborted = false;
@@ -766,8 +784,11 @@ function retireLead(lead: Lead): void {
   lead.retired = true;
   clearStatusRetry(lead);
   lead.wantedStatus = null;
-  strandPending(lead); // 还没送出的执行者汇报交给接管的那台,别烂在出局的对象里
-  // 攒着的轮换旁注必须**在断流之前**落盘。它为了不夹在正文和 agentEnd 之间才缓存下来
+  // 手上这批待送消息的**所有权**跟着牌子一起交出去:行还在 team_inbound 里,由接管的
+  // 那台认领(adoptInbound)。这里必须清干净 —— 摘牌不让旧进程闭嘴,它晚一步吐出的
+  // turnEnd 照样会走 endTurn 那段合并投递,不清就是同一条汇报朝一个已经被杀的 handle
+  // 再送一遍,送「成」了还会把行删掉。
+  lead.pending = [];  // 攒着的轮换旁注必须**在断流之前**落盘。它为了不夹在正文和 agentEnd 之间才缓存下来
   // (见 Lead.notices),可摘牌之后 turnEnd/closeLead 的那次 flush 只会写进丢弃流 ——
   // 「这条会话已作废、下次会丢上下文」这句关键说明就只活在 SSE 里,用户刷新一次就再也
   // 看不到发生过什么(2026-08-26 第 9 轮审查)。
@@ -779,34 +800,6 @@ function retireLead(lead: Lead): void {
   const out = lead.out;
   lead.out = new Writable({ write(_chunk, _enc, done) { done(); } });
   out.end();
-}
-
-/**
- * 旧台交班时把手上那批还没送出的入站消息挪到托盘上,等下一台认领。
- *
- * **必须同时清空 `lead.pending`**:摘牌不会让旧进程闭嘴,它晚一步吐出的 turnEnd 照样会走
- * endTurn 那段合并投递,不清就是同一条汇报朝一个已经被杀的 handle 再送一遍。
- */
-function strandPending(lead: Lead): void {
-  if (!lead.pending.length) return;
-  const queue = strandedInbound.get(lead.taskId) ?? [];
-  queue.push(...lead.pending);
-  strandedInbound.set(lead.taskId, queue);
-  lead.pending = [];
-}
-
-/**
- * 新台挂上线时认领托盘。
- *
- * 挂进 `pending` 而不是当场 send:attachLead 的下一步就是这台自己的第一个回合(openLead
- * 里紧跟着 beginTurn),当场送等于往一个正在跑的回合里插话 —— 合并投递本来就是为这种
- * 情况设计的。放在队头是因为它们比这台后来收到的消息更早发生。
- */
-function adoptStranded(lead: Lead): void {
-  const queue = strandedInbound.get(lead.taskId);
-  if (!queue?.length) return;
-  strandedInbound.delete(lead.taskId);
-  lead.pending.unshift(...queue);
 }
 
 /**
@@ -904,20 +897,23 @@ async function endTurn(lead: Lead): Promise<void> {
   writeTurnEnd(lead.out, endIso);
   flushSessionNotices(lead);
   if (lead.pending.length) {
-    const merged = lead.pending.join("\n\n---\n\n");
+    const batch = lead.pending;
+    const merged = batch.map((m) => m.text).join("\n\n---\n\n");
     const at = now();
-    // 原来是先清队列、先落盘,再 send。可 send 完全可能拒收(进程正在收尾),那一步之后
-    // 队列已经空了 —— closeLead 想把这批汇报交回托盘都拿不到东西,下一台健康调度台永远
-    // 等不到(2026-08-26 第 11 轮审查)。所以顺序反过来:**收下了才算送出去**,没收下就
-    // 原样留在 pending 里,由 closeLead 交回托盘。落盘也要等收下之后 —— 没送成还记一条
-    // 「已投递」的 system turn,下一台真送成时同一份汇报在 .md 里就是两条。
+    // 顺序是刻意的:**收下了才算送出去**。先销账、先落盘再 send 的话,send 一拒收
+    // (进程正在收尾)这批汇报就再也没人送得出去了 —— 下一台健康调度台永远等不到
+    // (2026-08-26 第 11 轮审查)。落盘同样要等收下之后:没送成还记一条「已投递」的
+    // system turn,下一台真送成时同一份汇报在 .md 里就是两条。
     if (sendToLead(lead, merged)) {
       lead.pending = [];
+      // 销账失败宁可重送不可丢:行还在就是下一台会再送一遍(.md 里会多一条),而删早了
+      // 是永久消失。所以这里只上报,不回滚也不掀掉这台调度台。
+      await persistOrReport(lead, "待送消息销账", () => consumeInbound(batch.map((m) => m.seq)), at);
       recordSystemTurn(lead, merged, at);
       await beginTurn(lead, at);
       return;
     }
-    reportLeadFailure(lead, "攒着的执行者汇报没能送进调度台进程(它正在收尾),先留着交给下一台接手的调度台。", at);
+    reportLeadFailure(lead, "攒着的执行者汇报没能送进调度台进程(它正在收尾),先留在待送队列里交给下一台接手的调度台。", at);
   }
   await setLeadStatus(lead, "idle", endIso);
   armIdle(lead);
@@ -949,10 +945,6 @@ async function closeLead(
   } else {
     retireLead(lead); // 被接管的一方从此不写任何共享产物(状态/.md/trace/SSE),见 retireLead
   }
-  // 进程没了,这一回合攒下的执行者汇报还没送出去(崩在回合中间、或者用户按了「停止全组」)。
-  // 它们既没进 CLI 也没落盘,跟着这个 Lead 一起消失就是无声丢账 —— 放回托盘,下一次开台时
-  // 由接手的那台合并送出。superseded 那一路 retireLead 已经搬过,这里是空转。
-  strandPending(lead);
   const endIso = now();
   const spent = lead.turnStart ? Math.max(0, Date.parse(endIso) - Date.parse(lead.turnStart)) : 0;
   // CLI 否认了这条会话:把失效的 id 连同由它派生的三件套恢复命令一起清掉,下一次说话
