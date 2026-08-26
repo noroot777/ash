@@ -2,31 +2,12 @@
 // 判定逻辑由 test:reviewer-turn 钉住，这里钉的是「看得出来」和「没动别的」两件事。
 // 设 SHOT=<路径> 可以顺带截一张图自查版式。
 import assert from "node:assert/strict";
-import { access } from "node:fs/promises";
-import { constants } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { chromeExecutablePath } from "./chrome-path.mjs";
 import { createServer } from "vite";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const chromeCandidates = [
-  process.env.CHROME_BIN,
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  chromium.executablePath(),
-].filter(Boolean);
-
-async function executablePath() {
-  for (const candidate of chromeCandidates) {
-    try {
-      await access(candidate, constants.X_OK);
-      return candidate;
-    } catch {
-      // Try the next local Chrome/Chromium candidate.
-    }
-  }
-  throw new Error("找不到可执行的 Chrome/Chromium；可通过 CHROME_BIN 指定路径");
-}
-
 const server = await createServer({
   root,
   logLevel: "error",
@@ -39,7 +20,7 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
-  browser = await chromium.launch({ executablePath: await executablePath(), headless: true });
+  browser = await chromium.launch({ executablePath: await chromeExecutablePath(), headless: true });
   const page = await browser.newPage({ viewport: { width: 1000, height: 1200 } });
   await page.route(/\/api\/tasks\/t1\/review\/file/, async (route) => {
     const round = new URL(route.request().url()).searchParams.get("round") ?? "?";

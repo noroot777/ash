@@ -1,31 +1,12 @@
 // 对话框的执行器水印:斜体大字铺在框中心,按框的宽高一起定大小,换智能体跟着换字。
 // 跑法:npm -w web run test:agent-plate
 import assert from "node:assert/strict";
-import { access } from "node:fs/promises";
-import { constants } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { chromeExecutablePath } from "./chrome-path.mjs";
 import { createServer } from "vite";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const chromeCandidates = [
-  process.env.CHROME_BIN,
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  chromium.executablePath(),
-].filter(Boolean);
-
-async function executablePath() {
-  for (const candidate of chromeCandidates) {
-    try {
-      await access(candidate, constants.X_OK);
-      return candidate;
-    } catch {
-      // Try the next local Chrome/Chromium candidate.
-    }
-  }
-  throw new Error("找不到可执行的 Chrome/Chromium；可通过 CHROME_BIN 指定路径");
-}
-
 const server = await createServer({
   root,
   logLevel: "error",
@@ -38,7 +19,7 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
-  browser = await chromium.launch({ executablePath: await executablePath(), headless: true });
+  browser = await chromium.launch({ executablePath: await chromeExecutablePath(), headless: true });
   const page = await browser.newPage({ viewport: { width: 900, height: 640 } });
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/agent-plate.html`);
 

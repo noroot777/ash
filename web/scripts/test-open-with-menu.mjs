@@ -9,31 +9,12 @@
 // POST /file/open 且带对 appId。fixture 用 StrictMode（双跑最容易照出这类写法）。
 // 跑：npm -w web run test:open-with
 import assert from "node:assert/strict";
-import { access } from "node:fs/promises";
-import { constants } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { chromeExecutablePath } from "./chrome-path.mjs";
 import { createServer } from "vite";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const chromeCandidates = [
-  process.env.CHROME_BIN,
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  chromium.executablePath(),
-].filter(Boolean);
-
-async function executablePath() {
-  for (const candidate of chromeCandidates) {
-    try {
-      await access(candidate, constants.X_OK);
-      return candidate;
-    } catch {
-      // Try the next local Chrome/Chromium candidate.
-    }
-  }
-  throw new Error("找不到可执行的 Chrome/Chromium；可通过 CHROME_BIN 指定路径");
-}
-
 const PROBE = {
   platform: "darwin",
   canReveal: true,
@@ -56,7 +37,7 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
-  browser = await chromium.launch({ executablePath: await executablePath(), headless: true });
+  browser = await chromium.launch({ executablePath: await chromeExecutablePath(), headless: true });
   const page = await browser.newPage();
 
   const probeCalls = [];
