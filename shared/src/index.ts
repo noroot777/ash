@@ -3,7 +3,7 @@ import type { TeamConfig } from "./team.ts";
 import type { DuetConfig } from "./duet.ts";
 import type { WorkflowDef } from "./workflow.ts";
 import type { TaskWorkflowMode } from "./free-workflow.ts";
-import type { HandoffTarget, TaskHandoff } from "./handoff.ts";
+import type { HandoffAudit, HandoffTarget, TaskHandoff } from "./handoff.ts";
 export type { Session, SessionRole } from "./session.ts";
 // 归一化后的 token 用量。运行时函数(累加/格式化)走 "@ash/shared/usage" 子路径
 // 导出,这里同上只再导出类型。
@@ -23,9 +23,6 @@ export type {
   FreeReviewRun,
   FreeWorkflowExecution,
   FreeWorkflowExecutionStatus,
-  FreeWorkflowPreviewEvent,
-  FreeWorkflowPreviewEventKind,
-  FreeWorkflowPreviewEventSource,
   FreeWorkflowState,
   ReviewerProfile,
   TaskWorkflowMode,
@@ -79,6 +76,7 @@ export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
 // 类型本体在 ./handoff.ts（纯类型模块）,这里只做再导出,消费方 import 路径不变。
 export type {
   HandoffApprovalResult,
+  HandoffAudit,
   HandoffExportResult,
   HandoffIdentity,
   HandoffOutboundStateResult,
@@ -88,6 +86,7 @@ export type {
   HandoffPingProject,
   HandoffPreflightResult,
   HandoffRemoteState,
+  HandoffReturnGrant,
   HandoffTarget,
   TaskHandoff,
 } from "./handoff.ts";
@@ -391,6 +390,8 @@ export interface Task {
   questionItems?: QuestionItem[] | null;
   // 任务接力标记（见 TaskHandoff）。null = 从未接力。
   handoff?: TaskHandoff | null;
+  // 强制恢复清掉 handoff 后仍保留的风险审计；刷新后必须持续可见。
+  handoffAudit?: HandoffAudit | null;
 }
 
 /**
@@ -507,7 +508,9 @@ export interface LlmProvider {
 }
 
 // ── Global search (⌘K) ───────────────────────────────────────────────────────
-// 形状住在 ./search.ts(纯类型,这里只再导出)。
+// 形状住在 ./search.ts,这里只再导出**类型**;那个文件里的排序判据
+// (compareSearchHits / SEARCH_MAX_HITS)是运行时值,走子路径 `@ash/shared/search`
+// ——index.ts 不能转发运行时函数(见 server/CLAUDE.md)。
 export type { NoteSearchHit, SearchField, SearchHit, TaskSearchHit } from "./search.ts";
 
 // ── Attachments (pasted into the composer / reply box) ───────────────────────

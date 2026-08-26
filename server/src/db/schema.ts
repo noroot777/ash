@@ -189,6 +189,8 @@ export const tasks = sqliteTable("tasks", {
   // 任务接力（json TaskHandoff）：direction:"out" = 已交给另一台 ash 续跑（本地这份
   // 是历史），"in" = 从别的机器接过来的。持久落库,刷新后的横幅靠它,不靠 toast。
   handoff: text("handoff"),
+  // 强制恢复会清掉 handoff；风险审计另存，确保无会话任务刷新后也仍能看见双任务警告。
+  handoffAudit: text("handoff_audit"),
 });
 
 export const agents = sqliteTable("agents", {

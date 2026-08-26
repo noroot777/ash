@@ -83,7 +83,7 @@ try {
     INSERT INTO tasks VALUES ('t4', 'running', 'team', NULL);
     INSERT INTO sessions VALUES ('s1', 't1', 4242, 'Mon Aug 7 10:00:00 2026', 991, 706);
     INSERT INTO usage_cumulative_snapshots VALUES ('codex:thread-1', 123456);
-    INSERT INTO free_workflow_events VALUES ('event1', 't3', 'preview_closed', 'user', 'http://127.0.0.1:4567', '2026-08-08T10:00:00.000Z');
+    INSERT INTO free_workflow_events VALUES ('event1', 't3', 'task_execution', 'agent', '{"status":"completed","endedAt":null}', '2026-08-08T10:00:00.000Z');
     INSERT INTO schedules VALUES ('sch1', 't3', '0 9 * * *');
     INSERT INTO scheduled_messages VALUES ('msg1', 't3', 'pending');
   `);
@@ -134,7 +134,7 @@ try {
   // —— snapshot 档：运行态也搬，搬完必须洗 ——
   const snap = await copyTables(source, dest, SNAPSHOT_TABLES);
   check("快照搬了任务与会话", { tasks: snap.tasks, sessions: snap.sessions }, { tasks: 4, sessions: 1 });
-  check("快照保留自由工作流预览历史", (await dest.execute("SELECT kind FROM free_workflow_events WHERE id='event1'")).rows[0].kind, "preview_closed");
+  check("快照保留自由工作流实际记录", (await dest.execute("SELECT kind FROM free_workflow_events WHERE id='event1'")).rows[0].kind, "task_execution");
   check("主库的定时任务没搬进来",
     (await dest.execute("SELECT id FROM schedules ORDER BY id")).rows.map((row) => row.id), ["old-sch"]);
   check("token 账跟着会话行一起进来（不然预览里芯片没数）",

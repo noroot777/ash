@@ -13,17 +13,20 @@ import { tasks } from "./db/schema.js";
 import { readCappedBody } from "./handoff-body.js";
 import { fetchPeer, normalizePeerUrl, pingPeer } from "./handoff-peer-client.js";
 import { sameFingerprint } from "./handoff-identity.js";
-import { requireApprovedPeer } from "./handoff-peers.js";
+import { requireApprovedPeer, verifyPeerSignature } from "./handoff-peers.js";
 import { HandoffError } from "./handoff-types.js";
 import { exportHandoff, preflightHandoff } from "./handoff.js";
 import { replyToTask, type TaskReplyBody } from "./task-reply.js";
 import { answerTask } from "./task-answer.js";
 import { sessionOutputText, sessionsForTask, sessionTraceEntries } from "./task-session-routes.js";
 import { enrichTasks } from "./task-store.js";
+import { returnTargetForMarker } from "./handoff-return.js";
+import { cancelPendingInboundTransfer } from "./handoff-transfer-state.js";
 
 type ProxyBody = TaskReplyBody & {
   taskId?: string;
   transferId?: string;
+  returnTransferId?: string | null;
   answer?: string;
   items?: { taskId: string; transferId?: string }[];
 };
@@ -82,6 +85,21 @@ async function signedBody(c: Context): Promise<{ peer: NonNullable<Awaited<Retur
   return { peer, body };
 }
 
+async function signedCancellation(c: Context): Promise<{
+  peer: NonNullable<ReturnType<typeof verifyPeerSignature>>;
+  body: ProxyBody;
+  returning: boolean;
+}> {
+  const bytes = await readCappedBody(c.req.raw, 1);
+  let body: ProxyBody;
+  try { body = JSON.parse(bytes.toString("utf8")) as ProxyBody; }
+  catch { throw new HandoffError("请求体不是合法 JSON", 400); }
+  const returning = Object.prototype.hasOwnProperty.call(body, "returnTransferId");
+  const peer = returning ? verifyPeerSignature(c, bytes) : await requireApprovedPeer(c, bytes);
+  if (!peer) throw new HandoffError("撤销接力要求带机器身份签名", 401);
+  return { peer, body, returning };
+}
+
 async function ownedInboundTask(taskId: string, peerFingerprint: string, transferId?: string) {
   const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!row) throw new HandoffError("远端任务不存在", 404);
@@ -125,7 +143,7 @@ async function ownedInboundTask(taskId: string, peerFingerprint: string, transfe
 }
 
 async function snapshotFor(taskId: string, callerFingerprint: string, transferId?: string) {
-  const { row } = await ownedInboundTask(taskId, callerFingerprint, transferId);
+  const { row, marker } = await ownedInboundTask(taskId, callerFingerprint, transferId);
   const task = (await enrichTasks([row]))[0];
   const sessions = await sessionsForTask(taskId);
   const persisted = await Promise.all(sessions.map(async (session) => ({
@@ -133,8 +151,7 @@ async function snapshotFor(taskId: string, callerFingerprint: string, transferId
     output: await sessionOutputText(taskId, session.id),
     trace: await sessionTraceEntries(taskId, session.id),
   })));
-  const { handoffTargets } = await getAppSettings();
-  const returnTarget = handoffTargets.find((target) => target.peerFp && sameFingerprint(target.peerFp, callerFingerprint));
+  const returnTarget = await returnTargetForMarker(marker);
   return { task, sessions, persisted, returnAvailable: Boolean(returnTarget) };
 }
 
@@ -229,6 +246,23 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
     } catch (error) { return fail(c, error); }
   });
 
+  // 来源机想恢复一条“送达未知”的本地任务时，先由当前目标机持久登记撤销。
+  // 这样即使旧 import 请求晚到，也会在落库前被 tombstone 拒绝，不会清完标记后又冒出第二份。
+  api.post("/handoff/proxy/task/cancel-pending", async (c) => {
+    try {
+      const { peer, body, returning } = await signedCancellation(c);
+      if (!body.taskId || !body.transferId) throw new HandoffError("缺 taskId / transferId", 400);
+      await cancelPendingInboundTransfer({
+        taskId: body.taskId,
+        transferId: body.transferId,
+        sourceFingerprint: peer.fingerprint,
+        returning,
+        ...(returning ? { returnTransferId: body.returnTransferId ?? null } : {}),
+      });
+      return c.json({ canceled: true });
+    } catch (error) { return fail(c, error); }
+  });
+
   api.post("/handoff/proxy/task/reply", async (c) => {
     try {
       const { peer, body } = await signedBody(c);
@@ -252,9 +286,8 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
       const { peer, body } = await signedBody(c);
       if (!body.taskId) throw new HandoffError("缺 taskId", 400);
       const owned = await ownedInboundTask(body.taskId, peer.fingerprint, body.transferId);
-      const { handoffTargets } = await getAppSettings();
-      const target = handoffTargets.find((item) => item.peerFp && sameFingerprint(item.peerFp, peer.fingerprint));
-      if (!target) throw new HandoffError("远端没有登记与来源机指纹一致的移回目标", 409);
+      const target = await returnTargetForMarker(owned.marker);
+      if (!target) throw new HandoffError("无法自动定位来源机器，请从来源机的本地远程任务视图重试", 409);
       const preflight = await preflightHandoff(body.taskId, target.url);
       const targetProjectId = preflight.suggestedProjectId ?? preflight.projects.at(0)?.id;
       if (!targetProjectId) throw new HandoffError("来源机没有可接收任务的项目", 409);

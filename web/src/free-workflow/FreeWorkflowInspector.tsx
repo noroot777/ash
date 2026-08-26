@@ -3,7 +3,6 @@ import type {
   FreeReviewRound,
   FreeReviewRun,
   FreeWorkflowExecution,
-  FreeWorkflowPreviewEvent,
   Task,
 } from "@ash/shared";
 import {
@@ -11,9 +10,7 @@ import {
   CheckCircle,
   GitCommit,
   MagnifyingGlass,
-  MonitorPlay,
   SpinnerGap,
-  StopCircle,
   WarningCircle,
   Wrench,
 } from "@phosphor-icons/react";
@@ -30,11 +27,12 @@ import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
 
 type Activity =
   | { type: "execution"; at: string; key: string; execution: FreeWorkflowExecution }
-  | { type: "review"; at: string; key: string; run: FreeReviewRun; round: FreeReviewRound }
-  | { type: "preview"; at: string; key: string; event: FreeWorkflowPreviewEvent };
+  | { type: "review"; at: string; key: string; run: FreeReviewRun; round: FreeReviewRound };
 
 type ReviewActivity = Extract<Activity, { type: "review" }>;
 
+// 只收「让任务本身往前走了一步」的事。打开/关闭预览不算——那是随手开一眼看效果的
+// 看片器，开十次也不改变任务走到了哪儿，摆进这条线只会把真正的进展冲淡。
 function actualActivities(state: FreeWorkflowApiState | null): Activity[] {
   if (!state) return [];
   const activities: Activity[] = [
@@ -44,7 +42,6 @@ function actualActivities(state: FreeWorkflowApiState | null): Activity[] {
     ...state.reviews.flatMap((run) => run.rounds.map((round): Activity => ({
       type: "review", at: round.startedAt, key: `review-${run.id}-${round.round}`, run, round,
     }))),
-    ...state.previewEvents.map((event): Activity => ({ type: "preview", at: event.occurredAt, key: `preview-${event.id}`, event })),
   ];
   return activities.sort((a, b) => a.at.localeCompare(b.at) || a.key.localeCompare(b.key));
 }
@@ -124,7 +121,6 @@ export function FreeWorkflowInspector({
   const postMergeReviewListRef = useRef<HTMLDivElement>(null);
   const state = free.state;
   const activities = useMemo(() => actualActivities(state), [state]);
-  const latestPreviewEvent = state?.previewEvents.at(-1);
   const reviewActivities = activities.filter((activity): activity is ReviewActivity => activity.type === "review");
   const workspaceReviewActivities = reviewActivities.filter((activity) => activity.run.target?.kind !== "accepted_merge");
   const postMergeReviewActivities = reviewActivities.filter((activity) => activity.run.target?.kind === "accepted_merge");
@@ -401,16 +397,9 @@ export function FreeWorkflowInspector({
                   </button>
                 </li>;
               }
-              if (activity.type === "preview") {
-                const active = activity.event.kind === "preview_opened" && latestPreviewEvent?.id === activity.event.id && !!state?.preview.running;
-                return <li key={activity.key} className={active ? "is-active" : "is-done"}>
-                  <span>{activity.event.kind === "preview_opened" ? <MonitorPlay size={14} /> : <StopCircle size={14} />}</span>
-                  <div><b>{activity.event.kind === "preview_opened" ? "预览已打开" : "预览已关闭"}</b><small>{activity.event.detail} · {timeText(activity.event.occurredAt)}</small></div>
-                </li>;
-              }
             })}
           </ol>
-          {!activities.length && <p>目前还没有实际工作流记录；任务执行、派审或预览后，这里会按发生顺序补出记录。</p>}
+          {!activities.length && <p>目前还没有实际工作流记录；任务执行或派审后，这里会按发生顺序补出记录。</p>}
         </section>
       </div>
       {drawer}

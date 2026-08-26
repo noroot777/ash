@@ -10,6 +10,10 @@ export class HandoffError extends Error {
   unsettled = false;
   // network=true:请求没送达或应答没读全 —— 对端**可能已经**处理成功,调用方不能
   // 当「确认失败」处理(exportHandoff 靠它决定保留 pending 标记还是回滚)。
+  // remoteStatus / remoteAsh 只由 fetchPeer 填：兼容逻辑据此区分「旧版没有这个路由」
+  // 和「新版路由明确返回业务错误」，避免靠错误文案做宽泛匹配。
+  remoteStatus: number | null = null;
+  remoteAsh = false;
   constructor(message: string, public status: number = 400, public network = false) {
     super(message);
   }
@@ -99,6 +103,9 @@ export interface HandoffSessionRow {
 export interface HandoffManifest {
   version: 1;
   sourceHost: string;
+  // 源 ash 的监听端口。接收机只把它和真实 TCP 来源地址组合成回程候选地址；回程前仍会
+  // 用任务里钉住的公钥指纹做双向核对，所以地址被改写也拿不到任务载荷。
+  sourcePort?: number | null;
   // 源机身份指纹；manifest 整体有签名保护。老版本没有，导入照常接受但无法安全“移回”。
   sourceFingerprint?: string | null;
   // 任务原机指纹；每一跳原样传播，接收侧据此区分“回到原机”和“再次交给曾持有机器”。
@@ -107,6 +114,8 @@ export interface HandoffManifest {
   // 这一次接力的身份证:源机在发送前生成并持久化。应答丢失后重试会带**同一个**
   // transferId,导入侧据此把「已有同 id 任务」识别成同一次接力并幂等返回成功。
   transferId: string;
+  // 从接入任务移回时，带上上一跳的 transferId，原机据此把免审批通道收窄到同一条历史存档。
+  returnTransferId?: string | null;
   // 导入完成后要不要立刻在对端续跑（会真的拉起一个 agent）。
   autoResume: boolean;
   // 源机的工作目录（会话行里的 cwd 基准）,对端用它写「路径从 X 迁到 Y」的前言。
@@ -172,6 +181,8 @@ export interface HandoffPingResponse {
   peerStatus?: "approved" | "pending" | "blocked" | "open" | "unknown";
   // 未获批准时故意为空:项目清单是本机的仓库布局,不该报给还没被认可的机器。
   projects: HandoffPingProject[];
+  // 任务级免审批移回时，只返回该任务原项目的 refs，供持有机生成增量 bundle。
+  returnRefs?: { name: string; commit: string }[];
 }
 
 /** 相对路径必须待在自己的目录里:拒绝绝对路径和 `..`（导入侧写盘前的通行证）。 */

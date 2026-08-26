@@ -5,7 +5,6 @@ import type {
   FreeReviewRound,
   FreeWorkflowExecution,
   FreeWorkflowExecutionStatus,
-  FreeWorkflowPreviewEvent,
   FreeWorkflowState,
   TaskStatus,
 } from "@ash/shared";
@@ -200,15 +199,6 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
     }];
   }
   const preview = readPreview(taskId);
-  const previewEvents: FreeWorkflowPreviewEvent[] = eventRows
-    .filter((event) => event.kind === "preview_opened" || event.kind === "preview_closed")
-    .map((event) => ({
-      id: event.id,
-      kind: event.kind as FreeWorkflowPreviewEvent["kind"],
-      source: event.source as FreeWorkflowPreviewEvent["source"],
-      detail: event.detail,
-      occurredAt: event.occurredAt,
-    }));
   // 预约可用的两种形态：续轮（runId 在，审查者配置取 run 行快照，profile 删了也能续）、
   // 新链（必须有 reviewerId）。两者都不在 → 脏 armed，对外一律当未预约。
   const reservationRunId = state?.reviewArmed ? state.reviewRunId ?? null : null;
@@ -257,7 +247,6 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
       command: preview?.cmd ?? null,
       startedAt: preview?.startedAt ?? null,
     },
-    previewEvents,
     executions,
     reviews,
   };

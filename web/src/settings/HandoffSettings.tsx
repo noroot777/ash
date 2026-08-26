@@ -4,6 +4,7 @@ import type {
   HandoffApprovalResult,
   HandoffIdentity,
   HandoffPeer,
+  HandoffReturnGrant,
   HandoffTarget,
 } from "@ash/shared";
 import { Check, Fingerprint, PaperPlaneTilt, Plus, Prohibit, SpinnerGap, Trash } from "@phosphor-icons/react";
@@ -32,6 +33,7 @@ export function HandoffSettings({
 }) {
   const [identity, setIdentity] = useState<HandoffIdentity | null>(null);
   const [peers, setPeers] = useState<HandoffPeer[]>([]);
+  const [returnGrants, setReturnGrants] = useState<HandoffReturnGrant[]>([]);
   const [busy, setBusy] = useState(false);
   // 目标行另存一份草稿:半填的行(名字有了 url 还没敲完)留在本地继续编辑,
   // 只有完整合法的行才落库,所以不能每次都用服务端返回值倒灌回输入框。
@@ -56,8 +58,11 @@ export function HandoffSettings({
   }, [notify]);
 
   const reloadPeers = useCallback(() => {
-    api.handoffPeers()
-      .then(setPeers)
+    Promise.all([api.handoffPeers(), api.handoffReturnGrants()])
+      .then(([nextPeers, nextGrants]) => {
+        setPeers(nextPeers);
+        setReturnGrants(nextGrants);
+      })
       .catch((error) => notify(error instanceof Error ? error.message : "接力来源读取失败"));
   }, [notify]);
 
@@ -91,10 +96,14 @@ export function HandoffSettings({
     [notify, onSettings, settings.handoffTargets],
   );
 
-  const peerAction = async (peer: HandoffPeer, action: "approve" | "block" | "forget") => {
+  const peerAction = async (
+    peer: Pick<HandoffPeer, "fingerprint">,
+    action: "approve" | "block" | "unblock" | "forget",
+  ) => {
     setBusy(true);
     try {
       if (action === "forget") await api.forgetHandoffPeer(peer.fingerprint);
+      else if (action === "unblock") await api.unblockHandoffPeer(peer.fingerprint);
       else await api.setHandoffPeerStatus(peer.fingerprint, action);
       reloadPeers();
       window.dispatchEvent(new Event(HANDOFF_PEERS_CHANGED_EVENT));
@@ -132,6 +141,7 @@ export function HandoffSettings({
   };
 
   const forgetTarget = targets[forgetIndex ?? -1] ?? null;
+  const inboundPeers = peers.filter((peer) => !peer.returnOnly);
 
   return (
     <section className="settings-section">
@@ -321,12 +331,12 @@ export function HandoffSettings({
             <small>谁尝试过把任务接力进本机。身份看指纹，不看地址——地址会漂，指纹不会。</small>
           </div>
         </div>
-        {peers.length === 0 ? (
+        {inboundPeers.length === 0 ? (
           <p className="handoff-peer-empty">
             还没有别的机器申请接力进来。对方第一次申请时会自动出现在这里等你批准。
           </p>
         ) : (
-          peers.map((peer) => (
+          inboundPeers.map((peer) => (
             <div className={`settings-row handoff-peer-row is-${peer.status}`} key={peer.fingerprint}>
               <div>
                 <b>
@@ -364,6 +374,45 @@ export function HandoffSettings({
             </div>
           ))
         )}
+        <div className="settings-row handoff-peer-head">
+          <div>
+            <b>历史回程权限</b>
+            <small>
+              曾接走任务的机器只能把对应历史任务免审批移回，不等于整机已批准。
+              拒绝会立即阻止该指纹的所有接力与历史回程，避免遗留权限不可见、不可撤销。
+            </small>
+          </div>
+        </div>
+        {returnGrants.length === 0 ? (
+          <p className="handoff-peer-empty">当前没有机器持有历史任务的免审批回程权限。</p>
+        ) : returnGrants.map((grant) => (
+          <div className={`settings-row handoff-peer-row${grant.blocked ? " is-blocked" : " is-approved"}`} key={grant.fingerprint}>
+            <div>
+              <b>
+                {grant.name || "历史持有机器"}
+                <span className="handoff-peer-state">{grant.blocked ? "已撤销" : `可移回 ${grant.taskCount} 条任务`}</span>
+              </b>
+              <small>
+                指纹 {grant.short} · 最近授权 {new Date(grant.lastGrantedAt).toLocaleString()}
+              </small>
+            </div>
+            <div className="handoff-peer-actions">
+              {grant.blocked ? (
+                <Button variant="ghost" disabled={busy} onClick={() => void peerAction(grant, "unblock")}>
+                  <Check size={13} aria-hidden="true" />解除拒绝
+                </Button>
+              ) : (
+                <Button
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => void peerAction(grant, "block")}
+                >
+                  <Prohibit size={13} aria-hidden="true" />拒绝这台机器
+                </Button>
+              )}
+            </div>
+          </div>
+        ))}
       </div>
 
       {forgetTarget && (

@@ -13,6 +13,8 @@ import type {
   HandoffOutboundStateResult,
   HandoffPeer,
   HandoffPreflightResult,
+  HandoffReturnGrant,
+  HandoffTarget,
   LlmProtocol,
   LlmProvider,
   Note,
@@ -36,11 +38,15 @@ import type {
   TeamPreset,
   TeamPresetConfig,
 } from "@ash/shared";
+
+export type TaskScopedHandoffPreflightResult = HandoffPreflightResult & { taskScopedReturn: boolean };
 import { DEFAULT_APP_SETTINGS } from "@ash/shared";
 import type { WorkflowDef, WorkflowItem } from "@ash/shared/workflow";
 import type { CliHostEnv } from "@ash/shared/cli-overrides";
 import type { CliModelCatalog } from "@ash/shared/cli-presets";
+import type { SearchStreamLine } from "@ash/shared/search";
 import { ApiError, apiError, apiPath, id, json, parseBody, request } from "./apiClient.ts";
+
 import type {
   AcceptTaskResult,
   DeleteTaskResult,
@@ -80,6 +86,18 @@ import type {
 // 清单为了守住 700 行上限拆出去的实现细节，不该逼着几十个 import 跟着改路径。
 export { ApiError } from "./apiClient.ts";
 export type * from "./apiTypes.ts";
+// 搜索的查询串。界面只走流式那条(`/search/stream`);服务端另有一条整份返回的
+// `/search`,参数完全同形,留给脚本和 curl —— 所以这里单独拎出来,两边不会漂。
+const searchQueryParams = (
+  query: string,
+  scope?: { projectId?: string; type?: "tasks" | "notes"; prefer?: string | null },
+) => {
+  const params = new URLSearchParams({ q: query });
+  if (scope?.projectId) params.set("projectId", scope.projectId);
+  if (scope?.type) params.set("type", scope.type);
+  if (scope?.prefer) params.set("prefer", scope.prefer);
+  return params;
+};
 
 function isAcceptTaskResult(body: unknown): body is AcceptTaskResult {
   return typeof body === "object" && body !== null && "accepted" in body &&
@@ -295,8 +313,12 @@ export const api = {
 
   // 任务接力:preflight 只读探测对端与本地可搬运的东西;handoffTask 会真的停下任务、
   // 打包 git 分支与 CLI 会话文件推给对端(可能上百 MB,调用点要给持续的忙碌反馈)。
-  handoffPreflight: (taskId: string, targetUrl: string): Promise<HandoffPreflightResult> =>
-    request(`/tasks/${id(taskId)}/handoff/preflight`, json("POST", { targetUrl })),
+  handoffPreflight: (
+    taskId: string,
+    targetUrl: string,
+    options?: { allowReturnFallback?: boolean },
+  ): Promise<TaskScopedHandoffPreflightResult> =>
+    request(`/tasks/${id(taskId)}/handoff/preflight`, json("POST", { targetUrl, ...options })),
   handoffTask: (
     taskId: string,
     body: { targetUrl: string; targetProjectId: string; targetName?: string; autoResume?: boolean },
@@ -314,19 +336,32 @@ export const api = {
     request(`/tasks/${id(taskId)}/remote-answer`, json("POST", { targetUrl, answer })),
   remoteTaskReturn: (taskId: string, targetUrl: string): Promise<{ task: Task }> =>
     request(`/tasks/${id(taskId)}/remote-return`, json("POST", { targetUrl })),
-  // 移除接力标记(「在本机继续」的逃生门):只清本机标记,对端那份任务不动。
-  clearHandoff: (taskId: string): Promise<{ cleared: true }> =>
-    request(`/tasks/${id(taskId)}/handoff`, { method: "DELETE" }),
+  // 恢复送达未知的本机任务前，会先让目标机确认未收到并持久登记撤销，防止旧请求晚到。
+  clearHandoff: (taskId: string, force = false): Promise<{
+    cleared: true;
+    restored: "in" | "local";
+    forced: boolean;
+  }> => request(`/tasks/${id(taskId)}/handoff`, force
+    ? json("DELETE", { force: true, acknowledgeDuplicateRisk: true })
+    : { method: "DELETE" }),
 
   // 接力身份与配对:本机身份(拿去和对端设置页上的指纹肉眼核对)、入站来源的审批。
   // 只有被批准的机器能把任务接力进本机 —— 出站方向的信任是 handoffTargets 上的 peerFp。
   requestHandoffApproval: (targetUrl: string): Promise<HandoffApprovalResult> =>
     request("/handoff/request", json("POST", { targetUrl })),
   handoffIdentity: (): Promise<HandoffIdentity> => request("/handoff/identity"),
+  handoffTargetIdentity: (targetUrl: string): Promise<HandoffIdentity> =>
+    request("/handoff/identity-probe", json("POST", { targetUrl })),
+  handoffReturnTarget: async (taskId: string): Promise<HandoffTarget> =>
+    (await request<{ target: HandoffTarget }>(`/tasks/${id(taskId)}/handoff/return-target`)).target,
   handoffPeers: async (): Promise<HandoffPeer[]> =>
     (await request<{ peers: HandoffPeer[] }>("/handoff/peers")).peers,
+  handoffReturnGrants: async (): Promise<HandoffReturnGrant[]> =>
+    (await request<{ grants: HandoffReturnGrant[] }>("/handoff/return-grants")).grants,
   setHandoffPeerStatus: (fingerprint: string, action: "approve" | "block"): Promise<HandoffPeer> =>
     request(`/handoff/peers/${id(fingerprint)}/${action}`, { method: "POST" }),
+  unblockHandoffPeer: (fingerprint: string): Promise<{ unblocked: true; peer: HandoffPeer | null }> =>
+    request(`/handoff/peers/${id(fingerprint)}/unblock`, { method: "POST" }),
   // 忘记这台机器:它再来敲门会重新进待批准列表(要永久拒绝用 block)。
   forgetHandoffPeer: (fingerprint: string): Promise<{ deleted: true }> =>
     request(`/handoff/peers/${id(fingerprint)}`, { method: "DELETE" }),
@@ -448,14 +483,48 @@ export const api = {
   deleteNote: (noteId: string): Promise<{ deleted: true }> =>
     request(`/notes/${id(noteId)}`, { method: "DELETE" }),
 
-  search: (
+  /**
+   * 流式搜索：命中一条回调一条，本项目那一段扫完时回调一次 `onLocalDone`。
+   *
+   * 语料 2.2 GB，一次全盘扫要几秒。整份返回意味着这几秒里 ⌘K 是空的；边扫边出意味着
+   * 本项目的命中第一时间就在列表里了。**`signal` 不是可选的礼貌** —— 用户每敲一个字就是
+   * 一次新的全盘扫，不中断上一次，服务端会同时跑几十个扫描，把事件循环占死。
+   */
+  searchStream: async (
     query: string,
-    scope?: { projectId?: string; type?: "tasks" | "notes" },
-  ): Promise<SearchHit[]> => {
-    const params = new URLSearchParams({ q: query });
-    if (scope?.projectId) params.set("projectId", scope.projectId);
-    if (scope?.type) params.set("type", scope.type);
-    return request(`/search?${params}`);
+    scope: { projectId?: string; type?: "tasks" | "notes"; prefer?: string | null } | undefined,
+    handlers: { onHit: (hit: SearchHit) => void; onLocalDone?: () => void },
+    signal: AbortSignal,
+  ): Promise<void> => {
+    const response = await fetch(apiPath(`/search/stream?${searchQueryParams(query, scope)}`), { signal });
+    if (!response.ok || !response.body) throw new Error(`搜索失败（${response.status}）`);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffered = "";
+    const take = (line: string) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      let parsed: SearchStreamLine;
+      try {
+        parsed = JSON.parse(trimmed) as SearchStreamLine;
+      } catch {
+        return; // 半行/坏行:丢掉这一条，别把整条流拆了
+      }
+      if ("marker" in parsed) {
+        if (parsed.marker === "local-done") handlers.onLocalDone?.();
+        return;
+      }
+      handlers.onHit(parsed);
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+      const lines = buffered.split("\n");
+      buffered = lines.pop() ?? "";
+      for (const line of lines) take(line);
+    }
+    take(buffered);
   },
   uploadFile: (
     dataUrl: string,

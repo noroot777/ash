@@ -33,6 +33,8 @@ import type {
   HandoffExportResult, HandoffPreflightResult, HandoffPeerIdentity, TaskHandoff,
 } from "@ash/shared";
 
+type TaskScopedPreflightResult = HandoffPreflightResult & { taskScopedReturn: boolean };
+
 // 传输协议类型/错误类/尺寸常量在 handoff-types.ts(导出、导入、HTTP 面三处共用)。
 import { HandoffError, MAX_FILE_BYTES } from "./handoff-types.js";
 import type { HandoffManifest } from "./handoff-types.js";
@@ -47,6 +49,8 @@ import { localIdentity, shortFingerprint } from "./handoff-identity.js";
 import { collectUploads, isTextRel } from "./handoff-uploads.js";
 import { beginHandoffPrepare, endHandoffPrepare } from "./handoff-guard.js";
 import { cancelPendingMessage } from "./pending-messages.js";
+import type { HandoffReturnContext } from "./handoff-peer-client.js";
+import { currentListeningPort } from "./listening-port.js";
 
 export async function handoffRemoteUrl(taskId: string): Promise<string> {
   const row = (await db.select({ handoff: tasks.handoff }).from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -105,8 +109,25 @@ function parsedHandoff(raw: string | null): TaskHandoff | null {
  */
 function inboundReturnFingerprint(raw: string | null): string | null | undefined {
   const marker = parsedHandoff(raw);
-  if (marker?.direction !== "in") return undefined;
-  return marker.peerFp || null;
+  if (marker?.direction === "in") return marker.peerFp || null;
+  if (marker?.direction === "out" && marker.pending
+    && Object.prototype.hasOwnProperty.call(marker, "returnTransferId")) {
+    return marker.peerFp || null;
+  }
+  return undefined;
+}
+
+function inboundReturnContext(taskId: string, raw: string | null): HandoffReturnContext | undefined {
+  const marker = parsedHandoff(raw);
+  if (marker?.direction === "in") {
+    return { taskId, returnTransferId: marker.transferId ?? null };
+  }
+  if (marker?.direction === "out" && marker.pending
+    && Object.prototype.hasOwnProperty.call(marker, "returnTransferId")) {
+    const returnTransferId = (marker as TaskHandoff & { returnTransferId?: string | null }).returnTransferId;
+    return { taskId, returnTransferId: returnTransferId ?? null };
+  }
+  return undefined;
 }
 
 /** 停掉正在跑的回合并等结算收尾（镜像 /stop 端点的语义:没有活进程但状态是 running/queued 就直接标 canceled）。 */
@@ -151,17 +172,30 @@ function assertPeerAcceptsUs(peer: HandoffPeerIdentity | null): void {
 }
 
 /** 接力预检:探测对端、核对身份、匹配项目、盘点本地可搬运的东西。只读,不停任务不动文件。 */
-export async function preflightHandoff(taskId: string, targetUrlRaw: string): Promise<HandoffPreflightResult> {
+export async function preflightHandoff(
+  taskId: string,
+  targetUrlRaw: string,
+  options: { allowReturnFallback?: boolean } = {},
+): Promise<TaskScopedPreflightResult> {
   const { task, project } = await loadSingleTask(taskId);
   const targetUrl = normalizePeerUrl(targetUrlRaw);
+  const currentMarker = parsedHandoff(task.handoff);
   const returnFingerprint = inboundReturnFingerprint(task.handoff);
   if (returnFingerprint === null) {
     throw new HandoffError("这份接入任务缺少来源机器指纹，无法确认该移回哪台机器；请先升级来源机并重新接力", 409);
   }
   // 身份核对在最前面:指纹对不上就直接抛,连盘点都不做——用户要先解决「这台是不是
   // 我那台机器」,别让一堆盘点数字把警告冲下去。
-  const expectedFingerprint = returnFingerprint ?? await rememberedFingerprint(targetUrl);
-  const { ping, peer } = await pingPeer(targetUrl, expectedFingerprint);
+  const pendingFingerprint = currentMarker?.direction === "out" && currentMarker.pending
+    ? currentMarker.peerFp : null;
+  const expectedFingerprint = returnFingerprint ?? pendingFingerprint ?? await rememberedFingerprint(targetUrl);
+  const returnContext = inboundReturnContext(taskId, task.handoff);
+  const { ping, peer, taskScopedReturn } = await pingPeer(
+    targetUrl,
+    expectedFingerprint,
+    returnContext,
+    { allowReturnFallback: options.allowReturnFallback },
+  );
   // 项目匹配靠仓库目录名:两台机器的绝对路径几乎必然不同,目录名是最稳的公共项。
   // 两侧路径可能来自不同操作系统(本机 Windows、对端 macOS,或反过来),所以不用
   // 跟随运行平台的 basename,统一按 win32 规则切——/ 和 \ 都认、吃掉盘符和尾分隔符,
@@ -174,6 +208,9 @@ export async function preflightHandoff(taskId: string, targetUrlRaw: string): Pr
   const rows = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
   const withCli = rows.filter((s) => s.cliSessionId);
   const { found, notes } = await collectSessionFiles(rows, expandHome(project.repoPath), true);
+  if (returnContext && !taskScopedReturn) {
+    notes.push("原机没有可用的任务存档，已切换为普通接力；需要原机批准当前机器后才能移回");
+  }
   const wt = worktreePathFor(project.repoPath, taskId);
   const gitReady = !!task.useWorktree && existsSync(wt);
   // 项目清单为空有两种原因,别混成一句话:对端真没建项目,还是它没批准本机所以不报。
@@ -225,6 +262,7 @@ export async function preflightHandoff(taskId: string, targetUrlRaw: string): Pr
   return {
     ok: true,
     target: { url: targetUrl, host: ping.host },
+    taskScopedReturn,
     peer,
     projects: ping.projects,
     suggestedProjectId: suggested?.id ?? null,
@@ -306,8 +344,9 @@ export async function exportHandoff(
     await assertNotQueueMember(taskId);
     // 先探测对端与目标项目,确认可行再停任务——反过来会白停一个正在跑的任务。
     // pingPeer 同时做身份核对:指纹和上次记住的对不上就在这里抛,bundle 一个字节都不打。
-    const expectedFingerprint = returnFingerprint ?? await rememberedFingerprint(targetUrl);
-    const { ping, peer, sealTo } = await pingPeer(targetUrl, expectedFingerprint);
+    const expectedFingerprint = returnFingerprint ?? pendingRetry?.peerFp ?? await rememberedFingerprint(targetUrl);
+    const returnContext = inboundReturnContext(taskId, prevHandoffRaw);
+    const { ping, peer, sealTo, taskScopedReturn } = await pingPeer(targetUrl, expectedFingerprint, returnContext);
     assertPeerAcceptsUs(peer);
     const targetProject = ping.projects.find((p) => p.id === opts.targetProjectId);
     if (!targetProject) throw new HandoffError("对端没有这个项目 id,先重新预检", 409);
@@ -317,6 +356,9 @@ export async function exportHandoff(
     if (!claimTurn(taskId, "handoff")) throw new HandoffError("任务回合还在收尾,稍等几秒再试", 409);
     try {
       const notes: string[] = [];
+      if (returnContext && !taskScopedReturn) {
+        notes.push("原机任务存档已删除，本次经整机审批通道重新导入原项目");
+      }
       const rows = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
         .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
       // 待发送消息(只带 pending)与定时计划随任务走:接力守卫拦续跑、调度器跳过已接力
@@ -331,9 +373,11 @@ export async function exportHandoff(
 
       let gitState: HandoffManifest["git"] = null;
       if (targetProject.isRepo) {
-        const refs = await fetchPeer<{ refs: { name: string; commit: string }[] }>(
-          `${targetUrl}/api/handoff/projects/${targetProject.id}/refs`,
-        );
+        const refs = taskScopedReturn
+          ? { refs: ping.returnRefs ?? [] }
+          : await fetchPeer<{ refs: { name: string; commit: string }[] }>(
+              `${targetUrl}/api/handoff/projects/${targetProject.id}/refs`,
+            );
         gitState = await packGitState(task, project.repoPath, refs.refs ?? [], notes);
       } else {
         notes.push("对端项目不是 git 仓库,代码不随任务迁移");
@@ -361,10 +405,12 @@ export async function exportHandoff(
       const manifest: HandoffManifest = {
         version: 1,
         sourceHost: hostname(),
+        sourcePort: currentListeningPort(),
         sourceFingerprint: localFingerprint,
         originFingerprint,
         targetProjectId: targetProject.id,
         transferId,
+        ...(taskScopedReturn ? { returnTransferId: returnContext?.returnTransferId ?? null } : {}),
         autoResume,
         sourceWorkspace,
         task: {
@@ -424,6 +470,9 @@ export async function exportHandoff(
         direction: "out",
         pending: true,
         transferId,
+        // 任务级移回应答丢失后，direction 会暂时变成 out+pending；把原始移回凭据
+        // 一起冻结，重试才能继续走 return/*，而不是退化成需要整机审批的普通接力。
+        ...(taskScopedReturn ? { returnTransferId: returnContext?.returnTransferId ?? null } : {}),
         // 冻结本次目标项目与 autoResume:收口重试必须原样重放(见上方 pendingRetry 校验)。
         targetProjectId: targetProject.id,
         autoResume,
@@ -445,7 +494,7 @@ export async function exportHandoff(
       let result: { ok: boolean; taskId: string; autoResume?: boolean; idempotent?: boolean; notes?: string[]; error?: string };
       try {
         result = await fetchPeer<{ ok: boolean; taskId: string; autoResume?: boolean; idempotent?: boolean; notes?: string[]; error?: string }>(
-          `${targetUrl}/api/handoff/import`,
+          `${targetUrl}/api/handoff/${taskScopedReturn ? "return/import" : "import"}`,
           {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -462,7 +511,8 @@ export async function exportHandoff(
       } catch (e) {
         if (e instanceof HandoffError && e.network) {
           // 送没送到说不清:保留 pending 标记,把收口方法一并告诉用户。
-          e.message += "。对端可能已经收到这份任务:本机保留「接力未确认」标记,原样重试会自动幂等收口;确认对端没收到的话,在任务横幅上移除接力标记即可在本机继续。";
+          const pendingLabel = taskScopedReturn ? "移回未确认" : "接力未确认";
+          e.message += `。对端可能已经收到这份任务:本机保留「${pendingLabel}」标记,原样重试会自动幂等收口;确认对端没收到的话,在任务横幅上移除接力标记即可在本机继续。`;
           throw e;
         }
         // 带 ash 标记的业务拒绝(对端可证明没落库):恢复接力前的标记,本机照常可跑。

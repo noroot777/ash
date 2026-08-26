@@ -17,6 +17,7 @@ import { conversationToMarkdown } from "./conversationModel.ts";
 import { ConversationFeed } from "./ConversationFeed.tsx";
 import { DeleteTaskDialog } from "./DeleteTaskDialog.tsx";
 import { HandoffBanner } from "./HandoffDialog.tsx";
+import { HandoffAuditBanner } from "./HandoffAuditBanner.tsx";
 import { QuestionCard } from "./QuestionCard.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
 import { TaskDerivationComposer } from "./TaskDerivationComposer.tsx";
@@ -374,8 +375,14 @@ export function TaskDetail({
               inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
               notify={notify}
             />
+            {task.handoffAudit && <HandoffAuditBanner audit={task.handoffAudit} />}
             {task.handoff && (
-              <HandoffBanner taskId={task.id} handoff={task.handoff} notify={notify} onTaskUpdate={onTaskUpdate} />
+              <HandoffBanner
+                taskId={task.id}
+                handoff={task.handoff}
+                notify={notify}
+                onTaskUpdate={onTaskUpdate}
+              />
             )}
             {reviewOpen ? (
               <TaskReviewWorkspace

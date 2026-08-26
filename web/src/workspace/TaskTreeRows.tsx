@@ -182,7 +182,10 @@ export function TaskRow({
                 size={12}
                 weight="bold"
                 className="workspace-task-kind"
-                aria-label="接力转出"
+                aria-label={task.handoff.pending
+                  && Object.prototype.hasOwnProperty.call(task.handoff, "returnTransferId")
+                  ? "移回未确认"
+                  : "接力转出"}
               />
             )}
             {trailing}

@@ -37,6 +37,27 @@ export interface HandoffPeer {
   approvedAt: string | null;
   /** 最近一次来访地址,纯展示。 */
   lastAddr: string;
+  /** true = 仅为撤销历史回程权限而建立的拒绝记录，并不代表这台机器曾申请整机接力。 */
+  returnOnly: boolean;
+}
+
+/** 历史 out 存档授予的任务级回程权限；它不等于整机入站批准。 */
+export interface HandoffReturnGrant {
+  fingerprint: string;
+  short: string;
+  name: string;
+  taskCount: number;
+  lastGrantedAt: string;
+  blocked: boolean;
+}
+
+/** 无法核验对端时由用户显式承担双任务风险的持久审计记录。 */
+export interface HandoffAudit {
+  kind: "forced-recovery";
+  at: string;
+  returning: boolean;
+  peerName: string | null;
+  forceReason: "legacy" | "unreachable" | "identity" | "unverifiable";
 }
 
 /** 预检时对目标机做的身份核对结果(出站方向)。 */
@@ -80,6 +101,10 @@ export interface TaskHandoff {
   // 这一次接力的身份证(源机生成并持久化,导入侧存进 in 标记):重试时对端据此把
   // 「已有同 id 任务」识别成同一次接力。老版本导出的标记没有这个字段。
   transferId?: string | null;
+  // out+pending:存在这个字段表示这是一次“移回”的送达未知态，值是原始 out 存档的
+  // transferId；returned:保留同一凭据，供移回应答丢失后的任务级 ping/import 幂等收口。
+  // 字段存在而值为 null 也有意义：代表旧记录的移回意图，不能退化成普通接力。
+  returnTransferId?: string | null;
   // out:对端项目 id,供横幅生成带项目与任务的完整直达链接。pending 时还用于冻结
   // 第一次发送参数:收口重试只能对同一台机器、同一个项目原样重放。
   targetProjectId?: string | null;
@@ -90,7 +115,8 @@ export interface TaskHandoff {
   // 这一批——pending 期间新建的消息没有随幂等重放迁移到对端,必须留在托盘里如实提醒,
   // 按「当前所有 pending」取消就是静默丢消息。
   messageIds?: string[];
-  // out: 对端 ash 根地址（横幅可点过去）；in: 源机自述不了地址,为 null。
+  // out: 对端 ash 根地址；in:接入时由真实来源地址 + 源机监听端口恢复出的回程候选地址。
+  // 地址只用于连接，移回仍会按 peerFp 实时验明身份。
   peerUrl: string | null;
   // out: 目标配置里的名字；in: 源机主机名。
   peerName: string | null;
@@ -123,6 +149,8 @@ export interface HandoffPingProject {
 export interface HandoffPreflightResult {
   ok: true;
   target: { url: string; host: string };
+  /** true = 本次移回仍使用任务存档限定的免审批通道；false = 普通接力或已降级为普通接力。 */
+  taskScopedReturn: boolean;
   /** 对目标机做的身份核对(出站方向)。null = 对端连 ping 都没报身份且本机也没记过。 */
   peer: HandoffPeerIdentity | null;
   projects: HandoffPingProject[];

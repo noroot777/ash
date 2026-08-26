@@ -10,7 +10,7 @@
 //      之后每次预检/导出都先核对,对不上就**拒绝打包**,连探测都不往下走。
 //
 // 入站方向(谁能推进本机)在 handoff-peers.ts。
-import type { HandoffApprovalResult, HandoffPeerIdentity, HandoffTarget } from "@ash/shared";
+import type { HandoffApprovalResult, HandoffIdentity, HandoffPeerIdentity, HandoffTarget } from "@ash/shared";
 import { getAppSettings, patchAppSettings } from "./app-settings.js";
 import { HandoffError } from "./handoff-types.js";
 import type { HandoffPingResponse } from "./handoff-types.js";
@@ -90,11 +90,14 @@ export async function fetchPeer<T>(
     // 按网络类失败(network=true)处理,让调用方保留 pending 而不是回滚——宁可让用户
     // 多点一次收口重试,也不能让同一个任务在两台机器上各跑一份。
     // 鉴权拒绝(401/403)一律带 ash 标记,确实什么都没导入,回滚才是对的。
-    throw new HandoffError(
+    const error = new HandoffError(
       `对端返回 ${res.status}：${payload?.error ?? "未知错误"}`,
       502,
       payload?.ash !== true,
     );
+    error.remoteStatus = res.status;
+    error.remoteAsh = payload?.ash === true;
+    throw error;
   }
   if (payload === null) {
     // 2xx 但应答体读不出来:对端多半已经处理成功,只是应答在路上断了——按网络类失败
@@ -104,8 +107,36 @@ export async function fetchPeer<T>(
   return payload as T;
 }
 
+/**
+ * 只读取目标机公开身份，不带本机签名、不携带任务 id，也不会触发对端 touchPeer。
+ * 批量弹窗用它把用户填写的主机名/IP 映射到 marker 指纹；正式预检仍会做签名挑战。
+ */
+export async function probePeerIdentity(rawTargetUrl: string, timeoutMs = 2_000): Promise<HandoffIdentity> {
+  const url = `${normalizePeerUrl(rawTargetUrl)}/api/handoff/identity`;
+  let response: Response;
+  try {
+    response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new HandoffError(`连不上对端 ash（${url}）：${message}`, 502, true);
+  }
+  const body = (await response.json().catch(() => null)) as Partial<HandoffIdentity> | null;
+  if (!response.ok || !body || typeof body.fingerprint !== "string"
+    || !/^[0-9a-f]{64}$/i.test(body.fingerprint)) {
+    throw new HandoffError(`目标机身份应答无效（${url}）`, 502, true);
+  }
+  const fingerprint = body.fingerprint.toLowerCase();
+  return {
+    fingerprint,
+    short: shortFingerprint(fingerprint),
+    host: typeof body.host === "string" && body.host ? body.host : new URL(url).hostname,
+  };
+}
+
 export interface PeerProbe {
   ping: HandoffPingResponse;
+  /** true = 本次使用任务级免审批回程；false = 普通接力（缺存档/旧版时需整机审批）。 */
+  taskScopedReturn: boolean;
   /** null = 对端没报身份、本机也没记过指纹(两边都是旧版,无从核对)。 */
   peer: HandoffPeerIdentity | null;
   /**
@@ -115,17 +146,48 @@ export interface PeerProbe {
   sealTo: { kx: string; fingerprint: string } | null;
 }
 
+export interface HandoffReturnContext {
+  taskId: string;
+  returnTransferId?: string | null;
+}
+
+const identityRecoveryGuidance = (returnContext?: HandoffReturnContext): string => returnContext
+  ? "任务来源指纹保存在这条任务的接力记录里，设置页没有可清除项。确认是同一台来源机时，请先恢复来源机原来的 ash 数据和身份；若身份无法恢复，不要忽略校验直接移回，应在本机继续任务并手工迁移。"
+  : "确认无误再到「设置 → 默认规则」清掉记住的指纹重新配对。";
+
 /**
  * 探活 + 身份核对。任何一步对不上都直接抛(HandoffError,非 network)——**在打包之前**
  * 拦下来,不能等 bundle 都推出去了才发现推错了机器。
  *
- * `expectedFp` 由调用方从 handoffTargets 里取(按 url 匹配);没有就是首次配对(TOFU)。
+ * `expectedFp` 来自整机目标设置或任务 marker；`returnContext` 非空表示后者。
+ * 两者都没有才是首次配对(TOFU)。
  */
-export async function pingPeer(targetUrl: string, expectedFp?: string | null): Promise<PeerProbe> {
+export async function pingPeer(
+  targetUrl: string,
+  expectedFp?: string | null,
+  returnContext?: HandoffReturnContext,
+  options: { allowReturnFallback?: boolean } = {},
+): Promise<PeerProbe> {
   const nonce = newNonce();
-  const ping = await fetchPeer<HandoffPingResponse>(
-    `${targetUrl}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`,
-  );
+  const pingUrl = returnContext ? `${targetUrl}/api/handoff/return/ping` : `${targetUrl}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`;
+  let ping: HandoffPingResponse;
+  let taskScopedReturn = Boolean(returnContext);
+  try {
+    ping = returnContext
+      ? await fetchPeer<HandoffPingResponse>(pingUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ...returnContext, nonce }),
+        })
+      : await fetchPeer<HandoffPingResponse>(pingUrl);
+  } catch (error) {
+    // 老版来源机没有任务级端点，或原机已删掉历史存档：退回普通接力通道。身份仍按
+    // 任务来源指纹核对，但 refs/import 会恢复整机审批，不能借降级继续免审批写入。
+    if (!returnContext || options.allowReturnFallback === false || !(error instanceof HandoffError)
+      || error.remoteStatus !== 404) throw error;
+    taskScopedReturn = false;
+    ping = await fetchPeer<HandoffPingResponse>(`${targetUrl}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`);
+  }
   if (!ping?.ok || ping.service !== "ash") {
     throw new HandoffError("对端不是 ash（/api/handoff/ping 应答不对）", 502);
   }
@@ -135,11 +197,11 @@ export async function pingPeer(targetUrl: string, expectedFp?: string | null): P
     // 直接断掉);**记过就一律拒绝** —— 一台报过身份的机器突然不报了,不是降级就是冒充。
     if (expectedFp) {
       throw new HandoffError(
-        `目标机这次没有报出身份,但本机记着它的指纹是 ${shortFingerprint(expectedFp)}。这可能是对端被降级/换了机器,也可能是有人冒充它。确认无误再到「设置 → 默认规则」清掉记住的指纹重新配对。`,
+        `目标机这次没有报出身份,但本机记着它的指纹是 ${shortFingerprint(expectedFp)}。这可能是对端被降级/换了机器,也可能是有人冒充它。${identityRecoveryGuidance(returnContext)}`,
         409,
       );
     }
-    return { ping, peer: null, sealTo: null };
+    return { ping, peer: null, sealTo: null, taskScopedReturn };
   }
   // 指纹一律按公钥现算,不信对端自报的那个字段。
   const fingerprint = fingerprintOf(identity.publicKey);
@@ -158,7 +220,7 @@ export async function pingPeer(targetUrl: string, expectedFp?: string | null): P
     throw new HandoffError(
       `目标机的身份和上次不一样:记住的是 ${shortFingerprint(expectedFp!)},这次是 ${shortFingerprint(fingerprint)}。`
       + "可能是那台机器重装过、也可能是这个地址现在指向了别的机器 —— 接力会把整个仓库和对话历史发过去,所以先核对对端设置页上的指纹。"
-      + "确认是同一台机器,到「设置 → 默认规则」清掉记住的指纹再接力。",
+      + identityRecoveryGuidance(returnContext),
       409,
     );
   }
@@ -166,6 +228,7 @@ export async function pingPeer(targetUrl: string, expectedFp?: string | null): P
   const sealTo = handoffEncrypt && identity.kxPublicKey ? { kx: identity.kxPublicKey, fingerprint } : null;
   return {
     ping,
+    taskScopedReturn,
     peer: {
       fingerprint,
       short: shortFingerprint(fingerprint),

@@ -16,8 +16,8 @@ export function handoffBlockReason(handoff: string | null | undefined): string |
     const h = JSON.parse(handoff) as { direction?: string; pending?: boolean; peerName?: string | null };
     if (h?.direction !== "out") return null;
     return h.pending
-      ? "任务正在接力到另一台机器（还没确认送达）。重试接力完成收口，或先移除接力标记再在本机继续。"
-      : `任务已接力到${h.peerName ? `「${h.peerName}」` : "另一台机器"}继续执行，本机这份是历史存档。要在本机继续，先移除接力标记。`;
+      ? "任务正在接力到另一台机器（还没确认送达）。请原样重试接力完成收口；若对端离线或版本过旧，可从任务横幅显式强制恢复（可能产生双任务）。"
+      : `任务已接力到${h.peerName ? `「${h.peerName}」` : "另一台机器"}继续执行，本机这份是历史存档。要回到本机，请从持有机器发起移回。`;
   } catch {
     return null;
   }
