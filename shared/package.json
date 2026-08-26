@@ -26,6 +26,10 @@
       "types": "./src/run-activity.ts",
       "default": "./src/run-activity.ts"
     },
+    "./search": {
+      "types": "./src/search.ts",
+      "default": "./src/search.ts"
+    },
     "./usage": {
       "types": "./src/usage.ts",
       "default": "./src/usage.ts"

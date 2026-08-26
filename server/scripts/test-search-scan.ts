@@ -135,7 +135,68 @@ try {
     "会话里带排除词的那条要被剔掉",
   );
 
-  console.log("✓ search scan: 早停等价 + 跨字段 AND + 排除词 + 多词 + 纯排除");
+  // ── 7. 本项目优先：先扫本项目、再扫别的项目，顺序与流式分界都要对 ──────────
+  // 分段扫之所以成立，全靠 compareSearchHits 里「当前项目在前」排在字段之前：本项目的
+  // 命中整体压过别的项目，所以先出本项目不会中途重排。谁把那把钥匙挪到字段后面，这条挂。
+  await db.insert(projects).values({ id: "other", name: "别的项目", repoPath: root, apiKeys: null, createdAt: iso(0) });
+  await db.insert(tasks).values([
+    { ...taskRow("zeta-local", "zeta 在本项目", "", 300), projectId: "project" },
+    // 更新时间比本项目那条**新**：没有「本项目优先」它就该排前面
+    { ...taskRow("zeta-other", "zeta 在别的项目", "", 500), projectId: "other" },
+  ]);
+
+  const zetaPlain = await searchAll("zeta");
+  assert.deepEqual(
+    zetaPlain.map((hit) => hit.id),
+    ["zeta-other", "zeta-local"],
+    "不给 preferProjectId 时按老规矩排：同为标题档，新的在前",
+  );
+
+  const streamed: string[] = [];
+  let markerAt = -1;
+  const zetaLocal = await searchAll("zeta", {
+    preferProjectId: "project",
+    onHit: (hit) => streamed.push(hit.id),
+    onLocalDone: () => { markerAt = streamed.length; },
+  });
+  assert.deepEqual(
+    zetaLocal.map((hit) => hit.id),
+    ["zeta-local", "zeta-other"],
+    "本项目的命中排在别的项目前面，哪怕它更旧",
+  );
+  assert.deepEqual(streamed, ["zeta-local", "zeta-other"], "流式回调吐出的是同一批，且本项目先出");
+  assert.equal(markerAt, 1, "local-done 这条分界正好落在本项目最后一条之后");
+
+  // ── 8. 本项目自己就收满上限时，别的项目整个不用碰 ──────────────────────
+  // 60 条 `alpha beta` 标题命中全在 project 里，上限 50 —— 别的项目再新也挤不进来。
+  await db.insert(tasks).values([{ ...taskRow("alpha-other", "alpha beta 在别的项目", "", 900), projectId: "other" }]);
+  const capped = await searchAll("alpha beta", { preferProjectId: "project" });
+  assert.equal(capped.length, 50, "仍是 50 条");
+  assert.ok(
+    capped.every((hit) => hit.projectId === "project"),
+    "本项目已经收满，别的项目那条（更新、且是标题档）不该出现 —— 这就是分段早停省下的那一大半扫描",
+  );
+
+  // ── 9. 流式与整份必须是同一次搜索 ─────────────────────────────────────
+  // 两条路（`/search` 与 `/search/stream`）跑的是同一个 searchAll，但早停发生在扫描过程中，
+  // 「回调吐过的」和「最终返回的」是两个不同时刻的集合。差了就是界面上多出/少掉几条。
+  const pushed: string[] = [];
+  const returned = await searchAll("alpha", { preferProjectId: "project", onHit: (hit) => pushed.push(hit.id) });
+  const pushedSet = new Set(pushed);
+  assert.ok(returned.length > 0, "这一查得有结果，不然下面这条断言是空转");
+  assert.ok(
+    returned.every((hit) => pushedSet.has(hit.id)),
+    "整份返回的每一条都被回调吐过（回调可能多吐几条 —— settled 那批不早停，最终按上限切掉）",
+  );
+
+  // ── 10. 中断信号一到就停手 ────────────────────────────────────────────
+  // ⌘K 每敲一个字就是一次新的全盘扫。不中断上一次，几十个扫描叠在一起会把事件循环占死。
+  const aborted = new AbortController();
+  aborted.abort();
+  const nothing = await searchAll("omega", { signal: aborted.signal });
+  assert.equal(nothing.length, 0, "已经取消的搜索不该再下盘扫会话");
+
+  console.log("✓ search scan: 早停等价 + 跨字段 AND + 排除词 + 多词 + 纯排除 + 本项目优先 + 流式一致 + 可中断");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

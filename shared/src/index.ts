@@ -501,7 +501,9 @@ export interface LlmProvider {
 }
 
 // ── Global search (⌘K) ───────────────────────────────────────────────────────
-// 形状住在 ./search.ts(纯类型,这里只再导出)。
+// 形状住在 ./search.ts,这里只再导出**类型**;那个文件里的排序判据
+// (compareSearchHits / SEARCH_MAX_HITS)是运行时值,走子路径 `@ash/shared/search`
+// ——index.ts 不能转发运行时函数(见 server/CLAUDE.md)。
 export type { NoteSearchHit, SearchField, SearchHit, TaskSearchHit } from "./search.ts";
 
 // ── Attachments (pasted into the composer / reply box) ───────────────────────
