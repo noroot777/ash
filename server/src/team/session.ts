@@ -100,6 +100,9 @@ interface Lead {
   // CLI 刚报上来、但还没写进库的会话凭据。内存里的 id 换得比库快,这一笔补不上,进程
   // 一回收或 server 一重启就只能 fresh —— 刚建立的上下文无声消失(flushPendingCredential)。
   pendingCredential: ({ cliSessionId: string } & ResumeFields) | null;
+  // 该写进 tasks.status 的值,以及还没写成功时的重试计时(见 setLeadStatus)。
+  wantedStatus: "running" | "idle" | null;
+  statusTimer: NodeJS.Timeout | null;
   idleTimer: NodeJS.Timeout | null;
   closing: "recycle" | "halt" | "workspace" | null;
 }
@@ -401,6 +404,8 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
     pending: [],
     notices: [],
     pendingCredential: null,
+    wantedStatus: null,
+    statusTimer: null,
     idleTimer: null,
     closing: null,
   };
@@ -653,6 +658,56 @@ async function flushPendingCredential(lead: Lead): Promise<boolean> {
   return ok;
 }
 
+const STATUS_RETRY_MS = Number(process.env.ASH_TEAM_STATUS_RETRY_MS ?? 5_000);
+
+/**
+ * 写这台调度台的任务状态,**写不进去就一直重试**。
+ *
+ * 别把它跟 activeMs、endedAt 那些统计混成一种语义。`tasks.status` 是路由门禁、排队投递
+ * 和页面按钮的共同真相源:回合已经收了、agentEnd 已经落盘,库里却还写着 running,用户看到
+ * 的是「仍在跑/可停止」,依赖 idle 的后续动作也不会推进。而常驻会话跟一次性任务不同 ——
+ * 它收完一个回合就阻塞在 events 上,**没有下一个自然的补写时机**:默认要等下一条消息或
+ * 30 分钟空闲回收,`ASH_TEAM_IDLE_MS<=0` 时可以永远维持(2026-08-25 第 5 轮审查)。所以这
+ * 一笔必须自己带重试,而不是报一声就算完。
+ *
+ * 报错只报第一次(后面每 STATUS_RETRY_MS 静默重试),那之后再刷屏也不多给用户任何信息。
+ */
+async function setLeadStatus(lead: Lead, status: "running" | "idle", at = now()): Promise<void> {
+  clearStatusRetry(lead);
+  lead.wantedStatus = status;
+  const what = status === "idle" ? "调度台待命状态" : "调度台运行状态";
+  if (await persistOrReport(lead, what, () => setTaskStatus(lead.taskId, status), at)) {
+    if (lead.wantedStatus === status) lead.wantedStatus = null;
+    return;
+  }
+  armStatusRetry(lead);
+}
+
+function clearStatusRetry(lead: Lead): void {
+  if (lead.statusTimer) clearTimeout(lead.statusTimer);
+  lead.statusTimer = null;
+}
+
+function armStatusRetry(lead: Lead): void {
+  clearStatusRetry(lead);
+  const status = lead.wantedStatus;
+  if (!status) return;
+  const t = setTimeout(() => {
+    lead.statusTimer = null;
+    // 期间要么这台调度台自己改了主意(开了新回合/关了台),要么整个任务已经换了新调度台
+    // 接管 —— 两种情况下最新那次写入才是真相,别拿这个旧值盖回去。
+    const owner = leads.get(lead.taskId);
+    if (lead.wantedStatus !== status || (owner && owner !== lead)) return;
+    void setTaskStatus(lead.taskId, status)
+      .then(() => {
+        if (lead.wantedStatus === status) lead.wantedStatus = null;
+      })
+      .catch(() => armStatusRetry(lead));
+  }, STATUS_RETRY_MS);
+  (t as { unref?: () => void }).unref?.();
+  lead.statusTimer = t;
+}
+
 // 入站消息(执行者汇报/提问、系统提示)记成 system turn:实时走 system 事件、
 // 刷新走 .md 的哨兵行,两边长得一样。
 function recordSystemTurn(lead: Lead, text: string, at = now()): void {
@@ -690,7 +745,7 @@ async function beginTurn(lead: Lead, at = now()): Promise<void> {
     model: lead.model,
     reasoningEffort: lead.reasoningEffort,
   });
-  await persistOrReport(lead, "调度台运行状态", () => setTaskStatus(lead.taskId, "running"), at);
+  await setLeadStatus(lead, "running", at);
 }
 
 // 一个回合说完了(进程还活着)。有攒下的执行者消息就立刻合并成一条继续跑,
@@ -722,7 +777,7 @@ async function endTurn(lead: Lead): Promise<void> {
     await beginTurn(lead, at);
     return;
   }
-  await persistOrReport(lead, "调度台待命状态", () => setTaskStatus(lead.taskId, "idle"), endIso);
+  await setLeadStatus(lead, "idle", endIso);
   armIdle(lead);
 }
 
@@ -818,15 +873,20 @@ async function closeLead(
   lead.out.end();
   // 团队没有终态,进程没了就是待命。注意 lead.out 已经 end 了 —— 这一步失败只能走日志
   // 和 SSE,再往那条流里写一个字会当场 ERR_STREAM_WRITE_AFTER_END 打崩整个 server。
+  // 失败同样要重试:这里写不进去,任务就永久停在 running(跟 setLeadStatus 同一个理由)。
   if (!superseded) {
+    clearStatusRetry(lead);
+    lead.wantedStatus = "idle";
     try {
       await setTaskStatus(lead.taskId, "idle");
+      lead.wantedStatus = null;
     } catch (error) {
       console.error(`[ash] closeLead(${lead.taskId}) idle status failed:`, error);
       publish(lead, {
         kind: "error",
         message: `调度台待命状态写入数据库失败：${error instanceof Error ? error.message : String(error)}`,
       });
+      armStatusRetry(lead);
     }
   }
 }

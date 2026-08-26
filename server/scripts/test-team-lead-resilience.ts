@@ -25,6 +25,7 @@ const root = mkdtempSync(join(tmpdir(), "ash-team-resilience-"));
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 process.env.ASH_TEAM_IDLE_MS = "0"; // 别在测试里挂一个 30 分钟的回收计时
+process.env.ASH_TEAM_STATUS_RETRY_MS = "40"; // 状态重试:别让测试干等 5 秒
 
 // 真机 Codex stderr:同一条 thread 已经 poisoned,恢复它只会一次次撞同一堵墙。
 const POISON = "ignored world-state patch without a full snapshot";
@@ -46,6 +47,12 @@ const breakSessionWrites = () =>
     "CREATE TRIGGER injected_sessions_failure BEFORE UPDATE ON sessions BEGIN SELECT RAISE(ABORT, 'injected sessions failure'); END;",
   );
 const healSessionWrites = () => dbClient.executeMultiple("DROP TRIGGER IF EXISTS injected_sessions_failure;");
+// 只让 tasks 的状态更新失败(sessions 照常可写)—— 复现「回合已经收了、库里还写着 running」。
+const breakTaskWrites = () =>
+  dbClient.executeMultiple(
+    "CREATE TRIGGER injected_tasks_failure BEFORE UPDATE ON tasks BEGIN SELECT RAISE(ABORT, 'injected idle status failure'); END;",
+  );
+const healTaskWrites = () => dbClient.executeMultiple("DROP TRIGGER IF EXISTS injected_tasks_failure;");
 
 interface Scenario {
   /** 这台调度台开台时手上那条 CLI 会话 id(同时写进库)。 */
@@ -53,6 +60,8 @@ interface Scenario {
   /** 按 consume 的消费节奏一条条放事件;generator 只有在上一条处理完才恢复执行, */
   /** 所以「装/拆故障」写在 yield 之间,天然排在前一条事件处理完之后。 */
   script: () => AsyncGenerator<AgentEvent>;
+  /** events 流**还在线**时要断言的事(由 script 自己用 promise 卡住时机)。 */
+  whileLive?: (taskId: string) => Promise<void>;
 }
 
 /** 起一台真的调度台,喂完 script 里的事件,等它自己收完台。 */
@@ -125,6 +134,7 @@ async function runLead(name: string, s: Scenario) {
   });
 
   const deadline = Date.now() + 15_000;
+  if (s.whileLive) await s.whileLive(taskId);
   while (teamIsLive(taskId) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
   assert.equal(
     teamIsLive(taskId),
@@ -266,9 +276,52 @@ try {
   assert.equal((await e.session()).cliSessionId, null, "这一路本来就没有 id 可落");
   ok("没拿到会话 id 就异常:如实说下次是全新会话");
 
+  // ── ⑥ 落 idle 那一笔写库瞬时失败:必须补上,不能让任务永久显示 running ──────────────
+  // 这一条跟前面几条最大的不同是**事件流全程在线**:常驻调度台收完一个回合就阻塞在
+  // events 上,没有下一个自然的补写时机 —— 默认要等下一条消息或 30 分钟空闲回收,
+  // ASH_TEAM_IDLE_MS<=0 时可以永远维持。而 tasks.status 是路由门禁、排队投递和页面按钮
+  // 的共同真相源:用户看到「仍在跑/可停止」,依赖 idle 的后续动作也不会推进。
+  let reachedIdle!: () => void;
+  const turnSettled = new Promise<void>((r) => { reachedIdle = r; });
+  let releaseStream!: () => void;
+  const holdStream = new Promise<void>((r) => { releaseStream = r; });
+  const f = await runLead("idle-status-write", {
+    cliSessionId: "live-thread",
+    script: async function* () {
+      breakTaskWrites();
+      yield { kind: "turnEnd" }; // 落 idle 这一笔会失败
+      healTaskWrites(); // 瞬时故障:库这就好了
+      reachedIdle();
+      await holdStream; // events 流留在线上,让断言在「调度台还活着」时进行
+      yield { kind: "done", exitStatus: 0 };
+    },
+    whileLive: async (taskId) => {
+      await turnSettled;
+      const until = Date.now() + 5_000;
+      let status = "";
+      while (Date.now() < until) {
+        status = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!.status;
+        if (status === "idle") break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      assert.equal(teamIsLive(taskId), true, "这一条要在调度台还在线时验,别退化成「关台时顺手补上了」");
+      assert.equal(
+        status,
+        "idle",
+        "落 idle 写库失败后没人再补 —— 回合早收了,库里却一直写着 running,页面按钮和排队投递全按错的状态走",
+      );
+      releaseStream();
+    },
+  });
+  healTaskWrites();
+  assert.match(f.md, /调度台待命状态写入数据库失败/, "第一次失败要如实说出来");
+  assert.equal((await f.task()).status, "idle", "收台后同样应是待命");
+  ok("落 idle 写库瞬时失败:事件流在线时也会自己补上");
+
   console.log("test:team-resilience ok");
 } finally {
   healSessionWrites();
+  healTaskWrites();
   // Windows 上 sqlite 的文件句柄不放,临时目录就删不掉(EBUSY),会把一次通过的测试
   // 报成失败。先关库再删。
   try {

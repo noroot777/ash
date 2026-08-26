@@ -25,7 +25,7 @@ import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "./tr
 import { notifyTeamLead } from "./team/inbox.js";
 import { handleTaskSettlement } from "./review.js";
 import { handleFreeWorkflowSettlement } from "./free-workflow.js";
-import { finishFreeTaskExecution, recordFreeTaskExecutionStartIfFree } from "./free-workflow-events.js";
+import { createExecutionCloser, recordFreeTaskExecutionStartIfFree } from "./free-workflow-events.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { clearTurnStart, turnOutputHint } from "./turn-output.js";
@@ -238,16 +238,8 @@ export async function consumeSingleRun(a: {
         return null;
       })
     : null;
-  let executionFinished = false;
-  const closeExecution = async (status: "completed" | "failed" | "canceled" | "paused", endedAt: string) => {
-    if (!executionEventId || executionFinished) return;
-    try {
-      await finishFreeTaskExecution(executionEventId, status, endedAt);
-      executionFinished = true;
-    } catch (error) {
-      console.warn(`[ash] failed to record free workflow execution end for ${taskId}:`, error);
-    }
-  };
+  // 终态只认第一次请求的那个,finally 那次兜底只准重试它 —— 理由见 createExecutionCloser。
+  const closeExecution = createExecutionCloser(executionEventId, taskId);
   // 会话轮换旁注的缓冲与落盘。**必须声明在 try 外面**：异常路径的兜底 flush 挂在
   // finally 上，声明进 try 里它就不在作用域内了。
   // 先取空再写：正常尾部（agentEnd 之后）跑一次，finally 再跑一次也只是空转 —— 既不会
