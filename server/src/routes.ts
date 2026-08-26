@@ -1,5 +1,6 @@
 import { Hono } from "hono";
-import { streamSSE } from "hono/streaming";
+import type { Context } from "hono";
+import { stream, streamSSE } from "hono/streaming";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { eq } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
@@ -13,6 +14,7 @@ import type {
   LlmProtocol,
 } from "@ash/shared";
 import { maxBytesFor, attachmentKind } from "@ash/shared";
+import type { SearchStreamLine } from "@ash/shared/search";
 import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@ash/shared/cli-presets";
 import { normalizeCliConfigOverrides, cliConfigOverrideErrors, readCliConfigOverrides } from "@ash/shared/cli-overrides";
 import { db } from "./db/index.js";
@@ -102,16 +104,55 @@ api.patch("/settings", async (c) => {
 // Global search across tasks + session transcripts (see search.ts).
 // Sub-2-char queries return empty instead of erroring — the palette calls this
 // on every keystroke.
-api.get("/search", async (c) => {
+type SearchParams = { error: string } | { q: string; projectId?: string; preferProjectId?: string; type?: "tasks" | "notes" };
+const searchParams = (c: Context): SearchParams => {
   const q = (c.req.query("q") ?? "").trim();
-  if (q.length < 2) return c.json([]);
   const projectId = (c.req.query("projectId") ?? "").trim() || undefined;
+  // 排序/扫描偏好，跟 projectId 那个硬筛子是两回事：⌘K 一般在当前项目里找东西，
+  // 于是先把它扫完先吐出来，再去扫别的项目。
+  const prefer = (c.req.query("prefer") ?? "").trim() || undefined;
   const type = (c.req.query("type") ?? "").trim();
-  if (type && type !== "tasks" && type !== "notes") {
-    return c.json({ error: "type must be tasks or notes" }, 400);
-  }
-  const searchType = type === "tasks" || type === "notes" ? type : undefined;
-  return c.json(await searchAll(q, { projectId, type: searchType }));
+  if (type && type !== "tasks" && type !== "notes") return { error: "type must be tasks or notes" as const };
+  return { q, projectId, preferProjectId: prefer, type: type === "tasks" || type === "notes" ? type : undefined };
+};
+
+api.get("/search", async (c) => {
+  const params = searchParams(c);
+  if ("error" in params) return c.json({ error: params.error }, 400);
+  if (params.q.length < 2) return c.json([]);
+  const { q, ...options } = params;
+  return c.json(await searchAll(q, { ...options, signal: c.req.raw.signal }));
+});
+
+// 同一次搜索的流式版本：命中一条吐一行 NDJSON，中间插一行 `{"marker":"local-done"}`
+// 分隔「本项目」和「其他项目」两段。语料 2.2 GB，一次全盘扫要几秒 —— 让用户盯着一个
+// 空列表等几秒，和边扫边出，是两种东西。行的形状是 SearchStreamLine，前端拿
+// compareSearchHits 把它们插进列表（判据两边共用一份，不然流式插入的顺序会跟服务端
+// 早停时以为的顺序对不上，早停就会砍错人）。
+api.get("/search/stream", async (c) => {
+  const params = searchParams(c);
+  if ("error" in params) return c.json({ error: params.error }, 400);
+  const { q, ...options } = params;
+  c.header("Content-Type", "application/x-ndjson; charset=utf-8");
+  c.header("Cache-Control", "no-store");
+  c.header("X-Accel-Buffering", "no");
+  return stream(c, async (writer) => {
+    if (q.length < 2) return;
+    // 写入串成一条链：onHit 是同步回调，直接 await 会把扫描卡住，各写各的又会乱序。
+    let tail: Promise<unknown> = Promise.resolve();
+    const push = (line: SearchStreamLine) => {
+      tail = tail.then(() => writer.write(`${JSON.stringify(line)}\n`)).catch(() => {
+        // 客户端走了（又敲了一个字 / 关掉 ⌘K）。signal 会让扫描自己停下来，这里不用嚷嚷。
+      });
+    };
+    await searchAll(q, {
+      ...options,
+      signal: c.req.raw.signal,
+      onHit: (hit) => push(hit),
+      onLocalDone: () => push({ marker: "local-done" }),
+    });
+    await tail;
+  });
 });
 
 // ── attachment uploads (pasted into the composer / reply box) ────────────────
