@@ -35,6 +35,7 @@
     "test:reviewer-turn-dom": "node scripts/test-reviewer-turn-dom.mjs",
     "test:task-tree": "node --experimental-strip-types scripts/test-task-tree.mjs",
     "test:task-tree-preview": "node scripts/test-task-tree-preview.mjs",
+    "test:task-tree-offline": "node scripts/test-task-tree-offline.mjs",
     "test:bulk-handoff": "node --experimental-strip-types scripts/test-bulk-handoff.mjs",
     "test:remote-task": "node scripts/test-remote-task.mjs",
     "test:handoff-dialog-lifetime": "node scripts/test-handoff-dialog-lifetime.mjs",

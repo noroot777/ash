@@ -156,18 +156,11 @@ function ScopedTaskTree({
     else next.add(sectionKey);
     return next;
   });
-  // 一条不剩时必须自己说出来，还得给条退路：窄态那排点很小，不说清楚的话看着就是「任务全没了」。
-  if (!layout.some((entry) => entry.kept.length) && !machineSection) {
-    const label = SPREAD_FILTERS.find((item) => item.key === filter)?.label ?? filter;
-    return (
-      <p className="workspace-task-empty">
-        {filter === "all" ? emptyText : `「${label}」下没有任务`}
-        {filter !== "all" && (
-          <button className="workspace-task-empty-action" type="button" onClick={onClearFilter}>显示全部</button>
-        )}
-      </p>
-    );
-  }
+  // 空态**只有下面那一处**。这里曾经还有一个提前 return：一条行都不剩时直接返回那句
+  // 「没有任务」，把后面正常分支里的东西全绕过去 —— 于是最需要解释的那一刻反而没了解释：
+  // 出站行因为持有机联系不上退回冻住的状态、正好又是唯一候选时，用户看到的是
+  // 「没有在跑、等你答复或待验收的任务」，而屏幕上本该写着「联系不上 mac-mini」。
+  // 同一句话有两份拷贝，补一处漏一处；删掉那份，让所有情况都走同一条渲染路径。
   type RenderGroup = (typeof layout)[number]["groups"][number];
   // 一个行块的内容：年龄闸筛过的那几行 +「显示另外 N 条」。分节和项目分组共用它。
   const renderRows = (group: RenderGroup, showProject: boolean) => {
@@ -264,6 +257,9 @@ function ScopedTaskTree({
       {renderSection(pinned)}
       {machineSection}
       {renderSection(rest)}
+      {/* 一条不剩时必须自己说出来，还得给条退路：窄态那排点很小，不说清楚的话看着就是
+          「任务全没了」。它排在离线提示**之后** —— 两句话可以同时出现，而且先说清楚
+          「有台机器问不到」，再说「剩下的没有」。 */}
       {noVisibleTasks && (
         <p className="workspace-task-empty">
           {filter === "all" ? emptyText : `当前「${SPREAD_FILTERS.find((item) => item.key === filter)?.label ?? filter}」筛选下没有任务`}
