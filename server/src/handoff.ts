@@ -172,7 +172,11 @@ function assertPeerAcceptsUs(peer: HandoffPeerIdentity | null): void {
 }
 
 /** 接力预检:探测对端、核对身份、匹配项目、盘点本地可搬运的东西。只读,不停任务不动文件。 */
-export async function preflightHandoff(taskId: string, targetUrlRaw: string): Promise<TaskScopedPreflightResult> {
+export async function preflightHandoff(
+  taskId: string,
+  targetUrlRaw: string,
+  options: { allowReturnFallback?: boolean } = {},
+): Promise<TaskScopedPreflightResult> {
   const { task, project } = await loadSingleTask(taskId);
   const targetUrl = normalizePeerUrl(targetUrlRaw);
   const currentMarker = parsedHandoff(task.handoff);
@@ -186,7 +190,12 @@ export async function preflightHandoff(taskId: string, targetUrlRaw: string): Pr
     ? currentMarker.peerFp : null;
   const expectedFingerprint = returnFingerprint ?? pendingFingerprint ?? await rememberedFingerprint(targetUrl);
   const returnContext = inboundReturnContext(taskId, task.handoff);
-  const { ping, peer, taskScopedReturn } = await pingPeer(targetUrl, expectedFingerprint, returnContext);
+  const { ping, peer, taskScopedReturn } = await pingPeer(
+    targetUrl,
+    expectedFingerprint,
+    returnContext,
+    { allowReturnFallback: options.allowReturnFallback },
+  );
   // 项目匹配靠仓库目录名:两台机器的绝对路径几乎必然不同,目录名是最稳的公共项。
   // 两侧路径可能来自不同操作系统(本机 Windows、对端 macOS,或反过来),所以不用
   // 跟随运行平台的 basename,统一按 win32 规则切——/ 和 \ 都认、吃掉盘符和尾分隔符,

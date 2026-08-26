@@ -48,7 +48,21 @@ export function bulkTargetProjectId(
   return selectedProjectId;
 }
 
-const normalizedTargetUrl = (url: string): string => url.trim().replace(/\/+$/, "");
+const normalizedTargetUrl = (raw: string): string => {
+  const trimmed = raw.trim().replace(/\/+$/, "").replace(/\/api$/, "");
+  try {
+    const url = new URL(trimmed);
+    const rawHost = url.hostname.toLowerCase();
+    const host = rawHost === "localhost" || rawHost === "127.0.0.1"
+      || rawHost === "[::1]" || rawHost === "::1" ? "loopback" : rawHost;
+    const port = url.port || (url.protocol === "https:" ? "443" : "80");
+    return `${url.protocol}//${host}:${port}${url.pathname.replace(/\/+$/, "")}`;
+  } catch {
+    return trimmed;
+  }
+};
+export const bulkTargetAddressHintMatches = (left: string, right: string): boolean =>
+  normalizedTargetUrl(left) === normalizedTargetUrl(right);
 const sameFingerprint = (left?: string | null, right?: string | null): boolean =>
   Boolean(left && right && left.toLowerCase() === right.toLowerCase());
 
@@ -76,6 +90,18 @@ export function bulkReturnCandidates<T extends TaskListItem>(tasks: T[], project
     && !bulkTaskBaseReason(task)
     && task.handoff?.direction === "in"
     && Boolean(task.handoff.peerFp));
+}
+
+export function groupBulkHandoffFailures<T extends TaskListItem>(
+  failures: { task: T; reason: string }[],
+): { reason: string; tasks: T[] }[] {
+  const grouped = new Map<string, T[]>();
+  for (const failure of failures) {
+    const rows = grouped.get(failure.reason) ?? [];
+    rows.push(failure.task);
+    grouped.set(failure.reason, rows);
+  }
+  return [...grouped].map(([reason, tasks]) => ({ reason, tasks }));
 }
 
 export function outboundTasksForTarget<T extends TaskListItem>(

@@ -14,7 +14,9 @@ import { HandoffDialogHeader, HandoffRouteCard } from "../task-detail/HandoffDia
 import {
   bulkPreflightAllowsRun,
   bulkPreflightIssue,
+  groupBulkHandoffFailures,
   bulkReturnCandidates,
+  bulkTargetAddressHintMatches,
   bulkTaskReturnsToTarget,
   bulkTargetProjectId,
   outboundTasksForTarget,
@@ -30,47 +32,23 @@ async function targetForBulkTask(task: TaskListItem, selected: HandoffTarget): P
   return task.handoff?.direction === "in" ? api.handoffReturnTarget(task.id) : selected;
 }
 
-const normalizedTargetUrl = (url: string) => url.trim().replace(/\/+$/, "").replace(/\/api$/, "");
-const sameTargetUrl = (left: string, right: string) => normalizedTargetUrl(left) === normalizedTargetUrl(right);
 const sameTargetFingerprint = (left?: string | null, right?: string | null) =>
   Boolean(left && right && left.toLowerCase() === right.toLowerCase());
-
-async function resolveBulkReturnFingerprint(
-  tasks: TaskListItem[],
-  projectId: string,
-  target: HandoffTarget,
-): Promise<string | null> {
-  if (target.peerFp) return target.peerFp;
-  const candidates = bulkReturnCandidates(tasks, projectId);
-  for (const task of candidates) {
-    try {
-      // 用用户登记的地址做一次只读任务级预检：主机名、IP、/api 等价写法都由
-      // 服务端统一归一化并按 marker.peerFp 核验，成功后才把这批任务认作同一来源机。
-      const probe = await api.handoffPreflight(task.id, target.url);
-      if (probe.taskScopedReturn
-        && sameTargetFingerprint(task.handoff?.peerFp, probe.peer?.fingerprint)) {
-        return probe.peer!.fingerprint;
-      }
-    } catch { /* 可能是别的来源机或当前不可达，继续找同批其他接入任务 */ }
-  }
-  // 来源机暂时离线时保留旧的直连地址体验；正式预检仍会再次核验任务指纹。
-  return candidates.find((task) => task.handoff?.peerUrl
-    && sameTargetUrl(task.handoff.peerUrl, target.url))?.handoff?.peerFp ?? null;
-}
 
 async function probeBulkTask(task: TaskListItem, selected: HandoffTarget): Promise<{
   taskTarget: HandoffTarget;
   probe: TaskScopedHandoffPreflightResult;
 }> {
   const taskTarget = await targetForBulkTask(task, selected);
+  const options = task.handoff?.direction === "in" ? { allowReturnFallback: false } : undefined;
   try {
-    return { taskTarget, probe: await api.handoffPreflight(task.id, taskTarget.url) };
+    return { taskTarget, probe: await api.handoffPreflight(task.id, taskTarget.url, options) };
   } catch (reason) {
     const canUseRegisteredFallback = task.handoff?.direction === "in"
-      && !sameTargetUrl(taskTarget.url, selected.url)
+      && !bulkTargetAddressHintMatches(taskTarget.url, selected.url)
       && sameTargetFingerprint(task.handoff.peerFp, selected.peerFp);
     if (!canUseRegisteredFallback) throw reason;
-    return { taskTarget: selected, probe: await api.handoffPreflight(task.id, selected.url) };
+    return { taskTarget: selected, probe: await api.handoffPreflight(task.id, selected.url, options) };
   }
 }
 
@@ -83,10 +61,17 @@ function approvalText(result: HandoffApprovalResult): string {
   return `${identity}目标机版本过旧，无法确认申请状态。`;
 }
 
+const isSharedReturnFailure = (message: string): boolean =>
+  /连不上对端|fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|连接中断|超时|身份和上次不一样|没有报出身份/i
+    .test(message);
+
+const failureTaskLabel = (tasks: TaskListItem[]): string => tasks.length === 1
+  ? tasks[0].title
+  : `${tasks.length} 个任务：${tasks.map((task) => task.title).join("、")}`;
+
 function BulkHandoffDialog({
   project,
   target,
-  returnFingerprint,
   tasks,
   notify,
   onClose,
@@ -94,22 +79,31 @@ function BulkHandoffDialog({
 }: {
   project: ProjectView;
   target: HandoffTarget;
-  returnFingerprint: string | null;
   tasks: TaskListItem[];
   notify: (message: string) => void;
   onClose: () => void;
   onFinished: () => Promise<void> | void;
 }) {
-  // 对话框打开时冻结本次批量清单。正式接力会让 tasks 通过 SSE 实时变成 out；如果继续
-  // 跟着重算，成功页会把刚搬走的任务反列成「不可接力」，甚至冒出“没有任务”的警告。
-  const batchFingerprint = target.peerFp ?? returnFingerprint;
-  const returnOnlyMode = !target.peerFp && Boolean(returnFingerprint);
-  const [{ eligible, skipped }] = useState(() => partitionBulkHandoffTasks(
-    tasks,
+  // 冻结本次批量清单；身份解析可以更新分区，但 SSE 不能把已搬走任务反列进成功页。
+  const [frozenTasks] = useState(tasks);
+  const [returnCandidates] = useState(() => bulkReturnCandidates(frozenTasks, project.id));
+  const addressHintFingerprint = target.peerFp ?? returnCandidates.find((task) => task.handoff?.peerUrl
+    && bulkTargetAddressHintMatches(task.handoff.peerUrl, target.url))?.handoff?.peerFp ?? null;
+  const [resolvedReturnFingerprint, setResolvedReturnFingerprint] = useState<string | null>(addressHintFingerprint);
+  const [identityResolving, setIdentityResolving] = useState(
+    !target.peerFp && returnCandidates.length > 0,
+  );
+  const batchFingerprint = target.peerFp ?? resolvedReturnFingerprint;
+  const taskSelectedTarget = target.peerFp || !batchFingerprint
+    ? target
+    : { ...target, peerFp: batchFingerprint };
+  const returnOnlyMode = !target.peerFp && Boolean(resolvedReturnFingerprint);
+  const { eligible, skipped } = useMemo(() => partitionBulkHandoffTasks(
+    frozenTasks,
     project.id,
     batchFingerprint,
     returnOnlyMode,
-  ));
+  ), [batchFingerprint, frozenTasks, project.id, returnOnlyMode]);
   const returnOnly = eligible.length > 0 && eligible.every(
     (task) => bulkTaskReturnsToTarget(task, batchFingerprint),
   );
@@ -138,6 +132,21 @@ function BulkHandoffDialog({
     return () => { mounted.current = false; };
   }, []);
 
+  useEffect(() => {
+    if (!identityResolving) return;
+    let alive = true;
+    api.handoffTargetIdentity(target.url)
+      .then((identity) => {
+        if (!alive) return;
+        const matched = returnCandidates.some((task) =>
+          sameTargetFingerprint(task.handoff?.peerFp, identity.fingerprint));
+        setResolvedReturnFingerprint(matched ? identity.fingerprint : null);
+      })
+      .catch(() => { /* 离线/旧版：结束核对，按本地地址提示结果展示可用项 */ })
+      .finally(() => { if (alive) setIdentityResolving(false); });
+    return () => { alive = false; };
+  }, [identityResolving, returnCandidates, target.url]);
+
   const rememberFirstProbe = (
     taskId: string,
     taskTarget: HandoffTarget,
@@ -162,10 +171,11 @@ function BulkHandoffDialog({
     let approvalCandidate: { task: TaskListItem; taskTarget: HandoffTarget; probe: TaskScopedHandoffPreflightResult } | null = null;
     try {
       for (let index = 0; index < eligible.length; index += 1) {
+        if (!mounted.current) return;
         const task = eligible[index];
         setProgress({ done: index, total: eligible.length, title: task.title });
         try {
-          const { taskTarget, probe } = await probeBulkTask(task, target);
+          const { taskTarget, probe } = await probeBulkTask(task, taskSelectedTarget);
           const issue = bulkPreflightIssue(task, probe, "");
           const downgradedApproval = task.handoff?.direction === "in" && !probe.taskScopedReturn
             && (probe.peer?.peerStatus === "pending" || probe.peer?.peerStatus === "blocked");
@@ -182,7 +192,12 @@ function BulkHandoffDialog({
           if (mounted.current) rememberFirstProbe(task.id, taskTarget, probe, failures);
           return;
         } catch (reason) {
-          failures.push({ task, reason: reason instanceof Error ? reason.message : String(reason) });
+          const message = reason instanceof Error ? reason.message : String(reason);
+          failures.push({ task, reason: message });
+          if (returnOnly && isSharedReturnFailure(message)) {
+            failures.push(...eligible.slice(index + 1).map((remaining) => ({ task: remaining, reason: message })));
+            break;
+          }
         }
       }
       if (!mounted.current) return;
@@ -208,14 +223,15 @@ function BulkHandoffDialog({
     }
     // rememberFirstProbe only writes state derived from this request.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eligible.length, phase, sample?.id, target.url]);
+  }, [batchFingerprint, eligible.length, phase, returnOnly, sample?.id, target.url]);
 
   useEffect(() => {
-    if (canProbeWithoutApproval && sample && !firstProbe && phase === "idle" && !autoProbeAttempted.current) {
+    if (!identityResolving && canProbeWithoutApproval && sample
+      && !firstProbe && phase === "idle" && !autoProbeAttempted.current) {
       autoProbeAttempted.current = true;
       void probeFirst();
     }
-  }, [canProbeWithoutApproval, firstProbe, phase, probeFirst, sample]);
+  }, [canProbeWithoutApproval, firstProbe, identityResolving, phase, probeFirst, sample]);
 
   const blocked = firstProbe?.peer?.peerStatus === "pending" || firstProbe?.peer?.peerStatus === "blocked";
   const busy = phase !== "idle";
@@ -243,7 +259,7 @@ function BulkHandoffDialog({
       const probeTask = eligible.find((task) => task.id === firstProbeTaskId) ?? sample;
       if (!probeTask) return;
       setProgress({ done: 0, total: eligible.length, title: probeTask.title });
-      const { taskTarget, probe } = await probeBulkTask(probeTask, target);
+      const { taskTarget, probe } = await probeBulkTask(probeTask, taskSelectedTarget);
       if (mounted.current) rememberFirstProbe(probeTask.id, taskTarget, probe);
     } catch (reason) {
       if (mounted.current) setError(reason instanceof Error ? reason.message : String(reason));
@@ -274,7 +290,7 @@ function BulkHandoffDialog({
         let taskTarget = resolvedTargets.get(task.id);
         let probe = checked.get(task.id);
         if (!taskTarget || !probe) {
-          const resolved = await probeBulkTask(task, target);
+          const resolved = await probeBulkTask(task, taskSelectedTarget);
           taskTarget = resolved.taskTarget;
           probe = resolved.probe;
         }
@@ -284,7 +300,12 @@ function BulkHandoffDialog({
         resolvedTargets.set(task.id, taskTarget);
         checked.set(task.id, probe);
       } catch (reason) {
-        failures.push({ task, reason: reason instanceof Error ? reason.message : String(reason) });
+        const message = reason instanceof Error ? reason.message : String(reason);
+        failures.push({ task, reason: message });
+        if (returnOnly && isSharedReturnFailure(message)) {
+          failures.push(...eligible.slice(index + 1).map((remaining) => ({ task: remaining, reason: message })));
+          break;
+        }
       }
     }
     if (!mounted.current) return;
@@ -362,8 +383,17 @@ function BulkHandoffDialog({
       ? probe.projects.slice(0, 1).map((candidate) => candidate.id)
       : [];
   })).size;
+  const groupedPreflightFailures = useMemo(
+    () => groupBulkHandoffFailures(preflightFailures),
+    [preflightFailures],
+  );
+  const groupedResultFailures = useMemo(
+    () => groupBulkHandoffFailures(result?.failures ?? []),
+    [result],
+  );
 
   const confirm = () => {
+    if (identityResolving) return;
     if (result) { onClose(); return; }
     if (!firstProbe || blocked) {
       if (canProbeWithoutApproval && !blocked) void probeFirst();
@@ -376,6 +406,8 @@ function BulkHandoffDialog({
 
   const confirmLabel = result
     ? "完成"
+    : identityResolving
+      ? "正在核对来源机…"
     : !firstProbe || blocked
       ? canProbeWithoutApproval && !blocked ? `重新检查${returnOnly ? "来源机" : "目标机"}` : blocked ? `检查${actionName}申请状态` : `发送${actionName}申请`
       : !checkedAll
@@ -398,11 +430,19 @@ function BulkHandoffDialog({
     >
       <section className="task-confirm-dialog handoff-dialog handoff-bulk-dialog" role="dialog" aria-modal="true" aria-labelledby="handoff-title">
         <HandoffDialogHeader
-          title={`${returnOnly ? "移回到" : "接力到"} ${target.name}`}
+          title={identityResolving ? `核对 ${target.name}` : `${returnOnly ? "移回到" : "接力到"} ${target.name}`}
           disabled={!canClose}
           onClose={onClose}
         />
-        {result ? (
+        {identityResolving ? (
+          <div className="handoff-bulk-body">
+            <div className="handoff-bulk-progress" role="status">
+              <SpinnerGap size={15} className="is-spinning" aria-hidden="true" />
+              <span>正在读取目标机公开身份；不会发送接力申请或任务信息…</span>
+            </div>
+            <p className="handoff-bulk-scope">弹窗已经打开，可随时取消；目标机离线时会在短暂超时后改用本地地址提示。</p>
+          </div>
+        ) : result ? (
           <div className="handoff-result-panel handoff-bulk-result">
             <span className="handoff-result-mark" aria-hidden="true"><Check size={22} weight="bold" /></span>
             <span className="handoff-eyebrow">BATCH COMPLETE</span>
@@ -413,8 +453,10 @@ function BulkHandoffDialog({
               <span><b>{result.failures.length}</b> 个失败</span>
               <span><b>{eligible.length}</b> 个任务</span>
             </div>
-            {result.failures.length > 0 && (
-              <ul className="handoff-bulk-failures">{result.failures.map(({ task, reason }) => <li key={task.id}><b>{task.title}</b><span>{reason}</span></li>)}</ul>
+            {groupedResultFailures.length > 0 && (
+              <ul className="handoff-bulk-failures">{groupedResultFailures.map(({ tasks: failedTasks, reason }) => (
+                <li key={reason}><b>{failureTaskLabel(failedTasks)}</b><span>{reason}</span></li>
+              ))}</ul>
             )}
           </div>
         ) : (
@@ -506,7 +548,9 @@ function BulkHandoffDialog({
             <p>{checkedAll
               ? `有 ${preflightFailures.length} 个任务未通过预检，将跳过；其余 ${readyTasks.length} 个可以继续迁移。`
               : `有 ${preflightFailures.length} 个任务预检失败。处理后可点击“重新检查”。`}</p>
-            <ul>{preflightFailures.map(({ task, reason }) => <li key={task.id}><b>{task.title}</b><span>{reason}</span></li>)}</ul>
+            <ul>{groupedPreflightFailures.map(({ tasks: failedTasks, reason }) => (
+              <li key={reason}><b>{failureTaskLabel(failedTasks)}</b><span>{reason}</span></li>
+            ))}</ul>
           </div>
         )}
             </div>
@@ -517,7 +561,7 @@ function BulkHandoffDialog({
           <button
             className="is-primary"
             type="button"
-            disabled={busy || (!result && (!eligible.length
+            disabled={identityResolving || busy || (!result && (!eligible.length
               || (Boolean(firstProbe) && !blocked && needsBatchProject && !projectId)))}
             onClick={confirm}
           >
@@ -546,8 +590,7 @@ export function HandoffMachines({
   onFinished: () => Promise<void> | void;
 }) {
   const [targets, setTargets] = useState<HandoffTarget[]>([]);
-  const [selected, setSelected] = useState<{ target: HandoffTarget; returnFingerprint: string | null } | null>(null);
-  const [resolvingTargetUrl, setResolvingTargetUrl] = useState<string | null>(null);
+  const [selected, setSelected] = useState<HandoffTarget | null>(null);
 
   const reloadTargets = useCallback(() => {
     let alive = true;
@@ -562,17 +605,6 @@ export function HandoffMachines({
     target.url,
     project ? outboundTasksForTarget(tasks, project.id, target.url, target.peerFp) : [],
   ])), [project, targets, tasks]);
-
-  const openBulkDialog = async (target: HandoffTarget) => {
-    if (!project || resolvingTargetUrl) return;
-    setResolvingTargetUrl(target.url);
-    try {
-      const returnFingerprint = await resolveBulkReturnFingerprint(tasks, project.id, target);
-      setSelected({ target, returnFingerprint });
-    } finally {
-      setResolvingTargetUrl(null);
-    }
-  };
 
   if (!targets.length || !project) return null;
 
@@ -592,12 +624,9 @@ export function HandoffMachines({
                 <button
                   type="button"
                   aria-label={`将本项目全部任务接力到 ${target.name}`}
-                  disabled={resolvingTargetUrl !== null}
-                  onClick={() => void openBulkDialog(target)}
+                  onClick={() => setSelected(target)}
                 >
-                  {resolvingTargetUrl === target.url
-                    ? <SpinnerGap size={13} className="is-spinning" aria-hidden="true" />
-                    : <PaperPlaneTilt size={13} weight="bold" aria-hidden="true" />}
+                  <PaperPlaneTilt size={13} weight="bold" aria-hidden="true" />
                 </button>
               </div>
               {outbound.length > 0 && (
@@ -623,8 +652,7 @@ export function HandoffMachines({
       {selected && (
         <BulkHandoffDialog
           project={project}
-          target={selected.target}
-          returnFingerprint={selected.returnFingerprint}
+          target={selected}
           tasks={tasks}
           notify={notify}
           onClose={() => { setSelected(null); reloadTargets(); }}

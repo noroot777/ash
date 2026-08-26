@@ -19,7 +19,7 @@ import { projects, tasks } from "./db/schema.js";
 import { projectHealthLight } from "./git.js";
 import { getAppSettings } from "./app-settings.js";
 import { exportHandoff, handoffRemoteUrl, preflightHandoff } from "./handoff.js";
-import { fetchPeer, normalizePeerUrl, pingPeer, requestHandoffApproval } from "./handoff-peer-client.js";
+import { fetchPeer, normalizePeerUrl, pingPeer, probePeerIdentity, requestHandoffApproval } from "./handoff-peer-client.js";
 import { repoRefTips } from "./handoff-collect.js";
 import { HandoffError, type HandoffManifest, type HandoffPingResponse } from "./handoff-types.js";
 import { canonicalPingChallenge, localIdentity, sameFingerprint, shortFingerprint, signWithLocalKey } from "./handoff-identity.js";
@@ -296,6 +296,17 @@ export function mountHandoffRoutes(api: Hono): void {
     });
   });
 
+  // 本机网页代理读取目标机公开身份：不签名、不带任务 id，不会让目标机新增待审批来源。
+  api.post("/handoff/identity-probe", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { targetUrl?: string };
+    if (!body.targetUrl) return c.json({ error: "缺 targetUrl" }, 400);
+    try {
+      return c.json(await probePeerIdentity(body.targetUrl));
+    } catch (e) {
+      return fail(c, e);
+    }
+  });
+
   // 接力来源(入站信任表):谁来敲过门、批没批准。
   api.get("/handoff/peers", async (c) => c.json({ peers: await listPeers() }));
   // 历史 out 存档另行授予的任务级回程权限；只读展示，不会暗中建立整机 approved。
@@ -343,10 +354,18 @@ export function mountHandoffRoutes(api: Hono): void {
 
   // 预检:探测目标机、匹配项目、盘点本地可搬运的东西。只读。
   api.post("/tasks/:id/handoff/preflight", async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as { targetUrl?: string };
+    const body = (await c.req.json().catch(() => ({}))) as {
+      targetUrl?: string;
+      allowReturnFallback?: boolean;
+    };
     if (!body.targetUrl) return c.json({ error: "缺 targetUrl" }, 400);
+    if (body.allowReturnFallback !== undefined && typeof body.allowReturnFallback !== "boolean") {
+      return c.json({ error: "allowReturnFallback 必须是 boolean" }, 400);
+    }
     try {
-      return c.json(await preflightHandoff(c.req.param("id"), body.targetUrl));
+      return c.json(await preflightHandoff(c.req.param("id"), body.targetUrl, {
+        allowReturnFallback: body.allowReturnFallback,
+      }));
     } catch (e) {
       return fail(c, e);
     }

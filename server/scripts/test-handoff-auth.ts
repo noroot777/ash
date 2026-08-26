@@ -49,7 +49,9 @@ async function main(): Promise<void> {
   const { projects, tasks } = await import("../src/db/schema.js");
   const { eq } = await import("drizzle-orm");
   const { exportHandoff, preflightHandoff } = await import("../src/handoff.js");
-  const { peerRequestHeaders, pingPeer, requestHandoffApproval } = await import("../src/handoff-peer-client.js");
+  const {
+    peerRequestHeaders, pingPeer, probePeerIdentity, requestHandoffApproval,
+  } = await import("../src/handoff-peer-client.js");
   const { localIdentity, shortFingerprint } = await import("../src/handoff-identity.js");
   const { getAppSettings, patchAppSettings } = await import("../src/app-settings.js");
   const { HandoffError } = await import("../src/handoff-types.js");
@@ -87,6 +89,27 @@ async function main(): Promise<void> {
   assert.notEqual(
     peerIdentity.fingerprint, localIdentity().fingerprint,
     "源机与对端各有一份身份:同一台电脑上跑两个实例也不能共用(密钥挂 ASH_DB 而不是 DATA_DIR)",
+  );
+  const peersBeforeIdentityProbe = await api<{ peers: unknown[] }>(peerUrl, "/handoff/peers");
+  assert.equal((await probePeerIdentity(peerUrl)).fingerprint, peerIdentity.fingerprint);
+  assert.deepEqual(
+    await api<{ peers: unknown[] }>(peerUrl, "/handoff/peers"),
+    peersBeforeIdentityProbe,
+    "公开身份探测不能携带本机签名或让目标机新增待审批来源",
+  );
+  await assert.rejects(
+    pingPeer(
+      peerUrl,
+      peerIdentity.fingerprint,
+      { taskId: "missing-return-archive", returnTransferId: null },
+      { allowReturnFallback: false },
+    ),
+    (error: unknown) => error instanceof HandoffError && error.remoteStatus === 404,
+  );
+  assert.deepEqual(
+    await api<{ peers: unknown[] }>(peerUrl, "/handoff/peers"),
+    peersBeforeIdentityProbe,
+    "移回预检缺少任务存档时不能降级成会落待审批记录的普通 ping",
   );
 
   const raw = (path: string, init: RequestInit & { sign?: false }) =>

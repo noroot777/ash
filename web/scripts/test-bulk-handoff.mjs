@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import {
   bulkPreflightAllowsRun,
   bulkPreflightIssue,
+  bulkTargetAddressHintMatches,
+  groupBulkHandoffFailures,
   bulkReturnCandidates,
   bulkTaskReturnsToTarget,
   bulkTargetProjectId,
@@ -106,6 +108,21 @@ assert.deepEqual(
   "未获整机审批的混合批次应先移回接入任务，不让本地任务拖回审批流程",
 );
 assert.match(unpairedMixedReturn.skipped[0].reason, /接入任务移回权限/);
+assert.equal(
+  bulkTargetAddressHintMatches("http://localhost:4317", "http://127.0.0.1:4317/api"),
+  true,
+  "来源机离线时 localhost、loopback IP 和 /api 写法应使用同一个安全地址提示",
+);
+assert.equal(bulkTargetAddressHintMatches("http://localhost:4317", "http://127.0.0.1:4318"), false);
+const groupedFailures = groupBulkHandoffFailures([
+  { task: task("one"), reason: "same failure" },
+  { task: task("two"), reason: "same failure" },
+  { task: task("three"), reason: "other failure" },
+]);
+assert.deepEqual(groupedFailures.map((group) => [group.reason, group.tasks.map((item) => item.id)]), [
+  ["same failure", ["one", "two"]],
+  ["other failure", ["three"]],
+]);
 
 const returnedHome = partitionBulkHandoffTasks([
   task("returned-home", { handoff: { direction: "returned", peerFp: thirdFp } }),
@@ -178,8 +195,9 @@ assert.match(bulkDialog, /<HandoffDialogHeader/, "批量接力应复用接力弹
 assert.match(bulkDialog, /<HandoffRouteCard/, "批量接力应展示与单任务一致的机器路线");
 assert.match(bulkDialog, /handoff-result-panel handoff-bulk-result/, "批量接力结果页应使用同一套完成态视觉");
 assert.match(bulkDialog, /api\.handoffReturnTarget\(task\.id\)/, "批量移回应逐任务解析 marker 里的回程目标");
-assert.match(bulkDialog, /api\.handoffPreflight\(task\.id, target\.url\)/, "未配对批次应通过所选地址做只读身份预检，不能比较 URL 字符串");
-assert.match(bulkDialog, /probe\.taskScopedReturn/, "只有服务端确认任务级移回授权后才能建立免审批批次");
+assert.match(bulkDialog, /api\.handoffTargetIdentity\(target\.url\)/, "打开弹窗只能读取目标机公开身份，不能拿其他来源任务做 preflight");
+assert.match(bulkDialog, /allowReturnFallback: false/, "批量移回预检不能降级成会落待审批记录的普通 ping");
+assert.match(bulkDialog, /identityResolving/, "目标身份探测期间必须先打开可取消的弹窗");
 assert.match(bulkDialog, /targetUrl: taskTarget\.url/, "批量正式移回应使用逐任务解析出的地址");
 assert.match(bulkDialog, /probeBulkTask/, "任务恢复地址不可达时批量移回应尝试同指纹登记地址");
 assert.match(bulkDialog, /preflightFailures/, "批量执行结果应保留被跳过任务的失败原因");

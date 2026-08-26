@@ -10,7 +10,7 @@
 //      之后每次预检/导出都先核对,对不上就**拒绝打包**,连探测都不往下走。
 //
 // 入站方向(谁能推进本机)在 handoff-peers.ts。
-import type { HandoffApprovalResult, HandoffPeerIdentity, HandoffTarget } from "@ash/shared";
+import type { HandoffApprovalResult, HandoffIdentity, HandoffPeerIdentity, HandoffTarget } from "@ash/shared";
 import { getAppSettings, patchAppSettings } from "./app-settings.js";
 import { HandoffError } from "./handoff-types.js";
 import type { HandoffPingResponse } from "./handoff-types.js";
@@ -105,6 +105,32 @@ export async function fetchPeer<T>(
     throw new HandoffError(`对端应答不完整（${url}）:连接中断或应答不是 JSON`, 502, true);
   }
   return payload as T;
+}
+
+/**
+ * 只读取目标机公开身份，不带本机签名、不携带任务 id，也不会触发对端 touchPeer。
+ * 批量弹窗用它把用户填写的主机名/IP 映射到 marker 指纹；正式预检仍会做签名挑战。
+ */
+export async function probePeerIdentity(rawTargetUrl: string, timeoutMs = 2_000): Promise<HandoffIdentity> {
+  const url = `${normalizePeerUrl(rawTargetUrl)}/api/handoff/identity`;
+  let response: Response;
+  try {
+    response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new HandoffError(`连不上对端 ash（${url}）：${message}`, 502, true);
+  }
+  const body = (await response.json().catch(() => null)) as Partial<HandoffIdentity> | null;
+  if (!response.ok || !body || typeof body.fingerprint !== "string"
+    || !/^[0-9a-f]{64}$/i.test(body.fingerprint)) {
+    throw new HandoffError(`目标机身份应答无效（${url}）`, 502, true);
+  }
+  const fingerprint = body.fingerprint.toLowerCase();
+  return {
+    fingerprint,
+    short: shortFingerprint(fingerprint),
+    host: typeof body.host === "string" && body.host ? body.host : new URL(url).hostname,
+  };
 }
 
 export interface PeerProbe {
