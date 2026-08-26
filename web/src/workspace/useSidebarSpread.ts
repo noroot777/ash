@@ -3,7 +3,7 @@ import type { TaskFollowUp, TaskListItem } from "@ash/shared";
 import { TASK_BATCH_LIMIT } from "@ash/shared";
 import { api } from "../lib/api.ts";
 import { spreadBucket, type SpreadBucket } from "../lib/taskAttention.ts";
-import { inScope, type TaskScope } from "./taskScope.ts";
+import { scopeTasks, type TaskScope } from "./taskScope.ts";
 import { orderedTopLevelTasks, visibleOnThisMachine } from "./taskTreeModel.ts";
 
 // 桶的判据搬到了 lib/taskAttention.ts（任务树排序和状态点也要读它，留在这里会成环）。
@@ -46,12 +46,12 @@ export function matchesSpreadFilter(task: TaskListItem, filter: SpreadFilter): b
 }
 
 // 筛选按钮（铺开态的胶囊、窄态的点）共用同一份计数：口径分两处写，早晚会对不上。
-// 口径 = **当前作用域**里的顶层活任务，跟任务树里被筛的那批行是同一批 —— 全部项目态
-// 下这个口径自然扩到所有项目，不必另开一套计数。
+// 口径 = **当前作用域**里的顶层活任务，跟任务树里被筛的那批行是同一批 —— 任务模式
+// 下这个口径自然收窄到「在跑 / 待验收」，不必另开一套计数。
 export function spreadCounts(tasks: TaskListItem[], scope: TaskScope): SpreadCounts {
   const counts: SpreadCounts = { all: 0, starred: 0, todo: 0, run: 0, wait: 0, done: 0, accepted: 0 };
-  for (const task of tasks) {
-    if (!inScope(task, scope) || task.archived || task.parentId || !visibleOnThisMachine(task)) continue;
+  for (const task of scopeTasks(tasks, scope)) {
+    if (task.archived || task.parentId || !visibleOnThisMachine(task)) continue;
     counts.all += 1;
     if (task.starredAt != null) counts.starred += 1;
     counts[spreadBucket(task)] += 1;
@@ -64,7 +64,7 @@ export function spreadCounts(tasks: TaskListItem[], scope: TaskScope): SpreadCou
 // 快捷键会拿到空数组,按键被吞但选中不动。
 export function spreadVisibleTasks(tasks: TaskListItem[], scope: TaskScope, filter: SpreadFilter): TaskListItem[] {
   return orderedTopLevelTasks(
-    tasks.filter((task) => inScope(task, scope) && !task.archived),
+    scopeTasks(tasks.filter((task) => !task.archived), scope),
     { unifiedPinned: true },
   ).filter((task) => matchesSpreadFilter(task, filter));
 }
@@ -112,13 +112,12 @@ export function useSidebarSpread(tasks: TaskListItem[], scope: TaskScope, revisi
   }, [laidOut, open]);
 
   // 只问作用域里的活任务 —— 单项目态下别的项目默认是折叠的，铺开时也看不到那些行；
-  // 全部项目态下它们就在屏幕上，那三格得跟着有内容。
+  // 任务模式下屏幕上就这些行，那三格得跟着有内容。
   //
   // **按最近更新排在前**：下面是分批取的，谁在前谁先填上，而任务树也是这个顺序 ——
   // 用户先看到的那几屏最先有内容。按 id 排（曾经的写法）等于随机决定谁先亮。
   const orderedIds = useMemo(
-    () => tasks
-      .filter((task) => inScope(task, scope) && !task.archived && visibleOnThisMachine(task))
+    () => scopeTasks(tasks.filter((task) => !task.archived && visibleOnThisMachine(task)), scope)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .map((task) => task.id),
     [scope, tasks],

@@ -19,7 +19,7 @@ export const TASK_PREVIEW_LIMIT = 12;
 const COLLAPSED_SECTIONS_STORAGE_KEY = "ash:task-tree:collapsed-sections";
 
 // 星标按钮埋在 TaskRow 里、TaskRow 又埋在几种列表里：回写和报错的通道用 context 递，
-// 免得每层组件都为它多两个 props。行首那枚项目徽标同理 —— 它只在「全部项目」态出现，
+// 免得每层组件都为它多两个 props。行首那枚项目徽标同理 —— 它只在「任务模式」出现，
 // 给的是 id→项目 的表；没有表就是单项目态，不画徽标。
 type TaskTreeActions = {
   onStarred: (taskId: string, starredAt: number | null) => void;
@@ -103,7 +103,7 @@ function TaskStarButton({ task }: { task: TaskListItem }) {
   );
 }
 
-// 「全部项目」态下每行标题前的项目徽标：混着看的时候，一行来自哪个项目是**必须先读到的
+// 「任务模式」下每行标题前的项目徽标：跨项目混着看时，一行来自哪个项目是**必须先读到的
 // 那个字段**，否则跨项目的同名任务根本分不开。窄侧栏只摆得下那个色块，铺开变宽了才把
 // 项目名补出来（由 CSS 决定）—— 名字对读屏永远给足，挂在 aria-label 上。
 function TaskProjectBadge({ project }: { project: ProjectView }) {

@@ -8,11 +8,11 @@ import {
   spreadVisibleTasks,
 } from "../src/workspace/useSidebarSpread.ts";
 import { orderedTopLevelTasks } from "../src/workspace/taskTreeModel.ts";
-import { inScope, resolveScopeKind, scopeHasTarget } from "../src/workspace/taskScope.ts";
+import { resolveScopeKind, scopeHasTarget, scopeTasks } from "../src/workspace/taskScope.ts";
 
 const P1 = { kind: "project", projectId: "p1" };
 const P3 = { kind: "project", projectId: "p3" };
-const ALL = { kind: "all" };
+const TASKS = { kind: "tasks" };
 
 function task(id, extra = {}) {
   return {
@@ -77,7 +77,7 @@ assert.equal(
 
 // 计数和列表是两处代码：这里钉住它们同一个口径 —— 按钮上写 3 条，点开只剩 1 条是最难查的那种 bug。
 const rows = orderedTopLevelTasks(
-  tasks.filter((row) => inScope(row, P1) && !row.archived),
+  scopeTasks(tasks.filter((row) => !row.archived), P1),
   { unifiedPinned: true },
 );
 assert.equal(rows.length, counts.all);
@@ -110,37 +110,72 @@ const empty = spreadCounts(tasks, P3);
 assert.equal(empty.all, 0);
 assert.equal(SPREAD_DOT_FILTERS.reduce((sum, item) => sum + empty[item.key], 0), 0);
 
-// 「全部项目」作用域：跨项目的顶层任务全都算进来（other-project 属 p2，单项目口径下不算），
-// 但执行者与归档行照旧排除 —— 换作用域只是放宽项目这一维，不是把树的规则也一起松了。
-const all = spreadCounts(tasks, ALL);
-assert.equal(all.all, counts.all + 1);
-assert.equal(all.run, counts.run + 1);
-assert.equal(all.starred, counts.starred);
+// 「任务模式」作用域：跨项目，但只收「在跑」和「待验收」两类顶层行 —— 它回答的是
+// 「此刻还没落地的活有哪些」，而不是「所有项目的任务摊开」。执行者与归档行照旧排除。
+const taskMode = spreadCounts(tasks, TASKS);
+const taskModeRows = spreadVisibleTasks(tasks, TASKS, "all").map((row) => row.id);
+assert.deepEqual(taskModeRows.sort(), [
+  "other-project",   // 别的项目，在跑 —— 单项目口径下看不见，任务模式里要看见
+  "run-accepted-review", // awaiting_review：机器确实在动
+  "run-running",
+  "todo-await",      // stage=awaiting_acceptance，就是「待验收」
+  "todo-question",   // status=running，在跑（被问住也还挂在 running 上）
+  "done-done",       // done 且没盖过章 = 等我验收
+].sort());
+// 排着的、失败的、已验收的、归档的、执行者、接力走了的，一个都不进。
+for (const id of ["wait-backlog", "todo-failed", "accepted-merged", "archived", "worker", "handed-out"]) {
+  assert.ok(!taskModeRows.includes(id), `任务模式不该收 ${id}`);
+}
+assert.equal(taskMode.all, taskModeRows.length);
 assert.equal(
-  BUCKET_FILTERS.reduce((sum, item) => sum + all[item.key], 0),
-  all.all,
+  BUCKET_FILTERS.reduce((sum, item) => sum + taskMode[item.key], 0),
+  taskMode.all,
 );
-const allRows = spreadVisibleTasks(tasks, ALL, "all").map((row) => row.id);
-assert.ok(allRows.includes("other-project"));
-assert.ok(!allRows.includes("worker"));
-assert.ok(!allRows.includes("archived"));
-assert.ok(!allRows.includes("handed-out"));
-assert.equal(allRows.length, all.all);
+// 计数与列表同口径（跟单项目态一样的钉子，换个作用域再钉一次）。
+for (const item of SPREAD_DOT_FILTERS) {
+  assert.equal(
+    spreadVisibleTasks(tasks, TASKS, item.key).length,
+    taskMode[item.key],
+    `taskMode:${item.key}`,
+  );
+}
 
-// 作用域筛选的唯一判据：单项目认 projectId，all 一律放行。
-assert.equal(inScope({ projectId: "p2" }, P1), false);
-assert.equal(inScope({ projectId: "p2" }, ALL), true);
-// 还没选项目时，单项目态没有可显示的树；all 态永远有目标（筛选条因此照常画出来）。
+// 团队要连执行者一起判：调度台派完活自己落回 idle，只盯它会把正在干活的团队判成静止，
+// 也会把还没收工的团队判成等验收。
+const teamTasks = [
+  task("team-live", { mode: "team", status: "idle" }),
+  task("team-live-w", { status: "running", parentId: "team-live" }),
+  task("team-settled", { mode: "team", status: "idle" }),
+  task("team-settled-w", { status: "done", parentId: "team-settled" }),
+  task("team-accepted", { mode: "team", status: "idle", stage: "accepted" }),
+  task("team-accepted-w", { status: "done", parentId: "team-accepted" }),
+  task("team-never", { mode: "team", status: "backlog" }),
+];
+const teamRows = scopeTasks(teamTasks, TASKS).map((row) => row.id);
+assert.ok(teamRows.includes("team-live"), "执行者在跑 = 团队在跑");
+assert.ok(teamRows.includes("team-settled"), "团队收工没盖章 = 待验收");
+assert.ok(!teamRows.includes("team-accepted"), "盖过章的团队不再出现");
+assert.ok(!teamRows.includes("team-never"), "从没开过台的团队不算收工");
+// 留下的团队要把自己的执行者一起带上，否则团队行的展开箭头是灰的、执行者摘要空一片。
+assert.ok(teamRows.includes("team-live-w"));
+assert.ok(teamRows.includes("team-settled-w"));
+assert.ok(!teamRows.includes("team-accepted-w"));
+
+// 还没选项目时，单项目态没有可显示的树；任务模式永远有目标（筛选条因此照常画出来）。
 assert.equal(scopeHasTarget({ kind: "project", projectId: null }), false);
-assert.equal(scopeHasTarget(ALL), true);
+assert.equal(scopeHasTarget(TASKS), true);
 
-// URL 是权威：带 scope=all 就读 all，带深链（project/task）而没写 scope 的按单项目读，
-// 两者都没有才回落到上次的选择。顺序反了会出现「后退回到全部项目却缩成一家」。
-assert.equal(resolveScopeKind("?scope=all", "project"), "all");
-assert.equal(resolveScopeKind("?scope=project", "all"), "project");
-assert.equal(resolveScopeKind("?project=p1&task=t1", "all"), "project");
-assert.equal(resolveScopeKind("", "all"), "all");
+// URL 是权威：带 scope=tasks 就读任务模式，带深链（project/task）而没写 scope 的按单项目读，
+// 两者都没有才回落到上次的选择。顺序反了会出现「后退回到任务模式却缩成一家」。
+assert.equal(resolveScopeKind("?scope=tasks", "project"), "tasks");
+assert.equal(resolveScopeKind("?scope=project", "tasks"), "project");
+assert.equal(resolveScopeKind("?project=p1&task=t1", "tasks"), "project");
+assert.equal(resolveScopeKind("", "tasks"), "tasks");
 assert.equal(resolveScopeKind("", null), "project");
-assert.equal(resolveScopeKind("?scope=bogus", "all"), "all");
+assert.equal(resolveScopeKind("?scope=bogus", "tasks"), "tasks");
+// 这一档从前叫「全部项目」，写进 URL / localStorage 的是 scope=all。旧链接和旧落盘
+// 还在外面跑着，读的时候一律归到 tasks，别让它们悄悄退回单项目态。
+assert.equal(resolveScopeKind("?scope=all", "project"), "tasks");
+assert.equal(resolveScopeKind("", "all"), "tasks");
 
 console.log("spread filter counting tests passed");

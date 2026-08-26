@@ -1,27 +1,28 @@
 import { useMemo, useRef, useState } from "react";
 import type { ProjectView } from "@ash/shared";
-import { CaretDown, Check, FolderPlus, GearSix, MagnifyingGlass, SquaresFour } from "@phosphor-icons/react";
+import { CaretDown, Check, FolderPlus, GearSix, ListChecks, MagnifyingGlass } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { shortenHomePath, useHostInfo } from "../lib/useHostInfo.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
-import { ALL_PROJECTS_LABEL } from "./taskScope.ts";
+import { TASK_MODE_LABEL, TASK_MODE_SUMMARY } from "./taskScope.ts";
 
-// 「全部项目」和某个具体项目是同一个下拉里的**同一排选项**，不是另开一个模式开关：
-// 侧栏顶上那颗按钮回答的始终是「这份列表在看谁」，多一档「谁都看」正好落在这句话里。
+// 「任务模式」和某个具体项目是同一个下拉里的**同一排选项**，不是另开一个模式开关：
+// 侧栏顶上那颗按钮回答的始终是「这份列表在看谁」，多一档「谁都看，但只看还没落地的活」
+// 正好落在这句话里。
 export function ProjectSwitcher({
   projects,
   current,
-  allProjects,
+  taskMode,
   onProject,
-  onAllProjects,
+  onTaskMode,
   onCreate,
   onSettings,
 }: {
   projects: ProjectView[];
   current: ProjectView | null;
-  allProjects: boolean;
+  taskMode: boolean;
   onProject: (projectId: string) => void;
-  onAllProjects: () => void;
+  onTaskMode: () => void;
   onCreate: () => void;
   onSettings: () => void;
 }) {
@@ -39,9 +40,9 @@ export function ProjectSwitcher({
         project.repoPath.toLocaleLowerCase().includes(query),
     );
   }, [projects, query]);
-  // 搜索框里打字时「全部项目」也得跟着被筛掉，否则它会挂在一堆无关结果上方；
-  // 但它本身可搜（打 all 或「全部」都能找到），别让人以为只能靠鼠标够。
-  const allMatches = !query || ALL_PROJECTS_LABEL.includes(query) || "all".startsWith(query);
+  // 搜索框里打字时「任务模式」也得跟着被筛掉，否则它会挂在一堆无关结果上方；
+  // 但它本身可搜（打 task 或「任务」都能找到），别让人以为只能靠鼠标够。
+  const taskModeMatches = !query || TASK_MODE_LABEL.includes(query) || "tasks".startsWith(query);
 
   useDismissable({
     enabled: open,
@@ -60,21 +61,21 @@ export function ProjectSwitcher({
         aria-haspopup="menu"
         onClick={() => setOpen((value) => !value)}
       >
-        {allProjects
-          ? <span className="workspace-project-avatar workspace-project-avatar--all" aria-hidden="true"><SquaresFour size={13} weight="fill" /></span>
+        {taskMode
+          ? <span className="workspace-project-avatar workspace-project-avatar--task-mode" aria-hidden="true"><ListChecks size={13} weight="bold" /></span>
           : current ? <ProjectAvatar project={current} /> : <span className="workspace-project-avatar" />}
-        <span className="workspace-project-trigger-name">{allProjects ? ALL_PROJECTS_LABEL : current?.name ?? "选择项目"}</span>
+        <span className="workspace-project-trigger-name">{taskMode ? TASK_MODE_LABEL : current?.name ?? "选择项目"}</span>
         <CaretDown size={11} weight="bold" aria-hidden="true" />
       </button>
 
       {open && (
         <div className="workspace-project-menu" role="menu" aria-label="项目切换">
-          {allProjects ? (
+          {taskMode ? (
             <div className="workspace-project-current">
-              <span className="workspace-project-avatar workspace-project-avatar--all is-large" aria-hidden="true"><SquaresFour size={17} weight="fill" /></span>
+              <span className="workspace-project-avatar workspace-project-avatar--task-mode is-large" aria-hidden="true"><ListChecks size={17} weight="bold" /></span>
               <span>
-                <b>{ALL_PROJECTS_LABEL}</b>
-                <small>{current ? `新建任务落在 ${current.name}` : "所有项目的任务混在一起"}</small>
+                <b>{TASK_MODE_LABEL}</b>
+                <small>{current ? `新建任务落在 ${current.name}` : TASK_MODE_SUMMARY}</small>
               </span>
             </div>
           ) : current && (
@@ -116,28 +117,28 @@ export function ProjectSwitcher({
 
           <div className="workspace-project-menu-label">切换到</div>
           <div className="workspace-project-results">
-            {allMatches && (
+            {taskModeMatches && (
               <button
-                className={`workspace-project-option ui-selectable${allProjects ? " is-selected" : ""}`}
+                className={`workspace-project-option ui-selectable${taskMode ? " is-selected" : ""}`}
                 type="button"
                 role="menuitemradio"
-                aria-checked={allProjects}
+                aria-checked={taskMode}
                 onClick={() => {
                   setSearch("");
                   setOpen(false);
-                  onAllProjects();
+                  onTaskMode();
                 }}
               >
-                <span className="workspace-project-avatar workspace-project-avatar--all" aria-hidden="true"><SquaresFour size={13} weight="fill" /></span>
+                <span className="workspace-project-avatar workspace-project-avatar--task-mode" aria-hidden="true"><ListChecks size={13} weight="bold" /></span>
                 <span>
-                  <b>{ALL_PROJECTS_LABEL}</b>
-                  <small>把所有项目的任务混着看</small>
+                  <b>{TASK_MODE_LABEL}</b>
+                  <small>{TASK_MODE_SUMMARY}</small>
                 </span>
-                {allProjects && <Check size={13} weight="bold" aria-hidden="true" />}
+                {taskMode && <Check size={13} weight="bold" aria-hidden="true" />}
               </button>
             )}
             {results.map((project) => {
-              const selected = !allProjects && project.id === current?.id;
+              const selected = !taskMode && project.id === current?.id;
               return (
                 <button
                   key={project.id}
@@ -160,7 +161,7 @@ export function ProjectSwitcher({
                 </button>
               );
             })}
-            {!results.length && !allMatches && <p className="workspace-project-empty">没有匹配的项目</p>}
+            {!results.length && !taskModeMatches && <p className="workspace-project-empty">没有匹配的项目</p>}
           </div>
           <button
             className="workspace-project-create"

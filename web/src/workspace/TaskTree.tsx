@@ -12,7 +12,7 @@ import {
   useCollapsedSections,
   useRevealHiddenSelection,
 } from "./TaskTreeRows.tsx";
-import { inScope, type TaskScope } from "./taskScope.ts";
+import { scopeTasks, type TaskScope } from "./taskScope.ts";
 import { matchesSpreadFilter, SPREAD_FILTERS, type SidebarSpread, type SpreadFilter } from "./useSidebarSpread.ts";
 import { buildTaskTree, orderedTopLevelTasks, previewTasksByAge } from "./taskTreeModel.ts";
 import { HandoffMachines } from "./HandoffMachines.tsx";
@@ -33,7 +33,7 @@ type TaskTreeProps = {
 };
 
 // 主列表：作用域里的顶层任务，按 taskTreeModel 的第一原则（更新时间倒序，置顶除外）分节。
-// 「当前项目」和「全部项目」共用它 —— 两态的区别只有喂进来的是哪一批任务，以及行首多不多
+// 「当前项目」和「任务模式」共用它 —— 两态的区别只有喂进来的是哪一批任务，以及行首多不多
 // 一枚项目徽标；另起一套「全局列表」组件只会让排序、年龄闸、筛选空态三处各活一份。
 function ScopedTaskTree({
   tasks,
@@ -43,6 +43,7 @@ function ScopedTaskTree({
   indicatorForTask,
   filter,
   onClearFilter,
+  emptyText,
   machineSection,
 }: {
   tasks: TaskListItem[];
@@ -52,6 +53,9 @@ function ScopedTaskTree({
   indicatorForTask: IndicatorForTask;
   filter: SpreadFilter;
   onClearFilter: () => void;
+  // 一条不剩时说什么。单项目态是「还没有任务」，任务模式得说清它本来就只收两类行，
+  // 否则空列表看着像「所有项目的任务都不见了」。
+  emptyText: string;
   machineSection: React.ReactNode;
 }) {
   const sections = useMemo(() => buildTaskTree(tasks, { unifiedPinned: true }), [tasks]);
@@ -106,7 +110,7 @@ function ScopedTaskTree({
     const label = SPREAD_FILTERS.find((item) => item.key === filter)?.label ?? filter;
     return (
       <p className="workspace-task-empty">
-        {filter === "all" ? "还没有任务" : `「${label}」下没有任务`}
+        {filter === "all" ? emptyText : `「${label}」下没有任务`}
         {filter !== "all" && (
           <button className="workspace-task-empty-action" type="button" onClick={onClearFilter}>显示全部</button>
         )}
@@ -170,7 +174,7 @@ function ScopedTaskTree({
       {renderSection(rest)}
       {noVisibleTasks && (
         <p className="workspace-task-empty">
-          {filter === "all" ? "还没有任务" : `当前「${SPREAD_FILTERS.find((item) => item.key === filter)?.label ?? filter}」筛选下没有任务`}
+          {filter === "all" ? emptyText : `当前「${SPREAD_FILTERS.find((item) => item.key === filter)?.label ?? filter}」筛选下没有任务`}
           {filter !== "all" && <button className="workspace-task-empty-action" type="button" onClick={onClearFilter}>显示全部</button>}
         </p>
       )}
@@ -178,8 +182,9 @@ function ScopedTaskTree({
   );
 }
 
-// 单项目态下方那一叠折叠起来的别家项目。全部项目态不画它 —— 那时候所有项目的任务
-// 已经混在上面同一份列表里了，再摆一遍等于同一条任务在侧栏出现两次。
+// 单项目态下方那一叠折叠起来的别家项目。任务模式不画它 —— 那时候别家的行已经按
+// 「在跑 / 待验收」混在上面同一份列表里了，再摆一遍等于同一条任务在侧栏出现两次，
+// 而且这一叠是不筛状态的全集，跟模式本身的口径也对不上。
 function OtherProject({
   project,
   tasks,
@@ -231,18 +236,15 @@ function OtherProject({
 export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTaskId, selectedRemoteTaskId, spread, onTask, onRemoteTask, onTaskStarred, onHandoffFinished, notify }: TaskTreeProps) {
   const { indicatorForTask } = useTaskReadState(tasks, selectedTaskId);
   const activeTasks = useMemo(() => tasks.filter((task) => !task.archived), [tasks]);
-  // 主列表看哪些行只由作用域决定（inScope 是唯一判据，跟计数、筛选、J/K 遍历同源）。
-  const scopedTasks = useMemo(
-    () => activeTasks.filter((task) => inScope(task, scope)),
-    [activeTasks, scope],
-  );
-  const allProjects = scope.kind === "all";
-  const otherProjects = allProjects ? [] : projects.filter((project) => project.id !== currentProjectId);
+  // 主列表看哪些行只由作用域决定（scopeTasks 是唯一判据，跟计数、筛选、J/K 遍历同源）。
+  const scopedTasks = useMemo(() => scopeTasks(activeTasks, scope), [activeTasks, scope]);
+  const taskMode = scope.kind === "tasks";
+  const otherProjects = taskMode ? [] : projects.filter((project) => project.id !== currentProjectId);
   const currentProject = projects.find((project) => project.id === currentProjectId) ?? null;
-  // 徽标表只在全部项目态给：单项目态下每行都是同一个项目，标了纯属占地方。
+  // 徽标表只在任务模式给：单项目态下每行都是同一个项目，标了纯属占地方。
   const projectBadges = useMemo(
-    () => allProjects ? new Map(projects.map((project) => [project.id, project])) : null,
-    [allProjects, projects],
+    () => taskMode ? new Map(projects.map((project) => [project.id, project])) : null,
+    [projects, taskMode],
   );
   const { peek, peekAt, peekOut, hold, hide } = useSpreadPeek(spread.laidOut);
   const rowContext = useMemo(() => ({ spread, peekAt, peekOut }), [peekAt, peekOut, spread]);
@@ -253,7 +255,7 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
   return (
     <TaskTreeActionsProvider value={treeActions}>
     <SpreadRowProvider value={rowContext}>
-      <nav className="workspace-task-tree" aria-label={allProjects ? "全部项目任务" : "任务树"} onScroll={hide}>
+      <nav className="workspace-task-tree" aria-label={taskMode ? "任务模式列表" : "任务树"} onScroll={hide}>
         <ScopedTaskTree
           tasks={scopedTasks}
           allTasks={tasks}
@@ -262,7 +264,8 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
           indicatorForTask={indicatorForTask}
           filter={spread.filter}
           onClearFilter={() => spread.setFilter("all")}
-          machineSection={allProjects ? null : <HandoffMachines project={currentProject} tasks={tasks} selectedRemoteTaskId={selectedRemoteTaskId} onRemoteTask={onRemoteTask} notify={notify} onFinished={onHandoffFinished} />}
+          emptyText={taskMode ? "没有在跑或待验收的任务" : "还没有任务"}
+          machineSection={taskMode ? null : <HandoffMachines project={currentProject} tasks={tasks} selectedRemoteTaskId={selectedRemoteTaskId} onRemoteTask={onRemoteTask} notify={notify} onFinished={onHandoffFinished} />}
         />
         {otherProjects.length > 0 && (
           <section className="workspace-other-projects">

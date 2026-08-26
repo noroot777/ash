@@ -1,4 +1,5 @@
-import type { Task, TaskListItem } from "@ash/shared";
+import type { Task, TaskListItem, TaskStatus } from "@ash/shared";
+import { isTeamSettled, teamNeverStarted } from "@ash/shared/team";
 
 // 「轮到谁动」的判据集中在这里：侧边栏筛选的分堆和行首圆点读的是同一份。
 // 放在 lib 而不是 workspace，是因为 lib/useTaskReadState 也要用它 —— 反过来引会成环。
@@ -37,4 +38,37 @@ export function isAcceptedStage(task: Pick<Task, "stage">): boolean {
 // 用户要的就是「凡是我没点过验收的，都得看得见」，而不是「只有 agent 主动报过待验收的才算」。
 export function awaitsAcceptance(task: Pick<Task, "stage">, settled: boolean): boolean {
   return settled && !isAcceptedStage(task);
+}
+
+// 「任务模式」（侧栏跨项目那一档）放行哪些行的判据，就下面这两条 —— 机器在动，或者
+// 干完了等我盖章。别的一律不进：那一档存在的意义是「此刻还没落地的活」，把排着的、
+// 收了尾又验完的一起塞进来，它跟单项目态就没区别了。
+//
+// 两条都要连执行者一起看：团队调度台派完活自己就落回 idle，只盯它会把一屋子执行者
+// 正在跑的团队判成静止，也会把还没收工的团队判成等验收。
+
+const LIVE_STATUSES = new Set<TaskStatus>(["running", "queued", "awaiting_review"]);
+
+function isTeamLead(task: Pick<TaskListItem, "mode" | "parentId">): boolean {
+  return task.mode === "team" && !task.parentId;
+}
+
+export function isTaskLive(task: TaskListItem, workers: TaskListItem[] = []): boolean {
+  if (LIVE_STATUSES.has(task.status)) return true;
+  return isTeamLead(task) && workers.some((worker) => LIVE_STATUSES.has(worker.status));
+}
+
+// stage 多数时候是 null（自由工作流只调 complete_task，不报 stage），所以不能只认
+// awaiting_acceptance —— 判据回落到「收了尾且没盖章」，跟行首那颗未验收的点同源。
+// 自己就失败/被取消的不算：那是「没干完」，不是「等你验收」。
+export function isTaskAwaitingAcceptance(task: TaskListItem, workers: TaskListItem[] = []): boolean {
+  if (isAcceptedStage(task)) return false;
+  if (task.status === "failed" || task.status === "canceled") return false;
+  if (task.stage === "awaiting_acceptance") return true;
+  if (isTeamLead(task)) return !teamNeverStarted(task.status) && isTeamSettled(task.status === "running", workers);
+  return task.status === "done";
+}
+
+export function inTaskMode(task: TaskListItem, workers: TaskListItem[] = []): boolean {
+  return isTaskLive(task, workers) || isTaskAwaitingAcceptance(task, workers);
 }
