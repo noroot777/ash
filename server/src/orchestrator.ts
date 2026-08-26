@@ -233,9 +233,11 @@ export async function continueTask(
     // DB 里的 verifyRound/nativeTurn 会在结算中途先清，handle/turn 要到 finally 才释放。
     // 把旁路身份也钉进运行时 turn role，关闭那段“标记已清、进程仍可被引导”的小窗口。
     if (sideTurn && sessionRole === "single") reclaimTurn(taskId, nativeCommand ? "native" : "side");
+    const checkpointFollowUp = !opts.system && !opts.byBackend
+      && task.status === "paused" && !!task.resumePrompt;
     const followUpFrom = sideTurn
       ? (task.status === "running" || task.status === "queued" ? null : task.status)
-      : !opts.system && ["done", "failed", "canceled"].includes(task.status)
+      : !opts.system && (["done", "failed", "canceled"].includes(task.status) || checkpointFollowUp)
         ? task.status
         : null;
     // 新回合起点:顺手清掉上一轮残留的完成确认(确认只在本回合内有效)。
@@ -491,10 +493,11 @@ export async function continueTask(
       // the human/backend turn as its own bubble; the matching event keeps every client live.
       recordUserConversationTurn({ taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text: userTurnText, at: turnStart, bySystem: opts.byBackend });
     }
-    // 真人消息真正进会话的这一刻才消费旧检查点。放在 HTTP 接受回复时会漏掉“先排队、
-    // 空闲后投递”这条路；放在起跑前又会在解析/spawn 失败时吞掉恢复指令。CAS 只清本轮
-    // 起点读到的那一份，agent 若已写下新检查点则原样保留。
-    if (!opts.system && !opts.byBackend && task.resumePrompt) {
+    // 上一回合尚未结算就收到回复时，消息会先排队，真正送达时任务已不再 paused；这条
+    // 路径要在落盘后消费旧检查点，避免它继续挡完成与预约派审。若起点本来就是 paused，
+    // 这句话也可能只是“怎么样了”一类追问：先保留检查点并用 followUpFrom 护住 paused，
+    // 只有本轮明确 complete 时再由结算清掉。
+    if (!opts.system && !opts.byBackend && task.resumePrompt && task.status !== "paused") {
       await db.update(tasks)
         .set({ resumePrompt: null, updatedAt: now() })
         .where(and(eq(tasks.id, taskId), eq(tasks.resumePrompt, task.resumePrompt)));

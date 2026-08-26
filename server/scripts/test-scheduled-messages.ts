@@ -98,6 +98,7 @@ process.stdin.on("end", () => {
     setInterval(() => {}, 1000);
     return;
   }
+  if (buf.includes("等待本轮完成确认")) return void setTimeout(() => succeed(buf), 300);
   if (!buf) return process.exit(1);
   succeed(buf);
 });
@@ -148,6 +149,8 @@ const deliveredTaskId = "scheduled-team-delivered";
 const unavailableTaskId = "scheduled-team-unavailable";
 const queuedTaskId = "scheduled-single-queued";
 const lockedTaskId = "scheduled-single-locked";
+const pausedChatTaskId = "scheduled-single-paused-chat";
+const pausedCompleteTaskId = "scheduled-single-paused-complete";
 const crashTaskId = "scheduled-single-crashed";
 const steerTaskId = "scheduled-single-steer";
 const steerLockedTaskId = "scheduled-single-steer-locked";
@@ -159,7 +162,7 @@ const unavailableTranscript = transcript.sessionTranscriptPath(unavailableTaskId
 // 「调度台不可用」这一档必须与本机装了什么 CLI 无关:claude/codex 都实现了常驻会话,
 // 装了真 codex 的机器上它会真的开起来。用一个走 GenericCliExecutor 的类型(它们一律
 // 不实现 openResident,这正是「谁能当调度者」的过滤条件),失败点就锁死在协议上。
-const taskRow = (id: string, lead: "claude" | "gemini", status: "idle" | "running" | "done") => ({
+const taskRow = (id: string, lead: "claude" | "gemini", status: "idle" | "running" | "done" | "paused") => ({
   id,
   projectId,
   groupId: null,
@@ -258,6 +261,8 @@ try {
     taskRow(unavailableTaskId, "gemini", "idle"),
     { ...taskRow(queuedTaskId, "claude", "running"), mode: "single", team: null },
     { ...taskRow(lockedTaskId, "claude", "running"), mode: "single", team: null, resumePrompt: "旧检查点" },
+    { ...taskRow(pausedChatTaskId, "claude", "paused"), mode: "single", team: null, resumePrompt: "等上游完成后继续第三步" },
+    { ...taskRow(pausedCompleteTaskId, "claude", "paused"), mode: "single", team: null, resumePrompt: "Windows 打开后继续验证" },
     { ...taskRow(crashTaskId, "claude", "done"), mode: "single", team: null },
     {
       ...taskRow(steerTaskId, "claude", "done"),
@@ -337,6 +342,34 @@ try {
   console.log("✓ 团队定时消息到期后进入 lead 常驻会话并标记 sent");
   console.log("✓ lead 不可用时消息安全取消并把原因写入时间线");
 
+  // 普通追问保留检查点；本轮明确 complete 才消费。
+  const replyApi = new Hono(); runRoutes.mountTaskRunRoutes(replyApi);
+  const chatReply = await replyApi.request(`/tasks/${pausedChatTaskId}/reply`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "怎么样了？" }),
+  });
+  assert.equal(chatReply.status, 202);
+  await waitFor(async () => !["running", "queued"].includes(
+    (await db.select().from(tasks).where(eq(tasks.id, pausedChatTaskId))).at(0)?.status ?? "",
+  ), "普通追问回合没有结算");
+  const pausedChat = (await db.select().from(tasks).where(eq(tasks.id, pausedChatTaskId))).at(0)!;
+  assert.equal(pausedChat.status, "paused", "暂停任务上的普通追问结束后必须恢复 paused");
+  assert.equal(pausedChat.resumePrompt, "等上游完成后继续第三步", "普通追问不得吞掉原检查点");
+
+  const completeReply = await replyApi.request(`/tasks/${pausedCompleteTaskId}/reply`, { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "等待本轮完成确认：Windows 已打开，继续" }) });
+  assert.equal(completeReply.status, 202);
+  await waitFor(
+    async () => (await db.select().from(tasks).where(eq(tasks.id, pausedCompleteTaskId))).at(0)?.status === "running",
+    "检查点答复没有启动同一会话的下一轮",
+  );
+  await db.update(tasks).set({ completeConfirmedAt: new Date().toISOString() }).where(eq(tasks.id, pausedCompleteTaskId));
+  await waitFor(async () => !["running", "queued"].includes(
+    (await db.select().from(tasks).where(eq(tasks.id, pausedCompleteTaskId))).at(0)?.status ?? "",
+  ), "明确完成的检查点答复没有结算");
+  const pausedComplete = (await db.select().from(tasks).where(eq(tasks.id, pausedCompleteTaskId))).at(0)!;
+  assert.equal(pausedComplete.status, "done", "检查点答复明确完成后应落 done");
+  assert.equal(pausedComplete.resumePrompt, null, "明确完成应消费旧检查点，不再阻塞预约派审");
+  console.log("✓ checkpoint-paused 普通追问保状态与指令，明确完成才消费检查点");
   // 投递成功和取消都得让托盘知道 —— 这两条是它「少一行」的唯一权威信号。
   assert.ok(trayEventCount(deliveredTaskId) > 0, "消息标成 sent 却没通知托盘,前端会一直挂着「排队中」");
   assert.ok(trayEventCount(unavailableTaskId) > 0, "消息取消了却没通知托盘");

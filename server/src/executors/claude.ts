@@ -231,13 +231,18 @@ export class ClaudeExecutor implements AgentExecutor {
         resident.interruptPending = true;
         child.stdin?.write(interruptLine());
       },
-      steer: async (text: string) => {
+      steer: async (text: string, onInterrupted?: () => void) => {
         resident.interruptPending = true;
+        let interruptWritten = false;
         try {
           await writeChecked(interruptLine());
+          interruptWritten = true;
+          onInterrupted?.();
           await writeChecked(userLine(text));
         } catch (error) {
-          resident.interruptPending = false;
+          // interrupt 尚未写出时才撤销；一旦写出，CLI 会产生一个 turnEnd，消费层必须
+          // 保留对应计数，即使紧接着的新 user 消息写失败。
+          if (!interruptWritten) resident.interruptPending = false;
           throw error;
         }
       },
@@ -311,14 +316,16 @@ export function singleRunFromResident(
     async steer(text: string) {
       if (!accepting) throw new Error("Claude 当前回合已经结束");
       intermediateEnds += 1;
+      let interrupted = false;
       try {
-        if (resident.steer) await resident.steer(text);
+        if (resident.steer) await resident.steer(text, () => { interrupted = true; });
         else {
           resident.interrupt();
+          interrupted = true;
           resident.send(text);
         }
       } catch (error) {
-        intermediateEnds -= 1;
+        if (!interrupted) intermediateEnds = Math.max(0, intermediateEnds - 1);
         throw error;
       }
     },

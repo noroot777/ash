@@ -126,7 +126,13 @@ export async function settleTaskStatus(
   if (t?.followUpFrom) {
     // 旁路回合(就地验证)恢复的可能是 paused/backlog 一类的原状态,不止三个终态。
     const back = t.followUpFrom as Parameters<typeof setStatus>[1];
-    await db.update(tasks).set({ followUpFrom: null, updatedAt: now() }).where(eq(tasks.id, taskId));
+    await db.update(tasks).set({
+      followUpFrom: null,
+      // checkpoint-paused 上的真人消息先保留旧检查点，避免一句普通追问把恢复指令吞掉；
+      // 本轮明确交卷才证明这句话确实接管了检查点，此时完成优先并清掉当前指令。
+      ...(confirmed && t.resumePrompt ? { resumePrompt: null } : {}),
+      updatedAt: now(),
+    }).where(eq(tasks.id, taskId));
     if (confirmed) {
       await setStatus(taskId, "done");
       notify("done");

@@ -56,6 +56,52 @@ assert.deepEqual(await claudeIterator.next(), { value: { kind: "done", exitStatu
 assert.equal(claudeCalls.at(-1), "close", "最终 turnEnd 才关闭当前单飞连接");
 console.log("✓ Claude 原生引导保持同一进程，中间 turnEnd 不结算");
 
+const partialEvents = eventQueue();
+const partialCalls: string[] = [];
+let partialAttempt = 0;
+const partialResident: ResidentHandle = {
+  sessionId: "claude-partial-thread",
+  commandLine: "claude partial resident",
+  events: partialEvents.stream,
+  interrupt: () => { throw new Error("checked steer path should be used"); },
+  send: () => { throw new Error("checked steer path should be used"); },
+  steer: async (text, onInterrupted) => {
+    partialAttempt += 1;
+    partialCalls.push(`interrupt:${text}`);
+    onInterrupted?.();
+    partialEvents.push({ kind: "turnEnd" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    if (partialAttempt === 1) throw new Error("Claude 当前回合 stdin 已关闭");
+    partialCalls.push(`send:${text}`);
+    partialEvents.push({ kind: "text", text });
+  },
+  close: () => { partialCalls.push("close"); partialEvents.end(); },
+  kill: () => { partialCalls.push("kill"); partialEvents.end(); },
+};
+const partialClaude = singleRunFromResident(partialResident);
+const partialSeen: AgentEvent[] = [];
+const partialConsuming = (async () => {
+  for await (const event of partialClaude.events) partialSeen.push(event);
+})();
+partialEvents.push({ kind: "text", text: "OLD" });
+await new Promise<void>((resolve) => setImmediate(resolve));
+await assert.rejects(partialClaude.steer!("FIRST"), /stdin 已关闭/,
+  "interrupt 已写出而新消息写失败时，引导应如实失败");
+await partialClaude.steer!("RETRY");
+partialEvents.push({ kind: "turnEnd" });
+await Promise.race([
+  partialConsuming,
+  new Promise((_, reject) => setTimeout(() => reject(new Error("partial steer stream did not finish")), 1_000)),
+]);
+assert.deepEqual(
+  partialSeen.map((event) => event.kind === "text" ? `text:${event.text}` : event.kind),
+  ["text:OLD", "text:RETRY", "done"],
+  "第一次 interrupt 的 turnEnd 已被消费后，失败回滚不得把计数减成负数",
+);
+assert.deepEqual(partialCalls, ["interrupt:FIRST", "interrupt:RETRY", "send:RETRY", "close"],
+  "重试时必须先送入新消息，最终 turnEnd 才允许关闭连接");
+console.log("✓ Claude 部分写失败不会让 intermediateEnds 下溢或提前关闭连接");
+
 let nativeKills = 0;
 let nativeRecords = 0;
 const stopFirstHandle = {

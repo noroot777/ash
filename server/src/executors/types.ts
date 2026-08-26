@@ -64,7 +64,7 @@ export interface ResidentHandle {
   // codex 侧没有原生打断,interrupt 就是杀掉当前回合的进程。
   interrupt(): void;
   /** 单飞原生引导可选的可确认写入；至少保证 interrupt 与新消息都被 stdin 接受。 */
-  steer?(text: string): Promise<void>;
+  steer?(text: string, onInterrupted?: () => void): Promise<void>;
   close(): void; // 优雅收尾:关 stdin,等它自己退出
   kill(): void; // 硬杀,走 killChild 三层击杀
 }
