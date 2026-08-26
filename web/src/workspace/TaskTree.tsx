@@ -342,7 +342,7 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
           indicatorForTask={indicatorForTask}
           filter={spread.filter}
           onClearFilter={() => spread.setFilter("all")}
-          emptyText={taskMode ? "没有在跑或待验收的任务" : "还没有任务"}
+          emptyText={taskMode ? "没有在跑、等你答复或待验收的任务" : "还没有任务"}
           workerIndex={workerIndex}
           projectIndex={projectBadges}
           machineSection={taskMode ? null : <HandoffMachines project={currentProject} tasks={tasks} selectedRemoteTaskId={selectedRemoteTaskId} onRemoteTask={onRemoteTask} notify={notify} onFinished={onHandoffFinished} />}

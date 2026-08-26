@@ -5,8 +5,9 @@ import { indexWorkers, inTaskMode, workersFrom } from "../lib/taskAttention.ts";
 // 侧栏任务列表的**作用域**：只看当前项目一家，还是进「任务模式」。
 //
 // 任务模式不是「把所有项目摊开」—— 那样只是把同一堆行变多，看的人还得自己挑。它回答的
-// 是另一个问题：**此刻全公司还没落地的活有哪些**，所以只留两类行 —— 机器在动的（在跑）
-// 和干完了等我盖章的（待验收）。判据在 lib/taskAttention 的 inTaskMode。
+// 是另一个问题：**此刻全公司还没落地的活有哪些**，所以只留三类行 —— 机器在动的（在跑）、
+// 等我说句话的（提问 / 停在检查点）和停在验收关口上的（待验收）。判据在
+// lib/taskAttention 的 inTaskMode。
 //
 // 判据只有 scopeTasks 这一处 —— 计数、筛选、J/K 遍历、铺开取数全从它来，分头写迟早对不上。
 //
@@ -24,7 +25,7 @@ export const SCOPE_STORAGE_KEY = "ash:task-scope";
 // 注意别跟 Task["mode"]（单飞 / 团队 / 讨论）搞混：那个字段内部也叫 mode，但从不对用户
 // 露出「模式」两个字（它显示成「任务 / 团队 / 讨论」）。这里的「任务模式」说的是侧栏作用域。
 export const TASK_MODE_LABEL = "任务模式";
-export const TASK_MODE_SUMMARY = "所有项目里在跑和待验收的任务";
+export const TASK_MODE_SUMMARY = "所有项目里在跑、等你答复和待验收的任务";
 
 // 作用域筛过的那一份列表。任务模式下**执行者跟着自己的调度台走**：团队行要靠执行者
 // 算摘要、展开子行，按顶层判据把它们一起筛掉的话，展开箭头会变成灰的、摘要空一片。
@@ -58,7 +59,7 @@ function normalizeScopeKind(value: unknown): TaskScopeKind | null {
 //
 // 作用域跟筛选不同，它落盘。筛选不落盘是因为它藏起一批行、入口又只是几颗小点，刷新后
 // 留着就成了「任务怎么没了」；任务模式同样藏行，但它的开关是侧栏顶上那颗**一直写着
-// 「任务模式」的按钮**，顶栏也写着「N 项在跑或待验收」——生效中的状态自己说得出口，
+// 「任务模式」的按钮**，顶栏也写着「N 项还没落地」——生效中的状态自己说得出口，
 // 就不构成那种失踪感。收起侧栏时那颗按钮换成清单图标，同一句话照样在。
 export function resolveScopeKind(search: string, stored: TaskScopeKind | null): TaskScopeKind {
   const params = new URLSearchParams(search);

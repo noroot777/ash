@@ -11,7 +11,7 @@ import {
 } from "../src/workspace/useSidebarSpread.ts";
 import { orderedTopLevelTasks } from "../src/workspace/taskTreeModel.ts";
 import { resolveScopeKind, scopeHasTarget, scopeTasks } from "../src/workspace/taskScope.ts";
-import { inTaskMode } from "../src/lib/taskAttention.ts";
+import { awaitsYourWord, inTaskMode } from "../src/lib/taskAttention.ts";
 
 const P1 = { kind: "project", projectId: "p1" };
 const P3 = { kind: "project", projectId: "p3" };
@@ -52,6 +52,7 @@ const tasks = [
   task("run-running", { status: "running" }),
   task("run-accepted-review", { status: "awaiting_review", stage: "accepted" }),
   task("wait-backlog", { status: "backlog", starredAt: 1754900001000 }),
+  task("wait-paused", { status: "paused" }),
   task("done-done", { status: "done" }),
   task("accepted-merged", { status: "done", stage: "merged" }),
   // 下面三条都不该进计数：执行者不是顶层行、归档的不在树里、别的项目也不在。
@@ -63,11 +64,11 @@ const tasks = [
 ];
 
 const counts = spreadCounts(tasks, P1);
-assert.equal(counts.all, 8);
+assert.equal(counts.all, 9);
 assert.equal(counts.starred, 2);
 assert.equal(counts.todo, 3);
 assert.equal(counts.run, 2);
-assert.equal(counts.wait, 1);
+assert.equal(counts.wait, 2);
 assert.equal(counts.done, 1);
 assert.equal(counts.accepted, 1);
 
@@ -123,8 +124,9 @@ const empty = spreadCounts(tasks, P3);
 assert.equal(empty.all, 0);
 assert.equal(SPREAD_DOT_FILTERS.reduce((sum, item) => sum + empty[item.key], 0), 0);
 
-// 「任务模式」作用域：跨项目，但只收「在跑」和「待验收」两类顶层行 —— 它回答的是
-// 「此刻还没落地的活有哪些」，而不是「所有项目的任务摊开」。执行者与归档行照旧排除。
+// 「任务模式」作用域：跨项目，但只收三类顶层行 —— 在跑、等我说句话（提问 / 停在检查点）、
+// 停在验收关口上（stage=awaiting_acceptance）。它回答的是「此刻还没落地的活有哪些」，
+// 而不是「所有项目的任务摊开」。执行者与归档行照旧排除。
 const taskMode = spreadCounts(tasks, TASKS);
 const taskModeRows = spreadVisibleTasks(tasks, TASKS, "all").map((row) => row.id);
 assert.deepEqual(taskModeRows.sort(), [
@@ -133,10 +135,12 @@ assert.deepEqual(taskModeRows.sort(), [
   "run-running",
   "todo-await",      // stage=awaiting_acceptance，就是「待验收」
   "todo-question",   // status=running，在跑（被问住也还挂在 running 上）
-  "done-done",       // done 且没盖过章 = 等我验收
+  "wait-paused",     // 停在检查点，等我说句话才走得下去
 ].sort());
 // 排着的、失败的、已验收的、归档的、执行者、接力走了的，一个都不进。
-for (const id of ["wait-backlog", "todo-failed", "accepted-merged", "archived", "worker", "handed-out"]) {
+// **done 但没盖过章的也不进**：stage 多数时候是 null，把「收了尾且没盖章」当待验收会把
+// 三百多条历史任务倒进来，模式想说的那句话就被淹了 —— 待验收只认显式的章。
+for (const id of ["wait-backlog", "todo-failed", "accepted-merged", "archived", "worker", "handed-out", "done-done"]) {
   assert.ok(!taskModeRows.includes(id), `任务模式不该收 ${id}`);
 }
 assert.equal(taskMode.all, taskModeRows.length);
@@ -154,7 +158,7 @@ for (const item of SPREAD_DOT_FILTERS) {
 }
 
 // 团队要连执行者一起判：调度台派完活自己落回 idle，只盯它会把正在干活的团队判成静止，
-// 也会把还没收工的团队判成等验收。
+// 也会把「执行者卡在提问上」的团队判成没事发生。
 const teamTasks = [
   task("team-live", { mode: "team", status: "idle" }),
   task("team-live-w", { status: "running", parentId: "team-live" }),
@@ -162,16 +166,20 @@ const teamTasks = [
   task("team-settled-w", { status: "done", parentId: "team-settled" }),
   task("team-accepted", { mode: "team", status: "idle", stage: "accepted" }),
   task("team-accepted-w", { status: "done", parentId: "team-accepted" }),
+  task("team-asking", { mode: "team", status: "idle" }),
+  task("team-asking-w", { status: "paused", question: "选哪个？", parentId: "team-asking" }),
   task("team-never", { mode: "team", status: "backlog" }),
 ];
 const teamRows = scopeTasks(teamTasks, TASKS).map((row) => row.id);
 assert.ok(teamRows.includes("team-live"), "执行者在跑 = 团队在跑");
-assert.ok(teamRows.includes("team-settled"), "团队收工没盖章 = 待验收");
+assert.ok(teamRows.includes("team-asking"), "执行者卡在提问上 = 这个团队等我说句话");
+assert.ok(!teamRows.includes("team-settled"), "收了工却没盖章的团队不再算待验收（章只认显式的）");
 assert.ok(!teamRows.includes("team-accepted"), "盖过章的团队不再出现");
-assert.ok(!teamRows.includes("team-never"), "从没开过台的团队不算收工");
+assert.ok(!teamRows.includes("team-never"), "从没开过台的团队不算还没落地的活");
 // 留下的团队要把自己的执行者一起带上，否则团队行的展开箭头是灰的、执行者摘要空一片。
 assert.ok(teamRows.includes("team-live-w"));
-assert.ok(teamRows.includes("team-settled-w"));
+assert.ok(teamRows.includes("team-asking-w"));
+assert.ok(!teamRows.includes("team-settled-w"));
 assert.ok(!teamRows.includes("team-accepted-w"));
 
 // **入选判据和状态桶必须是同一套。** 团队调度台自己常年停在 idle，只读它那一行的话
@@ -182,39 +190,48 @@ const bucketOf = (id) => spreadBucket(teamTasks.find((row) => row.id === id), wo
 assert.equal(bucketOf("team-live"), "run", "执行者在跑的团队要读作「在跑」");
 assert.equal(bucketOf("team-settled"), "done", "收了工的团队跟单飞 done 同义，不是「排着 / 暂停」");
 assert.equal(bucketOf("team-accepted"), "accepted", "盖过章的团队仍归「验收完成」，别被 done 抢走");
+assert.equal(bucketOf("team-asking"), "todo", "执行者的问题最后要你来答 = 需要你处理");
 assert.equal(bucketOf("team-never"), "wait", "从没开过台的团队才是真的「排着」");
 
-// 任务模式的口径承诺（只收在跑 / 待验收）落在筛选条上就是这一条：**wait 恒为 0**。
-// 一旦它非零，用户就会在一个自称「只有在跑和待验收」的模式里读到「排着 / 暂停」。
 const teamCounts = spreadCounts(teamTasks, TASKS);
-assert.equal(teamCounts.wait, 0, "任务模式里不该出现「排着 / 暂停」");
-assert.equal(spreadVisibleTasks(teamTasks, TASKS, "wait").length, 0);
-assert.equal(taskMode.wait, 0, "任务模式里不该出现「排着 / 暂停」");
-assert.equal(spreadVisibleTasks(tasks, TASKS, "wait").length, 0);
 assert.equal(teamCounts.run, 1);
-assert.equal(teamCounts.done, 1);
+assert.equal(teamCounts.todo, 1);
+assert.equal(teamCounts.done, 0, "收了工的团队不进任务模式，自然也不该在这里计数");
+assert.equal(teamCounts.accepted, 0);
 
-// 穷举一遍把上面那条不变式钉死：**进得了任务模式的行，绝不会落进 wait 桶**。
-// 两处判据（inTaskMode / spreadBucket）以后各自演化时，谁先漂了这里就红。
+// 任务模式的口径承诺落在筛选条上就是这一条：**进得来的行只会落在 在跑 / 需要你处理 /
+// 排着·暂停 三档里**，而且落进「排着 · 暂停」的必须真的有人停着或在等答复。
+// 一旦漂了，用户就会在一个自称「只收还没落地的活」的模式里读到「已收尾」「验收完成」。
+const MODE_BUCKETS = new Set(["run", "todo", "wait"]);
 const STATUSES = ["backlog", "queued", "running", "idle", "awaiting_review", "paused", "done", "failed", "canceled"];
 const STAGES = [null, "implemented", "verifying", "verified", "verify_failed", "awaiting_acceptance", "merged", "accepted"];
-const WORKER_SETS = [[], ["running"], ["queued"], ["paused"], ["done"], ["done", "failed"], ["running", "done"]];
+// 执行者集合里带上「停着」和「卡在提问上」两种：团队的这两种态只写在执行者身上。
+const WORKER_SETS = [
+  [],
+  [{ status: "running" }],
+  [{ status: "queued" }],
+  [{ status: "paused" }],
+  [{ status: "paused", question: "选哪个？" }],
+  [{ status: "done" }],
+  [{ status: "done" }, { status: "failed" }],
+  [{ status: "running" }, { status: "done" }],
+];
 let checked = 0;
 for (const mode of ["single", "team"]) {
   for (const status of STATUSES) {
     for (const stage of STAGES) {
       for (const question of [null, "选哪个？"]) {
-        for (const workerStatuses of WORKER_SETS) {
+        for (const workerSpecs of WORKER_SETS) {
           const lead = task("lead", { mode, status, stage, question });
-          const workers = workerStatuses.map((workerStatus, at) =>
-            task(`w${at}`, { parentId: "lead", status: workerStatus }));
+          const workers = workerSpecs.map((spec, at) => task(`w${at}`, { parentId: "lead", ...spec }));
           if (!inTaskMode(lead, workers)) continue;
           checked += 1;
-          assert.notEqual(
-            spreadBucket(lead, workers),
-            "wait",
-            `任务模式收了 ${mode}/${status}/${stage}/${question ? "问" : "不问"}/[${workerStatuses}]，桶却是 wait`,
-          );
+          const where = `${mode}/${status}/${stage}/${question ? "问" : "不问"}/[${workerSpecs.map((spec) => spec.status).join(",")}]`;
+          const bucket = spreadBucket(lead, workers);
+          assert.ok(MODE_BUCKETS.has(bucket), `任务模式收了 ${where}，桶却是 ${bucket}`);
+          if (bucket === "wait") {
+            assert.ok(awaitsYourWord(lead, workers), `${where} 落进「排着 · 暂停」，却没人在等我说话`);
+          }
         }
       }
     }

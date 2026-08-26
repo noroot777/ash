@@ -70,6 +70,12 @@ export function spreadBucket(task: TaskListItem, workers: TaskListItem[] = []): 
   if (task.question) return "todo";
   if (task.status === "failed" || task.stage === "awaiting_acceptance" || task.stage === "verify_failed") return "todo";
   if (isTaskLive(task, workers)) return "run";
+  // 调度台自己没在说话，底下却有执行者卡在提问上 —— 那句话最后是要你来答的。排在
+  // isTaskLive 之后：调度台还在跑就由它自己去答，那种时候事实是「机器在动」。
+  if (isTeamLead(task) && workers.some((worker) => worker.question)) return "todo";
+  // 底下还有执行者停着 = 这一队没落地，哪怕调度台那一行写着 done / 盖过章。事实高于记号，
+  // 跟 shared 的 isTeamSettled 把 paused 算作「活的执行者」是同一个口径。
+  if (isTeamLead(task) && workers.some((worker) => worker.status === "paused")) return "wait";
   if (task.stage === "accepted" || task.stage === "merged") return "accepted";
   if (task.status === "done" || task.status === "canceled") return "done";
   // 收了工的团队跟单飞的 done 同义。「盖没盖章」不由桶来说 —— 行首那颗未验收的点
@@ -92,29 +98,35 @@ export function awaitsAcceptance(task: Pick<Task, "stage">, settled: boolean): b
   return settled && !isAcceptedStage(task);
 }
 
-// 「任务模式」（侧栏跨项目那一档）放行哪些行的判据，就下面这两条 —— 机器在动，或者
-// 干完了等我盖章。别的一律不进：那一档存在的意义是「此刻还没落地的活」，把排着的、
-// 收了尾又验完的一起塞进来，它跟单项目态就没区别了。
+// 「任务模式」（侧栏跨项目那一档）放行哪些行的判据，就下面这三条 —— 机器在动、等我
+// 说句话（提问 / 停在检查点）、或者盖着「待验收」的章。别的一律不进：那一档存在的意义
+// 是「此刻还没落地的活」，把收了尾又验完的一起塞进来，它跟单项目态就没区别了。
 //
-// 这两条跟 spreadBucket 用的是同一批谓词（isTaskLive / isTeamSettledLead），所以
-// **进得来的行不可能落进 wait 桶** —— 这条不变式由 test-spread-filter 钉住：
-//   · isTaskLive → run
-//   · stage=awaiting_acceptance → todo
-//   · 团队收工 → done（accepted 已在上一条排除）
-//   · status=done → done
-// 判据分两处各写一份的话，筛选条上就会冒出模式自己都不认的档。
+// 判据跟 spreadBucket 用的是同一批谓词，连**顺序**都一样（先看在跑、再让盖过章的出局），
+// 所以进得来的行必定落在筛选条上的 在跑 / 需要你处理 / 排着·暂停 三档里，永远不会掉进
+// 「已收尾」「验收完成」这种模式自己都不认的档。这条不变式由 test-spread-filter 钉住。
 
-// stage 多数时候是 null（自由工作流只调 complete_task，不报 stage），所以不能只认
-// awaiting_acceptance —— 判据回落到「收了尾且没盖章」，跟行首那颗未验收的点同源。
-// 自己就失败/被取消的不算：那是「没干完」，不是「等你验收」。
-export function isTaskAwaitingAcceptance(task: TaskListItem, workers: TaskListItem[] = []): boolean {
-  if (isAcceptedStage(task)) return false;
-  if (task.status === "failed" || task.status === "canceled") return false;
-  if (task.stage === "awaiting_acceptance") return true;
-  if (isTeamLead(task)) return isTeamSettledLead(task, workers);
-  return task.status === "done";
+// 「等我说句话」。提问是明着要答案，paused 是停在检查点等续跑 —— 两样都是「活还在半路，
+// 而且下一步得人动手」。**团队要连执行者一起看**：调度台派完活自己落回 idle，执行者在
+// 底下卡着提问时，只读调度台那一行会把整个团队判成没事发生。
+export function awaitsYourWord(task: TaskListItem, workers: TaskListItem[] = []): boolean {
+  if (task.question || task.status === "paused") return true;
+  return isTeamLead(task) && workers.some((worker) => worker.question || worker.status === "paused");
+}
+
+// 「等我盖章」。只认**显式的** stage=awaiting_acceptance —— 这一档从前回落到「干完了且
+// 没盖过章」，可 stage 多数时候是 null（自由工作流只调 complete_task），于是三百多条早就
+// 收尾的历史任务全被当成待验收堆在任务模式里，模式想说的「还没落地的活」就被淹了。
+// 行首那颗未验收的圆点仍按老口径走（useTaskReadState 的 awaitsAcceptance），两者分工：
+// 点是「我还没点过头」的长期记号，这一档是「这条线现在停在验收关口上」。
+export function isTaskAwaitingAcceptance(task: Pick<TaskListItem, "stage">): boolean {
+  return !isAcceptedStage(task) && task.stage === "awaiting_acceptance";
 }
 
 export function inTaskMode(task: TaskListItem, workers: TaskListItem[] = []): boolean {
-  return isTaskLive(task, workers) || isTaskAwaitingAcceptance(task, workers);
+  if (isTaskLive(task, workers)) return true;
+  // 盖过章的一律出局，跟 spreadBucket 把 accepted 排在 run 之后同一个道理：事实高于
+  // 记号（验收完又重新开工的上一条已经放行），但只剩记号时它就是「落地了」。
+  if (isAcceptedStage(task)) return false;
+  return isTaskAwaitingAcceptance(task) || awaitsYourWord(task, workers);
 }
