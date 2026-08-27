@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-mcp-handoff-"));
 process.env.ASH_DB = join(root, "ash.db");
@@ -219,6 +220,7 @@ assert.equal(
 );
 
 console.log("mcp handoff ok");
+await releaseTmpDb();
 rmSync(root, { recursive: true, force: true });
 rmSync(join(RUNS_DIR, TASK), { recursive: true, force: true });
 process.exit(0);
