@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HandoffPreflightResult, HandoffReturnGrant, HandoffTarget, Task } from "@ash/shared";
 import { api, makeRepo, startPeer } from "./handoff-test-utils.js";
-import { readReturnLocalState, seedReturnLocalState } from "./handoff-return-state-fixture.js";
+import { readReturnLocalState, seedReturnLocalState, stripHandoffPeerUrl } from "./handoff-return-state-fixture.js";
 import { killOne, listenerPidsSync } from "../src/platform.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-handoff-return-"));
@@ -372,7 +372,49 @@ try {
   const { target: markerTarget } = await api<{ target: HandoffTarget }>(machineB, `/tasks/${task.id}/handoff/return-target`);
   assert.equal(markerTarget.url, machineA, "任务刚恢复的 peerUrl 不应被设置里的旧 URL 盖掉");
 
-  const { assertReturnProject, sourceUrlFromPeer } = await import("../src/handoff-return.js");
+  // 旧接力记录没保存来源机端口(peerUrl 为空),且设置里登记的地址已经死了——这两件事
+  // 以前都会把地址甩回给用户手填。现在按指纹探回去:同一台来源机在本机留下的其它
+  // 记录给出端口,handoff_peers 的来访地址给出主机,探到指纹一致的才算数。
+  const siblingTask = await createSimpleTask("同源新记录:给旧记录提供回程端口线索");
+  await api(machineA, `/tasks/${siblingTask.id}/handoff`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: machineB, targetProjectId: projectB.id, targetName: "B", autoResume: false }),
+  });
+  const portlessTask = await createSimpleTask("旧接力记录:marker 里没有来源机端口");
+  await api(machineA, `/tasks/${portlessTask.id}/handoff`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: machineB, targetProjectId: projectB.id, targetName: "B", autoResume: false }),
+  });
+  stripHandoffPeerUrl(join(root, "b.db"), portlessTask.id);
+  const { target: probedTarget } = await api<{ target: HandoffTarget }>(
+    machineB, `/tasks/${portlessTask.id}/handoff/return-target`,
+  );
+  assert.equal(probedTarget.url, machineA, "旧记录缺端口、登记地址已失效时应自动探回来源机");
+  assert.equal(probedTarget.peerFp, identityA.fingerprint);
+  // 指纹对不上的机器不能被探测顺手选中:C 也活着,但它不是这条任务的来源机。
+  await api(machineB, "/settings", {
+    method: "PATCH", headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      handoffTargets: [{ name: "无关的 C", url: machineC, peerFp: identityA.fingerprint }],
+    }),
+  });
+  const { target: strictTarget } = await api<{ target: HandoffTarget }>(
+    machineB, `/tasks/${portlessTask.id}/handoff/return-target`,
+  );
+  assert.equal(strictTarget.url, machineA, "探测必须按来源指纹认人,不能落到指纹不符的第三台机器");
+  await api(machineB, "/settings", {
+    method: "PATCH", headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      handoffTargets: [{ name: "过期的 A", url: "http://127.0.0.1:1", peerFp: identityA.fingerprint }],
+    }),
+  });
+  for (const id of [siblingTask.id, portlessTask.id]) {
+    await api(machineA, `/tasks/${id}`, { method: "DELETE" });
+    await api(machineB, `/tasks/${id}`, { method: "DELETE" });
+  }
+
+  const { assertReturnProject } = await import("../src/handoff-return.js");
+  const { sourceUrlFromPeer } = await import("../src/handoff-return-address.js");
   assert.equal(sourceUrlFromPeer("mac-mini.local", 4317), "http://mac-mini.local:4317", "mDNS 主机名应能组成回程地址");
   assert.equal(sourceUrlFromPeer("bad host", 4317), null, "非法主机名不能进入 URL");
   assert.throws(

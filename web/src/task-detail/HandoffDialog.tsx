@@ -337,8 +337,9 @@ export function HandoffDialog({
         ) : inboundHandoff && targets && targets.length === 0 ? (
           <div className="handoff-quick-add">
             <p>
-              无法自动定位来源机器{inboundHandoff.peerName ? `「${inboundHandoff.peerName}」` : ""}的可回连地址。
-              旧接力记录没有保存端口，请填写来源机当前的 ash 地址。
+              自动找不到来源机器{inboundHandoff.peerName ? `「${inboundHandoff.peerName}」` : ""}现在的地址。
+              这条旧接力记录没保存端口，按它最近的来访地址和常用端口也没探到指纹一致的机器
+              —— 多半是那台机器关着、换了网段或改了端口。请填写它当前的 ash 地址。
             </p>
             {manualReturnTargetFields}
           </div>
@@ -383,6 +384,13 @@ export function HandoffDialog({
                 {pendingReturn
                   ? "上次移回没收到确认，这次会按同一来源机、原项目和续跑选项原样重放。若要放弃本次移回，请先关闭弹窗并使用横幅上的“核验后在本机继续”；系统会先确认原机尚未接回任务。"
                   : "上次接力没收到确认，这次会按同一目标机、项目和续跑选项原样重放。若要放弃本次接力，请先关闭弹窗并使用横幅上的“核验后在本机继续”；系统会先确认对端尚未收到任务。"}
+              </p>
+            )}
+            {/* 移回时服务端可能要按指纹探几个候选地址才知道来源机在哪，别让下拉空着干等。 */}
+            {targets === null && (
+              <p className="handoff-probing">
+                <SpinnerGap size={13} className="is-spinning" aria-hidden="true" />
+                {returningHandoff ? "正在定位来源机器…" : "正在读取远程主机…"}
               </p>
             )}
             <div className="handoff-field">

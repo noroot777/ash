@@ -38,6 +38,21 @@ export function readReturnLocalState(dbPath: string, taskId: string): ReturnLoca
   }
 }
 
+/** 把接入标记里的回程地址抹掉,还原成「旧接力记录只有指纹、没有来源机端口」的样子。 */
+export function stripHandoffPeerUrl(dbPath: string, taskId: string): void {
+  const db = new DatabaseSync(dbPath);
+  db.exec("PRAGMA busy_timeout=5000");
+  try {
+    const row = db.prepare("SELECT handoff FROM tasks WHERE id = ?").get(taskId) as { handoff: string | null };
+    if (!row?.handoff) throw new Error(`任务 ${taskId} 没有接力标记`);
+    const marker = JSON.parse(row.handoff) as { peerUrl?: string | null };
+    marker.peerUrl = null;
+    db.prepare("UPDATE tasks SET handoff = ? WHERE id = ?").run(JSON.stringify(marker), taskId);
+  } finally {
+    db.close();
+  }
+}
+
 export function seedReturnLocalState(dbPath: string, taskId: string, projectId: string): ReturnLocalState {
   const db = new DatabaseSync(dbPath);
   db.exec("PRAGMA busy_timeout=5000; BEGIN IMMEDIATE");

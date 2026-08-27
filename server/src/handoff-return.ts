@@ -1,8 +1,7 @@
-import type { HandoffPingProject, HandoffReturnGrant, HandoffTarget, TaskHandoff } from "@ash/shared";
-import { isIP } from "node:net";
-import { domainToASCII } from "node:url";
+// 移回的**授权**一侧:哪台机器有资格把一条任务免审批地移回本机,落回哪个项目。
+// 「该往哪个地址移回」是另一件事,在 handoff-return-address.ts。
+import type { HandoffPingProject, HandoffReturnGrant, TaskHandoff } from "@ash/shared";
 import { eq } from "drizzle-orm";
-import { getAppSettings } from "./app-settings.js";
 import { db } from "./db/index.js";
 import { handoffPeers, projects, tasks } from "./db/schema.js";
 import { sameFingerprint, shortFingerprint } from "./handoff-identity.js";
@@ -20,26 +19,6 @@ function grantsTaskReturn(marker: TaskHandoff | null): marker is TaskHandoff & {
   const completedReturn = marker.direction === "returned"
     && Object.prototype.hasOwnProperty.call(marker, "returnTransferId");
   return confirmedOut || completedReturn;
-}
-
-function hostForUrl(address: string): string | null {
-  const raw = address.trim().replace(/^::ffff:/i, "");
-  const unwrapped = raw.startsWith("[") && raw.endsWith("]") ? raw.slice(1, -1) : raw;
-  const normalized = unwrapped.split("%")[0] ?? "";
-  if (isIP(normalized)) return normalized.includes(":") ? `[${normalized}]` : normalized;
-  const hostname = domainToASCII(normalized);
-  if (!hostname || hostname.length > 253
-    || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.?$/i.test(hostname)) {
-    return null;
-  }
-  return hostname;
-}
-
-export function sourceUrlFromPeer(address: string | undefined, port: unknown): string | null {
-  const host = hostForUrl(address ?? "");
-  const numericPort = Number(port);
-  if (!host || !Number.isInteger(numericPort) || numericPort < 1 || numericPort > 65_535) return null;
-  return `http://${host}:${numericPort}`;
 }
 
 export async function returnArchiveForPeer(
@@ -115,26 +94,4 @@ export function assertReturnProject(targetProjectId: string, archiveProjectId: s
   if (targetProjectId !== archiveProjectId) {
     throw new HandoffError("免审批移回只能落回原任务所属项目", 403);
   }
-}
-
-export async function returnTargetForMarker(marker: TaskHandoff): Promise<HandoffTarget | null> {
-  if (marker.direction !== "in" || !marker.peerFp) return null;
-  // 任务本次导入时从真实 TCP 来源 + 对端自报端口恢复出的地址最新，也和这条任务绑定；
-  // 设置项可能是 DHCP 变化前的旧地址，只作为老记录的兜底。
-  if (marker.peerUrl) {
-    return { name: marker.peerName || "来源机器", url: marker.peerUrl, peerFp: marker.peerFp };
-  }
-  const settings = await getAppSettings();
-  const registered = settings.handoffTargets.find((target) => target.peerFp
-    && sameFingerprint(target.peerFp, marker.peerFp));
-  if (registered) return registered;
-  // handoff_peers 只保存最近 TCP 地址，没有来源机监听端口。不能拿本机 PORT 猜；
-  // 前端会让用户临时补一个 URL，服务端仍按 marker.peerFp 做任务级身份核对。
-  return null;
-}
-
-export async function returnTargetForTask(taskId: string): Promise<HandoffTarget | null> {
-  const row = (await db.select({ handoff: tasks.handoff }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-  const marker = markerOf(row?.handoff ?? null);
-  return marker ? returnTargetForMarker(marker) : null;
 }
