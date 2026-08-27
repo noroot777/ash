@@ -112,4 +112,15 @@ assert.deepEqual(
   ["data/uploads/abcdefghijkl-shot.png", "/tmp/report.pdf"],
   "已经在草稿里的附件不得因撤回变成两份",
 );
-console.log("✓ 撤回回填、引导按钮位置、错误失效与窄托盘降级均受回归保护");
+// 手机端那一屏没有附件通道:带附件的消息必须先问过用户才允许取消,否则撤回 = 附件永久丢失。
+const mobileSource = readFileSync(new URL("../../mobile/src/app/task/[id].tsx", import.meta.url), "utf8");
+const mobileWithdraw = mobileSource.slice(
+  mobileSource.indexOf("const withdrawScheduled"),
+  mobileSource.indexOf("const meta =", mobileSource.indexOf("const withdrawScheduled")),
+);
+assert.match(mobileWithdraw, /if \(message\.attachments\.length\) \{[\s\S]*Alert\.alert\(/, "手机端撤回带附件的消息前必须先把后果问清楚");
+assert.ok(
+  mobileWithdraw.indexOf("Alert.alert(") < mobileWithdraw.indexOf("if (!await cancelPending(message)) return;"),
+  "手机端确认必须挡在取消端点前面",
+);
+console.log("✓ 撤回回填、附件丢失防线、引导按钮位置、错误失效与窄托盘降级均受回归保护");

@@ -320,18 +320,40 @@ export default function TaskDetail() {
     }
   };
 
-  // 撤回一条待发送消息：把它从队列上取下来，正文放回输入框继续编辑（跟 web 托盘同一
-  // 套语义，见 web/src/task-detail/withdrawDraft.ts）。取消成功才回填——失败了消息还在
-  // 队列上，再往输入框塞一份就成了两条。
-  const withdrawScheduled = async (message: ScheduledMessage) => {
+  // 真正调用取消端点：把这条消息从队列上取下来。成功返回 true，失败照实说并重拉列表
+  // （消息还挂在队列上，界面不能自己少一行）。
+  const cancelPending = async (message: ScheduledMessage): Promise<boolean> => {
     try {
       await api.cancelScheduledMessage(message.id);
     } catch (e) {
       Alert.alert("撤回失败", e instanceof Error ? e.message : String(e));
       loadPending();
-      return;
+      return false;
     }
     setPending((ps) => ps.filter((m) => m.id !== message.id));
+    return true;
+  };
+
+  // 撤回一条待发送消息：把它从队列上取下来，正文放回输入框继续编辑（跟 web 托盘同一
+  // 套语义，见 web/src/task-detail/withdrawDraft.ts）。取消成功才回填——失败了消息还在
+  // 队列上，再往输入框塞一份就成了两条。
+  //
+  // 手机端这一屏**没有附件通道**（输入框只发正文），所以带附件的消息撤回下来附件没有
+  // 落点，一按就是不可逆的内容丢失。不静默丢也不干脆禁掉：把后果摆给用户，让他自己选
+  // 是去网页端撤回（那边能连图片、文件一起放回），还是明知附件不保留仍然把它取消掉。
+  const withdrawScheduled = async (message: ScheduledMessage) => {
+    if (message.attachments.length) {
+      Alert.alert(
+        "这条带了附件",
+        `共 ${message.attachments.length} 个附件。手机端还不能把附件放回输入框——在这里撤回，附件就找不回来了。想连附件一起改，请到网页端撤回。`,
+        [
+          { text: "去网页端撤回", style: "cancel" },
+          { text: "仍然取消（附件不保留）", style: "destructive", onPress: () => void cancelPending(message) },
+        ],
+      );
+      return;
+    }
+    if (!await cancelPending(message)) return;
     const restored = message.text.trim();
     if (restored) setInput((current) => (current.trim() ? `${restored}\n\n${current}` : restored));
   };
@@ -565,11 +587,20 @@ export default function TaskDetail() {
             <Text numberOfLines={1} style={{ flex: 1, color: theme.ink, fontSize: 13 }}>
               {m.text || "[附件]"}
             </Text>
+            {/* 手机端撤不回附件（见 withdrawScheduled），所以按之前先让人看见这条带了几个。 */}
+            {m.attachments.length > 0 && (
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
+                <Ionicons name="attach-outline" size={12} color={theme.faint} />
+                <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.mono }}>{m.attachments.length}</Text>
+              </View>
+            )}
             <Pressable
               onPress={() => void withdrawScheduled(m)}
               hitSlop={8}
               accessibilityRole="button"
-              accessibilityLabel="撤回这条待发送消息，内容放回输入框"
+              accessibilityLabel={m.attachments.length
+                ? `撤回这条待发送消息；它带了 ${m.attachments.length} 个附件，手机端放不回输入框`
+                : "撤回这条待发送消息，内容放回输入框"}
             >
               <Ionicons name="arrow-undo-outline" size={15} color={theme.faint} />
             </Pressable>
