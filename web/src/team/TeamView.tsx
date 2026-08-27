@@ -17,6 +17,7 @@ import { useConversation } from "../lib/useConversation.ts";
 import { useServerEvents } from "../lib/events.ts";
 import { useSkills } from "../lib/useSkills.ts";
 import { useSlashCompletion } from "../lib/useSlashCompletion.ts";
+import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
 import { QuestionCard } from "../task-detail/QuestionCard.tsx";
@@ -84,6 +85,10 @@ function TeamReplyBox({
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [sendAt, setSendAt] = useState("");
   const scheduleTriggerRef = useRef<HTMLButtonElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  // 跟着输入行数长高;右下角原生把手拖过就以拖出来的高度为准(CSS 那边不设 max-height,
+  // 免得自动撑高的上限顺手也把用户能拖到多高给限死)。
+  useAutoGrowTextarea(inputRef, { value });
   const scheduled = useScheduledMessages(task.id);
   const uploads = useAttachments({
     value: draft.attachments,
@@ -166,6 +171,7 @@ function TeamReplyBox({
       {error && <p>{error}</p>}
       <div className="team-reply-box">
         <textarea
+          ref={inputRef}
           rows={2}
           value={value}
           disabled={disabled}
