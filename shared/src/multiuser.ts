@@ -163,6 +163,38 @@ export const MULTI_USER_CLI_BLOCKED_HINT = MULTI_USER_CLI_BLOCKED("该 CLI");
 export const MULTI_USER_NO_PROVIDER_HINT =
   "多人模式下必须给执行器挂一个供应商 —— 宿主机的 CLI 订阅已被隔离,不可借用";
 
+// ── 「这一轮会换执行器」的确认闸(§八「不静默替换」)──────────────────────────
+
+/**
+ * 一个任务身上可能被换掉的那几格执行器。
+ * `task` = 单人任务顶层那一格;duet 不用它,两位讨论者各占一格;team 三个角色各占一格。
+ */
+export type ExecutorSlot = "task" | "voiceA" | "voiceB" | "lead" | "worker" | "reviewer";
+
+export const EXECUTOR_SLOT_LABELS: Record<ExecutorSlot, string> = {
+  task: "",
+  voiceA: "讨论者 A",
+  voiceB: "讨论者 B",
+  lead: "调度者",
+  worker: "执行者",
+  reviewer: "审查者",
+};
+
+/**
+ * 「我现在动它,这一格会被换成什么」。`GET /tasks/:id/executor-preflight` 返回一个
+ * 列表:空数组 = 不会换,前端不弹。列表而不是单个对象,是因为 duet 有两格
+ * (第 6 轮审查 P1:只看顶层那一格,duet 永远被预检成「无需确认」)。
+ */
+export interface ExecutorDowngradeItem {
+  slot: ExecutorSlot;
+  fromName: string;
+  fromType: string;
+  /** 原执行器属于谁(姓名);null = 那条执行器已经被删了。 */
+  fromOwner: string | null;
+  /** 本轮改用我的哪一个;null = 我这个类型压根没有默认执行器。 */
+  toName: string | null;
+}
+
 // ── 个人 CLI 环境 ──────────────────────────────────────────────────────────
 
 /** 一个 CLI 的个人配置目录状态(设置页「个人 CLI 环境」节)。 */

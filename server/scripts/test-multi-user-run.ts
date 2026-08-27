@@ -13,7 +13,9 @@
 //   ① 单人任务 /retry:第 5 轮审查里这条路整个没传 actingUserId(P1)。
 //   ② duet /run:同上,而且 duet 的发言回合**一个环境变量都没注**,那一轮直接跑在
 //      宿主机的 ~/.claude 上(§八 要抹掉的正是它)。
-//   ③ duet 起跑前必须过派发闸:没挂供应商的执行器不许起跑 —— 单人任务一直在过,
+//   ③ 动手之前的确认闸(§八「不静默替换」):`executor-preflight` 得把**每一格**会被
+//      换掉的执行器都报出来 —— duet 两格、team 三格,顶层那一格是空的。
+//   ④ duet 起跑前必须过派发闸:没挂供应商的执行器不许起跑 —— 单人任务一直在过,
 //      duet 从来没过,于是换讨论这条路就能绕开。
 //
 // 跑法(不设 ASH_DB 时自己开一个临时库):
@@ -85,6 +87,7 @@ const { Hono } = await import("hono");
 const { authGate } = await import("../src/auth/middleware.js");
 const { resourceGate } = await import("../src/auth/resource-gate.js");
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
+const { mountTaskRoutes } = await import("../src/task-routes.js");
 const { now, id } = await import("../src/util.js");
 
 await ensureSchema();
@@ -118,10 +121,17 @@ await visibility.addProjectMember({ projectId: "p-shared", userId: bob.id, role:
 
 const api = new Hono();
 mountTaskRunRoutes(api);
+mountTaskRoutes(api); // executor-preflight 住在这边
 const app = new Hono();
 app.use("*", authGate());
 app.use("/api/*", resourceGate());
 app.route("/api", api);
+const get = async (path: string, key: string) => {
+  const res = await app.fetch(new Request(`http://127.0.0.1:4317${path}`, {
+    headers: { authorization: `Bearer ${key}` },
+  }));
+  return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
+};
 const post = async (path: string, key: string, body: unknown = {}) => {
   const res = await app.fetch(new Request(`http://127.0.0.1:4317${path}`, {
     method: "POST",
@@ -207,7 +217,48 @@ const expectBob = (env: Record<string, string | null>, where: string) => {
   );
 }
 
-// ── ③ duet 起跑前要过派发闸:没挂供应商的执行器不许起跑 ─────────────────────
+// ── ③ 确认闸的数据源:每一格都要报出来 ──────────────────────────────────────
+// 第 6 轮审查 P1:预检只读顶层 `tasks.executorId`,而 duet 把两位讨论者存在
+// `tasks.duet` 里、team 把三个角色存在 `tasks.team` 里,顶层那格恒空 —— 于是这两种
+// 任务永远被预检成「无需确认」,界面上一声不吭就换了人。
+{
+  const slotsOf = (body: Record<string, unknown>) =>
+    (body.downgrades as { slot: string; fromOwner: string | null; toName: string | null }[]);
+
+  // 单人任务:一格。
+  const single = id();
+  await db.insert(tasks).values(taskRow({ id: single, title: "preflight single", executorId: "ex-alice" }));
+  const r1 = await get(`/api/tasks/${single}/executor-preflight`, bobKey);
+  assert.equal(r1.status, 200, JSON.stringify(r1.body));
+  assert.deepEqual(slotsOf(r1.body).map((d) => d.slot), ["task"]);
+  assert.equal(slotsOf(r1.body)[0].fromOwner, "Alice", "要说清原执行器是谁的");
+  assert.equal(slotsOf(r1.body)[0].toName, "Bob Executor", "也要说清将改用我的哪一个");
+
+  // 同一条任务,alice 自己看:不会换,不该弹。
+  const aliceKey2 = await store.resetUserKey(alice.id);
+  const r2 = await get(`/api/tasks/${single}/executor-preflight`, aliceKey2);
+  assert.deepEqual(slotsOf(r2.body), [], "自己的执行器不会被换,别弹");
+
+  // duet:两格都要报。
+  const duetId = id();
+  await db.insert(tasks).values(taskRow({
+    id: duetId, title: "preflight duet", mode: "duet", status: "backlog",
+    duet: JSON.stringify({ voiceA: "claude", voiceB: "claude", topic: "x", voiceAExecutorId: "ex-alice", voiceBExecutorId: "ex-alice" }),
+  }));
+  const r3 = await get(`/api/tasks/${duetId}/executor-preflight`, bobKey);
+  assert.deepEqual(slotsOf(r3.body).map((d) => d.slot), ["voiceA", "voiceB"], "duet 两位讨论者各占一格");
+
+  // team:三个角色同理(报告只报了 duet,这是同一个洞)。
+  const teamId = id();
+  await db.insert(tasks).values(taskRow({
+    id: teamId, title: "preflight team", mode: "team", status: "backlog",
+    team: JSON.stringify({ lead: "claude", worker: "claude", leadExecutorId: "ex-alice", reviewerExecutorId: "ex-alice" }),
+  }));
+  const r4 = await get(`/api/tasks/${teamId}/executor-preflight`, bobKey);
+  assert.deepEqual(slotsOf(r4.body).map((d) => d.slot), ["lead", "reviewer"], "没钉执行器的那格不用问");
+}
+
+// ── ④ duet 起跑前要过派发闸:没挂供应商的执行器不许起跑 ─────────────────────
 {
   // bob 换成一个没挂供应商的默认执行器 —— 单人任务在这种情况下会被闸拦下,
   // duet 以前直接放行(第 5 轮审查 P1 场景 1)。

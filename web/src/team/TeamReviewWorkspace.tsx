@@ -9,6 +9,7 @@ import { api, type AcceptTaskFailure, type TaskCommit, type TaskDiffResult } fro
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { useTaskBody } from "../lib/useTaskBody.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
+import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
 import { parseAttachmentText } from "../task-detail/utils.ts";
 import { ChangeMetaBar, worktreeLabel } from "../review/ChangeMetaBar.tsx";
 import { ReviewDiffViewer } from "../review/ReviewDiffViewer.tsx";
@@ -123,6 +124,7 @@ export function AcceptanceControls({
   const [action, setAction] = useState<"accept" | "return" | null>(null);
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState(false);
+  const confirmExecutorSwap = useExecutorGate();
   const [failure, setFailure] = useState<AcceptTaskFailure | null>(null);
   const inFlight = task.status === "running" || task.status === "queued";
   // Archived = frozen/read-only：后端验收/打回都会 409，按钮必须一致地禁掉，不给假按钮。
@@ -181,6 +183,8 @@ export function AcceptanceControls({
   const returnTask = async () => {
     const text = feedback.trim();
     if (!text) return;
+    // 打回 = 往原任务会话里送一条意见并续跑,同样会起一轮(§八)。
+    if (!(await confirmExecutorSwap(task.id))) return;
     setBusy(true);
     try {
       const result = await api.replyTask(task.id, `【验收打回】请继续修改并完成后重新提交验收。\n\n${text}`);

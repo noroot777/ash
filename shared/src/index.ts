@@ -95,6 +95,8 @@ export type {
   ConfigProviderItem,
   ConfigReviewerItem,
   ConfigWorkflowItem,
+  ExecutorDowngradeItem,
+  ExecutorSlot,
   HandoffPeerModeInfo,
   InstanceMode,
   InviteInfo,

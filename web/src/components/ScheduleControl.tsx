@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
 import type { Schedule } from "@ash/shared";
 import { ArrowsClockwise, Clock, Lightning, SpinnerGap } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
@@ -102,6 +103,7 @@ export function ScheduleControl({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [firing, setFiring] = useState(false);
+  const confirmExecutorSwap = useExecutorGate();
   const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
@@ -166,6 +168,8 @@ export function ScheduleControl({
   };
 
   const fire = async () => {
+    // fire 是「现在就跑一班新的」—— 一样会起一轮,一样先过换执行器确认闸(§八)。
+    if (!(await confirmExecutorSwap(taskId))) return;
     setFiring(true);
     try {
       await api.fireTask(taskId);

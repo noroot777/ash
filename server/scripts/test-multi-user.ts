@@ -176,15 +176,19 @@ const bobActor = actorOf(bob);
   ] as never);
   await db.update(tasks).set({ executorId: "ex-alice", agentType: "claude" }).where(eq(tasks.id, "t-alice"));
 
-  // 本人跑自己的任务:没有降级,不该弹窗。
-  assert.equal(await gate.executorDowngradePreflight("t-alice", alice.id), null);
+  // 本人跑自己的任务:没有降级,不该弹窗。空列表 = 不弹。
+  assert.deepEqual(await gate.executorDowngradePreflight("t-alice", alice.id), []);
   // 别人来跑:原执行器是 alice 的私有资源,应降级到操作人自己的默认执行器。
-  const downgrade = await gate.executorDowngradePreflight("t-alice", bob.id);
-  assert.ok(downgrade, "跨人回合应探测到降级");
-  assert.equal(downgrade!.fromName, "claude@alice");
-  assert.equal(downgrade!.toName, "claude@bob");
-  // 探不到本人默认执行器时也要给出结论,不能静默放行。
-  assert.ok(await gate.executorDowngradePreflight("t-alice", admin.id));
+  const downgrades = await gate.executorDowngradePreflight("t-alice", bob.id);
+  assert.equal(downgrades.length, 1, "跨人回合应探测到降级");
+  assert.equal(downgrades[0].slot, "task", "普通任务只有顶层这一格");
+  assert.equal(downgrades[0].fromName, "claude@alice");
+  assert.equal(downgrades[0].fromOwner, alice.name);
+  assert.equal(downgrades[0].toName, "claude@bob");
+  // 探不到本人默认执行器时也要给出结论,不能静默放行(toName 为 null,前端照样弹)。
+  const noDefault = await gate.executorDowngradePreflight("t-alice", admin.id);
+  assert.equal(noDefault.length, 1);
+  assert.equal(noDefault[0].toName, null);
 }
 
 // ── ⑥ 设置分面 ────────────────────────────────────────────────────────────

@@ -24,6 +24,7 @@ import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api } from "../lib/api.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
+import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { TaskPinButton } from "../task-detail/TaskPinButton.tsx";
 import { TaskTimeMeta } from "../task-detail/TaskTimeMeta.tsx";
@@ -135,6 +136,8 @@ export function DuetView({
   const duet = useDuet(task.id, task.status);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [busy, setBusy] = useState(false);
+  // 确认闸的对话框住在 App 层(见 task-detail/ExecutorGate.tsx),这里只拿判据。
+  const confirmExecutorSwap = useExecutorGate();
   const [teamBusy, setTeamBusy] = useState(false);
   const [iterationBusyId, setIterationBusyId] = useState<string | null>(null);
   const [teamModal, setTeamModal] = useState(false);
@@ -175,6 +178,9 @@ export function DuetView({
 
   const refreshTask = async () => onTaskUpdated(await api.task(task.id));
   const perform = async (kind: Exclude<ReturnType<typeof actionFor>["kind"], null>) => {
+    // 会起一轮的动作先过「换执行器」确认闸(§八:不静默替换)。duet 的两位讨论者各占
+    // 一格,判据由后端 executor-preflight 给(第 6 轮审查 P1:这条路整个绕过了闸)。
+    if ((kind === "run" || kind === "retry") && !(await confirmExecutorSwap(task.id))) return;
     setBusy(true);
     try {
       if (kind === "run") await api.runTask(task.id);
@@ -189,6 +195,9 @@ export function DuetView({
     }
   };
   const gateAction = async (next: GateAction) => {
+    // 闸口四个动作里只有「注入意见 / 提问」会真的再起一轮讨论 —— 放行/打回只是结算,
+    // 一个 CLI 都不起,那就别拿一句「会换执行器」去打扰。
+    if ((next.kind === "inject" || next.kind === "ask") && !(await confirmExecutorSwap(task.id))) return;
     setBusy(true);
     try {
       await api.gate(task.id, next);

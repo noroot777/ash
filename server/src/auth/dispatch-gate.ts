@@ -10,7 +10,7 @@
 //
 // 自用模式下这两条一律不成立 —— 那条路走宿主订阅,行为与本功能上线前逐字节一致。
 import { eq, isNull } from "drizzle-orm";
-import type { AgentType } from "@ash/shared";
+import type { AgentType, ExecutorDowngradeItem, ExecutorSlot } from "@ash/shared";
 import { MULTI_USER_CLI_BLOCKED, MULTI_USER_NO_PROVIDER_HINT } from "@ash/shared/multiuser";
 import { db } from "../db/index.js";
 import { agents } from "../db/schema.js";
@@ -120,33 +120,68 @@ export async function noteExecutorDowngrade(
  * (别人的私有资源、或者已经被删),那一轮就会落到我自己的默认执行器上。这里只读、
  * 不写,前端在点「回复 / 重跑 / 派审」之前先问一次。
  *
- * 返回 null = 不会换,前端不弹。
+ * **一个任务身上不止一格执行器**:duet 把两位讨论者存在 `tasks.duet` 里、team 把三个
+ * 角色存在 `tasks.team` 里,两者顶层 `executorId` 都是空的 —— 只读顶层那一格,这两种
+ * 任务永远被预检成「无需确认」,而它们一样会静默换人(第 6 轮审查 P1 报的是 duet;
+ * team 是同一个洞,顺手一起堵上,别等下一轮再报一次)。所以返回的是**列表**:哪几格
+ * 会被换、各自换成什么。
+ *
+ * 空数组 = 不会换,前端不弹。
  */
 export async function executorDowngradePreflight(
   taskId: string,
   actingUserId: string | null,
-): Promise<{ fromName: string; fromType: string; fromOwner: string | null; toName: string | null } | null> {
-  if (!(await isMultiUser())) return null;
+): Promise<ExecutorDowngradeItem[]> {
+  if (!(await isMultiUser())) return [];
   const { tasks, users } = await import("../db/schema.js");
   const task = (await db
-    .select({ executorId: tasks.executorId, agentType: tasks.agentType })
+    .select({
+      executorId: tasks.executorId, agentType: tasks.agentType,
+      mode: tasks.mode, duet: tasks.duet, team: tasks.team,
+    })
     .from(tasks)
     .where(eq(tasks.id, taskId))).at(0);
-  if (!task?.executorId) return null;
-  const row = (await db.select().from(agents).where(eq(agents.id, task.executorId))).at(0);
-  // 行还在、而且就是我的 → 照原样跑,没什么可确认的。
-  if (row && row.ownerUserId === actingUserId) return null;
-  const type = row?.type ?? task.agentType ?? "claude";
-  const mine = (await db.select().from(agents).where(eq(agents.type, type)))
-    .find((a) => a.isDefault && a.ownerUserId === actingUserId) ?? null;
-  const ownerName = row?.ownerUserId
-    ? (await db.select({ name: users.name }).from(users).where(eq(users.id, row.ownerUserId))).at(0)?.name ?? null
-    : null;
-  return {
-    // 执行器行被删干净时名字已经无从查起,如实说「已删除」而不是编一个。
-    fromName: row?.name ?? "（已删除的执行器）",
-    fromType: type,
-    fromOwner: ownerName,
-    toName: mine?.name ?? null,
+  if (!task) return [];
+
+  // 这个任务真正会用到的几格。duet 只看两位讨论者:它的顶层 executorId 不参与运行。
+  const slots: { slot: ExecutorSlot; executorId: string | null; agentType: string | null }[] = [];
+  const parse = (json: string | null): Record<string, string | null> => {
+    try { return json ? (JSON.parse(json) as Record<string, string | null>) : {}; } catch { return {}; }
   };
+  if (task.mode === "duet") {
+    const cfg = parse(task.duet);
+    slots.push({ slot: "voiceA", executorId: cfg.voiceAExecutorId ?? null, agentType: cfg.voiceA ?? null });
+    slots.push({ slot: "voiceB", executorId: cfg.voiceBExecutorId ?? null, agentType: cfg.voiceB ?? null });
+  } else if (task.mode === "team") {
+    const cfg = parse(task.team);
+    slots.push({ slot: "lead", executorId: cfg.leadExecutorId ?? null, agentType: cfg.lead ?? null });
+    slots.push({ slot: "worker", executorId: cfg.workerExecutorId ?? null, agentType: cfg.worker ?? null });
+    slots.push({ slot: "reviewer", executorId: cfg.reviewerExecutorId ?? null, agentType: cfg.reviewerAgentType ?? null });
+  } else {
+    slots.push({ slot: "task", executorId: task.executorId, agentType: task.agentType });
+  }
+
+  const nameOf = async (userId: string | null): Promise<string | null> =>
+    userId ? (await db.select({ name: users.name }).from(users).where(eq(users.id, userId))).at(0)?.name ?? null : null;
+
+  const out: ExecutorDowngradeItem[] = [];
+  for (const s of slots) {
+    // 这一格压根没钉执行器 → 本来走的就是「我的默认」,没什么可确认的。
+    if (!s.executorId) continue;
+    const row = (await db.select().from(agents).where(eq(agents.id, s.executorId))).at(0);
+    // 行还在、而且就是我的 → 照原样跑。
+    if (row && row.ownerUserId === actingUserId) continue;
+    const type = row?.type ?? s.agentType ?? "claude";
+    const mine = (await db.select().from(agents).where(eq(agents.type, type)))
+      .find((a) => a.isDefault && a.ownerUserId === actingUserId) ?? null;
+    out.push({
+      slot: s.slot,
+      // 执行器行被删干净时名字已经无从查起,如实说「已删除」而不是编一个。
+      fromName: row?.name ?? "（已删除的执行器）",
+      fromType: type,
+      fromOwner: await nameOf(row?.ownerUserId ?? null),
+      toName: mine?.name ?? null,
+    });
+  }
+  return out;
 }

@@ -20,6 +20,7 @@ import { useSkills } from "../lib/useSkills.ts";
 import { useSlashCompletion } from "../lib/useSlashCompletion.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
+import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
 import { QuestionCard } from "../task-detail/QuestionCard.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
@@ -75,7 +76,8 @@ function TeamReplyBox({
   onSend,
 }: {
   task: Task;
-  onSend: (text: string, attachments: string[], options: { sendAt?: string }) => Promise<ReplyTaskResult>;
+  // 返回 null = 用户在确认闸上取消了:草稿和附件一个都别清(与 task-detail/ReplyBox 同口径)。
+  onSend: (text: string, attachments: string[], options: { sendAt?: string }) => Promise<ReplyTaskResult | null>;
 }) {
   const draft = useTaskReplyDraft(task.id);
   const value = draft.text;
@@ -116,6 +118,7 @@ function TeamReplyBox({
         uploads.attachments.map((attachment) => attachment.path),
         { sendAt: scheduledAt },
       );
+      if (result === null) return; // 用户主动取消:什么都别清
       if ("scheduled" in result) scheduled.add(result.message);
       setValue("");
       uploads.clear();
@@ -338,6 +341,8 @@ export function TeamView({
   // 中间那一栏同一时刻只放一样东西：团队会话 / 验收台 / 文件。
   const [openFilePath, setOpenFilePath] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // 「这一轮会换执行器」的确认闸(§八);对话框住在 App 层。
+  const confirmExecutorSwap = useExecutorGate();
   const [iterateBusy, setIterateBusy] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [localHalted, setLocalHalted] = useState(false);
@@ -435,6 +440,8 @@ export function TeamView({
   }, [markTaskRead, selectedWorker]);
 
   const perform = async (action: "run" | "halt" | "resume" | "archive") => {
+    // 起调度台 = 起一轮(团队三个角色各有一格执行器,别人的解析不到会降级到我的)。
+    if ((action === "run" || action === "resume") && !(await confirmExecutorSwap(task.id))) return;
     setBusy(true);
     try {
       if (action === "run") await api.runTask(task.id);
@@ -494,6 +501,11 @@ export function TeamView({
     delegatingRef.current.add(worker.id);
     setDelegatingIds((current) => new Set(current).add(worker.id));
     const message = `【转交】执行者「${worker.title}」(taskId=${worker.id})在等答复,问题:\n${question}\n\n你去调查并 answer_question 答复它。`;
+    if (!(await confirmExecutorSwap(task.id))) {
+      delegatingRef.current.delete(worker.id);
+      setDelegatingIds((current) => { const next = new Set(current); next.delete(worker.id); return next; });
+      return;
+    }
     try {
       await api.replyTask(task.id, message);
       conversation.addUser(message);
@@ -601,6 +613,8 @@ export function TeamView({
               indicatorForTask={indicatorForTask}
             />
             <TeamReplyBox task={task} onSend={async (text, attachments, options) => {
+              // 回复也会起一轮(与普通任务详情页同口径)。
+              if (!(await confirmExecutorSwap(task.id))) return null;
               const result = await api.replyTask(task.id, text, { attachments, ...options });
               // 调度台是常驻会话,忙着也接得住,所以这里只可能是定时发送;仍按结果
               // 分支(而不是按请求参数),口径与普通任务一致。

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
 import type { Group, ProjectView, SearchHit, TaskListItem } from "@ash/shared";
 import { canArchive, canSingleRun, TASK_STATUS_LABELS } from "@ash/shared";
 import { SEARCH_MAX_HITS, compareSearchHits } from "@ash/shared/search";
@@ -96,6 +97,8 @@ export function CommandPalette({
 }: CommandPaletteProps) {
   const modifier = workspaceModifierLabel();
   const [query, setQuery] = useState("");
+  // 「这一轮会换执行器」的确认闸(§八)。对话框住在 App 层,所以面板收起来也不影响它。
+  const confirmExecutorSwap = useExecutorGate();
   const [step, setStep] = useState<PaletteStep>("search");
   const [active, setActive] = useState(0);
   const [hits, setHits] = useState<SearchHit[]>([]);
@@ -238,12 +241,20 @@ export function CommandPalette({
           label,
           detail: "R",
           icon: <Play size={14} weight="fill" />,
-          run: closeRun(async () => {
-            if (retry) await api.retryTask(selectedTask.id);
-            else await api.runTask(selectedTask.id);
-            onTaskUpdated(await api.task(selectedTask.id));
-            notify(retry ? "任务已重试" : selectedTask.status === "paused" ? "任务已继续" : "任务已启动");
-          }),
+          // 先问再关自己:对话框住在 App 层,面板收起来了它照样在(第 6 轮审查:
+          // 这个入口按 canSingleRun 判断、不排除 duet,于是绕开了详情页那道闸)。
+          run: async () => {
+            try {
+              if (!(await confirmExecutorSwap(selectedTask.id))) return;
+              onClose(); // 与 closeRun 的差别只在顺序:先确认、后收面板
+              if (retry) await api.retryTask(selectedTask.id);
+              else await api.runTask(selectedTask.id);
+              onTaskUpdated(await api.task(selectedTask.id));
+              notify(retry ? "任务已重试" : selectedTask.status === "paused" ? "任务已继续" : "任务已启动");
+            } catch (error) {
+              notify(error instanceof Error ? error.message : "命令执行失败");
+            }
+          },
         });
       }
       if (
@@ -330,7 +341,7 @@ export function CommandPalette({
     return needle
       ? result.filter((item) => `${item.label} ${item.detail ?? ""} ${item.group} ${keysSearchText(item.keys)}`.toLocaleLowerCase().includes(needle))
       : result;
-  }, [currentProject, groups, notify, onClose, onComposer, onDeleteTask, onNewGroup, onNewProject, onNote, onProject, onSettings, onTask, onTaskMode, onTaskUpdated, projects, query, selectedTask, slashMode, step, tasks]);
+  }, [confirmExecutorSwap, currentProject, groups, notify, onClose, onComposer, onDeleteTask, onNewGroup, onNewProject, onNote, onProject, onSettings, onTask, onTaskMode, onTaskUpdated, projects, query, selectedTask, slashMode, step, tasks]);
 
   const normalTotal = items.length + hits.length;
   const total = step === "scope-project" ? projects.length + 1
