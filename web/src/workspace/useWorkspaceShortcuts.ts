@@ -5,7 +5,9 @@ import {
   createInspectorShortcutSequence,
   hasInspectorShortcutTarget,
 } from "../inspector/shortcuts.ts";
+import { createKeyChordSequence } from "../lib/keyChord.ts";
 import { hasOpenLayer } from "../lib/useDismissable.ts";
+import { TASK_MODE_CHORD_KEY, isTaskModeChordKey } from "./taskScope.ts";
 
 type ShortcutOptions = {
   enabled: boolean;
@@ -19,6 +21,7 @@ type ShortcutOptions = {
   onTask: (task: TaskListItem) => void;
   onToggleSpread: () => void;
   onCloseSpread: () => void;
+  onToggleTaskMode: () => void;
 };
 
 function isTextEntry(target: EventTarget | null): boolean {
@@ -61,14 +64,17 @@ export function useWorkspaceShortcuts({
   onTask,
   onToggleSpread,
   onCloseSpread,
+  onToggleTaskMode,
 }: ShortcutOptions): void {
   const inspectorSequence = useRef(createInspectorShortcutSequence());
+  const taskModeSequence = useRef(createKeyChordSequence(TASK_MODE_CHORD_KEY, isTaskModeChordKey));
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const commandPalette = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k";
       if (commandPalette) {
         inspectorSequence.current.reset();
+        taskModeSequence.current.reset();
         // The palette is global; enabled only gates the workspace navigation keys below.
         if (!paletteOpen && hasBlockingLayer()) return;
         event.preventDefault();
@@ -77,11 +83,34 @@ export function useWorkspaceShortcuts({
       }
       if (!enabled || paletteOpen || isTextEntry(event.target) || hasBlockingLayer()) {
         inspectorSequence.current.reset();
+        taskModeSequence.current.reset();
         return;
       }
       if (event.metaKey || event.ctrlKey || event.altKey) {
         inspectorSequence.current.reset();
+        taskModeSequence.current.reset();
         return;
+      }
+
+      // T T 在「任务模式」和当前项目之间来回切。放在 Inspector 那套之前跑：t 不是它的
+      // 前缀也不是它的第二键，抢不走；反过来若让 `I …` 先跑，`t i f t` 这种连打会把两条
+      // 序列串在一起 —— 最后那个 t 被算成 TT 的第二下。谁先跑，决定了「按了别的键就作废」
+      // 这条对两边同时成立。
+      if (!event.repeat) {
+        const taskModeChord = taskModeSequence.current.handle(event.key);
+        if (taskModeChord.kind === "prefix") {
+          inspectorSequence.current.reset();
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
+        if (taskModeChord.kind === "chord") {
+          inspectorSequence.current.reset();
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          onToggleTaskMode();
+          return;
+        }
       }
 
       if (hasInspectorShortcutTarget() && !event.repeat) {
@@ -91,7 +120,7 @@ export function useWorkspaceShortcuts({
           event.stopImmediatePropagation();
           return;
         }
-        if (inspectorShortcut.kind === "shortcut") {
+        if (inspectorShortcut.kind === "chord") {
           event.preventDefault();
           event.stopImmediatePropagation();
           activateInspectorShortcut(inspectorShortcut.key);
@@ -149,7 +178,7 @@ export function useWorkspaceShortcuts({
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [composerOpen, enabled, onCloseSpread, onCreate, onTask, onToggleSpread, onTogglePalette, orderedTasks, paletteOpen, selectedTaskId, spreadOpen]);
+  }, [composerOpen, enabled, onCloseSpread, onCreate, onTask, onToggleSpread, onToggleTaskMode, onTogglePalette, orderedTasks, paletteOpen, selectedTaskId, spreadOpen]);
 
   useEffect(() => {
     if (!selectedTaskId) return;

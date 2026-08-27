@@ -9,11 +9,11 @@ import {
 
 const sequence = createInspectorShortcutSequence(1_000);
 assert.deepEqual(sequence.handle("i", 100), { kind: "prefix" });
-assert.deepEqual(sequence.handle("f", 500), { kind: "shortcut", key: "f" });
+assert.deepEqual(sequence.handle("f", 500), { kind: "chord", key: "f" });
 assert.deepEqual(sequence.handle("f", 600), { kind: "none" });
 
 assert.deepEqual(sequence.handle("I", 1_000), { kind: "prefix" });
-assert.deepEqual(sequence.handle("I", 1_200), { kind: "shortcut", key: "i" });
+assert.deepEqual(sequence.handle("I", 1_200), { kind: "chord", key: "i" });
 
 assert.deepEqual(sequence.handle("i", 2_000), { kind: "prefix" });
 assert.deepEqual(sequence.handle("f", 3_001), { kind: "none" });

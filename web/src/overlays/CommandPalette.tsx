@@ -33,7 +33,8 @@ import {
   type SearchScopeType,
 } from "./CommandPaletteScope.tsx";
 import { filterSlashCommands, type SlashCommand, type SlashCommandId } from "./commandPaletteCommands.ts";
-import { TASK_MODE_LABEL, TASK_MODE_SUMMARY } from "../workspace/taskScope.ts";
+import { TASK_MODE_LABEL, TASK_MODE_SHORTCUT_LABEL, TASK_MODE_SUMMARY } from "../workspace/taskScope.ts";
+import { keysSearchText, matchesKeysQuery } from "./paletteKeys.ts";
 import { workspaceModifierLabel } from "../workspace/useWorkspaceShortcuts.ts";
 
 type PaletteStep = "search" | "scope-project" | "scope-type" | "git-project" | "git-overview";
@@ -305,6 +306,7 @@ export function CommandPalette({
       group: "切换项目",
       label: TASK_MODE_LABEL,
       detail: TASK_MODE_SUMMARY,
+      keys: TASK_MODE_SHORTCUT_LABEL,
       icon: <ListChecks size={15} />,
       run: closeRun(onTaskMode),
     });
@@ -326,7 +328,7 @@ export function CommandPalette({
     }));
     const needle = query.trim().toLocaleLowerCase();
     return needle
-      ? result.filter((item) => `${item.label} ${item.detail ?? ""} ${item.group} ${item.keys ?? ""}`.toLocaleLowerCase().includes(needle))
+      ? result.filter((item) => `${item.label} ${item.detail ?? ""} ${item.group} ${keysSearchText(item.keys)}`.toLocaleLowerCase().includes(needle))
       : result;
   }, [currentProject, groups, notify, onClose, onComposer, onDeleteTask, onNewGroup, onNewProject, onNote, onProject, onSettings, onTask, onTaskMode, onTaskUpdated, projects, query, selectedTask, slashMode, step, tasks]);
 
@@ -483,7 +485,7 @@ export function CommandPalette({
             placeholder={placeholder}
             onKeyDown={(event) => {
               const sequence = step === "search" && !slashMode && event.key === "Enter" && !event.nativeEvent.isComposing
-                ? items.find((item) => item.keys?.replace(/\s+/g, "").toLowerCase() === query.toLowerCase())
+                ? items.find((item) => matchesKeysQuery(item.keys, query))
                 : undefined;
               if (sequence) {
                 event.preventDefault();
