@@ -415,6 +415,42 @@ try {
 
   const { assertReturnProject } = await import("../src/handoff-return.js");
   const { sourceUrlFromPeer } = await import("../src/handoff-return-address.js");
+
+  // 地址发现不能信任对端自报的指纹:/handoff/identity 是一串明文,谁都能复读;
+  // /handoff/ping 的身份块整段截下来重放也一样过不了——挑战 nonce 每次现生成。
+  const { probeSignedPeerFingerprint } = await import("../src/handoff-peer-client.js");
+  const stolenPing = await (await fetch(`${machineA}/api/handoff/ping?nonce=stolen-nonce`)).json();
+  const impostor = createServer((req, res) => {
+    res.setHeader("content-type", "application/json");
+    const path = req.url ?? "/";
+    if (path.startsWith("/api/handoff/identity")) {
+      res.end(JSON.stringify({ fingerprint: identityA.fingerprint, short: "假的", host: "impostor" }));
+      return;
+    }
+    if (path.startsWith("/api/handoff/ping")) {
+      res.end(JSON.stringify(stolenPing));
+      return;
+    }
+    res.statusCode = 404;
+    res.end(JSON.stringify({ error: "not found" }));
+  });
+  await new Promise<void>((resolve) => impostor.listen(0, "127.0.0.1", resolve));
+  const impostorUrl = `http://127.0.0.1:${(impostor.address() as { port: number }).port}`;
+  try {
+    assert.equal(
+      await probeSignedPeerFingerprint(impostorUrl),
+      null,
+      "复读指纹/重放旧 ping 签名的服务不能被地址发现认成来源机",
+    );
+    assert.equal(
+      await probeSignedPeerFingerprint(machineA),
+      identityA.fingerprint,
+      "真来源机应能通过现场签名挑战被认出",
+    );
+  } finally {
+    impostor.closeAllConnections();
+    await new Promise<void>((resolve) => impostor.close(() => resolve()));
+  }
   assert.equal(sourceUrlFromPeer("mac-mini.local", 4317), "http://mac-mini.local:4317", "mDNS 主机名应能组成回程地址");
   assert.equal(sourceUrlFromPeer("bad host", 4317), null, "非法主机名不能进入 URL");
   assert.throws(

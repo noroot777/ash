@@ -12,8 +12,10 @@
 // 第 3 档以前是直接返回 null、让用户手填地址的——那正是「明明刚从这台机器接过来,
 // 移回却要我填地址」的来源。之所以现在敢自动猜,是因为**猜错连不上,但绝不会猜到
 // 别的机器上**:
-//   - 探测走 /api/handoff/identity(只读、不带签名,也不会把本机塞进对端待批列表),
-//     指纹按对端公钥现算,和这条任务记录的 peerFp 逐个比对,对不上一律丢弃;
+//   - 探测走 /api/handoff/ping 的**签名挑战**(只读、不带本机签名,也不会把本机塞进
+//     对端待批列表):对端得用私钥现签一个 nonce,指纹按它的公钥现算,再和这条任务
+//     记录的 peerFp 比对,验不过或对不上一律丢弃。自报指纹的 /handoff/identity 不能
+//     用在这里 —— 那种一串明文谁都能复读,占了旧 IP 的无关服务就能把定位骗走;
 //   - 即便这一步选错了地址,真正打包前的预检还会用同一份指纹做签名挑战
 //     (handoff-peer-client.ts 的 pingPeer,trust === "mismatch" 直接 409),
 //     第三台机器过不了这一关,拿不到仓库和会话历史。
@@ -25,7 +27,7 @@ import { getAppSettings } from "./app-settings.js";
 import { db } from "./db/index.js";
 import { handoffPeers, tasks } from "./db/schema.js";
 import { sameFingerprint } from "./handoff-identity.js";
-import { probePeerIdentity } from "./handoff-peer-client.js";
+import { probeSignedPeerFingerprint } from "./handoff-peer-client.js";
 import { currentListeningPort } from "./listening-port.js";
 
 /** 绝大多数 ash 都听这个口;探测候选里必须有它,否则换过端口的机器一个都探不到。 */
@@ -98,13 +100,11 @@ function candidatePorts(registeredUrls: string[]): number[] {
   return ports;
 }
 
-/** 并行探一批地址,按候选顺序返回第一个指纹对得上的。 */
+/** 并行探一批地址,按候选顺序返回第一个**签名验得过**且指纹对得上的。 */
 async function firstMatchingPeer(urls: string[], expectedFp: string): Promise<string | null> {
-  const probes = await Promise.allSettled(urls.map((url) => probePeerIdentity(url, PROBE_TIMEOUT_MS)));
-  for (const [index, probe] of probes.entries()) {
-    if (probe.status === "fulfilled" && sameFingerprint(probe.value.fingerprint, expectedFp)) {
-      return urls[index]!;
-    }
+  const probes = await Promise.all(urls.map((url) => probeSignedPeerFingerprint(url, PROBE_TIMEOUT_MS)));
+  for (const [index, fingerprint] of probes.entries()) {
+    if (fingerprint && sameFingerprint(fingerprint, expectedFp)) return urls[index]!;
   }
   return null;
 }
