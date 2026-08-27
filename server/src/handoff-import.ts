@@ -11,7 +11,10 @@ import { writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { projects, scheduledMessages, schedules, sessions, tasks } from "./db/schema.js";
+import {
+  freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates,
+  projects, scheduledMessages, schedules, sessions, tasks,
+} from "./db/schema.js";
 import { claudeProjectSlug } from "./handoff-collect.js";
 import {
   HandoffError, MAX_FILE_BYTES, MB, safeRel,
@@ -32,6 +35,7 @@ import { createTasks, publishTaskUpdated } from "./task-store.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { localIdentity } from "./handoff-identity.js";
 import { assertWorktreeHeadCanAdvance, untrackedOverwriteConflicts } from "./handoff-worktree-safety.js";
+import { buildFreeWorkflowRows } from "./handoff-import-free-workflow.js";
 import { id, now } from "./util.js";
 import type { TaskHandoff } from "@ash/shared";
 import { execFileText as exec } from "./exec.js";
@@ -526,6 +530,11 @@ async function importValidated(
     question: m.task.question,
     questionOptions: jsonOr(m.task.questionOptions, "") || null,
     questionItems: jsonOr(m.task.questionItems, "") || null,
+    // 验收落账随任务走(老 manifest 没有这三个字段,按缺失处理)。尾段进度位不带,
+    // 理由见 handoff-types.ts。
+    acceptedTargetBranch: m.task.acceptedTargetBranch ?? null,
+    acceptedBaseCommit: m.task.acceptedBaseCommit ?? null,
+    acceptedMergeCommit: m.task.acceptedMergeCommit ?? null,
     pinnedAt: m.task.pinnedAt,
     starredAt: m.task.starredAt,
     createdAt: m.task.createdAt,
@@ -575,6 +584,8 @@ async function importValidated(
     contextWindow: s.contextWindow,
     contextWindowEstimated: s.contextWindowEstimated,
   }));
+  // 自由工作流的审查历史(翻译成本机行,落库在下面两条路径里各自执行)。
+  const freeWorkflowRows = await buildFreeWorkflowRows(m.task.id, m.freeWorkflow, notes);
   const messageRows = messages.map((msg) => ({
     id: id(),
     taskId: m.task.id,
@@ -596,8 +607,8 @@ async function importValidated(
   if (returning) {
     try {
       await db.transaction(async (tx) => {
-        // 安全移回只覆盖 manifest 真正携带的任务字段。分组、依赖、自由审查、验收落账等
-        // 原机独有状态不在协议里，整行删除再插入会把它们静默清空。
+        // 安全移回只覆盖 manifest 真正携带的任务字段。分组与依赖是**整组一起挪**的东西，
+        // 不在单任务协议里（用户 2026-08-27 确认），整行删除再插入会把它们静默清空。
         await tx.update(tasks).set({
           ...taskValues,
           // 执行器 id 只在本机有意义；agent 类型没变才保留原机选择，否则按类型重新解析。
@@ -611,6 +622,20 @@ async function importValidated(
           eq(scheduledMessages.taskId, m.task.id),
           eq(scheduledMessages.status, "pending"),
         ));
+        // 审查历史现在也随任务迁移:回来的这份是最新的全量,本机旧存档整体让位。
+        // 先删 rounds(外键在 run 上,run 删了就找不着它们了),再删 run/事件/预约。
+        const staleRuns = await tx.select({ id: freeReviewRuns.id }).from(freeReviewRuns)
+          .where(eq(freeReviewRuns.taskId, m.task.id));
+        if (staleRuns.length) {
+          await tx.delete(freeReviewRounds).where(inArray(freeReviewRounds.runId, staleRuns.map((r) => r.id)));
+        }
+        await tx.delete(freeReviewRuns).where(eq(freeReviewRuns.taskId, m.task.id));
+        await tx.delete(freeWorkflowEvents).where(eq(freeWorkflowEvents.taskId, m.task.id));
+        await tx.delete(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, m.task.id));
+        if (freeWorkflowRows.state) await tx.insert(freeWorkflowStates).values(freeWorkflowRows.state);
+        if (freeWorkflowRows.runs.length) await tx.insert(freeReviewRuns).values(freeWorkflowRows.runs);
+        if (freeWorkflowRows.rounds.length) await tx.insert(freeReviewRounds).values(freeWorkflowRows.rounds);
+        if (freeWorkflowRows.events.length) await tx.insert(freeWorkflowEvents).values(freeWorkflowRows.events);
         if (scheduleValues) await tx.insert(schedules).values(scheduleValues);
         if (sessionRows.length) await tx.insert(sessions).values(sessionRows);
         if (messageRows.length) await tx.insert(scheduledMessages).values(messageRows);
@@ -641,6 +666,10 @@ async function importValidated(
         // 投递租约一概不带。id 重新生成——同一批消息可能曾在多台机器间来回接力。
         await db.insert(scheduledMessages).values(messageRows);
       }
+      if (freeWorkflowRows.state) await db.insert(freeWorkflowStates).values(freeWorkflowRows.state);
+      if (freeWorkflowRows.runs.length) await db.insert(freeReviewRuns).values(freeWorkflowRows.runs);
+      if (freeWorkflowRows.rounds.length) await db.insert(freeReviewRounds).values(freeWorkflowRows.rounds);
+      if (freeWorkflowRows.events.length) await db.insert(freeWorkflowEvents).values(freeWorkflowRows.events);
     });
   } catch (e) {
     // 补偿回滚:任务行 + 已插入的会话行一起清掉,不留半截任务(审查实测:UNIQUE 炸在
@@ -650,6 +679,13 @@ async function importValidated(
     let rollbackFailed = false;
     if (taskRowInserted) {
       try {
+        if (freeWorkflowRows.rounds.length) {
+          await db.delete(freeReviewRounds)
+            .where(inArray(freeReviewRounds.runId, [...new Set(freeWorkflowRows.rounds.map((r) => r.runId))]));
+        }
+        await db.delete(freeReviewRuns).where(eq(freeReviewRuns.taskId, m.task.id));
+        await db.delete(freeWorkflowEvents).where(eq(freeWorkflowEvents.taskId, m.task.id));
+        await db.delete(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, m.task.id));
         await db.delete(scheduledMessages).where(eq(scheduledMessages.taskId, m.task.id));
         await db.delete(sessions).where(eq(sessions.taskId, m.task.id));
         await db.delete(tasks).where(eq(tasks.id, m.task.id));

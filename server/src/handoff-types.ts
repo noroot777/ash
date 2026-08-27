@@ -67,6 +67,77 @@ export interface HandoffSchedulePayload {
   lastRunAt: string | null;
 }
 
+// ── 自由工作流的审查历史 ─────────────────────────────────────────────────────
+// 接力过去的任务除了横幅上的标记外应该和本机原生任务**没有区别**（用户 2026-08-27
+// 拍板），审查历史也在其列:不带走的话,对端点开任务只看到「从没审过」,再审一轮又从
+// 第 1 轮开始,修复入口拿不到上一轮的意见。
+//
+// 机器本地的外键一概不进协议:审查者 profile(reviewer_profiles)、执行器 profile
+// (agents)、修复任务 id 在对端库里没有对应行,原样带过去就是指向别人的记录。展示和
+// 重跑靠 reviewerName/agentType/model/reasoningEffort 这几件自描述的字段;审查者按
+// **名字**在对端重新解析(见 handoff-import 的 resolveReviewer)。
+export interface HandoffFreeReviewRound {
+  round: number;
+  status: string;
+  conclusion: string | null;
+  reviewedCommit: string | null;
+  startedAt: string;
+  endedAt: string | null;
+}
+
+export interface HandoffFreeReviewRun {
+  // run id 原样带走:free_review_runs 的主键是全局 id(),对端不会撞;证据文件
+  // (data/runs/<taskId>/free-review/<runId>/round-N/)随 run-artifact 一起搬,
+  // 换 id 就对不上号了。
+  id: string;
+  reviewerName: string;
+  agentType: string;
+  model: string | null;
+  reasoningEffort: string | null;
+  checkMode: string;
+  note: string | null;
+  targetKind: string;
+  targetBranch: string | null;
+  targetBaseCommit: string | null;
+  targetCommit: string | null;
+  retryLimit: number;
+  currentRound: number;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+  rounds: HandoffFreeReviewRound[];
+}
+
+export interface HandoffFreeWorkflowEvent {
+  kind: string;
+  source: string;
+  detail: string | null;
+  occurredAt: string;
+}
+
+// free_workflow_states 的一行:预约状态 + 预约时选的执行器覆盖。
+export interface HandoffFreeWorkflowState {
+  // 审查者按名字解析;对端没有同名 profile 时预约不落地(as 注记如实报出)。
+  selectedReviewerName: string | null;
+  reviewArmed: boolean;
+  reviewCheckMode: string | null;
+  reviewRetryLimit: number | null;
+  reviewNote: string | null;
+  reviewAgentType: string | null;
+  reviewModel: string | null;
+  reviewReasoningEffort: string | null;
+  // 指向本清单里的某条 run(自动复审续轮预约)。
+  reviewRunId: string | null;
+  updatedAt: string;
+}
+
+export interface HandoffFreeWorkflowPayload {
+  state: HandoffFreeWorkflowState | null;
+  runs: HandoffFreeReviewRun[];
+  events: HandoffFreeWorkflowEvent[];
+}
+
 export interface HandoffSessionRow {
   id: string;
   role: string;
@@ -144,6 +215,13 @@ export interface HandoffManifest {
     question: string | null;
     questionOptions: string | null;
     questionItems: string | null;
+    // 统一验收合并的落账三件套。老版本导出的 manifest 没有这三个字段,导入侧按缺失
+    // 处理(置 null),所以新旧两端可以互相接力。
+    // 不带 acceptedTailPending/acceptedTailDone:那两列是**尾段崩溃续跑**的进度位,
+    // 不是落账;带过去等于让对端在导入后重跑一遍发布/部署命令。
+    acceptedTargetBranch?: string | null;
+    acceptedBaseCommit?: string | null;
+    acceptedMergeCommit?: string | null;
     pinnedAt: number | null;
     starredAt: number | null;
     createdAt: string;
@@ -151,6 +229,8 @@ export interface HandoffManifest {
     endedAt: string | null;
   };
   sessions: HandoffSessionRow[];
+  // 自由工作流的审查历史。老版本导出的 manifest 没有这个字段。
+  freeWorkflow?: HandoffFreeWorkflowPayload | null;
   // 被任务文本/会话文件引用的上传附件。老版本导出的 manifest 没有这个字段。
   uploads?: HandoffUploadPayload[];
   // 待发送/排队消息与定时计划。老版本导出的 manifest 没有这些字段。
