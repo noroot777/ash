@@ -12,11 +12,13 @@ import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.
 import { api } from "../lib/api.ts";
 import { attachmentView } from "./utils.ts";
 
+// 刚上传的附件四样俱全；撤回待发送消息时只有一个路径可以还原（见 withdrawDraft.ts），
+// 所以字节数可缺省、URL 允许为空(路径不在 data/uploads 下时本来就没法直接访问)。
 export type UploadAttachment = {
-  url: string;
+  url: string | null;
   path: string;
   name: string;
-  size: number;
+  size?: number;
   kind: AttachmentKind;
 };
 
@@ -165,14 +167,14 @@ export function UploadAttachmentList({
       <div className="task-upload-list">
         {attachments.map((attachment) => (
           <div className="task-upload-chip" key={attachment.path}>
-            {attachment.kind === "image" ? (
+            {attachment.kind === "image" && attachment.url ? (
               <PreviewableImage src={attachment.url} alt={attachment.name} />
             ) : (
               <FileIcon size={18} aria-hidden="true" />
             )}
             <span>
               <b>{attachment.name}</b>
-              <small>{humanSize(attachment.size)}</small>
+              {typeof attachment.size === "number" && <small>{humanSize(attachment.size)}</small>}
             </span>
             <button type="button" onClick={() => onRemove(attachment.path)} aria-label={`移除 ${attachment.name}`}>
               <X size={11} weight="bold" aria-hidden="true" />

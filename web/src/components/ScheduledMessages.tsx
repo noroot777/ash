@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type { ScheduledMessage } from "@ash/shared";
-import { ChatsCircle, Clock, Queue, SpinnerGap, X } from "@phosphor-icons/react";
+import { ArrowUUpLeft, ChatsCircle, Clock, Queue, SpinnerGap } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
@@ -86,15 +86,20 @@ export function useScheduledMessages(taskId: string) {
     void reload({ quiet: true });
   });
 
-  const cancel = useCallback(async (messageId: string) => {
+  // 服务端只有「取消」这一个动作；界面上它是**撤回**——调用方在取消成功后把这条
+  // 消息的正文和附件放回对话框（见 task-detail/withdrawDraft.ts），所以这里要如实
+  // 返回成功与否：失败了消息还在队列上，绝不能再往输入框里塞一份。
+  const cancel = useCallback(async (messageId: string): Promise<boolean> => {
     setCancelingIds((current) => new Set(current).add(messageId));
     setActionError(null);
     try {
       await api.cancelScheduledMessage(messageId);
       setMessages((current) => current.filter((message) => message.id !== messageId));
+      return true;
     } catch (reason) {
       setActionError({ messageId, message: reason instanceof Error ? reason.message : String(reason) });
       void reload({ quiet: true });
+      return false;
     } finally {
       setCancelingIds((current) => {
         const next = new Set(current);
@@ -145,7 +150,7 @@ export function ScheduledMessageTray({
   cancelingIds,
   steeringIds,
   onSteer,
-  onCancel,
+  onWithdraw,
 }: {
   messages: ScheduledMessage[];
   loading: boolean;
@@ -153,7 +158,8 @@ export function ScheduledMessageTray({
   cancelingIds: ReadonlySet<string>;
   steeringIds?: ReadonlySet<string>;
   onSteer?: (messageId: string) => void;
-  onCancel: (messageId: string) => void;
+  // 撤回:把这条消息从队列上取下来,内容(正文 + 附件)放回对话框继续编辑。
+  onWithdraw: (message: ScheduledMessage) => void;
 }) {
   if (!loading && !error && messages.length === 0) return null;
   const orderedMessages = bySendTime(messages);
@@ -195,12 +201,15 @@ export function ScheduledMessageTray({
             )}
             <button
               type="button"
+              className="scheduled-message-withdraw"
               disabled={busy}
-              title={queued ? "取消这条排队消息" : "取消定时发送"}
-              aria-label={`取消${when}的待发送消息`}
-              onClick={() => onCancel(message.id)}
+              title={queued ? "撤回这条排队消息，内容放回输入框" : "撤回这条定时消息，内容放回输入框"}
+              aria-label={`撤回${when}的待发送消息“${message.text || "附件"}”，内容放回输入框`}
+              onClick={() => onWithdraw(message)}
             >
-              {canceling ? <SpinnerGap size={12} className="is-spinning" /> : <X size={12} weight="bold" />}
+              {canceling
+                ? <SpinnerGap size={12} className="is-spinning" />
+                : <ArrowUUpLeft size={12} weight="bold" />}
             </button>
           </div>
         );

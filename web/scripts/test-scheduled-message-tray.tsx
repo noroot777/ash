@@ -7,6 +7,11 @@ import {
   retainScheduledMessageActionError,
   ScheduledMessageTray,
 } from "../src/components/ScheduledMessages.tsx";
+import {
+  attachmentsFromPaths,
+  joinDraftText,
+  mergeAttachments,
+} from "../src/task-detail/withdrawDraft.ts";
 
 const row = (id: string, text: string, sendAt: string): ScheduledMessage => ({
   id,
@@ -35,7 +40,7 @@ const html = renderToStaticMarkup(
     cancelingIds={new Set()}
     steeringIds={new Set()}
     onSteer={() => undefined}
-    onCancel={() => undefined}
+    onWithdraw={() => undefined}
   />,
 );
 
@@ -48,9 +53,12 @@ const secondRow = html.slice(html.indexOf('<div class="scheduled-message-row">',
 assert.match(firstRow, /scheduled-message-guide/, "引导动作应放在队首消息行内");
 assert.doesNotMatch(secondRow, /scheduled-message-guide/, "较晚消息行不得重复显示引导动作");
 assert.ok(
-  firstRow.indexOf("scheduled-message-guide") < firstRow.indexOf("取消排队中的待发送消息"),
-  "引导动作应位于取消按钮左侧",
+  firstRow.indexOf("scheduled-message-guide") < firstRow.indexOf("撤回排队中的待发送消息"),
+  "引导动作应位于撤回按钮左侧",
 );
+// 托盘上那颗按钮是**撤回**不是丢弃:标签既要点名是哪条,也要自己说清内容会回到输入框。
+assert.match(html, /aria-label="撤回排队中的待发送消息“第一条”，内容放回输入框"/, "撤回按钮要点名消息并写明内容会放回输入框");
+assert.equal((html.match(/scheduled-message-withdraw/g) ?? []).length, 2, "每条待发送消息各有一个撤回按钮");
 const actionError = { messageId: "first", message: "消息继续排队" };
 assert.deepEqual(
   retainScheduledMessageActionError(actionError, [row("first", "第一条", "2026-08-25T10:00:00.000Z")]),
@@ -74,4 +82,34 @@ assert.match(
   /command \? "任务进行中；发送即排队，队尾可点“引导会话”/,
   "普通顶层任务即使支持派生命令，运行中提示也必须让用户发现队尾引导动作",
 );
-console.log("✓ 引导按钮位置、错误失效与窄托盘降级均受回归保护");
+// 撤回的回填只能发生在取消成功之后：失败了消息还挂在队列上，再往输入框塞一份就成了两条。
+for (const [file, source] of [
+  ["ReplyBox.tsx", replySource],
+  ["TeamView.tsx", readFileSync(new URL("../src/team/TeamView.tsx", import.meta.url), "utf8")],
+] as const) {
+  const withdraw = source.slice(source.indexOf("const withdraw = async"));
+  assert.match(withdraw, /if \(!await scheduled\.cancel\(message\.id\)\) return;/, `${file} 撤回必须先取消成功再回填`);
+  assert.match(withdraw, /joinDraftText\(message\.text, current\)/, `${file} 撤回必须把正文放回草稿`);
+  assert.match(withdraw, /attachmentsFromPaths\(message\.attachments\)/, `${file} 撤回必须把附件放回草稿`);
+}
+
+// 回填的合并语义:撤回的内容排在已有草稿前面,同一路径的附件不重复。
+assert.equal(joinDraftText("撤回的话", ""), "撤回的话", "草稿为空时直接用撤回的正文");
+assert.equal(joinDraftText("", "草稿"), "草稿", "空正文不得清掉已有草稿");
+assert.equal(joinDraftText("撤回的话", "草稿"), "撤回的话\n\n草稿", "两边都有内容时撤回的排前面并空行隔开");
+const restored = attachmentsFromPaths([" data/uploads/abcdefghijkl-shot.png ", "/tmp/report.pdf", "data/uploads/abcdefghijkl-shot.png"]);
+assert.deepEqual(
+  restored.map((attachment) => [attachment.path, attachment.name, attachment.kind, attachment.url]),
+  [
+    ["data/uploads/abcdefghijkl-shot.png", "shot.png", "image", "/api/uploads/abcdefghijkl-shot.png"],
+    ["/tmp/report.pdf", "report.pdf", "file", null],
+  ],
+  "附件按路径还原:图片可预览、库外路径只当文件、重复路径去重",
+);
+assert.deepEqual(
+  mergeAttachments(restored, [{ path: "/tmp/report.pdf", name: "report.pdf", kind: "file", url: null, size: 12 }])
+    .map((attachment) => attachment.path),
+  ["data/uploads/abcdefghijkl-shot.png", "/tmp/report.pdf"],
+  "已经在草稿里的附件不得因撤回变成两份",
+);
+console.log("✓ 撤回回填、引导按钮位置、错误失效与窄托盘降级均受回归保护");

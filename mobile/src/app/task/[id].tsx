@@ -320,10 +320,20 @@ export default function TaskDetail() {
     }
   };
 
-  // 取消一条待发送消息：乐观移除，失败再拉回。
-  const cancelScheduled = async (mid: string) => {
-    setPending((ps) => ps.filter((m) => m.id !== mid));
-    await api.cancelScheduledMessage(mid).catch(() => loadPending());
+  // 撤回一条待发送消息：把它从队列上取下来，正文放回输入框继续编辑（跟 web 托盘同一
+  // 套语义，见 web/src/task-detail/withdrawDraft.ts）。取消成功才回填——失败了消息还在
+  // 队列上，再往输入框塞一份就成了两条。
+  const withdrawScheduled = async (message: ScheduledMessage) => {
+    try {
+      await api.cancelScheduledMessage(message.id);
+    } catch (e) {
+      Alert.alert("撤回失败", e instanceof Error ? e.message : String(e));
+      loadPending();
+      return;
+    }
+    setPending((ps) => ps.filter((m) => m.id !== message.id));
+    const restored = message.text.trim();
+    if (restored) setInput((current) => (current.trim() ? `${restored}\n\n${current}` : restored));
   };
 
   const meta = STATUS_META[status];
@@ -555,8 +565,13 @@ export default function TaskDetail() {
             <Text numberOfLines={1} style={{ flex: 1, color: theme.ink, fontSize: 13 }}>
               {m.text || "[附件]"}
             </Text>
-            <Pressable onPress={() => cancelScheduled(m.id)} hitSlop={8}>
-              <Ionicons name="close" size={15} color={theme.faint} />
+            <Pressable
+              onPress={() => void withdrawScheduled(m)}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="撤回这条待发送消息，内容放回输入框"
+            >
+              <Ionicons name="arrow-undo-outline" size={15} color={theme.faint} />
             </Pressable>
           </View>
         ))}

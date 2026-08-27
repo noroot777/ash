@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { AgentEvent, Group, Task, TaskListItem } from "@ash/shared";
+import type { AgentEvent, Group, ScheduledMessage, Task, TaskListItem } from "@ash/shared";
 import { batchesOf, mergeFeed, teamGroupsOf, waitingWorkers, workerHaltStats, workersOf } from "@ash/shared/team";
 import { ArrowSquareOut, Broom, Clock, PaperPlaneTilt, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
 import {
@@ -7,7 +7,7 @@ import {
   ScheduledSendPanel,
   useScheduledMessages,
 } from "../components/ScheduledMessages.tsx";
-import { defaultOnceTime } from "../components/ScheduleControl.tsx";
+import { defaultOnceTime, toLocalDateTime } from "../components/ScheduleControl.tsx";
 import { SlashMenu } from "../components/SlashMenu.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { FileViewer } from "../files/FileViewer.tsx";
@@ -25,6 +25,7 @@ import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { useTaskReplyDraft } from "../task-detail/TaskReplyDrafts.tsx";
+import { attachmentsFromPaths, joinDraftText, mergeAttachments } from "../task-detail/withdrawDraft.ts";
 import { conversationToMarkdown } from "../task-detail/conversationModel.ts";
 import { TeamFeed } from "./TeamFeed.tsx";
 import { TeamAttentionBar } from "./TeamAttentionBar.tsx";
@@ -131,6 +132,16 @@ function TeamReplyBox({
   const canSchedule = Number.isFinite(scheduledTime)
     && scheduledTime > Date.now()
     && (!!value.trim() || uploads.attachments.length > 0);
+  // 撤回:取消成功才回填,正文与附件并回当前草稿(见 task-detail/withdrawDraft.ts);
+  // 定时消息把原定时间也留着,还没到点才留。
+  const withdraw = async (message: ScheduledMessage) => {
+    if (!await scheduled.cancel(message.id)) return;
+    setValue((current) => joinDraftText(message.text, current));
+    draft.setAttachments((current) => mergeAttachments(attachmentsFromPaths(message.attachments), current));
+    if (message.mode === "timed" && new Date(message.sendAt).getTime() > Date.now()) {
+      setSendAt(toLocalDateTime(new Date(message.sendAt)));
+    }
+  };
   return (
     <div className="team-reply-shell">
       {slash.open && (
@@ -161,7 +172,7 @@ function TeamReplyBox({
         loading={scheduled.loading}
         error={scheduled.error}
         cancelingIds={scheduled.cancelingIds}
-        onCancel={(messageId) => void scheduled.cancel(messageId)}
+        onWithdraw={(message) => void withdraw(message)}
       />
       <UploadAttachmentList attachments={uploads.attachments} error={uploads.error} onRemove={uploads.remove} />
       {error && <p>{error}</p>}

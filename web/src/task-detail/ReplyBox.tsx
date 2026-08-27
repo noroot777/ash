@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { AgentExecutorProfile, AgentType, SkillEntry, Task } from "@ash/shared";
+import type { AgentExecutorProfile, AgentType, ScheduledMessage, SkillEntry, Task } from "@ash/shared";
 import { sameExecutor } from "@ash/shared/executors";
 import { ArrowUp, Clock, Robot, SpinnerGap, X } from "@phosphor-icons/react";
 import {
@@ -7,7 +7,7 @@ import {
   ScheduledSendPanel,
   useScheduledMessages,
 } from "../components/ScheduledMessages.tsx";
-import { defaultOnceTime } from "../components/ScheduleControl.tsx";
+import { defaultOnceTime, toLocalDateTime } from "../components/ScheduleControl.tsx";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
 import { AgentPlate } from "../components/AgentPlate.tsx";
 import {
@@ -24,6 +24,7 @@ import { SlashMenu } from "../components/SlashMenu.tsx";
 import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
 import { useTaskReplyDraft } from "./TaskReplyDrafts.tsx";
+import { attachmentsFromPaths, joinDraftText, mergeAttachments } from "./withdrawDraft.ts";
 
 const EMPTY_SKILLS: SkillEntry[] = [];
 
@@ -311,6 +312,27 @@ export function ReplyBox({
     && scheduledTime > Date.now()
     && (!!value.trim() || uploads.attachments.length > 0);
 
+  // 撤回:先把消息从队列上取下来(失败就什么都不动,免得内容一式两份),成功后正文、
+  // 附件、这条消息当初 @ 指派的执行器配置一并放回对话框——发它时是什么样,撤回后就
+  // 还是什么样,用户接着改就行。定时消息连原定时间也留着(还没到点才留)。
+  const withdraw = async (message: ScheduledMessage) => {
+    if (!await scheduled.cancel(message.id)) return;
+    setValue((current) => joinDraftText(message.text, current));
+    draft.setAttachments((current) => mergeAttachments(attachmentsFromPaths(message.attachments), current));
+    if (message.agent) {
+      setTarget({
+        agent: message.agent,
+        executorId: message.executorId,
+        model: message.model,
+        reasoningEffort: message.reasoningEffort,
+      });
+    }
+    if (message.mode === "timed" && new Date(message.sendAt).getTime() > Date.now()) {
+      setSendAt(toLocalDateTime(new Date(message.sendAt)));
+    }
+    textareaRef.current?.focus();
+  };
+
   return (
     <div className={`task-reply-shell${topRail ? " has-top-rail" : ""}`}>
       {menuOpen && (
@@ -381,7 +403,7 @@ export function ReplyBox({
         cancelingIds={scheduled.cancelingIds}
         steeringIds={scheduled.steeringIds}
         onSteer={(messageId) => void scheduled.steer(messageId)}
-        onCancel={(messageId) => void scheduled.cancel(messageId)}
+        onWithdraw={(message) => void withdraw(message)}
       />
       <UploadAttachmentList attachments={uploads.attachments} error={uploads.error} onRemove={uploads.remove} />
       {sendError && <p className="task-reply-error">{sendError}</p>}
