@@ -16,6 +16,9 @@ function copy(value: string) {
  * 前两颗是**流水**（可加），第三颗是**水位**（只能覆盖），并排放是因为用户要一眼看全，
  * 不是因为它们同类 —— 别顺手把它们加到一起。
  *
+ * 第三颗要 `session` 不只是为了显示：它的面板里挂着「压缩设置」快捷入口，得靠会话
+ * 才知道改的是哪个执行器 profile（见 ContextCompactQuickSettings）。
+ *
  * `session` 缺席时这就是一行只有「本轮」的尾栏，非最后一条气泡走的正是这条路。
  */
 export function MessageFooter({
@@ -53,7 +56,7 @@ export function MessageFooter({
       )}
       <TokenUsageChip turn={turnUsage} />
       <TokenUsageChip session={total} />
-      <ContextMeterChip context={water} />
+      <ContextMeterChip context={water} session={session} />
       {actions}
     </footer>
   );

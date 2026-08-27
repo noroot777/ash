@@ -1,10 +1,11 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Gauge } from "@phosphor-icons/react";
-import type { ContextUsage } from "@ash/shared";
+import type { ContextUsage, Session } from "@ash/shared";
 import { contextRatio, effectiveContextWindow, formatTokens, formatTokensExact, hasContext } from "@ash/shared/usage";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
+import { ContextCompactQuickSettings } from "./ContextCompactQuickSettings.tsx";
 
 /**
  * 「这条会话离上下文塞满还有多远」的那颗胶囊。
@@ -20,25 +21,37 @@ import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
  *    「还剩 60%」是拿来做决定的；
  * ③ 执行器配了自动压缩窗口时优先用它算剩余量；模型能力上限仍保留在明细里。没配时
  *    才用 CLI 自报值，自报缺失又只能按模型名猜时胶囊上带个 `~`。
+ *
+ * 明细下面挂着**快捷设置**（`ContextCompactQuickSettings`）：面板里这几个数从哪来，
+ * 就在同一个面板里改得动。给了 `session` 才有，因为要知道改的是哪个执行器 profile。
  */
-export function ContextMeterChip({ context, className }: {
+export function ContextMeterChip({ context, session, className }: {
   context?: ContextUsage | null;
+  /** 这条会话的身份 —— 快捷设置要靠它定位执行器 profile。不给就只有只读明细。 */
+  session?: Session | null;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const place = usePanelPlacement(triggerRef, panelRef, {
-    minWidth: 224,
+    // 展开设置后面板里是一排输入框，224px 塞不下；收起时仍按明细的窄宽度走。
+    minWidth: editing ? 296 : 224,
     minHeight: 108,
     fallbackHeight: 180,
     enabled: open,
   });
 
+  const close = () => {
+    setOpen(false);
+    setEditing(false);
+  };
+
   useDismissable({
     enabled: open,
     containerRef: panelRef,
-    onClose: () => setOpen(false),
+    onClose: close,
     restoreFocusRef: triggerRef,
   });
 
@@ -111,6 +124,13 @@ export function ContextMeterChip({ context, className }: {
             ? "这一轮没拿到 CLI 自报的窗口，只能按模型名估，仅供参考。"
             : "窗口由 CLI 自报。这是最近一次请求带进模型的输入量，压缩后会掉下来。"}
       </footer>
+      {session && (
+        <ContextCompactQuickSettings
+          session={session}
+          open={editing}
+          onToggle={() => setEditing((current) => !current)}
+        />
+      )}
     </div>
   );
 
@@ -123,7 +143,7 @@ export function ContextMeterChip({ context, className }: {
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={`${spoken}；点击查看明细`}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => (open ? close() : setOpen(true))}
       >
         <Gauge size={11} weight="fill" aria-hidden="true" />
         {label}
