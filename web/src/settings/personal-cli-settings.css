@@ -1,0 +1,109 @@
+.pcli {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.pcli header h2 {
+  margin: 0 0 4px;
+}
+
+.pcli-block {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--border, #262a33);
+  border-radius: 10px;
+}
+
+.pcli-block h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 620;
+}
+
+.pcli-block--unsupported {
+  opacity: 0.75;
+}
+
+.pcli-path {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--fg-dim, #98a0b0);
+  word-break: break-all;
+}
+
+.pcli-part {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border, #262a33);
+}
+
+.pcli-part--editor {
+  border-top-style: dashed;
+}
+
+.pcli-part-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.pcli-skills {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pcli-skills li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: var(--bg, #0f1115);
+  font-size: 13px;
+}
+
+.pcli-skills li > span {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--fg-dim, #98a0b0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pcli-skill-name {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent, #6d8cff);
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.pcli-editor {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.pcli-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

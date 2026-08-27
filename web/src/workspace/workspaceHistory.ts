@@ -24,6 +24,9 @@ export function normalizedWorkspaceUrl(
   hash: string,
 ): string | null {
   if (pathname === "/") return null;
+  // 领取 key / 加入项目的链接是**真实路径**,由 AuthGate 自己认。归一化会把它们
+  // 一律改写成 "/",于是用户点开邮件里那条链接只会看到一个普通工作台。
+  if (/^\/(claim|join)\//.test(pathname)) return null;
   const params = new URLSearchParams(search);
   const legacyTask = pathname.match(/^\/tasks\/([^/]+)\/?$/);
   if (legacyTask?.[1]) {

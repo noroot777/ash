@@ -263,6 +263,12 @@ export function AgentProfileRow({
             整行跨列显示：速度那一格只有 56px，塞不下一句人话，而缩成一个记号等于要求
             用户先怀疑它。覆盖那一档的同类冲突由胶囊自己显示（它有值可写）。 */}
         {speedConflict && <p className="agent-profile-row-warning">{speedConflict}</p>}
+        {/* 多人模式下「这个执行器根本派不出任务」跟上面那种静默失效是同一类问题：
+            不在行里说，用户要等到派活失败才知道。服务端现算（auth/dispatch-gate.ts），
+            自用模式下这个字段不存在，所以这一行在自用模式恒不渲染。 */}
+        {profile.dispatchBlocked && (
+          <p className="agent-profile-row-warning is-blocked">{profile.dispatchBlocked}</p>
+        )}
       </article>
       {confirmDelete && (
         <ConfirmDialog

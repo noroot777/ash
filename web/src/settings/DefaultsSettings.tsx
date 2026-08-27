@@ -5,6 +5,7 @@ import { Toggle } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { WorkflowPicker, useWorkflows } from "../workflow/WorkflowPicker.tsx";
 import { HandoffSettings } from "./HandoffSettings.tsx";
+import { InstanceModeCard } from "./InstanceModeCard.tsx";
 import { SkillScanCard } from "./SkillScanCard.tsx";
 
 export function DefaultsSettings({ notify }: { notify: (message: string) => void }) {
@@ -92,6 +93,7 @@ export function DefaultsSettings({ notify }: { notify: (message: string) => void
         onChangeSeconds={patchSkillRefresh}
         notify={notify}
       />
+      <InstanceModeCard />
     </>
   );
 }

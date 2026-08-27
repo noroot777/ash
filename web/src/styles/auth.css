@@ -1,0 +1,214 @@
+/* 多人模式的前置屏(向导 / 登录 / 领取 / 加入项目)。它们都是**全屏单卡片**,
+   不复用工作台那套布局 —— 那套的前提是「已经知道你是谁」。 */
+
+.auth-shell {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 32px 20px;
+  overflow: auto;
+  background: var(--bg, #0f1115);
+}
+
+.auth-card {
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 28px;
+  border: 1px solid var(--border, #262a33);
+  border-radius: 14px;
+  background: var(--panel, #161920);
+  box-shadow: 0 18px 48px rgb(0 0 0 / 35%);
+}
+
+.auth-card--wide {
+  width: min(560px, 100%);
+}
+
+.auth-card h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+}
+
+.auth-card h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 620;
+}
+
+.auth-note {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--fg-dim, #98a0b0);
+}
+
+.auth-error {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--danger, #f2777a);
+}
+
+.auth-key-input {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  letter-spacing: 0.04em;
+}
+
+.auth-link {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 12px;
+  color: var(--fg-dim, #98a0b0);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.auth-recovery {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border, #262a33);
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--fg-dim, #98a0b0);
+}
+
+.auth-recovery p {
+  margin: 0;
+}
+
+.auth-code,
+.auth-key-value {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg, #0f1115);
+  border: 1px solid var(--border, #262a33);
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: all;
+}
+
+.auth-key-value {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--fg, #e6e9ef);
+}
+
+.auth-key-reveal {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.auth-key-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.auth-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--fg-dim, #98a0b0);
+  cursor: pointer;
+}
+
+.auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+.auth-field > span {
+  font-weight: 550;
+}
+
+.auth-field small {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--fg-dim, #98a0b0);
+}
+
+.auth-field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.auth-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.auth-warning {
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--warn-border, #4a3d1f);
+  background: var(--warn-bg, #211c10);
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--fg-dim, #cfc39c);
+}
+
+.auth-warning--strong {
+  border-color: var(--danger, #f2777a);
+  background: color-mix(in srgb, var(--danger, #f2777a) 10%, transparent);
+  color: var(--fg, #e6e9ef);
+}
+
+.auth-warning ul {
+  margin: 6px 0 6px;
+  padding-left: 18px;
+}
+
+.auth-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px;
+  text-align: left;
+  border: 1px solid var(--border, #262a33);
+  border-radius: 12px;
+  background: var(--bg, #0f1115);
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.auth-choice:hover:not(:disabled) {
+  border-color: var(--accent, #6d8cff);
+  background: color-mix(in srgb, var(--accent, #6d8cff) 8%, transparent);
+}
+
+.auth-choice b {
+  font-size: 14px;
+}
+
+.auth-choice span {
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--fg-dim, #98a0b0);
+}
+
+/* 「切到多人模式」表单本体。全屏向导里它直接躺在 .auth-card 上(那层已经有 gap),
+   设置页危险区里它被塞进 .settings-card--pad,所以间距得自己带一份。 */
+.auth-multi-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+

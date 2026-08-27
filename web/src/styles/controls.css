@@ -489,9 +489,14 @@
   min-width: 0;
   align-items: center;
   gap: 8px;
+  position: relative;
+  flex-wrap: wrap;
 }
 .path-field > input { min-width: 0; flex: 1; }
 .path-field > .ui-button { flex: none; }
+/* 应用内目录树是 .path-field 的第三个孩子，占满一整行落在输入框下面（那一行
+   flex-wrap 才有的位置）。它是块，不能挤在输入框旁边。 */
+.dir-pick-tree { flex: 0 0 100%; }
 
 @media (prefers-reduced-motion: reduce) {
   .task-pin { transition: none; }

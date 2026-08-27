@@ -2,6 +2,7 @@ import type { Group, ProjectView, Task, TaskListItem } from "@ash/shared";
 import {
   Archive,
   ArrowLeft,
+  ArrowsLeftRight,
   CirclesThreePlus,
   FolderSimple,
   GearSix,
@@ -11,16 +12,23 @@ import {
   MagnifyingGlass,
   SlidersHorizontal,
   Stack,
+  Terminal,
+  UsersThree,
 } from "@phosphor-icons/react";
 import { ArchiveSettings } from "./ArchiveSettings.tsx";
+import { ConfigTransferSettings } from "./ConfigTransferSettings.tsx";
 import { DefaultsSettings } from "./DefaultsSettings.tsx";
 import { ExecutorsSettings } from "./ExecutorsSettings.tsx";
 import { GroupsSettings } from "./GroupsSettings.tsx";
 import { ModesSettings } from "./ModesSettings.tsx";
+import { PersonalCliSettings } from "./PersonalCliSettings.tsx";
+import { ProjectMembersSettings } from "./ProjectMembersSettings.tsx";
 import { ProjectSettingsPanel } from "./ProjectSettingsPanel.tsx";
 import { ProvidersSettings } from "./ProvidersSettings.tsx";
+import { UsersSettings } from "./UsersSettings.tsx";
 import { WorkflowsSettings } from "./WorkflowsSettings.tsx";
 import { ReviewerProfilesSettings } from "./ReviewerProfilesSettings.tsx";
+import { useAuth } from "../auth/authContext.ts";
 import "./agents-settings.css";
 // 必须排在 agents-settings.css 之后:两边有几组共用的表单基础样式留在那边,
 // 顺序换了层叠结果就变了(见 providers-settings.css 顶部)。
@@ -30,6 +38,7 @@ import "./reviewer-settings.css";
 
 export type SettingsSection =
   | "project"
+  | "members"
   | "groups"
   | "archive"
   | "providers"
@@ -37,24 +46,41 @@ export type SettingsSection =
   | "modes"
   | "workflows"
   | "reviewers"
+  | "cli-env"
+  | "config"
+  | "users"
   | "defaults";
 
-const PROJECT_NAV = [
+// `requires` 决定这一节**在导航里显不显示**,不决定它存不存在 —— 两者分开的原因见
+// 下面 SECTIONS 的注释。判据只有两种:
+//  · "multi"      多人模式才有意义(自用模式下这一节的内容是空话)
+//  · "multiAdmin" 还得是实例管理员(藏起来只是省事,真正的闸在后端)
+type NavGate = "multi" | "multiAdmin";
+type NavItem = { id: SettingsSection; label: string; icon: typeof GearSix; requires?: NavGate };
+
+const PROJECT_NAV: readonly NavItem[] = [
   { id: "project", label: "项目设置", icon: FolderSimple },
+  { id: "members", label: "成员", icon: UsersThree, requires: "multi" },
   { id: "groups", label: "分组", icon: Stack },
   { id: "archive", label: "已归档", icon: Archive },
-] as const;
+];
 
-const SYSTEM_NAV = [
+const SYSTEM_NAV: readonly NavItem[] = [
   { id: "providers", label: "供应商", icon: PlugsConnected },
   { id: "executors", label: "执行器", icon: Robot },
   { id: "modes", label: "执行模式", icon: CirclesThreePlus },
   { id: "workflows", label: "起手式", icon: FlowArrow },
   { id: "reviewers", label: "审查者", icon: MagnifyingGlass },
+  { id: "cli-env", label: "个人 CLI 环境", icon: Terminal, requires: "multi" },
+  { id: "config", label: "配置搬家", icon: ArrowsLeftRight },
+  { id: "users", label: "用户", icon: UsersThree, requires: "multiAdmin" },
   { id: "defaults", label: "默认规则", icon: SlidersHorizontal },
-] as const;
+];
 
-const PROJECT_SECTIONS: SettingsSection[] = ["project", "groups", "archive"];
+// 两份清单都从**完整**的 NAV 推,不受 requires 影响:URL 里带着 `?settings=users`
+// 的链接在权限不够时该走「渲染时的空态」,而不是被 parse 判成非法后静默弹回默认节
+// —— 那样看着就像「链接坏了」。
+const PROJECT_SECTIONS: SettingsSection[] = PROJECT_NAV.map((item) => item.id);
 // 从 SYSTEM_NAV 推出来而不是再抄一遍字面量：新加一节只改一处，不会出现「导航里
 // 有、刷新一次就掉回默认」的半接通状态。
 const SYSTEM_SECTIONS: SettingsSection[] = SYSTEM_NAV.map((item) => item.id);
@@ -75,7 +101,7 @@ function SettingsNavItems({
   section,
   onSection,
 }: {
-  items: readonly { id: SettingsSection; label: string; icon: typeof GearSix }[];
+  items: readonly NavItem[];
   section: SettingsSection;
   onSection: (section: SettingsSection) => void;
 }) {
@@ -121,6 +147,14 @@ export function SettingsPage({
   onGroupsChanged: () => void;
   notify: (message: string) => void;
 }) {
+  const { state } = useAuth();
+  const isMulti = state.mode === "multi";
+  const isInstanceAdmin = state.user?.role === "admin";
+  const visible = (items: readonly NavItem[]) =>
+    items.filter((item) =>
+      item.requires === "multiAdmin" ? isMulti && isInstanceAdmin : item.requires === "multi" ? isMulti : true,
+    );
+
   return (
     <div className="settings-shell">
       <aside className="settings-sidebar">
@@ -131,11 +165,11 @@ export function SettingsPage({
         <nav aria-label="设置导航">
           <div className="settings-nav-group">
             <span className="settings-nav-label" title={project?.name}>{project?.name ?? "当前项目"}</span>
-            <SettingsNavItems items={PROJECT_NAV} section={section} onSection={onSection} />
+            <SettingsNavItems items={visible(PROJECT_NAV)} section={section} onSection={onSection} />
           </div>
           <div className="settings-nav-group">
             <span className="settings-nav-label">系统设置</span>
-            <SettingsNavItems items={SYSTEM_NAV} section={section} onSection={onSection} />
+            <SettingsNavItems items={visible(SYSTEM_NAV)} section={section} onSection={onSection} />
           </div>
         </nav>
       </aside>
@@ -147,6 +181,9 @@ export function SettingsPage({
           {section === "modes" && <ModesSettings notify={notify} />}
           {section === "workflows" && <WorkflowsSettings notify={notify} />}
           {section === "reviewers" && <ReviewerProfilesSettings notify={notify} />}
+          {section === "cli-env" && <PersonalCliSettings notify={notify} />}
+          {section === "config" && <ConfigTransferSettings notify={notify} />}
+          {section === "users" && <UsersSettings notify={notify} />}
           {section === "defaults" && <DefaultsSettings notify={notify} />}
           {section === "project" && project && (
             <ProjectSettingsPanel
@@ -155,6 +192,9 @@ export function SettingsPage({
               onDeleted={() => onProjectDeleted(project.id)}
               notify={notify}
             />
+          )}
+          {section === "members" && project && (
+            <ProjectMembersSettings project={project} notify={notify} />
           )}
           {section === "groups" && project && (
             <GroupsSettings

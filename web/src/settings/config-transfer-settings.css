@@ -1,0 +1,87 @@
+.cfgx {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.cfgx header h2 {
+  margin: 0 0 4px;
+}
+
+.cfgx-warning {
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--warn-border, #4a3d1f);
+  background: var(--warn-bg, #211c10);
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--fg-dim, #cfc39c);
+}
+
+.cfgx-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border, #262a33);
+  border-radius: 10px;
+}
+
+.cfgx-block h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 620;
+}
+
+.cfgx-kinds {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.cfgx-kind {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.cfgx-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.cfgx-file {
+  display: none;
+}
+
+.cfgx-staged,
+.cfgx-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--bg, #0f1115);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.cfgx-staged p,
+.cfgx-result p {
+  margin: 0;
+}
+
+.cfgx-staged ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  color: var(--fg-dim, #98a0b0);
+}
+
+.cfgx-muted {
+  font-size: 12.5px;
+  color: var(--fg-dim, #98a0b0);
+}

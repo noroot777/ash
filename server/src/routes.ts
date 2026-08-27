@@ -58,7 +58,7 @@ import { mountFsBrowseRoutes } from "./fs-browse.js";
 import { mountAuthRoutes } from "./auth/routes.js";
 import { mountUserRoutes } from "./auth/user-routes.js";
 import { mountPersonalCliRoutes } from "./auth/personal-routes.js";
-import { actorOf } from "./auth/context.js";
+import { actorOf, isAdminActor } from "./auth/context.js";
 import { makeEventFilter } from "./auth/event-filter.js";
 import { visibleProjectIds } from "./auth/visibility.js";
 import { canUseOwned, filterOwned, ownerStamp } from "./auth/owned.js";
@@ -99,10 +99,12 @@ api.get("/restart-impact", async (c) => {
 //
 // `canPickDirectory` 得按**这一次请求**算:文件选择窗口弹在服务端桌面上,只有本机打开
 // 的浏览器用得上(见 dir-picker.ts)。所以它不进 hostInfo() —— 那是台机器的静态事实,
-// 这条跟调用方是谁有关。
+// 这条跟调用方是谁有关。多人模式下还得是实例管理员:那个窗口选得到整台机器的任意路径。
+// 报假可用会让普通用户点出一个 403 —— 前端据此改用 web 目录树选择器(§七)。
 api.get("/host", (c) => c.json({
   ...hostInfo(),
-  canPickDirectory: directoryPickerSupport(getConnInfo(c).remote.address).available,
+  canPickDirectory:
+    isAdminActor(actorOf(c)) && directoryPickerSupport(getConnInfo(c).remote.address).available,
 }));
 
 api.get("/settings", async (c) => c.json(await getAppSettings()));

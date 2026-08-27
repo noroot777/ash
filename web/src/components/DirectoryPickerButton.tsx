@@ -1,16 +1,20 @@
 import { useState } from "react";
 import { api } from "../lib/api.ts";
 import { useHostInfo } from "../lib/useHostInfo.ts";
+import { DirectoryTreePicker } from "./DirectoryTreePicker.tsx";
 import { Button } from "./ui.tsx";
 
-// 「浏览…」按钮：在**服务端那台机器**上弹系统文件选择窗口，把用户点中的绝对路径填回输入框。
+// 「浏览…」按钮：把一个绝对路径填回输入框。它有**两条实现**，取哪条由服务端说了算：
 //
-// 三条约束都来自「窗口不在浏览器这一侧」这个事实：
-//  · 服务端说这次请求用不了（远程浏览器、没有图形界面的服务器）时**整个按钮不渲染** ——
-//    留一个按了没反应的按钮比没有按钮更糟，输入框本来就能手打路径。
-//  · 窗口是模态的，请求会挂到用户点完，所以按钮期间要显示「选择中…」并禁用；
-//    服务端另有单飞闸，连点也只会开出一个窗口。
-//  · 用户点「取消」不是错误，什么都不做，别弹提示。
+// ① 系统文件选择窗口（`host.canPickDirectory`）。窗口弹在**服务端那台机器**上，所以：
+//    · 远程浏览器、没有图形界面的服务器、以及多人模式下的普通用户都拿不到它
+//      （后者是刻意的：那个窗口选得到整台机器的任意路径，是实例管理员的工具）。
+//    · 窗口是模态的，请求会挂到用户点完，所以按钮期间显示「选择中…」并禁用；
+//      服务端另有单飞闸，连点也只会开出一个窗口。
+//    · 用户点「取消」不是错误，什么都不做，别弹提示。
+// ② 拿不到 ① 时退到**应用内目录树**（`/fs/browse`，只在调用者自己的目录里走）。
+//    以前这种情况是整个按钮不渲染、只能手打路径 —— 多人模式下那等于普通用户没有
+//    任何可视化选路径的办法。
 
 export function DirectoryPickerButton({ startIn, onPick, disabled, notify, className = "" }: {
   /** 打开时停在哪个目录。一般直接传输入框现在的值，服务端会自己退到父目录/家目录。 */
@@ -22,7 +26,39 @@ export function DirectoryPickerButton({ startIn, onPick, disabled, notify, class
 }) {
   const host = useHostInfo();
   const [busy, setBusy] = useState(false);
-  if (!host?.canPickDirectory) return null;
+  const [tree, setTree] = useState(false);
+
+  // host 还没读回来时先什么都不画：这一瞬间画错按钮，用户点下去只会得到一次报错。
+  if (!host) return null;
+
+  if (!host.canPickDirectory) {
+    return (
+      <>
+        <Button
+          className={`dir-pick-button ${className}`.trim()}
+          disabled={disabled}
+          aria-label="在目录树里选择目录"
+          onClick={() => setTree((open) => !open)}
+        >
+          {tree ? "收起" : "浏览…"}
+        </Button>
+        {tree ? (
+          <div className="dir-pick-tree">
+            <DirectoryTreePicker
+              value={startIn}
+              notify={notify}
+              onClose={() => setTree(false)}
+              onPick={(path) => {
+                onPick(path);
+                setTree(false);
+              }}
+            />
+          </div>
+        ) : null}
+      </>
+    );
+  }
+
   const pick = async () => {
     setBusy(true);
     try {

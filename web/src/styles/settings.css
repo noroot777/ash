@@ -136,6 +136,12 @@
   box-shadow: var(--surface-shadow);
 }
 
+/* 卡片里塞一整块表单(不是「一行一个设置项」)时用它补内边距 —— .settings-row 的
+   左右 16px 是给成对的「说明 + 控件」定的，套不到表单上。 */
+.settings-card--pad {
+  padding: 16px;
+}
+
 .settings-row,
 .settings-field,
 .settings-danger-row {

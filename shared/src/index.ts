@@ -183,6 +183,10 @@ export interface AgentExecutorProfile {
   // 可覆盖哪些项、各自盖掉谁,声明在 @ash/shared/cli-overrides。
   configOverrides?: Record<string, number>;
   isDefault: boolean; // the default executor resolved for its type
+  // 多人模式下这个执行器为什么派不出任务(自用模式恒 undefined)。宿主机的 CLI 订阅
+  // 被隔离后,没接 relay 的 CLI 与没挂供应商的执行器都跑不起来 —— 服务端现算,
+  // 前端据此标灰并给出下一步(见 auth/dispatch-gate.ts)。
+  dispatchBlocked?: string | null;
 }
 
 // ── Hierarchy (§3) ──────────────────────────────────────────────────────────
