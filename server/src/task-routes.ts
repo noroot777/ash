@@ -19,7 +19,7 @@ import { createTasks, enrichTasks, publishTaskUpdated, toTaskListItem } from "./
 import { attachmentsPrompt, id, now, taskBody } from "./util.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { canSeeProject, visibleProjectIds, visibleTaskIds } from "./auth/visibility.js";
-import { executorScope, type ExecutorScope } from "./auth/owned-executors.js";
+import { executorScopeForOwner, type ExecutorScope } from "./auth/owned-executors.js";
 import { executorDowngradePreflight } from "./auth/dispatch-gate.js";
 import { inheritOwner } from "./auth/run-env.js";
 
@@ -187,10 +187,15 @@ api.post("/tasks", async (c) => {
   }
   const ts = now();
   const taskId = id();
-  // 执行器是**个人面**资源(§八):别人的 profile 对我等同于不存在。看不见的 id 在这里
-  // 一律归一成 null(按类型默认执行器降级,与悬空 id 同一条口径),否则外人的 id 会连着
-  // 它的名字一起落进我的任务(第 2 轮审查 P1)。自用模式下 scope 是恒等的。
-  const scope = await executorScope(actorOf(c));
+  // 「谁的活」必须**先算**:执行器 scope 锚在这条任务最终的归属人身上,不是这次点它的人。
+  // 带 parentId 建子任务时归属继承父任务(§八),按操作人过滤会把操作人自己的 executorId
+  // 留在一条别人名下的任务里 —— 而运行侧按归属人解析,库里存的和真跑的就此分家
+  // (第 4 轮审查 P1)。共享项目里这两个人本来就可以不是同一个。
+  const taskOwner = (await inheritOwner(b.parentId)) ?? ownerIdOf(actorOf(c));
+  // 执行器是**个人面**资源(§八):归属人看不见的 id 在这里一律归一成 null(按类型默认
+  // 执行器降级,与悬空 id 同一条口径),否则外人的 id 会连着它的名字一起落进任务
+  // (第 2 轮审查 P1)。自用模式下 scope 是恒等的。
+  const scope = await executorScopeForOwner(taskOwner);
   const executorId = scope.keep(b.executorId);
   const executorType = agentTypeForExecutor(scope, executorId);
   if (executorType && b.agentType && b.agentType !== executorType) {
@@ -273,7 +278,8 @@ api.post("/tasks", async (c) => {
     workflowMode,
     // 「谁的活」(§八):归属决定用谁的执行器/供应商/CLI 环境跑,以及统计算在谁头上。
     // 派生任务(团队执行者/审查/就地验证)继承父任务,那条路在各自的创建点上。
-    ownerUserId: (await inheritOwner(b.parentId)) ?? ownerIdOf(actorOf(c)),
+    // 上面那句 executorScopeForOwner 用的就是这个值 —— 两者必须同源,别各算各的。
+    ownerUserId: taskOwner,
   };
   // 可选:追加到现有 queue 的尾部。要求:queue 已存在,且新 task 跟
   // queue 已有任务的 groupId 一致(违反就 400,不静默)。
@@ -430,8 +436,11 @@ api.patch("/tasks/:id", async (c) => {
   if (b.starredAt !== undefined) patch.starredAt = b.starredAt;
   if (b.labels !== undefined) patch.labels = JSON.stringify(b.labels);
   if (b.groupId !== undefined) patch.groupId = b.groupId;
-  // 同建任务:看不见的执行器 = 不存在,归一成 null 而不是原样落库。
-  const scope = await executorScope(actorOf(c));
+  // 同建任务:scope 锚在**这条任务的归属人**,不是这次 PATCH 的人 —— 共享项目里别人
+  // 也能改这条任务,按操作人过滤等于允许他把自己的 executorId 写进一条永远解析不到它的
+  // 任务里(第 4 轮审查 P1)。归属人用不了的 id 与悬空 id 同一条口径:归一成 null,由运行
+  // 侧按归属人的类型默认执行器接手 —— 与不改这个字段时的实际行为一致。
+  const scope = await executorScopeForOwner(existing.ownerUserId);
   const requestedExecutorId = b.executorId === "" ? null : scope.keep(b.executorId);
   const executorType = agentTypeForExecutor(scope, requestedExecutorId);
   if (executorType && b.agentType && b.agentType !== executorType) {

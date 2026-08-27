@@ -11,7 +11,7 @@ import { createTasks } from "./task-store.js";
 import { id, now, taskBody } from "./util.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { visibleProjectIds } from "./auth/visibility.js";
-import { executorScope } from "./auth/owned-executors.js";
+import { executorScopeForOwner } from "./auth/owned-executors.js";
 
 // ── groups (transient batch containers, §3) ─────────────────────────────────
 // 从 task-routes.ts 拆出的分组路由:列表/运行/暂停/批量建任务/编辑/删除。
@@ -84,9 +84,13 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
   const b = await c.req.json<BatchCreateTasksBody>();
   const specs: BatchTaskInput[] = Array.isArray(b.tasks) ? b.tasks : [];
   if (specs.length === 0) return c.json({ error: "tasks 不能为空" }, 400);
-  // 执行器是个人面资源(§八):这一批只认调用方自己看得见的那些,看不见的 id 归一成
-  // null 走类型默认执行器降级 —— 与悬空 id 同一条口径(第 2 轮审查 P1)。
-  const scope = await executorScope(actorOf(c));
+  // 「谁的活」(§八):批量入口没有父任务可继承,这一批全归调用方。
+  const batchOwner = ownerIdOf(actorOf(c));
+  // 执行器是个人面资源(§八):scope 锚在**归属人**(这条路上恰好就是调用方),看不见的 id
+  // 归一成 null 走类型默认执行器降级 —— 与悬空 id 同一条口径(第 2 轮审查 P1)。
+  // 锚在归属人而不是图省事按操作人:哪天这条路支持了 parentId,按操作人过滤会无声地
+  // 变成错的 —— 建任务那条正是这么出的事(第 4 轮审查 P1)。
+  const scope = await executorScopeForOwner(batchOwner);
 
   // Validate every agent type up front (task-level or inherited default) so we
   // fail the whole batch cleanly instead of half-inserting.
@@ -135,8 +139,6 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
 
   // Pre-generate ids (chain 用得到).
   const ids = specs.map(() => id());
-  // 「谁的活」(§八):这一批全归调用方。批量入口没有父任务可继承。
-  const batchOwner = ownerIdOf(actorOf(c));
 
   const firstLine = (body?: string) =>
     (body ?? "").split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 30) ?? "";

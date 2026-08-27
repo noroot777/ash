@@ -15,6 +15,15 @@
 //
 // 自用模式下 `ownedScope` 是 null,这里每个函数都退化成恒等变换(悬空 id 照旧原样落库),
 // 与本功能上线前逐字节一致。
+//
+// **挑哪个 scope:锚在「这份记录最终的归属人」,不是「这次点它的人」。** 两者常常同一个人,
+// 但不总是 —— 第 4 轮审查 P1 就出在这条缝上:带 parentId 建子任务时归属继承父任务,共享
+// 项目里别人也能 PATCH 我的任务,而运行侧一律按归属人解析。按操作人过滤 = 存进去一个
+// 运行时永远解析不到的 id,库里写的和真跑的分家。对照表:
+//   · 任务(executorId / duet 两位讨论者 / team 三角色)→ `executorScopeForOwner(taskOwner)`
+//   · 团队派活的执行者任务 → `executorScopeForOwner(lead.ownerUserId)`
+//   · 执行器 / 审查者 / 团队预设本身 → `executorScope(actor)`;这几张表的 ownerUserId
+//     就是 `ownerStamp(actor)` 盖的,归属人**就是**操作人,两条路同一个答案。
 import type { AgentType } from "@ash/shared";
 import { db } from "../db/index.js";
 import { agents } from "../db/schema.js";

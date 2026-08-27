@@ -16,6 +16,7 @@
 //   ⑭ 穿过完整 authGate 的 HTTP 回归:供应商 relay 打得通、供应商 CRUD 仍要登录、
 //      `/llm-providers/test` 用不了别人的 key。
 //   ⑮ 「选谁干活」的另外两个表面 —— duet 两位讨论者、团队派活 —— 同样按人收窄。
+//   ⑯ 收窄按谁:锚在**任务归属人**,不是这次点它的人(共享项目 / 继承父任务)。
 //
 // 跑法(不设 ASH_DB 时自己开一个临时库):
 //   npm -w server run test:multi-user
@@ -577,6 +578,80 @@ const bobActor = actorOf(bob);
     !(leakyRow.executorSnapshot ?? "").includes("claude@bob"),
     `快照兜底没生效:${leakyRow.executorSnapshot}`,
   );
+}
+
+// ── ⑯ 收窄按谁:锚在任务归属人,不是操作人 ──────────────────────────────────
+// 第 4 轮审查:写侧按操作人过滤、运行侧按归属人解析 —— 共享项目里这两个人可以不是
+// 同一个,于是存进去一个运行时永远解析不到的 id,库里写的和真跑的分家。两条缝:
+// ① 共享项目里 bob 改 alice 的任务;② 带 parentId 建子任务时归属继承父任务。
+{
+  const { Hono } = await import("hono");
+  const { authGate } = await import("../src/auth/middleware.js");
+  const { resourceGate } = await import("../src/auth/resource-gate.js");
+  const { mountTaskRoutes } = await import("../src/task-routes.js");
+
+  // p-alice 变成共享项目:bob 看得见、改得动,但它仍然是 alice 的活。
+  await visibility.addProjectMember({ projectId: "p-alice", userId: bob.id, role: "member", addedBy: alice.id });
+
+  const api = new Hono();
+  mountTaskRoutes(api);
+  const app = new Hono();
+  app.use("*", authGate());
+  app.use("/api/*", resourceGate());
+  app.route("/api", api);
+  const aliceKey2 = await store.resetUserKey(alice.id);
+  const bobKey2 = await store.resetUserKey(bob.id);
+  const send = async (path: string, method: string, key: string, body: unknown) => {
+    const res = await app.fetch(new Request(`http://127.0.0.1:4317${path}`, {
+      method,
+      headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }));
+    return { status: res.status, body: await res.json().catch(() => ({})) as Record<string, unknown> };
+  };
+  const stored = async (taskId: string) =>
+    (await db.select({ executorId: tasks.executorId, ownerUserId: tasks.ownerUserId, duet: tasks.duet })
+      .from(tasks).where(eq(tasks.id, taskId))).at(0)!;
+
+  // ① alice 的任务,bob 来改:他自己的执行器在这条任务上等同于不存在。
+  const aliceTask = await send("/api/tasks", "POST", aliceKey2,
+    { projectId: "p-alice", title: "shared", body: "x", useWorktree: false });
+  assert.equal(aliceTask.status, 201, JSON.stringify(aliceTask.body));
+  const sharedId = String(aliceTask.body.id);
+  const patched = await send(`/api/tasks/${sharedId}`, "PATCH", bobKey2, { executorId: "ex-bob" });
+  assert.equal(patched.status, 200, JSON.stringify(patched.body));
+  const afterPatch = await stored(sharedId);
+  assert.equal(afterPatch.ownerUserId, alice.id, "改一改不该顺手换掉归属");
+  assert.equal(afterPatch.executorId, null, "别人的任务上,操作人自己的执行器也存不进去");
+
+  // duet 那份配置同理(它整块 JSON 落库,漏过一次了)。
+  const aliceDuet = await send("/api/tasks", "POST", aliceKey2, {
+    projectId: "p-alice", title: "shared duet", body: "t", mode: "duet", useWorktree: false,
+    duet: { voiceA: "claude", voiceB: "claude", topic: "t", voiceAExecutorId: "ex-alice" },
+  });
+  assert.equal(aliceDuet.status, 201, JSON.stringify(aliceDuet.body));
+  const duetId2 = String(aliceDuet.body.id);
+  const duetPatched = await send(`/api/tasks/${duetId2}`, "PATCH", bobKey2,
+    { duet: { voiceA: "claude", voiceB: "claude", topic: "t", voiceAExecutorId: "ex-bob" } });
+  assert.equal(duetPatched.status, 200, JSON.stringify(duetPatched.body));
+  const duetCfg = JSON.parse((await stored(duetId2)).duet!) as { voiceAExecutorId: string | null };
+  assert.equal(duetCfg.voiceAExecutorId, null, "duet 两位讨论者也锚在归属人");
+
+  // ② parentId:归属继承父任务,所以 scope 也必须跟着父任务的归属人走。
+  const child = await send("/api/tasks", "POST", bobKey2,
+    { projectId: "p-alice", title: "child", body: "x", parentId: sharedId, executorId: "ex-bob", useWorktree: false });
+  assert.equal(child.status, 201, JSON.stringify(child.body));
+  const childRow = await stored(String(child.body.id));
+  assert.equal(childRow.ownerUserId, alice.id, "子任务归属继承父任务(§八)");
+  assert.equal(childRow.executorId, null, "归属继承过去了,执行器 scope 就得跟着走");
+
+  // 负对照:bob 在同一个共享项目里建**自己的**任务,他的执行器照常存得进去。
+  const bobOwn = await send("/api/tasks", "POST", bobKey2,
+    { projectId: "p-alice", title: "bob own", body: "x", executorId: "ex-bob", useWorktree: false });
+  assert.equal(bobOwn.status, 201, JSON.stringify(bobOwn.body));
+  const bobRow = await stored(String(bobOwn.body.id));
+  assert.equal(bobRow.ownerUserId, bob.id);
+  assert.equal(bobRow.executorId, "ex-bob", "自己的活当然用自己的执行器 —— 别把收窄做成一刀切");
 }
 
 await releaseTmpDb();
