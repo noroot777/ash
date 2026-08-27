@@ -12,14 +12,13 @@ import { relayRoot } from "../llm.js";
 import { anthropicContext1mBaseUrl, modelUsesContext1m, withContext1mSuffix } from "../anthropic-context-1m.js";
 import { calibrateSkills } from "../skills.js";
 import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
+import { ClaudeControlBridge } from "./claude-control.js";
 
 // Drives the real `claude` CLI in headless stream-json mode.
 export class ClaudeExecutor implements AgentExecutor {
   readonly type = "claude" as const;
   readonly label: string;
-  // 恢复命令的 env 前缀只留供应商；覆盖项必须走能压过 settings.json 的 --settings。
-  // CLI 会把 settings.env 写回进程环境，普通 env 前缀反而会输给用户配置；把覆盖项
-  // 留在前缀里会让复制出来的命令与 ash 实际运行不一致。
+  // 覆盖项不能放恢复命令的 env 前缀：它会输给 settings.json，导致复制命令与 ash 不一致。
   private readonly resumeEnvHint?: string;
   private bin: string;
   private startupError?: string;
@@ -55,9 +54,7 @@ export class ClaudeExecutor implements AgentExecutor {
     return this.resumeFields(cwd, sessionId).resumeCommand;
   }
 
-  /**
-   * 恢复参数按会话 cwd 现算；executor 构造时还不知道任务目录，提前冻结会漏掉项目 settings。
-   */
+  /** 恢复参数按会话 cwd 现算；构造时提前冻结会漏掉项目 settings。 */
   resumeFields(cwd: string, sessionId: string): ResumeFields {
     const settings = this.settingsPayload(cwd);
     const resumeArgs = settings ? `--settings ${shq(JSON.stringify(settings))}` : null;
@@ -73,11 +70,7 @@ export class ClaudeExecutor implements AgentExecutor {
     };
   }
 
-  /**
-   * fastMode 与 CLI 覆盖合成同一份 --settings：多个参数不会合并，最后一份整包胜出。
-   * 因此加速档、覆盖项和复制到终端的恢复参数必须共用这个 payload。
-   * cwd 必填，因为项目 settings 会参与压缩窗口换算。
-   */
+  /** fastMode、覆盖项与恢复参数共用一份 --settings；多份参数不合并，最后一份整包胜出。 */
   private settingsPayload(cwd: string): Record<string, unknown> | null {
     const settings = {
       ...(this.speed === "fast" ? { fastMode: true } : {}),
@@ -195,13 +188,7 @@ export class ClaudeExecutor implements AgentExecutor {
     sessionId: string,
     commandLine: string,
   ): ResidentHandle {
-    const resident = { interruptPending: false };
-    let reqSeq = 0;
-    const interruptLine = () => JSON.stringify({
-      type: "control_request",
-      request_id: `ash_int_${++reqSeq}`,
-      request: { subtype: "interrupt" },
-    }) + "\n";
+    const resident = new ClaudeControlBridge();
     const writeChecked = (data: string): Promise<void> => new Promise((resolve, reject) => {
       const input = child.stdin;
       if (!input || input.destroyed || input.writableEnded || !input.writable) {
@@ -223,17 +210,22 @@ export class ClaudeExecutor implements AgentExecutor {
       },
       interrupt: () => {
         resident.interruptPending = true;
-        child.stdin?.write(interruptLine());
+        child.stdin?.write(resident.request().line);
       },
-      steer: async (text: string, onInterrupted?: () => void) => {
+      steer: async (text: string, onInterrupted, beforeSend) => {
         resident.interruptPending = true;
+        const request = resident.request();
+        const ack = resident.waitFor(request.requestId);
         let interruptWritten = false;
         try {
-          await writeChecked(interruptLine());
+          await writeChecked(request.line);
           interruptWritten = true;
           onInterrupted?.();
+          await ack.promise;
+          await beforeSend?.();
           await writeChecked(userLine(text));
         } catch (error) {
+          ack.cancel();
           // interrupt 尚未写出时才撤销；一旦写出，CLI 会产生一个 turnEnd，消费层必须
           // 保留对应计数，即使紧接着的新 user 消息写失败。
           if (!interruptWritten) resident.interruptPending = false;
@@ -307,12 +299,12 @@ export function singleRunFromResident(
     commandLine: resident.commandLine,
     events,
     detached,
-    async steer(text: string) {
+    async steer(text: string, beforeSend) {
       if (!accepting) throw new Error("Claude 当前回合已经结束");
       intermediateEnds += 1;
       let interrupted = false;
       try {
-        if (resident.steer) await resident.steer(text, () => { interrupted = true; });
+        if (resident.steer) await resident.steer(text, () => { interrupted = true; }, beforeSend);
         else {
           resident.interrupt();
           interrupted = true;
@@ -348,7 +340,7 @@ const userLine = (text: string) =>
 // 拿 bin 名去猜会把别人的技能塞进 claude 的缓存。
 export async function* parseClaudeStream(
   child: ReturnType<typeof spawnAgent>,
-  resident?: { interruptPending: boolean },
+  resident?: ClaudeControlBridge,
   bin = "claude",
   calibrateAs?: AgentType,
   compactWindow: number | null = null,
@@ -393,6 +385,10 @@ export async function* parseClaudeStream(
     try {
       ev = JSON.parse(t);
     } catch {
+      return;
+    }
+    if (ev.type === "control_response") {
+      resident?.handleResponse(ev);
       return;
     }
     if (ev.type === "stream_event") {
@@ -519,6 +515,7 @@ export async function* parseClaudeStream(
   child.stderr?.on("data", (d) => (stderr += d.toString()));
   child.on("error", (err: NodeJS.ErrnoException) => {
     if (finished) return;
+    resident?.failPending(new Error(`Claude 进程错误：${err.message}`));
     push({ kind: "error", message: spawnErrorMessage(bin, err) });
     push({ kind: "done", exitStatus: 1 });
     finished = true;
@@ -527,6 +524,7 @@ export async function* parseClaudeStream(
   });
   child.on("close", (code) => {
     if (finished) return;
+    resident?.failPending(new Error("Claude 进程在 interrupt ACK 前退出"));
     flushText(); // emit any text tail that never hit the flush threshold
     const exit = code ?? 0;
     if (exit !== 0 && stderr.trim()) push({ kind: "error", message: normalizeClaudeCliError(stderr).slice(0, 2000) });
@@ -536,6 +534,7 @@ export async function* parseClaudeStream(
     resolve = null;
   });
   forceFinishOnExit(child, () => finished, (exit) => {
+    resident?.failPending(new Error("Claude 进程在 interrupt ACK 前异常收尾"));
     flushText();
     push({ kind: "error", message: "进程已退出但输出流未正常收尾(疑有残留子进程占用管道),已强制结束本回合" });
     push({ kind: "done", exitStatus: exit });

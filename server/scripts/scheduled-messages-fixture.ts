@@ -37,7 +37,13 @@ function succeed(input, exit = true) {
 function handleResident(line) {
   let message;
   try { message = JSON.parse(line); } catch { return; }
-  if (message.type === "control_request") return result("error_during_execution");
+  if (message.type === "control_request") {
+    process.stdout.write(JSON.stringify({
+      type: "control_response",
+      response: { subtype: "success", request_id: message.request_id },
+    }) + "\\n");
+    return result("error_during_execution");
+  }
   const text = message.message?.content?.map((part) => part.text || "").join("") || "";
   fs.appendFileSync(process.env.ASH_TEST_LEAD_LOG, line + "\\n");
   init();

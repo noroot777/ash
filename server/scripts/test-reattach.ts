@@ -62,6 +62,7 @@ let users = 0;
 createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
   if (message.type === "control_request") {
+    emit({type:"control_response",response:{subtype:"success",request_id:message.request_id}});
     emit({type:"result",subtype:"success",session_id:"claude-steer-session"});
     return;
   }

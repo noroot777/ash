@@ -9,7 +9,7 @@ import type { AgentType } from "@ash/shared";
 
 export interface Killable {
   kill(): void;
-  steer?(text: string): Promise<void>;
+  steer?(text: string, beforeSend?: () => void | Promise<void>): Promise<void>;
 }
 
 // 被杀回合的结算落位:手动停 → canceled(队列把它当离队);分组暂停 → paused
@@ -19,7 +19,7 @@ export type StopSettle = "canceled" | "paused";
 const handles = new Map<string, Set<Killable>>();
 const stopping = new Map<string, StopSettle>();
 type NativeSteerTarget = {
-  handle: Killable & { steer(text: string): Promise<void> };
+  handle: Killable & { steer(text: string, beforeSend?: () => void | Promise<void>): Promise<void> };
   agentType: AgentType;
   prepare(text: string): string;
   beforeDeliver?(at: string): void | Promise<void>;
@@ -73,7 +73,7 @@ export function bindNativeSteer(
 ): void {
   if (!handle.steer || !handles.get(taskId)?.has(handle)) return;
   nativeSteerTargets.set(taskId, {
-    handle: handle as Killable & { steer(text: string): Promise<void> },
+    handle: handle as Killable & { steer(text: string, beforeSend?: () => void | Promise<void>): Promise<void> },
     agentType: input.agentType,
     prepare: input.prepare ?? ((text) => text),
     beforeDeliver: input.beforeDeliver,
@@ -84,7 +84,7 @@ export function bindNativeSteer(
 export type NativeSteerReservation = {
   kind: "native";
   agentType: AgentType;
-  deliver(text: string, at: string): Promise<void>;
+  deliver(text: string, at: string, beforeSend?: () => void | Promise<void>): Promise<void>;
   cancel(): void;
 } | { kind: "busy" } | { kind: "unsupported" };
 
@@ -106,7 +106,7 @@ export function reserveNativeSteerTask(taskId: string): NativeSteerReservation {
   return {
     kind: "native",
     agentType: target.agentType,
-    async deliver(text, at) {
+    async deliver(text, at, beforeSend) {
       if (consumed) throw new Error("本次引导预约已经使用");
       consumed = true;
       try {
@@ -115,7 +115,7 @@ export function reserveNativeSteerTask(taskId: string): NativeSteerReservation {
           throw new Error("当前活动回合已经结束");
         }
         await target.beforeDeliver?.(at);
-        await target.handle.steer(target.prepare(text));
+        await target.handle.steer(target.prepare(text), beforeSend);
         // provider 已确认收到以后，消息就已经是真实投递；实时广播失败不能把它退回队列
         // 再投一次，否则同一句会进入模型两遍。
         try { target.record(text, at); } catch (error) {

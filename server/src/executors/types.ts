@@ -29,7 +29,7 @@ export interface RunHandle {
   kill(): void;
   // 单飞当前回合的原生引导通道。存在时调用方把新 user 消息送进同一个活动回合，
   // 不结束任务、不释放单飞锁；回合自然结束后这根通道随 RunHandle 一起关闭。
-  steer?(text: string): Promise<void>;
+  steer?(text: string, beforeSend?: () => void | Promise<void>): Promise<void>;
   /** 事件流结束后回收 CLI 甩出去的后台后代；没有真实进程的失败句柄可省略。 */
   cleanup?: () => Promise<void>;
   // 只有走了 detach 的这一轮才有：agent 的 pid + 已消费到的字节位置。
@@ -72,7 +72,11 @@ export interface ResidentHandle {
   // codex 侧没有原生打断,interrupt 就是杀掉当前回合的进程。
   interrupt(): void;
   /** 单飞原生引导可选的可确认写入；至少保证 interrupt 与新消息都被 stdin 接受。 */
-  steer?(text: string, onInterrupted?: () => void): Promise<void>;
+  steer?(
+    text: string,
+    onInterrupted?: () => void,
+    beforeSend?: () => void | Promise<void>,
+  ): Promise<void>;
   /** 忘掉恢复 id；Codex 常驻的下一回合会 fresh，进程级常驻执行器可不实现。 */
   dropSession?(): void;
   close(): void; // 优雅收尾:关 stdin,等它自己退出

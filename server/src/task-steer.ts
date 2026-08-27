@@ -360,13 +360,14 @@ async function deliverNativeSteer(
       return { ok: false, status: 409, error: "消息正在投递或已被处理，请稍后查看" };
     }
     previous = await clearPreviousDirectionState(message.taskId, false);
-    await reservation.deliver(message.text, now());
+    await reservation.deliver(
+      message.text,
+      now(),
+      reservation.agentType === "claude"
+        ? () => discardLateDirectionState(message.taskId, previous!.activeTurnToken!)
+        : undefined,
+    );
     delivered = true;
-    // Claude 的 interrupt ACK 先于新消息执行，可安全清掉竞态窗口里的旧完成/提问；
-    // Codex turn/steer ACK 后旧工作仍可能继续，二次清理会误删它随后写入的合法状态。
-    if (reservation.agentType === "claude") {
-      await discardLateDirectionState(message.taskId, previous.activeTurnToken!);
-    }
     await markSent(message);
     return { ok: true, taskId: message.taskId, messageId: message.id };
   } catch (error) {

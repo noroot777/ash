@@ -281,7 +281,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     });
     notify("initialized");
     const thread = opts.sessionId
-      ? await request("thread/resume", threadParams(opts, { threadId: opts.sessionId, excludeTurns: true }))
+      ? await request("thread/resume", threadParams(opts, { threadId: opts.sessionId }))
       : await request("thread/start", threadParams(opts));
     emitSession(thread.thread?.id ?? opts.sessionId ?? "");
     const started = await request("turn/start", {

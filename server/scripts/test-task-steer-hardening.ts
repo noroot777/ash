@@ -163,6 +163,7 @@ try {
     task("review-task", { reviewOf: "target" }),
     task("reviewer-role"),
     task("ordered"),
+    task("claude-native-state", { activeTurnToken: "claude-native-token" }),
     task("codex-native-state", { activeTurnToken: "codex-native-token" }),
     task("stopping", { activeTurnToken: "stopping-token" }),
     task("late-stop-db", {
@@ -194,6 +195,7 @@ try {
     message("m-reviewer-role", "reviewer-role"),
     message("ordered-a", "ordered"),
     message("ordered-b", "ordered"),
+    message("m-claude-native-state", "claude-native-state"),
     message("m-codex-native-state", "codex-native-state"),
     message("m-stopping", "stopping"),
     message("m-late-stop-db", "late-stop-db"),
@@ -239,6 +241,34 @@ try {
   runs.untrackRun("ordered", orderedHandle);
   runs.releaseTurn("ordered");
   console.log("✓ 引导只能消费队首，API 无法把较晚消息反序提前");
+
+  assert.equal(runs.claimTurn("claude-native-state", "single"), true);
+  const claudeNativeHandle = {
+    kill: () => {},
+    steer: async (_text: string, beforeSend?: () => void | Promise<void>) => {
+      runs.confirmDone("claude-native-state");
+      await db.update(tasks).set({
+        completeConfirmedAt: "2026-08-26T11:59:59.000Z",
+        resumePrompt: "旧方向迟到的检查点",
+        question: "旧方向迟到的问题",
+      }).where(eq(tasks.id, "claude-native-state"));
+      await beforeSend?.();
+      await db.update(tasks).set({ question: "新方向发送后的问题" })
+        .where(eq(tasks.id, "claude-native-state"));
+    },
+  };
+  runs.trackRun("claude-native-state", claudeNativeHandle);
+  runs.bindNativeSteer("claude-native-state", claudeNativeHandle, { agentType: "claude", record: () => {} });
+  assert.equal((await steer.steerQueuedMessage("m-claude-native-state")).ok, true);
+  const claudeNativeState = (await db.select().from(tasks)
+    .where(eq(tasks.id, "claude-native-state"))).at(0)!;
+  assert.equal(claudeNativeState.completeConfirmedAt, null, "interrupt ACK 前旧方向的完成票必须清掉");
+  assert.equal(claudeNativeState.resumePrompt, null, "interrupt ACK 前旧方向的检查点必须清掉");
+  assert.equal(claudeNativeState.question, "新方向发送后的问题", "ACK 后的新方向状态不得被二次清理");
+  assert.equal(runs.takeConfirmed("claude-native-state"), false, "旧方向的内存完成票也必须清掉");
+  runs.untrackRun("claude-native-state", claudeNativeHandle);
+  runs.releaseTurn("claude-native-state");
+  console.log("✓ Claude interrupt ACK 精确隔离旧方向与新方向状态");
 
   assert.equal(runs.claimTurn("codex-native-state", "single"), true);
   const codexNativeHandle = {
