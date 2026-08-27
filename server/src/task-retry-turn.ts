@@ -47,6 +47,7 @@ import { RESUME_PROMPT } from "./run-prompts.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { readableRunPath, sessionTranscriptPath } from "./transcript.js";
+import { actorOf, ownerIdOf } from "./auth/context.js";
 
 // 分档往回读会话正文，理由同 `task-follow-up.ts`：正文是一路追加的 Markdown，可能几 MB，
 // 而要找的那一段就在末尾附近；agent 一条回复动辄几十 KB，固定尾巴长度不够用。
@@ -330,6 +331,8 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
       // 这之后被改过。会话行记着那一轮真正生效的 profile 主键与模型/思考强度，按它整套
       // 重放；`agents.name` 反查是错的 —— 名字非唯一、可改，重名时会选中另一位（finding 5）。
       // 老会话行没有这三列（null）：只能退回按类型走默认 profile，与旧行为一致。
+      // 重跑也是真人回合:共享项目里重跑别人的任务,烧的是**我**的 key(§八)。
+      const acting = ownerIdOf(actorOf(c));
       const route = latest.executorId
         ? {
           agent: latest.agentType as AgentType,
@@ -347,6 +350,7 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
         if (trimmed || paths.length) {
           handoff(continueTask(taskId, trimmed, {
             ...route,
+            actingUserId: acting,
             attachments: paths,
             // 后端代写的那句（审查打回等）重投时仍标 by:"system"：作者没变，重来一次不该
             // 把机器的话记成我说的。
@@ -366,8 +370,8 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
       // agentType 挑会话，跟界面头部那颗「运行」同一条路）。
       handoff(
         latest.executorId
-          ? continueTask(taskId, RESUME_PROMPT, { ...route, system: "retry", resumeSessionId: latest.id, turnHeld: true, freezeGuard: true })
-          : resumeOrRunTask(taskId, { reason: "retry", turnHeld: true }),
+          ? continueTask(taskId, RESUME_PROMPT, { ...route, actingUserId: acting, system: "retry", resumeSessionId: latest.id, turnHeld: true, freezeGuard: true })
+          : resumeOrRunTask(taskId, { reason: "retry", turnHeld: true, actingUserId: acting }),
         "重跑上一回合",
       );
       return c.json({ started: true, mode: "resume" }, 202);

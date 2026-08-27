@@ -19,10 +19,13 @@ import { freeReviewResumeOptions } from "./free-workflow.js";
 // scheduler) keep chaining on the same promise.
 export async function resumeOrRunTask(
   taskId: string,
-  opts: { reason?: ResumeReason; turnHeld?: boolean } = {},
+  opts: { reason?: ResumeReason; turnHeld?: boolean; actingUserId?: string | null } = {},
 ): Promise<void> {
+  // `actingUserId` 一路原样往下传:它决定这一轮烧谁的 key(§八)。这里只是个中转,
+  // 不给默认值 —— 后端触发的那几路本来就该退回任务归属人。
+  const acting = opts.actingUserId ?? undefined;
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!task || task.mode !== "single") return runTask(taskId, { turnHeld: opts.turnHeld }); // duets/missing → unchanged path
+  if (!task || task.mode !== "single") return runTask(taskId, { turnHeld: opts.turnHeld, actingUserId: acting }); // duets/missing → unchanged path
   // 检查点续跑：resumePrompt 当 user 消息回灌同一会话，先清空避免再次 settle 时又认成
   // paused（调度器会先标 queued，不能只看 paused）。reviewing run 挂着 = 中断的是审查
   // 回合：续跑必须带回 reviewer 身份与配置，否则以 single 恢复实现会话，审查链收不了尾。
@@ -37,7 +40,7 @@ export async function resumeOrRunTask(
       .where(and(eq(tasks.id, taskId), eq(tasks.resumePrompt, rp)))
       .returning({ id: tasks.id });
     if (cleared.length) {
-      const started = await continueTask(taskId, rp, { system: opts.reason ?? "run", turnHeld: opts.turnHeld, ...(reviewerRoute ?? {}) });
+      const started = await continueTask(taskId, rp, { system: opts.reason ?? "run", turnHeld: opts.turnHeld, actingUserId: acting, ...(reviewerRoute ?? {}) });
       if (!started) {
         // 回合被别人抢了（典型：上一回合的 turn 还没 release）：checkpoint 指令一个字都没
         // 送出去，必须放回原位等下一次触发——清了不回写就是永久丢失（审查实测复现）。
@@ -60,8 +63,8 @@ export async function resumeOrRunTask(
     .at(0);
   if (prev?.cliSessionId) {
     const reviewerRoute = await freeReviewResumeOptions(taskId);
-    await continueTask(taskId, RESUME_PROMPT, { system: opts.reason ?? "run", turnHeld: opts.turnHeld, ...(reviewerRoute ?? {}) });
+    await continueTask(taskId, RESUME_PROMPT, { system: opts.reason ?? "run", turnHeld: opts.turnHeld, actingUserId: acting, ...(reviewerRoute ?? {}) });
     return;
   }
-  return runTask(taskId, { turnHeld: opts.turnHeld }); // no resumable session → fresh
+  return runTask(taskId, { turnHeld: opts.turnHeld, actingUserId: acting }); // no resumable session → fresh
 }

@@ -47,6 +47,8 @@ export async function enqueueMessage(input: {
   model?: string | null;
   reasoningEffort?: string | null;
   sessionRole?: string | null;
+  /** 谁发的这条(多人模式);投递时按它解析执行器与 CLI 环境。 */
+  ownerUserId?: string | null;
   mode?: ScheduledMessageMode;
   // 排队消息不看钟点,sendAt 只用来排先后,所以默认取此刻。
   sendAt?: Date;
@@ -61,6 +63,7 @@ export async function enqueueMessage(input: {
     model: input.model ?? null,
     reasoningEffort: input.reasoningEffort ?? null,
     sessionRole: input.sessionRole ?? null,
+    ownerUserId: input.ownerUserId ?? null,
     mode: input.mode ?? ("queued" satisfies ScheduledMessageMode),
     sendAt: (input.sendAt ?? new Date()).toISOString(),
     status: "pending" as const,
@@ -214,6 +217,8 @@ export function deliveryOptions(m: Row) {
     model: m.model ?? null,
     reasoningEffort: m.reasoningEffort ?? null,
     ...(m.sessionRole ? { sessionRole: m.sessionRole as "single" | "reviewer" } : {}),
+    // 排队/定时消息落地时,烧的仍是**当时排队那个人**的 key,不退回任务归属人。
+    ...(m.ownerUserId ? { actingUserId: m.ownerUserId } : {}),
   };
 }
 

@@ -267,6 +267,10 @@ export const api = {
   },
   runTask: (taskId: string): Promise<unknown> =>
     request(`/tasks/${id(taskId)}/run`, { method: "POST" }),
+  // 「我现在动它，会不会被换掉执行器」。多人模式的共享项目里才可能非空；自用模式恒 null。
+  executorPreflight: (taskId: string): Promise<{
+    downgrade: { fromName: string; fromType: string; fromOwner: string | null; toName: string | null } | null;
+  }> => request(`/tasks/${id(taskId)}/executor-preflight`),
   stopTask: (taskId: string): Promise<unknown> =>
     request(`/tasks/${id(taskId)}/stop`, { method: "POST" }),
   retryTask: (taskId: string): Promise<unknown> =>

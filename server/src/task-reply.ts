@@ -5,6 +5,7 @@ import type { Context } from "hono";
 import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
 import { handoffBlockReason } from "./handoff-guard.js";
+import { actorOf, ownerIdOf } from "./auth/context.js";
 import { continueTask } from "./orchestrator.js";
 import { enqueueMessage } from "./pending-messages.js";
 import { nativeCliCommand } from "./skills.js";
@@ -63,6 +64,7 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
       executorId: b.executorId ?? null,
       model: b.model?.trim() || null,
       reasoningEffort: b.reasoningEffort?.trim() || null,
+      ownerUserId: ownerIdOf(actorOf(c)),
       mode: b.sendAt ? "timed" : "queued",
       sendAt: when,
     });
@@ -75,6 +77,8 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
     executorId: b.executorId ?? null,
     model: b.model?.trim() || null,
     reasoningEffort: b.reasoningEffort?.trim() || null,
+    // 共享项目里在别人的任务上回复:这一轮烧的是**我**的 key(§八)。
+    actingUserId: ownerIdOf(actorOf(c)),
   };
   const text = (b.text ?? "").trim();
   const teamNative = isTeam ? nativeCliCommand(await leadTypeOf(taskId), text) : null;
@@ -89,7 +93,7 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
   }
   void continueTask(taskId, text, route).then(async (started) => {
     if (started) return;
-    await enqueueMessage({ taskId, text, ...route, agent: b.agent ?? null });
+    await enqueueMessage({ taskId, text, ...route, agent: b.agent ?? null, ownerUserId: route.actingUserId });
   });
   return c.json({ started: true }, 202);
 }

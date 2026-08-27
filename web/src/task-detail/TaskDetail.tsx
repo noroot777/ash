@@ -40,6 +40,7 @@ import { TaskReplyRail } from "./TaskReplyRail.tsx";
 import { FreeReviewDialog } from "../free-workflow/FreeReviewDialog.tsx";
 import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import { freeReviewRetryable } from "./turnRetry.ts";
+import { useExecutorDowngradeConfirm } from "./useExecutorDowngradeConfirm.tsx";
 
 interface TaskInspectorContext {
   task: Task;
@@ -151,6 +152,8 @@ export function TaskDetail({
 }) {
   const [groups, setGroups] = useState<Group[]>([]);
   const [busy, setBusy] = useState(false);
+  // 共享项目里动别人的任务会换执行器 —— 起轮之前先确认(§八)。自用模式恒不弹。
+  const { confirmRun, dialog: executorDowngradeDialog } = useExecutorDowngradeConfirm(task.id);
   const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
   // 中间那一栏同一时刻只放一样东西：会话 / 审查工作区 / 文件 / 工作区 diff。
   const [openFilePath, setOpenFilePath] = useState<string | null>(null);
@@ -263,6 +266,8 @@ export function TaskDetail({
 
   const perform = async (action: Exclude<PrimaryAction, null>) => {
     if (action === "accept") return changeReviewOpen(true);
+    // 会起一轮的动作先过「换执行器」确认闸(§八)。stop / unarchive 不起轮,不问。
+    if ((action === "run" || action === "retry") && !(await confirmRun())) return;
     setBusy(true);
     try {
       if (action === "run") await api.runTask(task.id);
@@ -422,6 +427,7 @@ export function TaskDetail({
                     error={conversation.error}
                     onRetryTurn={async (target) => {
                       try {
+                        if (!(await confirmRun())) return;
                         const result = await api.retryTurn(task.id, target.sessionId);
                         notify(result.mode === "review"
                           ? "已重跑这一轮审查"
@@ -463,6 +469,7 @@ export function TaskDetail({
                       : undefined}
                     skills={skills.skills}
                     onSend={async (text, attachments, { executorLabel, ...options }) => {
+                      if (!(await confirmRun())) return null;
                       const result = await api.replyTask(task.id, text, { attachments, ...options });
                       // 按**结果**分支而不是按请求参数:任务正在跑时后端会把这条落成
                       // 排队消息(前端没传 sendAt 也一样)。没真发出去就绝不能先贴进会话,
@@ -535,6 +542,7 @@ export function TaskDetail({
                 notify={notify}
               />
             )}
+            {executorDowngradeDialog}
           </div>
           {inspectorMode === "drawer" && inspectorToggleTarget
             ? createPortal(toggleButton, inspectorToggleTarget)

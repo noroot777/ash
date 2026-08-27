@@ -44,6 +44,7 @@ import { haltTeam } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
 import { setTaskQuestion } from "./task-question.js";
 import { readableRunPath } from "./transcript.js";
+import { actorOf, ownerIdOf } from "./auth/context.js";
 import { now } from "./util.js";
 
 export function mountTaskRunRoutes(api: Hono): void {
@@ -119,7 +120,7 @@ api.post("/tasks/:id/run", async (c) => {
       releaseTurn(taskId);
       return c.json({ error: "任务正在验收（含发布尾段），结束后再运行", status: r.status }, 409);
     }
-    void resumeOrRunTask(taskId, { reason: "run", turnHeld: true });
+    void resumeOrRunTask(taskId, { reason: "run", turnHeld: true, actingUserId: ownerIdOf(actorOf(c)) });
     return c.json({ started: true }, 202);
   }
   // **最后一个 await 之后**原子占位再启动：只读预检查后的任何 await 间隙里另一次启动
@@ -136,7 +137,7 @@ api.post("/tasks/:id/run", async (c) => {
     return c.json({ error: "任务正在验收（含发布尾段），结束后再运行", status: r.status }, 409);
   }
   if (r.mode === "duet") { void runDuet(taskId, { turnHeld: true }); return c.json({ started: true }, 202); }
-  void resumeOrRunTask(taskId, { reason: "run", turnHeld: true });
+  void resumeOrRunTask(taskId, { reason: "run", turnHeld: true, actingUserId: ownerIdOf(actorOf(c)) });
   return c.json({ started: true }, 202);
 });
 
@@ -186,7 +187,7 @@ api.post("/tasks/:id/fire", async (c) => {
     return c.json({ error: "任务正在验收（含发布尾段），结束后再触发", status: r.status }, 409);
   }
   if (r.mode === "duet") { void runDuet(taskId, { turnHeld: true }); return c.json({ started: true, fresh: true }, 202); }
-  void runTask(taskId, { turnHeld: true }); // 全新一轮,永不 resume
+  void runTask(taskId, { turnHeld: true, actingUserId: ownerIdOf(actorOf(c)) }); // 全新一轮,永不 resume
   return c.json({ started: true, fresh: true }, 202);
 });
 

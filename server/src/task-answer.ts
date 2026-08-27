@@ -8,6 +8,7 @@ import { handoffBlockReason } from "./handoff-guard.js";
 import { continueTask } from "./orchestrator.js";
 import { enqueueMessage } from "./pending-messages.js";
 import { askingAgentFor } from "./task-question.js";
+import { actorOf, ownerIdOf } from "./auth/context.js";
 import { now } from "./util.js";
 
 export type TaskAnswerBody = { answer?: string };
@@ -45,9 +46,11 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
     ? { agent: asker.agent, executorId: asker.executorId, model: null, reasoningEffort: null }
     : {});
   const answerText = `【答复】你之前的提问:「${task.question}」\n\n${answer}\n\n${tail}`;
-  void continueTask(taskId, answerText, route).then(async (started) => {
+  // 答复也是真人回合:共享项目里给别人的任务答疑,烧的是**我**的 key(§八)。
+  const acting = ownerIdOf(actorOf(c));
+  void continueTask(taskId, answerText, { ...route, actingUserId: acting }).then(async (started) => {
     if (started) return;
-    await enqueueMessage({ taskId, text: answerText, ...route });
+    await enqueueMessage({ taskId, text: answerText, ...route, ownerUserId: acting });
   });
   return c.json({ answered: true, resumed: true });
 }

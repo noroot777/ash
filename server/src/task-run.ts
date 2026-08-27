@@ -34,7 +34,7 @@ import { reportTurnFailure } from "./turn-failure.js";
 import { AUTONOMY, COMPLETION_PROTOCOL, DIRECTION_PROTOCOL } from "./run-prompts.js";
 import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
-import { runEnvForTask } from "./auth/run-env.js";
+import { runEnvForOwner } from "./auth/run-env.js";
 
 // 单任务的 **fresh run**:从任务描述起一条全新会话。续聊/召唤那一路(resume 已有会话、
 // 把用户原话送进去)在 orchestrator.ts 的 continueTask —— 两条路的前置条件、prompt 拼法
@@ -42,7 +42,13 @@ import { runEnvForTask } from "./auth/run-env.js";
 
 // M1: execute a single-agent task in the project's working dir, stream output over
 // SSE, and persist a session credential.
-export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {}): Promise<void> {
+// `actingUserId`:这一次起跑是谁点的(多人模式)。共享项目里 B 可以手点跑 A 的任务,
+// 那一轮烧的是 B 自己的 key —— 见 continueTask 同名参数的注释。后端路径(调度器、
+// 队列推进、上游唤醒)不传,退回任务归属人。
+export async function runTask(
+  taskId: string,
+  opts: { turnHeld?: boolean; actingUserId?: string | null } = {},
+): Promise<void> {
   // 团队任务(§Team)走常驻调度台,不占单飞锁 —— 它的「一次运行」是整段常驻,
   // 不是一个回合。放在最前面,于是 /tasks/:id/run、retry、queue 推进都自动生效。
   const head = (await db
@@ -108,10 +114,11 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     // 也要记 —— 漏交卷最常发生在这一路,而 turn-baseline 只给真人续聊拍照。
     await recordTurnStart(taskId, ws.path);
     const agentType = (task.agentType as AgentType) ?? "claude";
-    // 多人模式:用**任务归属人**的执行器与供应商跑(§八)。别人的执行器解析不到时
-    // 降级到本人的默认执行器,并把这次降级如实写进时间线 —— 烧的是他自己的 key。
-    const owner = await executorOwnerScope(task.ownerUserId);
-    const blocked = await dispatchRejection({ agentType, executorId: task.executorId });
+    // 多人模式:用**这一次起跑是谁点的**那个人的执行器与供应商跑(§八)。别人的执行器
+    // 解析不到时降级到本人的默认执行器,并把这次降级如实写进时间线 —— 烧的是他自己的 key。
+    const runOwner = opts.actingUserId ?? task.ownerUserId;
+    const owner = await executorOwnerScope(runOwner);
+    const blocked = await dispatchRejection({ agentType, executorId: task.executorId, ...owner });
     if (blocked) throw new Error(blocked);
     const { executor: ex, profileId, profileFingerprint, downgradedFrom } = await resolveExecutorWithProfile({
       executorId: task.executorId,
@@ -126,7 +133,7 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     const TITLE_HINT =
       "请在正式开始前，第一行只输出：标题：<不超过14字、概括本次任务的简短标题>，然后换行，再正常完成下面的任务。\n\n任务：\n";
     const reviewTask = !!task.reviewOf;
-    const objective = withSkillInvocation({ agentType, cwd: ws.path, text: initialTaskObjective(task.body, task.title, reviewTask), userId: task.ownerUserId });
+    const objective = withSkillInvocation({ agentType, cwd: ws.path, text: initialTaskObjective(task.body, task.title, reviewTask), userId: runOwner });
     // 团队执行者多一段前言(卡住走 ask_question 直达调度者、别自己扩张边界)。
     // 只拼进 prompt,不写进 tasks.body —— body 是调度者给的需求正文,界面展示那份。
     const teamPreamble = await workerPreambleFor(task);
@@ -158,7 +165,7 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     const run = ex.runSteerable?.bind(ex) ?? ex.run.bind(ex);
     handle = run({
       prompt, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart), detach,
-      env: { ...(await runEnvForTask(taskId, agentType)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken },
+      env: { ...(await runEnvForOwner(runOwner, agentType)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken },
     });
     trackRun(taskId, handle);
 
@@ -216,7 +223,7 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
       handle, out, turnStart, cliSessionId, autoTitle,
       nativeSteer: {
         prepare: (text) => withGlobalBrowserPolicy(
-          withSkillInvocation({ agentType, cwd: ws.path, text, userId: task.ownerUserId }),
+          withSkillInvocation({ agentType, cwd: ws.path, text, userId: runOwner }),
           "reminder",
         ),
         record: (text, at) => recordUserConversationTurn({

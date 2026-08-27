@@ -51,7 +51,9 @@ export function ReplyBox({
       // 它补的是「消息已发出、会话行还没落库」那一两秒里横幅没名字可报的空窗。
       executorLabel?: string | null;
     },
-  ) => Promise<ReplyTaskResult>;
+    // 返回 null = **这一句没送出去,而且不是错误**(典型:换执行器的确认框被取消)。
+    // 输入框里的字、附件、@选中的执行器全部原样留着，用户点一下就能重来。
+  ) => Promise<ReplyTaskResult | null>;
   command?: {
     matches: (text: string) => boolean;
     onSubmit: (text: string) => void;
@@ -293,6 +295,7 @@ export function ReplyBox({
           executorLabel: activeExecutorLabel,
         },
       );
+      if (result === null) return; // 用户主动取消：什么都别清
       if ("scheduled" in result) scheduled.add(result.message);
       setValue("");
       uploads.clear();

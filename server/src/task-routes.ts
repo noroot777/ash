@@ -17,9 +17,9 @@ import { isTurnClaimed } from "./runs.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { createTasks, enrichTasks, publishTaskUpdated, toTaskListItem } from "./task-store.js";
 import { attachmentsPrompt, id, now, taskBody } from "./util.js";
-import { actorOf } from "./auth/context.js";
+import { actorOf, ownerIdOf } from "./auth/context.js";
 import { canSeeProject, visibleProjectIds, visibleTaskIds } from "./auth/visibility.js";
-import { ownerIdOf } from "./auth/context.js";
+import { executorDowngradePreflight } from "./auth/dispatch-gate.js";
 import { inheritOwner } from "./auth/run-env.js";
 
 // 任务行删除时连关联状态一起收：自由审查链(run/round)、预约槽、事件、排队/定时消息、
@@ -110,6 +110,16 @@ api.get("/tasks/:id", async (c) => {
   // 只是不是我的项目」。
   if (!r || !(await canSeeProject(actorOf(c), r.projectId))) return c.json({ error: "not found" }, 404);
   return c.json((await enrichTasks([r]))[0]);
+});
+
+// 「我现在动它,会不会被换掉执行器」。前端在回复/重跑/派审之前问一次,拿到非 null
+// 就弹确认框(§八:不静默替换 —— 换执行器可能换模型档位,产出会变)。
+// 自用模式恒 null,那条路一个字都不多问。
+api.get("/tasks/:id/executor-preflight", async (c) => {
+  const taskId = c.req.param("id");
+  const r = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!r || !(await canSeeProject(actorOf(c), r.projectId))) return c.json({ error: "not found" }, 404);
+  return c.json({ downgrade: await executorDowngradePreflight(taskId, ownerIdOf(actorOf(c))) });
 });
 
 api.post("/tasks", async (c) => {

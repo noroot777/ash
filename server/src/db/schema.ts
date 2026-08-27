@@ -590,6 +590,10 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   // 时答案会落到这里排队——不存 role 的话投递会以 single 身份进实现会话，reviewer 永远
   // 收不到答案（审查实测复现）。null = 普通消息。
   sessionRole: text("session_role"),
+  // 这条消息是**谁发的**(多人模式)。投递时按它解析执行器/供应商/CLI 环境与 git 署名
+  // —— 排队消息可能几分钟后才送出去,那时不能退回「任务归属人」:在别人的任务上排的
+  // 队,烧的仍该是排队那个人自己的 key(§八)。null = 自用模式或存量行。
+  ownerUserId: text("owner_user_id"),
   mode: text("mode").notNull().default("timed"), // timed | queued
   sendAt: text("send_at").notNull(), // timed=ISO 到期时间；queued=入队时刻（只用来排先后）
   status: text("status").notNull().default("pending"), // pending | sent | canceled

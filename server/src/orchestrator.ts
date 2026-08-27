@@ -34,7 +34,7 @@ import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { reportTurnFailure } from "./turn-failure.js";
-import { runEnvForTask } from "./auth/run-env.js";
+import { runEnvForOwner } from "./auth/run-env.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
 import {
   COLLAB_INVITE, SYS_MARKER,
@@ -109,6 +109,15 @@ export async function continueTask(
      * 能把它跟我自己打的字分开。默认 false = 真人发的。
      */
     byBackend?: boolean;
+    /**
+     * **这一回合是谁点的**(多人模式)。共享项目里 B 可以在 A 的任务上回复/重跑/派审,
+     * 而那一轮烧的是 B 自己的 key —— 所以执行器、供应商、个人 CLI 环境与 git 署名
+     * 全部按 B 解析,而不是按 `tasks.ownerUserId`(§八「共享项目里的跨人操作」)。
+     *
+     * **只有真人发起的路径传它**:调度器、队列推进、上游唤醒、团队派活这些后端路径
+     * 不传,它们照旧按任务归属人跑 —— 那才是「这个任务是谁的活」。
+     */
+    actingUserId?: string | null;
     /**
      * 调用方已在入口**原子占住** turn（claimTurn 成功后传 true）：这里不再抢锁，用
      * sessionRole 接管（reclaimTurn）并照常在 finally 释放。入口占位是并发双 202 谎报
@@ -252,12 +261,15 @@ export async function continueTask(
       .set({ followUpFrom, nativeTurn: !!nativeCommand, completeConfirmedAt: null, activeTurnToken: turnToken, activeDirectionToken: directionToken, activeDirectionVersion: 1, updatedAt: now() })
       .where(eq(tasks.id, taskId));
 
-    // 续聊/重跑同样按**任务归属人**解析执行器(§八)。跨人时降级到本人的默认执行器,
-    // 并把这次降级写进时间线 —— 换执行器可能换模型档位,产出会变,不能静默。
-    const owner = await executorOwnerScope(task.ownerUserId);
+    // 续聊/重跑同样按**这一回合是谁点的**解析执行器(§八)。跨人时降级到本人的默认
+    // 执行器,并把这次降级写进时间线 —— 换执行器可能换模型档位,产出会变,不能静默。
+    // 后端发起的回合不带 actingUserId,退回任务归属人。
+    const runOwner = opts.actingUserId ?? task.ownerUserId;
+    const owner = await executorOwnerScope(runOwner);
     const dispatchBlocked = await dispatchRejection({
       agentType: agent,
       executorId: summoned ? opts.executorId ?? null : task.executorId,
+      ...owner,
     });
     if (dispatchBlocked) throw new Error(dispatchBlocked);
     const { executor: ex, profileId, profileFingerprint, downgradedFrom } = await resolveExecutorWithProfile({
@@ -351,7 +363,7 @@ export async function continueTask(
     await recordTurnStart(taskId, cwd);
     const invited = !prev; // first time this agent is pulled into the task
     const userTurnText = userText + attachmentsPrompt(opts.attachments);
-    const promptedUserTurnText = withSkillInvocation({ agentType: agent, cwd, text: userTurnText, userId: task.ownerUserId });
+    const promptedUserTurnText = withSkillInvocation({ agentType: agent, cwd, text: userTurnText, userId: runOwner });
     const sharedTeamWorker = !task.useWorktree && (await workerPreambleFor(task)).length > 0;
     // 验证回合（旧的独立审查任务，或这个任务自己身上的就地验证轮）：完成协议的
     // 验收那一句要换掉 —— 这一轮的产出是结论和证据，不是「这个任务可以合并了」。
@@ -414,7 +426,7 @@ export async function continueTask(
       trace: runTracePaths(runDir, sessId, turnStart),
       detach,
       // 多人模式:个人 CLI 配置目录 + git 署名(auth/run-env.ts)。自用模式恒为空对象。
-      env: { ...(await runEnvForTask(taskId, agent)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken },
+      env: { ...(await runEnvForOwner(runOwner, agent)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken },
     });
     trackRun(taskId, handle);
 
@@ -538,7 +550,7 @@ export async function continueTask(
       handle, out, turnStart, cliSessionId, autoTitle: false, role: sessionRole,
       nativeSteer: {
         prepare: (text) => withGlobalBrowserPolicy(
-          withSkillInvocation({ agentType: agent, cwd, text, userId: task.ownerUserId }),
+          withSkillInvocation({ agentType: agent, cwd, text, userId: runOwner }),
           "reminder",
         ),
         record: (text, at) => recordUserConversationTurn({
