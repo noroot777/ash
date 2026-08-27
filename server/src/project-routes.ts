@@ -2,7 +2,8 @@ import { eq, inArray } from "drizzle-orm";
 import { rmSync } from "node:fs";
 import { join, basename } from "node:path";
 import type { Context, Hono } from "hono";
-import type { Project, ProjectView } from "@ash/shared";
+import type { Project, ProjectRole, ProjectView } from "@ash/shared";
+import { isBuiltinKey } from "@ash/shared/workflow-presets";
 import { RUNS_DIR, DATA_DIR } from "./paths.js";
 import { db } from "./db/index.js";
 import { projects, groups, tasks, notes, noteTasks } from "./db/schema.js";
@@ -17,11 +18,13 @@ import { ensureProjectDir } from "./project-dir.js";
 import { deleteProjectGitCredential } from "./git-credentials.js";
 import { actorOf, authErrorResponse, ownerIdOf } from "./auth/context.js";
 import { ownedScope } from "./auth/owned.js";
+import { isMultiUser } from "./auth/mode.js";
 import { projectPathRejection } from "./auth/path-scope.js";
 import {
   deleteProjectMembers,
   projectOfTask,
   projectRoleOf,
+  projectRolesOf,
   requireProjectAccess,
   requireProjectAdmin,
   seedProjectOwner,
@@ -37,17 +40,26 @@ export function mountProjectRoutes(api: Hono): void {
   // ── projects ───────────────────────────────────────────────────────────────
   // repoPath health is computed, never persisted (§ path-awareness). The list
   // uses the cheap sync check; per-id and path-check endpoints do the full git probe.
-  const toProject = (r: typeof projects.$inferSelect): ProjectView => ({
+  //
+  // `myRole` 是**问的这个人**在这个项目里的角色(§四),前端据它决定管理控件给不给看。
+  // 它是必填的:少写一处就是「界面上以为自己能改、点下去 403」,类型上钉死比事后 grep 稳。
+  const toProject = (r: typeof projects.$inferSelect, myRole: ProjectRole): ProjectView => ({
     ...r,
     health: projectHealthLight(r.repoPath),
+    myRole,
   });
 
   // 可见性过滤(§十二):普通用户只看得到自己是成员的项目。`visible === null` 表示
   // 不设限(自用模式 / 实例管理员),这时走的是与本功能上线前完全一样的那条路。
   api.get("/projects", async (c) => {
-    const visible = await visibleProjectIds(actorOf(c));
+    const actor = actorOf(c);
+    const visible = await visibleProjectIds(actor);
+    // 角色一次取完:一行查一次成员表的话,项目一多就是 N 次查询。
+    const roles = await projectRolesOf(actor);
     const rows = await db.select().from(projects);
-    return c.json(rows.filter((r) => visible === null || visible.has(r.id)).map(toProject));
+    return c.json(rows
+      .filter((r) => visible === null || visible.has(r.id))
+      .map((r) => toProject(r, roles === null ? "admin" : roles.get(r.id) ?? "member")));
   });
 
   api.post("/projects", async (c) => {
@@ -81,7 +93,7 @@ export function mountProjectRoutes(api: Hono): void {
     await db.insert(projects).values(row);
     // 建的人立刻成为项目管理员 —— 否则他自己都进不去自己刚建的项目。
     await seedProjectOwner(row.id, actor);
-    return c.json(toProject(row), 201);
+    return c.json(toProject(row, "admin"), 201);
   });
 
   // Find-or-create a project by repoPath — idempotent, agent-friendly. Lets an agent
@@ -108,7 +120,7 @@ export function mountProjectRoutes(api: Hono): void {
     // 1) Canonical path match — the happy path, fully idempotent across path spellings.
     const pathHits = all.filter((p) => repoKey(p.repoPath) === key);
     if (pathHits.length > 1) return c.json({ error: "repoPath 匹配到多个项目，请改用 projectId", repoPath }, 409);
-    if (pathHits.length === 1) return c.json(toProject(pathHits[0]), 200);
+    if (pathHits.length === 1) return c.json(toProject(pathHits[0], (await projectRoleOf(actor, pathHits[0].id)) ?? "member"), 200);
 
     // 2) No path match: adopt a path-less project with the same name — the common
     //    case where the user created the project in the UI by name only (no repoPath).
@@ -131,7 +143,7 @@ export function mountProjectRoutes(api: Hono): void {
       }
       await db.update(projects).set({ repoPath }).where(eq(projects.id, orphans[0].id));
       const adopted = (await db.select().from(projects).where(eq(projects.id, orphans[0].id))).at(0)!;
-      return c.json(toProject(adopted), 200);
+      return c.json(toProject(adopted, "admin"), 200);
     }
 
     // 3) Genuinely new project.
@@ -146,7 +158,7 @@ export function mountProjectRoutes(api: Hono): void {
     };
     await db.insert(projects).values(row);
     await seedProjectOwner(row.id, actor);
-    return c.json(toProject(row), 201);
+    return c.json(toProject(row, "admin"), 201);
   });
 
   api.patch("/projects/:id", async (c) => {
@@ -181,15 +193,24 @@ export function mountProjectRoutes(api: Hono): void {
       const wid = typeof b.workflowId === "string" ? b.workflowId.trim() : "";
       // 起手式是**个人面**资源(§八:逐人隔离,实例管理员也看不见别人的)。所以这里必须按
       // 调用者自己的 scope 查 —— 不传 scope 的话 `owner === null` 表示不设限,于是一个
-      // 自己根本读不出来的 id 也能被写进共享项目行:该 workflow 的主人之后在这个项目里建
-      // 任务,用的就是别人替他选的那条私有起手式,而这个字段还顺带成了存在性探测面
-      // (第 5 轮审查 P2)。自用模式下 ownedScope 是 null,行为与本功能上线前一致。
+      // 自己根本读不出来的 id 也能被写进共享项目行(第 5 轮审查 P2)。
+      // 自用模式下 ownedScope 是 null,行为与本功能上线前一致。
       if (wid && !(await findWorkflow(wid, await ownedScope(actor)))) return c.json({ error: "起手式不存在" }, 400);
+      // 光「我看得见」还不够:项目行是**共享**的,而自建起手式只有作者看得见。把它设成项目
+      // 默认,对别人来说就是一个解析不出来的 id —— 他们的新任务**静默**落回系统默认,界面上
+      // 却写着「跟随本项目」(第 6 轮审查 P1)。所以多人模式下项目默认只收系统自带那几条:
+      // 它们按 key 人人都有(各自可以有自己的覆写,那正是自带条目的设计语义)。
+      // 自用模式下只有一个人,不存在「别人看不见」,照旧随便选。
+      if (wid && (await isMultiUser()) && !isBuiltinKey(wid)) {
+        return c.json({
+          error: "项目默认起手式只能选系统自带的那几条：自建起手式是你的个人资源，别人看不见它，设成项目默认只会让别人的新任务悄悄落回系统默认",
+        }, 400);
+      }
       patch.workflowId = wid || null;
     }
     if (Object.keys(patch).length) await db.update(projects).set(patch).where(eq(projects.id, pid));
     const updated = (await db.select().from(projects).where(eq(projects.id, pid))).at(0)!;
-    return c.json(toProject(updated));
+    return c.json(toProject(updated, "admin"));
   });
 
   // Full delete: cascade tasks → their sessions/schedules/run-artifacts, then

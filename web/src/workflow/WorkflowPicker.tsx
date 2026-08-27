@@ -61,6 +61,12 @@ export function WorkflowPicker({
   // 停用的不进候选，但**已经选中的那条即便停用了也得列出来**，否则下拉会显示成空、
   // 看着像「没设过」，用户一存就把原来的设置抹了。
   const options = items.filter((item) => !item.disabled || item.id === value);
+  // 同一个坑的另一半：选中的 id **不在候选里**——可能是别人的个人起手式（起手式按人隔离，
+  // 项目默认里可能留着这种存量值），也可能是调用方按规则把它排除了。这时下拉会自动落到第
+  // 一项，显示成「跟着系统默认走」，而库里明明设着值：用户会以为设置丢了，重设一次又把原
+  // 值悄悄覆盖掉。所以补一条如实的占位项，措辞只说「不在可选清单里」——谁拥有它、为什么
+  // 不能选，由各个调用方在旁边的说明里讲（第 6 轮审查 P1）。
+  const opaque = !!value && !options.some((item) => item.id === value);
   return (
     <select
       id={id}
@@ -70,6 +76,7 @@ export function WorkflowPicker({
       onChange={(event) => onChange(event.target.value)}
     >
       <option value="">{inheritLabel}</option>
+      {opaque && <option value={value}>当前设的那条（不在可选清单里）</option>}
       {options.map((item) => (
         <option key={item.id} value={item.id}>
           {item.name}{item.disabled ? "（已停用）" : ""} · {workflowSummary(item.def)}

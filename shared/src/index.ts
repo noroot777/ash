@@ -4,6 +4,7 @@ import type { DuetConfig } from "./duet.ts";
 import type { WorkflowDef } from "./workflow.ts";
 import type { TaskWorkflowMode } from "./free-workflow.ts";
 import type { HandoffAudit, HandoffTarget, TaskHandoff } from "./handoff.ts";
+import type { ProjectRole } from "./multiuser.ts";
 export type { Session, SessionRole } from "./session.ts";
 // 归一化后的 token 用量。运行时函数(累加/格式化)走 "@ash/shared/usage" 子路径
 // 导出,这里同上只再导出类型。
@@ -223,8 +224,14 @@ export interface ProjectHealth {
 
 // Wire shape returned by the project endpoints: the persisted row + computed
 // health. The web client uses this everywhere; it never inserts a bare Project.
+//
+// `myRole` 是**拿到这份数据的那个人**在这个项目里的角色,不是项目自己的属性。前端
+// 据它决定「项目设置 / 成员管理这些控件给不给看」——后端本来就会 403,但把必然失败的
+// 管理入口摆在成员面前,既跟权限表对不上,也让人以为是自己点坏了(第 6 轮审查 P3)。
+// 自用模式与实例管理员一律是 "admin",所以这个字段不会让老行为变样。
 export interface ProjectView extends Project {
   health: ProjectHealth;
+  myRole: ProjectRole;
 }
 
 // ── 任务留在磁盘上的工作区(worktree 目录 + ash/<id8> 分支) ──────────────

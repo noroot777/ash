@@ -52,11 +52,9 @@ export function ProjectMembersSettings({
     void load();
   }, [load]);
 
-  // 我能不能管这个项目:项目管理员成员行,或者实例管理员。
-  const canManage = useMemo(() => {
-    if (state.user?.role === "admin") return true;
-    return members.some((m) => m.userId === state.user?.id && m.role === "admin" && !m.implicit);
-  }, [members, state.user]);
+  // 我能不能管这个项目。判据只有一份:服务端算好的 `project.myRole`(自用模式与实例管理员
+  // 一律是 admin) —— 项目设置那一屏用的也是它,两处不会各算各的。
+  const canManage = project.myRole === "admin";
 
   const candidates = useMemo(() => {
     const inProject = new Set(members.map((m) => m.userId));

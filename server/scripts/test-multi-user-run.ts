@@ -25,9 +25,11 @@
 //   ⑦ 项目级的残留清理入口(`/projects/:id/workspaces/discard`)拿的也是**请求体里的
 //      taskId**,而且它真的执行 `worktree remove --force` + `branch -D`:既要查归属,
 //      也要复用任务运行态保护,否则 agent 脚下的目录能被别人当场抽走。
-//   ⑧ 项目设置(改路径 / 默认起手式)只给项目管理员,而且写进去的 id 必须是**自己看得见
-//      的**:`/projects/resolve` 的「同名孤儿项目回填路径」是改路径的一条集合端点绕行路,
-//      项目默认起手式则不能是别人的私有起手式(个人面资源,§八)。
+//   ⑧ 项目设置(改路径 / 默认起手式)只给项目管理员,而且写进去的 id 必须是**人人都解析
+//      得出来的**:`/projects/resolve` 的「同名孤儿项目回填路径」是改路径的一条集合端点
+//      绕行路;项目默认起手式既不能是别人的私有起手式(个人面资源,§八),也不能是自己的
+//      —— 项目行是共享的,自建条目对别人解析不出来,他们会静默落回系统默认。项目列表还要
+//      带上「我在这儿是什么角色」,否则前端只能把必然 403 的管理控件摆给所有人看。
 //
 // 跑法(不设 ASH_DB 时自己开一个临时库):
 //   npm -w server run test:multi-user-run
@@ -509,19 +511,47 @@ const expectBob = (env: Record<string, string | null>, where: string) => {
   await visibility.addProjectMember({ projectId: "p-bob", userId: bob.id, role: "admin", addedBy: bob.id });
   const stolen = await patch("/api/projects/p-bob", bobKey, { workflowId: aliceWf });
   assert.equal(stolen.status, 400, `别人的私有起手式不该写得进项目行:${JSON.stringify(stolen.body)}`);
+  // 文案要能区分两条规矩:这一条必须是「不存在」——跟没权限回同一句话,否则挨个 id 试
+  // 一遍就能问出「这个 id 存在但不是我的」。下面那条自建起手式走的才是另一句。
+  assert.equal(stolen.body.error, "起手式不存在", `别人的 id 只能回「不存在」:${JSON.stringify(stolen.body)}`);
   const wfRow = (await db.select({ w: projects.workflowId }).from(projects).where(eq(projects.id, "p-bob"))).at(0);
   assert.equal(wfRow?.w, null, "被拒之后项目默认起手式不该被写上");
 
-  // 正向对照:自己的起手式照常设得上;自带那几条(不属于任何人)也照常。
+  // 正向对照:系统自带那几条**人人都有**(按 key,各自可以有自己的覆写),所以它们才是
+  // 共享项目默认唯一说得通的选项。
+  const builtinOk = await patch("/api/projects/p-bob", bobKey, { workflowId: "standard" });
+  assert.equal(builtinOk.status, 200, JSON.stringify(builtinOk.body));
+  const builtinRow = (await db.select({ w: projects.workflowId }).from(projects).where(eq(projects.id, "p-bob"))).at(0);
+  assert.equal(builtinRow?.w, "standard");
+
+  // 连**自己的**自建起手式也不行:项目行是共享的,别人看不见它,设上去只会让他们的新任务
+  // 静默落回系统默认 —— 界面上却写着「跟随本项目」(第 6 轮审查 P1)。
   const bobWf = id();
   await db.insert(workflows).values({
     id: bobWf, builtinKey: null, name: "bob 自己的起手式", description: "",
     def: JSON.stringify({ steps: [] }), disabled: false, ownerUserId: bob.id, createdAt: ts, updatedAt: ts,
   });
-  const mineOk = await patch("/api/projects/p-bob", bobKey, { workflowId: bobWf });
-  assert.equal(mineOk.status, 200, JSON.stringify(mineOk.body));
+  const mine = await patch("/api/projects/p-bob", bobKey, { workflowId: bobWf });
+  assert.equal(mine.status, 400, `自建起手式也当不了共享项目的默认:${JSON.stringify(mine.body)}`);
+  assert.ok(
+    String(mine.body.error).includes("系统自带"),
+    `这条要走「只能选系统自带」那句,不能跟「不存在」混成一句:${JSON.stringify(mine.body)}`,
+  );
   const mineRow = (await db.select({ w: projects.workflowId }).from(projects).where(eq(projects.id, "p-bob"))).at(0);
-  assert.equal(mineRow?.w, bobWf);
+  assert.equal(mineRow?.w, "standard", "被拒之后原来那条默认不该被动过");
+
+  // 角色要随项目列表一起发出去,前端据它决定管理控件给不给看(第 6 轮审查 P3)。
+  const listed = await get("/api/projects", bobKey);
+  const seen = new Map((listed.body as unknown as { id: string; myRole: string }[]).map((p) => [p.id, p.myRole]));
+  assert.equal(seen.get("p-bob"), "admin", "自己建的项目里是管理员");
+  assert.equal(seen.get("p-shared"), "member", "别人的共享项目里是成员");
+  assert.equal(seen.get("p-orphan-a"), "member");
+  assert.equal(seen.has("p-private"), false, "看不见的项目本来就不该出现在列表里");
+  const asAdmin = await get("/api/projects", await store.resetUserKey(alice.id));
+  assert.ok(
+    (asAdmin.body as unknown as { myRole: string }[]).every((p) => p.myRole === "admin"),
+    "实例管理员进任意项目权限等同项目管理员(§四)",
+  );
 }
 
 await releaseTmpDb();

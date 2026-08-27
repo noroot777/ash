@@ -40,19 +40,24 @@ export async function visibleProjectsFor(actor: Actor): Promise<(typeof projects
   return visible === null ? rows : rows.filter((p) => visible.has(p.id));
 }
 
+/**
+ * 这个人在各个项目里的角色。null = **处处都是管理员**(自用模式 / 实例管理员,§四)。
+ *
+ * 项目列表要给每一行标出「我在这儿是什么角色」(前端据它决定管理控件给不给看),
+ * 一行查一次成员表就是 N 次查询;这里一次取完他自己的全部成员行。
+ */
+export async function projectRolesOf(actor: Actor): Promise<Map<string, ProjectRole> | null> {
+  if (!(await isMultiUser())) return null;
+  if (isAdminActor(actor)) return null;
+  if (!actor.userId) return new Map();
+  const rows = await db.select().from(projectMembers).where(eq(projectMembers.userId, actor.userId));
+  return new Map(rows.map((r) => [r.projectId, r.role === "admin" ? "admin" : "member"] as const));
+}
+
 /** 项目里的角色。实例管理员返回 "admin"(隐式);不是成员返回 null。 */
 export async function projectRoleOf(actor: Actor, projectId: string): Promise<ProjectRole | null> {
-  if (!(await isMultiUser())) return "admin";
-  if (isAdminActor(actor)) return "admin";
-  if (!actor.userId) return null;
-  const row = (
-    await db
-      .select()
-      .from(projectMembers)
-      .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, actor.userId)))
-  ).at(0);
-  if (!row) return null;
-  return row.role === "admin" ? "admin" : "member";
+  const roles = await projectRolesOf(actor);
+  return roles === null ? "admin" : roles.get(projectId) ?? null;
 }
 
 /** 看得见就放行,否则 403。读型端点的统一入口。 */

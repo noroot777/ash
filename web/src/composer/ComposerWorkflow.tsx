@@ -13,6 +13,7 @@ import { checkWorkflow, resolveWorkflowFromList, workflowDenied } from "@ash/sha
 import { DEFAULT_WORKFLOW_KEY } from "@ash/shared/workflow-presets";
 import { CaretDown, FlowArrow } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
+import { useAuth } from "../auth/authContext.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { Popover } from "../workflow/Popover.tsx";
 import { WorkflowMiniRail } from "../workflow/WorkflowMiniRail.tsx";
@@ -53,6 +54,10 @@ function SaveAsPresetDialog({
   const [name, setName] = useState(defaultName);
   const [asProjectDefault, setAsProjectDefault] = useState(false);
   const [busy, setBusy] = useState(false);
+  const { state } = useAuth();
+  // 「顺手设成项目默认」只在自用模式下成立:多人模式里存出来的是个人起手式,别人看不见,
+  // 设成共享项目的默认只会让他们的新任务静默落回系统默认(第 6 轮审查 P1)。
+  const canSetDefault = state.mode !== "multi" && project.myRole === "admin";
 
   const save = async () => {
     setBusy(true);
@@ -84,14 +89,20 @@ function SaveAsPresetDialog({
         <span>名字</span>
         <input value={name} autoFocus onChange={(event) => setName(event.target.value)} />
       </label>
-      <label className="composer-wf-check">
-        <input
-          type="checkbox"
-          checked={asProjectDefault}
-          onChange={(event) => setAsProjectDefault(event.target.checked)}
-        />
-        同时设为「{project.name}」以后新建任务的默认
-      </label>
+      {canSetDefault ? (
+        <label className="composer-wf-check">
+          <input
+            type="checkbox"
+            checked={asProjectDefault}
+            onChange={(event) => setAsProjectDefault(event.target.checked)}
+          />
+          同时设为「{project.name}」以后新建任务的默认
+        </label>
+      ) : (
+        // 多人模式下这条路是死的:存下来的是**个人**起手式,别人看不见它,所以它当不了共享
+        // 项目的默认(后端同样 400)。与其让人勾了再吃一个报错,不如当场说清楚。
+        <p className="composer-wf-check">存下来只归你自己用；项目默认起手式只能选系统自带的那几条。</p>
+      )}
     </ConfirmDialog>
   );
 }
@@ -141,7 +152,13 @@ export function ComposerWorkflow({
     : choice.pickedId
       ? "这次挑的"
       : projectDefaultId
-        ? `跟随本项目 · ${project.name}`
+        // 项目默认**真的命中了**才敢写「跟随本项目」。起手式按人隔离,项目行里那条可能是
+        // 别人的个人起手式:对我来说它解析不出来,链条会往下落到系统默认 —— 这时标成
+        // 「跟随本项目」就是当面说假话,而实际跑的线跟项目管理员以为的完全不是一条
+        // (第 6 轮审查 P1)。
+        ? item?.id === projectDefaultId
+          ? `跟随本项目 · ${project.name}`
+          : "本项目的默认起手式你看不到，已落到系统默认"
         : "跟随系统默认";
   // 下拉框上永远写「这条线现在是什么」：改过就明说是从哪个起手式改的，副标题退回成
   // 这条线自己的走法，免得挂着一个已经不作数的模板描述。
