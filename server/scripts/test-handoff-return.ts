@@ -223,6 +223,17 @@ try {
   const inbound = await api<Task>(machineB, `/tasks/${task.id}`);
   assert.equal(inbound.handoff?.direction, "in");
   assert.equal(inbound.handoff?.peerUrl, machineA, "接收机应从真实来源地址与源端口恢复回程地址");
+  // 审查历史与验收落账随任务走(用户 2026-08-27):接过去的任务除了横幅标记外应该和本机
+  // 原生任务没有区别,对端点开不该是一段空白历史。下面那条 deepEqual 再验它原样回得来。
+  const inboundLocal = readReturnLocalState(join(root, "b.db"), task.id);
+  assert.equal(inboundLocal.freeReviewRuns, 1, "审查历史应随任务迁移到对端");
+  assert.equal(inboundLocal.freeReviewRounds, 1, "审查轮次应随任务迁移(run id 原样保留,证据文件才对得上号)");
+  assert.equal(inboundLocal.freeWorkflowStates, 1, "自由工作流状态应随任务迁移");
+  assert.equal(inboundLocal.freeWorkflowEvents, 1, "自由工作流事件应随任务迁移");
+  assert.equal(inboundLocal.task.accepted_target_branch, "local-target", "验收落账应随任务迁移");
+  assert.equal(inboundLocal.task.accepted_base_commit, "local-base");
+  assert.equal(inboundLocal.task.accepted_merge_commit, "local-merge");
+  assert.equal(inboundLocal.task.accepted_tail_pending, 0, "尾段崩溃续跑的进度位不能跟着走,否则对端导入后会重跑一遍发布命令");
   const identityB = await api<{ fingerprint: string }>(machineB, "/handoff/identity");
   const grantsOnA = await api<{ grants: HandoffReturnGrant[] }>(machineA, "/handoff/return-grants");
   const returnGrant = grantsOnA.grants.find((grant) => grant.fingerprint === identityB.fingerprint);
@@ -417,6 +428,12 @@ try {
 
   const holderWorktree = worktreePathFor(repoB, task.id);
   const originWorktree = worktreePathFor(repoA, task.id);
+  // 接力确认送达后原机那份 worktree/分支已被自动清掉（「任务在哪儿，分支之类的才在
+  // 哪儿」，用户 2026-08-27）。下面几道分叉/脏目录保护仍然必须成立：目录里还剩没带走的
+  // 东西时清理会主动放弃、对端是旧版 ash 时压根不清、用户也随时能把 worktree 建回来。
+  // 所以这里手动重建原机 worktree，继续把那几条闸验一遍。
+  assert.equal(existsSync(originWorktree), false, "接力确认送达后原机 worktree 应已清理");
+  await prepareWorktree(repoA, task.id, "main");
   writeFileSync(join(originWorktree, "origin-after-handoff.txt"), "local commit after handoff\n");
   execFileSync("git", ["-C", originWorktree, "add", "origin-after-handoff.txt"]);
   execFileSync("git", [
@@ -510,6 +527,8 @@ try {
   );
   const originHead = execFileSync("git", ["-C", worktreePathFor(repoA, task.id), "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   assert.equal(originHead, holderHead, "原机 worktree 应落到持有机返回的新提交");
+  // 对称的另一半:任务回到 A 了,B 上那份 worktree/分支就该消失。
+  assert.equal(existsSync(holderWorktree), false, "移回确认之后持有机的 worktree 也要清掉");
 
   const peersOnA = await api<{ peers: { fingerprint: string }[] }>(machineA, "/handoff/peers");
   assert.ok(!peersOnA.peers.some((peer) => peer.fingerprint === identityB.fingerprint), "免审批移回不应暗中建立整机级批准记录");

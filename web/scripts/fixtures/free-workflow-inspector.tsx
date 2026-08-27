@@ -214,6 +214,23 @@ const manualChatState: FreeWorkflowApiState = {
   })),
 };
 
+// 接力刚落地的样子：任务在跑，身上挂着系统塞的「接力前言」(resumePrompt)。这时
+// 「立即派审」后端会 409，但「预约」不会——reserveFreeReview 没有 waiting 门禁。
+const waitingChatState: FreeWorkflowApiState = {
+  ...repairState,
+  taskId: "free-waiting-task",
+  reviews: [],
+};
+
+// 停在检查点的样子：任务**不在跑**（paused），身上挂着 agent 自己留的续跑指令。
+// 后端 reserveFreeReview 同样放行（它只拦 backlog / 归档 / 验收后 / 审查中 / done 且
+// 没有 stopped run），所以「跑完就审」这一手在这里恰恰是最该有的。
+const pausedCheckpointState: FreeWorkflowApiState = {
+  ...repairState,
+  taskId: "free-paused-task",
+  reviews: [],
+};
+
 const reviewer = {
   id: "reviewer-one", name: "Codex 审查", agentType: "codex", executorId: "reviewer-executor",
   executorLabel: "codex@test", model: "gpt-test", reasoningEffort: "high",
@@ -284,6 +301,18 @@ window.fetch = (input, init) => {
         ((window as Window & { __reservationRequests?: number }).__reservationRequests ?? 0) + 1;
     }
     return Promise.resolve(new Response(JSON.stringify(manualChatState), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+  }
+  if (url.pathname.startsWith("/api/tasks/free-waiting-task/free-workflow")) {
+    return Promise.resolve(new Response(JSON.stringify(waitingChatState), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+  }
+  if (url.pathname.startsWith("/api/tasks/free-paused-task/free-workflow")) {
+    return Promise.resolve(new Response(JSON.stringify(pausedCheckpointState), {
       status: 200,
       headers: { "content-type": "application/json" },
     }));
@@ -452,12 +481,39 @@ const manualChatTask = {
   workflowMode: "free",
 } as Task;
 
+const pausedCheckpointTask = {
+  id: "free-paused-task",
+  title: "停在检查点的任务",
+  // 关键就在这里:paused 不是 running/queued,taskBusy 为假。只按 taskBusy 判「预约模式」
+  // 时,这颗按钮会退回「派审查」并被 waiting 一票否决——后端明明放行(第 1 轮审查实测)。
+  status: "paused",
+  mode: "single",
+  parentId: null,
+  reviewOf: null,
+  workflowMode: "free",
+  resumePrompt: "继续:把第二步做完",
+} as Task;
+
+const waitingChatTask = {
+  id: "free-waiting-task",
+  title: "接力刚落地的任务",
+  status: "running",
+  mode: "single",
+  parentId: null,
+  reviewOf: null,
+  workflowMode: "free",
+  // 系统塞的接力前言。前端曾把它一律读成「用户在等续跑」，把整颗按钮灰掉。
+  resumePrompt: "【任务接力】本任务从另一台机器接力到本机继续。",
+} as Task;
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <div>
       <div style={{ display: "grid", gap: 6, width: 760, margin: "12px 0 12px auto", background: "white", padding: 8 }}>
         <div className="toolbar-repair-fixture"><FreeWorkflowToolbar task={repairTask} notify={() => undefined} /></div>
         <div className="toolbar-chat-rework-fixture"><FreeWorkflowToolbar task={manualChatTask} notify={() => undefined} /></div>
+        <div className="toolbar-waiting-fixture"><FreeWorkflowToolbar task={waitingChatTask} notify={() => undefined} /></div>
+        <div className="toolbar-paused-fixture"><FreeWorkflowToolbar task={pausedCheckpointTask} notify={() => undefined} /></div>
       </div>
       <div style={{ display: "flex", gap: 20, height: 640 }}>
         <div style={{ flex: 1 }} />

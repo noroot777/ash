@@ -5,6 +5,9 @@ import { homedir } from "node:os";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
+import { eq, inArray } from "drizzle-orm";
+import { db } from "./db/index.js";
+import { freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, reviewerProfiles } from "./db/schema.js";
 import type { sessions, tasks } from "./db/schema.js";
 import { execFileText } from "./exec.js";
 import { expandHome, isGitRepo, worktreePathFor } from "./git.js";
@@ -12,7 +15,9 @@ import { withRepoLock } from "./repo-lock.js";
 import { DATA_DIR, RUNS_DIR } from "./paths.js";
 import { codexHome, findRollout } from "./executors/codex-rollout.js";
 import { HandoffError, MAX_BUNDLE_BYTES, MAX_FILE_BYTES, MB } from "./handoff-types.js";
-import type { HandoffFilePayload, HandoffManifest } from "./handoff-types.js";
+import type {
+  HandoffFilePayload, HandoffFreeReviewRound, HandoffFreeWorkflowPayload, HandoffManifest,
+} from "./handoff-types.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type SessionRow = typeof sessions.$inferSelect;
@@ -212,4 +217,83 @@ export async function packGitState(
       rmSync(bundlePath, { force: true });
     }
   });
+}
+
+/**
+ * 自由工作流的审查历史(free_workflow_states + free_review_runs + free_review_rounds
+ * + free_workflow_events)。协议形状与「为什么不带机器本地外键」见 handoff-types.ts。
+ *
+ * 证据文件(report.md/截图)不在这里收:它们躺在 data/runs/<taskId>/free-review/ 下,
+ * 已经被 collectRunArtifacts 整棵搬走——所以 run id 必须原样带走,换了就对不上。
+ */
+export async function collectFreeWorkflow(taskId: string): Promise<HandoffFreeWorkflowPayload | null> {
+  const [stateRow] = await db.select().from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId));
+  const runRows = await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.taskId, taskId));
+  const eventRows = await db.select().from(freeWorkflowEvents).where(eq(freeWorkflowEvents.taskId, taskId));
+  if (!stateRow && !runRows.length && !eventRows.length) return null;
+
+  const roundRows = runRows.length
+    ? await db.select().from(freeReviewRounds).where(inArray(freeReviewRounds.runId, runRows.map((r) => r.id)))
+    : [];
+  const byRun = new Map<string, HandoffFreeReviewRound[]>();
+  for (const r of roundRows) {
+    const list = byRun.get(r.runId) ?? [];
+    list.push({
+      round: r.round, status: r.status, conclusion: r.conclusion,
+      reviewedCommit: r.reviewedCommit, startedAt: r.startedAt, endedAt: r.endedAt,
+    });
+    byRun.set(r.runId, list);
+  }
+
+  // 审查者 profile id 换成名字:对端按名字重新解析,解析不到就只用于展示。
+  const reviewerNames = new Map<string, string>();
+  if (stateRow?.selectedReviewerId) {
+    const [profile] = await db.select().from(reviewerProfiles)
+      .where(eq(reviewerProfiles.id, stateRow.selectedReviewerId));
+    if (profile) reviewerNames.set(profile.id, profile.name);
+  }
+
+  return {
+    state: stateRow
+      ? {
+          selectedReviewerName: stateRow.selectedReviewerId
+            ? reviewerNames.get(stateRow.selectedReviewerId) ?? null
+            : null,
+          reviewArmed: stateRow.reviewArmed,
+          reviewCheckMode: stateRow.reviewCheckMode,
+          reviewRetryLimit: stateRow.reviewRetryLimit,
+          reviewNote: stateRow.reviewNote,
+          reviewAgentType: stateRow.reviewAgentType,
+          reviewModel: stateRow.reviewModel,
+          reviewReasoningEffort: stateRow.reviewReasoningEffort,
+          reviewRunId: stateRow.reviewRunId,
+          updatedAt: stateRow.updatedAt,
+        }
+      : null,
+    runs: runRows
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .map((r) => ({
+        id: r.id,
+        reviewerName: r.reviewerName,
+        agentType: r.agentType,
+        model: r.model,
+        reasoningEffort: r.reasoningEffort,
+        checkMode: r.checkMode,
+        note: r.note,
+        targetKind: r.targetKind,
+        targetBranch: r.targetBranch,
+        targetBaseCommit: r.targetBaseCommit,
+        targetCommit: r.targetCommit,
+        retryLimit: r.retryLimit,
+        currentRound: r.currentRound,
+        status: r.status,
+        createdAt: r.createdAt,
+        updatedAt: r.updatedAt,
+        finishedAt: r.finishedAt,
+        rounds: (byRun.get(r.id) ?? []).sort((a, b) => a.round - b.round),
+      })),
+    events: eventRows
+      .sort((a, b) => a.occurredAt.localeCompare(b.occurredAt))
+      .map((e) => ({ kind: e.kind, source: e.source, detail: e.detail, occurredAt: e.occurredAt })),
+  };
 }

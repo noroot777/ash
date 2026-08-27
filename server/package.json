@@ -21,6 +21,7 @@
     "test:search": "tsx scripts/test-search-query.ts",
     "test:search-scan": "tsx scripts/test-search-scan.ts",
     "test:follow-up": "tsx scripts/test-follow-up.ts",
+    "test:resume-prompt": "tsx scripts/test-resume-prompt-broadcast.ts",
     "test:user-directives": "tsx scripts/test-user-directives.ts",
     "test:task-workspace": "tsx scripts/test-task-workspace.ts",
     "test:turn-baseline": "tsx scripts/test-turn-baseline.ts",
@@ -28,7 +29,8 @@
     "test:turn-output": "tsx scripts/test-turn-output.ts",
     "test:reopen-acceptance": "tsx scripts/test-reopen-acceptance.ts",
     "test:accept-merge": "tsx scripts/test-accept-merge.ts",
-    "test:handoff": "tsx scripts/test-handoff.ts && tsx scripts/test-handoff-local.ts && tsx scripts/test-handoff-auth.ts && tsx scripts/test-handoff-return.ts",
+    "test:handoff": "tsx scripts/test-handoff.ts && tsx scripts/test-handoff-local.ts && tsx scripts/test-handoff-auth.ts && tsx scripts/test-handoff-return.ts && tsx scripts/test-handoff-notice.ts && tsx scripts/test-handoff-free-workflow-rows.ts",
+    "test:handoff-notice": "tsx scripts/test-handoff-notice.ts",
     "test:repo-lock": "tsx scripts/test-repo-lock.ts",
     "test:project-git": "tsx scripts/test-project-git.ts",
     "test:project-clone": "tsx scripts/test-project-clone.ts",
@@ -100,7 +102,8 @@
     "test:win-launch": "tsx scripts/test-win-launch.ts",
     "test:path-boundary": "tsx scripts/test-path-boundary.ts",
     "test:agent-tee": "tsx scripts/test-agent-tee.ts",
-    "test:no-libsql": "tsx scripts/test-no-libsql.ts"
+    "test:no-libsql": "tsx scripts/test-no-libsql.ts",
+    "test:handoff-free-workflow-rows": "tsx scripts/test-handoff-free-workflow-rows.ts"
   },
   "dependencies": {
     "@ash/shared": "*",

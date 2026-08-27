@@ -9,9 +9,10 @@ const isDir = (p: string) => {
 };
 
 // ── 删除任务时 worktree/分支的去留 ──────────────────────────────────────────
-// ash 建 worktree 但**从不自行删除**;唯二的例外都由用户显式点出:①验收通过
+// ash 建 worktree 但**从不自行删除**;例外有三:前两个由用户显式点出——①验收通过
 // (accept,合并后清理,见 server/CLAUDE.md);②删除任务时勾选「连 worktree 和分支一起
-// 删」—— 就是这里。任务行一没,`.worktrees/<taskId>` 目录和 `ash/<id8>` 分支
+// 删」—— 就是这里；③任务接力确认送达后自动清理(见文件末尾 discardMigratedWorkspace)。
+// 任务行一没,`.worktrees/<taskId>` 目录和 `ash/<id8>` 分支
 // 就成了没人认领的垃圾:用户在界面上再也看不见它们,只能靠自己记得去 git 里收拾。
 //
 // 两件东西各自独立存在:目录被手动 rm 过、分支还留着,或者反过来(分支被删、目录
@@ -90,4 +91,47 @@ export async function discardTaskWorkspace(
     }
     return out;
   });
+}
+
+// ── 例外之三:任务接力(用户 2026-08-27 拍板)────────────────────────────────
+// 「任务在哪儿,分支之类的才在哪儿」。任务接力到另一台机器并**确认送达**之后,本机
+// 这份 worktree 和分支就是死物:代码全在对端了,留着只会让人误以为还能在本机接着改
+// (真改了也是分叉)。所以确认送达后主动删,移回时对称地删掉持有机那一份。
+//
+// 「彻底传完才删」这条闸分两段,缺一不可:
+//   ① 调用方先拿对端应答里的 `git: "bundle"` 证明代码确实落了地(旧版对端不报这个
+//      字段 → 什么都不删);
+//   ② 这里再让 git 自己把关——`git worktree remove` **不带 --force**,目录里还有
+//      未提交/未跟踪的东西它就拒绝,我们照单保留并如实报出。
+// 分支只能 -D:它的提交本来就没合回主线,-d 必然拒绝。走到那一步时代码已经在对端、
+// 目录也已确认干净,提交不会丢。
+export async function discardMigratedWorkspace(
+  repoPath: string | null | undefined,
+  taskId: string,
+): Promise<{ removed: boolean; note: string }> {
+  const repo = expandHome(repoPath);
+  if (!repo) return { removed: false, note: "" };
+  const path = worktreePathFor(repo, taskId);
+  const hadDir = isDir(path);
+  const wt = await discardTaskWorkspace(repo, taskId, { worktree: true, branch: false });
+  if (hadDir && !wt.worktreeRemoved) {
+    return {
+      removed: false,
+      note: `本机 worktree 里还有没随任务带走的东西,已原样保留:${path}（${wt.worktreeError ?? "删除失败"}）。确认不需要后手动删除。`,
+    };
+  }
+  const br = await discardTaskWorkspace(repo, taskId, { worktree: false, branch: true, force: true });
+  const parts: string[] = [];
+  if (wt.worktreeRemoved) parts.push(`worktree ${path}`);
+  if (br.branchDeleted) parts.push(`分支 ${br.branch}`);
+  if (br.branch && !br.branchDeleted) {
+    return {
+      removed: wt.worktreeRemoved,
+      note: `${parts.length ? `已清理本机 ${parts.join(" 和 ")};` : ""}分支 ${br.branch} 没能删掉（${br.branchError ?? "未知原因"}）,请手动确认。`,
+    };
+  }
+  return {
+    removed: true,
+    note: parts.length ? `已清理本机 ${parts.join(" 和 ")}——代码现在只在对端。` : "",
+  };
 }

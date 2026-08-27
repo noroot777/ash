@@ -43,6 +43,7 @@ import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
 import { haltTeam } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
 import { setTaskQuestion } from "./task-question.js";
+import { announceResumePrompt } from "./task-resume-prompt.js";
 import { readableRunPath } from "./transcript.js";
 import { now } from "./util.js";
 
@@ -251,6 +252,9 @@ api.post("/tasks/:id/pause", async (c) => {
     ))
     .returning({ id: tasks.id });
   if (!updated.length) return c.json({ error: "当前回合已经结束或已被引导，检查点未写入" }, 409);
+  // 检查点一挂上，前端的派审/预约/修复入口就该跟着灰掉；SSE 没有带 resume_prompt 的
+  // 局部事件，只能推整行（见 task-resume-prompt.ts 顶部）。
+  await announceResumePrompt(taskId);
   return c.json({ paused: true, willSettleAs: "paused" });
 });
 

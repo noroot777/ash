@@ -1,13 +1,13 @@
 // 「运行/重试/队列推进」时选 resume 还是 fresh（从 orchestrator.ts 拆出，纯行数拆分）。
 // 依赖方向单向：这里 import orchestrator，orchestrator 不回头 import 这里。
-import { and, eq, isNull } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { AgentType } from "@ash/shared";
 import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
-import { now } from "./util.js";
 import { continueTask, runTask, type ResumeReason } from "./orchestrator.js";
 import { RESUME_PROMPT } from "./run-prompts.js";
 import { freeReviewResumeOptions } from "./free-workflow.js";
+import { restoreResumePrompt, takeResumePrompt } from "./task-resume-prompt.js";
 
 // Decide between a fresh run and a resume when (re)starting a single task. A task
 // that was interrupted keeps a session row with a cliSessionId (server restart
@@ -32,20 +32,14 @@ export async function resumeOrRunTask(
     // 取走这段 checkpoint 指令要 CAS(`resume_prompt = rp`)：读到 rp 之后到清空之间隔着
     // 至少一个 await，两路触发(HTTP /run 与队列推进)会双双读到同一段、双双清空、于是
     // 一路送出、另一路把它当「没送出去」回填，下次触发再送一遍(审查实测:同一段指令投递两次)。
-    const cleared = await db.update(tasks)
-      .set({ resumePrompt: null, updatedAt: now() })
-      .where(and(eq(tasks.id, taskId), eq(tasks.resumePrompt, rp)))
-      .returning({ id: tasks.id });
-    if (cleared.length) {
+    // CAS 与整行广播都在 takeResumePrompt/restoreResumePrompt 里（见那个文件顶部：这一列
+    // 是前端的门禁，改了不广播，长开的页面会一直把任务读成「在等续跑」）。
+    if (await takeResumePrompt(taskId, rp)) {
       const started = await continueTask(taskId, rp, { system: opts.reason ?? "run", turnHeld: opts.turnHeld, ...(reviewerRoute ?? {}) });
       if (!started) {
         // 回合被别人抢了（典型：上一回合的 turn 还没 release）：checkpoint 指令一个字都没
         // 送出去，必须放回原位等下一次触发——清了不回写就是永久丢失（审查实测复现）。
-        // 回填同样要 CAS(`IS NULL`)：这中间 agent 可能已经 pause_task 写下了**新的**一段,
-        // 无条件回填就是拿旧指令盖掉新指令。这一格不再是我清出来的那个空,就不该由我填。
-        await db.update(tasks)
-          .set({ resumePrompt: rp, updatedAt: now() })
-          .where(and(eq(tasks.id, taskId), isNull(tasks.resumePrompt)));
+        await restoreResumePrompt(taskId, rp);
       }
       return;
     }
