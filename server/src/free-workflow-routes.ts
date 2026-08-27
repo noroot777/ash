@@ -17,6 +17,7 @@ import { freeWorkflowState } from "./free-workflow-state.js";
 import { handoffBlockReasonById } from "./handoff-guard.js";
 import { createPostMergeRepairTask, startPostMergeReview } from "./post-merge-review.js";
 import { REVIEW_MIME } from "./review-evidence.js";
+import { actorOf } from "./auth/context.js";
 
 const errorBody = (error: unknown) => ({ error: error instanceof Error ? error.message : String(error) });
 
@@ -40,13 +41,13 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
   api.post("/tasks/:id/free-workflow/review", async (c) => {
     const blocked = await blockedByHandoff(c);
     if (blocked) return blocked;
-    try { return c.json(await startFreeReview(c.req.param("id"), await c.req.json<FreeReviewDispatchInput>(), { holdTurn: true }), 201); }
+    try { return c.json(await startFreeReview(c.req.param("id"), await c.req.json<FreeReviewDispatchInput>(), { holdTurn: true, actor: actorOf(c) }), 201); }
     catch (error) { return c.json(errorBody(error), 409); }
   });
   api.post("/tasks/:id/free-workflow/post-merge-review", async (c) => {
     const blocked = await blockedByHandoff(c);
     if (blocked) return blocked;
-    try { return c.json(await startPostMergeReview(c.req.param("id"), await c.req.json<FreeReviewDispatchInput>()), 201); }
+    try { return c.json(await startPostMergeReview(c.req.param("id"), await c.req.json<FreeReviewDispatchInput>(), actorOf(c)), 201); }
     catch (error) { return c.json(errorBody(error), 409); }
   });
   api.post("/tasks/:id/free-workflow/post-merge-review/repair", async (c) => {
@@ -66,7 +67,7 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
   api.put("/tasks/:id/free-workflow/review-reservation", async (c) => {
     const blocked = await blockedByHandoff(c);
     if (blocked) return blocked;
-    try { return c.json(await reserveFreeReview(c.req.param("id"), await c.req.json<FreeReviewDispatchInput>())); }
+    try { return c.json(await reserveFreeReview(c.req.param("id"), await c.req.json<FreeReviewDispatchInput>(), actorOf(c))); }
     catch (error) { return c.json(errorBody(error), 409); }
   });
   api.delete("/tasks/:id/free-workflow/review-reservation", async (c) => {

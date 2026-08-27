@@ -12,6 +12,9 @@
 //   ⑩ 全局 id 路由(queues / sessions)必须进横切闸。
 //   ⑪ 免登录名单只放机器对机器那几条,本机设置面不在其中。
 //   ⑫ 宿主机逃生门脚本(scripts/ash-admin.mjs)真能发出一条可领取的邀请。
+//   ⑬ 执行器归属:写侧存不进别人的 id,读侧回退不出别人的名字。
+//   ⑭ 穿过完整 authGate 的 HTTP 回归:供应商 relay 打得通、供应商 CRUD 仍要登录、
+//      `/llm-providers/test` 用不了别人的 key。
 //
 // 跑法(不设 ASH_DB 时自己开一个临时库):
 //   npm -w server run test:multi-user
@@ -312,7 +315,21 @@ const bobActor = actorOf(bob);
   ]) {
     assert.equal(open(path), true, `${path} 是对端服务端来调的,到不了登录态`);
   }
+  // 供应商 relay:CLI 只带得出供应商 API key,带不出 ash 身份 —— 豁口钉死到 /v1 那一段。
   for (const path of [
+    "/api/llm-providers/prov-1/convert/v1",
+    "/api/llm-providers/prov-1/convert/v1/chat/completions",
+    "/api/llm-providers/prov-1/context-1m/v1",
+    "/api/llm-providers/prov-1/context-1m/v1/messages",
+  ]) {
+    assert.equal(open(path), true, `${path} 是 CLI 回连本机的 relay,带不上 ash 身份`);
+  }
+  for (const path of [
+    "/api/llm-providers",
+    "/api/llm-providers/prov-1",
+    "/api/llm-providers/test",
+    "/api/llm-providers/prov-1/convert",
+    "/api/llm-providers/prov-1/convert/v2/chat",
     "/api/handoff/peers",
     "/api/handoff/peers/aaaa/approve",
     "/api/handoff/targets",
@@ -346,6 +363,119 @@ const bobActor = actorOf(bob);
   // 它顺带作废旧 key:「我丢了 key」的正确语义就是旧的从现在起打不开门。
   const refreshed = (await db.select().from(schema.users).where(eq(schema.users.id, admin.id))).at(0);
   assert.equal(refreshed?.keyHash, null, "发新链接必须同时作废旧 key");
+}
+
+// ── ⑬ 执行器归属:写侧存不进别人的 id,读侧回退不出别人的名字 ──────────────
+// 第 2 轮审查 P1:alice 的 `GET /agents` 是空的,却能拿 bob 的 executor id 建任务/预设/
+// 审查者,响应里连名字一起回显;连 `executorId:null` 的默认回退都会落到 bob 的默认执行器。
+{
+  const ownedExecutors = await import("../src/auth/owned-executors.js");
+  const aliceScope = await ownedExecutors.executorScope(aliceActor);
+  assert.equal(aliceScope.keep("ex-alice"), "ex-alice");
+  assert.equal(aliceScope.keep("ex-bob"), null, "别人的执行器 id 不许落进我的行");
+  assert.equal(aliceScope.keep("ex-does-not-exist"), null, "悬空 id 与别人的 id 必须不可区分");
+  assert.equal(aliceScope.typeOf("ex-bob"), undefined, "看不见 = 不存在,连类型都问不出来");
+  assert.equal(aliceScope.typeOf("ex-alice"), "claude");
+  assert.deepEqual(aliceScope.rows.map((r) => r.id), ["ex-alice"]);
+
+  // 结算内部重放预约槽时没有 HTTP 身份,显式 null = 不设限(那份配置早已认过归属)。
+  assert.equal((await ownedExecutors.executorScope(null)).keep("ex-bob"), "ex-bob");
+
+  // 读侧:label 锚在**资源归属人**,不是看客 —— 看客口径会把「bob 的任务跑在 alice 的
+  // 执行器上」写进界面,那不是隐藏是编造。
+  const both = aliceScope.rows.concat((await ownedExecutors.executorScope(bobActor)).rows);
+  assert.deepEqual(ownedExecutors.profilesOwnedBy(both, alice.id).map((r) => r.name), ["claude@alice"]);
+  assert.deepEqual(ownedExecutors.profilesOwnedBy(both, bob.id).map((r) => r.name), ["claude@bob"]);
+
+  // 真走一遍读路径:executorId 为空的 alice 任务,默认回退只能落到 alice 自己的默认。
+  const taskStore = await import("../src/task-store.js");
+  await db.update(tasks).set({ executorId: null, agentType: "claude" }).where(eq(tasks.id, "t-alice"));
+  const [aliceTask] = await taskStore.enrichTasks(
+    (await db.select().from(tasks).where(eq(tasks.id, "t-alice"))) as never,
+  );
+  assert.equal(aliceTask.executorLabel, "claude@alice", "默认回退不能回退到别人的默认执行器");
+  const [bobTask] = await taskStore.enrichTasks(
+    (await db.select().from(tasks).where(eq(tasks.id, "t-bob"))) as never,
+  );
+  assert.equal(bobTask.executorLabel, "claude@bob", "bob 自己的任务照实显示,别一起藏掉");
+  await db.update(tasks).set({ executorId: "ex-alice" }).where(eq(tasks.id, "t-alice"));
+}
+
+// ── ⑭ 穿过完整 authGate 的 HTTP 回归 ──────────────────────────────────────
+// 前面几组验的是判据函数;这一组验**装配**:同 index.ts 的挂法(authGate → resourceGate
+// → 路由),用真 Request 打进去。第 2 轮审查两条都出在装配上,判据函数本身没问题:
+//  · relay 路由被 authGate 拦成「请先登录」,CLI 根本到不了它自己的供应商 key 校验;
+//  · `/llm-providers/test` 到得了路由,却没认存量行的归属。
+{
+  const { Hono } = await import("hono");
+  const { authGate } = await import("../src/auth/middleware.js");
+  const { resourceGate } = await import("../src/auth/resource-gate.js");
+  const { mountOpenAiConverterRoutes } = await import("../src/openai-converter/routes.js");
+  const { mountAnthropicContext1mRoutes } = await import("../src/anthropic-context-1m.js");
+  const { mountProviderTestRoutes } = await import("../src/provider-test.js");
+  const { llmProviders } = schema;
+
+  await db.update(llmProviders)
+    .set({ protocol: "openai", protocolConversionEnabled: true })
+    .where(eq(llmProviders.id, "prov-bob"));
+
+  const api = new Hono();
+  mountOpenAiConverterRoutes(api);
+  mountAnthropicContext1mRoutes(api);
+  mountProviderTestRoutes(api);
+  const app = new Hono();
+  app.use("*", authGate());
+  app.use("/api/*", resourceGate());
+  app.route("/api", api);
+  // relay 路由回的是 OpenAI 风格的 `{message,type}`,ash 自己的路由回 `{error}` ——
+  // 这条测试恰好要跨过这条边界,所以两种都读。
+  const call = async (path: string, init?: RequestInit) => {
+    const res = await app.fetch(new Request(`http://127.0.0.1:4317${path}`, init));
+    const body = await res.json().catch(() => ({})) as { error?: unknown; message?: string };
+    const error = typeof body.error === "object" && body.error
+      ? String((body.error as { message?: string }).message ?? "")
+      : String(body.error ?? body.message ?? "");
+    return { status: res.status, error };
+  };
+  const bearer = (key: string) => ({ authorization: `Bearer ${key}` });
+  const aliceKey = await store.resetUserKey(alice.id);
+  const bobKey = await store.resetUserKey(bob.id);
+
+  // relay:未登录也要过得去,凭证换成供应商自己的 key(路由内 secretsEqual 校验)。
+  const wrongKey = await call("/api/llm-providers/prov-bob/convert/v1/chat/completions", {
+    method: "POST", headers: bearer("not-the-provider-key"), body: "{}",
+  });
+  assert.equal(wrongKey.status, 401);
+  assert.match(
+    wrongKey.error,
+    /供应商 API Key 无效/,
+    "relay 该被路由自己的供应商 key 闸拒,而不是被 authGate 拦成「请先登录」",
+  );
+  const noKey = await call("/api/llm-providers/prov-bob/context-1m/v1/messages", { method: "POST", body: "{}" });
+  assert.equal(noKey.status, 404, "1M 映射没配模型 → 路由自己的 404,同样说明它到得了路由");
+  assert.ok(!/请先登录/.test(noKey.error), noKey.error);
+
+  // 豁口必须窄:同一族路径下的供应商 CRUD(里面装着 key)仍要登录。
+  const crud = await call("/api/llm-providers/prov-bob");
+  assert.equal(crud.status, 401);
+  assert.match(crud.error, /请先登录/, "供应商 CRUD 不在豁口里");
+
+  // `/llm-providers/test`:alice 拿 bob 的 provider id 去测,必须查无此供应商 ——
+  // 否则请求体给 baseUrl、apiKey 回落存量行,服务端就把 bob 的 key 发到 alice 指定的地址。
+  const stolen = await call("/api/llm-providers/test", {
+    method: "POST",
+    headers: { ...bearer(aliceKey), "content-type": "application/json" },
+    body: JSON.stringify({ id: "prov-bob", baseUrl: "http://127.0.0.1:1", model: "m", protocol: "openai" }),
+  });
+  assert.equal(stolen.status, 404, "别人的 provider 必须查无此行");
+  assert.match(stolen.error, /不存在/);
+  // 本人照走:「表单改了 baseUrl、key 沿用存量」是编辑页的常规用法,不能连坐。
+  const own = await call("/api/llm-providers/test", {
+    method: "POST",
+    headers: { ...bearer(bobKey), "content-type": "application/json" },
+    body: JSON.stringify({ id: "prov-bob", baseUrl: "http://127.0.0.1:1", model: "m", protocol: "openai" }),
+  });
+  assert.notEqual(own.status, 404, `本人测自己的供应商不该被拦:${own.error}`);
 }
 
 await releaseTmpDb();

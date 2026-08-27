@@ -11,8 +11,9 @@ import { expandHome, localBranchExists } from "./git.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { createTasks, enrichTasks } from "./task-store.js";
 import { id, now } from "./util.js";
+import type { Actor } from "./auth/context.js";
 
-export async function startPostMergeReview(taskId: string, input: FreeReviewDispatchInput) {
+export async function startPostMergeReview(taskId: string, input: FreeReviewDispatchInput, actor?: Actor) {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new Error("任务不存在");
   if (task.workflowMode !== "free" || task.mode !== "single" || task.parentId || task.reviewOf) {
@@ -34,6 +35,7 @@ export async function startPostMergeReview(taskId: string, input: FreeReviewDisp
   }
   return startFreeReview(taskId, { ...input, retryLimit: 0 }, {
     holdTurn: true,
+    actor,
     target: { kind: "accepted_merge", branch, baseCommit, mergeCommit },
   });
 }

@@ -9,13 +9,14 @@ import { projectHealthLight } from "./git.js";
 import { resolveWorkflowDef } from "./workflows.js";
 import { isMultiUser } from "./auth/mode.js";
 import { settingsFor } from "./auth/personal-settings.js";
+import { profilesOwnedBy, type ExecutorProfileRow } from "./auth/owned-executors.js";
 
 export type TaskRow = typeof tasks.$inferSelect;
 // workflowId 不是列：它是**创建那一刻**用来挑起手式的 id，落库时会被换成 tasks.workflow
 // 里的那份快照（见 createTasks）。调用方给 id，库里存线本身。
 export type NewTaskRow = typeof tasks.$inferInsert & { id: string; workflowId?: string | null };
 
-type AgentLabelRow = { id: string; name: string; type: string; isDefault: boolean };
+type AgentLabelRow = ExecutorProfileRow;
 
 const executorLabelFor = (
   profiles: AgentLabelRow[],
@@ -46,7 +47,14 @@ const enrichTeamExecutorLabels = (
   };
 };
 
-const toTask = (r: TaskRow, profiles: AgentLabelRow[] = []): Task => ({
+// executorLabel 一律在**这条任务归属人**自己的执行器里解析(为什么锚在归属人而不是
+// 看客,见 auth/owned-executors.ts `profilesOwnedBy`;这份结果还会经 SSE 广播,那里根本
+// 没有看客身份可用)。少了这道筛子,`executorId:null` 的默认回退会把别人的默认执行器名
+// 写进响应 —— 第 2 轮审查 P1 的额外发现。
+const toTask = (r: TaskRow, allProfiles: AgentLabelRow[] = []): Task =>
+  toTaskWith(r, profilesOwnedBy(allProfiles, r.ownerUserId));
+
+const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   id: r.id,
   projectId: r.projectId,
   groupId: r.groupId,
@@ -104,7 +112,13 @@ const toTask = (r: TaskRow, profiles: AgentLabelRow[] = []): Task => ({
 export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
   if (rows.length === 0) return [];
   const profiles = await db
-    .select({ id: agents.id, name: agents.name, type: agents.type, isDefault: agents.isDefault })
+    .select({
+      id: agents.id,
+      name: agents.name,
+      type: agents.type,
+      isDefault: agents.isDefault,
+      ownerUserId: agents.ownerUserId,
+    })
     .from(agents);
   const runs = await db
     .select({

@@ -51,6 +51,20 @@ const PUBLIC_API_PATHS = new Set([
 const PUBLIC_API_PREFIXES = ["/api/handoff/proxy/", "/api/auth/claim/", "/api/auth/project-invite/"];
 
 /**
+ * 供应商 relay 的两条:Codex 协议转换与 Claude 1M 映射会把 CLI 的 `base_url` 指回本机 ash
+ * (`openai-converter/common.ts` `protocolConverterBaseUrl`、`anthropic-context-1m.ts`
+ * `anthropicContext1mBaseUrl`)。**发请求的是 CLI 子进程,它手上只有供应商 API key,不可能
+ * 带 ash 的 cookie 或用户 key** —— 不放行,多人模式下这两条会先被这道闸拦成「请先登录」,
+ * 根本到不了路由自己那道更严的闸(`secretsEqual(bearerToken(...), provider.apiKey)`),于是
+ * 「多人模式只许派接了 relay 的 CLI」这条前提反过来被自己拦死(第 2 轮审查 P1)。
+ *
+ * 放行的是**路径形状**,不是「无需鉴权」:凭证换成了供应商自己的 API key。也正因为凭证在
+ * 路由内校验,这里必须钉死到 `/v1` 那一段 —— 只放 `/api/llm-providers/:id/` 前缀会连带把
+ * 供应商的增删改查(里面就装着 key)一起免登录。
+ */
+const PROVIDER_RELAY_PATH = /^\/api\/llm-providers\/[^/]+\/(?:convert|context-1m)\/v1(?:\/|$)/;
+
+/**
  * SPA 壳:登录页、领取页本身要打得开。**壳内不得内嵌任何数据**(§三)——
  * index.html 是一份静态构建产物,数据一律走 `/api/*`,所以放行它不泄露任何东西。
  */
@@ -67,7 +81,9 @@ function isSpaShell(path: string): boolean {
  * `/api/handoff/` 整个前缀,连带把来源审批也免登录了。
  */
 export const isPublicApiPath = (path: string): boolean =>
-  PUBLIC_API_PATHS.has(path) || PUBLIC_API_PREFIXES.some((p) => path.startsWith(p));
+  PUBLIC_API_PATHS.has(path)
+  || PUBLIC_API_PREFIXES.some((p) => path.startsWith(p))
+  || PROVIDER_RELAY_PATH.test(path);
 
 // 写方法要过 CSRF 检查。GET/HEAD 在这套 API 里没有副作用(唯一的例外
 // `/host/pick-directory` 是 POST,而且它自己另有一道同样的闸)。

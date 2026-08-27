@@ -4,13 +4,14 @@ import { inheritExecutorOverrides, pickExecutor } from "@ash/shared/executors";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { agents, groups, projects, queueItems, tasks } from "./db/schema.js";
+import { groups, projects, queueItems, tasks } from "./db/schema.js";
 import { repoKey } from "./git.js";
 import { pauseGroup, runGroup } from "./scheduler.js";
 import { createTasks } from "./task-store.js";
 import { id, now, taskBody } from "./util.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { visibleProjectIds } from "./auth/visibility.js";
+import { executorScope } from "./auth/owned-executors.js";
 
 // ── groups (transient batch containers, §3) ─────────────────────────────────
 // 从 task-routes.ts 拆出的分组路由:列表/运行/暂停/批量建任务/编辑/删除。
@@ -83,9 +84,9 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
   const b = await c.req.json<BatchCreateTasksBody>();
   const specs: BatchTaskInput[] = Array.isArray(b.tasks) ? b.tasks : [];
   if (specs.length === 0) return c.json({ error: "tasks 不能为空" }, 400);
-  const profileTypes = new Map(
-    (await db.select({ id: agents.id, type: agents.type }).from(agents)).map((a) => [a.id, a.type as AgentType] as const),
-  );
+  // 执行器是个人面资源(§八):这一批只认调用方自己看得见的那些,看不见的 id 归一成
+  // null 走类型默认执行器降级 —— 与悬空 id 同一条口径(第 2 轮审查 P1)。
+  const scope = await executorScope(actorOf(c));
 
   // Validate every agent type up front (task-level or inherited default) so we
   // fail the whole batch cleanly instead of half-inserting.
@@ -93,12 +94,13 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
   // 冲突只认「同一处显式给出的两者」(同一个 spec 里的 executorId + agentType,或
   // defaults 里的那对)。任务自己的 agentType 撞上**继承来的** defaults.executorId
   // 不是矛盾,而是「这个任务换类型」—— 按类型默认执行器降级,与 team dispatch 同口径。
-  const defaultsExecutorType = b.defaults?.executorId ? profileTypes.get(b.defaults.executorId) : undefined;
+  const defaultsExecutorId = scope.keep(b.defaults?.executorId);
+  const defaultsExecutorType = scope.typeOf(defaultsExecutorId);
   if (defaultsExecutorType && b.defaults?.agentType && defaultsExecutorType !== b.defaults.agentType) {
     return c.json({ error: `defaults.executorId 属于 ${defaultsExecutorType},但 defaults.agentType 是 ${b.defaults.agentType}`, executorId: b.defaults.executorId }, 400);
   }
   for (const [i, s] of specs.entries()) {
-    const executorType = s.executorId ? profileTypes.get(s.executorId) : undefined;
+    const executorType = scope.typeOf(scope.keep(s.executorId));
     const at = s.agentType ?? b.defaults?.agentType ?? executorType ?? defaultsExecutorType;
     if (at && !AGENT_TYPES.includes(at)) {
       return c.json({ error: `tasks[${i}].agentType 未知: ${at}`, allowed: AGENT_TYPES }, 400);
@@ -144,17 +146,17 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
   // 批次 defaults 里的 model/reasoningEffort 属于 defaults 那个执行器；任务自己换了
   // 执行器就不该继承（inheritExecutorOverrides 单点，与 team dispatch / PATCH 共用）。
   const defaultsRef = {
-    executorId: b.defaults?.executorId ?? null,
+    executorId: defaultsExecutorId,
     agentType: (b.defaults?.agentType ?? defaultsExecutorType ?? null) as AgentType | null,
   };
   const rows = specs.map((s, i) => {
     const explicitTitle = (s.title ?? "").trim();
     const ts = new Date(base + i).toISOString();
     const pick = pickExecutor({
-      executorId: s.executorId,
+      executorId: scope.keep(s.executorId),
       agentType: s.agentType,
       fallback: defaultsRef,
-      typeOf: (eid) => profileTypes.get(eid),
+      typeOf: (eid) => scope.typeOf(eid),
     });
     const overrides = inheritExecutorOverrides({
       from: defaultsRef,

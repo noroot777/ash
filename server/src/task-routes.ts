@@ -7,7 +7,7 @@ import { TASK_WORKFLOW_MODES } from "@ash/shared/free-workflow";
 import { and, asc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { agents, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks, teamInbound } from "./db/schema.js";
+import { freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks, teamInbound } from "./db/schema.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 import { followUpsFor } from "./task-follow-up.js";
@@ -19,6 +19,7 @@ import { createTasks, enrichTasks, publishTaskUpdated, toTaskListItem } from "./
 import { attachmentsPrompt, id, now, taskBody } from "./util.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { canSeeProject, visibleProjectIds, visibleTaskIds } from "./auth/visibility.js";
+import { executorScope, type ExecutorScope } from "./auth/owned-executors.js";
 import { executorDowngradePreflight } from "./auth/dispatch-gate.js";
 import { inheritOwner } from "./auth/run-env.js";
 
@@ -54,11 +55,8 @@ export function mountTaskRoutes(api: Hono): void {
     ids.length > TASK_BATCH_LIMIT
       ? { error: `一次最多问 ${TASK_BATCH_LIMIT} 个任务，请分批`, limit: TASK_BATCH_LIMIT, requested: ids.length }
       : null;
-  const agentTypeForExecutor = async (executorId?: string | null): Promise<AgentType | null> => {
-    if (!executorId) return null;
-    const row = (await db.select({ type: agents.type }).from(agents).where(eq(agents.id, executorId))).at(0);
-    return row ? (row.type as AgentType) : null;
-  };
+  const agentTypeForExecutor = (scope: ExecutorScope, executorId?: string | null): AgentType | null =>
+    scope.typeOf(executorId) ?? null;
 
 // ── tasks ───────────────────────────────────────────────────────────────
 // 列表**不带正文**（TaskListItem）：一千多行任务里正文占了响应的一半，而没有一处列表
@@ -178,7 +176,12 @@ api.post("/tasks", async (c) => {
   }
   const ts = now();
   const taskId = id();
-  const executorType = await agentTypeForExecutor(b.executorId);
+  // 执行器是**个人面**资源(§八):别人的 profile 对我等同于不存在。看不见的 id 在这里
+  // 一律归一成 null(按类型默认执行器降级,与悬空 id 同一条口径),否则外人的 id 会连着
+  // 它的名字一起落进我的任务(第 2 轮审查 P1)。自用模式下 scope 是恒等的。
+  const scope = await executorScope(actorOf(c));
+  const executorId = scope.keep(b.executorId);
+  const executorType = agentTypeForExecutor(scope, executorId);
   if (executorType && b.agentType && b.agentType !== executorType) {
     return c.json({ error: `executorId 属于 ${executorType},但 agentType 是 ${b.agentType}`, executorId: b.executorId }, 400);
   }
@@ -189,9 +192,12 @@ api.post("/tasks", async (c) => {
   if (rawTeam?.reviewerAgentType !== undefined && !AGENT_TYPES.includes(rawTeam.reviewerAgentType)) {
     return c.json({ error: "team.reviewerAgentType 不是有效 agent 类型" }, 400);
   }
-  const teamLeadType = rawTeam ? await agentTypeForExecutor(rawTeam.leadExecutorId) : null;
-  const teamWorkerType = rawTeam ? await agentTypeForExecutor(rawTeam.workerExecutorId) : null;
-  const teamReviewerType = rawTeam ? await agentTypeForExecutor(rawTeam.reviewerExecutorId) : null;
+  const teamLeadExecutorId = rawTeam ? scope.keep(rawTeam.leadExecutorId) : null;
+  const teamWorkerExecutorId = rawTeam ? scope.keep(rawTeam.workerExecutorId) : null;
+  const teamReviewerExecutorId = rawTeam ? scope.keep(rawTeam.reviewerExecutorId) : null;
+  const teamLeadType = agentTypeForExecutor(scope, teamLeadExecutorId);
+  const teamWorkerType = agentTypeForExecutor(scope, teamWorkerExecutorId);
+  const teamReviewerType = agentTypeForExecutor(scope, teamReviewerExecutorId);
   if (rawTeam && teamLeadType && rawTeam.lead !== teamLeadType) {
     return c.json({ error: `team.leadExecutorId 属于 ${teamLeadType},但 team.lead 是 ${rawTeam.lead}`, executorId: rawTeam.leadExecutorId }, 400);
   }
@@ -205,15 +211,15 @@ api.post("/tasks", async (c) => {
     ? {
         lead: rawTeam.lead,
         worker: rawTeam.worker,
-        leadExecutorId: rawTeam.leadExecutorId ?? null,
-        workerExecutorId: rawTeam.workerExecutorId ?? null,
+        leadExecutorId: teamLeadExecutorId,
+        workerExecutorId: teamWorkerExecutorId,
         leadModel: rawTeam.leadModel || null,
         leadReasoningEffort: rawTeam.leadReasoningEffort || null,
         workerModel: rawTeam.workerModel || null,
         workerReasoningEffort: rawTeam.workerReasoningEffort || null,
         review: rawTeam.review !== false,
         reviewerAgentType: rawTeam.reviewerAgentType,
-        reviewerExecutorId: rawTeam.reviewerExecutorId ?? null,
+        reviewerExecutorId: teamReviewerExecutorId,
         reviewerModel: rawTeam.reviewerModel || null,
         reviewerReasoningEffort: rawTeam.reviewerReasoningEffort || null,
       }
@@ -233,7 +239,7 @@ api.post("/tasks", async (c) => {
     dependsOn: "[]",
     resumeDependsOn: "[]",
     agentType: b.agentType ?? (teamConfig ? teamConfig.lead : executorType) ?? null,
-    executorId: b.executorId ?? null,
+    executorId,
     model: b.model || null,
     reasoningEffort: b.reasoningEffort || null,
     autoTitle: b.autoTitle ?? false,
@@ -413,8 +419,10 @@ api.patch("/tasks/:id", async (c) => {
   if (b.starredAt !== undefined) patch.starredAt = b.starredAt;
   if (b.labels !== undefined) patch.labels = JSON.stringify(b.labels);
   if (b.groupId !== undefined) patch.groupId = b.groupId;
-  const requestedExecutorId = b.executorId === "" ? null : b.executorId;
-  const executorType = await agentTypeForExecutor(requestedExecutorId);
+  // 同建任务:看不见的执行器 = 不存在,归一成 null 而不是原样落库。
+  const scope = await executorScope(actorOf(c));
+  const requestedExecutorId = b.executorId === "" ? null : scope.keep(b.executorId);
+  const executorType = agentTypeForExecutor(scope, requestedExecutorId);
   if (executorType && b.agentType && b.agentType !== executorType) {
     return c.json({ error: `executorId 属于 ${executorType},但 agentType 是 ${b.agentType}`, executorId: requestedExecutorId }, 400);
   }

@@ -45,6 +45,8 @@ import { claimTurn, continueWhenIdle, isTurnClaimed, releaseTurn, turnRole, when
 import { appendTaskTimeline } from "./task-timeline.js";
 import { BROWSER_VERIFICATION_REMINDER } from "./browser-verification-policy.js";
 import { id, now } from "./util.js";
+import type { Actor } from "./auth/context.js";
+import { canUseOwned } from "./auth/owned.js";
 
 type ReviewRunRow = typeof freeReviewRuns.$inferSelect;
 
@@ -98,7 +100,13 @@ export async function freeReviewReminder(taskId: string): Promise<string> {
 // 预约之前还是之后开跑的——任务正在跑（含已 claim、status 尚未落 running 的窗口）时挂
 // 预约，本回合完成即触发审查，这正是「修复中先把复审预约上」的常规用法。所以这里刻意
 // **不与 turn 互斥**；预约不动工作区、不投消息，写入本身没有并发危害。
-export async function reserveFreeReview(taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> {
+// `actor` = 发起这次预约的人。审查者配置是**个人面**资源(§八),只能选自己那份 ——
+// 不认归属的话,拿到别人的 profile id 就能把它存进自己的预约槽(第 2 轮审查 P1 实测)。
+export async function reserveFreeReview(
+  taskId: string,
+  input: FreeReviewDispatchInput,
+  actor?: Actor,
+): Promise<FreeWorkflowApiState> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new Error("任务不存在");
   if (task.mode !== "single" || task.parentId || task.reviewOf) throw new Error("自由工作流只适用于普通单任务");
@@ -114,11 +122,12 @@ export async function reserveFreeReview(taskId: string, input: FreeReviewDispatc
     const last = await latestWorkspaceRun(taskId);
     if (task.status === "done" && last?.status !== "stopped") throw new Error("任务已完成，请直接派审查");
     const profile = (await db.select().from(reviewerProfiles).where(eq(reviewerProfiles.id, input.reviewerId))).at(0);
-    if (!profile) throw new Error("所选审查者不存在");
+    // 「不是我的」与「根本没有」报同一句话(owned.ts `notYours` 同一个理由)。
+    if (!profile || (actor && !(await canUseOwned(profile, actor)))) throw new Error("所选审查者不存在");
     const mode = checkMode(input.checkMode);
     const retries = retryLimit(input.retryLimit);
     const note = reviewNote(input.note);
-    const override = await reviewOverride(input.override);
+    const override = await reviewOverride(input.override, actor);
     const at = now();
     const existing = (await db.select({ reviewArmed: freeWorkflowStates.reviewArmed }).from(freeWorkflowStates)
       .where(eq(freeWorkflowStates.taskId, taskId))).at(0);
@@ -395,8 +404,11 @@ export type AcceptedMergeReviewTarget = {
 export async function startFreeReview(
   taskId: string,
   input: FreeReviewDispatchInput,
-  opts: { holdTurn?: boolean; slotToken?: string; target?: AcceptedMergeReviewTarget } = {},
+  opts: { holdTurn?: boolean; slotToken?: string; target?: AcceptedMergeReviewTarget; actor?: Actor } = {},
 ): Promise<FreeWorkflowApiState> {
+  // 同 reserveFreeReview:HTTP 派审只能选自己的审查者;结算内部消费预约不传 actor
+  // (那份 reviewerId 在预约那一刻已经认过归属了)。
+  const actor = opts.actor;
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new Error("任务不存在");
   if (task.mode !== "single" || task.parentId || task.reviewOf) throw new Error("自由工作流只适用于普通单任务");
@@ -426,11 +438,12 @@ export async function startFreeReview(
   try {
     if (await reviewingRun(taskId)) throw new Error("审查回合正在进行，结束后再派审");
     const profile = (await db.select().from(reviewerProfiles).where(eq(reviewerProfiles.id, input.reviewerId))).at(0);
-    if (!profile) throw new Error("所选审查者不存在");
+    // 「不是我的」与「根本没有」报同一句话(owned.ts `notYours` 同一个理由)。
+    if (!profile || (actor && !(await canUseOwned(profile, actor)))) throw new Error("所选审查者不存在");
     const mode = checkMode(input.checkMode);
     const retries = opts.target ? 0 : retryLimit(input.retryLimit);
     const note = reviewNote(input.note);
-    const override = await reviewOverride(input.override);
+    const override = await reviewOverride(input.override, actor);
     const config = reviewRunConfig(profile, override);
     const at = now();
     const run: ReviewRunRow = {

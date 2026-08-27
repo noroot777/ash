@@ -9,6 +9,7 @@ import { appendTaskTimeline } from "./task-timeline.js";
 import { id, now } from "./util.js";
 import { actorOf } from "./auth/context.js";
 import { canUseOwned, filterOwned, notYours, ownerStamp } from "./auth/owned.js";
+import { executorScope, type ExecutorScope } from "./auth/owned-executors.js";
 
 type ReviewerRow = typeof reviewerProfiles.$inferSelect;
 
@@ -34,23 +35,29 @@ function agentType(value: unknown): AgentType {
   return value as AgentType;
 }
 
-async function validateExecutor(executorId: string | null, type: AgentType): Promise<void> {
+// 执行器是个人面资源(§八):**看不见的等同于不存在**,所以这里连措辞都不用改 ——
+// 别人的 id 和悬空 id 一样报「所选执行器不存在」,两者对外不可区分(能区分就能枚举)。
+function validateExecutor(scope: ExecutorScope, executorId: string | null, type: AgentType): void {
   if (!executorId) return;
-  const profile = (await db.select({ type: agents.type }).from(agents).where(eq(agents.id, executorId))).at(0);
-  if (!profile) throw new Error("所选执行器不存在");
-  if (profile.type !== type) throw new Error(`所选执行器属于 ${profile.type}，与 ${type} 不匹配`);
+  const actual = scope.typeOf(executorId);
+  if (!actual) throw new Error("所选执行器不存在");
+  if (actual !== type) throw new Error(`所选执行器属于 ${actual}，与 ${type} 不匹配`);
 }
 
+// executorLabel 只在**这条审查者配置归属人**自己的执行器里解析(理由见
+// auth/owned-executors.ts `profilesOwnedBy`)。
 async function toProfile(row: ReviewerRow): Promise<ReviewerProfile> {
   const selected = row.executorId
-    ? (await db.select({ name: agents.name }).from(agents).where(eq(agents.id, row.executorId))).at(0)
+    ? (await db.select({ name: agents.name, ownerUserId: agents.ownerUserId })
+        .from(agents).where(eq(agents.id, row.executorId))).at(0)
     : null;
+  const label = selected && selected.ownerUserId === row.ownerUserId ? selected.name : null;
   return {
     id: row.id,
     name: row.name,
     agentType: row.agentType as AgentType,
     executorId: row.executorId,
-    executorLabel: selected?.name ?? null,
+    executorLabel: label,
     model: row.model,
     reasoningEffort: row.reasoningEffort,
     createdAt: row.createdAt,
@@ -58,11 +65,11 @@ async function toProfile(row: ReviewerRow): Promise<ReviewerProfile> {
   };
 }
 
-async function parseBody(body: Record<string, unknown>, existing?: ReviewerRow) {
+async function parseBody(scope: ExecutorScope, body: Record<string, unknown>, existing?: ReviewerRow) {
   const type = body.agentType === undefined ? existing?.agentType as AgentType : agentType(body.agentType);
   if (!type) throw new Error("智能体类型必填");
   const executorId = body.executorId === undefined ? existing?.executorId ?? null : text(body.executorId, 100);
-  await validateExecutor(executorId, type);
+  validateExecutor(scope, executorId, type);
   return {
     name: body.name === undefined && existing ? existing.name : name(body.name),
     agentType: type,
@@ -83,7 +90,8 @@ export function mountReviewerProfileRoutes(api: Hono): void {
 
   api.post("/reviewer-profiles", async (c) => {
     try {
-      const data = await parseBody(await c.req.json<Record<string, unknown>>());
+      const scope = await executorScope(actorOf(c));
+      const data = await parseBody(scope, await c.req.json<Record<string, unknown>>());
       const at = now();
       const row: ReviewerRow = { id: id(), ...data, ...ownerStamp(actorOf(c)), createdAt: at, updatedAt: at };
       await db.insert(reviewerProfiles).values(row);
@@ -98,7 +106,8 @@ export function mountReviewerProfileRoutes(api: Hono): void {
     const existing = (await db.select().from(reviewerProfiles).where(eq(reviewerProfiles.id, profileId))).at(0);
     if (!(await canUseOwned(existing, actorOf(c)))) return c.json(notYours("审查者"), 404);
     try {
-      const data = await parseBody(await c.req.json<Record<string, unknown>>(), existing);
+      const scope = await executorScope(actorOf(c));
+      const data = await parseBody(scope, await c.req.json<Record<string, unknown>>(), existing);
       await db.update(reviewerProfiles).set({ ...data, updatedAt: now() }).where(eq(reviewerProfiles.id, profileId));
       const updated = (await db.select().from(reviewerProfiles).where(eq(reviewerProfiles.id, profileId))).at(0)!;
       return c.json(await toProfile(updated));

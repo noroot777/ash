@@ -3,9 +3,8 @@
 import type { AgentType, FreeReviewCheckMode, FreeReviewExecutorOverride } from "@ash/shared";
 import { AGENT_TYPES } from "@ash/shared";
 import { FREE_REVIEW_CHECK_MODES } from "@ash/shared/free-workflow";
-import { eq } from "drizzle-orm";
-import { db } from "./db/index.js";
-import { agents } from "./db/schema.js";
+import type { Actor } from "./auth/context.js";
+import { executorScope } from "./auth/owned-executors.js";
 
 const MAX_RETRIES = 5;
 const MAX_REVIEW_NOTE_LENGTH = 2_000;
@@ -46,8 +45,14 @@ function overrideText(value: unknown, max: number, field: string): string | null
  *
  * 校验与审查者配置同源（`reviewer-profiles.ts`）：执行器必须存在、且类型对得上，否则
  * 覆盖会把审查派给一个根本解析不出来的执行器，失败要等到真正开跑才暴露。
+ *
+ * `actor` 给了就按这个人的执行器集合校验（§八：别人的执行器等同于不存在，措辞一致）。
+ * 不给 = 结算内部消费预约槽里那份**已经校验过**的覆盖，此刻没有 HTTP 身份可用。
  */
-export async function reviewOverride(value: unknown): Promise<FreeReviewExecutorOverride | null> {
+export async function reviewOverride(
+  value: unknown,
+  actor?: Actor,
+): Promise<FreeReviewExecutorOverride | null> {
   if (value == null) return null;
   if (typeof value !== "object" || Array.isArray(value)) throw new Error("审查执行器覆盖必须是对象");
   const raw = value as Record<string, unknown>;
@@ -58,9 +63,10 @@ export async function reviewOverride(value: unknown): Promise<FreeReviewExecutor
   const agentType = type as AgentType;
   const executorId = overrideText(raw.executorId, 100, "执行器");
   if (executorId) {
-    const profile = (await db.select({ type: agents.type }).from(agents).where(eq(agents.id, executorId))).at(0);
-    if (!profile) throw new Error("覆盖所选的执行器不存在");
-    if (profile.type !== agentType) throw new Error(`覆盖所选的执行器属于 ${profile.type}，与 ${agentType} 不匹配`);
+    const scope = await executorScope(actor ?? null);
+    const actual = scope.typeOf(executorId);
+    if (!actual) throw new Error("覆盖所选的执行器不存在");
+    if (actual !== agentType) throw new Error(`覆盖所选的执行器属于 ${actual}，与 ${agentType} 不匹配`);
   }
   return {
     agentType,

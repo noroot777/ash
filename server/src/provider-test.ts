@@ -5,6 +5,8 @@ import { db } from "./db/index.js";
 import { llmProviders } from "./db/schema.js";
 import { relayApi, relayRoot } from "./llm.js";
 import { proxyConvertedOpenAiRequest } from "./openai-converter/proxy.js";
+import { actorOf } from "./auth/context.js";
+import { canUseOwned, notYours } from "./auth/owned.js";
 
 const TEST_TIMEOUT_MS = 60_000;
 const TEST_PROMPT = "Reply with exactly OK.";
@@ -168,6 +170,12 @@ export function mountProviderTestRoutes(api: Hono) {
     const stored = body.id
       ? (await db.select().from(llmProviders).where(eq(llmProviders.id, body.id))).at(0)
       : undefined;
+    // 存量行是**个人面**资源(§八),用它之前必须先认归属。不认的话这条端点就是一台
+    // 免费的密钥外发机:请求体给 baseUrl、apiKey 回落到库里那行,服务端就会把别人的
+    // key 当 `Authorization: Bearer` 发到调用者指定的地址(第 2 轮审查 P0 实测捕获)。
+    // 归属对上之后,「表单里改了 baseUrl、key 沿用存量」仍然照走 —— 那是编辑页的常规
+    // 用法(key 不回显,用户没法重新输一遍)。
+    if (body.id && !(await canUseOwned(stored, actorOf(c)))) return c.json(notYours("供应商"), 404);
     const protocol = body.protocol ?? (stored?.protocol as LlmProtocol | undefined) ?? "openai";
     const config: ProviderTestConfig = {
       protocol,

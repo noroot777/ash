@@ -25,6 +25,7 @@ import { freeReviewScreenshots, readFreeReviewReport } from "./free-review-files
 import { headCommit, workspaceDirty, worktreePathFor } from "./git.js";
 import { existsSync } from "node:fs";
 import { readPreview } from "./preview.js";
+import { profilesOwnedBy } from "./auth/owned-executors.js";
 
 export type FreeWorkflowApiState = Omit<FreeWorkflowState, "merge">;
 
@@ -127,7 +128,7 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
     db.select().from(tasks).where(eq(tasks.id, taskId)).then((rows) => rows.at(0)),
     db.select().from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId)).then((rows) => rows.at(0)),
     db.select().from(freeReviewRuns).where(eq(freeReviewRuns.taskId, taskId)).orderBy(desc(freeReviewRuns.createdAt)),
-    db.select({ id: agents.id, name: agents.name }).from(agents),
+    db.select({ id: agents.id, name: agents.name, ownerUserId: agents.ownerUserId }).from(agents),
     db.select().from(freeWorkflowEvents).where(eq(freeWorkflowEvents.taskId, taskId))
       .orderBy(asc(freeWorkflowEvents.occurredAt)),
   ]);
@@ -136,6 +137,8 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
     ? await db.select().from(freeReviewRounds).where(inArray(freeReviewRounds.runId, runs.map((run) => run.id)))
       .orderBy(asc(freeReviewRounds.round))
     : [];
+  // 审查跑在谁的执行器上,只在**这条任务归属人**自己的 profile 里解析(同 task-store)。
+  const profiles = profilesOwnedBy(profileRows, task.ownerUserId);
   const roundsByRun = new Map<string, typeof roundRows>();
   for (const round of roundRows) roundsByRun.set(round.runId, [...(roundsByRun.get(round.runId) ?? []), round]);
   const reviews: FreeReviewRun[] = runs.map((run) => ({
@@ -144,7 +147,7 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
     reviewerName: run.reviewerName,
     agentType: run.agentType as AgentType,
     executorId: run.executorId,
-    executorLabel: profileRows.find((profile) => profile.id === run.executorId)?.name ?? null,
+    executorLabel: profiles.find((profile) => profile.id === run.executorId)?.name ?? null,
     model: run.model,
     reasoningEffort: run.reasoningEffort,
     checkMode: run.checkMode as FreeReviewCheckMode,
