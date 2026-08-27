@@ -1,7 +1,8 @@
 # ash 多用户机制设计(定稿)
 
-状态:定稿于 2026-08-27,经六轮逐分支讨论拍板(任务 dsZcltM6cTHe)。本文是唯一完整方案,
-**不分 v1/v2**——所有语义一次定死;文末「实施顺序」只是开发排期建议,不是功能分版。
+状态:定稿于 2026-08-27,经六轮逐分支讨论拍板 + 一轮对抗性审查修订(12 项,见文末
+「审查修订清单」)(任务 dsZcltM6cTHe)。本文是唯一完整方案,**不分 v1/v2**——所有
+语义一次定死;文末「实施顺序」只是开发排期建议,不是功能分版。
 
 ## 一、定位与信任边界
 
@@ -16,7 +17,7 @@ API + UI 层的护栏,不是 OS 级隔离;恶意用户可以让自己的 agent �
 - 传输安全靠 Tailscale/反代 TLS,系统本身不做 HTTPS(与现状一致)。
 
 (CLI 订阅与宿主级 skill **不在**共享现实清单里——多人模式下它们被彻底隔离/禁用,
-见第八、九节。)
+见第八、九节;隔离有效性已实测,见第九节探针记录。)
 
 ## 二、实例模式:自用 / 多人
 
@@ -32,10 +33,19 @@ API + UI 层的护栏,不是 OS 级隔离;恶意用户可以让自己的 agent �
 ## 三、身份与认证
 
 - **无注册模块,key 即身份**。`users` 表:姓名、实例角色(admin/member)、目录名、
-  keyHash、状态(invited/active/suspended)、创建人、最近活跃。
+  keyHash、状态(invited/active/suspended)、**git 署名(姓名+邮箱,建用户时按姓名
+  生成默认值,本人可改)**、创建人、最近活跃。
 - key 形如 `ash_` + 高熵随机串;**库里只存哈希**,仅在领取/重生成时整屏展示一次。
 - **web 登录**:粘贴 key → 换 HttpOnly cookie 会话(服务端会话表,30 天滑动过期);
   SSE(`/api/events`)天然复用 cookie。登出=删会话。
+- **CSRF 防护是中间件的组成部分,不是可选加固**(实测确认:Hono `req.json()` 就是
+  `JSON.parse(text)`,不校验 content-type,`text/plain` 简单请求可带 cookie 免预检
+  直达):cookie 一律 `SameSite=Lax`;写操作校验 Origin/`Sec-Fetch-Site`
+  (照 `server/src/dir-picker.ts:316-342` 的现成先例)。
+- **闸的覆盖面(正面清单)**:`/api/*`、`/mobile`、`/review`、preview 端点全部在闸内。
+  豁口仅三类:`/api/health`(重启脚本与手机探针)、`/api/handoff/*`(自有 ed25519
+  签名 + 第十一节用户级校验)、登录页与 claim 页本身。SPA 壳放行,但壳内不得内嵌
+  任何数据。
 - **mobile**:设置页在「后端地址」旁增加 key 字段,每请求带 `Authorization: Bearer`。
 - **agent/MCP 流量**:agent 回连 server 已带回合凭证(`x-ash-turn-token`,
   `mcp/src/index.ts`),中间件按「有效回合凭证 → 任务归属项目」放行,不走用户会话。
@@ -43,8 +53,6 @@ API + UI 层的护栏,不是 OS 级隔离;恶意用户可以让自己的 agent �
   管理员也可为任何用户重置(生成新的专属邀请链接让他重领)。
 - **逃生门**:唯一管理员丢 key 时,在宿主机跑 CLI 命令(能碰到数据库文件的人本来就
   拥有一切)生成一条新的管理员邀请链接;不破坏「无注册、凭 key 登录」模型。
-- 中间件豁口:`/api/health`(重启脚本与手机探针)、`/api/handoff/*`(自有 ed25519
-  签名体系,用户级校验见第十一节)、登录页与 claim 页本身。
 
 ## 四、角色与权限
 
@@ -72,13 +80,15 @@ API + UI 层的护栏,不是 OS 级隔离;恶意用户可以让自己的 agent �
 设置页新增「用户」节:
 
 - 列表:姓名 / 目录名 / 角色 / 状态 / 最近活跃。
-- **添加用户**:填姓名 + 目录名 + 角色(普通用户/管理员)→ 在根目录下创建其目录并
-  初始化个人 CLI 环境(第九节)→ 生成**专属邀请链接**(一人一链)。实例开户
-  **只有这一条路**,没有自助注册。
+- **添加用户**:填姓名 + 目录名 + 角色(普通用户/管理员)+ git 署名(默认按姓名生成)
+  → 在根目录下创建其目录并初始化个人 CLI 环境(第九节)→ 生成**专属邀请链接**
+  (一人一链)。实例开户**只有这一条路**,没有自助注册。
 - **专属邀请链接**:7 天未领取自动过期,管理员可随时作废/重发。领取流程:打开链接
   先看到说明页 → 点「领取」才生成并展示 key(停留期间可复制)→ 点「我已保存」后
   链接作废、账号转 active。避免「手滑点开没保存就作废」的锁死。
-- **停用/恢复**:停用立即断该用户所有会话;不做删除(牵扯归属转移,只停用)。
+- **停用/恢复**:停用 = 立即断该用户所有会话 + **停止其名下 running/queued 任务
+  (走现有 stop 语义)+ 暂停其创建的日程**;恢复启用后由本人自行续跑。不做删除
+  (牵扯归属转移,只停用)。
 - **重置 key**:走专属邀请链接重领,旧 key 即刻失效。
 
 ## 六、项目成员与邀请(项目层)
@@ -95,10 +105,16 @@ API + UI 层的护栏,不是 OS 级隔离;恶意用户可以让自己的 agent �
 
 - 实例设置 **根目录 rootDir**(仅管理员,转多人时必填);每个用户在其下有一个目录
   `rootDir/<dirName>`(添加用户时创建,目录名做 slug 校验)。
+- **rootDir 与用户目录名设定后锁死**,系统不提供修改入口(一改所有已建项目路径失效)。
+  确要改走「手工迁移 + 改库」的文档化步骤,风险自担。
 - **普通用户**的项目路径钳死在本人目录内:新建项目可**选择本人目录内已存在的子目录**
   (不必每次新建目录)、也可新建目录、或克隆(目标限本人目录内)。
   服务端用 realpath + isInsidePath 钳制(复用 `server/src/file-browser.ts` 的防软链
-  越狱原语)。
+  越狱原语)。**禁止把用户目录根本身注册为项目**(只能用子目录)。
+- **钳制在 server 端对一切入口生效,MCP 不例外**:`resolve_project`/`create_task_chain`
+  等吃 `repoPath` 的 MCP 工具(`mcp/src/index.ts`)与 HTTP 的
+  `POST/PATCH /api/projects*` 同受「回合凭证 → 任务 owner → 其目录」钳制——否则
+  普通用户让 agent 调一句 MCP 就能把项目建到任意路径,整节作废。管理员任务例外。
 - 「浏览」改为**网页目录树选择器**(新做受限 fs-browse API,根钉死在本人目录);
   现有的原生桌面弹窗(`dir-picker`)对普通用户停用——它弹在服务器桌面上,对远程
   用户无意义。
@@ -114,46 +130,72 @@ API + UI 层的护栏,不是 OS 级隔离;恶意用户可以让自己的 agent �
   默认起手式);随手记(转私有);我的 key;个人 CLI 环境(第九节)。
 - **实例面(仅管理员)**:用户管理、根目录、实例模式、技能扫描间隔(机器级轮询行为)。
 - 新成员冷启动靠**配置导出/导入**(第十节),不靠共享库。
-- 实现注:上述资源表逐一挂 `userId`;任务/会话/分组跟项目走,不挂个人。
+
+**任务归属**:`tasks.ownerUserId`,三条继承规则——派生任务(团队执行者/审查任务/
+就地验证轮)继承父任务;日程/定时消息触发的继承日程创建者;接力导入的记对端用户。
+任务的可见性仍跟项目走,`ownerUserId` 决定的是「用谁的执行器/供应商/CLI 环境跑」
+和统计归属。
+
+**共享项目里的跨人操作**:任务落库时存执行器快照(名字/类型/型号,照现有 workflow
+快照先例)。他人重跑/回复/派审时若无权解析原执行器(它是别人的私有资源),**降级到
+本人的默认执行器**,且**弹窗显式确认**「原执行器属于 A 的 xxx,将改用你的 yyy」——
+烧的是自己的 key;不静默替换(换执行器可能换模型档位,产出会变)。
 
 **宿主机 CLI 订阅在多人模式下彻底抹去,不让任何用户烧**:
 
-- 个人 CLI 配置目录**整体取代**宿主机 `~/.claude`/`~/.codex` 且不回落(第九节),
-  宿主机的订阅登录对多人任务天然不可见——这不是靠约定,是 CLI 自身语义。
-- **执行器必须挂供应商才能派发**:多人模式下 `providerId` 为空的执行器在 UI 标为
-  不可用,后端拒绝派发。
+- 个人 CLI 配置目录**整体取代**宿主机 `~/.claude`/`~/.codex` 且不回落(第九节);
+  **隔离有效性已实测**(2026-08-27 探针,见第九节):空配置目录 + 无 API key 时
+  claude 直接报「Not logged in」退出,不回落宿主钥匙串登录。
+- **多人模式仅允许接了供应商注入(relay)的 CLI 派发**——约束挂在「catalog 里有无
+  relay 实现」上,不写死名单;当前为 claude/codex/qwen(全 catalog 18 个 CLI 中,
+  gemini/grok/antigravity 源码注明「未接 relay」及原因,其余未接)。其余 CLI 在 UI
+  明示「多人模式不可用:该 CLI 不支持第三方 key」;将来某 CLI 接上 relay 自动解禁。
+  不做管理员放行白名单(那是变相共享池)。
+- `providerId` 为空的执行器在多人模式下 UI 标不可用、后端拒绝派发。
 - server 进程自身环境里的出站凭证(如 `ANTHROPIC_API_KEY`)不透传给 agent
   (spawn env 清理)。
-- 诚实注:有终端权限的实例管理员技术上可以在自己的个人配置目录里 `claude login`
+- **git 署名注入**:spawn 任务时按 `ownerUserId` 注入 `GIT_AUTHOR_NAME/EMAIL` 与
+  `GIT_COMMITTER_*`(来自用户资料的 git 署名字段)——否则多人协作的提交在 git log
+  里全是宿主机一个身份,归属清晰无从谈起。
+- 诚实注:有终端权限的实例管理员技术上可以在个人配置目录里 `claude login`
   (自己的凭证放自己目录);系统不提供入口也不阻止。普通用户没有终端,无此路径。
 
 ## 九、个人 CLI 环境:skill / CLAUDE.md / AGENTS.md / 插件按人
 
 个人级 skill **能实现**,载体是「每用户每 CLI 一个独立配置目录」:
 
-- 位置:`rootDir/<dirName>/.ash/cli/<agentType>/`(在用户自己目录下,他的 agent
-  也够得着,可以派任务让 agent 帮自己写 skill)。建用户时初始化。
+- 位置:**server 数据目录 `data/user-cli/<userId>/<agentType>/`**——不放用户项目
+  目录内,项目路径永远够不着它,git 永远看不见它(放用户目录内会撞上「把含 `.ash`
+  的目录建成项目」的污染)。建用户时初始化。
 - spawn 该用户的任务时注入:claude → `CLAUDE_CONFIG_DIR`;codex → `CODEX_HOME`;
   gemini 视 CLI 是否提供等价环境变量,没有则该 CLI 的个人级如实降级为「仅项目级」
   并在 UI 标注。
-- `CLAUDE_CONFIG_DIR` 的语义代码里已实测钉住(`server/src/executors/claude-settings.ts:25-27`):
-  **整个取代 `~/.claude`,不回落**。于是宿主级 skill、插件、订阅登录对多人任务
-  全部不可见——隔离和「抹去订阅」(第八节)是同一个机制的两面。
 - 由此得到的个人级四件套:
   - 个人 skill:`<配置目录>/skills/`
   - 个人全局 CLAUDE.md:`<配置目录>/CLAUDE.md`(claude);codex 的个人全局
     AGENTS.md:`<CODEX_HOME>/AGENTS.md`
   - 个人插件:`<配置目录>/plugins/`
-  - 个人 CLI 设置(settings.json / config.toml):ash 建目录时**预置最小种子**
-    (onboarding 完成标记等),保证 headless 首跑不卡交互
+  - 个人 CLI 设置(settings.json / config.toml):ash 建目录时**预置种子**(见下)
 - **项目级不变**:仓库里的 `.claude/skills`、`CLAUDE.md`、`AGENTS.md` 照旧跟项目走。
   两层并存,与 CLI 原生的「用户层+项目层」模型完全一致——个人 skill 装一次全项目
   可用,不用每个项目都装。
 - **管理面**:设置页新增「个人 CLI 环境」节:技能列表(上传/新建/编辑/删除
   SKILL.md)、个人 CLAUDE.md / AGENTS.md 编辑器、插件管理。
-- skill 扫描(`server/src/skills.ts`,现扫 homedir)改为按任务发起用户的配置目录扫,
-  扫描缓存键增加用户维度。
+- skill 扫描(`server/src/skills.ts`,现扫 homedir)改为按任务 `ownerUserId` 的
+  配置目录扫,扫描缓存键增加用户维度。
 - 自用模式完全不变:继续用宿主机默认目录,订阅照用。
+
+**2026-08-27 探针实测记录**(空 `CLAUDE_CONFIG_DIR` + 清空 auth 环境变量,
+claude 2.x headless):
+
+1. **不带 API key:直接「Not logged in · Please run /login」退出**——不回落宿主
+   钥匙串(claude 二进制确有 `find-generic-password` 调用,但查找按配置目录隔离)。
+   「配置目录即隔离/抹去订阅」成立。
+2. **`~/.claude.json` 跟着配置目录走**:首跑在配置目录内生成 `.claude.json`,宿主
+   `~/.claude.json` 未被触碰;并自建 backups/projects/sessions 目录。
+3. **带(假)API key 的首跑挂起 >120s 无输出**,卡点未定位——所以**seed 不能裸上线**:
+   实施第 6 批次必须先用真 key 做「零交互冒烟测试」,确认预置种子(onboarding 标记、
+   key 批准记录等)后 headless 首跑能直接出活,才算过。
 
 ## 十、配置导出 / 导入
 
@@ -176,7 +218,7 @@ API + UI 层的护栏,不是 OS 级隔离;恶意用户可以让自己的 agent �
 - **来源审批(inbound)**:实例级状态,但**全员可见可批**(互信定位),记录操作人;
   不是管理员专属。**审批必须知情**:`/handoff/ping` 响应携带对方 `instanceMode`
   (多人时附用户数),审批界面明示对方是单人还是多人实例。
-- 发起接力只能从自己有权限的项目发起。
+- 发起接力只能从自己有权限的项目发起;导入的任务 `ownerUserId` 记对端用户(第八节)。
 
 四种组合的完整矩阵:
 
@@ -205,23 +247,47 @@ API + UI 层的护栏,不是 OS 级隔离;恶意用户可以让自己的 agent �
 
 ## 十四、实施顺序(仅开发排期,不是功能分版)
 
-1. 认证骨架:users/会话/中间件/登录页/首启向导/模式转换/宿主机逃生门。
-2. 用户管理 UI + 专属邀请 claim 流程 + 停用/重置/自助轮换。
-3. 目录模型:rootDir、用户目录、fs-browse API + 网页目录树、创建/克隆钳制、
-   dir-picker 与终端的角色门禁。
+1. 认证骨架:users(含 git 署名字段)/会话/中间件(**含 SameSite+Origin 校验、
+   `/mobile`/`/review`/preview 全覆盖**)/登录页/首启向导/模式转换/宿主机逃生门;
+   建表时一并加 `tasks.ownerUserId`。
+2. 用户管理 UI + 专属邀请 claim 流程 + 停用(含停任务/停日程)/重置/自助轮换。
+3. 目录模型:rootDir(锁定语义)、用户目录、fs-browse API + 网页目录树、创建/克隆
+   钳制(**HTTP 与 MCP 全部入口**)、禁止用户目录根建项目、dir-picker 与终端的
+   角色门禁。
 4. 项目成员(两种邀法)+ 全面可见性过滤(含 SSE)。
-5. 资源表按人拆分(逐表挂 userId)+ 配置导出导入。
-6. 个人 CLI 环境:配置目录初始化/seed、spawn 注入、执行器必须挂供应商的闸、
+5. 资源表按人拆分(逐表挂 userId)+ 执行器快照与跨人降级确认 + 配置导出导入。
+6. 个人 CLI 环境:配置目录初始化/seed(**先过零交互冒烟测试**,见第九节探针记录)、
+   spawn 注入(CLI 配置目录 + git 署名 + 清理出站凭证)、仅 relay CLI 可派发的闸、
    skill 扫描按人、「个人 CLI 环境」设置节。
 7. 接力用户级授权(对端 key 链路)+ 目标机配置按人 + 知情审批 + mobile 登录字段。
+
+## 审查修订清单(2026-08-27 对抗性审查,12 项)
+
+| # | 问题 | 处置(落点) |
+|---|---|---|
+| A1 | macOS keychain 可能绕过「抹去订阅」 | **实测否定**:空配置目录不回落钥匙串(§九探针) |
+| A2 | 仅 claude/codex/qwen 接了 relay | 多人模式仅允许有 relay 的 CLI,约束挂 catalog(§八) |
+| B3 | tasks 无归属列 | `ownerUserId` + 三条继承规则(§八) |
+| B4 | MCP 任意 repoPath 绕过目录模型 | server 端对 HTTP+MCP 全入口钳制(§七) |
+| B5 | 共享项目里私有执行器断链 | 快照 + 降级本人默认执行器 + 显式确认(§八) |
+| B6 | git 提交全署宿主机身份 | 用户资料 git 署名 + spawn 注入(§三/§八) |
+| B7 | 停用用户时在跑任务无定义 | 停用=断会话+停任务+停日程(§五) |
+| C8 | cookie 引入 CSRF(Hono 不校验 content-type,实测) | SameSite=Lax + Origin 校验进中间件(§三) |
+| C9 | 静态面(/mobile 等)不在闸内 | 覆盖面改为正面清单(§三) |
+| D10 | 个人配置目录放用户目录内会被项目化污染 | 挪 `data/user-cli/`,并禁用户目录根建项目(§九/§七) |
+| D11 | rootDir/目录名事后改无定义 | 设定后锁死,改=手工迁移(§七) |
+| D12 | seed 内容未验证 | 探针已解 2/3(§九);带 key 首跑挂起→冒烟测试为第 6 批次硬前置 |
 
 ## 附:关键代码落点(2026-08-27 调查)
 
 - 鉴权中间件落点:`server/src/index.ts:165-166`(`app.route("/api", api)` 之前)。
 - 路由总表:`server/src/routes.ts`;终端(裸 shell):`server/src/terminal.ts`。
+- Origin/`Sec-Fetch-Site` 校验先例:`server/src/dir-picker.ts:316-342`;
+  Hono `req.json()` 不校验 content-type:`node_modules/hono/dist/request.js:117`。
 - 设置边界:`server/src/app-settings.ts`,类型真源 `shared/src/index.ts`(AppSettings)。
 - 项目创建/路径:`server/src/project-routes.ts`、`server/src/project-clone.ts`、
-  `web/src/overlays/CreateProjectDialog.tsx`;原生目录弹窗 `server/src/dir-picker.ts`。
+  `web/src/overlays/CreateProjectDialog.tsx`;原生目录弹窗 `server/src/dir-picker.ts`;
+  MCP 侧 repoPath 入口:`mcp/src/index.ts:144-158` 等。
 - 路径钳制原语:`server/src/file-browser.ts:119-148`(realpath + isInsidePath)。
 - 接力:`server/src/handoff-identity.ts`、`handoff-peers.ts`、`handoff-routes.ts`。
 - skill 三层来源:`server/src/skills.ts:130-144`(project/user/plugin);codex 已尊重
