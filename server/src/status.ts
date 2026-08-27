@@ -36,6 +36,7 @@ export async function setTaskStatus(taskId: string, status: TaskStatus): Promise
   if (status !== "running") {
     patch.activeTurnToken = null;
     patch.activeDirectionToken = null;
+    patch.activeDirectionVersion = 0;
   }
 
   await db.update(tasks).set(patch).where(eq(tasks.id, taskId));

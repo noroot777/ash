@@ -574,6 +574,7 @@ try {
   const newIdentity = (await db.select().from(tasks).where(eq(tasks.id, steerLateTaskId))).at(0)!;
   assert.equal(newIdentity.activeTurnToken, oldIdentity.activeTurnToken, "原生引导必须保留 turn token");
   assert.notEqual(newIdentity.activeDirectionToken, oldIdentity.activeDirectionToken, "引导必须旋转方向 token");
+  assert.equal(newIdentity.activeDirectionVersion, 2, "首次引导必须进入第二个方向世代");
   const api = new Hono(); runRoutes.mountTaskRunRoutes(api);
   const ask = (direction?: string) => api.request(`/tasks/${steerLateTaskId}/ask`, {
     method: "POST",

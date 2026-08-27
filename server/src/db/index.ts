@@ -81,6 +81,7 @@ export async function ensureSchema() {
       resume_depends_on TEXT NOT NULL DEFAULT '[]',
       agent_type TEXT, executor_id TEXT, model TEXT, reasoning_effort TEXT,
       active_turn_token TEXT, active_direction_token TEXT,
+      active_direction_version INTEGER NOT NULL DEFAULT 0,
       auto_title INTEGER NOT NULL DEFAULT 0, duet TEXT, schedule_id TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL, started_at TEXT, ended_at TEXT,
       archived INTEGER NOT NULL DEFAULT 0, archived_at TEXT
@@ -245,6 +246,7 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN complete_confirmed_at TEXT",
     "ALTER TABLE tasks ADD COLUMN active_turn_token TEXT",
     "ALTER TABLE tasks ADD COLUMN active_direction_token TEXT",
+    "ALTER TABLE tasks ADD COLUMN active_direction_version INTEGER NOT NULL DEFAULT 0",
     // 正交验收阶段，只用于展示与协作，不进入 TaskStatus 调度/结算
     "ALTER TABLE tasks ADD COLUMN stage TEXT",
     // 正交列表展示字段：null=未置顶，整数毫秒时间戳用于多个置顶任务排序

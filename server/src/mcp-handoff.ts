@@ -145,10 +145,18 @@ export function collectAshMcpCalls(outPath: string, agentType: AgentType): McpCa
  * 依次砍掉：不该补的、补不得的、以及**已经不需要补的**。最后一类是这个函数存在的主要理由 ——
  * agent 失败之后往往自己重试成功了，照着失败记录无脑重放会把它后来的判断覆盖掉。
  */
-export function planReplay(calls: McpCallRecord[], taskId: string, directionToken?: string | null): McpCallRecord[] {
+export function planReplay(
+  calls: McpCallRecord[],
+  taskId: string,
+  directionToken?: string | null,
+  directionVersion = 0,
+): McpCallRecord[] {
   const directionBound = new Set(["complete_task", "pause_task"]);
   const eligible = calls.filter((call) => !directionToken || !directionBound.has(call.tool)
-    || call.args.directionToken === directionToken);
+    || call.args.directionToken === directionToken
+    // 首方向/升级前回合允许省略：MCP 会用启动时的 env token 发 HTTP，日志参数里没有它。
+    // 引导后(version>1)则必须显式带最新 token，否则无法区分旧方向的迟到调用。
+    || (call.args.directionToken === undefined && directionVersion <= 1));
   const succeeded = new Set(eligible.filter((c) => c.ok).map((c) => c.tool));
   const chosen = new Map<string, McpCallRecord>();
   for (const call of eligible) {
@@ -251,9 +259,12 @@ export async function replayUndeliveredMcpCalls(a: {
   const { out } = detachedPathsFor(join(RUNS_DIR, a.taskId), a.sessId, a.turnStart);
   const calls = collectAshMcpCalls(out, a.agentType);
   if (!calls.length) return 0;
-  const directionToken = (await db.select({ token: tasks.activeDirectionToken }).from(tasks)
-    .where(eq(tasks.id, a.taskId))).at(0)?.token;
-  const plan = planReplay(calls, a.taskId, directionToken);
+  const direction = (await db.select({
+    token: tasks.activeDirectionToken,
+    version: tasks.activeDirectionVersion,
+  }).from(tasks).where(eq(tasks.id, a.taskId))).at(0);
+  const directionToken = direction?.token;
+  const plan = planReplay(calls, a.taskId, directionToken, direction?.version ?? 0);
   let done = 0;
   for (const call of plan) {
     const note = await applyReplay(a.taskId, a.sessId, call, directionToken).catch(() => null);

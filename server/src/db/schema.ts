@@ -169,6 +169,9 @@ export const tasks = sqliteTable("tasks", {
   activeTurnToken: text("active_turn_token"),
   // 同一原生回合里的方向身份。引导会话会旋转它，旧方向迟到的完成/暂停/提问因此被拒。
   activeDirectionToken: text("active_direction_token"),
+  // 当前回合已经进入第几个方向。1=尚未引导；>1=发生过引导，用于断线补录判定省略 token
+  // 的普通首方向调用可以恢复，而引导后的无身份调用不能被冒充成当前方向。
+  activeDirectionVersion: integer("active_direction_version").notNull().default(0),
   // 这一轮是 CLI 原生命令（`/compact`）：整条消息由 CLI 本地执行，不进模型 —— 既不是
   // 任务的执行，也不是一轮验证。结算钩子（派验证 / 收验证轮 / 推工作流）必须整段跳过，
   // 否则「压一下上下文」会被记成一轮验证跑完，还白吃一轮配额。开跑时写，结算后清空；

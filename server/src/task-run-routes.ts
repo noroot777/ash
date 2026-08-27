@@ -231,7 +231,7 @@ api.post("/tasks/:id/pause", async (c) => {
   const pauseDirection = c.req.header("x-ash-direction-token");
   if (r.activeDirectionToken && pauseDirection !== r.activeDirectionToken) {
     return c.json({ error: pauseDirection
-      ? "检查点来自引导前的旧方向，已拒绝写入当前会话"
+      ? "检查点的方向身份已过期；请从最新用户消息的【当前方向身份】复制 directionToken 后重试"
       : "MCP 未携带当前方向身份（请传当前消息附带的 directionToken），检查点已拒绝写入" }, 409);
   }
   const updated = await db
@@ -275,7 +275,7 @@ api.post("/tasks/:id/complete", async (c) => {
   const completeDirection = c.req.header("x-ash-direction-token");
   if (r.activeDirectionToken && completeDirection !== r.activeDirectionToken) {
     return c.json({ error: completeDirection
-      ? "完成确认来自引导前的旧方向，已拒绝写入当前会话"
+      ? "完成确认的方向身份已过期；请从最新用户消息的【当前方向身份】复制 directionToken 后重试 complete_task"
       : "MCP 未携带当前方向身份（请传当前消息附带的 directionToken），完成确认已拒绝写入" }, 409);
   }
   const updated = await db
@@ -384,7 +384,7 @@ api.post("/tasks/:id/ask", async (c) => {
   const askDirection = c.req.header("x-ash-direction-token");
   if (r.mode !== "team" && r.activeDirectionToken && askDirection !== r.activeDirectionToken) {
     return c.json({ error: askDirection
-      ? "提问来自引导前的旧方向，已拒绝写入当前会话"
+      ? "提问的方向身份已过期；请从最新用户消息的【当前方向身份】复制 directionToken 后重试 ask_question"
       : "MCP 未携带当前方向身份（请传当前消息附带的 directionToken），提问已拒绝写入" }, 409);
   }
   const asked = await setTaskQuestion({

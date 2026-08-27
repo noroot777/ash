@@ -38,8 +38,10 @@ type MessageRow = typeof scheduledMessages.$inferSelect;
 interface PreviousDirectionState {
   activeTurnToken: string | null;
   activeDirectionToken: string | null;
+  activeDirectionVersion: number;
   clearedTurnToken: string;
   clearedDirectionToken: string;
+  clearedDirectionVersion: number;
   completeConfirmedAt: string | null;
   resumePrompt: string | null;
   question: string | null;
@@ -63,6 +65,7 @@ async function clearPreviousDirectionState(
     .select({
       activeTurnToken: tasks.activeTurnToken,
       activeDirectionToken: tasks.activeDirectionToken,
+      activeDirectionVersion: tasks.activeDirectionVersion,
       completeConfirmedAt: tasks.completeConfirmedAt,
       resumePrompt: tasks.resumePrompt,
       question: tasks.question,
@@ -77,6 +80,7 @@ async function clearPreviousDirectionState(
   }
   const clearedTurnToken = rotateTurnToken ? id() : current.activeTurnToken;
   const clearedDirectionToken = id();
+  const clearedDirectionVersion = Math.max(current.activeDirectionVersion + 1, 2);
   if (!clearedTurnToken) {
     if (confirmedBefore) confirmDone(taskId);
     throw new Error("当前回合缺少身份 token，无法原生引导");
@@ -89,6 +93,7 @@ async function clearPreviousDirectionState(
       .set({
         activeTurnToken: clearedTurnToken,
         activeDirectionToken: clearedDirectionToken,
+        activeDirectionVersion: clearedDirectionVersion,
         completeConfirmedAt: null,
         resumePrompt: null,
         question: null,
@@ -104,6 +109,7 @@ async function clearPreviousDirectionState(
         current.activeDirectionToken === null
           ? isNull(tasks.activeDirectionToken)
           : eq(tasks.activeDirectionToken, current.activeDirectionToken),
+        eq(tasks.activeDirectionVersion, current.activeDirectionVersion),
         current.completeConfirmedAt === null
           ? isNull(tasks.completeConfirmedAt)
           : eq(tasks.completeConfirmedAt, current.completeConfirmedAt),
@@ -140,7 +146,7 @@ async function clearPreviousDirectionState(
       console.warn(`[ash] 引导会话已清提问，但实时通知失败 ${taskId}:`, error);
     }
   }
-  return { ...current, clearedTurnToken, clearedDirectionToken, memoryConfirmed };
+  return { ...current, clearedTurnToken, clearedDirectionToken, clearedDirectionVersion, memoryConfirmed };
 }
 
 async function discardLateDirectionState(taskId: string, turnToken: string, directionToken: string): Promise<void> {
@@ -202,6 +208,9 @@ async function restorePreviousDirectionState(
       activeDirectionToken: preserveDirectionBarrier
         ? previous.clearedDirectionToken
         : previous.activeDirectionToken,
+      activeDirectionVersion: preserveDirectionBarrier
+        ? previous.clearedDirectionVersion
+        : previous.activeDirectionVersion,
       completeConfirmedAt: previous.completeConfirmedAt,
       resumePrompt: previous.resumePrompt,
       question: previous.question,
@@ -213,6 +222,7 @@ async function restorePreviousDirectionState(
       eq(tasks.id, taskId),
       eq(tasks.activeTurnToken, previous.clearedTurnToken),
       eq(tasks.activeDirectionToken, previous.clearedDirectionToken),
+      eq(tasks.activeDirectionVersion, previous.clearedDirectionVersion),
       isNull(tasks.completeConfirmedAt),
       isNull(tasks.resumePrompt),
       isNull(tasks.question),

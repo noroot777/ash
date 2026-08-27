@@ -70,6 +70,15 @@ assert.equal(claudeCalls[0].args.taskId, TASK, "取的必须是 assistant 那条
 assert.equal(planReplay(claudeCalls, TASK).length, 1);
 assert.equal(planReplay(claudeCalls, TASK, "new-direction").length, 0,
   "引导前旧方向的失败 complete_task 不得被补录进新方向");
+const noDirectionStream = claudeStream.replace(',"directionToken":"old-direction"', "");
+writeStream(TASK, "sessNoDirection", "2026-08-06T05:00:30.000Z", noDirectionStream);
+const noDirectionCalls = collectAshMcpCalls(
+  join(RUNS_DIR, TASK, "sessNoDirection-20260806T050030000Z.agent-out.jsonl"), "claude",
+);
+assert.equal(planReplay(noDirectionCalls, TASK, "new-direction", 1).length, 1,
+  "未引导的首方向允许省略工具参数：HTTP 实际会使用 MCP 启动时的 env token");
+assert.equal(planReplay(noDirectionCalls, TASK, "new-direction", 2).length, 0,
+  "发生过引导后，省略 token 的失败调用身份不明，不得冒充当前方向补录");
 
 // ── ③ 白名单：有后果的调用一律不补 ───────────────────────────────────────────
 // 这是整条路径最要命的一条红灯：accept_task 补一次 = 多合并一次代码。
@@ -147,8 +156,19 @@ assert.ok(
   "补录必须留痕，否则用户看到的是「我没点它自己就过了」",
 );
 
-// ── ⑪ 方向身份：旧方向不补，新方向才允许补 complete_task ─────────────────
-await db.update(tasks).set({ activeDirectionToken: "new-direction", completeConfirmedAt: null }).where(eq(tasks.id, TASK));
+// ── ⑪ 方向身份：普通首方向可省略；引导后旧/缺失身份不补，当前方向才补 ───────
+await db.update(tasks).set({
+  activeDirectionToken: "new-direction",
+  activeDirectionVersion: 1,
+  completeConfirmedAt: null,
+}).where(eq(tasks.id, TASK));
+assert.equal(await replayUndeliveredMcpCalls({
+  taskId: TASK, sessId: "sessNoDirection", turnStart: "2026-08-06T05:00:30.000Z", agentType: "claude",
+}), 1, "从未引导的普通任务即使没把 env token 抄进参数，断线完成确认仍应补录");
+await db.update(tasks).set({ activeDirectionVersion: 2, completeConfirmedAt: null }).where(eq(tasks.id, TASK));
+assert.equal(await replayUndeliveredMcpCalls({
+  taskId: TASK, sessId: "sessNoDirection", turnStart: "2026-08-06T05:00:30.000Z", agentType: "claude",
+}), 0, "引导后的无身份调用不得绕过方向隔离");
 assert.equal(await replayUndeliveredMcpCalls({
   taskId: TASK, sessId: "sessB", turnStart: "2026-08-06T05:00:00.000Z", agentType: "claude",
 }), 0, "旧方向 transport closed 也不能绕过方向隔离");

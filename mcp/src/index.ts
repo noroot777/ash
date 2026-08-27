@@ -408,7 +408,7 @@ server.registerTool(
       "在执行中调用,告诉 ash:「本任务的目标我确定已经达成了」。回合结束结算时读到这个确认才会把任务落成 done;**没有确认的正常退出(exit 0)会按未完成记为 failed**——因为正常退出不代表目标达成(报错后退出也是 exit 0),假 done 会误推进队列、错误唤醒下游任务。\n\n用法:当且仅当你核实任务目标已达成(产物在、校验过),在结束回合前调一次本工具,然后正常结束输出。**只能在任务正在跑时调用**。没完成就不要调:需要等外部条件用 pause_task;做不下去直接说明原因退出(会记 failed,用户可重试续跑)。",
     inputSchema: {
       taskId: z.string().describe("当前正在执行的任务 id(任务 prompt 前言里有)"),
-      directionToken: z.string().min(1).optional().describe("当前用户方向附带的 directionToken；发生过引导时必须传最新值"),
+      directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
     },
   },
   async ({ taskId, directionToken }) => {
@@ -426,7 +426,7 @@ server.registerTool(
     inputSchema: {
       taskId: z.string().describe("当前正在执行的任务 id"),
       resumePrompt: z.string().min(1).describe("下次被 resume 时喂给你的 user 消息 —— 就当成一条「继续：…」replied 写"),
-      directionToken: z.string().min(1).optional().describe("当前用户方向附带的 directionToken；发生过引导时必须传最新值"),
+      directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
     },
   },
   async ({ taskId, resumePrompt, directionToken }) => {
@@ -481,7 +481,7 @@ server.registerTool(
         .max(MAX_QUESTION_ITEMS)
         .optional()
         .describe(`一次并列询问的相关问题(可选,最多 ${MAX_QUESTION_ITEMS} 个)；每题会独立显示候选和输入框。`),
-      directionToken: z.string().min(1).optional().describe("单飞任务当前用户方向附带的 directionToken；团队任务可省略"),
+      directionToken: z.string().min(1).optional().describe("单飞任务必须原样传入最新用户方向附带的 directionToken；只有团队调度台可省略"),
     },
   },
   async ({ taskId, question, options, questionItems, directionToken }) => {

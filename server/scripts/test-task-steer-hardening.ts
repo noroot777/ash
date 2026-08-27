@@ -265,6 +265,7 @@ try {
   assert.equal(claudeNativeState.resumePrompt, null, "interrupt ACK 前旧方向的检查点必须清掉");
   assert.equal(claudeNativeState.question, "新方向发送后的问题", "ACK 后的新方向状态不得被二次清理");
   assert.notEqual(claudeNativeState.activeDirectionToken, "claude-old-direction", "Claude 引导必须旋转方向 token");
+  assert.equal(claudeNativeState.activeDirectionVersion, 2, "Claude 引导后必须进入第二个方向世代");
   assert.equal(runs.takeConfirmed("claude-native-state"), false, "旧方向的内存完成票也必须清掉");
   runs.untrackRun("claude-native-state", claudeNativeHandle);
   runs.releaseTurn("claude-native-state");
@@ -296,6 +297,7 @@ try {
   assert.equal(codexNativeState.resumePrompt, "ACK 后写入的检查点");
   assert.equal(codexNativeState.question, "ACK 后写入的问题");
   assert.notEqual(codexNativeState.activeDirectionToken, "codex-old-direction", "Codex 引导必须旋转方向 token");
+  assert.equal(codexNativeState.activeDirectionVersion, 2, "Codex 引导后必须进入第二个方向世代");
   runs.untrackRun("codex-native-state", codexNativeHandle);
   runs.releaseTurn("codex-native-state");
   console.log("✓ Codex steer ACK 后产生的合法完成、检查点与提问不会被二次清理抹掉");
@@ -311,6 +313,7 @@ try {
   if (!fallback.ok) assert.match(fallback.error, /结束当前回合.*新回合重新投递/);
   const fallbackTask = (await db.select().from(tasks).where(eq(tasks.id, "claude-native-fallback"))).at(0)!;
   assert.notEqual(fallbackTask.activeDirectionToken, "fallback-old-direction", "降级杀旧回合后不得重开旧方向身份");
+  assert.equal(fallbackTask.activeDirectionVersion, 2, "降级重投前也必须保留旧方向隔离世代");
   assert.match(readFileSync(join(root, "runs", "claude-native-fallback", "s-fallback.md"), "utf8"),
     /未确认原生引导.*结束当前回合.*新回合重新投递/, "降级必须留下刷新后可见的系统提示");
   const fallbackMessage = (await db.select().from(scheduledMessages)
@@ -563,6 +566,8 @@ try {
   );
   assert.equal((await db.select().from(tasks).where(eq(tasks.id, "token"))).at(0)!.activeDirectionToken, null,
     "离开 running 后应清掉活动方向 token");
+  assert.equal((await db.select().from(tasks).where(eq(tasks.id, "token"))).at(0)!.activeDirectionVersion, 0,
+    "离开 running 后应清掉活动方向世代");
   console.log("✓ complete_task 严格绑定当前回合 token，旧回合迟到确认返回 409");
 } finally {
   await releaseTmpDb();
