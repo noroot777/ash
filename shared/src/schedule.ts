@@ -24,6 +24,14 @@ export interface Schedule {
 // 一个任务可以同时挂多条，按 `sendAt` 升序依次投递，每次只发一条。
 export type ScheduledMessageStatus = "pending" | "sent" | "canceled";
 export type ScheduledMessageMode = "timed" | "queued";
+// 这条消息该投进哪个会话。null = 任务自己那个会话（用户手写的回复都是这种）；
+// "reviewer" = 自由工作流的审查会话——`/answer` 抢不到回合时把 reviewer 答复排进
+// 同一张表，投递时由 pending-messages 带着这个角色回到 reviewer 会话。
+//
+// 界面上必须能分辨这两者：带角色的消息**不归用户的对话框管**。撤回把内容放回普通
+// 输入框，再发一次走的是普通 /reply，角色就丢了（答复会进错会话，审查链等不到它）。
+// 所以托盘对这类消息只展示、不提供撤回/引导入口。
+export type ScheduledMessageSessionRole = "single" | "reviewer";
 export interface ScheduledMessage {
   id: string;
   taskId: string;
@@ -34,6 +42,7 @@ export interface ScheduledMessage {
   executorId: string | null;
   model: string | null;
   reasoningEffort: string | null;
+  sessionRole: ScheduledMessageSessionRole | null;
   mode: ScheduledMessageMode;
   // timed：ISO 到期发送时间。queued：入队时刻（排队消息不看时间，只用它排先后）。
   sendAt: string;

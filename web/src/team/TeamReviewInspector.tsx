@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { STAGE_LABELS, TASK_STATUS_LABELS, type Task } from "@ash/shared";
+import { STAGE_LABELS, TASK_STATUS_LABELS, type Task, type TaskListItem } from "@ash/shared";
 import {
   CaretRight,
   CheckCircle,
@@ -9,7 +9,7 @@ import {
 import { ReviewEvidence, useTaskReviewInfo } from "./ReviewEvidence.tsx";
 import { ReviewEvidenceDrawer } from "../review/ReviewEvidenceDrawer.tsx";
 
-function reviewLabel(task: Task) {
+function reviewLabel(task: TaskListItem) {
   if (task.stage) return STAGE_LABELS[task.stage];
   if (task.reviewRequested) return "等待自动审查";
   return TASK_STATUS_LABELS[task.status];
@@ -22,7 +22,7 @@ function reviewLabel(task: Task) {
 // 那是验收痕迹不是验证痕迹。照它列出来，列表里就会混进一堆点开只有「尚无审查记录」的
 // 执行者和调度台——用户看到的正是那一屏。被审对象自己的 accepted 不受影响：它由代表它
 // 的那条审查任务带进列表，不走这条判据。
-function hasReviewRecord(task: Task): boolean {
+function hasReviewRecord(task: TaskListItem): boolean {
   if (task.reviewOf || task.reviewRequested) return true;
   return task.stage === "verifying" || task.stage === "verified" || task.stage === "verify_failed";
 }
@@ -32,7 +32,7 @@ function TargetEvidence({
   subject,
   onOpenTask,
 }: {
-  subject: Task;
+  subject: TaskListItem;
   onOpenTask: (taskId: string) => void;
 }) {
   const review = useTaskReviewInfo(subject.id);
@@ -60,7 +60,7 @@ export function TeamReviewInspector({
   onOpenTask,
 }: {
   lead: Task;
-  workers: Task[];
+  workers: TaskListItem[];
   onOpenReview: () => void;
   onOpenTask: (taskId: string) => void;
 }) {
@@ -76,14 +76,14 @@ export function TeamReviewInspector({
   );
   const byId = useMemo(() => new Map(all.map((task) => [task.id, task])), [all]);
   const subjectOf = useMemo(
-    () => (task: Task) => (task.reviewOf ? byId.get(task.reviewOf) : null) ?? task,
+    () => (task: TaskListItem) => (task.reviewOf ? byId.get(task.reviewOf) : null) ?? task,
     [byId],
   );
   // 同一个执行者被审两轮就有两个审查任务，它们代表的是同一个被审对象、点开也是同一份
   // 记录（轮次在证据里本来就都列着），所以按被审对象收敛成一条，留最后派的那一轮。
   const targets = useMemo(() => {
     const seen = new Map<string, number>();
-    const list: Task[] = [];
+    const list: TaskListItem[] = [];
     for (const task of all) {
       if (reviewedIds.has(task.id) || !hasReviewRecord(task)) continue;
       const at = task.reviewOf ? seen.get(task.reviewOf) : undefined;
@@ -99,7 +99,7 @@ export function TeamReviewInspector({
   // 执行者编号按原始派活顺序固定，过滤之后也不重排——用户在执行者栏看到的是同一个号。
   const workerIndex = useMemo(() => new Map(workers.map((worker, index) => [worker.id, index + 1])), [workers]);
   const roleOf = useMemo(
-    () => (task: Task) => {
+    () => (task: TaskListItem) => {
       if (task.id === lead.id) return "调度台";
       if (task.reviewOf) {
         const index = workerIndex.get(task.reviewOf);

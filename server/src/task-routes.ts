@@ -1,13 +1,13 @@
 import type { AgentType, Task, TaskStatus, TaskWorkspaceDiscardResult } from "@ash/shared";
-import { AGENT_TYPES, isUserSettableStatus } from "@ash/shared";
+import { AGENT_TYPES, isUserSettableStatus, TASK_BATCH_LIMIT } from "@ash/shared";
 import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@ash/shared/cli-presets";
 import { inheritExecutorOverrides, sameExecutor } from "@ash/shared/executors";
 import { normalizeWorkflowDef } from "@ash/shared/workflow";
 import { TASK_WORKFLOW_MODES } from "@ash/shared/free-workflow";
-import { asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { agents, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks } from "./db/schema.js";
+import { agents, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks, teamInbound } from "./db/schema.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 import { followUpsFor } from "./task-follow-up.js";
@@ -15,7 +15,7 @@ import { advanceQueue } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
 import { isTurnClaimed } from "./runs.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
-import { createTasks, enrichTasks, publishTaskUpdated } from "./task-store.js";
+import { createTasks, enrichTasks, publishTaskUpdated, toTaskListItem } from "./task-store.js";
 import { attachmentsPrompt, id, now, taskBody } from "./util.js";
 
 // 任务行删除时连关联状态一起收：自由审查链(run/round)、预约槽、事件、排队/定时消息、
@@ -29,6 +29,7 @@ export async function deleteTaskAssociations(taskId: string): Promise<void> {
   await db.delete(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId));
   await db.delete(freeWorkflowEvents).where(eq(freeWorkflowEvents.taskId, taskId));
   await db.delete(scheduledMessages).where(eq(scheduledMessages.taskId, taskId));
+  await db.delete(teamInbound).where(eq(teamInbound.taskId, taskId)); // 调度台还没送出的入站消息
   await db.delete(noteTasks).where(eq(noteTasks.taskId, taskId));
   // 会话行、定时计划、队列位也一起收：孤儿 cron 每个 tick 都会被扫到再查不到任务，
   // 队列残位会顶住后续推进（审查实测：删除后 sessionRows/scheduleRows 各剩 1）。
@@ -41,9 +42,14 @@ export async function deleteTaskAssociations(taskId: string): Promise<void> {
 }
 
 export function mountTaskRoutes(api: Hono): void {
-  // 一次最多问这么多任务的追问 —— 每个都要摸一次盘，别让一个手抖的请求
-  // 把整个进程钉在 I/O 上。侧边栏一屏也放不下这么多行。
-  const MAX_FOLLOW_UP_TASKS = 200;
+  // 一次最多问这么多任务的追问 / 正文（判据和常量本体在 shared 的 TASK_BATCH_LIMIT）：
+  // 追问每个都要摸一次盘，别让一个手抖的请求把整个进程钉在 I/O 上。
+  // **超了返 400，不截断** —— 静默少返几行会被前端渲染成「还没读到」，一条永远不会
+  // 消失的假状态；请求方分批才是对的做法。
+  const overBatchLimit = (ids: string[]) =>
+    ids.length > TASK_BATCH_LIMIT
+      ? { error: `一次最多问 ${TASK_BATCH_LIMIT} 个任务，请分批`, limit: TASK_BATCH_LIMIT, requested: ids.length }
+      : null;
   const agentTypeForExecutor = async (executorId?: string | null): Promise<AgentType | null> => {
     if (!executorId) return null;
     const row = (await db.select({ type: agents.type }).from(agents).where(eq(agents.id, executorId))).at(0);
@@ -51,9 +57,12 @@ export function mountTaskRoutes(api: Hono): void {
   };
 
 // ── tasks ───────────────────────────────────────────────────────────────
+// 列表**不带正文**（TaskListItem）：一千多行任务里正文占了响应的一半，而没有一处列表
+// UI 用得上它。正文由 `GET /tasks/:id` 单取。这条路由是全应用最大的一份响应，且每次
+// 开页面 + 每次 SSE 重连都要整份重拉，省下来的是首屏和断线恢复的直接成本。
 api.get("/tasks", async (c) => {
   const rows = await db.select().from(tasks);
-  return c.json(await enrichTasks(rows));
+  return c.json((await enrichTasks(rows)).map(toTaskListItem));
 });
 
 // 侧边栏铺开时才拉：一批任务各自「我发的最后一条追问」（读的是会话 .md，不是库）。
@@ -61,7 +70,28 @@ api.get("/tasks", async (c) => {
 api.post("/tasks/follow-ups", async (c) => {
   const body = await c.req.json<{ taskIds?: unknown }>().catch(() => ({ taskIds: [] }));
   const ids = Array.isArray(body.taskIds) ? body.taskIds.filter((id): id is string => typeof id === "string") : [];
-  return c.json(await followUpsFor(ids.slice(0, MAX_FOLLOW_UP_TASKS)));
+  const over = overBatchLimit(ids);
+  if (over) return c.json(over, 400);
+  return c.json(await followUpsFor(ids));
+});
+
+// 正文批量取。跟上面那条同一个触发点（侧边栏铺开的「原始需求」列），同一套 id 上限，
+// 只是这份数据在库里而不在会话文件里，所以另开一条而不是塞进 follow-ups —— 后者按
+// 定义只有「追问过的任务」才有行，而正文是每个任务都有的。
+//
+// 列表接口（GET /tasks）不再带正文，所以需要正文的表面各自按需取：铺开走这条，详情
+// 面走 GET /tasks/:id。
+api.post("/tasks/bodies", async (c) => {
+  const body = await c.req.json<{ taskIds?: unknown }>().catch(() => ({ taskIds: [] }));
+  const ids = Array.isArray(body.taskIds) ? body.taskIds.filter((id): id is string => typeof id === "string") : [];
+  if (!ids.length) return c.json([]);
+  const over = overBatchLimit(ids);
+  if (over) return c.json(over, 400);
+  const rows = await db
+    .select({ taskId: tasks.id, body: tasks.body })
+    .from(tasks)
+    .where(inArray(tasks.id, ids));
+  return c.json(rows.map((row) => ({ taskId: row.taskId, body: row.body ?? "" })));
 });
 
 api.get("/tasks/:id", async (c) => {
@@ -248,6 +278,56 @@ api.patch("/tasks/:id", async (c) => {
   // is unarchived (which goes through the dedicated endpoint, not PATCH).
   if (existing.archived) return c.json({ error: "任务已归档，先取消归档再编辑", archived: true }, 409);
   const b = await c.req.json<Partial<Task>>();
+  // 运行中的 PATCH 既可能来自真人界面，也可能来自 agent 的 patch_task。真人客户端显式
+  // 标记 user-action；MCP 则携带发起任务 id + 回合 token。校验的是「发起者当前仍是这
+  // 一回合」，因此团队调度者可以跨任务改执行者，而被“引导会话”结束的旧单飞回合会被拒。
+  let updateWhere: SQL = eq(tasks.id, tid);
+  if ((existing.status === "running" || existing.status === "queued") && c.req.header("x-ash-user-action") !== "1") {
+    const sourceTaskId = c.req.header("x-ash-source-task-id")?.trim() ?? "";
+    const turnToken = c.req.header("x-ash-turn-token")?.trim() ?? "";
+    if (sourceTaskId) {
+      const source = (await db.select({
+        mode: tasks.mode,
+        status: tasks.status,
+        activeTurnToken: tasks.activeTurnToken,
+      }).from(tasks).where(eq(tasks.id, sourceTaskId))).at(0);
+      if (!source) return c.json({ error: "PATCH 的发起任务不存在，已拒绝写入" }, 409);
+      if (source.mode === "team") {
+        if (source.status !== "running" && source.status !== "idle") {
+          return c.json({ error: "团队调度者当前不在线，PATCH 已拒绝写入" }, 409);
+        }
+        updateWhere = and(
+          eq(tasks.id, tid),
+          eq(tasks.status, existing.status),
+          sql`exists (select 1 from tasks as source_task where source_task.id = ${sourceTaskId} and source_task.mode = 'team' and source_task.status in ('running', 'idle'))`,
+        )!;
+      } else {
+        if (source.status !== "running" || !source.activeTurnToken || turnToken !== source.activeTurnToken) {
+          return c.json({ error: "PATCH 来自已结束的回合，已拒绝写入当前会话" }, 409);
+        }
+        updateWhere = and(
+          eq(tasks.id, tid),
+          eq(tasks.status, existing.status),
+          sql`exists (select 1 from tasks as source_task where source_task.id = ${sourceTaskId} and source_task.status = 'running' and source_task.active_turn_token = ${source.activeTurnToken})`,
+        )!;
+      }
+    } else {
+      // 兼容已启动、尚未带 source-task-id 的本任务 MCP：仍须用目标任务的当前 token。
+      if (!turnToken) {
+        return c.json({
+          error: "运行中的任务缺少 ash 回合身份；外部 MCP 客户端不能修改运行中任务，请等任务空闲后再试",
+        }, 409);
+      }
+      if (!existing.activeTurnToken || turnToken !== existing.activeTurnToken) {
+        return c.json({ error: "PATCH 来自已结束的回合，已拒绝写入当前会话" }, 409);
+      }
+      updateWhere = and(
+        eq(tasks.id, tid),
+        eq(tasks.status, existing.status),
+        eq(tasks.activeTurnToken, existing.activeTurnToken),
+      )!;
+    }
+  }
   // running/queued/awaiting_review are system-owned — refuse manual changes so a
   // human can't desync the state (e.g. mark a task "running" when nothing runs).
   if (b.status !== undefined && !isUserSettableStatus(b.status)) {
@@ -365,7 +445,8 @@ api.patch("/tasks/:id", async (c) => {
   // task.updated 事件照发(下方 publishTaskUpdated),前端仍实时回流。
   const starOnly = "starredAt" in patch && Object.keys(patch).length === 1 && b.status === undefined;
   if (!starOnly) patch.updatedAt = now();
-  await db.update(tasks).set(patch).where(eq(tasks.id, tid));
+  const written = await db.update(tasks).set(patch).where(updateWhere).returning({ id: tasks.id });
+  if (!written.length) return c.json({ error: "任务或发起回合已经变化，PATCH 未写入" }, 409);
   // Status goes through the shared helper so manual changes maintain the run-time
   // columns (startedAt/endedAt) and broadcast them just like a real run does.
   // setTaskStatus 内部在 done/canceled 时会自动触发 queue 推进(DESIGN §3),

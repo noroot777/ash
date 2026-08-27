@@ -31,8 +31,9 @@ import { WorkerTeamLink } from "@/components/WorkerTeamLink";
 import { MarkdownText } from "@/components/MarkdownText";
 import { SignalBar } from "@/components/SignalBar";
 import { SkillSuggestions } from "@/components/SkillSuggestions";
+import { PendingMessageTray } from "@/components/PendingMessageTray";
 import { DateTimeButton } from "@/components/DateTimeField";
-import { TaskTimeChip, formatInstant } from "@/lib/time";
+import { TaskTimeChip } from "@/lib/time";
 import { canArchive } from "@ash/shared";
 import type { Session, ScheduledMessage } from "@ash/shared";
 import type { LogLine } from "@/lib/log";
@@ -61,6 +62,8 @@ export default function TaskDetail() {
   const [input, setInput] = useState("");
   const [pending, setPending] = useState<ScheduledMessage[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  // 任务正文：列表不带，按 id 单取（见下面的 hydrate effect）。
+  const [body, setBody] = useState<string | undefined>(undefined);
   const scrollRef = useRef<ScrollView>(null);
   // 是否「粘」在底部。轮询拉到新内容时,只有粘底状态才自动滚到底,
   // 否则别打扰正在往回翻历史的用户。初始 true,所以首次内容到达会滚到底。
@@ -104,9 +107,19 @@ export default function TaskDetail() {
 
   // Hydrate the task if we navigated straight here (e.g. deep link) without it
   // already being in the store.
+  //
+  // 顺带把**正文**取回来：列表接口不再带正文（shared 的 TaskListItem），而正文只有
+  // 这一屏用得上。`undefined` = 还没读到，空串 = 这个任务确实没写需求 —— 界面上前者
+  // 什么都不显示，后者本来就不显示，两者都不会编出一段假需求。
   useEffect(() => {
-    if (!task && id) api.task(id).then(upsertTask).catch(() => {});
-  }, [id, task, upsertTask]);
+    if (!id) return;
+    let alive = true;
+    setBody(undefined);
+    api.task(id)
+      .then((full) => { if (alive) { setBody(full.body); upsertTask(full); } })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [id, upsertTask]);
 
   // Conversation polling — no live stream. Pull once on open; while the task is
   // running keep pulling every few seconds; when it settles the dependency change
@@ -308,18 +321,13 @@ export default function TaskDetail() {
     }
   };
 
-  // 取消一条待发送消息：乐观移除，失败再拉回。
-  const cancelScheduled = async (mid: string) => {
-    setPending((ps) => ps.filter((m) => m.id !== mid));
-    await api.cancelScheduledMessage(mid).catch(() => loadPending());
-  };
-
   const meta = STATUS_META[status];
 
   if (task.mode === "team") {
     return (
       <TeamTaskDetail
         task={task}
+        body={body}
         lines={lines}
         sessions={sessions}
         input={input}
@@ -341,6 +349,7 @@ export default function TaskDetail() {
     return (
       <DuetTaskDetail
         task={task}
+        body={body}
         onArchive={onArchive}
         onUnarchive={onUnarchive}
         onDelete={confirmDelete}
@@ -461,7 +470,7 @@ export default function TaskDetail() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.muted} />}
       >
         {/* Objective */}
-        {task.body ? (
+        {body ? (
           <View
             style={{
               backgroundColor: theme.panel,
@@ -471,7 +480,7 @@ export default function TaskDetail() {
               padding: 12,
             }}
           >
-            <MarkdownText value={task.body} style={{ color: theme.muted, fontSize: 14, lineHeight: 20 }} />
+            <MarkdownText value={body} style={{ color: theme.muted, fontSize: 14, lineHeight: 20 }} />
           </View>
         ) : null}
 
@@ -520,32 +529,12 @@ export default function TaskDetail() {
           gap: 8,
         }}
       >
-        {pending.map((m) => (
-          <View
-            key={m.id}
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              gap: 8,
-              backgroundColor: theme.overlay,
-              borderRadius: radius.sm,
-              paddingHorizontal: 10,
-              paddingVertical: 6,
-            }}
-          >
-            {/* 排队消息不看时间（跑完就发），所以那一列写「排队中」而不是一个骗人的时刻。 */}
-            <Ionicons name={m.mode === "queued" ? "layers-outline" : "time-outline"} size={13} color={theme.faint} />
-            <Text style={{ color: theme.muted, fontSize: 12, fontFamily: fonts.mono }}>
-              {m.mode === "queued" ? "排队中" : formatInstant(m.sendAt)}
-            </Text>
-            <Text numberOfLines={1} style={{ flex: 1, color: theme.ink, fontSize: 13 }}>
-              {m.text || "[附件]"}
-            </Text>
-            <Pressable onPress={() => cancelScheduled(m.id)} hitSlop={8}>
-              <Ionicons name="close" size={15} color={theme.faint} />
-            </Pressable>
-          </View>
-        ))}
+        <PendingMessageTray
+          messages={pending}
+          onRemoved={(messageId) => setPending((ps) => ps.filter((m) => m.id !== messageId))}
+          onReload={loadPending}
+          onRestoreText={(restored) => setInput((current) => (current.trim() ? `${restored}\n\n${current}` : restored))}
+        />
 
         <SkillSuggestions
           agentType={task.agentType}

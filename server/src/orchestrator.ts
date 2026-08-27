@@ -1,13 +1,13 @@
 import { mkdirSync, createWriteStream, existsSync } from "node:fs";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { AgentType, SessionRole, TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, untrackRun, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
+import { trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun, afterSettlement } from "./single-run.js";
 import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
@@ -36,14 +36,13 @@ import { reportTurnFailure } from "./turn-failure.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
 import {
   COLLAB_INVITE, SYS_MARKER,
-  COMPLETION_REMINDER, FOLLOW_UP_REMINDER, followUpRailNote,
+  COMPLETION_REMINDER, DIRECTION_PROTOCOL, FOLLOW_UP_REMINDER, followUpRailNote,
   WORKSPACE_RESET, WORKSPACE_RESET_MARKER,
 } from "./run-prompts.js";
 // 「登记的基线被换掉了」这句话：说不说、怎么说、失败那条路怎么补，全在这一份里。
 import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
-import { readCodexCliVersion } from "./executors/codex-rollout.js";
-import { affectedCodexSessionWarning } from "./executors/version-policy.js";
 import { LOST_SESSION_PATCH } from "./executors/session-lost.js";
+import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "./session-version-guard.js";
 
 // Why a task is being (re)started — only used to label the resume; all reasons
 // behave the same (resume if there's a resumable session, else fresh). Note: a
@@ -155,10 +154,11 @@ export async function continueTask(
   if (head?.mode === "team") {
     if (opts.turnHeld) releaseTurn(taskId); // 占位对常驻调度台无意义，原样还回
     if (isAcceptingTask(taskId)) return false;
-    // 调度台明确拒收(离线时收到 `/compact` 这类原生命令,拼上唤醒前言就不再是命令)
-    // 时,这一句**一个字都没送出去** —— 绝不能顺手 onDelivered():那是 pending → sent
-    // 的唯一写点,标了 sent 排队/定时的那条就从托盘里消失、会话里也没有,用户的话凭空
-    // 蒸发(docs/incidents.md「排队消息凭空消失」)。跟单飞锁挡回同一口径:返回 false。
+    // 调度台明确拒收(离线时收到 `/compact` 这类原生命令,拼上唤醒前言就不再是命令;
+    // 或者进程正在收尾、stdin 已经关了)时,这一句**一个字都没送出去** —— 绝不能顺手
+    // onDelivered():那是 pending → sent 的唯一写点,标了 sent 排队/定时的那条就从托盘里
+    // 消失、会话里也没有,用户的话凭空蒸发(docs/incidents.md「排队消息凭空消失」)。
+    // 跟单飞锁挡回同一口径:返回 false。
     const delivered = await deliverToLead(taskId, userText, {
       attachments: opts.attachments,
       throwOnOpenFailure: opts.throwOnTeamUnavailable,
@@ -230,17 +230,24 @@ export async function continueTask(
     // 模型 —— 没有产出、也不可能交卷,所以必须当旁路回合,否则「压一下上下文」会把任务
     // 打成 failed。
     const sideTurn = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn || !!nativeCommand;
+    // DB 里的 verifyRound/nativeTurn 会在结算中途先清，handle/turn 要到 finally 才释放。
+    // 把旁路身份也钉进运行时 turn role，关闭那段“标记已清、进程仍可被引导”的小窗口。
+    if (sideTurn && sessionRole === "single") reclaimTurn(taskId, nativeCommand ? "native" : "side");
+    const checkpointFollowUp = !opts.system && !opts.byBackend
+      && task.status === "paused" && !!task.resumePrompt;
     const followUpFrom = sideTurn
       ? (task.status === "running" || task.status === "queued" ? null : task.status)
-      : !opts.system && ["done", "failed", "canceled"].includes(task.status)
+      : !opts.system && (["done", "failed", "canceled"].includes(task.status) || checkpointFollowUp)
         ? task.status
         : null;
     // 新回合起点:顺手清掉上一轮残留的完成确认(确认只在本回合内有效)。
     // nativeTurn 落库而不是只留在内存里:结算钩子跟这里可能不在同一个进程(重启后由
     // reattach 接着消费同一条流),内存标记会丢,而丢了就等于「压缩被算成一轮验证跑完」。
+    const turnToken = id();
+    const directionToken = id();
     await db
       .update(tasks)
-      .set({ followUpFrom, nativeTurn: !!nativeCommand, completeConfirmedAt: null, updatedAt: now() })
+      .set({ followUpFrom, nativeTurn: !!nativeCommand, completeConfirmedAt: null, activeTurnToken: turnToken, activeDirectionToken: directionToken, activeDirectionVersion: 1, updatedAt: now() })
       .where(eq(tasks.id, taskId));
 
     const { executor: ex, profileId, profileFingerprint } = await resolveExecutorWithProfile({
@@ -262,14 +269,15 @@ export async function continueTask(
       : opts.resumeSessionId
         ? all.find((s) => s.id === opts.resumeSessionId)
         : all.find((s) => s.agentType === agent && s.role === sessionRole);
-    let sessionUpgradeNote: string | undefined;
-    if (agent === "codex" && prev?.cliSessionId) {
-      const warning = affectedCodexSessionWarning(await readCodexCliVersion(prev.cliSessionId));
-      if (warning) {
-        await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, prev.id));
-        sessionUpgradeNote = `${warning} 本轮已使用全新会话。`;
-        prev = undefined;
-      }
+    const affectedSessionVersion = await affectedCodexResumeVersion(agent, prev?.cliSessionId);
+    if (prev && affectedSessionVersion) {
+      // 说明必须先持久写进旧会话，凭据后清；否则下面任一 await 抛错都会留下一个
+      // 「上下文没了、但没有解释」的永久状态。
+      await announceAffectedSessionReplacement({
+        taskId, sessionId: prev.id, role: sessionRole, agentType: agent, version: affectedSessionVersion,
+      });
+      await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, prev.id));
+      prev = undefined;
     }
     const resuming = !!prev?.cliSessionId;
 
@@ -369,6 +377,7 @@ export async function continueTask(
           (followUpFrom
             ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote, freeWorkflow)
             : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying, freeWorkflow)) +
+          DIRECTION_PROTOCOL(directionToken) +
           (reviewReminder ? `\n${reviewReminder}` : ""),
           resuming ? "reminder" : "full",
         );
@@ -385,12 +394,14 @@ export async function continueTask(
     // 回合，而任务被 resume 的次数远多于第一次起跑（实测:重启时在跑的任务里
     // 一半是 resume 回合，全都还挂在匿名管道上）。
     const detach = detachedPathsFor(runDir, sessId, turnStart);
-    handle = ex.run({
+    const run = ex.runSteerable?.bind(ex) ?? ex.run.bind(ex);
+    handle = run({
       prompt,
       cwd,
       sessionId: resuming ? prev!.cliSessionId! : undefined,
       trace: runTracePaths(runDir, sessId, turnStart),
       detach,
+      env: { ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken },
     });
     trackRun(taskId, handle);
 
@@ -407,6 +418,7 @@ export async function continueTask(
         .set({
           turnStartedAt: turnStart,
           endedAt: null,
+          exitStatus: null,
           commandLine: handle.commandLine,
           executor: ex.label,
           // 回合保真四件套整组刷新（说明见 db/schema.ts）：profile / 环境指纹 / 模型 /
@@ -474,6 +486,15 @@ export async function continueTask(
       // the human/backend turn as its own bubble; the matching event keeps every client live.
       recordUserConversationTurn({ taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text: userTurnText, at: turnStart, bySystem: opts.byBackend });
     }
+    // 上一回合尚未结算就收到回复时，消息会先排队，真正送达时任务已不再 paused；这条
+    // 路径要在落盘后消费旧检查点，避免它继续挡完成与预约派审。若起点本来就是 paused，
+    // 这句话也可能只是“怎么样了”一类追问：先保留检查点并用 followUpFrom 护住 paused，
+    // 只有本轮明确 complete 时再由结算清掉。
+    if (!opts.system && !opts.byBackend && task.resumePrompt && task.status !== "paused") {
+      await db.update(tasks)
+        .set({ resumePrompt: null, updatedAt: now() })
+        .where(and(eq(tasks.id, taskId), eq(tasks.resumePrompt, task.resumePrompt)));
+    }
     // 到这里这句话已经**两处落地**:agent 进程早在上面就带着它起来了,原文也刚写进会话
     // 落盘文件。排队/定时消息就是在这一刻、而不是更早,才把库里那条标成 sent。
     // 回调自己出错不许影响这一轮(它只是记账)。
@@ -485,10 +506,6 @@ export async function continueTask(
       // 刷新后仍要能看出来(见 AGENTS.md 关于持久可见状态的约定)。
       writeTurn(out, { t: "system", agent, text: WORKSPACE_RESET_MARKER }, turnStart);
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: sessionRole, agentType: agent, event: { kind: "system", text: WORKSPACE_RESET_MARKER, at: turnStart } });
-    }
-    if (sessionUpgradeNote) {
-      writeTurn(out, { t: "system", agent, text: sessionUpgradeNote }, turnStart);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: sessionRole, agentType: agent, event: { kind: "system", text: sessionUpgradeNote, at: turnStart } });
     }
     const baseNote = baseFallbackNote(baseFallback);
     if (baseNote) {
@@ -506,8 +523,22 @@ export async function continueTask(
     await consumeSingleRun({
       taskId, sessId, agentType: agent, ex, cwd,
       handle, out, turnStart, cliSessionId, autoTitle: false, role: sessionRole,
+      nativeSteer: {
+        prepare: (text) => withGlobalBrowserPolicy(
+          withSkillInvocation({ agentType: agent, cwd, text }),
+          "reminder",
+        ),
+        record: (text, at) => recordUserConversationTurn({
+          taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text, at,
+        }),
+      },
     });
   } catch (err) {
+    // 与 consumeSingleRun 的正常收流分支对称：有些 CLI 被 kill 后会让 parser 直接抛。
+    // 「引导会话」已经在 releaseTurn 后登记了同会话续送，这里不能再把旧回合结算成 failed。
+    const steered = await takeSteered(taskId);
+    const stopped = takeStopped(taskId);
+    if (steered && !stopped) return true;
     const message = String(err instanceof Error ? err.message : err);
     // 基线的事先说：它在这一轮更早的时候就**已经落库**了（解析工作目录那一刻），说在
     // 失败交代之前才对得上发生顺序；没说过才补。
@@ -543,7 +574,7 @@ export async function continueTask(
         .set({ ...(back ? { followUpFrom: null } : {}), ...(nativeTurn ? { nativeTurn: false } : {}), updatedAt: now() })
         .where(eq(tasks.id, taskId));
     }
-    const status = takeStopped(taskId) ?? back ?? "failed";
+    const status = stopped ?? back ?? "failed";
     await setStatus(taskId, status);
     // 压缩连启动都没启动,更谈不上有结论 —— 跟正常结算同一口径(single-run.ts):整段
     // 跳过结算钩子。交给它的话,正在跑的那轮就地验证会被当成「验完了」收掉(清 verifyRound、

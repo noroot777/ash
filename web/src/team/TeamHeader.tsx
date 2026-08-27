@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { Group, Task } from "@ash/shared";
+import type { Group, Task, TaskListItem } from "@ash/shared";
 import { canArchive, taskDisplayStatus } from "@ash/shared";
 import { isTeamSettled, teamNeverStarted } from "@ash/shared/team";
 import {
@@ -47,8 +47,8 @@ export function TeamHeader({
   notify,
 }: {
   task: Task;
-  allTasks: Task[];
-  workers: Task[];
+  allTasks: TaskListItem[];
+  workers: TaskListItem[];
   groups: Group[];
   haltedByHistory: boolean;
   conversationMarkdown: string;

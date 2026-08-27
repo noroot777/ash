@@ -4,7 +4,7 @@
 import { useEffect, useState } from "react";
 import { View, Text, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import type { Task } from "@ash/shared";
+import type { TaskListItem } from "@ash/shared";
 import { useTheme, fonts } from "./theme";
 
 // ── 格式化(与 web 一致)────────────────────────────────────────────────────
@@ -74,7 +74,7 @@ export function Duration({
 // 紧凑的创建时间 chip(列表项 / 详情头共用)——统一显示任务创建时刻「创建 MM/DD HH:mm」。
 // (曾显示执行用时 / 墙钟跨度,现按需求一律回归创建时间;Duration 等耗时函数保留,
 // 仍由会话视图 Conversation 用来显示每段会话的耗时。)
-export function TaskTimeChip({ task, style }: { task: Task; style?: StyleProp<ViewStyle> }) {
+export function TaskTimeChip({ task, style }: { task: TaskListItem; style?: StyleProp<ViewStyle> }) {
   const theme = useTheme();
   const faint: TextStyle = { fontSize: 11, fontFamily: fonts.mono, color: theme.faint };
   return (

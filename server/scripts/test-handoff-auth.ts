@@ -23,7 +23,7 @@
 // 拉起 CLI 烧额度;接力本身一律 autoResume:false。
 import assert from "node:assert/strict";
 import { type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateKeyPairSync, createHash, randomBytes, sign as edSign } from "node:crypto";
@@ -49,7 +49,9 @@ async function main(): Promise<void> {
   const { projects, tasks } = await import("../src/db/schema.js");
   const { eq } = await import("drizzle-orm");
   const { exportHandoff, preflightHandoff } = await import("../src/handoff.js");
-  const { peerRequestHeaders, requestHandoffApproval } = await import("../src/handoff-peer-client.js");
+  const {
+    peerRequestHeaders, pingPeer, probePeerIdentity, requestHandoffApproval,
+  } = await import("../src/handoff-peer-client.js");
   const { localIdentity, shortFingerprint } = await import("../src/handoff-identity.js");
   const { getAppSettings, patchAppSettings } = await import("../src/app-settings.js");
   const { HandoffError } = await import("../src/handoff-types.js");
@@ -87,6 +89,27 @@ async function main(): Promise<void> {
   assert.notEqual(
     peerIdentity.fingerprint, localIdentity().fingerprint,
     "源机与对端各有一份身份:同一台电脑上跑两个实例也不能共用(密钥挂 ASH_DB 而不是 DATA_DIR)",
+  );
+  const peersBeforeIdentityProbe = await api<{ peers: unknown[] }>(peerUrl, "/handoff/peers");
+  assert.equal((await probePeerIdentity(peerUrl)).fingerprint, peerIdentity.fingerprint);
+  assert.deepEqual(
+    await api<{ peers: unknown[] }>(peerUrl, "/handoff/peers"),
+    peersBeforeIdentityProbe,
+    "公开身份探测不能携带本机签名或让目标机新增待审批来源",
+  );
+  await assert.rejects(
+    pingPeer(
+      peerUrl,
+      peerIdentity.fingerprint,
+      { taskId: "missing-return-archive", returnTransferId: null },
+      { allowReturnFallback: false },
+    ),
+    (error: unknown) => error instanceof HandoffError && error.remoteStatus === 404,
+  );
+  assert.deepEqual(
+    await api<{ peers: unknown[] }>(peerUrl, "/handoff/peers"),
+    peersBeforeIdentityProbe,
+    "移回预检缺少任务存档时不能降级成会落待审批记录的普通 ping",
   );
 
   const raw = (path: string, init: RequestInit & { sign?: false }) =>
@@ -190,8 +213,9 @@ async function main(): Promise<void> {
     "/handoff/proxy/task/snapshot",
     signedInit("/handoff/proxy/task/snapshot", "POST", snapshotBody),
   );
-  assert.equal(snapshot.status, 200, "来源机应能通过签名代理读取自己交来的远端任务");
-  const snapshotJson = await snapshot.json() as { task: { id: string; question: string | null }; sessions: unknown[]; persisted: unknown[] };
+  const snapshotText = await snapshot.text();
+  assert.equal(snapshot.status, 200, `来源机应能通过签名代理读取自己交来的远端任务:${snapshotText}`);
+  const snapshotJson = JSON.parse(snapshotText) as { task: { id: string; question: string | null }; sessions: unknown[]; persisted: unknown[] };
   assert.equal(snapshotJson.task.id, "auth-replay");
   assert.equal(snapshotJson.task.question, "远程执行器在问：选哪条路？");
   assert.deepEqual(snapshotJson.sessions, []);
@@ -276,6 +300,23 @@ async function main(): Promise<void> {
   // 冒充:另一对现造的密钥(合法签名、陌生指纹)→ 待批准,进不来。
   const stranger = generateKeyPairSync("ed25519");
   const strangerPub = stranger.publicKey.export({ type: "spki", format: "der" }).toString("base64");
+  const strangerSigned = (path: string, body: string) => {
+    const ts = String(Date.now());
+    const nonce = randomBytes(16).toString("hex");
+    const canonical = [
+      "ash-handoff-v1", "POST", `/api${path}`, ts, nonce,
+      createHash("sha256").update(body, "utf8").digest("hex"),
+    ].join("\n");
+    return raw(path, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json", "x-ash-peer-key": strangerPub,
+        "x-ash-peer-sig": edSign(null, Buffer.from(canonical, "utf8"), stranger.privateKey).toString("base64"),
+        "x-ash-peer-ts": ts, "x-ash-peer-nonce": nonce,
+      },
+      body,
+    });
+  };
   const strangerBody = manifest("auth-stranger");
   const sTs = String(Date.now());
   const sNonce = randomBytes(16).toString("hex");
@@ -304,6 +345,24 @@ async function main(): Promise<void> {
     strangerRow?.name, "陌生机器·stranger",
     "主机名里的非 ASCII 要能原样还原:HTTP 头只装 ByteString,所以出站 percent 编码、入站解回来",
   );
+
+  const tombstoneDir = join(root, "handoff-canceled");
+  const tombstones = () => existsSync(tombstoneDir) ? readdirSync(tombstoneDir).length : 0;
+  const tombstonesBefore = tombstones();
+  const strangerCancel = await strangerSigned("/handoff/proxy/task/cancel-pending", JSON.stringify({
+    taskId: "missing-return-task", transferId: "missing-transfer", returnTransferId: "missing-return-transfer",
+  }));
+  assert.equal(strangerCancel.status, 404, "未获批准机器不能为不存在的移回存档制造 tombstone");
+  assert.equal(tombstones(), tombstonesBefore);
+  const hugeCancel = await strangerSigned("/handoff/proxy/task/cancel-pending", JSON.stringify({
+    taskId: "B".repeat(100_000), transferId: "missing-transfer", returnTransferId: "missing-return-transfer",
+  }));
+  assert.equal(hugeCancel.status, 400, "超长 taskId 必须在写盘前拒绝");
+  const longTransfer = await strangerSigned("/handoff/proxy/task/cancel-pending", JSON.stringify({
+    taskId: "missing-return-task", transferId: "T".repeat(65), returnTransferId: "missing-return-transfer",
+  }));
+  assert.equal(longTransfer.status, 400, "超长 transferId 必须在写盘前拒绝");
+  assert.equal(tombstones(), tombstonesBefore);
 
   await api(peerUrl, `/handoff/peers/${strangerFp}/approve`, { method: "POST" });
   const foreignSnapshotBody = JSON.stringify({ taskId: legacyTaskId, transferId: legacyTransferId });
@@ -378,6 +437,14 @@ async function main(): Promise<void> {
   await assert.rejects(
     exportHandoff(mismatchTask, { targetUrl: peerUrl, targetProjectId: peerProject.id, autoResume: false }),
     (e: unknown) => e instanceof HandoffError && /身份和上次不一样/.test(e.message),
+  );
+  await assert.rejects(
+    pingPeer(peerUrl, wrongFp, { taskId: "missing-return-archive", returnTransferId: null }),
+    (e: unknown) => e instanceof HandoffError
+      && /接力记录里/.test(e.message)
+      && /设置页没有可清除项/.test(e.message)
+      && !/清掉记住的指纹/.test(e.message),
+    "任务 marker 提供的指纹不能误导用户去设置页清理不存在的整机指纹",
   );
   const untouched = (await db.select().from(tasks).where(eq(tasks.id, mismatchTask))).at(0)!;
   assert.equal(untouched.status, "paused", "被身份核对拦下的导出不该停任务");

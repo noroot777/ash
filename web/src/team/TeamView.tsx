@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { AgentEvent, Group, Task } from "@ash/shared";
+import type { AgentEvent, Group, ScheduledMessage, Task, TaskListItem } from "@ash/shared";
 import { batchesOf, mergeFeed, teamGroupsOf, waitingWorkers, workerHaltStats, workersOf } from "@ash/shared/team";
 import { ArrowSquareOut, Broom, Clock, PaperPlaneTilt, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
 import {
@@ -7,11 +7,12 @@ import {
   ScheduledSendPanel,
   useScheduledMessages,
 } from "../components/ScheduledMessages.tsx";
-import { defaultOnceTime } from "../components/ScheduleControl.tsx";
+import { defaultOnceTime, toLocalDateTime } from "../components/ScheduleControl.tsx";
 import { SlashMenu } from "../components/SlashMenu.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { FileViewer } from "../files/FileViewer.tsx";
 import { api, type ReplyTaskResult, type TeamCuaStatus } from "../lib/api.ts";
+import { useTaskBody } from "../lib/useTaskBody.ts";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { useConversation } from "../lib/useConversation.ts";
 import { useServerEvents } from "../lib/events.ts";
@@ -25,6 +26,13 @@ import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { useTaskReplyDraft } from "../task-detail/TaskReplyDrafts.tsx";
+import {
+  attachmentsFromPaths,
+  clearSentDraft,
+  dropSentAttachments,
+  joinDraftText,
+  mergeAttachments,
+} from "../task-detail/withdrawDraft.ts";
 import { conversationToMarkdown } from "../task-detail/conversationModel.ts";
 import { TeamFeed } from "./TeamFeed.tsx";
 import { TeamAttentionBar } from "./TeamAttentionBar.tsx";
@@ -43,7 +51,7 @@ function liveLineForEvent(event: AgentEvent, textBuffer: string): string | null 
   return null;
 }
 
-function useWorkerLiveLines(teamId: string, workers: Task[]) {
+function useWorkerLiveLines(teamId: string, workers: TaskListItem[]) {
   const [lines, setLines] = useState<Record<string, string>>({});
   const textBuffers = useRef<Record<string, string>>({});
   const workerIds = useMemo(() => new Set(workers.map((worker) => worker.id)), [workers]);
@@ -110,19 +118,31 @@ function TeamReplyBox({
     setScheduleOpen(false);
     setSendAt("");
   }, [task.id]);
-  const send = async (scheduledAt?: string) => {
+  // 正在飞的那一次发送；撤回排在它后面，见下面的 withdraw。
+  const inFlightSend = useRef<Promise<void> | null>(null);
+  const send = (scheduledAt?: string): Promise<void> => {
+    const run = runSend(scheduledAt);
+    inFlightSend.current = run;
+    void run.finally(() => {
+      if (inFlightSend.current === run) inFlightSend.current = null;
+    });
+    return run;
+  };
+  const runSend = async (scheduledAt?: string) => {
     if (disabled || sending || uploads.uploading || (!value.trim() && !uploads.attachments.length)) return;
     setSending(true);
     setError(null);
+    // 发出去的是这一份；成功后只在草稿逐字还是这一份时才清掉，动过就整份留着
+    // （见 task-detail/withdrawDraft.ts 的 clearSentDraft）。
+    const draftAtSend = value;
+    const sentText = value.trim();
+    const sentPaths = uploads.attachments.map((attachment) => attachment.path);
     try {
-      const result = await onSend(
-        value.trim(),
-        uploads.attachments.map((attachment) => attachment.path),
-        { sendAt: scheduledAt },
-      );
+      const result = await onSend(sentText, sentPaths, { sendAt: scheduledAt });
       if ("scheduled" in result) scheduled.add(result.message);
-      setValue("");
-      uploads.clear();
+      setValue((current) => clearSentDraft(current, draftAtSend));
+      draft.setAttachments((current) => dropSentAttachments(current, sentPaths));
+      uploads.clearError();
       setScheduleOpen(false);
       setSendAt("");
     } catch (reason) {
@@ -135,6 +155,18 @@ function TeamReplyBox({
   const canSchedule = Number.isFinite(scheduledTime)
     && scheduledTime > Date.now()
     && (!!value.trim() || uploads.attachments.length > 0);
+  // 撤回:取消成功才回填,正文与附件并回当前草稿(见 task-detail/withdrawDraft.ts);
+  // 定时消息把原定时间也留着,还没到点才留。有发送正在飞就先等它结算完,清空排在
+  // 合并前面,免得两边互相猜草稿里哪一段是谁的。
+  const withdraw = async (message: ScheduledMessage) => {
+    if (!await scheduled.cancel(message.id)) return;
+    await inFlightSend.current;
+    setValue((current) => joinDraftText(message.text, current));
+    draft.setAttachments((current) => mergeAttachments(attachmentsFromPaths(message.attachments), current));
+    if (message.mode === "timed" && new Date(message.sendAt).getTime() > Date.now()) {
+      setSendAt(toLocalDateTime(new Date(message.sendAt)));
+    }
+  };
   return (
     <div className="team-reply-shell">
       {slash.open && (
@@ -165,7 +197,7 @@ function TeamReplyBox({
         loading={scheduled.loading}
         error={scheduled.error}
         cancelingIds={scheduled.cancelingIds}
-        onCancel={(messageId) => void scheduled.cancel(messageId)}
+        onWithdraw={(message) => void withdraw(message)}
       />
       <UploadAttachmentList attachments={uploads.attachments} error={uploads.error} onRemove={uploads.remove} />
       {error && <p>{error}</p>}
@@ -209,7 +241,7 @@ function TeamReplyBox({
   );
 }
 
-function HaltNotice({ workers, groupCount, historyOnly }: { workers: Task[]; groupCount: number; historyOnly: boolean }) {
+function HaltNotice({ workers, groupCount, historyOnly }: { workers: TaskListItem[]; groupCount: number; historyOnly: boolean }) {
   const stats = workerHaltStats(workers);
   return (
     <div className="team-halt-notice" role="status">
@@ -264,8 +296,8 @@ function WorkerDrawer({
   onDeleted,
   notify,
 }: {
-  worker: Task;
-  allTasks: Task[];
+  worker: TaskListItem;
+  allTasks: TaskListItem[];
   onClose: () => void;
   onOpenFull: () => void;
   onOpenTask: (taskId: string) => void;
@@ -275,6 +307,8 @@ function WorkerDrawer({
 }) {
   const [closing, setClosing] = useState(false);
   const [inspectorToggleTarget, setInspectorToggleTarget] = useState<HTMLSpanElement | null>(null);
+  // 抽屉里是完整的 TaskDetail，要正文；执行者行来自列表（不带正文），按需补。
+  const fullWorker = useTaskBody(worker);
   const closingRef = useRef(false);
   const closeTimer = useRef<number | null>(null);
   const requestClose = useCallback(() => {
@@ -308,7 +342,7 @@ function WorkerDrawer({
           <span className="team-worker-drawer__inspector-toggle" ref={setInspectorToggleTarget} />
           <button type="button" aria-label="关闭执行者抽屉" onClick={requestClose}><X size={14} weight="bold" /></button>
         </header>
-        <TaskDetail key={worker.id} task={worker} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} inspectorMode="drawer" inspectorToggleTarget={inspectorToggleTarget} notify={notify} />
+        {fullWorker && <TaskDetail key={fullWorker.id} task={fullWorker} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} inspectorMode="drawer" inspectorToggleTarget={inspectorToggleTarget} notify={notify} />}
       </aside>
     </>
   );
@@ -326,10 +360,10 @@ export function TeamView({
   notify,
 }: {
   task: Task;
-  allTasks: Task[];
+  allTasks: TaskListItem[];
   onTaskUpdate: (task: Task) => void;
   onTaskDeleted: (taskId: string) => void;
-  onSelectTask: (task: Task) => void;
+  onSelectTask: (task: TaskListItem) => void;
   initialReviewOpen?: boolean;
   onReviewOpenChange?: (open: boolean) => void;
   terminalToggle?: ReactNode;
@@ -491,7 +525,7 @@ export function TeamView({
       setIterateBusy(false);
     }
   };
-  const askLead = async (worker: Task) => {
+  const askLead = async (worker: TaskListItem) => {
     const question = worker.question?.trim();
     if (!question || delegatingRef.current.has(worker.id)) return;
     delegatingRef.current.add(worker.id);

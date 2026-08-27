@@ -29,6 +29,7 @@ import { mountTaskArchiveRoutes } from "./task-archive-routes.js";
 import { mountTaskRetryTurnRoutes } from "./task-retry-turn.js";
 import { mountTaskScheduleRoutes } from "./task-schedule-routes.js";
 import { mountTaskSessionRoutes } from "./task-session-routes.js";
+import { mountTaskSteerRoutes } from "./task-steer.js";
 import { RUNS_DIR } from "./paths.js";
 import { publishPendingMessages } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
@@ -50,10 +51,13 @@ export function mountTaskRunRoutes(api: Hono): void {
   mountTaskRetryTurnRoutes(api);
   mountTaskScheduleRoutes(api);
   mountTaskSessionRoutes(api);
+  mountTaskSteerRoutes(api);
   const toScheduledMessage = (r: typeof scheduledMessages.$inferSelect): ScheduledMessage => ({
     ...r,
     attachments: JSON.parse(r.attachments),
     agent: (r.agent as AgentType) ?? null,
+    // 托盘据此把「审查链自己的答复」和用户手写的回复分开（见 shared/src/schedule.ts）。
+    sessionRole: (r.sessionRole as ScheduledMessage["sessionRole"]) ?? null,
     mode: r.mode as ScheduledMessageMode,
     status: r.status as ScheduledMessageStatus,
   });
@@ -218,7 +222,35 @@ api.post("/tasks/:id/pause", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.status !== "running") return c.json({ error: "只能在任务正在运行时设置检查点", status: r.status }, 409);
-  await db.update(tasks).set({ resumePrompt: rp, updatedAt: now() }).where(eq(tasks.id, taskId));
+  const pauseToken = c.req.header("x-ash-turn-token");
+  if (r.activeTurnToken && pauseToken !== r.activeTurnToken) {
+    return c.json({
+      error: pauseToken
+        ? "检查点来自已结束的回合，已拒绝写入当前会话"
+        : "MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），检查点已拒绝写入",
+    }, 409);
+  }
+  const pauseDirection = c.req.header("x-ash-direction-token");
+  if (r.activeDirectionToken && pauseDirection !== r.activeDirectionToken) {
+    return c.json({ error: pauseDirection
+      ? "检查点的方向身份已过期；请从最新用户消息的【当前方向身份】复制 directionToken 后重试"
+      : "MCP 未携带当前方向身份（请传当前消息附带的 directionToken），检查点已拒绝写入" }, 409);
+  }
+  const updated = await db
+    .update(tasks)
+    .set({ resumePrompt: rp, updatedAt: now() })
+    .where(and(
+      eq(tasks.id, taskId),
+      eq(tasks.status, "running"),
+      r.activeTurnToken === null
+        ? isNull(tasks.activeTurnToken)
+        : eq(tasks.activeTurnToken, r.activeTurnToken),
+      r.activeDirectionToken === null
+        ? isNull(tasks.activeDirectionToken)
+        : eq(tasks.activeDirectionToken, r.activeDirectionToken),
+    ))
+    .returning({ id: tasks.id });
+  if (!updated.length) return c.json({ error: "当前回合已经结束或已被引导，检查点未写入" }, 409);
   return c.json({ paused: true, willSettleAs: "paused" });
 });
 
@@ -234,7 +266,35 @@ api.post("/tasks/:id/complete", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.status !== "running") return c.json({ error: "只能在任务正在运行时确认完成", status: r.status }, 409);
-  await db.update(tasks).set({ completeConfirmedAt: now(), updatedAt: now() }).where(eq(tasks.id, taskId));
+  const completeToken = c.req.header("x-ash-turn-token");
+  if (r.activeTurnToken && completeToken !== r.activeTurnToken) {
+    return c.json({
+      error: completeToken
+        ? "完成确认来自已结束的回合，已拒绝写入当前会话"
+        : "MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），完成确认已拒绝写入",
+    }, 409);
+  }
+  const completeDirection = c.req.header("x-ash-direction-token");
+  if (r.activeDirectionToken && completeDirection !== r.activeDirectionToken) {
+    return c.json({ error: completeDirection
+      ? "完成确认的方向身份已过期；请从最新用户消息的【当前方向身份】复制 directionToken 后重试 complete_task"
+      : "MCP 未携带当前方向身份（请传当前消息附带的 directionToken），完成确认已拒绝写入" }, 409);
+  }
+  const updated = await db
+    .update(tasks)
+    .set({ completeConfirmedAt: now(), updatedAt: now() })
+    .where(and(
+      eq(tasks.id, taskId),
+      eq(tasks.status, "running"),
+      r.activeTurnToken === null
+        ? isNull(tasks.activeTurnToken)
+        : eq(tasks.activeTurnToken, r.activeTurnToken),
+      r.activeDirectionToken === null
+        ? isNull(tasks.activeDirectionToken)
+        : eq(tasks.activeDirectionToken, r.activeDirectionToken),
+    ))
+    .returning({ id: tasks.id });
+  if (!updated.length) return c.json({ error: "当前回合已经结束或已被引导，完成确认未写入" }, 409);
   confirmDone(taskId);
   // 续聊回合(followUpFrom 非空)确认完成 = 把任务推进到 done;正常回合就是 done。
   return c.json({ confirmed: true, willSettleAs: "done" });
@@ -315,7 +375,31 @@ api.post("/tasks/:id/ask", async (c) => {
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.mode !== "team" && r.status !== "running")
     return c.json({ error: "只能在任务正在运行时提问", status: r.status }, 409);
-  await setTaskQuestion({ taskId, question: q, options: opts, items: questionItems });
+  const askToken = c.req.header("x-ash-turn-token");
+  if (r.mode !== "team" && r.activeTurnToken && askToken !== r.activeTurnToken) {
+    return c.json({
+      error: askToken
+        ? "提问来自已结束的回合，已拒绝写入当前会话"
+        : "MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），提问已拒绝写入",
+    }, 409);
+  }
+  const askDirection = c.req.header("x-ash-direction-token");
+  if (r.mode !== "team" && r.activeDirectionToken && askDirection !== r.activeDirectionToken) {
+    return c.json({ error: askDirection
+      ? "提问的方向身份已过期；请从最新用户消息的【当前方向身份】复制 directionToken 后重试 ask_question"
+      : "MCP 未携带当前方向身份（请传当前消息附带的 directionToken），提问已拒绝写入" }, 409);
+  }
+  const asked = await setTaskQuestion({
+    taskId,
+    question: q,
+    options: opts,
+    items: questionItems,
+    ...(r.mode === "team" ? {} : { currentTurn: {
+      token: r.activeTurnToken,
+      directionToken: r.activeDirectionToken,
+    } }),
+  });
+  if (!asked) return c.json({ error: "当前回合已经结束或已被引导，提问未写入" }, 409);
   return c.json({
     asked: true,
     options: opts,
@@ -403,9 +487,14 @@ api.post("/tasks/:id/reply", (c) => replyToTask(c, c.req.param("id")));
 
 // List a task's pending scheduled messages (soonest first).
 api.get("/tasks/:id/scheduled-messages", async (c) => {
-  const rows = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.taskId, c.req.param("id"))))
-    .filter((m) => m.status === "pending")
-    .sort((a, b) => a.sendAt.localeCompare(b.sendAt));
+  const rows = await db
+    .select()
+    .from(scheduledMessages)
+    .where(and(
+      eq(scheduledMessages.taskId, c.req.param("id")),
+      eq(scheduledMessages.status, "pending"),
+    ))
+    .orderBy(asc(scheduledMessages.sendAt), asc(scheduledMessages.createdAt), asc(scheduledMessages.id));
   return c.json(rows.map(toScheduledMessage));
 });
 

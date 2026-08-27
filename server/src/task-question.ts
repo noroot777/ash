@@ -8,7 +8,7 @@
 // 答复一律走既有的 POST /tasks/:id/answer：清空提问，把答复原样送进这个任务的 CLI
 // 会话。所以工作流的提问也**不需要另开一条决策链路** —— 用户答「重做一次，先修
 // 类型错误」，干活的 agent 就带着这句话接着干；答「先这样，我自己来」，它就停在那儿。
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN } from "@ash/shared";
 import type { AgentType, QuestionItem, SessionRole } from "@ash/shared";
 import { bus } from "./bus.js";
@@ -21,12 +21,30 @@ export interface AskInput {
   question: string;
   options?: string[];
   items?: QuestionItem[] | null;
+  // agent 自己提问时绑定当前一次性回合；工作流/团队主动提问不传。
+  currentTurn?: { token: string | null; directionToken?: string | null };
 }
 
 /** 写库 + 广播。校验（空问题、超限）由调用方做，这里只负责落地和发事件。 */
-export async function setTaskQuestion({ taskId, question, options = [], items = null }: AskInput): Promise<void> {
+export async function setTaskQuestion(input: AskInput): Promise<boolean> {
+  const { taskId, question, options = [], items = null } = input;
   const updatedAt = now();
-  await db
+  const currentTurn = input.currentTurn;
+  const where = currentTurn
+    ? and(
+        eq(tasks.id, taskId),
+        eq(tasks.status, "running"),
+        currentTurn.token === null
+          ? isNull(tasks.activeTurnToken)
+          : eq(tasks.activeTurnToken, currentTurn.token),
+        currentTurn.directionToken === undefined
+          ? undefined
+          : currentTurn.directionToken === null
+            ? isNull(tasks.activeDirectionToken)
+            : eq(tasks.activeDirectionToken, currentTurn.directionToken),
+      )
+    : eq(tasks.id, taskId);
+  const updated = await db
     .update(tasks)
     .set({
       question,
@@ -34,7 +52,9 @@ export async function setTaskQuestion({ taskId, question, options = [], items = 
       questionItems: items ? JSON.stringify(items) : null,
       updatedAt,
     })
-    .where(eq(tasks.id, taskId));
+    .where(where)
+    .returning({ id: tasks.id });
+  if (!updated.length) return false;
   bus.publish({
     type: "task.question",
     taskId,
@@ -43,6 +63,7 @@ export async function setTaskQuestion({ taskId, question, options = [], items = 
     questionOptions: options.length ? options : null,
     questionItems: items,
   });
+  return true;
 }
 
 /**

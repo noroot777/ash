@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
-import type { Group, ProjectView, Task } from "@ash/shared";
+import type { Group, ProjectView, TaskListItem } from "@ash/shared";
 import { Stack, X } from "@phosphor-icons/react";
 import { GroupManager } from "../settings/GroupsSettings.tsx";
 
 export function GroupsPanel({ project, groups, tasks, onClose, onChanged, notify }: {
   project: ProjectView;
   groups: Group[];
-  tasks: Task[];
+  tasks: TaskListItem[];
   onClose: () => void;
   onChanged: () => void;
   notify: (message: string) => void;

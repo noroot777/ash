@@ -1,6 +1,6 @@
 import { eq, inArray } from "drizzle-orm";
 import { normalizeDuetConfig } from "@ash/shared/duet";
-import type { AgentType, QuestionItem, Task, TaskStage, TaskStatus } from "@ash/shared";
+import type { AgentType, QuestionItem, Task, TaskListItem, TaskStage, TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { agents, projects, queueItems, sessions, tasks } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -95,6 +95,7 @@ const toTask = (r: TaskRow, profiles: AgentLabelRow[] = []): Task => ({
   questionOptions: r.questionOptions ? (JSON.parse(r.questionOptions) as string[]) : null,
   questionItems: r.questionItems ? (JSON.parse(r.questionItems) as QuestionItem[]) : null,
   handoff: r.handoff ? JSON.parse(r.handoff) : null,
+  handoffAudit: r.handoffAudit ? JSON.parse(r.handoffAudit) : null,
 });
 
 // GET /tasks、task.created 和 task.updated 共用这一条序列化路径，保证派生的
@@ -133,6 +134,16 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
       queuePosition: q?.position ?? null,
     };
   });
+}
+
+/**
+ * 列表序列化：丢掉正文。
+ *
+ * 只有 `GET /tasks` 用它。`GET /tasks/:id` 和 SSE 的 task.created/updated 仍发整份
+ * `Task`——前者就是详情面取正文的地方，后者要能就地更新已经打开的任务。
+ */
+export function toTaskListItem({ body: _body, ...rest }: Task): TaskListItem {
+  return rest;
 }
 
 // 任务创建时把那条线**拷一份**进 tasks.workflow。起手式是「起手式」不是「模板引用」：

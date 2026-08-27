@@ -20,13 +20,16 @@ export function TaskReplyRail({
   onHandoff: () => void;
   notify: (message: string) => void;
 }) {
+  const returning = task.handoff?.direction === "in"
+    || (task.handoff?.direction === "out" && task.handoff.pending
+      && Object.prototype.hasOwnProperty.call(task.handoff, "returnTransferId"));
   return (
     <div className="task-reply-rail">
       {freeToolbar && <FreeWorkflowToolbar task={task} notify={notify} />}
       {canHandoff && (
         <button type="button" className="task-reply-rail-button" onClick={onHandoff}>
           <PaperPlaneTilt size={13} />
-          <span>{task.handoff?.direction === "in" ? "移回..." : "接力到..."}</span>
+          <span>{returning ? "移回..." : "接力到..."}</span>
         </button>
       )}
     </div>

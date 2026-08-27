@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import type { ProjectView, Task } from "@ash/shared";
+import type { ProjectView, TaskListItem } from "@ash/shared";
 import { statusCounts, workersOf } from "@ash/shared/team";
 import { CaretRight, ChatsCircle, PaperPlaneTilt, Star, UsersThree } from "@phosphor-icons/react";
 import { OriginTaskChip, taskParentLink } from "../components/TaskOrigin.tsx";
@@ -10,7 +10,7 @@ import { type IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { SpreadRowCells, useSpreadRow } from "./TaskSpread.tsx";
 import { advanceHiddenReveal } from "./taskTreeModel.ts";
-import { spreadBucket } from "./useSidebarSpread.ts";
+import { spreadBucket, workersFrom, type WorkerIndex } from "./useSidebarSpread.ts";
 
 // 侧栏任务树的**一行**长什么样：状态点、星标、团队展开、铺开后多出来的那几格。
 // 分节、排序和「哪些行进来」在 TaskTree.tsx / taskTreeModel.ts。
@@ -19,12 +19,15 @@ export const TASK_PREVIEW_LIMIT = 12;
 const COLLAPSED_SECTIONS_STORAGE_KEY = "ash:task-tree:collapsed-sections";
 
 // 星标按钮埋在 TaskRow 里、TaskRow 又埋在几种列表里：回写和报错的通道用 context 递，
-// 免得每层组件都为它多两个 props。行首那枚项目徽标同理 —— 它只在「全部项目」态出现，
+// 免得每层组件都为它多两个 props。行首那枚项目徽标同理 —— 它只在「任务模式」出现，
 // 给的是 id→项目 的表；没有表就是单项目态，不画徽标。
 type TaskTreeActions = {
   onStarred: (taskId: string, starredAt: number | null) => void;
   notify: (message: string) => void;
   projectBadges: Map<string, ProjectView> | null;
+  // 团队的状态桶写在执行者身上（见 lib/taskAttention 的 spreadBucket），行也要读它，
+  // 否则「需要你处理」的底色在团队行上判据跟筛选条不是同一套。
+  workerIndex: WorkerIndex;
 };
 
 const TaskTreeActionsContext = createContext<TaskTreeActions | null>(null);
@@ -79,7 +82,7 @@ export function StatusMarker({ indicator }: { indicator: ReturnType<IndicatorFor
 // 的 SSE 到达，整条 Task 快照直接替换会把状态/标题回滚到点星那一刻。SSE 断线窗口
 // 里点的星也因此能立刻落到界面上；失败走 notify 让用户看得见。in-flight 期间忽略
 // 重复点击，避免拿同一份旧 props 连发同方向请求。
-function TaskStarButton({ task }: { task: Task }) {
+function TaskStarButton({ task }: { task: TaskListItem }) {
   const actions = useContext(TaskTreeActionsContext);
   const [busy, setBusy] = useState(false);
   const starred = task.starredAt != null;
@@ -103,7 +106,7 @@ function TaskStarButton({ task }: { task: Task }) {
   );
 }
 
-// 「全部项目」态下每行标题前的项目徽标：混着看的时候，一行来自哪个项目是**必须先读到的
+// 「任务模式」下每行标题前的项目徽标：跨项目混着看时，一行来自哪个项目是**必须先读到的
 // 那个字段**，否则跨项目的同名任务根本分不开。窄侧栏只摆得下那个色块，铺开变宽了才把
 // 项目名补出来（由 CSS 决定）—— 名字对读屏永远给足，挂在 aria-label 上。
 function TaskProjectBadge({ project }: { project: ProjectView }) {
@@ -123,17 +126,21 @@ export function TaskRow({
   indicatorForTask,
   child = false,
   showOrigin = true,
+  showProject = true,
   leading,
   wrapperClassName = "",
   trailing,
 }: {
-  task: Task;
-  allTasks: Task[];
+  task: TaskListItem;
+  allTasks: TaskListItem[];
   selectedTaskId: string | null;
-  onTask: (task: Task) => void;
+  onTask: (task: TaskListItem) => void;
   indicatorForTask: IndicatorForTask;
   child?: boolean;
   showOrigin?: boolean;
+  // 行首那枚项目徽标画不画。默认画（有徽标表就说明是任务模式）；**被项目分组装着的行
+  // 传 false** —— 组头已经写着项目名，每行再标一次就是把「弱化」做反了。
+  showProject?: boolean;
   leading?: React.ReactNode;
   wrapperClassName?: string;
   trailing?: React.ReactNode;
@@ -149,10 +156,11 @@ export function TaskRow({
   const spreadRow = useSpreadRow();
   const spreadCells = spreadRow?.spread.laidOut ? spreadRow : null;
   // 执行者行不挂徽标：它缩进在团队行底下，跟着上面那行走，同一个项目再标一次只是噪音。
-  const badges = useContext(TaskTreeActionsContext)?.projectBadges;
-  const project = canStar ? badges?.get(task.projectId) : undefined;
+  const actions = useContext(TaskTreeActionsContext);
+  const project = canStar && showProject ? actions?.projectBadges?.get(task.projectId) : undefined;
+  const bucket = spreadCells ? spreadBucket(task, workersFrom(actions?.workerIndex, task.id)) : null;
   return (
-    <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}${spreadCells && spreadBucket(task) === "todo" ? " is-todo" : ""}${task.starredAt != null ? " has-star" : ""}${canStar ? " can-star" : ""}`}>
+    <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}${bucket === "todo" ? " is-todo" : ""}${task.starredAt != null ? " has-star" : ""}${canStar ? " can-star" : ""}`}>
       <span className="workspace-task-leading">
         {leading ?? <StatusMarker indicator={indicator} />}
       </span>
@@ -174,7 +182,10 @@ export function TaskRow({
                 size={12}
                 weight="bold"
                 className="workspace-task-kind"
-                aria-label="接力转出"
+                aria-label={task.handoff.pending
+                  && Object.prototype.hasOwnProperty.call(task.handoff, "returnTransferId")
+                  ? "移回未确认"
+                  : "接力转出"}
               />
             )}
             {trailing}
@@ -197,7 +208,7 @@ export function TaskRow({
   );
 }
 
-function WorkerSummary({ workers, indicatorForTask }: { workers: Task[]; indicatorForTask: IndicatorForTask }) {
+function WorkerSummary({ workers, indicatorForTask }: { workers: TaskListItem[]; indicatorForTask: IndicatorForTask }) {
   if (!workers.length) return null;
   const buckets = statusCounts(workers);
   const summary = buckets.map((bucket) => `${bucket.n} ${bucket.label}`).join(" · ");
@@ -231,13 +242,15 @@ export function TeamRow({
   selectedTaskId,
   onTask,
   indicatorForTask,
+  showProject = true,
 }: {
-  task: Task;
-  tasks: Task[];
-  allTasks: Task[];
+  task: TaskListItem;
+  tasks: TaskListItem[];
+  allTasks: TaskListItem[];
   selectedTaskId: string | null;
-  onTask: (task: Task) => void;
+  onTask: (task: TaskListItem) => void;
   indicatorForTask: IndicatorForTask;
+  showProject?: boolean;
 }) {
   const workers = workersOf(tasks, task.id);
   const selectedWorkerIndex = workers.findIndex((worker) => worker.id === selectedTaskId);
@@ -261,6 +274,7 @@ export function TeamRow({
         selectedTaskId={selectedTaskId}
         onTask={onTask}
         indicatorForTask={indicatorForTask}
+        showProject={showProject}
         wrapperClassName={`workspace-team-row${expanded ? " is-expanded" : ""}`}
         leading={
           <span className="workspace-team-leading">

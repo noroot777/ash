@@ -5,6 +5,7 @@ import type {
   AppSettings,
   ProjectView,
   Task,
+  TaskListItem,
   Session,
   AgentExecutorProfile,
   AgentType,
@@ -128,12 +129,17 @@ export const api = {
   createProject: (b: { name: string; repoPath?: string }): Promise<ProjectView> =>
     req("/projects", { method: "POST", body: JSON.stringify(b) }).then(j),
 
-  tasks: (): Promise<Task[]> => req("/tasks").then(j),
+  // 列表不带正文（shared 的 TaskListItem）；正文由 task(id) 单取。
+  tasks: (): Promise<TaskListItem[]> => req("/tasks").then(j),
   task: (id: string): Promise<Task> => req(`/tasks/${id}`).then(j),
   createTask: (t: Partial<Task> & { projectId: string; title: string }): Promise<Task> =>
     req("/tasks", { method: "POST", body: JSON.stringify(t) }).then(j),
   patchTask: (id: string, patch: Partial<Task>): Promise<Task> =>
-    req(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }).then(j),
+    req(`/tasks/${id}`, {
+      method: "PATCH",
+      headers: { "x-ash-user-action": "1" },
+      body: JSON.stringify(patch),
+    }).then(j),
   // 删除任务。cleanup 里勾了什么就一起删什么(worktree 目录 / 分支);force 是看过
   // 第一次失败之后的再来一次(--force / -D)。
   deleteTask: (

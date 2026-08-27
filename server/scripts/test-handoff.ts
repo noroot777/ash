@@ -22,6 +22,8 @@
 //      消息在对端原样落库(新 id、到期时间保留、附件路径改写),本机原件取消留档;
 //      幂等收口只取消 pending 标记冻结的那批,收口期间新建的留在托盘如实提醒;
 //      定时计划带 enabled/lastRunAt 落到对端并接上任务(schedule_id)
+//  13. 出站存档的实时状态:签名代理问一圈持有机(逐个任务鉴权、pending 不问、
+//      联系不上如实进 offline、设置里删掉的机器当不存在)
 //  12. 网关伪造失败应答(对端实已导入成功、502 不带 ash 标记):按「送达未知」
 //      保留 pending,重试走幂等收口——按业务拒绝回滚就是两台机器双跑
 // ASH_RUNS_DIR 指到临时目录顺带打开 guardAgentSpawn,即使哪里失手触发续跑也
@@ -33,6 +35,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { api, git, makeRepo, pairWithPeer, startFakePeer, startPeer } from "./handoff-test-utils.js";
+import { checkOutboundStates } from "./handoff-state-check.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-handoff-test-"));
@@ -556,7 +559,8 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   // 缺陷形态(第 2 轮审查实测):out+pending 任务 accept 直接 200,把接力时刻的旧
   // 提交合入本机主分支——对端还在同一分支上继续干活,回程必然更难合。给对端库里的
   // task-03 种一个 out 标记,走真 HTTP 验各写入口;确认送达后只能从对端移回，源机
-  // 不能再清标记造出双跑。只有送达未知的 pending 仍保留撤销逃生门。
+  // 不能再清标记造出双跑。送达未知的 pending 也必须先让记录中的目标机确认撤销；
+  // 旧记录缺地址/身份时宁可继续硬拦，不能仅凭本机确认框恢复成双跑。
   const outMarker = JSON.stringify({
     direction: "out", transferId: "transfer-out-guard", pending: false,
     peerUrl: "http://192.0.2.1:1", peerName: "另一台机器", peerTaskId: "handoff-e2e-task-03",
@@ -597,11 +601,18 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
     args: [JSON.stringify({ ...JSON.parse(outMarker), pending: true }), "handoff-e2e-task-03"],
   });
   const clearRes = await peerCall("DELETE", "/tasks/handoff-e2e-task-03/handoff");
-  assert.equal(clearRes.status, 200, `送达未知的 pending 标记应可移除:${await clearRes.text()}`);
-  const scheduleAfterClear = await peerCall(
+  assert.equal(clearRes.status, 409, `无法向目标机核验的 pending 标记不能仅凭本机操作移除:${await clearRes.text()}`);
+  const scheduleStillBlocked = await peerCall(
     "PUT", "/tasks/handoff-e2e-task-03/schedule", { kind: "once", at: "2026-08-21T00:00:00.000Z", enabled: false },
   );
-  assert.equal(scheduleAfterClear.status, 200, `移除标记后写入口应恢复:${await scheduleAfterClear.text()}`);
+  assert.equal(scheduleStillBlocked.status, 409, `安全核验失败后写入口仍应保持硬拦:${await scheduleStillBlocked.text()}`);
+
+  // ── 13. 出站存档的实时状态:侧栏问一圈持有机 ──────────────────────────────
+  // 接力出去之后,源机那一行的 status 停在**交出去那一刻**(导出前先停任务,所以多半是
+  // canceled/paused)。侧栏要把这些行跟本机任务同等对待——同一份列表、同一颗状态点、
+  // 同一套筛选——就必须先把真状态问回来,否则等于把一批冻住的假状态铺在最该可信的那个
+  // 列表里。断言编排在 handoff-state-check.ts(拆出去只为压体积,跟 handoff-test-utils 同理)。
+  await checkOutboundStates({ peerUrl, taskId, marker });
 
   // (第 10/11 项的双机断言织在 1/3/4 节;单进程就能验的 Windows 源机附件形态、
   //  纯函数上下文改写、幂等收口 autoResume 事实在 test-handoff-local.ts。)

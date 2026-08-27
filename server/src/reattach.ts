@@ -17,6 +17,9 @@ import { consumeSingleRun } from "./single-run.js";
 import { isSameProcess } from "./proc.js";
 import { IS_WINDOWS } from "./platform.js";
 import { findMcpChannelHolders } from "./mcp-holders.js";
+import { recordUserConversationTurn } from "./conversation-turn.js";
+import { withSkillInvocation } from "./skills.js";
+import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 
 // 「现在重启会打断谁」——给 scripts/restart.mjs 的安全闸用。
 //
@@ -154,6 +157,16 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         turnStart: sess.turnStartedAt ?? sess.startedAt,
         cliSessionId: sess.cliSessionId ?? "",
         autoTitle: false, role: sess.role as SessionRole, // 标题在被打断之前那一段就已经解析过了
+        nativeSteer: {
+          prepare: (text) => withGlobalBrowserPolicy(
+            withSkillInvocation({ agentType: sess.agentType as AgentType, cwd: sess.cwd ?? "", text }),
+            "reminder",
+          ),
+          record: (text, at) => recordUserConversationTurn({
+            taskId: task.id, sessionId: sess.id, role: sess.role as SessionRole,
+            agentType: sess.agentType as AgentType, out, text, at,
+          }),
+        },
       })
         .catch((err) => console.error(`[ash] 接管 ${task.id} 的消费循环出错:`, err))
         .finally(() => {

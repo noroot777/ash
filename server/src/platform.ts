@@ -174,6 +174,20 @@ export async function listProcesses(timeoutMs = 3000): Promise<ProcessRow[]> {
   return parsePosixPs(text);
 }
 
+/**
+ * 命令行里明确引用了某个路径的进程。用于删除目录失败后的诊断,不是权限判据:
+ * cwd 本身不一定出现在 argv,所以空数组只表示「没认出来」,绝不表示无人占用。
+ */
+export async function findProcessesReferencingPath(path: string, timeoutMs = 3000): Promise<ProcessRow[]> {
+  const windows = path.replace(/\//g, "\\").toLowerCase();
+  const posix = path.replace(/\\/g, "/").toLowerCase();
+  return (await listProcesses(timeoutMs)).filter((row) => {
+    if (row.pid === process.pid) return false;
+    const command = row.command.toLowerCase();
+    return command.includes(windows) || command.includes(posix);
+  });
+}
+
 /** 单个进程的启动时间 + 命令行。查不到返回 null(调用方一律按「不存在」处理)。 */
 export function inspectProcessSync(pid: number): { startedAt: string | null; command: string | null } | null {
   if (!Number.isInteger(pid) || pid <= 0) return null;

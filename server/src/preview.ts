@@ -2,8 +2,9 @@
 //
 // 为什么值得单独一个模块：预览进程跟 agent 进程是两回事——它**没有终点**，是我们主动
 // 起、也得主动收的。所以这里的每一件事都围绕「别留孤儿」转：
-//   ① 进程 detached 自成组，pid 落盘（data/runs/<task>/preview.json），server 重启后
-//      照样杀得掉——内存里的 map 随进程一起没了，文件不会。
+//   ① POSIX 进程 detached 自成组；Windows 不放进 job object，父进程退出也不会连坐。
+//      两边都把 pid 落盘（data/runs/<task>/preview.json），server 重启后照样杀得掉——
+//      内存里的 map 随进程一起没了，文件不会。
 //   ② 每个任务同一时刻只有一个预览，起新的先收旧的。
 //   ③ 定时清扫既收「进程早死了但记录还在」，也收 idle30 这一档。
 //
@@ -15,9 +16,8 @@ import { createServer } from "node:net";
 import { existsSync, mkdirSync, openSync, closeSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PreviewLife, WorkflowStep } from "@ash/shared/workflow";
-import type { FreeWorkflowPreviewEventSource } from "@ash/shared";
+import { bus } from "./bus.js";
 import { augmentedEnv, killByPid } from "./executors/spawn.js";
-import { recordFreePreviewEventIfFree } from "./free-workflow-events.js";
 import { RUNS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
 import { portConflict, pickPreviewUrl, portHint } from "./preview-log.js";
@@ -121,7 +121,7 @@ export async function startPreview(
   step: PreviewStep,
   cwd: string,
 ): Promise<PreviewResult> {
-  await stopPreview(taskId, null, "system");
+  await stopPreview(taskId, null);
   const dir = join(RUNS_DIR, taskId);
   mkdirSync(dir, { recursive: true });
   const log = join(dir, "preview.log");
@@ -136,14 +136,14 @@ export async function startPreview(
   let pid: number;
   try {
     // 用户那条命令行交给谁跑,由 platform 收口(POSIX 是 `sh -lc`,Windows 是
-    // `cmd /d /s /c`)。**detached 两边都留着**:预览是有意要活过 server 重启的
-    // (pid 落盘就是为这个),而 Windows 上 detached 只意味着「不挂控制台、自成
-    // 进程组」——这里 stdio 早就重定向到文件了,没控制台反而正好;杀它走
-    // killByPid → taskkill /T,不依赖进程组。
+    // `cmd /d /s /c`)。POSIX 要 detached 才能靠进程组收完整棵树。Windows 反过来:
+    // `detached + windowsHide` 会让底层忽略 CREATE_NO_WINDOW,外层 cmd 再拉起的
+    // vite/node 就会拿到一扇可见控制台;而 taskkill /T 本来就按父子关系收树,不依赖
+    // 进程组,所以 Windows 不 detached 反而既能隐藏,也不影响回收。
     const launch = userShellLaunch(step.p.cmd);
     const child = spawn(launch.file, launch.args, {
       cwd,
-      detached: true,
+      detached: process.platform !== "win32",
       windowsHide: true,
       windowsVerbatimArguments: launch.windowsVerbatimArguments,
       stdio: ["ignore", fd, fd],
@@ -213,22 +213,17 @@ export async function startPreview(
 
 // 收掉一个任务的预览。reason 非空才往时间线写一行——刷新后仍能看出「预览被收了、
 // 为什么收的」，这是停止/暂停那条规矩的同一条判据。
-export async function stopPreview(
-  taskId: string,
-  reason: string | null,
-  source: FreeWorkflowPreviewEventSource = "system",
-): Promise<boolean> {
+export async function stopPreview(taskId: string, reason: string | null): Promise<boolean> {
   const record = readPreview(taskId);
   if (!record) return false;
   // 不先看组长是否还活着：组长死、vite 仍留在同一进程组，正是必须回收的现场。
   killByPid(record.pid);
   rmSync(recordPath(taskId), { force: true });
   if (reason) await appendTaskTimeline(taskId, `预览已回收（${reason}）：${record.url ?? record.cmd}`);
-  await recordFreePreviewEventIfFree(taskId, {
-    kind: "preview_closed",
-    source,
-    detail: record.url ?? record.cmd,
-  });
+  // 自由工作流状态里的 preview.running 变了就必须发事件：那份快照的版本号只由
+  // task.review / task.status 递增，不发的话前端拿到的新快照版本相等，会被当成
+  // 「不比现值新」丢掉——按钮就一直停在「关闭预览」上。
+  bus.publish({ type: "task.review", taskId });
   return true;
 }
 
@@ -253,7 +248,7 @@ export async function stopPreviewAtAccept(taskId: string): Promise<void> {
 
 /** 任务又开跑了：预览指向的是上一版代码，一律收掉，免得对着旧页面验新改动。 */
 export async function stopPreviewOnRerun(taskId: string): Promise<void> {
-  if (readPreview(taskId)) await stopPreview(taskId, "任务重新开跑，旧预览指向的是上一版代码", "rerun");
+  if (readPreview(taskId)) await stopPreview(taskId, "任务重新开跑，旧预览指向的是上一版代码");
 }
 
 // 清扫：进程早死了的记录、以及 idle30 那一档到点的。启动时先扫一遍，之后每 5 分钟一次

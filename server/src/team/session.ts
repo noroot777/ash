@@ -25,74 +25,63 @@
 //   • 执行者汇报/提问 → 不打断(它手上的活更重要);忙就缓冲,回合结束合并成
 //     一条送 —— 天然聚合,N 个执行者只花一次模型调用。
 import { mkdirSync, createWriteStream, existsSync } from "node:fs";
-import type { WriteStream } from "node:fs";
 import { join } from "node:path";
-import { eq, sql } from "drizzle-orm";
-import type { AgentEvent, AgentType, TeamConfig } from "@ash/shared";
+import { eq } from "drizzle-orm";
+import type { AgentType, TeamConfig } from "@ash/shared";
 import { TEAM_DEFAULTS } from "@ash/shared";
 import { db } from "../db/index.js";
 import { tasks, projects, sessions, groups } from "../db/schema.js";
 import { bus } from "../bus.js";
 import { id, now, attachmentsPrompt } from "../util.js";
 import { setTaskStatus } from "../status.js";
-import { trackRun, untrackRun, takeStopped, stopTask } from "../runs.js";
+import { trackRun, stopTask } from "../runs.js";
 import { pauseGroup } from "../scheduler.js";
 import { taskWorkspace } from "../task-workspace.js";
 import { resolveExecutorFor } from "../executors/index.js";
-import type { ResidentHandle } from "../executors/types.js";
-import { LOST_SESSION_PATCH, SESSION_LOST_NOTE, isSessionLost } from "../executors/session-lost.js";
+import { LOST_SESSION_PATCH } from "../executors/session-lost.js";
 import { RUNS_DIR } from "../paths.js";
-import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
+import { appendSessionTrace, writeRunError } from "../transcript.js";
 import { recordUserConversationTurn } from "../conversation-turn.js";
-import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET } from "./prompts.js";
 import { withSkillInvocation, nativeCliCommand } from "../skills.js";
 import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
-
-// 空闲多久回收进程(0/负数 = 永不回收)。测试用 ASH_TEAM_IDLE_MS=5000。
-const IDLE_MS = Number(process.env.ASH_TEAM_IDLE_MS ?? 30 * 60_000);
-// close() 之后还赖着不走的宽限,超时硬杀。
-const CLOSE_GRACE_MS = 10_000;
+import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
+import { latestTeamLeadSession } from "./session-selection.js";
+import { enqueueInbound, pendingInbound, type PendingInbound } from "./inbound-queue.js";
+import type { Lead } from "./session-types.js";
+import { createSessionConsumer } from "./session-consumer.js";
 
 const INTERRUPT_NOTE = "〔系统〕已打断调度者当前回合,插入你的新指令";
-const HALT_NOTE = "〔系统〕你按了「停止全组」:调度台进程与所有在跑的执行者都已停止,执行者可从中断处恢复。再说一句话就能把调度者接回同一会话。";
-const RECYCLE_NOTE = (min: number) =>
-  `〔系统〕调度台空闲超过 ${min} 分钟,进程已回收(待命)。你或执行者再说话时会自动接回同一会话,上下文不丢。`;
+// 「再说一句话就接回同一会话」只在会话**还在**时成立。刚被判 poisoned 作废过的话,
+// 这句就是把用户推回同一堵墙的错误指路 —— 以前靠事后补一条红色 error「更正上面那条」,
+// 于是一次 exit 0 的健康回合被停掉后照样挂着「执行过程 · 1 异常」(第 2 轮审查 P1)。
+// 现在按下按钮时就照实说,不留需要更正的话。
+const HALT_NOTE = (resumable: boolean) =>
+  "〔系统〕你按了「停止全组」:调度台进程与所有在跑的执行者都已停止,执行者可从中断处恢复。"
+  + (resumable
+    ? "再说一句话就能把调度者接回同一会话。"
+    : "调度者这条 CLI 会话已经作废,再说一句话会开一条全新会话(之前的上下文不带过去)。");
 // 调度台脚下的工作目录没了(多半是它自己按吩咐删掉了所在的 worktree)。
 const WORKSPACE_GONE_NOTE = (cwd: string) =>
   `〔系统〕检测到调度台的工作目录 ${cwd} 已不存在(worktree 被删除),当前进程已无法继续执行命令,先收掉它。这条消息会用同一个 CLI 会话重新接回:能恢复的会原样恢复,恢复不了则会新建一个空目录并明确告知。`;
 
 type Kind = "user" | "inbound" | "start";
 
-interface Lead {
-  taskId: string;
-  sessId: string; // ash 会话行 id,同时是 .md 文件名
-  cliSessionId: string;
-  agentType: AgentType;
-  executorId: string | null;
-  model: string | null;
-  reasoningEffort: string | null;
-  cwd: string;
-  handle: ResidentHandle;
-  out: WriteStream;
-  busy: boolean;
-  turnStart: string | null;
-  pending: string[]; // 回合进行中攒下的执行者消息,turnEnd 时合并成一条送
-  idleTimer: NodeJS.Timeout | null;
-  closing: "recycle" | "halt" | "workspace" | null;
-}
-
 const leads = new Map<string, Lead>();
 const opening = new Map<string, Promise<Lead>>();
+// 落库失败时的**最后一档**:没能写进 team_inbound 的入站消息只剩这一份内存副本。换台时
+// 跟着它走(releasePending → adoptInbound),server 一重启就真没了 —— 但那是数据库当时
+// 拒收的直接后果,总好过当场丢掉还一声不吭(2026-08-26 第 13 轮审查)。
+const unqueuedFallback = new Map<string, string[]>();
 
 export function teamIsLive(taskId: string): boolean {
   return leads.has(taskId) || opening.has(taskId);
 }
 
 // 用户插话(continueTask 顶部分流过来)。
-// **返回值 = 这句话有没有真的进到调度台**。false 只有一种来源:离线时收到 CLI 原生
-// 命令,被下面明确拒收(理由写进了会话)。上层拿它决定要不要记「已送达」—— 记了就
-// 等于把一句从未送出的话标成 sent(见 continueTask 里那段)。
+// **返回值 = 这句话有没有真的进到调度台**。false 有两种来源:离线时收到 CLI 原生命令
+// 被明确拒收,以及在线的调度台进程正在收尾、stdin 已经关了。上层拿它决定要不要记
+// 「已送达」—— 记了就等于把一句从未送出的话标成 sent(见 continueTask 里那段)。
 export async function deliverToLead(
   taskId: string,
   text: string,
@@ -122,7 +111,10 @@ export async function haltTeam(taskId: string): Promise<void> {
   const lead = leads.get(taskId);
   if (lead) {
     lead.closing = "halt";
-    recordSystemTurn(lead, HALT_NOTE);
+    // 会话在 consume 里被判 poisoned 时就地作废过(lead.cliSessionId 清空),所以这里
+    // 问得出「还接得回吗」,不必等 closeLead 再去更正。
+    lead.closingSaidRotated = !lead.cliSessionId;
+    recordSystemTurn(lead, HALT_NOTE(!!lead.cliSessionId));
   }
   stopTask(taskId); // 常驻 handle 已 trackRun → killChild 三层击杀
   const owned = await db.select().from(groups).where(eq(groups.ownerTaskId, taskId));
@@ -132,7 +124,8 @@ export async function haltTeam(taskId: string): Promise<void> {
 
 // ── 投递 ────────────────────────────────────────────────────────────────────
 // 返回 true = 这句话进了调度台(或者由 open 带着它开台);false = **明确拒收**,
-// 一个字都没送出去(见下面的原生命令分支)。调用方必须分得清这两者。
+// 一个字都没送出去。两个来源:离线时收到 CLI 原生命令(见下面的分支),以及在线的
+// 调度台进程已经关了 stdin(见 push)。调用方必须分得清这两者。
 async function deliver(
   taskId: string,
   text: string,
@@ -149,6 +142,7 @@ async function deliver(
     lead.closing = "workspace";
     recordSystemTurn(lead, WORKSPACE_GONE_NOTE(lead.cwd));
     leads.delete(taskId); // 立刻腾位置,别让下面的 open 以为还在线
+    retireLead(lead); // 它从此不代表这个任务:遗留的状态重试就地作废
     try {
       lead.handle.kill();
     } catch {
@@ -196,9 +190,10 @@ async function deliver(
       return true;
     }
   }
-  push(lead, text, kind);
-  return true;
+  // 拒收的回执一路往上传:调用方拿它决定「这句话到底算不算送出去了」(见 push)。
+  return push(lead, text, kind);
 }
+
 
 // 调度台此刻不在线时,配置里写的是哪种 CLI(判定 `/compact` 这类原生命令要用)。
 // 导出给路由层用:立即回复端点要先认出「这是发给调度台的原生命令」,才能把「送不出去」
@@ -248,30 +243,57 @@ function open(taskId: string, text: string, kind: Kind): Promise<Lead> {
   return p;
 }
 
-function push(lead: Lead, text: string, kind: Kind): void {
-  if (!text.trim()) return;
+/**
+ * 把一句话交给这台调度台。**返回值 = 它到底有没有被接住**。
+ *
+ * false 只有一个来源:进程明确拒收(收尾窗口里 stdin 已经关了,见 ResidentHandle.send)。
+ * 这个回执必须一路传回上层 —— `deliver` → `deliverToLead` → `continueTask` 的
+ * `onDelivered` 是排队/定时消息 pending → sent 的**唯一写点**。标了 sent,那条就从待发送
+ * 托盘里消失、全表扫描也不会再看它(只扫 pending),用户预定的指令从此没人执行,而时间线
+ * 上只有一句「没送进去」跟它自相矛盾(2026-08-26 第 14 轮审查)。
+ *
+ * 执行者汇报(inbound)被拒仍算 true:它有自己的持久待送队列接着(见 queueInbound),
+ * 已经被接住了,不需要上层再管第二遍。
+ */
+async function push(lead: Lead, text: string, kind: Kind): Promise<boolean> {
+  if (!text.trim()) return true;
   clearIdle(lead);
   if (kind === "user") {
     const promptedText = withSkillInvocation({ agentType: lead.agentType, cwd: lead.cwd, text });
     // 见头注 ②③:不打断的话用户要干等一整个回合,那就不是 steering 了。
-    if (lead.busy) {
-      lead.handle.interrupt();
-      recordSystemTurn(lead, INTERRUPT_NOTE);
-    }
+    const interrupted = lead.busy;
+    if (interrupted) lead.handle.interrupt();
     const at = now();
+    // **先确认进程收下了,再往时间线上落**。落早了这一句会以「用户已经说过」的样子留在
+    // .md 里,可它接着还要由下一台补送 —— 同一句话在会话里出现两遍,而中间那一遍模型
+    // 根本没收到。被拒时只留失败说明:原文还在待发送托盘里,用户看得见也等得到。
+    if (!sendToLead(lead, promptedText)) {
+      reportLeadFailure(lead, "这条消息没能送进调度台进程 —— 它正在收尾。这一句留在待发送托盘里,等下一台调度台接手时自动补送。", at);
+      return false;
+    }
+    if (interrupted) recordSystemTurn(lead, INTERRUPT_NOTE, at);
     recordUserConversationTurn({ taskId: lead.taskId, sessionId: lead.sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at });
-    lead.handle.send(withGlobalBrowserPolicy(promptedText, "reminder"));
     void beginTurn(lead, at);
-    return;
+    return true;
   }
   if (lead.busy) {
-    lead.pending.push(text); // 回合结束再合并成一条,省一轮模型调用
-    return;
+    // 回合结束再合并成一条,省一轮模型调用 —— 但**先落库**:这一等横跨换台、关台和重启,
+    // 只压在内存里的话,进程一换这条汇报就没了(见 team/inbound-queue.ts)。
+    lead.pending.push(await queueInbound(lead, text));
+    return true;
   }
   const at = now();
+  // 跟 endTurn 同一条规矩:**先确认进程收下了,再算它送出去了**。还挂在 leads 里不等于
+  // stdin 还开着 —— 空闲回收 close() 到 closeLead 之间就是这么一个窗口。没收下就排进持久
+  // 队列等下一台送(这时候别落盘正文,否则下一台真送成时同一条汇报会在 .md 里出现两遍)。
+  if (!sendToLead(lead, text)) {
+    lead.pending.push(await queueInbound(lead, text, at));
+    reportLeadFailure(lead, "执行者消息没能送进调度台进程(它正在收尾),先排进待送队列交给下一台接手的调度台。", at);
+    return true;
+  }
   recordSystemTurn(lead, text, at);
-  lead.handle.send(withGlobalBrowserPolicy(text, "reminder"));
   void beginTurn(lead, at);
+  return true;
 }
 
 // ── 开台 / 接回 ─────────────────────────────────────────────────────────────
@@ -295,10 +317,17 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   // 默认执行者会通过 taskWorkspace 继承这里得到的同一个目录。
   const ws = await taskWorkspace(task, project.repoPath);
   // 上一段常驻会话:同一个 CLI 会话可以 --resume 接回,.md 也接着往下写。
-  const prev = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
-    .filter((s) => s.role === "lead" && s.cliSessionId)
-    .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
-    .at(0);
+  // 只看最新一条调度台会话：最新行的 id 被清掉时应开新会话，不能越过它复活更老的
+  // 上下文（会话失效和版本替换两条清理路径都依赖这个判据）。
+  let prev = latestTeamLeadSession(await db.select().from(sessions).where(eq(sessions.taskId, taskId)));
+  const affectedSessionVersion = await affectedCodexResumeVersion(cfg.lead, prev?.cliSessionId);
+  if (prev && affectedSessionVersion) {
+    await announceAffectedSessionReplacement({
+      taskId, sessionId: prev.id, role: "lead", agentType: cfg.lead, version: affectedSessionVersion,
+    });
+    await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, prev.id));
+    prev = undefined;
+  }
   const resuming = !!prev?.cliSessionId;
   const objective = withSkillInvocation({ agentType: cfg.lead, cwd: ws.path, text: task.body?.trim() || task.title });
   const text = kind === "start" && resuming ? LEAD_NUDGE : rawText;
@@ -316,7 +345,12 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   const sessId = resuming ? prev!.id : id();
   const runDir = join(RUNS_DIR, taskId);
   mkdirSync(runDir, { recursive: true });
-  const handle = openResident({ prompt: message, cwd: ws.path, sessionId: prev?.cliSessionId ?? undefined });
+  const handle = openResident({
+    prompt: message,
+    cwd: ws.path,
+    sessionId: prev?.cliSessionId ?? undefined,
+    env: { ASH_TASK_ID: taskId },
+  });
   trackRun(taskId, handle);
 
   const cliSessionId = prev?.cliSessionId ?? handle.sessionId;
@@ -370,218 +404,134 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
     busy: false,
     turnStart: null,
     pending: [],
+    notices: [],
+    pendingCredential: null,
+    wantedStatus: null,
+    statusTimer: null,
+    retired: false,
     idleTimer: null,
     closing: null,
   };
-  leads.set(taskId, lead);
+  attachLead(lead);
   // 运行按钮带来的首个任务 prompt 不另记 turn；用户亲自发来的消息无论是否顺手
   // 打开了调度台，都必须成为可持久、可实时同步的一条 user turn。
   if (kind === "user") recordUserConversationTurn({ taskId, sessionId: sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at: turnStart });
   else if (resuming) recordSystemTurn(lead, text, turnStart);
   void beginTurn(lead, turnStart);
-  void consume(lead).catch((err) => console.error(`[ash] team consume(${taskId}) failed:`, err));
   return lead;
 }
 
-// ── 事件消费 ────────────────────────────────────────────────────────────────
-async function consume(lead: Lead): Promise<void> {
-  let exitStatus = 0;
-  // CLI 否认过这条会话吗(见 executors/session-lost.ts)。调度台是常驻会话,踩这个坑
-  // 比一次性任务更死:每次说话都 --resume 同一个不存在的 id,而收尾那句话还在告诉
-  // 用户「会话还在,再说一句就能接回」—— 他会照做,然后一次次撞同一堵墙。
-  let sessionLost = false;
-  let pendingTraceText = "";
-  const flushTraceText = () => {
-    if (!pendingTraceText) return;
-    appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), {
-      kind: "text",
-      text: pendingTraceText,
-    });
-    pendingTraceText = "";
-  };
-  for await (const event of lead.handle.events) {
-    if (event.kind === "turnEnd") {
-      flushTraceText();
-      await endTurn(lead);
-      continue;
-    }
-    if (event.kind === "session") {
-      if (event.cliSessionId !== lead.cliSessionId) {
-        lead.cliSessionId = event.cliSessionId;
-        const ex = await resolveExecutorFor({
-          executorId: lead.executorId,
-          type: lead.agentType,
-          model: lead.model,
-          reasoningEffort: lead.reasoningEffort,
-        });
-        await db
-          .update(sessions)
-          .set({ cliSessionId: event.cliSessionId, ...ex.resumeFields(lead.cwd, event.cliSessionId) })
-          .where(eq(sessions.id, lead.sessId));
-      }
-      publish(lead, event);
-      continue;
-    }
-    if (event.kind === "text") {
-      lead.out.write(event.text);
-      pendingTraceText += event.text;
-    }
-    else {
-      const emittedEvent = event.kind === "usage"
-        ? await recordSessionUsageEvent(lead.sessId, event, lead.agentType, lead.cliSessionId)
-        : event;
-      flushTraceText();
-      if (emittedEvent.kind === "thinking" || emittedEvent.kind === "tool" || emittedEvent.kind === "error" || emittedEvent.kind === "usage" || emittedEvent.kind === "attachment") {
-        appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), emittedEvent);
-      }
-      // 水位相反：**覆盖**。常驻会话尤其需要它——流水一路加到几百万，只有水位能回答
-      // 「这个调度台离上下文塞满还有多远」。
-      if (emittedEvent.kind === "context") await setSessionContext(lead.sessId, emittedEvent.context);
-      if (emittedEvent.kind === "error") {
-        writeRunError(lead.out, emittedEvent.message);
-        if (isSessionLost(emittedEvent.message)) sessionLost = true;
-      }
-      if (emittedEvent.kind === "done") exitStatus = emittedEvent.exitStatus;
-      publish(lead, emittedEvent);
-      continue;
-    }
-    publish(lead, event);
+/**
+ * 把一台组装好的调度台挂上线并开始消费它的事件流。**这两件事必须在同一个地方做**:
+ * 「在 leads 里」的含义是「后续消息送进这个 handle 会被处理」,而那只有在 consume 那条
+ * 循环还活着时才成立。只挂不消费、或消费者退了它还挂着,就是一台吞消息的假在线调度台
+ * (consume 的兜底注释里有现场)。
+ * 导出只为回归测试能驱动真的消费循环(scripts/test-team-lead-resilience.ts),
+ * 生产路径只有 openLead 走这里。
+ */
+export function attachLead(lead: Lead): void {
+  // 换台的那一刻就把老的摘牌。「谁说了算」不能只靠「此刻 leads 里是谁」现算 ——
+  // 新台完全可能先于老台的遗留计时器正常收尾并把自己从 map 里删掉,那时 map 是空的,
+  // 老台反而会被当成还有话语权(retireLead 顶部有现场)。
+  const previous = leads.get(lead.taskId);
+  if (previous && previous !== lead) retireLead(previous);
+  leads.set(lead.taskId, lead);
+  void consume(lead).catch((err) => console.error(`[ash] team consume(${lead.taskId}) failed:`, err));
+}
+
+/**
+ * 认领这条任务名下还没送出去的入站消息 —— 上一台没送成的、换台丢下的、上一个 server
+ * 进程留下的,都在这儿接回来(队列本身见 team/inbound-queue.ts)。
+ *
+ * 放在 consume 的开头而不是 attachLead 里,是因为读库要 await 而 attachLead 必须同步返回;
+ * 排在 for-await 之前就够了 —— 事件都在 generator 里排着,turnEnd 一定在认领之后才处理。
+ * 按 seq 去重是防这一手:认领读库的这段时间里,并发的 push 可能刚好把同一行也塞进了 pending。
+ */
+async function adoptInbound(lead: Lead): Promise<void> {
+  // 最后一档先取走:它只活在这个进程的内存里,没别的地方能等。
+  const fallback = unqueuedFallback.get(lead.taskId) ?? [];
+  unqueuedFallback.delete(lead.taskId);
+  let rows: { seq: number; text: string }[] = [];
+  try {
+    rows = await pendingInbound(lead.taskId);
+  } catch (error) {
+    // 读不到不能当成「没有」:那等于把这些消息判死。如实说一句,它们仍在库里等下一台。
+    reportLeadFailure(lead, `读取待送的执行者消息失败：${error instanceof Error ? error.message : String(error)}`);
   }
-  flushTraceText();
-  await closeLead(lead, exitStatus, sessionLost);
-}
-
-function publish(lead: Lead, event: AgentEvent): void {
-  bus.publish({
-    type: "agent.event",
-    taskId: lead.taskId,
-    sessionId: lead.sessId,
-    role: "lead",
-    agentType: lead.agentType,
-    model: lead.model,
-    reasoningEffort: lead.reasoningEffort,
-    event,
-  });
-}
-
-// 入站消息(执行者汇报/提问、系统提示)记成 system turn:实时走 system 事件、
-// 刷新走 .md 的哨兵行,两边长得一样。
-function recordSystemTurn(lead: Lead, text: string, at = now()): void {
-  writeTurn(lead.out, { t: "system", agent: lead.agentType, text }, at);
-  publish(lead, { kind: "system", text, at });
-}
-
-async function beginTurn(lead: Lead, at = now()): Promise<void> {
-  lead.busy = true;
-  lead.turnStart = at;
-  await db.update(sessions).set({ turnStartedAt: at, endedAt: null }).where(eq(sessions.id, lead.sessId));
-  appendSessionTrace(lead.taskId, lead.sessId, at, {
-    kind: "run",
-    model: lead.model,
-    reasoningEffort: lead.reasoningEffort,
-  });
-  await setTaskStatus(lead.taskId, "running");
-}
-
-// 一个回合说完了(进程还活着)。有攒下的执行者消息就立刻合并成一条继续跑,
-// 否则落 idle(待命)并起空闲回收计时。
-async function endTurn(lead: Lead): Promise<void> {
-  const endIso = now();
-  const spent = lead.turnStart ? Math.max(0, Date.parse(endIso) - Date.parse(lead.turnStart)) : 0;
-  lead.busy = false;
-  lead.turnStart = null;
-  await db
-    .update(sessions)
-    .set({ endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}` })
-    .where(eq(sessions.id, lead.sessId));
-  writeTurnEnd(lead.out, endIso);
-  if (lead.pending.length) {
-    const merged = lead.pending.join("\n\n---\n\n");
-    lead.pending = [];
-    const at = now();
-    recordSystemTurn(lead, merged, at);
-    lead.handle.send(withGlobalBrowserPolicy(merged, "reminder"));
-    await beginTurn(lead, at);
+  if (lead.retired) {
+    // 读库这段时间里被换掉了。库里那些自有下一台去认领,内存这一份得放回最后一档。
+    if (fallback.length) unqueuedFallback.set(lead.taskId, [...fallback, ...(unqueuedFallback.get(lead.taskId) ?? [])]);
     return;
   }
-  await setTaskStatus(lead.taskId, "idle");
-  armIdle(lead);
+  const have = new Set(lead.pending.map((m) => m.seq));
+  lead.pending.unshift(
+    ...rows.filter((r) => !have.has(r.seq)),
+    // 落库失败过的排在有 seq 的之后 —— 它们没有序号,精确的先后早在写库被拒时就丢了。
+    ...fallback.map((text) => ({ seq: null, text })),
+  );
 }
 
-async function closeLead(lead: Lead, exitStatus: number, sessionLost = false): Promise<void> {
-  clearIdle(lead);
-  takeStopped(lead.taskId); // 消费停止标记:团队不走 settleTaskStatus,别漏给下一次
-  untrackRun(lead.taskId, lead.handle);
-  // 工作目录被抽走时我们会主动收掉旧进程、立刻开新的,旧进程的 close 事件晚一步
-  // 才到 —— 它不能把已经接管的新会话摘掉,更不能把新回合的 running 改回 idle。
-  const superseded = leads.get(lead.taskId) !== lead;
-  if (!superseded) leads.delete(lead.taskId);
-  const endIso = now();
-  const spent = lead.turnStart ? Math.max(0, Date.parse(endIso) - Date.parse(lead.turnStart)) : 0;
-  // CLI 否认了这条会话:把失效的 id 连同由它派生的三件套恢复命令一起清掉,下一次说话
-  // 就会开一条全新会话(openResident 的判据就是「这行上有没有 cli_session_id」)。
-  // 退出码 0 也要求上:正常收尾的回合不该因为正文里出现过这句话就丢掉会话。
-  // superseded 也要排除:这条会话行已经被新进程接管了(工作目录被抽走那条路会复用同一
-  // 行),晚到的旧收尾要是把新进程刚报上来的有效 id 抹掉,新常驻会话的 id 就永久丢了
-  // —— 内存里 lead.cliSessionId 已是新值,那条「id 变了才写库」的分支不会再补写一次。
-  const dropSession = sessionLost && exitStatus !== 0 && !superseded;
-  await db
-    .update(sessions)
-    .set({
-      exitStatus,
-      endedAt: endIso,
-      activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${spent}`,
-      ...(dropSession ? LOST_SESSION_PATCH : {}),
-    })
-    .where(eq(sessions.id, lead.sessId));
-  if (lead.closing === "recycle") {
-    recordSystemTurn(lead, RECYCLE_NOTE(Math.round(IDLE_MS / 60_000)));
-  } else if (!lead.closing && exitStatus !== 0) {
-    // 既不是回收也不是手停 —— 进程自己没了。会话还在,说句话就能接回;除非 CLI 刚
-    // 否认过这条会话,那句「会话还在」就成了把用户推回同一堵墙的错误指路。
-    const msg = dropSession
-      ? `调度台进程意外退出(exit ${exitStatus})。${SESSION_LOST_NOTE}`
-      : `调度台进程意外退出(exit ${exitStatus})。CLI 会话还在,再说一句话会自动接回;需要的话也可以点「继续」。`;
-    writeRunError(lead.out, msg);
-    appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message: msg }, endIso);
-    publish(lead, { kind: "error", message: msg });
+/**
+ * 排进持久待送队列,**写库失败不抛**。
+ *
+ * 抛出去没有意义:这条链是 fire-and-forget 的(执行者结算侧 `notifyTeamLead(...)` 只
+ * `.catch(console.error)`),异常最终只变成一行控制台日志,而执行者已经结算,没有任何补送
+ * 入口 —— 一次瞬时故障就永久吃掉一份执行结果、一句失败说明或一个待回答的提问,用户刷新
+ * 也看不到发生过什么(2026-08-26 第 13 轮审查)。
+ *
+ * 写不进去就退回内存副本(seq=null):这一回合照样送得出去,下一次回合收尾还会重试落库
+ * (flushUnqueued),换台也带得走(releasePending)。失败本身如实落进会话。
+ */
+async function queueInbound(lead: Lead, text: string, at = now()): Promise<PendingInbound> {
+  try {
+    return await enqueueInbound(lead.taskId, text);
+  } catch (error) {
+    console.error(`[ash] team enqueueInbound(${lead.taskId}) failed:`, error);
+    reportLeadFailure(
+      lead,
+      `执行者消息写入待送队列失败：${error instanceof Error ? error.message : String(error)}。`
+        + `这条消息眼下只有一份内存副本,回合收尾时会重试落库;在那之前 server 重启就会丢。`,
+      at,
+    );
+    return { seq: null, text };
   }
-  // 回收和「停止全组」那两句都写着「再说一句话就能接回同一会话」,而这条会话刚被作废
-  // —— 不当场更正,用户刷新后看到的指引与真实状态正好相反,照做一次再撞一次墙。上面
-  // 那个「进程自己没了」的分支已经在 msg 里说过了,别重复。
-  if (dropSession && lead.closing) {
-    const msg = `更正上面那条:CLI 会话接不回了。${SESSION_LOST_NOTE}`;
-    writeRunError(lead.out, msg);
-    appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message: msg }, endIso);
-    publish(lead, { kind: "error", message: msg });
-  }
-  writeTurnEnd(lead.out, endIso);
-  lead.out.end();
-  if (!superseded) await setTaskStatus(lead.taskId, "idle"); // 团队没有终态,进程没了就是待命
 }
 
-// ── 空闲回收 ────────────────────────────────────────────────────────────────
-function clearIdle(lead: Lead): void {
-  if (lead.idleTimer) clearTimeout(lead.idleTimer);
-  lead.idleTimer = null;
-}
-
-function armIdle(lead: Lead): void {
-  clearIdle(lead);
-  if (!(IDLE_MS > 0)) return;
-  const t = setTimeout(() => {
-    if (lead.busy || lead.pending.length) return; // 刚好又忙起来了
-    lead.closing = "recycle";
+/** 重试把还没落库的那几条写进去。库一恢复它们就重新变成持久的;还是不行就照旧只有内存副本。 */
+async function flushUnqueued(lead: Lead): Promise<void> {
+  for (const message of lead.pending) {
+    if (message.seq !== null) continue;
     try {
-      lead.handle.close(); // 关 stdin,让它自己收尾退出
+      message.seq = (await enqueueInbound(lead.taskId, message.text)).seq;
     } catch {
-      /* 已经没了 */
+      // 还写不进去。第一次已经如实报过了,别每个回合再刷一遍屏 —— 内存副本还在,照样送。
+      return;
     }
-    const hard = setTimeout(() => {
-      if (leads.get(lead.taskId) === lead) lead.handle.kill();
-    }, CLOSE_GRACE_MS);
-    (hard as { unref?: () => void }).unref?.();
-  }, IDLE_MS);
-  (t as { unref?: () => void }).unref?.();
-  lead.idleTimer = t;
+  }
 }
+
+/**
+ * 交出这台手上的待送消息。有 seq 的留在 team_inbound 里等下一台认领;**没 seq 的只有内存
+ * 这一份**,交给进程内的最后一档,别跟着这台一起没(见 unqueuedFallback)。
+ *
+ * 必须清空 `lead.pending`:摘牌不让旧进程闭嘴,它晚一步吐出的 turnEnd 照样会走 endTurn 那段
+ * 合并投递,不清就是同一条汇报朝一个已经被杀的 handle 再送一遍,送「成」了还会把行删掉。
+ */
+function releasePending(lead: Lead): void {
+  const unqueued = lead.pending.filter((m) => m.seq === null).map((m) => m.text);
+  if (unqueued.length) {
+    unqueuedFallback.set(lead.taskId, [...(unqueuedFallback.get(lead.taskId) ?? []), ...unqueued]);
+  }
+  lead.pending = [];
+}
+
+// ── 事件消费 ────────────────────────────────────────────────────────────────
+const {
+  beginTurn,
+  clearIdle,
+  consume,
+  recordSystemTurn,
+  reportLeadFailure,
+  retireLead,
+  sendToLead,
+} = createSessionConsumer({ leads, adoptInbound, flushUnqueued, releasePending });

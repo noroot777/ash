@@ -1,4 +1,5 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
+import { currentListeningPort } from "../listening-port.js";
 
 export type JsonObject = Record<string, unknown>;
 
@@ -56,7 +57,7 @@ export function secretsEqual(left: string, right: string): boolean {
 
 export function protocolConverterBaseUrl(providerId: string): string {
   const configured = process.env.ASH_PROTOCOL_CONVERTER_URL?.trim();
-  const origin = (configured || `http://127.0.0.1:${Number(process.env.PORT ?? 4317)}`).replace(/\/+$/, "");
+  const origin = (configured || `http://127.0.0.1:${currentListeningPort() ?? 4317}`).replace(/\/+$/, "");
   return `${origin}/api/llm-providers/${encodeURIComponent(providerId)}/convert`;
 }
 

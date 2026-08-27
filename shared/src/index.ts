@@ -3,7 +3,7 @@ import type { TeamConfig } from "./team.ts";
 import type { DuetConfig } from "./duet.ts";
 import type { WorkflowDef } from "./workflow.ts";
 import type { TaskWorkflowMode } from "./free-workflow.ts";
-import type { HandoffTarget, TaskHandoff } from "./handoff.ts";
+import type { HandoffAudit, HandoffTarget, TaskHandoff } from "./handoff.ts";
 export type { Session, SessionRole } from "./session.ts";
 // 归一化后的 token 用量。运行时函数(累加/格式化)走 "@ash/shared/usage" 子路径
 // 导出,这里同上只再导出类型。
@@ -23,9 +23,6 @@ export type {
   FreeReviewRun,
   FreeWorkflowExecution,
   FreeWorkflowExecutionStatus,
-  FreeWorkflowPreviewEvent,
-  FreeWorkflowPreviewEventKind,
-  FreeWorkflowPreviewEventSource,
   FreeWorkflowState,
   ReviewerProfile,
   TaskWorkflowMode,
@@ -79,12 +76,17 @@ export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
 // 类型本体在 ./handoff.ts（纯类型模块）,这里只做再导出,消费方 import 路径不变。
 export type {
   HandoffApprovalResult,
+  HandoffAudit,
   HandoffExportResult,
   HandoffIdentity,
+  HandoffOutboundStateResult,
   HandoffPeer,
   HandoffPeerIdentity,
+  HandoffPeerOffline,
   HandoffPingProject,
   HandoffPreflightResult,
+  HandoffRemoteState,
+  HandoffReturnGrant,
   HandoffTarget,
   TaskHandoff,
 } from "./handoff.ts";
@@ -388,7 +390,22 @@ export interface Task {
   questionItems?: QuestionItem[] | null;
   // 任务接力标记（见 TaskHandoff）。null = 从未接力。
   handoff?: TaskHandoff | null;
+  // 强制恢复清掉 handoff 后仍保留的风险审计；刷新后必须持续可见。
+  handoffAudit?: HandoffAudit | null;
 }
+
+/**
+ * 任务**列表**行：`Task` 去掉正文。
+ *
+ * `GET /tasks` 一次要吐一千多行，正文占了整个响应的一半（实测 2.45 MB 里 1.25 MB），
+ * 而侧栏、树、命令面板没有一处用得上它——正文只有选中那一个任务的详情面需要。列表
+ * 走这个类型，正文由 `GET /tasks/:id` 单取（见 web 的 useTaskBody）。
+ *
+ * 用 `Omit` 而不是把 `body` 改成可选，是要让边界**编译期就立住**：拿列表行去喂任何
+ * 需要正文的地方（详情、派生、导出、duet 议题）都过不了类型检查，不会在运行时静默
+ * 变成一句「这个任务没有正文说明」。
+ */
+export type TaskListItem = Omit<Task, "body">;
 
 export interface QuestionItem {
   question: string;
@@ -407,6 +424,15 @@ export interface TaskFollowUp {
   // 附件路径原样带回，交给前端的 attachmentView 变成缩略图 / 下载链接。
   attachments: string[];
 }
+
+/**
+ * 按 id 批量问任务（追问、正文）时**一次**能问多少个。
+ *
+ * 服务端超了一律 400，**不截断**：少返几行在界面上会渲染成「还没读到这个任务的需求」——
+ * 一条永远不会消失的假状态，而用户根本无从知道后端压根没查。请求方自己分批（见 web 的
+ * `useSidebarSpread`），两边读同一个数，免得改一处漏一处。
+ */
+export const TASK_BATCH_LIMIT = 200;
 
 // 候选答案的上限：server 校验、MCP 工具描述、网页渲染共用这一处来源（写死两遍
 // 必然改一处漏一处）。超限一律 400 而不是静默截断 —— 悄悄砍掉一个候选，agent
@@ -482,7 +508,9 @@ export interface LlmProvider {
 }
 
 // ── Global search (⌘K) ───────────────────────────────────────────────────────
-// 形状住在 ./search.ts(纯类型,这里只再导出)。
+// 形状住在 ./search.ts,这里只再导出**类型**;那个文件里的排序判据
+// (compareSearchHits / SEARCH_MAX_HITS)是运行时值,走子路径 `@ash/shared/search`
+// ——index.ts 不能转发运行时函数(见 server/CLAUDE.md)。
 export type { NoteSearchHit, SearchField, SearchHit, TaskSearchHit } from "./search.ts";
 
 // ── Attachments (pasted into the composer / reply box) ───────────────────────
@@ -512,7 +540,13 @@ export type { DuetConfig, DuetConsensusBy, DuetStyle, HitlGate } from "./duet.ts
 
 // ── Scheduling (§9) ──────────────────────────────────────────────────────────
 // 形状住在 ./schedule.ts(纯类型,这里只再导出)。
-export type { Schedule, ScheduledMessage, ScheduledMessageMode, ScheduledMessageStatus } from "./schedule.ts";
+export type {
+  Schedule,
+  ScheduledMessage,
+  ScheduledMessageMode,
+  ScheduledMessageSessionRole,
+  ScheduledMessageStatus,
+} from "./schedule.ts";
 
 // ── HITL gates (§7) / Executor streaming events (§12) ───────────────────────
 // 形状住在 ./events.ts(纯类型,这里只再导出);拆分理由见那个文件的头部注释。

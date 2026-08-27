@@ -124,7 +124,7 @@ const inFlight = new Set<string>();
 
 // 抢下之后最终没能送出去:把租约还回去(托盘里它压根没消失过),下一次触发再送。
 // **宁可晚发,不能不发。**
-async function abortDelivery(message: Row): Promise<void> {
+export async function abortDelivery(message: Row): Promise<void> {
   lastFiredAt.delete(message.taskId);
   await db
     .update(scheduledMessages)
@@ -182,7 +182,7 @@ export async function beginDelivery(messageId: string): Promise<boolean> {
 
 // 原话已经进会话了,这才落 sent。用 status='pending' 兜一道:等待期间用户手动取消过的
 // 消息不该被这一步复活。
-async function markSent(message: Row): Promise<void> {
+export async function markSent(message: Row): Promise<void> {
   await db
     .update(scheduledMessages)
     .set({ status: "sent", sentAt: now(), deliveringSince: null })
@@ -205,7 +205,7 @@ export async function reclaimStaleDeliveries(): Promise<number> {
   return reclaimed.length;
 }
 
-function deliveryOptions(m: Row) {
+export function deliveryOptions(m: Row) {
   return {
     attachments: JSON.parse(m.attachments) as string[],
     agent: (m.agent as AgentType) ?? undefined,
@@ -262,7 +262,9 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
     .from(scheduledMessages)
     .where(and(eq(scheduledMessages.status, "pending"), isNull(scheduledMessages.deliveringSince)));
   const pending = (taskId ? all.filter((m) => m.taskId === taskId) : all)
-    .sort((a, b) => a.sendAt.localeCompare(b.sendAt)); // 排队消息的 sendAt=入队时刻,天然是先来后到
+    .sort((a, b) => a.sendAt.localeCompare(b.sendAt)
+      || a.createdAt.localeCompare(b.createdAt)
+      || a.id.localeCompare(b.id));
   const fired = new Set<string>(); // 每个任务每轮至多投递一条
   for (const m of pending) {
     try {
@@ -289,7 +291,7 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
               await markSent(m);
             },
           });
-          if (!started) await abortDelivery(m); // 理论上团队路径不会被挡回,租约也不留悬
+          if (!started) await abortDelivery(m); // 调度台明确拒收:清租约、保持 pending,下一台接手时补送
         } catch (reason) {
           if (delivered) throw reason; // 已经进调度台了,不是「未发送」,交给外层日志
           const detail = reason instanceof Error ? reason.message : String(reason);

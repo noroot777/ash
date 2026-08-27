@@ -9,9 +9,9 @@ import { homedir } from "node:os";
 import { mkdirSync, rmSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { noteTasks, projects, scheduledMessages, schedules, sessions, tasks } from "./db/schema.js";
+import { projects, scheduledMessages, schedules, sessions, tasks } from "./db/schema.js";
 import { claudeProjectSlug } from "./handoff-collect.js";
 import {
   HandoffError, MAX_FILE_BYTES, MB, safeRel,
@@ -22,15 +22,16 @@ import {
   applyUploadRewrites, buildUploadRewrites, hasUploadRewrites, isTextRel,
   MAX_UPLOADS, rewriteKindFor, writeUploads, type UploadRewrites,
 } from "./handoff-uploads.js";
-import { ensureWorkdir, expandHome, prepareWorktree, projectHealthLight, worktreePathFor } from "./git.js";
+import { ensureWorkdir, expandHome, prepareWorktree, projectHealthLight, workspaceTrackedDirty, worktreePathFor } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { DATA_DIR, RUNS_DIR } from "./paths.js";
 import { codexHome, findRollout } from "./executors/codex-rollout.js";
+import { assertHandoffNotCanceled, beginHandoffImport, endHandoffImport } from "./handoff-transfer-state.js";
 import { publishPendingMessages } from "./pending-messages.js";
 import { createTasks, publishTaskUpdated } from "./task-store.js";
-import { deleteTaskAssociations } from "./task-routes.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { localIdentity } from "./handoff-identity.js";
+import { assertWorktreeHeadCanAdvance, untrackedOverwriteConflicts } from "./handoff-worktree-safety.js";
 import { id, now } from "./util.js";
 import type { TaskHandoff } from "@ash/shared";
 import { execFileText as exec } from "./exec.js";
@@ -63,6 +64,12 @@ function validate(input: unknown): HandoffManifest {
   // transferId 宽容校验:老版本导出没有这个字段,缺了照收(只是失去幂等重放能力)。
   const tid = (m as { transferId?: unknown }).transferId;
   if (tid != null && (!isStr(tid) || tid.length > 64)) throw new HandoffError("transferId 非法");
+  const returnTid = (m as { returnTransferId?: unknown }).returnTransferId;
+  if (returnTid != null && (!isStr(returnTid) || returnTid.length > 64)) throw new HandoffError("returnTransferId 非法");
+  const sourcePort = (m as { sourcePort?: unknown }).sourcePort;
+  if (sourcePort != null && (typeof sourcePort !== "number" || !Number.isInteger(sourcePort) || sourcePort < 1 || sourcePort > 65_535)) {
+    throw new HandoffError("sourcePort 非法");
+  }
   const t = m.task;
   if (!t || !isStr(t.id) || !/^[A-Za-z0-9_-]{6,64}$/.test(t.id)) throw new HandoffError("task.id 非法");
   if (!isStr(t.title) || !isStr(t.body) || !isStr(t.createdAt)) throw new HandoffError("task 关键字段缺失");
@@ -120,6 +127,7 @@ function safeRefName(name: string): boolean {
 /** bundle 落进本地仓库:verify 确认前置提交齐全,再把分支强制 fetch 进来。 */
 async function importGitBundle(
   repoPath: string,
+  taskId: string,
   git: NonNullable<HandoffManifest["git"]>,
   notes: string[],
 ): Promise<void> {
@@ -150,6 +158,7 @@ async function importGitBundle(
   const bundlePath = join(tmpDir, `handoff-in-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.bundle`);
   try {
     await writeFile(bundlePath, Buffer.from(git.bundleBase64, "base64"));
+    let updatedCheckedOutWorktree = false;
     await withRepoLock(repoPath, async () => {
       try {
         await exec("git", ["-C", repo, "bundle", "verify", bundlePath], { maxBuffer: 4 * MB });
@@ -160,13 +169,55 @@ async function importGitBundle(
           409,
         );
       }
-      // `+` 强制更新:重复接力同一任务(先删了旧任务)时分支可能已存在旧尖。
-      await exec("git", [
-        "-C", repo, "fetch", bundlePath,
-        `+refs/heads/${git.branch}:refs/heads/${git.branch}`,
-      ], { maxBuffer: 4 * MB });
+      const taskWorktree = worktreePathFor(repoPath, taskId);
+      let checkedOutHere = false;
+      try {
+        const { stdout } = await exec("git", ["-C", taskWorktree, "symbolic-ref", "--quiet", "--short", "HEAD"]);
+        checkedOutHere = stdout.trim() === git.branch;
+      } catch { /* worktree 不存在或不在这个分支，走普通 fetch */ }
+      if (!checkedOutHere) {
+        // `+` 强制更新:重复接力同一任务(先删了旧任务)时分支可能已存在旧尖。
+        await exec("git", [
+          "-C", repo, "fetch", bundlePath,
+          `+refs/heads/${git.branch}:refs/heads/${git.branch}`,
+        ], { maxBuffer: 4 * MB });
+        return;
+      }
+
+      const dirty = await workspaceTrackedDirty(taskWorktree);
+      if (dirty !== false) {
+        throw new HandoffError(
+          dirty
+            ? `原机保留的任务 worktree 有已跟踪文件的未提交改动，不能用移回内容覆盖：${taskWorktree}。先提交或还原这些改动，再重试移回。`
+            : `无法确认原机任务 worktree 是否干净：${taskWorktree}。先检查这个目录，再重试移回。`,
+          409,
+        );
+      }
+      const tempRef = `refs/ash-handoff/import/${taskId}-${Date.now().toString(36)}`;
+      try {
+        await exec("git", ["-C", repo, "fetch", bundlePath, `+refs/heads/${git.branch}:${tempRef}`], { maxBuffer: 4 * MB });
+        const { stdout: fetchedHead } = await exec("git", ["-C", repo, "rev-parse", tempRef]);
+        if (fetchedHead.trim() !== git.head) throw new HandoffError("接力 bundle 的分支尖与 manifest 不一致", 409);
+        await assertWorktreeHeadCanAdvance(taskWorktree, tempRef);
+        const conflicts = await untrackedOverwriteConflicts(taskWorktree, tempRef);
+        if (conflicts === null) {
+          throw new HandoffError(`无法确认原机任务 worktree 的未跟踪文件是否会被覆盖：${taskWorktree}。先检查这个目录，再重试移回。`, 409);
+        }
+        if (conflicts.length) {
+          const shown = conflicts.slice(0, 8).join("、");
+          const more = conflicts.length > 8 ? ` 等 ${conflicts.length} 项` : "";
+          throw new HandoffError(
+            `原机保留的任务 worktree 有未跟踪文件会被移回内容覆盖：${shown}${more}。先移动、提交或删除这些文件，再重试移回。`,
+            409,
+          );
+        }
+        await exec("git", ["-C", taskWorktree, "reset", "--hard", git.head]);
+        updatedCheckedOutWorktree = true;
+      } finally {
+        await exec("git", ["-C", repo, "update-ref", "-d", tempRef]).catch(() => {});
+      }
     });
-    notes.push(`git 分支 ${git.branch} 已导入(${git.full ? "全量历史" : "增量"})`);
+    notes.push(`git 分支 ${git.branch} 已导入(${git.full ? "全量历史" : "增量"})${updatedCheckedOutWorktree ? "，原机保留的 worktree 已更新到返回提交" : ""}`);
   } finally {
     rmSync(bundlePath, { force: true });
   }
@@ -230,34 +281,30 @@ export interface HandoffImportResult {
   notes: string[];
 }
 
-// 同一 task id 的导入互斥闸:两个请求同时过掉下面的 existing 检查后,输家会撞
-// tasks.id UNIQUE,而它的补偿回滚曾按公共 task id 无条件清理,把赢家刚建好的任务
-// 也删掉(审查实测:req1 200、req2 500、最终 GET 404)。这种并发不需要恶意——应答
-// 丢失后用户重试时,上一次导入可能还在本机处理中。进程内按 task id 串行(本机 DB
-// 有单实例锁,不存在跨进程写方),后来者 409 让源机稍后原样重放收口。
-const importsInFlight = new Set<string>();
-
-export async function importHandoff(input: unknown): Promise<HandoffImportResult> {
+export async function importHandoff(
+  input: unknown,
+  context: { sourceUrl?: string | null } = {},
+): Promise<HandoffImportResult> {
   const m = validate(input);
-  if (importsInFlight.has(m.task.id)) {
+  if (!beginHandoffImport(m.task.id)) {
     throw new HandoffError("这个任务的另一次导入还在本机进行中,等它落定后再原样重试", 409);
   }
-  importsInFlight.add(m.task.id);
   try {
-    return await importValidated(m);
+    assertHandoffNotCanceled(m.task.id, m.transferId, m.sourceFingerprint);
+    return await importValidated(m, context);
   } finally {
-    importsInFlight.delete(m.task.id);
+    endHandoffImport(m.task.id);
   }
 }
 
-async function importValidated(m: HandoffManifest): Promise<HandoffImportResult> {
+async function importValidated(
+  m: HandoffManifest,
+  context: { sourceUrl?: string | null },
+): Promise<HandoffImportResult> {
   const notes: string[] = [];
   const project = (await db.select().from(projects).where(eq(projects.id, m.targetProjectId))).at(0);
   if (!project) throw new HandoffError("目标项目不存在(对端项目清单可能过期,重新预检)", 404);
-  const existing = (await db
-    .select({ id: tasks.id, handoff: tasks.handoff })
-    .from(tasks)
-    .where(eq(tasks.id, m.task.id))).at(0);
+  const existing = (await db.select().from(tasks).where(eq(tasks.id, m.task.id))).at(0);
   let existingMarker: TaskHandoff | null = null;
   let returning = false;
   if (existing) {
@@ -292,6 +339,8 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
   // 优先信本机历史标记里的原机指纹；旧标记没有时，才接受签名 manifest 携带的值。
   // returning 只表示“可安全覆盖旧存档”，并不等于回到原机：第二次 A→B 时 B 也有 out 存档。
   const originFingerprint = existingMarker?.originFp ?? m.originFingerprint ?? null;
+  // returned 必须由本机已有的 out 存档佐证。普通 import 的新任务只能信任来源机已获批准，
+  // 不能再信它自报的 originFingerprint 来伪造“已移回本机”的展示与来源锁解除状态。
   const returnedHome = returning && originFingerprint === localIdentity().fingerprint;
   // 会话 id 冲突预检:必须在任何副作用之前拦下,否则落库落到一半 UNIQUE 炸掉,
   // 留下没有会话的半截任务(审查实测:import 500 后 GET 200、重试永远 409)。
@@ -317,7 +366,7 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
   // ── git:先分支进仓库,再恢复 worktree ────────────────────────────────────
   let workspace: string | null = null;
   if (useWorktree && m.git) {
-    await importGitBundle(project.repoPath, m.git, notes);
+    await importGitBundle(project.repoPath, m.task.id, m.git, notes);
     const ws = await prepareWorktree(project.repoPath, m.task.id, m.task.worktreeBase);
     workspace = ws.path;
     if (ws.branch !== m.git.branch) {
@@ -438,10 +487,13 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
     // 源机生成的接力身份证:应答丢失后源机原样重试时,靠它把「已有同 id 任务」识别成
     // 同一次接力并幂等收口(见上面 existing 分支)。
     transferId: m.transferId ?? null,
+    // 任务级移回完成后仍保留原 out 存档的 transfer id：如果成功应答在路上丢失，
+    // 持有机可以用同一凭据重新探测并让 importHandoff 按 m.transferId 幂等收口。
+    ...(m.returnTransferId !== undefined ? { returnTransferId: m.returnTransferId } : {}),
     // 导入时有没有触发自动续跑,存成事实:应答丢失后的幂等收口靠它如实回答源机
     // 「任务在对端跑起来了没有」,而不是一律回 false 误导用户去对端手动再点一次。
     autoResume: m.autoResume,
-    peerUrl: null,
+    peerUrl: context.sourceUrl ?? null,
     peerName: m.sourceHost || null,
     peerFp: m.sourceFingerprint ?? null,
     originFp: originFingerprint,
@@ -451,17 +503,14 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
     git: useWorktree && m.git ? "bundle" : "none",
   };
   const status = SETTLED.has(m.task.status) ? m.task.status : "canceled";
-  const taskRow = {
-    id: m.task.id,
+  const taskValues = {
     projectId: project.id,
     title: m.task.title,
     body: m.task.body,
-    mode: "single" as const,
     status,
     stage: m.task.stage,
     labels: jsonOr(m.task.labels, "[]"),
     agentType: m.task.agentType,
-    executorId: null,
     model: m.task.model,
     reasoningEffort: m.task.reasoningEffort,
     autoTitle: m.task.autoTitle,
@@ -485,7 +534,13 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
     endedAt: m.task.endedAt,
     handoff: JSON.stringify(marker),
     scheduleId,
+  };
+  const taskRow = {
+    id: m.task.id,
+    mode: "single" as const,
+    executorId: null,
     reportBack: false,
+    ...taskValues,
   };
   const sessionRows = m.sessions.map((s) => ({
     id: s.id,
@@ -539,16 +594,26 @@ async function importValidated(m: HandoffManifest): Promise<HandoffImportResult>
   }));
 
   if (returning) {
-    const preservedNoteLinks = await db.select().from(noteTasks).where(eq(noteTasks.taskId, m.task.id));
     try {
       await db.transaction(async (tx) => {
-        await deleteTaskAssociations(m.task.id);
-        await tx.delete(tasks).where(eq(tasks.id, m.task.id));
-        await tx.insert(tasks).values(taskRow);
+        // 安全移回只覆盖 manifest 真正携带的任务字段。分组、依赖、自由审查、验收落账等
+        // 原机独有状态不在协议里，整行删除再插入会把它们静默清空。
+        await tx.update(tasks).set({
+          ...taskValues,
+          // 执行器 id 只在本机有意义；agent 类型没变才保留原机选择，否则按类型重新解析。
+          executorId: existing?.agentType === m.task.agentType ? existing.executorId : null,
+        }).where(eq(tasks.id, m.task.id));
+        // 会话、计划和 pending 消息确实随 manifest 迁移，只替换这三类；已发送/取消的
+        // 本机消息仍是本机历史，不能和未迁移的自由工作流关联一起误删。
+        await tx.delete(sessions).where(eq(sessions.taskId, m.task.id));
+        await tx.delete(schedules).where(eq(schedules.taskId, m.task.id));
+        await tx.delete(scheduledMessages).where(and(
+          eq(scheduledMessages.taskId, m.task.id),
+          eq(scheduledMessages.status, "pending"),
+        ));
         if (scheduleValues) await tx.insert(schedules).values(scheduleValues);
         if (sessionRows.length) await tx.insert(sessions).values(sessionRows);
         if (messageRows.length) await tx.insert(scheduledMessages).values(messageRows);
-        if (preservedNoteLinks.length) await tx.insert(noteTasks).values(preservedNoteLinks);
       });
       await publishTaskUpdated(m.task.id);
       notes.push(returnedHome

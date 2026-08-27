@@ -1,24 +1,27 @@
 import { useEffect, useRef } from "react";
-import type { Task } from "@ash/shared";
+import type { TaskListItem } from "@ash/shared";
 import {
   activateInspectorShortcut,
   createInspectorShortcutSequence,
   hasInspectorShortcutTarget,
 } from "../inspector/shortcuts.ts";
+import { createKeyChordSequence } from "../lib/keyChord.ts";
 import { hasOpenLayer } from "../lib/useDismissable.ts";
+import { TASK_MODE_CHORD_PREFIX, isTaskModeChordKey } from "./taskScope.ts";
 
 type ShortcutOptions = {
   enabled: boolean;
   paletteOpen: boolean;
   composerOpen: boolean;
   spreadOpen: boolean;
-  orderedTasks: Task[];
+  orderedTasks: TaskListItem[];
   selectedTaskId: string | null;
   onTogglePalette: () => void;
   onCreate: () => void;
-  onTask: (task: Task) => void;
+  onTask: (task: TaskListItem) => void;
   onToggleSpread: () => void;
   onCloseSpread: () => void;
+  onToggleTaskMode: () => void;
 };
 
 function isTextEntry(target: EventTarget | null): boolean {
@@ -61,14 +64,17 @@ export function useWorkspaceShortcuts({
   onTask,
   onToggleSpread,
   onCloseSpread,
+  onToggleTaskMode,
 }: ShortcutOptions): void {
   const inspectorSequence = useRef(createInspectorShortcutSequence());
+  const taskModeSequence = useRef(createKeyChordSequence(TASK_MODE_CHORD_PREFIX, isTaskModeChordKey));
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const commandPalette = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k";
       if (commandPalette) {
         inspectorSequence.current.reset();
+        taskModeSequence.current.reset();
         // The palette is global; enabled only gates the workspace navigation keys below.
         if (!paletteOpen && hasBlockingLayer()) return;
         event.preventDefault();
@@ -77,21 +83,28 @@ export function useWorkspaceShortcuts({
       }
       if (!enabled || paletteOpen || isTextEntry(event.target) || hasBlockingLayer()) {
         inspectorSequence.current.reset();
+        taskModeSequence.current.reset();
         return;
       }
       if (event.metaKey || event.ctrlKey || event.altKey) {
         inspectorSequence.current.reset();
+        taskModeSequence.current.reset();
         return;
       }
 
+      // Inspector 的 `I …` 先跑：g 是它的第二键（`I G` 是 Git 那一档），任务模式的和弦要是
+      // 抢在前面把 g 吞了，那一档就再也开不出来。反过来让它先跑不吃亏 —— Inspector 手上
+      // 没有半截序列时，handle 会把 g 原样让下去。
       if (hasInspectorShortcutTarget() && !event.repeat) {
         const inspectorShortcut = inspectorSequence.current.handle(event.key);
         if (inspectorShortcut.kind === "prefix") {
+          taskModeSequence.current.reset();
           event.preventDefault();
           event.stopImmediatePropagation();
           return;
         }
-        if (inspectorShortcut.kind === "shortcut") {
+        if (inspectorShortcut.kind === "chord") {
+          taskModeSequence.current.reset();
           event.preventDefault();
           event.stopImmediatePropagation();
           activateInspectorShortcut(inspectorShortcut.key);
@@ -99,6 +112,25 @@ export function useWorkspaceShortcuts({
         }
       } else if (!hasInspectorShortcutTarget()) {
         inspectorSequence.current.reset();
+      }
+
+      // G T 在「任务模式」和当前项目之间来回切。两条序列互相清对方的半截状态：不清的话
+      // `g i f t` 会被串成一次切换 —— 中间整条 Inspector 序列本该把那个 g 作废掉。
+      if (!event.repeat) {
+        const taskModeChord = taskModeSequence.current.handle(event.key);
+        if (taskModeChord.kind === "prefix") {
+          inspectorSequence.current.reset();
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
+        if (taskModeChord.kind === "chord") {
+          inspectorSequence.current.reset();
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          onToggleTaskMode();
+          return;
+        }
       }
 
       // 大图开着时 hasBlockingLayer() 已经把这里整段挡掉了，所以 Esc 只关大图、
@@ -149,7 +181,7 @@ export function useWorkspaceShortcuts({
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [composerOpen, enabled, onCloseSpread, onCreate, onTask, onToggleSpread, onTogglePalette, orderedTasks, paletteOpen, selectedTaskId, spreadOpen]);
+  }, [composerOpen, enabled, onCloseSpread, onCreate, onTask, onToggleSpread, onToggleTaskMode, onTogglePalette, orderedTasks, paletteOpen, selectedTaskId, spreadOpen]);
 
   useEffect(() => {
     if (!selectedTaskId) return;

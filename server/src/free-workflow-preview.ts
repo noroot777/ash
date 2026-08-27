@@ -7,7 +7,6 @@ import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { assertBeforeAcceptance } from "./free-workflow.js";
-import { recordFreePreviewEvent } from "./free-workflow-events.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { handoffBlockReasonById } from "./handoff-guard.js";
 import { isTurnClaimed } from "./runs.js";
@@ -51,12 +50,8 @@ async function startFreePreview(taskId: string) {
     };
     const result = await startPreview(taskId, step, workspace.path);
     if (!result.ok) throw new Error(result.reason);
-    await recordFreePreviewEvent(taskId, {
-      kind: "preview_opened",
-      source: "user",
-      detail: result.record.url ?? result.record.cmd,
-      occurredAt: result.record.startedAt,
-    });
+    // 预览只是「随手开一眼」：时间线留一行让刷新后仍看得见，但不进「实际工作流」那条
+    // 线——开关预览不改变任务本身走到了哪一步。
     await appendTaskTimeline(taskId, `自由工作流预览已打开：${result.record.url ?? command}`);
     bus.publish({ type: "task.review", taskId });
     return result.record;
@@ -90,7 +85,7 @@ export function mountFreePreviewRoutes(api: Hono): void {
     }
     if (!tryAcquireFreeWorkflowAction(taskId)) return c.json({ error: "当前已有自由工作流操作正在进行" }, 409);
     try {
-      const stopped = await stopPreview(taskId, "用户关闭了自由工作流预览", "user");
+      const stopped = await stopPreview(taskId, "用户关闭了自由工作流预览");
       bus.publish({ type: "task.review", taskId });
       return c.json({ stopped });
     } finally {

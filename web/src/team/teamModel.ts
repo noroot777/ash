@@ -1,4 +1,4 @@
-import type { Group, Session, Task, TaskStatus } from "@ash/shared";
+import type { Group, Session, Task, TaskListItem, TaskStatus } from "@ash/shared";
 import { taskDisplayStatus } from "@ash/shared";
 import { timeMs, type Batch, type FeedRow as SharedFeedRow } from "@ash/shared/team";
 import type { ConversationItem } from "../task-detail/conversationModel.ts";
@@ -69,11 +69,11 @@ export function teamFeedOptions() {
   };
 }
 
-export function executorLabel(task: Task): string {
+export function executorLabel(task: TaskListItem): string {
   return task.executorLabel?.trim() || task.agentType || "执行者";
 }
 
-export function workerStatusText(task: Task, groupPaused = false): string {
+export function workerStatusText(task: TaskListItem, groupPaused = false): string {
   if (task.question) return "等答复";
   const display = taskDisplayStatus(task.status, task.stage, false).label;
   if (task.stage && task.status !== "failed" && task.status !== "canceled") {
@@ -89,7 +89,7 @@ export function workerStatusText(task: Task, groupPaused = false): string {
   return `${display}${groupPaused ? " · 所属组已停止" : ""}`;
 }
 
-export function statusTone(task: Task): string {
+export function statusTone(task: TaskListItem): string {
   if (task.question) return "cyan";
   if (task.stage === "verify_failed" || task.status === "failed") return "red";
   if (task.stage === "verified" || task.stage === "awaiting_acceptance" || task.stage === "accepted") return "green";

@@ -177,6 +177,35 @@
 .token-usage-panel .is-total dt { color: var(--ink); }
 .token-usage-panel footer { margin-top: 7px; color: var(--faint); font-size: 9.5px; line-height: 1.55; }
 
+/* 面板底部的快捷设置：明细里那几个数从哪来，就在同一个面板里改得动。
+   默认收起成一行 —— 这颗胶囊的主业仍是「看一眼还剩多少」，表单不该抢在前面。 */
+.context-compact-quick { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
+.context-compact-toggle { display: flex; width: 100%; align-items: center; gap: 4px; border: 0; border-radius: 5px; background: transparent; padding: 3px 4px; color: var(--faint); font-size: 10px; }
+.context-compact-toggle:hover { background: var(--raised); color: var(--muted); }
+.context-compact-toggle > span { flex: 1; text-align: left; }
+.context-compact-toggle > svg:last-child { transition: transform 0.12s ease; }
+.context-compact-toggle.is-open > svg:last-child { transform: rotate(180deg); }
+.context-compact-form { display: grid; gap: 6px; padding: 5px 4px 2px; }
+.context-compact-row { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 6px; }
+.context-compact-row > label { color: var(--faint); font-size: 10px; }
+.context-compact-input { display: inline-flex; align-items: center; gap: 4px; }
+.context-compact-input input { width: 76px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); padding: 3px 6px; color: var(--ink); font-family: var(--font-mono); font-size: 10.5px; text-align: right; }
+.context-compact-input input:focus { border-color: var(--accent); outline: none; }
+.context-compact-input > small { width: 28px; color: var(--faint); font-size: 9px; }
+.context-compact-preset { border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 3px 6px; color: var(--faint); font-size: 9.5px; white-space: nowrap; }
+.context-compact-preset:hover { border-color: var(--line2); background: var(--raised); color: var(--muted); }
+.context-compact-note { margin: 0; color: var(--faint); font-size: 9.5px; line-height: 1.5; }
+.context-compact-note.is-warn { color: var(--red); }
+.context-compact-retry { margin-left: 6px; border: 1px solid currentColor; border-radius: 5px; background: transparent; padding: 1px 6px; color: inherit; font-size: 9.5px; }
+.context-compact-retry:hover { background: var(--raised); }
+.context-compact-actions { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+/* 「改的是哪个执行器 / 什么时候生效」跟保存按钮同一行：这是按下去之前最该读到的一句。 */
+.context-compact-actions > span { flex: 1; min-width: 0; color: var(--faint); font-size: 9.5px; line-height: 1.4; }
+.context-compact-actions > span.is-error { color: var(--red); }
+.context-compact-save { flex: none; border: 1px solid transparent; border-radius: 5px; background: var(--accent); padding: 3px 9px; color: white; font-size: 10px; }
+.context-compact-save:hover:not(:disabled) { background: #5560c4; }
+.context-compact-save:disabled { border-color: var(--line); background: transparent; color: var(--faint); }
+
 .task-event-line { display: flex; max-width: 790px; align-items: center; gap: 9px; margin: 17px 0 17px 30px; color: var(--faint); font-size: 10.5px; }
 .task-event-line span { height: 1px; flex: 1; background: var(--line); }
 .task-event-line p { margin: 0; }

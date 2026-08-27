@@ -3,7 +3,7 @@ import {
   TASK_STATUS_LABELS,
   type AgentExecutorProfile,
   type AgentType,
-  type Task,
+  type Task, type TaskListItem,
 } from "@ash/shared";
 import { sameExecutor } from "@ash/shared/executors";
 import {
@@ -31,7 +31,7 @@ interface ReviewSelection {
   reasoningEffort: string;
 }
 
-function reviewDefaults(task: Task, parent: Task | null): ReviewSelection {
+function reviewDefaults(task: Task, parent: TaskListItem | null): ReviewSelection {
   if (parent?.team) {
     return {
       agentType: parent.team.reviewerAgentType ?? parent.team.worker,
@@ -85,7 +85,7 @@ export function TaskReviewInspector({
   notify,
 }: {
   task: Task;
-  allTasks: Task[];
+  allTasks: TaskListItem[];
   onOpenTask: (taskId: string) => void;
   onOpenReview: () => void;
   onTaskUpdated: (task: Task) => void;

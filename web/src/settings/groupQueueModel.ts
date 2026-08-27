@@ -1,19 +1,19 @@
-import type { Task } from "@ash/shared";
+import type { TaskListItem } from "@ash/shared";
 
 export interface ResumeQueueModel {
-  ordered: Task[];
+  ordered: TaskListItem[];
   doneCount: number;
 }
 
-export function activeGroupTasks(tasks: Task[], groupId: string): Task[] {
+export function activeGroupTasks<T extends TaskListItem>(tasks: T[], groupId: string): T[] {
   return tasks.filter((task) => task.groupId === groupId && !task.archived);
 }
 
-export function resumeQueueModel(tasks: Task[]): ResumeQueueModel | null {
+export function resumeQueueModel(tasks: TaskListItem[]): ResumeQueueModel | null {
   if (!tasks.some((task) => task.status === "paused")) return null;
   const inSet = new Set(tasks.map((task) => task.id));
   const placed = new Set<string>();
-  const ordered: Task[] = [];
+  const ordered: TaskListItem[] = [];
   const pool = [...tasks].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
   while (pool.length) {
     const ready = pool.findIndex((task) => task.resumeDependsOn.every((dependency) => !inSet.has(dependency) || placed.has(dependency)));

@@ -91,17 +91,6 @@ export interface FreeWorkflowPreviewState {
   startedAt: string | null;
 }
 
-export type FreeWorkflowPreviewEventKind = "preview_opened" | "preview_closed";
-export type FreeWorkflowPreviewEventSource = "user" | "merge" | "rerun" | "system";
-
-export interface FreeWorkflowPreviewEvent {
-  id: string;
-  kind: FreeWorkflowPreviewEventKind;
-  source: FreeWorkflowPreviewEventSource;
-  detail: string | null;
-  occurredAt: string;
-}
-
 export type FreeWorkflowExecutionStatus = "running" | "completed" | "failed" | "canceled" | "paused";
 
 export interface FreeWorkflowExecution {
@@ -132,8 +121,8 @@ export interface FreeWorkflowState {
     /** 非空 = 这是自动复审链的续轮预约（修复确认完成后在该 run 上续下一轮）。 */
     runId: string | null;
   };
+  /** 预览是「随手开一眼」的看片器，不是工作流里的一步：只报当下开没开，不留开关历史。 */
   preview: FreeWorkflowPreviewState;
-  previewEvents: FreeWorkflowPreviewEvent[];
   executions: FreeWorkflowExecution[];
   reviews: FreeReviewRun[];
 }

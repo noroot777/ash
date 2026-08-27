@@ -328,6 +328,14 @@ try {
       })));
       return;
     }
+    if (req.method === "POST" && req.url === "/api/handoff/return/ping") {
+      req.resume();
+      req.on("end", () => res.end(JSON.stringify({
+        ok: true, service: "ash", host: "fake-peer",
+        projects: [{ id: "p-dst", name: "acme", repoPath: "/x/acme", isRepo: false }],
+      })));
+      return;
+    }
     if (req.method === "POST" && req.url === "/api/handoff/import") {
       req.resume();
       req.on("end", () => res.end(JSON.stringify({ ok: true, taskId: "fake-remote-01", autoResume: false, notes: [] })));

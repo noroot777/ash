@@ -1,7 +1,10 @@
+import { KEY_CHORD_TIMEOUT_MS, createKeyChordSequence } from "../lib/keyChord.ts";
+import type { KeyChordDecision } from "../lib/keyChord.ts";
+
 export type InspectorShortcutKey = "i" | "f" | "g" | "w" | "r" | "e";
 
 export const INSPECTOR_SHORTCUT_PREFIX = "i";
-export const INSPECTOR_SHORTCUT_TIMEOUT_MS = 1_000;
+export const INSPECTOR_SHORTCUT_TIMEOUT_MS = KEY_CHORD_TIMEOUT_MS;
 
 const SHORTCUT_KEYS = new Set<InspectorShortcutKey>(["i", "f", "g", "w", "r", "e"]);
 
@@ -13,32 +16,10 @@ export function isInspectorShortcutKey(key: string): key is InspectorShortcutKey
   return SHORTCUT_KEYS.has(key as InspectorShortcutKey);
 }
 
-export type InspectorShortcutDecision =
-  | { kind: "none" }
-  | { kind: "prefix" }
-  | { kind: "shortcut"; key: InspectorShortcutKey };
+export type InspectorShortcutDecision = KeyChordDecision<InspectorShortcutKey>;
 
 export function createInspectorShortcutSequence(timeoutMs = INSPECTOR_SHORTCUT_TIMEOUT_MS) {
-  let prefixStartedAt: number | null = null;
-
-  return {
-    handle(rawKey: string, now = Date.now()): InspectorShortcutDecision {
-      const key = rawKey.toLowerCase();
-      if (prefixStartedAt !== null) {
-        const withinTimeout = now >= prefixStartedAt && now - prefixStartedAt <= timeoutMs;
-        prefixStartedAt = null;
-        if (withinTimeout && isInspectorShortcutKey(key)) return { kind: "shortcut", key };
-      }
-      if (key === INSPECTOR_SHORTCUT_PREFIX) {
-        prefixStartedAt = now;
-        return { kind: "prefix" };
-      }
-      return { kind: "none" };
-    },
-    reset(): void {
-      prefixStartedAt = null;
-    },
-  };
+  return createKeyChordSequence(INSPECTOR_SHORTCUT_PREFIX, isInspectorShortcutKey, timeoutMs);
 }
 
 type InspectorShortcutTarget = (key: InspectorShortcutKey) => boolean;

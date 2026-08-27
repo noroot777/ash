@@ -16,7 +16,7 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 try {
-  const { ensureSchema, db } = await import("../src/db/index.js");
+  const { ensureSchema, db, dbClient } = await import("../src/db/index.js");
   const { agents, freeReviewRounds, freeReviewRuns, freeWorkflowStates, projects, sessions, tasks } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
   const {
@@ -32,8 +32,8 @@ try {
   const { mountFreeWorkflowRoutes } = await import("../src/free-workflow-routes.js");
   const { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } = await import("../src/free-workflow-lock.js");
   const {
+    createExecutionCloser,
     finishFreeTaskExecution,
-    recordFreePreviewEvent,
     recordFreeTaskExecutionStartIfFree,
   } = await import("../src/free-workflow-events.js");
   const { claimTurn } = await import("../src/runs.js");
@@ -420,23 +420,37 @@ try {
     { id: secondExecution, status: "completed", startedAt: "2026-08-08T11:00:00.000Z", endedAt: "2026-08-08T11:04:00.000Z" },
   ], "每次任务执行必须独立保留起止时间，不能被后一次覆盖");
 
-  await recordFreePreviewEvent("free-task", {
-    kind: "preview_opened", source: "user", detail: "http://127.0.0.1:4567",
-    occurredAt: "2026-08-08T10:00:00.000Z",
-  });
-  await recordFreePreviewEvent("free-task", {
-    kind: "preview_closed", source: "user", detail: "http://127.0.0.1:4567",
-    occurredAt: "2026-08-08T10:01:00.000Z",
-  });
-  const previewHistory = await api.request("/tasks/free-task/free-workflow");
+  // 结账人:终态只认第一次请求的那个。single-run 的 finally 上挂着一次固定传 "failed" 的
+  // 兜底(给异常路径用),正常路径要是第一次写库瞬时失败,兜底就会拿 "failed" 重试并写成功
+  // —— 一个 exit 0 的成功回合被永久记成失败。这里让 completed 那次更新真的失败一次。
+  const thirdExecution = await recordFreeTaskExecutionStartIfFree("free-task", "2026-08-08T12:00:00.000Z");
+  assert.ok(thirdExecution);
+  dbClient.executeMultiple(
+    "CREATE TRIGGER injected_completed_failure BEFORE UPDATE ON free_workflow_events"
+    + " WHEN NEW.detail LIKE '%\"completed\"%'"
+    + " BEGIN SELECT RAISE(ABORT, 'injected completed finish failure'); END;",
+  );
+  const close = createExecutionCloser(thirdExecution, "free-task");
+  await close("completed", "2026-08-08T12:05:00.000Z"); // 真实结果,但这一次写不进去
+  dbClient.executeMultiple("DROP TRIGGER IF EXISTS injected_completed_failure;");
+  await close("failed", "2026-08-08T12:09:00.000Z"); // finally 的兜底:只准重试,不准改写
+  const afterRetry = await api.request("/tasks/free-task/free-workflow").then((response) => response.json()) as {
+    executions: Array<{ id: string; status: string; endedAt: string | null }>;
+  };
   assert.deepEqual(
-    (await previewHistory.json() as { previewEvents: Array<{ kind: string; source: string; detail: string | null; occurredAt: string }> }).previewEvents
-      .map(({ kind, source, detail, occurredAt }) => ({ kind, source, detail, occurredAt })),
-    [
-      { kind: "preview_opened", source: "user", detail: "http://127.0.0.1:4567", occurredAt: "2026-08-08T10:00:00.000Z" },
-      { kind: "preview_closed", source: "user", detail: "http://127.0.0.1:4567", occurredAt: "2026-08-08T10:01:00.000Z" },
-    ],
-    "预览关闭后，打开与关闭事件仍应按实际发生顺序保留",
+    afterRetry.executions.find((execution) => execution.id === thirdExecution),
+    { id: thirdExecution, status: "completed", startedAt: "2026-08-08T12:00:00.000Z", endedAt: "2026-08-08T12:05:00.000Z" },
+    "第一次落账失败后被兜底改写成了另一个终态 —— 一次成功的回合会永久记成失败",
+  );
+
+  // 打开/关闭预览不是工作流里的一步：状态只报「当下开没开」，不再攒开关历史。
+  const previewShape = await api.request("/tasks/free-task/free-workflow")
+    .then((response) => response.json()) as Record<string, unknown>;
+  assert.equal("previewEvents" in previewShape, false, "自由工作流状态不应再暴露预览开关历史");
+  assert.equal(
+    typeof (previewShape.preview as { running?: unknown } | undefined)?.running,
+    "boolean",
+    "当下开没开仍要报，否则工具栏那颗按钮没法显示状态",
   );
 
   const review = await api.request("/tasks/free-task/free-workflow/review", {
@@ -556,7 +570,7 @@ try {
   console.log("✓ 运行中可预约、覆盖、取消，失败保留且 confirmed done 后只自动派出一次");
   console.log("✓ 派审附言会校验、持久化并进入即时与预约审查提示");
   console.log("✓ 删除审查者会取消预约；脏 armed 状态读路径与结算路径均不会静默失效");
-  console.log("✓ 预览打开与关闭事件持久保留且按发生顺序返回");
+  console.log("✓ 预览只报当下开没开，不进实际工作流记录");
   console.log("✓ 每次自由任务执行都独立保留起止时间与状态");
   console.log("✓ backlog 与旧 stage 路径仍被隔离，完成后可统一验收");
   console.log("✓ 派生任务与起手式引用不能混入自由工作流");

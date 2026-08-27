@@ -22,9 +22,17 @@
       "types": "./src/team.ts",
       "default": "./src/team.ts"
     },
+    "./session-notes": {
+      "types": "./src/session-notes.ts",
+      "default": "./src/session-notes.ts"
+    },
     "./run-activity": {
       "types": "./src/run-activity.ts",
       "default": "./src/run-activity.ts"
+    },
+    "./search": {
+      "types": "./src/search.ts",
+      "default": "./src/search.ts"
     },
     "./usage": {
       "types": "./src/usage.ts",
@@ -66,9 +74,17 @@
       "types": "./src/mcp-delivery.ts",
       "default": "./src/mcp-delivery.ts"
     },
+    "./mcp": {
+      "types": "./src/mcp.ts",
+      "default": "./src/mcp.ts"
+    },
     "./repo-url": {
       "types": "./src/repo-url.ts",
       "default": "./src/repo-url.ts"
+    },
+    "./session-notes": {
+      "types": "./src/session-notes.ts",
+      "default": "./src/session-notes.ts"
     }
   },
   "scripts": {

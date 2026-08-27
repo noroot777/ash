@@ -32,7 +32,13 @@ function primaryAction(task: Task): { kind: PrimaryAction; label: string; danger
   // 接力出去的任务在本机是历史存档:运行/重试/验收全部由服务端 handoff 守卫 409,
   // 主按钮给禁用态而不是假按钮。要在本机继续,走横幅上的「在本机继续」移除标记。
   if (task.handoff?.direction === "out") {
-    return { kind: null, label: task.handoff.pending ? "接力未确认" : "已接力", disabled: true };
+    const pendingReturn = task.handoff.pending
+      && Object.prototype.hasOwnProperty.call(task.handoff, "returnTransferId");
+    return {
+      kind: null,
+      label: task.handoff.pending ? pendingReturn ? "移回未确认" : "接力未确认" : "已接力",
+      disabled: true,
+    };
   }
   if (task.stage === "accepted") return { kind: null, label: "已验收", disabled: true };
   // 就地验证轮还没出结论、或有待答复的提问：任务的 status 是它原来的终态（旁路回合

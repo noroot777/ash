@@ -23,6 +23,11 @@ import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 import { IS_WINDOWS, which, windowsLongPaths } from "./platform.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces, npmConfigValue } from "./workspace-check.mjs";
 
+// setup 必须能在声明支持的 Node 22.16 上裸跑；那一版不能无 flag 导入 .ts。
+// 运行时代码的同名常量在 shared/src/mcp.ts，回归测试会把规范名钉为 ash。
+const ASH_MCP_SERVER_NAME = "ash";
+const LEGACY_ASH_MCP_SERVER_NAME = "harness";
+
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 process.chdir(REPO);
 
@@ -189,16 +194,16 @@ if (process.env.SKIP_MCP) {
   // ── claude ────────────────────────────────────────────────────────────────
   if (which("claude")) {
     const listed = run("claude", ["mcp", "list"]);
-    if (/^ash:/m.test(listed.stdout)) {
+    if (new RegExp(`^${ASH_MCP_SERVER_NAME}:`, "m").test(listed.stdout)) {
       ok("claude:ash 已注册,不动它");
     } else {
-      const legacy = /^harness:/m.test(listed.stdout);
+      const legacy = new RegExp(`^${LEGACY_ASH_MCP_SERVER_NAME}:`, "m").test(listed.stdout);
       const added = run("claude", [
-        "mcp", "add", "ash", "--scope", "user", "-e", `ASH_URL=${URL_BASE}`, "--", "node", mcpEntry,
+        "mcp", "add", ASH_MCP_SERVER_NAME, "--scope", "user", "-e", `ASH_URL=${URL_BASE}`, "--", "node", mcpEntry,
       ]);
       if (added.status === 0) {
         if (legacy) {
-          const removed = run("claude", ["mcp", "remove", "harness", "--scope", "user"]);
+          const removed = run("claude", ["mcp", "remove", LEGACY_ASH_MCP_SERVER_NAME, "--scope", "user"]);
           if (removed.status === 0) ok("claude:旧 harness 条目已迁移为 ash");
           else warn("claude:ash 已接好,但旧 harness 条目没删掉;可手动执行 claude mcp remove harness --scope user");
         } else {
@@ -218,7 +223,9 @@ if (process.env.SKIP_MCP) {
   const codexCfg = join(process.env.CODEX_HOME || join(homedir(), ".codex"), "config.toml");
   if (which("codex")) {
     const existing = existsSync(codexCfg) ? readFileSync(codexCfg, "utf8") : "";
-    if (/^\[mcp_servers\.ash\]/m.test(existing)) {
+    const canonicalSection = new RegExp(`^\\[mcp_servers\\.${ASH_MCP_SERVER_NAME}\\]`, "m");
+    const legacySection = new RegExp(`^\\[mcp_servers\\.${LEGACY_ASH_MCP_SERVER_NAME}\\]`, "m");
+    if (canonicalSection.test(existing)) {
       ok(`codex:ash 已在 ${codexCfg} 里,不动它`);
     } else {
       mkdirSync(dirname(codexCfg), { recursive: true });
@@ -228,15 +235,15 @@ if (process.env.SKIP_MCP) {
       // TOML 的字符串是转义的,Windows 路径里的 `\` 必须成对写,否则 `\d`、`\n`
       // 会被当转义序列吞掉 —— 装完看着成功,codex 起 MCP 时才报路径不存在。
       const tomlPath = JSON.stringify(mcpEntry);
-      if (/^\[mcp_servers\.harness\]/m.test(existing)) {
-        writeFileSync(codexCfg, withoutMcpServer(existing, "harness"));
+      if (legacySection.test(existing)) {
+        writeFileSync(codexCfg, withoutMcpServer(existing, LEGACY_ASH_MCP_SERVER_NAME));
       }
       appendFileSync(
         codexCfg,
-        `\n[mcp_servers.ash]\ncommand = "node"\nargs = [${tomlPath}]\n\n`
-        + `[mcp_servers.ash.env]\nASH_URL = "${URL_BASE}"\n`,
+        `\n[mcp_servers.${ASH_MCP_SERVER_NAME}]\ncommand = "node"\nargs = [${tomlPath}]\n\n`
+        + `[mcp_servers.${ASH_MCP_SERVER_NAME}.env]\nASH_URL = "${URL_BASE}"\n`,
       );
-      ok(`codex:${/^\[mcp_servers\.harness\]/m.test(existing) ? "旧 harness 条目已迁移为 ash" : "已写入"} ${codexCfg}${existing ? "(原文件备份在同名 .bak-ash-setup)" : ""}`);
+      ok(`codex:${legacySection.test(existing) ? "旧 harness 条目已迁移为 ash" : "已写入"} ${codexCfg}${existing ? "(原文件备份在同名 .bak-ash-setup)" : ""}`);
     }
   } else {
     warn("没装 codex CLI,跳过它的 MCP 注册");

@@ -10,6 +10,8 @@ export interface RunOpts {
   model?: string;
   extraArgs?: string[];
   trace?: RunTracePaths;
+  // 只作用于这一回合的进程环境（例如 ASH_TURN_TOKEN）；真实值不得拼进 commandLine。
+  env?: Record<string, string | undefined>;
   // 非空 = 用「活得过 server 重启」的跑法：stdout/stderr 落到这几个文件而不是
   // 匿名管道（见 executors/detached.ts）。只有一次性 run() 该传；常驻会话
   // （openResident）必须保留可写的 stdin，不适用。
@@ -25,6 +27,11 @@ export interface RunHandle {
   commandLine: string;
   events: AsyncIterable<AgentEvent>;
   kill(): void;
+  // 单飞当前回合的原生引导通道。存在时调用方把新 user 消息送进同一个活动回合，
+  // 不结束任务、不释放单飞锁；回合自然结束后这根通道随 RunHandle 一起关闭。
+  steer?(text: string, beforeSend?: () => void | Promise<void>): Promise<void>;
+  /** 事件流结束后回收 CLI 甩出去的后台后代；没有真实进程的失败句柄可省略。 */
+  cleanup?: () => Promise<void>;
   // 只有走了 detach 的这一轮才有：agent 的 pid + 已消费到的字节位置。
   // 调用方把它们存进 sessions，重启后据此找回并接管这个还活着的进程。
   detached?: { pid: number; committed: () => number };
@@ -51,13 +58,31 @@ export interface ResidentHandle {
   sessionId: string;
   commandLine: string;
   events: AsyncIterable<AgentEvent>; // 直到 close()/kill() 才结束
-  send(text: string): void; // 注入一条 user 消息(即时,无 tick)
+  /**
+   * 注入一条 user 消息(即时,无 tick)。
+   *
+   * **返回值 = 这个进程收下了没有**,调用方必须看:false 代表这条消息一个字都没进去
+   * (进程正在收尾、stdin 已经关掉),而不是「稍后会处理」。团队调度台把执行者汇报攒在
+   * 内存里等回合收尾合并投递,拿不到这个回执就只能假定送到了 —— 一次拒收就是一份执行
+   * 结果或一个待回答的提问无声消失(2026-08-26 第 11 轮审查)。
+   */
+  send(text: string): boolean;
   // 打断正在跑的回合。claude 的 stdin 注入是「排到回合结束才处理」,所以用户
   // 插话要先 interrupt 再 send 才有 codex 那种当场转向的手感(见 team/session.ts)。
   // codex 侧没有原生打断,interrupt 就是杀掉当前回合的进程。
   interrupt(): void;
+  /** 单飞原生引导可选的可确认写入；至少保证 interrupt 与新消息都被 stdin 接受。 */
+  steer?(
+    text: string,
+    onInterrupted?: () => void,
+    beforeSend?: () => void | Promise<void>,
+  ): Promise<void>;
+  /** 忘掉恢复 id；Codex 常驻的下一回合会 fresh，进程级常驻执行器可不实现。 */
+  dropSession?(): void;
   close(): void; // 优雅收尾:关 stdin,等它自己退出
   kill(): void; // 硬杀,走 killChild 三层击杀
+  /** 单飞适配器收流后继续清理 CLI 遗留的后台后代。 */
+  cleanup?: () => Promise<void>;
 }
 
 // 从执行器 profile(agents 表一行)解析出来的构造参数 —— 单点在
@@ -114,6 +139,9 @@ export interface AgentExecutor {
   readonly model?: string;
   readonly reasoningEffort?: string;
   run(opts: RunOpts): RunHandle;
+  // 单飞专用的可引导运行。没有这项的执行器继续走 run()，用户点「引导会话」时由
+  // 上层沿用 kill + resume 降级；它不等于团队常驻，也不影响 openResident 的筛选。
+  runSteerable?(opts: RunOpts): RunHandle;
   // 重启后接管一个**还活着**的 agent 进程：把它的输出流接回本执行器自己的
   // parser。child 是 detached.ts 造的合成 ChildProcess（按 pid+offset 接回来的）。
   // 不实现 = 该执行器不支持接管，重启对它仍是「这一轮被打断」。

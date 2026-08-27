@@ -164,6 +164,14 @@ export const tasks = sqliteTable("tasks", {
   // 落库而不只放内存 —— 确认与结算若不在同一个进程里（历史事故：僵尸实例跑任务、
   // HTTP 打到监听进程），内存标记会静默丢掉，agent 明明确认了却记 failed。
   completeConfirmedAt: text("complete_confirmed_at"),
+  // 当前一次性回合的身份。MCP complete_task 必须带同一 token，旧回合被引导后即使
+  // 迟到也不能把完成票写进新方向；null 只给升级前已经在跑的老回合兼容。
+  activeTurnToken: text("active_turn_token"),
+  // 同一原生回合里的方向身份。引导会话会旋转它，旧方向迟到的完成/暂停/提问因此被拒。
+  activeDirectionToken: text("active_direction_token"),
+  // 当前回合已经进入第几个方向。1=尚未引导；>1=发生过引导，用于断线补录判定省略 token
+  // 的普通首方向调用可以恢复，而引导后的无身份调用不能被冒充成当前方向。
+  activeDirectionVersion: integer("active_direction_version").notNull().default(0),
   // 这一轮是 CLI 原生命令（`/compact`）：整条消息由 CLI 本地执行，不进模型 —— 既不是
   // 任务的执行，也不是一轮验证。结算钩子（派验证 / 收验证轮 / 推工作流）必须整段跳过，
   // 否则「压一下上下文」会被记成一轮验证跑完，还白吃一轮配额。开跑时写，结算后清空；
@@ -186,6 +194,8 @@ export const tasks = sqliteTable("tasks", {
   // 任务接力（json TaskHandoff）：direction:"out" = 已交给另一台 ash 续跑（本地这份
   // 是历史），"in" = 从别的机器接过来的。持久落库,刷新后的横幅靠它,不靠 toast。
   handoff: text("handoff"),
+  // 强制恢复会清掉 handoff；风险审计另存，确保无会话任务刷新后也仍能看见双任务警告。
+  handoffAudit: text("handoff_audit"),
 });
 
 export const agents = sqliteTable("agents", {
@@ -470,6 +480,28 @@ export const queueItems = sqliteTable(
   (t) => ({
     queuePosIdx: uniqueIndex("queue_items_queue_pos_idx").on(t.queueId, t.position),
   }),
+);
+
+// 团队调度台**还没送进 CLI**的入站消息(执行者汇报/提问、ash 的唤醒语)。
+//
+// 调度台忙着的时候这些消息只能等它这一回合说完再合并送进去(见 team/session.ts 头注),
+// 而「等着」这段时间横跨换台、关台和 server 重启 —— 全放内存里的话,进程一换就什么都
+// 不剩:落回 idle 的团队任务开机时不会被唤醒(task-reconcile.ts 只叫醒还在跑的),那份
+// 执行结果、失败说明或待回答的提问就永久消失了(2026-08-26 第 12 轮审查)。
+//
+// 删行的唯一条件是 ResidentHandle.send() 明确回执「收下了」——拒收、抛错、换台、重启
+// 一律留着,由下一台调度台认领。写入/认领/销账都在 team/inbound-queue.ts。
+export const teamInbound = sqliteTable(
+  "team_inbound",
+  {
+    // 自增整数就是到达序号。执行者汇报必须按到达顺序合并送出,而同一毫秒来两条是常态
+    // (一批执行者同时收工),靠时间戳 + nanoid 排不出确定的先后。
+    seq: integer("seq").primaryKey({ autoIncrement: true }),
+    taskId: text("task_id").notNull(),
+    text: text("text").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => ({ taskIdx: index("team_inbound_task_idx").on(t.taskId, t.seq) }),
 );
 
 // 供应商(relay), system-level. 挂给执行器用:启动 CLI 时注入 base_url + key,

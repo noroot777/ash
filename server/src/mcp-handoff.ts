@@ -21,12 +21,13 @@
 // ③ **只补白名单里的**（`REPLAYABLE_MCP_TOOLS`）。`accept_task` 重放一次就是多合并一次代码。
 //
 // 补录必须留痕：不写时间线的话，用户看到的就是「我没点它自己就过了」。
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentType } from "@ash/shared";
 import { isTaskStage } from "@ash/shared";
 import { isReplayableMcpTool, isUndeliveredMcpFailure } from "@ash/shared/mcp-delivery";
+import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
@@ -65,7 +66,7 @@ function parseCodexCalls(text: string): McpCallRecord[] {
     let parsed: unknown;
     try { parsed = JSON.parse(line); } catch { continue; }
     const item = asRecord(asRecord(parsed).item);
-    if (item.type !== "mcp_tool_call" || item.server !== "ash") continue;
+    if (item.type !== "mcp_tool_call" || item.server !== ASH_MCP_SERVER_NAME) continue;
     if (item.status !== "failed" && item.status !== "completed") continue; // in_progress 那条跳过
     const tool = typeof item.tool === "string" ? item.tool : "";
     if (!tool) continue;
@@ -83,7 +84,7 @@ function parseCodexCalls(text: string): McpCallRecord[] {
 }
 
 // claude 的 MCP 工具名形如 `mcp__ash__report_stage`。
-const CLAUDE_TOOL = /^mcp__ash__(.+)$/;
+const CLAUDE_TOOL = new RegExp(`^mcp__${ASH_MCP_SERVER_NAME}__(.+)$`);
 
 /**
  * claude：stream-json。调用与结果分在两条消息里，靠 `tool_use_id` 对上。
@@ -98,7 +99,7 @@ function parseClaudeCalls(text: string): McpCallRecord[] {
   const pending = new Map<string, { tool: string; args: Record<string, unknown> }>();
   const out: McpCallRecord[] = [];
   for (const line of text.split("\n")) {
-    if (!line.includes("mcp__ash__") && !line.includes("tool_result")) continue;
+    if (!line.includes(`mcp__${ASH_MCP_SERVER_NAME}__`) && !line.includes("tool_result")) continue;
     let parsed: unknown;
     try { parsed = JSON.parse(line); } catch { continue; }
     const root = asRecord(parsed);
@@ -144,10 +145,21 @@ export function collectAshMcpCalls(outPath: string, agentType: AgentType): McpCa
  * 依次砍掉：不该补的、补不得的、以及**已经不需要补的**。最后一类是这个函数存在的主要理由 ——
  * agent 失败之后往往自己重试成功了，照着失败记录无脑重放会把它后来的判断覆盖掉。
  */
-export function planReplay(calls: McpCallRecord[], taskId: string): McpCallRecord[] {
-  const succeeded = new Set(calls.filter((c) => c.ok).map((c) => c.tool));
+export function planReplay(
+  calls: McpCallRecord[],
+  taskId: string,
+  directionToken?: string | null,
+  directionVersion = 0,
+): McpCallRecord[] {
+  const directionBound = new Set(["report_stage", "complete_task", "pause_task"]);
+  const eligible = calls.filter((call) => !directionToken || !directionBound.has(call.tool)
+    || call.args.directionToken === directionToken
+    // 首方向/升级前回合允许省略：MCP 会用启动时的 env token 发 HTTP，日志参数里没有它。
+    // 引导后(version>1)则必须显式带最新 token，否则无法区分旧方向的迟到调用。
+    || (call.args.directionToken === undefined && directionVersion <= 1));
+  const succeeded = new Set(eligible.filter((c) => c.ok).map((c) => c.tool));
   const chosen = new Map<string, McpCallRecord>();
-  for (const call of calls) {
+  for (const call of eligible) {
     if (call.ok) continue;
     if (!isReplayableMcpTool(call.tool)) continue;
     if (!isUndeliveredMcpFailure({ message: call.error })) continue;
@@ -168,7 +180,12 @@ export function planReplay(calls: McpCallRecord[], taskId: string): McpCallRecor
 }
 
 /** 执行一笔补录。返回写进时间线的那句话；参数不合法就返回 null（跳过，不硬塞）。 */
-async function applyReplay(taskId: string, sessId: string, call: McpCallRecord): Promise<string | null> {
+async function applyReplay(
+  taskId: string,
+  sessId: string,
+  call: McpCallRecord,
+  directionToken?: string | null,
+): Promise<string | null> {
   if (call.tool === "report_stage") {
     const stage = call.args.stage;
     if (!isTaskStage(stage)) return null;
@@ -201,7 +218,13 @@ async function applyReplay(taskId: string, sessId: string, call: McpCallRecord):
   }
   if (call.tool === "complete_task") {
     const at = now();
-    await db.update(tasks).set({ completeConfirmedAt: at, updatedAt: at }).where(eq(tasks.id, taskId));
+    const updated = await db.update(tasks).set({ completeConfirmedAt: at, updatedAt: at }).where(and(
+      eq(tasks.id, taskId),
+      directionToken === undefined ? undefined : directionToken === null
+        ? isNull(tasks.activeDirectionToken)
+        : eq(tasks.activeDirectionToken, directionToken),
+    )).returning({ id: tasks.id });
+    if (!updated.length) return null;
     confirmDone(taskId);
     return "完成确认当时因 MCP 通道中断没能送达，已从本回合的调用记录中补录（否则这一轮会被记成失败）。";
   }
@@ -209,7 +232,13 @@ async function applyReplay(taskId: string, sessId: string, call: McpCallRecord):
     const prompt = call.args.resumePrompt;
     if (typeof prompt !== "string" || !prompt.trim()) return null;
     const at = now();
-    await db.update(tasks).set({ resumePrompt: prompt.trim(), updatedAt: at }).where(eq(tasks.id, taskId));
+    const updated = await db.update(tasks).set({ resumePrompt: prompt.trim(), updatedAt: at }).where(and(
+      eq(tasks.id, taskId),
+      directionToken === undefined ? undefined : directionToken === null
+        ? isNull(tasks.activeDirectionToken)
+        : eq(tasks.activeDirectionToken, directionToken),
+    )).returning({ id: tasks.id });
+    if (!updated.length) return null;
     return "检查点暂停当时因 MCP 通道中断没能送达，已补录续跑指令。";
   }
   return null;
@@ -230,10 +259,15 @@ export async function replayUndeliveredMcpCalls(a: {
   const { out } = detachedPathsFor(join(RUNS_DIR, a.taskId), a.sessId, a.turnStart);
   const calls = collectAshMcpCalls(out, a.agentType);
   if (!calls.length) return 0;
-  const plan = planReplay(calls, a.taskId);
+  const direction = (await db.select({
+    token: tasks.activeDirectionToken,
+    version: tasks.activeDirectionVersion,
+  }).from(tasks).where(eq(tasks.id, a.taskId))).at(0);
+  const directionToken = direction?.token;
+  const plan = planReplay(calls, a.taskId, directionToken, direction?.version ?? 0);
   let done = 0;
   for (const call of plan) {
-    const note = await applyReplay(a.taskId, a.sessId, call).catch(() => null);
+    const note = await applyReplay(a.taskId, a.sessId, call, directionToken).catch(() => null);
     if (!note) continue;
     done += 1;
     await appendTaskTimeline(a.taskId, note);

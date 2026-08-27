@@ -6,12 +6,21 @@ import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { openCodexResident } from "./codex-resident.js";
 import { readCodexContext } from "./codex-rollout.js";
-import { spawnForRun, detachedInfo } from "./detached.js";
-import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
+import { spawnForRun, detachedInfo, type DetachedChild } from "./detached.js";
+import { cleanupAfterRun, spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
 import { relayApi } from "../llm.js";
 import { protocolConverterBaseUrl } from "../openai-converter/common.js";
-import { formatFailureForTimeline, RunTraceRecorder, type RunTracePaths } from "./diagnostics.js";
+import {
+  formatFailureForTimeline,
+  formatSessionPoisonForTimeline,
+  RunTraceRecorder,
+  type RunTracePaths,
+} from "./diagnostics.js";
 import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
+import { codexAshMcpServerName } from "./codex-mcp.js";
+
+const ASH_MCP_IDENTITY_ENV_VARS = ["ASH_TASK_ID", "ASH_TURN_TOKEN", "ASH_DIRECTION_TOKEN"] as const;
+import { openCodexAppServer, readCodexAppServerState } from "./codex-app-server.js";
 
 // 供应商的 key 走环境变量,不进命令行 —— `-c` 参数会原样进 commandLine,而后者存进
 // sessions.command_line 并在 UI 展示。codex 的 model_providers 正好支持 env_key
@@ -96,7 +105,10 @@ export class CodexExecutor implements AgentExecutor {
   // `codex exec` 的选项;`resume` 是子命令,只吃自己的 flag + [SESSION_ID]
   // [PROMPT] —— 所以 exec 选项必须排在 `resume` **前面**(否则 "unexpected
   // argument '-C'")。
-  private execArgs(opts: { cwd: string; model?: string; extraArgs?: string[] }, sessionId: string): string[] {
+  private execArgs(
+    opts: Pick<RunOpts, "cwd" | "model" | "extraArgs" | "env">,
+    sessionId: string,
+  ): string[] {
     const model = opts.model ?? this.model;
     const common = ["--json", "--skip-git-repo-check", "-C", opts.cwd, "--dangerously-bypass-approvals-and-sandbox"];
     if (model) common.push("-m", model);
@@ -108,6 +120,13 @@ export class CodexExecutor implements AgentExecutor {
     // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。
     if (this.extraArgs.length) common.push(...this.extraArgs);
     if (opts.extraArgs?.length) common.push(...opts.extraArgs);
+    // codex 默认会过滤 MCP stdio 子进程环境。env_vars 让它从父进程按**变量名**复制动态
+    // 身份：argv 里没有 token 值；放在用户 extraArgs 之后，避免白名单被同 key 覆盖。
+    const identityVars = ASH_MCP_IDENTITY_ENV_VARS.filter((key) => !!opts.env?.[key]);
+    if (identityVars.length) {
+      const serverName = codexAshMcpServerName(opts.env?.CODEX_HOME);
+      if (serverName) common.push("-c", `mcp_servers.${serverName}.env_vars=${JSON.stringify(identityVars)}`);
+    }
     return sessionId ? ["exec", ...common, "resume", sessionId, "-"] : ["exec", ...common, "-"];
   }
 
@@ -115,7 +134,7 @@ export class CodexExecutor implements AgentExecutor {
     const contextNotBeforeMs = Date.now();
     const args = this.execArgs(opts, opts.sessionId ?? "");
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
-    const child = spawnForRun(opts.cwd, this.bin, args, opts.prompt, this.env(), opts.detach);
+    const child = spawnForRun(opts.cwd, this.bin, args, opts.prompt, { ...this.env(), ...opts.env }, opts.detach);
     const lifecycle = { stopRequested: false };
     return {
       sessionId: opts.sessionId ?? "",
@@ -128,11 +147,64 @@ export class CodexExecutor implements AgentExecutor {
         lifecycle.stopRequested = true;
         killChild(child);
       },
+      cleanup: () => cleanupAfterRun(child),
       detached: detachedInfo(child),
     };
   }
 
+  runSteerable(opts: RunOpts): RunHandle {
+    const { args, ignored } = this.appServerArgs(opts);
+    // App Server 不认识 exec 专属参数；删掉会改变每一轮的能力（例如 --search）。
+    // 这类 profile 保留原 exec 语义，引导按钮沿用上层既有的 kill + resume 降级。
+    if (ignored.length) return this.run(opts);
+    return openCodexAppServer({
+      bin: this.bin,
+      args,
+      cwd: opts.cwd,
+      prompt: opts.prompt,
+      sessionId: opts.sessionId,
+      model: opts.model ?? this.model,
+      reasoningEffort: this.reasoningEffort,
+      serviceTier: this.speed === "fast" ? "priority" : undefined,
+      env: { ...this.env(), ...opts.env },
+      trace: opts.trace,
+      detach: opts.detach,
+    });
+  }
+
+  private appServerArgs(opts: Pick<RunOpts, "extraArgs" | "env">): { args: string[]; ignored: string[] } {
+    const args = ["app-server", "--stdio", ...this.relayArgs()];
+    const profile = appServerCompatibleArgs(this.extraArgs);
+    const turn = appServerCompatibleArgs(opts.extraArgs ?? []);
+    args.push(...profile.args, ...turn.args);
+    // App Server 同样由它自己拉起 MCP 子进程；身份变量仍只按名字进 TOML，真 token
+    // 留在父进程 env，既不进 commandLine，也不会被 Codex 的 MCP 环境过滤掉。
+    const identityVars = ASH_MCP_IDENTITY_ENV_VARS.filter((key) => !!opts.env?.[key]);
+    if (identityVars.length) {
+      const serverName = codexAshMcpServerName(opts.env?.CODEX_HOME);
+      if (serverName) args.push("-c", `mcp_servers.${serverName}.env_vars=${JSON.stringify(identityVars)}`);
+    }
+    return { args, ignored: [...new Set([...profile.ignored, ...turn.ignored])] };
+  }
+
   attach(child: ChildProcess, opts: { sessionId: string; commandLine: string }): RunHandle {
+    const detached = child as Partial<DetachedChild>;
+    if (child.stdin && opts.commandLine.includes("app-server") && detached.ashPaths) {
+      const recovered = readCodexAppServerState(detached.ashPaths.out, opts.sessionId);
+      return openCodexAppServer({
+        bin: this.bin,
+        args: [],
+        cwd: ".",
+        prompt: "",
+        sessionId: opts.sessionId,
+        commandLine: opts.commandLine,
+        reattach: {
+          threadId: recovered.threadId ?? opts.sessionId,
+          turnId: recovered.turnId ?? "",
+        },
+        startProcess: () => child,
+      });
+    }
     const lifecycle = { stopRequested: false };
     return {
       sessionId: opts.sessionId,
@@ -147,6 +219,7 @@ export class CodexExecutor implements AgentExecutor {
         lifecycle.stopRequested = true;
         child.kill();
       },
+      cleanup: () => cleanupAfterRun(child),
       detached: detachedInfo(child),
     };
   }
@@ -165,7 +238,7 @@ export class CodexExecutor implements AgentExecutor {
         const lifecycle = { stopRequested: false };
         // 常驻的每一轮都是**新进程**,所以 stdin 照旧读完即关(keepStdin 是
         // claude 那种「一个进程吃多个回合」才需要的)。
-        const child = spawnAgent(opts.cwd, this.bin, args, prompt, this.env());
+        const child = spawnAgent(opts.cwd, this.bin, args, prompt, { ...this.env(), ...opts.env });
         return {
           child,
           commandLine: redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`),
@@ -179,6 +252,25 @@ export class CodexExecutor implements AgentExecutor {
       killTurn: (child) => killChild(child),
     });
   }
+}
+
+// exec 的 profile 参数里只有 Codex 全局配置项能原样交给 app-server；`--search`、
+// `--output-schema` 之类 exec 专属 flag 不能塞过去，否则整个原生回合启动即退出。
+function appServerCompatibleArgs(input: string[]): { args: string[]; ignored: string[] } {
+  const out: string[] = [];
+  const ignored: string[] = [];
+  for (let i = 0; i < input.length; i += 1) {
+    const arg = input[i]!;
+    if (["-c", "--config", "--enable", "--disable"].includes(arg) && input[i + 1] !== undefined) {
+      out.push(arg, input[++i]!);
+    } else if (/^--(?:config|enable|disable)=/.test(arg) || arg === "--strict-config") {
+      out.push(arg);
+    } else if (arg.startsWith("-")) {
+      // 只展示 flag 名，不展示值：固定参数可能来自用户 profile，值里不排除 token。
+      ignored.push(arg.split("=", 1)[0]!);
+    }
+  }
+  return { args: out, ignored };
 }
 
 export async function* parseCodexStream(
@@ -278,6 +370,12 @@ export async function* parseCodexStream(
     });
     const failure = formatFailureForTimeline(diagnostics);
     if (failure && !lifecycle.stopRequested) push({ kind: "error", message: failure });
+    // poisoned 是恢复会话的状态，不是本回合的退出原因：手停 / turn.failed / spawn
+    // error 仍保留自己的结论，同时另发一条诊断让结算方只清恢复字段。
+    const sessionPoison = formatSessionPoisonForTimeline(diagnostics);
+    if (sessionPoison) {
+      push({ kind: "error", message: sessionPoison, scope: "session" });
+    }
     push({ kind: "done", exitStatus: opts.exitStatus });
     resolve?.();
     resolve = null;

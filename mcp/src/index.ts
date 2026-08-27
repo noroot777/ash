@@ -11,6 +11,9 @@ import { AGENT_TYPES, MAX_QUESTION_ITEMS, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPT
 import { UNDELIVERED_NET_CODES } from "@ash/shared/mcp-delivery";
 
 const BASE = (process.env.ASH_URL ?? process.env.HARNESS_URL ?? "http://localhost:4317").replace(/\/+$/, "");
+const SOURCE_TASK_ID = process.env.ASH_TASK_ID?.trim() ?? "";
+const TURN_TOKEN = process.env.ASH_TURN_TOKEN?.trim() ?? "";
+const DIRECTION_TOKEN = process.env.ASH_DIRECTION_TOKEN?.trim() ?? "";
 
 // 本机流量一律不走代理。Node 24+ 在 NODE_USE_ENV_PROXY=1(或显式 HTTP_PROXY)下
 // **连 localhost 也走代理** —— 实测本机 http_proxy=127.0.0.1:7897 时,打给
@@ -66,16 +69,21 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // `complete_task` 走 HTTP —— 正好撞上重启那几秒就会硬失败,于是「进程活下来了、
 // 成果却丢了」。重试把这个窗口抹平。只重试确定没送达的错误,所以 dispatch 这种
 // 非幂等调用也不会被做两遍。
-async function call(method: string, path: string, body?: unknown): Promise<unknown> {
+async function call(method: string, path: string, body?: unknown, directionToken = DIRECTION_TOKEN): Promise<unknown> {
   const deadline = Date.now() + RECONNECT_WINDOW_MS;
   let delay = 400;
   let lastCode = "";
   let res: Response;
   for (;;) {
     try {
+      const headers: Record<string, string> = {};
+      if (body !== undefined) headers["content-type"] = "application/json";
+      if (SOURCE_TASK_ID) headers["x-ash-source-task-id"] = SOURCE_TASK_ID;
+      if (TURN_TOKEN) headers["x-ash-turn-token"] = TURN_TOKEN;
+      if (directionToken) headers["x-ash-direction-token"] = directionToken;
       res = await fetch(`${BASE}/api${path}`, {
         method,
-        headers: body !== undefined ? { "content-type": "application/json" } : undefined,
+        headers: Object.keys(headers).length ? headers : undefined,
         body: body !== undefined ? JSON.stringify(body) : undefined,
       });
       break;
@@ -293,7 +301,7 @@ server.registerTool(
   {
     title: "更新任务",
     description:
-      "更新单个任务的可编辑字段:title/body/status/labels/groupId/agentType/executorId/model/reasoningEffort。model/reasoningEffort 覆盖执行器 profile 的模型/思考强度，缺省或 null=跟随执行器；可在运行中修改，下一回合解析执行器时生效。executorId 指具体执行器 profile(agents.id),指定则优先用它；为空/悬空时按 agentType 默认执行器降级。**不能**用此工具改任务的队列归属——请用 queue_insert / queue_remove / queue_reorder;**想让失败/取消的任务回队列等待用 requeue_task**(它会顺带处理位置:被越过就排到队尾)。也不能把任务手动设为 running/queued/awaiting_review。**running/queued 任务的 status 一律不可改(会被 409 拒绝)——要停止/取消用 stop_task**,它才会真正杀掉 agent 进程树;直接 patch canceled 只改数据库,是 2026-07-21「complete_task 409 → failed 错乱」事故的根因。**正在执行的任务要确认完成时,也不要用 status=done——用 complete_task**:回合结束的严格结算只认 complete_task 的确认。",
+      "更新单个任务的可编辑字段:title/body/status/labels/groupId/agentType/executorId/model/reasoningEffort。model/reasoningEffort 覆盖执行器 profile 的模型/思考强度，缺省或 null=跟随执行器；ash 拉起的当前 agent 可在运行中修改，下一回合解析执行器时生效；Claude Desktop/Cursor 等没有 ash 回合身份的外部 MCP 客户端只能在任务空闲后修改。executorId 指具体执行器 profile(agents.id),指定则优先用它；为空/悬空时按 agentType 默认执行器降级。**不能**用此工具改任务的队列归属——请用 queue_insert / queue_remove / queue_reorder;**想让失败/取消的任务回队列等待用 requeue_task**(它会顺带处理位置:被越过就排到队尾)。也不能把任务手动设为 running/queued/awaiting_review。**running/queued 任务的 status 一律不可改(会被 409 拒绝)——要停止/取消用 stop_task**,它才会真正杀掉 agent 进程树;直接 patch canceled 只改数据库,是 2026-07-21「complete_task 409 → failed 错乱」事故的根因。**正在执行的任务要确认完成时,也不要用 status=done——用 complete_task**:回合结束的严格结算只认 complete_task 的确认。",
     inputSchema: {
       taskId: z.string(),
       title: z.string().optional(),
@@ -368,10 +376,11 @@ server.registerTool(
     inputSchema: {
       taskId: z.string().describe("被验任务 id（就地验证时即当前任务；历史独立审查任务填被审任务 id）"),
       stage: TASK_STAGE.describe(`阶段：${STAGE_ORDER.join(" | ")}`),
+      directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
     },
   },
-  async ({ taskId, stage }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/stage`, { stage })); }
+  async ({ taskId, stage, directionToken }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/stage`, { stage }, directionToken)); }
     catch (e) { return fail(e); }
   },
 );
@@ -400,10 +409,11 @@ server.registerTool(
       "在执行中调用,告诉 ash:「本任务的目标我确定已经达成了」。回合结束结算时读到这个确认才会把任务落成 done;**没有确认的正常退出(exit 0)会按未完成记为 failed**——因为正常退出不代表目标达成(报错后退出也是 exit 0),假 done 会误推进队列、错误唤醒下游任务。\n\n用法:当且仅当你核实任务目标已达成(产物在、校验过),在结束回合前调一次本工具,然后正常结束输出。**只能在任务正在跑时调用**。没完成就不要调:需要等外部条件用 pause_task;做不下去直接说明原因退出(会记 failed,用户可重试续跑)。",
     inputSchema: {
       taskId: z.string().describe("当前正在执行的任务 id(任务 prompt 前言里有)"),
+      directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
     },
   },
-  async ({ taskId }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/complete`, {})); }
+  async ({ taskId, directionToken }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/complete`, {}, directionToken)); }
     catch (e) { return fail(e); }
   },
 );
@@ -417,10 +427,11 @@ server.registerTool(
     inputSchema: {
       taskId: z.string().describe("当前正在执行的任务 id"),
       resumePrompt: z.string().min(1).describe("下次被 resume 时喂给你的 user 消息 —— 就当成一条「继续：…」replied 写"),
+      directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
     },
   },
-  async ({ taskId, resumePrompt }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/pause`, { resumePrompt })); }
+  async ({ taskId, resumePrompt, directionToken }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/pause`, { resumePrompt }, directionToken)); }
     catch (e) { return fail(e); }
   },
 );
@@ -471,10 +482,11 @@ server.registerTool(
         .max(MAX_QUESTION_ITEMS)
         .optional()
         .describe(`一次并列询问的相关问题(可选,最多 ${MAX_QUESTION_ITEMS} 个)；每题会独立显示候选和输入框。`),
+      directionToken: z.string().min(1).optional().describe("单飞任务必须原样传入最新用户方向附带的 directionToken；只有团队调度台可省略"),
     },
   },
-  async ({ taskId, question, options, questionItems }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/ask`, { question, options, questionItems })); }
+  async ({ taskId, question, options, questionItems, directionToken }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/ask`, { question, options, questionItems }, directionToken)); }
     catch (e) { return fail(e); }
   },
 );

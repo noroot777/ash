@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { Group, Session, Task } from "@ash/shared";
+import type { Group, Session, Task, TaskListItem } from "@ash/shared";
 import { isUserFollowUp } from "@ash/shared";
 import { FolderOpen, GitBranch, GitPullRequest, Info, MagnifyingGlass } from "@phosphor-icons/react";
 import { InspectorHost, type InspectorDescriptor } from "../inspector/index.ts";
@@ -17,6 +17,7 @@ import { conversationToMarkdown } from "./conversationModel.ts";
 import { ConversationFeed } from "./ConversationFeed.tsx";
 import { DeleteTaskDialog } from "./DeleteTaskDialog.tsx";
 import { HandoffBanner } from "./HandoffDialog.tsx";
+import { HandoffAuditBanner } from "./HandoffAuditBanner.tsx";
 import { QuestionCard } from "./QuestionCard.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
 import { TaskDerivationComposer } from "./TaskDerivationComposer.tsx";
@@ -44,7 +45,7 @@ interface TaskInspectorContext {
   task: Task;
   groups: Group[];
   sessions: Session[];
-  allTasks: Task[];
+  allTasks: TaskListItem[];
   followUps: { text: string; attachments: string[]; at?: string }[];
   onOpenTask: (taskId: string) => void;
   onOpenReview: () => void;
@@ -136,7 +137,7 @@ export function TaskDetail({
   notify,
 }: {
   task: Task;
-  allTasks: Task[];
+  allTasks: TaskListItem[];
   onTaskUpdate: (task: Task) => void;
   onDeleted: (taskId: string) => void;
   onOpenTask: (taskId: string) => void;
@@ -374,8 +375,14 @@ export function TaskDetail({
               inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
               notify={notify}
             />
+            {task.handoffAudit && <HandoffAuditBanner audit={task.handoffAudit} />}
             {task.handoff && (
-              <HandoffBanner taskId={task.id} handoff={task.handoff} notify={notify} onTaskUpdate={onTaskUpdate} />
+              <HandoffBanner
+                taskId={task.id}
+                handoff={task.handoff}
+                notify={notify}
+                onTaskUpdate={onTaskUpdate}
+              />
             )}
             {reviewOpen ? (
               <TaskReviewWorkspace

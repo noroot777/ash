@@ -7,7 +7,7 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, untrackRun, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
+import { trackRun, untrackRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun, afterSettlement } from "./single-run.js";
 import { taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
@@ -30,8 +30,9 @@ import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { reportTurnFailure } from "./turn-failure.js";
-import { AUTONOMY, COMPLETION_PROTOCOL } from "./run-prompts.js";
+import { AUTONOMY, COMPLETION_PROTOCOL, DIRECTION_PROTOCOL } from "./run-prompts.js";
 import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
+import { recordUserConversationTurn } from "./conversation-turn.js";
 
 // 单任务的 **fresh run**:从任务描述起一条全新会话。续聊/召唤那一路(resume 已有会话、
 // 把用户原话送进去)在 orchestrator.ts 的 continueTask —— 两条路的前置条件、prompt 拼法
@@ -83,9 +84,11 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
 
     // 新回合起点:清掉上一轮可能残留的完成确认/续聊标记(fresh run 从来不是续聊,
     // 也从来不是 CLI 原生命令 —— 上一轮崩在半路留下的标记必须在这里归零)。
+    const turnToken = id();
+    const directionToken = id();
     await db
       .update(tasks)
-      .set({ followUpFrom: null, nativeTurn: false, completeConfirmedAt: null, updatedAt: now() })
+      .set({ followUpFrom: null, nativeTurn: false, completeConfirmedAt: null, activeTurnToken: turnToken, activeDirectionToken: directionToken, activeDirectionVersion: 1, updatedAt: now() })
       .where(eq(tasks.id, taskId));
     await setTaskStatus(taskId, "running");
     // 已验收任务被 fresh 重跑（Cron 到点 / fire）：旧「已验收」牌子当场摘掉——新一版
@@ -127,7 +130,7 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     const priorSessions = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
     const peerNotice = peerNoticeFor({ taskId, self: agentType, all: priorSessions, prev: undefined });
     const prompt = withGlobalBrowserPolicy(
-      AUTONOMY + COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask, task.workflowMode === "free") + teamPreamble + reviewProtocol +
+      AUTONOMY + COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask, task.workflowMode === "free") + DIRECTION_PROTOCOL(directionToken) + teamPreamble + reviewProtocol +
       peerNotice +
       (autoTitle ? TITLE_HINT + objective : objective),
       "full",
@@ -143,7 +146,11 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     // 解绑重启：输出落盘而不是走匿名管道，于是这个 agent 活得过 server 重启
     // （见 executors/detached.ts）。
     const detach = detachedPathsFor(runDir, sessId, turnStart);
-    handle = ex.run({ prompt, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart), detach });
+    const run = ex.runSteerable?.bind(ex) ?? ex.run.bind(ex);
+    handle = run({
+      prompt, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart), detach,
+      env: { ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken },
+    });
     trackRun(taskId, handle);
 
     let cliSessionId = handle.sessionId;
@@ -198,14 +205,28 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     await consumeSingleRun({
       taskId, sessId, agentType, ex, cwd: ws.path,
       handle, out, turnStart, cliSessionId, autoTitle,
+      nativeSteer: {
+        prepare: (text) => withGlobalBrowserPolicy(
+          withSkillInvocation({ agentType, cwd: ws.path, text }),
+          "reminder",
+        ),
+        record: (text, at) => recordUserConversationTurn({
+          taskId, sessionId: sessId, role: "single", agentType, out, text, at,
+        }),
+      },
     });
   } catch (err) {
+    // handle 已登记后收到「引导会话」时，kill 可能恰好让 parser 抛而不是正常收流。
+    // 它仍是受控交接：旧回合不落 failed，releaseTurn 后由已登记的回调续送新方向。
+    const steered = await takeSteered(taskId);
+    const stopped = takeStopped(taskId);
+    if (steered && !stopped) return;
     const message = String(err instanceof Error ? err.message : err);
     // 基线的事先说：它在这一轮更早的时候就**已经落库**了，说在失败交代之前才对得上
     // 发生顺序。没说过才补（spawn 成功后崩的那种，上面已经写过一条）。
     if (!baseFallbackTold) await announceBaseFallback(taskId, baseFallback, { role: "single" });
     await reportTurnFailure({ taskId, message, role: "single" });
-    const status = takeStopped(taskId) ?? "failed";
+    const status = stopped ?? "failed";
     await setTaskStatus(taskId, status);
     await afterSettlement(taskId, status, false, false);
   } finally {

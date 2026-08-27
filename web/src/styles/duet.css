@@ -34,7 +34,7 @@
 .duet-turn .task-markdown { font-size:12px; line-height:1.65; }.duet-turn .task-markdown > :first-child { margin-top:2px; }
 /* 执行过程沿用普通任务那套折叠块(.task-execution-block,见 task-conversation.css),这里只收窄一点。 */
 .duet-turn .task-execution-block { max-width:100%; margin-bottom:3px; }
-.duet-thinking,.duet-turn-error { margin:4px 0 0; color:var(--faint); font-size:10.5px; }.duet-turn-error { color:var(--red); }
+.duet-thinking,.duet-turn-notice,.duet-turn-error { margin:4px 0 0; color:var(--faint); font-size:10.5px; white-space:pre-wrap; }.duet-turn-notice { color:var(--muted); }.duet-turn-error { color:var(--red); }
 .duet-user-turn { width:min(78%,720px); margin-left:auto; border:1px solid color-mix(in lch,var(--accent) 28%,var(--line)); border-radius:9px; background:color-mix(in lch,var(--accent) 6%,var(--panel)); padding:8px 10px; }
 .duet-user-turn header { display:flex; gap:6px; color:var(--faint); font-size:9.5px; }.duet-user-turn header b { color:var(--accent); }.duet-user-turn header time { margin-left:auto; }.duet-user-turn p { margin:3px 0 0; color:var(--ink); font-size:11.5px; white-space:pre-wrap; }
 .duet-typing { display:inline-flex; align-items:center; gap:2px; }.duet-typing i { width:3px; height:3px; border-radius:50%; background:currentColor; animation:duet-pulse 900ms ease-in-out infinite; }.duet-typing i:nth-child(2) { animation-delay:140ms; }.duet-typing i:nth-child(3) { animation-delay:280ms; }

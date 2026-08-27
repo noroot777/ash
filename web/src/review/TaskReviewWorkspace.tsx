@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Task } from "@ash/shared";
+import type { Task, TaskListItem } from "@ash/shared";
 import {
   GitBranch,
   GitCommit,
@@ -20,7 +20,7 @@ type ReviewData = {
   diff: TaskDiffResult;
 };
 
-function SharedWorkerFacts({ parent, branch }: { parent: Task; branch: string | null }) {
+function SharedWorkerFacts({ parent, branch }: { parent: TaskListItem; branch: string | null }) {
   const params = new URLSearchParams({ project: parent.projectId, task: parent.id });
   return (
     <>
@@ -45,7 +45,7 @@ export function TaskReviewWorkspace({
   onPostMergeReview,
 }: {
   task: Task;
-  allTasks: Task[];
+  allTasks: TaskListItem[];
   onTaskUpdated: (task: Task) => void;
   notify: (message: string) => void;
   onPostMergeReview?: () => void;

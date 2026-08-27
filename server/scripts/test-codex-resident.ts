@@ -7,6 +7,7 @@
  *   ③thread_id 由首回合回填,后续回合必须带着它 `resume`
  *   ④interrupt 杀当前回合、不结束会话;close 等手头这轮跑完;kill 立刻收摊
  *   ⑤openCodexResident 一返回,commandLine 就得是真的(调用方立刻写进 sessions 表)
+ *   ⑥恢复 thread 被判 poisoned 后,下一回合必须 fresh
  *
  * codex CLI 本身的行为(resume 保持 thread_id、被杀后会话仍可续)是 2026-08-01
  * 手工实测过的,结论记在 executors/codex-resident.ts 头部,不在这里重复验证。
@@ -44,7 +45,7 @@ if (args.includes("--slow")) setTimeout(say, 3000); else say();
 );
 
 /** 造一个跑假 CLI 的常驻会话;prompt 直接当最后一个 argv 传进去便于断言。 */
-function open(opts: { slow?: boolean } = {}) {
+function open(opts: { slow?: boolean; poisonFirst?: boolean } = {}) {
   const spawned: string[][] = [];
   const handle = openCodexResident({
     initialSessionId: "",
@@ -52,10 +53,16 @@ function open(opts: { slow?: boolean } = {}) {
     startTurn: (prompt, sessionId) => {
       const args = [STUB, ...(sessionId ? ["resume", sessionId] : []), ...(opts.slow ? ["--slow"] : []), prompt];
       spawned.push(args);
+      const turnNumber = spawned.length;
       const child = spawn(process.execPath, args, { stdio: ["pipe", "pipe", "pipe"] });
       child.stdin?.end();
       const lifecycle = { stopRequested: false };
-      return { child, commandLine: `fake-codex ${args.join(" ")}`, lifecycle, events: parse(child) };
+      return {
+        child,
+        commandLine: `fake-codex ${args.join(" ")}`,
+        lifecycle,
+        events: parse(child, opts.poisonFirst === true && turnNumber === 1),
+      };
     },
     killTurn: (child) => child.kill("SIGTERM"),
   });
@@ -63,7 +70,7 @@ function open(opts: { slow?: boolean } = {}) {
 }
 
 /** 极简 codex 事件解析(真的那份在 codex.ts,这里只要够驱动状态机)。 */
-async function* parse(child: ReturnType<typeof spawn>): AsyncIterable<AgentEvent> {
+async function* parse(child: ReturnType<typeof spawn>, poisoned = false): AsyncIterable<AgentEvent> {
   const queue: AgentEvent[] = [];
   let wake: (() => void) | null = null;
   let done = false;
@@ -80,7 +87,16 @@ async function* parse(child: ReturnType<typeof spawn>): AsyncIterable<AgentEvent
       else if (ev.item?.type === "agent_message") push({ kind: "text", text: ev.item.text });
     }
   });
-  child.on("close", (code) => { done = true; push({ kind: "done", exitStatus: code ?? 0 }); });
+  child.on("close", (code) => {
+    done = true;
+    if (poisoned) {
+      push({
+        kind: "error",
+        message: "Codex 会话诊断：session=poisoned_session；Codex stderr 出现 `dropping turn-scoped item for unknown turn id`，恢复 thread 已无法对应旧回合。",
+      });
+    }
+    push({ kind: "done", exitStatus: code ?? 0 });
+  });
   while (true) {
     if (queue.length) { yield queue.shift()!; continue; }
     if (done) return;
@@ -195,10 +211,28 @@ console.log("5) close 等手头这轮跑完;kill 立刻收摊");
   handle.kill();
   await sub.finished;
   ok("kill 之后事件流立刻结束");
-  handle.send("死了之后不该再起回合");
+  // 拒收必须**说出来**:调度台靠这个回执决定「这条汇报还欠着」还是「已经送到了」,
+  // 拿不到 false 就会把一份执行者汇报当成已投递丢掉(见 ResidentHandle.send)。
+  if (handle.send("死了之后不该再起回合") === false) ok("kill 之后 send 明确回执拒收");
+  else fail("kill 之后 send 仍报「收下了」—— 调用方会把这条消息当成已投递");
   await new Promise((r) => setTimeout(r, 200));
   if (spawned.length === 1) ok("kill 之后 send 不再起回合");
   else fail(`kill 之后又起了 ${spawned.length - 1} 个回合`);
+}
+
+console.log("6) poisoned 回合结束前已排队,下一回合仍 fresh");
+{
+  const { handle, spawned } = open({ slow: true, poisonFirst: true });
+  const sub = subscribe(handle.events);
+  handle.send("坏回合进行中就排进来的下一条");
+  await sub.waitTurns(2);
+  if (!spawned[1]?.includes("resume")) ok("resident 在 pump 下一回合前已作废恢复 id");
+  else fail(`下一回合仍在 resume:${JSON.stringify(spawned[1])}`);
+  const contradictory = sub.all.some((event) => event.kind === "error" && event.message.includes("没有报出会话 id"));
+  if (!contradictory) ok("已收到 thread.started 后判 poisoned，不会再误报没有会话 id");
+  else fail("poisoned 清空 id 后又误报没有收到 thread.started");
+  handle.kill();
+  await sub.finished;
 }
 
 console.log(bad ? `\n✗ ${bad} 项未通过` : "\n✓ 全部通过");

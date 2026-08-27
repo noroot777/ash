@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Task, TaskWorkspaceDiscardResult, TaskWorkspaceLeftover } from "@ash/shared";
+import type { TaskListItem, TaskWorkspaceDiscardResult, TaskWorkspaceLeftover } from "@ash/shared";
 import { GitBranch, TreeStructure, Warning } from "@phosphor-icons/react";
 import { api, type TaskWorkspaceProbe } from "../lib/api.ts";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
@@ -49,7 +49,7 @@ export function DeleteTaskDialog({
   onClose,
   notify,
 }: {
-  task: Task;
+  task: TaskListItem;
   onDeleted: (deletedTaskIds: string[]) => void;
   onClose: () => void;
   notify: (message: string) => void;

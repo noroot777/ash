@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
-import { access } from "node:fs/promises";
-import { constants } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { createServer } from "vite";
 
 // **嵌套 Git 仓库那一行：看得见，但一个操作都不给。**
@@ -19,24 +18,6 @@ import { createServer } from "vite";
 //   ③ 「暂存全部并提交（N）」的 N 是真会被提交的份数，不把下不了手的那条算进去。
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const chromeCandidates = [
-  process.env.CHROME_BIN,
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  chromium.executablePath(),
-].filter(Boolean);
-
-async function executablePath() {
-  for (const candidate of chromeCandidates) {
-    try {
-      await access(candidate, constants.X_OK);
-      return candidate;
-    } catch {
-      // Try the next local Chrome/Chromium candidate.
-    }
-  }
-  throw new Error("找不到可执行的 Chrome/Chromium；可通过 CHROME_BIN 指定路径");
-}
-
 const change = (path, kind, nested = false) => ({ path, origPath: null, kind, conflict: null, nested });
 const status = {
   branch: { head: "main", detached: false, oid: "abc1234", upstream: null, ahead: null, behind: null },
@@ -68,7 +49,7 @@ try {
   assert(address && typeof address === "object", "Vite test server did not expose a port");
   const url = `http://127.0.0.1:${address.port}/scripts/fixtures/scm-stale.html`;
 
-  browser = await chromium.launch({ executablePath: await executablePath(), headless: true });
+  browser = await chromium.launch(await chromeLaunchOptions());
   const page = await browser.newPage();
 
   let stagedPaths = null;

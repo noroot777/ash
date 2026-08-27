@@ -1,5 +1,4 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execFileText } from "./exec.js";
 import { expandHome, gitError, isGitRepo } from "./git.js";
 import { gitNetInjection, type GitNetInjection } from "./git-credentials.js";
 import { readScmRemotes, readScmStatus, type ScmBranchInfo, type ScmStatus } from "./git-status.js";
@@ -32,7 +31,7 @@ import { withRepoLock } from "./repo-lock.js";
 // ④ **分支名只从 for-each-ref 的输出里来。** 前端传上来的名字必须在这份清单里对上号才
 //    动手，既挡住了 `--flag` 形状的参数，也顺带挡住了「切到一条刚被别人删掉的分支」。
 
-const exec = promisify(execFile);
+const exec = execFileText;
 const NET_TIMEOUT_MS = 120_000;
 
 /**

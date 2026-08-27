@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { TEAM_DEFAULTS, taskDisplayStatus, type AgentExecutorProfile, type AgentType, type Task } from "@ash/shared";
+import { TEAM_DEFAULTS, taskDisplayStatus, type AgentExecutorProfile, type AgentType, type TaskListItem } from "@ash/shared";
 import { ArrowRight, ChatsCircle, UsersThree, Warning } from "@phosphor-icons/react";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import {
@@ -131,13 +131,13 @@ export function DuetHandoffBar({
   onOpenTask,
   onIterateTeam,
 }: {
-  linkedTeams: Task[];
-  allTasks: Task[];
+  linkedTeams: TaskListItem[];
+  allTasks: TaskListItem[];
   busy: boolean;
   iterationBusyId?: string | null;
   onOpenTeam: () => void;
-  onOpenTask: (task: Task) => void;
-  onIterateTeam: (team: Task) => void;
+  onOpenTask: (task: TaskListItem) => void;
+  onIterateTeam: (team: TaskListItem) => void;
 }) {
   if (linkedTeams.length > 0) {
     return (

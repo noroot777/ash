@@ -19,7 +19,7 @@ import {
   canArchive,
   type Group,
   type Session,
-  type Task,
+  type TaskListItem,
 } from "@ash/shared";
 import {
   batchesOf,
@@ -40,6 +40,7 @@ import { TeamWorkerBatchCard } from "./TeamWorkerBatchCard";
 
 export function TeamTaskDetail({
   task,
+  body,
   lines,
   sessions,
   input,
@@ -54,7 +55,9 @@ export function TeamTaskDetail({
   onScroll,
   onContentSizeChange,
 }: {
-  task: Task;
+  task: TaskListItem;
+  // 正文由任务页按 id 单取后传进来（列表接口不带它）；undefined = 还没读到。
+  body: string | undefined;
   lines: LogLine[];
   sessions: Session[];
   input: string;
@@ -283,7 +286,7 @@ export function TeamTaskDetail({
           onKillCua={confirmKillCua}
         />
 
-        {task.body ? (
+        {body ? (
           <View
             style={{
               borderRadius: radius.md,
@@ -294,7 +297,7 @@ export function TeamTaskDetail({
             }}
           >
             <Text style={{ color: theme.faint, fontSize: 10, fontFamily: fonts.monoMed, marginBottom: 7 }}>原始需求</Text>
-            <MarkdownText value={task.body} style={{ color: theme.muted, fontSize: 14, lineHeight: 20 }} />
+            <MarkdownText value={body} style={{ color: theme.muted, fontSize: 14, lineHeight: 20 }} />
           </View>
         ) : null}
 

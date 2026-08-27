@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { AgentExecutorProfile, AgentType, SkillEntry, Task } from "@ash/shared";
+import type { AgentExecutorProfile, AgentType, ScheduledMessage, SkillEntry, Task } from "@ash/shared";
 import { sameExecutor } from "@ash/shared/executors";
 import { ArrowUp, Clock, Robot, SpinnerGap, X } from "@phosphor-icons/react";
 import {
@@ -7,7 +7,7 @@ import {
   ScheduledSendPanel,
   useScheduledMessages,
 } from "../components/ScheduledMessages.tsx";
-import { defaultOnceTime } from "../components/ScheduleControl.tsx";
+import { defaultOnceTime, toLocalDateTime } from "../components/ScheduleControl.tsx";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
 import { AgentPlate } from "../components/AgentPlate.tsx";
 import {
@@ -25,6 +25,13 @@ import { SlashMenu } from "../components/SlashMenu.tsx";
 import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
 import { useTaskReplyDraft } from "./TaskReplyDrafts.tsx";
+import {
+  attachmentsFromPaths,
+  clearSentDraft,
+  dropSentAttachments,
+  joinDraftText,
+  mergeAttachments,
+} from "./withdrawDraft.ts";
 
 const EMPTY_SKILLS: SkillEntry[] = [];
 
@@ -110,7 +117,7 @@ export function ReplyBox({
     : task.archived
       ? command ? "任务已归档；仍可输入 /team 或 /duet 创建派生任务…" : "任务已归档，无法继续回复"
       : queueing
-        ? command ? "任务进行中；发送即排队，也可输入 /team 或 /duet 派生任务…" : "任务进行中，发送即排队，这一轮结束自动发出（⌘↵）…"
+        ? command ? "任务进行中；发送即排队，队尾可点“引导会话”；也可输入 /team 或 /duet…" : "任务进行中，发送即排队；需要立即接入当前对话可在队尾点“引导会话”（⌘↵）…"
         : !hasConversation
           ? command ? "可输入 /team 创建团队，或输入 /duet 发起讨论…" : "先运行任务，再继续回复"
           : command ? "回复并继续；输入 /team 或 /duet 可派生新任务…" : "回复并继续（⌘↵ 发送，可粘贴图片或文件）…";
@@ -271,7 +278,20 @@ export function ReplyBox({
     }));
   };
 
-  const send = async (scheduledAt?: string) => {
+  // 正在飞的那一次发送。撤回要排在它后面（见下面的 withdraw）：清空和合并谁先谁后
+  // 一旦确定，就不必再去草稿里猜哪一段是刚发出去的。
+  const inFlightSend = useRef<Promise<void> | null>(null);
+
+  const send = (scheduledAt?: string): Promise<void> => {
+    const run = runSend(scheduledAt);
+    inFlightSend.current = run;
+    void run.finally(() => {
+      if (inFlightSend.current === run) inFlightSend.current = null;
+    });
+    return run;
+  };
+
+  const runSend = async (scheduledAt?: string) => {
     if (menuOpen) {
       pickCommand(candidates[selectedIndex]!);
       return;
@@ -283,10 +303,15 @@ export function ReplyBox({
     if (disabled || sending || uploads.uploading || (!value.trim() && !uploads.attachments.length)) return;
     setSending(true);
     setSendError(null);
+    // 发出去的是这一份。成功后只在草稿**逐字还是这一份**时才清掉；动过就整份留着，
+    // 绝不去猜哪一段是刚发出去的（见 withdrawDraft.ts 的 clearSentDraft）。
+    const draftAtSend = value;
+    const sentText = value.trim();
+    const sentPaths = uploads.attachments.map((attachment) => attachment.path);
     try {
       const result = await onSend(
-        value.trim(),
-        uploads.attachments.map((attachment) => attachment.path),
+        sentText,
+        sentPaths,
         {
           agent: target?.agent,
           executorId: target?.executorId ?? null,
@@ -297,8 +322,9 @@ export function ReplyBox({
         },
       );
       if ("scheduled" in result) scheduled.add(result.message);
-      setValue("");
-      uploads.clear();
+      setValue((current) => clearSentDraft(current, draftAtSend));
+      draft.setAttachments((current) => dropSentAttachments(current, sentPaths));
+      uploads.clearError();
       setTarget(null);
       setScheduleOpen(false);
       setSendAt("");
@@ -313,6 +339,31 @@ export function ReplyBox({
   const canSchedule = Number.isFinite(scheduledTime)
     && scheduledTime > Date.now()
     && (!!value.trim() || uploads.attachments.length > 0);
+
+  // 撤回:先把消息从队列上取下来(失败就什么都不动,免得内容一式两份),成功后正文、
+  // 附件、这条消息当初 @ 指派的执行器配置一并放回对话框——发它时是什么样,撤回后就
+  // 还是什么样,用户接着改就行。定时消息连原定时间也留着(还没到点才留)。
+  //
+  // 有发送正在飞就先等它结算完:发送成功会把它自己那份草稿清掉,清完再并入撤回的内容。
+  // 顺序一确定,两边都不必去猜草稿里哪一段是谁的(靠猜会猜错,2026-08-27 审查实测)。
+  const withdraw = async (message: ScheduledMessage) => {
+    if (!await scheduled.cancel(message.id)) return;
+    await inFlightSend.current;
+    setValue((current) => joinDraftText(message.text, current));
+    draft.setAttachments((current) => mergeAttachments(attachmentsFromPaths(message.attachments), current));
+    if (message.agent) {
+      setTarget({
+        agent: message.agent,
+        executorId: message.executorId,
+        model: message.model,
+        reasoningEffort: message.reasoningEffort,
+      });
+    }
+    if (message.mode === "timed" && new Date(message.sendAt).getTime() > Date.now()) {
+      setSendAt(toLocalDateTime(new Date(message.sendAt)));
+    }
+    textareaRef.current?.focus();
+  };
 
   return (
     <div className={`task-reply-shell${topRail ? " has-top-rail" : ""}`}>
@@ -382,7 +433,9 @@ export function ReplyBox({
         loading={scheduled.loading}
         error={scheduled.error}
         cancelingIds={scheduled.cancelingIds}
-        onCancel={(messageId) => void scheduled.cancel(messageId)}
+        steeringIds={scheduled.steeringIds}
+        onSteer={(messageId) => void scheduled.steer(messageId)}
+        onWithdraw={(message) => void withdraw(message)}
       />
       <UploadAttachmentList attachments={uploads.attachments} error={uploads.error} onRemove={uploads.remove} />
       {sendError && <p className="task-reply-error">{sendError}</p>}

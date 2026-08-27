@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import type { Group, ProjectView, SearchHit, Task } from "@ash/shared";
+import type { Group, ProjectView, SearchHit, TaskListItem } from "@ash/shared";
 import { canArchive, canSingleRun, TASK_STATUS_LABELS } from "@ash/shared";
+import { SEARCH_MAX_HITS, compareSearchHits } from "@ash/shared/search";
 import {
   Archive,
   ArrowCounterClockwise,
   FolderPlus,
   FolderSimple,
   GearSix,
+  ListChecks,
   ListNumbers,
   MagnifyingGlass,
   NotePencil,
@@ -15,7 +17,6 @@ import {
   ChatsCircle,
   Stack,
   Stop,
-  SquaresFour,
   Trash,
 } from "@phosphor-icons/react";
 import { api, type GitOverview } from "../lib/api.ts";
@@ -32,9 +33,9 @@ import {
   type SearchScopeType,
 } from "./CommandPaletteScope.tsx";
 import { filterSlashCommands, type SlashCommand, type SlashCommandId } from "./commandPaletteCommands.ts";
-import { ALL_PROJECTS_LABEL } from "../workspace/taskScope.ts";
+import { TASK_MODE_LABEL, TASK_MODE_SHORTCUT_LABEL, TASK_MODE_SUMMARY } from "../workspace/taskScope.ts";
+import { keysSearchText, matchesKeysQuery } from "./paletteKeys.ts";
 import { workspaceModifierLabel } from "../workspace/useWorkspaceShortcuts.ts";
-import { visibleOnThisMachine } from "../workspace/taskTreeModel.ts";
 
 type PaletteStep = "search" | "scope-project" | "scope-type" | "git-project" | "git-overview";
 
@@ -52,19 +53,19 @@ type CommandPaletteProps = {
   open: boolean;
   projects: ProjectView[];
   currentProject: ProjectView | null;
-  tasks: Task[];
-  selectedTask: Task | null;
+  tasks: TaskListItem[];
+  selectedTask: TaskListItem | null;
   groups: Group[];
   onClose: () => void;
   onProject: (projectId: string) => void;
-  onAllProjects: () => void;
-  onTask: (task: Task) => void;
-  onTaskUpdated: (task: Task) => void;
+  onTaskMode: () => void;
+  onTask: (task: TaskListItem) => void;
+  onTaskUpdated: (task: TaskListItem) => void;
   onNote: (projectId: string, noteId: string | null) => void;
   onComposer: (mode?: "single" | "team" | "duet") => void;
   onNewGroup: () => void;
   onNewProject: () => void;
-  onDeleteTask: (task: Task) => void;
+  onDeleteTask: (task: TaskListItem) => void;
   onSettings: (section?: SettingsSection) => void;
   notify: (message: string) => void;
 };
@@ -82,7 +83,7 @@ export function CommandPalette({
   groups,
   onClose,
   onProject,
-  onAllProjects,
+  onTaskMode,
   onTask,
   onTaskUpdated,
   onNote,
@@ -99,6 +100,9 @@ export function CommandPalette({
   const [active, setActive] = useState(0);
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
+  // 扫到哪一段了。"others" = 本项目已经列完，正在搜别的项目 —— 没有这个字，用户看到的是
+  // 一个停在半路、不知道还有没有下文的列表。
+  const [phase, setPhase] = useState<"local" | "others" | null>(null);
   const [scope, setScope] = useState<SearchScope | null>(null);
   const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
   const [gitProjectId, setGitProjectId] = useState<string | null>(null);
@@ -115,6 +119,7 @@ export function CommandPalette({
     setStep("search");
     setActive(0);
     setHits([]);
+    setPhase(null);
     setScope(null);
     setGitOverview(null);
     setGitError(null);
@@ -138,30 +143,56 @@ export function CommandPalette({
   const slashCommands = useMemo(() => slashMode ? filterSlashCommands(query) : [], [query, slashMode]);
   const projectNames = useMemo(() => new Map(projects.map((project) => [project.id, project.name])), [projects]);
 
+  // 搜索是**流式**的：命中一条插一条，本项目那一段先出，再出别的项目（见 server/src/search.ts）。
+  // 语料 2.2 GB，一次全盘扫要几秒 —— 整份等回来就是几秒钟空列表。
+  //
+  // `controller.abort()` 不是可选的礼貌：每敲一个字就是一次新的全盘扫，不掐掉上一次，
+  // 服务端会同时跑十几个扫描把事件循环占死（那正是「切完项目点任务要等十几秒」的成因）。
   useEffect(() => {
     const q = query.trim();
     if (!open || step !== "search" || slashMode || q.length < 2) {
       searchSeq.current += 1;
       setHits([]);
       setSearching(false);
+      setPhase(null);
       return;
     }
     setSearching(true);
+    setPhase("local");
     const seq = ++searchSeq.current;
+    const controller = new AbortController();
+    const prefer = currentProject?.id ?? null;
     const timer = window.setTimeout(() => {
-      api.search(q, { projectId: scope?.projectId ?? undefined, type: scope?.type ?? undefined })
-        .then((rows) => {
-          if (seq === searchSeq.current) setHits(rows);
-        })
-        .catch(() => {
-          if (seq === searchSeq.current) setHits([]);
-        })
+      const collected: SearchHit[] = [];
+      let flush = 0;
+      const paint = () => {
+        if (seq === searchSeq.current) setHits(collected.slice(0, SEARCH_MAX_HITS));
+      };
+      api.searchStream(
+        q,
+        { projectId: scope?.projectId ?? undefined, type: scope?.type ?? undefined, prefer },
+        {
+          onHit: (hit) => {
+            // 按 compareSearchHits 插进去 —— 服务端拿同一份判据决定扫描顺序并据此早停，
+            // 前端另写一套排序就会跟它对不上，早停砍掉的那些就成了「本该排进来却没有」。
+            const at = collected.findIndex((existing) => compareSearchHits(hit, existing, prefer) < 0);
+            collected.splice(at < 0 ? collected.length : at, 0, hit);
+            // 逐条 setState 会让一次搜索重渲染上千次；攒 60ms 一批，人眼看着仍是「一条条冒出来」。
+            if (!flush) flush = window.setTimeout(() => { flush = 0; paint(); }, 60);
+          },
+          onLocalDone: () => { if (seq === searchSeq.current) setPhase("others"); },
+        },
+        controller.signal,
+      )
+        .then(paint)
+        .catch(() => { if (!controller.signal.aborted && seq === searchSeq.current) setHits([]); })
         .finally(() => {
-          if (seq === searchSeq.current) setSearching(false);
+          if (flush) { window.clearTimeout(flush); flush = 0; }
+          if (seq === searchSeq.current) { setSearching(false); setPhase(null); }
         });
     }, 180);
-    return () => window.clearTimeout(timer);
-  }, [open, query, scope, slashMode, step]);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [currentProject?.id, open, query, scope, slashMode, step]);
 
   const items = useMemo(() => {
     if (slashMode || step !== "search") return [];
@@ -172,7 +203,9 @@ export function CommandPalette({
     };
     if (!query.trim()) {
       tasks
-        .filter((task) => visibleOnThisMachine(task) && (task.status === "running" || task.status === "queued" || !!task.question))
+        // 接力出去的行也算 —— 它们的状态是从持有机实时问回来的（useOutboundState），
+        // 点开进的是那台机器上的会话页。「现在有什么在跑」不该因为活在别的机器上就漏掉。
+        .filter((task) => task.status === "running" || task.status === "queued" || !!task.question)
         .slice(0, 6)
         .forEach((task) => result.push({
           key: `running:${task.id}`,
@@ -266,15 +299,16 @@ export function CommandPalette({
       { key: "manage:settings", group: "管理", label: "项目设置", icon: <GearSix size={15} />, run: closeRun(() => onSettings("project")) },
       { key: "manage:groups", group: "管理", label: "分组管理", icon: <Stack size={15} />, run: closeRun(() => onSettings("groups")) },
     );
-    // 「全部项目」和具体项目并排放在同一组里：它回答的是同一个问题（列表在看谁），
-    // 排在最前是因为它是唯一一条「谁都看」。
+    // 「任务模式」和具体项目并排放在同一组里：它回答的是同一个问题（列表在看谁），
+    // 排在最前是因为它是唯一一条不挑项目的。
     result.push({
-      key: "project:all",
+      key: "scope:tasks",
       group: "切换项目",
-      label: ALL_PROJECTS_LABEL,
-      detail: "把所有项目的任务混着看",
-      icon: <SquaresFour size={15} />,
-      run: closeRun(onAllProjects),
+      label: TASK_MODE_LABEL,
+      detail: TASK_MODE_SUMMARY,
+      keys: TASK_MODE_SHORTCUT_LABEL,
+      icon: <ListChecks size={15} />,
+      run: closeRun(onTaskMode),
     });
     projects.forEach((project) => result.push({
       key: `project:${project.id}`,
@@ -294,9 +328,9 @@ export function CommandPalette({
     }));
     const needle = query.trim().toLocaleLowerCase();
     return needle
-      ? result.filter((item) => `${item.label} ${item.detail ?? ""} ${item.group} ${item.keys ?? ""}`.toLocaleLowerCase().includes(needle))
+      ? result.filter((item) => `${item.label} ${item.detail ?? ""} ${item.group} ${keysSearchText(item.keys)}`.toLocaleLowerCase().includes(needle))
       : result;
-  }, [currentProject, groups, notify, onAllProjects, onClose, onComposer, onDeleteTask, onNewGroup, onNewProject, onNote, onProject, onSettings, onTask, onTaskUpdated, projects, query, selectedTask, slashMode, step, tasks]);
+  }, [currentProject, groups, notify, onClose, onComposer, onDeleteTask, onNewGroup, onNewProject, onNote, onProject, onSettings, onTask, onTaskMode, onTaskUpdated, projects, query, selectedTask, slashMode, step, tasks]);
 
   const normalTotal = items.length + hits.length;
   const total = step === "scope-project" ? projects.length + 1
@@ -416,6 +450,8 @@ export function CommandPalette({
   const gitProject = projects.find((project) => project.id === gitProjectId);
   const activeHit = idHit && active === 0 ? idHit : active >= hitStart ? restHits[active - hitStart] : undefined;
   const hasHits = step === "search" && !slashMode && hits.length > 0;
+  // 边扫边出的时候得说清楚现在扫到哪儿了，不然列表停住的那几秒看着就像搜完了。
+  const searchNote = phase === "others" ? "本项目已列完，正在搜其他项目…" : "搜索中…";
   const wide = hasHits || step === "git-overview";
   const placeholder = step === "scope-project" ? "选择项目…"
     : step === "scope-type" ? "选择类型…"
@@ -449,7 +485,7 @@ export function CommandPalette({
             placeholder={placeholder}
             onKeyDown={(event) => {
               const sequence = step === "search" && !slashMode && event.key === "Enter" && !event.nativeEvent.isComposing
-                ? items.find((item) => item.keys?.replace(/\s+/g, "").toLowerCase() === query.toLowerCase())
+                ? items.find((item) => matchesKeysQuery(item.keys, query))
                 : undefined;
               if (sequence) {
                 event.preventDefault();
@@ -528,8 +564,8 @@ export function CommandPalette({
                 );
               })}
               <SearchHitList hits={restHits} active={active} startIndex={hitStart} query={query} onHover={hover} onOpen={openHit} />
-              {!normalTotal && <p className="palette-empty">{searching ? "搜索中…" : query.trim().length >= 2 ? "没有匹配的命令、任务或随手记" : "无匹配命令"}</p>}
-              {searching && normalTotal > 0 && !hits.length && <p className="px-4 py-2 text-center text-[10px] text-faint">搜索中…</p>}
+              {!normalTotal && <p className="palette-empty">{searching ? searchNote : query.trim().length >= 2 ? "没有匹配的命令、任务或随手记" : "无匹配命令"}</p>}
+              {searching && normalTotal > 0 && <p className="px-4 py-2 text-center text-[10px] text-faint">{searchNote}</p>}
             </div>
             {hasHits && <SearchPreview hit={activeHit} query={query} />}
           </div>

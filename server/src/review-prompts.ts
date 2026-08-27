@@ -88,7 +88,7 @@ export async function verifyProtocolFor(
     `比较基线 ${baseline}。先看 git status / git diff / 相关提交，再决定验证范围。\n\n` +
     `${REVIEW_OVERWRITE_CHECK}\n\n` +
     verifyRules(evidenceDir) +
-    `验证结束时，调用 report_stage(taskId="${target.id}", stage="verified"|"verify_failed") 给出本轮结论；` +
+    `验证结束时，调用 report_stage(taskId="${target.id}", stage="verified"|"verify_failed", directionToken="<最新【当前方向身份】token>") 给出本轮结论；` +
     `**本回合不要调用 complete_task** —— 这是搭在任务上的验证回合，任务本身的状态保持不变。\n\n`;
 }
 
@@ -100,7 +100,7 @@ export function verifyReminderFor(taskId: string, round: number): string {
     BROWSER_VERIFICATION_REMINDER +
     `用了 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
     `验证完停掉自己启动的所有服务/进程；` +
-    `结束前调 report_stage(taskId="${taskId}", stage="verified"|"verify_failed") 给出结论，本回合不要调 complete_task。`;
+    `结束前调 report_stage(taskId="${taskId}", stage="verified"|"verify_failed", directionToken="<最新【当前方向身份】token>") 给出结论，本回合不要调 complete_task。`;
 }
 
 /** 历史做法：独立审查任务的协议正文。老任务身上还挂着这种任务，得能跑完。 */
@@ -123,7 +123,7 @@ export async function reviewProtocolFor(
     `先看 git status / git diff / 相关提交，再决定验证范围。\n\n` +
     `${REVIEW_OVERWRITE_CHECK}\n\n` +
     verifyRules(evidenceDir) +
-    `审查结束时，调用 report_stage(taskId="${target.id}", stage="verified"|"verify_failed") 给被审任务下结论；` +
+    `审查结束时，调用 report_stage(taskId="${target.id}", stage="verified"|"verify_failed", directionToken="<最新【当前方向身份】token>") 给被审任务下结论；` +
     `最后调用 complete_task(taskId="${review.id}") 确认你自己的审查任务完成。` +
     `不要给审查任务自身上报 stage。\n\n`;
 }
@@ -137,7 +137,7 @@ export function reviewReminderFor(review: Pick<TaskRow, "id" | "reviewOf" | "rev
     BROWSER_VERIFICATION_REMINDER +
     `用了 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
     `验证完停掉自己启动的所有服务/进程；` +
-    `结束前对被审任务 ${review.reviewOf} 调 report_stage(verified|verify_failed)，` +
+    `结束前对被审任务 ${review.reviewOf} 调 report_stage(verified|verify_failed) 并传最新【当前方向身份】directionToken，` +
     `再对审查任务自身 ${review.id} 调 complete_task。`;
 }
 

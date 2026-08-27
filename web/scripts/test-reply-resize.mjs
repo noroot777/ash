@@ -1,31 +1,12 @@
 // 对话框顶边的拖动条:往上拖变高、往下拖变矮、双击复位、上下限收住、刷新后还在。
 // 跑法:npm -w web run test:reply-resize
 import assert from "node:assert/strict";
-import { access } from "node:fs/promises";
-import { constants } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { createServer } from "vite";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const chromeCandidates = [
-  process.env.CHROME_BIN,
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  chromium.executablePath(),
-].filter(Boolean);
-
-async function executablePath() {
-  for (const candidate of chromeCandidates) {
-    try {
-      await access(candidate, constants.X_OK);
-      return candidate;
-    } catch {
-      // Try the next local Chrome/Chromium candidate.
-    }
-  }
-  throw new Error("找不到可执行的 Chrome/Chromium；可通过 CHROME_BIN 指定路径");
-}
-
 const server = await createServer({
   root,
   logLevel: "error",
@@ -39,7 +20,7 @@ try {
   assert(address && typeof address === "object", "Vite test server did not expose a port");
   const url = `http://127.0.0.1:${address.port}/scripts/fixtures/reply-resize.html`;
 
-  browser = await chromium.launch({ executablePath: await executablePath(), headless: true });
+  browser = await chromium.launch(await chromeLaunchOptions());
   const page = await browser.newPage({ viewport: { width: 900, height: 900 } });
   await page.goto(url);
 
@@ -52,6 +33,26 @@ try {
   // 拖之前是 rows 撑出来的自然高度,不该被写死的默认值顶掉。
   assert.equal(await page.getByTestId("state").textContent(), "auto");
   const natural = await fieldHeight();
+
+  // 没拖过时高度跟着输入的行数走,撑到上限为止(再多就在框内滚)。
+  const fill = async (lines) => {
+    await field.fill(Array.from({ length: lines }, (_, index) => `第 ${index + 1} 行`).join("\n"));
+    await page.waitForTimeout(60);
+    return fieldHeight();
+  };
+  const fiveLines = await fill(5);
+  assert.ok(fiveLines > natural, `5 行应比 3 行高：${natural} → ${fiveLines}`);
+  const autoCap = await fill(12);
+  assert.ok(autoCap > fiveLines, `12 行应继续长高：${fiveLines} → ${autoCap}`);
+  const overflowed = await fill(40);
+  assert.ok(Math.abs(overflowed - autoCap) < 2, `超过上限不该再长高：${autoCap} → ${overflowed}`);
+  assert.ok(
+    await field.evaluate((el) => el.scrollHeight > el.clientHeight + 1),
+    "撑到上限之后内容应当在框内滚动",
+  );
+  assert.ok(Math.abs((await fill(1)) - natural) < 2, "内容变少要能缩回自然高度");
+  await field.fill("");
+  await page.waitForTimeout(60);
 
   // 往上拖 80px:回复框跟着高 80px。
   const drag = async (dy) => {
@@ -85,6 +86,14 @@ try {
   await drag(4000);
   const ceiling = await fieldHeight();
   assert.ok(ceiling <= 900 - 260 + 2, `上限应给会话留出空间，实际 ${ceiling}`);
+
+  // 自动撑高那个上限只管自动撑高:拖能拖到比它高得多,拖过之后输入也不再把它改回去。
+  assert.ok(ceiling > autoCap, `手动拖动应能超过自动撑高的上限：自动 ${autoCap} / 拖到 ${ceiling}`);
+  await fill(40);
+  assert.ok(Math.abs((await fieldHeight()) - ceiling) < 2, "拖过之后输入不该改动高度");
+  await field.fill("");
+  await page.waitForTimeout(60);
+  assert.ok(Math.abs((await fieldHeight()) - ceiling) < 2, "拖过之后清空也不该缩回去");
 
   // 刷新后高度还在。
   const kept = await page.getByTestId("state").textContent();

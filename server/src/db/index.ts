@@ -3,6 +3,7 @@ import type { LibSQLDatabase } from "drizzle-orm/libsql/driver-core";
 import { createClient } from "./node-sqlite-client.js";
 import * as schema from "./schema.js";
 import { ensureAshDbDir, resolveAshDbFile } from "./path.js";
+import { dropRetiredTables } from "./retired-schema.js";
 
 const dbFile = resolveAshDbFile();
 ensureAshDbDir(dbFile);
@@ -79,6 +80,8 @@ export async function ensureSchema() {
       labels TEXT NOT NULL DEFAULT '[]', depends_on TEXT NOT NULL DEFAULT '[]',
       resume_depends_on TEXT NOT NULL DEFAULT '[]',
       agent_type TEXT, executor_id TEXT, model TEXT, reasoning_effort TEXT,
+      active_turn_token TEXT, active_direction_token TEXT,
+      active_direction_version INTEGER NOT NULL DEFAULT 0,
       auto_title INTEGER NOT NULL DEFAULT 0, duet TEXT, schedule_id TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL, started_at TEXT, ended_at TEXT,
       archived INTEGER NOT NULL DEFAULT 0, archived_at TEXT
@@ -129,6 +132,13 @@ export async function ensureSchema() {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS queue_items_queue_pos_idx
       ON queue_items (queue_id, position);
+    CREATE TABLE IF NOT EXISTS team_inbound (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id TEXT NOT NULL,
+      text TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS team_inbound_task_idx ON team_inbound (task_id, seq);
     CREATE TABLE IF NOT EXISTS workflows (
       id TEXT PRIMARY KEY, builtin_key TEXT, name TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '', def TEXT NOT NULL,
@@ -234,6 +244,9 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN follow_up_from TEXT",
     // 完成确认落库（严格 done 协议），确认与结算跨进程也不丢
     "ALTER TABLE tasks ADD COLUMN complete_confirmed_at TEXT",
+    "ALTER TABLE tasks ADD COLUMN active_turn_token TEXT",
+    "ALTER TABLE tasks ADD COLUMN active_direction_token TEXT",
+    "ALTER TABLE tasks ADD COLUMN active_direction_version INTEGER NOT NULL DEFAULT 0",
     // 正交验收阶段，只用于展示与协作，不进入 TaskStatus 调度/结算
     "ALTER TABLE tasks ADD COLUMN stage TEXT",
     // 正交列表展示字段：null=未置顶，整数毫秒时间戳用于多个置顶任务排序
@@ -346,6 +359,7 @@ export async function ensureSchema() {
     "ALTER TABLE sessions ADD COLUMN executor_fingerprint TEXT",
     // 任务接力(跨机器 handoff)的持久标记(json TaskHandoff,见 db/schema.ts)。
     "ALTER TABLE tasks ADD COLUMN handoff TEXT",
+    "ALTER TABLE tasks ADD COLUMN handoff_audit TEXT",
   ]) {
     try {
       await client.execute(sql);
@@ -371,7 +385,7 @@ export async function ensureSchema() {
   if (!mergeStatesMigrated) for (const column of MERGE_STATE_COLUMNS) keepColumns.add(column);
   if (!(await removeSshExecutorProfiles())) keepColumns.add("agents.target");
   await dropRetiredColumns(keepColumns);
-  await dropRetiredTables();
+  await dropRetiredTables(client, RETIRED_TABLES);
 }
 
 // 审查链状态瘦身（2026-08-11）：叙事状态改为推导，持久值只剩 reviewing/passed/failed/stopped。
@@ -675,22 +689,6 @@ async function dropRetiredColumns(skip?: ReadonlySet<string>): Promise<void> {
       // 清不掉不该拦住启动(比如老 SQLite 不支持 DROP COLUMN):报一声继续跑,
       // 这列本来就没人读。
       console.warn(`[ash] 退役列 ${table}.${column} 没能清掉,忽略:`, e);
-    }
-  }
-}
-
-async function dropRetiredTables(): Promise<void> {
-  for (const { table, why } of RETIRED_TABLES) {
-    try {
-      const found = await client.execute({
-        sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
-        args: [table],
-      });
-      if (!found.rows.length) continue;
-      await client.execute(`DROP TABLE IF EXISTS ${table}`);
-      console.log(`[ash] 清理退役表 ${table}(${why})`);
-    } catch (e) {
-      console.warn(`[ash] 退役表 ${table} 没能清掉,忽略:`, e);
     }
   }
 }

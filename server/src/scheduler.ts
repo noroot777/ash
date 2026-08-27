@@ -21,8 +21,9 @@ export async function pauseGroup(groupId: string): Promise<void> {
   await db.update(groups).set({ paused: true }).where(eq(groups.id, groupId));
   const members = await db.select().from(tasks).where(eq(tasks.groupId, groupId));
   for (const t of members) {
+    // status 可能在队列推进/续聊交错时短暂失真；只要有活 handle，先杀进程永远优先。
+    if (stopTask(t.id, "paused")) continue;
     if (t.status === "queued") await setTaskStatus(t.id, "backlog");
-    else if (t.status === "running" && stopTask(t.id, "paused")) continue;
     else freezeStartingTurn(t.id, "paused");
   }
 }
@@ -92,14 +93,15 @@ export type QueueMember = {
   followUpFrom?: string | null;
 };
 
-// 队列眼里的成员状态:续聊回合(followUpFrom 非空)虽然 status=running,但那一轮
-// 不是任务的执行 —— 任务早就到终态、位置早就被透明跳过了。所以队列一律按续聊前
-// 的终态看它:既不算「有人在跑」把整条线冻住,也不会被当成可启动项拉起来。
+// 队列眼里的成员状态:终态任务的续聊回合虽然 status=running,但那一轮不是任务的
+// 执行 —— 位置早就被透明跳过了，所以按续聊前的终态看它。paused/backlog 等非终态
+// 只用于旁路完成后的落位，不能遮住真实 running，否则队列会把活回合再拉一次。
 // (实测事故:队列 head 是个 done 任务,用户 11:30 给它发了条消息续聊,后面刚跑完
 // 的那位就再也推进不了,整条流水线白等了六分钟。)
 // 导出:queues.ts 的 queueBlockers(手点「运行」的前置检查)必须用同一把尺子。
 export function queueStatus(t: { status: string; followUpFrom?: string | null }): string {
-  return t.followUpFrom || t.status;
+  const before = t.followUpFrom;
+  return before === "done" || before === "canceled" || before === "failed" ? before : t.status;
 }
 
 // 队列推进的纯计算核心:给定按 position 排好的成员,挑出"现在该被拉起来的那个"。

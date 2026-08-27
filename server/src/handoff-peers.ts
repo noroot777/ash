@@ -13,6 +13,7 @@
 // 这里只管**入站**。出站方向(「我要发的这台还是不是原来那台」)在
 // handoff-peer-client.ts —— 那一半才是接力最该防的,见 handoff-identity.ts 顶部。
 import type { Context } from "hono";
+import { getConnInfo } from "@hono/node-server/conninfo";
 import { eq } from "drizzle-orm";
 import type { HandoffPeer } from "@ash/shared";
 import { db } from "./db/index.js";
@@ -126,9 +127,15 @@ export async function touchPeer(peer: VerifiedPeer, addr: string): Promise<Hando
     .where(eq(handoffPeers.fingerprint, peer.fingerprint))).at(0);
   if (existing) {
     await db.update(handoffPeers)
-      .set({ lastSeenAt: at, lastAddr: addr, name: peer.name || existing.name })
+      .set({ publicKey: peer.publicKey, lastSeenAt: at, lastAddr: addr, name: peer.name || existing.name })
       .where(eq(handoffPeers.fingerprint, peer.fingerprint));
-    return toPeer({ ...existing, lastSeenAt: at, lastAddr: addr, name: peer.name || existing.name });
+    return toPeer({
+      ...existing,
+      publicKey: peer.publicKey,
+      lastSeenAt: at,
+      lastAddr: addr,
+      name: peer.name || existing.name,
+    });
   }
   const row = {
     fingerprint: peer.fingerprint,
@@ -153,6 +160,7 @@ const toPeer = (row: typeof handoffPeers.$inferSelect): HandoffPeer => ({
   lastSeenAt: row.lastSeenAt,
   approvedAt: row.approvedAt,
   lastAddr: row.lastAddr,
+  returnOnly: !row.publicKey,
 });
 
 export async function listPeers(): Promise<HandoffPeer[]> {
@@ -163,23 +171,62 @@ export async function listPeers(): Promise<HandoffPeer[]> {
 }
 
 export async function setPeerStatus(fingerprint: string, status: "approved" | "blocked"): Promise<HandoffPeer> {
-  const row = (await db.select().from(handoffPeers).where(eq(handoffPeers.fingerprint, fingerprint))).at(0);
-  if (!row) throw new HandoffError("没有这台接力来源机器(指纹对不上)", 404);
-  const approvedAt = status === "approved" ? now() : null;
-  await db.update(handoffPeers).set({ status, approvedAt }).where(eq(handoffPeers.fingerprint, fingerprint));
+  const normalized = fingerprint.trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(normalized)) throw new HandoffError("机器指纹格式不正确", 400);
+  const row = (await db.select().from(handoffPeers).where(eq(handoffPeers.fingerprint, normalized))).at(0);
+  if (!row) {
+    if (status !== "blocked") throw new HandoffError("没有这台接力来源机器(指纹对不上)", 404);
+    const at = now();
+    const blocked = {
+      fingerprint: normalized,
+      publicKey: "",
+      name: "",
+      status: "blocked",
+      firstSeenAt: at,
+      lastSeenAt: at,
+      approvedAt: null,
+      lastAddr: "",
+    };
+    await db.insert(handoffPeers).values(blocked).onConflictDoUpdate({
+      target: handoffPeers.fingerprint,
+      set: { status: "blocked", approvedAt: null },
+    });
+    const stored = (await db.select().from(handoffPeers)
+      .where(eq(handoffPeers.fingerprint, normalized))).at(0);
+    return toPeer(stored ?? blocked);
+  }
+  if (status === "approved" && !row.publicKey) {
+    throw new HandoffError("这条记录只用于拒绝历史回程，不能直接升级为整机批准；先让对方重新发送接力申请", 409);
+  }
+  // 拉黑不是忘记：保留已有批准时间，解除时才能恢复原来的 approved；从未批准过的
+  // pending 行 approvedAt 仍为空，解除后也只回 pending，不能借一次 block/unblock 提权。
+  const approvedAt = status === "approved" ? now() : row.approvedAt;
+  await db.update(handoffPeers).set({ status, approvedAt }).where(eq(handoffPeers.fingerprint, normalized));
   return toPeer({ ...row, status, approvedAt });
+}
+
+export async function unblockPeer(fingerprint: string): Promise<HandoffPeer | null> {
+  const normalized = fingerprint.trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(normalized)) throw new HandoffError("机器指纹格式不正确", 400);
+  const row = (await db.select().from(handoffPeers).where(eq(handoffPeers.fingerprint, normalized))).at(0);
+  if (!row) throw new HandoffError("没有这台已拒绝的机器(指纹对不上)", 404);
+  if (row.status !== "blocked") throw new HandoffError("这台机器当前没有被拒绝", 409);
+  if (!row.publicKey) {
+    await db.delete(handoffPeers).where(eq(handoffPeers.fingerprint, normalized));
+    return null;
+  }
+  const status = row.approvedAt ? "approved" as const : "pending" as const;
+  await db.update(handoffPeers).set({ status }).where(eq(handoffPeers.fingerprint, normalized));
+  return toPeer({ ...row, status });
 }
 
 export async function deletePeer(fingerprint: string): Promise<void> {
   await db.delete(handoffPeers).where(eq(handoffPeers.fingerprint, fingerprint));
 }
 
-/** 客户端地址,只用于展示(反代后面拿到的可能是网关地址,不当判据用)。 */
+/** 客户端真实 TCP 地址。反代场景会看到网关地址；不信任可伪造的 X-Forwarded-For。 */
 export function peerAddr(c: Context): string {
-  const forwarded = c.req.header("x-forwarded-for")?.split(",")[0]?.trim();
-  if (forwarded) return forwarded.slice(0, 64);
-  const info = (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming;
-  return (info?.socket?.remoteAddress ?? "").slice(0, 64);
+  try { return (getConnInfo(c).remote.address ?? "").slice(0, 64); } catch { return ""; }
 }
 
 /** ping 应答里对源机的态度自述(源机据此在预检结果里如实告诉用户下一步该干什么)。 */

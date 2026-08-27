@@ -21,7 +21,7 @@ export function ProjectGitContext({
 }: {
   projectId: string;
   health: ProjectHealth;
-  // 左边那颗按钮读着「全部项目」时，这条分支属于谁就没人说了 —— 传项目进来，胶囊自己
+  // 左边那颗按钮读着「任务模式」时，这条分支属于谁就没人说了 —— 传项目进来，胶囊自己
   // 把归属补在分支前面。单项目态传 null：旁边就是项目名，再标一次是重复。
   project?: ProjectView | null;
   onChanged: () => void;

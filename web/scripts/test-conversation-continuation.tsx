@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { Task } from "@ash/shared";
 import { ConversationFeed } from "../src/task-detail/ConversationFeed.tsx";
 import type { ConversationItem } from "../src/task-detail/conversationModel.ts";
+import { takeTraceGroup } from "../src/task-detail/conversationTraceGroups.ts";
 import { TeamFeed } from "../src/team/TeamFeed.tsx";
 
 const at = "2026-08-14T02:42:00.000Z";
@@ -71,5 +72,20 @@ const team = renderToStaticMarkup(
 assert.equal(count(team, "<time>"), 1, "团队旁注也应自己显示时间，续写段不再另起一行");
 assert.match(team, /conversation-note[^>]*>已预约完成后审查。<time>/);
 assert.doesNotMatch(team, /team-feed-agent[^>]*><header>/, "团队续写没有额外元信息时不应留下空消息头");
+
+const boundary = "2026-08-14T10:00:01.000Z";
+const traceGroups = new Map([[boundary, [
+  { at: "2026-08-14T10:00:02.000Z", turnStartedAt: boundary, event: { kind: "tool", name: "toolX" } },
+  { at: "2026-08-14T10:00:03.000Z", turnStartedAt: boundary, event: { kind: "tool", name: "toolY" } },
+]]] as any);
+const consumedTrace = new Set<string>();
+assert.deepEqual(
+  takeTraceGroup(traceGroups, consumedTrace, "2026-08-14T10:00:00.000Z", boundary),
+  [], "就近兜底命中 userBoundary 自身时，前一个 agent 段不得把该组跟自己拼接",
+);
+assert.deepEqual(
+  takeTraceGroup(traceGroups, consumedTrace, boundary).map((entry) => entry.event.kind === "tool" ? entry.event.name : ""),
+  ["toolX", "toolY"], "boundary 后的 agent 段应各领取一次真实工具调用",
+);
 
 console.log("conversation-continuation ok");

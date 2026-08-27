@@ -1,20 +1,9 @@
-import type {
-  FreeWorkflowExecutionStatus,
-  FreeWorkflowPreviewEventKind,
-  FreeWorkflowPreviewEventSource,
-} from "@ash/shared";
+import type { FreeWorkflowExecutionStatus } from "@ash/shared";
 import { and, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { freeWorkflowEvents, tasks } from "./db/schema.js";
 import { id, now } from "./util.js";
-
-export interface RecordFreePreviewEventInput {
-  kind: FreeWorkflowPreviewEventKind;
-  source: FreeWorkflowPreviewEventSource;
-  detail: string | null;
-  occurredAt?: string;
-}
 
 function executionDetail(status: FreeWorkflowExecutionStatus, endedAt: string | null): string {
   return JSON.stringify({ status, endedAt });
@@ -24,30 +13,6 @@ async function isFreeTask(taskId: string): Promise<boolean> {
   const task = (await db.select({ workflowMode: tasks.workflowMode, mode: tasks.mode, parentId: tasks.parentId, reviewOf: tasks.reviewOf })
     .from(tasks).where(eq(tasks.id, taskId))).at(0);
   return !!task && task.workflowMode === "free" && task.mode === "single" && !task.parentId && !task.reviewOf;
-}
-
-export async function recordFreePreviewEvent(
-  taskId: string,
-  input: RecordFreePreviewEventInput,
-): Promise<void> {
-  await db.insert(freeWorkflowEvents).values({
-    id: id(),
-    taskId,
-    kind: input.kind,
-    source: input.source,
-    detail: input.detail,
-    occurredAt: input.occurredAt ?? now(),
-  });
-  bus.publish({ type: "task.review", taskId });
-}
-
-export async function recordFreePreviewEventIfFree(
-  taskId: string,
-  input: RecordFreePreviewEventInput,
-): Promise<boolean> {
-  if (!(await isFreeTask(taskId))) return false;
-  await recordFreePreviewEvent(taskId, input);
-  return true;
 }
 
 export async function recordFreeTaskExecutionStartIfFree(
@@ -85,4 +50,32 @@ export async function finishFreeTaskExecution(
   await db.update(freeWorkflowEvents).set({ detail: executionDetail(status, endedAt) })
     .where(eq(freeWorkflowEvents.id, eventId));
   bus.publish({ type: "task.review", taskId: event.taskId });
+}
+
+/**
+ * 一轮执行的「结账人」:**终态只认第一次请求的那个**,之后每次调用都只是重试它。
+ *
+ * 调用方(single-run)的 finally 上挂着一次固定传 "failed" 的兜底,那是给「异常路径没人
+ * 结账」准备的。可正常路径要是第一次写库瞬时失败,这一笔就还没记成,兜底便会拿 "failed"
+ * 再写一次并写成功 —— 一个 exit 0 的成功回合被永久记进活动时间线里当失败
+ * (2026-08-25 第 5 轮审查)。结束时间同理:重试补的是**当时**那一笔账,不是重试那一刻。
+ *
+ * 写失败只警告不外抛:活动时间线是诊断用的账,记不上不该改变这一轮的真实结局。
+ */
+export function createExecutionCloser(
+  executionEventId: string | null,
+  taskId: string,
+): (status: Exclude<FreeWorkflowExecutionStatus, "running">, endedAt: string) => Promise<void> {
+  let finished = false;
+  let intended: { status: Exclude<FreeWorkflowExecutionStatus, "running">; endedAt: string } | null = null;
+  return async (status, endedAt) => {
+    if (!executionEventId || finished) return;
+    intended ??= { status, endedAt };
+    try {
+      await finishFreeTaskExecution(executionEventId, intended.status, intended.endedAt);
+      finished = true;
+    } catch (error) {
+      console.warn(`[ash] failed to record free workflow execution end for ${taskId}:`, error);
+    }
+  };
 }

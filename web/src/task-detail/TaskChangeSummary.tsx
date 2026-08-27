@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Task } from "@ash/shared";
+import type { Task, TaskListItem } from "@ash/shared";
 import { CaretRight, GitBranch, GitCommit, GitDiff, SpinnerGap } from "@phosphor-icons/react";
 import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
 import { sharedTeamParent } from "../review/reviewModel.ts";
@@ -16,7 +16,7 @@ export function TaskChangeSummary({
   onOpenReview,
 }: {
   task: Task;
-  allTasks: Task[];
+  allTasks: TaskListItem[];
   onOpenReview: () => void;
 }) {
   const sharedParent = useMemo(() => sharedTeamParent(task, allTasks), [allTasks, task]);

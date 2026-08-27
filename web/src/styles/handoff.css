@@ -1,12 +1,161 @@
 /* 任务接力:HandoffDialog(对话框)、HandoffBanner(详情页横幅)、
    DefaultsSettings 里的接力目标编辑行。 */
 
-.handoff-dialog { width: min(540px, 94vw); }
+.handoff-dialog {
+  width: min(720px, calc(100vw - 32px));
+  max-height: min(820px, calc(100vh - 36px));
+  overflow: auto;
+  border-color: color-mix(in lch, var(--line2) 72%, transparent);
+  border-radius: 20px;
+  padding: 24px;
+  box-shadow: 0 30px 90px rgb(20 22 30 / 24%);
+  animation: handoff-dialog-enter 220ms cubic-bezier(.2, .8, .2, 1) both;
+}
 .handoff-dialog > p { margin: 12px 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+
+.handoff-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+.task-confirm-dialog > .handoff-dialog-header > .handoff-symbol {
+  position: relative;
+  display: block;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  border-radius: 13px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.handoff-symbol i {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border: 2px solid currentColor;
+  border-radius: 6px;
+}
+.handoff-symbol i:first-child { top: 9px; left: 8px; }
+.handoff-symbol i:last-child { right: 8px; bottom: 8px; background: var(--accent-soft); }
+.handoff-dialog-header > div { min-width: 0; flex: 1; }
+.handoff-dialog-header h2 { margin-top: 3px; font-size: 20px; font-weight: 720; letter-spacing: -0.035em; }
+.handoff-eyebrow {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: .14em;
+}
+.handoff-dialog-close {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+}
+.handoff-dialog-close:hover:not(:disabled) { background: var(--overlay); color: var(--ink); }
+.handoff-dialog-close:disabled { cursor: not-allowed; opacity: .45; }
+
+.handoff-route-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 100px minmax(0, 1fr);
+  align-items: center;
+  margin: 20px 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: color-mix(in lch, var(--raised) 78%, var(--panel));
+  padding: 17px 18px;
+}
+.handoff-route-node { display: grid; min-width: 0; }
+.handoff-route-node.is-target { text-align: right; }
+.handoff-route-node span { color: var(--faint); font-size: 10px; }
+.handoff-route-node b { overflow: hidden; margin-top: 5px; color: var(--ink); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.handoff-route-node small { overflow: hidden; margin-top: 5px; color: var(--muted); font-family: var(--font-mono); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+.handoff-route-track { position: relative; display: flex; align-items: center; justify-content: center; gap: 7px; color: var(--accent); }
+.handoff-route-track::before,
+.handoff-route-track::after { width: 28px; height: 1px; background: color-mix(in lch, var(--accent) 34%, var(--line)); content: ""; }
+.handoff-route-track i { position: absolute; width: 10px; height: 10px; left: 29px; border: 3px solid color-mix(in lch, var(--accent) 25%, var(--panel)); border-radius: 50%; background: var(--accent); }
+
+.handoff-review-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: hidden;
+  margin: 14px 0;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+.handoff-review-item {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 8px;
+  padding: 15px 16px;
+}
+.handoff-review-item:nth-child(odd) { border-right: 1px solid var(--line); }
+.handoff-review-item:nth-child(n + 3) { border-top: 1px solid var(--line); }
+.handoff-review-item > svg { grid-row: 1 / 4; margin-top: 1px; color: var(--accent); }
+.handoff-review-item span { color: var(--faint); font-size: 9.5px; }
+.handoff-review-item b { overflow: hidden; margin-top: 5px; color: var(--ink); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.handoff-review-item small { overflow: hidden; margin-top: 4px; color: var(--muted); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+
+.handoff-progress {
+  display: grid;
+  min-height: 590px;
+  place-items: center;
+  align-content: center;
+  padding: 24px 12px 34px;
+  text-align: center;
+}
+.handoff-dialog:has(.handoff-progress) > .handoff-dialog-header { display: none; }
+.handoff-progress-orbit {
+  position: relative;
+  width: 112px;
+  height: 112px;
+  margin-bottom: 28px;
+  border: 1px solid color-mix(in lch, var(--accent) 22%, var(--line));
+  border-radius: 50%;
+}
+.handoff-progress-orbit::before,
+.handoff-progress-orbit::after { position: absolute; border: 1px solid color-mix(in lch, var(--accent) 18%, var(--line)); border-radius: 50%; content: ""; inset: 16px; }
+.handoff-progress-orbit::after { inset: 32px; background: var(--accent-soft); }
+.handoff-progress-orbit span { position: absolute; z-index: 1; width: 30px; height: 30px; inset: 41px; border-radius: 9px; background: var(--accent); box-shadow: 0 8px 20px color-mix(in lch, var(--accent) 25%, transparent); }
+.handoff-progress-orbit i { position: absolute; width: 8px; height: 8px; top: 9px; left: 52px; border-radius: 50%; background: var(--cyan); transform-origin: 4px 47px; animation: handoff-orbit 1.7s linear infinite; }
+.handoff-progress h3,
+.handoff-result-panel h3 { margin: 14px 0 0; color: var(--ink); font-size: 26px; letter-spacing: -0.04em; }
+.handoff-progress > p,
+.handoff-result-panel > p { margin: 10px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.handoff-progress-plan-title { width: min(420px, 100%); margin-top: 28px; color: var(--faint); font-size: 9.5px; font-weight: 700; text-align: left; letter-spacing: .08em; }
+.handoff-progress ul { display: grid; width: min(420px, 100%); grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 9px auto 0; padding: 0; text-align: left; list-style: none; }
+.handoff-progress li { display: grid; min-width: 0; grid-template-columns: 26px minmax(0, 1fr); gap: 9px; border: 1px solid var(--line); border-radius: 11px; background: var(--raised); padding: 11px; }
+.handoff-progress li > span { display: grid; width: 26px; height: 26px; place-items: center; border-radius: 8px; background: var(--accent-soft); color: var(--accent); }
+.handoff-progress li div { display: grid; align-content: start; }
+.handoff-progress li b { font-size: 12px; }
+.handoff-progress li small { margin-top: 5px; color: var(--faint); font-size: 10px; }
+
+.handoff-result-panel { display: grid; justify-items: center; padding: 44px 10px 20px; text-align: center; }
+.handoff-result-mark { display: grid; width: 58px; height: 58px; margin-bottom: 18px; place-items: center; border-radius: 18px; background: color-mix(in lch, var(--green) 13%, var(--panel)); color: var(--green); box-shadow: inset 0 0 0 1px color-mix(in lch, var(--green) 22%, var(--line)); }
+.handoff-result-facts { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 24px; }
+.handoff-result-facts span { border: 1px solid var(--line); border-radius: 999px; background: var(--raised); padding: 7px 11px; color: var(--muted); font-size: 10px; }
+.handoff-result-facts b { color: var(--ink); }
+.handoff-result-panel .handoff-notes { width: min(520px, 100%); margin-top: 20px; text-align: left; }
+.handoff-local-open { display: inline-flex; height: 36px; align-items: center; gap: 6px; margin-top: 24px; border: 1px solid var(--accent); border-radius: 10px; background: var(--accent); padding: 0 15px; color: white; font-size: 11.5px; font-weight: 700; cursor: pointer; box-shadow: 0 10px 24px color-mix(in lch, var(--accent) 22%, transparent); }
+.handoff-local-open:hover { filter: brightness(.97); transform: translateY(-1px); }
+
+.handoff-dialog > footer { padding-top: 2px; }
+.handoff-dialog > footer button { height: 36px; border-radius: 10px; padding-inline: 16px; font-weight: 650; }
+
+@keyframes handoff-dialog-enter { from { opacity: 0; transform: translateY(10px) scale(.985); } }
+@keyframes handoff-orbit { to { transform: rotate(360deg); } }
 
 .handoff-quick-add { display: grid; gap: 7px; margin: 12px 0; }
 .handoff-quick-add p { margin: 0 0 4px; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .handoff-quick-add label { color: var(--faint); font-size: 10.5px; }
+.handoff-quick-add small { color: var(--faint); font-size: 10px; line-height: 1.55; }
 .handoff-quick-add input {
   height: 32px;
   border: 1px solid var(--line2);
@@ -46,7 +195,7 @@
 
 .handoff-check { display: flex; align-items: center; gap: 6px; margin: 12px 0 0; color: var(--ink); font-size: 11.5px; }
 
-.handoff-remote-link { display: inline-flex; align-items: center; gap: 3px; color: var(--accent); }
+.handoff-remote-link { display: inline-flex; align-items: center; gap: 3px; border: 0; background: transparent; padding: 0; color: var(--accent); cursor: pointer; }
 
 /* 详情页横幅:接力标记持久落在 tasks.handoff 上,刷新后仍看得见。 */
 .task-handoff-banner {
@@ -62,10 +211,9 @@
   font-size: 11.5px;
 }
 .task-handoff-banner > svg { flex: none; color: var(--accent); }
-.task-handoff-banner a { display: inline-flex; flex: none; align-items: center; gap: 3px; color: var(--accent); }
 .task-handoff-banner span { flex: 1 1 auto; min-width: 0; }
 
-/* 接力未确认(应答丢失):琥珀色警示,提醒用户先重试收口或确认后移除标记。 */
+/* 接力/移回送达未确认(应答丢失):琥珀色警示,提醒用户先重试收口或确认后移除标记。 */
 .task-handoff-banner.is-pending {
   border-color: color-mix(in lch, var(--amber) 45%, var(--line));
   background: color-mix(in lch, var(--amber) 9%, var(--panel));
@@ -247,6 +395,20 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
 }
 
 @media (max-width: 760px) {
+  .handoff-dialog { width: min(100%, calc(100vw - 20px)); max-height: calc(100vh - 20px); border-radius: 16px; padding: 18px; }
+  .handoff-dialog-header h2 { font-size: 18px; }
+  .handoff-route-card { grid-template-columns: minmax(0, 1fr) 58px minmax(0, 1fr); padding: 14px; }
+  .handoff-route-track { gap: 3px; }
+  .handoff-route-track::before,
+  .handoff-route-track::after { width: 12px; }
+  .handoff-route-track i { display: none; }
+  .handoff-review-grid { grid-template-columns: 1fr; }
+  .handoff-review-item:nth-child(odd) { border-right: 0; }
+  .handoff-review-item:nth-child(n + 2) { border-top: 1px solid var(--line); }
+  .handoff-progress { min-height: 520px; }
+  .handoff-progress ul { grid-template-columns: 1fr; }
+  .handoff-progress h3,
+  .handoff-result-panel h3 { font-size: 22px; }
   .handoff-approval-alert {
     grid-template-columns: auto minmax(0, 1fr);
     padding: 10px 12px;
@@ -256,8 +418,13 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .handoff-approval-alert { animation: none; }
+  .handoff-approval-alert,
+  .handoff-dialog,
+  .handoff-progress-orbit i { animation: none; }
 }
+.handoff-bulk-dialog > .handoff-route-card { margin-bottom: 10px; }
+.handoff-bulk-result { padding-bottom: 8px; }
+.handoff-bulk-result .handoff-bulk-failures { width: min(520px, 100%); margin-top: 18px; text-align: left; }
 .handoff-bulk-body {
   display: grid;
   gap: 11px;
@@ -321,6 +488,12 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   font: inherit;
 }
 
+.handoff-bulk-project-fixed strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .handoff-bulk-toggle {
   display: flex;
   align-items: center;
@@ -350,20 +523,6 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   color: var(--red);
 }
 
-.handoff-bulk-skipped {
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--raised);
-  padding: 8px 10px;
-}
-
-.handoff-bulk-skipped summary {
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 11px;
-}
-
-.handoff-bulk-skipped ul,
 .handoff-bulk-failures {
   display: grid;
   gap: 7px;
@@ -374,14 +533,12 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   list-style: none;
 }
 
-.handoff-bulk-skipped li,
 .handoff-bulk-failures li {
   display: grid;
   gap: 2px;
   font-size: 10.5px;
 }
 
-.handoff-bulk-skipped li b,
 .handoff-bulk-failures li b {
   overflow: hidden;
   font-weight: 600;
@@ -389,12 +546,10 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   white-space: nowrap;
 }
 
-.handoff-bulk-skipped li span,
 .handoff-bulk-failures li span {
   color: var(--faint);
 }
 
-.handoff-bulk-summary,
 .handoff-bulk-notes {
   display: grid;
   gap: 5px;
@@ -433,35 +588,64 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   padding: 9px 10px;
 }
 
-.handoff-bulk-blocked {
-  border: 1px solid color-mix(in lch, var(--red) 24%, var(--line));
+/* 会被接力的任务清单：就是弹窗里那种最普通的可折叠列表——一行 summary 加若干
+   「标题 + 一行小字」，默认展开。除了标题加粗，不额外加任何装饰。 */
+.handoff-bulk-list {
+  border: 1px solid var(--line);
   border-radius: 9px;
-  background: color-mix(in lch, var(--red) 6%, var(--panel));
-  padding: 9px 10px;
+  background: var(--raised);
+  padding: 8px 10px;
 }
 
-.handoff-bulk-blocked > p {
-  color: var(--red);
+.handoff-bulk-list > summary {
+  color: var(--muted);
+  cursor: pointer;
   font-size: 11px;
-  line-height: 1.45;
 }
 
-.handoff-bulk-blocked ul {
+.handoff-bulk-list ul {
   display: grid;
   gap: 7px;
-  max-height: 140px;
+  max-height: 210px;
   overflow: auto;
-  margin: 8px 0 0;
+  margin: 9px 0 0;
   padding: 0;
   list-style: none;
 }
 
-.handoff-bulk-blocked li {
+.handoff-bulk-list li {
   display: grid;
   gap: 2px;
   font-size: 10.5px;
 }
 
-.handoff-bulk-blocked li span {
+.handoff-bulk-list li b {
+  font-size: 12px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.handoff-bulk-list li > span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   color: var(--faint);
 }
+
+.handoff-bulk-list li.is-failed > span { color: var(--red); }
+.handoff-bulk-list li > span > svg { flex: 0 0 auto; color: var(--accent); }
+
+/* 身份/加密核对通过、以及"带走什么"这类背景说明，都退到一行安静的元信息里，
+   把视觉重量留给上面的任务清单。出问题时仍走 handoff-bulk-warning 的显眼样式。 */
+.handoff-bulk-meta {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.handoff-bulk-meta > svg { flex: 0 0 auto; margin-top: 2px; color: var(--green); }
+.handoff-bulk-meta.is-quiet { color: var(--faint); }
+.handoff-bulk-meta.is-alert { color: var(--red); }

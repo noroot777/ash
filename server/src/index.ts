@@ -15,6 +15,7 @@ import {
 import { inspectPortCommand, inspectProcessSync, killPidsCommand, listenerPidsSync } from "./platform.js";
 // 纯粹读一个环境变量，不碰 DB，所以可以静态 import（其余会打开库的模块一律等拿到锁之后）。
 import { IS_PREVIEW_INSTANCE } from "./preview-instance.js";
+import { recordListeningPort } from "./listening-port.js";
 
 let singletonLock: SingletonLock | null = null;
 let activeServer: ReturnType<typeof serve> | null = null;
@@ -373,6 +374,10 @@ app.get("/*", (c) => {
 // Bind the port before starting the scheduler. A process that cannot accept
 // HTTP callbacks must never be allowed to poll schedules or launch agents.
 activeServer = serve({ fetch: app.fetch, port }, (info) => {
+  // PORT=0 的测试/临时实例在绑定后才知道真实端口；接力清单读取这个动态值，才能把
+  // 可回连地址带给对端，而不是把不可用的 0 端口写进任务历史。只写模块内状态，不能
+  // 改 process.env.PORT：应用内终端和 agent 都会继承它，前端 dev server 会误抢 ash 端口。
+  recordListeningPort(info.port);
   // 预览实例**不跑调度器**：它连的是主库的快照，一条 cron 到点就会拿真项目目录去派活。
   // 快照压根没搬 schedules / scheduled_messages，这里是同一件事的第二道保险（成本一行）。
   if (IS_PREVIEW_INSTANCE) {

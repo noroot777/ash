@@ -8,11 +8,11 @@ type BrowserNavigation = {
   location: Pick<Location, "pathname" | "search">;
 };
 
-// 作用域要一起写进 URL：在「全部项目」里点开一行也压一条历史，回退时 URL 上没有 scope=all
-// 的话会被读成单项目态 —— 按一下后退，列表悄悄从「全部项目」缩回一家，这不是后退该做的事。
+// 作用域要一起写进 URL：在「任务模式」里点开一行也压一条历史，回退时 URL 上没有 scope=tasks
+// 的话会被读成单项目态 —— 按一下后退，列表悄悄从「任务模式」缩回一家，这不是后退该做的事。
 export function taskSelectionUrl(task: TaskSelection, pathname: string, scope: TaskScopeKind = "project"): string {
   const params = new URLSearchParams();
-  if (scope === "all") params.set("scope", "all");
+  if (scope === "tasks") params.set("scope", "tasks");
   params.set("project", task.projectId);
   params.set("task", task.id);
   return `${pathname}?${params.toString()}`;
