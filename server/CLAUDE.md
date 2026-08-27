@@ -33,7 +33,7 @@
 | 团队常驻调度台、执行者派活、提问转发 | `team/session.ts`、`team/dispatch.ts`、`team/inbox.ts` | `test:answer-routing` |
 | 供应商注入（base_url + key） | `llm.ts` `relayRoot` / `relayApi` | — |
 | 接力身份：出站核对指纹 / 入站配对审批 | `handoff-identity.ts` 顶部（出站 `handoff-peer-client.ts`、入站 `handoff-peers.ts`） | `test:handoff` |
-| 退役老库字段/表 | `db/index.ts` `RETIRED_COLUMNS` / `RETIRED_TABLES` | — |
+| 退役字段/表 | `db/migrations.ts` `RETIRED_COLUMNS`/`RETIRED_TABLES` | — |
 
 ## 没有单一代码归宿的，只有这几条
 
