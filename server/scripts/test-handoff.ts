@@ -289,10 +289,14 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
     "接力说明应追加在最近一条会话的时间线上",
   );
 
-  // 对端:任务原状态原样落库,in 标记、resumePrompt 前言齐全;正文里的附件路径已改写。
+  // 对端:任务原状态原样落库,in 标记齐全、接力前言挂在标记上(不占 resumePrompt);
+  // 正文里的附件路径已改写。
   const peerTask = await api<{
     status: string; body: string; resumePrompt: string | null; useWorktree: boolean;
-    handoff: { direction: string; sessions: number; git: string; peerName: string | null; peerFp?: string | null; originFp?: string | null };
+    handoff: {
+      direction: string; sessions: number; git: string; peerName: string | null;
+      peerFp?: string | null; originFp?: string | null; notice?: string;
+    };
   }>(peerUrl, `/tasks/${taskId}`);
   const uploadDstPath = join(root, "uploads-dst", uploadName);
   assert.equal(peerTask.status, "paused");
@@ -304,10 +308,13 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   assert.equal(peerTask.handoff.git, "bundle");
   assert.equal(peerTask.handoff.peerFp, localIdentity().fingerprint, "导入标记应记住来源指纹，供安全移回时锁定机器");
   assert.equal(peerTask.handoff.originFp, localIdentity().fingerprint, "导入标记应保留任务原机指纹");
-  assert.match(peerTask.resumePrompt!, /【任务接力】/);
-  assert.match(peerTask.resumePrompt!, /继续:完成第二步/, "原 resumePrompt 应保留在前言之后");
+  // 接力前言走 handoff.notice(orchestrator 下一回合注入一次),**不占** resume_prompt——
+  // 那一列是前端「正等续跑指令」的门禁,占了它刚接过来的任务整排按钮就是禁用的。
+  assert.match(peerTask.handoff.notice!, /【任务接力】/);
+  assert.doesNotMatch(peerTask.resumePrompt!, /【任务接力】/, "前言不该再占 resume_prompt");
+  assert.match(peerTask.resumePrompt!, /继续:完成第二步/, "源机的 checkpoint 指令应原样保留");
   const dstWs = worktreePathFor(dstRepo, taskId);
-  assert.match(peerTask.resumePrompt!, new RegExp(dstWs.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "前言应指出新工作目录");
+  assert.match(peerTask.handoff.notice!, new RegExp(dstWs.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "前言应指出新工作目录");
 
   // 对端 git:分支到位、WIP 提交在、worktree 恢复且两份文件都在。
   const branch = worktreeBranchName(taskId);

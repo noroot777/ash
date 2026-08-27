@@ -456,33 +456,35 @@ async function importValidated(
   }
   const migrated = m.sessions.filter((s) => usable.get(s.id));
 
-  // ── resumePrompt:告诉续跑的 agent 它被搬过机器了 ───────────────────────
+  // ── 接力前言:告诉续跑的 agent 它被搬过机器了 ─────────────────────────
+  // 这段话**不写进 resume_prompt**——那一列是「任务正等续跑指令」的门禁,写了会让刚
+  // 接过来的任务一进门就把派审/预约/修复/预览整排按钮判成禁用(用户 2026-08-27:接力
+  // 任务除了横幅标记外和普通任务没有区别)。改挂在 handoff 标记的 notice 上,由
+  // orchestrator 在下一回合注入一次,见 handoff-notice.ts。
   const agentType = m.task.agentType ?? "claude";
   const latest = [...m.sessions]
     .filter((s) => s.agentType === agentType)
     .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
     .at(-1);
   const resumable = !!latest && !!usable.get(latest.id);
-  const preamble = [
+  const noticeLines = [
     `【任务接力】本任务从另一台机器(${m.sourceHost})接力到本机继续。`,
     m.git ? "git 分支和已提交的改动已随任务迁移。" : "代码没有随任务迁移,以本机仓库当前状态为准。",
     `工作目录从 ${m.sourceWorkspace ?? "(未知)"} 变为 ${workspace},历史对话里引用的旧绝对路径一律以新目录为准。`,
     "先快速核对工作目录(git log/status、关键文件是否符合预期),再继续完成任务目标。",
-  ].join("");
-  let resumePrompt: string | null;
-  if (m.sessions.length === 0) {
-    resumePrompt = m.task.resumePrompt; // 没跑过的任务原样保留,首跑走正常 fresh 路径
-  } else if (resumable) {
-    resumePrompt = preamble + (m.task.resumePrompt ? `\n\n上次暂停时留下的续跑提示:\n${m.task.resumePrompt}` : "");
-  } else {
-    // 会话文件没到货:续跑会开全新 CLI 会话、只看到这一条消息,任务正文必须自带。
-    notes.push("CLI 会话历史未迁移,续跑将开全新会话(任务正文已并入首条消息)");
-    resumePrompt = [
-      preamble,
-      "\n\n注意:CLI 会话历史没有随任务迁移,这是一个全新会话。任务目标全文如下:\n\n" + m.task.body,
-      m.task.resumePrompt ? `\n\n上次暂停时留下的续跑提示:\n${m.task.resumePrompt}` : "",
-    ].join("");
+  ];
+  // 源机留下的 checkpoint 指令原样带走,不再被前言裹一层。
+  let resumePrompt = m.task.resumePrompt;
+  if (m.sessions.length > 0 && !resumable) {
+    notes.push("CLI 会话历史未迁移,续跑将开全新会话");
+    noticeLines.push("注意:CLI 会话历史没有随任务迁移,这是一个全新会话。");
+    // 挂着 checkpoint 指令时续跑走 continueTask 而不是 runTask,那条路的 prompt 里
+    // **不含任务正文**——会话历史又没到货,不自带就等于让 agent 空手上阵。
+    if (resumePrompt) {
+      resumePrompt = `任务目标全文如下:\n\n${m.task.body}\n\n上次暂停时留下的续跑提示:\n${resumePrompt}`;
+    }
   }
+  const handoffNotice = noticeLines.join("");
 
   const marker: TaskHandoff = {
     // 覆盖旧 out 存档不一定是回家：任务再次交给曾持有机器时也会命中 returning。
@@ -505,6 +507,7 @@ async function importValidated(
     at: now(),
     sessions: migrated.length,
     git: useWorktree && m.git ? "bundle" : "none",
+    notice: handoffNotice,
   };
   const status = SETTLED.has(m.task.status) ? m.task.status : "canceled";
   const taskValues = {
