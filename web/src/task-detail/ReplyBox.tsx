@@ -26,8 +26,8 @@ import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
 import { useTaskReplyDraft } from "./TaskReplyDrafts.tsx";
 import {
   attachmentsFromPaths,
+  clearSentDraft,
   dropSentAttachments,
-  dropSentText,
   joinDraftText,
   mergeAttachments,
 } from "./withdrawDraft.ts";
@@ -275,7 +275,20 @@ export function ReplyBox({
     }));
   };
 
-  const send = async (scheduledAt?: string) => {
+  // 正在飞的那一次发送。撤回要排在它后面（见下面的 withdraw）：清空和合并谁先谁后
+  // 一旦确定，就不必再去草稿里猜哪一段是刚发出去的。
+  const inFlightSend = useRef<Promise<void> | null>(null);
+
+  const send = (scheduledAt?: string): Promise<void> => {
+    const run = runSend(scheduledAt);
+    inFlightSend.current = run;
+    void run.finally(() => {
+      if (inFlightSend.current === run) inFlightSend.current = null;
+    });
+    return run;
+  };
+
+  const runSend = async (scheduledAt?: string) => {
     if (menuOpen) {
       pickCommand(candidates[selectedIndex]!);
       return;
@@ -287,8 +300,9 @@ export function ReplyBox({
     if (disabled || sending || uploads.uploading || (!value.trim() && !uploads.attachments.length)) return;
     setSending(true);
     setSendError(null);
-    // 发出去的是这一份。请求在途的那一两秒里草稿还可能变（用户又打了字，或者撤回了
-    // 另一条待发送消息把内容并了回来），所以成功之后按这份快照做减法，不是清零。
+    // 发出去的是这一份。成功后只在草稿**逐字还是这一份**时才清掉；动过就整份留着，
+    // 绝不去猜哪一段是刚发出去的（见 withdrawDraft.ts 的 clearSentDraft）。
+    const draftAtSend = value;
     const sentText = value.trim();
     const sentPaths = uploads.attachments.map((attachment) => attachment.path);
     try {
@@ -305,7 +319,7 @@ export function ReplyBox({
         },
       );
       if ("scheduled" in result) scheduled.add(result.message);
-      setValue((current) => dropSentText(current, sentText));
+      setValue((current) => clearSentDraft(current, draftAtSend));
       draft.setAttachments((current) => dropSentAttachments(current, sentPaths));
       uploads.clearError();
       setTarget(null);
@@ -326,8 +340,12 @@ export function ReplyBox({
   // 撤回:先把消息从队列上取下来(失败就什么都不动,免得内容一式两份),成功后正文、
   // 附件、这条消息当初 @ 指派的执行器配置一并放回对话框——发它时是什么样,撤回后就
   // 还是什么样,用户接着改就行。定时消息连原定时间也留着(还没到点才留)。
+  //
+  // 有发送正在飞就先等它结算完:发送成功会把它自己那份草稿清掉,清完再并入撤回的内容。
+  // 顺序一确定,两边都不必去猜草稿里哪一段是谁的(靠猜会猜错,2026-08-27 审查实测)。
   const withdraw = async (message: ScheduledMessage) => {
     if (!await scheduled.cancel(message.id)) return;
+    await inFlightSend.current;
     setValue((current) => joinDraftText(message.text, current));
     draft.setAttachments((current) => mergeAttachments(attachmentsFromPaths(message.attachments), current));
     if (message.agent) {

@@ -105,24 +105,30 @@ try {
   const sendButton = page.getByRole("button", { name: "排队发送，任务跑完自动发出" });
   assert.equal(await sendButton.isEnabled(), true, "撤回回来的内容应能直接再排一次队");
 
-  // ③ 交错：发送请求在途时撤回另一条消息。请求回来时只许摘掉「这次发出去的那份」，
-  //    在途期间撤回来的正文和附件必须原样留着——那条消息服务端已经取消，清掉就找不回了。
-  const sentText = "排队里的原话\n\n我后来又写的草稿";
+  // ③ 交错：发送请求在途时撤回另一条消息。撤回排在发送结算之后——发送先清掉它自己那份
+  //    草稿，撤回的正文和附件再并进来，最后框里只剩撤回来的这份，谁也没被谁清掉。
   let release;
   replyHeld = new Promise((resolve) => { release = resolve; });
   await sendButton.click();
-  const late = page.getByRole("button", { name: /撤回.*迟到的原话/ });
-  await late.click();
-  await page.getByText("late.pdf", { exact: true }).waitFor();
-  assert.equal(await input.inputValue(), `迟到的原话\n\n${sentText}`, "在途期间撤回的正文应并进草稿");
+  await page.getByRole("button", { name: /撤回.*迟到的原话/ }).click();
+  await page.waitForTimeout(400);
+  assert.deepEqual(deleted, ["msg-fail", "msg-ok", "msg-late"], "在途期间的撤回要立刻真的取消掉，不必等发送");
   release();
-  // 等发送这一轮结算完（草稿里只该剩撤回来的那段）。
   for (let i = 0; i < 100 && await input.inputValue() !== "迟到的原话"; i++) await page.waitForTimeout(100);
 
-  assert.equal(await input.inputValue(), "迟到的原话", "发送回来只许摘掉发出去的那份，撤回来的正文要留着");
-  assert.equal(await page.getByText("late.pdf", { exact: true }).count(), 1, "在途期间撤回来的附件不得被发送清掉");
-  assert.equal(await page.locator(".task-upload-chip").count(), 1, "发出去的附件要摘掉，只剩撤回来的那个");
-  assert.deepEqual(deleted, ["msg-fail", "msg-ok", "msg-late"], "在途期间的撤回同样要真的取消掉");
+  assert.equal(await input.inputValue(), "迟到的原话", "发送结算后撤回来的正文必须原样落在草稿里");
+  await page.getByText("late.pdf", { exact: true }).waitFor();
+  assert.equal(await page.locator(".task-upload-chip").count(), 1, "发出去的附件摘掉，撤回来的那个留下");
+
+  // ④ 审查实测过的那条路：发送在途时把草稿整个重写。发出去的是「方案」，用户改成
+  //    「新方案细节」——里面碰巧包含「方案」两个字，任何子串减法都会把它切成「新细节」。
+  await input.fill("方案");
+  replyHeld = new Promise((resolve) => { release = resolve; });
+  await sendButton.click();
+  await input.fill("新方案细节");
+  release();
+  await page.waitForTimeout(1500);
+  assert.equal(await input.inputValue(), "新方案细节", "在途重写的新草稿必须一个字都不动");
 
   console.log("withdraw scheduled message test passed");
 } finally {

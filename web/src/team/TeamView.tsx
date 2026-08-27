@@ -27,8 +27,8 @@ import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { useTaskReplyDraft } from "../task-detail/TaskReplyDrafts.tsx";
 import {
   attachmentsFromPaths,
+  clearSentDraft,
   dropSentAttachments,
-  dropSentText,
   joinDraftText,
   mergeAttachments,
 } from "../task-detail/withdrawDraft.ts";
@@ -113,18 +113,29 @@ function TeamReplyBox({
     setScheduleOpen(false);
     setSendAt("");
   }, [task.id]);
-  const send = async (scheduledAt?: string) => {
+  // 正在飞的那一次发送；撤回排在它后面，见下面的 withdraw。
+  const inFlightSend = useRef<Promise<void> | null>(null);
+  const send = (scheduledAt?: string): Promise<void> => {
+    const run = runSend(scheduledAt);
+    inFlightSend.current = run;
+    void run.finally(() => {
+      if (inFlightSend.current === run) inFlightSend.current = null;
+    });
+    return run;
+  };
+  const runSend = async (scheduledAt?: string) => {
     if (disabled || sending || uploads.uploading || (!value.trim() && !uploads.attachments.length)) return;
     setSending(true);
     setError(null);
-    // 发出去的是这一份；请求在途时草稿可能已经变了（比如撤回了另一条待发送消息），
-    // 所以成功后按快照做减法，别把新合进来的内容一起清掉。
+    // 发出去的是这一份；成功后只在草稿逐字还是这一份时才清掉，动过就整份留着
+    // （见 task-detail/withdrawDraft.ts 的 clearSentDraft）。
+    const draftAtSend = value;
     const sentText = value.trim();
     const sentPaths = uploads.attachments.map((attachment) => attachment.path);
     try {
       const result = await onSend(sentText, sentPaths, { sendAt: scheduledAt });
       if ("scheduled" in result) scheduled.add(result.message);
-      setValue((current) => dropSentText(current, sentText));
+      setValue((current) => clearSentDraft(current, draftAtSend));
       draft.setAttachments((current) => dropSentAttachments(current, sentPaths));
       uploads.clearError();
       setScheduleOpen(false);
@@ -140,9 +151,11 @@ function TeamReplyBox({
     && scheduledTime > Date.now()
     && (!!value.trim() || uploads.attachments.length > 0);
   // 撤回:取消成功才回填,正文与附件并回当前草稿(见 task-detail/withdrawDraft.ts);
-  // 定时消息把原定时间也留着,还没到点才留。
+  // 定时消息把原定时间也留着,还没到点才留。有发送正在飞就先等它结算完,清空排在
+  // 合并前面,免得两边互相猜草稿里哪一段是谁的。
   const withdraw = async (message: ScheduledMessage) => {
     if (!await scheduled.cancel(message.id)) return;
+    await inFlightSend.current;
     setValue((current) => joinDraftText(message.text, current));
     draft.setAttachments((current) => mergeAttachments(attachmentsFromPaths(message.attachments), current));
     if (message.mode === "timed" && new Date(message.sendAt).getTime() > Date.now()) {

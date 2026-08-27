@@ -9,8 +9,8 @@ import {
 } from "../src/components/ScheduledMessages.tsx";
 import {
   attachmentsFromPaths,
+  clearSentDraft,
   dropSentAttachments,
-  dropSentText,
   joinDraftText,
   mergeAttachments,
 } from "../src/task-detail/withdrawDraft.ts";
@@ -91,21 +91,26 @@ for (const [file, source] of [
 ] as const) {
   const withdraw = source.slice(source.indexOf("const withdraw = async"));
   assert.match(withdraw, /if \(!await scheduled\.cancel\(message\.id\)\) return;/, `${file} 撤回必须先取消成功再回填`);
+  assert.match(withdraw, /await inFlightSend\.current;/, `${file} 撤回必须等在途的发送先结算，靠顺序而不是靠猜`);
   assert.match(withdraw, /joinDraftText\(message\.text, current\)/, `${file} 撤回必须把正文放回草稿`);
   assert.match(withdraw, /attachmentsFromPaths\(message\.attachments\)/, `${file} 撤回必须把附件放回草稿`);
-  // 发送成功后按快照做减法:请求在途时撤回来的内容不能被这一下清掉(2026-08-27 审查发现)。
-  const send = source.slice(source.indexOf("const send = async"), source.indexOf("const withdraw = async"));
-  assert.match(send, /dropSentText\(current, sentText\)/, `${file} 发送后只许摘掉发出去的正文`);
-  assert.match(send, /dropSentAttachments\(current, sentPaths\)/, `${file} 发送后只许摘掉发出去的附件`);
+  // 发送结算只认「草稿逐字没变」这一条:任何形式的子串搜索都可能把用户新写的句子
+  // 当成旧的那一份删掉(2026-08-27 审查实测「方案」→「新方案细节」)。
+  const send = source.slice(source.indexOf("const runSend = async"), source.indexOf("const withdraw = async"));
+  assert.match(send, /const draftAtSend = value;/, `${file} 发送要先留下整份草稿快照`);
+  assert.match(send, /clearSentDraft\(current, draftAtSend\)/, `${file} 发送后只在草稿没动过时才清`);
+  assert.match(send, /dropSentAttachments\(current, sentPaths\)/, `${file} 附件按路径精确摘`);
   assert.doesNotMatch(send, /setValue\(""\)|uploads\.clear\(\)/, `${file} 发送后不得无条件清空草稿`);
+  assert.doesNotMatch(send, /indexOf\(sent|lastIndexOf\(sent/, `${file} 不得靠子串搜索去认「发出去的那一段」`);
 }
 
-// 减法的边界：认得出就只摘那一段，认不出宁可留着（少一段刚撤回的内容，用户根本发现不了）。
-assert.equal(dropSentText("发出去的话", "发出去的话"), "", "草稿没动过就清干净");
-assert.equal(dropSentText("撤回来的\n\n发出去的话", "发出去的话"), "撤回来的", "撤回来的内容必须留下");
-assert.equal(dropSentText("发出去的话\n\n后写的", "发出去的话"), "后写的", "在途期间新写的内容必须留下");
-assert.equal(dropSentText("前\n\n发出去的话\n\n后", "发出去的话"), "前\n\n后", "只摘中间那一段");
-assert.equal(dropSentText("用户自己改过了", "发出去的话"), "用户自己改过了", "认不出发出去的那段就原样留着");
+// 清空的判据只有一条：逐字还是发送时那一份。少一个字、多一个字、改一个字都整份留着。
+assert.equal(clearSentDraft("发出去的话", "发出去的话"), "", "草稿没动过就清干净");
+assert.equal(clearSentDraft("撤回来的\n\n发出去的话", "发出去的话"), "撤回来的\n\n发出去的话", "动过就整份留着");
+assert.equal(clearSentDraft("新方案细节", "方案"), "新方案细节", "在途重写的新草稿不得被当成旧文本的容器切开");
+assert.equal(clearSentDraft("  方案\n  细节", "方案"), "  方案\n  细节", "带缩进的 Markdown 草稿必须原样留着");
+assert.equal(clearSentDraft("方案 方案 方案", "方案"), "方案 方案 方案", "重复子串一个都不许删");
+assert.equal(clearSentDraft("方案 ", "方案"), "方案 ", "连尾随空格的差异都算动过");
 assert.deepEqual(
   dropSentAttachments(
     [{ path: "/tmp/late.pdf", name: "late.pdf", kind: "file", url: null },
@@ -113,7 +118,7 @@ assert.deepEqual(
     ["/tmp/sent.pdf"],
   ).map((attachment) => attachment.path),
   ["/tmp/late.pdf"],
-  "发送只摘掉自己发出去的附件",
+  "发送只摘掉自己发出去的附件（路径是唯一标识，不用猜）",
 );
 
 // 回填的合并语义:撤回的内容排在已有草稿前面,同一路径的附件不重复。

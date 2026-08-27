@@ -48,26 +48,28 @@ export function mergeAttachments(
 }
 
 /**
- * 一条消息发出去之后，从草稿里**只**摘掉发出去的那一段。
+ * 一条消息发出去之后，草稿该不该清。
  *
- * 不能无条件清空：发送是异步的，请求在途的那一两秒里草稿可能已经变了——用户又打了
- * 几个字，或者撤回了另一条待发送消息把正文和附件并了回来。请求一回来就 `setValue("")`
- * 会连这些一起抹掉，而被撤回的那条消息在服务端已经取消，内容再也找不回来。
+ * 判据只有一条：**当前草稿逐字还是发送时的那一份吗**。是就清掉（常态：点了发送就没再
+ * 碰输入框）；只要动过一个字符，就整份留着，一个字都不删。
  *
- * 认不出发出去的那段（用户自己改过）时宁可原样留着：多一句待发的话，用户看得见也删得掉；
- * 少一段刚撤回来的内容，他连自己丢了什么都不知道。
+ * 为什么不去草稿里找「发出去的那一段」再摘掉：字符串里没有版本，也没有编辑来源。
+ * 发送时草稿是「方案」，用户在途中全选重写成「新方案细节」，任何形式的子串搜索都会
+ * 把中间那两个字当成旧的那一份删掉，把用户刚写的句子改成「新细节」——静默、且他根本
+ * 不知道自己丢了什么（2026-08-27 审查实测）。搜不到就留着还不够，**搜得到也可能是错的**，
+ * 所以这里干脆不搜。
+ *
+ * 那「发送在途时撤回另一条消息」怎么办？靠顺序而不是靠猜：撤回等这一次发送结算完再
+ * 回填（见 ReplyBox / TeamView 的 withdraw），清空发生在合并之前，两边都不用推断。
  */
-export function dropSentText(current: string, sent: string): string {
-  if (!sent) return current;
-  if (current.trim() === sent) return "";
-  const index = current.lastIndexOf(sent);
-  if (index < 0) return current;
-  const before = current.slice(0, index).trimEnd();
-  const after = current.slice(index + sent.length).trimStart();
-  return before && after ? `${before}\n\n${after}` : before || after;
+export function clearSentDraft(current: string, draftAtSend: string): string {
+  return current === draftAtSend ? "" : current;
 }
 
-/** 同理，附件只摘掉这次真发出去的那几个路径，请求在途期间新加进来的留着。 */
+/**
+ * 附件按路径摘：路径是附件的唯一标识，「这一个是不是刚发出去的那一个」有确定答案，
+ * 不像正文那样要猜——所以这里可以精确减，在途期间新加进来的原样留着。
+ */
 export function dropSentAttachments(
   current: UploadAttachment[],
   sentPaths: string[],
