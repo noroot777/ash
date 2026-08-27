@@ -13,8 +13,10 @@ import {
   SlidersHorizontal,
   Stack,
   Terminal,
+  UserCircle,
   UsersThree,
 } from "@phosphor-icons/react";
+import { AccountSettings } from "./AccountSettings.tsx";
 import { ArchiveSettings } from "./ArchiveSettings.tsx";
 import { ConfigTransferSettings } from "./ConfigTransferSettings.tsx";
 import { DefaultsSettings } from "./DefaultsSettings.tsx";
@@ -49,6 +51,7 @@ export type SettingsSection =
   | "cli-env"
   | "config"
   | "users"
+  | "account"
   | "defaults";
 
 // `requires` 决定这一节**在导航里显不显示**,不决定它存不存在 —— 两者分开的原因见
@@ -74,6 +77,7 @@ const SYSTEM_NAV: readonly NavItem[] = [
   { id: "cli-env", label: "个人 CLI 环境", icon: Terminal, requires: "multi" },
   { id: "config", label: "配置搬家", icon: ArrowsLeftRight },
   { id: "users", label: "用户", icon: UsersThree, requires: "multiAdmin" },
+  { id: "account", label: "我的账号", icon: UserCircle, requires: "multi" },
   { id: "defaults", label: "默认规则", icon: SlidersHorizontal },
 ];
 
@@ -184,6 +188,7 @@ export function SettingsPage({
           {section === "cli-env" && <PersonalCliSettings notify={notify} />}
           {section === "config" && <ConfigTransferSettings notify={notify} />}
           {section === "users" && <UsersSettings notify={notify} />}
+          {section === "account" && <AccountSettings notify={notify} />}
           {section === "defaults" && <DefaultsSettings notify={notify} />}
           {section === "project" && project && (
             <ProjectSettingsPanel
