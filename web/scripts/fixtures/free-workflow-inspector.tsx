@@ -222,6 +222,15 @@ const waitingChatState: FreeWorkflowApiState = {
   reviews: [],
 };
 
+// 停在检查点的样子：任务**不在跑**（paused），身上挂着 agent 自己留的续跑指令。
+// 后端 reserveFreeReview 同样放行（它只拦 backlog / 归档 / 验收后 / 审查中 / done 且
+// 没有 stopped run），所以「跑完就审」这一手在这里恰恰是最该有的。
+const pausedCheckpointState: FreeWorkflowApiState = {
+  ...repairState,
+  taskId: "free-paused-task",
+  reviews: [],
+};
+
 const reviewer = {
   id: "reviewer-one", name: "Codex 审查", agentType: "codex", executorId: "reviewer-executor",
   executorLabel: "codex@test", model: "gpt-test", reasoningEffort: "high",
@@ -298,6 +307,12 @@ window.fetch = (input, init) => {
   }
   if (url.pathname.startsWith("/api/tasks/free-waiting-task/free-workflow")) {
     return Promise.resolve(new Response(JSON.stringify(waitingChatState), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+  }
+  if (url.pathname.startsWith("/api/tasks/free-paused-task/free-workflow")) {
+    return Promise.resolve(new Response(JSON.stringify(pausedCheckpointState), {
       status: 200,
       headers: { "content-type": "application/json" },
     }));
@@ -466,6 +481,19 @@ const manualChatTask = {
   workflowMode: "free",
 } as Task;
 
+const pausedCheckpointTask = {
+  id: "free-paused-task",
+  title: "停在检查点的任务",
+  // 关键就在这里:paused 不是 running/queued,taskBusy 为假。只按 taskBusy 判「预约模式」
+  // 时,这颗按钮会退回「派审查」并被 waiting 一票否决——后端明明放行(第 1 轮审查实测)。
+  status: "paused",
+  mode: "single",
+  parentId: null,
+  reviewOf: null,
+  workflowMode: "free",
+  resumePrompt: "继续:把第二步做完",
+} as Task;
+
 const waitingChatTask = {
   id: "free-waiting-task",
   title: "接力刚落地的任务",
@@ -485,6 +513,7 @@ createRoot(document.getElementById("root")!).render(
         <div className="toolbar-repair-fixture"><FreeWorkflowToolbar task={repairTask} notify={() => undefined} /></div>
         <div className="toolbar-chat-rework-fixture"><FreeWorkflowToolbar task={manualChatTask} notify={() => undefined} /></div>
         <div className="toolbar-waiting-fixture"><FreeWorkflowToolbar task={waitingChatTask} notify={() => undefined} /></div>
+        <div className="toolbar-paused-fixture"><FreeWorkflowToolbar task={pausedCheckpointTask} notify={() => undefined} /></div>
       </div>
       <div style={{ display: "flex", gap: 20, height: 640 }}>
         <div style={{ flex: 1 }} />

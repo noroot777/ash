@@ -55,7 +55,15 @@ export type FreeReviewView = {
   /** 最近一条链异常停止（验收页要警示，不能静默当成没审过） */
   failedRun: FreeReviewRun | null;
   taskBusy: boolean;
+  /** 任务挂着待答复的提问或待续跑的检查点指令 —— 「立即派审/修复/开预览」后端必拒（409）。 */
+  waiting: boolean;
   reservationArmed: boolean;
+  /** 派审按钮此刻的语义是「预约一轮跑完就审」而不是「立刻开审」。
+   *  判据是**这个任务后面还会再动**:正在跑(taskBusy)、停在检查点或等答复(waiting)、
+   *  或者已经挂着一条预约(armed,点进去是改预约)。后端 reserveFreeReview 对这三种
+   *  一律放行,所以这里必须一起认——只认 taskBusy 会把「暂停在检查点的任务」判成
+   *  「立刻开审」,再被 waiting 一票否决,入口就死了(第 1 轮审查实测)。 */
+  reservationMode: boolean;
   /** armed 且挂着 runId = 自动复审链的续轮预约 */
   autoRereview: boolean;
   /** 任务在改（running/queued）且有未通过意见在身或挂着自动续轮——「修复中」的叙事。
@@ -75,6 +83,7 @@ export function freeReviewView(state: FreeWorkflowState | null | undefined, task
   const stoppedRun = latestRun?.status === "stopped" ? latestRun : null;
   const failedRun = latestRun?.status === "failed" ? latestRun : null;
   const taskBusy = task.status === "running" || task.status === "queued";
+  const waiting = !!task.question || !!task.resumePrompt;
   const reservationArmed = !!state?.reviewReservation?.armed;
   const autoRereview = reservationArmed && !!state?.reviewReservation?.runId;
   const freshness = freeConclusionFreshness(latestRun, state?.workspaceHead, state?.workspaceDirty);
@@ -84,7 +93,9 @@ export function freeReviewView(state: FreeWorkflowState | null | undefined, task
     stoppedRun,
     failedRun,
     taskBusy,
+    waiting,
     reservationArmed,
+    reservationMode: taskBusy || waiting || reservationArmed,
     autoRereview,
     repairing: taskBusy && (!!stoppedRun || autoRereview),
     freshness,

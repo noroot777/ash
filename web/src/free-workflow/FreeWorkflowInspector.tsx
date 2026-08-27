@@ -138,15 +138,15 @@ export function FreeWorkflowInspector({
     ? { branch: task.acceptedTargetBranch, baseCommit: task.acceptedBaseCommit, mergeCommit: task.acceptedMergeCommit }
     : null;
   const view = freeReviewView(state, task);
-  const { latestRun, reviewing, stoppedRun, taskBusy, reservationArmed, repairing, stale } = view;
+  const { latestRun, reviewing, stoppedRun, taskBusy, waiting, reservationArmed, reservationMode, repairing, stale } = view;
   const taskReady = task.status !== "backlog";
   // waiting 只锁「立即派审/修复」，预约与取消预约照常（同 Toolbar，也与后端口径一致）。
-  const waiting = !!task.question || !!task.resumePrompt;
+  // waiting / reservationMode 都由 freeReviewCopy.ts 的 freeReviewView 算,两个表面共用
+  // 一份定义 —— 各写各的时候就漂过。
   // 接力出去的任务在本机是历史存档，后端一律 409 —— 判据必须与 Toolbar 完全一样，
   // 否则同一个派审动作会出现「底部那颗灰、这里这颗能点（点了吃 409）」。
   const locked = task.stage === "accepted" || task.stage === "merged" || !!task.archived
     || task.handoff?.direction === "out";
-  const reservationMode = taskBusy || reservationArmed;
   const reviewActionLabel = reviewing
     ? "审查进行中"
     : reservationArmed

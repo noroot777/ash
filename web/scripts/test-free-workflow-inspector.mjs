@@ -44,6 +44,14 @@ try {
   await waitingReserve.waitFor();
   assert.equal(await waitingReserve.isEnabled(), true, "任务挂着待续跑指令时仍应允许预约复审");
 
+  // 同一条门禁的另一半:**停在检查点**(paused + resumePrompt)的任务不是 running/queued,
+  // 只按「任务在跑」判预约模式就会把它判成「立刻开审」,再被 waiting 一票否决,入口死掉。
+  // 后端 reserveFreeReview 对 paused 一路放行。
+  const pausedToolbar = page.locator(".toolbar-paused-fixture");
+  const pausedReserve = pausedToolbar.getByRole("button", { name: "预约复审" });
+  await pausedReserve.waitFor();
+  assert.equal(await pausedReserve.isEnabled(), true, "停在检查点的任务仍应允许预约复审");
+
   // 预约模式属于「任务在跑」的场景：修复/修改开跑后从这里预约完成后的复审。
   const chatToolbar = page.locator(".toolbar-chat-rework-fixture");
   await chatToolbar.getByRole("status").filter({ hasText: "任务修改中" }).waitFor();
