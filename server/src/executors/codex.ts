@@ -2,7 +2,6 @@ import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { AgentEvent, TokenUsage } from "@ash/shared";
 import { cliConfigOverrideEnvPatch } from "@ash/shared/cli-overrides";
-import { ASH_MCP_IDENTITY_ENV_VARS } from "@ash/shared/mcp";
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { openCodexResident } from "./codex-resident.js";
@@ -19,6 +18,8 @@ import {
 } from "./diagnostics.js";
 import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
 import { codexAshMcpServerName } from "./codex-mcp.js";
+
+const ASH_MCP_IDENTITY_ENV_VARS = ["ASH_TASK_ID", "ASH_TURN_TOKEN", "ASH_DIRECTION_TOKEN"] as const;
 import { openCodexAppServer, readCodexAppServerState } from "./codex-app-server.js";
 
 // 供应商的 key 走环境变量,不进命令行 —— `-c` 参数会原样进 commandLine,而后者存进

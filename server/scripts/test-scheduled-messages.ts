@@ -566,23 +566,25 @@ try {
   // 真引导成功后新方向仍在跑：旧回合迟到的 ask_question（旧 token 或无 token）都不能写入。
   const lateOldRun = orchestrator.continueTask(steerLateTaskId, "保持运行等待引导");
   await waitFor(() => runs.isRunning(steerLateTaskId), "迟到工具复现的旧回合没有进入 running");
-  const oldTurnToken = (await db.select().from(tasks).where(eq(tasks.id, steerLateTaskId))).at(0)!.activeTurnToken!;
+  const oldIdentity = (await db.select().from(tasks).where(eq(tasks.id, steerLateTaskId))).at(0)!;
   await db.insert(scheduledMessages).values(
     messageRow("scheduled-steer-late", steerLateTaskId, "保持新方向运行", "queued"),
   );
   assert.equal((await steer.steerQueuedMessage("scheduled-steer-late")).ok, true, "迟到工具复现应先成功引导");
-  const newTurnToken = (await db.select().from(tasks).where(eq(tasks.id, steerLateTaskId))).at(0)!.activeTurnToken!;
-  assert.equal(newTurnToken, oldTurnToken, "原生引导仍属于同一个活动回合，必须保留 turn token");
-  const api = new Hono();
-  runRoutes.mountTaskRunRoutes(api);
-  const currentAsk = await api.request(`/tasks/${steerLateTaskId}/ask`, {
+  const newIdentity = (await db.select().from(tasks).where(eq(tasks.id, steerLateTaskId))).at(0)!;
+  assert.equal(newIdentity.activeTurnToken, oldIdentity.activeTurnToken, "原生引导必须保留 turn token");
+  assert.notEqual(newIdentity.activeDirectionToken, oldIdentity.activeDirectionToken, "引导必须旋转方向 token");
+  const api = new Hono(); runRoutes.mountTaskRunRoutes(api);
+  const ask = (direction?: string) => api.request(`/tasks/${steerLateTaskId}/ask`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-ash-turn-token": oldTurnToken },
+    headers: { "content-type": "application/json", "x-ash-turn-token": oldIdentity.activeTurnToken!,
+      ...(direction ? { "x-ash-direction-token": direction } : {}) },
     body: JSON.stringify({ question: "current question after native steer" }),
   });
-  assert.equal(currentAsk.status, 200, "同一进程后续工具调用必须继续使用原 turn token");
-  await db.update(tasks).set({ question: null, questionOptions: null, questionItems: null })
-    .where(eq(tasks.id, steerLateTaskId));
+  assert.equal((await ask(oldIdentity.activeDirectionToken!)).status, 409, "旧方向迟到提问必须被拒绝");
+  assert.equal((await ask()).status, 409, "缺少新方向身份的提问必须被拒绝");
+  assert.equal((await ask(newIdentity.activeDirectionToken!)).status, 200, "新方向工具调用应继续有效");
+  await db.update(tasks).set({ question: null, questionOptions: null, questionItems: null }).where(eq(tasks.id, steerLateTaskId));
   assert.equal(
     (await db.select().from(tasks).where(eq(tasks.id, steerLateTaskId))).at(0)!.question,
     null,
@@ -592,15 +594,12 @@ try {
   assert.equal(await lateOldRun, true);
   await waitFor(async () => (await db.select().from(tasks).where(eq(tasks.id, steerLateTaskId))).at(0)!.status !== "running",
     "挂起的新方向没有完成停止结算");
-  console.log("✓ 原生引导保留 turn token，同一进程的后续工具调用仍然有效");
+  console.log("✓ 原生引导保留 turn token、旋转方向 token，旧方向迟到调用被拒绝");
 
-  // ── 进程死在投递中途:重启后必须自己回来 ──────────────────────────────────
-  // 上一段证明了「锁挡回不丢消息」,但锁不是唯一能掐断投递的东西 —— 服务重启会把内存里
+  // ── 进程死在投递中途:重启后必须自己回来。锁不是唯一能掐断投递的东西，服务重启会把内存里
   // 的等待/在途标记连根拔掉。所以「有人正在送」必须**落库**成一个可回收的租约,而不是
   // 提前把状态改成 sent:后者一断电就是一条永远没人管的 sent 行(2026-08-07 那条就是)。
-  await db.insert(scheduledMessages).values([
-    messageRow("scheduled-crashed", crashTaskId, "重启也不许弄丢这句话", "queued"),
-  ]);
+  await db.insert(scheduledMessages).values([messageRow("scheduled-crashed", crashTaskId, "重启也不许弄丢这句话", "queued")]);
   const crash = spawnSync(process.execPath, [...process.execArgv, selfPath], {
     env: { ...process.env, ASH_TEST_CRASH_MESSAGE: "scheduled-crashed" },
     encoding: "utf8",

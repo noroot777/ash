@@ -52,6 +52,10 @@ export const COMPLETION_REMINDER = (taskId: string, sharedTeamWorker: boolean, r
   !STRICT_DONE_PROTOCOL ? "" :
   `\n\n(ash 完成协议:taskId=${taskId}。若本回合结束时任务目标已达成,先调用 complete_task 确认再结束,否则按未完成记 failed;到等待检查点则用 pause_task。${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)})`;
 
+export const DIRECTION_PROTOCOL = (token: string) =>
+  !STRICT_DONE_PROTOCOL ? "" :
+    `\n\n【当前方向身份】本方向调用 complete_task、pause_task 或 ask_question 时，必须在工具参数 directionToken 中原样传入 "${token}"。引导会话后只认最新用户消息附带的 token，旧方向不得沿用。`;
+
 // 续聊(follow-up)回合的尾巴:任务早就到终态了,这一轮是「完成之后的对话」,
 // 不该拿严格完成协议吓唬 agent(不确认就 failed)—— 这一轮不确认,任务状态原样不动。
 //

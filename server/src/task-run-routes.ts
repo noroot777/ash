@@ -228,6 +228,12 @@ api.post("/tasks/:id/pause", async (c) => {
         : "MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），检查点已拒绝写入",
     }, 409);
   }
+  const pauseDirection = c.req.header("x-ash-direction-token");
+  if (r.activeDirectionToken && pauseDirection !== r.activeDirectionToken) {
+    return c.json({ error: pauseDirection
+      ? "检查点来自引导前的旧方向，已拒绝写入当前会话"
+      : "MCP 未携带当前方向身份（请传当前消息附带的 directionToken），检查点已拒绝写入" }, 409);
+  }
   const updated = await db
     .update(tasks)
     .set({ resumePrompt: rp, updatedAt: now() })
@@ -237,6 +243,9 @@ api.post("/tasks/:id/pause", async (c) => {
       r.activeTurnToken === null
         ? isNull(tasks.activeTurnToken)
         : eq(tasks.activeTurnToken, r.activeTurnToken),
+      r.activeDirectionToken === null
+        ? isNull(tasks.activeDirectionToken)
+        : eq(tasks.activeDirectionToken, r.activeDirectionToken),
     ))
     .returning({ id: tasks.id });
   if (!updated.length) return c.json({ error: "当前回合已经结束或已被引导，检查点未写入" }, 409);
@@ -263,6 +272,12 @@ api.post("/tasks/:id/complete", async (c) => {
         : "MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），完成确认已拒绝写入",
     }, 409);
   }
+  const completeDirection = c.req.header("x-ash-direction-token");
+  if (r.activeDirectionToken && completeDirection !== r.activeDirectionToken) {
+    return c.json({ error: completeDirection
+      ? "完成确认来自引导前的旧方向，已拒绝写入当前会话"
+      : "MCP 未携带当前方向身份（请传当前消息附带的 directionToken），完成确认已拒绝写入" }, 409);
+  }
   const updated = await db
     .update(tasks)
     .set({ completeConfirmedAt: now(), updatedAt: now() })
@@ -272,6 +287,9 @@ api.post("/tasks/:id/complete", async (c) => {
       r.activeTurnToken === null
         ? isNull(tasks.activeTurnToken)
         : eq(tasks.activeTurnToken, r.activeTurnToken),
+      r.activeDirectionToken === null
+        ? isNull(tasks.activeDirectionToken)
+        : eq(tasks.activeDirectionToken, r.activeDirectionToken),
     ))
     .returning({ id: tasks.id });
   if (!updated.length) return c.json({ error: "当前回合已经结束或已被引导，完成确认未写入" }, 409);
@@ -363,12 +381,21 @@ api.post("/tasks/:id/ask", async (c) => {
         : "MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），提问已拒绝写入",
     }, 409);
   }
+  const askDirection = c.req.header("x-ash-direction-token");
+  if (r.mode !== "team" && r.activeDirectionToken && askDirection !== r.activeDirectionToken) {
+    return c.json({ error: askDirection
+      ? "提问来自引导前的旧方向，已拒绝写入当前会话"
+      : "MCP 未携带当前方向身份（请传当前消息附带的 directionToken），提问已拒绝写入" }, 409);
+  }
   const asked = await setTaskQuestion({
     taskId,
     question: q,
     options: opts,
     items: questionItems,
-    ...(r.mode === "team" ? {} : { currentTurn: { token: r.activeTurnToken } }),
+    ...(r.mode === "team" ? {} : { currentTurn: {
+      token: r.activeTurnToken,
+      directionToken: r.activeDirectionToken,
+    } }),
   });
   if (!asked) return c.json({ error: "当前回合已经结束或已被引导，提问未写入" }, 409);
   return c.json({

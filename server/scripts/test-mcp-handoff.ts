@@ -56,7 +56,7 @@ assert.equal(codexPlan[0].args.stage, "verified");
 // ── ② claude 流：tool_use 与 tool_result 靠 id 配对 ──────────────────────────
 const claudeStream = [
   `{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_1","name":"mcp__ash__complete_task","input":{}}}}`,
-  `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"mcp__ash__complete_task","input":{"taskId":"${TASK}"}}]}}`,
+  `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"mcp__ash__complete_task","input":{"taskId":"${TASK}","directionToken":"old-direction"}}]}}`,
   `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","is_error":true,"content":"MCP server is not connected"}]}}`,
 ].join("\n");
 writeStream(TASK, "sessB", "2026-08-06T05:00:00.000Z", claudeStream);
@@ -67,6 +67,8 @@ assert.equal(claudeCalls.length, 1, "流式增量那条 tool_use（input 空）�
 assert.equal(claudeCalls[0].tool, "complete_task");
 assert.equal(claudeCalls[0].args.taskId, TASK, "取的必须是 assistant 那条完整参数，不是流式空壳");
 assert.equal(planReplay(claudeCalls, TASK).length, 1);
+assert.equal(planReplay(claudeCalls, TASK, "new-direction").length, 0,
+  "引导前旧方向的失败 complete_task 不得被补录进新方向");
 
 // ── ③ 白名单：有后果的调用一律不补 ───────────────────────────────────────────
 // 这是整条路径最要命的一条红灯：accept_task 补一次 = 多合并一次代码。
@@ -144,13 +146,25 @@ assert.ok(
   "补录必须留痕，否则用户看到的是「我没点它自己就过了」",
 );
 
-// ── ⑪ 没有输出文件（非 detached 的老路径）：安静返回，不炸 ──────────────────
+// ── ⑪ 方向身份：旧方向不补，新方向才允许补 complete_task ─────────────────
+await db.update(tasks).set({ activeDirectionToken: "new-direction", completeConfirmedAt: null }).where(eq(tasks.id, TASK));
+assert.equal(await replayUndeliveredMcpCalls({
+  taskId: TASK, sessId: "sessB", turnStart: "2026-08-06T05:00:00.000Z", agentType: "claude",
+}), 0, "旧方向 transport closed 也不能绕过方向隔离");
+const currentDirectionStream = claudeStream.replaceAll("old-direction", "new-direction");
+writeStream(TASK, "sessC", "2026-08-06T05:01:00.000Z", currentDirectionStream);
+assert.equal(await replayUndeliveredMcpCalls({
+  taskId: TASK, sessId: "sessC", turnStart: "2026-08-06T05:01:00.000Z", agentType: "claude",
+}), 1, "当前方向的未送达完成确认仍应补录");
+assert.ok((await db.select().from(tasks).where(eq(tasks.id, TASK))).at(0)!.completeConfirmedAt);
+
+// ── ⑫ 没有输出文件（非 detached 的老路径）：安静返回，不炸 ──────────────────
 assert.equal(
   await replayUndeliveredMcpCalls({ taskId: TASK, sessId: "nope", turnStart: at, agentType: "codex" }),
   0,
 );
 
-// ── ⑫ 事前预警：谁手里还握着 MCP 通道（restart.mjs 第 3 步的闸）──────────────
+// ── ⑬ 事前预警：谁手里还握着 MCP 通道（restart.mjs 第 3 步的闸）──────────────
 // 这一段跟上面的补捞是同一件事的两头：能不掐断就别掐断，掐断了才谈补捞。
 const { holdersOf, isMcpProcess, parsePsTable } = await import("../src/mcp-holders.js");
 
@@ -190,7 +204,7 @@ assert.deepEqual(holdersOf(psTable, [100, 200]).sort(), [100, 200], "隔着 shel
 assert.deepEqual(holdersOf(psTable, [999]), [], "不相干的 MCP 进程不算在谁头上");
 assert.deepEqual(holdersOf(psTable, []), [], "没有在跑的 agent → 随便刷新");
 
-// ── ⑬ 宽严不对称是设计，不是疏忽 ────────────────────────────────────────────
+// ── ⑭ 宽严不对称是设计，不是疏忽 ────────────────────────────────────────────
 // 补捞侧敢认「连上了又断」，是因为它另外叠了幂等白名单；MCP 端的进程内重试对所有
 // 工具一视同仁，认了 ECONNRESET 就等于允许 dispatch 被做两遍。哪天有人图省事把宽的
 // 那份接过去统一口径，这两条会先红。

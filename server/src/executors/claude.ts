@@ -315,6 +315,7 @@ export function singleRunFromResident(
         else {
           accepting = false;
           resident.kill();
+          throw Object.assign(error instanceof Error ? error : new Error(String(error)), { nativeSteerRestart: true });
         }
         throw error;
       }

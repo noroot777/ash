@@ -163,8 +163,9 @@ try {
     task("review-task", { reviewOf: "target" }),
     task("reviewer-role"),
     task("ordered"),
-    task("claude-native-state", { activeTurnToken: "claude-native-token" }),
-    task("codex-native-state", { activeTurnToken: "codex-native-token" }),
+    task("claude-native-state", { activeTurnToken: "claude-native-token", activeDirectionToken: "claude-old-direction" }),
+    task("codex-native-state", { activeTurnToken: "codex-native-token", activeDirectionToken: "codex-old-direction" }),
+    task("claude-native-fallback", { activeTurnToken: "fallback-token", activeDirectionToken: "fallback-old-direction" }),
     task("stopping", { activeTurnToken: "stopping-token" }),
     task("late-stop-db", {
       activeTurnToken: "late-stop-token",
@@ -182,7 +183,7 @@ try {
       questionOptions: previousQuestionOptions,
       questionItems: previousQuestionItems,
     }),
-    task("token", { activeTurnToken: "new-token" }),
+    task("token", { activeTurnToken: "new-token", activeDirectionToken: "new-direction" }),
     task("patch-source", { activeTurnToken: "source-token" }),
     task("patch-target", { activeTurnToken: "target-token" }),
     task("team-patcher", { mode: "team", status: "idle", activeTurnToken: null }),
@@ -197,19 +198,17 @@ try {
     message("ordered-b", "ordered"),
     message("m-claude-native-state", "claude-native-state"),
     message("m-codex-native-state", "codex-native-state"),
+    message("m-claude-native-fallback", "claude-native-fallback"),
     message("m-stopping", "stopping"),
     message("m-late-stop-db", "late-stop-db"),
     message("m-lost-db", "lost-db"),
   ]);
-  await db.insert(sessions).values({
-    id: "s-stopping",
-    taskId: "stopping",
-    role: "single",
-    agentType: "claude",
-    executor: "claude",
-    cwd: root,
-    startedAt: at,
-  });
+  await db.insert(sessions).values([
+    { id: "s-stopping", taskId: "stopping", role: "single", agentType: "claude",
+      executor: "claude", cwd: root, startedAt: at },
+    { id: "s-fallback", taskId: "claude-native-fallback", role: "single", agentType: "claude",
+      executor: "claude", cwd: root, startedAt: at },
+  ]);
 
   for (const [messageId, pattern] of [
     ["m-verify", /验证/],
@@ -265,6 +264,7 @@ try {
   assert.equal(claudeNativeState.completeConfirmedAt, null, "interrupt ACK 前旧方向的完成票必须清掉");
   assert.equal(claudeNativeState.resumePrompt, null, "interrupt ACK 前旧方向的检查点必须清掉");
   assert.equal(claudeNativeState.question, "新方向发送后的问题", "ACK 后的新方向状态不得被二次清理");
+  assert.notEqual(claudeNativeState.activeDirectionToken, "claude-old-direction", "Claude 引导必须旋转方向 token");
   assert.equal(runs.takeConfirmed("claude-native-state"), false, "旧方向的内存完成票也必须清掉");
   runs.untrackRun("claude-native-state", claudeNativeHandle);
   runs.releaseTurn("claude-native-state");
@@ -295,9 +295,32 @@ try {
   assert.equal(codexNativeState.completeConfirmedAt, "2026-08-26T12:00:00.000Z");
   assert.equal(codexNativeState.resumePrompt, "ACK 后写入的检查点");
   assert.equal(codexNativeState.question, "ACK 后写入的问题");
+  assert.notEqual(codexNativeState.activeDirectionToken, "codex-old-direction", "Codex 引导必须旋转方向 token");
   runs.untrackRun("codex-native-state", codexNativeHandle);
   runs.releaseTurn("codex-native-state");
   console.log("✓ Codex steer ACK 后产生的合法完成、检查点与提问不会被二次清理抹掉");
+
+  assert.equal(runs.claimTurn("claude-native-fallback", "single"), true);
+  const fallbackHandle = { kill: () => {}, steer: async () => {
+    throw Object.assign(new Error("Claude interrupt ACK 超时"), { nativeSteerRestart: true });
+  } };
+  runs.trackRun("claude-native-fallback", fallbackHandle);
+  runs.bindNativeSteer("claude-native-fallback", fallbackHandle, { agentType: "claude", record: () => {} });
+  const fallback = await steer.steerQueuedMessage("m-claude-native-fallback");
+  assert.equal(fallback.ok, false);
+  if (!fallback.ok) assert.match(fallback.error, /结束当前回合.*新回合重新投递/);
+  const fallbackTask = (await db.select().from(tasks).where(eq(tasks.id, "claude-native-fallback"))).at(0)!;
+  assert.notEqual(fallbackTask.activeDirectionToken, "fallback-old-direction", "降级杀旧回合后不得重开旧方向身份");
+  assert.match(readFileSync(join(root, "runs", "claude-native-fallback", "s-fallback.md"), "utf8"),
+    /未确认原生引导.*结束当前回合.*新回合重新投递/, "降级必须留下刷新后可见的系统提示");
+  const fallbackMessage = (await db.select().from(scheduledMessages)
+    .where(eq(scheduledMessages.id, "m-claude-native-fallback"))).at(0)!;
+  assert.equal(fallbackMessage.status, "pending");
+  assert.equal(fallbackMessage.deliveringSince, null);
+  await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.id, fallbackMessage.id));
+  runs.untrackRun("claude-native-fallback", fallbackHandle);
+  runs.releaseTurn("claude-native-fallback");
+  console.log("✓ Claude ACK 失败明确降级重投，并留下持久时间线说明");
 
   assert.equal(runs.claimTurn("stopping", "single"), true);
   const stoppingHandle = { kill: () => { kills++; } };
@@ -400,9 +423,10 @@ try {
   mountTaskRunRoutes(api);
   mountTaskRoutes(api);
   mountTaskStageRoutes(api);
-  const complete = (token?: string) => api.request("/tasks/token/complete", {
+  const complete = (token?: string, direction?: string) => api.request("/tasks/token/complete", {
     method: "POST",
-    headers: token ? { "x-ash-turn-token": token } : undefined,
+    headers: { ...(token ? { "x-ash-turn-token": token } : {}),
+      ...(direction ? { "x-ash-direction-token": direction } : {}) },
   });
   const missingComplete = await complete();
   assert.equal(missingComplete.status, 409);
@@ -418,16 +442,19 @@ try {
     null,
     "旧 token 不得写入完成票",
   );
-  const current = await complete("new-token");
+  assert.equal((await complete("new-token")).status, 409, "缺少方向 token 的当前回合也必须拒绝");
+  assert.equal((await complete("new-token", "old-direction")).status, 409, "旧方向完成确认必须拒绝");
+  const current = await complete("new-token", "new-direction");
   assert.equal(current.status, 200, "当前回合 token 应能确认完成");
   assert.ok((await db.select().from(tasks).where(eq(tasks.id, "token"))).at(0)!.completeConfirmedAt);
   runs.takeConfirmed("token");
 
-  const postTurnAction = (path: string, body: unknown, token?: string) => api.request(path, {
+  const postTurnAction = (path: string, body: unknown, token?: string, direction?: string) => api.request(path, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       ...(token ? { "x-ash-turn-token": token } : {}),
+      ...(direction ? { "x-ash-direction-token": direction } : {}),
     },
     body: JSON.stringify(body),
   });
@@ -437,13 +464,15 @@ try {
     const paused = await postTurnAction("/tasks/token/pause", { resumePrompt: "stale checkpoint" }, token);
     assert.equal(paused.status, 409, "旧 token 或缺 token 的 pause_task 必须被拒绝");
   }
+  assert.equal((await postTurnAction("/tasks/token/pause", { resumePrompt: "stale direction" },
+    "new-token", "old-direction")).status, 409, "旧方向 pause_task 必须被拒绝");
   assert.equal(
     (await db.select().from(tasks).where(eq(tasks.id, "token"))).at(0)!.resumePrompt,
     null,
     "旧回合不得写入检查点",
   );
   assert.equal(
-    (await postTurnAction("/tasks/token/pause", { resumePrompt: "current checkpoint" }, "new-token")).status,
+    (await postTurnAction("/tasks/token/pause", { resumePrompt: "current checkpoint" }, "new-token", "new-direction")).status,
     200,
     "当前回合 pause_task 应继续可用",
   );
@@ -453,13 +482,15 @@ try {
     const asked = await postTurnAction("/tasks/token/ask", { question: "stale question" }, token);
     assert.equal(asked.status, 409, "旧 token 或缺 token 的 ask_question 必须被拒绝");
   }
+  assert.equal((await postTurnAction("/tasks/token/ask", { question: "stale direction" },
+    "new-token", "old-direction")).status, 409, "旧方向 ask_question 必须被拒绝");
   assert.equal(
     (await db.select().from(tasks).where(eq(tasks.id, "token"))).at(0)!.question,
     null,
     "旧回合不得写入提问",
   );
   assert.equal(
-    (await postTurnAction("/tasks/token/ask", { question: "current question" }, "new-token")).status,
+    (await postTurnAction("/tasks/token/ask", { question: "current question" }, "new-token", "new-direction")).status,
     200,
     "当前回合 ask_question 应继续可用",
   );
@@ -530,6 +561,8 @@ try {
     null,
     "离开 running 后应清掉活动回合 token",
   );
+  assert.equal((await db.select().from(tasks).where(eq(tasks.id, "token"))).at(0)!.activeDirectionToken, null,
+    "离开 running 后应清掉活动方向 token");
   console.log("✓ complete_task 严格绑定当前回合 token，旧回合迟到确认返回 409");
 } finally {
   await releaseTmpDb();

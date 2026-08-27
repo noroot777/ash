@@ -86,8 +86,12 @@ const partialConsuming = (async () => {
 })();
 partialEvents.push({ kind: "text", text: "OLD" });
 await new Promise<void>((resolve) => setImmediate(resolve));
-await assert.rejects(partialClaude.steer!("FIRST"), /stdin 已关闭/,
-  "interrupt 已写出而新消息写失败时，引导应如实失败");
+const partialError = await partialClaude.steer!("FIRST").then(
+  () => { throw new Error("引导应当失败"); },
+  (error) => error as Error & { nativeSteerRestart?: boolean },
+);
+assert.match(partialError.message, /stdin 已关闭/, "interrupt 已写出而新消息写失败时，引导应如实失败");
+assert.equal(partialError.nativeSteerRestart, true, "已 interrupt 的失败必须标明当前回合会被结束并降级重投");
 await Promise.race([
   partialConsuming,
   new Promise((_, reject) => setTimeout(() => reject(new Error("partial steer stream did not finish")), 1_000)),

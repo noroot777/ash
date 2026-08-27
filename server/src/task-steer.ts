@@ -11,7 +11,7 @@ import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
 import { continueTask } from "./orchestrator.js";
-import { abortDelivery, beginDelivery, deliveryOptions, markSent } from "./pending-messages.js";
+import { abortDelivery, beginDelivery, deliveryOptions, flushPendingForTask, markSent } from "./pending-messages.js";
 import {
   isRunning,
   isCanceling,
@@ -23,6 +23,7 @@ import {
   type StopSettle,
   takeConfirmed,
   turnRole,
+  whenTurnIdle,
 } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -30,12 +31,15 @@ import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { id, now } from "./util.js";
 import { nativeCliCommand } from "./skills.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
+import { DIRECTION_PROTOCOL } from "./run-prompts.js";
 
 type MessageRow = typeof scheduledMessages.$inferSelect;
 
 interface PreviousDirectionState {
   activeTurnToken: string | null;
+  activeDirectionToken: string | null;
   clearedTurnToken: string;
+  clearedDirectionToken: string;
   completeConfirmedAt: string | null;
   resumePrompt: string | null;
   question: string | null;
@@ -58,6 +62,7 @@ async function clearPreviousDirectionState(
   const current = (await db
     .select({
       activeTurnToken: tasks.activeTurnToken,
+      activeDirectionToken: tasks.activeDirectionToken,
       completeConfirmedAt: tasks.completeConfirmedAt,
       resumePrompt: tasks.resumePrompt,
       question: tasks.question,
@@ -71,6 +76,7 @@ async function clearPreviousDirectionState(
     throw new Error("任务不存在");
   }
   const clearedTurnToken = rotateTurnToken ? id() : current.activeTurnToken;
+  const clearedDirectionToken = id();
   if (!clearedTurnToken) {
     if (confirmedBefore) confirmDone(taskId);
     throw new Error("当前回合缺少身份 token，无法原生引导");
@@ -82,6 +88,7 @@ async function clearPreviousDirectionState(
       .update(tasks)
       .set({
         activeTurnToken: clearedTurnToken,
+        activeDirectionToken: clearedDirectionToken,
         completeConfirmedAt: null,
         resumePrompt: null,
         question: null,
@@ -94,6 +101,9 @@ async function clearPreviousDirectionState(
         current.activeTurnToken === null
           ? isNull(tasks.activeTurnToken)
           : eq(tasks.activeTurnToken, current.activeTurnToken),
+        current.activeDirectionToken === null
+          ? isNull(tasks.activeDirectionToken)
+          : eq(tasks.activeDirectionToken, current.activeDirectionToken),
         current.completeConfirmedAt === null
           ? isNull(tasks.completeConfirmedAt)
           : eq(tasks.completeConfirmedAt, current.completeConfirmedAt),
@@ -130,17 +140,22 @@ async function clearPreviousDirectionState(
       console.warn(`[ash] 引导会话已清提问，但实时通知失败 ${taskId}:`, error);
     }
   }
-  return { ...current, clearedTurnToken, memoryConfirmed };
+  return { ...current, clearedTurnToken, clearedDirectionToken, memoryConfirmed };
 }
 
-async function discardLateDirectionState(taskId: string, turnToken: string): Promise<void> {
+async function discardLateDirectionState(taskId: string, turnToken: string, directionToken: string): Promise<void> {
   // 原生请求确认接收前，旧方向已经发出的完成/提问/检查点仍可能刚好落库；成功 ACK 后
-  // 再清一遍。此刻新消息还没开始执行，因此不会误删新方向自己产生的状态。token 不旋转。
+  // 再清一遍。此刻新消息还没开始执行，因此不会误删新方向自己产生的状态；turn token
+  // 保持不变，方向 token 已在第一次清理时旋转。
   takeConfirmed(taskId);
   const late = (await db
     .select({ question: tasks.question })
     .from(tasks)
-    .where(and(eq(tasks.id, taskId), eq(tasks.activeTurnToken, turnToken)))).at(0);
+    .where(and(
+      eq(tasks.id, taskId),
+      eq(tasks.activeTurnToken, turnToken),
+      eq(tasks.activeDirectionToken, directionToken),
+    ))).at(0);
   const updatedAt = now();
   await db
     .update(tasks)
@@ -152,7 +167,11 @@ async function discardLateDirectionState(taskId: string, turnToken: string): Pro
       questionItems: null,
       updatedAt,
     })
-    .where(and(eq(tasks.id, taskId), eq(tasks.activeTurnToken, turnToken)));
+    .where(and(
+      eq(tasks.id, taskId),
+      eq(tasks.activeTurnToken, turnToken),
+      eq(tasks.activeDirectionToken, directionToken),
+    ));
   takeConfirmed(taskId);
   if (late?.question) {
     try {
@@ -173,12 +192,16 @@ async function discardLateDirectionState(taskId: string, turnToken: string): Pro
 async function restorePreviousDirectionState(
   taskId: string,
   previous: PreviousDirectionState,
+  preserveDirectionBarrier = false,
 ): Promise<boolean> {
   const updatedAt = now();
   let restored = await db
     .update(tasks)
     .set({
       activeTurnToken: previous.activeTurnToken,
+      activeDirectionToken: preserveDirectionBarrier
+        ? previous.clearedDirectionToken
+        : previous.activeDirectionToken,
       completeConfirmedAt: previous.completeConfirmedAt,
       resumePrompt: previous.resumePrompt,
       question: previous.question,
@@ -189,6 +212,7 @@ async function restorePreviousDirectionState(
     .where(and(
       eq(tasks.id, taskId),
       eq(tasks.activeTurnToken, previous.clearedTurnToken),
+      eq(tasks.activeDirectionToken, previous.clearedDirectionToken),
       isNull(tasks.completeConfirmedAt),
       isNull(tasks.resumePrompt),
       isNull(tasks.question),
@@ -360,20 +384,31 @@ async function deliverNativeSteer(
       return { ok: false, status: 409, error: "消息正在投递或已被处理，请稍后查看" };
     }
     previous = await clearPreviousDirectionState(message.taskId, false);
-    await reservation.deliver(
-      message.text,
-      now(),
-      reservation.agentType === "claude"
-        ? () => discardLateDirectionState(message.taskId, previous!.activeTurnToken!)
+    await reservation.deliver(message.text, now(), {
+      promptText: message.text + DIRECTION_PROTOCOL(previous.clearedDirectionToken),
+      beforeSend: reservation.agentType === "claude"
+        ? () => discardLateDirectionState(
+            message.taskId,
+            previous!.activeTurnToken!,
+            previous!.clearedDirectionToken,
+          )
         : undefined,
-    );
+    });
     delivered = true;
     await markSent(message);
     return { ok: true, taskId: message.taskId, messageId: message.id };
   } catch (error) {
+    const restarted = (error as { nativeSteerRestart?: boolean })?.nativeSteerRestart === true;
     if (!delivered) {
-      if (previous) await restorePreviousDirectionState(message.taskId, previous).catch(() => undefined);
+      if (previous) await restorePreviousDirectionState(message.taskId, previous, restarted).catch(() => undefined);
       await abortDelivery(message).catch(() => undefined);
+      if (restarted) {
+        await appendTaskTimeline(
+          message.taskId,
+          "Claude 未确认原生引导，已结束当前回合；这条排队消息会由新回合重新投递。",
+        );
+        whenTurnIdle(message.taskId, () => flushPendingForTask(message.taskId));
+      }
     } else {
       // provider 已经接收，不能把原话退回队列再投一次；尽力把 sent 记账补齐。
       await markSent(message).catch(() => undefined);
@@ -381,7 +416,9 @@ async function deliverNativeSteer(
     return {
       ok: false,
       status: isCanceling(message.taskId) ? 409 : 500,
-      error: delivered
+      error: restarted
+        ? `原生引导失败，已结束当前回合；消息将由新回合重新投递：${error instanceof Error ? error.message : String(error)}`
+        : delivered
         ? `新方向已送达，但清理或记账失败：${error instanceof Error ? error.message : String(error)}`
         : `引导会话失败，消息仍在排队：${error instanceof Error ? error.message : String(error)}`,
     };

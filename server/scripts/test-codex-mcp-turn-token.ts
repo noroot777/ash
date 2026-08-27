@@ -101,13 +101,14 @@ if (args.includes("app-server")) {
   process.env.ASH_FAKE_MCP_OUTPUT = output;
 
   const turnToken = "turn-token-secret-123456";
+  const directionToken = "direction-token-secret-123456";
   const taskId = "task-codex-boundary";
   const executor = new CodexExecutor({ bin: fakeCodex });
   const handle = executor.runSteerable({
     cwd: root,
     prompt: "probe",
     extraArgs: ["-c", `mcp_servers.${ASH_MCP_SERVER_NAME}.env_vars=["ASH_TASK_ID"]`],
-    env: { CODEX_HOME: root, ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken },
+    env: { CODEX_HOME: root, ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken },
   });
   for await (const _event of handle.events) {
     // 消费到进程退出，确保 probe 已写完。
@@ -117,7 +118,9 @@ if (args.includes("app-server")) {
   const childEnv = JSON.parse(readFileSync(output, "utf8")) as Record<string, string>;
   assert.equal(childEnv.ASH_TASK_ID, taskId, "Codex MCP 子进程应收到发起任务 id");
   assert.equal(childEnv.ASH_TURN_TOKEN, turnToken, "最终 env_vars 必须覆盖用户 extraArgs 的残缺白名单");
+  assert.equal(childEnv.ASH_DIRECTION_TOKEN, directionToken, "Codex MCP 子进程应收到当前方向身份");
   assert.ok(!handle.commandLine.includes(turnToken), "sessions.commandLine 不得泄露回合 token");
+  assert.ok(!handle.commandLine.includes(directionToken), "sessions.commandLine 不得泄露方向 token");
   assert.match(handle.commandLine, /mcp_servers\.ash\.env_vars=/, "参数必须写到规范 ash MCP 条目");
   assert.ok(!handle.commandLine.includes("mcp_servers.harness"), "规范安装不能被历史 harness 名盖回去");
 
@@ -127,7 +130,7 @@ if (args.includes("app-server")) {
   const noMcpHandle = executor.runSteerable({
     cwd: root,
     prompt: "probe without registered MCP",
-    env: { CODEX_HOME: unconfigured, ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken },
+    env: { CODEX_HOME: unconfigured, ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken },
   });
   for await (const _event of noMcpHandle.events) {
     // 等假 Codex 完整退出。
@@ -138,6 +141,7 @@ if (args.includes("app-server")) {
   const noMcpChildEnv = JSON.parse(readFileSync(output, "utf8")) as Record<string, string>;
   assert.equal(noMcpChildEnv.ASH_TASK_ID, undefined);
   assert.equal(noMcpChildEnv.ASH_TURN_TOKEN, undefined, "未注册 MCP 时只能降级，不能伪造一个无效 transport");
+  assert.equal(noMcpChildEnv.ASH_DIRECTION_TOKEN, undefined);
 
   writeFileSync(join(root, "config.toml"), `
 [mcp_servers.${LEGACY_ASH_MCP_SERVER_NAME}]

@@ -84,7 +84,10 @@ export function bindNativeSteer(
 export type NativeSteerReservation = {
   kind: "native";
   agentType: AgentType;
-  deliver(text: string, at: string, beforeSend?: () => void | Promise<void>): Promise<void>;
+  deliver(text: string, at: string, opts?: {
+    beforeSend?: () => void | Promise<void>;
+    promptText?: string;
+  }): Promise<void>;
   cancel(): void;
 } | { kind: "busy" } | { kind: "unsupported" };
 
@@ -106,7 +109,7 @@ export function reserveNativeSteerTask(taskId: string): NativeSteerReservation {
   return {
     kind: "native",
     agentType: target.agentType,
-    async deliver(text, at, beforeSend) {
+    async deliver(text, at, opts) {
       if (consumed) throw new Error("本次引导预约已经使用");
       consumed = true;
       try {
@@ -115,7 +118,7 @@ export function reserveNativeSteerTask(taskId: string): NativeSteerReservation {
           throw new Error("当前活动回合已经结束");
         }
         await target.beforeDeliver?.(at);
-        await target.handle.steer(target.prepare(text), beforeSend);
+        await target.handle.steer(target.prepare(opts?.promptText ?? text), opts?.beforeSend);
         // provider 已确认收到以后，消息就已经是真实投递；实时广播失败不能把它退回队列
         // 再投一次，否则同一句会进入模型两遍。
         try { target.record(text, at); } catch (error) {

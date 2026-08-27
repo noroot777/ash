@@ -36,7 +36,7 @@ import { reportTurnFailure } from "./turn-failure.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
 import {
   COLLAB_INVITE, SYS_MARKER,
-  COMPLETION_REMINDER, FOLLOW_UP_REMINDER, followUpRailNote,
+  COMPLETION_REMINDER, DIRECTION_PROTOCOL, FOLLOW_UP_REMINDER, followUpRailNote,
   WORKSPACE_RESET, WORKSPACE_RESET_MARKER,
 } from "./run-prompts.js";
 // 「登记的基线被换掉了」这句话：说不说、怎么说、失败那条路怎么补，全在这一份里。
@@ -244,9 +244,10 @@ export async function continueTask(
     // nativeTurn 落库而不是只留在内存里:结算钩子跟这里可能不在同一个进程(重启后由
     // reattach 接着消费同一条流),内存标记会丢,而丢了就等于「压缩被算成一轮验证跑完」。
     const turnToken = id();
+    const directionToken = id();
     await db
       .update(tasks)
-      .set({ followUpFrom, nativeTurn: !!nativeCommand, completeConfirmedAt: null, activeTurnToken: turnToken, updatedAt: now() })
+      .set({ followUpFrom, nativeTurn: !!nativeCommand, completeConfirmedAt: null, activeTurnToken: turnToken, activeDirectionToken: directionToken, updatedAt: now() })
       .where(eq(tasks.id, taskId));
 
     const { executor: ex, profileId, profileFingerprint } = await resolveExecutorWithProfile({
@@ -376,6 +377,7 @@ export async function continueTask(
           (followUpFrom
             ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote, freeWorkflow)
             : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying, freeWorkflow)) +
+          DIRECTION_PROTOCOL(directionToken) +
           (reviewReminder ? `\n${reviewReminder}` : ""),
           resuming ? "reminder" : "full",
         );
@@ -399,7 +401,7 @@ export async function continueTask(
       sessionId: resuming ? prev!.cliSessionId! : undefined,
       trace: runTracePaths(runDir, sessId, turnStart),
       detach,
-      env: { ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken },
+      env: { ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken },
     });
     trackRun(taskId, handle);
 

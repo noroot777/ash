@@ -34,7 +34,7 @@ export class ClaudeControlBridge {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
         reject(new Error("Claude interrupt ACK 超时"));
-      }, 10_000);
+      }, 2_000);
       this.pending.set(requestId, { resolve, reject, timer });
       cancel = () => {
         const waiter = this.pending.get(requestId);

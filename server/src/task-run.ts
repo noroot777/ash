@@ -30,7 +30,7 @@ import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { reportTurnFailure } from "./turn-failure.js";
-import { AUTONOMY, COMPLETION_PROTOCOL } from "./run-prompts.js";
+import { AUTONOMY, COMPLETION_PROTOCOL, DIRECTION_PROTOCOL } from "./run-prompts.js";
 import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
 
@@ -85,9 +85,10 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     // 新回合起点:清掉上一轮可能残留的完成确认/续聊标记(fresh run 从来不是续聊,
     // 也从来不是 CLI 原生命令 —— 上一轮崩在半路留下的标记必须在这里归零)。
     const turnToken = id();
+    const directionToken = id();
     await db
       .update(tasks)
-      .set({ followUpFrom: null, nativeTurn: false, completeConfirmedAt: null, activeTurnToken: turnToken, updatedAt: now() })
+      .set({ followUpFrom: null, nativeTurn: false, completeConfirmedAt: null, activeTurnToken: turnToken, activeDirectionToken: directionToken, updatedAt: now() })
       .where(eq(tasks.id, taskId));
     await setTaskStatus(taskId, "running");
     // 已验收任务被 fresh 重跑（Cron 到点 / fire）：旧「已验收」牌子当场摘掉——新一版
@@ -129,7 +130,7 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     const priorSessions = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
     const peerNotice = peerNoticeFor({ taskId, self: agentType, all: priorSessions, prev: undefined });
     const prompt = withGlobalBrowserPolicy(
-      AUTONOMY + COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask, task.workflowMode === "free") + teamPreamble + reviewProtocol +
+      AUTONOMY + COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask, task.workflowMode === "free") + DIRECTION_PROTOCOL(directionToken) + teamPreamble + reviewProtocol +
       peerNotice +
       (autoTitle ? TITLE_HINT + objective : objective),
       "full",
@@ -148,7 +149,7 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     const run = ex.runSteerable?.bind(ex) ?? ex.run.bind(ex);
     handle = run({
       prompt, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart), detach,
-      env: { ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken },
+      env: { ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken },
     });
     trackRun(taskId, handle);
 

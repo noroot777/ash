@@ -86,7 +86,7 @@ const STRICT_DONE = !process.env.ASH_LAX_DONE;
  */
 export const STRICT_DONE_PROTOCOL = STRICT_DONE;
 const UNCONFIRMED_NOTE =
-  "回合正常结束,但本回合内没有收到 complete_task 的完成确认 —— 按严格完成协议记为 failed。可能是 agent 没调用;也可能执行器/MCP 过滤了 ASH_TURN_TOKEN、或任务状态已变化，导致调用被 409 拒绝。若任务其实已完成,可手动把状态改成已完成;重试则会从中断处续跑。";
+  "回合正常结束,但本回合内没有收到 complete_task 的完成确认 —— 按严格完成协议记为 failed。可能是 agent 没调用;也可能执行器/MCP 丢了回合或方向身份、或任务状态已变化，导致调用被 409 拒绝。若任务其实已完成,可手动把状态改成已完成;重试则会从中断处续跑。";
 const GROUP_PAUSED_NOTE =
   "分组被暂停,本回合被中止 —— 任务落为已暂停;点「运行/继续」恢复分组时会从当前会话接着跑。";
 const STEERED_NOTE = "〔系统〕当前回合已由“引导会话”结束。";

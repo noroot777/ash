@@ -22,7 +22,7 @@ export interface AskInput {
   options?: string[];
   items?: QuestionItem[] | null;
   // agent 自己提问时绑定当前一次性回合；工作流/团队主动提问不传。
-  currentTurn?: { token: string | null };
+  currentTurn?: { token: string | null; directionToken?: string | null };
 }
 
 /** 写库 + 广播。校验（空问题、超限）由调用方做，这里只负责落地和发事件。 */
@@ -37,6 +37,11 @@ export async function setTaskQuestion(input: AskInput): Promise<boolean> {
         currentTurn.token === null
           ? isNull(tasks.activeTurnToken)
           : eq(tasks.activeTurnToken, currentTurn.token),
+        currentTurn.directionToken === undefined
+          ? undefined
+          : currentTurn.directionToken === null
+            ? isNull(tasks.activeDirectionToken)
+            : eq(tasks.activeDirectionToken, currentTurn.directionToken),
       )
     : eq(tasks.id, taskId);
   const updated = await db

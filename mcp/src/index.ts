@@ -13,6 +13,7 @@ import { UNDELIVERED_NET_CODES } from "@ash/shared/mcp-delivery";
 const BASE = (process.env.ASH_URL ?? process.env.HARNESS_URL ?? "http://localhost:4317").replace(/\/+$/, "");
 const SOURCE_TASK_ID = process.env.ASH_TASK_ID?.trim() ?? "";
 const TURN_TOKEN = process.env.ASH_TURN_TOKEN?.trim() ?? "";
+const DIRECTION_TOKEN = process.env.ASH_DIRECTION_TOKEN?.trim() ?? "";
 
 // 本机流量一律不走代理。Node 24+ 在 NODE_USE_ENV_PROXY=1(或显式 HTTP_PROXY)下
 // **连 localhost 也走代理** —— 实测本机 http_proxy=127.0.0.1:7897 时,打给
@@ -68,7 +69,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // `complete_task` 走 HTTP —— 正好撞上重启那几秒就会硬失败,于是「进程活下来了、
 // 成果却丢了」。重试把这个窗口抹平。只重试确定没送达的错误,所以 dispatch 这种
 // 非幂等调用也不会被做两遍。
-async function call(method: string, path: string, body?: unknown): Promise<unknown> {
+async function call(method: string, path: string, body?: unknown, directionToken = DIRECTION_TOKEN): Promise<unknown> {
   const deadline = Date.now() + RECONNECT_WINDOW_MS;
   let delay = 400;
   let lastCode = "";
@@ -79,6 +80,7 @@ async function call(method: string, path: string, body?: unknown): Promise<unkno
       if (body !== undefined) headers["content-type"] = "application/json";
       if (SOURCE_TASK_ID) headers["x-ash-source-task-id"] = SOURCE_TASK_ID;
       if (TURN_TOKEN) headers["x-ash-turn-token"] = TURN_TOKEN;
+      if (directionToken) headers["x-ash-direction-token"] = directionToken;
       res = await fetch(`${BASE}/api${path}`, {
         method,
         headers: Object.keys(headers).length ? headers : undefined,
@@ -406,10 +408,11 @@ server.registerTool(
       "在执行中调用,告诉 ash:「本任务的目标我确定已经达成了」。回合结束结算时读到这个确认才会把任务落成 done;**没有确认的正常退出(exit 0)会按未完成记为 failed**——因为正常退出不代表目标达成(报错后退出也是 exit 0),假 done 会误推进队列、错误唤醒下游任务。\n\n用法:当且仅当你核实任务目标已达成(产物在、校验过),在结束回合前调一次本工具,然后正常结束输出。**只能在任务正在跑时调用**。没完成就不要调:需要等外部条件用 pause_task;做不下去直接说明原因退出(会记 failed,用户可重试续跑)。",
     inputSchema: {
       taskId: z.string().describe("当前正在执行的任务 id(任务 prompt 前言里有)"),
+      directionToken: z.string().min(1).optional().describe("当前用户方向附带的 directionToken；发生过引导时必须传最新值"),
     },
   },
-  async ({ taskId }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/complete`, {})); }
+  async ({ taskId, directionToken }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/complete`, {}, directionToken)); }
     catch (e) { return fail(e); }
   },
 );
@@ -423,10 +426,11 @@ server.registerTool(
     inputSchema: {
       taskId: z.string().describe("当前正在执行的任务 id"),
       resumePrompt: z.string().min(1).describe("下次被 resume 时喂给你的 user 消息 —— 就当成一条「继续：…」replied 写"),
+      directionToken: z.string().min(1).optional().describe("当前用户方向附带的 directionToken；发生过引导时必须传最新值"),
     },
   },
-  async ({ taskId, resumePrompt }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/pause`, { resumePrompt })); }
+  async ({ taskId, resumePrompt, directionToken }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/pause`, { resumePrompt }, directionToken)); }
     catch (e) { return fail(e); }
   },
 );
@@ -477,10 +481,11 @@ server.registerTool(
         .max(MAX_QUESTION_ITEMS)
         .optional()
         .describe(`一次并列询问的相关问题(可选,最多 ${MAX_QUESTION_ITEMS} 个)；每题会独立显示候选和输入框。`),
+      directionToken: z.string().min(1).optional().describe("单飞任务当前用户方向附带的 directionToken；团队任务可省略"),
     },
   },
-  async ({ taskId, question, options, questionItems }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/ask`, { question, options, questionItems })); }
+  async ({ taskId, question, options, questionItems, directionToken }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/ask`, { question, options, questionItems }, directionToken)); }
     catch (e) { return fail(e); }
   },
 );
