@@ -14,6 +14,7 @@
 import { closeSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
+import { configDirEnvVar, userCliDir } from "./auth/user-cli.js";
 import {
   KEY_SEP,
   clearPersistedCalibrations,
@@ -93,10 +94,10 @@ interface WalkItem extends Root {
   size: number;
 }
 
-function claudePluginRoots(): Root[] {
+function claudePluginRoots(configDir: string): Root[] {
   // 插件目录堆着历史版本(hyperframes 一家躺着 10 个版本目录),glob 一扫会把废弃版本
   // 全列出来 —— 必须读 installed_plugins.json 拿当前生效的 installPath。
-  const file = join(homedir(), ".claude", "plugins", "installed_plugins.json");
+  const file = join(configDir, "plugins", "installed_plugins.json");
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(file, "utf8"));
@@ -123,25 +124,48 @@ function claudePluginRoots(): Root[] {
   return roots;
 }
 
-function rootsFor(agentType: Scannable, cwd: string): Root[] {
+/**
+ * 「用户那一层」的配置目录。多人模式下它是**这个人自己的**目录
+ * (data/user-cli/<userId>/<agentType>/,见 auth/user-cli.ts),自用模式仍是宿主机
+ * 默认目录 —— 与执行时注入 CLAUDE_CONFIG_DIR / CODEX_HOME 的判据必须是同一个,
+ * 否则菜单里列的技能和 CLI 真能用的技能是两套(§九)。
+ */
+function userConfigDirFor(agentType: Scannable, userId: string | null): string {
+  if (userId) {
+    const personal = userCliDir(userId, agentType);
+    if (configDirEnvVar(agentType)) return personal;
+    // 该 CLI 没有「整体取代配置目录」的环境变量 → 个人级如实降级为仅项目级,
+    // 用户层仍指向宿主默认目录(它在多人模式下也确实是 CLI 会读的那个)。
+  }
+  switch (agentType) {
+    case "claude":
+      return join(homedir(), ".claude");
+    case "codex":
+      return process.env.CODEX_HOME?.trim() || join(homedir(), ".codex");
+    case "gemini":
+      return join(homedir(), ".gemini");
+  }
+}
+
+function rootsFor(agentType: Scannable, cwd: string, userId: string | null): Root[] {
+  const home = userConfigDirFor(agentType, userId);
   switch (agentType) {
     case "claude":
       return [
         { dir: join(cwd, ".claude", "skills"), source: "project", prefix: "" },
-        { dir: join(homedir(), ".claude", "skills"), source: "user", prefix: "" },
-        ...claudePluginRoots(),
+        { dir: join(home, "skills"), source: "user", prefix: "" },
+        // 插件目录跟着用户配置目录走:多人模式下每人一份 plugins/(§九)。
+        ...claudePluginRoots(home),
       ];
-    case "codex": {
-      const home = process.env.CODEX_HOME?.trim() || join(homedir(), ".codex");
+    case "codex":
       return [
         { dir: join(cwd, ".codex", "skills"), source: "project", prefix: "" },
         { dir: join(home, "skills"), source: "user", prefix: "" },
       ];
-    }
     case "gemini":
       return [
         { dir: join(cwd, ".gemini", "skills"), source: "project", prefix: "" },
-        { dir: join(homedir(), ".gemini", "skills"), source: "user", prefix: "" },
+        { dir: join(home, "skills"), source: "user", prefix: "" },
       ];
   }
 }
@@ -222,7 +246,9 @@ interface Scan {
 }
 
 // 分隔符用 NUL:路径里不可能出现它,cwd 带空格也不会串味。
-const cacheKey = (agentType: string, cwd: string) => `${agentType}${KEY_SEP}${cwd}`;
+// **必须带用户维度**:多人模式下同一个 cwd 上,两个人的用户层技能完全不同(§九)。
+const cacheKey = (agentType: string, cwd: string, userId?: string | null) =>
+  `${agentType}${KEY_SEP}${cwd}${userId ? `${KEY_SEP}${userId}` : ""}`;
 const scanCache = new Map<string, Scan>();
 
 function build(items: WalkItem[]): Omit<SkillEntry, "alsoIn">[] {
@@ -250,9 +276,9 @@ function build(items: WalkItem[]): Omit<SkillEntry, "alsoIn">[] {
   return [...byCommand.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function scan(agentType: Scannable, cwd: string, force = false): Scan {
-  const key = cacheKey(agentType, cwd);
-  const items = walk(rootsFor(agentType, cwd));
+function scan(agentType: Scannable, cwd: string, force = false, userId: string | null = null): Scan {
+  const key = cacheKey(agentType, cwd, userId);
+  const items = walk(rootsFor(agentType, cwd, userId));
   const fingerprint = fingerprintOf(items);
   const cached = scanCache.get(key);
   if (!force && cached && cached.fingerprint === fingerprint) return cached;
@@ -327,6 +353,8 @@ export function listSkills(opts: {
   agentType: string;
   cwd: string;
   force?: boolean;
+  /** 多人模式:按这个人的配置目录扫(§九)。自用模式传 null/省略。 */
+  userId?: string | null;
 }): SkillList {
   const agentType = opts.agentType as AgentType;
   const base: SkillList = {
@@ -338,13 +366,14 @@ export function listSkills(opts: {
   };
   if (!isScannable(agentType)) return base;
 
-  const self = scan(agentType, opts.cwd, opts.force);
+  const userId = opts.userId ?? null;
+  const self = scan(agentType, opts.cwd, opts.force, userId);
   // 同一个技能常常跨 CLI 软链共享(本机 78 个条目去重后只有 54 个物理技能)。标一个
   // 「谁都能用」的角标,免得用户切一次执行器看见列表短了一半,以为技能丢了。
   const others = new Map<string, AgentType[]>();
   for (const other of SCANNABLE) {
     if (other === agentType) continue;
-    for (const entry of scan(other, opts.cwd, opts.force).entries) {
+    for (const entry of scan(other, opts.cwd, opts.force, userId).entries) {
       if (!entry.realPath) continue;
       const list = others.get(entry.realPath) ?? [];
       if (!list.includes(other)) list.push(other);
@@ -392,6 +421,7 @@ export function withSkillInvocation(opts: {
   agentType: string;
   cwd: string;
   text: string;
+  userId?: string | null;
 }): string {
   if (!opts.text.includes("/")) return opts.text;
   // 原生命令由 CLI 自己拦下执行,前面垫一个字就不生效 —— 原样放行(见 NATIVE_COMMANDS)。
@@ -427,14 +457,16 @@ export function withSkillInvocation(opts: {
 }
 
 /** server 启动预热:把常用 CLI 的清单先扫进内存,免得第一次敲 `/` 等 IO。 */
-export function warmSkills(cwds: string[]): void {
+export function warmSkills(cwds: string[], userIds: (string | null)[] = [null]): void {
   for (const cwd of new Set(cwds)) {
+    for (const userId of new Set(userIds)) {
     for (const agentType of SCANNABLE) {
       try {
-        scan(agentType, cwd);
+        scan(agentType, cwd, false, userId);
       } catch {
         // 预热失败无所谓,请求那一刻会重来
       }
+    }
     }
   }
 }
@@ -448,6 +480,7 @@ export function scanOverview(opts: {
   cwd: string;
   executors: { label: string; agentType: string }[];
   force?: boolean;
+  userId?: string | null;
 }): SkillScanOverview {
   const groups = new Map<string, { agentType: string; executors: string[] }>();
   for (const executor of opts.executors) {
@@ -464,6 +497,7 @@ export function scanOverview(opts: {
       agentType: group.agentType,
       cwd: opts.cwd,
       force: opts.force,
+      userId: opts.userId,
     });
     const bySource: Record<SkillSource, number> = { project: 0, user: 0, plugin: 0, builtin: 0 };
     for (const skill of list.skills) bySource[skill.source] += 1;

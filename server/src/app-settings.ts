@@ -38,7 +38,25 @@ const SETTING_SPECS = {
     ok: (v: unknown) => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= MAX_BODY_MB,
     hint: `必须是 1..${MAX_BODY_MB} 的整数（512 是硬顶：body 最终要变成一个 JS 字符串）`,
   },
+  // 实例模式与根目录只能走 `/api/auth/setup`(首启向导 / 危险区转换):那条路要同时
+  // 建管理员、建目录、发 key,拆成一次裸 PATCH 就会留下「模式是多人但一个用户都没有」
+  // 的锁死状态。所以这里的 ok 恒 false —— **PATCH /settings 永远拒绝这两项**,读取仍走
+  // getAppSettings 那条统一的归一路径。
+  instanceMode: {
+    ok: () => false,
+    hint: "只能通过首启向导 / 设置页危险区转换（POST /api/auth/setup）设定",
+  },
+  rootDir: {
+    ok: () => false,
+    hint: "只能在转多人模式时设定，设定后锁死（一改所有已建项目路径失效）",
+  },
 } satisfies { [K in keyof AppSettings]: { ok: (v: unknown) => boolean; hint: string } };
+
+// 上面两项对 PATCH 永远说不,但读取仍要认得住盘里的值 —— 所以读侧另有一份校验。
+const READ_ONLY_SPECS: Partial<Record<keyof AppSettings, (v: unknown) => boolean>> = {
+  instanceMode: (v) => v === "" || v === "single" || v === "multi",
+  rootDir: (v) => typeof v === "string" && v.length <= 4096,
+};
 
 const SETTING_KEYS = Object.keys(SETTING_SPECS) as (keyof AppSettings)[];
 const isSettingKey = (key: string): key is keyof AppSettings =>
@@ -52,7 +70,8 @@ export async function getAppSettings(): Promise<AppSettings> {
     if (!isSettingKey(row.key)) continue;
     try {
       const value: unknown = JSON.parse(row.value);
-      if (SETTING_SPECS[row.key].ok(value)) {
+      const accept = READ_ONLY_SPECS[row.key] ?? SETTING_SPECS[row.key].ok;
+      if (accept(value)) {
         (merged as unknown as Record<string, unknown>)[row.key] = value;
       }
     } catch {
@@ -60,6 +79,21 @@ export async function getAppSettings(): Promise<AppSettings> {
     }
   }
   return merged;
+}
+
+/**
+ * 绕过 PATCH 校验直写一个设置项。**只给 auth/setup 那条路用**(实例模式与根目录):
+ * 它俩对外恒拒,但转换向导必须写得进去。别在别处调它。
+ */
+export async function writeSystemSetting<K extends keyof AppSettings>(
+  key: K,
+  value: AppSettings[K],
+): Promise<void> {
+  const encoded = JSON.stringify(value);
+  await db
+    .insert(appSettings)
+    .values({ key, value: encoded })
+    .onConflictDoUpdate({ target: appSettings.key, set: { value: encoded } });
 }
 
 export function parseAppSettingsPatch(input: unknown): Partial<AppSettings> {

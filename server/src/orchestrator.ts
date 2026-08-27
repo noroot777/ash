@@ -33,6 +33,7 @@ import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { reportTurnFailure } from "./turn-failure.js";
+import { runEnvForTask } from "./auth/run-env.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
 import {
   COLLAB_INVITE, SYS_MARKER,
@@ -339,7 +340,7 @@ export async function continueTask(
     await recordTurnStart(taskId, cwd);
     const invited = !prev; // first time this agent is pulled into the task
     const userTurnText = userText + attachmentsPrompt(opts.attachments);
-    const promptedUserTurnText = withSkillInvocation({ agentType: agent, cwd, text: userTurnText });
+    const promptedUserTurnText = withSkillInvocation({ agentType: agent, cwd, text: userTurnText, userId: task.ownerUserId });
     const sharedTeamWorker = !task.useWorktree && (await workerPreambleFor(task)).length > 0;
     // 验证回合（旧的独立审查任务，或这个任务自己身上的就地验证轮）：完成协议的
     // 验收那一句要换掉 —— 这一轮的产出是结论和证据，不是「这个任务可以合并了」。
@@ -401,7 +402,8 @@ export async function continueTask(
       sessionId: resuming ? prev!.cliSessionId! : undefined,
       trace: runTracePaths(runDir, sessId, turnStart),
       detach,
-      env: { ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken },
+      // 多人模式:个人 CLI 配置目录 + git 署名(auth/run-env.ts)。自用模式恒为空对象。
+      env: { ...(await runEnvForTask(taskId, agent)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken },
     });
     trackRun(taskId, handle);
 
@@ -525,7 +527,7 @@ export async function continueTask(
       handle, out, turnStart, cliSessionId, autoTitle: false, role: sessionRole,
       nativeSteer: {
         prepare: (text) => withGlobalBrowserPolicy(
-          withSkillInvocation({ agentType: agent, cwd, text }),
+          withSkillInvocation({ agentType: agent, cwd, text, userId: task.ownerUserId }),
           "reminder",
         ),
         record: (text, at) => recordUserConversationTurn({

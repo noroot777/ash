@@ -54,8 +54,14 @@ import { mountLocalOpenRoutes } from "./local-open-routes.js";
 import { directoryPickerSupport, mountDirectoryPickerRoutes } from "./dir-picker.js";
 import { mountProjectCloneRoutes } from "./project-clone.js";
 import { mountProjectRoutes } from "./project-routes.js";
+import { mountAuthRoutes } from "./auth/routes.js";
+import { mountUserRoutes } from "./auth/user-routes.js";
 
 export const api = new Hono();
+// 认证 / 首启向导 / 用户与项目成员。挂在最前:它们里有几条是**闸外**的公开端点
+// (见 auth/middleware.ts 的 PUBLIC 清单),前端得先问出「什么模式、我是谁」。
+mountAuthRoutes(api);
+mountUserRoutes(api);
 mountNoteRoutes(api);
 mountLocalOpenRoutes(api);
 mountDirectoryPickerRoutes(api);

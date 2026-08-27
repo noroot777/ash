@@ -60,6 +60,13 @@ export interface AppSettings {
   // 天生排在缓冲之后 —— 没有这条闸,未鉴权的巨大 body 就能把内存吃光。
   // 硬顶 512:body 最终要变成一个 JS 字符串,而 Node 的字符串最长就这么大。
   handoffMaxBodyMb: number;
+  // ── 多人模式(docs/multi-user-plan.md)────────────────────────────────────
+  // 实例模式。"" = 还没定过(首启向导);"single" = 自用,鉴权一行不拦;
+  // "multi" = 多人。**只能 single→multi 单向转换**,多人数据无法合并回单人。
+  instanceMode: "" | "single" | "multi";
+  // 多人模式的根目录。每个用户在其下有一个目录 `rootDir/<dirName>`。
+  // **设定后锁死**,系统不提供修改入口(一改所有已建项目路径失效)。
+  rootDir: string;
 }
 
 export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
@@ -70,7 +77,31 @@ export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
   handoffRequireApproval: true,
   handoffEncrypt: true,
   handoffMaxBodyMb: 512,
+  instanceMode: "",
+  rootDir: "",
 });
+
+// ── 多人模式 ────────────────────────────────────────────────────────────────
+// 类型本体在 ./multiuser.ts;运行时判据(目录名校验、权限判据)走子路径
+// `@ash/shared/multiuser`,这里同上只再导出类型。
+export type {
+  ActorLike,
+  AuthState,
+  ConfigBundle,
+  ConfigBundleKind,
+  HandoffPeerModeInfo,
+  InstanceMode,
+  InviteInfo,
+  PersonalCliEnv,
+  PersonalSkill,
+  ProjectInviteInfo,
+  ProjectMemberView,
+  ProjectRole,
+  UserHandoffTarget,
+  UserRole,
+  UserStatus,
+  UserView,
+} from "./multiuser.ts";
 
 // ── 任务接力（跨机器 handoff）──────────────────────────────────────────────
 // 类型本体在 ./handoff.ts（纯类型模块）,这里只做再导出,消费方 import 路径不变。

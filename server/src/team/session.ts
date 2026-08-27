@@ -50,6 +50,7 @@ import { latestTeamLeadSession } from "./session-selection.js";
 import { enqueueInbound, pendingInbound, type PendingInbound } from "./inbound-queue.js";
 import type { Lead } from "./session-types.js";
 import { createSessionConsumer } from "./session-consumer.js";
+import { runEnvForTask } from "../auth/run-env.js";
 
 const INTERRUPT_NOTE = "〔系统〕已打断调度者当前回合,插入你的新指令";
 // 「再说一句话就接回同一会话」只在会话**还在**时成立。刚被判 poisoned 作废过的话,
@@ -259,7 +260,7 @@ async function push(lead: Lead, text: string, kind: Kind): Promise<boolean> {
   if (!text.trim()) return true;
   clearIdle(lead);
   if (kind === "user") {
-    const promptedText = withSkillInvocation({ agentType: lead.agentType, cwd: lead.cwd, text });
+    const promptedText = withSkillInvocation({ agentType: lead.agentType, cwd: lead.cwd, text, userId: lead.ownerUserId });
     // 见头注 ②③:不打断的话用户要干等一整个回合,那就不是 steering 了。
     const interrupted = lead.busy;
     if (interrupted) lead.handle.interrupt();
@@ -329,9 +330,9 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
     prev = undefined;
   }
   const resuming = !!prev?.cliSessionId;
-  const objective = withSkillInvocation({ agentType: cfg.lead, cwd: ws.path, text: task.body?.trim() || task.title });
+  const objective = withSkillInvocation({ agentType: cfg.lead, cwd: ws.path, text: task.body?.trim() || task.title, userId: task.ownerUserId });
   const text = kind === "start" && resuming ? LEAD_NUDGE : rawText;
-  const promptedText = kind === "user" ? withSkillInvocation({ agentType: cfg.lead, cwd: ws.path, text }) : text;
+  const promptedText = kind === "user" ? withSkillInvocation({ agentType: cfg.lead, cwd: ws.path, text, userId: task.ownerUserId }) : text;
   // 接回:上下文都在 CLI 会话里,只补一句「你被中断过」。全新开台:前言 + 目标
   // (哪怕这次是被一条消息带起来的,前言也必须有 —— 否则它不知道自己是调度者)。
   // ws.fresh = 原 worktree 连分支一起没了、这次是重建的空目录,接回的调度者记忆
@@ -349,7 +350,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
     prompt: message,
     cwd: ws.path,
     sessionId: prev?.cliSessionId ?? undefined,
-    env: { ASH_TASK_ID: taskId },
+    env: { ...(await runEnvForTask(taskId, cfg.lead)), ASH_TASK_ID: taskId },
   });
   trackRun(taskId, handle);
 
@@ -395,6 +396,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
     sessId,
     cliSessionId,
     agentType: cfg.lead,
+    ownerUserId: task.ownerUserId,
     executorId: cfg.leadExecutorId ?? null,
     model: ex.model ?? null,
     reasoningEffort: ex.reasoningEffort ?? null,

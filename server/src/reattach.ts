@@ -159,7 +159,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         autoTitle: false, role: sess.role as SessionRole, // 标题在被打断之前那一段就已经解析过了
         nativeSteer: {
           prepare: (text) => withGlobalBrowserPolicy(
-            withSkillInvocation({ agentType: sess.agentType as AgentType, cwd: sess.cwd ?? "", text }),
+            withSkillInvocation({ agentType: sess.agentType as AgentType, cwd: sess.cwd ?? "", text, userId: task.ownerUserId }),
             "reminder",
           ),
           record: (text, at) => recordUserConversationTurn({

@@ -33,6 +33,7 @@ import { reportTurnFailure } from "./turn-failure.js";
 import { AUTONOMY, COMPLETION_PROTOCOL, DIRECTION_PROTOCOL } from "./run-prompts.js";
 import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
+import { runEnvForTask } from "./auth/run-env.js";
 
 // 单任务的 **fresh run**:从任务描述起一条全新会话。续聊/召唤那一路(resume 已有会话、
 // 把用户原话送进去)在 orchestrator.ts 的 continueTask —— 两条路的前置条件、prompt 拼法
@@ -117,7 +118,7 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     const TITLE_HINT =
       "请在正式开始前，第一行只输出：标题：<不超过14字、概括本次任务的简短标题>，然后换行，再正常完成下面的任务。\n\n任务：\n";
     const reviewTask = !!task.reviewOf;
-    const objective = withSkillInvocation({ agentType, cwd: ws.path, text: initialTaskObjective(task.body, task.title, reviewTask) });
+    const objective = withSkillInvocation({ agentType, cwd: ws.path, text: initialTaskObjective(task.body, task.title, reviewTask), userId: task.ownerUserId });
     // 团队执行者多一段前言(卡住走 ask_question 直达调度者、别自己扩张边界)。
     // 只拼进 prompt,不写进 tasks.body —— body 是调度者给的需求正文,界面展示那份。
     const teamPreamble = await workerPreambleFor(task);
@@ -149,7 +150,7 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     const run = ex.runSteerable?.bind(ex) ?? ex.run.bind(ex);
     handle = run({
       prompt, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart), detach,
-      env: { ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken },
+      env: { ...(await runEnvForTask(taskId, agentType)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken },
     });
     trackRun(taskId, handle);
 
@@ -207,7 +208,7 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
       handle, out, turnStart, cliSessionId, autoTitle,
       nativeSteer: {
         prepare: (text) => withGlobalBrowserPolicy(
-          withSkillInvocation({ agentType, cwd: ws.path, text }),
+          withSkillInvocation({ agentType, cwd: ws.path, text, userId: task.ownerUserId }),
           "reminder",
         ),
         record: (text, at) => recordUserConversationTurn({

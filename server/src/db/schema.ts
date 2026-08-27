@@ -10,8 +10,127 @@ export const projects = sqliteTable("projects", {
   apiKeys: text("api_keys"), // legacy project-level credentials, kept for compatibility
   // 本项目新建任务默认用哪条起手式（workflows.id 或内置 key）。空 = 跟随全局默认。
   workflowId: text("workflow_id"),
+  // 建这个项目的人(多人模式)。null = 自用模式建的、或转换前的存量项目。
+  // 创建者自动是项目管理员,但成员关系的真源是 project_members —— 这一列只记出身。
+  ownerUserId: text("owner_user_id"),
   createdAt: text("created_at").notNull(),
 });
+
+// ── 多人模式(docs/multi-user-plan.md)────────────────────────────────────────
+// 无注册模块,**key 即身份**:库里只存哈希,明文仅在领取/重生成时整屏展示一次。
+// 自用模式下这张表恒为空(那条路一行鉴权都不拦)。
+export const users = sqliteTable("users", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  role: text("role").notNull().default("member"), // admin | member
+  // 根目录下这个人的目录名。**设定后锁死**,没有修改入口(§七)。
+  dirName: text("dir_name").notNull(),
+  status: text("status").notNull().default("invited"), // invited | active | suspended
+  // key 的哈希(scrypt)。null = 还没领取过。明文永不落库。
+  keyHash: text("key_hash"),
+  // git 署名:spawn 任务时按 ownerUserId 注入 GIT_AUTHOR_*/GIT_COMMITTER_*。
+  // 不注入的话多人协作的提交在 git log 里全是宿主机一个身份(§八 B6)。
+  gitName: text("git_name").notNull().default(""),
+  gitEmail: text("git_email").notNull().default(""),
+  createdBy: text("created_by"),
+  createdAt: text("created_at").notNull(),
+  lastActiveAt: text("last_active_at"),
+});
+
+// web 登录会话。key 换 HttpOnly cookie,30 天滑动过期;登出 = 删行。
+// token 同样只存哈希 —— 库被快照/备份时不该连活会话一起送出去。
+export const userSessions = sqliteTable(
+  "user_sessions",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    createdAt: text("created_at").notNull(),
+    lastSeenAt: text("last_seen_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+    userAgent: text("user_agent").notNull().default(""),
+  },
+  (t) => ({
+    tokenIdx: uniqueIndex("user_sessions_token_idx").on(t.tokenHash),
+    userIdx: index("user_sessions_user_idx").on(t.userId),
+  }),
+);
+
+// 专属邀请链接(一人一链)。7 天未领取自动过期,管理员可随时作废/重发。
+// 领取流程见 §五:说明页 → 点「领取」生成并展示 key → 点「我已保存」才作废链接。
+export const userInvites = sqliteTable(
+  "user_invites",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    createdBy: text("created_by"),
+    createdAt: text("created_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+    // 非空 = 已经点过「我已保存」,链接作废。中途只是看过说明页不算。
+    consumedAt: text("consumed_at"),
+    revokedAt: text("revoked_at"),
+  },
+  (t) => ({
+    tokenIdx: uniqueIndex("user_invites_token_idx").on(t.tokenHash),
+    userIdx: index("user_invites_user_idx").on(t.userId),
+  }),
+);
+
+// 项目成员关系。创建者建项目时自动插一行 role=admin。
+// 实例管理员**不在这张表里**却对所有项目有项目管理员权限(§四),判据在 auth/visibility.ts。
+export const projectMembers = sqliteTable(
+  "project_members",
+  {
+    projectId: text("project_id").notNull(),
+    userId: text("user_id").notNull(),
+    role: text("role").notNull().default("member"), // admin | member
+    addedBy: text("added_by"),
+    addedAt: text("added_at").notNull(),
+  },
+  (t) => ({
+    memberIdx: uniqueIndex("project_members_idx").on(t.projectId, t.userId),
+    userIdx: index("project_members_user_idx").on(t.userId),
+  }),
+);
+
+// 项目邀请链接:一条链接发群里,多个**已有账号**的用户点开即加入(§六)。
+// 只能发普通成员角色 —— 管理员必须由项目管理员逐个指定。
+export const projectInvites = sqliteTable(
+  "project_invites",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    createdBy: text("created_by"),
+    createdAt: text("created_at").notNull(),
+    expiresAt: text("expires_at"), // null = 不过期(可随时作废)
+    revokedAt: text("revoked_at"),
+  },
+  (t) => ({
+    tokenIdx: uniqueIndex("project_invites_token_idx").on(t.tokenHash),
+    projectIdx: index("project_invites_project_idx").on(t.projectId),
+  }),
+);
+
+// 接力目标机器**按人**(§十一)。app_settings.handoffTargets 是自用模式那份;
+// 多人模式下每个用户配自己的清单,还多带一样东西:「我在对端的账号 key」。
+// 那是凭证,待遇同 project_git_credentials —— 落库不回显。
+export const userHandoffTargets = sqliteTable(
+  "user_handoff_targets",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    name: text("name").notNull(),
+    url: text("url").notNull(),
+    peerFp: text("peer_fp"),
+    // 对端账号 key 的**明文**(要原样发给对端,没法只存哈希)。GET 只报 hasKey。
+    peerKey: text("peer_key").notNull().default(""),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => ({ userIdx: index("user_handoff_targets_user_idx").on(t.userId) }),
+);
+
 
 // 项目走 HTTPS 远端时用的用户名 + 令牌。**一个项目一组**，故意不做成「一个项目多个
 // host」：需求是「这个项目用哪个账号推」，多 host 那层复杂度还没有人要过。
@@ -53,6 +172,8 @@ export const notes = sqliteTable("notes", {
   projectId: text("project_id").notNull(),
   body: text("body").notNull(),
   attachments: text("attachments"), // json string[]
+  // 随手记在多人模式下是**私有**的(§八),所以归属列是可见性判据本身,不只是统计。
+  ownerUserId: text("owner_user_id"),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
 });
@@ -196,6 +317,15 @@ export const tasks = sqliteTable("tasks", {
   handoff: text("handoff"),
   // 强制恢复会清掉 handoff；风险审计另存，确保无会话任务刷新后也仍能看见双任务警告。
   handoffAudit: text("handoff_audit"),
+  // ── 多人模式(§八)────────────────────────────────────────────────────────
+  // 这个任务「用谁的执行器/供应商/CLI 环境跑」以及统计归属。可见性仍跟项目走。
+  // 三条继承规则:派生任务(团队执行者/审查任务/就地验证轮)继承父任务;日程/定时
+  // 消息触发的继承日程创建者;接力导入的记对端用户。
+  ownerUserId: text("owner_user_id"),
+  // 派任务那一刻执行器长什么样的快照(json {name,type,model,reasoningEffort})。
+  // 共享项目里别人来重跑/回复时,原执行器多半是**私有资源**解析不到 —— 有这份快照
+  // 才能在降级弹窗里如实说出「原执行器属于 A 的 xxx」(§八 B5)。
+  executorSnapshot: text("executor_snapshot"),
 });
 
 export const agents = sqliteTable("agents", {
@@ -213,6 +343,9 @@ export const agents = sqliteTable("agents", {
   // 声明表在 @ash/shared/cli-overrides —— 没在那儿声明过的 key 一律不落库。
   configOverrides: text("config_overrides").notNull().default("{}"),
   isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
+  // 多人模式:执行器是**个人面**资源(§八),各人各一套,互不可见。
+  // null = 自用模式建的,或转多人时归了初始管理员之前的存量行。
+  ownerUserId: text("owner_user_id"),
 });
 
 // Global team-creation shortcuts. config stores only the configurable TeamConfig
@@ -221,6 +354,7 @@ export const teamPresets = sqliteTable("team_presets", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   config: text("config").notNull(), // json TeamPresetConfig (without display labels)
+  ownerUserId: text("owner_user_id"), // 个人面资源(§八)
   createdAt: text("created_at").notNull(),
 });
 
@@ -236,10 +370,13 @@ export const workflows = sqliteTable(
     description: text("description").notNull().default(""),
     def: text("def").notNull(), // json WorkflowDef
     disabled: integer("disabled", { mode: "boolean" }).notNull().default(false),
+    ownerUserId: text("owner_user_id"), // 个人面资源(§八)
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
-  (t) => ({ builtinIdx: uniqueIndex("workflows_builtin_idx").on(t.builtinKey) }),
+  // builtin_key 的唯一约束必须**带上归属**：每个人都可以覆写同一条系统自带起手式,
+  // 全局唯一会让第二个人存不进去。
+  (t) => ({ builtinIdx: uniqueIndex("workflows_builtin_idx").on(t.builtinKey, t.ownerUserId) }),
 );
 
 export const reviewerProfiles = sqliteTable("reviewer_profiles", {
@@ -249,6 +386,7 @@ export const reviewerProfiles = sqliteTable("reviewer_profiles", {
   executorId: text("executor_id"),
   model: text("model"),
   reasoningEffort: text("reasoning_effort"),
+  ownerUserId: text("owner_user_id"), // 个人面资源(§八)
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -428,6 +566,9 @@ export const schedules = sqliteTable("schedules", {
   cron: text("cron"), // 5-field expression for recurring
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   lastRunAt: text("last_run_at"),
+  // 建这条日程的人。到点派出去的任务按它继承 ownerUserId(§八 三条继承规则之二),
+  // 停用该用户时他建的日程一并暂停(§五)。
+  ownerUserId: text("owner_user_id"),
   createdAt: text("created_at").notNull(),
 });
 
@@ -519,6 +660,8 @@ export const llmProviders = sqliteTable("llm_providers", {
   pinnedModels: text("pinned_models").notNull().default("[]"),
   // Anthropic 供应商逐模型声明 1M；存干净模型名，运行时再加 [1m] 并按需走本地转发。
   context1mModels: text("context_1m_models").notNull().default("[]"),
+  // 多人模式:**不做共享池**,每人自带 API key(§八)。
+  ownerUserId: text("owner_user_id"),
   createdAt: text("created_at").notNull(),
 });
 

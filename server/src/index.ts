@@ -82,7 +82,7 @@ try {
   exitAfterStartupFailure("failed to acquire the database singleton lock", e);
 }
 
-const { startScheduler, api } = await initializeServer().catch((e) =>
+const { startScheduler, api, authGate } = await initializeServer().catch((e) =>
   exitAfterStartupFailure("server initialization failed", e),
 );
 
@@ -103,6 +103,18 @@ async function initializeServer() {
     ]);
 
   await ensureSchema();
+  // 实例模式(自用 / 多人)要在任何路由被打之前读出来:同步派进程那条路只认
+  // auth/multi-flag.ts 里的缓存镜像,而那个镜像由 instanceConfig() 负责刷新。
+  const [modeModule, { authGate }] = await Promise.all([
+    import("./auth/mode.js"),
+    import("./auth/middleware.js"),
+  ]);
+  const instance = await modeModule.instanceConfig();
+  if (instance.mode === "multi") {
+    const { sweepExpiredSessions } = await import("./auth/store.js");
+    await sweepExpiredSessions();
+    console.log(`[ash] 多人模式：根目录 ${instance.rootDir}`);
+  }
   // 测试库档第一次从主库播种，之后复用这个 worktree 自己的副本。
   if (process.env.ASH_SEED_FROM) {
     const { seedPreviewDb } = await import("./preview-seed.js");
@@ -159,10 +171,13 @@ async function initializeServer() {
     const { db } = await import("./db/index.js");
     warmSkills((await db.select().from(projects)).map((p) => p.repoPath));
   })().catch(() => {});
-  return { startScheduler: schedulesModule.startScheduler, api: routesModule.api };
+  return { startScheduler: schedulesModule.startScheduler, api: routesModule.api, authGate };
 }
 
 const app = new Hono();
+// 鉴权闸。**必须排在所有路由之前** —— 它是一张正面清单:公开的那几条逐条列在
+// auth/middleware.ts 里,其余一律要身份。自用模式下它整体空转(§三)。
+app.use("*", authGate());
 app.route("/api", api);
 
 // 没被上面任何一条 api 路由认领的 `/api/*`,到这里就停,不许落到下方的 SPA 兜底。

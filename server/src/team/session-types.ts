@@ -8,6 +8,8 @@ export interface Lead {
   sessId: string;
   cliSessionId: string;
   agentType: AgentType;
+  /** 这台调度台跑的是谁的活(多人模式)。技能扫描与环境注入按它走。 */
+  ownerUserId: string | null;
   executorId: string | null;
   model: string | null;
   reasoningEffort: string | null;

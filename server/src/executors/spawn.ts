@@ -6,12 +6,42 @@ import { dirname, join } from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough, Readable } from "node:stream";
 import { IS_WINDOWS, isPidAlive, killOne, killTree, listProcesses } from "../platform.js";
+import { isMultiUserSync } from "../auth/multi-flag.js";
 import { augmentedEnv, resolveBin, resolveLaunch } from "./bin-resolve.js";
 
 // PATH 补全与命令名解析住在 bin-resolve.ts(Windows 的 PATHEXT / `.cmd` 垫片够写
 // 一整个文件)。这里转出去,是因为已有近二十处从 spawn.ts import 它们。
 export { augmentedEnv, resolveBin, resolveLaunch };
 export type { LaunchPlan } from "./bin-resolve.js";
+
+// ── 多人模式:server 进程自己的出站凭证不透传给 agent(docs/multi-user-plan.md §八)──
+// 宿主机上跑着的 ash 很可能自带 ANTHROPIC_API_KEY 之类;不删的话,一个「没挂供应商」
+// 的执行器照样能花到宿主的钱,「抹去宿主订阅」整节就是空的。
+//
+// 顺序很关键:这一层是**基座**,供应商注入(executor.env() 的 relay)与回合身份
+// (opts.env)都拼在它后面,所以挂了供应商的执行器仍然拿得到自己的 key —— 清掉的
+// 只有「server 环境里带进来的那份」。
+//
+// 名单只含「能直接花到宿主模型额度」的变量。仓库访问凭证(GH_TOKEN 等)刻意不清:
+// agent 用 `gh` 查 issue 是正常工作流,砍掉是平白弄坏功能,而项目 git 凭证本来就走
+// project_git_credentials 单独注入。
+const SCRUBBED_OUTBOUND_ENV = [
+  "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN",
+  "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_BASE_URL_PATH",
+  "GEMINI_API_KEY", "GOOGLE_API_KEY", "GROQ_API_KEY", "DEEPSEEK_API_KEY",
+  "MOONSHOT_API_KEY", "DASHSCOPE_API_KEY", "XAI_API_KEY",
+] as const;
+
+/**
+ * 起 agent CLI 用的基座环境。自用模式下与 `augmentedEnv()` 逐字节相同 ——
+ * 那条路的行为必须与本功能上线前一致(§二)。
+ */
+export function agentBaseEnv(): NodeJS.ProcessEnv {
+  const env = augmentedEnv();
+  if (!isMultiUserSync()) return env;
+  for (const key of SCRUBBED_OUTBOUND_ENV) delete env[key];
+  return env;
+}
 
 // shell-quote a single argument for a copy-pasteable command line
 export const shq = (s: string) => (/^[\w./:@=-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
@@ -224,7 +254,7 @@ export function spawnAgent(
   const child = spawn(plan.file, plan.args, {
     cwd,
     stdio,
-    env: { ...augmentedEnv(), ...extraEnv },
+    env: { ...agentBaseEnv(), ...extraEnv },
     detached: DETACH,
     windowsHide: true,
     windowsVerbatimArguments: plan.windowsVerbatimArguments,

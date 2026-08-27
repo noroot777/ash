@@ -7,6 +7,8 @@ import { db } from "./db/index.js";
 import { agents, freeWorkflowStates, reviewerProfiles } from "./db/schema.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { id, now } from "./util.js";
+import { actorOf } from "./auth/context.js";
+import { canUseOwned, filterOwned, notYours, ownerStamp } from "./auth/owned.js";
 
 type ReviewerRow = typeof reviewerProfiles.$inferSelect;
 
@@ -73,16 +75,17 @@ async function parseBody(body: Record<string, unknown>, existing?: ReviewerRow) 
 }
 
 export function mountReviewerProfileRoutes(api: Hono): void {
+  // 审查者是**个人面**资源(§八):多人模式下各人只看得到自己那份。
   api.get("/reviewer-profiles", async (c) => {
     const rows = await db.select().from(reviewerProfiles).orderBy(desc(reviewerProfiles.updatedAt));
-    return c.json(await Promise.all(rows.map(toProfile)));
+    return c.json(await Promise.all((await filterOwned(rows, actorOf(c))).map(toProfile)));
   });
 
   api.post("/reviewer-profiles", async (c) => {
     try {
       const data = await parseBody(await c.req.json<Record<string, unknown>>());
       const at = now();
-      const row: ReviewerRow = { id: id(), ...data, createdAt: at, updatedAt: at };
+      const row: ReviewerRow = { id: id(), ...data, ...ownerStamp(actorOf(c)), createdAt: at, updatedAt: at };
       await db.insert(reviewerProfiles).values(row);
       return c.json(await toProfile(row), 201);
     } catch (error) {
@@ -93,7 +96,7 @@ export function mountReviewerProfileRoutes(api: Hono): void {
   api.patch("/reviewer-profiles/:id", async (c) => {
     const profileId = c.req.param("id");
     const existing = (await db.select().from(reviewerProfiles).where(eq(reviewerProfiles.id, profileId))).at(0);
-    if (!existing) return c.json({ error: "审查者不存在" }, 404);
+    if (!(await canUseOwned(existing, actorOf(c)))) return c.json(notYours("审查者"), 404);
     try {
       const data = await parseBody(await c.req.json<Record<string, unknown>>(), existing);
       await db.update(reviewerProfiles).set({ ...data, updatedAt: now() }).where(eq(reviewerProfiles.id, profileId));
@@ -106,8 +109,8 @@ export function mountReviewerProfileRoutes(api: Hono): void {
 
   api.delete("/reviewer-profiles/:id", async (c) => {
     const profileId = c.req.param("id");
-    const existing = (await db.select({ id: reviewerProfiles.id }).from(reviewerProfiles).where(eq(reviewerProfiles.id, profileId))).at(0);
-    if (!existing) return c.json({ error: "审查者不存在" }, 404);
+    const existing = (await db.select().from(reviewerProfiles).where(eq(reviewerProfiles.id, profileId))).at(0);
+    if (!(await canUseOwned(existing, actorOf(c)))) return c.json(notYours("审查者"), 404);
     // 先摘掉引用再删配置。两种预约分开处理：
     // - 手动预约（reviewRunId 空）依赖 profile 配置 → 必须 disarm，否则 UI 仍显示
     //   「已预约」而结算因 reviewerId 为空静默不派审。

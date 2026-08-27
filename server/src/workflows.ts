@@ -22,6 +22,8 @@ import { getAppSettings, patchAppSettings } from "./app-settings.js";
 import { db } from "./db/index.js";
 import { projects, tasks, workflows } from "./db/schema.js";
 import { id, now } from "./util.js";
+import { actorOf } from "./auth/context.js";
+import { ownedScope, ownerStamp } from "./auth/owned.js";
 
 type Row = typeof workflows.$inferSelect;
 
@@ -113,8 +115,11 @@ function factoryItem(key: string, name: string, desc: string): WorkflowItem {
 
 // 自带的排在前面且**顺序固定**（那是产品排的从简到繁的梯子，不该被改动时间打乱），
 // 用户自建的按最近创建在前跟在后面。
-export async function listWorkflows(): Promise<WorkflowItem[]> {
-  const rows = await db.select().from(workflows).orderBy(desc(workflows.createdAt));
+// `owner` = 只看这个人的行(多人模式)。null = 不设限(自用模式)。**自带条目永远都在** ——
+// 它们不是任何人的私产,只是「被谁改过」才落行;所以覆写行按人过滤,出厂那份不过滤。
+export async function listWorkflows(owner: string | null = null): Promise<WorkflowItem[]> {
+  const all = await db.select().from(workflows).orderBy(desc(workflows.createdAt));
+  const rows = owner === null ? all : all.filter((r) => r.ownerUserId === owner);
   const overrides = new Map(rows.filter((r) => r.builtinKey).map((r) => [r.builtinKey!, r]));
   const builtins = BUILTIN_WORKFLOWS.map((b) => {
     const row = overrides.get(b.key);
@@ -124,28 +129,30 @@ export async function listWorkflows(): Promise<WorkflowItem[]> {
   return [...builtins, ...own];
 }
 
-export async function findWorkflow(itemId: string): Promise<WorkflowItem | null> {
+export async function findWorkflow(itemId: string, owner: string | null = null): Promise<WorkflowItem | null> {
+  const mine = (r: { ownerUserId: string | null }) => owner === null || r.ownerUserId === owner;
   if (isBuiltinKey(itemId)) {
     const meta = BUILTIN_WORKFLOWS.find((b) => b.key === itemId)!;
     const row = (await db.select().from(workflows).where(eq(workflows.builtinKey, itemId))).at(0);
-    return row ? rowItem(row, meta.name, meta.desc) : factoryItem(itemId, meta.name, meta.desc);
+    return row && mine(row) ? rowItem(row, meta.name, meta.desc) : factoryItem(itemId, meta.name, meta.desc);
   }
   const row = (
     await db.select().from(workflows).where(and(eq(workflows.id, itemId), isNull(workflows.builtinKey)))
   ).at(0);
-  return row ? rowItem(row) : null;
+  return row && mine(row) ? rowItem(row) : null;
 }
 
 // 覆写行的 upsert：自带条目第一次被改时才落行，之后就地更新。
-async function writeOverride(key: string, patch: Partial<Row>): Promise<void> {
-  const existing = (await db.select().from(workflows).where(eq(workflows.builtinKey, key))).at(0);
+async function writeOverride(key: string, patch: Partial<Row>, owner: string | null): Promise<void> {
+  const rows = await db.select().from(workflows).where(eq(workflows.builtinKey, key));
+  const existing = rows.find((r) => owner === null || r.ownerUserId === owner);
   const meta = BUILTIN_WORKFLOWS.find((b) => b.key === key)!;
   if (existing) {
     await db.update(workflows).set({ ...patch, updatedAt: now() }).where(eq(workflows.id, existing.id));
     return;
   }
   await db.insert(workflows).values({
-    id: id(), builtinKey: key,
+    id: id(), builtinKey: key, ownerUserId: owner,
     name: meta.name, description: meta.desc,
     def: JSON.stringify(builtinWorkflowDef(key)!),
     disabled: false, createdAt: now(), updatedAt: now(),
@@ -170,8 +177,9 @@ export async function workflowChain(projectId?: string | null): Promise<string[]
 export async function resolveWorkflowDef(opts: {
   explicitId?: string | null;
   projectId?: string | null;
+  owner?: string | null;
 }): Promise<{ id: string; def: WorkflowDef }> {
-  const items = await listWorkflows();
+  const items = await listWorkflows(opts.owner ?? null);
   // 挑选规矩本身在 shared 里（resolveWorkflowFromList），前端的新建面板用的是同一份，
   // 这样「面板上说会走哪条」和「真建出来走了哪条」不可能各说各话。
   const chain = [opts.explicitId, ...(await workflowChain(opts.projectId))];
@@ -182,10 +190,11 @@ export async function resolveWorkflowDef(opts: {
 }
 
 export function mountWorkflowRoutes(api: Hono): void {
-  api.get("/workflows", async (c) => c.json(await listWorkflows()));
+  // 起手式是**个人面**资源(§八):多人模式下各人只看得到自己那份,实例管理员也一样。
+  api.get("/workflows", async (c) => c.json(await listWorkflows(await ownedScope(actorOf(c)))));
 
   api.get("/workflows/:id", async (c) => {
-    const item = await findWorkflow(c.req.param("id"));
+    const item = await findWorkflow(c.req.param("id"), await ownedScope(actorOf(c)));
     return item ? c.json(item) : c.json({ error: "起手式不存在" }, 404);
   });
 
@@ -197,6 +206,7 @@ export function mountWorkflowRoutes(api: Hono): void {
     if (!parsed.def) return c.json({ error: parsed.error }, 400);
     const row: Row = {
       id: id(), builtinKey: null, name,
+      ...ownerStamp(actorOf(c)),
       description: text(body.description, MAX_DESC) ?? "",
       def: JSON.stringify(parsed.def), disabled: false,
       createdAt: now(), updatedAt: now(),
@@ -209,7 +219,8 @@ export function mountWorkflowRoutes(api: Hono): void {
   // 是在用的那条）；改完带上 modified 标记 + 永远可用的「恢复系统默认」。
   api.patch("/workflows/:id", async (c) => {
     const itemId = c.req.param("id");
-    const existing = await findWorkflow(itemId);
+    const owner = await ownedScope(actorOf(c));
+    const existing = await findWorkflow(itemId, owner);
     if (!existing) return c.json({ error: "起手式不存在" }, 404);
     const body = await c.req.json<{
       name?: unknown; description?: unknown; def?: unknown; disabled?: unknown;
@@ -231,9 +242,9 @@ export function mountWorkflowRoutes(api: Hono): void {
       patch.disabled = body.disabled;
     }
     if (!Object.keys(patch).length) return c.json(existing);
-    if (existing.builtin) await writeOverride(itemId, patch);
+    if (existing.builtin) await writeOverride(itemId, patch, owner);
     else await db.update(workflows).set({ ...patch, updatedAt: now() }).where(eq(workflows.id, itemId));
-    return c.json((await findWorkflow(itemId))!);
+    return c.json((await findWorkflow(itemId, owner))!);
   });
 
   // 自带的删不掉：409 并明确指路（停用 / 恢复默认），别让前端去猜。
@@ -242,7 +253,7 @@ export function mountWorkflowRoutes(api: Hono): void {
     if (isBuiltinKey(itemId)) {
       return c.json({ error: "系统自带的起手式删不掉，可以「停用」让它不再出现，或「恢复系统默认」" }, 409);
     }
-    const existing = await findWorkflow(itemId);
+    const existing = await findWorkflow(itemId, await ownedScope(actorOf(c)));
     if (!existing) return c.json({ error: "起手式不存在" }, 404);
     await db.delete(workflows).where(eq(workflows.id, itemId));
     await clearReferences(itemId);
@@ -254,8 +265,14 @@ export function mountWorkflowRoutes(api: Hono): void {
   api.post("/workflows/:id/restore", async (c) => {
     const itemId = c.req.param("id");
     if (!isBuiltinKey(itemId)) return c.json({ error: "只有系统自带的起手式能恢复默认" }, 400);
-    await db.delete(workflows).where(eq(workflows.builtinKey, itemId));
-    return c.json((await findWorkflow(itemId))!);
+    const owner = await ownedScope(actorOf(c));
+    // 只删**自己那份**覆写行:别人对同一条自带起手式的改法不该被一起抹掉。
+    const overrides = await db.select().from(workflows).where(eq(workflows.builtinKey, itemId));
+    for (const row of overrides) {
+      if (owner !== null && row.ownerUserId !== owner) continue;
+      await db.delete(workflows).where(eq(workflows.id, row.id));
+    }
+    return c.json((await findWorkflow(itemId, owner))!);
   });
 }
 

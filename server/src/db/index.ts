@@ -192,6 +192,44 @@ export async function ensureSchema() {
       first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
       approved_at TEXT, last_addr TEXT NOT NULL DEFAULT ''
     );
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'member', dir_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'invited', key_hash TEXT,
+      git_name TEXT NOT NULL DEFAULT '', git_email TEXT NOT NULL DEFAULT '',
+      created_by TEXT, created_at TEXT NOT NULL, last_active_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS user_sessions (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+      user_agent TEXT NOT NULL DEFAULT ''
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS user_sessions_token_idx ON user_sessions (token_hash);
+    CREATE INDEX IF NOT EXISTS user_sessions_user_idx ON user_sessions (user_id);
+    CREATE TABLE IF NOT EXISTS user_invites (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT NOT NULL,
+      created_by TEXT, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+      consumed_at TEXT, revoked_at TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS user_invites_token_idx ON user_invites (token_hash);
+    CREATE INDEX IF NOT EXISTS user_invites_user_idx ON user_invites (user_id);
+    CREATE TABLE IF NOT EXISTS project_members (
+      project_id TEXT NOT NULL, user_id TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'member', added_by TEXT, added_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS project_members_idx ON project_members (project_id, user_id);
+    CREATE INDEX IF NOT EXISTS project_members_user_idx ON project_members (user_id);
+    CREATE TABLE IF NOT EXISTS project_invites (
+      id TEXT PRIMARY KEY, project_id TEXT NOT NULL, token_hash TEXT NOT NULL,
+      created_by TEXT, created_at TEXT NOT NULL, expires_at TEXT, revoked_at TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS project_invites_token_idx ON project_invites (token_hash);
+    CREATE INDEX IF NOT EXISTS project_invites_project_idx ON project_invites (project_id);
+    CREATE TABLE IF NOT EXISTS user_handoff_targets (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, url TEXT NOT NULL,
+      peer_fp TEXT, peer_key TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS user_handoff_targets_user_idx ON user_handoff_targets (user_id);
   `);
   // Tolerant migration for DBs created before columns were added.
   try {
@@ -360,6 +398,18 @@ export async function ensureSchema() {
     // 任务接力(跨机器 handoff)的持久标记(json TaskHandoff,见 db/schema.ts)。
     "ALTER TABLE tasks ADD COLUMN handoff TEXT",
     "ALTER TABLE tasks ADD COLUMN handoff_audit TEXT",
+    // ── 多人模式(docs/multi-user-plan.md §八)──────────────────────────────
+    // 归属列。全部可空:自用模式下恒为 null,转多人时由向导一次性实名化成初始管理员。
+    "ALTER TABLE tasks ADD COLUMN owner_user_id TEXT",
+    "ALTER TABLE tasks ADD COLUMN executor_snapshot TEXT",
+    "ALTER TABLE projects ADD COLUMN owner_user_id TEXT",
+    "ALTER TABLE notes ADD COLUMN owner_user_id TEXT",
+    "ALTER TABLE agents ADD COLUMN owner_user_id TEXT",
+    "ALTER TABLE llm_providers ADD COLUMN owner_user_id TEXT",
+    "ALTER TABLE workflows ADD COLUMN owner_user_id TEXT",
+    "ALTER TABLE reviewer_profiles ADD COLUMN owner_user_id TEXT",
+    "ALTER TABLE team_presets ADD COLUMN owner_user_id TEXT",
+    "ALTER TABLE schedules ADD COLUMN owner_user_id TEXT",
   ]) {
     try {
       await client.execute(sql);
@@ -367,6 +417,7 @@ export async function ensureSchema() {
       /* column already exists */
     }
   }
+  await widenWorkflowBuiltinIndex();
   await migrateLegacyNoteTaskLinks();
   await migrateDebateToDuet();
   await migrateFreeReviewStatuses();
@@ -386,6 +437,22 @@ export async function ensureSchema() {
   if (!(await removeSshExecutorProfiles())) keepColumns.add("agents.target");
   await dropRetiredColumns(keepColumns);
   await dropRetiredTables(client, RETIRED_TABLES);
+}
+
+// 起手式的「覆写某条系统自带」唯一约束要**带上归属**：多人模式下每个人都能各自覆写
+// 同一条自带起手式,全局唯一会让第二个人存不进去(而且报的是一句看不懂的约束冲突)。
+// 老库上的旧索引只认 builtin_key,这里换成 (builtin_key, owner_user_id)。幂等。
+async function widenWorkflowBuiltinIndex(): Promise<void> {
+  try {
+    const info = await client.execute("PRAGMA index_info(workflows_builtin_idx)");
+    if (info.rows.length === 2) return; // 已经是两列的新索引
+    await client.execute("DROP INDEX IF EXISTS workflows_builtin_idx");
+    await client.execute(
+      "CREATE UNIQUE INDEX IF NOT EXISTS workflows_builtin_idx ON workflows (builtin_key, owner_user_id)",
+    );
+  } catch (e) {
+    console.warn("[ash] 起手式覆写索引扩宽失败,忽略:", e);
+  }
 }
 
 // 审查链状态瘦身（2026-08-11）：叙事状态改为推导，持久值只剩 reviewing/passed/failed/stopped。

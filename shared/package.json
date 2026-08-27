@@ -70,6 +70,10 @@
       "types": "./src/cli-overrides.ts",
       "default": "./src/cli-overrides.ts"
     },
+    "./multiuser": {
+      "types": "./src/multiuser.ts",
+      "default": "./src/multiuser.ts"
+    },
     "./mcp-delivery": {
       "types": "./src/mcp-delivery.ts",
       "default": "./src/mcp-delivery.ts"

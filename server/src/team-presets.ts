@@ -5,6 +5,8 @@ import { AGENT_TYPES } from "@ash/shared";
 import { db } from "./db/index.js";
 import { agents, teamPresets } from "./db/schema.js";
 import { id, now } from "./util.js";
+import { actorOf } from "./auth/context.js";
+import { canUseOwned, filterOwned, notYours, ownerStamp } from "./auth/owned.js";
 
 type PresetRow = typeof teamPresets.$inferSelect;
 type AgentLabelRow = Pick<typeof agents.$inferSelect, "id" | "name" | "type" | "isDefault">;
@@ -127,7 +129,7 @@ export function mountTeamPresetRoutes(api: Hono): void {
       db.select().from(teamPresets).orderBy(desc(teamPresets.createdAt)),
       labelRows(),
     ]);
-    return c.json(rows.map((row) => toPreset(row, profiles)));
+    return c.json((await filterOwned(rows, actorOf(c))).map((row) => toPreset(row, profiles)));
   });
 
   api.post("/team-presets", async (c) => {
@@ -139,6 +141,7 @@ export function mountTeamPresetRoutes(api: Hono): void {
     const row: PresetRow = {
       id: id(),
       name,
+      ...ownerStamp(actorOf(c)),
       config: JSON.stringify(parsed.config),
       createdAt: now(),
     };
@@ -149,7 +152,7 @@ export function mountTeamPresetRoutes(api: Hono): void {
   api.patch("/team-presets/:id", async (c) => {
     const presetId = c.req.param("id");
     const existing = (await db.select().from(teamPresets).where(eq(teamPresets.id, presetId))).at(0);
-    if (!existing) return c.json({ error: "预设不存在" }, 404);
+    if (!(await canUseOwned(existing, actorOf(c)))) return c.json(notYours("预设"), 404);
     const body = await c.req.json<{ name?: unknown; config?: unknown }>();
     const patch: Partial<typeof teamPresets.$inferInsert> = {};
     if (body.name !== undefined) {
@@ -172,7 +175,7 @@ export function mountTeamPresetRoutes(api: Hono): void {
   api.delete("/team-presets/:id", async (c) => {
     const presetId = c.req.param("id");
     const existing = (await db.select().from(teamPresets).where(eq(teamPresets.id, presetId))).at(0);
-    if (!existing) return c.json({ error: "预设不存在" }, 404);
+    if (!(await canUseOwned(existing, actorOf(c)))) return c.json(notYours("预设"), 404);
     await db.delete(teamPresets).where(eq(teamPresets.id, presetId));
     return c.json({ deleted: true });
   });

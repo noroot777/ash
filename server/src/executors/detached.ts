@@ -22,7 +22,7 @@ import { join } from "node:path";
 import { IS_WINDOWS } from "../platform.js";
 import { isSameProcess } from "../proc.js";
 import {
-  shq, resolveBin, augmentedEnv, failedChild, guardAgentSpawn,
+  shq, resolveBin, agentBaseEnv, failedChild, guardAgentSpawn,
   openTrackFd, registerTrackFd, shareTrackFdRegistration, killChild, killByPid, spawnAgent,
 } from "./spawn.js";
 
@@ -234,7 +234,7 @@ export function spawnControllableDetachedAgent(
     'exit "$rc"',
   ].join("; ");
   const env = {
-    ...augmentedEnv(),
+    ...agentBaseEnv(),
     ...extraEnv,
     ASH_IN: input,
     ASH_OUT: paths.out,
@@ -309,7 +309,7 @@ export function spawnDetachedAgent(
 
   const script = '"$@" >>"$ASH_OUT" 2>>"$ASH_ERR"; printf %s $? >"$ASH_RC"';
   const env = {
-    ...augmentedEnv(),
+    ...agentBaseEnv(),
     ...extraEnv,
     ASH_OUT: paths.out,
     ASH_ERR: paths.err,
