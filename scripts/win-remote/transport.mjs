@@ -239,7 +239,12 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
       `Get-ChildItem -LiteralPath $env:TEMP -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^[0-9a-f]{18}\\.(ps1|out|err)$' -and $_.LastWriteTime -lt (Get-Date).AddHours(-1) } | Remove-Item -Force -ErrorAction SilentlyContinue`,
       `$__d=${psq(cwd ?? "")}`,
       `$__o=Join-Path $env:TEMP ${psq(`${token}.out`)}; $__r=Join-Path $env:TEMP ${psq(`${token}.err`)}; $__s=Join-Path $env:TEMP ${psq(`${token}.ps1`)}`,
-      `[IO.File]::WriteAllText($__s,[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(${psq(b64)})),(New-Object Text.UTF8Encoding $false))`,
+      // 这个 .ps1 **必须带 BOM**:对端是 Windows PowerShell 5.1(doctor 报 5.1.x),
+      // `-File` 读无 BOM 的脚本时按活动代码页(中文机器 936)解码,命令里但凡有一个中文字
+      // 就会被拆成两个 GBK 字节再错解成别的字符 —— 实测 `win-remote sync` 的那句中文守卫
+      // 提示直接把脚本解析崩了(Unexpected token ')'),而且报错指向的是乱码后的行,
+      // 看不出跟编码有关。写上 BOM 之后 5.1 和 7 都按 UTF-8 读。
+      `[IO.File]::WriteAllText($__s,[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(${psq(b64)})),(New-Object Text.UTF8Encoding $true))`,
       `$__x=[Diagnostics.Process]::GetCurrentProcess().Path`,
       `$__nl=[Environment]::NewLine`,
       // 容器要在起进程**之前**建好(见 kill-tree.mjs 顶部:事后按父链补拍快照够不着脱链后代)。
