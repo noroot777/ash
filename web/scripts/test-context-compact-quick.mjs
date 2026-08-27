@@ -5,6 +5,8 @@
 //   ② 存下去的 PATCH 打给的是**这条会话的执行器 profile**，body 是那两个数
 //   ③ 没有可覆盖项的 CLI（codex）压根不长这个入口
 //   ④ 保存后必须说清楚「下一轮生效」——当前这一轮的进程早带着旧环境变量起跑了
+//   ⑤ 执行器清单读失败之后还能重来：原地「重试」和「收起再展开」都要真的再发一次请求。
+//      缓存住那次失败等于把这个唯一的编辑入口锁死到刷新整页为止（第 1 轮审查 P2）
 //
 // 跑法：npm -w web run test:context-compact-quick
 import assert from "node:assert/strict";
@@ -40,6 +42,8 @@ try {
   browser = await chromium.launch(await chromeLaunchOptions());
   const page = await browser.newPage({ viewport: { width: 1000, height: 760 } });
   const patches = [];
+  // 前两次读执行器清单故意打成 503：一次留给「原地重试」，一次留给「收起再展开」。
+  let agentReads = 0;
   await page.route("**/api/**", (route) => {
     const request = route.request();
     const url = request.url();
@@ -56,11 +60,23 @@ try {
       });
     }
     if (url.includes("/api/agents")) {
-      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([PROFILE]) });
+      agentReads += 1;
+      return agentReads <= 2
+        ? route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"执行器清单暂时不可用"}' })
+        : route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([PROFILE]) });
     }
     return route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/context-compact-quick.html`);
+
+  /** 等一个只有 node 侧看得见的条件（请求计数）成立。 */
+  const until = async (predicate, message) => {
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      if (predicate()) return;
+      await page.waitForTimeout(50);
+    }
+    throw new Error(message);
+  };
 
   // ③ codex 那颗：面板里只有明细，没有快捷设置。
   await page.locator('[data-testid="codex-chip"] .context-meter-chip').click();
@@ -75,9 +91,22 @@ try {
   assert.match(await panel.innerText(), /距压缩/, "快捷设置不该挤掉原来的明细");
   await page.locator(".context-compact-toggle").click();
 
+  // ⑤ 第一次读失败：如实报错 + 给一颗原地「重试」。重试再失败也不能把入口锁死 ——
+  //    收起再展开(用户最自然的恢复动作)必须是一次真正的新请求。
+  const failure = page.locator(".context-compact-note.is-warn");
+  await failure.waitFor();
+  assert.match(await failure.innerText(), /执行器清单暂时不可用/, "读失败要如实说原因");
+  assert.equal(agentReads, 1);
+  await page.locator(".context-compact-retry").click();
+  await until(() => agentReads === 2, "「重试」必须真的再发一次请求");
+  await failure.waitFor();
+  await page.locator(".context-compact-toggle").click(); // 收起
+  await page.locator(".context-compact-toggle").click(); // 再展开
+
   const windowInput = page.locator(".context-compact-row").nth(0).locator("input");
   const percentInput = page.locator(".context-compact-row").nth(1).locator("input");
   await windowInput.waitFor();
+  assert.equal(agentReads, 3, "收起再展开必须重新拉一次，不能把上一次的失败缓存到刷新为止");
   // 展开时带出的是这个 profile 已存的值，不是空表单。
   assert.equal(await windowInput.inputValue(), "400000", "应回填执行器已存的窗口");
   assert.equal(await percentInput.inputValue(), "", "没配过的项留空 = 跟随 CLI");

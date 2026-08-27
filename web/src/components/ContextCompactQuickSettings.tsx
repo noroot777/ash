@@ -32,25 +32,36 @@ export function ContextCompactQuickSettings({
   open: boolean;
   onToggle: () => void;
 }) {
-  const [profiles, setProfiles] = useState<AgentExecutorProfile[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  // "idle" = 还没拉。**收起就退回 idle**,展开则重新拉一次:「收起再展开」是用户遇到
+  // 读取失败时最自然的恢复动作,把结果缓存住(哪怕只缓存那次错误)就等于告诉他「刷新
+  // 整页吧」。成功的那份也一起丢,重开时顺带拿到别处改过的最新配置。
+  const [load, setLoad] = useState<LoadState>({ status: "idle" });
+  // 「重试」按的是这个:展开状态没变,靠它把同一个 effect 再跑一遍。
+  const [attempt, setAttempt] = useState(0);
 
   // 展开才去拉执行器清单:这颗面板挂在每条会话的最后一条气泡上,一进任务就拉一遍
   // 纯属浪费,而用户十有八九只是来看一眼水位。
+  //
+  // 依赖里**不能有 load.status** —— effect 自己第一句就把它改成 "loading",那会立刻
+  // 触发清理(alive=false)把自己发出的请求作废,界面永远停在「读取执行器配置…」。
   useEffect(() => {
-    if (!open || profiles || loadError) return;
+    if (!open) {
+      setLoad({ status: "idle" });
+      return;
+    }
     let alive = true;
+    setLoad({ status: "loading" });
     api.agents()
-      .then((list) => { if (alive) setProfiles(list); })
+      .then((profiles) => { if (alive) setLoad({ status: "ready", profiles }); })
       .catch((error: unknown) => {
-        if (alive) setLoadError(error instanceof Error ? error.message : "执行器清单读不到");
+        if (alive) setLoad({ status: "failed", error: error instanceof Error ? error.message : "执行器清单读不到" });
       });
     return () => { alive = false; };
-  }, [loadError, open, profiles]);
+  }, [attempt, open]);
 
   if (!hasCliConfigOverrides(session.agentType)) return null;
 
-  const profile = profiles ? matchProfile(profiles, session) : null;
+  const profile = load.status === "ready" ? matchProfile(load.profiles, session) : null;
 
   return (
     <div className="context-compact-quick">
@@ -65,17 +76,26 @@ export function ContextCompactQuickSettings({
         <CaretDown size={10} weight="bold" aria-hidden="true" />
       </button>
       {open && (
-        loadError
-          ? <p className="context-compact-note">读不到执行器清单：{loadError}</p>
-          : !profiles
+        load.status === "failed"
+          ? (
+            <p className="context-compact-note is-warn">
+              读不到执行器清单：{load.error}
+              {/* 原地重试,免得为了一次网络抖动去收起再展开(更别说刷新整页)。 */}
+              <button type="button" className="context-compact-retry" onClick={() => setAttempt((n) => n + 1)}>
+                重试
+              </button>
+            </p>
+          )
+          : load.status !== "ready"
             ? <p className="context-compact-note">读取执行器配置…</p>
             : profile
               ? (
                 <CompactOverrideForm
                   key={profile.id}
                   profile={profile}
-                  onSaved={(saved) => setProfiles((current) =>
-                    (current ?? []).map((item) => (item.id === saved.id ? saved : item)))}
+                  onSaved={(saved) => setLoad((current) => (current.status === "ready"
+                    ? { status: "ready", profiles: current.profiles.map((item) => (item.id === saved.id ? saved : item)) }
+                    : current))}
                 />
               )
               : (
@@ -88,6 +108,12 @@ export function ContextCompactQuickSettings({
     </div>
   );
 }
+
+type LoadState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; profiles: AgentExecutorProfile[] }
+  | { status: "failed"; error: string };
 
 /**
  * 会话行记的是 profile 主键;`executorId` 为空的是**该字段上线之前**建的老会话,

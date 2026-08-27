@@ -196,6 +196,8 @@
 .context-compact-preset:hover { border-color: var(--line2); background: var(--raised); color: var(--muted); }
 .context-compact-note { margin: 0; color: var(--faint); font-size: 9.5px; line-height: 1.5; }
 .context-compact-note.is-warn { color: var(--red); }
+.context-compact-retry { margin-left: 6px; border: 1px solid currentColor; border-radius: 5px; background: transparent; padding: 1px 6px; color: inherit; font-size: 9.5px; }
+.context-compact-retry:hover { background: var(--raised); }
 .context-compact-actions { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
 /* 「改的是哪个执行器 / 什么时候生效」跟保存按钮同一行：这是按下去之前最该读到的一句。 */
 .context-compact-actions > span { flex: 1; min-width: 0; color: var(--faint); font-size: 9.5px; line-height: 1.4; }
