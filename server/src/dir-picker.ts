@@ -6,6 +6,7 @@ import { getConnInfo } from "@hono/node-server/conninfo";
 import type { Hono } from "hono";
 import { expandHome } from "./git.js";
 import { encodePowerShellCommand } from "./platform.js";
+import { instanceAdminOnly } from "./auth/context.js";
 
 // 「弹一个系统文件选择窗口，让用户点出项目目录」。三件事决定了这个模块的形状：
 //
@@ -343,6 +344,11 @@ export function readPickRequest(
 
 export function mountDirectoryPickerRoutes(api: Hono): void {
   api.post("/host/pick-directory", async (c) => {
+    // 多人模式:目录选择窗口弹在**服务端桌面**上,选到的是整台机器的文件系统 ——
+    // 它是实例管理员的工具,不是普通用户的(§七)。普通用户走 web 目录树选择器,
+    // 那条路只在他自己的目录里走。
+    const denied = await instanceAdminOnly(c, "目录选择");
+    if (denied) return c.json(denied.body, denied.status);
     const support = directoryPickerSupport(getConnInfo(c).remote.address);
     // 403 而不是 400：这是「你这个来源不该调它」，跟参数没关系。
     if (!support.available) return c.json({ error: support.reason }, 403);

@@ -175,15 +175,16 @@ export interface PersonalSkill {
 
 // ── 配置导出 / 导入(§十)────────────────────────────────────────────────────
 
-export const CONFIG_BUNDLE_KINDS = ["executors", "modes", "workflows", "reviewers", "providers"] as const;
+export const CONFIG_BUNDLE_KINDS = ["providers", "executors", "workflows", "reviewers", "teamPresets", "cliEnv"] as const;
 export type ConfigBundleKind = (typeof CONFIG_BUNDLE_KINDS)[number];
 
 export const CONFIG_BUNDLE_LABELS: Record<ConfigBundleKind, string> = {
   executors: "执行器",
-  modes: "执行模式",
+  teamPresets: "模式预设",
   workflows: "起手式",
   reviewers: "审查者",
   providers: "供应商(不含 API key)",
+  cliEnv: "个人 CLI 环境(技能 + 全局指令)",
 };
 
 /**
@@ -193,12 +194,66 @@ export const CONFIG_BUNDLE_LABELS: Record<ConfigBundleKind, string> = {
 export interface ConfigBundle {
   version: 1;
   exportedAt: string;
-  exportedBy: string;
-  executors?: unknown[];
-  modes?: unknown[];
-  workflows?: unknown[];
-  reviewers?: unknown[];
-  providers?: unknown[];
+  /** 这份文件里装了哪几类(导入端据此显示勾选框)。 */
+  kinds: ConfigBundleKind[];
+  items: {
+    providers?: ConfigProviderItem[];
+    executors?: ConfigExecutorItem[];
+    workflows?: ConfigWorkflowItem[];
+    reviewers?: ConfigReviewerItem[];
+    teamPresets?: ConfigNamedItem[];
+    cliEnv?: ConfigCliEnvItem[];
+  };
+}
+
+export interface ConfigProviderItem {
+  name: string;
+  protocol: string;
+  baseUrl: string;
+  model: string | null;
+  protocolConversionEnabled: boolean;
+  modelListMode: string | null;
+  pinnedModels: string | null;
+  context1mModels: string | null;
+}
+
+export interface ConfigExecutorItem {
+  name: string;
+  type: string;
+  model: string | null;
+  extraArgs: string | null;
+  reasoningEffort: string | null;
+  speed: string | null;
+  configOverrides: string | null;
+  isDefault: boolean;
+  /** 按**名字**软引用供应商:对端的 id 必然不同,靠 id 引用一定悬空。 */
+  providerName: string | null;
+}
+
+export interface ConfigWorkflowItem {
+  builtinKey: string | null;
+  name: string;
+  description: string | null;
+  def: string;
+  disabled: boolean;
+}
+
+export interface ConfigReviewerItem {
+  name: string;
+  agentType: string;
+  model: string | null;
+  reasoningEffort: string | null;
+}
+
+export interface ConfigNamedItem {
+  name: string;
+  config: string;
+}
+
+export interface ConfigCliEnvItem {
+  agentType: string;
+  memory: string;
+  skills: { name: string; body: string }[];
 }
 
 // ── 接力:目标机器按人(§十一)───────────────────────────────────────────────

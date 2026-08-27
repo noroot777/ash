@@ -54,8 +54,10 @@ import { mountLocalOpenRoutes } from "./local-open-routes.js";
 import { directoryPickerSupport, mountDirectoryPickerRoutes } from "./dir-picker.js";
 import { mountProjectCloneRoutes } from "./project-clone.js";
 import { mountProjectRoutes } from "./project-routes.js";
+import { mountFsBrowseRoutes } from "./fs-browse.js";
 import { mountAuthRoutes } from "./auth/routes.js";
 import { mountUserRoutes } from "./auth/user-routes.js";
+import { mountPersonalCliRoutes } from "./auth/personal-routes.js";
 import { actorOf } from "./auth/context.js";
 import { makeEventFilter } from "./auth/event-filter.js";
 import { visibleProjectIds } from "./auth/visibility.js";
@@ -68,9 +70,11 @@ export const api = new Hono();
 // (见 auth/middleware.ts 的 PUBLIC 清单),前端得先问出「什么模式、我是谁」。
 mountAuthRoutes(api);
 mountUserRoutes(api);
+mountPersonalCliRoutes(api);
 mountNoteRoutes(api);
 mountLocalOpenRoutes(api);
 mountDirectoryPickerRoutes(api);
+mountFsBrowseRoutes(api);
 mountProjectRoutes(api);
 mountProjectCloneRoutes(api);
 

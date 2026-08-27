@@ -10,6 +10,7 @@ import { resolveBin } from "./executors/bin-resolve.js";
 import { expandHome } from "./git.js";
 import { IS_WINDOWS } from "./platform.js";
 import { id } from "./util.js";
+import { instanceAdminOnly } from "./auth/context.js";
 
 const MAX_BUFFER_BYTES = 512 * 1024;
 const MAX_SESSIONS = 16;
@@ -230,6 +231,14 @@ export function resolveTerminalDirectory(repoPath: string | null | undefined): s
 }
 
 export function mountTerminalRoutes(api: Hono): void {
+  // 终端是**实例管理员专属**(§七):它开的是宿主机上的一个真 shell,项目目录只是
+  // 起始 cwd —— 一条 `cd /` 就出去了。给普通用户就等于把「护栏」变成一句空话。
+  api.use("/projects/:projectId/terminal/*", async (c, next) => {
+    const denied = await instanceAdminOnly(c, "终端");
+    if (denied) return c.json(denied.body, denied.status);
+    return next();
+  });
+
   api.post("/projects/:projectId/terminal/sessions", async (c) => {
     const projectId = c.req.param("projectId");
     const cwd = await projectDirectory(projectId);

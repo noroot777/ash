@@ -94,3 +94,24 @@ export function authErrorResponse(error: unknown): { status: 401 | 403; body: { 
   if (!(error instanceof AuthError)) return null;
   return { status: error.status, body: { error: error.message } };
 }
+
+/**
+ * 「这条端点只有实例管理员能用」的路由内判据(§七:目录选择器、终端)。
+ * 返回 null 表示放行;否则返回可以直接 `c.json(...)` 出去的拒绝体。
+ *
+ * 之所以不做成中间件:这两条端点分别住在 dir-picker.ts 和 terminal.ts 里,各自有
+ * 更贴切的拒绝文案,而横切闸只能给一句通用的。
+ */
+export async function instanceAdminOnly(
+  c: { get: (key: string) => unknown },
+  what: string,
+): Promise<{ status: 403; body: { error: string } } | null> {
+  const { isMultiUser } = await import("./mode.js");
+  if (!(await isMultiUser())) return null;
+  const actor = actorOf(c as never);
+  if (isAdminActor(actor)) return null;
+  return {
+    status: 403,
+    body: { error: `${what}只对实例管理员开放：它能碰到这台机器上的任意路径，不受你的目录限制` },
+  };
+}

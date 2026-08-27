@@ -10,6 +10,10 @@ import { id, now } from "./util.js";
 import { expandHome, gitError, isEmptyDir, projectHealthLight, repoKey, tidyRepoPath } from "./git.js";
 import { credentialInjection, saveProjectGitCredential } from "./git-credentials.js";
 import { fail } from "./project-dir.js";
+import type { Actor } from "./auth/context.js";
+import { actorOf, ownerIdOf } from "./auth/context.js";
+import { projectPathRejection } from "./auth/path-scope.js";
+import { seedProjectOwner } from "./auth/visibility.js";
 
 // 「从 Git 检出一个新项目」。项目那侧只有两条路会替用户动磁盘：这一条，和 POST /projects
 // 显式带 `createDir` 时那一条（它只是 mkdir，见 project-dir.ts）。剩下的入口
@@ -97,7 +101,7 @@ function undoAncestors(created: string[]): void {
   }
 }
 
-export async function cloneProject(input: CloneProjectInput): Promise<ProjectView> {
+export async function cloneProject(input: CloneProjectInput, actor?: Actor): Promise<ProjectView> {
   const url = (input.url ?? "").trim();
   if (!url) throw fail("仓库地址不能为空");
   assertNotFlag(url, "仓库地址");
@@ -106,6 +110,12 @@ export async function cloneProject(input: CloneProjectInput): Promise<ProjectVie
   if (!stored) throw fail("克隆目录不能为空");
   const target = expandHome(stored);
   if (!isAbsolute(target)) throw fail("克隆目录要写绝对路径（服务端这台机器上的路径）");
+  // 克隆是**建项目的另一条入口**,钳制必须与 POST /projects 完全同一份(§七)。
+  // 只在表单那条上拦而漏掉这条,等于给了一条把仓库落到任意路径的正门。
+  if (actor) {
+    const rejection = await projectPathRejection(actor, stored);
+    if (rejection) throw fail(rejection, 403);
+  }
 
   const branch = (input.branch ?? "").trim();
   if (branch) assertNotFlag(branch, "分支名");
@@ -156,8 +166,17 @@ export async function cloneProject(input: CloneProjectInput): Promise<ProjectVie
   }
 
   const name = (input.name ?? "").trim() || repoNameFromUrl(url) || "project";
-  const row = { id: id(), name, repoPath: stored, apiKeys: null, workflowId: null, createdAt: now() };
+  const row = {
+    id: id(),
+    name,
+    repoPath: stored,
+    apiKeys: null,
+    workflowId: null,
+    createdAt: now(),
+    ownerUserId: actor ? ownerIdOf(actor) : null,
+  };
   await db.insert(projects).values(row);
+  if (actor) await seedProjectOwner(row.id, actor);
   // 刚才那对凭证存到新项目上：克隆能连上，后面的 fetch/pull/push 就也该能连上，不该让
   // 用户在项目设置里把同一个令牌再填一遍。存不下去不回滚克隆 —— 仓库已经在磁盘上了，
   // 少一条凭证是「去设置里补一次」，回滚掉整个克隆才是真的损失。
@@ -172,7 +191,7 @@ export function mountProjectCloneRoutes(api: Hono): void {
   api.post("/projects/clone", async (c) => {
     const body = await c.req.json<CloneProjectInput>();
     try {
-      return c.json(await cloneProject(body), 201);
+      return c.json(await cloneProject(body, actorOf(c)), 201);
     } catch (error) {
       const status = (error as { status?: number }).status ?? 500;
       return c.json({ error: (error as Error).message }, status as 400);
