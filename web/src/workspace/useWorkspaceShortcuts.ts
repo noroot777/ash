@@ -7,7 +7,7 @@ import {
 } from "../inspector/shortcuts.ts";
 import { createKeyChordSequence } from "../lib/keyChord.ts";
 import { hasOpenLayer } from "../lib/useDismissable.ts";
-import { TASK_MODE_CHORD_KEY, isTaskModeChordKey } from "./taskScope.ts";
+import { TASK_MODE_CHORD_PREFIX, isTaskModeChordKey } from "./taskScope.ts";
 
 type ShortcutOptions = {
   enabled: boolean;
@@ -67,7 +67,7 @@ export function useWorkspaceShortcuts({
   onToggleTaskMode,
 }: ShortcutOptions): void {
   const inspectorSequence = useRef(createInspectorShortcutSequence());
-  const taskModeSequence = useRef(createKeyChordSequence(TASK_MODE_CHORD_KEY, isTaskModeChordKey));
+  const taskModeSequence = useRef(createKeyChordSequence(TASK_MODE_CHORD_PREFIX, isTaskModeChordKey));
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -92,10 +92,30 @@ export function useWorkspaceShortcuts({
         return;
       }
 
-      // T T 在「任务模式」和当前项目之间来回切。放在 Inspector 那套之前跑：t 不是它的
-      // 前缀也不是它的第二键，抢不走；反过来若让 `I …` 先跑，`t i f t` 这种连打会把两条
-      // 序列串在一起 —— 最后那个 t 被算成 TT 的第二下。谁先跑，决定了「按了别的键就作废」
-      // 这条对两边同时成立。
+      // Inspector 的 `I …` 先跑：g 是它的第二键（`I G` 是 Git 那一档），任务模式的和弦要是
+      // 抢在前面把 g 吞了，那一档就再也开不出来。反过来让它先跑不吃亏 —— Inspector 手上
+      // 没有半截序列时，handle 会把 g 原样让下去。
+      if (hasInspectorShortcutTarget() && !event.repeat) {
+        const inspectorShortcut = inspectorSequence.current.handle(event.key);
+        if (inspectorShortcut.kind === "prefix") {
+          taskModeSequence.current.reset();
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
+        if (inspectorShortcut.kind === "chord") {
+          taskModeSequence.current.reset();
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          activateInspectorShortcut(inspectorShortcut.key);
+          return;
+        }
+      } else if (!hasInspectorShortcutTarget()) {
+        inspectorSequence.current.reset();
+      }
+
+      // G T 在「任务模式」和当前项目之间来回切。两条序列互相清对方的半截状态：不清的话
+      // `g i f t` 会被串成一次切换 —— 中间整条 Inspector 序列本该把那个 g 作废掉。
       if (!event.repeat) {
         const taskModeChord = taskModeSequence.current.handle(event.key);
         if (taskModeChord.kind === "prefix") {
@@ -111,23 +131,6 @@ export function useWorkspaceShortcuts({
           onToggleTaskMode();
           return;
         }
-      }
-
-      if (hasInspectorShortcutTarget() && !event.repeat) {
-        const inspectorShortcut = inspectorSequence.current.handle(event.key);
-        if (inspectorShortcut.kind === "prefix") {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          return;
-        }
-        if (inspectorShortcut.kind === "chord") {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          activateInspectorShortcut(inspectorShortcut.key);
-          return;
-        }
-      } else if (!hasInspectorShortcutTarget()) {
-        inspectorSequence.current.reset();
       }
 
       // 大图开着时 hasBlockingLayer() 已经把这里整段挡掉了，所以 Esc 只关大图、

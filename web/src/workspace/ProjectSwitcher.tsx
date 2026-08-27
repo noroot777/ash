@@ -135,7 +135,7 @@ export function ProjectSwitcher({
                   <small>{TASK_MODE_SUMMARY}</small>
                 </span>
                 {/* 唯一带快捷键的一档，所以键位就写在它自己那行上：这个下拉是找「列表在看谁」
-                    的必经之地，也就是最可能被读到 T T 的地方。 */}
+                    的必经之地，也就是最可能被读到 G T 的地方。 */}
                 <kbd>{TASK_MODE_SHORTCUT_LABEL}</kbd>
                 {taskMode && <Check size={13} weight="bold" aria-hidden="true" />}
               </button>
