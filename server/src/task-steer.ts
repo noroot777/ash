@@ -26,6 +26,7 @@ import {
   whenTurnIdle,
 } from "./runs.js";
 import { setTaskStatus } from "./status.js";
+import { announceResumePrompt } from "./task-resume-prompt.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { id, now } from "./util.js";
@@ -146,6 +147,9 @@ async function clearPreviousDirectionState(
       console.warn(`[ash] 引导会话已清提问，但实时通知失败 ${taskId}:`, error);
     }
   }
+  // 提问有自己的局部事件，检查点没有：清掉的 resume_prompt 只能靠整行广播告诉前端
+  // （见 task-resume-prompt.ts 顶部）。
+  if (current?.resumePrompt) await announceResumePrompt(taskId);
   return { ...current, clearedTurnToken, clearedDirectionToken, clearedDirectionVersion, memoryConfirmed };
 }
 
@@ -155,7 +159,7 @@ async function discardLateDirectionState(taskId: string, turnToken: string, dire
   // 保持不变，方向 token 已在第一次清理时旋转。
   takeConfirmed(taskId);
   const late = (await db
-    .select({ question: tasks.question })
+    .select({ question: tasks.question, resumePrompt: tasks.resumePrompt })
     .from(tasks)
     .where(and(
       eq(tasks.id, taskId),
@@ -193,6 +197,7 @@ async function discardLateDirectionState(taskId: string, turnToken: string, dire
       console.warn(`[ash] 原生引导已清迟到提问，但实时通知失败 ${taskId}:`, error);
     }
   }
+  if (late?.resumePrompt) await announceResumePrompt(taskId);
 }
 
 async function restorePreviousDirectionState(
@@ -277,6 +282,7 @@ async function restorePreviousDirectionState(
       console.warn(`[ash] 引导会话已恢复提问，但实时通知失败 ${taskId}:`, error);
     }
   }
+  if (previous.resumePrompt) await announceResumePrompt(taskId);
   return true;
 }
 

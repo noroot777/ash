@@ -31,6 +31,7 @@ import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
+import { announceResumePrompt } from "./task-resume-prompt.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
 import { confirmDone } from "./runs.js";
@@ -239,6 +240,7 @@ async function applyReplay(
         : eq(tasks.activeDirectionToken, directionToken),
     )).returning({ id: tasks.id });
     if (!updated.length) return null;
+    await announceResumePrompt(taskId);
     return "检查点暂停当时因 MCP 通道中断没能送达，已补录续跑指令。";
   }
   return null;

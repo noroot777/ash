@@ -1,6 +1,6 @@
 import { mkdirSync, createWriteStream, existsSync } from "node:fs";
 import { join } from "node:path";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { AgentType, SessionRole, TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
@@ -33,6 +33,7 @@ import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { reportTurnFailure } from "./turn-failure.js";
+import { takeResumePrompt } from "./task-resume-prompt.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
 import {
   COLLAB_INVITE, SYS_MARKER,
@@ -491,9 +492,7 @@ export async function continueTask(
     // 这句话也可能只是“怎么样了”一类追问：先保留检查点并用 followUpFrom 护住 paused，
     // 只有本轮明确 complete 时再由结算清掉。
     if (!opts.system && !opts.byBackend && task.resumePrompt && task.status !== "paused") {
-      await db.update(tasks)
-        .set({ resumePrompt: null, updatedAt: now() })
-        .where(and(eq(tasks.id, taskId), eq(tasks.resumePrompt, task.resumePrompt)));
+      await takeResumePrompt(taskId, task.resumePrompt);
     }
     // 到这里这句话已经**两处落地**:agent 进程早在上面就带着它起来了,原文也刚写进会话
     // 落盘文件。排队/定时消息就是在这一刻、而不是更早,才把库里那条标成 sent。

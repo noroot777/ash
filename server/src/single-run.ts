@@ -28,6 +28,7 @@ import { handleTaskSettlement } from "./review.js";
 import { handleFreeWorkflowSettlement } from "./free-workflow.js";
 import { createExecutionCloser, recordFreeTaskExecutionStartIfFree } from "./free-workflow-events.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
+import { announceResumePrompt } from "./task-resume-prompt.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { clearTurnStart, turnOutputHint } from "./turn-output.js";
 import { replayUndeliveredMcpCalls } from "./mcp-handoff.js";
@@ -133,13 +134,17 @@ export async function settleTaskStatus(
   if (t?.followUpFrom) {
     // 旁路回合(就地验证)恢复的可能是 paused/backlog 一类的原状态,不止三个终态。
     const back = t.followUpFrom as Parameters<typeof setStatus>[1];
+    const consumedCheckpoint = !!(confirmed && t.resumePrompt);
     await db.update(tasks).set({
       followUpFrom: null,
       // checkpoint-paused 上的真人消息先保留旧检查点，避免一句普通追问把恢复指令吞掉；
       // 本轮明确交卷才证明这句话确实接管了检查点，此时完成优先并清掉当前指令。
-      ...(confirmed && t.resumePrompt ? { resumePrompt: null } : {}),
+      ...(consumedCheckpoint ? { resumePrompt: null } : {}),
       updatedAt: now(),
     }).where(eq(tasks.id, taskId));
+    // 检查点被这一轮消费掉了：随后的 setStatus 只广播 task.status，带不动 resume_prompt，
+    // 页面会继续把任务读成「在等续跑」（见 task-resume-prompt.ts 顶部）。
+    if (consumedCheckpoint) await announceResumePrompt(taskId);
     if (confirmed) {
       await setStatus(taskId, "done");
       notify("done");
