@@ -83,7 +83,7 @@ const executor = {
 } as unknown as Parameters<typeof duet.runTurn>[0]["executor"];
 
 const turn = await duet.runTurn({
-  taskId, role: "voiceA", speaker: "A", round: 1, executor,
+  taskId, role: "voiceA", speaker: "A", round: 1, runOwner: null, executor,
   prompt: "随便说点什么", cwd: stage, resumeCliId: DEAD_ID,
 });
 // 摘掉 —— 再留着,下面断言失败(ESM 顶层抛出走的是 unhandledRejection)也会被这两个
@@ -152,7 +152,7 @@ const poisonedExecutor = {
   resumeFields: () => ({ resumeCommand: `codex exec resume ${POISONED_ID}`, resumeEnv: "K=x", resumeArgs: "--json" }),
 } as unknown as Parameters<typeof duet.runTurn>[0]["executor"];
 const poisonedTurn = await duet.runTurn({
-  taskId: poisonedTaskId, role: "voiceA", speaker: "A", round: 1, executor: poisonedExecutor,
+  taskId: poisonedTaskId, role: "voiceA", speaker: "A", round: 1, runOwner: null, executor: poisonedExecutor,
   prompt: "继续旧 thread", cwd: stage, resumeCliId: POISONED_ID,
 });
 const [poisonedRow] = await db.select().from(sessions).where(eq(sessions.id, poisonedTurn.rowId));
@@ -227,7 +227,7 @@ const unsubscribe = bus.subscribe((event) => liveEvents.push(event));
 const versionTurn = await (async () => {
   try {
     return await duet.runTurn({
-      taskId: versionTaskId, role: "voiceA", speaker: "A", round: 1, executor: versionExecutor,
+      taskId: versionTaskId, role: "voiceA", speaker: "A", round: 1, runOwner: null, executor: versionExecutor,
       prompt: "继续旧 thread", cwd: stage, rowId: versionRowId, resumeCliId: versionThreadId,
     });
   } finally {
@@ -270,7 +270,7 @@ const mixedExecutor = {
   }),
 } as unknown as Parameters<typeof duet.runTurn>[0]["executor"];
 const mixedTurn = await duet.runTurn({
-  taskId: mixedTaskId, role: "voiceA", speaker: "A", round: 1, executor: mixedExecutor,
+  taskId: mixedTaskId, role: "voiceA", speaker: "A", round: 1, runOwner: null, executor: mixedExecutor,
   prompt: "继续旧 thread", cwd: stage, resumeCliId: POISONED_ID,
 });
 assert.match(mixedTurn.error ?? "", /执行诊断：.*dropping turn-scoped item/, "含指纹的真实失败被误分流或吞掉");
@@ -311,7 +311,7 @@ const parsedExecutor = {
   resumeFields: (_cwd: string, sid: string) => ({ resumeCommand: `codex exec resume ${sid}`, resumeEnv: null, resumeArgs: "--json" }),
 } as unknown as Parameters<typeof duet.runTurn>[0]["executor"];
 const parsedTurn = await duet.runTurn({
-  taskId: parsedTaskId, role: "voiceA", speaker: "A", round: 1, executor: parsedExecutor,
+  taskId: parsedTaskId, role: "voiceA", speaker: "A", round: 1, runOwner: null, executor: parsedExecutor,
   prompt: "继续 poisoned thread", cwd: stage, resumeCliId: parsedThreadId,
 });
 assert.match(parsedTurn.error ?? "", /执行诊断：.*dropping turn-scoped item/s, "真解析器的失败摘要在 duet 中丢失");
@@ -346,7 +346,7 @@ const healthy = {
 } as unknown as Parameters<typeof duet.runTurn>[0]["executor"];
 
 const next = await duet.runTurn({
-  taskId, role: "voiceA", speaker: "A", round: 2, executor: healthy,
+  taskId, role: "voiceA", speaker: "A", round: 2, runOwner: null, executor: healthy,
   prompt: "继续", cwd: stage, rowId: turn.rowId, resumeCliId: turn.cliId || undefined,
 });
 assert.equal(next.cliId, NEW_ID, "新一轮该拿到新会话 id");

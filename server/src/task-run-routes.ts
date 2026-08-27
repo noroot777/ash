@@ -136,7 +136,7 @@ api.post("/tasks/:id/run", async (c) => {
     releaseTurn(taskId);
     return c.json({ error: "任务正在验收（含发布尾段），结束后再运行", status: r.status }, 409);
   }
-  if (r.mode === "duet") { void runDuet(taskId, { turnHeld: true }); return c.json({ started: true }, 202); }
+  if (r.mode === "duet") { void runDuet(taskId, { turnHeld: true, actingUserId: ownerIdOf(actorOf(c)) }); return c.json({ started: true }, 202); }
   void resumeOrRunTask(taskId, { reason: "run", turnHeld: true, actingUserId: ownerIdOf(actorOf(c)) });
   return c.json({ started: true }, 202);
 });
@@ -186,7 +186,7 @@ api.post("/tasks/:id/fire", async (c) => {
     releaseTurn(taskId);
     return c.json({ error: "任务正在验收（含发布尾段），结束后再触发", status: r.status }, 409);
   }
-  if (r.mode === "duet") { void runDuet(taskId, { turnHeld: true }); return c.json({ started: true, fresh: true }, 202); }
+  if (r.mode === "duet") { void runDuet(taskId, { turnHeld: true, actingUserId: ownerIdOf(actorOf(c)) }); return c.json({ started: true, fresh: true }, 202); }
   void runTask(taskId, { turnHeld: true, actingUserId: ownerIdOf(actorOf(c)) }); // 全新一轮,永不 resume
   return c.json({ started: true, fresh: true }, 202);
 });
@@ -545,8 +545,12 @@ api.post("/tasks/:id/retry", async (c) => {
     releaseTurn(taskId);
     return c.json({ error: "任务正在验收（含发布尾段），结束后再重试", status: r.status }, 409);
   }
-  if (r.mode === "duet") { void resumeDuet(taskId, { turnHeld: true }); return c.json({ started: true }, 202); }
-  void resumeOrRunTask(taskId, { reason: "retry", turnHeld: true });
+  // 「这一次是谁点的」四个人工入口(run / fire / retry / 闸口重放)一个都不能漏:漏掉
+  // 就退回任务归属人,于是共享项目里 B 点「重试」烧的是 A 的 key、提交署 A 的名
+  // (第 5 轮审查 P1)。
+  const acting = ownerIdOf(actorOf(c));
+  if (r.mode === "duet") { void resumeDuet(taskId, { turnHeld: true, actingUserId: acting }); return c.json({ started: true }, 202); }
+  void resumeOrRunTask(taskId, { reason: "retry", turnHeld: true, actingUserId: acting });
   return c.json({ started: true }, 202);
 });
 
@@ -622,7 +626,7 @@ api.post("/tasks/:id/gate", async (c) => {
       releaseTurn(taskId);
       return c.json({ error: "任务正在验收（含发布尾段），结束后再处理裁决", status: t.status }, 409);
     }
-    void resumeAtGate(taskId, action, { turnHeld: true });
+    void resumeAtGate(taskId, action, { turnHeld: true, actingUserId: ownerIdOf(actorOf(c)) });
     return c.json({ ok: true, resumed: true });
   }
   return c.json({ error: "no open gate for this task" }, 409);

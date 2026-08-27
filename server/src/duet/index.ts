@@ -12,7 +12,7 @@ import { takeCanceled, CanceledRun, claimTurn, reclaimTurn, releaseTurn } from "
 import { isAcceptingTask } from "../acceptance-lock.js";
 import { reopenAcceptedStage } from "../task-stage.js";
 import { taskWorkspace } from "../task-workspace.js";
-import { resolveExecutorFor } from "../executors/index.js";
+import { resolveExecutorWithProfile } from "../executors/index.js";
 import type { AgentExecutor } from "../executors/types.js";
 import { RUNS_DIR } from "../paths.js";
 import * as P from "./prompts.js";
@@ -21,7 +21,8 @@ import { gateUserMessage } from "./user-message.js";
 import { canSettleDuet as canSettle, duetConsensusBy as consensusBy, isDuetConsensus as isConsensus } from "./settlement.js";
 import { recordGateEvent, recordUserTurn } from "./timeline.js";
 import { runTurn, type Turn } from "./turn.js";
-import { executorOwnerScope } from "../auth/dispatch-gate.js";
+import { dispatchRejection, executorOwnerScope, noteExecutorDowngrade } from "../auth/dispatch-gate.js";
+import { runEnvForOwner } from "../auth/run-env.js";
 
 // duet 的所有权与 single 共用 runs.ts 那把单飞锁。这里原来是个模块内的 `running`
 // Set:调用方看不见它,于是 /run、/fire、/retry、scheduler 都能声称「已启动」而第二次
@@ -51,6 +52,8 @@ const HARD_CAP = 50; // absolute safety cap, even when maxRounds is "不设限"
 interface Ctx {
   taskId: string;
   cfg: DuetConfig;
+  /** 这一场按谁的身份跑(§八);见 runTurn 的同名必填参数。 */
+  runOwner: string | null;
   exA: AgentExecutor;
   exB: AgentExecutor;
   cwd: string;
@@ -124,7 +127,7 @@ async function synthesizePlan(ctx: Ctx): Promise<void> {
   try {
     const t = await runTurn({
       taskId: ctx.taskId, role: "voiceA", speaker: "synthesis", round: ctx.round,
-      executor: ctx.exA,
+      executor: ctx.exA, runOwner: ctx.runOwner,
       // 停止原因要如实告知合稿者并落盘:双方举手但结论不同 ≠ 轮数耗尽;
       // 回炉后刚更新一轮、还没到轮数上限也没重新收敛 = midway(先开门给用户看)。
       prompt: P.synthesize({ stop, opponentLatest: ctx.lastB, userNote: ctx.lastUserNote }),
@@ -140,7 +143,7 @@ async function synthesizePlan(ctx: Ctx): Promise<void> {
   }
 }
 
-async function loadBase(taskId: string) {
+async function loadBase(taskId: string, actingUserId?: string | null) {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task || !task.duet) throw new Error("duet config missing");
   const storedCfg = normalizeDuetConfig(JSON.parse(task.duet));
@@ -155,56 +158,79 @@ async function loadBase(taskId: string) {
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   if (!project) throw new Error("project not found");
   // 每个讨论者各自的模型/强度；没设才退回任务级（派生讨论会带着来源任务的设置）。
-  // **按「谁的活」收窄**(§八,与 task-run.ts / orchestrator.ts 同一条口径):这两个 id
-  // 存在任务的 duet 配置里,可能是转多人之前、或本轮修复之前留下的外人 id —— 不收窄的话
-  // 解析器会照单全收,讨论回合真的跑在别人的 profile 上、烧别人的 relay(第 3 轮审查 P0)。
-  const owner = await executorOwnerScope(task.ownerUserId);
-  const exA = await resolveExecutorFor({
+  // **按「这一次是谁点的」收窄**(§八,与 task-run.ts / orchestrator.ts 逐字同一条口径):
+  // 共享项目里 B 手点跑 A 的讨论,烧的是 B 自己的 key,于是也按 B 的执行器解析、解析
+  // 不到就降级到 B 的默认(第 5 轮审查 P1)。后端触发那几路(调度班次、内部交棒)不传
+  // actingUserId,退回任务归属人 —— 与单人任务同一条规则。
+  // 收窄本身还兼着第 3 轮的那道:duet 配置里可能留着转多人之前的外人 id,不收窄的话
+  // 解析器照单全收,讨论真的跑在别人的 profile 上、烧别人的 relay。
+  const runOwner = actingUserId ?? task.ownerUserId;
+  const owner = await executorOwnerScope(runOwner);
+  // 派发闸(§八「宿主机 CLI 订阅彻底抹去」):没挂供应商、或 CLI 没接 relay 的执行器
+  // 一律不许起跑。单人任务在 task-run.ts 过这道闸,duet 从来没过 —— 同一个执行器
+  // 换讨论这条路就能绕过去(第 5 轮审查 P1)。两位讨论者各判各的,谁不合格谁报名。
+  for (const voice of [
+    { who: "讨论者 A", type: cfg.voiceA, executorId: cfg.voiceAExecutorId },
+    { who: "讨论者 B", type: cfg.voiceB, executorId: cfg.voiceBExecutorId },
+  ]) {
+    const blocked = await dispatchRejection({ agentType: voice.type, executorId: voice.executorId, ...owner });
+    if (blocked) throw new Error(`${voice.who}：${blocked}`);
+  }
+  const a = await resolveExecutorWithProfile({
     executorId: cfg.voiceAExecutorId,
     type: cfg.voiceA,
     model: cfg.voiceAModel || task.model,
     reasoningEffort: cfg.voiceAReasoningEffort || task.reasoningEffort,
     ...owner,
   });
-  const exB = await resolveExecutorFor({
+  const b = await resolveExecutorWithProfile({
     executorId: cfg.voiceBExecutorId,
     type: cfg.voiceB,
     model: cfg.voiceBModel || task.model,
     reasoningEffort: cfg.voiceBReasoningEffort || task.reasoningEffort,
     ...owner,
   });
+  // 跨人降级要事后可查(§八「不静默替换」),与单人任务同一条:弹窗那一半在前端,
+  // 这里补时间线那一半。两位讨论者各记各的。
+  if (a.downgradedFrom) await noteExecutorDowngrade(taskId, a.downgradedFrom, a.executor.label);
+  if (b.downgradedFrom) await noteExecutorDowngrade(taskId, b.downgradedFrom, b.executor.label);
+  const exA = a.executor;
+  const exB = b.executor;
   // Discussion only reads, but still honors the task's worktree/base so a
   // source-derived duet sees the source task's branch. Repo-less projects keep
   // the existing scratch fallback through taskWorkspace.
   const cwd = (await taskWorkspace(task, project.repoPath)).path;
   const cap = Math.min(cfg.maxRounds ?? HARD_CAP, HARD_CAP);
-  return { task, cfg, exA, exB, cwd, cap };
+  return { task, cfg, exA, exB, cwd, cap, runOwner };
 }
 
 // Full /duet pipeline: blind opening (parallel) → serial rebuttal rounds
 // (A-first) → optional consensus gate G1 → conclusion.
-export async function runDuet(taskId: string, opts: { turnHeld?: boolean } = {}): Promise<boolean> {
+export async function runDuet(
+  taskId: string,
+  opts: { turnHeld?: boolean; actingUserId?: string | null } = {},
+): Promise<boolean> {
   if (!acquireDuetTurn(taskId, opts.turnHeld)) return false;
   try {
-    const base = await loadBase(taskId);
-    const { cfg, exA, exB, cwd } = base;
+    const base = await loadBase(taskId, opts.actingUserId);
+    const { cfg, exA, exB, cwd, runOwner } = base;
     await setStatus(taskId, "running");
     // 与 single 的 fresh run 对齐:已验收任务被重跑(Cron 到点 / fire),旧「已验收」
     // 牌子当场摘掉——新一版讨论不能躲在旧牌子下继续。
     await reopenAcceptedStage(taskId);
 
     // Title the task from its topic (concurrent, non-blocking) like a single task.
-    if (base.task.autoTitle) void genDuetTitle(taskId, cfg.topic, exA, cwd);
+    if (base.task.autoTitle) void genDuetTitle(taskId, cfg.topic, exA, cwd, runOwner);
 
     // Round 1 — blind opening, parallel.
     const [a, b] = await Promise.all([
-      runTurn({ taskId, role: "voiceA", speaker: "A", round: 1, executor: exA, prompt: P.opening(cfg.topic, cwd), cwd }),
-      runTurn({ taskId, role: "voiceB", speaker: "B", round: 1, executor: exB, prompt: P.opening(cfg.topic, cwd), cwd }),
+      runTurn({ taskId, role: "voiceA", speaker: "A", round: 1, executor: exA, prompt: P.opening(cfg.topic, cwd), cwd, runOwner }),
+      runTurn({ taskId, role: "voiceB", speaker: "B", round: 1, executor: exB, prompt: P.opening(cfg.topic, cwd), cwd, runOwner }),
     ]);
     if (failed(a) || failed(b)) { await setStatus(taskId, "failed"); return true; }
 
     const ctx: Ctx = {
-      taskId, cfg, exA, exB, cwd, cap: base.cap,
+      taskId, cfg, exA, exB, cwd, cap: base.cap, runOwner,
       A: { rowId: a.rowId, cliId: a.cliId }, B: { rowId: b.rowId, cliId: b.cliId }, round: 1,
       lastA: a.text, lastB: b.text, raisedA: a.raised, raisedB: b.raised,
       agreesA: a.agrees, agreesB: b.agrees, conclusionA: a.conclusion, conclusionB: b.conclusion,
@@ -224,13 +250,16 @@ export async function runDuet(taskId: string, opts: { turnHeld?: boolean } = {})
 // continuing — instead of re-running the whole duet. State is rebuilt from the
 // persisted sessions + transcript; the failed turn is dropped from the transcript
 // and re-run (resuming the same CLI session so context is retained).
-export async function resumeDuet(taskId: string, opts: { turnHeld?: boolean } = {}): Promise<boolean> {
+export async function resumeDuet(
+  taskId: string,
+  opts: { turnHeld?: boolean; actingUserId?: string | null } = {},
+): Promise<boolean> {
   if (!acquireDuetTurn(taskId, opts.turnHeld)) return false;
   // 交棒给 runDuet 时由它释放:两边都释放会把**下一次**运行占的锁误删。
   let handedOff = false;
   try {
-    const base = await loadBase(taskId);
-    const { cfg, exA, exB, cwd } = base;
+    const base = await loadBase(taskId, opts.actingUserId);
+    const { cfg, exA, exB, cwd, runOwner } = base;
 
     const sess = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
     const latest = (role: string) =>
@@ -243,7 +272,8 @@ export async function resumeDuet(taskId: string, opts: { turnHeld?: boolean } = 
     try { rows = readFileSync(tpath, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)); } catch { /* none */ }
     const failedIndex = rows.findLastIndex((row) =>
       !row.type && ["A", "B", "impl", "review"].includes(row.speaker));
-    if (failedIndex < 0) { handedOff = true; void runDuet(taskId, { turnHeld: true }); return true; } // no completed turn → fresh
+    // 交棒也要把「这次是谁点的」带过去,否则 fresh 那一路又静默退回任务归属人。
+    if (failedIndex < 0) { handedOff = true; void runDuet(taskId, { turnHeld: true, actingUserId: opts.actingUserId }); return true; } // no completed turn → fresh
     const failedTurn = rows[failedIndex];
     rows.splice(failedIndex, 1); // drop the failed turn; it will be re-run
     writeFileSync(tpath, rows.length ? rows.map((r) => JSON.stringify(r)).join("\n") + "\n" : "");
@@ -252,7 +282,7 @@ export async function resumeDuet(taskId: string, opts: { turnHeld?: boolean } = 
     const ra = lastOf("A");
     const rb = lastOf("B");
     const ctx: Ctx = {
-      taskId, cfg, exA, exB, cwd, cap: base.cap,
+      taskId, cfg, exA, exB, cwd, cap: base.cap, runOwner,
       A: { rowId: sA?.id ?? id(), cliId: sA?.cliSessionId ?? "" },
       B: { rowId: sB?.id ?? id(), cliId: sB?.cliSessionId ?? "" },
       round: failedTurn.round,
@@ -288,7 +318,7 @@ export async function resumeDuet(taskId: string, opts: { turnHeld?: boolean } = 
         : { raised: ctx.raisedB, agrees: ctx.agreesB, conclusion: ctx.conclusionB });
       return runTurn({
         taskId, role: s === "A" ? "voiceA" : "voiceB", speaker: s, round,
-        executor: s === "A" ? exA : exB,
+        executor: s === "A" ? exA : exB, runOwner,
         prompt: isGateRound
           ? (gateNote!.kind === "inject" ? P.injectFeedback(gateNote!.text, round) : P.question(gateNote!.text, round))
           : round === 1 ? P.opening(cfg.topic, cwd) : P.evolve(s === "A" ? ctx.lastB : ctx.lastA, round),
@@ -341,9 +371,17 @@ function failDuet(taskId: string, err: unknown) {
 // Auto-generate a short list-friendly title from the topic — the duet analog of
 // a single task's auto-title. Runs concurrently with round 1 (it doesn't block the
 // duet) and is best-effort: on any failure the provisional title simply stays.
-async function genDuetTitle(taskId: string, topic: string, ex: AgentExecutor, cwd: string): Promise<void> {
+async function genDuetTitle(
+  taskId: string,
+  topic: string,
+  ex: AgentExecutor,
+  cwd: string,
+  runOwner: string | null,
+): Promise<void> {
   try {
-    const handle = ex.run({ prompt: P.title(topic), cwd });
+    // 起名也是一次真的 CLI 调用 —— 同样要落在本人的配置目录里(§八),别让它成为
+    // 唯一一条还摸得到宿主机 ~/.claude 的缝。
+    const handle = ex.run({ prompt: P.title(topic), cwd, env: await runEnvForOwner(runOwner, ex.type) });
     let text = "";
     for await (const event of handle.events) {
       if (event.kind === "text") text += event.text;
@@ -365,12 +403,16 @@ async function genDuetTitle(taskId: string, topic: string, ex: AgentExecutor, cw
 // Resume a duet that is parked at a gate but whose in-memory gate was lost (the
 // server restarted). Rebuilds state from the persisted transcript + sessions and
 // applies the human's gate action, so the gate keeps working across restarts.
-export async function resumeAtGate(taskId: string, action: GateAction, opts: { turnHeld?: boolean } = {}): Promise<boolean> {
+export async function resumeAtGate(
+  taskId: string,
+  action: GateAction,
+  opts: { turnHeld?: boolean; actingUserId?: string | null } = {},
+): Promise<boolean> {
   // 占不到 = 确有回合在跑(活着的 duet 停在闸口时也占着这把锁,那种情况 resolveGate
   // 已经就地处理了,根本走不到这儿)。
   if (!acquireDuetTurn(taskId, opts.turnHeld)) return false;
   try {
-    const base = await loadBase(taskId);
+    const base = await loadBase(taskId, opts.actingUserId);
     const sess = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
     const latest = (role: string) =>
       sess.filter((s) => s.role === role).sort((x, y) => y.startedAt.localeCompare(x.startedAt))[0];
@@ -385,6 +427,7 @@ export async function resumeAtGate(taskId: string, action: GateAction, opts: { t
     const duetRounds = rows.filter((r) => r.speaker === "A" || r.speaker === "B").map((r) => r.round);
     const ctx: Ctx = {
       taskId, cfg: base.cfg, exA: base.exA, exB: base.exB, cwd: base.cwd, cap: base.cap,
+      runOwner: base.runOwner,
       A: { rowId: sA?.id ?? id(), cliId: sA?.cliSessionId ?? "" },
       B: { rowId: sB?.id ?? id(), cliId: sB?.cliSessionId ?? "" },
       round: duetRounds.length ? Math.max(...duetRounds) : 1,
@@ -417,14 +460,14 @@ async function runRebuttalLoop(ctx: Ctx): Promise<boolean> {
   while (!canSettle(ctx) && ctx.round < ctx.cap) {
     ctx.round++;
     const at = await runTurn({
-      taskId, role: "voiceA", speaker: "A", round: ctx.round, executor: exA,
+      taskId, role: "voiceA", speaker: "A", round: ctx.round, executor: exA, runOwner: ctx.runOwner,
       prompt: P.evolve(ctx.lastB, ctx.round), cwd, rowId: ctx.A.rowId, resumeCliId: ctx.A.cliId || undefined,
     });
     if (failed(at)) { await setStatus(taskId, "failed"); return false; }
     applyTurn(ctx, "A", at);
     if (canSettle(ctx)) break;
     const bt = await runTurn({
-      taskId, role: "voiceB", speaker: "B", round: ctx.round, executor: exB,
+      taskId, role: "voiceB", speaker: "B", round: ctx.round, executor: exB, runOwner: ctx.runOwner,
       prompt: P.evolve(ctx.lastA, ctx.round), cwd, rowId: ctx.B.rowId, resumeCliId: ctx.B.cliId || undefined,
     });
     if (failed(bt)) { await setStatus(taskId, "failed"); return false; }
@@ -453,12 +496,12 @@ async function reDiscuss(ctx: Ctx, kind: "inject" | "ask", text: string, target?
   // 带着垃圾状态继续合稿、重开 gate,甚至被批准完成。抛出去由外层 failDuet 落
   // failed(错误行已在 transcript,用户可重试)。
   if (tgt !== "B") {
-    const at = await runTurn({ taskId: ctx.taskId, role: "voiceA", speaker: "A", round: ctx.round, executor: ctx.exA, prompt, cwd: ctx.cwd, rowId: ctx.A.rowId, resumeCliId: ctx.A.cliId || undefined, inherit: inhA });
+    const at = await runTurn({ taskId: ctx.taskId, role: "voiceA", speaker: "A", round: ctx.round, executor: ctx.exA, runOwner: ctx.runOwner, prompt, cwd: ctx.cwd, rowId: ctx.A.rowId, resumeCliId: ctx.A.cliId || undefined, inherit: inhA });
     if (failed(at)) throw new Error(`讨论者 A 在回炉轮失败${at.error ? `：${at.error}` : ""}`);
     applyTurn(ctx, "A", at);
   }
   if (tgt !== "A") {
-    const bt = await runTurn({ taskId: ctx.taskId, role: "voiceB", speaker: "B", round: ctx.round, executor: ctx.exB, prompt, cwd: ctx.cwd, rowId: ctx.B.rowId, resumeCliId: ctx.B.cliId || undefined, inherit: inhB });
+    const bt = await runTurn({ taskId: ctx.taskId, role: "voiceB", speaker: "B", round: ctx.round, executor: ctx.exB, runOwner: ctx.runOwner, prompt, cwd: ctx.cwd, rowId: ctx.B.rowId, resumeCliId: ctx.B.cliId || undefined, inherit: inhB });
     if (failed(bt)) throw new Error(`讨论者 B 在回炉轮失败${bt.error ? `：${bt.error}` : ""}`);
     applyTurn(ctx, "B", bt);
   }

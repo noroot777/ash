@@ -29,6 +29,7 @@ import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
 import { isSessionScopeNotice } from "../session-notice.js";
+import { runEnvForOwner } from "../auth/run-env.js";
 import { recordTurnStart } from "./timeline.js";
 
 const RAISE_RE = /(^|\n)\s*\[可收敛\]/;
@@ -84,6 +85,16 @@ export async function runTurn(args: {
   executor: AgentExecutor;
   prompt: string;
   cwd: string;
+  /**
+   * 这一轮按谁的身份跑(§八):个人 CLI 配置目录 + git 署名从它算出来。
+   *
+   * **故意做成必填**:duet 起 CLI 的地方有七八处(开场、驳论、合稿、闸口重放、重试补
+   * 跑…),给它一个默认值就等于给「下一处新加的发言」留一个静默漏注入的口子 —— 而漏
+   * 掉的后果是那一轮跑在**宿主机**的 `~/.claude` 上,正是 §八 要抹掉的东西,且从产出上
+   * 完全看不出来(第 5 轮审查 P1)。必填 = 编译期就得回答「这轮算谁的」。
+   * 自用模式下 `runEnvForOwner` 返回空对象,这条路与本功能上线前逐字节一致。
+   */
+  runOwner: string | null;
   rowId?: string; // reuse a voice's session row across turns
   resumeCliId?: string; // resume the CLI session
   branch?: string | null;
@@ -117,6 +128,18 @@ export async function runTurn(args: {
     prompt: withGlobalBrowserPolicy(prompt, resumeCliId ? "reminder" : "full"),
     cwd,
     sessionId: resumeCliId || undefined,
+    // 个人 CLI 配置目录 + git 署名(§八)。
+    env: {
+      ...(await runEnvForOwner(args.runOwner, executor.type)),
+      // **不给讨论者回合身份,并且要确保它是真的没有**:讨论者没有完成协议,duet 的结算
+      // 由这条流水线自己做,凭空发一个没登记进 tasks.activeTurnToken 的令牌只会让每个
+      // 消费者都拒收。但「不设」不等于「没有」—— 子进程默认继承 server 自己的环境,
+      // 而 ash 从一个 ash 任务里启动时那三个变量是有值的(实测:duet 的假 CLI 收到了
+      // **另一个任务**的 ASH_TASK_ID)。借来的身份比没有身份更糟,所以显式清掉。
+      ASH_TASK_ID: undefined,
+      ASH_TURN_TOKEN: undefined,
+      ASH_DIRECTION_TOKEN: undefined,
+    },
   });
   trackRun(taskId, handle);
   let cliId = handle.sessionId;
