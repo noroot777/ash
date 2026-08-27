@@ -33,6 +33,13 @@ export async function canSeeProject(actor: Actor, projectId: string): Promise<bo
   return visible === null || visible.has(projectId);
 }
 
+/** 这个人看得见的项目行。接力的对端项目清单用它,与本机所有过滤面同一份判据。 */
+export async function visibleProjectsFor(actor: Actor): Promise<(typeof projects.$inferSelect)[]> {
+  const rows = await db.select().from(projects);
+  const visible = await visibleProjectIds(actor);
+  return visible === null ? rows : rows.filter((p) => visible.has(p.id));
+}
+
 /** 项目里的角色。实例管理员返回 "admin"(隐式);不是成员返回 null。 */
 export async function projectRoleOf(actor: Actor, projectId: string): Promise<ProjectRole | null> {
   if (!(await isMultiUser())) return "admin";

@@ -10,8 +10,8 @@
 //      之后每次预检/导出都先核对,对不上就**拒绝打包**,连探测都不往下走。
 //
 // 入站方向(谁能推进本机)在 handoff-peers.ts。
-import type { HandoffApprovalResult, HandoffIdentity, HandoffPeerIdentity, HandoffTarget } from "@ash/shared";
-import { getAppSettings, patchAppSettings } from "./app-settings.js";
+import type { HandoffApprovalResult, HandoffIdentity, HandoffPeerIdentity } from "@ash/shared";
+import { getAppSettings } from "./app-settings.js";
 import { HandoffError } from "./handoff-types.js";
 import type { HandoffPingResponse } from "./handoff-types.js";
 import {
@@ -20,6 +20,9 @@ import {
 } from "./handoff-identity.js";
 import { PEER_HEADERS } from "./handoff-peers.js";
 import { sealForPeer } from "./handoff-crypto.js";
+import { handoffActorId, peerUserKeyHeader } from "./auth/handoff-outbound.js";
+import { localModeTag } from "./auth/handoff-peer-user.js";
+import { rememberPeerFingerprint as rememberFingerprintFor, targetForUrl } from "./auth/handoff-scope.js";
 import { hostname } from "node:os";
 
 export function normalizePeerUrl(raw: string): string {
@@ -64,7 +67,15 @@ export async function fetchPeer<T>(
   // 加密在签名**之前**:线上传的是信封,验签方拿到的也是信封,两边哈希的是同一串字节。
   // 信封是二进制帧(不再 base64),所以 content-type 也要跟着换。
   const body = init?.sealTo ? sealForPeer(init.sealTo.kx, init.sealTo.fingerprint, plain) : plain;
-  const headers: Record<string, string> = { ...(init?.headers as Record<string, string> | undefined) };
+  const headers: Record<string, string> = {
+    ...(init?.headers as Record<string, string> | undefined),
+    // 多人模式:带上「我在对端的账号 key」。机器级签名只证明「哪台机器」,这一头才
+    // 说得清「那台机器上的哪个人」(§十一)。自用模式/没配 key 时这里是空对象。
+    ...(await peerUserKeyHeader(url)),
+    // 自报实例模式,好让对端**知情批准**(§十一)。不进签名:它本来就是自报的,
+    // 签了也只是"经过完整性校验的自我声明",拿它当权限判据仍旧不成立。
+    [PEER_HEADERS.mode]: await localModeTag(),
+  };
   // Buffer 不在 fetch 的 BodyInit 里(DOM 的 BufferSource 只收非共享的 ArrayBuffer),
   // 套一层零拷贝视图交出去 —— 签名仍按同一串字节算。
   const wire: string | Uint8Array<ArrayBuffer> = typeof body === "string"
@@ -166,7 +177,7 @@ export async function pingPeer(
   targetUrl: string,
   expectedFp?: string | null,
   returnContext?: HandoffReturnContext,
-  options: { allowReturnFallback?: boolean } = {},
+  options: { allowReturnFallback?: boolean; requirePeerUser?: boolean } = {},
 ): Promise<PeerProbe> {
   const nonce = newNonce();
   const pingUrl = returnContext ? `${targetUrl}/api/handoff/return/ping` : `${targetUrl}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`;
@@ -190,6 +201,16 @@ export async function pingPeer(
   }
   if (!ping?.ok || ping.service !== "ash") {
     throw new HandoffError("对端不是 ash（/api/handoff/ping 应答不对）", 502);
+  }
+  // 对端是多人实例、而这次没认出我是谁(没配 key 或 key 已失效):在这里就说清楚。
+  // 不说的话用户看到的是「对端一个项目都没有」——那是最容易被误读成「对端没建项目」
+  // 的假象(§十一 单人→多人 / 多人→多人 两格)。配对申请不走这一步:那时本来就还
+  // 没有账号,拦死它等于连申请的路都断了。
+  if (options.requirePeerUser && ping.instanceMode === "multi" && !ping.peerUser) {
+    throw new HandoffError(
+      "对端是多人实例，但它不认识你：接力需要「你在对端的账号 key」。到「设置 → 默认规则 → 接力目标机」给这台机器补上它；还没有账号就找对端管理员开一个。",
+      401,
+    );
   }
   const identity = ping.identity;
   if (!identity?.publicKey || !identity.sig) {
@@ -242,10 +263,9 @@ export async function pingPeer(
   };
 }
 
-/** 从设置里取某个目标机记住的指纹(按归一后的 url 匹配)。 */
+/** 从**这个人**的目标机清单里取记住的指纹(按归一后的 url 匹配)。 */
 export async function rememberedFingerprint(targetUrl: string): Promise<string | null> {
-  const { handoffTargets } = await getAppSettings();
-  return findTarget(handoffTargets, targetUrl)?.peerFp ?? null;
+  return (await targetForUrl(handoffActorId(), targetUrl))?.peerFp ?? null;
 }
 
 /**
@@ -265,21 +285,11 @@ export async function requestHandoffApproval(rawTargetUrl: string): Promise<Hand
   };
 }
 
-const findTarget = (targets: HandoffTarget[], url: string): HandoffTarget | undefined => {
-  const want = url.replace(/\/+$/, "");
-  return targets.find((t) => t.url.trim().replace(/\/+$/, "") === want);
-};
-
 /**
  * TOFU 落地:显式申请或接力成功之后把对端指纹记进设置。普通预检仍然不调用它，避免
  * 「点开对话框看一眼就退出」静默改信任状态 —— 记住一台机器必须对应一次明确动作。
  * 目标机不在设置列表里(临时地址)就跳过,不给它凭空建一条。
  */
 export async function rememberPeerFingerprint(targetUrl: string, fingerprint: string): Promise<void> {
-  const { handoffTargets } = await getAppSettings();
-  const hit = findTarget(handoffTargets, targetUrl);
-  if (!hit || sameFingerprint(hit.peerFp, fingerprint)) return;
-  await patchAppSettings({
-    handoffTargets: handoffTargets.map((t) => (t === hit ? { ...t, peerFp: fingerprint } : t)),
-  });
+  await rememberFingerprintFor(handoffActorId(), targetUrl, fingerprint);
 }

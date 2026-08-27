@@ -5,10 +5,10 @@ import { db } from "./db/index.js";
 import { agents, projects, queueItems, sessions, tasks } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { runsTiming } from "./util.js";
-import { getAppSettings } from "./app-settings.js";
 import { projectHealthLight } from "./git.js";
 import { resolveWorkflowDef } from "./workflows.js";
 import { isMultiUser } from "./auth/mode.js";
+import { settingsFor } from "./auth/personal-settings.js";
 
 export type TaskRow = typeof tasks.$inferSelect;
 // workflowId 不是列：它是**创建那一刻**用来挑起手式的 id，落库时会被换成 tasks.workflow
@@ -194,9 +194,15 @@ export async function createTasks(
   // Creation defaults belong here so every ordinary path (HTTP single, batch /
   // chain, duet handoff, future clients) gets the same behavior. Explicit
   // true/false wins, but a non-repo project can never materialize a worktree.
-  const defaultUseWorktree = rows.some((row) => row.useWorktree === undefined)
-    ? (await getAppSettings()).worktreeDefault
-    : false;
+  // worktree 默认是**个人面**设置(§八):同一批任务理论上可以来自不同归属人(接力导入、
+  // 派生),所以按 owner 各查各的,别用「第一行的归属人」代表整批。
+  const worktreeDefaults = new Map<string, boolean>();
+  for (const row of rows) {
+    if (row.useWorktree !== undefined) continue;
+    const owner = row.ownerUserId ?? "";
+    if (worktreeDefaults.has(owner)) continue;
+    worktreeDefaults.set(owner, (await settingsFor(row.ownerUserId ?? null)).worktreeDefault);
+  }
   const projectIds = [...new Set(rows.map((row) => row.projectId))];
   const projectRows = await db
     .select({ id: projects.id, repoPath: projects.repoPath })
@@ -204,7 +210,7 @@ export async function createTasks(
     .where(inArray(projects.id, projectIds));
   const repoByProject = new Map(projectRows.map((project) => [project.id, project.repoPath] as const));
   const normalizedRows = await Promise.all(rows.map(async (row): Promise<typeof tasks.$inferInsert & { id: string }> => {
-    const requested = row.useWorktree ?? defaultUseWorktree;
+    const requested = row.useWorktree ?? worktreeDefaults.get(row.ownerUserId ?? "") ?? false;
     const useWorktree = requested && projectHealthLight(repoByProject.get(row.projectId)).isRepo;
     const { workflowId, ...rest } = row;
     return {

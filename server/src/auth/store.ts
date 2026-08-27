@@ -13,7 +13,7 @@ import { db } from "../db/index.js";
 import { users, userSessions, userInvites } from "../db/schema.js";
 import { id, now } from "../util.js";
 
-type UserRow = typeof users.$inferSelect;
+export type UserRow = typeof users.$inferSelect;
 
 /** 会话有效期(天)。滑动:每次带着有效 cookie 来都往后顺延。 */
 export const SESSION_DAYS = 30;

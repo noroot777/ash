@@ -283,7 +283,9 @@ export interface HandoffImportResult {
 
 export async function importHandoff(
   input: unknown,
-  context: { sourceUrl?: string | null } = {},
+  // `ownerUserId`:落地任务归**对端那个人**(§八 三条继承规则之三、§十一)。
+  // 自用模式恒 null,与本功能上线前一致。
+  context: { sourceUrl?: string | null; ownerUserId?: string | null } = {},
 ): Promise<HandoffImportResult> {
   const m = validate(input);
   if (!beginHandoffImport(m.task.id)) {
@@ -299,7 +301,7 @@ export async function importHandoff(
 
 async function importValidated(
   m: HandoffManifest,
-  context: { sourceUrl?: string | null },
+  context: { sourceUrl?: string | null; ownerUserId?: string | null },
 ): Promise<HandoffImportResult> {
   const notes: string[] = [];
   const project = (await db.select().from(projects).where(eq(projects.id, m.targetProjectId))).at(0);
@@ -541,6 +543,8 @@ async function importValidated(
     executorId: null,
     reportBack: false,
     ...taskValues,
+    // 接力导入的任务归对端那个人:之后它在本机重跑、回复,烧的都是他自己的 key。
+    ownerUserId: context.ownerUserId ?? null,
   };
   const sessionRows = m.sessions.map((s) => ({
     id: s.id,

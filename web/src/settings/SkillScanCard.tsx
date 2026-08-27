@@ -45,11 +45,14 @@ function sourceSummary(row: SkillScanRow): string {
 export function SkillScanCard({
   seconds,
   loading,
+  readOnly,
   onChangeSeconds,
   notify,
 }: {
   seconds: number;
   loading: boolean;
+  /** 多人模式下这是**机器级**轮询行为(§八 实例面),普通用户只读。 */
+  readOnly?: boolean;
   onChangeSeconds: (seconds: number) => Promise<void>;
   notify: (message: string) => void;
 }) {
@@ -97,11 +100,12 @@ export function SkillScanCard({
             <small>
               指的是页面隔多久去问一次服务端，不是服务端多久扫一次盘（它每次都真扫，命中缓存约 0.5ms）。
               装了新技能等不及，用下面的「立即重新扫描」，或者关掉输入框再打开——那一下一定是新的
+              {readOnly && <><br />这一项是整台机器的轮询行为，只有实例管理员能改。</>}
             </small>
           </div>
           <select
             value={String(seconds)}
-            disabled={loading}
+            disabled={loading || readOnly}
             aria-label="技能清单刷新间隔"
             onChange={(event) => void onChangeSeconds(Number(event.target.value))}
           >

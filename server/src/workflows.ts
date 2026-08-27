@@ -19,6 +19,7 @@ import {
 } from "@ash/shared/workflow-presets";
 import { firstAnchor } from "@ash/shared/workflow-policy";
 import { getAppSettings, patchAppSettings } from "./app-settings.js";
+import { clearPersonalDefaultWorkflow, settingsFor } from "./auth/personal-settings.js";
 import { db } from "./db/index.js";
 import { projects, tasks, workflows } from "./db/schema.js";
 import { id, now } from "./util.js";
@@ -163,13 +164,15 @@ async function writeOverride(key: string, patch: Partial<Row>, owner: string | n
 // ── 三级作用域 ────────────────────────────────────────────────────────────
 // 任务显式选的 → 项目默认 → 全局默认 → 出厂推荐。每一级都可能指向一条被删掉或停用
 // 的条目，**那就往下落一级而不是报错**：一条起手式没了不该让「新建任务」也点不动。
-export async function workflowChain(projectId?: string | null): Promise<string[]> {
+export async function workflowChain(projectId?: string | null, owner?: string | null): Promise<string[]> {
   const chain: string[] = [];
   if (projectId) {
     const project = (await db.select().from(projects).where(eq(projects.id, projectId))).at(0);
     if (project?.workflowId) chain.push(project.workflowId);
   }
-  const global = (await getAppSettings()).defaultWorkflowId;
+  // 多人模式下「全局默认」其实是**这个人的**默认(§八);自用模式 settingsFor 直接
+  // 落回 app_settings,行为不变。
+  const global = (await settingsFor(owner ?? null)).defaultWorkflowId;
   if (global) chain.push(global);
   return chain;
 }
@@ -182,7 +185,7 @@ export async function resolveWorkflowDef(opts: {
   const items = await listWorkflows(opts.owner ?? null);
   // 挑选规矩本身在 shared 里（resolveWorkflowFromList），前端的新建面板用的是同一份，
   // 这样「面板上说会走哪条」和「真建出来走了哪条」不可能各说各话。
-  const chain = [opts.explicitId, ...(await workflowChain(opts.projectId))];
+  const chain = [opts.explicitId, ...(await workflowChain(opts.projectId, opts.owner ?? null))];
   const hit = resolveWorkflowFromList(items, chain, opts.explicitId);
   if (hit) return { id: hit.id, def: hit.def };
   const fallback = items.find((item) => item.id === DEFAULT_WORKFLOW_KEY);
@@ -282,4 +285,6 @@ async function clearReferences(itemId: string): Promise<void> {
   await db.update(projects).set({ workflowId: null }).where(eq(projects.workflowId, itemId));
   const settings = await getAppSettings();
   if (settings.defaultWorkflowId === itemId) await patchAppSettings({ defaultWorkflowId: "" });
+  // 多人模式下默认起手式是**每人一份**,全局那份清了不代表没人还指着它。
+  await clearPersonalDefaultWorkflow(itemId);
 }

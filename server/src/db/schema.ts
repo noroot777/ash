@@ -131,6 +131,20 @@ export const userHandoffTargets = sqliteTable(
   (t) => ({ userIdx: index("user_handoff_targets_user_idx").on(t.userId) }),
 );
 
+// 「默认规则」里属于**个人面**的那几项(§八:worktree 默认、默认起手式)。形状照抄
+// app_settings —— 同一个 key 在这里有行就盖过全局那份,没有就落回全局。
+// 实例面的那几项(根目录、实例模式、技能扫描间隔、接力审批/加密/载荷上限)不进这张表:
+// 它们描述的是**这台机器**的行为,一人一份没有意义。
+export const userSettings = sqliteTable(
+  "user_settings",
+  {
+    userId: text("user_id").notNull(),
+    key: text("key").notNull(),
+    value: text("value").notNull(),
+  },
+  (t) => ({ idx: uniqueIndex("user_settings_idx").on(t.userId, t.key) }),
+);
+
 
 // 项目走 HTTPS 远端时用的用户名 + 令牌。**一个项目一组**，故意不做成「一个项目多个
 // host」：需求是「这个项目用哪个账号推」，多 host 那层复杂度还没有人要过。
@@ -688,6 +702,13 @@ export const handoffPeers = sqliteTable("handoff_peers", {
   firstSeenAt: text("first_seen_at").notNull(),
   lastSeenAt: text("last_seen_at").notNull(),
   approvedAt: text("approved_at"),
+  // 多人模式下入站审批是**全员可批**的(§十一 互信定位),所以必须记下是谁批的 ——
+  // 一台机器被放行意味着它上面的人都能敲本机的门,事后要能问出「这是谁点的」。
+  // 自用模式恒空(只有一个人)。
+  approvedBy: text("approved_by"),
+  // 对端**自报**的实例模式(`single` / `multi:<人数>`)。自报的东西不做权限判据,
+  // 只在批准界面上明示:批一台多人实例 = 它上面所有人都能经这条路进来(§十一)。
+  peerMode: text("peer_mode").notNull().default(""),
   // 最近一次来访的地址,纯展示(帮人判断「这是不是我那台台式机」)。
   lastAddr: text("last_addr").notNull().default(""),
 });

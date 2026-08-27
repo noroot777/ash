@@ -194,7 +194,7 @@ export async function preflightHandoff(
     targetUrl,
     expectedFingerprint,
     returnContext,
-    { allowReturnFallback: options.allowReturnFallback },
+    { allowReturnFallback: options.allowReturnFallback, requirePeerUser: true },
   );
   // 项目匹配靠仓库目录名:两台机器的绝对路径几乎必然不同,目录名是最稳的公共项。
   // 两侧路径可能来自不同操作系统(本机 Windows、对端 macOS,或反过来),所以不用
@@ -346,7 +346,9 @@ export async function exportHandoff(
     // pingPeer 同时做身份核对:指纹和上次记住的对不上就在这里抛,bundle 一个字节都不打。
     const expectedFingerprint = returnFingerprint ?? pendingRetry?.peerFp ?? await rememberedFingerprint(targetUrl);
     const returnContext = inboundReturnContext(taskId, prevHandoffRaw);
-    const { ping, peer, sealTo, taskScopedReturn } = await pingPeer(targetUrl, expectedFingerprint, returnContext);
+    const { ping, peer, sealTo, taskScopedReturn } = await pingPeer(
+      targetUrl, expectedFingerprint, returnContext, { requirePeerUser: true },
+    );
     assertPeerAcceptsUs(peer);
     const targetProject = ping.projects.find((p) => p.id === opts.targetProjectId);
     if (!targetProject) throw new HandoffError("对端没有这个项目 id,先重新预检", 409);

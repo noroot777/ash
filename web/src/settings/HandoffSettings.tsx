@@ -8,9 +8,19 @@ import type {
   HandoffTarget,
 } from "@ash/shared";
 import { Check, Fingerprint, PaperPlaneTilt, Plus, Prohibit, SpinnerGap, Trash } from "@phosphor-icons/react";
+import { useIsInstanceAdmin, useIsMultiUser } from "../auth/authContext.ts";
 import { Button, TextInput, Toggle } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
+import {
+  approvalNotice,
+  approvalStateClass,
+  approvalStateLabel,
+  HANDOFF_PEERS_CHANGED_EVENT,
+  HANDOFF_URL_RE,
+  shortOf,
+} from "./handoffTargetUi.ts";
+import { UserHandoffTargets } from "./UserHandoffTargets.tsx";
 
 // 设置页的「任务接力」整段:本机身份 + 出站目标(含记住的对端指纹)+ 入站来源审批。
 //
@@ -41,6 +51,15 @@ export function HandoffSettings({
   const [forgetIndex, setForgetIndex] = useState<number | null>(null);
   const [approvalByUrl, setApprovalByUrl] = useState<Record<string, HandoffApprovalResult>>({});
   const [approvalBusyUrl, setApprovalBusyUrl] = useState<string | null>(null);
+  const isMulti = useIsMultiUser();
+  const isInstanceAdmin = useIsInstanceAdmin();
+  // 两件事,门禁不一样:
+  //  · **入站策略**(要不要审批、加不加密、载荷上限)= 整台机器的安全姿态,一个人关掉
+  //    等于替所有人开门,所以多人模式下只有实例管理员能改(§八 实例面)。
+  //  · **来源名单**的批准/拒绝 = 计划点名的「全员可见可批」(§十一,互信定位),
+  //    任何登录用户都能点,服务端记下操作人。
+  const canManageInstance = !isMulti || isInstanceAdmin;
+  const lockInstance = loading || busy || !canManageInstance;
 
   // 只在首次读回设置时倒灌一次输入框:每次 PATCH 都会拿到一个新数组引用,跟着同步
   // 就会把用户正在敲的半截行(名字有了 url 还没敲完)冲掉。
@@ -161,91 +180,93 @@ export function HandoffSettings({
         </div>
       </div>
 
-      <div className="settings-card">
-        <div className="settings-row">
-          <div>
-            <b>接力目标机器</b>
-            <small>
-              另一台 ash 的根地址。第一次明确申请时会记住它的身份指纹，之后这个地址要是换了机器，申请和接力都会被拦下。
-            </small>
-          </div>
-          <Button
-            variant="ghost"
-            disabled={loading}
-            onClick={() => setTargets([...targets, { name: "", url: "" }])}
-          >
-            <Plus size={13} aria-hidden="true" />添加
-          </Button>
-        </div>
-        {targets.map((item, index) => (
-          <div className="settings-row handoff-target-row" key={index}>
-            <TextInput
-              placeholder="名字（如 家里的台式机）"
-              className="handoff-target-name"
-              value={item.name}
-              disabled={loading}
-              onChange={(event) => {
-                const next = targets.slice();
-                next[index] = { ...item, name: event.target.value };
-                setTargets(next);
-              }}
-              onBlur={() => void saveTargets(targets)}
-            />
-            <TextInput
-              placeholder="http://192.168.1.50:4317"
-              value={item.url}
-              disabled={loading}
-              onChange={(event) => {
-                const next = targets.slice();
-                // 地址改了就把记住的指纹一起丢掉:那串指纹是对**上一个地址**背后那台
-                // 机器的承诺,跟着新地址走就成了一句凭空的担保。
-                const peerFp = event.target.value.trim() === item.url.trim() ? item.peerFp : null;
-                next[index] = { ...item, url: event.target.value, peerFp };
-                setTargets(next);
-              }}
-              onBlur={() => void saveTargets(targets)}
-            />
+      {isMulti ? <UserHandoffTargets notify={notify} /> : (
+        <div className="settings-card">
+          <div className="settings-row">
+            <div>
+              <b>接力目标机器</b>
+              <small>
+                另一台 ash 的根地址。第一次明确申请时会记住它的身份指纹，之后这个地址要是换了机器，申请和接力都会被拦下。
+              </small>
+            </div>
             <Button
               variant="ghost"
-              className="handoff-target-request"
-              disabled={loading || approvalBusyUrl !== null
-                || !item.name.trim() || !HANDOFF_URL_RE.test(item.url.trim())}
-              onClick={() => void requestApproval(item)}
-            >
-              {approvalBusyUrl === item.url.trim().replace(/\/+$/, "")
-                ? <SpinnerGap size={13} className="is-spinning" aria-hidden="true" />
-                : <PaperPlaneTilt size={13} aria-hidden="true" />}
-              {approvalByUrl[item.url.trim().replace(/\/+$/, "")] || item.peerFp ? "检查状态" : "申请"}
-            </Button>
-            {approvalByUrl[item.url.trim().replace(/\/+$/, "")] ? (
-              <span className={`handoff-approval-state ${approvalStateClass(approvalByUrl[item.url.trim().replace(/\/+$/, "")])}`}>
-                {approvalStateLabel(approvalByUrl[item.url.trim().replace(/\/+$/, "")])}
-              </span>
-            ) : item.peerFp ? (
-              <button
-                type="button"
-                className="handoff-fingerprint is-known"
-                disabled={loading}
-                aria-label={`忘记「${item.name || item.url}」记住的身份指纹`}
-                onClick={() => setForgetIndex(index)}
-              >
-                <Fingerprint size={12} aria-hidden="true" />
-                {shortOf(item.peerFp)}
-              </button>
-            ) : (
-              <span className="handoff-approval-state is-unknown">申请后核对身份</span>
-            )}
-            <Button
-              variant="icon"
-              aria-label={`删除接力目标 ${item.name || item.url || String(index + 1)}`}
               disabled={loading}
-              onClick={() => void saveTargets(targets.filter((_, i) => i !== index))}
+              onClick={() => setTargets([...targets, { name: "", url: "" }])}
             >
-              <Trash size={13} aria-hidden="true" />
+              <Plus size={13} aria-hidden="true" />添加
             </Button>
           </div>
-        ))}
-      </div>
+          {targets.map((item, index) => (
+            <div className="settings-row handoff-target-row" key={index}>
+              <TextInput
+                placeholder="名字（如 家里的台式机）"
+                className="handoff-target-name"
+                value={item.name}
+                disabled={loading}
+                onChange={(event) => {
+                  const next = targets.slice();
+                  next[index] = { ...item, name: event.target.value };
+                  setTargets(next);
+                }}
+                onBlur={() => void saveTargets(targets)}
+              />
+              <TextInput
+                placeholder="http://192.168.1.50:4317"
+                value={item.url}
+                disabled={loading}
+                onChange={(event) => {
+                  const next = targets.slice();
+                  // 地址改了就把记住的指纹一起丢掉:那串指纹是对**上一个地址**背后那台
+                  // 机器的承诺,跟着新地址走就成了一句凭空的担保。
+                  const peerFp = event.target.value.trim() === item.url.trim() ? item.peerFp : null;
+                  next[index] = { ...item, url: event.target.value, peerFp };
+                  setTargets(next);
+                }}
+                onBlur={() => void saveTargets(targets)}
+              />
+              <Button
+                variant="ghost"
+                className="handoff-target-request"
+                disabled={loading || approvalBusyUrl !== null
+                  || !item.name.trim() || !HANDOFF_URL_RE.test(item.url.trim())}
+                onClick={() => void requestApproval(item)}
+              >
+                {approvalBusyUrl === item.url.trim().replace(/\/+$/, "")
+                  ? <SpinnerGap size={13} className="is-spinning" aria-hidden="true" />
+                  : <PaperPlaneTilt size={13} aria-hidden="true" />}
+                {approvalByUrl[item.url.trim().replace(/\/+$/, "")] || item.peerFp ? "检查状态" : "申请"}
+              </Button>
+              {approvalByUrl[item.url.trim().replace(/\/+$/, "")] ? (
+                <span className={`handoff-approval-state ${approvalStateClass(approvalByUrl[item.url.trim().replace(/\/+$/, "")])}`}>
+                  {approvalStateLabel(approvalByUrl[item.url.trim().replace(/\/+$/, "")])}
+                </span>
+              ) : item.peerFp ? (
+                <button
+                  type="button"
+                  className="handoff-fingerprint is-known"
+                  disabled={loading}
+                  aria-label={`忘记「${item.name || item.url}」记住的身份指纹`}
+                  onClick={() => setForgetIndex(index)}
+                >
+                  <Fingerprint size={12} aria-hidden="true" />
+                  {shortOf(item.peerFp)}
+                </button>
+              ) : (
+                <span className="handoff-approval-state is-unknown">申请后核对身份</span>
+              )}
+              <Button
+                variant="icon"
+                aria-label={`删除接力目标 ${item.name || item.url || String(index + 1)}`}
+                disabled={loading}
+                onClick={() => void saveTargets(targets.filter((_, i) => i !== index))}
+              >
+                <Trash size={13} aria-hidden="true" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="settings-card">
         <div className="settings-row">
@@ -254,12 +275,21 @@ export function HandoffSettings({
             <small>
               开启后，别的机器必须先在下面被你放行，且每个接力请求都要带它自己的密钥签名。
               关掉就退回旧行为：任何连得上这个端口的机器都能把任务推进本机。
+              {isMulti && (
+                <>
+                  <br />
+                  批准一台机器只是<b>让它敲得开门</b>：它上面的每个人能把任务推进哪些项目，仍由那个人
+                  在本机的账号和项目成员名单决定——机器指纹管传输，账号管权限，两层各管各的。
+                  下面的来源名单<b>谁都能批</b>（批了会记名）；这三个开关是整台机器的安全姿态
+                  {!canManageInstance && "，只有实例管理员能改"}。
+                </>
+              )}
             </small>
           </div>
           <Toggle
             label={settings.handoffRequireApproval ? "已开启" : "已关闭"}
             checked={settings.handoffRequireApproval}
-            disabled={loading || busy}
+            disabled={lockInstance}
             onChange={async (checked) => {
               try {
                 onSettings(await api.patchSettings({ handoffRequireApproval: checked }));
@@ -283,7 +313,7 @@ export function HandoffSettings({
           <Toggle
             label={settings.handoffEncrypt ? "已开启" : "已关闭（明文）"}
             checked={settings.handoffEncrypt}
-            disabled={loading || busy}
+            disabled={lockInstance}
             onChange={async (checked) => {
               try {
                 onSettings(await api.patchSettings({ handoffEncrypt: checked }));
@@ -313,7 +343,7 @@ export function HandoffSettings({
             max={512}
             step={1}
             value={settings.handoffMaxBodyMb}
-            disabled={loading || busy}
+            disabled={lockInstance}
             onChange={(e) => onSettings({ ...settings, handoffMaxBodyMb: Number(e.target.value) })}
             onBlur={async (e) => {
               const mb = Math.min(512, Math.max(1, Math.round(Number(e.target.value) || 512)));
@@ -344,12 +374,24 @@ export function HandoffSettings({
                   <span className="handoff-peer-state">
                     {peer.status === "approved" ? "已批准" : peer.status === "blocked" ? "已拒绝" : "待批准"}
                   </span>
+                  {peerModeLabel(peer.peerMode) && (
+                    <span className="handoff-peer-mode">{peerModeLabel(peer.peerMode)}</span>
+                  )}
                 </b>
                 <small>
                   指纹 {peer.short}
                   {peer.lastAddr ? ` · 来自 ${peer.lastAddr}` : ""}
                   {` · 最近 ${new Date(peer.lastSeenAt).toLocaleString()}`}
+                  {peer.approvedByName ? ` · 由 ${peer.approvedByName} 处理` : ""}
                 </small>
+                {/* 知情批准(§十一):对方是多人实例时,批准的是**那台机器**,
+                    它上面的每个人都能经这条路敲门。这句话必须在点「批准」之前看得见。 */}
+                {peer.status !== "approved" && multiPeerCount(peer.peerMode) !== null && (
+                  <small className="handoff-peer-warn">
+                    对方是多人实例（{multiPeerCount(peer.peerMode)} 个账号）：批准后，那台机器上的
+                    <b>所有用户</b>都能经这次配对把任务接力进来。他们各自能推进哪些项目，仍由他们在本机的账号和项目成员名单决定。
+                  </small>
+                )}
               </div>
               <div className="handoff-peer-actions">
                 {peer.status !== "approved" && (
@@ -437,38 +479,14 @@ export function HandoffSettings({
   );
 }
 
-const HANDOFF_URL_RE = /^https?:\/\/\S+$/;
-const HANDOFF_PEERS_CHANGED_EVENT = "ash:handoff-peers-changed";
-
-const peerStatusOf = (result?: HandoffApprovalResult) => result?.peer?.peerStatus ?? null;
-
-const approvalStateLabel = (result?: HandoffApprovalResult) => {
-  const status = peerStatusOf(result);
-  if (status === "pending") return "等待对方接受";
-  if (status === "approved") return "对方已接受";
-  if (status === "open") return "对方无需审批";
-  if (status === "blocked") return "对方已拒绝";
-  if (result) return "目标机版本过旧";
-  return "申请后核对身份";
+/** 对端自报的模式标签。`multi:3` → 3;不是多人实例(或老版本没报)→ null。 */
+const multiPeerCount = (mode?: string): number | null => {
+  const hit = /^multi:(\d+)$/.exec(mode ?? "");
+  return hit ? Number(hit[1]) : null;
 };
 
-const approvalStateClass = (result?: HandoffApprovalResult) => {
-  const status = peerStatusOf(result);
-  if (status === "pending") return "is-pending";
-  if (status === "approved" || status === "open") return "is-approved";
-  if (status === "blocked") return "is-blocked";
-  return "is-unknown";
+const peerModeLabel = (mode?: string): string => {
+  if (mode === "single") return "自用实例";
+  const count = multiPeerCount(mode);
+  return count === null ? "" : `多人实例 · ${count} 人`;
 };
-
-const approvalNotice = (name: string, result: HandoffApprovalResult) => {
-  const status = peerStatusOf(result);
-  if (status === "pending") return `已向「${name}」发送申请，请等待对方接受后再接力`;
-  if (status === "approved") return `「${name}」已接受申请，可以开始接力`;
-  if (status === "open") return `「${name}」没有开启审批，可以直接接力`;
-  if (status === "blocked") return `「${name}」已拒绝这台机器的接力申请`;
-  return `「${name}」版本过旧，无法确认申请状态`;
-};
-
-/** 和服务端 shortFingerprint 同一套:前 20 个 hex 分 5 组,只用于展示。 */
-const shortOf = (fingerprint: string) =>
-  (fingerprint.slice(0, 20).toUpperCase().match(/.{1,4}/g) ?? []).join("-");

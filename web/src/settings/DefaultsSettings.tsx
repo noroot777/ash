@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { AppSettings } from "@ash/shared";
 import { DEFAULT_APP_SETTINGS } from "@ash/shared";
+import { useIsInstanceAdmin, useIsMultiUser } from "../auth/authContext.ts";
 import { Toggle } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { WorkflowPicker, useWorkflows } from "../workflow/WorkflowPicker.tsx";
@@ -12,6 +13,11 @@ export function DefaultsSettings({ notify }: { notify: (message: string) => void
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
   const [loading, setLoading] = useState(true);
   const workflows = useWorkflows();
+  // 多人模式下「任务默认值」是个人面(各存各的),而技能扫描间隔、接力那几项是实例面
+  // (§八)。这里只负责别把改不动的东西显示成能改 —— 真正的闸在服务端。
+  const isMulti = useIsMultiUser();
+  const isInstanceAdmin = useIsInstanceAdmin();
+  const canManageInstance = !isMulti || isInstanceAdmin;
 
   useEffect(() => {
     api.settings()
@@ -36,11 +42,14 @@ export function DefaultsSettings({ notify }: { notify: (message: string) => void
       <header className="settings-heading">
         <div>
           <h1>默认规则</h1>
-          <p>设置新任务的系统级初始行为；创建任务时仍可单独覆盖。</p>
+          <p>设置新任务的初始行为；创建任务时仍可单独覆盖。</p>
         </div>
       </header>
       <section className="settings-section">
         <h2>任务默认值</h2>
+        {isMulti && (
+          <p className="settings-note">这一节只对你生效，别人有各自的一份。</p>
+        )}
         <div className="settings-card">
           <div className="settings-row">
             <div>
@@ -90,10 +99,11 @@ export function DefaultsSettings({ notify }: { notify: (message: string) => void
       <SkillScanCard
         seconds={settings.skillRefreshSeconds}
         loading={loading}
+        readOnly={!canManageInstance}
         onChangeSeconds={patchSkillRefresh}
         notify={notify}
       />
-      <InstanceModeCard />
+      {canManageInstance && <InstanceModeCard />}
     </>
   );
 }

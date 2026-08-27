@@ -370,6 +370,21 @@ export const api = {
   forgetHandoffPeer: (fingerprint: string): Promise<{ deleted: true }> =>
     request(`/handoff/peers/${id(fingerprint)}`, { method: "DELETE" }),
 
+  // 多人模式:目标机清单**按人**存(里面有「我在对端的账号 key」,是凭证)。
+  // 自用模式这几条也通,但读回的是 app_settings 里那份公共清单,写侧只允许 add——
+  // 那条路必须与本功能上线前逐字节一致,所以自用模式的编辑仍走 patchSettings。
+  handoffTargets: async (): Promise<HandoffTarget[]> =>
+    (await request<{ targets: HandoffTarget[] }>("/handoff/targets")).targets,
+  addHandoffTarget: async (input: { name: string; url: string; peerKey?: string }): Promise<HandoffTarget[]> =>
+    (await request<{ targets: HandoffTarget[] }>("/handoff/targets", json("POST", input))).targets,
+  patchHandoffTarget: async (
+    targetId: string,
+    patch: { name?: string; url?: string; peerKey?: string },
+  ): Promise<HandoffTarget[]> =>
+    (await request<{ targets: HandoffTarget[] }>(`/handoff/targets/${id(targetId)}`, json("PATCH", patch))).targets,
+  deleteHandoffTarget: async (targetId: string): Promise<HandoffTarget[]> =>
+    (await request<{ targets: HandoffTarget[] }>(`/handoff/targets/${id(targetId)}`, { method: "DELETE" })).targets,
+
   taskWorkspace: (taskId: string): Promise<TaskWorkspaceProbe> =>
     request(`/tasks/${id(taskId)}/workspace`),
   taskReview: (taskId: string): Promise<TaskReviewInfo> =>

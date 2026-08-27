@@ -7,7 +7,8 @@ import type {
 } from "@ash/shared";
 import { and, eq } from "drizzle-orm";
 import type { Context, Hono } from "hono";
-import { getAppSettings } from "./app-settings.js";
+import { handoffActorId } from "./auth/handoff-outbound.js";
+import { resolveTargetsFor, toPublicTarget } from "./auth/handoff-scope.js";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { readCappedBody } from "./handoff-body.js";
@@ -68,7 +69,8 @@ async function outboundTask(taskId: string, rawTargetUrl: string) {
   if (!row) throw new HandoffError("任务不存在", 404);
   const marker = markerOf(row.handoff);
   if (!marker) throw new HandoffError("任务没有接力记录", 409);
-  const { handoffTargets } = await getAppSettings();
+  // 目标机清单按人:多人模式下它装着「我在对端的 key」,不能放进公共设置(§十一)。
+  const handoffTargets = (await resolveTargetsFor(handoffActorId())).map(toPublicTarget);
   const target = targetForOutbound(marker, rawTargetUrl, handoffTargets);
   const expectedFp = marker.peerFp ?? target.peerFp ?? null;
   const probe = await pingPeer(normalizedUrl(target.url), expectedFp);
@@ -183,7 +185,7 @@ async function remoteStatesFor(
 // 本机所有「确认接力出去」的行,按持有机分组。pending(应答丢失、没确认送到)的不算:
 // 那种任务本机还硬拦着不让跑,状态归本机自己说,问对端只会问出个 404。
 async function outboundByPeer(): Promise<Map<string, { target: HandoffTarget; items: { taskId: string; transferId?: string }[] }>> {
-  const { handoffTargets } = await getAppSettings();
+  const handoffTargets = (await resolveTargetsFor(handoffActorId())).map(toPublicTarget);
   const rows = await db.select({ id: tasks.id, handoff: tasks.handoff }).from(tasks);
   const byPeer = new Map<string, { target: HandoffTarget; items: { taskId: string; transferId?: string }[] }>();
   for (const row of rows) {

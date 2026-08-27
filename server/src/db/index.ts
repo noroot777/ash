@@ -230,6 +230,10 @@ export async function ensureSchema() {
       peer_fp TEXT, peer_key TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS user_handoff_targets_user_idx ON user_handoff_targets (user_id);
+    CREATE TABLE IF NOT EXISTS user_settings (
+      user_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS user_settings_idx ON user_settings (user_id, key);
   `);
   // Tolerant migration for DBs created before columns were added.
   try {
@@ -410,6 +414,12 @@ export async function ensureSchema() {
     "ALTER TABLE reviewer_profiles ADD COLUMN owner_user_id TEXT",
     "ALTER TABLE team_presets ADD COLUMN owner_user_id TEXT",
     "ALTER TABLE schedules ADD COLUMN owner_user_id TEXT",
+    // 定时/排队消息也盖归属戳:它触发的回合要按**排消息的人**跑(§八),
+    // 不是按任务归属人 —— 共享项目里给别人的任务排一条回复,烧的是自己的 key。
+    "ALTER TABLE scheduled_messages ADD COLUMN owner_user_id TEXT",
+    // 入站接力来源:谁批的 + 对端自报的实例模式(§十一 知情批准)。
+    "ALTER TABLE handoff_peers ADD COLUMN approved_by TEXT",
+    "ALTER TABLE handoff_peers ADD COLUMN peer_mode TEXT NOT NULL DEFAULT ''",
   ]) {
     try {
       await client.execute(sql);

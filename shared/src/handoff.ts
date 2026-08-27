@@ -11,6 +11,14 @@ export interface HandoffTarget {
   // 整个仓库和会话历史,地址漂到别人机器上时,这是唯一拦得住的东西。
   // 空/缺失 = 还没记过(首次)或用户手动清除过。
   peerFp?: string | null;
+  // 多人模式:目标机是多人实例时,「我在对端的账号 key」。它是凭证,**读侧永不回显**
+  // (同 project_git_credentials 待遇),GET 只报 hasKey;写侧传明文 key 落库。
+  // 空 = 还没配。对端是多人实例而这里为空 → 接力会被明确拒绝并提示去找对端管理员开账号。
+  hasKey?: boolean;
+  /** 仅写入方向:明文 key。服务端落库后永远不回显。 */
+  peerKey?: string;
+  /** 多人模式下这条目标机是**谁的**。单人模式恒缺省。 */
+  id?: string;
 }
 
 // ── 接力身份与配对 ─────────────────────────────────────────────────────────
@@ -35,6 +43,10 @@ export interface HandoffPeer {
   firstSeenAt: string;
   lastSeenAt: string;
   approvedAt: string | null;
+  /** 最近一次批准/拒绝这台机器的人。多人模式下入站审批全员可点,所以要记名(§十一)。 */
+  approvedByName?: string;
+  /** 对端自报的实例模式:`single` / `multi:<人数>`。不可信,只为知情批准。 */
+  peerMode?: string;
   /** 最近一次来访地址,纯展示。 */
   lastAddr: string;
   /** true = 仅为撤销历史回程权限而建立的拒绝记录，并不代表这台机器曾申请整机接力。 */

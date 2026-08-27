@@ -179,6 +179,13 @@ export interface HandoffPingResponse {
   // 对端对**源机**的态度(入站方向):approved 放行 / pending 待批准 / blocked 已拒绝 /
   // open 对端没开审批 / unknown 源机没签名或对端是旧版。
   peerStatus?: "approved" | "pending" | "blocked" | "open" | "unknown";
+  // 对端是单人还是多人实例(§十一「审批必须知情」)。多人时附用户数。老版本没有这个
+  // 字段 —— 源机读到 undefined 就按「单人/旧版」处理,与本功能上线前一致。
+  instanceMode?: "single" | "multi";
+  userCount?: number;
+  // 多人实例专用:这次请求带的那把对端 key 认出来是谁。没带/不认时为空,源机据此
+  // 提示「去配 key」而不是把空项目列表当成「对端没有项目」。
+  peerUser?: { id: string; name: string } | null;
   // 未获批准时故意为空:项目清单是本机的仓库布局,不该报给还没被认可的机器。
   projects: HandoffPingProject[];
   // 任务级免审批移回时，只返回该任务原项目的 refs，供持有机生成增量 bundle。

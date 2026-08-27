@@ -32,7 +32,7 @@ import { mountNoteRoutes } from "./notes.js";
 import { mountTeamPresetRoutes } from "./team-presets.js";
 import { mountWorkflowRoutes } from "./workflows.js";
 import { mountPreviewRoutes } from "./preview-routes.js";
-import { getAppSettings, parseAppSettingsPatch, patchAppSettings } from "./app-settings.js";
+import { parseAppSettingsPatch } from "./app-settings.js";
 import { hostInfo } from "./platform.js";
 import { mountSkillRoutes } from "./skill-routes.js";
 import { mountAnthropicContext1mRoutes, stripContext1mSuffix } from "./anthropic-context-1m.js";
@@ -59,6 +59,7 @@ import { mountAuthRoutes } from "./auth/routes.js";
 import { mountUserRoutes } from "./auth/user-routes.js";
 import { mountPersonalCliRoutes } from "./auth/personal-routes.js";
 import { actorOf, isAdminActor } from "./auth/context.js";
+import { patchSettingsFor, settingsForActor } from "./auth/personal-settings.js";
 import { makeEventFilter } from "./auth/event-filter.js";
 import { visibleProjectIds } from "./auth/visibility.js";
 import { canUseOwned, filterOwned, ownerStamp } from "./auth/owned.js";
@@ -107,14 +108,17 @@ api.get("/host", (c) => c.json({
     isAdminActor(actorOf(c)) && directoryPickerSupport(getConnInfo(c).remote.address).available,
 }));
 
-api.get("/settings", async (c) => c.json(await getAppSettings()));
+// 设置分个人面 / 实例面(§八),判据在 auth/personal-settings.ts。自用模式下这一层透明。
+api.get("/settings", async (c) => c.json(await settingsForActor(actorOf(c))));
 
 api.patch("/settings", async (c) => {
   try {
     const patch = parseAppSettingsPatch(await c.req.json<unknown>());
-    return c.json(await patchAppSettings(patch));
+    return c.json(await patchSettingsFor(actorOf(c), patch));
   } catch (error) {
-    return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    // 403(实例面被普通用户改)不能被压成 400:那会让前端把「没权限」显示成「填错了」。
+    const status = (error as { status?: number }).status === 403 ? 403 : 400;
+    return c.json({ error: error instanceof Error ? error.message : String(error) }, status);
   }
 });
 

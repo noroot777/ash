@@ -17,7 +17,7 @@ import { getConnInfo } from "@hono/node-server/conninfo";
 import { eq } from "drizzle-orm";
 import type { HandoffPeer } from "@ash/shared";
 import { db } from "./db/index.js";
-import { handoffPeers } from "./db/schema.js";
+import { handoffPeers, users } from "./db/schema.js";
 import { getAppSettings } from "./app-settings.js";
 import { HandoffError } from "./handoff-types.js";
 import {
@@ -31,6 +31,10 @@ export const PEER_HEADERS = {
   ts: "x-ash-peer-ts",
   nonce: "x-ash-peer-nonce",
   host: "x-ash-peer-host",
+  // 对端自报的实例模式,形如 `single` / `multi:3`。**不可信**(同 host 头,自报的),
+  // 不进签名 —— 它不是权限判据,只让批准的人知道自己在批什么:批一台多人实例
+  // = 那台机器上**所有人**都能经这条路接力进来(§十一 多人→单人 那一格)。
+  mode: "x-ash-peer-mode",
 } as const;
 
 /** 时间戳容忍窗口。两台机器的表差几分钟很常见,但更宽就等于给重放留窗口。 */
@@ -77,6 +81,8 @@ export interface VerifiedPeer {
   publicKey: string;
   /** 对端自述的主机名,不可信,只用于展示。 */
   name: string;
+  /** 对端自述的实例模式(`single` / `multi:<人数>`),不可信,只用于让人知情批准。 */
+  mode: string;
 }
 
 /**
@@ -117,6 +123,7 @@ export function verifyPeerSignature(c: Context, rawBody: string | Buffer): Verif
     publicKey,
     // 出站侧 percent 编码过(主机名可能是中文);解不开就按原样收,反正只用于展示。
     name: decodeHost(h(PEER_HEADERS.host)),
+    mode: h(PEER_HEADERS.mode).slice(0, 32),
   };
 }
 
@@ -125,9 +132,13 @@ export async function touchPeer(peer: VerifiedPeer, addr: string): Promise<Hando
   const at = now();
   const existing = (await db.select().from(handoffPeers)
     .where(eq(handoffPeers.fingerprint, peer.fingerprint))).at(0);
+  const peerMode = peer.mode || existing?.peerMode || "";
   if (existing) {
     await db.update(handoffPeers)
-      .set({ publicKey: peer.publicKey, lastSeenAt: at, lastAddr: addr, name: peer.name || existing.name })
+      .set({
+        publicKey: peer.publicKey, lastSeenAt: at, lastAddr: addr,
+        name: peer.name || existing.name, peerMode,
+      })
       .where(eq(handoffPeers.fingerprint, peer.fingerprint));
     return toPeer({
       ...existing,
@@ -135,6 +146,7 @@ export async function touchPeer(peer: VerifiedPeer, addr: string): Promise<Hando
       lastSeenAt: at,
       lastAddr: addr,
       name: peer.name || existing.name,
+      peerMode,
     });
   }
   const row = {
@@ -145,13 +157,15 @@ export async function touchPeer(peer: VerifiedPeer, addr: string): Promise<Hando
     firstSeenAt: at,
     lastSeenAt: at,
     approvedAt: null,
+    approvedBy: null,
+    peerMode,
     lastAddr: addr,
   };
   await db.insert(handoffPeers).values(row).onConflictDoNothing();
   return toPeer(row);
 }
 
-const toPeer = (row: typeof handoffPeers.$inferSelect): HandoffPeer => ({
+const toPeer = (row: typeof handoffPeers.$inferSelect, byName?: string): HandoffPeer => ({
   fingerprint: row.fingerprint,
   short: shortFingerprint(row.fingerprint),
   name: row.name,
@@ -159,18 +173,34 @@ const toPeer = (row: typeof handoffPeers.$inferSelect): HandoffPeer => ({
   firstSeenAt: row.firstSeenAt,
   lastSeenAt: row.lastSeenAt,
   approvedAt: row.approvedAt,
+  ...(byName ? { approvedByName: byName } : {}),
+  ...(row.peerMode ? { peerMode: row.peerMode } : {}),
   lastAddr: row.lastAddr,
   returnOnly: !row.publicKey,
 });
 
 export async function listPeers(): Promise<HandoffPeer[]> {
   const rows = await db.select().from(handoffPeers);
+  // 谁批的要显示成人名而不是 id —— 多人模式下这行字是「这台机器怎么进来的」的唯一线索。
+  const names = new Map((await db.select({ id: users.id, name: users.name }).from(users))
+    .map((u) => [u.id, u.name] as const));
   // 待批准的排前面:那是唯一需要用户动手的一档。
   const rank = (s: string) => (s === "pending" ? 0 : s === "approved" ? 1 : 2);
-  return rows.map(toPeer).sort((a, b) => rank(a.status) - rank(b.status) || b.lastSeenAt.localeCompare(a.lastSeenAt));
+  return rows
+    .map((row) => toPeer(row, row.approvedBy ? names.get(row.approvedBy) ?? "(已删除)" : undefined))
+    .sort((a, b) => rank(a.status) - rank(b.status) || b.lastSeenAt.localeCompare(a.lastSeenAt));
 }
 
-export async function setPeerStatus(fingerprint: string, status: "approved" | "blocked"): Promise<HandoffPeer> {
+/**
+ * 批准 / 拒绝一台入站机器。多人模式下**任何登录用户都能点**(§十一:互信定位,不是
+ * 管理员专属),所以 `by` 必填 —— 放行一台机器等于让它上面所有人都敲得开本机的门,
+ * 事后必须能问出是谁点的。
+ */
+export async function setPeerStatus(
+  fingerprint: string,
+  status: "approved" | "blocked",
+  by?: string | null,
+): Promise<HandoffPeer> {
   const normalized = fingerprint.trim().toLowerCase();
   if (!/^[a-f0-9]{64}$/.test(normalized)) throw new HandoffError("机器指纹格式不正确", 400);
   const row = (await db.select().from(handoffPeers).where(eq(handoffPeers.fingerprint, normalized))).at(0);
@@ -185,11 +215,13 @@ export async function setPeerStatus(fingerprint: string, status: "approved" | "b
       firstSeenAt: at,
       lastSeenAt: at,
       approvedAt: null,
+      approvedBy: by ?? null,
+      peerMode: "",
       lastAddr: "",
     };
     await db.insert(handoffPeers).values(blocked).onConflictDoUpdate({
       target: handoffPeers.fingerprint,
-      set: { status: "blocked", approvedAt: null },
+      set: { status: "blocked", approvedAt: null, approvedBy: by ?? null },
     });
     const stored = (await db.select().from(handoffPeers)
       .where(eq(handoffPeers.fingerprint, normalized))).at(0);
@@ -201,8 +233,12 @@ export async function setPeerStatus(fingerprint: string, status: "approved" | "b
   // 拉黑不是忘记：保留已有批准时间，解除时才能恢复原来的 approved；从未批准过的
   // pending 行 approvedAt 仍为空，解除后也只回 pending，不能借一次 block/unblock 提权。
   const approvedAt = status === "approved" ? now() : row.approvedAt;
-  await db.update(handoffPeers).set({ status, approvedAt }).where(eq(handoffPeers.fingerprint, normalized));
-  return toPeer({ ...row, status, approvedAt });
+  // 操作人记的是**最近一次动它的人**(批准或拒绝),不是「最初批准的人」——
+  // 要回答的问题是「现在这个状态是谁定的」。
+  const approvedBy = by ?? row.approvedBy;
+  await db.update(handoffPeers).set({ status, approvedAt, approvedBy })
+    .where(eq(handoffPeers.fingerprint, normalized));
+  return toPeer({ ...row, status, approvedAt, approvedBy });
 }
 
 export async function unblockPeer(fingerprint: string): Promise<HandoffPeer | null> {

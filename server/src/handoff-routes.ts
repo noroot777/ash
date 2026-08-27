@@ -37,6 +37,12 @@ import {
   assertReturnProject, listReturnGrants, returnArchiveForPeer, returnTargetForTask, sourceUrlFromPeer,
 } from "./handoff-return.js";
 import { appendTaskTimeline } from "./task-timeline.js";
+import { isMultiUser } from "./auth/mode.js";
+import { countUsers } from "./auth/store.js";
+import { peerActor, peerOwnerId, peerUserFor, peerUserSoft } from "./auth/handoff-peer-user.js";
+import { canSeeProject, visibleProjectsFor } from "./auth/visibility.js";
+import { actorOf, ownerIdOf } from "./auth/context.js";
+import { addTarget, deleteTarget, listTargets, patchTarget } from "./auth/handoff-scope.js";
 
 type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 500 | 502;
 
@@ -148,6 +154,7 @@ function pingPayload(
   peerStatus: NonNullable<HandoffPingResponse["peerStatus"]>,
   rows: HandoffPingResponse["projects"],
   returnRefs?: HandoffPingResponse["returnRefs"],
+  instance?: { mode: "single" | "multi"; userCount?: number; peerUser?: { id: string; name: string } | null },
 ): HandoffPingResponse {
   const identity = localIdentity();
   return {
@@ -161,6 +168,13 @@ function pingPayload(
       sig: signWithLocalKey(canonicalPingChallenge(nonce, identity.kxPublicKey)),
     },
     peerStatus,
+    // 「审批必须知情」(§十一):对端是不是多人实例必须写在应答里,审批界面才说得出
+    // 「批准后对方所有用户都可经此配对接力进来」。
+    ...(instance ? {
+      instanceMode: instance.mode,
+      ...(instance.userCount === undefined ? {} : { userCount: instance.userCount }),
+      ...(instance.peerUser === undefined ? {} : { peerUser: instance.peerUser }),
+    } : {}),
     projects: rows,
     ...(returnRefs ? { returnRefs } : {}),
   };
@@ -205,8 +219,17 @@ async function handleImport(c: Context, returning: boolean) {
       const archive = await returnArchiveForPeer(body.task?.id ?? "", peer.fingerprint, body.returnTransferId);
       assertReturnProject(body.targetProjectId, archive.project.id);
     }
+    // 多人实例:导入要求**发起人在本机的账号**对目标项目有权限(§十一)。机器级配对
+    // 只说明「那台机器可以连我」,说明不了「那台机器上的这个人可以往这个项目里塞东西」。
+    const peerUser = await peerUserFor(c);
+    if (peerUser.kind === "user" && body.targetProjectId
+        && !(await canSeeProject(peerActor(peerUser), body.targetProjectId))) {
+      // 与本机所有面同一口径:看不见的项目和不存在的项目回同一句话,免得拿 id 试探。
+      throw new HandoffError("目标项目不存在(对端项目清单可能过期,重新预检)", 404);
+    }
     return c.json(await importHandoff(body, {
       sourceUrl: sourceUrlFromPeer(peerAddr(c), body.sourcePort),
+      ownerUserId: peerOwnerId(peerUser),
     }));
   } catch (e) {
     return fail(c, e);
@@ -232,13 +255,30 @@ export function mountHandoffRoutes(api: Hono): void {
     if (peer) await touchPeer(peer, peerAddr(c));
     const stance = await peerStanceFor(peer, handoffRequireApproval);
     const nonce = c.req.query("nonce") ?? "";
-    const rows = stance === "approved" || stance === "open" ? await db.select().from(projects) : [];
+    // 多人实例:项目清单按**这次请求代表的那个人**的可见集过滤(§十一)。没带 key 或
+    // key 不认时清单为空、peerUser 为 null —— 源机据此提示「去配对端 key」,而不是
+    // 把空清单误读成「对端没有项目」。
+    const multi = await isMultiUser();
+    const peerUser = multi ? await peerUserSoft(c) : null;
+    const instance = {
+      mode: (multi ? "multi" : "single") as "single" | "multi",
+      ...(multi ? { userCount: await countUsers() } : {}),
+      ...(multi
+        ? { peerUser: peerUser?.user ? { id: peerUser.user.id, name: peerUser.user.name } : null }
+        : {}),
+    };
+    const cleared = stance === "approved" || stance === "open";
+    const rows = !cleared || (multi && !peerUser?.user)
+      ? []
+      : multi
+        ? await visibleProjectsFor(peerActor(peerUser!))
+        : await db.select().from(projects);
     return c.json(pingPayload(nonce, stance, rows.map((p) => ({
         id: p.id,
         name: p.name,
         repoPath: p.repoPath,
         isRepo: projectHealthLight(p.repoPath).isRepo,
-      }))));
+      })), undefined, instance));
   });
 
   // 移回专用探测:不建立整机级入站授权，只验证“当前签名机器就是这条 out 存档记录的
@@ -264,13 +304,20 @@ export function mountHandoffRoutes(api: Hono): void {
   // 分支尖清单,供源机协商 git bundle 的前置提交(对端已有的历史不重复打包)。
   // 它会泄露本机仓库的分支名和提交,和 /import 同一道闸。
   api.get("/handoff/projects/:id/refs", async (c) => {
+    let peerUser: Awaited<ReturnType<typeof peerUserFor>>;
     try {
       await requireApprovedPeer(c, "");
+      // 分支尖会泄露仓库布局,所以这条跟 /import 同一道用户级闸:多人实例下必须是
+      // 本机某个账号,而且那个账号看得见这个项目。
+      peerUser = await peerUserFor(c);
     } catch (e) {
       return fail(c, e);
     }
     const row = (await db.select().from(projects)).find((p) => p.id === c.req.param("id"));
     if (!row) return c.json({ error: "项目不存在", ash: true }, 404);
+    if (peerUser.kind === "user" && !(await canSeeProject(peerActor(peerUser), row.id))) {
+      return c.json({ error: "项目不存在", ash: true }, 404);
+    }
     if (!projectHealthLight(row.repoPath).isRepo) return c.json({ refs: [] });
     try {
       return c.json({ refs: await repoRefTips(row.repoPath) });
@@ -328,7 +375,12 @@ export function mountHandoffRoutes(api: Hono): void {
     }
     try {
       if (action === "unblock") return c.json({ unblocked: true, peer: await unblockPeer(c.req.param("fingerprint")) });
-      return c.json(await setPeerStatus(c.req.param("fingerprint"), action === "approve" ? "approved" : "blocked"));
+      // 多人模式下这一步全员可点(§十一),所以把操作人记下来。
+      return c.json(await setPeerStatus(
+        c.req.param("fingerprint"),
+        action === "approve" ? "approved" : "blocked",
+        ownerIdOf(actorOf(c)),
+      ));
     } catch (e) {
       return fail(c, e);
     }
@@ -342,6 +394,47 @@ export function mountHandoffRoutes(api: Hono): void {
 
   // 出站配对申请:只向目标机发一次带身份签名的 ping，让本机出现在它的待审批列表里。
   // 与 preflight 分开，避免用户只是打开接力对话框就悄悄发出申请。
+  // ── 目标机清单(按人)────────────────────────────────────────────────────
+  // 多人模式下它装着「我在对端的账号 key」,所以**不能**放进 app_settings ——
+  // `GET /settings` 会把整份吐回前端(§十一)。自用模式仍读写 app_settings,
+  // 行为与本功能上线前一致。读侧永不回显 key,只报 hasKey。
+  api.get("/handoff/targets", async (c) => c.json({ targets: await listTargets(actorOf(c)) }));
+
+  api.post("/handoff/targets", async (c) => {
+    const b = (await c.req.json().catch(() => ({}))) as { name?: string; url?: string; peerKey?: string };
+    const name = (b.name ?? "").trim();
+    if (!name || name.length > 64) return c.json({ error: "名称必填,不超过 64 字" }, 400);
+    let url: string;
+    try { url = normalizePeerUrl(b.url ?? ""); } catch (e) { return fail(c, e); }
+    try {
+      return c.json({ targets: await addTarget(actorOf(c), { name, url, peerKey: (b.peerKey ?? "").trim() }) });
+    } catch (e) { return fail(c, e); }
+  });
+
+  api.patch("/handoff/targets/:id", async (c) => {
+    const b = (await c.req.json().catch(() => ({}))) as { name?: string; url?: string; peerKey?: string };
+    const patch: { name?: string; url?: string; peerKey?: string } = {};
+    if (b.name !== undefined) {
+      const name = b.name.trim();
+      if (!name || name.length > 64) return c.json({ error: "名称必填,不超过 64 字" }, 400);
+      patch.name = name;
+    }
+    if (b.url !== undefined) {
+      try { patch.url = normalizePeerUrl(b.url); } catch (e) { return fail(c, e); }
+    }
+    // 空串是**明确清空**(对端转回单人实例了),不是「没传」。
+    if (b.peerKey !== undefined) patch.peerKey = b.peerKey.trim();
+    try {
+      return c.json({ targets: await patchTarget(actorOf(c), c.req.param("id"), patch) });
+    } catch (e) { return fail(c, e); }
+  });
+
+  api.delete("/handoff/targets/:id", async (c) => {
+    try {
+      return c.json({ targets: await deleteTarget(actorOf(c), c.req.param("id")) });
+    } catch (e) { return fail(c, e); }
+  });
+
   api.post("/handoff/request", async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as { targetUrl?: string };
     if (!body.targetUrl) return c.json({ error: "缺 targetUrl" }, 400);
