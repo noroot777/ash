@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HandoffPreflightResult, HandoffReturnGrant, HandoffTarget, Task } from "@ash/shared";
 import { api, makeRepo, startPeer } from "./handoff-test-utils.js";
-import { readReturnLocalState, seedReturnLocalState } from "./handoff-return-state-fixture.js";
+import { startImpostorPeer, startOrdinaryImportProxy, startReturnProxy } from "./handoff-proxy-fixture.js";
+import { readReturnLocalState, seedReturnLocalState, stripHandoffPeerUrl } from "./handoff-return-state-fixture.js";
 import { killOne, listenerPidsSync } from "../src/platform.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-handoff-return-"));
@@ -22,133 +22,6 @@ const remember = (proc: ChildProcess) => children.push(proc);
 let returnProxy: { url: string; close(): Promise<void> } | null = null;
 const ordinaryProxies: { close(): Promise<void> }[] = [];
 
-async function startReturnProxy(upstream: string): Promise<{ url: string; close(): Promise<void> }> {
-  let cutFirstImport = true;
-  const server = createServer((req, res) => {
-    const chunks: Buffer[] = [];
-    req.on("data", (chunk) => chunks.push(chunk as Buffer));
-    req.on("end", () => {
-      void (async () => {
-        const body = Buffer.concat(chunks);
-        const headers: Record<string, string> = {};
-        for (const [key, value] of Object.entries(req.headers)) {
-          if ((key === "content-type" || key.startsWith("x-ash-peer-")) && typeof value === "string") {
-            headers[key] = value;
-          }
-        }
-        const method = req.method ?? "GET";
-        const upstreamResponse = await fetch(`${upstream}${req.url}`, {
-          method,
-          headers,
-          ...(method === "GET" || method === "HEAD"
-            ? {}
-            : { body: new Uint8Array(body.buffer as ArrayBuffer, body.byteOffset, body.byteLength) }),
-        });
-        const responseBody = Buffer.from(await upstreamResponse.arrayBuffer());
-        if (cutFirstImport && req.url?.startsWith("/api/handoff/return/import")) {
-          cutFirstImport = false;
-          req.socket.destroy();
-          return;
-        }
-        res.statusCode = upstreamResponse.status;
-        res.setHeader("content-type", upstreamResponse.headers.get("content-type") ?? "application/json");
-        res.end(responseBody);
-      })().catch(() => req.socket.destroy());
-    });
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return {
-    url: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
-    close: async () => {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    },
-  };
-}
-
-async function startOrdinaryImportProxy(
-  upstream: string,
-  forwardBeforeCut: boolean,
-  legacyCancel = false,
-  cutPath = "/api/handoff/import",
-): Promise<{
-  url: string;
-  deliverHeld(): Promise<{ status: number; body: { error?: string; ash?: boolean } }>;
-  setUpstream(url: string): void;
-  close(): Promise<void>;
-}> {
-  let activeUpstream = upstream;
-  let cutFirstImport = true;
-  let held: { path: string; method: string; headers: Record<string, string>; body: Buffer } | null = null;
-  const forward = async (request: NonNullable<typeof held>) => {
-    const response = await fetch(`${activeUpstream}${request.path}`, {
-      method: request.method,
-      headers: request.headers,
-      ...(request.method === "GET" || request.method === "HEAD" ? {} : {
-        body: new Uint8Array(request.body.buffer as ArrayBuffer, request.body.byteOffset, request.body.byteLength),
-      }),
-    });
-    return {
-      status: response.status,
-      contentType: response.headers.get("content-type") ?? "application/json",
-      bytes: Buffer.from(await response.arrayBuffer()),
-    };
-  };
-  let closed = false;
-  const server = createServer((req, res) => {
-    const chunks: Buffer[] = [];
-    req.on("data", (chunk) => chunks.push(chunk as Buffer));
-    req.on("end", () => {
-      void (async () => {
-        const headers: Record<string, string> = {};
-        for (const [key, value] of Object.entries(req.headers)) {
-          if ((key === "content-type" || key.startsWith("x-ash-peer-")) && typeof value === "string") {
-            headers[key] = value;
-          }
-        }
-        const request = {
-          path: req.url ?? "/",
-          method: req.method ?? "POST",
-          headers,
-          body: Buffer.concat(chunks),
-        };
-        if (legacyCancel && request.path.startsWith("/api/handoff/proxy/task/cancel-pending")) {
-          res.statusCode = 404;
-          res.setHeader("content-type", "application/json");
-          res.end(JSON.stringify({ error: "not found" }));
-          return;
-        }
-        if (cutFirstImport && request.path.startsWith(cutPath)) {
-          cutFirstImport = false;
-          if (forwardBeforeCut) await forward(request);
-          else held = request;
-          req.socket.destroy();
-          return;
-        }
-        const upstreamResponse = await forward(request);
-        res.statusCode = upstreamResponse.status;
-        res.setHeader("content-type", upstreamResponse.contentType);
-        res.end(upstreamResponse.bytes);
-      })().catch(() => req.socket.destroy());
-    });
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return {
-    url: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
-    deliverHeld: async () => {
-      if (!held) throw new Error("没有待投递的 import 请求");
-      const response = await forward(held);
-      return { status: response.status, body: JSON.parse(response.bytes.toString("utf8")) as { error?: string; ash?: boolean } };
-    },
-    setUpstream: (url: string) => { activeUpstream = url; },
-    close: async () => {
-      if (closed) return;
-      closed = true;
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    },
-  };
-}
 
 try {
   const repoA = makeRepo(join(root, "repo-a"));
@@ -372,7 +245,69 @@ try {
   const { target: markerTarget } = await api<{ target: HandoffTarget }>(machineB, `/tasks/${task.id}/handoff/return-target`);
   assert.equal(markerTarget.url, machineA, "任务刚恢复的 peerUrl 不应被设置里的旧 URL 盖掉");
 
-  const { assertReturnProject, sourceUrlFromPeer } = await import("../src/handoff-return.js");
+  // 旧接力记录没保存来源机端口(peerUrl 为空),且设置里登记的地址已经死了——这两件事
+  // 以前都会把地址甩回给用户手填。现在按指纹探回去:同一台来源机在本机留下的其它
+  // 记录给出端口,handoff_peers 的来访地址给出主机,探到指纹一致的才算数。
+  const siblingTask = await createSimpleTask("同源新记录:给旧记录提供回程端口线索");
+  await api(machineA, `/tasks/${siblingTask.id}/handoff`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: machineB, targetProjectId: projectB.id, targetName: "B", autoResume: false }),
+  });
+  const portlessTask = await createSimpleTask("旧接力记录:marker 里没有来源机端口");
+  await api(machineA, `/tasks/${portlessTask.id}/handoff`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: machineB, targetProjectId: projectB.id, targetName: "B", autoResume: false }),
+  });
+  stripHandoffPeerUrl(join(root, "b.db"), portlessTask.id);
+  const { target: probedTarget } = await api<{ target: HandoffTarget }>(
+    machineB, `/tasks/${portlessTask.id}/handoff/return-target`,
+  );
+  assert.equal(probedTarget.url, machineA, "旧记录缺端口、登记地址已失效时应自动探回来源机");
+  assert.equal(probedTarget.peerFp, identityA.fingerprint);
+  // 指纹对不上的机器不能被探测顺手选中:C 也活着,但它不是这条任务的来源机。
+  await api(machineB, "/settings", {
+    method: "PATCH", headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      handoffTargets: [{ name: "无关的 C", url: machineC, peerFp: identityA.fingerprint }],
+    }),
+  });
+  const { target: strictTarget } = await api<{ target: HandoffTarget }>(
+    machineB, `/tasks/${portlessTask.id}/handoff/return-target`,
+  );
+  assert.equal(strictTarget.url, machineA, "探测必须按来源指纹认人,不能落到指纹不符的第三台机器");
+  await api(machineB, "/settings", {
+    method: "PATCH", headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      handoffTargets: [{ name: "过期的 A", url: "http://127.0.0.1:1", peerFp: identityA.fingerprint }],
+    }),
+  });
+  for (const id of [siblingTask.id, portlessTask.id]) {
+    await api(machineA, `/tasks/${id}`, { method: "DELETE" });
+    await api(machineB, `/tasks/${id}`, { method: "DELETE" });
+  }
+
+  const { assertReturnProject } = await import("../src/handoff-return.js");
+  const { sourceUrlFromPeer } = await import("../src/handoff-return-address.js");
+
+  // 地址发现不能信任对端自报的指纹:/handoff/identity 是一串明文,谁都能复读;
+  // /handoff/ping 的身份块整段截下来重放也一样过不了——挑战 nonce 每次现生成。
+  const { probeSignedPeerFingerprint } = await import("../src/handoff-peer-client.js");
+  const stolenPing = await (await fetch(`${machineA}/api/handoff/ping?nonce=stolen-nonce`)).json();
+  const impostor = await startImpostorPeer(identityA.fingerprint, stolenPing);
+  try {
+    assert.equal(
+      await probeSignedPeerFingerprint(impostor.url),
+      null,
+      "复读指纹/重放旧 ping 签名的服务不能被地址发现认成来源机",
+    );
+    assert.equal(
+      await probeSignedPeerFingerprint(machineA),
+      identityA.fingerprint,
+      "真来源机应能通过现场签名挑战被认出",
+    );
+  } finally {
+    await impostor.close();
+  }
   assert.equal(sourceUrlFromPeer("mac-mini.local", 4317), "http://mac-mini.local:4317", "mDNS 主机名应能组成回程地址");
   assert.equal(sourceUrlFromPeer("bad host", 4317), null, "非法主机名不能进入 URL");
   assert.throws(

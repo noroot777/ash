@@ -20,7 +20,7 @@ import { replyToTask, type TaskReplyBody } from "./task-reply.js";
 import { answerTask } from "./task-answer.js";
 import { sessionOutputText, sessionsForTask, sessionTraceEntries } from "./task-session-routes.js";
 import { enrichTasks } from "./task-store.js";
-import { returnTargetForMarker } from "./handoff-return.js";
+import { returnTargetForMarker } from "./handoff-return-address.js";
 import { cancelPendingInboundTransfer } from "./handoff-transfer-state.js";
 
 type ProxyBody = TaskReplyBody & {

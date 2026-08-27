@@ -133,6 +133,43 @@ export async function probePeerIdentity(rawTargetUrl: string, timeoutMs = 2_000)
   };
 }
 
+/**
+ * 地址发现专用:不带本机签名读对端 `/handoff/ping` 的**签名**身份,验不过就返回 null。
+ *
+ * 和上面 probePeerIdentity 的区别是**验签**,这一步不能省:`/handoff/identity` 只自报
+ * 一串 fingerprint,任意服务都能复读别人的指纹,拿它当「这是不是那台机器」的依据,一个
+ * 占了旧 IP 的无关服务就能把自动定位骗到自己身上(那不会泄露仓库——真正打包前还有一次
+ * 签名挑战——但会把「一键移回」变成「预检失败」)。这里要求对端用私钥现签一个 nonce,
+ * 复读公钥没用。
+ *
+ * 不带签名头 = 对端 touchPeer 不会触发,探测不会把本机塞进它的待批准列表。对端太旧、
+ * 不报签名身份时一律返回 null:无从核对就不该自动选中它,让用户手填反而是对的。
+ */
+export async function probeSignedPeerFingerprint(
+  rawTargetUrl: string,
+  timeoutMs = 2_000,
+): Promise<string | null> {
+  let base: string;
+  try { base = normalizePeerUrl(rawTargetUrl); } catch { return null; }
+  const nonce = newNonce();
+  try {
+    const response = await fetch(`${base}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) return null;
+    const ping = (await response.json().catch(() => null)) as HandoffPingResponse | null;
+    if (!ping?.ok || ping.service !== "ash") return null;
+    const identity = ping.identity;
+    if (!identity?.publicKey || !identity.sig) return null;
+    if (!verifyWithPeerKey(identity.publicKey, canonicalPingChallenge(nonce, identity.kxPublicKey), identity.sig)) {
+      return null;
+    }
+    return fingerprintOf(identity.publicKey);
+  } catch {
+    return null;
+  }
+}
+
 export interface PeerProbe {
   ping: HandoffPingResponse;
   /** true = 本次使用任务级免审批回程；false = 普通接力（缺存档/旧版时需整机审批）。 */
