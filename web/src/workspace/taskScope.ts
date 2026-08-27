@@ -28,6 +28,20 @@ export const SCOPE_STORAGE_KEY = "ash:task-scope";
 export const TASK_MODE_LABEL = "任务模式";
 export const TASK_MODE_SUMMARY = "所有项目里在跑、等你答复和待验收的任务";
 
+// G T 在「任务模式」和「当前项目」之间来回切（go → tasks）。用两键连打而不是单键，是因为
+// 这一档要在**任何界面**上都按得到（Inspector 的 `I …` 已经占了单键 i 的那种代价），
+// 而单键预算得留给列表里高频的 j/k/f/c/r。
+//
+// 前缀 g 是 Inspector `I G` 的第二键，两条序列因此必须互相让路，判据写在
+// useWorkspaceShortcuts 里（谁先跑、谁清谁的半截状态）。
+export const TASK_MODE_CHORD_PREFIX = "g";
+export const TASK_MODE_CHORD_KEY = "t";
+export const TASK_MODE_SHORTCUT_LABEL = "G T";
+
+export function isTaskModeChordKey(key: string): key is typeof TASK_MODE_CHORD_KEY {
+  return key === TASK_MODE_CHORD_KEY;
+}
+
 // 作用域筛过的那一份列表。任务模式下**执行者跟着自己的调度台走**：团队行要靠执行者
 // 算摘要、展开子行，按顶层判据把它们一起筛掉的话，展开箭头会变成灰的、摘要空一片。
 export function scopeTasks<T extends TaskListItem>(tasks: T[], scope: TaskScope): T[] {

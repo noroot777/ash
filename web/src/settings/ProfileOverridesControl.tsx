@@ -1,16 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Sliders, X } from "@phosphor-icons/react";
 import type { AgentType } from "@ash/shared";
 import {
   cliConfigOverrideConflict,
-  cliConfigOverrideErrors,
   cliConfigOverrideHints,
-  cliConfigOverridesFor,
   ineffectiveCliConfigOverrides,
 } from "@ash/shared/cli-overrides";
 import { Button } from "../components/ui.tsx";
+import { fmtOverrideValue, useCliOverrideDraft } from "../lib/cliOverrideDraft.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
-import { useCliHostEnv } from "./useCliHostEnv.ts";
+import { useCliHostEnv } from "../lib/useCliHostEnv.ts";
 
 // 「ash 替你写进 CLI 的配置」的编辑入口。这一档配置跟旁边那些(模型、档位、
 // 额外参数)有个本质区别:它**盖掉的是用户自己配置文件里的值**。所以这里的重点
@@ -25,9 +24,9 @@ import { useCliHostEnv } from "./useCliHostEnv.ts";
 //
 // 弹层外框复用 ProfileArgsControl 那套 .agent-profile-args-popover 样式;关闭语义走
 // useDismissable(点外面 / Esc / 焦点归还),打开时焦点进第一个输入框。
-
-const fmt = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
-const fmtWith = (n: number, unit?: string) => (unit === "%" ? `${n}%` : fmt(n));
+//
+// 草稿态(解析、夹范围、算脏)在 lib/cliOverrideDraft.ts —— 会话尾栏那颗上下文胶囊里的
+// 快捷设置填的是同一份字段,校验分家会长出「这边存得下、那边存不下」。
 
 export function ProfileOverridesControl({
   profileName,
@@ -45,25 +44,14 @@ export function ProfileOverridesControl({
   disabled: boolean;
   onSave: (value: Record<string, number>) => Promise<boolean>;
 }) {
-  const specs = useMemo(() => cliConfigOverridesFor(type), [type]);
   const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState<Record<string, string>>({});
+  const { specs, draft, set, reset, parsed, errors, dirty, active } = useCliOverrideDraft(type, value, open);
   const hostEnv = useCliHostEnv();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
 
-  const toDraft = useMemo(
-    () => (source: Record<string, number>): Record<string, string> =>
-      Object.fromEntries(specs.map((spec) => [spec.key, source[spec.key] === undefined ? "" : String(source[spec.key])])),
-    [specs],
-  );
-
-  useEffect(() => {
-    if (!open) setDraft(toDraft(value));
-  }, [open, toDraft, value]);
-
   const close = () => {
-    setDraft(toDraft(value));
+    reset();
     setOpen(false);
   };
 
@@ -78,34 +66,6 @@ export function ProfileOverridesControl({
 
   if (!specs.length) return null;
 
-  // 空串 = 清掉这一项(回到「跟随 CLI」),不是 0。数字非法时保留原值,交给下面的
-  // 逐项提示,而不是静默丢弃用户刚敲的东西。
-  const parsed: Record<string, number> = {};
-  const errors: string[] = [];
-  for (const spec of specs) {
-    const raw = (draft[spec.key] ?? "").trim();
-    if (!raw) continue;
-    const n = Number(raw);
-    if (!Number.isFinite(n)) {
-      errors.push(`${spec.label}要填数字`);
-      continue;
-    }
-    if (n < spec.min || n > spec.max) {
-      errors.push(`${spec.label}要在 ${fmt(spec.min)}–${fmt(spec.max)} 之间`);
-      continue;
-    }
-    parsed[spec.key] = Math.round(n);
-  }
-  // 依赖项没配上时这一项**根本不会注入**(cliConfigOverrideEnv 会跳过它),所以不能让
-  // 它存下去:存了会显示成「已覆盖 80%」,而实际行为跟没配一模一样 —— 静默失败。
-  // 判定用 shared 的那份,跟后端 400 是同一句话,别在这儿再写一遍。
-  errors.push(...cliConfigOverrideErrors(type, parsed));
-
-  const key = (source: Record<string, number>) =>
-    specs.map((spec) => `${spec.key}=${source[spec.key] ?? ""}`).join("&");
-  const dirty = key(parsed) !== key(value);
-
-  const active = specs.filter((spec) => value[spec.key] !== undefined);
   // 已存下的值里也可能有空转的(这道校验是后加的,老数据没过过闸)。胶囊上必须看得出
   // 来 —— 否则用户看到「80%」会以为它在生效,而 CLI 那边压根没收到这个变量。
   const dead = new Set(ineffectiveCliConfigOverrides(type, value));
@@ -113,7 +73,7 @@ export function ProfileOverridesControl({
   // 那个「空转项」一样,得在胶囊上就看得出来 —— 只写在弹层里等于要求用户先怀疑它。
   const conflict = cliConfigOverrideConflict(type, extraArgs);
   const summary = active
-    .map((spec) => `${fmtWith(value[spec.key]!, spec.unit)}${dead.has(spec.key) ? "（未生效）" : ""}`)
+    .map((spec) => `${fmtOverrideValue(value[spec.key]!, spec.unit)}${dead.has(spec.key) ? "（未生效）" : ""}`)
     .join(" · ")
     + (active.length && conflict ? "（被额外参数顶掉）" : "");
   const shadowed = active.map((spec) => spec.shadows).join("、");
@@ -143,7 +103,7 @@ export function ProfileOverridesControl({
             : `编辑 ${profileName} 对 CLI 配置的覆盖`
         }
         onClick={() => {
-          setDraft(toDraft(value));
+          reset();
           setOpen((current) => !current);
         }}
       >
@@ -177,15 +137,15 @@ export function ProfileOverridesControl({
                     disabled={disabled}
                     placeholder={spec.placeholder}
                     value={draft[spec.key] ?? ""}
-                    onChange={(event) => setDraft((current) => ({ ...current, [spec.key]: event.target.value }))}
+                    onChange={(event) => set(spec.key, event.target.value)}
                   />
                   {spec.unit && <small>{spec.unit}</small>}
                   <Button
                     variant="ghost"
                     disabled={disabled}
-                    onClick={() => setDraft((current) => ({ ...current, [spec.key]: String(spec.recommended) }))}
+                    onClick={() => set(spec.key, String(spec.recommended))}
                   >
-                    用 {fmtWith(spec.recommended, spec.unit)}
+                    用 {fmtOverrideValue(spec.recommended, spec.unit)}
                   </Button>
                 </div>
                 <p>{spec.help}</p>

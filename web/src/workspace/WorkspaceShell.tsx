@@ -237,6 +237,11 @@ export function WorkspaceShell() {
   // 切到「任务模式」只换列表的口径，不动选中的任务和上下文项目 —— 你正看着的那条还在，
   // 只是周围换成了所有项目里在跑 / 待验收的行（它自己若不在这两档里，列表上不出现，但仍开着）。
   const selectTaskMode = () => { setScopeKind("tasks"); setSettingsSection(null); };
+  // G T 是**来回**切而不是单向进入：一个按两下就能进的档位，得能用同样两下退出去，否则
+  // 第二次按下去没反应，只会被读成「快捷键坏了」。退回单项目态时同样不动选中的任务 ——
+  // 上下文项目一直跟着它走，所以退出去看到的就是它所在的那个项目。设置页不用在这里让路：
+  // 快捷键在那儿本来就是关的（见下面 useWorkspaceShortcuts 的 enabled）。
+  const toggleTaskMode = () => setScopeKind((kind) => kind === "tasks" ? "project" : "tasks");
   // keepSpread：J/K 在铺开态里只是挪选中行，右边那两列还得接着看；点行或按 Enter 才算「选定了」，
   // 那时候铺开自己收起来把主区还回去。
   const selectTask = (task: TaskListItem, options?: { keepSpread?: boolean }) => {
@@ -314,6 +319,7 @@ export function WorkspaceShell() {
     onTask: (task) => selectTask(task, { keepSpread: true }),
     onToggleSpread: () => { if (collapsed) setCollapsed(false); spread.toggle(); },
     onCloseSpread: spread.close,
+    onToggleTaskMode: toggleTaskMode,
   });
 
   const notesProject = notes ? projects.find((project) => project.id === notes.projectId) ?? null : null;

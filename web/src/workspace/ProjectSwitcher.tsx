@@ -4,7 +4,7 @@ import { CaretDown, Check, FolderPlus, GearSix, ListChecks, MagnifyingGlass } fr
 import { useDismissable } from "../lib/useDismissable.ts";
 import { shortenHomePath, useHostInfo } from "../lib/useHostInfo.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
-import { TASK_MODE_LABEL, TASK_MODE_SUMMARY } from "./taskScope.ts";
+import { TASK_MODE_LABEL, TASK_MODE_SHORTCUT_LABEL, TASK_MODE_SUMMARY } from "./taskScope.ts";
 
 // 「任务模式」和某个具体项目是同一个下拉里的**同一排选项**，不是另开一个模式开关：
 // 侧栏顶上那颗按钮回答的始终是「这份列表在看谁」，多一档「谁都看，但只看还没落地的活」
@@ -134,6 +134,9 @@ export function ProjectSwitcher({
                   <b>{TASK_MODE_LABEL}</b>
                   <small>{TASK_MODE_SUMMARY}</small>
                 </span>
+                {/* 唯一带快捷键的一档，所以键位就写在它自己那行上：这个下拉是找「列表在看谁」
+                    的必经之地，也就是最可能被读到 G T 的地方。 */}
+                <kbd>{TASK_MODE_SHORTCUT_LABEL}</kbd>
                 {taskMode && <Check size={13} weight="bold" aria-hidden="true" />}
               </button>
             )}
