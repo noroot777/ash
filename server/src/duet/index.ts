@@ -21,6 +21,7 @@ import { gateUserMessage } from "./user-message.js";
 import { canSettleDuet as canSettle, duetConsensusBy as consensusBy, isDuetConsensus as isConsensus } from "./settlement.js";
 import { recordGateEvent, recordUserTurn } from "./timeline.js";
 import { runTurn, type Turn } from "./turn.js";
+import { executorOwnerScope } from "../auth/dispatch-gate.js";
 
 // duet 的所有权与 single 共用 runs.ts 那把单飞锁。这里原来是个模块内的 `running`
 // Set:调用方看不见它,于是 /run、/fire、/retry、scheduler 都能声称「已启动」而第二次
@@ -154,17 +155,23 @@ async function loadBase(taskId: string) {
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   if (!project) throw new Error("project not found");
   // 每个讨论者各自的模型/强度；没设才退回任务级（派生讨论会带着来源任务的设置）。
+  // **按「谁的活」收窄**(§八,与 task-run.ts / orchestrator.ts 同一条口径):这两个 id
+  // 存在任务的 duet 配置里,可能是转多人之前、或本轮修复之前留下的外人 id —— 不收窄的话
+  // 解析器会照单全收,讨论回合真的跑在别人的 profile 上、烧别人的 relay(第 3 轮审查 P0)。
+  const owner = await executorOwnerScope(task.ownerUserId);
   const exA = await resolveExecutorFor({
     executorId: cfg.voiceAExecutorId,
     type: cfg.voiceA,
     model: cfg.voiceAModel || task.model,
     reasoningEffort: cfg.voiceAReasoningEffort || task.reasoningEffort,
+    ...owner,
   });
   const exB = await resolveExecutorFor({
     executorId: cfg.voiceBExecutorId,
     type: cfg.voiceB,
     model: cfg.voiceBModel || task.model,
     reasoningEffort: cfg.voiceBReasoningEffort || task.reasoningEffort,
+    ...owner,
   });
   // Discussion only reads, but still honors the task's worktree/base so a
   // source-derived duet sees the source task's branch. Repo-less projects keep

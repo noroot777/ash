@@ -12,13 +12,14 @@ import type { AgentType, Task, TeamConfig } from "@ash/shared";
 import { TEAM_DEFAULTS } from "@ash/shared";
 import { inheritExecutorOverrides, pickExecutor } from "@ash/shared/executors";
 import { db } from "../db/index.js";
-import { tasks, groups, queueItems, agents } from "../db/schema.js";
+import { tasks, groups, queueItems } from "../db/schema.js";
 import { id, now } from "../util.js";
 import { runGroup } from "../scheduler.js";
 import { TEAM_WORKER_PREAMBLE } from "./prompts.js";
 import { createTasks } from "../task-store.js";
 import { reopenAcceptedStage } from "../task-stage.js";
 import { beginAccepting, endAccepting } from "../acceptance-lock.js";
+import { executorScopeForOwner } from "../auth/owned-executors.js";
 
 export interface DispatchSpec {
   body: string;
@@ -57,22 +58,25 @@ export async function dispatchWorkers(
   try {
   const cfg: TeamConfig = lead.team ? JSON.parse(lead.team) : TEAM_DEFAULTS;
   const mode = opts.mode ?? (specs.length > 1 ? "serial" : "parallel");
-  const profileTypes = new Map(
-    (await db.select({ id: agents.id, type: agents.type }).from(agents)).map((a) => [a.id, a.type as AgentType] as const),
-  );
+  // 派活是 agent 路径(lead 调 MCP),没有 HTTP actor —— 但有明确的归属人:派出去的活
+  // 按 §八 用调度者那个人的执行器与 key 跑。所以 scope 按 lead 的 ownerUserId 建,
+  // 别人的 executorId 在这里等同于不存在(第 3 轮审查 P1:lead 在 body 里填别人的 id,
+  // 连 id、名字带 owner 快照一起落进了自己的子任务)。
+  const scope = await executorScopeForOwner(lead.ownerUserId);
   // 团队默认执行者 —— 既是「没指定就用它」的兜底，也是 cfg.workerModel /
   // cfg.workerReasoningEffort 这两个默认覆盖所属的执行器。
-  const workerDefault = { executorId: cfg.workerExecutorId ?? null, agentType: cfg.worker };
-  const typeOf = (eid: string) => profileTypes.get(eid);
+  const workerDefault = { executorId: scope.keep(cfg.workerExecutorId), agentType: cfg.worker };
+  const typeOf = (eid: string) => scope.typeOf(eid);
   // 每个执行者任务的「执行器 profile + 类型」。只有**同一次调用里显式给出的**两者冲突才算用户自相矛盾;
   // 单给 agentType 是「这个执行者换类型」,此时不能硬套团队默认 profile(类型对不上),按类型默认执行器走。
   const picks = specs.map((s, i) => {
-    const t = s.executorId ? typeOf(s.executorId) : undefined;
+    const executorId = scope.keep(s.executorId);
+    const t = typeOf(executorId ?? "");
     if (t && s.agentType && t !== s.agentType) {
       throw new Error(`tasks[${i}].executorId 属于 ${t},但 agentType 是 ${s.agentType}`);
     }
     return pickExecutor({
-      executorId: s.executorId,
+      executorId,
       agentType: s.agentType,
       fallback: workerDefault,
       typeOf,

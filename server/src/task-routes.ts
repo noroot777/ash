@@ -57,6 +57,17 @@ export function mountTaskRoutes(api: Hono): void {
       : null;
   const agentTypeForExecutor = (scope: ExecutorScope, executorId?: string | null): AgentType | null =>
     scope.typeOf(executorId) ?? null;
+  // duet 的两位讨论者各自挑执行器(voiceA/BExecutorId),和顶层 executorId、team 三角色
+  // 同属个人面资源 —— 但这份配置是整块 JSON.stringify 落库的,不逐个过 scope 就等于给
+  // 外人的 id 留了一条缝(第 3 轮审查 P0:存进去之后运行侧真的会解析到别人的 profile)。
+  const scopedDuet = (scope: ExecutorScope, duet: Task["duet"]): string | null =>
+    duet
+      ? JSON.stringify({
+          ...duet,
+          voiceAExecutorId: scope.keep(duet.voiceAExecutorId),
+          voiceBExecutorId: scope.keep(duet.voiceBExecutorId),
+        })
+      : null;
 
 // ── tasks ───────────────────────────────────────────────────────────────
 // 列表**不带正文**（TaskListItem）：一千多行任务里正文占了响应的一半，而没有一处列表
@@ -243,7 +254,7 @@ api.post("/tasks", async (c) => {
     model: b.model || null,
     reasoningEffort: b.reasoningEffort || null,
     autoTitle: b.autoTitle ?? false,
-    duet: b.duet ? JSON.stringify(b.duet) : null,
+    duet: scopedDuet(scope, b.duet),
     // mode:"team" 的调度者/默认执行者类型(跟 duet 对称)。别漏 —— 漏了就静默退回
     // TEAM_DEFAULTS,用户在启动器上挑的那两个旋钮全白挑。
     team: teamConfig ? JSON.stringify(teamConfig) : null,
@@ -470,7 +481,7 @@ api.patch("/tasks/:id", async (c) => {
   if (b.model !== undefined || executorChanged) patch.model = patchedOverrides.model;
   if (b.reasoningEffort !== undefined || b.model !== undefined || executorChanged) patch.reasoningEffort = normalizedEffort;
   if (b.mode !== undefined) patch.mode = b.mode;
-  if (b.duet !== undefined) patch.duet = b.duet ? JSON.stringify(b.duet) : null;
+  if (b.duet !== undefined) patch.duet = scopedDuet(scope, b.duet);
   // 注意:dependsOn / resumeDependsOn 不再可编辑:
   // 改顺序请用 /queues/:id/* 端点;调整队列归属请用 remove + insert/append。
   // resumePrompt：让用户编辑 agent 留下的续跑指令（写得不好就改、不想续跑就传空

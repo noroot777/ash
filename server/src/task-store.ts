@@ -186,9 +186,15 @@ async function snapshotWorkflow(
 async function snapshotExecutor(row: NewTaskRow): Promise<string | null> {
   if (!(await isMultiUser())) return null;
   const type = row.agentType ?? null;
-  if (!row.executorId) return type ? JSON.stringify({ type, name: null, model: row.model ?? null }) : null;
+  const typeOnly = () => (type ? JSON.stringify({ type, name: null, model: row.model ?? null }) : null);
+  if (!row.executorId) return typeOnly();
   const profile = (await db.select().from(agents).where(eq(agents.id, row.executorId))).at(0);
   if (!profile) return null;
+  // 最后一道:这份快照会原样回显给前端(名字 + 归属人),所以**不给别人的 profile 拍照**。
+  // 各写入口已经各自过了 scope,这里兜的是「又长出一条新的建任务路径、而它忘了过」——
+  // 建任务只此一条汇流处,所以判据放这儿最省(第 3 轮审查 P1 泄露的就是这份快照)。
+  // 归属人为空(转多人前的存量行)时不判:那不是「别人的」,是「还没认领的」。
+  if (row.ownerUserId && profile.ownerUserId !== row.ownerUserId) return typeOnly();
   return JSON.stringify({
     id: profile.id,
     name: profile.name,

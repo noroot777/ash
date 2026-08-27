@@ -15,6 +15,7 @@
 //   ⑬ 执行器归属:写侧存不进别人的 id,读侧回退不出别人的名字。
 //   ⑭ 穿过完整 authGate 的 HTTP 回归:供应商 relay 打得通、供应商 CRUD 仍要登录、
 //      `/llm-providers/test` 用不了别人的 key。
+//   ⑮ 「选谁干活」的另外两个表面 —— duet 两位讨论者、团队派活 —— 同样按人收窄。
 //
 // 跑法(不设 ASH_DB 时自己开一个临时库):
 //   npm -w server run test:multi-user
@@ -476,6 +477,106 @@ const bobActor = actorOf(bob);
     body: JSON.stringify({ id: "prov-bob", baseUrl: "http://127.0.0.1:1", model: "m", protocol: "openai" }),
   });
   assert.notEqual(own.status, 404, `本人测自己的供应商不该被拦:${own.error}`);
+}
+
+// ── ⑮ duet 讨论者与团队派活:同样按人收窄 ──────────────────────────────────
+// 第 3 轮审查:顶层 executorId 和 team 三角色都过了 scope,但 duet 配置是整块
+// JSON.stringify 落库的,团队派活又是 agent 路径(没有 HTTP actor),两处都从缝里漏了。
+// server/CLAUDE.md 那条「新增任何『选谁干活』的表面,三件套一起上」说的正是这件事。
+{
+  const { Hono } = await import("hono");
+  const { authGate } = await import("../src/auth/middleware.js");
+  const { resourceGate } = await import("../src/auth/resource-gate.js");
+  const { mountTaskRoutes } = await import("../src/task-routes.js");
+  const { executorScopeForOwner } = await import("../src/auth/owned-executors.js");
+  const { resolveExecutorWithProfile } = await import("../src/executors/index.js");
+  const { dispatchWorkers } = await import("../src/team/dispatch.js");
+
+  const api = new Hono();
+  mountTaskRoutes(api);
+  const app = new Hono();
+  app.use("*", authGate());
+  app.use("/api/*", resourceGate());
+  app.route("/api", api);
+  const aliceKey = await store.resetUserKey(alice.id);
+  const post = async (path: string, body: unknown) => {
+    const res = await app.fetch(new Request(`http://127.0.0.1:4317${path}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${aliceKey}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }));
+    return { status: res.status, body: await res.json().catch(() => ({})) as Record<string, unknown> };
+  };
+
+  // 写侧:alice 建 duet,voiceA 填 bob 的执行器 —— 存进去的必须是 null。
+  const created = await post("/api/tasks", {
+    projectId: "p-alice", title: "duet", body: "topic", mode: "duet", useWorktree: false,
+    duet: { voiceA: "claude", voiceB: "claude", topic: "topic",
+            voiceAExecutorId: "ex-bob", voiceBExecutorId: "ex-alice" },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const duetId = String(created.body.id);
+  const storedDuet = JSON.parse(
+    (await db.select({ duet: tasks.duet }).from(tasks).where(eq(tasks.id, duetId))).at(0)!.duet!,
+  ) as { voiceAExecutorId: string | null; voiceBExecutorId: string | null };
+  assert.equal(storedDuet.voiceAExecutorId, null, "别人的讨论者执行器不许落库");
+  assert.equal(storedDuet.voiceBExecutorId, "ex-alice", "自己的照常存");
+
+  // PATCH 是对称的另一半:同一个字段两条写入口,只改一条等于没改。
+  const patched = await app.fetch(new Request(`http://127.0.0.1:4317/api/tasks/${duetId}`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${aliceKey}`, "content-type": "application/json" },
+    body: JSON.stringify({ duet: { voiceA: "claude", voiceB: "claude", topic: "t", voiceAExecutorId: "ex-bob" } }),
+  }));
+  assert.equal(patched.status, 200);
+  const afterPatch = JSON.parse(
+    (await db.select({ duet: tasks.duet }).from(tasks).where(eq(tasks.id, duetId))).at(0)!.duet!,
+  ) as { voiceAExecutorId: string | null };
+  assert.equal(afterPatch.voiceAExecutorId, null, "PATCH 这条入口也要收窄");
+
+  // 运行侧:存量行(转多人之前、或本轮修复之前)里仍可能躺着外人的 id,所以解析器
+  // 也要按任务归属人收窄 —— 否则讨论回合真的跑在别人的 profile 上。
+  const loose = await resolveExecutorWithProfile({ executorId: "ex-bob", type: "claude" });
+  assert.equal(loose.profileId, "ex-bob", "不传 owner = 不收窄(自用模式那条路)");
+  const scoped = await resolveExecutorWithProfile({ executorId: "ex-bob", type: "claude", owner: alice.id });
+  assert.equal(scoped.profileId, "ex-alice", "按归属人收窄后应降级到本人默认执行器");
+  assert.equal(scoped.downgradedFrom?.id, "ex-bob", "降级要把原来那条带回去,好让前端说清楚");
+
+  // 团队派活:agent 路径没有 HTTP actor,scope 按调度者任务的归属人建。
+  assert.equal((await executorScopeForOwner(alice.id)).keep("ex-bob"), null);
+  assert.equal((await executorScopeForOwner(alice.id)).keep("ex-alice"), "ex-alice");
+  assert.equal((await executorScopeForOwner(bob.id)).keep("ex-bob"), "ex-bob");
+
+  const leadAt = new Date().toISOString();
+  await db.insert(tasks).values([{
+    id: "lead-alice", projectId: "p-alice", title: "lead", body: "", mode: "team",
+    status: "idle", createdAt: leadAt, updatedAt: leadAt, ownerUserId: alice.id,
+    team: JSON.stringify({ lead: "claude", worker: "claude" }),
+  }] as never);
+  const dispatched = await dispatchWorkers("lead-alice", [{ body: "干活", executorId: "ex-bob" }], { run: false });
+  const worker = (await db.select().from(tasks).where(eq(tasks.id, dispatched.tasks[0]!.id))).at(0)!;
+  assert.equal(worker.executorId, null, "派活不许把别人的 executorId 写进子任务");
+  assert.equal(worker.ownerUserId, alice.id, "子任务照旧继承调度者的归属");
+  assert.ok(
+    !(worker.executorSnapshot ?? "").includes("claude@bob"),
+    `执行器快照会原样回显,不许带上别人的 profile 名:${worker.executorSnapshot}`,
+  );
+
+  // 快照那道兜底单独钉一次:上面那条走的是「dispatch 已经把 id 归一成 null」,
+  // 试不出兜底在不在。这里直接绕过所有入口喂一条外人的 id —— 模拟「又长出一条新的
+  // 建任务路径、而它忘了过 scope」,建任务只此一条汇流处,所以判据钉在这儿。
+  const taskStore2 = await import("../src/task-store.js");
+  const [leaky] = await taskStore2.createTasks([{
+    id: "leaky-task", projectId: "p-alice", title: "leaky", body: "",
+    mode: "single", status: "backlog", agentType: "claude", executorId: "ex-bob",
+    ownerUserId: alice.id, useWorktree: false,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  } as never]);
+  const leakyRow = (await db.select().from(tasks).where(eq(tasks.id, leaky!.id))).at(0)!;
+  assert.ok(
+    !(leakyRow.executorSnapshot ?? "").includes("claude@bob"),
+    `快照兜底没生效:${leakyRow.executorSnapshot}`,
+  );
 }
 
 await releaseTmpDb();

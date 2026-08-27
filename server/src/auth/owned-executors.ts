@@ -19,6 +19,7 @@ import type { AgentType } from "@ash/shared";
 import { db } from "../db/index.js";
 import { agents } from "../db/schema.js";
 import type { Actor } from "./context.js";
+import { isMultiUser } from "./mode.js";
 import { filterOwned, ownedScope, type Owned } from "./owned.js";
 
 /** label 解析需要的最小列集(名字 + 类型 + 是不是该类型的默认)。 */
@@ -39,15 +40,8 @@ export interface ExecutorScope {
   keep(executorId: string | null | undefined): string | null;
 }
 
-/**
- * 一次请求取一次:一条创建路径上要判四个 executorId(任务 + 团队三角色)。
- *
- * `actor` 传 `null` = **没有 HTTP 身份可用**、且此刻也不该有(结算内部重放一份早已校验
- * 过的预约槽配置)。写成显式的 null 而不是省略参数,是为了让「这里为什么不设限」在调用
- * 点上看得见 —— 省略参数的重载迟早会被顺手当默认值用。
- */
-export async function executorScope(actor: Actor | null): Promise<ExecutorScope> {
-  const all = await db
+async function allProfiles(): Promise<ExecutorProfileRow[]> {
+  return db
     .select({
       id: agents.id,
       name: agents.name,
@@ -56,8 +50,9 @@ export async function executorScope(actor: Actor | null): Promise<ExecutorScope>
       ownerUserId: agents.ownerUserId,
     })
     .from(agents);
-  const limited = actor !== null && (await ownedScope(actor)) !== null;
-  const rows = actor === null ? all : await filterOwned(all, actor);
+}
+
+function buildScope(rows: ExecutorProfileRow[], limited: boolean): ExecutorScope {
   const byId = new Map(rows.map((row) => [row.id, row] as const));
   return {
     rows,
@@ -67,6 +62,32 @@ export async function executorScope(actor: Actor | null): Promise<ExecutorScope>
       return limited && !byId.has(executorId) ? null : executorId;
     },
   };
+}
+
+/**
+ * 一次请求取一次:一条创建路径上要判四个 executorId(任务 + 团队三角色)。
+ *
+ * `actor` 传 `null` = **没有 HTTP 身份可用**、且此刻也不该有(结算内部重放一份早已校验
+ * 过的预约槽配置)。写成显式的 null 而不是省略参数,是为了让「这里为什么不设限」在调用
+ * 点上看得见 —— 省略参数的重载迟早会被顺手当默认值用。
+ */
+export async function executorScope(actor: Actor | null): Promise<ExecutorScope> {
+  const all = await allProfiles();
+  const limited = actor !== null && (await ownedScope(actor)) !== null;
+  return buildScope(actor === null ? all : await filterOwned(all, actor), limited);
+}
+
+/**
+ * 按**「谁的活」**建 scope:调用方不是人而是 agent(团队派活的 lead、派生链路),此刻没有
+ * HTTP actor,但有一个明确的归属人 —— 派出去的活按 §八 用的就是那个人的执行器与 key。
+ *
+ * 与 `executorScope(actor)` 的差别只在选谁:那条按操作人,这条按归属人。管理员在这里
+ * **不额外看见**无主行 —— 「以谁的名义跑」跟「谁在管实例」是两回事。
+ */
+export async function executorScopeForOwner(ownerUserId: string | null): Promise<ExecutorScope> {
+  const all = await allProfiles();
+  if (!(await isMultiUser())) return buildScope(all, false);
+  return buildScope(profilesOwnedBy(all, ownerUserId), true);
 }
 
 /**
