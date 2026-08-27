@@ -56,6 +56,12 @@ import { mountProjectCloneRoutes } from "./project-clone.js";
 import { mountProjectRoutes } from "./project-routes.js";
 import { mountAuthRoutes } from "./auth/routes.js";
 import { mountUserRoutes } from "./auth/user-routes.js";
+import { actorOf } from "./auth/context.js";
+import { makeEventFilter } from "./auth/event-filter.js";
+import { visibleProjectIds } from "./auth/visibility.js";
+import { canUseOwned, filterOwned, ownerStamp } from "./auth/owned.js";
+import { isMultiUser } from "./auth/mode.js";
+import { clearDefaultFor, dispatchBlockReason } from "./auth/dispatch-gate.js";
 
 export const api = new Hono();
 // 认证 / 首启向导 / 用户与项目成员。挂在最前:它们里有几条是**闸外**的公开端点
@@ -127,7 +133,8 @@ api.get("/search", async (c) => {
   if ("error" in params) return c.json({ error: params.error }, 400);
   if (params.q.length < 2) return c.json([]);
   const { q, ...options } = params;
-  return c.json(await searchAll(q, { ...options, signal: c.req.raw.signal }));
+  const visible = await visibleProjectIds(actorOf(c));
+  return c.json(await searchAll(q, { ...options, visibleProjectIds: visible, signal: c.req.raw.signal }));
 });
 
 // 同一次搜索的流式版本：命中一条吐一行 NDJSON，中间插一行 `{"marker":"local-done"}`
@@ -153,6 +160,7 @@ api.get("/search/stream", async (c) => {
     };
     await searchAll(q, {
       ...options,
+      visibleProjectIds: await visibleProjectIds(actorOf(c)),
       signal: c.req.raw.signal,
       onHit: (hit) => push(hit),
       onLocalDone: () => push({ marker: "local-done" }),
@@ -253,7 +261,17 @@ const toAgent = (r: typeof agents.$inferSelect) => ({
   isDefault: r.isDefault,
 });
 
-api.get("/agents", async (c) => c.json((await db.select().from(agents)).map(toAgent)));
+// 执行器是**个人面**资源(§八):每人自带供应商 key,别人的执行器既看不见也用不了。
+// 多人模式下再叠一层「能不能派发」的标注(dispatchBlocked),前端据此把它标灰 ——
+// 宿主机订阅被抹去后,没接 relay 的 CLI 与没挂供应商的执行器都跑不起来。
+api.get("/agents", async (c) => {
+  const rows = await filterOwned(await db.select().from(agents), actorOf(c));
+  const multi = await isMultiUser();
+  return c.json(rows.map((r) => ({
+    ...toAgent(r),
+    ...(multi ? { dispatchBlocked: dispatchBlockReason(r.type, r.providerId) } : {}),
+  })));
+});
 
 // Detect which agent CLIs are installed on the local machine (§5).
 api.get("/agents/detect", async (c) => c.json(await detectLocalAgents()));
@@ -290,6 +308,7 @@ api.post("/agents", async (c) => {
     id: id(),
     name: b.name,
     type,
+    ...ownerStamp(actorOf(c)),
     model,
     extraArgs: JSON.stringify(b.extraArgs ?? []),
     reasoningEffort: normalizeReasoningEffort(type, model, b.reasoningEffort),
@@ -299,8 +318,9 @@ api.post("/agents", async (c) => {
     configOverrides: JSON.stringify(configOverrides),
     isDefault: !!b.isDefault,
   };
-  // a type has at most one default
-  if (row.isDefault) await db.update(agents).set({ isDefault: false }).where(eq(agents.type, row.type));
+  // 「同一类型至多一个默认」在多人模式下是**每人各自**的一个默认 —— 清别人的标记
+  // 既越权又会把他的设置改掉。
+  if (row.isDefault) await clearDefaultFor(row.type, row.ownerUserId);
   await db.insert(agents).values(row);
   return c.json(toAgent(row as typeof agents.$inferSelect), 201);
 });
@@ -308,7 +328,7 @@ api.post("/agents", async (c) => {
 api.patch("/agents/:id", async (c) => {
   const aid = c.req.param("id");
   const existing = (await db.select().from(agents).where(eq(agents.id, aid))).at(0);
-  if (!existing) return c.json({ error: "not found" }, 404);
+  if (!existing || !(await canUseOwned(existing, actorOf(c)))) return c.json({ error: "not found" }, 404);
   const b = await c.req.json<any>();
   const patch: Record<string, unknown> = {};
   if (b.name !== undefined) patch.name = b.name;
@@ -335,7 +355,7 @@ api.patch("/agents/:id", async (c) => {
     patch.configOverrides = JSON.stringify(configOverrides);
   }
   if (b.isDefault === true) {
-    await db.update(agents).set({ isDefault: false }).where(eq(agents.type, existing.type));
+    await clearDefaultFor(existing.type, existing.ownerUserId);
     patch.isDefault = true;
   }
   await db.update(agents).set(patch).where(eq(agents.id, aid));
@@ -345,6 +365,8 @@ api.patch("/agents/:id", async (c) => {
 
 api.delete("/agents/:id", async (c) => {
   const aid = c.req.param("id");
+  const existing = (await db.select().from(agents).where(eq(agents.id, aid))).at(0);
+  if (!existing || !(await canUseOwned(existing, actorOf(c)))) return c.json({ error: "not found" }, 404);
   await db.delete(agents).where(eq(agents.id, aid));
   await db.update(tasks).set({ executorId: null, updatedAt: now() }).where(eq(tasks.executorId, aid));
   return c.json({ deleted: true });
@@ -484,7 +506,9 @@ function normalizeContext1mModels(list: unknown[]): string[] {
   return normalizeModelNames(normalizeModelNames(list).map(stripContext1mSuffix));
 }
 
-api.get("/llm-providers", async (c) => c.json((await db.select().from(llmProviders)).map(toProvider)));
+// 供应商是**个人面**资源,且计划明确写了「不做共享池,每人自带 API key」(§八)。
+api.get("/llm-providers", async (c) =>
+  c.json((await filterOwned(await db.select().from(llmProviders), actorOf(c))).map(toProvider)));
 
 // Probe the available models for a connection. Used by the 智能体执行器 form to
 // pick a default model. Accepts ad-hoc creds {protocol, baseUrl, apiKey} for the add
@@ -495,7 +519,9 @@ api.post("/llm-providers/models", async (c) => {
   let { protocol, baseUrl, apiKey } = b;
   if (b.id) {
     const row = (await db.select().from(llmProviders).where(eq(llmProviders.id, b.id))).at(0);
-    if (row) {
+    // 「复用已存的 key」这条捷径只对自己的行成立 —— 否则拿别人的 provider id 就能
+    // 借他的 key 去打任意 baseUrl,而 key 本身从不回给前端这件事就白做了。
+    if (row && (await canUseOwned(row, actorOf(c)))) {
       protocol = protocol ?? (row.protocol as LlmProtocol);
       baseUrl = baseUrl || row.baseUrl;
       if (!apiKey) apiKey = row.apiKey;
@@ -520,6 +546,7 @@ api.post("/llm-providers", async (c) => {
   const row = {
     id: id(),
     name: b.name.trim(),
+    ...ownerStamp(actorOf(c)),
     protocol,
     baseUrl: b.baseUrl.trim(),
     apiKey: (b.apiKey ?? "").trim(),
@@ -537,7 +564,7 @@ api.post("/llm-providers", async (c) => {
 api.patch("/llm-providers/:id", async (c) => {
   const pid = c.req.param("id");
   const existing = (await db.select().from(llmProviders).where(eq(llmProviders.id, pid))).at(0);
-  if (!existing) return c.json({ error: "not found" }, 404);
+  if (!existing || !(await canUseOwned(existing, actorOf(c)))) return c.json({ error: "not found" }, 404);
   const b = await c.req.json<Partial<LlmProvider> & { apiKey?: string }>();
   const patch: Record<string, unknown> = {};
   if (b.name !== undefined) patch.name = b.name;
@@ -563,6 +590,8 @@ api.patch("/llm-providers/:id", async (c) => {
 
 api.delete("/llm-providers/:id", async (c) => {
   const pid = c.req.param("id");
+  const existing = (await db.select().from(llmProviders).where(eq(llmProviders.id, pid))).at(0);
+  if (!existing || !(await canUseOwned(existing, actorOf(c)))) return c.json({ error: "not found" }, 404);
   await db.delete(llmProviders).where(eq(llmProviders.id, pid));
   // 挂着它的执行器退回官方账号 —— 留悬空 id 会让「供应商」下拉显示成空白选项。
   await db.update(agents).set({ providerId: null }).where(eq(agents.providerId, pid));
@@ -587,11 +616,17 @@ mountFreeWorkflowRoutes(api);
 // ── SSE stream (§12) ───────────────────────────────────────────────────────
 api.get("/events", (c) =>
   streamSSE(c, async (stream) => {
+    // 可见性过滤(§十二 的验收基准):不做的话,同一台 ash 上另一个人的任务标题、
+    // 提问原文、agent 正文会实时推到这条连接上 —— 界面看不见,Network 面板一条不落。
+    const filter = makeEventFilter(actorOf(c));
+    await filter.refresh();
     const unsub = bus.subscribe((ev) => {
+      if (!filter.allow(ev)) return;
       stream.writeSSE({ data: JSON.stringify(ev) }).catch(() => {});
     });
     stream.onAbort(() => {
       unsub();
+      filter.stop();
     });
     try {
       while (!stream.aborted) {
@@ -602,6 +637,7 @@ api.get("/events", (c) =>
       /* client disconnected mid-write — expected on page refresh */
     } finally {
       unsub();
+      filter.stop();
     }
   }),
 );

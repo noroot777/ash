@@ -210,6 +210,7 @@ export function mountDuetIterationRoutes(api: Hono): void {
       executorId: null,
       model: originalRow.model,
       reasoningEffort: originalRow.reasoningEffort,
+      ownerUserId: originalRow.ownerUserId, // 派生任务继承源任务的归属(§八)
       autoTitle: true,
       // Keep the original duet knobs byte-for-byte (voice profiles, round
       // cap, gate policy, and original topic). runDuet uses this task's body

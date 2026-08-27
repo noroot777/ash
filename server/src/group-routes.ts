@@ -9,6 +9,8 @@ import { repoKey } from "./git.js";
 import { pauseGroup, runGroup } from "./scheduler.js";
 import { createTasks } from "./task-store.js";
 import { id, now, taskBody } from "./util.js";
+import { actorOf, ownerIdOf } from "./auth/context.js";
+import { visibleProjectIds } from "./auth/visibility.js";
 
 // ── groups (transient batch containers, §3) ─────────────────────────────────
 // 从 task-routes.ts 拆出的分组路由:列表/运行/暂停/批量建任务/编辑/删除。
@@ -26,7 +28,8 @@ api.get("/groups", async (c) => {
   // 的内部结构(团队视图自己会展示执行者),混进用户的分组列表只会当噪音。
   // includeInternal=1 给调试/排查用。
   const includeInternal = c.req.query("includeInternal") === "1";
-  let rows = await db.select().from(groups);
+  const visible = await visibleProjectIds(actorOf(c));
+  let rows = (await db.select().from(groups)).filter((g) => visible === null || visible.has(g.projectId));
   if (ownerTaskId) rows = rows.filter((g) => g.ownerTaskId === ownerTaskId);
   else if (!includeInternal) rows = rows.filter((g) => !g.ownerTaskId);
   if (pid) rows = rows.filter((g) => g.projectId === pid);
@@ -130,6 +133,8 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
 
   // Pre-generate ids (chain 用得到).
   const ids = specs.map(() => id());
+  // 「谁的活」(§八):这一批全归调用方。批量入口没有父任务可继承。
+  const batchOwner = ownerIdOf(actorOf(c));
 
   const firstLine = (body?: string) =>
     (body ?? "").split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 30) ?? "";
@@ -186,6 +191,7 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
       worktreeBase:
         s.worktreeBase !== undefined ? s.worktreeBase : b.defaults?.worktreeBase ?? null,
       workflowId: s.workflowId !== undefined ? s.workflowId : b.defaults?.workflowId ?? null,
+      ownerUserId: batchOwner,
     };
   });
 

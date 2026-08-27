@@ -12,6 +12,7 @@ import { consumeSingleRun, afterSettlement } from "./single-run.js";
 import { taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
 import { resolveExecutorWithProfile } from "./executors/index.js";
+import { dispatchRejection, executorOwnerScope, noteExecutorDowngrade } from "./auth/dispatch-gate.js";
 import type { RunHandle } from "./executors/types.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { inspectProcess } from "./proc.js";
@@ -107,12 +108,19 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     // 也要记 —— 漏交卷最常发生在这一路,而 turn-baseline 只给真人续聊拍照。
     await recordTurnStart(taskId, ws.path);
     const agentType = (task.agentType as AgentType) ?? "claude";
-    const { executor: ex, profileId, profileFingerprint } = await resolveExecutorWithProfile({
+    // 多人模式:用**任务归属人**的执行器与供应商跑(§八)。别人的执行器解析不到时
+    // 降级到本人的默认执行器,并把这次降级如实写进时间线 —— 烧的是他自己的 key。
+    const owner = await executorOwnerScope(task.ownerUserId);
+    const blocked = await dispatchRejection({ agentType, executorId: task.executorId });
+    if (blocked) throw new Error(blocked);
+    const { executor: ex, profileId, profileFingerprint, downgradedFrom } = await resolveExecutorWithProfile({
       executorId: task.executorId,
       type: agentType,
       model: task.model,
       reasoningEffort: task.reasoningEffort,
+      ...owner,
     });
+    if (downgradedFrom) await noteExecutorDowngrade(taskId, downgradedFrom, ex.label);
 
     const autoTitle = !!task.autoTitle;
     const TITLE_HINT =

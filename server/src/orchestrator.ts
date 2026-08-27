@@ -12,6 +12,7 @@ import { consumeSingleRun, afterSettlement } from "./single-run.js";
 import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
 import { resolveExecutorWithProfile } from "./executors/index.js";
+import { dispatchRejection, executorOwnerScope, noteExecutorDowngrade } from "./auth/dispatch-gate.js";
 import type { RunHandle } from "./executors/types.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { inspectProcess } from "./proc.js";
@@ -251,12 +252,22 @@ export async function continueTask(
       .set({ followUpFrom, nativeTurn: !!nativeCommand, completeConfirmedAt: null, activeTurnToken: turnToken, activeDirectionToken: directionToken, activeDirectionVersion: 1, updatedAt: now() })
       .where(eq(tasks.id, taskId));
 
-    const { executor: ex, profileId, profileFingerprint } = await resolveExecutorWithProfile({
+    // 续聊/重跑同样按**任务归属人**解析执行器(§八)。跨人时降级到本人的默认执行器,
+    // 并把这次降级写进时间线 —— 换执行器可能换模型档位,产出会变,不能静默。
+    const owner = await executorOwnerScope(task.ownerUserId);
+    const dispatchBlocked = await dispatchRejection({
+      agentType: agent,
+      executorId: summoned ? opts.executorId ?? null : task.executorId,
+    });
+    if (dispatchBlocked) throw new Error(dispatchBlocked);
+    const { executor: ex, profileId, profileFingerprint, downgradedFrom } = await resolveExecutorWithProfile({
       executorId: summoned ? opts.executorId ?? null : task.executorId,
       type: agent,
       model: summoned ? opts.model ?? null : task.model,
       reasoningEffort: summoned ? opts.reasoningEffort ?? null : task.reasoningEffort,
+      ...owner,
     });
+    if (downgradedFrom) await noteExecutorDowngrade(taskId, downgradedFrom, ex.label);
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
 
     // A single task can now host several agents — one session line per agentType,

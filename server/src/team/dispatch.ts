@@ -82,6 +82,7 @@ export async function dispatchWorkers(
   const ts = now();
   const groupId = id();
   const batch = (await db.select({ id: groups.id }).from(groups).where(eq(groups.ownerTaskId, leadTaskId))).length + 1;
+  const leadOwner = lead.ownerUserId;
   await db.insert(groups).values({
     id: groupId,
     projectId: lead.projectId,
@@ -138,6 +139,8 @@ export async function dispatchWorkers(
       // worktree)；true = 执行者自己再开一层隔离，具体解析统一在 taskWorkspace。
       useWorktree: s.useWorktree ?? false,
       worktreeBase: null as string | null,
+      // 派生任务继承父任务的归属(§八):执行者用调度者那个人的执行器与 key 跑。
+      ownerUserId: leadOwner,
     };
   });
   // serial 批次串成 A→B→C:头一个 done 后 advanceQueueFromTask 自动起下一个。

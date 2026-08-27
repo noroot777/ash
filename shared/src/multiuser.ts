@@ -143,8 +143,9 @@ export const canManageProject = (
 // ── 多人模式下可派发的 CLI ─────────────────────────────────────────────────
 // 约束挂在「catalog 里有没有 relay 实现」上,不写死名单(§八)。服务端从 catalog
 // 现算并经 `GET /api/agents/catalog` 报给前端;这里只留一句共用文案。
-export const MULTI_USER_CLI_BLOCKED_HINT =
-  "多人模式不可用:该 CLI 不支持第三方 key(接上供应商注入后自动解禁)";
+export const MULTI_USER_CLI_BLOCKED = (cli: string): string =>
+  `多人模式不可用:${cli} 不支持第三方 key(接上供应商注入后自动解禁)`;
+export const MULTI_USER_CLI_BLOCKED_HINT = MULTI_USER_CLI_BLOCKED("该 CLI");
 export const MULTI_USER_NO_PROVIDER_HINT =
   "多人模式下必须给执行器挂一个供应商 —— 宿主机的 CLI 订阅已被隔离,不可借用";
 

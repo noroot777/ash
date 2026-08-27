@@ -7,7 +7,7 @@
 //
 // **别在调用点自己拼 SQL** —— 项目切换器、任务列表、搜索、SSE、通知、验收页、随手记
 // 全都要过同一份判据;复制一份出去,漏掉的那个面就是横向越权。
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { ProjectMemberView, ProjectRole } from "@ash/shared";
 import { db } from "../db/index.js";
 import { projectMembers, projects, tasks, users } from "../db/schema.js";
@@ -60,6 +60,19 @@ export async function requireProjectAdmin(actor: Actor, projectId: string): Prom
   if ((await projectRoleOf(actor, projectId)) !== "admin") {
     throw forbidden("只有项目管理员或实例管理员可以做这个操作");
   }
+}
+
+/** 批量端点的过滤:把一串 taskId 收窄成「这个人看得见的那些」。 */
+export async function visibleTaskIds(actor: Actor, ids: string[]): Promise<string[]> {
+  if (!ids.length) return [];
+  const visible = await visibleProjectIds(actor);
+  if (visible === null) return ids;
+  const rows = await db
+    .select({ id: tasks.id, projectId: tasks.projectId })
+    .from(tasks)
+    .where(inArray(tasks.id, ids));
+  const ok = new Set(rows.filter((r) => visible.has(r.projectId)).map((r) => r.id));
+  return ids.filter((taskId) => ok.has(taskId));
 }
 
 /** 任务可见性跟项目走(§八):看得见项目就看得见任务。 */

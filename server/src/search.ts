@@ -54,6 +54,10 @@ export type ParsedSearchQuery = {
 export type SearchOptions = {
   // 硬过滤：只在这个项目里搜（⌘K 的「限定项目」筛子）。
   projectId?: string;
+  // 可见项目集合(多人模式)。null / 不给 = 不设限。搜索是横跨全库扫**磁盘上的会话
+  // 正文**的,不过这一道等于把别人任务的原文直接吐进 ⌘K —— 它比列表页更危险,因为
+  // 命中的是正文片段而不只是标题。
+  visibleProjectIds?: Set<string> | null;
   type?: "tasks" | "notes";
   // 排序偏好 + **扫描顺序**：先把这个项目扫完，再扫别的项目。跟 projectId 是两回事 ——
   // 后者把别的项目排除掉，这个只是让它们排后面、晚一点到。
@@ -280,7 +284,9 @@ export async function searchAll(query: string, options: SearchOptions = {}): Pro
     db.select().from(notes),
     db.select({ noteId: noteTasks.noteId }).from(noteTasks).innerJoin(tasks, eq(noteTasks.taskId, tasks.id)),
   ]);
-  const projectMatches = (projectId: string) => !options.projectId || projectId === options.projectId;
+  const visible = options.visibleProjectIds ?? null;
+  const projectMatches = (projectId: string) =>
+    (!options.projectId || projectId === options.projectId) && (visible === null || visible.has(projectId));
   const taskRows = options.type === "notes" ? [] : allTaskRows.filter((task) => projectMatches(task.projectId) && visibleLocalSearchTask(task.handoff));
   const noteRows = options.type === "tasks" ? [] : allNoteRows.filter((note) => projectMatches(note.projectId));
   const projName = new Map(projRows.map((project) => [project.id, project.name] as const));

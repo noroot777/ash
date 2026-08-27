@@ -8,6 +8,7 @@ import { runsTiming } from "./util.js";
 import { getAppSettings } from "./app-settings.js";
 import { projectHealthLight } from "./git.js";
 import { resolveWorkflowDef } from "./workflows.js";
+import { isMultiUser } from "./auth/mode.js";
 
 export type TaskRow = typeof tasks.$inferSelect;
 // workflowId 不是列：它是**创建那一刻**用来挑起手式的 id，落库时会被换成 tasks.workflow
@@ -157,9 +158,30 @@ async function snapshotWorkflow(
   workflowId: string | null | undefined,
   projectId: string,
   useWorktree: boolean,
+  owner: string | null,
 ): Promise<string> {
-  const { def } = await resolveWorkflowDef({ explicitId: workflowId, projectId });
+  const { def } = await resolveWorkflowDef({ explicitId: workflowId, projectId, owner });
   return JSON.stringify({ ...def, workspace: useWorktree ? "isolated" : "shared" });
+}
+
+/**
+ * 执行器快照(§八):任务落库时记下「当时选的是谁、什么类型、什么型号」。
+ * 照 workflow 快照的先例 —— 执行器是可编辑可删除的私有资源,主键说不清它当时长什么样。
+ * 别人重跑这个任务时,前端拿这份快照说「原执行器属于 A 的 xxx」。
+ */
+async function snapshotExecutor(row: NewTaskRow): Promise<string | null> {
+  if (!(await isMultiUser())) return null;
+  const type = row.agentType ?? null;
+  if (!row.executorId) return type ? JSON.stringify({ type, name: null, model: row.model ?? null }) : null;
+  const profile = (await db.select().from(agents).where(eq(agents.id, row.executorId))).at(0);
+  if (!profile) return null;
+  return JSON.stringify({
+    id: profile.id,
+    name: profile.name,
+    type: profile.type,
+    model: row.model ?? profile.model ?? null,
+    ownerUserId: profile.ownerUserId,
+  });
 }
 
 // All task creation paths go through here. afterInsert lets callers persist
@@ -191,11 +213,12 @@ export async function createTasks(
       worktreeBase: useWorktree ? row.worktreeBase ?? null : null,
       // 审查任务（reviewOf 非空）不拷线：它本身就是别人那条线上「验证」那一站长出来的
       // 产物，再给它配一条自己的线就成了「审查任务的审查任务」。
+      executorSnapshot: row.executorSnapshot ?? (await snapshotExecutor(row)),
       workflow: row.workflowMode === "free"
         ? null
         : row.workflow ?? (row.reviewOf
           ? null
-          : await snapshotWorkflow(workflowId, row.projectId, useWorktree)),
+          : await snapshotWorkflow(workflowId, row.projectId, useWorktree, row.ownerUserId ?? null)),
     };
   }));
   await db.insert(tasks).values(normalizedRows);

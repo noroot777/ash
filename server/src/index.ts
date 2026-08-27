@@ -82,7 +82,7 @@ try {
   exitAfterStartupFailure("failed to acquire the database singleton lock", e);
 }
 
-const { startScheduler, api, authGate } = await initializeServer().catch((e) =>
+const { startScheduler, api, authGate, resourceGate } = await initializeServer().catch((e) =>
   exitAfterStartupFailure("server initialization failed", e),
 );
 
@@ -105,9 +105,10 @@ async function initializeServer() {
   await ensureSchema();
   // 实例模式(自用 / 多人)要在任何路由被打之前读出来:同步派进程那条路只认
   // auth/multi-flag.ts 里的缓存镜像,而那个镜像由 instanceConfig() 负责刷新。
-  const [modeModule, { authGate }] = await Promise.all([
+  const [modeModule, { authGate }, { resourceGate }] = await Promise.all([
     import("./auth/mode.js"),
     import("./auth/middleware.js"),
+    import("./auth/resource-gate.js"),
   ]);
   const instance = await modeModule.instanceConfig();
   if (instance.mode === "multi") {
@@ -171,13 +172,16 @@ async function initializeServer() {
     const { db } = await import("./db/index.js");
     warmSkills((await db.select().from(projects)).map((p) => p.repoPath));
   })().catch(() => {});
-  return { startScheduler: schedulesModule.startScheduler, api: routesModule.api, authGate };
+  return { startScheduler: schedulesModule.startScheduler, api: routesModule.api, authGate, resourceGate };
 }
 
 const app = new Hono();
 // 鉴权闸。**必须排在所有路由之前** —— 它是一张正面清单:公开的那几条逐条列在
 // auth/middleware.ts 里,其余一律要身份。自用模式下它整体空转(§三)。
 app.use("*", authGate());
+// 认了身份之后紧接着认资源:`/api/tasks/:id/…` 这类路径一律先过可见性。逐条路由自己
+// 查是漏不完的(那条轴上的端点分散在十几个文件里且还在长),所以做成横切的一道。
+app.use("/api/*", resourceGate());
 app.route("/api", api);
 
 // 没被上面任何一条 api 路由认领的 `/api/*`,到这里就停,不许落到下方的 SPA 兜底。

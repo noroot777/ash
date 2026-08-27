@@ -16,8 +16,10 @@ import { claudeEffortUnsupportedMessage } from "./claude.js";
 type AgentRow = typeof agents.$inferSelect;
 type ExecutorOverrides = { model?: string | null; reasoningEffort?: string | null };
 
-async function defaultProfile(type: AgentType): Promise<AgentRow | null> {
-  const rows = await db.select().from(agents).where(eq(agents.type, type));
+// `owner` 收窄到「这个人的执行器」(多人模式)。undefined = 不收窄,与本功能上线前一致。
+async function defaultProfile(type: AgentType, owner?: string | null): Promise<AgentRow | null> {
+  const all = await db.select().from(agents).where(eq(agents.type, type));
+  const rows = owner === undefined ? all : all.filter((r) => r.ownerUserId === owner);
   return rows.find((r) => r.isDefault) ?? rows[0] ?? null;
 }
 
@@ -44,18 +46,35 @@ export type ExecutorResolveOpts = {
   type?: AgentType | null;
   model?: string | null;
   reasoningEffort?: string | null;
+  /**
+   * 用谁的执行器跑(多人模式,来自 `tasks.ownerUserId`)。
+   * **不传 = 不收窄**,自用模式与所有还没接这一层的调用点都走原来的那条路。
+   */
+  owner?: string | null;
 };
 
 // 「这次到底选中了哪一条 profile」的单点：executorId 命中就用它（类型跟着这条 profile
 // 走），否则退回该类型的默认 profile。降级逻辑只有这一份 —— 复制一份出去，两条路迟早
 // 会在「id 悬空」这种边角上分叉。
-async function pickProfile(opts: ExecutorResolveOpts): Promise<{ profile: AgentRow | null; type: AgentType }> {
+async function pickProfile(
+  opts: ExecutorResolveOpts,
+): Promise<{ profile: AgentRow | null; type: AgentType; downgraded?: AgentRow }> {
+  const owner = opts.owner;
   if (opts.executorId) {
     const [row] = await db.select().from(agents).where(eq(agents.id, opts.executorId));
-    if (row) return { profile: row, type: row.type as AgentType };
+    // 共享项目里的跨人操作(§八):选中的执行器是别人的私有资源时,**降级到本人的
+    // 默认执行器**并把原来那条一起带回去 —— 调用方要拿它弹「原执行器属于 A 的
+    // xxx,将改用你的 yyy」。静默替换是不行的:换执行器可能换模型档位,产出会变。
+    if (row && (owner === undefined || row.ownerUserId === owner)) {
+      return { profile: row, type: row.type as AgentType };
+    }
+    if (row) {
+      const type = (opts.type ?? row.type) as AgentType;
+      return { profile: await defaultProfile(type, owner), type, downgraded: row };
+    }
   }
   const type = opts.type ?? "claude";
-  return { profile: await defaultProfile(type), type };
+  return { profile: await defaultProfile(type, owner), type };
 }
 
 // profile 主键只说得清「选中了谁」，说不清「它当时长什么样」——一条 profile 是可编辑、
@@ -102,12 +121,19 @@ export async function profileDrift(
 // 「把上一回合原样再跑一遍」只能认 id + 指纹（见 sessions.executor_id / executor_fingerprint）。
 export async function resolveExecutorWithProfile(
   opts: ExecutorResolveOpts,
-): Promise<{ executor: AgentExecutor; profileId: string | null; profileFingerprint: string | null }> {
-  const { profile, type } = await pickProfile(opts);
+): Promise<{
+  executor: AgentExecutor;
+  profileId: string | null;
+  profileFingerprint: string | null;
+  /** 非空 = 发生了跨人降级,这是**原本**那条(别人的)执行器。 */
+  downgradedFrom?: { id: string; name: string; type: string };
+}> {
+  const { profile, type, downgraded } = await pickProfile(opts);
   return {
     executor: await build(profile, type, opts),
     profileId: profile?.id ?? null,
     profileFingerprint: profile ? await fingerprintOf(profile) : null,
+    ...(downgraded ? { downgradedFrom: { id: downgraded.id, name: downgraded.name, type: downgraded.type } } : {}),
   };
 }
 

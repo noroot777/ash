@@ -17,6 +17,10 @@ import { isTurnClaimed } from "./runs.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { createTasks, enrichTasks, publishTaskUpdated, toTaskListItem } from "./task-store.js";
 import { attachmentsPrompt, id, now, taskBody } from "./util.js";
+import { actorOf } from "./auth/context.js";
+import { canSeeProject, visibleProjectIds, visibleTaskIds } from "./auth/visibility.js";
+import { ownerIdOf } from "./auth/context.js";
+import { inheritOwner } from "./auth/run-env.js";
 
 // 任务行删除时连关联状态一起收：自由审查链(run/round)、预约槽、事件、排队/定时消息、
 // 随手记回链。没有 FK cascade,只删任务行会留下孤儿——审查实测:等答复的审查在任务
@@ -60,8 +64,11 @@ export function mountTaskRoutes(api: Hono): void {
 // 列表**不带正文**（TaskListItem）：一千多行任务里正文占了响应的一半，而没有一处列表
 // UI 用得上它。正文由 `GET /tasks/:id` 单取。这条路由是全应用最大的一份响应，且每次
 // 开页面 + 每次 SSE 重连都要整份重拉，省下来的是首屏和断线恢复的直接成本。
+// 任务的可见性**跟项目走**(§八):看得见项目就看得见项目里的全部任务,不论是谁的活。
 api.get("/tasks", async (c) => {
-  const rows = await db.select().from(tasks);
+  const visible = await visibleProjectIds(actorOf(c));
+  const all = await db.select().from(tasks);
+  const rows = visible === null ? all : all.filter((t) => visible.has(t.projectId));
   return c.json((await enrichTasks(rows)).map(toTaskListItem));
 });
 
@@ -72,7 +79,7 @@ api.post("/tasks/follow-ups", async (c) => {
   const ids = Array.isArray(body.taskIds) ? body.taskIds.filter((id): id is string => typeof id === "string") : [];
   const over = overBatchLimit(ids);
   if (over) return c.json(over, 400);
-  return c.json(await followUpsFor(ids));
+  return c.json(await followUpsFor(await visibleTaskIds(actorOf(c), ids)));
 });
 
 // 正文批量取。跟上面那条同一个触发点（侧边栏铺开的「原始需求」列），同一套 id 上限，
@@ -87,17 +94,21 @@ api.post("/tasks/bodies", async (c) => {
   if (!ids.length) return c.json([]);
   const over = overBatchLimit(ids);
   if (over) return c.json(over, 400);
-  const rows = await db
-    .select({ taskId: tasks.id, body: tasks.body })
+  const visible = await visibleProjectIds(actorOf(c));
+  const rows = (await db
+    .select({ taskId: tasks.id, body: tasks.body, projectId: tasks.projectId })
     .from(tasks)
-    .where(inArray(tasks.id, ids));
+    .where(inArray(tasks.id, ids)))
+    .filter((row) => visible === null || visible.has(row.projectId));
   return c.json(rows.map((row) => ({ taskId: row.taskId, body: row.body ?? "" })));
 });
 
 api.get("/tasks/:id", async (c) => {
   const rows = await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")));
   const r = rows.at(0);
-  if (!r) return c.json({ error: "not found" }, 404);
+  // 看不见的任务与不存在的任务**回同一句话**:否则挨个 id 试就能问出「这个任务存在,
+  // 只是不是我的项目」。
+  if (!r || !(await canSeeProject(actorOf(c), r.projectId))) return c.json({ error: "not found" }, 404);
   return c.json((await enrichTasks([r]))[0]);
 });
 
@@ -226,6 +237,9 @@ api.post("/tasks", async (c) => {
     workflowId: b.workflowId ?? null,
     workflow: inlineWorkflow,
     workflowMode,
+    // 「谁的活」(§八):归属决定用谁的执行器/供应商/CLI 环境跑,以及统计算在谁头上。
+    // 派生任务(团队执行者/审查/就地验证)继承父任务,那条路在各自的创建点上。
+    ownerUserId: (await inheritOwner(b.parentId)) ?? ownerIdOf(actorOf(c)),
   };
   // 可选:追加到现有 queue 的尾部。要求:queue 已存在,且新 task 跟
   // queue 已有任务的 groupId 一致(违反就 400,不静默)。

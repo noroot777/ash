@@ -7,6 +7,7 @@ import { projects, schedules, sessions, tasks } from "./db/schema.js";
 import { taskCommits } from "./git.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { id, now } from "./util.js";
+import { actorOf, ownerIdOf } from "./auth/context.js";
 
 export function mountTaskScheduleRoutes(api: Hono): void {
 // ── schedules (§9) — one schedule per task ──────────────────────────────────
@@ -32,6 +33,9 @@ api.put("/tasks/:id/schedule", async (c) => {
     cron: b.cron ?? null,
     enabled: b.enabled ?? true,
     lastRunAt: null,
+    // 日程归**建它的人**(§五 停用时按这一列暂停他的日程,§八 日程触发的任务继承
+    // 日程创建者)。改一条已有日程不换归属。
+    ownerUserId: existing?.ownerUserId ?? ownerIdOf(actorOf(c)),
     createdAt: existing?.createdAt ?? now(),
   };
   if (existing) await db.update(schedules).set(row).where(eq(schedules.id, existing.id));

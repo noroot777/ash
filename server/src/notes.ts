@@ -4,6 +4,8 @@ import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { notes, noteTasks, projects, tasks } from "./db/schema.js";
 import { id } from "./util.js";
+import { actorOf } from "./auth/context.js";
+import { canUseOwned, filterOwned, ownerStamp } from "./auth/owned.js";
 
 type NoteBody = {
   projectId?: unknown;
@@ -54,12 +56,14 @@ async function withTaskLinks(rows: (typeof notes.$inferSelect)[]): Promise<Note[
 }
 
 export function mountNoteRoutes(api: Hono) {
+  // 随手记在多人模式下**转私有**(§八):同一个共享项目里,各人的随手记互不可见。
+  // 所以这里过的是归属(ownerUserId),不是项目成员表 —— 两条轴叠加。
   api.get("/notes", async (c) => {
     const projectId = c.req.query("projectId");
     const rows = projectId
       ? await db.select().from(notes).where(eq(notes.projectId, projectId)).orderBy(desc(notes.updatedAt))
       : await db.select().from(notes).orderBy(desc(notes.updatedAt));
-    return c.json(await withTaskLinks(rows));
+    return c.json(await withTaskLinks(await filterOwned(rows, actorOf(c))));
   });
 
   api.post("/notes", async (c) => {
@@ -80,6 +84,7 @@ export function mountNoteRoutes(api: Hono) {
     const row: typeof notes.$inferInsert = {
       id: id(),
       projectId: project.id,
+      ...ownerStamp(actorOf(c)),
       body: body.body,
       attachments: files?.length ? JSON.stringify(files) : null,
       createdAt: timestamp,
@@ -92,7 +97,7 @@ export function mountNoteRoutes(api: Hono) {
   api.patch("/notes/:id", async (c) => {
     const noteId = c.req.param("id");
     const existing = (await db.select().from(notes).where(eq(notes.id, noteId))).at(0);
-    if (!existing) return c.json({ error: "not found" }, 404);
+    if (!existing || !(await canUseOwned(existing, actorOf(c)))) return c.json({ error: "not found" }, 404);
     const body = await c.req.json<NoteBody>();
     const patch: Partial<typeof notes.$inferInsert> = {};
     if (body.body !== undefined) {
@@ -129,8 +134,8 @@ export function mountNoteRoutes(api: Hono) {
 
   api.delete("/notes/:id", async (c) => {
     const noteId = c.req.param("id");
-    const existing = (await db.select({ id: notes.id }).from(notes).where(eq(notes.id, noteId))).at(0);
-    if (!existing) return c.json({ error: "not found" }, 404);
+    const existing = (await db.select().from(notes).where(eq(notes.id, noteId))).at(0);
+    if (!(await canUseOwned(existing, actorOf(c)))) return c.json({ error: "not found" }, 404);
     await db.delete(noteTasks).where(eq(noteTasks.noteId, noteId));
     await db.delete(notes).where(eq(notes.id, noteId));
     return c.json({ deleted: true });

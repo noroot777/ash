@@ -93,6 +93,7 @@ export async function createPostMergeRepairTask(taskId: string, runId: string): 
       resumeDependsOn: "[]",
       agentType: source.agentType,
       executorId: source.executorId,
+      ownerUserId: source.ownerUserId, // 派生任务继承源任务的归属(§八)
       model: source.model,
       reasoningEffort: source.reasoningEffort,
       autoTitle: false,
