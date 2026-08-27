@@ -223,6 +223,17 @@ try {
   const inbound = await api<Task>(machineB, `/tasks/${task.id}`);
   assert.equal(inbound.handoff?.direction, "in");
   assert.equal(inbound.handoff?.peerUrl, machineA, "接收机应从真实来源地址与源端口恢复回程地址");
+  // 审查历史与验收落账随任务走(用户 2026-08-27):接过去的任务除了横幅标记外应该和本机
+  // 原生任务没有区别,对端点开不该是一段空白历史。下面那条 deepEqual 再验它原样回得来。
+  const inboundLocal = readReturnLocalState(join(root, "b.db"), task.id);
+  assert.equal(inboundLocal.freeReviewRuns, 1, "审查历史应随任务迁移到对端");
+  assert.equal(inboundLocal.freeReviewRounds, 1, "审查轮次应随任务迁移(run id 原样保留,证据文件才对得上号)");
+  assert.equal(inboundLocal.freeWorkflowStates, 1, "自由工作流状态应随任务迁移");
+  assert.equal(inboundLocal.freeWorkflowEvents, 1, "自由工作流事件应随任务迁移");
+  assert.equal(inboundLocal.task.accepted_target_branch, "local-target", "验收落账应随任务迁移");
+  assert.equal(inboundLocal.task.accepted_base_commit, "local-base");
+  assert.equal(inboundLocal.task.accepted_merge_commit, "local-merge");
+  assert.equal(inboundLocal.task.accepted_tail_pending, 0, "尾段崩溃续跑的进度位不能跟着走,否则对端导入后会重跑一遍发布命令");
   const identityB = await api<{ fingerprint: string }>(machineB, "/handoff/identity");
   const grantsOnA = await api<{ grants: HandoffReturnGrant[] }>(machineA, "/handoff/return-grants");
   const returnGrant = grantsOnA.grants.find((grant) => grant.fingerprint === identityB.fingerprint);
