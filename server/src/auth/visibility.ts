@@ -7,10 +7,10 @@
 //
 // **别在调用点自己拼 SQL** —— 项目切换器、任务列表、搜索、SSE、通知、验收页、随手记
 // 全都要过同一份判据;复制一份出去,漏掉的那个面就是横向越权。
-import { and, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import type { ProjectMemberView, ProjectRole } from "@ash/shared";
 import { db } from "../db/index.js";
-import { projectMembers, projects, tasks, users } from "../db/schema.js";
+import { groups, projectMembers, projects, queueItems, tasks, users } from "../db/schema.js";
 import { now } from "../util.js";
 import type { Actor } from "./context.js";
 import { forbidden, isAdminActor } from "./context.js";
@@ -80,6 +80,38 @@ export async function visibleTaskIds(actor: Actor, ids: string[]): Promise<strin
     .where(inArray(tasks.id, ids));
   const ok = new Set(rows.filter((r) => visible.has(r.projectId)).map((r) => r.id));
   return ids.filter((taskId) => ok.has(taskId));
+}
+
+// ── 请求体里带来的资源 id ────────────────────────────────────────────────────
+// 横切闸只看得见 **URL 上**的 id(见 resource-gate.ts 顶部)。分组、队列这类写在
+// **请求体**里的 id 得各自路由查,而「查」不止是可见性 —— 还得查**归属**:猜中一个
+// 别人项目的 groupId / queueId,就能把自己的任务挂进那个分组、串进那条队列,而
+// `runGroup` 只按 groupId 找任务、队列视图只按 queueId 列内容(第 2 轮审查 P1)。
+//
+// 判据统一成一句:**必须和这条任务在同一个项目里**。项目本身已经过了 canSeeProject,
+// 所以同项目就蕴含可见;而且这一句同时堵住了「两边 groupId 都是 null 就算同组」那个
+// 缝 —— 只比 groupId 的话,两个项目的无分组任务能串进同一条队列。
+
+/** 这个分组属于这个项目吗。分组不存在同样回 false:悬空 id 不该被写进任务。 */
+export async function groupInProject(groupId: string, projectId: string): Promise<boolean> {
+  const row = (await db.select({ projectId: groups.projectId }).from(groups).where(eq(groups.id, groupId))).at(0);
+  return !!row && row.projectId === projectId;
+}
+
+/**
+ * 这条队列在跑哪个项目的任务。队列没有自己的项目列 —— 成员任务的项目就是它的项目
+ * (同队必须同项目,由 `assertSameGroup` 守着)。空队列 / 不存在回 null。
+ * 横切闸也用这一份(resource-gate.ts),别再抄第二份。
+ */
+export async function projectOfQueue(queueId: string): Promise<string | null> {
+  const item = (await db
+    .select({ taskId: queueItems.taskId })
+    .from(queueItems)
+    .where(eq(queueItems.queueId, queueId))
+    .orderBy(asc(queueItems.position))).at(0);
+  if (!item) return null;
+  const row = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, item.taskId))).at(0);
+  return row?.projectId ?? null;
 }
 
 /** 任务可见性跟项目走(§八):看得见项目就看得见任务。 */

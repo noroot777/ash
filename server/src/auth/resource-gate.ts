@@ -21,10 +21,10 @@
 import type { MiddlewareHandler } from "hono";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { groups, queueItems, scheduledMessages, sessions, tasks } from "../db/schema.js";
+import { groups, scheduledMessages, sessions, tasks } from "../db/schema.js";
 import { actorOf } from "./context.js";
 import { isMultiUser } from "./mode.js";
-import { canSeeProject } from "./visibility.js";
+import { canSeeProject, projectOfQueue } from "./visibility.js";
 
 /** `/api/tasks/abc/reply` → `["tasks", "abc", "reply"]` */
 function segmentsOf(pathname: string): string[] {
@@ -43,15 +43,6 @@ async function projectOfTask(taskId: string): Promise<string | null> {
 async function projectOfGroup(groupId: string): Promise<string | null> {
   const row = (await db.select({ projectId: groups.projectId }).from(groups).where(eq(groups.id, groupId))).at(0);
   return row?.projectId ?? null;
-}
-
-/**
- * 队列没有自己的项目列 —— 它的项目就是成员任务的项目(同 queue 必须同 group,
- * 所以取第一个成员即可)。空队列查不出项目,交给业务路由报它的 404。
- */
-async function projectOfQueue(queueId: string): Promise<string | null> {
-  const item = (await db.select({ taskId: queueItems.taskId }).from(queueItems).where(eq(queueItems.queueId, queueId))).at(0);
-  return item ? await projectOfTask(item.taskId) : null;
 }
 
 /** 会话属于任务,任务属于项目。`/api/sessions/:id/output` 直接吐 agent 的完整 transcript。 */

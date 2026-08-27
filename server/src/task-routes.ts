@@ -18,7 +18,7 @@ import { isAcceptingTask } from "./acceptance-lock.js";
 import { createTasks, enrichTasks, publishTaskUpdated, toTaskListItem } from "./task-store.js";
 import { attachmentsPrompt, id, now, taskBody } from "./util.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
-import { canSeeProject, visibleProjectIds, visibleTaskIds } from "./auth/visibility.js";
+import { canSeeProject, groupInProject, projectOfQueue, visibleProjectIds, visibleTaskIds } from "./auth/visibility.js";
 import { executorScopeForOwner, type ExecutorScope } from "./auth/owned-executors.js";
 import { executorDowngradePreflight } from "./auth/dispatch-gate.js";
 import { inheritOwner } from "./auth/run-env.js";
@@ -145,6 +145,12 @@ api.post("/tasks", async (c) => {
   // 「看不见」与「不存在」回同一句话,免得这里变成 id 探测器。
   if (!b.projectId || !(await canSeeProject(actorOf(c), b.projectId))) {
     return c.json({ error: "project not found", projectId: b.projectId }, 404);
+  }
+  // groupId 同样在请求体里,横切闸同样看不见它。只查了 projectId 是不够的:猜中一个
+  // 别人项目的 groupId,就能把任务挂进那个分组,而 `runGroup` 只按 groupId 找任务
+  // (第 2 轮审查 P1)。判据见 auth/visibility.ts「请求体里带来的资源 id」。
+  if (b.groupId && !(await groupInProject(b.groupId, b.projectId))) {
+    return c.json({ error: "group not found", groupId: b.groupId }, 404);
   }
   const workflowMode = b.workflowMode ?? "preset";
   if (!(TASK_WORKFLOW_MODES as readonly string[]).includes(workflowMode)) {
@@ -281,10 +287,18 @@ api.post("/tasks", async (c) => {
     // 上面那句 executorScopeForOwner 用的就是这个值 —— 两者必须同源,别各算各的。
     ownerUserId: taskOwner,
   };
-  // 可选:追加到现有 queue 的尾部。要求:queue 已存在,且新 task 跟
-  // queue 已有任务的 groupId 一致(违反就 400,不静默)。
+  // 可选:追加到现有 queue 的尾部。要求:queue 已存在、跟新 task **同项目**,且新 task 跟
+  // queue 已有任务的 groupId 一致(违反就 400/404,不静默)。
   let appendPosition: number | null = null;
   if (b.appendToQueue) {
+    // 同项目这一条排在最前面:queueId 也是请求体里的 id,横切闸看不见它 —— 少了这句,
+    // 猜中一个别人项目的 queueId 就能把自己的任务串进那条队列,而队列视图只按 queueId
+    // 列内容,对面刷新就会看见我塞进去的标题(第 2 轮审查 P1)。
+    // 「看不见」与「不存在」回同一句话,免得这里变成 queueId 探测器。
+    const queueProject = await projectOfQueue(b.appendToQueue);
+    if (queueProject !== null && queueProject !== b.projectId) {
+      return c.json({ error: `queue ${b.appendToQueue} 不存在` }, 400);
+    }
     const existing = await db
       .select()
       .from(queueItems)
@@ -435,6 +449,13 @@ api.patch("/tasks/:id", async (c) => {
   if (b.pinnedAt !== undefined) patch.pinnedAt = b.pinnedAt;
   if (b.starredAt !== undefined) patch.starredAt = b.starredAt;
   if (b.labels !== undefined) patch.labels = JSON.stringify(b.labels);
+  // 同建任务:groupId 是请求体里的 id,横切闸只护住了路径上的 taskId —— 少了这句,
+  // 一条我看得见的任务能被改挂到别人项目的分组上(第 2 轮审查 P1)。null = 摘出分组,
+  // 不用查。
+  if (b.groupId !== undefined && b.groupId !== null
+    && !(await groupInProject(b.groupId, existing.projectId))) {
+    return c.json({ error: "group not found", groupId: b.groupId }, 404);
+  }
   if (b.groupId !== undefined) patch.groupId = b.groupId;
   // 同建任务:scope 锚在**这条任务的归属人**,不是这次 PATCH 的人 —— 共享项目里别人
   // 也能改这条任务,按操作人过滤等于允许他把自己的 executorId 写进一条永远解析不到它的

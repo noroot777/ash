@@ -32,12 +32,21 @@ export async function repackQueue(queueId: string, orderedTaskIds: string[]): Pr
   );
 }
 
-// 校验:queue 里所有 task 必须同 group(或都无 group)
+// 校验:queue 里所有 task 必须同 group(或都无 group),而且必须**同项目**。
+//
+// 只比 groupId 会漏掉一整类:两个项目里的无分组任务,`groupId` 都是 null,比出来「同组」
+// —— 于是一条队列能横跨两个项目。队列视图按 queueId 列内容、`advanceQueue` 按队列推进,
+// 混进来的任务对面刷新就看得见、还会被自动起跑(第 2 轮审查 P1)。项目这一条是主判据,
+// 分组那条是它的加细。
 async function assertSameGroup(queueId: string, candidateTaskId?: string): Promise<string | null> {
   const items = await db.select().from(queueItems).where(eq(queueItems.queueId, queueId));
   const taskIds = [...items.map((i) => i.taskId), ...(candidateTaskId ? [candidateTaskId] : [])];
   if (taskIds.length === 0) return null;
   const rows = await db.select().from(tasks).where(inArray(tasks.id, taskIds));
+  const projectIds = new Set(rows.map((r) => r.projectId));
+  if (projectIds.size > 1) {
+    return `跨项目不允许:queue ${queueId} 涉及多个项目`;
+  }
   const groups = new Set(rows.map((r) => r.groupId));
   if (groups.size > 1) {
     return `跨 group 不允许:queue ${queueId} 涉及多个 group ${[...groups].join(", ")}`;
@@ -298,7 +307,9 @@ export function mountQueueRoutes(api: Hono): void {
         409,
       );
     }
-    // 同 group(或都无 group)
+    // 同项目(主判据)+ 同 group(加细)—— 理由同 assertSameGroup 顶部。
+    const ps = new Set(rows.map((r) => r.projectId));
+    if (ps.size > 1) return c.json({ error: "跨项目不允许" }, 400);
     const gs = new Set(rows.map((r) => r.groupId));
     if (gs.size > 1) return c.json({ error: "跨 group 不允许" }, 400);
     // 任何一个 task 已在其他 queue?

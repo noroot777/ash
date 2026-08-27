@@ -19,6 +19,8 @@
 //      duet 从来没过,于是换讨论这条路就能绕开。
 //   ⑤ 定时消息的**全局 id 路由**(`/scheduled-messages/:mid` 与 `…/steer`)要进横切闸:
 //      列表端点挂在 `/tasks/:id/…` 下、一直被挡着,这两条改写端点却整个漏在闸外。
+//   ⑥ **请求体里带来的** groupId / appendToQueue:横切闸只看 URL 上的 id,这两个得
+//      路由自己查归属 —— 猜中别人项目的 groupId/queueId 就能把任务挂进去、串进去。
 //
 // 跑法(不设 ASH_DB 时自己开一个临时库):
 //   npm -w server run test:multi-user-run
@@ -133,6 +135,14 @@ app.route("/api", api);
 const get = async (path: string, key: string) => {
   const res = await app.fetch(new Request(`http://127.0.0.1:4317${path}`, {
     headers: { authorization: `Bearer ${key}` },
+  }));
+  return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
+};
+const patch = async (path: string, key: string, body: unknown = {}) => {
+  const res = await app.fetch(new Request(`http://127.0.0.1:4317${path}`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+    body: JSON.stringify(body),
   }));
   return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
 };
@@ -317,6 +327,46 @@ const expectBob = (env: Record<string, string | null>, where: string) => {
   const aliceKey3 = await store.resetUserKey(alice.id);
   const ok = await del(`/api/scheduled-messages/${mid}`, aliceKey3);
   assert.equal(ok.status, 200, JSON.stringify(ok.body));
+}
+
+// ── ⑥ 请求体里的 groupId / appendToQueue 必须查归属 ────────────────────────
+{
+  const { groups, queueItems } = await import("../src/db/schema.js");
+  // p-private 是 bob 看不见的项目(⑤ 里建的)。在里面放一个分组和一条队列。
+  await db.insert(groups).values({ id: "g-private", projectId: "p-private", name: "别人的分组", mode: "serial", paused: false, createdAt: ts });
+  // 队头**不设分组**:两边 groupId 都是 null 时,老的「跨 group 不允许」比出来是「同组」,
+  // 于是只剩「同项目」这一条能拦住它 —— 用带分组的队头会被旧检查顺手挡下,证不到真正的洞。
+  const head = id();
+  await db.insert(tasks).values(taskRow({ id: head, projectId: "p-private", title: "队头" }));
+  await db.insert(queueItems).values({ taskId: head, queueId: "q-private", position: 0, createdAt: ts });
+
+  // 对照组:直接打队列那条路一直是挡着的,证明漏的只是请求体这一层。
+  assert.equal((await get("/api/queues/q-private", bobKey)).status, 404, "直接查别人的队列本来就该 404");
+
+  // 建任务时把别人的 groupId 塞进请求体。
+  const intoGroup = await post("/api/tasks", bobKey, { projectId: "p-shared", title: "混进分组", groupId: "g-private" });
+  assert.equal(intoGroup.status, 404, `别人项目的 groupId 不该收:${JSON.stringify(intoGroup.body)}`);
+
+  // 建任务时把别人的 queueId 塞进请求体。
+  const intoQueue = await post("/api/tasks", bobKey, { projectId: "p-shared", title: "混进队列", appendToQueue: "q-private" });
+  assert.ok(intoQueue.status >= 400, `别人项目的 queueId 不该收:${JSON.stringify(intoQueue.body)}`);
+  const items = await db.select().from(queueItems).where(eq(queueItems.queueId, "q-private"));
+  assert.equal(items.length, 1, "被拒之后队列里一条都不该多出来");
+
+  // PATCH 同一个洞:一条我看得见的任务,不能被改挂到别人项目的分组上。
+  const mine = id();
+  await db.insert(tasks).values(taskRow({ id: mine, title: "我的任务", ownerUserId: bob.id }));
+  const patched = await patch(`/api/tasks/${mine}`, bobKey, { groupId: "g-private" });
+  assert.equal(patched.status, 404, `PATCH 也不该收:${JSON.stringify(patched.body)}`);
+  const after = (await db.select({ g: tasks.groupId }).from(tasks).where(eq(tasks.id, mine))).at(0);
+  assert.equal(after?.g, null, "被拒之后库里一个字都不该改");
+
+  // 正向对照:同项目的分组照常挂得上 —— 别把正常路一起堵了。
+  await db.insert(groups).values({ id: "g-shared", projectId: "p-shared", name: "自己的分组", mode: "parallel", paused: false, createdAt: ts });
+  const ok = await patch(`/api/tasks/${mine}`, bobKey, { groupId: "g-shared" });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  const okRow = (await db.select({ g: tasks.groupId }).from(tasks).where(eq(tasks.id, mine))).at(0);
+  assert.equal(okRow?.g, "g-shared");
 }
 
 await releaseTmpDb();
