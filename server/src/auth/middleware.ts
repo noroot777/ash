@@ -30,10 +30,25 @@ const PUBLIC_API_PATHS = new Set([
   "/api/auth/state",
   "/api/auth/login",
   "/api/auth/setup",
+  // ── 机器对机器的接力端点 ────────────────────────────────────────────────
+  // 它们由**对端的 ash 服务端**来调,拿不到本机的 cookie 也没有本机的 key,所以走
+  // 不了这道闸;它们自己那套闸更严:ed25519 签名 + 来源机审批 + §十一 的用户级 key。
+  // **必须逐条列**,不能放 `/api/handoff/` 整个前缀 —— 那底下还住着本机设置面
+  // (来源审批、目标机清单、配对申请),放行整个前缀等于让局域网里任何未登录的人
+  // 批准入站机器信任(第 1 轮审查 P0)。
+  "/api/handoff/ping",
+  "/api/handoff/import",
+  "/api/handoff/return/ping",
+  "/api/handoff/return/import",
 ]);
 
-/** 前缀豁口。`/api/handoff/*` 有自己那套 ed25519 签名 + §十一 的用户级校验。 */
-const PUBLIC_API_PREFIXES = ["/api/handoff/", "/api/auth/claim/", "/api/auth/project-invite/"];
+/**
+ * 前缀豁口。三条,每条都说得出「为什么它到不了登录态」:
+ *  · `/api/handoff/proxy/*` —— 同上,对端服务端来调,全部经 `requireApprovedPeer`
+ *    验签且只能碰它自己交来的那条任务(handoff-remote.ts `ownedInboundTask`)。
+ *  · 领取链接与项目邀请 —— 拿它换的就是登录本身,要求先登录是死结。
+ */
+const PUBLIC_API_PREFIXES = ["/api/handoff/proxy/", "/api/auth/claim/", "/api/auth/project-invite/"];
 
 /**
  * SPA 壳:登录页、领取页本身要打得开。**壳内不得内嵌任何数据**(§三)——
@@ -46,7 +61,12 @@ function isSpaShell(path: string): boolean {
   return true;
 }
 
-const isPublicApi = (path: string): boolean =>
+/**
+ * 免登录名单的判据本体。导出是为了让回归测试直接钉住它(`test:multi-user` ⑫):
+ * 「哪几条能免登录」是这道闸唯一的软肋,靠通读维护不住 —— 曾经放行了
+ * `/api/handoff/` 整个前缀,连带把来源审批也免登录了。
+ */
+export const isPublicApiPath = (path: string): boolean =>
   PUBLIC_API_PATHS.has(path) || PUBLIC_API_PREFIXES.some((p) => path.startsWith(p));
 
 // 写方法要过 CSRF 检查。GET/HEAD 在这套 API 里没有副作用(唯一的例外
@@ -180,7 +200,7 @@ export function authGate(): MiddlewareHandler {
     }
 
     setActor(c, ANONYMOUS_ACTOR);
-    if (isPublicApi(path)) return next();
+    if (isPublicApiPath(path)) return next();
     // 壳可以打开(登录页要渲染),数据一律不行。
     if (isSpaShell(path)) return next();
     if (path.startsWith("/api/")) {

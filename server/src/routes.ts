@@ -63,7 +63,7 @@ import { actorOf, isAdminActor } from "./auth/context.js";
 import { patchSettingsFor, settingsForActor } from "./auth/personal-settings.js";
 import { makeEventFilter } from "./auth/event-filter.js";
 import { visibleProjectIds } from "./auth/visibility.js";
-import { canUseOwned, filterOwned, ownerStamp } from "./auth/owned.js";
+import { canUseOwned, filterOwned, notYours, ownerStamp } from "./auth/owned.js";
 import { isMultiUser } from "./auth/mode.js";
 import { clearDefaultFor, dispatchBlockReason } from "./auth/dispatch-gate.js";
 
@@ -298,11 +298,30 @@ mountSkillRoutes(api);
 // 模型清单(现问 CLI + 刷新)在 `model-routes.ts`。
 mountModelRoutes(api);
 
+/**
+ * 「这个执行器能不能挂上这个供应商」。
+ *
+ * 供应商是**个人面资源**(§八):它装着这个人自己的 API key。执行器行同样按人隔离,
+ * 但 providerId 只是一个字符串外键 —— 不校验的话,我可以建一个「我的」执行器却填上
+ * **别人的** providerId,派发闸只看它非空就放行,真正起跑时 `loadRelay(providerId)`
+ * 按 id 全局读库,烧的是别人的 key(第 1 轮审查 P1)。
+ *
+ * 返回拒绝体或 null。不存在与不是我的**回同一句话**(auth/owned.ts notYours 的理由)。
+ */
+async function providerRejection(c: Context, providerId: unknown): Promise<{ error: string } | null> {
+  if (!providerId) return null;
+  if (typeof providerId !== "string") return { error: "providerId 必须是字符串" };
+  const row = (await db.select().from(llmProviders).where(eq(llmProviders.id, providerId))).at(0);
+  return (await canUseOwned(row, actorOf(c))) ? null : notYours("供应商");
+}
+
 api.post("/agents", async (c) => {
   const b = await c.req.json<any>();
   const type = b.type as AgentType;
   const blocked = await registrationBlockReason(type);
   if (blocked) return c.json({ error: blocked }, 409);
+  const badProvider = await providerRejection(c, b.providerId);
+  if (badProvider) return c.json(badProvider, 404);
   const model = b.model?.trim() || null;
   if (b.reasoningEffort && !isReasoningEffortSupported(type, model, b.reasoningEffort)) {
     return c.json({
@@ -358,7 +377,11 @@ api.patch("/agents/:id", async (c) => {
     patch.reasoningEffort = normalizeReasoningEffort(type, nextModel, requestedEffort);
   }
   if (b.speed !== undefined) patch.speed = b.speed === "fast" ? "fast" : null;
-  if (b.providerId !== undefined) patch.providerId = b.providerId || null;
+  if (b.providerId !== undefined) {
+    const badProvider = await providerRejection(c, b.providerId);
+    if (badProvider) return c.json(badProvider, 404);
+    patch.providerId = b.providerId || null;
+  }
   if (b.configOverrides !== undefined) {
     const configOverrides = normalizeCliConfigOverrides(type, b.configOverrides);
     const overrideErrors = cliConfigOverrideErrors(type, configOverrides);

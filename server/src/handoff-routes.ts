@@ -6,9 +6,11 @@
 //     浏览器用——server→server 顺带绕开了 CORS。这三个走身份签名:/refs 和 /import
 //     要求来源机器已被批准(handoff-peers.ts requireApprovedPeer),/ping 是配对入口
 //     本身,谁都能敲,但没获批准就不报项目清单。
-//  ② **本机设置面**(/handoff/identity、/handoff/peers*):给自己的网页用,和 ash 其它
-//     端点一样没有鉴权(整机在可信网络里用的既定取舍)。这里管的是「谁能把任务推进来」,
-//     不是「谁能打开这个网页」。
+//  ② **本机设置面**(/handoff/identity、/handoff/peers*、/handoff/targets*、
+//     /handoff/request):给自己的网页用。自用模式下和 ash 其它端点一样没有鉴权(整机
+//     在可信网络里用的既定取舍);**多人模式下它们必须先登录** —— 它们管的是「谁能把
+//     任务推进来」和「我在对端的账号 key」,不是「谁能打开这个网页」。豁免名单在
+//     auth/middleware.ts,只列 ① 那几条,别把 `/api/handoff/` 整个前缀放进去。
 import { hostname } from "node:os";
 import type { HandoffAudit, TaskHandoff } from "@ash/shared";
 import type { Hono } from "hono";

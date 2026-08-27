@@ -8,6 +8,8 @@ import type {
 import { and, eq } from "drizzle-orm";
 import type { Context, Hono } from "hono";
 import { handoffActorId } from "./auth/handoff-outbound.js";
+import { actorOf, type Actor } from "./auth/context.js";
+import { visibleTaskIds } from "./auth/visibility.js";
 import { resolveTargetsFor, toPublicTarget } from "./auth/handoff-scope.js";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
@@ -184,11 +186,17 @@ async function remoteStatesFor(
 
 // 本机所有「确认接力出去」的行,按持有机分组。pending(应答丢失、没确认送到)的不算:
 // 那种任务本机还硬拦着不让跑,状态归本机自己说,问对端只会问出个 404。
-async function outboundByPeer(): Promise<Map<string, { target: HandoffTarget; items: { taskId: string; transferId?: string }[] }>> {
+//
+// **要按可见性收窄**:这是一条全表扫描,而它的返回值里带 title。`/tasks/outbound-state`
+// 的路径上没有 task 段,横切闸(auth/resource-gate.ts)拦不到它 —— 不收窄的话,同一台
+// 实例里两个人只要各自登记了同一台目标机,就能在侧栏里读到对方任务的标题。
+async function outboundByPeer(actor: Actor): Promise<Map<string, { target: HandoffTarget; items: { taskId: string; transferId?: string }[] }>> {
   const handoffTargets = (await resolveTargetsFor(handoffActorId())).map(toPublicTarget);
   const rows = await db.select({ id: tasks.id, handoff: tasks.handoff }).from(tasks);
+  const visible = new Set(await visibleTaskIds(actor, rows.map((row) => row.id)));
   const byPeer = new Map<string, { target: HandoffTarget; items: { taskId: string; transferId?: string }[] }>();
   for (const row of rows) {
+    if (!visible.has(row.id)) continue;
     const marker = markerOf(row.handoff);
     if (marker?.direction !== "out" || marker.pending || !marker.peerUrl) continue;
     const url = normalizedUrl(marker.peerUrl);
@@ -205,10 +213,10 @@ async function outboundByPeer(): Promise<Map<string, { target: HandoffTarget; it
 // 问一圈持有机：我交出去的那些任务，在它们那儿现在什么样。
 // 联系不上的机器只列进 offline **不抛错** —— 一台机器关机不该让整个侧栏读不出状态，
 // 而侧栏拿到 offline 才能如实说「这几行显示的是接力当时的状态」。
-export async function outboundRemoteStates(): Promise<HandoffOutboundStateResult> {
+export async function outboundRemoteStates(actor: Actor): Promise<HandoffOutboundStateResult> {
   const rows: HandoffRemoteState[] = [];
   const offline: HandoffPeerOffline[] = [];
-  for (const [url, { target, items }] of await outboundByPeer()) {
+  for (const [url, { target, items }] of await outboundByPeer(actor)) {
     try {
       const answer = await fetchPeer<{ rows: HandoffRemoteState[] }>(
         `${url}/api/handoff/proxy/tasks/state`,
@@ -238,7 +246,7 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
   });
 
   // 浏览器面：侧栏定时问一次「我交出去的那些任务，在对端现在什么样」。
-  api.post("/tasks/outbound-state", async (c) => c.json(await outboundRemoteStates()));
+  api.post("/tasks/outbound-state", async (c) => c.json(await outboundRemoteStates(actorOf(c))));
 
   api.post("/handoff/proxy/task/snapshot", async (c) => {
     try {

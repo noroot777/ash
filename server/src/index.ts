@@ -170,10 +170,16 @@ async function initializeServer() {
   startPreviewSweeper();
   // 技能清单预热:第一次在输入框敲 `/` 之前就把磁盘扫完(冷扫 ~15ms,之后靠
   // mtime 指纹命中缓存)。best-effort,失败了请求那一刻自己会重扫。
+  // 多人模式下缓存键带 userId(各人扫各自的 CLI 配置目录),所以要按人各热一遍 ——
+  // 只热 null 那一份等于热了一个谁也用不到的条目。
   void (async () => {
-    const [{ warmSkills }, { projects }] = await Promise.all([import("./skills.js"), import("./db/schema.js")]);
+    const [{ warmSkills }, { projects, users }] = await Promise.all([import("./skills.js"), import("./db/schema.js")]);
     const { db } = await import("./db/index.js");
-    warmSkills((await db.select().from(projects)).map((p) => p.repoPath));
+    const { isMultiUser } = await import("./auth/mode.js");
+    const userIds = (await isMultiUser())
+      ? (await db.select({ id: users.id }).from(users)).map((u) => u.id)
+      : [null];
+    warmSkills((await db.select().from(projects)).map((p) => p.repoPath), userIds);
   })().catch(() => {});
   return {
     startScheduler: schedulesModule.startScheduler,

@@ -6,13 +6,15 @@
 //   ② 同一 queue 同一时刻至多一个成员在跑——守卫在 selectNextInQueue(scheduler.ts)。
 // 推进规则本身不在这里,统一由 scheduler.ts 的 advanceQueue 负责;本文件只做
 // 「改队列内容」并在改完推一把。
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { eq, and, lt, asc, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks, queueItems } from "./db/schema.js";
 import { id, now } from "./util.js";
 import { advanceQueue, queueStatus } from "./scheduler.js";
 import { handoffBlockReason, isHandoffPreparing } from "./handoff-guard.js";
+import { actorOf } from "./auth/context.js";
+import { visibleTaskIds } from "./auth/visibility.js";
 
 // 内部:把 (queueId, [..items..]) 重排成 position 0..N-1,保持 dense
 export async function repackQueue(queueId: string, orderedTaskIds: string[]): Promise<void> {
@@ -98,6 +100,16 @@ export function tailOrder(orderedIds: string[], taskId: string): string[] {
 }
 
 // ── 端点 ─────────────────────────────────────────────────────────────────────
+//
+// `/queues/:queueId/…` 的可见性由 `auth/resource-gate.ts` 横切拦(队列的项目 = 成员
+// 任务的项目)。**但请求体里的 taskId 拦不到** —— 那道闸只解析路径。所以下面凡是
+// 从 body 收 taskId 的地方,自己得再过一次 `visibleTaskIds`,否则「把别人的任务插进
+// 我的队列」就成了一条现成的越权写入路径。
+async function invisibleTaskIds(c: Context, ids: string[]): Promise<string[]> {
+  const visible = new Set(await visibleTaskIds(actorOf(c), ids));
+  return ids.filter((taskId) => !visible.has(taskId));
+}
+
 export function mountQueueRoutes(api: Hono): void {
   // 列出某 queue 的内容(含每个 task 的状态)
   api.get("/queues/:queueId", async (c) => {
@@ -216,6 +228,8 @@ export function mountQueueRoutes(api: Hono): void {
     // 候选 task 必须先存在
     const tr = (await db.select().from(tasks).where(eq(tasks.id, b.taskId))).at(0);
     if (!tr) return c.json({ error: "task not found" }, 404);
+    // 看不见的任务 = 不存在(§十二):否则挨个 id 试就能问出「这个任务存在但不是我的」。
+    if ((await invisibleTaskIds(c, [b.taskId])).length) return c.json({ error: "task not found" }, 404);
 
     // 正在接力导出的任务不能入队:导出会把它结算成 canceled,队列对 canceled 透明跳过,
     // 后继会被提前启动(TOCTOU 详见 handoff-guard.ts 接力准备 barrier 的注释)。
@@ -267,6 +281,10 @@ export function mountQueueRoutes(api: Hono): void {
     if (rows.length !== want.length) {
       return c.json({ error: "部分 taskId 不存在" }, 400);
     }
+    // 建队列时路径上还没有 queueId,横切闸看不到它 —— 看不见的任务在这里必须等于不存在,
+    // 否则「把别人的任务串成一条我的队列」就是一条现成的越权写入路径(第 1 轮审查 P1)。
+    const hidden = await invisibleTaskIds(c, want);
+    if (hidden.length) return c.json({ error: "部分 taskId 不存在" }, 400);
     // 正在接力导出的任务不能入队(同 insert 端点,TOCTOU 见 handoff-guard.ts)
     const preparing = want.filter((tid) => isHandoffPreparing(tid));
     if (preparing.length > 0) {
