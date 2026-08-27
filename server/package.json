@@ -30,6 +30,7 @@
     "test:reopen-acceptance": "tsx scripts/test-reopen-acceptance.ts",
     "test:accept-merge": "tsx scripts/test-accept-merge.ts",
     "test:handoff": "tsx scripts/test-handoff.ts && tsx scripts/test-handoff-local.ts && tsx scripts/test-handoff-auth.ts && tsx scripts/test-handoff-return.ts",
+    "test:handoff-notice": "tsx scripts/test-handoff-notice.ts",
     "test:repo-lock": "tsx scripts/test-repo-lock.ts",
     "test:project-git": "tsx scripts/test-project-git.ts",
     "test:project-clone": "tsx scripts/test-project-clone.ts",
