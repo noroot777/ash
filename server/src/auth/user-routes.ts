@@ -2,7 +2,7 @@
 import type { Hono } from "hono";
 import { and, eq, isNull } from "drizzle-orm";
 import type { ProjectInviteInfo, ProjectRole, UserRole } from "@ash/shared";
-import { suggestDirName, suggestGitEmail, userDirNameError } from "@ash/shared/multiuser";
+import { dirNameFromNameHint, suggestDirName, suggestGitEmail, userDirNameError } from "@ash/shared/multiuser";
 import { db } from "../db/index.js";
 import { projectInvites, projects, schedules, tasks } from "../db/schema.js";
 import { stopTask } from "../runs.js";
@@ -83,6 +83,9 @@ export function mountUserRoutes(api: Hono): void {
     if (!name) return c.json({ error: "姓名必填" }, 400);
     if (await nameTaken(name)) return c.json({ error: `已经有一个叫「${name}」的用户了` }, 409);
     const dirName = (b.dirName ?? "").trim() || suggestDirName(name);
+    // 没传 dirName、姓名又推不出一个(中文名必然如此)时,别回一句干巴巴的「目录名必填」——
+    // 那对着一张已经填了姓名的表单是句谜语。
+    if (!dirName) return c.json({ error: dirNameFromNameHint(name) }, 400);
     const dirError = userDirNameError(dirName);
     if (dirError) return c.json({ error: `目录名不合法：${dirError}` }, 400);
     if (await dirNameTaken(dirName)) return c.json({ error: `目录名「${dirName}」已被占用` }, 409);
@@ -93,7 +96,7 @@ export function mountUserRoutes(api: Hono): void {
       role,
       dirName,
       gitName: (b.gitName ?? "").trim() || name,
-      gitEmail: (b.gitEmail ?? "").trim() || suggestGitEmail(name),
+      gitEmail: (b.gitEmail ?? "").trim() || suggestGitEmail(name, dirName),
       createdBy: actorOf(c).userId,
     });
     // 目录与个人 CLI 环境在**建用户时**就位(§五/§九):等到第一次派任务再建的话,

@@ -48,7 +48,9 @@ export function MultiModeForm({
   }, [adminName, dirTouched]);
 
   const hasData = !!preflight && Object.values(preflight.counts).some((n) => n > 0);
-  const dirError = dirName ? userDirNameError(dirName) : null;
+  // 姓名推不出目录名(中文名必然如此)时,当场把原因说出来 —— 不要等提交后才回一句
+  // 「目录名必填」:那时用户看到的是一张自己已经填了姓名的表单在说「必填」。
+  const dirError = dirName ? userDirNameError(dirName) : adminName.trim() ? "自己填一个英文目录名（中文名推不出来），比如 zhangsan" : null;
 
   const submit = useCallback(async () => {
     setBusy(true);
@@ -132,7 +134,7 @@ export function MultiModeForm({
             className="ui-input"
             value={gitEmail}
             onChange={(e) => setGitEmail(e.target.value)}
-            placeholder={adminName ? suggestGitEmail(adminName) : "zhangsan@ash.local"}
+            placeholder={adminName ? suggestGitEmail(adminName, dirName) : "zhangsan@ash.local"}
           />
         </label>
       </div>

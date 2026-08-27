@@ -3,7 +3,7 @@
 import type { Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { AuthState, InviteInfo, UserRole } from "@ash/shared";
-import { suggestDirName, suggestGitEmail, userDirNameError } from "@ash/shared/multiuser";
+import { dirNameFromNameHint, suggestDirName, suggestGitEmail, userDirNameError } from "@ash/shared/multiuser";
 import { hostname } from "node:os";
 import { actorOf, authErrorResponse, requireAdmin } from "./context.js";
 import { SESSION_COOKIE, crossSiteRejection } from "./middleware.js";
@@ -141,6 +141,9 @@ export function mountAuthRoutes(api: Hono): void {
     const adminName = (body.adminName ?? "").trim();
     if (!adminName) return c.json({ error: "管理员姓名必填" }, 400);
     const dirName = (body.dirName ?? "").trim() || suggestDirName(adminName);
+    // 没传 dirName、姓名又推不出一个(中文名必然如此)时,别回一句干巴巴的「目录名必填」——
+    // 那对着一张已经填了姓名的表单是句谜语。
+    if (!dirName) return c.json({ error: dirNameFromNameHint(adminName) }, 400);
     const dirError = userDirNameError(dirName);
     if (dirError) return c.json({ error: `目录名不合法：${dirError}` }, 400);
 
@@ -159,7 +162,7 @@ export function mountAuthRoutes(api: Hono): void {
       role: "admin",
       dirName,
       gitName: (body.gitName ?? "").trim() || adminName,
-      gitEmail: (body.gitEmail ?? "").trim() || suggestGitEmail(adminName),
+      gitEmail: (body.gitEmail ?? "").trim() || suggestGitEmail(adminName, dirName),
       createdBy: null,
     });
     await ensureUserHomeDir(admin.dirName);

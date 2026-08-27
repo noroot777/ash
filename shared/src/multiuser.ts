@@ -105,6 +105,14 @@ export function userDirNameError(value: string): string | null {
   return null;
 }
 
+/**
+ * 姓名里**猜不出**目录名时的那句话。中文名(以及任何非 ASCII 名字)必然走到这里 ——
+ * 只回一句「目录名必填」会让人对着一个自动填好过其它字段的表单发懵:填了姓名,
+ * 怎么还说必填?所以要把「为什么猜不出」和「该填成什么样」一起说清。
+ */
+export const dirNameFromNameHint = (displayName: string): string =>
+  `「${displayName}」里没有可以直接用作目录名的字母或数字（中文名很常见），请自己填一个英文目录名，比如 zhangsan。${USER_DIR_NAME_HINT}`;
+
 /** 按姓名猜一个目录名(添加用户表单的默认值,用户可改)。猜不出就返回空串。 */
 export function suggestDirName(displayName: string): string {
   const slug = (displayName ?? "")
@@ -117,9 +125,15 @@ export function suggestDirName(displayName: string): string {
   return userDirNameError(slug) ? "" : slug;
 }
 
-/** 按姓名生成默认 git 署名邮箱。域名固定用 `ash.local` —— 不是真邮箱,只求可归属。 */
-export function suggestGitEmail(displayName: string): string {
-  const local = suggestDirName(displayName) || "user";
+/**
+ * 按姓名生成默认 git 署名邮箱。域名固定用 `ash.local` —— 不是真邮箱,只求可归属。
+ *
+ * 姓名推不出 slug 时(中文名)退到 `dirName`,**不是**退到字面量 `user`:后者会让
+ * 每一个中文名用户都拿到同一个 `user@ash.local`,而这一列存在的全部理由就是让
+ * git log 认得出谁是谁(审查修订 B6)。dirName 唯一,退到它就还能分得开。
+ */
+export function suggestGitEmail(displayName: string, dirName?: string): string {
+  const local = suggestDirName(displayName) || (dirName ?? "").trim() || "user";
   return `${local}@ash.local`;
 }
 

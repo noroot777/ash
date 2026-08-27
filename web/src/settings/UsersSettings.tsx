@@ -75,7 +75,10 @@ export function UsersSettings({ notify }: { notify: (message: string) => void })
     if (!dirTouched) setDirName(name.trim() ? suggestDirName(name) : "");
   }, [name, dirTouched]);
 
-  const dirError = dirName ? userDirNameError(dirName) : null;
+  // 姓名推不出目录名(中文名必然如此)时当场说清,别等提交后才回一句「目录名必填」。
+  const dirError = dirName
+    ? userDirNameError(dirName)
+    : name.trim() ? "自己填一个英文目录名（中文名推不出来），比如 zhangsan" : null;
 
   const resetForm = () => {
     setName("");
@@ -189,7 +192,7 @@ export function UsersSettings({ notify }: { notify: (message: string) => void })
             <TextInput
               value={gitEmail}
               onChange={(e) => setGitEmail(e.target.value)}
-              placeholder={name ? suggestGitEmail(name) : "lisi@ash.local"}
+              placeholder={name ? suggestGitEmail(name, dirName) : "lisi@ash.local"}
             />
           </label>
           <label className="users-field">
@@ -205,7 +208,7 @@ export function UsersSettings({ notify }: { notify: (message: string) => void })
           </label>
           <div className="users-form-actions">
             <Button variant="ghost" onClick={resetForm}>取消</Button>
-            <Button variant="primary" type="submit" disabled={busy || !name.trim() || !!dirError}>
+            <Button variant="primary" type="submit" disabled={busy || !name.trim() || !dirName.trim() || !!dirError}>
               {busy ? "正在创建…" : "创建并生成邀请链接"}
             </Button>
           </div>
