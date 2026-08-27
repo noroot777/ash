@@ -69,10 +69,11 @@ function portOfUrl(raw: string): number | null {
 
 /**
  * 候选主机:来源机最近一次来访的 TCP 地址,加它自报的主机名(局域网里 `name` 和
- * `name.local` 两种写法都常见,mDNS 只认后者)。主机名不可信,但这里只当地址用,
- * 身份仍看指纹。
+ * `name.local` 两种写法都常见,mDNS 只认后者),最后兜上设置里登记过的那些主机 ——
+ * 来源机换了网段时,用户能做的就是去「设置 → 远程主机」写上新地址,那条路得通。
+ * 主机名不可信,但这里只当地址用,身份仍看指纹。
  */
-function candidateHosts(marker: TaskHandoff, lastAddr: string): string[] {
+function candidateHosts(marker: TaskHandoff, lastAddr: string, registeredUrls: string[]): string[] {
   const hosts: string[] = [];
   const push = (value: string | null) => {
     if (value && !hosts.includes(value)) hosts.push(value);
@@ -82,6 +83,9 @@ function candidateHosts(marker: TaskHandoff, lastAddr: string): string[] {
   if (name && !isIP(name)) {
     push(name);
     if (!name.includes(".")) push(`${name}.local`);
+  }
+  for (const url of registeredUrls) {
+    try { push(hostForUrl(new URL(url).hostname)); } catch { /* 设置里的坏地址不该拖垮探测 */ }
   }
   return hosts;
 }
@@ -137,7 +141,7 @@ async function discoverReturnTarget(
     peerUrlsFromSiblingTasks(marker.peerFp),
   ]);
   const urls = [...siblingUrls];
-  const hosts = candidateHosts(marker, peer?.lastAddr ?? "");
+  const hosts = candidateHosts(marker, peer?.lastAddr ?? "", registeredUrls);
   const ports = candidatePorts([...siblingUrls, ...registeredUrls]);
   for (const host of hosts) {
     for (const port of ports) {
