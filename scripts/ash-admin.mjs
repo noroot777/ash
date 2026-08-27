@@ -40,7 +40,17 @@ function tableExists(name) {
 function instanceMode() {
   if (!tableExists("app_settings")) return "";
   const row = one("SELECT value FROM app_settings WHERE key='instanceMode'");
-  return row?.value ?? "";
+  if (!row?.value) return "";
+  // app_settings 存的是 **JSON**(server/src/app-settings.ts 写入时 JSON.stringify),
+  // 所以库里躺着的是 `"multi"` 带引号那六个字节,不是裸 multi。直接比字符串会让这条
+  // 逃生门在真库上永远判成「不是多人模式」——而它存在的全部意义就是真库出事时能用。
+  try {
+    const parsed = JSON.parse(row.value);
+    return typeof parsed === "string" ? parsed : "";
+  } catch {
+    // 手工改过库的情况:裸字符串也认,别让人卡在引号上。
+    return row.value;
+  }
 }
 
 function requireMulti() {
@@ -64,10 +74,17 @@ const INVITE_DAYS = 7;
 
 function issueInvite(user) {
   const token = mintToken();
+  // 列名与 server/src/db/schema.ts 的 user_invites 必须对上:是 consumed_at(领取)
+  // 与 revoked_at(作废)两列,不是单一的 used_at。写错列名的后果是 `no such column`
+  // 当场炸掉 —— 而这条命令的使用场景恰恰是「唯一的管理员进不去了」,那时没有第二条路。
   // 作废这个人手上的旧链接:同时飘着两条会让「我到底该点哪个」变成一次支持请求。
-  run("UPDATE user_invites SET used_at = ? WHERE user_id = ? AND used_at IS NULL", nowIso(), user.id);
   run(
-    "INSERT INTO user_invites (id, user_id, token_hash, created_by, created_at, expires_at, used_at) VALUES (?,?,?,?,?,?,NULL)",
+    "UPDATE user_invites SET revoked_at = ? WHERE user_id = ? AND consumed_at IS NULL AND revoked_at IS NULL",
+    nowIso(),
+    user.id,
+  );
+  run(
+    "INSERT INTO user_invites (id, user_id, token_hash, created_by, created_at, expires_at, consumed_at, revoked_at) VALUES (?,?,?,?,?,?,NULL,NULL)",
     randomBytes(12).toString("hex"),
     user.id,
     tokenDigest(token),
