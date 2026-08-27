@@ -151,7 +151,7 @@ export function planReplay(
   directionToken?: string | null,
   directionVersion = 0,
 ): McpCallRecord[] {
-  const directionBound = new Set(["complete_task", "pause_task"]);
+  const directionBound = new Set(["report_stage", "complete_task", "pause_task"]);
   const eligible = calls.filter((call) => !directionToken || !directionBound.has(call.tool)
     || call.args.directionToken === directionToken
     // 首方向/升级前回合允许省略：MCP 会用启动时的 env token 发 HTTP，日志参数里没有它。

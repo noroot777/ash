@@ -53,6 +53,20 @@ assert.equal(codexCalls[0].args.stage, "verified", "参数必须原样带出来�
 const codexPlan = planReplay(codexCalls, TASK);
 assert.equal(codexPlan.length, 1, "同一个工具失败两次只补一笔（去重）");
 assert.equal(codexPlan[0].args.stage, "verified");
+assert.equal(planReplay(codexCalls, TASK, "new-direction", 1).length, 1,
+  "未引导的首方向 report_stage 兼容省略工具参数里的 env token");
+assert.equal(planReplay(codexCalls, TASK, "new-direction", 2).length, 0,
+  "引导后无方向身份的旧 report_stage 不得在新方向结算时补录");
+const currentStageCalls = codexCalls.map((call) => ({
+  ...call, args: { ...call.args, directionToken: "new-direction" },
+}));
+const oldStageCalls = codexCalls.map((call) => ({
+  ...call, args: { ...call.args, directionToken: "old-direction" },
+}));
+assert.equal(planReplay(currentStageCalls, TASK, "new-direction", 2).length, 1,
+  "当前方向未送达的 report_stage 仍应补录");
+assert.equal(planReplay(oldStageCalls, TASK, "new-direction", 2).length, 0,
+  "明确携带旧方向身份的 report_stage 不得补录");
 
 // ── ② claude 流：tool_use 与 tool_result 靠 id 配对 ──────────────────────────
 const claudeStream = [
@@ -157,6 +171,24 @@ assert.ok(
 );
 
 // ── ⑪ 方向身份：普通首方向可省略；引导后旧/缺失身份不补，当前方向才补 ───────
+await db.update(tasks).set({
+  stage: null,
+  activeDirectionToken: "new-direction",
+  activeDirectionVersion: 2,
+}).where(eq(tasks.id, TASK));
+assert.equal(await replayUndeliveredMcpCalls({
+  taskId: TASK, sessId: "sessA", turnStart: "2026-08-06T04:08:22.911Z", agentType: "codex",
+}), 0, "旧方向省略 token 的 report_stage 不得在引导后补进来");
+const currentStageStream = codexFailed.replaceAll(
+  '"stage":"verified"',
+  '"stage":"verified","directionToken":"new-direction"',
+);
+writeStream(TASK, "sessStageCurrent", "2026-08-06T04:09:00.000Z", currentStageStream);
+assert.equal(await replayUndeliveredMcpCalls({
+  taskId: TASK, sessId: "sessStageCurrent", turnStart: "2026-08-06T04:09:00.000Z", agentType: "codex",
+}), 1, "当前方向未送达的 report_stage 应正常补录");
+assert.equal((await db.select().from(tasks).where(eq(tasks.id, TASK))).at(0)!.stage, "verified");
+
 await db.update(tasks).set({
   activeDirectionToken: "new-direction",
   activeDirectionVersion: 1,

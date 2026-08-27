@@ -376,10 +376,11 @@ server.registerTool(
     inputSchema: {
       taskId: z.string().describe("被验任务 id（就地验证时即当前任务；历史独立审查任务填被审任务 id）"),
       stage: TASK_STAGE.describe(`阶段：${STAGE_ORDER.join(" | ")}`),
+      directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
     },
   },
-  async ({ taskId, stage }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/stage`, { stage })); }
+  async ({ taskId, stage, directionToken }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/stage`, { stage }, directionToken)); }
     catch (e) { return fail(e); }
   },
 );

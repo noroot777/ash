@@ -504,19 +504,26 @@ try {
   );
   console.log("✓ pause_task / ask_question 与 complete_task 一样绑定当前回合 token");
 
-  const reportStage = (token?: string) => api.request("/tasks/token/stage", {
+  const reportStage = (token?: string, direction?: string) => api.request("/tasks/token/stage", {
     method: "POST",
     headers: {
       "content-type": "application/json",
       ...(token ? { "x-ash-turn-token": token } : {}),
+      ...(direction ? { "x-ash-direction-token": direction } : {}),
     },
     body: JSON.stringify({ stage: "implemented" }),
   });
   for (const token of ["old-token", undefined]) {
-    assert.equal((await reportStage(token)).status, 409, "旧 token 或缺 token 的 report_stage 必须被拒绝");
+    assert.equal((await reportStage(token, "new-direction")).status, 409,
+      "旧 token 或缺 token 的 report_stage 必须被拒绝");
   }
+  assert.equal((await reportStage("new-token", "old-direction")).status, 409,
+    "旧方向的 report_stage 必须被拒绝");
+  assert.equal((await reportStage("new-token")).status, 409,
+    "缺少方向身份的 report_stage 必须被拒绝");
   assert.equal((await db.select().from(tasks).where(eq(tasks.id, "token"))).at(0)!.stage, null);
-  assert.equal((await reportStage("new-token")).status, 200, "当前回合 report_stage 应继续可用");
+  assert.equal((await reportStage("new-token", "new-direction")).status, 200,
+    "当前方向 report_stage 应继续可用");
   assert.equal((await db.select().from(tasks).where(eq(tasks.id, "token"))).at(0)!.stage, "implemented");
   await db.update(tasks).set({ stage: null }).where(eq(tasks.id, "token"));
 

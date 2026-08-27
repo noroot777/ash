@@ -30,7 +30,7 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
     `必须真实运行与风险相称的检查。\n\n${BROWSER_VERIFICATION_POLICY}` +
     `一旦用了 playwright，结束前清掉工作区产物；所有验证临时服务和浏览器进程都必须停掉。\n\n` +
     `证据必须落盘：报告写到 ${freeReviewReportPath(task.id, run.id, round)}；截图如有必要放在同一目录。证据不要 git add/commit。\n\n` +
-    `结束前调用 report_stage(taskId="${task.id}", stage="verified"|"verify_failed") 给出结论。` +
+    `结束前调用 report_stage(taskId="${task.id}", stage="verified"|"verify_failed", directionToken="<最新【当前方向身份】token>") 给出结论。` +
     `这是旁路审查回合，不要调用 complete_task，也不要调用 accept_task。`;
 }
 

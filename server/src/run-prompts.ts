@@ -43,7 +43,7 @@ export const ACCEPTANCE_REMINDER = (taskId: string, sharedTeamWorker: boolean, v
     ? "自由工作流:完成实现后只调用 complete_task；不要调用 report_stage 或 accept_task。派审和预览由用户按需触发，任务完成后由用户从统一验收页验收。"
   : sharedTeamWorker
     ? "验收辅路:本共享执行者不适用 accept_task；合并与验收由团队级处理。"
-    : `验收辅路:准备交给人工验收前可调用 report_stage(taskId="${taskId}", stage="awaiting_acceptance")；` +
+    : `验收辅路:准备交给人工验收前可调用 report_stage(taskId="${taskId}", stage="awaiting_acceptance", directionToken="<最新【当前方向身份】token>")；` +
       `只有用户明确表示「验收通过/可以合并」时，调用 accept_task(taskId="${taskId}")，不要自行运行 git merge、worktree remove 或 branch -d。`;
 export const COMPLETION_PROTOCOL = (taskId: string, sharedTeamWorker: boolean, reviewTask: boolean, free = false) =>
   !STRICT_DONE_PROTOCOL ? "" :
@@ -54,7 +54,7 @@ export const COMPLETION_REMINDER = (taskId: string, sharedTeamWorker: boolean, r
 
 export const DIRECTION_PROTOCOL = (token: string) =>
   !STRICT_DONE_PROTOCOL ? "" :
-    `\n\n【当前方向身份】本方向调用 complete_task、pause_task 或 ask_question 时，必须在工具参数 directionToken 中原样传入 "${token}"，不得省略。上下文里若有更早的方向身份一律作废；收到“方向身份已过期”时，用本段 token 立即重试。`;
+    `\n\n【当前方向身份】本方向调用 report_stage、complete_task、pause_task 或 ask_question 时，必须在工具参数 directionToken 中原样传入 "${token}"，不得省略。上下文里若有更早的方向身份一律作废；收到“方向身份已过期”时，用本段 token 立即重试。`;
 
 // 续聊(follow-up)回合的尾巴:任务早就到终态了,这一轮是「完成之后的对话」,
 // 不该拿严格完成协议吓唬 agent(不确认就 failed)—— 这一轮不确认,任务状态原样不动。

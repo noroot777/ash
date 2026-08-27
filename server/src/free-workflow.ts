@@ -90,7 +90,7 @@ export async function freeReviewReminder(taskId: string): Promise<string> {
   if (!run) return "";
   return `自由工作流审查提醒：你正在执行第 ${run.currentRound} 轮${run.checkMode === "logic" ? "逻辑" : "语法"}审查。` +
     BROWSER_VERIFICATION_REMINDER +
-    `报告必须写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)}；结束前调用 report_stage(verified|verify_failed)，` +
+    `报告必须写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)}；结束前调用 report_stage(verified|verify_failed) 并传最新【当前方向身份】directionToken，` +
     `不要调用 complete_task 或 accept_task。`;
 }
 

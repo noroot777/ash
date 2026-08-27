@@ -12,7 +12,7 @@ import { now } from "./util.js";
 export async function setTaskStage(
   taskId: string,
   stage: TaskStage,
-  currentTurn?: { token: string | null },
+  currentTurn?: { token: string | null; directionToken: string | null },
 ): Promise<{ updatedAt: string; timelineRecorded: boolean } | null> {
   const updatedAt = now();
   const where = currentTurn
@@ -22,6 +22,9 @@ export async function setTaskStage(
         currentTurn.token === null
           ? isNull(tasks.activeTurnToken)
           : eq(tasks.activeTurnToken, currentTurn.token),
+        currentTurn.directionToken === null
+          ? isNull(tasks.activeDirectionToken)
+          : eq(tasks.activeDirectionToken, currentTurn.directionToken),
       )
     : eq(tasks.id, taskId);
   const updated = await db.update(tasks).set({ stage, updatedAt }).where(where).returning({ id: tasks.id });
@@ -182,11 +185,19 @@ export function mountTaskStageRoutes(api: Hono): void {
     const handedOff = handoffBlockReason(task.handoff);
     if (handedOff) return c.json({ error: handedOff, handoff: true }, 409);
     const stageToken = c.req.header("x-ash-turn-token");
-    if (task.status === "running" && task.activeTurnToken && stageToken !== task.activeTurnToken) {
+    if (task.activeTurnToken && stageToken !== task.activeTurnToken) {
       return c.json({
         error: stageToken
           ? "验收阶段来自已结束的回合，已拒绝写入当前会话"
           : "MCP 未携带当前回合身份（执行器可能过滤了 ASH_TURN_TOKEN），验收阶段已拒绝写入",
+      }, 409);
+    }
+    const stageDirection = c.req.header("x-ash-direction-token");
+    if (task.activeDirectionToken && stageDirection !== task.activeDirectionToken) {
+      return c.json({
+        error: stageDirection
+          ? "验收阶段的方向身份已过期；请从最新用户消息的【当前方向身份】复制 directionToken 后重试 report_stage"
+          : "MCP 未携带当前方向身份（请传当前消息附带的 directionToken），验收阶段已拒绝写入",
       }, 409);
     }
 
@@ -218,7 +229,9 @@ export function mountTaskStageRoutes(api: Hono): void {
     const result = await setTaskStage(
       taskId,
       body.stage,
-      task.status === "running" ? { token: task.activeTurnToken } : undefined,
+      task.activeTurnToken || task.activeDirectionToken
+        ? { token: task.activeTurnToken, directionToken: task.activeDirectionToken }
+        : undefined,
     );
     if (!result) return c.json({ error: "当前回合已经结束或已被引导，验收阶段未写入" }, 409);
     const { updatedAt, timelineRecorded } = result;
