@@ -16,10 +16,12 @@ import { findWorkflow } from "./workflows.js";
 import { ensureProjectDir } from "./project-dir.js";
 import { deleteProjectGitCredential } from "./git-credentials.js";
 import { actorOf, authErrorResponse, ownerIdOf } from "./auth/context.js";
+import { ownedScope } from "./auth/owned.js";
 import { projectPathRejection } from "./auth/path-scope.js";
 import {
   deleteProjectMembers,
   projectOfTask,
+  projectRoleOf,
   requireProjectAccess,
   requireProjectAdmin,
   seedProjectOwner,
@@ -116,6 +118,17 @@ export function mountProjectRoutes(api: Hono): void {
     const orphans = all.filter((p) => !repoKey(p.repoPath) && p.name === name);
     if (orphans.length > 1) return c.json({ error: "有多个同名且未设路径的项目，请在界面里设置路径或改用 projectId", name }, 409);
     if (orphans.length === 1) {
+      // 回填路径**就是改项目路径**,而改路径是项目设置(§六:只给项目管理员或实例管理员)。
+      // resourceGate 帮不上忙 —— resolve 是集合端点,URL 上没有 project id 可查,所以这一句
+      // 得路由自己补:否则普通成员按一次「按路径找回」就能把共享项目的运行目录挪进自己的
+      // 目录,之后所有任务的 cwd / worktree / git 状态全跟着走(第 5 轮审查 P1)。
+      // 自用模式与实例管理员下 projectRoleOf 恒为 "admin",这条路原样不变。
+      if ((await projectRoleOf(actor, orphans[0].id)) !== "admin") {
+        return c.json({
+          error: "有一个同名项目还没设路径,给它补上路径属于项目设置,只有项目管理员能做",
+          projectId: orphans[0].id,
+        }, 403);
+      }
       await db.update(projects).set({ repoPath }).where(eq(projects.id, orphans[0].id));
       const adopted = (await db.select().from(projects).where(eq(projects.id, orphans[0].id))).at(0)!;
       return c.json(toProject(adopted), 200);
@@ -166,7 +179,12 @@ export function mountProjectRoutes(api: Hono): void {
         return c.json({ error: "workflowId 必须是字符串或 null" }, 400);
       }
       const wid = typeof b.workflowId === "string" ? b.workflowId.trim() : "";
-      if (wid && !(await findWorkflow(wid))) return c.json({ error: "起手式不存在" }, 400);
+      // 起手式是**个人面**资源(§八:逐人隔离,实例管理员也看不见别人的)。所以这里必须按
+      // 调用者自己的 scope 查 —— 不传 scope 的话 `owner === null` 表示不设限,于是一个
+      // 自己根本读不出来的 id 也能被写进共享项目行:该 workflow 的主人之后在这个项目里建
+      // 任务,用的就是别人替他选的那条私有起手式,而这个字段还顺带成了存在性探测面
+      // (第 5 轮审查 P2)。自用模式下 ownedScope 是 null,行为与本功能上线前一致。
+      if (wid && !(await findWorkflow(wid, await ownedScope(actor)))) return c.json({ error: "起手式不存在" }, 400);
       patch.workflowId = wid || null;
     }
     if (Object.keys(patch).length) await db.update(projects).set(patch).where(eq(projects.id, pid));

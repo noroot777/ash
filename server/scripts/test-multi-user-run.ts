@@ -25,6 +25,9 @@
 //   ⑦ 项目级的残留清理入口(`/projects/:id/workspaces/discard`)拿的也是**请求体里的
 //      taskId**,而且它真的执行 `worktree remove --force` + `branch -D`:既要查归属,
 //      也要复用任务运行态保护,否则 agent 脚下的目录能被别人当场抽走。
+//   ⑧ 项目设置(改路径 / 默认起手式)只给项目管理员,而且写进去的 id 必须是**自己看得见
+//      的**:`/projects/resolve` 的「同名孤儿项目回填路径」是改路径的一条集合端点绕行路,
+//      项目默认起手式则不能是别人的私有起手式(个人面资源,§八)。
 //
 // 跑法(不设 ASH_DB 时自己开一个临时库):
 //   npm -w server run test:multi-user-run
@@ -464,6 +467,61 @@ const expectBob = (env: Record<string, string | null>, where: string) => {
   assert.equal(swept.body.worktreeRemoved, true, JSON.stringify(swept.body));
   assert.equal(existsSync(ghostWs.path), false);
   assert.equal(branchAlive(ghostBranch), false);
+}
+
+// ── ⑧ 项目设置的两个绕行路:resolve 回填路径、项目默认起手式 ────────────────
+{
+  const { workflows } = await import("../src/db/schema.js");
+  // 普通成员的路径必须落在自己的目录里(§七),所以先把它建出来 —— realpath 钳制要求
+  // 父目录真的在磁盘上。
+  const bobHome = join(root, "bob");
+  const bobPath = join(bobHome, "抢来的仓库");
+  mkdirSync(bobPath, { recursive: true });
+
+  // P1:同名且未设路径的项目会被 resolve「认领」并回填 repoPath —— 那就是改项目路径,
+  // 只能给项目管理员。bob 只是成员。
+  await db.insert(projects).values({ id: "p-orphan-a", name: "孤儿甲", repoPath: "", ownerUserId: alice.id, createdAt: ts, updatedAt: ts });
+  await visibility.addProjectMember({ projectId: "p-orphan-a", userId: bob.id, role: "member", addedBy: alice.id });
+  // 对照组:直接改路径一直是挡着的,证明漏的只是 resolve 这条集合端点。
+  const direct = await patch("/api/projects/p-orphan-a", bobKey, { repoPath: bobPath });
+  assert.equal(direct.status, 403, `成员直接改路径本来就该 403:${JSON.stringify(direct.body)}`);
+  const adopted = await post("/api/projects/resolve", bobKey, { name: "孤儿甲", repoPath: bobPath });
+  assert.equal(adopted.status, 403, `成员不该借 resolve 把项目目录挪走:${JSON.stringify(adopted.body)}`);
+  const orphanRow = (await db.select({ p: projects.repoPath }).from(projects).where(eq(projects.id, "p-orphan-a"))).at(0);
+  assert.equal(orphanRow?.p, "", "被拒之后路径一个字都不该改");
+
+  // 正向对照:项目管理员照常认领得了 —— 别把正常路一起堵了。
+  await db.insert(projects).values({ id: "p-orphan-b", name: "孤儿乙", repoPath: "", ownerUserId: alice.id, createdAt: ts, updatedAt: ts });
+  await visibility.addProjectMember({ projectId: "p-orphan-b", userId: bob.id, role: "admin", addedBy: alice.id });
+  const okAdopt = await post("/api/projects/resolve", bobKey, { name: "孤儿乙", repoPath: bobPath });
+  assert.equal(okAdopt.status, 200, JSON.stringify(okAdopt.body));
+  const adoptedRow = (await db.select({ p: projects.repoPath }).from(projects).where(eq(projects.id, "p-orphan-b"))).at(0);
+  assert.equal(adoptedRow?.p, bobPath, "项目管理员认领后路径要真的落库");
+
+  // P2:起手式是个人面资源。alice 的私有起手式 bob 读都读不到,更不该能把它写进项目行。
+  const aliceWf = id();
+  await db.insert(workflows).values({
+    id: aliceWf, builtinKey: null, name: "alice 的私有起手式", description: "",
+    def: JSON.stringify({ steps: [] }), disabled: false, ownerUserId: alice.id, createdAt: ts, updatedAt: ts,
+  });
+  // bob 得先是某个项目的管理员,否则 PATCH 会先被 requireProjectAdmin 挡下,证不到起手式那一层。
+  await db.insert(projects).values({ id: "p-bob", name: "bob 自己的项目", repoPath: bobPath, ownerUserId: bob.id, createdAt: ts, updatedAt: ts });
+  await visibility.addProjectMember({ projectId: "p-bob", userId: bob.id, role: "admin", addedBy: bob.id });
+  const stolen = await patch("/api/projects/p-bob", bobKey, { workflowId: aliceWf });
+  assert.equal(stolen.status, 400, `别人的私有起手式不该写得进项目行:${JSON.stringify(stolen.body)}`);
+  const wfRow = (await db.select({ w: projects.workflowId }).from(projects).where(eq(projects.id, "p-bob"))).at(0);
+  assert.equal(wfRow?.w, null, "被拒之后项目默认起手式不该被写上");
+
+  // 正向对照:自己的起手式照常设得上;自带那几条(不属于任何人)也照常。
+  const bobWf = id();
+  await db.insert(workflows).values({
+    id: bobWf, builtinKey: null, name: "bob 自己的起手式", description: "",
+    def: JSON.stringify({ steps: [] }), disabled: false, ownerUserId: bob.id, createdAt: ts, updatedAt: ts,
+  });
+  const mineOk = await patch("/api/projects/p-bob", bobKey, { workflowId: bobWf });
+  assert.equal(mineOk.status, 200, JSON.stringify(mineOk.body));
+  const mineRow = (await db.select({ w: projects.workflowId }).from(projects).where(eq(projects.id, "p-bob"))).at(0);
+  assert.equal(mineRow?.w, bobWf);
 }
 
 await releaseTmpDb();
