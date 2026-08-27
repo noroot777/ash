@@ -23,6 +23,7 @@ const message = (id, text, attachments) => ({
   executorId: null,
   model: null,
   reasoningEffort: null,
+  sessionRole: null,
   mode: "queued",
   sendAt: id === "msg-fail" ? "2026-08-25T10:00:00.000Z" : "2026-08-25T10:00:01.000Z",
   status: "pending",

@@ -24,6 +24,7 @@ const row = (id: string, text: string, sendAt: string): ScheduledMessage => ({
   executorId: null,
   model: null,
   reasoningEffort: null,
+  sessionRole: null,
   mode: "queued",
   sendAt,
   status: "pending",
@@ -61,6 +62,37 @@ assert.ok(
 // 托盘上那颗按钮是**撤回**不是丢弃:标签既要点名是哪条,也要自己说清内容会回到输入框。
 assert.match(html, /aria-label="撤回排队中的待发送消息“第一条”，内容放回输入框"/, "撤回按钮要点名消息并写明内容会放回输入框");
 assert.equal((html.match(/scheduled-message-withdraw/g) ?? []).length, 2, "每条待发送消息各有一个撤回按钮");
+// 带会话角色的消息（审查链排给 reviewer 会话的答复）不归这个对话框管：撤回回来的正文
+// 再发一次只会走普通 /reply，角色就丢了。所以两个入口都不给它，只如实标出来。
+const managedHtml = renderToStaticMarkup(
+  <ScheduledMessageTray
+    messages={[
+      { ...row("reviewer", "审查答复", "2026-08-25T10:00:00.000Z"), sessionRole: "reviewer" },
+      row("mine", "我写的", "2026-08-25T10:00:01.000Z"),
+    ]}
+    loading={false}
+    error={null}
+    cancelingIds={new Set()}
+    steeringIds={new Set()}
+    onSteer={() => undefined}
+    onWithdraw={() => undefined}
+  />,
+);
+const managedStart = managedHtml.indexOf('<div class="scheduled-message-row">');
+const mineStart = managedHtml.indexOf('<div class="scheduled-message-row">', managedStart + 1);
+assert.ok(managedStart >= 0 && mineStart > managedStart, "两条消息应各占一行");
+const managedRow = managedHtml.slice(managedStart, mineStart);
+assert.match(managedRow, /审查答复/, "取到的应当是审查会话那一行");
+assert.doesNotMatch(managedRow, /scheduled-message-withdraw/, "审查会话的答复不得挂撤回按钮：这个输入框重发不回它的会话");
+assert.doesNotMatch(managedRow, /scheduled-message-guide/, "审查会话的答复也不得被选作托盘引导目标");
+assert.match(managedRow, /scheduled-message-managed[^>]*>审查会话的答复 · 由审查链投递</, "要如实标出这条由谁投递");
+assert.equal((managedHtml.match(/scheduled-message-withdraw/g) ?? []).length, 1, "用户自己那条排队消息仍可撤回");
+assert.match(
+  managedHtml.slice(mineStart),
+  /scheduled-message-guide/,
+  "带角色的消息被跳过后，引导动作要落到最早的那条用户消息上",
+);
+
 const actionError = { messageId: "first", message: "消息继续排队" };
 assert.deepEqual(
   retainScheduledMessageActionError(actionError, [row("first", "第一条", "2026-08-25T10:00:00.000Z")]),
@@ -163,4 +195,11 @@ const mobileDiscard = slice("const discard =", "return (");
 assert.match(mobileDiscard, /Alert\.alert\([\s\S]*style: "destructive"[\s\S]*cancelPending\(message\)/, "丢弃必须经明确确认才调用取消端点");
 assert.match(mobileDiscard, /不保留/, "丢弃的措辞必须写明内容不保留");
 assert.match(mobileSource, /accessibilityLabel="丢弃这条待发送消息，内容不保留"/, "托盘上要有独立的丢弃入口");
-console.log("✓ 撤回回填、发送减法、附件丢失防线、引导按钮位置、错误失效与窄托盘降级均受回归保护");
+// 手机端同样不许把审查会话的答复交给这两颗按钮:撤回回不去那个会话,丢弃直接卡住审查链。
+const mobileRow = mobileSource.slice(mobileSource.indexOf("m.sessionRole ?"), mobileSource.indexOf("accessibilityLabel=\"丢弃"));
+assert.match(mobileRow, /m\.sessionRole \? \([\s\S]*审查会话 · 自动投递[\s\S]*\) : \(/, "带角色的消息只标出来");
+assert.ok(
+  mobileRow.indexOf("审查会话 · 自动投递") < mobileRow.indexOf("void withdraw(m)"),
+  "撤回与丢弃必须落在 sessionRole 为空的那个分支里",
+);
+console.log("✓ 撤回回填、发送减法、附件丢失防线、审查会话答复只读、引导按钮位置、错误失效与窄托盘降级均受回归保护");

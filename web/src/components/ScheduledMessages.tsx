@@ -163,7 +163,9 @@ export function ScheduledMessageTray({
 }) {
   if (!loading && !error && messages.length === 0) return null;
   const orderedMessages = bySendTime(messages);
-  const steerable = orderedMessages.find((message) => message.mode === "queued");
+  // 引导会话跟撤回一样只对用户自己那条排队消息开放：带会话角色的（审查链的 reviewer
+  // 答复）不归这个对话框管，把它推进当前会话同样是送错地方。
+  const steerable = orderedMessages.find((message) => message.mode === "queued" && !message.sessionRole);
   return (
     <div className="scheduled-message-tray" aria-label="待发送消息">
       {loading && messages.length === 0 && <small>正在加载待发送消息…</small>}
@@ -175,6 +177,10 @@ export function ScheduledMessageTray({
         // 排队消息没有「几点发」可言——它等的是任务空下来,所以那一格写它在等什么。
         const queued = message.mode === "queued";
         const when = queued ? "排队中" : formatInstant(message.sendAt);
+        // 带会话角色 = 这条不是用户在这个对话框里写的，是审查链排给 reviewer 会话的
+        // 答复。撤回承诺「放回输入框、改完再发一次」，可这个框再发只会走普通 /reply，
+        // 角色就丢了——答复进错会话，审查链等不到它。做不到就不提供入口，只如实标出来。
+        const managed = !!message.sessionRole;
         return (
           <div className="scheduled-message-row" key={message.id}>
             {queued ? <Queue size={12} aria-hidden="true" /> : <Clock size={12} aria-hidden="true" />}
@@ -199,18 +205,22 @@ export function ScheduledMessageTray({
                 <span>{steering ? "引导中" : "引导会话"}</span>
               </button>
             )}
-            <button
-              type="button"
-              className="scheduled-message-withdraw"
-              disabled={busy}
-              title={queued ? "撤回这条排队消息，内容放回输入框" : "撤回这条定时消息，内容放回输入框"}
-              aria-label={`撤回${when}的待发送消息“${message.text || "附件"}”，内容放回输入框`}
-              onClick={() => onWithdraw(message)}
-            >
-              {canceling
-                ? <SpinnerGap size={12} className="is-spinning" />
-                : <ArrowUUpLeft size={12} weight="bold" />}
-            </button>
+            {managed
+              ? <small className="scheduled-message-managed">审查会话的答复 · 由审查链投递</small>
+              : (
+                <button
+                  type="button"
+                  className="scheduled-message-withdraw"
+                  disabled={busy}
+                  title={queued ? "撤回这条排队消息，内容放回输入框" : "撤回这条定时消息，内容放回输入框"}
+                  aria-label={`撤回${when}的待发送消息“${message.text || "附件"}”，内容放回输入框`}
+                  onClick={() => onWithdraw(message)}
+                >
+                  {canceling
+                    ? <SpinnerGap size={12} className="is-spinning" />
+                    : <ArrowUUpLeft size={12} weight="bold" />}
+                </button>
+              )}
           </div>
         );
       })}

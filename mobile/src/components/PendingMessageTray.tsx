@@ -102,24 +102,33 @@ export function PendingMessageTray({
               <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.mono }}>{m.attachments.length}</Text>
             </View>
           )}
-          <Pressable
-            onPress={() => void withdraw(m)}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel={m.attachments.length
-              ? `撤回这条待发送消息；它带了 ${m.attachments.length} 个附件，需要到网页端撤回`
-              : "撤回这条待发送消息，内容放回输入框"}
-          >
-            <Ionicons name="arrow-undo-outline" size={15} color={theme.faint} />
-          </Pressable>
-          <Pressable
-            onPress={() => discard(m)}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel="丢弃这条待发送消息，内容不保留"
-          >
-            <Ionicons name="trash-outline" size={15} color={theme.faint} />
-          </Pressable>
+          {/* 带会话角色的消息（审查链排给 reviewer 会话的答复）不归这个输入框管：撤回
+              回来的正文再发一次只会走普通回复，角色就丢了；丢弃更是直接卡住审查链。
+              所以只标出来，两颗按钮都不给。 */}
+          {m.sessionRole ? (
+            <Text style={{ color: theme.faint, fontSize: 11 }}>审查会话 · 自动投递</Text>
+          ) : (
+            <>
+              <Pressable
+                onPress={() => void withdraw(m)}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel={m.attachments.length
+                  ? `撤回这条待发送消息；它带了 ${m.attachments.length} 个附件，需要到网页端撤回`
+                  : "撤回这条待发送消息，内容放回输入框"}
+              >
+                <Ionicons name="arrow-undo-outline" size={15} color={theme.faint} />
+              </Pressable>
+              <Pressable
+                onPress={() => discard(m)}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="丢弃这条待发送消息，内容不保留"
+              >
+                <Ionicons name="trash-outline" size={15} color={theme.faint} />
+              </Pressable>
+            </>
+          )}
         </View>
       ))}
     </>
