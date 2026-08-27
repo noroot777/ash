@@ -1,18 +1,18 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readSource } from "../../scripts/read-source.mjs";
 
-const machines = readFileSync(new URL("../src/workspace/HandoffMachines.tsx", import.meta.url), "utf8");
-const shell = readFileSync(new URL("../src/workspace/WorkspaceShell.tsx", import.meta.url), "utf8");
-const detail = readFileSync(new URL("../src/remote-task/RemoteTaskDetail.tsx", import.meta.url), "utf8");
-const rows = readFileSync(new URL("../src/workspace/TaskTreeRows.tsx", import.meta.url), "utf8");
-const handoff = readFileSync(new URL("../src/task-detail/HandoffDialog.tsx", import.meta.url), "utf8");
-const handoffViews = readFileSync(new URL("../src/task-detail/HandoffDialogViews.tsx", import.meta.url), "utf8");
-const returnView = readFileSync(new URL("../src/task-detail/HandoffReturnView.tsx", import.meta.url), "utf8");
-const taskDetail = readFileSync(new URL("../src/task-detail/TaskDetail.tsx", import.meta.url), "utf8");
-const replyRail = readFileSync(new URL("../src/task-detail/TaskReplyRail.tsx", import.meta.url), "utf8");
-const taskHeader = readFileSync(new URL("../src/task-detail/TaskHeader.tsx", import.meta.url), "utf8");
-const handoffSettings = readFileSync(new URL("../src/settings/HandoffSettings.tsx", import.meta.url), "utf8");
-const handoffAudit = readFileSync(new URL("../src/task-detail/HandoffAuditBanner.tsx", import.meta.url), "utf8");
+const machines = readSource(new URL("../src/workspace/HandoffMachines.tsx", import.meta.url));
+const shell = readSource(new URL("../src/workspace/WorkspaceShell.tsx", import.meta.url));
+const detail = readSource(new URL("../src/remote-task/RemoteTaskDetail.tsx", import.meta.url));
+const rows = readSource(new URL("../src/workspace/TaskTreeRows.tsx", import.meta.url));
+const handoff = readSource(new URL("../src/task-detail/HandoffDialog.tsx", import.meta.url));
+const handoffViews = readSource(new URL("../src/task-detail/HandoffDialogViews.tsx", import.meta.url));
+const returnView = readSource(new URL("../src/task-detail/HandoffReturnView.tsx", import.meta.url));
+const taskDetail = readSource(new URL("../src/task-detail/TaskDetail.tsx", import.meta.url));
+const replyRail = readSource(new URL("../src/task-detail/TaskReplyRail.tsx", import.meta.url));
+const taskHeader = readSource(new URL("../src/task-detail/TaskHeader.tsx", import.meta.url));
+const handoffSettings = readSource(new URL("../src/settings/HandoffSettings.tsx", import.meta.url));
+const handoffAudit = readSource(new URL("../src/task-detail/HandoffAuditBanner.tsx", import.meta.url));
 
 assert.doesNotMatch(machines, /target="_blank"/, "远程任务不应再打开新的远端浏览器标签");
 assert.match(machines, /onClick=\{\(\) => onRemoteTask\(task, target\)\}/, "远程任务行应交给工作区内联选择");

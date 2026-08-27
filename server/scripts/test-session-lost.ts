@@ -15,7 +15,8 @@
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { readSource } from "../../scripts/read-source.mjs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { parseSessionOutput } from "@ash/shared";
@@ -192,7 +193,7 @@ const walk = (d: string): string[] =>
     e.isDirectory() ? walk(join(d, e.name)) : e.name.endsWith(".ts") ? [join(d, e.name)] : [],
   );
 const rel = (p: string) => relative(SRC, p).split(sep).join("/");
-const chains = walk(SRC).filter((f) => RESUME_CALL.test(readFileSync(f, "utf8"))).map(rel).sort();
+const chains = walk(SRC).filter((f) => RESUME_CALL.test(readSource(f))).map(rel).sort();
 assert.deepEqual(
   chains,
   Object.keys(CHAIN_OWNER).sort(),
@@ -200,7 +201,7 @@ assert.deepEqual(
     + "mergeSessionResumeFault + LOST_SESSION_PATCH,再把它登记进 CHAIN_OWNER",
 );
 for (const [chain, owner] of Object.entries(CHAIN_OWNER)) {
-  const code = readFileSync(join(SRC, owner), "utf8");
+  const code = readSource(join(SRC, owner));
   assert.ok(code.includes("LOST_SESSION_PATCH"), `${chain} 的结算方 ${owner} 没在清失效会话`);
   // 识别 poisoned 可以直接调合并规则,也可以走常驻那台状态机(它自己就架在同一条规则上,
   // 见 team/rotation-state.ts 与本文件 ⑦)—— 但总得有一个,不能一个都没有。
@@ -214,7 +215,7 @@ for (const [chain, owner] of Object.entries(CHAIN_OWNER)) {
 ok("每条续跑链都有人负责清失效 id");
 
 for (const chain of ["orchestrator.ts", "team/session.ts", "duet/turn.ts"]) {
-  const code = readFileSync(join(SRC, chain), "utf8");
+  const code = readSource(join(SRC, chain));
   assert.ok(code.includes("affectedCodexResumeVersion"), `${chain} 没在起跑前识别受影响的 Codex 会话`);
   assert.match(
     code,
@@ -224,7 +225,7 @@ for (const chain of ["orchestrator.ts", "team/session.ts", "duet/turn.ts"]) {
 }
 ok("single / team / duet 都在持久说明后替换受影响的 Codex 会话");
 
-const teamSessionCode = readFileSync(join(SRC, "team/session-consumer.ts"), "utf8");
+const teamSessionCode = readSource(join(SRC, "team/session-consumer.ts"));
 assert.match(
   teamSessionCode,
   /async function closeLead[\s\S]*?updateOwnSession\([\s\S]*?if \(!persisted && dropSession\) dropNote = SESSION_DROP_PERSISTENCE_FAILED_NOTE/,
@@ -262,7 +263,7 @@ assert.equal(
 );
 
 // 落盘顺序由代码保证:两条链都得先 writeTurnEnd,再补旁注。
-const singleRunCode = readFileSync(join(SRC, "single-run.ts"), "utf8");
+const singleRunCode = readSource(join(SRC, "single-run.ts"));
 assert.match(
   singleRunCode,
   /writeTurnEnd\(out, endIso\);[^\n]*\n\s*flushSessionNotices\(\);/,
@@ -304,7 +305,7 @@ assert.match(
 // (test-session-notice.ts 从反面钉着同一条)。
 for (const [chain, owner] of [["single", "single-run.ts"], ["team", "team/session-consumer.ts"], ["duet", "duet/turn.ts"]]) {
   assert.match(
-    readFileSync(join(SRC, owner!), "utf8"),
+    readSource(join(SRC, owner!)),
     /isSessionScopeNotice/,
     `${chain} 没按 scope 分流会话轮换诊断,成功回合会被记成有异常`,
   );

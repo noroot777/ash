@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readSource } from "../../scripts/read-source.mjs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +19,7 @@ const oldOutput = process.env.ASH_FAKE_MCP_OUTPUT;
 
 try {
   assert.equal(ASH_MCP_SERVER_NAME, "ash", "安装器约定的规范 MCP 名必须是 ash");
-  const setupSource = readFileSync(fileURLToPath(new URL("../../scripts/setup.mjs", import.meta.url)), "utf8");
+  const setupSource = readSource(fileURLToPath(new URL("../../scripts/setup.mjs", import.meta.url)));
   assert.doesNotMatch(setupSource, /from\s+["'][^"']+\.ts["']/, "setup 必须兼容不能裸导入 TS 的 Node 22.16");
   assert.match(setupSource, /const ASH_MCP_SERVER_NAME = "ash"/, "安装器的规范名必须与运行时一致");
   writeFileSync(join(root, "config.toml"), `

@@ -6,7 +6,7 @@
 //   3) 换身份是 continuation 的断点 —— 否则验证回合会被当成「同一个人接着说」，
 //      连头像和执行器名都不重报，比完全不区分更糟
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readSource } from "../../scripts/read-source.mjs";
 import { buildConversationItems, conversationToMarkdown } from "../src/task-detail/conversationModel.ts";
 import { isVerifyNote } from "../src/task-detail/conversationNotes.ts";
 import { conversationFeedRows } from "../src/task-detail/conversationReviewLanes.ts";
@@ -445,7 +445,7 @@ const legacySession = {
 const legacy = buildConversationItems(
   [{
     session: legacySession,
-    output: readFileSync(new URL("./fixtures/legacy-verify-session.md", import.meta.url), "utf8"),
+    output: readSource(new URL("./fixtures/legacy-verify-session.md", import.meta.url)),
     trace: [],
   }],
   [legacySession],
@@ -649,7 +649,7 @@ const answerLegacySession = {
 const answerLegacy = buildConversationItems(
   [{
     session: answerLegacySession,
-    output: readFileSync(new URL("./fixtures/legacy-answer-verify-session.md", import.meta.url), "utf8"),
+    output: readSource(new URL("./fixtures/legacy-answer-verify-session.md", import.meta.url)),
     trace: [],
   }],
   [answerLegacySession],

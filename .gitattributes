@@ -1,0 +1,9 @@
+# 文本一律以 LF 入库、以 LF 检出。
+#
+# Windows 上 git 默认 core.autocrlf=true,会把工作区的每一行改成 CRLF。仓库里有一批
+# 「拿源码文本当断言对象」的回归测试,它们的跨行正则是按 LF 写的,遇到 CRLF 会失配 ——
+# 表现是同一份代码在 macOS 全绿,到 Windows 上 `npm -w web run build` 断在测试那一步。
+# `.githooks/*` 由 Git for Windows 自带的 bash 执行,同样需要 LF。
+#
+# 这条只影响之后检出的文件;已经是 CRLF 的旧工作区靠 scripts/read-source.mjs 归一。
+* text=auto eol=lf

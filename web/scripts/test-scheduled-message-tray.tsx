@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readSource } from "../../scripts/read-source.mjs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ScheduledMessage } from "@ash/shared";
@@ -104,13 +104,13 @@ assert.equal(
   null,
   "对应消息离队后必须清掉陈旧动作错误",
 );
-const source = readFileSync(new URL("../src/components/ScheduledMessages.tsx", import.meta.url), "utf8");
+const source = readSource(new URL("../src/components/ScheduledMessages.tsx", import.meta.url));
 const reloadSource = source.slice(source.indexOf("const reload"), source.indexOf("useEffect", source.indexOf("const reload")));
 assert.match(source, /const \[actionError, setActionError\]/, "动作错误必须与加载错误分开保存");
 assert.match(reloadSource, /retainScheduledMessageActionError/, "reload 必须按消息是否仍在队列决定错误存活");
-const css = readFileSync(new URL("../src/styles/reply.css", import.meta.url), "utf8");
+const css = readSource(new URL("../src/styles/reply.css", import.meta.url));
 assert.match(css, /@container \(max-width: 520px\)[\s\S]*scheduled-message-guide[\s\S]*display: none/, "窄托盘必须把引导按钮降级成纯图标");
-const replySource = readFileSync(new URL("../src/task-detail/ReplyBox.tsx", import.meta.url), "utf8");
+const replySource = readSource(new URL("../src/task-detail/ReplyBox.tsx", import.meta.url));
 assert.match(
   replySource,
   /command \? "任务进行中；发送即排队，队尾可点“引导会话”/,
@@ -119,7 +119,7 @@ assert.match(
 // 撤回的回填只能发生在取消成功之后：失败了消息还挂在队列上，再往输入框塞一份就成了两条。
 for (const [file, source] of [
   ["ReplyBox.tsx", replySource],
-  ["TeamView.tsx", readFileSync(new URL("../src/team/TeamView.tsx", import.meta.url), "utf8")],
+  ["TeamView.tsx", readSource(new URL("../src/team/TeamView.tsx", import.meta.url))],
 ] as const) {
   const withdraw = source.slice(source.indexOf("const withdraw = async"));
   assert.match(withdraw, /if \(!await scheduled\.cancel\(message\.id\)\) return;/, `${file} 撤回必须先取消成功再回填`);
@@ -174,7 +174,7 @@ assert.deepEqual(
 );
 // 手机端那一屏没有附件通道：撤回承诺「内容原样回到输入框」，对带附件的消息做不到，
 // 就一次都不做——只提示去网页端，绝不能从这个入口发出取消请求。真要扔掉走独立的丢弃。
-const mobileSource = readFileSync(new URL("../../mobile/src/components/PendingMessageTray.tsx", import.meta.url), "utf8");
+const mobileSource = readSource(new URL("../../mobile/src/components/PendingMessageTray.tsx", import.meta.url));
 const slice = (from: string, to: string) => {
   const start = mobileSource.indexOf(from);
   assert.notEqual(start, -1, `手机端托盘应存在 ${from}`);
