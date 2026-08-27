@@ -194,9 +194,9 @@ function ScopedTaskTree({
       </>
     );
   };
-  // 项目分组头。**要求就是别显眼**：它给列表分段，不是一级导航，所以没有底色没有边框，
-  // 字比分节标题还小一号，一颗 6px 的项目色圆点代替带首字母的方块。折叠状态跟分节共用
-  // 同一份 localStorage（键加了 `project:` 前缀），刷新后还记得你收起过谁。
+  // 项目分组头。**要求就是别显眼**：它给列表分段，不是一级导航，所以没有底色没有边框、
+  // 没有项目色点，字比分节标题还小一号。折叠状态跟分节共用同一份 localStorage
+  //（键加了 `project:` 前缀），刷新后还记得你收起过谁。
   const renderProjectGroup = (group: RenderGroup) => {
     const name = group.project?.name ?? "未知项目";
     const groupCollapsed = collapsed.has(group.key);
@@ -210,7 +210,6 @@ function ScopedTaskTree({
           onClick={() => toggleCollapsed(group.key)}
         >
           <CaretRight size={9} weight="bold" aria-hidden="true" />
-          {group.project && <ProjectAvatar project={group.project} size="dot" />}
           <b>{name}</b>
           <em>{group.tasks.length}</em>
         </button>

@@ -58,15 +58,6 @@
   font-weight: 750;
 }
 
-/* 一颗项目色的小圆点，不写首字母。给「说一句就够、不能抢戏」的地方用（任务模式里的
-   项目分组头）—— 那种一行高的弱化标题上，带字母的方块太重。 */
-.workspace-project-avatar--dot {
-  width: 6px;
-  height: 6px;
-  flex-basis: 6px;
-  border-radius: 50%;
-}
-
 .workspace-project-avatar--small {
   width: 17px;
   height: 17px;
