@@ -112,15 +112,27 @@ assert.deepEqual(
   ["data/uploads/abcdefghijkl-shot.png", "/tmp/report.pdf"],
   "已经在草稿里的附件不得因撤回变成两份",
 );
-// 手机端那一屏没有附件通道:带附件的消息必须先问过用户才允许取消,否则撤回 = 附件永久丢失。
+// 手机端那一屏没有附件通道：撤回承诺「内容原样回到输入框」，对带附件的消息做不到，
+// 就一次都不做——只提示去网页端，绝不能从这个入口发出取消请求。真要扔掉走独立的丢弃。
 const mobileSource = readFileSync(new URL("../../mobile/src/app/task/[id].tsx", import.meta.url), "utf8");
-const mobileWithdraw = mobileSource.slice(
-  mobileSource.indexOf("const withdrawScheduled"),
-  mobileSource.indexOf("const meta =", mobileSource.indexOf("const withdrawScheduled")),
+const slice = (from: string, to: string) => {
+  const start = mobileSource.indexOf(from);
+  assert.notEqual(start, -1, `手机端应存在 ${from}`);
+  const end = mobileSource.indexOf(to, start);
+  assert.notEqual(end, -1, `${from} 之后应存在 ${to}`);
+  return mobileSource.slice(start, end);
+};
+const mobileWithdraw = slice("const withdrawScheduled", "const discardScheduled");
+const attachmentBranch = mobileWithdraw.slice(
+  mobileWithdraw.indexOf("if (message.attachments.length)"),
+  mobileWithdraw.indexOf("if (!await cancelPending(message)) return;"),
 );
-assert.match(mobileWithdraw, /if \(message\.attachments\.length\) \{[\s\S]*Alert\.alert\(/, "手机端撤回带附件的消息前必须先把后果问清楚");
-assert.ok(
-  mobileWithdraw.indexOf("Alert.alert(") < mobileWithdraw.indexOf("if (!await cancelPending(message)) return;"),
-  "手机端确认必须挡在取消端点前面",
-);
+assert.match(attachmentBranch, /Alert\.alert\(/, "带附件时必须先告诉用户去哪撤回");
+assert.doesNotMatch(attachmentBranch, /cancelPending/, "撤回入口不得对带附件的消息发出取消请求");
+assert.match(mobileWithdraw, /if \(!await cancelPending\(message\)\) return;[\s\S]*setInput\(/, "无附件的消息取消成功后才回填正文");
+// 丢弃是另一颗按钮、另一套措辞：明说不留内容，且必须经确认才真删。
+const mobileDiscard = slice("const discardScheduled", "const meta =");
+assert.match(mobileDiscard, /Alert\.alert\([\s\S]*style: "destructive"[\s\S]*cancelPending\(message\)/, "丢弃必须经明确确认才调用取消端点");
+assert.match(mobileDiscard, /不保留/, "丢弃的措辞必须写明内容不保留");
+assert.match(mobileSource, /accessibilityLabel="丢弃这条待发送消息，内容不保留"/, "托盘上要有独立的丢弃入口");
 console.log("✓ 撤回回填、附件丢失防线、引导按钮位置、错误失效与窄托盘降级均受回归保护");

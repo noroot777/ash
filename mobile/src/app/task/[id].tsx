@@ -321,12 +321,13 @@ export default function TaskDetail() {
   };
 
   // 真正调用取消端点：把这条消息从队列上取下来。成功返回 true，失败照实说并重拉列表
-  // （消息还挂在队列上，界面不能自己少一行）。
+  // （消息还挂在队列上，界面不能自己少一行）。撤回和丢弃都经它，区别只在取下来之后
+  // 做什么。
   const cancelPending = async (message: ScheduledMessage): Promise<boolean> => {
     try {
       await api.cancelScheduledMessage(message.id);
     } catch (e) {
-      Alert.alert("撤回失败", e instanceof Error ? e.message : String(e));
+      Alert.alert("操作失败", e instanceof Error ? e.message : String(e));
       loadPending();
       return false;
     }
@@ -338,24 +339,37 @@ export default function TaskDetail() {
   // 套语义，见 web/src/task-detail/withdrawDraft.ts）。取消成功才回填——失败了消息还在
   // 队列上，再往输入框塞一份就成了两条。
   //
-  // 手机端这一屏**没有附件通道**（输入框只发正文），所以带附件的消息撤回下来附件没有
-  // 落点，一按就是不可逆的内容丢失。不静默丢也不干脆禁掉：把后果摆给用户，让他自己选
-  // 是去网页端撤回（那边能连图片、文件一起放回），还是明知附件不保留仍然把它取消掉。
+  // 手机端这一屏**没有附件通道**（输入框只发正文），带附件的消息撤回下来附件没有落点。
+  // 撤回这个词承诺的是「内容原样回到输入框」，做不到就一次都不做：只提示去网页端撤回，
+  // **不发 DELETE**——按下去消息一个字都没少，用户随时还能在网页端把它整条捞回来。真想
+  // 直接扔掉的，走旁边那颗语义明确的丢弃按钮。
   const withdrawScheduled = async (message: ScheduledMessage) => {
     if (message.attachments.length) {
       Alert.alert(
-        "这条带了附件",
-        `共 ${message.attachments.length} 个附件。手机端还不能把附件放回输入框——在这里撤回，附件就找不回来了。想连附件一起改，请到网页端撤回。`,
-        [
-          { text: "去网页端撤回", style: "cancel" },
-          { text: "仍然取消（附件不保留）", style: "destructive", onPress: () => void cancelPending(message) },
-        ],
+        "这条得去网页端撤回",
+        `共 ${message.attachments.length} 个附件。手机端的输入框只放得下正文，附件没有落点，所以这里不做撤回——消息仍在队列上。到网页端撤回，正文和附件会一起回到对话框；只想扔掉它就点旁边的丢弃。`,
+        [{ text: "知道了" }],
       );
       return;
     }
     if (!await cancelPending(message)) return;
     const restored = message.text.trim();
     if (restored) setInput((current) => (current.trim() ? `${restored}\n\n${current}` : restored));
+  };
+
+  // 丢弃：明说了不留内容的那条路。它跟撤回是两回事，所以是两颗按钮、两套措辞——把
+  // 「什么都不留」藏在承诺「放回输入框」的入口下面，等于骗用户按下删除键。
+  const discardScheduled = (message: ScheduledMessage) => {
+    Alert.alert(
+      "丢弃这条待发送消息？",
+      message.attachments.length
+        ? `正文和 ${message.attachments.length} 个附件都不保留，也不会放回输入框。`
+        : "正文不保留，也不会放回输入框。",
+      [
+        { text: "取消", style: "cancel" },
+        { text: "丢弃", style: "destructive", onPress: () => void cancelPending(message) },
+      ],
+    );
   };
 
   const meta = STATUS_META[status];
@@ -599,10 +613,19 @@ export default function TaskDetail() {
               hitSlop={8}
               accessibilityRole="button"
               accessibilityLabel={m.attachments.length
-                ? `撤回这条待发送消息；它带了 ${m.attachments.length} 个附件，手机端放不回输入框`
+                ? `撤回这条待发送消息；它带了 ${m.attachments.length} 个附件，需要到网页端撤回`
                 : "撤回这条待发送消息，内容放回输入框"}
             >
               <Ionicons name="arrow-undo-outline" size={15} color={theme.faint} />
+            </Pressable>
+            {/* 丢弃跟撤回分成两颗:一颗承诺内容回到输入框,一颗明说什么都不留。 */}
+            <Pressable
+              onPress={() => discardScheduled(m)}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="丢弃这条待发送消息，内容不保留"
+            >
+              <Ionicons name="trash-outline" size={15} color={theme.faint} />
             </Pressable>
           </View>
         ))}
