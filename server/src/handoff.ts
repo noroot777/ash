@@ -25,6 +25,7 @@ import { projects, queueItems, scheduledMessages, schedules, sessions, tasks } f
 import { claimTurn, isTurnClaimed, releaseTurn, stopTask } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { expandHome, worktreePathFor } from "./git.js";
+import { discardMigratedWorkspace } from "./workspace-cleanup.js";
 import { RUNS_DIR } from "./paths.js";
 import { sessionTranscriptPath, TURN_SENTINEL } from "./transcript.js";
 import { publishTaskUpdated } from "./task-store.js";
@@ -497,9 +498,15 @@ export async function exportHandoff(
         .where(eq(tasks.id, taskId));
       await publishTaskUpdated(taskId);
 
-      let result: { ok: boolean; taskId: string; autoResume?: boolean; idempotent?: boolean; notes?: string[]; error?: string };
+      type ImportReply = {
+        ok: boolean; taskId: string; autoResume?: boolean; idempotent?: boolean;
+        // 对端确认「代码确实落到本机了」。老版本对端不报 —— 源机据此保守地什么都不删。
+        git?: "bundle" | "none";
+        notes?: string[]; error?: string;
+      };
+      let result: ImportReply;
       try {
-        result = await fetchPeer<{ ok: boolean; taskId: string; autoResume?: boolean; idempotent?: boolean; notes?: string[]; error?: string }>(
+        result = await fetchPeer<ImportReply>(
           `${targetUrl}/api/handoff/${taskScopedReturn ? "return/import" : "import"}`,
           {
             method: "POST",
@@ -578,6 +585,22 @@ export async function exportHandoff(
       }
       if (pendingMsgs.length > msgsLeft) notes.push(`迁移待发送消息 ${pendingMsgs.length - msgsLeft} 条,本机原件已取消并留档在时间线`);
       if (scheduleRow) notes.push("定时计划已随任务迁移,今后由对端触发;本机这份在接力标记存在期间不会触发");
+
+      // 「任务在哪儿,分支之类的才在哪儿」(用户 2026-08-27):代码确认落到对端之后,本机
+      // 这份 worktree 和分支就是死物,主动收掉;移回时同一段代码对称地收掉持有机那份。
+      // 两道闸都过了才真删:①对端明确应答 git:"bundle";②git worktree remove 不带
+      // --force,目录里还剩没带走的东西它自己会拒。细节见 workspace-cleanup.ts 末尾。
+      if (gitState) {
+        if (result.git === "bundle") {
+          const cleaned = await discardMigratedWorkspace(project.repoPath, taskId)
+            .catch((e) => ({ removed: false, note: `本机 worktree/分支清理失败(${e instanceof Error ? e.message : String(e)}),已原样保留,可手动删除` }));
+          if (cleaned.note) notes.push(cleaned.note);
+        } else if (result.git === "none") {
+          notes.push("对端没有按 worktree 任务导入,代码没有在对端落地;本机 worktree 和分支照原样保留");
+        } else {
+          notes.push("对端是旧版 ash,没报代码落地结果;本机 worktree 和分支照原样保留,确认对端无误后可手动删除");
+        }
+      }
       await publishTaskUpdated(taskId);
 
       return {

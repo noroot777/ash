@@ -264,9 +264,18 @@ const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
   assert.equal(result.git, "bundle");
   assert.equal(result.autoResume, false);
 
-  // 源机:WIP 已提交进任务分支,worktree 干净;任务落了 out 标记;时间线有系统说明。
-  assert.equal(git(ws.path, "status", "--porcelain"), "");
-  assert.match(git(ws.path, "log", "-1", "--format=%s"), /chore\(handoff\)/);
+  // 源机:代码确认落到对端之后,本机 worktree 和分支一起清掉——「任务在哪儿,分支之类的
+  // 才在哪儿」(用户 2026-08-27)。WIP 提交仍随包带走了,它现在只在对端。
+  assert.equal(existsSync(ws.path), false, "确认送达后源机 worktree 应被清理");
+  assert.equal(
+    git(srcRepo, "branch", "--list", worktreeBranchName(taskId)).trim(),
+    "",
+    "确认送达后源机任务分支应被清理",
+  );
+  assert.ok(
+    result.notes.some((n) => n.includes("已清理本机")),
+    "清理结果要如实报给用户",
+  );
   const srcTask = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
   const marker = JSON.parse(srcTask.handoff!) as {
     direction: string; peerTaskId: string; peerName: string; pending?: boolean; transferId?: string;

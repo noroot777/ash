@@ -417,6 +417,12 @@ try {
 
   const holderWorktree = worktreePathFor(repoB, task.id);
   const originWorktree = worktreePathFor(repoA, task.id);
+  // 接力确认送达后原机那份 worktree/分支已被自动清掉（「任务在哪儿，分支之类的才在
+  // 哪儿」，用户 2026-08-27）。下面几道分叉/脏目录保护仍然必须成立：目录里还剩没带走的
+  // 东西时清理会主动放弃、对端是旧版 ash 时压根不清、用户也随时能把 worktree 建回来。
+  // 所以这里手动重建原机 worktree，继续把那几条闸验一遍。
+  assert.equal(existsSync(originWorktree), false, "接力确认送达后原机 worktree 应已清理");
+  await prepareWorktree(repoA, task.id, "main");
   writeFileSync(join(originWorktree, "origin-after-handoff.txt"), "local commit after handoff\n");
   execFileSync("git", ["-C", originWorktree, "add", "origin-after-handoff.txt"]);
   execFileSync("git", [
@@ -510,6 +516,8 @@ try {
   );
   const originHead = execFileSync("git", ["-C", worktreePathFor(repoA, task.id), "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   assert.equal(originHead, holderHead, "原机 worktree 应落到持有机返回的新提交");
+  // 对称的另一半:任务回到 A 了,B 上那份 worktree/分支就该消失。
+  assert.equal(existsSync(holderWorktree), false, "移回确认之后持有机的 worktree 也要清掉");
 
   const peersOnA = await api<{ peers: { fingerprint: string }[] }>(machineA, "/handoff/peers");
   assert.ok(!peersOnA.peers.some((peer) => peer.fingerprint === identityB.fingerprint), "免审批移回不应暗中建立整机级批准记录");

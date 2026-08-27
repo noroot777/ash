@@ -36,6 +36,7 @@ import { resumeOrRunTask } from "./task-resume.js";
 import { localIdentity } from "./handoff-identity.js";
 import { assertWorktreeHeadCanAdvance, untrackedOverwriteConflicts } from "./handoff-worktree-safety.js";
 import { buildFreeWorkflowRows } from "./handoff-import-free-workflow.js";
+import { discardMigratedWorkspace } from "./workspace-cleanup.js";
 import { id, now } from "./util.js";
 import type { TaskHandoff } from "@ash/shared";
 import { execFileText as exec } from "./exec.js";
@@ -282,6 +283,11 @@ export interface HandoffImportResult {
   // true = 本机已有这次接力导入的任务,本次是应答丢失后的幂等收口(零副作用)。
   // 源机据此决定取消哪批待发送消息原件:幂等收口只对应第一次带走的那批。
   idempotent?: boolean;
+  // 代码到底落没落到本机:"bundle" = 分支和 worktree 都恢复好了,"none" = 没有 git
+  // 载荷,或本机按非 worktree 任务导入(那条路根本不 fetch 分支)。源机靠这一句证明
+  // 「确实全量传完了」,才敢删掉自己那份 worktree 和分支;老版本对端不报这个字段,
+  // 源机据此保守地什么都不删。
+  git?: "bundle" | "none";
   notes: string[];
 }
 
@@ -329,6 +335,8 @@ async function importValidated(
         // 按 false 报——宁可让源机以为没续跑,也不能谎报「已在对端跑起来了」。
         autoResume: existingMarker.autoResume ?? false,
         idempotent: true,
+        // 收口应答同样报当初导入的事实:那一次代码真落了地,源机就可以放心收尾。
+        git: existingMarker.git === "bundle" ? "bundle" : "none",
         notes: ["本机已有这次接力导入的任务(应答曾丢失,本次为幂等收口),未重复导入"],
       };
     }
@@ -694,6 +702,14 @@ async function importValidated(
         await db.delete(tasks).where(eq(tasks.id, m.task.id));
       } catch { rollbackFailed = true; /* 没有更好的办法,如实上报,让源机保留 pending */ }
     }
+    // 本次导入建出来的 worktree/分支也一并收掉:接力宣告失败,本机就不该留下一份
+    // 「谁都不认领、源机也不知道」的检出(用户 2026-08-27:没彻底传完的话对方也应该
+    // 把建了的删掉,并宣布接力失败)。只在**任务行确实是本次插进去的**时候才动手——
+    // taskRowInserted=false 说明库里那行属于别的导入,它的 worktree 动不得。
+    if (taskRowInserted && useWorktree) {
+      await discardMigratedWorkspace(project.repoPath, m.task.id)
+        .catch(() => { /* 清不掉不改变结论:源机照样保留自己那份,重试会原样覆盖 */ });
+    }
     // 计划行在任务行之前插的,不管任务行插没插成都要清——留着就是孤儿,重试时上面的
     // 孤儿清扫兜底,但能现在清干净就别指望兜底。
     if (scheduleId) {
@@ -728,6 +744,7 @@ async function importValidated(
     workspace,
     sessionsMigrated: migrated.length,
     autoResume: m.autoResume,
+    git: useWorktree && m.git ? "bundle" : "none",
     notes,
   };
 }
