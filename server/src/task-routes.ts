@@ -13,8 +13,7 @@ import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.j
 import { followUpsFor } from "./task-follow-up.js";
 import { advanceQueue } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
-import { isTurnClaimed } from "./runs.js";
-import { isAcceptingTask } from "./acceptance-lock.js";
+import { taskBusyRejection } from "./task-busy.js";
 import { createTasks, enrichTasks, publishTaskUpdated, toTaskListItem } from "./task-store.js";
 import { attachmentsPrompt, id, now, taskBody } from "./util.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
@@ -581,33 +580,12 @@ api.get("/tasks/:id/workspace", async (c) => {
 api.delete("/tasks/:id", async (c) => {
   const tid = c.req.param("id");
   const existing = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
-  // 正在执行的任务不能整行删掉：进程还活着、turn 还占着，删行会让回合结算写向不存在的
-  // 任务（审查实测：claimTurn 到 status 落库的窗口里 DELETE 直接 200）。turn 锁一并看，
-  // 常驻调度台 idle 时不受影响（status 不匹配、turn 未占）。
-  if (existing && (existing.status === "running" || existing.status === "queued" || isTurnClaimed(tid))) {
-    return c.json({ error: "任务正在执行，请先停止再删除", status: existing.status }, 409);
-  }
-  // 验收（含尾段发布命令）期间删除任务行：命令还在跑、结算还要写这一行（审查实测：
-  // 删除返回 200、尾段继续写、验收最后还报成功）。
-  if (existing && isAcceptingTask(tid)) {
-    return c.json({ error: "任务正在验收中，结束后再删除" }, 409);
-  }
-  // 团队：执行者跟着 lead 活。任何 child 在飞就拒删（否则活着的 worker 失去父任务，
-  // 还可能连带清掉它正在用的共享工作区）；都停了则连 children 行一并删，不留悬空 parentId。
+  // 正在跑 / 占着 turn / 在验收 / 有 child 在飞的任务都不能整行删掉,判据与理由见
+  // task-busy.ts —— 项目级的两个入口用的是同一份,别在这里再拼一遍。
+  const busy = await taskBusyRejection(tid, "删除");
+  if (busy) return c.json(busy, 409);
+  // 都停了则连 children 行一并删,不留悬空 parentId。
   const children = existing ? await db.select().from(tasks).where(eq(tasks.parentId, tid)) : [];
-  // child 的验收锁也要传播:执行者的发布尾段还在跑时删掉整个团队,结算会写向不存在
-  // 的任务行(审查实测:child beginAccepting 后删除 lead 返回 200)。
-  const busyChild = children.find(
-    (child) => child.status === "running" || child.status === "queued"
-      || isTurnClaimed(child.id) || isAcceptingTask(child.id),
-  );
-  if (busyChild) {
-    return c.json({
-      error: `执行者「${busyChild.title}」正在执行，请先停止团队再删除`,
-      childId: busyChild.id,
-      status: busyChild.status,
-    }, 409);
-  }
   const project = existing
     ? (await db.select().from(projects).where(eq(projects.id, existing.projectId))).at(0)
     : undefined;

@@ -22,6 +22,9 @@
 //   ⑥ **请求体里带来的** groupId / appendToQueue / parentId / originTaskId:横切闸只看
 //      URL 上的 id,这四个都得路由自己查归属 —— 猜中别人项目的 id 就能把任务挂进去、
 //      串进去;parentId 更狠,归属会跟着它继承,造出一条「我的项目、别人 owner」的任务。
+//   ⑦ 项目级的残留清理入口(`/projects/:id/workspaces/discard`)拿的也是**请求体里的
+//      taskId**,而且它真的执行 `worktree remove --force` + `branch -D`:既要查归属,
+//      也要复用任务运行态保护,否则 agent 脚下的目录能被别人当场抽走。
 //
 // 跑法(不设 ASH_DB 时自己开一个临时库):
 //   npm -w server run test:multi-user-run
@@ -93,6 +96,7 @@ const { authGate } = await import("../src/auth/middleware.js");
 const { resourceGate } = await import("../src/auth/resource-gate.js");
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
 const { mountTaskRoutes } = await import("../src/task-routes.js");
+const { mountProjectRoutes } = await import("../src/project-routes.js");
 const { mountTaskSteerRoutes } = await import("../src/task-steer.js");
 const { now, id } = await import("../src/util.js");
 
@@ -128,6 +132,7 @@ await visibility.addProjectMember({ projectId: "p-shared", userId: bob.id, role:
 const api = new Hono();
 mountTaskRunRoutes(api);
 mountTaskRoutes(api); // executor-preflight 住在这边
+mountProjectRoutes(api); // /projects/:id/workspaces/discard 住在这边
 mountTaskSteerRoutes(api); // /scheduled-messages/:mid/steer 与 DELETE 同一个 id 形状
 const app = new Hono();
 app.use("*", authGate());
@@ -392,6 +397,73 @@ const expectBob = (env: Record<string, string | null>, where: string) => {
   const kidRow = (await db.select({ o: tasks.ownerUserId, p: tasks.parentId }).from(tasks).where(eq(tasks.id, String(kid.body.id)))).at(0);
   assert.equal(kidRow?.p, String(parentOk.body.id));
   assert.equal(kidRow?.o, bob.id, "同项目继承照常:父任务是 bob 建的,儿子也归 bob");
+}
+
+// ── ⑦ 项目级残留清理入口不能绕过任务运行态保护 ────────────────────────────
+{
+  const { execFileSync } = await import("node:child_process");
+  const { existsSync } = await import("node:fs");
+  const { prepareWorktree, worktreeBranchName } = await import("../src/git.js");
+  // 这一格要真删到东西才算数,所以另起一个**真的 git 仓库**(前面那个 repo 是空目录)。
+  const gitRepo = join(stage, "git-repo");
+  mkdirSync(gitRepo, { recursive: true });
+  execFileSync("git", ["init", "-b", "main", gitRepo]);
+  execFileSync("git", ["-C", gitRepo, "config", "user.name", "Ash Test"]);
+  execFileSync("git", ["-C", gitRepo, "config", "user.email", "ash@example.test"]);
+  writeFileSync(join(gitRepo, "seed.txt"), "seed\n");
+  execFileSync("git", ["-C", gitRepo, "add", "-A"]);
+  execFileSync("git", ["-C", gitRepo, "commit", "-m", "seed"]);
+  const branchAlive = (name: string) => {
+    try {
+      execFileSync("git", ["-C", gitRepo, "show-ref", "--verify", "--quiet", `refs/heads/${name}`]);
+      return true;
+    } catch { return false; }
+  };
+  await db.insert(projects).values({ id: "p-git", name: "git", repoPath: gitRepo, ownerUserId: alice.id, createdAt: ts, updatedAt: ts });
+  await visibility.addProjectMember({ projectId: "p-git", userId: bob.id, role: "member", addedBy: alice.id });
+
+  // alice 的任务**正在跑**,worktree 是真的,分支也是真的。
+  const victim = id();
+  await db.insert(tasks).values(taskRow({ id: victim, projectId: "p-git", title: "alice 在跑", status: "running", useWorktree: true }));
+  const ws = await prepareWorktree(gitRepo, victim, "main");
+  const branch = worktreeBranchName(victim);
+  assert.equal(existsSync(ws.path), true);
+  assert.equal(branchAlive(branch), true);
+
+  // 洞:bob 是 p-git 的成员,路径上的 project 他看得见 —— 以前这就够了,带上 force
+  // 就能把还在跑的任务脚下的目录连同未提交改动一起抽掉,任务行还停在 running。
+  const forced = await post("/api/projects/p-git/workspaces/discard", bobKey, { taskId: victim, force: true });
+  assert.equal(forced.status, 409, `在跑的任务不该被清:${JSON.stringify(forced.body)}`);
+  assert.equal(existsSync(ws.path), true, "被拒之后 worktree 必须原样在");
+  assert.equal(branchAlive(branch), true, "分支同样必须还在");
+  // 任务自己的主人点也一样 —— 这是运行态保护,不是权限。
+  const byOwner = await post("/api/projects/p-git/workspaces/discard", await store.resetUserKey(alice.id), { taskId: victim, force: true });
+  assert.equal(byOwner.status, 409, `主人也不能清自己在跑的任务:${JSON.stringify(byOwner.body)}`);
+
+  // 归属:taskId 是请求体里带来的资源 id(同 ⑥)。p-private 里那条 bob 看不见的任务,
+  // 不能从他看得见的 p-git 借道发起清理。
+  const outsider = id();
+  await db.insert(tasks).values(taskRow({ id: outsider, projectId: "p-private", title: "别人项目的任务", status: "failed" }));
+  const crossed = await post("/api/projects/p-git/workspaces/discard", bobKey, { taskId: outsider, force: true });
+  assert.equal(crossed.status, 404, `别的项目的 taskId 不该收:${JSON.stringify(crossed.body)}`);
+
+  // 停了就能清 —— 别把正常路一起堵了。
+  await db.update(tasks).set({ status: "failed" }).where(eq(tasks.id, victim));
+  const ok = await post("/api/projects/p-git/workspaces/discard", bobKey, { taskId: victim, force: true });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(ok.body.worktreeRemoved, true, JSON.stringify(ok.body));
+  assert.equal(existsSync(ws.path), false);
+  assert.equal(branchAlive(branch), false);
+
+  // 这条入口的**本职**:任务行早就删了、git 里还剩东西,照样收拾得掉。
+  const ghost = id();
+  const ghostWs = await prepareWorktree(gitRepo, ghost, "main");
+  const ghostBranch = worktreeBranchName(ghost);
+  const swept = await post("/api/projects/p-git/workspaces/discard", bobKey, { taskId: ghost });
+  assert.equal(swept.status, 200, `查无此行的残留必须还能清:${JSON.stringify(swept.body)}`);
+  assert.equal(swept.body.worktreeRemoved, true, JSON.stringify(swept.body));
+  assert.equal(existsSync(ghostWs.path), false);
+  assert.equal(branchAlive(ghostBranch), false);
 }
 
 await releaseTmpDb();

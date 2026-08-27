@@ -11,8 +11,7 @@ import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranc
 import { getGitOverview } from "./git-overview.js";
 import { discardTaskWorkspace } from "./workspace-cleanup.js";
 import { deleteTaskAssociations } from "./task-routes.js";
-import { isTurnClaimed } from "./runs.js";
-import { isAcceptingTask } from "./acceptance-lock.js";
+import { isTaskBusy, taskBusyRejection } from "./task-busy.js";
 import { findWorkflow } from "./workflows.js";
 import { ensureProjectDir } from "./project-dir.js";
 import { deleteProjectGitCredential } from "./git-credentials.js";
@@ -20,6 +19,7 @@ import { actorOf, authErrorResponse, ownerIdOf } from "./auth/context.js";
 import { projectPathRejection } from "./auth/path-scope.js";
 import {
   deleteProjectMembers,
+  projectOfTask,
   requireProjectAccess,
   requireProjectAdmin,
   seedProjectOwner,
@@ -188,9 +188,8 @@ export function mountProjectRoutes(api: Hono): void {
     const ptasks = await db.select().from(tasks).where(eq(tasks.projectId, pid));
     // 单任务 DELETE 的生命周期锁在这里同样成立：turn 已占（status 未落 running）、验收
     // （含发布尾段）进行中删掉任务行，结算/尾段会写向不存在的任务（审查实测：项目入口
-    // 完全绕过了任务级门禁）。
-    const live = ptasks.find((t) =>
-      t.status === "running" || t.status === "queued" || isTurnClaimed(t.id) || isAcceptingTask(t.id));
+    // 完全绕过了任务级门禁）。判据与单任务入口共用 isTaskBusy（task-busy.ts）。
+    const live = ptasks.find(isTaskBusy);
     if (live) return c.json({ error: "项目有正在运行/排队/验收中的任务，无法删除", taskId: live.id }, 409);
     for (const t of ptasks) {
       // 与单任务 DELETE 同一份级联（审查链/预约/事件/消息/会话/计划/队列位），不留
@@ -266,13 +265,24 @@ export function mountProjectRoutes(api: Hono): void {
 
   // 清理某个任务留下的 worktree 目录 / 分支。任务行这时通常已经被删掉了(删除时
   // 没勾选、或勾了但 git 拒绝),所以入口挂在 project 上、只按 taskId 推导路径与
-  // 分支名 —— 不查任务表,删掉的任务照样能收拾干净。逐项结果原样回给 UI:git 拒绝
+  // 分支名 —— 删掉的任务照样能收拾干净。逐项结果原样回给 UI:git 拒绝
   // (脏 worktree / 未合并分支)是要展示给用户的信息,不是 500。
+  //
+  // 「行已经没了」是这条入口的**正常场景**,不是免检的理由:行还在的时候,清它的
+  // worktree 跟 `DELETE /tasks/:id` 勾了「一起删」是同一件事,必须走同一套保护 ——
+  // 否则拿一个还在跑的 taskId 加 force 打进来,就能把 agent 脚下的目录连同未提交
+  // 改动、未合并分支一起抽掉,而任务行还停在 running(第 4 轮审查 P1)。归属也要查:
+  // taskId 是**请求体里带来的资源 id**,路径上的 project 过了可见性不代表这条任务
+  // 属于它,不查就能拿别人项目的任务 id 从自己看得见的项目里发起清理。
   api.post("/projects/:id/workspaces/discard", async (c) => {
     const { row, error } = await loadVisible(c, c.req.param("id"));
     if (error) return error;
     const b = await c.req.json<{ taskId: string; worktree?: boolean; branch?: boolean; force?: boolean }>();
     if (!b?.taskId) return c.json({ error: "taskId required" }, 400);
+    const owner = await projectOfTask(b.taskId);
+    if (owner !== null && owner !== row.id) return c.json({ error: "task not found", taskId: b.taskId }, 404);
+    const busy = await taskBusyRejection(b.taskId, "清理");
+    if (busy) return c.json(busy, 409);
     return c.json(
       await discardTaskWorkspace(row.repoPath, b.taskId, {
         worktree: b.worktree !== false,

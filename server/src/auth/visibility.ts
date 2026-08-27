@@ -99,6 +99,18 @@ export async function groupInProject(groupId: string, projectId: string): Promis
 }
 
 /**
+ * 这条任务在哪个项目里。不存在回 null。
+ *
+ * 「不存在」和「属于别的项目」必须分得开:清理残留那条入口(`POST
+ * /projects/:id/workspaces/discard`)专门服务于「任务行已经删了、git 里还剩东西」,
+ * 行不在正是它的正常场景;而行还在、却属于别人的项目,就得挡。
+ */
+export async function projectOfTask(taskId: string): Promise<string | null> {
+  const row = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  return row?.projectId ?? null;
+}
+
+/**
  * 这条任务属于这个项目吗。任务不存在同样回 false。
  *
  * 建任务时请求体里还带着两个**指向别的任务**的 id:`parentId`(父任务,归属会跟着它继承)
@@ -107,8 +119,7 @@ export async function groupInProject(groupId: string, projectId: string): Promis
  * 的任务,而后端自动起跑退回 `tasks.ownerUserId` 时烧的就是那个人的 key(第 3 轮审查 P1)。
  */
 export async function taskInProject(taskId: string, projectId: string): Promise<boolean> {
-  const row = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-  return !!row && row.projectId === projectId;
+  return (await projectOfTask(taskId)) === projectId;
 }
 
 /**
