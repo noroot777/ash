@@ -31,8 +31,9 @@ import { WorkerTeamLink } from "@/components/WorkerTeamLink";
 import { MarkdownText } from "@/components/MarkdownText";
 import { SignalBar } from "@/components/SignalBar";
 import { SkillSuggestions } from "@/components/SkillSuggestions";
+import { PendingMessageTray } from "@/components/PendingMessageTray";
 import { DateTimeButton } from "@/components/DateTimeField";
-import { TaskTimeChip, formatInstant } from "@/lib/time";
+import { TaskTimeChip } from "@/lib/time";
 import { canArchive } from "@ash/shared";
 import type { Session, ScheduledMessage } from "@ash/shared";
 import type { LogLine } from "@/lib/log";
@@ -320,58 +321,6 @@ export default function TaskDetail() {
     }
   };
 
-  // 真正调用取消端点：把这条消息从队列上取下来。成功返回 true，失败照实说并重拉列表
-  // （消息还挂在队列上，界面不能自己少一行）。撤回和丢弃都经它，区别只在取下来之后
-  // 做什么。
-  const cancelPending = async (message: ScheduledMessage): Promise<boolean> => {
-    try {
-      await api.cancelScheduledMessage(message.id);
-    } catch (e) {
-      Alert.alert("操作失败", e instanceof Error ? e.message : String(e));
-      loadPending();
-      return false;
-    }
-    setPending((ps) => ps.filter((m) => m.id !== message.id));
-    return true;
-  };
-
-  // 撤回一条待发送消息：把它从队列上取下来，正文放回输入框继续编辑（跟 web 托盘同一
-  // 套语义，见 web/src/task-detail/withdrawDraft.ts）。取消成功才回填——失败了消息还在
-  // 队列上，再往输入框塞一份就成了两条。
-  //
-  // 手机端这一屏**没有附件通道**（输入框只发正文），带附件的消息撤回下来附件没有落点。
-  // 撤回这个词承诺的是「内容原样回到输入框」，做不到就一次都不做：只提示去网页端撤回，
-  // **不发 DELETE**——按下去消息一个字都没少，用户随时还能在网页端把它整条捞回来。真想
-  // 直接扔掉的，走旁边那颗语义明确的丢弃按钮。
-  const withdrawScheduled = async (message: ScheduledMessage) => {
-    if (message.attachments.length) {
-      Alert.alert(
-        "这条得去网页端撤回",
-        `共 ${message.attachments.length} 个附件。手机端的输入框只放得下正文，附件没有落点，所以这里不做撤回——消息仍在队列上。到网页端撤回，正文和附件会一起回到对话框；只想扔掉它就点旁边的丢弃。`,
-        [{ text: "知道了" }],
-      );
-      return;
-    }
-    if (!await cancelPending(message)) return;
-    const restored = message.text.trim();
-    if (restored) setInput((current) => (current.trim() ? `${restored}\n\n${current}` : restored));
-  };
-
-  // 丢弃：明说了不留内容的那条路。它跟撤回是两回事，所以是两颗按钮、两套措辞——把
-  // 「什么都不留」藏在承诺「放回输入框」的入口下面，等于骗用户按下删除键。
-  const discardScheduled = (message: ScheduledMessage) => {
-    Alert.alert(
-      "丢弃这条待发送消息？",
-      message.attachments.length
-        ? `正文和 ${message.attachments.length} 个附件都不保留，也不会放回输入框。`
-        : "正文不保留，也不会放回输入框。",
-      [
-        { text: "取消", style: "cancel" },
-        { text: "丢弃", style: "destructive", onPress: () => void cancelPending(message) },
-      ],
-    );
-  };
-
   const meta = STATUS_META[status];
 
   if (task.mode === "team") {
@@ -580,55 +529,12 @@ export default function TaskDetail() {
           gap: 8,
         }}
       >
-        {pending.map((m) => (
-          <View
-            key={m.id}
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              gap: 8,
-              backgroundColor: theme.overlay,
-              borderRadius: radius.sm,
-              paddingHorizontal: 10,
-              paddingVertical: 6,
-            }}
-          >
-            {/* 排队消息不看时间（跑完就发），所以那一列写「排队中」而不是一个骗人的时刻。 */}
-            <Ionicons name={m.mode === "queued" ? "layers-outline" : "time-outline"} size={13} color={theme.faint} />
-            <Text style={{ color: theme.muted, fontSize: 12, fontFamily: fonts.mono }}>
-              {m.mode === "queued" ? "排队中" : formatInstant(m.sendAt)}
-            </Text>
-            <Text numberOfLines={1} style={{ flex: 1, color: theme.ink, fontSize: 13 }}>
-              {m.text || "[附件]"}
-            </Text>
-            {/* 手机端撤不回附件（见 withdrawScheduled），所以按之前先让人看见这条带了几个。 */}
-            {m.attachments.length > 0 && (
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
-                <Ionicons name="attach-outline" size={12} color={theme.faint} />
-                <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.mono }}>{m.attachments.length}</Text>
-              </View>
-            )}
-            <Pressable
-              onPress={() => void withdrawScheduled(m)}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityLabel={m.attachments.length
-                ? `撤回这条待发送消息；它带了 ${m.attachments.length} 个附件，需要到网页端撤回`
-                : "撤回这条待发送消息，内容放回输入框"}
-            >
-              <Ionicons name="arrow-undo-outline" size={15} color={theme.faint} />
-            </Pressable>
-            {/* 丢弃跟撤回分成两颗:一颗承诺内容回到输入框,一颗明说什么都不留。 */}
-            <Pressable
-              onPress={() => discardScheduled(m)}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityLabel="丢弃这条待发送消息，内容不保留"
-            >
-              <Ionicons name="trash-outline" size={15} color={theme.faint} />
-            </Pressable>
-          </View>
-        ))}
+        <PendingMessageTray
+          messages={pending}
+          onRemoved={(messageId) => setPending((ps) => ps.filter((m) => m.id !== messageId))}
+          onReload={loadPending}
+          onRestoreText={(restored) => setInput((current) => (current.trim() ? `${restored}\n\n${current}` : restored))}
+        />
 
         <SkillSuggestions
           agentType={task.agentType}

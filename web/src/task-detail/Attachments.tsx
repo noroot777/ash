@@ -114,8 +114,11 @@ export function useAttachments({
     setAttachments([]);
     setError(null);
   }, [setAttachments]);
+  // 发送成功后附件是**按已发出的路径**逐个摘掉的（见 withdrawDraft.ts 的 dropSentAttachments，
+  // 请求在途期间新加进来的要留着），所以清空提示单独有个入口，不能顺手调 clear()。
+  const clearError = useCallback(() => setError(null), []);
 
-  return { attachments, uploading, error, addFiles, onPaste, remove, clear };
+  return { attachments, uploading, error, addFiles, onPaste, remove, clear, clearError };
 }
 
 export function AttachmentPicker({

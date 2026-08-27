@@ -24,7 +24,13 @@ import { SlashMenu } from "../components/SlashMenu.tsx";
 import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
 import { useTaskReplyDraft } from "./TaskReplyDrafts.tsx";
-import { attachmentsFromPaths, joinDraftText, mergeAttachments } from "./withdrawDraft.ts";
+import {
+  attachmentsFromPaths,
+  dropSentAttachments,
+  dropSentText,
+  joinDraftText,
+  mergeAttachments,
+} from "./withdrawDraft.ts";
 
 const EMPTY_SKILLS: SkillEntry[] = [];
 
@@ -281,10 +287,14 @@ export function ReplyBox({
     if (disabled || sending || uploads.uploading || (!value.trim() && !uploads.attachments.length)) return;
     setSending(true);
     setSendError(null);
+    // 发出去的是这一份。请求在途的那一两秒里草稿还可能变（用户又打了字，或者撤回了
+    // 另一条待发送消息把内容并了回来），所以成功之后按这份快照做减法，不是清零。
+    const sentText = value.trim();
+    const sentPaths = uploads.attachments.map((attachment) => attachment.path);
     try {
       const result = await onSend(
-        value.trim(),
-        uploads.attachments.map((attachment) => attachment.path),
+        sentText,
+        sentPaths,
         {
           agent: target?.agent,
           executorId: target?.executorId ?? null,
@@ -295,8 +305,9 @@ export function ReplyBox({
         },
       );
       if ("scheduled" in result) scheduled.add(result.message);
-      setValue("");
-      uploads.clear();
+      setValue((current) => dropSentText(current, sentText));
+      draft.setAttachments((current) => dropSentAttachments(current, sentPaths));
+      uploads.clearError();
       setTarget(null);
       setScheduleOpen(false);
       setSendAt("");

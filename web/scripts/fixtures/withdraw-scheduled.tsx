@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import type { Task } from "@ash/shared";
 import { ReplyBox } from "../../src/task-detail/ReplyBox.tsx";
 import { TaskReplyDraftProvider } from "../../src/task-detail/TaskReplyDrafts.tsx";
+import { api } from "../../src/lib/api.ts";
 import "../../src/styles/global.css";
 
 // 撤回一条排队消息的现场：任务在跑（所以有托盘），托盘里那条消息带正文和两个附件。
@@ -25,7 +26,13 @@ const task: Task = {
 createRoot(document.getElementById("root")!).render(
   <TaskReplyDraftProvider>
     <main style={{ width: 720, margin: "40px auto" }}>
-      <ReplyBox task={task} hasConversation onSend={async () => ({ started: true })} />
+      <ReplyBox
+        task={task}
+        hasConversation
+        // 走真实请求，测试才能把它按住不放，制造「发送在途时撤回另一条」的交错。
+        onSend={(text, attachments, options) =>
+          api.replyTask(task.id, text, { attachments, sendAt: options.sendAt })}
+      />
     </main>
   </TaskReplyDraftProvider>,
 );

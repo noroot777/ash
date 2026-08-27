@@ -33,6 +33,7 @@ const message = (id, text, attachments) => ({
 const PENDING = [
   message("msg-fail", "撤不掉的那条", []),
   message("msg-ok", "排队里的原话", ["data/uploads/abcdefghijkl-shot.png", "/tmp/spec.pdf"]),
+  message("msg-late", "迟到的原话", ["/tmp/late.pdf"]),
 ];
 
 let browser;
@@ -45,11 +46,26 @@ try {
   const page = await browser.newPage();
   let deleted = [];
   let remaining = PENDING;
+  // 发送请求按住不放，好在「请求在途」这段时间里去点另一条消息的撤回。
+  let releaseReply;
+  let replyHeld;
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
     if (path === "/api/tasks/task-a/scheduled-messages") {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(remaining) });
+      return;
+    }
+    if (path === "/api/tasks/task-a/reply" && route.request().method() === "POST") {
+      if (replyHeld) await replyHeld;
+      const sent = JSON.parse(route.request().postData() ?? "{}");
+      const queued = message("msg-sent", sent.text ?? "", sent.attachments ?? []);
+      remaining = [...remaining, queued];
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({ scheduled: true, message: queued }),
+      });
       return;
     }
     const canceled = /^\/api\/scheduled-messages\/([^/]+)$/.exec(path);
@@ -86,11 +102,27 @@ try {
   assert.equal(await page.locator(".task-upload-chip img").count(), 1, "图片附件应还原成可预览的缩略图");
   assert.equal(await page.getByText("排队里的原话", { exact: true }).count(), 0, "撤回成功后托盘上不该再留这一行");
   assert.deepEqual(deleted, ["msg-fail", "msg-ok"], "每次撤回都必须真的调用取消端点");
-  assert.equal(
-    await page.getByRole("button", { name: "排队发送，任务跑完自动发出" }).isEnabled(),
-    true,
-    "撤回回来的内容应能直接再排一次队",
-  );
+  const sendButton = page.getByRole("button", { name: "排队发送，任务跑完自动发出" });
+  assert.equal(await sendButton.isEnabled(), true, "撤回回来的内容应能直接再排一次队");
+
+  // ③ 交错：发送请求在途时撤回另一条消息。请求回来时只许摘掉「这次发出去的那份」，
+  //    在途期间撤回来的正文和附件必须原样留着——那条消息服务端已经取消，清掉就找不回了。
+  const sentText = "排队里的原话\n\n我后来又写的草稿";
+  let release;
+  replyHeld = new Promise((resolve) => { release = resolve; });
+  await sendButton.click();
+  const late = page.getByRole("button", { name: /撤回.*迟到的原话/ });
+  await late.click();
+  await page.getByText("late.pdf", { exact: true }).waitFor();
+  assert.equal(await input.inputValue(), `迟到的原话\n\n${sentText}`, "在途期间撤回的正文应并进草稿");
+  release();
+  // 等发送这一轮结算完（草稿里只该剩撤回来的那段）。
+  for (let i = 0; i < 100 && await input.inputValue() !== "迟到的原话"; i++) await page.waitForTimeout(100);
+
+  assert.equal(await input.inputValue(), "迟到的原话", "发送回来只许摘掉发出去的那份，撤回来的正文要留着");
+  assert.equal(await page.getByText("late.pdf", { exact: true }).count(), 1, "在途期间撤回来的附件不得被发送清掉");
+  assert.equal(await page.locator(".task-upload-chip").count(), 1, "发出去的附件要摘掉，只剩撤回来的那个");
+  assert.deepEqual(deleted, ["msg-fail", "msg-ok", "msg-late"], "在途期间的撤回同样要真的取消掉");
 
   console.log("withdraw scheduled message test passed");
 } finally {

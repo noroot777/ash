@@ -9,6 +9,8 @@ import {
 } from "../src/components/ScheduledMessages.tsx";
 import {
   attachmentsFromPaths,
+  dropSentAttachments,
+  dropSentText,
   joinDraftText,
   mergeAttachments,
 } from "../src/task-detail/withdrawDraft.ts";
@@ -91,7 +93,28 @@ for (const [file, source] of [
   assert.match(withdraw, /if \(!await scheduled\.cancel\(message\.id\)\) return;/, `${file} 撤回必须先取消成功再回填`);
   assert.match(withdraw, /joinDraftText\(message\.text, current\)/, `${file} 撤回必须把正文放回草稿`);
   assert.match(withdraw, /attachmentsFromPaths\(message\.attachments\)/, `${file} 撤回必须把附件放回草稿`);
+  // 发送成功后按快照做减法:请求在途时撤回来的内容不能被这一下清掉(2026-08-27 审查发现)。
+  const send = source.slice(source.indexOf("const send = async"), source.indexOf("const withdraw = async"));
+  assert.match(send, /dropSentText\(current, sentText\)/, `${file} 发送后只许摘掉发出去的正文`);
+  assert.match(send, /dropSentAttachments\(current, sentPaths\)/, `${file} 发送后只许摘掉发出去的附件`);
+  assert.doesNotMatch(send, /setValue\(""\)|uploads\.clear\(\)/, `${file} 发送后不得无条件清空草稿`);
 }
+
+// 减法的边界：认得出就只摘那一段，认不出宁可留着（少一段刚撤回的内容，用户根本发现不了）。
+assert.equal(dropSentText("发出去的话", "发出去的话"), "", "草稿没动过就清干净");
+assert.equal(dropSentText("撤回来的\n\n发出去的话", "发出去的话"), "撤回来的", "撤回来的内容必须留下");
+assert.equal(dropSentText("发出去的话\n\n后写的", "发出去的话"), "后写的", "在途期间新写的内容必须留下");
+assert.equal(dropSentText("前\n\n发出去的话\n\n后", "发出去的话"), "前\n\n后", "只摘中间那一段");
+assert.equal(dropSentText("用户自己改过了", "发出去的话"), "用户自己改过了", "认不出发出去的那段就原样留着");
+assert.deepEqual(
+  dropSentAttachments(
+    [{ path: "/tmp/late.pdf", name: "late.pdf", kind: "file", url: null },
+      { path: "/tmp/sent.pdf", name: "sent.pdf", kind: "file", url: null }],
+    ["/tmp/sent.pdf"],
+  ).map((attachment) => attachment.path),
+  ["/tmp/late.pdf"],
+  "发送只摘掉自己发出去的附件",
+);
 
 // 回填的合并语义:撤回的内容排在已有草稿前面,同一路径的附件不重复。
 assert.equal(joinDraftText("撤回的话", ""), "撤回的话", "草稿为空时直接用撤回的正文");
@@ -114,25 +137,25 @@ assert.deepEqual(
 );
 // 手机端那一屏没有附件通道：撤回承诺「内容原样回到输入框」，对带附件的消息做不到，
 // 就一次都不做——只提示去网页端，绝不能从这个入口发出取消请求。真要扔掉走独立的丢弃。
-const mobileSource = readFileSync(new URL("../../mobile/src/app/task/[id].tsx", import.meta.url), "utf8");
+const mobileSource = readFileSync(new URL("../../mobile/src/components/PendingMessageTray.tsx", import.meta.url), "utf8");
 const slice = (from: string, to: string) => {
   const start = mobileSource.indexOf(from);
-  assert.notEqual(start, -1, `手机端应存在 ${from}`);
+  assert.notEqual(start, -1, `手机端托盘应存在 ${from}`);
   const end = mobileSource.indexOf(to, start);
   assert.notEqual(end, -1, `${from} 之后应存在 ${to}`);
   return mobileSource.slice(start, end);
 };
-const mobileWithdraw = slice("const withdrawScheduled", "const discardScheduled");
+const mobileWithdraw = slice("const withdraw = async", "const discard =");
 const attachmentBranch = mobileWithdraw.slice(
   mobileWithdraw.indexOf("if (message.attachments.length)"),
   mobileWithdraw.indexOf("if (!await cancelPending(message)) return;"),
 );
 assert.match(attachmentBranch, /Alert\.alert\(/, "带附件时必须先告诉用户去哪撤回");
 assert.doesNotMatch(attachmentBranch, /cancelPending/, "撤回入口不得对带附件的消息发出取消请求");
-assert.match(mobileWithdraw, /if \(!await cancelPending\(message\)\) return;[\s\S]*setInput\(/, "无附件的消息取消成功后才回填正文");
+assert.match(mobileWithdraw, /if \(!await cancelPending\(message\)\) return;[\s\S]*onRestoreText\(/, "无附件的消息取消成功后才回填正文");
 // 丢弃是另一颗按钮、另一套措辞：明说不留内容，且必须经确认才真删。
-const mobileDiscard = slice("const discardScheduled", "const meta =");
+const mobileDiscard = slice("const discard =", "return (");
 assert.match(mobileDiscard, /Alert\.alert\([\s\S]*style: "destructive"[\s\S]*cancelPending\(message\)/, "丢弃必须经明确确认才调用取消端点");
 assert.match(mobileDiscard, /不保留/, "丢弃的措辞必须写明内容不保留");
 assert.match(mobileSource, /accessibilityLabel="丢弃这条待发送消息，内容不保留"/, "托盘上要有独立的丢弃入口");
-console.log("✓ 撤回回填、附件丢失防线、引导按钮位置、错误失效与窄托盘降级均受回归保护");
+console.log("✓ 撤回回填、发送减法、附件丢失防线、引导按钮位置、错误失效与窄托盘降级均受回归保护");

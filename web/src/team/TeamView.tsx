@@ -25,7 +25,13 @@ import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { useTaskReplyDraft } from "../task-detail/TaskReplyDrafts.tsx";
-import { attachmentsFromPaths, joinDraftText, mergeAttachments } from "../task-detail/withdrawDraft.ts";
+import {
+  attachmentsFromPaths,
+  dropSentAttachments,
+  dropSentText,
+  joinDraftText,
+  mergeAttachments,
+} from "../task-detail/withdrawDraft.ts";
 import { conversationToMarkdown } from "../task-detail/conversationModel.ts";
 import { TeamFeed } from "./TeamFeed.tsx";
 import { TeamAttentionBar } from "./TeamAttentionBar.tsx";
@@ -111,15 +117,16 @@ function TeamReplyBox({
     if (disabled || sending || uploads.uploading || (!value.trim() && !uploads.attachments.length)) return;
     setSending(true);
     setError(null);
+    // 发出去的是这一份；请求在途时草稿可能已经变了（比如撤回了另一条待发送消息），
+    // 所以成功后按快照做减法，别把新合进来的内容一起清掉。
+    const sentText = value.trim();
+    const sentPaths = uploads.attachments.map((attachment) => attachment.path);
     try {
-      const result = await onSend(
-        value.trim(),
-        uploads.attachments.map((attachment) => attachment.path),
-        { sendAt: scheduledAt },
-      );
+      const result = await onSend(sentText, sentPaths, { sendAt: scheduledAt });
       if ("scheduled" in result) scheduled.add(result.message);
-      setValue("");
-      uploads.clear();
+      setValue((current) => dropSentText(current, sentText));
+      draft.setAttachments((current) => dropSentAttachments(current, sentPaths));
+      uploads.clearError();
       setScheduleOpen(false);
       setSendAt("");
     } catch (reason) {
