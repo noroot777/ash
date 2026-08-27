@@ -21,8 +21,9 @@ import type {
   TaskWorkspaceLeftover,
   TaskWorkspaceDiscardResult,
 } from "@ash/shared";
+import type { AuthState } from "@ash/shared/multiuser";
 import type { CliModelCatalog } from "@ash/shared/cli-presets";
-import { getBaseURL } from "./config";
+import { getApiKey, getBaseURL } from "./config";
 
 // 删除任务的返回:`leftover` 是清理之后**仍然剩下**的 worktree/分支(没勾选、或勾
 // 了但 git 拒绝),`cleanup` 是本次清理的逐项结果(没勾选时为 null)。
@@ -109,10 +110,16 @@ const j = async (r: Response) => {
   return r.json();
 };
 
+/** 配了 key 就每请求带上;自用模式留空,服务端不看这个头。 */
+const authHeader = (): Record<string, string> => {
+  const key = getApiKey();
+  return key ? { authorization: `Bearer ${key}` } : {};
+};
+
 const req = (path: string, init?: RequestInit) =>
   fetch(`${base()}/api${path}`, {
     ...init,
-    headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
+    headers: { "content-type": "application/json", ...authHeader(), ...(init?.headers ?? {}) },
   });
 
 export const api = {
@@ -124,6 +131,13 @@ export const api = {
   // takes an explicit url and bypasses the cached base().
   health: (url?: string): Promise<{ ok: boolean; ts: string }> =>
     fetch(`${(url ?? base()).replace(/\/+$/, "")}/api/health`).then(j),
+
+  // 身份探针 —— 设置页在保存之前用它验一把 key(url/key 都还没落 AsyncStorage,
+  // 所以显式传进来)。/api/auth/state 是免鉴权的:它正是用来问「这台要不要登录」的。
+  authState: (url: string, key: string): Promise<AuthState> =>
+    fetch(`${url.replace(/\/+$/, "")}/api/auth/state`, {
+      headers: key ? { authorization: `Bearer ${key}` } : {},
+    }).then(j),
 
   projects: (): Promise<ProjectView[]> => req("/projects").then(j),
   createProject: (b: { name: string; repoPath?: string }): Promise<ProjectView> =>

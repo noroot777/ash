@@ -58,6 +58,7 @@ import { mountFsBrowseRoutes } from "./fs-browse.js";
 import { mountAuthRoutes } from "./auth/routes.js";
 import { mountUserRoutes } from "./auth/user-routes.js";
 import { mountPersonalCliRoutes } from "./auth/personal-routes.js";
+import type { Actor } from "./auth/context.js";
 import { actorOf, isAdminActor } from "./auth/context.js";
 import { patchSettingsFor, settingsForActor } from "./auth/personal-settings.js";
 import { makeEventFilter } from "./auth/event-filter.js";
@@ -392,14 +393,19 @@ api.delete("/agents/:id", async (c) => {
 // /groups/resolve so both resolve the project identically.
 async function locateProject(
   b: { projectId?: string; repoPath?: string },
+  actor: Actor,
 ): Promise<{ project: typeof projects.$inferSelect } | { status: 400 | 404 | 409; body: Record<string, unknown> }> {
+  // 建分组也是往别人项目里写东西:看不见的项目在这里必须**等于不存在**(§十二),
+  // 否则「project not found / 201」这两种应答就是一台现成的 projectId 探测器。
+  const visible = await visibleProjectIds(actor);
+  const seen = (p: typeof projects.$inferSelect) => visible === null || visible.has(p.id);
   if (b.projectId) {
     const p = (await db.select().from(projects).where(eq(projects.id, b.projectId))).at(0);
-    return p ? { project: p } : { status: 404, body: { error: "project not found", projectId: b.projectId } };
+    return p && seen(p) ? { project: p } : { status: 404, body: { error: "project not found", projectId: b.projectId } };
   }
   if (b.repoPath) {
     const key = repoKey(b.repoPath);
-    const hits = (await db.select().from(projects)).filter((p) => repoKey(p.repoPath) === key);
+    const hits = (await db.select().from(projects)).filter((p) => repoKey(p.repoPath) === key && seen(p));
     if (hits.length === 0) return { status: 404, body: { error: "没有匹配 repoPath 的项目（可先调用 POST /api/projects/resolve 建项目）", repoPath: b.repoPath } };
     if (hits.length > 1) return { status: 409, body: { error: "repoPath 匹配到多个项目，请改用 projectId", repoPath: b.repoPath } };
     return { project: hits[0] };
@@ -414,7 +420,7 @@ api.post("/groups", async (c) => {
     return c.json({ error: `mode 非法: ${b.mode}（只能是 parallel | serial）` }, 400);
   }
 
-  const loc = await locateProject(b);
+  const loc = await locateProject(b, actorOf(c));
   if ("status" in loc) return c.json(loc.body, loc.status);
 
   const row = {
@@ -443,7 +449,7 @@ api.post("/groups/resolve", async (c) => {
     return c.json({ error: `mode 非法: ${b.mode}（只能是 parallel | serial）` }, 400);
   }
 
-  const loc = await locateProject(b);
+  const loc = await locateProject(b, actorOf(c));
   if ("status" in loc) return c.json(loc.body, loc.status);
 
   const name = b.name.trim();

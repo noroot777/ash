@@ -6,7 +6,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { useFonts, SpaceGrotesk_500Medium, SpaceGrotesk_700Bold } from "@expo-google-fonts/space-grotesk";
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold } from "@expo-google-fonts/inter";
 import { IBMPlexMono_400Regular, IBMPlexMono_500Medium } from "@expo-google-fonts/ibm-plex-mono";
-import { loadBaseURL, getBaseURL } from "@/lib/config";
+import { loadApiKey, loadBaseURL, getBaseURL } from "@/lib/config";
 import { refreshAll } from "@/lib/data";
 import { useTheme, fonts } from "@/lib/theme";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -29,7 +29,9 @@ export default function RootLayout() {
 
   useEffect(() => {
     (async () => {
-      await loadBaseURL();
+      // key 必须和 baseURL 一起在**第一个请求之前**读进内存:api 层是同步取用的,
+      // 晚一步的表现是开屏第一轮拉取整片 401,然后才莫名其妙自己好了。
+      await Promise.all([loadBaseURL(), loadApiKey()]);
       setBooted(true);
     })();
   }, []);

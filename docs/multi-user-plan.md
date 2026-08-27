@@ -197,6 +197,13 @@ claude 2.x headless):
    实施第 6 批次必须先用真 key 做「零交互冒烟测试」,确认预置种子(onboarding 标记、
    key 批准记录等)后 headless 首跑能直接出活,才算过。
 
+   **已解(2026-08-27,`server/scripts/test-user-cli-smoke.ts` 真跑)**:用真 key +
+   `ensureUserCliDir` 生成的种子目录,claude headless 首跑 **9.6s 出活、exit 0**,
+   宿主 `~/.claude.json` 逐字节未变。探针③ 的挂起**不复现**——它是假 key 触发的
+   (无效凭证下的重试/等待),不是 seed 缺位。结论:当前最小 seed(onboarding 标记 +
+   空 `skills/`)可以上线,不需要预置 settings.json/config.toml。
+   回归入口:`npm -w server run test:user-cli-smoke`(没给 key 时跳过而不判红)。
+
 ## 十、配置导出 / 导入
 
 - 导出为 JSON 文件,内容可勾选:执行器 / 执行模式 / 起手式 / 审查者 / 供应商。
@@ -276,7 +283,7 @@ claude 2.x headless):
 | C9 | 静态面(/mobile 等)不在闸内 | 覆盖面改为正面清单(§三) |
 | D10 | 个人配置目录放用户目录内会被项目化污染 | 挪 `data/user-cli/`,并禁用户目录根建项目(§九/§七) |
 | D11 | rootDir/目录名事后改无定义 | 设定后锁死,改=手工迁移(§七) |
-| D12 | seed 内容未验证 | 探针已解 2/3(§九);带 key 首跑挂起→冒烟测试为第 6 批次硬前置 |
+| D12 | seed 内容未验证 | **已解 3/3**(§九):真 key 冒烟 9.6s 出活、宿主配置未动;挂起系假 key 所致 |
 
 ## 附:关键代码落点(2026-08-27 调查)
 

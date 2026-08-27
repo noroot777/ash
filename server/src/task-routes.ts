@@ -130,6 +130,13 @@ api.post("/tasks", async (c) => {
     appendToQueue?: string; // 可选:把新任务追加到指定 queue 的尾部
     workflowId?: string | null; // 挑哪条起手式;省略则按项目→全局默认解析
   }>();
+  // 建任务是**往一个项目里写东西**,所以先过可见性(§十二)。resourceGate 拦的是
+  // `/tasks/:id/…`,建任务这条路上还没有 id,只有请求体里那个 projectId —— 漏了这一句,
+  // 猜中一个 projectId 就能把任务塞进别人的项目。
+  // 「看不见」与「不存在」回同一句话,免得这里变成 id 探测器。
+  if (!b.projectId || !(await canSeeProject(actorOf(c), b.projectId))) {
+    return c.json({ error: "project not found", projectId: b.projectId }, 404);
+  }
   const workflowMode = b.workflowMode ?? "preset";
   if (!(TASK_WORKFLOW_MODES as readonly string[]).includes(workflowMode)) {
     return c.json({ error: "workflowMode 只能是 free 或 preset" }, 400);
