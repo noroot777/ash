@@ -18,7 +18,7 @@ import { isAcceptingTask } from "./acceptance-lock.js";
 import { createTasks, enrichTasks, publishTaskUpdated, toTaskListItem } from "./task-store.js";
 import { attachmentsPrompt, id, now, taskBody } from "./util.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
-import { canSeeProject, groupInProject, projectOfQueue, visibleProjectIds, visibleTaskIds } from "./auth/visibility.js";
+import { canSeeProject, groupInProject, projectOfQueue, taskInProject, visibleProjectIds, visibleTaskIds } from "./auth/visibility.js";
 import { executorScopeForOwner, type ExecutorScope } from "./auth/owned-executors.js";
 import { executorDowngradePreflight } from "./auth/dispatch-gate.js";
 import { inheritOwner } from "./auth/run-env.js";
@@ -151,6 +151,18 @@ api.post("/tasks", async (c) => {
   // (第 2 轮审查 P1)。判据见 auth/visibility.ts「请求体里带来的资源 id」。
   if (b.groupId && !(await groupInProject(b.groupId, b.projectId))) {
     return c.json({ error: "group not found", groupId: b.groupId }, 404);
+  }
+  // 这条路由的请求体里一共四个资源 id:projectId、groupId、appendToQueue,加上这里这两个
+  // **指向别的任务**的。它们同样得查归属,而且 parentId 比前几个更要紧 —— 下面那句
+  // `inheritOwner` 按全库 id 查父任务的 ownerUserId,于是「猜中一个隐藏父任务」就能在自己
+  // 项目里造出一条**别人 owner** 的任务:自动起跑没有 actingUserId 时退回 tasks.ownerUserId,
+  // 烧的是那个人的 key、署的是那个人的名(第 3 轮审查 P1)。
+  // 现有调用方(派生面板、duet 接手)一律传 `projectId: task.projectId` + 同项目的任务 id,
+  // 所以这条判据就是它们本来满足的那个。
+  for (const [field, taskRef] of [["parentId", b.parentId], ["originTaskId", b.originTaskId]] as const) {
+    if (taskRef && !(await taskInProject(taskRef, b.projectId))) {
+      return c.json({ error: "task not found", [field]: taskRef }, 404);
+    }
   }
   const workflowMode = b.workflowMode ?? "preset";
   if (!(TASK_WORKFLOW_MODES as readonly string[]).includes(workflowMode)) {

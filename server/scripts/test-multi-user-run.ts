@@ -19,8 +19,9 @@
 //      duet 从来没过,于是换讨论这条路就能绕开。
 //   ⑤ 定时消息的**全局 id 路由**(`/scheduled-messages/:mid` 与 `…/steer`)要进横切闸:
 //      列表端点挂在 `/tasks/:id/…` 下、一直被挡着,这两条改写端点却整个漏在闸外。
-//   ⑥ **请求体里带来的** groupId / appendToQueue:横切闸只看 URL 上的 id,这两个得
-//      路由自己查归属 —— 猜中别人项目的 groupId/queueId 就能把任务挂进去、串进去。
+//   ⑥ **请求体里带来的** groupId / appendToQueue / parentId / originTaskId:横切闸只看
+//      URL 上的 id,这四个都得路由自己查归属 —— 猜中别人项目的 id 就能把任务挂进去、
+//      串进去;parentId 更狠,归属会跟着它继承,造出一条「我的项目、别人 owner」的任务。
 //
 // 跑法(不设 ASH_DB 时自己开一个临时库):
 //   npm -w server run test:multi-user-run
@@ -367,6 +368,30 @@ const expectBob = (env: Record<string, string | null>, where: string) => {
   assert.equal(ok.status, 200, JSON.stringify(ok.body));
   const okRow = (await db.select({ g: tasks.groupId }).from(tasks).where(eq(tasks.id, mine))).at(0);
   assert.equal(okRow?.g, "g-shared");
+
+  // parentId:同一条路由里第三个请求体 id,而且它比前两个更要紧 —— 归属跟着父任务继承。
+  // 在 bob 看不见的 p-private 里放一条 alice 的任务当父:bob 直接读它是 404(对照组),
+  // 但以前能在 p-shared 里建一条指着它的子任务,并把 ownerUserId 继承成 alice。
+  const hidden = id();
+  await db.insert(tasks).values(taskRow({ id: hidden, projectId: "p-private", title: "alice 的隐藏父任务" }));
+  assert.equal((await get(`/api/tasks/${hidden}`, bobKey)).status, 404, "隐藏任务直接读本来就该 404");
+  const child = await post("/api/tasks", bobKey, { projectId: "p-shared", title: "认了别人当爹", parentId: hidden });
+  assert.equal(child.status, 404, `别人项目的 parentId 不该收:${JSON.stringify(child.body)}`);
+  const leaked = (await db.select({ o: tasks.ownerUserId }).from(tasks).where(eq(tasks.parentId, hidden)));
+  assert.equal(leaked.length, 0, "被拒之后不该留下任何认了别人当爹的任务");
+
+  // originTaskId 同理(派生自哪条),同一路由、同一类,别只补被点名的那个。
+  const derived = await post("/api/tasks", bobKey, { projectId: "p-shared", title: "派生自别人", originTaskId: hidden });
+  assert.equal(derived.status, 404, `别人项目的 originTaskId 不该收:${JSON.stringify(derived.body)}`);
+
+  // 正向对照:同项目的父任务照常认得,归属跟着父走(§八 要的就是这个)。
+  const parentOk = await post("/api/tasks", bobKey, { projectId: "p-shared", title: "同项目的爹" });
+  assert.equal(parentOk.status, 201, JSON.stringify(parentOk.body));
+  const kid = await post("/api/tasks", bobKey, { projectId: "p-shared", title: "亲儿子", parentId: String(parentOk.body.id) });
+  assert.equal(kid.status, 201, JSON.stringify(kid.body));
+  const kidRow = (await db.select({ o: tasks.ownerUserId, p: tasks.parentId }).from(tasks).where(eq(tasks.id, String(kid.body.id)))).at(0);
+  assert.equal(kidRow?.p, String(parentOk.body.id));
+  assert.equal(kidRow?.o, bob.id, "同项目继承照常:父任务是 bob 建的,儿子也归 bob");
 }
 
 await releaseTmpDb();

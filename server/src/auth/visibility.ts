@@ -99,6 +99,19 @@ export async function groupInProject(groupId: string, projectId: string): Promis
 }
 
 /**
+ * 这条任务属于这个项目吗。任务不存在同样回 false。
+ *
+ * 建任务时请求体里还带着两个**指向别的任务**的 id:`parentId`(父任务,归属会跟着它继承)
+ * 和 `originTaskId`(派生自哪条)。父任务尤其要紧 —— `inheritOwner` 按全库 id 查它的
+ * ownerUserId,不查归属的话,猜中一个隐藏父任务就能在自己项目里造出一条**别人 owner**
+ * 的任务,而后端自动起跑退回 `tasks.ownerUserId` 时烧的就是那个人的 key(第 3 轮审查 P1)。
+ */
+export async function taskInProject(taskId: string, projectId: string): Promise<boolean> {
+  const row = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  return !!row && row.projectId === projectId;
+}
+
+/**
  * 这条队列在跑哪个项目的任务。队列没有自己的项目列 —— 成员任务的项目就是它的项目
  * (同队必须同项目,由 `assertSameGroup` 守着)。空队列 / 不存在回 null。
  * 横切闸也用这一份(resource-gate.ts),别再抄第二份。
