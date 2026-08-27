@@ -71,7 +71,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     );
   }
 
-  if (state.needsSetup) return <SetupWizard onDone={refresh} />;
+  if (state.needsSetup) return <SetupWizard state={state} onDone={refresh} />;
   if (state.mode === "multi" && !state.user) {
     // 项目加入链接:没登录时先引导登录,登录完自动回到这条链接(计划 §六:
     // 项目邀请链接只发给已有账号的人)。

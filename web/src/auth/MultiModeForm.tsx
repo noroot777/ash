@@ -22,17 +22,21 @@ export function MultiModeForm({
   onCancel,
   onIssued,
   cancelLabel = "返回",
+  lockedRootDir,
 }: {
-  onCancel: () => void;
+  /** 不给 = 这一屏没有退路(补做首启),不渲染返回按钮。 */
+  onCancel?: () => void;
   onIssued: (key: string) => void;
   cancelLabel?: string;
+  /** 补做首启时:根目录早已锁死,只能原样填回去,所以直接给出来并禁编辑。 */
+  lockedRootDir?: string;
 }) {
   const [preflight, setPreflight] = useState<SetupPreflight | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [adminName, setAdminName] = useState("");
-  const [rootDir, setRootDir] = useState("");
+  const [rootDir, setRootDir] = useState(lockedRootDir ?? "");
   const [dirName, setDirName] = useState("");
   const [dirTouched, setDirTouched] = useState(false);
   const [gitName, setGitName] = useState("");
@@ -97,6 +101,7 @@ export function MultiModeForm({
           value={rootDir}
           onChange={(e) => setRootDir(e.target.value)}
           placeholder="~/ash-workspaces"
+          readOnly={!!lockedRootDir}
         />
         <small>
           每个人会在它下面得到一个自己的目录（<code>{rootDir || "<根目录>"}/{dirName || "<目录名>"}</code>）。
@@ -172,15 +177,17 @@ export function MultiModeForm({
 
       {error ? <p className="auth-error">{error}</p> : null}
       <div className="auth-actions">
-        <button type="button" className="ui-button ui-button--ghost" onClick={onCancel}>
-          {cancelLabel}
-        </button>
+        {onCancel ? (
+          <button type="button" className="ui-button ui-button--ghost" onClick={onCancel}>
+            {cancelLabel}
+          </button>
+        ) : null}
         <button
           type="submit"
           className="ui-button ui-button--primary"
           disabled={busy || !adminName.trim() || !rootDir.trim() || !!dirError}
         >
-          {busy ? "正在转换…" : "确认切到多人模式"}
+          {busy ? "正在转换…" : lockedRootDir ? "建出管理员" : "确认切到多人模式"}
         </button>
       </div>
     </form>

@@ -29,6 +29,7 @@
     "test:reopen-acceptance": "tsx scripts/test-reopen-acceptance.ts",
     "test:accept-merge": "tsx scripts/test-accept-merge.ts",
     "test:multi-user": "tsx scripts/test-multi-user.ts",
+    "test:multi-user-setup": "tsx scripts/test-multi-user-setup.ts",
     "test:user-cli-smoke": "tsx scripts/test-user-cli-smoke.ts",
     "test:handoff": "tsx scripts/test-handoff.ts && tsx scripts/test-handoff-local.ts && tsx scripts/test-handoff-auth.ts && tsx scripts/test-handoff-return.ts",
     "test:repo-lock": "tsx scripts/test-repo-lock.ts",

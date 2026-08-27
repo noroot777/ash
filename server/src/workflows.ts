@@ -134,8 +134,12 @@ export async function findWorkflow(itemId: string, owner: string | null = null):
   const mine = (r: { ownerUserId: string | null }) => owner === null || r.ownerUserId === owner;
   if (isBuiltinKey(itemId)) {
     const meta = BUILTIN_WORKFLOWS.find((b) => b.key === itemId)!;
-    const row = (await db.select().from(workflows).where(eq(workflows.builtinKey, itemId))).at(0);
-    return row && mine(row) ? rowItem(row, meta.name, meta.desc) : factoryItem(itemId, meta.name, meta.desc);
+    // 同一条自带起手式**每人各有一行**覆写(唯一索引是 `(builtin_key, owner_user_id)`)。
+    // 所以这里必须 `.find(mine)` 而不是 `.at(0)` 再判归属:取第一行的话,别人的覆写行
+    // 只要排在前面,我自己的就被当成不存在、回一份出厂内容 —— 列表和详情对同一个人给出
+    // 两种答案,而编辑页保存时会拿出厂内容盖掉我那份改动(第 1 轮审查 P2)。
+    const row = (await db.select().from(workflows).where(eq(workflows.builtinKey, itemId))).find(mine);
+    return row ? rowItem(row, meta.name, meta.desc) : factoryItem(itemId, meta.name, meta.desc);
   }
   const row = (
     await db.select().from(workflows).where(and(eq(workflows.id, itemId), isNull(workflows.builtinKey)))

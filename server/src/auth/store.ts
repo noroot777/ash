@@ -96,6 +96,16 @@ export async function countUsers(): Promise<number> {
   return (await db.select().from(users)).length;
 }
 
+/**
+ * 首启补做时用:上一次转换崩在半路,库里留下的那个**没有 key 的**管理员。
+ * 只在 `needsSetup()` 为真(一个能登录的人都没有)时调用,所以这里查到的任何一行
+ * 按定义都是没建完的。优先挑 admin;没有任何行就回 null,由调用方新建。
+ */
+export async function halfBuiltAdmin(): Promise<UserRow | null> {
+  const rows = (await db.select().from(users)).filter((u) => !u.keyHash);
+  return rows.find((u) => u.role === "admin") ?? rows.at(0) ?? null;
+}
+
 export async function createUser(input: {
   name: string;
   role: UserRole;

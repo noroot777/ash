@@ -8,6 +8,7 @@ import { hostname } from "node:os";
 import { actorOf, authErrorResponse, requireAdmin } from "./context.js";
 import { SESSION_COOKIE, crossSiteRejection } from "./middleware.js";
 import {
+  ensureHomeDirUnder,
   ensureUserHomeDir,
   instanceConfig,
   isMultiUser,
@@ -21,6 +22,7 @@ import {
   createSession,
   createUser,
   deleteSession,
+  halfBuiltAdmin,
   revokeUserKey,
   findUserByKey,
   getUser,
@@ -56,11 +58,14 @@ async function stateFor(c: Context): Promise<AuthState> {
     return { mode: "single", needsSetup: config.mode === "", user: null, rootDir: null, homeDir: null };
   }
   const user = actor.kind === "user" && actor.userId ? await getUser(actor.userId) : null;
+  const needs = await needsSetup();
   return {
     mode: "multi",
-    needsSetup: await needsSetup(),
+    needsSetup: needs,
     user: user ? toUserView(user) : null,
-    rootDir: user?.role === "admin" ? config.rootDir : null,
+    // 补做中(needs)时还没有人能登录,但根目录已经锁死了 —— 不把它交出去,向导那张表
+    // 只能靠用户凭记忆填对,填错就是一个 409。
+    rootDir: user?.role === "admin" || needs ? config.rootDir : null,
     homeDir: user ? await userHomeDir(user.dirName) : null,
   };
 }
@@ -110,7 +115,10 @@ export function mountAuthRoutes(api: Hono): void {
   // 一个端点管两件事:它们的差别只有「库里有没有存量数据」,流程与校验完全一致。
   api.post("/auth/setup", async (c) => {
     const config = await instanceConfig();
-    const first = config.mode === "";
+    // 「首启」有两种:模式还没定过,以及**定了 multi 却没人能登录**(转换中途崩了)。
+    // 后者必须也走这条路 —— 否则实例锁死在一个谁也进不去的多人模式里,只能手改库。
+    const resuming = config.mode === "multi" && (await needsSetup());
+    const first = config.mode === "" || resuming;
     // 已经定过模式 = 这是设置页危险区的转换,必须是管理员(自用模式下人人都是)。
     if (!first) {
       try {
@@ -121,7 +129,7 @@ export function mountAuthRoutes(api: Hono): void {
         throw error;
       }
     }
-    if (config.mode === "multi") return c.json({ error: "已经是多人模式了" }, 409);
+    if (config.mode === "multi" && !resuming) return c.json({ error: "已经是多人模式了" }, 409);
 
     const body = await c.req.json<{
       mode?: string;
@@ -133,6 +141,10 @@ export function mountAuthRoutes(api: Hono): void {
     }>().catch(() => ({} as Record<string, never>));
 
     if (body.mode === "single") {
+      // 补做中的实例走不到这里:multi 转不回 single(§二),与其抛个 500,不如说清楚。
+      if (resuming) {
+        return c.json({ error: "这个实例已经是多人模式了，只能把管理员补建出来；多人模式不能转回自用模式" }, 409);
+      }
       await setInstanceMode("single", "");
       return c.json(await stateFor(c));
     }
@@ -154,10 +166,29 @@ export function mountAuthRoutes(api: Hono): void {
       return c.json({ error: (error as Error).message }, ((error as { status?: number }).status ?? 400) as 400);
     }
 
-    // 顺序有讲究:**先落模式与根目录**,再建人。反过来的话,建人成功但写模式失败,
-    // 库里会留下一个孤儿用户,而实例仍是自用模式 —— 下次再转换会撞目录名冲突。
-    await setInstanceMode("multi", rootDir);
-    const admin = await createUser({
+    // 顺序有讲究,而且**两头都要顾**:
+    //  · 建人**之前**必须先把管理员目录建出来。反过来的话(第 1 轮审查 P0),
+    //    `ensureUserHomeDir` 一失败(路径被文件占着、没写权限),实例已经是 multi、
+    //    管理员行已落库却没有 key —— 向导被 needsSetup 藏起来,谁也进不去。目录先建
+    //    则失败时**库里一个字都没动**,原样重试即可。
+    //  · 落模式仍要排在建人之前:建人成功而写模式失败会留下孤儿用户,下次转换撞目录名。
+    // 两条合起来就是「先磁盘、再模式、最后人」。
+    try {
+      ensureHomeDirUnder(rootDir, dirName);
+    } catch (error) {
+      return c.json({ error: (error as Error).message }, ((error as { status?: number }).status ?? 500) as 500);
+    }
+    try {
+      await setInstanceMode("multi", rootDir);
+    } catch (error) {
+      // 根目录锁死(补做时填了另一个路径)是这里唯一的可预期失败,如实回它的原话。
+      return c.json({ error: (error as Error).message }, 409);
+    }
+    // 补做时**先认领上一次留下的那半个管理员**,而不是再插一行。上次可能已经跑完
+    // `claimExistingDataFor`(存量项目/执行器都记在那个 id 名下),另起一行会把那些
+    // 数据留给一个谁也登录不了的账号。它的目录名是当初锁死的那个,以库里的为准。
+    const half = resuming ? await halfBuiltAdmin() : null;
+    const admin = half ?? await createUser({
       name: adminName,
       role: "admin",
       dirName,
@@ -165,7 +196,8 @@ export function mountAuthRoutes(api: Hono): void {
       gitEmail: (body.gitEmail ?? "").trim() || suggestGitEmail(adminName, dirName),
       createdBy: null,
     });
-    await ensureUserHomeDir(admin.dirName);
+    // 认领来的那行的目录名可能与表单里填的不同(锁死的是库里那个),按它再保一次。
+    if (half) await ensureUserHomeDir(half.dirName);
     initUserCliEnv(admin.id);
     // 存量项目/随手记/供应商/执行器等一律归初始管理员(§十三);项目路径一律不动。
     const claimed = await claimExistingDataFor(admin.id);

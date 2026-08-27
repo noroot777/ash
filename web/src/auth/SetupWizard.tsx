@@ -3,6 +3,7 @@
 // 「切到多人」的表单本体在 `MultiModeForm.tsx` —— 设置页危险区走的是同一份,
 // 那三条警告(转不回、根目录锁死、宿主订阅被抹去)只能有一份拷贝。
 import { useCallback, useState } from "react";
+import type { AuthState } from "@ash/shared";
 import { ApiError } from "../lib/apiClient.ts";
 import { authApi } from "../lib/authApi.ts";
 import { KeyReveal } from "./KeyReveal.tsx";
@@ -10,8 +11,13 @@ import { MultiModeForm } from "./MultiModeForm.tsx";
 
 type Step = "choose" | "multi-form" | "key";
 
-export function SetupWizard({ onDone }: { onDone: () => Promise<void> | void }) {
-  const [step, setStep] = useState<Step>("choose");
+// `state` 是**传进来的**,不是 useAuth() 读的:这一屏由 AuthGate 渲染在
+// `AuthContext.Provider` 之外(那时还没确认身份),读 context 只会拿到自用模式的兜底值。
+export function SetupWizard({ state, onDone }: { state: AuthState; onDone: () => Promise<void> | void }) {
+  // 模式已经是 multi 却还进得了向导 = 上一次转换崩在半路,没建出能登录的管理员。
+  // 那一步的分叉早就没得选了(转不回自用),直接进表单,只把管理员补出来。
+  const resuming = state.mode === "multi";
+  const [step, setStep] = useState<Step>(resuming ? "multi-form" : "choose");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [issuedKey, setIssuedKey] = useState("");
@@ -47,9 +53,16 @@ export function SetupWizard({ onDone }: { onDone: () => Promise<void> | void }) 
     return (
       <div className="auth-shell">
         <div className="auth-card auth-card--wide">
-          <h1>切到多人模式</h1>
+          <h1>{resuming ? "把管理员补建出来" : "切到多人模式"}</h1>
+          {resuming ? (
+            <p className="auth-note">
+              上一次转换没走完：这台 ash 已经是多人模式，但还没有任何人能登录。
+              填一次姓名就能补上，根目录已经锁死、不用再选。
+            </p>
+          ) : null}
           <MultiModeForm
-            onCancel={() => setStep("choose")}
+            lockedRootDir={resuming ? state.rootDir ?? undefined : undefined}
+            onCancel={resuming ? undefined : () => setStep("choose")}
             onIssued={(key) => {
               setIssuedKey(key);
               setStep("key");

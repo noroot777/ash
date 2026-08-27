@@ -91,6 +91,19 @@ export function mountUserRoutes(api: Hono): void {
     if (await dirNameTaken(dirName)) return c.json({ error: `目录名「${dirName}」已被占用` }, 409);
     const role: UserRole = b.role === "admin" ? "admin" : "member";
 
+    // 目录与个人 CLI 环境在**建用户时**就位(§五/§九):等到第一次派任务再建的话,
+    // 那一刻的失败会表现成一个莫名其妙的执行错误。
+    //
+    // **目录排在落库之前**。反过来的话(第 1 轮审查 P1),目录建不出来时库里已经留下
+    // 一个没有邀请链接、也没有 key 的用户,而它把姓名和目录名双双占死 —— 管理员照原样
+    // 重试会撞 409「已经有一个叫「X」的用户了」,只能先去删那个残行。先建目录则失败时
+    // 库里一个字都没动,把路径腾开重试即可。
+    try {
+      await ensureUserHomeDir(dirName);
+    } catch (error) {
+      const status = ((error as { status?: number }).status ?? 500) as 500;
+      return c.json({ error: `目录没建出来，用户也没建：${(error as Error).message}` }, status);
+    }
     const user = await createUser({
       name,
       role,
@@ -99,13 +112,6 @@ export function mountUserRoutes(api: Hono): void {
       gitEmail: (b.gitEmail ?? "").trim() || suggestGitEmail(name, dirName),
       createdBy: actorOf(c).userId,
     });
-    // 目录与个人 CLI 环境在**建用户时**就位(§五/§九):等到第一次派任务再建的话,
-    // 那一刻的失败会表现成一个莫名其妙的执行错误。
-    try {
-      await ensureUserHomeDir(user.dirName);
-    } catch (error) {
-      return c.json({ error: `用户已建，但目录没建出来：${(error as Error).message}` }, 500);
-    }
     initUserCliEnv(user.id);
     const token = await issueInvite(user.id, actorOf(c).userId);
     return c.json({ user: toUserView(user, true), inviteUrl: `/claim/${token}` }, 201);

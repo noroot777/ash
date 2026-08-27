@@ -17,6 +17,8 @@
 //      换掉的执行器都报出来 —— duet 两格、team 三格,顶层那一格是空的。
 //   ④ duet 起跑前必须过派发闸:没挂供应商的执行器不许起跑 —— 单人任务一直在过,
 //      duet 从来没过,于是换讨论这条路就能绕开。
+//   ⑤ 定时消息的**全局 id 路由**(`/scheduled-messages/:mid` 与 `…/steer`)要进横切闸:
+//      列表端点挂在 `/tasks/:id/…` 下、一直被挡着,这两条改写端点却整个漏在闸外。
 //
 // 跑法(不设 ASH_DB 时自己开一个临时库):
 //   npm -w server run test:multi-user-run
@@ -88,6 +90,7 @@ const { authGate } = await import("../src/auth/middleware.js");
 const { resourceGate } = await import("../src/auth/resource-gate.js");
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
 const { mountTaskRoutes } = await import("../src/task-routes.js");
+const { mountTaskSteerRoutes } = await import("../src/task-steer.js");
 const { now, id } = await import("../src/util.js");
 
 await ensureSchema();
@@ -122,12 +125,20 @@ await visibility.addProjectMember({ projectId: "p-shared", userId: bob.id, role:
 const api = new Hono();
 mountTaskRunRoutes(api);
 mountTaskRoutes(api); // executor-preflight 住在这边
+mountTaskSteerRoutes(api); // /scheduled-messages/:mid/steer 与 DELETE 同一个 id 形状
 const app = new Hono();
 app.use("*", authGate());
 app.use("/api/*", resourceGate());
 app.route("/api", api);
 const get = async (path: string, key: string) => {
   const res = await app.fetch(new Request(`http://127.0.0.1:4317${path}`, {
+    headers: { authorization: `Bearer ${key}` },
+  }));
+  return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
+};
+const del = async (path: string, key: string) => {
+  const res = await app.fetch(new Request(`http://127.0.0.1:4317${path}`, {
+    method: "DELETE",
     headers: { authorization: `Bearer ${key}` },
   }));
   return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
@@ -275,6 +286,37 @@ const expectBob = (env: Record<string, string | null>, where: string) => {
   await until("闸拦下后结算", async () => settled(await statusOf(taskId)));
   assert.equal(await statusOf(taskId), "failed", "没挂供应商的执行器不该跑成功");
   assert.equal(readProbes().length, 0, "被闸拦下就一个进程都不该起 —— 起了就是绕过去了");
+}
+
+// ── ⑤ 定时消息的全局 id 路由要进横切闸 ─────────────────────────────────────
+{
+  const { scheduledMessages } = await import("../src/db/schema.js");
+  // bob **不是**成员的项目 —— 前面那个 p-shared 他看得见,证不了越权。
+  await db.insert(projects).values({ id: "p-private", name: "private", repoPath: repo, ownerUserId: alice.id, createdAt: ts, updatedAt: ts });
+  const hidden = id();
+  await db.insert(tasks).values(taskRow({ id: hidden, projectId: "p-private", title: "别人的任务" }));
+  const mid = id();
+  await db.insert(scheduledMessages).values({
+    id: mid, taskId: hidden, text: "待发的原话",
+    sendAt: new Date(Date.parse(ts) + 3_600_000).toISOString(),
+    status: "pending", ownerUserId: alice.id, createdAt: ts,
+  });
+
+  // 任务级列表一直是挡着的 —— 对照组,证明漏的只是全局 id 那两条。
+  const list = await get(`/api/tasks/${hidden}/scheduled-messages`, bobKey);
+  assert.equal(list.status, 404, "看不见的项目,任务级列表本来就该 404");
+
+  const canceled = await del(`/api/scheduled-messages/${mid}`, bobKey);
+  assert.equal(canceled.status, 404, `拿到 mid 就能取消别人项目的待发消息:${JSON.stringify(canceled.body)}`);
+  const steered = await post(`/api/scheduled-messages/${mid}/steer`, bobKey);
+  assert.equal(steered.status, 404, "同一个 id 形状的 steer 也一样");
+  const after = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, mid))).at(0);
+  assert.equal(after?.status, "pending", "被挡下就一个字都不该改");
+
+  // 看得见的人照常能取消 —— 闸不能把正常路一起堵了。
+  const aliceKey3 = await store.resetUserKey(alice.id);
+  const ok = await del(`/api/scheduled-messages/${mid}`, aliceKey3);
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
 }
 
 await releaseTmpDb();
