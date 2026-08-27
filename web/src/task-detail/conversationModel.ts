@@ -10,6 +10,7 @@ import { applyVerifySpans, reviewerKey, reviewerKeyOf, reviewerOf, traceVerifyRo
 import {
   groupedTrace,
   normalizedPersistedTrace,
+  splitTraceGroupAt,
   takeTraceGroup,
   traceRun,
   traceUsage,
@@ -359,6 +360,18 @@ export function buildConversationItems(
     const segments = parseSessionOutput(output);
     const traceGroups = groupedTrace(normalizedPersistedTrace(trace, session));
     const consumedTrace = new Set<string>();
+    // 先按真人插话把 trace 切成段，再逐段发放。切分必须整体跑在任何 agent 段认领之前：
+    // 原生引导那一路插话前常常一个字都没吐（agent 正连着跑工具），既没有 .md 正文能顺手
+    // 触发切分，等上一段领走整组之后也已经晚了。
+    //
+    // 只认 user 段。系统旁注（预约审查、验收阶段更新…）夹在回合中间时**不算断点**，
+    // 后面还是同一个人接着说 —— 见下面 continuation 那一段的同一条判据。
+    let splitFrom = session.startedAt;
+    for (const segment of segments) {
+      if (segment.kind !== "user" || !segment.at) continue;
+      splitTraceGroupAt(traceGroups, consumedTrace, splitFrom, segment.at);
+      splitFrom = segment.at;
+    }
     let turnStartedAt = session.startedAt;
     segments.forEach((segment, index) => {
       if (segment.kind === "user") {

@@ -57,7 +57,7 @@ assert.deepEqual(runActivityCopy({ status: "queued", mode: "single", queuePositi
 });
 assert.deepEqual(runActivityCopy({ status: "running", mode: "single", phase: "replying", executor: "codex@local" }), {
   title: "codex@local 已收到你的消息",
-  detail: "正在恢复原会话并读取你的补充，下一条回复会自动出现在这里。",
+  detail: "正在把你的补充读进当前会话，下一条回复会自动出现在这里。",
 });
 assert.match(runActivityCopy({ status: "running", mode: "team", phase: "replying" }).detail, /调整方向/);
 assert.match(runActivityCopy({ status: "running", mode: "duet", phase: "replying" }).title, /收到你的补充/);
