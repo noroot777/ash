@@ -52,16 +52,22 @@ function targetForOutbound(marker: TaskHandoff, rawTargetUrl: string, targets: H
   if (marker.direction !== "out" || marker.pending) {
     throw new HandoffError("这不是已确认接力出去的任务", 409);
   }
-  // 持有机认的是**设置里那一条**，不是 marker 里冻着的旧地址（见 shared 的 outboundHolder：
-  // 机器换地址后按名字认回同一台）。请求带来的目标必须就是它现在的地址 —— 这一层仍要卡，
-  // 否则前端传谁就往谁发。
+  // 持有机认的是**设置里那一条**，不是 marker 里冻着的旧地址（判据见 shared 的
+  // outboundHolder：地址 → 指纹 → 名字，指纹明确冲突的一律出局）。
   const target = outboundHolder(marker, targets);
-  if (!target) throw new HandoffError("这台持有机器已从接力设置中移除", 409);
+  if (!target) {
+    // 认不出来有两种，**得说清是哪一种**：说错了用户会去改错的东西。
+    // 「指纹对不上」时地址多半还在设置里躺着，报成「已移除」只会让人对着一条明明还在的
+    // 记录发愣；这一条的正解是去核对指纹，不是重新添一台机器。
+    const sameUrl = targets.find((item) => normalizedUrl(item.url) === normalizedUrl(marker.peerUrl ?? ""));
+    if (sameUrl && marker.peerFp && sameUrl.peerFp && !sameFingerprint(marker.peerFp, sameUrl.peerFp)) {
+      throw new HandoffError("任务记录的机器身份与当前设置不一致，请重新核对指纹", 409);
+    }
+    throw new HandoffError("这台持有机器已从接力设置中移除", 409);
+  }
+  // 请求带来的目标必须就是它现在的地址 —— 这一层仍要卡，否则前端传谁就往谁发。
   if (normalizedUrl(target.url) !== normalizedUrl(rawTargetUrl)) {
     throw new HandoffError("任务记录的持有机器与请求目标不一致", 409);
-  }
-  if (marker.peerFp && target.peerFp && !sameFingerprint(marker.peerFp, target.peerFp)) {
-    throw new HandoffError("任务记录的机器身份与当前设置不一致，请重新核对指纹", 409);
   }
   return target;
 }

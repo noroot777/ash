@@ -250,8 +250,11 @@ function samePeerFp(a: string | null | undefined, b: string | null | undefined):
  *   3. **名字** —— 老版本导出的 marker 没有 `peerFp`，那时名字是仅剩的线索。
  *      「改地址、不改名字」也正是那次编辑的形状。
  *
- * 第 3 档有一条硬约束：**已知指纹冲突的一律不选**。marker 记着 A、设置里这条写着 B，那它明确
- * 不是同一台机器，重名也不行 —— 名字是用户随手填的，指纹不是。
+ * 三档之前先过一道闸：**指纹明确冲突的一律出局**。marker 记着 A、设置里这条写着 B，那它已经
+ * 自证不是同一台机器 —— 地址一样也不行（「门牌没变、屋里换了人」正是 TOFU 指纹要拦的那件事：
+ * 地址会被 DHCP 或 tailscale 回收给别的设备，本任务的起因就是这个），名字一样更不行（名字是
+ * 用户随手填的，指纹不是）。marker 或 target 任一缺指纹时这道闸不设限 —— 老版本导出的记录、
+ * 还没记过指纹的 target，那时本来就没有身份可比，正是后两档要兜的场合。
  *
  * 认错了会怎样？**问不出东西，仅此而已**：状态查询在对端是按调用方指纹逐条鉴权的
  * （remoteStatesFor → ownedInboundTask），不是本机交过去的任务一条都不回。而真会把整个仓库和
@@ -263,16 +266,16 @@ export function outboundHolder<T extends HandoffTarget>(
   targets: T[],
 ): T | null {
   if (!marker) return null;
-  const wanted = normalizedPeerUrl(marker.peerUrl);
-  const byUrl = wanted ? targets.find((item) => normalizedPeerUrl(item.url) === wanted) : undefined;
-  if (byUrl) return byUrl;
   const fp = marker.peerFp;
-  const byFp = fp ? targets.find((item) => samePeerFp(item.peerFp, fp)) : undefined;
+  // 指纹这道闸对三档一视同仁（理由见上）。滤在前面而不是各档各判，是为了不出现
+  // 「地址那档放行、名字那档拦住」这种同一份数据两种答案。
+  const candidates = targets.filter((item) => !(fp && item.peerFp && !samePeerFp(item.peerFp, fp)));
+  const wanted = normalizedPeerUrl(marker.peerUrl);
+  const byUrl = wanted ? candidates.find((item) => normalizedPeerUrl(item.url) === wanted) : undefined;
+  if (byUrl) return byUrl;
+  const byFp = fp ? candidates.find((item) => samePeerFp(item.peerFp, fp)) : undefined;
   if (byFp) return byFp;
   const name = marker.peerName?.trim();
-  if (!name) return null;
-  // 重名时取头一条,但**指纹明确对不上的那些先出局** —— 它们已经自证不是同一台机器。
-  // marker 或 target 缺指纹（老记录）时这一条不设限,那正是要靠名字兜的场合。
-  return targets.find((item) => item.name.trim() === name && !(fp && item.peerFp && !samePeerFp(item.peerFp, fp)))
-    ?? null;
+  // 重名时取头一条：走到这一档说明没有指纹可依，而名字重了的两台在界面上本来也分不出来。
+  return name ? candidates.find((item) => item.name.trim() === name) ?? null : null;
 }

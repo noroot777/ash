@@ -83,4 +83,24 @@ assert.equal(outboundHolder(marker("http://old:4317", "mac-mini"), [MOVED_WRONG]
 const FRESH = { name: "mac-mini", url: "http://fresh:4317" } satisfies HandoffTarget;
 assert.equal(outboundHolder(marker("http://old:4317", "mac-mini", FP_MAC), [FRESH]), FRESH);
 
+// ── 指纹这道闸对**地址**那一档也生效（第 2 轮审查提出）──────────────────────
+// 「门牌没变、屋里换了人」：地址会被 DHCP / tailscale 回收给别的设备，而历史 marker 还
+// 记着原来那台的指纹。地址撞上就直接返回的话，状态轮询会把出站任务 id 发给一台陌生机器,
+//「在对端打开」会拼出它的 URL,点开出站行也会进它的 RemoteTaskDetail。
+const SAME_URL_OTHER = { name: "mac-mini", url: "http://same:4317", peerFp: FP_OTHER } satisfies HandoffTarget;
+assert.equal(
+  outboundHolder(marker("http://same:4317", "mac-mini", FP_MAC), [SAME_URL_OTHER]),
+  null,
+  "地址一样但指纹是另一台：宁可认不出，也不能把它当成持有机",
+);
+// 同一个地址上换了人，而真正那台在设置里换了地址躺着 —— 要认后者。
+const REAL_MOVED = { name: "mac-mini", url: "http://moved:4317", peerFp: FP_MAC } satisfies HandoffTarget;
+assert.equal(
+  outboundHolder(marker("http://same:4317", "mac-mini", FP_MAC), [SAME_URL_OTHER, REAL_MOVED]),
+  REAL_MOVED,
+  "地址那条被指纹否掉之后，要接着按指纹找到真正那台",
+);
+// 名字也一样、地址也一样，但指纹冲突 —— 三档一个都不能放它过。
+assert.equal(outboundHolder(marker("http://same:4317", "mac-mini", FP_MAC), [SAME_URL_OTHER, COMP]), null);
+
 console.log("handoff holder resolution tests passed");
