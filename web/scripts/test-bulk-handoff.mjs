@@ -47,8 +47,12 @@ assert.match(
   "身份端点不可达时不能静默吞掉核对失败",
 );
 
+// 「其他机器」那一节列谁，判据跟任务模式点开出站行同源（shared 的 outboundHolder）。
+// 这里传的是 target 本身 + 全量 targets：outboundHolder 是在候选集里挑，只递当前这条的话
+// 另一台同名机器的行会被算到它头上。
+const TARGET = { name: "目标机", url: "http://target:4317/", peerFp: sourceFp };
 const outbound = outboundTasksForTarget([
-  task("older", { updatedAt: "2026-08-20T08:00:00.000Z", handoff: { direction: "out", peerUrl: "http://old-target:4317", peerFp: sourceFp, at: "2026-08-20T08:00:00.000Z" } }),
+  task("older", { updatedAt: "2026-08-20T08:00:00.000Z", handoff: { direction: "out", peerUrl: "http://old-target:4317", peerFp: sourceFp, peerName: "目标机", at: "2026-08-20T08:00:00.000Z" } }),
   task("newer", { updatedAt: "2026-08-20T09:00:00.000Z", handoff: { direction: "out", peerUrl: "http://target:4317/", peerFp: sourceFp, at: "2026-08-20T09:00:00.000Z" } }),
   task("pending", { handoff: { direction: "out", pending: true, peerUrl: "http://target:4317" } }),
   task("other-target", { handoff: { direction: "out", peerUrl: "http://elsewhere:4317" } }),
@@ -56,8 +60,27 @@ const outbound = outboundTasksForTarget([
   task("returned-archive", { handoff: { direction: "out", peerUrl: "http://target:4317", peerFp: sourceFp, originFp: sourceFp } }),
   task("inbound", { handoff: { direction: "in", peerUrl: "http://target:4317" } }),
   task("other-project", { projectId: "p2", handoff: { direction: "out", peerUrl: "http://target:4317" } }),
-], "p1", "http://target:4317/", sourceFp);
+], "p1", TARGET, [TARGET]);
 assert.deepEqual(outbound.map((item) => item.id), ["newer", "older"]);
+
+// 机器换了地址：用户在设置里把 url 改新，界面会把记住的指纹一并清掉（那串指纹是对
+// **上一个地址**背后那台机器的承诺）。这一节必须跟着认回同一台 —— 不认的话，任务模式里
+// 点得开的那些行，在「其他机器」下整批消失，同一件事两个表面两种答案。
+const MOVED = { name: "目标机", url: "http://new-target:4317", peerFp: null };
+const movedRows = outboundTasksForTarget([
+  task("moved", { handoff: { direction: "out", peerUrl: "http://old-target:4317", peerFp: sourceFp, peerName: "目标机", at: "2026-08-20T08:00:00.000Z" } }),
+], "p1", MOVED, [MOVED]);
+assert.deepEqual(movedRows.map((item) => item.id), ["moved"], "改完地址后历史出站行仍归这台机器");
+
+// 反过来：同一个地址上换了人（marker 记着 A，设置里这条写着 B）—— 一行都不该归它。
+const RECLAIMED = { name: "目标机", url: "http://old-target:4317", peerFp: thirdFp };
+assert.deepEqual(
+  outboundTasksForTarget([
+    task("stale", { handoff: { direction: "out", peerUrl: "http://old-target:4317", peerFp: sourceFp, peerName: "目标机", at: "2026-08-20T08:00:00.000Z" } }),
+  ], "p1", RECLAIMED, [RECLAIMED]).map((item) => item.id),
+  [],
+  "地址被别的机器占了，历史行不能算在它头上",
+);
 
 const result = partitionBulkHandoffTasks([
   task("ready"),

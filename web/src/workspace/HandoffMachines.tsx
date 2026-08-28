@@ -34,7 +34,7 @@ export function HandoffMachines({
 
   const outboundByTarget = useMemo(() => new Map(targets.map((target) => [
     target.url,
-    project ? outboundTasksForTarget(tasks, project.id, target.url, target.peerFp) : [],
+    project ? outboundTasksForTarget(tasks, project.id, target, targets) : [],
   ])), [project, targets, tasks]);
 
   if (!targets.length || !project) return null;

@@ -194,10 +194,18 @@ async function remoteStatesFor(
 //
 // 分组的 key 是**持有机现在的地址**,不是 marker 里冻着的那个:同一台机器换过地址之后,
 // 换地址前后交出去的行要合并成同一次请求,而不是拆成「一台连得上、一台永远连不上」。
-async function outboundByPeer(): Promise<Map<string, { target: HandoffTarget; items: { taskId: string; transferId?: string }[] }>> {
+type PeerBucket = {
+  target: HandoffTarget;
+  items: { taskId: string; transferId?: string }[];
+  // 这些行在接力那一刻记下的对端指纹(去重)。设置里那条 target 自己没记指纹时,
+  // 它就是唯一能用来验明「这个地址后面还是不是那台机器」的东西 —— 见下面 outboundRemoteStates。
+  expectedFps: Set<string>;
+};
+
+async function outboundByPeer(): Promise<Map<string, PeerBucket>> {
   const { handoffTargets } = await getAppSettings();
   const rows = await db.select({ id: tasks.id, handoff: tasks.handoff }).from(tasks);
-  const byPeer = new Map<string, { target: HandoffTarget; items: { taskId: string; transferId?: string }[] }>();
+  const byPeer = new Map<string, PeerBucket>();
   for (const row of rows) {
     const marker = markerOf(row.handoff);
     if (marker?.direction !== "out" || marker.pending || !marker.peerUrl) continue;
@@ -207,21 +215,52 @@ async function outboundByPeer(): Promise<Map<string, { target: HandoffTarget; it
     const target = outboundHolder(marker, handoffTargets);
     if (!target) continue;
     const url = normalizedUrl(target.url);
-    const bucket = byPeer.get(url) ?? { target, items: [] };
+    const bucket = byPeer.get(url) ?? { target, items: [], expectedFps: new Set<string>() };
     bucket.items.push({ taskId: marker.peerTaskId || row.id, transferId: marker.transferId ?? undefined });
+    if (marker.peerFp) bucket.expectedFps.add(marker.peerFp.trim().toLowerCase());
     byPeer.set(url, bucket);
   }
   return byPeer;
 }
 
+// 这一轮该不该先验明对端正身,以及拿谁当期望指纹。
+//
+// **要验的只有一种情况**:设置里那条 target 没有指纹,而这些出站行记着一个。改地址会
+// 把记住的指纹一起丢掉(设置页那段注释:指纹是对上一个地址背后那台机器的承诺),于是
+// outboundHolder 只能按名字把它认回来 —— 而名字认回来的地址可能根本是填错的。
+// 不验就直接问的话,一台恰好也批准过本机的 ash 会回 200 + 空 rows:侧栏既没有实时状态、
+// 也不会说「联系不上」,正是这次要修的那种「不是实时却没有提示」。
+//
+// target 自己有指纹时不必验:outboundHolder 的闸已经保证它跟 marker 记的是同一台。
+// 一条 marker 都没记指纹(老版本导出的)时也不必:没有期望值可比,验了也是白验。
+function identityToVerify(bucket: PeerBucket): { expectFp: string } | { conflict: true } | null {
+  if (bucket.target.peerFp || bucket.expectedFps.size === 0) return null;
+  // 同一个名字下混着两台机器的历史行:问哪一台都可能问错人,一律不发。
+  if (bucket.expectedFps.size > 1) return { conflict: true };
+  return { expectFp: [...bucket.expectedFps][0]! };
+}
+
 // 问一圈持有机：我交出去的那些任务，在它们那儿现在什么样。
 // 联系不上的机器只列进 offline **不抛错** —— 一台机器关机不该让整个侧栏读不出状态，
 // 而侧栏拿到 offline 才能如实说「这几行显示的是接力当时的状态」。
+// 身份没核对过的先 ping 一次验明正身（判据见 identityToVerify），验不过同样只进 offline。
 export async function outboundRemoteStates(): Promise<HandoffOutboundStateResult> {
   const rows: HandoffRemoteState[] = [];
   const offline: HandoffPeerOffline[] = [];
-  for (const [url, { target, items }] of await outboundByPeer()) {
+  for (const [url, bucket] of await outboundByPeer()) {
+    const { target, items } = bucket;
     try {
+      const verify = identityToVerify(bucket);
+      if (verify) {
+        if ("conflict" in verify) {
+          throw new HandoffError(
+            `「${target.name}」名下混着多台机器的接力记录，无法确认该问哪一台；`
+            + "先在接力设置里对它重新申请一次，把指纹记回来", 409,
+          );
+        }
+        // 指纹对不上时 pingPeer 自己会抛 409,话说得比这里清楚(记住的 / 这次的短指纹都列出来)。
+        await pingPeer(url, verify.expectFp);
+      }
       const answer = await fetchPeer<{ rows: HandoffRemoteState[] }>(
         `${url}/api/handoff/proxy/tasks/state`,
         {

@@ -73,6 +73,33 @@ export async function checkOutboundStates(opts: {
     `换过地址的持有机要按名字认回,实得 ${JSON.stringify(moved)}`,
   );
 
+  // 真实的改地址路径还带一件事:设置页改 url 时会把记住的 peerFp **一并清掉**(那串指纹
+  // 是对上一个地址背后那台机器的承诺)。于是这台机器只能靠名字认回来 —— 而名字认回来的
+  // 地址完全可能是填错的。所以问状态之前先 ping 一次验明正身。
+  //
+  // 指纹对得上:照常问。
+  await patchAppSettings({ handoffTargets: [{ name: "刚改过地址的机器", url: peerUrl }] });
+  await setMarker({ peerUrl: deadUrl, peerName: "刚改过地址的机器", peerFp: peerFingerprint });
+  const verified = await outboundRemoteStates();
+  assert.deepEqual(verified.offline, [], "指纹核对得上就该照常问到状态");
+  assert.ok(
+    verified.rows.some((row) => row.taskId === taskId),
+    `验明正身之后要问得到实时状态,实得 ${JSON.stringify(verified)}`,
+  );
+
+  // 指纹对不上(地址填错了、或这个地址后面已经换了别的机器):**任务 id 一个都不发出去**,
+  // 如实进 offline。不验的话,一台恰好也批准过本机的 ash 会回 200 + 空 rows —— 侧栏既
+  // 没有实时状态、也不说「联系不上」,正是这次要修的那种「不是实时却没有提示」。
+  await setMarker({ peerUrl: deadUrl, peerName: "刚改过地址的机器", peerFp: "0".repeat(64) });
+  const impostor = await outboundRemoteStates();
+  assert.deepEqual(impostor.rows, [], "身份验不过就不该有实时状态");
+  assert.equal(impostor.offline.length, 1, "验不过的机器要如实进 offline");
+  assert.match(
+    impostor.offline[0]!.reason,
+    /身份和上次不一样/,
+    `offline 的理由要说清是身份对不上,实得 ${impostor.offline[0]?.reason}`,
+  );
+
   // 已经从接力设置里删掉的机器:连签名都发不出去,当它不存在(既不问也不报 offline)。
   // 跟上面那条是两件事 —— 删除是用户自己按的,换地址不是。
   await patchAppSettings({ handoffTargets: [] });
