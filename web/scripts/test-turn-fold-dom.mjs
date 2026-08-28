@@ -1,0 +1,107 @@
+// 回合折叠的开合时机（渲染结果，切分逻辑本身由 test:turn-fold 钉住）。
+//
+// 钉的就是「跑完会不会自动折起来」这一条：跑的时候必须摊开（不然用户盯着一行摘要不知道
+// 在干嘛），收工那一刻自动收起，刷新后读到的历史回合一上来就是折好的。还有一条同样要紧
+// 的反向约束：用户自己动过折角之后，后续重绘不许再把它按回去。
+import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
+import { chromium } from "playwright-core";
+import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { createServer } from "vite";
+
+const root = fileURLToPath(new URL("..", import.meta.url));
+const server = await createServer({
+  root,
+  logLevel: "error",
+  server: { host: "127.0.0.1", port: 0, strictPort: false },
+});
+
+let browser;
+try {
+  await server.listen();
+  const address = server.httpServer?.address();
+  assert(address && typeof address === "object", "Vite test server did not expose a port");
+
+  browser = await chromium.launch(await chromeLaunchOptions());
+  const page = await browser.newPage({ viewport: { width: 1000, height: 1200 } });
+  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/turn-fold.html`);
+
+  const turn = (name) => page.locator(`[data-case="${name}"]`);
+  const fold = (name) => turn(name).locator("details.task-turn-process");
+  const isOpen = (name) => fold(name).evaluate((el) => el.open);
+  // 过程里那句话：折起来就该看不见。
+  const processText = (name) => turn(name).getByText("真实页面已在后台标签打开并操作");
+  // 结论：任何时候都露在外面。
+  const conclusionText = (name) => turn(name).getByText("第 2 轮结论");
+  // 摘要条上的运行小圆点只在 running 时渲染，拿它当「新的 running 已经渲染」的信标。
+  const settled = (name, running) =>
+    turn(name).locator(".task-execution-pulse").waitFor({ state: running ? "attached" : "detached" });
+  // 开合是 useEffect 干的，跑在渲染之后 —— 小圆点比它早到。「不该被掀开」这类负向断言
+  // 没法 waitFor，只能等两帧确保 effect 已经有过机会，否则读到的是还没提交的旧值。
+  const flush = () => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+
+  await fold("live").waitFor();
+
+  // 1. 正在跑：摊开，过程和结论都看得见。
+  assert.equal(await isOpen("live"), true, "回合还在跑，过程块不该是收起的");
+  assert.equal(await processText("live").isVisible(), true);
+  assert.equal(await conclusionText("live").isVisible(), true);
+
+  // 2. 跑完：自动收起，只留结论。
+  await turn("live").locator('[data-role="end-turn"]').click();
+  await page.waitForFunction(
+    () => !document.querySelector('[data-case="live"] details.task-turn-process').open,
+  );
+  assert.equal(await processText("live").isVisible(), false, "收工后过程正文该被折进去");
+  assert.equal(await conclusionText("live").isVisible(), true, "结论任何时候都不该被折起来");
+  assert.equal(await turn("live").getByText("工作树保持干净").isVisible(), true, "记账之后的收尾句也是结论");
+
+  // 3. 记账调用不当切点：complete_task 被并进过程块，不在结论区自成一条折叠行。
+  assert.equal(await fold("live").locator(".task-tool-line").count(), 3);
+  assert.equal(
+    await turn("live").locator("details.task-execution-block:not(.task-turn-process)").count(),
+    0,
+    "结论区不该再夹一条「执行过程」折叠行",
+  );
+
+  // 4. 用户自己展开之后，后续重绘不许再把它按回去。
+  await fold("live").locator("summary").click();
+  assert.equal(await isOpen("live"), true);
+  await turn("live").locator('[data-role="repaint"]').click();
+  await turn("live").getByText("触发重绘 1").waitFor();
+  await turn("live").locator('[data-role="repaint"]').click();
+  await turn("live").getByText("触发重绘 2").waitFor();
+  await flush();
+  assert.equal(await isOpen("live"), true, "用户手动展开后被重绘按了回去");
+  assert.equal(await processText("live").isVisible(), true);
+
+  // 5. 刷新后读到的历史回合：首屏就是折好的，不该先闪一下再收。
+  assert.equal(await isOpen("persisted"), false, "已结束的回合首屏就该是折好的");
+  assert.equal(await processText("persisted").isVisible(), false);
+  assert.equal(await conclusionText("persisted").isVisible(), true);
+
+  // 6. 折好的历史回合又被续跑（回复、resume）：没人动过它，就跟着重新摊开。
+  await turn("persisted").locator('[data-role="restart-turn"]').click();
+  await page.waitForFunction(
+    () => document.querySelector('[data-case="persisted"] details.task-turn-process').open,
+  );
+  assert.equal(await processText("persisted").isVisible(), true);
+
+  // 7. 但用户自己收起来的，续跑不许替他掀开 —— 这是 touched 那道闸唯一起作用的方向。
+  await fold("persisted").locator("summary").click();
+  assert.equal(await isOpen("persisted"), false);
+  await turn("persisted").locator('[data-role="end-turn"]').click();
+  await settled("persisted", false);
+  await flush();
+  await turn("persisted").locator('[data-role="restart-turn"]').click();
+  await settled("persisted", true);
+  await flush();
+  assert.equal(await isOpen("persisted"), false, "用户收起来的过程块被续跑掀开了");
+
+  if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: true });
+
+  console.log("turn fold dom tests passed");
+} finally {
+  await browser?.close();
+  await server.close();
+}
