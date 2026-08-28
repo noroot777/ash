@@ -226,6 +226,15 @@ export function normalizedPeerUrl(raw: string | null | undefined): string {
 }
 
 /**
+ * 两个指纹是不是同一台机器。语义跟服务端的 `sameFingerprint` 一致（缺一边就不算相同）。
+ * 这里不做常量时间比较：指纹是公钥的 sha256，本来就公开可传，比的不是秘密。
+ */
+function samePeerFp(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+/**
  * 一条出站行的持有机，在**当前**接力设置里是哪一条。
  *
  * `marker.peerUrl` 是**接力那一刻**冻下来的地址。机器换地址是常事（DHCP 换租约、重装后
@@ -234,23 +243,36 @@ export function normalizedPeerUrl(raw: string | null | undefined): string {
  * target 就整台跳过，侧栏既不显示实时状态、也不再说「联系不上」，剩一份冻住的旧状态冒充实时
  * （比直说「联系不上」更糟，因为屏幕上没有任何地方还在提醒你它不是真的）。
  *
- * 所以认机器分两步：地址对得上就是它；对不上再按**名字**认回同一台 —— 名字是用户在接力设置里
- * 给这台机器起的标识，「改地址、不改名字」正是那次编辑的形状。
+ * 所以认机器按三档往下走，能停在哪档就停在哪档：
+ *   1. **地址**对得上 —— 就是它。
+ *   2. **指纹**对得上 —— 接力那一刻记下的 `peerFp` 是这台机器真正的身份（公钥的 sha256），
+ *      地址会漂、名字会重，它不会。新记录都带着它。
+ *   3. **名字** —— 老版本导出的 marker 没有 `peerFp`，那时名字是仅剩的线索。
+ *      「改地址、不改名字」也正是那次编辑的形状。
  *
- * 按名字认错了会怎样？**问不出东西，仅此而已**：状态查询在对端是按调用方指纹逐条鉴权的
+ * 第 3 档有一条硬约束：**已知指纹冲突的一律不选**。marker 记着 A、设置里这条写着 B，那它明确
+ * 不是同一台机器，重名也不行 —— 名字是用户随手填的，指纹不是。
+ *
+ * 认错了会怎样？**问不出东西，仅此而已**：状态查询在对端是按调用方指纹逐条鉴权的
  * （remoteStatesFor → ownedInboundTask），不是本机交过去的任务一条都不回。而真会把整个仓库和
  * 会话历史推出去的导出路径另有 TOFU 指纹核对（见 server/src/handoff-peer-client.ts 顶部），
  * 不从这里拿目标。
  */
 export function outboundHolder<T extends HandoffTarget>(
-  marker: Pick<TaskHandoff, "peerUrl" | "peerName"> | null | undefined,
+  marker: Pick<TaskHandoff, "peerUrl" | "peerName" | "peerFp"> | null | undefined,
   targets: T[],
 ): T | null {
   if (!marker) return null;
   const wanted = normalizedPeerUrl(marker.peerUrl);
   const byUrl = wanted ? targets.find((item) => normalizedPeerUrl(item.url) === wanted) : undefined;
   if (byUrl) return byUrl;
+  const fp = marker.peerFp;
+  const byFp = fp ? targets.find((item) => samePeerFp(item.peerFp, fp)) : undefined;
+  if (byFp) return byFp;
   const name = marker.peerName?.trim();
-  // 重名时取头一条：名字是用户自己填的，真重了名这两台在界面上本来就已经分不出来。
-  return name ? targets.find((item) => item.name.trim() === name) ?? null : null;
+  if (!name) return null;
+  // 重名时取头一条,但**指纹明确对不上的那些先出局** —— 它们已经自证不是同一台机器。
+  // marker 或 target 缺指纹（老记录）时这一条不设限,那正是要靠名字兜的场合。
+  return targets.find((item) => item.name.trim() === name && !(fp && item.peerFp && !samePeerFp(item.peerFp, fp)))
+    ?? null;
 }

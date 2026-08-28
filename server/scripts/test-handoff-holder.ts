@@ -9,10 +9,16 @@ import assert from "node:assert/strict";
 import type { HandoffTarget, TaskHandoff } from "@ash/shared";
 import { normalizedPeerUrl, outboundHolder } from "@ash/shared/handoff";
 
-const marker = (peerUrl: string | null, peerName: string | null): Pick<TaskHandoff, "peerUrl" | "peerName"> =>
-  ({ peerUrl, peerName });
+const marker = (
+  peerUrl: string | null,
+  peerName: string | null,
+  peerFp?: string | null,
+): Pick<TaskHandoff, "peerUrl" | "peerName" | "peerFp"> => ({ peerUrl, peerName, peerFp });
 
-const MAC = { name: "mac-mini", url: "http://100.80.239.23:4317", peerFp: "d67f" } satisfies HandoffTarget;
+const FP_MAC = "d67fcd0748e71ddf59b9131dc9dd998247ae2d463b14cd10052e09ba00f2e0e9";
+const FP_OTHER = "7df1f3ebe98e445e778cdedcb704006dac69c7e0e7a23b109fa1bb606674c6a3";
+
+const MAC = { name: "mac-mini", url: "http://100.80.239.23:4317", peerFp: FP_MAC } satisfies HandoffTarget;
 const COMP = { name: "comp", url: "http://172.16.88.252:4317" } satisfies HandoffTarget;
 const TARGETS: HandoffTarget[] = [MAC, COMP];
 
@@ -47,5 +53,34 @@ const DUP: HandoffTarget[] = [
 assert.equal(outboundHolder(marker("http://10.0.0.2:4317", "mac-mini"), DUP), DUP[1]);
 // 地址谁也对不上时才回落到名字，取头一条（重名本身在界面上就已经分不出来了）。
 assert.equal(outboundHolder(marker("http://10.0.0.9:4317", "mac-mini"), DUP), DUP[0]);
+
+// ── 指纹这一档（第 1 轮审查提出）────────────────────────────────────────────
+// 名字是用户随手填的、能重；指纹是公钥的 sha256，才是机器真正的身份。marker 里有它
+// 就必须先用它 —— 否则「按名字认」会在重名时把出站行路由到**另一台机器**：轮询问错人、
+// 「在对端打开」拼出错的 URL、点开出站行进错的 RemoteTaskDetail。
+const MOVED_WRONG = { name: "mac-mini", url: "http://wrong:4317", peerFp: FP_OTHER } satisfies HandoffTarget;
+const MOVED_RIGHT = { name: "mac-mini", url: "http://right:4317", peerFp: FP_MAC } satisfies HandoffTarget;
+assert.equal(
+  outboundHolder(marker("http://old:4317", "mac-mini", FP_MAC), [MOVED_WRONG, MOVED_RIGHT]),
+  MOVED_RIGHT,
+  "同名两台时按指纹认对的那台，而不是数组里靠前的那台",
+);
+// 名字都对不上也照样按指纹认得出来：用户改地址时顺手把名字也改了，是很常见的一次编辑。
+assert.equal(
+  outboundHolder(marker("http://old:4317", "旧名字", FP_MAC), [COMP, MOVED_RIGHT]),
+  MOVED_RIGHT,
+  "指纹在，名字改了也认得回来",
+);
+// 指纹**明确冲突**的一律不选，哪怕名字一模一样 —— 它已经自证不是同一台机器。
+assert.equal(
+  outboundHolder(marker("http://old:4317", "mac-mini", FP_MAC), [MOVED_WRONG]),
+  null,
+  "只剩一条同名但指纹对不上的，宁可认不出也不能认它",
+);
+// 老记录（marker 没存 peerFp）仍走名字：那时名字是仅剩的线索，不能因为 target 有指纹就出局。
+assert.equal(outboundHolder(marker("http://old:4317", "mac-mini"), [MOVED_WRONG]), MOVED_WRONG);
+// 反过来，设置里那条还没记过指纹（首次接力前 / 用户手动清过）也不该被指纹挡住。
+const FRESH = { name: "mac-mini", url: "http://fresh:4317" } satisfies HandoffTarget;
+assert.equal(outboundHolder(marker("http://old:4317", "mac-mini", FP_MAC), [FRESH]), FRESH);
 
 console.log("handoff holder resolution tests passed");
