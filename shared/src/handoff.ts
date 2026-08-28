@@ -229,3 +229,65 @@ export interface HandoffOutboundStateResult {
   rows: HandoffRemoteState[];
   offline: HandoffPeerOffline[];
 }
+
+// ── 出站行的持有机现在在哪 ─────────────────────────────────────────────────
+
+/** 比较地址用的宽松归一：去掉尾斜杠和 `/api` 后缀，不校验协议（比不出来就当不同）。 */
+export function normalizedPeerUrl(raw: string | null | undefined): string {
+  return (raw ?? "").trim().replace(/\/+$/, "").replace(/\/api$/, "");
+}
+
+/**
+ * 两个指纹是不是同一台机器。语义跟服务端的 `sameFingerprint` 一致（缺一边就不算相同）。
+ * 这里不做常量时间比较：指纹是公钥的 sha256，本来就公开可传，比的不是秘密。
+ */
+function samePeerFp(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+/**
+ * 一条出站行的持有机，在**当前**接力设置里是哪一条。
+ *
+ * `marker.peerUrl` 是**接力那一刻**冻下来的地址。机器换地址是常事（DHCP 换租约、重装后
+ * tailscale 分到新 IP、换网段），换完那个地址就是个死地址，而用户唯一的修法是去接力设置里
+ * 改这台机器的 url —— 改完历史出站行必须跟着走。不跟的话它们会**静默**失联：按 URL 找不到
+ * target 就整台跳过，侧栏既不显示实时状态、也不再说「联系不上」，剩一份冻住的旧状态冒充实时
+ * （比直说「联系不上」更糟，因为屏幕上没有任何地方还在提醒你它不是真的）。
+ *
+ * 所以认机器按三档往下走，能停在哪档就停在哪档：
+ *   1. **地址**对得上 —— 就是它。
+ *   2. **指纹**对得上 —— 接力那一刻记下的 `peerFp` 是这台机器真正的身份（公钥的 sha256），
+ *      地址会漂、名字会重，它不会。新记录都带着它。
+ *   3. **名字** —— 老版本导出的 marker 没有 `peerFp`，那时名字是仅剩的线索。
+ *      「改地址、不改名字」也正是那次编辑的形状。
+ *
+ * 三档之前先过一道闸：**指纹明确冲突的一律出局**。marker 记着 A、设置里这条写着 B，那它已经
+ * 自证不是同一台机器 —— 地址一样也不行（「门牌没变、屋里换了人」正是 TOFU 指纹要拦的那件事：
+ * 地址会被 DHCP 或 tailscale 回收给别的设备，本任务的起因就是这个），名字一样更不行（名字是
+ * 用户随手填的，指纹不是）。marker 或 target 任一缺指纹时这道闸不设限 —— 老版本导出的记录、
+ * 还没记过指纹的 target，那时本来就没有身份可比，正是后两档要兜的场合。
+ *
+ * 认错了会怎样？**问不出东西，仅此而已**：状态查询在对端是按调用方指纹逐条鉴权的
+ * （remoteStatesFor → ownedInboundTask），不是本机交过去的任务一条都不回。而真会把整个仓库和
+ * 会话历史推出去的导出路径另有 TOFU 指纹核对（见 server/src/handoff-peer-client.ts 顶部），
+ * 不从这里拿目标。
+ */
+export function outboundHolder<T extends HandoffTarget>(
+  marker: Pick<TaskHandoff, "peerUrl" | "peerName" | "peerFp"> | null | undefined,
+  targets: T[],
+): T | null {
+  if (!marker) return null;
+  const fp = marker.peerFp;
+  // 指纹这道闸对三档一视同仁（理由见上）。滤在前面而不是各档各判，是为了不出现
+  // 「地址那档放行、名字那档拦住」这种同一份数据两种答案。
+  const candidates = targets.filter((item) => !(fp && item.peerFp && !samePeerFp(item.peerFp, fp)));
+  const wanted = normalizedPeerUrl(marker.peerUrl);
+  const byUrl = wanted ? candidates.find((item) => normalizedPeerUrl(item.url) === wanted) : undefined;
+  if (byUrl) return byUrl;
+  const byFp = fp ? candidates.find((item) => samePeerFp(item.peerFp, fp)) : undefined;
+  if (byFp) return byFp;
+  const name = marker.peerName?.trim();
+  // 重名时取头一条：走到这一档说明没有指纹可依，而名字重了的两台在界面上本来也分不出来。
+  return name ? candidates.find((item) => item.name.trim() === name) ?? null : null;
+}

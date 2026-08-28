@@ -113,6 +113,9 @@ export type {
 
 // ── 任务接力（跨机器 handoff）──────────────────────────────────────────────
 // 类型本体在 ./handoff.ts（纯类型模块）,这里只做再导出,消费方 import 路径不变。
+// 认持有机那两个**运行时函数**走子路径 `@ash/shared/handoff`：这个文件不能转发运行时
+// 函数（理由见 server/CLAUDE.md：服务端直接跑 .ts 源码，类型擦除不会把 "./x.js" 映射回
+// "./x.ts"，一加真正的转发进程就起不来）。
 export type {
   HandoffApprovalResult,
   HandoffAudit,

@@ -1,4 +1,5 @@
-import type { TaskListItem } from "@ash/shared";
+import type { HandoffTarget, TaskListItem } from "@ash/shared";
+import { normalizedPeerUrl, outboundHolder } from "@ash/shared/handoff";
 import type { TaskScopedHandoffPreflightResult } from "../lib/api.ts";
 
 export type BulkHandoffSkip = {
@@ -152,13 +153,22 @@ export function groupBulkHandoffFailures<T extends TaskListItem>(
   return [...grouped].map(([reason, tasks]) => ({ reason, tasks }));
 }
 
+// 单项目侧栏「其他机器」那一节：某台持有机名下有哪些本机交出去的行。
+//
+// 归属判据**只有 shared 的 outboundHolder 一处** —— 任务模式里点开出站行走的也是它。
+// 分头写会立刻漂：这个函数原本是「target 有指纹就比指纹，否则比 URL」，而改地址会把
+// target 的指纹一起清掉（设置页那段注释），于是同一台机器换个地址后，任务模式认得回来、
+// 这一节却把它的历史行全漏了 —— 同一件事在两个表面给出两种答案。
+//
+// 要全量 targets 是判据本身的要求：outboundHolder 是在**候选集里**挑一条，只把当前这条
+// 递进去的话，另一台同名机器的行也会被算到它头上。
 export function outboundTasksForTarget<T extends TaskListItem>(
   tasks: T[],
   projectId: string,
-  targetUrl: string,
-  targetFingerprint?: string | null,
+  target: HandoffTarget,
+  allTargets: HandoffTarget[],
 ): T[] {
-  const normalized = normalizedTargetUrl(targetUrl);
+  const wanted = normalizedPeerUrl(target.url);
   return tasks
     .filter((task) => task.projectId === projectId
       && task.parentId === null
@@ -169,9 +179,7 @@ export function outboundTasksForTarget<T extends TaskListItem>(
       // 非原机把任务安全移回原机后，本地 out 行只是历史存档；原机上的任务标记为
       // returned，不再提供远程代理。把这类存档列进侧栏只会得到 401/409。
       && !sameFingerprint(task.handoff.peerFp, task.handoff.originFp)
-      && (targetFingerprint && task.handoff.peerFp
-        ? task.handoff.peerFp === targetFingerprint
-        : normalizedTargetUrl(task.handoff.peerUrl!) === normalized))
+      && normalizedPeerUrl(outboundHolder(task.handoff, allTargets)?.url) === wanted)
     .sort((a, b) => (b.handoff?.at ?? b.updatedAt).localeCompare(a.handoff?.at ?? a.updatedAt));
 }
 

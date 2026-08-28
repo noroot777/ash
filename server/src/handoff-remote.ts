@@ -5,6 +5,7 @@ import type {
   HandoffTarget,
   TaskHandoff,
 } from "@ash/shared";
+import { outboundHolder } from "@ash/shared/handoff";
 import { and, eq } from "drizzle-orm";
 import type { Context, Hono } from "hono";
 import { handoffActorId } from "./auth/handoff-outbound.js";
@@ -54,14 +55,22 @@ function targetForOutbound(marker: TaskHandoff, rawTargetUrl: string, targets: H
   if (marker.direction !== "out" || marker.pending) {
     throw new HandoffError("这不是已确认接力出去的任务", 409);
   }
-  const wanted = normalizedUrl(rawTargetUrl);
-  if (!marker.peerUrl || normalizedUrl(marker.peerUrl) !== wanted) {
-    throw new HandoffError("任务记录的持有机器与请求目标不一致", 409);
+  // 持有机认的是**设置里那一条**，不是 marker 里冻着的旧地址（判据见 shared 的
+  // outboundHolder：地址 → 指纹 → 名字，指纹明确冲突的一律出局）。
+  const target = outboundHolder(marker, targets);
+  if (!target) {
+    // 认不出来有两种，**得说清是哪一种**：说错了用户会去改错的东西。
+    // 「指纹对不上」时地址多半还在设置里躺着，报成「已移除」只会让人对着一条明明还在的
+    // 记录发愣；这一条的正解是去核对指纹，不是重新添一台机器。
+    const sameUrl = targets.find((item) => normalizedUrl(item.url) === normalizedUrl(marker.peerUrl ?? ""));
+    if (sameUrl && marker.peerFp && sameUrl.peerFp && !sameFingerprint(marker.peerFp, sameUrl.peerFp)) {
+      throw new HandoffError("任务记录的机器身份与当前设置不一致，请重新核对指纹", 409);
+    }
+    throw new HandoffError("这台持有机器已从接力设置中移除", 409);
   }
-  const target = targets.find((item) => normalizedUrl(item.url) === wanted);
-  if (!target) throw new HandoffError("这台持有机器已从接力设置中移除", 409);
-  if (marker.peerFp && target.peerFp && !sameFingerprint(marker.peerFp, target.peerFp)) {
-    throw new HandoffError("任务记录的机器身份与当前设置不一致，请重新核对指纹", 409);
+  // 请求带来的目标必须就是它现在的地址 —— 这一层仍要卡，否则前端传谁就往谁发。
+  if (normalizedUrl(target.url) !== normalizedUrl(rawTargetUrl)) {
+    throw new HandoffError("任务记录的持有机器与请求目标不一致", 409);
   }
   return target;
 }
@@ -187,37 +196,82 @@ async function remoteStatesFor(
 // 本机所有「确认接力出去」的行,按持有机分组。pending(应答丢失、没确认送到)的不算:
 // 那种任务本机还硬拦着不让跑,状态归本机自己说,问对端只会问出个 404。
 //
-// **要按可见性收窄**:这是一条全表扫描,而它的返回值里带 title。`/tasks/outbound-state`
+// 分组的 key 是**持有机现在的地址**,不是 marker 里冻着的那个:同一台机器换过地址之后,
+// 换地址前后交出去的行要合并成同一次请求,而不是拆成「一台连得上、一台永远连不上」。
+//
+// **还要按可见性收窄**:这是一条全表扫描,而它的返回值里带 title。`/tasks/outbound-state`
 // 的路径上没有 task 段,横切闸(auth/resource-gate.ts)拦不到它 —— 不收窄的话,同一台
 // 实例里两个人只要各自登记了同一台目标机,就能在侧栏里读到对方任务的标题。
-async function outboundByPeer(actor: Actor): Promise<Map<string, { target: HandoffTarget; items: { taskId: string; transferId?: string }[] }>> {
+type PeerBucket = {
+  target: HandoffTarget;
+  items: { taskId: string; transferId?: string }[];
+  // 这些行在接力那一刻记下的对端指纹(去重)。设置里那条 target 自己没记指纹时,
+  // 它就是唯一能用来验明「这个地址后面还是不是那台机器」的东西 —— 见下面 outboundRemoteStates。
+  expectedFps: Set<string>;
+};
+
+async function outboundByPeer(actor: Actor): Promise<Map<string, PeerBucket>> {
+  // 目标机清单按人:多人模式下它装着「我在对端的 key」,不能放进公共设置(§十一)。
   const handoffTargets = (await resolveTargetsFor(handoffActorId())).map(toPublicTarget);
   const rows = await db.select({ id: tasks.id, handoff: tasks.handoff }).from(tasks);
   const visible = new Set(await visibleTaskIds(actor, rows.map((row) => row.id)));
-  const byPeer = new Map<string, { target: HandoffTarget; items: { taskId: string; transferId?: string }[] }>();
+  const byPeer = new Map<string, PeerBucket>();
   for (const row of rows) {
     if (!visible.has(row.id)) continue;
     const marker = markerOf(row.handoff);
     if (marker?.direction !== "out" || marker.pending || !marker.peerUrl) continue;
-    const url = normalizedUrl(marker.peerUrl);
-    const target = handoffTargets.find((item) => normalizedUrl(item.url) === url);
-    // 已经从接力设置里删掉的机器:没有名字也没有指纹,连签名都发不出去,当它不存在。
+    // 已经从接力设置里删掉的机器:没有名字也没有指纹,连签名都发不出去,当它不存在
+    //（既不问也不报 offline —— 那是用户自己按的删除,handoff-state-check 钉着）。
+    // 只是**换过地址**的不算删除,按名字认回同一台(判据在 shared 的 outboundHolder)。
+    const target = outboundHolder(marker, handoffTargets);
     if (!target) continue;
-    const bucket = byPeer.get(url) ?? { target, items: [] };
+    const url = normalizedUrl(target.url);
+    const bucket = byPeer.get(url) ?? { target, items: [], expectedFps: new Set<string>() };
     bucket.items.push({ taskId: marker.peerTaskId || row.id, transferId: marker.transferId ?? undefined });
+    if (marker.peerFp) bucket.expectedFps.add(marker.peerFp.trim().toLowerCase());
     byPeer.set(url, bucket);
   }
   return byPeer;
 }
 
+// 这一轮该不该先验明对端正身,以及拿谁当期望指纹。
+//
+// **要验的只有一种情况**:设置里那条 target 没有指纹,而这些出站行记着一个。改地址会
+// 把记住的指纹一起丢掉(设置页那段注释:指纹是对上一个地址背后那台机器的承诺),于是
+// outboundHolder 只能按名字把它认回来 —— 而名字认回来的地址可能根本是填错的。
+// 不验就直接问的话,一台恰好也批准过本机的 ash 会回 200 + 空 rows:侧栏既没有实时状态、
+// 也不会说「联系不上」,正是这次要修的那种「不是实时却没有提示」。
+//
+// target 自己有指纹时不必验:outboundHolder 的闸已经保证它跟 marker 记的是同一台。
+// 一条 marker 都没记指纹(老版本导出的)时也不必:没有期望值可比,验了也是白验。
+function identityToVerify(bucket: PeerBucket): { expectFp: string } | { conflict: true } | null {
+  if (bucket.target.peerFp || bucket.expectedFps.size === 0) return null;
+  // 同一个名字下混着两台机器的历史行:问哪一台都可能问错人,一律不发。
+  if (bucket.expectedFps.size > 1) return { conflict: true };
+  return { expectFp: [...bucket.expectedFps][0]! };
+}
+
 // 问一圈持有机：我交出去的那些任务，在它们那儿现在什么样。
 // 联系不上的机器只列进 offline **不抛错** —— 一台机器关机不该让整个侧栏读不出状态，
 // 而侧栏拿到 offline 才能如实说「这几行显示的是接力当时的状态」。
+// 身份没核对过的先 ping 一次验明正身（判据见 identityToVerify），验不过同样只进 offline。
 export async function outboundRemoteStates(actor: Actor): Promise<HandoffOutboundStateResult> {
   const rows: HandoffRemoteState[] = [];
   const offline: HandoffPeerOffline[] = [];
-  for (const [url, { target, items }] of await outboundByPeer(actor)) {
+  for (const [url, bucket] of await outboundByPeer(actor)) {
+    const { target, items } = bucket;
     try {
+      const verify = identityToVerify(bucket);
+      if (verify) {
+        if ("conflict" in verify) {
+          throw new HandoffError(
+            `「${target.name}」名下混着多台机器的接力记录，无法确认该问哪一台；`
+            + "先在接力设置里对它重新申请一次，把指纹记回来", 409,
+          );
+        }
+        // 指纹对不上时 pingPeer 自己会抛 409,话说得比这里清楚(记住的 / 这次的短指纹都列出来)。
+        await pingPeer(url, verify.expectFp);
+      }
       const answer = await fetchPeer<{ rows: HandoffRemoteState[] }>(
         `${url}/api/handoff/proxy/tasks/state`,
         {

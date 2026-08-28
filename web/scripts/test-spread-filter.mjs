@@ -10,7 +10,7 @@ import {
   workersFrom,
 } from "../src/workspace/useSidebarSpread.ts";
 import { orderedTopLevelTasks } from "../src/workspace/taskTreeModel.ts";
-import { resolveScopeKind, scopeHasTarget, scopeTasks } from "../src/workspace/taskScope.ts";
+import { resolveScopeKind, scopeHasFilters, scopeTasks } from "../src/workspace/taskScope.ts";
 import { awaitsYourWord, inTaskMode, isTaskAwaitingAcceptance } from "../src/lib/taskAttention.ts";
 
 const P1 = { kind: "project", projectId: "p1" };
@@ -279,9 +279,13 @@ for (const mode of ["single", "team"]) {
 }
 assert.ok(checked > 100, `穷举样本太少（${checked}），这条不变式等于没钉`);
 
-// 还没选项目时，单项目态没有可显示的树；任务模式永远有目标（筛选条因此照常画出来）。
-assert.equal(scopeHasTarget({ kind: "project", projectId: null }), false);
-assert.equal(scopeHasTarget(TASKS), true);
+// 筛选控件画在哪一档：只有「选中了某个项目的单项目态」有。任务模式没有 —— 它自己就是
+// 一次筛选，那排点里两颗永远是 0、剩下三颗在二三十行上再切一刀（见 taskScope 的判据）。
+// useSidebarSpread 读同一条判据把生效值归一到「全部」，所以这里漂了，任务模式就会出现
+// 一份被悄悄筛过、却没有开关的列表。
+assert.equal(scopeHasFilters(P1), true);
+assert.equal(scopeHasFilters({ kind: "project", projectId: null }), false, "还没选项目时没有可筛的树");
+assert.equal(scopeHasFilters(TASKS), false, "任务模式不带状态筛选");
 
 // URL 是权威：带 scope=tasks 就读任务模式，带深链（project/task）而没写 scope 的按单项目读，
 // 两者都没有才回落到上次的选择。顺序反了会出现「后退回到任务模式却缩成一家」。

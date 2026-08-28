@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useIsInstanceAdmin, useIsMultiUser } from "../auth/authContext.ts";
 import type { Group, GroupMode, HandoffTarget, ProjectView, Task, TaskListItem, TaskMode } from "@ash/shared";
+import { outboundHolder } from "@ash/shared/handoff";
 import { api } from "../lib/api.ts";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import { useTasks } from "../lib/useTasks.ts";
@@ -91,7 +92,7 @@ export function WorkspaceShell() {
   const { tasks: localTasks, setTasks, loading: tasksLoading, error: tasksError, connected, settlementVersion, refetch: refetchTasks, applyStar } = useTasks();
   // 接力出去的行，状态从持有机实时问回来再合并进列表 —— 本机那一行停在交出去那一刻，
   // 不合并的话它在任务模式里就是一条冻住的假状态（见 useOutboundState 顶部）。
-  const { tasks, targets: handoffTargets, offline: offlinePeers } = useOutboundState(localTasks);
+  const { tasks, targets: handoffTargets, refreshTargets, offline: offlinePeers } = useOutboundState(localTasks);
   // 侧栏在看哪些任务：当前项目一家，还是进「任务模式」看所有项目里在跑 / 待验收的那些。
   // 它只影响**列表**；下面的 currentProject 仍是「新建任务 / 终端 / git 落在哪」的上下文，
   // 跟着选中的任务走。
@@ -246,15 +247,25 @@ export function WorkspaceShell() {
   // 上下文项目一直跟着它走，所以退出去看到的就是它所在的那个项目。设置页不用在这里让路：
   // 快捷键在那儿本来就是关的（见下面 useWorkspaceShortcuts 的 enabled）。
   const toggleTaskMode = () => setScopeKind((kind) => kind === "tasks" ? "project" : "tasks");
+  // 任务模式里出站行就摆在列表里，点开当然得能进去 —— 进的是持有机上那份实时会话
+  // （RemoteTaskDetail），跟点开本机任务一样是「打开这条任务」，只是活在别的机器上。
+  // 认哪台机器由 shared 的 outboundHolder 说了算（换过地址的按名字认回同一台）。
+  //
+  // **先把接力设置现取一遍**再认：`handoffTargets` 是跟着轮询走的缓存，用户在设置页改完
+  // 地址、页面没重新挂载时它还是旧的。而后端解析持有机用的是当前设置 —— 拿旧地址发过去
+  // 只会换回一个「持有机与请求目标不一致」的 409，屏幕上就成了「状态看着恢复了，点开却
+  // 打不开」。取不到就退回缓存那份，总比不让点强。
+  const openOutboundTask = async (task: TaskListItem) => {
+    const latest = await refreshTargets().catch(() => handoffTargets);
+    const holder = outboundHolder(task.handoff, latest);
+    if (holder) { selectRemoteTask(task, holder); return; }
+    notify("任务已接力到另一台机器，请在当前持有它的机器上继续");
+  };
   // keepSpread：J/K 在铺开态里只是挪选中行，右边那两列还得接着看；点行或按 Enter 才算「选定了」，
   // 那时候铺开自己收起来把主区还回去。
   const selectTask = (task: TaskListItem, options?: { keepSpread?: boolean }) => {
     if (!visibleOnThisMachine(task)) {
-      // 任务模式里出站行就摆在列表里，点开当然得能进去 —— 进的是持有机上那份实时会话
-      // （RemoteTaskDetail），跟点开本机任务一样是「打开这条任务」，只是活在别的机器上。
-      const holder = handoffTargets.find((item) => item.url.replace(/\/+$/, "") === (task.handoff?.peerUrl ?? "").replace(/\/+$/, ""));
-      if (holder) { selectRemoteTask(task, holder); return; }
-      notify("任务已接力到另一台机器，请在当前持有它的机器上继续");
+      void openOutboundTask(task);
       return;
     }
     pushTaskHistoryEntry(task, window, scopeKind);

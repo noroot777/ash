@@ -29,10 +29,13 @@ import { discardMigratedWorkspace } from "./workspace-cleanup.js";
 import { RUNS_DIR } from "./paths.js";
 import { sessionTranscriptPath, TURN_SENTINEL } from "./transcript.js";
 import { publishTaskUpdated } from "./task-store.js";
+import { handoffActorId } from "./auth/handoff-outbound.js";
+import { resolveTargetsFor, toPublicTarget } from "./auth/handoff-scope.js";
 import { id, now } from "./util.js";
 import type {
   HandoffExportResult, HandoffPreflightResult, HandoffPeerIdentity, TaskHandoff,
 } from "@ash/shared";
+import { outboundHolder } from "@ash/shared/handoff";
 
 type TaskScopedPreflightResult = HandoffPreflightResult & { taskScopedReturn: boolean };
 
@@ -61,7 +64,13 @@ export async function handoffRemoteUrl(taskId: string): Promise<string> {
   if (marker?.direction !== "out" || !marker.peerUrl || marker.pending) {
     throw new HandoffError("任务没有已确认的对端接力记录", 409);
   }
-  const targetUrl = normalizePeerUrl(marker.peerUrl);
+  // 地址以**接力设置里那一条**为准：marker 里冻的是接力那一刻的地址，机器换过地址之后
+  // 拿它拼出来的直达链接会指向一台没人的机器（判据在 shared 的 outboundHolder）。
+  // 设置里已经没有这台了才回落到冻着的地址 —— 那时它是仅有的线索。
+  // 清单**按人取**:多人模式下目标机是每个人自己的(§十一),读全局那份会得到一张空表,
+  // 于是这条「跟着地址走」的判据在多人模式下悄悄失效、永远回落到冻着的旧地址。
+  const handoffTargets = (await resolveTargetsFor(handoffActorId())).map(toPublicTarget);
+  const targetUrl = normalizePeerUrl(outboundHolder(marker, handoffTargets)?.url ?? marker.peerUrl);
   let projectId = marker.targetProjectId;
   if (!projectId) {
     const peerTask = await fetchPeer<{ projectId?: string }>(
