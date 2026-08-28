@@ -180,9 +180,16 @@ export async function touchUser(userId: string): Promise<void> {
  * 作废某人手上那把 key(管理员「重置 key」的第一步)。账号退回 invited,等他从新的
  * 专属邀请链接重领。**必须连会话一起断** —— 只清 keyHash 的话,他浏览器里那个
  * cookie 还能用 30 天,「重置」就只是个说法。
+ *
+ * **已停用的账号只抹 key,状态不动**:这里原来无条件写 invited,于是「重置 key」顺手
+ * 把人从停用里放了出来 —— 一个管理动作偷偷兼了另一个管理动作(第 3 轮审查 P2)。
+ * 恢复有它自己的入口(`POST /users/:id/resume`),宿主机逃生门也会把「顺带放出来」
+ * 明说给用户看;悄悄改状态的只有这一处。调用方另有一道 409 拦在前面,这里是二道闸。
  */
 export async function revokeUserKey(userId: string): Promise<void> {
-  await db.update(users).set({ keyHash: null, status: "invited" }).where(eq(users.id, userId));
+  const user = await getUser(userId);
+  const status = user?.status === "suspended" ? "suspended" : "invited";
+  await db.update(users).set({ keyHash: null, status }).where(eq(users.id, userId));
   await deleteSessionsOf(userId);
 }
 
@@ -313,10 +320,24 @@ export async function resumeUser(userId: string): Promise<void> {
   await updateUser(userId, { status: user.keyHash ? "active" : "invited" });
 }
 
-/** 实例里还剩几个可用的管理员(降级/停用最后一个管理员要拦)。 */
-export async function activeAdminCount(exceptUserId?: string): Promise<number> {
+/**
+ * 「这个人登录得进来吗」—— 有 key 且没被停用。**判据只此一份**。
+ *
+ * 它有两个问法,原来各写各的:`needsSetup()` 问「整个实例还有人能进来吗」,
+ * `loginableAdminCount()` 问「还剩几个管得了事的管理员」。后者当年只排除了
+ * `suspended`,于是一个**刚建出来、key 还没领**的管理员也算「可用」,顶住了最后管理员
+ * 保护 —— 唯一那个真管理员因此能把自己降级/停用,实例落进「有人能登录,却没人有
+ * 管理员权限」,只能靠宿主机逃生门救(第 3 轮审查 P1)。两个问法共用这一份,再漂移
+ * 就得两处一起改。
+ */
+export function canSignIn(u: { keyHash: string | null; status: string }): boolean {
+  return !!u.keyHash && u.status !== "suspended";
+}
+
+/** 实例里还剩几个**登录得进来**的管理员(降级/停用最后一个管理员要拦)。 */
+export async function loginableAdminCount(exceptUserId?: string): Promise<number> {
   return (await db.select().from(users)).filter(
-    (u) => u.role === "admin" && u.status !== "suspended" && u.id !== exceptUserId,
+    (u) => u.role === "admin" && canSignIn(u) && u.id !== exceptUserId,
   ).length;
 }
 

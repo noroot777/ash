@@ -11,7 +11,7 @@ import { id, now } from "../util.js";
 import { actorOf, authErrorResponse, isAccountHolder, isAdminActor, requireAdmin } from "./context.js";
 import { ensureUserHomeDir, isMultiUser } from "./mode.js";
 import {
-  activeAdminCount,
+  loginableAdminCount,
   createUser,
   dirNameTaken,
   getUser,
@@ -155,8 +155,12 @@ export function mountUserRoutes(api: Hono): void {
     if (b.role !== undefined) {
       if (!isAdminActor(actor)) return c.json({ error: "只有实例管理员可以改角色" }, 403);
       const role: UserRole = b.role === "admin" ? "admin" : "member";
-      if (role === "member" && user.role === "admin" && (await activeAdminCount(target)) === 0) {
-        return c.json({ error: "这是最后一个管理员，不能降级（降了就没人能管用户和实例设置了）" }, 409);
+      // 「最后一个管理员」按**登录得进来**算,不是按「没被停用」算:名单里那个刚建出来、
+      // key 还没领的管理员顶不上这个位置(store.ts `canSignIn`)。
+      if (role === "member" && user.role === "admin" && (await loginableAdminCount(target)) === 0) {
+        return c.json({
+          error: "这是最后一个能登录进来的管理员，不能降级（降了就没人能管用户和实例设置了）。还没领 key 或已停用的管理员顶不上这个位置",
+        }, 409);
       }
       patch.role = role;
     }
@@ -179,8 +183,10 @@ export function mountUserRoutes(api: Hono): void {
     const user = await getUser(target);
     if (!user) return c.json({ error: "用户不存在" }, 404);
     if (target === actorOf(c).userId) return c.json({ error: "不能停用自己" }, 409);
-    if (user.role === "admin" && (await activeAdminCount(target)) === 0) {
-      return c.json({ error: "这是最后一个可用的管理员，不能停用" }, 409);
+    if (user.role === "admin" && (await loginableAdminCount(target)) === 0) {
+      return c.json({
+        error: "这是最后一个能登录进来的管理员，不能停用。还没领 key 或已停用的管理员顶不上这个位置",
+      }, 409);
     }
 
     await suspendUser(target);

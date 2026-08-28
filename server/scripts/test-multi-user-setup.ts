@@ -28,7 +28,7 @@ process.env.ASH_DB ||= join(stage, "mu-setup.db");
 requireTmpDb("test-multi-user-setup");
 
 const { db, ensureSchema } = await import("../src/db/index.js");
-const { users, workflows } = await import("../src/db/schema.js");
+const { users, userInvites, workflows } = await import("../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 const { Hono } = await import("hono");
 const mode = await import("../src/auth/mode.js");
@@ -286,6 +286,68 @@ const adminKey = await store.resetUserKey(adminRow.id);
   // 双击 / 刷新不该在一条本来走通了的流程末尾报假错。
   const again = await call(`/api/auth/claim/${token}/confirm`, "POST", null, undefined, { cookie: claimed.cookie! });
   assert.equal(again.status, 200, `重复 confirm 要幂等:${JSON.stringify(again.body)}`);
+}
+
+// ── ⑥ 「最后一个管理员」按**登录得进来**算;重置 key 不兼职恢复用户 ─────────
+// 上面 ② 验的是「实例已经锁死了要能救回来」,这一组验的是**别把它锁死**:两处问的都是
+// 「还有人进得来吗」,判据也就必须是同一份(store.ts `canSignIn`)。
+// 原来的 `activeAdminCount` 只排除 suspended,于是一个刚建出来、key 还没领的管理员也
+// 算「可用」,顶住了最后管理员保护 —— 唯一那个真管理员因此能把自己降成成员,实例落进
+// 「有人能登录,却没人管得了用户和实例设置」,只剩宿主机逃生门(第 3 轮审查 P1)。
+{
+  const bob = (await db.select().from(users)).find((u) => u.name === "Bob")!;
+  assert.equal(bob.keyHash, null, "Bob 该还是那个建出来、key 一次没领过的账号");
+
+  // 把 Bob 升成管理员:名单上从此有两个管理员,但他一次也登录不进来。
+  assert.equal((await call(`/api/users/${bob.id}`, "PATCH", adminKey, { role: "admin" })).status, 200);
+  assert.equal((await store.getUser(bob.id))!.keyHash, null, "升管理员不该顺手给他发 key");
+
+  // 报告里的那一发:唯一能登录的管理员把自己降成成员。
+  const demote = await call(`/api/users/${adminRow.id}`, "PATCH", adminKey, { role: "member" });
+  assert.equal(demote.status, 409, `降掉最后一个能登录的管理员必须拒:${JSON.stringify(demote.body)}`);
+  assert.match(String(demote.body.error), /能登录进来的管理员/);
+  // 只看状态码不够:一个「409 但角色已经写下去了」的实现照样过。
+  assert.equal((await store.getUser(adminRow.id))!.role, "admin", "被拒的降级不许落库");
+  assert.equal(await store.loginableAdminCount(), 1, "任何时候都得留着一个登录得进来的管理员");
+
+  // 反过来也得让开:这条不是「永远不许降级」。Bob 一领 key 就该放行。
+  const bobKey = await store.resetUserKey(bob.id);
+  const allowed = await call(`/api/users/${adminRow.id}`, "PATCH", adminKey, { role: "member" });
+  assert.equal(allowed.status, 200, `另一个管理员真能登录时降级要放行:${JSON.stringify(allowed.body)}`);
+  assert.equal(
+    (await call(`/api/users/${adminRow.id}`, "PATCH", bobKey, { role: "admin" })).status, 200,
+    "复原:后面几步还要用 adminKey 干管理员的活",
+  );
+
+  // 判据的另一半:被停用的管理员同样顶不上这个位置。
+  assert.equal(
+    (await call(`/api/users/${bob.id}/suspend`, "POST", adminKey)).status, 200,
+    "还有别的管理员能登录时,停用一个管理员要成",
+  );
+  const demoteAgain = await call(`/api/users/${adminRow.id}`, "PATCH", adminKey, { role: "member" });
+  assert.equal(demoteAgain.status, 409, `另一个管理员被停用了,同样不能降:${JSON.stringify(demoteAgain.body)}`);
+
+  // 「重置 key」不是「恢复用户」:对停用账号必须拒,而且库里一个字都不许动
+  // —— revokeUserKey 原来无条件写 invited,等于顺手把人放了出来(第 3 轮审查 P2)。
+  const invitesOf = async (userId: string) =>
+    (await db.select().from(userInvites)).filter((r) => r.userId === userId).length;
+  const before = { row: (await store.getUser(bob.id))!, invites: await invitesOf(bob.id) };
+  assert.equal(before.row.status, "suspended");
+  const reset = await call(`/api/users/${bob.id}/reset-key`, "POST", adminKey);
+  assert.equal(reset.status, 409, `对停用账号重置 key 必须拒:${JSON.stringify(reset.body)}`);
+  const after = (await store.getUser(bob.id))!;
+  assert.equal(after.status, "suspended", "被拒的重置不许把人从停用里放出来");
+  assert.equal(after.keyHash, before.row.keyHash, "更不许顺手把他手上那把 key 抹掉");
+  assert.equal(await invitesOf(bob.id), before.invites, "也不许留下一条能把他领回来的新链接");
+
+  // 正常那条路照旧:先恢复,再重置。
+  assert.equal((await call(`/api/users/${bob.id}/resume`, "POST", adminKey)).status, 200);
+  const reset2 = await call(`/api/users/${bob.id}/reset-key`, "POST", adminKey);
+  assert.equal(reset2.status, 200, `恢复之后重置 key 要成:${JSON.stringify(reset2.body)}`);
+  assert.ok(String(reset2.body.inviteUrl ?? "").startsWith("/claim/"), "重置得给出重领链接");
+  const done = (await store.getUser(bob.id))!;
+  assert.equal(done.keyHash, null, "重置就该把旧 key 抹掉");
+  assert.equal(done.status, "invited", "没被停用的人重置后退回 invited,等他重领");
 }
 
 await releaseTmpDb();

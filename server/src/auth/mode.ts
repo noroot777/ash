@@ -13,6 +13,8 @@ import { users } from "../db/schema.js";
 import { expandHome } from "../git.js";
 import { isInsidePath, windowsPathRejection } from "../platform.js";
 import { setMultiUserFlag } from "./multi-flag.js";
+// 「登录得进来」的判据只有 store.ts 那一份 —— 这里和最后管理员保护问的是同一件事。
+import { canSignIn } from "./store.js";
 
 let cached: { mode: InstanceMode | ""; rootDir: string } | null = null;
 // 见 needsSetup:一旦见过能登录的人就不再查库(authGate 每个请求都要问一次)。
@@ -54,7 +56,7 @@ export async function needsSetup(): Promise<boolean> {
   if (mode === "") return true;
   if (mode !== "multi" || sawLoginableUser) return false;
   const rows = await db.select({ keyHash: users.keyHash, status: users.status }).from(users);
-  sawLoginableUser = rows.some((u) => u.keyHash && u.status !== "suspended");
+  sawLoginableUser = rows.some(canSignIn);
   return !sawLoginableUser;
 }
 

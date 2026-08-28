@@ -299,6 +299,13 @@ export function mountAuthRoutes(api: Hono): void {
     }
     const user = await getUser(c.req.param("id"));
     if (!user) return c.json({ error: "用户不存在" }, 404);
+    // 停用的账号不走这条路:`revokeUserKey` 会把 status 写回 invited,于是「重置 key」
+    // 顺手把人从停用里放了出来 —— 他拿新链接一领就又是 active(第 3 轮审查 P2)。恢复
+    // 有它自己的入口,而且那条入口会把「还没领过 key 的人需要新链接」一并处理掉。
+    // (`POST /auth/claim/:token` 拦停用账号用的也是这一句判据。)
+    if (user.status === "suspended") {
+      return c.json({ error: "这个账号已被停用。要让他重新进来,先点「恢复」——恢复那一步会按需要给出新的邀请链接" }, 409);
+    }
     // 先作废旧 key 与所有会话,再发新链接 —— 反过来的话中间那一小段里旧 key 还能用,
     // 而「重置」的语义就是「他手上那把从现在起打不开门」。
     await revokeUserKey(user.id);
