@@ -101,6 +101,7 @@ const visibility = await import("../src/auth/visibility.js");
 const { Hono } = await import("hono");
 const { authGate } = await import("../src/auth/middleware.js");
 const { resourceGate } = await import("../src/auth/resource-gate.js");
+const { personalWriteGate } = await import("../src/auth/personal-gate.js");
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
 const { mountTaskRoutes } = await import("../src/task-routes.js");
 const { mountProjectRoutes } = await import("../src/project-routes.js");
@@ -144,6 +145,7 @@ mountTaskSteerRoutes(api); // /scheduled-messages/:mid/steer 与 DELETE 同一�
 const app = new Hono();
 app.use("*", authGate());
 app.use("/api/*", resourceGate());
+app.use("/api/*", personalWriteGate());
 app.route("/api", api);
 const get = async (path: string, key: string) => {
   const res = await app.fetch(new Request(`http://127.0.0.1:4317${path}`, {

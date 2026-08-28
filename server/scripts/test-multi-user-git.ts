@@ -42,6 +42,7 @@ const { readProjectGitCredential } = await import("../src/git-credentials.js");
 const { Hono } = await import("hono");
 const { authGate } = await import("../src/auth/middleware.js");
 const { resourceGate } = await import("../src/auth/resource-gate.js");
+const { personalWriteGate } = await import("../src/auth/personal-gate.js");
 // 整张 `api` 而不是逐个 mount:这三条路要么住在 routes.ts 自己身上(/restart-impact),
 // 要么必须跟它的挂载顺序一致,拆着挂就成了第二份装配,测的不再是真的那份。
 const { api } = await import("../src/routes.js");
@@ -80,6 +81,7 @@ await visibility.addProjectMember({ projectId: "p-shared", userId: member.id, ro
 const app = new Hono();
 app.use("*", authGate());
 app.use("/api/*", resourceGate());
+app.use("/api/*", personalWriteGate());
 app.route("/api", api);
 
 type Reply = { status: number; body: Record<string, unknown>; text: string };
@@ -265,6 +267,33 @@ const WRITE_ROUTES: { path: string; method: string; body?: unknown; what: string
   const ping = await call("/api/handoff/ping", "POST", null, {});
   assert.notEqual(ping.status, 403, `机器对端点不带 Origin,不该被 CSRF 判据误伤:${ping.status} ${ping.text}`);
   assert.ok(!/跨站请求/.test(ping.text), ping.text);
+}
+
+// ── ⑦ 横切闸不许把**集合端点**当成项目 id ─────────────────────────────────
+// `/api/projects/clone` 的第二段是个字面量,不是 id。而 `projects` 那一段是**直接拿
+// ident 当 projectId** 的(其余五个集合都要查库,查不到就落回业务路由),所以一条没
+// 登记进 NOT_AN_ID 的字面量会被当成「一个你看不见的项目」而 404 —— 普通成员因此整个
+// 用不了「克隆仓库建项目」,而它本该是每个人在自己根目录里都能做的事(第 1 轮审查 P1)。
+{
+  const clone = await call("/api/projects/clone", "POST", memberKey, { url: "" });
+  assert.notEqual(clone.status, 404, `普通成员的 clone 必须到得了业务路由,不该被横切闸 404:${clone.text}`);
+  assert.equal(clone.status, 400, `空仓库地址该由 clone 路由自己判成 400:${clone.text}`);
+  assert.ok(!/not found/.test(clone.text), clone.text);
+
+  // 光补一条不够:靠通读维护不住。按**真的路由表**枚举所有 `/api/<归这道闸管的集合>/<字面量>`
+  // 形状,逐条要求登记 —— 新加一条 `/projects/xxx` 而忘了登记,这里直接红。
+  const { GATED_KINDS, NOT_AN_ID } = await import("../src/auth/resource-gate.js");
+  const missing: string[] = [];
+  for (const route of api.routes) {
+    const [kind, second] = route.path.replace(/^\//, "").split("/");
+    if (!kind || !GATED_KINDS.has(kind)) continue;
+    if (!second || second.startsWith(":") || NOT_AN_ID.has(second)) continue;
+    missing.push(`${route.method} /api/${kind}/${second}`);
+  }
+  assert.deepEqual(
+    missing, [],
+    `这些是同级集合端点、不是资源 id,必须登记进 resource-gate.ts 的 NOT_AN_ID：${missing.join("、")}`,
+  );
 }
 
 console.log("multi-user git/host/handoff gates ok");

@@ -9,7 +9,8 @@
 // 「对称端点只改了一个」是本仓库已经吃过的亏(docs/incidents.md)。
 //
 // 判断一条路由属不属于这道闸,看的是**第一段**:凡是 `/api/<集合>/<id>/…` 形状、而那个
-// id 又能一路查回项目的,都该在下面的分支里有一行。新开这样一个集合就顺手加一行 ——
+// id 又能一路查回项目的,都该在下面的 `PROJECT_OF` 里有一行。新开这样一个集合就顺手加
+// 一行 ——
 // 「全局 id 路由整个漏在闸外」这个洞已经被审出来两次了(queues/sessions、scheduled-messages)。
 //
 // 这道闸只管**看得见看不见**这一层。「看得见但只有管理员能删」这类更细的判断仍留在
@@ -31,9 +32,19 @@ function segmentsOf(pathname: string): string[] {
   return pathname.replace(/^\/api\/?/, "").split("/").filter(Boolean);
 }
 
-// 这些第二段不是 id,而是同级的集合端点(如 `/tasks/follow-ups`、`/tasks/bodies`)。
-// 它们自己做批量过滤,这里放过 —— 否则会拿 "follow-ups" 当 taskId 去查库。
-const NOT_AN_ID = new Set(["follow-ups", "bodies", "batch", "check", "resolve", "search", "archived"]);
+// 这些第二段不是 id,而是同级的集合端点(如 `/tasks/follow-ups`、`/projects/clone`)。
+// 它们自己做批量过滤或自带鉴权,这里放过 —— 否则会拿 "follow-ups" 当 taskId 去查库。
+//
+// **漏一条的后果不对称**:tasks / groups / queues / sessions / scheduled-messages 那五个
+// 要查库才拿得到项目,查不到就 `return next()` 落回业务路由,漏了也看不出来;而 `projects`
+// 那一段是**直接拿 ident 当 projectId** 的,于是漏掉的字面量会被当成「一个你看不见的
+// 项目」而 404 —— `/api/projects/clone` 就这样对普通成员整个不可用(第 1 轮审查 P1)。
+//
+// 靠通读维护不住,所以 `test:multi-user-git` 会把 `api.routes` 里所有这种形状枚举出来,
+// 逐条比对这张表;新加一条 `/projects/xxx` 而忘了登记,那条测试直接红。
+export const NOT_AN_ID = new Set([
+  "follow-ups", "bodies", "batch", "check", "resolve", "search", "archived", "clone", "outbound-state",
+]);
 
 async function projectOfTask(taskId: string): Promise<string | null> {
   const row = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -64,6 +75,30 @@ async function projectOfScheduledMessage(messageId: string): Promise<string | nu
   return row ? await projectOfTask(row.taskId) : null;
 }
 
+/**
+ * 「这个集合的 id 怎么查回项目」。一个集合一行 —— 新开一个 `/api/<集合>/<id>/…` 形状的
+ * 集合就在这里加一行(队列与会话这类**全局 id 路由**当年整个漏在闸外,就是因为判据散在
+ * 一串 if/else 里,加的人看不见自己漏了谁)。
+ *
+ * 这张表同时是「哪些集合归这道闸管」的**唯一**来源:`test:multi-user-git` 按它枚举
+ * `api.routes`,逐条比对 NOT_AN_ID。写成 if/else 链的话那张枚举表就得抄第二份。
+ */
+const PROJECT_OF: Record<string, (ident: string) => Promise<string | null>> = {
+  tasks: projectOfTask,
+  groups: projectOfGroup,
+  // 项目自己就是项目:**不查库**。所以 NOT_AN_ID 漏一条,受伤的只会是这一段。
+  projects: async (ident) => ident,
+  // 队列与会话是**全局 id 路由**:路径里没有 task/project 段,所以第 1 轮审查前它们
+  // 整个漏在闸外 —— 拿到 queueId 能读别人的任务标题、改别人的队列顺序,拿到
+  // sessionId 能读完整 transcript。它们的项目要多跳一层才查得到,但判据同一份。
+  queues: projectOfQueue,
+  sessions: projectOfSession,
+  "scheduled-messages": projectOfScheduledMessage,
+};
+
+/** 归这道闸管的集合。导出给回归测试按它枚举路由表。 */
+export const GATED_KINDS = new Set(Object.keys(PROJECT_OF));
+
 export function resourceGate(): MiddlewareHandler {
   return async (c, next) => {
     if (!c.req.path.startsWith("/api/")) return next();
@@ -74,17 +109,9 @@ export function resourceGate(): MiddlewareHandler {
     const [kind, ident] = segmentsOf(c.req.path);
     if (!ident || NOT_AN_ID.has(ident)) return next();
 
-    let projectId: string | null = null;
-    if (kind === "tasks") projectId = await projectOfTask(ident);
-    else if (kind === "groups") projectId = await projectOfGroup(ident);
-    else if (kind === "projects") projectId = ident;
-    // 队列与会话是**全局 id 路由**:路径里没有 task/project 段,所以第 1 轮审查前它们
-    // 整个漏在闸外 —— 拿到 queueId 能读别人的任务标题、改别人的队列顺序,拿到
-    // sessionId 能读完整 transcript。它们的项目要多跳一层才查得到,但判据同一份。
-    else if (kind === "queues") projectId = await projectOfQueue(ident);
-    else if (kind === "sessions") projectId = await projectOfSession(ident);
-    else if (kind === "scheduled-messages") projectId = await projectOfScheduledMessage(ident);
-    else return next();
+    const resolve = PROJECT_OF[kind];
+    if (!resolve) return next();
+    const projectId = await resolve(ident);
 
     // 资源不存在:交给业务路由去报 404(它知道该说「任务不存在」还是「分组不存在」)。
     if (!projectId) return next();

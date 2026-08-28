@@ -430,6 +430,7 @@ const bobActor = actorOf(bob);
   const { Hono } = await import("hono");
   const { authGate } = await import("../src/auth/middleware.js");
   const { resourceGate } = await import("../src/auth/resource-gate.js");
+const { personalWriteGate } = await import("../src/auth/personal-gate.js");
   const { mountOpenAiConverterRoutes } = await import("../src/openai-converter/routes.js");
   const { mountAnthropicContext1mRoutes } = await import("../src/anthropic-context-1m.js");
   const { mountProviderTestRoutes } = await import("../src/provider-test.js");
@@ -446,6 +447,7 @@ const bobActor = actorOf(bob);
   const app = new Hono();
   app.use("*", authGate());
   app.use("/api/*", resourceGate());
+app.use("/api/*", personalWriteGate());
   app.route("/api", api);
   // relay 路由回的是 OpenAI 风格的 `{message,type}`,ash 自己的路由回 `{error}` ——
   // 这条测试恰好要跨过这条边界,所以两种都读。
@@ -506,6 +508,7 @@ const bobActor = actorOf(bob);
   const { Hono } = await import("hono");
   const { authGate } = await import("../src/auth/middleware.js");
   const { resourceGate } = await import("../src/auth/resource-gate.js");
+const { personalWriteGate } = await import("../src/auth/personal-gate.js");
   const { mountTaskRoutes } = await import("../src/task-routes.js");
   const { executorScopeForOwner } = await import("../src/auth/owned-executors.js");
   const { resolveExecutorWithProfile } = await import("../src/executors/index.js");
@@ -516,6 +519,7 @@ const bobActor = actorOf(bob);
   const app = new Hono();
   app.use("*", authGate());
   app.use("/api/*", resourceGate());
+app.use("/api/*", personalWriteGate());
   app.route("/api", api);
   const aliceKey = await store.resetUserKey(alice.id);
   const post = async (path: string, body: unknown) => {
@@ -606,6 +610,7 @@ const bobActor = actorOf(bob);
   const { Hono } = await import("hono");
   const { authGate } = await import("../src/auth/middleware.js");
   const { resourceGate } = await import("../src/auth/resource-gate.js");
+const { personalWriteGate } = await import("../src/auth/personal-gate.js");
   const { mountTaskRoutes } = await import("../src/task-routes.js");
 
   // p-alice 变成共享项目:bob 看得见、改得动,但它仍然是 alice 的活。
@@ -616,6 +621,7 @@ const bobActor = actorOf(bob);
   const app = new Hono();
   app.use("*", authGate());
   app.use("/api/*", resourceGate());
+app.use("/api/*", personalWriteGate());
   app.route("/api", api);
   const aliceKey2 = await store.resetUserKey(alice.id);
   const bobKey2 = await store.resetUserKey(bob.id);

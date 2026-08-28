@@ -82,7 +82,7 @@ try {
   exitAfterStartupFailure("failed to acquire the database singleton lock", e);
 }
 
-const { startScheduler, api, authGate, resourceGate, withHandoffActor, actorOf, ownerIdOf } = await initializeServer().catch((e) =>
+const { startScheduler, api, authGate, resourceGate, personalWriteGate, withHandoffActor, actorOf, ownerIdOf } = await initializeServer().catch((e) =>
   exitAfterStartupFailure("server initialization failed", e),
 );
 
@@ -105,11 +105,12 @@ async function initializeServer() {
   await ensureSchema();
   // 实例模式(自用 / 多人)要在任何路由被打之前读出来:同步派进程那条路只认
   // auth/multi-flag.ts 里的缓存镜像,而那个镜像由 instanceConfig() 负责刷新。
-  const [modeModule, { authGate }, { resourceGate }, { withHandoffActor }, { actorOf, ownerIdOf }] =
+  const [modeModule, { authGate }, { resourceGate }, { personalWriteGate }, { withHandoffActor }, { actorOf, ownerIdOf }] =
     await Promise.all([
       import("./auth/mode.js"),
       import("./auth/middleware.js"),
       import("./auth/resource-gate.js"),
+      import("./auth/personal-gate.js"),
       import("./auth/handoff-outbound.js"),
       import("./auth/context.js"),
     ]);
@@ -186,6 +187,7 @@ async function initializeServer() {
     api: routesModule.api,
     authGate,
     resourceGate,
+    personalWriteGate,
     withHandoffActor,
     actorOf,
     ownerIdOf,
@@ -199,6 +201,10 @@ app.use("*", authGate());
 // 认了身份之后紧接着认资源:`/api/tasks/:id/…` 这类路径一律先过可见性。逐条路由自己
 // 查是漏不完的(那条轴上的端点分散在十几个文件里且还在长),所以做成横切的一道。
 app.use("/api/*", resourceGate());
+// 第三道:个人面资源的写侧。项目轴放行了不代表账号面也放行 —— agent 回合凭证在自己
+// 项目里干活是合法的,但它不该拿 owner 的身份去改执行器/供应商/审查者这些**后续任务
+// 会继承的配置**(auth/personal-gate.ts 顶部)。
+app.use("/api/*", personalWriteGate());
 // 出站接力的「我是谁」。一次接力是 ping → refs → import 好几个来回,分散在四五个文件
 // 里,逐个传 ownerUserId 一定会漏 —— 漏掉的那条会不带 key 发出去,对端多人实例直接
 // 拒收。做成一道横切的 AsyncLocalStorage,出站客户端自己去取(auth/handoff-outbound.ts)。

@@ -39,6 +39,7 @@ const visibility = await import("../src/auth/visibility.js");
 const { Hono } = await import("hono");
 const { authGate } = await import("../src/auth/middleware.js");
 const { resourceGate } = await import("../src/auth/resource-gate.js");
+const { personalWriteGate } = await import("../src/auth/personal-gate.js");
 const { api } = await import("../src/routes.js");
 
 await ensureSchema();
@@ -85,6 +86,7 @@ await db.insert(agents).values([
 const app = new Hono();
 app.use("*", authGate());
 app.use("/api/*", resourceGate());
+app.use("/api/*", personalWriteGate());
 app.route("/api", api);
 
 type Reply = { status: number; body: Record<string, unknown>; list: Record<string, unknown>[]; text: string };
@@ -235,6 +237,52 @@ const AS_ALICE = { authorization: `Bearer ${aliceKey}` };
   // 凭证本身仍然要对得上:token 不对就退回匿名。
   const wrong = await call("/api/tasks", "GET", { ...AS_AGENT, "x-ash-turn-token": "nope" });
   assert.equal(wrong.status, 401, `token 不对必须回未登录:${wrong.text}`);
+}
+
+// ── ⑥ 个人面资源的**写侧**:回合凭证一条都不许改 ──────────────────────────
+// 读侧是敞开的(上一组:派活要挑执行器),但写侧不是 —— 这几张表装的是**后续任务会
+// 继承的配置**:默认执行器、默认供应商(带 baseUrl 和 key)、审查者、团队预设、个人
+// 接力目标机。一条任务的凭证改得动它们,就等于一条任务能改写这个账号往后的运行方式
+// (第 1 轮审查 P1 实测:`POST /api/llm-providers` 201,在 alice 名下建出了供应商)。
+{
+  const { llmProviders, reviewerProfiles, teamPresets, workflows } = await import("../src/db/schema.js");
+  const WRITES: { path: string; method: string; body?: unknown; what: string }[] = [
+    { path: "/api/llm-providers", method: "POST", body: { name: "agent-added", protocol: "openai", baseUrl: "https://evil.example.com", apiKey: "secret" }, what: "建供应商" },
+    { path: "/api/agents", method: "POST", body: { name: "agent-added-executor", type: "claude" }, what: "建执行器" },
+    { path: "/api/workflows", method: "POST", body: { name: "agent-added-flow", def: { steps: [{ kind: "run" }] } }, what: "建起手式" },
+    { path: "/api/reviewer-profiles", method: "POST", body: { name: "agent-added-reviewer", agentType: "claude" }, what: "建审查者" },
+    { path: "/api/team-presets", method: "POST", body: { name: "agent-added-preset", config: { lead: "claude", worker: "claude" } }, what: "建团队预设" },
+    // 个人键(§八):改掉它,owner 往后所有新任务的默认就变了。
+    { path: "/api/settings", method: "PATCH", body: { worktreeDefault: false }, what: "改个人设置" },
+    { path: "/api/handoff/targets", method: "POST", body: { name: "agent-added-peer", url: "https://evil.example.com", peerKey: "k" }, what: "加接力目标机" },
+    { path: "/api/notes", method: "POST", body: { projectId: "p-source", body: "agent 写的随手记" }, what: "写随手记" },
+    { path: `/api/agents/ex-alice`, method: "PATCH", body: { name: "HIJACKED" }, what: "改 owner 的执行器" },
+    { path: `/api/agents/ex-alice`, method: "DELETE", what: "删 owner 的执行器" },
+  ];
+  for (const w of WRITES) {
+    const denied = await call(w.path, w.method, AS_AGENT, w.body);
+    assert.equal(denied.status, 403, `agent ${w.what} 必须 403(${w.method} ${w.path} 回了 ${denied.status}:${denied.text})`);
+    assert.match(String(denied.body.error ?? ""), /账号本人/, denied.text);
+  }
+  // 库里一行都不许多、一行都不许变 —— 只看状态码的话,「403 但已经写进去了」照样过。
+  assert.equal((await db.select().from(llmProviders)).length, 0, "被拒的供应商不许落库");
+  assert.equal((await db.select().from(workflows)).length, 0, "被拒的起手式不许落库");
+  assert.equal((await db.select().from(reviewerProfiles)).length, 0, "被拒的审查者不许落库");
+  assert.equal((await db.select().from(teamPresets)).length, 0, "被拒的团队预设不许落库");
+  const executors = await db.select().from(agents);
+  assert.equal(executors.length, 1, "执行器既不许多出来,也不许被删");
+  assert.equal(executors[0].name, "Alice Executor", "owner 的执行器不许被改名");
+
+  // 本人登录时照常能写 —— 拦的是凭证种类,不是这几条端点本身。
+  const mine = await call("/api/llm-providers", "POST", AS_ALICE, {
+    name: "alice-own", protocol: "openai", baseUrl: "https://api.example.com", apiKey: "k",
+  });
+  assert.equal(mine.status, 201, `alice 本人建供应商要过:${mine.text}`);
+
+  // 读侧不跟着收:派活要挑执行器/供应商,而读端点一条都不回显 key(只报 hasKey)。
+  const providers = await call("/api/llm-providers", "GET", AS_AGENT);
+  assert.equal(providers.status, 200, `agent 读得到 owner 的供应商清单:${providers.text}`);
+  assert.equal(providers.text.includes("\"k\""), false, `读侧永远不许把 key 交出去:${providers.text}`);
 }
 
 console.log("multi-user agent turn-token scope ok");

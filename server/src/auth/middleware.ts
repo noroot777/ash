@@ -128,7 +128,8 @@ export const isPublicApiPath = (path: string): boolean =>
 
 // 写方法要过 CSRF 检查。GET/HEAD 在这套 API 里没有副作用(唯一的例外
 // `/host/pick-directory` 是 POST,而且它自己另有一道同样的闸)。
-const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+// 个人面写闸(personal-gate.ts)用的也是这一份 —— 别在那边再抄一个。
+export const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /**
  * 跨站请求判定。两个信号,任一命中就拒:
