@@ -27,7 +27,7 @@ import { db } from "./db/index.js";
 import { notes, noteTasks, projects, tasks } from "./db/schema.js";
 import type { Actor } from "./auth/context.js";
 import { filterOwned } from "./auth/owned.js";
-import { visibleProjectIds } from "./auth/visibility.js";
+import { visibleProjectIds, visibleTaskIds } from "./auth/visibility.js";
 import { RUNS_DIR } from "./paths.js";
 
 const SNIPPET_RADIUS = 60;
@@ -274,6 +274,31 @@ async function readRunText(taskId: string, signal?: AbortSignal): Promise<string
 }
 
 /**
+ * 随手记的「已转 N 个任务」。**只数看得见的任务**,判据与 `/notes` 的 taskLinks 共用
+ * 同一句 `visibleTaskIds` —— 存量库里留着功能上线前建立的跨项目回链,「这条随手记我
+ * 看得见」推不出「它链的任务我也看得见」。
+ *
+ * 少这一道时泄露的不是标题而是**存在与数量**:详情页老老实实显示「没有关联任务」,
+ * ⌘K 却在同一条随手记上写着「已转 1 个任务」(第 2 轮审查 P2)。
+ */
+async function visibleNoteTaskCounts(
+  links: { noteId: string; taskId: string }[],
+  noteIds: string[],
+  actor: Actor,
+): Promise<Map<string, number>> {
+  const wanted = new Set(noteIds);
+  const mine = links.filter((link) => wanted.has(link.noteId));
+  const counts = new Map<string, number>();
+  if (!mine.length) return counts;
+  const visible = new Set(await visibleTaskIds(actor, [...new Set(mine.map((link) => link.taskId))]));
+  for (const link of mine) {
+    if (!visible.has(link.taskId)) continue;
+    counts.set(link.noteId, (counts.get(link.noteId) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
  * 一次搜索。**「谁在搜」是必填的位置参数**,不是 options 里可省的一项 —— 这个函数返回
  * 的是任务正文、会话原文和随手记正文的片段,比任何列表页都更危险,漏一个身份就是把
  * 全库端出去。放进 options 的那一版正是这么漏的(第 1 轮审查 P1)。
@@ -283,6 +308,9 @@ async function readRunText(taskId: string, signal?: AbortSignal): Promise<string
  *     得看得见;
  *   · 个人面 —— `filterOwned`(auth/owned.ts):随手记在多人模式下逐人隔离(§八),
  *     连实例管理员也不例外。`/notes` 的 `visibleNotes` 就是这两条轴,搜索不能少一条。
+ *
+ * 收窄的是**行**,应答里由别的行算出来的字段还得各自再过一遍 —— 随手记的转任务计数
+ * 见 `visibleNoteTaskCounts`。
  */
 export async function searchAll(query: string, actor: Actor, options: SearchOptions = {}): Promise<SearchHit[]> {
   const parsed = parseSearchQuery(query);
@@ -292,7 +320,7 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
     db.select().from(projects),
     db.select().from(tasks),
     db.select().from(notes),
-    db.select({ noteId: noteTasks.noteId }).from(noteTasks).innerJoin(tasks, eq(noteTasks.taskId, tasks.id)),
+    db.select({ noteId: noteTasks.noteId, taskId: noteTasks.taskId }).from(noteTasks).innerJoin(tasks, eq(noteTasks.taskId, tasks.id)),
     visibleProjectIds(actor),
   ]);
   const projectMatches = (projectId: string) =>
@@ -300,8 +328,6 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
   const taskRows = options.type === "notes" ? [] : allTaskRows.filter((task) => projectMatches(task.projectId) && visibleLocalSearchTask(task.handoff));
   const noteRows = options.type === "tasks" ? [] : (await filterOwned(allNoteRows, actor)).filter((note) => projectMatches(note.projectId));
   const projName = new Map(projRows.map((project) => [project.id, project.name] as const));
-  const noteTaskCounts = new Map<string, number>();
-  for (const link of allNoteTaskRows) noteTaskCounts.set(link.noteId, (noteTaskCounts.get(link.noteId) ?? 0) + 1);
 
   type TaskRow = (typeof taskRows)[number];
   type TaskHit = Extract<SearchHit, { kind: "task" }>;
@@ -367,8 +393,9 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
   // 随手记只在库里，判定不下盘、几乎不要钱 —— 先出，⌘K 就不会有「敲完字空着一片」的
   // 那一秒。排序上它们本来就在所有任务之后（compareSearchHits 第一把钥匙），先到后到
   // 不影响最终顺序。
-  for (const note of noteRows) {
-    if (!matchesSearchQuery(note.body, parsed)) continue;
+  const noteHits = noteRows.filter((note) => matchesSearchQuery(note.body, parsed));
+  const noteTaskCounts = await visibleNoteTaskCounts(allNoteTaskRows, noteHits.map((note) => note.id), actor);
+  for (const note of noteHits) {
     emit({
       kind: "note",
       id: note.id,

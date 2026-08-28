@@ -29,7 +29,7 @@ requireTmpDb("test-search-visibility");
 
 // 碰库的模块一律 await import:静态 import 会被提升到设 ASH_DB 之前,那样连的是真库。
 const { db, ensureSchema } = await import("../src/db/index.js");
-const { notes, projects, tasks } = await import("../src/db/schema.js");
+const { noteTasks, notes, projects, tasks } = await import("../src/db/schema.js");
 const mode = await import("../src/auth/mode.js");
 const store = await import("../src/auth/store.js");
 const visibility = await import("../src/auth/visibility.js");
@@ -52,6 +52,7 @@ const BOB_NEEDLE = "bob-private-needle-7c4b";
 const BOB_BODY = `${BOB_NEEDLE} should not be searchable by Alice`;
 const ALICE_NEEDLE = "alice-note-needle-3d1a";
 const ORPHAN_NEEDLE = "orphan-note-needle-9f2e";
+const BOB_LINK_NEEDLE = "bob-linked-note-needle-5a8c";
 const BOB_TASK_NEEDLE = "bobonlyprojectneedle";
 
 const at = new Date().toISOString();
@@ -71,8 +72,15 @@ const note = (id: string, body: string) => ({
 await db.insert(notes).values([
   note("note-bob-private", BOB_BODY),
   note("note-alice", `${ALICE_NEEDLE} alice's own note`),
+  note("note-bob-linked", `${BOB_LINK_NEEDLE} bob's own note`),
   // 归属为 null 的存量行:转换时该被认领掉,万一还留着,只对实例管理员可见(owned.ts)。
   note("note-orphan", `${ORPHAN_NEEDLE} nobody's note`),
+] as never);
+// 跨项目回链:两条随手记都挂在 p-shared,却都链着 p-bob 里的那个任务。功能上线前建
+// 起来的这种链在存量库里是有的 —— 「随手记看得见」推不出「它链的任务看得见」。
+await db.insert(noteTasks).values([
+  { noteId: "note-alice", taskId: "t-bob", createdAt: ms },
+  { noteId: "note-bob-linked", taskId: "t-bob", createdAt: ms },
 ] as never);
 
 type Reply = { status: number; hits: Record<string, unknown>[]; text: string };
@@ -106,6 +114,10 @@ try {
     assert.equal(reply.status, 200, `自用模式不该要登录:${reply.text}`);
     assert.deepEqual(ids(reply), ["note-bob-private"], `自用模式该照常搜到随手记:${reply.text}`);
   }
+  // 计数同理:自用模式下所有任务都看得见,这条跨项目回链该照数不误。
+  for (const reply of await bothRoutes(ALICE_NEEDLE, {})) {
+    assert.equal(reply.hits[0]?.taskCount, 1, `自用模式的转任务计数该照常:${reply.text}`);
+  }
 
   // ── 转多人 ───────────────────────────────────────────────────────────
   const root = join(stage, "root");
@@ -126,6 +138,7 @@ try {
 
   const { eq } = await import("drizzle-orm");
   await db.update(notes).set({ ownerUserId: bob.id }).where(eq(notes.id, "note-bob-private"));
+  await db.update(notes).set({ ownerUserId: bob.id }).where(eq(notes.id, "note-bob-linked"));
   await db.update(notes).set({ ownerUserId: alice.id }).where(eq(notes.id, "note-alice"));
 
   // ── ① 个人面:共享项目里也看不见别人的随手记 ────────────────────────────
@@ -170,7 +183,23 @@ try {
     assert.deepEqual(ids(reply), ["t-bob"], `实例管理员在项目轴上看得见一切:${reply.text}`);
   }
 
-  console.log("search visibility ok(个人面 + 项目轴,/search 与 /search/stream 同判据)");
+  // ── ⑤ 「已转 N 个任务」只数看得见的任务 ────────────────────────────────
+  // 泄露的不是任务标题而是**存在与数量**,而且它让两个面对同一条随手记说法不一致:
+  // 详情页说「没有关联任务」,⌘K 却写着「已转 1 个任务」。
+  const notesReply = await search("/api/notes?projectId=p-shared", AS_ALICE);
+  const aliceNote = notesReply.hits.find((row) => row.id === "note-alice");
+  assert.ok(aliceNote, `Alice 该看得见自己的随手记:${notesReply.text}`);
+  assert.deepEqual(aliceNote?.taskLinks, [], `/notes 早就藏掉了不可见的回链:${notesReply.text}`);
+  for (const reply of await bothRoutes(ALICE_NEEDLE, AS_ALICE)) {
+    assert.equal(reply.hits.length, 1, `Alice 该搜到自己那条:${reply.text}`);
+    assert.equal(reply.hits[0]?.taskCount, 0, `搜索的计数得跟 /notes 说同一件事:${reply.text}`);
+  }
+  // 别收过头:Bob 是 p-bob 的成员,同一条回链对他就是真的。
+  for (const reply of await bothRoutes(BOB_LINK_NEEDLE, AS_BOB)) {
+    assert.equal(reply.hits[0]?.taskCount, 1, `看得见那个任务的人,计数该照数:${reply.text}`);
+  }
+
+  console.log("search visibility ok(个人面 + 项目轴 + 转任务计数,/search 与 /search/stream 同判据)");
 } finally {
   await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });
