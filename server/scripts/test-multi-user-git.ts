@@ -8,6 +8,8 @@
 //      任务数」算成 0,不加 FORCE 的重启照样打断 queued 任务。
 //   ③ `/api/handoff/projects/:id/refs` 和 `/api/handoff/identity` 同样被通用闸挡住,
 //      多人↔多人的 Git 接力在协商第一步就 401,路由自己那三道更严的闸一条都到不了。
+//   ④ 免登录名单上的**匿名写端点**(登录 / 首启 / 领取链接)不过 CSRF:攻击页一个
+//      `text/plain` 简单请求就能免预检直达,而机器对机器那半张名单又不能被误伤。
 //
 // 三条都是**装配**问题而不是判据问题,所以这条测试一律走真 Request 打进
 // `authGate → resourceGate → 路由` 的完整栈,不直接调判据函数。
@@ -236,6 +238,33 @@ const WRITE_ROUTES: { path: string; method: string; body?: unknown; what: string
     assert.equal(settings.status, 401, `${path} 是本机设置面,必须先登录:${settings.text}`);
     assert.equal(settings.body.needsAuth, true, settings.text);
   }
+}
+
+// ── ⑥ 免登录名单上的写请求同样要过 CSRF ──────────────────────────────────
+// 名单里有一半是**浏览器**会打的写端点(登录、首启 setup、领取链接),而 Hono 的
+// `req.json()` 不看 content-type,攻击页一个 `text/plain` 简单请求就能免预检直达。
+// 另一半是机器对机器,它们既没有 Origin 也没有 Sec-Fetch-*,按同一份判据天然放行 ——
+// 收窄这道闸时最容易顺手把它们一起误伤(第 1 轮审查 P1)。
+{
+  const cross = { "sec-fetch-site": "cross-site" };
+  const login = await call("/api/auth/login", "POST", null, { key: "x" }, cross);
+  assert.equal(login.status, 403, `跨站打登录必须拒:${login.text}`);
+  assert.match(String(login.body.error ?? ""), /跨站请求已被拒绝/);
+
+  const setup = await call("/api/auth/setup", "POST", null, { mode: "single" }, cross);
+  assert.equal(setup.status, 403, `跨站打首启必须拒:${setup.text}`);
+
+  const claim = await call("/api/auth/claim/whatever", "POST", null, {}, cross);
+  assert.equal(claim.status, 403, `领取链接同属匿名写端点:${claim.text}`);
+
+  // 同源放行:别把自家向导和登录页一起锁死。
+  const same = await call("/api/auth/login", "POST", null, { key: "x" }, { "sec-fetch-site": "same-origin" });
+  assert.equal(same.status, 401, `同源登录该走到 key 校验:${same.text}`);
+
+  // 机器对机器:两个来源头都不带,必须被闸放行,由路由自己那道签名闸判。
+  const ping = await call("/api/handoff/ping", "POST", null, {});
+  assert.notEqual(ping.status, 403, `机器对端点不带 Origin,不该被 CSRF 判据误伤:${ping.status} ${ping.text}`);
+  assert.ok(!/跨站请求/.test(ping.text), ping.text);
 }
 
 console.log("multi-user git/host/handoff gates ok");

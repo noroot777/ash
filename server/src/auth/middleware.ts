@@ -11,6 +11,11 @@
 //   ② 写操作校验 `Origin` / `Sec-Fetch-Site`(照 dir-picker.ts:316-342 的现成先例)
 //   ③ Bearer 认证的请求天然免疫(浏览器不会自动附加 Authorization 头),所以只对
 //      cookie 身份做 ②
+//
+// ② 的覆盖面是**两段**,别只记住第一段:cookie 身份那一段,加上**匿名打免登录名单**
+// 那一段。后者不带任何凭证,却照样能改服务端状态 —— 首启 `/auth/setup` 就是,跨站一发
+// 就把未配置的实例锁进攻击者指定的多人模式(第 1 轮审查 P1)。自用模式下这道闸整条
+// 穿透,所以 `/auth/setup` 自己也留了一份同样的判据。
 import type { Context, MiddlewareHandler, Next } from "hono";
 import { getCookie } from "hono/cookie";
 import { eq } from "drizzle-orm";
@@ -252,7 +257,25 @@ export function authGate(): MiddlewareHandler {
     }
 
     setActor(c, ANONYMOUS_ACTOR);
-    if (isPublicApiPath(path)) return next();
+    if (isPublicApiPath(path)) {
+      // **免登录 ≠ 免 CSRF。** 这张名单里有一半是**浏览器**会打的写端点(首启 setup、
+      // 登录、领取链接),而 Hono 的 `req.json()` 不校验 content-type(见文件顶部),
+      // 攻击页一个 `text/plain` 的简单请求就能免预检直达它们 —— 未配置的实例因此能
+      // 被跨站锁进攻击者指定的多人模式,连管理员名字都是他起的(第 1 轮审查 P1)。
+      //
+      // 另一半是机器对机器(handoff / provider relay):它们既没有 `Origin` 也没有
+      // `Sec-Fetch-*`,按 `crossSiteRejection` 的既定口径天然放行,不必在这里另开一张
+      // 例外表 —— 那就是第二份判据,迟早跟主判据漂移。
+      if (WRITE_METHODS.has(c.req.method)) {
+        const rejection = crossSiteRejection({
+          secFetchSite: c.req.header("sec-fetch-site"),
+          origin: c.req.header("origin"),
+          host: c.req.header("host"),
+        });
+        if (rejection) return c.json({ error: rejection }, 403);
+      }
+      return next();
+    }
     // 壳可以打开(登录页要渲染),数据一律不行。
     if (isSpaShell(path)) return next();
     if (path.startsWith("/api/")) {

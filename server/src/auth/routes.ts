@@ -114,6 +114,17 @@ export function mountAuthRoutes(api: Hono): void {
   // ── 首启向导 / 模式转换 ───────────────────────────────────────────────────
   // 一个端点管两件事:它们的差别只有「库里有没有存量数据」,流程与校验完全一致。
   api.post("/auth/setup", async (c) => {
+    // CSRF 判据在这里**再落一道**,不是重复:`authGate` 在自用模式下是整条穿透的
+    // (§二「自用模式一行不拦」),而这条端点恰恰是自用模式里唯一能把实例**不可逆**
+    // 推进另一个状态的写操作 —— 跨站一发,用户的实例就翻成攻击者命名的多人模式,
+    // 他自己反倒只剩登录页,拿不到 key 就只能走宿主机逃生门(第 1 轮审查 P1)。
+    // 判据与 `/auth/login`、中间件共用同一份 `crossSiteRejection`。
+    const rejection = crossSiteRejection({
+      secFetchSite: c.req.header("sec-fetch-site"),
+      origin: c.req.header("origin"),
+      host: c.req.header("host"),
+    });
+    if (rejection) return c.json({ error: rejection }, 403);
     const config = await instanceConfig();
     // 「首启」有两种:模式还没定过,以及**定了 multi 却没人能登录**(转换中途崩了)。
     // 后者必须也走这条路 —— 否则实例锁死在一个谁也进不去的多人模式里,只能手改库。

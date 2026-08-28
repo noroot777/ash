@@ -2,6 +2,8 @@
 //
 //   落库和建目录这两步之间一旦失败,不能留下一个「库里有、磁盘没有、谁也修不了」的状态。
 //
+//   ⓪ 前置的另一条:首启 `/auth/setup` 是**匿名写端点**,免登录不等于免 CSRF ——
+//      跨站一发就能把未配置的实例锁进攻击者指定的多人模式(第 1 轮审查 P1)。
 //   ① `POST /auth/setup`:目录建不出来时,实例已经翻成 multi、管理员行已落库却没有
 //      key —— 而 `needsSetup:false` 把向导藏了起来,谁也进不去,只能手改库(第 1 轮
 //      审查 P0)。两层都要挡:**目录先建**(失败时库里一个字没动),外加 needsSetup 把
@@ -51,8 +53,14 @@ app.use("*", authGate());
 app.route("/api", api);
 
 type Res = { status: number; body: Record<string, unknown> };
-const call = async (path: string, method: string, key: string | null, body?: unknown): Promise<Res> => {
-  const headers: Record<string, string> = { "content-type": "application/json" };
+const call = async (
+  path: string,
+  method: string,
+  key: string | null,
+  body?: unknown,
+  extra?: Record<string, string>,
+): Promise<Res> => {
+  const headers: Record<string, string> = { "content-type": "application/json", ...extra };
   if (key) headers.authorization = `Bearer ${key}`;
   const res = await app.fetch(new Request(`http://127.0.0.1:4317${path}`, {
     method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -62,6 +70,41 @@ const call = async (path: string, method: string, key: string | null, body?: unk
 
 const root = join(stage, "root");
 mkdirSync(root, { recursive: true });
+
+// ── ⓪ 首启 setup 是**匿名写端点**,必须过 CSRF ─────────────────────────────
+// 免登录名单里有一半是浏览器会打的写端点,而 Hono 的 `req.json()` 不看 content-type
+// (middleware.ts 顶部),所以攻击页一个 `text/plain` 简单请求就能免预检直达。这条端点
+// 尤其致命:它把**未配置**的实例一次性锁进攻击者指定的多人模式,连管理员名字和根目录
+// 都是他起的;真正的用户刷新后只剩一张登录页,没拿到 key 就只能走宿主机逃生门
+// (第 1 轮审查 P1)。
+//
+// 这一组必须排在所有会真的写库的组**之前**:它验的正是「跨站那一发什么都没改成」。
+{
+  const evil = { mode: "multi", adminName: "Hijacked", rootDir: root, dirName: "hijacked" };
+  // 现代浏览器:Sec-Fetch-Site 是浏览器自己盖的章,页面伪造不了。
+  const secFetch = await call("/api/auth/setup", "POST", null, evil, { "sec-fetch-site": "cross-site" });
+  assert.equal(secFetch.status, 403, `跨站 setup 必须拒:${JSON.stringify(secFetch.body)}`);
+  assert.match(String(secFetch.body.error), /跨站请求已被拒绝/);
+  // 老浏览器没有 Sec-Fetch-*,退到比对 Origin。
+  const byOrigin = await call("/api/auth/setup", "POST", null, evil, { origin: "https://evil.example" });
+  assert.equal(byOrigin.status, 403, `Origin 对不上也必须拒:${JSON.stringify(byOrigin.body)}`);
+
+  // 只看状态码不够:一个「403 但已经翻了模式」的实现照样过。
+  mode.invalidateInstanceConfig();
+  assert.equal((await mode.instanceConfig()).mode, "", "被拒的 setup 不许把实例翻成 multi");
+  assert.equal(await store.countUsers(), 0, "被拒的 setup 不许留下管理员行");
+
+  // 反过来:同源那一发得照常放行,别把向导自己锁死。
+  const sameOrigin = await call("/api/auth/setup", "POST", null, { mode: "multi" }, { "sec-fetch-site": "same-origin" });
+  assert.equal(sameOrigin.status, 400, `同源请求该走到业务校验(缺 adminName):${JSON.stringify(sameOrigin.body)}`);
+  assert.match(String(sameOrigin.body.error), /管理员姓名必填/);
+  // 非浏览器调用方(curl / 手机端 / 这份测试)两个头都不带 —— 同样放行。
+  const headless = await call("/api/auth/setup", "POST", null, { mode: "multi" });
+  assert.equal(headless.status, 400, `不带来源头的调用方不该被 CSRF 挡:${JSON.stringify(headless.body)}`);
+  // 注意这一刻实例模式还是 ""(未配置),`authGate` 整条穿透 —— 上面这四发全靠
+  // `/auth/setup` **自己**那道判据挡住的。闸那一层的同一道判据(匿名打免登录名单的写
+  // 请求)在多人模式下才生效,钉在 `test:multi-user-git` 里。
+}
 
 // ── ① 首启转换:目录建不出来 → 库里一个字都不许动,而且要能重来 ────────────
 {
