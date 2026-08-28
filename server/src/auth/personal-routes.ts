@@ -15,7 +15,7 @@ import { CONFIG_BUNDLE_KINDS } from "@ash/shared/multiuser";
 import { db } from "../db/index.js";
 import { agents, llmProviders, reviewerProfiles, teamPresets, workflows } from "../db/schema.js";
 import { id, now } from "../util.js";
-import { actorOf } from "./context.js";
+import { actorOf, isAccountHolder } from "./context.js";
 import { isMultiUser } from "./mode.js";
 import { filterOwned, ownedScope, ownerStamp } from "./owned.js";
 import {
@@ -28,10 +28,26 @@ import {
   writePersonalSkill,
 } from "./user-cli.js";
 
-/** 个人 CLI 环境只对**本人**开放 —— 连实例管理员也看不了别人的(§八 个人面)。 */
+/**
+ * 个人 CLI 环境只对**本人**开放 —— 连实例管理员也看不了别人的(§八 个人面)。
+ *
+ * 「本人」不含 agent 回合凭证:它带着 owner 的 userId,但代表的是那一条任务
+ * (`isAccountHolder` 的注释)。放它进来 = 任意一个正在跑的 agent 都能读改 owner 的
+ * 全局 CLAUDE.md 与个人技能,而那正是**下一次派任务时喂给所有 CLI** 的东西 ——
+ * 一条任务就能改写这个账号往后的行为(第 2 轮审查 P1 同一类)。
+ */
 function selfId(c: Context): string | null {
   const actor = actorOf(c);
+  if (!isAccountHolder(actor)) return null;
   return actor.userId ?? null;
+}
+
+/** 拿不到「本人」时的拒绝。两种成因文案不同:没登录 vs 拿的是回合凭证。 */
+function refuseSelf(c: Context): Response {
+  if (actorOf(c).kind === "agent") {
+    return c.json({ error: "个人设置只对账号本人开放：回合凭证代表的是那一条任务，不是这个账号" }, 403);
+  }
+  return c.json({ error: "请先登录" }, 401);
 }
 
 export function mountPersonalCliRoutes(api: Hono): void {
@@ -41,20 +57,20 @@ export function mountPersonalCliRoutes(api: Hono): void {
       return c.json({ mode: "single", envs: [] });
     }
     const userId = selfId(c);
-    if (!userId) return c.json({ error: "请先登录" }, 401);
+    if (!userId) return refuseSelf(c);
     return c.json({ mode: "multi", envs: listPersonalCliEnv(userId) });
   });
 
   api.get("/me/cli-env/:agentType", async (c) => {
     const userId = selfId(c);
-    if (!userId) return c.json({ error: "请先登录" }, 401);
+    if (!userId) return refuseSelf(c);
     return c.json(personalCliEnv(userId, c.req.param("agentType") as AgentType));
   });
 
   // ── 个人技能 ─────────────────────────────────────────────────────────────
   api.get("/me/cli-env/:agentType/skills/:name", async (c) => {
     const userId = selfId(c);
-    if (!userId) return c.json({ error: "请先登录" }, 401);
+    if (!userId) return refuseSelf(c);
     const body = readPersonalSkill(userId, c.req.param("agentType") as AgentType, c.req.param("name"));
     if (body === null) return c.json({ error: "技能不存在" }, 404);
     return c.json({ name: c.req.param("name"), body });
@@ -62,7 +78,7 @@ export function mountPersonalCliRoutes(api: Hono): void {
 
   api.put("/me/cli-env/:agentType/skills/:name", async (c) => {
     const userId = selfId(c);
-    if (!userId) return c.json({ error: "请先登录" }, 401);
+    if (!userId) return refuseSelf(c);
     const b = await c.req.json<{ body?: string }>().catch(() => ({}) as { body?: string });
     if (typeof b.body !== "string" || !b.body.trim()) return c.json({ error: "SKILL.md 内容不能为空" }, 400);
     try {
@@ -75,7 +91,7 @@ export function mountPersonalCliRoutes(api: Hono): void {
 
   api.delete("/me/cli-env/:agentType/skills/:name", async (c) => {
     const userId = selfId(c);
-    if (!userId) return c.json({ error: "请先登录" }, 401);
+    if (!userId) return refuseSelf(c);
     try {
       deletePersonalSkill(userId, c.req.param("agentType") as AgentType, c.req.param("name"));
     } catch (error) {
@@ -87,13 +103,13 @@ export function mountPersonalCliRoutes(api: Hono): void {
   // ── 个人全局 CLAUDE.md / AGENTS.md ───────────────────────────────────────
   api.get("/me/cli-env/:agentType/memory", async (c) => {
     const userId = selfId(c);
-    if (!userId) return c.json({ error: "请先登录" }, 401);
+    if (!userId) return refuseSelf(c);
     return c.json({ body: readPersonalMemory(userId, c.req.param("agentType") as AgentType) });
   });
 
   api.put("/me/cli-env/:agentType/memory", async (c) => {
     const userId = selfId(c);
-    if (!userId) return c.json({ error: "请先登录" }, 401);
+    if (!userId) return refuseSelf(c);
     const b = await c.req.json<{ body?: string }>().catch(() => ({}) as { body?: string });
     try {
       writePersonalMemory(userId, c.req.param("agentType") as AgentType, b.body ?? "");
@@ -116,6 +132,9 @@ function bundleKinds(raw: unknown): ConfigBundleKind[] {
 
 function mountConfigTransferRoutes(api: Hono): void {
   api.post("/me/config/export", async (c) => {
+    // `/me/*` 整条都是账号面,导出也不例外:它按 owner 的 scope 把个人供应商、执行器、
+    // 个人技能全打成一个包 —— 一条任务的回合凭证不该能把 owner 的整份配置端走。
+    if (!isAccountHolder(actorOf(c))) return refuseSelf(c);
     const actor = actorOf(c);
     const kinds = bundleKinds(
       (await c.req.json<{ kinds?: unknown }>().catch(() => ({}) as { kinds?: unknown })).kinds,
@@ -195,6 +214,7 @@ function mountConfigTransferRoutes(api: Hono): void {
   });
 
   api.post("/me/config/import", async (c) => {
+    if (!isAccountHolder(actorOf(c))) return refuseSelf(c);
     const actor = actorOf(c);
     const bundle = await c.req.json<ConfigBundle>().catch(() => null);
     if (!bundle || bundle.version !== 1 || !bundle.items) {

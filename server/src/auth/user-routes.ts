@@ -8,7 +8,7 @@ import { projectInvites, projects, schedules, tasks } from "../db/schema.js";
 import { stopTask } from "../runs.js";
 import { setTaskStatus } from "../status.js";
 import { id, now } from "../util.js";
-import { actorOf, authErrorResponse, isAdminActor, requireAdmin } from "./context.js";
+import { actorOf, authErrorResponse, isAccountHolder, isAdminActor, requireAdmin } from "./context.js";
 import { ensureUserHomeDir, isMultiUser } from "./mode.js";
 import {
   activeAdminCount,
@@ -123,7 +123,11 @@ export function mountUserRoutes(api: Hono): void {
     const target = c.req.param("id");
     const user = await getUser(target);
     if (!user) return c.json({ error: "用户不存在" }, 404);
-    const self = actor.userId === target;
+    // 「本人」只认真人登录态:回合凭证的 userId 是任务 owner 的,但它不是那个人
+    // (isAccountHolder 的注释)。不加这一句的话,agent 走的就是下面这条自改分支 ——
+    // 实测能改掉 owner 的 git 署名(第 2 轮审查 P1)。它落到 requireAdmin 上被挡住:
+    // agent 恒 member,永远过不了。
+    const self = isAccountHolder(actor) && actor.userId === target;
     // 本人可以改自己的姓名与 git 署名;角色只有管理员能动。
     if (!self) {
       try {
@@ -310,7 +314,9 @@ function mountProjectMemberRoutes(api: Hono): void {
     const projectId = c.req.param("id");
     const userId = c.req.param("userId");
     const actor = actorOf(c);
-    const leaving = actor.userId === userId;
+    // 「自行退出」同样只认真人:否则源任务项目里跑着的 agent 能把 owner 本人退出去
+    // (它对源任务项目恰好有可见性,这条分支只查可见性)。agent 落到项目管理员那条。
+    const leaving = isAccountHolder(actor) && actor.userId === userId;
     try {
       if (leaving) await requireProjectAccess(actor, projectId);
       else await requireProjectAdmin(actor, projectId);

@@ -2,9 +2,10 @@
 //
 // 三类调用方,判据完全不同,但都要收敛成同一个 Actor:
 //  · **人**(web cookie / mobile Bearer):落在 users 表上,有实例角色。
-//  · **agent**(MCP 回连,带回合凭证):不走用户会话,身份是「那个任务的 owner」。
-//    见 docs/multi-user-plan.md §三。它没有 web 会话,也不该有 —— 一个 agent 拿到
-//    的权限恰好是它那条任务的权限,多一分都是横向越权。
+//  · **agent**(MCP 回连,带回合凭证):不走用户会话,归属记在那个任务的 owner 名下,
+//    但**权限只到那条任务**。见 docs/multi-user-plan.md §三。它没有 web 会话,也不该有
+//    —— 一个 agent 拿到的权限恰好是它那条任务的权限,多一分都是横向越权(项目轴的收窄
+//    在 visibility.ts `agentScope`,账号面的在下面的 `isAccountHolder`)。
 //  · **自用模式**:恒定的隐式本地用户(id 见 SINGLE_USER_ID)。这样归属列只有一套
 //    逻辑,转多人时把它实名化即可,不必在每个读写点写 `if (multi)`。
 //
@@ -66,6 +67,18 @@ export function actorOf(c: Context): Actor {
 /** 多人模式下这次请求是不是实例管理员。自用模式恒 true。 */
 export const isAdminActor = (actor: Actor): boolean =>
   actor.kind === "single" || actor.role === "admin";
+
+/**
+ * 「这次请求是**账号本人**在操作」。改自己的资料、改个人 CLI 环境、导入配置、退出项目
+ * 这类**账号面**的判据统一走这一句,别在调用点写裸的 `actor.userId === xxx`。
+ *
+ * 回合凭证不算本人:它代表的是那一条任务(见文件顶部),而 `agentActor` 给它填的
+ * userId 是任务 owner 的 —— 只比 userId 的话,任意一个正在跑的 agent 都能改 owner 的
+ * 姓名/git 署名、改他的全局 CLAUDE.md 与个人技能(下一次派任务喂给所有 CLI 的东西),
+ * 或者把 owner 从项目里退出去(第 2 轮审查 P1)。
+ */
+export const isAccountHolder = (actor: Actor): boolean =>
+  actor.kind === "single" || actor.kind === "user";
 
 /** 归属列该写什么。自用模式写 null(见 SINGLE_USER_ID 的注释)。 */
 export const ownerIdOf = (actor: Actor): string | null =>

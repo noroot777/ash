@@ -165,8 +165,14 @@ export function crossSiteRejection(headers: {
 
 /**
  * agent 回连身份:MCP 带着 `x-ash-source-task-id` + `x-ash-turn-token` 来
- * (mcp/src/index.ts:81-84)。凭证对得上就按「那条任务的 owner」放行,**不走用户会话**
- * —— 一个 agent 的权限恰好是它那条任务的权限。
+ * (mcp/src/index.ts:81-84)。凭证对得上就放行,**不走用户会话** —— 一个 agent 的权限
+ * 恰好是它那条任务的权限。
+ *
+ * 这里填的 `userId` 只是**归属戳**(它建的任务/资源该记在谁名下),不是「它就是这个人」:
+ * 权限面的收窄在别处,两处都得在 ——
+ *  · 项目轴:`visibility.ts` 的 `agentScope`,可见集 = 源任务那一个项目;
+ *  · 账号面:`context.ts` 的 `isAccountHolder`,改资料 / 改个人 CLI 环境 / 退出项目一律不认。
+ * 少哪一处,共享账号下任意一个正在跑的 agent 就是 owner 的完整账号(第 2 轮审查 P1)。
  *
  * 校验必须**同时**认 taskId 和 token:光有 token 无从查起(它不是全局唯一索引),
  * 光有 taskId 谁都能填。

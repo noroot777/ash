@@ -1,9 +1,10 @@
 // 「这个人能看见哪些项目」——多人模式所有横切过滤面的单一判据(§十二)。
 //
-// 三条规则,全在这个文件里:
+// 四条规则,全在这个文件里:
 //  ① 自用模式:一切可见。
 //  ② 实例管理员:一切可见,且进任意项目时权限等同项目管理员(§四)。
 //  ③ 普通用户:project_members 里有他的那些。
+//  ④ agent 回合凭证:**只有源任务那一个项目**,不是它 owner 的全部项目(§三)。
 //
 // **别在调用点自己拼 SQL** —— 项目切换器、任务列表、搜索、SSE、通知、验收页、随手记
 // 全都要过同一份判据;复制一份出去,漏掉的那个面就是横向越权。
@@ -16,9 +17,28 @@ import type { Actor } from "./context.js";
 import { forbidden, isAdminActor } from "./context.js";
 import { isMultiUser } from "./mode.js";
 
+/**
+ * agent 回合凭证看得见的项目:**只有源任务那一个**。
+ *
+ * 它身上确实挂着一个 userId(那条任务的 owner),但它不是那个人 —— 按 owner 的成员表
+ * 展开的话,共享账号下任意一个正在跑的 agent 都能横向读到 owner 的其它项目(第 2 轮
+ * 审查 P1 实测:只带 `x-ash-source-task-id` + `x-ash-turn-token` 的请求,`GET /api/tasks`
+ * 列出了另一个项目的任务、`GET /api/tasks/:id` 直接回出详情)。计划 §三 写死的口径是
+ * 「有效回合凭证 → **任务归属项目**」,不是「→ owner 的账号」。
+ *
+ * 任务行不在了(被删)→ 空集:一个悬空的回合凭证什么都不该看见。
+ */
+async function agentScope(actor: Actor): Promise<Set<string>> {
+  const projectId = actor.taskId ? await projectOfTask(actor.taskId) : null;
+  return new Set(projectId ? [projectId] : []);
+}
+
 /** null = 不设限(自用模式或实例管理员);Set = 只这些。 */
 export async function visibleProjectIds(actor: Actor): Promise<Set<string> | null> {
   if (!(await isMultiUser())) return null;
+  // agent 排在管理员判据**前面**:回合凭证目前恒为 member,但哪天 agentActor 改成继承
+  // owner 的实例角色,顺序写反就是「一条任务的凭证变成万能钥匙」。
+  if (actor.kind === "agent") return agentScope(actor);
   if (isAdminActor(actor)) return null;
   if (!actor.userId) return new Set();
   const rows = await db
@@ -45,13 +65,22 @@ export async function visibleProjectsFor(actor: Actor): Promise<(typeof projects
  *
  * 项目列表要给每一行标出「我在这儿是什么角色」(前端据它决定管理控件给不给看),
  * 一行查一次成员表就是 N 次查询;这里一次取完他自己的全部成员行。
+ *
+ * agent 与可见集同一个收窄:角色表按 owner 全量展开的话,`projectRoleOf(actor, 别的
+ * 项目)` 照样回 "admin" —— 而不是每条管理动作都先过一遍 canSeeProject(`POST
+ * /projects/resolve` 的回填分支就只查角色,URL 上根本没有 project id 给横切闸看)。
  */
 export async function projectRolesOf(actor: Actor): Promise<Map<string, ProjectRole> | null> {
   if (!(await isMultiUser())) return null;
-  if (isAdminActor(actor)) return null;
+  if (actor.kind !== "agent" && isAdminActor(actor)) return null;
   if (!actor.userId) return new Map();
+  const scope = actor.kind === "agent" ? await agentScope(actor) : null;
   const rows = await db.select().from(projectMembers).where(eq(projectMembers.userId, actor.userId));
-  return new Map(rows.map((r) => [r.projectId, r.role === "admin" ? "admin" : "member"] as const));
+  return new Map(
+    rows
+      .filter((r) => scope === null || scope.has(r.projectId))
+      .map((r) => [r.projectId, r.role === "admin" ? "admin" : "member"] as const),
+  );
 }
 
 /** 项目里的角色。实例管理员返回 "admin"(隐式);不是成员返回 null。 */

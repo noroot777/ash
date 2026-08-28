@@ -108,7 +108,8 @@
     "test:no-libsql": "tsx scripts/test-no-libsql.ts",
     "test:handoff-free-workflow-rows": "tsx scripts/test-handoff-free-workflow-rows.ts",
     "test:multi-user-run": "tsx scripts/test-multi-user-run.ts",
-    "test:multi-user-git": "tsx scripts/test-multi-user-git.ts"
+    "test:multi-user-git": "tsx scripts/test-multi-user-git.ts",
+    "test:multi-user-agent": "tsx scripts/test-multi-user-agent.ts"
   },
   "dependencies": {
     "@ash/shared": "*",
