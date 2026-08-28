@@ -5,6 +5,7 @@ import type {
   HandoffTarget,
   TaskHandoff,
 } from "@ash/shared";
+import { outboundHolder } from "@ash/shared/handoff";
 import { and, eq } from "drizzle-orm";
 import type { Context, Hono } from "hono";
 import { getAppSettings } from "./app-settings.js";
@@ -51,12 +52,14 @@ function targetForOutbound(marker: TaskHandoff, rawTargetUrl: string, targets: H
   if (marker.direction !== "out" || marker.pending) {
     throw new HandoffError("这不是已确认接力出去的任务", 409);
   }
-  const wanted = normalizedUrl(rawTargetUrl);
-  if (!marker.peerUrl || normalizedUrl(marker.peerUrl) !== wanted) {
+  // 持有机认的是**设置里那一条**，不是 marker 里冻着的旧地址（见 shared 的 outboundHolder：
+  // 机器换地址后按名字认回同一台）。请求带来的目标必须就是它现在的地址 —— 这一层仍要卡，
+  // 否则前端传谁就往谁发。
+  const target = outboundHolder(marker, targets);
+  if (!target) throw new HandoffError("这台持有机器已从接力设置中移除", 409);
+  if (normalizedUrl(target.url) !== normalizedUrl(rawTargetUrl)) {
     throw new HandoffError("任务记录的持有机器与请求目标不一致", 409);
   }
-  const target = targets.find((item) => normalizedUrl(item.url) === wanted);
-  if (!target) throw new HandoffError("这台持有机器已从接力设置中移除", 409);
   if (marker.peerFp && target.peerFp && !sameFingerprint(marker.peerFp, target.peerFp)) {
     throw new HandoffError("任务记录的机器身份与当前设置不一致，请重新核对指纹", 409);
   }
@@ -182,6 +185,9 @@ async function remoteStatesFor(
 
 // 本机所有「确认接力出去」的行,按持有机分组。pending(应答丢失、没确认送到)的不算:
 // 那种任务本机还硬拦着不让跑,状态归本机自己说,问对端只会问出个 404。
+//
+// 分组的 key 是**持有机现在的地址**,不是 marker 里冻着的那个:同一台机器换过地址之后,
+// 换地址前后交出去的行要合并成同一次请求,而不是拆成「一台连得上、一台永远连不上」。
 async function outboundByPeer(): Promise<Map<string, { target: HandoffTarget; items: { taskId: string; transferId?: string }[] }>> {
   const { handoffTargets } = await getAppSettings();
   const rows = await db.select({ id: tasks.id, handoff: tasks.handoff }).from(tasks);
@@ -189,10 +195,12 @@ async function outboundByPeer(): Promise<Map<string, { target: HandoffTarget; it
   for (const row of rows) {
     const marker = markerOf(row.handoff);
     if (marker?.direction !== "out" || marker.pending || !marker.peerUrl) continue;
-    const url = normalizedUrl(marker.peerUrl);
-    const target = handoffTargets.find((item) => normalizedUrl(item.url) === url);
-    // 已经从接力设置里删掉的机器:没有名字也没有指纹,连签名都发不出去,当它不存在。
+    // 已经从接力设置里删掉的机器:没有名字也没有指纹,连签名都发不出去,当它不存在
+    //（既不问也不报 offline —— 那是用户自己按的删除,handoff-state-check 钉着）。
+    // 只是**换过地址**的不算删除,按名字认回同一台(判据在 shared 的 outboundHolder)。
+    const target = outboundHolder(marker, handoffTargets);
     if (!target) continue;
+    const url = normalizedUrl(target.url);
     const bucket = byPeer.get(url) ?? { target, items: [] };
     bucket.items.push({ taskId: marker.peerTaskId || row.id, transferId: marker.transferId ?? undefined });
     byPeer.set(url, bucket);

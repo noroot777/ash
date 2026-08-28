@@ -18,6 +18,10 @@
       "types": "./src/duet.ts",
       "default": "./src/duet.ts"
     },
+    "./handoff": {
+      "types": "./src/handoff.ts",
+      "default": "./src/handoff.ts"
+    },
     "./team": {
       "types": "./src/team.ts",
       "default": "./src/team.ts"

@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { Group, GroupMode, HandoffTarget, ProjectView, Task, TaskListItem, TaskMode } from "@ash/shared";
+import { outboundHolder } from "@ash/shared/handoff";
 import { api } from "../lib/api.ts";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import { useTasks } from "../lib/useTasks.ts";
@@ -248,7 +249,8 @@ export function WorkspaceShell() {
     if (!visibleOnThisMachine(task)) {
       // 任务模式里出站行就摆在列表里，点开当然得能进去 —— 进的是持有机上那份实时会话
       // （RemoteTaskDetail），跟点开本机任务一样是「打开这条任务」，只是活在别的机器上。
-      const holder = handoffTargets.find((item) => item.url.replace(/\/+$/, "") === (task.handoff?.peerUrl ?? "").replace(/\/+$/, ""));
+      // 认哪台机器由 shared 的 outboundHolder 说了算（换过地址的按名字认回同一台）。
+      const holder = outboundHolder(task.handoff, handoffTargets);
       if (holder) { selectRemoteTask(task, holder); return; }
       notify("任务已接力到另一台机器，请在当前持有它的机器上继续");
       return;

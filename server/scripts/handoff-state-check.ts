@@ -60,7 +60,21 @@ export async function checkOutboundStates(opts: {
   assert.equal(dead.offline.length, 1);
   assert.equal(dead.offline[0].name, "关着的机器", "offline 要报出用户认得的机器名");
 
+  // 机器换了地址:用户去接力设置里把 url 改对了,可历史出站行的 marker 还冻着接力那一刻
+  // 的旧地址。这时必须按**名字**认回同一台 —— 不认的话按 url 找不到 target,整台机器被
+  // 轮询静默跳过:既没有实时状态,也不再说「联系不上」,屏幕上剩一份冻住的旧状态冒充实时,
+  // 比直说「联系不上」更糟。判据在 shared 的 outboundHolder。
+  await patchAppSettings({ handoffTargets: [{ name: "搬过家的机器", url: peerUrl, peerFp: peerFingerprint }] });
+  await setMarker({ peerUrl: deadUrl, peerName: "搬过家的机器" });
+  const moved = await outboundRemoteStates();
+  assert.deepEqual(moved.offline, [], "地址在设置里已经改对了,不该再报离线");
+  assert.ok(
+    moved.rows.some((row) => row.taskId === taskId),
+    `换过地址的持有机要按名字认回,实得 ${JSON.stringify(moved)}`,
+  );
+
   // 已经从接力设置里删掉的机器:连签名都发不出去,当它不存在(既不问也不报 offline)。
+  // 跟上面那条是两件事 —— 删除是用户自己按的,换地址不是。
   await patchAppSettings({ handoffTargets: [] });
   assert.deepEqual(await outboundRemoteStates(), { rows: [], offline: [] }, "设置里没有的机器不该报成离线");
   await patchAppSettings({ handoffTargets: beforeTargets });
