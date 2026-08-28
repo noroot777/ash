@@ -20,8 +20,12 @@ import { join, sep } from "node:path";
 import { MAX_FILE_BYTES, MB } from "./handoff-types.js";
 import type { HandoffUploadPayload } from "./handoff-types.js";
 import { UPLOADS_DIR } from "./paths.js";
+import { id } from "./util.js";
 
 export const MAX_UPLOADS = 100;
+
+/** 写盘结果:`name` 是**本机最终文件名**(撞名时改过),`fresh` = 这批字节是这次新写下的。 */
+export type WrittenUpload = HandoffUploadPayload & { fresh: boolean };
 
 /** 一段文本在 JSON 字符串里的形态(去掉包裹引号)。POSIX 路径没有需转义字符,原样返回。 */
 export const jsonEscaped = (s: string): string => JSON.stringify(s).slice(1, -1);
@@ -75,12 +79,29 @@ export async function collectUploads(
   return out;
 }
 
-/** 导入侧:附件落到本机 uploads 目录,返回**真正写盘成功**的载荷——路径改写只认这批, 写失败的旧路径原样留着(好歹能看出引用的是什么)。 */
+/**
+ * 导入侧:附件落到本机 uploads 目录,返回**真正写盘成功**的载荷——路径改写只认这批,
+ * 写失败的旧路径原样留着(好歹能看出引用的是什么)。
+ *
+ * **本机同名的文件绝不覆盖。** 目录是扁平的、名字就是全部信息(`uploads.ts`),源机
+ * 送来的名字撞上本机既有文件时,直接按名字写下去有两重后果:本机那份用户数据被远端
+ * 内容顶掉;既有登记行还会被顺手补上接力任务的 id —— 别人的私有附件就此敞开给这条
+ * 任务看得见的所有人(第 5 轮审查 P1)。所以撞名时:
+ *   · 本机那份**字节一模一样** → 就用本机这一份,不写盘、不登记(接力移回的常态,
+ *     免得每来回一趟就多一份拷贝);
+ *   · 内容不同 → 换一个本机名字落地,如实记 notes。
+ * 返回的 `name` 一律是**本机最终名字**,`fresh` 标记这批字节是不是这次新写下的 ——
+ * 调用方只该给 fresh 的那些建登记行(撞上的名字归本机原主,一动不动)。
+ *
+ * `registered` 是本机已有登记行的名字:文件被删了、登记行还在的也算撞名,否则补写
+ * 一份内容进去就等于往别人的登记行里换了瓤。
+ */
 export async function writeUploads(
   uploads: HandoffUploadPayload[],
   notes: string[],
-): Promise<HandoffUploadPayload[]> {
-  const written: HandoffUploadPayload[] = [];
+  registered: ReadonlySet<string> = new Set<string>(),
+): Promise<WrittenUpload[]> {
+  const written: WrittenUpload[] = [];
   for (const u of uploads) {
     // "." 与 ".." 也满足字符集正则,必须单独拒绝。
     if (!SAFE_NAME.test(u.name) || u.name === "." || u.name === "..") {
@@ -93,8 +114,22 @@ export async function writeUploads(
       continue;
     }
     mkdirSync(UPLOADS_DIR, { recursive: true });
-    await writeFile(join(UPLOADS_DIR, u.name), data);
-    written.push(u);
+    const abs = join(UPLOADS_DIR, u.name);
+    const onDisk = existsSync(abs);
+    if (!onDisk && !registered.has(u.name)) {
+      await writeFile(abs, data);
+      written.push({ ...u, fresh: true });
+      continue;
+    }
+    const same = onDisk && await readFile(abs).then((cur) => cur.equals(data)).catch(() => false);
+    if (same) {
+      written.push({ ...u, fresh: false });
+      continue;
+    }
+    const name = `${id()}-${u.name}`;
+    await writeFile(join(UPLOADS_DIR, name), data);
+    notes.push(`上传附件 ${u.name} 与本机同名文件冲突,改名为 ${name} 落地(本机原文件没动)`);
+    written.push({ ...u, name, fresh: true });
   }
   return written;
 }

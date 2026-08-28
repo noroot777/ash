@@ -349,7 +349,13 @@ api.post("/tasks", async (c) => {
   // 附件跟着任务走进项目轴:同项目的人在会话里看得见这张图,就该读得到它(uploads.ts)。
   // 只认「还没归属」或「本来就是我的」文件 —— 否则把别人私有随手记的附件路径写进
   // attachments 就能给它敞开一条项目轴的读路。
-  await bindUploadsToTask(b.attachments, taskId, taskOwner);
+  //
+  // 这里问的是**这次请求的人**,不是上面那个 taskOwner:附件是随请求体上来的,能不能
+  // 拿它换一个项目轴的读路,得看点「创建」的这只手里有没有它。两者在建派生任务时会
+  // 分家(taskOwner 继承父任务,§八),按 taskOwner 判会把上传者本人挡在门外 ——
+  // Bob 给 Alice 的任务开一条子任务、附上自己刚传的图,正文里写着路径却谁都打不开
+  // (第 5 轮审查 P2)。归属决定执行环境,授权看操作人,两个问题两个答案。
+  await bindUploadsToTask(b.attachments, taskId, ownerIdOf(actorOf(c)));
   return c.json(created!, 201);
 });
 

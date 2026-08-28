@@ -5,6 +5,9 @@
 //      哨兵 JSON 行用转义形态);非歧义方向(POSIX→POSIX)行为与全局替换一致
 //   2. Windows 源机的附件路径:原始/JSON 转义两种形态都改写成本机路径,JSONL 改完
 //      仍是合法 JSON——只改原始形态会漏掉 Windows 源机的全部会话引用
+//   2b. 接力落地的附件撞上本机同名文件:绝不覆盖——内容不同就改名落地、本机既有
+//      登记行的归属与 taskId 一动不动(多人模式下补 taskId 等于把别人的私有附件
+//      敞开给这条接力任务),内容相同就复用本机那一份,不再多一份拷贝
 //   3. 幂等收口如实报 in 标记里存的 autoResume 事实(而不是本次请求参数),
 //      老标记没这字段按 false 报(不谎报已续跑)
 //   4. 队列成员禁止接力:预检/导出双入口 409 且发生在停任务之前——running 队列头
@@ -20,7 +23,7 @@
 // 双机走真 HTTP 的端到端场景在 test-handoff.ts。ASH_RUNS_DIR 指到临时目录顺带
 // 打开 guardAgentSpawn,即使哪里失手触发续跑也不会真拉起 CLI 烧额度。
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -43,9 +46,9 @@ assert.ok(
 
 try {
   const { db, ensureSchema } = await import("../src/db/index.js");
-  const { projects, queueItems, sessions, tasks } = await import("../src/db/schema.js");
+  const { projects, queueItems, sessions, tasks, uploads: uploadRows } = await import("../src/db/schema.js");
   const { importHandoff } = await import("../src/handoff-import.js");
-  const { applyUploadRewrites, buildUploadRewrites } = await import("../src/handoff-uploads.js");
+  const { applyUploadRewrites, buildUploadRewrites, scanUploadNames } = await import("../src/handoff-uploads.js");
   const { localIdentity } = await import("../src/handoff-identity.js");
   await ensureSchema();
   const localFp = localIdentity().fingerprint;
@@ -124,6 +127,57 @@ try {
   const upParsed = JSON.parse(upArtifact.trim()) as { text: string };
   assert.ok(upParsed.text.includes(winUpLocal), "JSONL 里的转义形态路径应改写,且改完仍是合法 JSON");
   assert.ok(!upArtifact.includes("D:"), "JSONL 不该残留源机路径");
+
+  // ── 2b. 同名附件绝不覆盖本机既有文件 ──────────────────────────────────────
+  // 源机送来的名字撞上本机既有文件时,按名字直接写盘有两重后果:本机那份用户数据被
+  // 远端内容顶掉;既有登记行还会被顺手补上接力任务 id —— 多人模式下等于把别人的私有
+  // 附件敞开给这条任务看得见的所有人(第 5 轮审查 P1)。先把上一段落地的那份改造成
+  // 「某人的私有附件」(有主、还没挂任务),再送一份同名不同内容的进来。
+  await db.update(uploadRows).set({ ownerUserId: "local-owner-01", taskId: null })
+    .where(eq(uploadRows.file, winUpName));
+  const collideId = "handoff-local-task-collide";
+  const collideManifest = {
+    ...upManifest(false),
+    transferId: "transfer-up-collide",
+    task: { ...upManifest(false).task, id: collideId, title: "同名附件", body: `看这个附件:${winUpPath}` },
+    uploads: [{ name: winUpName, sourcePath: winUpPath, dataBase64: b64("remote-imported\n") }],
+    files: [] as unknown[],
+  };
+  assert.equal((await importHandoff(collideManifest)).ok, true);
+  assert.equal(readFileSync(winUpLocal, "utf8"), "win-upload\n", "本机同名附件的内容不许被远端顶掉");
+  const localRow = (await db.select().from(uploadRows).where(eq(uploadRows.file, winUpName))).at(0)!;
+  assert.equal(localRow.ownerUserId, "local-owner-01", "本机既有登记行的归属不许被接力改写");
+  assert.equal(localRow.taskId, null, "更不许补上接力任务 id——那等于把别人的私有附件敞开给这条任务");
+  const collideBody = (await db.select().from(tasks).where(eq(tasks.id, collideId))).at(0)!.body!;
+  const renamed = [...scanUploadNames(collideBody)].filter((n) => n !== winUpName);
+  assert.equal(renamed.length, 1, `正文该指向改名后的本机附件:${collideBody}`);
+  assert.equal(readFileSync(join(root, "uploads", renamed[0]!), "utf8"), "remote-imported\n", "远端内容落在改名后的那一份里");
+  assert.equal(
+    (await db.select().from(uploadRows).where(eq(uploadRows.file, renamed[0]!))).at(0)!.taskId,
+    collideId,
+    "只有改名落地的那份归接力任务",
+  );
+
+  // 字节一模一样就复用本机那一份:接力移回是常态,不该每来回一趟就多一份拷贝。
+  const beforeSame = readdirSync(join(root, "uploads")).length;
+  const sameId = "handoff-local-task-same";
+  assert.equal((await importHandoff({
+    ...collideManifest,
+    transferId: "transfer-up-same",
+    // importHandoff 会**就地改写** m.task.body,body 得重新给一份源机形态的。
+    task: { ...collideManifest.task, id: sameId, title: "同名同内容", body: `看这个附件:${winUpPath}` },
+    uploads: [{ name: winUpName, sourcePath: winUpPath, dataBase64: b64("win-upload\n") }],
+  })).ok, true);
+  assert.equal(readdirSync(join(root, "uploads")).length, beforeSame, "字节相同不该再落一份拷贝");
+  assert.ok(
+    ((await db.select().from(tasks).where(eq(tasks.id, sameId))).at(0)!.body!).includes(winUpLocal),
+    "正文应指向本机既有的那一份",
+  );
+  assert.equal(
+    (await db.select().from(uploadRows).where(eq(uploadRows.file, winUpName))).at(0)!.taskId,
+    null,
+    "复用不等于认领:本机既有登记行仍不挂这条接力任务",
+  );
 
   // ── 已接力出去的历史存档，只接受原目标机按指纹移回 ────────────────────
   const returnId = "handoff-return-01";

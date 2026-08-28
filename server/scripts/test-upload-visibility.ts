@@ -5,18 +5,21 @@
 // 可能出现),就能读到别人**私有随手记**的附件正文 —— `/api/notes` 那两条轴白过了。
 //
 // 判据现在在 `server/src/uploads.ts`:个人面(上传者本人)+ 项目轴(附到的任务看得见)。
-// 这条测试钉住四件事:
+// 这条测试钉住六件事:
 //   ① 泄露本身没了,而且**实例管理员也读不到**别人的私有附件(个人面没有特权);
 //   ② 别收过头:同项目的人照常打得开会话里的图,自用模式整条判据透明;
 //   ③ **绑定不能被拿来越权**:把别人的附件路径写进自己任务的 attachments,
 //      不会给它敞开一条项目轴的读路;
-//   ④ 存量文件:转多人时按任务正文回填归属,没登记的一律只有管理员读得到(失败关闭)。
+//   ④ 存量文件:转多人时按任务正文回填归属,没登记的一律只有管理员读得到(失败关闭);
+//   ⑤ **引用一次不算认领**:没登记的文件被任务 attachments 引用后仍是失败关闭那一档;
+//   ⑥ 派生任务里归属继承父任务、授权仍看动手的人 —— 上传者本人不该被自己的附件挡在外面。
 //
 // 一律走真 Request 打进 `authGate → resourceGate → personalWriteGate → 路由` 的完整栈。
 //
 // 跑法(自带临时库):
 //   npm -w server run test:upload-visibility
 import assert from "node:assert/strict";
+import { eq } from "drizzle-orm";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -84,6 +87,7 @@ const ALICE_TASK_SECRET = "alice-task-upload-3ba7";
 const LEGACY_SECRET = "legacy-upload-secret-5c1d";
 const LATE_SECRET = "late-unregistered-secret-62fd";
 const IMPORTED_BODY = "handoff-landed-body-8ae1";
+const CHILD_SECRET = "bob-child-task-upload-7d40";
 
 const at = new Date().toISOString();
 const repo = join(stage, "shared-repo");
@@ -201,13 +205,41 @@ try {
 
   // 别把登记能力一起砍掉:接力落地那条路**是它自己写下的字节**,照样得建登记行,
   // 否则接力过来的会话里那些图对项目成员全打不开。
-  const { registerUploads } = await import("../src/uploads.js");
+  const { registerUpload, registerUploads } = await import("../src/uploads.js");
   writeFileSync(join(UPLOADS_DIR, "imported.txt"), IMPORTED_BODY);
   await registerUploads(["imported.txt"], { taskId: String(created.json.id) });
   assert.equal((await get("imported.txt", AS_BOB)).text, IMPORTED_BODY, "接力落地的附件该跟着任务对成员可见");
   assert.equal((await get("imported.txt", AS_CAROL)).status, 404, "但仍只限那个任务看得见的人");
 
-  console.log("upload visibility ok(个人面 + 项目轴 + 越权绑定 + 引用不算认领 + 存量认领)");
+  // 登记这道口也得认人:给一条**有主**的行补 taskId,等于把别人的私有附件敞开给那条
+  // 任务看得见的所有人 —— 接力导入曾借这一句挂走同名的私有行(第 5 轮审查 P1 第二层)。
+  await registerUpload(bobFile.file, { taskId: String(created.json.id) });
+  assert.equal((await get(bobFile.file, AS_ALICE)).status, 404, "替别人补 taskId 不算数");
+  // 但本人自己把附件挂进任务照常生效,别把这道口一起焊死。
+  await registerUpload(bobFile.file, { ownerUserId: bob.id, taskId: String(created.json.id) });
+  assert.equal((await get(bobFile.file, AS_ALICE)).text, BOB_SECRET, "本人挂上去之后,任务看得见的人就该打得开");
+
+  // ── ⑥ 派生任务:归属继承父任务,授权仍看动手的人 ────────────────────────
+  // Bob 在 Alice 的任务下开一条子任务、附上自己刚传的图:子任务归属按 §八 继承 Alice,
+  // 但附件是 Bob 的。按继承后的归属人判绑定,会把上传者本人挡在门外 —— 正文里明明
+  // 写着附件路径,任务看得见的人(连 Bob 自己所在的项目)全打不开(第 5 轮审查 P2)。
+  const parent = await call("/api/tasks", "POST", AS_ALICE, {
+    projectId: "p-shared", title: "父任务", body: "父", useWorktree: false,
+  });
+  assert.equal(parent.status, 201, `建父任务该成功:${parent.text}`);
+  const bobChild = await upload(AS_BOB, "child.txt", CHILD_SECRET);
+  const child = await call("/api/tasks", "POST", AS_BOB, {
+    projectId: "p-shared", title: "子任务", body: "看图", parentId: parent.json.id,
+    attachments: [bobChild.path], useWorktree: false,
+  });
+  assert.equal(child.status, 201, `建子任务该成功:${child.text}`);
+  const childRow = (await db.select().from(tasks).where(eq(tasks.id, String(child.json.id)))).at(0)!;
+  assert.equal(childRow.ownerUserId, alice.id, "派生任务的归属仍继承父任务(别把 P2 修成改归属)");
+  assert.equal((await get(bobChild.file, AS_BOB)).text, CHILD_SECRET, "上传者本人照常读得到");
+  assert.equal((await get(bobChild.file, AS_ALICE)).text, CHILD_SECRET, "正文里写着路径,任务看得见的人就该打得开");
+  assert.equal((await get(bobChild.file, AS_CAROL)).status, 404, "但仍只限这个项目");
+
+  console.log("upload visibility ok(个人面 + 项目轴 + 越权绑定 + 引用不算认领 + 派生任务 + 存量认领)");
 } finally {
   await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });

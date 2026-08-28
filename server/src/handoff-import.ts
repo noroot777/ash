@@ -19,7 +19,7 @@ import {
 } from "./db/schema.js";
 import { HandoffError, type HandoffManifest } from "./handoff-types.js";
 import { applyUploadRewrites, buildUploadRewrites, hasUploadRewrites, writeUploads } from "./handoff-uploads.js";
-import { registerUploads } from "./uploads.js";
+import { registerUploads, registeredUploadNames } from "./uploads.js";
 import { ensureWorkdir, expandHome, prepareWorktree, projectHealthLight, worktreePathFor } from "./git.js";
 import { findRollout } from "./executors/codex-rollout.js";
 import { assertHandoffNotCanceled, beginHandoffImport, endHandoffImport } from "./handoff-transfer-state.js";
@@ -161,12 +161,19 @@ async function importValidated(
   // 附件写盘 → 生成「源机旧路径→本机新路径」改写对(原始/JSON 转义两种形态)→ 改写
   // 任务文本字段和后面的文本类文件载荷。必须在拼 resumePrompt 前言**之前**改:前言
   // 会把 m.task.body 原文嵌进去。写盘失败的附件不进改写对,旧路径原样留着。
-  const writtenUploads = await writeUploads(m.uploads ?? [], notes);
+  const incomingUploads = m.uploads ?? [];
+  const writtenUploads = await writeUploads(
+    incomingUploads,
+    notes,
+    // 撞上本机既有登记行的名字要避让:文件被删了、行还在的也算撞名(handoff-uploads.ts)。
+    await registeredUploadNames(incomingUploads.map((u) => u.name)),
+  );
   // 落地的附件归这条被接过来的任务(uploads.ts):不登记的话它们在多人模式下是
   // 「无主资产」,只有实例管理员打得开 —— 接力过来的会话里那些图就全打不开了。
   // 这里是**登记**而不是绑定:字节就是上面这一句刚写下的,所以有资格建登记行 ——
   // bindUploadsToTask 只改已有的行,它挡的是「引用一个没登记的文件就算认领」。
-  await registerUploads(writtenUploads.map((u) => u.name), { taskId: m.task.id });
+  // 只登记 fresh 的那些:撞名复用的那份是本机原主的东西,归属一动不动。
+  await registerUploads(writtenUploads.filter((u) => u.fresh).map((u) => u.name), { taskId: m.task.id });
   const rewrites = buildUploadRewrites(writtenUploads);
   const messages = m.messages ?? [];
   if (hasUploadRewrites(rewrites)) {

@@ -63,10 +63,21 @@ export async function registerUpload(
     return;
   }
   // 只补空位:已经有归属的行不许被后来的写入改掉(见 bindUploadsToTask 的越权推演)。
+  // **补 taskId 同样是在改授权面** —— 给别人的私有文件补一条任务 id,等于把它敞开给
+  // 那条任务看得见的所有人。所以补空位也要先认人:行是无主的,或者本来就是这次声明
+  // 的这个人的。接力导入曾借这一句把同名的私有行挂到接力任务上(第 5 轮审查 P1)。
   const patch: { ownerUserId?: string; taskId?: string } = {};
   if (!existing.ownerUserId && fields.ownerUserId) patch.ownerUserId = fields.ownerUserId;
-  if (!existing.taskId && fields.taskId) patch.taskId = fields.taskId;
+  const mine = !existing.ownerUserId || existing.ownerUserId === fields.ownerUserId;
+  if (!existing.taskId && fields.taskId && mine) patch.taskId = fields.taskId;
   if (Object.keys(patch).length) await db.update(uploads).set(patch).where(eq(uploads.file, name));
+}
+
+/** 这批名字里本机已经有登记行的那些。接力落地拿它避让同名(handoff-uploads.ts)。 */
+export async function registeredUploadNames(names: string[]): Promise<Set<string>> {
+  if (!names.length) return new Set();
+  const rows = await db.select({ file: uploads.file }).from(uploads).where(inArray(uploads.file, names));
+  return new Set(rows.map((row) => row.file));
 }
 
 /** 一批刚写下的附件。用在「字节是我们自己写的」那些地方(接力落地)。 */
