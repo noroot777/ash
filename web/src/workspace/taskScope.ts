@@ -62,11 +62,21 @@ export function visibleInScope(task: TaskListItem, scope: TaskScope): boolean {
   return scope.kind === "tasks" || visibleOnThisMachine(task);
 }
 
-// 筛选控件画不画。任务模式永远画（它天生有可筛的东西）；单项目态下只有一个项目都
-// 没选中时才收起来 —— 选了项目就一直画着，哪怕它一个任务都没有：筛选是**生效中的状态**，
-// 把入口藏起来会出现「列表被筛空了，却没地方取消」。
-export function scopeHasTarget(scope: TaskScope): boolean {
-  return scope.kind === "tasks" || scope.projectId !== null;
+// 这一档有没有状态筛选。
+//
+// **任务模式没有**（用户 2026-08-28 拍板）：它自己就是一次筛选 —— 收进来的行必定落在
+// 在跑 / 需要你处理 / 排着·暂停 三档里（不变式由 test-spread-filter 钉着），所以那排点
+// 里「已收尾」「验收完成」两颗永远是 0，剩下三颗是在一份本来就只剩二三十行的列表上
+// 再切一刀。收窄它要付的代价（几颗认不出颜色的小点、以及「筛空了却看不出为什么」）
+// 比省下的翻找多。
+//
+// 单项目态照旧画，只有一个项目都没选中时才收起来 —— 选了项目就一直画着，哪怕它一个
+// 任务都没有：筛选是**生效中的状态**，把入口藏起来会出现「列表被筛空了，却没地方取消」。
+//
+// 反过来这也是硬约束：**画不出控件的作用域，筛选一律不生效**（useSidebarSpread 按这条
+// 归一），否则在单项目态挑了「在跑」再切进任务模式，就是一份被悄悄筛过、还没有开关的列表。
+export function scopeHasFilters(scope: TaskScope): boolean {
+  return scope.kind === "project" && scope.projectId !== null;
 }
 
 // `all` 是这一档的旧名（那会儿它真的叫「全部项目」）。旧链接和旧落盘都还带着它，

@@ -1,7 +1,7 @@
 import type { TaskListItem } from "@ash/shared";
 import { Star } from "@phosphor-icons/react";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
-import { scopeHasTarget, type TaskScope } from "./taskScope.ts";
+import { scopeHasFilters, type TaskScope } from "./taskScope.ts";
 import {
   SPREAD_DOT_FILTERS,
   SPREAD_FILTERS,
@@ -101,10 +101,9 @@ export function SpreadFilterDots({ spread, counts }: { spread: SidebarSpread; co
 }
 
 export function SpreadFilterControls({ spread, tasks, scope }: { spread: SidebarSpread; tasks: TaskListItem[]; scope: TaskScope }) {
-  // 作用域里没有可筛的目标（一个项目都没选）时才收起来。反过来，只要有目标就一直画着 ——
-  // 哪怕这个项目一个任务都没有：筛选是**生效中的状态**，把入口藏起来会出现「列表被筛空
-  // 了，却没地方取消」。
-  if (!scopeHasTarget(scope)) return null;
+  // 画不画由 scopeHasFilters 一处说了算（任务模式不画，理由在那儿）。useSidebarSpread 读的是
+  // 同一条判据把筛选归一到「全部」—— 控件和生效值必须同源，否则会有筛过却没开关的列表。
+  if (!scopeHasFilters(scope)) return null;
   const counts = spreadCounts(tasks, scope);
   return spread.open
     ? <SpreadFilterBar spread={spread} counts={counts} />

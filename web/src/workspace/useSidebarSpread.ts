@@ -3,7 +3,7 @@ import type { TaskFollowUp, TaskListItem } from "@ash/shared";
 import { TASK_BATCH_LIMIT } from "@ash/shared";
 import { api } from "../lib/api.ts";
 import { indexWorkers, spreadBucket, workersFrom, type SpreadBucket, type WorkerIndex } from "../lib/taskAttention.ts";
-import { scopeTasks, visibleInScope, type TaskScope } from "./taskScope.ts";
+import { scopeHasFilters, scopeTasks, visibleInScope, type TaskScope } from "./taskScope.ts";
 import { orderedTopLevelTasks } from "./taskTreeModel.ts";
 
 // 桶的判据搬到了 lib/taskAttention.ts（任务树排序和状态点也要读它，留在这里会成环）。
@@ -82,6 +82,7 @@ export type SidebarSpread = {
   laidOut: boolean;
   // 筛选是**跨两态共享的一份状态**：铺开态那排胶囊和窄态那排点读写的是同一个值，
   // 所以在哪边选的，切到另一边还是它 —— 铺开里挑了「在跑」，收起后窄态那颗点也亮着。
+  // 但**只在有筛选控件的作用域里生效**（scopeHasFilters；任务模式没有那排点，也就不筛）。
   filter: SpreadFilter;
   setFilter: (filter: SpreadFilter) => void;
   followUps: Map<string, TaskFollowUp>;
@@ -174,5 +175,9 @@ export function useSidebarSpread(tasks: TaskListItem[], scope: TaskScope, revisi
 
   const toggle = useCallback(() => setOpen((value) => !value), []);
   const close = useCallback(() => setOpen(false), []);
-  return { open, laidOut: open || laidOut, filter, setFilter, followUps, bodies, loaded, toggle, close };
+  // 生效的筛选跟**控件画不画**同源（scopeHasFilters）：画不出开关的作用域一律按「全部」算。
+  // 存的还是原值 —— 从单项目态挑了「在跑」、切进任务模式看一圈再切回来，那一档还在。
+  // 用派生而不是 effect 归零：后者会先渲染一帧被筛过的列表，再自己弹回去。
+  const effectiveFilter: SpreadFilter = scopeHasFilters(scope) ? filter : "all";
+  return { open, laidOut: open || laidOut, filter: effectiveFilter, setFilter, followUps, bodies, loaded, toggle, close };
 }
