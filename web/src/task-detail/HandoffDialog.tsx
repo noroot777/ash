@@ -13,6 +13,7 @@ import { api, ApiError, type TaskScopedHandoffPreflightResult } from "../lib/api
 import { useDismissable } from "../lib/useDismissable.ts";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { handoffTargetsForTask, nextUntriedHandoffTarget } from "./handoffTargetPolicy.ts";
+import { HandoffReturnView, type HandoffReturnPhase } from "./HandoffReturnView.tsx";
 import {
   HandoffDialogHeader,
   HandoffProgress,
@@ -46,7 +47,6 @@ export function HandoffDialog({
   const pendingReturn = pendingHandoff
     && Object.prototype.hasOwnProperty.call(pendingHandoff, "returnTransferId") ? pendingHandoff : null;
   const returningHandoff = inboundHandoff ?? pendingReturn;
-  const actionName = returningHandoff ? "移回" : "接力";
   // null = 设置还没读回来;[] = 读回来了但一个目标都没配过。
   const [targets, setTargets] = useState<HandoffTarget[] | null>(null);
   const [targetUrl, setTargetUrl] = useState("");
@@ -62,6 +62,8 @@ export function HandoffDialog({
   const [result, setResult] = useState<HandoffExportResult | null>(null);
   const [transferring, setTransferring] = useState(false);
   const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
+  // 「重新检查」要连地址发现一起重来:来源机可能刚开机,或用户刚在设置里改了地址。
+  const [reloadKey, setReloadKey] = useState(0);
   const attemptedReturnTargets = useRef(new Set<string>());
   const automaticReturnFallback = useRef(true);
 
@@ -96,7 +98,7 @@ export function HandoffDialog({
     return () => { alive = false; };
     // 接力标记只取对话框打开那一刻的值,任务更新不重读设置。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [notify]);
+  }, [notify, reloadKey]);
 
   const target = targets?.find((item) => item.url === targetUrl) ?? null;
   const shouldAutoPreflight = Boolean(target?.peerFp || pendingHandoff);
@@ -147,6 +149,24 @@ export function HandoffDialog({
   const selectedProject = preflight?.projects.find((project) => project.id === projectId) ?? null;
   // 对端还没批准本机(或已拒绝):后端在打包前也会 409,这里先把按钮按住,省掉一次白等。
   const blockedByPeer = preflight?.peer?.peerStatus === "pending" || preflight?.peer?.peerStatus === "blocked";
+  // 移回只有三种状态:还在找来源机 / 找到了可以按确认 / 连不上。中间的选择项一个都没有。
+  const returnPhase: HandoffReturnPhase = preflight
+    ? "ready"
+    : preflightError || (targets !== null && targets.length === 0)
+      ? "unreachable"
+      : "locating";
+  const returnNotes = preflight
+    ? [
+        ...(missingFiles > 0 ? [`${missingFiles} 个 CLI 会话找不到文件，回到来源机后会全新起跑`] : []),
+        ...(preflight.local.pendingMessages > 0
+          ? [`待发送消息 ${preflight.local.pendingMessages} 条随任务移回，本机原件会取消并留档`] : []),
+        ...(preflight.local.schedule ? ["定时计划随任务移回，今后由来源机触发"] : []),
+        ...(blockedByPeer ? ["来源机还没批准本机（或已拒绝），需要先在它的「接力来源」里放行"] : []),
+        ...(!projectId ? ["来源机没有报出这条任务的原项目，暂时无法移回"] : []),
+        ...preflight.local.notes,
+      ]
+    : [];
+  const returnReady = returnPhase === "ready" && !blockedByPeer && Boolean(projectId);
 
   const addTarget = async () => {
     const name = draftTargetName.trim();
@@ -171,53 +191,19 @@ export function HandoffDialog({
     }
   };
 
-  const manualReturnUrl = () => {
-    const url = draftTargetUrl.trim().replace(/\/+$/, "");
-    return inboundHandoff?.peerFp && HANDOFF_URL_RE.test(url) ? url : null;
-  };
-
-  const useManualReturnTarget = () => {
-    const url = manualReturnUrl();
-    if (!url || !inboundHandoff?.peerFp || busy) return;
-    // 只把用户补的地址留在当前弹窗里，不写入整机设置。真正预检仍从任务 marker 取
-    // peerFp 做身份核对，所以换一个地址不会把任务转送给第三台机器。
-    setTargets([{
-      name: inboundHandoff.peerName || "来源机器",
-      url,
-      peerFp: inboundHandoff.peerFp,
-    }]);
-    automaticReturnFallback.current = false;
-    attemptedReturnTargets.current.clear();
+  // 移回没有「填地址」这一步:地址由服务端按来源指纹探,探不到就重来一次,而不是
+  // 把一个输入框推给用户——他手上并不比系统多知道什么。
+  const relocateReturnTarget = () => {
+    if (busy) return;
+    setTargets(null);
+    setTargetUrl("");
+    setPreflight(null);
+    setPreflightError(null);
     setFallbackNotice(null);
-    setTargetUrl(url);
+    attemptedReturnTargets.current.clear();
+    automaticReturnFallback.current = true;
+    setReloadKey((key) => key + 1);
   };
-
-  const manualReturnTargetFields = inboundHandoff?.peerFp ? (
-    <>
-      <label htmlFor="handoff-return-source-url">来源机 ash 地址</label>
-      <input
-        id="handoff-return-source-url"
-        value={draftTargetUrl}
-        disabled={busy}
-        placeholder={targetUrl || "http://mac-mini.local:4317"}
-        onChange={(event) => setDraftTargetUrl(event.target.value)}
-        onKeyDown={(event) => { if (event.key === "Enter") useManualReturnTarget(); }}
-      />
-      <small>仅用于这次移回，不会新增整机信任；连接后仍必须与任务记录的来源指纹一致。</small>
-      <Button
-        variant="secondary"
-        disabled={busy || !HANDOFF_URL_RE.test(draftTargetUrl.trim())}
-        onClick={useManualReturnTarget}
-      >
-        检查来源机
-      </Button>
-    </>
-  ) : (
-    <p className="handoff-error">
-      <Warning size={13} aria-hidden="true" />
-      这条旧记录没有来源机指纹，无法安全判断该移回哪台机器。请从来源机重新接力一次。
-    </p>
-  );
 
   const requestApproval = async () => {
     if (!targetUrl || busy) return;
@@ -251,11 +237,6 @@ export function HandoffDialog({
   };
 
   const checkTarget = async () => {
-    const drafted = manualReturnUrl();
-    if (drafted && normalizedHandoffUrl(drafted) !== normalizedHandoffUrl(targetUrl)) {
-      useManualReturnTarget();
-      return;
-    }
     if (!targetUrl || busy) return;
     setBusy(true);
     setApplying(true);
@@ -334,14 +315,24 @@ export function HandoffDialog({
           />
         ) : transferring ? (
           <HandoffProgress targetName={target?.name ?? preflight?.target.host ?? "目标机器"} returning={Boolean(returningHandoff)} />
-        ) : inboundHandoff && targets && targets.length === 0 ? (
-          <div className="handoff-quick-add">
-            <p>
-              无法自动定位来源机器{inboundHandoff.peerName ? `「${inboundHandoff.peerName}」` : ""}的可回连地址。
-              旧接力记录没有保存端口，请填写来源机当前的 ash 地址。
-            </p>
-            {manualReturnTargetFields}
-          </div>
+        ) : returningHandoff ? (
+          <HandoffReturnView
+            phase={returnPhase}
+            fallbackNotice={fallbackNotice}
+            peerName={returningHandoff.peerName ? `「${returningHandoff.peerName}」` : "最初交出它的机器"}
+            peerUrl={targetUrl || null}
+            peer={preflight?.peer ?? null}
+            taskScopedReturn={Boolean(preflight?.taskScopedReturn)}
+            running={Boolean(preflight?.local.running)}
+            notes={returnNotes}
+            errorMessage={preflightError ?? "没有找到它现在的地址。"}
+            identityMissing={!returningHandoff.peerFp}
+            autoResume={autoResume}
+            autoResumeLocked={pendingHandoff?.autoResume !== undefined}
+            replay={Boolean(pendingReturn)}
+            busy={busy}
+            onAutoResumeChange={setAutoResume}
+          />
         ) : targets && targets.length === 0 && !pendingHandoff ? (
           <div className="handoff-quick-add">
             <p>还没有远程主机。在这里直接添加，保存后再向对方发送接力申请。</p>
@@ -385,6 +376,13 @@ export function HandoffDialog({
                   : "上次接力没收到确认，这次会按同一目标机、项目和续跑选项原样重放。若要放弃本次接力，请先关闭弹窗并使用横幅上的“核验后在本机继续”；系统会先确认对端尚未收到任务。"}
               </p>
             )}
+            {/* 移回时服务端可能要按指纹探几个候选地址才知道来源机在哪，别让下拉空着干等。 */}
+            {targets === null && (
+              <p className="handoff-probing">
+                <SpinnerGap size={13} className="is-spinning" aria-hidden="true" />
+                {returningHandoff ? "正在定位来源机器…" : "正在读取远程主机…"}
+              </p>
+            )}
             <div className="handoff-field">
               <label htmlFor="handoff-target">{returningHandoff ? "来源机器" : "目标机器"}</label>
               <select
@@ -414,12 +412,6 @@ export function HandoffDialog({
             )}
             {fallbackNotice && (
               <p className="handoff-peer-line is-warn"><Warning size={13} aria-hidden="true" /><span>{fallbackNotice}</span></p>
-            )}
-            {inboundHandoff && returnAddressMayHelp(preflightError) && (
-              <div className="handoff-quick-add handoff-return-override">
-                <p>如果来源机地址已经变化，可在这里临时改用当前地址。</p>
-                {manualReturnTargetFields}
-              </div>
             )}
             {applying && targetUrl && (
               <p className="handoff-probing"><SpinnerGap size={13} className="is-spinning" aria-hidden="true" />正在探测对端…</p>
@@ -533,7 +525,27 @@ export function HandoffDialog({
         )}
         {!transferring && <footer>
           <button type="button" disabled={busy} onClick={onClose}>{result ? "关闭" : "取消"}</button>
-          {!result && targetOptions.length > 0 && (
+          {!result && returningHandoff && returningHandoff.peerFp && (
+            <button
+              className="is-primary"
+              type="button"
+              disabled={busy || returnPhase === "locating" || (returnPhase === "ready" && !returnReady)}
+              onClick={() => void (returnReady ? run() : relocateReturnTarget())}
+            >
+              {busy
+                ? "移回中…(打包并传输,可能要一会儿)"
+                : returnPhase === "locating"
+                  ? "正在联系来源机…"
+                  : returnPhase === "unreachable"
+                    ? "重新检查"
+                    : pendingReturn
+                      ? "原样重发,幂等收口"
+                      : preflight?.local.running
+                        ? "停止并移回"
+                        : "确认移回"}
+            </button>
+          )}
+          {!result && !returningHandoff && targetOptions.length > 0 && (
             <button
               className="is-primary"
               type="button"
@@ -541,18 +553,18 @@ export function HandoffDialog({
               onClick={() => void (preflight && !blockedByPeer ? run() : target?.peerFp ? checkTarget() : requestApproval())}
             >
               {applying
-                ? target?.peerFp ? `正在检查${returningHandoff ? "来源机" : "目标机"}…` : `正在发送${actionName}申请…`
+                ? target?.peerFp ? "正在检查目标机…" : "正在发送接力申请…"
                 : busy
-                ? `${actionName}中…(打包并传输,可能要一会儿)`
+                ? "接力中…(打包并传输,可能要一会儿)"
                 : !preflight || blockedByPeer
                   ? approval?.peer?.peerStatus === "pending" || approval?.peer?.peerStatus === "blocked" || blockedByPeer
-                    ? `检查${actionName}申请状态`
-                    : target?.peerFp ? `重新检查${inboundHandoff ? "来源机" : "目标机"}` : `申请${actionName}`
+                    ? "检查接力申请状态"
+                    : target?.peerFp ? "重新检查目标机" : "申请接力"
                   : pendingHandoff
                     ? "原样重发,幂等收口"
                     : preflight?.local.running
-                      ? `停止并${actionName}`
-                      : `开始${actionName}`}
+                      ? "停止并接力"
+                      : "开始接力"}
             </button>
           )}
         </footer>}
@@ -568,11 +580,6 @@ const forceHandoffReason = (reason: unknown): string | null => {
   if (!(reason instanceof ApiError) || typeof reason.body !== "object" || reason.body === null) return null;
   return "needsForce" in reason.body && reason.body.needsForce === true ? reason.message : null;
 };
-const returnAddressMayHelp = (message: string | null) => Boolean(message && (
-  /连不上对端|fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|连接中断|超时/i.test(message)
-  || /身份和上次不一样|没有报出身份/.test(message)
-));
-
 const approvalMessage = (result: HandoffApprovalResult) => {
   const identity = result.peer ? `目标机身份 ${result.peer.short}。` : "目标机没有提供可核对的身份。";
   const status = result.peer?.peerStatus;

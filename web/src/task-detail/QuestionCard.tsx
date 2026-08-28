@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { QuestionItem, TaskListItem } from "@ash/shared";
 import { PaperPlaneTilt, Question } from "@phosphor-icons/react";
+import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
 
 function AnswerEditor({
   value,
@@ -16,6 +17,8 @@ function AnswerEditor({
   onSubmit: () => void;
 }) {
   const input = useRef<HTMLTextAreaElement>(null);
+  // 答复常常不止一行(尤其是把候选一条条填进来),跟着行数长高;原生把手拖过就以拖的为准。
+  useAutoGrowTextarea(input, { value });
   const choose = (option: string) => {
     const next = value.trim() ? `${value.trimEnd()}\n${option}` : option;
     onChange(next);

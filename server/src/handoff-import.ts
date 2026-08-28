@@ -5,269 +5,33 @@
 // 文件放到本机 CLI 期望的位置、runs 产物归位,最后(可选)立刻续跑。
 // 失败要么整体 4xx/5xx(什么都没建),要么建成但带 notes 说明哪些东西退化了;
 // 不留半截任务。
-import { homedir } from "node:os";
-import { mkdirSync, rmSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+//
+// 这个文件只留**编排**。三块具体活计各自成文件:
+//   - handoff-import-payload.ts:manifest 校验、git bundle 进仓库、会话/产物写盘
+//     (「不信任对端」的那一层)
+//   - handoff-import-free-workflow.ts:审查历史翻译成本机行(机器本地外键重新解析)
+//   - handoff-uploads.ts:上传附件本体与各处文本里的路径改写
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { projects, scheduledMessages, schedules, sessions, tasks } from "./db/schema.js";
-import { claudeProjectSlug } from "./handoff-collect.js";
 import {
-  HandoffError, MAX_FILE_BYTES, MB, safeRel,
-  type HandoffManifest, type HandoffFilePayload, type HandoffMessagePayload,
-  type HandoffSchedulePayload, type HandoffUploadPayload,
-} from "./handoff-types.js";
-import {
-  applyUploadRewrites, buildUploadRewrites, hasUploadRewrites, isTextRel,
-  MAX_UPLOADS, rewriteKindFor, writeUploads, type UploadRewrites,
-} from "./handoff-uploads.js";
-import { ensureWorkdir, expandHome, prepareWorktree, projectHealthLight, workspaceTrackedDirty, worktreePathFor } from "./git.js";
-import { withRepoLock } from "./repo-lock.js";
-import { DATA_DIR, RUNS_DIR } from "./paths.js";
-import { codexHome, findRollout } from "./executors/codex-rollout.js";
+  freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates,
+  projects, scheduledMessages, schedules, sessions, tasks,
+} from "./db/schema.js";
+import { HandoffError, type HandoffManifest } from "./handoff-types.js";
+import { applyUploadRewrites, buildUploadRewrites, hasUploadRewrites, writeUploads } from "./handoff-uploads.js";
+import { ensureWorkdir, expandHome, prepareWorktree, projectHealthLight, worktreePathFor } from "./git.js";
+import { findRollout } from "./executors/codex-rollout.js";
 import { assertHandoffNotCanceled, beginHandoffImport, endHandoffImport } from "./handoff-transfer-state.js";
 import { publishPendingMessages } from "./pending-messages.js";
 import { createTasks, publishTaskUpdated } from "./task-store.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { localIdentity } from "./handoff-identity.js";
-import { assertWorktreeHeadCanAdvance, untrackedOverwriteConflicts } from "./handoff-worktree-safety.js";
+import { buildFreeWorkflowRows } from "./handoff-import-free-workflow.js";
+// 校验 / git bundle / 文件写盘这三件事在载荷落地层(不信任对端的那一层)。
+import { importGitBundle, jsonOr, SETTLED, validate, writePayloadFiles } from "./handoff-import-payload.js";
+import { discardMigratedWorkspace } from "./workspace-cleanup.js";
 import { id, now } from "./util.js";
 import type { TaskHandoff } from "@ash/shared";
-import { execFileText as exec } from "./exec.js";
-
-// 导入只接受**已结算**的状态;running/queued 混进来(理论上不该有)一律落 canceled,
-// 假 running 会骗过所有「在跑」判断却没有任何进程。
-const SETTLED = new Set(["backlog", "paused", "done", "failed", "canceled"]);
-
-const isStr = (v: unknown): v is string => typeof v === "string";
-
-/** JSON 列必须真的是 JSON——坏值现在拒收,好过落库后每次序列化都炸。 */
-function jsonOr(v: unknown, fallback: string): string {
-  if (!isStr(v)) return fallback;
-  try { JSON.parse(v); return v; } catch { return fallback; }
-}
-
-function validate(input: unknown): HandoffManifest {
-  const m = input as HandoffManifest;
-  if (!m || typeof m !== "object") throw new HandoffError("导入体必须是 JSON 对象");
-  if (m.version !== 1) throw new HandoffError(`不认识的接力协议版本 ${String((m as { version?: unknown }).version)},两边 ash 版本差太远`);
-  if (!isStr(m.targetProjectId)) throw new HandoffError("缺 targetProjectId");
-  const sourceFingerprint = (m as { sourceFingerprint?: unknown }).sourceFingerprint;
-  if (sourceFingerprint != null && (!isStr(sourceFingerprint) || !/^[0-9a-f]{64}$/.test(sourceFingerprint))) {
-    throw new HandoffError("sourceFingerprint 非法");
-  }
-  const originFingerprint = (m as { originFingerprint?: unknown }).originFingerprint;
-  if (originFingerprint != null && (!isStr(originFingerprint) || !/^[0-9a-f]{64}$/.test(originFingerprint))) {
-    throw new HandoffError("originFingerprint 非法");
-  }
-  // transferId 宽容校验:老版本导出没有这个字段,缺了照收(只是失去幂等重放能力)。
-  const tid = (m as { transferId?: unknown }).transferId;
-  if (tid != null && (!isStr(tid) || tid.length > 64)) throw new HandoffError("transferId 非法");
-  const returnTid = (m as { returnTransferId?: unknown }).returnTransferId;
-  if (returnTid != null && (!isStr(returnTid) || returnTid.length > 64)) throw new HandoffError("returnTransferId 非法");
-  const sourcePort = (m as { sourcePort?: unknown }).sourcePort;
-  if (sourcePort != null && (typeof sourcePort !== "number" || !Number.isInteger(sourcePort) || sourcePort < 1 || sourcePort > 65_535)) {
-    throw new HandoffError("sourcePort 非法");
-  }
-  const t = m.task;
-  if (!t || !isStr(t.id) || !/^[A-Za-z0-9_-]{6,64}$/.test(t.id)) throw new HandoffError("task.id 非法");
-  if (!isStr(t.title) || !isStr(t.body) || !isStr(t.createdAt)) throw new HandoffError("task 关键字段缺失");
-  if (!Array.isArray(m.sessions) || m.sessions.length > 200) throw new HandoffError("sessions 非法");
-  if (!Array.isArray(m.files) || m.files.length > 500) throw new HandoffError("files 非法(最多 500 个)");
-  for (const f of m.files) {
-    if (!isStr(f.rel) || !isStr(f.dataBase64)) throw new HandoffError("file 载荷字段缺失");
-    if (!["claude-session", "codex-rollout", "run-artifact"].includes(f.kind)) {
-      throw new HandoffError(`不认识的文件类型 ${String(f.kind)}`);
-    }
-  }
-  // uploads/messages/schedule 宽容校验:老版本导出没有这些字段。
-  const ups = (m as { uploads?: unknown }).uploads;
-  if (ups != null) {
-    if (!Array.isArray(ups) || ups.length > MAX_UPLOADS) throw new HandoffError(`uploads 非法(最多 ${MAX_UPLOADS} 个)`);
-    for (const u of ups as HandoffUploadPayload[]) {
-      if (!isStr(u.name) || !isStr(u.sourcePath) || !isStr(u.dataBase64)) throw new HandoffError("upload 载荷字段缺失");
-    }
-  }
-  const msgs = (m as { messages?: unknown }).messages;
-  if (msgs != null) {
-    if (!Array.isArray(msgs) || msgs.length > 200) throw new HandoffError("messages 非法(最多 200 条)");
-    for (const x of msgs as HandoffMessagePayload[]) {
-      if (!isStr(x.text) || !isStr(x.attachments) || !isStr(x.mode) || !isStr(x.sendAt) || !isStr(x.createdAt)) {
-        throw new HandoffError("message 载荷字段缺失");
-      }
-    }
-  }
-  const sch = (m as { schedule?: unknown }).schedule;
-  if (sch != null && (!sch || typeof sch !== "object" || !["once", "cron"].includes((sch as HandoffSchedulePayload).kind))) {
-    throw new HandoffError("schedule 载荷非法");
-  }
-  if (m.git !== null) {
-    if (!m.git || !isStr(m.git.branch) || !isStr(m.git.bundleBase64)) throw new HandoffError("git 载荷非法");
-    if (!safeRefName(m.git.branch)) throw new HandoffError(`git 分支名非法:${m.git.branch.slice(0, 80)}`);
-    if (!/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(String(m.git.head))) throw new HandoffError("git head 不是提交号");
-  }
-  return m;
-}
-
-/**
- * 分支名与 head 会**原样进 git 的 argv**(`branch -f <branch> <head>`、refspec 拼接、
- * `<head>^{commit}`),只判 `typeof === "string"` 不够:`-` 开头的值会被 git 当成选项
- * (参数注入),含 `..`/控制字符的会把 refspec 拆坏或指向仓库目录之外。这里按 git 自己的
- * refname 规则收窄——保留非 ASCII(中文分支名是合法的),只挡掉危险形状。
- * 文件落盘方向的同类校验在 handoff-types.ts `safeRel` 与 handoff-uploads.ts `SAFE_NAME`。
- */
-function safeRefName(name: string): boolean {
-  if (!name || name.length > 255) return false;
-  if (/^[-./]/.test(name) || /[/.]$/.test(name) || name.endsWith(".lock")) return false;
-  if (name.includes("..") || name.includes("//") || name.includes("@{")) return false;
-  return !/[\x00-\x20\x7f~^:?*[\\]/.test(name);
-}
-
-/** bundle 落进本地仓库:verify 确认前置提交齐全,再把分支强制 fetch 进来。 */
-async function importGitBundle(
-  repoPath: string,
-  taskId: string,
-  git: NonNullable<HandoffManifest["git"]>,
-  notes: string[],
-): Promise<void> {
-  const repo = expandHome(repoPath);
-  // 空 bundle = 源机确认本机已有全部提交(见 handoff.ts packGitState),只需对齐分支。
-  if (!git.bundleBase64) {
-    await withRepoLock(repoPath, async () => {
-      try {
-        await exec("git", ["-C", repo, "cat-file", "-e", `${git.head}^{commit}`]);
-      } catch {
-        throw new HandoffError(
-          `对端说本机已有提交 ${git.head.slice(0, 8)},但本机仓库里找不到——两边仓库状态漂了,重新预检再试`,
-          409,
-        );
-      }
-      try {
-        await exec("git", ["-C", repo, "branch", "-f", git.branch, git.head]);
-        notes.push(`本机已有分支全部提交,分支 ${git.branch} 已对齐(未传输 git 数据)`);
-      } catch {
-        // 分支正被某个 worktree 检出时 branch -f 会拒绝;提交都在,如实记录即可。
-        notes.push(`本机已有分支全部提交,但 ${git.branch} 正被占用无法强制对齐,以本机分支现状为准`);
-      }
-    });
-    return;
-  }
-  const tmpDir = join(DATA_DIR, "tmp");
-  mkdirSync(tmpDir, { recursive: true });
-  const bundlePath = join(tmpDir, `handoff-in-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.bundle`);
-  try {
-    await writeFile(bundlePath, Buffer.from(git.bundleBase64, "base64"));
-    let updatedCheckedOutWorktree = false;
-    await withRepoLock(repoPath, async () => {
-      try {
-        await exec("git", ["-C", repo, "bundle", "verify", bundlePath], { maxBuffer: 4 * MB });
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        throw new HandoffError(
-          `git bundle 校验失败——本机仓库缺少接力分支的前置提交。先在本机把仓库 git fetch/pull 到较新状态再重试接力。原始错误:${msg.slice(0, 400)}`,
-          409,
-        );
-      }
-      const taskWorktree = worktreePathFor(repoPath, taskId);
-      let checkedOutHere = false;
-      try {
-        const { stdout } = await exec("git", ["-C", taskWorktree, "symbolic-ref", "--quiet", "--short", "HEAD"]);
-        checkedOutHere = stdout.trim() === git.branch;
-      } catch { /* worktree 不存在或不在这个分支，走普通 fetch */ }
-      if (!checkedOutHere) {
-        // `+` 强制更新:重复接力同一任务(先删了旧任务)时分支可能已存在旧尖。
-        await exec("git", [
-          "-C", repo, "fetch", bundlePath,
-          `+refs/heads/${git.branch}:refs/heads/${git.branch}`,
-        ], { maxBuffer: 4 * MB });
-        return;
-      }
-
-      const dirty = await workspaceTrackedDirty(taskWorktree);
-      if (dirty !== false) {
-        throw new HandoffError(
-          dirty
-            ? `原机保留的任务 worktree 有已跟踪文件的未提交改动，不能用移回内容覆盖：${taskWorktree}。先提交或还原这些改动，再重试移回。`
-            : `无法确认原机任务 worktree 是否干净：${taskWorktree}。先检查这个目录，再重试移回。`,
-          409,
-        );
-      }
-      const tempRef = `refs/ash-handoff/import/${taskId}-${Date.now().toString(36)}`;
-      try {
-        await exec("git", ["-C", repo, "fetch", bundlePath, `+refs/heads/${git.branch}:${tempRef}`], { maxBuffer: 4 * MB });
-        const { stdout: fetchedHead } = await exec("git", ["-C", repo, "rev-parse", tempRef]);
-        if (fetchedHead.trim() !== git.head) throw new HandoffError("接力 bundle 的分支尖与 manifest 不一致", 409);
-        await assertWorktreeHeadCanAdvance(taskWorktree, tempRef);
-        const conflicts = await untrackedOverwriteConflicts(taskWorktree, tempRef);
-        if (conflicts === null) {
-          throw new HandoffError(`无法确认原机任务 worktree 的未跟踪文件是否会被覆盖：${taskWorktree}。先检查这个目录，再重试移回。`, 409);
-        }
-        if (conflicts.length) {
-          const shown = conflicts.slice(0, 8).join("、");
-          const more = conflicts.length > 8 ? ` 等 ${conflicts.length} 项` : "";
-          throw new HandoffError(
-            `原机保留的任务 worktree 有未跟踪文件会被移回内容覆盖：${shown}${more}。先移动、提交或删除这些文件，再重试移回。`,
-            409,
-          );
-        }
-        await exec("git", ["-C", taskWorktree, "reset", "--hard", git.head]);
-        updatedCheckedOutWorktree = true;
-      } finally {
-        await exec("git", ["-C", repo, "update-ref", "-d", tempRef]).catch(() => {});
-      }
-    });
-    notes.push(`git 分支 ${git.branch} 已导入(${git.full ? "全量历史" : "增量"})${updatedCheckedOutWorktree ? "，原机保留的 worktree 已更新到返回提交" : ""}`);
-  } finally {
-    rmSync(bundlePath, { force: true });
-  }
-}
-
-/**
- * 把 manifest 里的文件落到本机对应位置,返回**真正写盘成功**的会话文件名(basename)集合。
- * cliSessionId 只认这个集合——manifest 里声称带了文件、但被跳过/写失败的会话,一律按
- * 未迁移处理,否则续跑时 CLI 按 id 找不到历史就成了假恢复。
- */
-async function writePayloadFiles(
-  files: HandoffFilePayload[],
-  taskId: string,
-  remoteCwd: string,
-  rewrites: UploadRewrites,
-  notes: string[],
-): Promise<Set<string>> {
-  const claudeDir = join(homedir(), ".claude", "projects", claudeProjectSlug(remoteCwd));
-  const arrived = new Set<string>();
-  for (const f of files) {
-    // 协议约定 rel 用 `/` 分隔,但老版本 Windows 源机导出的是 `\`——两种都按段拆开重组,
-    // 否则整串反斜杠在 POSIX 上是一个文件名,写进错误位置后 findRollout 永远找不到
-    // (审查实测:跨平台假迁移)。
-    const segs = f.rel.split(/[\\/]/);
-    let dest: string;
-    if (f.kind === "claude-session") {
-      // 会话文件名就是 `<uuid>.jsonl`,不允许带任何目录成分。
-      if (!/^[A-Za-z0-9_-]+\.jsonl$/.test(f.rel)) { notes.push(`claude 会话文件名非法,跳过:${f.rel}`); continue; }
-      dest = join(claudeDir, f.rel);
-    } else if (f.kind === "codex-rollout") {
-      if (!safeRel(f.rel)) { notes.push(`codex rollout 路径非法,跳过:${f.rel}`); continue; }
-      dest = join(codexHome(), "sessions", ...segs);
-    } else {
-      if (!safeRel(f.rel)) { notes.push(`产物路径非法,跳过:${f.rel}`); continue; }
-      dest = join(RUNS_DIR, taskId, ...segs);
-    }
-    let data = Buffer.from(f.dataBase64, "base64");
-    if (data.byteLength > MAX_FILE_BYTES) { notes.push(`${f.rel} 解码后超限,跳过`); continue; }
-    if (hasUploadRewrites(rewrites) && isTextRel(f.rel)) {
-      // 会话 JSONL/产物文本里的上传附件路径改写成本机路径。上下文按扩展名声明
-      // (.jsonl/.json/.trace 整体是 JSON,.md/.txt 是混排文本),POSIX 源机接力到
-      // Windows 目标机时两种形态才能各改各的,JSONL 改完仍是合法 JSON;二进制不碰。
-      data = Buffer.from(applyUploadRewrites(data.toString("utf8"), rewrites, rewriteKindFor(f.rel)), "utf8");
-    }
-    mkdirSync(dirname(dest), { recursive: true });
-    await writeFile(dest, data);
-    if (f.kind !== "run-artifact") arrived.add(segs.at(-1)!);
-  }
-  return arrived;
-}
 
 export interface HandoffImportResult {
   ok: true;
@@ -278,6 +42,11 @@ export interface HandoffImportResult {
   // true = 本机已有这次接力导入的任务,本次是应答丢失后的幂等收口(零副作用)。
   // 源机据此决定取消哪批待发送消息原件:幂等收口只对应第一次带走的那批。
   idempotent?: boolean;
+  // 代码到底落没落到本机:"bundle" = 分支和 worktree 都恢复好了,"none" = 没有 git
+  // 载荷,或本机按非 worktree 任务导入(那条路根本不 fetch 分支)。源机靠这一句证明
+  // 「确实全量传完了」,才敢删掉自己那份 worktree 和分支;老版本对端不报这个字段,
+  // 源机据此保守地什么都不删。
+  git?: "bundle" | "none";
   notes: string[];
 }
 
@@ -327,6 +96,8 @@ async function importValidated(
         // 按 false 报——宁可让源机以为没续跑,也不能谎报「已在对端跑起来了」。
         autoResume: existingMarker.autoResume ?? false,
         idempotent: true,
+        // 收口应答同样报当初导入的事实:那一次代码真落了地,源机就可以放心收尾。
+        git: existingMarker.git === "bundle" ? "bundle" : "none",
         notes: ["本机已有这次接力导入的任务(应答曾丢失,本次为幂等收口),未重复导入"],
       };
     }
@@ -454,33 +225,35 @@ async function importValidated(
   }
   const migrated = m.sessions.filter((s) => usable.get(s.id));
 
-  // ── resumePrompt:告诉续跑的 agent 它被搬过机器了 ───────────────────────
+  // ── 接力前言:告诉续跑的 agent 它被搬过机器了 ─────────────────────────
+  // 这段话**不写进 resume_prompt**——那一列是「任务正等续跑指令」的门禁,写了会让刚
+  // 接过来的任务一进门就把派审/预约/修复/预览整排按钮判成禁用(用户 2026-08-27:接力
+  // 任务除了横幅标记外和普通任务没有区别)。改挂在 handoff 标记的 notice 上,由
+  // orchestrator 在下一回合注入一次,见 handoff-notice.ts。
   const agentType = m.task.agentType ?? "claude";
   const latest = [...m.sessions]
     .filter((s) => s.agentType === agentType)
     .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
     .at(-1);
   const resumable = !!latest && !!usable.get(latest.id);
-  const preamble = [
+  const noticeLines = [
     `【任务接力】本任务从另一台机器(${m.sourceHost})接力到本机继续。`,
     m.git ? "git 分支和已提交的改动已随任务迁移。" : "代码没有随任务迁移,以本机仓库当前状态为准。",
     `工作目录从 ${m.sourceWorkspace ?? "(未知)"} 变为 ${workspace},历史对话里引用的旧绝对路径一律以新目录为准。`,
     "先快速核对工作目录(git log/status、关键文件是否符合预期),再继续完成任务目标。",
-  ].join("");
-  let resumePrompt: string | null;
-  if (m.sessions.length === 0) {
-    resumePrompt = m.task.resumePrompt; // 没跑过的任务原样保留,首跑走正常 fresh 路径
-  } else if (resumable) {
-    resumePrompt = preamble + (m.task.resumePrompt ? `\n\n上次暂停时留下的续跑提示:\n${m.task.resumePrompt}` : "");
-  } else {
-    // 会话文件没到货:续跑会开全新 CLI 会话、只看到这一条消息,任务正文必须自带。
-    notes.push("CLI 会话历史未迁移,续跑将开全新会话(任务正文已并入首条消息)");
-    resumePrompt = [
-      preamble,
-      "\n\n注意:CLI 会话历史没有随任务迁移,这是一个全新会话。任务目标全文如下:\n\n" + m.task.body,
-      m.task.resumePrompt ? `\n\n上次暂停时留下的续跑提示:\n${m.task.resumePrompt}` : "",
-    ].join("");
+  ];
+  // 源机留下的 checkpoint 指令原样带走,不再被前言裹一层。
+  let resumePrompt = m.task.resumePrompt;
+  if (m.sessions.length > 0 && !resumable) {
+    notes.push("CLI 会话历史未迁移,续跑将开全新会话");
+    noticeLines.push("注意:CLI 会话历史没有随任务迁移,这是一个全新会话。");
+    // 挂着 checkpoint 指令时续跑走 continueTask 而不是 runTask,那条路的 prompt 里
+    // **不含任务正文**——会话历史又没到货,不自带就等于让 agent 空手上阵。
+    if (resumePrompt) {
+      resumePrompt = `任务目标全文如下:\n\n${m.task.body}\n\n上次暂停时留下的续跑提示:\n${resumePrompt}`;
+    }
   }
+  const handoffNotice = noticeLines.join("");
 
   const marker: TaskHandoff = {
     // 覆盖旧 out 存档不一定是回家：任务再次交给曾持有机器时也会命中 returning。
@@ -503,6 +276,7 @@ async function importValidated(
     at: now(),
     sessions: migrated.length,
     git: useWorktree && m.git ? "bundle" : "none",
+    notice: handoffNotice,
   };
   const status = SETTLED.has(m.task.status) ? m.task.status : "canceled";
   const taskValues = {
@@ -528,6 +302,11 @@ async function importValidated(
     question: m.task.question,
     questionOptions: jsonOr(m.task.questionOptions, "") || null,
     questionItems: jsonOr(m.task.questionItems, "") || null,
+    // 验收落账随任务走(老 manifest 没有这三个字段,按缺失处理)。尾段进度位不带,
+    // 理由见 handoff-types.ts。
+    acceptedTargetBranch: m.task.acceptedTargetBranch ?? null,
+    acceptedBaseCommit: m.task.acceptedBaseCommit ?? null,
+    acceptedMergeCommit: m.task.acceptedMergeCommit ?? null,
     pinnedAt: m.task.pinnedAt,
     starredAt: m.task.starredAt,
     createdAt: m.task.createdAt,
@@ -579,6 +358,8 @@ async function importValidated(
     contextWindow: s.contextWindow,
     contextWindowEstimated: s.contextWindowEstimated,
   }));
+  // 自由工作流的审查历史(翻译成本机行,落库在下面两条路径里各自执行)。
+  const freeWorkflowRows = await buildFreeWorkflowRows(m.task.id, m.freeWorkflow, notes);
   const messageRows = messages.map((msg) => ({
     id: id(),
     taskId: m.task.id,
@@ -600,8 +381,8 @@ async function importValidated(
   if (returning) {
     try {
       await db.transaction(async (tx) => {
-        // 安全移回只覆盖 manifest 真正携带的任务字段。分组、依赖、自由审查、验收落账等
-        // 原机独有状态不在协议里，整行删除再插入会把它们静默清空。
+        // 安全移回只覆盖 manifest 真正携带的任务字段。分组与依赖是**整组一起挪**的东西，
+        // 不在单任务协议里（用户 2026-08-27 确认），整行删除再插入会把它们静默清空。
         await tx.update(tasks).set({
           ...taskValues,
           // 执行器 id 只在本机有意义；agent 类型没变才保留原机选择，否则按类型重新解析。
@@ -615,6 +396,20 @@ async function importValidated(
           eq(scheduledMessages.taskId, m.task.id),
           eq(scheduledMessages.status, "pending"),
         ));
+        // 审查历史现在也随任务迁移:回来的这份是最新的全量,本机旧存档整体让位。
+        // 先删 rounds(外键在 run 上,run 删了就找不着它们了),再删 run/事件/预约。
+        const staleRuns = await tx.select({ id: freeReviewRuns.id }).from(freeReviewRuns)
+          .where(eq(freeReviewRuns.taskId, m.task.id));
+        if (staleRuns.length) {
+          await tx.delete(freeReviewRounds).where(inArray(freeReviewRounds.runId, staleRuns.map((r) => r.id)));
+        }
+        await tx.delete(freeReviewRuns).where(eq(freeReviewRuns.taskId, m.task.id));
+        await tx.delete(freeWorkflowEvents).where(eq(freeWorkflowEvents.taskId, m.task.id));
+        await tx.delete(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, m.task.id));
+        if (freeWorkflowRows.state) await tx.insert(freeWorkflowStates).values(freeWorkflowRows.state);
+        if (freeWorkflowRows.runs.length) await tx.insert(freeReviewRuns).values(freeWorkflowRows.runs);
+        if (freeWorkflowRows.rounds.length) await tx.insert(freeReviewRounds).values(freeWorkflowRows.rounds);
+        if (freeWorkflowRows.events.length) await tx.insert(freeWorkflowEvents).values(freeWorkflowRows.events);
         if (scheduleValues) await tx.insert(schedules).values(scheduleValues);
         if (sessionRows.length) await tx.insert(sessions).values(sessionRows);
         if (messageRows.length) await tx.insert(scheduledMessages).values(messageRows);
@@ -645,6 +440,10 @@ async function importValidated(
         // 投递租约一概不带。id 重新生成——同一批消息可能曾在多台机器间来回接力。
         await db.insert(scheduledMessages).values(messageRows);
       }
+      if (freeWorkflowRows.state) await db.insert(freeWorkflowStates).values(freeWorkflowRows.state);
+      if (freeWorkflowRows.runs.length) await db.insert(freeReviewRuns).values(freeWorkflowRows.runs);
+      if (freeWorkflowRows.rounds.length) await db.insert(freeReviewRounds).values(freeWorkflowRows.rounds);
+      if (freeWorkflowRows.events.length) await db.insert(freeWorkflowEvents).values(freeWorkflowRows.events);
     });
   } catch (e) {
     // 补偿回滚:任务行 + 已插入的会话行一起清掉,不留半截任务(审查实测:UNIQUE 炸在
@@ -654,10 +453,25 @@ async function importValidated(
     let rollbackFailed = false;
     if (taskRowInserted) {
       try {
+        if (freeWorkflowRows.rounds.length) {
+          await db.delete(freeReviewRounds)
+            .where(inArray(freeReviewRounds.runId, [...new Set(freeWorkflowRows.rounds.map((r) => r.runId))]));
+        }
+        await db.delete(freeReviewRuns).where(eq(freeReviewRuns.taskId, m.task.id));
+        await db.delete(freeWorkflowEvents).where(eq(freeWorkflowEvents.taskId, m.task.id));
+        await db.delete(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, m.task.id));
         await db.delete(scheduledMessages).where(eq(scheduledMessages.taskId, m.task.id));
         await db.delete(sessions).where(eq(sessions.taskId, m.task.id));
         await db.delete(tasks).where(eq(tasks.id, m.task.id));
       } catch { rollbackFailed = true; /* 没有更好的办法,如实上报,让源机保留 pending */ }
+    }
+    // 本次导入建出来的 worktree/分支也一并收掉:接力宣告失败,本机就不该留下一份
+    // 「谁都不认领、源机也不知道」的检出(用户 2026-08-27:没彻底传完的话对方也应该
+    // 把建了的删掉,并宣布接力失败)。只在**任务行确实是本次插进去的**时候才动手——
+    // taskRowInserted=false 说明库里那行属于别的导入,它的 worktree 动不得。
+    if (taskRowInserted && useWorktree) {
+      await discardMigratedWorkspace(project.repoPath, m.task.id)
+        .catch(() => { /* 清不掉不改变结论:源机照样保留自己那份,重试会原样覆盖 */ });
     }
     // 计划行在任务行之前插的,不管任务行插没插成都要清——留着就是孤儿,重试时上面的
     // 孤儿清扫兜底,但能现在清干净就别指望兜底。
@@ -693,6 +507,7 @@ async function importValidated(
     workspace,
     sessionsMigrated: migrated.length,
     autoResume: m.autoResume,
+    git: useWorktree && m.git ? "bundle" : "none",
     notes,
   };
 }

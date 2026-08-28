@@ -26,6 +26,8 @@ function toScheduledMessage(r: typeof scheduledMessages.$inferSelect): Scheduled
     ...r,
     attachments: JSON.parse(r.attachments),
     agent: (r.agent as AgentType) ?? null,
+    // 界面要能看出这条归不归用户的对话框管（见 shared/src/schedule.ts）。
+    sessionRole: (r.sessionRole as ScheduledMessage["sessionRole"]) ?? null,
     mode: r.mode as ScheduledMessage["mode"],
     status: r.status as ScheduledMessage["status"],
   };

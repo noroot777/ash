@@ -13,17 +13,17 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
   const [reviewOpen, setReviewOpen] = useState(false);
   const [previewBusy, setPreviewBusy] = useState(false);
   const view = freeReviewView(free.state, task);
-  const { latestRun, reviewing, stoppedRun, taskBusy, reservationArmed, repairing, stale } = view;
+  const { latestRun, reviewing, stoppedRun, taskBusy, waiting, reservationArmed, reservationMode, repairing, stale } = view;
   const taskReady = task.status !== "backlog";
-  // 等待答复/续跑期间**发起类**动作（派审/修复/打开预览）后端必拒（409），按钮同步禁用；
-  // 取消预约、关闭预览是控制类动作，后端不设 waiting 门禁，不能一并锁死——预约挂着时
-  // 用户必须能取消，预览开着时必须能收掉端口。
-  const waiting = !!task.question || !!task.resumePrompt;
+  // 等待答复/续跑期间**立即发起**的动作（派审/修复/打开预览）后端必拒（409），按钮同步
+  // 禁用；「预约」不在其列——后端 reserveFreeReview 根本没有这道门禁，任务正等续跑时预约
+  // 一轮「跑完就审」恰恰是该允许的。取消预约、关闭预览是控制类动作，同样不能锁死。
+  // waiting / reservationMode 的定义在 freeReviewCopy.ts 里,和 Inspector 共用一份:
+  // 两边各写一份的时候就漂过——底部那颗灰、侧栏那颗能点。
   // 接力出去的任务在本机是历史存档:派审/修复/开预览这些发起类动作后端一律 409,
   // 这里按同一口径锁死(取消预约、关预览是清理,照常可点)。
   const locked = task.stage === "accepted" || task.stage === "merged" || task.archived
     || task.handoff?.direction === "out";
-  const reservationMode = taskBusy || reservationArmed;
   const reviewLabel = reviewing
     ? "审查中"
     : reservationArmed
@@ -74,7 +74,7 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
             notify={notify}
           />
         ) : null}
-        <button type="button" className={`is-review${reviewing ? " is-busy" : ""}${reservationArmed ? " is-armed" : ""}`} data-state={reviewing ? "reviewing" : reservationArmed ? "armed" : latestRun?.status ?? "idle"} disabled={!taskReady || locked || !!reviewing || (waiting && !reservationArmed)} onClick={() => setReviewOpen(true)}>
+        <button type="button" className={`is-review${reviewing ? " is-busy" : ""}${reservationArmed ? " is-armed" : ""}`} data-state={reviewing ? "reviewing" : reservationArmed ? "armed" : latestRun?.status ?? "idle"} disabled={!taskReady || locked || !!reviewing || (waiting && !reservationMode)} onClick={() => setReviewOpen(true)}>
           {reviewing ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} weight="regular" />}
           <span>{reviewLabel}</span>
           {reservationArmed && <i className="free-review-armed-dot" aria-hidden="true" />}

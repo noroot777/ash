@@ -34,6 +34,26 @@ try {
   assert.equal(await page.getByTestId("state").textContent(), "auto");
   const natural = await fieldHeight();
 
+  // 没拖过时高度跟着输入的行数走,撑到上限为止(再多就在框内滚)。
+  const fill = async (lines) => {
+    await field.fill(Array.from({ length: lines }, (_, index) => `第 ${index + 1} 行`).join("\n"));
+    await page.waitForTimeout(60);
+    return fieldHeight();
+  };
+  const fiveLines = await fill(5);
+  assert.ok(fiveLines > natural, `5 行应比 3 行高：${natural} → ${fiveLines}`);
+  const autoCap = await fill(12);
+  assert.ok(autoCap > fiveLines, `12 行应继续长高：${fiveLines} → ${autoCap}`);
+  const overflowed = await fill(40);
+  assert.ok(Math.abs(overflowed - autoCap) < 2, `超过上限不该再长高：${autoCap} → ${overflowed}`);
+  assert.ok(
+    await field.evaluate((el) => el.scrollHeight > el.clientHeight + 1),
+    "撑到上限之后内容应当在框内滚动",
+  );
+  assert.ok(Math.abs((await fill(1)) - natural) < 2, "内容变少要能缩回自然高度");
+  await field.fill("");
+  await page.waitForTimeout(60);
+
   // 往上拖 80px:回复框跟着高 80px。
   const drag = async (dy) => {
     const box = await handle.boundingBox();
@@ -66,6 +86,14 @@ try {
   await drag(4000);
   const ceiling = await fieldHeight();
   assert.ok(ceiling <= 900 - 260 + 2, `上限应给会话留出空间，实际 ${ceiling}`);
+
+  // 自动撑高那个上限只管自动撑高:拖能拖到比它高得多,拖过之后输入也不再把它改回去。
+  assert.ok(ceiling > autoCap, `手动拖动应能超过自动撑高的上限：自动 ${autoCap} / 拖到 ${ceiling}`);
+  await fill(40);
+  assert.ok(Math.abs((await fieldHeight()) - ceiling) < 2, "拖过之后输入不该改动高度");
+  await field.fill("");
+  await page.waitForTimeout(60);
+  assert.ok(Math.abs((await fieldHeight()) - ceiling) < 2, "拖过之后清空也不该缩回去");
 
   // 刷新后高度还在。
   const kept = await page.getByTestId("state").textContent();

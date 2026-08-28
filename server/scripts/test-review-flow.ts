@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { readSource } from "../../scripts/read-source.mjs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { releaseTmpDb } from "./tmp-db.js";
@@ -297,13 +298,13 @@ const globalPromptCallsites = [
   ["duet 讨论者", new URL("../src/duet/turn.ts", import.meta.url), 1],
 ] as const;
 for (const [source, file, expected] of globalPromptCallsites) {
-  const calls = [...readFileSync(file, "utf8").matchAll(/withGlobalBrowserPolicy\(/g)].length;
+  const calls = [...readSource(file).matchAll(/withGlobalBrowserPolicy\(/g)].length;
   assert.equal(calls, expected, `${source} 的所有 prompt 入口必须经过全局浏览器策略`);
 }
 // 调度台的注入只数得清「一共几处调用」是不够的:真正要钉的是**只有一道门**。
 // 用户插话、执行者汇报、回合末合并投递原本各自 handle.send 一次,漏贴一处就是一条
 // 绕过策略的路;现在一律走 sendToLead,策略贴在那里面。
-const teamSessionSource = readFileSync(new URL("../src/team/session-consumer.ts", import.meta.url), "utf8");
+const teamSessionSource = readSource(new URL("../src/team/session-consumer.ts", import.meta.url));
 assert.match(
   teamSessionSource,
   /function sendToLead\([\s\S]{0,300}?withGlobalBrowserPolicy\(text, "reminder"\)/,

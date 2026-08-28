@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readSource } from "../../scripts/read-source.mjs";
 import {
   bulkIdentityMismatchWarning,
   bulkIdentityUnavailableWarning,
@@ -239,8 +239,8 @@ assert.equal(bulkTargetProjectId(fromOne, scopedOne, "batch-project"), "origin-o
 assert.equal(bulkTargetProjectId(fromTwo, scopedTwo, "batch-project"), "origin-two");
 assert.equal(bulkPreflightIssue(scopedTwo, bulkTargetProjectId(fromTwo, scopedTwo, "batch-project")), null);
 
-const bulkDialog = readFileSync(new URL("../src/workspace/BulkHandoffDialog.tsx", import.meta.url), "utf8");
-const machines = readFileSync(new URL("../src/workspace/HandoffMachines.tsx", import.meta.url), "utf8");
+const bulkDialog = readSource(new URL("../src/workspace/BulkHandoffDialog.tsx", import.meta.url));
+const machines = readSource(new URL("../src/workspace/HandoffMachines.tsx", import.meta.url));
 assert.match(machines, /<BulkHandoffDialog/, "侧栏「其他机器」仍应是批量接力弹窗的唯一入口");
 assert.doesNotMatch(machines, /handoff-bulk-body/, "弹窗实现拆出去后不应留在侧栏文件里");
 assert.doesNotMatch(bulkDialog, /<ConfirmDialog/, "批量接力不应继续使用旧确认框");

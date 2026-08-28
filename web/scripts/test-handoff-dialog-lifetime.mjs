@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readSourceAsync } from "../../scripts/read-source.mjs";
 
-const workspace = await readFile(new URL("../src/workspace/WorkspaceShell.tsx", import.meta.url), "utf8");
-const detail = await readFile(new URL("../src/task-detail/TaskDetail.tsx", import.meta.url), "utf8");
+const workspace = await readSourceAsync(new URL("../src/workspace/WorkspaceShell.tsx", import.meta.url));
+const detail = await readSourceAsync(new URL("../src/task-detail/TaskDetail.tsx", import.meta.url));
 
 // 钉的是**弹窗生命周期归 WorkspaceShell 管**（下面两条断言），不是这颗 state 的类型，
 // 所以 Task / TaskListItem 都放行——列表行不再带正文之后这里拿到的是后者。

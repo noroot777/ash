@@ -25,6 +25,7 @@ import { projects, queueItems, scheduledMessages, schedules, sessions, tasks } f
 import { claimTurn, isTurnClaimed, releaseTurn, stopTask } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { expandHome, worktreePathFor } from "./git.js";
+import { discardMigratedWorkspace } from "./workspace-cleanup.js";
 import { RUNS_DIR } from "./paths.js";
 import { sessionTranscriptPath, TURN_SENTINEL } from "./transcript.js";
 import { publishTaskUpdated } from "./task-store.js";
@@ -39,7 +40,7 @@ type TaskScopedPreflightResult = HandoffPreflightResult & { taskScopedReturn: bo
 import { HandoffError, MAX_FILE_BYTES } from "./handoff-types.js";
 import type { HandoffManifest } from "./handoff-types.js";
 // 盘点与打包(会话文件、runs 产物、git bundle)在 handoff-collect.ts,这里只留流程编排。
-import { collectRunArtifacts, collectSessionFiles, packGitState } from "./handoff-collect.js";
+import { collectFreeWorkflow, collectRunArtifacts, collectSessionFiles, packGitState } from "./handoff-collect.js";
 // 出站请求一律走 handoff-peer-client:每个请求带身份签名,且**打包前**先核对对端指纹
 // (地址会漂,而接力推的是整个仓库和会话历史)。原理见那个文件顶部。
 import {
@@ -388,6 +389,8 @@ export async function exportHandoff(
       const { files: sessionFiles, found, notes: sessNotes } = await collectSessionFiles(rows, sourceWorkspace, false);
       notes.push(...sessNotes);
       const artifacts = await collectRunArtifacts(taskId, notes);
+      // 审查历史随任务走:接过去的任务除了横幅标记外应该和本机原生任务没有区别。
+      const freeWorkflow = await collectFreeWorkflow(taskId);
 
       // 任务文本和文本类载荷(会话 JSONL/产物)里引用的上传附件一并打包——不带走的话,
       // 对端 agent 照着 prompt 里的源机绝对路径 Read 只会得到「文件不存在」。
@@ -424,6 +427,9 @@ export async function exportHandoff(
           reviewStep: task.reviewStep, verifyRounds: task.verifyRounds, verifyStationRounds: task.verifyStationRounds,
           resumePrompt: task.resumePrompt, question: task.question,
           questionOptions: task.questionOptions, questionItems: task.questionItems,
+          acceptedTargetBranch: task.acceptedTargetBranch,
+          acceptedBaseCommit: task.acceptedBaseCommit,
+          acceptedMergeCommit: task.acceptedMergeCommit,
           pinnedAt: task.pinnedAt, starredAt: task.starredAt,
           createdAt: task.createdAt, startedAt: task.startedAt, endedAt: task.endedAt,
         },
@@ -441,6 +447,7 @@ export async function exportHandoff(
           contextUsed: s.contextUsed, contextWindow: s.contextWindow,
           contextWindowEstimated: s.contextWindowEstimated,
         })),
+        freeWorkflow,
         git: gitState,
         uploads,
         messages: pendingMsgs.map((x) => ({
@@ -493,9 +500,15 @@ export async function exportHandoff(
         .where(eq(tasks.id, taskId));
       await publishTaskUpdated(taskId);
 
-      let result: { ok: boolean; taskId: string; autoResume?: boolean; idempotent?: boolean; notes?: string[]; error?: string };
+      type ImportReply = {
+        ok: boolean; taskId: string; autoResume?: boolean; idempotent?: boolean;
+        // 对端确认「代码确实落到本机了」。老版本对端不报 —— 源机据此保守地什么都不删。
+        git?: "bundle" | "none";
+        notes?: string[]; error?: string;
+      };
+      let result: ImportReply;
       try {
-        result = await fetchPeer<{ ok: boolean; taskId: string; autoResume?: boolean; idempotent?: boolean; notes?: string[]; error?: string }>(
+        result = await fetchPeer<ImportReply>(
           `${targetUrl}/api/handoff/${taskScopedReturn ? "return/import" : "import"}`,
           {
             method: "POST",
@@ -574,6 +587,22 @@ export async function exportHandoff(
       }
       if (pendingMsgs.length > msgsLeft) notes.push(`迁移待发送消息 ${pendingMsgs.length - msgsLeft} 条,本机原件已取消并留档在时间线`);
       if (scheduleRow) notes.push("定时计划已随任务迁移,今后由对端触发;本机这份在接力标记存在期间不会触发");
+
+      // 「任务在哪儿,分支之类的才在哪儿」(用户 2026-08-27):代码确认落到对端之后,本机
+      // 这份 worktree 和分支就是死物,主动收掉;移回时同一段代码对称地收掉持有机那份。
+      // 两道闸都过了才真删:①对端明确应答 git:"bundle";②git worktree remove 不带
+      // --force,目录里还剩没带走的东西它自己会拒。细节见 workspace-cleanup.ts 末尾。
+      if (gitState) {
+        if (result.git === "bundle") {
+          const cleaned = await discardMigratedWorkspace(project.repoPath, taskId)
+            .catch((e) => ({ removed: false, note: `本机 worktree/分支清理失败(${e instanceof Error ? e.message : String(e)}),已原样保留,可手动删除` }));
+          if (cleaned.note) notes.push(cleaned.note);
+        } else if (result.git === "none") {
+          notes.push("对端没有按 worktree 任务导入,代码没有在对端落地;本机 worktree 和分支照原样保留");
+        } else {
+          notes.push("对端是旧版 ash,没报代码落地结果;本机 worktree 和分支照原样保留,确认对端无误后可手动删除");
+        }
+      }
       await publishTaskUpdated(taskId);
 
       return {

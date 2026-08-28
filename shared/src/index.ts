@@ -525,7 +525,13 @@ export type { DuetConfig, DuetConsensusBy, DuetStyle, HitlGate } from "./duet.ts
 
 // ── Scheduling (§9) ──────────────────────────────────────────────────────────
 // 形状住在 ./schedule.ts(纯类型,这里只再导出)。
-export type { Schedule, ScheduledMessage, ScheduledMessageMode, ScheduledMessageStatus } from "./schedule.ts";
+export type {
+  Schedule,
+  ScheduledMessage,
+  ScheduledMessageMode,
+  ScheduledMessageSessionRole,
+  ScheduledMessageStatus,
+} from "./schedule.ts";
 
 // ── HITL gates (§7) / Executor streaming events (§12) ───────────────────────
 // 形状住在 ./events.ts(纯类型,这里只再导出);拆分理由见那个文件的头部注释。

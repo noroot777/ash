@@ -35,9 +35,8 @@ import { importHandoff } from "./handoff-import.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { now } from "./util.js";
 import { mountHandoffRemoteRoutes } from "./handoff-remote.js";
-import {
-  assertReturnProject, listReturnGrants, returnArchiveForPeer, returnTargetForTask, sourceUrlFromPeer,
-} from "./handoff-return.js";
+import { assertReturnProject, listReturnGrants, returnArchiveForPeer } from "./handoff-return.js";
+import { returnTargetForTask, sourceUrlFromPeer } from "./handoff-return-address.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { isMultiUser } from "./auth/mode.js";
 import { countUsers } from "./auth/store.js";

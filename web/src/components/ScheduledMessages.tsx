@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type { ScheduledMessage } from "@ash/shared";
-import { ChatsCircle, Clock, Queue, SpinnerGap, X } from "@phosphor-icons/react";
+import { ArrowUUpLeft, ChatsCircle, Clock, Queue, SpinnerGap } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
@@ -86,15 +86,20 @@ export function useScheduledMessages(taskId: string) {
     void reload({ quiet: true });
   });
 
-  const cancel = useCallback(async (messageId: string) => {
+  // 服务端只有「取消」这一个动作；界面上它是**撤回**——调用方在取消成功后把这条
+  // 消息的正文和附件放回对话框（见 task-detail/withdrawDraft.ts），所以这里要如实
+  // 返回成功与否：失败了消息还在队列上，绝不能再往输入框里塞一份。
+  const cancel = useCallback(async (messageId: string): Promise<boolean> => {
     setCancelingIds((current) => new Set(current).add(messageId));
     setActionError(null);
     try {
       await api.cancelScheduledMessage(messageId);
       setMessages((current) => current.filter((message) => message.id !== messageId));
+      return true;
     } catch (reason) {
       setActionError({ messageId, message: reason instanceof Error ? reason.message : String(reason) });
       void reload({ quiet: true });
+      return false;
     } finally {
       setCancelingIds((current) => {
         const next = new Set(current);
@@ -145,7 +150,7 @@ export function ScheduledMessageTray({
   cancelingIds,
   steeringIds,
   onSteer,
-  onCancel,
+  onWithdraw,
 }: {
   messages: ScheduledMessage[];
   loading: boolean;
@@ -153,11 +158,14 @@ export function ScheduledMessageTray({
   cancelingIds: ReadonlySet<string>;
   steeringIds?: ReadonlySet<string>;
   onSteer?: (messageId: string) => void;
-  onCancel: (messageId: string) => void;
+  // 撤回:把这条消息从队列上取下来,内容(正文 + 附件)放回对话框继续编辑。
+  onWithdraw: (message: ScheduledMessage) => void;
 }) {
   if (!loading && !error && messages.length === 0) return null;
   const orderedMessages = bySendTime(messages);
-  const steerable = orderedMessages.find((message) => message.mode === "queued");
+  // 引导会话跟撤回一样只对用户自己那条排队消息开放：带会话角色的（审查链的 reviewer
+  // 答复）不归这个对话框管，把它推进当前会话同样是送错地方。
+  const steerable = orderedMessages.find((message) => message.mode === "queued" && !message.sessionRole);
   return (
     <div className="scheduled-message-tray" aria-label="待发送消息">
       {loading && messages.length === 0 && <small>正在加载待发送消息…</small>}
@@ -169,6 +177,10 @@ export function ScheduledMessageTray({
         // 排队消息没有「几点发」可言——它等的是任务空下来,所以那一格写它在等什么。
         const queued = message.mode === "queued";
         const when = queued ? "排队中" : formatInstant(message.sendAt);
+        // 带会话角色 = 这条不是用户在这个对话框里写的，是审查链排给 reviewer 会话的
+        // 答复。撤回承诺「放回输入框、改完再发一次」，可这个框再发只会走普通 /reply，
+        // 角色就丢了——答复进错会话，审查链等不到它。做不到就不提供入口，只如实标出来。
+        const managed = !!message.sessionRole;
         return (
           <div className="scheduled-message-row" key={message.id}>
             {queued ? <Queue size={12} aria-hidden="true" /> : <Clock size={12} aria-hidden="true" />}
@@ -193,15 +205,22 @@ export function ScheduledMessageTray({
                 <span>{steering ? "引导中" : "引导会话"}</span>
               </button>
             )}
-            <button
-              type="button"
-              disabled={busy}
-              title={queued ? "取消这条排队消息" : "取消定时发送"}
-              aria-label={`取消${when}的待发送消息`}
-              onClick={() => onCancel(message.id)}
-            >
-              {canceling ? <SpinnerGap size={12} className="is-spinning" /> : <X size={12} weight="bold" />}
-            </button>
+            {managed
+              ? <small className="scheduled-message-managed">审查会话的答复 · 由审查链投递</small>
+              : (
+                <button
+                  type="button"
+                  className="scheduled-message-withdraw"
+                  disabled={busy}
+                  title={queued ? "撤回这条排队消息，内容放回输入框" : "撤回这条定时消息，内容放回输入框"}
+                  aria-label={`撤回${when}的待发送消息“${message.text || "附件"}”，内容放回输入框`}
+                  onClick={() => onWithdraw(message)}
+                >
+                  {canceling
+                    ? <SpinnerGap size={12} className="is-spinning" />
+                    : <ArrowUUpLeft size={12} weight="bold" />}
+                </button>
+              )}
           </div>
         );
       })}

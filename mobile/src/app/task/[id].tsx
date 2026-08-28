@@ -31,8 +31,9 @@ import { WorkerTeamLink } from "@/components/WorkerTeamLink";
 import { MarkdownText } from "@/components/MarkdownText";
 import { SignalBar } from "@/components/SignalBar";
 import { SkillSuggestions } from "@/components/SkillSuggestions";
+import { PendingMessageTray } from "@/components/PendingMessageTray";
 import { DateTimeButton } from "@/components/DateTimeField";
-import { TaskTimeChip, formatInstant } from "@/lib/time";
+import { TaskTimeChip } from "@/lib/time";
 import { canArchive } from "@ash/shared";
 import type { Session, ScheduledMessage } from "@ash/shared";
 import type { LogLine } from "@/lib/log";
@@ -320,12 +321,6 @@ export default function TaskDetail() {
     }
   };
 
-  // 取消一条待发送消息：乐观移除，失败再拉回。
-  const cancelScheduled = async (mid: string) => {
-    setPending((ps) => ps.filter((m) => m.id !== mid));
-    await api.cancelScheduledMessage(mid).catch(() => loadPending());
-  };
-
   const meta = STATUS_META[status];
 
   if (task.mode === "team") {
@@ -534,32 +529,12 @@ export default function TaskDetail() {
           gap: 8,
         }}
       >
-        {pending.map((m) => (
-          <View
-            key={m.id}
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              gap: 8,
-              backgroundColor: theme.overlay,
-              borderRadius: radius.sm,
-              paddingHorizontal: 10,
-              paddingVertical: 6,
-            }}
-          >
-            {/* 排队消息不看时间（跑完就发），所以那一列写「排队中」而不是一个骗人的时刻。 */}
-            <Ionicons name={m.mode === "queued" ? "layers-outline" : "time-outline"} size={13} color={theme.faint} />
-            <Text style={{ color: theme.muted, fontSize: 12, fontFamily: fonts.mono }}>
-              {m.mode === "queued" ? "排队中" : formatInstant(m.sendAt)}
-            </Text>
-            <Text numberOfLines={1} style={{ flex: 1, color: theme.ink, fontSize: 13 }}>
-              {m.text || "[附件]"}
-            </Text>
-            <Pressable onPress={() => cancelScheduled(m.id)} hitSlop={8}>
-              <Ionicons name="close" size={15} color={theme.faint} />
-            </Pressable>
-          </View>
-        ))}
+        <PendingMessageTray
+          messages={pending}
+          onRemoved={(messageId) => setPending((ps) => ps.filter((m) => m.id !== messageId))}
+          onReload={loadPending}
+          onRestoreText={(restored) => setInput((current) => (current.trim() ? `${restored}\n\n${current}` : restored))}
+        />
 
         <SkillSuggestions
           agentType={task.agentType}

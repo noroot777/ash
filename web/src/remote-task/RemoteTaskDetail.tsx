@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { HandoffTarget, Task, TaskListItem } from "@ash/shared";
 import { TASK_STATUS_LABELS } from "@ash/shared";
 import { ArrowCounterClockwise, ArrowUp, DesktopTower, SpinnerGap } from "@phosphor-icons/react";
 import { api, type RemoteTaskSnapshot } from "../lib/api.ts";
+import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { ConversationFeed } from "../task-detail/ConversationFeed.tsx";
 import { buildConversationItems, type TimelineEntry } from "../task-detail/conversationModel.ts";
@@ -30,6 +31,9 @@ export function RemoteTaskDetail({
   const [sendError, setSendError] = useState<string | null>(null);
   const [returnOpen, setReturnOpen] = useState(false);
   const [returning, setReturning] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  // 这个框沿用 .task-reply-box 的样式(resize: none,没有拖动条),高度就全交给行数自动撑。
+  useAutoGrowTextarea(inputRef, { value: text });
 
   const refresh = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -148,6 +152,7 @@ export function RemoteTaskDetail({
             {sendError && <p className="task-reply-error">{sendError}</p>}
             <div className="task-reply-box">
               <textarea
+                ref={inputRef}
                 value={text}
                 rows={3}
                 disabled={!snapshot || sending || !canReply || Boolean(task.question)}

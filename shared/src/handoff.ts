@@ -146,6 +146,11 @@ export interface TaskHandoff {
   sessions: number;
   // 代码是否随任务走了:bundle = 分支打包带走;none = 没有可带的（非 worktree 任务等）。
   git: "bundle" | "none";
+  // in/returned:还没投递出去的**接力前言**（「你被搬过机器了,先核对工作目录」）。
+  // 由 orchestrator 在下一回合的 prompt 里注入一次,注入完就删掉这个字段。原先它写在
+  // tasks.resume_prompt 里,害得刚接过来的任务一进门就长着「正等续跑指令」的样子,
+  // 派审/预约/修复/预览整排按钮全禁。详见 server/src/handoff-notice.ts。
+  notice?: string;
   note?: string;
 }
 

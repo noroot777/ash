@@ -43,6 +43,7 @@ import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
 import { haltTeam } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
 import { setTaskQuestion } from "./task-question.js";
+import { announceResumePrompt } from "./task-resume-prompt.js";
 import { readableRunPath } from "./transcript.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { now } from "./util.js";
@@ -57,6 +58,8 @@ export function mountTaskRunRoutes(api: Hono): void {
     ...r,
     attachments: JSON.parse(r.attachments),
     agent: (r.agent as AgentType) ?? null,
+    // 托盘据此把「审查链自己的答复」和用户手写的回复分开（见 shared/src/schedule.ts）。
+    sessionRole: (r.sessionRole as ScheduledMessage["sessionRole"]) ?? null,
     mode: r.mode as ScheduledMessageMode,
     status: r.status as ScheduledMessageStatus,
   });
@@ -250,6 +253,9 @@ api.post("/tasks/:id/pause", async (c) => {
     ))
     .returning({ id: tasks.id });
   if (!updated.length) return c.json({ error: "当前回合已经结束或已被引导，检查点未写入" }, 409);
+  // 检查点一挂上，前端的派审/预约/修复入口就该跟着灰掉；SSE 没有带 resume_prompt 的
+  // 局部事件，只能推整行（见 task-resume-prompt.ts 顶部）。
+  await announceResumePrompt(taskId);
   return c.json({ paused: true, willSettleAs: "paused" });
 });
 

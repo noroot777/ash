@@ -30,6 +30,8 @@
 //      绕行路;项目默认起手式既不能是别人的私有起手式(个人面资源,§八),也不能是自己的
 //      —— 项目行是共享的,自建条目对别人解析不出来,他们会静默落回系统默认。项目列表还要
 //      带上「我在这儿是什么角色」,否则前端只能把必然 403 的管理控件摆给所有人看。
+//   ⑨ 检查点续跑(`resume_prompt`)是 `resumeOrRunTask` 里的**另一条岔路**:CAS 取走
+//      指令后它自己另调一次 continueTask,那处的 actingUserId 与 ① 是对称参数。
 //
 // 跑法(不设 ASH_DB 时自己开一个临时库):
 //   npm -w server run test:multi-user-run
@@ -552,6 +554,32 @@ const expectBob = (env: Record<string, string | null>, where: string) => {
     (asAdmin.body as unknown as { myRole: string }[]).every((p) => p.myRole === "admin"),
     "实例管理员进任意项目权限等同项目管理员(§四)",
   );
+}
+
+// ── ⑨ 检查点续跑(`resume_prompt`)那条岔路也要带上「谁点的」──────────────────
+// 它跟 ① 走的不是同一段代码:①(retry/无 checkpoint)落到 `runTask`,这一条在
+// `resumeOrRunTask` 里就被 `takeResumePrompt` 的 CAS 岔走,自己另调一次 continueTask。
+// 两处 `actingUserId` 是**对称参数**,只改一处靠通读发现不了(server/CLAUDE.md
+// 「对称端点只改了一个」);合并 main 时这一行正好落在冲突块里,更该有根钉子。
+{
+  // ④ 故意把 bob 的默认执行器换成没挂供应商的那条(它要的就是被闸拦下),之后没还原。
+  // 这一组要真起进程,先把 bob 的默认换回接了供应商的 ex-bob。
+  await db.update(agents).set({ isDefault: false }).where(eq(agents.id, "ex-bob-bare"));
+  await db.update(agents).set({ isDefault: true }).where(eq(agents.id, "ex-bob"));
+  const taskId = id();
+  await db.insert(tasks).values(taskRow({
+    id: taskId, title: "alice 挂了检查点", executorId: "ex-alice",
+    status: "paused", resumePrompt: "继续:把 tts 那一段做完",
+  }));
+  clearProbes();
+  const r = await post(`/api/tasks/${taskId}/run`, bobKey);
+  assert.equal(r.status, 202, JSON.stringify(r.body));
+  await until("检查点续跑起了进程", () => readProbes().length > 0);
+  expectBob(readProbes()[0], "检查点续跑 /run");
+  await until("检查点续跑结算", async () => settled(await statusOf(taskId)));
+  // 顺带钉住 main 那侧的语义:指令送出去了就该被取走,不能留在原位下次再投一遍。
+  const left = (await db.select({ rp: tasks.resumePrompt }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  assert.equal(left?.rp, null, "送出去的 checkpoint 指令要被取走,否则下次触发会重投");
 }
 
 await releaseTmpDb();
