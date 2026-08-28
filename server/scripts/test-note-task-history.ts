@@ -23,13 +23,16 @@ await legacy.executeMultiple(`
 `);
 legacy.close();
 
-const [{ db, ensureSchema }, schema, { mountNoteRoutes }, { mountTaskRoutes }, { searchAll }] = await Promise.all([
+const [{ db, ensureSchema }, schema, { mountNoteRoutes }, { mountTaskRoutes }, search, { SINGLE_ACTOR }] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/notes.js"),
   import("../src/task-routes.js"),
   import("../src/search.js"),
+  import("../src/auth/context.js"),
 ]);
+// searchAll 要说明「谁在搜」;这条用例是自用模式,隐式本地用户看得见全部。
+const searchAll = (query: string) => search.searchAll(query, SINGLE_ACTOR);
 const { noteTasks, projects, tasks } = schema;
 
 await ensureSchema();

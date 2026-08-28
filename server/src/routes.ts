@@ -162,8 +162,7 @@ api.get("/search", async (c) => {
   if ("error" in params) return c.json({ error: params.error }, 400);
   if (params.q.length < 2) return c.json([]);
   const { q, ...options } = params;
-  const visible = await visibleProjectIds(actorOf(c));
-  return c.json(await searchAll(q, { ...options, visibleProjectIds: visible, signal: c.req.raw.signal }));
+  return c.json(await searchAll(q, actorOf(c), { ...options, signal: c.req.raw.signal }));
 });
 
 // 同一次搜索的流式版本：命中一条吐一行 NDJSON，中间插一行 `{"marker":"local-done"}`
@@ -187,9 +186,8 @@ api.get("/search/stream", async (c) => {
         // 客户端走了（又敲了一个字 / 关掉 ⌘K）。signal 会让扫描自己停下来，这里不用嚷嚷。
       });
     };
-    await searchAll(q, {
+    await searchAll(q, actorOf(c), {
       ...options,
-      visibleProjectIds: await visibleProjectIds(actorOf(c)),
       signal: c.req.raw.signal,
       onHit: (hit) => push(hit),
       onLocalDone: () => push({ marker: "local-done" }),

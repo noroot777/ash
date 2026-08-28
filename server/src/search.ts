@@ -25,6 +25,9 @@ import { SEARCH_MAX_HITS, compareSearchHits } from "@ash/shared/search";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { notes, noteTasks, projects, tasks } from "./db/schema.js";
+import type { Actor } from "./auth/context.js";
+import { filterOwned } from "./auth/owned.js";
+import { visibleProjectIds } from "./auth/visibility.js";
 import { RUNS_DIR } from "./paths.js";
 
 const SNIPPET_RADIUS = 60;
@@ -54,10 +57,6 @@ export type ParsedSearchQuery = {
 export type SearchOptions = {
   // 硬过滤：只在这个项目里搜（⌘K 的「限定项目」筛子）。
   projectId?: string;
-  // 可见项目集合(多人模式)。null / 不给 = 不设限。搜索是横跨全库扫**磁盘上的会话
-  // 正文**的,不过这一道等于把别人任务的原文直接吐进 ⌘K —— 它比列表页更危险,因为
-  // 命中的是正文片段而不只是标题。
-  visibleProjectIds?: Set<string> | null;
   type?: "tasks" | "notes";
   // 排序偏好 + **扫描顺序**：先把这个项目扫完，再扫别的项目。跟 projectId 是两回事 ——
   // 后者把别的项目排除掉，这个只是让它们排后面、晚一点到。
@@ -274,21 +273,32 @@ async function readRunText(taskId: string, signal?: AbortSignal): Promise<string
   return chunks.filter(Boolean).join("\n");
 }
 
-export async function searchAll(query: string, options: SearchOptions = {}): Promise<SearchHit[]> {
+/**
+ * 一次搜索。**「谁在搜」是必填的位置参数**,不是 options 里可省的一项 —— 这个函数返回
+ * 的是任务正文、会话原文和随手记正文的片段,比任何列表页都更危险,漏一个身份就是把
+ * 全库端出去。放进 options 的那一版正是这么漏的(第 1 轮审查 P1)。
+ *
+ * 它按**两条轴**收窄,与其它面共用同一份判据,不另抄一套 SQL:
+ *   · 项目轴 —— `visibleProjectIds(actor)`(auth/visibility.ts):任务和随手记挂的项目
+ *     得看得见;
+ *   · 个人面 —— `filterOwned`(auth/owned.ts):随手记在多人模式下逐人隔离(§八),
+ *     连实例管理员也不例外。`/notes` 的 `visibleNotes` 就是这两条轴,搜索不能少一条。
+ */
+export async function searchAll(query: string, actor: Actor, options: SearchOptions = {}): Promise<SearchHit[]> {
   const parsed = parseSearchQuery(query);
   if (!parsed.groups.length && !parsed.excluded.length) return [];
 
-  const [projRows, allTaskRows, allNoteRows, allNoteTaskRows] = await Promise.all([
+  const [projRows, allTaskRows, allNoteRows, allNoteTaskRows, visible] = await Promise.all([
     db.select().from(projects),
     db.select().from(tasks),
     db.select().from(notes),
     db.select({ noteId: noteTasks.noteId }).from(noteTasks).innerJoin(tasks, eq(noteTasks.taskId, tasks.id)),
+    visibleProjectIds(actor),
   ]);
-  const visible = options.visibleProjectIds ?? null;
   const projectMatches = (projectId: string) =>
     (!options.projectId || projectId === options.projectId) && (visible === null || visible.has(projectId));
   const taskRows = options.type === "notes" ? [] : allTaskRows.filter((task) => projectMatches(task.projectId) && visibleLocalSearchTask(task.handoff));
-  const noteRows = options.type === "tasks" ? [] : allNoteRows.filter((note) => projectMatches(note.projectId));
+  const noteRows = options.type === "tasks" ? [] : (await filterOwned(allNoteRows, actor)).filter((note) => projectMatches(note.projectId));
   const projName = new Map(projRows.map((project) => [project.id, project.name] as const));
   const noteTaskCounts = new Map<string, number>();
   for (const link of allNoteTaskRows) noteTaskCounts.set(link.noteId, (noteTaskCounts.get(link.noteId) ?? 0) + 1);

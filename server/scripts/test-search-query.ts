@@ -7,13 +7,17 @@ const root = mkdtempSync(join(tmpdir(), "ash-search-"));
 process.env.ASH_DB = join(root, "ash.db");
 
 // 动态 import:search.js 连带打开 DB,得等 ASH_DB 指到临时库之后再加载。
-const [{ db, ensureSchema }, { projects, tasks }, search, { parseWorktreePorcelain }] = await Promise.all([
+const [{ db, ensureSchema }, { projects, tasks }, search, { parseWorktreePorcelain }, { SINGLE_ACTOR }] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/search.js"),
   import("../src/git-overview.js"),
+  import("../src/auth/context.js"),
 ]);
-const { isTaskIdMatch, matchesSearchQuery, parseSearchQuery, searchAll, taskIdCandidates, visibleLocalSearchTask } = search;
+const { isTaskIdMatch, matchesSearchQuery, parseSearchQuery, taskIdCandidates, visibleLocalSearchTask } = search;
+// searchAll 的第二个参数是「谁在搜」(可见项目 + 随手记归属两条轴)。这里只验查询语义,
+// 一律以自用模式的隐式本地用户身份搜;两条轴本身归 test:search-visibility 管。
+const searchAll = (query: string) => search.searchAll(query, SINGLE_ACTOR);
 
 const matches = (text: string, query: string) => matchesSearchQuery(text, parseSearchQuery(query));
 

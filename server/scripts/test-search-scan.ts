@@ -19,11 +19,17 @@ const root = mkdtempSync(join(tmpdir(), "ash-search-scan-"));
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 
-const [{ db, ensureSchema }, schema, { searchAll }] = await Promise.all([
+const [{ db, ensureSchema }, schema, search, { SINGLE_ACTOR }] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/search.js"),
+  import("../src/auth/context.js"),
 ]);
+// searchAll 现在必须说明「谁在搜」(可见项目 + 随手记归属两条轴,见 search.ts 顶部)。
+// 这条用例只关心扫描策略,统一以自用模式的隐式本地用户身份搜 —— 那一档两条轴都不设限,
+// 与本轮改动之前的行为逐字节一致。可见性本身由 test:search-visibility 钉。
+const searchAll = (query: string, options?: Parameters<typeof search.searchAll>[2]) =>
+  search.searchAll(query, SINGLE_ACTOR, options);
 const { projects, tasks } = schema;
 
 await ensureSchema();
