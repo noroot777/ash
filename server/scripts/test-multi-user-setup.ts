@@ -348,6 +348,25 @@ const adminKey = await store.resetUserKey(adminRow.id);
   const done = (await store.getUser(bob.id))!;
   assert.equal(done.keyHash, null, "重置就该把旧 key 抹掉");
   assert.equal(done.status, "invited", "没被停用的人重置后退回 invited,等他重领");
+
+  // 「重置自己的 key」也不从管理员这条路走:它断掉的正是调用者自己的会话,而新链接
+  // 只在那一次响应里 —— 前端下一次 refresh 就把它连同整棵工作台一起卸载,人落到登录
+  // 页,旧 key 已经失效,只剩宿主机逃生门(第 4 轮审查 P1)。
+  const selfReset = await call(`/api/users/${adminRow.id}/reset-key`, "POST", adminKey);
+  assert.equal(selfReset.status, 409, `管理员重置自己的 key 必须拒:${JSON.stringify(selfReset.body)}`);
+  assert.match(String(selfReset.body.error), /我的账号/, "得把人指到本人自助那条路上");
+  assert.ok((await store.getUser(adminRow.id))!.keyHash, "被拒的自重置不许把自己的 key 抹掉");
+  assert.equal((await call("/api/users", "GET", adminKey)).status, 200, "更不许把自己踢下线");
+
+  // 本人自助那条路才是对的。它必须**当场补发会话**,否则同样是把自己踢出去 ——
+  // 这正是管理员那条路做不到、因此不该兼这件事的地方。
+  const rotated = await call("/api/auth/rotate-key", "POST", adminKey);
+  assert.equal(rotated.status, 200, `本人轮换要成:${JSON.stringify(rotated.body)}`);
+  const freshKey = String(rotated.body.key ?? "");
+  assert.ok(freshKey.startsWith("ash_"), "轮换要当场把新 key 交到本人手里,不是发一条链接");
+  assert.ok(rotated.cookie, "轮换必须补发会话 cookie,不然点完「重新生成」就把自己踢到登录页");
+  assert.equal((await call("/api/users", "GET", freshKey)).status, 200, "新 key 立刻能用");
+  assert.equal((await call("/api/users", "GET", adminKey)).status, 401, "旧 key 当场失效");
 }
 
 await releaseTmpDb();

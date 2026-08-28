@@ -4,7 +4,7 @@
 // 三件事在这一屏里必须说清楚,否则用户会用错:
 //  ① 建用户**不设 key**,只发一条专属链接;key 在他自己点开链接时生成。
 //  ② 停用不是删除 —— 它断会话、停他的任务、暂停他的日程,数据全留着。
-//  ③ 重置 key = 他手上那把当场失效。
+//  ③ 重置 key = **别人**手上那把当场失效;自己那把在「我的账号」里换(见 UserRow)。
 import { useCallback, useEffect, useState } from "react";
 import type { UserView } from "@ash/shared";
 import { suggestDirName, suggestGitEmail, userDirNameError, USER_DIR_NAME_HINT } from "@ash/shared/multiuser";
@@ -42,7 +42,13 @@ function InviteLink({ url, onDone }: { url: string; onDone?: () => void }) {
   );
 }
 
-export function UsersSettings({ notify }: { notify: (message: string) => void }) {
+export function UsersSettings({
+  notify,
+  onAccount,
+}: {
+  notify: (message: string) => void;
+  onAccount: () => void;
+}) {
   const { state, refresh } = useAuth();
   const [users, setUsers] = useState<UserView[]>([]);
   const [loading, setLoading] = useState(true);
@@ -225,6 +231,7 @@ export function UsersSettings({ notify }: { notify: (message: string) => void })
               user={user}
               self={state.user?.id === user.id}
               onAct={act}
+              onAccount={onAccount}
             />
           ))}
         </ul>
@@ -243,10 +250,12 @@ function UserRow({
   user,
   self,
   onAct,
+  onAccount,
 }: {
   user: UserView;
   self: boolean;
   onAct: (label: string, run: () => Promise<unknown>) => Promise<void>;
+  onAccount: () => void;
 }) {
   const [confirming, setConfirming] = useState<"suspend" | "reset" | null>(null);
   return (
@@ -274,7 +283,14 @@ function UserRow({
             <Button onClick={() => void onAct("已重发邀请链接", () => userApi.reissueInvite(user.id))}>
               {user.hasPendingInvite ? "重发链接" : "发邀请链接"}
             </Button>
-            {confirming === "reset" ? (
+            {self ? (
+              // 自己那把 key **不从这条路换**:管理员这条「重置」会抹掉 key 并断掉全部
+              // 会话,新链接只在那一次响应里 —— 而被断掉的正是你自己的会话,`AuthGate`
+              // 下一次 refresh 就把整个工作台连同刚显示出来的链接一起卸载,人落到登录
+              // 页,旧 key 已经失效(第 4 轮审查 P1)。「我的账号 → 重新生成 key」当场把
+              // 你换到新 key 上,后端也把这条路对自己封了(409),这里只是别让人白点。
+              <Button onClick={onAccount}>去「我的账号」换自己的 key</Button>
+            ) : confirming === "reset" ? (
               <ConfirmInline
                 text="他手上那把 key 会当场失效，需要用新链接重领。"
                 onCancel={() => setConfirming(null)}

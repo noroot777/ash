@@ -187,7 +187,7 @@ export function SettingsPage({
           {section === "reviewers" && <ReviewerProfilesSettings notify={notify} />}
           {section === "cli-env" && <PersonalCliSettings notify={notify} />}
           {section === "config" && <ConfigTransferSettings notify={notify} />}
-          {section === "users" && <UsersSettings notify={notify} />}
+          {section === "users" && <UsersSettings notify={notify} onAccount={() => onSection("account")} />}
           {section === "account" && <AccountSettings notify={notify} />}
           {section === "defaults" && <DefaultsSettings notify={notify} />}
           {section === "project" && project && (

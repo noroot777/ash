@@ -5,7 +5,7 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { AuthState, InviteInfo, UserRole } from "@ash/shared";
 import { dirNameFromNameHint, suggestDirName, suggestGitEmail, userDirNameError } from "@ash/shared/multiuser";
 import { hostname } from "node:os";
-import { actorOf, authErrorResponse, requireAdmin } from "./context.js";
+import { actorOf, authErrorResponse, isAccountHolder, requireAdmin } from "./context.js";
 import { SESSION_COOKIE, crossSiteRejection } from "./middleware.js";
 import {
   ensureHomeDirUnder,
@@ -288,10 +288,12 @@ export function mountAuthRoutes(api: Hono): void {
       note: "在跑着 ash 的那台机器上、仓库根目录执行。它会打印一条新的管理员邀请链接。",
     }));
 
-  // 管理员为任何用户重置 key:走专属邀请链接重领(§五),旧 key 即刻失效。
+  // 管理员为**别人**重置 key:走专属邀请链接重领(§五),旧 key 即刻失效。
+  // 自己那把走 `POST /auth/rotate-key`(见下面那道 409)。
   api.post("/users/:id/reset-key", async (c) => {
+    const actor = actorOf(c);
     try {
-      requireAdmin(actorOf(c));
+      requireAdmin(actor);
     } catch (error) {
       const mapped = authErrorResponse(error);
       if (mapped) return c.json(mapped.body, mapped.status);
@@ -299,6 +301,16 @@ export function mountAuthRoutes(api: Hono): void {
     }
     const user = await getUser(c.req.param("id"));
     if (!user) return c.json({ error: "用户不存在" }, 404);
+    // 这条路**对自己下不去手**:它先抹 key、断掉全部会话,新链接只在这一次响应里 ——
+    // 而被断掉的正是调用者自己的会话,前端下一次 refresh 就把整棵工作台连同刚拿到的
+    // 那条链接一起卸载,人落到登录页,旧 key 已经失效,只剩宿主机逃生门(第 4 轮审查 P1)。
+    // 本人自助是 `POST /auth/rotate-key`:它当场补发 cookie,所以不会把自己踢出去。
+    // 同一件事只留那一条路 —— `POST /users/:id/suspend` 的「不能停用自己」也是这个道理。
+    if (isAccountHolder(actor) && actor.userId === user.id) {
+      return c.json({
+        error: "重置自己的 key 请去「我的账号 → 重新生成 key」：那条路当场把你换到新 key 上，不会把你踢回登录页",
+      }, 409);
+    }
     // 停用的账号不走这条路:`revokeUserKey` 会把 status 写回 invited,于是「重置 key」
     // 顺手把人从停用里放了出来 —— 他拿新链接一领就又是 active(第 3 轮审查 P2)。恢复
     // 有它自己的入口,而且那条入口会把「还没领过 key 的人需要新链接」一并处理掉。
@@ -309,7 +321,7 @@ export function mountAuthRoutes(api: Hono): void {
     // 先作废旧 key 与所有会话,再发新链接 —— 反过来的话中间那一小段里旧 key 还能用,
     // 而「重置」的语义就是「他手上那把从现在起打不开门」。
     await revokeUserKey(user.id);
-    const token = await issueInvite(user.id, actorOf(c).userId);
+    const token = await issueInvite(user.id, actor.userId);
     return c.json({ inviteUrl: `/claim/${token}` });
   });
 }
