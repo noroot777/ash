@@ -1,5 +1,12 @@
 /* 多人模式的前置屏(向导 / 登录 / 领取 / 加入项目)。它们都是**全屏单卡片**,
-   不复用工作台那套布局 —— 那套的前提是「已经知道你是谁」。 */
+   不复用工作台那套布局 —— 那套的前提是「已经知道你是谁」。
+   配色只用 global.css `:root` 里真实存在的令牌(--chrome/--panel/--raised/--ink/
+   --muted/--line/--red/--amber)。这一屏最初写的是 `var(--bg, #0f1115)` 这类
+   **压根没定义过的名字 + 暗色兜底**,于是浅色主题下配出「深底 + 继承来的黑字」,
+   首启选择卡的标题几乎读不出来(第 1 轮审查 P2)。
+   淡底一律 `color-mix(in srgb, …)`:`--panel`/`--line` 是**零彩度**的(`lch(… 0 282)`),
+   在 lch 里跟它们混色会把那个没有意义的 282 号色相一起插值进来 —— 黄色警告条实测
+   会配出 rgb(246,244,254) 的淡紫,红色危险条也一样。 */
 
 .auth-shell {
   position: fixed;
@@ -8,7 +15,7 @@
   place-items: center;
   padding: 32px 20px;
   overflow: auto;
-  background: var(--bg, #0f1115);
+  background: var(--chrome);
 }
 
 .auth-card {
@@ -17,10 +24,10 @@
   flex-direction: column;
   gap: 14px;
   padding: 28px;
-  border: 1px solid var(--border, #262a33);
+  border: 1px solid var(--line);
   border-radius: 14px;
-  background: var(--panel, #161920);
-  box-shadow: 0 18px 48px rgb(0 0 0 / 35%);
+  background: var(--panel);
+  box-shadow: var(--shadow);
 }
 
 .auth-card--wide {
@@ -43,18 +50,18 @@
   margin: 0;
   font-size: 13px;
   line-height: 1.65;
-  color: var(--fg-dim, #98a0b0);
+  color: var(--muted);
 }
 
 .auth-error {
   margin: 0;
   font-size: 13px;
   line-height: 1.6;
-  color: var(--danger, #f2777a);
+  color: var(--red);
 }
 
 .auth-key-input {
-  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--font-mono);
   letter-spacing: 0.04em;
 }
 
@@ -64,7 +71,7 @@
   border: 0;
   background: none;
   font-size: 12px;
-  color: var(--fg-dim, #98a0b0);
+  color: var(--muted);
   text-decoration: underline;
   text-underline-offset: 3px;
   cursor: pointer;
@@ -75,11 +82,11 @@
   flex-direction: column;
   gap: 10px;
   padding: 14px;
-  border: 1px solid var(--border, #262a33);
+  border: 1px solid var(--line);
   border-radius: 10px;
   font-size: 12.5px;
   line-height: 1.7;
-  color: var(--fg-dim, #98a0b0);
+  color: var(--muted);
 }
 
 .auth-recovery p {
@@ -91,9 +98,9 @@
   margin: 0;
   padding: 10px 12px;
   border-radius: 8px;
-  background: var(--bg, #0f1115);
-  border: 1px solid var(--border, #262a33);
-  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  background: var(--raised);
+  border: 1px solid var(--line);
+  font-family: var(--font-mono);
   font-size: 12.5px;
   white-space: pre-wrap;
   word-break: break-all;
@@ -103,7 +110,7 @@
 .auth-key-value {
   font-size: 14px;
   line-height: 1.7;
-  color: var(--fg, #e6e9ef);
+  color: var(--ink);
 }
 
 .auth-key-reveal {
@@ -122,7 +129,7 @@
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  color: var(--fg-dim, #98a0b0);
+  color: var(--muted);
   cursor: pointer;
 }
 
@@ -139,7 +146,7 @@
 .auth-field small {
   font-size: 12px;
   line-height: 1.6;
-  color: var(--fg-dim, #98a0b0);
+  color: var(--muted);
 }
 
 .auth-field-row {
@@ -157,17 +164,17 @@
 .auth-warning {
   padding: 12px 14px;
   border-radius: 10px;
-  border: 1px solid var(--warn-border, #4a3d1f);
-  background: var(--warn-bg, #211c10);
+  border: 1px solid color-mix(in srgb, var(--amber) 30%, var(--line));
+  background: color-mix(in srgb, var(--amber) 8%, var(--panel));
   font-size: 12.5px;
   line-height: 1.7;
-  color: var(--fg-dim, #cfc39c);
+  color: var(--muted);
 }
 
 .auth-warning--strong {
-  border-color: var(--danger, #f2777a);
-  background: color-mix(in srgb, var(--danger, #f2777a) 10%, transparent);
-  color: var(--fg, #e6e9ef);
+  border-color: color-mix(in srgb, var(--red) 35%, var(--line));
+  background: color-mix(in srgb, var(--red) 7%, var(--panel));
+  color: var(--ink);
 }
 
 .auth-warning ul {
@@ -181,17 +188,19 @@
   gap: 6px;
   padding: 16px;
   text-align: left;
-  border: 1px solid var(--border, #262a33);
+  border: 1px solid var(--line);
   border-radius: 12px;
-  background: var(--bg, #0f1115);
-  color: inherit;
+  background: var(--raised);
+  /* 显式给字色:这是个 <button>,`inherit` 只是「跟着卡片走」,一旦哪天卡片底色变深
+     它不会跟着翻转。底色和字色成对写死,读得出来才是这块的本分。 */
+  color: var(--ink);
   cursor: pointer;
   transition: border-color 120ms ease, background 120ms ease;
 }
 
 .auth-choice:hover:not(:disabled) {
-  border-color: var(--accent, #6d8cff);
-  background: color-mix(in srgb, var(--accent, #6d8cff) 8%, transparent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
 }
 
 .auth-choice b {
@@ -201,7 +210,7 @@
 .auth-choice span {
   font-size: 12.5px;
   line-height: 1.7;
-  color: var(--fg-dim, #98a0b0);
+  color: var(--muted);
 }
 
 /* 「切到多人模式」表单本体。全屏向导里它直接躺在 .auth-card 上(那层已经有 gap),

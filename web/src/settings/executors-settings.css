@@ -198,7 +198,7 @@
 
 /* 「派不出任务」比「某个选项静默失效」更重：前者是这一行现在完全跑不了。 */
 .agent-profile-row-warning.is-blocked {
-  color: var(--danger, #f2777a);
+  color: var(--red);
 }
 
 .agent-profile-identity {

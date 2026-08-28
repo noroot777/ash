@@ -3,26 +3,26 @@
   flex-direction: column;
   gap: 10px;
   padding: 12px;
-  border: 1px solid var(--line, #262a33);
+  border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--panel, #161920);
+  background: var(--panel);
 }
 
 .dtree-root {
   margin: 0;
   font-size: 12px;
   line-height: 1.6;
-  color: var(--fg-dim, #98a0b0);
+  color: var(--muted);
   word-break: break-all;
 }
 
 .dtree-body {
   max-height: 280px;
   overflow: auto;
-  border: 1px solid var(--line, #262a33);
+  border: 1px solid var(--line);
   border-radius: 8px;
   padding: 4px 0;
-  background: var(--bg, #0f1115);
+  background: var(--raised);
 }
 
 .dtree-row {
@@ -34,7 +34,7 @@
 }
 
 .dtree-row[data-selected="yes"] {
-  background: color-mix(in srgb, var(--accent, #6d8cff) 18%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .dtree-caret,
@@ -47,7 +47,7 @@
   flex: none;
   border: 0;
   background: none;
-  color: var(--fg-dim, #98a0b0);
+  color: var(--muted);
   cursor: pointer;
 }
 
@@ -72,7 +72,7 @@
 
 .dtree-repo {
   font-size: 11px;
-  color: var(--accent, #6d8cff);
+  color: var(--accent);
 }
 
 .dtree-mkdir {
@@ -97,7 +97,7 @@
   flex: 1;
   min-width: 0;
   font-size: 12px;
-  color: var(--fg-dim, #98a0b0);
+  color: var(--muted);
   word-break: break-all;
 }
 

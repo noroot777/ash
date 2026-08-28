@@ -17,7 +17,7 @@ import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { tasks } from "../db/schema.js";
 import { SINGLE_ACTOR, ANONYMOUS_ACTOR, setActor, type Actor } from "./context.js";
-import { isMultiUser, needsSetup } from "./mode.js";
+import { isMultiUser } from "./mode.js";
 import { resolveSession, touchUser, findUserByKey } from "./store.js";
 
 export const SESSION_COOKIE = "ash_session";
@@ -192,12 +192,12 @@ export function authGate(): MiddlewareHandler {
       return next();
     }
 
-    // 模式已经是 multi 却还没建出管理员 —— 只可能是转换中途崩了。放行 setup 让它补完。
-    if (await needsSetup()) {
-      setActor(c, SINGLE_ACTOR);
-      return next();
-    }
-
+    // 模式已经是 multi 却还没建出管理员(转换中途崩了)—— **这里不开任何后门**。
+    // 补做首启走的是既有的免登录名单:`/api/auth/state` 决定要不要出向导、
+    // `/api/auth/setup` 把管理员补出来(routes.ts 的 `resuming` 分支不查管理员身份),
+    // SPA 壳照常渲染。曾经这里是「setActor(SINGLE_ACTOR) + next()」放行**全部路径**:
+    // 那一刻库里已经装着真实的项目和任务,等于未登录访客拿到实例管理员的全部读写权
+    // (审查 P0 实测:`GET /api/tasks` 200 回出别人的任务)。
     const actor = (await agentActor(c)) ?? (await cookieActor(c)) ?? (await bearerActor(c));
 
     if (actor) {

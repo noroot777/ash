@@ -43,8 +43,12 @@ export function MultiModeForm({
   const [gitEmail, setGitEmail] = useState("");
 
   useEffect(() => {
+    // 补做首启时不问盘点:那一刻实例已经是 multi、又还没人能登录,这条端点在闸外
+    // 会被挡成 401(闸只放行 state / setup 两条,见 auth/middleware.ts)。而且盘点讲的是
+    // 「转换后这些归你」—— 转换上一次已经发生过了,这一屏只负责把管理员补出来。
+    if (lockedRootDir) return;
     void authApi.setupPreflight().then(setPreflight).catch(() => {});
-  }, []);
+  }, [lockedRootDir]);
 
   // 目录名默认从姓名推,用户一旦手改过就不再覆盖他。
   useEffect(() => {

@@ -6,6 +6,8 @@
 //      key —— 而 `needsSetup:false` 把向导藏了起来,谁也进不去,只能手改库(第 1 轮
 //      审查 P0)。两层都要挡:**目录先建**(失败时库里一个字没动),外加 needsSetup 把
 //      「multi 却没人能登录」也算进首启,让向导能把管理员补出来。
+//      —— 而这个「补做中」的状态本身**不是免鉴权状态**:出路只有免登录名单里的
+//      `/auth/state`、`/auth/setup` 加 SPA 壳,别的路径一律 401(第 1 轮审查 P0)。
 //   ② `POST /users`:同样的顺序问题。原来的写法留下一个没有邀请链接、也没有 key 的
 //      用户,而它把姓名和目录名双双占死,管理员照原样重试直接 409(第 1 轮审查 P1)。
 //   ③ 自带起手式的每人覆写:`(builtin_key, owner_user_id)` 是**每人一行**,按 key 查完
@@ -40,6 +42,10 @@ await ensureSchema();
 const api = new Hono();
 mountAuthRoutes(api);
 mountUserRoutes(api);
+// 闸下的普通数据端点替身。测的是 `authGate` 本身「除了免登录名单一律拦」,不是某条
+// 业务路由 —— 挂真的 task-routes 只会把一堆无关依赖拖进来,而闸对它们一视同仁。
+api.get("/canary", (c) => c.json({ secret: "别人的任务标题" }));
+api.post("/canary", (c) => c.json({ wrote: true }));
 const app = new Hono();
 app.use("*", authGate());
 app.route("/api", api);
@@ -99,6 +105,20 @@ mkdirSync(root, { recursive: true });
   const state = await call("/api/auth/state", "GET", null);
   assert.equal(state.body.needsSetup, true);
   assert.equal(state.body.rootDir, root, "根目录锁死了,得交给表单预填,否则只能靠用户记");
+
+  // **补做期间不许开后门。** 这一刻库里已经装着真实的项目和任务:`authGate` 曾经在
+  // 「multi 却没人能登录」时 `setActor(SINGLE_ACTOR)` + `next()` 放行**全部路径**,
+  // 于是未登录访客拿到实例管理员的全部读写权(第 1 轮审查 P0:实测 `GET /api/tasks`
+  // 200 回出别人的任务)。出路只有免登录名单那两条 + SPA 壳,别的一律 401。
+  const canary = await call("/api/canary", "GET", null);
+  assert.equal(canary.status, 401, `锁死状态下的数据端点必须挡住:${JSON.stringify(canary.body)}`);
+  assert.equal(canary.body.needsAuth, true, "401 要带 needsAuth,前端据它决定去登录页还是向导");
+  assert.equal(canary.body.secret, undefined, "一个字节的业务数据都不许漏出去");
+  const canaryWrite = await call("/api/canary", "POST", null, { x: 1 });
+  assert.equal(canaryWrite.status, 401, `写端点同在闸内 —— 放行是在资源闸之前发生的:${JSON.stringify(canaryWrite.body)}`);
+  // 壳照常开(向导页要渲染):这里没挂静态资源,所以它落到 404 —— 只要不是 401 就说明闸放了行。
+  const shell = await app.fetch(new Request("http://127.0.0.1:4317/setup"));
+  assert.notEqual(shell.status, 401, "SPA 壳必须打得开,否则向导本身都进不去");
 
   // 补做中也不能倒回自用(§二),而且要说人话,不能抛个 500。
   const backWhileBroken = await call("/api/auth/setup", "POST", null, { mode: "single" });
