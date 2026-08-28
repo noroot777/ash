@@ -220,7 +220,14 @@ export function mountAuthRoutes(api: Hono): void {
   });
 
   // 转多人之前的盘点:存量执行器里哪些没挂供应商(§十三)。向导据此逐条警告。
+  //
+  // 转完就关掉:它按定义扫的是**全库**执行器(转换那一刻还没有「谁的执行器」这回事),
+  // 而多人模式下执行器是个人资源。不关的话,任何一个登录成员都能从这里读到管理员和
+  // 其他人的执行器名字与总数(第 1 轮审查 P2)。首启/补做向导跑在 multi 之前,不受影响。
   api.get("/auth/setup/preflight", async (c) => {
+    if (await isMultiUser()) {
+      return c.json({ error: "这台 ash 已经是多人模式了，转换前的盘点只在转换那一刻有意义" }, 409);
+    }
     const { unbackedExecutors, counts } = await conversionPreflight();
     return c.json({ unbackedExecutors, counts, host: hostname() });
   });

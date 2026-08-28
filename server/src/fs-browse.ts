@@ -10,13 +10,10 @@
 import { mkdir, readdir, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import type { Context, Hono } from "hono";
-import { db } from "./db/index.js";
-import { users } from "./db/schema.js";
-import { eq } from "drizzle-orm";
 import { expandHome } from "./git.js";
-import { actorOf, isAdminActor } from "./auth/context.js";
-import { isMultiUser, rootDirOf, userHomeDir } from "./auth/mode.js";
-import { projectPathRejection } from "./auth/path-scope.js";
+import { actorOf } from "./auth/context.js";
+import { isMultiUser, rootDirOf } from "./auth/mode.js";
+import { pathScopeOf, projectPathRejection } from "./auth/path-scope.js";
 
 export interface BrowseEntry {
   name: string;
@@ -50,29 +47,29 @@ async function listDirs(dir: string): Promise<BrowseEntry[]> {
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** 这个人的浏览起点。管理员是根目录(自用模式则是 home),普通用户是他自己的目录。 */
-async function browseRootFor(c: Context): Promise<string> {
-  const actor = actorOf(c);
-  if (!(await isMultiUser())) return expandHome("~");
-  if (isAdminActor(actor)) return (await rootDirOf()) || expandHome("~");
-  if (!actor.userId) throw Object.assign(new Error("请先登录"), { status: 401 });
-  const user = (await db.select({ dirName: users.dirName }).from(users).where(eq(users.id, actor.userId))).at(0);
-  if (!user) throw Object.assign(new Error("账号已不存在"), { status: 401 });
-  return userHomeDir(user.dirName);
+/**
+ * 这个人的浏览起点和边界。「谁受钳制、钳到哪」**不在这里判**,取 path-scope 那一份 ——
+ * 这里曾经自己查一遍用户,于是同一个问题有了两份答案,而两份判据早晚宽窄不一。
+ * 这里只额外决定「不受钳制的人从哪儿开始画」:根目录比整块文件系统好用。
+ */
+async function browseRootFor(c: Context): Promise<{ root: string; clamped: boolean }> {
+  const scope = await pathScopeOf(actorOf(c));
+  if (scope.clamp === "deny") throw Object.assign(new Error(scope.reason), { status: 401 });
+  if (scope.clamp === "home") return { root: scope.home, clamped: true };
+  if (!(await isMultiUser())) return { root: expandHome("~"), clamped: false };
+  return { root: (await rootDirOf()) || expandHome("~"), clamped: false };
 }
 
 export function mountFsBrowseRoutes(api: Hono): void {
   // 起点:告诉前端从哪儿开始画,以及这个人的钳制边界在哪(界面上要写出来)。
   api.get("/fs/browse/root", async (c) => {
     try {
-      const root = await browseRootFor(c);
-      const actor = actorOf(c);
-      const multi = await isMultiUser();
+      const { root, clamped } = await browseRootFor(c);
       return c.json({
         root,
         name: basename(root) || root,
-        // 管理员不受钳制(§七),前端据此决定要不要显示「你只能在这个目录内选择」。
-        clamped: multi && !isAdminActor(actor),
+        // 不受钳制的人(自用模式、实例管理员 §七)不显示「你只能在这个目录内选择」。
+        clamped,
         entries: await listDirs(root),
       });
     } catch (error) {
@@ -86,18 +83,18 @@ export function mountFsBrowseRoutes(api: Hono): void {
     const raw = (c.req.query("path") ?? "").trim();
     if (!raw) return c.json({ error: "path required" }, 400);
     const target = resolve(expandHome(raw));
-    const actor = actorOf(c);
     if (await isMultiUser()) {
-      if (isAdminActor(actor)) {
+      const scope = await pathScopeOf(actorOf(c));
+      if (scope.clamp === "deny") return c.json({ error: scope.reason }, 401);
+      if (scope.clamp === "none") {
         // 管理员不受钳制,但仍要拒 UNC / 8.3 短名(与其它入口同一套原语)。
         const { windowsPathRejection } = await import("./platform.js");
         if (windowsPathRejection(target)) return c.json({ error: "不接受 UNC / 8.3 短名路径" }, 400);
       } else {
         // **注意这里用的不是 projectPathRejection**:那一条额外拒绝「目录根本身」,
         // 因为把用户目录根注册成项目会污染整片区域。而浏览目录根是完全正常的动作。
-        const home = await browseRootFor(c);
         const { realPathClampError } = await import("./auth/mode.js");
-        const outside = resolve(home) === target ? null : await realPathClampError(home, target);
+        const outside = resolve(scope.home) === target ? null : await realPathClampError(scope.home, target);
         if (outside) return c.json({ error: outside }, 403);
       }
     }

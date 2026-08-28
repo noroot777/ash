@@ -2,7 +2,7 @@
 //
 //   ① 自用模式必须逐字节照旧 —— 所有闸在 single 下全是穿透。
 //   ② 可见性:项目/任务/分组三条轴用**同一份**判据(auth/visibility.ts)。
-//   ③ 路径钳制:普通用户只能用自己目录**之内、且不是目录根**的路径;管理员豁免。
+//   ③ 路径钳制 —— 已搬到 test-multi-user-paths.ts(判据本身长成一整块了)。
 //   ④ 派发闸:CLI 没接 relay、或执行器没挂供应商 → 拒绝派发(判据取自 catalog)。
 //   ⑤ 跨人回合:任务归属人不是操作人时,执行器降级要**先能被探测出来**(弹窗的料)。
 //   ⑥ 设置分面:worktree 默认/默认起手式一人一份;实例面要管理员。
@@ -39,7 +39,6 @@ const { agents, groups, projects, tasks } = schema;
 const mode = await import("../src/auth/mode.js");
 const store = await import("../src/auth/store.js");
 const visibility = await import("../src/auth/visibility.js");
-const pathScope = await import("../src/auth/path-scope.js");
 const gate = await import("../src/auth/dispatch-gate.js");
 const personal = await import("../src/auth/personal-settings.js");
 const owned = await import("../src/auth/owned.js");
@@ -63,8 +62,6 @@ const actorOf = (user: store.UserRow) => ({
   assert.equal(await mode.isMultiUser(), false, "还没设过模式时不该是多人");
   assert.equal(await visibility.visibleProjectIds(SINGLE_ACTOR), null, "自用模式不该有可见集限制");
   assert.equal(await visibility.projectRoleOf(SINGLE_ACTOR, "whatever"), "admin");
-  assert.equal(await pathScope.homeDirOf(SINGLE_ACTOR), null, "自用模式不钳路径");
-  assert.equal(await pathScope.projectPathRejection(SINGLE_ACTOR, "/anywhere/at/all"), null);
   assert.equal(await owned.ownedScope(SINGLE_ACTOR), null, "自用模式的资源不分归属");
   // 设置写入仍旧直落 app_settings。
   await personal.patchSettingsFor(SINGLE_ACTOR, { worktreeDefault: false });
@@ -134,28 +131,8 @@ const bobActor = actorOf(bob);
   await visibility.removeProjectMember("p-alice", bob.id);
 }
 
-// ── ③ 路径钳制 ────────────────────────────────────────────────────────────
-{
-  const aliceHome = join(root, "alice");
-  assert.equal(await pathScope.homeDirOf(adminActor), null, "实例管理员不受钳制");
-  assert.equal(await pathScope.projectPathRejection(adminActor, join(root, "bob", "x")), null);
-
-  assert.equal(await pathScope.projectPathRejection(aliceActor, join(aliceHome, "proj")), null);
-  assert.ok(
-    await pathScope.projectPathRejection(aliceActor, aliceHome),
-    "用户目录根本身不许注册成项目(§七 D10)",
-  );
-  assert.ok(
-    await pathScope.projectPathRejection(aliceActor, join(root, "bob", "proj")),
-    "不许把项目建到别人目录里",
-  );
-  assert.ok(
-    await pathScope.projectPathRejection(aliceActor, join(stage, "outside")),
-    "不许跑到根目录外面",
-  );
-  // 空路径放行:「先建项目、回头补路径」是既有正常用法。
-  assert.equal(await pathScope.projectPathRejection(aliceActor, ""), null);
-}
+// ── ③ 路径钳制 → 已搬到 test-multi-user-paths.ts ──────────────────────────
+// 三态判据 + 六个入口自己长成一整块了,留在这份合集里只会把它压成一行断言。
 
 // ── ④ 派发闸 ──────────────────────────────────────────────────────────────
 {

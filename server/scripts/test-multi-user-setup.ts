@@ -114,6 +114,11 @@ mkdirSync(root, { recursive: true });
 
 // ── ① 首启转换:目录建不出来 → 库里一个字都不许动,而且要能重来 ────────────
 {
+  // 转换盘点是向导的第一屏(「转过去之后这些存量归你」),转换**之前**必须打得开 ——
+  // 这一刻还没有「谁的执行器」这回事,扫全库正是它的定义。
+  const beforeConversion = await call("/api/auth/setup/preflight", "GET", null);
+  assert.equal(beforeConversion.status, 200, `转换前的盘点是向导的料:${JSON.stringify(beforeConversion.body)}`);
+
   // 「admin」这个路径被一个**文件**占着 —— 报告里用的就是这一手。
   writeFileSync(join(root, "admin"), "占位");
 
@@ -139,6 +144,12 @@ mkdirSync(root, { recursive: true });
   assert.ok(String(ok.body.key ?? "").length > 0, "该发一把能登录的 key");
   mode.invalidateInstanceConfig();
   assert.equal(await mode.needsSetup(), false, "建完了,向导该收起来");
+
+  // 转完就关掉:盘点扫的是**全库**执行器,而多人模式下执行器是个人资源。留着它,
+  // 任何一个登录成员都能从这儿读到别人的执行器名字和全局计数(第 1 轮审查 P2)。
+  const afterConversion = await call("/api/auth/setup/preflight", "GET", String(ok.body.key));
+  assert.equal(afterConversion.status, 409, `转换后盘点必须关掉:${JSON.stringify(afterConversion.body)}`);
+  assert.equal(afterConversion.body.unbackedExecutors, undefined, "拒了就一个字段都不许漏");
 }
 
 // ── ② 「multi 却没人能登录」= 首启没走完,向导要能把管理员补出来 ────────────

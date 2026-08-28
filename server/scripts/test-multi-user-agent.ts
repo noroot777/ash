@@ -15,6 +15,11 @@
 // 同时钉住**别收过头**:agent 在自己项目里照常建任务、照常用得到 owner 的执行器 ——
 // 那正是 MCP 派活这条主路(`mcp/src/index.ts` 给每个 HTTP 调用都附这两个头)。
 //
+// 第 1 轮审查(新审查者)又添了一处同源的:凭证的 `userId` **可以是空的**(转多人之前
+// 建的存量任务),而路径钳制把「算不出这个人的目录」和「这个人不用钳」共用了一个答案,
+// 于是权限最小的那种凭证反倒拿到了不受钳制的路径能力(⑦)。判据在 `auth/path-scope.ts`,
+// 现在是三态。
+//
 // 一律走真 Request 打进 `authGate → resourceGate → 路由` 的完整栈;只有「实例管理员
 // 名下的 agent」那一条是直接调判据函数(HTTP 侧构造不出这个身份,`agentActor` 恒填
 // member —— 但判据的分支顺序不该依赖这个巧合)。
@@ -283,6 +288,74 @@ const AS_ALICE = { authorization: `Bearer ${aliceKey}` };
   const providers = await call("/api/llm-providers", "GET", AS_AGENT);
   assert.equal(providers.status, 200, `agent 读得到 owner 的供应商清单:${providers.text}`);
   assert.equal(providers.text.includes("\"k\""), false, `读侧永远不许把 key 交出去:${providers.text}`);
+}
+
+// ── ⑦ 归属为空的回合凭证:路径能力必须比普通成员**更小**,不是更大 ────────────
+// `agentActor` 对 `ownerUserId` 为空的存量任务明确填 member、注释也写着「不给管理员
+// 权限」。但路径钳制那一侧曾经是**二态**:算不出这个人的目录 → null → 当成「不用钳」。
+// 于是这条凭证在多人模式下反而不受钳制,能在根目录外建出无主项目,并拿到 myRole:
+// "admin"(第 1 轮审查 P1)。判据改成三态后,「算不出目录」落 deny。
+{
+  const { existsSync } = await import("node:fs");
+  const legacyRepo = join(stage, "legacy-repo");
+  const outside = join(stage, "outside-project");
+  await db.insert(projects).values([
+    { id: "p-legacy", name: "legacy", repoPath: legacyRepo, apiKeys: null, workflowId: null, createdAt: at, ownerUserId: null },
+  ] as never);
+  await db.insert(tasks).values([
+    task({ id: "t-legacy", projectId: "p-legacy", title: "legacy task", status: "running", activeTurnToken: "turn-legacy", ownerUserId: null }),
+  ] as never);
+  const AS_LEGACY = { "x-ash-source-task-id": "t-legacy", "x-ash-turn-token": "turn-legacy" };
+
+  const before = (await db.select().from(projects)).length;
+  for (const [what, path, body] of [
+    ["按路径找回/建项目", "/api/projects/resolve", { repoPath: outside }],
+    ["直接建项目", "/api/projects", { name: "outside", repoPath: outside }],
+  ] as const) {
+    const denied = await call(path, "POST", AS_LEGACY, body);
+    assert.equal(denied.status, 403, `存量凭证 ${what} 到根目录外必须 403:${denied.text}`);
+  }
+  // 别人目录里同样不行 —— 「不钳」当初连这条都放过去了。
+  const intoAlice = await call("/api/projects/resolve", "POST", AS_LEGACY, { repoPath: join(root, "alice", "grab") });
+  assert.equal(intoAlice.status, 403, `存量凭证不许伸进别人目录:${intoAlice.text}`);
+  assert.equal(
+    (await db.select().from(projects)).length, before,
+    "被拒的建项目不许落库(只看状态码的话,「403 但已经建出来了」会照样过)",
+  );
+
+  // 建目录走的是同一份钳制,而且它建出来的位置紧接着就会被登记成项目。
+  const mkdir = await call("/api/fs/browse/mkdir", "POST", AS_LEGACY, { path: outside });
+  assert.equal(mkdir.status, 403, `存量凭证不许在根目录外建目录:${mkdir.text}`);
+  assert.equal(existsSync(outside), false, "被拒的建目录不许真的落到磁盘上");
+
+  // 目录树也一样:算不出目录 = 没有起点可给,不能拿根目录顶上。
+  const browseRoot = await call("/api/fs/browse/root", "GET", AS_LEGACY);
+  assert.equal(browseRoot.status, 401, `存量凭证没有目录树起点:${browseRoot.text}`);
+  const browse = await call(`/api/fs/browse?path=${encodeURIComponent(root)}`, "GET", AS_LEGACY);
+  assert.equal(browse.status, 401, `存量凭证不许列根目录:${browse.text}`);
+
+  // 别收过头:归属**填了**的凭证,在 owner 自己的目录里照常建得出项目(MCP 主路)。
+  const created = await call("/api/projects/resolve", "POST", AS_AGENT, { repoPath: join(root, "alice", "agent-made") });
+  assert.equal(created.status, 201, `alice 名下的 agent 在她目录里建项目必须过:${created.text}`);
+  assert.equal(created.body.ownerUserId ?? null, alice.id, `新项目要记在 owner 名下:${created.text}`);
+}
+
+// ── ⑧ 转换盘点端点:多人模式下对谁都关着 ──────────────────────────────────
+// `/auth/setup/preflight` 扫**全库** agents 并回执行器的 id/name/type 加全局计数 ——
+// 转换那一刻这是它的定义,转完就成了个人资源的泄漏口:任何登录成员都读得到管理员
+// 的执行器名字(第 1 轮审查 P2)。多人模式下一律 409,不靠按角色过滤。
+{
+  const bossKey = await store.resetUserKey(boss.id);
+  for (const [who, headers] of [
+    ["普通成员", AS_ALICE],
+    ["实例管理员", { authorization: `Bearer ${bossKey}` }],
+    ["回合凭证", AS_AGENT],
+  ] as const) {
+    const denied = await call("/api/auth/setup/preflight", "GET", headers);
+    assert.equal(denied.status, 409, `${who} 在多人模式下不该拿到转换盘点:${denied.text}`);
+    assert.equal(denied.text.includes("Alice Executor"), false, `${who}:拒了就一个执行器名字都不许漏`);
+    assert.equal(denied.text.includes("ex-alice"), false, `${who}:执行器 id 同样不许漏`);
+  }
 }
 
 console.log("multi-user agent turn-token scope ok");

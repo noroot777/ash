@@ -110,7 +110,8 @@
     "test:multi-user-run": "tsx scripts/test-multi-user-run.ts",
     "test:multi-user-git": "tsx scripts/test-multi-user-git.ts",
     "test:multi-user-agent": "tsx scripts/test-multi-user-agent.ts",
-    "test:multi-user-members": "tsx scripts/test-multi-user-members.ts"
+    "test:multi-user-members": "tsx scripts/test-multi-user-members.ts",
+    "test:multi-user-paths": "tsx scripts/test-multi-user-paths.ts"
   },
   "dependencies": {
     "@ash/shared": "*",
