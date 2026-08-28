@@ -21,6 +21,7 @@
     "test:search": "tsx scripts/test-search-query.ts",
     "test:search-scan": "tsx scripts/test-search-scan.ts",
     "test:search-visibility": "tsx scripts/test-search-visibility.ts",
+    "test:upload-visibility": "tsx scripts/test-upload-visibility.ts",
     "test:follow-up": "tsx scripts/test-follow-up.ts",
     "test:resume-prompt": "tsx scripts/test-resume-prompt-broadcast.ts",
     "test:user-directives": "tsx scripts/test-user-directives.ts",

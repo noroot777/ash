@@ -28,6 +28,7 @@ import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
 import { reconcileTurnBaseline, recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
 import { abortIfFrozen } from "./turn-freeze.js";
+import { bindUploadsToTask } from "./uploads.js";
 import { freeReviewReminder } from "./free-workflow.js";
 import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
@@ -155,6 +156,11 @@ export async function continueTask(
     .select({ mode: tasks.mode, agentType: tasks.agentType, handoff: tasks.handoff })
     .from(tasks)
     .where(eq(tasks.id, taskId))).at(0);
+  // 这一轮带的附件跟着任务走进项目轴(uploads.ts)。放在最前面:团队调度台那条路
+  // 在下面就 return 了,放后面等于团队任务的附件永远挂不上归属。
+  // `actingUserId` 是「谁点的这一轮」—— 后端路径(队列推进、定时投递)不传,那时附件
+  // 早在真人发起的那一步登记过了,这里再走一遍只是补空位。
+  await bindUploadsToTask(opts.attachments, taskId, opts.actingUserId ?? null);
   const nativeCommand = nativeCliCommand(
     opts.agent ?? (head?.agentType as AgentType) ?? "claude",
     userText,

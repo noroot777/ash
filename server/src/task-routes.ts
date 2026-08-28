@@ -15,6 +15,7 @@ import { advanceQueue } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
 import { taskBusyRejection } from "./task-busy.js";
 import { createTasks, enrichTasks, publishTaskUpdated, toTaskListItem } from "./task-store.js";
+import { bindUploadsToTask } from "./uploads.js";
 import { attachmentsPrompt, id, now, taskBody } from "./util.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { canSeeProject, groupInProject, projectOfQueue, taskInProject, visibleProjectIds, visibleTaskIds } from "./auth/visibility.js";
@@ -345,6 +346,10 @@ api.post("/tasks", async (c) => {
     // 追加到队尾后立刻推进:若前序全 done,新 task 应立刻起跑
     void advanceQueue(b.appendToQueue);
   }
+  // 附件跟着任务走进项目轴:同项目的人在会话里看得见这张图,就该读得到它(uploads.ts)。
+  // 只认「还没归属」或「本来就是我的」文件 —— 否则把别人私有随手记的附件路径写进
+  // attachments 就能给它敞开一条项目轴的读路。
+  await bindUploadsToTask(b.attachments, taskId, taskOwner);
   return c.json(created!, 201);
 });
 

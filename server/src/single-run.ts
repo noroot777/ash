@@ -22,6 +22,7 @@ import {
   type SessionResumeFault,
 } from "./executors/session-lost.js";
 import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "./transcript.js";
+import { noteAgentUpload } from "./uploads.js";
 import { isSessionScopeNotice } from "./session-notice.js";
 import { notifyTeamLead } from "./team/inbox.js";
 import { handleTaskSettlement } from "./review.js";
@@ -338,6 +339,10 @@ export async function consumeSingleRun(a: {
     // `context` 刻意不进 trace：trace 是「按回合回放各自的气泡」，而水位属于整条会话的
     // 此刻、只有最后一个值有意义，它的家在 sessions 行上（setSessionContext）。
     if (event.kind === "thinking" || event.kind === "tool" || event.kind === "error" || event.kind === "usage" || event.kind === "attachment") {
+      // agent 自己产出的图(工具结果截图之类)也躺在 uploads 目录里,归属跟着这个任务走 ——
+      // 不登记的话多人模式下它是「无主资产」,同项目的人在会话里打不开(uploads.ts)。
+      // 团队那条链的同一处在 team/session-consumer.ts 的 traceLead:改一处记得看另一处。
+      if (event.kind === "attachment") noteAgentUpload(taskId, event.path);
       flushTraceText();
       appendSessionTrace(taskId, sessId, a.turnStart, event, at);
     } else if (event.kind === "done" || event.kind === "turnEnd") {

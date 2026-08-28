@@ -1,0 +1,158 @@
+// 上传附件的**授权面**(§八)。
+//
+// `data/uploads` 是个扁平目录:文件名(`<nanoid>-<原名>`)就是全部信息,`/api/uploads/:file`
+// 拿着名字直接读盘。第 3 轮审查实证:多人模式下这等于**任何一个登录用户**只要拿到文件名
+// (聊天记录、截图、导出包、日志里都可能出现),就能读到别人**私有随手记**的附件正文 ——
+// `/api/notes` 那两条轴白过了,附件是随手记内容的一部分。
+//
+// 所以文件得有个能查的归属。判据两条,与库里其它面同一套口径:
+//   · 个人面 —— 上传者本人恒可读(`ownerUserId`);
+//   · 项目轴 —— 附到某个任务上的文件,那个任务看得见的人都可读(`taskId`)。
+//     共享项目里的会话是给全体成员看的,里面的图当然也是。
+//
+// **没有登记行**的文件按「无主资产」处置:只有实例管理员可读 —— 与 `auth/owned.ts` 对
+// `ownerUserId IS NULL` 的处置逐字一致。存量文件由转多人时的 `claimExistingUploads`
+// 一次性认领(并按任务正文回填 taskId),所以这一档兜的是「哪条写盘路径忘了登记」,
+// 失败方向是拒绝而不是放行。
+//
+// 自用模式下**整条判据透明**:一律放行,与本功能上线前逐字节一致。
+import { readdir } from "node:fs/promises";
+import { eq, inArray } from "drizzle-orm";
+import { basename } from "node:path";
+import { db } from "./db/index.js";
+import { tasks, uploads } from "./db/schema.js";
+import { UPLOADS_DIR } from "./paths.js";
+import { scanUploadNames } from "./handoff-uploads.js";
+import type { Actor } from "./auth/context.js";
+import { isAdminActor } from "./auth/context.js";
+import { isMultiUser } from "./auth/mode.js";
+import { visibleTaskIds } from "./auth/visibility.js";
+import { now } from "./util.js";
+
+/** 路径 / URL 段 → UPLOADS_DIR 下的文件名。Windows 的反斜杠也归一。 */
+export const uploadFileName = (pathOrName: string): string =>
+  basename((pathOrName ?? "").trim().replaceAll("\\", "/"));
+
+/** 这个字符串指向 uploads 目录直下的附件吗;是就给出文件名。仓库里的文件返回 null。 */
+export function uploadNameOf(pathOrName: string): string | null {
+  const raw = (pathOrName ?? "").trim();
+  if (!raw) return null;
+  const name = uploadFileName(raw);
+  if (!name) return null;
+  // 裸文件名(接力载荷里就是这个形态)按名字认;带路径的必须真的落在 UPLOADS_DIR 直下 ——
+  // 否则「把仓库里任意文件的路径写进 attachments」就能给它挂上一个任务归属。
+  if (name === raw) return name;
+  return scanUploadNames(raw).has(name) ? name : null;
+}
+
+/** 登记一个新写下的附件。同名再登记不覆盖归属(先到先得,后面的只补空位)。 */
+export async function registerUpload(
+  file: string,
+  fields: { ownerUserId?: string | null; taskId?: string | null } = {},
+): Promise<void> {
+  const name = uploadFileName(file);
+  if (!name) return;
+  const existing = (await db.select().from(uploads).where(eq(uploads.file, name))).at(0);
+  if (!existing) {
+    await db.insert(uploads).values({
+      file: name,
+      ownerUserId: fields.ownerUserId ?? null,
+      taskId: fields.taskId ?? null,
+      createdAt: now(),
+    });
+    return;
+  }
+  // 只补空位:已经有归属的行不许被后来的写入改掉(见 bindUploadsToTask 的越权推演)。
+  const patch: { ownerUserId?: string; taskId?: string } = {};
+  if (!existing.ownerUserId && fields.ownerUserId) patch.ownerUserId = fields.ownerUserId;
+  if (!existing.taskId && fields.taskId) patch.taskId = fields.taskId;
+  if (Object.keys(patch).length) await db.update(uploads).set(patch).where(eq(uploads.file, name));
+}
+
+/**
+ * 把一批附件挂到某个任务上 —— 附件跟着任务走进项目轴,同项目的人就看得见了。
+ *
+ * `actorUserId` 是**必要的**:附件路径是请求体里带来的,谁都能把别人私有随手记的
+ * 附件路径写进自己任务的 attachments。所以只认「还没归属」或「本来就是我的」文件,
+ * 别人的东西不会因为被别人引用一次就跟着敞开(已有 taskId 的同理不动)。
+ */
+export async function bindUploadsToTask(
+  paths: string[] | undefined,
+  taskId: string,
+  actorUserId: string | null,
+): Promise<void> {
+  const names = [...new Set((paths ?? []).map(uploadNameOf).filter((name): name is string => !!name))];
+  if (!names.length) return;
+  const rows = await db.select().from(uploads).where(inArray(uploads.file, names));
+  const known = new Map(rows.map((row) => [row.file, row] as const));
+  for (const name of names) {
+    const row = known.get(name);
+    if (!row) {
+      await registerUpload(name, { ownerUserId: actorUserId, taskId });
+      continue;
+    }
+    if (row.taskId) continue;
+    if (row.ownerUserId && row.ownerUserId !== actorUserId) continue;
+    await db.update(uploads).set({ taskId }).where(eq(uploads.file, name));
+  }
+}
+
+/** agent 自己产出的图(工具结果截图之类)。没有上传者,归它跑的那个任务。 */
+export function noteAgentUpload(taskId: string, path: string): void {
+  void registerUpload(path, { taskId }).catch((error) => {
+    // 登记失败只影响别人能不能在界面上看到这张图,不该动摇这一轮的产出。
+    console.warn("[ash] 附件归属登记失败:", error);
+  });
+}
+
+/** 能读这个附件吗。找不到与没权限**回同一句话**(路由统一 404),不泄露文件存不存在。 */
+export async function canReadUpload(actor: Actor, file: string): Promise<boolean> {
+  if (!(await isMultiUser())) return true;
+  const name = uploadFileName(file);
+  if (!name) return false;
+  const row = (await db.select().from(uploads).where(eq(uploads.file, name))).at(0);
+  if (!row) return isAdminActor(actor);
+  if (row.ownerUserId ? row.ownerUserId === actor.userId : isAdminActor(actor)) return true;
+  if (row.taskId) return (await visibleTaskIds(actor, [row.taskId])).length > 0;
+  return false;
+}
+
+/**
+ * 转多人时认领存量附件(§十三「存量资源全部归初始管理员」)。两半都要做:
+ *   · 自用模式传上来的文件**已经登记过**了,只是归属为 null(那时没有实名用户) ——
+ *     跟其它表一样一次 UPDATE 填成管理员;
+ *   · 从没登记过的(功能上线前上传的)按目录逐个补登记。
+ *
+ * 两半都顺带按**任务正文**回填 taskId:老任务里创建时带的附件路径就写在 body 里,
+ * 回填之后项目成员照常看得见那些截图 —— 不回填的话它们全成了「只有管理员打得开」。
+ * 幂等:已经有归属的行不动。
+ */
+export async function claimExistingUploads(userId: string): Promise<number> {
+  const files = await readdir(UPLOADS_DIR).catch(() => [] as string[]);
+  const rows = await db.select().from(uploads);
+  const known = new Map(rows.map((row) => [row.file, row] as const));
+  const pending = files.filter((file) => !known.has(file));
+  const orphanRows = rows.filter((row) => !row.ownerUserId || !row.taskId);
+  if (!pending.length && !orphanRows.length) return 0;
+  // 一次扫完任务正文建反向索引,别对每个文件各扫一遍(存量库两边都是上千条)。
+  const byFile = new Map<string, string>();
+  for (const task of await db.select({ id: tasks.id, body: tasks.body }).from(tasks)) {
+    for (const name of scanUploadNames(task.body)) if (!byFile.has(name)) byFile.set(name, task.id);
+  }
+  const at = now();
+  if (pending.length) {
+    await db.insert(uploads).values(pending.map((file) => ({
+      file,
+      ownerUserId: userId,
+      taskId: byFile.get(file) ?? null,
+      createdAt: at,
+    })));
+  }
+  for (const row of orphanRows) {
+    const patch: { ownerUserId?: string; taskId?: string } = {};
+    if (!row.ownerUserId) patch.ownerUserId = userId;
+    if (!row.taskId && byFile.has(row.file)) patch.taskId = byFile.get(row.file)!;
+    if (Object.keys(patch).length) await db.update(uploads).set(patch).where(eq(uploads.file, row.file));
+  }
+  return pending.length + orphanRows.length;
+}

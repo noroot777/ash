@@ -19,6 +19,7 @@ import {
 } from "./db/schema.js";
 import { HandoffError, type HandoffManifest } from "./handoff-types.js";
 import { applyUploadRewrites, buildUploadRewrites, hasUploadRewrites, writeUploads } from "./handoff-uploads.js";
+import { bindUploadsToTask } from "./uploads.js";
 import { ensureWorkdir, expandHome, prepareWorktree, projectHealthLight, worktreePathFor } from "./git.js";
 import { findRollout } from "./executors/codex-rollout.js";
 import { assertHandoffNotCanceled, beginHandoffImport, endHandoffImport } from "./handoff-transfer-state.js";
@@ -161,6 +162,9 @@ async function importValidated(
   // 任务文本字段和后面的文本类文件载荷。必须在拼 resumePrompt 前言**之前**改:前言
   // 会把 m.task.body 原文嵌进去。写盘失败的附件不进改写对,旧路径原样留着。
   const writtenUploads = await writeUploads(m.uploads ?? [], notes);
+  // 落地的附件归这条被接过来的任务(uploads.ts):不登记的话它们在多人模式下是
+  // 「无主资产」,只有实例管理员打得开 —— 接力过来的会话里那些图就全打不开了。
+  await bindUploadsToTask(writtenUploads.map((u) => u.name), m.task.id, null);
   const rewrites = buildUploadRewrites(writtenUploads);
   const messages = m.messages ?? [];
   if (hasUploadRewrites(rewrites)) {

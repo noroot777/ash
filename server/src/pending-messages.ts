@@ -24,6 +24,7 @@ import { scheduledMessages, tasks } from "./db/schema.js";
 import { continueTask } from "./orchestrator.js";
 import { whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
+import { bindUploadsToTask } from "./uploads.js";
 import { id, now } from "./util.js";
 
 type Row = typeof scheduledMessages.$inferSelect;
@@ -72,6 +73,9 @@ export async function enqueueMessage(input: {
     deliveringSince: null,
   };
   await db.insert(scheduledMessages).values(row);
+  // 附件在**入队这一刻**挂到任务上(uploads.ts):这里才知道是谁发的,投递时那条路
+  // 是后端触发的、没有发起人,认不出「这个文件本来就是我的」。
+  await bindUploadsToTask(input.attachments, row.taskId, row.ownerUserId);
   publishPendingMessages(row.taskId);
   return row;
 }

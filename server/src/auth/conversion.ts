@@ -21,6 +21,7 @@ import {
   teamPresets,
   workflows,
 } from "../db/schema.js";
+import { claimExistingUploads } from "../uploads.js";
 import { addProjectMember } from "./visibility.js";
 
 /** 转换前的盘点结果:向导要把这些逐条摆给用户看。 */
@@ -104,6 +105,10 @@ export async function claimExistingDataFor(userId: string): Promise<Record<strin
     db.update(teamPresets).set({ ownerUserId: userId }).where(isNull(teamPresets.ownerUserId)));
   await take("schedules", () =>
     db.update(schedules).set({ ownerUserId: userId }).where(isNull(schedules.ownerUserId)));
+  // 上传附件不在库里(是磁盘上一个扁平目录),所以它没有「归属列为 null」这一说 ——
+  // 得照着目录逐个登记(uploads.ts),顺带按任务正文回填 taskId,老任务里的截图
+  // 转换后照常对项目成员可见。
+  claimed.uploads = await claimExistingUploads(userId);
 
   // 存量项目要显式登记成员行:实例管理员本来就看得见一切,但他日后被降级成普通用户
   // 时不该连自己建的项目都进不去。

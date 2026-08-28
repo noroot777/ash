@@ -570,6 +570,19 @@ export const llmProviders = sqliteTable("llm_providers", {
 // 出站方向(「我要发的这台是不是原来那台」)不在这里,而是 app_settings.handoffTargets
 // 每个目标上的 peerFp —— 那是「地址 → 期望身份」的绑定,和这张「身份 → 是否放行」是
 // 两件事,合成一张表反而说不清一台只出不进(或只进不出)的机器该是什么状态。
+// 上传附件的**归属登记**(§八)。文件本身躺在 `data/uploads` 里 —— 那是个扁平目录,
+// 文件名就是全部信息,所以「谁能读它」只能靠这张表回答(判据在 `uploads.ts`)。
+export const uploads = sqliteTable("uploads", {
+  // UPLOADS_DIR 下的文件名,单个路径段。URL 上的 `:file` 与文本里的绝对路径都归一到它。
+  file: text("file").primaryKey(),
+  // 上传的人。agent 产出的图没有上传者(恒 null),转换前的存量文件由 conversion 认领。
+  ownerUserId: text("owner_user_id"),
+  // 附到了哪个任务:有它就走项目轴(同项目的人在会话里看得见这张图)。随手记的附件
+  // 恒 null —— 随手记是个人面,它的附件不该因为挂在共享项目里就人人可读。
+  taskId: text("task_id"),
+  createdAt: text("created_at").notNull(),
+});
+
 export const handoffPeers = sqliteTable("handoff_peers", {
   fingerprint: text("fingerprint").primaryKey(), // sha256(公钥 SPKI DER) 小写 hex
   publicKey: text("public_key").notNull(), // base64(SPKI DER)

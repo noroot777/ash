@@ -4,6 +4,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join, basename, extname } from "node:path";
 import { maxBytesFor, attachmentKind } from "@ash/shared";
 import { UPLOADS_DIR } from "./paths.js";
+import { actorOf, ownerIdOf } from "./auth/context.js";
+import { canReadUpload, registerUpload } from "./uploads.js";
 import { id } from "./util.js";
 
 // ── attachment uploads (pasted into the composer / reply box) ────────────────
@@ -61,6 +63,9 @@ export function mountUploadRoutes(api: Hono): void {
     mkdirSync(UPLOADS_DIR, { recursive: true });
     const file = `${id()}-${display}`;
     writeFileSync(join(UPLOADS_DIR, file), bytes);
+    // 谁上传的就归谁(§八)。目录是扁平的、文件名就是全部信息,不登记这一句的话
+    // 「谁能读它」在多人模式下无从判起 —— 判据见 uploads.ts。
+    await registerUpload(file, { ownerUserId: ownerIdOf(actorOf(c)) });
     return c.json({
       id: file,
       path: join(UPLOADS_DIR, file),
@@ -72,8 +77,15 @@ export function mountUploadRoutes(api: Hono): void {
 
   // Serve a stored attachment back (thumbnail preview). basename() strips any path
   // so `..` can't escape UPLOADS_DIR. Non-previewable types fall back to octet-stream.
+  //
+  // 授权走 canReadUpload(uploads.ts):附件是**内容的一部分**,私有随手记的附件不能
+  // 因为躺在同一个扁平目录里就人人可读(第 3 轮审查 P1)。这道判据没有登记进
+  // resource-gate 的 PROJECT_OF —— 那张表回答的是「这个 id 属于哪个项目」,而附件有
+  // 一半(随手记的、刚传上来还没挂任务的)压根不属于任何项目,拆成两处就会有两个答案。
+  // 没权限与不存在**回同一句 404**:否则挨个文件名试一遍就能问出「这个文件存在」。
   api.get("/uploads/:file", async (c) => {
     const file = basename(c.req.param("file"));
+    if (!(await canReadUpload(actorOf(c), file))) return c.json({ error: "not found" }, 404);
     try {
       const body = await readFile(join(UPLOADS_DIR, file));
       return c.body(body, 200, { "content-type": EXT_MIME[extname(file).toLowerCase()] ?? "application/octet-stream" });
