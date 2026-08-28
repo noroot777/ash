@@ -82,6 +82,8 @@ const get = (file: string, headers: Record<string, string>) =>
 const BOB_SECRET = "bob-private-upload-secret-39f2";
 const ALICE_TASK_SECRET = "alice-task-upload-3ba7";
 const LEGACY_SECRET = "legacy-upload-secret-5c1d";
+const LATE_SECRET = "late-unregistered-secret-62fd";
+const IMPORTED_BODY = "handoff-landed-body-8ae1";
 
 const at = new Date().toISOString();
 const repo = join(stage, "shared-repo");
@@ -176,7 +178,36 @@ try {
   assert.equal((await get("unregistered.txt", AS_ALICE)).status, 404, "没登记的文件不许对普通成员放行");
   assert.equal((await get("unregistered.txt", AS_BOSS)).status, 200, "没登记的文件按无主资产归管理员");
 
-  console.log("upload visibility ok(个人面 + 项目轴 + 越权绑定 + 存量认领)");
+  // ── ⑤ 「引用一次」不算认领 ────────────────────────────────────────────
+  // 未登记的文件(上传写盘后崩在登记前、或哪条写盘路径漏了登记)一旦能被任务
+  // attachments 认领,失败关闭就当场翻成失败打开:随便写一个名字就把它变成自己的、
+  // 还顺带敞开给整个项目(第 4 轮审查 P2)。两种形态都试:裸文件名与绝对路径。
+  writeFileSync(join(UPLOADS_DIR, "late-unregistered.txt"), LATE_SECRET);
+  writeFileSync(join(UPLOADS_DIR, "late-by-path.txt"), LATE_SECRET);
+  assert.equal((await get("late-unregistered.txt", AS_ALICE)).status, 404, "认领之前本来就读不到");
+  const claim = await call("/api/tasks", "POST", AS_ALICE, {
+    projectId: "p-shared", title: "借个名字", body: "看图", useWorktree: false,
+    attachments: ["late-unregistered.txt", join(UPLOADS_DIR, "late-by-path.txt")],
+  });
+  assert.equal(claim.status, 201, `建任务该成功:${claim.text}`);
+  for (const file of ["late-unregistered.txt", "late-by-path.txt"]) {
+    for (const [who, headers] of [["Alice(引用的人)", AS_ALICE], ["Bob(同项目)", AS_BOB], ["Carol", AS_CAROL]] as const) {
+      const res = await get(file, headers);
+      assert.equal(res.status, 404, `${who}不该靠一次引用认领 ${file}:${res.text}`);
+      assert.equal(res.text.includes(LATE_SECRET), false, `拒了就一个字都不许漏:${res.text}`);
+    }
+    assert.equal((await get(file, AS_BOSS)).text, LATE_SECRET, `${file} 仍是管理员那一档`);
+  }
+
+  // 别把登记能力一起砍掉:接力落地那条路**是它自己写下的字节**,照样得建登记行,
+  // 否则接力过来的会话里那些图对项目成员全打不开。
+  const { registerUploads } = await import("../src/uploads.js");
+  writeFileSync(join(UPLOADS_DIR, "imported.txt"), IMPORTED_BODY);
+  await registerUploads(["imported.txt"], { taskId: String(created.json.id) });
+  assert.equal((await get("imported.txt", AS_BOB)).text, IMPORTED_BODY, "接力落地的附件该跟着任务对成员可见");
+  assert.equal((await get("imported.txt", AS_CAROL)).status, 404, "但仍只限那个任务看得见的人");
+
+  console.log("upload visibility ok(个人面 + 项目轴 + 越权绑定 + 引用不算认领 + 存量认领)");
 } finally {
   await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });

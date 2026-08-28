@@ -69,12 +69,28 @@ export async function registerUpload(
   if (Object.keys(patch).length) await db.update(uploads).set(patch).where(eq(uploads.file, name));
 }
 
+/** 一批刚写下的附件。用在「字节是我们自己写的」那些地方(接力落地)。 */
+export async function registerUploads(
+  files: string[],
+  fields: { ownerUserId?: string | null; taskId?: string | null } = {},
+): Promise<void> {
+  for (const file of files) await registerUpload(file, fields);
+}
+
 /**
  * 把一批附件挂到某个任务上 —— 附件跟着任务走进项目轴,同项目的人就看得见了。
  *
- * `actorUserId` 是**必要的**:附件路径是请求体里带来的,谁都能把别人私有随手记的
- * 附件路径写进自己任务的 attachments。所以只认「还没归属」或「本来就是我的」文件,
- * 别人的东西不会因为被别人引用一次就跟着敞开(已有 taskId 的同理不动)。
+ * **只改已有的登记行,一行都不新建。** 这条边界是判据的一半:
+ *   · 附件路径是请求体里带来的,谁都能把别人的附件写进自己任务的 attachments,
+ *     所以只认「还没挂任务」且「无主或本来就是我的」那些行;
+ *   · 没有登记行的文件是**失败关闭**那一档(只有实例管理员读得到)。这里若顺手补一行,
+ *     等于给出一条「引用即认领」的路:随便写一个 uploads 目录里已存在、但登记漏了的
+ *     文件名(上传写盘后崩在登记前、或哪条写盘路径忘了登记),就把它变成自己的、
+ *     还顺带敞开给整个项目 —— 第 4 轮审查实测过这条路。
+ *
+ * 登记只发生在**刚写下这些字节**的地方(`registerUpload` / `registerUploads`:上传接口、
+ * 接力落地、agent 产出的图),以及转多人时的一次性认领。要救回失联的文件走那条管理员
+ * 路径,不走普通用户的任务写入。
  */
 export async function bindUploadsToTask(
   paths: string[] | undefined,
@@ -84,16 +100,10 @@ export async function bindUploadsToTask(
   const names = [...new Set((paths ?? []).map(uploadNameOf).filter((name): name is string => !!name))];
   if (!names.length) return;
   const rows = await db.select().from(uploads).where(inArray(uploads.file, names));
-  const known = new Map(rows.map((row) => [row.file, row] as const));
-  for (const name of names) {
-    const row = known.get(name);
-    if (!row) {
-      await registerUpload(name, { ownerUserId: actorUserId, taskId });
-      continue;
-    }
+  for (const row of rows) {
     if (row.taskId) continue;
     if (row.ownerUserId && row.ownerUserId !== actorUserId) continue;
-    await db.update(uploads).set({ taskId }).where(eq(uploads.file, name));
+    await db.update(uploads).set({ taskId }).where(eq(uploads.file, row.file));
   }
 }
 
