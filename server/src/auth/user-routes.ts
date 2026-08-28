@@ -235,7 +235,7 @@ export function mountUserRoutes(api: Hono): void {
     return c.json({ ok: true, inviteUrl });
   });
 
-  // 重发/作废专属邀请链接。
+  // 重发/作废专属邀请链接。**只对还没领到 key 的账号**开(见 `issueInvite` 顶部)。
   api.post("/users/:id/invite", async (c) => {
     try {
       requireAdmin(actorOf(c));
@@ -245,6 +245,15 @@ export function mountUserRoutes(api: Hono): void {
     }
     const user = await getUser(c.req.param("id"));
     if (!user) return c.json({ error: "用户不存在" }, 404);
+    // 已经领到 key 的人不在这条路上:这条链接是**匿名**领取入口,给一个还在用的账号
+    // 开它,等于开一条延迟生效的接管入口(旧 key 先继续有效,谁拿到链接谁稍后接管),
+    // 而且正好绕开「本人不能从管理员入口重置自己的 key」(第 5 轮审查 P1)。换 key 有
+    // 两条明确的路:别人走「重置 key」(旧 key 即刻失效),本人走 `/auth/rotate-key`。
+    if (user.keyHash) {
+      return c.json({
+        error: "这个人已经领到 key 了。要给他换一把请用「重置 key」——你自己那把在「我的账号 → 重新生成 key」里换",
+      }, 409);
+    }
     const token = await issueInvite(user.id, actorOf(c).userId);
     return c.json({ inviteUrl: `/claim/${token}` });
   });

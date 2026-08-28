@@ -32,6 +32,12 @@ export interface UserView {
   createdBy: string | null;
   createdAt: string;
   lastActiveAt: string | null;
+  /**
+   * 这个人手上有没有 key。**不是** status 的同义词:管理面按它决定那一格该给
+   * 「发邀请链接」(还没领到)还是「重置 key」(已经领到)—— 专属邀请链接是匿名
+   * 领取入口,只发给还没有 key 的账号(store.ts `issueInvite`)。
+   */
+  hasKey: boolean;
   /** 这个人有没有待领取的邀请链接(管理员列表用,不含 token 本身)。 */
   hasPendingInvite?: boolean;
 }

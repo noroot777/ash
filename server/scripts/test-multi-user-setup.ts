@@ -367,6 +367,46 @@ const adminKey = await store.resetUserKey(adminRow.id);
   assert.ok(rotated.cookie, "轮换必须补发会话 cookie,不然点完「重新生成」就把自己踢到登录页");
   assert.equal((await call("/api/users", "GET", freshKey)).status, 200, "新 key 立刻能用");
   assert.equal((await call("/api/users", "GET", adminKey)).status, 401, "旧 key 当场失效");
+
+  // 「发邀请链接」是**开户 / 重领**用的,只对手上还没有 key 的账号开。这条链接是
+  // **匿名**领取入口(`POST /auth/claim/:token` 不看身份),给一个还在用的账号开它
+  // 等于开一条延迟生效的接管入口:旧 key 先继续有效,谁拿到链接谁稍后就能换 key、
+  // 拿会话、把原会话全踢掉 —— 而且正好绕开上面那道「本人不能从管理员入口重置自己
+  // 的 key」(第 5 轮审查 P1)。
+  const carol = (await db.select().from(users)).find((u) => u.name === "Carol")!;
+  assert.ok(carol.keyHash, "Carol 在 ⑤ 里已经领过 key");
+  for (const target of [
+    { id: adminRow.id, what: "自己" },
+    { id: carol.id, what: "别的已领 key 账号" },
+  ]) {
+    const issued = await call(`/api/users/${target.id}/invite`, "POST", freshKey);
+    assert.equal(issued.status, 409, `给${target.what}发邀请链接必须拒:${JSON.stringify(issued.body)}`);
+    // 只看状态码不够:一个「409 但链接已经进库」的实现照样过 —— 那条链接一样能领。
+    assert.equal(
+      (await store.pendingInviteUserIds()).has(target.id), false,
+      `被拒的那一下不许给${target.what}留下一条能领的链接`,
+    );
+  }
+
+  // 反过来:还没领到 key 的人照旧能重发(Bob 刚被重置成 invited)。
+  const bobInvite = await call(`/api/users/${bob.id}/invite`, "POST", freshKey);
+  assert.equal(bobInvite.status, 200, `没领到 key 的人要能重发链接:${JSON.stringify(bobInvite.body)}`);
+  assert.ok(String(bobInvite.body.inviteUrl ?? "").startsWith("/claim/"), "重发要给出链接");
+  assert.equal((await store.pendingInviteUserIds()).has(bob.id), true);
+
+  // 「作废链接」是管理员唯一能烧掉一条挂着的链接的地方(领取那一步不作废,所以领完
+  // 没点「我已保存」的人身上会一直挂着一条能接管他账号的链接)。
+  assert.equal((await call(`/api/users/${bob.id}/invite`, "DELETE", freshKey)).status, 200);
+  assert.equal((await store.pendingInviteUserIds()).has(bob.id), false, "作废之后那条链接不许还能领");
+
+  // 名单里的 hasKey 是前端分岔的依据(没 key 给「发链接」、有 key 给「重置 key」),
+  // 所以它得跟库里一致 —— 前端另算一份就会跟这道闸对不上。
+  const roster = (await call("/api/users", "GET", freshKey)).body as unknown as
+    { id: string; hasKey: boolean }[];
+  const hasKeyOf = (userId: string) => roster.find((u) => u.id === userId)?.hasKey;
+  assert.equal(hasKeyOf(adminRow.id), true, "自己刚轮换过,手上有 key");
+  assert.equal(hasKeyOf(carol.id), true);
+  assert.equal(hasKeyOf(bob.id), false, "重置之后 Bob 手上没有 key");
 }
 
 await releaseTmpDb();

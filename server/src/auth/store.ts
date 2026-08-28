@@ -80,6 +80,7 @@ export const toUserView = (row: UserRow, hasPendingInvite?: boolean): UserView =
   createdBy: row.createdBy ?? null,
   createdAt: row.createdAt,
   lastActiveAt: row.lastActiveAt ?? null,
+  hasKey: !!row.keyHash,
   ...(hasPendingInvite === undefined ? {} : { hasPendingInvite }),
 });
 
@@ -250,8 +251,27 @@ export async function sweepExpiredSessions(): Promise<void> {
 
 export type InviteRow = typeof userInvites.$inferSelect;
 
-/** 建一条新邀请,并作废该用户所有旧的未领取邀请(一人一链)。返回明文 token。 */
+/**
+ * 建一条新邀请,并作废该用户所有旧的未领取邀请(一人一链)。返回明文 token。
+ *
+ * **只发给手上还没有 key 的账号**(开户 / 重领)。这不是偏好,是这条链接本身决定的:
+ * `POST /auth/claim/:token` 是**匿名**入口,谁拿到谁就能当场生成新 key、拿到会话,并
+ * 把该账号原有的会话全部踢掉。对一个已经有 key 的人开这条链接,等于「他旧 key 先继续
+ * 有效,而任何拿到链接的人稍后都能接管这个账号」——既比 `reset-key`(旧 key 即刻失效)
+ * 的语义弱,又正好绕开「本人不能从管理员入口重置自己的 key」那道闸(第 5 轮审查 P1)。
+ *
+ * 三个正常调用方天然满足:建用户(还没 key)、恢复(自己先判了 keyHash)、重置 key
+ * (先 `revokeUserKey` 把 key 抹掉)。所以这里是硬闸,不是常规分支 —— 「发邀请链接」
+ * 那条路在 `user-routes.ts` 里另有一句同判据的 409,负责把话说清楚。
+ */
 export async function issueInvite(userId: string, createdBy: string | null): Promise<string> {
+  const user = await getUser(userId);
+  if (user?.keyHash) {
+    throw Object.assign(
+      new Error("这个账号已经有 key 了：专属邀请链接只发给还没领到 key 的人"),
+      { status: 409 },
+    );
+  }
   await db
     .update(userInvites)
     .set({ revokedAt: now() })

@@ -5,6 +5,8 @@
 //  ① 建用户**不设 key**,只发一条专属链接;key 在他自己点开链接时生成。
 //  ② 停用不是删除 —— 它断会话、停他的任务、暂停他的日程,数据全留着。
 //  ③ 重置 key = **别人**手上那把当场失效;自己那把在「我的账号」里换(见 UserRow)。
+//  ④ 邀请链接只发给还没领到 key 的人 —— 它是匿名领取入口,对已有 key 的账号开它
+//    等于开一条账号接管链接(第 5 轮审查 P1)。
 import { useCallback, useEffect, useState } from "react";
 import type { UserView } from "@ash/shared";
 import { suggestDirName, suggestGitEmail, userDirNameError, USER_DIR_NAME_HINT } from "@ash/shared/multiuser";
@@ -280,15 +282,22 @@ function UserRow({
           <Button onClick={() => void onAct("已恢复", () => userApi.resume(user.id))}>恢复</Button>
         ) : (
           <>
-            <Button onClick={() => void onAct("已重发邀请链接", () => userApi.reissueInvite(user.id))}>
-              {user.hasPendingInvite ? "重发链接" : "发邀请链接"}
-            </Button>
-            {self ? (
-              // 自己那把 key **不从这条路换**:管理员这条「重置」会抹掉 key 并断掉全部
-              // 会话,新链接只在那一次响应里 —— 而被断掉的正是你自己的会话,`AuthGate`
-              // 下一次 refresh 就把整个工作台连同刚显示出来的链接一起卸载,人落到登录
-              // 页,旧 key 已经失效(第 4 轮审查 P1)。「我的账号 → 重新生成 key」当场把
-              // 你换到新 key 上,后端也把这条路对自己封了(409),这里只是别让人白点。
+            {/*
+              key 那一格按**有没有领到 key** 分岔,三种状态各只有一件事可做:
+               · 还没领到 → 只有「把链接给他」。专属邀请链接是匿名领取入口(谁拿到谁
+                 就能当场生成 key 并拿会话),所以已经有 key 的账号不许再开这条链接,
+                 否则等于开一条延迟生效的接管入口,还绕开了下面那道自重置闸(第 5 轮
+                 审查 P1)。后端 `POST /users/:id/invite` 有同判据的 409。
+               · 已领到 · 别人 → 「重置 key」:旧 key 即刻失效,再给一条重领链接。
+               · 已领到 · 自己 → 去「我的账号」。管理员这条会断掉你自己的会话,而新
+                 链接只在那一次响应里,`AuthGate` 一刷新就把它连同整个工作台卸载
+                 (第 4 轮审查 P1);自助那条当场把你换到新 key 上。
+            */}
+            {!user.hasKey ? (
+              <Button onClick={() => void onAct("已重发邀请链接", () => userApi.reissueInvite(user.id))}>
+                {user.hasPendingInvite ? "重发链接" : "发邀请链接"}
+              </Button>
+            ) : self ? (
               <Button onClick={onAccount}>去「我的账号」换自己的 key</Button>
             ) : confirming === "reset" ? (
               <ConfirmInline
@@ -302,6 +311,18 @@ function UserRow({
             ) : (
               <Button onClick={() => setConfirming("reset")}>重置 key</Button>
             )}
+            {/*
+              名单上标着「邀请链接有效中」,就得有地方把它作废 —— 尤其是已经领到 key
+              的人:领取那一步**不作废链接**(§五:手滑点开就锁死是要避免的),所以一个
+              领完了没点「我已保存」的人,身上会挂着一条 7 天内谁拿到谁就能接管他账号
+              的链接。这颗按钮是管理员这一侧唯一能烧掉它的地方(项目成员那一屏的
+              「作废现有链接」同一形状)。
+            */}
+            {user.hasPendingInvite ? (
+              <Button onClick={() => void onAct("已作废", () => userApi.revokeInvite(user.id))}>
+                作废链接
+              </Button>
+            ) : null}
             {self ? null : confirming === "suspend" ? (
               <ConfirmInline
                 text="会断掉他的登录、停掉他名下在跑/排队的任务、暂停他建的日程。数据全部保留，随时能恢复。"
