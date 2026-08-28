@@ -109,7 +109,8 @@
     "test:handoff-free-workflow-rows": "tsx scripts/test-handoff-free-workflow-rows.ts",
     "test:multi-user-run": "tsx scripts/test-multi-user-run.ts",
     "test:multi-user-git": "tsx scripts/test-multi-user-git.ts",
-    "test:multi-user-agent": "tsx scripts/test-multi-user-agent.ts"
+    "test:multi-user-agent": "tsx scripts/test-multi-user-agent.ts",
+    "test:multi-user-members": "tsx scripts/test-multi-user-members.ts"
   },
   "dependencies": {
     "@ash/shared": "*",

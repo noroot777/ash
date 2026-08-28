@@ -258,9 +258,22 @@ export function mountAuthRoutes(api: Hono): void {
     return c.json({ key, user: toUserView({ ...user, keyHash: "set", status: "active" }) });
   });
 
+  // 「我已保存」才作废链接。**得先证明这一步之前真的领过** —— 光有 token 就 consume
+  // 的话,任何拿到链接的人(或者前端一次误调)都能把它烧掉:用户仍是 invited、仍然
+  // 没有 key,而链接已经作废,正好落进 §五 要避免的那条「未保存就锁死」(第 2 轮审查 P2)。
+  //
+  // 判据不需要新状态:上一步 `POST /auth/claim/:token` 领完 key 就已经发了会话 cookie。
+  // 所以「本人 + 有 key」就是「这条流程真的走过一遍」的凭据。
   api.post("/auth/claim/:token/confirm", async (c) => {
     const found = await loadInvite(c.req.param("token"));
     if (!found) return c.json({ error: "这条邀请链接不存在" }, 404);
+    const actor = actorOf(c);
+    const self = actor.kind === "user" && actor.userId ? await getUser(actor.userId) : null;
+    if (!self || self.id !== found.row.userId || !self.keyHash) {
+      return c.json({ error: "还没领到 key，不能作废这条链接。请先点「领取」拿到 key 再确认" }, 409);
+    }
+    // 已经 consume 过了(双击、刷新)就当成功:这一步的语义是「链接别再用了」,
+    // 而它此刻正是这个状态。回 409 只会在一条本来走通了的流程末尾报个假错。
     await consumeInvite(found.row.id);
     return c.json({ ok: true });
   });

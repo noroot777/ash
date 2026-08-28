@@ -31,6 +31,7 @@ import { initUserCliEnv } from "./user-cli.js";
 import {
   addProjectMember,
   explicitProjectAdminCount,
+  isExplicitProjectMember,
   listProjectMembers,
   removeProjectMember,
   requireProjectAccess,
@@ -257,6 +258,39 @@ export function mountUserRoutes(api: Hono): void {
 }
 
 // ── 项目成员(§六)──────────────────────────────────────────────────────────
+
+/**
+ * 「这个人能不能被写进这个项目的成员表」——直加(POST)与改角色(PATCH)**同一份判据**。
+ *
+ * 两条端点各写各的检查是本仓库吃过的亏(`docs/incidents.md`「对称端点只改了一个」):
+ * PATCH 曾经只查调用者是不是项目管理员就直接 `addProjectMember`,而那是个 **upsert** ——
+ * 于是它既能把一个**根本不存在的 userId** 写成项目管理员(成员列表显示「(已删除)」,
+ * 还占着 `explicitProjectAdminCount` 的名额,把真管理员降级/移除的保护顶掉),也能把
+ * POST 明确拒掉的**停用账号**写进去(第 2 轮审查 P2)。
+ *
+ * `mode: "patch"` 多一条:目标必须已经是**显式**成员。不在名单里就指回直加入口 ——
+ * 「改角色」这条路不该同时是第二个加人入口。
+ */
+async function memberTargetRefusal(
+  projectId: string,
+  userId: string,
+  mode: "add" | "patch",
+): Promise<{ status: 404 | 409; body: { error: string } } | null> {
+  const user = await getUser(userId);
+  // 「只能邀请实例中已存在的用户」(§六)——不在系统里就明确指路,不静默建号。
+  if (!user) return { status: 404, body: { error: "这个人不在实例里。找管理员给他开通账号后再邀请" } };
+  if (user.status === "suspended") return { status: 409, body: { error: "这个账号已被停用" } };
+  if (mode === "add" || (await isExplicitProjectMember(projectId, userId))) return null;
+  return {
+    status: 404,
+    body: {
+      error: user.role === "admin"
+        ? "实例管理员在每个项目里都是隐式管理员，这一行不能改角色（名单里标着「实例管理员」）"
+        : "这个人还不是这个项目的成员，先用「添加成员」把他加进来",
+    },
+  };
+}
+
 function mountProjectMemberRoutes(api: Hono): void {
   api.get("/projects/:id/members", async (c) => {
     const projectId = c.req.param("id");
@@ -282,10 +316,8 @@ function mountProjectMemberRoutes(api: Hono): void {
     const b = await c.req.json<{ userId?: string; role?: string }>().catch(() => ({} as Record<string, never>));
     const userId = (b.userId ?? "").trim();
     if (!userId) return c.json({ error: "userId required" }, 400);
-    const user = await getUser(userId);
-    // 「只能邀请实例中已存在的用户」(§六)——不在系统里就明确指路,不静默建号。
-    if (!user) return c.json({ error: "这个人不在实例里。找管理员给他开通账号后再邀请" }, 404);
-    if (user.status === "suspended") return c.json({ error: "这个账号已被停用" }, 409);
+    const refusal = await memberTargetRefusal(projectId, userId, "add");
+    if (refusal) return c.json(refusal.body, refusal.status);
     const role: ProjectRole = b.role === "admin" ? "admin" : "member";
     await addProjectMember({ projectId, userId, role, addedBy: actor.userId });
     return c.json(await listProjectMembers(projectId), 201);
@@ -300,6 +332,9 @@ function mountProjectMemberRoutes(api: Hono): void {
       const mapped = mapAuthError(error);
       return c.json(mapped.body, mapped.status);
     }
+    // 改角色底下是 upsert,所以它跟直加走同一份判据(见 memberTargetRefusal)。
+    const refusal = await memberTargetRefusal(projectId, userId, "patch");
+    if (refusal) return c.json(refusal.body, refusal.status);
     const b = await c.req.json<{ role?: string }>().catch(() => ({} as Record<string, never>));
     const role: ProjectRole = b.role === "admin" ? "admin" : "member";
     if (role === "member" && (await explicitProjectAdminCount(projectId, userId)) === 0) {

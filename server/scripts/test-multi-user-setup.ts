@@ -52,7 +52,7 @@ const app = new Hono();
 app.use("*", authGate());
 app.route("/api", api);
 
-type Res = { status: number; body: Record<string, unknown> };
+type Res = { status: number; body: Record<string, unknown>; cookie: string | null };
 const call = async (
   path: string,
   method: string,
@@ -65,7 +65,13 @@ const call = async (
   const res = await app.fetch(new Request(`http://127.0.0.1:4317${path}`, {
     method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   }));
-  return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
+  // 领取那一步会发会话 cookie,而它正是 confirm 的凭据(见 ⑤)。
+  const setCookie = res.headers.get("set-cookie");
+  return {
+    status: res.status,
+    body: (await res.json().catch(() => ({}))) as Record<string, unknown>,
+    cookie: setCookie ? setCookie.split(";")[0]! : null,
+  };
 };
 
 const root = join(stage, "root");
@@ -227,6 +233,59 @@ const adminKey = await store.resetUserKey(adminRow.id);
   assert.equal((await findWorkflow("standard", adminRow.id))!.name, "A 标准");
   // 谁的行都不是 → 出厂那份(自带条目永远在)。
   assert.equal((await findWorkflow("standard", id()))!.modified, false);
+}
+
+// ── ⑤ 专属邀请链接:没领到 key 之前,谁也不许把它作废 ───────────────────────
+// 三步是「说明 → 领取生成 key → 点『我已保存』作废」,而作废那一步原来只要 token 存在
+// 就 consume。于是任何拿到链接的人(或者前端一次误调)都能把它烧掉:用户仍是 invited、
+// 仍然没有 key,链接却已经作废 —— 正是 §五 要避免的那条「未保存就锁死」(第 2 轮审查 P2)。
+{
+  const created = await call("/api/users", "POST", adminKey, { name: "Carol", dirName: "carol" });
+  assert.equal(created.status, 201, `建 Carol 该成:${JSON.stringify(created.body)}`);
+  const token = String(created.body.inviteUrl ?? "").slice("/claim/".length);
+  const carolId = (created.body.user as { id: string }).id;
+  assert.ok(token, "建完就该有邀请链接");
+
+  // 直接 confirm(拿到链接的任何人都发得出这一下):必须被拒。
+  const early = await call(`/api/auth/claim/${token}/confirm`, "POST", null);
+  assert.equal(early.status, 409, `没领过 key 就 confirm 必须拒:${JSON.stringify(early.body)}`);
+  // 只看状态码不够:一个「409 但已经 consume 了」的实现照样过。
+  const stillOpen = await call(`/api/auth/claim/${token}`, "GET", null);
+  assert.equal(stillOpen.body.invalid, undefined, `被拒的 confirm 不许把链接烧掉:${JSON.stringify(stillOpen.body)}`);
+  const before = await store.getUser(carolId);
+  assert.equal(!!before?.keyHash, false, "更不许在一个 key 都没发出去的情况下走完流程");
+
+  // 换成**别人**的会话也不行:凭据必须是这条邀请的本人。
+  const adminLogin = await call("/api/auth/login", "POST", null, { key: adminKey });
+  assert.equal(adminLogin.status, 200, `管理员登录该成:${JSON.stringify(adminLogin.body)}`);
+  assert.ok(adminLogin.cookie, "登录要发会话 cookie");
+  const wrongSession = await call(
+    `/api/auth/claim/${token}/confirm`, "POST", null, undefined, { cookie: adminLogin.cookie! },
+  );
+  assert.equal(wrongSession.status, 409, `别人的会话不能替 Carol 作废:${JSON.stringify(wrongSession.body)}`);
+  assert.equal((await call(`/api/auth/claim/${token}`, "GET", null)).body.invalid, undefined, "同样不许烧掉");
+
+  // 正常三步:领取拿到 key 和会话 → 再 confirm 才作废。
+  const claimed = await call(`/api/auth/claim/${token}`, "POST", null);
+  assert.equal(claimed.status, 200, `领取该成:${JSON.stringify(claimed.body)}`);
+  assert.ok(String(claimed.body.key ?? "").length > 8, "领取要吐出 key");
+  assert.ok(claimed.cookie, "领取那一步必须发会话 cookie —— confirm 的凭据就是它");
+  assert.equal(
+    (await call(`/api/auth/claim/${token}`, "GET", null)).body.invalid, undefined,
+    "领取本身不作废链接(手滑点开就锁死是 §五 明确要避免的)",
+  );
+
+  const done = await call(`/api/auth/claim/${token}/confirm`, "POST", null, undefined, { cookie: claimed.cookie! });
+  assert.equal(done.status, 200, `领过之后 confirm 该成:${JSON.stringify(done.body)}`);
+  assert.ok((await store.getUser(carolId))?.keyHash, "走完流程的人手上必须有 key");
+  assert.equal(
+    (await call(`/api/auth/claim/${token}`, "GET", null)).body.invalid, "这条邀请链接已经被领取过了",
+    "点过「我已保存」之后链接才作废",
+  );
+
+  // 双击 / 刷新不该在一条本来走通了的流程末尾报假错。
+  const again = await call(`/api/auth/claim/${token}/confirm`, "POST", null, undefined, { cookie: claimed.cookie! });
+  assert.equal(again.status, 200, `重复 confirm 要幂等:${JSON.stringify(again.body)}`);
 }
 
 await releaseTmpDb();

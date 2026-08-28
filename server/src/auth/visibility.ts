@@ -210,6 +210,20 @@ export async function removeProjectMember(projectId: string, userId: string): Pr
     .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)));
 }
 
+/**
+ * 这个人有没有**显式的**成员行。实例管理员的隐式管理员身份不算 —— 那一行由
+ * `listProjectMembers` 现补出来,标着 implicit,按约定「不能移除、不能改角色」。
+ *
+ * 改角色那条端点靠它区分「改已有成员」和「凭空写一行」:`addProjectMember` 是
+ * upsert,不查在不在就等于开了第二个直加入口(第 2 轮审查 P2)。
+ */
+export async function isExplicitProjectMember(projectId: string, userId: string): Promise<boolean> {
+  return !!(await db
+    .select({ userId: projectMembers.userId })
+    .from(projectMembers)
+    .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)))).at(0);
+}
+
 export async function listProjectMembers(projectId: string): Promise<ProjectMemberView[]> {
   const rows = await db.select().from(projectMembers).where(eq(projectMembers.projectId, projectId));
   const all = await db.select().from(users);
