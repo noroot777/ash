@@ -9,17 +9,22 @@
 //     `source` 字段就是给界面区分「实时目录」和「内置兜底」用的,不许拿后者冒充前者。
 //  ③ **缓存 + 显式刷新**:跟 skills 一样是内存缓存(重启即重探,不会有陈旧数据长期骗人),
 //     TTL 到点自动重探,用户也能在选择器里点「刷新」强制现问。
+//  ④ **多人模式下一次都不问**:探测问的是宿主机那个登录账号,而 §八 要抹掉的就是它。
+//     判据见 `modelCatalogFor` 顶部 —— 这条端点没有鉴权可言(它不读任何人的资源),
+//     真正的边界是「多人模式下压根不去起这个子进程」。
 //
 // 为什么不落库:清单是**本机 CLI 当下的事实**,不是用户配置。落库要额外处理「换了
 // CLI 版本 / 换了登录账号 / 卸载了」的失效,而重启后重探一次的代价只有几百毫秒。
 
 import type { AgentType } from "@ash/shared";
 import { AGENT_TYPES } from "@ash/shared";
+import { MULTI_USER_HOST_CLI_MODELS_HIDDEN } from "@ash/shared/multiuser";
 import type { CliModelCatalog } from "@ash/shared/cli-presets";
 import { CLI_MODEL_PRESETS } from "@ash/shared/cli-presets";
 import { probeBins } from "./bin-probe.js";
 import { CLI_SPEC_BY_KEY } from "./catalog/index.js";
 import { execFileText as exec } from "../exec.js";
+import { isMultiUser } from "../auth/mode.js";
 
 /** 探测结果的保鲜期。到点后下一次读取会**等**一次重探(不做后台预热那套复杂度)。 */
 const TTL_MS = 6 * 60 * 60 * 1000;
@@ -56,6 +61,7 @@ const presetCatalog = (type: AgentType, patch: Partial<CliModelCatalog> = {}): C
   probedAt: null,
   cliVersion: null,
   error: null,
+  skipped: null,
   ...patch,
 });
 
@@ -123,6 +129,7 @@ async function probe(type: AgentType): Promise<CliModelCatalog> {
       source: "probe",
       probedAt: new Date().toISOString(),
       error: null,
+      skipped: null,
       ...base,
     };
   } catch (error) {
@@ -148,20 +155,46 @@ function fresh(entry: CacheEntry | undefined): boolean {
  *
  * 缓存未命中时**等**探测结果(第一次打开选择器要多等几百毫秒,但拿到的是真清单);
  * 命中且未过期直接返回;过期则重探 —— 探测本身很便宜,不做后台预热那套复杂度。
+ *
+ * 多人模式下**一次都不问宿主机 CLI**(§八「宿主机 CLI 订阅彻底抹去」):`grok models`
+ * 这类命令问的是宿主机那个登录账号,而那正是被隔离掉的东西 —— 执行器必须挂自己的
+ * 供应商才跑得起来,模型候选也就该来自供应商。留着这条路的代价是实打实的:任何一个
+ * 登录用户 POST 一次 refresh,就能让 server 用**自己进程的环境**(里面带着宿主的
+ * ANTHROPIC_API_KEY / XAI_API_KEY 之类)起一个 CLI 子进程,并把宿主账号的模型清单
+ * 端出来(第 2 轮审查 P1)。
+ *
+ * 这道判据排在**读缓存之前**:自用模式下探到的实时清单会在缓存里躺 6 小时,转成多人
+ * 之后不能继续被端出来。它自己也不写缓存 —— 那不是探测结果,没有保鲜期可言。
+ * 但登记 inflight 仍然是**同步**的(判据在 request 链里而不是函数开头),否则并发去重
+ * 与「陈旧探测不许覆盖新结果」两条都会因为多了一个 await 而失效。
  */
 export function modelCatalogFor(type: AgentType, force = false): Promise<CliModelCatalog> {
-  const cached = cache.get(type);
-  if (!force && fresh(cached)) return Promise.resolve(cached!.catalog);
-
   const running = inflight.get(type);
   if (running && !force) return running;
 
-  const request: Promise<CliModelCatalog> = probe(type)
-    .then((catalog) => {
+  const request: Promise<CliModelCatalog> = isMultiUser()
+    .then(async (multi): Promise<{ catalog: CliModelCatalog; probed: boolean }> => {
+      if (multi) {
+        // 只有本来就会去问的那几家才谈得上「没去问」;没有清单命令的 CLI 在两种模式下
+        // 拿到的是同一份快照,给它挂一句多人模式的说明只会平白多出一行噪音。
+        const wouldProbe = !!CLI_SPEC_BY_KEY[type]?.models;
+        return {
+          catalog: presetCatalog(type, wouldProbe ? { skipped: MULTI_USER_HOST_CLI_MODELS_HIDDEN } : {}),
+          probed: false,
+        };
+      }
+      const cached = cache.get(type);
+      if (!force && fresh(cached)) return { catalog: cached!.catalog, probed: false };
+      return { catalog: await probe(type), probed: true };
+    })
+    .then(({ catalog, probed }) => {
       // **只有当前那次探测有权写缓存**。force 会另起一次并顶掉 inflight,此时先前
       // 那次(可能还在等 10s 超时)结算得更晚 —— 不拦住的话它会把用户刚刷出来的
       // 实时清单覆盖回 preset,界面无缘无故退回快照,而且看着像「刷新按钮没用」。
-      if (inflight.get(type) === request) cache.set(type, { catalog, at: Date.now() });
+      //
+      // `probed` 那一半同样要紧:命中缓存也照写的话,时间戳会被每一次读续上,6 小时的
+      // 保鲜期就变成了「6 小时没人看」,永远轮不到重探。
+      if (probed && inflight.get(type) === request) cache.set(type, { catalog, at: Date.now() });
       return catalog;
     })
     .catch(() => presetCatalog(type, { error: "探测过程异常" }))

@@ -40,6 +40,13 @@ export interface CliModelCatalog {
   cliVersion: string | null;
   /** 探测失败的原因原文(截断)。成功或不支持时为 null。 */
   error: string | null;
+  /**
+   * 服务端**没去问**的原因;问过但失败是 `error`,两者不是一回事。
+   *
+   * 目前只有一种:多人模式下不碰宿主机 CLI(§八「宿主订阅彻底抹去」)——「我们故意
+   * 没问」被写成「问了但失败」的话,界面会催用户去点刷新,而刷新永远不会有别的结果。
+   */
+  skipped: string | null;
 }
 
 /**

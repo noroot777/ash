@@ -9,15 +9,37 @@
 //   ③ 每个 AgentType 都拿得到 catalog,`probeSupported` 与 spec.models 严格一致;
 //   ④ 没有清单命令 / 没装 CLI 时诚实降级:source==="preset" 且 models 等于内置快照;
 //   ⑤ 缓存命中不重复起子进程,force 会绕过缓存,降级结果比成功结果短命;
-//   ⑥ 本机装了 grok 时的**真实**探测(装了才断言,没装就跳过并说明——不拿本机环境当硬前提)。
+//   ⑥ 本机装了 grok 时的**真实**探测(装了才断言,没装就跳过并说明——不拿本机环境当硬前提);
+//   ⑦ 多人模式下**一次都不问宿主机 CLI**(§八),连自用模式下探到的缓存也不许端出来。
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { AGENT_TYPES } from "@ash/shared";
 import { CLI_MODEL_PRESETS, CLI_MODEL_PROBE_TYPES } from "@ash/shared/cli-presets";
-import { CLI_SPEC_BY_KEY } from "../src/executors/catalog/index.js";
-import { parseGrokModels } from "../src/executors/catalog/grok.js";
-import { parsePiModels } from "../src/executors/catalog/pi.js";
-import { catalogTtlMs, modelCatalogFor, modelCatalogs, normalizeModelList, resetModelCatalogCache } from "../src/executors/model-probe.js";
-import { probeBins } from "../src/executors/bin-probe.js";
+import { MULTI_USER_HOST_CLI_MODELS_HIDDEN } from "@ash/shared/multiuser";
+import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
+
+// ⑦ 要读实例模式(权威值在 app_settings 表里),所以这条测试也得自带临时库。
+//
+// 碰库的模块一律 **`await import`**,不能写成顶部的 `import`:那种写法会被提升到
+// 下面这句赋值**之前**执行,`db/index.ts` 在模块求值时就解析并打开了 ASH_DB ——
+// 于是测试连的是仓库默认的 `data/ash.db`,而 `requireTmpDb` 那道闸只看环境变量,
+// 一个字都拦不住。上面留的静态 import 都不碰库(@ash/shared 是纯常量与解析器)。
+const stage = mkdtempSync(join(tmpdir(), "ash-cli-models-"));
+process.env.ASH_DB ||= join(stage, "cli-models.db");
+requireTmpDb("test-cli-models");
+
+const { CLI_SPEC_BY_KEY } = await import("../src/executors/catalog/index.js");
+const { parseGrokModels } = await import("../src/executors/catalog/grok.js");
+const { parsePiModels } = await import("../src/executors/catalog/pi.js");
+const { catalogTtlMs, modelCatalogFor, modelCatalogs, normalizeModelList, resetModelCatalogCache } =
+  await import("../src/executors/model-probe.js");
+const { probeBins } = await import("../src/executors/bin-probe.js");
+const { ensureSchema } = await import("../src/db/index.js");
+const { setInstanceMode } = await import("../src/auth/mode.js");
+
+await ensureSchema();
 
 // ── ① 解析器:真实输出 ────────────────────────────────────────────────────
 // 2026-08-13 本机 `grok models`(v1.0.3)的原样输出。
@@ -165,9 +187,9 @@ for (const catalog of all) {
     cliVersion: null,
     error: null,
   };
-  const ok = { ...presetShape, source: "probe" as const, probeSupported: true };
-  const failed = { ...presetShape, source: "preset" as const, probeSupported: true };
-  const noCommand = { ...presetShape, source: "preset" as const, probeSupported: false };
+  const ok = { ...presetShape, source: "probe" as const, probeSupported: true, skipped: null };
+  const failed = { ...presetShape, source: "preset" as const, probeSupported: true, skipped: null };
+  const noCommand = { ...presetShape, source: "preset" as const, probeSupported: false, skipped: null };
   assert.ok(catalogTtlMs(failed) < catalogTtlMs(ok), "探测失败的缓存必须比成功的短命");
   assert.equal(catalogTtlMs(noCommand), catalogTtlMs(ok), "没有清单命令的 CLI 不该被反复重探");
 }
@@ -192,4 +214,46 @@ for (const catalog of all) {
   }
 }
 
+// ── ⑦ 多人模式:一次都不问宿主机 CLI ──────────────────────────────────────
+// `grok models` 问的是宿主机那个登录账号,而 §八 要抹掉的就是它。原来这条端点谁登录
+// 了都能打,server 用**自己进程的环境**(带着宿主的 XAI_API_KEY 之类)起一个 CLI 子
+// 进程,再把宿主账号的模型清单端出来(第 2 轮审查 P1)。
+//
+// 这一组放在最后:setInstanceMode("multi") 之后就回不去自用模式了。
+{
+  // 先在自用模式下把结果探进缓存 —— 转多人之后它不许再被端出来(判据必须排在
+  // 缓存**之前**,否则那份实时清单会在缓存里躺满 6 小时)。
+  resetModelCatalogCache();
+  const beforeSwitch = await modelCatalogFor("grok");
+  assert.equal(beforeSwitch.skipped, null, "自用模式下不该有「没去问」这回事");
+
+  await setInstanceMode("multi", join(stage, "root"));
+
+  const grok = await modelCatalogFor("grok");
+  assert.equal(grok.source, "preset", "多人模式下只能给内置快照");
+  assert.equal(grok.skipped, MULTI_USER_HOST_CLI_MODELS_HIDDEN, "得说清楚是**没去问**,不是问失败了");
+  assert.equal(grok.error, null, "没去问就不是失败:两个字段不能混着用");
+  assert.deepEqual([...grok.models], [...CLI_MODEL_PRESETS.grok], "内容就是内置快照,一个字不多");
+  assert.equal(grok.probedAt, null, "没探过就不该有探测时刻");
+  assert.equal(grok.cliVersion, null, "连版本都不该问 —— 那也要起一次子进程");
+  // force = 用户点刷新。它同样不许把子进程起起来。
+  const forced = await modelCatalogFor("grok", true);
+  assert.equal(forced.skipped, MULTI_USER_HOST_CLI_MODELS_HIDDEN, "刷新也不问");
+  assert.equal(forced.source, "preset", "刷新也只有快照");
+  // 整份清单端点同样如此,而不是只有单个 type 那条路被堵上。
+  for (const catalog of await modelCatalogs()) {
+    assert.equal(catalog.source, "preset", `${catalog.type}:多人模式下不该有探测结果`);
+    // 「没去问」只挂在**本来就会去问**的那几家上;别的 CLI 两种模式下都是同一份快照,
+    // 多挂一句说明只是噪音。
+    assert.equal(
+      catalog.skipped,
+      CLI_MODEL_PROBE_TYPES.has(catalog.type) ? MULTI_USER_HOST_CLI_MODELS_HIDDEN : null,
+      `${catalog.type}:「没去问」这句话只该出现在有清单命令的 CLI 上`,
+    );
+    assert.equal(catalog.available, false, `${catalog.type}:连装没装都不该去问(那也要起子进程)`);
+  }
+}
+
 console.log("cli-models 回归测试通过");
+await releaseTmpDb();
+rmSync(stage, { recursive: true, force: true });

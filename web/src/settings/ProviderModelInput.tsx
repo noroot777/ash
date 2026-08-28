@@ -197,7 +197,9 @@ export function ProviderModelInput({
           {/* 「能选到新模型」不等于「这个执行器已经在用它」:钉死的旧模型会一直跑下去,
               而清单刷新得再勤也不会去改用户的配置。差异只如实说一句,改不改由用户定。 */}
           {behindDefault && <span className="model-behind-default">· CLI 默认已是 {cli.catalog?.defaultModel}</span>}
-          {cli.catalog?.probeSupported && (
+          {/* 服务端说了「这次没去问」(多人模式不碰宿主机 CLI)就别摆刷新按钮:
+              它按下去只会把同一份内置清单再取一遍。 */}
+          {cli.catalog?.probeSupported && !cli.catalog.skipped && (
             <button
               type="button"
               className="model-refresh"

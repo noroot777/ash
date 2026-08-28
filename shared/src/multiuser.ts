@@ -168,6 +168,13 @@ export const MULTI_USER_CLI_BLOCKED = (cli: string): string =>
 export const MULTI_USER_CLI_BLOCKED_HINT = MULTI_USER_CLI_BLOCKED("该 CLI");
 export const MULTI_USER_NO_PROVIDER_HINT =
   "多人模式下必须给执行器挂一个供应商 —— 宿主机的 CLI 订阅已被隔离,不可借用";
+/**
+ * 「这个 CLI 现在有哪些模型」在多人模式下不问宿主机(§八)。
+ *
+ * `grok models` 这类命令问的是**宿主机那个登录账号**,而那正是要抹掉的东西:执行器
+ * 挂了供应商才跑得起来,模型候选也就该来自供应商的 `/v1/models`。
+ */
+export const MULTI_USER_HOST_CLI_MODELS_HIDDEN = "多人模式不问宿主机 CLI";
 
 // ── 「这一轮会换执行器」的确认闸(§八「不静默替换」)──────────────────────────
 

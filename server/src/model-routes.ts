@@ -5,6 +5,10 @@
 //   GET  /agents/models          —— 拿清单(命中缓存就直接返回,没有就现问一次)
 //   POST /agents/models/refresh  —— 用户点了「刷新」,绕过缓存重问
 // 探测与缓存的全部规矩在 `executors/model-probe.ts` 顶部,这里不复述。
+//
+// 这两条**不按 actor 收窄**,也不该收窄:多人模式下 `modelCatalogFor` 根本不去问宿主机
+// CLI(§八),回的是对谁都一样的内置快照;自用模式下本来就没有「谁」这回事。别在这里
+// 补第二道判据 —— 边界是「不起那个子进程」,不是「谁能看见结果」。
 import type { Hono } from "hono";
 import type { AgentType } from "@ash/shared";
 import { AGENT_TYPES } from "@ash/shared";
