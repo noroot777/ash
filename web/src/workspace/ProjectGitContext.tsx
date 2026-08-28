@@ -16,6 +16,7 @@ export function ProjectGitContext({
   projectId,
   health,
   project = null,
+  canManage,
   onChanged,
   onOpenTerminal,
 }: {
@@ -24,6 +25,8 @@ export function ProjectGitContext({
   // 左边那颗按钮读着「任务模式」时，这条分支属于谁就没人说了 —— 传项目进来，胶囊自己
   // 把归属补在分支前面。单项目态传 null：旁边就是项目名，再标一次是重复。
   project?: ProjectView | null;
+  /** 项目管理员 / 实例管理员才动得了主仓，理由见 `projectGitModel.ts` 的 `roleBlocker`。 */
+  canManage: boolean;
   onChanged: () => void;
   onOpenTerminal: (() => void) | null;
 }) {
@@ -61,7 +64,7 @@ export function ProjectGitContext({
         <CaretDown size={8} weight="bold" aria-hidden="true" />
       </button>
       {open && (
-        <ProjectGitPanel projectId={projectId} onChanged={onChanged} onOpenTerminal={onOpenTerminal} />
+        <ProjectGitPanel projectId={projectId} canManage={canManage} onChanged={onChanged} onOpenTerminal={onOpenTerminal} />
       )}
     </span>
   );

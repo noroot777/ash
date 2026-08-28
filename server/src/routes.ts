@@ -3,17 +3,12 @@ import type { Context } from "hono";
 import { stream, streamSSE } from "hono/streaming";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { eq } from "drizzle-orm";
-import { readFile } from "node:fs/promises";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join, basename, extname } from "node:path";
-import { UPLOADS_DIR } from "./paths.js";
 import type {
   Group,
   AgentType,
   LlmProvider,
   LlmProtocol,
 } from "@ash/shared";
-import { maxBytesFor, attachmentKind } from "@ash/shared";
 import type { SearchStreamLine } from "@ash/shared/search";
 import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@ash/shared/cli-presets";
 import { normalizeCliConfigOverrides, cliConfigOverrideErrors, readCliConfigOverrides } from "@ash/shared/cli-overrides";
@@ -34,6 +29,7 @@ import { mountWorkflowRoutes } from "./workflows.js";
 import { mountPreviewRoutes } from "./preview-routes.js";
 import { parseAppSettingsPatch } from "./app-settings.js";
 import { hostInfo } from "./platform.js";
+import { secretsEqual } from "./openai-converter/common.js";
 import { mountSkillRoutes } from "./skill-routes.js";
 import { mountAnthropicContext1mRoutes, stripContext1mSuffix } from "./anthropic-context-1m.js";
 import { mountModelRoutes } from "./model-routes.js";
@@ -55,6 +51,7 @@ import { directoryPickerSupport, mountDirectoryPickerRoutes } from "./dir-picker
 import { mountProjectCloneRoutes } from "./project-clone.js";
 import { mountProjectRoutes } from "./project-routes.js";
 import { mountFsBrowseRoutes } from "./fs-browse.js";
+import { mountUploadRoutes } from "./upload-routes.js";
 import { mountAuthRoutes } from "./auth/routes.js";
 import { mountUserRoutes } from "./auth/user-routes.js";
 import { mountPersonalCliRoutes } from "./auth/personal-routes.js";
@@ -79,6 +76,7 @@ mountDirectoryPickerRoutes(api);
 mountFsBrowseRoutes(api);
 mountProjectRoutes(api);
 mountProjectCloneRoutes(api);
+mountUploadRoutes(api);
 
 // ── health ───────────────────────────────────────────────────────────────
 // `pid` 是给 scripts/restart.mjs 认人用的:它重启完要确认「端口上应答的是我刚起的
@@ -89,7 +87,27 @@ api.get("/health", (c) => c.json({ ok: true, ts: now(), pid: process.pid }));
 // 「现在重启会打断谁」。scripts/restart.mjs 的安全闸靠它决定拦不拦 —— 只数
 // running/queued 的个数已经不对了：agent 输出走文件之后，多数单飞任务重启不会断。
 // 动态 import：这条路只在人工重启时被打一次，没必要把 reattach 那条链拉进启动路径。
+//
+// 多人模式下打这条的是**宿主机上的运维者**,他手里没有任何网页登录态,所以闸把它按
+// 「路径形状放行、凭证在路由内校验」处理(同 provider relay 的先例,见
+// auth/middleware.ts `HOST_MAINTENANCE_PATHS`)。凭证是单实例锁文件里那串 token:
+// 文件 0600,读得到它 = 读得到 ash 数据目录 = 本来就能直接读库,所以这里回任务标题
+// 不额外扩大暴露面。反过来,**登录用户照常能打**:前端也会用这条。
 api.get("/restart-impact", async (c) => {
+  const { isMultiUser } = await import("./auth/mode.js");
+  if (await isMultiUser()) {
+    const { actorOf } = await import("./auth/context.js");
+    const anonymous = actorOf(c).kind === "anonymous";
+    if (anonymous) {
+      const { liveLockToken } = await import("./singleton.js");
+      const expected = liveLockToken();
+      const given = c.req.header("x-ash-host-token")?.trim() ?? "";
+      // 没拿到锁(ASH_ALLOW_MULTI=1)时这条凭证根本不存在 —— 拒绝,别拿空串对空串放行。
+      if (!expected || !secretsEqual(given, expected)) {
+        return c.json({ error: "请先登录", needsAuth: true }, 401);
+      }
+    }
+  }
   const { restartImpact } = await import("./reattach.js");
   return c.json(await restartImpact());
 });
@@ -178,81 +196,6 @@ api.get("/search/stream", async (c) => {
     });
     await tail;
   });
-});
-
-// ── attachment uploads (pasted into the composer / reply box) ────────────────
-// Agents take text on stdin, not binaries — so we persist the pasted image/file
-// and hand its absolute path to the agent (it reads it with the Read tool). See
-// attachmentsPrompt. ANY type is accepted; size caps mirror Claude Code / Codex
-// (vision images ≤5MB, any other file ≤20MB — maxBytesFor).
-const MIME_EXT: Record<string, string> = {
-  "image/png": "png",
-  "image/jpeg": "jpg",
-  "image/gif": "gif",
-  "image/webp": "webp",
-  "image/svg+xml": "svg",
-  "application/pdf": "pdf",
-  "text/plain": "txt",
-  "text/csv": "csv",
-  "application/json": "json",
-};
-const EXT_MIME: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".svg": "image/svg+xml",
-  ".pdf": "application/pdf",
-  ".txt": "text/plain; charset=utf-8",
-  ".csv": "text/csv; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-};
-
-// Keep stored filenames to a single safe path segment and bounded length.
-const sanitizeName = (name: string): string =>
-  (name || "").replace(/[^A-Za-z0-9._-]/g, "_").replace(/^[._-]+/, "").slice(-80);
-
-// Accept a base64 data URL of any type, persist it, return the absolute path (for
-// the prompt) plus a url (preview thumbnail) and the kind (image vs file → which
-// chip the web shows). The agent-facing filename keeps the original name when the
-// client sent one, prefixed with an id so concurrent pastes never collide.
-api.post("/uploads", async (c) => {
-  const { dataUrl, name } = await c.req.json<{ dataUrl?: string; name?: string }>();
-  const m = /^data:([^;,]+);base64,(.+)$/s.exec(dataUrl ?? "");
-  if (!m) return c.json({ error: "需要 data:<mime>;base64 格式的数据" }, 400);
-  const mime = m[1];
-  const bytes = Buffer.from(m[2], "base64");
-  const cap = maxBytesFor(mime);
-  if (bytes.length > cap) {
-    return c.json(
-      { error: `文件过大：${(bytes.length / 1048576).toFixed(1)}MB，上限 ${Math.round(cap / 1048576)}MB`, max: cap },
-      413,
-    );
-  }
-  const display = sanitizeName(name ?? "") || `pasted.${MIME_EXT[mime] ?? "bin"}`;
-  mkdirSync(UPLOADS_DIR, { recursive: true });
-  const file = `${id()}-${display}`;
-  writeFileSync(join(UPLOADS_DIR, file), bytes);
-  return c.json({
-    id: file,
-    path: join(UPLOADS_DIR, file),
-    url: `/api/uploads/${file}`,
-    name: display,
-    kind: attachmentKind(mime),
-  });
-});
-
-// Serve a stored attachment back (thumbnail preview). basename() strips any path
-// so `..` can't escape UPLOADS_DIR. Non-previewable types fall back to octet-stream.
-api.get("/uploads/:file", async (c) => {
-  const file = basename(c.req.param("file"));
-  try {
-    const body = await readFile(join(UPLOADS_DIR, file));
-    return c.body(body, 200, { "content-type": EXT_MIME[extname(file).toLowerCase()] ?? "application/octet-stream" });
-  } catch {
-    return c.json({ error: "not found" }, 404);
-  }
 });
 
 // ── agents (executor registry, §5) ───────────────────────────────────────────

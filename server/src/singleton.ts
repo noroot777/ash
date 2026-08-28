@@ -16,6 +16,9 @@ const LOCK_VERSION = 1;
 const LOCK_SUFFIX = ".ash.lock";
 const START_TIME_TOLERANCE_MS = 10_000;
 
+/** 本进程拿到锁时写进去的 token（见 liveLockToken）。没拿到锁就一直是 null。 */
+let ownLockToken: string | null = null;
+
 type LockFile = {
   version: number;
   pid: number;
@@ -54,6 +57,21 @@ export type SingletonLock = {
 
 export function singletonLockFileForDb(dbFile = resolveAshDbFile()) {
   return `${dbFile}${LOCK_SUFFIX}`;
+}
+
+/**
+ * 本进程写进锁文件的那串随机 token。
+ *
+ * 它顺带是**宿主机运维者**的凭证:锁文件按 0600 落盘(见 `writeOwnLock` 的 `openSync`),
+ * 读得到它 = 读得到 ash 的数据目录 = 本来就能直接读库。多人模式下 `scripts/restart.mjs`
+ * 拿它去打 `/api/restart-impact` —— 那个脚本跑在宿主机上,手里没有任何网页登录态,而
+ * 那条端点被鉴权闸挡住时它只会把「会被打断的任务数」算成 0,安全闸静默失效
+ * (第 1 轮审查 P1)。
+ *
+ * 没拿到锁(`ASH_ALLOW_MULTI=1`)时是 null:那种情况下这条凭证不存在,端点该拒就拒。
+ */
+export function liveLockToken(): string | null {
+  return ownLockToken;
 }
 
 export function acquireDbSingletonLock(options: { port?: number | null } = {}): SingletonLock | null {
@@ -112,6 +130,7 @@ function writeOwnLock(dbFile: string, lockFile: string, port: number | null): Si
     argv: process.argv,
     token: randomUUID(),
   };
+  ownLockToken = lock.token;
 
   for (;;) {
     try {

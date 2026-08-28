@@ -83,12 +83,14 @@ export function ProjectGitBranchList({
   state,
   busy,
   loading,
+  canManage,
   onCheckout,
 }: {
   rows: ProjectGitBranchRow[];
   state: ProjectGitState | null;
   busy: boolean;
   loading: boolean;
+  canManage: boolean;
   onCheckout: (branch: string) => void;
 }) {
   return (
@@ -97,7 +99,7 @@ export function ProjectGitBranchList({
         <BranchRow
           key={row.name}
           row={row}
-          blocked={checkoutBlocker(row, state)}
+          blocked={checkoutBlocker(row, state, canManage)}
           busy={busy}
           onCheckout={() => onCheckout(row.name)}
         />

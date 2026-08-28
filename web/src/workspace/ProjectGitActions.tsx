@@ -47,10 +47,13 @@ export function ActionButton({
 export function ProjectGitActions({
   projectId,
   git,
+  canManage,
   onChanged,
 }: {
   projectId: string;
   git: ProjectGitHandle;
+  /** 项目管理员 / 实例管理员才能动主仓，理由见 `projectGitModel.ts` 的 `roleBlocker`。 */
+  canManage: boolean;
   /** 操作成功后通知外面：胶囊上的分支名是从 `ProjectHealth` 来的，不刷就停在操作之前。 */
   onChanged: () => void;
 }) {
@@ -68,9 +71,9 @@ export function ProjectGitActions({
     if (await git.run(kind, action)) onChanged();
   };
 
-  const pullStop = pullBlocker(state);
+  const pullStop = pullBlocker(state, canManage);
   const pullBusy = busy === "pull";
-  const pushStop = pushBlocker(state);
+  const pushStop = pushBlocker(state, canManage);
   const pushBusy = busy === "push";
 
   // 门禁同时落在按钮和提交函数上：菜单是先展开、后点的，展开期间状态可能已经变了（另一次
@@ -94,7 +97,7 @@ export function ProjectGitActions({
     <div className="project-git-panel__tools">
       <ActionButton
         label="更新远端信息（fetch --prune）"
-        blocked={fetchBlocker(state)}
+        blocked={fetchBlocker(state, canManage)}
         busy={busy === "fetch"}
         onClick={() => void run("fetch", () => api.projectGitFetch(projectId, null))}
       >

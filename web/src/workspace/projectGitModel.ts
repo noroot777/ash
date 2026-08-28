@@ -37,6 +37,20 @@ export function dirtyText(state: ProjectGitState | null): string | null {
   return parts.length ? parts.join(" · ") : null;
 }
 
+/**
+ * 不是项目管理员 → 这一屏整个只读。
+ *
+ * 主仓是**所有任务共用**的：切分支会改变新建任务的 base，也会改变没有独立 worktree 的
+ * 任务此刻看到的内容；拉取 / 推送动的是同一份历史。按权限表（§四「项目设置」那一行）
+ * 这些只给项目管理员与实例管理员，服务端也是这么拦的（`project-git-routes.ts` 的共用
+ * handler，第 1 轮审查 P1）。
+ *
+ * 写在 blocker 里而不是各调用点 OR 一下：blocker 是这一屏唯一的门禁出口，进了它就漏不
+ * 掉；而且 `canManage` 是**必填参数**，将来新加的调用点编译期就得表态。
+ */
+const roleBlocker = (canManage: boolean): string | null =>
+  canManage ? null : "主仓所有任务共用，只有项目管理员能改";
+
 /** 会改工作树的操作（切分支 / 拉取）此刻能不能做。能做返回 null。 */
 export function worktreeBlocker(state: ProjectGitState | null, what: string): string | null {
   if (!state?.isRepo) return "这个项目的路径不是 Git 仓库";
@@ -51,7 +65,9 @@ function midwayBlocker(state: ProjectGitState, what: string): string | null {
   return state.operation ? `仓库正停在 ${state.operation} 中途，先到终端收尾再${what}` : null;
 }
 
-export function pullBlocker(state: ProjectGitState | null): string | null {
+export function pullBlocker(state: ProjectGitState | null, canManage: boolean): string | null {
+  const role = roleBlocker(canManage);
+  if (role) return role;
   if (!state?.isRepo) return "这个项目的路径不是 Git 仓库";
   if (state.branch.detached || !state.branch.head) return "当前是游离 HEAD，没有可拉取的分支";
   if (!state.branch.upstream) return "这条分支还没有 upstream，先推送一次把它发布出去";
@@ -60,21 +76,36 @@ export function pullBlocker(state: ProjectGitState | null): string | null {
 
 // 推送不看工作区脏不脏（推的是已提交的历史），但看 merge / rebase 中途：那时候的 HEAD
 // 是半成品，发布出去等于把用户还没认可的历史推给别人。
-export function pushBlocker(state: ProjectGitState | null): string | null {
+export function pushBlocker(state: ProjectGitState | null, canManage: boolean): string | null {
+  const role = roleBlocker(canManage);
+  if (role) return role;
   if (!state?.isRepo) return "这个项目的路径不是 Git 仓库";
   if (state.branch.detached || !state.branch.head) return "当前是游离 HEAD，没有可推送的分支";
   if (!state.branch.upstream && !state.remotes.length) return "这个仓库没有配置 Git 远端，暂时不能发布分支";
   return midwayBlocker(state, "推送");
 }
 
-export function fetchBlocker(state: ProjectGitState | null): string | null {
+export function fetchBlocker(state: ProjectGitState | null, canManage: boolean): string | null {
+  const role = roleBlocker(canManage);
+  if (role) return role;
   if (!state?.isRepo) return "这个项目的路径不是 Git 仓库";
   if (!state.remotes.length) return "这个仓库没有配置 Git 远端";
   return null;
 }
 
-/** 某一条分支切不过去的原因。当前分支返回 null（点它是无害的幂等操作）。 */
-export function checkoutBlocker(row: ProjectGitBranchRow, state: ProjectGitState | null): string | null {
+/**
+ * 某一条分支切不过去的原因。当前分支对管理员返回 null（点它是无害的幂等操作）。
+ *
+ * 角色那一道排在 `row.current` **前面**：点当前分支照样会发一次 checkout 请求，成员发出去
+ * 只会换回一个 403 弹窗。
+ */
+export function checkoutBlocker(
+  row: ProjectGitBranchRow,
+  state: ProjectGitState | null,
+  canManage: boolean,
+): string | null {
+  const role = roleBlocker(canManage);
+  if (role) return role;
   if (row.current) return null;
   if (row.worktree) return `正被另一个工作区占着：${row.worktree}`;
   return worktreeBlocker(state, "切换分支");

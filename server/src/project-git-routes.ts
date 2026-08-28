@@ -24,15 +24,24 @@ import {
 } from "./git-credentials.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { ScmOperationError } from "./scm-paths.js";
+import { actorOf, authErrorResponse } from "./auth/context.js";
+import { requireProjectAdmin } from "./auth/visibility.js";
 
 // 项目主仓的 git 面板（侧栏那颗分支胶囊）。跟任务面板的
 // `scm-routes.ts` 是**两个尺度**：那边的工作目录由 taskFileRoot 一路推导出来，这边的
 // 目标永远只有一个——项目行上登记的 `repoPath`，没有回退档，也就没有「以为在改自己的
 // worktree、其实在改主仓」那类错位。语义在 `git-project-ops.ts` 顶部。
 //
-// 写侧只有一道门禁：**预览实例一律拒绝**。预览连的是主库快照，项目行里的 `repo_path`
-// 指向的是真仓库（`preview-instance.ts` 顶部），在沙盒里点一下切分支会真的把用户主仓的
-// HEAD 挪走。读侧不拦——看是安全的。
+// 写侧两道门禁：
+//  ① **预览实例一律拒绝**。预览连的是主库快照，项目行里的 `repo_path` 指向的是真仓库
+//     （`preview-instance.ts` 顶部），在沙盒里点一下切分支会真的把用户主仓的 HEAD 挪走。
+//  ② **项目管理员/实例管理员**（多人模式，§四 权限表「项目设置」那一行）。这一屏改的是
+//     整个项目共用的提交署名、SSH key、HTTPS 令牌，以及主仓自己的分支和工作树 —— 都是
+//     项目设置,不是「在可见项目里派任务/回复」。普通成员改一次,所有人所有任务的
+//     worktree 都跟着变(第 1 轮审查 P1)。自用模式下 `projectRoleOf` 恒为 admin,行为不变。
+//
+// **读侧不拦**：看仓库状态是安全的，凭证读回来也只有用户名（`git-credentials.ts` 里
+// 令牌只写不读）。能不能改和能不能看是两件事，不捆在一起。
 //
 // 这里没有任务面板那三道（只读回退 / 归档冻结 / 任务在飞）：主仓不属于任何一个任务，
 // 归档与否是任务的属性。至于「别的任务此刻正踩在主仓上」，挡它的是 `withRepoLock` 排队
@@ -84,14 +93,24 @@ export function mountProjectGitRoutes(api: Hono) {
   });
 
   /**
-   * 写型请求共用的外壳：预览实例拒绝 → 项目存在性 → 解析 body → 统一错误映射。
-   * `run` 拿得到项目 id，网络操作靠它取这个项目自己的凭证。
+   * 写型请求共用的外壳：预览实例拒绝 → **项目管理员** → 项目存在性 → 解析 body →
+   * 统一错误映射。`run` 拿得到项目 id，网络操作靠它取这个项目自己的凭证。
+   *
+   * 权限那一道走**共用外壳**而不是逐条挂:七条写路由(checkout/fetch/pull/push、
+   * git-config、git-credential 的 PUT 与 DELETE)全从这里过,漏一条的可能性就没了。
    */
   const handler = (
     run: (repoPath: string, body: Record<string, unknown>, projectId: string) => Promise<unknown>,
   ) => async (c: Context) => {
     if (IS_PREVIEW_INSTANCE) return c.json({ error: previewRefusal("项目 Git 操作") }, 403);
     const id = c.req.param("id") ?? "";
+    try {
+      await requireProjectAdmin(actorOf(c), id);
+    } catch (error) {
+      const mapped = authErrorResponse(error);
+      if (mapped) return c.json(mapped.body, mapped.status);
+      throw error;
+    }
     const repoPath = await repoPathOf(id);
     if (repoPath === null) return c.json({ error: "not found" }, 404);
     const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));

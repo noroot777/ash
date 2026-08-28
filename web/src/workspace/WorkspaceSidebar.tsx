@@ -115,6 +115,7 @@ export function WorkspaceSidebar({
               projectId={currentProject.id}
               health={currentProject.health}
               project={taskMode ? currentProject : null}
+              canManage={currentProject.myRole === "admin"}
               onChanged={onGitChanged}
               onOpenTerminal={onOpenTerminal}
             />

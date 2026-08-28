@@ -39,7 +39,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
-import { IS_WINDOWS, isPidAlive, killPid, listenerPids, localJson, pidsRunningScript, sleep } from "./platform.mjs";
+import { IS_WINDOWS, isPidAlive, killPid, listenerPids, localGet, localJson, pidsRunningScript, sleep } from "./platform.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces } from "./workspace-check.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
@@ -82,22 +82,83 @@ function lockOwnerPid() {
 }
 
 /**
+ * 宿主机运维者的凭证:锁文件里那串 token(server 自己写的,文件 0600)。
+ *
+ * 多人模式下 `/api/restart-impact` 会挡住未登录请求 —— 而跑这个脚本的人手上没有任何
+ * 网页登录态。读得到这个 token = 读得到 ash 的数据目录 = 本来就能直接读库,所以拿它
+ * 当「我就是这台机器的运维者」的证明既够用也不额外扩大暴露面(server/src/singleton.ts
+ * `liveLockToken`)。
+ */
+function hostToken() {
+  try {
+    const lock = JSON.parse(readFileSync(LOCK_FILE, "utf8"));
+    return lock?.port === PORT && typeof lock.token === "string" ? lock.token : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 「现在重启会真正打断几个任务」。**不是** running/queued 的个数 —— agent 的输出
  * 走文件之后（server/src/executors/detached.ts），单飞任务的进程压根不随 server 死，
  * 重启后按 pid+offset 接管，全程无感；团队调度台进程会断但会自动 --resume 接回。
  * 判据单点在 server 的 /api/restart-impact，跟真正接管时用同一条口径，免得这边说能
- * 接、那边又不认。server 没起来/查不到 → 各类算 0，照旧重启。
+ * 接、那边又不认。server 没起来 → 各类算 0，照旧重启。
+ *
+ * **「服务端拒绝回答」不是「没有会被打断的任务」**：多人模式下这条端点要凭证
+ * （见 hostToken），拿不到就得 fail closed —— 否则安全闸静默变成 0，不加 FORCE 的
+ * 重启照样打断 queued 任务，命令还不提示（第 1 轮审查 P1）。
  */
 async function impact() {
-  return (await localJson(PORT, "/api/restart-impact")) ?? {};
+  const token = hostToken();
+  const { status, json } = await localGet(
+    PORT,
+    "/api/restart-impact",
+    2000,
+    token ? { "x-ash-host-token": token } : undefined,
+  );
+  if (json) return json;
+  // 连不上(status === null)= server 没在跑,本来就没有任务会被打断,照旧算 0。
+  if (status === null) return {};
+  return { refused: status };
 }
 
 function countOf(data, field) {
   return Array.isArray(data[field]) ? data[field].length : 0;
 }
 
+/** 服务端答了、但没给出判据 —— 只有这种情况才把「查不到」当成危险信号。 */
+function refusedStatus(data) {
+  return typeof data.refused === "number" ? data.refused : null;
+}
+
+/** build 那一步跑过没有 —— 只用来让中止提示说得准（见 impactOrAbort）。 */
+let built = false;
+
+/**
+ * 问一次判据；服务端拒答就当场中止（FORCE 例外）。
+ *
+ * 每个读判据的地方都得走它 —— WAIT 轮询中途凭证失效(比如 server 换了锁)同样会让
+ * 下游把 busy 读成 0，「只在第一处判一次」漏得掉这条路。
+ */
+async function impactOrAbort() {
+  const data = await impact();
+  const refused = refusedStatus(data);
+  if (refused === null || FORCE) return data;
+  say(`  ✋ 问不到「重启会打断谁」(服务端回 ${refused}) —— 已中止,未重启服务端。`);
+  say(`     多人模式下这条判据要宿主机凭证:确认 ${LOCK_FILE} 读得到`);
+  say("     (它由 server 自己写、权限 0600;换个用户跑这个脚本就读不到了)。");
+  say("     明知可能打断也要重启:  FORCE=1 npm run restart");
+  // WAIT 那一档在 build 之前就问,所以这句必须按实际走到哪儿说 —— 说反了会让人
+  // 以为新代码已经落盘。
+  say(built
+    ? `     (新代码已 build 进 dist,不会丢;只是暂不重启 :${PORT}。MCP 也未动。)`
+    : "     (什么都没动:没 build、没重启,跑的还是旧代码。)");
+  process.exit(2);
+}
+
 async function interruptCount() {
-  return countOf(await impact(), "interrupted");
+  return countOf(await impactOrAbort(), "interrupted");
 }
 
 /** WAIT=1 用:轮询到「不再有会被打断的任务」为止,把「人守着等」换成「脚本替你等」。 */
@@ -156,6 +217,7 @@ npm(["install", "--no-audit", "--no-fund"], "✕ 依赖同步失败,已中止—
 
 say("▶ 1/3 构建 (shared → web → server → mcp)…");
 npm(["run", "build"], "✕ 构建失败,已中止——服务端未重启,跑的还是旧代码。");
+built = true;
 
 say(`▶ 2/3 重启 :${PORT} 服务端…`);
 // 端口 ∪ 锁文件:两条线索都用上,少一条就可能漏掉旧进程(见 lockOwnerPid 的注释)。
@@ -163,12 +225,13 @@ const owner = lockOwnerPid();
 const old = [...new Set([...listenerPids(PORT), ...(owner ? [owner] : [])])];
 if (old.length) {
   // 别盲目打断会被打断的任务。判据是「重启会**真断**几个」而不是「有几个在跑」。
-  let data = await impact();
+  // 问不出判据就中止(impactOrAbort):静默按 0 继续正是这条闸失效的样子。
+  let data = await impactOrAbort();
   let busy = countOf(data, "interrupted");
   // build 少说几十秒,这期间完全可能又有任务起跑 —— WAIT 模式再排一轮。
   if (busy > 0 && WAIT && !FORCE) {
     await drainWait();
-    data = await impact();
+    data = await impactOrAbort();
     busy = countOf(data, "interrupted");
   }
   if (busy > 0 && !FORCE) {
@@ -250,12 +313,17 @@ if (ready) {
 
 say("▶ 3/3 刷新 ash MCP…");
 // 谁手里还握着 MCP 通道。**在服务端重启完之后才问**:此刻接管已经做完,答案是最新的。
-// 拿不到(server 没起来/老版本没这个字段)算 0,退回原来的行为。
+// server 没起来/老版本没这个字段算 0,退回原来的行为;**服务端拒答则当作「有人握着」**
+// —— 掐断在跑的 agent 是不可逆的,不知道就别掐(第 1 轮审查 P1 的同一条判据)。
 const after = await impact();
+const mcpUnknown = refusedStatus(after) !== null;
 const holders = countOf(after, "mcpDisrupted");
 if (process.env.SKIP_MCP) {
   say("  ⏭ SKIP_MCP:跳过——不动 MCP 子进程,正在用 ash MCP 的会话不会被打断。");
   say("     (代价:这些会话仍跑旧 mcp/dist;只有改了 mcp/ 才需去掉 SKIP_MCP 再跑一次。)");
+} else if (mcpUnknown && !process.env.FORCE_MCP && !FORCE) {
+  say(`  ⏭ 问不到「谁还握着 MCP 通道」(服务端回 ${refusedStatus(after)}),已跳过刷新 —— 宁可让旧会话跑旧 mcp,也不冒险掐断在跑的 agent。`);
+  say("     确定要刷新:  FORCE_MCP=1 npm run restart");
 } else if (holders > 0 && !process.env.FORCE_MCP && !FORCE) {
   // 默认不掐断正在干活的 agent:刷新 MCP 的收益只是"旧会话用上新 mcp 代码",
   // 代价却是它这一轮的交卷调用当场失败(2026-08-06 验证白跑)。收益远小于代价,

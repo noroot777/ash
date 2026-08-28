@@ -40,6 +40,12 @@ const PUBLIC_API_PATHS = new Set([
   "/api/handoff/import",
   "/api/handoff/return/ping",
   "/api/handoff/return/import",
+  // 本机公开身份(指纹 + 短指纹 + 主机名)。它长在「本机设置面」那一组里,但**读它的
+  // 是对端**:源机的 `probePeerIdentity` 不签名、不带任务 id 地拉一次,好把用户填的
+  // 主机名映射到指纹。挡住它 = 多人目标机在对方的「目标机」列表里永远探不出身份
+  // (第 1 轮审查 P1)。放行的代价是零:公钥指纹本来就是拿去两边肉眼核对的东西,
+  // 同一台机器上更公开的 `/handoff/ping` 早就在这张名单里了。
+  "/api/handoff/identity",
 ]);
 
 /**
@@ -65,6 +71,34 @@ const PUBLIC_API_PREFIXES = ["/api/handoff/proxy/", "/api/auth/claim/", "/api/au
 const PROVIDER_RELAY_PATH = /^\/api\/llm-providers\/[^/]+\/(?:convert|context-1m)\/v1(?:\/|$)/;
 
 /**
+ * 接力协商分支尖:`/api/handoff/projects/:id/refs`。带路径参数,进不了上面那张精确清单,
+ * 所以照 relay 的先例写成**路径形状**。
+ *
+ * 打它的同样是对端的 ash 服务端(`handoff.ts` 打 git bundle 之前问一次「你已经有哪些
+ * 提交」),手上只有机器签名和 §十一 的 peer user key,不可能有本机 cookie —— 不放行,
+ * 多人目标机会在通用闸上先回 401,路由自己那三道更严的闸(来源机已批准 → 验签 →
+ * 那个账号看不看得见这个项目)一条都到不了,多人↔多人的 Git 项目接力整个走不通
+ * (第 1 轮审查 P1)。
+ *
+ * **必须钉死到 `/refs` 那一段**:放 `/api/handoff/projects/` 前缀会把将来长在这底下的
+ * 任何东西一起免登录。凭证仍在路由内校验,这里放行的只是形状。
+ */
+const PEER_REFS_PATH = /^\/api\/handoff\/projects\/[^/]+\/refs$/;
+
+/**
+ * 「现在重启会打断谁」:`scripts/restart.mjs` 的安全闸靠它。跑这个脚本的是**宿主机
+ * 上的运维者**,他手上没有任何网页登录态,而这条端点被挡住时脚本只会拿到 null、把
+ * 「会被打断的任务数」算成 0 —— 闸静默失效,不加 FORCE 的重启照样打断 queued 任务
+ * (第 1 轮审查 P1)。
+ *
+ * 同样只放行**形状**:响应里带着任务标题(多人模式下是跨人数据),所以路由自己要校验
+ * `x-ash-host-token` —— 单实例锁文件里那串随机 token,只有读得到 ash 数据目录的人拿得到
+ * (见 routes.ts 的 `/restart-impact` 与 singleton.ts `liveLockToken`)。
+ */
+const HOST_MAINTENANCE_PATHS = new Set(["/api/restart-impact"]);
+
+
+/**
  * SPA 壳:登录页、领取页本身要打得开。**壳内不得内嵌任何数据**(§三)——
  * index.html 是一份静态构建产物,数据一律走 `/api/*`,所以放行它不泄露任何东西。
  */
@@ -83,7 +117,9 @@ function isSpaShell(path: string): boolean {
 export const isPublicApiPath = (path: string): boolean =>
   PUBLIC_API_PATHS.has(path)
   || PUBLIC_API_PREFIXES.some((p) => path.startsWith(p))
-  || PROVIDER_RELAY_PATH.test(path);
+  || PROVIDER_RELAY_PATH.test(path)
+  || PEER_REFS_PATH.test(path)
+  || HOST_MAINTENANCE_PATHS.has(path);
 
 // 写方法要过 CSRF 检查。GET/HEAD 在这套 API 里没有副作用(唯一的例外
 // `/host/pick-directory` 是 POST,而且它自己另有一道同样的闸)。

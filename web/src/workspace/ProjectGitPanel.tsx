@@ -17,10 +17,13 @@ import { branchLabel, dirtyText } from "./projectGitModel.ts";
 
 export function ProjectGitPanel({
   projectId,
+  canManage,
   onChanged,
   onOpenTerminal,
 }: {
   projectId: string;
+  /** 项目管理员 / 实例管理员才动得了主仓，理由见 `projectGitModel.ts` 的 `roleBlocker`。 */
+  canManage: boolean;
   onChanged: () => void;
   onOpenTerminal: (() => void) | null;
 }) {
@@ -54,7 +57,7 @@ export function ProjectGitPanel({
             </small>
           )}
         </span>
-        <ProjectGitActions projectId={projectId} git={git} onChanged={onChanged} />
+        <ProjectGitActions projectId={projectId} git={git} canManage={canManage} onChanged={onChanged} />
       </header>
 
       {state?.operation && (
@@ -93,12 +96,14 @@ export function ProjectGitPanel({
         state={state}
         busy={git.busy === "checkout"}
         loading={git.loading}
+        canManage={canManage}
         onCheckout={(branch) => void checkout(branch)}
       />
 
       <p className="project-git-panel__note">
-        这里改的是项目主仓，所有任务共用它：切换分支会改变新建任务的默认 base 分支，也会改变
-        没有独立 worktree 的任务看到的内容。已经建好的 worktree 不受影响。
+        {canManage
+          ? "这里改的是项目主仓，所有任务共用它：切换分支会改变新建任务的默认 base 分支，也会改变没有独立 worktree 的任务看到的内容。已经建好的 worktree 不受影响。"
+          : "这里是项目主仓的只读视图。切分支 / 拉取 / 推送会改变所有人新建任务的默认 base，也会改变没有独立 worktree 的任务看到的内容，所以只有项目管理员能动。"}
       </p>
     </div>
   );

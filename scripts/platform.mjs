@@ -193,23 +193,39 @@ export function isPidAlive(pid) {
  * `node:http` 不读任何代理环境变量，这条路是确定的（fetch 在 Node 24 起可以被
  * `NODE_USE_ENV_PROXY` 打开，不确定）。
  */
-export function localJson(port, path, timeoutMs = 2000) {
+export function localJson(port, path, timeoutMs = 2000, headers = undefined) {
+  return localGet(port, path, timeoutMs, headers).then((r) => r.json);
+}
+
+/**
+ * 同一条请求，但**把「连不上」和「被拒」分开**回给调用方。
+ *
+ * `localJson` 把两者一律压成 null，调用方只能按「查不到 → 当 0 处理」继续 —— 对探活
+ * 是对的，对**安全闸**是致命的：多人模式下 `/api/restart-impact` 会 401，重启脚本于是
+ * 把「会被打断的任务数」算成 0，不加 FORCE 也照样杀（第 1 轮审查 P1）。要 fail closed
+ * 的地方用这个，看 `status`：null = 连不上，数字 = 服务端真的答了。
+ */
+export function localGet(port, path, timeoutMs = 2000, headers = undefined) {
   return new Promise((resolve) => {
-    const req = request({ host: "127.0.0.1", port, path, timeout: timeoutMs }, (res) => {
-      let body = "";
-      res.setEncoding("utf8");
-      res.on("data", (chunk) => { body += chunk; });
-      res.on("end", () => {
-        if (!res.statusCode || res.statusCode >= 300) return resolve(null);
-        try {
-          resolve(JSON.parse(body));
-        } catch {
-          resolve(null);
-        }
-      });
-    });
+    const req = request(
+      { host: "127.0.0.1", port, path, timeout: timeoutMs, ...(headers ? { headers } : {}) },
+      (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => { body += chunk; });
+        res.on("end", () => {
+          const status = res.statusCode ?? null;
+          if (!status || status >= 300) return resolve({ status, json: null });
+          try {
+            resolve({ status, json: JSON.parse(body) });
+          } catch {
+            resolve({ status, json: null });
+          }
+        });
+      },
+    );
     req.on("timeout", () => req.destroy());
-    req.on("error", () => resolve(null));
+    req.on("error", () => resolve({ status: null, json: null }));
     req.end();
   });
 }

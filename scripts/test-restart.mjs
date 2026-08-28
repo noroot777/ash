@@ -160,5 +160,68 @@ if (!blockedOutput.includes("仍有一个 ash 在应答")) {
   fail("失败信息没说清「旧的没下线」这个成因", blockedOutput);
 }
 
+// ── 问不到「会打断谁」时必须 fail closed ──────────────────────────────────────
+// 多人模式下 `/api/restart-impact` 要宿主机凭证(单实例锁文件里那串 token)。读不到锁、
+// 或者跑脚本的不是启动 ash 的那个用户时,端点会 401 —— 而 `localJson` 把「连不上」和
+// 「被拒」一律压成 null,脚本于是把「会被打断的任务数」算成 0,不加 FORCE 也照杀
+// (第 1 轮审查 P1:安全闸静默失效)。这里让假 server 对这条端点回 401,其余照常 200,
+// 脚本必须当场中止且**不许碰旧进程**。
+const refusing = join(TMP, "refusing.mjs");
+const REFUSING_PID = join(TMP, "refusing.pid");
+writeFileSync(refusing, `import { writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+createServer((req, res) => {
+  if (req.url?.startsWith("/api/restart-impact")) {
+    res.writeHead(401, { "content-type": "application/json" });
+    res.end('{"error":"请先登录","needsAuth":true}');
+    return;
+  }
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(JSON.stringify({ ok: true, pid: process.pid }));
+}).listen(${PORT}, "127.0.0.1", () => {
+  writeFileSync(${JSON.stringify(REFUSING_PID)}, String(process.pid));
+});
+`);
+
+const refusingProc = spawn(process.execPath, [refusing], { stdio: "ignore", detached: false });
+stubbornChild = refusingProc;
+for (let i = 0; i < 50 && !existsSync(REFUSING_PID); i++) await sleep(100);
+if (!existsSync(REFUSING_PID)) fail("回 401 的假 server 没起来,这条回归没法测");
+const refusingPid = Number(readFileSync(REFUSING_PID, "utf8").trim());
+
+const refused = spawnSync(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
+  cwd: REPO,
+  env: { ...env, START_TIMEOUT: "3" },
+  encoding: "utf8",
+});
+const refusedOutput = (refused.stdout ?? "") + (refused.stderr ?? "");
+const survived = isPidAlive(refusingPid);
+
+if (refused.status !== 2) fail(`服务端拒答判据时该以 2 中止,实际 ${refused.status}`, refusedOutput);
+if (!refusedOutput.includes("问不到「重启会打断谁」")) {
+  fail("中止信息没说清「问不到判据」这个成因", refusedOutput);
+}
+if (refusedOutput.includes("已就绪")) fail("问不到判据却照样重启了", refusedOutput);
+if (!survived) fail("问不到判据时不许动旧进程,它却被杀了", refusedOutput);
+
+// FORCE=1 是明说「知道可能打断也要重启」,那条路不该被这道闸挡住 —— 同一个回 401 的
+// 旧 server 还在端口上,这次必须被换掉。
+const forced = spawnSync(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
+  cwd: REPO,
+  env: { ...env, FORCE: "1", START_TIMEOUT: "10" },
+  encoding: "utf8",
+});
+const forcedOutput = (forced.stdout ?? "") + (forced.stderr ?? "");
+try { refusingProc.kill("SIGKILL"); } catch { /* 已经没了 */ }
+stubbornChild = null;
+try { serverPid = Number(readFileSync(PID_FILE, "utf8").trim()); } catch { /* 下面统一报错 */ }
+await sleep(200);
+
+if (forced.status !== 0) fail(`FORCE=1 该照常重启,退出码 ${forced.status}`, forcedOutput);
+if (forcedOutput.includes("问不到「重启会打断谁」")) fail("FORCE=1 不该被这道闸挡住", forcedOutput);
+if (!forcedOutput.includes(`${PORT} 已就绪`)) fail("FORCE=1 没把服务端换成新的", forcedOutput);
+if (serverPid) { killPid(serverPid); serverPid = 0; }
+
 process.stdout.write("✓ restart.mjs 的本机探测绕过代理，且脚本返回后 detached server 仍在运行\n");
 process.stdout.write("✓ 旧进程没能下线时 restart.mjs 明确失败，不再谎报「已就绪」\n");
+process.stdout.write("✓ 问不到「会打断谁」时 fail closed(FORCE=1 仍可越过)\n");

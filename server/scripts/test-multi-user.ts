@@ -311,6 +311,10 @@ const bobActor = actorOf(bob);
 // ── ⑫ 免登录名单:只放机器对机器那几条 ──────────────────────────────────
 // `/api/handoff/` 整个前缀曾经免登录,于是局域网里任何未登录的人都能批准入站机器
 // 信任(第 1 轮审查 P0)。这条判据锁住「豁口逐条列,不放前缀」。
+//
+// 反过来漏一条同样致命:refs 和 identity 曾经**不在**名单里,多人目标机于是在通用闸上
+// 先回 401,路由自己那三道更严的闸(来源机已批准 → 验签 → 那个账号看不看得见这个项目)
+// 一条都到不了,多人↔多人的 Git 接力整个走不通(第 1 轮审查 P1)。所以两个方向都钉。
 {
   const mw = await import("../src/auth/middleware.js");
   const open = (path: string) => mw.isPublicApiPath(path);
@@ -318,8 +322,14 @@ const bobActor = actorOf(bob);
     "/api/handoff/ping", "/api/handoff/import",
     "/api/handoff/return/ping", "/api/handoff/return/import",
     "/api/handoff/proxy/task/snapshot", "/api/handoff/proxy/tasks/state",
+    // 对端服务端来调:refs 只带机器签名 + peer user key,identity 连签名都没有。
+    "/api/handoff/projects/p-alice/refs",
+    "/api/handoff/identity",
+    // 宿主机运维脚本(scripts/restart.mjs)来调:它手上没有任何网页登录态,凭证是锁
+    // 文件里那串 token,在路由内校验。
+    "/api/restart-impact",
   ]) {
-    assert.equal(open(path), true, `${path} 是对端服务端来调的,到不了登录态`);
+    assert.equal(open(path), true, `${path} 到不了登录态,必须在名单里`);
   }
   // 供应商 relay:CLI 只带得出供应商 API key,带不出 ash 身份 —— 豁口钉死到 /v1 那一段。
   for (const path of [
@@ -340,8 +350,12 @@ const bobActor = actorOf(bob);
     "/api/handoff/peers/aaaa/approve",
     "/api/handoff/targets",
     "/api/handoff/request",
-    "/api/handoff/identity",
     "/api/handoff/return-grants",
+    // 形状必须钉死:放宽成前缀,底下将来长出来的任何东西都会跟着免登录。
+    "/api/handoff/projects",
+    "/api/handoff/projects/p-alice",
+    "/api/handoff/projects/p-alice/refs/extra",
+    "/api/restart-impact/detail",
   ]) {
     assert.equal(open(path), false, `${path} 是本机设置面,多人模式下必须先登录`);
   }

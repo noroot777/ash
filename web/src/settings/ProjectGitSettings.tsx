@@ -15,6 +15,15 @@ import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 //
 // 令牌框永远是空的，这是设计而不是加载失败，所以卡片里必须有一句话说清楚它，并且
 // 「留空 = 沿用已存的令牌」——不然用户只想改个用户名，却被逼着回 GitHub 重新生成一次。
+//
+// `canManage`（项目管理员 / 实例管理员）决定这一屏是两副面孔中的哪一副。这两张卡改的
+// 都是**整个项目共用**的东西:提交署名和 SSH key 落在主仓的 .git/config,所有人所有任务
+// 的 worktree 都跟着变;HTTPS 令牌是项目级凭证,覆盖一次就没了。所以按权限表(§四「项目
+// 设置」那一行)只给管理员。后端本来就会 403(project-git-routes.ts 的共用 handler),这里
+// 把必然失败的输入框和按钮收掉,免得成员改完点保存才发现改不了(第 1 轮审查 P1)。
+//
+// **读侧照旧全员可见**:看远端、看署名从哪继承来的没有风险,令牌本来就只写不读
+// (`git-credentials.ts`),所以「能不能看」和「能不能改」不捆在一起。
 
 const scopeHint = (field: GitConfigValue): string => {
   if (field.scope === "local") return "本项目设定";
@@ -22,8 +31,9 @@ const scopeHint = (field: GitConfigValue): string => {
   return "全局也没设";
 };
 
-export function ProjectGitSettings({ projectId, notify }: {
+export function ProjectGitSettings({ projectId, canManage, notify }: {
   projectId: string;
+  canManage: boolean;
   notify: (message: string) => void;
 }) {
   const [config, setConfig] = useState<ProjectGitConfig | null>(null);
@@ -121,6 +131,7 @@ export function ProjectGitSettings({ projectId, notify }: {
           <input
             value={userName}
             disabled={busy}
+            readOnly={!canManage}
             placeholder={identity.userName.scope === "inherited" ? identity.userName.value ?? "" : "留空则跟着全局设置走"}
             onChange={(event) => setUserName(event.target.value)}
           />
@@ -131,6 +142,7 @@ export function ProjectGitSettings({ projectId, notify }: {
           <input
             value={userEmail}
             disabled={busy}
+            readOnly={!canManage}
             placeholder={identity.userEmail.scope === "inherited" ? identity.userEmail.value ?? "" : "留空则跟着全局设置走"}
             onChange={(event) => setUserEmail(event.target.value)}
           />
@@ -142,6 +154,7 @@ export function ProjectGitSettings({ projectId, notify }: {
             className="mono"
             value={sshKey}
             disabled={busy || unknownSshCommand}
+            readOnly={!canManage}
             placeholder={unknownSshCommand ? "" : "留空则用默认的 ssh 身份，例如 ~/.ssh/id_ed25519"}
             onChange={(event) => setSshKey(event.target.value)}
           />
@@ -152,11 +165,17 @@ export function ProjectGitSettings({ projectId, notify }: {
           </span>
         </label>
         <div className="settings-card-foot">
-          <span>这三项写进仓库的 .git/config，agent 和你自己的终端看到的是同一份；所有任务 worktree 都跟着生效。清空输入框 = 回去跟着全局走。</span>
-          <Button variant="primary" disabled={!identityDirty || busy} onClick={() => void run("提交身份已保存", () =>
-            api.saveProjectGitConfig(projectId, { userName, userEmail, sshKeyPath: sshKey }))}>
-            {busy ? "保存中…" : "保存身份"}
-          </Button>
+          <span>
+            {canManage
+              ? "这三项写进仓库的 .git/config，agent 和你自己的终端看到的是同一份；所有任务 worktree 都跟着生效。清空输入框 = 回去跟着全局走。"
+              : "这三项写进仓库的 .git/config，所有人的任务 worktree 都跟着生效，所以只有项目管理员能改；这里按只读展示。"}
+          </span>
+          {canManage && (
+            <Button variant="primary" disabled={!identityDirty || busy} onClick={() => void run("提交身份已保存", () =>
+              api.saveProjectGitConfig(projectId, { userName, userEmail, sshKeyPath: sshKey }))}>
+              {busy ? "保存中…" : "保存身份"}
+            </Button>
+          )}
         </div>
       </div></section>
 
@@ -173,7 +192,7 @@ export function ProjectGitSettings({ projectId, notify }: {
         </div>
         <label className="settings-field">
           <span>用户名</span>
-          <input value={credUser} disabled={busy} autoComplete="off" onChange={(event) => setCredUser(event.target.value)} />
+          <input value={credUser} disabled={busy} readOnly={!canManage} autoComplete="off" onChange={(event) => setCredUser(event.target.value)} />
         </label>
         <label className="settings-field">
           <span>令牌 / 密码</span>
@@ -181,6 +200,7 @@ export function ProjectGitSettings({ projectId, notify }: {
             type="password"
             value={credSecret}
             disabled={busy}
+            readOnly={!canManage}
             autoComplete="new-password"
             placeholder={credential ? "留空则沿用已存的令牌" : "GitHub / GitLab 的 access token"}
             onChange={(event) => setCredSecret(event.target.value)}
@@ -189,19 +209,23 @@ export function ProjectGitSettings({ projectId, notify }: {
         </label>
         <div className="settings-card-foot">
           <span>
-            {anyHttps || !identity.remotes.length
-              ? "只存在 ash 自己的库里，不写进仓库；这个项目的拉取、推送（含任务工作区的推送）都用它。"
-              : "当前远端都是 SSH，配了也不会被用到——SSH 走上面那把私钥。"}
+            {!canManage
+              ? "这是整个项目共用的凭证，覆盖一次所有人都跟着换，所以只有项目管理员能改；令牌本来就取不回来，这里只显示用户名。"
+              : anyHttps || !identity.remotes.length
+                ? "只存在 ash 自己的库里，不写进仓库；这个项目的拉取、推送（含任务工作区的推送）都用它。"
+                : "当前远端都是 SSH，配了也不会被用到——SSH 走上面那把私钥。"}
           </span>
-          <span className="git-cred-actions">
-            {credential && (
-              <Button variant="danger" disabled={busy} onClick={() => setConfirmClear(true)}>清除凭证</Button>
-            )}
-            <Button variant="primary" disabled={!credentialDirty || !credUser.trim() || busy} onClick={() => void run("Git 凭证已保存", () =>
-              api.saveProjectGitCredential(projectId, credUser, credSecret))}>
-              {busy ? "保存中…" : "保存凭证"}
-            </Button>
-          </span>
+          {canManage && (
+            <span className="git-cred-actions">
+              {credential && (
+                <Button variant="danger" disabled={busy} onClick={() => setConfirmClear(true)}>清除凭证</Button>
+              )}
+              <Button variant="primary" disabled={!credentialDirty || !credUser.trim() || busy} onClick={() => void run("Git 凭证已保存", () =>
+                api.saveProjectGitCredential(projectId, credUser, credSecret))}>
+                {busy ? "保存中…" : "保存凭证"}
+              </Button>
+            </span>
+          )}
         </div>
       </div></section>
 

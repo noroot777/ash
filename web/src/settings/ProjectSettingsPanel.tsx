@@ -11,8 +11,9 @@ import { WorkflowPicker, useWorkflows } from "../workflow/WorkflowPicker.tsx";
 
 // 改名 / 改目录 / 默认起手式 / 删除项目都是**项目设置**,按权限表只给项目管理员与实例
 // 管理员(§四)。后端本来就会 403,但把必然失败的控件摆在成员面前,他只会以为是自己点坏了
-// —— 所以这一屏按 `project.myRole` 分两副面孔(第 6 轮审查 P3)。Git 配置那一段不在这条
-// 线内:后端只要求「看得见这个项目」,这里就不自作主张多加一道。
+// —— 所以这一屏按 `project.myRole` 分两副面孔(第 6 轮审查 P3)。Git 那一段**同属这条线**:
+// 提交署名、SSH key、HTTPS 令牌改一次,所有人所有任务的 worktree 都跟着变,所以 canManage
+// 一路传下去(第 1 轮审查 P1);读侧仍然全员可见,理由见 ProjectGitSettings 顶部。
 export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: {
   project: ProjectView;
   onUpdated: (project: ProjectView) => void;
@@ -25,7 +26,11 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
   const [repoPath, setRepoPath] = useState(project.repoPath);
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const pathHealth = useDebouncedPathHealth(repoPath);
+  // 路径体检只对**改得动路径的人**有意义:它探的是「你现在填的这条路走不走得通」。
+  // 成员那边不但没有提交按钮,`/projects/check` 还会按路径钳制回 403(它是一台目录
+  // 探测器,多人模式下必须钳),于是控制台落一条 403、界面挂一句「暂时无法检查目录;
+  // **仍可尝试提交**」—— 对一个提交不了的人说的完全是反话。传空串 = 根本不发这个请求。
+  const pathHealth = useDebouncedPathHealth(canManage ? repoPath : "");
   const workflows = useWorkflows();
   // 多人模式下项目默认起手式只收系统自带那几条:自建的是个人资源,别人看不见,设成项目
   // 默认只会让别人的新任务**静默**落回系统默认(后端同样这么挡,见 project-routes.ts)。
@@ -62,14 +67,14 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
         <section className="settings-section"><div className="settings-card">
           <div className="settings-row"><div>
             <b>你在这个项目里是成员</b>
-            <small>项目名称、工作目录、默认起手式和删除项目只有项目管理员能改；下面按只读展示。要改就找一位项目管理员。</small>
+            <small>项目名称、工作目录、默认起手式、Git 身份与凭证、删除项目只有项目管理员能改；下面按只读展示。要改就找一位项目管理员。</small>
           </div></div>
         </div></section>
       )}
       <section className="settings-section"><h2>基本信息</h2><div className="settings-card">
         <label className="settings-field"><span>项目名称</span><input value={name} readOnly={!canManage} onChange={(event) => setName(event.target.value)} /></label>
         <label className="settings-field"><span>工作目录</span><span className="path-field"><input className="mono" value={repoPath} readOnly={!canManage} onChange={(event) => setRepoPath(event.target.value)} />{canManage && <DirectoryPickerButton startIn={repoPath} onPick={setRepoPath} disabled={busy} notify={notify} />}</span></label>
-        <PathHealthStatus path={repoPath} state={pathHealth} />
+        {canManage && <PathHealthStatus path={repoPath} state={pathHealth} />}
         {canManage && <div className="settings-card-foot"><span>修改目录不会移动磁盘文件，只会改变后续任务的 cwd。</span><Button variant="primary" disabled={!dirty || !name.trim() || !repoPath.trim() || busy} onClick={() => void save()}>{busy ? "保存中…" : "保存更改"}</Button></div>}
       </div></section>
       <section className="settings-section"><h2>默认起手式</h2><div className="settings-card">
@@ -97,7 +102,7 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
           />
         </div>
       </div></section>
-      <ProjectGitSettings projectId={project.id} notify={notify} />
+      <ProjectGitSettings projectId={project.id} canManage={canManage} notify={notify} />
       {canManage && (
         <section className="settings-section"><h2>危险操作</h2><div className="settings-card settings-danger-row"><div><b>删除项目</b><small>删除项目记录，以及它下面的任务、分组和运行记录；不会删除仓库目录。</small></div><Button variant="danger" disabled={busy} onClick={() => setConfirmDelete(true)}>删除项目</Button></div></section>
       )}
