@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { HandoffPeerOffline, HandoffRemoteState, HandoffTarget, TaskListItem } from "@ash/shared";
 import { api } from "../lib/api.ts";
 import { applyRemoteStates, handedOut, peersOf, remoteStateMap } from "./outboundStateModel.ts";
@@ -23,6 +23,15 @@ export type OutboundState = {
   tasks: TaskListItem[];
   /** 接力目标机，点开出站行时要靠它连去对端（settings 里那份）。 */
   targets: HandoffTarget[];
+  /**
+   * 现在就把接力设置重取一遍，并返回取到的那份。
+   *
+   * 上面那份 `targets` 是跟着轮询走的**缓存**，而地址是用户在设置页随手就改的东西
+   * （改完还会把记住的指纹一起清掉）。真要拿它去连对端之前得先刷一次：后端解析持有机
+   * 用的是**当前**设置，前端拿着一份旧地址发过去，只会换回一个「持有机与请求目标不一致」
+   * 的 409 —— 屏幕上就成了「状态看着恢复了，点开却打不开」。
+   */
+  refreshTargets: () => Promise<HandoffTarget[]>;
   /** 这一轮联系不上的持有机：它们上面的行只能显示接力当时的旧状态，得如实说出来。 */
   offline: HandoffPeerOffline[];
 };
@@ -62,14 +71,24 @@ export function useOutboundState(tasks: TaskListItem[]): OutboundState {
     return () => { alive = false; window.clearInterval(timer); };
   }, [outboundKey]);
 
+  // 目标机列表跟着同一个节奏刷：地址会被用户在设置页改掉（本任务的起因就是一台机器
+  // 换了地址），只在出站集合变化时读一次的话，改完地址不刷新页面就一直拿着旧的。
+  // 20 秒的自愈只是兜底，真要连对端之前还得 refreshTargets 现取一次（见类型上的说明）。
+  const refreshTargets = useCallback(async (): Promise<HandoffTarget[]> => {
+    const settings = await api.settings();
+    setTargets(settings.handoffTargets);
+    return settings.handoffTargets;
+  }, []);
+
   useEffect(() => {
     if (!outboundKey) { setTargets([]); return; }
-    let alive = true;
-    api.settings().then((settings) => { if (alive) setTargets(settings.handoffTargets); }).catch(() => {});
-    return () => { alive = false; };
-  }, [outboundKey]);
+    const pull = () => { void refreshTargets().catch(() => {}); };
+    pull();
+    const timer = window.setInterval(pull, POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [outboundKey, refreshTargets]);
 
   const merged = useMemo(() => applyRemoteStates(tasks, states), [states, tasks]);
 
-  return { tasks: merged, targets, offline };
+  return { tasks: merged, targets, refreshTargets, offline };
 }
