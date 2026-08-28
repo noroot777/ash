@@ -113,8 +113,8 @@ function EventLine({ event }: { event: ExecutionEvent }) {
   );
 }
 
-export function ExecutionDetails({ events, running }: { events: ExecutionEvent[]; running: boolean }) {
-  if (!events.length) return null;
+/** 折叠条上那句「执行过程 · 3 分析 · 5 工具」。回合级折叠和单段折叠共用同一套词。 */
+export function executionCountsLabel(events: ExecutionEvent[]): string {
   const thinking = events.filter((event) => event.kind === "thinking").length;
   const tools = events.filter((event) => event.kind === "tool").length;
   const errors = events.filter((event) => event.kind === "error").length;
@@ -123,20 +123,44 @@ export function ExecutionDetails({ events, running }: { events: ExecutionEvent[]
     tools ? `${tools} 工具` : "",
     errors ? `${errors} 异常` : "",
   ].filter(Boolean).join(" · ");
-  const baseLabel = `执行过程${counts ? ` · ${counts}` : ""}`;
+  return `执行过程${counts ? ` · ${counts}` : ""}`;
+}
 
+export function hasExecutionError(events: ExecutionEvent[]): boolean {
+  return events.some((event) => event.kind === "error");
+}
+
+/** `<summary>` 的内容：折角 + 运行小点 + 会临时轮播最新一步的标签。 */
+export function ExecutionSummaryLine({ events, running }: { events: ExecutionEvent[]; running: boolean }) {
   return (
-    <details className={`task-execution-block${errors ? " has-error" : ""}`}>
+    <>
+      <CaretRight className="task-execution-caret" size={11} weight="bold" aria-hidden="true" />
+      {running && <span className="task-execution-pulse" aria-hidden="true" />}
+      <TransientExecutionLabel baseLabel={executionCountsLabel(events)} events={events} running={running} />
+    </>
+  );
+}
+
+/** 光秃秃的事件行列表。外面已经有折叠壳时用它，别再套一层 `<details>`。 */
+export function ExecutionEventList({ events }: { events: ExecutionEvent[] }) {
+  if (!events.length) return null;
+  return (
+    <div className="task-execution-events">
+      {events.map((event, index) => (
+        <EventLine event={event} key={`${event.kind}:${index}`} />
+      ))}
+    </div>
+  );
+}
+
+export function ExecutionDetails({ events, running }: { events: ExecutionEvent[]; running: boolean }) {
+  if (!events.length) return null;
+  return (
+    <details className={`task-execution-block${hasExecutionError(events) ? " has-error" : ""}`}>
       <summary>
-        <CaretRight className="task-execution-caret" size={11} weight="bold" aria-hidden="true" />
-        {running && <span className="task-execution-pulse" aria-hidden="true" />}
-        <TransientExecutionLabel baseLabel={baseLabel} events={events} running={running} />
+        <ExecutionSummaryLine events={events} running={running} />
       </summary>
-      <div className="task-execution-events">
-        {events.map((event, index) => (
-          <EventLine event={event} key={`${event.kind}:${index}`} />
-        ))}
-      </div>
+      <ExecutionEventList events={events} />
     </details>
   );
 }
