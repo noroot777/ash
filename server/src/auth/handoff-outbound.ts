@@ -10,7 +10,7 @@
 // 静默降级 —— 不带 key 时对端会明确回「必须带上你在对端的账号 key」。
 import { AsyncLocalStorage } from "node:async_hooks";
 import { PEER_USER_KEY_HEADER } from "./handoff-peer-user.js";
-import { peerKeyFor } from "./handoff-scope.js";
+import { peerKeyForRequest } from "./handoff-scope.js";
 
 const store = new AsyncLocalStorage<{ ownerUserId: string | null }>();
 
@@ -25,8 +25,12 @@ export const handoffActorId = (): string | null => store.getStore()?.ownerUserId
 /**
  * 给一个出站请求补上「我在对端的账号 key」。自用模式、或这个目标机还没配 key 时
  * 返回空对象 —— 让对端来说那句「你在这台机器上没有账号」,本机不猜。
+ *
+ * 入参是**这条请求的完整 URL**(带 `/api/handoff/...` 路径和查询串),所以匹配走
+ * `peerKeyForRequest` 的最长前缀,不能拿它去和清单里的根地址精确比 —— 那样永远匹配
+ * 不上,每个出站请求都会不带 key 出门(2026-08-29 修,详见那个函数的注释)。
  */
 export async function peerUserKeyHeader(url: string): Promise<Record<string, string>> {
-  const key = await peerKeyFor(handoffActorId(), url);
+  const key = await peerKeyForRequest(handoffActorId(), url);
   return key ? { [PEER_USER_KEY_HEADER]: key } : {};
 }

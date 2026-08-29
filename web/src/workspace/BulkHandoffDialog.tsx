@@ -7,9 +7,11 @@ import type {
   ProjectView,
   TaskListItem,
 } from "@ash/shared";
+import { needsPeerKey } from "@ash/shared/handoff";
 import { Check, Fingerprint, LockKey, SpinnerGap, Warning } from "@phosphor-icons/react";
-import { api, type TaskScopedHandoffPreflightResult } from "../lib/api.ts";
+import { api, ApiError, type TaskScopedHandoffPreflightResult } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
+import { HandoffPeerKeyField } from "../settings/HandoffPeerKeyField.tsx";
 import { HandoffDialogHeader, HandoffRouteCard } from "../task-detail/HandoffDialogViews.tsx";
 import { BulkHandoffTaskList } from "./BulkHandoffTaskList.tsx";
 import {
@@ -127,6 +129,9 @@ export function BulkHandoffDialog({
   const [checkedAll, setCheckedAll] = useState(false);
   const [approval, setApproval] = useState<HandoffApprovalResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 整批都卡在「对端是多人实例但不认识你」时,补 key 的入口也得在这儿 —— 与单任务
+  // 对话框同一个控件、同一条写入路径(见 settings/HandoffPeerKeyField.tsx)。
+  const [peerKeyRequired, setPeerKeyRequired] = useState(false);
   const [projectId, setProjectId] = useState("");
   const [autoResume, setAutoResume] = useState(true);
   const [phase, setPhase] = useState<BusyPhase>("idle");
@@ -190,6 +195,7 @@ export function BulkHandoffDialog({
     if (!sample || phase !== "idle") return;
     setPhase("preflight");
     setError(null);
+    setPeerKeyRequired(false);
     const failures: TransferFailure[] = [];
     try {
       for (let index = 0; index < eligible.length; index += 1) {
@@ -208,6 +214,7 @@ export function BulkHandoffDialog({
           return;
         } catch (reason) {
           const message = reason instanceof Error ? reason.message : String(reason);
+          if (needsPeerKey(reason instanceof ApiError ? reason.body : null)) setPeerKeyRequired(true);
           failures.push({ task, reason: message });
           if (returnOnly && isSharedReturnFailure(message)) {
             failures.push(...eligible.slice(index + 1).map((remaining) => ({ task: remaining, reason: message })));
@@ -247,6 +254,7 @@ export function BulkHandoffDialog({
     if (busy) return;
     setPhase("approval");
     setError(null);
+    setPeerKeyRequired(false);
     try {
       const nextApproval = await api.requestHandoffApproval(target.url);
       if (!mounted.current) return;
@@ -266,7 +274,9 @@ export function BulkHandoffDialog({
       const { taskTarget, probe } = await probeBulkTask(probeTask, taskSelectedTarget);
       if (mounted.current) rememberFirstProbe(probeTask.id, taskTarget, probe);
     } catch (reason) {
-      if (mounted.current) setError(reason instanceof Error ? reason.message : String(reason));
+      if (!mounted.current) return;
+      setError(reason instanceof Error ? reason.message : String(reason));
+      setPeerKeyRequired(needsPeerKey(reason instanceof ApiError ? reason.body : null));
     } finally {
       if (mounted.current) { setProgress(null); setPhase("idle"); }
     }
@@ -276,6 +286,7 @@ export function BulkHandoffDialog({
     if (!firstProbe || (needsBatchProject && !projectId) || busy) return;
     setPhase("preflight");
     setError(null);
+    setPeerKeyRequired(false);
     // 上次有失败时必须真正重探全部任务，不能继续复用旧 probe；否则目标项目刚修好，
     // “重新检查”仍会拿旧项目清单再次失败，看起来像按钮没作用。
     const checked = preflightFailures.length > 0
@@ -305,6 +316,7 @@ export function BulkHandoffDialog({
         checked.set(task.id, probe);
       } catch (reason) {
         const message = reason instanceof Error ? reason.message : String(reason);
+        if (needsPeerKey(reason instanceof ApiError ? reason.body : null)) setPeerKeyRequired(true);
         failures.push({ task, reason: message });
         if (returnOnly && isSharedReturnFailure(message)) {
           failures.push(...eligible.slice(index + 1).map((remaining) => ({ task: remaining, reason: message })));
@@ -342,6 +354,8 @@ export function BulkHandoffDialog({
           autoResume,
         }));
       } catch (reason) {
+        // 打包阶段撞上「对端不认识你」同样能当场补 key(整批共用一把)。
+        if (needsPeerKey(reason instanceof ApiError ? reason.body : null)) setPeerKeyRequired(true);
         failures.push({ task, reason: reason instanceof Error ? reason.message : String(reason) });
       }
     }
@@ -504,6 +518,21 @@ export function BulkHandoffDialog({
         {notes.length > 0 && checkedAll && <ul className="handoff-bulk-notes">{notes.map((note) => <li key={note}>{note}</li>)}</ul>}
         {blocked && <p className="handoff-bulk-warning">目标机尚未批准本机。请在目标机接受申请后，再点击“检查申请状态”。</p>}
         {error && <p className="handoff-bulk-error">{error}</p>}
+        {peerKeyRequired && (
+          <HandoffPeerKeyField
+            url={target.url}
+            hasKey={Boolean(target.hasKey)}
+            mode="block"
+            disabled={busy}
+            saveLabel="保存并重新检查"
+            notify={notify}
+            onSaved={() => {
+              setPeerKeyRequired(false);
+              autoProbeAttempted.current = false;
+              void probeFirst();
+            }}
+          />
+        )}
         {(phase === "approval" || phase === "transferring") && (
           <div className="handoff-bulk-progress" role="status">
             <SpinnerGap size={15} className="is-spinning" aria-hidden="true" />

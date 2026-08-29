@@ -25,8 +25,10 @@ export function HandoffMachines({
 
   const reloadTargets = useCallback(() => {
     let alive = true;
-    api.settings()
-      .then((settings) => { if (alive) setTargets(settings.handoffTargets); })
+    // 走 `/handoff/targets` 而不是 `GET /settings` 里那份:多人模式下目标机按人存,
+    // app_settings 那份是自用模式的公共清单(多人实例里通常是空的)。
+    api.handoffTargets()
+      .then((rows) => { if (alive) setTargets(rows); })
       .catch((reason) => { if (alive) notify(reason instanceof Error ? reason.message : "接力目标读取失败"); });
     return () => { alive = false; };
   }, [notify]);

@@ -15,6 +15,7 @@ import { db } from "../db/index.js";
 import { userSettings } from "../db/schema.js";
 import type { Actor } from "./context.js";
 import { forbidden, isAdminActor, ownerIdOf } from "./context.js";
+import { pruneLocalPeerKeys } from "./handoff-scope.js";
 import { isMultiUser } from "./mode.js";
 
 /** 一人一份的那几项。加一项就往这里加,读写两侧同时生效。 */
@@ -56,7 +57,16 @@ export const settingsForActor = (actor: Actor): Promise<AppSettings> => settings
  * (它按人存,而且带凭证,见 auth/handoff-scope.ts)。
  */
 export async function patchSettingsFor(actor: Actor, patch: Partial<AppSettings>): Promise<AppSettings> {
-  if (!(await isMultiUser())) return patchAppSettings(patch);
+  if (!(await isMultiUser())) {
+    const next = await patchAppSettings(patch);
+    // 自用模式的目标机清单住在设置里,而它们的对端账号 key 单独存(见 handoff-scope.ts)。
+    // 这里删掉一台机器,就把它那把 key 一起收走 —— 否则「删掉再加回同一个地址」会让旧
+    // key 悄悄复活。
+    if (patch.handoffTargets !== undefined) {
+      await pruneLocalPeerKeys(next.handoffTargets.map((target) => target.url));
+    }
+    return next;
+  }
   const owner = ownerIdOf(actor);
   const instancePart: Partial<AppSettings> = {};
   for (const [key, value] of Object.entries(patch) as [keyof AppSettings, unknown][]) {

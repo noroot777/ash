@@ -18,8 +18,10 @@ import {
   approvalStateLabel,
   HANDOFF_PEERS_CHANGED_EVENT,
   HANDOFF_URL_RE,
+  normalizeTargetUrl,
   shortOf,
 } from "./handoffTargetUi.ts";
+import { HandoffPeerKeyField } from "./HandoffPeerKeyField.tsx";
 import { UserHandoffTargets } from "./UserHandoffTargets.tsx";
 
 // 设置页的「任务接力」整段:本机身份 + 出站目标(含记住的对端指纹)+ 入站来源审批。
@@ -51,6 +53,9 @@ export function HandoffSettings({
   const [forgetIndex, setForgetIndex] = useState<number | null>(null);
   const [approvalByUrl, setApprovalByUrl] = useState<Record<string, HandoffApprovalResult>>({});
   const [approvalBusyUrl, setApprovalBusyUrl] = useState<string | null>(null);
+  // 自用模式下「我在对端的账号 key」不住在设置里(它是凭证,`GET /settings` 会把整份
+  // 吐回前端),所以哪几台配过 key 得单独问一次 `/handoff/targets` —— 那条路只报 hasKey。
+  const [keyedUrls, setKeyedUrls] = useState<Set<string>>(new Set());
   const isMulti = useIsMultiUser();
   const isInstanceAdmin = useIsInstanceAdmin();
   // 两件事,门禁不一样:
@@ -75,6 +80,18 @@ export function HandoffSettings({
       .then(setIdentity)
       .catch((error) => notify(error instanceof Error ? error.message : "本机接力身份读取失败"));
   }, [notify]);
+
+  const applyTargetKeys = useCallback((rows: HandoffTarget[]) => {
+    setKeyedUrls(new Set(rows.filter((row) => row.hasKey).map((row) => normalizeTargetUrl(row.url).toLowerCase())));
+  }, []);
+
+  useEffect(() => {
+    // 多人模式那份清单自己带 hasKey(UserHandoffTargets 直接读 `/handoff/targets`)。
+    if (isMulti) return;
+    api.handoffTargets()
+      .then(applyTargetKeys)
+      .catch((error) => notify(error instanceof Error ? error.message : "对端账号 key 状态读取失败"));
+  }, [applyTargetKeys, isMulti, notify]);
 
   const reloadPeers = useCallback(() => {
     Promise.all([api.handoffPeers(), api.handoffReturnGrants()])
@@ -187,6 +204,9 @@ export function HandoffSettings({
               <b>接力目标机器</b>
               <small>
                 另一台 ash 的根地址。第一次明确申请时会记住它的身份指纹，之后这个地址要是换了机器，申请和接力都会被拦下。
+                <br />
+                目标机是<b>多人实例</b>时还要填<b>你在那台机器上的账号 key</b>——
+                接力用的是你在对端的身份，能推进哪些项目由对端的成员名单决定。没有账号就找对端管理员开一个。
               </small>
             </div>
             <Button
@@ -263,6 +283,16 @@ export function HandoffSettings({
               >
                 <Trash size={13} aria-hidden="true" />
               </Button>
+              {/* key 按**地址**存(自用模式那份清单没有行 id),所以地址还没敲完整的半截行
+                  先不给填 —— 填进去会落到一个不存在的目标上。 */}
+              <HandoffPeerKeyField
+                url={normalizeTargetUrl(item.url)}
+                hasKey={keyedUrls.has(normalizeTargetUrl(item.url).toLowerCase())}
+                mode="row"
+                disabled={loading || !HANDOFF_URL_RE.test(item.url.trim())}
+                notify={notify}
+                onSaved={applyTargetKeys}
+              />
             </div>
           ))}
         </div>

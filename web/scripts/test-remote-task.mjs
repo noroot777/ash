@@ -6,6 +6,9 @@ const shell = readSource(new URL("../src/workspace/WorkspaceShell.tsx", import.m
 const detail = readSource(new URL("../src/remote-task/RemoteTaskDetail.tsx", import.meta.url));
 const rows = readSource(new URL("../src/workspace/TaskTreeRows.tsx", import.meta.url));
 const handoff = readSource(new URL("../src/task-detail/HandoffDialog.tsx", import.meta.url));
+// 「交出去之后本机这份长什么样」那半边在 2026-08-29 拆去了 HandoffBanner.tsx(原文件
+// 顶到 700 行上限)。这几条断言跟着搬,判据本身一个字没改。
+const handoffBanner = readSource(new URL("../src/task-detail/HandoffBanner.tsx", import.meta.url));
 const handoffViews = readSource(new URL("../src/task-detail/HandoffDialogViews.tsx", import.meta.url));
 const returnView = readSource(new URL("../src/task-detail/HandoffReturnView.tsx", import.meta.url));
 const taskDetail = readSource(new URL("../src/task-detail/TaskDetail.tsx", import.meta.url));
@@ -36,21 +39,21 @@ assert.match(returnView, /连不上来源机器/, "连不上来源机时必须�
 assert.match(handoff, /relocateReturnTarget/, "连不上之后的重新检查要连地址发现一起重来");
 assert.doesNotMatch(handoffViews, /index === 2|is-active/, "单任务传输不能展示伪造的精确阶段");
 assert.match(handoffViews, /本次将执行/, "单任务传输应把步骤表述为将执行清单");
-assert.doesNotMatch(handoff, /const canOpenRemote|task-handoff-open/, "不可选中的历史存档横幅不能保留永远到不了且移回后不安全的远程入口");
+assert.doesNotMatch(handoff + handoffBanner, /const canOpenRemote|task-handoff-open/, "不可选中的历史存档横幅不能保留永远到不了且移回后不安全的远程入口");
 assert.doesNotMatch(taskDetail, /onOpenRemote=|onRemoteTask/, "任务详情不应再为不可选中的 out 存档接死代码回调");
 assert.match(handoff, /hasOwnProperty\.call\(pendingHandoff, "returnTransferId"\)/, "移回应答丢失后的重放弹窗仍应保持移回语义");
 assert.match(replyRail, /hasOwnProperty\.call\(task\.handoff, "returnTransferId"\)/, "移回应答丢失后的任务操作仍应显示移回而不是接力");
 assert.match(taskHeader, /pendingReturn \? "移回未确认" : "接力未确认"/, "移回应答丢失后的主状态不能误报成接力未确认");
 assert.match(returnView, /上次移回没收到确认/, "移回重放警告必须使用移回和来源机语义");
-assert.match(handoff, /核验并在本机继续/, "恢复本机任务前必须明确会先向对端安全核验");
+assert.match(handoffBanner, /核验并在本机继续/, "恢复本机任务前必须明确会先向对端安全核验");
 assert.match(handoff, /preflight\.local\.uploads > 0 \|\| preflight\.local\.pendingMessages/, "只有附件时也应显示路径改写说明");
 assert.match(handoff, /probe\.suggestedProjectId \?\? probe\.projects\[0\]\?\.id/, "唯一候选项目应自动选中");
 assert.match(returnView, /taskScopedReturn\n\s+\? "（与这条任务接入时记录的来源指纹一致/, "移回的身份文案必须区分任务级免审批与普通接力降级");
 assert.match(handoff, /nextUntriedHandoffTarget/, "单任务移回应遍历全部同指纹备用地址");
 assert.match(returnView, /fallbackNotice/, "自动切换来源地址时必须向用户显示说明");
 assert.match(handoff, /"确认移回"/, "移回的主按钮就是一次确认，不是「检查来源机」这种中间步骤");
-assert.match(handoff, /承担风险，强制恢复/, "安全核验失败后必须提供带双任务警告的显式强制恢复入口");
-assert.match(handoff, /forceHandoffReason/, "只有服务端明确标记可强制恢复的失败才显示风险入口");
+assert.match(handoffBanner, /承担风险，强制恢复/, "安全核验失败后必须提供带双任务警告的显式强制恢复入口");
+assert.match(handoffBanner, /forceHandoffReason/, "只有服务端明确标记可强制恢复的失败才显示风险入口");
 assert.match(handoffSettings, /历史回程权限/, "设置页必须列出任务历史授予的回程权限");
 assert.match(handoffSettings, /handoffReturnGrants/, "历史回程权限必须来自可审计的服务端清单");
 assert.match(handoffSettings, /拒绝这台机器/, "历史回程权限必须可由用户显式撤销");

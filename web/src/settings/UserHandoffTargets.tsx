@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import type { HandoffApprovalResult, HandoffTarget } from "@ash/shared";
-import { Fingerprint, Key, PaperPlaneTilt, Plus, SpinnerGap, Trash } from "@phosphor-icons/react";
+import { Fingerprint, PaperPlaneTilt, Plus, SpinnerGap, Trash } from "@phosphor-icons/react";
 import { Button, TextInput } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
+import { HandoffPeerKeyField } from "./HandoffPeerKeyField.tsx";
 import {
   approvalNotice,
   approvalStateClass,
@@ -23,15 +24,13 @@ import {
 //  · **账号 key**(peerKey)= 对端认不认识**我这个人**。对端是多人实例时没有它就只能
 //    看到空的项目列表,所以接力会当场报错,而不是让人对着「对方一个项目都没有」发懵。
 //
-// key 是凭证,读侧永不回显(同 project_git_credentials 待遇),只报 hasKey。
+// key 是凭证,读侧永不回显(同 project_git_credentials 待遇),只报 hasKey;编辑控件与
+// 自用模式那份清单、接力对话框共用 `HandoffPeerKeyField`。
 export function UserHandoffTargets({ notify }: { notify: (message: string) => void }) {
   const [targets, setTargets] = useState<HandoffTarget[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState({ name: "", url: "", peerKey: "" });
-  // 改 key 是显式动作:默认收起,点「换一把」才展开输入框。省得每次进设置页都看见
-  // 一排空的密码框,让人以为 key 丢了。
-  const [keyEdit, setKeyEdit] = useState<Record<string, string>>({});
   const [removing, setRemoving] = useState<HandoffTarget | null>(null);
   const [approvalByUrl, setApprovalByUrl] = useState<Record<string, HandoffApprovalResult>>({});
   const [approvalBusyUrl, setApprovalBusyUrl] = useState<string | null>(null);
@@ -110,7 +109,6 @@ export function UserHandoffTargets({ notify }: { notify: (message: string) => vo
       ) : (
         targets.map((target) => {
           const url = normalizeTargetUrl(target.url);
-          const editing = keyEdit[target.id!] !== undefined;
           return (
             <div className="settings-row handoff-target-row is-user" key={target.id}>
               <TextInput
@@ -163,56 +161,14 @@ export function UserHandoffTargets({ notify }: { notify: (message: string) => vo
               >
                 <Trash size={13} aria-hidden="true" />
               </Button>
-              <div className="handoff-target-key">
-                <Key size={12} aria-hidden="true" />
-                {editing ? (
-                  <>
-                    <TextInput
-                      type="password"
-                      placeholder="ash_… （你在对端的账号 key）"
-                      value={keyEdit[target.id!]}
-                      autoComplete="off"
-                      disabled={busy}
-                      onChange={(event) =>
-                        setKeyEdit((current) => ({ ...current, [target.id!]: event.target.value }))}
-                    />
-                    <Button
-                      variant="ghost"
-                      disabled={busy}
-                      onClick={async () => {
-                        if (await patch(target, { peerKey: keyEdit[target.id!].trim() })) {
-                          setKeyEdit(({ [target.id!]: _drop, ...rest }) => rest);
-                        }
-                      }}
-                    >
-                      保存
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      disabled={busy}
-                      onClick={() => setKeyEdit(({ [target.id!]: _drop, ...rest }) => rest)}
-                    >
-                      取消
-                    </Button>
-                  </>
-                ) : (
-                  <>
-                    <small>{target.hasKey ? "已配置对端账号 key（不回显）" : "还没配对端账号 key"}</small>
-                    <Button
-                      variant="ghost"
-                      disabled={busy}
-                      onClick={() => setKeyEdit((current) => ({ ...current, [target.id!]: "" }))}
-                    >
-                      {target.hasKey ? "换一把" : "填写"}
-                    </Button>
-                    {target.hasKey && (
-                      <Button variant="ghost" disabled={busy} onClick={() => void patch(target, { peerKey: "" })}>
-                        清除
-                      </Button>
-                    )}
-                  </>
-                )}
-              </div>
+              <HandoffPeerKeyField
+                url={url}
+                hasKey={Boolean(target.hasKey)}
+                mode="row"
+                disabled={busy}
+                notify={notify}
+                onSaved={setTargets}
+              />
             </div>
           );
         })

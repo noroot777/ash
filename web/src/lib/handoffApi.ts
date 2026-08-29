@@ -94,4 +94,9 @@ export const handoffApi = {
     (await request<{ targets: HandoffTarget[] }>(`/handoff/targets/${id(targetId)}`, json("PATCH", patch))).targets,
   deleteHandoffTarget: async (targetId: string): Promise<HandoffTarget[]> =>
     (await request<{ targets: HandoffTarget[] }>(`/handoff/targets/${id(targetId)}`, { method: "DELETE" })).targets,
+  // 按**地址**配「我在对端的账号 key」。两种模式、三个表面(设置页两份清单 + 接力对话框
+  // 里的就地补填)共用这一条:调用点手上常常只有地址——自用模式那份清单存在 app_settings
+  // 里,压根没有行 id。空串 = 清除。
+  setHandoffTargetKey: async (url: string, peerKey: string): Promise<HandoffTarget[]> =>
+    (await request<{ targets: HandoffTarget[] }>("/handoff/targets/key", json("PUT", { url, peerKey }))).targets,
 };

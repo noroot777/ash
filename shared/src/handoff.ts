@@ -11,14 +11,33 @@ export interface HandoffTarget {
   // 整个仓库和会话历史,地址漂到别人机器上时,这是唯一拦得住的东西。
   // 空/缺失 = 还没记过(首次)或用户手动清除过。
   peerFp?: string | null;
-  // 多人模式:目标机是多人实例时,「我在对端的账号 key」。它是凭证,**读侧永不回显**
+  // 目标机是多人实例时,「我在对端的账号 key」。它是凭证,**读侧永不回显**
   // (同 project_git_credentials 待遇),GET 只报 hasKey;写侧传明文 key 落库。
-  // 空 = 还没配。对端是多人实例而这里为空 → 接力会被明确拒绝并提示去找对端管理员开账号。
+  // 空 = 还没配。对端是多人实例而这里为空 → 接力会被明确拒绝并提示补 key。
+  // **本机是不是多人实例不影响这一列**:决定要不要 key 的是**对端**的模式。自用实例
+  // 往多人实例上接力同样得带 key,所以自用模式那份清单也存(见 handoff_local_peer_keys)。
   hasKey?: boolean;
   /** 仅写入方向:明文 key。服务端落库后永远不回显。 */
   peerKey?: string;
   /** 多人模式下这条目标机是**谁的**。单人模式恒缺省。 */
   id?: string;
+}
+
+/**
+ * 接力错误的**机器可读原因**。文案会改、会翻译、会被人肉复述,判据不能压在字符串上。
+ *
+ * 目前只有一条:`peer-key-required` —— 对端是多人实例但不认识发起人(没带 key / key
+ * 已失效)。前端拿它把「去某个地方补 key」变成**当场可填的输入框**:2026-08-29 之前
+ * 这句提示指向的自用模式设置页里根本没有那个输入框,用户照着找一圈什么也找不到。
+ */
+export const HANDOFF_PEER_KEY_REQUIRED = "peer-key-required";
+
+export type HandoffErrorCode = typeof HANDOFF_PEER_KEY_REQUIRED;
+
+/** 应答体里带没带 `peer-key-required`。前端与服务端共用同一份判据。 */
+export function needsPeerKey(body: unknown): boolean {
+  return typeof body === "object" && body !== null && "code" in body
+    && (body as { code?: unknown }).code === HANDOFF_PEER_KEY_REQUIRED;
 }
 
 // ── 接力身份与配对 ─────────────────────────────────────────────────────────

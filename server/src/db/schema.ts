@@ -603,3 +603,22 @@ export const handoffPeers = sqliteTable("handoff_peers", {
   // 最近一次来访的地址,纯展示(帮人判断「这是不是我那台台式机」)。
   lastAddr: text("last_addr").notNull().default(""),
 });
+
+// 自用模式的「我在对端的账号 key」。**多人模式那份在 user_handoff_targets.peer_key**,
+// 这张表只服务自用实例。
+//
+// 为什么不塞进 app_settings.handoffTargets(自用模式的目标机清单就住在那儿):那份设置
+// 被 `GET /settings` 整份吐回前端,凭证进去就等于一个打开的网页拿走全部对端 key;而且
+// 实例以后转多人时,它会当场变成所有人都读得到的公共设置。凭证的待遇统一照
+// project_git_credentials:单独存,读侧只报 hasKey。
+//
+// 为什么自用实例也需要它:要不要 key 由**对端**的模式决定,不是本机。一台自用 ash 往
+// 多人 ash 上接力同样要带「你在对端的账号 key」——2026-08-29 之前自用模式压根没有存
+// 它的地方,预检失败的提示却让人去设置页补,那里根本没有输入框。
+export const handoffLocalPeerKeys = sqliteTable("handoff_local_peer_keys", {
+  // 归一后的目标机地址(去尾斜杠、小写),与 app_settings.handoffTargets 里的行按它对齐。
+  url: text("url").primaryKey(),
+  // 明文 key:要原样发给对端,没法只存哈希。GET 只报 hasKey。
+  peerKey: text("peer_key").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});

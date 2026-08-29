@@ -260,6 +260,8 @@ const AS_ALICE = { authorization: `Bearer ${aliceKey}` };
     // 个人键(§八):改掉它,owner 往后所有新任务的默认就变了。
     { path: "/api/settings", method: "PATCH", body: { worktreeDefault: false }, what: "改个人设置" },
     { path: "/api/handoff/targets", method: "POST", body: { name: "agent-added-peer", url: "https://evil.example.com", peerKey: "k" }, what: "加接力目标机" },
+    // 按地址配 key 是同一件事的另一个入口(接力对话框里就地补 key 走它),同样归账号本人。
+    { path: "/api/handoff/targets/key", method: "PUT", body: { url: "https://evil.example.com", peerKey: "k" }, what: "改接力目标机的对端 key" },
     { path: "/api/notes", method: "POST", body: { projectId: "p-source", body: "agent 写的随手记" }, what: "写随手记" },
     { path: `/api/agents/ex-alice`, method: "PATCH", body: { name: "HIJACKED" }, what: "改 owner 的执行器" },
     { path: `/api/agents/ex-alice`, method: "DELETE", what: "删 owner 的执行器" },

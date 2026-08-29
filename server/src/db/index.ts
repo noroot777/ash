@@ -192,6 +192,9 @@ export async function ensureSchema() {
       first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
       approved_at TEXT, last_addr TEXT NOT NULL DEFAULT ''
     );
+    CREATE TABLE IF NOT EXISTS handoff_local_peer_keys (
+      url TEXT PRIMARY KEY, peer_key TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS uploads (
       file TEXT PRIMARY KEY, owner_user_id TEXT, task_id TEXT, created_at TEXT NOT NULL
     );

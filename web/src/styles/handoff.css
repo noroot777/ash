@@ -169,7 +169,20 @@
 .handoff-quick-add > button { justify-self: end; margin-top: 4px; }
 
 .handoff-field { display: grid; gap: 5px; margin: 10px 0; }
-.handoff-field label { color: var(--faint); font-size: 10.5px; }
+/* 预检失败「对端不认识你」时的就地补填块:紧跟在那条红字下面,填完当场重试。
+   把用户支去设置页的做法已经证明是死路——自用模式的设置页里根本没有这个输入框。 */
+.handoff-key-fix {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 12px;
+  border: 1px solid color-mix(in lch, var(--amber) 40%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in lch, var(--amber) 7%, var(--panel));
+  padding: 10px 12px;
+}
+.handoff-key-fix label { color: var(--faint); font-size: 10.5px; }
+.handoff-key-fix small { color: var(--muted); font-size: 11px; line-height: 1.6; }
+.handoff-key-fix > button { justify-self: end; margin-top: 2px; }.handoff-field label { color: var(--faint); font-size: 10.5px; }
 .handoff-field select {
   min-width: 0;
   height: 30px;
@@ -234,16 +247,19 @@
 .task-handoff-clear:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .task-handoff-clear:disabled { cursor: not-allowed; opacity: 0.55; }
 
-/* 设置页的接力目标编辑行:名字窄、地址宽、指纹芯片、删除按钮贴右。 */
-.handoff-target-row { gap: 7px; }
+/* 设置页的接力目标编辑行:名字窄、地址宽、指纹芯片、删除按钮贴右;
+   「对端账号 key」另起一整行 —— 它比名字/地址长,挤进同一行会把地址压成看不清的窄条。
+   两份清单(自用模式那份、多人模式的按人那份)都有这一行:要不要 key 由**对端**是不是
+   多人实例决定,跟本机什么模式无关。 */
+.handoff-target-row { flex-wrap: wrap; gap: 7px; }
 .handoff-target-row .ui-input { flex: 1 1 0; min-width: 0; }
 .handoff-target-row .handoff-target-name { flex: 0 1 180px; }
 .handoff-target-request { flex: none; }
 
-/* 多人模式的按人清单:第一行同上,「对端账号 key」另起一整行 —— 它比名字/地址长,
-   挤进同一行会把地址压成看不清的窄条。 */
-.handoff-target-row.is-user { flex-wrap: wrap; }
-.handoff-target-key {
+/* 选择器带上父级不是为了好看:`.settings-row > div` 把每一个直接子 div 都设成
+   `display:grid`(优先级比单个类高),不提一档权重,这一行的图标、说明和按钮会被排成
+   一列竖着堆下来。 */
+.settings-row > .handoff-target-key {
   display: flex;
   flex: 0 0 100%;
   align-items: center;

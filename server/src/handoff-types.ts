@@ -1,7 +1,7 @@
 // 任务接力——两端共用的传输协议类型、错误类与尺寸常量(从 handoff.ts 拆出,
 // 导出/导入/HTTP 面三处共用;业务流程见 handoff.ts 顶部注释)。
 import { isAbsolute } from "node:path";
-import type { HandoffPingProject } from "@ash/shared";
+import type { HandoffErrorCode, HandoffPingProject } from "@ash/shared";
 
 export class HandoffError extends Error {
   // 导入侧专用:true = 这次失败**不证明**本机没留下半截产物(补偿回滚自身失败)。
@@ -14,6 +14,10 @@ export class HandoffError extends Error {
   // 和「新版路由明确返回业务错误」，避免靠错误文案做宽泛匹配。
   remoteStatus: number | null = null;
   remoteAsh = false;
+  // 机器可读的原因码,随应答体的 `code` 字段发到前端(定义在 shared/src/handoff.ts)。
+  // 前端据此把「缺对端账号 key」渲染成一个当场能填的输入框,而不是一句让人去别处找的话。
+  // 出站链路上它还要**穿透一跳**:对端 401 的 code 由 fetchPeer 原样挂回来(见那里)。
+  code: HandoffErrorCode | null = null;
   constructor(message: string, public status: number = 400, public network = false) {
     super(message);
   }

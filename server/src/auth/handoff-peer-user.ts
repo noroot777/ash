@@ -10,6 +10,7 @@
 //   本机多人 + 带错/过期的 key → 抛 401「这把 key 在本机不认」
 //   本机多人 + 压根没带 key → 抛 401「在这台机器上没有账号,找管理员开通」
 import type { Context } from "hono";
+import { HANDOFF_PEER_KEY_REQUIRED } from "@ash/shared/handoff";
 import type { Actor } from "./context.js";
 import { SINGLE_ACTOR } from "./context.js";
 import type { UserRow } from "./store.js";
@@ -32,16 +33,28 @@ export async function peerUserFor(c: Context): Promise<PeerUser> {
   if (!(await isMultiUser())) return { kind: "single", user: null };
   const key = c.req.header(PEER_USER_KEY_HEADER)?.trim() ?? "";
   if (!key) {
-    throw new HandoffError(
-      "对端是多人实例:接力必须带上「你在对端的账号 key」。去「设置 → 默认规则 → 接力目标机」补上它;还没有账号就找对端管理员开一个。",
-      401,
+    throw peerKeyError(
+      "对端是多人实例:接力必须带上「你在对端的账号 key」。在接力对话框里直接填上它;还没有账号就找对端管理员开一个。",
     );
   }
   const user = await findUserByKey(key);
-  if (!user) throw new HandoffError("这把 key 在对端机器上不认(可能已被重置或停用),找对端管理员重发。", 401);
+  if (!user) {
+    throw peerKeyError("这把 key 在对端机器上不认(可能已被重置或停用),换一把再试;找对端管理员重发。");
+  }
   if (user.status === "suspended") throw new HandoffError("你在对端机器上的账号已被停用。", 403);
   return { kind: "user", user };
 }
+
+/**
+ * 这两种拒绝都是「补一把 key 就能继续」,所以带上原因码:源机的 `fetchPeer` 把它原样
+ * 挂回本机错误上,接力对话框据此当场给出输入框。**账号被停用不在其列** —— 那不是换
+ * 一把 key 能解决的,给输入框只会让人白填一遍。
+ */
+const peerKeyError = (message: string): HandoffError => {
+  const error = new HandoffError(message, 401);
+  error.code = HANDOFF_PEER_KEY_REQUIRED;
+  return error;
+};
 
 /**
  * 软版本:探活(`/handoff/ping`)用。没带 key 不抛错,只回 null —— ping 是配对入口,

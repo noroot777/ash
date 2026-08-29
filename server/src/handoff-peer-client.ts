@@ -11,6 +11,7 @@
 //
 // 入站方向(谁能推进本机)在 handoff-peers.ts。
 import type { HandoffApprovalResult, HandoffIdentity, HandoffPeerIdentity } from "@ash/shared";
+import { HANDOFF_PEER_KEY_REQUIRED } from "@ash/shared/handoff";
 import { getAppSettings } from "./app-settings.js";
 import { HandoffError } from "./handoff-types.js";
 import type { HandoffPingResponse } from "./handoff-types.js";
@@ -94,7 +95,8 @@ export async function fetchPeer<T>(
     const msg = e instanceof Error ? e.message : String(e);
     throw new HandoffError(`连不上对端 ash（${url}）：${msg}`, 502, true);
   }
-  const payload = (await res.json().catch(() => null)) as { error?: string; ash?: boolean } | null;
+  const payload = (await res.json().catch(() => null)) as
+    { error?: string; ash?: boolean; code?: string } | null;
   if (!res.ok) {
     // 只有带 ash 标记的错误应答才可信为「对端业务层明确拒绝,可证明没落库」。
     // 没有标记的非 2xx 可能是中间网关在对端已处理成功后伪造的(上游读超时回 502 等),
@@ -108,6 +110,9 @@ export async function fetchPeer<T>(
     );
     error.remoteStatus = res.status;
     error.remoteAsh = payload?.ash === true;
+    // 原因码穿透这一跳:「对端不认识你这把 key」是对端才知道的事实,可本机的界面才是
+    // 能补 key 的地方。只认白名单里的码 —— 对端是外部输入,不能让它往前端塞任意字符串。
+    if (payload?.code === HANDOFF_PEER_KEY_REQUIRED) error.code = HANDOFF_PEER_KEY_REQUIRED;
     throw error;
   }
   if (payload === null) {
@@ -244,10 +249,14 @@ export async function pingPeer(
   // 的假象(§十一 单人→多人 / 多人→多人 两格)。配对申请不走这一步:那时本来就还
   // 没有账号,拦死它等于连申请的路都断了。
   if (options.requirePeerUser && ping.instanceMode === "multi" && !ping.peerUser) {
-    throw new HandoffError(
-      "对端是多人实例，但它不认识你：接力需要「你在对端的账号 key」。到「设置 → 默认规则 → 接力目标机」给这台机器补上它；还没有账号就找对端管理员开一个。",
+    // 带上原因码,接力对话框据此当场给出输入框(文案里只说「哪里能填」,不再指路)。
+    const error = new HandoffError(
+      "对端是多人实例，但它不认识你：接力需要「你在对端的账号 key」。在下面直接填上它就能继续；"
+      + "也可以到「设置 → 默认规则 → 接力目标机」给这台机器补上。还没有账号就找对端管理员开一个。",
       401,
     );
+    error.code = HANDOFF_PEER_KEY_REQUIRED;
+    throw error;
   }
   const identity = ping.identity;
   if (!identity?.publicKey || !identity.sig) {

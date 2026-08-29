@@ -46,7 +46,7 @@ import { countUsers } from "./auth/store.js";
 import { peerActor, peerOwnerId, peerUserFor, peerUserSoft } from "./auth/handoff-peer-user.js";
 import { canSeeProject, visibleProjectsFor } from "./auth/visibility.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
-import { addTarget, deleteTarget, listTargets, patchTarget } from "./auth/handoff-scope.js";
+import { addTarget, deleteTarget, listTargets, patchTarget, setPeerKey } from "./auth/handoff-scope.js";
 
 type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 500 | 502;
 
@@ -59,8 +59,14 @@ type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 500 | 502;
 // 回 502」触发回滚造成双跑。
 const fail = (c: Context, e: unknown) => {
   if (e instanceof HandoffError) {
+    // code 是机器可读的原因(见 handoff-types.ts)。它既发给本机网页(接力对话框据此
+    // 就地给出补 key 的输入框),也发给源机(入站拒绝时,由源机 fetchPeer 原样挂回)。
     return c.json(
-      e.unsettled ? { error: e.message } : { error: e.message, ash: true },
+      {
+        error: e.message,
+        ...(e.unsettled ? {} : { ash: true }),
+        ...(e.code ? { code: e.code } : {}),
+      },
       e.status as ErrorStatus,
     );
   }
@@ -436,6 +442,20 @@ export function mountHandoffRoutes(api: Hono): void {
   api.delete("/handoff/targets/:id", async (c) => {
     try {
       return c.json({ targets: await deleteTarget(actorOf(c), c.req.param("id")) });
+    } catch (e) { return fail(c, e); }
+  });
+
+  // 按**地址**配「我在对端的账号 key」。为什么不是 PATCH /handoff/targets/:id:调用点
+  // 手上常常只有地址 —— 自用模式那份清单存在 app_settings 里,根本没有行 id;接力对话框
+  // 预检失败时要当场补 key,那里也只有选中的那台机器。两种模式的写入差异收在
+  // `setPeerKey` 里(见 auth/handoff-scope.ts),路由这层只有一条路。
+  api.put("/handoff/targets/key", async (c) => {
+    const b = (await c.req.json().catch(() => ({}))) as { url?: string; peerKey?: string };
+    if (typeof b.peerKey !== "string") return c.json({ error: "缺 peerKey(空串 = 清除)" }, 400);
+    let url: string;
+    try { url = normalizePeerUrl(b.url ?? ""); } catch (e) { return fail(c, e); }
+    try {
+      return c.json({ targets: await setPeerKey(actorOf(c), url, b.peerKey.trim()) });
     } catch (e) { return fail(c, e); }
   });
 
