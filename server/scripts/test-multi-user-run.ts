@@ -62,7 +62,7 @@ const probes = join(stage, "probes");
 mkdirSync(probes, { recursive: true });
 const bin = join(stage, "bin");
 mkdirSync(bin, { recursive: true });
-const KEYS = ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CONFIG_DIR", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "ASH_TASK_ID"];
+const KEYS = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CONFIG_DIR", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "ASH_TASK_ID"];
 // 探针本体写成独立的 .cjs 文件,壳只负责 `node <它>`。塞进 `node -e "…"` 里会被两层
 // 引号绞碎(sh 一层、cmd 一层),而那种碎法的症状是「假 CLI 起来了但立刻 exit 1」,
 // 排查成本远高于多写一个文件。
@@ -198,7 +198,9 @@ const statusOf = async (taskId: string) =>
 const settled = (s?: string) => s === "done" || s === "failed" || s === "canceled";
 
 const expectBob = (env: Record<string, string | null>, where: string) => {
-  assert.equal(env.ANTHROPIC_AUTH_TOKEN, "bob-provider-key", `${where}:烧的必须是点它的人的 key`);
+  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "bob-provider-key", `${where}:烧的必须是点它的人的 key`);
+  assert.equal(env.ANTHROPIC_AUTH_TOKEN, null, `${where}:旧 AUTH_TOKEN 必须从子进程删除`);
+  assert.equal(env.ANTHROPIC_API_KEY, null, `${where}:旧 API_KEY 必须从子进程删除`);
   assert.equal(env.ANTHROPIC_BASE_URL, "https://bob-provider.example", `${where}:供应商地址同上`);
   assert.ok(
     (env.CLAUDE_CONFIG_DIR ?? "").includes(bob.id),

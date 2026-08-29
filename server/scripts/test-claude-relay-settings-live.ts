@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,7 @@ if (spawnSync("claude", ["--version"], { encoding: "utf8" }).status !== 0) {
 const scratch = mkdtempSync(join(tmpdir(), "ash-claude-relay-live-"));
 const cwd = join(scratch, "repo");
 const configDir = join(scratch, "claude-config");
+const hookFile = join(scratch, "hook.json");
 mkdirSync(cwd, { recursive: true });
 mkdirSync(configDir, { recursive: true });
 writeFileSync(join(configDir, "settings.json"), JSON.stringify({
@@ -23,6 +24,10 @@ writeFileSync(join(configDir, "settings.json"), JSON.stringify({
     ANTHROPIC_BASE_URL: "http://127.0.0.1:59999",
     ANTHROPIC_AUTH_TOKEN: "wrong-user-auth",
     ANTHROPIC_API_KEY: "wrong-user-api-key",
+    API_TIMEOUT_MS: "3000000",
+  },
+  hooks: {
+    SessionStart: [{ hooks: [{ type: "command", command: `printf '{\"timeout\":\"%s\"}' \"$API_TIMEOUT_MS\" > ${JSON.stringify(hookFile)}` }] }],
   },
 }));
 
@@ -76,8 +81,10 @@ try {
   assert.equal(text.trim(), "OK");
   assert.equal(authorization, "Bearer ash-profile-key");
   assert.equal(xApiKey, null);
-  assert.match(handle.commandLine, /--setting-sources project,local/);
+  assert.doesNotMatch(handle.commandLine, /--setting-sources/);
   assert.doesNotMatch(handle.commandLine, /ash-profile-key|wrong-user/);
+  assert.ok(existsSync(hookFile), "用户级 SessionStart hook 应继续加载");
+  assert.deepEqual(JSON.parse(readFileSync(hookFile, "utf8")), { timeout: "3000000" });
   console.log("claude relay settings live: ok");
 } finally {
   upstream.close();

@@ -43,12 +43,12 @@ export const claudeSpec: CliSpec = {
     },
     parser: claudeStreamJsonParser,
     // 供应商:BASE_URL 指到根地址(SDK 自己补 /v1,库里那份带了 /v1 得剥掉,
-    // 否则打到 /v1/v1);key 只走 env,绝不进 argv。ClaudeExecutor 运行时还会用
-    // `--setting-sources project,local` 排除用户层的旧路由/旧 key，并把 BASE_URL 钉进
-    // 自己的 `--settings`;恢复命令前缀因此只需要 key 占位符。
+    // 否则打到 /v1/v1);key 只走 env,绝不进 argv。ClaudeExecutor 会把 BASE_URL 钉进
+    // 最高优先级 `--settings`，清空用户层的旧 AUTH_TOKEN / API_KEY，并用 OAuth env
+    // 保持 Authorization: Bearer；用户层的技能、hooks、MCP 与其它 env 不受影响。
     relay: (r) => ({
-      env: { ANTHROPIC_BASE_URL: relayRoot(r.baseUrl), ANTHROPIC_AUTH_TOKEN: r.apiKey },
-      envHint: "ANTHROPIC_AUTH_TOKEN=<你的key> ",
+      env: { ANTHROPIC_BASE_URL: relayRoot(r.baseUrl), CLAUDE_CODE_OAUTH_TOKEN: r.apiKey },
+      envHint: "CLAUDE_CODE_OAUTH_TOKEN=<你的key> ",
     }),
   },
 };
