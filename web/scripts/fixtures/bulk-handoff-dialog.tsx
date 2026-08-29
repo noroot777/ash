@@ -44,16 +44,38 @@ const RESULTS: Record<string, { status: number; body: unknown }> = {
   "t-broken": { status: 502, body: { error: "连不上对端 mac-mini（fetch failed）" } },
 };
 
+// ?runkey=1 造第 2 轮审查报告里的那一档:预检全过、**打包阶段**才撞上「对端不认识你」。
+// 补 key 的入口必须长在结果页上,而且补完只重试卡住的那条 —— 已经推过去的不能再推一次。
+const runKeyMode = new URLSearchParams(window.location.search).has("runkey");
+const handoffCalls: string[] = [];
+(window as unknown as { __handoffCalls: string[] }).__handoffCalls = handoffCalls;
+let peerKeySaved = false;
+
 const nativeFetch = window.fetch.bind(window);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  const json = (status: number, body: unknown) => new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+  if (url.includes("/api/handoff/targets/key")) {
+    peerKeySaved = true;
+    return json(200, { targets: [{ name: "mac-mini", url: "http://mac-mini:4317", peerFp: "d".repeat(64), hasKey: true }] });
+  }
+  const exporting = /\/api\/tasks\/([^/]+)\/handoff$/.exec(url);
+  if (exporting) {
+    const taskId = decodeURIComponent(exporting[1]);
+    handoffCalls.push(taskId);
+    // t-git 一次就过;t-plain 在补上 key 之前一直被对端挡回来。
+    if (taskId === "t-plain" && !peerKeySaved) {
+      return json(401, { error: "对端是多人实例，但它不认识你", ash: true, code: "peer-key-required" });
+    }
+    return json(200, { taskId, remoteTaskId: `r-${taskId}`, remoteUrl: "http://mac-mini:4317", host: "mac-mini" });
+  }
   const match = /\/api\/tasks\/([^/]+)\/handoff\/preflight/.exec(url);
   if (!match) return nativeFetch(input as RequestInfo, init);
   const hit = RESULTS[decodeURIComponent(match[1])] ?? { status: 500, body: { error: "unexpected task" } };
-  return new Response(JSON.stringify(hit.body), {
-    status: hit.status,
-    headers: { "content-type": "application/json" },
-  });
+  return json(hit.status, hit.body);
 }) as typeof window.fetch;
 
 const task = (id: string, title: string, status: string): TaskListItem => ({
@@ -84,7 +106,9 @@ const tasks: TaskListItem[] = [
 // —— 这时必须解释清楚，否则「明明有任务在跑」和「没有可接力的」看起来自相矛盾。
 const liveTasks = new URLSearchParams(window.location.search).has("empty")
   ? tasks.filter((item) => item.mode === "team" || (item.status !== "running" && item.status !== "queued"))
-  : tasks;
+  : runKeyMode
+    ? tasks.filter((item) => item.id === "t-git" || item.id === "t-plain")
+    : tasks;
 
 const project = { id: "p1", name: "knowledge-base", repoPath: "/Users/fjh/code/kb" } as unknown as ProjectView;
 const target: HandoffTarget = {

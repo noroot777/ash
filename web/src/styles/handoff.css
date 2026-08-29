@@ -139,6 +139,8 @@
 
 .handoff-result-panel { display: grid; justify-items: center; padding: 44px 10px 20px; text-align: center; }
 .handoff-result-mark { display: grid; width: 58px; height: 58px; margin-bottom: 18px; place-items: center; border-radius: 18px; background: color-mix(in lch, var(--green) 13%, var(--panel)); color: var(--green); box-shadow: inset 0 0 0 1px color-mix(in lch, var(--green) 22%, var(--line)); }
+/* 批量接力中途卡住(比如整批缺 key)时同一个位置要报警,不能顶着一枚绿章说没做完。 */
+.handoff-result-mark.is-warn { background: color-mix(in lch, var(--amber) 15%, var(--panel)); color: var(--amber); box-shadow: inset 0 0 0 1px color-mix(in lch, var(--amber) 26%, var(--line)); }
 .handoff-result-facts { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 24px; }
 .handoff-result-facts span { border: 1px solid var(--line); border-radius: 999px; background: var(--raised); padding: 7px 11px; color: var(--muted); font-size: 10px; }
 .handoff-result-facts b { color: var(--ink); }
@@ -182,7 +184,11 @@
 }
 .handoff-key-fix label { color: var(--faint); font-size: 10.5px; }
 .handoff-key-fix small { color: var(--muted); font-size: 11px; line-height: 1.6; }
-.handoff-key-fix > button { justify-self: end; margin-top: 2px; }.handoff-field label { color: var(--faint); font-size: 10.5px; }
+.handoff-key-fix > button { justify-self: end; margin-top: 2px; }
+/* 结果页整块居中,这一块是表单,得按表单左对齐读。 */
+.handoff-result-panel .handoff-key-fix { width: min(520px, 100%); text-align: left; }
+
+.handoff-field label { color: var(--faint); font-size: 10.5px; }
 .handoff-field select {
   min-width: 0;
   height: 30px;

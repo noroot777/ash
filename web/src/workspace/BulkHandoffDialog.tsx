@@ -132,6 +132,9 @@ export function BulkHandoffDialog({
   // 整批都卡在「对端是多人实例但不认识你」时,补 key 的入口也得在这儿 —— 与单任务
   // 对话框同一个控件、同一条写入路径(见 settings/HandoffPeerKeyField.tsx)。
   const [peerKeyRequired, setPeerKeyRequired] = useState(false);
+  // 打包阶段(而不是预检阶段)被「对端不认识你」挡住的那几条。补完 key 只重试它们:
+  // 同一批里先走完的任务已经真的搬到对端了,再搬一次会撞上「这条任务已经接力出去」。
+  const [peerKeyBlocked, setPeerKeyBlocked] = useState<Set<string>>(new Set());
   const [projectId, setProjectId] = useState("");
   const [autoResume, setAutoResume] = useState(true);
   const [phase, setPhase] = useState<BusyPhase>("idle");
@@ -333,15 +336,21 @@ export function BulkHandoffDialog({
     setPhase("idle");
   };
 
-  const run = async () => {
-    const runnable = eligible.filter((task) => preflights.has(task.id) && taskTargets.has(task.id));
-    if ((needsBatchProject && !projectId) || busy || !runnable.length || !checkedAll) return;
+  /**
+   * 逐条打包推走。`carry` 是本批次此前已经攒下的成功/失败 —— 补完 key 重试时,先前
+   * 真的搬走的那几条必须原样留在结果里,不能被第二趟覆盖掉。
+   */
+  const transfer = async (batch: TaskListItem[], carry: {
+    successes: HandoffExportResult[];
+    failures: TransferFailure[];
+  }) => {
     setPhase("transferring");
-    const successes: HandoffExportResult[] = [];
-    const failures: TransferFailure[] = [...preflightFailures];
-    for (let index = 0; index < runnable.length; index += 1) {
-      const task = runnable[index];
-      setProgress({ done: index, total: runnable.length, taskId: task.id });
+    const successes = [...carry.successes];
+    const failures = [...carry.failures];
+    const keyBlocked = new Set<string>();
+    for (let index = 0; index < batch.length; index += 1) {
+      const task = batch[index];
+      setProgress({ done: index, total: batch.length, taskId: task.id });
       try {
         const taskTarget = taskTargets.get(task.id) ?? await targetForBulkTask(task, target);
         const probe = preflights.get(task.id);
@@ -354,16 +363,39 @@ export function BulkHandoffDialog({
           autoResume,
         }));
       } catch (reason) {
-        // 打包阶段撞上「对端不认识你」同样能当场补 key(整批共用一把)。
-        if (needsPeerKey(reason instanceof ApiError ? reason.body : null)) setPeerKeyRequired(true);
+        // 打包阶段撞上「对端不认识你」同样能当场补 key(整批共用一把)。这时**不能**把
+        // 结果页当终点:它只写着「已完成:成功 0 失败 N」和一个「完成」按钮,而这批活
+        // 其实差一把 key 就能接着跑完。
+        if (needsPeerKey(reason instanceof ApiError ? reason.body : null)) keyBlocked.add(task.id);
         failures.push({ task, reason: reason instanceof Error ? reason.message : String(reason) });
       }
     }
     if (!mounted.current) return;
     setProgress(null);
+    setPeerKeyBlocked(keyBlocked);
+    setPeerKeyRequired(keyBlocked.size > 0);
     setResult({ successes, failures });
     await onFinished();
     if (mounted.current) setPhase("idle");
+  };
+
+  const run = () => {
+    const runnable = eligible.filter((task) => preflights.has(task.id) && taskTargets.has(task.id));
+    if ((needsBatchProject && !projectId) || busy || !runnable.length || !checkedAll) return;
+    void transfer(runnable, { successes: [], failures: [...preflightFailures] });
+  };
+
+  /** 结果页上补完 key:只重试「就差这把 key」的那几条,已经搬过去的不动。 */
+  const retryAfterKey = () => {
+    if (busy || !result) return;
+    const retryTasks = eligible.filter((task) => peerKeyBlocked.has(task.id));
+    if (!retryTasks.length) { setPeerKeyRequired(false); return; }
+    setPeerKeyRequired(false);
+    setPeerKeyBlocked(new Set());
+    void transfer(retryTasks, {
+      successes: result.successes,
+      failures: result.failures.filter((failure) => !peerKeyBlocked.has(failure.task.id)),
+    });
   };
 
   // 每个任务带走什么已经逐行写在清单里，这里只汇总服务端给的额外提醒。
@@ -402,7 +434,9 @@ export function BulkHandoffDialog({
   };
 
   const confirmLabel = result
-    ? "完成"
+    // 卡在缺 key 时这批活并没有做完,主按钮不能写「完成」—— 往下走的入口是那个 key
+    // 输入框,这颗只是「不补了,就到这儿」。
+    ? peerKeyRequired ? "不补了，结束这批" : "完成"
     : identityResolving
       ? "正在核对来源机…"
     : identityMismatch
@@ -413,7 +447,9 @@ export function BulkHandoffDialog({
         ? `${preflightFailures.length > 0 ? "重新检查" : "检查"} ${eligible.length} 个${actionName}任务`
         : `停止并${actionName} ${readyTasks.length} 个任务${preflightFailures.length ? `（跳过 ${preflightFailures.length} 个）` : ""}`;
   const message = result
-    ? `已完成批量${actionName}：成功 ${result.successes.length} 个，失败 ${result.failures.length} 个。`
+    ? peerKeyRequired
+      ? `已${actionName} ${result.successes.length} 个；另外 ${peerKeyBlocked.size} 个卡在「对端不认识你」，补上下面这把 key 就能接着搬，已经过去的不会再搬一次。`
+      : `已完成批量${actionName}：成功 ${result.successes.length} 个，失败 ${result.failures.length} 个。`
     : returnOnly
       ? `把本机「${project.name}」项目中 ${eligible.length} 个正在跑的接入任务顺序移回「${target.name}」。`
       : `把本机「${project.name}」项目中 ${eligible.length} 个正在跑的任务顺序${actionName}到「${target.name}」。`;
@@ -443,9 +479,11 @@ export function BulkHandoffDialog({
           </div>
         ) : result ? (
           <div className="handoff-result-panel handoff-bulk-result">
-            <span className="handoff-result-mark" aria-hidden="true"><Check size={22} weight="bold" /></span>
-            <span className="handoff-eyebrow">BATCH COMPLETE</span>
-            <h3>批量{actionName}已完成</h3>
+            <span className={`handoff-result-mark${peerKeyRequired ? " is-warn" : ""}`} aria-hidden="true">
+              {peerKeyRequired ? <Warning size={22} weight="bold" /> : <Check size={22} weight="bold" />}
+            </span>
+            <span className="handoff-eyebrow">{peerKeyRequired ? "BATCH PAUSED" : "BATCH COMPLETE"}</span>
+            <h3>批量{actionName}{peerKeyRequired ? "没做完" : "已完成"}</h3>
             <p>{message}</p>
             <div className="handoff-result-facts">
               <span><b>{result.successes.length}</b> 个成功</span>
@@ -456,6 +494,26 @@ export function BulkHandoffDialog({
               <ul className="handoff-bulk-failures">{groupedResultFailures.map(({ tasks: failedTasks, reason }) => (
                 <li key={reason}><b>{failureTaskLabel(failedTasks)}</b><span>{reason}</span></li>
               ))}</ul>
+            )}
+            {/* 预检过了、打包阶段才发现对端不认识你(key 被停用/重置)。这批活差的只是
+                一把 key,所以补填的入口必须也长在结果页上 —— 否则用户只看得到「已完成:
+                成功 0 个」和一个「完成」按钮,没有任何能往下走的地方。 */}
+            {peerKeyRequired && (
+              <HandoffPeerKeyField
+                url={target.url}
+                hasKey={Boolean(target.hasKey)}
+                mode="block"
+                disabled={busy}
+                saveLabel={`保存并${actionName}剩下的 ${peerKeyBlocked.size} 个`}
+                notify={notify}
+                onSaved={retryAfterKey}
+              />
+            )}
+            {phase === "transferring" && (
+              <div className="handoff-bulk-progress" role="status">
+                <SpinnerGap size={15} className="is-spinning" aria-hidden="true" />
+                <span>{`正在${actionName}剩下的任务 · ${(progress?.done ?? 0) + 1}/${progress?.total ?? 0}`}</span>
+              </div>
             )}
           </div>
         ) : (

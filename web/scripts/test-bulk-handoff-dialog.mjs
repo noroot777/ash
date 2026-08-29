@@ -94,6 +94,35 @@ try {
   assert.equal(await page.locator(".handoff-bulk-dialog footer .is-primary").isDisabled(), true);
   const emptyShot = process.env.BULK_HANDOFF_SHOT_EMPTY;
   if (emptyShot) await page.locator(".handoff-bulk-dialog").screenshot({ path: emptyShot });
+
+  // 6. 预检全过、**打包阶段**才撞上「对端不认识你」:结果页不能是死胡同。
+  //    第 2 轮审查复现的就是这一档 —— 代码已经识别为「可就地补 key」,可结果页把输入框
+  //    整个挡在了另一个渲染分支里,用户只看得到「已完成:成功 0 个」和一颗「完成」。
+  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/bulk-handoff-dialog.html?runkey=1`);
+  await page.locator(".handoff-bulk-list").waitFor();
+  await page.getByRole("button", { name: "检查 2 个接力任务" }).click();
+  await page.getByRole("button", { name: /停止并接力 2 个任务/ }).click();
+  const resultPanel = page.locator(".handoff-bulk-result");
+  await resultPanel.waitFor();
+  assert.match(await resultPanel.innerText(), /批量接力没做完/, "还差一把 key 就不能写「已完成」");
+  assert.equal(await page.locator(".handoff-key-fix").count(), 1, "补 key 的输入框必须在结果页上也够得着");
+  assert.match(
+    await page.locator(".handoff-bulk-dialog footer .is-primary").innerText(),
+    /不补了，结束这批/,
+    "往下走的入口是那个 key 输入框，主按钮不能还写「完成」",
+  );
+
+  // 补上 key:只重试卡住的那条,已经推过去的 t-git 不能再推一次。
+  await page.locator("#handoff-peer-key").fill("ash_bulk_key");
+  await page.getByRole("button", { name: /保存并接力剩下的 1 个/ }).click();
+  await page.locator(".handoff-key-fix").waitFor({ state: "detached" });
+  assert.match(await resultPanel.innerText(), /批量接力已完成/);
+  assert.match(await resultPanel.innerText(), /2 个成功/);
+  assert.deepEqual(
+    await page.evaluate(() => window.__handoffCalls),
+    ["t-git", "t-plain", "t-plain"],
+    "重试只补发被 key 挡住的那条；已经搬过去的任务再发一次会撞上「已接力出去」",
+  );
 } finally {
   await browser?.close();
   await server.close();
