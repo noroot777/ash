@@ -159,9 +159,16 @@ export function useAttachments({
 
   // 取消只掐这一个在途的：pending 项自己带着 abort，所以切走任务再切回来
   // （组件重新挂载、在途状态留在草稿里）按钮依然有效。
+  //
+  // 摘掉这一项由取消这一下**当场**做完，不等下面那个循环走到它：整批是串行传的，
+  // 排在后面还没轮到的那个，abort 不会立刻让它落地，等第一张传完才消失 —— 那段时间
+  // 「取消」看着就是坏的，而且还继续挡着创建/发送（第 1 轮审查 P2）。
   const cancel = useCallback((id: string) => {
-    pendingFiles.find((item) => item.id === id)?.abort();
-  }, [pendingFiles]);
+    const target = pendingFiles.find((item) => item.id === id);
+    if (!target) return;
+    target.abort();
+    setPending((current) => current.filter((item) => item.id !== id));
+  }, [pendingFiles, setPending]);
 
   const remove = useCallback((path: string) => {
     setAttachments((current) => current.filter((attachment) => attachment.path !== path));

@@ -16,13 +16,14 @@ const server = await createServer({
   server: { host: "127.0.0.1", port: 0, strictPort: false },
 });
 
-const paste = (name) => async (page) => page.evaluate(({ name, png }) => {
+// 一次粘贴一个或多个文件：多文件时是**一个** paste 事件带多张，跟真实的多选粘贴一致。
+const paste = (...names) => async (page) => page.evaluate(({ names, png }) => {
   const textarea = document.querySelector(".composer-objective textarea");
   const bytes = Uint8Array.from(atob(png), (char) => char.charCodeAt(0));
   const data = new DataTransfer();
-  data.items.add(new File([bytes], name, { type: "image/png" }));
+  for (const name of names) data.items.add(new File([bytes], name, { type: "image/png" }));
   textarea.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
-}, { name, png: PNG });
+}, { names, png: PNG });
 
 let browser;
 try {
@@ -127,6 +128,15 @@ try {
   await page.waitForTimeout(300);
   assert.equal(createdBodies.length, 0, "快捷键也不能绕过上传中的门禁");
 
+  // ②b 切到「讨论」不能把在途的藏起来：讨论虽然不收附件，但创建之后面板就没了，
+  //     这张图同样没人接住；藏起来只会让用户以为已经传完（第 1 轮审查 P1）。
+  await page.getByRole("tab", { name: "讨论" }).click();
+  await page.waitForTimeout(200);
+  assert.equal(await page.locator(".task-upload-chip.is-uploading").count(), 1, "切到讨论后在途卡片必须还在");
+  assert.match(await page.locator(".composer-footer span").first().innerText(), /上传中 \d+%/, "讨论模式底栏也要说在传");
+  assert.equal(await submit.isDisabled(), true, "讨论模式同样不能在上传未完成时创建");
+  await page.getByRole("tab", { name: "单任务" }).click();
+
   // ③ 传完原地换成正式附件，按钮恢复。
   await release("shot.png");
   await page.locator(".task-upload-chip img").waitFor();
@@ -142,6 +152,23 @@ try {
   assert.equal(await page.locator(".task-upload-error").count(), 0, "用户自己取消的不算上传失败");
   assert.equal(await submit.isEnabled(), true, "取消后应立刻恢复可创建");
   await release("wrong.png");
+
+  // ④b 一次粘两张：第一张在传、第二张还排着队。取消排队那张必须当场消失，
+  //     不能等第一张传完才轮到它（第 1 轮审查 P2）。
+  await paste("queued-first.png", "queued-second.png")(page);
+  await page.getByText("queued-second.png", { exact: true }).waitFor();
+  assert.equal(await page.locator(".task-upload-chip.is-uploading").count(), 2, "整批都要先挂进在途");
+  await page.getByRole("button", { name: "取消上传 queued-second.png" }).click();
+  await page.getByText("queued-second.png", { exact: true }).waitFor({ state: "detached", timeout: 2000 });
+  assert.equal(await page.locator(".task-upload-chip.is-uploading").count(), 1, "取消排队那张时第一张还在传");
+  assert.match(
+    await page.locator(".composer-footer span").first().innerText(),
+    /上传中 \d+%/,
+    "取消一张之后底栏要按剩下的一张算，不能还写着 2 个",
+  );
+  await page.getByRole("button", { name: "取消上传 queued-first.png" }).click();
+  await page.getByText("queued-first.png", { exact: true }).waitFor({ state: "detached" });
+  await release("queued-first.png");
 
   await submit.click();
   await page.getByText("已创建：把这张图上的问题修掉").waitFor();

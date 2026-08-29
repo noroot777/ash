@@ -398,8 +398,9 @@ export function TaskComposerPanel({
     ? scheduleValidationError(launchMode, scheduleAt, scheduleCron)
     : null;
   // 有图还在传就先不放行：附件路径是上传成功才有的，这时候创建等于把刚粘的那张图
-  // 悄悄扔掉（讨论本来就不收附件，不受这条约束）。
-  const waitingUploads = mode !== "duet" && uploads.uploading;
+  // 悄悄扔掉。**讨论也算**——它虽然不收附件，但创建之后这个面板就没了，在途的那张
+  // 同样没人接住；切到讨论就把「还在传」藏起来更糟，用户会以为已经传完（第 1 轮审查 P1）。
+  const waitingUploads = uploads.uploading;
   const canSubmit = (mode === "duet" ? !!body.trim() : !!body.trim() || allAttachments.length > 0)
     && !busy && !noExecutor && !roleBlocked && !scheduleError && !waitingUploads;
 
@@ -602,21 +603,23 @@ export function TaskComposerPanel({
               />
             )}
           </div>
-          {mode !== "duet" && (
-            <ImagePreviewGroup isolated>
-              <UploadAttachmentList
-                attachments={uploads.attachments}
-                pending={uploads.pending}
-                error={uploads.error}
-                onRemove={uploads.remove}
-                onCancel={uploads.cancel}
-              />
+          {/* 已经传好的只有单任务/团队才列（讨论不收附件，由下面那句提示交代）；
+              **在途**的三种模式都列 —— 藏起来就等于告诉用户「传完了」。 */}
+          <ImagePreviewGroup isolated>
+            <UploadAttachmentList
+              attachments={mode === "duet" ? [] : uploads.attachments}
+              pending={uploads.pending}
+              error={uploads.error}
+              onRemove={uploads.remove}
+              onCancel={uploads.cancel}
+            />
+            {mode !== "duet" && (
               <SeedAttachmentList
                 paths={seedAttachments}
                 onRemove={(path) => setSeedAttachments((current) => current.filter((item) => item !== path))}
               />
-            </ImagePreviewGroup>
-          )}
+            )}
+          </ImagePreviewGroup>
           {mode === "duet" && allAttachments.length > 0 && (
             <p className="composer-warning">讨论配置不接收附件；附件仍保留，切回单任务或团队后会随任务提交。</p>
           )}
@@ -664,8 +667,8 @@ export function TaskComposerPanel({
           {mode !== "duet" && <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />}
           <span>
             <Paperclip size={13} />
-            {mode === "duet" ? "讨论不收附件 · ⌘↵ 按当前启动方式创建"
-              : uploads.uploading ? `${uploadingLabel(uploads.pending)} · 传完才能创建`
+            {uploads.uploading ? `${uploadingLabel(uploads.pending)} · 传完才能创建`
+              : mode === "duet" ? "讨论不收附件 · ⌘↵ 按当前启动方式创建"
                 : `${allAttachments.length} 个附件 · ⌘↵ 按当前启动方式创建`}
           </span>
         </div>
