@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
-import { rmSync, writeFileSync } from "node:fs";
+import { readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -18,9 +18,31 @@ import { persistMarkdownImages, persistToolResultImages } from "../agent-attachm
 import { ClaudeControlBridge } from "./claude-control.js";
 
 type RuntimeSettings = { arg: string | null; cleanup: () => void; error?: string };
+const RUNTIME_SETTINGS_RE = /^ash-claude-settings-(\d+)-[0-9a-f-]+\.json$/i;
 
 function removeRuntimeSettings(path: string): void {
   try { rmSync(path, { force: true }); } catch { /* 退出/重启清理只做 best effort */ }
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function cleanupStaleRuntimeSettings(): void {
+  let names: string[];
+  try { names = readdirSync(tmpdir()); } catch { return; }
+  for (const name of names) {
+    const match = name.match(RUNTIME_SETTINGS_RE);
+    if (!match) continue;
+    const pid = Number(match[1]);
+    if (pid > 0 && processExists(pid)) continue;
+    removeRuntimeSettings(join(tmpdir(), name));
+  }
 }
 
 function runtimeSettingsCleanupFromCommandLine(commandLine: string): () => void {
@@ -28,6 +50,18 @@ function runtimeSettingsCleanupFromCommandLine(commandLine: string): () => void 
   const path = match?.[1];
   return path ? () => removeRuntimeSettings(path) : () => {};
 }
+
+function cleanupWithEvents(events: AsyncIterable<AgentEvent>, cleanup: () => void): AsyncIterable<AgentEvent> {
+  return (async function* () {
+    try {
+      for await (const event of events) yield event;
+    } finally {
+      cleanup();
+    }
+  })();
+}
+
+cleanupStaleRuntimeSettings();
 
 // Drives the real `claude` CLI in headless stream-json mode.
 export class ClaudeExecutor implements AgentExecutor {
@@ -154,7 +188,9 @@ export class ClaudeExecutor implements AgentExecutor {
   run(opts: RunOpts): RunHandle {
     const sessionId = opts.sessionId ?? randomUUID();
     const model = opts.model ?? this.model;
-    const settings = this.runtimeSettings(opts.cwd, model);
+    const settings = this.startupError
+      ? { arg: null, cleanup: () => {} }
+      : this.runtimeSettings(opts.cwd, model);
     const args = this.buildArgs(opts, sessionId, false, model, settings.arg);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
     const child = this.startupError || settings.error
@@ -164,7 +200,10 @@ export class ClaudeExecutor implements AgentExecutor {
     return {
       sessionId,
       commandLine,
-      events: parseClaudeStream(child, undefined, this.bin, this.type, this.compactWindow(), settings.cleanup),
+      events: cleanupWithEvents(
+        parseClaudeStream(child, undefined, this.bin, this.type, this.compactWindow(), settings.cleanup),
+        settings.cleanup,
+      ),
       kill: () => killChild(child),
       cleanup: async () => { settings.cleanup(); await cleanupAfterRun(child); },
       detached: detachedInfo(child),
@@ -175,7 +214,9 @@ export class ClaudeExecutor implements AgentExecutor {
   runSteerable(opts: RunOpts): RunHandle {
     const sessionId = opts.sessionId ?? randomUUID();
     const model = opts.model ?? this.model;
-    const settings = this.runtimeSettings(opts.cwd, model);
+    const settings = this.startupError
+      ? { arg: null, cleanup: () => {} }
+      : this.runtimeSettings(opts.cwd, model);
     const args = this.buildArgs(opts, sessionId, true, model, settings.arg);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`);
     const child = this.startupError || settings.error
@@ -209,7 +250,10 @@ export class ClaudeExecutor implements AgentExecutor {
     return {
       sessionId: opts.sessionId,
       commandLine: opts.commandLine,
-      events: parseClaudeStream(child, undefined, this.bin, this.type, this.compactWindow(), settingsCleanup),
+      events: cleanupWithEvents(
+        parseClaudeStream(child, undefined, this.bin, this.type, this.compactWindow(), settingsCleanup),
+        settingsCleanup,
+      ),
       kill: () => child.kill(),
       cleanup: async () => { settingsCleanup(); await cleanupAfterRun(child); },
       detached: detachedInfo(child),
@@ -222,7 +266,9 @@ export class ClaudeExecutor implements AgentExecutor {
   openResident(opts: RunOpts): ResidentHandle {
     const sessionId = opts.sessionId ?? randomUUID();
     const model = opts.model ?? this.model;
-    const settings = this.runtimeSettings(opts.cwd, model);
+    const settings = this.startupError
+      ? { arg: null, cleanup: () => {} }
+      : this.runtimeSettings(opts.cwd, model);
     const args = this.buildArgs(opts, sessionId, true, model, settings.arg);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`);
     const child = this.startupError || settings.error
@@ -252,7 +298,10 @@ export class ClaudeExecutor implements AgentExecutor {
     return {
       sessionId,
       commandLine,
-      events: parseClaudeStream(child, resident, this.bin, this.type, this.compactWindow(), settingsCleanup),
+      events: cleanupWithEvents(
+        parseClaudeStream(child, resident, this.bin, this.type, this.compactWindow(), settingsCleanup),
+        settingsCleanup,
+      ),
       send: (text: string) => {
         // stdin 没了/已经关掉 = 这条消息一个字都进不去,如实说不(见 ResidentHandle.send)。
         const stdin = child.stdin;

@@ -144,7 +144,7 @@ const oneMExecutor = new ClaudeExecutor({
 });
 const oneMRun = oneMExecutor.run({ cwd: "/tmp", prompt: "test" });
 assert.match(oneMRun.commandLine, /--model claude-opus-5\[1m\]/);
-assert.match(oneMRun.commandLine, /--settings .*ash-claude-settings-/);
+assert.doesNotMatch(oneMRun.commandLine, /ash-claude-settings-/);
 assert.doesNotMatch(oneMRun.commandLine, /secret-key/);
 const oneMResume = oneMExecutor.resumeFields("/tmp", oneMRun.sessionId);
 assert.equal(oneMResume.resumeEnv, null);
@@ -164,7 +164,7 @@ const directExecutor = new ClaudeExecutor({
 const directRun = directExecutor.run({ cwd: "/tmp", prompt: "test" });
 assert.match(directRun.commandLine, /--model claude-haiku-4-5/);
 assert.doesNotMatch(directRun.commandLine, /\[1m\]/);
-assert.match(directRun.commandLine, /--settings .*ash-claude-settings-/);
+assert.doesNotMatch(directRun.commandLine, /ash-claude-settings-/);
 const directResume = directExecutor.resumeFields("/tmp", directRun.sessionId);
 assert.equal(directResume.resumeEnv, null);
 assert.match(directResume.resumeArgs ?? "", new RegExp(String(address.port)));

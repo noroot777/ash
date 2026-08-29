@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 
 if (spawnSync("claude", ["--version"], { encoding: "utf8" }).status !== 0) {
@@ -14,6 +14,8 @@ if (spawnSync("claude", ["--version"], { encoding: "utf8" }).status !== 0) {
 }
 
 const scratch = mkdtempSync(join(tmpdir(), "ash-claude-relay-live-"));
+const staleSettings = join(tmpdir(), "ash-claude-settings-2147483647-00000000-0000-0000-0000-000000000000.json");
+writeFileSync(staleSettings, "stale");
 const cwd = join(scratch, "repo");
 const configDir = join(scratch, "claude-config");
 const hookFile = join(scratch, "hook.json");
@@ -71,6 +73,7 @@ try {
 
   process.env.ASH_DB = join(scratch, "relay.db");
   const { ClaudeExecutor } = await import("../src/executors/claude.js");
+  assert.equal(existsSync(staleSettings), false, "导入执行器时应清理已死亡 pid 的残留 settings");
   const executor = new ClaudeExecutor({
     model: "claude-sonnet-4-6",
     relay: {
@@ -86,7 +89,7 @@ try {
   const handle = executor.run({ cwd, prompt: "ping", env: { CLAUDE_CONFIG_DIR: configDir } });
   const settingsPath = handle.commandLine.match(/--settings (.*?ash-claude-settings-\d+-[0-9a-f-]+\.json)(?:\s|$)/i)?.[1];
   assert.ok(settingsPath && existsSync(settingsPath), "运行期 settings 文件应在 spawn 前准备好");
-  assert.equal(statSync(settingsPath).mode & 0o777, 0o600);
+  if (platform() !== "win32") assert.equal(statSync(settingsPath).mode & 0o777, 0o600);
   const runtimeSettings = readFileSync(settingsPath, "utf8");
   assert.match(runtimeSettings, /ash-profile-key/);
   assert.doesNotMatch(handle.commandLine, /ash-profile-key/);
@@ -109,8 +112,35 @@ try {
   assert.equal(existsSync(settingsPath), false, "Claude init 后应删除临时 settings 文件");
   assert.ok(existsSync(hookFile), "用户级 SessionStart hook 应继续加载");
   assert.deepEqual(JSON.parse(readFileSync(hookFile, "utf8")), { timeout: "3000000" });
+
+  for (const [label, failed] of [
+    ["run", executor.run({ cwd: join(scratch, "missing-run"), prompt: "ping", env: { CLAUDE_CONFIG_DIR: configDir } })],
+    ["runSteerable", executor.runSteerable({ cwd: join(scratch, "missing-steerable"), prompt: "ping", env: { CLAUDE_CONFIG_DIR: configDir } })],
+    ["openResident", executor.openResident({ cwd: join(scratch, "missing-resident"), prompt: "ping", env: { CLAUDE_CONFIG_DIR: configDir } })],
+  ] as const) {
+    const failedSettingsPath = failed.commandLine.match(/--settings (.*?ash-claude-settings-\d+-[0-9a-f-]+\.json)(?:\s|$)/i)?.[1];
+    assert.ok(failedSettingsPath && existsSync(failedSettingsPath), `${label}:预检前应已准备 settings`);
+    for await (const _event of failed.events) { /* consume failedChild error/done */ }
+    assert.equal(existsSync(failedSettingsPath), false, `${label}:调用方不调 cleanup 时也必须删除 settings`);
+  }
+
+  const startupFailed = new ClaudeExecutor({
+    relay: {
+      providerId: "provider-live",
+      name: "live",
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      apiKey: "ash-profile-key",
+      defaultModel: "claude-sonnet-4-6",
+      protocolConversionEnabled: false,
+      context1mModels: [],
+    },
+    startupError: "test startup error",
+  }).run({ cwd, prompt: "ping" });
+  assert.doesNotMatch(startupFailed.commandLine, /ash-claude-settings-/);
+  for await (const _event of startupFailed.events) { /* consume startup error */ }
   console.log("claude relay settings live: ok");
 } finally {
+  rmSync(staleSettings, { force: true });
   upstream.close();
   if (upstream.listening) await once(upstream, "close");
   rmSync(scratch, { recursive: true, force: true });
