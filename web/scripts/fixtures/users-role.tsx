@@ -45,12 +45,23 @@ const reply = (body: unknown, status = 200) =>
 const loginableAdmins = (except: string) =>
   users.filter((u) => u.role === "admin" && u.hasKey && u.status !== "suspended" && u.id !== except).length;
 
+// `GET /users` 是**全员可见**的,但按调用者的角色分两版(user-routes.ts:52-65):管理员拿
+// 全量,普通成员只拿 id/name/role 且不含停用的人。这一版必须照做 —— 自降级的中间态全靠
+// 它才出得来:PATCH 一成功后端就改口,而前端要等 refresh() 才知道自己已经不是管理员了。
+const listFor = (role: UserRole) =>
+  role === "admin"
+    ? users
+    : users.filter((u) => u.status !== "suspended").map((u) => ({ id: u.id, name: u.name, role: u.role }));
+
 const realFetch = window.fetch.bind(window);
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const { pathname } = new URL(href, location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
-  if (pathname === "/api/users" && method === "GET") return reply(users);
+  // 「我是谁」一律读 users 这份源,不读 React 那份 —— 后端也是这样,它不会等前端刷完。
+  if (pathname === "/api/users" && method === "GET") {
+    return reply(listFor(users.find((u) => u.id === SELF_ID)?.role ?? "member"));
+  }
   const target = /^\/api\/users\/([^/]+)$/.exec(pathname)?.[1];
   if (target && method === "PATCH") {
     const id = decodeURIComponent(target);
@@ -77,14 +88,24 @@ const authState = (role: UserRole): AuthState => ({
 function Fixture() {
   const [myRole, setMyRole] = useState<UserRole>("admin");
   const [notices, setNotices] = useState<string[]>([]);
-  // `UsersSettings` 改完角色会 `refresh()`；自己那一下降级要靠它把这一屏关上。
+  // `notify` 必须是稳定引用 —— `WorkspaceShell` 那个真身就是 `useCallback(…, [])`。
+  // 写成内联箭头的话 `UsersSettings` 里 `load` 的 useCallback 每次渲染都换新，那个
+  // `useEffect(…, [load])` 就跟着每渲染一次重拉一次名单，夹具里看到的时序是假的。
+  const notify = useCallback((message: string) => setNotices((all) => [...all, message]), []);
+  // `UsersSettings` 改完角色会 `refresh()`；自己那一下降级要靠它把这一屏关上。真实现里
+  // 这是一次网络往返，所以这里能被拨慢（`?slowRefresh=`，用来看住那一拍中间态）或者
+  // 拨成失败（`?failRefresh=1`，那一拍会**永远**停在中间态）。
   const refresh = useCallback(async () => {
+    const params = new URLSearchParams(location.search);
+    const delay = Number(params.get("slowRefresh") ?? 0);
+    if (delay > 0) await new Promise((done) => setTimeout(done, delay));
+    if (params.get("failRefresh")) throw new Error("auth state 读不出来");
     setMyRole(users.find((u) => u.id === SELF_ID)?.role ?? "member");
   }, []);
   return (
     <AuthContext.Provider value={{ state: authState(myRole), refresh }}>
       <main style={{ width: 960, margin: "24px auto" }}>
-        <UsersSettings notify={(m) => setNotices((all) => [...all, m])} onAccount={() => {}} />
+        <UsersSettings notify={notify} onAccount={() => {}} />
         <pre data-testid="notices">{JSON.stringify(notices)}</pre>
       </main>
     </AuthContext.Provider>

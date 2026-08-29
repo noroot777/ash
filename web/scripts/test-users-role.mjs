@@ -81,8 +81,70 @@ try {
   assert.equal(await page.locator(".users-row").count(), 0, "降完自己就不该再渲染那张管理名单");
   assert.equal(await page.locator(".users-role").count(), 0);
 
+  // ⑤/⑥ 第 1 轮审查 P2：`PATCH` 一成功，后端下一次 `GET /users` 就按普通成员回精简版
+  //     （只有 id/name/role），而这一屏要等 auth state 刷回来才知道自己已经不是管理员。
+  //     中间那一拍要是把精简版渲染出来，就是一张目录名全空、却照样摆着「发邀请链接 /
+  //     停用 / 角色下拉」的假管理表。两档分开钉，因为它们坏在不同地方：
+  //       ⑤ auth 刷得慢 → 顺序问题，假表一闪而过；
+  //       ⑥ auth 刷不回来 → 顺序救不了，假表**一直**留在屏幕上，只有判形状拦得住。
+  //     一闪而过那一帧靠轮询抓不着，用 MutationObserver 盯每一次提交的 DOM。
+
+  // ⑤ auth state 慢半拍刷回来。
+  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/users-role.html?slowRefresh=500`);
+  await page.locator(".users-row").first().waitFor();
+  await watchForSlimRows(page);
+  await selfDemote(page, rows, roleOf);
+  await closed.waitFor();
+  assert.equal(await slimRowsSeen(page), 0, "auth 刷回来之前，一帧都不许拿精简名单渲染管理表");
+
+  // ⑥ auth state 刷不回来。
+  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/users-role.html?failRefresh=1`);
+  await page.locator(".users-row").first().waitFor();
+  await watchForSlimRows(page);
+  await selfDemote(page, rows, roleOf);
+  // 修好之前/之后都会落两条提示，所以等条数而不是等某一句——否则这里挂成 30 秒超时，
+  // 底下那几条更说明问题的断言反倒跑不到。
+  await page.waitForFunction(() => JSON.parse(document.querySelector('[data-testid="notices"]').textContent).length >= 2);
+
+  const notices = await page.getByTestId("notices").innerText();
+  assert.match(notices, /已降为普通成员/, "降级本身是成功的，得照实说");
+  assert.doesNotMatch(notices, /操作失败/, "善后步骤失败不许把已经成功的动作说成失败");
+  assert.match(notices, /账号状态没刷新出来/, "刷不回来要明说，别让人对着一张已失效的名单继续点");
+  assert.equal(await slimRowsSeen(page), 0, "刷不回来也不许把精简名单写进管理表");
+  const dirs = await page.locator(".users-row-meta code").allInnerTexts();
+  assert.equal(dirs.length, 4, "退守到上一份完整名单，而不是精简版");
+  assert.ok(dirs.every((d) => d.trim()), `每一行的目录名都该还在：${JSON.stringify(dirs)}`);
+
   console.log("[users-role] ok");
 } finally {
   await browser?.close();
   await server.close();
+}
+
+/** 把「阿岚」（也就是当前这个会话自己）降成普通成员，走完那道确认。 */
+async function selfDemote(page, rows, roleOf) {
+  await roleOf("阿岚").selectOption("member");
+  const confirm = rows.filter({ hasText: "阿岚" }).locator(".users-confirm");
+  await confirm.waitFor();
+  await confirm.getByRole("button", { name: "确定" }).click();
+}
+
+/** 从这一刻起，盯住每一次 DOM 提交里有没有「目录名是空的」那种行。 */
+async function watchForSlimRows(page) {
+  await page.evaluate(() => {
+    window.__slimRows = 0;
+    const scan = () => {
+      for (const code of document.querySelectorAll(".users-row-meta code")) {
+        if (!code.textContent?.trim()) window.__slimRows += 1;
+      }
+    };
+    window.__slimObserver?.disconnect();
+    window.__slimObserver = new MutationObserver(scan);
+    window.__slimObserver.observe(document.body, { subtree: true, childList: true, characterData: true });
+    scan();
+  });
+}
+
+function slimRowsSeen(page) {
+  return page.evaluate(() => window.__slimRows);
 }

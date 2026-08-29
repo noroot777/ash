@@ -30,6 +30,9 @@ const ROLE_LABEL: Record<UserRole, string> = {
 
 const asRole = (value: string): UserRole => (value === "admin" ? "admin" : "member");
 
+// 管理员那一版的名单行带着 dirName/status;普通成员拿到的精简版只有 id/name/role。
+const isAdminRow = (row: UserView) => typeof (row as Partial<UserView>).dirName === "string";
+
 function InviteLink({ url, onDone }: { url: string; onDone?: () => void }) {
   const [copied, setCopied] = useState(false);
   const full = absoluteInvite(url);
@@ -75,9 +78,18 @@ export function UsersSettings({
   const [role, setRole] = useState<UserRole>("member");
   const [busy, setBusy] = useState(false);
 
+  // 名单只在**后端还把我当管理员**时才收下。自降级那一下必然撞上一个窗口:PATCH 一成功
+  // 后端下一次 `GET /users` 就改口回精简版(user-routes.ts),而这一屏要等 `refresh()`
+  // 把 auth state 刷回来才知道自己不是管理员了 —— 中间这一拍把精简版写进来,渲染出的
+  // 就是一张目录名全空、却照样摆着「发邀请链接 / 停用 / 角色下拉」的假管理表;`refresh()`
+  // 要是失败,它还会一直留在屏幕上(第 1 轮审查 P2)。
+  //
+  // 所以判据落在**响应形状**上,不靠 load/refresh 的先后:精简版一律不收,宁可留着上一份
+  // 名单,等这一屏自己关掉。
   const load = useCallback(async () => {
     try {
-      setUsers(await userApi.list());
+      const rows = await userApi.list();
+      if (rows.every(isAdminRow)) setUsers(rows);
     } catch (e) {
       notify(e instanceof ApiError ? e.message : "读不出用户列表");
     } finally {
@@ -130,22 +142,28 @@ export function UsersSettings({
 
   const act = useCallback(
     async (label: string, run: () => Promise<unknown>) => {
+      let result: { inviteUrl?: string | null; stoppedTasks?: string[]; pausedSchedules?: number };
       try {
-        const result = (await run()) as { inviteUrl?: string | null; stoppedTasks?: string[]; pausedSchedules?: number };
-        if (result?.inviteUrl) setInvite({ userId: "", url: result.inviteUrl });
-        if (result?.stoppedTasks) {
-          notify(
-            `已停用。停掉 ${result.stoppedTasks.length} 个在跑/排队的任务` +
-              (result.pausedSchedules ? `，暂停 ${result.pausedSchedules} 条日程` : ""),
-          );
-        } else {
-          notify(label);
-        }
-        await load();
-        await refresh();
+        result = (await run()) as { inviteUrl?: string | null; stoppedTasks?: string[]; pausedSchedules?: number };
       } catch (e) {
         notify(e instanceof ApiError ? e.message : "操作失败");
+        return;
       }
+      if (result?.inviteUrl) setInvite({ userId: "", url: result.inviteUrl });
+      if (result?.stoppedTasks) {
+        notify(
+          `已停用。停掉 ${result.stoppedTasks.length} 个在跑/排队的任务` +
+            (result.pausedSchedules ? `，暂停 ${result.pausedSchedules} 条日程` : ""),
+        );
+      } else {
+        notify(label);
+      }
+      // 到这里动作**已经成了**,底下两步是善后 —— 它们失败不许回一句「操作失败」把结论
+      // 说反(第 1 轮审查 P2)。`refresh()` 排在 `load()` 前面:自降级那一下 auth state
+      // 早一拍刷回来,这一屏就早一拍关掉;刷不回来时如实说一句,别让人对着一张已经失效的
+      // 管理名单继续点。
+      await refresh().catch(() => notify("账号状态没刷新出来，刷新页面看最新的"));
+      await load();
     },
     [load, notify, refresh],
   );
