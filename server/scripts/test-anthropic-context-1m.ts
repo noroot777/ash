@@ -144,19 +144,15 @@ const oneMExecutor = new ClaudeExecutor({
 });
 const oneMRun = oneMExecutor.run({ cwd: "/tmp", prompt: "test" });
 assert.match(oneMRun.commandLine, /--model claude-opus-5\[1m\]/);
-assert.match(oneMRun.commandLine, /"autoCompactEnabled":true/);
-assert.match(oneMRun.commandLine, /"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"400000"/);
-assert.match(oneMRun.commandLine, /"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":"84\.21"/);
-assert.match(oneMRun.commandLine, /"ANTHROPIC_BASE_URL":"http:\/\/127\.0\.0\.1:54322\/api\/llm-providers\/provider-1\/context-1m"/);
-assert.match(oneMRun.commandLine, /"ANTHROPIC_AUTH_TOKEN":""/);
-assert.match(oneMRun.commandLine, /"ANTHROPIC_API_KEY":""/);
+assert.match(oneMRun.commandLine, /--settings .*ash-claude-settings-/);
 assert.doesNotMatch(oneMRun.commandLine, /secret-key/);
 const oneMResume = oneMExecutor.resumeFields("/tmp", oneMRun.sessionId);
-assert.match(oneMResume.resumeEnv ?? "", /CLAUDE_CODE_OAUTH_TOKEN=<你的key>/);
-assert.doesNotMatch(oneMResume.resumeEnv ?? "", /ANTHROPIC_(?:AUTH_TOKEN|API_KEY)/);
+assert.equal(oneMResume.resumeEnv, null);
 assert.match(oneMResume.resumeArgs ?? "", /"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"400000"/);
 assert.match(oneMResume.resumeArgs ?? "", /"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":"84\.21"/);
 assert.match(oneMResume.resumeArgs ?? "", /context-1m/);
+assert.match(oneMResume.resumeArgs ?? "", /"ANTHROPIC_AUTH_TOKEN":"<你的key>"/);
+assert.match(oneMResume.resumeArgs ?? "", /"CLAUDE_CODE_OAUTH_TOKEN":""/);
 assert.doesNotMatch(oneMResume.resumeArgs ?? "", /secret-key/);
 
 const directExecutor = new ClaudeExecutor({
@@ -168,13 +164,14 @@ const directExecutor = new ClaudeExecutor({
 const directRun = directExecutor.run({ cwd: "/tmp", prompt: "test" });
 assert.match(directRun.commandLine, /--model claude-haiku-4-5/);
 assert.doesNotMatch(directRun.commandLine, /\[1m\]/);
-assert.match(directRun.commandLine, /"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"400000"/);
-assert.match(directRun.commandLine, new RegExp(`"ANTHROPIC_BASE_URL":"http:\\\/\\\/127\\.0\\.0\\.1:${address.port}"`));
+assert.match(directRun.commandLine, /--settings .*ash-claude-settings-/);
 const directResume = directExecutor.resumeFields("/tmp", directRun.sessionId);
-assert.match(directResume.resumeEnv ?? "", /CLAUDE_CODE_OAUTH_TOKEN=<你的key>/);
+assert.equal(directResume.resumeEnv, null);
 assert.match(directResume.resumeArgs ?? "", new RegExp(String(address.port)));
 assert.doesNotMatch(directResume.resumeArgs ?? "", /context-1m/);
 assert.doesNotMatch(directRun.commandLine, /secret-key/);
+await oneMRun.cleanup?.();
+await directRun.cleanup?.();
 
 upstream.close();
 await once(upstream, "close");

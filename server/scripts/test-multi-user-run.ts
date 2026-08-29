@@ -198,9 +198,9 @@ const statusOf = async (taskId: string) =>
 const settled = (s?: string) => s === "done" || s === "failed" || s === "canceled";
 
 const expectBob = (env: Record<string, string | null>, where: string) => {
-  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "bob-provider-key", `${where}:烧的必须是点它的人的 key`);
-  assert.equal(env.ANTHROPIC_AUTH_TOKEN, null, `${where}:旧 AUTH_TOKEN 必须从子进程删除`);
+  assert.equal(env.ANTHROPIC_AUTH_TOKEN, "bob-provider-key", `${where}:烧的必须是点它的人的 key`);
   assert.equal(env.ANTHROPIC_API_KEY, null, `${where}:旧 API_KEY 必须从子进程删除`);
+  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, null, `${where}:旧 OAuth token 必须从子进程删除`);
   assert.equal(env.ANTHROPIC_BASE_URL, "https://bob-provider.example", `${where}:供应商地址同上`);
   assert.ok(
     (env.CLAUDE_CONFIG_DIR ?? "").includes(bob.id),

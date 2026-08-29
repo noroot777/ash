@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
+import { rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { AgentEvent, AgentType, TokenUsage } from "@ash/shared";
 import { guessContextWindow } from "@ash/shared/usage";
 import { cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@ash/shared/cli-overrides";
-import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
+import { cliHostEnv } from "./cli-env.js";
 import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { spawnControllableForRun, spawnForRun, detachedInfo } from "./detached.js";
 import { cleanupAfterRun, spawnAgent, resumeFor, resumeInner, shq, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets, failedChild } from "./spawn.js";
@@ -14,12 +17,22 @@ import { calibrateSkills } from "../skills.js";
 import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
 import { ClaudeControlBridge } from "./claude-control.js";
 
+type RuntimeSettings = { arg: string | null; cleanup: () => void; error?: string };
+
+function removeRuntimeSettings(path: string): void {
+  try { rmSync(path, { force: true }); } catch { /* 退出/重启清理只做 best effort */ }
+}
+
+function runtimeSettingsCleanupFromCommandLine(commandLine: string): () => void {
+  const match = commandLine.match(/--settings (.*?ash-claude-settings-\d+-[0-9a-f-]+\.json)(?:\s|$)/i);
+  const path = match?.[1];
+  return path ? () => removeRuntimeSettings(path) : () => {};
+}
+
 // Drives the real `claude` CLI in headless stream-json mode.
 export class ClaudeExecutor implements AgentExecutor {
   readonly type = "claude" as const;
   readonly label: string;
-  // 覆盖项不能放恢复命令的 env 前缀：它会输给 settings.json，导致复制命令与 ash 不一致。
-  private readonly resumeEnvHint?: string;
   private bin: string;
   private startupError?: string;
   readonly model?: string;
@@ -37,13 +50,6 @@ export class ClaudeExecutor implements AgentExecutor {
     this.startupError = opts.startupError;
     this.relay = opts.relay;
     this.configOverrides = opts.configOverrides;
-    this.resumeEnvHint = resumeEnvHint(
-      this.type,
-      // 覆盖项故意不进 env 前缀:它打不过用户的 settings.json(见 resumeEnvHint 字段注释),
-      // 真正带着走的是 resumeFields() 里那个 `--settings`。
-      undefined,
-      this.relay ? `CLAUDE_CODE_OAUTH_TOKEN=<你的key> ` : undefined,
-    );
     this.label = opts.name ?? `claude@local${opts.model ? "·" + opts.model : ""}`;
   }
 
@@ -53,16 +59,16 @@ export class ClaudeExecutor implements AgentExecutor {
 
   /** 恢复参数按会话 cwd 现算；构造时提前冻结会漏掉项目 settings。 */
   resumeFields(cwd: string, sessionId: string): ResumeFields {
-    const settings = this.settingsPayload(cwd, this.model);
+    const settings = this.settingsPayload(cwd, this.model, this.relay ? "<你的key>" : undefined);
     const resumeArgs = settings ? `--settings ${shq(JSON.stringify(settings))}` : null;
     const inner = resumeInner.claude(sessionId);
     return {
       resumeCommand: resumeFor(
         cwd,
         resumeArgs ? `${inner} ${resumeArgs}` : inner,
-        this.resumeEnvHint ?? "",
+        "",
       ),
-      resumeEnv: this.resumeEnvHint ?? null,
+      resumeEnv: null,
       resumeArgs,
     };
   }
@@ -75,7 +81,7 @@ export class ClaudeExecutor implements AgentExecutor {
   }
 
   /** fastMode、覆盖项、供应商路由与恢复参数共用一份 --settings；多份参数不合并。 */
-  private settingsPayload(cwd: string, model?: string): Record<string, unknown> | null {
+  private settingsPayload(cwd: string, model?: string, relayAuthToken?: string): Record<string, unknown> | null {
     const settings = {
       ...(this.speed === "fast" ? { fastMode: true } : {}),
       ...cliConfigOverrideSettings(this.type, this.configOverrides, cliHostEnv(cwd)),
@@ -88,19 +94,19 @@ export class ClaudeExecutor implements AgentExecutor {
       settings.env = {
         ...existingEnv,
         ANTHROPIC_BASE_URL: relayBaseUrl,
-        // CC Switch 常把这两项写进用户 settings；最高优先级这里清空后，真正的
-        // Bearer 凭证由进程环境里的 CLAUDE_CODE_OAUTH_TOKEN 提供，不进 argv。
-        ANTHROPIC_AUTH_TOKEN: "",
+        // 真密钥只在运行期写入 0600 临时 settings 文件；恢复命令保存的是占位符。
+        // 三种凭证变量都在最高优先级钉住，用户/项目 settings 无法再反向覆盖。
+        ANTHROPIC_AUTH_TOKEN: relayAuthToken ?? "",
         ANTHROPIC_API_KEY: "",
+        CLAUDE_CODE_OAUTH_TOKEN: "",
       };
     }
     return Object.keys(settings).length ? settings : null;
   }
 
-  // 挂了供应商就顶掉 CLI 自己的登录态:BASE_URL 由最高优先级的 --settings 锁定；
-  // 用户 settings 里的 AUTH_TOKEN / API_KEY 也在同一层清空。真正的 Bearer 凭证只走
-  // CLAUDE_CODE_OAUTH_TOKEN 进程环境，所以既不进 argv，也不需要屏蔽 user settings；
-  // 用户的全局技能、hooks、MCP、权限与其余 env 仍照常加载。
+  // 挂了供应商就顶掉 CLI 自己的登录态:BASE_URL 与三种凭证变量由最高优先级的
+  // --settings 锁定。运行期 settings 走 0600 临时文件，commandLine 只保存路径；Claude
+  // 发出 init(说明配置已读完)就删除，退出再兜底。这样用户层仍完整加载，密钥也不进 argv。
   //
   // configOverrides 落成的那几个变量在这里只是**第二道**:claude 启动时会把各层
   // settings 的 `env` 写回自己的进程环境,用户 `~/.claude/settings.json` 里的同名
@@ -116,11 +122,28 @@ export class ClaudeExecutor implements AgentExecutor {
     const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv(cwd));
     if (this.relay) {
       env.ANTHROPIC_BASE_URL = this.relayBaseUrl(model);
-      env.CLAUDE_CODE_OAUTH_TOKEN = this.relay.apiKey;
-      env.ANTHROPIC_AUTH_TOKEN = undefined;
+      env.ANTHROPIC_AUTH_TOKEN = this.relay.apiKey;
       env.ANTHROPIC_API_KEY = undefined;
+      env.CLAUDE_CODE_OAUTH_TOKEN = undefined;
     }
     return env;
+  }
+
+  private runtimeSettings(cwd: string, model?: string): RuntimeSettings {
+    const settings = this.settingsPayload(cwd, model, this.relay?.apiKey);
+    if (!settings) return { arg: null, cleanup: () => {} };
+    if (!this.relay) return { arg: JSON.stringify(settings), cleanup: () => {} };
+    const path = join(tmpdir(), `ash-claude-settings-${process.pid}-${randomUUID()}.json`);
+    try {
+      writeFileSync(path, JSON.stringify(settings), { encoding: "utf8", mode: 0o600, flag: "wx" });
+      return { arg: path, cleanup: () => removeRuntimeSettings(path) };
+    } catch (error) {
+      return {
+        arg: null,
+        cleanup: () => {},
+        error: `无法创建 Claude 临时配置：${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
   }
 
   private compactWindow(): number | null {
@@ -131,17 +154,19 @@ export class ClaudeExecutor implements AgentExecutor {
   run(opts: RunOpts): RunHandle {
     const sessionId = opts.sessionId ?? randomUUID();
     const model = opts.model ?? this.model;
-    const args = this.buildArgs(opts, sessionId, false, model);
+    const settings = this.runtimeSettings(opts.cwd, model);
+    const args = this.buildArgs(opts, sessionId, false, model, settings.arg);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
-    const child = this.startupError
-      ? failedChild(this.startupError)
+    const child = this.startupError || settings.error
+      ? failedChild(this.startupError ?? settings.error!)
       : spawnForRun(opts.cwd, this.bin, args, opts.prompt, { ...this.env(opts.cwd, model), ...opts.env }, opts.detach);
+    child.on("close", settings.cleanup);
     return {
       sessionId,
       commandLine,
-      events: parseClaudeStream(child, undefined, this.bin, this.type, this.compactWindow()),
+      events: parseClaudeStream(child, undefined, this.bin, this.type, this.compactWindow(), settings.cleanup),
       kill: () => killChild(child),
-      cleanup: () => cleanupAfterRun(child),
+      cleanup: async () => { settings.cleanup(); await cleanupAfterRun(child); },
       detached: detachedInfo(child),
     };
   }
@@ -150,10 +175,11 @@ export class ClaudeExecutor implements AgentExecutor {
   runSteerable(opts: RunOpts): RunHandle {
     const sessionId = opts.sessionId ?? randomUUID();
     const model = opts.model ?? this.model;
-    const args = this.buildArgs(opts, sessionId, true, model);
+    const settings = this.runtimeSettings(opts.cwd, model);
+    const args = this.buildArgs(opts, sessionId, true, model, settings.arg);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`);
-    const child = this.startupError
-      ? failedChild(this.startupError)
+    const child = this.startupError || settings.error
+      ? failedChild(this.startupError ?? settings.error!)
       : spawnControllableForRun(
           opts.cwd,
           this.bin,
@@ -162,27 +188,30 @@ export class ClaudeExecutor implements AgentExecutor {
           { ...this.env(opts.cwd, model), ...opts.env },
           opts.detach,
         );
+    child.on("close", settings.cleanup);
     const detached = detachedInfo(child);
     return singleRunFromResident(
-      this.residentFromChild(child, sessionId, commandLine),
+      this.residentFromChild(child, sessionId, commandLine, settings.cleanup),
       detached,
     );
   }
 
   attach(child: ChildProcess, opts: { sessionId: string; commandLine: string }): RunHandle {
     const detached = detachedInfo(child);
+    const settingsCleanup = runtimeSettingsCleanupFromCommandLine(opts.commandLine);
+    child.on("close", settingsCleanup);
     if (child.stdin && opts.commandLine.includes("--input-format")) {
       return singleRunFromResident(
-        this.residentFromChild(child, opts.sessionId, opts.commandLine),
+        this.residentFromChild(child, opts.sessionId, opts.commandLine, settingsCleanup),
         detached,
       );
     }
     return {
       sessionId: opts.sessionId,
       commandLine: opts.commandLine,
-      events: parseClaudeStream(child, undefined, this.bin, this.type, this.compactWindow()),
+      events: parseClaudeStream(child, undefined, this.bin, this.type, this.compactWindow(), settingsCleanup),
       kill: () => child.kill(),
-      cleanup: () => cleanupAfterRun(child),
+      cleanup: async () => { settingsCleanup(); await cleanupAfterRun(child); },
       detached: detachedInfo(child),
     };
   }
@@ -193,20 +222,23 @@ export class ClaudeExecutor implements AgentExecutor {
   openResident(opts: RunOpts): ResidentHandle {
     const sessionId = opts.sessionId ?? randomUUID();
     const model = opts.model ?? this.model;
-    const args = this.buildArgs(opts, sessionId, true, model);
+    const settings = this.runtimeSettings(opts.cwd, model);
+    const args = this.buildArgs(opts, sessionId, true, model, settings.arg);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`);
-    const child = this.startupError
-      ? failedChild(this.startupError)
+    const child = this.startupError || settings.error
+      ? failedChild(this.startupError ?? settings.error!)
       : spawnAgent(opts.cwd, this.bin, args, userLine(opts.prompt), { ...this.env(opts.cwd, model), ...opts.env }, {
           keepStdin: true,
         });
-    return this.residentFromChild(child, sessionId, commandLine);
+    child.on("close", settings.cleanup);
+    return this.residentFromChild(child, sessionId, commandLine, settings.cleanup);
   }
 
   private residentFromChild(
     child: ChildProcess,
     sessionId: string,
     commandLine: string,
+    settingsCleanup: () => void = () => {},
   ): ResidentHandle {
     const resident = new ClaudeControlBridge();
     const writeChecked = (data: string): Promise<void> => new Promise((resolve, reject) => {
@@ -220,7 +252,7 @@ export class ClaudeExecutor implements AgentExecutor {
     return {
       sessionId,
       commandLine,
-      events: parseClaudeStream(child, resident, this.bin, this.type, this.compactWindow()),
+      events: parseClaudeStream(child, resident, this.bin, this.type, this.compactWindow(), settingsCleanup),
       send: (text: string) => {
         // stdin 没了/已经关掉 = 这条消息一个字都进不去,如实说不(见 ResidentHandle.send)。
         const stdin = child.stdin;
@@ -256,12 +288,12 @@ export class ClaudeExecutor implements AgentExecutor {
         child.stdin?.end();
       },
       kill: () => killChild(child),
-      cleanup: () => cleanupAfterRun(child),
+      cleanup: async () => { settingsCleanup(); await cleanupAfterRun(child); },
     };
   }
 
   // 两种形态共用的参数装配。resident 只多一个 --input-format。
-  private buildArgs(opts: RunOpts, sessionId: string, resident: boolean, selectedModel = opts.model ?? this.model): string[] {
+  private buildArgs(opts: RunOpts, sessionId: string, resident: boolean, selectedModel = opts.model ?? this.model, settingsArg: string | null = null): string[] {
     const model = this.relay
       ? withContext1mSuffix(selectedModel, this.relay.context1mModels)
       : selectedModel;
@@ -282,8 +314,7 @@ export class ClaudeExecutor implements AgentExecutor {
     // 和「覆盖 CLI 自己的配置」都从这里进;装配在 settingsPayload() 里,恢复命令共用同
     // 一份。放在 extraArgs 之前:用户自带 --settings 时以他那份为准(设置页会警告本覆盖
     // 被顶掉)。
-    const settings = this.settingsPayload(opts.cwd, selectedModel);
-    if (settings) args.push("--settings", JSON.stringify(settings));
+    if (settingsArg) args.push("--settings", settingsArg);
     // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。
     if (this.extraArgs.length) args.push(...this.extraArgs);
     if (opts.extraArgs?.length) args.push(...opts.extraArgs);
@@ -365,6 +396,7 @@ export async function* parseClaudeStream(
   bin = "claude",
   calibrateAs?: AgentType,
   compactWindow: number | null = null,
+  onInitialized: () => void = () => {},
 ): AsyncIterable<AgentEvent> {
   const queue: AgentEvent[] = [];
   let resolve: (() => void) | null = null;
@@ -421,6 +453,7 @@ export async function* parseClaudeStream(
       return; // deltas drive the live stream; the trailing complete message handles tools
     }
     if (ev.type === "system" && ev.session_id) {
+      if (ev.subtype === "init") onInitialized();
       // init 事件白送一份**权威**技能清单(skills / slash_commands / cwd 都在里面),
       // 顺手校准 skills 模块的扫描结果 —— 这是唯一不用额外起一个 CLI 进程就能拿到
       // 「这个 CLI 自己认哪些技能」的机会,别浪费。纯旁路:失败也不能影响事件流。

@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,24 +19,39 @@ const configDir = join(scratch, "claude-config");
 const hookFile = join(scratch, "hook.json");
 mkdirSync(cwd, { recursive: true });
 mkdirSync(configDir, { recursive: true });
+mkdirSync(join(cwd, ".claude"), { recursive: true });
 writeFileSync(join(configDir, "settings.json"), JSON.stringify({
   env: {
     ANTHROPIC_BASE_URL: "http://127.0.0.1:59999",
     ANTHROPIC_AUTH_TOKEN: "wrong-user-auth",
     ANTHROPIC_API_KEY: "wrong-user-api-key",
+    CLAUDE_CODE_OAUTH_TOKEN: "wrong-user-oauth",
     API_TIMEOUT_MS: "3000000",
   },
   hooks: {
     SessionStart: [{ hooks: [{ type: "command", command: `printf '{\"timeout\":\"%s\"}' \"$API_TIMEOUT_MS\" > ${JSON.stringify(hookFile)}` }] }],
   },
 }));
+writeFileSync(join(cwd, ".claude", "settings.json"), JSON.stringify({
+  env: {
+    ANTHROPIC_AUTH_TOKEN: "wrong-project-auth",
+    ANTHROPIC_API_KEY: "wrong-project-api-key",
+    CLAUDE_CODE_OAUTH_TOKEN: "wrong-project-oauth",
+  },
+}));
 
 let authorization: string | null = null;
 let xApiKey: string | null = null;
+let beta = "";
+let cacheControls: unknown[] = [];
 const upstream = createServer(async (req, res) => {
   authorization = req.headers.authorization ?? null;
   xApiKey = String(req.headers["x-api-key"] ?? "") || null;
-  for await (const _chunk of req) { /* consume request */ }
+  beta = String(req.headers["anthropic-beta"] ?? "");
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(Buffer.from(chunk));
+  const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { system?: Array<{ cache_control?: unknown }> };
+  cacheControls = (body.system ?? []).map((item) => item.cache_control).filter(Boolean);
   res.writeHead(200, { "content-type": "text/event-stream" });
   res.end(
     'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-6","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1}}}\n\n'
@@ -69,6 +84,12 @@ try {
     },
   });
   const handle = executor.run({ cwd, prompt: "ping", env: { CLAUDE_CONFIG_DIR: configDir } });
+  const settingsPath = handle.commandLine.match(/--settings (.*?ash-claude-settings-\d+-[0-9a-f-]+\.json)(?:\s|$)/i)?.[1];
+  assert.ok(settingsPath && existsSync(settingsPath), "运行期 settings 文件应在 spawn 前准备好");
+  assert.equal(statSync(settingsPath).mode & 0o777, 0o600);
+  const runtimeSettings = readFileSync(settingsPath, "utf8");
+  assert.match(runtimeSettings, /ash-profile-key/);
+  assert.doesNotMatch(handle.commandLine, /ash-profile-key/);
   let text = "";
   let error: string | null = null;
   for await (const event of handle.events) {
@@ -81,8 +102,11 @@ try {
   assert.equal(text.trim(), "OK");
   assert.equal(authorization, "Bearer ash-profile-key");
   assert.equal(xApiKey, null);
+  assert.doesNotMatch(beta, /oauth-2025-04-20|extended-cache-ttl-2025-04-11/);
+  assert.ok(cacheControls.every((value) => !value || typeof value !== "object" || !("ttl" in value)), "AUTH_TOKEN 通道不应请求 1h cache ttl");
   assert.doesNotMatch(handle.commandLine, /--setting-sources/);
   assert.doesNotMatch(handle.commandLine, /ash-profile-key|wrong-user/);
+  assert.equal(existsSync(settingsPath), false, "Claude init 后应删除临时 settings 文件");
   assert.ok(existsSync(hookFile), "用户级 SessionStart hook 应继续加载");
   assert.deepEqual(JSON.parse(readFileSync(hookFile, "utf8")), { timeout: "3000000" });
   console.log("claude relay settings live: ok");
