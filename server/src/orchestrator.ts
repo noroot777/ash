@@ -462,6 +462,9 @@ export async function continueTask(
           exitStatus: null,
           commandLine: handle.commandLine,
           executor: ex.label,
+          // 这一轮跑在谁名下 —— 跨人续聊会换人(runOwner 上面刚算过),而 CLI 的会话
+          // 文件跟着这个人的配置目录走。不刷新,接力就会去上一个人的目录里找。
+          runOwnerUserId: runOwner ?? null,
           // 回合保真四件套整组刷新（说明见 db/schema.ts）：profile / 环境指纹 / 模型 /
           // 思考强度都可能在两轮之间被改，留着上一轮的值就会让重试按着别人的配置跑。
           executorId: profileId,
@@ -492,6 +495,7 @@ export async function continueTask(
         role: sessionRole,
         agentType: agent,
         executor: ex.label,
+        runOwnerUserId: runOwner ?? null,
         executorId: profileId,
         executorFingerprint: profileFingerprint,
         turnModel: ex.model ?? null,

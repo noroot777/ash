@@ -78,27 +78,39 @@ export async function repoRefTips(repoPath: string): Promise<{ name: string; com
 
 /**
  * 会话文件盘点:每条会话的文件在哪、能不能搬。dryRun 时不读内容（preflight 用）。
- * `ownerUserId` 决定去谁的 CLI 配置目录里找——多用户模式下会话不在 `~/.claude`。
+ *
+ * 目录**逐条会话解析**,不是整批一个:多人模式下 `sessions.run_owner_user_id` 才是
+ * 「这条会话的 transcript 写在谁的 CLI 配置目录里」,共享项目里 B 回复 A 的任务时它是 B
+ * (`orchestrator.ts` 的 `runOwner = actingUserId ?? task.ownerUserId`)。按任务归属人一刀切
+ * 会在 A 的目录下扑空,报「本机找不到 CLI 会话文件」,最新那段上下文就此不随任务走。
+ * `taskOwnerUserId` 只兜底没有这一列的老行(以及自用模式,那边两者都是 null)。
  */
 export async function collectSessionFiles(
   rows: SessionRow[],
   fallbackCwd: string | null,
   dryRun: boolean,
-  ownerUserId: string | null,
+  taskOwnerUserId: string | null,
 ): Promise<{ files: HandoffFilePayload[]; found: Set<string>; notes: string[] }> {
   const files: HandoffFilePayload[] = [];
   const found = new Set<string>();
   const notes: string[] = [];
-  const claudeConfigDir = await cliConfigDirForOwner(ownerUserId, "claude");
-  const codexConfigDir = await cliConfigDirForOwner(ownerUserId, "codex");
+  // 同一个 owner 往往是整批,缓存一下省掉每行两次库查询。
+  const dirCache = new Map<string, string | null>();
+  const configDirFor = async (owner: string | null, agentType: string): Promise<string | null> => {
+    const key = `${owner ?? ""} ${agentType}`;
+    if (!dirCache.has(key)) dirCache.set(key, await cliConfigDirForOwner(owner, agentType));
+    return dirCache.get(key)!;
+  };
   for (const s of rows) {
     if (!s.cliSessionId) continue;
+    const runOwner = s.runOwnerUserId ?? taskOwnerUserId;
     let abs: string | null = null;
     let rel = "";
     let kind: HandoffFilePayload["kind"];
     if (s.agentType === "claude") {
       kind = "claude-session";
       rel = `${s.cliSessionId}.jsonl`;
+      const claudeConfigDir = await configDirFor(runOwner, "claude");
       for (const cwd of [s.cwd, s.worktreePath, fallbackCwd]) {
         if (!cwd) continue;
         const candidate = claudeSessionFilePath(cwd, s.cliSessionId, claudeConfigDir);
@@ -106,6 +118,7 @@ export async function collectSessionFiles(
       }
     } else if (s.agentType === "codex") {
       kind = "codex-rollout";
+      const codexConfigDir = await configDirFor(runOwner, "codex");
       abs = await findRollout(s.cliSessionId, codexConfigDir);
       // 协议里 rel 一律 `/` 分隔:Windows 上 relative 产出反斜杠,POSIX 导入侧会把
       // 整串当成一个文件名落错地方(codex 按目录深度扫描,从此找不到这份会话)。

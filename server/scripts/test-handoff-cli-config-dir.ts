@@ -7,10 +7,12 @@
 // 任务按「没调 complete_task」记 failed。导入侧那道「只认写盘成功的会话」的闸也拦不住:
 // 它只问文件名到没到,不问 CLI 站在自己的配置目录里看不看得见。
 //
-// 这条测试钉三件事:
+// 这条测试钉四件事:
 //   ① 判据同源 —— cliConfigDirForOwner 给出的目录 == 起跑注入的那个环境变量的值
 //   ② 导入侧真的落进那个目录,而且**不在** `~/.claude` 下(反向断言才抓得住回归)
 //   ③ 导出侧也去那个目录找:归属人对了找得到,按自用模式找就找不到
+//   ④ 跨人回合:共享项目里 B 回复 A 的任务,会话写在 B 的目录下,导出必须按
+//      `sessions.run_owner_user_id` 逐条找,不能按任务归属人 A 一刀切(第 1 轮审查 finding 1)
 // 外加自用模式(owner 为 null)逐字节维持老行为:仍然是 `~/.claude` / `$CODEX_HOME`。
 //
 // 跑法(自带临时库):
@@ -41,6 +43,7 @@ const codexRel = (threadId: string) => `2026/08/29/rollout-2026-08-29T13-26-46-$
 
 let failed = false;
 let cleanupUserDir: string | null = null;
+let cleanupBobDir: string | null = null;
 try {
   const { ensureSchema } = await import("../src/db/index.js");
   const mode = await import("../src/auth/mode.js");
@@ -59,9 +62,9 @@ try {
     { kind: "claude-session" as const, rel: `${CLAUDE_ID}.jsonl`, dataBase64: Buffer.from("{}\n").toString("base64") },
     { kind: "codex-rollout" as const, rel: codexRel(threadId), dataBase64: Buffer.from("{}\n").toString("base64") },
   ];
-  // 会话行只用到这四个字段;整行 SessionRow 有三十多列,凑齐没有信息量。
-  const sessionRow = (agentType: string, cliSessionId: string, cwd: string) =>
-    ({ id: `s-${agentType}`, agentType, cliSessionId, cwd, worktreePath: cwd } as never);
+  // 会话行只用到这几个字段;整行 SessionRow 有三十多列,凑齐没有信息量。
+  const sessionRow = (agentType: string, cliSessionId: string, cwd: string, runOwnerUserId: string | null = null) =>
+    ({ id: `s-${agentType}`, agentType, cliSessionId, cwd, worktreePath: cwd, runOwnerUserId } as never);
 
   // ── 自用模式:owner 为 null,一切照旧落宿主机默认目录 ────────────────────
   const SOLO_THREAD = "aaaa1111bbbb2222";
@@ -137,6 +140,42 @@ try {
   const asSolo = await collectSessionFiles(rows, OWNED_CWD, false, null);
   assert.equal(asSolo.found.size, 0, "按宿主机默认目录找,这两条都不该找得到——两侧判据必须同源");
 
+  // ④ 跨人回合:共享项目里任务归属人是 A,B 回复了一轮,那一轮的 CLI 会话写在 **B** 的
+  //    配置目录下(orchestrator.ts 的 `runOwner = actingUserId ?? task.ownerUserId`)。
+  //    导出必须按会话行自己的 run_owner 找;按任务归属人 A 一刀切就会扑空,最新那段
+  //    上下文不随任务走(第 1 轮审查 finding 1)。
+  const bob = await store.createUser({
+    name: "bob", role: "member", dirName: "bob", gitName: "Bob", gitEmail: "b@x", createdBy: null,
+  });
+  cleanupBobDir = join(USER_CLI_ROOT, bob.id);
+  const bobClaudeDir = await cliConfigDirForOwner(bob.id, "claude");
+  const bobCodexDir = await cliConfigDirForOwner(bob.id, "codex");
+  assert.notEqual(bobClaudeDir, claudeDir, "两个人的个人配置目录不该是同一个");
+  const CROSS_CWD = join(stage, "workspace", "repo", ".worktrees", "TASKCROSS001");
+  const CROSS_THREAD = "eeee5555ffff6666";
+  await writePayloadFiles(
+    payload(CROSS_THREAD), "TASKCROSS001", CROSS_CWD, noRewrites, [], { claude: bobClaudeDir, codex: bobCodexDir },
+  );
+  // 任务归属人仍是 lj(user.id),但这两行会话是 bob 跑出来的。
+  const crossRows = [
+    sessionRow("claude", CLAUDE_ID, CROSS_CWD, bob.id),
+    sessionRow("codex", CROSS_THREAD, CROSS_CWD, bob.id),
+  ];
+  const cross = await collectSessionFiles(crossRows, CROSS_CWD, false, user.id);
+  assert.equal(
+    cross.found.size, 2,
+    `跨人回合的会话要按 run_owner 找得到,实际 ${cross.found.size}:${cross.notes.join(" / ")}`,
+  );
+  // 反向:同样两行、但没有 run_owner(老行),就只能退回任务归属人 A 的目录 —— 找不到。
+  const legacyRows = [
+    sessionRow("claude", CLAUDE_ID, CROSS_CWD),
+    sessionRow("codex", CROSS_THREAD, CROSS_CWD),
+  ];
+  assert.equal(
+    (await collectSessionFiles(legacyRows, CROSS_CWD, false, user.id)).found.size, 0,
+    "没有 run_owner 就退回任务归属人:这两条本来就不在他的目录下,找不到才是对的",
+  );
+
   console.log("test-handoff-cli-config-dir: OK");
 } catch (error) {
   failed = true;
@@ -147,5 +186,6 @@ try {
   // 个人配置目录锚在 <repo>/data 下(paths.ts),舞台目录删不掉它。只删这次建的那个
   // 用户 id 的子树 —— USER_CLI_ROOT 整个删掉会连带清空真实实例里所有人的个人 CLI 环境。
   if (cleanupUserDir) rmSync(cleanupUserDir, { recursive: true, force: true });
+  if (cleanupBobDir) rmSync(cleanupBobDir, { recursive: true, force: true });
 }
 process.exit(failed ? 1 : 0);

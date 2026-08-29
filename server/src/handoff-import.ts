@@ -371,6 +371,9 @@ async function importValidated(
     branch: s.branch,
     cwd: workspace,
     cliSessionId: usable.get(s.id) ? s.cliSessionId : null,
+    // 会话文件刚被写进**这个人**的 CLI 配置目录(上面的 cliDirs),之后的回合默认也按他跑。
+    // 不盖这个戳,任务再接力出去时导出侧只能退回猜任务归属人。
+    runOwnerUserId: context.ownerUserId ?? null,
     commandLine: s.commandLine,
     startedAt: s.startedAt,
     endedAt: s.endedAt,

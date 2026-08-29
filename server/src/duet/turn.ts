@@ -45,11 +45,21 @@ const CONC_RE = /结论[：:]\s*(.+)/; // one-line final conclusion
  * 在本机跑的错命令,漏掉 cwd 会给出一条 `cd` 到不存在目录的命令(第 2 轮审查 finding 6)。
  * 单独拎出来是为了让「哪些列会随轮次变」有一个能被测试钉住的地方。
  */
-export function reusedSessionPatch(executor: AgentExecutor, cwd: string, commandLine: string, cliSessionId: string) {
+export function reusedSessionPatch(
+  executor: AgentExecutor,
+  cwd: string,
+  commandLine: string,
+  cliSessionId: string,
+  runOwnerUserId: string | null = null,
+) {
   return {
     commandLine,
     executor: executor.label,
     cwd,
+    // 这一轮跑在谁名下(= 注入 CLAUDE_CONFIG_DIR/CODEX_HOME 的那个人)。跟 cwd 一样是
+    // 「会话文件此刻在哪」的一部分:跨人回合换了人,transcript 就换到那个人的配置目录下,
+    // 不刷新的话接力会去上一个人的目录里扑空。
+    runOwnerUserId,
     // id 本身也在这份补丁里,不能只写由它派生的那三件套:上一轮若因会话失效被清成 null
     // (LOST_SESSION_PATCH),这一轮开出来的新 id 就只活在内存里 —— 带 newIdFlag 的 CLI
     // 回报的 session 事件与本地 cliId 相同,下面那个 `!==` 分支不会触发,库里于是永远是
@@ -153,7 +163,7 @@ export async function runTurn(args: {
       agentType: executor.type,
       // 开新行和复用旧行共用同一份「随执行器/工作目录走」的列,免得两条分支各写各的、
       // 时间一长只有一边跟得上(finding 6 就是这么来的)。
-      ...reusedSessionPatch(executor, cwd, handle.commandLine, cliId),
+      ...reusedSessionPatch(executor, cwd, handle.commandLine, cliId, args.runOwner ?? null),
       worktreePath: args.branch ? cwd : null,
       branch: args.branch ?? null,
       cliSessionId: cliId,
@@ -168,7 +178,7 @@ export async function runTurn(args: {
     // end, so the gate wait is excluded from execution time.
     await db
       .update(sessions)
-      .set({ turnStartedAt: turnStart, endedAt: null, ...reusedSessionPatch(executor, cwd, handle.commandLine, cliId) })
+      .set({ turnStartedAt: turnStart, endedAt: null, ...reusedSessionPatch(executor, cwd, handle.commandLine, cliId, args.runOwner ?? null) })
       .where(eq(sessions.id, rowId));
   }
 
