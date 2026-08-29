@@ -62,6 +62,26 @@ export async function cliConfigDirForOwner(
 }
 
 /**
+ * 「这条旧会话,这一轮还接得上吗」——判据是**两边的 CLI 配置目录是不是同一个**。
+ *
+ * CLI 的 transcript 躺在**开它的那个人**的配置目录里(多人模式一人一份),拿 A 的
+ * session id 去 B 的 `CLAUDE_CONFIG_DIR` 里 `--resume`,CLI 只会回一句 "No conversation
+ * found with session ID" —— 与 2026-08-29 那次接力事故同一个现场,只是触发口从「搬机器」
+ * 换成了「换个人回复」(共享项目里 B 回复 A 的任务)。所以选 `prev` 时不能只看
+ * agentType+role,还要看这一列。
+ *
+ * 自用模式两边恒为 null,判据永远成立,行为与本函数加入前逐字节一致。
+ */
+export async function sameCliConfigDir(
+  a: string | null | undefined,
+  b: string | null | undefined,
+  agentType: string,
+): Promise<boolean> {
+  if ((a ?? null) === (b ?? null)) return true;
+  return (await cliConfigDirForOwner(a, agentType)) === (await cliConfigDirForOwner(b, agentType));
+}
+
+/**
  * 「谁的活」——派生任务的归属继承(§八 三条规则之一)。
  * 父任务没有归属(存量/自用)时返回 null,与不写这一列等价。
  */

@@ -7,8 +7,12 @@
 // 判据只有 `scope === "session"` 一个（`shared/src/events.ts`），生产方是
 // `executors/codex.ts` 里的 poisoned 诊断。single-run / team / duet 三条链共用下面
 // 这两个函数，别再各自内联判断 —— duet 早先只在自己那条链上分流，另外两条漏了。
-import type { AgentEvent, AgentType } from "@ash/shared";
-import { writeTurn } from "./transcript.js";
+import { createWriteStream, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { finished } from "node:stream/promises";
+import type { AgentEvent, AgentType, SessionRole } from "@ash/shared";
+import { bus } from "./bus.js";
+import { sessionTranscriptPath, writeTurn } from "./transcript.js";
 import { now } from "./util.js";
 
 // 刻意**不**写成类型守卫(`event is Extract<AgentEvent, { kind: "error" }>`):那样
@@ -38,4 +42,52 @@ export function emitSessionNotice(args: {
   const at = args.at ?? now();
   writeTurn(args.out, { t: "system", agent: args.agentType, text: args.text }, at);
   args.publish({ kind: "system", text: args.text, at });
+}
+
+/**
+ * 跨人回合接不上旧会话时,留在**旧会话**时间线上的那一句。
+ *
+ * 单飞(orchestrator)与 duet 共用一份文本:两条链遇到的是同一件事,措辞漂了只会让
+ * 用户以为是两种毛病。
+ * 会话流里这条渲染成纯文本一行小字(ConversationFeed 的 conversation-note),所以
+ * **文案里不能带 Markdown 标记** —— 星号和反引号会原样露给用户。
+ */
+export const CROSS_OWNER_SESSION_NOTE =
+  "〔换人接手〕这一轮由另一位用户发起。CLI 的会话记录存在发起人自己的配置目录里"
+  + "（多人模式下一人一份），这条会话不在那儿，续用它只会当场扑空，所以本轮另开了一条新会话。"
+  + "这条会话原样保留，原来那位再回来时仍从这里接着跑。";
+
+/**
+ * 同样的一条注记，但用在**手上还没有那条会话的输出流**的时候：自己开一次 transcript
+ * 追加、等它真正落盘，再广播。
+ *
+ * 「等落盘」是刻意的：这类注记全都写在「接下来还要解析工作目录 / 过暂停闸 / spawn」
+ * 之前，中途任何一处抛错,用户刷新页面仍得能看出这条会话为什么被换掉。
+ */
+export async function announceSessionNote(args: {
+  taskId: string;
+  sessionId: string;
+  role: SessionRole;
+  agentType: AgentType;
+  text: string;
+  publish?: boolean;
+}): Promise<string> {
+  const at = now();
+  const transcriptPath = sessionTranscriptPath(args.taskId, args.sessionId);
+  mkdirSync(dirname(transcriptPath), { recursive: true });
+  const out = createWriteStream(transcriptPath, { flags: "a" });
+  writeTurn(out, { t: "system", agent: args.agentType, text: args.text }, at);
+  out.end();
+  await finished(out);
+  if (args.publish !== false) {
+    bus.publish({
+      type: "agent.event",
+      taskId: args.taskId,
+      sessionId: args.sessionId,
+      role: args.role,
+      agentType: args.agentType,
+      event: { kind: "system", text: args.text, at },
+    });
+  }
+  return args.text;
 }

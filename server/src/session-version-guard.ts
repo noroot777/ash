@@ -1,12 +1,7 @@
-import { createWriteStream, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { finished } from "node:stream/promises";
 import type { AgentType, SessionRole } from "@ash/shared";
-import { bus } from "./bus.js";
 import { readCodexCliVersion } from "./executors/codex-rollout.js";
 import { affectedCodexSessionReplacementNote, isAffectedCodexVersion } from "./executors/version-policy.js";
-import { sessionTranscriptPath, writeTurn } from "./transcript.js";
-import { now } from "./util.js";
+import { announceSessionNote } from "./session-notice.js";
 
 /**
  * 无法读取 rollout 或无法证明版本受影响时保留原会话。这里刻意 fail-open：误删一条
@@ -24,6 +19,7 @@ export async function affectedCodexResumeVersion(
 /**
  * 先把替换原因写进旧会话并等文件真正落盘，再由调用方清凭据。这样后续工作目录解析、
  * 暂停闸或 spawn 抛错时，用户刷新页面仍能知道为什么这条会话不再被续用。
+ * (落盘与广播的机制在 `session-notice.ts`,这里只负责「说什么」。)
  */
 export async function announceAffectedSessionReplacement(args: {
   taskId: string;
@@ -33,24 +29,7 @@ export async function announceAffectedSessionReplacement(args: {
   version: string;
   publish?: boolean;
 }): Promise<string> {
-  const at = now();
   const text = affectedCodexSessionReplacementNote(args.version);
   if (!text) throw new Error(`unsupported Codex replacement version: ${args.version}`);
-  const transcriptPath = sessionTranscriptPath(args.taskId, args.sessionId);
-  mkdirSync(dirname(transcriptPath), { recursive: true });
-  const out = createWriteStream(transcriptPath, { flags: "a" });
-  writeTurn(out, { t: "system", agent: args.agentType, text }, at);
-  out.end();
-  await finished(out);
-  if (args.publish !== false) {
-    bus.publish({
-      type: "agent.event",
-      taskId: args.taskId,
-      sessionId: args.sessionId,
-      role: args.role,
-      agentType: args.agentType,
-      event: { kind: "system", text, at },
-    });
-  }
-  return text;
+  return announceSessionNote({ ...args, text });
 }

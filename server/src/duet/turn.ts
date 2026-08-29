@@ -28,8 +28,8 @@ import { RUNS_DIR } from "../paths.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
-import { isSessionScopeNotice } from "../session-notice.js";
-import { runEnvForOwner } from "../auth/run-env.js";
+import { isSessionScopeNotice, announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "../session-notice.js";
+import { runEnvForOwner, sameCliConfigDir } from "../auth/run-env.js";
 import { recordTurnStart } from "./timeline.js";
 
 const RAISE_RE = /(^|\n)\s*\[可收敛\]/;
@@ -119,15 +119,32 @@ export async function runTurn(args: {
   // A stop requested between turns: don't even spawn the next one.
   if (isCanceling(taskId)) throw new CanceledRun();
   let resumeCliId = args.resumeCliId;
+  // 复用哪一条会话行。跨人续跑时会被清空 —— 见下。
+  let reuseRowId = args.rowId;
   let versionReplacementNotice: string | undefined;
+  // 换人接手:门禁能等很久,这期间**换个人点「继续」**是常规操作(runOwner 跟着点的
+  // 那个人走)。而这条会话的 transcript 躺在原来那位的 CLI 配置目录里,拿到这一轮的
+  // 环境里 --resume 只会扑空 —— 判据与单飞同源(auth/run-env.ts),自用模式恒不触发。
+  // 接不上就**另开一条会话行**,不是把旧行改写成新人的:旧行原样留着,原来那位再回来
+  // 时还能从自己那条接着跑(这一点与上面的版本闸不同 —— 那条会话是真的坏了)。
+  if (resumeCliId && reuseRowId) {
+    const owner = (await db.select({ o: sessions.runOwnerUserId }).from(sessions).where(eq(sessions.id, reuseRowId))).at(0);
+    if (owner && !(await sameCliConfigDir(owner.o, args.runOwner, executor.type))) {
+      await announceSessionNote({
+        taskId, sessionId: reuseRowId, role, agentType: executor.type, text: CROSS_OWNER_SESSION_NOTE,
+      });
+      resumeCliId = undefined;
+      reuseRowId = undefined;
+    }
+  }
   const affectedSessionVersion = await affectedCodexResumeVersion(executor.type, resumeCliId);
   if (affectedSessionVersion) {
-    if (args.rowId) {
+    if (reuseRowId) {
       versionReplacementNotice = await announceAffectedSessionReplacement({
-        taskId, sessionId: args.rowId, role, agentType: executor.type, version: affectedSessionVersion,
+        taskId, sessionId: reuseRowId, role, agentType: executor.type, version: affectedSessionVersion,
         publish: false,
       });
-      await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, args.rowId));
+      await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, reuseRowId));
     }
     resumeCliId = undefined;
   }
@@ -154,8 +171,8 @@ export async function runTurn(args: {
   trackRun(taskId, handle);
   let cliId = handle.sessionId;
 
-  const rowId = args.rowId ?? id();
-  if (!args.rowId) {
+  const rowId = reuseRowId ?? id();
+  if (!reuseRowId) {
     await db.insert(sessions).values({
       id: rowId,
       taskId,
