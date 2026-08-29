@@ -215,6 +215,8 @@ function contentSegments(
 
   const structuredMarkdown = segments.map((segment) => segment.markdown).join("");
   if (structuredMarkdown.trim() === fallbackMarkdown.trim()) return segments;
+  const aligned = alignedSegments(segments, fallbackMarkdown);
+  if (aligned) return aligned;
   // Partially written/legacy trace is still useful, but it cannot safely split
   // the body. Keep one process block with the intact Markdown rather than drop or
   // duplicate text.
@@ -224,6 +226,51 @@ function contentSegments(
     events: auxEntries.map((entry) => auxEvent(entry.event as AgentTraceEvent)),
     attachments: attachmentEntries.map((entry) => entry.event.path),
   }];
+}
+
+/**
+ * trace 与 .md 对同一段正文的**原子边界并不总是一致**，于是拼出来的整串常常差一点点，
+ * 逐字相等这道闸就把整条回合打回单段（几百次工具糊成一个块，正文一句都拆不开）。
+ *
+ * 现场最常见的一种：旁注（预约审查…）落盘时 .md 已经把「我」冲进了上一段，而 trace 把
+ * 相邻 delta 合并成了一条、时间戳落在旁注之后，于是这一段的 trace 正文比 .md 多一个
+ * 「我」字。全库 1881 段里有 172 段是这种一方包含另一方的关系。
+ *
+ * 只要一方包含另一方，两串就能按偏移对上：**.md 是正文的权威**（它决定这颗气泡该显示
+ * 哪些字），trace 只用来定位工具插在正文的第几个字之后。按 trace 的切点换算到 .md 坐标
+ * 上重新分段即可。真发散（trace 被截断之类）返回 null，照旧退回单段。
+ *
+ * 不变量：各段正文拼回去必须**恰好等于** `fallbackMarkdown.trim()` —— 一个字都不能丢、
+ * 不能重。最后一段兜到末尾就是为了保证这一点。
+ */
+function alignedSegments(
+  segments: AgentContentSegment[],
+  fallbackMarkdown: string,
+): AgentContentSegment[] | null {
+  const body = fallbackMarkdown.trim();
+  const raw = segments.map((segment) => segment.markdown).join("");
+  const flat = raw.trim();
+  // 兜底气泡那一路会拿空正文来调（trace-only），此时对齐没有意义：indexOf("") 恒为 0,
+  // 会把每一段的正文都抹成空串。
+  if (!body || !flat) return null;
+
+  const ahead = flat.indexOf(body);
+  const behind = body.indexOf(flat);
+  const delta = ahead >= 0 ? ahead : behind >= 0 ? -behind : null;
+  if (delta === null) return null;
+
+  const lead = raw.length - raw.trimStart().length;
+  let consumed = 0;
+  let previous = 0;
+  return segments.map((segment, index) => {
+    consumed += segment.markdown.length;
+    const cut = index === segments.length - 1
+      ? body.length
+      : Math.min(Math.max(consumed - lead - delta, previous), body.length);
+    const markdown = body.slice(previous, cut);
+    previous = cut;
+    return { ...segment, markdown };
+  });
 }
 
 function currentSegment(agent: Extract<ConversationItem, { kind: "agent" }>): AgentContentSegment {
@@ -360,15 +407,27 @@ export function buildConversationItems(
     const segments = parseSessionOutput(output);
     const traceGroups = groupedTrace(normalizedPersistedTrace(trace, session));
     const consumedTrace = new Set<string>();
-    // 先按真人插话把 trace 切成段，再逐段发放。切分必须整体跑在任何 agent 段认领之前：
-    // 原生引导那一路插话前常常一个字都没吐（agent 正连着跑工具），既没有 .md 正文能顺手
-    // 触发切分，等上一段领走整组之后也已经晚了。
+    // 先按 .md 里的 sentinel 把 trace 切成段，再逐段发放。切分必须整体跑在任何 agent 段
+    // 认领之前：原生引导那一路插话前常常一个字都没吐（agent 正连着跑工具），既没有 .md
+    // 正文能顺手触发切分，等上一段领走整组之后也已经晚了。
     //
-    // 只认 user 段。系统旁注（预约审查、验收阶段更新…）夹在回合中间时**不算断点**，
-    // 后面还是同一个人接着说 —— 见下面 continuation 那一段的同一条判据。
+    // 插话一律是切点。**系统旁注只在它后面还有 agent 正文时才是切点**：那种情形下
+    // parseSessionOutput 已经在 sentinel 处把正文切成了两段 agent，trace 不跟着切，前面
+    // 那截（「预约审查」这类旁注常常正好落在 agent 刚吐出一两个字的时候）就会把整组
+    // trace 连同几百次工具调用一起领走，真正写正文的那一段一个事件都拿不到。
+    //
+    // 旁注后面没有正文时**不能**切：那一组 trace 会没人认领，落进「无正文兜底气泡」凭空
+    // 多出一颗，而直播那边旁注根本不拆气泡（见 appendAgent 跨旁注回捞当前回合），刷新
+    // 前后就长得不一样了。
+    const splitPoints = new Set<string>();
+    segments.forEach((segment, index) => {
+      if (segment.kind === "agent" || !segment.at) return;
+      if (segment.kind === "system" && !segments.slice(index + 1).some((later) => later.kind === "agent")) return;
+      splitPoints.add(segment.at);
+    });
     let splitFrom = session.startedAt;
     for (const segment of segments) {
-      if (segment.kind !== "user" || !segment.at) continue;
+      if (segment.kind === "agent" || !segment.at || !splitPoints.has(segment.at)) continue;
       splitTraceGroupAt(traceGroups, consumedTrace, splitFrom, segment.at);
       splitFrom = segment.at;
     }
@@ -406,7 +465,12 @@ export function buildConversationItems(
         turnStartedAt = segment.at ?? turnStartedAt;
       } else {
         const next = segments[index + 1];
-        const boundary = next?.kind === "user" ? next.at : undefined;
+        // 下一段的 trace 已经被上面切成独立一组了，这一段不许靠 ±2 秒兜底把它捞过来。
+        // 判据跟切点保持同一份：agent 在切点之前一个字都没吐时，它自己那一组会被切空
+        // 删掉，兜底就正好会挑中切点之后那一组。
+        const boundary = next && next.kind !== "agent" && next.at && splitPoints.has(next.at)
+          ? next.at
+          : undefined;
         const traceEntries = takeTraceGroup(traceGroups, consumedTrace, turnStartedAt, boundary);
         items.push({
           kind: "agent",
