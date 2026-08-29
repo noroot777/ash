@@ -14,6 +14,7 @@ import { expandHome, isGitRepo, worktreePathFor } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { DATA_DIR, RUNS_DIR } from "./paths.js";
 import { codexHome, findRollout } from "./executors/codex-rollout.js";
+import { cliConfigDirForOwner } from "./auth/run-env.js";
 import { HandoffError, MAX_BUNDLE_BYTES, MAX_FILE_BYTES, MB } from "./handoff-types.js";
 import type {
   HandoffFilePayload, HandoffFreeReviewRound, HandoffFreeWorkflowPayload, HandoffManifest,
@@ -35,8 +36,21 @@ export function claudeProjectSlug(cwd: string): string {
   return cwd.replace(/[^A-Za-z0-9]/g, "-");
 }
 
-export function claudeSessionFilePath(cwd: string, cliSessionId: string): string {
-  return join(homedir(), ".claude", "projects", claudeProjectSlug(cwd), `${cliSessionId}.jsonl`);
+/**
+ * claude 存这个 cwd 的会话的目录。`configDir` 是**这条任务的归属人**那一份
+ * `CLAUDE_CONFIG_DIR`(`auth/run-env.ts` 的 cliConfigDirForOwner);它设了就**整个取代**
+ * `~/.claude`,不回落,所以这里也不能回落——否则找的和 CLI 用的不是同一个目录。
+ */
+export function claudeProjectDir(cwd: string, configDir?: string | null): string {
+  return join(configDir?.trim() || join(homedir(), ".claude"), "projects", claudeProjectSlug(cwd));
+}
+
+export function claudeSessionFilePath(
+  cwd: string,
+  cliSessionId: string,
+  configDir?: string | null,
+): string {
+  return join(claudeProjectDir(cwd, configDir), `${cliSessionId}.jsonl`);
 }
 
 async function git(cwd: string, args: string[]): Promise<string> {
@@ -62,15 +76,21 @@ export async function repoRefTips(repoPath: string): Promise<{ name: string; com
 }
 
 
-/** 会话文件盘点:每条会话的文件在哪、能不能搬。dryRun 时不读内容（preflight 用）。 */
+/**
+ * 会话文件盘点:每条会话的文件在哪、能不能搬。dryRun 时不读内容（preflight 用）。
+ * `ownerUserId` 决定去谁的 CLI 配置目录里找——多用户模式下会话不在 `~/.claude`。
+ */
 export async function collectSessionFiles(
   rows: SessionRow[],
   fallbackCwd: string | null,
   dryRun: boolean,
+  ownerUserId: string | null,
 ): Promise<{ files: HandoffFilePayload[]; found: Set<string>; notes: string[] }> {
   const files: HandoffFilePayload[] = [];
   const found = new Set<string>();
   const notes: string[] = [];
+  const claudeConfigDir = await cliConfigDirForOwner(ownerUserId, "claude");
+  const codexConfigDir = await cliConfigDirForOwner(ownerUserId, "codex");
   for (const s of rows) {
     if (!s.cliSessionId) continue;
     let abs: string | null = null;
@@ -81,15 +101,15 @@ export async function collectSessionFiles(
       rel = `${s.cliSessionId}.jsonl`;
       for (const cwd of [s.cwd, s.worktreePath, fallbackCwd]) {
         if (!cwd) continue;
-        const candidate = claudeSessionFilePath(cwd, s.cliSessionId);
+        const candidate = claudeSessionFilePath(cwd, s.cliSessionId, claudeConfigDir);
         if (existsSync(candidate)) { abs = candidate; break; }
       }
     } else if (s.agentType === "codex") {
       kind = "codex-rollout";
-      abs = await findRollout(s.cliSessionId);
+      abs = await findRollout(s.cliSessionId, codexConfigDir);
       // 协议里 rel 一律 `/` 分隔:Windows 上 relative 产出反斜杠,POSIX 导入侧会把
       // 整串当成一个文件名落错地方(codex 按目录深度扫描,从此找不到这份会话)。
-      if (abs) rel = relative(join(codexHome(), "sessions"), abs).split(sep).join("/");
+      if (abs) rel = relative(join(codexHome(codexConfigDir), "sessions"), abs).split(sep).join("/");
     } else {
       notes.push(`会话 ${s.id}（${s.agentType}）:该执行器的会话文件迁移暂不支持,对端只能全新起跑`);
       continue;

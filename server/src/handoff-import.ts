@@ -12,6 +12,7 @@
 //   - handoff-import-free-workflow.ts:审查历史翻译成本机行(机器本地外键重新解析)
 //   - handoff-uploads.ts:上传附件本体与各处文本里的路径改写
 import { and, eq, inArray } from "drizzle-orm";
+import { existsSync } from "node:fs";
 import { db } from "./db/index.js";
 import {
   freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates,
@@ -29,7 +30,11 @@ import { resumeOrRunTask } from "./task-resume.js";
 import { localIdentity } from "./handoff-identity.js";
 import { buildFreeWorkflowRows } from "./handoff-import-free-workflow.js";
 // 校验 / git bundle / 文件写盘这三件事在载荷落地层(不信任对端的那一层)。
-import { importGitBundle, jsonOr, SETTLED, validate, writePayloadFiles } from "./handoff-import-payload.js";
+import {
+  importGitBundle, jsonOr, SETTLED, validate, writePayloadFiles, type CliConfigDirs,
+} from "./handoff-import-payload.js";
+import { claudeSessionFilePath } from "./handoff-collect.js";
+import { cliConfigDirForOwner } from "./auth/run-env.js";
 import { discardMigratedWorkspace } from "./workspace-cleanup.js";
 import { id, now } from "./util.js";
 import type { TaskHandoff } from "@ash/shared";
@@ -218,12 +223,21 @@ async function importValidated(
   // ── 文件先落盘,再落库 ──────────────────────────────────────────────────
   // 顺序有讲究:文件写一半崩了只留下无害的磁盘残留(重试会原样覆盖);反过来先落库
   // 再写文件,「任务行在、文件没到」就是半截任务。arrived 是真正写盘成功的会话文件名。
-  const arrived = await writePayloadFiles(m.files, m.task.id, workspace ?? expandHome(project.repoPath), rewrites, notes);
+  //
+  // 落进哪个 CLI 配置目录按**落地任务的归属人**算,不是宿主机的 `~/.claude`:多用户
+  // 模式下起跑会注入 `CLAUDE_CONFIG_DIR`/`CODEX_HOME`,写错地方等于没搬(见下面那道闸)。
+  const importCwd = workspace ?? expandHome(project.repoPath);
+  const cliDirs: CliConfigDirs = {
+    claude: await cliConfigDirForOwner(context.ownerUserId, "claude"),
+    codex: await cliConfigDirForOwner(context.ownerUserId, "codex"),
+  };
+  const arrived = await writePayloadFiles(m.files, m.task.id, importCwd, rewrites, notes, cliDirs);
 
   // ── cliSessionId 只认「文件写盘成功、且 CLI 自己找得到」的会话 ────────────
   // claude 的文件名是 `<cliSessionId>.jsonl`,codex 是 `rollout-<ts>-<threadId>.jsonl`。
-  // codex 还要过 findRollout:它只按 sessions/YYYY/MM/DD 的标准深度扫描,rel 深度不对时
-  // 文件在盘上但 codex 定位不到,保留 cliSessionId 就是假恢复(续跑报找不到线程)。
+  // 两种都还要再问一次「CLI 站在它自己的配置目录里看得见吗」:文件在盘上但 CLI 定位不到
+  // 时保留 cliSessionId 就是假恢复,续跑只会换来一句「找不到会话/线程」然后整回合空转。
+  // codex 是目录深度(它只按 sessions/YYYY/MM/DD 扫描),claude 是配置目录本身。
   const hasFile = (s: HandoffManifest["sessions"][number]): boolean =>
     !!s.cliSessionId && [...arrived].some(
       (name) => name === `${s.cliSessionId}.jsonl` || name.endsWith(`-${s.cliSessionId}.jsonl`),
@@ -232,8 +246,12 @@ async function importValidated(
   for (const s of m.sessions) {
     let ok = hasFile(s);
     if (ok && s.agentType === "codex") {
-      ok = !!(await findRollout(s.cliSessionId!));
+      ok = !!(await findRollout(s.cliSessionId!, cliDirs.codex));
       if (!ok) notes.push(`codex 会话 ${s.id} 的 rollout 已写盘但无法按标准目录定位,按未迁移处理`);
+    }
+    if (ok && s.agentType === "claude") {
+      ok = existsSync(claudeSessionFilePath(importCwd, s.cliSessionId!, cliDirs.claude));
+      if (!ok) notes.push(`claude 会话 ${s.id} 已写盘但不在本机 CLI 的配置目录下,按未迁移处理`);
     }
     usable.set(s.id, ok);
   }

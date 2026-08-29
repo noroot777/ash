@@ -23,17 +23,22 @@ const warnedThreads = new Set<string>();
 const cliVersionCache = new Map<string, string>();
 const CLI_VERSION_SCAN_LINES = 32;
 
-export function codexHome(): string {
-  return process.env.CODEX_HOME || path.join(homedir(), ".codex");
+/**
+ * codex 的配置目录。`configDir` 是**这条任务的归属人**那一份(多用户模式下起跑注入的
+ * `CODEX_HOME`,见 `auth/run-env.ts` 的 cliConfigDirForOwner);不传就是 server 自己
+ * 环境里的那份,也就是自用模式的宿主机默认目录。
+ */
+export function codexHome(configDir?: string | null): string {
+  return configDir?.trim() || process.env.CODEX_HOME || path.join(homedir(), ".codex");
 }
 
 /**
  * 按 thread id 找 rollout。当前布局是 sessions/YYYY/MM/DD/；布局变化时找不到即 null。
  * 倒序下钻让活跃会话通常在前几个目录内命中，避免每轮完整扫描所有历史文件。
- * （任务接力 handoff.ts 也用它定位要搬走的会话文件。）
+ * （任务接力 handoff.ts 也用它定位要搬走的会话文件，那条路要按任务归属人传 configDir。）
  */
-export async function findRollout(threadId: string): Promise<string | null> {
-  const root = path.join(codexHome(), "sessions");
+export async function findRollout(threadId: string, configDir?: string | null): Promise<string | null> {
+  const root = path.join(codexHome(configDir), "sessions");
   const suffix = `-${threadId}.jsonl`;
 
   const descend = async (dir: string, depth: number): Promise<string | null> => {

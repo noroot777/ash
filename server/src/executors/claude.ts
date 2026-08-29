@@ -498,9 +498,16 @@ export async function* parseClaudeStream(
       // 会把它整条判成正常结束。两路判据都要算上,否则回合「成功」但一个字没说。
       const apiError = ev.is_error === true || typeof ev.api_error_status === "number";
       if (((ev.subtype && ev.subtype !== "success") || apiError) && !ownInterrupt) {
+        // CLI **自己**失败时(会话找不到、启动期崩)`result` 是空的,原因只在
+        // `errors[]` 里。不读它就只剩一句 `result: error_during_execution`——用户看不出
+        // 发生了什么,`session-lost.ts` 那条「no conversation found」的识别也永远匹配不上,
+        // 一条已经失效的 --resume 会被一路重试到底。
+        const errors = Array.isArray(ev.errors)
+          ? ev.errors.filter((e: unknown): e is string => typeof e === "string" && e.trim() !== "")
+          : [];
         const detail = typeof ev.result === "string" && ev.result.trim()
           ? ev.result.trim()
-          : `result: ${ev.subtype}`;
+          : errors.length ? errors.join("; ") : `result: ${ev.subtype}`;
         push({
           kind: "error",
           message: ev.api_error_status ? `HTTP ${ev.api_error_status}: ${detail}` : detail,
