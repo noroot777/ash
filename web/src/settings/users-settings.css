@@ -157,6 +157,13 @@
   flex-wrap: wrap;
 }
 
+/* `.ui-input` 是 width:100%,搁进这条会换行的动作条里会独占一整行、把按钮挤下去。 */
+.users-role {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 130px;
+}
+
 .users-confirm {
   display: flex;
   align-items: center;

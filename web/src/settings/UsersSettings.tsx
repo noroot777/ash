@@ -1,14 +1,17 @@
 // 「用户」设置节(§五)。**只有实例管理员**看得到这一节;界面上藏起来只是省事,
-// 真正的闸在后端(`requireAdmin`)。
+// 真正的闸在后端(`requireAdmin`)。不过这一屏自己能把人降级(含降自己),所以下面那道
+// 「你不是管理员」的岔路不是摆设:降完之后导航项没了、这块面板却还挂在屏幕上,
+// `GET /users` 对普通成员回的是**精简版**(只有 id/name/role),照原样渲染就是一屏
+// 目录名和状态全空的残表。
 //
-// 三件事在这一屏里必须说清楚,否则用户会用错:
+// 四件事在这一屏里必须说清楚,否则用户会用错:
 //  ① 建用户**不设 key**,只发一条专属链接;key 在他自己点开链接时生成。
 //  ② 停用不是删除 —— 它断会话、停他的任务、暂停他的日程,数据全留着。
 //  ③ 重置 key = **别人**手上那把当场失效;自己那把在「我的账号」里换(见 UserRow)。
 //  ④ 邀请链接只发给还没领到 key 的人 —— 它是匿名领取入口,对已有 key 的账号开它
 //    等于开一条账号接管链接(第 5 轮审查 P1)。
 import { useCallback, useEffect, useState } from "react";
-import type { UserView } from "@ash/shared";
+import type { UserRole, UserView } from "@ash/shared";
 import { suggestDirName, suggestGitEmail, userDirNameError, USER_DIR_NAME_HINT } from "@ash/shared/multiuser";
 import { ApiError } from "../lib/apiClient.ts";
 import { userApi } from "../lib/authApi.ts";
@@ -19,6 +22,13 @@ import "./users-settings.css";
 function absoluteInvite(url: string): string {
   return new URL(url, window.location.origin).toString();
 }
+
+const ROLE_LABEL: Record<UserRole, string> = {
+  admin: "实例管理员",
+  member: "普通成员",
+};
+
+const asRole = (value: string): UserRole => (value === "admin" ? "admin" : "member");
 
 function InviteLink({ url, onDone }: { url: string; onDone?: () => void }) {
   const [copied, setCopied] = useState(false);
@@ -62,7 +72,7 @@ export function UsersSettings({
   const [dirTouched, setDirTouched] = useState(false);
   const [gitName, setGitName] = useState("");
   const [gitEmail, setGitEmail] = useState("");
-  const [role, setRole] = useState<"admin" | "member">("member");
+  const [role, setRole] = useState<UserRole>("member");
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -151,6 +161,19 @@ export function UsersSettings({
     );
   }
 
+  // 降完自己之后落在这里:导航项已经没了,但这块面板还挂在屏幕上,而普通成员拿到的
+  // `GET /users` 是精简版,照原样渲染就是一屏空目录名。
+  if (state.user?.role !== "admin") {
+    return (
+      <section className="settings-section">
+        <h2>用户</h2>
+        <p className="settings-hint">
+          只有<b>实例管理员</b>能管用户，你现在是普通成员。要改回来得找另一位管理员。
+        </p>
+      </section>
+    );
+  }
+
   return (
     <section className="settings-section users-settings">
       <header className="users-header">
@@ -208,10 +231,10 @@ export function UsersSettings({
             <select
               className="ui-input"
               value={role}
-              onChange={(e) => setRole(e.target.value === "admin" ? "admin" : "member")}
+              onChange={(e) => setRole(asRole(e.target.value))}
             >
-              <option value="member">普通成员</option>
-              <option value="admin">实例管理员（能管用户、能碰任意路径、能开终端）</option>
+              <option value="member">{ROLE_LABEL.member}</option>
+              <option value="admin">{ROLE_LABEL.admin}（能管用户、能碰任意路径、能开终端）</option>
             </select>
           </label>
           <div className="users-form-actions">
@@ -260,6 +283,26 @@ function UserRow({
   onAccount: () => void;
 }) {
   const [confirming, setConfirming] = useState<"suspend" | "reset" | null>(null);
+  const [pendingRole, setPendingRole] = useState<UserRole | null>(null);
+  const [roleBusy, setRoleBusy] = useState(false);
+
+  const applyRole = async (role: UserRole) => {
+    setPendingRole(null);
+    setRoleBusy(true);
+    // 后端还有一道「最后一个能登录进来的管理员不许降」的 409(user-routes.ts),
+    // 它带着理由回来,由 onAct 原样 notify —— 这里不重复算一遍那份判据。
+    await onAct(role === "admin" ? "已升为实例管理员" : "已降为普通成员", () => userApi.patch(user.id, { role }));
+    setRoleBusy(false);
+  };
+
+  // 「升管理员」交出的是整台机器(管用户 + 任意路径 + 终端),「把自己降下去」是当场
+  // 把自己关在门外 —— 这两下不许一个下拉手滑就落地。降别人是可撤销的,当场生效。
+  const requestRole = (next: UserRole) => {
+    if (next === user.role) return;
+    if (next === "admin" || self) setPendingRole(next);
+    else void applyRole(next);
+  };
+
   return (
     <li className="users-row" data-status={user.status}>
       <div className="users-row-main">
@@ -278,6 +321,34 @@ function UserRow({
       </div>
 
       <div className="users-row-actions">
+        {/*
+          实例角色。停用中的人也能改 —— 「先升成管理员再恢复」是一条正当路径,而且
+          「最后一个管理员」保护按**登录得进来**算(store.ts `canSignIn`),停用账号本来
+          就顶不上那个位置,这里放开不会把实例锁死。
+        */}
+        {pendingRole ? (
+          <ConfirmInline
+            text={
+              pendingRole === "admin"
+                ? `${user.name} 将能管理所有用户、访问这台机器上的任意路径、开终端。`
+                : "降级后你立刻失去管理员权限，这一屏也随之关上 —— 只能由另一位管理员把你改回来。"
+            }
+            danger={pendingRole === "member"}
+            onCancel={() => setPendingRole(null)}
+            onConfirm={() => void applyRole(pendingRole)}
+          />
+        ) : (
+          <select
+            className="ui-input users-role"
+            aria-label={`${user.name} 的实例角色`}
+            value={user.role}
+            disabled={roleBusy}
+            onChange={(e) => requestRole(asRole(e.target.value))}
+          >
+            <option value="member">{ROLE_LABEL.member}</option>
+            <option value="admin">{ROLE_LABEL.admin}</option>
+          </select>
+        )}
         {user.status === "suspended" ? (
           <Button onClick={() => void onAct("已恢复", () => userApi.resume(user.id))}>恢复</Button>
         ) : (

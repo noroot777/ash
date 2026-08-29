@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node ../scripts/check-conventions.mjs && npm run test:bulk-handoff && npm run test:bulk-handoff-dialog && npm run test:remote-task && npm run test:handoff-dialog-lifetime && npm run test:conversation && npm run test:task-read-state && npm run test:scheduled-message-tray && npm run test:withdraw-scheduled && npm run test:shortcuts && tsc -b && vite build",
+    "build": "node ../scripts/check-conventions.mjs && npm run test:bulk-handoff && npm run test:bulk-handoff-dialog && npm run test:remote-task && npm run test:handoff-dialog-lifetime && npm run test:conversation && npm run test:task-read-state && npm run test:scheduled-message-tray && npm run test:withdraw-scheduled && npm run test:users-role && npm run test:shortcuts && tsc -b && vite build",
     "test:image-preview": "node scripts/test-image-preview.mjs",
     "test:inspector-shortcuts": "node --experimental-strip-types scripts/test-inspector-shortcuts.mjs",
     "test:key-chord": "node --experimental-strip-types scripts/test-key-chord.mjs",
@@ -28,6 +28,7 @@
     "test:task-read-state": "node --experimental-strip-types scripts/test-task-read-state.mjs",
     "test:scheduled-message-tray": "tsx scripts/test-scheduled-message-tray.tsx",
     "test:withdraw-scheduled": "node scripts/test-withdraw-scheduled.mjs",
+    "test:users-role": "node scripts/test-users-role.mjs",
     "test:run-activity": "node --experimental-strip-types scripts/test-run-activity.mjs",
     "test:tool-summary": "node --experimental-strip-types scripts/test-tool-summary.mjs",
     "test:duet-timeline": "node --experimental-strip-types scripts/test-duet-timeline.mjs",
