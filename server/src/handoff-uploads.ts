@@ -67,6 +67,9 @@ export function scanUploadNames(text: string, uploadsDir: string = UPLOADS_DIR):
  * 第 1 轮审查 P1)。判据由调用方从 `uploads.ts` 取(`readableUploads`),这里只负责
  * 逐个问、被拒的如实记进 notes —— 少一个附件对端最多按旧路径读不到,而多带一个是
  * 越权。新加导出入口时这个参数编译期就逼你想一遍「这是谁在导」。
+ *
+ * 问的顺序也是判据的一部分:**授权在前、存在性在后**,读不到的一律回同一句话
+ * (第 2 轮审查 P2,推演见循环里)。
  */
 export async function collectUploads(
   texts: string[],
@@ -83,12 +86,16 @@ export async function collectUploads(
       break;
     }
     const abs = join(UPLOADS_DIR, name);
-    if (!existsSync(abs)) {
-      notes.push(`上传附件 ${name} 在本机已不存在,跳过`);
+    // **先问授权,再看在不在。** 反过来的话「本机没有这个文件」和「有,但你读不到」
+    // 就是两句不同的话,谁都能拿一个猜来的文件名建条任务、点一次预检,问出「这台机器
+    // 上有没有这个附件」—— `/api/uploads/:file` 对这两种情况回同一句 404 就白费了
+    // (8CEbm0rJQIwK 第 2 轮审查 P2)。所以读不到的一律走同一句话,不区分存不存在。
+    if (!(await canPack(name))) {
+      notes.push(`上传附件 ${name} 不随任务迁移(本机没有,或不在你的可读范围内)`);
       continue;
     }
-    if (!(await canPack(name))) {
-      notes.push(`上传附件 ${name} 不在你的可读范围内,不随任务迁移(对端按旧路径读不到)`);
+    if (!existsSync(abs)) {
+      notes.push(`上传附件 ${name} 在本机已不存在,跳过`);
       continue;
     }
     const size = statSync(abs).size;

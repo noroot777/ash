@@ -16,7 +16,7 @@
 //   ⑦ 接力落地的附件撞上本机同名的私有文件:正文里写着的那份,任务里的人就得打得开,
 //      而本机那份私有附件仍旧只有本人能读;
 //   ⑧ **出境也要过同一条判据**:把别人的私有附件路径写进自己看得见的任务再接力出去,
-//      导出侧不打包它的字节。
+//      导出侧不打包它的字节,而且拦下来的话不区分「没这个文件」和「有但你读不到」。
 //
 // 一律走真 Request 打进 `authGate → resourceGate → personalWriteGate → 路由` 的完整栈。
 //
@@ -298,6 +298,20 @@ try {
     aliceNotesOut.some((note) => note.includes(bobExport.file)),
     `被拦下的要如实记进 notes:${JSON.stringify(aliceNotesOut)}`,
   );
+  // 拦下来的话**不许区分「没这个文件」和「有,但你读不到」**:否则拿一个猜来的名字
+  // 建条任务、点一次预检,就能问出这台机器上有没有这个附件 —— /api/uploads/:file 对
+  // 两种情况回同一句 404 就白费了(第 2 轮审查 P2)。
+  const missingName = "no-such-upload-9a1f.txt";
+  const probeNotes: string[] = [];
+  await collectUploads(
+    [`${bobExport.path} 与 ${join(UPLOADS_DIR, missingName)}`],
+    probeNotes,
+    true,
+    await readableUploads(alice.id),
+  );
+  const shapes = new Set(probeNotes.map((note) => note.replace(bobExport.file, "?").replace(missingName, "?")));
+  assert.equal(probeNotes.length, 2, `两个名字各记一句:${JSON.stringify(probeNotes)}`);
+  assert.equal(shapes.size, 1, `「读不到」与「不存在」必须是同一句话:${JSON.stringify(probeNotes)}`);
   // 别收过头:本人导出自己的附件照常带走。
   const bobPack = await collectUploads([exportText], [], false, await readableUploads(bob.id));
   assert.ok(bobPack.some((u) => u.name === bobExport.file), "Bob 自己导出时照常带得走");
