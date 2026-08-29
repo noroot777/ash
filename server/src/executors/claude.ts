@@ -42,7 +42,7 @@ export class ClaudeExecutor implements AgentExecutor {
       // 覆盖项故意不进 env 前缀:它打不过用户的 settings.json(见 resumeEnvHint 字段注释),
       // 真正带着走的是 resumeFields() 里那个 `--settings`。
       undefined,
-      this.relay ? `ANTHROPIC_API_KEY=<你的key> ` : undefined,
+      this.relay ? `ANTHROPIC_AUTH_TOKEN=<你的key> ` : undefined,
     );
     this.label = opts.name ?? `claude@local${opts.model ? "·" + opts.model : ""}`;
   }
@@ -54,7 +54,10 @@ export class ClaudeExecutor implements AgentExecutor {
   /** 恢复参数按会话 cwd 现算；构造时提前冻结会漏掉项目 settings。 */
   resumeFields(cwd: string, sessionId: string): ResumeFields {
     const settings = this.settingsPayload(cwd, this.model);
-    const resumeArgs = settings ? `--settings ${shq(JSON.stringify(settings))}` : null;
+    const resumeArgs = [
+      ...(this.relay ? ["--setting-sources project,local"] : []),
+      ...(settings ? [`--settings ${shq(JSON.stringify(settings))}`] : []),
+    ].join(" ") || null;
     const inner = resumeInner.claude(sessionId);
     return {
       resumeCommand: resumeFor(
@@ -88,17 +91,15 @@ export class ClaudeExecutor implements AgentExecutor {
       settings.env = {
         ...existingEnv,
         ANTHROPIC_BASE_URL: relayBaseUrl,
-        // Claude 会把用户 settings.json 的 env 写回进程环境。这里显式清空旧 token，
-        // 让真正的密钥只从进程环境里的 ANTHROPIC_API_KEY 进入，绝不落进 argv/会话表。
-        ANTHROPIC_AUTH_TOKEN: "",
       };
     }
     return Object.keys(settings).length ? settings : null;
   }
 
   // 挂了供应商就顶掉 CLI 自己的登录态:BASE_URL 由最高优先级的 --settings 锁定，
-  // 密钥只走 ANTHROPIC_API_KEY 进程环境。用户 settings.json 里的 AUTH_TOKEN 会在
-  // settingsPayload() 被清空，不能再把 ash profile 的密钥盖掉。
+  // 密钥只走 ANTHROPIC_AUTH_TOKEN 进程环境。运行参数同时排除 user settings source，
+  // 因此 CC Switch / ~/.claude/settings.json 里的 BASE_URL、AUTH_TOKEN、API_KEY 都不能
+  // 反过来盖掉 ash profile；项目与 local settings 仍照常生效。
   //
   // configOverrides 落成的那几个变量在这里只是**第二道**:claude 启动时会把各层
   // settings 的 `env` 写回自己的进程环境,用户 `~/.claude/settings.json` 里的同名
@@ -114,8 +115,8 @@ export class ClaudeExecutor implements AgentExecutor {
     const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv(cwd));
     if (this.relay) {
       env.ANTHROPIC_BASE_URL = this.relayBaseUrl(model);
-      env.ANTHROPIC_API_KEY = this.relay.apiKey;
-      env.ANTHROPIC_AUTH_TOKEN = undefined;
+      env.ANTHROPIC_AUTH_TOKEN = this.relay.apiKey;
+      env.ANTHROPIC_API_KEY = undefined;
     }
     return env;
   }
@@ -275,6 +276,10 @@ export class ClaudeExecutor implements AgentExecutor {
     else args.push("--session-id", sessionId);
     if (model) args.push("--model", model);
     if (this.reasoningEffort) args.push("--effort", this.reasoningEffort);
+    // 供应商 profile 是本轮凭证与路由的权威来源。Claude 的 user settings 会把 env
+    // 写回进程环境，所以挂供应商时排除 user 这一层；否则 CC Switch 的旧 key 会在
+    // spawn 之后重新盖掉 ash 注入的 key。项目与 local 两层继续保留。
+    if (this.relay) args.push("--setting-sources", "project,local");
     // `--settings` 是 claude 优先级最高的一档配置(之上只剩企业策略文件),1.5x 加速档
     // 和「覆盖 CLI 自己的配置」都从这里进;装配在 settingsPayload() 里,恢复命令共用同
     // 一份。放在 extraArgs 之前:用户自带 --settings 时以他那份为准(设置页会警告本覆盖
