@@ -95,12 +95,18 @@ export function parseCodexCliVersionLine(line: string, threadId?: string): strin
     : null;
 }
 
-export async function readCodexCliVersion(threadId: string): Promise<string | null> {
+/**
+ * 这条会话是哪个版本的 Codex 建的。`configDir` 同 `findRollout` —— **多用户模式下必须
+ * 传**:CLI 起跑时注入的是归属人那份 `CODEX_HOME`,rollout 就写在
+ * `data/user-cli/<owner>/codex/sessions/…`,拿宿主机默认目录去找是找不到的(而找不到
+ * 一律 fail-open 返回 null,于是起跑前的版本守卫会静默放行受影响的会话)。
+ */
+export async function readCodexCliVersion(threadId: string, configDir?: string | null): Promise<string | null> {
   if (!threadId) return null;
   const cached = cliVersionCache.get(threadId);
   if (cached) return cached;
   try {
-    const file = await findRollout(threadId);
+    const file = await findRollout(threadId, configDir);
     if (!file) return null;
     const stream = createReadStream(file, { encoding: "utf8" });
     const lines = createInterface({ input: stream, crlfDelay: Infinity });
@@ -180,11 +186,17 @@ export function parseCodexContextLines(lines: string[], notBeforeMs = 0): Contex
 /**
  * 读取该 thread 在**本回合**产生的最新水位。notBeforeMs 是回合启动时间：它既防止
  * 格式变化后误用上一轮旧值，也让缺失/损坏自然退化成“不显示水位”。
+ * `configDir` 同上:这一轮的 CLI 往哪个 `CODEX_HOME` 写,就得去哪儿读(多用户模式下
+ * 那是归属人的个人目录);拿宿主机默认目录去读,水位会静默恒为空。
  */
-export async function readCodexContext(threadId: string, notBeforeMs = 0): Promise<ContextUsage | null> {
+export async function readCodexContext(
+  threadId: string,
+  notBeforeMs = 0,
+  configDir?: string | null,
+): Promise<ContextUsage | null> {
   if (!threadId) return null;
   try {
-    const file = await findRollout(threadId);
+    const file = await findRollout(threadId, configDir);
     if (!file) return null;
     const outcome = parseOutcome(await tailLines(file), Math.max(0, notBeforeMs));
     if (outcome.kind === "context") return outcome.value;

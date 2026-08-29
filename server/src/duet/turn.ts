@@ -137,7 +137,9 @@ export async function runTurn(args: {
       reuseRowId = undefined;
     }
   }
-  const affectedSessionVersion = await affectedCodexResumeVersion(executor.type, resumeCliId);
+  // 走到这里 resumeCliId 若还在,它就是**这一轮这个人**自己那条(跨人的已在上面另开),
+  // 所以 rollout 按 args.runOwner 的 CODEX_HOME 去找。
+  const affectedSessionVersion = await affectedCodexResumeVersion(executor.type, resumeCliId, args.runOwner);
   if (affectedSessionVersion) {
     if (reuseRowId) {
       versionReplacementNotice = await announceAffectedSessionReplacement({

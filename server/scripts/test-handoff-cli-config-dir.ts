@@ -7,20 +7,22 @@
 // 任务按「没调 complete_task」记 failed。导入侧那道「只认写盘成功的会话」的闸也拦不住:
 // 它只问文件名到没到,不问 CLI 站在自己的配置目录里看不看得见。
 //
-// 这条测试钉四件事:
+// 这条测试钉五件事:
 //   ① 判据同源 —— cliConfigDirForOwner 给出的目录 == 起跑注入的那个环境变量的值
 //   ② 导入侧真的落进那个目录,而且**不在** `~/.claude` 下(反向断言才抓得住回归)
 //   ③ 导出侧也去那个目录找:归属人对了找得到,按自用模式找就找不到
 //   ④ 跨人回合:共享项目里 B 回复 A 的任务,会话写在 B 的目录下,导出必须按
 //      `sessions.run_owner_user_id` 逐条找,不能按任务归属人 A 一刀切(第 1 轮审查 finding 1)
+//   ⑤ 「读会话元数据」的那条链同样得站这个目录:起跑前的 Codex 版本守卫、会话列表里的
+//      版本提示,都从 rollout 首行读 cli_version —— 站错目录读不到,而读不到是 fail-open
 // 外加自用模式(owner 为 null)逐字节维持老行为:仍然是 `~/.claude` / `$CODEX_HOME`。
 //
 // 跑法(自带临时库):
 //   npm -w server run test:handoff-cli-config-dir
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-handoff-cli-dir-"));
@@ -174,6 +176,59 @@ try {
   assert.equal(
     (await collectSessionFiles(legacyRows, CROSS_CWD, false, user.id)).found.size, 0,
     "没有 run_owner 就退回任务归属人:这两条本来就不在他的目录下,找不到才是对的",
+  );
+
+  // ⑤ 「找文件」对了还不够:**读会话元数据**的那条链也得站同一个目录。起跑前的版本守卫
+  //    (0.147 建的 Codex 会话要在 spawn 前换掉)和会话列表里的版本提示,都从 rollout 首行
+  //    读 cli_version。按宿主机默认 CODEX_HOME 读必然扑空,而扑空是 fail-open —— 受影响的
+  //    会话被静默放行,照样把旧 id 交给 `codex exec resume`(第 1 轮 finding 1)。
+  const { affectedCodexResumeVersion } = await import("../src/session-version-guard.js");
+  const writeRollout = (dir: string | null, threadId: string) => {
+    const file = join(codexHome(dir), "sessions", ...codexRel(threadId).split("/"));
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(
+      file,
+      `${JSON.stringify({ type: "session_meta", payload: { session_id: threadId, cli_version: "0.147.0" } })}\n`,
+    );
+  };
+  // 每段一个新 thread id:版本读取带进程内缓存(按 thread id),复用同一个会让后一段
+  // 拿到前一段的缓存值,反向断言就成了假绿。
+  const GUARD_THREAD = "01a032e5-c973-78c2-bbc7-a2ff7d10b3da";
+  writeRollout(bobCodexDir, GUARD_THREAD);
+  assert.equal(
+    await affectedCodexResumeVersion("codex", GUARD_THREAD),
+    undefined,
+    "按宿主机默认 CODEX_HOME 读 —— 读不到,这正是漏拦的形状(先跑它,免得缓存喂出假绿)",
+  );
+  assert.equal(
+    await affectedCodexResumeVersion("codex", GUARD_THREAD, bob.id),
+    "0.147.0",
+    "按会话的 run_owner 读:受影响的版本必须在起跑前就认出来",
+  );
+
+  // 会话列表也得读同一个目录,否则界面说「读不出版本」、守卫却在换会话,两套结论。
+  // 这一行**故意不写 run_owner**(老库里就是这样),走的是「回落到任务归属人」那条路。
+  const { db } = await import("../src/db/index.js");
+  const { projects, sessions, tasks } = await import("../src/db/schema.js");
+  const { sessionsForTask } = await import("../src/task-session-routes.js");
+  const LIST_THREAD = "01b032e5-c973-78c2-bbc7-a2ff7d10b3da";
+  writeRollout(codexDir, LIST_THREAD);
+  const at = "2026-08-29T13:26:46.000Z";
+  await db.insert(projects).values({ id: "p-cli-dir", name: "cli-dir", repoPath: stage, createdAt: at });
+  await db.insert(tasks).values({
+    id: "t-cli-dir", projectId: "p-cli-dir", title: "会话列表", body: "", mode: "single", status: "done",
+    labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
+    ownerUserId: user.id, createdAt: at, updatedAt: at, useWorktree: false,
+  });
+  await db.insert(sessions).values({
+    id: "s-cli-dir", taskId: "t-cli-dir", role: "single", agentType: "codex", executor: "codex@x",
+    cliSessionId: LIST_THREAD, startedAt: at,
+  });
+  const listed = await sessionsForTask("t-cli-dir");
+  assert.equal(
+    listed.at(0)?.cliVersion,
+    "0.147.0",
+    "会话列表要按归属人的 CODEX_HOME 读版本,否则界面与起跑守卫给出两套结论",
   );
 
   console.log("test-handoff-cli-config-dir: OK");

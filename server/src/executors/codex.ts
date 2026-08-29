@@ -142,6 +142,9 @@ export class CodexExecutor implements AgentExecutor {
       events: parseCodexStream(child, opts.trace, lifecycle, {
         initialThreadId: opts.sessionId ?? "",
         contextNotBeforeMs,
+        // 这一轮真正生效的 CODEX_HOME(多用户模式由 auth/run-env.ts 注入),rollout 就写在
+        // 它下面 —— 水位必须去同一个目录读。
+        configDir: opts.env?.CODEX_HOME,
       }),
       kill: () => {
         lifecycle.stopRequested = true;
@@ -187,7 +190,7 @@ export class CodexExecutor implements AgentExecutor {
     return { args, ignored: [...new Set([...profile.ignored, ...turn.ignored])] };
   }
 
-  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string }): RunHandle {
+  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string; configDir?: string | null }): RunHandle {
     const detached = child as Partial<DetachedChild>;
     if (child.stdin && opts.commandLine.includes("app-server") && detached.ashPaths) {
       const recovered = readCodexAppServerState(detached.ashPaths.out, opts.sessionId);
@@ -214,6 +217,7 @@ export class CodexExecutor implements AgentExecutor {
       events: parseCodexStream(child, undefined, lifecycle, {
         initialThreadId: opts.sessionId,
         contextNotBeforeMs: Date.now(),
+        configDir: opts.configDir,
       }),
       kill: () => {
         lifecycle.stopRequested = true;
@@ -246,6 +250,7 @@ export class CodexExecutor implements AgentExecutor {
           events: parseCodexStream(child, undefined, lifecycle, {
             initialThreadId: sessionId,
             contextNotBeforeMs,
+            configDir: opts.env?.CODEX_HOME,
           }),
         };
       },
@@ -277,7 +282,9 @@ export async function* parseCodexStream(
   child: ReturnType<typeof spawnAgent>,
   tracePaths: RunTracePaths | undefined,
   lifecycle: { stopRequested: boolean },
-  contextOptions: { initialThreadId: string; contextNotBeforeMs: number },
+  // configDir = 这一轮 CLI 实际写 rollout 的 CODEX_HOME(多用户模式下是归属人的个人
+  // 目录)。不传就是宿主机默认那份 —— 读不到 rollout 时水位静默为空。
+  contextOptions: { initialThreadId: string; contextNotBeforeMs: number; configDir?: string | null },
 ): AsyncIterable<AgentEvent> {
   const queue: AgentEvent[] = [];
   let resolve: (() => void) | null = null;
@@ -398,7 +405,7 @@ export async function* parseCodexStream(
       const next = queue.shift()!;
       if (next.kind === "done" && !contextDone) {
         contextDone = true;
-        const context = await readCodexContext(threadId, contextOptions.contextNotBeforeMs);
+        const context = await readCodexContext(threadId, contextOptions.contextNotBeforeMs, contextOptions.configDir);
         // used=0 的哨兵也必须发：它会清掉 sessions 行上的上一轮旧水位。否则私有格式
         // 变化后读取器虽已失败关闭，界面却仍拿数据库里的陈旧数字冒充当前值。
         yield {

@@ -56,9 +56,12 @@ export async function cliConfigDirForOwner(
   ownerUserId: string | null | undefined,
   agentType: string,
 ): Promise<string | null> {
+  // 没有归属人 = 宿主机默认目录,这个答案与实例模式无关。提前返回不只是省一次查询:
+  // 它让「不碰库」的调用方(纯函数级回归、启动早期)不会因为一次 app_settings 查询而炸。
+  if (!ownerUserId) return null;
   const key = configDirEnvVar(agentType);
   if (!key) return null;
-  return (await runEnvForOwner(ownerUserId ?? null, agentType))[key] ?? null;
+  return (await runEnvForOwner(ownerUserId, agentType))[key] ?? null;
 }
 
 /**

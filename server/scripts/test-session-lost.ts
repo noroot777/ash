@@ -149,6 +149,27 @@ try {
 }
 ok("能识别带文件头噪声的 0.147 Codex rollout");
 
+// 同一份 rollout,只存在于**某个人的** CODEX_HOME 里(多用户模式:起跑注入的是
+// `data/user-cli/<owner>/codex`)。按宿主机默认目录读必然扑空,而扑空是 fail-open ——
+// 版本守卫于是静默放行,受影响的会话照样被 --resume(第 1 轮 finding 1)。
+const ownedHome = join(dir, "owner-codex-home");
+const ownedThreadId = "01c032e5-c973-78c2-bbc7-a2ff7d10b3da";
+const ownedRolloutDir = join(ownedHome, "sessions", "2026", "08", "29");
+mkdirSync(ownedRolloutDir, { recursive: true });
+writeFileSync(
+  join(ownedRolloutDir, `rollout-2026-08-29T10-00-00-${ownedThreadId}.jsonl`),
+  `${JSON.stringify({ type: "session_meta", payload: { session_id: ownedThreadId, cli_version: "0.147.0" } })}\n`,
+);
+process.env.CODEX_HOME = join(dir, "empty-codex-home");
+try {
+  assert.equal(await readCodexCliVersion(ownedThreadId), null, "按宿主机默认目录读:读不到(先跑它,免得版本缓存喂出假绿)");
+  assert.equal(await readCodexCliVersion(ownedThreadId, ownedHome), "0.147.0", "指定配置目录后必须读得到");
+} finally {
+  if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = originalCodexHome;
+}
+ok("版本读取认 configDir:会话在谁的 CODEX_HOME 里就去谁那儿读");
+
 const cappedThreadId = "01b032e5-c973-78c2-bbc7-a2ff7d10b3da";
 writeFileSync(
   join(rolloutDir, `rollout-2026-08-24T10-05-00-${cappedThreadId}.jsonl`),
@@ -217,6 +238,13 @@ ok("每条续跑链都有人负责清失效 id");
 for (const chain of ["orchestrator.ts", "team/session.ts", "duet/turn.ts"]) {
   const code = readSource(join(SRC, chain));
   assert.ok(code.includes("affectedCodexResumeVersion"), `${chain} 没在起跑前识别受影响的 Codex 会话`);
+  // 第三个参数是**开这条会话的那个人**。少了它,多用户模式下守卫会去宿主机默认
+  // CODEX_HOME 找 rollout,必然扑空 —— 而扑空是 fail-open,受影响的会话被静默放行。
+  assert.match(
+    code,
+    /affectedCodexResumeVersion\(([^)]*,){2}[^)]*\)/,
+    `${chain} 没把会话归属人传给版本守卫`,
+  );
   assert.match(
     code,
     /announceAffectedSessionReplacement\([\s\S]*?db\.update\(sessions\)\.set\(LOST_SESSION_PATCH\)/,

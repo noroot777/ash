@@ -2,17 +2,24 @@ import type { AgentType, SessionRole } from "@ash/shared";
 import { readCodexCliVersion } from "./executors/codex-rollout.js";
 import { affectedCodexSessionReplacementNote, isAffectedCodexVersion } from "./executors/version-policy.js";
 import { announceSessionNote } from "./session-notice.js";
+import { cliConfigDirForOwner } from "./auth/run-env.js";
 
 /**
  * 无法读取 rollout 或无法证明版本受影响时保留原会话。这里刻意 fail-open：误删一条
  * 健康会话会直接丢上下文，而漏拦只会维持升级守卫加入前的恢复行为。
+ *
+ * `runOwnerUserId` = **开这条会话的那个人**(老行没有这一列时由调用方回落到任务归属人)。
+ * 必须传:rollout 写在起跑时注入的那份 `CODEX_HOME` 里,多用户模式下那是个人目录
+ * (`data/user-cli/<owner>/codex/…`)。按宿主机默认目录找必然扑空,而扑空是 fail-open ——
+ * 于是 0.147 这类受影响会话被静默放行,照样把旧 id 交给 codex resume(第 1 轮 finding 1)。
  */
 export async function affectedCodexResumeVersion(
   agentType: AgentType,
   cliSessionId: string | null | undefined,
+  runOwnerUserId?: string | null,
 ): Promise<string | undefined> {
   if (agentType !== "codex" || !cliSessionId) return undefined;
-  const version = await readCodexCliVersion(cliSessionId);
+  const version = await readCodexCliVersion(cliSessionId, await cliConfigDirForOwner(runOwnerUserId, "codex"));
   return isAffectedCodexVersion(version) ? version! : undefined;
 }
 

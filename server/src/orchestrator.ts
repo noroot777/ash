@@ -320,7 +320,11 @@ export async function continueTask(
         text: CROSS_OWNER_SESSION_NOTE,
       });
     }
-    const affectedSessionVersion = await affectedCodexResumeVersion(agent, prev?.cliSessionId);
+    // 版本守卫要去**开这条会话的那个人**的 CODEX_HOME 里读 rollout(老行没这一列就回落
+    // 到任务归属人)——不传等于按宿主机默认目录找,多用户模式下必然扑空、静默放行。
+    const affectedSessionVersion = await affectedCodexResumeVersion(
+      agent, prev?.cliSessionId, prev?.runOwnerUserId ?? task.ownerUserId,
+    );
     if (prev && affectedSessionVersion) {
       // 说明必须先持久写进旧会话，凭据后清；否则下面任一 await 抛错都会留下一个
       // 「上下文没了、但没有解释」的永久状态。
