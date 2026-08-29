@@ -110,7 +110,7 @@ export interface ExecutorBuildOpts {
 /**
  * 「复制到终端接着聊」那条命令的**全部依据**,一次给齐。三样东西同源同时算出来:
  *   · resumeCommand —— 直接能粘的整条命令
- *   · resumeEnv     —— 存进 `sessions.resume_env`:供应商 base_url + key 占位符
+ *   · resumeEnv     —— 存进 `sessions.resume_env`:供应商 key 占位符
  *   · resumeArgs    —— 存进 `sessions.resume_args`:跟在 CLI 后面的参数
  *                      (claude 的 `--settings '{…}'`)。盖掉 CLI 配置文件的那几项走
  *                      这里而**不是** env 前缀:CLI 会把各层 settings 的 env 写回自己的

@@ -37,15 +37,12 @@ export class ClaudeExecutor implements AgentExecutor {
     this.startupError = opts.startupError;
     this.relay = opts.relay;
     this.configOverrides = opts.configOverrides;
-    const resumeBaseUrl = this.relay && modelUsesContext1m(this.model, this.relay.context1mModels)
-      ? anthropicContext1mBaseUrl(this.relay.providerId)
-      : this.relay ? relayRoot(this.relay.baseUrl) : undefined;
     this.resumeEnvHint = resumeEnvHint(
       this.type,
       // 覆盖项故意不进 env 前缀:它打不过用户的 settings.json(见 resumeEnvHint 字段注释),
       // 真正带着走的是 resumeFields() 里那个 `--settings`。
       undefined,
-      this.relay ? `ANTHROPIC_BASE_URL=${resumeBaseUrl} ANTHROPIC_AUTH_TOKEN=<你的key> ` : undefined,
+      this.relay ? `ANTHROPIC_API_KEY=<你的key> ` : undefined,
     );
     this.label = opts.name ?? `claude@local${opts.model ? "·" + opts.model : ""}`;
   }
@@ -56,7 +53,7 @@ export class ClaudeExecutor implements AgentExecutor {
 
   /** 恢复参数按会话 cwd 现算；构造时提前冻结会漏掉项目 settings。 */
   resumeFields(cwd: string, sessionId: string): ResumeFields {
-    const settings = this.settingsPayload(cwd);
+    const settings = this.settingsPayload(cwd, this.model);
     const resumeArgs = settings ? `--settings ${shq(JSON.stringify(settings))}` : null;
     const inner = resumeInner.claude(sessionId);
     return {
@@ -70,17 +67,38 @@ export class ClaudeExecutor implements AgentExecutor {
     };
   }
 
-  /** fastMode、覆盖项与恢复参数共用一份 --settings；多份参数不合并，最后一份整包胜出。 */
-  private settingsPayload(cwd: string): Record<string, unknown> | null {
+  private relayBaseUrl(model?: string): string | undefined {
+    if (!this.relay) return undefined;
+    return modelUsesContext1m(model, this.relay.context1mModels)
+      ? anthropicContext1mBaseUrl(this.relay.providerId)
+      : relayRoot(this.relay.baseUrl);
+  }
+
+  /** fastMode、覆盖项、供应商路由与恢复参数共用一份 --settings；多份参数不合并。 */
+  private settingsPayload(cwd: string, model?: string): Record<string, unknown> | null {
     const settings = {
       ...(this.speed === "fast" ? { fastMode: true } : {}),
       ...cliConfigOverrideSettings(this.type, this.configOverrides, cliHostEnv(cwd)),
-    };
+    } as Record<string, unknown>;
+    const relayBaseUrl = this.relayBaseUrl(model);
+    if (relayBaseUrl) {
+      const existingEnv = settings.env && typeof settings.env === "object"
+        ? settings.env as Record<string, unknown>
+        : {};
+      settings.env = {
+        ...existingEnv,
+        ANTHROPIC_BASE_URL: relayBaseUrl,
+        // Claude 会把用户 settings.json 的 env 写回进程环境。这里显式清空旧 token，
+        // 让真正的密钥只从进程环境里的 ANTHROPIC_API_KEY 进入，绝不落进 argv/会话表。
+        ANTHROPIC_AUTH_TOKEN: "",
+      };
+    }
     return Object.keys(settings).length ? settings : null;
   }
 
-  // 挂了供应商就顶掉 CLI 自己的登录态:BASE_URL 指到供应商根地址(SDK 自己会补 /v1,
-  // 库里那份要是带了 /v1 得剥掉,否则打到 /v1/v1),AUTH_TOKEN 给它的 key。
+  // 挂了供应商就顶掉 CLI 自己的登录态:BASE_URL 由最高优先级的 --settings 锁定，
+  // 密钥只走 ANTHROPIC_API_KEY 进程环境。用户 settings.json 里的 AUTH_TOKEN 会在
+  // settingsPayload() 被清空，不能再把 ash profile 的密钥盖掉。
   //
   // configOverrides 落成的那几个变量在这里只是**第二道**:claude 启动时会把各层
   // settings 的 `env` 写回自己的进程环境,用户 `~/.claude/settings.json` 里的同名
@@ -95,10 +113,9 @@ export class ClaudeExecutor implements AgentExecutor {
   private env(cwd?: string, model?: string): Record<string, string | undefined> {
     const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv(cwd));
     if (this.relay) {
-      env.ANTHROPIC_BASE_URL = modelUsesContext1m(model, this.relay.context1mModels)
-        ? anthropicContext1mBaseUrl(this.relay.providerId)
-        : relayRoot(this.relay.baseUrl);
-      env.ANTHROPIC_AUTH_TOKEN = this.relay.apiKey;
+      env.ANTHROPIC_BASE_URL = this.relayBaseUrl(model);
+      env.ANTHROPIC_API_KEY = this.relay.apiKey;
+      env.ANTHROPIC_AUTH_TOKEN = undefined;
     }
     return env;
   }
@@ -262,7 +279,7 @@ export class ClaudeExecutor implements AgentExecutor {
     // 和「覆盖 CLI 自己的配置」都从这里进;装配在 settingsPayload() 里,恢复命令共用同
     // 一份。放在 extraArgs 之前:用户自带 --settings 时以他那份为准(设置页会警告本覆盖
     // 被顶掉)。
-    const settings = this.settingsPayload(opts.cwd);
+    const settings = this.settingsPayload(opts.cwd, selectedModel);
     if (settings) args.push("--settings", JSON.stringify(settings));
     // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。
     if (this.extraArgs.length) args.push(...this.extraArgs);
