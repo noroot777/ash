@@ -14,7 +14,7 @@ import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { Dropdown } from "../components/Dropdown.tsx";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
-import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
+import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { attachmentView } from "../task-detail/utils.ts";
 import { filterNotes, NOTE_CONVERSION_FILTERS, type NoteConversionFilter } from "./notesFilter.ts";
@@ -486,12 +486,20 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
               <div className="note-attachments">
                 {draft.attachments.map((path) => { const view = attachmentView(path); return <div key={path}>{view.image && view.url ? <PreviewableImage src={view.url} alt={view.name} /> : <span><File size={16} />{view.name}</span>}<button type="button" onClick={() => updateDraft({ ...draftRef.current, attachments: draftRef.current.attachments.filter((item) => item !== path) })} aria-label={`移除 ${view.name}`}><X size={11} /></button></div>; })}
               </div>
-              <UploadAttachmentList attachments={uploads.attachments} error={uploads.error} onRemove={uploads.remove} />
+              <UploadAttachmentList
+                attachments={uploads.attachments}
+                pending={uploads.pending}
+                error={uploads.error}
+                onRemove={uploads.remove}
+                onCancel={uploads.cancel}
+              />
             </ImagePreviewGroup>
           </main>
         </div>
         <footer>
-          <span>{picked.size ? `已选择 ${picked.size} 条 · 将按列表顺序合并` : `${saveStatus} · 正文失焦后显示 Markdown`}</span>
+          <span>{picked.size ? `已选择 ${picked.size} 条 · 将按列表顺序合并`
+            : uploads.uploading ? `${uploadingLabel(uploads.pending)} · 传完自动附到这条随手记`
+              : `${saveStatus} · 正文失焦后显示 Markdown`}</span>
           <div className="notes-footer-actions">
             <AttachmentPicker addFiles={uploads.addFiles} disabled={deleting} />
             {active && <Button variant="danger" disabled={deleting} onClick={async () => { if (await flushDraft()) setConfirmDelete(true); }}><Trash size={13} />删除</Button>}

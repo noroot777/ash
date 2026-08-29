@@ -37,7 +37,7 @@ import type { WorkflowDef, WorkflowItem } from "@ash/shared/workflow";
 import type { CliHostEnv } from "@ash/shared/cli-overrides";
 import type { CliModelCatalog } from "@ash/shared/cli-presets";
 import type { SearchStreamLine } from "@ash/shared/search";
-import { ApiError, apiError, apiPath, id, json, parseBody, request } from "./apiClient.ts";
+import { ApiError, apiError, apiPath, id, json, parseBody, postWithProgress, request } from "./apiClient.ts";
 import { handoffApi } from "./handoffApi.ts";
 export type { TaskScopedHandoffPreflightResult } from "./handoffApi.ts";
 
@@ -472,11 +472,14 @@ export const api = {
     }
     take(buffered);
   },
+  // 上传走带进度的通道（postWithProgress）：粘贴一张图在远程访问时可能要传十几秒，
+  // 调用方得拿到百分比才能把「正在传」说清楚。
   uploadFile: (
     dataUrl: string,
     name: string,
+    options?: { onProgress?: (fraction: number) => void; signal?: AbortSignal },
   ): Promise<{ id: string; path: string; url: string; name: string; kind: AttachmentKind }> =>
-    request("/uploads", json("POST", { dataUrl, name })),
+    postWithProgress("/uploads", { dataUrl, name }, options),
 
   agents: (): Promise<AgentExecutorProfile[]> => request("/agents"),
   detectAgents: (): Promise<
