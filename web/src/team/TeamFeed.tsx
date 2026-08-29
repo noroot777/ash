@@ -5,7 +5,7 @@ import type { Batch } from "@ash/shared/team";
 import { ArrowElbowDownRight, ArrowRight, SpinnerGap } from "@phosphor-icons/react";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { AgentRunMeta } from "../components/AgentRunMeta.tsx";
-import { ExecutionDetails } from "../components/ExecutionTrace.tsx";
+import { AgentTurnBody } from "../components/AgentTurnBody.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { RunActivity } from "../components/RunActivity.tsx";
@@ -40,13 +40,7 @@ function AgentRow({
           {duration && <small className="task-turn-duration" title={`开始 ${formatInstant(row.at)} · 结束 ${formatInstant(row.endedAt)}`}>{row.continuation ? "" : "· "}⏱ {duration} 用时</small>}
         </header>
       )}
-      {row.segments.map((segment, index) => (
-        <section className="task-agent-segment" key={segment.id}>
-          <ExecutionDetails events={segment.events} running={!row.endedAt && index === row.segments.length - 1} />
-          <MessageAttachments paths={segment.attachments} />
-          {segment.markdown && <MarkdownBody text={segment.markdown} />}
-        </section>
-      ))}
+      <AgentTurnBody segments={row.segments} running={!row.endedAt} />
       <MessageFooter
         turnUsage={row.usage}
         session={row.showSessionMeta ? row.session : null}

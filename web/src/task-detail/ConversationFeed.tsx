@@ -6,7 +6,7 @@ import { runActivityExecutor, runActivityPhase, runActivityTail } from "@ash/sha
 import type { ConversationItem } from "./conversationModel.ts";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { AgentRunMeta } from "../components/AgentRunMeta.tsx";
-import { ExecutionDetails } from "../components/ExecutionTrace.tsx";
+import { AgentTurnBody } from "../components/AgentTurnBody.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { RunActivity } from "../components/RunActivity.tsx";
@@ -84,13 +84,7 @@ function AgentMessage({
             </button>
           </header>
         )}
-        {item.segments.map((segment, index) => (
-          <section className="task-agent-segment" key={segment.id}>
-            <ExecutionDetails events={segment.events} running={!item.endedAt && index === item.segments.length - 1} />
-            <MessageAttachments paths={segment.attachments} />
-            {segment.markdown && <MarkdownBody text={segment.markdown} />}
-          </section>
-        ))}
+        <AgentTurnBody segments={item.segments} running={!item.endedAt} />
         {/* 账目一律在尾栏，头部不放。位置不许随「是不是会话最后一条」变——
             那样同一个数会在气泡顶和气泡底之间跳，而这条规则用户看不见。 */}
         <MessageFooter

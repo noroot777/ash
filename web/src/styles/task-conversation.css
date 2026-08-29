@@ -112,6 +112,13 @@
 .task-execution-block.has-error .t-shimmer { --shimmer-base: color-mix(in srgb, var(--red) 52%, transparent); --shimmer-highlight: color-mix(in srgb, var(--red) 72%, transparent); }
 .task-execution-pulse { width: 3px; height: 3px; flex: none; border-radius: 50%; background: currentColor; opacity: .72; }
 .task-execution-events { margin: 1px 0 1px 7px; border-left: 1px solid color-mix(in srgb, var(--line) 72%, transparent); padding: 1px 0 2px 6px; }
+/* 回合级折叠：折起来只剩最后一次工具动作之后说的话。摘要条沿用执行块那身小字，
+   折进去的正文仍是正文，字号颜色都得回到气泡基准，否则展开像看脚注。 */
+.task-turn-process { max-width: 100%; color: inherit; font-size: inherit; }
+.task-turn-process > summary { color: color-mix(in srgb, var(--faint) 76%, transparent); font-size: 9.5px; }
+.task-turn-process-body { margin: 2px 0 3px 7px; border-left: 1px solid color-mix(in srgb, var(--line) 72%, transparent); padding: 2px 0 2px 9px; }
+/* 外层已经有这条竖线了，事件列表不必再画一条。 */
+.task-turn-process-body .task-execution-events { margin: 0; border-left: 0; padding: 0; }
 .task-tool-line { margin-top: 2px; border: 0; color: color-mix(in srgb, var(--faint) 82%, transparent); font-size: 9.5px; }
 .task-tool-line summary,
 .task-tool-line .task-tool-head { display: flex; max-width: 100%; cursor: pointer; align-items: baseline; gap: 6px; border-radius: 6px; padding: 3px 6px; list-style: none; }

@@ -5,6 +5,8 @@
 //   claude/qwen/qoder → JSON.stringify(tool_use.input),超 1500 字会被截断成半截 JSON
 //   codex             → 命令原文 / 文件路径(纯文本)
 // 所以先按工具名挑字段,JSON 解析失败(截断)时退回正则取值,再退回首行文本。
+import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+
 export type ExecutionEvent = {
   kind: "tool" | "thinking" | "error";
   label: string;
@@ -145,4 +147,39 @@ export function hasMoreThanSummary(event: ExecutionEvent, summary: string): bool
   const detail = event.detail?.trim();
   if (!detail) return false;
   return collapse(detail) !== summary;
+}
+
+// ash 强加给 agent 的回合结算协议。它们跟任务内容无关 —— agent 是被系统要求调的,
+// 不是为了把活干完才调的。
+const TURN_PROTOCOL = new Set(["complete_task", "pause_task", "report_stage", "ask_question", "accept_task"]);
+
+// 待办清单的记账。载荷长这样:{"taskId":"1","status":"completed"} —— 只是把某一条划掉,
+// 现场什么都没发生。claude 的 TaskCreate/TaskUpdate/TaskList 与 codex 的 update_plan
+// 是同一件事的不同叫法。
+const PLAN_BOOKKEEPING = new Set(["taskcreate", "taskupdate", "tasklist", "todowrite", "update_plan"]);
+
+/** `mcp__ash__complete_task`(claude)/ `ash/complete_task`(codex)→ `complete_task`。 */
+function ashMcpTool(label: string): string | null {
+  for (const server of [ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME]) {
+    if (label.startsWith(`mcp__${server}__`)) return label.slice(`mcp__${server}__`.length);
+    if (label.startsWith(`${server}/`)) return label.slice(server.length + 1);
+  }
+  return null;
+}
+
+/**
+ * 这一步是**记账**,不是干活。
+ *
+ * 用途是回合折叠的切点:切点要落在最后一次真正动手的地方,而记账调用几乎总在正文写完
+ * 之后才发生(complete_task 尤其 —— 全库 22% 的回合切点是它)。拿它当切点会把整篇回答
+ * 折进「过程」,外面只剩收尾那一句。
+ *
+ * 判据是「这一步有没有改变现场」而不是「它属不属于本项目的 MCP」:同一个 ash MCP 里的
+ * dispatch / run_task / create_task_chain 是 agent 拿 ash 干活,照旧算数。
+ */
+export function isBookkeepingEvent(event: ExecutionEvent): boolean {
+  if (event.kind !== "tool") return false;
+  const ash = ashMcpTool(event.label);
+  if (ash !== null) return TURN_PROTOCOL.has(ash);
+  return PLAN_BOOKKEEPING.has(event.label.toLowerCase());
 }
