@@ -20,6 +20,12 @@ type ParseOutcome =
   | { kind: "incompatible"; reason: string };
 
 const warnedThreads = new Set<string>();
+/**
+ * 键是 **`<解析后的 CODEX_HOME>\0<threadId>`**,不能只用 threadId:同一个 session id
+ * 在多用户模式下可能同时躺在几个配置根里(个人目录、宿主机默认目录、接力导入过来的
+ * 那份),只按 id 缓存的话「先读了哪个目录」就决定了后面所有调用的答案 —— owner-aware
+ * 的调用会拿到别的目录缓存下来的版本,守卫据此错判「不用换会话」(第 2 轮 finding 1)。
+ */
 const cliVersionCache = new Map<string, string>();
 const CLI_VERSION_SCAN_LINES = 32;
 
@@ -103,7 +109,10 @@ export function parseCodexCliVersionLine(line: string, threadId?: string): strin
  */
 export async function readCodexCliVersion(threadId: string, configDir?: string | null): Promise<string | null> {
   if (!threadId) return null;
-  const cached = cliVersionCache.get(threadId);
+  // 缓存键带上目录（说明见 cliVersionCache）。codexHome() 每次现算：进程的
+  // CODEX_HOME 变了,键也跟着变,不会拿旧目录的答案冒充新目录。
+  const cacheKey = `${codexHome(configDir)}\0${threadId}`;
+  const cached = cliVersionCache.get(cacheKey);
   if (cached) return cached;
   try {
     const file = await findRollout(threadId, configDir);
@@ -120,7 +129,7 @@ export async function readCodexCliVersion(threadId: string, configDir?: string |
         }
         const version = parseCodexCliVersionLine(line, threadId);
         if (version) {
-          cliVersionCache.set(threadId, version);
+          cliVersionCache.set(cacheKey, version);
           return version;
         }
         // session_meta 应在文件开头；只容忍少量空行/旁注/格式噪声，避免坏文件触发
