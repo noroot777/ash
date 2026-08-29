@@ -5,14 +5,16 @@
 // 可能出现),就能读到别人**私有随手记**的附件正文 —— `/api/notes` 那两条轴白过了。
 //
 // 判据现在在 `server/src/uploads.ts`:个人面(上传者本人)+ 项目轴(附到的任务看得见)。
-// 这条测试钉住六件事:
+// 这条测试钉住七件事:
 //   ① 泄露本身没了,而且**实例管理员也读不到**别人的私有附件(个人面没有特权);
 //   ② 别收过头:同项目的人照常打得开会话里的图,自用模式整条判据透明;
 //   ③ **绑定不能被拿来越权**:把别人的附件路径写进自己任务的 attachments,
 //      不会给它敞开一条项目轴的读路;
 //   ④ 存量文件:转多人时按任务正文回填归属,没登记的一律只有管理员读得到(失败关闭);
 //   ⑤ **引用一次不算认领**:没登记的文件被任务 attachments 引用后仍是失败关闭那一档;
-//   ⑥ 派生任务里归属继承父任务、授权仍看动手的人 —— 上传者本人不该被自己的附件挡在外面。
+//   ⑥ 派生任务里归属继承父任务、授权仍看动手的人 —— 上传者本人不该被自己的附件挡在外面;
+//   ⑦ 接力落地的附件撞上本机同名的私有文件:正文里写着的那份,任务里的人就得打得开,
+//      而本机那份私有附件仍旧只有本人能读。
 //
 // 一律走真 Request 打进 `authGate → resourceGate → personalWriteGate → 路由` 的完整栈。
 //
@@ -88,6 +90,7 @@ const LEGACY_SECRET = "legacy-upload-secret-5c1d";
 const LATE_SECRET = "late-unregistered-secret-62fd";
 const IMPORTED_BODY = "handoff-landed-body-8ae1";
 const CHILD_SECRET = "bob-child-task-upload-7d40";
+const HANDOFF_SECRET = "peer-sent-same-name-1c9e";
 
 const at = new Date().toISOString();
 const repo = join(stage, "shared-repo");
@@ -239,7 +242,35 @@ try {
   assert.equal((await get(bobChild.file, AS_ALICE)).text, CHILD_SECRET, "正文里写着路径,任务看得见的人就该打得开");
   assert.equal((await get(bobChild.file, AS_CAROL)).status, 404, "但仍只限这个项目");
 
-  console.log("upload visibility ok(个人面 + 项目轴 + 越权绑定 + 引用不算认领 + 派生任务 + 存量认领)");
+  // ── ⑦ 接力落地:正文里写着的附件,任务里的人就得打得开 ─────────────────────
+  // 撞名时复用本机那一份看着最省事,但本机那份可能是**别人的私有附件**:导入报告说
+  // 「附件已迁移」、正文也改写成了本机路径,任务里的人却打不开(第 6 轮审查 P2)。
+  // 字节相同也一样 —— 能不能读取决于那条无关的旧登记,不是这条任务。
+  const { importHandoff } = await import("../src/handoff-import.js");
+  const { scanUploadNames } = await import("../src/handoff-uploads.js");
+  const bobPrivate = await upload(AS_BOB, "share.txt", HANDOFF_SECRET);
+  const peerPath = `/peer/data/uploads/${bobPrivate.file}`;
+  const handoffTaskId = "handoff-upload-vis-01";
+  await importHandoff({
+    version: 1, sourceHost: "peer", sourceFingerprint: "a".repeat(64), originFingerprint: "a".repeat(64),
+    sourceWorkspace: null, targetProjectId: "p-shared", autoResume: false, git: null,
+    transferId: "transfer-upload-vis-1",
+    task: { id: handoffTaskId, title: "接来的任务", body: `远端附件 ${peerPath}`, status: "paused", createdAt: at },
+    sessions: [],
+    // 同名**同内容**:第 6 轮的触发条件。
+    uploads: [{ name: bobPrivate.file, sourcePath: peerPath, dataBase64: Buffer.from(HANDOFF_SECRET, "utf8").toString("base64") }],
+    files: [],
+  }, { ownerUserId: alice.id });
+  const handoffBody = (await db.select().from(tasks).where(eq(tasks.id, handoffTaskId))).at(0)!.body!;
+  const landed = [...scanUploadNames(handoffBody)].filter((name) => name !== bobPrivate.file);
+  assert.equal(landed.length, 1, `正文该指向这条接力任务自己的那一份:${handoffBody}`);
+  assert.equal((await get(landed[0]!, AS_ALICE)).text, HANDOFF_SECRET, "接力任务里的人得打得开正文写的附件");
+  assert.equal((await get(landed[0]!, AS_CAROL)).status, 404, "项目外仍读不到");
+  // Bob 那份私有附件半点没变:内容一样不等于可以拿他的登记行顶账。
+  assert.equal((await get(bobPrivate.file, AS_BOB)).text, HANDOFF_SECRET, "Bob 自己照常读得到");
+  assert.equal((await get(bobPrivate.file, AS_ALICE)).status, 404, "他那份仍是私有的");
+
+  console.log("upload visibility ok(个人面 + 项目轴 + 越权绑定 + 引用不算认领 + 派生任务 + 接力落地 + 存量认领)");
 } finally {
   await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });

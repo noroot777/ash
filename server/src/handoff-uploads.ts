@@ -27,6 +27,14 @@ export const MAX_UPLOADS = 100;
 /** 写盘结果:`name` 是**本机最终文件名**(撞名时改过),`fresh` = 这批字节是这次新写下的。 */
 export type WrittenUpload = HandoffUploadPayload & { fresh: boolean };
 
+/** 本机对这批名字的既有登记情况(`uploads.ts` 的 localUploadNames 算好后传进来)。 */
+export interface LocalUploadNames {
+  /** 有登记行的名字 —— 文件被删、行还在的也算撞名。 */
+  registered: ReadonlySet<string>;
+  /** 登记行已经就挂在这条接力任务上的名字 —— 唯一可以复用本机那份字节的一档。 */
+  boundToTask: ReadonlySet<string>;
+}
+
 /** 一段文本在 JSON 字符串里的形态(去掉包裹引号)。POSIX 路径没有需转义字符,原样返回。 */
 export const jsonEscaped = (s: string): string => JSON.stringify(s).slice(1, -1);
 
@@ -86,20 +94,21 @@ export async function collectUploads(
  * **本机同名的文件绝不覆盖。** 目录是扁平的、名字就是全部信息(`uploads.ts`),源机
  * 送来的名字撞上本机既有文件时,直接按名字写下去有两重后果:本机那份用户数据被远端
  * 内容顶掉;既有登记行还会被顺手补上接力任务的 id —— 别人的私有附件就此敞开给这条
- * 任务看得见的所有人(第 5 轮审查 P1)。所以撞名时:
- *   · 本机那份**字节一模一样** → 就用本机这一份,不写盘、不登记(接力移回的常态,
- *     免得每来回一趟就多一份拷贝);
- *   · 内容不同 → 换一个本机名字落地,如实记 notes。
- * 返回的 `name` 一律是**本机最终名字**,`fresh` 标记这批字节是不是这次新写下的 ——
- * 调用方只该给 fresh 的那些建登记行(撞上的名字归本机原主,一动不动)。
+ * 任务看得见的所有人(第 5 轮审查 P1)。
  *
- * `registered` 是本机已有登记行的名字:文件被删了、登记行还在的也算撞名,否则补写
- * 一份内容进去就等于往别人的登记行里换了瓤。
+ * 撞名一律**改名落地**,只有一种情况复用本机那一份:登记行已经就挂在这条接力任务上
+ * (`local.boundToTask`)且字节一模一样 —— 接力移回的常态,授权面与「新写一份再登记
+ * 给这条任务」完全等价,不必每来回一趟就多一份拷贝。「字节一样」本身**不是**复用的
+ * 理由:本机那份可能是某人的私有附件、或挂在一条导入方看不见的任务上,复用就落成
+ * 「导入报告说附件迁好了,正文指向本机路径,任务里的人却打不开」(第 6 轮审查 P2)。
+ *
+ * 返回的 `name` 一律是**本机最终名字**,`fresh` 标记这批字节是不是这次新写下的 ——
+ * 调用方只该给 fresh 的那些建登记行(复用的那份归本机原主,一动不动)。
  */
 export async function writeUploads(
   uploads: HandoffUploadPayload[],
   notes: string[],
-  registered: ReadonlySet<string> = new Set<string>(),
+  local: LocalUploadNames = { registered: new Set<string>(), boundToTask: new Set<string>() },
 ): Promise<WrittenUpload[]> {
   const written: WrittenUpload[] = [];
   for (const u of uploads) {
@@ -116,12 +125,14 @@ export async function writeUploads(
     mkdirSync(UPLOADS_DIR, { recursive: true });
     const abs = join(UPLOADS_DIR, u.name);
     const onDisk = existsSync(abs);
-    if (!onDisk && !registered.has(u.name)) {
+    if (!onDisk && !local.registered.has(u.name)) {
       await writeFile(abs, data);
       written.push({ ...u, fresh: true });
       continue;
     }
-    const same = onDisk && await readFile(abs).then((cur) => cur.equals(data)).catch(() => false);
+    const same = onDisk
+      && local.boundToTask.has(u.name)
+      && await readFile(abs).then((cur) => cur.equals(data)).catch(() => false);
     if (same) {
       written.push({ ...u, fresh: false });
       continue;

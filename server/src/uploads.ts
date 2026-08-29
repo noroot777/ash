@@ -73,11 +73,27 @@ export async function registerUpload(
   if (Object.keys(patch).length) await db.update(uploads).set(patch).where(eq(uploads.file, name));
 }
 
-/** 这批名字里本机已经有登记行的那些。接力落地拿它避让同名(handoff-uploads.ts)。 */
-export async function registeredUploadNames(names: string[]): Promise<Set<string>> {
-  if (!names.length) return new Set();
-  const rows = await db.select({ file: uploads.file }).from(uploads).where(inArray(uploads.file, names));
-  return new Set(rows.map((row) => row.file));
+/**
+ * 本机对这批名字的既有登记情况,接力落地拿它决定撞名时改名还是复用(handoff-uploads.ts)。
+ *   · `registered` —— 有登记行的名字。文件被删、行还在的也算撞名。
+ *   · `boundToTask` —— 登记行**已经就挂在这条接力任务上**。只有这一档可以复用本机
+ *     那份字节:授权面与「新写一份再登记给这条任务」完全等价(接力移回的常态)。
+ * 其余撞名一律改名落地 —— 「字节一样」不代表「这条任务的人读得到」:本机那份可能是
+ * 某人的私有附件、或挂在一条导入方看不见的任务上,复用就等于让附件可读性取决于一条
+ * 无关的旧登记(第 6 轮审查 P2)。
+ */
+export async function localUploadNames(
+  names: string[],
+  taskId: string,
+): Promise<{ registered: Set<string>; boundToTask: Set<string> }> {
+  const registered = new Set<string>();
+  const boundToTask = new Set<string>();
+  if (!names.length) return { registered, boundToTask };
+  for (const row of await db.select().from(uploads).where(inArray(uploads.file, names))) {
+    registered.add(row.file);
+    if (row.taskId === taskId) boundToTask.add(row.file);
+  }
+  return { registered, boundToTask };
 }
 
 /** 一批刚写下的附件。用在「字节是我们自己写的」那些地方(接力落地)。 */
