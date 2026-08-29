@@ -66,34 +66,50 @@ export async function resolveTargetsFor(ownerUserId: string | null): Promise<Res
   }));
 }
 
-/** 给一个具体 URL 找目标机条目。出站前核指纹、取 key 都用它。 */
+/** 给一个具体 URL 找目标机条目。出站前核指纹用它。 */
 export async function targetForUrl(ownerUserId: string | null, url: string): Promise<ResolvedTarget | null> {
   return (await resolveTargetsFor(ownerUserId)).find((t) => sameUrl(t.url, url)) ?? null;
 }
 
-/** 我在对端的 key。没配就是空串 —— 调用方据此给出「去找对端管理员开账号」那句话。 */
-export async function peerKeyFor(ownerUserId: string | null, url: string): Promise<string> {
-  return (await targetForUrl(ownerUserId, url))?.peerKey ?? "";
+/**
+ * 出站能用的「根地址 → key」。自用模式**直接读 key 表本身,不经过目标机清单** ——
+ * 那张表才是自用模式的权威存储,清单只是设置页上的书签。经清单 join 的写法会漏掉一类
+ * 真实情形:pending 重放收口时,弹框会为「已从设置里删掉、但任务还挂在它身上」的地址
+ * 合成一个目标,用户在那儿填的 key 保存成功却永远发不出去。
+ *
+ * 多人模式没有这张表,key 就是那个人目标机行上的一列,清单即存储。
+ */
+async function outboundPeerKeys(ownerUserId: string | null): Promise<Map<string, string>> {
+  if (!(await isMultiUser())) return localPeerKeys();
+  return new Map(
+    (await resolveTargetsFor(ownerUserId))
+      .filter((t) => t.peerKey)
+      .map((t) => [keyUrl(t.url), t.peerKey] as const),
+  );
 }
 
 /**
- * 出站请求要带的 key。跟上面那个的区别是**入参形态**:这里收到的是一条具体请求的
- * 完整 URL(`http://host:4317/api/handoff/ping?nonce=…`),而清单里存的是根地址,精确
- * 相等永远不成立 —— 2026-08-29 之前 `peerUserKeyHeader` 直接把完整 URL 拿去精确匹配,
- * 于是**每一个出站请求都不带 key**:用户在设置里配了 key,对端照样回「我不认识你」,
- * 而错误文案还在教他去配那把已经配好的 key。
+ * 出站请求要带的 key。入参是一条具体请求的**完整 URL**
+ * (`http://host:4317/api/handoff/ping?nonce=…`),而存储里是根地址,精确相等永远不成立
+ * —— 2026-08-29 之前 `peerUserKeyHeader` 直接把完整 URL 拿去精确匹配,于是**每一个出站
+ * 请求都不带 key**:用户配了 key,对端照样回「我不认识你」,而错误文案还在教他去配那把
+ * 已经配好的 key。
  *
  * 匹配按最长前缀:目标机地址可能带路径前缀(反代到子路径),取 origin 会把它切掉。
+ * 读侧只有这一个入口 —— 两个语义略有出入的读法,正是上面那个 bug 的成因。
  */
 export async function peerKeyForRequest(ownerUserId: string | null, requestUrl: string): Promise<string> {
   const wanted = keyUrl(requestUrl);
-  const hit = (await resolveTargetsFor(ownerUserId))
-    .filter((t) => {
-      const base = keyUrl(t.url);
-      return base.length > 0 && (wanted === base || wanted.startsWith(`${base}/`) || wanted.startsWith(`${base}?`));
-    })
-    .sort((a, b) => keyUrl(b.url).length - keyUrl(a.url).length)[0];
-  return hit?.peerKey ?? "";
+  let best = "";
+  let bestLen = 0;
+  for (const [base, key] of await outboundPeerKeys(ownerUserId)) {
+    if (!base || base.length < bestLen) continue;
+    if (wanted === base || wanted.startsWith(`${base}/`) || wanted.startsWith(`${base}?`)) {
+      best = key;
+      bestLen = base.length;
+    }
+  }
+  return best;
 }
 
 /** 展示用:抹掉 key,只报 hasKey。所有回给前端的路径都必须过这一层。 */
@@ -177,6 +193,9 @@ export async function setPeerKey(actor: Actor, rawUrl: string, peerKey: string):
   if (!url) throw new HandoffError("缺目标机地址", 400);
   if (peerKey.length > 512) throw new HandoffError("这把 key 太长了(上限 512 字符)", 400);
   if (!(await isMultiUser())) {
+    // 不校验「这个地址还在不在清单里」是**故意的**:pending 重放收口时,弹框会为
+    // 「已从设置里删掉、但任务还挂在它身上」的地址合成一个目标,那里填的 key 必须真的
+    // 能用。出站读侧直接读这张表,所以写下去就生效(见 `outboundPeerKeys`)。
     if (peerKey) {
       await db.insert(handoffLocalPeerKeys).values({ url, peerKey, updatedAt: now() })
         .onConflictDoUpdate({
@@ -202,18 +221,23 @@ export async function setPeerKey(actor: Actor, rawUrl: string, peerKey: string):
 }
 
 /**
- * 自用模式:目标机从设置里被删掉后,顺手把它的 key 也删了。留着不会泄露(读侧按 url
- * join,孤儿行谁也读不到),但「删掉再加回同一个地址,旧 key 悄悄复活」是会让人查半天
- * 的意外行为。由 `patchSettingsFor` 在 handoffTargets 落库后调用。
+ * 自用模式:目标机从设置里被删掉后,顺手把它那把 key 也删了。留着不会泄露(出站要先
+ * 拿到地址才用得上),但「删掉再加回同一个地址,旧 key 悄悄复活」是会让人查半天的意外
+ * 行为。由 `patchSettingsFor` 在 handoffTargets 落库后调用。
+ *
+ * 入参是**改动前后的两份清单**,删的只有「这次被拿掉的那几个地址」。早先那版收的是
+ * 「留下来的地址」、把一切对不上的行都当孤儿删掉,会连带清掉**故意为不在清单里的地址
+ * 配的 key**(pending 重放那种):用户配完当场能用,随手改一下别的目标机就又不能用了。
  */
-export async function pruneLocalPeerKeys(keptUrls: string[]): Promise<void> {
+export async function forgetRemovedPeerKeys(
+  before: readonly { url: string }[],
+  after: readonly { url: string }[],
+): Promise<void> {
   if (await isMultiUser()) return;
-  const kept = new Set(keptUrls.map(keyUrl));
-  const orphans = (await db.select().from(handoffLocalPeerKeys))
-    .filter((row) => !kept.has(row.url))
-    .map((row) => row.url);
-  if (orphans.length) {
-    await db.delete(handoffLocalPeerKeys).where(inArray(handoffLocalPeerKeys.url, orphans));
+  const kept = new Set(after.map((t) => keyUrl(t.url)));
+  const removed = [...new Set(before.map((t) => keyUrl(t.url)))].filter((url) => !kept.has(url));
+  if (removed.length) {
+    await db.delete(handoffLocalPeerKeys).where(inArray(handoffLocalPeerKeys.url, removed));
   }
 }
 

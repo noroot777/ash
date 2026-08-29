@@ -5,12 +5,15 @@
 // 是「这也没有能补的地方啊」。根因是 key 只存在多人模式的 `user_handoff_targets` 上,
 // 而**要不要 key 由对端的模式决定,跟本机是不是多人无关**。
 //
-// 这份测试钉住修法的三块:
+// 这份测试钉住修法的四块:
 //   1. 自用模式的 key 存得下、读得出(`handoff_local_peer_keys`),清单读侧只报 hasKey
 //      —— 凭证不进 `app_settings`(`GET /settings` 会把那份整份吐回前端)
-//   2. 目标机从设置里删掉时,它那把 key 跟着走(不然删掉再加回同一个地址会诈尸)
+//   2. 目标机从设置里删掉时,它那把 key 跟着走(不然删掉再加回同一个地址会诈尸);但
+//      只收走**这次被删的那台**,别的行不碰
 //   3. 「缺 key」这件事带**机器可读的原因码**一路传到前端:出站预检自己判定的那次,
 //      以及对端 401 应答里带回来的那次(前端据此就地给出输入框,而不是再指一次路)
+//   4. 配好的 key 必须真的**随请求发到对端** —— 包括为「已不在清单里但任务还挂着」的
+//      地址配的那把(重放收口场景)
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -40,17 +43,17 @@ try {
 
   // ── 1. 自用模式:清单在设置里,key 在自己的表里 ────────────────────────────
   await scope.addTarget(SINGLE_ACTOR, { name: "多人那台", url });
-  assert.equal(await scope.peerKeyFor(null, url), "", "还没配过 key 时读回空串");
+  assert.equal(await scope.peerKeyForRequest(null, url), "", "还没配过 key 时读回空串");
   assert.equal((await scope.listTargets(SINGLE_ACTOR))[0].hasKey, false);
 
   await scope.setPeerKey(SINGLE_ACTOR, url, "ash_single_mode_key");
   assert.equal(
-    await scope.peerKeyFor(null, url), "ash_single_mode_key",
+    await scope.peerKeyForRequest(null, url), "ash_single_mode_key",
     "自用模式也要能存下「我在对端的账号 key」——要不要它由对端的模式决定",
   );
   // 尾斜杠、大小写都不该影响命中:出站那一侧的 url 来自用户输入和 marker,形态不统一。
-  assert.equal(await scope.peerKeyFor(null, `${url}/`), "ash_single_mode_key");
-  assert.equal(await scope.peerKeyFor(null, url.toUpperCase().replace("HTTP", "http")), "ash_single_mode_key");
+  assert.equal(await scope.peerKeyForRequest(null, `${url}/`), "ash_single_mode_key");
+  assert.equal(await scope.peerKeyForRequest(null, url.toUpperCase().replace("HTTP", "http")), "ash_single_mode_key");
 
   const listed = await scope.listTargets(SINGLE_ACTOR);
   assert.equal(listed[0].hasKey, true, "读侧只报 hasKey");
@@ -64,7 +67,7 @@ try {
 
   // 空串 = 明确清空(对端转回单人实例了)。
   await scope.setPeerKey(SINGLE_ACTOR, url, "");
-  assert.equal(await scope.peerKeyFor(null, url), "");
+  assert.equal(await scope.peerKeyForRequest(null, url), "");
   assert.equal((await scope.listTargets(SINGLE_ACTOR))[0].hasKey, false);
 
   // ── 2. 删掉目标机,key 跟着走 ──────────────────────────────────────────────
@@ -72,7 +75,7 @@ try {
   await patchSettingsFor(SINGLE_ACTOR, { handoffTargets: [] });
   await scope.addTarget(SINGLE_ACTOR, { name: "同一个地址又加回来", url });
   assert.equal(
-    await scope.peerKeyFor(null, url), "",
+    await scope.peerKeyForRequest(null, url), "",
     "删掉目标机时它那把 key 也该没了,不然同一个地址加回来会诈尸",
   );
 
@@ -140,6 +143,28 @@ try {
     seenKeys.length = 0;
     await pingPeer(peerUrl, null, undefined, { requirePeerUser: true }).catch(() => undefined);
     assert.equal(seenKeys[0], "ash_outbound_key", "配好的 key 必须真的随请求发到对端");
+
+    // ── 5. 目标机已从设置里删掉时,那个地址上配的 key 照样要出门 ───────────────
+    // pending / 移回重放收口时,弹框会为「已经不在清单里、但任务还挂在它身上」的地址
+    // 合成一个可选项,并在那儿给出 key 输入框。第 1 轮审查(P2)复现的是:保存回 200、
+    // 下一次预检仍旧 401 —— 因为出站读侧是拿清单去 join key 表的,孤儿行谁也看不见。
+    // 现在自用模式直接读那张表本身,清单只是设置页上的书签。
+    await patchSettingsFor(SINGLE_ACTOR, { handoffTargets: [] });
+    await scope.setPeerKey(SINGLE_ACTOR, peerUrl, "ash_orphan_key");
+    assert.deepEqual(await scope.listTargets(SINGLE_ACTOR), [], "它确实已经不在清单里了");
+    seenKeys.length = 0;
+    await pingPeer(peerUrl, null, undefined, { requirePeerUser: true }).catch(() => undefined);
+    assert.equal(
+      seenKeys[0], "ash_orphan_key",
+      "重放收口用的那个地址上填的 key,保存成功就必须真的能用",
+    );
+
+    // 而且不能被「改了别的目标机」顺手清掉 —— 只有**这次被删掉的那台**才收走它的 key。
+    await patchSettingsFor(SINGLE_ACTOR, { handoffTargets: [{ name: "另一台", url, peerFp: null }] });
+    assert.equal(
+      await scope.peerKeyForRequest(null, peerUrl), "ash_orphan_key",
+      "动了别的目标机不该顺手清掉这一把",
+    );
   } finally {
     await new Promise<void>((done) => multiPeer.close(() => done()));
   }
