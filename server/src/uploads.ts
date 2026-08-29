@@ -24,8 +24,9 @@ import { tasks, uploads } from "./db/schema.js";
 import { UPLOADS_DIR } from "./paths.js";
 import { scanUploadNames } from "./handoff-uploads.js";
 import type { Actor } from "./auth/context.js";
-import { isAdminActor } from "./auth/context.js";
+import { ANONYMOUS_ACTOR, isAdminActor } from "./auth/context.js";
 import { isMultiUser } from "./auth/mode.js";
+import { getUser } from "./auth/store.js";
 import { visibleTaskIds } from "./auth/visibility.js";
 import { now } from "./util.js";
 
@@ -152,6 +153,29 @@ export async function canReadUpload(actor: Actor, file: string): Promise<boolean
   if (row.ownerUserId ? row.ownerUserId === actor.userId : isAdminActor(actor)) return true;
   if (row.taskId) return (await visibleTaskIds(actor, [row.taskId])).length > 0;
   return false;
+}
+
+/**
+ * 「这个人读得到哪些附件」——给**没有请求上下文**的链路用(出站接力打包)。
+ *
+ * 出境的字节也得过这条判据:附件路径会出现在日志、粘贴的 prompt、截图里,谁都可能
+ * 拿到一个别人的文件名。把它写进一条自己看得见的任务再接力出去,导出侧照着任务正文
+ * 扫名字打包 —— 私有附件的**内容**就这么被送到另一台机器上了(8CEbm0rJQIwK 第 1 轮
+ * 审查 P1)。判据不新造:能不能带走 == 这个人在本机能不能打开它,毕竟他本来就能自己
+ * 复制一份。自用模式恒放行,与本功能上线前逐字节一致。
+ *
+ * 返回一个判定函数而不是名单:名字是扫文本扫出来的,调用方拿到名字才知道要问谁。
+ * 用户行只查一次。
+ */
+export async function readableUploads(userId: string | null): Promise<(file: string) => Promise<boolean>> {
+  if (!(await isMultiUser())) return async () => true;
+  const user = userId ? await getUser(userId) : null;
+  // 认不出人就按未登录处置(失败关闭):出站链路忘了带身份时,宁可少带走附件、
+  // 让对端按旧路径读不到,也不能把不属于他的字节送出境。
+  const actor: Actor = user
+    ? { kind: "user", userId: user.id, role: user.role === "admin" ? "admin" : "member", name: user.name }
+    : ANONYMOUS_ACTOR;
+  return (file: string) => canReadUpload(actor, file);
 }
 
 /**

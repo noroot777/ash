@@ -5,7 +5,7 @@
 // 可能出现),就能读到别人**私有随手记**的附件正文 —— `/api/notes` 那两条轴白过了。
 //
 // 判据现在在 `server/src/uploads.ts`:个人面(上传者本人)+ 项目轴(附到的任务看得见)。
-// 这条测试钉住七件事:
+// 这条测试钉住八件事:
 //   ① 泄露本身没了,而且**实例管理员也读不到**别人的私有附件(个人面没有特权);
 //   ② 别收过头:同项目的人照常打得开会话里的图,自用模式整条判据透明;
 //   ③ **绑定不能被拿来越权**:把别人的附件路径写进自己任务的 attachments,
@@ -14,7 +14,9 @@
 //   ⑤ **引用一次不算认领**:没登记的文件被任务 attachments 引用后仍是失败关闭那一档;
 //   ⑥ 派生任务里归属继承父任务、授权仍看动手的人 —— 上传者本人不该被自己的附件挡在外面;
 //   ⑦ 接力落地的附件撞上本机同名的私有文件:正文里写着的那份,任务里的人就得打得开,
-//      而本机那份私有附件仍旧只有本人能读。
+//      而本机那份私有附件仍旧只有本人能读;
+//   ⑧ **出境也要过同一条判据**:把别人的私有附件路径写进自己看得见的任务再接力出去,
+//      导出侧不打包它的字节。
 //
 // 一律走真 Request 打进 `authGate → resourceGate → personalWriteGate → 路由` 的完整栈。
 //
@@ -91,6 +93,7 @@ const LATE_SECRET = "late-unregistered-secret-62fd";
 const IMPORTED_BODY = "handoff-landed-body-8ae1";
 const CHILD_SECRET = "bob-child-task-upload-7d40";
 const HANDOFF_SECRET = "peer-sent-same-name-1c9e";
+const EXPORT_SECRET = "bob-never-bound-export-4b81";
 
 const at = new Date().toISOString();
 const repo = join(stage, "shared-repo");
@@ -270,7 +273,39 @@ try {
   assert.equal((await get(bobPrivate.file, AS_BOB)).text, HANDOFF_SECRET, "Bob 自己照常读得到");
   assert.equal((await get(bobPrivate.file, AS_ALICE)).status, 404, "他那份仍是私有的");
 
-  console.log("upload visibility ok(个人面 + 项目轴 + 越权绑定 + 引用不算认领 + 派生任务 + 接力落地 + 存量认领)");
+  // ── ⑧ 出境的字节:导出侧按「导出的人读不读得到」筛 ─────────────────────────
+  // 附件路径会顺着日志、粘贴的 prompt、截图流到任何人手上。把一个别人的文件名写进
+  // 自己看得见的任务再接力出去,导出侧照着正文扫名字打包 —— 私有附件的**内容**就这么
+  // 出境了(8CEbm0rJQIwK 第 1 轮审查 P1)。判据不新造:能不能带走 == 本机能不能打开。
+  const { collectUploads } = await import("../src/handoff-uploads.js");
+  const { readableUploads } = await import("../src/uploads.js");
+  const bobExport = await upload(AS_BOB, "export-secret.txt", EXPORT_SECRET);
+  assert.equal((await get(bobExport.file, AS_ALICE)).status, 404, "前提:这份私有附件 Alice 本来就读不到");
+  const exportText = `任务正文引用 ${bobExport.path} 和 ${aliceFile.path}`;
+  const aliceNotesOut: string[] = [];
+  const alicePack = await collectUploads([exportText], aliceNotesOut, false, await readableUploads(alice.id));
+  assert.deepEqual(
+    alicePack.map((u) => u.name).sort(),
+    [aliceFile.file],
+    `Alice 只该带走自己读得到的那份:${JSON.stringify(alicePack.map((u) => u.name))}`,
+  );
+  assert.equal(
+    alicePack.some((u) => Buffer.from(u.dataBase64, "base64").toString("utf8").includes(EXPORT_SECRET)),
+    false,
+    "别人的私有附件一个字节都不许进载荷",
+  );
+  assert.ok(
+    aliceNotesOut.some((note) => note.includes(bobExport.file)),
+    `被拦下的要如实记进 notes:${JSON.stringify(aliceNotesOut)}`,
+  );
+  // 别收过头:本人导出自己的附件照常带走。
+  const bobPack = await collectUploads([exportText], [], false, await readableUploads(bob.id));
+  assert.ok(bobPack.some((u) => u.name === bobExport.file), "Bob 自己导出时照常带得走");
+  // 认不出人(出站链路没带身份)就一个都不带:失败方向是少带,不是越权。
+  const blindPack = await collectUploads([exportText], [], false, await readableUploads(null));
+  assert.deepEqual(blindPack.map((u) => u.name), [], "认不出身份就不该带走任何附件");
+
+  console.log("upload visibility ok(个人面 + 项目轴 + 越权绑定 + 引用不算认领 + 派生任务 + 接力落地 + 出境打包 + 存量认领)");
 } finally {
   await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });

@@ -51,6 +51,7 @@ import {
 } from "./handoff-peer-client.js";
 import { localIdentity, shortFingerprint } from "./handoff-identity.js";
 import { collectUploads, isTextRel } from "./handoff-uploads.js";
+import { readableUploads } from "./uploads.js";
 import { beginHandoffPrepare, endHandoffPrepare } from "./handoff-guard.js";
 import { cancelPendingMessage } from "./pending-messages.js";
 import type { HandoffReturnContext } from "./handoff-peer-client.js";
@@ -182,6 +183,17 @@ function assertPeerAcceptsUs(peer: HandoffPeerIdentity | null): void {
 }
 
 /** 接力预检:探测对端、核对身份、匹配项目、盘点本地可搬运的东西。只读,不停任务不动文件。 */
+/**
+ * 这次导出按谁的可读范围打包附件(判据本体在 `uploads.ts` readableUploads)。
+ *
+ * 正常出站是人点的,ALS 里就是那个人(index.ts 给每个 /api 请求包了 withHandoffActor)。
+ * 只有一条路没有请求身份:对端签名调 `/api/handoff/proxy/task/return` 让本机把它当初
+ * 交来的任务**移回去** —— 那条路等价于「这条任务的归属人点了移回」,所以退到任务
+ * 归属人。自用模式两者都是 null,判据本来就透明。
+ */
+const packGateFor = (task: { ownerUserId: string | null }) =>
+  readableUploads(handoffActorId() ?? task.ownerUserId);
+
 export async function preflightHandoff(
   taskId: string,
   targetUrlRaw: string,
@@ -268,7 +280,8 @@ export async function preflightHandoff(
     };
     await walkTexts(runRoot);
   }
-  const uploads = await collectUploads(uploadTexts, notes, true);
+  // 盘点也过授权闸:对话框里报的数字必须就是真会带走的那批(uploads.ts readableUploads)。
+  const uploads = await collectUploads(uploadTexts, notes, true, await packGateFor(task));
   return {
     ok: true,
     target: { url: targetUrl, host: ping.host },
@@ -414,6 +427,10 @@ export async function exportHandoff(
         ],
         notes,
         false,
+        // 出境的字节按「导出这条任务的人在本机读不读得到」筛一遍:附件路径会顺着日志、
+        // 粘贴的 prompt 流出去,不筛就等于谁都能借一条自己看得见的任务把别人的私有附件
+        // 送到另一台机器上(8CEbm0rJQIwK 第 1 轮审查 P1)。
+        await packGateFor(task),
       );
 
       const manifest: HandoffManifest = {

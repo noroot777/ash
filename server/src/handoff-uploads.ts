@@ -58,11 +58,21 @@ export function scanUploadNames(text: string, uploadsDir: string = UPLOADS_DIR):
   return names;
 }
 
-/** 导出侧:收集被引用且本机真实存在的附件。dryRun(preflight)只盘点,不读内容。 */
+/**
+ * 导出侧:收集被引用且本机真实存在的附件。dryRun(preflight)只盘点,不读内容。
+ *
+ * `canPack` 是**授权闸**,不给默认值:名字是从任务正文/会话文本里扫出来的,而路径
+ * 会顺着日志、粘贴的 prompt、截图流到任何人手上。把别人的附件路径写进一条自己看得见
+ * 的任务再接力出去,不问一声就等于把私有附件的内容送到另一台机器上(8CEbm0rJQIwK
+ * 第 1 轮审查 P1)。判据由调用方从 `uploads.ts` 取(`readableUploads`),这里只负责
+ * 逐个问、被拒的如实记进 notes —— 少一个附件对端最多按旧路径读不到,而多带一个是
+ * 越权。新加导出入口时这个参数编译期就逼你想一遍「这是谁在导」。
+ */
 export async function collectUploads(
   texts: string[],
   notes: string[],
   dryRun: boolean,
+  canPack: (name: string) => Promise<boolean>,
 ): Promise<HandoffUploadPayload[]> {
   const names = new Set<string>();
   for (const t of texts) for (const n of scanUploadNames(t)) names.add(n);
@@ -75,6 +85,10 @@ export async function collectUploads(
     const abs = join(UPLOADS_DIR, name);
     if (!existsSync(abs)) {
       notes.push(`上传附件 ${name} 在本机已不存在,跳过`);
+      continue;
+    }
+    if (!(await canPack(name))) {
+      notes.push(`上传附件 ${name} 不在你的可读范围内,不随任务迁移(对端按旧路径读不到)`);
       continue;
     }
     const size = statSync(abs).size;
