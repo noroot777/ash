@@ -22,20 +22,82 @@ try {
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/ui-polish.html`);
 
   const render = (html) => page.locator("#root").evaluate((node, value) => { node.innerHTML = value; }, html);
+  const renderProbe = (name) => page.locator("#root").evaluate((node, value) => {
+    const template = document.querySelector(`#${value}-probe`);
+    if (!(template instanceof HTMLTemplateElement)) throw new Error(`Unknown UI polish probe: ${value}`);
+    node.replaceChildren(template.content.cloneNode(true));
+  }, name);
 
-  await render('<div class="settings-shell"><aside></aside><main></main></div>');
-  for (const [width, columns] of [[640, "640px"], [641, "176px 465px"], [660, "176px 484px"], [680, "176px 504px"], [681, "240px 441px"], [760, "240px 520px"]]) {
+  await renderProbe("settings");
+  for (const [width, columns] of [[420, "176px 244px"], [600, "176px 424px"], [640, "176px 464px"], [641, "176px 465px"], [660, "176px 484px"], [680, "176px 504px"], [681, "240px 441px"], [760, "240px 520px"]]) {
     await page.setViewportSize({ width, height: 900 });
     assert.equal(await page.locator(".settings-shell").evaluate((node) => getComputedStyle(node).gridTemplateColumns), columns);
   }
 
-  await page.setViewportSize({ width: 1280, height: 720 });
-  await render('<div class="auth-shell"><div class="auth-stage"></div></div>');
-  const authScroll = await page.locator(".auth-shell").evaluate((node) => ({
-    clientHeight: node.clientHeight,
-    scrollHeight: node.scrollHeight,
-  }));
-  assert.equal(authScroll.scrollHeight, authScroll.clientHeight, `身份页不应凭空滚动：${JSON.stringify(authScroll)}`);
+  for (const width of [420, 600, 640]) {
+    await page.setViewportSize({ width, height: 800 });
+    const navigation = await page.locator(".settings-shell").evaluate((node) => {
+      const sidebar = node.querySelector(".settings-sidebar");
+      const main = node.querySelector(".settings-main");
+      const last = node.querySelector(".settings-nav-group:last-child button:last-child");
+      const sidebarRect = sidebar.getBoundingClientRect();
+      const mainRect = main.getBoundingClientRect();
+      const lastRect = last.getBoundingClientRect();
+      const hit = document.elementFromPoint(lastRect.left + lastRect.width / 2, lastRect.top + lastRect.height / 2);
+      return {
+        sidebarBottom: sidebarRect.bottom,
+        sidebarClientHeight: sidebar.clientHeight,
+        sidebarScrollHeight: sidebar.scrollHeight,
+        mainTop: mainRect.top,
+        mainHeight: mainRect.height,
+        lastBottom: lastRect.bottom,
+        lastIsClickable: hit === last || last.contains(hit),
+      };
+    });
+    assert.ok(navigation.lastBottom <= navigation.sidebarBottom + 0.5, `${width}px 下最后一项应留在侧栏内：${JSON.stringify(navigation)}`);
+    assert.ok(navigation.sidebarScrollHeight <= navigation.sidebarClientHeight, `${width}px 下设置导航不应被截断：${JSON.stringify(navigation)}`);
+    assert.equal(navigation.mainTop, 0, `${width}px 下设置正文不应被挤到第二行`);
+    assert.equal(navigation.mainHeight, 800, `${width}px 下设置正文应保持整屏高度`);
+    assert.equal(navigation.lastIsClickable, true, `${width}px 下最后一个设置入口应可点击`);
+  }
+
+  await page.setViewportSize({ width: 1280, height: 700 });
+  await renderProbe("auth");
+  const authTop = await page.locator(".auth-shell").evaluate((node) => {
+    node.scrollTop = 0;
+    const shell = node.getBoundingClientRect();
+    const heading = node.querySelector("[data-auth-heading]").getBoundingClientRect();
+    return { clientHeight: node.clientHeight, scrollHeight: node.scrollHeight, shellTop: shell.top, headingTop: heading.top };
+  });
+  assert.ok(authTop.scrollHeight > authTop.clientHeight, `身份页探针必须真实高于视口：${JSON.stringify(authTop)}`);
+  assert.ok(authTop.headingTop >= authTop.shellTop, `身份页滚到最顶时标题必须可达：${JSON.stringify(authTop)}`);
+  const authBottom = await page.locator(".auth-shell").evaluate((node) => {
+    node.scrollTop = node.scrollHeight;
+    const shell = node.getBoundingClientRect();
+    const last = node.querySelector("[data-auth-last]").getBoundingClientRect();
+    return { shellBottom: shell.bottom, lastBottom: last.bottom };
+  });
+  assert.ok(authBottom.lastBottom <= authBottom.shellBottom, `身份页滚到底时末项必须可达：${JSON.stringify(authBottom)}`);
+
+  await renderProbe("settings-key");
+  const settingsKeyReveal = await page.locator(".auth-key-reveal").evaluate((node) => {
+    const heading = node.querySelector("h2");
+    const keyValue = node.querySelector(".auth-key-value");
+    const check = node.querySelector(".auth-check");
+    const button = node.querySelector(".ui-button--primary");
+    return {
+      eyebrow: getComputedStyle(heading, "::before").content,
+      headingSize: getComputedStyle(heading).fontSize,
+      keyBorderStyle: getComputedStyle(keyValue).borderTopStyle,
+      checkBorderWidth: getComputedStyle(check).borderTopWidth,
+      buttonHeight: button.getBoundingClientRect().height,
+    };
+  });
+  assert.ok(!settingsKeyReveal.eyebrow.includes("ASH ACCESS"), `设置页不应出现身份页眉题：${JSON.stringify(settingsKeyReveal)}`);
+  assert.equal(settingsKeyReveal.headingSize, "17px", "设置页 KeyReveal 标题应使用卡片层级");
+  assert.equal(settingsKeyReveal.keyBorderStyle, "solid", "设置页 key 应保留紧凑卡片样式");
+  assert.equal(settingsKeyReveal.checkBorderWidth, "0px", "设置页确认项不应套用身份页方框");
+  assert.equal(settingsKeyReveal.buttonHeight, 28, "设置页确认按钮不应放大成身份页主操作");
 
   await page.setViewportSize({ width: 1000, height: 800 });
   await render(`
@@ -120,7 +182,7 @@ try {
   assert.ok(reviewGeometry.footerBottom <= reviewGeometry.dialogBottom, `派审弹窗页脚不应被裁：${JSON.stringify(reviewGeometry)}`);
   assert.ok(reviewGeometry.dialogHeight <= 644, `700px 视口下弹窗不应超过 92vh：${JSON.stringify(reviewGeometry)}`);
 
-  console.log("[ui-polish] responsive, panel geometry, danger color and reduced-motion checks passed");
+  console.log("[ui-polish] responsive reachability, auth scoping, panel geometry, danger color and reduced-motion checks passed");
 } finally {
   await browser?.close();
   await server.close();

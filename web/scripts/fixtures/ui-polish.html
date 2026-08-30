@@ -8,19 +8,83 @@
   </head>
   <body>
     <div id="root"></div>
+    <template id="settings-probe">
+      <div class="settings-shell">
+        <aside class="settings-sidebar">
+          <button class="settings-back" type="button">返回应用</button>
+          <nav aria-label="设置导航">
+            <div class="settings-nav-group">
+              <span class="settings-nav-label">当前项目</span>
+              <button type="button">项目设置</button><button type="button">成员</button>
+              <button type="button">分组</button><button type="button">已归档</button>
+            </div>
+            <div class="settings-nav-group">
+              <span class="settings-nav-label">系统设置</span>
+              <button type="button">供应商</button><button type="button">执行器</button>
+              <button type="button">执行模式</button><button type="button">起手式</button>
+              <button type="button">审查者</button><button type="button">个人 CLI 环境</button>
+              <button type="button">配置搬家</button><button type="button">用户</button>
+              <button type="button">我的账号</button><button type="button">默认规则</button>
+            </div>
+          </nav>
+        </aside>
+        <main class="settings-main">设置正文</main>
+      </div>
+    </template>
+
+    <template id="auth-probe">
+      <div class="auth-shell">
+        <div class="auth-stage">
+          <aside class="auth-brand">
+            <div class="auth-brand-mark">a</div>
+            <div class="auth-brand-copy"><span>LOCAL AGENT OPERATIONS</span><h2>把复杂的协作，留在一张清楚的工作台里。</h2></div>
+          </aside>
+          <main class="auth-stage-content">
+            <div class="auth-card auth-card--wide">
+              <h1 data-auth-heading>切到多人模式</h1>
+              <form class="auth-multi-form">
+                <label class="auth-field"><span>你的姓名</span><input class="ui-input" placeholder="张三" /></label>
+                <label class="auth-field"><span>根目录</span><input class="ui-input" placeholder="~/ash-workspaces" /><small>每个人会在它下面得到自己的目录。设定后锁死，改动会让已有项目路径失效。</small></label>
+                <label class="auth-field"><span>你的目录名</span><input class="ui-input" placeholder="zhangsan" /><small>自己填一个英文目录名，比如 zhangsan。</small></label>
+                <div class="auth-field-row">
+                  <label class="auth-field"><span>git 署名</span><input class="ui-input" placeholder="张三" /></label>
+                  <label class="auth-field"><span>git 邮箱</span><input class="ui-input" placeholder="zhangsan@ash.local" /></label>
+                </div>
+                <p class="auth-note">agent 提交时会用这对署名。不填就按姓名生成默认值，之后能改。</p>
+                <div class="auth-warning"><b>库里已经有数据了。</b>转换后这些全部归你，项目路径一律不动。</div>
+                <div class="auth-warning auth-warning--strong">
+                  <b>转换后这些执行器派不出任务：</b>
+                  <ul><li>Claude Code——缺少供应商凭据</li><li>Codex——缺少供应商凭据</li></ul>
+                  多人模式下每人必须自带供应商 key。
+                </div>
+                <div class="auth-warning"><b>多人模式转不回自用模式。</b>多人的数据没有合并回单人的语义，所以这条路只有单向。</div>
+                <div class="auth-actions"><button type="button" class="ui-button ui-button--ghost">返回</button><button data-auth-last type="submit" class="ui-button ui-button--primary">确认切到多人模式</button></div>
+              </form>
+            </div>
+          </main>
+        </div>
+      </div>
+    </template>
+
+    <template id="settings-key-probe">
+      <section class="settings-section">
+        <div class="settings-card settings-card--pad">
+          <div class="auth-key-reveal">
+            <h2>这是你的新 key</h2>
+            <p class="auth-note">只显示这一次。</p>
+            <pre class="auth-key-value">ash_test_key</pre>
+            <label class="auth-check"><input type="checkbox" /><span>我已经保存</span></label>
+            <button type="button" class="ui-button ui-button--primary">我已保存</button>
+          </div>
+        </div>
+      </section>
+    </template>
+
     <script>
       const probe = new URLSearchParams(location.search).get("probe");
-      const root = document.getElementById("root");
-      if (probe === "settings") {
-        root.innerHTML = '<div class="settings-shell"><aside></aside><main></main></div>';
-      } else if (probe === "auth") {
-        root.innerHTML = '<div class="auth-shell"><div class="auth-stage"></div></div>';
-      } else if (probe === "danger") {
-        root.innerHTML = '<section class="task-confirm-dialog"><header class="task-confirm-header"><span class="is-danger">!</span><div><small>HIGH IMPACT ACTION</small><h2>删除</h2></div><button>×</button></header></section>';
-      } else if (probe === "panels") {
-        root.innerHTML = '<section class="notes-panel"><header>随手记</header><div class="notes-body"></div><footer></footer></section><section class="groups-panel"><header>分组</header><div class="groups-panel-body"></div></section>';
-      } else if (probe === "preset") {
-        root.innerHTML = '<section class="composer-preset-dialog"><header><span>◇</span><div><h2>保存当前组合</h2></div></header></section>';
+      const template = document.getElementById(`${probe}-probe`);
+      if (template instanceof HTMLTemplateElement) {
+        document.getElementById("root").append(template.content.cloneNode(true));
       }
     </script>
   </body>

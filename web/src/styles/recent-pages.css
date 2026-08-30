@@ -1,5 +1,6 @@
 /* 最近新增的身份页与多人设置共用一套“本地控制室”视觉语言。 */
 .auth-shell {
+  align-items: safe center;
   padding: clamp(18px, 4vw, 48px);
   background:
     radial-gradient(circle at 12% 16%, rgb(94 106 210 / 14%), transparent 29%),
@@ -162,8 +163,8 @@
   box-shadow: none;
 }
 
-.auth-card:not(:has(.auth-key-reveal)) > h1::before,
-.auth-key-reveal > h2::before {
+.auth-shell .auth-card:not(:has(.auth-key-reveal)) > h1::before,
+.auth-shell .auth-key-reveal > h2::before {
   display: block;
   margin-bottom: 12px;
   color: var(--accent);
@@ -172,23 +173,23 @@
   content: "ASH ACCESS";
 }
 
-.auth-card.auth-card--service > h1::before {
+.auth-shell .auth-card.auth-card--service > h1::before {
   color: var(--red);
   content: "SERVICE STATUS";
 }
 
-.auth-card h1,
-.auth-key-reveal h2 {
+.auth-shell .auth-card h1,
+.auth-shell .auth-key-reveal h2 {
   font-size: clamp(27px, 3.2vw, 36px);
   font-weight: 720;
   line-height: 1.16;
   letter-spacing: -.045em;
 }
 
-.auth-card h2 { font-size: 28px; }
-.auth-note { font-size: 13px; line-height: 1.75; }
+.auth-shell .auth-card h2 { font-size: 28px; }
+.auth-shell .auth-note { font-size: 13px; line-height: 1.75; }
 
-.auth-card .ui-input {
+.auth-shell .auth-card .ui-input {
   min-height: 42px;
   border-radius: 11px;
   background: color-mix(in lch, var(--canvas) 76%, var(--panel));
@@ -196,8 +197,8 @@
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 70%);
 }
 
-.auth-card > .ui-button--primary,
-.auth-key-reveal > .ui-button--primary {
+.auth-shell .auth-card > .ui-button--primary,
+.auth-shell .auth-key-reveal > .ui-button--primary {
   min-height: 42px;
   border-radius: 11px;
   font-weight: 680;
@@ -245,21 +246,21 @@
 
 .auth-warning,
 .auth-recovery,
-.auth-key-value {
+.auth-shell .auth-key-value {
   border-radius: 13px;
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 60%);
 }
 
-.auth-key-value {
+.auth-shell .auth-key-value {
   padding: 18px;
   border-style: dashed;
   font-size: 15px;
   line-height: 1.8;
 }
 
-.auth-check { padding: 11px 13px; border: 1px solid var(--line); border-radius: 11px; background: var(--raised); }
-.auth-link { text-decoration: none; }
-.auth-link:hover { color: var(--accent); }
+.auth-shell .auth-check { padding: 11px 13px; border: 1px solid var(--line); border-radius: 11px; background: var(--raised); }
+.auth-shell .auth-link { text-decoration: none; }
+.auth-shell .auth-link:hover { color: var(--accent); }
 
 .settings-shell {
   background: #f6f6f8;
@@ -300,6 +301,14 @@
   border-color: color-mix(in lch, var(--line) 82%, transparent);
   border-radius: 16px;
   box-shadow: 0 9px 28px rgb(35 37 48 / 4%), inset 0 1px 0 rgb(255 255 255 / 75%);
+}
+
+.settings-card--pad > .auth-key-reveal > h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 690;
+  letter-spacing: -.02em;
 }
 
 .settings-main .users-settings,
@@ -410,12 +419,11 @@
   .auth-brand-copy { margin-top: 26px; }
   .auth-brand-copy h2 { font-size: 21px; }
   .auth-stage-content { align-items: start; padding: 30px 22px 48px; }
-  .auth-card h1,
-  .auth-key-reveal h2 { font-size: 28px; }
+  .auth-shell .auth-card h1,
+  .auth-shell .auth-key-reveal h2 { font-size: 28px; }
   .auth-field-row { grid-template-columns: 1fr; }
   .auth-choice { min-height: 0; padding-left: 68px; }
   .auth-choice::before { left: 14px; }
-  .settings-shell { grid-template-columns: 1fr; }
   .settings-main .users-row,
   .settings-main .pmem-row { padding-left: 48px; }
 }
