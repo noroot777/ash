@@ -52,6 +52,15 @@ export function DuetGateControls({
   const consensus = !!gate.consensus;
   const consensusBy = gate.consensusBy ?? (consensus ? "both" : undefined);
   const handedOff = !gateAllowsRevision(linkedTeams[0]);
+  // 放行/打回都会终结这道门，而 approve/reject 这两个 GateAction 根本带不了附件
+  // （见 shared 的 GateAction：只有 inject/ask 有 attachments），所以手上还捏着图的时候
+  // 得先按住这两个按钮，并说清楚要怎么才能松开——不然刚粘的那张就这么无声没了。
+  const unsent = uploads.attachments.length;
+  const hold = uploads.uploading
+    ? `${uploadingLabel(uploads.pending)} · 传完才能放行或打回`
+    : unsent
+      ? `${unsent} 个附件还没提交 · ${handedOff ? "结束讨论带不走它，先移除" : mode ? "点「提交并继续」发出去，或先移除" : "点「注入意见 / 提问继续」发出去，或先移除"}`
+      : null;
   return (
     <section className="duet-control-shell">
       <div className="duet-control-summary">
@@ -74,16 +83,15 @@ export function DuetGateControls({
           onOpenTask={onOpenTask}
           onIterateTeam={onIterateTeam}
         />
-        {/* 放行/打回都会终结这道门，在途的那张图再也没机会跟着这次操作发出去，所以传完之前先按住。 */}
-        <button type="button" className="is-approve" disabled={busy || uploads.uploading} onClick={() => void onGate({ kind: "approve" })}>{handedOff ? "结束讨论" : "放行结束"}</button>
+        <button type="button" className="is-approve" disabled={busy || !!hold} onClick={() => void onGate({ kind: "approve" })}>{handedOff ? "结束讨论" : "放行结束"}</button>
         {!handedOff && <>
-          <button type="button" disabled={busy || uploads.uploading} onClick={() => void onGate({ kind: "reject" })}>打回终止</button>
+          <button type="button" disabled={busy || !!hold} onClick={() => void onGate({ kind: "reject" })}>打回终止</button>
           <button type="button" className={mode === "inject" ? "is-active" : ""} disabled={busy} onClick={() => setMode((current) => current === "inject" ? null : "inject")}>注入意见</button>
           <button type="button" className={mode === "ask" ? "is-active" : ""} disabled={busy} onClick={() => setMode((current) => current === "ask" ? null : "ask")}><Question size={12} />提问继续</button>
         </>}
       </div>
-      {/* 在途状态挂在输入区外面：再点一次「注入意见」把输入区收起来（mode 变回 null）也照样看得见，
-          否则界面上什么都没有、放行按钮又是灰的，就成了「按钮无缘无故坏了」。 */}
+      {/* 附件和在途状态都挂在输入区外面：再点一次「注入意见」把输入区收起来（mode 变回 null）
+          也照样看得见，否则界面上什么都没有、放行按钮又是灰的，就成了「按钮无缘无故坏了」。 */}
       <div className="duet-gate-uploads">
         <UploadAttachmentList
           attachments={uploads.attachments}
@@ -92,7 +100,7 @@ export function DuetGateControls({
           onRemove={uploads.remove}
           onCancel={uploads.cancel}
         />
-        {uploads.uploading && <p className="duet-gate-uploading">{`${uploadingLabel(uploads.pending)} · 传完才能放行或打回`}</p>}
+        {hold && <p className="duet-gate-hold">{hold}</p>}
       </div>
       {mode && !handedOff && (
         <div className="duet-gate-composer">
