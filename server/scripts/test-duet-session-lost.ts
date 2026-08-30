@@ -362,6 +362,94 @@ for (let i = 0; i < 100; i++) {
   await new Promise((r) => setTimeout(r, 20));
 }
 
+// ⑥ 换人接手:门禁能等很久,回来点「继续」的完全可能是**另一位用户**(共享项目里
+// runOwner 跟着点的那个人走)。而这条会话的 transcript 躺在原来那位的 CLI 配置目录里
+// (多人模式一人一份),把它的 id 交到这一轮的环境里 --resume,CLI 只会回一句
+// "No conversation found" —— 与 2026-08-29 那次接力事故同一堵墙,换了个触发口。
+// 所以这一轮要:① 不把旧 id 交给 CLI;② 另开一条会话行;③ **旧行原样留着** ——
+// 那条会话对原来那位完全健康(这一点与上面的版本闸/失效闸不同,那些是真的坏了)。
+const { setInstanceMode } = await import("../src/auth/mode.js");
+const { USER_CLI_ROOT } = await import("../src/auth/user-cli.js");
+await setInstanceMode("multi", join(stage, "root"));
+const ALICE = "u-alice-duet";
+const BOB = "u-bob-duet";
+const ALICE_CLI = "3d9f0a11-2c4b-4e6a-8f01-77c2b9d4e510";
+const crossTaskId = "duet-cross-owner";
+await db.insert(tasks).values({
+  id: crossTaskId, projectId: "p", groupId: null, parentId: null, title: "换人接手", body: "", mode: "duet",
+  status: "running", labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: null, executorId: null,
+  autoTitle: false, duet: null, team: null, scheduleId: null, createdAt: at, updatedAt: at,
+  useWorktree: false, worktreeBase: null, originTaskId: null,
+});
+await db.insert(sessions).values({
+  id: "row-alice", taskId: crossTaskId, role: "voiceA", agentType: "claude", executor: "claude@stub",
+  cliSessionId: ALICE_CLI, runOwnerUserId: ALICE, startedAt: at, turnStartedAt: at,
+});
+// CLI 到底被交了哪个会话 id —— 这条测试的核心证据。
+const handed: (string | undefined)[] = [];
+const spyExecutor = (newId: string) => ({
+  type: "claude",
+  label: "claude@stub",
+  run: (o: { sessionId?: string }) => {
+    handed.push(o.sessionId);
+    return {
+      sessionId: o.sessionId || newId,
+      commandLine: `claude --session-id ${o.sessionId || newId}`,
+      events: (async function* () {
+        yield { kind: "session", cliSessionId: o.sessionId || newId };
+        yield { kind: "text", text: "换人之后接着说。" };
+        yield { kind: "done", exitStatus: 0 };
+      })(),
+      kill() {},
+    };
+  },
+  resumeCommand: (_cwd: string, sid: string) => `claude --resume ${sid}`,
+  resumeFields: (_cwd: string, sid: string) => ({ resumeCommand: `claude --resume ${sid}`, resumeEnv: null, resumeArgs: null }),
+}) as unknown as Parameters<typeof duet.runTurn>[0]["executor"];
+
+const BOB_CLI = "7a2e5c30-9b18-42d7-a6f5-1e8043bb9c22";
+const crossTurn = await duet.runTurn({
+  taskId: crossTaskId, role: "voiceA", speaker: "A", round: 2, runOwner: BOB, executor: spyExecutor(BOB_CLI),
+  prompt: "继续", cwd: stage, rowId: "row-alice", resumeCliId: ALICE_CLI,
+});
+assert.deepEqual(handed, [undefined], `别人的会话 id 不能交给这一轮的 CLI,实际交了 ${handed[0]}`);
+assert.notEqual(crossTurn.rowId, "row-alice", "接不上就该另开一条会话行");
+const [aliceRow] = await db.select().from(sessions).where(eq(sessions.id, "row-alice"));
+assert.equal(aliceRow.cliSessionId, ALICE_CLI, "原来那位的会话 id 不许被这一轮改写");
+assert.equal(aliceRow.runOwnerUserId, ALICE, "旧行的归属人同样不许被改写");
+const [bobRow] = await db.select().from(sessions).where(eq(sessions.id, crossTurn.rowId));
+assert.equal(bobRow.runOwnerUserId, BOB, "新开的这条要记在接手人名下");
+assert.equal(bobRow.cliSessionId, BOB_CLI, "新开的这条要记自己的会话 id");
+// 换掉的理由要留在旧会话的时间线上:界面上凭空多一条会话行、旧的再没人续,不说清楚
+// 用户只会读成「会话丢了」(根 AGENTS.md「停止/暂停必须留下持久可见的状态」同一条判据)。
+const aliceMd = join(process.env.ASH_RUNS_DIR!, crossTaskId, "row-alice.md");
+let crossNote = "";
+for (let i = 0; i < 100 && !crossNote.includes("换人接手"); i++) {
+  try { crossNote = readFileSync(aliceMd, "utf8"); } catch { /* 还没 flush */ }
+  if (!crossNote.includes("换人接手")) await new Promise((r) => setTimeout(r, 20));
+}
+assert.ok(crossNote.includes("换人接手"), `换会话的理由没落进旧会话的时间线:${JSON.stringify(crossNote)}`);
+// 这行小字在会话流里是纯文本(ConversationFeed 的 conversation-note),带 Markdown 标记
+// 就会把星号/反引号原样露给用户 —— 同 poisoned 那条旁注的规矩。
+const { CROSS_OWNER_SESSION_NOTE } = await import("../src/session-notice.js");
+assert.ok(!/[*`_]/.test(CROSS_OWNER_SESSION_NOTE), `换人接手的文案带了 Markdown 标记:${CROSS_OWNER_SESSION_NOTE}`);
+ok("换人接手:旧会话原样留着,这一轮另开新行,理由持久可见");
+
+// 反过来:原来那位自己回来,照常接着跑 —— 这道闸只拦「换了人」,别把正常续跑一起拦了。
+handed.length = 0;
+const sameOwner = await duet.runTurn({
+  taskId: crossTaskId, role: "voiceA", speaker: "A", round: 3, runOwner: ALICE, executor: spyExecutor("不该用到"),
+  prompt: "继续", cwd: stage, rowId: "row-alice", resumeCliId: ALICE_CLI,
+});
+assert.deepEqual(handed, [ALICE_CLI], "同一个人回来必须照常 --resume 自己那条");
+assert.equal(sameOwner.rowId, "row-alice", "同一个人回来复用原来那条会话行");
+ok("同一个人回来照常续跑,没被这道闸误伤");
+
+
+
 await releaseTmpDb();
 rmSync(stage, { recursive: true, force: true });
+// 个人 CLI 配置目录锚在 <repo>/data 上(没有环境变量能挪走它),所以只删这两个测试用户
+// 自己那份 —— 整个 USER_CLI_ROOT 删下去会连真实用户的个人 CLI 环境一起端掉。
+for (const uid of [ALICE, BOB]) rmSync(join(USER_CLI_ROOT, uid), { recursive: true, force: true });
 console.log("duet session-lost: 全部通过");

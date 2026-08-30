@@ -14,7 +14,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { tasks, users } from "../db/schema.js";
-import { cliConfigEnvFor } from "./user-cli.js";
+import { cliConfigEnvFor, configDirEnvVar } from "./user-cli.js";
 import { isMultiUser } from "./mode.js";
 
 export type OwnerRunEnv = Record<string, string | undefined>;
@@ -39,6 +39,49 @@ export async function runEnvForOwner(ownerUserId: string | null, agentType: stri
     env.GIT_COMMITTER_EMAIL = email;
   }
   return env;
+}
+
+/**
+ * 这条任务的 CLI **实际**会去哪个目录找自己的会话历史。null = 宿主机默认目录
+ * (`~/.claude`、`$CODEX_HOME`),即自用模式和没有归属的存量任务。
+ *
+ * 谁要它:任务接力搬会话文件的两侧(`handoff-collect.ts` 找、`handoff-import-payload.ts`
+ * 放)。**必须和上面注入的那一份同源**——2026-08-29 现场:导入侧把 transcript 写死进
+ * `~/.claude/projects/…`,而多用户模式下起跑注入了 `CLAUDE_CONFIG_DIR`(它**整个取代**
+ * `~/.claude`,不回落),于是文件在盘上、CLI 眼里却没有,`--resume` 换回一句
+ * "No conversation found with session ID",回合 0.9 秒空转,任务按未完成记 failed。
+ * 所以这里不另拼一次路径,直接读注入结果:判据只有一份,漂不了。
+ */
+export async function cliConfigDirForOwner(
+  ownerUserId: string | null | undefined,
+  agentType: string,
+): Promise<string | null> {
+  // 没有归属人 = 宿主机默认目录,这个答案与实例模式无关。提前返回不只是省一次查询:
+  // 它让「不碰库」的调用方(纯函数级回归、启动早期)不会因为一次 app_settings 查询而炸。
+  if (!ownerUserId) return null;
+  const key = configDirEnvVar(agentType);
+  if (!key) return null;
+  return (await runEnvForOwner(ownerUserId, agentType))[key] ?? null;
+}
+
+/**
+ * 「这条旧会话,这一轮还接得上吗」——判据是**两边的 CLI 配置目录是不是同一个**。
+ *
+ * CLI 的 transcript 躺在**开它的那个人**的配置目录里(多人模式一人一份),拿 A 的
+ * session id 去 B 的 `CLAUDE_CONFIG_DIR` 里 `--resume`,CLI 只会回一句 "No conversation
+ * found with session ID" —— 与 2026-08-29 那次接力事故同一个现场,只是触发口从「搬机器」
+ * 换成了「换个人回复」(共享项目里 B 回复 A 的任务)。所以选 `prev` 时不能只看
+ * agentType+role,还要看这一列。
+ *
+ * 自用模式两边恒为 null,判据永远成立,行为与本函数加入前逐字节一致。
+ */
+export async function sameCliConfigDir(
+  a: string | null | undefined,
+  b: string | null | undefined,
+  agentType: string,
+): Promise<boolean> {
+  if ((a ?? null) === (b ?? null)) return true;
+  return (await cliConfigDirForOwner(a, agentType)) === (await cliConfigDirForOwner(b, agentType));
 }
 
 /**

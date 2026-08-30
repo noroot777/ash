@@ -423,6 +423,9 @@ export async function ensureSchema() {
     // 定时/排队消息也盖归属戳:它触发的回合要按**排消息的人**跑(§八),
     // 不是按任务归属人 —— 共享项目里给别人的任务排一条回复,烧的是自己的 key。
     "ALTER TABLE scheduled_messages ADD COLUMN owner_user_id TEXT",
+    // 这一轮实际跑在谁名下(= 注入 CLAUDE_CONFIG_DIR/CODEX_HOME 的那个人)。接力搬会话
+    // 文件按它找,不按任务归属人 —— 跨人回合两者不是一回事(见 db/schema.ts 同名列)。
+    "ALTER TABLE sessions ADD COLUMN run_owner_user_id TEXT",
     // 入站接力来源:谁批的 + 对端自报的实例模式(§十一 知情批准)。
     "ALTER TABLE handoff_peers ADD COLUMN approved_by TEXT",
     "ALTER TABLE handoff_peers ADD COLUMN peer_mode TEXT NOT NULL DEFAULT ''",

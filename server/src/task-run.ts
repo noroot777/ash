@@ -185,6 +185,8 @@ export async function runTask(
       role: "single",
       agentType,
       executor: ex.label,
+      // 这一轮跑在谁名下(= 上面 runEnvForOwner 注入的那个人)。接力搬会话文件按它找。
+      runOwnerUserId: runOwner ?? null,
       // 这一轮真正跑在哪条 profile、哪个模型/思考强度上（见 db/schema.ts 的同名列）：
       // 「原样再跑一遍上一回合」只认它们，不认可改名的展示名，也不认任务此刻的配置。
       executorId: profileId,

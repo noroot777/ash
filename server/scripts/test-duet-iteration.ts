@@ -190,10 +190,12 @@ try {
       return { resumeCommand: `cd ${cwd} && claude --resume ${sessionId}`, resumeEnv: "K=v ", resumeArgs: "--settings '{}'" };
     },
   } as unknown as Parameters<typeof reusedSessionPatch>[0];
-  assert.deepEqual(reusedSessionPatch(executor, "/repo/next", "claude --resume x", "sess-9"), {
+  assert.deepEqual(reusedSessionPatch(executor, "/repo/next", "claude --resume x", "sess-9", "u-bob"), {
     commandLine: "claude --resume x",
     executor: "claude@build",
     cwd: "/repo/next",
+    // 这一轮跑在谁名下:跨人回合会换人,而 CLI 的会话文件跟着那个人的配置目录走。
+    runOwnerUserId: "u-bob",
     // id 本身也在这份补丁里:上一轮若因会话失效被清空,只写三件套会让库里停在
     // 「恢复命令有 id、cli_session_id 为空」的自相矛盾状态。
     cliSessionId: "sess-9",
