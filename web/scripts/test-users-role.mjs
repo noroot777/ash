@@ -53,6 +53,15 @@ try {
   assert.equal(layout.borderRadius, 14, "用户行应使用焕新后的圆角");
   assert.ok(layout.contentLeft > layout.badgeRight, `装饰徽标不能压住正文：${JSON.stringify(layout)}`);
 
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const reducedMotion = await rows.first().evaluate((row) => {
+    const style = getComputedStyle(row);
+    return { property: style.transitionProperty, duration: style.transitionDuration };
+  });
+  assert.equal(reducedMotion.property, "none", "减弱动态效果时用户行不应保留 hover 过渡");
+  assert.equal(reducedMotion.duration, "0s", "减弱动态效果时用户行过渡时长应归零");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+
   const roleOf = (name) => page.getByRole("combobox", { name: `${name} 的实例角色` });
 
   // ① 每一行一个下拉，读的是这个人现在的角色。

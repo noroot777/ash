@@ -419,6 +419,6 @@
 
 @media (prefers-reduced-motion: reduce) {
   .auth-choice,
-  .users-row,
-  .pmem-row { transition: none; }
+  .settings-main .users-row,
+  .settings-main .pmem-row { transition: none; }
 }
