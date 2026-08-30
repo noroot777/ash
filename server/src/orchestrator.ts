@@ -36,7 +36,7 @@ import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { reportTurnFailure } from "./turn-failure.js";
-import { runEnvForOwner } from "./auth/run-env.js";
+import { runEnvForOwner, sameCliConfigDir } from "./auth/run-env.js";
 import { takeResumePrompt } from "./task-resume-prompt.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
 import {
@@ -48,6 +48,7 @@ import {
 import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
 import { LOST_SESSION_PATCH } from "./executors/session-lost.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "./session-version-guard.js";
+import { announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "./session-notice.js";
 
 // Why a task is being (re)started — only used to label the resume; all reasons
 // behave the same (resume if there's a resumable session, else fresh). Note: a
@@ -294,14 +295,36 @@ export async function continueTask(
     // each invited via @-mention. Newest first.
     const all = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-    let prev = opts.freshSession
-      ? undefined
-      // 指名道姓要续哪一条会话行（「重跑上一回合」）：按 agentType+role 挑会在同一位
-      // 智能体有多条会话时挑错人，而重投必须落回**崩掉的那一条**，否则等于换个人重说。
+    // 「这一条接得上吗」不止看 agentType+role:CLI 的会话文件躺在**开它的那个人**的配置
+    // 目录里,而共享项目里 B 可以回复 A 的任务(runOwner 上面刚算过)。拿 A 的 session id
+    // 去 B 的 CLAUDE_CONFIG_DIR 里 --resume,CLI 只会回一句 "No conversation found" ——
+    // 与 2026-08-29 那次接力事故同一堵墙,换了个触发口。判据在 auth/run-env.ts
+    // (自用模式两边恒为 null,这一层永远放行,行为不变)。
+    // 存量会话没有这一列,回落到任务归属人:它们本来就是按归属人跑的。
+    const resumableHere = async (s: typeof all[number]) =>
+      !s.cliSessionId || await sameCliConfigDir(s.runOwnerUserId ?? task.ownerUserId, runOwner, agent);
+    // 指名道姓要续哪一条会话行（「重跑上一回合」）：按 agentType+role 挑会在同一位
+    // 智能体有多条会话时挑错人，而重投必须落回**崩掉的那一条**，否则等于换个人重说。
+    const candidates = opts.freshSession
+      ? []
       : opts.resumeSessionId
-        ? all.find((s) => s.id === opts.resumeSessionId)
-        : all.find((s) => s.agentType === agent && s.role === sessionRole);
-    const affectedSessionVersion = await affectedCodexResumeVersion(agent, prev?.cliSessionId);
+        ? all.filter((s) => s.id === opts.resumeSessionId)
+        : all.filter((s) => s.agentType === agent && s.role === sessionRole);
+    let prev: typeof all[number] | undefined;
+    for (const s of candidates) {
+      if (await resumableHere(s)) { prev = s; break; }
+      // 接不上就另开一条 —— 但**不能一声不吭**:这一轮起跑后界面上会凭空多出一条会话行,
+      // 而旧会话看着好好的却再没人续。理由写进旧会话的时间线,刷新后仍在。
+      await announceSessionNote({
+        taskId, sessionId: s.id, role: s.role as SessionRole, agentType: agent,
+        text: CROSS_OWNER_SESSION_NOTE,
+      });
+    }
+    // 版本守卫要去**开这条会话的那个人**的 CODEX_HOME 里读 rollout(老行没这一列就回落
+    // 到任务归属人)——不传等于按宿主机默认目录找,多用户模式下必然扑空、静默放行。
+    const affectedSessionVersion = await affectedCodexResumeVersion(
+      agent, prev?.cliSessionId, prev?.runOwnerUserId ?? task.ownerUserId,
+    );
     if (prev && affectedSessionVersion) {
       // 说明必须先持久写进旧会话，凭据后清；否则下面任一 await 抛错都会留下一个
       // 「上下文没了、但没有解释」的永久状态。
@@ -462,6 +485,9 @@ export async function continueTask(
           exitStatus: null,
           commandLine: handle.commandLine,
           executor: ex.label,
+          // 这一轮跑在谁名下 —— 跨人续聊会换人(runOwner 上面刚算过),而 CLI 的会话
+          // 文件跟着这个人的配置目录走。不刷新,接力就会去上一个人的目录里找。
+          runOwnerUserId: runOwner ?? null,
           // 回合保真四件套整组刷新（说明见 db/schema.ts）：profile / 环境指纹 / 模型 /
           // 思考强度都可能在两轮之间被改，留着上一轮的值就会让重试按着别人的配置跑。
           executorId: profileId,
@@ -492,6 +518,7 @@ export async function continueTask(
         role: sessionRole,
         agentType: agent,
         executor: ex.label,
+        runOwnerUserId: runOwner ?? null,
         executorId: profileId,
         executorFingerprint: profileFingerprint,
         turnModel: ex.model ?? null,

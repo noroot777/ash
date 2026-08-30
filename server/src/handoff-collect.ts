@@ -14,6 +14,7 @@ import { expandHome, isGitRepo, worktreePathFor } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { DATA_DIR, RUNS_DIR } from "./paths.js";
 import { codexHome, findRollout } from "./executors/codex-rollout.js";
+import { cliConfigDirForOwner } from "./auth/run-env.js";
 import { HandoffError, MAX_BUNDLE_BYTES, MAX_FILE_BYTES, MB } from "./handoff-types.js";
 import type {
   HandoffFilePayload, HandoffFreeReviewRound, HandoffFreeWorkflowPayload, HandoffManifest,
@@ -35,8 +36,21 @@ export function claudeProjectSlug(cwd: string): string {
   return cwd.replace(/[^A-Za-z0-9]/g, "-");
 }
 
-export function claudeSessionFilePath(cwd: string, cliSessionId: string): string {
-  return join(homedir(), ".claude", "projects", claudeProjectSlug(cwd), `${cliSessionId}.jsonl`);
+/**
+ * claude 存这个 cwd 的会话的目录。`configDir` 是**这条任务的归属人**那一份
+ * `CLAUDE_CONFIG_DIR`(`auth/run-env.ts` 的 cliConfigDirForOwner);它设了就**整个取代**
+ * `~/.claude`,不回落,所以这里也不能回落——否则找的和 CLI 用的不是同一个目录。
+ */
+export function claudeProjectDir(cwd: string, configDir?: string | null): string {
+  return join(configDir?.trim() || join(homedir(), ".claude"), "projects", claudeProjectSlug(cwd));
+}
+
+export function claudeSessionFilePath(
+  cwd: string,
+  cliSessionId: string,
+  configDir?: string | null,
+): string {
+  return join(claudeProjectDir(cwd, configDir), `${cliSessionId}.jsonl`);
 }
 
 async function git(cwd: string, args: string[]): Promise<string> {
@@ -62,34 +76,53 @@ export async function repoRefTips(repoPath: string): Promise<{ name: string; com
 }
 
 
-/** 会话文件盘点:每条会话的文件在哪、能不能搬。dryRun 时不读内容（preflight 用）。 */
+/**
+ * 会话文件盘点:每条会话的文件在哪、能不能搬。dryRun 时不读内容（preflight 用）。
+ *
+ * 目录**逐条会话解析**,不是整批一个:多人模式下 `sessions.run_owner_user_id` 才是
+ * 「这条会话的 transcript 写在谁的 CLI 配置目录里」,共享项目里 B 回复 A 的任务时它是 B
+ * (`orchestrator.ts` 的 `runOwner = actingUserId ?? task.ownerUserId`)。按任务归属人一刀切
+ * 会在 A 的目录下扑空,报「本机找不到 CLI 会话文件」,最新那段上下文就此不随任务走。
+ * `taskOwnerUserId` 只兜底没有这一列的老行(以及自用模式,那边两者都是 null)。
+ */
 export async function collectSessionFiles(
   rows: SessionRow[],
   fallbackCwd: string | null,
   dryRun: boolean,
+  taskOwnerUserId: string | null,
 ): Promise<{ files: HandoffFilePayload[]; found: Set<string>; notes: string[] }> {
   const files: HandoffFilePayload[] = [];
   const found = new Set<string>();
   const notes: string[] = [];
+  // 同一个 owner 往往是整批,缓存一下省掉每行两次库查询。
+  const dirCache = new Map<string, string | null>();
+  const configDirFor = async (owner: string | null, agentType: string): Promise<string | null> => {
+    const key = `${owner ?? ""} ${agentType}`;
+    if (!dirCache.has(key)) dirCache.set(key, await cliConfigDirForOwner(owner, agentType));
+    return dirCache.get(key)!;
+  };
   for (const s of rows) {
     if (!s.cliSessionId) continue;
+    const runOwner = s.runOwnerUserId ?? taskOwnerUserId;
     let abs: string | null = null;
     let rel = "";
     let kind: HandoffFilePayload["kind"];
     if (s.agentType === "claude") {
       kind = "claude-session";
       rel = `${s.cliSessionId}.jsonl`;
+      const claudeConfigDir = await configDirFor(runOwner, "claude");
       for (const cwd of [s.cwd, s.worktreePath, fallbackCwd]) {
         if (!cwd) continue;
-        const candidate = claudeSessionFilePath(cwd, s.cliSessionId);
+        const candidate = claudeSessionFilePath(cwd, s.cliSessionId, claudeConfigDir);
         if (existsSync(candidate)) { abs = candidate; break; }
       }
     } else if (s.agentType === "codex") {
       kind = "codex-rollout";
-      abs = await findRollout(s.cliSessionId);
+      const codexConfigDir = await configDirFor(runOwner, "codex");
+      abs = await findRollout(s.cliSessionId, codexConfigDir);
       // 协议里 rel 一律 `/` 分隔:Windows 上 relative 产出反斜杠,POSIX 导入侧会把
       // 整串当成一个文件名落错地方(codex 按目录深度扫描,从此找不到这份会话)。
-      if (abs) rel = relative(join(codexHome(), "sessions"), abs).split(sep).join("/");
+      if (abs) rel = relative(join(codexHome(codexConfigDir), "sessions"), abs).split(sep).join("/");
     } else {
       notes.push(`会话 ${s.id}（${s.agentType}）:该执行器的会话文件迁移暂不支持,对端只能全新起跑`);
       continue;

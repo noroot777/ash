@@ -32,6 +32,8 @@
 //      带上「我在这儿是什么角色」,否则前端只能把必然 403 的管理控件摆给所有人看。
 //   ⑨ 检查点续跑(`resume_prompt`)是 `resumeOrRunTask` 里的**另一条岔路**:CAS 取走
 //      指令后它自己另调一次 continueTask,那处的 actingUserId 与 ① 是对称参数。
+//   ⑩ 「烧谁的 key、落谁的目录」对了还不够:**接着谁的会话**也得对。CLI 的 transcript
+//      躺在开它的那个人的配置目录里,拿别人的会话 id 去 `--resume` 只会扑空。
 //
 // 跑法(不设 ASH_DB 时自己开一个临时库):
 //   npm -w server run test:multi-user-run
@@ -72,11 +74,15 @@ writeFileSync(
   `const fs=require("fs"),path=require("path");\n`
   + `const keys=${JSON.stringify(KEYS)};\n`
   + `const out={};for(const k of keys)out[k]=process.env[k]??null;\n`
+  // 命令行也留一份:「有没有拿别人的会话 id 去 --resume」只有 argv 答得了(⑩)。
+  + `out.ARGV=process.argv.slice(2).join(" ");\n`
   + `fs.writeFileSync(path.join(process.env.ASH_TEST_PROBES,process.pid+"-"+process.hrtime.bigint()+".json"),JSON.stringify(out));\n`,
 );
 // 假 claude 按平台换壳:Windows 内核不认 `#!/bin/sh`,PATH 查找只认 PATHEXT 里的后缀。
+// 两边都要把参数原样转给探针(`%*` / `"$@"`)—— 少了它 argv 恒为空,⑩ 那条「有没有拿
+// 别人的会话 id 去 --resume」的断言就永远为真,测了个寂寞。
 const fakeBin = join(bin, IS_WINDOWS ? "claude.cmd" : "claude");
-writeFileSync(fakeBin, IS_WINDOWS ? `@node "${probeJs}"\r\n` : `#!/bin/sh\nexec node "${probeJs}"\n`);
+writeFileSync(fakeBin, IS_WINDOWS ? `@node "${probeJs}" %*\r\n` : `#!/bin/sh\nexec node "${probeJs}" "$@"\n`);
 chmodSync(fakeBin, 0o755);
 // 分隔符用 path.delimiter:Windows 是 `;`,写死 `:` 会把整条 PATH 粘成一个不存在的目录。
 process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ""}`;
@@ -582,6 +588,43 @@ const expectBob = (env: Record<string, string | null>, where: string) => {
   // 顺带钉住 main 那侧的语义:指令送出去了就该被取走,不能留在原位下次再投一遍。
   const left = (await db.select({ rp: tasks.resumePrompt }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   assert.equal(left?.rp, null, "送出去的 checkpoint 指令要被取走,否则下次触发会重投");
+}
+
+// ── ⑩ 跨人续聊不许拿**别人的** CLI 会话 id 去 --resume ──────────────────────
+// 共享项目里 alice 的任务已经跑过一轮、留下了她自己的 claude 会话。bob 点「运行」时
+// runOwner 是 bob,注入的是 **bob 的** CLAUDE_CONFIG_DIR —— 而那条 transcript 躺在
+// alice 的目录里(多人模式一人一份,CLAUDE_CONFIG_DIR **整个取代** ~/.claude,不回落)。
+// 老逻辑按 agentType+role 挑最新一行,于是把 alice 的 id 交给 bob 的 CLI:当场
+// "No conversation found with session ID",回合空转、按未完成记 failed —— 与 2026-08-29
+// 那次接力事故同一堵墙,只是触发口从「搬机器」换成了「换个人点一下」。
+{
+  const taskId = id();
+  const aliceCli = "5c1d3f80-7ab2-4d19-9e64-2f0a8c37bb41";
+  await db.insert(tasks).values(taskRow({ id: taskId, title: "alice 跑过一轮的任务", executorId: "ex-alice" }));
+  await db.insert(sessions).values({
+    id: "sess-alice-run", taskId, role: "single", agentType: "claude", executor: "Alice Executor",
+    cliSessionId: aliceCli, runOwnerUserId: alice.id, startedAt: ts, turnStartedAt: ts,
+  });
+  clearProbes();
+  const r = await post(`/api/tasks/${taskId}/run`, bobKey);
+  assert.equal(r.status, 202, JSON.stringify(r.body));
+  await until("跨人续聊起了进程", () => readProbes().length > 0);
+  const probe = readProbes()[0];
+  expectBob(probe, "跨人续聊");
+  assert.ok(
+    !(probe.ARGV ?? "").includes(aliceCli),
+    `不许把别人的会话 id 交给这一轮的 CLI(它在对方的配置目录里,只会扑空):${probe.ARGV}`,
+  );
+  await until("跨人续聊结算", async () => settled(await statusOf(taskId)));
+  // alice 那条原样留着 —— 那条会话对她完全健康,她再回来还能接着跑。
+  const kept = (await db.select().from(sessions).where(eq(sessions.id, "sess-alice-run"))).at(0)!;
+  assert.equal(kept.cliSessionId, aliceCli, "别人那条会话的 id 不许被这一轮改写");
+  assert.equal(kept.runOwnerUserId, alice.id, "归属人同样不许被改写");
+  // bob 这一轮另开一条,记在他自己名下(接力搬会话文件按这一列找,见 handoff-collect.ts)。
+  const rows = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
+  assert.equal(rows.length, 2, `跨人续聊该另开一条会话行,实际 ${rows.length} 条`);
+  const fresh = rows.find((s) => s.id !== "sess-alice-run")!;
+  assert.equal(fresh.runOwnerUserId, bob.id, "新开的这条要记在接手人名下");
 }
 
 await releaseTmpDb();

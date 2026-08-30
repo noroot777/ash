@@ -384,6 +384,13 @@ export const sessions = sqliteTable("sessions", {
   branch: text("branch"),
   cwd: text("cwd"),
   cliSessionId: text("cli_session_id"),
+  // **这一轮实际跑在谁名下**。多人模式下它不等于 `tasks.owner_user_id`:共享项目里
+  // B 回复 A 的任务时,`runOwner = actingUserId ?? task.ownerUserId` 是 B(orchestrator.ts),
+  // 于是 CLI 带着 B 的 `CLAUDE_CONFIG_DIR` 起跑,`cli_session_id` 那份 transcript 也写在
+  // B 的个人配置目录里。接力搬会话文件时必须按这一列找,按任务归属人找就会在 A 的目录下
+  // 扑空(2026-08-29 事故的同源第二格,见 docs/incidents.md)。
+  // null = 建在本列之前的老行,或这一轮本来就没有归属人(自用模式);两种都退回任务归属人。
+  runOwnerUserId: text("run_owner_user_id"),
   resumeCommand: text("resume_command"),
   // 恢复命令要带的 env 前缀:供应商那一截(token 已是占位符)。null = 没有。
   // 只用于展示,不含真 key。列名 relay_env 跟它现在装的东西正好对上。

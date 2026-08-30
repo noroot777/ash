@@ -321,7 +321,11 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   // 只看最新一条调度台会话：最新行的 id 被清掉时应开新会话，不能越过它复活更老的
   // 上下文（会话失效和版本替换两条清理路径都依赖这个判据）。
   let prev = latestTeamLeadSession(await db.select().from(sessions).where(eq(sessions.taskId, taskId)));
-  const affectedSessionVersion = await affectedCodexResumeVersion(cfg.lead, prev?.cliSessionId);
+  // 调度台恒按任务归属人跑(下面 spawn 用的是 runEnvForTask),所以 rollout 也去那份
+  // CODEX_HOME 里找;老行没记 run_owner 时同样回落到它。
+  const affectedSessionVersion = await affectedCodexResumeVersion(
+    cfg.lead, prev?.cliSessionId, prev?.runOwnerUserId ?? task.ownerUserId,
+  );
   if (prev && affectedSessionVersion) {
     await announceAffectedSessionReplacement({
       taskId, sessionId: prev.id, role: "lead", agentType: cfg.lead, version: affectedSessionVersion,

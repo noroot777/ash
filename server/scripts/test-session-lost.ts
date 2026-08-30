@@ -149,6 +149,40 @@ try {
 }
 ok("能识别带文件头噪声的 0.147 Codex rollout");
 
+// 同一个 thread id **同时**存在于两个配置根:宿主机默认目录里是 0.148.0,某个人的
+// CODEX_HOME 里是 0.147.0(接力导入、多用户共存时都会这样)。两件事一起钉:
+//   · 按目录读:传谁的目录就读谁那份(第 1 轮 finding 1)
+//   · 版本缓存必须按目录分区:先读过默认目录,再带 owner 目录读,不能返回上一次那个 ——
+//     缓存只按 thread id 的话,「先读了哪个目录」就决定了后面所有调用的答案,守卫会据此
+//     错判「不用换会话」(第 2 轮 finding 1)
+const ownedHome = join(dir, "owner-codex-home");
+const defaultHome = join(dir, "default-codex-home");
+const ownedThreadId = "01c032e5-c973-78c2-bbc7-a2ff7d10b3da";
+const metaLine = (threadId: string, version: string) =>
+  `${JSON.stringify({ type: "session_meta", payload: { session_id: threadId, cli_version: version } })}\n`;
+for (const [home, version] of [[ownedHome, "0.147.0"], [defaultHome, "0.148.0"]] as const) {
+  const into = join(home, "sessions", "2026", "08", "29");
+  mkdirSync(into, { recursive: true });
+  writeFileSync(join(into, `rollout-2026-08-29T10-00-00-${ownedThreadId}.jsonl`), metaLine(ownedThreadId, version));
+}
+process.env.CODEX_HOME = defaultHome;
+try {
+  assert.equal(await readCodexCliVersion(ownedThreadId), "0.148.0", "不传目录时读宿主机默认那份");
+  assert.equal(
+    await readCodexCliVersion(ownedThreadId, ownedHome),
+    "0.147.0",
+    "同一个 thread id 先读过默认目录,再按归属人的目录读,不能被上一次的缓存串味",
+  );
+  // 反向也钉一次:回到默认目录仍是默认那份(缓存分区不能只对一边成立)。
+  assert.equal(await readCodexCliVersion(ownedThreadId), "0.148.0", "两个方向都要按目录各记各的");
+  // 目录里根本没有这条:扑空是 fail-open,而扑空不该被缓存成任何版本。
+  assert.equal(await readCodexCliVersion(ownedThreadId, join(dir, "empty-codex-home")), null, "空目录里就该读不到");
+} finally {
+  if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = originalCodexHome;
+}
+ok("版本读取按 configDir 各读各的,缓存也按目录分区");
+
 const cappedThreadId = "01b032e5-c973-78c2-bbc7-a2ff7d10b3da";
 writeFileSync(
   join(rolloutDir, `rollout-2026-08-24T10-05-00-${cappedThreadId}.jsonl`),
@@ -217,6 +251,13 @@ ok("每条续跑链都有人负责清失效 id");
 for (const chain of ["orchestrator.ts", "team/session.ts", "duet/turn.ts"]) {
   const code = readSource(join(SRC, chain));
   assert.ok(code.includes("affectedCodexResumeVersion"), `${chain} 没在起跑前识别受影响的 Codex 会话`);
+  // 第三个参数是**开这条会话的那个人**。少了它,多用户模式下守卫会去宿主机默认
+  // CODEX_HOME 找 rollout,必然扑空 —— 而扑空是 fail-open,受影响的会话被静默放行。
+  assert.match(
+    code,
+    /affectedCodexResumeVersion\(([^)]*,){2}[^)]*\)/,
+    `${chain} 没把会话归属人传给版本守卫`,
+  );
   assert.match(
     code,
     /announceAffectedSessionReplacement\([\s\S]*?db\.update\(sessions\)\.set\(LOST_SESSION_PATCH\)/,
