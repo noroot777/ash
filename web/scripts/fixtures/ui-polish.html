@@ -17,6 +17,10 @@
         root.innerHTML = '<div class="auth-shell"><div class="auth-stage"></div></div>';
       } else if (probe === "danger") {
         root.innerHTML = '<section class="task-confirm-dialog"><header class="task-confirm-header"><span class="is-danger">!</span><div><small>HIGH IMPACT ACTION</small><h2>删除</h2></div><button>×</button></header></section>';
+      } else if (probe === "panels") {
+        root.innerHTML = '<section class="notes-panel"><header>随手记</header><div class="notes-body"></div><footer></footer></section><section class="groups-panel"><header>分组</header><div class="groups-panel-body"></div></section>';
+      } else if (probe === "preset") {
+        root.innerHTML = '<section class="composer-preset-dialog"><header><span>◇</span><div><h2>保存当前组合</h2></div></header></section>';
       }
     </script>
   </body>

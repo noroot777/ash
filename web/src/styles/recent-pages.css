@@ -424,4 +424,7 @@
   .auth-choice,
   .settings-main .users-row,
   .settings-main .pmem-row { transition: none; }
+  .auth-choice:hover:not(:disabled),
+  .settings-main .users-row:hover,
+  .settings-main .pmem-row:hover { transform: none; }
 }

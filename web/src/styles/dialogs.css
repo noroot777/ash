@@ -172,6 +172,8 @@
 
 .notes-panel,
 .groups-panel { border-radius: 22px; }
+.notes-panel { grid-template-rows: auto minmax(0, 1fr) 52px; }
+.groups-panel { grid-template-rows: auto minmax(0, 1fr); }
 .notes-panel > header,
 .groups-panel > header { min-height: 56px; padding-inline: 18px 14px; }
 .notes-panel > header b,
@@ -179,11 +181,12 @@
 .groups-panel-icon { width: 34px; height: 34px; flex-basis: 34px; border-radius: 11px; }
 .groups-panel-body { padding: 22px; }
 
-.free-review-dialog { border-radius: 22px; }
+.free-review-dialog { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; border-radius: 22px; }
 .free-review-dialog > header { min-height: 76px; grid-template-columns: 42px minmax(0, 1fr) 32px; padding: 13px 18px; }
 .free-review-dialog > header > span { width: 42px; height: 42px; border-radius: 13px; }
 .free-review-dialog h2 { font-size: 18px; letter-spacing: -.03em; }
 .free-review-dialog > header p { margin-top: 4px; font-size: 10.5px; }
+.free-review-dialog-body { min-height: 0; max-height: none; }
 .free-review-dialog > footer { min-height: 58px; align-items: center; padding: 11px 18px; }
 .free-review-dialog > footer button { height: 36px; border-radius: 10px; padding-inline: 15px; font-weight: 630; }
 
@@ -193,6 +196,7 @@
 .duet-handoff-modal h2 { font-size: 18px; letter-spacing: -.03em; }
 .composer-preset-dialog > header > span,
 .duet-handoff-modal > header > span { width: 42px; height: 42px; border-radius: 13px; }
+.composer-preset-dialog > header > span { flex: 0 0 42px; }
 .composer-preset-dialog > footer button,
 .duet-handoff-modal footer button { height: 36px; border-radius: 10px; padding-inline: 14px; font-weight: 630; }
 .duet-handoff-modal { width: min(600px, calc(100vw - 32px)); }
