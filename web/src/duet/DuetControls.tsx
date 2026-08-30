@@ -74,23 +74,29 @@ export function DuetGateControls({
           onOpenTask={onOpenTask}
           onIterateTeam={onIterateTeam}
         />
-        <button type="button" className="is-approve" disabled={busy} onClick={() => void onGate({ kind: "approve" })}>{handedOff ? "结束讨论" : "放行结束"}</button>
+        {/* 放行/打回都会终结这道门，在途的那张图再也没机会跟着这次操作发出去，所以传完之前先按住。 */}
+        <button type="button" className="is-approve" disabled={busy || uploads.uploading} onClick={() => void onGate({ kind: "approve" })}>{handedOff ? "结束讨论" : "放行结束"}</button>
         {!handedOff && <>
-          <button type="button" disabled={busy} onClick={() => void onGate({ kind: "reject" })}>打回终止</button>
+          <button type="button" disabled={busy || uploads.uploading} onClick={() => void onGate({ kind: "reject" })}>打回终止</button>
           <button type="button" className={mode === "inject" ? "is-active" : ""} disabled={busy} onClick={() => setMode((current) => current === "inject" ? null : "inject")}>注入意见</button>
           <button type="button" className={mode === "ask" ? "is-active" : ""} disabled={busy} onClick={() => setMode((current) => current === "ask" ? null : "ask")}><Question size={12} />提问继续</button>
         </>}
       </div>
+      {/* 在途状态挂在输入区外面：再点一次「注入意见」把输入区收起来（mode 变回 null）也照样看得见，
+          否则界面上什么都没有、放行按钮又是灰的，就成了「按钮无缘无故坏了」。 */}
+      <div className="duet-gate-uploads">
+        <UploadAttachmentList
+          attachments={uploads.attachments}
+          pending={uploads.pending}
+          error={uploads.error}
+          onRemove={uploads.remove}
+          onCancel={uploads.cancel}
+        />
+        {uploads.uploading && <p className="duet-gate-uploading">{`${uploadingLabel(uploads.pending)} · 传完才能放行或打回`}</p>}
+      </div>
       {mode && !handedOff && (
         <div className="duet-gate-composer">
           {mode === "ask" && <div className="duet-targets"><span>提问对象</span>{(["both", "A", "B"] as const).map((value) => <button type="button" className={target === value ? "is-selected" : ""} key={value} onClick={() => setTarget(value)}>{value === "both" ? "双方" : `讨论者 ${value}`}</button>)}</div>}
-          <UploadAttachmentList
-            attachments={uploads.attachments}
-            pending={uploads.pending}
-            error={uploads.error}
-            onRemove={uploads.remove}
-            onCancel={uploads.cancel}
-          />
           <textarea autoFocus rows={3} value={text} placeholder={mode === "inject" ? "补充意见，双方据此回炉再讨论（可粘贴截图）…" : "写下要澄清的问题（可粘贴截图）…"} onChange={(event) => setText(event.target.value)} onPaste={uploads.onPaste} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); void submit(); } }} />
           <div className="duet-gate-composer-actions">
             <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />

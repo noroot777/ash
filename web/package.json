@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node ../scripts/check-conventions.mjs && npm run test:bulk-handoff && npm run test:bulk-handoff-dialog && npm run test:remote-task && npm run test:handoff-dialog-lifetime && npm run test:conversation && npm run test:task-read-state && npm run test:scheduled-message-tray && npm run test:withdraw-scheduled && npm run test:users-role && npm run test:composer-upload && npm run test:notes-upload && npm run test:shortcuts && tsc -b && vite build",
+    "build": "node ../scripts/check-conventions.mjs && npm run test:bulk-handoff && npm run test:bulk-handoff-dialog && npm run test:remote-task && npm run test:handoff-dialog-lifetime && npm run test:conversation && npm run test:task-read-state && npm run test:scheduled-message-tray && npm run test:withdraw-scheduled && npm run test:users-role && npm run test:composer-upload && npm run test:notes-upload && npm run test:duet-upload && npm run test:shortcuts && tsc -b && vite build",
     "test:image-preview": "node scripts/test-image-preview.mjs",
     "test:inspector-shortcuts": "node --experimental-strip-types scripts/test-inspector-shortcuts.mjs",
     "test:key-chord": "node --experimental-strip-types scripts/test-key-chord.mjs",
@@ -59,6 +59,7 @@
     "test:reply-drafts": "node scripts/test-reply-drafts.mjs",
     "test:composer-upload": "node scripts/test-composer-upload.mjs",
     "test:notes-upload": "node scripts/test-notes-upload.mjs",
+    "test:duet-upload": "node scripts/test-duet-upload.mjs",
     "test:workflow-rail": "node --experimental-strip-types scripts/test-workflow-rail.mjs",
     "test:workflow-edit": "node --experimental-strip-types scripts/test-workflow-edit.mjs",
     "test:turn-retry": "node --experimental-strip-types scripts/test-turn-retry.mjs",
