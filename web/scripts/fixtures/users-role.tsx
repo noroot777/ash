@@ -104,7 +104,7 @@ function Fixture() {
   }, []);
   return (
     <AuthContext.Provider value={{ state: authState(myRole), refresh }}>
-      <main style={{ width: 960, margin: "24px auto" }}>
+      <main className="settings-main" style={{ width: 960, height: "auto", margin: "24px auto", overflow: "visible" }}>
         <UsersSettings notify={notify} onAccount={() => {}} />
         <pre data-testid="notices">{JSON.stringify(notices)}</pre>
       </main>

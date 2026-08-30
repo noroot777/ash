@@ -55,7 +55,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (!state) {
     return (
       <AuthShell>
-        <div className="auth-card">
+        <div className="auth-card auth-card--service">
           {error ? (
             <>
               <h1>连不上服务端</h1>

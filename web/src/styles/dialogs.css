@@ -59,6 +59,7 @@
 
 .task-confirm-dialog > .task-confirm-header > div { display: grid; min-width: 0; gap: 4px; }
 .task-confirm-dialog > .task-confirm-header small { color: var(--accent); font: 750 8.5px/1 var(--font-mono); letter-spacing: .13em; }
+.task-confirm-dialog > .task-confirm-header:has(> span.is-danger) small { color: var(--red); }
 .task-confirm-dialog > .task-confirm-header h2 { overflow: hidden; margin: 0; font-size: 20px; font-weight: 710; letter-spacing: -.035em; text-overflow: ellipsis; white-space: nowrap; }
 
 .task-confirm-dialog > .task-confirm-header > button {

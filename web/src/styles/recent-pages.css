@@ -172,6 +172,11 @@
   content: "ASH ACCESS";
 }
 
+.auth-card.auth-card--service > h1::before {
+  color: var(--red);
+  content: "SERVICE STATUS";
+}
+
 .auth-card h1,
 .auth-key-reveal h2 {
   font-size: clamp(27px, 3.2vw, 36px);
@@ -294,24 +299,24 @@
   box-shadow: 0 9px 28px rgb(35 37 48 / 4%), inset 0 1px 0 rgb(255 255 255 / 75%);
 }
 
-.users-settings,
-.pmem,
-.pcli,
-.cfgx { gap: 18px; }
+.settings-main .users-settings,
+.settings-main .pmem,
+.settings-main .pcli,
+.settings-main .cfgx { gap: 18px; }
 
-.users-header,
-.pmem > header,
-.pcli > header,
-.cfgx > header {
+.settings-main .users-header,
+.settings-main .pmem > header,
+.settings-main .pcli > header,
+.settings-main .cfgx > header {
   position: relative;
   padding: 0 0 16px 16px;
   border-bottom: 1px solid var(--line);
 }
 
-.users-header::before,
-.pmem > header::before,
-.pcli > header::before,
-.cfgx > header::before {
+.settings-main .users-header::before,
+.settings-main .pmem > header::before,
+.settings-main .pcli > header::before,
+.settings-main .cfgx > header::before {
   position: absolute;
   width: 4px;
   top: 1px;
@@ -322,29 +327,29 @@
   content: "";
 }
 
-.users-header h2,
-.pmem header h2,
-.pcli header h2,
-.cfgx header h2 { color: var(--ink); font-size: 17px; font-weight: 690; letter-spacing: -.02em; }
+.settings-main .users-header h2,
+.settings-main .pmem header h2,
+.settings-main .pcli header h2,
+.settings-main .cfgx header h2 { color: var(--ink); font-size: 17px; font-weight: 690; letter-spacing: -.02em; }
 
-.users-form,
-.users-invite,
-.pmem-block,
-.pcli-block,
-.cfgx-block {
+.settings-main .users-form,
+.settings-main .users-invite,
+.settings-main .pmem-block,
+.settings-main .pcli-block,
+.settings-main .cfgx-block {
   border-color: color-mix(in lch, var(--line) 82%, transparent);
   border-radius: 16px;
   background: var(--panel);
   box-shadow: 0 10px 30px rgb(35 37 48 / 4%);
 }
 
-.users-form { gap: 16px; padding: 20px; }
-.users-invite { padding: 18px; }
-.users-invite-url,
-.pmem-invite-url { border: 1px dashed var(--line2); border-radius: 10px; background: var(--canvas); padding: 11px 12px; }
+.settings-main .users-form { gap: 16px; padding: 20px; }
+.settings-main .users-invite { padding: 18px; }
+.settings-main .users-invite-url,
+.settings-main .pmem-invite-url { border: 1px dashed var(--line2); border-radius: 10px; background: var(--canvas); padding: 11px 12px; }
 
-.users-row,
-.pmem-row {
+.settings-main .users-row,
+.settings-main .pmem-row {
   position: relative;
   min-height: 72px;
   border-color: color-mix(in lch, var(--line) 82%, transparent);
@@ -355,8 +360,8 @@
   transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
 }
 
-.users-row::before,
-.pmem-row::before {
+.settings-main .users-row::before,
+.settings-main .pmem-row::before {
   position: absolute;
   display: grid;
   width: 27px;
@@ -369,20 +374,20 @@
   content: "";
 }
 
-.users-row:hover,
-.pmem-row:hover { border-color: color-mix(in lch, var(--accent) 24%, var(--line)); box-shadow: 0 11px 28px rgb(35 37 48 / 6%); transform: translateY(-1px); }
-.users-row-name b,
-.pmem-who b { font-size: 13.5px; }
-.users-tag,
-.pmem-tag { background: color-mix(in lch, var(--accent) 7%, var(--panel)); }
+.settings-main .users-row:hover,
+.settings-main .pmem-row:hover { border-color: color-mix(in lch, var(--accent) 24%, var(--line)); box-shadow: 0 11px 28px rgb(35 37 48 / 6%); transform: translateY(-1px); }
+.settings-main .users-row-name b,
+.settings-main .pmem-who b { font-size: 13.5px; }
+.settings-main .users-tag,
+.settings-main .pmem-tag { background: color-mix(in lch, var(--accent) 7%, var(--panel)); }
 
-.pcli-block,
-.cfgx-block { padding: 20px; }
-.pcli-block h3,
-.cfgx-block h3 { font-size: 16px; letter-spacing: -.015em; }
-.pcli-skills li { min-height: 42px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in lch, var(--raised) 74%, var(--panel)); }
-.cfgx-kind { min-height: 38px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); padding: 8px 11px; }
-.cfgx-warning { border-radius: 14px; padding: 15px 17px; }
+.settings-main .pcli-block,
+.settings-main .cfgx-block { padding: 20px; }
+.settings-main .pcli-block h3,
+.settings-main .cfgx-block h3 { font-size: 16px; letter-spacing: -.015em; }
+.settings-main .pcli-skills li { min-height: 42px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in lch, var(--raised) 74%, var(--panel)); }
+.settings-main .cfgx-kind { min-height: 38px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); padding: 8px 11px; }
+.settings-main .cfgx-warning { border-radius: 14px; padding: 15px 17px; }
 
 @media (max-width: 840px) {
   .auth-stage { min-height: 0; grid-template-columns: 1fr; }
@@ -408,8 +413,8 @@
   .auth-choice { min-height: 0; padding-left: 68px; }
   .auth-choice::before { left: 14px; }
   .settings-shell { grid-template-columns: 1fr; }
-  .users-row,
-  .pmem-row { padding-left: 48px; }
+  .settings-main .users-row,
+  .settings-main .pmem-row { padding-left: 48px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

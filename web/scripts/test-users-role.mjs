@@ -35,6 +35,24 @@ try {
   await rows.first().waitFor();
   assert.equal(await rows.count(), 4);
 
+  // 真实设置页的组件样式在 global.css 之后加载。装饰徽标左边占位必须赢过后加载的
+  // `.users-row` 默认 padding，否则方块会原样保留、正文却退回左边，直接压住用户名。
+  const layout = await rows.first().evaluate((row) => {
+    const style = getComputedStyle(row);
+    const badge = getComputedStyle(row, "::before");
+    const content = row.querySelector(".users-row-main").getBoundingClientRect();
+    const outer = row.getBoundingClientRect();
+    return {
+      paddingLeft: Number.parseFloat(style.paddingLeft),
+      borderRadius: Number.parseFloat(style.borderRadius),
+      badgeRight: Number.parseFloat(badge.left) + Number.parseFloat(badge.width),
+      contentLeft: content.left - outer.left,
+    };
+  });
+  assert.equal(layout.paddingLeft, 52, "用户行要给左侧装饰徽标留出 52px");
+  assert.equal(layout.borderRadius, 14, "用户行应使用焕新后的圆角");
+  assert.ok(layout.contentLeft > layout.badgeRight, `装饰徽标不能压住正文：${JSON.stringify(layout)}`);
+
   const roleOf = (name) => page.getByRole("combobox", { name: `${name} 的实例角色` });
 
   // ① 每一行一个下拉，读的是这个人现在的角色。
