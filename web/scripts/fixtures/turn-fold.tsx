@@ -19,7 +19,32 @@ const segments: AgentContentSegment[] = [
   { id: "s5", markdown: "工作树保持干净。\n", events: [], attachments: [] },
 ];
 
-function Turn({ name, initialRunning }: { name: string; initialRunning: boolean }) {
+// 未确认完成的失败回合：server 在正文写完之后补一条 settled.note —— .md 里是一段引用、
+// trace 里是一条 error（single-run.ts）。整篇回答必须留在外面，别跟着它折进过程。
+const failedSegments: AgentContentSegment[] = [
+  {
+    id: "f0",
+    markdown: "答（只回答，未改代码）：会覆盖，而且只有一个槽。\n",
+    events: [{ kind: "tool", label: "Bash", detail: "grep -rn 预约" }],
+    attachments: [],
+  },
+  {
+    id: "f1",
+    markdown: "> 回合正常结束,但本回合内没有收到 complete_task 的完成确认。\n",
+    events: [{ kind: "error", label: "回合正常结束,但本回合内没有收到 complete_task 的完成确认" }],
+    attachments: [],
+  },
+];
+
+function Turn({
+  name,
+  initialRunning,
+  turnSegments = segments,
+}: {
+  name: string;
+  initialRunning: boolean;
+  turnSegments?: AgentContentSegment[];
+}) {
   const [running, setRunning] = useState(initialRunning);
   const [nonce, setNonce] = useState(0);
   return (
@@ -29,7 +54,7 @@ function Turn({ name, initialRunning }: { name: string; initialRunning: boolean 
         <button type="button" data-role="end-turn" onClick={() => setRunning(false)}>结束回合</button>
         <button type="button" data-role="restart-turn" onClick={() => setRunning(true)}>重新开跑</button>
         <button type="button" data-role="repaint" onClick={() => setNonce(nonce + 1)}>触发重绘 {nonce}</button>
-        <AgentTurnBody segments={segments} running={running} />
+        <AgentTurnBody segments={turnSegments} running={running} />
       </div>
     </div>
   );
@@ -41,5 +66,7 @@ createRoot(document.getElementById("root")!).render(
     <Turn name="live" initialRunning />
     {/* 刷新页面后读到的历史回合：一上来就该是折好的 */}
     <Turn name="persisted" initialRunning={false} />
+    {/* 未确认完成而记 failed 的回合：结算那条异常不许把整篇回答折进过程 */}
+    <Turn name="failed" initialRunning={false} turnSegments={failedSegments} />
   </StrictMode>,
 );

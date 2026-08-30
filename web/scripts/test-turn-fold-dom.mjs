@@ -98,6 +98,26 @@ try {
   await flush();
   assert.equal(await isOpen("persisted"), false, "用户收起来的过程块被续跑掀开了");
 
+  // 8. 未确认完成的失败回合：结算补的那条异常不是切点。整篇回答留在折叠外面，异常并进
+  //    过程块（折叠条标红），失败说明那段引用照旧露在外面。
+  assert.equal(await isOpen("failed"), false, "已结束的失败回合首屏就该是折好的");
+  assert.equal(
+    await turn("failed").getByText("会覆盖，而且只有一个槽").first().isVisible(),
+    true,
+    "整篇回答被结算那条异常折进过程了",
+  );
+  assert.equal(
+    await turn("failed").getByText("没有收到 complete_task 的完成确认。").first().isVisible(),
+    true,
+    "失败说明该露在外面",
+  );
+  assert.equal(await fold("failed").evaluate((el) => el.classList.contains("has-error")), true);
+  assert.equal(
+    await turn("failed").locator("details.task-execution-block:not(.task-turn-process)").count(),
+    0,
+    "异常该并进过程块，不在结论区自成一条折叠行",
+  );
+
   if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: true });
 
   console.log("turn fold dom tests passed");
