@@ -85,6 +85,10 @@ const SYSTEM_NAV: readonly NavItem[] = [
 // 的链接在权限不够时该走「渲染时的空态」,而不是被 parse 判成非法后静默弹回默认节
 // —— 那样看着就像「链接坏了」。
 const PROJECT_SECTIONS: SettingsSection[] = PROJECT_NAV.map((item) => item.id);
+/** 这一节要不要先有项目？要就返回它在导航里的名字（给拦下它的地方当提示词），不要就返回 null。 */
+export function projectSectionLabel(section: SettingsSection): string | null {
+  return PROJECT_NAV.find((item) => item.id === section)?.label ?? null;
+}
 // 从 SYSTEM_NAV 推出来而不是再抄一遍字面量：新加一节只改一处，不会出现「导航里
 // 有、刷新一次就掉回默认」的半接通状态。
 const SYSTEM_SECTIONS: SettingsSection[] = SYSTEM_NAV.map((item) => item.id);

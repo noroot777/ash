@@ -26,9 +26,14 @@ const MODES: { key: Mode; label: string; hint: string }[] = [
   { key: "clone", label: "从 Git 检出", hint: "输入仓库地址，ash 克隆到你指定的位置" },
 ];
 
-export function CreateProjectDialog({ projects, onClose, onCreated, notify }: {
+export function CreateProjectDialog({ projects, reason = null, onClose, onCreated, notify }: {
   /** 已有项目，用来在填到一条已登记的路径时当场提醒，而不是造出第二个同仓库项目。 */
   projects: ProjectView[];
+  /**
+   * 这层不是用户主动点开、而是被「没有项目」的门禁弹出来时，这里写清是哪个动作把他领到
+   * 这儿的。toast 两秒多就没了，弹层却一直开着 —— 因果只写在 toast 上，等于没写。
+   */
+  reason?: string | null;
   onClose: () => void;
   onCreated: (project: ProjectView) => void;
   notify: (message: string) => void;
@@ -134,7 +139,7 @@ export function CreateProjectDialog({ projects, onClose, onCreated, notify }: {
 
   return <ConfirmDialog
     title="新建项目"
-    message="项目目录会成为任务的默认运行位置。"
+    message={reason ? `${reason}项目目录会成为任务的默认运行位置。` : "项目目录会成为任务的默认运行位置。"}
     confirmLabel={mode === "clone" ? "克隆并创建" : willCreateDir ? "创建目录并创建项目" : "创建项目"}
     busy={busy}
     confirmDisabled={!canSubmit || pathHealth.checking}
