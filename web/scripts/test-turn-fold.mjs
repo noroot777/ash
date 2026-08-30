@@ -9,6 +9,7 @@ import { splitTurnSegments } from "../src/task-detail/turnFold.ts";
 
 const segment = (id, { markdown = "", events = [], attachments = [] } = {}) => ({ id, markdown, events, attachments });
 const tool = (label) => ({ kind: "tool", label });
+const error = (label) => ({ kind: "error", label });
 const text = (segments) => segments.map((item) => item.markdown).join("|");
 const labels = (segments) => segments.flatMap((item) => item.events).map((event) => event.label).join(",");
 
@@ -111,6 +112,41 @@ for (const label of [
     segment("a", { events: [tool("Bash")], attachments: ["shot.png"], markdown: "复现如图。" }),
   ]);
   assert.deepEqual(conclusion[0].attachments, ["shot.png"]);
+}
+
+// 11. 结算补的那条异常不当切点。未确认完成时 server 在正文写完之后才写 settled.note
+//     （.md 里是一段引用，trace 里是一条 error），拿它当切点就把整篇回答折进过程，
+//     外面只剩那句失败提示 —— 现场原状：15 次工具 + 长篇回答，用户只能看到红字。
+{
+  const { process, conclusion } = splitTurnSegments([
+    segment("a", { events: [tool("Bash")], markdown: "答（只回答，未改代码）：会覆盖，而且只有一个槽。" }),
+    segment("b", { events: [error("回合正常结束,但本回合内没有收到 complete_task 的完成确认")], markdown: "> 回合正常结束,但……" }),
+  ]);
+  assert.equal(text(conclusion), "答（只回答，未改代码）：会覆盖，而且只有一个槽。|> 回合正常结束,但……");
+  assert.equal(labels(conclusion), "");
+  // 异常并进过程块末尾：折叠条照旧标红（hasExecutionError 看的就是这份 events）。
+  assert.equal(labels(process), "Bash,回合正常结束,但本回合内没有收到 complete_task 的完成确认");
+}
+
+// 12. 失败回合一个字都没说（只有失败说明那段引用）：照样折，工具收进去、说明留在外面。
+{
+  const { process, conclusion } = splitTurnSegments([
+    segment("a", { events: [tool("Bash")] }),
+    segment("b", { events: [error("执行异常结束")], markdown: "> 执行异常结束 · exit 1" }),
+  ]);
+  assert.equal(text(conclusion), "|> 执行异常结束 · exit 1");
+  assert.equal(labels(process), "Bash,执行异常结束");
+}
+
+// 13. 通篇只有异常（连工具都没跑成）：没有动手过，不折。
+{
+  const segments = [
+    segment("a", { markdown: "刚要开工。" }),
+    segment("b", { events: [error("执行异常结束")] }),
+  ];
+  const { process, conclusion } = splitTurnSegments(segments);
+  assert.equal(process.length, 0);
+  assert.equal(conclusion, segments);
 }
 
 console.log("turn fold tests passed");

@@ -1,5 +1,18 @@
 import type { AgentContentSegment } from "./conversationModel.ts";
-import { isBookkeepingEvent } from "../lib/executionTrace.ts";
+import { isBookkeepingEvent, type ExecutionEvent } from "../lib/executionTrace.ts";
+
+/**
+ * 这一步算不算「动手」—— 只有动手过的事件才配当切点。
+ *
+ * 排除两类：
+ * - **记账调用**（isBookkeepingEvent）：complete_task、把待办划掉这类，现场什么都没发生。
+ * - **异常**：它是回合的旁白，不是这一轮干的活。结算那条尤其毒 —— 未确认完成 / 退出码
+ *   非 0 时，server 在正文写完之后才补一条 error（single-run.ts 的 settled.note，同时
+ *   写进 .md 和 trace），拿它当切点，整篇回答就被折进过程，外面只剩那句失败提示。
+ */
+function isHandsOn(event: ExecutionEvent): boolean {
+  return event.kind !== "error" && !isBookkeepingEvent(event);
+}
 
 /**
  * 把一个回合切成「过程」和「结论」两段。切点是**最后一次真正动手的工具/分析事件**：
@@ -8,8 +21,7 @@ import { isBookkeepingEvent } from "../lib/executionTrace.ts";
  * 判据是位置而不是内容类型 —— 同一段边干边说的正文，落在最后一次动手之前就是过程，
  * 之后就是结论。这样一条长回合收起来只剩它最后要讲的那件事。
  *
- * **记账调用不算动手**（isBookkeepingEvent）。complete_task、把待办划掉这类动作几乎总在
- * 正文写完之后才发生，拿它当切点会把整篇回答折进过程，外面只剩收尾那一句。
+ * 什么才算动手见 isHandsOn。
  *
  * 切点还常常落在**一段之内**：contentSegments 把「若干工具事件 + 紧随其后的正文」攒成同
  * 一段（见 conversationModel.ts 的 pushCurrent），所以这里要把那一段拆开——事件归过程，
@@ -22,7 +34,7 @@ export function splitTurnSegments(segments: AgentContentSegment[]): {
   const flat = { process: [] as AgentContentSegment[], conclusion: segments };
   let pivot = -1;
   for (let index = segments.length - 1; index >= 0 && pivot < 0; index -= 1) {
-    if (segments[index]!.events.some((event) => !isBookkeepingEvent(event))) pivot = index;
+    if (segments[index]!.events.some(isHandsOn)) pivot = index;
   }
   if (pivot < 0) return flat;
 
@@ -40,12 +52,14 @@ export function splitTurnSegments(segments: AgentContentSegment[]): {
     ...segments.slice(0, pivot),
     { ...split, id: `${split.id}:did`, markdown: "", attachments: [] },
   ];
-  // 结论区里剩下的必然全是记账事件（切点定义使然）。把它们并进过程块末尾，而不是留在
-  // 原位——留着就会在报告和收尾句之间夹一条「执行过程 · 1 工具」，看着像又干了点什么。
+  // 结论区里剩下的必然全是没动手的事件（切点定义使然）：记账调用，以及结算补的那条
+  // 异常。把它们并进过程块末尾，而不是留在原位——留着就会在报告和收尾句之间夹一条
+  // 「执行过程 · 1 工具」，看着像又干了点什么；异常留在原位则是在报告和它自己的失败
+  // 说明之间再插一行同样的红字。异常并进来后折叠条照旧标红（hasExecutionError）。
   // 代价是这几步在折叠里的位置比实际发生得早一点；折叠讲的是「做过哪些步」，不是流水账。
-  const bookkeeping = trailing.flatMap((segment) => segment.events);
-  if (bookkeeping.length) {
-    process.push({ id: `${split.id}:bookkeeping`, markdown: "", attachments: [], events: bookkeeping });
+  const trailingEvents = trailing.flatMap((segment) => segment.events);
+  if (trailingEvents.length) {
+    process.push({ id: `${split.id}:bookkeeping`, markdown: "", attachments: [], events: trailingEvents });
   }
   return { process, conclusion };
 }
