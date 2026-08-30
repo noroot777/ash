@@ -277,60 +277,6 @@ export function TaskInspector({
         </ImagePreviewGroup>
 
         <section>
-          <h2>属性</h2>
-          <InspectorRow label="状态">
-            <Dropdown
-              label="状态"
-              value={task.status}
-              options={statusOptions.map((status) => ({ value: status, label: TASK_STATUS_LABELS[status] }))}
-              disabled={readOnly}
-              filterable={false}
-              onChange={(status) => void patch({ status: status as TaskStatus })}
-            />
-          </InspectorRow>
-          <InspectorRow label="分组">
-            <Dropdown
-              label="分组"
-              value={task.groupId ?? ""}
-              options={[
-                { value: "", label: "无分组" },
-                ...groups.map((group) => ({
-                  value: group.id,
-                  label: group.name,
-                  detail: group.mode === "parallel" ? "并行" : "串行",
-                })),
-              ]}
-              disabled={readOnly}
-              filterable={groups.length > 6}
-              filterPlaceholder="筛选分组…"
-              placeholder="无分组"
-              onChange={(groupId) => void patch({ groupId: groupId || null })}
-            />
-          </InspectorRow>
-          <InspectorRow label="标签">
-            <TaskLabelsEditor
-              key={task.id}
-              labels={task.labels}
-              disabled={readOnly}
-              onChange={(labels, change) => void patch(
-                { labels },
-                change.kind === "add" ? "标签已添加" : "标签已移除",
-              )}
-            />
-          </InspectorRow>
-          {task.parentId !== null && (
-            <>
-              <p className="task-inspector-note">这是调度者派出的执行者，属性由团队任务统一管理。</p>
-              {parent && (
-                <button className="task-inspector-action" type="button" onClick={() => onOpenTask(parent.taskId)}>
-                  <span>打开所属团队{parent.task ? ` · ${parent.task.title}` : ""}</span><ArrowSquareOut size={13} />
-                </button>
-              )}
-            </>
-          )}
-        </section>
-
-        <section>
           <h2>执行信息</h2>
           <InspectorRow label="执行器">
             <span>{task.executorLabel ?? agentType}</span>
@@ -403,6 +349,60 @@ export function TaskInspector({
             editable={task.parentId === null && task.status === "paused" && !task.question}
             onSave={saveResumePrompt}
           />
+        </section>
+
+        <section>
+          <h2>属性</h2>
+          <InspectorRow label="状态">
+            <Dropdown
+              label="状态"
+              value={task.status}
+              options={statusOptions.map((status) => ({ value: status, label: TASK_STATUS_LABELS[status] }))}
+              disabled={readOnly}
+              filterable={false}
+              onChange={(status) => void patch({ status: status as TaskStatus })}
+            />
+          </InspectorRow>
+          <InspectorRow label="分组">
+            <Dropdown
+              label="分组"
+              value={task.groupId ?? ""}
+              options={[
+                { value: "", label: "无分组" },
+                ...groups.map((group) => ({
+                  value: group.id,
+                  label: group.name,
+                  detail: group.mode === "parallel" ? "并行" : "串行",
+                })),
+              ]}
+              disabled={readOnly}
+              filterable={groups.length > 6}
+              filterPlaceholder="筛选分组…"
+              placeholder="无分组"
+              onChange={(groupId) => void patch({ groupId: groupId || null })}
+            />
+          </InspectorRow>
+          <InspectorRow label="标签">
+            <TaskLabelsEditor
+              key={task.id}
+              labels={task.labels}
+              disabled={readOnly}
+              onChange={(labels, change) => void patch(
+                { labels },
+                change.kind === "add" ? "标签已添加" : "标签已移除",
+              )}
+            />
+          </InspectorRow>
+          {task.parentId !== null && (
+            <>
+              <p className="task-inspector-note">这是调度者派出的执行者，属性由团队任务统一管理。</p>
+              {parent && (
+                <button className="task-inspector-action" type="button" onClick={() => onOpenTask(parent.taskId)}>
+                  <span>打开所属团队{parent.task ? ` · ${parent.task.title}` : ""}</span><ArrowSquareOut size={13} />
+                </button>
+              )}
+            </>
+          )}
         </section>
       </div>
       {queueOpen && task.queueId && (
