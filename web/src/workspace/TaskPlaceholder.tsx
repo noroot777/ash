@@ -1,6 +1,7 @@
 import type { ProjectView, Task } from "@ash/shared";
 import { taskDisplayStatus } from "@ash/shared";
-import { CirclesThreePlus } from "@phosphor-icons/react";
+import { CirclesThreePlus, FolderPlus } from "@phosphor-icons/react";
+import { Button } from "../components/ui.tsx";
 import { workspaceModifierLabel } from "./useWorkspaceShortcuts.ts";
 
 function taskKind(task: Task): string {
@@ -12,9 +13,12 @@ function taskKind(task: Task): string {
 export function TaskPlaceholder({
   project,
   task,
+  onCreateProject,
 }: {
   project: ProjectView | null;
   task: Task | null;
+  /** 一个项目都没有时,空状态得自己给出下一步 —— 只写一句「用 ⌘K 新建项目」等于让人先学快捷键。 */
+  onCreateProject?: () => void;
 }) {
   const modifier = workspaceModifierLabel();
   if (!project) {
@@ -22,7 +26,13 @@ export function TaskPlaceholder({
       <section className="workspace-empty-state">
         <CirclesThreePlus size={26} weight="bold" aria-hidden="true" />
         <h1>还没有可用项目</h1>
-        <p>用 {modifier} K 新建项目，或从项目切换器选择现有工作区。</p>
+        <p>任务、随手记和分组都挂在项目下，先建一个项目才能开工。也可以按 {modifier} K 从命令面板新建。</p>
+        {onCreateProject && (
+          <Button variant="primary" className="workspace-empty-action" onClick={onCreateProject}>
+            <FolderPlus size={14} weight="bold" aria-hidden="true" />
+            新建项目
+          </Button>
+        )}
       </section>
     );
   }

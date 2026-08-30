@@ -306,6 +306,10 @@
   font-size: 12px;
 }
 
+.workspace-empty-action {
+  margin-top: 18px;
+}
+
 .workspace-task-placeholder {
   max-width: 760px;
   padding: clamp(44px, 8vw, 96px) clamp(28px, 7vw, 86px);

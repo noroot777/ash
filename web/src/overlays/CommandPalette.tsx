@@ -62,7 +62,8 @@ type CommandPaletteProps = {
   onTaskMode: () => void;
   onTask: (task: TaskListItem) => void;
   onTaskUpdated: (task: TaskListItem) => void;
-  onNote: (projectId: string, noteId: string | null) => void;
+  /** projectId 为 null = 当前没有可用项目：由上层决定提示什么、要不要引导去建项目，这里不静默吞掉。 */
+  onNote: (projectId: string | null, noteId: string | null) => void;
   onComposer: (mode?: "single" | "team" | "duet") => void;
   onNewGroup: () => void;
   onNewProject: () => void;
@@ -302,10 +303,10 @@ export function CommandPalette({
     result.push(
       { key: "new:task", group: "新建", label: "新建任务", keys: "C", icon: <Plus size={15} />, run: closeRun(() => onComposer("single")) },
       { key: "new:duet", group: "新建", label: "新建讨论 · 给你答案", icon: <ChatsCircle size={15} />, run: closeRun(() => onComposer("duet")) },
-      { key: "new:note", group: "新建", label: "新建随手记", keys: "NI", icon: <NotePencil size={15} />, run: closeRun(() => { if (currentProject) onNote(currentProject.id, "__new__"); }) },
+      { key: "new:note", group: "新建", label: "新建随手记", keys: "NI", icon: <NotePencil size={15} />, run: closeRun(() => onNote(currentProject?.id ?? null, "__new__")) },
       { key: "new:group", group: "新建", label: "新建分组", icon: <Stack size={15} />, run: closeRun(onNewGroup) },
       { key: "new:project", group: "新建", label: "新建项目", icon: <FolderPlus size={15} />, run: closeRun(onNewProject) },
-      { key: "manage:notes", group: "管理", label: "随手记列表", keys: "NL", icon: <NotePencil size={15} />, run: closeRun(() => { if (currentProject) onNote(currentProject.id, null); }) },
+      { key: "manage:notes", group: "管理", label: "随手记列表", keys: "NL", icon: <NotePencil size={15} />, run: closeRun(() => onNote(currentProject?.id ?? null, null)) },
       { key: "manage:agents", group: "管理", label: "管理智能体执行器", icon: <GearSix size={15} />, run: closeRun(() => onSettings("executors")) },
       { key: "manage:settings", group: "管理", label: "项目设置", icon: <GearSix size={15} />, run: closeRun(() => onSettings("project")) },
       { key: "manage:groups", group: "管理", label: "分组管理", icon: <Stack size={15} />, run: closeRun(() => onSettings("groups")) },
