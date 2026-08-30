@@ -6,6 +6,7 @@ import { useCallback, useState } from "react";
 import type { AuthState } from "@ash/shared";
 import { ApiError } from "../lib/apiClient.ts";
 import { authApi } from "../lib/authApi.ts";
+import { AuthShell } from "./AuthShell.tsx";
 import { KeyReveal } from "./KeyReveal.tsx";
 import { MultiModeForm } from "./MultiModeForm.tsx";
 
@@ -36,7 +37,7 @@ export function SetupWizard({ state, onDone }: { state: AuthState; onDone: () =>
 
   if (step === "key") {
     return (
-      <div className="auth-shell">
+      <AuthShell>
         <div className="auth-card auth-card--wide">
           <KeyReveal
             value={issuedKey}
@@ -45,13 +46,13 @@ export function SetupWizard({ state, onDone }: { state: AuthState; onDone: () =>
             onConfirm={() => void onDone()}
           />
         </div>
-      </div>
+      </AuthShell>
     );
   }
 
   if (step === "multi-form") {
     return (
-      <div className="auth-shell">
+      <AuthShell>
         <div className="auth-card auth-card--wide">
           <h1>{resuming ? "把管理员补建出来" : "切到多人模式"}</h1>
           {resuming ? (
@@ -69,12 +70,12 @@ export function SetupWizard({ state, onDone }: { state: AuthState; onDone: () =>
             }}
           />
         </div>
-      </div>
+      </AuthShell>
     );
   }
 
   return (
-    <div className="auth-shell">
+    <AuthShell>
       <div className="auth-card auth-card--wide">
         <h1>这台 ash 给谁用？</h1>
         <p className="auth-note">选完就能开始。之后从自用切到多人还来得及，反过来不行。</p>
@@ -98,6 +99,6 @@ export function SetupWizard({ state, onDone }: { state: AuthState; onDone: () =>
 
         {error ? <p className="auth-error">{error}</p> : null}
       </div>
-    </div>
+    </AuthShell>
   );
 }

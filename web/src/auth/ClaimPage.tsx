@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { InviteInfo } from "@ash/shared";
 import { ApiError } from "../lib/apiClient.ts";
 import { authApi } from "../lib/authApi.ts";
+import { AuthShell } from "./AuthShell.tsx";
 import { KeyReveal } from "./KeyReveal.tsx";
 
 export function ClaimPage({ token, onDone }: { token: string; onDone: () => void }) {
@@ -43,7 +44,7 @@ export function ClaimPage({ token, onDone }: { token: string; onDone: () => void
 
   if (issuedKey) {
     return (
-      <div className="auth-shell">
+      <AuthShell>
         <div className="auth-card auth-card--wide">
           <KeyReveal
             value={issuedKey}
@@ -53,12 +54,12 @@ export function ClaimPage({ token, onDone }: { token: string; onDone: () => void
             onConfirm={finish}
           />
         </div>
-      </div>
+      </AuthShell>
     );
   }
 
   return (
-    <div className="auth-shell">
+    <AuthShell>
       <div className="auth-card auth-card--wide">
         <h1>领取你的 ash 账号</h1>
         {error ? <p className="auth-error">{error}</p> : null}
@@ -91,6 +92,6 @@ export function ClaimPage({ token, onDone }: { token: string; onDone: () => void
           <p className="auth-note">正在读取链接…</p>
         )}
       </div>
-    </div>
+    </AuthShell>
   );
 }

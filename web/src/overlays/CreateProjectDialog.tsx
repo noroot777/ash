@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { ProjectView } from "@ash/shared";
 import { repoNameFromUrl, repoUrlError } from "@ash/shared/repo-url";
+import { FolderOpen, FolderPlus, GitBranch } from "@phosphor-icons/react";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { DirectoryPickerButton, directoryName } from "../components/DirectoryPickerButton.tsx";
 import { hostSamplePath, joinHostPath, useHostInfo } from "../lib/useHostInfo.ts";
@@ -135,10 +136,11 @@ export function CreateProjectDialog({ projects, reason = null, onClose, onCreate
     }
   };
 
-  const activeHint = MODES.find((m) => m.key === mode)?.hint ?? "";
-
   return <ConfirmDialog
+    className="create-project-dialog"
     title="新建项目"
+    eyebrow="PROJECT SETUP"
+    icon={<FolderPlus size={21} weight="duotone" />}
     message={reason ? `${reason}项目目录会成为任务的默认运行位置。` : "项目目录会成为任务的默认运行位置。"}
     confirmLabel={mode === "clone" ? "克隆并创建" : willCreateDir ? "创建目录并创建项目" : "创建项目"}
     busy={busy}
@@ -156,11 +158,11 @@ export function CreateProjectDialog({ projects, reason = null, onClose, onCreate
           disabled={busy}
           onClick={() => { setMode(item.key); setError(null); }}
         >
-          {item.label}
+          <span aria-hidden="true">{item.key === "local" ? <FolderOpen size={19} weight="duotone" /> : <GitBranch size={19} weight="duotone" />}</span>
+          <span><b>{item.label}</b><small>{item.hint}</small></span>
         </button>
       ))}
     </div>
-    <p className="create-project-mode-hint">{activeHint}</p>
 
     <div className="quick-create-fields">
       {mode === "clone" && <>

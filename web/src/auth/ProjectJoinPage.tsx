@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { ProjectInviteInfo } from "@ash/shared";
 import { ApiError } from "../lib/apiClient.ts";
 import { authApi } from "../lib/authApi.ts";
+import { AuthShell } from "./AuthShell.tsx";
 
 export function ProjectJoinPage({ token, onDone }: { token: string; onDone: () => void }) {
   const [info, setInfo] = useState<ProjectInviteInfo | null>(null);
@@ -30,7 +31,7 @@ export function ProjectJoinPage({ token, onDone }: { token: string; onDone: () =
   }, [token, onDone]);
 
   return (
-    <div className="auth-shell">
+    <AuthShell>
       <div className="auth-card auth-card--wide">
         <h1>加入项目</h1>
         {error ? <p className="auth-error">{error}</p> : null}
@@ -61,6 +62,6 @@ export function ProjectJoinPage({ token, onDone }: { token: string; onDone: () =
           <p className="auth-note">正在读取链接…</p>
         )}
       </div>
-    </div>
+    </AuthShell>
   );
 }

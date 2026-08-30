@@ -1,0 +1,238 @@
+/* 全屏弹层统一到接力弹窗的圆角、景深和标题层级。 */
+.task-modal-scrim,
+.overlay-scrim,
+.duet-handoff-scrim,
+.markdown-report-scrim {
+  background: rgb(26 28 35 / 46%);
+  backdrop-filter: blur(8px) saturate(.82);
+  animation: dialog-scrim-in 150ms ease both;
+}
+
+.task-confirm-dialog:not(.handoff-dialog),
+.command-palette,
+.notes-panel,
+.groups-panel,
+.free-review-dialog,
+.composer-preset-dialog,
+.duet-handoff-modal,
+.markdown-report-dialog {
+  border-color: color-mix(in lch, var(--line2) 70%, transparent);
+  border-radius: 20px;
+  box-shadow: 0 28px 90px rgb(20 22 30 / 22%), 0 6px 22px rgb(20 22 30 / 10%);
+  animation: dialog-surface-in 210ms cubic-bezier(.2, .8, .2, 1) both;
+}
+
+.task-confirm-dialog:not(.handoff-dialog) {
+  width: min(520px, calc(100vw - 32px));
+  max-height: min(820px, calc(100vh - 32px));
+  overflow-y: auto;
+  padding: 22px;
+  background:
+    radial-gradient(circle at 96% 0, rgb(94 106 210 / 8%), transparent 25%),
+    var(--panel);
+}
+
+.task-confirm-dialog > .task-confirm-header {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 12px;
+}
+
+.task-confirm-dialog > .task-confirm-header > span {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border: 1px solid color-mix(in lch, var(--accent) 18%, var(--line));
+  border-radius: 14px;
+  background: color-mix(in lch, var(--accent) 10%, var(--panel));
+  color: var(--accent);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 72%);
+}
+
+.task-confirm-dialog > .task-confirm-header > span.is-danger {
+  border-color: color-mix(in lch, var(--red) 24%, var(--line));
+  background: color-mix(in lch, var(--red) 9%, var(--panel));
+  color: var(--red);
+}
+
+.task-confirm-dialog > .task-confirm-header > div { display: grid; min-width: 0; gap: 4px; }
+.task-confirm-dialog > .task-confirm-header small { color: var(--accent); font: 750 8.5px/1 var(--font-mono); letter-spacing: .13em; }
+.task-confirm-dialog > .task-confirm-header h2 { overflow: hidden; margin: 0; font-size: 20px; font-weight: 710; letter-spacing: -.035em; text-overflow: ellipsis; white-space: nowrap; }
+
+.task-confirm-dialog > .task-confirm-header > button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--faint);
+}
+
+.task-confirm-dialog > .task-confirm-header > button:hover:not(:disabled) { background: var(--overlay); color: var(--ink); }
+.task-confirm-dialog > .task-confirm-message { margin: 15px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.7; }
+
+.task-confirm-dialog:not(.handoff-dialog) > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+
+.task-confirm-dialog:not(.handoff-dialog) > footer button {
+  min-width: 72px;
+  height: 38px;
+  border-radius: 10px;
+  padding-inline: 15px;
+  font-size: 11.5px;
+  font-weight: 640;
+  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.task-confirm-dialog:not(.handoff-dialog) > footer button:hover:not(:disabled) { border-color: var(--line2); box-shadow: 0 7px 18px rgb(35 37 48 / 8%); transform: translateY(-1px); }
+.task-confirm-dialog:not(.handoff-dialog) > footer button.is-primary { box-shadow: 0 10px 23px rgb(94 106 210 / 20%); }
+.task-confirm-dialog:not(.handoff-dialog) > footer button.is-danger { box-shadow: 0 10px 23px rgb(217 61 76 / 18%); }
+
+.create-project-dialog { width: min(740px, calc(100vw - 32px)) !important; }
+
+.create-project-modes {
+  grid-auto-flow: initial;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  margin-top: 20px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.create-project-mode {
+  display: grid;
+  min-height: 76px;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: center;
+  gap: 11px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: color-mix(in lch, var(--raised) 68%, var(--panel));
+  padding: 13px;
+  text-align: left;
+  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.create-project-mode > span:first-child {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 11px;
+  background: var(--panel);
+  color: var(--muted);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.create-project-mode > span:last-child { display: grid; min-width: 0; gap: 3px; }
+.create-project-mode b { color: var(--ink); font-size: 12.5px; font-weight: 670; }
+.create-project-mode small { color: var(--faint); font-size: 9.5px; line-height: 1.45; }
+.create-project-mode:hover:not(:disabled) { border-color: color-mix(in lch, var(--accent) 35%, var(--line)); box-shadow: 0 8px 22px rgb(35 37 48 / 6%); transform: translateY(-1px); }
+
+.create-project-mode.is-on {
+  border-color: color-mix(in lch, var(--accent) 55%, var(--line));
+  background: color-mix(in lch, var(--accent) 7%, var(--panel));
+  box-shadow: 0 10px 28px rgb(94 106 210 / 10%), inset 0 0 0 1px rgb(255 255 255 / 60%);
+}
+
+.create-project-mode.is-on > span:first-child { background: var(--accent); color: white; box-shadow: 0 7px 18px rgb(94 106 210 / 22%); }
+
+.quick-create-fields { gap: 13px; margin-top: 18px; }
+.quick-create-fields label { gap: 7px; }
+.quick-create-fields label > span { color: var(--muted); font-size: 10.5px; font-weight: 620; }
+.quick-create-fields input,
+.quick-create-fields select { height: 39px; border-radius: 10px; background: color-mix(in lch, var(--canvas) 72%, var(--panel)); padding-inline: 11px; box-shadow: inset 0 1px 0 rgb(255 255 255 / 72%); }
+.quick-create-fields input:focus,
+.quick-create-fields select:focus { border-color: color-mix(in lch, var(--accent) 72%, var(--line)); box-shadow: 0 0 0 3px rgb(94 106 210 / 9%); }
+.quick-create-fields .create-project-health { border-radius: 11px; padding: 10px 12px; }
+.create-project-target { border: 1px dashed var(--line2); border-radius: 10px; background: var(--raised); padding: 8px 10px; }
+.create-project-note,
+.create-project-error { border-radius: 11px; padding: 10px 12px; }
+
+.command-palette { border-radius: 18px; }
+.palette-input { height: 60px; padding-inline: 19px; }
+.palette-results { padding: 7px; }
+.palette-row { min-height: 45px; border-radius: 10px; }
+.palette-row:hover,
+.palette-row.is-active { background: color-mix(in lch, var(--accent) 7%, var(--raised)); }
+.palette-footer { height: 36px; background: color-mix(in lch, var(--raised) 56%, var(--panel)); }
+
+.notes-panel,
+.groups-panel { border-radius: 22px; }
+.notes-panel > header,
+.groups-panel > header { min-height: 56px; padding-inline: 18px 14px; }
+.notes-panel > header b,
+.groups-panel-heading b { font-size: 14px; letter-spacing: -.015em; }
+.groups-panel-icon { width: 34px; height: 34px; flex-basis: 34px; border-radius: 11px; }
+.groups-panel-body { padding: 22px; }
+
+.free-review-dialog { border-radius: 22px; }
+.free-review-dialog > header { min-height: 76px; grid-template-columns: 42px minmax(0, 1fr) 32px; padding: 13px 18px; }
+.free-review-dialog > header > span { width: 42px; height: 42px; border-radius: 13px; }
+.free-review-dialog h2 { font-size: 18px; letter-spacing: -.03em; }
+.free-review-dialog > header p { margin-top: 4px; font-size: 10.5px; }
+.free-review-dialog > footer { min-height: 58px; align-items: center; padding: 11px 18px; }
+.free-review-dialog > footer button { height: 36px; border-radius: 10px; padding-inline: 15px; font-weight: 630; }
+
+.composer-preset-dialog,
+.duet-handoff-modal { border-radius: 20px; padding: 21px; }
+.composer-preset-dialog h2,
+.duet-handoff-modal h2 { font-size: 18px; letter-spacing: -.03em; }
+.composer-preset-dialog > header > span,
+.duet-handoff-modal > header > span { width: 42px; height: 42px; border-radius: 13px; }
+.composer-preset-dialog > footer button,
+.duet-handoff-modal footer button { height: 36px; border-radius: 10px; padding-inline: 14px; font-weight: 630; }
+.duet-handoff-modal { width: min(600px, calc(100vw - 32px)); }
+
+.markdown-report-dialog { border-radius: 22px; }
+.markdown-report-dialog > header { min-height: 68px; padding: 13px 16px 13px 20px; }
+.markdown-report-dialog > header span { color: var(--accent); font-family: var(--font-mono); letter-spacing: .1em; }
+.markdown-report-dialog h2 { margin-top: 5px; font-size: 16px; letter-spacing: -.02em; }
+.markdown-report-body { padding: 22px 24px 28px; }
+
+.image-preview-lightbox { background: rgb(10 11 15 / 90%); backdrop-filter: blur(12px) saturate(.72); }
+.image-preview-lightbox > img { border-radius: 14px; box-shadow: 0 30px 110px rgb(0 0 0 / 60%); }
+
+@keyframes dialog-scrim-in { from { opacity: 0; } }
+@keyframes dialog-surface-in { from { opacity: 0; transform: translateY(10px) scale(.985); } }
+
+@media (max-width: 620px) {
+  .task-modal-scrim { padding: 10px; }
+  .task-confirm-dialog:not(.handoff-dialog) { width: min(100%, calc(100vw - 20px)); max-height: calc(100dvh - 20px); border-radius: 18px; padding: 18px; }
+  .task-confirm-dialog > .task-confirm-header { grid-template-columns: 40px minmax(0, 1fr) 32px; gap: 10px; }
+  .task-confirm-dialog > .task-confirm-header > span { width: 40px; height: 40px; border-radius: 12px; }
+  .task-confirm-dialog > .task-confirm-header h2 { font-size: 18px; }
+  .create-project-modes,
+  .create-project-row,
+  .quick-create-fields.is-group { grid-template-columns: 1fr; }
+  .create-project-mode { min-height: 68px; }
+  .notes-panel,
+  .groups-panel { width: calc(100vw - 16px); height: calc(100dvh - 16px); max-height: none; border-radius: 18px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-modal-scrim,
+  .overlay-scrim,
+  .duet-handoff-scrim,
+  .markdown-report-scrim,
+  .task-confirm-dialog:not(.handoff-dialog),
+  .command-palette,
+  .notes-panel,
+  .groups-panel,
+  .free-review-dialog,
+  .composer-preset-dialog,
+  .duet-handoff-modal,
+  .markdown-report-dialog { animation: none; }
+}

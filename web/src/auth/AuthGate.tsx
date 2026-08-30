@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { AuthState } from "@ash/shared";
 import { authApi } from "../lib/authApi.ts";
 import { ApiError } from "../lib/apiClient.ts";
+import { AuthShell } from "./AuthShell.tsx";
 import { ClaimPage } from "./ClaimPage.tsx";
 import { LoginPage } from "./LoginPage.tsx";
 import { ProjectJoinPage } from "./ProjectJoinPage.tsx";
@@ -53,7 +54,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   if (!state) {
     return (
-      <div className="auth-shell">
+      <AuthShell>
         <div className="auth-card">
           {error ? (
             <>
@@ -67,7 +68,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
             <p className="auth-note">正在确认身份…</p>
           )}
         </div>
-      </div>
+      </AuthShell>
     );
   }
 

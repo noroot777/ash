@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ApiError } from "../lib/apiClient.ts";
 import { authApi } from "../lib/authApi.ts";
+import { AuthShell } from "./AuthShell.tsx";
 
 export function LoginPage({
   pendingJoin,
@@ -38,7 +39,7 @@ export function LoginPage({
   }, [key, onDone]);
 
   return (
-    <div className="auth-shell">
+    <AuthShell>
       <form
         className="auth-card"
         onSubmit={(e) => {
@@ -87,6 +88,6 @@ export function LoginPage({
           </div>
         ) : null}
       </form>
-    </div>
+    </AuthShell>
   );
 }

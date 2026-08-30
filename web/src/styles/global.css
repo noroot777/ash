@@ -47,6 +47,8 @@
 @import "./workflow-composer.css";
 @import "./free-workflow.css";
 @import "./parity.css";
+@import "./recent-pages.css";
+@import "./dialogs.css";
 
 @theme {
   --font-sans: "Inter Variable", "Inter", "SF Pro Display", -apple-system,
