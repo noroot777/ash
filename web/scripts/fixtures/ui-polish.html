@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>UI polish regression</title>
+    <link rel="stylesheet" href="/src/styles/global.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      const probe = new URLSearchParams(location.search).get("probe");
+      const root = document.getElementById("root");
+      if (probe === "settings") {
+        root.innerHTML = '<div class="settings-shell"><aside></aside><main></main></div>';
+      } else if (probe === "auth") {
+        root.innerHTML = '<div class="auth-shell"><div class="auth-stage"></div></div>';
+      } else if (probe === "danger") {
+        root.innerHTML = '<section class="task-confirm-dialog"><header class="task-confirm-header"><span class="is-danger">!</span><div><small>HIGH IMPACT ACTION</small><h2>删除</h2></div><button>×</button></header></section>';
+      }
+    </script>
+  </body>
+</html>

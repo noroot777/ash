@@ -52,8 +52,8 @@
 }
 
 .task-confirm-dialog > .task-confirm-header > span.is-danger {
-  border-color: color-mix(in lch, var(--red) 24%, var(--line));
-  background: color-mix(in lch, var(--red) 9%, var(--panel));
+  border-color: color-mix(in srgb, var(--red) 24%, var(--line));
+  background: color-mix(in srgb, var(--red) 9%, var(--panel));
   color: var(--red);
 }
 
@@ -236,4 +236,8 @@
   .composer-preset-dialog,
   .duet-handoff-modal,
   .markdown-report-dialog { animation: none; }
+  .create-project-mode,
+  .task-confirm-dialog:not(.handoff-dialog) > footer button { transition: none; }
+  .create-project-mode:hover:not(:disabled),
+  .task-confirm-dialog:not(.handoff-dialog) > footer button:hover:not(:disabled) { transform: none; }
 }
