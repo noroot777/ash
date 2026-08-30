@@ -14,7 +14,7 @@ import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { Dropdown } from "../components/Dropdown.tsx";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
-import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
+import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { attachmentView } from "../task-detail/utils.ts";
 import { filterNotes, NOTE_CONVERSION_FILTERS, type NoteConversionFilter } from "./notesFilter.ts";
@@ -296,6 +296,34 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
     uploads.clear();
   }, [updateDraft, uploads.attachments, uploads.clear]);
 
+  // 传上来的附件是由上面那个 effect 折进**当前**草稿的，所以「换一条 / 关掉面板 / 转任务」
+  // 都不能在上传落地前发生：面板已经关了就没人接住结果（附件白传），中途换了一条就会
+  // 落到别人头上。这些动作统一排到落地之后再跑；不想等的用户可以点在途卡片上的取消。
+  const deferredRef = useRef<(() => void | Promise<void>) | null>(null);
+  const [deferred, setDeferred] = useState(false);
+  // 「落地」= 没有在途的，且上传好的那批已经被折进草稿（折完 uploads.attachments 会清空）。
+  const uploadsSettled = !uploads.uploading && !uploads.attachments.length;
+  const afterUploads = useCallback((action: () => void | Promise<void>) => {
+    if (uploadsSettled) {
+      void action();
+      return;
+    }
+    deferredRef.current = action;
+    setDeferred(true);
+  }, [uploadsSettled]);
+  useEffect(() => {
+    if (!deferred || !uploadsSettled) return;
+    const action = deferredRef.current;
+    deferredRef.current = null;
+    setDeferred(false);
+    // 传失败就别接着走了：这一走用户就看不到那条错误了，留在原地让他自己决定。
+    if (uploads.error) {
+      notify("附件上传失败，先处理一下再离开");
+      return;
+    }
+    void action?.();
+  }, [deferred, notify, uploads.error, uploadsSettled]);
+
   useEffect(() => () => { void flushDraft(); }, [flushDraft]);
 
   const active = rows.find((note) => note.id === activeId) ?? null;
@@ -320,14 +348,14 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
         : saveState === "pending" ? "立即保存"
           : "已保存";
 
-  const close = useCallback(async () => {
-    if (await flushDraft()) onClose();
-  }, [flushDraft, onClose]);
+  const close = useCallback(() => {
+    afterUploads(async () => { if (await flushDraft()) onClose(); });
+  }, [afterUploads, flushDraft, onClose]);
 
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if (confirmDelete) return;
-      if (event.key === "Escape") void close();
+      if (event.key === "Escape") close();
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
         event.preventDefault();
         void flushDraft();
@@ -337,7 +365,10 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
     return () => window.removeEventListener("keydown", key);
   }, [close, confirmDelete, flushDraft]);
 
-  const select = async (note: Note) => {
+  const openTask = (taskId: string) => {
+    afterUploads(async () => { if (await flushDraft()) onTask(taskId); });
+  };
+  const select = (note: Note) => afterUploads(async () => {
     if (note.id === draftRef.current.id || !await flushDraft()) return;
     const target = rowsRef.current.find((item) => item.id === note.id);
     if (!target) return;
@@ -349,8 +380,8 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
     setSaveState("saved");
     setEditing(false);
     uploads.clear();
-  };
-  const create = async () => {
+  });
+  const create = () => afterUploads(async () => {
     if (!await flushDraft()) return;
     const next = emptyDraft();
     savedDraftRef.current = next;
@@ -362,7 +393,7 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
     setQuery("");
     setConversionFilter("all");
     uploads.clear();
-  };
+  });
   const remove = async () => {
     const targetId = draftRef.current.id;
     if (!targetId) return;
@@ -400,7 +431,7 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
       return next;
     });
   };
-  const convert = async () => {
+  const convert = () => afterUploads(async () => {
     if (deleting || !await flushDraft()) return;
     const selectedNotes = rowsRef.current.filter((note) => picked.has(note.id));
     const current = rowsRef.current.find((note) => note.id === draftRef.current.id) ?? null;
@@ -411,9 +442,9 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
       attachments: uniquePaths(notes.flatMap((note) => note.attachments)),
       noteIds: notes.map((note) => note.id),
     });
-  };
+  });
   return (
-    <div className="overlay-scrim notes-scrim" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) void close(); }}>
+    <div className="overlay-scrim notes-scrim" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
       <section
         ref={movable.panelRef}
         className={`notes-panel${movable.isFullscreen ? " is-fullscreen" : ""}`}
@@ -429,16 +460,16 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
             <button type="button" aria-pressed={movable.isFullscreen} onClick={movable.toggleFullscreen} aria-label={movable.isFullscreen ? "还原窗口" : "全屏显示"} title={movable.isFullscreen ? "还原窗口" : "全屏显示"}>
               {movable.isFullscreen ? <CornersIn size={17} /> : <CornersOut size={17} />}
             </button>
-            <button type="button" onClick={() => void close()} aria-label="关闭"><X size={17} /></button>
+            <button type="button" onClick={() => close()} aria-label="关闭"><X size={17} /></button>
           </div>
         </header>
         <div className="notes-body">
-          <aside className="notes-list"><div className="notes-list-tools"><label><MagnifyingGlass size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索随手记…" /></label><Dropdown className="notes-status-filter" panelClassName="notes-status-filter-menu" value={conversionFilter} options={NOTE_CONVERSION_FILTERS} onChange={(value) => setConversionFilter(value as NoteConversionFilter)} label="按转任务状态筛选随手记" filterable={false} /><button type="button" onClick={() => void create()} aria-label="新建随手记"><Plus size={15} /></button></div><div className="notes-scroll" role="list" aria-label="随手记列表">
+          <aside className="notes-list"><div className="notes-list-tools"><label><MagnifyingGlass size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索随手记…" /></label><Dropdown className="notes-status-filter" panelClassName="notes-status-filter-menu" value={conversionFilter} options={NOTE_CONVERSION_FILTERS} onChange={(value) => setConversionFilter(value as NoteConversionFilter)} label="按转任务状态筛选随手记" filterable={false} /><button type="button" onClick={() => create()} aria-label="新建随手记"><Plus size={15} /></button></div><div className="notes-scroll" role="list" aria-label="随手记列表">
             {!loading && newDraft && <div className="note-row ui-selectable is-selected" role="listitem"><span className="note-pick-placeholder" /><button className="note-row-main" type="button" onClick={() => setEditing(true)}><b>{titleOf(draft.body)}</b><small>{draft.body.trim() ? saveStatus : "尚未保存"}</small></button></div>}
             {filtered.map((note) => <div className={`note-row ui-selectable${note.taskLinks.length ? " is-converted" : ""}${note.id === draft.id ? " is-selected" : ""}`} key={note.id} role="listitem">
               <button className="note-pick" type="button" role="checkbox" aria-checked={picked.has(note.id)} aria-label={`选择 ${titleOf(note.body)}`} onClick={() => togglePicked(note.id)}><span className={`ui-checkbox${picked.has(note.id) ? " is-checked" : ""}`} aria-hidden="true" /></button>
-              <button className="note-row-main" type="button" onClick={() => void select(note)}><b>{titleOf(note.id === draft.id ? draft.body : note.body)}</b><small>{noteTime(note.updatedAt)}</small></button>
-              {note.taskLinks.length > 0 && <button className="note-task-badge" type="button" title="打开最近关联任务" onClick={async () => { if (await flushDraft()) onTask(note.taskLinks[0].taskId); }}><CheckCircle size={12} weight="duotone" aria-hidden="true" /><span>已转 {note.taskLinks.length} 个</span><ArrowSquareOut className="note-task-arrow" size={11} aria-hidden="true" /></button>}
+              <button className="note-row-main" type="button" onClick={() => select(note)}><b>{titleOf(note.id === draft.id ? draft.body : note.body)}</b><small>{noteTime(note.updatedAt)}</small></button>
+              {note.taskLinks.length > 0 && <button className="note-task-badge" type="button" title="打开最近关联任务" onClick={() => openTask(note.taskLinks[0].taskId)}><CheckCircle size={12} weight="duotone" aria-hidden="true" /><span>已转 {note.taskLinks.length} 个</span><ArrowSquareOut className="note-task-arrow" size={11} aria-hidden="true" /></button>}
             </div>)}
             {loading && <p>读取中…</p>}{!loading && !filtered.length && !newDraft && <p>{emptyListText}</p>}
           </div></aside>
@@ -450,7 +481,7 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
                   <b>已转任务（{active.taskLinks.length}）</b>
                   <div>
                     {active.taskLinks.map((link) => (
-                      <button type="button" key={link.taskId} onClick={async () => { if (await flushDraft()) onTask(link.taskId); }}>
+                      <button type="button" key={link.taskId} onClick={() => openTask(link.taskId)}>
                         <CheckCircle size={12} weight="duotone" aria-hidden="true" />
                         <span>{link.title}</span>
                         {link.archived && <small>已归档</small>}
@@ -486,16 +517,25 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
               <div className="note-attachments">
                 {draft.attachments.map((path) => { const view = attachmentView(path); return <div key={path}>{view.image && view.url ? <PreviewableImage src={view.url} alt={view.name} /> : <span><File size={16} />{view.name}</span>}<button type="button" onClick={() => updateDraft({ ...draftRef.current, attachments: draftRef.current.attachments.filter((item) => item !== path) })} aria-label={`移除 ${view.name}`}><X size={11} /></button></div>; })}
               </div>
-              <UploadAttachmentList attachments={uploads.attachments} error={uploads.error} onRemove={uploads.remove} />
+              <UploadAttachmentList
+                attachments={uploads.attachments}
+                pending={uploads.pending}
+                error={uploads.error}
+                onRemove={uploads.remove}
+                onCancel={uploads.cancel}
+              />
             </ImagePreviewGroup>
           </main>
         </div>
         <footer>
-          <span>{picked.size ? `已选择 ${picked.size} 条 · 将按列表顺序合并` : `${saveStatus} · 正文失焦后显示 Markdown`}</span>
+          <span>{picked.size ? `已选择 ${picked.size} 条 · 将按列表顺序合并`
+            : deferred ? `${uploadingLabel(uploads.pending)} · 传完就保存并继续（不想等就取消上传）`
+              : uploads.uploading ? `${uploadingLabel(uploads.pending)} · 传完自动附到这条随手记`
+                : `${saveStatus} · 正文失焦后显示 Markdown`}</span>
           <div className="notes-footer-actions">
             <AttachmentPicker addFiles={uploads.addFiles} disabled={deleting} />
-            {active && <Button variant="danger" disabled={deleting} onClick={async () => { if (await flushDraft()) setConfirmDelete(true); }}><Trash size={13} />删除</Button>}
-            <Button variant={picked.size ? "primary" : "secondary"} disabled={deleting || (!picked.size && !draft.body.trim())} onClick={() => void convert()}><NotePencil size={13} />{picked.size ? `创建任务（${picked.size}）` : "转为新任务"}</Button>
+            {active && <Button variant="danger" disabled={deleting} onClick={() => afterUploads(async () => { if (await flushDraft()) setConfirmDelete(true); })}><Trash size={13} />删除</Button>}
+            <Button variant={picked.size ? "primary" : "secondary"} disabled={deleting || (!picked.size && !draft.body.trim())} onClick={() => convert()}><NotePencil size={13} />{picked.size ? `创建任务（${picked.size}）` : "转为新任务"}</Button>
             <Button variant={picked.size ? "secondary" : "primary"} disabled={!dirty || !draft.body.trim() || deleting || saveState === "saving"} onClick={() => { void flushDraft().then((saved) => { if (saved) notify("随手记已保存"); }); }}>{saveButtonLabel}</Button>
           </div>
         </footer>

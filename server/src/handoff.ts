@@ -229,7 +229,7 @@ export async function preflightHandoff(
     : null;
   const rows = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
   const withCli = rows.filter((s) => s.cliSessionId);
-  const { found, notes } = await collectSessionFiles(rows, expandHome(project.repoPath), true);
+  const { found, notes } = await collectSessionFiles(rows, expandHome(project.repoPath), true, task.ownerUserId);
   if (returnContext && !taskScopedReturn) {
     notes.push("原机没有可用的任务存档，已切换为普通接力；需要原机批准当前机器后才能移回");
   }
@@ -408,7 +408,9 @@ export async function exportHandoff(
         notes.push("对端项目不是 git 仓库,代码不随任务迁移");
       }
 
-      const { files: sessionFiles, found, notes: sessNotes } = await collectSessionFiles(rows, sourceWorkspace, false);
+      const { files: sessionFiles, found, notes: sessNotes } = await collectSessionFiles(
+        rows, sourceWorkspace, false, task.ownerUserId,
+      );
       notes.push(...sessNotes);
       const artifacts = await collectRunArtifacts(taskId, notes);
       // 审查历史随任务走:接过去的任务除了横幅标记外应该和本机原生任务没有区别。

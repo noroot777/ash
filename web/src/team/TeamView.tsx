@@ -20,7 +20,7 @@ import { useSkills } from "../lib/useSkills.ts";
 import { useSlashCompletion } from "../lib/useSlashCompletion.ts";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
-import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
+import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
 import { QuestionCard } from "../task-detail/QuestionCard.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
@@ -203,7 +203,13 @@ function TeamReplyBox({
         cancelingIds={scheduled.cancelingIds}
         onWithdraw={(message) => void withdraw(message)}
       />
-      <UploadAttachmentList attachments={uploads.attachments} error={uploads.error} onRemove={uploads.remove} />
+      <UploadAttachmentList
+        attachments={uploads.attachments}
+        pending={uploads.pending}
+        error={uploads.error}
+        onRemove={uploads.remove}
+        onCancel={uploads.cancel}
+      />
       {error && <p>{error}</p>}
       <div className="team-reply-box">
         <textarea
@@ -235,7 +241,7 @@ function TeamReplyBox({
           >
             <Clock size={14} />
           </button>
-          <span>调度台 · ⌘↵ 发送</span>
+          <span>{uploads.uploading ? uploadingLabel(uploads.pending) : "调度台 · ⌘↵ 发送"}</span>
           <button type="button" disabled={disabled || sending || uploads.uploading || (!value.trim() && !uploads.attachments.length)} onClick={() => void send()} aria-label="发送给调度者">
             {sending ? <SpinnerGap size={14} className="is-spinning" /> : <PaperPlaneTilt size={14} weight="fill" />}
           </button>

@@ -20,7 +20,7 @@ import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
 import { api, type ReplyTaskResult } from "../lib/api.ts";
 import { useProviders } from "../lib/modelCatalog.ts";
 import { AgentModelPicker } from "./AgentModelPicker.tsx";
-import { AttachmentPicker, UploadAttachmentList, useAttachments } from "./Attachments.tsx";
+import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "./Attachments.tsx";
 import { SlashMenu } from "../components/SlashMenu.tsx";
 import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
@@ -440,7 +440,13 @@ export function ReplyBox({
         onSteer={(messageId) => void scheduled.steer(messageId)}
         onWithdraw={(message) => void withdraw(message)}
       />
-      <UploadAttachmentList attachments={uploads.attachments} error={uploads.error} onRemove={uploads.remove} />
+      <UploadAttachmentList
+        attachments={uploads.attachments}
+        pending={uploads.pending}
+        error={uploads.error}
+        onRemove={uploads.remove}
+        onCancel={uploads.cancel}
+      />
       {sendError && <p className="task-reply-error">{sendError}</p>}
       {topRail}
       <div className="task-reply-box">
@@ -568,7 +574,7 @@ export function ReplyBox({
             </button>
           )}
           <span>
-            {uploads.uploading ? "上传中…"
+            {uploads.uploading ? uploadingLabel(uploads.pending)
               : selectedIsSkill ? "回车补全"
                 : commandActive ? "回车配置"
                 : queueing ? (target ? "排队：跑完按上面这套发出" : "⌘↵ 排队，跑完自动发出")

@@ -78,10 +78,12 @@ interface Ctx {
 }
 
 function applyTurn(ctx: Ctx, sp: "A" | "B", t: Turn) {
+  // rowId 也要跟着走:这一轮可能**另开了一条会话行**(换人接手时 runTurn 不会把旧行
+  // 改写成新人的)。不更新的话下一轮又拿着旧行去比,每一轮都新开一条。
   if (sp === "A") {
-    ctx.A.cliId = t.cliId; ctx.lastA = t.text; ctx.raisedA = t.raised; ctx.agreesA = t.agrees; ctx.conclusionA = t.conclusion;
+    ctx.A.rowId = t.rowId; ctx.A.cliId = t.cliId; ctx.lastA = t.text; ctx.raisedA = t.raised; ctx.agreesA = t.agrees; ctx.conclusionA = t.conclusion;
   } else {
-    ctx.B.cliId = t.cliId; ctx.lastB = t.text; ctx.raisedB = t.raised; ctx.agreesB = t.agrees; ctx.conclusionB = t.conclusion;
+    ctx.B.rowId = t.rowId; ctx.B.cliId = t.cliId; ctx.lastB = t.text; ctx.raisedB = t.raised; ctx.agreesB = t.agrees; ctx.conclusionB = t.conclusion;
   }
 }
 

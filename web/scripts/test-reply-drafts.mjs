@@ -82,13 +82,16 @@ try {
   assert.equal(await input.inputValue(), "任务 A 的未发送内容", "切回任务后应恢复正文");
   const sendButton = page.getByRole("button", { name: "发送回复" });
   assert.equal(await sendButton.isDisabled(), true, "当前任务仍有图片上传时必须禁止发送");
-  assert.equal(await page.getByText("a-delayed.png", { exact: true }).count(), 0, "上传完成前不应提前显示图片");
+  // 在途期间界面不是空白：卡片先占位说明「在传、传了多少」，正式缩略图要等传完才出现。
+  assert.equal(await page.locator(".task-upload-chip.is-uploading").count(), 1, "上传期间必须有在途卡片顶着");
+  assert.equal(await page.locator(".task-upload-chip img").count(), 0, "上传完成前不应提前显示缩略图");
   await input.press("Control+Enter");
   assert.equal(await input.inputValue(), "任务 A 的未发送内容", "上传中用快捷键也不能提前发送正文");
 
   releaseFirstUpload();
   await firstUploadFinished;
-  await page.getByText("a-delayed.png", { exact: true }).waitFor();
+  // 名字在粘上去那一刻就有了（在途卡片），所以「传完了没」要看正式缩略图。
+  await page.locator(".task-upload-chip img").waitFor();
   assert.equal(await sendButton.isEnabled(), true, "当前任务图片上传完成后才能恢复发送");
   assert.equal(await page.getByText("a-delayed.png", { exact: true }).count(), 1, "切回任务后应恢复延迟完成的图片");
   assert.equal(await page.getByText("task-b-image.png", { exact: true }).count(), 0, "任务 A 不能混入任务 B 的图片");

@@ -24,7 +24,7 @@ const fail = (m: string) => { console.log("   ✕ " + m); bad++; };
 const ok = (m: string) => console.log("   ✓ " + m);
 
 /** 跑一段假 CLI stdout,收集 parseClaudeStream 吐出的事件。 */
-async function collect(lines: unknown[], resident?: { interruptPending: boolean }) {
+async function collect(lines: unknown[], resident?: { interruptPending: boolean; failPending: () => void }) {
   const script = join(dir, `stub-${Math.random().toString(36).slice(2, 8)}.mjs`);
   writeFileSync(
     script,
@@ -92,7 +92,9 @@ console.log("2) 真模型的正文仍然只走 delta,不因为这次改动重复
 
 console.log("3) 用户主动打断仍然不算故障");
 {
-  const resident = { interruptPending: true };
+  // 假常驻桥要带上 failPending:进程退出时解析器会调它(claude.ts 的 close/error 分支),
+  // 只塞 interruptPending 的话整个文件会在这里 TypeError 掉,后面几节根本跑不到。
+  const resident = { interruptPending: true, failPending: () => {} };
   const events = await collect(
     [
       { type: "system", session_id: "sess-3" },
@@ -166,6 +168,30 @@ console.log("6) root 下被拒绝跳过权限确认要说清成因和出路");
   else fail(`没有翻成可操作提示:${JSON.stringify(message)}`);
   if (!message.includes("for security reasons")) ok("不再透传生硬的 CLI 原始错误");
   else fail(`仍在透传原始错误:${JSON.stringify(message)}`);
+}
+
+// 起因(2026-08-29):任务接力到对端后 `--resume` 的会话在对端 CLI 的配置目录里不存在,
+// CLI 一行 `{"subtype":"error_during_execution", …, "errors":["No conversation found with
+// session ID: …"]}` 就退了 —— `result` 是空的,原因只在 `errors[]` 里。当时解析器只读
+// `result`,于是时间线上只剩一句 `result: error_during_execution`:用户看不出发生了什么,
+// `session-lost.ts` 那条「no conversation found」的识别也永远匹配不上。
+console.log("7) CLI 自身失败时,原因在 errors[] 里,不能只报一句 subtype");
+{
+  const events = await collect([
+    {
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      session_id: "sess-7",
+      errors: ["No conversation found with session ID: edb416ee-d4bc-46c2-9bda-f05fbcc84f87"],
+    },
+  ]);
+  const message = events.find((e) => e.kind === "error")?.message ?? "";
+  if (message.includes("No conversation found with session ID")) ok(`errors[] 的原因抬到了 error 上:${message}`);
+  else fail(`原因丢了,只剩:${JSON.stringify(message)}`);
+  const { isSessionLost } = await import("../src/executors/session-lost.js");
+  if (isSessionLost(message)) ok("这条消息能被 session-lost 认出来(失效的会话 id 才清得掉)");
+  else fail("session-lost 认不出这条消息");
 }
 
 console.log(bad ? `\n✗ ${bad} 项未通过` : "\n✓ 全部通过");

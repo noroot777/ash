@@ -5,11 +5,10 @@
 // 这一层的共同立场是**不信任对端**:manifest 是网上来的字节,每个字段先验形状再用;
 // ref 名、相对路径、解码后的体积各有一道闸,任何一条不过就跳过并留注记,而不是把它
 // 写到本机文件系统上某个算出来的位置。
-import { homedir } from "node:os";
 import { mkdirSync, rmSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { claudeProjectSlug } from "./handoff-collect.js";
+import { claudeProjectDir } from "./handoff-collect.js";
 import {
   HandoffError, MAX_FILE_BYTES, MB, safeRel,
   type HandoffManifest, type HandoffFilePayload, type HandoffMessagePayload,
@@ -213,10 +212,17 @@ export async function importGitBundle(
   }
 }
 
+/** 会话文件该落进谁的 CLI 配置目录:`auth/run-env.ts` 的 cliConfigDirForOwner 算出来的那两个。 */
+export type CliConfigDirs = { claude: string | null; codex: string | null };
+
 /**
  * 把 manifest 里的文件落到本机对应位置,返回**真正写盘成功**的会话文件名(basename)集合。
  * cliSessionId 只认这个集合——manifest 里声称带了文件、但被跳过/写失败的会话,一律按
  * 未迁移处理,否则续跑时 CLI 按 id 找不到历史就成了假恢复。
+ *
+ * `cliDirs` 不是可选项:多用户模式下 CLI 起跑带着 `CLAUDE_CONFIG_DIR`/`CODEX_HOME`,
+ * 写进宿主机 `~/.claude` 就是写进一个 CLI 永远不看的地方——盘上有、`--resume` 找不到,
+ * 正是「假恢复」的另一种形态。
  */
 export async function writePayloadFiles(
   files: HandoffFilePayload[],
@@ -224,8 +230,9 @@ export async function writePayloadFiles(
   remoteCwd: string,
   rewrites: UploadRewrites,
   notes: string[],
+  cliDirs: CliConfigDirs,
 ): Promise<Set<string>> {
-  const claudeDir = join(homedir(), ".claude", "projects", claudeProjectSlug(remoteCwd));
+  const claudeDir = claudeProjectDir(remoteCwd, cliDirs.claude);
   const arrived = new Set<string>();
   for (const f of files) {
     // 协议约定 rel 用 `/` 分隔,但老版本 Windows 源机导出的是 `\`——两种都按段拆开重组,
@@ -239,7 +246,7 @@ export async function writePayloadFiles(
       dest = join(claudeDir, f.rel);
     } else if (f.kind === "codex-rollout") {
       if (!safeRel(f.rel)) { notes.push(`codex rollout 路径非法,跳过:${f.rel}`); continue; }
-      dest = join(codexHome(), "sessions", ...segs);
+      dest = join(codexHome(cliDirs.codex), "sessions", ...segs);
     } else {
       if (!safeRel(f.rel)) { notes.push(`产物路径非法,跳过:${f.rel}`); continue; }
       dest = join(RUNS_DIR, taskId, ...segs);
