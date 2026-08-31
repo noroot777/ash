@@ -23,7 +23,6 @@ import { ScheduleControl } from "../components/ScheduleControl.tsx";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api } from "../lib/api.ts";
-import { isExecutionChainLive } from "../lib/taskAttention.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
@@ -62,14 +61,11 @@ function TurnBubble({
   previousRound,
   session,
   fallback,
-  taskLive,
 }: {
   turn: DuetTurn;
   previousRound?: number;
   session?: Session;
   fallback: string;
-  /** 整条执行链路还没停：为真时执行过程块不自动收起（见 AgentTurnBody 的同名 prop）。 */
-  taskLive: boolean;
 }) {
   const newRound = turn.round !== previousRound;
   if (turn.speaker === "user") {
@@ -101,7 +97,7 @@ function TurnBubble({
           {turn.raised && <em>✋ 可收敛</em>}
           {!turn.done && <TypingDots />}
         </header>
-        <ExecutionDetails events={turn.events} running={!turn.done} taskLive={taskLive} />
+        <ExecutionDetails events={turn.events} running={!turn.done} />
         {!turn.done && !turn.text && !turn.events.length && <p className="duet-thinking">{side === "synthesis" ? "正在把讨论成果整理成共同方案…" : "正在组织本轮观点…"}</p>}
         {turn.text && <MarkdownBody text={turn.text} />}
         {turn.notice && <p className="duet-turn-notice">{turn.notice}</p>}
@@ -138,8 +134,6 @@ export function DuetView({
   notify: (message: string) => void;
 }) {
   const config = normalizeDuetConfig(task.duet);
-  // 执行过程块什么时候才自动收起：口径跟普通任务、团队共用一份（taskAttention）。
-  const taskLive = isExecutionChainLive(task);
   const topic = parseAttachmentText(task.body || config.topic);
   const duet = useDuet(task.id, task.status);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -374,7 +368,6 @@ export function DuetView({
                 previousRound={turns[index - 1]?.round}
                 session={turn.speaker === "A" ? sessionsByRole.voiceA : turn.speaker === "B" ? sessionsByRole.voiceB : undefined}
                 fallback={turn.speaker === "B" ? config.voiceB : config.voiceA}
-                taskLive={taskLive}
               />
             ))}
             {activityPhase === "replying" && turns.length > 0 && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} queuePosition={task.queuePosition} />}
