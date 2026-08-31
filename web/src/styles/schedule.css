@@ -105,10 +105,10 @@
 }
 
 .duet-schedule-control {
-  margin-top: 9px;
+  margin-top: 0;
 }
 
-.duet-config-card .schedule-control small {
+.duet-context .schedule-control small {
   font-weight: 450;
   letter-spacing: normal;
   text-transform: none;

@@ -635,6 +635,26 @@ api.post("/tasks/:id/gate", async (c) => {
     void resumeAtGate(taskId, action, { turnHeld: true, actingUserId: ownerIdOf(actorOf(c)) });
     return c.json({ ok: true, resumed: true });
   }
+  // 讨论已经收口后，验收打回仍沿用同一对讨论者和同一份 transcript 回炉；这不是
+  // 新开一场讨论，所以复用 gate 的 inject 语义，但只接受会产生新一轮的动作。
+  if (t?.mode === "duet" && ["done", "failed", "canceled"].includes(t.status)
+    && (action.kind === "inject" || action.kind === "ask")) {
+    if (t.stage === "accepted" || t.stage === "merged") {
+      return c.json({ error: "讨论已经验收完成；如需继续，请先新开一轮讨论", stage: t.stage }, 409);
+    }
+    if (t.archived) return c.json({ error: "讨论已归档，先取消归档再继续", archived: true }, 409);
+    const blocked = handoffBlockReason(t.handoff);
+    if (blocked) return c.json({ error: blocked, handoff: true }, 409);
+    if (!claimTurn(taskId, "duet")) {
+      return c.json({ error: "讨论回合正在进行，稍后再提交验收意见", status: t.status }, 409);
+    }
+    if (isAcceptingTask(taskId)) {
+      releaseTurn(taskId);
+      return c.json({ error: "讨论正在验收，结束后再提交意见", status: t.status }, 409);
+    }
+    void resumeAtGate(taskId, action, { turnHeld: true, actingUserId: ownerIdOf(actorOf(c)) });
+    return c.json({ ok: true, resumed: true, revision: true }, 202);
+  }
   return c.json({ error: "no open gate for this task" }, 409);
 });
 

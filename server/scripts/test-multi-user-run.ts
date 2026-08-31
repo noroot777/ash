@@ -259,6 +259,32 @@ const expectBob = (env: Record<string, string | null>, where: string) => {
     sess.every((s) => s.executor?.includes("Bob")),
     `duet 会话行该记 bob 的执行器,实际 ${sess.map((s) => s.executor).join(",")}`,
   );
+
+  // 讨论完成后从验收入口打回：沿用同一份 transcript 和同一对讨论者回炉，仍然烧
+  // 点下按钮的人的 key；验收完成之后则必须挡住，不能在已盖章的结论上偷偷续写。
+  const { bus } = await import("../src/bus.js");
+  const revisionErrors: string[] = [];
+  const stopRevisionWatch = bus.subscribe((event) => {
+    if (event.type === "agent.event" && event.taskId === taskId && event.event.kind === "error") {
+      revisionErrors.push(event.event.message);
+    }
+  });
+  clearProbes();
+  const revision = await post(`/api/tasks/${taskId}/gate`, bobKey, { kind: "inject", text: "补充风险后重新收敛" });
+  assert.equal(revision.status, 202, JSON.stringify(revision.body));
+  // 这里的假 CLI 只记环境、不输出正文，所以回炉会在 A 的空回复处如预期失败；这个用例
+  // 钉的是路由确实把原讨论拉起来了、且身份仍按点按钮的人解析，B 的串行回合不会被跑到。
+  await until("duet 验收打回拉起讨论者", () => readProbes().length > 0 || revisionErrors.length > 0);
+  assert.ok(readProbes().length > 0, `duet 验收打回没有启动执行器:${revisionErrors.join("；")}`);
+  for (const env of readProbes()) expectBob(env, "duet 验收打回");
+  await until("duet 验收打回结算", async () => settled(await statusOf(taskId)));
+  stopRevisionWatch();
+
+  await db.update(tasks).set({ stage: "accepted" }).where(eq(tasks.id, taskId));
+  clearProbes();
+  const acceptedRevision = await post(`/api/tasks/${taskId}/gate`, bobKey, { kind: "inject", text: "不应再启动" });
+  assert.equal(acceptedRevision.status, 409, JSON.stringify(acceptedRevision.body));
+  assert.equal(readProbes().length, 0, "已验收讨论不能再从打回入口启动进程");
 }
 
 // ── ③ 确认闸的数据源:每一格都要报出来 ──────────────────────────────────────

@@ -5,6 +5,7 @@ import { runActivityPhase } from "@ash/shared/run-activity";
 import { TEAM_DEFAULTS, canArchive, taskDisplayStatus } from "@ash/shared";
 import {
   Archive,
+  CaretDown,
   ChatCircle,
   ChatTeardrop,
   ClipboardText,
@@ -29,6 +30,7 @@ import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { TaskPinButton } from "../task-detail/TaskPinButton.tsx";
 import { TaskTimeMeta } from "../task-detail/TaskTimeMeta.tsx";
 import { formatDuration, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
+import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
 import { DuetGateControls, DuetProgressBar } from "./DuetControls.tsx";
 import { DuetHandoffBar, DuetHandoffModal, type HandoffChoice } from "./DuetHandoff.tsx";
 import { buildDuetHandoffBody, latestDuetGate } from "./duetHandoff.ts";
@@ -326,9 +328,21 @@ export function DuetView({
       </header>
 
       <ImagePreviewGroup isolated>
-        <section className="duet-config-card">
-          <div>
-            <small>议题</small><h2>{topic.body || config.topic || task.title}</h2><MessageAttachments paths={topic.paths} />
+        <details className="duet-context">
+          <summary>
+            <span className="duet-context-topic"><small>议题</small><b>{topic.body || config.topic || task.title}</b></span>
+            <span className="duet-context-meta">
+              <span className="is-a"><ChatCircle size={12} weight="fill" />{sessionsByRole.voiceA?.executor || config.voiceA}</span>
+              <span className="is-b"><ChatTeardrop size={12} weight="fill" />{sessionsByRole.voiceB?.executor || config.voiceB}</span>
+              <span>{config.maxRounds ? `${config.maxRounds} 轮` : "不限轮次"}</span>
+              <span>{config.gateG1 === "on" ? "G1 开启" : "无收敛门"}</span>
+            </span>
+            <CaretDown className="duet-context-caret" size={13} weight="bold" />
+          </summary>
+          <div className="duet-context-details">
+            <div className="duet-context-full-topic">
+              <small>完整议题</small><h2>{topic.body || config.topic || task.title}</h2><MessageAttachments paths={topic.paths} />
+            </div>
             <ScheduleControl
               taskId={task.id}
               notify={notify}
@@ -336,13 +350,7 @@ export function DuetView({
               className="duet-schedule-control"
             />
           </div>
-          <dl>
-            <div><dt><ChatCircle size={12} weight="fill" />讨论者 A</dt><dd>{sessionsByRole.voiceA?.executor || config.voiceA}</dd></div>
-            <div><dt><ChatTeardrop size={12} weight="fill" />讨论者 B</dt><dd>{sessionsByRole.voiceB?.executor || config.voiceB}</dd></div>
-            <div><dt>轮数</dt><dd>{config.maxRounds ?? "不设限"}</dd></div>
-            <div><dt>收敛门</dt><dd>{config.gateG1 === "on" ? "G1 开启" : "关闭"}</dd></div>
-          </dl>
-        </section>
+        </details>
       </ImagePreviewGroup>
 
       <ImagePreviewGroup isolated>
@@ -398,6 +406,10 @@ export function DuetView({
         />
       ) : ["done", "failed", "canceled"].includes(task.status) ? (
         <div className="duet-terminal-handoff">
+          <div className="duet-terminal-acceptance">
+            <div><b>讨论结论</b><small>确认这份结论，或带着意见让双方继续讨论。</small></div>
+            <AcceptanceControls task={task} onTaskUpdated={onTaskUpdated} notify={notify} />
+          </div>
           <DuetHandoffBar
             linkedTeams={linkedTeams}
             allTasks={allTasks}

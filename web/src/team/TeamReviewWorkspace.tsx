@@ -32,6 +32,7 @@ type ReviewData = {
 // 框就是那条规则的安全兜底，措辞含糊等于把兜底拆了。
 function acceptanceMessage(task: TaskListItem): string {
   const team = task.mode === "team";
+  const duet = task.mode === "duet";
   // 后面还有站要走的那道「等我点头」：这一按只是放行，不合并、不清理，线接着往下走。措辞
   // 必须跟着变——拿「会合并会删分支」的话去描述一次放行，用户要么不敢按，要么按完发现什么
   // 都没合。**下一站是什么要指名道姓**：这道关口最常见的写法就是画在「自动验证」前面，
@@ -42,13 +43,14 @@ function acceptanceMessage(task: TaskListItem): string {
     return `${where}，所以这一按只是放行这一关：不合并、不清理，这条线会接着往下走到那一站。`;
   }
   if (!task.useWorktree) {
+    if (duet) return "这会确认当前讨论结论并标记为验收完成，不执行 Git 操作。";
     return team
       ? "这会确认共享项目工作区中的团队结果，并联动把全部共享执行者标为验收完成。"
       : "这会确认当前项目工作区中的结果并标记为验收完成。";
   }
   const plan = acceptPlan(task.workflow, "human", task.workflowAt);
-  const branch = team ? "共享分支" : "任务分支";
-  const worktree = team ? "团队 worktree" : "任务 worktree";
+  const branch = team ? "共享分支" : duet ? "讨论分支" : "任务分支";
+  const worktree = team ? "团队 worktree" : duet ? "讨论 worktree" : "任务 worktree";
   const target = task.worktreeBase || "项目当前分支";
   const tail = team ? "并联动验收共享执行者。" : "";
   // 手动验收永远有合并方案（acceptPlan 的 human 口径），这里只是类型兜底。
@@ -126,6 +128,7 @@ export function AcceptanceControls({
   const [busy, setBusy] = useState(false);
   const confirmExecutorSwap = useExecutorGate();
   const [failure, setFailure] = useState<AcceptTaskFailure | null>(null);
+  const duet = task.mode === "duet";
   const inFlight = task.status === "running" || task.status === "queued";
   // Archived = frozen/read-only：后端验收/打回都会 409，按钮必须一致地禁掉，不给假按钮。
   const archived = !!task.archived;
@@ -183,17 +186,24 @@ export function AcceptanceControls({
   const returnTask = async () => {
     const text = feedback.trim();
     if (!text) return;
-    // 打回 = 往原任务会话里送一条意见并续跑,同样会起一轮(§八)。
+    // 普通任务把意见送回原会话；讨论则让原来的双方沿现有记录回炉一轮。
     if (!(await confirmExecutorSwap(task.id))) return;
     setBusy(true);
     try {
-      const result = await api.replyTask(task.id, `【验收打回】请继续修改并完成后重新提交验收。\n\n${text}`);
+      let result: Awaited<ReturnType<typeof api.replyTask>> | null = null;
+      if (duet) {
+        await api.gate(task.id, { kind: "inject", text: `【验收打回】请根据以下意见继续讨论，并重新形成可验收结论。\n\n${text}` });
+      } else {
+        result = await api.replyTask(task.id, `【验收打回】请继续修改并完成后重新提交验收。\n\n${text}`);
+      }
       // 打回已经投递出去了:先把弹窗和已发出的意见收掉,再去刷新(见上面的注释)。
       setAction(null);
       setFeedback("");
       const stale = await refreshAfterMutation();
       // 任务这会儿还在跑的话,后端会把意见排队,等它这一轮结束再送进去——如实说清楚。
-      notify(("scheduled" in result
+      notify((duet
+        ? "已打回，意见已送回原讨论"
+        : result && "scheduled" in result
         ? "已打回；任务还在跑，意见已排队，跑完自动送入会话"
         : "已打回，意见已送入原任务会话") + stale);
     } catch (reason) {
@@ -214,7 +224,7 @@ export function AcceptanceControls({
               {busy ? <SpinnerGap size={13} className="is-spinning" /> : <CheckCircle size={13} weight="fill" />}
               {busy ? (midGate ? "放行中" : "验收中") : archived ? "已归档（只读）" : inFlight ? "执行中" : acceptanceBlock ?? (midGate ? "放行，继续下一站" : "验收通过")}
             </button>
-            <button type="button" disabled={archived || inFlight || busy} onClick={() => setAction("return")}><WarningCircle size={13} />打回修改</button>
+            <button type="button" disabled={archived || inFlight || busy} onClick={() => setAction("return")}><WarningCircle size={13} />{duet ? "打回再讨论" : "打回修改"}</button>
           </>
         )}
       </div>
@@ -222,7 +232,7 @@ export function AcceptanceControls({
       {action === "accept" && (
         <ConfirmDialog
           title={midGate ? "放行这一关？" : "确认验收通过？"}
-          message={midGate ? acceptanceMessage(task) : `${acceptanceMessage(task)} 已执行的合并和删除不可逆。`}
+          message={midGate ? acceptanceMessage(task) : task.useWorktree ? `${acceptanceMessage(task)} 已执行的合并和删除不可逆。` : acceptanceMessage(task)}
           confirmLabel={midGate ? "放行" : "验收通过"}
           danger={!midGate && !!task.useWorktree}
           busy={busy}
@@ -231,8 +241,8 @@ export function AcceptanceControls({
         />
       )}
       {action === "return" && (
-        <ConfirmDialog title="打回继续修改？" message="这会把验收意见作为真人回复送入原任务会话，执行者会在原上下文继续处理。" confirmLabel="打回修改" busy={busy} onConfirm={() => void returnTask()} onClose={() => setAction(null)}>
-          <textarea className="team-return-feedback" value={feedback} autoFocus rows={5} placeholder="写清需要修改的内容与重新验收标准…" onChange={(event) => setFeedback(event.target.value)} />
+        <ConfirmDialog title={duet ? "打回继续讨论？" : "打回继续修改？"} message={duet ? "这会把验收意见送回本次讨论，原来的两位讨论者会沿现有上下文继续形成结论。" : "这会把验收意见作为真人回复送入原任务会话，执行者会在原上下文继续处理。"} confirmLabel={duet ? "打回再讨论" : "打回修改"} busy={busy} onConfirm={() => void returnTask()} onClose={() => setAction(null)}>
+          <textarea className="team-return-feedback" value={feedback} autoFocus rows={5} placeholder={duet ? "写清需要补充讨论的问题与验收标准…" : "写清需要修改的内容与重新验收标准…"} onChange={(event) => setFeedback(event.target.value)} />
         </ConfirmDialog>
       )}
     </>
