@@ -35,6 +35,8 @@ export function ReviewerLane({
   const bodyId = useId();
   const state = stateOf(lane.conclusion, lane.complete);
   const time = timing(lane);
+  const hasBody = lane.items.length > 0;
+  const bodyHidden = collapsed || !hasBody;
   const reviewerModel = lane.reviewerModel && !lane.reviewerLabel?.includes(lane.reviewerModel)
     ? lane.reviewerModel
     : null;
@@ -53,7 +55,7 @@ export function ReviewerLane({
   };
 
   return (
-    <article className={`verify-lane${collapsed ? " is-collapsed" : ""}`} aria-label={lane.title}>
+    <article className={`verify-lane${bodyHidden ? " is-collapsed" : ""}`} aria-label={lane.title}>
       <header className="verify-lane-head">
         <span className="verify-lane-mark" aria-hidden="true"><ShieldCheck size={12} weight="fill" /></span>
         <b>{lane.title}</b>
@@ -69,17 +71,19 @@ export function ReviewerLane({
               <FileText size={11} aria-hidden="true" />审查报告
             </button>
           )}
-          <button
-            type="button"
-            aria-controls={bodyId}
-            aria-expanded={!collapsed}
-            onClick={() => setCollapsed((value) => !value)}
-          >
-            {collapsed ? "展开" : "收起"}
-          </button>
+          {hasBody && (
+            <button
+              type="button"
+              aria-controls={bodyId}
+              aria-expanded={!collapsed}
+              onClick={() => setCollapsed((value) => !value)}
+            >
+              {collapsed ? "展开" : "收起"}
+            </button>
+          )}
         </span>
       </header>
-      <div className="verify-lane-body" id={bodyId} hidden={collapsed}>{children}</div>
+      <div className="verify-lane-body" id={bodyId} hidden={bodyHidden}>{children}</div>
       {report && (
         <ReviewReportDialog
           target={report}

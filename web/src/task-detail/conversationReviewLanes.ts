@@ -38,19 +38,24 @@ type ActiveLane = ConversationReviewLane & { reviewerSpoke: boolean };
 
 const STAGE_CONCLUSION = /验收阶段更新：.*（(verified|verify_failed)）/;
 const FREE_REVIEW_REPAIR_HANDOFF = /^【自由工作流审查未通过(?:\s*·[^】]+)?】/;
+const INLINE_REVIEW_REPAIR_HANDOFF = /^【自动(?:验证|审查)未通过(?:\s*·[^】]+)?】/;
 
-// 这些行是给执行器续跑用的协议，不是用户需要阅读的会话内容。原始 items 保留不动，
-// 这里只在展示行里降噪：运行语义、导出和重试仍然能读到完整历史。
-function hiddenProtocolItem(item: ConversationItem): boolean {
-  if (item.kind === "event") return item.text.includes(LEGACY_SYS_MARKER);
-  return item.kind === "user"
-    && !!item.bySystem
-    && FREE_REVIEW_REPAIR_HANDOFF.test(item.text.trimStart());
+type RepairHandoffKind = "free" | "inline";
+
+function repairHandoffKind(item: ConversationItem): RepairHandoffKind | null {
+  if (item.kind !== "user" || !item.bySystem) return null;
+  const text = item.text.trimStart();
+  if (FREE_REVIEW_REPAIR_HANDOFF.test(text)) return "free";
+  if (INLINE_REVIEW_REPAIR_HANDOFF.test(text)) return "inline";
+  return null;
 }
 
 function visibleLaneItem(item: ConversationItem): boolean {
   // 轮次、审查者与开始时间已经在卡头；正文再重复一遍「第 N 轮开始」只会制造双标题。
-  return laneStart(item) === null && !hiddenProtocolItem(item);
+  // checkpoint 标记只在审查卡内部降噪；普通任务仍靠它留下「曾经暂停并续跑」的持久痕迹。
+  if (laneStart(item) !== null) return false;
+  if (item.kind === "event" && item.text.includes(LEGACY_SYS_MARKER)) return false;
+  return repairHandoffKind(item) === null;
 }
 
 function itemEnd(item: ConversationItem): string | null {
@@ -252,5 +257,17 @@ export function conversationFeedRows(
     // 正在跑的轮次展开，避免用户只看见一张不动的卡片。
     lane.defaultCollapsed = lane !== latest && lane.conclusion !== null;
   }
-  return rows.filter((row) => row.kind === "review-lane" || !hiddenProtocolItem(row.item));
+  // 修复交接紧跟在被打回的卡后面。就地验证的整份内嵌报告一律由卡片入口替代；自由派审
+  // 只有在 report.md 确实可打开时才隐藏原 prompt，没有报告就保留它作为证据目录兜底。
+  let previousLane: ConversationReviewLane | null = null;
+  return rows.filter((row) => {
+    if (row.kind === "review-lane") {
+      previousLane = row;
+      return true;
+    }
+    const handoff = repairHandoffKind(row.item);
+    if (handoff === "inline") return false;
+    if (handoff === "free") return !(previousLane?.source === "free" && previousLane.reportAvailable);
+    return true;
+  });
 }

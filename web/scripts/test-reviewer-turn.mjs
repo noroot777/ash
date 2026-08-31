@@ -299,32 +299,6 @@ assert.deepEqual(
   "卡内只保留审查正文和收尾结论，不重复开始旁注",
 );
 
-// 审查开始、checkpoint 续跑和失败后的修复 prompt 都必须留在原始会话里供执行器使用，
-// 但不再伪装成用户需要阅读的三块对话内容。
-const protocolNoise = buildConversationItems([{
-  session: { ...session, endedAt: null },
-  output: [
-    turn("system", "自由工作流第 3 轮审查开始：5.5审查 · 逻辑检查。", "2026-08-11T04:00:00.000Z"),
-    turn("system", "〔系统〕继续（从中断处）", "2026-08-11T04:01:00.000Z"),
-    turn("system", "自由工作流第 3 轮审查未通过，意见已发回会话；修复确认完成后自动复审。", "2026-08-11T04:40:00.000Z"),
-    turn("user", "【自由工作流审查未通过 · 第 3 轮】\n请先完整读取 report.md，再调用 complete_task。\n\n证据目录：/tmp/review", "2026-08-11T04:41:00.000Z", { by: "system" }),
-  ].join("\n"),
-  trace: [],
-}], [{ ...session, endedAt: null }], []);
-const protocolRows = conversationFeedRows(protocolNoise);
-const protocolLane = protocolRows.find((row) => row.kind === "review-lane");
-assert.ok(protocolLane);
-assert.deepEqual(
-  protocolLane.items.map((item) => item.kind === "event" ? item.text : item.kind),
-  ["自由工作流第 3 轮审查未通过，意见已发回会话；修复确认完成后自动复审。"],
-  "卡内只保留用户真正需要的审查结论",
-);
-assert.equal(
-  protocolRows.some((row) => row.kind === "item" && row.item.kind === "user" && row.item.bySystem),
-  false,
-  "自由审查修复 prompt 不应出现在主时间线",
-);
-
 const freeLaneNoState = conversationFeedRows(freeLaneItems).find((row) => row.kind === "review-lane");
 assert.equal(freeLaneNoState.report, null);
 assert.equal(

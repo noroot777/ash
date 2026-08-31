@@ -65,18 +65,21 @@ try {
   // D：有后续轮次且已有结论的历史卡默认折叠，最新一张展开。自由派审启动失败后重跑
   // 仍是同一 round，但要分成旧失败卡 + 新结果卡；报告只能挂到后者。
   const lanes = page.locator(".verify-lane");
-  assert.equal(await lanes.count(), 4, "两轮就地验证 + 自由派审失败旧卡 / 重跑结果卡");
+  assert.equal(await lanes.count(), 5, "两轮就地验证 + 自由派审失败旧卡 / 重跑结果卡 + 尚未开口的新轮次");
   assert.deepEqual(
     await lanes.evaluateAll((els) => els.map((el) => el.getAttribute("aria-label"))),
-    ["第 2 轮验证", "第 3 轮验证", "第 1 轮审查", "第 1 轮审查"],
+    ["第 2 轮验证", "第 3 轮验证", "第 1 轮审查", "第 1 轮审查", "第 2 轮审查"],
     "自由派审的卡不能沿用就地验证的「第 N 轮验证」标题",
   );
   assert.equal(await lanes.nth(0).evaluate((el) => el.classList.contains("is-collapsed")), true);
   assert.equal(await lanes.nth(1).evaluate((el) => el.classList.contains("is-collapsed")), true);
   assert.equal(await lanes.nth(2).evaluate((el) => el.classList.contains("is-collapsed")), true);
-  assert.equal(await lanes.nth(3).evaluate((el) => el.classList.contains("is-collapsed")), false);
+  assert.equal(await lanes.nth(3).evaluate((el) => el.classList.contains("is-collapsed")), true);
+  assert.equal(await lanes.nth(4).evaluate((el) => el.classList.contains("is-collapsed")), true, "空正文按收起态绘制");
   assert.equal(await lanes.nth(0).locator(".verify-lane-body").isHidden(), true);
-  assert.equal(await lanes.nth(3).locator(".verify-lane-body").isVisible(), true);
+  assert.equal(await lanes.nth(4).locator(".verify-lane-body").isHidden(), true);
+  assert.equal(await lanes.nth(4).locator(".verify-lane-body > *").count(), 0);
+  assert.deepEqual(await lanes.nth(4).locator(".verify-lane-actions > button").allInnerTexts(), [], "空正文没有无效展开按钮");
   assert.deepEqual(
     await lanes.nth(0).locator(".verify-lane-actions > button").allInnerTexts(),
     ["审查报告", "展开"],
@@ -89,7 +92,7 @@ try {
   );
   assert.deepEqual(
     await lanes.nth(3).locator(".verify-lane-actions > button").allInnerTexts(),
-    ["审查报告", "收起"],
+    ["审查报告", "展开"],
   );
   assert.equal(
     await messages.nth(4).evaluate((el) => el.closest(".verify-lane")?.getAttribute("aria-label")),
@@ -97,7 +100,9 @@ try {
     "自由派审的正文归它自己那张卡",
   );
   assert.equal(await page.getByText(/审查开始|审查重跑上一回合/).count(), 0, "卡头已有轮次，正文不重复开始旁注");
-  assert.equal(await page.getByText(/继续（从中断处）/).count(), 0, "checkpoint 续跑标记不进入主时间线");
+  const resumeMarkers = page.getByText(/继续（从中断处）/);
+  assert.equal(await resumeMarkers.count(), 1, "普通任务的 checkpoint 续跑标记必须保留");
+  assert.equal(await resumeMarkers.first().evaluate((el) => !!el.closest(".verify-lane")), false, "只隐藏审查卡内部的续跑标记");
   assert.equal(await page.getByText(/请先完整读取 report\.md/).count(), 0, "自由审查修复 prompt 不伪装成系统消息块");
 
   // 折叠状态不妨碍直接看报告；报告沿用现有应用内 Markdown 弹层，不另开标签页。
@@ -124,6 +129,7 @@ try {
   assert.equal(await lanes.nth(0).getByRole("button", { name: "收起" }).count(), 1);
   // 下面量版式，三张卡都得摊开。
   await lanes.nth(1).getByRole("button", { name: "展开" }).click();
+  await lanes.nth(3).getByRole("button", { name: "展开" }).click();
 
   // 执行方恢复普通任务原来的无卡片排版；审查泳道保留中性卡片 + 左绿线，整张卡
   // 移回左侧。审查正文不能再套一层卡。
