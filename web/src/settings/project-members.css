@@ -85,11 +85,20 @@
 .pmem-add {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .pmem-add select {
   flex: 1;
   min-width: 0;
+}
+
+/* 角色只有两项，不跟用户下拉平分宽度。`.ui-input` 是 width:100%，在可换行的 flex 行里
+   那就是「一行只放得下我一个」，所以这里必须把宽度交回内容。 */
+.pmem-add .pmem-role {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 132px;
 }
 
 .pmem-invite-url {

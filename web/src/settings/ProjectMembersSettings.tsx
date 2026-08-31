@@ -30,6 +30,9 @@ export function ProjectMembersSettings({
   const [invite, setInvite] = useState<{ active: boolean; expiresAt: string | null } | null>(null);
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
   const [pick, setPick] = useState("");
+  // 加人时就把角色定下来:不然「先加进来是成员、再翻到名单里改成管理员」是两趟操作,
+  // 中间那一小段时间里对方是拿错权限的。
+  const [pickRole, setPickRole] = useState<ProjectRole>("member");
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -111,6 +114,7 @@ export function ProjectMembersSettings({
                 <>
                   <select
                     className="ui-input pmem-role"
+                    aria-label={`${member.name} 的项目角色`}
                     value={member.role}
                     disabled={busy}
                     onChange={(e) =>
@@ -142,7 +146,12 @@ export function ProjectMembersSettings({
         <div className="pmem-block">
           <h3>加人</h3>
           <div className="pmem-add">
-            <select className="ui-input" value={pick} onChange={(e) => setPick(e.target.value)}>
+            <select
+              className="ui-input"
+              aria-label="选择要加入的用户"
+              value={pick}
+              onChange={(e) => setPick(e.target.value)}
+            >
               <option value="">选一个用户…</option>
               {candidates.map((u) => (
                 <option key={u.id} value={u.id}>
@@ -150,13 +159,23 @@ export function ProjectMembersSettings({
                 </option>
               ))}
             </select>
+            <select
+              className="ui-input pmem-role"
+              aria-label="加入后的角色"
+              value={pickRole}
+              onChange={(e) => setPickRole(e.target.value as ProjectRole)}
+            >
+              <option value="member">{ROLE_LABEL.member}</option>
+              <option value="admin">{ROLE_LABEL.admin}</option>
+            </select>
             <Button
               variant="primary"
               disabled={busy || !pick}
               onClick={() =>
-                void run("已加入项目", async () => {
-                  await projectMemberApi.add(project.id, pick);
+                void run(`已加入项目：${ROLE_LABEL[pickRole]}`, async () => {
+                  await projectMemberApi.add(project.id, pick, pickRole);
                   setPick("");
+                  setPickRole("member");
                 })
               }
             >
