@@ -140,7 +140,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         sessionId: sess.cliSessionId ?? "",
         commandLine: sess.commandLine ?? "",
         // 那一轮的 CLI 产物写在会话行记下的那个配置目录里(老行回落到按归属人现算)。
-        configDir: await sessionCliConfigDir(sess, task.ownerUserId, sess.agentType),
+        configDir: await sessionCliConfigDir(sess, sess.agentType),
       });
       trackRun(task.id, handle);
       adopted.add(task.id);

@@ -393,7 +393,9 @@ export const sessions = sqliteTable("sessions", {
   runOwnerUserId: text("run_owner_user_id"),
   // **这一轮的 CLI 配置目录**(CLAUDE_CONFIG_DIR / CODEX_HOME 实际注进去的那个值)。
   // `""` = 宿主机默认目录(自用模式、共用宿主 CLI 的实例、没有归属人的任务);
-  // `null` = 建在本列之前的老行,读侧回落到「按 run_owner_user_id 现算」。
+  // `null` = 建在本列之前的老行,读侧按**当时**那条规则解释:那时多人模式还没有「共用」
+  // 这一档,所以 run_owner_user_id 非空 = 一定注了个人配置目录,为空 = 宿主机默认目录。
+  // 不能按当前设置现算,否则改档之后老行会被判成「接得上」(第 1 轮审查 P1)。
   //
   // 有了 run_owner_user_id 为什么还要这一列:那一列只说得出「谁跑的」,而**同一个人的
   // 配置目录会挪位置** —— 实例管理员把「CLI 额度」从「每人自带 key」改成「共用宿主机

@@ -139,7 +139,7 @@ export async function runTurn(args: {
         .where(eq(sessions.id, reuseRowId))).at(0)
     : undefined;
   if (reuseRowId && reusedRow
-      && !(await sessionResumableHere(reusedRow, null, args.runOwner, executor.type))) {
+      && !(await sessionResumableHere(reusedRow, args.runOwner, executor.type))) {
     await announceSessionNote({
       taskId, sessionId: reuseRowId, role, agentType: executor.type, text: CROSS_OWNER_SESSION_NOTE,
     });

@@ -327,7 +327,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   // 「上一段的会话文件写在哪」—— 实例把「CLI 额度」换了档(共用宿主 CLI ⇄ 每人自带
   // key)之后,同一个人的配置目录整体挪了位置,而盘上的 transcript 没动。接不上就当
   // 没有上一段:开新会话,而不是把一个必然扑空的 id 交给 CLI 去 --resume。
-  if (prev?.cliSessionId && !(await sessionResumableHere(prev, task.ownerUserId, task.ownerUserId, cfg.lead))) {
+  if (prev?.cliSessionId && !(await sessionResumableHere(prev, task.ownerUserId, cfg.lead))) {
     await announceSessionNote({
       taskId, sessionId: prev.id, role: "lead", agentType: cfg.lead, text: HOST_CLI_SWITCH_SESSION_NOTE,
     });
@@ -337,7 +337,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   // rollout 同样去**那一段实际写入的目录**里找(老行回落到按归属人现算)。
   const affectedSessionVersion = await affectedCodexResumeVersion(
     cfg.lead, prev?.cliSessionId,
-    prev ? await sessionCliConfigDir(prev, task.ownerUserId, cfg.lead) : null,
+    prev ? await sessionCliConfigDir(prev, cfg.lead) : null,
   );
   if (prev && affectedSessionVersion) {
     await announceAffectedSessionReplacement({

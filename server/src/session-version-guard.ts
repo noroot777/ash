@@ -8,7 +8,7 @@ import { announceSessionNote } from "./session-notice.js";
  * 健康会话会直接丢上下文，而漏拦只会维持升级守卫加入前的恢复行为。
  *
  * `configDir` = **这条会话的 rollout 写在哪个目录**(`sessions.cli_config_dir`,
- * 老行由调用方经 `sessionCliConfigDir` 回落到按归属人现算;null = 宿主机默认目录)。
+ * 老行由调用方经 `sessionCliConfigDir` 按当时那条规则解释;null = 宿主机默认目录)。
  * 必须传:rollout 写在起跑时注入的那份 `CODEX_HOME` 里,隔离档下那是个人目录
  * (`data/user-cli/<owner>/codex/…`)。按宿主机默认目录找必然扑空,而扑空是 fail-open ——
  * 于是 0.147 这类受影响会话被静默放行,照样把旧 id 交给 codex resume(第 1 轮 finding 1)。

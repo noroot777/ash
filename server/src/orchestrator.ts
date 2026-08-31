@@ -304,7 +304,7 @@ export async function continueTask(
     // 目录整体挪了位置。所以比的是**会话行记下的那个目录**,不是按归属人现算一遍。
     // 存量会话没有这两列,回落到任务归属人:它们本来就是按归属人跑的。
     const resumableHere = async (s: typeof all[number]) =>
-      !s.cliSessionId || await sessionResumableHere(s, task.ownerUserId, runOwner, agent);
+      !s.cliSessionId || await sessionResumableHere(s, runOwner, agent);
     // 指名道姓要续哪一条会话行（「重跑上一回合」）：按 agentType+role 挑会在同一位
     // 智能体有多条会话时挑错人，而重投必须落回**崩掉的那一条**，否则等于换个人重说。
     const candidates = opts.freshSession
@@ -326,7 +326,7 @@ export async function continueTask(
     // 按归属人现算)——不传等于按宿主机默认目录找,隔离档下必然扑空、静默放行。
     const affectedSessionVersion = await affectedCodexResumeVersion(
       agent, prev?.cliSessionId,
-      prev ? await sessionCliConfigDir(prev, task.ownerUserId, agent) : null,
+      prev ? await sessionCliConfigDir(prev, agent) : null,
     );
     if (prev && affectedSessionVersion) {
       // 说明必须先持久写进旧会话，凭据后清；否则下面任一 await 抛错都会留下一个

@@ -87,14 +87,13 @@ export async function repoRefTips(repoPath: string): Promise<{ name: string; com
  *
  * 读**记下来的目录**而不是「按归属人现算」:同一个人的目录会随实例的「CLI 额度」设置
  * 整体挪位置(§八之二),现算给出的是「现在会去哪」,而搬文件要的是「当初写在哪」。
- * 老行没有这一列时才回落到现算,`taskOwnerUserId` 兜的是那一档(以及自用模式,那边
- * 两者都是 null)。
+ * 老行没有这一列时按**当时**那条规则解释(见 `sessionCliConfigDir`),不问任务归属人
+ * —— 存量任务在自用转多人时会被整体划给管理员,那个字段对「当初写在哪」没有证明力。
  */
 export async function collectSessionFiles(
   rows: SessionRow[],
   fallbackCwd: string | null,
   dryRun: boolean,
-  taskOwnerUserId: string | null,
 ): Promise<{ files: HandoffFilePayload[]; found: Set<string>; notes: string[] }> {
   const files: HandoffFilePayload[] = [];
   const found = new Set<string>();
@@ -107,7 +106,7 @@ export async function collectSessionFiles(
     if (s.agentType === "claude") {
       kind = "claude-session";
       rel = `${s.cliSessionId}.jsonl`;
-      const claudeConfigDir = await sessionCliConfigDir(s, taskOwnerUserId, "claude");
+      const claudeConfigDir = await sessionCliConfigDir(s, "claude");
       for (const cwd of [s.cwd, s.worktreePath, fallbackCwd]) {
         if (!cwd) continue;
         const candidate = claudeSessionFilePath(cwd, s.cliSessionId, claudeConfigDir);
@@ -115,7 +114,7 @@ export async function collectSessionFiles(
       }
     } else if (s.agentType === "codex") {
       kind = "codex-rollout";
-      const codexConfigDir = await sessionCliConfigDir(s, taskOwnerUserId, "codex");
+      const codexConfigDir = await sessionCliConfigDir(s, "codex");
       abs = await findRollout(s.cliSessionId, codexConfigDir);
       // 协议里 rel 一律 `/` 分隔:Windows 上 relative 产出反斜杠,POSIX 导入侧会把
       // 整串当成一个文件名落错地方(codex 按目录深度扫描,从此找不到这份会话)。
