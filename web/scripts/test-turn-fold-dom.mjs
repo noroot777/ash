@@ -160,6 +160,48 @@ try {
   await step("feed-team", "to-settled");
   assert.equal(await feedOpen("feed-team"), false, "全队收工了才该折");
 
+  // 12. 折不出结论那条路径（最后一步是工具、后面还没吐字 —— 一条回合跑到一半时最常见
+  //     的形状）也归同一套开合规矩。这里原来是纯默认的 <details>：跑着跑着切到这个形状，
+  //     执行过程就自己合上了，用户看到的正是「运行过程中还在折叠」。
+  const flatFold = () => page.locator('[data-case="flat"] details.task-execution-block');
+  assert.equal(await flatFold().count(), 1, "这一路该是逐段折那种块（不是 task-turn-process）");
+  assert.equal(await flatFold().evaluate((el) => el.open), true, "回合还在跑，逐段折的块也该摊开");
+  assert.equal(
+    await page.locator('[data-case="flat"]').getByText("web/src/review/ReviewNote.tsx").isVisible(),
+    true,
+    "跑着的时候工具行该看得见",
+  );
+  // 回合接着长：又说了一句（能折出过程块了）→ 又去跑工具（回到折不出结论）。形状来回
+  // 换，每一帧都得是摊开的 —— 用户看到的「跑着跑着自己合上」就是切形状那一下。
+  await page.locator('[data-case="flat"] [data-role="grow"]').click();
+  await page.locator('[data-case="flat"]').getByText("只走 free-review").first().waitFor();
+  await flush();
+  assert.equal(
+    await page.locator('[data-case="flat"] details.task-execution-block').first().evaluate((el) => el.open),
+    true,
+    "切成过程块那一帧不该是收起的",
+  );
+  await page.locator('[data-case="flat"] [data-role="grow"]').click();
+  await flush();
+  assert.deepEqual(
+    await page.locator('[data-case="flat"] details.task-execution-block').evaluateAll((els) => els.map((el) => el.open)),
+    [true, true],
+    "又切回逐段折那一帧：两段事件块都不该收起",
+  );
+
+  // 回合收口、任务还在跑：跟过程块一样，不许折。
+  await page.locator('[data-case="flat"] [data-role="end-turn"]').click();
+  await flush();
+  assert.deepEqual(
+    await page.locator('[data-case="flat"] details.task-execution-block').evaluateAll((els) => els.map((el) => el.open)),
+    [true, true],
+    "任务还在跑，逐段折的块不该自己合上",
+  );
+  // 整条链路停了：这一下才折。
+  await page.locator('[data-case="flat"] [data-role="end-task"]').click();
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-case="flat"] details.task-execution-block')]
+    .every((el) => !el.open));
+
   if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: true });
 
   console.log("turn fold dom tests passed");

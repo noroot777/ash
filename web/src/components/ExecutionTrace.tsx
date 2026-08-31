@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CaretRight, Wrench, X } from "@phosphor-icons/react";
 import { hasMoreThanSummary, traceSummary, type ExecutionEvent } from "../lib/executionTrace.ts";
+import { nextProcessFoldOpen } from "../task-detail/turnFold.ts";
 
 function compact(text: string, limit = 52): string {
   const clean = text.replace(/\s+/g, " ").trim();
@@ -153,10 +154,57 @@ export function ExecutionEventList({ events }: { events: ExecutionEvent[] }) {
   );
 }
 
-export function ExecutionDetails({ events, running }: { events: ExecutionEvent[]; running: boolean }) {
+/**
+ * 折叠块的自动开合，回合级折叠（ProcessFold）和单段折叠共用这一份：跑的时候摊开，
+ * 整条链路停下来才收起，用户动过折角之后一律不再自动动它。判据本体在
+ * turnFold 的 nextProcessFoldOpen（那儿有测试钉着）。
+ *
+ * 两种形状都得挂上它。一条回合在跑的过程中会**来回换形状** —— 最后一步是工具调用、
+ * 后面还没吐字时 splitTurnSegments 折不出结论，于是退回逐段折（ExecutionDetails）；
+ * 等它再说话又变回 ProcessFold。只给其中一种做自动摊开，用户看到的就是执行过程
+ * 在跑的中途一收一放。
+ */
+export function useAutoFold(live: boolean, taskLive: boolean) {
+  const [open, setOpen] = useState(live);
+  const touched = useRef(false);
+
+  useEffect(() => {
+    const next = nextProcessFoldOpen({ running: live, taskLive, touched: touched.current });
+    if (next !== null) setOpen(next);
+  }, [live, taskLive]);
+
+  return {
+    open,
+    onToggle: (event: { currentTarget: HTMLDetailsElement }) => {
+      const next = event.currentTarget.open;
+      if (next !== open) touched.current = true;
+      setOpen(next);
+    },
+  };
+}
+
+export function ExecutionDetails({
+  events,
+  running,
+  live = running,
+  taskLive,
+}: {
+  events: ExecutionEvent[];
+  /** 这一段是不是「此刻正在跑的那一步」：只管摘要条上的小圆点和微光。 */
+  running: boolean;
+  /** 这一回合还在飞。缺省跟着 running —— 只有一段的形状（duet）两者本来就是一回事。 */
+  live?: boolean;
+  /** 整条执行链路还没停（见 AgentTurnBody 的同名 prop）。 */
+  taskLive: boolean;
+}) {
+  const fold = useAutoFold(live, taskLive);
   if (!events.length) return null;
   return (
-    <details className={`task-execution-block${hasExecutionError(events) ? " has-error" : ""}`}>
+    <details
+      className={`task-execution-block${hasExecutionError(events) ? " has-error" : ""}`}
+      open={fold.open}
+      onToggle={fold.onToggle}
+    >
       <summary>
         <ExecutionSummaryLine events={events} running={running} />
       </summary>

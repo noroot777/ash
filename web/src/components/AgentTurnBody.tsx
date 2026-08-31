@@ -1,13 +1,13 @@
-import { useEffect, useRef, useState } from "react";
 import type { AgentContentSegment } from "../task-detail/conversationModel.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
-import { splitTurnSegments, nextProcessFoldOpen } from "../task-detail/turnFold.ts";
+import { splitTurnSegments } from "../task-detail/turnFold.ts";
 import { MarkdownBody } from "./MarkdownBody.tsx";
 import {
   ExecutionDetails,
   ExecutionEventList,
   ExecutionSummaryLine,
   hasExecutionError,
+  useAutoFold,
 } from "./ExecutionTrace.tsx";
 
 function SegmentBody({ segment }: { segment: AgentContentSegment }) {
@@ -20,8 +20,8 @@ function SegmentBody({ segment }: { segment: AgentContentSegment }) {
 }
 
 /**
- * 过程折叠块。跑的时候默认摊开（不然用户盯着一行摘要不知道在干嘛），整个任务停下来
- * 的那一刻才自动收起 —— 判据见 nextProcessFoldOpen，跑的中途一律不折。
+ * 过程折叠块。跑的时候默认摊开（不然用户盯着一行摘要不知道在干嘛），整条执行链路停下来
+ * 的那一刻才自动收起 —— 判据见 useAutoFold / nextProcessFoldOpen，跑的中途一律不折。
  */
 function ProcessFold({
   segments,
@@ -34,23 +34,13 @@ function ProcessFold({
   taskLive: boolean;
 }) {
   const events = segments.flatMap((segment) => segment.events);
-  const [open, setOpen] = useState(running);
-  const touched = useRef(false);
-
-  useEffect(() => {
-    const next = nextProcessFoldOpen({ running, taskLive, touched: touched.current });
-    if (next !== null) setOpen(next);
-  }, [running, taskLive]);
+  const fold = useAutoFold(running, taskLive);
 
   return (
     <details
       className={`task-execution-block task-turn-process${hasExecutionError(events) ? " has-error" : ""}`}
-      open={open}
-      onToggle={(event) => {
-        const next = event.currentTarget.open;
-        if (next !== open) touched.current = true;
-        setOpen(next);
-      }}
+      open={fold.open}
+      onToggle={fold.onToggle}
     >
       <summary>
         <ExecutionSummaryLine events={events} running={running} />
@@ -92,10 +82,17 @@ export function AgentTurnBody({
       {!!process.length && <ProcessFold segments={process} running={running} taskLive={taskLive} />}
       {conclusion.map((segment, index) => (
         <section className="task-agent-segment" key={segment.id}>
-          {/* 不折的那条路径（无过程可折 / 折完没内容）仍按老样子逐段折事件。 */}
+          {/*
+            不折的那条路径（无过程可折 / 折完没内容）仍按老样子逐段折事件 —— 但**摊开的
+            时机跟过程块一致**：这条路径正是一条回合跑到「最后一步是工具调用、后面还没
+            吐字」时的形状，让它保持默认收起，用户看到的就是执行过程在跑的中途自己合上。
+            live 传回合级的 running（这一段是不是当前那一步只决定小圆点，不决定开合）。
+          */}
           <ExecutionDetails
             events={segment.events}
             running={running && !process.length && index === conclusion.length - 1}
+            live={running}
+            taskLive={taskLive}
           />
           <SegmentBody segment={segment} />
         </section>

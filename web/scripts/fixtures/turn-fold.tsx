@@ -40,6 +40,34 @@ const failedSegments: AgentContentSegment[] = [
   },
 ];
 
+// 一条回合**在跑到一半时最常见的形状**：说了句话就开始连着跑工具，最后一步是工具调用、
+// 后面还没吐字。这时 splitTurnSegments 折不出结论（折完外面一个字都不剩），于是退回逐段
+// 折事件那条路径 —— 它必须跟过程块一样在跑的时候摊开，否则用户眼看着执行过程自己合上。
+const flatSegments: AgentContentSegment[] = [
+  { id: "l0", markdown: "我先看一圈 审查附言 现在是怎么流转的。\n", events: [], attachments: [] },
+  {
+    id: "l1",
+    markdown: "",
+    events: [
+      { kind: "tool", label: "Bash", detail: "grep -rn 附言 server/src" },
+      { kind: "tool", label: "Write", detail: "web/src/review/ReviewNote.tsx" },
+    ],
+    attachments: [],
+  },
+];
+
+// 同一条回合边跑边长：跑工具（折不出结论）→ 又说了句话（能折出过程块）→ 又去跑工具
+// （回到折不出结论）。形状来回换，但整条链路一直在跑 —— 每一帧都必须是摊开的。
+const flatPhases: AgentContentSegment[][] = [
+  flatSegments,
+  [...flatSegments, { id: "l2", markdown: "看明白了，附言现在只走 free-review 那条线。\n", events: [], attachments: [] }],
+  [
+    ...flatSegments,
+    { id: "l2", markdown: "看明白了，附言现在只走 free-review 那条线。\n", events: [], attachments: [] },
+    { id: "l3", markdown: "", events: [{ kind: "tool", label: "Edit", detail: "web/src/review/ReviewNote.tsx" }], attachments: [] },
+  ],
+];
+
 // 真会话流（不是直接摆 AgentTurnBody）：钉的是两个 feed 自己怎么判「链路停没停」——
 // 只钉 nextProcessFoldOpen 的话，喂给它的那个布尔算错了照样红不了。
 //
@@ -122,16 +150,21 @@ function Turn({
   initialRunning,
   initialTaskLive = initialRunning,
   turnSegments = segments,
+  phases,
 }: {
   name: string;
   initialRunning: boolean;
   /** 整个任务还在跑。缺省跟着回合走（回合在飞，任务当然在跑）。 */
   initialTaskLive?: boolean;
   turnSegments?: AgentContentSegment[];
+  /** 一条回合边跑边长出来的几个快照：按 data-role="grow" 逐帧前进。 */
+  phases?: AgentContentSegment[][];
 }) {
   const [running, setRunning] = useState(initialRunning);
   const [taskLive, setTaskLive] = useState(initialTaskLive);
   const [nonce, setNonce] = useState(0);
+  const [phase, setPhase] = useState(0);
+  const shown = phases ? phases[Math.min(phase, phases.length - 1)]! : turnSegments;
   return (
     <div className="task-message task-message--agent" data-case={name}>
       <span className="task-message-avatar" aria-hidden="true">A</span>
@@ -154,7 +187,8 @@ function Turn({
           重新开跑
         </button>
         <button type="button" data-role="repaint" onClick={() => setNonce(nonce + 1)}>触发重绘 {nonce}</button>
-        <AgentTurnBody segments={turnSegments} running={running} taskLive={taskLive} />
+        {phases && <button type="button" data-role="grow" onClick={() => setPhase(phase + 1)}>再跑一步 {phase}</button>}
+        <AgentTurnBody segments={shown} running={running} taskLive={taskLive} />
       </div>
     </div>
   );
@@ -170,6 +204,8 @@ createRoot(document.getElementById("root")!).render(
     <Turn name="history" initialRunning={false} initialTaskLive />
     {/* 未确认完成而记 failed 的回合：结算那条异常不许把整篇回答折进过程 */}
     <Turn name="failed" initialRunning={false} turnSegments={failedSegments} />
+    {/* 跑到「最后一步是工具、还没吐字」的形状：折不出结论那条路径，照样得摊开 */}
+    <Turn name="flat" initialRunning phases={flatPhases} />
     {/* 回合收口了，但任务卡在审查门上 / 团队执行者还在干活：链路没停，不许折 */}
     <SingleFeed />
     <TeamLeadFeed />
