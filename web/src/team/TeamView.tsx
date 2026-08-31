@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { AgentEvent, Group, ScheduledMessage, Task, TaskListItem } from "@ash/shared";
+import type { Group, ScheduledMessage, Task, TaskListItem } from "@ash/shared";
 import { batchesOf, mergeFeed, teamGroupsOf, waitingWorkers, workerHaltStats, workersOf } from "@ash/shared/team";
 import { ArrowSquareOut, Broom, Clock, PaperPlaneTilt, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
 import {
@@ -15,7 +15,6 @@ import { api, type ReplyTaskResult, type TeamCuaStatus } from "../lib/api.ts";
 import { useTaskBody } from "../lib/useTaskBody.ts";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { useConversation } from "../lib/useConversation.ts";
-import { useServerEvents } from "../lib/events.ts";
 import { useSkills } from "../lib/useSkills.ts";
 import { useSlashCompletion } from "../lib/useSlashCompletion.ts";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
@@ -42,45 +41,7 @@ import { TEAM_INSPECTORS, type TeamInspectorContext } from "./TeamInspector.tsx"
 import { TeamReviewWorkspace } from "./TeamReviewWorkspace.tsx";
 import { teamDuetIterationState } from "../duet/handoffPolicy.ts";
 import { activeTeamHaltMarker, leadTurns, teamFeedOptions } from "./teamModel.ts";
-
-function liveLineForEvent(event: AgentEvent, textBuffer: string): string | null {
-  if (event.kind === "text") {
-    return textBuffer.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1) ?? null;
-  }
-  if (event.kind === "tool") return `⚙ ${event.name || "tool"}`;
-  if (event.kind === "error") return `✕ ${event.message}`;
-  // 结算说明（level:"notice"）以前是条 error，在这一格里跟「执行者崩了」长得一模一样。
-  // 现在它走 system 旁注，看板上给它 ⓘ —— 没交卷和崩了是两回事，一眼要分得出轻重。
-  if (event.kind === "system" && event.level === "notice") return `ⓘ ${event.text}`;
-  return null;
-}
-
-function useWorkerLiveLines(teamId: string, workers: TaskListItem[]) {
-  const [lines, setLines] = useState<Record<string, string>>({});
-  const textBuffers = useRef<Record<string, string>>({});
-  const workerIds = useMemo(() => new Set(workers.map((worker) => worker.id)), [workers]);
-
-  useEffect(() => {
-    textBuffers.current = {};
-    setLines({});
-  }, [teamId]);
-
-  useServerEvents(useCallback((event) => {
-    if (event.type !== "agent.event" || !workerIds.has(event.taskId)) return;
-    let textBuffer = textBuffers.current[event.taskId] ?? "";
-    if (event.event.kind === "text") {
-      textBuffer = `${textBuffer}${event.event.text}`.slice(-4000);
-      textBuffers.current[event.taskId] = textBuffer;
-    }
-    const line = liveLineForEvent(event.event, textBuffer);
-    if (!line) return;
-    setLines((current) => current[event.taskId] === line
-      ? current
-      : { ...current, [event.taskId]: line });
-  }, [workerIds]));
-
-  return lines;
-}
+import { useWorkerLiveLines } from "./workerLiveLines.ts";
 
 function TeamReplyBox({
   task,
