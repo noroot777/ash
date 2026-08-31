@@ -387,7 +387,7 @@ export function mountHandoffRoutes(api: Hono): void {
   // 判据在 handoff-peers.ts `peerAudience`。
   api.get("/handoff/peers", async (c) => c.json({ peers: await listPeers(actorOf(c)) }));
   // 历史 out 存档另行授予的任务级回程权限；只读展示，不会暗中建立整机 approved。
-  api.get("/handoff/return-grants", async (c) => c.json({ grants: await listReturnGrants() }));
+  api.get("/handoff/return-grants", async (c) => c.json({ grants: await listReturnGrants(actorOf(c)) }));
 
   api.get("/tasks/:id/handoff/return-target", async (c) => {
     try {

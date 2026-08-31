@@ -99,6 +99,12 @@ export interface HandoffReturnGrant {
   taskCount: number;
   lastGrantedAt: string;
   blocked: boolean;
+  /**
+   * 当前登录者能不能拒绝/解除这台机器的回程。拒绝它会连带挡掉那台机器往后所有人的接力
+   * 申请,所以只有授权任务的本人和实例管理员点得了(server/src/handoff-peers.ts
+   * `requireReturnGrantToRevoke`)。UI 据此决定露不露按钮。
+   */
+  canRevoke?: boolean;
 }
 
 /** 无法核验对端时由用户显式承担双任务风险的持久审计记录。 */

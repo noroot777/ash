@@ -482,7 +482,13 @@ export function HandoffSettings({
               </small>
             </div>
             <div className="handoff-peer-actions">
-              {grant.blocked ? (
+              {/* 拒绝它会连带挡掉那台机器往后所有人的接力申请,所以只有授权任务的本人和
+                  实例管理员点得了(后端 requireReturnGrantToRevoke)。别人只读。 */}
+              {grant.canRevoke === false ? (
+                <small className="handoff-peer-note">
+                  这些历史任务不是你的，拒绝要由任务本人或实例管理员来点。
+                </small>
+              ) : grant.blocked ? (
                 <Button variant="ghost" disabled={busy} onClick={() => void peerAction(grant, "unblock")}>
                   <Check size={13} aria-hidden="true" />解除拒绝
                 </Button>

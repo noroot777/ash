@@ -25,6 +25,7 @@ import {
 } from "./handoff-identity.js";
 import type { Actor } from "./auth/context.js";
 import { isAccountHolder, ownerIdOf } from "./auth/context.js";
+import { returnGrantOwners } from "./handoff-return.js";
 import { now } from "./util.js";
 
 export const PEER_HEADERS = {
@@ -318,6 +319,30 @@ async function requirePeerActable(
 }
 
 /**
+ * 「凭空拒绝」的准入:这个指纹得**真有**历史回程可拒,而且拒它的人得跟这件事有关系。
+ *
+ * 有关系 = 实例管理员,或者授权了这次回程的任务里有一条是他的。这跟名单本身那套
+ * 「按档分」是一致的:拒绝是收权,谁的东西谁能收,整台机器的事归管理员。
+ */
+async function requireReturnGrantToRevoke(actor: Actor, fingerprint: string): Promise<void> {
+  const owners = await returnGrantOwners(fingerprint);
+  if (owners.size === 0) {
+    throw new HandoffError(
+      "没有这台接力来源机器(指纹对不上)。拒绝只能针对已经出现过的来源机或持有历史任务的机器,"
+      + "不能凭一个指纹先把一台没打过交道的机器挡在外面。",
+      404,
+    );
+  }
+  if (actor.kind === "single" || actor.role === "admin") return;
+  if (actor.userId && owners.has(actor.userId)) return;
+  throw new HandoffError(
+    "这台机器持有的历史任务不是你的 —— 拒绝它会连带挡掉别人的回程和往后所有人的接力申请,"
+    + "得由任务本人或实例管理员来点。",
+    403,
+  );
+}
+
+/**
  * 批准 / 拒绝一台入站机器。谁能点由 `peerAudience` 定:接受只有本人,拒绝本人和实例
  * 管理员都行。`by` 必填 —— 放行一台机器等于让它上面所有人都敲得开本机的门,事后必须
  * 能问出是谁点的。
@@ -333,6 +358,12 @@ export async function setPeerStatus(
   const row = await requirePeerActable(actor, normalized, status === "approved");
   if (!row) {
     if (status !== "blocked") throw new HandoffError("没有这台接力来源机器(指纹对不上)", 404);
+    // **记录还不存在也能拒**这一条只为「历史回程权限」那张表存在:任务标记本身就给了
+    // 那台机器免审批移回的资格,而来源名单里并没有对应的行可点。所以它必须收窄到
+    // 「确实有回程可拒」——否则任意成员随手一个指纹就能凭空落一行**全局** blocked,
+    // 把那台机器之后所有人的正式申请一起挡死,而被申请的本人连这行都看不见
+    // (第 1 轮审查 P1 实测复现:member 先 block,alice 之后带对 key 配对仍被拒)。
+    await requireReturnGrantToRevoke(actor, normalized);
     const at = now();
     const blocked = {
       fingerprint: normalized,

@@ -389,6 +389,56 @@ const WRITE_ROUTES: { path: string; method: string; body?: unknown; what: string
   );
 }
 
+// ── ⑦b 凭空拒绝一台没打过交道的机器 = 全局拒绝服务 ────────────────────────
+// 「记录还不存在也能拒」这条路只为历史回程那张表存在。不收窄的话,任意成员随手一个
+// 指纹就能落一行**全局** blocked:那台机器之后带对谁的 key 来配对都被 peerStanceFor /
+// requireApprovedPeer 挡死,而被申请的本人连这行记录都看不见,解不了也批不了
+// (第 1 轮审查 P1 实测复现)。
+{
+  const { handoffPeers, tasks } = await import("../src/db/schema.js");
+  const strangerFp = "e".repeat(64);
+  const denied = await call(`/api/handoff/peers/${strangerFp}/block`, "POST", memberKey);
+  assert.equal(denied.status, 404, `没打过交道的指纹不该能被凭空拉黑:${denied.text}`);
+  assert.equal(
+    (await db.select().from(handoffPeers)).some((r) => r.fingerprint === strangerFp), false,
+    "被拒的拉黑不许落库 —— 只看状态码的话,「404 但黑名单已经写进去了」照样过",
+  );
+  const adminDenied = await call(`/api/handoff/peers/${strangerFp}/block`, "POST", bossKey);
+  assert.equal(
+    adminDenied.status, 404,
+    `管理员也一样:这条路的前提是「有回程可拒」,不是权限大小:${adminDenied.text}`,
+  );
+
+  // 真有历史回程的那台机器照常拒得掉 —— 收窄不能把这个功能一起弄没。
+  const holderFp = "f".repeat(64);
+  await db.insert(tasks).values({
+    id: "t-held-by-member", projectId: "p-shared", title: "被 member 接力出去的任务",
+    body: "", mode: "single", status: "paused", agentType: "claude",
+    useWorktree: false, workflowMode: "free", ownerUserId: member.id,
+    handoff: JSON.stringify({
+      direction: "out", pending: false, peerFp: holderFp, peerName: "持有机",
+      at: new Date().toISOString(), transferId: "tx-held",
+    }),
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  });
+  const grants = (await call("/api/handoff/return-grants", "GET", memberKey)).body.grants as
+    { fingerprint: string; canRevoke?: boolean }[];
+  assert.equal(
+    grants.find((g) => g.fingerprint === holderFp)?.canRevoke, true,
+    "自己任务授权出去的回程,本人当然拒得了",
+  );
+  const otherView = (await call("/api/handoff/return-grants", "GET", ownerKey)).body.grants as
+    { fingerprint: string; canRevoke?: boolean }[];
+  assert.equal(
+    otherView.find((g) => g.fingerprint === holderFp)?.canRevoke, false,
+    "别人的历史任务只读:界面据此不露按钮,免得点下去吃 403",
+  );
+  const byStranger = await call(`/api/handoff/peers/${holderFp}/block`, "POST", ownerKey);
+  assert.equal(byStranger.status, 403, `不是你的任务就拒不了它的持有机:${byStranger.text}`);
+  const byOwnerOfTask = await call(`/api/handoff/peers/${holderFp}/block`, "POST", memberKey);
+  assert.equal(byOwnerOfTask.status, 200, `任务本人要拒得掉持有机:${byOwnerOfTask.text}`);
+}
+
 // ── ⑧ 多人实例不收无主申请 ────────────────────────────────────────────────
 // 用户 2026-08-31:「就没有无主申请这一说，除非对方是单人模式，单人模式是不需要 key 的。」
 // 这跟 §十一 的原则本来就一致 —— 要在那台机器上做事，就得在那台机器上有账号。

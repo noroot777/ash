@@ -1,6 +1,7 @@
 // 移回的**授权**一侧:哪台机器有资格把一条任务免审批地移回本机,落回哪个项目。
 // 「该往哪个地址移回」是另一件事,在 handoff-return-address.ts。
 import type { HandoffPingProject, HandoffReturnGrant, TaskHandoff } from "@ash/shared";
+import type { Actor } from "./auth/context.js";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { handoffPeers, projects, tasks } from "./db/schema.js";
@@ -56,18 +57,44 @@ export async function returnArchiveForPeer(
   };
 }
 
-export async function listReturnGrants(): Promise<HandoffReturnGrant[]> {
+/**
+ * 哪些人有资格拒绝**这个指纹**的历史回程 —— 返回授权它移回的那些任务的归属人。
+ * 空集合 = 这个指纹压根没有历史回程可拒。
+ *
+ * 存在的理由:「拒绝这台机器」是接力来源名单上唯一一个**记录还不存在就能点**的动作
+ * (它拒的是任务标记给出的回程权限,不是一条配对申请)。不把这条路收窄到「确实有回程
+ * 可拒」的话,任意成员随手一个指纹就能凭空落一行全局 blocked,把那台机器之后所有人的
+ * 正式申请一起挡死,而被申请的本人连这行记录都看不见(第 1 轮审查 P1)。
+ */
+export async function returnGrantOwners(fingerprint: string): Promise<Set<string | null>> {
+  const owners = new Set<string | null>();
+  const rows = await db.select({ handoff: tasks.handoff, ownerUserId: tasks.ownerUserId }).from(tasks);
+  for (const row of rows) {
+    const marker = markerOf(row.handoff);
+    if (!grantsTaskReturn(marker)) continue;
+    if (sameFingerprint(marker.peerFp, fingerprint)) owners.add(row.ownerUserId ?? null);
+  }
+  return owners;
+}
+
+/**
+ * 历史回程清单。`canRevoke` 跟 `requireReturnGrantToRevoke` 是同一条判据的两面:后端拒得
+ * 住,前端才知道该不该露那颗按钮 —— 留一颗按下去 403 的按钮只会让人以为功能坏了。
+ */
+export async function listReturnGrants(actor: Actor): Promise<HandoffReturnGrant[]> {
   const [taskRows, peerRows] = await Promise.all([
-    db.select({ handoff: tasks.handoff }).from(tasks),
+    db.select({ handoff: tasks.handoff, ownerUserId: tasks.ownerUserId }).from(tasks),
     db.select({ fingerprint: handoffPeers.fingerprint, status: handoffPeers.status }).from(handoffPeers),
   ]);
   const blocked = new Set(peerRows.filter((peer) => peer.status === "blocked")
     .map((peer) => peer.fingerprint.trim().toLowerCase()));
+  const anyGrant = actor.kind === "single" || actor.role === "admin";
   const grants = new Map<string, HandoffReturnGrant>();
   for (const row of taskRows) {
     const marker = markerOf(row.handoff);
     if (!grantsTaskReturn(marker)) continue;
     const fingerprint = marker.peerFp.trim().toLowerCase();
+    const mine = anyGrant || Boolean(actor.userId && row.ownerUserId === actor.userId);
     const current = grants.get(fingerprint);
     const at = marker.at || "";
     if (!current) {
@@ -78,10 +105,12 @@ export async function listReturnGrants(): Promise<HandoffReturnGrant[]> {
         taskCount: 1,
         lastGrantedAt: at,
         blocked: blocked.has(fingerprint),
+        canRevoke: mine,
       });
       continue;
     }
     current.taskCount += 1;
+    current.canRevoke = current.canRevoke || mine;
     if (at > current.lastGrantedAt) {
       current.lastGrantedAt = at;
       current.name = marker.peerName || current.name;
