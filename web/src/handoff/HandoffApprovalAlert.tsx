@@ -45,7 +45,9 @@ export function HandoffApprovalAlert({
 
   const reload = useCallback(async () => {
     try {
-      // 服务端已按人收窄（handoff-peers.ts peerAudience），这里拿到的就只有该我处理的。
+      // 服务端已按人收窄（handoff-peers.ts peerAudience）：**待批准**的申请只有它冲着的
+      // 那个人看得见，管理员也不例外。所以这个横幅不需要「你是以管理员身份看到的」那一档，
+      // 拿到的每一条都是该我拆的信，接受和拒绝都归我点。
       setPending((await api.handoffPeers()).filter((peer) => peer.status === "pending" && isFresh(peer)));
     } catch {
       // 后台轮询失败不反复弹 toast；下一轮或连接恢复后会自动补上。
@@ -96,23 +98,12 @@ export function HandoffApprovalAlert({
           {` · ${seenLabel(peer.lastSeenAt)}`}
           {pending.length > 1 ? ` · 另有 ${pending.length - 1} 个申请` : ""}
         </small>
-        {/* 管理员看到的是别人的申请：说清楚为什么它会出现在这儿，免得替人做了决定。 */}
-        {peer.seenAsAdmin && (
-          <small className="handoff-approval-alert-note">
-            这条不是冲着你来的，你是以实例管理员身份看到的。通常该由
-            {peer.requestedByName ? `「${peer.requestedByName}」` : "申请人本人"}处理。
-          </small>
-        )}
       </div>
       <div className="handoff-approval-alert-actions">
-        {/* 批不了就别露按钮:管理员看得见这条,但接受得由本人点(后端 requirePeerActable
-            会 403)。留一颗按下去就报错的按钮只会让人以为功能坏了。 */}
-        {peer.canApprove !== false && (
-          <Button variant="primary" disabled={busy} onClick={() => void decide("approve")}>
-            {busy ? <SpinnerGap size={13} className="is-spinning" aria-hidden="true" /> : <Check size={13} aria-hidden="true" />}
-            接受申请
-          </Button>
-        )}
+        <Button variant="primary" disabled={busy} onClick={() => void decide("approve")}>
+          {busy ? <SpinnerGap size={13} className="is-spinning" aria-hidden="true" /> : <Check size={13} aria-hidden="true" />}
+          接受申请
+        </Button>
         <Button variant="ghost" disabled={busy} onClick={() => void decide("block")}>
           <Prohibit size={13} aria-hidden="true" />拒绝
         </Button>

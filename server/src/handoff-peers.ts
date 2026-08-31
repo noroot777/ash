@@ -220,18 +220,22 @@ const toPeer = (
  * 原来是「全员可见可批」(§十一 互信定位)。那一条只说对了一半:**发申请**确实不是
  * 管理员专属,谁都可以发;但一条申请该打扰的只有它冲着的那个人 —— 源机发申请时带的
  * 「我在对端的账号 key」已经说明了它要以谁的身份进来,对端没有理由把它推给另外几个
- * 不相干的人,更不该让他们替本人放行一台机器。
+ * 不相干的人,更不该让他们替本人处置。
  *
- * **看得见 ≠ 批得了**,两件事分开(第 1 轮审查 P1)。用户的原话是「只有发送请求的那个
- * 用户才能看得见,并操作是否接受」,所以:
+ * 判据按**这一行处在哪一档**分,不按角色分(第 2 轮审查 P1):
  *
- *   · `approve` = 放行,**只有本人**。放行一台机器等于让它上面所有人都敲得开本机的门,
- *     这是扩权,谁都替不了当事人 —— 管理员也不行。
- *   · `block` / `unblock` / `delete` = 收紧与清理,本人 + 实例管理员。这是收权不是扩权,
- *     而 approved 名单是**实例级**信任表:人走了、key 换了、升级前落下无主老行,总得有人
- *     能撤销和收拾,否则就是一批谁也动不了的孤儿。
- *   · 可见:本人 + 管理员(后者带 `asAdmin`,界面据此说明「你是以管理员身份看到的」,
- *     并且不给他「批准」按钮)。
+ *   · `pending` = 一封还没人拆的信,**只有收信人**。看不见、拒不了、也删不掉 ——
+ *     管理员在这一档什么都不是。用户的原话就是「只有发送请求的那个用户才能看得见,
+ *     并操作是否接受」,而「替你拒了」和「替你批了」一样是替人做决定:源机那边只会
+ *     看到一句「对方拒绝了」,当事人根本不知道有人来找过他。
+ *   · `approved` / `blocked` = 已经进了**实例级信任表**,本人 + 实例管理员都看得见。
+ *     一台 approved 的机器意味着它上面所有人都敲得开本机的门,人走了、key 换了总得
+ *     有人撤销得掉,否则就是一批谁也动不了的孤儿。管理员在这一档能拒(收权)、能删
+ *     (清理),但**批不了**:`approve` 和把 blocked 解回 approved 都是放行,是扩权。
+ *
+ * 升级前落下的无主 pending 老行因此对所有人不可见 —— 这是对的,不是漏了一档:它没
+ * 放行任何东西(pending 进不来),而源机一旦按新流程重发申请,touchPeer 会就地把归属
+ * 补上(那一行还在 pending),它自己就回到收信人手里了。
  *
  * **agent 回合凭证一律不算本人**。它身上挂的 owner userId 是归属戳,不是「它就是这个
  * 人」(auth/context.ts `isAccountHolder`)。不判这一条的话,任意一条正在跑的任务只凭
@@ -243,7 +247,7 @@ const toPeer = (
  */
 export function peerAudience(
   actor: Actor,
-  row: { requestedByUserId?: string | null },
+  row: { requestedByUserId?: string | null; status?: string | null },
 ): { visible: boolean; asAdmin: boolean; canApprove: boolean } {
   if (actor.kind === "single") return { visible: true, asAdmin: false, canApprove: true };
   // agent 不是账号本人:读写两侧一起挡,别让它连别人的申请列表都翻得到。
@@ -252,6 +256,8 @@ export function peerAudience(
   if (owner && actor.userId && actor.userId === owner) {
     return { visible: true, asAdmin: false, canApprove: true };
   }
+  // 别人的**待批准申请**对谁都不存在,管理员也一样。
+  if (row.status === "pending" || !row.status) return { visible: false, asAdmin: false, canApprove: false };
   return actor.role === "admin"
     ? { visible: true, asAdmin: true, canApprove: false }
     : { visible: false, asAdmin: false, canApprove: false };
@@ -286,9 +292,9 @@ export async function listPeers(actor: Actor): Promise<HandoffPeer[]> {
 
 /**
  * 处置前的同一道闸。看不见的记录一律回「没有这台机器」,免得拿指纹试探别人的申请。
- * `approving` 为真时再加一道:放行只有本人做得了(见 `peerAudience`),管理员看得见
- * 也批不了 —— 这一档要**明说**而不是回 404,不然管理员会对着一条自己列表里明明有的
- * 记录得到「没有这台机器」。
+ * `approving` 为真时再加一道:放行只有本人做得了(见 `peerAudience`)。这一档要**明说**
+ * 而不是回 404 —— 走到这里说明这条记录在他自己的列表里就看得见(已 approved/blocked 的
+ * 实例信任表),回「没有这台机器」只会让人以为界面坏了。
  */
 async function requirePeerActable(
   actor: Actor,
@@ -303,8 +309,8 @@ async function requirePeerActable(
   }
   if (approving && !audience.canApprove) {
     throw new HandoffError(
-      "这条接力申请只有它冲着的那个人能接受 —— 放行一台机器等于让它上面所有人都敲得开本机的门。"
-      + "你可以拒绝或删除它,但接受得由本人来点。",
+      "放行一台来源机器只有它冲着的那个人点得了 —— 那等于让它上面所有人都敲得开本机的门。"
+      + "你可以拒绝或删除它,但放行得由本人来。",
       403,
     );
   }
@@ -384,9 +390,12 @@ export async function unblockPeer(actor: Actor, fingerprint: string): Promise<Ha
 }
 
 export async function deletePeer(actor: Actor, fingerprint: string): Promise<void> {
+  // 校验和删除必须用**同一个**串:指纹在库里一律小写,拿原样的大写指纹去 delete 会
+  // 一行都不匹配,端点却照样回 {deleted:true}(第 2 轮审查 P3)。
+  const normalized = fingerprint.trim().toLowerCase();
   // 看不见就删不掉:否则「只打扰本人」在读侧做了,写侧还能拿指纹把别人的记录抹掉。
-  await requirePeerActable(actor, fingerprint.trim().toLowerCase());
-  await db.delete(handoffPeers).where(eq(handoffPeers.fingerprint, fingerprint));
+  await requirePeerActable(actor, normalized);
+  await db.delete(handoffPeers).where(eq(handoffPeers.fingerprint, normalized));
 }
 
 /** 客户端真实 TCP 地址。反代场景会看到网关地址；不信任可伪造的 X-Forwarded-For。 */

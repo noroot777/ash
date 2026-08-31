@@ -311,7 +311,8 @@ export function HandoffSettings({
                   <br />
                   批准一台机器只是<b>让它敲得开门</b>：它上面的每个人能把任务推进哪些项目，仍由那个人
                   在本机的账号和项目成员名单决定——机器指纹管传输，账号管权限，两层各管各的。
-                  下面的来源名单<b>谁都能批</b>（批了会记名）；这三个开关是整台机器的安全姿态
+                  下面的来源名单按人分：一台机器的申请<b>只有它冲着的那个人看得见、批得了</b>
+                  （批了会记名），别人连有这么一条都不知道；这三个开关是整台机器的安全姿态
                   {!canManageInstance && "，只有实例管理员能改"}。
                 </>
               )}
@@ -420,8 +421,8 @@ export function HandoffSettings({
                     为了审计和撤销,不是为了替人拍板(判据 handoff-peers.ts peerAudience)。 */}
                 {peer.seenAsAdmin && (
                   <small className="handoff-peer-note">
-                    你是以实例管理员身份看到这条的；通常该由
-                    {peer.requestedByName ? `「${peer.requestedByName}」` : "申请人本人"}处理。
+                    你是以实例管理员身份看到这条的：它已经进了本机的信任表，你能拒绝或删除，
+                    但重新放行得由{peer.requestedByName ? `「${peer.requestedByName}」` : "申请人本人"}来点。
                   </small>
                 )}
                 {/* 知情批准(§十一):对方是多人实例时,批准的是**那台机器**,

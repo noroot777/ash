@@ -299,14 +299,6 @@
   font-size: 10px;
   font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
 }
-/* 「你是以管理员身份看到的」——是给人读的一句话，不是指纹那类机器串，所以不上等宽。 */
-.handoff-approval-alert-copy small.handoff-approval-alert-note {
-  display: block;
-  margin-top: 3px;
-  font-family: inherit;
-  font-size: 10.5px;
-  color: var(--muted);
-}
 .handoff-approval-alert-actions { display: flex; align-items: center; gap: 4px; }
 
 @keyframes handoff-approval-enter {

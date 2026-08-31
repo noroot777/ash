@@ -327,35 +327,26 @@ const WRITE_ROUTES: { path: string; method: string; body?: unknown; what: string
   assert.ok(!memberSees.has(others), "别人的申请不该来打扰我");
   assert.ok(
     !memberSees.has(legacy),
-    "无主的老记录只归管理员收拾 —— 给全员看等于把「无主申请谁都能批」那条口子从读侧开回来",
+    "无主的老记录也不该冒出来 —— 给全员看等于把「无主申请谁都能批」那条口子从读侧开回来",
   );
 
   const ownerSees = await seenBy(ownerKey);
   assert.ok(ownerSees.has(others) && !ownerSees.has(mine), "反向同理");
 
-  // 管理员看得见全部:approved 名单是实例级信任表,人走了、key 换了总得有人能审计撤销,
-  // 升级前落下的无主老行也只剩他能处置。
+  // 管理员在**待批准**这一档什么都不是(第 2 轮审查 P1):一封没拆的信只有收信人有份,
+  // 「替你拒了」和「替你批了」一样是替人做决定 —— 源机只会看到「对方拒绝了」,当事人
+  // 根本不知道有人来找过他。
   const bossSees = await seenBy(bossKey);
   assert.ok(
-    bossSees.has(mine) && bossSees.has(others) && bossSees.has(legacy),
-    "实例管理员要能审计整张信任表，包括没人认领的老行",
+    !bossSees.has(mine) && !bossSees.has(others) && !bossSees.has(legacy),
+    "别人的待批准申请对管理员也不存在",
   );
-  const bossRows = (await call("/api/handoff/peers", "GET", bossKey)).body.peers as
-    { fingerprint: string; seenAsAdmin?: boolean; canApprove?: boolean }[];
-  const bossRow = bossRows.find((p) => p.fingerprint === mine);
-  assert.equal(
-    bossRow?.seenAsAdmin, true,
-    "管理员看到别人的申请时要标出「你是以管理员身份看到的」,界面才说得清为什么它在这儿",
-  );
-  // 看得见 ≠ 批得了(第 1 轮审查 P1-2)。这一位是界面露不露「批准」按钮的唯一依据 ——
-  // 留一颗按下去就 403 的按钮,用户只会得出「功能坏了」。
-  assert.equal(bossRow?.canApprove, false, "管理员看得见别人的申请,但接受得由本人点");
-  const memberRows = (await call("/api/handoff/peers", "GET", memberKey)).body.peers as
-    { fingerprint: string; canApprove?: boolean }[];
-  assert.equal(
-    memberRows.find((p) => p.fingerprint === mine)?.canApprove, true,
-    "本人当然批得了自己的申请",
-  );
+  const adminReject = await call(`/api/handoff/peers/${mine}/block`, "POST", bossKey);
+  assert.equal(adminReject.status, 404, `管理员拒不了别人的申请:${adminReject.text}`);
+  const adminDrop = await call(`/api/handoff/peers/${mine}`, "DELETE", bossKey);
+  assert.equal(adminDrop.status, 404, `删同理:${adminDrop.text}`);
+  const adminGrab = await call(`/api/handoff/peers/${mine}/approve`, "POST", bossKey);
+  assert.equal(adminGrab.status, 404, `更批不了:${adminGrab.text}`);
 
   // 写侧同一道闸:读侧收窄了、写侧还能拿指纹动别人的记录,等于没收窄。
   const steal = await call(`/api/handoff/peers/${mine}/approve`, "POST", ownerKey);
@@ -365,23 +356,37 @@ const WRITE_ROUTES: { path: string; method: string; body?: unknown; what: string
   const orphanGrab = await call(`/api/handoff/peers/${legacy}/approve`, "POST", ownerKey);
   assert.equal(orphanGrab.status, 404, `无主老行也不是谁都能批:${orphanGrab.text}`);
 
-  // 管理员这一档要**明说**:回 404 的话他会对着一条自己列表里明明有的记录得到「没有这台机器」。
-  const adminGrab = await call(`/api/handoff/peers/${mine}/approve`, "POST", bossKey);
-  assert.equal(adminGrab.status, 403, `管理员也替不了本人放行:${adminGrab.text}`);
-  const orphanByAdmin = await call(`/api/handoff/peers/${legacy}/approve`, "POST", bossKey);
-  assert.equal(orphanByAdmin.status, 403, `无主老行同理,没人认领就没人能批:${orphanByAdmin.text}`);
-
+  const memberRows = (await call("/api/handoff/peers", "GET", memberKey)).body.peers as
+    { fingerprint: string; canApprove?: boolean }[];
+  assert.equal(
+    memberRows.find((p) => p.fingerprint === mine)?.canApprove, true,
+    "本人当然批得了自己的申请",
+  );
   const own = await call(`/api/handoff/peers/${mine}/approve`, "POST", memberKey);
   assert.equal(own.status, 200, `本人批自己的申请必须放行:${own.text}`);
-  // 收紧和清理是另一面:approved 名单是实例级信任表,人走了、key 换了、无主老行,
-  // 总得有人撤销得了,否则就是一批谁也动不了的孤儿。
+
+  // 一旦进了信任表就换一档:approved/blocked 是**实例级**的,一台放行的机器意味着它上面
+  // 所有人都敲得开本机的门,人走了、key 换了总得有人撤销得掉。管理员在这一档看得见、
+  // 能拒能删,但放行仍旧只有本人点得了。
+  const bossAfter = (await call("/api/handoff/peers", "GET", bossKey)).body.peers as
+    { fingerprint: string; seenAsAdmin?: boolean; canApprove?: boolean }[];
+  const trusted = bossAfter.find((p) => p.fingerprint === mine);
+  assert.ok(trusted, "已放行的机器要进管理员的审计视野");
+  assert.equal(trusted?.seenAsAdmin, true, "并标出「你是以管理员身份看到的」,界面才说得清为什么它在这儿");
+  assert.equal(trusted?.canApprove, false, "看得见 ≠ 批得了:这一位决定界面露不露「批准」按钮");
   const adminBlock = await call(`/api/handoff/peers/${mine}/block`, "POST", bossKey);
   assert.equal(adminBlock.status, 200, `管理员要撤销得了已放行的机器:${adminBlock.text}`);
-  const adminWipe = await call(`/api/handoff/peers/${legacy}`, "DELETE", bossKey);
-  assert.equal(adminWipe.status, 200, `无主老行也得有人收拾得掉:${adminWipe.text}`);
   // 拉黑再解除会**恢复**原来的 approved —— 那也是放行,不能成为绕过「只有本人能批」的后门。
   const adminUnblock = await call(`/api/handoff/peers/${mine}/unblock`, "POST", bossKey);
   assert.equal(adminUnblock.status, 403, `拉黑再解除不能变成替本人放行的后门:${adminUnblock.text}`);
+  // 删除按**归一化后**的指纹落库:拿大写指纹去 delete 会一行都不匹配,端点却照样回
+  // {deleted:true}(第 2 轮审查 P3)。
+  const upper = await call(`/api/handoff/peers/${mine.toUpperCase()}`, "DELETE", bossKey);
+  assert.equal(upper.status, 200, upper.text);
+  assert.equal(
+    (await seenBy(bossKey)).has(mine), false,
+    "回了 deleted:true 就必须真删掉 —— 大小写不一致时曾经只是「看起来删了」",
+  );
 }
 
 // ── ⑧ 多人实例不收无主申请 ────────────────────────────────────────────────
@@ -397,10 +402,12 @@ const WRITE_ROUTES: { path: string; method: string; body?: unknown; what: string
   const { localIdentity } = await import("../src/handoff-identity.js");
   const me = localIdentity().fingerprint;
   const url = "http://127.0.0.1:4317/api/handoff/ping?nonce=pair";
-  const listed = async () => {
-    const rows = (await call("/api/handoff/peers", "GET", bossKey)).body.peers as { fingerprint: string }[];
-    return rows.some((p) => p.fingerprint === me);
-  };
+  // 直接查库,不走列表端点:无主行现在对**所有人**都不可见(⑦),拿谁的 key 去列都是空,
+  // 那样「没落库」和「落了但看不见」就分不开了 —— 这一节要钉的恰恰是前者。
+  const { handoffPeers: peerTable } = await import("../src/db/schema.js");
+  const { eq: peerEq } = await import("drizzle-orm");
+  const listed = async () =>
+    (await db.select().from(peerTable).where(peerEq(peerTable.fingerprint, me))).length > 0;
   const ping = async (extra?: Record<string, string>) => {
     const res = await app.fetch(new Request(url, {
       headers: { ...peerRequestHeaders(url, "GET", ""), ...extra },
