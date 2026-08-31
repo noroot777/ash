@@ -96,6 +96,9 @@ try {
     "第 1 轮审查",
     "自由派审的正文归它自己那张卡",
   );
+  assert.equal(await page.getByText(/审查开始|审查重跑上一回合/).count(), 0, "卡头已有轮次，正文不重复开始旁注");
+  assert.equal(await page.getByText(/继续（从中断处）/).count(), 0, "checkpoint 续跑标记不进入主时间线");
+  assert.equal(await page.getByText(/请先完整读取 report\.md/).count(), 0, "自由审查修复 prompt 不伪装成系统消息块");
 
   // 折叠状态不妨碍直接看报告；报告沿用现有应用内 Markdown 弹层，不另开标签页。
   const pageCount = page.context().pages().length;
@@ -202,9 +205,9 @@ try {
 
   // 验证段的起止旁注跟审查者同一套颜色；打回那条仍归红。
   const verifyNotes = page.locator(".conversation-note.is-verify");
-  assert.equal(await verifyNotes.count(), 8, "两轮就地验证四条 + 自由派审失败 / 重跑四条");
-  assert.match(await verifyNotes.nth(0).innerText(), /第 2 轮验证开始/);
-  assert.equal(await verifyNotes.nth(1).evaluate((el) => el.classList.contains("is-error")), true);
+  assert.equal(await verifyNotes.count(), 4, "四张审查卡各只保留一条收尾结论");
+  assert.match(await verifyNotes.nth(0).innerText(), /第 2 轮验证未通过/);
+  assert.equal(await verifyNotes.nth(0).evaluate((el) => el.classList.contains("is-error")), true);
   const noteColors = await verifyNotes.evaluateAll((els) =>
     els.map((el) => getComputedStyle(el).borderLeftColor));
   assert.notEqual(noteColors[0], noteColors[1], "开始是青的、打回是红的，两条不能同色");

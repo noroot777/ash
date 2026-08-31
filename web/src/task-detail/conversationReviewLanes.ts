@@ -37,6 +37,21 @@ export type ConversationFeedRow =
 type ActiveLane = ConversationReviewLane & { reviewerSpoke: boolean };
 
 const STAGE_CONCLUSION = /验收阶段更新：.*（(verified|verify_failed)）/;
+const FREE_REVIEW_REPAIR_HANDOFF = /^【自由工作流审查未通过(?:\s*·[^】]+)?】/;
+
+// 这些行是给执行器续跑用的协议，不是用户需要阅读的会话内容。原始 items 保留不动，
+// 这里只在展示行里降噪：运行语义、导出和重试仍然能读到完整历史。
+function hiddenProtocolItem(item: ConversationItem): boolean {
+  if (item.kind === "event") return item.text.includes(LEGACY_SYS_MARKER);
+  return item.kind === "user"
+    && !!item.bySystem
+    && FREE_REVIEW_REPAIR_HANDOFF.test(item.text.trimStart());
+}
+
+function visibleLaneItem(item: ConversationItem): boolean {
+  // 轮次、审查者与开始时间已经在卡头；正文再重复一遍「第 N 轮开始」只会制造双标题。
+  return laneStart(item) === null && !hiddenProtocolItem(item);
+}
 
 function itemEnd(item: ConversationItem): string | null {
   if (item.kind === "agent") return item.markerEndedAt ?? item.endedAt ?? item.at ?? null;
@@ -123,7 +138,7 @@ function finishLane(
     if (lane.reportAvailable && lane.round !== null) lane.report = { kind: "inline", round: lane.round };
   }
   const { reviewerSpoke: _reviewerSpoke, ...finished } = lane;
-  return finished;
+  return { ...finished, items: finished.items.filter(visibleLaneItem) };
 }
 
 function titleOf(mark: VerifyNoteMark): string {
@@ -237,5 +252,5 @@ export function conversationFeedRows(
     // 正在跑的轮次展开，避免用户只看见一张不动的卡片。
     lane.defaultCollapsed = lane !== latest && lane.conclusion !== null;
   }
-  return rows;
+  return rows.filter((row) => row.kind === "review-lane" || !hiddenProtocolItem(row.item));
 }

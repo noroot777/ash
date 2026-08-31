@@ -30,7 +30,7 @@ const session = {
   reasoningEffort: "xhigh",
 };
 // 回合哨兵行:落盘格式是 \x1e + 一行 JSON(见 shared 的 parseSessionOutput)。
-const turn = (kind, text, at) => `\x1e${JSON.stringify({ t: kind, text, at })}`;
+const turn = (kind, text, at, extra = {}) => `\x1e${JSON.stringify({ t: kind, text, at, ...extra })}`;
 const run = (turnStartedAt, verifyRound) => ({
   at: turnStartedAt,
   turnStartedAt,
@@ -79,7 +79,7 @@ assert.equal(impl.sessionId, verify.sessionId, "这三段本来就跑在同一�
 const firstLane = conversationFeedRows(items).find((row) => row.kind === "review-lane");
 assert.ok(firstLane, "第 2 轮就地验证应整理成验证卡");
 assert.equal(firstLane.round, 2);
-assert.deepEqual(firstLane.items.map((item) => item.id), [startNote.id, verify.id, failNote.id]);
+assert.deepEqual(firstLane.items.map((item) => item.id), [verify.id, failNote.id], "卡头已有轮次和时间，正文不重复开始旁注");
 assert.equal(firstLane.conclusion, "verify_failed");
 assert.equal(firstLane.complete, true);
 assert.equal(firstLane.reportAvailable, true, "跑完且审查者确实说过话，才有可看的 report.md");
@@ -295,8 +295,34 @@ assert.deepEqual(freeLane.report, { kind: "free", runId: "fr1", round: 1 });
 assert.equal(freeLane.reportAvailable, true);
 assert.deepEqual(
   freeLane.items.map((item) => item.kind),
-  ["event", "agent", "event"],
-  "起旁注、审查正文、收尾旁注是同一张卡",
+  ["agent", "event"],
+  "卡内只保留审查正文和收尾结论，不重复开始旁注",
+);
+
+// 审查开始、checkpoint 续跑和失败后的修复 prompt 都必须留在原始会话里供执行器使用，
+// 但不再伪装成用户需要阅读的三块对话内容。
+const protocolNoise = buildConversationItems([{
+  session: { ...session, endedAt: null },
+  output: [
+    turn("system", "自由工作流第 3 轮审查开始：5.5审查 · 逻辑检查。", "2026-08-11T04:00:00.000Z"),
+    turn("system", "〔系统〕继续（从中断处）", "2026-08-11T04:01:00.000Z"),
+    turn("system", "自由工作流第 3 轮审查未通过，意见已发回会话；修复确认完成后自动复审。", "2026-08-11T04:40:00.000Z"),
+    turn("user", "【自由工作流审查未通过 · 第 3 轮】\n请先完整读取 report.md，再调用 complete_task。\n\n证据目录：/tmp/review", "2026-08-11T04:41:00.000Z", { by: "system" }),
+  ].join("\n"),
+  trace: [],
+}], [{ ...session, endedAt: null }], []);
+const protocolRows = conversationFeedRows(protocolNoise);
+const protocolLane = protocolRows.find((row) => row.kind === "review-lane");
+assert.ok(protocolLane);
+assert.deepEqual(
+  protocolLane.items.map((item) => item.kind === "event" ? item.text : item.kind),
+  ["自由工作流第 3 轮审查未通过，意见已发回会话；修复确认完成后自动复审。"],
+  "卡内只保留用户真正需要的审查结论",
+);
+assert.equal(
+  protocolRows.some((row) => row.kind === "item" && row.item.kind === "user" && row.item.bySystem),
+  false,
+  "自由审查修复 prompt 不应出现在主时间线",
 );
 
 const freeLaneNoState = conversationFeedRows(freeLaneItems).find((row) => row.kind === "review-lane");
