@@ -97,4 +97,23 @@ assert.match(emptyMarkup, /verify-lane is-collapsed/, "空正文卡按收起态�
 assert.doesNotMatch(emptyMarkup, />展开<|>收起</, "没有正文时不显示无效的展开按钮");
 assert.match(emptyMarkup, /class="verify-lane-body"[^>]*hidden=""/, "没有正文时 body 必须隐藏");
 
+// 派审附言是这一轮审查的输入，卡里必须看得见 —— 否则它写完就只剩派审对话框里那个
+// textarea 知道，用户读结论时无从核对「我要求重点看的那一点他看了没有」。
+const noteText = "重点看 SSE 断线重连，别只跑单测。";
+const noteLane = conversationFeedRows(protocolItems, { reviews: [{
+  id: "fr3",
+  reviewerName: "5.5审查",
+  model: "claude-opus-5",
+  note: noteText,
+  retryLimit: 2,
+  target: { kind: "workspace" },
+  rounds: [{ round: 3, startedAt: "2026-08-11T02:00:00.000Z", reportMarkdown: "# 报告" }],
+}] as never }).find((row): row is ConversationReviewLane => row.kind === "review-lane");
+assert.ok(noteLane);
+assert.equal(noteLane.note, noteText, "附言从 run 上补进审查卡");
+const noteMarkup = renderToStaticMarkup(<ReviewerLane taskId="t1" lane={noteLane}>{null}</ReviewerLane>);
+assert.match(noteMarkup, /派审附言/, "卡内正文顶部摆出附言");
+assert.match(noteMarkup, /重点看 SSE 断线重连/, "附言正文原样呈现");
+assert.match(noteMarkup, /含附言/, "卡头留标记，折叠着也看得出这一轮带附言");
+
 console.log("review-presentation ok");

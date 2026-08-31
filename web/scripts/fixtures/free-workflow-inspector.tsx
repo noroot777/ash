@@ -58,7 +58,7 @@ const state = {
     model: null,
     reasoningEffort: null,
     checkMode: "logic",
-    note: null,
+    note: "重点核对退款分支的边界条件。",
     retryLimit: 1,
     currentRound: 1,
     status: "passed",
@@ -538,6 +538,11 @@ createRoot(document.getElementById("root")!).render(
       </aside>
       <aside className="inspector-host repair-fixture" style={{ width: 380, height: 360, marginTop: 20, marginLeft: "auto" }}>
         <FreeWorkflowInspector task={repairTask} reviewOnly notify={() => undefined} />
+      </aside>
+      {/* 预约槽里的附言：run 还没建，附言只在 reviewReservation 上。跟上面那条工具栏共用
+          同一个 taskId 的共享状态，所以工具栏存下预约后这里应立刻显示出来。 */}
+      <aside className="inspector-host reservation-inspector-fixture" style={{ width: 380, height: 360, marginTop: 20, marginLeft: "auto" }}>
+        <FreeWorkflowInspector task={manualChatTask} reviewOnly notify={() => undefined} />
       </aside>
     </div>
   </StrictMode>,

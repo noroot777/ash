@@ -84,6 +84,15 @@
 .review-round__open-task { display: inline-flex; align-items: center; gap: 5px; margin-top: 8px; border: 0; border-radius: 6px; background: var(--raised); padding: 4px 7px; color: var(--muted); font-size: 9.5px; }
 .review-round__open-task:hover { color: var(--ink); }
 
+/* 派审附言（ReviewNote）。三个地方共用同一块：报告抽屉正文顶部、会话流审查卡正文顶部、
+   预约概览。它是**用户自己写的输入**，所以刻意长得像引用而不是像结论——一条竖杠 + 原样
+   换行的正文，跟旁边的报告 markdown 区分开。 */
+.review-note { border-left: 2px solid color-mix(in lch,var(--accent) 45%,var(--line)); border-radius: 0 6px 6px 0; background: color-mix(in lch,var(--accent) 4%,var(--panel)); padding: 6px 9px; }
+.review-note + * { margin-top: 9px; }
+.review-note > b { display: block; color: var(--accent); font-size: 9px; font-weight: 700; letter-spacing: .04em; }
+.review-note > p { overflow-wrap: anywhere; margin: 3px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; white-space: pre-wrap; }
+.review-inspector__overview .review-note { margin-top: 9px; }
+
 .review-inspector__targets { border-bottom: 0.5px solid var(--line); padding: 12px 14px; }
 .review-inspector__targets > header { margin-bottom: 7px; }
 .review-inspector__targets > header b, .review-inspector__targets > header small { display: block; }

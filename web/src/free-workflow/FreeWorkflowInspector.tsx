@@ -18,6 +18,7 @@ import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { ReviewEvidenceDrawer } from "../review/ReviewEvidenceDrawer.tsx";
+import { ReviewNote } from "../review/ReviewNote.tsx";
 import { ReviewScreenshotStrip } from "../review/ReviewScreenshotStrip.tsx";
 import { FreeReviewDialog } from "./FreeReviewDialog.tsx";
 import { FreeReviewProgress } from "./FreeReviewProgress.tsx";
@@ -221,6 +222,7 @@ export function FreeWorkflowInspector({
         ) : undefined}
       >
         <div className="review-round-body">
+          {opened.run.note && <ReviewNote text={opened.run.note} />}
           {opened.round.reportMarkdown ? <MarkdownBody text={opened.round.reportMarkdown} /> : <p>报告尚未生成。</p>}
         </div>
       </ReviewEvidenceDrawer>
@@ -308,6 +310,11 @@ export function FreeWorkflowInspector({
               </button>}
               {onOpenReview && <button type="button" onClick={onOpenReview}><span>打开改动工作区</span><CaretRight size={13} /></button>}
             </div>
+            {/* 预约还没变成 run，附言只躺在预约槽里；不摆出来的话，用户只能靠重新打开
+                派审对话框才知道自己预约时写了什么。 */}
+            {reservationArmed && state?.reviewReservation.note && (
+              <ReviewNote text={state.reviewReservation.note} label="预约附言" />
+            )}
           </section>
 
           <section className="review-inspector__targets" aria-label="自由审查轮次">
@@ -330,7 +337,7 @@ export function FreeWorkflowInspector({
                   >
                     <span>
                       <b>第 {activity.round.round} 轮</b>
-                      <small>{activity.run.reviewerName} · {activity.run.checkMode === "logic" ? "逻辑检查" : "语法检查"} · {timing(activity.round.startedAt, activity.round.endedAt)}</small>
+                      <small>{activity.run.reviewerName} · {activity.run.checkMode === "logic" ? "逻辑检查" : "语法检查"} · {timing(activity.round.startedAt, activity.round.endedAt)}{activity.run.note ? " · 含附言" : ""}</small>
                     </span>
                     <em>{reviewStatusIcon(activity.round)}{reviewRoundLabel(activity.round)}</em>
                   </button>
@@ -347,7 +354,7 @@ export function FreeWorkflowInspector({
                   const failed = activity.round.status !== "reviewing" && activity.round.conclusion !== "verified";
                   return (
                     <button type="button" key={key} className={key === selectedReviewKey ? "is-selected" : failed ? "is-failed" : ""} aria-expanded={key === selectedReviewKey} onClick={() => selectReview(activity.run, activity.round)}>
-                      <span><b>{activity.run.target?.kind === "accepted_merge" ? `${activity.run.target.branch}@${activity.run.target.mergeCommit.slice(0, 8)}` : "验收快照"}</b><small>{activity.run.reviewerName} · {timing(activity.round.startedAt, activity.round.endedAt)}</small></span>
+                      <span><b>{activity.run.target?.kind === "accepted_merge" ? `${activity.run.target.branch}@${activity.run.target.mergeCommit.slice(0, 8)}` : "验收快照"}</b><small>{activity.run.reviewerName} · {timing(activity.round.startedAt, activity.round.endedAt)}{activity.run.note ? " · 含附言" : ""}</small></span>
                       <em>{reviewStatusIcon(activity.round)}{reviewRoundLabel(activity.round)}</em>
                     </button>
                   );
@@ -396,7 +403,7 @@ export function FreeWorkflowInspector({
                 return <li key={activity.key} className={active ? "is-active" : passed ? "is-done" : "is-warning"}>
                   <button type="button" aria-expanded={selectedReviewKey === key} onClick={() => selectReview(activity.run, activity.round)}>
                     <span>{active ? <SpinnerGap size={14} className="is-spinning" /> : passed ? <CheckCircle size={14} weight="fill" /> : <MagnifyingGlass size={14} />}</span>
-                    <div><b>{activity.run.reviewerName} · {activity.run.checkMode === "logic" ? "逻辑检查" : "语法检查"}</b><small>{reviewRoundLabel(activity.round)} · 第 {activity.round.round} 轮 / 最多 {activity.run.retryLimit + 1} 轮 · {timing(activity.round.startedAt, activity.round.endedAt)}</small></div>
+                    <div><b>{activity.run.reviewerName} · {activity.run.checkMode === "logic" ? "逻辑检查" : "语法检查"}</b><small>{reviewRoundLabel(activity.round)} · 第 {activity.round.round} 轮 / 最多 {activity.run.retryLimit + 1} 轮 · {timing(activity.round.startedAt, activity.round.endedAt)}{activity.run.note ? " · 含附言" : ""}</small></div>
                   </button>
                 </li>;
               }
