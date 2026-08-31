@@ -170,8 +170,8 @@ export function ConversationFeed({
     ? [...items].reverse().find((item) => item.kind === "agent")?.id ?? null
     : null;
   const rows = conversationFeedRows(items, { reviews });
-  // 「执行链路还没停」用 taskAttention 那一份口径（含 awaiting_review —— 卡在审查门上
-  // 的任务还没走完），别在折叠这儿另起一套。这里只有单飞与执行者，团队走 TeamFeed。
+  // 「执行链路还没停」用 taskAttention 那一份口径（在跑 / 卡在审查门上 / 停在检查点等人
+  // 答话都算没停），别在折叠这儿另起一套。这里只有单飞与执行者，团队走 TeamFeed。
   const taskLive = isExecutionChainLive(task);
   const hiddenTimes = new Set<string>();
   for (let index = 1; index < items.length; index += 1) {

@@ -177,6 +177,11 @@ for (const label of [
   assert.equal(isExecutionChainLive(single("awaiting_review")), true);
   assert.equal(isExecutionChainLive(single("running")), true);
   assert.equal(nextProcessFoldOpen({ running: false, taskLive: true, touched: false }), null);
+  // 停在检查点 / 等人答话也是活在半路：ask_question 和 pause_task 都落 paused，那不是
+  // 完成确认，后面还要 resume 接着跑。跟同文件 awaitsYourWord 是同一句话。
+  assert.equal(isExecutionChainLive(single("paused")), true);
+  assert.equal(isExecutionChainLive({ ...single("running"), question: "选 A 还是 B？" }), true);
+  assert.equal(isExecutionChainLive({ ...single("failed"), question: "选 A 还是 B？" }), true);
   // 团队：调度台派完活就落回 idle，得连执行者一起看。paused 的执行者也算这一队没落地
   //（跟 shared 的 isTeamSettled 同一个口径）。
   assert.equal(isExecutionChainLive(lead, [worker("running")]), true);
@@ -185,6 +190,7 @@ for (const label of [
   // 全队收工了才是真停下来 —— 这一下才折。
   assert.equal(isExecutionChainLive(lead, [worker("done")]), false);
   assert.equal(isExecutionChainLive(single("done")), false);
+  assert.equal(isExecutionChainLive(single("failed")), false);
   assert.equal(nextProcessFoldOpen({ running: false, taskLive: false, touched: false }), false);
 }
 

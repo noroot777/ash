@@ -66,12 +66,13 @@ const feedTask = (status: string) => ({
   executorLabel: "codex@cpa·gpt-5.6-sol",
 }) as never;
 
-/** 单飞：跑 → 回合收口且任务进审查门（不许折）→ 真收尾（这一下才折）。 */
+/** 单飞：跑 → 回合收口后停在检查点 / 进审查门（都不许折）→ 真收尾（这一下才折）。 */
 function SingleFeed() {
-  const [phase, setPhase] = useState<"running" | "gate" | "done">("running");
-  const status = phase === "running" ? "running" : phase === "gate" ? "awaiting_review" : "done";
+  const [phase, setPhase] = useState<"running" | "paused" | "gate" | "done">("running");
+  const status = phase === "running" ? "running" : phase === "paused" ? "paused" : phase === "gate" ? "awaiting_review" : "done";
   return (
     <div data-case="feed-single">
+      <button type="button" data-role="to-paused" onClick={() => setPhase("paused")}>停在检查点</button>
       <button type="button" data-role="to-gate" onClick={() => setPhase("gate")}>进审查门</button>
       <button type="button" data-role="to-done" onClick={() => setPhase("done")}>收尾</button>
       <ConversationFeed

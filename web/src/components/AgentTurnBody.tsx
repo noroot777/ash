@@ -80,9 +80,9 @@ export function AgentTurnBody({
   /** 这一回合还在飞。 */
   running: boolean;
   /**
-   * 整条执行链路还没停：它为真时过程块绝不自动收起。判据归调用方 ——
-   * 单飞看 taskAttention 的 isTaskLive（含 awaiting_review），团队看这一队收没收工
-   * （调度台派完活自己就落回 idle，只读它那一行会把满负荷的团队判成静止）。
+   * 整条执行链路还没停：它为真时过程块绝不自动收起。判据归调用方，两个会话流用的都是
+   * taskAttention 的 isExecutionChainLive —— 在跑、卡在审查门上、停在检查点等人答话、
+   * 团队还没收工，都算没停。
    */
   taskLive: boolean;
 }) {

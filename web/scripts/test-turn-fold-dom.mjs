@@ -134,10 +134,10 @@ try {
     "异常该并进过程块，不在结论区自成一条折叠行",
   );
 
-  // 11. 会话流自己判「链路停没停」：走真实时序，回合先在飞、再收口，而任务这时卡在
-  //     审查门上（单飞）/ 执行者还在干活（团队调度台已落回 idle）。这两档都不许折，
-  //     直到整条链路真停下来。只钉 nextProcessFoldOpen 的话，喂给它的那个布尔算错了
-  //     照样红不了 —— 所以这一段钉的是两个 feed 的接线。
+  // 11. 会话流自己判「链路停没停」：走真实时序，回合先在飞、再收口，而任务这时停在
+  //     检查点 / 卡在审查门上（单飞）、或执行者还在干活（团队调度台已落回 idle）。
+  //     这几档都不许折，直到整条链路真停下来。只钉 nextProcessFoldOpen 的话，喂给它的
+  //     那个布尔算错了照样红不了 —— 所以这一段钉的是两个 feed 的接线。
   const feedFold = (name) => page.locator(`[data-case="${name}"] details.task-turn-process`);
   const feedOpen = (name) => feedFold(name).evaluate((el) => el.open);
   const step = async (name, role) => {
@@ -147,6 +147,8 @@ try {
 
   await feedFold("feed-single").waitFor();
   assert.equal(await feedOpen("feed-single"), true, "回合在飞，会话流里的过程块该是摊开的");
+  await step("feed-single", "to-paused");
+  assert.equal(await feedOpen("feed-single"), true, "停在检查点等人答话不是完成确认，不该自动折");
   await step("feed-single", "to-gate");
   assert.equal(await feedOpen("feed-single"), true, "任务卡在审查门上，执行链路没走完，不该自动折");
   await step("feed-single", "to-done");
