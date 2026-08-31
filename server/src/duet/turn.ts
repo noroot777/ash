@@ -9,6 +9,7 @@
 
 import { mkdirSync, createWriteStream, appendFileSync } from "node:fs";
 import { join } from "node:path";
+import { finished } from "node:stream/promises";
 import { eq, sql } from "drizzle-orm";
 import type { DuetSpeaker, SessionRole, TurnTraceEvent } from "@ash/shared";
 import { db } from "../db/index.js";
@@ -51,7 +52,12 @@ export function reusedSessionPatch(
   commandLine: string,
   cliSessionId: string,
   runOwnerUserId: string | null = null,
-  cliConfigDir: string | null = null,
+  // **故意做成必填**,理由与上面 runOwner 那条同源:给它一个默认值,下一处新加的发言
+  // 漏传时不会报错,而是把这条复用行的 cli_config_dir 悄悄写成 null —— null 在读侧
+  // 正好等于「这一列上线前的老行」,于是那条会话的目录改按 run_owner 反推,在共用档下
+  // 反推出一个从没写过东西的个人目录,直接把第 1 轮刚堵上的 "No conversation found"
+  // 放回来,而且从产出上完全看不出来。必填 = 编译期就得回答「这一轮写在哪」。
+  cliConfigDir: string | null,
 ) {
   return {
     commandLine,
@@ -224,6 +230,11 @@ export async function runTurn(args: {
   const runDir = join(RUNS_DIR, taskId);
   mkdirSync(runDir, { recursive: true });
   const out = createWriteStream(join(runDir, `${rowId}.md`), { flags: "a" });
+  // 这条流在**整个回合**里一直开着(CLI 跑多久它开多久)。stream 上没人听的 'error'
+  // 会直接掀掉进程,而 transcript 写不进去(盘满、worktree 被删、目录没权限)不该连累
+  // 这一轮的结算 —— 先接住,回合末尾统一记一笔。
+  let outFailure: unknown = null;
+  out.on("error", (e) => { outFailure ??= e; });
   out.write(`\n\n### 第 ${round} 轮 · ${speaker}\n`);
 
   let text = "";
@@ -317,6 +328,12 @@ export async function runTurn(args: {
   // 'error' 事件('ERR_STREAM_WRITE_AFTER_END'),会当场把整个 server 打崩 —— 而且只在
   // 会话失效这条冷路径上崩,正常跑一百遍都碰不到。(第 1 轮审查 P1)
   out.end();
+  // `end()` 只是「我不写了」,不等于落盘 —— 文件可能连 open 都还没完成。必须等它真结束
+  // 再返回:调用方拿到结果后随时会去读这份 transcript,而在那之前流才 open 失败的话,那个
+  // 'error' 就成了回合之外的一颗雷,炸在谁头上全看时序(第 2 轮审查 P2:测试删掉 runs
+  // 目录后进程被它打掉,断言明明全过了还是 exit 1)。
+  await finished(out).catch(() => { /* 具体原因在 outFailure 里,下面统一报 */ });
+  if (outFailure) console.warn(`[ash] duet 这一轮的 transcript 没写成 (${rowId}):`, outFailure);
   await db
     .update(sessions)
     .set({

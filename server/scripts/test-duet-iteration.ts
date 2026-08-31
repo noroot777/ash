@@ -190,10 +190,13 @@ try {
       return { resumeCommand: `cd ${cwd} && claude --resume ${sessionId}`, resumeEnv: "K=v ", resumeArgs: "--settings '{}'" };
     },
   } as unknown as Parameters<typeof reusedSessionPatch>[0];
-  assert.deepEqual(reusedSessionPatch(executor, "/repo/next", "claude --resume x", "sess-9", "u-bob"), {
+  assert.deepEqual(reusedSessionPatch(executor, "/repo/next", "claude --resume x", "sess-9", "u-bob", "/cfg/bob/claude"), {
     commandLine: "claude --resume x",
     executor: "claude@build",
     cwd: "/repo/next",
+    // 这一轮实际注进去的配置目录。跟 cwd 一样是「会话文件此刻在哪」的一部分:
+    // 不跟着刷新,接力/续跑就会去上一轮那个目录里扑空。
+    cliConfigDir: "/cfg/bob/claude",
     // 这一轮跑在谁名下:跨人回合会换人,而 CLI 的会话文件跟着那个人的配置目录走。
     runOwnerUserId: "u-bob",
     // id 本身也在这份补丁里:上一轮若因会话失效被清空,只写三件套会让库里停在
@@ -207,7 +210,7 @@ try {
   // 冻好的那份(第 3 轮 finding 2)。
   assert.deepEqual(seen, ["/repo/next|sess-9"], "恢复三件套必须按本轮 cwd + 本轮会话 id 现算");
   // 还没拿到 CLI 会话 id 时:这几列一律不碰(写一条缺 id 的恢复命令,比留着上一轮那条更糟)。
-  const withoutId = reusedSessionPatch(executor, "/repo/next", "claude --resume x", "");
+  const withoutId = reusedSessionPatch(executor, "/repo/next", "claude --resume x", "", null, "/cfg/bob/claude");
   assert.equal("cliSessionId" in withoutId, false, "没有会话 id 就不该拿空串去覆盖库里那条");
   assert.equal("resumeCommand" in withoutId, false, "没有会话 id 就不该产出 resumeCommand");
   assert.equal("resumeEnv" in withoutId, false);
