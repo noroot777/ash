@@ -127,6 +127,16 @@ export interface HandoffApprovalResult {
   peer: HandoffPeerIdentity | null;
   /** 只有对方已经接受申请（或关闭审批）时才会返回项目。 */
   projects: HandoffPingProject[];
+  /**
+   * true = 对端是多人实例，但这次申请**没带**（或带了张无效的）「我在对端的账号 key」，
+   * 所以它认不出这条申请代表谁。申请照发不误 —— 拦死它等于连申请的路都断了，人本来
+   * 就可能还没有对端账号 —— 但对端只能把它当成一条无主申请推给全体成员处理，而不是
+   * 精准送到「我」名下（判据在 server/src/handoff-peers.ts peerAudience）。填上 key
+   * 再申请一次就会归到本人名下。
+   */
+  unclaimed?: boolean;
+  /** 对端认出来的「我」是谁。unclaimed 为假且对端是多人实例时才有。 */
+  peerUserName?: string;
 }
 
 // 落在 tasks.handoff（json）上的持久接力标记:导出侧 direction:"out"（任务已交出去，

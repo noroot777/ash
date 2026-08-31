@@ -332,11 +332,17 @@ export async function requestHandoffApproval(rawTargetUrl: string): Promise<Hand
   // 唯一带 pairing 的调用点 —— 只有这里该让对端多出一条待批准记录。
   const probe = await pingPeer(targetUrl, await rememberedFingerprint(targetUrl), undefined, { pairing: true });
   if (probe.peer) await rememberPeerFingerprint(targetUrl, probe.peer.fingerprint);
+  // 对端是多人实例却没认出我 = 这条申请落在它那边是**无主**的,只能推给全体成员处理。
+  // 照发不误(没有对端账号的人正要靠这一步开口),但得让申请人当场知道,而不是等对面
+  // 四个人一起被打扰之后才发现自己漏填了 key。
+  const unclaimed = probe.ping.instanceMode === "multi" && !probe.ping.peerUser;
   return {
     ok: true,
     target: { url: targetUrl, host: probe.ping.host },
     peer: probe.peer,
     projects: probe.ping.projects,
+    ...(unclaimed ? { unclaimed: true } : {}),
+    ...(probe.ping.peerUser ? { peerUserName: probe.ping.peerUser.name } : {}),
   };
 }
 
