@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { AgentExecutorProfile, FreeReviewCheckMode, FreeReviewExecutorOverride, ReviewerProfile } from "@ash/shared";
+import { MAX_FREE_REVIEW_RETRIES } from "@ash/shared/free-workflow";
 import { CheckCircle, MagnifyingGlass, Plus, SpinnerGap, X } from "@phosphor-icons/react";
 import { registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
@@ -21,6 +22,17 @@ import {
   type ReviewerRunDraft,
   type ReviewerRunSaveMode,
 } from "./ReviewerRunOverride.tsx";
+
+/**
+ * 复审轮数是手填的：空串、小数、负号、超上限都要在这里判死，别让它走到提交那一刻
+ * 才被后端（`free-review-input.ts` 的同一个上限）打回。null = 这串不是合法轮数。
+ */
+function parseRetryLimit(value: string): number | null {
+  const text = value.trim();
+  if (!/^\d+$/.test(text)) return null;
+  const parsed = Number(text);
+  return parsed <= MAX_FREE_REVIEW_RETRIES ? parsed : null;
+}
 
 export function FreeReviewDialog({
   taskId,
@@ -56,6 +68,9 @@ export function FreeReviewDialog({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const postMerge = !!postMergeTarget;
+  const parsedRetryLimit = parseRetryLimit(retryLimit);
+  // 合并结果审查本来就不复审（提交时写死 0），别让那条禁用的输入卡住它的提交按钮。
+  const retryLimitInvalid = !postMerge && parsedRetryLimit === null;
   const dialogTitle = postMerge
     ? "审查合并结果"
     : reservationMode ? (state?.reviewReservation?.armed ? "调整预约审查" : "预约审查") : "派审查";
@@ -128,6 +143,10 @@ export function FreeReviewDialog({
 
   const submit = async () => {
     if (!selectedId || busy || loading) return;
+    if (retryLimitInvalid) {
+      notify(`自动复审轮数必须是 0-${MAX_FREE_REVIEW_RETRIES} 的整数`);
+      return;
+    }
     if (runChanged && saveMode === "new" && !newName.trim()) {
       notify("请先给新审查者起个名字");
       return;
@@ -153,7 +172,7 @@ export function FreeReviewDialog({
       const input = {
         reviewerId,
         checkMode,
-        retryLimit: postMerge ? 0 : Number(retryLimit),
+        retryLimit: postMerge ? 0 : (parsedRetryLimit ?? 0),
         note,
         override,
       };
@@ -262,7 +281,31 @@ export function FreeReviewDialog({
                 </dl>
               )}
               <label><span>检查类型</span><select value={checkMode} onChange={(event) => setCheckMode(event.target.value as FreeReviewCheckMode)}><option value="logic">逻辑检查</option><option value="syntax">只做语法检查</option></select></label>
-              {!postMerge && <label><span>失败后自动复审</span><select value={retryLimit} onChange={(event) => setRetryLimit(event.target.value)}>{[0, 1, 2, 3, 5].map((value) => <option key={value} value={value}>{value} 轮</option>)}</select></label>}
+              {!postMerge && (
+                <label className="free-review-retry">
+                  <span>失败后自动复审</span>
+                  <span className={`free-review-retry-field${retryLimitInvalid ? " is-invalid" : ""}`}>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min={0}
+                      max={MAX_FREE_REVIEW_RETRIES}
+                      step={1}
+                      value={retryLimit}
+                      disabled={busy}
+                      aria-invalid={retryLimitInvalid}
+                      aria-describedby="free-review-retry-hint"
+                      onChange={(event) => setRetryLimit(event.target.value)}
+                    />
+                    <em>轮</em>
+                  </span>
+                  <small id="free-review-retry-hint">
+                    {retryLimitInvalid
+                      ? `请填 0-${MAX_FREE_REVIEW_RETRIES} 之间的整数`
+                      : `直接填 0-${MAX_FREE_REVIEW_RETRIES} 的整数；0 = 未通过就停下来等你处理`}
+                  </small>
+                </label>
+              )}
               <label className="free-review-note">
                 <span>附言（可选）</span>
                 <textarea
@@ -287,7 +330,7 @@ export function FreeReviewDialog({
         <footer>
           {!postMerge && state?.reviewReservation?.armed && <button type="button" disabled={busy} onClick={() => void cancelReservation()}>取消预约</button>}
           <button type="button" disabled={busy} onClick={onClose}>{!postMerge && state?.reviewReservation?.armed ? "关闭" : "取消"}</button>
-          <button className="is-primary" type="submit" aria-keyshortcuts="Enter" disabled={busy || loading || !selectedId}>
+          <button className="is-primary" type="submit" aria-keyshortcuts="Enter" disabled={busy || loading || !selectedId || retryLimitInvalid}>
             {busy ? (reservationMode && !postMerge ? "保存中…" : "启动中…") : postMerge ? "开始审查" : reservationMode ? (state?.reviewReservation?.armed ? "保存预约" : "预约审查") : "开始审查"}
           </button>
         </footer>

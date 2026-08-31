@@ -68,8 +68,8 @@ try {
   assert.equal(await lanes.count(), 4, "两轮就地验证 + 自由派审失败旧卡 / 重跑结果卡");
   assert.deepEqual(
     await lanes.evaluateAll((els) => els.map((el) => el.getAttribute("aria-label"))),
-    ["第 2 轮验证", "第 3 轮验证", "第 1 轮审查", "第 1 轮审查"],
-    "自由派审的卡不能沿用就地验证的「第 N 轮验证」标题",
+    ["第 2 轮验证", "第 3 轮验证", "第 1/5 轮审查", "第 1/5 轮审查"],
+    "自由派审的卡不能沿用就地验证的「第 N 轮验证」标题；拿得到 run 就要带上总轮数",
   );
   assert.equal(await lanes.nth(0).evaluate((el) => el.classList.contains("is-collapsed")), true);
   assert.equal(await lanes.nth(1).evaluate((el) => el.classList.contains("is-collapsed")), true);
@@ -93,7 +93,7 @@ try {
   );
   assert.equal(
     await messages.nth(4).evaluate((el) => el.closest(".verify-lane")?.getAttribute("aria-label")),
-    "第 1 轮审查",
+    "第 1/5 轮审查",
     "自由派审的正文归它自己那张卡",
   );
 

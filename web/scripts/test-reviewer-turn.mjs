@@ -289,6 +289,7 @@ assert.ok(freeLane, "自由派审的一轮同样要折成结论卡");
 assert.equal(freeLane.source, "free");
 assert.equal(freeLane.round, 1);
 assert.equal(freeLane.title, "第 1 轮审查", "标题不能沿用就地验证的「第 N 轮验证」");
+assert.equal(freeLane.totalRounds, null, "run 里没有 retryLimit 时不能拼出「第 1/NaN 轮」");
 assert.equal(freeLane.conclusion, "verify_failed");
 assert.equal(freeLane.complete, true);
 assert.deepEqual(freeLane.report, { kind: "free", runId: "fr1", round: 1 });
@@ -305,6 +306,20 @@ assert.equal(
   freeLaneNoState.reportAvailable,
   false,
   "拿不到 reviews 就没有 runId，宁可不给入口也不能拼一个打不开的 URL",
+);
+assert.equal(freeLaneNoState.title, "第 1 轮审查", "远程只读视图拿不到 reviews，标题退回不带分母");
+
+// —— 「本次审查一共几轮」：分母是 retryLimit + 1（首轮 + 允许的自动复审次数）——
+const scaledLane = conversationFeedRows(freeLaneItems, {
+  reviews: [{ ...freeReviews[0], retryLimit: 4 }],
+}).find((row) => row.kind === "review-lane");
+assert.equal(scaledLane.totalRounds, 5, "失败后自动复审 4 轮 = 这条链最多 5 轮");
+assert.equal(scaledLane.title, "第 1/5 轮审查");
+assert.equal(
+  conversationFeedRows(freeLaneItems, { reviews: [{ ...freeReviews[0], retryLimit: 0 }] })
+    .find((row) => row.kind === "review-lane").title,
+  "第 1/1 轮审查",
+  "不自动复审就是「一共 1 轮」，不能因为 0 而退回不带分母",
 );
 
 // 还没落盘报告的那一轮（正在跑 / 异常收场）不给死入口，但审查者名字可以先补上。
@@ -349,13 +364,17 @@ const rerunLanes = conversationFeedRows(buildFreeLane([
   turn("system", "自由工作流第 3 轮审查启动失败：执行器起不来", "2026-08-11T07:01:00.000Z"),
   turn("system", rerunNote, "2026-08-11T07:10:00.000Z"),
   turn("system", "自由工作流第 3 轮审查通过（5.5审查）。", "2026-08-11T07:40:00.000Z"),
-]), { reviews: [{ ...freeReviews[0], id: "fr3", rounds: [
+]), { reviews: [{ ...freeReviews[0], id: "fr3", retryLimit: 4, rounds: [
   { round: 3, startedAt: "2026-08-11T07:00:00.000Z", reportMarkdown: "# 重跑报告" },
 ] }] }).filter((row) => row.kind === "review-lane");
 assert.equal(rerunLanes.length, 2, "启动失败自成一张卡，重跑另起一张，不会互相顶掉");
 assert.equal(rerunLanes[0].conclusion, "inconclusive", "启动失败收的是一个根本没跑起来的区间");
 assert.equal(rerunLanes[1].conclusion, "verified");
-assert.equal(rerunLanes[1].title, "第 3 轮审查");
+assert.deepEqual(
+  rerunLanes.map((lane) => lane.title),
+  ["第 3/5 轮审查", "第 3/5 轮审查"],
+  "总轮数是这条 run 的属性：启动失败旧卡和重跑卡得写同一个分母",
+);
 assert.equal(rerunLanes[0].report, null, "失败旧卡不能占用后来重跑生成的报告");
 assert.deepEqual(rerunLanes[1].report, { kind: "free", runId: "fr3", round: 3 });
 

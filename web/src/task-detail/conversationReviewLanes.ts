@@ -17,6 +17,12 @@ export type ConversationReviewLane = {
   source: ReviewLaneSource;
   /** 合并结果审查没有轮号（它跑在验收后的只读快照上，一次就是一次）。 */
   round: number | null;
+  /**
+   * 这条审查链最多跑几轮（= `FreeReviewRun.retryLimit + 1`），标题里显示成「第 3/5 轮」。
+   * 只有自由派审配得上 run 才知道；就地验证、合并结果审查以及拿不到 `reviews` 的只读
+   * 视图一律为 null，标题退回不带分母的「第 N 轮」。
+   */
+  totalRounds: number | null;
   title: string;
   items: ConversationItem[];
   reviewerLabel: string | null;
@@ -126,18 +132,20 @@ function finishLane(
   return finished;
 }
 
-function titleOf(mark: VerifyNoteMark): string {
-  if (mark.kind === "merge") return "合并结果审查";
-  return `第 ${mark.round} 轮${mark.kind === "inline" ? "验证" : "审查"}`;
+function titleOf(source: ReviewLaneSource, round: number | null, totalRounds: number | null): string {
+  if (source === "merge") return "合并结果审查";
+  // 知道这条链一共几轮时写成「第 3/5 轮」——否则用户看着「第 3 轮」不知道还剩几轮。
+  const scale = round !== null && totalRounds !== null ? `${round}/${totalRounds}` : `${round}`;
+  return `第 ${scale} 轮${source === "inline" ? "验证" : "审查"}`;
 }
 
 /**
- * 给自由派审 / 合并结果审查的卡补上报告入口。
+ * 给自由派审 / 合并结果审查的卡补上报告入口**和总轮数**。
  *
  * 报告落在 `data/runs/<taskId>/free-review/<runId>/round-<N>/report.md`，URL 少了 runId
- * 就打不开；而时间线旁注里**只有轮号**（服务端从不把 runId 写进去）。所以只能拿
- * `FreeWorkflowState.reviews` 反查：同一类 target 下按起始时间升序、轮号对得上就依次配对，
- * 配过的不再复用 —— 同一个轮号在重开的审查里会重复出现，一一对应比「找到就用」稳。
+ * 就打不开；而时间线旁注里**只有轮号**（服务端从不把 runId 写进去，总轮数更是从来没写过）。
+ * 所以只能拿 `FreeWorkflowState.reviews` 反查：同一类 target 下按起始时间升序、轮号对得上
+ * 就依次配对，配过的不再复用 —— 同一个轮号在重开的审查里会重复出现，一一对应比「找到就用」稳。
  */
 function attachReports(lanes: ConversationReviewLane[], reviews: readonly FreeReviewRun[]): void {
   const candidates = reviews
@@ -145,6 +153,9 @@ function attachReports(lanes: ConversationReviewLane[], reviews: readonly FreeRe
       runId: run.id,
       round: round.round,
       source: run.target?.kind === "accepted_merge" ? "merge" as const : "free" as const,
+      // 「最多几轮」= 首轮 + 允许的自动复审次数。接力导入 / 旧快照可能没有这个字段，
+      // 那就退回不带分母的标题，绝不能拿 NaN 去拼「第 1/NaN 轮」。
+      totalRounds: Number.isInteger(run.retryLimit) ? run.retryLimit + 1 : null,
       startedAt: round.startedAt ?? "",
       hasReport: (round.reportMarkdown ?? "").trim().length > 0,
       reviewerName: run.reviewerName,
@@ -168,6 +179,13 @@ function attachReports(lanes: ConversationReviewLane[], reviews: readonly FreeRe
       if (Number.isFinite(ended) && Number.isFinite(at) && at >= ended) return false;
       return true;
     });
+    // 总轮数是这条 run 的属性，同一轮的每张卡都成立 —— 只补给拿到报告的那张，会让
+    // 「启动失败旧卡」显示成「第 3 轮」、紧挨着的重跑卡显示成「第 3/5 轮」。
+    for (const lane of matching) {
+      if (candidate.source !== "free" || candidate.totalRounds === null || lane.totalRounds !== null) continue;
+      lane.totalRounds = candidate.totalRounds;
+      lane.title = titleOf(lane.source, lane.round, candidate.totalRounds);
+    }
     const lane = matching.at(-1);
     if (!lane) continue;
     assigned.add(lane.id);
@@ -206,7 +224,8 @@ export function conversationFeedRows(
         id: `review-lane:${start.kind}:${start.round ?? "once"}:${item.id}`,
         source: start.kind,
         round: start.round,
-        title: titleOf(start),
+        totalRounds: null,
+        title: titleOf(start.kind, start.round, null),
         items: [],
         reviewerLabel: null,
         reviewerModel: null,

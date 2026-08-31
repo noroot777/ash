@@ -83,11 +83,14 @@ const items = buildConversationItems(
 
 // 自由派审的报告落在 data/runs/<task>/free-review/<runId>/round-<N>/，URL 少了 runId 就
 // 打不开；旁注里只有轮号，所以折叠卡的报告入口要靠这份落盘状态反查。
+// retryLimit 同理：「这条链一共几轮」也只在这里，标题的分母全靠它。
 const reviews = [{
   id: "fr1",
   reviewerName: "5.5审查",
   model: "claude-opus-5",
   target: { kind: "workspace" },
+  retryLimit: 4,
+  currentRound: 1,
   rounds: [{
     round: 1,
     status: "passed",

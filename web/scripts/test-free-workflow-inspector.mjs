@@ -81,6 +81,23 @@ try {
   await chatToolbar.getByRole("button", { name: "已预约复审" }).waitFor();
   assert.equal(await page.evaluate(() => window.__reservationRequests), 2, "Enter 更新预约时应只新增一次请求");
   assert.equal(await page.evaluate(() => window.__reservationNote), "重点检查窄屏布局\n与键盘交互", "Enter 提交时必须携带附言");
+
+  // 「失败后自动复审」是手填的数字，不是固定几档：预设里没有的 7 也要能提交上去。
+  await chatToolbar.getByRole("button", { name: "已预约复审" }).click();
+  await reviewDialog.getByRole("heading", { name: "调整预约审查" }).waitFor();
+  const retry = reviewDialog.getByLabel("失败后自动复审");
+  assert.equal(await retry.inputValue(), "1", "重新打开要回显已存的轮数");
+  const submitReservation = reviewDialog.getByRole("button", { name: "保存预约" });
+  await retry.fill("999");
+  assert.equal(await submitReservation.isEnabled(), false, "超上限时提交按钮必须灰掉，不能等后端打回");
+  await retry.fill("");
+  assert.equal(await submitReservation.isEnabled(), false, "空值同样不能提交");
+  await retry.fill("7");
+  assert.equal(await submitReservation.isEnabled(), true);
+  await submitReservation.click();
+  await page.waitForFunction(() => window.__reservationRequests === 3);
+  await reviewDialog.waitFor({ state: "detached" });
+  assert.equal(await page.evaluate(() => window.__reservationRetryLimit), 7, "手填的轮数必须原样提交");
   assert.deepEqual(await reviewRounds.locator("b").allInnerTexts(), ["第 1 轮", "第 1 轮"], "自由审查 inspector 应和普通任务一样按轮列出记录");
   assert.equal(await page.locator(".review-evidence-drawer").count(), 0, "审查正文默认不弹出");
   await reviewRounds.first().click();

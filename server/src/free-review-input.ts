@@ -2,11 +2,10 @@
 // 检查类型、复审轮数、附言，以及「这一次换个人/换个模型跑」的执行器覆盖。
 import type { AgentType, FreeReviewCheckMode, FreeReviewExecutorOverride } from "@ash/shared";
 import { AGENT_TYPES } from "@ash/shared";
-import { FREE_REVIEW_CHECK_MODES } from "@ash/shared/free-workflow";
+import { FREE_REVIEW_CHECK_MODES, MAX_FREE_REVIEW_RETRIES } from "@ash/shared/free-workflow";
 import type { Actor } from "./auth/context.js";
 import { executorScope } from "./auth/owned-executors.js";
 
-const MAX_RETRIES = 5;
 const MAX_REVIEW_NOTE_LENGTH = 2_000;
 
 export function checkMode(value: unknown): FreeReviewCheckMode {
@@ -17,8 +16,8 @@ export function checkMode(value: unknown): FreeReviewCheckMode {
 }
 
 export function retryLimit(value: unknown): number {
-  if (!Number.isInteger(value) || Number(value) < 0 || Number(value) > MAX_RETRIES) {
-    throw new Error(`自动复审轮数必须是 0-${MAX_RETRIES} 的整数`);
+  if (!Number.isInteger(value) || Number(value) < 0 || Number(value) > MAX_FREE_REVIEW_RETRIES) {
+    throw new Error(`自动复审轮数必须是 0-${MAX_FREE_REVIEW_RETRIES} 的整数`);
   }
   return Number(value);
 }

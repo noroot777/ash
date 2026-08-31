@@ -6,6 +6,13 @@ export type TaskWorkflowMode = (typeof TASK_WORKFLOW_MODES)[number];
 export const FREE_REVIEW_CHECK_MODES = ["syntax", "logic"] as const;
 export type FreeReviewCheckMode = (typeof FREE_REVIEW_CHECK_MODES)[number];
 
+/**
+ * 「失败后自动复审」允许的最大次数（这条链最多跑 `retryLimit + 1` 轮）。
+ * 派审面让用户直接填数字，前端的输入门禁和后端的入参校验必须是同一个上限——
+ * 各写一份的话，界面放行的值会在提交那一刻被后端打回。
+ */
+export const MAX_FREE_REVIEW_RETRIES = 20;
+
 // 审查链只落四个持久状态：reviewing 是唯一的「活」态（旁路审查回合正在跑），
 // passed / failed 是链的终局，stopped 是「最后一轮未通过后停住」。
 // 「修复中 / 等待复审 / 结论已过期」这些叙事一律**推导**，不落库：

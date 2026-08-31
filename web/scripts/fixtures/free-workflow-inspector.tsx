@@ -289,14 +289,20 @@ window.fetch = (input, init) => {
   }
   if (url.pathname.startsWith("/api/tasks/free-chat-rework-task/free-workflow")) {
     if (init?.method === "PUT" && url.pathname.endsWith("/review-reservation")) {
-      const body = JSON.parse(String(init.body ?? "{}")) as { note?: string | null };
+      const body = JSON.parse(String(init.body ?? "{}")) as { note?: string | null; retryLimit?: number };
       // 真实服务端每次变更都 bump stateVersion；前端拒收「不比现值新」的快照，mock 必须同语义。
       manualChatState.stateVersion += 1;
       manualChatState.selectedReviewerId = reviewer.id;
       manualChatState.reviewReservation = {
-        armed: true, reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1, note: body.note ?? null, runId: null,
+        armed: true,
+        reviewerId: reviewer.id,
+        checkMode: "logic",
+        retryLimit: body.retryLimit ?? 1,
+        note: body.note ?? null,
+        runId: null,
       };
       (window as Window & { __reservationNote?: string | null }).__reservationNote = body.note ?? null;
+      (window as Window & { __reservationRetryLimit?: number | null }).__reservationRetryLimit = body.retryLimit ?? null;
       (window as Window & { __reservationRequests?: number }).__reservationRequests =
         ((window as Window & { __reservationRequests?: number }).__reservationRequests ?? 0) + 1;
     }

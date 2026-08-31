@@ -61,6 +61,15 @@
 .free-review-options textarea { min-height:72px; max-height:140px; resize:vertical; padding:8px; color:var(--ink); font:inherit; line-height:1.45; }
 .free-review-options select:focus,.free-review-options textarea:focus,.reviewer-profile-fields input:focus { border-color:var(--accent); box-shadow:0 0 0 2px color-mix(in lch,var(--accent) 12%,transparent); }
 .free-review-note small { color:var(--faint); font-size:8.5px; line-height:1.35; }
+/* 复审轮数改成手填：外壳当输入框画，里面是裸 input + 「轮」单位。壳的选择器必须比
+   上面那条 `.free-review-options label > span` 更特指，否则会被它当成小标题排版。 */
+.free-review-options .free-review-retry-field { display:flex; height:32px; align-items:center; gap:6px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; color:var(--ink); font-size:11px; font-weight:400; letter-spacing:normal; text-transform:none; }
+.free-review-options .free-review-retry-field:focus-within { border-color:var(--accent); box-shadow:0 0 0 2px color-mix(in lch,var(--accent) 12%,transparent); }
+.free-review-options .free-review-retry-field.is-invalid { border-color:var(--red); box-shadow:0 0 0 2px color-mix(in lch,var(--red) 12%,transparent); }
+.free-review-options .free-review-retry-field input { width:100%; min-width:0; height:100%; border:0; background:transparent; padding:0; color:inherit; font:inherit; outline:0; }
+.free-review-options .free-review-retry-field em { flex:none; color:var(--faint); font-size:10px; font-style:normal; }
+.free-review-retry small { color:var(--faint); font-size:8.5px; line-height:1.35; }
+.free-review-retry .free-review-retry-field.is-invalid + small { color:var(--red); }
 .free-review-options p { color:var(--faint); font-size:9.5px; line-height:1.55; }
 .free-review-dialog > footer { display:flex; justify-content:flex-end; gap:7px; border-top:1px solid var(--line); padding:10px 14px; }
 .free-review-dialog > footer button { height:30px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 12px; color:var(--muted); font-size:10.5px; }
