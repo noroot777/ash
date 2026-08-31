@@ -338,9 +338,36 @@ async function main(): Promise<void> {
   });
   assert.equal(strangerRes.status, 401, "签名合法但指纹陌生:身份对了不等于获授权");
   const strangerFp = createHash("sha256").update(Buffer.from(strangerPub, "base64")).digest("hex");
-  const peersAfter = (await api<{ peers: { fingerprint: string; status: string; name: string }[] }>(peerUrl, "/handoff/peers")).peers;
-  const strangerRow = peersAfter.find((p) => p.fingerprint === strangerFp);
-  assert.equal(strangerRow?.status, "pending");
+  const peerList = async () =>
+    (await api<{ peers: { fingerprint: string; status: string; name: string }[] }>(peerUrl, "/handoff/peers")).peers;
+  // **/import 不建待批准记录**。2026-08-31 之前它建,于是源机的自动状态轮询
+  // (/proxy/tasks/state,同一道 requireApprovedPeer)每 20 秒就在对端刷出一条
+  // 「收到接力申请」——用户压根没申请过。配对只认配对入口,见下面那段。
+  assert.equal(
+    (await peerList()).find((p) => p.fingerprint === strangerFp), undefined,
+    "已建立关系的通道(import/refs/proxy)遇到陌生指纹只该 401,不该把它落成一条待批准申请",
+  );
+
+  // 配对入口:带申请意图的签名 ping 才建记录。顺带验主机名的非 ASCII 还原。
+  const pTs = String(Date.now());
+  const pNonce = randomBytes(16).toString("hex");
+  const pingPath = "/api/handoff/ping";
+  const pCanonical = [
+    "ash-handoff-v1", "GET", pingPath, pTs, pNonce,
+    createHash("sha256").update("", "utf8").digest("hex"),
+  ].join("\n");
+  const pingRes = await raw("/handoff/ping?nonce=pair-probe", {
+    headers: {
+      "x-ash-peer-key": strangerPub,
+      "x-ash-peer-sig": edSign(null, Buffer.from(pCanonical, "utf8"), stranger.privateKey).toString("base64"),
+      "x-ash-peer-ts": pTs,
+      "x-ash-peer-nonce": pNonce,
+      "x-ash-peer-host": encodeURIComponent("陌生机器·stranger"),
+    },
+  });
+  assert.equal(pingRes.status, 200, "配对入口对谁都开着(项目清单为空而已)");
+  const strangerRow = (await peerList()).find((p) => p.fingerprint === strangerFp);
+  assert.equal(strangerRow?.status, "pending", "带申请意图的签名 ping 才是配对请求本身");
   assert.equal(
     strangerRow?.name, "陌生机器·stranger",
     "主机名里的非 ASCII 要能原样还原:HTTP 头只装 ByteString,所以出站 percent 编码、入站解回来",

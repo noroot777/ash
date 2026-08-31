@@ -45,7 +45,7 @@ import { isMultiUser } from "./auth/mode.js";
 import { countUsers } from "./auth/store.js";
 import { peerActor, peerOwnerId, peerUserFor, peerUserSoft } from "./auth/handoff-peer-user.js";
 import { canSeeProject, visibleProjectsFor } from "./auth/visibility.js";
-import { actorOf, ownerIdOf } from "./auth/context.js";
+import { actorOf } from "./auth/context.js";
 import { addTarget, deleteTarget, listTargets, patchTarget, setPeerKey } from "./auth/handoff-scope.js";
 
 type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 500 | 502;
@@ -262,14 +262,27 @@ export function mountHandoffRoutes(api: Hono): void {
     } catch {
       peer = null;
     }
-    if (peer) await touchPeer(peer, peerAddr(c));
+    // **只有真的在申请配对时才建待批准记录。** 同一条 ping 被三种场景共用:显式点
+    // 「发送接力申请」、打开接力对话框的预检、代理链路的身份核对。后两种建记录 =
+    // 用户没申请过却在对端刷出「接力申请」,所以新版源机在非申请场景带 `intent=probe`
+    // (见 handoff-peer-client.ts pingPeer)。缺省仍按申请处理:老版源机不带这个参数,
+    // 而它点申请走的就是这条路,默认成 probe 会让老版永远配不上对。
+    const pairing = c.req.query("intent") !== "probe";
+    // 归属:源机带的「我在对端的账号 key」说明了它要以谁的身份进来。记下来,这条申请
+    // 就只打扰那个人(判据在 handoff-peers.ts peerAudience)。
+    const multi = await isMultiUser();
+    const peerUser = multi ? await peerUserSoft(c) : null;
+    if (peer) {
+      await touchPeer(peer, peerAddr(c), {
+        create: pairing,
+        requestedBy: peerUser?.user?.id ?? null,
+      });
+    }
     const stance = await peerStanceFor(peer, handoffRequireApproval);
     const nonce = c.req.query("nonce") ?? "";
     // 多人实例:项目清单按**这次请求代表的那个人**的可见集过滤(§十一)。没带 key 或
     // key 不认时清单为空、peerUser 为 null —— 源机据此提示「去配对端 key」,而不是
     // 把空清单误读成「对端没有项目」。
-    const multi = await isMultiUser();
-    const peerUser = multi ? await peerUserSoft(c) : null;
     const instance = {
       mode: (multi ? "multi" : "single") as "single" | "multi",
       ...(multi ? { userCount: await countUsers() } : {}),
@@ -365,7 +378,9 @@ export function mountHandoffRoutes(api: Hono): void {
   });
 
   // 接力来源(入站信任表):谁来敲过门、批没批准。
-  api.get("/handoff/peers", async (c) => c.json({ peers: await listPeers() }));
+  // 多人模式下按人收窄:一条申请只给它冲着的那个人看(加上要能审计名单的管理员),
+  // 判据在 handoff-peers.ts `peerAudience`。
+  api.get("/handoff/peers", async (c) => c.json({ peers: await listPeers(actorOf(c)) }));
   // 历史 out 存档另行授予的任务级回程权限；只读展示，不会暗中建立整机 approved。
   api.get("/handoff/return-grants", async (c) => c.json({ grants: await listReturnGrants() }));
 
@@ -384,12 +399,16 @@ export function mountHandoffRoutes(api: Hono): void {
       return c.json({ error: "只支持 approve / block / unblock" }, 400);
     }
     try {
-      if (action === "unblock") return c.json({ unblocked: true, peer: await unblockPeer(c.req.param("fingerprint")) });
-      // 多人模式下这一步全员可点(§十一),所以把操作人记下来。
+      const actor = actorOf(c);
+      if (action === "unblock") {
+        return c.json({ unblocked: true, peer: await unblockPeer(actor, c.req.param("fingerprint")) });
+      }
+      // 谁能点由 peerAudience 定(申请人本人 + 管理员;无主申请全员)。放行一台机器
+      // 等于让它上面所有人都敲得开本机的门,所以操作人一律记下。
       return c.json(await setPeerStatus(
+        actor,
         c.req.param("fingerprint"),
         action === "approve" ? "approved" : "blocked",
-        ownerIdOf(actorOf(c)),
       ));
     } catch (e) {
       return fail(c, e);
@@ -398,8 +417,12 @@ export function mountHandoffRoutes(api: Hono): void {
 
   // 删掉记录 = 忘记这台机器。它再来敲门会重新落进待批准列表(不是永久拉黑,拉黑用 block)。
   api.delete("/handoff/peers/:fingerprint", async (c) => {
-    await deletePeer(c.req.param("fingerprint"));
-    return c.json({ deleted: true });
+    try {
+      await deletePeer(actorOf(c), c.req.param("fingerprint"));
+      return c.json({ deleted: true });
+    } catch (e) {
+      return fail(c, e);
+    }
   });
 
   // 出站配对申请:只向目标机发一次带身份签名的 ping，让本机出现在它的待审批列表里。

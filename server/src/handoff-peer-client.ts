@@ -214,15 +214,23 @@ const identityRecoveryGuidance = (returnContext?: HandoffReturnContext): string 
  *
  * `expectedFp` 来自整机目标设置或任务 marker；`returnContext` 非空表示后者。
  * 两者都没有才是首次配对(TOFU)。
+ *
+ * **默认是「探测」而不是「申请」**(`options.pairing`)。同一条 ping 被三种场景共用:
+ * 显式点申请、打开接力对话框的预检、代理链路的身份核对。只有第一种该让对端多出一条
+ * 待批准记录 —— 否则用户没申请过,对端却天天弹「收到接力申请」(2026-08-31)。
+ * 非申请场景在 URL 上带 `intent=probe`;老版对端不认这个参数,行为与今天一致。
  */
 export async function pingPeer(
   targetUrl: string,
   expectedFp?: string | null,
   returnContext?: HandoffReturnContext,
-  options: { allowReturnFallback?: boolean; requirePeerUser?: boolean } = {},
+  options: { allowReturnFallback?: boolean; requirePeerUser?: boolean; pairing?: boolean } = {},
 ): Promise<PeerProbe> {
   const nonce = newNonce();
-  const pingUrl = returnContext ? `${targetUrl}/api/handoff/return/ping` : `${targetUrl}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`;
+  // 移回探测走的是任务级端点,它本来就不建整机待批准记录,不需要这个参数。
+  const intent = options.pairing ? "" : "&intent=probe";
+  const plainPing = `${targetUrl}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}${intent}`;
+  const pingUrl = returnContext ? `${targetUrl}/api/handoff/return/ping` : plainPing;
   let ping: HandoffPingResponse;
   let taskScopedReturn = Boolean(returnContext);
   try {
@@ -239,7 +247,7 @@ export async function pingPeer(
     if (!returnContext || options.allowReturnFallback === false || !(error instanceof HandoffError)
       || error.remoteStatus !== 404) throw error;
     taskScopedReturn = false;
-    ping = await fetchPeer<HandoffPingResponse>(`${targetUrl}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`);
+    ping = await fetchPeer<HandoffPingResponse>(plainPing);
   }
   if (!ping?.ok || ping.service !== "ash") {
     throw new HandoffError("对端不是 ash（/api/handoff/ping 应答不对）", 502);
@@ -321,7 +329,8 @@ export async function rememberedFingerprint(targetUrl: string): Promise<string |
  */
 export async function requestHandoffApproval(rawTargetUrl: string): Promise<HandoffApprovalResult> {
   const targetUrl = normalizePeerUrl(rawTargetUrl);
-  const probe = await pingPeer(targetUrl, await rememberedFingerprint(targetUrl));
+  // 唯一带 pairing 的调用点 —— 只有这里该让对端多出一条待批准记录。
+  const probe = await pingPeer(targetUrl, await rememberedFingerprint(targetUrl), undefined, { pairing: true });
   if (probe.peer) await rememberPeerFingerprint(targetUrl, probe.peer.fingerprint);
   return {
     ok: true,

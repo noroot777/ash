@@ -600,10 +600,15 @@ export const handoffPeers = sqliteTable("handoff_peers", {
   firstSeenAt: text("first_seen_at").notNull(),
   lastSeenAt: text("last_seen_at").notNull(),
   approvedAt: text("approved_at"),
-  // 多人模式下入站审批是**全员可批**的(§十一 互信定位),所以必须记下是谁批的 ——
+  // 多人模式下入站审批不是管理员专属(§十一 互信定位),所以必须记下是谁批的 ——
   // 一台机器被放行意味着它上面的人都能敲本机的门,事后要能问出「这是谁点的」。
   // 自用模式恒空(只有一个人)。
   approvedBy: text("approved_by"),
+  // 这次配对申请代表本机的哪个账号:源机发申请时带的「我在对端的账号 key」认出来的人。
+  // **待批准的申请只打扰这个人**(加上实例管理员,他要能收拾无主记录)。空 = 无主,
+  // 退回全员可见 —— 否则一条没带 key 的申请谁都看不见,就永远批不了。判据见
+  // handoff-peers.ts `peerAudience`。
+  requestedByUserId: text("requested_by_user_id"),
   // 对端**自报**的实例模式(`single` / `multi:<人数>`)。自报的东西不做权限判据,
   // 只在批准界面上明示:批一台多人实例 = 它上面所有人都能经这条路进来(§十一)。
   peerMode: text("peer_mode").notNull().default(""),

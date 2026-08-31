@@ -62,8 +62,16 @@ export interface HandoffPeer {
   firstSeenAt: string;
   lastSeenAt: string;
   approvedAt: string | null;
-  /** 最近一次批准/拒绝这台机器的人。多人模式下入站审批全员可点,所以要记名(§十一)。 */
+  /** 最近一次批准/拒绝这台机器的人。多人模式下入站审批要记名(§十一)。 */
   approvedByName?: string;
+  /**
+   * 这次申请代表本机的哪个账号 —— 源机发申请时带的「我在对端的账号 key」认出来的人。
+   * 有它的申请只打扰这个人;没有它的(单人源机、没配 key、老库遗留)退回全员可见,
+   * 否则一条无主申请谁都看不见 = 永远批不了。判据在 server/src/handoff-peers.ts。
+   */
+  requestedByName?: string;
+  /** 当前登录者是不是因为管理员身份才看见这条(本人则为 false)。UI 据此说明原因。 */
+  seenAsAdmin?: boolean;
   /** 对端自报的实例模式:`single` / `multi:<人数>`。不可信,只为知情批准。 */
   peerMode?: string;
   /** 最近一次来访地址,纯展示。 */
