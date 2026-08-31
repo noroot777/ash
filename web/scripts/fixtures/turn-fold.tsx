@@ -63,7 +63,7 @@ const growPhases: AgentContentSegment[][] = [];
 }
 
 // 真会话流（不是直接摆 AgentTurnBody）：钉的是两个 feed 自己怎么判「链路停没停」——
-// 只钉 nextProcessFoldOpen 的话，喂给它的那个布尔算错了照样红不了。
+// 只钉 turnLayout 的话，喂给它的那个布尔算错了照样红不了。
 //
 // 走的是真实时序：回合先在飞，然后收口（endedAt 落下来），而任务这时还卡在审查门上 /
 // 团队执行者还在干活。气泡 id 全程不变，跟直播一致（这两档都不触发快照重拉）。
@@ -180,6 +180,9 @@ function Turn({
         >
           重新开跑
         </button>
+        {/* 终态先到、当前气泡的 endedAt 后到：任务列表 SSE 比 sessions 重拉快，中间那一瞬
+            taskLive 已经是假、running 还是真。 */}
+        <button type="button" data-role="task-done-first" onClick={() => setTaskLive(false)}>先落终态</button>
         <button type="button" data-role="repaint" onClick={() => setNonce(nonce + 1)}>触发重绘 {nonce}</button>
         {phases && <button type="button" data-role="grow" onClick={() => setPhase(phase + 1)}>再跑一步 {phase}</button>}
         <AgentTurnBody segments={shown} running={running} taskLive={taskLive} />
@@ -200,6 +203,8 @@ createRoot(document.getElementById("root")!).render(
     <Turn name="failed" initialRunning={false} turnSegments={failedSegments} />
     {/* 边跑边长：每一帧都不许重组，说过的话一直留在外面 */}
     <Turn name="grow" initialRunning phases={growPhases} />
+    {/* 终态先到、气泡的 endedAt 后到：折出来的那一下就得是折好的，不许先展开再收 */}
+    <Turn name="race" initialRunning />
     {/* 回合收口了，但任务卡在审查门上 / 团队执行者还在干活：链路没停，不许折 */}
     <SingleFeed />
     <TeamLeadFeed />

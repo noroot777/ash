@@ -157,7 +157,17 @@ try {
   assert.equal(await turn("grow").getByText(saidSoFar[0]).isVisible(), false, "跑完了，前面的正文该折进去");
   assert.equal(await turn("grow").getByText(saidSoFar[2]).isVisible(), true, "最后那句是结论，留在外面");
 
-  // 11. 会话流自己判「链路停没停」：走真实时序 —— 单飞 running → 停在检查点 → 卡在
+  // 11. 终态先到、当前气泡的 endedAt 后到（任务列表 SSE 比 sessions 重拉快，中间那一瞬
+  //     taskLive 已经是假、running 还是真）：折出来的那一下就得是折好的。原来的行为是
+  //     running 优先摊开 —— 用户会看见过程块先展开一下，等重拉回来再自己收上去。
+  assert.equal(await folded("race"), 0, "还没落终态就不该有过程块");
+  await click("race", "task-done-first");
+  await fold("race").waitFor();
+  assert.equal(await isOpen("race"), false, "终态先到那一瞬，折叠块先展开了一下");
+  assert.equal(await processText("race").isVisible(), false);
+  assert.equal(await turn("race").locator(".task-execution-pulse").count(), 1, "回合确实还挂着 running");
+
+  // 12. 会话流自己判「链路停没停」：走真实时序 —— 单飞 running → 停在检查点 → 卡在
   //     审查门 → 收尾；团队 调度台在说话 → 落回 idle 但执行者还在跑 → 全队收工。
   //     只钉 turnLayout 的话，喂给它的那个布尔算错了照样红不了。
   const feedFolded = (name) => page.locator(`[data-case="${name}"] details.task-turn-process`).count();

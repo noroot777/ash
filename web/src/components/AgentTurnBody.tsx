@@ -21,8 +21,8 @@ function SegmentBody({ segment }: { segment: AgentContentSegment }) {
 
 /**
  * 过程折叠块。**只在整条执行链路停下来之后才会被渲染**（见 turnLayout），所以它一上来
- * 就是折好的；这里的开合只管两件事：结算那一瞬 running 还没落下的时差，以及用户自己
- * 动过折角之后不再自动动它（判据见 nextProcessFoldOpen）。
+ * 就是折好的 —— 哪怕这一瞬当前气泡还挂着 running（终态 SSE 比 sessions 重拉先到）。
+ * 这里的开合只管一件事：用户自己动过折角之后不再自动动它（判据见 nextProcessFoldOpen）。
  */
 function ProcessFold({
   segments,
@@ -35,13 +35,13 @@ function ProcessFold({
   taskLive: boolean;
 }) {
   const events = segments.flatMap((segment) => segment.events);
-  const [open, setOpen] = useState(running);
+  const [open, setOpen] = useState(false);
   const touched = useRef(false);
 
   useEffect(() => {
-    const next = nextProcessFoldOpen({ running, taskLive, touched: touched.current });
+    const next = nextProcessFoldOpen({ taskLive, touched: touched.current });
     if (next !== null) setOpen(next);
-  }, [running, taskLive]);
+  }, [taskLive]);
 
   return (
     <details

@@ -154,17 +154,15 @@ for (const label of [
 
 // 14. 自动开合的时机（渲染结果由 test:turn-fold-dom 钉住，这里钉判据本身）。
 {
-  const open = (running, taskLive, touched = false) => nextProcessFoldOpen({ running, taskLive, touched });
-  // 在飞就摊开。
-  assert.equal(open(true, true), true);
-  // 最后一步确认执行完了：这一下才收。
-  assert.equal(open(false, false), false);
+  const open = (taskLive, touched = false) => nextProcessFoldOpen({ taskLive, touched });
+  // 折叠块只在链路停下来之后才存在，所以自动动作只剩一个：收起。
+  assert.equal(open(false), false);
   // 回合收口但任务还在跑（换轮、就地验证、endedAt 落下来那一瞬）：什么都不做。跟着它
   // 折，用户会在跑的中途被反复折叠，正读着的那段过程说没就没了。
-  assert.equal(open(false, true), null);
+  assert.equal(open(true), null);
   // 用户自己动过折角之后，两个方向都不再自动。
-  assert.equal(open(true, true, true), null);
-  assert.equal(open(false, false, true), null);
+  assert.equal(open(true, true), null);
+  assert.equal(open(false, true), null);
 }
 
 // 15. 「执行链路还没停」这一问必须走仓库已有的那份口径（taskAttention 的
@@ -178,7 +176,7 @@ for (const label of [
   // 单飞卡在审查门上：链路还没停。
   assert.equal(isExecutionChainLive(single("awaiting_review")), true);
   assert.equal(isExecutionChainLive(single("running")), true);
-  assert.equal(nextProcessFoldOpen({ running: false, taskLive: true, touched: false }), null);
+  assert.equal(nextProcessFoldOpen({ taskLive: true, touched: false }), null);
   // 停在检查点 / 等人答话也是活在半路：ask_question 和 pause_task 都落 paused，那不是
   // 完成确认，后面还要 resume 接着跑。跟同文件 awaitsYourWord 是同一句话。
   assert.equal(isExecutionChainLive(single("paused")), true);
@@ -193,7 +191,7 @@ for (const label of [
   assert.equal(isExecutionChainLive(lead, [worker("done")]), false);
   assert.equal(isExecutionChainLive(single("done")), false);
   assert.equal(isExecutionChainLive(single("failed")), false);
-  assert.equal(nextProcessFoldOpen({ running: false, taskLive: false, touched: false }), false);
+  assert.equal(nextProcessFoldOpen({ taskLive: false, touched: false }), false);
 }
 
 // 16. 折叠只在链路停下来之后才发生 —— 运行期连切都不切。
