@@ -412,8 +412,17 @@ export function HandoffSettings({
                   指纹 {peer.short}
                   {peer.lastAddr ? ` · 来自 ${peer.lastAddr}` : ""}
                   {` · 最近 ${new Date(peer.lastSeenAt).toLocaleString()}`}
+                  {peer.requestedByName ? ` · 冲着 ${peer.requestedByName} 来的` : ""}
                   {peer.approvedByName ? ` · 由 ${peer.approvedByName} 处理` : ""}
                 </small>
+                {/* 管理员看到别人的申请时说清来由:这张表是实例级信任表,他能看全部是
+                    为了审计和撤销,不是为了替人拍板(判据 handoff-peers.ts peerAudience)。 */}
+                {peer.seenAsAdmin && (
+                  <small className="handoff-peer-note">
+                    你是以实例管理员身份看到这条的；通常该由
+                    {peer.requestedByName ? `「${peer.requestedByName}」` : "申请人本人"}处理。
+                  </small>
+                )}
                 {/* 知情批准(§十一):对方是多人实例时,批准的是**那台机器**,
                     它上面的每个人都能经这条路敲门。这句话必须在点「批准」之前看得见。 */}
                 {peer.status !== "approved" && multiPeerCount(peer.peerMode) !== null && (

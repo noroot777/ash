@@ -298,6 +298,15 @@
   line-height: 1.5;
 }
 
+/* 「你是以管理员身份看到的」——陈述，不是警告，所以不给它 amber 那条边。 */
+.handoff-peer-note {
+  display: block;
+  margin-top: 5px;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .handoff-approval-state {
   display: inline-flex;
   flex: none;
@@ -444,6 +453,14 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
   color: var(--faint);
   font-size: 10px;
   font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+/* 「你是以管理员身份看到的」——是给人读的一句话，不是指纹那类机器串，所以不上等宽。 */
+.handoff-approval-alert-copy small.handoff-approval-alert-note {
+  display: block;
+  margin-top: 3px;
+  font-family: inherit;
+  font-size: 10.5px;
+  color: var(--muted);
 }
 .handoff-approval-alert-actions { display: flex; align-items: center; gap: 4px; }
 

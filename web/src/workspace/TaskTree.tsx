@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import type { HandoffPeerOffline, HandoffTarget, ProjectView, TaskListItem } from "@ash/shared";
+import type { HandoffTarget, ProjectView, TaskListItem } from "@ash/shared";
 import { CaretRight } from "@phosphor-icons/react";
 import { useTaskReadState, type IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
@@ -23,6 +23,7 @@ import {
   type WorkerIndex,
 } from "./useSidebarSpread.ts";
 import { buildTaskTree, groupTasksByProject, orderedTopLevelTasks, previewTasksByAge } from "./taskTreeModel.ts";
+import { OutboundStatusBar, type OutboundBar } from "./OutboundStatusBar.tsx";
 import { HandoffMachines } from "./HandoffMachines.tsx";
 
 type TaskTreeProps = {
@@ -37,7 +38,7 @@ type TaskTreeProps = {
   onRemoteTask: (task: TaskListItem, target: HandoffTarget) => void;
   onTaskStarred: (taskId: string, starredAt: number | null) => void;
   onHandoffFinished: () => Promise<void> | void;
-  offlinePeers: HandoffPeerOffline[];
+  outbound: OutboundBar;
   notify: (message: string) => void;
 };
 
@@ -57,7 +58,7 @@ function ScopedTaskTree({
   workerIndex,
   projectIndex,
   includeElsewhere,
-  offlinePeers,
+  outbound,
 }: {
   tasks: TaskListItem[];
   allTasks: TaskListItem[];
@@ -79,7 +80,7 @@ function ScopedTaskTree({
   includeElsewhere: boolean;
   // 这一轮联系不上的持有机。它们上面那些行只能显示接力当时的旧状态 —— 列表要么说出来，
   // 要么就是在拿冻住的状态冒充实时。
-  offlinePeers: HandoffPeerOffline[];
+  outbound: OutboundBar;
 }) {
   const sections = useMemo(
     () => buildTaskTree(tasks, { unifiedPinned: true, includeElsewhere }),
@@ -248,11 +249,7 @@ function ScopedTaskTree({
   const noVisibleTasks = !layout.some((entry) => entry.kept.length);
   return (
     <>
-      {offlinePeers.length > 0 && (
-        <p className="workspace-task-offline-peers" role="status">
-          联系不上 {offlinePeers.map((peer) => peer.name).join("、")}，这些机器上的任务显示的是接力当时的状态
-        </p>
-      )}
+      <OutboundStatusBar {...outbound} />
       {renderSection(pinned)}
       {machineSection}
       {renderSection(rest)}
@@ -320,7 +317,7 @@ function OtherProject({
   );
 }
 
-export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTaskId, selectedRemoteTaskId, spread, onTask, onRemoteTask, onTaskStarred, onHandoffFinished, offlinePeers, notify }: TaskTreeProps) {
+export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTaskId, selectedRemoteTaskId, spread, onTask, onRemoteTask, onTaskStarred, onHandoffFinished, outbound, notify }: TaskTreeProps) {
   const { indicatorForTask } = useTaskReadState(tasks, selectedTaskId);
   const activeTasks = useMemo(() => tasks.filter((task) => !task.archived), [tasks]);
   // 主列表看哪些行只由作用域决定（scopeTasks 是唯一判据，跟计数、筛选、J/K 遍历同源）。
@@ -357,7 +354,7 @@ export function TaskTree({ projects, currentProjectId, scope, tasks, selectedTas
           workerIndex={workerIndex}
           projectIndex={projectBadges}
           includeElsewhere={taskMode}
-          offlinePeers={taskMode ? offlinePeers : []}
+          outbound={taskMode ? outbound : { ...outbound, outboundCount: 0 }}
           machineSection={taskMode ? null : <HandoffMachines project={currentProject} tasks={tasks} selectedRemoteTaskId={selectedRemoteTaskId} onRemoteTask={onRemoteTask} notify={notify} onFinished={onHandoffFinished} />}
         />
         {otherProjects.length > 0 && (

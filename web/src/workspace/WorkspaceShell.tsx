@@ -5,7 +5,7 @@ import { outboundHolder } from "@ash/shared/handoff";
 import { api } from "../lib/api.ts";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import { useTasks } from "../lib/useTasks.ts";
-import { useOutboundState } from "./useOutboundState.ts";
+import { handedOut, useOutboundState } from "./useOutboundState.ts";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { TeamView } from "../team/TeamView.tsx";
 import { DuetView } from "../duet/DuetView.tsx";
@@ -92,9 +92,20 @@ export function WorkspaceShell() {
   // 改动」那颗点都从它来，不跟着刷就会停在操作之前的样子。
   const [gitVersion, setGitVersion] = useState(0);
   const { tasks: localTasks, setTasks, loading: tasksLoading, error: tasksError, connected, settlementVersion, refetch: refetchTasks, applyStar } = useTasks();
-  // 接力出去的行，状态从持有机实时问回来再合并进列表 —— 本机那一行停在交出去那一刻，
-  // 不合并的话它在任务模式里就是一条冻住的假状态（见 useOutboundState 顶部）。
-  const { tasks, targets: handoffTargets, refreshTargets, offline: offlinePeers } = useOutboundState(localTasks);
+  // 接力出去的行，状态要跨机器问持有机才知道 —— 本机那一行停在交出去那一刻。
+  // **这一问由用户按**（见 useOutboundState 顶部：自动轮询会没完没了地敲别人的服务器），
+  // 所以没问过时列表里就是接力当时的状态，由 OutboundStatusBar 如实说出来。
+  const {
+    tasks, targets: handoffTargets, refreshTargets,
+    refreshRemote, refreshing: outboundRefreshing, asked: outboundAsked, offline: offlinePeers,
+  } = useOutboundState(localTasks);
+  const outboundBar = useMemo(() => ({
+    outboundCount: tasks.filter(handedOut).length,
+    offlinePeers,
+    asked: outboundAsked,
+    refreshing: outboundRefreshing,
+    onRefresh: () => { void refreshRemote(); },
+  }), [tasks, offlinePeers, outboundAsked, outboundRefreshing, refreshRemote]);
   // 侧栏在看哪些任务：当前项目一家，还是进「任务模式」看所有项目里在跑 / 待验收的那些。
   // 它只影响**列表**；下面的 currentProject 仍是「新建任务 / 终端 / git 落在哪」的上下文，
   // 跟着选中的任务走。
@@ -409,7 +420,7 @@ export function WorkspaceShell() {
 
   return (
     <><div className="workspace-system-layout">{handoffAlert}<div className={`workspace-shell${spread.laidOut ? " is-spread" : ""}`} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
-      <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} selectedRemoteTaskId={remoteSelection?.task.id ?? null} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTaskMode={selectTaskMode} onTask={selectTask} onRemoteTask={selectRemoteTask} onTaskStarred={applyStar} onHandoffFinished={() => refetchTasks({ silent: true }).then(() => {})} offlinePeers={offlinePeers} onGitChanged={() => setGitVersion((value) => value + 1)} onOpenTerminal={currentProject && canUseTerminal ? () => setTerminalOpen(true) : null} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={openGroups} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onSettings={() => openSettings("executors")} />
+      <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} selectedRemoteTaskId={remoteSelection?.task.id ?? null} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTaskMode={selectTaskMode} onTask={selectTask} onRemoteTask={selectRemoteTask} onTaskStarred={applyStar} onHandoffFinished={() => refetchTasks({ silent: true }).then(() => {})} outbound={outboundBar} onGitChanged={() => setGitVersion((value) => value + 1)} onOpenTerminal={currentProject && canUseTerminal ? () => setTerminalOpen(true) : null} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={openGroups} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onSettings={() => openSettings("executors")} />
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
         {composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onCancel={() => setComposer(null)} onCreated={createTask} onCreateGroup={createComposerGroup} notify={notify} /> : remoteSelection ? (

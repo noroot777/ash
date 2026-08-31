@@ -82,3 +82,21 @@
   font-size: 10.5px;
   line-height: 1.45;
 }
+
+/* 「问一次持有机」：跨机器那一问的唯一入口（自动轮询已撤，见 useOutboundState.ts）。
+   跟在说明文字后面，不另起一行 —— 它是那句话的下文，不是一个独立动作区。 */
+.workspace-task-outbound-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  border: 0;
+  border-radius: 5px;
+  padding: 1px 5px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.workspace-task-outbound-refresh:hover:not(:disabled) { background: var(--active-bg); }
+.workspace-task-outbound-refresh:disabled { color: var(--faint); cursor: default; }

@@ -1,4 +1,5 @@
-import type { HandoffPeerOffline, HandoffTarget, ProjectView, TaskListItem } from "@ash/shared";
+import type { HandoffTarget, ProjectView, TaskListItem } from "@ash/shared";
+import type { OutboundBar } from "./OutboundStatusBar.tsx";
 import {
   ListChecks,
   MagnifyingGlass,
@@ -36,7 +37,7 @@ export function WorkspaceSidebar({
   onRemoteTask,
   onTaskStarred,
   onHandoffFinished,
-  offlinePeers,
+  outbound,
   onGitChanged,
   onOpenTerminal,
   notify,
@@ -66,7 +67,7 @@ export function WorkspaceSidebar({
   onRemoteTask: (task: TaskListItem, target: HandoffTarget) => void;
   onTaskStarred: (taskId: string, starredAt: number | null) => void;
   onHandoffFinished: () => Promise<void> | void;
-  offlinePeers: HandoffPeerOffline[];
+  outbound: OutboundBar;
   /** 项目主仓的 git 状态被改过了（切分支/拉取/推送），让上层重拉一次 ProjectHealth。 */
   onGitChanged: () => void;
   onOpenTerminal: (() => void) | null;
@@ -150,7 +151,7 @@ export function WorkspaceSidebar({
         onRemoteTask={onRemoteTask}
         onTaskStarred={onTaskStarred}
         onHandoffFinished={onHandoffFinished}
-        offlinePeers={offlinePeers}
+        outbound={outbound}
         notify={notify}
       />
 
