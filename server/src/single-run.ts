@@ -87,8 +87,15 @@ const STRICT_DONE = !process.env.ASH_LAX_DONE;
  * 一条它压根做不到的指令，不如不说。
  */
 export const STRICT_DONE_PROTOCOL = STRICT_DONE;
+// 结算说明写给**第一次用 ash 的人**看:他这一刻眼里只有一条红字,而红字里全是内部
+// 黑话(严格完成协议、方向身份、409),读完只会得出「它崩了」。所以顺序是「发生了什么 →
+// 这不是崩溃 → 你现在能做什么 → 常见原因」,内部原因排最后。落位仍是 failed,措辞不改
+// 规则。**这类说明一律以 level:"notice" 发出**,别跟执行器报的真故障挤在同一格红里。
 const UNCONFIRMED_NOTE =
-  "回合正常结束,但本回合内没有收到 complete_task 的完成确认 —— 按严格完成协议记为 failed。可能是 agent 没调用;也可能执行器/MCP 丢了回合或方向身份、或任务状态已变化，导致调用被 409 拒绝。若任务其实已完成,可手动把状态改成已完成;重试则会从中断处续跑。";
+  "本回合没有交卷:agent 结束前没有调用 complete_task 确认目标已达成,按 ash 的完成协议记为未完成。" +
+  "这不是崩溃 —— 进程正常退出(exit 0)只证明 CLI 没挂,报错后退出也是 exit 0,所以「干完了」只认 agent 亲口确认。" +
+  "产物都还在:核对后可直接把状态改成已完成;点重试会从中断处接着跑,不用从头再来。" +
+  "常见原因:agent 漏调了这一步;执行器/MCP 丢了回合或方向身份;任务状态中途变了,调用被 409 拒绝。";
 const GROUP_PAUSED_NOTE =
   "分组被暂停,本回合被中止 —— 任务落为已暂停;点「运行/继续」恢复分组时会从当前会话接着跑。";
 const STEERED_NOTE = "〔系统〕当前回合已由“引导会话”结束。";
@@ -262,11 +269,11 @@ export async function consumeSingleRun(a: {
   // finally 上，声明进 try 里它就不在作用域内了。
   // 先取空再写：正常尾部（agentEnd 之后）跑一次，finally 再跑一次也只是空转 —— 既不会
   // 把同一条写两遍，也不会往已经 end 掉的流上再写（写已 end 的流会当场打崩 server）。
-  const sessionNotices: { text: string; at: string }[] = [];
+  const sessionNotices: { text: string; at: string; level?: "notice" }[] = [];
   const flushSessionNotices = () => {
     const notices = sessionNotices.splice(0);
     for (const notice of notices) {
-      writeTurn(out, { t: "system", agent: agentType, text: notice.text }, notice.at);
+      writeTurn(out, { t: "system", agent: agentType, text: notice.text, level: notice.level }, notice.at);
     }
   };
   try {
@@ -297,9 +304,9 @@ export async function consumeSingleRun(a: {
   };
   // 会话轮换旁注：实时立刻播（用户正看着），落盘攒到 writeTurnEnd 之后再补 —— 见
   // 事件循环里那段注释，夹在正文和 agentEnd 之间会让重建出来的回合用时失准。
-  const noteSessionNotice = (text: string, at = now()) => {
-    sessionNotices.push({ text, at });
-    publishEvent({ kind: "system", text, at });
+  const noteSessionNotice = (text: string, at = now(), level?: "notice") => {
+    sessionNotices.push({ text, at, level });
+    publishEvent({ kind: "system", text, at, ...(level ? { level } : {}) });
   };
   const emitText = (text: string) => {
     if (!text) return;
@@ -510,7 +517,10 @@ export async function consumeSingleRun(a: {
     // 不等于这一轮失败，真正的失败自有它自己的 error 和退出码（见 session-notice.ts）。
     // 落盘仍走缓冲：这里已经在收尾链上，正文早写完了，夹在 writeTurnEnd 前面会让重建
     // 出来的回合用时失准（见 noteSessionNotice）。
-    noteSessionNotice(note, endIso);
+    // level:"notice" 跟结算说明同档：它也是「系统在旁边说明了一件事」，不是这一轮的输入、
+    // 也不是失败。标了之后展示端不必再靠关键词绕开它（conversationNotes 为这条文案专门
+    // 写过一段例外），「重跑上一回合」找上一次输入时也会跳过它。
+    noteSessionNotice(note, endIso, "notice");
   }
   // 这一轮有没有「交卷时通道断了」的调用：有就替它补录。**必须排在 settleTaskStatus
   // 之前** —— complete_task 的补录要赶在结算读确认标记之前落库，晚一步，一个干完活的
@@ -539,10 +549,15 @@ export async function consumeSingleRun(a: {
     await afterSettlement(taskId, settled.status, settled.confirmedDone, !stopped && exitStatus === 0, role);
   }
   if (settled.note) {
-    // 诊断正文留在 .md 原始产物里；trace 负责刷新后的折叠块，SSE 负责实时显示。
-    out.write(`\n> ${settled.note}\n`);
-    persistTrace({ kind: "error", message: settled.note }, endIso);
-    publishEvent({ kind: "error", message: settled.note });
+    // 结算说明落成**会话旁注**（持久 system 行 + SSE），跟会话轮换旁注同一条道：
+    // 它讲的是「这一轮为什么落成这个状态」，不是 agent 干的活，也不是执行器报的错。
+    // 从前它是「.md 里一段引用 + trace 里一条 error」，两处毛病都实打实：引用块糊进
+    // agent 气泡正文（实时那份还没有，刷新后才冒出来），error 则把回合折叠条整条染红、
+    // 计进「N 异常」—— 第一次用 ash 的人看到的是一个红色黑盒，读到的是「它崩了」，而
+    // 真相多半只是「忘了调 complete_task」。真出故障时它还会盖住原因（docs/incidents.md
+    // 「接力到多用户机器」）。
+    // level:"notice" 让展示端直接知道这是提示不是故障，不必再靠关键词猜语气。
+    noteSessionNotice(settled.note, endIso, "notice");
   }
   writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
   flushSessionNotices();

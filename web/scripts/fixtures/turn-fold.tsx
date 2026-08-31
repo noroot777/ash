@@ -21,8 +21,10 @@ const segments: AgentContentSegment[] = [
   { id: "s5", markdown: "工作树保持干净。\n", events: [], attachments: [] },
 ];
 
-// 未确认完成的失败回合：server 在正文写完之后补一条 settled.note —— .md 里是一段引用、
-// trace 里是一条 error（single-run.ts）。整篇回答必须留在外面，别跟着它折进过程。
+// 未确认完成的失败回合，**老会话的形状**：server 在正文写完之后补一条 settled.note ——
+// .md 里是一段引用、trace 里是一条 error。未确认那一支从 2026-08-31 起改走会话旁注
+// （level:"notice"），但盘上已有的老会话仍是这样，重放时整篇回答必须留在外面，
+// 别跟着它折进过程。
 const failedSegments: AgentContentSegment[] = [
   {
     id: "f0",

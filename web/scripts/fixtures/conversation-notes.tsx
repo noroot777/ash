@@ -30,8 +30,8 @@ const task = {
   executorLabel: "codex@cpa·gpt-5.6-sol",
 } as unknown as Task;
 
-const turn = (kind: string, text: string, at: string) =>
-  `${JSON.stringify({ t: kind, text, at })}`;
+const turn = (kind: string, text: string, at: string, level?: "notice") =>
+  `${JSON.stringify({ t: kind, text, at, ...(level ? { level } : {}) })}`;
 
 // 升级前已经落在用户 .md 里的轮换旁注原文（一字不改）。渲染层要把它归一成当前文案：
 // 刷新之后不能还是红的，也不能把 Markdown 星号原样露出来。
@@ -62,6 +62,15 @@ const output = [
   "\n> 上下文已压缩。\n",
   turn("user", "这块再改一下，右边留白太挤了", "2026-08-10T06:30:00.000Z"),
   "好的，我调整右侧留白。",
+  // 结算说明（level:"notice"）跟上面那些旁注同族，但它讲的是「这一轮为什么落成这个状态」，
+  // 语气由服务端的标记决定而不是关键词猜 —— 这句话里带着「未完成」，猜出来永远是红的，
+  // 而一条红字对第一次用 ash 的人只有一个读法：它崩了。
+  turn(
+    "system",
+    "本回合没有交卷:agent 结束前没有调用 complete_task 确认目标已达成,按 ash 的完成协议记为未完成。这不是崩溃 —— 产物都还在,核对后可直接把状态改成已完成;点重试会从中断处接着跑。",
+    "2026-08-10T06:40:00.000Z",
+    "notice",
+  ),
 ].join("\n");
 
 const items = buildConversationItems([{ session, output, trace: [] }], [session], [

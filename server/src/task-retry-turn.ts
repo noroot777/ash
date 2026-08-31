@@ -74,8 +74,16 @@ type NonAgentSeg = Exclude<ConvSeg, { kind: "agent" }>;
 
 // 一段会话正文里**最后一个非 agent 段**：它就是「上一回合的输入」。是 user 段才可能重投；
 // 是 system 段（系统续跑提示）说明上一回合本来就是续跑，重投没有意义。
+//
+// 后端旁注（level:"notice"：结算说明、会话轮换那句）不是输入，必须跳过 —— 它们恒在回合
+// 收尾时落盘，也就是恒在最后一个真人回合之后。不跳的话每一个「没交卷」的失败回合末尾都
+// 挂着一条旁注，`lastInputOf` 拿到 system 就判成「上一轮本来就是续跑」，于是「重跑上一
+// 回合」再也重投不了用户那句话，静默退回 resume。
 export function lastInputOf(out: string): NonAgentSeg | null {
-  return [...parseSessionOutput(out)].reverse().find((seg): seg is NonAgentSeg => seg.kind !== "agent") ?? null;
+  return [...parseSessionOutput(out)]
+    .reverse()
+    .find((seg): seg is NonAgentSeg => seg.kind !== "agent" && !(seg.kind === "system" && seg.level === "notice"))
+    ?? null;
 }
 
 async function lastInputSeg(path: string): Promise<NonAgentSeg | null> {

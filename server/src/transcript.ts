@@ -110,7 +110,9 @@ export function writeTurn(
   // by:"system" = 这条虽然占的是真人回合（它必须是 user 回合，否则 followUpFrom 护不住
   // 任务原来的终态），但字是后端写的（验证打回、验收冲突交接）。不标的话，「我发的最后
   // 一条追问」那类读端只能看着一模一样的 user 回合瞎猜。
-  turn: { t: "user" | "system"; agent: AgentType; text: string; by?: "system" },
+  // level:"notice" = 结算说明（这一轮为什么落成这个状态）。落盘也要带着，否则刷新之后
+  // 展示端只剩正文可读，又得回到「按关键词猜语气」那条路上去。
+  turn: { t: "user" | "system"; agent: AgentType; text: string; by?: "system"; level?: "notice" },
   at: string,
 ): void {
   out.write(`\n${TURN_SENTINEL}${JSON.stringify({ ...turn, at })}\n`);

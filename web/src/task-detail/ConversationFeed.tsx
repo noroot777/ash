@@ -219,7 +219,7 @@ export function ConversationFeed({
     }
     return (
       <p
-        className={`conversation-note${item.tone === "error" ? " is-error" : ""}${item.verify ? " is-verify" : ""}`}
+        className={`conversation-note${item.tone === "error" ? " is-error" : ""}${item.tone === "notice" ? " is-notice" : ""}${item.verify ? " is-verify" : ""}`}
         key={item.id}
       >
         {item.text}

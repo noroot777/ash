@@ -458,7 +458,8 @@ export function buildConversationItems(
           text,
           at: segment.at,
           sessionId: session.id,
-          tone: noteTone(text),
+          // 服务端标了 notice 就照它的，别再去猜（见 conversationNotes 的 tone 注释）。
+          tone: segment.level === "notice" ? "notice" : noteTone(text),
           variant: "note",
           verify: isVerifyNote(text),
         });
@@ -543,7 +544,7 @@ export function buildConversationItems(
         text,
         at: event.at,
         sessionId: entry.event.sessionId,
-        tone: noteTone(text),
+        tone: event.level === "notice" ? "notice" : noteTone(text),
         variant: "note",
         verify: isVerifyNote(text),
       });

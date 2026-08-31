@@ -115,9 +115,11 @@ for (const label of [
   assert.deepEqual(conclusion[0].attachments, ["shot.png"]);
 }
 
-// 11. 结算补的那条异常不当切点。未确认完成时 server 在正文写完之后才写 settled.note
-//     （.md 里是一段引用，trace 里是一条 error），拿它当切点就把整篇回答折进过程，
-//     外面只剩那句失败提示 —— 现场原状：15 次工具 + 长篇回答，用户只能看到红字。
+// 11. 结算补的那条异常不当切点。**这是历史形状**：2026-08-31 之前，未确认完成 / 退出码
+//     非 0 时 server 都把 settled.note 写成「.md 一段引用 + trace 一条 error」；未确认那一
+//     支现在改走会话旁注（level:"notice"，见 test-settlement-note.mjs），但老会话仍是这个
+//     样子，重放时不能因为它把整篇回答折进过程 —— 外面就只剩那句失败提示了。
+//     现场原状：15 次工具 + 长篇回答，用户只能看到红字。
 {
   const { process, conclusion } = splitTurnSegments([
     segment("a", { events: [tool("Bash")], markdown: "答（只回答，未改代码）：会覆盖，而且只有一个槽。" }),
