@@ -7,7 +7,6 @@ import type {
   Task, TaskListItem,
 } from "@ash/shared";
 import { needsPeerKey } from "@ash/shared/handoff";
-import { unclaimedHint } from "../settings/handoffTargetUi.ts";
 import { Fingerprint, SpinnerGap, Warning } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { api, ApiError, type TaskScopedHandoffPreflightResult } from "../lib/api.ts";
@@ -236,7 +235,7 @@ export function HandoffDialog({
       setApproval(requestResult);
       const status = requestResult.peer?.peerStatus;
       if (status === "pending") {
-        notify(`接力申请已发送，请等待对方接受申请后再接力${unclaimedHint(requestResult)}`);
+        notify("接力申请已发送，请等待对方接受申请后再接力");
         return;
       }
       if (status === "blocked") {

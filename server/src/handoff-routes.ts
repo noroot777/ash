@@ -268,13 +268,18 @@ export function mountHandoffRoutes(api: Hono): void {
     // (见 handoff-peer-client.ts pingPeer)。缺省仍按申请处理:老版源机不带这个参数,
     // 而它点申请走的就是这条路,默认成 probe 会让老版永远配不上对。
     const pairing = c.req.query("intent") !== "probe";
-    // 归属:源机带的「我在对端的账号 key」说明了它要以谁的身份进来。记下来,这条申请
-    // 就只打扰那个人(判据在 handoff-peers.ts peerAudience)。
+    // 归属:源机带的「我在对端的账号 key」说明了它要以谁的身份进来。
     const multi = await isMultiUser();
     const peerUser = multi ? await peerUserSoft(c) : null;
+    // **多人实例不收无主申请**(用户 2026-08-31 拍板)。认不出主人的申请只能推给全体
+    // 成员,而「谁都能替本人放行一台机器」正是要修的病。这里只是不落库 —— ping 照常
+    // 200 回全套身份和 instanceMode,源机据此当场提示「先补上你在对端的账号 key」
+    // (出站侧同一道判据在 pingPeer 的 requirePeerUser,这一道是不信任源机的兜底:
+    // 老版源机和自己拼请求的都到不了这儿)。单人实例没有用户概念,不受此限。
+    const claimed = !multi || Boolean(peerUser?.user);
     if (peer) {
       await touchPeer(peer, peerAddr(c), {
-        create: pairing,
+        create: pairing && claimed,
         requestedBy: peerUser?.user?.id ?? null,
       });
     }

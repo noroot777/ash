@@ -254,8 +254,13 @@ export async function pingPeer(
   }
   // 对端是多人实例、而这次没认出我是谁(没配 key 或 key 已失效):在这里就说清楚。
   // 不说的话用户看到的是「对端一个项目都没有」——那是最容易被误读成「对端没建项目」
-  // 的假象(§十一 单人→多人 / 多人→多人 两格)。配对申请不走这一步:那时本来就还
-  // 没有账号,拦死它等于连申请的路都断了。
+  // 的假象(§十一 单人→多人 / 多人→多人 两格)。
+  //
+  // **配对申请同样适用**(用户 2026-08-31 拍板)。曾经在这儿放过一马,理由是「那时本来
+  // 就还没有账号,拦死它等于连申请的路都断了」—— 那条理由站不住:§十一 的原则就是
+  // 「要在那台机器上做事,就得在那台机器上有账号(找那台机器的管理员开)」。放过去的
+  // 结果是对端收到一条认不出主人的申请,只能推给它上面所有人,而那正是本轮要修的病。
+  // 对端是单人实例时不需要 key,也就没有归属问题,这条闸自然不触发。
   if (options.requirePeerUser && ping.instanceMode === "multi" && !ping.peerUser) {
     // 带上原因码,接力对话框据此当场给出输入框(文案里只说「哪里能填」,不再指路)。
     const error = new HandoffError(
@@ -326,22 +331,24 @@ export async function rememberedFingerprint(targetUrl: string): Promise<string |
  * 显式发送接力申请。它只做带签名的 ping：对端据此把本机落进待审批列表，不读取
  * 分支、不打包任务、更不会传输仓库。用户已经明确点了「申请」，所以首次见到的对端
  * 身份可以在这一步记住；之后地址背后换了机器，连再次申请都会先被指纹校验拦下。
+ *
+ * `requirePeerUser` 不能省:对端是多人实例时,一条认不出主人的申请只能推给它上面
+ * 所有人 —— 没有「无主申请」这回事(用户 2026-08-31 拍板)。没账号就先找对端管理员
+ * 开一个,这跟项目邀请是同一套哲学(§十一)。对端是单人实例时不需要 key,照常放行。
  */
 export async function requestHandoffApproval(rawTargetUrl: string): Promise<HandoffApprovalResult> {
   const targetUrl = normalizePeerUrl(rawTargetUrl);
   // 唯一带 pairing 的调用点 —— 只有这里该让对端多出一条待批准记录。
-  const probe = await pingPeer(targetUrl, await rememberedFingerprint(targetUrl), undefined, { pairing: true });
+  const probe = await pingPeer(targetUrl, await rememberedFingerprint(targetUrl), undefined, {
+    pairing: true,
+    requirePeerUser: true,
+  });
   if (probe.peer) await rememberPeerFingerprint(targetUrl, probe.peer.fingerprint);
-  // 对端是多人实例却没认出我 = 这条申请落在它那边是**无主**的,只能推给全体成员处理。
-  // 照发不误(没有对端账号的人正要靠这一步开口),但得让申请人当场知道,而不是等对面
-  // 四个人一起被打扰之后才发现自己漏填了 key。
-  const unclaimed = probe.ping.instanceMode === "multi" && !probe.ping.peerUser;
   return {
     ok: true,
     target: { url: targetUrl, host: probe.ping.host },
     peer: probe.peer,
     projects: probe.ping.projects,
-    ...(unclaimed ? { unclaimed: true } : {}),
     ...(probe.ping.peerUser ? { peerUserName: probe.ping.peerUser.name } : {}),
   };
 }

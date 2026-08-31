@@ -28,22 +28,12 @@ export const approvalStateClass = (result?: HandoffApprovalResult) => {
   return "is-unknown";
 };
 
-/**
- * 申请发出去了，但对端认不出这条是谁的。
- *
- * 对端是多人实例时，一条申请**该只打扰它冲着的那个人**（server 的 peerAudience）。
- * 认人靠的是「我在对端的账号 key」；没填就只能落成无主申请，推给对面全体成员处理 ——
- * 那正是「凭什么不相干的人也收到我的申请、还能替我批」的来源。申请本身不拦（人可能
- * 正要靠这一步开口要账号），但得当场说清楚。
- */
-export const unclaimedHint = (result: HandoffApprovalResult): string =>
-  result.unclaimed
-    ? "。你还没填「我在对端的账号 key」，对方看到的会是一条无主申请（它上面每个人都会看到、都能批）；填上 key 再申请一次就只送到你名下"
-    : "";
-
 export const approvalNotice = (name: string, result: HandoffApprovalResult) => {
   const status = peerStatusOf(result);
-  if (status === "pending") return `已向「${name}」发送申请，请等待对方接受后再接力${unclaimedHint(result)}`;
+  // 对端是多人实例时，申请一定认得出主人 —— 认不出就在服务端当场失败（带
+  // HANDOFF_PEER_KEY_REQUIRED，由调用点的补 key 输入框接住），走不到这句话。
+  const as = result.peerUserName ? `（以「${result.peerUserName}」的身份）` : "";
+  if (status === "pending") return `已向「${name}」发送申请${as}，请等待对方接受后再接力`;
   if (status === "approved") return `「${name}」已接受申请，可以开始接力`;
   if (status === "open") return `「${name}」没有开启审批，可以直接接力`;
   if (status === "blocked") return `「${name}」已拒绝这台机器的接力申请`;

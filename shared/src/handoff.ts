@@ -128,14 +128,11 @@ export interface HandoffApprovalResult {
   /** 只有对方已经接受申请（或关闭审批）时才会返回项目。 */
   projects: HandoffPingProject[];
   /**
-   * true = 对端是多人实例，但这次申请**没带**（或带了张无效的）「我在对端的账号 key」，
-   * 所以它认不出这条申请代表谁。申请照发不误 —— 拦死它等于连申请的路都断了，人本来
-   * 就可能还没有对端账号 —— 但对端只能把它当成一条无主申请推给全体成员处理，而不是
-   * 精准送到「我」名下（判据在 server/src/handoff-peers.ts peerAudience）。填上 key
-   * 再申请一次就会归到本人名下。
+   * 对端认出来的「我」是谁。对端是多人实例时必有 —— 它认不出主人就根本不受理这次
+   * 申请（没有「无主申请」这回事，见 server/src/handoff-peer-client.ts
+   * requestHandoffApproval），申请会带 `HANDOFF_PEER_KEY_REQUIRED` 失败而不是成功。
+   * 对端是单人实例时不需要 key，这里为空。
    */
-  unclaimed?: boolean;
-  /** 对端认出来的「我」是谁。unclaimed 为假且对端是多人实例时才有。 */
   peerUserName?: string;
 }
 

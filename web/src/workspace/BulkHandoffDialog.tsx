@@ -8,7 +8,6 @@ import type {
   TaskListItem,
 } from "@ash/shared";
 import { needsPeerKey } from "@ash/shared/handoff";
-import { unclaimedHint } from "../settings/handoffTargetUi.ts";
 import { Check, Fingerprint, LockKey, SpinnerGap, Warning } from "@phosphor-icons/react";
 import { api, ApiError, type TaskScopedHandoffPreflightResult } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
@@ -265,7 +264,7 @@ export function BulkHandoffDialog({
       setApproval(nextApproval);
       const status = nextApproval.peer?.peerStatus;
       if (status === "pending") {
-        notify(`已向「${target.name}」发送${actionName}申请，等待对方接受${unclaimedHint(nextApproval)}`);
+        notify(`已向「${target.name}」发送${actionName}申请，等待对方接受`);
         return;
       }
       if (status === "blocked") {

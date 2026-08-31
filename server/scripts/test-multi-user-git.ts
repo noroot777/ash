@@ -305,10 +305,10 @@ const WRITE_ROUTES: { path: string; method: string; body?: unknown; what: string
   const fp = (seed: string) => seed.repeat(64).slice(0, 64);
   const mine = fp("a");      // member 用自己的对端 key 申请的
   const others = fp("b");    // owner 申请的
-  const orphan = fp("c");    // 没带 key / 单人源机 / 老库遗留
+  const legacy = fp("c");    // 升级前落下的老行(多人实例现在已不收无主申请)
   const at = new Date().toISOString();
   for (const [fingerprint, requestedByUserId] of [
-    [mine, member.id], [others, owner.id], [orphan, null],
+    [mine, member.id], [others, owner.id], [legacy, null],
   ] as const) {
     await db.insert(handoffPeers).values({
       fingerprint, publicKey: "pk", name: `peer-${fingerprint.slice(0, 1)}`, status: "pending",
@@ -325,14 +325,21 @@ const WRITE_ROUTES: { path: string; method: string; body?: unknown; what: string
   const memberSees = await seenBy(memberKey);
   assert.ok(memberSees.has(mine), "自己的申请当然要看得见");
   assert.ok(!memberSees.has(others), "别人的申请不该来打扰我");
-  assert.ok(memberSees.has(orphan), "无主申请退回全员可见 —— 否则谁都看不见就永远批不了");
+  assert.ok(
+    !memberSees.has(legacy),
+    "无主的老记录只归管理员收拾 —— 给全员看等于把「无主申请谁都能批」那条口子从读侧开回来",
+  );
 
   const ownerSees = await seenBy(ownerKey);
   assert.ok(ownerSees.has(others) && !ownerSees.has(mine), "反向同理");
 
-  // 管理员看得见全部:approved 名单是实例级信任表,人走了、key 换了总得有人能审计撤销。
+  // 管理员看得见全部:approved 名单是实例级信任表,人走了、key 换了总得有人能审计撤销,
+  // 升级前落下的无主老行也只剩他能处置。
   const bossSees = await seenBy(bossKey);
-  assert.ok(bossSees.has(mine) && bossSees.has(others), "实例管理员要能审计整张信任表");
+  assert.ok(
+    bossSees.has(mine) && bossSees.has(others) && bossSees.has(legacy),
+    "实例管理员要能审计整张信任表，包括没人认领的老行",
+  );
   const bossRows = (await call("/api/handoff/peers", "GET", bossKey)).body.peers as
     { fingerprint: string; seenAsAdmin?: boolean }[];
   assert.equal(
@@ -345,11 +352,57 @@ const WRITE_ROUTES: { path: string; method: string; body?: unknown; what: string
   assert.equal(steal.status, 404, `不该让人替别人放行一台机器:${steal.text}`);
   const wipe = await call(`/api/handoff/peers/${mine}`, "DELETE", ownerKey);
   assert.equal(wipe.status, 404, `删除同理:${wipe.text}`);
+  const orphanGrab = await call(`/api/handoff/peers/${legacy}/approve`, "POST", ownerKey);
+  assert.equal(orphanGrab.status, 404, `无主老行也不是谁都能批:${orphanGrab.text}`);
 
   const own = await call(`/api/handoff/peers/${mine}/approve`, "POST", memberKey);
   assert.equal(own.status, 200, `本人批自己的申请必须放行:${own.text}`);
-  const anyone = await call(`/api/handoff/peers/${orphan}/approve`, "POST", ownerKey);
-  assert.equal(anyone.status, 200, `无主申请谁都能批:${anyone.text}`);
+  const byAdmin = await call(`/api/handoff/peers/${legacy}/approve`, "POST", bossKey);
+  assert.equal(byAdmin.status, 200, `管理员要收拾得了无主老行:${byAdmin.text}`);
+}
+
+// ── ⑧ 多人实例不收无主申请 ────────────────────────────────────────────────
+// 用户 2026-08-31:「就没有无主申请这一说，除非对方是单人模式，单人模式是不需要 key 的。」
+// 这跟 §十一 的原则本来就一致 —— 要在那台机器上做事，就得在那台机器上有账号。
+// 认不出主人的申请只能推给全体成员处理，而那正是「凭什么不相干的人也能替我批」的来源。
+//
+// 出站侧同一道判据在 pingPeer 的 requirePeerUser（test-handoff-peer-key 钉着）；
+// 这一道是**入站兜底**：老版源机和自己拼请求的都到不了那一道。
+{
+  const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
+  const { PEER_USER_KEY_HEADER } = await import("../src/auth/handoff-peer-user.js");
+  const { localIdentity } = await import("../src/handoff-identity.js");
+  const me = localIdentity().fingerprint;
+  const url = "http://127.0.0.1:4317/api/handoff/ping?nonce=pair";
+  const listed = async () => {
+    const rows = (await call("/api/handoff/peers", "GET", bossKey)).body.peers as { fingerprint: string }[];
+    return rows.some((p) => p.fingerprint === me);
+  };
+  const ping = async (extra?: Record<string, string>) => {
+    const res = await app.fetch(new Request(url, {
+      headers: { ...peerRequestHeaders(url, "GET", ""), ...extra },
+    }));
+    return { status: res.status, body: JSON.parse(await res.text()) as Record<string, unknown> };
+  };
+
+  // 没带 key：ping 照常 200（源机要靠它拿到 instanceMode 才知道自己缺什么），但不落库。
+  const anonymous = await ping();
+  assert.equal(anonymous.status, 200, "配对入口本身对谁都开着,拿不到应答就没法提示补 key");
+  assert.equal(anonymous.body.instanceMode, "multi", "应答要自报是多人实例");
+  assert.equal(anonymous.body.peerUser, null, "没带 key 时明说「我不认识你」");
+  assert.equal(await listed(), false, "多人实例不收认不出主人的申请 —— 它只能推给全体成员");
+
+  // 带上有效 key：受理，并且归到那个人名下。
+  const claimed = await ping({ [PEER_USER_KEY_HEADER]: memberKey });
+  assert.equal(claimed.status, 200, JSON.stringify(claimed.body));
+  assert.equal((claimed.body.peerUser as { name?: string } | null)?.name, "member", "应答要回报认出了谁");
+  assert.equal(await listed(), true, "带对了 key 的申请才受理");
+  const mineNow = (await call("/api/handoff/peers", "GET", memberKey)).body.peers as
+    { fingerprint: string; requestedByName?: string }[];
+  assert.equal(
+    mineNow.find((p) => p.fingerprint === me)?.requestedByName, "member",
+    "受理时就把归属记下来,它决定这条申请之后只打扰谁",
+  );
 }
 
 console.log("multi-user git/host/handoff gates ok");

@@ -218,15 +218,18 @@ const toPeer = (
  *
  * 原来是「全员可见可批」(§十一 互信定位)。那一条只说对了一半:**发申请**确实不是
  * 管理员专属,谁都可以发;但一条申请该打扰的只有它冲着的那个人 —— 源机发申请时带的
- * 「我在对端的账号 key」已经说明了它要以谁的身份进来,对端没有理由把它推给另外三个
+ * 「我在对端的账号 key」已经说明了它要以谁的身份进来,对端没有理由把它推给另外几个
  * 不相干的人,更不该让他们替本人放行一台机器。
  *
- * 三档,顺序固定:
- *   · 自用模式 → 恒真(只有一个人,没有归属可言)
- *   · 无主记录(没带 key / 单人源机 / 老库遗留) → 全员可见。**这条降级不能省**:
- *     否则一条无主申请谁都看不见,等于永远批不了,配对路直接断掉。
+ * 三档:
+ *   · 自用模式 → 恒真(没有用户概念,机器级配对即全部授权)
  *   · 有主记录 → 本人 + 实例管理员。管理员这一格不是为了替人做决定,而是因为
- *     approved 名单是实例级信任表:人走了、key 换了,总得有人能审计和撤销。
+ *     approved 名单是实例级信任表:人走了、key 换了,总得有人能审计和撤销
+ *   · **无主记录 → 只有实例管理员**。多人实例已经不再收无主申请了(handoff-routes.ts
+ *     的 ping:认不出主人就不落库,源机那边会被提示先补 key),所以这一档只剩两种存量:
+ *     升级前落下的老行,以及单人时期建的记录。给全员看等于把那条已经关掉的口子又
+ *     从读侧开回来;给谁都不看则会留下没人能撤销的 approved 孤儿 —— 管理员这一格
+ *     正是为收拾它们而留。
  */
 export function peerAudience(
   actor: Actor,
@@ -234,8 +237,7 @@ export function peerAudience(
 ): { visible: boolean; asAdmin: boolean } {
   if (actor.kind === "single") return { visible: true, asAdmin: false };
   const owner = row.requestedByUserId ?? null;
-  if (!owner) return { visible: true, asAdmin: false };
-  if (actor.userId && actor.userId === owner) return { visible: true, asAdmin: false };
+  if (owner && actor.userId && actor.userId === owner) return { visible: true, asAdmin: false };
   return actor.role === "admin"
     ? { visible: true, asAdmin: true }
     : { visible: false, asAdmin: false };
