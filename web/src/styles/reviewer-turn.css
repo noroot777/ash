@@ -7,7 +7,7 @@
    系统代写消息的左竖线都是它），验证段再用会把「谁在说话」这条最要紧的线索搅混。
 
    身份仍靠头像、徽标和青色来认。实现回合沿用普通会话原来的无卡片排版；审查泳道单独
-   用一张左对齐的中性卡片，角色色只落在右侧那一小段竖线上。 */
+   用一张左对齐的中性卡片，角色色只落在左侧那一小段竖线上。 */
 
 .task-message--agent.is-reviewer .task-message-avatar {
   background: color-mix(in lch, var(--cyan) 13%, var(--overlay));
@@ -57,7 +57,7 @@
   background: var(--panel);
   box-shadow: 0 1px 2px rgb(30 32 38 / 3%);
 }
-.verify-lane::before { position: absolute; top: 8px; right: -1px; bottom: 8px; width: 2px; border-radius: 2px; background: #28a17c; content: ""; pointer-events: none; }
+.verify-lane::before { position: absolute; top: 8px; bottom: 8px; left: -1px; width: 2px; border-radius: 2px; background: #28a17c; content: ""; pointer-events: none; }
 
 .verify-lane-head {
   display: flex;

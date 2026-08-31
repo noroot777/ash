@@ -122,7 +122,7 @@ try {
   // 下面量版式，三张卡都得摊开。
   await lanes.nth(1).getByRole("button", { name: "展开" }).click();
 
-  // 执行方恢复普通任务原来的无卡片排版；审查泳道保留中性卡片 + 右绿线，但整张卡
+  // 执行方恢复普通任务原来的无卡片排版；审查泳道保留中性卡片 + 左绿线，整张卡
   // 移回左侧。审查正文不能再套一层卡。
   const conversationBox = await page.locator(".task-conversation").evaluate((el) => {
     const style = getComputedStyle(el);
@@ -150,7 +150,7 @@ try {
       leftBorder: Number.parseFloat(style.borderLeftWidth),
       rightBorder: Number.parseFloat(style.borderRightWidth),
       lineWidth: Number.parseFloat(line.width),
-      lineRight: line.right,
+      lineLeft: line.left,
     };
   });
   assert.ok(Math.abs(executorLayout.left - conversationBox.contentLeft) <= 1, "执行消息应贴住会话内容区左侧");
@@ -160,7 +160,7 @@ try {
   assert.equal(laneLayout.leftBorder, 1, "审查卡整圈只用普通描边");
   assert.equal(laneLayout.rightBorder, 1);
   assert.equal(laneLayout.lineWidth, 2, "审查身份线应与讨论任务一样细");
-  assert.equal(laneLayout.lineRight, "-1px");
+  assert.equal(laneLayout.lineLeft, "-1px");
   const nestedReviewer = await reviewer.nth(0).evaluate((el) => ({
     border: getComputedStyle(el).borderTopWidth,
     line: getComputedStyle(el, "::before").content,
