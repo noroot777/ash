@@ -3,6 +3,7 @@ import { FileText, ShieldCheck } from "@phosphor-icons/react";
 import { ReviewReportDialog } from "../components/MarkdownBody.tsx";
 import type { ReviewFileTarget } from "../components/markdownPolicy.ts";
 import { api } from "../lib/api.ts";
+import { ReviewNote } from "../review/ReviewNote.tsx";
 import type { ConversationReviewLane, ReviewLaneConclusion } from "./conversationReviewLanes.ts";
 import { durationBetween, formatInstant } from "./utils.ts";
 
@@ -35,7 +36,9 @@ export function ReviewerLane({
   const bodyId = useId();
   const state = stateOf(lane.conclusion, lane.complete);
   const time = timing(lane);
-  const hasBody = lane.items.length > 0;
+  // 附言也是卡内容的一部分：审查者一句话没说的轮次（刚起、或起就失败），展开后至少
+  // 还能看见「我当时要求他重点看什么」。
+  const hasBody = lane.items.length > 0 || !!lane.note;
   const bodyHidden = collapsed || !hasBody;
   const reviewerModel = lane.reviewerModel && !lane.reviewerLabel?.includes(lane.reviewerModel)
     ? lane.reviewerModel
@@ -62,6 +65,8 @@ export function ReviewerLane({
         <span className="verify-lane-by">
           {lane.reviewerLabel ? `${lane.reviewerLabel} 在审` : "审查中"}
           {reviewerModel ? ` · ${reviewerModel}` : ""}
+          {/* 折叠着的历史轮也得看得出「这一轮是带着附言跑的」，展开才有正文。 */}
+          {lane.note ? " · 含附言" : ""}
         </span>
         <span className={`verify-lane-state ${state.className}`}>{state.label}</span>
         {time && <small className="verify-lane-time">{time}</small>}
@@ -83,7 +88,10 @@ export function ReviewerLane({
           )}
         </span>
       </header>
-      <div className="verify-lane-body" id={bodyId} hidden={bodyHidden}>{children}</div>
+      <div className="verify-lane-body" id={bodyId} hidden={bodyHidden}>
+        {lane.note && <ReviewNote text={lane.note} />}
+        {children}
+      </div>
       {report && (
         <ReviewReportDialog
           target={report}

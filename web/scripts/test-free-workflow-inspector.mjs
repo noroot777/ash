@@ -33,7 +33,10 @@ try {
   await repairButton.click();
   await page.waitForFunction(() => window.__repairRequests === 1);
   assert.equal(await page.evaluate(() => window.__repairRequests), 1, "一键修复只应发送一次请求");
-  assert.equal(await repairToolbar.getByRole("button", { name: "按意见修复" }).count(), 1, "修复只代发消息不翻状态，按钮保留（重复保护在服务端）");
+  // 「按意见修复」在请求飞出去到响应回来这段时间里显示成「正在发起修复」：__repairRequests
+  // 是在 fetch mock 里当场加的，此刻组件多半还 busy。count() 是一次性快照，会把这一瞬
+  // 当成「按钮没了」——要的是「稍后它仍在」，所以用会重试的 waitFor。
+  await repairToolbar.getByRole("button", { name: "按意见修复" }).waitFor();
   assert.equal(await repairToolbar.getByRole("button", { name: "打开预览" }).isEnabled(), true, "任务空闲时预览应可用，未通过结论不再锁预览");
   assert.equal(await repairToolbar.getByRole("button", { name: "直接再审" }).count(), 1, "空闲且未通过时主按钮是立即再审");
 
@@ -82,6 +85,13 @@ try {
   assert.equal(await page.evaluate(() => window.__reservationRequests), 2, "Enter 更新预约时应只新增一次请求");
   assert.equal(await page.evaluate(() => window.__reservationNote), "重点检查窄屏布局\n与键盘交互", "Enter 提交时必须携带附言");
 
+  // 预约里的附言必须在界面上看得到：不摆出来的话，用户只能重新打开派审弹窗才知道
+  // 自己预约时写了什么。
+  const reservationInspector = page.locator(".reservation-inspector-fixture");
+  const reservationNote = reservationInspector.locator(".review-note");
+  await reservationNote.waitFor();
+  assert.match(await reservationNote.innerText(), /预约附言[\s\S]*重点检查窄屏布局[\s\S]*与键盘交互/, "预约附言应连同换行原样显示在审查面板里");
+
   // 「失败后自动复审」是手填的数字，不是固定几档：预设里没有的 7 也要能提交上去。
   await chatToolbar.getByRole("button", { name: "已预约复审" }).click();
   await reviewDialog.getByRole("heading", { name: "调整预约审查" }).waitFor();
@@ -99,11 +109,14 @@ try {
   await reviewDialog.waitFor({ state: "detached" });
   assert.equal(await page.evaluate(() => window.__reservationRetryLimit), 7, "手填的轮数必须原样提交");
   assert.deepEqual(await reviewRounds.locator("b").allInnerTexts(), ["第 1 轮", "第 1 轮"], "自由审查 inspector 应和普通任务一样按轮列出记录");
+  assert.match(await reviewRounds.first().locator("small").innerText(), /含附言$/, "带附言的那一轮要在记录条上留标记");
   assert.equal(await page.locator(".review-evidence-drawer").count(), 0, "审查正文默认不弹出");
   await reviewRounds.first().click();
 
   const drawer = page.locator(".review-evidence-drawer");
   await drawer.waitFor();
+  // 附言是这一轮审查的输入，摆在报告正文之上才好拿它对着结论核对。
+  assert.match(await drawer.locator(".review-note").innerText(), /派审附言[\s\S]*重点核对退款分支的边界条件。/, "报告抽屉里要带出这一轮的附言");
   assert.equal(await drawer.getByRole("heading", { name: "审查结论" }).count(), 1, "报告应在左侧抽屉按 Markdown 正文渲染");
   assert.equal(await drawer.locator("pre").count(), 0, "报告不再退化成原始 pre 文本");
 

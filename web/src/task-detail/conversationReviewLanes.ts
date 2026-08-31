@@ -27,6 +27,11 @@ export type ConversationReviewLane = {
   items: ConversationItem[];
   reviewerLabel: string | null;
   reviewerModel: string | null;
+  /**
+   * 派审时写的附言。它是这一轮审查的**输入**（每轮 prompt 都会带上），卡里摆出来才能
+   * 拿它对着结论核对。只有自由派审 / 合并结果审查配得上 run 才知道；就地验证没有附言。
+   */
+  note: string | null;
   startedAt: string | null;
   endedAt: string | null;
   conclusion: ReviewLaneConclusion;
@@ -180,6 +185,7 @@ function attachReports(lanes: ConversationReviewLane[], reviews: readonly FreeRe
       hasReport: (round.reportMarkdown ?? "").trim().length > 0,
       reviewerName: run.reviewerName,
       model: run.model,
+      note: run.note ?? null,
     })))
     .sort((left, right) => left.startedAt.localeCompare(right.startedAt));
   const assigned = new Set<string>();
@@ -201,7 +207,9 @@ function attachReports(lanes: ConversationReviewLane[], reviews: readonly FreeRe
     });
     // 总轮数是这条 run 的属性，同一轮的每张卡都成立 —— 只补给拿到报告的那张，会让
     // 「启动失败旧卡」显示成「第 3 轮」、紧挨着的重跑卡显示成「第 3/5 轮」。
+    // 附言同理：它属于整条 run，配到这一轮的每张卡都该带上。
     for (const lane of matching) {
+      if (candidate.note && lane.note === null) lane.note = candidate.note;
       if (candidate.source !== "free" || candidate.totalRounds === null || lane.totalRounds !== null) continue;
       lane.totalRounds = candidate.totalRounds;
       lane.title = titleOf(lane.source, lane.round, candidate.totalRounds);
@@ -222,14 +230,17 @@ function attachReports(lanes: ConversationReviewLane[], reviews: readonly FreeRe
   // 上一条已结束的审查的上限套到新开的一条上）。
   const freeCandidates = candidates.filter((candidate) => candidate.source === "free");
   for (const lane of lanes) {
-    if (lane.source !== "free" || lane.totalRounds !== null || lane.round === null) continue;
+    if (lane.source !== "free" || lane.round === null) continue;
     const at = lane.startedAt ? Date.parse(lane.startedAt) : Number.NaN;
     if (!Number.isFinite(at)) continue;
     const owner = freeCandidates.findLast((candidate) => {
       const started = Date.parse(candidate.startedAt);
       return Number.isFinite(started) && started <= at && candidate.round < lane.round!;
     });
-    if (!owner?.totalRounds) continue;
+    if (!owner) continue;
+    // 附言同样是整条链的属性：新开那一轮还没有自己的 round 行，也该带着上一轮的附言。
+    if (owner.note && lane.note === null) lane.note = owner.note;
+    if (lane.totalRounds !== null || !owner.totalRounds) continue;
     lane.totalRounds = owner.totalRounds;
     lane.title = titleOf(lane.source, lane.round, owner.totalRounds);
   }
@@ -266,6 +277,7 @@ export function conversationFeedRows(
         items: [],
         reviewerLabel: null,
         reviewerModel: null,
+        note: null,
         startedAt: item.at ?? null,
         endedAt: item.at ?? null,
         conclusion: null,
