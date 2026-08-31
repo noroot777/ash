@@ -1,7 +1,7 @@
 /* 任务会话流：气泡、markdown 正文、执行过程折叠块、账目胶囊、附件、提问卡。
    外壳（头部、侧栏、抽屉）在 task-detail.css，回复框与派生面板在 task-reply.css，
    执行块用到的两个动效在 task-motion.css。 */
-.task-message { position: relative; width: min(86%, 790px); margin-bottom: 20px; }
+.task-message { position: relative; width: 100%; max-width: 790px; margin-bottom: 20px; }
 .task-message--agent { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); padding: 9px 11px 10px; box-shadow: 0 1px 2px rgb(30 32 38 / 3%); }
 .task-message--agent::before { position: absolute; top: 8px; bottom: 8px; left: -1px; width: 2px; border-radius: 2px; background: #3890ba; content: ""; pointer-events: none; }
 .task-message-avatar { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 50%; background: var(--overlay); color: var(--muted); font-size: 8px; font-weight: 750; }

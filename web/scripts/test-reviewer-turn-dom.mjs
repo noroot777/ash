@@ -173,6 +173,28 @@ try {
   assert.equal(nestedReviewer.border, "0px", "审查泳道内不能再套第二层卡片");
   assert.equal(nestedReviewer.line, "none", "审查泳道只保留最外侧一条角色线");
 
+  // 没做左右卡片前，普通消息是「可用空间内铺满、最多 790px」。左右两方都恢复这个
+  // 宽度规则，不能再乘一层 86% 把较窄工作区里的正文额外压缩。
+  await page.setViewportSize({ width: 760, height: 1200 });
+  const narrowWidths = await page.evaluate(() => {
+    const conversation = document.querySelector(".task-conversation");
+    const executor = document.querySelector(".task-message--agent:not(.is-reviewer)");
+    const lane = document.querySelectorAll(".verify-lane")[1];
+    if (!conversation || !executor || !lane) throw new Error("narrow layout missing");
+    const style = getComputedStyle(conversation);
+    const available = conversation.getBoundingClientRect().width
+      - Number.parseFloat(style.paddingLeft)
+      - Number.parseFloat(style.paddingRight);
+    return {
+      available: Math.round(available),
+      executor: Math.round(executor.getBoundingClientRect().width),
+      reviewer: Math.round(lane.getBoundingClientRect().width),
+    };
+  });
+  assert.equal(narrowWidths.executor, narrowWidths.available, "较窄工作区里的执行卡应铺满可用宽度");
+  assert.equal(narrowWidths.reviewer, narrowWidths.available, "较窄工作区里的审查卡应铺满可用宽度");
+  await page.setViewportSize({ width: 1000, height: 1200 });
+
   // 换身份是断点：验证回合和它后面的修复回合都得重新报执行器名，
   // 否则读者只看见「同一个人一口气说了三段」。
   for (const index of [0, 1, 2, 3, 4]) {

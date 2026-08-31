@@ -51,7 +51,8 @@
    用时和两颗动作收在一起；正文的阅读密度仍沿用原会话，不另造一套气泡。 */
 .verify-lane {
   position: relative;
-  width: min(86%, 790px);
+  width: 100%;
+  max-width: 790px;
   margin: 18px 0 22px auto;
   border: 1px solid var(--line);
   border-radius: 9px;
@@ -94,7 +95,6 @@
 .verify-lane .conversation-note { margin-left: 0; }
 
 @media (max-width: 680px) {
-  .verify-lane { width: 94%; }
   .verify-lane-head { flex-wrap: wrap; }
   .verify-lane-by { flex: 1 1 160px; }
   .verify-lane-time { order: 2; margin-left: 26px; }
