@@ -494,6 +494,44 @@
 }
 .path-field > input { min-width: 0; flex: 1; }
 .path-field > .ui-button { flex: none; }
+/* 多人模式的前缀锁死款（`ScopedPathField`）：前缀那一截不是 input 的内容，但看上去要和
+   输入框是同一个控件，所以边框画在外层 span 上，里面的 input 脱掉自己那一圈。
+   前缀可以被压成省略号（长根目录 + 窄弹层），完整路径由调用点在下面另给一行。 */
+.path-field > .path-scoped {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  height: 32px;
+  border: 1px solid var(--line2);
+  border-radius: 8px;
+  background: var(--canvas);
+  padding: 0 9px;
+}
+.path-field > .path-scoped:focus-within { border-color: var(--accent); }
+.path-field > .path-scoped > code {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  /* 一条竖线把「改不动的那截」和「要你填的那截」分开 —— 同色同字体挨在一起，
+     光标点进去之前看不出前缀是锁的。 */
+  margin-right: 7px;
+  border-right: 1px solid var(--line2);
+  padding-right: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.path-field > .path-scoped > input {
+  min-width: 0;
+  flex: 1 1 80px;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+}
 /* 应用内目录树是 .path-field 的第三个孩子，占满一整行落在输入框下面（那一行
    flex-wrap 才有的位置）。它是块，不能挤在输入框旁边。 */
 .dir-pick-tree { flex: 0 0 100%; }

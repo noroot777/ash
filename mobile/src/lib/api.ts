@@ -139,6 +139,10 @@ export const api = {
       headers: key ? { authorization: `Bearer ${key}` } : {},
     }).then(j),
 
+  // 同一条端点的「已经连上了」版本:用存好的地址和 key 问「我是谁、我的目录在哪」。
+  // 新建项目那一屏靠它决定路径框要不要锁前缀(多人模式下服务端只收我目录里的路径)。
+  me: (): Promise<AuthState> => req("/auth/state").then(j),
+
   projects: (): Promise<ProjectView[]> => req("/projects").then(j),
   createProject: (b: { name: string; repoPath?: string }): Promise<ProjectView> =>
     req("/projects", { method: "POST", body: JSON.stringify(b) }).then(j),

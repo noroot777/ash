@@ -120,6 +120,19 @@
   line-height: 1.45;
 }
 
+/* 「默认放在你自己的目录里 / 用其它路径…」。只有实例管理员看得到那颗按钮，
+   所以这一行平时是纯说明，不能长得像个必须处理的操作。 */
+.create-project-free-path {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin: -2px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 /* 克隆报的是 git 原文，可能好几行，别压成一行省略号 —— 用户要照着它改地址重试。 */
 .create-project-error {
   border: 1px solid color-mix(in srgb, var(--red) 45%, transparent);
