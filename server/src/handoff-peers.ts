@@ -25,7 +25,7 @@ import {
 } from "./handoff-identity.js";
 import type { Actor } from "./auth/context.js";
 import { isAccountHolder, ownerIdOf } from "./auth/context.js";
-import { returnGrantOwners } from "./handoff-return.js";
+import { canRevokeReturnGrant, returnGrantOwners } from "./handoff-return.js";
 import { now } from "./util.js";
 
 export const PEER_HEADERS = {
@@ -333,11 +333,13 @@ async function requireReturnGrantToRevoke(actor: Actor, fingerprint: string): Pr
       404,
     );
   }
-  if (actor.kind === "single" || actor.role === "admin") return;
-  if (actor.userId && owners.has(actor.userId)) return;
+  if (canRevokeReturnGrant(actor, owners)) return;
   throw new HandoffError(
-    "这台机器持有的历史任务不是你的 —— 拒绝它会连带挡掉别人的回程和往后所有人的接力申请,"
-    + "得由任务本人或实例管理员来点。",
+    owners.size > 1
+      ? "这台机器还持有别人的历史任务 —— 落库的是**整机**拒绝,一点下去别人的回程和它往后"
+        + "所有人的接力申请一起被挡,所以跨了人就得由实例管理员来点。"
+      : "这台机器持有的历史任务不是你的 —— 拒绝它会连带挡掉别人的回程和往后所有人的接力申请,"
+        + "得由任务本人或实例管理员来点。",
     403,
   );
 }

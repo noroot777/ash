@@ -49,10 +49,17 @@ const PERSONAL_COLLECTIONS = new Set([
  *    不是「它就是这个人」—— 不登记进来的话,任意一条正在跑的任务只凭
  *    `x-ash-source-task-id` + `x-ash-turn-token` 就能替 owner 放行一台陌生机器,
  *    还会把操作人记成 owner 本人(第 1 轮审查 P1)。
+ *  · 接力**申请**是「以 owner 的身份去敲另一台机器的门」:index.ts 用
+ *    `withHandoffActor(ownerIdOf(actorOf(c)))` 包住 /api/*,所以回合凭证走到这条路由时
+ *    会顶着 owner 的名义,而 `requestHandoffApproval` 是唯一 `pairing: true` 的出口 ——
+ *    它会把 owner 存的**「我在对端的账号 key」随请求发给那个 URL**。任意一条正在跑的
+ *    任务因此能在用户没点过的情况下往任意地址制造远端申请并带走那把 key(第 2 轮审查
+ *    P1 实测复现)。agent 要探路仍有只读的 /tasks/:id/handoff/preflight,那条不配对。
  */
 const PERSONAL_PATHS = [
   /^\/api\/handoff\/targets(?:\/|$)/,
   /^\/api\/handoff\/peers(?:\/|$)/,
+  /^\/api\/handoff\/request(?:\/|$)/,
 ];
 
 export const AGENT_PERSONAL_REFUSAL =

@@ -486,7 +486,8 @@ export function HandoffSettings({
                   实例管理员点得了(后端 requireReturnGrantToRevoke)。别人只读。 */}
               {grant.canRevoke === false ? (
                 <small className="handoff-peer-note">
-                  这些历史任务不是你的，拒绝要由任务本人或实例管理员来点。
+                  拒绝落的是<b>整机</b>黑名单，会连带挡掉别人的回程；这台机器持有的历史任务
+                  不都是你的，所以要由任务本人或实例管理员来点。
                 </small>
               ) : grant.blocked ? (
                 <Button variant="ghost" disabled={busy} onClick={() => void peerAction(grant, "unblock")}>

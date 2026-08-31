@@ -437,6 +437,38 @@ const WRITE_ROUTES: { path: string; method: string; body?: unknown; what: string
   assert.equal(byStranger.status, 403, `不是你的任务就拒不了它的持有机:${byStranger.text}`);
   const byOwnerOfTask = await call(`/api/handoff/peers/${holderFp}/block`, "POST", memberKey);
   assert.equal(byOwnerOfTask.status, 200, `任务本人要拒得掉持有机:${byOwnerOfTask.text}`);
+
+  // 一台机器同时持有**多个人**的历史任务:落库的是机器级 blocked,一点下去别人的回程和
+  // 它往后所有人的配对申请一起被挡。所以跨了人就只有管理员点得了(第 2 轮审查 P1)。
+  const sharedFp = "9".repeat(64);
+  for (const [id, who] of [["t-shared-member", member.id], ["t-shared-owner", owner.id]] as const) {
+    await db.insert(tasks).values({
+      id, projectId: "p-shared", title: `${id} 的历史存档`, body: "",
+      mode: "single", status: "paused", agentType: "claude",
+      useWorktree: false, workflowMode: "free", ownerUserId: who,
+      handoff: JSON.stringify({
+        direction: "out", pending: false, peerFp: sharedFp, peerName: "共用持有机",
+        at: new Date().toISOString(), transferId: `tx-${id}`,
+      }),
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    });
+  }
+  const sharedSeenBy = async (key: string) => {
+    const rows = (await call("/api/handoff/return-grants", "GET", key)).body.grants as
+      { fingerprint: string; canRevoke?: boolean }[];
+    return rows.find((g) => g.fingerprint === sharedFp);
+  };
+  assert.equal((await sharedSeenBy(memberKey))?.canRevoke, false, "我在这台机器上有任务 ≠ 我能替所有人拉黑它");
+  assert.equal((await sharedSeenBy(ownerKey))?.canRevoke, false, "另一位同理");
+  assert.equal((await sharedSeenBy(bossKey))?.canRevoke, true, "跨了人就是整机级决定,归实例管理员");
+  const sharedByMember = await call(`/api/handoff/peers/${sharedFp}/block`, "POST", memberKey);
+  assert.equal(sharedByMember.status, 403, `一个人拒不掉大家共用的持有机:${sharedByMember.text}`);
+  assert.equal(
+    (await db.select().from(handoffPeers)).some((r) => r.fingerprint === sharedFp), false,
+    "被拒的拉黑不许落库",
+  );
+  const sharedByAdmin = await call(`/api/handoff/peers/${sharedFp}/block`, "POST", bossKey);
+  assert.equal(sharedByAdmin.status, 200, `管理员要拒得掉:${sharedByAdmin.text}`);
 }
 
 // ── ⑧ 多人实例不收无主申请 ────────────────────────────────────────────────

