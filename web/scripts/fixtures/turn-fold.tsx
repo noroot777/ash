@@ -39,22 +39,41 @@ const failedSegments: AgentContentSegment[] = [
 function Turn({
   name,
   initialRunning,
+  initialTaskLive = initialRunning,
   turnSegments = segments,
 }: {
   name: string;
   initialRunning: boolean;
+  /** 整个任务还在跑。缺省跟着回合走（回合在飞，任务当然在跑）。 */
+  initialTaskLive?: boolean;
   turnSegments?: AgentContentSegment[];
 }) {
   const [running, setRunning] = useState(initialRunning);
+  const [taskLive, setTaskLive] = useState(initialTaskLive);
   const [nonce, setNonce] = useState(0);
   return (
     <div className="task-message task-message--agent" data-case={name}>
       <span className="task-message-avatar" aria-hidden="true">A</span>
       <div className="task-message-content">
+        {/* 回合收口但任务还在跑：换下一轮、就地验证、会话行落 endedAt 都长这样。 */}
         <button type="button" data-role="end-turn" onClick={() => setRunning(false)}>结束回合</button>
-        <button type="button" data-role="restart-turn" onClick={() => setRunning(true)}>重新开跑</button>
+        {/* 最后一步确认执行完了：任务不跑了。 */}
+        <button
+          type="button"
+          data-role="end-task"
+          onClick={() => { setRunning(false); setTaskLive(false); }}
+        >
+          结束任务
+        </button>
+        <button
+          type="button"
+          data-role="restart-turn"
+          onClick={() => { setRunning(true); setTaskLive(true); }}
+        >
+          重新开跑
+        </button>
         <button type="button" data-role="repaint" onClick={() => setNonce(nonce + 1)}>触发重绘 {nonce}</button>
-        <AgentTurnBody segments={turnSegments} running={running} />
+        <AgentTurnBody segments={turnSegments} running={running} taskLive={taskLive} />
       </div>
     </div>
   );
@@ -66,6 +85,8 @@ createRoot(document.getElementById("root")!).render(
     <Turn name="live" initialRunning />
     {/* 刷新页面后读到的历史回合：一上来就该是折好的 */}
     <Turn name="persisted" initialRunning={false} />
+    {/* 任务还在跑，但这一条是它上一轮的回合：不许被自动掀开 */}
+    <Turn name="history" initialRunning={false} initialTaskLive />
     {/* 未确认完成而记 failed 的回合：结算那条异常不许把整篇回答折进过程 */}
     <Turn name="failed" initialRunning={false} turnSegments={failedSegments} />
   </StrictMode>,

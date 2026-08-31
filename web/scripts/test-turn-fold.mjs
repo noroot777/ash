@@ -5,7 +5,7 @@
 // 切点是它 —— 于是整篇报告被折进过程，外面只剩收尾那一句。待办清单的 TaskUpdate
 // （载荷就是把某条划掉）是同一个毛病的另一副面孔。
 import assert from "node:assert/strict";
-import { splitTurnSegments } from "../src/task-detail/turnFold.ts";
+import { splitTurnSegments, nextProcessFoldOpen } from "../src/task-detail/turnFold.ts";
 
 const segment = (id, { markdown = "", events = [], attachments = [] } = {}) => ({ id, markdown, events, attachments });
 const tool = (label) => ({ kind: "tool", label });
@@ -147,6 +147,21 @@ for (const label of [
   const { process, conclusion } = splitTurnSegments(segments);
   assert.equal(process.length, 0);
   assert.equal(conclusion, segments);
+}
+
+// 14. 自动开合的时机（渲染结果由 test:turn-fold-dom 钉住，这里钉判据本身）。
+{
+  const open = (running, taskLive, touched = false) => nextProcessFoldOpen({ running, taskLive, touched });
+  // 在飞就摊开。
+  assert.equal(open(true, true), true);
+  // 最后一步确认执行完了：这一下才收。
+  assert.equal(open(false, false), false);
+  // 回合收口但任务还在跑（换轮、就地验证、endedAt 落下来那一瞬）：什么都不做。跟着它
+  // 折，用户会在跑的中途被反复折叠，正读着的那段过程说没就没了。
+  assert.equal(open(false, true), null);
+  // 用户自己动过折角之后，两个方向都不再自动。
+  assert.equal(open(true, true, true), null);
+  assert.equal(open(false, false, true), null);
 }
 
 console.log("turn fold tests passed");

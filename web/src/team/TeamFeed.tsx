@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import type { Task, TaskListItem } from "@ash/shared";
+import { isTaskLive } from "@ash/shared";
 import { runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
 import type { Batch } from "@ash/shared/team";
 import { ArrowElbowDownRight, ArrowRight, SpinnerGap } from "@phosphor-icons/react";
@@ -18,9 +19,12 @@ import { executorLabel, parseInbound, teamLeadLabel, workerStatusText, type Inbo
 
 function AgentRow({
   row,
+  taskLive,
   hideTime,
 }: {
   row: Extract<TeamFeedRow, { kind: "conv" }>["item"];
+  /** 调度台还在跑：过程折叠块在跑的中途不自动收起。 */
+  taskLive: boolean;
   hideTime?: boolean;
 }) {
   if (row.kind !== "agent") return null;
@@ -40,7 +44,7 @@ function AgentRow({
           {duration && <small className="task-turn-duration" title={`开始 ${formatInstant(row.at)} · 结束 ${formatInstant(row.endedAt)}`}>{row.continuation ? "" : "· "}⏱ {duration} 用时</small>}
         </header>
       )}
-      <AgentTurnBody segments={row.segments} running={!row.endedAt} />
+      <AgentTurnBody segments={row.segments} running={!row.endedAt} taskLive={taskLive} />
       <MessageFooter
         turnUsage={row.usage}
         session={row.showSessionMeta ? row.session : null}
@@ -199,7 +203,7 @@ export function TeamFeed({
           {rows.map((row) => {
             if (row.kind === "batch") return <BatchCard key={row.key} batch={row.batch} allWorkers={workers} onOpenWorker={onOpenWorker} indicatorForTask={indicatorForTask} />;
             const item = row.item;
-            if (item.kind === "agent") return <AgentRow key={row.key} row={item} hideTime={hiddenTimes.has(item.id)} />;
+            if (item.kind === "agent") return <AgentRow key={row.key} row={item} taskLive={isTaskLive(task.status)} hideTime={hiddenTimes.has(item.id)} />;
             if (item.kind === "user") return <UserRow key={row.key} row={item} />;
             const inbound = parseInbound(item.text);
             if (inbound) {

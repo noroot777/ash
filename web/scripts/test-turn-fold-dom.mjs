@@ -1,8 +1,10 @@
 // 回合折叠的开合时机（渲染结果，切分逻辑本身由 test:turn-fold 钉住）。
 //
-// 钉的就是「跑完会不会自动折起来」这一条：跑的时候必须摊开（不然用户盯着一行摘要不知道
-// 在干嘛），收工那一刻自动收起，刷新后读到的历史回合一上来就是折好的。还有一条同样要紧
-// 的反向约束：用户自己动过折角之后，后续重绘不许再把它按回去。
+// 钉的就是「什么时候自动折起来」这一条：跑的时候必须摊开（不然用户盯着一行摘要不知道
+// 在干嘛），**只有整个任务停下来那一刻**才收起 —— 回合边界在一次运行里能出现好几次
+// （换轮、就地验证、会话行落 endedAt），跟着它折用户会在跑的中途被反复折叠。刷新后读到
+// 的历史回合一上来就是折好的。还有一条同样要紧的反向约束：用户自己动过折角之后，后续
+// 重绘不许再把它按回去。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -47,8 +49,17 @@ try {
   assert.equal(await processText("live").isVisible(), true);
   assert.equal(await conclusionText("live").isVisible(), true);
 
-  // 2. 跑完：自动收起，只留结论。
+  // 2. 回合收口了、任务还在跑：**不许折**。这是本功能的主约束 —— 一次运行里回合边界
+  //    出现好几次（换轮、就地验证、endedAt 落下来的那一瞬），跟着它折就等于跑的中途
+  //    把用户正读的过程收走。
   await turn("live").locator('[data-role="end-turn"]').click();
+  await settled("live", false);
+  await flush();
+  assert.equal(await isOpen("live"), true, "任务还在跑，回合结束不该把过程折起来");
+  assert.equal(await processText("live").isVisible(), true);
+
+  // 3. 最后一步确认执行完了：这时才自动收起，只留结论。
+  await turn("live").locator('[data-role="end-task"]').click();
   await page.waitForFunction(
     () => !document.querySelector('[data-case="live"] details.task-turn-process').open,
   );
@@ -56,7 +67,7 @@ try {
   assert.equal(await conclusionText("live").isVisible(), true, "结论任何时候都不该被折起来");
   assert.equal(await turn("live").getByText("工作树保持干净").isVisible(), true, "记账之后的收尾句也是结论");
 
-  // 3. 记账调用不当切点：complete_task 被并进过程块，不在结论区自成一条折叠行。
+  // 4. 记账调用不当切点：complete_task 被并进过程块，不在结论区自成一条折叠行。
   assert.equal(await fold("live").locator(".task-tool-line").count(), 3);
   assert.equal(
     await turn("live").locator("details.task-execution-block:not(.task-turn-process)").count(),
@@ -64,7 +75,7 @@ try {
     "结论区不该再夹一条「执行过程」折叠行",
   );
 
-  // 4. 用户自己展开之后，后续重绘不许再把它按回去。
+  // 5. 用户自己展开之后，后续重绘不许再把它按回去。
   await fold("live").locator("summary").click();
   assert.equal(await isOpen("live"), true);
   await turn("live").locator('[data-role="repaint"]').click();
@@ -75,22 +86,27 @@ try {
   assert.equal(await isOpen("live"), true, "用户手动展开后被重绘按了回去");
   assert.equal(await processText("live").isVisible(), true);
 
-  // 5. 刷新后读到的历史回合：首屏就是折好的，不该先闪一下再收。
+  // 6. 刷新后读到的历史回合：首屏就是折好的，不该先闪一下再收。
   assert.equal(await isOpen("persisted"), false, "已结束的回合首屏就该是折好的");
   assert.equal(await processText("persisted").isVisible(), false);
   assert.equal(await conclusionText("persisted").isVisible(), true);
 
-  // 6. 折好的历史回合又被续跑（回复、resume）：没人动过它，就跟着重新摊开。
+  // 7. 任务还在跑时挂在上面的历史回合（跑到中途刷新页面、或续跑前面的那些轮）：
+  //    「不折」不等于「掀开」，它自己没在飞就该保持折好。
+  assert.equal(await isOpen("history"), false, "任务在跑不是把每一条历史回合都掀开的理由");
+  assert.equal(await processText("history").isVisible(), false);
+
+  // 8. 折好的历史回合又被续跑（回复、resume）：没人动过它，就跟着重新摊开。
   await turn("persisted").locator('[data-role="restart-turn"]').click();
   await page.waitForFunction(
     () => document.querySelector('[data-case="persisted"] details.task-turn-process').open,
   );
   assert.equal(await processText("persisted").isVisible(), true);
 
-  // 7. 但用户自己收起来的，续跑不许替他掀开 —— 这是 touched 那道闸唯一起作用的方向。
+  // 9. 但用户自己收起来的，续跑不许替他掀开 —— 这是 touched 那道闸唯一起作用的方向。
   await fold("persisted").locator("summary").click();
   assert.equal(await isOpen("persisted"), false);
-  await turn("persisted").locator('[data-role="end-turn"]').click();
+  await turn("persisted").locator('[data-role="end-task"]').click();
   await settled("persisted", false);
   await flush();
   await turn("persisted").locator('[data-role="restart-turn"]').click();
@@ -98,8 +114,8 @@ try {
   await flush();
   assert.equal(await isOpen("persisted"), false, "用户收起来的过程块被续跑掀开了");
 
-  // 8. 未确认完成的失败回合：结算补的那条异常不是切点。整篇回答留在折叠外面，异常并进
-  //    过程块（折叠条标红），失败说明那段引用照旧露在外面。
+  // 10. 未确认完成的失败回合：结算补的那条异常不是切点。整篇回答留在折叠外面，异常并进
+  //     过程块（折叠条标红），失败说明那段引用照旧露在外面。
   assert.equal(await isOpen("failed"), false, "已结束的失败回合首屏就该是折好的");
   assert.equal(
     await turn("failed").getByText("会覆盖，而且只有一个槽").first().isVisible(),

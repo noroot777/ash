@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import { Copy, File, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
+import { isTaskLive } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
 import { runActivityExecutor, runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
 import type { ConversationItem } from "./conversationModel.ts";
@@ -35,10 +36,13 @@ function ReviewerBadge({ round }: { round: number | null }) {
 
 function AgentMessage({
   item,
+  taskLive,
   retry,
   hideTime,
 }: {
   item: Extract<ConversationItem, { kind: "agent" }>;
+  /** 整个任务还在跑：过程折叠块在跑的中途不自动收起。 */
+  taskLive: boolean;
   /** 这条气泡是不是「上一回合崩了」的那一条：给了就在尾栏挂重试按钮。 */
   retry?: React.ReactNode;
   /** 紧邻的旁注已经显示了同一个时间。 */
@@ -84,7 +88,7 @@ function AgentMessage({
             </button>
           </header>
         )}
-        <AgentTurnBody segments={item.segments} running={!item.endedAt} />
+        <AgentTurnBody segments={item.segments} running={!item.endedAt} taskLive={taskLive} />
         {/* 账目一律在尾栏，头部不放。位置不许随「是不是会话最后一条」变——
             那样同一个数会在气泡顶和气泡底之间跳，而这条规则用户看不见。 */}
         <MessageFooter
@@ -186,6 +190,7 @@ export function ConversationFeed({
         <AgentMessage
           key={item.id}
           item={item}
+          taskLive={isTaskLive(task.status)}
           hideTime={hiddenTimes.has(item.id)}
           retry={retry && item.id === retryItemId ? (
             <TurnRetryButton

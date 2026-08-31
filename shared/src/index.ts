@@ -261,6 +261,12 @@ export type TaskDisplayStatus = { key: TaskDisplayStatusKey; label: string };
 export function isTaskStage(value: unknown): value is TaskStage {
   return typeof value === "string" && (STAGE_ORDER as readonly string[]).includes(value);
 }
+// 这一刻任务还在执行链路上，后面还会有新东西冒出来。跟「某一回合收没收口」是两件事：
+// 一次运行里回合边界能出现好几次（换轮、就地验证、会话行落 endedAt），任务照样是
+// running。UI 里凡是「跑完了才做的事」都该问它，别拿单个回合的 endedAt 代替。
+export function isTaskLive(status: TaskStatus): boolean {
+  return status === "running" || status === "queued";
+}
 export function taskDisplayStatus(
   status: TaskStatus, stage: TaskStage | null | undefined, awaitingAnswer: boolean,
 ): TaskDisplayStatus {
