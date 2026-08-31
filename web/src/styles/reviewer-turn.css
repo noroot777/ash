@@ -6,15 +6,13 @@
    配色用 --cyan 而不是 --accent：靛蓝在这套界面里已经被「你（真人）」占着（用户气泡、
    系统代写消息的左竖线都是它），验证段再用会把「谁在说话」这条最要紧的线索搅混。
 
-   身份仍靠头像、徽标和青色来认；版式跟讨论任务的两方对话一致：实现回合是左侧卡片，
-   审查泳道是右侧卡片。卡片本身只用中性描边，角色色只落在外侧那一小段竖线上。 */
+   身份仍靠头像、徽标和青色来认。实现回合沿用普通会话原来的无卡片排版；审查泳道单独
+   用一张左对齐的中性卡片，角色色只落在右侧那一小段竖线上。 */
 
 .task-message--agent.is-reviewer .task-message-avatar {
   background: color-mix(in lch, var(--cyan) 13%, var(--overlay));
   color: var(--cyan);
 }
-.task-message--agent.is-reviewer { margin-left: auto; }
-.task-message--agent.is-reviewer::before { right: -1px; left: auto; background: #28a17c; }
 
 .verify-badge {
   display: inline-flex;
@@ -53,7 +51,7 @@
   position: relative;
   width: 100%;
   max-width: 790px;
-  margin: 18px 0 22px auto;
+  margin: 18px 0 22px;
   border: 1px solid var(--line);
   border-radius: 9px;
   background: var(--panel);

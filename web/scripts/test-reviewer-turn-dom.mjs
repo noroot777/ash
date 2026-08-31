@@ -122,14 +122,13 @@ try {
   // 下面量版式，三张卡都得摊开。
   await lanes.nth(1).getByRole("button", { name: "展开" }).click();
 
-  // 跟讨论任务一致：执行方是左卡 + 左蓝线，审查方是右卡 + 右绿线。卡片整圈只用
-  // 中性 1px 描边，角色色只落在 2px 的短竖线上；审查正文也不能再套一层卡。
+  // 执行方恢复普通任务原来的无卡片排版；审查泳道保留中性卡片 + 右绿线，但整张卡
+  // 移回左侧。审查正文不能再套一层卡。
   const conversationBox = await page.locator(".task-conversation").evaluate((el) => {
     const style = getComputedStyle(el);
     const rect = el.getBoundingClientRect();
     return {
       contentLeft: Math.round(rect.left + Number.parseFloat(style.paddingLeft)),
-      contentRight: Math.round(rect.right - Number.parseFloat(style.paddingRight)),
     };
   });
   const executorLayout = await messages.nth(0).evaluate((el) => {
@@ -138,10 +137,8 @@ try {
     const rect = el.getBoundingClientRect();
     return {
       left: Math.round(rect.left),
-      leftBorder: Number.parseFloat(style.borderLeftWidth),
-      rightBorder: Number.parseFloat(style.borderRightWidth),
-      lineWidth: Number.parseFloat(line.width),
-      lineLeft: line.left,
+      border: style.borderTopWidth,
+      line: line.content,
     };
   });
   const laneLayout = await lanes.nth(1).evaluate((el) => {
@@ -149,19 +146,17 @@ try {
     const line = getComputedStyle(el, "::before");
     const rect = el.getBoundingClientRect();
     return {
-      right: Math.round(rect.right),
+      left: Math.round(rect.left),
       leftBorder: Number.parseFloat(style.borderLeftWidth),
       rightBorder: Number.parseFloat(style.borderRightWidth),
       lineWidth: Number.parseFloat(line.width),
       lineRight: line.right,
     };
   });
-  assert.ok(Math.abs(executorLayout.left - conversationBox.contentLeft) <= 1, "执行卡应贴住会话内容区左侧");
-  assert.equal(executorLayout.leftBorder, 1, "执行卡整圈只用普通描边");
-  assert.equal(executorLayout.rightBorder, 1);
-  assert.equal(executorLayout.lineWidth, 2, "执行身份线应与讨论任务一样细");
-  assert.equal(executorLayout.lineLeft, "-1px");
-  assert.ok(Math.abs(laneLayout.right - conversationBox.contentRight) <= 1, "审查泳道应贴住会话内容区右侧");
+  assert.ok(Math.abs(executorLayout.left - conversationBox.contentLeft) <= 1, "执行消息应贴住会话内容区左侧");
+  assert.equal(executorLayout.border, "0px", "执行消息应恢复无卡片排版");
+  assert.equal(executorLayout.line, "none", "执行消息不再画角色边线");
+  assert.ok(Math.abs(laneLayout.left - conversationBox.contentLeft) <= 1, "审查泳道应移回会话内容区左侧");
   assert.equal(laneLayout.leftBorder, 1, "审查卡整圈只用普通描边");
   assert.equal(laneLayout.rightBorder, 1);
   assert.equal(laneLayout.lineWidth, 2, "审查身份线应与讨论任务一样细");
@@ -173,8 +168,8 @@ try {
   assert.equal(nestedReviewer.border, "0px", "审查泳道内不能再套第二层卡片");
   assert.equal(nestedReviewer.line, "none", "审查泳道只保留最外侧一条角色线");
 
-  // 没做左右卡片前，普通消息是「可用空间内铺满、最多 790px」。左右两方都恢复这个
-  // 宽度规则，不能再乘一层 86% 把较窄工作区里的正文额外压缩。
+  // 普通消息原本就是「可用空间内铺满、最多 790px」；审查卡也沿用同一个宽度上限，
+  // 不能再乘一层百分比把较窄工作区里的正文额外压缩。
   await page.setViewportSize({ width: 760, height: 1200 });
   const narrowWidths = await page.evaluate(() => {
     const conversation = document.querySelector(".task-conversation");
@@ -191,7 +186,7 @@ try {
       reviewer: Math.round(lane.getBoundingClientRect().width),
     };
   });
-  assert.equal(narrowWidths.executor, narrowWidths.available, "较窄工作区里的执行卡应铺满可用宽度");
+  assert.equal(narrowWidths.executor, narrowWidths.available, "较窄工作区里的执行消息应铺满可用宽度");
   assert.equal(narrowWidths.reviewer, narrowWidths.available, "较窄工作区里的审查卡应铺满可用宽度");
   await page.setViewportSize({ width: 1000, height: 1200 });
 
