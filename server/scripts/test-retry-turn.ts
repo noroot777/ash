@@ -23,6 +23,29 @@ const turn = (t: string, text: string, extra: Record<string, unknown> = {}) =>
   assert.equal(seg?.kind === "user" ? seg.bySystem : undefined, undefined, "真人发的不带代写标记");
 }
 
+// ── 回合末尾挂着结算说明（level:"notice"）→ 跳过它，照样重投用户那句话 ──────────
+// 结算说明恒在收尾时落盘，也就是恒排在最后一个真人回合之后。把它当成「上一轮是系统续跑」
+// 的话，每一个「没交卷」的失败回合都会让「重跑上一回合」静默退回 resume。
+{
+  const seg = lastInputOf([
+    turn("user", "把标题也改一下"),
+    "agent 刚开口就崩了",
+    turn("system", "本回合没有交卷:agent 结束前没有调用 complete_task 确认目标已达成。", { level: "notice" }),
+  ].join("\n"));
+  assert.equal(seg?.kind, "user", "结算说明不是输入，该跳过去找真人那句");
+  assert.equal(seg?.text, "把标题也改一下");
+}
+
+// ── 系统续跑提示（没有 notice 标记）照旧算数：上一轮本来就是续跑，重投没有意义 ──
+{
+  const seg = lastInputOf([
+    turn("user", "开工"),
+    "agent 干了一半",
+    turn("system", "继续（从中断处）"),
+  ].join("\n"));
+  assert.equal(seg?.kind, "system");
+}
+
 // ── 自由工作流自动修复回合崩了：最后一段是后端代写的 user 回合 → 重投并保留标记 ──
 {
   const seg = lastInputOf([

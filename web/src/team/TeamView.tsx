@@ -49,6 +49,9 @@ function liveLineForEvent(event: AgentEvent, textBuffer: string): string | null 
   }
   if (event.kind === "tool") return `⚙ ${event.name || "tool"}`;
   if (event.kind === "error") return `✕ ${event.message}`;
+  // 结算说明（level:"notice"）以前是条 error，在这一格里跟「执行者崩了」长得一模一样。
+  // 现在它走 system 旁注，看板上给它 ⓘ —— 没交卷和崩了是两回事，一眼要分得出轻重。
+  if (event.kind === "system" && event.level === "notice") return `ⓘ ${event.text}`;
   return null;
 }
 

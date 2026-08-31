@@ -84,6 +84,7 @@ export function TaskHeader({
   onTogglePin,
   onPrimary,
   onRequeue,
+  onMarkDone,
   onArchive,
   onRefresh,
   onReview,
@@ -104,6 +105,8 @@ export function TaskHeader({
   onTogglePin: () => Promise<void>;
   onPrimary: (action: Exclude<PrimaryAction, null>) => void;
   onRequeue: () => void;
+  /** 「标记为已完成」：结算说明让用户核对产物后自己收尾，这是那句话对应的入口。 */
+  onMarkDone?: () => void;
   onArchive: () => void;
   onRefresh: () => void;
   onReview: () => void;
@@ -131,6 +134,14 @@ export function TaskHeader({
     && !task.archived
     && task.handoff?.direction !== "out"
     && !!task.queueId
+    && (task.status === "failed" || task.status === "canceled");
+  // 「没交卷」记 failed 时，结算说明请用户「核对产物后直接标记完成」—— 那句话得有个真按得
+  // 到的地方，否则它就是空头支票（在此之前，把状态改回 done 只有 API / MCP 能做）。放进
+  // 更多菜单而不是顶栏：它是收拾残局用的低频动作，不该在每个失败任务上都摆一颗按钮。
+  // 团队执行者不给：调度者是靠结算事件被叫醒的，绕过它直接改状态只会让调度台一直等下去。
+  const canMarkDone = task.parentId === null
+    && !task.archived
+    && task.handoff?.direction !== "out"
     && (task.status === "failed" || task.status === "canceled");
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
   const indicator = indicatorForTask(task);
@@ -295,6 +306,12 @@ export function TaskHeader({
             <button type="button" role="menuitem" onClick={() => void copy(taskUrl, "已复制任务链接")}>
               <Copy size={14} />复制任务链接
             </button>
+            {canMarkDone && onMarkDone && <span role="separator" />}
+            {canMarkDone && onMarkDone && (
+              <button type="button" role="menuitem" onClick={() => { setMenu(false); onMarkDone(); }}>
+                <CheckCircle size={14} />标记为已完成
+              </button>
+            )}
             {task.parentId === null && <span role="separator" />}
             {task.parentId === null && (
               <button type="button" role="menuitem" onClick={() => { setMenu(false); onArchive(); }} disabled={!task.archived && !canArchive(task.status)}>

@@ -15,6 +15,7 @@ import { useSkills } from "../lib/useSkills.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { conversationToMarkdown } from "./conversationModel.ts";
 import { ConversationFeed } from "./ConversationFeed.tsx";
+import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { DeleteTaskDialog } from "./DeleteTaskDialog.tsx";
 import { HandoffBanner } from "./HandoffBanner.tsx";
 import { HandoffAuditBanner } from "./HandoffAuditBanner.tsx";
@@ -160,6 +161,7 @@ export function TaskDetail({
   const [openFilePath, setOpenFilePath] = useState<string | null>(null);
   const [openScmDiff, setOpenScmDiff] = useState<ScmDiffTarget | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [markDoneOpen, setMarkDoneOpen] = useState(false);
   const [postMergeDialogOpen, setPostMergeDialogOpen] = useState(false);
   const [derivation, setDerivation] = useState<{
     command: TaskDerivationCommand;
@@ -228,6 +230,7 @@ export function TaskDetail({
   useEffect(() => {
     setReviewOpen(initialReviewOpen);
     setDeleteOpen(false);
+    setMarkDoneOpen(false);
     setPostMergeDialogOpen(false);
     setDerivation(null);
     setOpenFilePath(null);
@@ -276,6 +279,22 @@ export function TaskDetail({
       if (action === "stop") await api.stopTask(task.id);
       if (action === "unarchive") onTaskUpdate(await api.unarchiveTask(task.id));
       else await refreshTask();
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // 「没交卷」被记 failed 时的收尾出口：结算说明让用户核对产物后直接标记完成，这就是那句
+  // 话对应的动作。走通用的 PATCH status —— 服务端对 running/queued 一律 409，所以按不到
+  // 一个还活着的任务上（真要停得先 stop_task）。
+  const markDone = async () => {
+    setBusy(true);
+    try {
+      await patch({ status: "done" });
+      setMarkDoneOpen(false);
+      notify("已标记为完成");
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -367,6 +386,7 @@ export function TaskDetail({
               onTogglePin={() => patch({ pinnedAt: task.pinnedAt != null ? null : Date.now() })}
               onPrimary={(action) => void perform(action)}
               onRequeue={() => void requeue()}
+              onMarkDone={() => setMarkDoneOpen(true)}
               onArchive={() => void archive()}
               onRefresh={() => void refresh()}
               onReview={() => changeReviewOpen(!reviewOpen)}
@@ -523,6 +543,16 @@ export function TaskDetail({
                   />}
                 </section>
               </div>
+            )}
+            {markDoneOpen && (
+              <ConfirmDialog
+                title="标记为已完成"
+                message={"把这个任务直接落成「已完成」。用在 agent 其实干完了、只是没调 complete_task 交卷的时候 —— 请先核对产物（提交、改动、产出文件）确实在。\n\n它跟「重试」是两条路：重试会从中断处接着跑，标记完成则就此收尾，队列里排在后面的任务会开始跑。"}
+                confirmLabel="标记完成"
+                busy={busy}
+                onConfirm={() => void markDone()}
+                onClose={() => setMarkDoneOpen(false)}
+              />
             )}
             {deleteOpen && (
               <DeleteTaskDialog

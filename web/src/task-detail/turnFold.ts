@@ -6,9 +6,10 @@ import { isBookkeepingEvent, type ExecutionEvent } from "../lib/executionTrace.t
  *
  * 排除两类：
  * - **记账调用**（isBookkeepingEvent）：complete_task、把待办划掉这类，现场什么都没发生。
- * - **异常**：它是回合的旁白，不是这一轮干的活。结算那条尤其毒 —— 未确认完成 / 退出码
- *   非 0 时，server 在正文写完之后才补一条 error（single-run.ts 的 settled.note，同时
- *   写进 .md 和 trace），拿它当切点，整篇回答就被折进过程，外面只剩那句失败提示。
+ * - **异常**：它是回合的旁白，不是这一轮干的活。结算那条尤其毒 —— 退出码非 0 时，server
+ *   在正文写完之后才补一条 error（single-run.ts 的 settled.note），拿它当切点，整篇回答就
+ *   被折进过程，外面只剩那句失败提示。未确认完成那一支现在改走会话旁注（level:"notice"），
+ *   不再进 trace，但 2026-08-31 之前的老会话里它仍是一条 error，这道排除照旧要管住。
  */
 function isHandsOn(event: ExecutionEvent): boolean {
   return event.kind !== "error" && !isBookkeepingEvent(event);

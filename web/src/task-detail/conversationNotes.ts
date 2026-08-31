@@ -7,7 +7,10 @@
 //   boundary 回合边界(本轮执行结束 / 执行异常结束 / 本回合结束),保留整宽横线
 import { SESSION_POISON_DIAGNOSIS_PREFIX, stripSessionNotes } from "@ash/shared/session-notes";
 
-export type ConversationEventTone = "neutral" | "error";
+// notice = 结算说明（「这一轮为什么落成这个状态」）。它由服务端**显式标记**（事件和落盘
+// 行上的 level:"notice"），不参与下面的关键词推断 —— 这类说明里天然带着「未完成」，猜出
+// 来永远是红的，而一条红字对第一次用 ash 的人只有一个读法：它崩了。
+export type ConversationEventTone = "neutral" | "error" | "notice";
 export type ConversationEventVariant = "note" | "boundary";
 // 只收「这件事没办成」的词。「未通过」是审查结论、也确实要显眼,归红;
 // 「通过」「完成」「开始」这类正常推进不进表。

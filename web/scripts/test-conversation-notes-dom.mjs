@@ -26,7 +26,7 @@ try {
 
   const notes = page.locator(".conversation-note");
   await notes.first().waitFor();
-  assert.equal(await notes.count(), 8, "八条时间线通告都该渲染成旁注");
+  assert.equal(await notes.count(), 9, "九条时间线通告都该渲染成旁注");
 
   // 通告不再借用回合边界那条横贯的分隔线；边界事件本身仍然是那条线。
   const boundary = page.locator(".task-event-line");
@@ -50,6 +50,26 @@ try {
     "会话轮换旁注被渲染成红色执行异常 —— 用户会以为这一回合失败了",
   );
   assert.doesNotMatch(await rotation.innerText(), /\*\*/, "旁注是纯文本，Markdown 标记会原样露给用户");
+
+  // 结算说明（level:"notice"）：不许是红的（它讲的是流程，不是故障），但要比普通旁注更
+  // 显眼一档 —— 任务落成未完成时这是唯一的解释，也是用户下一步该干什么的说明。
+  const settlement = notes.filter({ hasText: "本回合没有交卷" });
+  assert.equal(await settlement.count(), 1, "结算说明没渲染成旁注");
+  assert.equal(
+    await settlement.evaluate((el) => el.classList.contains("is-notice")),
+    true,
+    "结算说明该拿到 notice 那身提示语气",
+  );
+  assert.equal(
+    await settlement.evaluate((el) => el.classList.contains("is-error")),
+    false,
+    "结算说明被渲染成红色异常 —— 第一次用的人会读成「它崩了」",
+  );
+  const [settlementBg, plainBg] = await Promise.all([
+    settlement.evaluate((el) => getComputedStyle(el).backgroundColor),
+    notes.first().evaluate((el) => getComputedStyle(el).backgroundColor),
+  ]);
+  assert.notEqual(settlementBg, plainBg, "结算说明该比普通旁注更显眼（有底色），否则等于藏起来");
 
   const messages = page.locator(".task-message--agent");
   assert.equal(await messages.count(), 6, "实时旁注后的工具应并回当前回合，不另拆第七段");

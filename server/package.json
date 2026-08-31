@@ -79,6 +79,7 @@
     "test:session-trace": "tsx scripts/test-session-trace.ts",
     "test:conversation-turn": "tsx scripts/test-conversation-turn.ts",
     "test:retry-turn": "tsx scripts/test-retry-turn.ts",
+    "test:settlement-note": "tsx scripts/test-settlement-note.ts",
     "test:turn-freeze": "tsx scripts/test-turn-freeze.ts",
     "test:turn-visibility": "tsx scripts/test-turn-visibility.ts",
     "test:agent-attachments": "tsx scripts/test-agent-attachments.ts",

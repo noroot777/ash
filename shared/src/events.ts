@@ -27,7 +27,12 @@ export type AgentEvent =
   | { kind: "tool"; name: string; detail?: string }
   | { kind: "attachment"; path: string }
   | { kind: "session"; cliSessionId: string }
-  | { kind: "system"; text: string; at: string } // backend 旁注；时间与落盘 sentinel 共用，实时/刷新布局才不会漂
+  // backend 旁注；时间与落盘 sentinel 共用，实时/刷新布局才不会漂。
+  // level="notice" = 这条是**结算说明**(这一轮为什么落成这个状态),不是出了什么岔子。
+  // 展示端据此上「提示」那身琥珀,而不是让关键词表去猜语气(noteTone)——「没交卷」这类
+  // 说明里天然带着「未完成」,猜出来永远是红的,而第一次用 ash 的人读到红字只有一个
+  // 结论:它崩了。
+  | { kind: "system"; text: string; at: string; level?: "notice" }
   // 本回合的 token 用量,由执行器从 CLI 的收尾事件(claude 的 result / codex 的
   // turn.completed)解析。每回合至多一条,恒在该回合的 turnEnd/done 之前。拿不到
   // 用量的 CLI 一条都不发 —— 展示端据此判断「这家报不报账」。
@@ -37,7 +42,11 @@ export type AgentEvent =
   // 上下文**水位**(不是流水,区别见 shared/src/usage.ts 的 ContextUsage)。每回合至多
   // 一条,恒在该回合的 turnEnd/done 之前。落库是**覆盖**不是累加。
   | { kind: "context"; context: ContextUsage }
-  | { kind: "error"; message: string; scope?: "session" }
+  // level="notice" = 这条不是执行故障,是**结算说明**(回合怎么落位、为什么这么落)。
+  // 分级的理由:结算说明混在故障里,新用户看到红叉只会读成「它崩了」,而真出故障时
+  // 那句说明又会盖住真正的原因(docs/incidents.md「接力到多用户机器」)。缺省(旧 trace、
+  // 执行器报的错)仍是故障级,展示端照旧红着。
+  | { kind: "error"; message: string; scope?: "session"; level?: "notice" }
   // 常驻会话（team 调度台）专用：一个回合说完了，但进程还活着等下一条消息。
   // 一次性 run() 永远不发这个 —— 它的回合结束就是进程结束(done)。
   | { kind: "turnEnd" }

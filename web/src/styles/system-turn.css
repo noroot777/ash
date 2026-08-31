@@ -38,6 +38,16 @@
   border-left-color: color-mix(in lch, var(--red) 45%, var(--line2));
   color: color-mix(in lch, var(--red) 76%, var(--faint));
 }
+/* 结算说明（「这一轮为什么落成这个状态」）：琥珀 + 一点底色。它比别的旁注更需要被读完
+   —— 任务落成未完成时，这就是唯一的解释，也是用户下一步该干什么的说明。但它讲的是
+   流程不是故障，所以给提示的语气，红留给真出错。 */
+.conversation-note.is-notice {
+  border-left: 2px solid color-mix(in lch, var(--amber) 72%, var(--line2));
+  border-radius: 0 7px 7px 0;
+  background: color-mix(in lch, var(--amber) 11%, transparent);
+  padding: 6px 10px 6px 11px;
+  color: var(--muted);
+}
 .team-feed .conversation-note { margin-left: 0; }
 
 /* 旁注不算换段：被它隔开的下半截还是同一个会话在说话，接着上一段排版就行，
