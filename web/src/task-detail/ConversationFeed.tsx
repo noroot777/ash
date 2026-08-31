@@ -1,13 +1,13 @@
 import { useRef } from "react";
 import { Copy, File, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
-import { isTaskLive } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
 import { runActivityExecutor, runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
 import type { ConversationItem } from "./conversationModel.ts";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { AgentRunMeta } from "../components/AgentRunMeta.tsx";
 import { AgentTurnBody } from "../components/AgentTurnBody.tsx";
+import { isExecutionChainLive } from "../lib/taskAttention.ts";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { RunActivity } from "../components/RunActivity.tsx";
@@ -170,6 +170,9 @@ export function ConversationFeed({
     ? [...items].reverse().find((item) => item.kind === "agent")?.id ?? null
     : null;
   const rows = conversationFeedRows(items, { reviews });
+  // 「执行链路还没停」用 taskAttention 那一份口径（含 awaiting_review —— 卡在审查门上
+  // 的任务还没走完），别在折叠这儿另起一套。这里只有单飞与执行者，团队走 TeamFeed。
+  const taskLive = isExecutionChainLive(task);
   const hiddenTimes = new Set<string>();
   for (let index = 1; index < items.length; index += 1) {
     const item = items[index]!;
@@ -190,7 +193,7 @@ export function ConversationFeed({
         <AgentMessage
           key={item.id}
           item={item}
-          taskLive={isTaskLive(task.status)}
+          taskLive={taskLive}
           hideTime={hiddenTimes.has(item.id)}
           retry={retry && item.id === retryItemId ? (
             <TurnRetryButton

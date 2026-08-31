@@ -1,6 +1,5 @@
 import { useRef } from "react";
 import type { Task, TaskListItem } from "@ash/shared";
-import { isTaskLive } from "@ash/shared";
 import { runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
 import type { Batch } from "@ash/shared/team";
 import { ArrowElbowDownRight, ArrowRight, SpinnerGap } from "@phosphor-icons/react";
@@ -13,6 +12,7 @@ import { RunActivity } from "../components/RunActivity.tsx";
 import { MessageFooter } from "../components/MessageFooter.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
+import { isExecutionChainLive } from "../lib/taskAttention.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { durationBetween, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
 import { executorLabel, parseInbound, teamLeadLabel, workerStatusText, type InboundMessage, type TeamFeedRow } from "./teamModel.ts";
@@ -190,6 +190,10 @@ export function TeamFeed({
     ) hiddenTimes.add(item.id);
     previousConversationItem = item;
   }
+  // 团队「跑完了」写在执行者身上：调度台派完活自己就落回 idle，只读它这一行，一屋子
+  // 执行者还在干活时过程块就先折了。口径归 isExecutionChainLive（团队那一半用的就是
+  // isTeamSettled，paused 的执行者也算这一队没落地）。
+  const taskLive = isExecutionChainLive(task, workers);
   // 派活卡片和事件行都不是「消息」:夹在末尾不该把「已收到你的消息」冲掉。
   const activityPhase = runActivityPhase(
     task.status,
@@ -203,7 +207,7 @@ export function TeamFeed({
           {rows.map((row) => {
             if (row.kind === "batch") return <BatchCard key={row.key} batch={row.batch} allWorkers={workers} onOpenWorker={onOpenWorker} indicatorForTask={indicatorForTask} />;
             const item = row.item;
-            if (item.kind === "agent") return <AgentRow key={row.key} row={item} taskLive={isTaskLive(task.status)} hideTime={hiddenTimes.has(item.id)} />;
+            if (item.kind === "agent") return <AgentRow key={row.key} row={item} taskLive={taskLive} hideTime={hiddenTimes.has(item.id)} />;
             if (item.kind === "user") return <UserRow key={row.key} row={item} />;
             const inbound = parseInbound(item.text);
             if (inbound) {

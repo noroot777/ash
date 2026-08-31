@@ -30,6 +30,7 @@ function ProcessFold({
 }: {
   segments: AgentContentSegment[];
   running: boolean;
+  /** 见 AgentTurnBody 的同名 prop。 */
   taskLive: boolean;
 }) {
   const events = segments.flatMap((segment) => segment.events);
@@ -78,7 +79,11 @@ export function AgentTurnBody({
   segments: AgentContentSegment[];
   /** 这一回合还在飞。 */
   running: boolean;
-  /** 整个任务还在跑（running / queued）。它为真时过程块绝不自动收起。 */
+  /**
+   * 整条执行链路还没停：它为真时过程块绝不自动收起。判据归调用方 ——
+   * 单飞看 taskAttention 的 isTaskLive（含 awaiting_review），团队看这一队收没收工
+   * （调度台派完活自己就落回 idle，只读它那一行会把满负荷的团队判成静止）。
+   */
   taskLive: boolean;
 }) {
   const { process, conclusion } = splitTurnSegments(segments);

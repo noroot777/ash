@@ -134,6 +134,30 @@ try {
     "异常该并进过程块，不在结论区自成一条折叠行",
   );
 
+  // 11. 会话流自己判「链路停没停」：走真实时序，回合先在飞、再收口，而任务这时卡在
+  //     审查门上（单飞）/ 执行者还在干活（团队调度台已落回 idle）。这两档都不许折，
+  //     直到整条链路真停下来。只钉 nextProcessFoldOpen 的话，喂给它的那个布尔算错了
+  //     照样红不了 —— 所以这一段钉的是两个 feed 的接线。
+  const feedFold = (name) => page.locator(`[data-case="${name}"] details.task-turn-process`);
+  const feedOpen = (name) => feedFold(name).evaluate((el) => el.open);
+  const step = async (name, role) => {
+    await page.locator(`[data-case="${name}"] [data-role="${role}"]`).click();
+    await flush();
+  };
+
+  await feedFold("feed-single").waitFor();
+  assert.equal(await feedOpen("feed-single"), true, "回合在飞，会话流里的过程块该是摊开的");
+  await step("feed-single", "to-gate");
+  assert.equal(await feedOpen("feed-single"), true, "任务卡在审查门上，执行链路没走完，不该自动折");
+  await step("feed-single", "to-done");
+  assert.equal(await feedOpen("feed-single"), false, "任务收尾了才该折");
+
+  assert.equal(await feedOpen("feed-team"), true, "调度台在说话，过程块该是摊开的");
+  await step("feed-team", "to-dispatched");
+  assert.equal(await feedOpen("feed-team"), true, "调度台派完活落回 idle，但执行者还在跑，不该折");
+  await step("feed-team", "to-settled");
+  assert.equal(await feedOpen("feed-team"), false, "全队收工了才该折");
+
   if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: true });
 
   console.log("turn fold dom tests passed");

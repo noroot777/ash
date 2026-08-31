@@ -6,6 +6,7 @@
 // （载荷就是把某条划掉）是同一个毛病的另一副面孔。
 import assert from "node:assert/strict";
 import { splitTurnSegments, nextProcessFoldOpen } from "../src/task-detail/turnFold.ts";
+import { isExecutionChainLive } from "../src/lib/taskAttention.ts";
 
 const segment = (id, { markdown = "", events = [], attachments = [] } = {}) => ({ id, markdown, events, attachments });
 const tool = (label) => ({ kind: "tool", label });
@@ -162,6 +163,29 @@ for (const label of [
   // 用户自己动过折角之后，两个方向都不再自动。
   assert.equal(open(true, true, true), null);
   assert.equal(open(false, false, true), null);
+}
+
+// 15. 「执行链路还没停」这一问必须走仓库已有的那份口径（taskAttention 的
+//     isExecutionChainLive，两个会话流用的就是它），别在折叠这儿另起一套。两个现场：
+//     审查门（awaiting_review）和「调度台 idle、执行者还在干活」的团队 —— 都还没走到
+//     「最后一步确认执行完了」，回合收口了也不许折。
+{
+  const lead = { id: "lead", mode: "team", parentId: null, status: "idle" };
+  const worker = (status) => ({ id: `w-${status}`, mode: "single", parentId: "lead", status });
+  const single = (status) => ({ id: "t", mode: "single", parentId: null, status });
+  // 单飞卡在审查门上：链路还没停。
+  assert.equal(isExecutionChainLive(single("awaiting_review")), true);
+  assert.equal(isExecutionChainLive(single("running")), true);
+  assert.equal(nextProcessFoldOpen({ running: false, taskLive: true, touched: false }), null);
+  // 团队：调度台派完活就落回 idle，得连执行者一起看。paused 的执行者也算这一队没落地
+  //（跟 shared 的 isTeamSettled 同一个口径）。
+  assert.equal(isExecutionChainLive(lead, [worker("running")]), true);
+  assert.equal(isExecutionChainLive(lead, [worker("queued")]), true);
+  assert.equal(isExecutionChainLive(lead, [worker("paused")]), true);
+  // 全队收工了才是真停下来 —— 这一下才折。
+  assert.equal(isExecutionChainLive(lead, [worker("done")]), false);
+  assert.equal(isExecutionChainLive(single("done")), false);
+  assert.equal(nextProcessFoldOpen({ running: false, taskLive: false, touched: false }), false);
 }
 
 console.log("turn fold tests passed");

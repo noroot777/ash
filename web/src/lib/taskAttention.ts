@@ -49,6 +49,15 @@ export function isTeamSettledLead(task: TaskListItem, workers: TaskListItem[] = 
     && isTeamSettled(task.status === "running", workers);
 }
 
+// 「这条执行链路还没停」。跟上面 isTaskLive 只差团队那一半：调度台派完活自己就落回
+// idle，一屋子执行者还在干活时链路显然没停，所以团队问的是「收没收工」（同 isTeamSettled）。
+// 会话流里凡是「跑完了才做的事」都读这一份 —— 眼下是过程折叠块的自动收起：它必须等到
+// 最后一步确认执行完了才折，中途折掉用户正读的那段过程就没了。
+export function isExecutionChainLive(task: TaskListItem, workers: TaskListItem[] = []): boolean {
+  if (isTeamLead(task)) return !isTeamSettledLead(task, workers);
+  return isTaskLive(task, workers);
+}
+
 // 分堆的判据只问一句：这一行现在轮到谁动。轮到我 = todo（等答复 / 待验收 / 失败），
 // 机器在动 = run，谁也没轮到 = wait，收了尾 = done，走完验收 = accepted。
 //
