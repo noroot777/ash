@@ -6,8 +6,8 @@
    配色用 --cyan 而不是 --accent：靛蓝在这套界面里已经被「你（真人）」占着（用户气泡、
    系统代写消息的左竖线都是它），验证段再用会把「谁在说话」这条最要紧的线索搅混。
 
-   重量刻意压到最低：只改身份行（头像 + 一颗徽标）和旁注的竖线颜色，气泡本体、缩进、
-   宽度一律不动 —— 长审查的正文本来就够挤了。 */
+   身份仍靠头像、徽标和青色来认。实现回合沿用普通会话原来的无卡片排版；审查泳道单独
+   用一张左对齐的中性卡片，角色色只落在左侧那一小段竖线上。 */
 
 .task-message--agent.is-reviewer .task-message-avatar {
   background: color-mix(in lch, var(--cyan) 13%, var(--overlay));
@@ -48,20 +48,23 @@
 /* D：历史验证轮折成一张结论卡，展开态就是完整验证泳道。段头把轮次、审查者、结论、
    用时和两颗动作收在一起；正文的阅读密度仍沿用原会话，不另造一套气泡。 */
 .verify-lane {
+  position: relative;
+  width: 100%;
   max-width: 790px;
   margin: 18px 0 22px;
-  border: 1px solid color-mix(in lch, var(--cyan) 24%, var(--line));
-  border-left: 3px solid color-mix(in lch, var(--cyan) 62%, var(--line2));
-  border-radius: 10px;
-  background: color-mix(in lch, var(--cyan) 4.5%, var(--panel));
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  box-shadow: 0 1px 2px rgb(30 32 38 / 3%);
 }
+.verify-lane::before { position: absolute; top: 8px; bottom: 8px; left: -1px; width: 2px; border-radius: 2px; background: #28a17c; content: ""; pointer-events: none; }
 
 .verify-lane-head {
   display: flex;
   min-height: 36px;
   align-items: center;
   gap: 8px;
-  border-bottom: 1px solid color-mix(in lch, var(--cyan) 16%, var(--line));
+  border-bottom: 1px solid var(--line);
   padding: 7px 10px 7px 12px;
   font-size: 10.5px;
 }
@@ -84,6 +87,8 @@
 .verify-lane-body[hidden] { display: none; }
 .verify-lane-body > :first-child { margin-top: 0; }
 .verify-lane-body > :last-child { margin-bottom: 0; }
+.verify-lane .task-message--agent { width: 100%; margin-left: 0; border: 0; border-radius: 0; background: transparent; padding: 0; box-shadow: none; }
+.verify-lane .task-message--agent::before { content: none; }
 .verify-lane .task-message--user.is-system-authored { padding-right: 0; padding-left: 0; }
 .verify-lane .conversation-note { margin-left: 0; }
 

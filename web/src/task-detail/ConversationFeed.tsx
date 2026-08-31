@@ -7,6 +7,7 @@ import type { ConversationItem } from "./conversationModel.ts";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { AgentRunMeta } from "../components/AgentRunMeta.tsx";
 import { AgentTurnBody } from "../components/AgentTurnBody.tsx";
+import { isExecutionChainLive } from "../lib/taskAttention.ts";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { RunActivity } from "../components/RunActivity.tsx";
@@ -35,10 +36,13 @@ function ReviewerBadge({ round }: { round: number | null }) {
 
 function AgentMessage({
   item,
+  taskLive,
   retry,
   hideTime,
 }: {
   item: Extract<ConversationItem, { kind: "agent" }>;
+  /** 整个任务还在跑：过程折叠块在跑的中途不自动收起。 */
+  taskLive: boolean;
   /** 这条气泡是不是「上一回合崩了」的那一条：给了就在尾栏挂重试按钮。 */
   retry?: React.ReactNode;
   /** 紧邻的旁注已经显示了同一个时间。 */
@@ -84,7 +88,7 @@ function AgentMessage({
             </button>
           </header>
         )}
-        <AgentTurnBody segments={item.segments} running={!item.endedAt} />
+        <AgentTurnBody segments={item.segments} running={!item.endedAt} taskLive={taskLive} />
         {/* 账目一律在尾栏，头部不放。位置不许随「是不是会话最后一条」变——
             那样同一个数会在气泡顶和气泡底之间跳，而这条规则用户看不见。 */}
         <MessageFooter
@@ -166,6 +170,9 @@ export function ConversationFeed({
     ? [...items].reverse().find((item) => item.kind === "agent")?.id ?? null
     : null;
   const rows = conversationFeedRows(items, { reviews });
+  // 「执行链路还没停」用 taskAttention 那一份口径（在跑 / 卡在审查门上 / 停在检查点等人
+  // 答话都算没停），别在折叠这儿另起一套。这里只有单飞与执行者，团队走 TeamFeed。
+  const taskLive = isExecutionChainLive(task);
   const hiddenTimes = new Set<string>();
   for (let index = 1; index < items.length; index += 1) {
     const item = items[index]!;
@@ -186,6 +193,7 @@ export function ConversationFeed({
         <AgentMessage
           key={item.id}
           item={item}
+          taskLive={taskLive}
           hideTime={hiddenTimes.has(item.id)}
           retry={retry && item.id === retryItemId ? (
             <TurnRetryButton
