@@ -281,6 +281,11 @@ const AS_ALICE = { authorization: `Bearer ${aliceKey}` };
     // 接力申请顶着 owner 的名义去敲别人的门,还会把 owner 存的对端账号 key 一起发出去
     // (第 2 轮审查 P1)。只读探路仍有 /tasks/:id/handoff/preflight,那条不配对。
     { path: "/api/handoff/request", method: "POST", body: { targetUrl: "https://evil.example.com" }, what: "替 owner 发接力申请" },
+    // 正式接力比申请重得多:对端已批准/单人/旧版开放接收时,这不是一封待审批通知,而是
+    // 任务正文、会话历史和仓库状态**直接迁移**过去,本机任务当场停掉落成存档
+    // (第 3 轮审查 P1)。移除标记那道逃生门同理,也是把任务搬回来的用户决定。
+    { path: "/api/tasks/t-source/handoff", method: "POST", body: { targetUrl: "https://evil.example.com", targetProjectId: "p" }, what: "替 owner 把任务接力出去" },
+    { path: "/api/tasks/t-source/handoff", method: "DELETE", what: "替 owner 移除接力标记" },
   ];
   for (const w of WRITES) {
     const denied = await call(w.path, w.method, AS_AGENT, w.body);
@@ -304,6 +309,13 @@ const AS_ALICE = { authorization: `Bearer ${aliceKey}` };
     name: "alice-own", protocol: "openai", baseUrl: "https://api.example.com", apiKey: "k",
   });
   assert.equal(mine.status, 201, `alice 本人建供应商要过:${mine.text}`);
+
+  // 探路那条不能跟着关死:它只探测对端、不停任务也不 import,而 agent 判断「这台能不能
+  // 接」要用它。这里只钉「没被这道闸拦掉」——它自己会因为目标机地址不通而失败。
+  const probe = await call("/api/tasks/t-source/handoff/preflight", "POST", AS_AGENT, {
+    targetUrl: "https://unreachable.invalid",
+  });
+  assert.notEqual(probe.status, 403, `只读预检不该被个人写闸误伤:${probe.text}`);
 
   // 读侧不跟着收:派活要挑执行器/供应商,而读端点一条都不回显 key(只报 hasKey)。
   const providers = await call("/api/llm-providers", "GET", AS_AGENT);
