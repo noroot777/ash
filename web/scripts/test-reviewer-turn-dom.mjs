@@ -122,27 +122,56 @@ try {
   // 下面量版式，三张卡都得摊开。
   await lanes.nth(1).getByRole("button", { name: "展开" }).click();
 
-  // 跟讨论任务的 B 方一致：审查泳道靠右，身份强调线也在右边；左边仍保留普通描边，
-  // 不能出现两条同样抢眼的竖线。这里量的是卡本体，不受正文长短影响。
+  // 跟讨论任务一致：执行方是左卡 + 左蓝线，审查方是右卡 + 右绿线。卡片整圈只用
+  // 中性 1px 描边，角色色只落在 2px 的短竖线上；审查正文也不能再套一层卡。
   const conversationBox = await page.locator(".task-conversation").evaluate((el) => {
     const style = getComputedStyle(el);
     const rect = el.getBoundingClientRect();
     return {
+      contentLeft: Math.round(rect.left + Number.parseFloat(style.paddingLeft)),
       contentRight: Math.round(rect.right - Number.parseFloat(style.paddingRight)),
+    };
+  });
+  const executorLayout = await messages.nth(0).evaluate((el) => {
+    const style = getComputedStyle(el);
+    const line = getComputedStyle(el, "::before");
+    const rect = el.getBoundingClientRect();
+    return {
+      left: Math.round(rect.left),
+      leftBorder: Number.parseFloat(style.borderLeftWidth),
+      rightBorder: Number.parseFloat(style.borderRightWidth),
+      lineWidth: Number.parseFloat(line.width),
+      lineLeft: line.left,
     };
   });
   const laneLayout = await lanes.nth(1).evaluate((el) => {
     const style = getComputedStyle(el);
+    const line = getComputedStyle(el, "::before");
     const rect = el.getBoundingClientRect();
     return {
       right: Math.round(rect.right),
       leftBorder: Number.parseFloat(style.borderLeftWidth),
       rightBorder: Number.parseFloat(style.borderRightWidth),
+      lineWidth: Number.parseFloat(line.width),
+      lineRight: line.right,
     };
   });
+  assert.ok(Math.abs(executorLayout.left - conversationBox.contentLeft) <= 1, "执行卡应贴住会话内容区左侧");
+  assert.equal(executorLayout.leftBorder, 1, "执行卡整圈只用普通描边");
+  assert.equal(executorLayout.rightBorder, 1);
+  assert.equal(executorLayout.lineWidth, 2, "执行身份线应与讨论任务一样细");
+  assert.equal(executorLayout.lineLeft, "-1px");
   assert.ok(Math.abs(laneLayout.right - conversationBox.contentRight) <= 1, "审查泳道应贴住会话内容区右侧");
-  assert.equal(laneLayout.leftBorder, 1, "审查卡左侧只保留普通描边");
-  assert.equal(laneLayout.rightBorder, 3, "审查身份竖线应在右侧");
+  assert.equal(laneLayout.leftBorder, 1, "审查卡整圈只用普通描边");
+  assert.equal(laneLayout.rightBorder, 1);
+  assert.equal(laneLayout.lineWidth, 2, "审查身份线应与讨论任务一样细");
+  assert.equal(laneLayout.lineRight, "-1px");
+  const nestedReviewer = await reviewer.nth(0).evaluate((el) => ({
+    border: getComputedStyle(el).borderTopWidth,
+    line: getComputedStyle(el, "::before").content,
+  }));
+  assert.equal(nestedReviewer.border, "0px", "审查泳道内不能再套第二层卡片");
+  assert.equal(nestedReviewer.line, "none", "审查泳道只保留最外侧一条角色线");
 
   // 换身份是断点：验证回合和它后面的修复回合都得重新报执行器名，
   // 否则读者只看见「同一个人一口气说了三段」。
@@ -162,6 +191,9 @@ try {
   const noteColors = await verifyNotes.evaluateAll((els) =>
     els.map((el) => getComputedStyle(el).borderLeftColor));
   assert.notEqual(noteColors[0], noteColors[1], "开始是青的、打回是红的，两条不能同色");
+  const noteWidths = await verifyNotes.evaluateAll((els) =>
+    els.map((el) => getComputedStyle(el).borderLeftWidth));
+  assert.ok(noteWidths.every((width) => width === "2px"), "审查起止旁注都应保留截图中的 2px 短竖线");
 
   // D 的正文统一收进同一层泳道内边距 —— 自由派审现在也是一张卡，同样对齐。
   const boxes = await messages.evaluateAll((els) =>
