@@ -80,7 +80,13 @@ function Ash() {
         onRemoteTask={() => {}}
         onTaskStarred={() => {}}
         onHandoffFinished={() => {}}
-        offlinePeers={[{ url: "http://peer.test", name: "mac-mini", reason: "fetch failed" }]}
+        outbound={{
+          outboundCount: 1,
+          offlinePeers: [{ url: "http://peer.test", name: "mac-mini", reason: "fetch failed" }],
+          asked: true,
+          refreshing: false,
+          onRefresh: () => {},
+        }}
         notify={() => {}}
       />
     </main>

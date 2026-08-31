@@ -429,6 +429,10 @@ export async function ensureSchema() {
     // 入站接力来源:谁批的 + 对端自报的实例模式(§十一 知情批准)。
     "ALTER TABLE handoff_peers ADD COLUMN approved_by TEXT",
     "ALTER TABLE handoff_peers ADD COLUMN peer_mode TEXT NOT NULL DEFAULT ''",
+    // 这次配对申请代表本机的哪个账号(源机带的对端 key 认出来的)。多人模式下认不出
+    // 主人就不受理,所以空值只见于单人时期或升级前的存量行(见 handoff-peers.ts
+    // peerAudience)。
+    "ALTER TABLE handoff_peers ADD COLUMN requested_by_user_id TEXT",
   ]) {
     try {
       await client.execute(sql);

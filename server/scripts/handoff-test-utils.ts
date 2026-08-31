@@ -62,13 +62,16 @@ export async function api<T>(base: string, path: string, init?: RequestInit): Pr
 /**
  * 配对:让对端批准本测试进程(源机)的接力身份。
  * 新版接力默认要求入站审批,不先配对的话 /refs 和 /import 一律 401——这一步就是
- * 用户在对端设置页点「批准」的等价物。先发一次签名 ping 让对端认识本机(那是配对
- * 请求本身),再按指纹放行。
+ * 用户在对端设置页点「批准」的等价物。先发一次**申请意图**的签名 ping 让对端认识
+ * 本机(那是配对请求本身),再按指纹放行。
+ *
+ * `pairing: true` 不能省:普通 ping 现在是「探测」,故意不在对端建待批准记录 ——
+ * 否则源机的自动状态轮询会天天在对端刷出「接力申请」(见 handoff-peers.ts touchPeer)。
  */
 export async function pairWithPeer(peerBase: string): Promise<string> {
   const { pingPeer } = await import("../src/handoff-peer-client.js");
   const { localIdentity } = await import("../src/handoff-identity.js");
-  await pingPeer(peerBase);
+  await pingPeer(peerBase, null, undefined, { pairing: true });
   const me = localIdentity().fingerprint;
   const { peers } = await api<{ peers: { fingerprint: string; status: string }[] }>(peerBase, "/handoff/peers");
   assert.ok(peers.some((p) => p.fingerprint === me), "签名 ping 之后源机应出现在对端的待批准列表里");

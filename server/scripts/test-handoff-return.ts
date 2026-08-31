@@ -585,6 +585,18 @@ try {
   assert.deepEqual(pendingFallback.projects, [], "未批准前普通接力不能读取原机项目清单");
   assert.ok(pendingFallback.local.notes.some((note) => /普通接力/.test(note)), "预检应解释为何重新需要审批");
 
+  // 预检只是**探测**,不会把 B 塞进 A 的待批准列表(否则源机的自动轮询也会天天在
+  // 对端刷申请,见 handoff-peers.ts touchPeer)。要 A 批准就得先显式申请一次 ——
+  // 这正是用户在接力对话框里点「发送接力申请」那一下。
+  const notYetListed = await api<{ peers: { fingerprint: string }[] }>(machineA, "/handoff/peers");
+  assert.ok(
+    !notYetListed.peers.some((p) => p.fingerprint === identityB.fingerprint),
+    "光做预检不该在对端建待批准记录",
+  );
+  await api(machineB, "/handoff/request", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targetUrl: machineA }),
+  });
   await api(machineA, `/handoff/peers/${identityB.fingerprint}/approve`, { method: "POST" });
   const approvedFallback = await api<HandoffPreflightResult>(machineB, `/tasks/${missingArchiveTask.id}/handoff/preflight`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetUrl: machineA }),

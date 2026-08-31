@@ -7,6 +7,32 @@ import { api } from "../lib/api.ts";
 const PEERS_CHANGED_EVENT = "ash:handoff-peers-changed";
 const POLL_MS = 4_000;
 
+// 横幅只弹**新鲜**的申请。
+//
+// 它是个打断式顶条，压在所有人的工作区上方，所以门槛得比设置页那份名单高一档：
+// 一条没人处理的 pending 会一直留在库里，而横幅原来只看 `status === "pending"`、
+// 不看时间也不显示时间 —— 于是几周前的一条陈年记录天天顶在页面上，看起来永远像
+// 「刚刚有人在申请」（2026-08-31 用户就是这么被误导的）。
+//
+// 过了这个窗口不是消失，是**降级**：申请仍在「设置 → 默认规则 → 接力来源」里等着
+// 处理，只是不再打断人。真在等对面放行的人会自己去点，不需要横幅一直提醒。
+const FRESH_MS = 24 * 60 * 60_000;
+
+const isFresh = (peer: HandoffPeer): boolean => {
+  const seen = Date.parse(peer.lastSeenAt);
+  return Number.isFinite(seen) && Date.now() - seen < FRESH_MS;
+};
+
+const seenLabel = (iso: string): string => {
+  const at = Date.parse(iso);
+  if (!Number.isFinite(at)) return "";
+  const mins = Math.floor((Date.now() - at) / 60_000);
+  if (mins < 1) return "刚刚";
+  if (mins < 60) return `${mins} 分钟前`;
+  const hours = Math.floor(mins / 60);
+  return hours < 24 ? `${hours} 小时前` : new Date(at).toLocaleString();
+};
+
 export function HandoffApprovalAlert({
   notify,
   onOpenSettings,
@@ -19,7 +45,10 @@ export function HandoffApprovalAlert({
 
   const reload = useCallback(async () => {
     try {
-      setPending((await api.handoffPeers()).filter((peer) => peer.status === "pending"));
+      // 服务端已按人收窄（handoff-peers.ts peerAudience）：**待批准**的申请只有它冲着的
+      // 那个人看得见，管理员也不例外。所以这个横幅不需要「你是以管理员身份看到的」那一档，
+      // 拿到的每一条都是该我拆的信，接受和拒绝都归我点。
+      setPending((await api.handoffPeers()).filter((peer) => peer.status === "pending" && isFresh(peer)));
     } catch {
       // 后台轮询失败不反复弹 toast；下一轮或连接恢复后会自动补上。
     }
@@ -60,9 +89,13 @@ export function HandoffApprovalAlert({
       <span className="handoff-approval-alert-icon"><ShieldWarning size={22} weight="fill" aria-hidden="true" /></span>
       <div className="handoff-approval-alert-copy">
         <strong id="handoff-approval-alert-title">收到接力申请</strong>
-        <p>「{peer.name || "未命名机器"}」想把任务接力到本机。接受前不会向它公开项目列表。</p>
+        <p>
+          「{peer.name || "未命名机器"}」想把任务接力到本机
+          {peer.requestedByName ? `，以「${peer.requestedByName}」的身份` : ""}。接受前不会向它公开项目列表。
+        </p>
         <small>
           指纹 {peer.short}{peer.lastAddr ? ` · 来自 ${peer.lastAddr}` : ""}
+          {` · ${seenLabel(peer.lastSeenAt)}`}
           {pending.length > 1 ? ` · 另有 ${pending.length - 1} 个申请` : ""}
         </small>
       </div>

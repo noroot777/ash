@@ -296,6 +296,227 @@ const WRITE_ROUTES: { path: string; method: string; body?: unknown; what: string
   );
 }
 
+// ── ⑦ 接力申请按人归属:一条申请只打扰它冲着的那个人 ──────────────────────
+// 用户 2026-08-31 拍板改的语义。原来是「全员可见可批」——4 个账号一起被顶部横幅
+// 打断，而且任何一个人都能替本人放行一台机器(放行 = 那台机器上所有人都进得来)。
+// 判据在 handoff-peers.ts `peerAudience`，这里走真 Request 钉住它的读写两侧。
+{
+  const { handoffPeers } = await import("../src/db/schema.js");
+  const fp = (seed: string) => seed.repeat(64).slice(0, 64);
+  const mine = fp("a");      // member 用自己的对端 key 申请的
+  const others = fp("b");    // owner 申请的
+  const legacy = fp("c");    // 升级前落下的老行(多人实例现在已不收无主申请)
+  const at = new Date().toISOString();
+  for (const [fingerprint, requestedByUserId] of [
+    [mine, member.id], [others, owner.id], [legacy, null],
+  ] as const) {
+    await db.insert(handoffPeers).values({
+      fingerprint, publicKey: "pk", name: `peer-${fingerprint.slice(0, 1)}`, status: "pending",
+      firstSeenAt: at, lastSeenAt: at, approvedAt: null, approvedBy: null,
+      peerMode: "single", lastAddr: "", requestedByUserId,
+    });
+  }
+  const seenBy = async (key: string): Promise<Set<string>> => {
+    const res = await call("/api/handoff/peers", "GET", key);
+    assert.equal(res.status, 200, res.text);
+    return new Set((res.body.peers as { fingerprint: string }[]).map((p) => p.fingerprint));
+  };
+
+  const memberSees = await seenBy(memberKey);
+  assert.ok(memberSees.has(mine), "自己的申请当然要看得见");
+  assert.ok(!memberSees.has(others), "别人的申请不该来打扰我");
+  assert.ok(
+    !memberSees.has(legacy),
+    "无主的老记录也不该冒出来 —— 给全员看等于把「无主申请谁都能批」那条口子从读侧开回来",
+  );
+
+  const ownerSees = await seenBy(ownerKey);
+  assert.ok(ownerSees.has(others) && !ownerSees.has(mine), "反向同理");
+
+  // 管理员在**待批准**这一档什么都不是(第 2 轮审查 P1):一封没拆的信只有收信人有份,
+  // 「替你拒了」和「替你批了」一样是替人做决定 —— 源机只会看到「对方拒绝了」,当事人
+  // 根本不知道有人来找过他。
+  const bossSees = await seenBy(bossKey);
+  assert.ok(
+    !bossSees.has(mine) && !bossSees.has(others) && !bossSees.has(legacy),
+    "别人的待批准申请对管理员也不存在",
+  );
+  const adminReject = await call(`/api/handoff/peers/${mine}/block`, "POST", bossKey);
+  assert.equal(adminReject.status, 404, `管理员拒不了别人的申请:${adminReject.text}`);
+  const adminDrop = await call(`/api/handoff/peers/${mine}`, "DELETE", bossKey);
+  assert.equal(adminDrop.status, 404, `删同理:${adminDrop.text}`);
+  const adminGrab = await call(`/api/handoff/peers/${mine}/approve`, "POST", bossKey);
+  assert.equal(adminGrab.status, 404, `更批不了:${adminGrab.text}`);
+
+  // 写侧同一道闸:读侧收窄了、写侧还能拿指纹动别人的记录,等于没收窄。
+  const steal = await call(`/api/handoff/peers/${mine}/approve`, "POST", ownerKey);
+  assert.equal(steal.status, 404, `不该让人替别人放行一台机器:${steal.text}`);
+  const wipe = await call(`/api/handoff/peers/${mine}`, "DELETE", ownerKey);
+  assert.equal(wipe.status, 404, `删除同理:${wipe.text}`);
+  const orphanGrab = await call(`/api/handoff/peers/${legacy}/approve`, "POST", ownerKey);
+  assert.equal(orphanGrab.status, 404, `无主老行也不是谁都能批:${orphanGrab.text}`);
+
+  const memberRows = (await call("/api/handoff/peers", "GET", memberKey)).body.peers as
+    { fingerprint: string; canApprove?: boolean }[];
+  assert.equal(
+    memberRows.find((p) => p.fingerprint === mine)?.canApprove, true,
+    "本人当然批得了自己的申请",
+  );
+  const own = await call(`/api/handoff/peers/${mine}/approve`, "POST", memberKey);
+  assert.equal(own.status, 200, `本人批自己的申请必须放行:${own.text}`);
+
+  // 一旦进了信任表就换一档:approved/blocked 是**实例级**的,一台放行的机器意味着它上面
+  // 所有人都敲得开本机的门,人走了、key 换了总得有人撤销得掉。管理员在这一档看得见、
+  // 能拒能删,但放行仍旧只有本人点得了。
+  const bossAfter = (await call("/api/handoff/peers", "GET", bossKey)).body.peers as
+    { fingerprint: string; seenAsAdmin?: boolean; canApprove?: boolean }[];
+  const trusted = bossAfter.find((p) => p.fingerprint === mine);
+  assert.ok(trusted, "已放行的机器要进管理员的审计视野");
+  assert.equal(trusted?.seenAsAdmin, true, "并标出「你是以管理员身份看到的」,界面才说得清为什么它在这儿");
+  assert.equal(trusted?.canApprove, false, "看得见 ≠ 批得了:这一位决定界面露不露「批准」按钮");
+  const adminBlock = await call(`/api/handoff/peers/${mine}/block`, "POST", bossKey);
+  assert.equal(adminBlock.status, 200, `管理员要撤销得了已放行的机器:${adminBlock.text}`);
+  // 拉黑再解除会**恢复**原来的 approved —— 那也是放行,不能成为绕过「只有本人能批」的后门。
+  const adminUnblock = await call(`/api/handoff/peers/${mine}/unblock`, "POST", bossKey);
+  assert.equal(adminUnblock.status, 403, `拉黑再解除不能变成替本人放行的后门:${adminUnblock.text}`);
+  // 删除按**归一化后**的指纹落库:拿大写指纹去 delete 会一行都不匹配,端点却照样回
+  // {deleted:true}(第 2 轮审查 P3)。
+  const upper = await call(`/api/handoff/peers/${mine.toUpperCase()}`, "DELETE", bossKey);
+  assert.equal(upper.status, 200, upper.text);
+  assert.equal(
+    (await seenBy(bossKey)).has(mine), false,
+    "回了 deleted:true 就必须真删掉 —— 大小写不一致时曾经只是「看起来删了」",
+  );
+}
+
+// ── ⑦b 凭空拒绝一台没打过交道的机器 = 全局拒绝服务 ────────────────────────
+// 「记录还不存在也能拒」这条路只为历史回程那张表存在。不收窄的话,任意成员随手一个
+// 指纹就能落一行**全局** blocked:那台机器之后带对谁的 key 来配对都被 peerStanceFor /
+// requireApprovedPeer 挡死,而被申请的本人连这行记录都看不见,解不了也批不了
+// (第 1 轮审查 P1 实测复现)。
+{
+  const { handoffPeers, tasks } = await import("../src/db/schema.js");
+  const strangerFp = "e".repeat(64);
+  const denied = await call(`/api/handoff/peers/${strangerFp}/block`, "POST", memberKey);
+  assert.equal(denied.status, 404, `没打过交道的指纹不该能被凭空拉黑:${denied.text}`);
+  assert.equal(
+    (await db.select().from(handoffPeers)).some((r) => r.fingerprint === strangerFp), false,
+    "被拒的拉黑不许落库 —— 只看状态码的话,「404 但黑名单已经写进去了」照样过",
+  );
+  const adminDenied = await call(`/api/handoff/peers/${strangerFp}/block`, "POST", bossKey);
+  assert.equal(
+    adminDenied.status, 404,
+    `管理员也一样:这条路的前提是「有回程可拒」,不是权限大小:${adminDenied.text}`,
+  );
+
+  // 真有历史回程的那台机器照常拒得掉 —— 收窄不能把这个功能一起弄没。
+  const holderFp = "f".repeat(64);
+  await db.insert(tasks).values({
+    id: "t-held-by-member", projectId: "p-shared", title: "被 member 接力出去的任务",
+    body: "", mode: "single", status: "paused", agentType: "claude",
+    useWorktree: false, workflowMode: "free", ownerUserId: member.id,
+    handoff: JSON.stringify({
+      direction: "out", pending: false, peerFp: holderFp, peerName: "持有机",
+      at: new Date().toISOString(), transferId: "tx-held",
+    }),
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  });
+  const grants = (await call("/api/handoff/return-grants", "GET", memberKey)).body.grants as
+    { fingerprint: string; canRevoke?: boolean }[];
+  assert.equal(
+    grants.find((g) => g.fingerprint === holderFp)?.canRevoke, true,
+    "自己任务授权出去的回程,本人当然拒得了",
+  );
+  const otherView = (await call("/api/handoff/return-grants", "GET", ownerKey)).body.grants as
+    { fingerprint: string; canRevoke?: boolean }[];
+  assert.equal(
+    otherView.find((g) => g.fingerprint === holderFp)?.canRevoke, false,
+    "别人的历史任务只读:界面据此不露按钮,免得点下去吃 403",
+  );
+  const byStranger = await call(`/api/handoff/peers/${holderFp}/block`, "POST", ownerKey);
+  assert.equal(byStranger.status, 403, `不是你的任务就拒不了它的持有机:${byStranger.text}`);
+  const byOwnerOfTask = await call(`/api/handoff/peers/${holderFp}/block`, "POST", memberKey);
+  assert.equal(byOwnerOfTask.status, 200, `任务本人要拒得掉持有机:${byOwnerOfTask.text}`);
+
+  // 一台机器同时持有**多个人**的历史任务:落库的是机器级 blocked,一点下去别人的回程和
+  // 它往后所有人的配对申请一起被挡。所以跨了人就只有管理员点得了(第 2 轮审查 P1)。
+  const sharedFp = "9".repeat(64);
+  for (const [id, who] of [["t-shared-member", member.id], ["t-shared-owner", owner.id]] as const) {
+    await db.insert(tasks).values({
+      id, projectId: "p-shared", title: `${id} 的历史存档`, body: "",
+      mode: "single", status: "paused", agentType: "claude",
+      useWorktree: false, workflowMode: "free", ownerUserId: who,
+      handoff: JSON.stringify({
+        direction: "out", pending: false, peerFp: sharedFp, peerName: "共用持有机",
+        at: new Date().toISOString(), transferId: `tx-${id}`,
+      }),
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    });
+  }
+  const sharedSeenBy = async (key: string) => {
+    const rows = (await call("/api/handoff/return-grants", "GET", key)).body.grants as
+      { fingerprint: string; canRevoke?: boolean }[];
+    return rows.find((g) => g.fingerprint === sharedFp);
+  };
+  assert.equal((await sharedSeenBy(memberKey))?.canRevoke, false, "我在这台机器上有任务 ≠ 我能替所有人拉黑它");
+  assert.equal((await sharedSeenBy(ownerKey))?.canRevoke, false, "另一位同理");
+  assert.equal((await sharedSeenBy(bossKey))?.canRevoke, true, "跨了人就是整机级决定,归实例管理员");
+  const sharedByMember = await call(`/api/handoff/peers/${sharedFp}/block`, "POST", memberKey);
+  assert.equal(sharedByMember.status, 403, `一个人拒不掉大家共用的持有机:${sharedByMember.text}`);
+  assert.equal(
+    (await db.select().from(handoffPeers)).some((r) => r.fingerprint === sharedFp), false,
+    "被拒的拉黑不许落库",
+  );
+  const sharedByAdmin = await call(`/api/handoff/peers/${sharedFp}/block`, "POST", bossKey);
+  assert.equal(sharedByAdmin.status, 200, `管理员要拒得掉:${sharedByAdmin.text}`);
+}
+
+// ── ⑧ 多人实例不收无主申请 ────────────────────────────────────────────────
+// 用户 2026-08-31:「就没有无主申请这一说，除非对方是单人模式，单人模式是不需要 key 的。」
+// 这跟 §十一 的原则本来就一致 —— 要在那台机器上做事，就得在那台机器上有账号。
+// 认不出主人的申请只能推给全体成员处理，而那正是「凭什么不相干的人也能替我批」的来源。
+//
+// 出站侧同一道判据在 pingPeer 的 requirePeerUser（test-handoff-peer-key 钉着）；
+// 这一道是**入站兜底**：老版源机和自己拼请求的都到不了那一道。
+{
+  const { peerRequestHeaders } = await import("../src/handoff-peer-client.js");
+  const { PEER_USER_KEY_HEADER } = await import("../src/auth/handoff-peer-user.js");
+  const { localIdentity } = await import("../src/handoff-identity.js");
+  const me = localIdentity().fingerprint;
+  const url = "http://127.0.0.1:4317/api/handoff/ping?nonce=pair";
+  // 直接查库,不走列表端点:无主行现在对**所有人**都不可见(⑦),拿谁的 key 去列都是空,
+  // 那样「没落库」和「落了但看不见」就分不开了 —— 这一节要钉的恰恰是前者。
+  const { handoffPeers: peerTable } = await import("../src/db/schema.js");
+  const { eq: peerEq } = await import("drizzle-orm");
+  const listed = async () =>
+    (await db.select().from(peerTable).where(peerEq(peerTable.fingerprint, me))).length > 0;
+  const ping = async (extra?: Record<string, string>) => {
+    const res = await app.fetch(new Request(url, {
+      headers: { ...peerRequestHeaders(url, "GET", ""), ...extra },
+    }));
+    return { status: res.status, body: JSON.parse(await res.text()) as Record<string, unknown> };
+  };
+
+  // 没带 key：ping 照常 200（源机要靠它拿到 instanceMode 才知道自己缺什么），但不落库。
+  const anonymous = await ping();
+  assert.equal(anonymous.status, 200, "配对入口本身对谁都开着,拿不到应答就没法提示补 key");
+  assert.equal(anonymous.body.instanceMode, "multi", "应答要自报是多人实例");
+  assert.equal(anonymous.body.peerUser, null, "没带 key 时明说「我不认识你」");
+  assert.equal(await listed(), false, "多人实例不收认不出主人的申请 —— 它只能推给全体成员");
+
+  // 带上有效 key：受理，并且归到那个人名下。
+  const claimed = await ping({ [PEER_USER_KEY_HEADER]: memberKey });
+  assert.equal(claimed.status, 200, JSON.stringify(claimed.body));
+  assert.equal((claimed.body.peerUser as { name?: string } | null)?.name, "member", "应答要回报认出了谁");
+  assert.equal(await listed(), true, "带对了 key 的申请才受理");
+  const mineNow = (await call("/api/handoff/peers", "GET", memberKey)).body.peers as
+    { fingerprint: string; requestedByName?: string }[];
+  assert.equal(
+    mineNow.find((p) => p.fingerprint === me)?.requestedByName, "member",
+    "受理时就把归属记下来,它决定这条申请之后只打扰谁",
+  );
+}
+
 console.log("multi-user git/host/handoff gates ok");
 await releaseTmpDb();
 rmSync(stage, { recursive: true, force: true });

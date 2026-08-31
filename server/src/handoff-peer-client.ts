@@ -214,15 +214,23 @@ const identityRecoveryGuidance = (returnContext?: HandoffReturnContext): string 
  *
  * `expectedFp` 来自整机目标设置或任务 marker；`returnContext` 非空表示后者。
  * 两者都没有才是首次配对(TOFU)。
+ *
+ * **默认是「探测」而不是「申请」**(`options.pairing`)。同一条 ping 被三种场景共用:
+ * 显式点申请、打开接力对话框的预检、代理链路的身份核对。只有第一种该让对端多出一条
+ * 待批准记录 —— 否则用户没申请过,对端却天天弹「收到接力申请」(2026-08-31)。
+ * 非申请场景在 URL 上带 `intent=probe`;老版对端不认这个参数,行为与今天一致。
  */
 export async function pingPeer(
   targetUrl: string,
   expectedFp?: string | null,
   returnContext?: HandoffReturnContext,
-  options: { allowReturnFallback?: boolean; requirePeerUser?: boolean } = {},
+  options: { allowReturnFallback?: boolean; requirePeerUser?: boolean; pairing?: boolean } = {},
 ): Promise<PeerProbe> {
   const nonce = newNonce();
-  const pingUrl = returnContext ? `${targetUrl}/api/handoff/return/ping` : `${targetUrl}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`;
+  // 移回探测走的是任务级端点,它本来就不建整机待批准记录,不需要这个参数。
+  const intent = options.pairing ? "" : "&intent=probe";
+  const plainPing = `${targetUrl}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}${intent}`;
+  const pingUrl = returnContext ? `${targetUrl}/api/handoff/return/ping` : plainPing;
   let ping: HandoffPingResponse;
   let taskScopedReturn = Boolean(returnContext);
   try {
@@ -239,15 +247,20 @@ export async function pingPeer(
     if (!returnContext || options.allowReturnFallback === false || !(error instanceof HandoffError)
       || error.remoteStatus !== 404) throw error;
     taskScopedReturn = false;
-    ping = await fetchPeer<HandoffPingResponse>(`${targetUrl}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`);
+    ping = await fetchPeer<HandoffPingResponse>(plainPing);
   }
   if (!ping?.ok || ping.service !== "ash") {
     throw new HandoffError("对端不是 ash（/api/handoff/ping 应答不对）", 502);
   }
   // 对端是多人实例、而这次没认出我是谁(没配 key 或 key 已失效):在这里就说清楚。
   // 不说的话用户看到的是「对端一个项目都没有」——那是最容易被误读成「对端没建项目」
-  // 的假象(§十一 单人→多人 / 多人→多人 两格)。配对申请不走这一步:那时本来就还
-  // 没有账号,拦死它等于连申请的路都断了。
+  // 的假象(§十一 单人→多人 / 多人→多人 两格)。
+  //
+  // **配对申请同样适用**(用户 2026-08-31 拍板)。曾经在这儿放过一马,理由是「那时本来
+  // 就还没有账号,拦死它等于连申请的路都断了」—— 那条理由站不住:§十一 的原则就是
+  // 「要在那台机器上做事,就得在那台机器上有账号(找那台机器的管理员开)」。放过去的
+  // 结果是对端收到一条认不出主人的申请,只能推给它上面所有人,而那正是本轮要修的病。
+  // 对端是单人实例时不需要 key,也就没有归属问题,这条闸自然不触发。
   if (options.requirePeerUser && ping.instanceMode === "multi" && !ping.peerUser) {
     // 带上原因码,接力对话框据此当场给出输入框(文案里只说「哪里能填」,不再指路)。
     const error = new HandoffError(
@@ -318,16 +331,25 @@ export async function rememberedFingerprint(targetUrl: string): Promise<string |
  * 显式发送接力申请。它只做带签名的 ping：对端据此把本机落进待审批列表，不读取
  * 分支、不打包任务、更不会传输仓库。用户已经明确点了「申请」，所以首次见到的对端
  * 身份可以在这一步记住；之后地址背后换了机器，连再次申请都会先被指纹校验拦下。
+ *
+ * `requirePeerUser` 不能省:对端是多人实例时,一条认不出主人的申请只能推给它上面
+ * 所有人 —— 没有「无主申请」这回事(用户 2026-08-31 拍板)。没账号就先找对端管理员
+ * 开一个,这跟项目邀请是同一套哲学(§十一)。对端是单人实例时不需要 key,照常放行。
  */
 export async function requestHandoffApproval(rawTargetUrl: string): Promise<HandoffApprovalResult> {
   const targetUrl = normalizePeerUrl(rawTargetUrl);
-  const probe = await pingPeer(targetUrl, await rememberedFingerprint(targetUrl));
+  // 唯一带 pairing 的调用点 —— 只有这里该让对端多出一条待批准记录。
+  const probe = await pingPeer(targetUrl, await rememberedFingerprint(targetUrl), undefined, {
+    pairing: true,
+    requirePeerUser: true,
+  });
   if (probe.peer) await rememberPeerFingerprint(targetUrl, probe.peer.fingerprint);
   return {
     ok: true,
     target: { url: targetUrl, host: probe.ping.host },
     peer: probe.peer,
     projects: probe.ping.projects,
+    ...(probe.ping.peerUser ? { peerUserName: probe.ping.peerUser.name } : {}),
   };
 }
 

@@ -61,8 +61,9 @@ export function HandoffSettings({
   // 两件事,门禁不一样:
   //  · **入站策略**(要不要审批、加不加密、载荷上限)= 整台机器的安全姿态,一个人关掉
   //    等于替所有人开门,所以多人模式下只有实例管理员能改(§八 实例面)。
-  //  · **来源名单**的批准/拒绝 = 计划点名的「全员可见可批」(§十一,互信定位),
-  //    任何登录用户都能点,服务端记下操作人。
+  //  · **来源名单**按人归属:一条申请只打扰它冲着的那个人,也只有他能接受。管理员看得见
+  //    整张表、能拒能删,但批不了 —— 放行是扩权,替不了当事人(handoff-peers.ts
+  //    `peerAudience`;按钮露不露看服务端回的 `canApprove`)。服务端一律记下操作人。
   const canManageInstance = !isMulti || isInstanceAdmin;
   const lockInstance = loading || busy || !canManageInstance;
 
@@ -310,7 +311,8 @@ export function HandoffSettings({
                   <br />
                   批准一台机器只是<b>让它敲得开门</b>：它上面的每个人能把任务推进哪些项目，仍由那个人
                   在本机的账号和项目成员名单决定——机器指纹管传输，账号管权限，两层各管各的。
-                  下面的来源名单<b>谁都能批</b>（批了会记名）；这三个开关是整台机器的安全姿态
+                  下面的来源名单按人分：一台机器的申请<b>只有它冲着的那个人看得见、批得了</b>
+                  （批了会记名），别人连有这么一条都不知道；这三个开关是整台机器的安全姿态
                   {!canManageInstance && "，只有实例管理员能改"}。
                 </>
               )}
@@ -412,8 +414,17 @@ export function HandoffSettings({
                   指纹 {peer.short}
                   {peer.lastAddr ? ` · 来自 ${peer.lastAddr}` : ""}
                   {` · 最近 ${new Date(peer.lastSeenAt).toLocaleString()}`}
+                  {peer.requestedByName ? ` · 冲着 ${peer.requestedByName} 来的` : ""}
                   {peer.approvedByName ? ` · 由 ${peer.approvedByName} 处理` : ""}
                 </small>
+                {/* 管理员看到别人的申请时说清来由:这张表是实例级信任表,他能看全部是
+                    为了审计和撤销,不是为了替人拍板(判据 handoff-peers.ts peerAudience)。 */}
+                {peer.seenAsAdmin && (
+                  <small className="handoff-peer-note">
+                    你是以实例管理员身份看到这条的：它已经进了本机的信任表，你能拒绝或删除，
+                    但重新放行得由{peer.requestedByName ? `「${peer.requestedByName}」` : "申请人本人"}来点。
+                  </small>
+                )}
                 {/* 知情批准(§十一):对方是多人实例时,批准的是**那台机器**,
                     它上面的每个人都能经这条路敲门。这句话必须在点「批准」之前看得见。 */}
                 {peer.status !== "approved" && multiPeerCount(peer.peerMode) !== null && (
@@ -424,7 +435,9 @@ export function HandoffSettings({
                 )}
               </div>
               <div className="handoff-peer-actions">
-                {peer.status !== "approved" && (
+                {/* 批不了就别露按钮:管理员看得见这条、能拒能删,但接受得由申请冲着的本人点
+                    (后端 requirePeerActable 会 403)。 */}
+                {peer.status !== "approved" && peer.canApprove !== false && (
                   <Button variant="ghost" disabled={busy} onClick={() => void peerAction(peer, "approve")}>
                     <Check size={13} aria-hidden="true" />批准
                   </Button>
@@ -469,7 +482,14 @@ export function HandoffSettings({
               </small>
             </div>
             <div className="handoff-peer-actions">
-              {grant.blocked ? (
+              {/* 拒绝它会连带挡掉那台机器往后所有人的接力申请,所以只有授权任务的本人和
+                  实例管理员点得了(后端 requireReturnGrantToRevoke)。别人只读。 */}
+              {grant.canRevoke === false ? (
+                <small className="handoff-peer-note">
+                  拒绝落的是<b>整机</b>黑名单，会连带挡掉别人的回程；这台机器持有的历史任务
+                  不都是你的，所以要由任务本人或实例管理员来点。
+                </small>
+              ) : grant.blocked ? (
                 <Button variant="ghost" disabled={busy} onClick={() => void peerAction(grant, "unblock")}>
                   <Check size={13} aria-hidden="true" />解除拒绝
                 </Button>

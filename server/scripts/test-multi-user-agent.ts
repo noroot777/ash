@@ -250,7 +250,17 @@ const AS_ALICE = { authorization: `Bearer ${aliceKey}` };
 // 接力目标机。一条任务的凭证改得动它们,就等于一条任务能改写这个账号往后的运行方式
 // (第 1 轮审查 P1 实测:`POST /api/llm-providers` 201,在 alice 名下建出了供应商)。
 {
-  const { llmProviders, reviewerProfiles, teamPresets, workflows } = await import("../src/db/schema.js");
+  const { llmProviders, reviewerProfiles, teamPresets, workflows, handoffPeers } =
+    await import("../src/db/schema.js");
+  // 入站接力来源:批准一台机器 = 它上面所有人都敲得开本机的门,比改一个供应商还重。
+  // 先摆一条冲着 alice 来的待批准记录,好验证被拒之后它**还在待批准**。
+  const peerFp = "d".repeat(64);
+  const peerAt = new Date().toISOString();
+  await db.insert(handoffPeers).values({
+    fingerprint: peerFp, publicKey: "pk", name: "evil-box", status: "pending",
+    firstSeenAt: peerAt, lastSeenAt: peerAt, approvedAt: null, approvedBy: null,
+    peerMode: "single", lastAddr: "", requestedByUserId: alice.id,
+  });
   const WRITES: { path: string; method: string; body?: unknown; what: string }[] = [
     { path: "/api/llm-providers", method: "POST", body: { name: "agent-added", protocol: "openai", baseUrl: "https://evil.example.com", apiKey: "secret" }, what: "建供应商" },
     { path: "/api/agents", method: "POST", body: { name: "agent-added-executor", type: "claude" }, what: "建执行器" },
@@ -265,6 +275,17 @@ const AS_ALICE = { authorization: `Bearer ${aliceKey}` };
     { path: "/api/notes", method: "POST", body: { projectId: "p-source", body: "agent 写的随手记" }, what: "写随手记" },
     { path: `/api/agents/ex-alice`, method: "PATCH", body: { name: "HIJACKED" }, what: "改 owner 的执行器" },
     { path: `/api/agents/ex-alice`, method: "DELETE", what: "删 owner 的执行器" },
+    // 第 1 轮审查 P1 实测:只带那两个头就把冲着 alice 的入站来源批了,还把操作人记成 alice。
+    { path: `/api/handoff/peers/${peerFp}/approve`, method: "POST", what: "替 owner 批准入站接力来源" },
+    { path: `/api/handoff/peers/${peerFp}`, method: "DELETE", what: "删 owner 的入站接力来源" },
+    // 接力申请顶着 owner 的名义去敲别人的门,还会把 owner 存的对端账号 key 一起发出去
+    // (第 2 轮审查 P1)。只读探路仍有 /tasks/:id/handoff/preflight,那条不配对。
+    { path: "/api/handoff/request", method: "POST", body: { targetUrl: "https://evil.example.com" }, what: "替 owner 发接力申请" },
+    // 正式接力比申请重得多:对端已批准/单人/旧版开放接收时,这不是一封待审批通知,而是
+    // 任务正文、会话历史和仓库状态**直接迁移**过去,本机任务当场停掉落成存档
+    // (第 3 轮审查 P1)。移除标记那道逃生门同理,也是把任务搬回来的用户决定。
+    { path: "/api/tasks/t-source/handoff", method: "POST", body: { targetUrl: "https://evil.example.com", targetProjectId: "p" }, what: "替 owner 把任务接力出去" },
+    { path: "/api/tasks/t-source/handoff", method: "DELETE", what: "替 owner 移除接力标记" },
   ];
   for (const w of WRITES) {
     const denied = await call(w.path, w.method, AS_AGENT, w.body);
@@ -276,6 +297,9 @@ const AS_ALICE = { authorization: `Bearer ${aliceKey}` };
   assert.equal((await db.select().from(workflows)).length, 0, "被拒的起手式不许落库");
   assert.equal((await db.select().from(reviewerProfiles)).length, 0, "被拒的审查者不许落库");
   assert.equal((await db.select().from(teamPresets)).length, 0, "被拒的团队预设不许落库");
+  const stillPending = (await db.select().from(handoffPeers)).at(0);
+  assert.equal(stillPending?.status, "pending", "被拒的批准不许真把来源机放行");
+  assert.equal(stillPending?.approvedBy, null, "更不许把操作人记成账号本人");
   const executors = await db.select().from(agents);
   assert.equal(executors.length, 1, "执行器既不许多出来,也不许被删");
   assert.equal(executors[0].name, "Alice Executor", "owner 的执行器不许被改名");
@@ -285,6 +309,13 @@ const AS_ALICE = { authorization: `Bearer ${aliceKey}` };
     name: "alice-own", protocol: "openai", baseUrl: "https://api.example.com", apiKey: "k",
   });
   assert.equal(mine.status, 201, `alice 本人建供应商要过:${mine.text}`);
+
+  // 探路那条不能跟着关死:它只探测对端、不停任务也不 import,而 agent 判断「这台能不能
+  // 接」要用它。这里只钉「没被这道闸拦掉」——它自己会因为目标机地址不通而失败。
+  const probe = await call("/api/tasks/t-source/handoff/preflight", "POST", AS_AGENT, {
+    targetUrl: "https://unreachable.invalid",
+  });
+  assert.notEqual(probe.status, 403, `只读预检不该被个人写闸误伤:${probe.text}`);
 
   // 读侧不跟着收:派活要挑执行器/供应商,而读端点一条都不回显 key(只报 hasKey)。
   const providers = await call("/api/llm-providers", "GET", AS_AGENT);

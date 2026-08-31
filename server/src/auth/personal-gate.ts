@@ -41,10 +41,34 @@ const PERSONAL_COLLECTIONS = new Set([
 ]);
 
 /**
- * 不在第一段上的那几条,逐条写死形状。
- *  · 接力目标机装着「我在对端的账号 key」,但它住在 `/api/handoff/` 这一族下面。
+ * 不在第一段上的那几条,逐条写死形状。前几条住在 `/api/handoff/` 这一族下面,最后一条挂在
+ * 任务上 —— 它不是「一张逐人隔离的表」,而是**只有账号本人做得了的动作**,判据同一条:
+ * 回合凭证代表的是那一条任务,不是这个账号。
+ *  · 接力目标机装着「我在对端的账号 key」。
+ *  · 接力**来源**名单管的是「谁能把任务推进这台机器」。批准一台来源机 = 让它上面所有人
+ *    都敲得开本机的门,比改一个供应商还重;而按人归属之后,它同样是一张逐人隔离的表
+ *    (handoff-peers.ts `peerAudience`)。回合凭证身上挂的 owner userId 是**归属戳**,
+ *    不是「它就是这个人」—— 不登记进来的话,任意一条正在跑的任务只凭
+ *    `x-ash-source-task-id` + `x-ash-turn-token` 就能替 owner 放行一台陌生机器,
+ *    还会把操作人记成 owner 本人(第 1 轮审查 P1)。
+ *  · 接力**申请**是「以 owner 的身份去敲另一台机器的门」:index.ts 用
+ *    `withHandoffActor(ownerIdOf(actorOf(c)))` 包住 /api/*,所以回合凭证走到这条路由时
+ *    会顶着 owner 的名义,而 `requestHandoffApproval` 是唯一 `pairing: true` 的出口 ——
+ *    它会把 owner 存的**「我在对端的账号 key」随请求发给那个 URL**。任意一条正在跑的
+ *    任务因此能在用户没点过的情况下往任意地址制造远端申请并带走那把 key(第 2 轮审查
+ *    P1 实测复现)。agent 要探路仍有只读的 /tasks/:id/handoff/preflight,那条不配对。
  */
-const PERSONAL_PATHS = [/^\/api\/handoff\/targets(?:\/|$)/];
+const PERSONAL_PATHS = [
+  /^\/api\/handoff\/targets(?:\/|$)/,
+  /^\/api\/handoff\/peers(?:\/|$)/,
+  /^\/api\/handoff\/request(?:\/|$)/,
+  // `POST` = 正式接力(停任务 → 打包 → 推给对端 → 本地落存档),`DELETE` = 「在本机继续」
+  // 那道逃生门(去对端撤单,必要时带 acknowledgeDuplicateRisk 强来)。两边都是把任务整个
+  // 搬走或搬回的**用户决定**,比发一封申请重得多:对端要是已批准/单人/旧版开放接收,那不
+  // 是一条待审批通知,而是任务正文、会话历史和仓库状态**直接迁移**过去(第 3 轮审查 P1)。
+  // 精确到末尾:`/handoff/preflight` 只探路不动任务,派活要用,留给它。
+  /^\/api\/tasks\/[^/]+\/handoff$/,
+];
 
 export const AGENT_PERSONAL_REFUSAL =
   "个人资源与账号设置只对账号本人开放：回合凭证代表的是那一条任务，不是这个账号";

@@ -62,8 +62,27 @@ export interface HandoffPeer {
   firstSeenAt: string;
   lastSeenAt: string;
   approvedAt: string | null;
-  /** 最近一次批准/拒绝这台机器的人。多人模式下入站审批全员可点,所以要记名(§十一)。 */
+  /** 最近一次批准/拒绝这台机器的人。多人模式下入站审批要记名(§十一)。 */
   approvedByName?: string;
+  /**
+   * 这次申请代表本机的哪个账号 —— 源机发申请时带的「我在对端的账号 key」认出来的人。
+   * 一条申请只打扰这个人。对端是多人实例时它必有：认不出主人的申请根本不受理
+   * （没有「无主申请」这回事，见 server/src/handoff-routes.ts 的 ping）。空值只出现在
+   * 单人时期或升级前落下的存量行上。判据在 server/src/handoff-peers.ts `peerAudience`。
+   */
+  requestedByName?: string;
+  /**
+   * 当前登录者是不是因为管理员身份才看见这条(本人则为 false)。UI 据此说明原因。
+   * 只会出现在**已进信任表**(approved/blocked)的行上：待批准的申请只有它冲着的那个人
+   * 看得见，管理员在那一档是看不见的。
+   */
+  seenAsAdmin?: boolean;
+  /**
+   * 当前登录者能不能**放行**这台机器。放行是扩权（那台机器上所有人都敲得开本机的门），
+   * 只有它冲着的本人能点；管理员对已进信任表的行能拒绝能删，但批不了。UI 据此决定露不露
+   * 「批准」按钮 —— 留一颗按下去 403 的按钮只会让人以为功能坏了。
+   */
+  canApprove?: boolean;
   /** 对端自报的实例模式:`single` / `multi:<人数>`。不可信,只为知情批准。 */
   peerMode?: string;
   /** 最近一次来访地址,纯展示。 */
@@ -80,6 +99,12 @@ export interface HandoffReturnGrant {
   taskCount: number;
   lastGrantedAt: string;
   blocked: boolean;
+  /**
+   * 当前登录者能不能拒绝/解除这台机器的回程。拒绝它会连带挡掉那台机器往后所有人的接力
+   * 申请,所以只有授权任务的本人和实例管理员点得了(server/src/handoff-peers.ts
+   * `requireReturnGrantToRevoke`)。UI 据此决定露不露按钮。
+   */
+  canRevoke?: boolean;
 }
 
 /** 无法核验对端时由用户显式承担双任务风险的持久审计记录。 */
@@ -119,6 +144,13 @@ export interface HandoffApprovalResult {
   peer: HandoffPeerIdentity | null;
   /** 只有对方已经接受申请（或关闭审批）时才会返回项目。 */
   projects: HandoffPingProject[];
+  /**
+   * 对端认出来的「我」是谁。对端是多人实例时必有 —— 它认不出主人就根本不受理这次
+   * 申请（没有「无主申请」这回事，见 server/src/handoff-peer-client.ts
+   * requestHandoffApproval），申请会带 `HANDOFF_PEER_KEY_REQUIRED` 失败而不是成功。
+   * 对端是单人实例时不需要 key，这里为空。
+   */
+  peerUserName?: string;
 }
 
 // 落在 tasks.handoff（json）上的持久接力标记:导出侧 direction:"out"（任务已交出去，

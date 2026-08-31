@@ -23,6 +23,9 @@ import { HandoffError } from "./handoff-types.js";
 import {
   canonicalRequest, fingerprintOf, sha256Hex, shortFingerprint, verifyWithPeerKey,
 } from "./handoff-identity.js";
+import type { Actor } from "./auth/context.js";
+import { isAccountHolder, ownerIdOf } from "./auth/context.js";
+import { canRevokeReturnGrant, returnGrantOwners } from "./handoff-return.js";
 import { now } from "./util.js";
 
 export const PEER_HEADERS = {
@@ -127,17 +130,41 @@ export function verifyPeerSignature(c: Context, rawBody: string | Buffer): Verif
   };
 }
 
-/** 记一次来访:没见过的落 pending(这就是配对请求本身),见过的只刷新时间与地址。 */
-export async function touchPeer(peer: VerifiedPeer, addr: string): Promise<HandoffPeer> {
+/**
+ * 记一次来访。
+ *
+ * `create` 决定陌生指纹要不要落成一条待批准记录 —— 这一位是 2026-08-31 那次
+ * 「我没申请过接力，却天天收到申请」的正解。在那之前 touchPeer 无条件建 pending,
+ * 于是**任何**带签名的请求都会变成对端的一条「接力申请」:出站侧栏每 20 秒问一次
+ * 「我交出去那条任务现在什么样」(/proxy/tasks/state),对端就每 20 秒收到一次申请,
+ * 而真正的申请入口 /handoff/request 反倒是最少走的那条。
+ *
+ * 现在的判据按**端点性质**分,不看请求自报的任何东西:
+ *   · 配对入口(/handoff/ping,且源机没声明只是探测) → create,这是它的本职
+ *   · 已建立关系的通道(/refs、/import、/proxy/*,走 requireApprovedPeer) → 不 create,
+ *     陌生指纹一律 401 并指路「先在源机点一次申请」
+ *
+ * 返回 null = 没这条记录、且这次不许建。
+ */
+export async function touchPeer(
+  peer: VerifiedPeer,
+  addr: string,
+  options: { create: boolean; requestedBy?: string | null },
+): Promise<HandoffPeer | null> {
   const at = now();
   const existing = (await db.select().from(handoffPeers)
     .where(eq(handoffPeers.fingerprint, peer.fingerprint))).at(0);
   const peerMode = peer.mode || existing?.peerMode || "";
   if (existing) {
+    // 归属只在**还没人处置过**时补写:已批准/已拒绝的记录归属谁不再影响可见性,
+    // 而后来换一把 key 敲门不该悄悄把一条别人批过的记录改挂到自己名下。
+    const requestedByUserId = existing.status === "pending" && options.requestedBy
+      ? options.requestedBy
+      : existing.requestedByUserId;
     await db.update(handoffPeers)
       .set({
         publicKey: peer.publicKey, lastSeenAt: at, lastAddr: addr,
-        name: peer.name || existing.name, peerMode,
+        name: peer.name || existing.name, peerMode, requestedByUserId,
       })
       .where(eq(handoffPeers.fingerprint, peer.fingerprint));
     return toPeer({
@@ -147,8 +174,10 @@ export async function touchPeer(peer: VerifiedPeer, addr: string): Promise<Hando
       lastAddr: addr,
       name: peer.name || existing.name,
       peerMode,
+      requestedByUserId,
     });
   }
+  if (!options.create) return null;
   const row = {
     fingerprint: peer.fingerprint,
     publicKey: peer.publicKey,
@@ -160,12 +189,16 @@ export async function touchPeer(peer: VerifiedPeer, addr: string): Promise<Hando
     approvedBy: null,
     peerMode,
     lastAddr: addr,
+    requestedByUserId: options.requestedBy ?? null,
   };
   await db.insert(handoffPeers).values(row).onConflictDoNothing();
   return toPeer(row);
 }
 
-const toPeer = (row: typeof handoffPeers.$inferSelect, byName?: string): HandoffPeer => ({
+const toPeer = (
+  row: typeof handoffPeers.$inferSelect,
+  extra?: { byName?: string; requestedByName?: string; seenAsAdmin?: boolean; canApprove?: boolean },
+): HandoffPeer => ({
   fingerprint: row.fingerprint,
   short: shortFingerprint(row.fingerprint),
   name: row.name,
@@ -173,39 +206,166 @@ const toPeer = (row: typeof handoffPeers.$inferSelect, byName?: string): Handoff
   firstSeenAt: row.firstSeenAt,
   lastSeenAt: row.lastSeenAt,
   approvedAt: row.approvedAt,
-  ...(byName ? { approvedByName: byName } : {}),
+  ...(extra?.byName ? { approvedByName: extra.byName } : {}),
+  ...(extra?.requestedByName ? { requestedByName: extra.requestedByName } : {}),
+  ...(extra?.seenAsAdmin ? { seenAsAdmin: true } : {}),
+  ...(extra?.canApprove === undefined ? {} : { canApprove: extra.canApprove }),
   ...(row.peerMode ? { peerMode: row.peerMode } : {}),
   lastAddr: row.lastAddr,
   returnOnly: !row.publicKey,
 });
 
-export async function listPeers(): Promise<HandoffPeer[]> {
+/**
+ * 谁看得见、动得了这条来源记录(用户 2026-08-31 拍板)。
+ *
+ * 原来是「全员可见可批」(§十一 互信定位)。那一条只说对了一半:**发申请**确实不是
+ * 管理员专属,谁都可以发;但一条申请该打扰的只有它冲着的那个人 —— 源机发申请时带的
+ * 「我在对端的账号 key」已经说明了它要以谁的身份进来,对端没有理由把它推给另外几个
+ * 不相干的人,更不该让他们替本人处置。
+ *
+ * 判据按**这一行处在哪一档**分,不按角色分(第 2 轮审查 P1):
+ *
+ *   · `pending` = 一封还没人拆的信,**只有收信人**。看不见、拒不了、也删不掉 ——
+ *     管理员在这一档什么都不是。用户的原话就是「只有发送请求的那个用户才能看得见,
+ *     并操作是否接受」,而「替你拒了」和「替你批了」一样是替人做决定:源机那边只会
+ *     看到一句「对方拒绝了」,当事人根本不知道有人来找过他。
+ *   · `approved` / `blocked` = 已经进了**实例级信任表**,本人 + 实例管理员都看得见。
+ *     一台 approved 的机器意味着它上面所有人都敲得开本机的门,人走了、key 换了总得
+ *     有人撤销得掉,否则就是一批谁也动不了的孤儿。管理员在这一档能拒(收权)、能删
+ *     (清理),但**批不了**:`approve` 和把 blocked 解回 approved 都是放行,是扩权。
+ *
+ * 升级前落下的无主 pending 老行因此对所有人不可见 —— 这是对的,不是漏了一档:它没
+ * 放行任何东西(pending 进不来),而源机一旦按新流程重发申请,touchPeer 会就地把归属
+ * 补上(那一行还在 pending),它自己就回到收信人手里了。
+ *
+ * **agent 回合凭证一律不算本人**。它身上挂的 owner userId 是归属戳,不是「它就是这个
+ * 人」(auth/context.ts `isAccountHolder`)。不判这一条的话,任意一条正在跑的任务只凭
+ * `x-ash-source-task-id` + `x-ash-turn-token` 就能替 owner 放行一台陌生机器,还把操作人
+ * 记成 owner 本人(第 1 轮审查 P1 实测复现)。写侧另有 `personal-gate.ts` 的中间件兜底,
+ * 两道都要 —— 判据自己立不住的话,中间件那份路径名单迟早会漏掉一条。
+ *
+ * 自用模式恒真:没有用户概念,机器级配对即全部授权。
+ */
+export function peerAudience(
+  actor: Actor,
+  row: { requestedByUserId?: string | null; status?: string | null },
+): { visible: boolean; asAdmin: boolean; canApprove: boolean } {
+  if (actor.kind === "single") return { visible: true, asAdmin: false, canApprove: true };
+  // agent 不是账号本人:读写两侧一起挡,别让它连别人的申请列表都翻得到。
+  if (!isAccountHolder(actor)) return { visible: false, asAdmin: false, canApprove: false };
+  const owner = row.requestedByUserId ?? null;
+  if (owner && actor.userId && actor.userId === owner) {
+    return { visible: true, asAdmin: false, canApprove: true };
+  }
+  // 别人的**待批准申请**对谁都不存在,管理员也一样。
+  if (row.status === "pending" || !row.status) return { visible: false, asAdmin: false, canApprove: false };
+  return actor.role === "admin"
+    ? { visible: true, asAdmin: true, canApprove: false }
+    : { visible: false, asAdmin: false, canApprove: false };
+}
+
+/**
+ * 入站来源名单。多人模式下按 `peerAudience` 收窄 —— 这是一条会被前端横幅直接消费的
+ * 列表,不收窄的话「只打扰本人」在后端做了也白做。
+ */
+export async function listPeers(actor: Actor): Promise<HandoffPeer[]> {
   const rows = await db.select().from(handoffPeers);
-  // 谁批的要显示成人名而不是 id —— 多人模式下这行字是「这台机器怎么进来的」的唯一线索。
+  // 谁批的 / 谁申请的都要显示成人名而不是 id —— 多人模式下这行字是「这台机器怎么进来的」的唯一线索。
   const names = new Map((await db.select({ id: users.id, name: users.name }).from(users))
     .map((u) => [u.id, u.name] as const));
   // 待批准的排前面:那是唯一需要用户动手的一档。
   const rank = (s: string) => (s === "pending" ? 0 : s === "approved" ? 1 : 2);
   return rows
-    .map((row) => toPeer(row, row.approvedBy ? names.get(row.approvedBy) ?? "(已删除)" : undefined))
+    .flatMap((row) => {
+      const audience = peerAudience(actor, row);
+      if (!audience.visible) return [];
+      return [toPeer(row, {
+        ...(row.approvedBy ? { byName: names.get(row.approvedBy) ?? "(已删除)" } : {}),
+        ...(row.requestedByUserId
+          ? { requestedByName: names.get(row.requestedByUserId) ?? "(已删除)" }
+          : {}),
+        ...(audience.asAdmin ? { seenAsAdmin: true } : {}),
+        canApprove: audience.canApprove,
+      })];
+    })
     .sort((a, b) => rank(a.status) - rank(b.status) || b.lastSeenAt.localeCompare(a.lastSeenAt));
 }
 
 /**
- * 批准 / 拒绝一台入站机器。多人模式下**任何登录用户都能点**(§十一:互信定位,不是
- * 管理员专属),所以 `by` 必填 —— 放行一台机器等于让它上面所有人都敲得开本机的门,
- * 事后必须能问出是谁点的。
+ * 处置前的同一道闸。看不见的记录一律回「没有这台机器」,免得拿指纹试探别人的申请。
+ * `approving` 为真时再加一道:放行只有本人做得了(见 `peerAudience`)。这一档要**明说**
+ * 而不是回 404 —— 走到这里说明这条记录在他自己的列表里就看得见(已 approved/blocked 的
+ * 实例信任表),回「没有这台机器」只会让人以为界面坏了。
+ */
+async function requirePeerActable(
+  actor: Actor,
+  fingerprint: string,
+  approving = false,
+): Promise<typeof handoffPeers.$inferSelect | null> {
+  const row = (await db.select().from(handoffPeers).where(eq(handoffPeers.fingerprint, fingerprint))).at(0);
+  if (!row) return null;
+  const audience = peerAudience(actor, row);
+  if (!audience.visible) {
+    throw new HandoffError("没有这台接力来源机器(指纹对不上)", 404);
+  }
+  if (approving && !audience.canApprove) {
+    throw new HandoffError(
+      "放行一台来源机器只有它冲着的那个人点得了 —— 那等于让它上面所有人都敲得开本机的门。"
+      + "你可以拒绝或删除它,但放行得由本人来。",
+      403,
+    );
+  }
+  return row;
+}
+
+/**
+ * 「凭空拒绝」的准入:这个指纹得**真有**历史回程可拒,而且拒它的人得跟这件事有关系。
+ *
+ * 有关系 = 实例管理员,或者授权了这次回程的任务里有一条是他的。这跟名单本身那套
+ * 「按档分」是一致的:拒绝是收权,谁的东西谁能收,整台机器的事归管理员。
+ */
+async function requireReturnGrantToRevoke(actor: Actor, fingerprint: string): Promise<void> {
+  const owners = await returnGrantOwners(fingerprint);
+  if (owners.size === 0) {
+    throw new HandoffError(
+      "没有这台接力来源机器(指纹对不上)。拒绝只能针对已经出现过的来源机或持有历史任务的机器,"
+      + "不能凭一个指纹先把一台没打过交道的机器挡在外面。",
+      404,
+    );
+  }
+  if (canRevokeReturnGrant(actor, owners)) return;
+  throw new HandoffError(
+    owners.size > 1
+      ? "这台机器还持有别人的历史任务 —— 落库的是**整机**拒绝,一点下去别人的回程和它往后"
+        + "所有人的接力申请一起被挡,所以跨了人就得由实例管理员来点。"
+      : "这台机器持有的历史任务不是你的 —— 拒绝它会连带挡掉别人的回程和往后所有人的接力申请,"
+        + "得由任务本人或实例管理员来点。",
+    403,
+  );
+}
+
+/**
+ * 批准 / 拒绝一台入站机器。谁能点由 `peerAudience` 定:接受只有本人,拒绝本人和实例
+ * 管理员都行。`by` 必填 —— 放行一台机器等于让它上面所有人都敲得开本机的门,事后必须
+ * 能问出是谁点的。
  */
 export async function setPeerStatus(
+  actor: Actor,
   fingerprint: string,
   status: "approved" | "blocked",
-  by?: string | null,
 ): Promise<HandoffPeer> {
+  const by = ownerIdOf(actor);
   const normalized = fingerprint.trim().toLowerCase();
   if (!/^[a-f0-9]{64}$/.test(normalized)) throw new HandoffError("机器指纹格式不正确", 400);
-  const row = (await db.select().from(handoffPeers).where(eq(handoffPeers.fingerprint, normalized))).at(0);
+  const row = await requirePeerActable(actor, normalized, status === "approved");
   if (!row) {
     if (status !== "blocked") throw new HandoffError("没有这台接力来源机器(指纹对不上)", 404);
+    // **记录还不存在也能拒**这一条只为「历史回程权限」那张表存在:任务标记本身就给了
+    // 那台机器免审批移回的资格,而来源名单里并没有对应的行可点。所以它必须收窄到
+    // 「确实有回程可拒」——否则任意成员随手一个指纹就能凭空落一行**全局** blocked,
+    // 把那台机器之后所有人的正式申请一起挡死,而被申请的本人连这行都看不见
+    // (第 1 轮审查 P1 实测复现:member 先 block,alice 之后带对 key 配对仍被拒)。
+    await requireReturnGrantToRevoke(actor, normalized);
     const at = now();
     const blocked = {
       fingerprint: normalized,
@@ -218,6 +378,8 @@ export async function setPeerStatus(
       approvedBy: by ?? null,
       peerMode: "",
       lastAddr: "",
+      // 凭空建的拒绝记录归属点它的人:这样别人不会在名单里看到一条来路不明的黑名单。
+      requestedByUserId: by ?? null,
     };
     await db.insert(handoffPeers).values(blocked).onConflictDoUpdate({
       target: handoffPeers.fingerprint,
@@ -241,10 +403,14 @@ export async function setPeerStatus(
   return toPeer({ ...row, status, approvedAt, approvedBy });
 }
 
-export async function unblockPeer(fingerprint: string): Promise<HandoffPeer | null> {
+export async function unblockPeer(actor: Actor, fingerprint: string): Promise<HandoffPeer | null> {
   const normalized = fingerprint.trim().toLowerCase();
   if (!/^[a-f0-9]{64}$/.test(normalized)) throw new HandoffError("机器指纹格式不正确", 400);
-  const row = (await db.select().from(handoffPeers).where(eq(handoffPeers.fingerprint, normalized))).at(0);
+  // 解除拒绝会把**曾经批准过**的记录直接送回 approved —— 那一档是放行,同样只有本人
+  // 能点,否则管理员一个 block+unblock 就绕开了「接受得由本人来」。没批准过的只回
+  // pending(不是放行),谁都能解。判定要在读库之后,所以先不带 approving 取一次行。
+  const peek = (await db.select().from(handoffPeers).where(eq(handoffPeers.fingerprint, normalized))).at(0);
+  const row = await requirePeerActable(actor, normalized, Boolean(peek?.approvedAt));
   if (!row) throw new HandoffError("没有这台已拒绝的机器(指纹对不上)", 404);
   if (row.status !== "blocked") throw new HandoffError("这台机器当前没有被拒绝", 409);
   if (!row.publicKey) {
@@ -256,8 +422,13 @@ export async function unblockPeer(fingerprint: string): Promise<HandoffPeer | nu
   return toPeer({ ...row, status });
 }
 
-export async function deletePeer(fingerprint: string): Promise<void> {
-  await db.delete(handoffPeers).where(eq(handoffPeers.fingerprint, fingerprint));
+export async function deletePeer(actor: Actor, fingerprint: string): Promise<void> {
+  // 校验和删除必须用**同一个**串:指纹在库里一律小写,拿原样的大写指纹去 delete 会
+  // 一行都不匹配,端点却照样回 {deleted:true}(第 2 轮审查 P3)。
+  const normalized = fingerprint.trim().toLowerCase();
+  // 看不见就删不掉:否则「只打扰本人」在读侧做了,写侧还能拿指纹把别人的记录抹掉。
+  await requirePeerActable(actor, normalized);
+  await db.delete(handoffPeers).where(eq(handoffPeers.fingerprint, normalized));
 }
 
 /** 客户端真实 TCP 地址。反代场景会看到网关地址；不信任可伪造的 X-Forwarded-For。 */
@@ -285,7 +456,10 @@ export async function peerStanceFor(peer: VerifiedPeer | null, requireApproval: 
 export async function requireApprovedPeer(c: Context, rawBody: string | Buffer): Promise<VerifiedPeer | null> {
   const settings = await getAppSettings();
   const peer = verifyPeerSignature(c, rawBody);
-  if (peer) await touchPeer(peer, peerAddr(c));
+  // **不建新记录**:这条通道是给已经配好对的机器走的,陌生指纹到这儿一律拒。
+  // 建了的话,源机的自动状态轮询就会源源不断地在这台机器上刷出「接力申请」——
+  // 那正是 2026-08-31 那次「我没申请过却天天收到申请」的成因(见 touchPeer 顶部)。
+  if (peer) await touchPeer(peer, peerAddr(c), { create: false });
   if (!settings.handoffRequireApproval) return peer;
   if (!peer) {
     throw new HandoffError(
@@ -298,8 +472,17 @@ export async function requireApprovedPeer(c: Context, rawBody: string | Buffer):
   if (row?.status === "blocked") {
     throw new HandoffError(`目标机已明确拒绝这台来源机器(指纹 ${shortFingerprint(peer.fingerprint)})。`, 403);
   }
+  // 两种没批准分开说:**这条通道不再自动建待批准记录**(见上面的 create:false),
+  // 所以「已经在它的待批列表里等着」只对确实申请过的那种成立。对没申请过的说那句话
+  // 会让人跑到对端设置页里对着一张空表发愣。
+  if (row) {
+    throw new HandoffError(
+      `目标机还没批准这台来源机器。到目标机「设置 → 默认规则 → 接力来源」批准指纹 ${shortFingerprint(peer.fingerprint)} 后重试(这次申请已经在它的待批准列表里等着)。`,
+      401,
+    );
+  }
   throw new HandoffError(
-    `目标机还没批准这台来源机器。到目标机「设置 → 默认规则 → 接力来源」批准指纹 ${shortFingerprint(peer.fingerprint)} 后重试(这台机器已经出现在它的待批准列表里)。`,
+    `这台机器还没跟目标机配过对(指纹 ${shortFingerprint(peer.fingerprint)})。到本机「设置 → 默认规则 → 接力目标机」对它点一次「发送接力申请」,再让目标机上对应的人批准。`,
     401,
   );
 }
