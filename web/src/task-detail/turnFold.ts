@@ -36,6 +36,26 @@ export function nextProcessFoldOpen(
 }
 
 /**
+ * 一条回合此刻该怎么排：**跑的时候一律平铺，链路停下来那一下才折**。
+ *
+ * 折叠本身是个**重组**动作（见 splitTurnSegments）：它把最后一次动手之前的一切 —— 连同
+ * 已经说出口、已经露在外面的正文 —— 收进「执行过程」块，外面只留最后那段话。跑的过程中
+ * 干这件事，用户眼睁睁看着刚读到一半的内容被吸走：agent 一说话就收编（外面只剩最后一
+ * 句），下一个工具调用又把它们吐回来（切点后移、折不出结论），来回闪。
+ *
+ * 所以运行期不做这个判断，原样按段铺开；等整条执行链路停了（`live` 为假 —— 在跑、卡在
+ * 审查门、停在检查点等人答话、团队没收工都算没停，见 taskAttention 的
+ * isExecutionChainLive）再折一次，位置从此不再变。
+ */
+export function turnLayout(
+  segments: AgentContentSegment[],
+  { live }: { live: boolean },
+): { process: AgentContentSegment[]; conclusion: AgentContentSegment[] } {
+  if (live) return { process: [], conclusion: segments };
+  return splitTurnSegments(segments);
+}
+
+/**
  * 把一个回合切成「过程」和「结论」两段。切点是**最后一次真正动手的工具/分析事件**：
  * 在它之前的一切（含夹在两次工具调用之间的正文）折起来，在它之后吐出的正文原样露在外面。
  *

@@ -40,6 +40,28 @@ const failedSegments: AgentContentSegment[] = [
   },
 ];
 
+// 同一条回合边跑边长出来的几帧：说话 → 跑工具 → 又说话 → 又跑工具 → 再说一句。
+// 用户抱怨的就是这条时序：跑着跑着 agent 一说话，上面已经露在外面的正文和工具就被
+// 收编进「执行过程」块，外面只剩最后一句；下一个工具调用又把它们吐回来。
+const growPhases: AgentContentSegment[][] = [];
+{
+  const say = (id: string, text: string) => ({ id, markdown: text, events: [], attachments: [] });
+  const ran = (id: string, ...labels: string[]) => ({
+    id,
+    markdown: "",
+    events: labels.map((label) => ({ kind: "tool" as const, label, detail: `${label} 的载荷` })),
+    attachments: [],
+  });
+  const timeline = [
+    say("p0", "类型检查的失败仍是 vite.config.ts 的 Node 类型缺失。\n"),
+    ran("p1", "Bash", "Read"),
+    say("p2", "可见改动涉及抽屉、审查记录、预约概览三处。\n"),
+    ran("p3", "Edit"),
+    say("p4", "node_repl 没能解析到 Vite，改用仓库自己的 Node 环境。\n"),
+  ];
+  for (let index = 1; index <= timeline.length; index += 1) growPhases.push(timeline.slice(0, index));
+}
+
 // 真会话流（不是直接摆 AgentTurnBody）：钉的是两个 feed 自己怎么判「链路停没停」——
 // 只钉 nextProcessFoldOpen 的话，喂给它的那个布尔算错了照样红不了。
 //
@@ -122,16 +144,21 @@ function Turn({
   initialRunning,
   initialTaskLive = initialRunning,
   turnSegments = segments,
+  phases,
 }: {
   name: string;
   initialRunning: boolean;
   /** 整个任务还在跑。缺省跟着回合走（回合在飞，任务当然在跑）。 */
   initialTaskLive?: boolean;
   turnSegments?: AgentContentSegment[];
+  /** 一条回合边跑边长出来的几帧：按 data-role="grow" 逐帧前进。 */
+  phases?: AgentContentSegment[][];
 }) {
   const [running, setRunning] = useState(initialRunning);
   const [taskLive, setTaskLive] = useState(initialTaskLive);
   const [nonce, setNonce] = useState(0);
+  const [phase, setPhase] = useState(0);
+  const shown = phases ? phases[Math.min(phase, phases.length - 1)]! : turnSegments;
   return (
     <div className="task-message task-message--agent" data-case={name}>
       <span className="task-message-avatar" aria-hidden="true">A</span>
@@ -154,7 +181,8 @@ function Turn({
           重新开跑
         </button>
         <button type="button" data-role="repaint" onClick={() => setNonce(nonce + 1)}>触发重绘 {nonce}</button>
-        <AgentTurnBody segments={turnSegments} running={running} taskLive={taskLive} />
+        {phases && <button type="button" data-role="grow" onClick={() => setPhase(phase + 1)}>再跑一步 {phase}</button>}
+        <AgentTurnBody segments={shown} running={running} taskLive={taskLive} />
       </div>
     </div>
   );
@@ -170,6 +198,8 @@ createRoot(document.getElementById("root")!).render(
     <Turn name="history" initialRunning={false} initialTaskLive />
     {/* 未确认完成而记 failed 的回合：结算那条异常不许把整篇回答折进过程 */}
     <Turn name="failed" initialRunning={false} turnSegments={failedSegments} />
+    {/* 边跑边长：每一帧都不许重组，说过的话一直留在外面 */}
+    <Turn name="grow" initialRunning phases={growPhases} />
     {/* 回合收口了，但任务卡在审查门上 / 团队执行者还在干活：链路没停，不许折 */}
     <SingleFeed />
     <TeamLeadFeed />
