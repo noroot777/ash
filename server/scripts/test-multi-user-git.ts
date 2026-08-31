@@ -296,6 +296,62 @@ const WRITE_ROUTES: { path: string; method: string; body?: unknown; what: string
   );
 }
 
+// ── ⑦ 接力申请按人归属:一条申请只打扰它冲着的那个人 ──────────────────────
+// 用户 2026-08-31 拍板改的语义。原来是「全员可见可批」——4 个账号一起被顶部横幅
+// 打断，而且任何一个人都能替本人放行一台机器(放行 = 那台机器上所有人都进得来)。
+// 判据在 handoff-peers.ts `peerAudience`，这里走真 Request 钉住它的读写两侧。
+{
+  const { handoffPeers } = await import("../src/db/schema.js");
+  const fp = (seed: string) => seed.repeat(64).slice(0, 64);
+  const mine = fp("a");      // member 用自己的对端 key 申请的
+  const others = fp("b");    // owner 申请的
+  const orphan = fp("c");    // 没带 key / 单人源机 / 老库遗留
+  const at = new Date().toISOString();
+  for (const [fingerprint, requestedByUserId] of [
+    [mine, member.id], [others, owner.id], [orphan, null],
+  ] as const) {
+    await db.insert(handoffPeers).values({
+      fingerprint, publicKey: "pk", name: `peer-${fingerprint.slice(0, 1)}`, status: "pending",
+      firstSeenAt: at, lastSeenAt: at, approvedAt: null, approvedBy: null,
+      peerMode: "single", lastAddr: "", requestedByUserId,
+    });
+  }
+  const seenBy = async (key: string): Promise<Set<string>> => {
+    const res = await call("/api/handoff/peers", "GET", key);
+    assert.equal(res.status, 200, res.text);
+    return new Set((res.body.peers as { fingerprint: string }[]).map((p) => p.fingerprint));
+  };
+
+  const memberSees = await seenBy(memberKey);
+  assert.ok(memberSees.has(mine), "自己的申请当然要看得见");
+  assert.ok(!memberSees.has(others), "别人的申请不该来打扰我");
+  assert.ok(memberSees.has(orphan), "无主申请退回全员可见 —— 否则谁都看不见就永远批不了");
+
+  const ownerSees = await seenBy(ownerKey);
+  assert.ok(ownerSees.has(others) && !ownerSees.has(mine), "反向同理");
+
+  // 管理员看得见全部:approved 名单是实例级信任表,人走了、key 换了总得有人能审计撤销。
+  const bossSees = await seenBy(bossKey);
+  assert.ok(bossSees.has(mine) && bossSees.has(others), "实例管理员要能审计整张信任表");
+  const bossRows = (await call("/api/handoff/peers", "GET", bossKey)).body.peers as
+    { fingerprint: string; seenAsAdmin?: boolean }[];
+  assert.equal(
+    bossRows.find((p) => p.fingerprint === mine)?.seenAsAdmin, true,
+    "管理员看到别人的申请时要标出「你是以管理员身份看到的」,界面才说得清为什么它在这儿",
+  );
+
+  // 写侧同一道闸:读侧收窄了、写侧还能拿指纹动别人的记录,等于没收窄。
+  const steal = await call(`/api/handoff/peers/${mine}/approve`, "POST", ownerKey);
+  assert.equal(steal.status, 404, `不该让人替别人放行一台机器:${steal.text}`);
+  const wipe = await call(`/api/handoff/peers/${mine}`, "DELETE", ownerKey);
+  assert.equal(wipe.status, 404, `删除同理:${wipe.text}`);
+
+  const own = await call(`/api/handoff/peers/${mine}/approve`, "POST", memberKey);
+  assert.equal(own.status, 200, `本人批自己的申请必须放行:${own.text}`);
+  const anyone = await call(`/api/handoff/peers/${orphan}/approve`, "POST", ownerKey);
+  assert.equal(anyone.status, 200, `无主申请谁都能批:${anyone.text}`);
+}
+
 console.log("multi-user git/host/handoff gates ok");
 await releaseTmpDb();
 rmSync(stage, { recursive: true, force: true });
