@@ -24,7 +24,7 @@ import {
   canonicalRequest, fingerprintOf, sha256Hex, shortFingerprint, verifyWithPeerKey,
 } from "./handoff-identity.js";
 import type { Actor } from "./auth/context.js";
-import { ownerIdOf } from "./auth/context.js";
+import { isAccountHolder, ownerIdOf } from "./auth/context.js";
 import { now } from "./util.js";
 
 export const PEER_HEADERS = {
@@ -196,7 +196,7 @@ export async function touchPeer(
 
 const toPeer = (
   row: typeof handoffPeers.$inferSelect,
-  extra?: { byName?: string; requestedByName?: string; seenAsAdmin?: boolean },
+  extra?: { byName?: string; requestedByName?: string; seenAsAdmin?: boolean; canApprove?: boolean },
 ): HandoffPeer => ({
   fingerprint: row.fingerprint,
   short: shortFingerprint(row.fingerprint),
@@ -208,6 +208,7 @@ const toPeer = (
   ...(extra?.byName ? { approvedByName: extra.byName } : {}),
   ...(extra?.requestedByName ? { requestedByName: extra.requestedByName } : {}),
   ...(extra?.seenAsAdmin ? { seenAsAdmin: true } : {}),
+  ...(extra?.canApprove === undefined ? {} : { canApprove: extra.canApprove }),
   ...(row.peerMode ? { peerMode: row.peerMode } : {}),
   lastAddr: row.lastAddr,
   returnOnly: !row.publicKey,
@@ -221,26 +222,39 @@ const toPeer = (
  * 「我在对端的账号 key」已经说明了它要以谁的身份进来,对端没有理由把它推给另外几个
  * 不相干的人,更不该让他们替本人放行一台机器。
  *
- * 三档:
- *   · 自用模式 → 恒真(没有用户概念,机器级配对即全部授权)
- *   · 有主记录 → 本人 + 实例管理员。管理员这一格不是为了替人做决定,而是因为
- *     approved 名单是实例级信任表:人走了、key 换了,总得有人能审计和撤销
- *   · **无主记录 → 只有实例管理员**。多人实例已经不再收无主申请了(handoff-routes.ts
- *     的 ping:认不出主人就不落库,源机那边会被提示先补 key),所以这一档只剩两种存量:
- *     升级前落下的老行,以及单人时期建的记录。给全员看等于把那条已经关掉的口子又
- *     从读侧开回来;给谁都不看则会留下没人能撤销的 approved 孤儿 —— 管理员这一格
- *     正是为收拾它们而留。
+ * **看得见 ≠ 批得了**,两件事分开(第 1 轮审查 P1)。用户的原话是「只有发送请求的那个
+ * 用户才能看得见,并操作是否接受」,所以:
+ *
+ *   · `approve` = 放行,**只有本人**。放行一台机器等于让它上面所有人都敲得开本机的门,
+ *     这是扩权,谁都替不了当事人 —— 管理员也不行。
+ *   · `block` / `unblock` / `delete` = 收紧与清理,本人 + 实例管理员。这是收权不是扩权,
+ *     而 approved 名单是**实例级**信任表:人走了、key 换了、升级前落下无主老行,总得有人
+ *     能撤销和收拾,否则就是一批谁也动不了的孤儿。
+ *   · 可见:本人 + 管理员(后者带 `asAdmin`,界面据此说明「你是以管理员身份看到的」,
+ *     并且不给他「批准」按钮)。
+ *
+ * **agent 回合凭证一律不算本人**。它身上挂的 owner userId 是归属戳,不是「它就是这个
+ * 人」(auth/context.ts `isAccountHolder`)。不判这一条的话,任意一条正在跑的任务只凭
+ * `x-ash-source-task-id` + `x-ash-turn-token` 就能替 owner 放行一台陌生机器,还把操作人
+ * 记成 owner 本人(第 1 轮审查 P1 实测复现)。写侧另有 `personal-gate.ts` 的中间件兜底,
+ * 两道都要 —— 判据自己立不住的话,中间件那份路径名单迟早会漏掉一条。
+ *
+ * 自用模式恒真:没有用户概念,机器级配对即全部授权。
  */
 export function peerAudience(
   actor: Actor,
   row: { requestedByUserId?: string | null },
-): { visible: boolean; asAdmin: boolean } {
-  if (actor.kind === "single") return { visible: true, asAdmin: false };
+): { visible: boolean; asAdmin: boolean; canApprove: boolean } {
+  if (actor.kind === "single") return { visible: true, asAdmin: false, canApprove: true };
+  // agent 不是账号本人:读写两侧一起挡,别让它连别人的申请列表都翻得到。
+  if (!isAccountHolder(actor)) return { visible: false, asAdmin: false, canApprove: false };
   const owner = row.requestedByUserId ?? null;
-  if (owner && actor.userId && actor.userId === owner) return { visible: true, asAdmin: false };
+  if (owner && actor.userId && actor.userId === owner) {
+    return { visible: true, asAdmin: false, canApprove: true };
+  }
   return actor.role === "admin"
-    ? { visible: true, asAdmin: true }
-    : { visible: false, asAdmin: false };
+    ? { visible: true, asAdmin: true, canApprove: false }
+    : { visible: false, asAdmin: false, canApprove: false };
 }
 
 /**
@@ -264,28 +278,43 @@ export async function listPeers(actor: Actor): Promise<HandoffPeer[]> {
           ? { requestedByName: names.get(row.requestedByUserId) ?? "(已删除)" }
           : {}),
         ...(audience.asAdmin ? { seenAsAdmin: true } : {}),
+        canApprove: audience.canApprove,
       })];
     })
     .sort((a, b) => rank(a.status) - rank(b.status) || b.lastSeenAt.localeCompare(a.lastSeenAt));
 }
 
-/** 处置前的同一道闸。看不见的记录一律回「没有这台机器」,免得拿指纹试探别人的申请。 */
+/**
+ * 处置前的同一道闸。看不见的记录一律回「没有这台机器」,免得拿指纹试探别人的申请。
+ * `approving` 为真时再加一道:放行只有本人做得了(见 `peerAudience`),管理员看得见
+ * 也批不了 —— 这一档要**明说**而不是回 404,不然管理员会对着一条自己列表里明明有的
+ * 记录得到「没有这台机器」。
+ */
 async function requirePeerActable(
   actor: Actor,
   fingerprint: string,
+  approving = false,
 ): Promise<typeof handoffPeers.$inferSelect | null> {
   const row = (await db.select().from(handoffPeers).where(eq(handoffPeers.fingerprint, fingerprint))).at(0);
   if (!row) return null;
-  if (!peerAudience(actor, row).visible) {
+  const audience = peerAudience(actor, row);
+  if (!audience.visible) {
     throw new HandoffError("没有这台接力来源机器(指纹对不上)", 404);
+  }
+  if (approving && !audience.canApprove) {
+    throw new HandoffError(
+      "这条接力申请只有它冲着的那个人能接受 —— 放行一台机器等于让它上面所有人都敲得开本机的门。"
+      + "你可以拒绝或删除它,但接受得由本人来点。",
+      403,
+    );
   }
   return row;
 }
 
 /**
- * 批准 / 拒绝一台入站机器。可操作的人由 `peerAudience` 定(本人 + 管理员,无主记录
- * 全员),所以 `by` 必填 —— 放行一台机器等于让它上面所有人都敲得开本机的门,
- * 事后必须能问出是谁点的。
+ * 批准 / 拒绝一台入站机器。谁能点由 `peerAudience` 定:接受只有本人,拒绝本人和实例
+ * 管理员都行。`by` 必填 —— 放行一台机器等于让它上面所有人都敲得开本机的门,事后必须
+ * 能问出是谁点的。
  */
 export async function setPeerStatus(
   actor: Actor,
@@ -295,7 +324,7 @@ export async function setPeerStatus(
   const by = ownerIdOf(actor);
   const normalized = fingerprint.trim().toLowerCase();
   if (!/^[a-f0-9]{64}$/.test(normalized)) throw new HandoffError("机器指纹格式不正确", 400);
-  const row = await requirePeerActable(actor, normalized);
+  const row = await requirePeerActable(actor, normalized, status === "approved");
   if (!row) {
     if (status !== "blocked") throw new HandoffError("没有这台接力来源机器(指纹对不上)", 404);
     const at = now();
@@ -338,7 +367,11 @@ export async function setPeerStatus(
 export async function unblockPeer(actor: Actor, fingerprint: string): Promise<HandoffPeer | null> {
   const normalized = fingerprint.trim().toLowerCase();
   if (!/^[a-f0-9]{64}$/.test(normalized)) throw new HandoffError("机器指纹格式不正确", 400);
-  const row = await requirePeerActable(actor, normalized);
+  // 解除拒绝会把**曾经批准过**的记录直接送回 approved —— 那一档是放行,同样只有本人
+  // 能点,否则管理员一个 block+unblock 就绕开了「接受得由本人来」。没批准过的只回
+  // pending(不是放行),谁都能解。判定要在读库之后,所以先不带 approving 取一次行。
+  const peek = (await db.select().from(handoffPeers).where(eq(handoffPeers.fingerprint, normalized))).at(0);
+  const row = await requirePeerActable(actor, normalized, Boolean(peek?.approvedAt));
   if (!row) throw new HandoffError("没有这台已拒绝的机器(指纹对不上)", 404);
   if (row.status !== "blocked") throw new HandoffError("这台机器当前没有被拒绝", 409);
   if (!row.publicKey) {

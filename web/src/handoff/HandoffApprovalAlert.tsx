@@ -105,10 +105,14 @@ export function HandoffApprovalAlert({
         )}
       </div>
       <div className="handoff-approval-alert-actions">
-        <Button variant="primary" disabled={busy} onClick={() => void decide("approve")}>
-          {busy ? <SpinnerGap size={13} className="is-spinning" aria-hidden="true" /> : <Check size={13} aria-hidden="true" />}
-          接受申请
-        </Button>
+        {/* 批不了就别露按钮:管理员看得见这条,但接受得由本人点(后端 requirePeerActable
+            会 403)。留一颗按下去就报错的按钮只会让人以为功能坏了。 */}
+        {peer.canApprove !== false && (
+          <Button variant="primary" disabled={busy} onClick={() => void decide("approve")}>
+            {busy ? <SpinnerGap size={13} className="is-spinning" aria-hidden="true" /> : <Check size={13} aria-hidden="true" />}
+            接受申请
+          </Button>
+        )}
         <Button variant="ghost" disabled={busy} onClick={() => void decide("block")}>
           <Prohibit size={13} aria-hidden="true" />拒绝
         </Button>

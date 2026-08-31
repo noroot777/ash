@@ -341,10 +341,20 @@ const WRITE_ROUTES: { path: string; method: string; body?: unknown; what: string
     "实例管理员要能审计整张信任表，包括没人认领的老行",
   );
   const bossRows = (await call("/api/handoff/peers", "GET", bossKey)).body.peers as
-    { fingerprint: string; seenAsAdmin?: boolean }[];
+    { fingerprint: string; seenAsAdmin?: boolean; canApprove?: boolean }[];
+  const bossRow = bossRows.find((p) => p.fingerprint === mine);
   assert.equal(
-    bossRows.find((p) => p.fingerprint === mine)?.seenAsAdmin, true,
+    bossRow?.seenAsAdmin, true,
     "管理员看到别人的申请时要标出「你是以管理员身份看到的」,界面才说得清为什么它在这儿",
+  );
+  // 看得见 ≠ 批得了(第 1 轮审查 P1-2)。这一位是界面露不露「批准」按钮的唯一依据 ——
+  // 留一颗按下去就 403 的按钮,用户只会得出「功能坏了」。
+  assert.equal(bossRow?.canApprove, false, "管理员看得见别人的申请,但接受得由本人点");
+  const memberRows = (await call("/api/handoff/peers", "GET", memberKey)).body.peers as
+    { fingerprint: string; canApprove?: boolean }[];
+  assert.equal(
+    memberRows.find((p) => p.fingerprint === mine)?.canApprove, true,
+    "本人当然批得了自己的申请",
   );
 
   // 写侧同一道闸:读侧收窄了、写侧还能拿指纹动别人的记录,等于没收窄。
@@ -355,10 +365,23 @@ const WRITE_ROUTES: { path: string; method: string; body?: unknown; what: string
   const orphanGrab = await call(`/api/handoff/peers/${legacy}/approve`, "POST", ownerKey);
   assert.equal(orphanGrab.status, 404, `无主老行也不是谁都能批:${orphanGrab.text}`);
 
+  // 管理员这一档要**明说**:回 404 的话他会对着一条自己列表里明明有的记录得到「没有这台机器」。
+  const adminGrab = await call(`/api/handoff/peers/${mine}/approve`, "POST", bossKey);
+  assert.equal(adminGrab.status, 403, `管理员也替不了本人放行:${adminGrab.text}`);
+  const orphanByAdmin = await call(`/api/handoff/peers/${legacy}/approve`, "POST", bossKey);
+  assert.equal(orphanByAdmin.status, 403, `无主老行同理,没人认领就没人能批:${orphanByAdmin.text}`);
+
   const own = await call(`/api/handoff/peers/${mine}/approve`, "POST", memberKey);
   assert.equal(own.status, 200, `本人批自己的申请必须放行:${own.text}`);
-  const byAdmin = await call(`/api/handoff/peers/${legacy}/approve`, "POST", bossKey);
-  assert.equal(byAdmin.status, 200, `管理员要收拾得了无主老行:${byAdmin.text}`);
+  // 收紧和清理是另一面:approved 名单是实例级信任表,人走了、key 换了、无主老行,
+  // 总得有人撤销得了,否则就是一批谁也动不了的孤儿。
+  const adminBlock = await call(`/api/handoff/peers/${mine}/block`, "POST", bossKey);
+  assert.equal(adminBlock.status, 200, `管理员要撤销得了已放行的机器:${adminBlock.text}`);
+  const adminWipe = await call(`/api/handoff/peers/${legacy}`, "DELETE", bossKey);
+  assert.equal(adminWipe.status, 200, `无主老行也得有人收拾得掉:${adminWipe.text}`);
+  // 拉黑再解除会**恢复**原来的 approved —— 那也是放行,不能成为绕过「只有本人能批」的后门。
+  const adminUnblock = await call(`/api/handoff/peers/${mine}/unblock`, "POST", bossKey);
+  assert.equal(adminUnblock.status, 403, `拉黑再解除不能变成替本人放行的后门:${adminUnblock.text}`);
 }
 
 // ── ⑧ 多人实例不收无主申请 ────────────────────────────────────────────────

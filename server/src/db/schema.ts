@@ -605,8 +605,9 @@ export const handoffPeers = sqliteTable("handoff_peers", {
   // 自用模式恒空(只有一个人)。
   approvedBy: text("approved_by"),
   // 这次配对申请代表本机的哪个账号:源机发申请时带的「我在对端的账号 key」认出来的人。
-  // **待批准的申请只打扰这个人**(加上实例管理员,他要能收拾无主记录)。空 = 无主,
-  // 退回全员可见 —— 否则一条没带 key 的申请谁都看不见,就永远批不了。判据见
+  // **一条申请只打扰这个人**,也只有他能接受。多人模式下认不出主人的申请压根不落库
+  // (没有「无主申请」这回事,见 handoff-routes.ts 的 ping);空值只出现在单人时期或
+  // 升级前落下的存量行上,那些行只有管理员看得见、能拒能删但批不了。判据见
   // handoff-peers.ts `peerAudience`。
   requestedByUserId: text("requested_by_user_id"),
   // 对端**自报**的实例模式(`single` / `multi:<人数>`)。自报的东西不做权限判据,

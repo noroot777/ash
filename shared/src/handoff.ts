@@ -66,12 +66,19 @@ export interface HandoffPeer {
   approvedByName?: string;
   /**
    * 这次申请代表本机的哪个账号 —— 源机发申请时带的「我在对端的账号 key」认出来的人。
-   * 有它的申请只打扰这个人;没有它的(单人源机、没配 key、老库遗留)退回全员可见,
-   * 否则一条无主申请谁都看不见 = 永远批不了。判据在 server/src/handoff-peers.ts。
+   * 一条申请只打扰这个人。对端是多人实例时它必有：认不出主人的申请根本不受理
+   * （没有「无主申请」这回事，见 server/src/handoff-routes.ts 的 ping）。空值只出现在
+   * 单人时期或升级前落下的存量行上。判据在 server/src/handoff-peers.ts `peerAudience`。
    */
   requestedByName?: string;
   /** 当前登录者是不是因为管理员身份才看见这条(本人则为 false)。UI 据此说明原因。 */
   seenAsAdmin?: boolean;
+  /**
+   * 当前登录者能不能**接受**这条申请。放行是扩权（那台机器上所有人都敲得开本机的门），
+   * 只有申请冲着的本人能点；管理员看得见、能拒绝能删，但批不了。UI 据此决定露不露
+   * 「批准」按钮 —— 留一颗按下去 403 的按钮只会让人以为功能坏了。
+   */
+  canApprove?: boolean;
   /** 对端自报的实例模式:`single` / `multi:<人数>`。不可信,只为知情批准。 */
   peerMode?: string;
   /** 最近一次来访地址,纯展示。 */

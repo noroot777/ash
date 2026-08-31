@@ -408,8 +408,8 @@ export function mountHandoffRoutes(api: Hono): void {
       if (action === "unblock") {
         return c.json({ unblocked: true, peer: await unblockPeer(actor, c.req.param("fingerprint")) });
       }
-      // 谁能点由 peerAudience 定(申请人本人 + 管理员;无主申请全员)。放行一台机器
-      // 等于让它上面所有人都敲得开本机的门,所以操作人一律记下。
+      // 谁能点由 peerAudience 定:申请冲着的本人可批可拒,管理员看得见、能拒能删但
+      // 批不了。放行一台机器等于让它上面所有人都敲得开本机的门,所以操作人一律记下。
       return c.json(await setPeerStatus(
         actor,
         c.req.param("fingerprint"),

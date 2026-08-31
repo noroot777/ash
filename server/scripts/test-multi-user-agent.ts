@@ -250,7 +250,17 @@ const AS_ALICE = { authorization: `Bearer ${aliceKey}` };
 // 接力目标机。一条任务的凭证改得动它们,就等于一条任务能改写这个账号往后的运行方式
 // (第 1 轮审查 P1 实测:`POST /api/llm-providers` 201,在 alice 名下建出了供应商)。
 {
-  const { llmProviders, reviewerProfiles, teamPresets, workflows } = await import("../src/db/schema.js");
+  const { llmProviders, reviewerProfiles, teamPresets, workflows, handoffPeers } =
+    await import("../src/db/schema.js");
+  // 入站接力来源:批准一台机器 = 它上面所有人都敲得开本机的门,比改一个供应商还重。
+  // 先摆一条冲着 alice 来的待批准记录,好验证被拒之后它**还在待批准**。
+  const peerFp = "d".repeat(64);
+  const peerAt = new Date().toISOString();
+  await db.insert(handoffPeers).values({
+    fingerprint: peerFp, publicKey: "pk", name: "evil-box", status: "pending",
+    firstSeenAt: peerAt, lastSeenAt: peerAt, approvedAt: null, approvedBy: null,
+    peerMode: "single", lastAddr: "", requestedByUserId: alice.id,
+  });
   const WRITES: { path: string; method: string; body?: unknown; what: string }[] = [
     { path: "/api/llm-providers", method: "POST", body: { name: "agent-added", protocol: "openai", baseUrl: "https://evil.example.com", apiKey: "secret" }, what: "建供应商" },
     { path: "/api/agents", method: "POST", body: { name: "agent-added-executor", type: "claude" }, what: "建执行器" },
@@ -265,6 +275,9 @@ const AS_ALICE = { authorization: `Bearer ${aliceKey}` };
     { path: "/api/notes", method: "POST", body: { projectId: "p-source", body: "agent 写的随手记" }, what: "写随手记" },
     { path: `/api/agents/ex-alice`, method: "PATCH", body: { name: "HIJACKED" }, what: "改 owner 的执行器" },
     { path: `/api/agents/ex-alice`, method: "DELETE", what: "删 owner 的执行器" },
+    // 第 1 轮审查 P1 实测:只带那两个头就把冲着 alice 的入站来源批了,还把操作人记成 alice。
+    { path: `/api/handoff/peers/${peerFp}/approve`, method: "POST", what: "替 owner 批准入站接力来源" },
+    { path: `/api/handoff/peers/${peerFp}`, method: "DELETE", what: "删 owner 的入站接力来源" },
   ];
   for (const w of WRITES) {
     const denied = await call(w.path, w.method, AS_AGENT, w.body);
@@ -276,6 +289,9 @@ const AS_ALICE = { authorization: `Bearer ${aliceKey}` };
   assert.equal((await db.select().from(workflows)).length, 0, "被拒的起手式不许落库");
   assert.equal((await db.select().from(reviewerProfiles)).length, 0, "被拒的审查者不许落库");
   assert.equal((await db.select().from(teamPresets)).length, 0, "被拒的团队预设不许落库");
+  const stillPending = (await db.select().from(handoffPeers)).at(0);
+  assert.equal(stillPending?.status, "pending", "被拒的批准不许真把来源机放行");
+  assert.equal(stillPending?.approvedBy, null, "更不许把操作人记成账号本人");
   const executors = await db.select().from(agents);
   assert.equal(executors.length, 1, "执行器既不许多出来,也不许被删");
   assert.equal(executors[0].name, "Alice Executor", "owner 的执行器不许被改名");

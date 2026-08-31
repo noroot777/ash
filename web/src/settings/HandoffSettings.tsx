@@ -61,8 +61,9 @@ export function HandoffSettings({
   // 两件事,门禁不一样:
   //  · **入站策略**(要不要审批、加不加密、载荷上限)= 整台机器的安全姿态,一个人关掉
   //    等于替所有人开门,所以多人模式下只有实例管理员能改(§八 实例面)。
-  //  · **来源名单**的批准/拒绝 = 计划点名的「全员可见可批」(§十一,互信定位),
-  //    任何登录用户都能点,服务端记下操作人。
+  //  · **来源名单**按人归属:一条申请只打扰它冲着的那个人,也只有他能接受。管理员看得见
+  //    整张表、能拒能删,但批不了 —— 放行是扩权,替不了当事人(handoff-peers.ts
+  //    `peerAudience`;按钮露不露看服务端回的 `canApprove`)。服务端一律记下操作人。
   const canManageInstance = !isMulti || isInstanceAdmin;
   const lockInstance = loading || busy || !canManageInstance;
 
@@ -433,7 +434,9 @@ export function HandoffSettings({
                 )}
               </div>
               <div className="handoff-peer-actions">
-                {peer.status !== "approved" && (
+                {/* 批不了就别露按钮:管理员看得见这条、能拒能删,但接受得由申请冲着的本人点
+                    (后端 requirePeerActable 会 403)。 */}
+                {peer.status !== "approved" && peer.canApprove !== false && (
                   <Button variant="ghost" disabled={busy} onClick={() => void peerAction(peer, "approve")}>
                     <Check size={13} aria-hidden="true" />批准
                   </Button>

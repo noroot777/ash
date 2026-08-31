@@ -41,10 +41,19 @@ const PERSONAL_COLLECTIONS = new Set([
 ]);
 
 /**
- * 不在第一段上的那几条,逐条写死形状。
- *  · 接力目标机装着「我在对端的账号 key」,但它住在 `/api/handoff/` 这一族下面。
+ * 不在第一段上的那几条,逐条写死形状。两条都住在 `/api/handoff/` 这一族下面。
+ *  · 接力目标机装着「我在对端的账号 key」。
+ *  · 接力**来源**名单管的是「谁能把任务推进这台机器」。批准一台来源机 = 让它上面所有人
+ *    都敲得开本机的门,比改一个供应商还重;而按人归属之后,它同样是一张逐人隔离的表
+ *    (handoff-peers.ts `peerAudience`)。回合凭证身上挂的 owner userId 是**归属戳**,
+ *    不是「它就是这个人」—— 不登记进来的话,任意一条正在跑的任务只凭
+ *    `x-ash-source-task-id` + `x-ash-turn-token` 就能替 owner 放行一台陌生机器,
+ *    还会把操作人记成 owner 本人(第 1 轮审查 P1)。
  */
-const PERSONAL_PATHS = [/^\/api\/handoff\/targets(?:\/|$)/];
+const PERSONAL_PATHS = [
+  /^\/api\/handoff\/targets(?:\/|$)/,
+  /^\/api\/handoff\/peers(?:\/|$)/,
+];
 
 export const AGENT_PERSONAL_REFUSAL =
   "个人资源与账号设置只对账号本人开放：回合凭证代表的是那一条任务，不是这个账号";
