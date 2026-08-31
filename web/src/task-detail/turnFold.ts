@@ -15,6 +15,26 @@ function isHandsOn(event: ExecutionEvent): boolean {
 }
 
 /**
+ * 过程折叠块此刻该不该自动开合。`null` = 什么都别做，维持现在的样子。
+ *
+ * 只有两个自动动作，其余一概不动：
+ * - **摊开**：这一回合正在飞（不然用户盯着一行摘要不知道在干嘛）。
+ * - **收起**：整个任务都不跑了，也就是「最后一步确认执行完了」那一下。
+ *
+ * 中间态（回合收口了、任务还在跑）刻意什么都不做。回合边界在一次运行里能出现好几次
+ * ——换下一轮、就地验证、会话行 endedAt 落下来的那一瞬 —— 拿它当收起信号，用户会在
+ * 跑的过程中被反复折叠，正读着的那段过程说没就没了。
+ */
+export function nextProcessFoldOpen(
+  { running, taskLive, touched }: { running: boolean; taskLive: boolean; touched: boolean },
+): boolean | null {
+  // 用户自己动过折角就以他的选择为准，不再自动开合。
+  if (touched) return null;
+  if (running) return true;
+  return taskLive ? null : false;
+}
+
+/**
  * 把一个回合切成「过程」和「结论」两段。切点是**最后一次真正动手的工具/分析事件**：
  * 在它之前的一切（含夹在两次工具调用之间的正文）折起来，在它之后吐出的正文原样露在外面。
  *

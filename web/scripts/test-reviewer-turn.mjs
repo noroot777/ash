@@ -30,7 +30,7 @@ const session = {
   reasoningEffort: "xhigh",
 };
 // 回合哨兵行:落盘格式是 \x1e + 一行 JSON(见 shared 的 parseSessionOutput)。
-const turn = (kind, text, at) => `\x1e${JSON.stringify({ t: kind, text, at })}`;
+const turn = (kind, text, at, extra = {}) => `\x1e${JSON.stringify({ t: kind, text, at, ...extra })}`;
 const run = (turnStartedAt, verifyRound) => ({
   at: turnStartedAt,
   turnStartedAt,
@@ -79,7 +79,7 @@ assert.equal(impl.sessionId, verify.sessionId, "这三段本来就跑在同一�
 const firstLane = conversationFeedRows(items).find((row) => row.kind === "review-lane");
 assert.ok(firstLane, "第 2 轮就地验证应整理成验证卡");
 assert.equal(firstLane.round, 2);
-assert.deepEqual(firstLane.items.map((item) => item.id), [startNote.id, verify.id, failNote.id]);
+assert.deepEqual(firstLane.items.map((item) => item.id), [verify.id, failNote.id], "卡头已有轮次和时间，正文不重复开始旁注");
 assert.equal(firstLane.conclusion, "verify_failed");
 assert.equal(firstLane.complete, true);
 assert.equal(firstLane.reportAvailable, true, "跑完且审查者确实说过话，才有可看的 report.md");
@@ -296,8 +296,8 @@ assert.deepEqual(freeLane.report, { kind: "free", runId: "fr1", round: 1 });
 assert.equal(freeLane.reportAvailable, true);
 assert.deepEqual(
   freeLane.items.map((item) => item.kind),
-  ["event", "agent", "event"],
-  "起旁注、审查正文、收尾旁注是同一张卡",
+  ["agent", "event"],
+  "卡内只保留审查正文和收尾结论，不重复开始旁注",
 );
 
 const freeLaneNoState = conversationFeedRows(freeLaneItems).find((row) => row.kind === "review-lane");

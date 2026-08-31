@@ -43,6 +43,26 @@ export type ConversationFeedRow =
 type ActiveLane = ConversationReviewLane & { reviewerSpoke: boolean };
 
 const STAGE_CONCLUSION = /验收阶段更新：.*（(verified|verify_failed)）/;
+const FREE_REVIEW_REPAIR_HANDOFF = /^【自由工作流审查未通过(?:\s*·[^】]+)?】/;
+const INLINE_REVIEW_REPAIR_HANDOFF = /^【自动(?:验证|审查)未通过(?:\s*·[^】]+)?】/;
+
+type RepairHandoffKind = "free" | "inline";
+
+function repairHandoffKind(item: ConversationItem): RepairHandoffKind | null {
+  if (item.kind !== "user" || !item.bySystem) return null;
+  const text = item.text.trimStart();
+  if (FREE_REVIEW_REPAIR_HANDOFF.test(text)) return "free";
+  if (INLINE_REVIEW_REPAIR_HANDOFF.test(text)) return "inline";
+  return null;
+}
+
+function visibleLaneItem(item: ConversationItem): boolean {
+  // 轮次、审查者与开始时间已经在卡头；正文再重复一遍「第 N 轮开始」只会制造双标题。
+  // checkpoint 标记只在审查卡内部降噪；普通任务仍靠它留下「曾经暂停并续跑」的持久痕迹。
+  if (laneStart(item) !== null) return false;
+  if (item.kind === "event" && item.text.includes(LEGACY_SYS_MARKER)) return false;
+  return repairHandoffKind(item) === null;
+}
 
 function itemEnd(item: ConversationItem): string | null {
   if (item.kind === "agent") return item.markerEndedAt ?? item.endedAt ?? item.at ?? null;
@@ -129,7 +149,7 @@ function finishLane(
     if (lane.reportAvailable && lane.round !== null) lane.report = { kind: "inline", round: lane.round };
   }
   const { reviewerSpoke: _reviewerSpoke, ...finished } = lane;
-  return finished;
+  return { ...finished, items: finished.items.filter(visibleLaneItem) };
 }
 
 function titleOf(source: ReviewLaneSource, round: number | null, totalRounds: number | null): string {
@@ -196,6 +216,23 @@ function attachReports(lanes: ConversationReviewLane[], reviews: readonly FreeRe
     lane.reportAvailable = true;
     lane.report = { kind: "free", runId: candidate.runId, round: candidate.round };
   }
+  // 刚开的那一轮可能还没有对应的 round 行（服务端先写旁注、后插行，快照也可能差一拍），
+  // 上面按轮号配对就配不到它。分母是整条 run 的属性，同一条链不能这张带、下一张不带 ——
+  // 用时间上最近、且轮号更小的那条候选兜底（轮号更小 = 确实是同一条链在往下走，不会把
+  // 上一条已结束的审查的上限套到新开的一条上）。
+  const freeCandidates = candidates.filter((candidate) => candidate.source === "free");
+  for (const lane of lanes) {
+    if (lane.source !== "free" || lane.totalRounds !== null || lane.round === null) continue;
+    const at = lane.startedAt ? Date.parse(lane.startedAt) : Number.NaN;
+    if (!Number.isFinite(at)) continue;
+    const owner = freeCandidates.findLast((candidate) => {
+      const started = Date.parse(candidate.startedAt);
+      return Number.isFinite(started) && started <= at && candidate.round < lane.round!;
+    });
+    if (!owner?.totalRounds) continue;
+    lane.totalRounds = owner.totalRounds;
+    lane.title = titleOf(lane.source, lane.round, owner.totalRounds);
+  }
 }
 
 // D 方案的结构推导：把「第 N 轮验证开始」「自由工作流第 N 轮审查开始」「合并结果审查开始」
@@ -256,5 +293,17 @@ export function conversationFeedRows(
     // 正在跑的轮次展开，避免用户只看见一张不动的卡片。
     lane.defaultCollapsed = lane !== latest && lane.conclusion !== null;
   }
-  return rows;
+  // 修复交接紧跟在被打回的卡后面。就地验证的整份内嵌报告一律由卡片入口替代；自由派审
+  // 只有在 report.md 确实可打开时才隐藏原 prompt，没有报告就保留它作为证据目录兜底。
+  let previousLane: ConversationReviewLane | null = null;
+  return rows.filter((row) => {
+    if (row.kind === "review-lane") {
+      previousLane = row;
+      return true;
+    }
+    const handoff = repairHandoffKind(row.item);
+    if (handoff === "inline") return false;
+    if (handoff === "free") return !(previousLane?.source === "free" && previousLane.reportAvailable);
+    return true;
+  });
 }

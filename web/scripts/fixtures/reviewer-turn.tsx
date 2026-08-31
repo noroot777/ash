@@ -43,14 +43,17 @@ const task = {
 } as unknown as Task;
 
 // 回合哨兵行:落盘格式是 \x1e + 一行 JSON(见 shared 的 parseSessionOutput)。
-const turn = (kind: string, text: string, at: string) =>
-  `\x1e${JSON.stringify({ t: kind, text, at })}`;
+const turn = (kind: string, text: string, at: string, extra: Record<string, string> = {}) =>
+  `\x1e${JSON.stringify({ t: kind, text, at, ...extra })}`;
 
 const output = [
   "徽标、旁注竖条和头像都改完了，气泡本体没动。",
+  // 放一条普通任务续跑标记，覆盖审查卡降噪不影响主时间线的场景。
+  turn("system", "〔系统〕继续（从中断处）", "2026-08-10T03:30:00.000Z"),
   turn("system", "第 2 轮验证开始：就在这个任务的工作目录里跑。", "2026-08-10T03:40:00.000Z"),
   "起了无头浏览器复核，盾形头像和「审查者 · 第 2 轮」都在，但打回那条旁注仍是灰的。",
   turn("system", "第 2 轮验证未通过，意见已发回会话；修复完成后自动复验。", "2026-08-10T04:10:00.000Z"),
+  turn("user", "【自动验证未通过 · 第 2 轮】\n请先完整读取 report.md，再按报告修复。\n\n证据目录：/tmp/inline-review/round-2", "2026-08-10T04:10:30.000Z", { by: "system" }),
   "收到，改成红色竖条。",
   turn("system", "第 3 轮验证开始：就在这个任务的工作目录里跑。", "2026-08-10T05:00:00.000Z"),
   "复验确认身份、边界和对比度都正常，这一轮通过。",
@@ -59,7 +62,11 @@ const output = [
   turn("system", "自由工作流第 1 轮审查开始：5.5审查 · 逻辑检查。", "2026-08-10T14:59:00.000Z"),
   turn("system", "自由工作流第 1 轮审查启动失败：执行器起不来", "2026-08-10T15:00:00.000Z"),
   turn("system", "自由工作流第 1 轮审查重跑上一回合：5.5审查。", "2026-08-10T15:01:00.000Z"),
+  turn("system", "〔系统〕继续（从中断处）", "2026-08-10T15:01:30.000Z"),
   turn("system", "自由工作流第 1 轮审查通过（5.5审查）。", "2026-08-10T15:13:00.000Z"),
+  turn("user", "【自由工作流审查未通过 · 第 1 轮】\n请先完整读取 report.md，再按报告修复并调用 complete_task。\n\n证据目录：/tmp/free-review/round-1", "2026-08-10T15:13:30.000Z", { by: "system" }),
+  // 覆盖审查者尚未开口时只有卡头的状态。
+  turn("system", "自由工作流第 2 轮审查开始：5.5审查 · 逻辑检查。", "2026-08-10T16:00:00.000Z"),
 ].join("\n");
 
 const reviewOutput = "另开一条会话做完成后审查：改动范围和验收标准对得上，通过。";
