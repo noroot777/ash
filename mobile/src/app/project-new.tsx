@@ -3,6 +3,7 @@ import { View, Text, KeyboardAvoidingView, Platform, Pressable } from "react-nat
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api } from "@/lib/api";
+import { projectPathOf, scopedTail, separatorOf } from "@/lib/projectPath";
 import { useStore } from "@/lib/store";
 import { useTheme } from "@/lib/theme";
 import { Button, Input } from "@/components/ui";
@@ -30,7 +31,10 @@ export default function NewProject() {
 
   // 锁前缀的那个目录；null = 不锁（自用模式、或者我是实例管理员）。
   const [home, setHome] = useState<string | null>(null);
-  const [tail, setTail] = useState("");
+  // 目录名**不存自动填的那份**，只存用户自己打的那份：身份是异步问回来的，先打项目名、
+  // 后拿到 homeDir 是常态（冷启动、慢网络），把自动值存进 state 就得在身份到位那一刻
+  // 再补一次同步 —— 少补一次，用户就会对着一个空目录名提交，路径整个丢掉。
+  const [typedTail, setTypedTail] = useState("");
   const [tailTouched, setTailTouched] = useState(false);
   useEffect(() => {
     let alive = true;
@@ -47,14 +51,10 @@ export default function NewProject() {
 
   // 分隔符从家目录自己的形状认（Windows 的 `D:\ash-root\me`）——手机端没有 /host 那条
   // 端点，而这一段是服务端给的绝对路径，它长什么样就跟着什么样。
-  const sep = home?.includes("\\") ? "\\" : "/";
-  const prefix = home ? `${home.replace(/[\\/]+$/, "")}${sep}` : "";
-  const path = home ? (tail.trim() ? `${prefix}${tail.trim()}` : "") : repoPath.trim();
-
-  const applyName = (value: string) => {
-    setName(value);
-    if (home && !tailTouched) setTail(value.replace(/[\\/:*?"<>|]+/g, "-").trim());
-  };
+  const prefix = home ? `${home.replace(/[\\/]+$/, "")}${separatorOf(home)}` : "";
+  // 没手动改过就一直**跟着项目名算**，跟身份什么时候回来无关。
+  const tail = scopedTail(name, typedTail, tailTouched);
+  const path = projectPathOf(home, tail, repoPath);
 
   const submit = async () => {
     if (!name.trim()) {
@@ -89,7 +89,7 @@ export default function NewProject() {
 
         <View style={{ gap: 8 }}>
           <Text style={{ color: theme.faint, fontSize: 12 }}>项目名</Text>
-          <Input value={name} onChangeText={applyName} placeholder="例如 Frontend" autoFocus />
+          <Input value={name} onChangeText={setName} placeholder="例如 Frontend" autoFocus />
         </View>
 
         {home ? (
@@ -105,7 +105,7 @@ export default function NewProject() {
               </Text>
               <Input
                 value={tail}
-                onChangeText={(value) => { setTail(value.replace(/^[\\/]+/, "")); setTailTouched(true); }}
+                onChangeText={(value) => { setTypedTail(value.replace(/^[\\/]+/, "")); setTailTouched(true); }}
                 placeholder="目录名，默认跟项目名一样"
                 autoCapitalize="none"
                 autoCorrect={false}

@@ -39,6 +39,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
+    "test:project-path": "node --experimental-strip-types scripts/test-project-path.mjs",
     "lint": "expo lint"
   },
   "private": true
