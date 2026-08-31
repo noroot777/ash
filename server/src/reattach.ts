@@ -20,7 +20,7 @@ import { findMcpChannelHolders } from "./mcp-holders.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
 import { withSkillInvocation } from "./skills.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
-import { cliConfigDirForOwner } from "./auth/run-env.js";
+import { sessionCliConfigDir } from "./auth/run-env.js";
 
 // 「现在重启会打断谁」——给 scripts/restart.mjs 的安全闸用。
 //
@@ -139,8 +139,8 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
       const handle = ex.attach(child, {
         sessionId: sess.cliSessionId ?? "",
         commandLine: sess.commandLine ?? "",
-        // 那一轮跑在谁名下,它的 CLI 产物就写在谁的配置目录里(老行回落任务归属人)。
-        configDir: await cliConfigDirForOwner(sess.runOwnerUserId ?? task.ownerUserId, sess.agentType),
+        // 那一轮的 CLI 产物写在会话行记下的那个配置目录里(老行回落到按归属人现算)。
+        configDir: await sessionCliConfigDir(sess, task.ownerUserId, sess.agentType),
       });
       trackRun(task.id, handle);
       adopted.add(task.id);

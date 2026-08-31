@@ -50,6 +50,11 @@ const SETTING_SPECS = {
     ok: () => false,
     hint: "只能在转多人模式时设定，设定后锁死（一改所有已建项目路径失效）",
   },
+  // 与上面两项相反,这一项**故意可以裸 PATCH**:它不牵扯建人建目录,改一下就生效,
+  // 而且是「几个人合买一份订阅」这类团队每隔一阵就要动一次的东西(§八之二)。
+  // 它是实例面的键(不在 PERSONAL_SETTING_KEYS 里),所以 personal-settings.ts 天然
+  // 只让实例管理员改 —— 不需要在这里再写一道权限。
+  sharedHostCli: { ok: (v: unknown) => typeof v === "boolean", hint: "必须是 boolean" },
 } satisfies { [K in keyof AppSettings]: { ok: (v: unknown) => boolean; hint: string } };
 
 // 上面两项对 PATCH 永远说不,但读取仍要认得住盘里的值 —— 所以读侧另有一份校验。
@@ -94,6 +99,23 @@ export async function writeSystemSetting<K extends keyof AppSettings>(
     .insert(appSettings)
     .values({ key, value: encoded })
     .onConflictDoUpdate({ target: appSettings.key, set: { value: encoded } });
+  await invalidateInstanceCache();
+}
+
+/**
+ * `auth/mode.ts` 把 `instanceMode` / `rootDir` / `sharedHostCli` 缓存在进程内(中间件
+ * 每个请求都要问一次,不能每次查库)。**写完这张表就必须让那份缓存失效** —— 否则
+ * 「设置里把 CLI 额度改成共用」要等到下次重启才算数,而界面上它已经显示改好了。
+ *
+ * 动态 import 是为了避开静态环:`mode.ts` 依赖本模块读设置。这条路只在写设置时走,
+ * 频次极低。
+ */
+async function invalidateInstanceCache(): Promise<void> {
+  const { invalidateInstanceConfig, instanceConfig } = await import("./auth/mode.js");
+  invalidateInstanceConfig();
+  // 立刻回填:同步镜像(spawn 那条路读的那一位)只在解析实例配置时刷新,
+  // 不主动读一次的话它会一直停在旧值上,直到下一个请求偶然碰到它。
+  await instanceConfig();
 }
 
 export function parseAppSettingsPatch(input: unknown): Partial<AppSettings> {
@@ -119,5 +141,8 @@ export async function patchAppSettings(patch: Partial<AppSettings>): Promise<App
       .values({ key, value: encoded })
       .onConflictDoUpdate({ target: appSettings.key, set: { value: encoded } });
   }
+  // 无条件失效,不按 key 挑:挑就得在这里再维护一份「哪些键进了那份缓存」的清单,
+  // 而漏一个的表现是「改了不生效」——最难查的那一类。这条路每天走不了几次。
+  if (Object.keys(patch).length) await invalidateInstanceCache();
   return getAppSettings();
 }

@@ -103,7 +103,14 @@ export function DefaultsSettings({ notify }: { notify: (message: string) => void
         onChangeSeconds={patchSkillRefresh}
         notify={notify}
       />
-      {canManageInstance && <InstanceModeCard />}
+      {canManageInstance && (
+        <InstanceModeCard
+          settings={settings}
+          loading={loading}
+          onSettings={setSettings}
+          notify={notify}
+        />
+      )}
     </>
   );
 }

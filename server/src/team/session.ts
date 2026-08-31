@@ -46,11 +46,13 @@ import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET } from ".
 import { withSkillInvocation, nativeCliCommand } from "../skills.js";
 import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
+import { announceSessionNote } from "../session-notice.js";
 import { latestTeamLeadSession } from "./session-selection.js";
 import { enqueueInbound, pendingInbound, type PendingInbound } from "./inbound-queue.js";
 import type { Lead } from "./session-types.js";
 import { createSessionConsumer } from "./session-consumer.js";
-import { runEnvForTask } from "../auth/run-env.js";
+import { cliConfigDirColumn, runEnvForTask, sessionCliConfigDir, sessionResumableHere } from "../auth/run-env.js";
+import { HOST_CLI_SWITCH_SESSION_NOTE } from "@ash/shared/multiuser";
 
 const INTERRUPT_NOTE = "〔系统〕已打断调度者当前回合,插入你的新指令";
 // 「再说一句话就接回同一会话」只在会话**还在**时成立。刚被判 poisoned 作废过的话,
@@ -321,10 +323,21 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   // 只看最新一条调度台会话：最新行的 id 被清掉时应开新会话，不能越过它复活更老的
   // 上下文（会话失效和版本替换两条清理路径都依赖这个判据）。
   let prev = latestTeamLeadSession(await db.select().from(sessions).where(eq(sessions.taskId, taskId)));
-  // 调度台恒按任务归属人跑(下面 spawn 用的是 runEnvForTask),所以 rollout 也去那份
-  // CODEX_HOME 里找;老行没记 run_owner 时同样回落到它。
+  // 调度台恒按任务归属人跑(下面 spawn 用的是 runEnvForTask)。但「按谁跑」推不出
+  // 「上一段的会话文件写在哪」—— 实例把「CLI 额度」换了档(共用宿主 CLI ⇄ 每人自带
+  // key)之后,同一个人的配置目录整体挪了位置,而盘上的 transcript 没动。接不上就当
+  // 没有上一段:开新会话,而不是把一个必然扑空的 id 交给 CLI 去 --resume。
+  if (prev?.cliSessionId && !(await sessionResumableHere(prev, task.ownerUserId, task.ownerUserId, cfg.lead))) {
+    await announceSessionNote({
+      taskId, sessionId: prev.id, role: "lead", agentType: cfg.lead, text: HOST_CLI_SWITCH_SESSION_NOTE,
+    });
+    await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, prev.id));
+    prev = undefined;
+  }
+  // rollout 同样去**那一段实际写入的目录**里找(老行回落到按归属人现算)。
   const affectedSessionVersion = await affectedCodexResumeVersion(
-    cfg.lead, prev?.cliSessionId, prev?.runOwnerUserId ?? task.ownerUserId,
+    cfg.lead, prev?.cliSessionId,
+    prev ? await sessionCliConfigDir(prev, task.ownerUserId, cfg.lead) : null,
   );
   if (prev && affectedSessionVersion) {
     await announceAffectedSessionReplacement({
@@ -359,6 +372,9 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   trackRun(taskId, handle);
 
   const cliSessionId = prev?.cliSessionId ?? handle.sessionId;
+  // 这一段常驻实际注进去的 CLI 配置目录(`""` = 宿主机默认)。下一次接回时靠它判断
+  // 「这条会话还接得上吗」—— 见 db/schema.ts 的 sessions.cli_config_dir。
+  const leadConfigDir = await cliConfigDirColumn(task.ownerUserId, cfg.lead);
   if (resuming) {
     // 接回同一行会话:除了回合时间戳,**执行器那一组字段必须整组刷新** —— 用户完全
     // 可以在两段常驻之间改掉团队的执行器 profile(换 CLI、换供应商、改 CLI 配置覆盖)。
@@ -372,6 +388,8 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
         exitStatus: null,
         commandLine: handle.commandLine,
         executor: ex.label,
+        runOwnerUserId: task.ownerUserId,
+        cliConfigDir: leadConfigDir,
         ...ex.resumeFields(ws.path, cliSessionId),
       })
       .where(eq(sessions.id, sessId));
@@ -382,6 +400,9 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
       role: "lead",
       agentType: cfg.lead,
       executor: ex.label,
+      // 调度台恒按任务归属人跑(上面 spawn 用的 runEnvForTask 就是按它算的)。
+      runOwnerUserId: task.ownerUserId,
+      cliConfigDir: leadConfigDir,
       worktreePath: ws.isWorktree ? ws.path : null,
       branch: ws.branch,
       cwd: ws.path,

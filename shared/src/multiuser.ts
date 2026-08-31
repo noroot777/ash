@@ -163,18 +163,49 @@ export const canManageProject = (
 // ── 多人模式下可派发的 CLI ─────────────────────────────────────────────────
 // 约束挂在「catalog 里有没有 relay 实现」上,不写死名单(§八)。服务端从 catalog
 // 现算并经 `GET /api/agents/catalog` 报给前端;这里只留一句共用文案。
+//
+// ⚠ 这几条只在**隔离**档下成立(`sharedHostCli === false`,§八之二)。共用宿主 CLI 时
+// 派发闸整个不生效 —— 服务端的判据统一走 `auth/mode.ts` 的 `isHostCliIsolated()`,
+// 别在别处按 `mode === "multi"` 另起一份。
 export const MULTI_USER_CLI_BLOCKED = (cli: string): string =>
   `多人模式不可用:${cli} 不支持第三方 key(接上供应商注入后自动解禁)`;
 export const MULTI_USER_CLI_BLOCKED_HINT = MULTI_USER_CLI_BLOCKED("该 CLI");
 export const MULTI_USER_NO_PROVIDER_HINT =
-  "多人模式下必须给执行器挂一个供应商 —— 宿主机的 CLI 订阅已被隔离,不可借用";
+  "多人模式下必须给执行器挂一个供应商 —— 宿主机的 CLI 订阅已被隔离,不可借用"
+  + "(要几个人共用一份官方额度,让管理员去「设置 → 实例模式」把 CLI 额度改成共用)";
 /**
  * 「这个 CLI 现在有哪些模型」在多人模式下不问宿主机(§八)。
  *
  * `grok models` 这类命令问的是**宿主机那个登录账号**,而那正是要抹掉的东西:执行器
  * 挂了供应商才跑得起来,模型候选也就该来自供应商的 `/v1/models`。
+ * 共用宿主 CLI 那一档不适用 —— 那时宿主账号本来就是大家在用的账号。
  */
 export const MULTI_USER_HOST_CLI_MODELS_HIDDEN = "多人模式不问宿主机 CLI";
+
+// ── CLI 额度:隔离 / 共用(§八之二)──────────────────────────────────────────
+// 多人模式下「宿主机 CLI 订阅彻底抹去」原本是写死的。实际有一类很常见的团队:几个人
+// 合用一份官方订阅(Claude Max / ChatGPT Plus),对他们来说抹去宿主订阅等于整台机器
+// 没法派活。所以它变成一个**实例级开关**,首启选、之后管理员随时能改。
+//
+// 两档的差别只有「宿主机那份登录态算不算数」,归属/可见性/权限一律不受影响。
+
+export const HOST_CLI_ISOLATED_TITLE = "每人自带 key（隔离宿主机 CLI）";
+export const HOST_CLI_SHARED_TITLE = "共用这台机器的 CLI 额度";
+
+export const HOST_CLI_ISOLATED_DESC =
+  "每人一个独立的 CLI 配置目录，宿主机上 claude / codex 的登录态谁也用不到。"
+  + "执行器必须挂自己的供应商 key，各花各的钱。个人技能、个人全局 CLAUDE.md 也按人一份。";
+
+export const HOST_CLI_SHARED_DESC =
+  "所有人的任务都用这台机器上已经登录好的 CLI（~/.claude、~/.codex），"
+  + "烧的是同一份官方订阅额度。适合几个人合买一份订阅的小团队。"
+  + "代价是：额度、会话历史、CLI 全局配置和技能全都是共用的一份，个人 CLI 环境那一层不再生效。";
+
+/** 换档之后旧的 CLI 会话为什么接不上(时间线里如实写一句)。 */
+export const HOST_CLI_SWITCH_SESSION_NOTE =
+  "CLI 额度设置改过了（共用宿主机 CLI ⇄ 每人自带 key），会话文件所在的配置目录也跟着换了，"
+  + "旧的 CLI 上下文接不回来，这一轮从新会话开始。";
+
 
 // ── 「这一轮会换执行器」的确认闸(§八「不静默替换」)──────────────────────────
 

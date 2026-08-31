@@ -16,7 +16,7 @@ import { db } from "../db/index.js";
 import { agents, llmProviders, reviewerProfiles, teamPresets, workflows } from "../db/schema.js";
 import { id, now } from "../util.js";
 import { actorOf, isAccountHolder } from "./context.js";
-import { isMultiUser } from "./mode.js";
+import { isHostCliShared, isMultiUser } from "./mode.js";
 import { filterOwned, ownedScope, ownerStamp } from "./owned.js";
 import {
   deletePersonalSkill,
@@ -54,11 +54,14 @@ export function mountPersonalCliRoutes(api: Hono): void {
   api.get("/me/cli-env", async (c) => {
     if (!(await isMultiUser())) {
       // 自用模式没有「个人」这一层:CLI 用的就是宿主机默认目录,订阅照用(§九)。
-      return c.json({ mode: "single", envs: [] });
+      return c.json({ mode: "single", sharedHostCli: false, envs: [] });
     }
     const userId = selfId(c);
     if (!userId) return refuseSelf(c);
-    return c.json({ mode: "multi", envs: listPersonalCliEnv(userId) });
+    // 实例选了「共用宿主机 CLI」时个人配置目录压根没被注入(§八之二),这一层如实报
+    // **不生效**:目录还在盘上、编辑器也还能写,但 CLI 根本不会去读它。不说清楚的话,
+    // 用户会在这里装一个技能然后发现补全里没有 —— 而界面上一切正常。
+    return c.json({ mode: "multi", sharedHostCli: await isHostCliShared(), envs: listPersonalCliEnv(userId) });
   });
 
   api.get("/me/cli-env/:agentType", async (c) => {

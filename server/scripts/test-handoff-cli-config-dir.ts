@@ -7,7 +7,7 @@
 // 任务按「没调 complete_task」记 failed。导入侧那道「只认写盘成功的会话」的闸也拦不住:
 // 它只问文件名到没到,不问 CLI 站在自己的配置目录里看不看得见。
 //
-// 这条测试钉五件事:
+// 这条测试钉六件事:
 //   ① 判据同源 —— cliConfigDirForOwner 给出的目录 == 起跑注入的那个环境变量的值
 //   ② 导入侧真的落进那个目录,而且**不在** `~/.claude` 下(反向断言才抓得住回归)
 //   ③ 导出侧也去那个目录找:归属人对了找得到,按自用模式找就找不到
@@ -15,6 +15,9 @@
 //      `sessions.run_owner_user_id` 逐条找,不能按任务归属人 A 一刀切(第 1 轮审查 finding 1)
 //   ⑤ 「读会话元数据」的那条链同样得站这个目录:起跑前的 Codex 版本守卫、会话列表里的
 //      版本提示,都从 rollout 首行读 cli_version —— 站错目录读不到,而读不到是 fail-open
+//   ⑥ 「CLI 额度」在共用/隔离之间换档(§八之二)时,**人没变、目录变了**:注入、出站凭证
+//      清理、派发闸三条都要跟着翻,而「这条旧会话接不接得上」必须认会话行记下的那个目录
+//      ——按归属人现算的话这一档换过之后会一路放行,然后在 CLI 那头硬失败
 // 外加自用模式(owner 为 null)逐字节维持老行为:仍然是 `~/.claude` / `$CODEX_HOME`。
 //
 // 跑法(自带临时库):
@@ -201,9 +204,9 @@ try {
     "按宿主机默认 CODEX_HOME 读 —— 读不到,这正是漏拦的形状(先跑它,免得缓存喂出假绿)",
   );
   assert.equal(
-    await affectedCodexResumeVersion("codex", GUARD_THREAD, bob.id),
+    await affectedCodexResumeVersion("codex", GUARD_THREAD, bobCodexDir),
     "0.147.0",
-    "按会话的 run_owner 读:受影响的版本必须在起跑前就认出来",
+    "按会话记下的那个配置目录读:受影响的版本必须在起跑前就认出来",
   );
 
   // 会话列表也得读同一个目录,否则界面说「读不出版本」、守卫却在换会话,两套结论。
@@ -230,6 +233,62 @@ try {
     "0.147.0",
     "会话列表要按归属人的 CODEX_HOME 读版本,否则界面与起跑守卫给出两套结论",
   );
+
+  // ⑥ 「CLI 额度」换档(§八之二):同一个人,配置目录整体挪位置,而盘上的会话文件没动。
+  //    这是与④同一堵墙的第三个触发口,但它更阴 —— ④ 换的是人,这里人没变,所以任何
+  //    「按归属人现算一遍」的判据都会一路放行,然后在 CLI 那头硬失败。
+  const { patchAppSettings } = await import("../src/app-settings.js");
+  const { agentBaseEnv } = await import("../src/executors/spawn.js");
+  const { dispatchRejection } = await import("../src/auth/dispatch-gate.js");
+  const { sessionCliConfigDir, sessionResumableHere } = await import("../src/auth/run-env.js");
+  // 起跑那一刻记下的行:目录是隔离档下那个个人目录。
+  const recorded = { cliConfigDir: claudeDir ?? "", runOwnerUserId: user.id };
+
+  process.env.ANTHROPIC_API_KEY = "sk-host-subscription";
+  assert.equal(
+    agentBaseEnv().ANTHROPIC_API_KEY, undefined,
+    "隔离档:宿主机的出站凭证不许透传给 agent(§八)",
+  );
+  assert.ok(
+    await dispatchRejection({ agentType: "claude", owner: user.id }),
+    "隔离档:没挂供应商的执行器派不出去",
+  );
+
+  await patchAppSettings({ sharedHostCli: true });
+  assert.equal(
+    (await runEnvForOwner(user.id, "claude")).CLAUDE_CONFIG_DIR, undefined,
+    "共用档:不注个人配置目录,大家用宿主机那份登录态",
+  );
+  assert.equal(
+    (await runEnvForOwner(user.id, "claude")).GIT_AUTHOR_NAME, "LJ",
+    "共用档:共用额度不等于共用身份,git 署名照样按人注入(审查修订 B6)",
+  );
+  assert.equal(await cliConfigDirForOwner(user.id, "claude"), null, "共用档:现算的答案变成宿主机默认目录");
+  assert.equal(
+    await sessionCliConfigDir(recorded, user.id, "claude"), claudeDir,
+    "但**记下来的**那个目录不会跟着变 —— 文件还躺在那儿,判据必须认它",
+  );
+  assert.equal(
+    await sessionResumableHere(recorded, user.id, user.id, "claude"), false,
+    "所以这条旧会话接不上:必须另开一条,而不是把注定扑空的 id 交给 CLI --resume",
+  );
+  assert.equal(
+    agentBaseEnv().ANTHROPIC_API_KEY, "sk-host-subscription",
+    "共用档:宿主机的 key 正是大家要烧的那把,清掉等于把这一档关了",
+  );
+  assert.equal(
+    await dispatchRejection({ agentType: "claude", owner: user.id }), null,
+    "共用档:没挂供应商是常态,派发闸必须整条穿透",
+  );
+
+  await patchAppSettings({ sharedHostCli: false });
+  assert.equal(await cliConfigDirForOwner(user.id, "claude"), claudeDir, "改回隔离档要立刻生效,不能等重启");
+  assert.equal(
+    await sessionResumableHere(recorded, user.id, user.id, "claude"), true,
+    "改回来之后那条旧会话又接得上了 —— 文件从头到尾没动过",
+  );
+  assert.equal(agentBaseEnv().ANTHROPIC_API_KEY, undefined, "同步镜像也得跟着回来(spawn 走的是它)");
+  delete process.env.ANTHROPIC_API_KEY;
 
   console.log("test-handoff-cli-config-dir: OK");
 } catch (error) {

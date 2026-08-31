@@ -1,11 +1,12 @@
-// 「切到多人模式」的表单本体。首启向导和设置页危险区**共用这一份** —— 那三条警告
-// (转不回、根目录锁死、宿主订阅被抹去)一旦有两份拷贝,迟早只改一边。
+// 「切到多人模式」的表单本体。首启向导和设置页危险区**共用这一份** —— 那几条警告
+// (转不回、根目录锁死)一旦有两份拷贝,迟早只改一边。
 //
 // 它只负责「填完 → 拿到 key」;拿到之后展示还是跳转由调用方决定。
 import { useCallback, useEffect, useState } from "react";
 import { suggestDirName, suggestGitEmail, userDirNameError } from "@ash/shared/multiuser";
 import { ApiError } from "../lib/apiClient.ts";
 import { authApi, type SetupPreflight } from "../lib/authApi.ts";
+import { HostCliChoice } from "./HostCliChoice.tsx";
 
 const LABELS: Record<string, string> = {
   projects: "项目",
@@ -41,6 +42,10 @@ export function MultiModeForm({
   const [dirTouched, setDirTouched] = useState(false);
   const [gitName, setGitName] = useState("");
   const [gitEmail, setGitEmail] = useState("");
+  // CLI 额度(§八之二)。默认**隔离** —— 那是更保守的一档:选错了顶多是「还得各自配
+  // 供应商」,而默认成共用则意味着每个新成员一进来就能烧宿主的订阅,一个不留神的选择
+  // 变成了默认行为。之后随时能在「设置 → 实例模式」里改。
+  const [sharedHostCli, setSharedHostCli] = useState(false);
 
   useEffect(() => {
     // 补做首启时不问盘点:那一刻实例已经是 multi、又还没人能登录,这条端点在闸外
@@ -70,6 +75,7 @@ export function MultiModeForm({
         dirName: dirName.trim(),
         gitName: gitName.trim(),
         gitEmail: gitEmail.trim(),
+        sharedHostCli,
       });
       onIssued(result.key);
     } catch (e) {
@@ -77,7 +83,7 @@ export function MultiModeForm({
     } finally {
       setBusy(false);
     }
-  }, [adminName, rootDir, dirName, gitName, gitEmail, onIssued]);
+  }, [adminName, rootDir, dirName, gitName, gitEmail, sharedHostCli, onIssued]);
 
   return (
     <form
@@ -149,6 +155,16 @@ export function MultiModeForm({
       </div>
       <p className="auth-note">agent 提交时会用这对署名。不填就按姓名生成默认值，之后能改。</p>
 
+      {/* CLI 额度(§八之二)。补做首启时不问:那一屏只负责把管理员补出来,额度那一档
+          上一次转换时已经定过了,再问一遍只会把它悄悄改掉。 */}
+      {lockedRootDir ? null : (
+        <div className="auth-field">
+          <span>CLI 额度怎么算</span>
+          <HostCliChoice value={sharedHostCli} onChange={setSharedHostCli} />
+          <small>之后随时能在「设置 → 默认规则 → 实例模式」里改，不锁死。</small>
+        </div>
+      )}
+
       {hasData ? (
         <div className="auth-warning">
           <b>库里已经有数据了。</b>
@@ -159,7 +175,9 @@ export function MultiModeForm({
         </div>
       ) : null}
 
-      {preflight?.unbackedExecutors.length ? (
+      {/* 「没挂供应商就派不出任务」只在**隔离**那一档成立。选了共用宿主机 CLI 的话,
+          这些执行器照跑不误 —— 那时把它们列成一屏红色警告是彻头彻尾的假警报。 */}
+      {!sharedHostCli && preflight?.unbackedExecutors.length ? (
         <div className="auth-warning auth-warning--strong">
           <b>转换后这些执行器派不出任务：</b>
           <ul>
@@ -169,8 +187,8 @@ export function MultiModeForm({
               </li>
             ))}
           </ul>
-          多人模式下宿主机的 CLI 订阅被彻底隔离，每人必须自带供应商 key。
-          转换后到「设置 → 供应商」里配一个，再把执行器挂上去。
+          你选的是「每人自带 key」，宿主机的 CLI 订阅会被隔离。
+          转换后到「设置 → 供应商」里配一个，再把执行器挂上去 —— 或者上面改选「共用这台机器的 CLI 额度」。
         </div>
       ) : null}
 

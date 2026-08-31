@@ -67,6 +67,12 @@ export interface AppSettings {
   // 多人模式的根目录。每个用户在其下有一个目录 `rootDir/<dirName>`。
   // **设定后锁死**,系统不提供修改入口(一改所有已建项目路径失效)。
   rootDir: string;
+  // 多人模式下大家**共用这台机器上的 CLI 登录态与官方额度**吗。
+  // false(默认)= 隔离:每人一个 CLI 配置目录,宿主订阅抹去,执行器必须挂自己的供应商。
+  // true = 共用:不注入个人配置目录、不清出站凭证、派发闸放开 —— 一份官方订阅几个人一起烧。
+  // **不锁死**,管理员随时能在设置里改;改了之后已有 CLI 会话接不上(配置目录换了),
+  // 系统会自动另开新会话并在时间线里说明。判据在 server/src/auth/mode.ts。
+  sharedHostCli: boolean;
 }
 
 export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
@@ -79,6 +85,7 @@ export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
   handoffMaxBodyMb: 512,
   instanceMode: "",
   rootDir: "",
+  sharedHostCli: false,
 });
 
 // ── 多人模式 ────────────────────────────────────────────────────────────────

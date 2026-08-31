@@ -9,7 +9,7 @@ import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
-import { cliConfigDirForOwner } from "./auth/run-env.js";
+import { sessionCliConfigDir } from "./auth/run-env.js";
 import { resumeCommandFor } from "./executors/resume.js";
 import { sessionRunMeta } from "./session-run-meta.js";
 import { parseSessionTrace, readableRunPath, sessionTracePath, sessionTranscriptPath } from "./transcript.js";
@@ -22,14 +22,11 @@ async function toSession(
   run: { model: string | null; reasoningEffort: string | null } = { model: null, reasoningEffort: null },
   taskOwnerUserId: string | null = null,
 ): Promise<Session> {
-  // 版本得从**开这条会话的那个人**的 CODEX_HOME 里读(老行回落到任务归属人)。按宿主机
-  // 默认目录读的话,多用户模式下列表恒为「读不出版本」,而起跑守卫那边却按个人目录判定 ——
-  // 界面和守卫会给出两套结论(第 1 轮 finding 1)。
+  // 版本得从**这条会话的 rollout 实际写在的那个目录**里读(会话行记着;老行回落到按
+  // 归属人现算)。按宿主机默认目录读的话,隔离档下列表恒为「读不出版本」,而起跑守卫那边
+  // 却按个人目录判定 —— 界面和守卫会给出两套结论(第 1 轮 finding 1)。
   const cliVersion = r.agentType === "codex" && r.cliSessionId
-    ? await readCodexCliVersion(
-        r.cliSessionId,
-        await cliConfigDirForOwner(r.runOwnerUserId ?? taskOwnerUserId, "codex"),
-      )
+    ? await readCodexCliVersion(r.cliSessionId, await sessionCliConfigDir(r, taskOwnerUserId, "codex"))
     : null;
   return {
     ...r,

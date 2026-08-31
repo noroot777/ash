@@ -391,6 +391,17 @@ export const sessions = sqliteTable("sessions", {
   // 扑空(2026-08-29 事故的同源第二格,见 docs/incidents.md)。
   // null = 建在本列之前的老行,或这一轮本来就没有归属人(自用模式);两种都退回任务归属人。
   runOwnerUserId: text("run_owner_user_id"),
+  // **这一轮的 CLI 配置目录**(CLAUDE_CONFIG_DIR / CODEX_HOME 实际注进去的那个值)。
+  // `""` = 宿主机默认目录(自用模式、共用宿主 CLI 的实例、没有归属人的任务);
+  // `null` = 建在本列之前的老行,读侧回落到「按 run_owner_user_id 现算」。
+  //
+  // 有了 run_owner_user_id 为什么还要这一列:那一列只说得出「谁跑的」,而**同一个人的
+  // 配置目录会挪位置** —— 实例管理员把「CLI 额度」从「每人自带 key」改成「共用宿主机
+  // CLI」(app_settings.sharedHostCli,§八之二),现算的答案立刻从 data/user-cli/<uid>/…
+  // 变成宿主默认目录,盘上的 transcript 却一个字节都没动。拿新答案去 --resume 旧会话就是
+  // 2026-08-29 那句 "No conversation found with session ID"。把当时那个目录**记下来**,
+  // 「接不接得上」才有一个不随设置漂移的判据(auth/run-env.ts sessionResumableHere)。
+  cliConfigDir: text("cli_config_dir"),
   resumeCommand: text("resume_command"),
   // 恢复命令要带的 env 前缀:供应商那一截(token 已是占位符)。null = 没有。
   // 只用于展示,不含真 key。列名 relay_env 跟它现在装的东西正好对上。

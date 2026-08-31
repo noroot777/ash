@@ -220,3 +220,59 @@
   flex-direction: column;
   gap: 14px;
 }
+
+/* 「CLI 额度」二选一(§八之二)。首启表单、设置页危险区、实例模式卡片共用一份组件,
+   所以样式不能挂在 .auth-multi-form 下面 —— 那样第三个地方就得再抄一遍。 */
+.host-cli-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.host-cli-option {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--raised);
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.host-cli-option[data-checked="yes"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+}
+
+.host-cli-option:hover:not(:has(input:disabled)) {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+
+.host-cli-option:has(input:disabled) {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.host-cli-option input {
+  margin-top: 3px;
+  flex: none;
+}
+
+.host-cli-option > span {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.host-cli-option b {
+  font-size: 13.5px;
+  color: var(--ink);
+}
+
+.host-cli-option small {
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--muted);
+}
