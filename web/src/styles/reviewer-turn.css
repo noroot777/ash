@@ -6,8 +6,8 @@
    配色用 --cyan 而不是 --accent：靛蓝在这套界面里已经被「你（真人）」占着（用户气泡、
    系统代写消息的左竖线都是它），验证段再用会把「谁在说话」这条最要紧的线索搅混。
 
-   重量刻意压到最低：只改身份行（头像 + 一颗徽标）和旁注的竖线颜色，气泡本体、缩进、
-   宽度一律不动 —— 长审查的正文本来就够挤了。 */
+   身份仍靠头像、徽标和青色来认；版式则跟讨论任务的两方对话一致：实现回合靠左，审查
+   泳道靠右，强调线跟着审查方移到右边。这样不用先读徽标也能一眼分清是谁在说话。 */
 
 .task-message--agent.is-reviewer .task-message-avatar {
   background: color-mix(in lch, var(--cyan) 13%, var(--overlay));
@@ -48,10 +48,10 @@
 /* D：历史验证轮折成一张结论卡，展开态就是完整验证泳道。段头把轮次、审查者、结论、
    用时和两颗动作收在一起；正文的阅读密度仍沿用原会话，不另造一套气泡。 */
 .verify-lane {
-  max-width: 790px;
-  margin: 18px 0 22px;
+  width: min(86%, 790px);
+  margin: 18px 0 22px auto;
   border: 1px solid color-mix(in lch, var(--cyan) 24%, var(--line));
-  border-left: 3px solid color-mix(in lch, var(--cyan) 62%, var(--line2));
+  border-right: 3px solid color-mix(in lch, var(--cyan) 62%, var(--line2));
   border-radius: 10px;
   background: color-mix(in lch, var(--cyan) 4.5%, var(--panel));
 }
@@ -88,6 +88,7 @@
 .verify-lane .conversation-note { margin-left: 0; }
 
 @media (max-width: 680px) {
+  .verify-lane { width: 94%; }
   .verify-lane-head { flex-wrap: wrap; }
   .verify-lane-by { flex: 1 1 160px; }
   .verify-lane-time { order: 2; margin-left: 26px; }

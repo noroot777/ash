@@ -122,6 +122,28 @@ try {
   // 下面量版式，三张卡都得摊开。
   await lanes.nth(1).getByRole("button", { name: "展开" }).click();
 
+  // 跟讨论任务的 B 方一致：审查泳道靠右，身份强调线也在右边；左边仍保留普通描边，
+  // 不能出现两条同样抢眼的竖线。这里量的是卡本体，不受正文长短影响。
+  const conversationBox = await page.locator(".task-conversation").evaluate((el) => {
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return {
+      contentRight: Math.round(rect.right - Number.parseFloat(style.paddingRight)),
+    };
+  });
+  const laneLayout = await lanes.nth(1).evaluate((el) => {
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return {
+      right: Math.round(rect.right),
+      leftBorder: Number.parseFloat(style.borderLeftWidth),
+      rightBorder: Number.parseFloat(style.borderRightWidth),
+    };
+  });
+  assert.ok(Math.abs(laneLayout.right - conversationBox.contentRight) <= 1, "审查泳道应贴住会话内容区右侧");
+  assert.equal(laneLayout.leftBorder, 1, "审查卡左侧只保留普通描边");
+  assert.equal(laneLayout.rightBorder, 3, "审查身份竖线应在右侧");
+
   // 换身份是断点：验证回合和它后面的修复回合都得重新报执行器名，
   // 否则读者只看见「同一个人一口气说了三段」。
   for (const index of [0, 1, 2, 3, 4]) {
