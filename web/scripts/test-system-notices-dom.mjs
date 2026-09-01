@@ -67,7 +67,7 @@ try {
   const aligned = page.locator(".system-event-digest.is-aligned");
   await aligned.waitFor();
   const alignedGeometry = await page.evaluate(() => {
-    const agent = document.querySelector(".task-message--agent").getBoundingClientRect();
+    const agentAvatar = document.querySelector(".task-message-avatar").getBoundingClientRect();
     const agentBody = document.querySelector(".task-message-content").getBoundingClientRect();
     const digest = document.querySelector(".system-event-digest.is-aligned");
     const digestIcon = digest.querySelector(".system-event-avatar").getBoundingClientRect();
@@ -77,22 +77,22 @@ try {
     const actionMain = action.querySelector(".system-action-main").getBoundingClientRect();
     const boundary = document.querySelector(".system-boundary.notice-mode-aligned");
     return {
-      avatarLeft: Math.round(agent.left),
+      avatarCenter: Math.round(agentAvatar.left + agentAvatar.width / 2),
       bodyLeft: Math.round(agentBody.left),
-      digestIconLeft: Math.round(digestIcon.left),
+      digestIconCenter: Math.round(digestIcon.left + digestIcon.width / 2),
       digestLineLeft: Math.round(digestLine.left),
-      actionIconLeft: Math.round(actionIcon.left),
+      actionIconCenter: Math.round(actionIcon.left + actionIcon.width / 2),
       actionMainLeft: Math.round(actionMain.left),
       iconSize: `${Math.round(digestIcon.width)}x${Math.round(digestIcon.height)}`,
       iconBackground: getComputedStyle(digest.querySelector(".system-event-avatar")).backgroundColor,
       boundaryIcon: !!boundary?.querySelector(".system-event-avatar"),
     };
   });
-  assert.equal(alignedGeometry.digestIconLeft, alignedGeometry.avatarLeft, "系统节点应与智能体头像左侧对齐");
-  assert.equal(alignedGeometry.actionIconLeft, alignedGeometry.avatarLeft, "系统长提示同样进入头像轴");
+  assert.equal(alignedGeometry.digestIconCenter, alignedGeometry.avatarCenter, "系统节点应与智能体头像中心对齐");
+  assert.equal(alignedGeometry.actionIconCenter, alignedGeometry.avatarCenter, "系统长提示同样进入头像轴");
   assert.equal(alignedGeometry.digestLineLeft, alignedGeometry.bodyLeft, "系统摘要正文应与智能体正文起点对齐");
   assert.equal(alignedGeometry.actionMainLeft, alignedGeometry.bodyLeft, "系统长提示正文应与智能体正文起点对齐");
-  assert.equal(alignedGeometry.iconSize, "20x20", "系统节点尺寸应与智能体头像一致");
+  assert.equal(alignedGeometry.iconSize, "16x16", "系统节点外圈应比智能体头像更克制");
   assert.notEqual(alignedGeometry.iconBackground, "rgba(0, 0, 0, 0)", "备选二用轻底色提高一点辨识度");
   assert.equal(alignedGeometry.boundaryIcon, true, "回合边界也应使用同一系统节点");
   assert.equal(await page.locator('.system-notice-mode-switch a[aria-current="page"]').innerText(), "备选二 · 头像轴提示");

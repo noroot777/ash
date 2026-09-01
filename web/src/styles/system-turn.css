@@ -76,9 +76,10 @@
 /* 备选二：系统提示进入与智能体头像相同的 20px 轨道，正文仍保持轻量行文。 */
 .system-event-avatar {
   display: grid;
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   flex: none;
+  justify-self: center;
   place-items: center;
   border: 1px solid color-mix(in lch, var(--accent) 18%, var(--line2));
   border-radius: 50%;
@@ -157,8 +158,9 @@
 .system-action-wrap.notice-mode-aligned .system-action-note { grid-template-columns: 20px minmax(0, 1fr); gap: 10px; }
 .system-action-wrap.notice-mode-aligned .system-action-icon {
   display: grid;
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
+  justify-self: center;
   place-items: center;
   border: 1px solid color-mix(in lch, var(--accent) 18%, var(--line2));
   border-radius: 50%;
@@ -210,9 +212,10 @@
 .system-event-row.notice-mode-aligned { max-width: 790px; align-items: flex-start; gap: 10px; margin: 8px 0 12px; padding: 0; color: var(--muted); }
 .system-event-row.notice-mode-aligned .system-event-icon {
   display: grid;
-  width: 20px;
-  height: 20px;
-  flex-basis: 20px;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  margin: 2px;
   border: 1px solid color-mix(in lch, var(--accent) 18%, var(--line2));
   border-radius: 50%;
   background: color-mix(in lch, var(--accent) 7%, var(--panel));
