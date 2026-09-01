@@ -25,8 +25,8 @@
 .system-notice-mode-switch a[aria-current="page"] { background: var(--ink); color: var(--panel); }
 
 .system-event-digest {
-  width: min(760px, calc(100% - 30px));
-  margin-right: 0;
+  width: fit-content;
+  max-width: min(760px, calc(100% - 30px));
   margin-left: 30px;
   color: var(--faint);
   font-size: 10.5px;
@@ -34,7 +34,9 @@
 .system-event-digest details { min-width: 0; }
 .system-event-digest summary,
 .system-event-digest-line {
-  display: flex;
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
   min-width: 0;
   align-items: baseline;
   gap: 8px;
@@ -42,7 +44,7 @@
   list-style: none;
 }
 .system-event-digest summary::-webkit-details-marker { display: none; }
-.system-event-digest :is(summary, .system-event-digest-line) > span { min-width: 0; overflow: hidden; flex: 1; text-overflow: ellipsis; white-space: nowrap; }
+.system-event-digest :is(summary, .system-event-digest-line) > span { min-width: 0; overflow: hidden; flex: 0 1 auto; text-overflow: ellipsis; white-space: nowrap; }
 .system-event-digest :is(summary, .system-event-digest-line) small { flex: none; color: var(--faint); font-size: 9px; white-space: nowrap; }
 .system-event-digest summary time,
 .system-event-digest-line time,
@@ -53,7 +55,7 @@
 .system-event-digest li.is-error { color: color-mix(in lch, var(--red) 64%, var(--ink)); }
 
 /* 方案一：连续系统事件收成会话脚注，默认只读最终结果。 */
-.system-event-digest.is-footnote { position: relative; margin-top: 7px; margin-bottom: 11px; padding-left: 12px; }
+.system-event-digest.is-footnote { position: relative; margin-top: 9px; margin-bottom: 10px; padding-left: 12px; }
 .system-event-digest.is-footnote::before { position: absolute; top: 6px; left: 1px; width: 4px; height: 4px; border-radius: 50%; background: var(--line2); content: ""; }
 .system-event-digest.is-footnote.is-error::before { background: color-mix(in lch, var(--red) 55%, var(--line2)); }
 .system-event-digest.is-footnote :is(summary, .system-event-digest-line) > span { color: var(--faint); }
@@ -82,7 +84,8 @@
 .team-feed-user.system-action-wrap { padding-right: 42px; padding-left: 30px; }
 .system-action-note {
   display: grid;
-  width: min(760px, 100%);
+  width: fit-content;
+  max-width: min(760px, 100%);
   grid-template-columns: 14px minmax(0, 1fr);
   gap: 6px;
   color: var(--faint);
@@ -90,8 +93,8 @@
 .system-action-icon { display: grid; width: 14px; height: 18px; place-items: center; color: var(--faint); }
 .system-action-note.is-conflict .system-action-icon { color: color-mix(in lch, var(--red) 62%, var(--faint)); }
 .system-action-main { min-width: 0; }
-.system-action-line { display: flex; align-items: baseline; gap: 8px; }
-.system-action-line > p { min-width: 0; flex: 1; margin: 0; overflow-wrap: anywhere; font-size: 10.5px; line-height: 1.55; }
+.system-action-line { display: flex; width: fit-content; max-width: 100%; flex-wrap: wrap; align-items: baseline; gap: 3px 8px; }
+.system-action-line > p { min-width: 0; flex: 0 1 auto; margin: 0; overflow-wrap: anywhere; font-size: 10.5px; line-height: 1.55; }
 .system-action-line b { color: var(--muted); font-weight: 650; }
 .system-action-note.is-conflict .system-action-line b { color: color-mix(in lch, var(--red) 54%, var(--muted)); }
 .system-action-line time { flex: none; opacity: 0.78; font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -124,6 +127,7 @@
 /* 一行系统事实：图标负责语气，正文负责事实，不再每条都竖一根颜色不同的线。 */
 .conversation-note.system-event-row {
   display: flex;
+  width: fit-content;
   max-width: 760px;
   align-items: flex-start;
   gap: 6px;
@@ -136,7 +140,7 @@
   line-height: 1.6;
 }
 .system-event-icon { display: grid; width: 14px; height: 16px; flex: 0 0 14px; place-items: center; color: var(--faint); }
-.system-event-row p { min-width: 0; flex: 1; margin: 0; overflow-wrap: anywhere; }
+.system-event-row p { min-width: 0; flex: 0 1 auto; margin: 0; overflow-wrap: anywhere; }
 .system-event-row p b { margin-right: 6px; color: var(--muted); font-weight: 650; }
 .system-event-row time { flex: none; opacity: 0.72; font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .system-event-row.is-progress .system-event-icon { color: color-mix(in lch, var(--cyan) 46%, var(--faint)); }
@@ -171,12 +175,10 @@
 @media (max-width: 680px) {
   .system-notice-mode-switch { right: 8px; overflow-x: auto; justify-content: flex-start; }
   .system-notice-mode-switch > span { display: none; }
-  .system-event-digest { width: calc(100% - 10px); margin-left: 10px; }
+  .system-event-digest { width: fit-content; max-width: calc(100% - 10px); margin-left: 10px; }
   .system-event-digest.is-attached { padding-left: 20px; }
   .system-action-wrap { padding-right: 10px; padding-left: 10px; }
   .team-feed-user.system-action-wrap { padding-right: 10px; padding-left: 10px; }
-  .system-action-line { flex-wrap: wrap; }
-  .system-action-line time { margin-left: 20px; }
   .conversation-note.system-event-row { margin-left: 10px; }
   .system-event-row.notice-mode-attached { margin-left: 30px; }
 }

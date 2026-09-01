@@ -38,8 +38,6 @@ export type ConversationReviewLane = {
   complete: boolean;
   reportAvailable: boolean;
   report: ReviewLaneReport | null;
-  /** 审查未通过后由系统写回原任务的修复要求；并入本轮卡片，避免再画一大块系统消息。 */
-  repairHandoff: Extract<ConversationItem, { kind: "user" }> | null;
   defaultCollapsed: boolean;
 };
 
@@ -286,7 +284,6 @@ export function conversationFeedRows(
         complete: false,
         reportAvailable: false,
         report: null,
-        repairHandoff: null,
         defaultCollapsed: false,
         reviewerSpoke: false,
       };
@@ -308,29 +305,17 @@ export function conversationFeedRows(
     // 正在跑的轮次展开，避免用户只看见一张不动的卡片。
     lane.defaultCollapsed = lane !== latest && lane.conclusion !== null;
   }
-  // 修复交接紧跟在被打回的卡后面：把它并入同一张卡，但原文完整保留在卡内的展开区。
-  // 因此即使远程只读视图拿不到 report.md，也不会丢掉证据目录与下一步要求。
-  const filtered: ConversationFeedRow[] = [];
+  // 修复交接紧跟在被打回的卡后面。就地验证的整份内嵌报告一律由卡片入口替代；自由派审
+  // 只有在 report.md 确实可打开时才隐藏原 prompt，没有报告就保留它作为证据目录兜底。
   let previousLane: ConversationReviewLane | null = null;
-  for (const row of rows) {
+  return rows.filter((row) => {
     if (row.kind === "review-lane") {
       previousLane = row;
-      filtered.push(row);
-      continue;
+      return true;
     }
     const handoff = repairHandoffKind(row.item);
-    const matchesPrevious = previousLane !== null
-      && ((handoff === "inline" && previousLane.source === "inline")
-        || (handoff === "free" && previousLane.source === "free"));
-    if (row.item.kind === "user" && previousLane && matchesPrevious && !previousLane.repairHandoff) {
-      previousLane.repairHandoff = row.item;
-      previousLane.conclusion = "verify_failed";
-      previousLane.complete = true;
-      continue;
-    }
-    filtered.push(row);
-    // 普通执行者或真人已经接管会话后，不再把更远处的系统消息错挂到上一轮审查。
-    if (row.item.kind === "agent" || (row.item.kind === "user" && !row.item.bySystem)) previousLane = null;
-  }
-  return filtered;
+    if (handoff === "inline") return false;
+    if (handoff === "free") return !(previousLane?.source === "free" && previousLane.reportAvailable);
+    return true;
+  });
 }

@@ -43,6 +43,18 @@ try {
     return { width: style.width, height: style.height, radius: style.borderRadius, content: style.content };
   });
   assert.deepEqual(marker, { width: "4px", height: "4px", radius: "50%", content: '""' }, "脚注使用无方向性的 4px 圆点，不再显示弯箭头");
+  const compactLine = await digest.locator("summary").evaluate((el) => {
+    const text = el.querySelector(":scope > span").getBoundingClientRect();
+    const time = el.querySelector(":scope > time").getBoundingClientRect();
+    return {
+      gap: Math.round(time.left - text.right),
+      lineWidth: Math.round(el.getBoundingClientRect().width),
+      containerWidth: Math.round(el.parentElement.getBoundingClientRect().width),
+    };
+  });
+  assert.ok(compactLine.gap <= 80, "记录数可占一格，但时间不能被推到内容区最右侧");
+  assert.equal(compactLine.lineWidth, compactLine.containerWidth, "系统提示应按内容收缩，不铺成整行");
+  assert.ok(compactLine.containerWidth < 500, "短系统提示不应占满会话内容宽度");
   await digest.locator("summary").click();
   assert.match(await digest.innerText(), /已预约完成后审查.*验收阶段更新.*本回合没有交卷.*工作区已恢复/s);
   assert.equal(await page.locator(".system-event-row").count(), 0, "任务会话不再逐条铺系统事件");
@@ -61,10 +73,18 @@ try {
   await attached.waitFor();
   const attachedStyle = await attached.evaluate((el) => {
     const style = getComputedStyle(el);
-    return { marginTop: Number.parseFloat(style.marginTop), border: getComputedStyle(el.querySelector("summary")).borderTopWidth };
+    const line = el.querySelector("summary");
+    const text = line.querySelector(":scope > span").getBoundingClientRect();
+    const time = line.querySelector(":scope > time").getBoundingClientRect();
+    return {
+      marginTop: Number.parseFloat(style.marginTop),
+      border: getComputedStyle(line).borderTopWidth,
+      timeGap: Math.round(time.left - text.right),
+    };
   });
   assert.ok(attachedStyle.marginTop < 0, "消息尾注应贴近上一段会话");
   assert.notEqual(attachedStyle.border, "0px", "消息尾注用细线表达它属于上一段消息");
+  assert.ok(attachedStyle.timeGap <= 80, "消息尾注的时间同样应紧跟内容");
   assert.equal(await page.locator('.system-notice-mode-switch a[aria-current="page"]').innerText(), "消息尾注");
 
   await page.setViewportSize({ width: 390, height: 900 });

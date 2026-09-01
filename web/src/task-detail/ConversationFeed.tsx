@@ -9,6 +9,7 @@ import { AgentRunMeta } from "../components/AgentRunMeta.tsx";
 import { AgentTurnBody } from "../components/AgentTurnBody.tsx";
 import { isExecutionChainLive } from "../lib/taskAttention.ts";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
+import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { RunActivity } from "../components/RunActivity.tsx";
 import { MessageFooter } from "../components/MessageFooter.tsx";
 import { TurnRetryButton } from "../components/TurnRetryButton.tsx";
@@ -117,18 +118,25 @@ function AgentMessage({
 
 function UserMessage({
   item,
+  noticeMode,
+  preserveSystemStyle = false,
 }: {
   item: Extract<ConversationItem, { kind: "user" }>;
+  noticeMode: SystemNoticeMode;
+  preserveSystemStyle?: boolean;
 }) {
   const parsed = parseAttachmentText(item.text);
   const paths = [...parsed.paths, ...item.attachments];
   const bySystem = !!item.bySystem;
-  if (bySystem) return <SystemAuthoredMessage item={item} />;
+  const reviewPrompt = /^【(?:自由工作流审查未通过|自动(?:验证|审查)未通过|审查未通过)(?:\s*·[^】]+)?】/.test(item.text.trimStart());
+  if (bySystem && !preserveSystemStyle && !reviewPrompt) {
+    return <SystemAuthoredMessage item={item} mode={noticeMode} />;
+  }
   return (
-    <article className="task-message task-message--user">
+    <article className={`task-message task-message--user${bySystem ? " is-system-authored" : ""}`}>
       <div className="task-user-bubble">
         <header>
-          <b>你</b>
+          <b>{bySystem ? "系统" : "你"}</b>
           {item.at && <time>{formatInstant(item.at)}</time>}
           {parsed.body && (
             <button type="button" onClick={() => copyText(parsed.body)} aria-label="复制这条回复">
@@ -136,7 +144,7 @@ function UserMessage({
             </button>
           )}
         </header>
-        {parsed.body && <p>{parsed.body}</p>}
+        {parsed.body && (bySystem ? <MarkdownBody text={parsed.body} /> : <p>{parsed.body}</p>)}
         <MessageAttachments paths={paths} />
       </div>
     </article>
@@ -206,7 +214,7 @@ export function ConversationFeed({
     ) hiddenTimes.add(item.id);
   }
 
-  const renderItem = (item: ConversationItem) => {
+  const renderItem = (item: ConversationItem, preserveSystemStyle = false) => {
     if (item.kind === "agent") {
       return (
         <AgentMessage
@@ -224,11 +232,24 @@ export function ConversationFeed({
         />
       );
     }
-    if (item.kind === "user") return <UserMessage key={item.id} item={item} />;
+    if (item.kind === "user") {
+      return <UserMessage key={item.id} item={item} noticeMode={noticeMode} preserveSystemStyle={preserveSystemStyle} />;
+    }
     // 回合边界才配得上一条横贯的分隔线；系统旁注只是贴在会话边上的一行小字，
     // 它不该看起来像「这里换了一段对话」。
     if (item.variant === "boundary") {
       return <SystemBoundary item={item} key={item.id} />;
+    }
+    if (preserveSystemStyle) {
+      return (
+        <p
+          className={`conversation-note${item.tone === "error" ? " is-error" : ""}${item.tone === "notice" ? " is-notice" : ""}${item.verify ? " is-verify" : ""}`}
+          key={item.id}
+        >
+          {item.text}
+          {item.at && <time>{formatInstant(item.at)}</time>}
+        </p>
+      );
     }
     return <SystemEventNote item={item} mode={noticeMode} key={item.id} />;
   };
@@ -245,8 +266,8 @@ export function ConversationFeed({
               : row.kind === "system-digest"
                 ? <SystemEventDigest key={row.id} items={row.items} mode={noticeMode} />
               : (
-              <ReviewerLane key={row.id} taskId={task.id} lane={row} noticeMode={noticeMode}>
-                {row.items.map(renderItem)}
+              <ReviewerLane key={row.id} taskId={task.id} lane={row}>
+                {row.items.map((item) => renderItem(item, true))}
               </ReviewerLane>
               ))}
           {activityPhase && !loading && !error && (
