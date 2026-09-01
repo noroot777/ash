@@ -1,155 +1,138 @@
 :root {
-  --shell: #ececef;
-  --canvas: #f8f8fa;
-  --paper: #fff;
-  --ink: #222328;
-  --muted: #686b73;
-  --faint: #999ca4;
-  --line: #e1e2e7;
-  --line-strong: #d3d5dc;
-  --indigo: #5e69c7;
-  --indigo-soft: #eef0fb;
-  --amber: #9b641d;
-  --amber-line: #dfc594;
-  --rose: #9c4c57;
-  --rose-line: #dfbdc2;
+  --chrome: lch(94.44% .5 282);
+  --canvas: lch(97.94% .5 282);
+  --panel: lch(100% 0 282);
+  --raised: lch(96.914% 0 282);
+  --overlay: lch(95.886% 0 282);
+  --line: lch(90.55% 0 282);
+  --line2: lch(86.5% 0 282);
+  --ink: lch(9.794% 0 282);
+  --muted: lch(39.176% 1.25 282);
+  --faint: lch(64.64% 1.25 282);
+  --accent: #5e6ad2;
+  --red: #d93d4c;
+  --amber: #b57b00;
+  --cyan: #0e9db8;
+  --font-sans: "Inter Variable", "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 
 * { box-sizing: border-box; }
 
 body {
   margin: 0;
-  min-width: 320px;
-  background: var(--shell);
+  background: var(--chrome);
   color: var(--ink);
-  font-family: Inter, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
-  font-size: 14px;
-  line-height: 1.58;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 450;
+  line-height: 1.5;
 }
 
-button { color: inherit; font: inherit; }
-button:focus-visible, summary:focus-visible { outline: 2px solid rgba(94, 105, 199, .5); outline-offset: 2px; }
-code { border-radius: 4px; background: #eff0f3; padding: 1px 4px; font-family: "SFMono-Regular", Consolas, monospace; font-size: .9em; }
+button { cursor: pointer; font: inherit; }
+a { color: inherit; }
+code { border-radius: 4px; background: var(--raised); padding: 1px 4px; color: var(--ink); font-family: var(--font-mono); font-size: 11.5px; }
 
-.demo-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  height: 46px;
-  padding: 0 20px;
-  border-bottom: 1px solid var(--line-strong);
-  background: var(--paper);
-}
-
-.demo-bar strong { font-size: 12px; }
-.demo-bar span { color: var(--faint); font-size: 10px; }
-
-.app {
-  width: min(1000px, calc(100% - 32px));
-  min-height: calc(100vh - 78px);
-  margin: 16px auto;
+.task-detail {
+  width: min(1120px, calc(100% - 24px));
+  min-height: calc(100vh - 24px);
+  margin: 12px auto;
   overflow: hidden;
-  border: 1px solid var(--line-strong);
+  border: .5px solid var(--line);
   border-radius: 12px;
   background: var(--canvas);
-  box-shadow: 0 12px 38px rgba(32, 34, 44, .06);
+  box-shadow: 0 3px 6px -2px lch(0 0 0 / .02), 0 1px 1px lch(0 0 0 / .04);
 }
 
 .task-header {
   display: flex;
   align-items: center;
-  min-height: 48px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--line);
+  gap: 8px;
+  height: 44px;
+  padding: 0 12px 0 14px;
+  border-bottom: .5px solid var(--line);
 }
 
-.task-header > div { display: flex; align-items: center; gap: 8px; }
-.task-header b { font-size: 13px; font-weight: 650; }
-.task-kind { border-radius: 5px; background: var(--indigo-soft); padding: 2px 7px; color: var(--indigo); font-size: 9px; font-weight: 750; }
-.task-state { margin-left: auto; color: var(--indigo); font-size: 10px; }
-.task-state::before { display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: currentColor; content: ""; }
+.task-header b { font-size: 13px; font-weight: 500; }
+.task-kind { border-radius: 5px; background: color-mix(in lch, var(--accent) 11%, transparent); padding: 2px 7px; color: var(--accent); font-size: 10px; font-weight: 750; }
+.task-status { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; color: var(--amber); font-size: 10px; font-weight: 600; }
+.task-status i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.task-header > button { height: 28px; border: 1px solid transparent; border-radius: 8px; background: var(--panel); padding: 0 10px; color: var(--muted); font-size: 12px; box-shadow: lch(0 0 0 / .103) 0 0 0 1px; }
 
-.conversation { width: min(720px, calc(100% - 32px)); margin: 0 auto; padding: 32px 0 54px; }
+.task-conversation { height: calc(100vh - 69px); overflow-y: auto; padding: 18px clamp(18px, 4vw, 48px) 28px; }
+.task-message { position: relative; max-width: 790px; margin-bottom: 20px; }
+.task-message--agent { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; }
+.task-message-avatar { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 50%; background: var(--overlay); color: var(--muted); font-size: 8px; font-weight: 750; }
+.task-message-content { min-width: 0; }
+.task-message header, .task-user-bubble header { display: flex; min-height: 20px; align-items: center; gap: 6px; color: var(--faint); font-size: 10.5px; }
+.task-message header b, .task-user-bubble header b { color: var(--muted); font-weight: 650; }
 
-.message { display: grid; grid-template-columns: 24px 1fr; gap: 10px; margin-bottom: 26px; }
-.avatar { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; background: #e4e5e9; color: var(--muted); font-size: 8px; font-weight: 750; }
-.user .avatar { background: var(--indigo); color: white; }
-.meta { color: var(--faint); font-size: 9px; }
-.message p { margin: 5px 0 0; color: #42454d; font-size: 13px; }
-.message strong { color: var(--ink); }
-.emphasis { margin-top: 34px; }
-.compact { margin-bottom: 18px; }
-.attachment { display: inline-block; margin-top: 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); padding: 4px 8px; color: var(--muted); font-size: 9px; }
+.task-message--user { display: flex; max-width: none; justify-content: flex-end; padding-left: 38px; }
+.task-user-bubble { max-width: min(680px, 88%); border: 1px solid color-mix(in lch, var(--accent) 28%, var(--line)); border-radius: 9px; background: color-mix(in lch, var(--accent) 7%, var(--panel)); padding: 8px 11px; }
+.task-user-bubble p { margin: 2px 0 0; color: var(--ink); font-size: 12.5px; line-height: 1.65; white-space: pre-wrap; }
+.task-attachment { display: flex; width: fit-content; height: 32px; align-items: center; gap: 7px; margin-top: 8px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 9px; color: var(--muted); }
+.task-attachment span { font-size: 11px; }
 
-.process { margin-top: 10px; border-left: 2px solid #c9cbd2; padding-left: 10px; }
-.process summary { color: var(--muted); font-size: 9px; font-weight: 630; cursor: pointer; }
-.process p { color: var(--faint); font-size: 9px; }
+.task-markdown { min-width: 0; color: var(--muted); font-size: 12.5px; line-height: 1.7; }
+.task-markdown p { margin: 8px 0; }
+.task-markdown > :first-child { margin-top: 3px; }
+.task-markdown > :last-child { margin-bottom: 0; }
+.task-markdown strong { color: var(--ink); font-weight: 650; }
 
-.system-note {
-  display: grid;
-  grid-template-columns: 72px 1fr auto;
-  gap: 9px;
-  align-items: baseline;
-  margin: 4px 0 22px 34px;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  padding: 8px 2px;
-  color: var(--muted);
-  font-size: 9px;
+.task-execution-block { max-width: 680px; margin: 2px 0 1px; border: 0; color: color-mix(in srgb, var(--faint) 76%, transparent); font-size: 9.5px; }
+.task-execution-block > summary { display: inline-flex; align-items: center; gap: 4px; border-radius: 5px; padding: 2px 3px; list-style: none; opacity: .72; cursor: pointer; }
+.task-execution-block > summary::-webkit-details-marker { display: none; }
+.task-execution-block[open] .caret { transform: rotate(90deg); }
+.caret { transition: transform 140ms ease; }
+.task-execution-events { margin: 1px 0 1px 7px; border-left: 1px solid color-mix(in srgb, var(--line) 72%, transparent); padding: 3px 0 3px 7px; }
+
+.conversation-note {
+  max-width: 760px;
+  margin: 10px 0 10px 30px;
+  border-left: 2px solid var(--line2);
+  padding: 1px 0 1px 11px;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.6;
 }
 
-.system-note span { color: var(--faint); }
-.system-note b { color: #555861; font-size: 10px; font-weight: 620; }
-.system-note time { color: var(--faint); font-variant-numeric: tabular-nums; }
-.system-note.current { border-color: #d5d8ef; }
-.system-note.current span { color: var(--indigo); }
+.conversation-note time { margin-left: 7px; opacity: .72; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.conversation-note--recovery { border-left-color: color-mix(in lch, var(--cyan) 36%, var(--line2)); }
 
-.notice-card {
-  margin: 6px 0 26px 34px;
-  overflow: hidden;
-  border: 1px solid var(--tone-line);
-  border-left: 3px solid var(--tone);
-  border-radius: 10px;
-  background: var(--paper);
+/* 仅此处是本 Demo 的改版：普通消息、页面和输入框均沿用现有样式。 */
+.system-prompt {
+  max-width: 760px;
+  margin: 12px 0 18px 30px;
+  border-left: 2px solid var(--prompt-tone);
+  padding: 4px 0 4px 12px;
 }
 
-.notice-card.warning { --tone: var(--amber); --tone-line: var(--amber-line); }
-.notice-card.settlement { --tone: var(--rose); --tone-line: var(--rose-line); }
-.notice-main { padding: 16px 18px 14px; }
-.notice-label { color: var(--tone); font-size: 8px; font-weight: 760; letter-spacing: .08em; }
-.notice-card h2 { margin: 3px 0 0; font-size: 15px; font-weight: 670; letter-spacing: -.015em; }
-.notice-card p { margin: 6px 0 0; color: var(--muted); font-size: 10px; }
-.notice-status { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 12px; color: #565961; font-size: 9px; }
-.notice-status span::before { margin-right: 5px; color: var(--tone); content: "✓"; font-weight: 800; }
-.notice-actions { display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 7px 18px; border-top: 1px solid var(--line); background: #fbfbfc; }
-.notice-actions button { border: 1px solid var(--line-strong); border-radius: 7px; background: var(--paper); padding: 5px 9px; color: #50535b; font-size: 9px; font-weight: 620; cursor: pointer; }
-.notice-actions button:hover { background: var(--canvas); }
-.notice-actions button.primary { border-color: #525db7; background: var(--indigo); color: white; }
-.notice-actions details { color: var(--faint); font-size: 9px; }
-.notice-actions details summary { cursor: pointer; }
-.notice-actions details p { max-width: 420px; margin: 6px 0; color: var(--muted); }
+.system-prompt--review { --prompt-tone: color-mix(in lch, var(--amber) 68%, var(--line2)); }
+.system-prompt--settlement { --prompt-tone: color-mix(in lch, var(--amber) 78%, var(--line2)); border-radius: 0 7px 7px 0; background: color-mix(in lch, var(--amber) 8%, transparent); padding: 7px 10px 7px 12px; }
+.system-prompt header { display: flex; align-items: center; gap: 7px; color: var(--faint); font-size: 10.5px; }
+.system-prompt header b { color: color-mix(in lch, var(--prompt-tone) 72%, var(--muted)); font-weight: 650; }
+.system-prompt header time { color: var(--faint); font-weight: 450; }
+.system-prompt h2 { margin: 6px 0 0; color: var(--ink); font-size: 12.5px; font-weight: 650; }
+.system-prompt p { margin: 5px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.62; }
+.system-prompt footer { display: flex; align-items: center; gap: 12px; margin-top: 7px; color: var(--faint); font-size: 10px; }
+.system-prompt footer a { color: var(--accent); text-decoration: none; }
+.system-prompt footer a:hover { text-decoration: underline; }
 
-.history { margin: 4px 0 26px 34px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-.history summary { display: grid; grid-template-columns: 72px 1fr auto; gap: 9px; align-items: baseline; padding: 9px 2px; cursor: pointer; }
-.history summary span, .history summary small { color: var(--faint); font-size: 9px; }
-.history summary b { color: #555861; font-size: 10px; font-weight: 620; }
-.history-list { padding: 3px 0 10px 81px; }
-.history-list p { margin: 6px 0; color: var(--muted); font-size: 9px; }
-.history-list time { display: inline-block; width: 38px; color: var(--faint); }
+.run-activity { display: flex; max-width: 790px; align-items: center; gap: 7px; margin: 2px 0 18px; color: var(--faint); }
+.run-activity-signal { display: flex; width: 20px; height: 20px; align-items: center; justify-content: center; gap: 2px; border-radius: 50%; background: var(--overlay); color: color-mix(in lch, var(--accent) 55%, var(--faint)); }
+.run-activity-signal i { width: 2.5px; height: 2.5px; border-radius: 50%; background: currentColor; }
+.run-activity b { color: var(--muted); font-size: 11.5px; font-weight: 650; }
+.run-activity > span:last-child { font-size: 11.5px; }
 
-.composer { display: flex; align-items: center; margin: 36px 0 0 34px; border: 1px solid var(--line-strong); border-radius: 11px; background: var(--paper); padding: 11px 12px; color: var(--faint); font-size: 10px; box-shadow: 0 5px 18px rgba(32, 34, 44, .05); }
-.composer button { display: grid; place-items: center; width: 26px; height: 26px; margin-left: auto; border: 0; border-radius: 7px; background: var(--indigo); color: white; }
+.reply-box { max-width: 790px; margin-top: 14px; border: 1px solid var(--line2); border-radius: 12px; background: var(--panel); padding: 10px 12px; color: var(--faint); font-size: 11.5px; box-shadow: 0 1px 1px lch(0 0 0 / .04); }
+.reply-box > div { display: flex; align-items: center; margin-top: 18px; }
+.reply-box > div span { border-radius: 999px; padding: 3px 5px; color: var(--faint); font-size: 9.5px; }
+.reply-box button { display: grid; width: 27px; height: 27px; margin-left: auto; place-items: center; border: 0; border-radius: 7px; background: var(--accent); color: white; }
 
-@media (max-width: 620px) {
-  .demo-bar span { display: none; }
-  .app { width: calc(100% - 16px); margin: 8px auto; }
-  .conversation { width: calc(100% - 24px); padding-top: 24px; }
-  .system-note, .notice-card, .history, .composer { margin-left: 0; }
-  .system-note { grid-template-columns: 68px 1fr; }
-  .system-note time { display: none; }
-  .notice-status { display: grid; gap: 5px; }
-  .notice-actions { flex-wrap: wrap; }
-  .history summary { grid-template-columns: 68px 1fr; }
-  .history summary small { display: none; }
-  .history-list { padding-left: 77px; }
+@media (max-width: 560px) {
+  .task-detail { width: calc(100% - 8px); margin: 4px auto; }
+  .task-message--user { padding-left: 10px; }
+  .task-user-bubble { max-width: 96%; }
+  .conversation-note, .system-prompt { margin-left: 10px; }
+  .task-header > button { display: none; }
 }

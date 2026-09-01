@@ -3,94 +3,94 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>真实任务会话 · 系统提示 Demo</title>
+  <title>系统提示局部改版 Demo</title>
   <link rel="stylesheet" href="system-notice-task-demo.css">
 </head>
 <body>
-  <header class="demo-bar">
-    <strong>系统提示改版</strong>
-    <span>真实任务 erNee6w_b0lh · 精简视图</span>
-  </header>
-
-  <main class="app">
+  <main class="task-detail">
     <header class="task-header">
-      <div><span class="task-kind">自由任务</span><b>执行过程折叠时机</b></div>
-      <span class="task-state">正在审查</span>
+      <span class="task-kind">自由任务</span>
+      <b>执行过程折叠时机</b>
+      <span class="task-status"><i></i>正在审查</span>
+      <button type="button">查看改动</button>
     </header>
 
-    <section class="conversation">
-      <article class="message user">
-        <span class="avatar">你</span>
-        <div><div class="meta">你 · 08/31 15:21</div><p>自动折叠执行过程的这个功能，仅在最后一步确认执行完了的时候执行一下折叠行了，运行过程中就不要执行折叠了，能做到吗？</p><span class="attachment">▧ 1 张截图</span></div>
-      </article>
-
-      <article class="message">
-        <span class="avatar">执</span>
-        <div><div class="meta">claude@ccb · 15:55</div><p><strong>能做到，已经改完。</strong></p><p>运行中的回合保持展开；任务停下来时才自动收起。提交 <code>51b8979</code>，构建与浏览器验证通过。</p><details class="process"><summary>执行过程 · 18 个工具</summary><p>定位折叠逻辑、修改组件、补回归测试、执行构建。</p></details></div>
-      </article>
-
-      <div class="system-note"><span>审查开始</span><b>第 1 轮逻辑检查</b><time>16:35</time></div>
-
-      <section class="notice-card warning">
-        <div class="notice-main">
-          <div class="notice-label">审查未通过 · 第 1 轮</div>
-          <h2>还有 1 类运行中场景会提前折叠</h2>
-          <p><code>awaiting_review</code> 和团队执行者仍在运行时，会被误判为已经结束。</p>
-          <div class="notice-status"><span>报告已交回原任务</span><span>智能体正在修复</span><span>无需重新描述需求</span></div>
+    <section class="task-conversation">
+      <article class="task-message task-message--user">
+        <div class="task-user-bubble">
+          <header><b>你</b><time>08/31 15:21</time></header>
+          <p>自动折叠执行过程的这个功能，仅在最后一步确认执行完了的时候执行一下折叠行了，运行过程中就不要执行折叠了，能做到吗？</p>
+          <div class="task-attachment">▧ <span>1 张界面截图</span></div>
         </div>
-        <div class="notice-actions"><button type="button">查看审查报告</button></div>
+      </article>
+
+      <article class="task-message task-message--agent">
+        <span class="task-message-avatar">执</span>
+        <div class="task-message-content">
+          <header><b>claude@ccb</b><time>08/31 15:55</time></header>
+          <div class="task-markdown"><p><strong>能做到，已经改完。</strong></p><p>运行中的回合保持展开；任务停下来时才自动收起。提交 <code>51b8979</code>，构建与浏览器验证通过。</p></div>
+          <details class="task-execution-block"><summary><span class="caret">›</span><span>执行过程 · 18 个工具</span></summary><div class="task-execution-events">定位折叠逻辑、修改组件、补回归测试、执行构建。</div></details>
+        </div>
+      </article>
+
+      <p class="conversation-note">自由工作流第 1 轮审查开始：5.5 审查 · 逻辑检查。<time>08/31 16:35</time></p>
+
+      <section class="system-prompt system-prompt--review">
+        <header><b>审查未通过 · 第 1 轮</b><time>08/31 16:42</time></header>
+        <h2>还有 1 类运行中场景会提前折叠</h2>
+        <p><code>awaiting_review</code> 和团队执行者仍在运行时，会被误判为已经结束。</p>
+        <footer><a href="#">查看审查报告</a><span>原任务已自动继续修复</span></footer>
       </section>
 
-      <article class="message">
-        <span class="avatar">执</span>
-        <div><div class="meta">claude@ccb · 17:17</div><p>审查意见成立，已修复并提交 <code>23a7e18</code>。审查门、执行者运行和暂停状态现在都不会中途折叠。</p></div>
-      </article>
-
-      <details class="history">
-        <summary><span>中间过程</span><b>4 轮修复、2 次审查和 2 次工作区恢复</b><small>展开查看</small></summary>
-        <div class="history-list">
-          <p><time>17:45</time> 第 2 轮审查发现暂停态仍会提前折叠。</p>
-          <p><time>19:36</time> 用户再次复现；系统重建工作区并让智能体重新确认现状。</p>
-          <p><time>19:55</time> 智能体确认漏掉了“最后一步是工具”的另一条布局路径。</p>
-          <p><time>21:29</time> 新的用户消息结束当前回合，任务从最新要求继续。</p>
+      <article class="task-message task-message--agent">
+        <span class="task-message-avatar">执</span>
+        <div class="task-message-content">
+          <header><b>claude@ccb</b><time>08/31 17:17</time></header>
+          <div class="task-markdown"><p>审查意见成立，已修复并提交 <code>23a7e18</code>。审查门、执行者运行和暂停状态现在都不会中途折叠。</p></div>
+          <details class="task-execution-block"><summary><span class="caret">›</span><span>执行过程 · 14 个工具</span></summary></details>
         </div>
-      </details>
-
-      <article class="message user emphasis">
-        <span class="avatar">你</span>
-        <div><div class="meta">你 · 21:28</div><p>你是不是一直理解错了？？图一这种最下方是工具的，和图二这种最下方是文字的，你能看出不一样吗？</p><p>你确定你搞清楚了再给我改！你先给我出个 html demo 我看看你理解了没有！！！</p><span class="attachment">▧ 2 张对照截图</span></div>
       </article>
 
-      <div class="system-note"><span>工作区恢复</span><b>会话已保留，智能体将先核对仓库现状</b><time>21:28</time></div>
+      <p class="conversation-note conversation-note--recovery">原工作目录已不存在，已重建空工作区；会话与用户消息均已保留，智能体会先核对仓库现状再继续。<time>08/31 19:36</time></p>
 
-      <article class="message">
-        <span class="avatar">执</span>
-        <div><div class="meta">claude@ccb · 21:40</div><p><strong>现在我看懂了。先不动代码，按你的要求出 Demo。</strong></p><p>你说的“折叠”是运行中把上方内容重新收编成“过程 + 结论”，不是工具块自身的展开与收起。</p></div>
-      </article>
-
-      <section class="notice-card settlement">
-        <div class="notice-main">
-          <div class="notice-label">本轮未确认完成</div>
-          <h2>Demo 已保留，任务可以从这里继续</h2>
-          <p>进程正常结束，但没有收到完成确认，所以系统没有把任务标记为完成或推进后续队列。</p>
-          <div class="notice-status"><span>产物已保留</span><span>上下文可继续</span><span>任务未误完成</span></div>
+      <article class="task-message task-message--user">
+        <div class="task-user-bubble">
+          <header><b>你</b><time>08/31 21:28</time></header>
+          <p>你是不是一直理解错了？？图一这种最下方是工具的，和图二这种最下方是文字的，你能看出不一样吗？你先给我出个 html demo 我看看你理解了没有！！！</p>
+          <div class="task-attachment">▧ <span>2 张对照截图</span></div>
         </div>
-        <div class="notice-actions"><button class="primary" type="button">继续当前任务</button><details><summary>为什么会这样</summary><p>正常退出只能证明执行器没有崩溃，不能代替智能体确认目标已经达成。</p></details></div>
-      </section>
-
-      <article class="message user compact">
-        <span class="avatar">你</span>
-        <div><div class="meta">你 · 21:42</div><p><strong>这次对了，做吧。</strong></p></div>
       </article>
 
-      <article class="message">
-        <span class="avatar">执</span>
-        <div><div class="meta">claude@ccb · 21:55</div><p><strong>做完了，就是 Demo 里那个改法。</strong></p><p>运行全程保持平铺，只有这一轮执行结束时才收编一次。提交 <code>03146f48</code>，逐帧测试与构建通过。</p><details class="process"><summary>执行过程 · 12 个工具</summary><p>回退误改、增加布局闸门、重写逐帧测试、执行变异验证。</p></details></div>
+      <article class="task-message task-message--agent">
+        <span class="task-message-avatar">执</span>
+        <div class="task-message-content">
+          <header><b>claude@ccb</b><time>08/31 21:40</time></header>
+          <div class="task-markdown"><p><strong>现在我看懂了。先不动代码，按你的要求出 Demo。</strong></p><p>你说的“折叠”是运行中把上方内容重新收编成“过程 + 结论”，不是工具块自身的展开与收起。</p></div>
+        </div>
       </article>
 
-      <div class="system-note current"><span>正在进行</span><b>新一轮审查正在验证最终折叠时机</b><time>09/01 13:49</time></div>
+      <aside class="system-prompt system-prompt--settlement">
+        <header><b>本轮未确认完成</b><time>08/31 21:40</time></header>
+        <p>Demo 已保留，会话可以从这里继续。系统没有把任务误标为完成，也没有推进后续队列。</p>
+        <footer><span>产物已保留 · 上下文可继续</span><a href="#">了解完成确认</a></footer>
+      </aside>
 
-      <div class="composer">给智能体追加消息…<button type="button" aria-label="发送">↑</button></div>
+      <article class="task-message task-message--user">
+        <div class="task-user-bubble"><header><b>你</b><time>08/31 21:42</time></header><p>这次对了，做吧。</p></div>
+      </article>
+
+      <article class="task-message task-message--agent">
+        <span class="task-message-avatar">执</span>
+        <div class="task-message-content">
+          <header><b>claude@ccb</b><time>08/31 21:55</time></header>
+          <div class="task-markdown"><p><strong>做完了，就是 Demo 里那个改法。</strong></p><p>运行全程保持平铺，只有这一轮执行结束时才收编一次。提交 <code>03146f48</code>，逐帧测试与构建通过。</p></div>
+          <details class="task-execution-block"><summary><span class="caret">›</span><span>执行过程 · 12 个工具</span></summary></details>
+        </div>
+      </article>
+
+      <div class="run-activity"><span class="run-activity-signal"><i></i><i></i><i></i></span><b>智能体委派中</b><span>新一轮审查正在验证最终折叠时机。</span></div>
+
+      <div class="reply-box">给智能体追加消息…<div><span>@ claude@ccb</span><button type="button" aria-label="发送">↑</button></div></div>
     </section>
   </main>
 </body>
