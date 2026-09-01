@@ -8,173 +8,90 @@
 </head>
 <body>
   <header class="demo-bar">
-    <i class="demo-dot"></i>
-    <strong>真实任务会话 · 系统提示改版</strong>
-    <span>内容取自任务 erNee6w_b0lh，工具过程已折叠</span>
-    <button id="annotationButton" type="button">标出系统提示</button>
+    <strong>系统提示改版</strong>
+    <span>真实任务 erNee6w_b0lh · 精简视图</span>
   </header>
 
   <main class="app">
     <header class="task-header">
-      <span class="task-kind">自由任务</span>
-      <span class="task-title">执行过程折叠时机</span>
-      <span class="task-id">erNee6w_b0lh</span>
+      <div><span class="task-kind">自由任务</span><b>执行过程折叠时机</b></div>
       <span class="task-state">正在审查</span>
     </header>
 
-    <section class="conversation" aria-label="执行过程折叠时机任务会话">
+    <section class="conversation">
       <article class="message user">
-        <div class="avatar">你</div>
-        <div>
-          <div class="message-meta"><b>你</b><time>08/31 15:21</time></div>
-          <div class="message-copy">
-            自动折叠执行过程的这个功能，仅在最后一步确认执行完了的时候执行一下折叠行了，运行过程中就不要执行折叠了，能做到吗？
-            <div class="attachment">1 张界面截图</div>
-          </div>
+        <span class="avatar">你</span>
+        <div><div class="meta">你 · 08/31 15:21</div><p>自动折叠执行过程的这个功能，仅在最后一步确认执行完了的时候执行一下折叠行了，运行过程中就不要执行折叠了，能做到吗？</p><span class="attachment">▧ 1 张截图</span></div>
+      </article>
+
+      <article class="message">
+        <span class="avatar">执</span>
+        <div><div class="meta">claude@ccb · 15:55</div><p><strong>能做到，已经改完。</strong></p><p>运行中的回合保持展开；任务停下来时才自动收起。提交 <code>51b8979</code>，构建与浏览器验证通过。</p><details class="process"><summary>执行过程 · 18 个工具</summary><p>定位折叠逻辑、修改组件、补回归测试、执行构建。</p></details></div>
+      </article>
+
+      <div class="system-note"><span>审查开始</span><b>第 1 轮逻辑检查</b><time>16:35</time></div>
+
+      <section class="notice-card warning">
+        <div class="notice-main">
+          <div class="notice-label">审查未通过 · 第 1 轮</div>
+          <h2>还有 1 类运行中场景会提前折叠</h2>
+          <p><code>awaiting_review</code> 和团队执行者仍在运行时，会被误判为已经结束。</p>
+          <div class="notice-status"><span>报告已交回原任务</span><span>智能体正在修复</span><span>无需重新描述需求</span></div>
         </div>
-      </article>
+        <div class="notice-actions"><button type="button">查看审查报告</button></div>
+      </section>
 
       <article class="message">
-        <div class="avatar">执</div>
-        <div>
-          <div class="message-meta"><b>claude@ccb</b><time>08/31 15:55</time></div>
-          <div class="message-copy">
-            <p><strong>能做到，已经改完。</strong></p>
-            <p>运行中的回合保持展开；任务停下来时才自动收起。补了单飞、团队和历史回合的回归测试。</p>
-            <p>提交 <code class="commit">51b8979</code>，构建与无头浏览器验证通过。</p>
-            <details class="process-fold"><summary>执行过程 · 18 个工具</summary><p>读取截图、定位折叠逻辑、修改组件、补回归测试、执行构建。</p></details>
-          </div>
+        <span class="avatar">执</span>
+        <div><div class="meta">claude@ccb · 17:17</div><p>审查意见成立，已修复并提交 <code>23a7e18</code>。审查门、执行者运行和暂停状态现在都不会中途折叠。</p></div>
+      </article>
+
+      <details class="history">
+        <summary><span>中间过程</span><b>4 轮修复、2 次审查和 2 次工作区恢复</b><small>展开查看</small></summary>
+        <div class="history-list">
+          <p><time>17:45</time> 第 2 轮审查发现暂停态仍会提前折叠。</p>
+          <p><time>19:36</time> 用户再次复现；系统重建工作区并让智能体重新确认现状。</p>
+          <p><time>19:55</time> 智能体确认漏掉了“最后一步是工具”的另一条布局路径。</p>
+          <p><time>21:29</time> 新的用户消息结束当前回合，任务从最新要求继续。</p>
         </div>
+      </details>
+
+      <article class="message user emphasis">
+        <span class="avatar">你</span>
+        <div><div class="meta">你 · 21:28</div><p>你是不是一直理解错了？？图一这种最下方是工具的，和图二这种最下方是文字的，你能看出不一样吗？</p><p>你确定你搞清楚了再给我改！你先给我出个 html demo 我看看你理解了没有！！！</p><span class="attachment">▧ 2 张对照截图</span></div>
       </article>
 
-      <div class="system-event live">
-        <div class="event-line"><b>第 1 轮审查开始</b><span>5.5 审查正在检查逻辑与边界场景</span><time class="event-time">16:35</time></div>
-      </div>
-
-      <div class="system-event warning" id="reviewNotice">
-        <article class="system-card review">
-          <div class="card-body">
-            <div class="card-head">
-              <span class="card-icon">!</span>
-              <div class="card-copy"><div class="eyebrow">审查未通过 · 第 1 轮</div><h2 class="card-title">还有 1 类运行中场景会提前折叠</h2><p class="card-summary">审查报告已交回原任务，智能体正在按原范围修复，不需要你重新描述需求。</p></div>
-            </div>
-            <div class="card-content">
-              <div class="finding"><i>1</i><span><code>awaiting_review</code> 和团队执行者仍在运行时，会被误判为整条链路已经结束。</span></div>
-            </div>
-          </div>
-          <div class="card-actions"><button class="button primary" type="button">查看审查报告</button><button class="button raw-toggle" type="button">查看现有原文</button><span class="card-note">原任务已自动继续</span></div>
-          <details class="raw-prompt"><summary>现有系统提示原文</summary><pre class="raw-text">【自由工作流审查未通过 · 第 1 轮】
-请先完整读取 report.md，再按报告修复，不要扩大原任务边界。修复完成并验证后调用 complete_task；ash 随后会自动派同一位审查者复审。
-
-证据目录：.../free-review/0t1JglZkpG9L/round-1</pre></details>
-        </article>
-      </div>
+      <div class="system-note"><span>工作区恢复</span><b>会话已保留，智能体将先核对仓库现状</b><time>21:28</time></div>
 
       <article class="message">
-        <div class="avatar">执</div>
-        <div>
-          <div class="message-meta"><b>claude@ccb</b><time>08/31 17:17</time></div>
-          <div class="message-copy"><p>审查意见成立，已修复并提交 <code class="commit">23a7e18</code>。</p><p>单飞和团队现在共用同一条“执行链是否仍在继续”的判据；审查门、执行者运行和暂停状态都不会中途折叠。</p><details class="process-fold"><summary>执行过程 · 14 个工具</summary><p>读取报告、核对现有谓词、重写状态判断、补真实时序测试。</p></details></div>
+        <span class="avatar">执</span>
+        <div><div class="meta">claude@ccb · 21:40</div><p><strong>现在我看懂了。先不动代码，按你的要求出 Demo。</strong></p><p>你说的“折叠”是运行中把上方内容重新收编成“过程 + 结论”，不是工具块自身的展开与收起。</p></div>
+      </article>
+
+      <section class="notice-card settlement">
+        <div class="notice-main">
+          <div class="notice-label">本轮未确认完成</div>
+          <h2>Demo 已保留，任务可以从这里继续</h2>
+          <p>进程正常结束，但没有收到完成确认，所以系统没有把任务标记为完成或推进后续队列。</p>
+          <div class="notice-status"><span>产物已保留</span><span>上下文可继续</span><span>任务未误完成</span></div>
         </div>
-      </article>
+        <div class="notice-actions"><button class="primary" type="button">继续当前任务</button><details><summary>为什么会这样</summary><p>正常退出只能证明执行器没有崩溃，不能代替智能体确认目标已经达成。</p></details></div>
+      </section>
 
-      <div class="compact-history">
-        <span>6</span><b>较早的审查与修复记录</b><small>第 2 轮审查、暂停态修复与验证</small><button type="button" id="historyButton">展开</button>
-      </div>
-
-      <div id="olderHistory" hidden>
-        <div class="system-event warning"><div class="event-line"><b>第 2 轮审查未通过</b><span>暂停与等待答复仍被误判为完成</span><time class="event-time">17:45</time></div></div>
-        <article class="message"><div class="avatar">执</div><div><div class="message-meta"><b>claude@ccb</b><time>17:59</time></div><div class="message-copy">已补齐 <code>pause_task</code> 和 <code>ask_question</code> 场景，提交 <code class="commit">a824bf5</code>。</div></div></article>
-      </div>
-
-      <article class="message user">
-        <div class="avatar">你</div>
-        <div><div class="message-meta"><b>你</b><time>08/31 19:36</time></div><div class="message-copy">这不还是在执行过程中还是会折叠吗？？？？？<div class="attachment">1 张复现截图</div></div></div>
-      </article>
-
-      <div class="system-event info">
-        <article class="system-card recovery">
-          <div class="card-body">
-            <div class="card-head"><span class="card-icon">↻</span><div class="card-copy"><div class="eyebrow">工作区已恢复</div><h2 class="card-title">原工作目录已被清理，系统已重建空工作区</h2><p class="card-summary">历史提交仍可从主分支确认；智能体已收到提醒，会先检查现状再继续。</p></div></div>
-            <div class="card-content"><div class="safe-row"><div class="safe-cell good"><small>任务会话</small><b>已保留</b></div><div class="safe-cell good"><small>用户消息</small><b>已送达</b></div><div class="safe-cell"><small>下一步</small><b>智能体核对仓库</b></div></div></div>
-          </div>
-          <div class="card-actions"><button class="button raw-toggle" type="button">查看现有原文</button><span class="card-note">无需用户处理</span></div>
-          <details class="raw-prompt"><summary>现有系统提示原文</summary><pre class="raw-text">〔系统〕原工作目录(worktree 与分支)已不存在，已重建为空目录并提醒 agent 重新确认现状</pre></details>
-        </article>
-      </div>
-
-      <article class="message">
-        <div class="avatar">执</div>
-        <div><div class="message-meta"><b>claude@ccb</b><time>08/31 19:55</time></div><div class="message-copy"><p><strong>你是对的，之前的改动漏了一整条路径。</strong></p><p>回合在“最后一步是工具”和“最后一步是文字”之间切换时，会来回换布局；我只修了其中一种形状。</p><p>已补齐另一条路径，提交 <code class="commit">f71de69c</code>。</p></div></div>
-      </article>
-
-      <article class="message user">
-        <div class="avatar">你</div>
-        <div><div class="message-meta"><b>你</b><time>08/31 21:28</time></div><div class="message-copy"><p>你是不是一直理解错了？？图一这种最下方是工具的，和图二这种最下方是文字的，你能看出不一样吗？</p><p>你确定你搞清楚了再给我改！你先给我出个 html demo 我看看你理解了没有！！！</p><div class="attachment">2 张对照截图</div></div></div>
-      </article>
-
-      <div class="system-event info"><div class="event-line"><b>当前回合已结束</b><span>检测到新的引导消息，将从最新要求继续</span><time class="event-time">21:29</time></div></div>
-
-      <article class="message user">
-        <div class="avatar">你</div>
-        <div><div class="message-meta"><b>你</b><time>08/31 21:29</time></div><div class="message-copy">而你改了半天的这种地方，本来就没让你动过！！明白吗？？<div class="attachment">1 张标注截图</div></div></div>
+      <article class="message user compact">
+        <span class="avatar">你</span>
+        <div><div class="meta">你 · 21:42</div><p><strong>这次对了，做吧。</strong></p></div>
       </article>
 
       <article class="message">
-        <div class="avatar">执</div>
-        <div><div class="message-meta"><b>claude@ccb</b><time>08/31 21:40</time></div><div class="message-copy"><p><strong>现在我看懂了。先不动代码，按你的要求出 demo。</strong></p><p>你说的“折叠”是运行中把上方内容重新收编成“过程 + 结论”，不是小工具块自身的展开与收起。</p><p>Demo 已生成，等你确认理解后再修改代码。</p></div></div>
+        <span class="avatar">执</span>
+        <div><div class="meta">claude@ccb · 21:55</div><p><strong>做完了，就是 Demo 里那个改法。</strong></p><p>运行全程保持平铺，只有这一轮执行结束时才收编一次。提交 <code>03146f48</code>，逐帧测试与构建通过。</p><details class="process"><summary>执行过程 · 12 个工具</summary><p>回退误改、增加布局闸门、重写逐帧测试、执行变异验证。</p></details></div>
       </article>
 
-      <div class="system-event failure" id="settlementNotice">
-        <article class="system-card settlement">
-          <div class="card-body">
-            <div class="card-head"><span class="card-icon">!</span><div class="card-copy"><div class="eyebrow">本轮未确认完成</div><h2 class="card-title">Demo 已保留，但任务没有被标记为完成</h2><p class="card-summary">进程正常结束不等于目标已经达成。你可以继续当前任务，不需要从头重跑。</p></div></div>
-            <div class="card-content"><div class="safe-row"><div class="safe-cell good"><small>HTML Demo</small><b>已保留</b></div><div class="safe-cell good"><small>会话上下文</small><b>可继续</b></div><div class="safe-cell"><small>任务状态</small><b>等待确认</b></div></div></div>
-          </div>
-          <div class="card-actions"><button class="button primary" type="button">继续当前任务</button><button class="button raw-toggle" type="button">查看为什么</button><span class="card-note">不会误推进后续队列</span></div>
-          <details class="raw-prompt"><summary>现有系统提示原文</summary><pre class="raw-text">本回合没有交卷：agent 结束前没有调用 complete_task 确认目标已达成，按 ash 的完成协议记为未完成。这不是崩溃——进程正常退出只证明 CLI 没挂……产物都还在，点重试会从中断处接着跑，不用从头再来。</pre></details>
-        </article>
-      </div>
+      <div class="system-note current"><span>正在进行</span><b>新一轮审查正在验证最终折叠时机</b><time>09/01 13:49</time></div>
 
-      <article class="message user">
-        <div class="avatar">你</div>
-        <div><div class="message-meta"><b>你</b><time>08/31 21:42</time></div><div class="message-copy"><strong>这次对了，做吧。</strong></div></div>
-      </article>
-
-      <article class="message">
-        <div class="avatar">执</div>
-        <div><div class="message-meta"><b>claude@ccb</b><time>08/31 21:55</time></div><div class="message-copy"><p><strong>做完了，就是 demo 里那个改法。</strong></p><p>运行全程保持平铺，只有执行结束时才做一次收编。提交 <code class="commit">03146f48</code>，逐帧 DOM 测试与构建均通过。</p><details class="process-fold"><summary>执行过程 · 12 个工具</summary><p>回退误改、增加布局闸门、重写逐帧测试、执行变异验证。</p></details></div></div>
-      </article>
-
-      <div class="day-divider">09/01</div>
-
-      <article class="message user">
-        <div class="avatar">你</div>
-        <div><div class="message-meta"><b>你</b><time>13:35</time></div><div class="message-copy">这个执行完了怎么没有自动折叠？图二也是，咋回事，还没做好吗？？<div class="attachment">2 张结果截图</div></div></div>
-      </article>
-
-      <div class="system-event info"><div class="event-line"><b>工作区已重建</b><span>智能体会重新确认主分支与已合并提交</span><time class="event-time">13:35</time></div></div>
-
-      <article class="message user">
-        <div class="avatar">你</div>
-        <div><div class="message-meta"><b>你</b><time>13:46</time></div><div class="message-copy">但是现在上面图一那个的会话又好了，到底咋回事啊<div class="attachment">1 张状态截图</div></div></div>
-      </article>
-
-      <article class="message">
-        <div class="avatar">执</div>
-        <div><div class="message-meta"><b>claude@ccb</b><time>13:47</time></div><div class="message-copy"><p>不是时好时坏，是闸门装错了地方：我把它绑在“整个任务停没停”，你要的是“这一轮执行完就折这一轮”。</p><p>已经把粒度改为单回合，提交 <code class="commit">f8324d11</code>。</p></div></div>
-      </article>
-
-      <div class="system-event live">
-        <article class="system-card current">
-          <div class="card-body"><div class="card-head"><span class="card-icon">··</span><div class="card-copy"><div class="eyebrow">当前状态</div><h2 class="card-title">新一轮审查正在进行</h2><p class="card-summary">审查者正在验证“运行中不重组、单回合结束后立即折叠”这两个时机。</p></div></div></div>
-          <div class="card-actions"><button class="button" type="button">查看审查进度</button><span class="card-note">任务保持运行中</span></div>
-        </article>
-      </div>
-
-      <div class="composer">给智能体追加消息…<div class="composer-row"><span>@ claude@ccb</span><button class="send" type="button" aria-label="发送">↑</button></div></div>
+      <div class="composer">给智能体追加消息…<button type="button" aria-label="发送">↑</button></div>
     </section>
   </main>
-  <script src="system-notice-task-demo.js"></script>
 </body>
 </html>
