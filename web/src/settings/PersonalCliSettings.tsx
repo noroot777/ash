@@ -78,6 +78,32 @@ function setEnvsOf(set: (fn: (prev: PersonalCliEnv[]) => PersonalCliEnv[]) => vo
     set((prev) => prev.map((item) => (item.agentType === next.agentType ? next : item)));
 }
 
+/**
+ * ash MCP 在这个个人目录里登记了没有。
+ *
+ * 为什么值得占一块地方:缺了它的表现是**任务照跑、干完记 failed**,界面上没有任何一处
+ * 说得出原因(agent 调 complete_task 撞回 "No such tool available",而那句话只躺在
+ * 会话正文里)。ash 每次起跑都会自动补,所以这块平时是一行淡字;补不上才变红。
+ */
+function AshMcpNotice({ env }: { env: PersonalCliEnv }) {
+  if (!env.ashMcp) return null;
+  if (env.ashMcp.configured) {
+    return (
+      <p className="pcli-path">
+        ash MCP 已登记为 <code>{env.ashMcp.serverName}</code> —— agent 靠它调{" "}
+        <code>complete_task</code> 交卷。
+      </p>
+    );
+  }
+  return (
+    <div className="auth-warning auth-warning--strong">
+      <b>这个目录里没有 ash MCP 登记，用它跑的任务交不了卷。</b>
+      agent 手上不会有 <code>complete_task</code> 这个工具，活干完了也只会显示成「失败」。
+      ash 每次起跑都会尝试自动补上，这次没补成：{env.ashMcp.problem ?? "原因不明"}。
+    </div>
+  );
+}
+
 function CliEnvBlock({
   env,
   onChanged,
@@ -134,6 +160,7 @@ function CliEnvBlock({
       <p className="pcli-path">
         配置目录 <code>{env.configDir}</code>（注入为 <code>{env.envVar}</code>）
       </p>
+      <AshMcpNotice env={env} />
 
       <div className="pcli-part">
         <div className="pcli-part-head">

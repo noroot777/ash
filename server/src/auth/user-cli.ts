@@ -21,6 +21,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, wri
 import { join } from "node:path";
 import type { AgentType, PersonalCliEnv, PersonalSkill } from "@ash/shared";
 import { DATA_DIR } from "../paths.js";
+import { ensureAshMcp } from "./user-cli-mcp.js";
 
 /** 个人配置目录的根。刻意放 data/ 下 —— 见文件顶部。 */
 export const USER_CLI_ROOT = join(DATA_DIR, "user-cli");
@@ -55,12 +56,15 @@ export function userCliDir(userId: string, agentType: string): string {
 /**
  * 建目录并写下最小 seed。幂等 —— 已存在的文件一律不覆盖(用户可能已经改过)。
  *
- * seed 只有两样,都属于「确定无害」:
+ * seed 只有三样,都属于「确定无害」:
  *  · `skills/` 空目录:让「个人技能」这一层从第一天起就存在,不必等第一次上传。
  *  · claude 的 `.claude.json`:只写 onboarding 完成标记。CLI 首跑会自己在这个目录里
  *    生成这份文件(探针②),我们只是把「别再问一遍引导问题」这一位先摆好。
  *    **不预置任何 model / permissions / env** —— 那些会改变 CLI 行为,而探针③ 表明
  *    带 key 的首跑本来就有一个未定位的挂起,再加变量只会让排查更难。
+ *  · **ash MCP 的登记**(`user-cli-mcp.ts`):它不是「改变 CLI 行为的开关」,而是完成
+ *    协议本身 —— 没有它 agent 调不到 `complete_task`,干完的活一律显示成失败。缺了
+ *    才写、已有不覆盖,所以对已经跑起来的目录也是安全的补做。
  */
 export function ensureUserCliDir(userId: string, agentType: AgentType): string | null {
   if (!configDirEnvVar(agentType)) return null;
@@ -77,6 +81,7 @@ export function ensureUserCliDir(userId: string, agentType: AgentType): string |
     }
   }
   if (agentType === "codex") mkdirSync(join(dir, "sessions"), { recursive: true });
+  ensureAshMcp(dir, agentType);
   return dir;
 }
 
@@ -156,6 +161,7 @@ export function personalCliEnv(userId: string, agentType: AgentType): PersonalCl
       memoryName: null,
       hasMemory: false,
       plugins: [],
+      ashMcp: null,
     };
   }
   const dir = ensureUserCliDir(userId, agentType)!;
@@ -171,7 +177,41 @@ export function personalCliEnv(userId: string, agentType: AgentType): PersonalCl
     memoryName,
     hasMemory: !!memoryFile && existsSync(memoryFile),
     plugins: readPlugins(dir),
+    // 现读一遍(不是复用 ensureUserCliDir 那次的结果):这一屏正是用来看「补上了没有」的,
+    // 用户手工改完刷新页面就该看到新状态。
+    ashMcp: ensureAshMcp(dir, agentType),
   };
+}
+
+/**
+ * 启动自检:隔离档下把每个人的个人配置目录补齐 ash MCP,补不上的**在日志里点名**。
+ *
+ * 为什么补做之外还要单独扫一趟:`ensureUserCliDir` 只在「有人起任务 / 打开设置页」时
+ * 才跑到,而缺这条登记的表现是**任务照跑、干完记 failed** —— 等第一个任务白跑一轮才
+ * 发现,已经晚了一轮。启动时扫一遍,机器起来就是好的;补不上(没 build 过 mcp、配置
+ * 文件坏了)则必须出声,否则用户只会看到一堆莫名其妙的失败任务。
+ *
+ * best-effort:任何一步出错都不许影响启动。
+ */
+export async function sweepPersonalAshMcp(): Promise<void> {
+  // 动态 import:mode.ts / db 都在 auth 这一圈里绕回来,顶层导入会绕出一个环。
+  const { isHostCliIsolated } = await import("./mode.js");
+  if (!(await isHostCliIsolated())) return;
+  const { db } = await import("../db/index.js");
+  const { users } = await import("../db/schema.js");
+  const rows = await db.select({ id: users.id, name: users.name }).from(users);
+  const broken: string[] = [];
+  for (const row of rows) {
+    for (const type of PERSONAL_CLI_TYPES) {
+      const dir = ensureUserCliDir(row.id, type);
+      if (!dir) continue;
+      const state = ensureAshMcp(dir, type);
+      if (!state.configured) broken.push(`${row.name} 的 ${type}：${state.problem ?? "原因不明"}`);
+    }
+  }
+  if (!broken.length) return;
+  console.warn("[ash] 这些个人 CLI 配置目录缺 ash MCP 登记，它们的 agent 交不了卷（没有 complete_task，干完的活会记 failed）：");
+  for (const line of broken) console.warn(`  · ${line}`);
 }
 
 export function listPersonalCliEnv(userId: string): PersonalCliEnv[] {

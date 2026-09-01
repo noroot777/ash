@@ -107,6 +107,7 @@ export type {
   HandoffPeerModeInfo,
   InstanceMode,
   InviteInfo,
+  PersonalAshMcp,
   PersonalCliEnv,
   PersonalSkill,
   ProjectInviteInfo,

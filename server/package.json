@@ -34,6 +34,7 @@
     "test:multi-user": "tsx scripts/test-multi-user.ts",
     "test:multi-user-setup": "tsx scripts/test-multi-user-setup.ts",
     "test:user-cli-smoke": "tsx scripts/test-user-cli-smoke.ts",
+    "test:user-cli-mcp": "tsx scripts/test-user-cli-mcp.ts",
     "test:handoff": "tsx scripts/test-handoff.ts && tsx scripts/test-handoff-local.ts && tsx scripts/test-handoff-auth.ts && tsx scripts/test-handoff-peer-key.ts && tsx scripts/test-handoff-return.ts && tsx scripts/test-handoff-notice.ts && tsx scripts/test-handoff-holder.ts && tsx scripts/test-handoff-free-workflow-rows.ts && tsx scripts/test-handoff-cli-config-dir.ts",
     "test:handoff-cli-config-dir": "tsx scripts/test-handoff-cli-config-dir.ts",
     "test:handoff-peer-key": "tsx scripts/test-handoff-peer-key.ts",
