@@ -95,3 +95,10 @@ export function verifyNoteOf(text: string): VerifyNoteMark | null {
 export function isVerifyNote(text: string): boolean {
   return !!verifyNoteOf(text);
 }
+
+// worktree 被验收清理后，用户继续追问会触发这一条持久系统回执。它不是警告，也不是
+// 新的一段对话；渲染层只把这条已知文案收成一行中性恢复记录，其他系统旁注保持原样。
+export function isWorkspaceRecoveryNote(text: string): boolean {
+  return text.includes("原工作目录(worktree 与分支)已不存在")
+    && text.includes("已重建为空目录");
+}

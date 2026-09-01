@@ -28,6 +28,12 @@ try {
   await notes.first().waitFor();
   assert.equal(await notes.count(), 9, "九条时间线通告都该渲染成旁注");
 
+  const recovery = page.locator(".system-recovery-row");
+  assert.equal(await recovery.count(), 1, "worktree 重建应收成一条恢复回执");
+  assert.match(await recovery.innerText(), /工作区已恢复.*会话与用户消息均已保留/);
+  assert.equal(await recovery.evaluate((el) => getComputedStyle(el).borderLeftWidth), "0px", "恢复回执不画警告式竖线");
+  assert.notEqual(await recovery.evaluate((el) => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0)", "恢复回执用中性底色承接");
+
   // 通告不再借用回合边界那条横贯的分隔线；边界事件本身仍然是那条线。
   const boundary = page.locator(".task-event-line");
   assert.equal(await boundary.count(), 1);

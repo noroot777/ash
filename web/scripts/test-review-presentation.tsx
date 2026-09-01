@@ -46,9 +46,14 @@ assert.deepEqual(
 );
 assert.equal(
   withoutReport.some((row) => row.kind === "item" && row.item.kind === "user" && row.item.text === freePrompt),
-  true,
-  "没有 report.md 时保留自由派审 prompt 作为证据目录兜底",
+  false,
+  "没有 report.md 时也不退回巨型系统消息",
 );
+assert.equal(protocolLane.repairHandoff?.text, freePrompt, "没有 report.md 时把证据目录保留在卡内展开区");
+const protocolMarkup = renderToStaticMarkup(<ReviewerLane taskId="t1" lane={protocolLane}>{null}</ReviewerLane>);
+assert.match(protocolMarkup, /verify-lane--repair/, "审查失败交接使用紧凑状态卡");
+assert.match(protocolMarkup, /查看审查要求/, "原始要求仍有明确入口");
+assert.match(protocolMarkup, /证据目录：\/tmp\/review/, "服务端渲染时原始证据目录没有丢失");
 
 const withReport = conversationFeedRows(protocolItems, { reviews: [{
   id: "fr3",
@@ -61,6 +66,11 @@ assert.equal(
   withReport.some((row) => row.kind === "item" && row.item.kind === "user" && row.item.text === freePrompt),
   false,
   "report.md 可打开时隐藏自由派审修复 prompt",
+);
+assert.equal(
+  withReport.find((row): row is ConversationReviewLane => row.kind === "review-lane")?.repairHandoff?.text,
+  freePrompt,
+  "有报告入口时原始交接同样留在卡内",
 );
 
 const plainResume = conversationFeedRows(build([
@@ -85,6 +95,11 @@ assert.equal(
   inlineRows.some((row) => row.kind === "item" && row.item.kind === "user" && row.item.text === inlinePrompt),
   false,
   "就地验证的同款巨型修复 prompt 也应隐藏",
+);
+assert.equal(
+  inlineRows.find((row): row is ConversationReviewLane => row.kind === "review-lane")?.repairHandoff?.text,
+  inlinePrompt,
+  "就地验证的原始要求并入本轮卡片",
 );
 
 const emptyLane = conversationFeedRows(build([

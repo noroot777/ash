@@ -1,6 +1,6 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { FileText, ShieldCheck } from "@phosphor-icons/react";
-import { ReviewReportDialog } from "../components/MarkdownBody.tsx";
+import { MarkdownBody, ReviewReportDialog } from "../components/MarkdownBody.tsx";
 import type { ReviewFileTarget } from "../components/markdownPolicy.ts";
 import { api } from "../lib/api.ts";
 import { ReviewNote } from "../review/ReviewNote.tsx";
@@ -22,6 +22,17 @@ function timing(lane: ConversationReviewLane): string | null {
   return `${start}${end && end !== start ? `–${end}` : ""}${duration ? ` · ${duration}` : ""}`;
 }
 
+function repairHeading(text: string): string {
+  return text.includes("自动复审已停止")
+    ? "自动复审已停止，等待修复后再决定是否复审"
+    : "审查发现需要继续修复的问题";
+}
+
+function repairSummary(text: string): string {
+  if (text.includes("不要扩大原任务边界")) return "请按审查报告修复，不要扩大原任务边界。";
+  return "请按本轮审查结论完成修复，再重新确认任务已完成。";
+}
+
 export function ReviewerLane({
   taskId,
   lane,
@@ -31,7 +42,8 @@ export function ReviewerLane({
   lane: ConversationReviewLane;
   children: ReactNode;
 }) {
-  const [collapsed, setCollapsed] = useState(lane.defaultCollapsed);
+  const defaultCollapsed = lane.repairHandoff ? true : lane.defaultCollapsed;
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [report, setReport] = useState<ReviewFileTarget | null>(null);
   const bodyId = useId();
   const state = stateOf(lane.conclusion, lane.complete);
@@ -46,7 +58,7 @@ export function ReviewerLane({
 
   // 第一轮原本是“最新轮”，第二轮出现后会变成“历史轮”；只在这条默认规则发生变化时
   // 自动折叠一次。用户随后手动展开，不会被 SSE 的普通刷新反复关回去。
-  useEffect(() => setCollapsed(lane.defaultCollapsed), [lane.defaultCollapsed, lane.id]);
+  useEffect(() => setCollapsed(defaultCollapsed), [defaultCollapsed, lane.id]);
 
   const openReport = () => {
     const target = lane.report;
@@ -56,6 +68,61 @@ export function ReviewerLane({
       : api.freeReviewFileUrl(taskId, target.runId, target.round, "report.md");
     setReport({ name: "report.md", url });
   };
+
+  if (lane.repairHandoff) {
+    const handoff = lane.repairHandoff.text;
+    return (
+      <article className={`verify-lane verify-lane--repair${bodyHidden ? " is-collapsed" : ""}`} aria-label={lane.title}>
+        <span className="verify-repair-mark" aria-hidden="true"><ShieldCheck size={14} weight="fill" /></span>
+        <div className="verify-repair-main">
+          <header className="verify-repair-head">
+            <b>{lane.title}未通过</b>
+            <span>
+              {lane.reviewerLabel ?? "审查者"}
+              {reviewerModel ? ` · ${reviewerModel}` : ""}
+              {lane.note ? " · 含附言" : ""}
+            </span>
+            {time && <time>{time}</time>}
+          </header>
+          <h2>{repairHeading(handoff)}</h2>
+          <p>{repairSummary(handoff)}</p>
+          <footer className="verify-repair-actions">
+            <details className="verify-repair-requirements">
+              <summary>查看审查要求</summary>
+              <div><MarkdownBody text={handoff} /></div>
+            </details>
+            {lane.reportAvailable && lane.report && (
+              <button type="button" onClick={openReport}>
+                <FileText size={11} aria-hidden="true" />审查报告
+              </button>
+            )}
+            {hasBody && (
+              <button
+                type="button"
+                aria-controls={bodyId}
+                aria-expanded={!collapsed}
+                onClick={() => setCollapsed((value) => !value)}
+              >
+                {collapsed ? "审查过程" : "收起过程"}
+              </button>
+            )}
+            <span>已交回原任务，智能体正在修复</span>
+          </footer>
+          <div className="verify-lane-body" id={bodyId} hidden={bodyHidden}>
+            {lane.note && <ReviewNote text={lane.note} />}
+            {children}
+          </div>
+        </div>
+        {report && (
+          <ReviewReportDialog
+            target={report}
+            onReviewReport={setReport}
+            onClose={() => setReport(null)}
+          />
+        )}
+      </article>
+    );
+  }
 
   return (
     <article className={`verify-lane${bodyHidden ? " is-collapsed" : ""}`} aria-label={lane.title}>

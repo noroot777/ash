@@ -92,10 +92,48 @@
 .verify-lane .task-message--user.is-system-authored { padding-right: 0; padding-left: 0; }
 .verify-lane .conversation-note { margin-left: 0; }
 
+/* 审查失败后的系统交接不再单独伪装成一条「系统消息」。它是本轮审查的状态收据：
+   一枚图标、一句结论、原要求与审查过程各自按需展开，颜色只在图标与标题上轻点一下。 */
+.verify-lane--repair {
+  display: grid;
+  width: min(760px, calc(100% - 30px));
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 10px;
+  margin: 12px 0 18px 30px;
+  background: color-mix(in lch, var(--amber) 3%, var(--panel));
+  padding: 10px 11px;
+}
+.verify-lane--repair::before { content: none; }
+.verify-repair-mark { display: grid; width: 26px; height: 26px; place-items: center; border-radius: 7px; background: color-mix(in lch, var(--amber) 13%, var(--panel)); color: color-mix(in lch, var(--amber) 76%, var(--muted)); }
+.verify-repair-main { min-width: 0; }
+.verify-repair-head { display: flex; align-items: baseline; gap: 7px; color: var(--faint); font-size: 10px; }
+.verify-repair-head > b { flex: none; color: color-mix(in lch, var(--amber) 72%, var(--muted)); font-size: 10.5px; font-weight: 650; }
+.verify-repair-head > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.verify-repair-head > time { flex: none; margin-left: auto; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.verify-repair-main > h2 { margin: 5px 0 0; color: var(--ink); font-size: 12.5px; font-weight: 650; }
+.verify-repair-main > p { margin: 4px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.6; }
+.verify-repair-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 6px; color: var(--faint); font-size: 10px; }
+.verify-repair-actions > span { min-width: 190px; flex: 1; }
+.verify-repair-actions > button { display: inline-flex; min-height: 22px; align-items: center; gap: 4px; border: 0; border-radius: 5px; background: transparent; padding: 2px 4px; color: var(--accent); font-size: 10px; }
+.verify-repair-actions > button:hover { background: var(--raised); color: var(--ink); }
+.verify-repair-requirements { min-width: fit-content; }
+.verify-repair-requirements > summary { border-radius: 5px; padding: 2px 4px; color: var(--accent); cursor: pointer; list-style: none; }
+.verify-repair-requirements > summary::-webkit-details-marker { display: none; }
+.verify-repair-requirements > summary:hover { background: var(--raised); color: var(--ink); }
+.verify-repair-requirements[open] { flex-basis: 100%; }
+.verify-repair-requirements > div { margin-top: 7px; border-left: 1px solid var(--line2); padding-left: 9px; }
+.verify-repair-requirements .task-markdown { color: var(--muted); font-size: 10.5px; line-height: 1.55; }
+.verify-repair-requirements .task-markdown :is(h2, h3, h4) { font-size: 11px; }
+.verify-lane--repair .verify-lane-body { margin-top: 9px; border-top: 1px solid var(--line); padding: 12px 0 0; }
+
 @media (max-width: 680px) {
   .verify-lane-head { flex-wrap: wrap; }
   .verify-lane-by { flex: 1 1 160px; }
   .verify-lane-time { order: 2; margin-left: 26px; }
   .verify-lane-actions { margin-left: auto; }
   .verify-lane-time + .verify-lane-actions { margin-left: auto; }
+  .verify-lane--repair { width: calc(100% - 10px); margin-left: 10px; }
+  .verify-repair-head { flex-wrap: wrap; }
+  .verify-repair-head > span { display: none; }
+  .verify-repair-head > time { margin-left: auto; }
 }

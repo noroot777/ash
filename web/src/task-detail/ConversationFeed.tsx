@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { Copy, File, ShieldCheck } from "@phosphor-icons/react";
+import { ArrowClockwise, Copy, File, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
 import { runActivityExecutor, runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
@@ -15,6 +15,7 @@ import { MessageFooter } from "../components/MessageFooter.tsx";
 import { TurnRetryButton } from "../components/TurnRetryButton.tsx";
 import { MessageAttachments } from "./Attachments.tsx";
 import { conversationFeedRows } from "./conversationReviewLanes.ts";
+import { isWorkspaceRecoveryNote } from "./conversationNotes.ts";
 import { ReviewerLane } from "./ReviewerLane.tsx";
 import { type TurnRetryTarget, turnRetryTarget } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
@@ -214,6 +215,15 @@ export function ConversationFeed({
           <span />
           <p>{item.text}{item.at ? ` · ${formatInstant(item.at)}` : ""}</p>
           <span />
+        </div>
+      );
+    }
+    if (isWorkspaceRecoveryNote(item.text)) {
+      return (
+        <div className="system-recovery-row" role="status" key={item.id}>
+          <span className="system-recovery-icon" aria-hidden="true"><ArrowClockwise size={12} weight="bold" /></span>
+          <p><b>工作区已恢复</b>原目录已不存在，系统已重建空工作区；会话与用户消息均已保留。</p>
+          {item.at && <time>{formatInstant(item.at)}</time>}
         </div>
       );
     }

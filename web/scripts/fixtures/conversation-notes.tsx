@@ -56,6 +56,7 @@ const output = [
   // —— 不能是红的，也不能把 Markdown 标记原样露出来（服务端文案见 @ash/shared/session-notes）。
   // 这里用的是**修复前落盘的原文**：历史记录刷新后同样要满足这两条。
   turn("system", LEGACY_SESSION_LOST_NOTE, "2026-08-10T06:10:30.000Z"),
+  turn("system", "〔系统〕原工作目录(worktree 与分支)已不存在，已重建为空目录并提醒 agent 重新确认现状", "2026-08-10T06:11:00.000Z"),
   "收到审查意见，开始修复。",
   // ash 自己插在 agent 输出里的注记走 markdown 引用块，视觉上要跟系统旁注同档。
   "\n> 正在压缩上下文…\n",

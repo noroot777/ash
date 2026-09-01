@@ -81,9 +81,9 @@ try {
   assert.equal(await lanes.nth(4).locator(".verify-lane-body > *").count(), 0);
   assert.deepEqual(await lanes.nth(4).locator(".verify-lane-actions > button").allInnerTexts(), [], "空正文没有无效展开按钮");
   assert.deepEqual(
-    await lanes.nth(0).locator(".verify-lane-actions > button").allInnerTexts(),
-    ["审查报告", "展开"],
-    "审查报告必须在展开按钮左边",
+    await lanes.nth(0).locator(".verify-repair-actions > button").allInnerTexts(),
+    ["审查报告", "审查过程"],
+    "失败卡把报告与过程入口收在同一行",
   );
   assert.deepEqual(
     await lanes.nth(2).locator(".verify-lane-actions > button").allInnerTexts(),
@@ -91,8 +91,8 @@ try {
     "启动失败旧卡不能占用后来重跑生成的报告",
   );
   assert.deepEqual(
-    await lanes.nth(3).locator(".verify-lane-actions > button").allInnerTexts(),
-    ["审查报告", "展开"],
+    await lanes.nth(3).locator(".verify-repair-actions > button").allInnerTexts(),
+    ["审查报告", "审查过程"],
   );
   assert.equal(
     await messages.nth(4).evaluate((el) => el.closest(".verify-lane")?.getAttribute("aria-label")),
@@ -103,7 +103,13 @@ try {
   const resumeMarkers = page.getByText(/继续（从中断处）/);
   assert.equal(await resumeMarkers.count(), 1, "普通任务的 checkpoint 续跑标记必须保留");
   assert.equal(await resumeMarkers.first().evaluate((el) => !!el.closest(".verify-lane")), false, "只隐藏审查卡内部的续跑标记");
-  assert.equal(await page.getByText(/请先完整读取 report\.md/).count(), 0, "自由审查修复 prompt 不伪装成系统消息块");
+  assert.equal(await page.locator(".task-message--user.is-system-authored").count(), 0, "审查修复 prompt 不再伪装成系统消息块");
+  const repairCards = page.locator(".verify-lane--repair");
+  assert.equal(await repairCards.count(), 2, "两条修复交接都并入各自的审查卡");
+  assert.match(await repairCards.nth(0).innerText(), /第 2 轮验证未通过.*已交回原任务，智能体正在修复/s);
+  assert.match(await repairCards.nth(1).innerText(), /第 1\/5 轮审查未通过.*已交回原任务，智能体正在修复/s);
+  await repairCards.nth(1).getByText("查看审查要求", { exact: true }).click();
+  assert.match(await repairCards.nth(1).innerText(), /证据目录：\/tmp\/free-review\/round-1/, "没有独立系统消息后原始证据仍可展开查看");
 
   // 折叠状态不妨碍直接看报告；报告沿用现有应用内 Markdown 弹层，不另开标签页。
   const pageCount = page.context().pages().length;
@@ -124,12 +130,12 @@ try {
   assert.match(await freeDialog.innerText(), /自由派审报告 fr1 第 1 轮/);
   await freeDialog.getByRole("button", { name: "关闭审查报告" }).click();
 
-  await lanes.nth(0).getByRole("button", { name: "展开" }).click();
+  await lanes.nth(0).getByRole("button", { name: "审查过程" }).click();
   assert.equal(await lanes.nth(0).locator(".verify-lane-body").isVisible(), true);
-  assert.equal(await lanes.nth(0).getByRole("button", { name: "收起" }).count(), 1);
+  assert.equal(await lanes.nth(0).getByRole("button", { name: "收起过程" }).count(), 1);
   // 下面量版式，三张卡都得摊开。
   await lanes.nth(1).getByRole("button", { name: "展开" }).click();
-  await lanes.nth(3).getByRole("button", { name: "展开" }).click();
+  await lanes.nth(3).getByRole("button", { name: "审查过程" }).click();
 
   // 执行方恢复普通任务原来的无卡片排版；审查泳道保留中性卡片 + 左绿线，整张卡
   // 移回左侧。审查正文不能再套一层卡。
@@ -228,10 +234,9 @@ try {
       const rect = body.getBoundingClientRect();
       return { x: Math.round(rect.x), width: Math.round(rect.width) };
     }));
-  assert.equal(boxes[3].x, boxes[1].x, "两轮验证正文应使用同一条泳道内边距");
-  assert.equal(boxes[3].width, boxes[1].width, "两轮验证正文宽度应一致");
-  assert.equal(boxes[4].x, boxes[1].x, "自由派审的正文也在泳道里，跟就地验证同一条内边距");
-  assert.equal(boxes[4].width, boxes[1].width);
+  assert.equal(boxes[4].x, boxes[1].x, "两张失败交接卡里的审查正文应使用同一条内边距");
+  assert.equal(boxes[4].width, boxes[1].width, "两张失败交接卡里的审查正文宽度应一致");
+  assert.ok(boxes[3].x < boxes[1].x, "普通审查泳道仍沿用原内边距，失败卡只在自己的摘要列内展开");
   assert.notEqual(boxes[4].x, boxes[0].x, "卡内正文比卡外窄，不然折叠卡的边界看不出来");
 
   // 头像换了个东西（盾形图标而不是首字母），但盘子本身大小不变。

@@ -11,7 +11,7 @@ import {
   normalizeSessionNoteText,
 } from "@ash/shared/session-notes";
 import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
-import { noteTone } from "../src/task-detail/conversationNotes.ts";
+import { isWorkspaceRecoveryNote, noteTone } from "../src/task-detail/conversationNotes.ts";
 
 // —— 语气分类：办成了的事不报红，没办成的才报红 ——
 assert.equal(noteTone("自由工作流第 2 轮审查通过（5.5审查）。"), "neutral");
@@ -23,6 +23,12 @@ assert.equal(noteTone("自由工作流第 1 轮审查未通过，意见已发回
 assert.equal(noteTone("完成后审查启动失败：审查者不可用"), "error");
 assert.equal(noteTone("已取消完成后审查预约。"), "error");
 assert.equal(noteTone("合并清理警告：worktree 未能删除"), "error");
+assert.equal(
+  isWorkspaceRecoveryNote("〔系统〕原工作目录(worktree 与分支)已不存在，已重建为空目录并提醒 agent 重新确认现状"),
+  true,
+  "已知的 worktree 重建回执应拿到专用单行样式",
+);
+assert.equal(isWorkspaceRecoveryNote("合并清理警告：worktree 未能删除"), false, "普通 worktree 旁注不能误判为恢复回执");
 
 // —— 会话轮换旁注：中性事实，不是本回合失败 ——
 // 这几句会出现在一个 exit 0 的成功回合、甚至用户自己点的「停止全组」上。判据不是「文案

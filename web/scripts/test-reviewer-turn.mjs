@@ -85,6 +85,26 @@ assert.equal(firstLane.complete, true);
 assert.equal(firstLane.reportAvailable, true, "跑完且审查者确实说过话，才有可看的 report.md");
 assert.equal(firstLane.defaultCollapsed, false, "唯一一轮仍是最新轮，默认展开");
 
+const inlineHandoffText = "【自动验证未通过 · 第 2 轮】\n请先完整读取 report.md，再按报告修复，不要扩大原任务边界。";
+const inlineHandoffItems = buildConversationItems([{
+  session,
+  output: [
+    turn("system", "第 2 轮验证开始：就在这个任务的工作目录里跑。", "2026-08-10T03:40:00.000Z"),
+    "验证回合说的话。",
+    turn("system", "第 2 轮验证未通过，意见已发回会话；修复完成后自动复验。", "2026-08-10T04:10:00.000Z"),
+    turn("user", inlineHandoffText, "2026-08-10T04:10:30.000Z", { by: "system" }),
+  ].join("\n"),
+  trace: [run("2026-08-10T03:40:00.000Z", 2)],
+}], [session], []);
+const inlineHandoffRows = conversationFeedRows(inlineHandoffItems);
+const inlineHandoffLane = inlineHandoffRows.find((row) => row.kind === "review-lane");
+assert.equal(inlineHandoffLane.repairHandoff?.text, inlineHandoffText, "就地验证交接应并入本轮审查卡");
+assert.equal(
+  inlineHandoffRows.some((row) => row.kind === "item" && row.item.kind === "user" && row.item.bySystem),
+  false,
+  "修复要求不再另画一大块系统消息",
+);
+
 const twoRoundItems = buildConversationItems([{
   session,
   output: [
@@ -308,6 +328,21 @@ assert.equal(
   "拿不到 reviews 就没有 runId，宁可不给入口也不能拼一个打不开的 URL",
 );
 assert.equal(freeLaneNoState.title, "第 1 轮审查", "远程只读视图拿不到 reviews，标题退回不带分母");
+
+const freeHandoffText = "【自由工作流审查未通过 · 第 1 轮】\n请先完整读取 report.md，再按报告修复，不要扩大原任务边界。\n\n证据目录：/tmp/free-review/round-1";
+const freeHandoffRows = conversationFeedRows(buildFreeLane([
+  turn("system", freeNotes[0], "2026-08-11T02:00:00.000Z"),
+  turn("system", freeNotes[1], "2026-08-11T02:40:00.000Z"),
+  turn("user", freeHandoffText, "2026-08-11T02:40:30.000Z", { by: "system" }),
+]));
+const freeHandoffLane = freeHandoffRows.find((row) => row.kind === "review-lane");
+assert.equal(freeHandoffLane.reportAvailable, false, "拿不到 reviews 时仍然没有伪造的报告入口");
+assert.equal(freeHandoffLane.repairHandoff?.text, freeHandoffText, "没有 report.md 入口时原始要求仍保留在卡内");
+assert.equal(
+  freeHandoffRows.some((row) => row.kind === "item" && row.item.kind === "user" && row.item.bySystem),
+  false,
+  "无报告入口也不该退回巨大的系统消息块",
+);
 
 // —— 「本次审查一共几轮」：分母是 retryLimit + 1（首轮 + 允许的自动复审次数）——
 const scaledLane = conversationFeedRows(freeLaneItems, {

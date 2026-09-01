@@ -50,6 +50,24 @@
 }
 .team-feed .conversation-note { margin-left: 0; }
 
+/* 工作目录重建只是一次恢复回执：不用警告色，也不再跟普通旁注一样画左竖线。 */
+.system-recovery-row {
+  display: flex;
+  max-width: 760px;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 16px 30px;
+  border-radius: 7px;
+  background: var(--raised);
+  padding: 6px 9px;
+  color: var(--faint);
+  font-size: 10.5px;
+}
+.system-recovery-icon { display: grid; width: 20px; height: 20px; flex: 0 0 20px; place-items: center; border-radius: 6px; background: var(--panel); color: var(--muted); }
+.system-recovery-row p { min-width: 0; flex: 1; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.system-recovery-row b { margin-right: 7px; color: var(--muted); font-weight: 650; }
+.system-recovery-row time { flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
 /* 旁注不算换段：被它隔开的下半截还是同一个会话在说话，接着上一段排版就行，
    头像和执行器名不重报（重报出来就是图二那种「一条会话被劈成两半」）。 */
 .task-message--agent.is-continuation { margin-top: -6px; }
@@ -58,4 +76,6 @@
 
 @media (max-width: 560px) {
   .conversation-note { margin-left: 10px; }
+  .system-recovery-row { margin-left: 10px; }
+  .system-recovery-row p { white-space: normal; }
 }
