@@ -6,6 +6,19 @@
     <meta name="theme-color" content="#efeff0" />
     <link rel="icon" href="data:," />
     <title>Ash</title>
+    <script>
+      // 身份确认要一个来回，而它决定首屏渲染什么（工作台 / 向导 / 登录页）。放在这里 =
+      // HTML 一解析就起飞，与 bundle 的下载和解析**并行**；等 React 挂上来时结果多半已经
+      // 在手。挪进 bundle 里就变成串行的第二段，本机看不出来，远程访问那段空窗刚好够闪
+      // 一屏登录外壳再跳走。
+      //
+      // **必须是同步的经典脚本**：加上 type="module" 它就变成 defer，跟 bundle 一起排到
+      // 解析之后跑，这里争取的那点提前量当场归零。
+      // 接它的是 src/lib/authProbe.ts；接不住就照常自己请求一次，那条路径永远能工作。
+      window.__ashAuthProbe = fetch("/api/auth/state", { credentials: "same-origin" })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .catch(function () { return null; });
+    </script>
   </head>
   <body>
     <div id="root"></div>

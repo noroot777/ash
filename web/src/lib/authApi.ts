@@ -13,6 +13,7 @@ import type {
   UserView,
 } from "@ash/shared";
 import { id, json, request } from "./apiClient.ts";
+import { takeAuthProbe } from "./authProbe.ts";
 
 export interface UnbackedExecutor {
   id: string;
@@ -28,7 +29,9 @@ export interface SetupPreflight {
 }
 
 export const authApi = {
-  state: () => request<AuthState>("/auth/state"),
+  // 首屏那一次优先吃 index.html 预热好的结果(authProbe.ts):省掉「bundle 跑起来之后
+  // 才开始问」的那一个 RTT。预热只兑现一次,之后每一次都是真请求。
+  state: async () => (await takeAuthProbe()) ?? (await request<AuthState>("/auth/state")),
 
   login: (key: string) => request<{ user: UserView }>("/auth/login", json("POST", { key })),
   logout: () => request<{ ok: true }>("/auth/logout", json("POST")),

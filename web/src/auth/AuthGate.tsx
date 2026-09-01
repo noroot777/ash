@@ -27,6 +27,14 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [route, setRoute] = useState(() => routeOf(window.location.pathname));
+  // 「确认身份」慢到该给个交代了没有。**首屏空窗期一律不渲染登录外壳** —— 那是整块
+  // 深色品牌面板,而它多数时候只存在一个 RTT,闪出来再跳走比什么都不显示更吵(远程
+  // 访问时用户看到的就是「刷新一下先闪一屏登录页」)。真等久了才淡入一行低调的字。
+  const [waitedLong, setWaitedLong] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setWaitedLong(true), 400);
+    return () => clearTimeout(timer);
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -53,23 +61,21 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (route?.kind === "claim") return <ClaimPage token={route.token} onDone={leaveRoute} />;
 
   if (!state) {
-    return (
-      <AuthShell>
-        <div className="auth-card auth-card--service">
-          {error ? (
-            <>
-              <h1>连不上服务端</h1>
-              <p className="auth-note">{error}</p>
-              <button type="button" className="ui-button ui-button--primary" onClick={() => void refresh()}>
-                重试
-              </button>
-            </>
-          ) : (
-            <p className="auth-note">正在确认身份…</p>
-          )}
-        </div>
-      </AuthShell>
-    );
+    // 连不上是**持久态**,得把话说全,所以照旧给整屏外壳。等待则相反(见上)。
+    if (error) {
+      return (
+        <AuthShell>
+          <div className="auth-card auth-card--service">
+            <h1>连不上服务端</h1>
+            <p className="auth-note">{error}</p>
+            <button type="button" className="ui-button ui-button--primary" onClick={() => void refresh()}>
+              重试
+            </button>
+          </div>
+        </AuthShell>
+      );
+    }
+    return waitedLong ? <div className="auth-booting">正在确认身份…</div> : null;
   }
 
   if (state.needsSetup) return <SetupWizard state={state} onDone={refresh} />;
