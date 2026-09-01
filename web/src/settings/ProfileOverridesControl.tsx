@@ -8,6 +8,7 @@ import {
 } from "@ash/shared/cli-overrides";
 import { Button } from "../components/ui.tsx";
 import { fmtOverrideValue, useCliOverrideDraft } from "../lib/cliOverrideDraft.ts";
+import { selectAllOnFocus } from "../lib/selectAllOnFocus.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { useCliHostEnv } from "../lib/useCliHostEnv.ts";
 
@@ -138,6 +139,7 @@ export function ProfileOverridesControl({
                     placeholder={spec.placeholder}
                     value={draft[spec.key] ?? ""}
                     onChange={(event) => set(spec.key, event.target.value)}
+                    {...selectAllOnFocus}
                   />
                   {spec.unit && <small>{spec.unit}</small>}
                   <Button
