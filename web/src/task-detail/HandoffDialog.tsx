@@ -7,6 +7,7 @@ import type {
   Task, TaskListItem,
 } from "@ash/shared";
 import { needsPeerKey } from "@ash/shared/handoff";
+import { isAcceptedStage } from "@ash/shared";
 import { Fingerprint, SpinnerGap, Warning } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { api, ApiError, type TaskScopedHandoffPreflightResult } from "../lib/api.ts";
@@ -56,7 +57,12 @@ export function HandoffDialog({
   // 别再把人支去设置页 —— 自用模式的设置页里以前根本没有这个输入框(本任务的起因)。
   const [peerKeyRequired, setPeerKeyRequired] = useState(false);
   const [projectId, setProjectId] = useState("");
-  const [autoResume, setAutoResume] = useState(pendingHandoff?.autoResume ?? true);
+  // 已验收的任务到了对面也不会自己跑起来（服务端硬闸在 handoff-import：续跑会把验收章
+  // 连同合并快照整套摘掉）。所以这里默认不勾、也不让勾 —— 留一个勾了不生效的框，只会让
+  // 人以为「我明明勾了」。pending 重放那一档仍以冻结的第一次参数为准。
+  const accepted = isAcceptedStage(task.stage);
+  const [autoResume, setAutoResume] = useState(pendingHandoff?.autoResume ?? !accepted);
+  const autoResumeLocked = pendingHandoff?.autoResume !== undefined || accepted;
   const [busy, setBusy] = useState(false);
   const [applying, setApplying] = useState(false);
   const [approval, setApproval] = useState<HandoffApprovalResult | null>(null);
@@ -351,7 +357,8 @@ export function HandoffDialog({
               errorMessage={preflightError ?? "没有找到它现在的地址。"}
               identityMissing={!returningHandoff.peerFp}
               autoResume={autoResume}
-              autoResumeLocked={pendingHandoff?.autoResume !== undefined}
+              autoResumeLocked={autoResumeLocked}
+              accepted={accepted}
               replay={Boolean(pendingReturn)}
               busy={busy}
               onAutoResumeChange={setAutoResume}
@@ -572,11 +579,17 @@ export function HandoffDialog({
                   <input
                     type="checkbox"
                     checked={autoResume}
-                    disabled={busy || pendingHandoff?.autoResume !== undefined}
+                    disabled={busy || autoResumeLocked}
                     onChange={(event) => setAutoResume(event.target.checked)}
                   />
                   导入完成后在对端立即续跑
                 </label>
+                {accepted && (
+                  <p className="handoff-peer-line">
+                    <Warning size={13} aria-hidden="true" />
+                    <span>任务已验收，到对端不会自动续跑 —— 续跑会把验收结论和合并快照整套摘掉。</span>
+                  </p>
+                )}
               </>
             )}
           </>
