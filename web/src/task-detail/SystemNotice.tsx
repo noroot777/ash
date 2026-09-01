@@ -88,6 +88,9 @@ export function SystemEventDigest({ items, mode }: { items: EventItem[]; mode: S
   );
   return (
     <div className={`system-event-digest is-${mode} is-${lead.kind}`} role={lead.kind === "error" ? "status" : undefined}>
+      {mode === "aligned" && (
+        <span className="system-event-avatar" aria-hidden="true">{eventIcon(lead.kind)}</span>
+      )}
       {items.length === 1 ? <div className="system-event-digest-line">{line}</div> : (
         <details>
           <summary>{line}</summary>
@@ -123,7 +126,24 @@ export function SystemEventNote({ item, mode = "footnote" }: { item: EventLike; 
   );
 }
 
-export function SystemBoundary({ item, surface = "task" }: { item: EventLike; surface?: "task" | "team" }) {
+export function SystemBoundary({
+  item,
+  surface = "task",
+  mode = "footnote",
+}: {
+  item: EventLike;
+  surface?: "task" | "team";
+  mode?: SystemNoticeMode;
+}) {
+  const kind = systemEventKind(item.text, item.tone);
+  if (mode === "aligned") {
+    return (
+      <div className={`${surface === "team" ? "team-feed-event" : "task-event-line"} system-boundary notice-mode-aligned is-${kind}`}>
+        <span className="system-event-avatar" aria-hidden="true">{eventIcon(kind)}</span>
+        <p>{item.text}{item.at ? ` · ${formatInstant(item.at)}` : ""}</p>
+      </div>
+    );
+  }
   return (
     <div className={`${surface === "team" ? "team-feed-event" : "task-event-line"} system-boundary${item.tone === "error" ? " is-error" : ""}`}>
       <span />

@@ -238,7 +238,7 @@ export function ConversationFeed({
     // 回合边界才配得上一条横贯的分隔线；系统旁注只是贴在会话边上的一行小字，
     // 它不该看起来像「这里换了一段对话」。
     if (item.variant === "boundary") {
-      return <SystemBoundary item={item} key={item.id} />;
+      return <SystemBoundary item={item} mode={preserveSystemStyle ? "footnote" : noticeMode} key={item.id} />;
     }
     if (preserveSystemStyle) {
       return (

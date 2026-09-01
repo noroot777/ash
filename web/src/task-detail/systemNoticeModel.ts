@@ -1,10 +1,11 @@
 import type { ConversationEventTone } from "./conversationNotes.ts";
 
 export type SystemEventKind = "neutral" | "progress" | "success" | "warning" | "error" | "notice" | "recovery";
-export type SystemNoticeMode = "footnote" | "collapsed" | "attached";
+export type SystemNoticeMode = "footnote" | "aligned" | "collapsed" | "attached";
 
 export const SYSTEM_NOTICE_MODES: ReadonlyArray<{ value: SystemNoticeMode; label: string }> = [
-  { value: "footnote", label: "会话脚注" },
+  { value: "footnote", label: "备选一 · 轻量脚注" },
+  { value: "aligned", label: "备选二 · 头像轴提示" },
   { value: "collapsed", label: "系统记录折叠" },
   { value: "attached", label: "消息尾注" },
 ];
@@ -56,7 +57,7 @@ export function conflictContextEvent(text: string): boolean {
 export function systemNoticeModeFromSearch(search: string, hash = ""): SystemNoticeMode {
   const value = new URLSearchParams(search).get("systemNotices")
     ?? new URLSearchParams(hash.replace(/^#/, "")).get("systemNotices");
-  return value === "collapsed" || value === "attached" ? value : "footnote";
+  return value === "aligned" || value === "collapsed" || value === "attached" ? value : "footnote";
 }
 
 const INITIAL_SEARCH = typeof window === "undefined" ? "" : window.location.search;

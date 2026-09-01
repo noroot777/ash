@@ -73,6 +73,36 @@
 .system-event-digest.is-attached :is(summary, .system-event-digest-line) > span { color: var(--faint); }
 .system-event-digest.is-attached.is-error :is(summary, .system-event-digest-line) > span { color: color-mix(in lch, var(--red) 58%, var(--muted)); }
 
+/* 备选二：系统提示进入与智能体头像相同的 20px 轨道，正文仍保持轻量行文。 */
+.system-event-avatar {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  place-items: center;
+  border: 1px solid color-mix(in lch, var(--accent) 18%, var(--line2));
+  border-radius: 50%;
+  background: color-mix(in lch, var(--accent) 7%, var(--panel));
+  color: color-mix(in lch, var(--accent) 45%, var(--muted));
+}
+.is-success > .system-event-avatar { border-color: color-mix(in lch, var(--green) 20%, var(--line2)); background: color-mix(in lch, var(--green) 7%, var(--panel)); color: color-mix(in lch, var(--green) 58%, var(--muted)); }
+:is(.is-warning, .is-notice) > .system-event-avatar { border-color: color-mix(in lch, var(--amber) 24%, var(--line2)); background: color-mix(in lch, var(--amber) 8%, var(--panel)); color: color-mix(in lch, var(--amber) 64%, var(--muted)); }
+.is-error > .system-event-avatar { border-color: color-mix(in lch, var(--red) 25%, var(--line2)); background: color-mix(in lch, var(--red) 7%, var(--panel)); color: color-mix(in lch, var(--red) 62%, var(--muted)); }
+.system-event-digest.is-aligned {
+  display: grid;
+  width: fit-content;
+  max-width: min(790px, 100%);
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  margin: 8px 0 12px;
+  color: var(--muted);
+}
+.system-event-digest.is-aligned > :is(details, .system-event-digest-line) { grid-column: 2; min-width: 0; }
+.system-event-digest.is-aligned :is(summary, .system-event-digest-line) { min-height: 20px; align-items: center; }
+.system-event-digest.is-aligned :is(summary, .system-event-digest-line) > span { color: var(--muted); }
+.system-event-digest.is-aligned:is(.is-error, .is-warning) :is(summary, .system-event-digest-line) > span { color: color-mix(in lch, var(--red) 64%, var(--muted)); }
+
 .system-action-wrap {
   display: flex;
   max-width: none;
@@ -123,6 +153,22 @@
 .system-action-wrap.notice-mode-attached { margin-top: -9px; margin-bottom: 18px; }
 .system-action-wrap.notice-mode-attached .system-action-note { margin-left: 30px; border-top: 1px solid color-mix(in lch, var(--line) 55%, transparent); padding-top: 5px; }
 .system-action-wrap.notice-mode-attached .system-action-line b::before { color: var(--faint); content: "验收 · "; font-weight: 450; }
+.system-action-wrap.notice-mode-aligned { max-width: 790px; margin: 8px 0 12px; padding-right: 0; padding-left: 0; }
+.system-action-wrap.notice-mode-aligned .system-action-note { grid-template-columns: 20px minmax(0, 1fr); gap: 10px; }
+.system-action-wrap.notice-mode-aligned .system-action-icon {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border: 1px solid color-mix(in lch, var(--accent) 18%, var(--line2));
+  border-radius: 50%;
+  background: color-mix(in lch, var(--accent) 7%, var(--panel));
+  color: color-mix(in lch, var(--accent) 45%, var(--muted));
+}
+.system-action-wrap.notice-mode-aligned .system-action-note.is-conflict .system-action-icon { border-color: color-mix(in lch, var(--red) 25%, var(--line2)); background: color-mix(in lch, var(--red) 7%, var(--panel)); color: color-mix(in lch, var(--red) 62%, var(--muted)); }
+.system-action-wrap.notice-mode-aligned .system-action-main { padding-top: 1px; }
+.system-action-wrap.notice-mode-aligned .system-action-line b { color: var(--ink); }
+.system-action-wrap.notice-mode-aligned .system-action-line > p > span { color: var(--muted); }
 
 /* 一行系统事实：图标负责语气，正文负责事实，不再每条都竖一根颜色不同的线。 */
 .conversation-note.system-event-row {
@@ -161,11 +207,40 @@
 .system-event-row.notice-mode-footnote.is-error::before { background: color-mix(in lch, var(--red) 55%, var(--line2)); }
 .system-event-row.notice-mode-collapsed { width: fit-content; border-bottom: 1px dotted var(--line2); }
 .system-event-row.notice-mode-attached { margin-top: -9px; margin-bottom: 18px; margin-left: 60px; border-top: 1px solid color-mix(in lch, var(--line) 55%, transparent); padding-top: 5px; }
+.system-event-row.notice-mode-aligned { max-width: 790px; align-items: flex-start; gap: 10px; margin: 8px 0 12px; padding: 0; color: var(--muted); }
+.system-event-row.notice-mode-aligned .system-event-icon {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  flex-basis: 20px;
+  border: 1px solid color-mix(in lch, var(--accent) 18%, var(--line2));
+  border-radius: 50%;
+  background: color-mix(in lch, var(--accent) 7%, var(--panel));
+  color: color-mix(in lch, var(--accent) 45%, var(--muted));
+}
+.system-event-row.notice-mode-aligned p { padding-top: 1px; }
+.system-event-row.notice-mode-aligned time { padding-top: 2px; }
+.system-event-row.notice-mode-aligned.is-success .system-event-icon { border-color: color-mix(in lch, var(--green) 20%, var(--line2)); background: color-mix(in lch, var(--green) 7%, var(--panel)); color: color-mix(in lch, var(--green) 58%, var(--muted)); }
+.system-event-row.notice-mode-aligned:is(.is-warning, .is-notice) .system-event-icon { border-color: color-mix(in lch, var(--amber) 24%, var(--line2)); background: color-mix(in lch, var(--amber) 8%, var(--panel)); color: color-mix(in lch, var(--amber) 64%, var(--muted)); }
+.system-event-row.notice-mode-aligned.is-error .system-event-icon { border-color: color-mix(in lch, var(--red) 25%, var(--line2)); background: color-mix(in lch, var(--red) 7%, var(--panel)); color: color-mix(in lch, var(--red) 62%, var(--muted)); }
 
 /* 回合边界只留一条很淡的分隔线和说明。 */
 .system-boundary { gap: 8px; color: var(--faint); font-size: 9.5px; }
 .system-boundary > p { flex: none; margin: 0; opacity: 0.78; }
 .system-boundary > span { background: color-mix(in lch, var(--line) 58%, transparent); }
+.system-boundary.notice-mode-aligned {
+  display: grid;
+  width: fit-content;
+  max-width: min(790px, 100%);
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0 12px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+.system-boundary.notice-mode-aligned > p { min-width: 0; opacity: 1; }
+.system-boundary.notice-mode-aligned > .system-event-avatar { background: color-mix(in lch, var(--overlay) 70%, var(--panel)); }
 
 /* 旁注不算换段：被它隔开的下半截还是同一个会话在说话，接着上一段排版。 */
 .task-message--agent.is-continuation { margin-top: -6px; }
@@ -179,6 +254,9 @@
   .system-event-digest.is-attached { padding-left: 20px; }
   .system-action-wrap { padding-right: 10px; padding-left: 10px; }
   .team-feed-user.system-action-wrap { padding-right: 10px; padding-left: 10px; }
+  .system-action-wrap.notice-mode-aligned,
+  .team-feed-user.system-action-wrap.notice-mode-aligned { padding-right: 0; padding-left: 0; }
   .conversation-note.system-event-row { margin-left: 10px; }
+  .conversation-note.system-event-row.notice-mode-aligned { margin-left: 0; }
   .system-event-row.notice-mode-attached { margin-left: 30px; }
 }

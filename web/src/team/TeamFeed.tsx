@@ -242,7 +242,7 @@ export function TeamFeed({
               );
             }
             if (item.variant === "boundary") {
-              return <SystemBoundary item={item} surface="team" key={row.key} />;
+              return <SystemBoundary item={item} surface="team" mode={noticeMode} key={row.key} />;
             }
             return <SystemEventNote item={item} mode={noticeMode} key={row.key} />;
           })}

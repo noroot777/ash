@@ -60,7 +60,42 @@ try {
   assert.equal(await page.locator(".system-event-row").count(), 0, "任务会话不再逐条铺系统事件");
   assert.equal(await page.locator(".system-boundary").count(), 1);
   assert.equal(await page.locator(".task-message--agent").count(), 2, "普通 agent 消息结构没有改");
-  assert.equal(await page.locator(".system-notice-mode-switch a").count(), 3, "带模式参数时显示三版切换入口");
+  assert.equal(await page.locator(".system-notice-mode-switch a").count(), 4, "带模式参数时显示两套备选与两种早期方向");
+  assert.equal(await page.locator('.system-notice-mode-switch a[aria-current="page"]').innerText(), "备选一 · 轻量脚注");
+
+  await page.goto(`${fixture}?systemNotices=aligned`);
+  const aligned = page.locator(".system-event-digest.is-aligned");
+  await aligned.waitFor();
+  const alignedGeometry = await page.evaluate(() => {
+    const agent = document.querySelector(".task-message--agent").getBoundingClientRect();
+    const agentBody = document.querySelector(".task-message-content").getBoundingClientRect();
+    const digest = document.querySelector(".system-event-digest.is-aligned");
+    const digestIcon = digest.querySelector(".system-event-avatar").getBoundingClientRect();
+    const digestLine = digest.querySelector("summary").getBoundingClientRect();
+    const action = document.querySelector(".system-action-note");
+    const actionIcon = action.querySelector(".system-action-icon").getBoundingClientRect();
+    const actionMain = action.querySelector(".system-action-main").getBoundingClientRect();
+    const boundary = document.querySelector(".system-boundary.notice-mode-aligned");
+    return {
+      avatarLeft: Math.round(agent.left),
+      bodyLeft: Math.round(agentBody.left),
+      digestIconLeft: Math.round(digestIcon.left),
+      digestLineLeft: Math.round(digestLine.left),
+      actionIconLeft: Math.round(actionIcon.left),
+      actionMainLeft: Math.round(actionMain.left),
+      iconSize: `${Math.round(digestIcon.width)}x${Math.round(digestIcon.height)}`,
+      iconBackground: getComputedStyle(digest.querySelector(".system-event-avatar")).backgroundColor,
+      boundaryIcon: !!boundary?.querySelector(".system-event-avatar"),
+    };
+  });
+  assert.equal(alignedGeometry.digestIconLeft, alignedGeometry.avatarLeft, "系统节点应与智能体头像左侧对齐");
+  assert.equal(alignedGeometry.actionIconLeft, alignedGeometry.avatarLeft, "系统长提示同样进入头像轴");
+  assert.equal(alignedGeometry.digestLineLeft, alignedGeometry.bodyLeft, "系统摘要正文应与智能体正文起点对齐");
+  assert.equal(alignedGeometry.actionMainLeft, alignedGeometry.bodyLeft, "系统长提示正文应与智能体正文起点对齐");
+  assert.equal(alignedGeometry.iconSize, "20x20", "系统节点尺寸应与智能体头像一致");
+  assert.notEqual(alignedGeometry.iconBackground, "rgba(0, 0, 0, 0)", "备选二用轻底色提高一点辨识度");
+  assert.equal(alignedGeometry.boundaryIcon, true, "回合边界也应使用同一系统节点");
+  assert.equal(await page.locator('.system-notice-mode-switch a[aria-current="page"]').innerText(), "备选二 · 头像轴提示");
 
   await page.goto(`${fixture}?systemNotices=collapsed`);
   const collapsed = page.locator(".system-event-digest.is-collapsed");
