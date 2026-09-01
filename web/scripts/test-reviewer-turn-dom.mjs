@@ -54,13 +54,15 @@ try {
   assert.equal(await messages.nth(3).evaluate((el) => el.classList.contains("is-reviewer")), true);
   assert.equal(await messages.nth(4).evaluate((el) => el.classList.contains("is-reviewer")), true);
 
-  // 徽标要说清是第几轮，两种审查各有各的轮次来源。
-  const badges = page.locator(".verify-badge");
-  assert.equal(await badges.count(), 3);
-  assert.match(await badges.nth(0).innerText(), /审查者\s*·\s*第 2 轮/);
-  assert.match(await badges.nth(1).innerText(), /审查者\s*·\s*第 3 轮/);
-  // 自由派审的轮次只写在时间线旁注里、从不进 run 事件，靠区间补上。
-  assert.match(await badges.nth(2).innerText(), /审查者\s*·\s*第 1 轮/);
+  // 轮次、身份、模型档位和起止时间全归卡头：卡内首条气泡原本把这一整行又复读了一遍。
+  assert.equal(
+    await page.locator(".verify-badge").count(),
+    0,
+    "三条审查发言都在卡里，轮次徽标只是卡头标题的复读",
+  );
+  const laneBy = await page.locator(".verify-lane-by").allInnerTexts();
+  assert.match(laneBy[0], /codex@cpa·gpt-5\.6-sol 在审 · xhigh/, "卡头报出在审的人和智能水平");
+  assert.match(laneBy[3], /5\.5审查 在审 · claude-opus-5 · high/, "模型和智能水平一起搬到卡头");
 
   // D：有后续轮次且已有结论的历史卡默认折叠，最新一张展开。自由派审启动失败后重跑
   // 仍是同一 round，但要分成旧失败卡 + 新结果卡；报告只能挂到后者。
@@ -199,13 +201,26 @@ try {
   assert.equal(narrowWidths.reviewer, narrowWidths.available, "较窄工作区里的审查卡应铺满可用宽度");
   await page.setViewportSize({ width: 1000, height: 1200 });
 
-  // 换身份是断点：验证回合和它后面的修复回合都得重新报执行器名，
-  // 否则读者只看见「同一个人一口气说了三段」。
-  for (const index of [0, 1, 2, 3, 4]) {
+  // 换身份是断点：卡外那两段（实现 / 修复）各自重新报执行器名，否则读者只看见
+  // 「同一个人一口气说了三段」。卡内的三段审查发言反过来 —— 卡头已经把人和模型档位
+  // 写在头上，气泡再报一次就是同一行文字上下叠两遍。
+  for (const index of [0, 2]) {
     assert.equal(
       await messages.nth(index).locator(".agent-run-identity").count(),
       1,
       `第 ${index + 1} 段该报身份`,
+    );
+  }
+  for (const index of [1, 3, 4]) {
+    assert.equal(
+      await messages.nth(index).locator(".agent-run-identity").count(),
+      0,
+      `第 ${index + 1} 段在审查卡里，身份由卡头代言`,
+    );
+    assert.equal(
+      await messages.nth(index).locator(".task-message-content > header").count(),
+      0,
+      `第 ${index + 1} 段是本轮首条发言，整条头都由卡头顶替`,
     );
   }
 
@@ -276,7 +291,7 @@ try {
       return (Math.max(front, back) + 0.05) / (Math.min(front, back) + 0.05);
     };
     return {
-      badge: ratio(document.querySelector(".verify-badge")),
+      laneBy: ratio(document.querySelector(".verify-lane-by")),
       note: ratio(document.querySelector(".conversation-note.is-verify:not(.is-error)")),
       failNote: ratio(document.querySelector(".conversation-note.is-verify.is-error")),
     };

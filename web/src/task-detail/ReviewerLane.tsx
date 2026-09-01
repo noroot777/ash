@@ -43,6 +43,8 @@ export function ReviewerLane({
   const reviewerModel = lane.reviewerModel && !lane.reviewerLabel?.includes(lane.reviewerModel)
     ? lane.reviewerModel
     : null;
+  // 卡内首条气泡的头整条省掉了（见 reviewLaneMessageRoles），模型和智能水平只剩这一处可看。
+  const reviewerMeta = [reviewerModel, lane.reviewerEffort].filter(Boolean).join(" · ");
 
   // 第一轮原本是“最新轮”，第二轮出现后会变成“历史轮”；只在这条默认规则发生变化时
   // 自动折叠一次。用户随后手动展开，不会被 SSE 的普通刷新反复关回去。
@@ -64,7 +66,7 @@ export function ReviewerLane({
         <b>{lane.title}</b>
         <span className="verify-lane-by">
           {lane.reviewerLabel ? `${lane.reviewerLabel} 在审` : "审查中"}
-          {reviewerModel ? ` · ${reviewerModel}` : ""}
+          {reviewerMeta ? ` · ${reviewerMeta}` : ""}
           {/* 折叠着的历史轮也得看得出「这一轮是带着附言跑的」，展开才有正文。 */}
           {lane.note ? " · 含附言" : ""}
         </span>

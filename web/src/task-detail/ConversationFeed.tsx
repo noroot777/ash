@@ -13,7 +13,7 @@ import { RunActivity } from "../components/RunActivity.tsx";
 import { MessageFooter } from "../components/MessageFooter.tsx";
 import { TurnRetryButton } from "../components/TurnRetryButton.tsx";
 import { MessageAttachments } from "./Attachments.tsx";
-import { conversationFeedRows } from "./conversationReviewLanes.ts";
+import { conversationFeedRows, reviewLaneMessageRoles, type ReviewLaneMessageRole } from "./conversationReviewLanes.ts";
 import { ReviewerLane } from "./ReviewerLane.tsx";
 import { type TurnRetryTarget, turnRetryTarget } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
@@ -37,17 +37,26 @@ function AgentMessage({
   item,
   retry,
   hideTime,
+  laneRole,
 }: {
   item: Extract<ConversationItem, { kind: "agent" }>;
   /** 这条气泡是不是「上一回合崩了」的那一条：给了就在尾栏挂重试按钮。 */
   retry?: React.ReactNode;
   /** 紧邻的旁注已经显示了同一个时间。 */
   hideTime?: boolean;
+  /** 这条气泡在审查卡里的位置：卡头已经把身份（lead 还包括时间）说过一遍了。 */
+  laneRole?: ReviewLaneMessageRole;
 }) {
   const duration = durationBetween(item.at, item.endedAt);
   const reviewer = item.reviewer;
-  const compactContinuation = !!item.continuation && !!hideTime && !duration;
-  const footerActions = compactContinuation ? (
+  const showIdentity = !item.continuation && !laneRole;
+  // 轮次徽标只是卡头标题（「第 N 轮审查」）的复读，卡里一律不出。
+  const showBadge = !!reviewer && !item.continuation && !laneRole;
+  const showTime = !hideTime && !!item.at && laneRole !== "lead";
+  const showDuration = !!duration && laneRole !== "lead";
+  // 头部一个元素都不剩时整条不渲染，复制按钮改挂尾栏——留一条空白横杠比复读还难看。
+  const headless = !showIdentity && !showBadge && !showTime && !showDuration;
+  const footerActions = headless ? (
     <>
       <button className="task-message-copy-action" type="button" onClick={() => copyText(item.markdown)} aria-label="复制这条回复">
         <Copy size={12} aria-hidden="true" />
@@ -64,19 +73,19 @@ function AgentMessage({
         {item.continuation ? "" : reviewer ? <ShieldCheck size={13} weight="fill" /> : item.label.slice(0, 1).toUpperCase()}
       </span>
       <div className="task-message-content">
-        {!compactContinuation && (
+        {!headless && (
           <header>
-            {!item.continuation && (
+            {showIdentity && (
               <span className="agent-run-identity">
                 <b>{item.label}</b>
                 <AgentRunMeta run={item.run} />
               </span>
             )}
-            {reviewer && !item.continuation && <ReviewerBadge round={reviewer.round} />}
-            {!hideTime && item.at && <time>{formatInstant(item.at)}</time>}
-            {duration && (
+            {showBadge && <ReviewerBadge round={reviewer.round} />}
+            {showTime && <time>{formatInstant(item.at)}</time>}
+            {showDuration && (
               <small className="task-turn-duration" title={`开始 ${formatInstant(item.at)} · 结束 ${formatInstant(item.endedAt)}`}>
-                {item.continuation ? "" : "· "}⏱ {duration} 用时
+                {item.continuation || laneRole ? "" : "· "}⏱ {duration} 用时
               </small>
             )}
             <button type="button" onClick={() => copyText(item.markdown)} aria-label="复制这条回复">
@@ -180,13 +189,14 @@ export function ConversationFeed({
     ) hiddenTimes.add(item.id);
   }
 
-  const renderItem = (item: ConversationItem) => {
+  const renderItem = (item: ConversationItem, laneRole?: ReviewLaneMessageRole) => {
     if (item.kind === "agent") {
       return (
         <AgentMessage
           key={item.id}
           item={item}
           hideTime={hiddenTimes.has(item.id)}
+          laneRole={laneRole}
           retry={retry && item.id === retryItemId ? (
             <TurnRetryButton
               exitStatus={retry.exitStatus}
@@ -224,13 +234,15 @@ export function ConversationFeed({
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region task-conversation-wrap">
         <div className="task-conversation" ref={scroll}>
-          {rows.map((row) => row.kind === "item"
-            ? renderItem(row.item)
-            : (
+          {rows.map((row) => {
+            if (row.kind === "item") return renderItem(row.item);
+            const roles = reviewLaneMessageRoles(row);
+            return (
               <ReviewerLane key={row.id} taskId={task.id} lane={row}>
-                {row.items.map(renderItem)}
+                {row.items.map((item) => renderItem(item, roles.get(item.id)))}
               </ReviewerLane>
-            ))}
+            );
+          })}
           {activityPhase && !loading && !error && (
             <RunActivity
               status={task.status}
