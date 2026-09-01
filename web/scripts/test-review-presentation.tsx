@@ -158,5 +158,6 @@ assert.match(feedMarkup, /gpt-5\.5 · high/, "卡头报出模型与智能水平"
 assert.doesNotMatch(feedMarkup, /agent-run-identity/, "卡内首条气泡不再重复审查者与模型");
 assert.doesNotMatch(feedMarkup, /verify-badge/, "轮次徽标是卡头标题的复读，卡内不出");
 assert.doesNotMatch(feedMarkup, /task-turn-duration/, "用时已在卡头，首条气泡不再重复");
+assert.doesNotMatch(feedMarkup, /task-message-avatar/, "卡头左边已有一颗盾，卡内气泡不再各挂一颗");
 
 console.log("review-presentation ok");

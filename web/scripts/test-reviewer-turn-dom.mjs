@@ -249,15 +249,19 @@ try {
   assert.equal(boxes[4].width, boxes[1].width);
   assert.notEqual(boxes[4].x, boxes[0].x, "卡内正文比卡外窄，不然折叠卡的边界看不出来");
 
-  // 头像换了个东西（盾形图标而不是首字母），但盘子本身大小不变。
+  // 头像只留给卡外的发言。卡内那三条身份归卡头，连头像列一起收掉 —— 卡头左边已经有
+  // 一颗盾，每条气泡再挂一颗就是把同一个身份画两遍。（卡外审查者仍是盾形头像，那条
+  // 分支现在这份 fixture 圈不出来，判据由 test:reviewer-turn 的 reviewer 字段钉住。）
   const avatars = await page.locator(".task-message-avatar").evaluateAll((els) =>
     els.map((el) => {
       const rect = el.getBoundingClientRect();
       return { size: `${Math.round(rect.width)}x${Math.round(rect.height)}`, svg: !!el.querySelector("svg") };
     }));
+  assert.equal(avatars.length, 2, "只有卡外那两段实现回合还带头像");
+  assert.equal(await page.locator(".verify-lane .task-message-avatar").count(), 0, "卡内不再重复画盾");
   assert.equal(avatars[0].svg, false, "普通回合还是首字母");
-  assert.equal(avatars[3].svg, true, "审查者换成盾形");
-  assert.equal(avatars[3].size, avatars[2].size, "头像盘子大小不变");
+  assert.equal(avatars[1].svg, false);
+  assert.equal(avatars[0].size, avatars[1].size, "头像盘子大小不变");
 
   // 新增的这几处小字承载的正是本功能的全部信息（谁在说话 / 哪一轮 / 验证段的边界），
   // 淡一点就等于没做。按 WCAG 相对亮度实测，普通小号文本至少要 4.5:1。

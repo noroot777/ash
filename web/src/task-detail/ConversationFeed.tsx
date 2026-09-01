@@ -67,11 +67,14 @@ function AgentMessage({
   ) : retry;
   return (
     <article
-      className={`task-message task-message--agent${item.continuation ? " is-continuation" : ""}${reviewer ? " is-reviewer" : ""}`}
+      className={`task-message task-message--agent${item.continuation ? " is-continuation" : ""}${reviewer ? " is-reviewer" : ""}${laneRole ? " is-lane-owned" : ""}`}
     >
-      <span className="task-message-avatar" aria-hidden="true">
-        {item.continuation ? "" : reviewer ? <ShieldCheck size={13} weight="fill" /> : item.label.slice(0, 1).toUpperCase()}
-      </span>
+      {/* 卡头左边已经有一颗同样的盾：卡里每条发言再挂一颗，只是把同一个身份画两遍。 */}
+      {!laneRole && (
+        <span className="task-message-avatar" aria-hidden="true">
+          {item.continuation ? "" : reviewer ? <ShieldCheck size={13} weight="fill" /> : item.label.slice(0, 1).toUpperCase()}
+        </span>
+      )}
       <div className="task-message-content">
         {!headless && (
           <header>

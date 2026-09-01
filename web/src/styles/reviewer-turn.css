@@ -99,6 +99,8 @@
 .verify-lane-body > :first-child { margin-top: 0; }
 .verify-lane-body > :last-child { margin-bottom: 0; }
 .verify-lane .task-message--agent { width: 100%; margin-left: 0; border: 0; border-radius: 0; background: transparent; padding: 0; box-shadow: none; }
+/* 身份由卡头代言的那几条连头像列一起收掉——盾形在卡头已经有一颗，正文顺势对齐卡内边距。 */
+.verify-lane .task-message--agent.is-lane-owned { grid-template-columns: minmax(0, 1fr); gap: 0; }
 .verify-lane .task-message--agent::before { content: none; }
 .verify-lane .task-message--user.is-system-authored { padding-right: 0; padding-left: 0; }
 .verify-lane .conversation-note { margin-left: 0; }
