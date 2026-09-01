@@ -78,6 +78,17 @@ code { border-radius: 4px; background: var(--raised); padding: 1px 4px; color: v
 .task-markdown > :first-child { margin-top: 3px; }
 .task-markdown > :last-child { margin-bottom: 0; }
 .task-markdown strong { color: var(--ink); font-weight: 650; }
+.task-markdown h2, .task-markdown h3, .task-markdown h4 { margin: 15px 0 7px; color: var(--ink); line-height: 1.35; }
+.task-markdown h2 { font-size: 15px; }
+.task-markdown h3 { font-size: 13.5px; }
+.task-markdown h4 { font-size: 12.5px; }
+.task-markdown ul, .task-markdown ol { margin: 8px 0; padding-left: 1.65rem; }
+.task-markdown li + li { margin-top: 3px; }
+.task-markdown li::marker { color: var(--faint); }
+.task-markdown blockquote { margin: 8px 0; border-left: 2px solid var(--line2); padding: 1px 0 1px 11px; color: var(--faint); font-size: 11px; }
+.task-markdown blockquote p { margin: 2px 0; }
+.task-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.task-code-block { overflow-x: auto; margin: 9px 0; border: 1px solid var(--line); border-radius: 8px; background: #f4f4f5; padding: 10px 12px; color: #27272a; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.6; white-space: pre; }
 
 .task-execution-block { max-width: 680px; margin: 2px 0 1px; border: 0; color: color-mix(in srgb, var(--faint) 76%, transparent); font-size: 9.5px; }
 .task-execution-block > summary { display: inline-flex; align-items: center; gap: 4px; border-radius: 5px; padding: 2px 3px; list-style: none; opacity: .72; cursor: pointer; }
@@ -122,8 +133,12 @@ code { border-radius: 4px; background: var(--raised); padding: 1px 4px; color: v
 .system-review-card h2 { margin: 5px 0 0; color: var(--ink); font-size: 12.5px; font-weight: 650; }
 .system-review-card p { margin: 4px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.6; }
 .system-review-card footer { display: flex; align-items: center; gap: 12px; margin-top: 6px; color: var(--faint); font-size: 10px; }
-.system-review-card footer a { color: var(--accent); text-decoration: none; }
-.system-review-card footer a:hover { text-decoration: underline; }
+.system-review-card footer details { position: relative; }
+.system-review-card footer summary { color: var(--accent); cursor: pointer; list-style: none; }
+.system-review-card footer summary::-webkit-details-marker { display: none; }
+.review-raw { margin-top: 7px; border-left: 1px solid var(--line2); padding-left: 9px; color: var(--muted); font-size: 10.5px; }
+.review-raw h2, .review-raw h3, .review-raw h4 { font-size: 11px; }
+.review-raw p { font-size: 10.5px; }
 
 /* 工作区恢复只是完成回执：单行、无竖线、无警告色。 */
 .system-recovery-row { display: flex; max-width: 760px; align-items: center; gap: 8px; margin: 10px 0 16px 30px; border-radius: 7px; background: var(--raised); padding: 6px 9px; color: var(--faint); font-size: 10.5px; }

@@ -16,79 +16,14 @@
     </header>
 
     <section class="task-conversation">
-      <article class="task-message task-message--user">
-        <div class="task-user-bubble">
-          <header><b>你</b><time>08/31 15:21</time></header>
-          <p>自动折叠执行过程的这个功能，仅在最后一步确认执行完了的时候执行一下折叠行了，运行过程中就不要执行折叠了，能做到吗？</p>
-          <div class="task-attachment">▧ <span>1 张界面截图</span></div>
-        </div>
-      </article>
-
-      <article class="task-message task-message--agent">
-        <span class="task-message-avatar">执</span>
-        <div class="task-message-content">
-          <header><b>claude@ccb</b><time>08/31 15:55</time></header>
-          <div class="task-markdown"><p><strong>能做到，已经改完。</strong></p><p>运行中的回合保持展开；任务停下来时才自动收起。提交 <code>51b8979</code>，构建与浏览器验证通过。</p></div>
-          <details class="task-execution-block"><summary><span class="caret">›</span><span>执行过程 · 18 个工具</span></summary><div class="task-execution-events">定位折叠逻辑、修改组件、补回归测试、执行构建。</div></details>
-        </div>
-      </article>
-
-      <section class="system-review-card">
-        <div class="system-review-icon">审</div>
-        <div class="system-review-main">
-          <header><b>第 1 轮审查未通过</b><span>5.5 审查 · 逻辑检查 · 7 分钟</span><time>08/31 16:42</time></header>
-          <h2>还有 1 类运行中场景会提前折叠</h2>
-          <p><code>awaiting_review</code> 和团队执行者仍在运行时，会被误判为已经结束。</p>
-          <footer><a href="#">查看审查报告</a><span>已交回原任务，智能体正在修复</span></footer>
-        </div>
-      </section>
-
-      <article class="task-message task-message--agent">
-        <span class="task-message-avatar">执</span>
-        <div class="task-message-content">
-          <header><b>claude@ccb</b><time>08/31 17:17</time></header>
-          <div class="task-markdown"><p>审查意见成立，已修复并提交 <code>23a7e18</code>。审查门、执行者运行和暂停状态现在都不会中途折叠。</p></div>
-          <details class="task-execution-block"><summary><span class="caret">›</span><span>执行过程 · 14 个工具</span></summary></details>
-        </div>
-      </article>
-
-      <div class="system-recovery-row"><span class="system-recovery-icon">↻</span><p><b>工作区已恢复</b>原目录已不存在，系统已重建空工作区；会话与用户消息均已保留。</p><time>08/31 19:36</time></div>
-
-      <article class="task-message task-message--user">
-        <div class="task-user-bubble">
-          <header><b>你</b><time>08/31 21:28</time></header>
-          <p>你是不是一直理解错了？？图一这种最下方是工具的，和图二这种最下方是文字的，你能看出不一样吗？你先给我出个 html demo 我看看你理解了没有！！！</p>
-          <div class="task-attachment">▧ <span>2 张对照截图</span></div>
-        </div>
-      </article>
-
-      <article class="task-message task-message--agent">
-        <span class="task-message-avatar">执</span>
-        <div class="task-message-content">
-          <header><b>claude@ccb</b><time>08/31 21:40</time></header>
-          <div class="task-markdown"><p><strong>现在我看懂了。先不动代码，按你的要求出 Demo。</strong></p><p>你说的“折叠”是运行中把上方内容重新收编成“过程 + 结论”，不是工具块自身的展开与收起。</p></div>
-        </div>
-      </article>
-
-      <p class="conversation-note is-notice">本轮没有收到完成确认。Demo 已保留，会话可以从这里继续；任务没有被误标为完成，也没有推进后续队列。<time>08/31 21:40</time></p>
-
-      <article class="task-message task-message--user">
-        <div class="task-user-bubble"><header><b>你</b><time>08/31 21:42</time></header><p>这次对了，做吧。</p></div>
-      </article>
-
-      <article class="task-message task-message--agent">
-        <span class="task-message-avatar">执</span>
-        <div class="task-message-content">
-          <header><b>claude@ccb</b><time>08/31 21:55</time></header>
-          <div class="task-markdown"><p><strong>做完了，就是 Demo 里那个改法。</strong></p><p>运行全程保持平铺，只有这一轮执行结束时才收编一次。提交 <code>03146f48</code>，逐帧测试与构建通过。</p></div>
-          <details class="task-execution-block"><summary><span class="caret">›</span><span>执行过程 · 12 个工具</span></summary></details>
-        </div>
-      </article>
+      <div id="conversationRows"></div>
 
       <div class="run-activity"><span class="run-activity-signal"><i></i><i></i><i></i></span><b>智能体委派中</b><span>新一轮审查正在验证最终折叠时机。</span></div>
 
       <div class="reply-box">给智能体追加消息…<div><span>@ claude@ccb</span><button type="button" aria-label="发送">↑</button></div></div>
     </section>
   </main>
+  <script src="system-notice-task-demo.data.js"></script>
+  <script src="system-notice-task-demo.js"></script>
 </body>
 </html>
