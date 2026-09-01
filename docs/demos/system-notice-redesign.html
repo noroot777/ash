@@ -3,621 +3,151 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>系统提示重设计 Demo</title>
-  <style>
-    :root {
-      --shell: #ececef;
-      --surface: #f8f8fa;
-      --paper: #ffffff;
-      --ink: #202126;
-      --muted: #6f727b;
-      --faint: #9a9da5;
-      --line: #e1e2e7;
-      --line-strong: #d3d5dc;
-      --indigo: #5e69c7;
-      --indigo-soft: #eff0fb;
-      --amber: #a9610b;
-      --amber-soft: #fff5df;
-      --amber-line: #efd29b;
-      --green: #19745c;
-      --green-soft: #e9f6f1;
-      --shadow: 0 1px 2px rgba(30, 32, 42, .04), 0 12px 38px rgba(30, 32, 42, .06);
-    }
-
-    * { box-sizing: border-box; }
-    [hidden] { display: none !important; }
-
-    body {
-      margin: 0;
-      min-width: 320px;
-      background: var(--shell);
-      color: var(--ink);
-      font-family: Inter, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
-      font-size: 14px;
-      line-height: 1.55;
-    }
-
-    button { font: inherit; }
-
-    button:focus-visible,
-    summary:focus-visible {
-      outline: 2px solid rgba(94, 105, 199, .55);
-      outline-offset: 2px;
-    }
-
-    .demo-toolbar {
-      position: sticky;
-      top: 0;
-      z-index: 10;
-      display: flex;
-      align-items: center;
-      gap: 14px;
-      height: 52px;
-      padding: 0 22px;
-      border-bottom: 1px solid var(--line-strong);
-      background: rgba(255, 255, 255, .92);
-      backdrop-filter: blur(14px);
-    }
-
-    .demo-toolbar strong { font-size: 13px; }
-    .demo-toolbar span { color: var(--faint); font-size: 12px; }
-
-    .reset-button {
-      margin-left: auto;
-      border: 1px solid var(--line-strong);
-      border-radius: 8px;
-      background: var(--paper);
-      padding: 5px 10px;
-      color: var(--muted);
-      cursor: pointer;
-    }
-
-    .reset-button:hover { background: var(--surface); color: var(--ink); }
-
-    .app {
-      width: min(1180px, calc(100% - 32px));
-      min-height: calc(100vh - 84px);
-      margin: 16px auto;
-      overflow: hidden;
-      border: 1px solid var(--line-strong);
-      border-radius: 14px;
-      background: var(--surface);
-      box-shadow: var(--shadow);
-    }
-
-    .app-header {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      height: 48px;
-      padding: 0 18px;
-      border-bottom: 1px solid var(--line);
-      background: rgba(248, 248, 250, .94);
-    }
-
-    .task-kind {
-      border-radius: 5px;
-      background: var(--indigo-soft);
-      padding: 2px 7px;
-      color: var(--indigo);
-      font-size: 10px;
-      font-weight: 750;
-    }
-
-    .task-title { font-size: 13px; font-weight: 620; }
-
-    .task-status {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      color: var(--green);
-      font-size: 11px;
-    }
-
-    .task-status::before {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: currentColor;
-      content: "";
-    }
-
-    .header-action {
-      margin-left: auto;
-      border: 1px solid var(--line-strong);
-      border-radius: 8px;
-      background: var(--paper);
-      padding: 5px 10px;
-      color: var(--muted);
-      font-size: 12px;
-    }
-
-    .conversation {
-      width: min(820px, calc(100% - 40px));
-      margin: 0 auto;
-      padding: 38px 0 54px;
-    }
-
-    .assistant-message {
-      display: grid;
-      grid-template-columns: 24px 1fr;
-      gap: 10px;
-      margin-bottom: 24px;
-    }
-
-    .avatar {
-      display: grid;
-      place-items: center;
-      width: 24px;
-      height: 24px;
-      border-radius: 7px;
-      background: #e8e9ed;
-      color: var(--muted);
-      font-size: 10px;
-      font-weight: 700;
-    }
-
-    .message-meta { color: var(--faint); font-size: 11px; }
-    .message-copy { margin-top: 6px; color: #45474f; }
-
-    .event-stack {
-      position: relative;
-      margin: 10px 0 20px 34px;
-      padding-left: 20px;
-    }
-
-    .event-stack::before {
-      position: absolute;
-      top: 8px;
-      bottom: 8px;
-      left: 4px;
-      width: 1px;
-      background: var(--line-strong);
-      content: "";
-    }
-
-    .event {
-      position: relative;
-      display: grid;
-      grid-template-columns: minmax(110px, auto) 1fr auto;
-      gap: 8px 16px;
-      align-items: baseline;
-      min-height: 36px;
-      padding: 7px 0;
-      color: var(--muted);
-      font-size: 12px;
-    }
-
-    .event::before {
-      position: absolute;
-      top: 14px;
-      left: -20px;
-      width: 7px;
-      height: 7px;
-      border: 2px solid var(--surface);
-      border-radius: 50%;
-      background: #b5b7bf;
-      box-shadow: 0 0 0 1px var(--line-strong);
-      content: "";
-    }
-
-    .event.current::before { background: var(--amber); box-shadow: 0 0 0 1px var(--amber-line); }
-    .event-title { color: #4f5159; font-weight: 620; }
-    .event-time { color: var(--faint); font-variant-numeric: tabular-nums; }
-
-    .conflict-card {
-      margin: 16px 0 24px 34px;
-      overflow: hidden;
-      border: 1px solid var(--amber-line);
-      border-radius: 14px;
-      background: var(--paper);
-      box-shadow: 0 10px 30px rgba(96, 68, 20, .05);
-    }
-
-    .conflict-card.resolved { border-color: #b8dccf; }
-
-    .card-main { padding: 22px 24px 20px; }
-
-    .card-heading {
-      display: flex;
-      align-items: flex-start;
-      gap: 14px;
-    }
-
-    .state-icon {
-      position: relative;
-      display: grid;
-      place-items: center;
-      width: 34px;
-      height: 34px;
-      flex: 0 0 34px;
-      border-radius: 10px;
-      background: var(--amber-soft);
-      color: var(--amber);
-    }
-
-    .resolved .state-icon { background: var(--green-soft); color: var(--green); }
-    .state-icon svg { width: 18px; height: 18px; }
-
-    .heading-copy { min-width: 0; flex: 1; }
-
-    .eyebrow {
-      margin-bottom: 2px;
-      color: var(--amber);
-      font-size: 10px;
-      font-weight: 780;
-      letter-spacing: .08em;
-    }
-
-    .resolved .eyebrow { color: var(--green); }
-
-    h1 {
-      margin: 0;
-      font-size: 19px;
-      font-weight: 680;
-      letter-spacing: -.025em;
-      line-height: 1.35;
-    }
-
-    .summary {
-      margin: 6px 0 0;
-      color: var(--muted);
-      font-size: 13px;
-    }
-
-    .safe-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      margin-left: 6px;
-      border-radius: 999px;
-      background: var(--green-soft);
-      padding: 2px 8px;
-      color: var(--green);
-      font-size: 10px;
-      font-weight: 700;
-      vertical-align: 1px;
-      white-space: nowrap;
-    }
-
-    .route-map {
-      display: grid;
-      grid-template-columns: 118px 1fr 106px;
-      align-items: center;
-      gap: 12px;
-      margin: 22px 0 18px;
-      border-radius: 10px;
-      background: var(--surface);
-      padding: 14px;
-    }
-
-    .branch-label { min-width: 0; }
-    .branch-label small { display: block; color: var(--faint); font-size: 9px; letter-spacing: .06em; }
-
-    code {
-      font-family: "SFMono-Regular", Consolas, monospace;
-      font-size: .92em;
-    }
-
-    .branch-label code {
-      display: block;
-      overflow: hidden;
-      color: #474951;
-      font-size: 11px;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .rail {
-      position: relative;
-      height: 32px;
-    }
-
-    .rail::before {
-      position: absolute;
-      top: 15px;
-      right: 0;
-      left: 0;
-      height: 2px;
-      border-radius: 2px;
-      background: linear-gradient(90deg, var(--indigo) 0 58%, var(--line-strong) 58% 100%);
-      content: "";
-    }
-
-    .rail::after {
-      position: absolute;
-      top: 11px;
-      right: -1px;
-      width: 8px;
-      height: 8px;
-      border-top: 2px solid var(--line-strong);
-      border-right: 2px solid var(--line-strong);
-      transform: rotate(45deg);
-      content: "";
-    }
-
-    .conflict-node {
-      position: absolute;
-      z-index: 1;
-      top: 6px;
-      left: 58%;
-      display: grid;
-      place-items: center;
-      width: 20px;
-      height: 20px;
-      border: 3px solid var(--surface);
-      border-radius: 50%;
-      background: var(--amber);
-      color: white;
-      font-size: 10px;
-      font-weight: 800;
-      transform: translateX(-50%);
-      box-shadow: 0 0 0 1px var(--amber-line);
-    }
-
-    .resolved .rail::before { background: var(--green); }
-    .resolved .rail::after { border-color: var(--green); }
-    .resolved .conflict-node { background: var(--green); box-shadow: 0 0 0 1px #b8dccf; }
-
-    .target-label { text-align: right; }
-
-    .file-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      min-height: 44px;
-      border: 1px solid var(--line);
-      border-radius: 9px;
-      padding: 9px 11px;
-    }
-
-    .file-icon {
-      display: grid;
-      place-items: center;
-      width: 24px;
-      height: 24px;
-      border-radius: 6px;
-      background: var(--amber-soft);
-      color: var(--amber);
-      font-family: monospace;
-      font-size: 10px;
-      font-weight: 800;
-    }
-
-    .resolved .file-icon { background: var(--green-soft); color: var(--green); }
-    .file-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .file-state { color: var(--amber); font-size: 11px; font-weight: 650; }
-    .resolved .file-state { color: var(--green); }
-
-    .progress-line {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-top: 13px;
-      color: var(--muted);
-      font-size: 11px;
-    }
-
-    .spinner {
-      width: 12px;
-      height: 12px;
-      border: 2px solid #dfc99f;
-      border-top-color: var(--amber);
-      border-radius: 50%;
-      animation: spin .9s linear infinite;
-    }
-
-    .resolved .spinner { border: 0; animation: none; }
-    .resolved .spinner::before { color: var(--green); content: "✓"; font-weight: 800; }
-
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    .card-actions {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 12px 24px;
-      border-top: 1px solid var(--line);
-      background: #fbfbfc;
-    }
-
-    .button {
-      min-height: 31px;
-      border: 1px solid var(--line-strong);
-      border-radius: 8px;
-      background: var(--paper);
-      padding: 5px 11px;
-      color: #4e5058;
-      font-size: 12px;
-      font-weight: 580;
-      cursor: pointer;
-    }
-
-    .button:hover { background: var(--surface); color: var(--ink); }
-    .button.primary { border-color: #505bb5; background: var(--indigo); color: white; }
-    .button.primary:hover { background: #535eba; }
-
-    .action-note { margin-left: auto; color: var(--faint); font-size: 10px; }
-
-    details {
-      margin: 0 24px 18px 58px;
-      border-left: 2px solid var(--line);
-      padding-left: 14px;
-      color: var(--muted);
-      font-size: 11px;
-    }
-
-    summary { cursor: pointer; color: #565861; font-weight: 620; }
-    details p { margin: 8px 0 0; }
-
-    .composer {
-      margin: 36px 0 0 34px;
-      border: 1px solid var(--line-strong);
-      border-radius: 12px;
-      background: var(--paper);
-      padding: 12px 14px;
-      color: var(--faint);
-      font-size: 12px;
-      box-shadow: 0 2px 8px rgba(30, 32, 42, .03);
-    }
-
-    .composer-footer { display: flex; align-items: center; margin-top: 18px; }
-    .composer-footer span { border-radius: 999px; background: var(--surface); padding: 2px 7px; font-size: 10px; }
-
-    .send {
-      display: grid;
-      place-items: center;
-      width: 27px;
-      height: 27px;
-      margin-left: auto;
-      border: 0;
-      border-radius: 8px;
-      background: var(--indigo);
-      color: white;
-    }
-
-    @media (max-width: 680px) {
-      .demo-toolbar span, .header-action, .event-copy, .action-note { display: none; }
-      .app { width: calc(100% - 16px); margin: 8px auto; border-radius: 10px; }
-      .conversation { width: calc(100% - 24px); padding-top: 24px; }
-      .event-stack, .conflict-card, .composer { margin-left: 0; }
-      .card-main { padding: 18px; }
-      .route-map { grid-template-columns: 84px 1fr 72px; gap: 8px; padding: 12px; }
-      .card-actions { flex-wrap: wrap; padding: 11px 18px; }
-      details { margin-left: 18px; }
-      h1 { font-size: 17px; }
-    }
-
-    @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
-  </style>
+  <title>系统提示语言 Demo</title>
+  <link rel="stylesheet" href="system-notice-redesign.css">
 </head>
 <body>
   <header class="demo-toolbar">
-    <strong>系统提示 · 交互稿</strong>
-    <span>原则：过程降噪，异常可扫读，下一步可执行</span>
-    <button class="reset-button" id="resetButton" type="button">重置演示</button>
+    <i class="toolbar-mark"></i>
+    <strong>系统提示语言 · 交互稿</strong>
+    <span>同一套层级覆盖过程、完成、决策、异常与暂停</span>
   </header>
 
   <main class="app">
-    <header class="app-header">
-      <span class="task-kind">自由任务</span>
-      <span class="task-title">更新依赖与构建配置</span>
-      <span class="task-status">任务已完成</span>
-      <button class="header-action" type="button">查看改动</button>
-    </header>
-
-    <section class="conversation" aria-label="任务会话">
-      <article class="assistant-message">
-        <div class="avatar">执</div>
-        <div>
-          <div class="message-meta">智能体 · 09/01 13:18</div>
-          <div class="message-copy">依赖已经更新，构建和类型检查均通过。改动已提交，可以验收。</div>
-        </div>
-      </article>
-
-      <div class="event-stack" aria-label="验收过程">
-        <div class="event">
-          <span class="event-title">开始验收</span>
-          <span class="event-copy">检查任务分支并尝试合并到 <code>main</code></span>
-          <time class="event-time">13:19</time>
-        </div>
-        <div class="event current">
-          <span class="event-title">合并暂停</span>
-          <span class="event-copy">发现 1 个需要处理的文件</span>
-          <time class="event-time">13:19</time>
-        </div>
+    <aside class="scene-rail" aria-label="系统提示场景">
+      <div class="rail-kicker">提示场景</div>
+      <nav class="scene-nav">
+        <button class="scene-button active" data-scene="overview" type="button">
+          <span class="nav-icon">全</span><div><b>方案总览</b><small>四级提示语法</small></div>
+        </button>
+        <button class="scene-button" data-scene="trace" type="button">
+          <span class="nav-icon">··</span><div><b>后台过程</b><small>无需用户处理</small></div>
+        </button>
+        <button class="scene-button" data-scene="receipt" type="button">
+          <span class="nav-icon">✓</span><div><b>成功回执</b><small>结果与证据</small></div>
+        </button>
+        <button class="scene-button" data-scene="question" type="button">
+          <span class="nav-icon">?</span><div><b>等待用户</b><small>需要做决定</small></div>
+        </button>
+        <button class="scene-button" data-scene="warning" type="button">
+          <span class="nav-icon">!</span><div><b>可恢复异常</b><small>自动保护现场</small></div>
+        </button>
+        <button class="scene-button" data-scene="conflict" type="button">
+          <span class="nav-icon">⇄</span><div><b>合并冲突</b><small>阻断但无损</small></div>
+        </button>
+        <button class="scene-button" data-scene="paused" type="button">
+          <span class="nav-icon">Ⅱ</span><div><b>暂停与停止</b><small>刷新后仍可见</small></div>
+        </button>
+      </nav>
+      <div class="rail-rule">
+        <b>统一文案顺序</b>
+        发生了什么 → 影响范围 → 下一步由谁做
       </div>
+    </aside>
 
-      <article class="conflict-card" id="conflictCard" aria-live="polite">
-        <div class="card-main">
-          <div class="card-heading">
-            <div class="state-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 3v10"></path><path d="M12 18.5v.5"></path><path d="M5.6 20h12.8a2 2 0 0 0 1.74-3L13.74 5.9a2 2 0 0 0-3.48 0L3.86 17a2 2 0 0 0 1.74 3Z"></path>
-              </svg>
-            </div>
-            <div class="heading-copy">
-              <div class="eyebrow" id="eyebrow">需要处理</div>
-              <h1 id="cardTitle">合并遇到 1 个冲突</h1>
-              <p class="summary" id="cardSummary">已停止合并并叫醒原任务处理。<span class="safe-badge">✓ main 未改变</span></p>
-            </div>
-          </div>
+    <section class="workspace">
+      <header class="app-header">
+        <span class="kind">自由任务</span>
+        <span class="task-title">更新依赖与构建配置</span>
+        <span class="task-state">任务已完成</span>
+        <span class="header-note">点击左侧切换场景</span>
+      </header>
 
-          <div class="route-map" aria-label="分支合并路径">
-            <div class="branch-label">
-              <small>任务分支</small>
-              <code>ash/EQCOCUEk</code>
-            </div>
-            <div class="rail"><span class="conflict-node" id="routeNode">!</span></div>
-            <div class="branch-label target-label">
-              <small>目标分支</small>
-              <code>main</code>
-            </div>
-          </div>
+      <section class="scene" data-panel="overview">
+        <header class="scene-intro">
+          <span class="scene-index">00</span>
+          <div><h1>不是每条系统消息都该长成卡片</h1><p>信息越不需要用户参与，视觉越轻；只有真的阻断流程，才占据一块完整空间。颜色只标识状态，不承担信息结构。</p></div>
+        </header>
 
-          <div class="file-row">
-            <span class="file-icon">{ }</span>
-            <code class="file-name">server/package.json</code>
-            <span class="file-state" id="fileState">等待解决</span>
-          </div>
-
-          <div class="progress-line">
-            <span class="spinner" aria-hidden="true"></span>
-            <span id="progressText">原任务正在解决冲突，完成后会通知你重新验收</span>
-          </div>
+        <div class="principle-strip">
+          <div class="principle"><small>第一眼</small><b>发生了什么</b></div>
+          <div class="principle"><small>第二眼</small><b>什么被影响、什么是安全的</b></div>
+          <div class="principle"><small>最后</small><b>谁来做下一步</b></div>
         </div>
 
-        <div class="card-actions">
-          <button class="button" type="button" id="detailButton">查看处理说明</button>
-          <button class="button primary" type="button" id="resolveButton">模拟处理完成</button>
-          <span class="action-note">任务状态仍为“已完成”</span>
+        <div class="level-grid">
+          <article class="level-card trace">
+            <div class="level-top"><span class="level-number">L1</span><h2>轨迹 Trace</h2></div>
+            <p>系统正在做事，但不需要用户关注。融进时间线，不抢正文。</p>
+            <div class="level-example"><i></i><b>开始验收</b><span>检查任务分支与构建结果</span></div>
+          </article>
+          <article class="level-card receipt">
+            <div class="level-top"><span class="level-number">L2</span><h2>回执 Receipt</h2></div>
+            <p>动作已经完成，需要留下可追溯结果。默认一行，细节按需展开。</p>
+            <div class="level-example"><i></i><b>验收通过</b><span>3 项检查全部完成</span></div>
+          </article>
+          <article class="level-card attention">
+            <div class="level-top"><span class="level-number">L3</span><h2>行动 Attention</h2></div>
+            <p>系统停下来等用户选择。只问一个问题，主按钮就是下一步。</p>
+            <div class="level-example"><i></i><b>需要你的决定</b><span>选择保留哪一版文案</span></div>
+          </article>
+          <article class="level-card blocker">
+            <div class="level-top"><span class="level-number">L4</span><h2>问题 Blocker</h2></div>
+            <p>流程被阻断。明确损害边界、保护动作和恢复路径，不用大段红字。</p>
+            <div class="level-example"><i></i><b>合并暂停</b><span>main 未改变，原任务处理中</span></div>
+          </article>
         </div>
+      </section>
 
-        <details id="instructions">
-          <summary>智能体收到的处理范围</summary>
-          <p>仅在任务分支合并 <code>main</code>、解决 <code>server/package.json</code> 并重新自检；不会修改或切换目标分支，也不会删除工作区。</p>
-        </details>
-      </article>
+      <section class="scene" data-panel="trace" hidden>
+        <header class="scene-intro"><span class="scene-index">L1</span><div><h1>后台过程只是轨迹，不是对话</h1><p>开始、排队、分派、重试这类信息只需证明“系统还活着”，不应伪装成一位说话的人。</p></div></header>
+        <article class="message"><div class="avatar">执</div><div><div class="message-meta">智能体 · 13:18</div><div class="message-copy">改动已提交，构建和类型检查通过，可以验收。</div></div></article>
+        <div class="system-block trace-list">
+          <div class="trace-row"><span class="trace-title">开始验收</span><span class="trace-copy">读取任务分支和目标分支状态</span><time class="trace-time">13:19</time></div>
+          <div class="trace-row"><span class="trace-title">检查完成</span><span class="trace-copy">构建、类型检查和工作区均正常</span><time class="trace-time">13:19</time></div>
+          <div class="trace-row live"><span class="trace-title">正在合并</span><span class="trace-copy">以 fast-forward 更新 <code>main</code></span><time class="trace-time">现在</time></div>
+        </div>
+        <div class="composer">给智能体追加消息…<div class="composer-row"><span>@ 执行者</span><button class="send" type="button" aria-label="发送">↑</button></div></div>
+      </section>
 
-      <div class="event" id="resolvedEvent" hidden>
-        <span class="event-title">冲突已解决</span>
-        <span class="event-copy">任务分支已就绪，可以重新验收</span>
-        <time class="event-time">刚刚</time>
-      </div>
+      <section class="scene" data-panel="receipt" hidden>
+        <header class="scene-intro"><span class="scene-index">L2</span><div><h1>成功提示是一张回执，不是一场庆典</h1><p>告诉用户结果、关键数字和证据入口；不使用占满屏幕的绿色成功卡。</p></div></header>
+        <article class="message"><div class="avatar">执</div><div><div class="message-meta">智能体 · 13:18</div><div class="message-copy">依赖升级完成，已补齐锁文件并通过验证。</div></div></article>
+        <div class="system-block">
+          <div class="notice-line"><span class="notice-icon">✓</span><div><b>验收通过</b> · 任务分支已合并到 <code>main</code></div><span class="notice-meta">3 项检查 · 13:19</span></div>
+        </div>
+        <div class="system-block system-card success">
+          <div class="card-body"><div class="card-head"><span class="card-icon">✓</span><div><div class="eyebrow">已完成</div><h2 class="card-title">预览已生成</h2><p class="card-summary">页面在本地地址正常打开，桌面与移动宽度均无溢出。</p></div></div><div class="card-content"><div class="impact-strip"><div class="impact good"><small>页面</small><b>1 个可访问</b></div><div class="impact good"><small>控制台</small><b>0 个错误</b></div><div class="impact"><small>验证方式</small><b>扩展后台标签</b></div></div></div></div>
+          <div class="card-actions"><button class="button primary" type="button">打开预览</button><button class="button" type="button">查看验证记录</button><span class="card-footnote">不需要下一步</span></div>
+        </div>
+      </section>
 
-      <div class="composer">
-        给智能体追加消息…
-        <div class="composer-footer"><span>@ 执行者</span><button class="send" type="button" aria-label="发送">↑</button></div>
-      </div>
+      <section class="scene" data-panel="question" hidden>
+        <header class="scene-intro"><span class="scene-index">L3</span><div><h1>需要用户时，只问那个真正卡住的问题</h1><p>把背景压成一句，把选项写成结果；用户不必先读懂 Git 或任务编排的内部机制。</p></div></header>
+        <article class="message"><div class="avatar">执</div><div><div class="message-meta">智能体 · 13:21</div><div class="message-copy">两边都改了同一句产品文案，技术上都能保留，但语义需要你决定。</div></div></article>
+        <div class="system-block system-card attention">
+          <div class="card-body"><div class="card-head"><span class="card-icon">?</span><div><div class="eyebrow">等待你的决定</div><h2 class="card-title">首页标题保留哪一版？</h2><p class="card-summary">你的选择只影响首页标题，不会覆盖其他改动。</p></div></div><div class="card-content"><div class="question-copy">建议使用更具体的新版文案：</div><div class="choice-list"><button class="choice selected" type="button"><i>✓</i><span>保留“让多个智能体并行完成任务”</span></button><button class="choice" type="button"><i></i><span>保留“你的 AI 工作台”</span></button></div></div></div>
+          <div class="card-actions"><button class="button primary" type="button">采用所选文案</button><button class="button" type="button">自己输入</button><span class="card-footnote">回答后原任务继续</span></div>
+        </div>
+      </section>
+
+      <section class="scene" data-panel="warning" hidden>
+        <header class="scene-intro"><span class="scene-index">L4</span><div><h1>异常提示先说明保护结果，再谈错误</h1><p>用户最先想知道的不是错误码，而是“有没有弄坏东西”和“系统还会不会继续”。</p></div></header>
+        <div class="system-block system-card warning">
+          <div class="card-body"><div class="card-head"><span class="card-icon">!</span><div><div class="eyebrow">预览未启动</div><h2 class="card-title">端口 4317 已被其他进程占用</h2><p class="card-summary">任务没有停止，文件和提交均已保留。你可以让系统换一个端口重试。</p></div></div><div class="card-content"><div class="impact-strip"><div class="impact good"><small>任务改动</small><b>已保留</b></div><div class="impact good"><small>运行状态</small><b>仍在继续</b></div><div class="impact"><small>受影响</small><b>仅本地预览</b></div></div><div class="log-box">EADDRINUSE · 127.0.0.1:4317</div></div></div>
+          <div class="card-actions"><button class="button primary" type="button">换端口重试</button><button class="button" type="button">查看完整日志</button><span class="card-footnote">系统不会自动结束任务</span></div>
+        </div>
+      </section>
+
+      <section class="scene" data-panel="conflict" hidden>
+        <header class="scene-intro"><span class="scene-index">L4</span><div><h1>冲突是“合并暂停”，不是“验收失败”</h1><p>让分支路径承担解释工作，正文只保留影响范围和恢复动作。</p></div></header>
+        <div class="system-block system-card warning conflict-card" id="conflictCard">
+          <div class="card-body"><div class="card-head"><span class="card-icon">⇄</span><div><div class="eyebrow" id="conflictEyebrow">需要处理</div><h2 class="card-title" id="conflictTitle">合并遇到 1 个冲突</h2><p class="card-summary" id="conflictSummary">已停止合并并叫醒原任务处理。<span class="safe-pill">✓ main 未改变</span></p></div></div><div class="card-content"><div class="route-map"><div class="branch"><small>任务分支</small><code>ash/EQCOCUEk</code></div><div class="rail-line"><span class="conflict-node" id="conflictNode">!</span></div><div class="branch target"><small>目标分支</small><code>main</code></div></div><div class="file-row"><span>{ }</span><code>server/package.json</code><span class="file-state" id="fileState">等待解决</span></div></div></div>
+          <div class="card-actions"><button class="button" type="button">查看处理范围</button><button class="button primary" id="resolveButton" type="button">模拟处理完成</button><span class="card-footnote">任务状态仍为“已完成”</span></div>
+        </div>
+      </section>
+
+      <section class="scene" data-panel="paused" hidden>
+        <header class="scene-intro"><span class="scene-index">L4</span><div><h1>暂停必须成为页面状态，而不是一闪而过的 toast</h1><p>刷新后仍能看到停止原因、保存情况和恢复入口；输入区同步变成不可执行状态。</p></div></header>
+        <article class="message"><div class="avatar">执</div><div><div class="message-meta">智能体 · 13:24</div><div class="message-copy">已完成当前可安全执行的部分，接下来需要等待测试账号开通。</div></div></article>
+        <div class="system-block system-card stop">
+          <div class="card-body"><div class="card-head"><span class="card-icon">Ⅱ</span><div><div class="eyebrow">任务已暂停</div><h2 class="card-title">正在等待外部条件</h2><p class="card-summary">当前进度、工作区和续跑说明均已保存；系统不会继续消耗资源。</p></div></div><div class="card-content"><div class="persistent-bar"><span>●</span><div><b>刷新后仍会保留</b><br>测试账号可用后，从这里继续原会话</div><code>13:24</code></div></div></div>
+          <div class="card-actions"><button class="button primary" type="button">条件已满足，继续</button><button class="button danger" type="button">结束任务</button><span class="card-footnote">暂停不会推进后续队列</span></div>
+        </div>
+        <div class="composer disabled">任务暂停期间不能追加消息<div class="composer-row"><span>等待恢复</span><button class="send" type="button" aria-label="不可发送" disabled>↑</button></div></div>
+      </section>
     </section>
   </main>
-
-  <script>
-    const card = document.querySelector('#conflictCard');
-    const instructions = document.querySelector('#instructions');
-    const detailButton = document.querySelector('#detailButton');
-    const resolveButton = document.querySelector('#resolveButton');
-    const resetButton = document.querySelector('#resetButton');
-    const resolvedEvent = document.querySelector('#resolvedEvent');
-
-    detailButton.addEventListener('click', () => {
-      instructions.open = !instructions.open;
-      detailButton.textContent = instructions.open ? '收起处理说明' : '查看处理说明';
-    });
-
-    resolveButton.addEventListener('click', () => {
-      card.classList.add('resolved');
-      document.querySelector('#eyebrow').textContent = '已准备好';
-      document.querySelector('#cardTitle').textContent = '冲突已解决，可以重新验收';
-      document.querySelector('#cardSummary').innerHTML = '任务分支已完成自检。<span class="safe-badge">✓ main 仍未改变</span>';
-      document.querySelector('#routeNode').textContent = '✓';
-      document.querySelector('#fileState').textContent = '已解决';
-      document.querySelector('#progressText').textContent = '等待你重新验收；通过后将以 fast-forward 合并';
-      resolveButton.textContent = '重新验收';
-      resolvedEvent.hidden = false;
-    });
-
-    resetButton.addEventListener('click', () => window.location.reload());
-  </script>
+  <script src="system-notice-redesign.js"></script>
 </body>
 </html>
