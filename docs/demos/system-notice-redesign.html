@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>系统提示重设计 Demo</title>
+  <style>
+    :root {
+      --shell: #ececef;
+      --surface: #f8f8fa;
+      --paper: #ffffff;
+      --ink: #202126;
+      --muted: #6f727b;
+      --faint: #9a9da5;
+      --line: #e1e2e7;
+      --line-strong: #d3d5dc;
+      --indigo: #5e69c7;
+      --indigo-soft: #eff0fb;
+      --amber: #a9610b;
+      --amber-soft: #fff5df;
+      --amber-line: #efd29b;
+      --green: #19745c;
+      --green-soft: #e9f6f1;
+      --shadow: 0 1px 2px rgba(30, 32, 42, .04), 0 12px 38px rgba(30, 32, 42, .06);
+    }
+
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: var(--shell);
+      color: var(--ink);
+      font-family: Inter, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    button { font: inherit; }
+
+    button:focus-visible,
+    summary:focus-visible {
+      outline: 2px solid rgba(94, 105, 199, .55);
+      outline-offset: 2px;
+    }
+
+    .demo-toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      height: 52px;
+      padding: 0 22px;
+      border-bottom: 1px solid var(--line-strong);
+      background: rgba(255, 255, 255, .92);
+      backdrop-filter: blur(14px);
+    }
+
+    .demo-toolbar strong { font-size: 13px; }
+    .demo-toolbar span { color: var(--faint); font-size: 12px; }
+
+    .reset-button {
+      margin-left: auto;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: var(--paper);
+      padding: 5px 10px;
+      color: var(--muted);
+      cursor: pointer;
+    }
+
+    .reset-button:hover { background: var(--surface); color: var(--ink); }
+
+    .app {
+      width: min(1180px, calc(100% - 32px));
+      min-height: calc(100vh - 84px);
+      margin: 16px auto;
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 14px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .app-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      height: 48px;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(248, 248, 250, .94);
+    }
+
+    .task-kind {
+      border-radius: 5px;
+      background: var(--indigo-soft);
+      padding: 2px 7px;
+      color: var(--indigo);
+      font-size: 10px;
+      font-weight: 750;
+    }
+
+    .task-title { font-size: 13px; font-weight: 620; }
+
+    .task-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--green);
+      font-size: 11px;
+    }
+
+    .task-status::before {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      content: "";
+    }
+
+    .header-action {
+      margin-left: auto;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: var(--paper);
+      padding: 5px 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .conversation {
+      width: min(820px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 38px 0 54px;
+    }
+
+    .assistant-message {
+      display: grid;
+      grid-template-columns: 24px 1fr;
+      gap: 10px;
+      margin-bottom: 24px;
+    }
+
+    .avatar {
+      display: grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 7px;
+      background: #e8e9ed;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    .message-meta { color: var(--faint); font-size: 11px; }
+    .message-copy { margin-top: 6px; color: #45474f; }
+
+    .event-stack {
+      position: relative;
+      margin: 10px 0 20px 34px;
+      padding-left: 20px;
+    }
+
+    .event-stack::before {
+      position: absolute;
+      top: 8px;
+      bottom: 8px;
+      left: 4px;
+      width: 1px;
+      background: var(--line-strong);
+      content: "";
+    }
+
+    .event {
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(110px, auto) 1fr auto;
+      gap: 8px 16px;
+      align-items: baseline;
+      min-height: 36px;
+      padding: 7px 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .event::before {
+      position: absolute;
+      top: 14px;
+      left: -20px;
+      width: 7px;
+      height: 7px;
+      border: 2px solid var(--surface);
+      border-radius: 50%;
+      background: #b5b7bf;
+      box-shadow: 0 0 0 1px var(--line-strong);
+      content: "";
+    }
+
+    .event.current::before { background: var(--amber); box-shadow: 0 0 0 1px var(--amber-line); }
+    .event-title { color: #4f5159; font-weight: 620; }
+    .event-time { color: var(--faint); font-variant-numeric: tabular-nums; }
+
+    .conflict-card {
+      margin: 16px 0 24px 34px;
+      overflow: hidden;
+      border: 1px solid var(--amber-line);
+      border-radius: 14px;
+      background: var(--paper);
+      box-shadow: 0 10px 30px rgba(96, 68, 20, .05);
+    }
+
+    .conflict-card.resolved { border-color: #b8dccf; }
+
+    .card-main { padding: 22px 24px 20px; }
+
+    .card-heading {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+    }
+
+    .state-icon {
+      position: relative;
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      flex: 0 0 34px;
+      border-radius: 10px;
+      background: var(--amber-soft);
+      color: var(--amber);
+    }
+
+    .resolved .state-icon { background: var(--green-soft); color: var(--green); }
+    .state-icon svg { width: 18px; height: 18px; }
+
+    .heading-copy { min-width: 0; flex: 1; }
+
+    .eyebrow {
+      margin-bottom: 2px;
+      color: var(--amber);
+      font-size: 10px;
+      font-weight: 780;
+      letter-spacing: .08em;
+    }
+
+    .resolved .eyebrow { color: var(--green); }
+
+    h1 {
+      margin: 0;
+      font-size: 19px;
+      font-weight: 680;
+      letter-spacing: -.025em;
+      line-height: 1.35;
+    }
+
+    .summary {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .safe-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      margin-left: 6px;
+      border-radius: 999px;
+      background: var(--green-soft);
+      padding: 2px 8px;
+      color: var(--green);
+      font-size: 10px;
+      font-weight: 700;
+      vertical-align: 1px;
+      white-space: nowrap;
+    }
+
+    .route-map {
+      display: grid;
+      grid-template-columns: 118px 1fr 106px;
+      align-items: center;
+      gap: 12px;
+      margin: 22px 0 18px;
+      border-radius: 10px;
+      background: var(--surface);
+      padding: 14px;
+    }
+
+    .branch-label { min-width: 0; }
+    .branch-label small { display: block; color: var(--faint); font-size: 9px; letter-spacing: .06em; }
+
+    code {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: .92em;
+    }
+
+    .branch-label code {
+      display: block;
+      overflow: hidden;
+      color: #474951;
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .rail {
+      position: relative;
+      height: 32px;
+    }
+
+    .rail::before {
+      position: absolute;
+      top: 15px;
+      right: 0;
+      left: 0;
+      height: 2px;
+      border-radius: 2px;
+      background: linear-gradient(90deg, var(--indigo) 0 58%, var(--line-strong) 58% 100%);
+      content: "";
+    }
+
+    .rail::after {
+      position: absolute;
+      top: 11px;
+      right: -1px;
+      width: 8px;
+      height: 8px;
+      border-top: 2px solid var(--line-strong);
+      border-right: 2px solid var(--line-strong);
+      transform: rotate(45deg);
+      content: "";
+    }
+
+    .conflict-node {
+      position: absolute;
+      z-index: 1;
+      top: 6px;
+      left: 58%;
+      display: grid;
+      place-items: center;
+      width: 20px;
+      height: 20px;
+      border: 3px solid var(--surface);
+      border-radius: 50%;
+      background: var(--amber);
+      color: white;
+      font-size: 10px;
+      font-weight: 800;
+      transform: translateX(-50%);
+      box-shadow: 0 0 0 1px var(--amber-line);
+    }
+
+    .resolved .rail::before { background: var(--green); }
+    .resolved .rail::after { border-color: var(--green); }
+    .resolved .conflict-node { background: var(--green); box-shadow: 0 0 0 1px #b8dccf; }
+
+    .target-label { text-align: right; }
+
+    .file-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 44px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      padding: 9px 11px;
+    }
+
+    .file-icon {
+      display: grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      background: var(--amber-soft);
+      color: var(--amber);
+      font-family: monospace;
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .resolved .file-icon { background: var(--green-soft); color: var(--green); }
+    .file-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-state { color: var(--amber); font-size: 11px; font-weight: 650; }
+    .resolved .file-state { color: var(--green); }
+
+    .progress-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 13px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .spinner {
+      width: 12px;
+      height: 12px;
+      border: 2px solid #dfc99f;
+      border-top-color: var(--amber);
+      border-radius: 50%;
+      animation: spin .9s linear infinite;
+    }
+
+    .resolved .spinner { border: 0; animation: none; }
+    .resolved .spinner::before { color: var(--green); content: "✓"; font-weight: 800; }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .card-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 24px;
+      border-top: 1px solid var(--line);
+      background: #fbfbfc;
+    }
+
+    .button {
+      min-height: 31px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: var(--paper);
+      padding: 5px 11px;
+      color: #4e5058;
+      font-size: 12px;
+      font-weight: 580;
+      cursor: pointer;
+    }
+
+    .button:hover { background: var(--surface); color: var(--ink); }
+    .button.primary { border-color: #505bb5; background: var(--indigo); color: white; }
+    .button.primary:hover { background: #535eba; }
+
+    .action-note { margin-left: auto; color: var(--faint); font-size: 10px; }
+
+    details {
+      margin: 0 24px 18px 58px;
+      border-left: 2px solid var(--line);
+      padding-left: 14px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    summary { cursor: pointer; color: #565861; font-weight: 620; }
+    details p { margin: 8px 0 0; }
+
+    .composer {
+      margin: 36px 0 0 34px;
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      background: var(--paper);
+      padding: 12px 14px;
+      color: var(--faint);
+      font-size: 12px;
+      box-shadow: 0 2px 8px rgba(30, 32, 42, .03);
+    }
+
+    .composer-footer { display: flex; align-items: center; margin-top: 18px; }
+    .composer-footer span { border-radius: 999px; background: var(--surface); padding: 2px 7px; font-size: 10px; }
+
+    .send {
+      display: grid;
+      place-items: center;
+      width: 27px;
+      height: 27px;
+      margin-left: auto;
+      border: 0;
+      border-radius: 8px;
+      background: var(--indigo);
+      color: white;
+    }
+
+    @media (max-width: 680px) {
+      .demo-toolbar span, .header-action, .event-copy, .action-note { display: none; }
+      .app { width: calc(100% - 16px); margin: 8px auto; border-radius: 10px; }
+      .conversation { width: calc(100% - 24px); padding-top: 24px; }
+      .event-stack, .conflict-card, .composer { margin-left: 0; }
+      .card-main { padding: 18px; }
+      .route-map { grid-template-columns: 84px 1fr 72px; gap: 8px; padding: 12px; }
+      .card-actions { flex-wrap: wrap; padding: 11px 18px; }
+      details { margin-left: 18px; }
+      h1 { font-size: 17px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+  </style>
+</head>
+<body>
+  <header class="demo-toolbar">
+    <strong>系统提示 · 交互稿</strong>
+    <span>原则：过程降噪，异常可扫读，下一步可执行</span>
+    <button class="reset-button" id="resetButton" type="button">重置演示</button>
+  </header>
+
+  <main class="app">
+    <header class="app-header">
+      <span class="task-kind">自由任务</span>
+      <span class="task-title">更新依赖与构建配置</span>
+      <span class="task-status">任务已完成</span>
+      <button class="header-action" type="button">查看改动</button>
+    </header>
+
+    <section class="conversation" aria-label="任务会话">
+      <article class="assistant-message">
+        <div class="avatar">执</div>
+        <div>
+          <div class="message-meta">智能体 · 09/01 13:18</div>
+          <div class="message-copy">依赖已经更新，构建和类型检查均通过。改动已提交，可以验收。</div>
+        </div>
+      </article>
+
+      <div class="event-stack" aria-label="验收过程">
+        <div class="event">
+          <span class="event-title">开始验收</span>
+          <span class="event-copy">检查任务分支并尝试合并到 <code>main</code></span>
+          <time class="event-time">13:19</time>
+        </div>
+        <div class="event current">
+          <span class="event-title">合并暂停</span>
+          <span class="event-copy">发现 1 个需要处理的文件</span>
+          <time class="event-time">13:19</time>
+        </div>
+      </div>
+
+      <article class="conflict-card" id="conflictCard" aria-live="polite">
+        <div class="card-main">
+          <div class="card-heading">
+            <div class="state-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 3v10"></path><path d="M12 18.5v.5"></path><path d="M5.6 20h12.8a2 2 0 0 0 1.74-3L13.74 5.9a2 2 0 0 0-3.48 0L3.86 17a2 2 0 0 0 1.74 3Z"></path>
+              </svg>
+            </div>
+            <div class="heading-copy">
+              <div class="eyebrow" id="eyebrow">需要处理</div>
+              <h1 id="cardTitle">合并遇到 1 个冲突</h1>
+              <p class="summary" id="cardSummary">已停止合并并叫醒原任务处理。<span class="safe-badge">✓ main 未改变</span></p>
+            </div>
+          </div>
+
+          <div class="route-map" aria-label="分支合并路径">
+            <div class="branch-label">
+              <small>任务分支</small>
+              <code>ash/EQCOCUEk</code>
+            </div>
+            <div class="rail"><span class="conflict-node" id="routeNode">!</span></div>
+            <div class="branch-label target-label">
+              <small>目标分支</small>
+              <code>main</code>
+            </div>
+          </div>
+
+          <div class="file-row">
+            <span class="file-icon">{ }</span>
+            <code class="file-name">server/package.json</code>
+            <span class="file-state" id="fileState">等待解决</span>
+          </div>
+
+          <div class="progress-line">
+            <span class="spinner" aria-hidden="true"></span>
+            <span id="progressText">原任务正在解决冲突，完成后会通知你重新验收</span>
+          </div>
+        </div>
+
+        <div class="card-actions">
+          <button class="button" type="button" id="detailButton">查看处理说明</button>
+          <button class="button primary" type="button" id="resolveButton">模拟处理完成</button>
+          <span class="action-note">任务状态仍为“已完成”</span>
+        </div>
+
+        <details id="instructions">
+          <summary>智能体收到的处理范围</summary>
+          <p>仅在任务分支合并 <code>main</code>、解决 <code>server/package.json</code> 并重新自检；不会修改或切换目标分支，也不会删除工作区。</p>
+        </details>
+      </article>
+
+      <div class="event" id="resolvedEvent" hidden>
+        <span class="event-title">冲突已解决</span>
+        <span class="event-copy">任务分支已就绪，可以重新验收</span>
+        <time class="event-time">刚刚</time>
+      </div>
+
+      <div class="composer">
+        给智能体追加消息…
+        <div class="composer-footer"><span>@ 执行者</span><button class="send" type="button" aria-label="发送">↑</button></div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const card = document.querySelector('#conflictCard');
+    const instructions = document.querySelector('#instructions');
+    const detailButton = document.querySelector('#detailButton');
+    const resolveButton = document.querySelector('#resolveButton');
+    const resetButton = document.querySelector('#resetButton');
+    const resolvedEvent = document.querySelector('#resolvedEvent');
+
+    detailButton.addEventListener('click', () => {
+      instructions.open = !instructions.open;
+      detailButton.textContent = instructions.open ? '收起处理说明' : '查看处理说明';
+    });
+
+    resolveButton.addEventListener('click', () => {
+      card.classList.add('resolved');
+      document.querySelector('#eyebrow').textContent = '已准备好';
+      document.querySelector('#cardTitle').textContent = '冲突已解决，可以重新验收';
+      document.querySelector('#cardSummary').innerHTML = '任务分支已完成自检。<span class="safe-badge">✓ main 仍未改变</span>';
+      document.querySelector('#routeNode').textContent = '✓';
+      document.querySelector('#fileState').textContent = '已解决';
+      document.querySelector('#progressText').textContent = '等待你重新验收；通过后将以 fast-forward 合并';
+      resolveButton.textContent = '重新验收';
+      resolvedEvent.hidden = false;
+    });
+
+    resetButton.addEventListener('click', () => window.location.reload());
+  </script>
+</body>
+</html>
