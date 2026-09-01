@@ -1,5 +1,22 @@
 /* 系统信息是会话旁注，不与用户和 agent 的正文争夺视觉层级。 */
 
+.task-message--user.is-system-authored { justify-content: flex-start; padding-right: 38px; padding-left: 30px; }
+.task-message--user.is-system-authored .task-user-bubble,
+.team-feed-user.is-system-authored > div {
+  max-width: min(760px, 92%);
+  border: 0;
+  border-left: 2px solid color-mix(in lch, var(--accent) 26%, var(--line2));
+  border-radius: 0;
+  background: transparent;
+  padding: 3px 0 5px 12px;
+  box-shadow: none;
+}
+.task-message--user.is-system-authored header,
+.team-feed-user.is-system-authored header { margin-bottom: 2px; }
+.task-message--user.is-system-authored .task-markdown,
+.team-feed-user.is-system-authored .task-markdown { color: var(--muted); font-size: 12px; line-height: 1.62; }
+.team-feed-user.is-system-authored { justify-content: flex-start; padding-right: 42px; padding-left: 30px; }
+
 .system-notice-mode-switch {
   position: absolute;
   z-index: 9;
@@ -46,6 +63,7 @@
 .system-event-digest summary::-webkit-details-marker { display: none; }
 .system-event-digest :is(summary, .system-event-digest-line) > span { min-width: 0; overflow: hidden; flex: 0 1 auto; text-overflow: ellipsis; white-space: nowrap; }
 .system-event-digest :is(summary, .system-event-digest-line) small { flex: none; color: var(--faint); font-size: 9px; white-space: nowrap; }
+.system-event-digest :is(summary, .system-event-digest-line) .system-event-issues { color: color-mix(in lch, var(--red) 64%, var(--muted)); font-weight: 650; }
 .system-event-digest summary time,
 .system-event-digest-line time,
 .system-event-digest li time { flex: none; opacity: .72; font-size: 9.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -263,4 +281,9 @@
   .conversation-note.system-event-row { margin-left: 10px; }
   .conversation-note.system-event-row.notice-mode-aligned { margin-left: 0; }
   .system-event-row.notice-mode-attached { margin-left: 30px; }
+}
+
+@media (max-width: 560px) {
+  .task-message--user.is-system-authored { padding-right: 10px; padding-left: 10px; }
+  .task-message--user.is-system-authored .task-user-bubble { max-width: 100%; }
 }

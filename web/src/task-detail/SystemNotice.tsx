@@ -44,12 +44,9 @@ function cleanEventText(item: EventLike): string {
 
 function digestLead(items: EventItem[]): { kind: SystemEventKind; text: string } {
   const latest = items.at(-1)!;
-  const mostImportant = [...items].sort((a, b) => (
-    IMPORTANCE[systemEventKind(b.text, b.tone)] - IMPORTANCE[systemEventKind(a.text, a.tone)]
-  ))[0] ?? latest;
   const text = cleanEventText(latest).replace(/\s+/g, " ");
   return {
-    kind: systemEventKind(mostImportant.text, mostImportant.tone),
+    kind: systemEventKind(latest.text, latest.tone),
     text: text.length > 108 ? `${text.slice(0, 105)}…` : text,
   };
 }
@@ -78,12 +75,17 @@ export function SystemNoticeModeSwitch({ mode, search }: { mode: SystemNoticeMod
 export function SystemEventDigest({ items, mode }: { items: EventItem[]; mode: SystemNoticeMode }) {
   const lead = digestLead(items);
   const lastAt = items.at(-1)?.at;
+  const hiddenIssueCount = items.slice(0, -1).filter((item) => {
+    const kind = systemEventKind(item.text, item.tone);
+    return kind === "error" || kind === "warning";
+  }).length;
   const important = IMPORTANCE[lead.kind] >= IMPORTANCE.recovery;
   const collapsedLabel = important ? `系统记录 · ${lead.text}` : `系统记录 · ${items.length} 条`;
   const line = (
     <>
       <span>{mode === "collapsed" ? collapsedLabel : lead.text}</span>
       {mode !== "collapsed" && <small>{items.length > 1 ? `${items.length} 条记录` : "查看完整内容"}</small>}
+      {hiddenIssueCount > 0 && <small className="system-event-issues">其中 {hiddenIssueCount} 条异常</small>}
       {lastAt && <time>{formatInstant(lastAt)}</time>}
     </>
   );

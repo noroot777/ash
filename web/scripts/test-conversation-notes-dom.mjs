@@ -46,9 +46,11 @@ try {
   const boundaryBox = await boundary.boundingBox();
   assert.ok(boundaryBox.width > noteBox.width, "回合边界横贯得比旁注宽");
   // 「没办成」的那条要看得出来不一样。
-  const failedDigest = page.locator(".system-event-digest.is-error");
+  const failedDigest = page.locator(".system-event-digest").filter({ hasText: "审查未通过" });
   assert.equal(await failedDigest.count(), 1);
   assert.match(await failedDigest.locator("summary").innerText(), /工作区已恢复/, "摘要显示这组的最新状态");
+  assert.match(await failedDigest.locator(".system-event-issues").innerText(), /其中 1 条异常/, "隐藏的失败记录必须用文字提示");
+  assert.equal(await failedDigest.evaluate((el) => el.classList.contains("is-error")), false, "恢复摘要不能沿用旧失败的整行红色语气");
   await failedDigest.locator("summary").click();
   assert.match(await failedDigest.innerText(), /审查未通过/s, "展开后仍完整保留组内失败记录");
 

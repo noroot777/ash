@@ -59,22 +59,25 @@ try {
   });
   assert.equal(latestPair.summaryText, latestPair.latestText, "摘要文字必须来自最新事件");
   assert.equal(latestPair.summaryTime, latestPair.latestTime, "摘要时间必须来自同一条最新事件");
-  assert.equal(await digest.evaluate((el) => el.classList.contains("is-error")), true, "组内较严重事件仍应用颜色提示");
+  assert.equal(await digest.evaluate((el) => el.classList.contains("is-recovery")), true, "摘要语气必须与最新恢复事件一致");
+  assert.equal(await digest.evaluate((el) => el.classList.contains("is-error")), false, "恢复文字不能被旧失败染成整行红色");
+  assert.match(await digest.locator(".system-event-issues").innerText(), /其中 1 条异常/, "组内旧失败仍应用可读文字提示");
   const marker = await digest.evaluate((el) => {
     const style = getComputedStyle(el, "::before");
     return { width: style.width, height: style.height, radius: style.borderRadius, content: style.content };
   });
   assert.deepEqual(marker, { width: "4px", height: "4px", radius: "50%", content: '""' }, "脚注使用无方向性的 4px 圆点，不再显示弯箭头");
   const compactLine = await digest.locator("summary").evaluate((el) => {
-    const text = el.querySelector(":scope > span").getBoundingClientRect();
-    const time = el.querySelector(":scope > time").getBoundingClientRect();
+    const timeElement = el.querySelector(":scope > time");
+    const time = timeElement.getBoundingClientRect();
+    const previous = timeElement.previousElementSibling.getBoundingClientRect();
     return {
-      gap: Math.round(time.left - text.right),
+      gap: Math.round(time.left - previous.right),
       lineWidth: Math.round(el.getBoundingClientRect().width),
       containerWidth: Math.round(el.parentElement.getBoundingClientRect().width),
     };
   });
-  assert.ok(compactLine.gap <= 80, "记录数可占一格，但时间不能被推到内容区最右侧");
+  assert.ok(compactLine.gap <= 16, "时间应紧跟在最后一个摘要信息块之后");
   assert.equal(compactLine.lineWidth, compactLine.containerWidth, "系统提示应按内容收缩，不铺成整行");
   assert.ok(compactLine.containerWidth < 500, "短系统提示不应占满会话内容宽度");
   await digest.locator("summary").click();
@@ -137,17 +140,18 @@ try {
   const attachedStyle = await attached.evaluate((el) => {
     const style = getComputedStyle(el);
     const line = el.querySelector("summary");
-    const text = line.querySelector(":scope > span").getBoundingClientRect();
-    const time = line.querySelector(":scope > time").getBoundingClientRect();
+    const timeElement = line.querySelector(":scope > time");
+    const time = timeElement.getBoundingClientRect();
+    const previous = timeElement.previousElementSibling.getBoundingClientRect();
     return {
       marginTop: Number.parseFloat(style.marginTop),
       border: getComputedStyle(line).borderTopWidth,
-      timeGap: Math.round(time.left - text.right),
+      timeGap: Math.round(time.left - previous.right),
     };
   });
   assert.ok(attachedStyle.marginTop < 0, "消息尾注应贴近上一段会话");
   assert.notEqual(attachedStyle.border, "0px", "消息尾注用细线表达它属于上一段消息");
-  assert.ok(attachedStyle.timeGap <= 80, "消息尾注的时间同样应紧跟内容");
+  assert.ok(attachedStyle.timeGap <= 16, "消息尾注的时间同样应紧跟最后一个摘要信息块");
   assert.equal(await page.locator('.system-notice-mode-switch a[aria-current="page"]').innerText(), "消息尾注");
 
   await page.setViewportSize({ width: 390, height: 900 });
@@ -157,6 +161,50 @@ try {
   }));
   assert.equal(geometry.overflow, false, "窄屏不能横向溢出");
   assert.ok(geometry.actionWidth <= 370, "系统旁注应收进窄屏可用宽度");
+
+  await page.setViewportSize({ width: 1100, height: 700 });
+  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/review-system-prompts.html`);
+  const authoredStyles = await page.evaluate(() => {
+    const read = (surface) => {
+      const root = document.querySelector(`[data-surface="${surface}"]`);
+      const authored = root.querySelector(".is-system-authored");
+      const authoredBubble = authored.querySelector(surface === "task" ? ".task-user-bubble" : ":scope > div");
+      const authoredText = authoredBubble.querySelector(".task-markdown");
+      const user = root.querySelector(surface === "task"
+        ? ".task-message--user:not(.is-system-authored)"
+        : ".team-feed-user:not(.is-system-authored)");
+      const userBubble = user.querySelector(surface === "task" ? ".task-user-bubble" : ":scope > div");
+      const articleStyle = getComputedStyle(authored);
+      const bubbleStyle = getComputedStyle(authoredBubble);
+      const userArticleStyle = getComputedStyle(user);
+      const userBubbleStyle = getComputedStyle(userBubble);
+      return {
+        justify: articleStyle.justifyContent,
+        background: bubbleStyle.backgroundColor,
+        borderTop: bubbleStyle.borderTopWidth,
+        borderLeft: bubbleStyle.borderLeftWidth,
+        radius: bubbleStyle.borderRadius,
+        fontSize: getComputedStyle(authoredText).fontSize,
+        userJustify: userArticleStyle.justifyContent,
+        userBackground: userBubbleStyle.backgroundColor,
+        userBorderTop: userBubbleStyle.borderTopWidth,
+        userRadius: userBubbleStyle.borderRadius,
+      };
+    };
+    return { task: read("task"), team: read("team") };
+  });
+  for (const [surface, styles] of Object.entries(authoredStyles)) {
+    assert.equal(styles.justify, "flex-start", `${surface} 审查系统提示必须左对齐`);
+    assert.equal(styles.background, "rgba(0, 0, 0, 0)", `${surface} 审查系统提示不使用用户气泡底色`);
+    assert.equal(styles.borderTop, "0px", `${surface} 审查系统提示不使用用户气泡外框`);
+    assert.equal(styles.borderLeft, "2px", `${surface} 审查系统提示保留原来的短竖线`);
+    assert.equal(styles.radius, "0px", `${surface} 审查系统提示不使用用户气泡圆角`);
+    assert.equal(styles.fontSize, "12px", `${surface} 审查系统提示保留原字号`);
+    assert.equal(styles.userJustify, "flex-end", `${surface} 普通用户消息仍右对齐`);
+    assert.notEqual(styles.userBackground, "rgba(0, 0, 0, 0)", `${surface} 普通用户气泡仍保留底色`);
+    assert.notEqual(styles.userBorderTop, "0px", `${surface} 普通用户气泡仍保留外框`);
+    assert.notEqual(styles.userRadius, "0px", `${surface} 普通用户气泡仍保留圆角`);
+  }
 
   if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: true });
   console.log("system-notices-dom ok");
