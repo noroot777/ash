@@ -22,7 +22,6 @@ import { HandoffError, type HandoffManifest } from "./handoff-types.js";
 import { applyUploadRewrites, buildUploadRewrites, hasUploadRewrites, writeUploads } from "./handoff-uploads.js";
 import { localUploadNames, registerUploads } from "./uploads.js";
 import { ensureWorkdir, expandHome, prepareWorktree, projectHealthLight, worktreePathFor } from "./git.js";
-import { isAncestor } from "./git-accept.js";
 import { findRollout } from "./executors/codex-rollout.js";
 import { assertHandoffNotCanceled, beginHandoffImport, endHandoffImport } from "./handoff-transfer-state.js";
 import { publishPendingMessages } from "./pending-messages.js";
@@ -146,8 +145,6 @@ async function importValidated(
 
   // ── git:先分支进仓库,再恢复 worktree ────────────────────────────────────
   let workspace: string | null = null;
-  // 「对端验收过、但本机主线还没有这份合并」——留给下面写时间线,判定在 acceptedMergeLanded。
-  let pendingLocalMerge: string | null = null;
   if (useWorktree && m.git) {
     await importGitBundle(project.repoPath, m.task.id, m.git, notes);
     const ws = await prepareWorktree(project.repoPath, m.task.id, m.task.worktreeBase);
@@ -158,24 +155,6 @@ async function importValidated(
     }
     if (ws.fresh) {
       notes.push("worktree 是全新建的(没接上导入分支),代码进度可能没挂上——检查一下分支");
-    }
-    // 对端已经验收过:验收章随任务走,合并却走不了 —— 那次 merge 发生在**对端仓库**的
-    // 目标分支上。所以到货之后当场核一遍本机主线够不够得着它,够不着就明说「还差最后
-    // 一合」,别让一个盖着「验收完成」的任务在本机主线上其实一个字节都没有。
-    const target = (m.task.acceptedTargetBranch ?? "").trim();
-    if (m.git.acceptedMerge || isAcceptedStage(m.task.stage as TaskStage | null)) {
-      const repo = expandHome(project.repoPath);
-      const landed = target
-        ? await isAncestor(repo, m.git.head, target)
-        : false;
-      if (landed) {
-        notes.push(`对端验收的合并成果本机 ${target} 已经有了,无需再合`);
-      } else {
-        pendingLocalMerge = target || "目标分支";
-        notes.push(
-          `对端验收时的合并成果已恢复为本机分支 ${m.git.branch};本机 ${pendingLocalMerge} 还没有这份合并,在验收页点「验收通过」即可合进来`,
-        );
-      }
     }
   } else if (useWorktree) {
     // 没有 git 载荷(源机 worktree 没建过/detached):worktree 留给首次运行时惰性创建。
@@ -574,14 +553,6 @@ async function importValidated(
     await appendTaskTimeline(
       m.task.id,
       "任务带着「已验收」回到本机，没有自动续跑 —— 续跑会把验收结论和合并快照整套摘掉。需要继续改动就直接在会话里发消息唤醒它。",
-    );
-  }
-  if (pendingLocalMerge) {
-    await appendTaskTimeline(
-      m.task.id,
-      `代码已随任务回到本机（分支 ${m.git?.branch}，工作目录 ${workspace}）。`
-        + `对端那次验收合并的是它自己仓库的 ${pendingLocalMerge}，本机这条分支还没合 —— `
-        + "在验收页点「验收通过」即可把它合进本机主线。",
     );
   }
 

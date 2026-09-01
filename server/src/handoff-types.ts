@@ -248,10 +248,6 @@ export interface HandoffManifest {
     prereqs: string[];
     // 空串 = 对端已有分支全部提交,不传数据,导入侧只把分支对齐到 head。
     bundleBase64: string;
-    // true = head 不是一条活着的任务分支的尖,而是**源机验收时那次合并的成果**:任务
-    // 分支已经在验收清理里删掉了,源机借它原来的名字临时立了个 ref 才打得出包。老版本
-    // 导出没有这个字段;导入侧只拿它写措辞(代码照常落地),所以缺了也不影响正确性。
-    acceptedMerge?: boolean;
   };
   files: HandoffFilePayload[];
 }

@@ -181,10 +181,7 @@ export function RemoteTaskDetail({
         <ConfirmDialog
           title="把任务移回本机？"
           message={`任务将从「${target.name}」接力回本机，远端列表中的这条任务随后会消失。`
-            + (isAcceptedStage(task.stage)
-              ? `它已经验收完成：移回后不会自动续跑，那边验收合并的成果会跟着回来落成本机的任务分支，`
-                + `在验收页点「验收通过」即可合进本机主线。`
-              : "")}
+            + (isAcceptedStage(task.stage) ? "它已经验收完成：移回后不会自动续跑。" : "")}
           confirmLabel="移回本机"
           busy={returning}
           onConfirm={() => void returnHome()}

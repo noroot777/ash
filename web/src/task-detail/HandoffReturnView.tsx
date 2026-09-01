@@ -124,7 +124,6 @@ export function HandoffReturnView({
               <Warning size={13} aria-hidden="true" />
               <span>
                 任务已验收，回到来源机<b>不会自动续跑</b>（续跑会把验收结论和合并快照整套摘掉）。
-                这次验收合并的成果会随任务一起回去，落成来源机上的任务分支。
               </span>
             </p>
           ) : (
