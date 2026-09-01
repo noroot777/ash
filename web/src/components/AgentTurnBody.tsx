@@ -1,13 +1,13 @@
+import { useEffect, useRef, useState } from "react";
 import type { AgentContentSegment } from "../task-detail/conversationModel.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
-import { splitTurnSegments } from "../task-detail/turnFold.ts";
+import { turnLayout, nextProcessFoldOpen } from "../task-detail/turnFold.ts";
 import { MarkdownBody } from "./MarkdownBody.tsx";
 import {
   ExecutionDetails,
   ExecutionEventList,
   ExecutionSummaryLine,
   hasExecutionError,
-  useAutoFold,
 } from "./ExecutionTrace.tsx";
 
 function SegmentBody({ segment }: { segment: AgentContentSegment }) {
@@ -20,8 +20,9 @@ function SegmentBody({ segment }: { segment: AgentContentSegment }) {
 }
 
 /**
- * 过程折叠块。跑的时候默认摊开（不然用户盯着一行摘要不知道在干嘛），整条执行链路停下来
- * 的那一刻才自动收起 —— 判据见 useAutoFold / nextProcessFoldOpen，跑的中途一律不折。
+ * 过程折叠块。**只在整条执行链路停下来之后才会被渲染**（见 turnLayout），所以它一上来
+ * 就是折好的 —— 哪怕这一瞬当前气泡还挂着 running（终态 SSE 比 sessions 重拉先到）。
+ * 这里的开合只管一件事：用户自己动过折角之后不再自动动它（判据见 nextProcessFoldOpen）。
  */
 function ProcessFold({
   segments,
@@ -34,13 +35,23 @@ function ProcessFold({
   taskLive: boolean;
 }) {
   const events = segments.flatMap((segment) => segment.events);
-  const fold = useAutoFold(running, taskLive);
+  const [open, setOpen] = useState(false);
+  const touched = useRef(false);
+
+  useEffect(() => {
+    const next = nextProcessFoldOpen({ taskLive, touched: touched.current });
+    if (next !== null) setOpen(next);
+  }, [taskLive]);
 
   return (
     <details
       className={`task-execution-block task-turn-process${hasExecutionError(events) ? " has-error" : ""}`}
-      open={fold.open}
-      onToggle={fold.onToggle}
+      open={open}
+      onToggle={(event) => {
+        const next = event.currentTarget.open;
+        if (next !== open) touched.current = true;
+        setOpen(next);
+      }}
     >
       <summary>
         <ExecutionSummaryLine events={events} running={running} />
@@ -76,23 +87,19 @@ export function AgentTurnBody({
    */
   taskLive: boolean;
 }) {
-  const { process, conclusion } = splitTurnSegments(segments);
+  // 跑的时候不折 —— 连「切成过程 / 结论」这一步都不做（见 turnLayout）。折叠是个重组
+  // 动作：它会把已经说出口、已经露在外面的正文一并收进过程块，跑的中途干这件事，用户
+  // 正读的内容说没就没。链路停下来那一下才折，位置从此不再变。
+  const { process, conclusion } = turnLayout(segments, { live: taskLive });
   return (
     <>
       {!!process.length && <ProcessFold segments={process} running={running} taskLive={taskLive} />}
       {conclusion.map((segment, index) => (
         <section className="task-agent-segment" key={segment.id}>
-          {/*
-            不折的那条路径（无过程可折 / 折完没内容）仍按老样子逐段折事件 —— 但**摊开的
-            时机跟过程块一致**：这条路径正是一条回合跑到「最后一步是工具调用、后面还没
-            吐字」时的形状，让它保持默认收起，用户看到的就是执行过程在跑的中途自己合上。
-            live 传回合级的 running（这一段是不是当前那一步只决定小圆点，不决定开合）。
-          */}
+          {/* 平铺那条路径（跑着的时候、以及折不出结论的回合）逐段折事件，跟原来一样。 */}
           <ExecutionDetails
             events={segment.events}
             running={running && !process.length && index === conclusion.length - 1}
-            live={running}
-            taskLive={taskLive}
           />
           <SegmentBody segment={segment} />
         </section>

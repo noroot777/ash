@@ -1,10 +1,11 @@
-// 回合折叠的开合时机（渲染结果，切分逻辑本身由 test:turn-fold 钉住）。
+// 回合折叠的时机（渲染结果，切分逻辑本身由 test:turn-fold 钉住）。
 //
-// 钉的就是「什么时候自动折起来」这一条：跑的时候必须摊开（不然用户盯着一行摘要不知道
-// 在干嘛），**只有整个任务停下来那一刻**才收起 —— 回合边界在一次运行里能出现好几次
-// （换轮、就地验证、会话行落 endedAt），跟着它折用户会在跑的中途被反复折叠。刷新后读到
-// 的历史回合一上来就是折好的。还有一条同样要紧的反向约束：用户自己动过折角之后，后续
-// 重绘不许再把它按回去。
+// 钉的是一条硬规矩：**跑的时候一律平铺，整条执行链路停下来那一下才折**。
+//
+// 折叠是个重组动作 —— 它把最后一次动手之前的一切（连同已经说出口、已经露在外面的正文）
+// 收进「执行过程」块，外面只留最后那段话。跑的过程中干这件事，用户看到的就是：agent 一
+// 说话，上面读到一半的内容被吸走；下一个工具调用又把它们吐回来。所以运行期连切都不切。
+// 反向约束同样要紧：折起来之后用户自己动过折角，后续重绘不许再把它按回去。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -25,49 +26,55 @@ try {
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
   browser = await chromium.launch(await chromeLaunchOptions());
-  const page = await browser.newPage({ viewport: { width: 1000, height: 1200 } });
+  const page = await browser.newPage({ viewport: { width: 1000, height: 1400 } });
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/turn-fold.html`);
 
   const turn = (name) => page.locator(`[data-case="${name}"]`);
   const fold = (name) => turn(name).locator("details.task-turn-process");
+  const folded = (name) => fold(name).count();
   const isOpen = (name) => fold(name).evaluate((el) => el.open);
-  // 过程里那句话：折起来就该看不见。
+  // 过程里那句话：折起来就该看不见，没折就该露在外面。
   const processText = (name) => turn(name).getByText("真实页面已在后台标签打开并操作");
-  // 结论：任何时候都露在外面。
   const conclusionText = (name) => turn(name).getByText("第 2 轮结论");
-  // 摘要条上的运行小圆点只在 running 时渲染，拿它当「新的 running 已经渲染」的信标。
   const settled = (name, running) =>
     turn(name).locator(".task-execution-pulse").waitFor({ state: running ? "attached" : "detached" });
-  // 开合是 useEffect 干的，跑在渲染之后 —— 小圆点比它早到。「不该被掀开」这类负向断言
-  // 没法 waitFor，只能等两帧确保 effect 已经有过机会，否则读到的是还没提交的旧值。
+  // 开合/重排是 useEffect 与重渲染干的。「不该发生」这类负向断言没法 waitFor，等两帧。
   const flush = () => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+  const click = async (name, role) => {
+    await turn(name).locator(`[data-role="${role}"]`).click();
+    await flush();
+  };
 
-  await fold("live").waitFor();
+  await turn("live").waitFor();
 
-  // 1. 正在跑：摊开，过程和结论都看得见。
-  assert.equal(await isOpen("live"), true, "回合还在跑，过程块不该是收起的");
-  assert.equal(await processText("live").isVisible(), true);
+  // 1. 正在跑：**一个过程块都不该有**。说过的话全在外面，工具各自一条折叠行（默认收起，
+  //    那是它本来的样子，这次不动它）。
+  assert.equal(await folded("live"), 0, "跑的时候不该把回合重组成「过程 + 结论」");
+  assert.equal(await processText("live").isVisible(), true, "跑的时候说过的话必须留在外面");
   assert.equal(await conclusionText("live").isVisible(), true);
+  assert.equal(await turn("live").locator("details.task-execution-block").count(), 3, "工具照旧逐段一条");
+  assert.equal(
+    await turn("live").locator("details.task-execution-block").evaluateAll((els) => els.some((el) => el.open)),
+    false,
+    "逐段那几条保持原样（默认收起，用户自己点开）",
+  );
 
-  // 2. 回合收口了、任务还在跑：**不许折**。这是本功能的主约束 —— 一次运行里回合边界
-  //    出现好几次（换轮、就地验证、endedAt 落下来的那一瞬），跟着它折就等于跑的中途
-  //    把用户正读的过程收走。
-  await turn("live").locator('[data-role="end-turn"]').click();
+  // 2. 回合收口了、任务还在跑（换下一轮、就地验证、endedAt 落下来那一瞬）：还是不折。
+  await click("live", "end-turn");
   await settled("live", false);
   await flush();
-  assert.equal(await isOpen("live"), true, "任务还在跑，回合结束不该把过程折起来");
+  assert.equal(await folded("live"), 0, "任务还在跑，回合结束不该触发折叠");
   assert.equal(await processText("live").isVisible(), true);
 
-  // 3. 最后一步确认执行完了：这时才自动收起，只留结论。
-  await turn("live").locator('[data-role="end-task"]').click();
-  await page.waitForFunction(
-    () => !document.querySelector('[data-case="live"] details.task-turn-process').open,
-  );
-  assert.equal(await processText("live").isVisible(), false, "收工后过程正文该被折进去");
+  // 3. 最后一步确认执行完了：这一下才折 —— 过程收进去（且是收起的），结论留在外面。
+  await click("live", "end-task");
+  await fold("live").waitFor();
+  assert.equal(await isOpen("live"), false, "折的时候就该是收起的");
+  assert.equal(await processText("live").isVisible(), false, "过程正文该被折进去");
   assert.equal(await conclusionText("live").isVisible(), true, "结论任何时候都不该被折起来");
   assert.equal(await turn("live").getByText("工作树保持干净").isVisible(), true, "记账之后的收尾句也是结论");
 
-  // 4. 记账调用不当切点：complete_task 被并进过程块，不在结论区自成一条折叠行。
+  // 4. 记账调用不当切点：complete_task 并进过程块，不在结论区自成一条折叠行。
   assert.equal(await fold("live").locator(".task-tool-line").count(), 3);
   assert.equal(
     await turn("live").locator("details.task-execution-block:not(.task-turn-process)").count(),
@@ -75,48 +82,34 @@ try {
     "结论区不该再夹一条「执行过程」折叠行",
   );
 
-  // 5. 用户自己展开之后，后续重绘不许再把它按回去。
+  // 5. 折起来之后用户自己展开：后续重绘不许再把它按回去。
   await fold("live").locator("summary").click();
   assert.equal(await isOpen("live"), true);
-  await turn("live").locator('[data-role="repaint"]').click();
+  await click("live", "repaint");
   await turn("live").getByText("触发重绘 1").waitFor();
-  await turn("live").locator('[data-role="repaint"]').click();
+  await click("live", "repaint");
   await turn("live").getByText("触发重绘 2").waitFor();
-  await flush();
   assert.equal(await isOpen("live"), true, "用户手动展开后被重绘按了回去");
+
+  // 6. 又被续跑（回复 / resume）：链路重新活了，折叠整个撤掉，回到平铺。
+  await click("live", "restart-turn");
+  await flush();
+  assert.equal(await folded("live"), 0, "重新开跑之后不该还留着过程块");
   assert.equal(await processText("live").isVisible(), true);
 
-  // 6. 刷新后读到的历史回合：首屏就是折好的，不该先闪一下再收。
+  // 7. 刷新后读到的历史回合（链路早停了）：首屏就是折好的，不该先摊开再收。
+  assert.equal(await folded("persisted"), 1);
   assert.equal(await isOpen("persisted"), false, "已结束的回合首屏就该是折好的");
   assert.equal(await processText("persisted").isVisible(), false);
   assert.equal(await conclusionText("persisted").isVisible(), true);
 
-  // 7. 任务还在跑时挂在上面的历史回合（跑到中途刷新页面、或续跑前面的那些轮）：
-  //    「不折」不等于「掀开」，它自己没在飞就该保持折好。
-  assert.equal(await isOpen("history"), false, "任务在跑不是把每一条历史回合都掀开的理由");
-  assert.equal(await processText("history").isVisible(), false);
+  // 8. 任务还在跑时挂在上面的历史回合：跟着「运行中不折」，平铺。
+  assert.equal(await folded("history"), 0, "任务还在跑，历史回合也不折");
+  assert.equal(await processText("history").isVisible(), true);
 
-  // 8. 折好的历史回合又被续跑（回复、resume）：没人动过它，就跟着重新摊开。
-  await turn("persisted").locator('[data-role="restart-turn"]').click();
-  await page.waitForFunction(
-    () => document.querySelector('[data-case="persisted"] details.task-turn-process').open,
-  );
-  assert.equal(await processText("persisted").isVisible(), true);
-
-  // 9. 但用户自己收起来的，续跑不许替他掀开 —— 这是 touched 那道闸唯一起作用的方向。
-  await fold("persisted").locator("summary").click();
-  assert.equal(await isOpen("persisted"), false);
-  await turn("persisted").locator('[data-role="end-task"]').click();
-  await settled("persisted", false);
-  await flush();
-  await turn("persisted").locator('[data-role="restart-turn"]').click();
-  await settled("persisted", true);
-  await flush();
-  assert.equal(await isOpen("persisted"), false, "用户收起来的过程块被续跑掀开了");
-
-  // 10. 未确认完成的失败回合：结算补的那条异常不是切点。整篇回答留在折叠外面，异常并进
-  //     过程块（折叠条标红），失败说明那段引用照旧露在外面。
-  assert.equal(await isOpen("failed"), false, "已结束的失败回合首屏就该是折好的");
+  // 9. 未确认完成的失败回合（老会话形状，链路已停）：结算补的那条异常不是切点 ——
+  //    整篇回答留在折叠外面，异常并进过程块（折叠条标红）。
+  assert.equal(await isOpen("failed"), false);
   assert.equal(
     await turn("failed").getByText("会覆盖，而且只有一个槽").first().isVisible(),
     true,
@@ -128,79 +121,74 @@ try {
     "失败说明该露在外面",
   );
   assert.equal(await fold("failed").evaluate((el) => el.classList.contains("has-error")), true);
-  assert.equal(
-    await turn("failed").locator("details.task-execution-block:not(.task-turn-process)").count(),
-    0,
-    "异常该并进过程块，不在结论区自成一条折叠行",
-  );
 
-  // 11. 会话流自己判「链路停没停」：走真实时序，回合先在飞、再收口，而任务这时停在
-  //     检查点 / 卡在审查门上（单飞）、或执行者还在干活（团队调度台已落回 idle）。
-  //     这几档都不许折，直到整条链路真停下来。只钉 nextProcessFoldOpen 的话，喂给它的
-  //     那个布尔算错了照样红不了 —— 所以这一段钉的是两个 feed 的接线。
-  const feedFold = (name) => page.locator(`[data-case="${name}"] details.task-turn-process`);
-  const feedOpen = (name) => feedFold(name).evaluate((el) => el.open);
-  const step = async (name, role) => {
+  // 10. 用户抱怨的那条时序，逐帧钉死：同一条回合边跑边长 —— 说话 → 工具 → 又说话 →
+  //     又工具 → 再说一句。每一帧都必须 (a) 没有过程块 (b) 之前说过的每句话都还在外面。
+  //     原来的行为是：第 3 帧、第 5 帧（最后一步是文字）会把上面全部收编进过程块。
+  const saidSoFar = [
+    "类型检查的失败仍是",
+    "可见改动涉及抽屉",
+    "node_repl 没能解析到 Vite",
+  ];
+  const visibleSays = async () => {
+    const shown = [];
+    for (const text of saidSoFar) {
+      if (await turn("grow").getByText(text).count()) shown.push(text);
+    }
+    return shown;
+  };
+  await turn("grow").getByText(saidSoFar[0]).waitFor();
+  // 第 n 帧时应该露在外面的正文（帧序：说话 / 工具 / 说话 / 工具 / 说话）。
+  const expected = [[0], [0], [0, 1], [0, 1], [0, 1, 2]];
+  for (let frame = 0; frame < expected.length; frame += 1) {
+    if (frame) await click("grow", "grow");
+    await flush();
+    assert.equal(await folded("grow"), 0, `第 ${frame + 1} 帧：跑的中途把回合折了`);
+    assert.deepEqual(
+      await visibleSays(),
+      expected[frame].map((index) => saidSoFar[index]),
+      `第 ${frame + 1} 帧：说过的话被收编进过程块了`,
+    );
+  }
+  // 跑完这一下才折：三段正文里，只有最后一句留在外面。
+  await click("grow", "end-task");
+  await fold("grow").waitFor();
+  assert.equal(await isOpen("grow"), false);
+  assert.equal(await turn("grow").getByText(saidSoFar[0]).isVisible(), false, "跑完了，前面的正文该折进去");
+  assert.equal(await turn("grow").getByText(saidSoFar[2]).isVisible(), true, "最后那句是结论，留在外面");
+
+  // 11. 终态先到、当前气泡的 endedAt 后到（任务列表 SSE 比 sessions 重拉快，中间那一瞬
+  //     taskLive 已经是假、running 还是真）：折出来的那一下就得是折好的。原来的行为是
+  //     running 优先摊开 —— 用户会看见过程块先展开一下，等重拉回来再自己收上去。
+  assert.equal(await folded("race"), 0, "还没落终态就不该有过程块");
+  await click("race", "task-done-first");
+  await fold("race").waitFor();
+  assert.equal(await isOpen("race"), false, "终态先到那一瞬，折叠块先展开了一下");
+  assert.equal(await processText("race").isVisible(), false);
+  assert.equal(await turn("race").locator(".task-execution-pulse").count(), 1, "回合确实还挂着 running");
+
+  // 12. 会话流自己判「链路停没停」：走真实时序 —— 单飞 running → 停在检查点 → 卡在
+  //     审查门 → 收尾；团队 调度台在说话 → 落回 idle 但执行者还在跑 → 全队收工。
+  //     只钉 turnLayout 的话，喂给它的那个布尔算错了照样红不了。
+  const feedFolded = (name) => page.locator(`[data-case="${name}"] details.task-turn-process`).count();
+  const feedStep = async (name, role) => {
     await page.locator(`[data-case="${name}"] [data-role="${role}"]`).click();
     await flush();
   };
 
-  await feedFold("feed-single").waitFor();
-  assert.equal(await feedOpen("feed-single"), true, "回合在飞，会话流里的过程块该是摊开的");
-  await step("feed-single", "to-paused");
-  assert.equal(await feedOpen("feed-single"), true, "停在检查点等人答话不是完成确认，不该自动折");
-  await step("feed-single", "to-gate");
-  assert.equal(await feedOpen("feed-single"), true, "任务卡在审查门上，执行链路没走完，不该自动折");
-  await step("feed-single", "to-done");
-  assert.equal(await feedOpen("feed-single"), false, "任务收尾了才该折");
+  assert.equal(await feedFolded("feed-single"), 0, "回合在飞，会话流里不该有过程块");
+  await feedStep("feed-single", "to-paused");
+  assert.equal(await feedFolded("feed-single"), 0, "停在检查点等人答话不是完成确认，不该折");
+  await feedStep("feed-single", "to-gate");
+  assert.equal(await feedFolded("feed-single"), 0, "任务卡在审查门上，执行链路没走完，不该折");
+  await feedStep("feed-single", "to-done");
+  assert.equal(await feedFolded("feed-single"), 1, "任务收尾了才折");
 
-  assert.equal(await feedOpen("feed-team"), true, "调度台在说话，过程块该是摊开的");
-  await step("feed-team", "to-dispatched");
-  assert.equal(await feedOpen("feed-team"), true, "调度台派完活落回 idle，但执行者还在跑，不该折");
-  await step("feed-team", "to-settled");
-  assert.equal(await feedOpen("feed-team"), false, "全队收工了才该折");
-
-  // 12. 折不出结论那条路径（最后一步是工具、后面还没吐字 —— 一条回合跑到一半时最常见
-  //     的形状）也归同一套开合规矩。这里原来是纯默认的 <details>：跑着跑着切到这个形状，
-  //     执行过程就自己合上了，用户看到的正是「运行过程中还在折叠」。
-  const flatFold = () => page.locator('[data-case="flat"] details.task-execution-block');
-  assert.equal(await flatFold().count(), 1, "这一路该是逐段折那种块（不是 task-turn-process）");
-  assert.equal(await flatFold().evaluate((el) => el.open), true, "回合还在跑，逐段折的块也该摊开");
-  assert.equal(
-    await page.locator('[data-case="flat"]').getByText("web/src/review/ReviewNote.tsx").isVisible(),
-    true,
-    "跑着的时候工具行该看得见",
-  );
-  // 回合接着长：又说了一句（能折出过程块了）→ 又去跑工具（回到折不出结论）。形状来回
-  // 换，每一帧都得是摊开的 —— 用户看到的「跑着跑着自己合上」就是切形状那一下。
-  await page.locator('[data-case="flat"] [data-role="grow"]').click();
-  await page.locator('[data-case="flat"]').getByText("只走 free-review").first().waitFor();
-  await flush();
-  assert.equal(
-    await page.locator('[data-case="flat"] details.task-execution-block').first().evaluate((el) => el.open),
-    true,
-    "切成过程块那一帧不该是收起的",
-  );
-  await page.locator('[data-case="flat"] [data-role="grow"]').click();
-  await flush();
-  assert.deepEqual(
-    await page.locator('[data-case="flat"] details.task-execution-block').evaluateAll((els) => els.map((el) => el.open)),
-    [true, true],
-    "又切回逐段折那一帧：两段事件块都不该收起",
-  );
-
-  // 回合收口、任务还在跑：跟过程块一样，不许折。
-  await page.locator('[data-case="flat"] [data-role="end-turn"]').click();
-  await flush();
-  assert.deepEqual(
-    await page.locator('[data-case="flat"] details.task-execution-block').evaluateAll((els) => els.map((el) => el.open)),
-    [true, true],
-    "任务还在跑，逐段折的块不该自己合上",
-  );
-  // 整条链路停了：这一下才折。
-  await page.locator('[data-case="flat"] [data-role="end-task"]').click();
-  await page.waitForFunction(() => [...document.querySelectorAll('[data-case="flat"] details.task-execution-block')]
-    .every((el) => !el.open));
+  assert.equal(await feedFolded("feed-team"), 0, "调度台在说话，不该折");
+  await feedStep("feed-team", "to-dispatched");
+  assert.equal(await feedFolded("feed-team"), 0, "调度台落回 idle 但执行者还在跑，不该折");
+  await feedStep("feed-team", "to-settled");
+  assert.equal(await feedFolded("feed-team"), 1, "全队收工了才折");
 
   if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: true });
 

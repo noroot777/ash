@@ -40,36 +40,30 @@ const failedSegments: AgentContentSegment[] = [
   },
 ];
 
-// 一条回合**在跑到一半时最常见的形状**：说了句话就开始连着跑工具，最后一步是工具调用、
-// 后面还没吐字。这时 splitTurnSegments 折不出结论（折完外面一个字都不剩），于是退回逐段
-// 折事件那条路径 —— 它必须跟过程块一样在跑的时候摊开，否则用户眼看着执行过程自己合上。
-const flatSegments: AgentContentSegment[] = [
-  { id: "l0", markdown: "我先看一圈 审查附言 现在是怎么流转的。\n", events: [], attachments: [] },
-  {
-    id: "l1",
+// 同一条回合边跑边长出来的几帧：说话 → 跑工具 → 又说话 → 又跑工具 → 再说一句。
+// 用户抱怨的就是这条时序：跑着跑着 agent 一说话，上面已经露在外面的正文和工具就被
+// 收编进「执行过程」块，外面只剩最后一句；下一个工具调用又把它们吐回来。
+const growPhases: AgentContentSegment[][] = [];
+{
+  const say = (id: string, text: string) => ({ id, markdown: text, events: [], attachments: [] });
+  const ran = (id: string, ...labels: string[]) => ({
+    id,
     markdown: "",
-    events: [
-      { kind: "tool", label: "Bash", detail: "grep -rn 附言 server/src" },
-      { kind: "tool", label: "Write", detail: "web/src/review/ReviewNote.tsx" },
-    ],
+    events: labels.map((label) => ({ kind: "tool" as const, label, detail: `${label} 的载荷` })),
     attachments: [],
-  },
-];
-
-// 同一条回合边跑边长：跑工具（折不出结论）→ 又说了句话（能折出过程块）→ 又去跑工具
-// （回到折不出结论）。形状来回换，但整条链路一直在跑 —— 每一帧都必须是摊开的。
-const flatPhases: AgentContentSegment[][] = [
-  flatSegments,
-  [...flatSegments, { id: "l2", markdown: "看明白了，附言现在只走 free-review 那条线。\n", events: [], attachments: [] }],
-  [
-    ...flatSegments,
-    { id: "l2", markdown: "看明白了，附言现在只走 free-review 那条线。\n", events: [], attachments: [] },
-    { id: "l3", markdown: "", events: [{ kind: "tool", label: "Edit", detail: "web/src/review/ReviewNote.tsx" }], attachments: [] },
-  ],
-];
+  });
+  const timeline = [
+    say("p0", "类型检查的失败仍是 vite.config.ts 的 Node 类型缺失。\n"),
+    ran("p1", "Bash", "Read"),
+    say("p2", "可见改动涉及抽屉、审查记录、预约概览三处。\n"),
+    ran("p3", "Edit"),
+    say("p4", "node_repl 没能解析到 Vite，改用仓库自己的 Node 环境。\n"),
+  ];
+  for (let index = 1; index <= timeline.length; index += 1) growPhases.push(timeline.slice(0, index));
+}
 
 // 真会话流（不是直接摆 AgentTurnBody）：钉的是两个 feed 自己怎么判「链路停没停」——
-// 只钉 nextProcessFoldOpen 的话，喂给它的那个布尔算错了照样红不了。
+// 只钉 turnLayout 的话，喂给它的那个布尔算错了照样红不了。
 //
 // 走的是真实时序：回合先在飞，然后收口（endedAt 落下来），而任务这时还卡在审查门上 /
 // 团队执行者还在干活。气泡 id 全程不变，跟直播一致（这两档都不触发快照重拉）。
@@ -157,7 +151,7 @@ function Turn({
   /** 整个任务还在跑。缺省跟着回合走（回合在飞，任务当然在跑）。 */
   initialTaskLive?: boolean;
   turnSegments?: AgentContentSegment[];
-  /** 一条回合边跑边长出来的几个快照：按 data-role="grow" 逐帧前进。 */
+  /** 一条回合边跑边长出来的几帧：按 data-role="grow" 逐帧前进。 */
   phases?: AgentContentSegment[][];
 }) {
   const [running, setRunning] = useState(initialRunning);
@@ -186,6 +180,9 @@ function Turn({
         >
           重新开跑
         </button>
+        {/* 终态先到、当前气泡的 endedAt 后到：任务列表 SSE 比 sessions 重拉快，中间那一瞬
+            taskLive 已经是假、running 还是真。 */}
+        <button type="button" data-role="task-done-first" onClick={() => setTaskLive(false)}>先落终态</button>
         <button type="button" data-role="repaint" onClick={() => setNonce(nonce + 1)}>触发重绘 {nonce}</button>
         {phases && <button type="button" data-role="grow" onClick={() => setPhase(phase + 1)}>再跑一步 {phase}</button>}
         <AgentTurnBody segments={shown} running={running} taskLive={taskLive} />
@@ -204,8 +201,10 @@ createRoot(document.getElementById("root")!).render(
     <Turn name="history" initialRunning={false} initialTaskLive />
     {/* 未确认完成而记 failed 的回合：结算那条异常不许把整篇回答折进过程 */}
     <Turn name="failed" initialRunning={false} turnSegments={failedSegments} />
-    {/* 跑到「最后一步是工具、还没吐字」的形状：折不出结论那条路径，照样得摊开 */}
-    <Turn name="flat" initialRunning phases={flatPhases} />
+    {/* 边跑边长：每一帧都不许重组，说过的话一直留在外面 */}
+    <Turn name="grow" initialRunning phases={growPhases} />
+    {/* 终态先到、气泡的 endedAt 后到：折出来的那一下就得是折好的，不许先展开再收 */}
+    <Turn name="race" initialRunning />
     {/* 回合收口了，但任务卡在审查门上 / 团队执行者还在干活：链路没停，不许折 */}
     <SingleFeed />
     <TeamLeadFeed />

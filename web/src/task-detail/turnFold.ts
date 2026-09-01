@@ -18,21 +18,43 @@ function isHandsOn(event: ExecutionEvent): boolean {
 /**
  * 过程折叠块此刻该不该自动开合。`null` = 什么都别做，维持现在的样子。
  *
- * 只有两个自动动作，其余一概不动：
- * - **摊开**：这一回合正在飞（不然用户盯着一行摘要不知道在干嘛）。
- * - **收起**：整个任务都不跑了，也就是「最后一步确认执行完了」那一下。
+ * 它只在整条执行链路停下来之后才会被渲染（见 turnLayout），所以自动动作只剩**收起**
+ * 这一个：折出来的那一下就是折好的。
+ *
+ * **回合还在飞不再算摊开的理由**：任务列表的 SSE 先把状态推成终态，`useConversation`
+ * 看到终态才去重拉 sessions/trace —— 中间那一瞬 `taskLive` 已经是假、当前气泡却还没落
+ * `endedAt`（`running` 仍为真）。拿 running 当摊开信号，用户会看见过程块先展开一下、
+ * 等重拉回来再自己收上去，正是「跑的时候别折腾」要避免的那种跳动。
  *
  * 中间态（回合收口了、任务还在跑）刻意什么都不做。回合边界在一次运行里能出现好几次
- * ——换下一轮、就地验证、会话行 endedAt 落下来的那一瞬 —— 拿它当收起信号，用户会在
- * 跑的过程中被反复折叠，正读着的那段过程说没就没了。
+ * ——换下一轮、就地验证、会话行 endedAt 落下来的那一瞬 —— 而这时折叠块本来就不该存在。
  */
 export function nextProcessFoldOpen(
-  { running, taskLive, touched }: { running: boolean; taskLive: boolean; touched: boolean },
+  { taskLive, touched }: { taskLive: boolean; touched: boolean },
 ): boolean | null {
   // 用户自己动过折角就以他的选择为准，不再自动开合。
   if (touched) return null;
-  if (running) return true;
   return taskLive ? null : false;
+}
+
+/**
+ * 一条回合此刻该怎么排：**跑的时候一律平铺，链路停下来那一下才折**。
+ *
+ * 折叠本身是个**重组**动作（见 splitTurnSegments）：它把最后一次动手之前的一切 —— 连同
+ * 已经说出口、已经露在外面的正文 —— 收进「执行过程」块，外面只留最后那段话。跑的过程中
+ * 干这件事，用户眼睁睁看着刚读到一半的内容被吸走：agent 一说话就收编（外面只剩最后一
+ * 句），下一个工具调用又把它们吐回来（切点后移、折不出结论），来回闪。
+ *
+ * 所以运行期不做这个判断，原样按段铺开；等整条执行链路停了（`live` 为假 —— 在跑、卡在
+ * 审查门、停在检查点等人答话、团队没收工都算没停，见 taskAttention 的
+ * isExecutionChainLive）再折一次，位置从此不再变。
+ */
+export function turnLayout(
+  segments: AgentContentSegment[],
+  { live }: { live: boolean },
+): { process: AgentContentSegment[]; conclusion: AgentContentSegment[] } {
+  if (live) return { process: [], conclusion: segments };
+  return splitTurnSegments(segments);
 }
 
 /**
