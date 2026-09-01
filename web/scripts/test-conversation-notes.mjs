@@ -12,7 +12,8 @@ import {
 } from "@ash/shared/session-notes";
 import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
 import { isWorkspaceRecoveryNote, noteTone } from "../src/task-detail/conversationNotes.ts";
-import { isConflictHandoff, systemEventKind } from "../src/task-detail/systemNoticeModel.ts";
+import { conversationSystemRows } from "../src/task-detail/conversationSystemRows.ts";
+import { isConflictHandoff, isReviewSystemPrompt, systemEventKind, systemNoticeModeFromSearch } from "../src/task-detail/systemNoticeModel.ts";
 
 // —— 语气分类：办成了的事不报红，没办成的才报红 ——
 assert.equal(noteTone("自由工作流第 2 轮审查通过（5.5审查）。"), "neutral");
@@ -36,6 +37,25 @@ assert.equal(systemEventKind("本回合没有交卷：产物仍保留。", "noti
 assert.equal(systemEventKind("验收未完成：合并发生冲突。", "error"), "error");
 assert.equal(isConflictHandoff("【验收未通过 · 需要你解冲突】\n请处理"), true);
 assert.equal(isConflictHandoff("【自动验证未通过 · 第 1 轮】\n请处理"), false);
+assert.equal(isReviewSystemPrompt("【自由工作流审查未通过 · 第 1 轮】\n请处理"), true);
+assert.equal(isReviewSystemPrompt("【验收未通过 · 需要你解冲突】\n请处理"), false);
+assert.equal(systemNoticeModeFromSearch("?systemNotices=footnote"), "footnote");
+assert.equal(systemNoticeModeFromSearch("?systemNotices=unknown"), "aligned", "非法参数回落到正式默认方案二");
+assert.equal(systemNoticeModeFromSearch(""), "aligned");
+
+const digestEvent = (id, text) => ({
+  kind: "event",
+  id,
+  text,
+  variant: "note",
+  tone: "neutral",
+});
+const oneDigest = conversationSystemRows([{ kind: "item", item: digestEvent("digest:first", "第一条") }]);
+const growingDigest = conversationSystemRows([
+  { kind: "item", item: digestEvent("digest:first", "第一条") },
+  { kind: "item", item: digestEvent("digest:second", "第二条") },
+]);
+assert.equal(oneDigest[0].id, growingDigest[0].id, "同一组追加系统事件时 React key 必须稳定，展开态不能被冲掉");
 
 // —— 会话轮换旁注：中性事实，不是本回合失败 ——
 // 这几句会出现在一个 exit 0 的成功回合、甚至用户自己点的「停止全组」上。判据不是「文案

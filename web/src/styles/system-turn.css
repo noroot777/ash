@@ -233,9 +233,9 @@
 .system-boundary > span { background: color-mix(in lch, var(--line) 58%, transparent); }
 .system-boundary.notice-mode-aligned {
   display: grid;
-  width: fit-content;
-  max-width: min(790px, 100%);
-  grid-template-columns: 20px minmax(0, 1fr);
+  width: 100%;
+  max-width: 790px;
+  grid-template-columns: 20px auto minmax(32px, 1fr);
   align-items: center;
   gap: 10px;
   margin: 8px 0 12px;
@@ -244,6 +244,7 @@
 }
 .system-boundary.notice-mode-aligned > p { min-width: 0; opacity: 1; }
 .system-boundary.notice-mode-aligned > .system-event-avatar { background: color-mix(in lch, var(--overlay) 70%, var(--panel)); }
+.system-boundary.notice-mode-aligned > .system-boundary-rule { width: 100%; background: color-mix(in lch, var(--line) 58%, transparent); }
 
 /* 旁注不算换段：被它隔开的下半截还是同一个会话在说话，接着上一段排版。 */
 .task-message--agent.is-continuation { margin-top: -6px; }

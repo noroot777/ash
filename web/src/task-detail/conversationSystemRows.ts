@@ -47,7 +47,7 @@ export function conversationSystemRows(rows: ConversationFeedRow[]): Conversatio
   let pending: Array<Extract<ConversationItem, { kind: "event" }>> = [];
   const flush = () => {
     if (!pending.length) return;
-    display.push({ kind: "system-digest", id: `system-digest:${pending.map((item) => item.id).join(":")}`, items: pending });
+    display.push({ kind: "system-digest", id: `system-digest:${pending[0]!.id}`, items: pending });
     pending = [];
   };
   for (const row of grouped) {

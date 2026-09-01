@@ -11,6 +11,7 @@ export const SYSTEM_NOTICE_MODES: ReadonlyArray<{ value: SystemNoticeMode; label
 ];
 
 const CONFLICT_HANDOFF = /^【验收未通过\s*·\s*需要你解冲突】/;
+const REVIEW_SYSTEM_PROMPT = /^【(?:自由工作流审查未通过|自动(?:验证|审查)未通过|审查未通过)(?:\s*·[^】]+)?】/;
 const BRACKET_TITLE = /^【([^】]+)】\s*/;
 const SUCCESS = /已完成|完成|通过|已合并|合并完成|清理完成|已删除|已打开|已关闭|已保存|已同步|已恢复/;
 const ACTIVE_PROGRESS = /开始|正在|已预约|已发起|已叫醒|等待|排队|继续|重跑|交接|处理中|即将/;
@@ -18,6 +19,10 @@ const WARNING = /警告|暂缓|等待用户|需要你|卡在|用完了/;
 
 export function isConflictHandoff(text: string): boolean {
   return CONFLICT_HANDOFF.test(text.trimStart());
+}
+
+export function isReviewSystemPrompt(text: string): boolean {
+  return REVIEW_SYSTEM_PROMPT.test(text.trimStart());
 }
 
 export function systemEventKind(text: string, tone?: ConversationEventTone): SystemEventKind {
@@ -57,7 +62,9 @@ export function conflictContextEvent(text: string): boolean {
 export function systemNoticeModeFromSearch(search: string, hash = ""): SystemNoticeMode {
   const value = new URLSearchParams(search).get("systemNotices")
     ?? new URLSearchParams(hash.replace(/^#/, "")).get("systemNotices");
-  return value === "aligned" || value === "collapsed" || value === "attached" ? value : "footnote";
+  return value === "footnote" || value === "aligned" || value === "collapsed" || value === "attached"
+    ? value
+    : "aligned";
 }
 
 const INITIAL_SEARCH = typeof window === "undefined" ? "" : window.location.search;

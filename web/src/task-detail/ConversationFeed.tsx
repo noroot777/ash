@@ -26,6 +26,7 @@ import {
 import {
   INITIAL_SYSTEM_NOTICE_MODE,
   SYSTEM_NOTICE_DEMO_REQUESTED,
+  isReviewSystemPrompt,
   type SystemNoticeMode,
 } from "./systemNoticeModel.ts";
 import { type TurnRetryTarget, turnRetryTarget } from "./turnRetry.ts";
@@ -136,7 +137,7 @@ function UserMessage({
   const parsed = parseAttachmentText(item.text);
   const paths = [...parsed.paths, ...item.attachments];
   const bySystem = !!item.bySystem;
-  const reviewPrompt = /^【(?:自由工作流审查未通过|自动(?:验证|审查)未通过|审查未通过)(?:\s*·[^】]+)?】/.test(item.text.trimStart());
+  const reviewPrompt = isReviewSystemPrompt(item.text);
   if (bySystem && !preserveSystemStyle && !reviewPrompt) {
     return <SystemAuthoredMessage item={item} mode={noticeMode} />;
   }

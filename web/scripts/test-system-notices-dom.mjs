@@ -20,6 +20,10 @@ try {
   assert.equal(await page.locator(".system-event-digest.is-aligned").count(), 1, "生产环境默认使用备选二");
   assert.equal(await page.locator(".system-notice-mode-switch").count(), 0, "普通页面不显示方案比较开关");
 
+  await page.goto(`${fixture}?systemNotices=unknown`);
+  assert.equal(await page.locator(".system-event-digest.is-aligned").count(), 1, "非法模式参数应回落到正式默认方案二");
+  assert.equal(await page.locator('.system-notice-mode-switch a[aria-current="page"]').innerText(), "备选二 · 头像轴提示");
+
   await page.goto(`${fixture}?systemNotices=footnote`);
 
   const action = page.locator(".system-action-note.is-conflict");
@@ -42,7 +46,20 @@ try {
 
   const digest = page.locator(".system-event-digest.is-footnote");
   assert.equal(await digest.count(), 1, "连续系统事件应合成一条会话脚注");
-  assert.match(await digest.innerText(), /冲突交接失败.*5 条记录/s);
+  assert.match(await digest.locator("summary").innerText(), /工作区已恢复.*5 条记录/s, "摘要必须显示组内最新状态");
+  const latestPair = await digest.evaluate((el) => {
+    const summary = el.querySelector("summary");
+    const latest = el.querySelector("li:last-child");
+    return {
+      summaryText: summary.querySelector(":scope > span").textContent,
+      summaryTime: summary.querySelector(":scope > time")?.textContent,
+      latestText: latest.querySelector(":scope > span").textContent,
+      latestTime: latest.querySelector(":scope > time")?.textContent,
+    };
+  });
+  assert.equal(latestPair.summaryText, latestPair.latestText, "摘要文字必须来自最新事件");
+  assert.equal(latestPair.summaryTime, latestPair.latestTime, "摘要时间必须来自同一条最新事件");
+  assert.equal(await digest.evaluate((el) => el.classList.contains("is-error")), true, "组内较严重事件仍应用颜色提示");
   const marker = await digest.evaluate((el) => {
     const style = getComputedStyle(el, "::before");
     return { width: style.width, height: style.height, radius: style.borderRadius, content: style.content };
@@ -81,6 +98,8 @@ try {
     const actionIcon = action.querySelector(".system-action-icon").getBoundingClientRect();
     const actionMain = action.querySelector(".system-action-main").getBoundingClientRect();
     const boundary = document.querySelector(".system-boundary.notice-mode-aligned");
+    const digestBox = digest.getBoundingClientRect();
+    const boundaryBox = boundary.getBoundingClientRect();
     return {
       avatarCenter: Math.round(agentAvatar.left + agentAvatar.width / 2),
       bodyLeft: Math.round(agentBody.left),
@@ -91,6 +110,8 @@ try {
       iconSize: `${Math.round(digestIcon.width)}x${Math.round(digestIcon.height)}`,
       iconBackground: getComputedStyle(digest.querySelector(".system-event-avatar")).backgroundColor,
       boundaryIcon: !!boundary?.querySelector(".system-event-avatar"),
+      boundaryWiderThanDigest: boundaryBox.width > digestBox.width,
+      boundaryRule: !!boundary?.querySelector(".system-boundary-rule"),
     };
   });
   assert.equal(alignedGeometry.digestIconCenter, alignedGeometry.avatarCenter, "系统节点应与智能体头像中心对齐");
@@ -100,12 +121,14 @@ try {
   assert.equal(alignedGeometry.iconSize, "16x16", "系统节点外圈应比智能体头像更克制");
   assert.notEqual(alignedGeometry.iconBackground, "rgba(0, 0, 0, 0)", "备选二用轻底色提高一点辨识度");
   assert.equal(alignedGeometry.boundaryIcon, true, "回合边界也应使用同一系统节点");
+  assert.equal(alignedGeometry.boundaryRule, true, "回合边界应保留横贯细线");
+  assert.equal(alignedGeometry.boundaryWiderThanDigest, true, "回合边界应明显宽于普通系统旁注");
   assert.equal(await page.locator('.system-notice-mode-switch a[aria-current="page"]').innerText(), "备选二 · 头像轴提示");
 
   await page.goto(`${fixture}?systemNotices=collapsed`);
   const collapsed = page.locator(".system-event-digest.is-collapsed");
   await collapsed.waitFor();
-  assert.match(await collapsed.locator("summary").innerText(), /系统记录 · 冲突交接失败/);
+  assert.match(await collapsed.locator("summary").innerText(), /系统记录 · 工作区已恢复/);
   assert.equal(await page.locator('.system-notice-mode-switch a[aria-current="page"]').innerText(), "系统记录折叠");
 
   await page.goto(`${fixture}?systemNotices=attached`);

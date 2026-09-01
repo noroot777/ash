@@ -43,12 +43,13 @@ function cleanEventText(item: EventLike): string {
 }
 
 function digestLead(items: EventItem[]): { kind: SystemEventKind; text: string } {
-  const chosen = [...items].sort((a, b) => (
+  const latest = items.at(-1)!;
+  const mostImportant = [...items].sort((a, b) => (
     IMPORTANCE[systemEventKind(b.text, b.tone)] - IMPORTANCE[systemEventKind(a.text, a.tone)]
-  ))[0] ?? items.at(-1)!;
-  const text = cleanEventText(chosen).replace(/\s+/g, " ");
+  ))[0] ?? latest;
+  const text = cleanEventText(latest).replace(/\s+/g, " ");
   return {
-    kind: systemEventKind(chosen.text, chosen.tone),
+    kind: systemEventKind(mostImportant.text, mostImportant.tone),
     text: text.length > 108 ? `${text.slice(0, 105)}…` : text,
   };
 }
@@ -82,7 +83,7 @@ export function SystemEventDigest({ items, mode }: { items: EventItem[]; mode: S
   const line = (
     <>
       <span>{mode === "collapsed" ? collapsedLabel : lead.text}</span>
-      {mode !== "collapsed" && items.length > 1 && <small>{items.length} 条记录</small>}
+      {mode !== "collapsed" && <small>{items.length > 1 ? `${items.length} 条记录` : "查看完整内容"}</small>}
       {lastAt && <time>{formatInstant(lastAt)}</time>}
     </>
   );
@@ -91,19 +92,17 @@ export function SystemEventDigest({ items, mode }: { items: EventItem[]; mode: S
       {mode === "aligned" && (
         <span className="system-event-avatar" aria-hidden="true">{eventIcon(lead.kind)}</span>
       )}
-      {items.length === 1 ? <div className="system-event-digest-line">{line}</div> : (
-        <details>
-          <summary>{line}</summary>
-          <ol>
-            {items.map((item) => (
-              <li key={item.id} className={`is-${systemEventKind(item.text, item.tone)}`}>
-                <span>{cleanEventText(item)}</span>
-                {item.at && <time>{formatInstant(item.at)}</time>}
-              </li>
-            ))}
-          </ol>
-        </details>
-      )}
+      <details>
+        <summary>{line}</summary>
+        <ol>
+          {items.map((item) => (
+            <li key={item.id} className={`is-${systemEventKind(item.text, item.tone)}`}>
+              <span>{cleanEventText(item)}</span>
+              {item.at && <time>{formatInstant(item.at)}</time>}
+            </li>
+          ))}
+        </ol>
+      </details>
     </div>
   );
 }
@@ -141,6 +140,7 @@ export function SystemBoundary({
       <div className={`${surface === "team" ? "team-feed-event" : "task-event-line"} system-boundary notice-mode-aligned is-${kind}`}>
         <span className="system-event-avatar" aria-hidden="true">{eventIcon(kind)}</span>
         <p>{item.text}{item.at ? ` · ${formatInstant(item.at)}` : ""}</p>
+        <span className="system-boundary-rule" aria-hidden="true" />
       </div>
     );
   }

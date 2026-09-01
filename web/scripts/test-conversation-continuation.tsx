@@ -51,7 +51,8 @@ const render = () => renderToStaticMarkup(
 const count = (text: string, needle: string) => text.split(needle).length - 1;
 
 const persisted = render();
-assert.equal(count(persisted, "<time>"), 1, "落盘旁注已有时间时，续写段不应重复");
+assert.equal(count(persisted, "<time>"), 2, "折叠摘要和隐藏明细各保留一次旁注时间");
+assert.doesNotMatch(persisted, /task-message--agent[^>]*>[\s\S]*?<header>[\s\S]*?<time>/, "续写段不应重复旁注时间");
 assert.equal(count(persisted, 'aria-label="复制这条回复"'), 1, "压平消息头不能删掉复制入口");
 assert.match(persisted, /task-message-copy-action/, "无用时的续写段应把复制入口放到尾栏");
 
@@ -72,6 +73,35 @@ const team = renderToStaticMarkup(
 assert.equal(count(team, "<time>"), 1, "团队旁注也应自己显示时间，续写段不再另起一行");
 assert.match(team, /conversation-note[^>]*>[\s\S]*<p>已预约完成后审查。<\/p><time>/);
 assert.doesNotMatch(team, /team-feed-agent[^>]*><header>/, "团队续写没有额外元信息时不应留下空消息头");
+
+const reviewPrompt: ConversationItem = {
+  kind: "user",
+  id: "review-prompt",
+  text: "【自由工作流审查未通过 · 第 1 轮】\n请先完整读取 report.md，再按报告修复并调用 complete_task。",
+  at,
+  bySystem: true,
+  attachments: [],
+};
+const taskReviewPrompt = renderToStaticMarkup(
+  <ConversationFeed task={task} items={[reviewPrompt]} sessions={[]} loading={false} error={null} />,
+);
+const teamReviewPrompt = renderToStaticMarkup(
+  <TeamFeed
+    task={{ ...task, mode: "team" } as Task}
+    rows={[{ kind: "conv", key: reviewPrompt.id, item: reviewPrompt }]}
+    workers={[]}
+    onOpenWorker={() => undefined}
+    onAskLead={() => undefined}
+    delegatingIds={new Set()}
+    indicatorForTask={() => null}
+  />,
+);
+for (const [surface, markup] of [["任务详情", taskReviewPrompt], ["团队调度台", teamReviewPrompt]]) {
+  assert.match(markup, /is-system-authored/, `${surface}应保留审查提示原来的系统气泡`);
+  assert.match(markup, /task-markdown/, `${surface}应完整渲染审查修复指令`);
+  assert.match(markup, /complete_task/, `${surface}不能截断审查修复指令`);
+  assert.doesNotMatch(markup, /system-action-wrap|system-action-note/, `${surface}不应套用新的折叠系统提示`);
+}
 
 const boundary = "2026-08-14T10:00:01.000Z";
 const traceGroups = new Map([[boundary, [

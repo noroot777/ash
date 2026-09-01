@@ -102,7 +102,7 @@ try {
     "自由派审的正文归它自己那张卡",
   );
   assert.equal(await page.getByText(/审查开始|审查重跑上一回合/).count(), 0, "卡头已有轮次，正文不重复开始旁注");
-  const resumeMarkers = page.getByText(/继续（从中断处）/);
+  const resumeMarkers = page.locator(".system-event-digest summary > span").filter({ hasText: /继续（从中断处）/ });
   assert.equal(await resumeMarkers.count(), 1, "普通任务的 checkpoint 续跑标记必须保留");
   assert.equal(await resumeMarkers.first().evaluate((el) => !!el.closest(".verify-lane")), false, "只隐藏审查卡内部的续跑标记");
   assert.equal(await page.getByText(/请先完整读取 report\.md/).count(), 0, "自由审查修复 prompt 不伪装成系统消息块");

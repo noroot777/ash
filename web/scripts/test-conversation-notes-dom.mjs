@@ -46,8 +46,11 @@ try {
   const boundaryBox = await boundary.boundingBox();
   assert.ok(boundaryBox.width > noteBox.width, "回合边界横贯得比旁注宽");
   // 「没办成」的那条要看得出来不一样。
-  assert.equal(await page.locator(".system-event-digest.is-error").count(), 1);
-  assert.match(await page.locator(".system-event-digest.is-error").innerText(), /审查未通过/);
+  const failedDigest = page.locator(".system-event-digest.is-error");
+  assert.equal(await failedDigest.count(), 1);
+  assert.match(await failedDigest.locator("summary").innerText(), /工作区已恢复/, "摘要显示这组的最新状态");
+  await failedDigest.locator("summary").click();
+  assert.match(await failedDigest.innerText(), /审查未通过/s, "展开后仍完整保留组内失败记录");
 
   // 会话轮换旁注是中性事实：一个 exit 0 的成功回合、甚至用户自己点的「停止全组」都会带
   // 一句。它既不该是红的，也不该把 Markdown 标记原样露给用户（旁注是纯文本渲染）。
@@ -73,6 +76,14 @@ try {
     await settlement.evaluate((el) => el.classList.contains("is-error")),
     false,
     "结算说明被渲染成红色异常 —— 第一次用的人会读成「它崩了」",
+  );
+  assert.equal(await settlement.locator("details").count(), 1, "单条结算说明也必须有完整内容入口");
+  assert.match(await settlement.locator("summary").innerText(), /查看完整内容/);
+  await settlement.locator("summary").click();
+  assert.match(
+    await settlement.innerText(),
+    /这不是崩溃.*点重试会从中断处接着跑/s,
+    "单条结算说明展开后必须能读到完整原因和下一步",
   );
   const [settlementBg, plainBg] = await Promise.all([
     settlement.evaluate((el) => getComputedStyle(el).backgroundColor),
@@ -106,7 +117,7 @@ try {
   assert.equal(await notes.last().evaluate((note) => note === note.parentElement?.lastElementChild), true, "实时旁注应稳定留在当前回合与统计条之后");
 
   await page.setViewportSize({ width: 390, height: 1000 });
-  const narrowTime = await notes.last().locator(".system-event-digest-line time").evaluate((time) => {
+  const narrowTime = await notes.last().locator("summary time").evaluate((time) => {
     const range = document.createRange();
     range.selectNodeContents(time);
     return { whiteSpace: getComputedStyle(time).whiteSpace, lineCount: range.getClientRects().length };

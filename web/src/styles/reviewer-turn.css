@@ -43,6 +43,17 @@
   line-height: 1.6;
 }
 .verify-lane .conversation-note time { margin-left: 7px; opacity: 0.72; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.verify-lane .conversation-note.is-error:not(.is-verify) {
+  border-left-color: color-mix(in lch, var(--red) 45%, var(--line2));
+  color: color-mix(in lch, var(--red) 76%, var(--faint));
+}
+.verify-lane .conversation-note.is-notice:not(.is-verify) {
+  border-left-color: color-mix(in lch, var(--amber) 72%, var(--line2));
+  border-radius: 0 7px 7px 0;
+  background: color-mix(in lch, var(--amber) 11%, transparent);
+  padding: 6px 10px 6px 11px;
+  color: var(--muted);
+}
 
 /* 验证段的起止旁注（第 N 轮验证开始 / 未通过并打回）跟着审查者一个颜色，两条旁注
    加中间的气泡才读得出是一段。未通过那条仍归红（.is-error 排在后面覆盖）—— 结论的
