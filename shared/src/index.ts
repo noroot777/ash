@@ -269,6 +269,15 @@ export type TaskDisplayStatus = { key: TaskDisplayStatusKey; label: string };
 export function isTaskStage(value: unknown): value is TaskStage {
   return typeof value === "string" && (STAGE_ORDER as readonly string[]).includes(value);
 }
+/**
+ * 这块牌子代表「上一版产物已经翻篇」：accepted 是验收章，merged 是「已经合进去了、只差
+ * 落个章」。两者都是终局结论，而且要拦的事情一模一样（摘牌重来、别再让 agent 接着跑、
+ * 验收别重复合并），所以判据只留这一份 —— 各处各写一次 `=== "accepted"` 时，
+ * merged 那一半漏得悄无声息。
+ */
+export function isAcceptedStage(stage: TaskStage | null | undefined): boolean {
+  return stage === "accepted" || stage === "merged";
+}
 export function taskDisplayStatus(
   status: TaskStatus, stage: TaskStage | null | undefined, awaitingAnswer: boolean,
 ): TaskDisplayStatus {

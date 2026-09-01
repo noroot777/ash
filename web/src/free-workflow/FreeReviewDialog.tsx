@@ -5,6 +5,7 @@ import { MAX_FREE_REVIEW_RETRIES } from "@ash/shared/free-workflow";
 import { CheckCircle, MagnifyingGlass, Plus, SpinnerGap, X } from "@phosphor-icons/react";
 import { registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { api, type FreeWorkflowApiState } from "../lib/api.ts";
+import { selectAllOnFocus } from "../lib/selectAllOnFocus.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import {
   createReviewerDraft,
@@ -296,6 +297,7 @@ export function FreeReviewDialog({
                       aria-invalid={retryLimitInvalid}
                       aria-describedby="free-review-retry-hint"
                       onChange={(event) => setRetryLimit(event.target.value)}
+                      {...selectAllOnFocus}
                     />
                     <em>轮</em>
                   </span>
