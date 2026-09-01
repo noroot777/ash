@@ -8,6 +8,7 @@ import {
 } from "@ash/shared/cli-overrides";
 import { api } from "../lib/api.ts";
 import { fmtOverrideValue, useCliOverrideDraft } from "../lib/cliOverrideDraft.ts";
+import { selectAllOnFocus } from "../lib/selectAllOnFocus.ts";
 import { useCliHostEnv } from "../lib/useCliHostEnv.ts";
 
 /**
@@ -175,6 +176,7 @@ function CompactOverrideForm({
                 setJustSaved(false);
                 set(spec.key, event.target.value);
               }}
+              {...selectAllOnFocus}
             />
             {spec.unit && <small>{spec.unit}</small>}
           </span>

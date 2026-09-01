@@ -4,7 +4,9 @@ import type {
   HandoffRemoteState,
   HandoffTarget,
   TaskHandoff,
+  TaskStage,
 } from "@ash/shared";
+import { isAcceptedStage } from "@ash/shared";
 import { outboundHolder } from "@ash/shared/handoff";
 import { and, eq } from "drizzle-orm";
 import type { Context, Hono } from "hono";
@@ -359,7 +361,9 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
         targetUrl: target.url,
         targetProjectId,
         targetName: target.name,
-        autoResume: !owned.row.question,
+        // 挂着提问、或者已经验收翻篇的任务回去都不该自己跑起来:前者要等人答复,后者一跑
+        // 就把验收章摘了。接收侧还有一道硬闸(handoff-import),这里只是别白发一次请求。
+        autoResume: !owned.row.question && !isAcceptedStage(owned.row.stage as TaskStage | null),
       }));
     } catch (error) { return fail(c, error); }
   });

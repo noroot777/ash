@@ -88,6 +88,15 @@ export async function patchSettingsFor(actor: Actor, patch: Partial<AppSettings>
   if (Object.keys(instancePart).length) {
     if (!isAdminActor(actor)) throw forbidden("这几项是整台机器的设置，只有实例管理员能改");
     await patchAppSettings(instancePart);
+    // 「CLI 额度」切到**隔离档**那一下,就地把个人配置目录的 ash MCP 补齐一遍。
+    // 不能只靠启动自检:这一档是运行中随时能换的,换完到下次重启之间起跑的任务全都
+    // 用个人目录 —— 缺那条登记的表现是「任务照跑、干完记 failed」(见
+    // user-cli-mcp.ts 顶部)。补不上时它自己会在日志里点名,这里不拦请求:档位该切的
+    // 还是要切,只是得有人听见。
+    if (instancePart.sharedHostCli === false) {
+      const { sweepPersonalAshMcp } = await import("./user-cli.js");
+      await sweepPersonalAshMcp().catch((err) => console.error("[ash] 切档后的 ash MCP 自检失败:", err));
+    }
   }
   return settingsFor(owner);
 }

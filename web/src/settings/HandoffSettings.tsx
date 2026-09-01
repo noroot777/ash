@@ -11,6 +11,7 @@ import { Check, Fingerprint, PaperPlaneTilt, Plus, Prohibit, SpinnerGap, Trash }
 import { useIsInstanceAdmin, useIsMultiUser } from "../auth/authContext.ts";
 import { Button, TextInput, Toggle } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
+import { selectAllOnFocus } from "../lib/selectAllOnFocus.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import {
   approvalNotice,
@@ -376,6 +377,7 @@ export function HandoffSettings({
             step={1}
             value={settings.handoffMaxBodyMb}
             disabled={lockInstance}
+            {...selectAllOnFocus}
             onChange={(e) => onSettings({ ...settings, handoffMaxBodyMb: Number(e.target.value) })}
             onBlur={async (e) => {
               const mb = Math.min(512, Math.max(1, Math.round(Number(e.target.value) || 512)));

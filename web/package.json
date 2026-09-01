@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node ../scripts/check-conventions.mjs && npm run test:bulk-handoff && npm run test:bulk-handoff-dialog && npm run test:remote-task && npm run test:handoff-dialog-lifetime && npm run test:conversation && npm run test:task-read-state && npm run test:scheduled-message-tray && npm run test:withdraw-scheduled && npm run test:users-role && npm run test:project-member-role && npm run test:create-project-scope && npm run test:ui-polish && npm run test:composer-upload && npm run test:notes-upload && npm run test:duet-upload && npm run test:shortcuts && npm run test:auth-boot && tsc -b && vite build",
+    "build": "node ../scripts/check-conventions.mjs && npm run test:bulk-handoff && npm run test:bulk-handoff-dialog && npm run test:remote-task && npm run test:handoff-dialog-lifetime && npm run test:conversation && npm run test:task-read-state && npm run test:scheduled-message-tray && npm run test:withdraw-scheduled && npm run test:users-role && npm run test:project-member-role && npm run test:create-project-scope && npm run test:ui-polish && npm run test:select-all-on-focus && npm run test:composer-upload && npm run test:notes-upload && npm run test:duet-upload && npm run test:shortcuts && npm run test:auth-boot && tsc -b && vite build",
     "test:image-preview": "node scripts/test-image-preview.mjs",
     "test:inspector-shortcuts": "node --experimental-strip-types scripts/test-inspector-shortcuts.mjs",
     "test:key-chord": "node --experimental-strip-types scripts/test-key-chord.mjs",
@@ -32,6 +32,7 @@
     "test:project-member-role": "node scripts/test-project-member-role.mjs",
     "test:create-project-scope": "node scripts/test-create-project-scope.mjs",
     "test:ui-polish": "node scripts/test-ui-polish.mjs",
+    "test:select-all-on-focus": "node scripts/test-select-all-on-focus.mjs",
     "test:run-activity": "node --experimental-strip-types scripts/test-run-activity.mjs",
     "test:tool-summary": "node --experimental-strip-types scripts/test-tool-summary.mjs",
     "test:duet-timeline": "node --experimental-strip-types scripts/test-duet-timeline.mjs",

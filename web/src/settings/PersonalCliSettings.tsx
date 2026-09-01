@@ -5,7 +5,7 @@
 //  · 没有等价环境变量的(gemini)如实标「只有项目级」,不假装。
 //  · 项目级(仓库里的 .claude/skills、CLAUDE.md)照旧跟项目走,两层并存。
 import { useCallback, useEffect, useState } from "react";
-import type { PersonalCliEnv } from "@ash/shared";
+import type { PersonalAshMcp, PersonalCliEnv } from "@ash/shared";
 import { ApiError } from "../lib/apiClient.ts";
 import { personalCliApi } from "../lib/authApi.ts";
 import { Button, TextInput } from "../components/ui.tsx";
@@ -16,12 +16,15 @@ export function PersonalCliSettings({ notify }: { notify: (message: string) => v
   const [mode, setMode] = useState<"single" | "multi" | null>(null);
   // 实例选了「共用宿主机 CLI」时这一整节**不生效**:CLI 起跑时压根没被注入个人配置目录。
   const [sharedHostCli, setSharedHostCli] = useState(false);
+  // 共用档下真正生效的是宿主机那份配置,ash MCP 登记也要问到那边去。
+  const [hostAshMcp, setHostAshMcp] = useState<({ agentType: string } & PersonalAshMcp)[]>([]);
 
   const load = useCallback(async () => {
     try {
       const result = await personalCliApi.list();
       setMode(result.mode);
       setSharedHostCli(result.sharedHostCli);
+      setHostAshMcp(result.hostAshMcp ?? []);
       setEnvs(result.envs);
     } catch (e) {
       notify(e instanceof ApiError ? e.message : "读不出个人 CLI 环境");
@@ -65,8 +68,27 @@ export function PersonalCliSettings({ notify }: { notify: (message: string) => v
           现在要让全员都用上某个技能，装到宿主机的配置目录里。
         </div>
       ) : null}
+      {/* 这一档下能不能交卷，取决于**宿主机**那份配置里有没有 ash MCP —— 个人目录的
+          答案在这里毫无意义，所以只在缺的时候说话。 */}
+      {sharedHostCli
+        ? hostAshMcp
+            .filter((host) => !host.configured)
+            .map((host) => (
+              <div key={host.agentType} className="auth-warning auth-warning--strong">
+                <b>宿主机的 {host.agentType} 配置里没有 ash MCP，用它跑的任务交不了卷。</b>
+                agent 手上不会有 <code>complete_task</code> 这个工具，活干完了也只会显示成「失败」。
+                在这台机器上按 <code>docs/install.md</code> 接一次 MCP（{host.problem ?? "原因不明"}）。
+              </div>
+            ))
+        : null}
       {envs.map((env) => (
-        <CliEnvBlock key={env.agentType} env={env} onChanged={setEnvsOf(setEnvs)} notify={notify} />
+        <CliEnvBlock
+          key={env.agentType}
+          env={env}
+          sharedHostCli={sharedHostCli}
+          onChanged={setEnvsOf(setEnvs)}
+          notify={notify}
+        />
       ))}
     </section>
   );
@@ -78,12 +100,43 @@ function setEnvsOf(set: (fn: (prev: PersonalCliEnv[]) => PersonalCliEnv[]) => vo
     set((prev) => prev.map((item) => (item.agentType === next.agentType ? next : item)));
 }
 
+/**
+ * ash MCP 在这个个人目录里登记了没有。
+ *
+ * 为什么值得占一块地方:缺了它的表现是**任务照跑、干完记 failed**,界面上没有任何一处
+ * 说得出原因(agent 调 complete_task 撞回 "No such tool available",而那句话只躺在
+ * 会话正文里)。ash 每次起跑都会自动补,所以这块平时是一行淡字;补不上才变红。
+ *
+ * 共用档下整块闭嘴:那一档跑的是宿主机的配置目录,个人目录里登记了什么都不作数 ——
+ * 那种情况下该看的是上面那条「宿主机没接 MCP」的红字。
+ */
+function AshMcpNotice({ env, sharedHostCli }: { env: PersonalCliEnv; sharedHostCli: boolean }) {
+  if (!env.ashMcp || sharedHostCli) return null;
+  if (env.ashMcp.configured) {
+    return (
+      <p className="pcli-path">
+        ash MCP 已登记为 <code>{env.ashMcp.serverName}</code> —— agent 靠它调{" "}
+        <code>complete_task</code> 交卷。
+      </p>
+    );
+  }
+  return (
+    <div className="auth-warning auth-warning--strong">
+      <b>这个目录里没有 ash MCP 登记，用它跑的任务交不了卷。</b>
+      agent 手上不会有 <code>complete_task</code> 这个工具，活干完了也只会显示成「失败」。
+      ash 每次起跑都会尝试自动补上，这次没补成：{env.ashMcp.problem ?? "原因不明"}。
+    </div>
+  );
+}
+
 function CliEnvBlock({
   env,
+  sharedHostCli,
   onChanged,
   notify,
 }: {
   env: PersonalCliEnv;
+  sharedHostCli: boolean;
   onChanged: (next: PersonalCliEnv) => void;
   notify: (message: string) => void;
 }) {
@@ -134,6 +187,7 @@ function CliEnvBlock({
       <p className="pcli-path">
         配置目录 <code>{env.configDir}</code>（注入为 <code>{env.envVar}</code>）
       </p>
+      <AshMcpNotice env={env} sharedHostCli={sharedHostCli} />
 
       <div className="pcli-part">
         <div className="pcli-part-head">
