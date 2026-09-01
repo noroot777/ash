@@ -32,6 +32,7 @@ export function HandoffReturnView({
   identityMissing,
   autoResume,
   autoResumeLocked,
+  accepted,
   replay,
   busy,
   onAutoResumeChange,
@@ -50,6 +51,8 @@ export function HandoffReturnView({
   identityMissing: boolean;
   autoResume: boolean;
   autoResumeLocked: boolean;
+  /** 任务已验收/已合并:回去也不会自己跑起来,续跑框不该还立在那里骗人点。 */
+  accepted: boolean;
   replay: boolean;
   busy: boolean;
   onAutoResumeChange: (next: boolean) => void;
@@ -116,15 +119,25 @@ export function HandoffReturnView({
             </p>
           )}
           {notes.length > 0 && <ul className="handoff-summary">{notes.map((note) => <li key={note}>{note}</li>)}</ul>}
-          <label className="handoff-check">
-            <input
-              type="checkbox"
-              checked={autoResume}
-              disabled={busy || autoResumeLocked}
-              onChange={(event) => onAutoResumeChange(event.target.checked)}
-            />
-            回到来源机后立即续跑
-          </label>
+          {accepted ? (
+            <p className="handoff-peer-line">
+              <Warning size={13} aria-hidden="true" />
+              <span>
+                任务已验收，回到来源机<b>不会自动续跑</b>（续跑会把验收结论和合并快照整套摘掉）。
+                这次验收合并的成果会随任务一起回去，落成来源机上的任务分支。
+              </span>
+            </p>
+          ) : (
+            <label className="handoff-check">
+              <input
+                type="checkbox"
+                checked={autoResume}
+                disabled={busy || autoResumeLocked}
+                onChange={(event) => onAutoResumeChange(event.target.checked)}
+              />
+              回到来源机后立即续跑
+            </label>
+          )}
         </>
       )}
     </>

@@ -8,7 +8,7 @@ import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { flushConflictHandoff, handOffConflict } from "./accept-conflict.js";
-import { localBranchExists, resolveTaskMergeTarget } from "./git.js";
+import { localBranchExists, expandHome, resolveTaskMergeTarget, resolveWorktreeBranchName } from "./git.js";
 import { cleanupAcceptedTask, cleanupPlanFor, isAncestor, mergeTaskBranch } from "./git-accept.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
 import { disarmFreeReviewReservation } from "./free-review-reservations.js";
@@ -115,6 +115,33 @@ async function acceptWithoutCleanup(
   };
 }
 
+/**
+ * 挂着「已验收」的任务，**在本机**还差最后一合吗？
+ *
+ * 验收是两件事叠在一起：一句「这份产物我认了」（人的结论，会随接力原样搬到别的机器），
+ * 和一次「把任务分支合进目标分支」（这台机器仓库里的 git 事实，搬不走）。任务在别处跑完
+ * 验收再移回原机时，章跟着回来了，合并却留在对端仓库里 —— 此时走 already_accepted 幂等
+ * 快路，就是拿一句「此前已验收完成」盖住「本机主线一个字节都没有」，而用户点验收要的
+ * 恰恰是把它合进来（用户 2026-09-01 报的第二个问题）。
+ *
+ * 判据只认证据齐全的一种形状，宁可漏判也不误判成「要重合」：记着合并提交和目标分支、
+ * 目标分支本机确实存在、合并提交却从它到达不了，而任务分支就在本机躺着（有东西可合）。
+ * 缺任何一条都返回 false，行为与这道检查上线前完全一致。判定与 line 314 那处
+ * `mergeReachable` 同源：已记录的合并结果必须仍能从目标分支到达，否则不能算数。
+ */
+async function needsLocalRelanding(task: typeof tasks.$inferSelect): Promise<boolean> {
+  if (!task.useWorktree) return false;
+  const merge = task.acceptedMergeCommit?.trim();
+  const target = task.acceptedTargetBranch?.trim();
+  if (!merge || !target) return false;
+  const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
+  if (!project) return false;
+  const repo = expandHome(project.repoPath);
+  if (!(await localBranchExists(repo, target))) return false;
+  if (await isAncestor(repo, merge, target)) return false;
+  return localBranchExists(repo, await resolveWorktreeBranchName(repo, task.id));
+}
+
 async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptTaskResult> {
   const requestedTask = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!requestedTask) {
@@ -185,7 +212,16 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   const initial = await acceptanceGuard(taskId, "initial");
   if (initial.failure) return initial.failure;
   const task = initial.task!;
-  if (task.stage === "accepted") {
+  const relanding = task.stage === "accepted" && await needsLocalRelanding(task);
+  if (relanding) {
+    await appendTaskTimeline(
+      taskId,
+      `这个任务盖着「验收完成」，但记录的合并提交 ${task.acceptedMergeCommit!.slice(0, 8)} 在本机 `
+        + `${task.acceptedTargetBranch} 上够不着（多半是在别的机器上验收后移回来的）。`
+        + "本次不走幂等快路，按记录的目标分支在本机真正执行一次合并。",
+    );
+  }
+  if (task.stage === "accepted" && !relanding) {
     // 幂等快路也要补清预约：历史上可能形成 accepted + armed 的组合（旧版合并入口、
     // 或写 accepted 与清预约之间进程退出），不自愈的话 reopen 后会触发幽灵审查。
     if (task.workflowMode === "free" && await disarmFreeReviewReservation(task.id)) {

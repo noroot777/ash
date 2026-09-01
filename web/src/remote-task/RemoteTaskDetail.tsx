@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { HandoffTarget, Task, TaskListItem } from "@ash/shared";
-import { TASK_STATUS_LABELS } from "@ash/shared";
+import { isAcceptedStage, TASK_STATUS_LABELS } from "@ash/shared";
 import { ArrowCounterClockwise, ArrowUp, DesktopTower, SpinnerGap } from "@phosphor-icons/react";
 import { api, type RemoteTaskSnapshot } from "../lib/api.ts";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
@@ -180,7 +180,11 @@ export function RemoteTaskDetail({
       {returnOpen && (
         <ConfirmDialog
           title="把任务移回本机？"
-          message={`任务将从「${target.name}」接力回本机，远端列表中的这条任务随后会消失。`}
+          message={`任务将从「${target.name}」接力回本机，远端列表中的这条任务随后会消失。`
+            + (isAcceptedStage(task.stage)
+              ? `它已经验收完成：移回后不会自动续跑，那边验收合并的成果会跟着回来落成本机的任务分支，`
+                + `在验收页点「验收通过」即可合进本机主线。`
+              : "")}
           confirmLabel="移回本机"
           busy={returning}
           onConfirm={() => void returnHome()}

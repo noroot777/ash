@@ -22,6 +22,7 @@ import { HandoffError, type HandoffManifest } from "./handoff-types.js";
 import { applyUploadRewrites, buildUploadRewrites, hasUploadRewrites, writeUploads } from "./handoff-uploads.js";
 import { localUploadNames, registerUploads } from "./uploads.js";
 import { ensureWorkdir, expandHome, prepareWorktree, projectHealthLight, worktreePathFor } from "./git.js";
+import { isAncestor } from "./git-accept.js";
 import { findRollout } from "./executors/codex-rollout.js";
 import { assertHandoffNotCanceled, beginHandoffImport, endHandoffImport } from "./handoff-transfer-state.js";
 import { publishPendingMessages } from "./pending-messages.js";
@@ -37,7 +38,8 @@ import { claudeSessionFilePath } from "./handoff-collect.js";
 import { cliConfigDirForOwner } from "./auth/run-env.js";
 import { discardMigratedWorkspace } from "./workspace-cleanup.js";
 import { id, now } from "./util.js";
-import type { TaskHandoff } from "@ash/shared";
+import { appendTaskTimeline } from "./task-timeline.js";
+import { isAcceptedStage, type TaskHandoff, type TaskStage } from "@ash/shared";
 
 export interface HandoffImportResult {
   ok: true;
@@ -144,6 +146,8 @@ async function importValidated(
 
   // ── git:先分支进仓库,再恢复 worktree ────────────────────────────────────
   let workspace: string | null = null;
+  // 「对端验收过、但本机主线还没有这份合并」——留给下面写时间线,判定在 acceptedMergeLanded。
+  let pendingLocalMerge: string | null = null;
   if (useWorktree && m.git) {
     await importGitBundle(project.repoPath, m.task.id, m.git, notes);
     const ws = await prepareWorktree(project.repoPath, m.task.id, m.task.worktreeBase);
@@ -154,6 +158,24 @@ async function importValidated(
     }
     if (ws.fresh) {
       notes.push("worktree 是全新建的(没接上导入分支),代码进度可能没挂上——检查一下分支");
+    }
+    // 对端已经验收过:验收章随任务走,合并却走不了 —— 那次 merge 发生在**对端仓库**的
+    // 目标分支上。所以到货之后当场核一遍本机主线够不够得着它,够不着就明说「还差最后
+    // 一合」,别让一个盖着「验收完成」的任务在本机主线上其实一个字节都没有。
+    const target = (m.task.acceptedTargetBranch ?? "").trim();
+    if (m.git.acceptedMerge || isAcceptedStage(m.task.stage as TaskStage | null)) {
+      const repo = expandHome(project.repoPath);
+      const landed = target
+        ? await isAncestor(repo, m.git.head, target)
+        : false;
+      if (landed) {
+        notes.push(`对端验收的合并成果本机 ${target} 已经有了,无需再合`);
+      } else {
+        pendingLocalMerge = target || "目标分支";
+        notes.push(
+          `对端验收时的合并成果已恢复为本机分支 ${m.git.branch};本机 ${pendingLocalMerge} 还没有这份合并,在验收页点「验收通过」即可合进来`,
+        );
+      }
     }
   } else if (useWorktree) {
     // 没有 git 载荷(源机 worktree 没建过/detached):worktree 留给首次运行时惰性创建。
@@ -287,6 +309,20 @@ async function importValidated(
   }
   const handoffNotice = noticeLines.join("");
 
+  // 已验收/已合并的任务不自动续跑。续跑的第一件事是把验收牌子连同合并快照整套摘下来
+  // （turn-baseline → reopenAcceptedStage），于是「在对端跑完、验收完，再移回来」这条最
+  // 常走的路，会被移回动作自己把用户刚点下的验收抹掉，还白烧一轮 agent。
+  //
+  // 判据落在**接收侧**而不是源机那个勾选框：源机可能是旧版、可能走的是代理移回（那条路
+  // 的 autoResume 是服务端算的，不经人手）、也可能是批量接力的一个全局勾。接收侧看着自己
+  // 刚落库的这条任务判一次，三条路一起管住。源机勾了但这里没跑，应答如实报 false —— 那
+  // 一列存的是「到底跑没跑」，不是「本来想不想跑」。
+  const importedAccepted = isAcceptedStage(m.task.stage as TaskStage | null);
+  const autoResume = m.autoResume && !importedAccepted;
+  if (m.autoResume && !autoResume) {
+    notes.push("任务已验收，导入后没有自动续跑（续跑会把验收结论和合并快照整套摘掉）");
+  }
+
   const marker: TaskHandoff = {
     // 覆盖旧 out 存档不一定是回家：任务再次交给曾持有机器时也会命中 returning。
     // 只有接收机就是 originFp 对应的原机才解除来源锁；否则仍是 in，只能移回原机。
@@ -299,7 +335,7 @@ async function importValidated(
     ...(m.returnTransferId !== undefined ? { returnTransferId: m.returnTransferId } : {}),
     // 导入时有没有触发自动续跑,存成事实:应答丢失后的幂等收口靠它如实回答源机
     // 「任务在对端跑起来了没有」,而不是一律回 false 误导用户去对端手动再点一次。
-    autoResume: m.autoResume,
+    autoResume,
     peerUrl: context.sourceUrl ?? null,
     peerName: m.sourceHost || null,
     peerFp: m.sourceFingerprint ?? null,
@@ -532,7 +568,24 @@ async function importValidated(
     publishPendingMessages(m.task.id);
   }
 
-  if (m.autoResume) {
+  if (m.autoResume && !autoResume) {
+    // 时间线而不只是 notes:代理移回那条路(/tasks/:id/remote-return)把应答里的 notes
+    // 丢掉了,只有落在会话时间线上的这一句刷新页面后还看得见。
+    await appendTaskTimeline(
+      m.task.id,
+      "任务带着「已验收」回到本机，没有自动续跑 —— 续跑会把验收结论和合并快照整套摘掉。需要继续改动就直接在会话里发消息唤醒它。",
+    );
+  }
+  if (pendingLocalMerge) {
+    await appendTaskTimeline(
+      m.task.id,
+      `代码已随任务回到本机（分支 ${m.git?.branch}，工作目录 ${workspace}）。`
+        + `对端那次验收合并的是它自己仓库的 ${pendingLocalMerge}，本机这条分支还没合 —— `
+        + "在验收页点「验收通过」即可把它合进本机主线。",
+    );
+  }
+
+  if (autoResume) {
     // 火后不管:失败会照常走任务自己的失败结算,在界面上可见。
     void resumeOrRunTask(m.task.id, { reason: "run" }).catch((e) => {
       console.warn(`[handoff] 接力任务 ${m.task.id} 自动续跑失败:`, e);
@@ -545,7 +598,7 @@ async function importValidated(
     taskId: m.task.id,
     workspace,
     sessionsMigrated: migrated.length,
-    autoResume: m.autoResume,
+    autoResume,
     git: useWorktree && m.git ? "bundle" : "none",
     notes,
   };
