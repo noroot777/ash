@@ -75,7 +75,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
         </AuthShell>
       );
     }
-    return waitedLong ? <div className="auth-booting">正在确认身份…</div> : null;
+    // `role="status"` 不是装饰:这一屏只剩一行字,没有它读屏用户在这段等待里什么都听不到。
+    return waitedLong ? <div className="auth-booting" role="status">正在确认身份…</div> : null;
   }
 
   if (state.needsSetup) return <SetupWizard state={state} onDone={refresh} />;

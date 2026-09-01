@@ -3,13 +3,16 @@
 // 用户报的现象:远程访问的实例,每次刷新都先「唰」地出现一屏深色品牌登录页,然后才进
 // 工作台。成因不是设计,是首屏时序 —— `GET /api/auth/state` 决定渲染工作台/向导/登录页,
 // 而它原本**串**在 bundle 之后(mount → effect → fetch),本机零延迟看不出来,远程那一个
-// RTT 刚好够把外壳闪出来再跳走。两头一起修,所以这里钉四条:
+// RTT 刚好够把外壳闪出来再跳走。两头一起修,所以这里钉五条:
 //   ① 状态很快回来(本机/预热命中):从头到尾**一个过渡屏都不出现**,直接是工作台;
 //   ② 状态真的慢:仍然不许出现整块外壳,但要给出低调的等待态,别让人对着空屏猜;
 //   ③ 等待态的阈值以 AuthGate 的源码为准 —— 测试跟着它走,改阈值不用改这里;
 //   ④ index.html 里那发预热请求还在,而且确实**赶在 bundle 之前**发出去(整个修复的
-//      前提就是它俩并行;它被删掉的话 ① 会静默退化成「本机也要等一个 RTT」)。
+//      前提就是它俩并行;它被删掉的话 ① 会静默退化成「本机也要等一个 RTT」);
+//   ⑤ 预热快照**只兑现一次** —— 这是整个修复里唯一能造成功能倒退的语义:重复兑现的话,
+//      登录完会被钉在登录页、错误屏上点「重试」永远退不出去。
 import assert from "node:assert/strict";
+import { createServer as createHttpServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { createServer } from "vite";
@@ -42,10 +45,39 @@ assert.doesNotMatch(probeAttrs, /type\s*=/, "预热脚本不能带 type —— m
 assert.doesNotMatch(probeAttrs, /\b(?:defer|async)\b/, "预热脚本不能 defer/async,那正好抵消它存在的理由");
 assert.match(probeSource, /window\.__ashAuthProbe/, "authProbe.ts 接的全局名要和 index.html 写的那个一致");
 
+const AUTH_STATE = { mode: "single", needsSetup: false, user: null, rootDir: null, homeDir: null };
+
 const server = await createServer({
   root,
   logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
+  // watch: null —— 这几个夹具页跑完就走,不需要 HMR。留着 watcher 会在收尾时残留 FSEvent
+  // 句柄,进程偶发退不出去(实测 1/6);而这条测试挂在 build 链上,卡住就是一次无输出、
+  // 无报错、永不返回的构建。
+  server: { host: "127.0.0.1", port: 0, strictPort: false, watch: null },
+});
+
+// ④ 用的那个:直接把**真 index.html 原文**喂给浏览器,不经 vite。
+// 早先这一段是在 vite 上导航 `/` 再用 page.route 把 `main.tsx` 顶掉的,那会让 vite 只
+// transform 了 index.html、模块图没建起来,收尾时 watcher 句柄回收不干净 —— 进程跑完不退。
+// 这一段本来也只需要量「预热请求 vs bundle 执行」的先后,用不着模块图,所以整段搬下来:
+// 服务的仍是磁盘上那份真 index.html(不是复制出来的夹具),量到的顺序就是线上的顺序。
+const indexHost = createHttpServer((req, res) => {
+  const { pathname } = new URL(req.url, "http://x");
+  if (pathname === "/") {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    return res.end(indexSource);
+  }
+  if (pathname === "/api/auth/state") {
+    res.writeHead(200, { "content-type": "application/json" });
+    return res.end(JSON.stringify(AUTH_STATE));
+  }
+  // bundle 换成一行打点的替身:这条只量时序,不必把整个工作台拉起来。
+  if (pathname === "/src/main.tsx") {
+    res.writeHead(200, { "content-type": "text/javascript" });
+    return res.end("window.__bundleRanAt = performance.now();");
+  }
+  res.writeHead(404);
+  res.end();
 });
 
 // 每个页面都从零开始记:React 把外壳插进来又拿掉,轮询采样抓不住,只有 MutationObserver
@@ -93,6 +125,11 @@ try {
     "正在确认身份…",
     "等待态要说清楚在等什么",
   );
+  assert.equal(
+    await page.locator(".auth-booting").getAttribute("role"),
+    "status",
+    "等待态这一屏只剩一行字,没有 role=status 读屏用户就什么都听不到",
+  );
   assert.equal(await page.locator(".probe-workbench").count(), 0, "身份没确认完就不该放行工作台");
   await page.locator(".probe-workbench").waitFor({ timeout: threshold + 3000 });
   const slow = await page.evaluate(() => window.__seen);
@@ -102,24 +139,9 @@ try {
 
   // ④ 真 index.html:预热请求确实赶在 bundle **执行**之前起飞。比的不是两条请求谁先发出
   // —— 浏览器的预扫描器会提前把 `<script src>` 抓下来,那个顺序说明不了问题;串行与否
-  // 取决于「fetch 起飞时,bundle 跑起来没有」。main.tsx 被换成一行打点的替身:这条只量
-  // 时序,不需要把整个工作台拉起来。
-  //
-  // 身份那条也自己接住:放它走 vite 的 /api 代理,这个测试就变成「本机 4317 上有没有真
-  // ash 在跑」的函数 —— 结果不稳,而且那条代理连接会吊着不放,跑完了进程都退不出去。
-  await page.route("**/api/auth/state", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ mode: "single", needsSetup: false, user: null, rootDir: null, homeDir: null }),
-    }));
-  await page.route("**/src/main.tsx", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "text/javascript",
-      body: "window.__bundleRanAt = performance.now();",
-    }));
-  await page.goto(origin, { waitUntil: "load" });
+  // 取决于「fetch 起飞时,bundle 跑起来没有」。
+  await new Promise((resolve) => indexHost.listen(0, "127.0.0.1", resolve));
+  await page.goto(`http://127.0.0.1:${indexHost.address().port}/`, { waitUntil: "load" });
   const timing = await page.evaluate(() => {
     const entry = performance
       .getEntriesByType("resource")
@@ -133,8 +155,19 @@ try {
     `预热请求比 bundle 执行还晚(${timing.probeStart} vs ${timing.bundleRanAt}) —— 又串行了`,
   );
 
-  console.log("auth boot: 快路径无过渡屏、慢路径只给等待态、预热请求与 bundle 并行 ✔");
+  // ⑤ 预热快照只兑现一次。它是页面加载那一刻的身份,连着吃第二回就意味着:登录完还是
+  // 登录页、登出了还是工作台、错误屏上点「重试」永远退不出去 —— 全是看不出成因的那种。
+  await page.goto(`${origin}/scripts/fixtures/auth-boot.html?mode=probe-once`);
+  const once = JSON.parse(await page.locator("#probe-once").innerText());
+  assert.equal(once.firstFromProbe, true, "首屏那一次没吃到预热结果 —— 预热白发了");
+  assert.equal(once.realRequests, 0, "吃了预热还照样打一次真请求,等于没省下那个 RTT");
+  assert.equal(once.secondFromProbe, false, "第二次还在吃同一份快照 —— 身份变了也刷不掉它");
+  assert.equal(once.realRequestsAfterSecond, 1, "第二次没打真请求,拿的是过期身份");
+
+  console.log("auth boot: 快路径无过渡屏、慢路径只给等待态、预热与 bundle 并行、快照只兑现一次 ✔");
 } finally {
   await browser?.close();
   await server.close();
+  indexHost.closeAllConnections?.();
+  await new Promise((resolve) => indexHost.close(resolve));
 }
