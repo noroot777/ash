@@ -33,13 +33,14 @@
         </div>
       </article>
 
-      <p class="conversation-note">自由工作流第 1 轮审查开始：5.5 审查 · 逻辑检查。<time>08/31 16:35</time></p>
-
-      <section class="system-prompt system-prompt--review">
-        <header><b>审查未通过 · 第 1 轮</b><time>08/31 16:42</time></header>
-        <h2>还有 1 类运行中场景会提前折叠</h2>
-        <p><code>awaiting_review</code> 和团队执行者仍在运行时，会被误判为已经结束。</p>
-        <footer><a href="#">查看审查报告</a><span>原任务已自动继续修复</span></footer>
+      <section class="system-review-card">
+        <div class="system-review-icon">审</div>
+        <div class="system-review-main">
+          <header><b>第 1 轮审查未通过</b><span>5.5 审查 · 逻辑检查 · 7 分钟</span><time>08/31 16:42</time></header>
+          <h2>还有 1 类运行中场景会提前折叠</h2>
+          <p><code>awaiting_review</code> 和团队执行者仍在运行时，会被误判为已经结束。</p>
+          <footer><a href="#">查看审查报告</a><span>已交回原任务，智能体正在修复</span></footer>
+        </div>
       </section>
 
       <article class="task-message task-message--agent">
@@ -51,7 +52,7 @@
         </div>
       </article>
 
-      <p class="conversation-note conversation-note--recovery">原工作目录已不存在，已重建空工作区；会话与用户消息均已保留，智能体会先核对仓库现状再继续。<time>08/31 19:36</time></p>
+      <div class="system-recovery-row"><span class="system-recovery-icon">↻</span><p><b>工作区已恢复</b>原目录已不存在，系统已重建空工作区；会话与用户消息均已保留。</p><time>08/31 19:36</time></div>
 
       <article class="task-message task-message--user">
         <div class="task-user-bubble">
@@ -69,11 +70,7 @@
         </div>
       </article>
 
-      <aside class="system-prompt system-prompt--settlement">
-        <header><b>本轮未确认完成</b><time>08/31 21:40</time></header>
-        <p>Demo 已保留，会话可以从这里继续。系统没有把任务误标为完成，也没有推进后续队列。</p>
-        <footer><span>产物已保留 · 上下文可继续</span><a href="#">了解完成确认</a></footer>
-      </aside>
+      <p class="conversation-note is-notice">本轮没有收到完成确认。Demo 已保留，会话可以从这里继续；任务没有被误标为完成，也没有推进后续队列。<time>08/31 21:40</time></p>
 
       <article class="task-message task-message--user">
         <div class="task-user-bubble"><header><b>你</b><time>08/31 21:42</time></header><p>这次对了，做吧。</p></div>
