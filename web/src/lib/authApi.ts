@@ -5,6 +5,7 @@ import type {
   ConfigBundle,
   ConfigBundleKind,
   InviteInfo,
+  PersonalAshMcp,
   PersonalCliEnv,
   ProjectInviteInfo,
   ProjectMemberView,
@@ -112,7 +113,13 @@ export const fsBrowseApi = {
 
 export const personalCliApi = {
   list: () =>
-    request<{ mode: "single" | "multi"; sharedHostCli: boolean; envs: PersonalCliEnv[] }>("/me/cli-env"),
+    request<{
+      mode: "single" | "multi";
+      sharedHostCli: boolean;
+      /** 共用档下才有：真正生效的宿主机配置里 ash MCP 登记了没有。 */
+      hostAshMcp?: ({ agentType: string } & PersonalAshMcp)[];
+      envs: PersonalCliEnv[];
+    }>("/me/cli-env"),
   one: (agentType: string) => request<PersonalCliEnv>(`/me/cli-env/${id(agentType)}`),
   readSkill: (agentType: string, name: string) =>
     request<{ name: string; body: string }>(`/me/cli-env/${id(agentType)}/skills/${id(name)}`),

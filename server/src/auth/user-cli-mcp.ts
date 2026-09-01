@@ -58,6 +58,43 @@ export function ensureAshMcp(dir: string, agentType: string, hostHome: string = 
   }
 }
 
+/**
+ * 同一个问题的**只读**版:看一眼,不补、不建、不写。
+ *
+ * 谁要它:「共用宿主机 CLI」那一档(§八之二)。那一档真正生效的是**宿主机**的配置目录,
+ * 而宿主那份 `~/.claude.json` 是用户自己的配置 —— 检查可以,写一个字都不行。
+ */
+export function readAshMcp(dir: string, agentType: string): PersonalAshMcp {
+  try {
+    if (agentType === "claude") {
+      const file = join(dir, ".claude.json");
+      const doc = readJsonObject(file);
+      if (!doc) return fail(`${file} 解析不了`);
+      const name = claudeServerName(doc);
+      return name ? ok(name) : fail("这个配置目录里没有 ash MCP 登记");
+    }
+    if (agentType === "codex") {
+      const name = codexAshMcpServerName(dir);
+      return name ? ok(name) : fail("这个配置目录里没有 ash MCP 登记");
+    }
+    return fail(`${agentType} 没有个人配置目录，这一问不适用`);
+  } catch (e) {
+    return fail(`读 ash MCP 登记失败：${(e as Error).message}`);
+  }
+}
+
+/**
+ * 宿主机那份配置里的 ash MCP —— 共用档下 agent 真正用的就是它。
+ *
+ * claude 的用户级配置是 `~/.claude.json`(在 home 根,不在 `~/.claude` 里),codex 的是
+ * `~/.codex/config.toml`;两条路径差一层,所以这里不能拿 home 当 dir 直接问。
+ */
+export function hostAshMcp(agentType: string, hostHome: string = homedir()): PersonalAshMcp {
+  if (agentType === "claude") return readAshMcp(hostHome, "claude");
+  if (agentType === "codex") return readAshMcp(join(hostHome, ".codex"), "codex");
+  return fail(`${agentType} 没有宿主级配置目录，这一问不适用`);
+}
+
 // ── claude:~/.claude.json 的 mcpServers ────────────────────────────────────
 
 function ensureClaudeAshMcp(dir: string, hostHome: string): PersonalAshMcp {

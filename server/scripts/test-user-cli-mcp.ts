@@ -15,8 +15,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
-import { ensureAshMcp, extractTomlTables } from "../src/auth/user-cli-mcp.js";
+import { ensureAshMcp, extractTomlTables, hostAshMcp, readAshMcp } from "../src/auth/user-cli-mcp.js";
 import { REPO_DIR } from "../src/paths.js";
+import { requireTmpDb } from "./tmp-db.js";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-user-cli-mcp-"));
 process.on("exit", () => rmSync(stage, { recursive: true, force: true }));
@@ -162,4 +163,61 @@ const HOST_CLAUDE = JSON.stringify({
   assert.ok(!block?.includes("hooks"), "数组表不许被吞进来");
 }
 
-console.log("test-user-cli-mcp: ✅ 11 组全过");
+// ⑫ 只读版**一个字都不许写** —— 共用档拿它去问宿主机那份配置,那是用户自己的文件。
+{
+  const { dir } = bench();
+  const state = readAshMcp(dir, "claude");
+  assert.equal(state.configured, false, "空目录里当然没有登记");
+  assert.ok(!existsSync(join(dir, ".claude.json")), "只读版不许把文件建出来");
+  writeFileSync(join(dir, ".claude.json"), JSON.stringify({ mcpServers: { ash: {} } }), "utf8");
+  assert.equal(readAshMcp(dir, "claude").serverName, ASH_MCP_SERVER_NAME);
+}
+
+// ⑬ 宿主视角的路径差一层:claude 读 ~/.claude.json,codex 读 ~/.codex/config.toml。
+{
+  const { host } = bench({ claude: HOST_CLAUDE, codex: `[mcp_servers.ash]\ncommand = "node"\n` });
+  assert.equal(hostAshMcp("claude", host).configured, true, "claude 的用户级配置在 home 根");
+  assert.equal(hostAshMcp("codex", host).configured, true, "codex 的在 ~/.codex/ 里");
+  const bare = bench();
+  assert.equal(hostAshMcp("claude", bare.host).configured, false);
+  assert.equal(hostAshMcp("codex", bare.host).configured, false);
+  // 问完之后宿主那边不该多出任何东西(只读的判据就是这个)。
+  assert.ok(!existsSync(join(bare.host, ".claude.json")), "问一句不许把宿主配置建出来");
+  assert.ok(!existsSync(join(bare.host, ".codex", "config.toml")), "codex 侧同理");
+}
+
+// ⑭ **档位是运行中能切的**:从「共用宿主机 CLI」切回隔离档那一下,就地补一遍。
+// 不能只靠启动自检 —— 切完到下次重启之间起跑的任务全都用个人目录,缺登记就全记 failed。
+{
+  process.env.ASH_DB ||= join(stage, "switch.db");
+  requireTmpDb("test-user-cli-mcp");
+  const { ensureSchema } = await import("../src/db/index.js");
+  const mode = await import("../src/auth/mode.js");
+  const store = await import("../src/auth/store.js");
+  const personal = await import("../src/auth/personal-settings.js");
+  const { USER_CLI_ROOT, userCliDir } = await import("../src/auth/user-cli.js");
+  await ensureSchema();
+
+  const root = join(stage, "root");
+  mkdirSync(root, { recursive: true });
+  // 先落在**共用档**:那一档不注入个人配置目录,所以它们本来就可能一直是空的。
+  await mode.setInstanceMode("multi", root, true);
+  const admin = await store.createUser({ name: "切档管理员", dirName: "switcher", role: "admin" });
+  process.on("exit", () => rmSync(join(USER_CLI_ROOT, admin.id), { recursive: true, force: true }));
+  const claudeDir = userCliDir(admin.id, "claude");
+  rmSync(claudeDir, { recursive: true, force: true });
+  assert.ok(!existsSync(claudeDir), "共用档下这个目录可以是不存在的");
+
+  await personal.patchSettingsFor(
+    { kind: "user", userId: admin.id, role: "admin", name: admin.name },
+    { sharedHostCli: false },
+  );
+  assert.ok(existsSync(claudeDir), "切到隔离档就该把个人配置目录建出来");
+  // 这台机器上但凡有一处能取到定义(宿主装过 ash、或仓库 build 过 mcp),就必须补上。
+  const { hostAshMcp: hostCheck } = await import("../src/auth/user-cli-mcp.js");
+  if (hostCheck("claude").configured || HAS_BUILT_MCP) {
+    assert.equal(readAshMcp(claudeDir, "claude").configured, true, "切档那一下必须把 ash MCP 补上");
+  }
+}
+
+console.log("test-user-cli-mcp: ✅ 14 组全过");
