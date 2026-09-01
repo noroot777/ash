@@ -62,11 +62,12 @@ const growPhases: AgentContentSegment[][] = [];
   for (let index = 1; index <= timeline.length; index += 1) growPhases.push(timeline.slice(0, index));
 }
 
-// 真会话流（不是直接摆 AgentTurnBody）：钉的是两个 feed 自己怎么判「链路停没停」——
-// 只钉 turnLayout 的话，喂给它的那个布尔算错了照样红不了。
+// 真会话流（不是直接摆 AgentTurnBody）：钉的是两个 feed 喂给回合的那个「在飞没有」——
+// 只钉 turnLayout 的话，喂错了照样红不了。
 //
-// 走的是真实时序：回合先在飞，然后收口（endedAt 落下来），而任务这时还卡在审查门上 /
-// 团队执行者还在干活。气泡 id 全程不变，跟直播一致（这两档都不触发快照重拉）。
+// 走的是真实时序：回合先在飞，然后收口（endedAt 落下来），而**任务还没走完**（停在检查
+// 点 / 卡在审查门上 / 团队执行者还在干活）。回合自己讲完了就该折，不必等整个任务收尾。
+// 气泡 id 全程不变，跟直播一致（这两档都不触发快照重拉）。
 const feedTurn = (endedAt: string | null): ConversationItem => ({
   kind: "agent",
   id: "feed-turn",
@@ -90,7 +91,7 @@ const feedTask = (status: string) => ({
   executorLabel: "codex@cpa·gpt-5.6-sol",
 }) as never;
 
-/** 单飞：跑 → 回合收口后停在检查点 / 进审查门（都不许折）→ 真收尾（这一下才折）。 */
+/** 单飞：回合在飞（不许折）→ 收口后停在检查点 / 进审查门 / 收尾（每一档都该是折好的）。 */
 function SingleFeed() {
   const [phase, setPhase] = useState<"running" | "paused" | "gate" | "done">("running");
   const status = phase === "running" ? "running" : phase === "paused" ? "paused" : phase === "gate" ? "awaiting_review" : "done";
@@ -110,7 +111,7 @@ function SingleFeed() {
   );
 }
 
-/** 团队：调度台说完话就落回 idle，可执行者还在干活 —— 那时候折等于折在半路上。 */
+/** 团队：调度台说完话就落回 idle、执行者还在干活 —— 调度台这一回合讲完了，照折。 */
 function TeamLeadFeed() {
   const [phase, setPhase] = useState<"running" | "dispatched" | "settled">("running");
   const worker = (status: string) => ({ id: "w1", title: "执行者 1", status, mode: "single", parentId: "lead", agentType: "codex" }) as never;
@@ -142,20 +143,16 @@ function TeamLeadFeed() {
 function Turn({
   name,
   initialRunning,
-  initialTaskLive = initialRunning,
   turnSegments = segments,
   phases,
 }: {
   name: string;
   initialRunning: boolean;
-  /** 整个任务还在跑。缺省跟着回合走（回合在飞，任务当然在跑）。 */
-  initialTaskLive?: boolean;
   turnSegments?: AgentContentSegment[];
   /** 一条回合边跑边长出来的几帧：按 data-role="grow" 逐帧前进。 */
   phases?: AgentContentSegment[][];
 }) {
   const [running, setRunning] = useState(initialRunning);
-  const [taskLive, setTaskLive] = useState(initialTaskLive);
   const [nonce, setNonce] = useState(0);
   const [phase, setPhase] = useState(0);
   const shown = phases ? phases[Math.min(phase, phases.length - 1)]! : turnSegments;
@@ -163,29 +160,12 @@ function Turn({
     <div className="task-message task-message--agent" data-case={name}>
       <span className="task-message-avatar" aria-hidden="true">A</span>
       <div className="task-message-content">
-        {/* 回合收口但任务还在跑：换下一轮、就地验证、会话行落 endedAt 都长这样。 */}
+        {/* 这一回合收口了（会话行落 endedAt）：折就发生在这一下，跟任务还跑不跑无关。 */}
         <button type="button" data-role="end-turn" onClick={() => setRunning(false)}>结束回合</button>
-        {/* 最后一步确认执行完了：任务不跑了。 */}
-        <button
-          type="button"
-          data-role="end-task"
-          onClick={() => { setRunning(false); setTaskLive(false); }}
-        >
-          结束任务
-        </button>
-        <button
-          type="button"
-          data-role="restart-turn"
-          onClick={() => { setRunning(true); setTaskLive(true); }}
-        >
-          重新开跑
-        </button>
-        {/* 终态先到、当前气泡的 endedAt 后到：任务列表 SSE 比 sessions 重拉快，中间那一瞬
-            taskLive 已经是假、running 还是真。 */}
-        <button type="button" data-role="task-done-first" onClick={() => setTaskLive(false)}>先落终态</button>
+        <button type="button" data-role="restart-turn" onClick={() => setRunning(true)}>重新开跑</button>
         <button type="button" data-role="repaint" onClick={() => setNonce(nonce + 1)}>触发重绘 {nonce}</button>
         {phases && <button type="button" data-role="grow" onClick={() => setPhase(phase + 1)}>再跑一步 {phase}</button>}
-        <AgentTurnBody segments={shown} running={running} taskLive={taskLive} />
+        <AgentTurnBody segments={shown} running={running} />
       </div>
     </div>
   );
@@ -197,15 +177,11 @@ createRoot(document.getElementById("root")!).render(
     <Turn name="live" initialRunning />
     {/* 刷新页面后读到的历史回合：一上来就该是折好的 */}
     <Turn name="persisted" initialRunning={false} />
-    {/* 任务还在跑，但这一条是它上一轮的回合：不许被自动掀开 */}
-    <Turn name="history" initialRunning={false} initialTaskLive />
     {/* 未确认完成而记 failed 的回合：结算那条异常不许把整篇回答折进过程 */}
     <Turn name="failed" initialRunning={false} turnSegments={failedSegments} />
     {/* 边跑边长：每一帧都不许重组，说过的话一直留在外面 */}
     <Turn name="grow" initialRunning phases={growPhases} />
-    {/* 终态先到、气泡的 endedAt 后到：折出来的那一下就得是折好的，不许先展开再收 */}
-    <Turn name="race" initialRunning />
-    {/* 回合收口了，但任务卡在审查门上 / 团队执行者还在干活：链路没停，不许折 */}
+    {/* 回合收口了、任务还没走完（检查点 / 审查门 / 执行者在干活）：照样折，别等任务收尾 */}
     <SingleFeed />
     <TeamLeadFeed />
   </StrictMode>,
