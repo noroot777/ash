@@ -5,6 +5,8 @@ import type { Session } from "@ash/shared";
 import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
 import { conversationFeedRows, type ConversationReviewLane } from "../src/task-detail/conversationReviewLanes.ts";
 import { ReviewerLane } from "../src/task-detail/ReviewerLane.tsx";
+import { conversationSystemRows } from "../src/task-detail/conversationSystemRows.ts";
+import { SystemAuthoredMessage } from "../src/task-detail/SystemNotice.tsx";
 
 const session = {
   id: "presentation",
@@ -101,6 +103,24 @@ assert.equal(
   inlinePrompt,
   "就地验证的原始要求并入本轮卡片",
 );
+
+const conflictPrompt = "【验收未通过 · 需要你解冲突】\n用户点了验收通过，合并时发生冲突，已经安全回滚。\n\n冲突文件：\n- server/package.json\n- web/src/App.tsx\n\n请你来解决：\n1. 在任务分支合并 main；\n2. 解完重新验收。";
+const conflictItems = build([
+  turn("system", "开始验收：准备安全合并到 main。", "2026-08-11T06:00:00.000Z"),
+  turn("system", "验收未完成：合并任务分支到 main 发生冲突。", "2026-08-11T06:00:01.000Z"),
+  turn("system", "冲突交接：已叫醒该任务去解冲突。", "2026-08-11T06:00:02.000Z"),
+  turn("user", conflictPrompt, "2026-08-11T06:00:03.000Z", { by: "system" }),
+]);
+const conflictRows = conversationSystemRows(conversationFeedRows(conflictItems));
+assert.equal(conflictRows.length, 1, "冲突的开始、失败、交接与长指令应收成一条旁注");
+const conflictRow = conflictRows[0];
+assert.equal(conflictRow.kind, "system-action");
+assert.equal(conflictRow.related.length, 3, "原始系统记录保留在旁注展开区");
+const conflictMarkup = renderToStaticMarkup(<SystemAuthoredMessage item={conflictRow.item} related={conflictRow.related} />);
+assert.match(conflictMarkup, /验收遇到冲突/);
+assert.match(conflictMarkup, /目标分支未改动/);
+assert.match(conflictMarkup, /server\/package\.json/);
+assert.match(conflictMarkup, /流程记录 3 条/);
 
 const emptyLane = conversationFeedRows(build([
   turn("system", "自由工作流第 4 轮审查开始：5.5审查 · 逻辑检查。", "2026-08-11T05:00:00.000Z"),

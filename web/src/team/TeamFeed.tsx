@@ -7,13 +7,13 @@ import { ConversationScrollControls } from "../components/ConversationScrollCont
 import { AgentRunMeta } from "../components/AgentRunMeta.tsx";
 import { AgentTurnBody } from "../components/AgentTurnBody.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
-import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { RunActivity } from "../components/RunActivity.tsx";
 import { MessageFooter } from "../components/MessageFooter.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { isExecutionChainLive } from "../lib/taskAttention.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
+import { SystemAuthoredMessage, SystemBoundary, SystemEventNote } from "../task-detail/SystemNotice.tsx";
 import { durationBetween, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
 import { executorLabel, parseInbound, teamLeadLabel, workerStatusText, type InboundMessage, type TeamFeedRow } from "./teamModel.ts";
 
@@ -60,11 +60,12 @@ function UserRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"] 
   const parsed = parseAttachmentText(row.text);
   const paths = [...parsed.paths, ...row.attachments];
   const bySystem = !!row.bySystem;
+  if (bySystem) return <SystemAuthoredMessage item={row} surface="team" />;
   return (
-    <article className={`team-feed-user${bySystem ? " is-system-authored" : ""}`}>
+    <article className="team-feed-user">
       <div>
-        <header><b>{bySystem ? "系统" : "你"}</b>{row.at && <time>{formatInstant(row.at)}</time>}</header>
-        {parsed.body && (bySystem ? <MarkdownBody text={parsed.body} /> : <p>{parsed.body}</p>)}
+        <header><b>你</b>{row.at && <time>{formatInstant(row.at)}</time>}</header>
+        {parsed.body && <p>{parsed.body}</p>}
         <MessageAttachments paths={paths} />
       </div>
     </article>
@@ -232,14 +233,9 @@ export function TeamFeed({
               );
             }
             if (item.variant === "boundary") {
-              return <div className={`team-feed-event${item.tone === "error" ? " is-error" : ""}`} key={row.key}><span />{item.text}<span /></div>;
+              return <SystemBoundary item={item} surface="team" key={row.key} />;
             }
-            return (
-              <p className={`conversation-note${item.tone === "error" ? " is-error" : ""}${item.verify ? " is-verify" : ""}`} key={row.key}>
-                {item.text}
-                {item.at && <time>{formatInstant(item.at)}</time>}
-              </p>
-            );
+            return <SystemEventNote item={item} key={row.key} />;
           })}
           {activityPhase && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} executor={teamLeadLabel(task)} queuePosition={task.queuePosition} />}
         </section>

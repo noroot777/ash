@@ -70,7 +70,7 @@ const team = renderToStaticMarkup(
   />,
 );
 assert.equal(count(team, "<time>"), 1, "团队旁注也应自己显示时间，续写段不再另起一行");
-assert.match(team, /conversation-note[^>]*>已预约完成后审查。<time>/);
+assert.match(team, /conversation-note[^>]*>[\s\S]*<p>已预约完成后审查。<\/p><time>/);
 assert.doesNotMatch(team, /team-feed-agent[^>]*><header>/, "团队续写没有额外元信息时不应留下空消息头");
 
 const boundary = "2026-08-14T10:00:01.000Z";

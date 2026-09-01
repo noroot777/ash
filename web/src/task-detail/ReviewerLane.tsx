@@ -84,8 +84,10 @@ export function ReviewerLane({
             </span>
             {time && <time>{time}</time>}
           </header>
-          <h2>{repairHeading(handoff)}</h2>
-          <p>{repairSummary(handoff)}</p>
+          <p className="verify-repair-title">
+            <b>{repairHeading(handoff)}</b>
+            <span> · {repairSummary(handoff)}</span>
+          </p>
           <footer className="verify-repair-actions">
             <details className="verify-repair-requirements">
               <summary>查看审查要求</summary>

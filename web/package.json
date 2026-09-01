@@ -48,6 +48,7 @@
     "test:context-compact-quick": "node scripts/test-context-compact-quick.mjs",
     "test:client-id": "node --experimental-strip-types scripts/test-client-id.mjs",
     "test:conversation-notes-dom": "node scripts/test-conversation-notes-dom.mjs",
+    "test:system-notices-dom": "node scripts/test-system-notices-dom.mjs",
     "test:reviewer-turn": "node --experimental-strip-types scripts/test-reviewer-turn.mjs && tsx scripts/test-review-presentation.tsx",
     "test:reviewer-turn-dom": "node scripts/test-reviewer-turn-dom.mjs",
     "test:task-tree": "node --experimental-strip-types scripts/test-task-tree.mjs",

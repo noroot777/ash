@@ -137,8 +137,7 @@ try {
   await lanes.nth(1).getByRole("button", { name: "展开" }).click();
   await lanes.nth(3).getByRole("button", { name: "审查过程" }).click();
 
-  // 执行方恢复普通任务原来的无卡片排版；审查泳道保留中性卡片 + 左绿线，整张卡
-  // 移回左侧。审查正文不能再套一层卡。
+  // 执行方与审查泳道都使用无卡片排版；只有展开的审查正文保留一条很淡的阅读导线。
   const conversationBox = await page.locator(".task-conversation").evaluate((el) => {
     const style = getComputedStyle(el);
     const rect = el.getBoundingClientRect();
@@ -164,18 +163,16 @@ try {
       left: Math.round(rect.left),
       leftBorder: Number.parseFloat(style.borderLeftWidth),
       rightBorder: Number.parseFloat(style.borderRightWidth),
-      lineWidth: Number.parseFloat(line.width),
-      lineLeft: line.left,
+      line: line.content,
     };
   });
   assert.ok(Math.abs(executorLayout.left - conversationBox.contentLeft) <= 1, "执行消息应贴住会话内容区左侧");
   assert.equal(executorLayout.border, "0px", "执行消息应恢复无卡片排版");
   assert.equal(executorLayout.line, "none", "执行消息不再画角色边线");
   assert.ok(Math.abs(laneLayout.left - conversationBox.contentLeft) <= 1, "审查泳道应移回会话内容区左侧");
-  assert.equal(laneLayout.leftBorder, 1, "审查卡整圈只用普通描边");
-  assert.equal(laneLayout.rightBorder, 1);
-  assert.equal(laneLayout.lineWidth, 2, "审查身份线应与讨论任务一样细");
-  assert.equal(laneLayout.lineLeft, "-1px");
+  assert.equal(laneLayout.leftBorder, 0, "审查泳道不再使用卡片描边");
+  assert.equal(laneLayout.rightBorder, 0);
+  assert.equal(laneLayout.line, "none", "审查泳道不再画强调身份线");
   const nestedReviewer = await reviewer.nth(0).evaluate((el) => ({
     border: getComputedStyle(el).borderTopWidth,
     line: getComputedStyle(el, "::before").content,
@@ -220,12 +217,12 @@ try {
   assert.equal(await verifyNotes.count(), 4, "四张审查卡各只保留一条收尾结论");
   assert.match(await verifyNotes.nth(0).innerText(), /第 2 轮验证未通过/);
   assert.equal(await verifyNotes.nth(0).evaluate((el) => el.classList.contains("is-error")), true);
-  const noteColors = await verifyNotes.evaluateAll((els) =>
-    els.map((el) => getComputedStyle(el).borderLeftColor));
-  assert.notEqual(noteColors[0], noteColors[1], "开始是青的、打回是红的，两条不能同色");
+  const noteColors = await verifyNotes.locator(".system-event-icon").evaluateAll((els) =>
+    els.map((el) => getComputedStyle(el).color));
+  assert.notEqual(noteColors[0], noteColors[1], "审查通过与打回的语气图标不能同色");
   const noteWidths = await verifyNotes.evaluateAll((els) =>
     els.map((el) => getComputedStyle(el).borderLeftWidth));
-  assert.ok(noteWidths.every((width) => width === "2px"), "审查起止旁注都应保留截图中的 2px 短竖线");
+  assert.ok(noteWidths.every((width) => width === "0px"), "系统事件统一取消重复的左侧竖线");
 
   // D 的正文统一收进同一层泳道内边距 —— 自由派审现在也是一张卡，同样对齐。
   const boxes = await messages.evaluateAll((els) =>

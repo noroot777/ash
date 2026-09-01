@@ -1,81 +1,88 @@
-.task-message--user.is-system-authored { justify-content: flex-start; padding-right: 38px; padding-left: 30px; }
-.task-message--user.is-system-authored .task-user-bubble,
-.team-feed-user.is-system-authored > div {
-  max-width: min(760px, 92%);
-  border: 0;
-  border-left: 2px solid color-mix(in lch, var(--accent) 26%, var(--line2));
-  border-radius: 0;
-  background: transparent;
-  padding: 3px 0 5px 12px;
-  box-shadow: none;
-}
-.task-message--user.is-system-authored header,
-.team-feed-user.is-system-authored header { margin-bottom: 2px; }
-.task-message--user.is-system-authored .task-markdown,
-.team-feed-user.is-system-authored .task-markdown { color: var(--muted); font-size: 12px; line-height: 1.62; }
-.team-feed-user.is-system-authored { justify-content: flex-start; padding-right: 42px; padding-left: 30px; }
+/* 系统信息是会话旁注，不与用户和 agent 的正文争夺视觉层级。 */
 
-@media (max-width: 560px) {
-  .task-message--user.is-system-authored { padding-right: 10px; padding-left: 10px; }
-  .task-message--user.is-system-authored .task-user-bubble { max-width: 100%; }
+.system-action-wrap {
+  display: flex;
+  max-width: none;
+  justify-content: flex-start;
+  margin: 8px 0 14px;
+  padding-right: 38px;
+  padding-left: 30px;
 }
+.team-feed-user.system-action-wrap { padding-right: 42px; padding-left: 30px; }
+.system-action-note {
+  display: grid;
+  width: min(760px, 100%);
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 6px;
+  color: var(--faint);
+}
+.system-action-icon { display: grid; width: 14px; height: 18px; place-items: center; color: var(--faint); }
+.system-action-note.is-conflict .system-action-icon { color: color-mix(in lch, var(--red) 62%, var(--faint)); }
+.system-action-main { min-width: 0; }
+.system-action-line { display: flex; align-items: baseline; gap: 8px; }
+.system-action-line > p { min-width: 0; flex: 1; margin: 0; overflow-wrap: anywhere; font-size: 10.5px; line-height: 1.55; }
+.system-action-line b { color: var(--muted); font-weight: 650; }
+.system-action-note.is-conflict .system-action-line b { color: color-mix(in lch, var(--red) 54%, var(--muted)); }
+.system-action-line time { flex: none; opacity: 0.78; font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.system-action-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 2px; color: var(--faint); font-size: 9.5px; }
+.system-action-main details { min-width: fit-content; }
+.system-action-main summary { display: inline-flex; align-items: center; gap: 4px; padding: 1px 0; color: var(--faint); cursor: pointer; list-style: none; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 2px; }
+.system-action-main summary::-webkit-details-marker { display: none; }
+.system-action-main summary:hover { color: var(--muted); text-decoration-color: currentColor; }
+.system-action-main details[open] { flex-basis: 100%; }
+.system-action-details > div,
+.system-action-related > ol { margin: 6px 0 2px; border-left: 1px solid var(--line2); padding: 2px 0 2px 9px; }
+.system-action-details .task-markdown { color: var(--muted); font-size: 10.5px; line-height: 1.58; }
+.system-action-details .task-markdown :is(h2, h3, h4) { font-size: 11px; }
+.system-action-files { display: grid; gap: 3px; margin: 0 0 7px; padding-left: 16px; color: var(--faint); }
+.system-action-files code { color: var(--muted); font-size: 9.5px; }
+.system-action-related ol { display: grid; gap: 5px; padding-left: 24px; color: var(--muted); }
+.system-action-related li { padding-left: 2px; line-height: 1.5; }
+.system-action-related time { margin-left: 7px; color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-/* 系统旁注：预约审查、验收阶段更新、合并&清理完成、验证轮起止…… 跟上面「系统代写的
-   消息」是同一族东西，所以共用那套视觉语言（左竖线 + 淡色小字）。差别在于它连一条
-   消息都算不上，只是贴在会话边上的一行注记：更紧、更淡、不占气泡宽度。
-   横贯整条会话的分隔线留给真正的回合边界（.task-event-line / .team-feed-event）。 */
-.conversation-note {
+/* 一行系统事实：图标负责语气，正文负责事实，不再每条都竖一根颜色不同的线。 */
+.conversation-note.system-event-row {
+  display: flex;
   max-width: 760px;
-  margin: 10px 0 10px 30px;
-  border-left: 2px solid var(--line2);
-  padding: 1px 0 1px 11px;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 7px 0 9px 30px;
+  border: 0;
+  background: transparent;
+  padding: 1px 0;
   color: var(--faint);
   font-size: 11px;
   line-height: 1.6;
 }
-.conversation-note time { margin-left: 7px; opacity: 0.72; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.conversation-note.is-error {
-  border-left-color: color-mix(in lch, var(--red) 45%, var(--line2));
-  color: color-mix(in lch, var(--red) 76%, var(--faint));
-}
-/* 结算说明（「这一轮为什么落成这个状态」）：琥珀 + 一点底色。它比别的旁注更需要被读完
-   —— 任务落成未完成时，这就是唯一的解释，也是用户下一步该干什么的说明。但它讲的是
-   流程不是故障，所以给提示的语气，红留给真出错。 */
-.conversation-note.is-notice {
-  border-left: 2px solid color-mix(in lch, var(--amber) 72%, var(--line2));
-  border-radius: 0 7px 7px 0;
-  background: color-mix(in lch, var(--amber) 11%, transparent);
-  padding: 6px 10px 6px 11px;
-  color: var(--muted);
-}
-.team-feed .conversation-note { margin-left: 0; }
+.system-event-icon { display: grid; width: 14px; height: 16px; flex: 0 0 14px; place-items: center; color: var(--faint); }
+.system-event-row p { min-width: 0; flex: 1; margin: 0; overflow-wrap: anywhere; }
+.system-event-row p b { margin-right: 6px; color: var(--muted); font-weight: 650; }
+.system-event-row time { flex: none; opacity: 0.72; font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.system-event-row.is-progress .system-event-icon { color: color-mix(in lch, var(--cyan) 46%, var(--faint)); }
+.system-event-row.is-success .system-event-icon { color: color-mix(in lch, var(--green) 50%, var(--faint)); }
+.system-event-row.is-warning,
+.system-event-row.is-notice { color: color-mix(in lch, var(--amber) 20%, var(--faint)); }
+.system-event-row.is-warning .system-event-icon,
+.system-event-row.is-notice .system-event-icon { color: color-mix(in lch, var(--amber) 52%, var(--faint)); }
+.system-event-row.is-error { color: color-mix(in lch, var(--red) 64%, var(--ink)); }
+.system-event-row.is-error .system-event-icon { color: color-mix(in lch, var(--red) 72%, var(--ink)); }
+.system-event-row.is-recovery .system-event-icon { color: var(--muted); }
+.team-feed .system-event-row { margin-left: 0; }
 
-/* 工作目录重建只是一次恢复回执：不用警告色，也不再跟普通旁注一样画左竖线。 */
-.system-recovery-row {
-  display: flex;
-  max-width: 760px;
-  align-items: center;
-  gap: 8px;
-  margin: 10px 0 16px 30px;
-  border-radius: 7px;
-  background: var(--raised);
-  padding: 6px 9px;
-  color: var(--faint);
-  font-size: 10.5px;
-}
-.system-recovery-icon { display: grid; width: 20px; height: 20px; flex: 0 0 20px; place-items: center; border-radius: 6px; background: var(--panel); color: var(--muted); }
-.system-recovery-row p { min-width: 0; flex: 1; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.system-recovery-row b { margin-right: 7px; color: var(--muted); font-weight: 650; }
-.system-recovery-row time { flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* 回合边界只留一条很淡的分隔线和说明。 */
+.system-boundary { gap: 8px; color: var(--faint); font-size: 9.5px; }
+.system-boundary > p { flex: none; margin: 0; opacity: 0.78; }
+.system-boundary > span { background: color-mix(in lch, var(--line) 58%, transparent); }
 
-/* 旁注不算换段：被它隔开的下半截还是同一个会话在说话，接着上一段排版就行，
-   头像和执行器名不重报（重报出来就是图二那种「一条会话被劈成两半」）。 */
+/* 旁注不算换段：被它隔开的下半截还是同一个会话在说话，接着上一段排版。 */
 .task-message--agent.is-continuation { margin-top: -6px; }
 .task-message--agent.is-continuation .task-message-avatar { background: transparent; }
 .team-feed-agent.is-continuation { margin-top: -6px; }
 
-@media (max-width: 560px) {
-  .conversation-note { margin-left: 10px; }
-  .system-recovery-row { margin-left: 10px; }
-  .system-recovery-row p { white-space: normal; }
+@media (max-width: 680px) {
+  .system-action-wrap { padding-right: 10px; padding-left: 10px; }
+  .team-feed-user.system-action-wrap { padding-right: 10px; padding-left: 10px; }
+  .system-action-line { flex-wrap: wrap; }
+  .system-action-line time { margin-left: 20px; }
+  .conversation-note.system-event-row { margin-left: 10px; }
 }

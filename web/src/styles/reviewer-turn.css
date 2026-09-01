@@ -3,11 +3,11 @@
    不同，同一个执行器自审时连名字都一样 —— 不标出来，「在验我」和「在做需求」两种
    发言在会话里长得完全一致。
 
-   配色用 --cyan 而不是 --accent：靛蓝在这套界面里已经被「你（真人）」占着（用户气泡、
-   系统代写消息的左竖线都是它），验证段再用会把「谁在说话」这条最要紧的线索搅混。
+   配色用 --cyan 而不是 --accent：靛蓝在这套界面里已经被「你（真人）」占着，验证段
+   再用会把「谁在说话」这条最要紧的线索搅混。
 
-   身份仍靠头像、徽标和青色来认。实现回合沿用普通会话原来的无卡片排版；审查泳道单独
-   用一张左对齐的中性卡片，角色色只落在左侧那一小段竖线上。 */
+   身份仍靠头像、徽标和青色来认。实现回合沿用普通会话排版；审查泳道也只作为一条
+   可展开的时间线旁注，不再单独围成卡片。 */
 
 .task-message--agent.is-reviewer .task-message-avatar {
   background: color-mix(in lch, var(--cyan) 13%, var(--overlay));
@@ -33,57 +33,45 @@
   white-space: nowrap;
 }
 
-/* 验证段的起止旁注（第 N 轮验证开始 / 未通过并打回）跟着审查者一个颜色，两条旁注
-   加中间的气泡才读得出是一段。未通过那条仍归红（.is-error 排在后面覆盖）—— 结论的
-   成败比「它属于验证段」更要紧。 */
-.conversation-note.is-verify {
-  border-left-color: color-mix(in lch, var(--cyan) 62%, var(--line2));
-  color: color-mix(in lch, var(--cyan) 70%, var(--ink));
-}
-.conversation-note.is-verify.is-error {
-  border-left-color: color-mix(in lch, var(--red) 45%, var(--line2));
-  color: color-mix(in lch, var(--red) 76%, var(--ink));
-}
+/* 验证段沿用系统旁注的阅读层级，只用一点青色提示身份；失败仍由 error 覆盖。 */
+.conversation-note.is-verify:not(.is-error) { color: var(--muted); }
+.conversation-note.is-verify:not(.is-error) .system-event-icon { color: color-mix(in lch, var(--cyan) 48%, var(--faint)); }
 
-/* D：历史验证轮折成一张结论卡，展开态就是完整验证泳道。段头把轮次、审查者、结论、
+/* D：历史验证轮折成一行结论，展开态就是完整验证泳道。段头把轮次、审查者、结论、
    用时和两颗动作收在一起；正文的阅读密度仍沿用原会话，不另造一套气泡。 */
 .verify-lane {
-  position: relative;
   width: 100%;
   max-width: 790px;
-  margin: 18px 0 22px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--panel);
-  box-shadow: 0 1px 2px rgb(30 32 38 / 3%);
+  margin: 12px 0 16px;
+  border: 0;
+  background: transparent;
 }
-.verify-lane::before { position: absolute; top: 8px; bottom: 8px; left: -1px; width: 2px; border-radius: 2px; background: #28a17c; content: ""; pointer-events: none; }
+.verify-lane::before { content: none; }
 
 .verify-lane-head {
   display: flex;
-  min-height: 36px;
+  min-height: 24px;
   align-items: center;
-  gap: 8px;
-  border-bottom: 1px solid var(--line);
-  padding: 7px 10px 7px 12px;
-  font-size: 10.5px;
+  gap: 7px;
+  border: 0;
+  padding: 1px 0;
+  font-size: 10px;
 }
 
-.verify-lane.is-collapsed .verify-lane-head { border-bottom-color: transparent; }
-.verify-lane-mark { display: grid; width: 18px; height: 18px; flex: none; place-items: center; border-radius: 50%; background: color-mix(in lch, var(--cyan) 15%, var(--panel)); color: var(--cyan); }
-.verify-lane-head > b { flex: none; color: color-mix(in lch, var(--cyan) 72%, var(--ink)); font-size: 11px; font-weight: 680; }
+.verify-lane-mark { display: grid; width: 16px; height: 18px; flex: none; place-items: center; color: color-mix(in lch, var(--cyan) 48%, var(--faint)); }
+.verify-lane-head > b { flex: none; color: var(--muted); font-size: 10.5px; font-weight: 650; }
 .verify-lane-by { min-width: 0; overflow: hidden; color: var(--faint); text-overflow: ellipsis; white-space: nowrap; }
-.verify-lane-state { flex: none; border-radius: 999px; padding: 1px 7px; font-size: 9.5px; font-weight: 650; }
-.verify-lane-state.is-verified { background: color-mix(in lch, var(--green) 11%, var(--panel)); color: var(--green); }
-.verify-lane-state.is-failed { background: color-mix(in lch, var(--red) 11%, var(--panel)); color: var(--red); }
-.verify-lane-state.is-running { background: color-mix(in lch, var(--cyan) 11%, var(--panel)); color: color-mix(in lch, var(--cyan) 72%, var(--ink)); }
-.verify-lane-state.is-inconclusive { background: color-mix(in lch, var(--amber) 11%, var(--panel)); color: var(--amber); }
+.verify-lane-state { flex: none; padding: 0; font-size: 9.5px; font-weight: 600; }
+.verify-lane-state.is-verified { color: color-mix(in lch, var(--green) 55%, var(--faint)); }
+.verify-lane-state.is-failed { color: color-mix(in lch, var(--red) 62%, var(--faint)); }
+.verify-lane-state.is-running { color: color-mix(in lch, var(--cyan) 48%, var(--faint)); }
+.verify-lane-state.is-inconclusive { color: color-mix(in lch, var(--amber) 48%, var(--faint)); }
 .verify-lane-time { margin-left: auto; color: var(--faint); font-size: 9.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .verify-lane-actions { display: inline-flex; flex: none; align-items: center; gap: 5px; margin-left: auto; }
 .verify-lane-time + .verify-lane-actions { margin-left: 0; }
-.verify-lane-actions > button { display: inline-flex; min-height: 24px; align-items: center; gap: 4px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); padding: 2px 8px; color: var(--muted); font-size: 10px; }
-.verify-lane-actions > button:hover { background: var(--raised); color: var(--ink); }
-.verify-lane-body { padding: 14px 13px 4px; }
+.verify-lane-actions > button { display: inline-flex; min-height: 20px; align-items: center; gap: 4px; border: 0; background: transparent; padding: 1px 2px; color: var(--faint); font-size: 9.5px; }
+.verify-lane-actions > button:hover { color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
+.verify-lane-body { margin: 7px 0 0 7px; border-left: 1px solid var(--line2); padding: 8px 0 3px 15px; }
 .verify-lane-body[hidden] { display: none; }
 .verify-lane-body > :first-child { margin-top: 0; }
 .verify-lane-body > :last-child { margin-bottom: 0; }
@@ -97,34 +85,33 @@
 .verify-lane--repair {
   display: grid;
   width: min(760px, calc(100% - 30px));
-  grid-template-columns: 26px minmax(0, 1fr);
-  gap: 10px;
-  margin: 12px 0 18px 30px;
-  background: color-mix(in lch, var(--amber) 3%, var(--panel));
-  padding: 10px 11px;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 6px;
+  margin: 8px 0 14px 30px;
+  padding: 0;
 }
 .verify-lane--repair::before { content: none; }
-.verify-repair-mark { display: grid; width: 26px; height: 26px; place-items: center; border-radius: 7px; background: color-mix(in lch, var(--amber) 13%, var(--panel)); color: color-mix(in lch, var(--amber) 76%, var(--muted)); }
+.verify-repair-mark { display: grid; width: 14px; height: 18px; place-items: center; color: color-mix(in lch, var(--red) 58%, var(--faint)); }
 .verify-repair-main { min-width: 0; }
-.verify-repair-head { display: flex; align-items: baseline; gap: 7px; color: var(--faint); font-size: 10px; }
-.verify-repair-head > b { flex: none; color: color-mix(in lch, var(--amber) 72%, var(--muted)); font-size: 10.5px; font-weight: 650; }
+.verify-repair-head { display: flex; align-items: baseline; gap: 7px; color: var(--faint); font-size: 9.5px; }
+.verify-repair-head > b { flex: none; color: color-mix(in lch, var(--red) 54%, var(--muted)); font-size: 10.5px; font-weight: 650; }
 .verify-repair-head > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .verify-repair-head > time { flex: none; margin-left: auto; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.verify-repair-main > h2 { margin: 5px 0 0; color: var(--ink); font-size: 12.5px; font-weight: 650; }
-.verify-repair-main > p { margin: 4px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.6; }
-.verify-repair-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 6px; color: var(--faint); font-size: 10px; }
+.verify-repair-title { margin: 1px 0 0; color: var(--faint); font-size: 10.5px; line-height: 1.55; }
+.verify-repair-title b { color: var(--muted); font-weight: 600; }
+.verify-repair-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 2px; color: var(--faint); font-size: 9.5px; }
 .verify-repair-actions > span { min-width: 190px; flex: 1; }
-.verify-repair-actions > button { display: inline-flex; min-height: 22px; align-items: center; gap: 4px; border: 0; border-radius: 5px; background: transparent; padding: 2px 4px; color: var(--accent); font-size: 10px; }
-.verify-repair-actions > button:hover { background: var(--raised); color: var(--ink); }
+.verify-repair-actions > button { display: inline-flex; min-height: 20px; align-items: center; gap: 4px; border: 0; background: transparent; padding: 1px 0; color: var(--faint); font-size: 9.5px; }
+.verify-repair-actions > button:hover { color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
 .verify-repair-requirements { min-width: fit-content; }
-.verify-repair-requirements > summary { border-radius: 5px; padding: 2px 4px; color: var(--accent); cursor: pointer; list-style: none; }
+.verify-repair-requirements > summary { padding: 1px 0; color: var(--faint); cursor: pointer; list-style: none; }
 .verify-repair-requirements > summary::-webkit-details-marker { display: none; }
-.verify-repair-requirements > summary:hover { background: var(--raised); color: var(--ink); }
+.verify-repair-requirements > summary:hover { color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
 .verify-repair-requirements[open] { flex-basis: 100%; }
-.verify-repair-requirements > div { margin-top: 7px; border-left: 1px solid var(--line2); padding-left: 9px; }
+.verify-repair-requirements > div { margin-top: 6px; border-left: 1px solid var(--line2); padding-left: 9px; }
 .verify-repair-requirements .task-markdown { color: var(--muted); font-size: 10.5px; line-height: 1.55; }
 .verify-repair-requirements .task-markdown :is(h2, h3, h4) { font-size: 11px; }
-.verify-lane--repair .verify-lane-body { margin-top: 9px; border-top: 1px solid var(--line); padding: 12px 0 0; }
+.verify-lane--repair .verify-lane-body { margin: 7px 0 0; border-top: 0; padding: 8px 0 0 15px; }
 
 @media (max-width: 680px) {
   .verify-lane-head { flex-wrap: wrap; }

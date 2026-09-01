@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { ArrowClockwise, Copy, File, ShieldCheck } from "@phosphor-icons/react";
+import { Copy, File, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
 import { runActivityExecutor, runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
@@ -9,14 +9,14 @@ import { AgentRunMeta } from "../components/AgentRunMeta.tsx";
 import { AgentTurnBody } from "../components/AgentTurnBody.tsx";
 import { isExecutionChainLive } from "../lib/taskAttention.ts";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
-import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { RunActivity } from "../components/RunActivity.tsx";
 import { MessageFooter } from "../components/MessageFooter.tsx";
 import { TurnRetryButton } from "../components/TurnRetryButton.tsx";
 import { MessageAttachments } from "./Attachments.tsx";
 import { conversationFeedRows } from "./conversationReviewLanes.ts";
-import { isWorkspaceRecoveryNote } from "./conversationNotes.ts";
+import { conversationSystemRows } from "./conversationSystemRows.ts";
 import { ReviewerLane } from "./ReviewerLane.tsx";
+import { SystemAuthoredMessage, SystemBoundary, SystemEventNote } from "./SystemNotice.tsx";
 import { type TurnRetryTarget, turnRetryTarget } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 
@@ -112,11 +112,12 @@ function UserMessage({
   const parsed = parseAttachmentText(item.text);
   const paths = [...parsed.paths, ...item.attachments];
   const bySystem = !!item.bySystem;
+  if (bySystem) return <SystemAuthoredMessage item={item} />;
   return (
-    <article className={`task-message task-message--user${bySystem ? " is-system-authored" : ""}`}>
+    <article className="task-message task-message--user">
       <div className="task-user-bubble">
         <header>
-          <b>{bySystem ? "系统" : "你"}</b>
+          <b>你</b>
           {item.at && <time>{formatInstant(item.at)}</time>}
           {parsed.body && (
             <button type="button" onClick={() => copyText(parsed.body)} aria-label="复制这条回复">
@@ -124,7 +125,7 @@ function UserMessage({
             </button>
           )}
         </header>
-        {parsed.body && (bySystem ? <MarkdownBody text={parsed.body} /> : <p>{parsed.body}</p>)}
+        {parsed.body && <p>{parsed.body}</p>}
         <MessageAttachments paths={paths} />
       </div>
     </article>
@@ -170,7 +171,7 @@ export function ConversationFeed({
   const retryItemId = retry
     ? [...items].reverse().find((item) => item.kind === "agent")?.id ?? null
     : null;
-  const rows = conversationFeedRows(items, { reviews });
+  const rows = conversationSystemRows(conversationFeedRows(items, { reviews }));
   // 「执行链路还没停」用 taskAttention 那一份口径（在跑 / 卡在审查门上 / 停在检查点等人
   // 答话都算没停），别在折叠这儿另起一套。这里只有单飞与执行者，团队走 TeamFeed。
   const taskLive = isExecutionChainLive(task);
@@ -210,32 +211,9 @@ export function ConversationFeed({
     // 回合边界才配得上一条横贯的分隔线；系统旁注只是贴在会话边上的一行小字，
     // 它不该看起来像「这里换了一段对话」。
     if (item.variant === "boundary") {
-      return (
-        <div className={`task-event-line${item.tone === "error" ? " is-error" : ""}`} key={item.id}>
-          <span />
-          <p>{item.text}{item.at ? ` · ${formatInstant(item.at)}` : ""}</p>
-          <span />
-        </div>
-      );
+      return <SystemBoundary item={item} key={item.id} />;
     }
-    if (isWorkspaceRecoveryNote(item.text)) {
-      return (
-        <div className="system-recovery-row" role="status" key={item.id}>
-          <span className="system-recovery-icon" aria-hidden="true"><ArrowClockwise size={12} weight="bold" /></span>
-          <p><b>工作区已恢复</b>原目录已不存在，系统已重建空工作区；会话与用户消息均已保留。</p>
-          {item.at && <time>{formatInstant(item.at)}</time>}
-        </div>
-      );
-    }
-    return (
-      <p
-        className={`conversation-note${item.tone === "error" ? " is-error" : ""}${item.tone === "notice" ? " is-notice" : ""}${item.verify ? " is-verify" : ""}`}
-        key={item.id}
-      >
-        {item.text}
-        {item.at && <time>{formatInstant(item.at)}</time>}
-      </p>
-    );
+    return <SystemEventNote item={item} key={item.id} />;
   };
 
   return (
@@ -244,11 +222,13 @@ export function ConversationFeed({
         <div className="task-conversation" ref={scroll}>
           {rows.map((row) => row.kind === "item"
             ? renderItem(row.item)
-            : (
+            : row.kind === "system-action"
+              ? <SystemAuthoredMessage key={row.id} item={row.item} related={row.related} />
+              : (
               <ReviewerLane key={row.id} taskId={task.id} lane={row}>
                 {row.items.map(renderItem)}
               </ReviewerLane>
-            ))}
+              ))}
           {activityPhase && !loading && !error && (
             <RunActivity
               status={task.status}

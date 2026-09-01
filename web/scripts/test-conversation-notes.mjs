@@ -12,6 +12,7 @@ import {
 } from "@ash/shared/session-notes";
 import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
 import { isWorkspaceRecoveryNote, noteTone } from "../src/task-detail/conversationNotes.ts";
+import { isConflictHandoff, systemEventKind } from "../src/task-detail/systemNoticeModel.ts";
 
 // —— 语气分类：办成了的事不报红，没办成的才报红 ——
 assert.equal(noteTone("自由工作流第 2 轮审查通过（5.5审查）。"), "neutral");
@@ -29,6 +30,12 @@ assert.equal(
   "已知的 worktree 重建回执应拿到专用单行样式",
 );
 assert.equal(isWorkspaceRecoveryNote("合并清理警告：worktree 未能删除"), false, "普通 worktree 旁注不能误判为恢复回执");
+assert.equal(systemEventKind("开始验收：准备安全合并。", "neutral"), "progress");
+assert.equal(systemEventKind("验收完成：目标分支 main。", "neutral"), "success");
+assert.equal(systemEventKind("本回合没有交卷：产物仍保留。", "notice"), "notice");
+assert.equal(systemEventKind("验收未完成：合并发生冲突。", "error"), "error");
+assert.equal(isConflictHandoff("【验收未通过 · 需要你解冲突】\n请处理"), true);
+assert.equal(isConflictHandoff("【自动验证未通过 · 第 1 轮】\n请处理"), false);
 
 // —— 会话轮换旁注：中性事实，不是本回合失败 ——
 // 这几句会出现在一个 exit 0 的成功回合、甚至用户自己点的「停止全组」上。判据不是「文案
