@@ -15,6 +15,7 @@ import { closeSync, openSync, readFileSync, readSync, readdirSync, realpathSync,
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
 import { configDirEnvVar, userCliDir } from "./auth/user-cli.js";
+import { isHostCliIsolatedSync } from "./auth/multi-flag.js";
 import {
   KEY_SEP,
   clearPersistedCalibrations,
@@ -125,13 +126,16 @@ function claudePluginRoots(configDir: string): Root[] {
 }
 
 /**
- * 「用户那一层」的配置目录。多人模式下它是**这个人自己的**目录
- * (data/user-cli/<userId>/<agentType>/,见 auth/user-cli.ts),自用模式仍是宿主机
- * 默认目录 —— 与执行时注入 CLAUDE_CONFIG_DIR / CODEX_HOME 的判据必须是同一个,
- * 否则菜单里列的技能和 CLI 真能用的技能是两套(§九)。
+ * 「用户那一层」的配置目录。隔离档下它是**这个人自己的**目录
+ * (data/user-cli/<userId>/<agentType>/,见 auth/user-cli.ts),自用模式、以及实例选了
+ * 「共用宿主机 CLI」时仍是宿主机默认目录 —— 与执行时注入 CLAUDE_CONFIG_DIR / CODEX_HOME
+ * 的判据必须是同一个,否则菜单里列的技能和 CLI 真能用的技能是两套(§九)。
+ *
+ * 用同步镜像而不是 `await isHostCliIsolated()`:整条扫描链是同步的(listSkills 要能
+ * 在补全的热路径上直接返回),而这一位的降级方向是安全的 —— 见 auth/multi-flag.ts。
  */
 function userConfigDirFor(agentType: Scannable, userId: string | null): string {
-  if (userId) {
+  if (userId && isHostCliIsolatedSync()) {
     const personal = userCliDir(userId, agentType);
     if (configDirEnvVar(agentType)) return personal;
     // 该 CLI 没有「整体取代配置目录」的环境变量 → 个人级如实降级为仅项目级,

@@ -7,7 +7,7 @@
 // 任务按「没调 complete_task」记 failed。导入侧那道「只认写盘成功的会话」的闸也拦不住:
 // 它只问文件名到没到,不问 CLI 站在自己的配置目录里看不看得见。
 //
-// 这条测试钉五件事:
+// 这条测试钉七件事:
 //   ① 判据同源 —— cliConfigDirForOwner 给出的目录 == 起跑注入的那个环境变量的值
 //   ② 导入侧真的落进那个目录,而且**不在** `~/.claude` 下(反向断言才抓得住回归)
 //   ③ 导出侧也去那个目录找:归属人对了找得到,按自用模式找就找不到
@@ -15,6 +15,13 @@
 //      `sessions.run_owner_user_id` 逐条找,不能按任务归属人 A 一刀切(第 1 轮审查 finding 1)
 //   ⑤ 「读会话元数据」的那条链同样得站这个目录:起跑前的 Codex 版本守卫、会话列表里的
 //      版本提示,都从 rollout 首行读 cli_version —— 站错目录读不到,而读不到是 fail-open
+//   ⑥ 「CLI 额度」在共用/隔离之间换档(§八之二)时,**人没变、目录变了**:注入、出站凭证
+//      清理、派发闸三条都要跟着翻,而「这条旧会话接不接得上」必须认会话行记下的那个目录
+//      ——按归属人现算的话这一档换过之后会一路放行,然后在 CLI 那头硬失败
+//   ⑦ **老行**(cli_config_dir 上线之前建的会话)在共用档下的解释:迁移只 ADD COLUMN
+//      不回填,而老行确实写在个人目录里,所以判据只能是**当时**那条规则(有 run_owner
+//      就是个人目录),不能按当前设置现算 —— 现算会让老会话在换档后被判成接得上
+//      (第 1 轮审查 P1)。顺带钉住「读」这条路不许有 mkdir 副作用
 // 外加自用模式(owner 为 null)逐字节维持老行为:仍然是 `~/.claude` / `$CODEX_HOME`。
 //
 // 跑法(自带临时库):
@@ -84,7 +91,7 @@ try {
   );
   const solo = await collectSessionFiles(
     [sessionRow("claude", CLAUDE_ID, SOLO_CWD), sessionRow("codex", SOLO_THREAD, SOLO_CWD)],
-    SOLO_CWD, false, null,
+    SOLO_CWD, false,
   );
   assert.equal(solo.found.size, 2, `自用模式:导出侧要在宿主机目录里找得到刚落的两份:${solo.notes.join(" / ")}`);
 
@@ -136,10 +143,18 @@ try {
   );
 
   // ③ 导出侧对称:按归属人找得到,按自用模式(null)就找不到。
-  const rows = [sessionRow("claude", CLAUDE_ID, OWNED_CWD), sessionRow("codex", OWNED_THREAD, OWNED_CWD)];
-  const mine = await collectSessionFiles(rows, OWNED_CWD, false, user.id);
+  const rows = [
+    sessionRow("claude", CLAUDE_ID, OWNED_CWD, user.id),
+    sessionRow("codex", OWNED_THREAD, OWNED_CWD, user.id),
+  ];
+  const mine = await collectSessionFiles(rows, OWNED_CWD, false);
   assert.equal(mine.found.size, 2, `按归属人应盘点到两条会话,实际 ${mine.found.size}:${mine.notes.join(" / ")}`);
-  const asSolo = await collectSessionFiles(rows, OWNED_CWD, false, null);
+  // 反向:同样两份文件,但会话行说这一轮没有归属人(自用模式的形状)—— 那就该去宿主机
+  // 默认目录找,于是找不到。两侧判据必须同源,不同源的话这条会假绿。
+  const asSolo = await collectSessionFiles(
+    [sessionRow("claude", CLAUDE_ID, OWNED_CWD), sessionRow("codex", OWNED_THREAD, OWNED_CWD)],
+    OWNED_CWD, false,
+  );
   assert.equal(asSolo.found.size, 0, "按宿主机默认目录找,这两条都不该找得到——两侧判据必须同源");
 
   // ④ 跨人回合:共享项目里任务归属人是 A,B 回复了一轮,那一轮的 CLI 会话写在 **B** 的
@@ -163,19 +178,21 @@ try {
     sessionRow("claude", CLAUDE_ID, CROSS_CWD, bob.id),
     sessionRow("codex", CROSS_THREAD, CROSS_CWD, bob.id),
   ];
-  const cross = await collectSessionFiles(crossRows, CROSS_CWD, false, user.id);
+  const cross = await collectSessionFiles(crossRows, CROSS_CWD, false);
   assert.equal(
     cross.found.size, 2,
     `跨人回合的会话要按 run_owner 找得到,实际 ${cross.found.size}:${cross.notes.join(" / ")}`,
   );
-  // 反向:同样两行、但没有 run_owner(老行),就只能退回任务归属人 A 的目录 —— 找不到。
+  // 反向:同样两行、但没有 run_owner(老行),按当时那条规则就是宿主机默认目录 —— 找不到。
+  // 注意这里**不能**退回任务归属人 lj:存量任务在自用转多人时会被整体划给管理员,
+  // 拿它当「当初写在哪」的证据只会把老会话指到一个从没写过东西的目录(第 1 轮 P1)。
   const legacyRows = [
     sessionRow("claude", CLAUDE_ID, CROSS_CWD),
     sessionRow("codex", CROSS_THREAD, CROSS_CWD),
   ];
   assert.equal(
-    (await collectSessionFiles(legacyRows, CROSS_CWD, false, user.id)).found.size, 0,
-    "没有 run_owner 就退回任务归属人:这两条本来就不在他的目录下,找不到才是对的",
+    (await collectSessionFiles(legacyRows, CROSS_CWD, false)).found.size, 0,
+    "没有 run_owner 的老行按宿主机默认目录找:这两条不在那儿,找不到才是对的",
   );
 
   // ⑤ 「找文件」对了还不够:**读会话元数据**的那条链也得站同一个目录。起跑前的版本守卫
@@ -201,13 +218,15 @@ try {
     "按宿主机默认 CODEX_HOME 读 —— 读不到,这正是漏拦的形状(先跑它,免得缓存喂出假绿)",
   );
   assert.equal(
-    await affectedCodexResumeVersion("codex", GUARD_THREAD, bob.id),
+    await affectedCodexResumeVersion("codex", GUARD_THREAD, bobCodexDir),
     "0.147.0",
-    "按会话的 run_owner 读:受影响的版本必须在起跑前就认出来",
+    "按会话记下的那个配置目录读:受影响的版本必须在起跑前就认出来",
   );
 
   // 会话列表也得读同一个目录,否则界面说「读不出版本」、守卫却在换会话,两套结论。
-  // 这一行**故意不写 run_owner**(老库里就是这样),走的是「回落到任务归属人」那条路。
+  // 这一行**故意不写 cli_config_dir**(那一列上线前的老行就是这样),但写了 run_owner ——
+  // 真实的多人老行正是这个形状:两列是同一批插入点写的,不会只有一半。所以它整条走的是
+  // 老行解析那条路,顺带把「列表 → sessionCliConfigDir → 老行规则」串起来验一遍。
   const { db } = await import("../src/db/index.js");
   const { projects, sessions, tasks } = await import("../src/db/schema.js");
   const { sessionsForTask } = await import("../src/task-session-routes.js");
@@ -222,7 +241,7 @@ try {
   });
   await db.insert(sessions).values({
     id: "s-cli-dir", taskId: "t-cli-dir", role: "single", agentType: "codex", executor: "codex@x",
-    cliSessionId: LIST_THREAD, startedAt: at,
+    cliSessionId: LIST_THREAD, startedAt: at, runOwnerUserId: user.id,
   });
   const listed = await sessionsForTask("t-cli-dir");
   assert.equal(
@@ -230,6 +249,97 @@ try {
     "0.147.0",
     "会话列表要按归属人的 CODEX_HOME 读版本,否则界面与起跑守卫给出两套结论",
   );
+
+  // ⑥ 「CLI 额度」换档(§八之二):同一个人,配置目录整体挪位置,而盘上的会话文件没动。
+  //    这是与④同一堵墙的第三个触发口,但它更阴 —— ④ 换的是人,这里人没变,所以任何
+  //    「按归属人现算一遍」的判据都会一路放行,然后在 CLI 那头硬失败。
+  const { patchAppSettings } = await import("../src/app-settings.js");
+  const { agentBaseEnv } = await import("../src/executors/spawn.js");
+  const { dispatchRejection } = await import("../src/auth/dispatch-gate.js");
+  const { sessionCliConfigDir, sessionResumableHere } = await import("../src/auth/run-env.js");
+  // 起跑那一刻记下的行:目录是隔离档下那个个人目录。
+  const recorded = { cliConfigDir: claudeDir ?? "", runOwnerUserId: user.id };
+
+  process.env.ANTHROPIC_API_KEY = "sk-host-subscription";
+  assert.equal(
+    agentBaseEnv().ANTHROPIC_API_KEY, undefined,
+    "隔离档:宿主机的出站凭证不许透传给 agent(§八)",
+  );
+  assert.ok(
+    await dispatchRejection({ agentType: "claude", owner: user.id }),
+    "隔离档:没挂供应商的执行器派不出去",
+  );
+
+  await patchAppSettings({ sharedHostCli: true });
+  assert.equal(
+    (await runEnvForOwner(user.id, "claude")).CLAUDE_CONFIG_DIR, undefined,
+    "共用档:不注个人配置目录,大家用宿主机那份登录态",
+  );
+  assert.equal(
+    (await runEnvForOwner(user.id, "claude")).GIT_AUTHOR_NAME, "LJ",
+    "共用档:共用额度不等于共用身份,git 署名照样按人注入(审查修订 B6)",
+  );
+  assert.equal(await cliConfigDirForOwner(user.id, "claude"), null, "共用档:现算的答案变成宿主机默认目录");
+  assert.equal(
+    await sessionCliConfigDir(recorded, "claude"), claudeDir,
+    "但**记下来的**那个目录不会跟着变 —— 文件还躺在那儿,判据必须认它",
+  );
+  assert.equal(
+    await sessionResumableHere(recorded, user.id, "claude"), false,
+    "所以这条旧会话接不上:必须另开一条,而不是把注定扑空的 id 交给 CLI --resume",
+  );
+  assert.equal(
+    agentBaseEnv().ANTHROPIC_API_KEY, "sk-host-subscription",
+    "共用档:宿主机的 key 正是大家要烧的那把,清掉等于把这一档关了",
+  );
+  assert.equal(
+    await dispatchRejection({ agentType: "claude", owner: user.id }), null,
+    "共用档:没挂供应商是常态,派发闸必须整条穿透",
+  );
+
+  // ⑦ **老行**(cli_config_dir 上线之前建的会话,这一列是 null)在共用档下怎么解释。
+  //    这是第 1 轮审查的 P1:迁移只 ADD COLUMN 不回填,而老行当初实实在在写在个人目录里。
+  //    「按归属人现算」在这里会回答「宿主机默认目录」,于是老会话被判成接得上,再一次
+  //    撞回本次改动要堵的 "No conversation found"。判据必须是**当时**那条规则。
+  const legacyOwned = { runOwnerUserId: user.id };          // 多人模式下跑过的老行
+  const legacyUnowned = { runOwnerUserId: null };            // 自用模式 / 转换前的老行
+  // 一个从没建过目录的用户 id,专用来验「读」这条路没有 mkdir 副作用。
+  const GHOST = "ghost-never-seeded";
+  const { userCliDir } = await import("../src/auth/user-cli.js");
+  await sessionCliConfigDir({ runOwnerUserId: GHOST }, "claude");
+  assert.equal(
+    await sessionCliConfigDir(legacyOwned, "claude"), claudeDir,
+    "共用档下的老行:当初没有「共用」这一档,跑在谁名下就一定注了谁的个人目录",
+  );
+  assert.equal(
+    await sessionResumableHere(legacyOwned, user.id, "claude"), false,
+    "所以它同样接不上 —— 老行不回填不等于可以按新设置重新解释(第 1 轮 P1)",
+  );
+  assert.equal(
+    await sessionCliConfigDir(legacyUnowned, "claude"), null,
+    "没有归属人的老行才是宿主机默认目录(自用模式,以及自用转多人之前的存量会话)",
+  );
+  assert.equal(
+    await sessionResumableHere(legacyUnowned, null, "claude"), true,
+    "自用模式两边恒为 null,这道闸永远放行,行为与它加入前逐字节一致",
+  );
+
+  await patchAppSettings({ sharedHostCli: false });
+  assert.equal(await cliConfigDirForOwner(user.id, "claude"), claudeDir, "改回隔离档要立刻生效,不能等重启");
+  assert.equal(
+    await sessionResumableHere(recorded, user.id, "claude"), true,
+    "改回来之后那条旧会话又接得上了 —— 文件从头到尾没动过",
+  );
+  assert.equal(
+    await sessionResumableHere(legacyOwned, user.id, "claude"), true,
+    "隔离档下老行照常续跑:这一列上线前后行为不变,不能因为没回填就把人挡在外面",
+  );
+  assert.ok(
+    !existsSync(userCliDir(GHOST, "claude")),
+    "问「旧文件在哪」不许有副作用:解释老行时不能顺手 mkdir 出一套没人读的个人目录",
+  );
+  assert.equal(agentBaseEnv().ANTHROPIC_API_KEY, undefined, "同步镜像也得跟着回来(spawn 走的是它)");
+  delete process.env.ANTHROPIC_API_KEY;
 
   console.log("test-handoff-cli-config-dir: OK");
 } catch (error) {

@@ -149,6 +149,7 @@ export function mountAuthRoutes(api: Hono): void {
       dirName?: string;
       gitName?: string;
       gitEmail?: string;
+      sharedHostCli?: boolean;
     }>().catch(() => ({} as Record<string, never>));
 
     if (body.mode === "single") {
@@ -190,7 +191,10 @@ export function mountAuthRoutes(api: Hono): void {
       return c.json({ error: (error as Error).message }, ((error as { status?: number }).status ?? 500) as 500);
     }
     try {
-      await setInstanceMode("multi", rootDir);
+      // CLI 额度那一档在这里定初值(§八之二)。**只在真正的首次转换时写**:补做那一遍
+      // (resuming)不该把上次选的覆盖成表单默认值 —— 那一屏问的是「把管理员补出来」,
+      // 不是「重选一遍额度模式」。之后随时能在「设置 → 实例模式」里改。
+      await setInstanceMode("multi", rootDir, resuming ? undefined : body.sharedHostCli === true);
     } catch (error) {
       // 根目录锁死(补做时填了另一个路径)是这里唯一的可预期失败,如实回它的原话。
       return c.json({ error: (error as Error).message }, 409);

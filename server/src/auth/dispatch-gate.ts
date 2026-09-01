@@ -8,14 +8,17 @@
 // ① 的判据挂在「catalog 里有没有 relay 实现」上,**不写死名单**(计划明确要求):
 // 将来某个 CLI 接上 relay,它自动解禁,这里一行都不用改。
 //
-// 自用模式下这两条一律不成立 —— 那条路走宿主订阅,行为与本功能上线前逐字节一致。
+// **整道闸只在隔离档下成立**:实例选了「共用宿主机 CLI」(§八之二)时宿主登录态就是
+// 大家在用的那份,没挂供应商恰恰是常态,这里必须整条穿透 —— 判据统一问
+// `isHostCliIsolated()`,不是 `isMultiUser()`。自用模式下同样一律不成立,行为与本
+// 功能上线前逐字节一致。
 import { eq, isNull } from "drizzle-orm";
 import type { AgentType, ExecutorDowngradeItem, ExecutorSlot } from "@ash/shared";
 import { MULTI_USER_CLI_BLOCKED, MULTI_USER_NO_PROVIDER_HINT } from "@ash/shared/multiuser";
 import { db } from "../db/index.js";
 import { agents } from "../db/schema.js";
 import { cliSpec } from "../executors/catalog/index.js";
-import { isMultiUser } from "./mode.js";
+import { isHostCliIsolated, isMultiUser } from "./mode.js";
 
 /** 这个 CLI 接了供应商注入吗。 */
 export function cliSupportsRelay(type: string): boolean {
@@ -47,7 +50,7 @@ export async function dispatchRejection(input: {
   /** 这一轮按谁的执行器跑;不传 = 不收窄(自用模式或还没接这一层的调用点)。 */
   owner?: string | null;
 }): Promise<string | null> {
-  if (!(await isMultiUser())) return null;
+  if (!(await isHostCliIsolated())) return null;
   if (!cliSupportsRelay(input.agentType)) return MULTI_USER_CLI_BLOCKED(input.agentType);
   if (input.executorId) {
     const row = (await db.select().from(agents).where(eq(agents.id, input.executorId))).at(0);

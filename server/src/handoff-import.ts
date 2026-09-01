@@ -374,6 +374,10 @@ async function importValidated(
     // 会话文件刚被写进**这个人**的 CLI 配置目录(上面的 cliDirs),之后的回合默认也按他跑。
     // 不盖这个戳,任务再接力出去时导出侧只能退回猜任务归属人。
     runOwnerUserId: context.ownerUserId ?? null,
+    // 目录本身也钉下来:文件确实就落在 cliDirs 这两个里(writePayloadFiles 用的同一份)。
+    // 之后实例把「CLI 额度」换了档,按归属人现算会给出另一个目录,而文件还在这儿 ——
+    // 记着才判得出「这条接不上了,开新会话」而不是把一个必然扑空的 id 交给 CLI。
+    cliConfigDir: (s.agentType === "codex" ? cliDirs.codex : cliDirs.claude) ?? "",
     commandLine: s.commandLine,
     startedAt: s.startedAt,
     endedAt: s.endedAt,

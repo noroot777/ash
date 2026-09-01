@@ -14,11 +14,14 @@ import "./personal-cli-settings.css";
 export function PersonalCliSettings({ notify }: { notify: (message: string) => void }) {
   const [envs, setEnvs] = useState<PersonalCliEnv[]>([]);
   const [mode, setMode] = useState<"single" | "multi" | null>(null);
+  // 实例选了「共用宿主机 CLI」时这一整节**不生效**:CLI 起跑时压根没被注入个人配置目录。
+  const [sharedHostCli, setSharedHostCli] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const result = await personalCliApi.list();
       setMode(result.mode);
+      setSharedHostCli(result.sharedHostCli);
       setEnvs(result.envs);
     } catch (e) {
       notify(e instanceof ApiError ? e.message : "读不出个人 CLI 环境");
@@ -50,6 +53,18 @@ export function PersonalCliSettings({ notify }: { notify: (message: string) => v
           <code>.claude/skills</code>、<code>CLAUDE.md</code> 两层并存 —— 那一层照旧跟项目走。
         </p>
       </header>
+      {/* 目录还在盘上、编辑器也还能写,但 CLI 不会去读它 —— 不说清楚的话,用户会在这里
+          装一个技能然后发现补全里没有,而界面上一切正常。 */}
+      {sharedHostCli ? (
+        <div className="auth-warning auth-warning--strong">
+          <b>这一节现在不生效。</b>
+          这台 ash 的「CLI 额度」设成了<b>共用这台机器的 CLI</b>，所以任务跑的是宿主机的{" "}
+          <code>~/.claude</code>、<code>~/.codex</code>，不是下面这些个人目录 ——
+          在这里装的技能、写的全局指令，CLI 都读不到。
+          下面的内容原样留着（改回「每人自带 key」立刻恢复生效）；
+          现在要让全员都用上某个技能，装到宿主机的配置目录里。
+        </div>
+      ) : null}
       {envs.map((env) => (
         <CliEnvBlock key={env.agentType} env={env} onChanged={setEnvsOf(setEnvs)} notify={notify} />
       ))}

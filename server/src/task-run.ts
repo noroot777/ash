@@ -35,7 +35,7 @@ import { reportTurnFailure } from "./turn-failure.js";
 import { AUTONOMY, COMPLETION_PROTOCOL, DIRECTION_PROTOCOL } from "./run-prompts.js";
 import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
-import { runEnvForOwner } from "./auth/run-env.js";
+import { cliConfigDirColumn, runEnvForOwner } from "./auth/run-env.js";
 
 // 单任务的 **fresh run**:从任务描述起一条全新会话。续聊/召唤那一路(resume 已有会话、
 // 把用户原话送进去)在 orchestrator.ts 的 continueTask —— 两条路的前置条件、prompt 拼法
@@ -187,6 +187,9 @@ export async function runTask(
       executor: ex.label,
       // 这一轮跑在谁名下(= 上面 runEnvForOwner 注入的那个人)。接力搬会话文件按它找。
       runOwnerUserId: runOwner ?? null,
+      // 以及那一刻**实际**注进去的配置目录。归属人算得出它,但答案会随实例的「CLI 额度」
+      // 设置整体挪位置,而盘上的 transcript 不会 —— 记下来才接得回去(见 db/schema.ts)。
+      cliConfigDir: await cliConfigDirColumn(runOwner, agentType),
       // 这一轮真正跑在哪条 profile、哪个模型/思考强度上（见 db/schema.ts 的同名列）：
       // 「原样再跑一遍上一回合」只认它们，不认可改名的展示名，也不认任务此刻的配置。
       executorId: profileId,

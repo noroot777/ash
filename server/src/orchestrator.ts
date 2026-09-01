@@ -36,7 +36,7 @@ import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { reportTurnFailure } from "./turn-failure.js";
-import { runEnvForOwner, sameCliConfigDir } from "./auth/run-env.js";
+import { cliConfigDirColumn, runEnvForOwner, sessionCliConfigDir, sessionResumableHere } from "./auth/run-env.js";
 import { takeResumePrompt } from "./task-resume-prompt.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
 import {
@@ -300,9 +300,11 @@ export async function continueTask(
     // 去 B 的 CLAUDE_CONFIG_DIR 里 --resume,CLI 只会回一句 "No conversation found" ——
     // 与 2026-08-29 那次接力事故同一堵墙,换了个触发口。判据在 auth/run-env.ts
     // (自用模式两边恒为 null,这一层永远放行,行为不变)。
-    // 存量会话没有这一列,回落到任务归属人:它们本来就是按归属人跑的。
+    // 第二个触发口是实例把「CLI 额度」换了档(共用宿主 CLI ⇄ 每人自带 key):人没变,
+    // 目录整体挪了位置。所以比的是**会话行记下的那个目录**,不是按归属人现算一遍。
+    // 存量会话没有这两列,回落到任务归属人:它们本来就是按归属人跑的。
     const resumableHere = async (s: typeof all[number]) =>
-      !s.cliSessionId || await sameCliConfigDir(s.runOwnerUserId ?? task.ownerUserId, runOwner, agent);
+      !s.cliSessionId || await sessionResumableHere(s, runOwner, agent);
     // 指名道姓要续哪一条会话行（「重跑上一回合」）：按 agentType+role 挑会在同一位
     // 智能体有多条会话时挑错人，而重投必须落回**崩掉的那一条**，否则等于换个人重说。
     const candidates = opts.freshSession
@@ -320,10 +322,11 @@ export async function continueTask(
         text: CROSS_OWNER_SESSION_NOTE,
       });
     }
-    // 版本守卫要去**开这条会话的那个人**的 CODEX_HOME 里读 rollout(老行没这一列就回落
-    // 到任务归属人)——不传等于按宿主机默认目录找,多用户模式下必然扑空、静默放行。
+    // 版本守卫要去**这条会话的 rollout 实际写在的那个目录**里读(会话行记着;老行回落到
+    // 按归属人现算)——不传等于按宿主机默认目录找,隔离档下必然扑空、静默放行。
     const affectedSessionVersion = await affectedCodexResumeVersion(
-      agent, prev?.cliSessionId, prev?.runOwnerUserId ?? task.ownerUserId,
+      agent, prev?.cliSessionId,
+      prev ? await sessionCliConfigDir(prev, agent) : null,
     );
     if (prev && affectedSessionVersion) {
       // 说明必须先持久写进旧会话，凭据后清；否则下面任一 await 抛错都会留下一个
@@ -488,6 +491,9 @@ export async function continueTask(
           // 这一轮跑在谁名下 —— 跨人续聊会换人(runOwner 上面刚算过),而 CLI 的会话
           // 文件跟着这个人的配置目录走。不刷新,接力就会去上一个人的目录里找。
           runOwnerUserId: runOwner ?? null,
+          // 目录本身跟着一起刷新。走到这一支说明它与记下来的那个相同(不同的话
+          // resumableHere 早把这条会话排除了),刷新只是不让这一列停在老值上。
+          cliConfigDir: await cliConfigDirColumn(runOwner, agent),
           // 回合保真四件套整组刷新（说明见 db/schema.ts）：profile / 环境指纹 / 模型 /
           // 思考强度都可能在两轮之间被改，留着上一轮的值就会让重试按着别人的配置跑。
           executorId: profileId,
@@ -519,6 +525,7 @@ export async function continueTask(
         agentType: agent,
         executor: ex.label,
         runOwnerUserId: runOwner ?? null,
+        cliConfigDir: await cliConfigDirColumn(runOwner, agent),
         executorId: profileId,
         executorFingerprint: profileFingerprint,
         turnModel: ex.model ?? null,

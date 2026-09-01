@@ -12,20 +12,29 @@ import { db } from "../db/index.js";
 import { users } from "../db/schema.js";
 import { expandHome } from "../git.js";
 import { isInsidePath, windowsPathRejection } from "../platform.js";
-import { setMultiUserFlag } from "./multi-flag.js";
+import { setHostCliIsolatedFlag, setMultiUserFlag } from "./multi-flag.js";
 // 「登录得进来」的判据只有 store.ts 那一份 —— 这里和最后管理员保护问的是同一件事。
 import { canSignIn } from "./store.js";
 
-let cached: { mode: InstanceMode | ""; rootDir: string } | null = null;
+let cached: { mode: InstanceMode | ""; rootDir: string; sharedHostCli: boolean } | null = null;
 // 见 needsSetup:一旦见过能登录的人就不再查库(authGate 每个请求都要问一次)。
 let sawLoginableUser = false;
 
-export async function instanceConfig(): Promise<{ mode: InstanceMode | ""; rootDir: string }> {
+export async function instanceConfig(): Promise<{
+  mode: InstanceMode | "";
+  rootDir: string;
+  sharedHostCli: boolean;
+}> {
   if (cached) return cached;
   const settings = await getAppSettings();
-  cached = { mode: settings.instanceMode, rootDir: settings.rootDir };
-  // spawn 那条同步路径靠这一位判断要不要清出站凭证(见 multi-flag.ts)。
+  cached = {
+    mode: settings.instanceMode,
+    rootDir: settings.rootDir,
+    sharedHostCli: settings.sharedHostCli,
+  };
+  // spawn 那条同步路径靠这两位判断要不要清出站凭证 / 走谁的配置目录(见 multi-flag.ts)。
   setMultiUserFlag(cached.mode === "multi");
+  setHostCliIsolatedFlag(cached.mode === "multi" && !cached.sharedHostCli);
   return cached;
 }
 
@@ -37,6 +46,27 @@ export function invalidateInstanceConfig(): void {
 /** 多人模式?这是所有闸的总开关。 */
 export async function isMultiUser(): Promise<boolean> {
   return (await instanceConfig()).mode === "multi";
+}
+
+/**
+ * 「宿主机那份 CLI 登录态对任务算不算数」—— §八 的那一整套隔离(每人一个配置目录、
+ * spawn 清出站凭证、执行器必须挂供应商、模型清单不问宿主机)统一挂这一条判据上。
+ *
+ * **别再拿 `isMultiUser()` 当隔离判据**:多人模式只说明「有几个人在用」,而隔不隔离
+ * 是另一回事 —— 几个人合买一份官方订阅、共用宿主机 CLI 是完全正当的用法(§八之二)。
+ * 两件事混在一句 `mode === "multi"` 里,就没有地方能把它们分开。
+ *
+ * 自用模式恒为 false,那条路的行为与本功能上线前逐字节一致。
+ */
+export async function isHostCliIsolated(): Promise<boolean> {
+  const config = await instanceConfig();
+  return config.mode === "multi" && !config.sharedHostCli;
+}
+
+/** 多人模式下大家共用宿主机的 CLI 额度吗。自用模式恒为 false(那时没有「共用」可言)。 */
+export async function isHostCliShared(): Promise<boolean> {
+  const config = await instanceConfig();
+  return config.mode === "multi" && config.sharedHostCli;
 }
 
 /**
@@ -71,8 +101,15 @@ export async function rootDirOf(): Promise<string> {
  * 之所以要放行 multi→multi:转换中途崩掉的实例(模式已落、管理员没建出来)只能靠
  * 重走一遍向导救回来,而那一遍必然会再写一次同样的模式。根目录仍然锁死,所以这条
  * 补做路径改不了任何已定的东西。
+ *
+ * `sharedHostCli` 是**转多人时选的初值**(§八之二),不锁死 —— 之后走
+ * `PATCH /api/settings` 随时能改。不传 = 不动它(补做那一遍不该把上次选的覆盖掉)。
  */
-export async function setInstanceMode(mode: InstanceMode, rootDir: string): Promise<void> {
+export async function setInstanceMode(
+  mode: InstanceMode,
+  rootDir: string,
+  sharedHostCli?: boolean,
+): Promise<void> {
   const current = await instanceConfig();
   if (current.mode === "multi" && mode !== "multi") throw new Error("多人模式不能转回自用模式");
   if (mode === "multi") {
@@ -80,6 +117,7 @@ export async function setInstanceMode(mode: InstanceMode, rootDir: string): Prom
       throw new Error("根目录设定后锁死，不能修改（一改所有已建项目路径失效）");
     }
     await writeSystemSetting("rootDir", rootDir);
+    if (sharedHostCli !== undefined) await writeSystemSetting("sharedHostCli", sharedHostCli);
   }
   await writeSystemSetting("instanceMode", mode);
   invalidateInstanceConfig();

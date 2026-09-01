@@ -9,6 +9,7 @@
 
 import { mkdirSync, createWriteStream, appendFileSync } from "node:fs";
 import { join } from "node:path";
+import { finished } from "node:stream/promises";
 import { eq, sql } from "drizzle-orm";
 import type { DuetSpeaker, SessionRole, TurnTraceEvent } from "@ash/shared";
 import { db } from "../db/index.js";
@@ -29,7 +30,7 @@ import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
 import { isSessionScopeNotice, announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "../session-notice.js";
-import { runEnvForOwner, sameCliConfigDir } from "../auth/run-env.js";
+import { cliConfigDirColumn, runEnvForOwner, sessionResumableHere } from "../auth/run-env.js";
 import { recordTurnStart } from "./timeline.js";
 
 const RAISE_RE = /(^|\n)\s*\[可收敛\]/;
@@ -51,6 +52,12 @@ export function reusedSessionPatch(
   commandLine: string,
   cliSessionId: string,
   runOwnerUserId: string | null = null,
+  // **故意做成必填**,理由与上面 runOwner 那条同源:给它一个默认值,下一处新加的发言
+  // 漏传时不会报错,而是把这条复用行的 cli_config_dir 悄悄写成 null —— null 在读侧
+  // 正好等于「这一列上线前的老行」,于是那条会话的目录改按 run_owner 反推,在共用档下
+  // 反推出一个从没写过东西的个人目录,直接把第 1 轮刚堵上的 "No conversation found"
+  // 放回来,而且从产出上完全看不出来。必填 = 编译期就得回答「这一轮写在哪」。
+  cliConfigDir: string | null,
 ) {
   return {
     commandLine,
@@ -60,6 +67,9 @@ export function reusedSessionPatch(
     // 「会话文件此刻在哪」的一部分:跨人回合换了人,transcript 就换到那个人的配置目录下,
     // 不刷新的话接力会去上一个人的目录里扑空。
     runOwnerUserId,
+    // 以及那个目录本身(`""` = 宿主机默认目录)。同一个人的目录会随实例的「CLI 额度」
+    // 设置整体挪位置,光有「谁」推不出「当初写在哪」—— 说明见 db/schema.ts 同名列。
+    cliConfigDir,
     // id 本身也在这份补丁里,不能只写由它派生的那三件套:上一轮若因会话失效被清成 null
     // (LOST_SESSION_PATCH),这一轮开出来的新 id 就只活在内存里 —— 带 newIdFlag 的 CLI
     // 回报的 session 事件与本地 cliId 相同,下面那个 `!==` 分支不会触发,库里于是永远是
@@ -125,21 +135,29 @@ export async function runTurn(args: {
   // 换人接手:门禁能等很久,这期间**换个人点「继续」**是常规操作(runOwner 跟着点的
   // 那个人走)。而这条会话的 transcript 躺在原来那位的 CLI 配置目录里,拿到这一轮的
   // 环境里 --resume 只会扑空 —— 判据与单飞同源(auth/run-env.ts),自用模式恒不触发。
+  // 同一堵墙的第二个触发口:实例把「CLI 额度」换了档,人没变、目录整体挪了位置。
   // 接不上就**另开一条会话行**,不是把旧行改写成新人的:旧行原样留着,原来那位再回来
   // 时还能从自己那条接着跑(这一点与上面的版本闸不同 —— 那条会话是真的坏了)。
-  if (resumeCliId && reuseRowId) {
-    const owner = (await db.select({ o: sessions.runOwnerUserId }).from(sessions).where(eq(sessions.id, reuseRowId))).at(0);
-    if (owner && !(await sameCliConfigDir(owner.o, args.runOwner, executor.type))) {
-      await announceSessionNote({
-        taskId, sessionId: reuseRowId, role, agentType: executor.type, text: CROSS_OWNER_SESSION_NOTE,
-      });
-      resumeCliId = undefined;
-      reuseRowId = undefined;
-    }
+  const reusedRow = resumeCliId && reuseRowId
+    ? (await db
+        .select({ cliConfigDir: sessions.cliConfigDir, runOwnerUserId: sessions.runOwnerUserId })
+        .from(sessions)
+        .where(eq(sessions.id, reuseRowId))).at(0)
+    : undefined;
+  if (reuseRowId && reusedRow
+      && !(await sessionResumableHere(reusedRow, args.runOwner, executor.type))) {
+    await announceSessionNote({
+      taskId, sessionId: reuseRowId, role, agentType: executor.type, text: CROSS_OWNER_SESSION_NOTE,
+    });
+    resumeCliId = undefined;
+    reuseRowId = undefined;
   }
   // 走到这里 resumeCliId 若还在,它就是**这一轮这个人**自己那条(跨人的已在上面另开),
-  // 所以 rollout 按 args.runOwner 的 CODEX_HOME 去找。
-  const affectedSessionVersion = await affectedCodexResumeVersion(executor.type, resumeCliId, args.runOwner);
+  // 所以 rollout 按这一轮的配置目录去找。
+  const turnConfigDir = await cliConfigDirColumn(args.runOwner, executor.type);
+  const affectedSessionVersion = await affectedCodexResumeVersion(
+    executor.type, resumeCliId, turnConfigDir || null,
+  );
   if (affectedSessionVersion) {
     if (reuseRowId) {
       versionReplacementNotice = await announceAffectedSessionReplacement({
@@ -182,7 +200,7 @@ export async function runTurn(args: {
       agentType: executor.type,
       // 开新行和复用旧行共用同一份「随执行器/工作目录走」的列,免得两条分支各写各的、
       // 时间一长只有一边跟得上(finding 6 就是这么来的)。
-      ...reusedSessionPatch(executor, cwd, handle.commandLine, cliId, args.runOwner ?? null),
+      ...reusedSessionPatch(executor, cwd, handle.commandLine, cliId, args.runOwner ?? null, turnConfigDir),
       worktreePath: args.branch ? cwd : null,
       branch: args.branch ?? null,
       cliSessionId: cliId,
@@ -197,7 +215,7 @@ export async function runTurn(args: {
     // end, so the gate wait is excluded from execution time.
     await db
       .update(sessions)
-      .set({ turnStartedAt: turnStart, endedAt: null, ...reusedSessionPatch(executor, cwd, handle.commandLine, cliId, args.runOwner ?? null) })
+      .set({ turnStartedAt: turnStart, endedAt: null, ...reusedSessionPatch(executor, cwd, handle.commandLine, cliId, args.runOwner ?? null, turnConfigDir) })
       .where(eq(sessions.id, rowId));
   }
 
@@ -212,6 +230,11 @@ export async function runTurn(args: {
   const runDir = join(RUNS_DIR, taskId);
   mkdirSync(runDir, { recursive: true });
   const out = createWriteStream(join(runDir, `${rowId}.md`), { flags: "a" });
+  // 这条流在**整个回合**里一直开着(CLI 跑多久它开多久)。stream 上没人听的 'error'
+  // 会直接掀掉进程,而 transcript 写不进去(盘满、worktree 被删、目录没权限)不该连累
+  // 这一轮的结算 —— 先接住,回合末尾统一记一笔。
+  let outFailure: unknown = null;
+  out.on("error", (e) => { outFailure ??= e; });
   out.write(`\n\n### 第 ${round} 轮 · ${speaker}\n`);
 
   let text = "";
@@ -305,6 +328,12 @@ export async function runTurn(args: {
   // 'error' 事件('ERR_STREAM_WRITE_AFTER_END'),会当场把整个 server 打崩 —— 而且只在
   // 会话失效这条冷路径上崩,正常跑一百遍都碰不到。(第 1 轮审查 P1)
   out.end();
+  // `end()` 只是「我不写了」,不等于落盘 —— 文件可能连 open 都还没完成。必须等它真结束
+  // 再返回:调用方拿到结果后随时会去读这份 transcript,而在那之前流才 open 失败的话,那个
+  // 'error' 就成了回合之外的一颗雷,炸在谁头上全看时序(第 2 轮审查 P2:测试删掉 runs
+  // 目录后进程被它打掉,断言明明全过了还是 exit 1)。
+  await finished(out).catch(() => { /* 具体原因在 outFailure 里,下面统一报 */ });
+  if (outFailure) console.warn(`[ash] duet 这一轮的 transcript 没写成 (${rowId}):`, outFailure);
   await db
     .update(sessions)
     .set({

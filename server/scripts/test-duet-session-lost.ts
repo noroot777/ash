@@ -413,6 +413,15 @@ const crossTurn = await duet.runTurn({
   prompt: "继续", cwd: stage, rowId: "row-alice", resumeCliId: ALICE_CLI,
 });
 assert.deepEqual(handed, [undefined], `别人的会话 id 不能交给这一轮的 CLI,实际交了 ${handed[0]}`);
+// 回合**返回时** transcript 必须已经落盘 —— runTurn 里的 out.end() 只是「不写了」,
+// 不 await 它真正结束的话,这个文件此刻可能连 open 都没完成。那个没人听的 'error'
+// 之后炸在谁头上全看时序:这里表现为「断言全过了还是 exit 1」(第 2 轮审查 P2),
+// 在生产里则是删任务/清理工作目录时把 server 掀掉。不轮询,要的就是「已经好了」。
+const crossMd = join(process.env.ASH_RUNS_DIR!, crossTaskId, `${crossTurn.rowId}.md`);
+assert.ok(
+  readFileSync(crossMd, "utf8").includes("换人之后接着说。"),
+  "runTurn 返回时这一轮的 .md 必须已经写完,不能把没关的流丢给调用方",
+);
 assert.notEqual(crossTurn.rowId, "row-alice", "接不上就该另开一条会话行");
 const [aliceRow] = await db.select().from(sessions).where(eq(sessions.id, "row-alice"));
 assert.equal(aliceRow.cliSessionId, ALICE_CLI, "原来那位的会话 id 不许被这一轮改写");

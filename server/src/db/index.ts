@@ -426,6 +426,10 @@ export async function ensureSchema() {
     // 这一轮实际跑在谁名下(= 注入 CLAUDE_CONFIG_DIR/CODEX_HOME 的那个人)。接力搬会话
     // 文件按它找,不按任务归属人 —— 跨人回合两者不是一回事(见 db/schema.ts 同名列)。
     "ALTER TABLE sessions ADD COLUMN run_owner_user_id TEXT",
+    // 这一轮**注进去的那个配置目录**本身。归属人算得出目录,但目录会随实例设置整体
+    // 挪位置(「CLI 额度」共用 ⇄ 隔离),所以「这条会话的文件在哪」只能记下来,不能现算
+    // (见 db/schema.ts 同名列)。老行为 null,读侧回落到按归属人现算。
+    "ALTER TABLE sessions ADD COLUMN cli_config_dir TEXT",
     // 入站接力来源:谁批的 + 对端自报的实例模式(§十一 知情批准)。
     "ALTER TABLE handoff_peers ADD COLUMN approved_by TEXT",
     "ALTER TABLE handoff_peers ADD COLUMN peer_mode TEXT NOT NULL DEFAULT ''",

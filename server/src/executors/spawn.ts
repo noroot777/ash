@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough, Readable } from "node:stream";
 import { IS_WINDOWS, isPidAlive, killOne, killTree, listProcesses } from "../platform.js";
-import { isMultiUserSync } from "../auth/multi-flag.js";
+import { isHostCliIsolatedSync } from "../auth/multi-flag.js";
 import { augmentedEnv, resolveBin, resolveLaunch } from "./bin-resolve.js";
 
 // PATH 补全与命令名解析住在 bin-resolve.ts(Windows 的 PATHEXT / `.cmd` 垫片够写
@@ -17,6 +17,9 @@ export type { LaunchPlan } from "./bin-resolve.js";
 // ── 多人模式:server 进程自己的出站凭证不透传给 agent(docs/multi-user-plan.md §八)──
 // 宿主机上跑着的 ash 很可能自带 ANTHROPIC_API_KEY 之类;不删的话,一个「没挂供应商」
 // 的执行器照样能花到宿主的钱,「抹去宿主订阅」整节就是空的。
+//
+// 判据是**隔离**而不是「多人」:开了「共用宿主机 CLI」的实例(§八之二)本来就是几个人
+// 合烧一份宿主额度,那时宿主环境里的 key 正是他们要用的那把,清掉等于把功能关了。
 //
 // 顺序很关键:这一层是**基座**,供应商注入(executor.env() 的 relay)与回合身份
 // (opts.env)都拼在它后面,所以挂了供应商的执行器仍然拿得到自己的 key —— 清掉的
@@ -33,12 +36,12 @@ const SCRUBBED_OUTBOUND_ENV = [
 ] as const;
 
 /**
- * 起 agent CLI 用的基座环境。自用模式下与 `augmentedEnv()` 逐字节相同 ——
- * 那条路的行为必须与本功能上线前一致(§二)。
+ * 起 agent CLI 用的基座环境。自用模式、以及多人但共用宿主 CLI 时,与 `augmentedEnv()`
+ * 逐字节相同 —— 那两条路的行为必须与隔离功能上线前一致(§二 / §八之二)。
  */
 export function agentBaseEnv(): NodeJS.ProcessEnv {
   const env = augmentedEnv();
-  if (!isMultiUserSync()) return env;
+  if (!isHostCliIsolatedSync()) return env;
   for (const key of SCRUBBED_OUTBOUND_ENV) delete env[key];
   return env;
 }

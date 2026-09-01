@@ -24,7 +24,7 @@ import { CLI_MODEL_PRESETS } from "@ash/shared/cli-presets";
 import { probeBins } from "./bin-probe.js";
 import { CLI_SPEC_BY_KEY } from "./catalog/index.js";
 import { execFileText as exec } from "../exec.js";
-import { isMultiUser } from "../auth/mode.js";
+import { isHostCliIsolated } from "../auth/mode.js";
 
 /** 探测结果的保鲜期。到点后下一次读取会**等**一次重探(不做后台预热那套复杂度)。 */
 const TTL_MS = 6 * 60 * 60 * 1000;
@@ -156,14 +156,16 @@ function fresh(entry: CacheEntry | undefined): boolean {
  * 缓存未命中时**等**探测结果(第一次打开选择器要多等几百毫秒,但拿到的是真清单);
  * 命中且未过期直接返回;过期则重探 —— 探测本身很便宜,不做后台预热那套复杂度。
  *
- * 多人模式下**一次都不问宿主机 CLI**(§八「宿主机 CLI 订阅彻底抹去」):`grok models`
+ * 隔离档下**一次都不问宿主机 CLI**(§八「宿主机 CLI 订阅彻底抹去」):`grok models`
  * 这类命令问的是宿主机那个登录账号,而那正是被隔离掉的东西 —— 执行器必须挂自己的
  * 供应商才跑得起来,模型候选也就该来自供应商。留着这条路的代价是实打实的:任何一个
  * 登录用户 POST 一次 refresh,就能让 server 用**自己进程的环境**(里面带着宿主的
  * ANTHROPIC_API_KEY / XAI_API_KEY 之类)起一个 CLI 子进程,并把宿主账号的模型清单
  * 端出来(第 2 轮审查 P1)。
+ * 实例选了「共用宿主机 CLI」(§八之二)时这条不适用:那时宿主账号本来就是大家在用的
+ * 账号,它能跑哪些模型正是要显示的答案。所以判据是 `isHostCliIsolated()` 而不是模式。
  *
- * 这道判据排在**读缓存之前**:自用模式下探到的实时清单会在缓存里躺 6 小时,转成多人
+ * 这道判据排在**读缓存之前**:自用模式下探到的实时清单会在缓存里躺 6 小时,转成隔离档
  * 之后不能继续被端出来。它自己也不写缓存 —— 那不是探测结果,没有保鲜期可言。
  * 但登记 inflight 仍然是**同步**的(判据在 request 链里而不是函数开头),否则并发去重
  * 与「陈旧探测不许覆盖新结果」两条都会因为多了一个 await 而失效。
@@ -172,9 +174,9 @@ export function modelCatalogFor(type: AgentType, force = false): Promise<CliMode
   const running = inflight.get(type);
   if (running && !force) return running;
 
-  const request: Promise<CliModelCatalog> = isMultiUser()
-    .then(async (multi): Promise<{ catalog: CliModelCatalog; probed: boolean }> => {
-      if (multi) {
+  const request: Promise<CliModelCatalog> = isHostCliIsolated()
+    .then(async (isolated): Promise<{ catalog: CliModelCatalog; probed: boolean }> => {
+      if (isolated) {
         // 只有本来就会去问的那几家才谈得上「没去问」;没有清单命令的 CLI 在两种模式下
         // 拿到的是同一份快照,给它挂一句多人模式的说明只会平白多出一行噪音。
         const wouldProbe = !!CLI_SPEC_BY_KEY[type]?.models;

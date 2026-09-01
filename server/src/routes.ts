@@ -61,7 +61,7 @@ import { patchSettingsFor, settingsForActor } from "./auth/personal-settings.js"
 import { makeEventFilter } from "./auth/event-filter.js";
 import { visibleProjectIds } from "./auth/visibility.js";
 import { canUseOwned, filterOwned, notYours, ownerStamp } from "./auth/owned.js";
-import { isMultiUser } from "./auth/mode.js";
+import { isHostCliIsolated } from "./auth/mode.js";
 import { clearDefaultFor, dispatchBlockReason } from "./auth/dispatch-gate.js";
 
 export const api = new Hono();
@@ -214,14 +214,15 @@ const toAgent = (r: typeof agents.$inferSelect) => ({
 });
 
 // 执行器是**个人面**资源(§八):每人自带供应商 key,别人的执行器既看不见也用不了。
-// 多人模式下再叠一层「能不能派发」的标注(dispatchBlocked),前端据此把它标灰 ——
+// 隔离档下再叠一层「能不能派发」的标注(dispatchBlocked),前端据此把它标灰 ——
 // 宿主机订阅被抹去后,没接 relay 的 CLI 与没挂供应商的执行器都跑不起来。
+// 实例选了「共用宿主机 CLI」时这一层整个不加:那时没挂供应商恰恰是常态。
 api.get("/agents", async (c) => {
   const rows = await filterOwned(await db.select().from(agents), actorOf(c));
-  const multi = await isMultiUser();
+  const gated = await isHostCliIsolated();
   return c.json(rows.map((r) => ({
     ...toAgent(r),
-    ...(multi ? { dispatchBlocked: dispatchBlockReason(r.type, r.providerId) } : {}),
+    ...(gated ? { dispatchBlocked: dispatchBlockReason(r.type, r.providerId) } : {}),
   })));
 });
 

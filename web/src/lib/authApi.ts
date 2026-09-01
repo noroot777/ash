@@ -43,6 +43,8 @@ export const authApi = {
     dirName?: string;
     gitName?: string;
     gitEmail?: string;
+    /** CLI 额度:true = 共用宿主机 CLI,false/缺省 = 每人自带 key(§八之二)。 */
+    sharedHostCli?: boolean;
   }) =>
     request<{ key: string; user: UserView; claimed: Record<string, number>; rootDir: string }>(
       "/auth/setup",
@@ -109,7 +111,8 @@ export const fsBrowseApi = {
 };
 
 export const personalCliApi = {
-  list: () => request<{ mode: "single" | "multi"; envs: PersonalCliEnv[] }>("/me/cli-env"),
+  list: () =>
+    request<{ mode: "single" | "multi"; sharedHostCli: boolean; envs: PersonalCliEnv[] }>("/me/cli-env"),
   one: (agentType: string) => request<PersonalCliEnv>(`/me/cli-env/${id(agentType)}`),
   readSkill: (agentType: string, name: string) =>
     request<{ name: string; body: string }>(`/me/cli-env/${id(agentType)}/skills/${id(name)}`),
