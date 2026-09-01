@@ -5,6 +5,7 @@ import type { ReviewFileTarget } from "../components/markdownPolicy.ts";
 import { api } from "../lib/api.ts";
 import { ReviewNote } from "../review/ReviewNote.tsx";
 import type { ConversationReviewLane, ReviewLaneConclusion } from "./conversationReviewLanes.ts";
+import type { SystemNoticeMode } from "./systemNoticeModel.ts";
 import { durationBetween, formatInstant } from "./utils.ts";
 
 function stateOf(conclusion: ReviewLaneConclusion, complete: boolean) {
@@ -37,10 +38,12 @@ export function ReviewerLane({
   taskId,
   lane,
   children,
+  noticeMode = "footnote",
 }: {
   taskId: string;
   lane: ConversationReviewLane;
   children: ReactNode;
+  noticeMode?: SystemNoticeMode;
 }) {
   const defaultCollapsed = lane.repairHandoff ? true : lane.defaultCollapsed;
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
@@ -72,7 +75,7 @@ export function ReviewerLane({
   if (lane.repairHandoff) {
     const handoff = lane.repairHandoff.text;
     return (
-      <article className={`verify-lane verify-lane--repair${bodyHidden ? " is-collapsed" : ""}`} aria-label={lane.title}>
+      <article className={`verify-lane verify-lane--repair notice-mode-${noticeMode}${bodyHidden ? " is-collapsed" : ""}`} aria-label={lane.title}>
         <span className="verify-repair-mark" aria-hidden="true"><ShieldCheck size={14} weight="fill" /></span>
         <div className="verify-repair-main">
           <header className="verify-repair-head">
@@ -127,7 +130,7 @@ export function ReviewerLane({
   }
 
   return (
-    <article className={`verify-lane${bodyHidden ? " is-collapsed" : ""}`} aria-label={lane.title}>
+    <article className={`verify-lane notice-mode-${noticeMode}${bodyHidden ? " is-collapsed" : ""}`} aria-label={lane.title}>
       <header className="verify-lane-head">
         <span className="verify-lane-mark" aria-hidden="true"><ShieldCheck size={12} weight="fill" /></span>
         <b>{lane.title}</b>

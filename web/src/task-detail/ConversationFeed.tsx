@@ -16,7 +16,18 @@ import { MessageAttachments } from "./Attachments.tsx";
 import { conversationFeedRows } from "./conversationReviewLanes.ts";
 import { conversationSystemRows } from "./conversationSystemRows.ts";
 import { ReviewerLane } from "./ReviewerLane.tsx";
-import { SystemAuthoredMessage, SystemBoundary, SystemEventNote } from "./SystemNotice.tsx";
+import {
+  SystemAuthoredMessage,
+  SystemBoundary,
+  SystemEventDigest,
+  SystemEventNote,
+  SystemNoticeModeSwitch,
+} from "./SystemNotice.tsx";
+import {
+  INITIAL_SYSTEM_NOTICE_MODE,
+  SYSTEM_NOTICE_DEMO_REQUESTED,
+  type SystemNoticeMode,
+} from "./systemNoticeModel.ts";
 import { type TurnRetryTarget, turnRetryTarget } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 
@@ -143,6 +154,7 @@ export function ConversationFeed({
   onRetryTurn,
   reviewRetryable,
   reviews,
+  systemNoticeMode,
 }: {
   task: TaskListItem;
   items: ConversationItem[];
@@ -158,6 +170,8 @@ export function ConversationFeed({
   reviewRetryable?: boolean;
   /** 自由派审的落盘记录：折叠卡靠它反查报告的 runId（旁注里只有轮号）。 */
   reviews?: readonly FreeReviewRun[] | null;
+  /** 比较系统提示方案时覆盖 URL 模式；普通任务不传。 */
+  systemNoticeMode?: SystemNoticeMode;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const activityPhase = runActivityPhase(task.status, runActivityTail(items));
@@ -171,6 +185,9 @@ export function ConversationFeed({
   const retryItemId = retry
     ? [...items].reverse().find((item) => item.kind === "agent")?.id ?? null
     : null;
+  const search = typeof window === "undefined" ? "" : window.location.search;
+  const modeFromUrl = SYSTEM_NOTICE_DEMO_REQUESTED;
+  const noticeMode = systemNoticeMode ?? INITIAL_SYSTEM_NOTICE_MODE;
   const rows = conversationSystemRows(conversationFeedRows(items, { reviews }));
   // 「执行链路还没停」用 taskAttention 那一份口径（在跑 / 卡在审查门上 / 停在检查点等人
   // 答话都算没停），别在折叠这儿另起一套。这里只有单飞与执行者，团队走 TeamFeed。
@@ -213,19 +230,22 @@ export function ConversationFeed({
     if (item.variant === "boundary") {
       return <SystemBoundary item={item} key={item.id} />;
     }
-    return <SystemEventNote item={item} key={item.id} />;
+    return <SystemEventNote item={item} mode={noticeMode} key={item.id} />;
   };
 
   return (
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region task-conversation-wrap">
-        <div className="task-conversation" ref={scroll}>
+        {modeFromUrl && <SystemNoticeModeSwitch mode={noticeMode} search={search} />}
+        <div className={`task-conversation system-notice-mode-${noticeMode}`} ref={scroll}>
           {rows.map((row) => row.kind === "item"
             ? renderItem(row.item)
             : row.kind === "system-action"
-              ? <SystemAuthoredMessage key={row.id} item={row.item} related={row.related} />
+              ? <SystemAuthoredMessage key={row.id} item={row.item} related={row.related} mode={noticeMode} />
+              : row.kind === "system-digest"
+                ? <SystemEventDigest key={row.id} items={row.items} mode={noticeMode} />
               : (
-              <ReviewerLane key={row.id} taskId={task.id} lane={row}>
+              <ReviewerLane key={row.id} taskId={task.id} lane={row} noticeMode={noticeMode}>
                 {row.items.map(renderItem)}
               </ReviewerLane>
               ))}

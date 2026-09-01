@@ -1,6 +1,13 @@
 import type { ConversationEventTone } from "./conversationNotes.ts";
 
 export type SystemEventKind = "neutral" | "progress" | "success" | "warning" | "error" | "notice" | "recovery";
+export type SystemNoticeMode = "footnote" | "collapsed" | "attached";
+
+export const SYSTEM_NOTICE_MODES: ReadonlyArray<{ value: SystemNoticeMode; label: string }> = [
+  { value: "footnote", label: "会话脚注" },
+  { value: "collapsed", label: "系统记录折叠" },
+  { value: "attached", label: "消息尾注" },
+];
 
 const CONFLICT_HANDOFF = /^【验收未通过\s*·\s*需要你解冲突】/;
 const BRACKET_TITLE = /^【([^】]+)】\s*/;
@@ -45,3 +52,15 @@ export function conflictFiles(text: string): string[] {
 export function conflictContextEvent(text: string): boolean {
   return /^开始验收[：:]|^验收未完成[：:].*冲突|^冲突交接[：:]|^预览已回收|卡在「?合并(?:并清理)?」?这一站/.test(text);
 }
+
+export function systemNoticeModeFromSearch(search: string, hash = ""): SystemNoticeMode {
+  const value = new URLSearchParams(search).get("systemNotices")
+    ?? new URLSearchParams(hash.replace(/^#/, "")).get("systemNotices");
+  return value === "collapsed" || value === "attached" ? value : "footnote";
+}
+
+const INITIAL_SEARCH = typeof window === "undefined" ? "" : window.location.search;
+const INITIAL_HASH = typeof window === "undefined" ? "" : window.location.hash;
+export const INITIAL_SYSTEM_NOTICE_MODE = systemNoticeModeFromSearch(INITIAL_SEARCH, INITIAL_HASH);
+export const SYSTEM_NOTICE_DEMO_REQUESTED = new URLSearchParams(INITIAL_SEARCH).has("systemNotices")
+  || new URLSearchParams(INITIAL_HASH.replace(/^#/, "")).has("systemNotices");

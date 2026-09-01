@@ -128,7 +128,7 @@ const emptyLane = conversationFeedRows(build([
 assert.ok(emptyLane);
 assert.equal(emptyLane.items.length, 0);
 const emptyMarkup = renderToStaticMarkup(<ReviewerLane taskId="t1" lane={emptyLane}>{null}</ReviewerLane>);
-assert.match(emptyMarkup, /verify-lane is-collapsed/, "空正文卡按收起态绘制，不留分隔线");
+assert.match(emptyMarkup, /verify-lane[^\"]*is-collapsed/, "空正文卡按收起态绘制，不留分隔线");
 assert.doesNotMatch(emptyMarkup, />展开<|>收起</, "没有正文时不显示无效的展开按钮");
 assert.match(emptyMarkup, /class="verify-lane-body"[^>]*hidden=""/, "没有正文时 body 必须隐藏");
 

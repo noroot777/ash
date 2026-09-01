@@ -5,6 +5,7 @@ import { MessageAttachments } from "./Attachments.tsx";
 import type { ConversationItem } from "./conversationModel.ts";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
 import {
+  SYSTEM_NOTICE_MODES,
   conflictFiles,
   isConflictHandoff,
   systemEventKind,
@@ -12,9 +13,21 @@ import {
   systemPromptSummary,
   systemPromptTitle,
   type SystemEventKind,
+  type SystemNoticeMode,
 } from "./systemNoticeModel.ts";
 
-type EventLike = Pick<Extract<ConversationItem, { kind: "event" }>, "text" | "at" | "tone" | "verify">;
+type EventItem = Extract<ConversationItem, { kind: "event" }>;
+type EventLike = Pick<EventItem, "text" | "at" | "tone" | "verify">;
+
+const IMPORTANCE: Record<SystemEventKind, number> = {
+  neutral: 0,
+  progress: 1,
+  success: 2,
+  recovery: 3,
+  notice: 4,
+  warning: 5,
+  error: 6,
+};
 
 function eventIcon(kind: SystemEventKind): ReactNode {
   if (kind === "recovery") return <ArrowClockwise size={11} weight="bold" />;
@@ -24,12 +37,80 @@ function eventIcon(kind: SystemEventKind): ReactNode {
   return <Info size={11} weight="fill" />;
 }
 
-export function SystemEventNote({ item }: { item: EventLike }) {
+function cleanEventText(item: EventLike): string {
+  if (systemEventKind(item.text, item.tone) === "recovery") return "工作区已恢复 · 会话内容已保留";
+  return item.text.replace(/^〔系统〕/, "").trim();
+}
+
+function digestLead(items: EventItem[]): { kind: SystemEventKind; text: string } {
+  const chosen = [...items].sort((a, b) => (
+    IMPORTANCE[systemEventKind(b.text, b.tone)] - IMPORTANCE[systemEventKind(a.text, a.tone)]
+  ))[0] ?? items.at(-1)!;
+  const text = cleanEventText(chosen).replace(/\s+/g, " ");
+  return {
+    kind: systemEventKind(chosen.text, chosen.tone),
+    text: text.length > 108 ? `${text.slice(0, 105)}…` : text,
+  };
+}
+
+export function SystemNoticeModeSwitch({ mode, search }: { mode: SystemNoticeMode; search: string }) {
+  return (
+    <nav className="system-notice-mode-switch" aria-label="系统提示方案">
+      <span>系统提示方案</span>
+      {SYSTEM_NOTICE_MODES.map((option) => {
+        const params = new URLSearchParams(search);
+        params.set("systemNotices", option.value);
+        return (
+          <a
+            href={`?${params.toString()}`}
+            aria-current={mode === option.value ? "page" : undefined}
+            key={option.value}
+          >
+            {option.label}
+          </a>
+        );
+      })}
+    </nav>
+  );
+}
+
+export function SystemEventDigest({ items, mode }: { items: EventItem[]; mode: SystemNoticeMode }) {
+  const lead = digestLead(items);
+  const lastAt = items.at(-1)?.at;
+  const important = IMPORTANCE[lead.kind] >= IMPORTANCE.recovery;
+  const collapsedLabel = important ? `系统记录 · ${lead.text}` : `系统记录 · ${items.length} 条`;
+  const line = (
+    <>
+      <span>{mode === "collapsed" ? collapsedLabel : lead.text}</span>
+      {mode !== "collapsed" && items.length > 1 && <small>{items.length} 条记录</small>}
+      {lastAt && <time>{formatInstant(lastAt)}</time>}
+    </>
+  );
+  return (
+    <div className={`system-event-digest is-${mode} is-${lead.kind}`} role={lead.kind === "error" ? "status" : undefined}>
+      {items.length === 1 ? <div className="system-event-digest-line">{line}</div> : (
+        <details>
+          <summary>{line}</summary>
+          <ol>
+            {items.map((item) => (
+              <li key={item.id} className={`is-${systemEventKind(item.text, item.tone)}`}>
+                <span>{cleanEventText(item)}</span>
+                {item.at && <time>{formatInstant(item.at)}</time>}
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
+    </div>
+  );
+}
+
+export function SystemEventNote({ item, mode = "footnote" }: { item: EventLike; mode?: SystemNoticeMode }) {
   const kind = systemEventKind(item.text, item.tone);
   const recovery = kind === "recovery";
   return (
     <div
-      className={`conversation-note system-event-row is-${kind}${item.verify ? " is-verify" : ""}${recovery ? " system-recovery-row" : ""}`}
+      className={`conversation-note system-event-row notice-mode-${mode} is-${kind}${item.verify ? " is-verify" : ""}${recovery ? " system-recovery-row" : ""}`}
       role={kind === "error" || kind === "warning" || kind === "notice" ? "status" : undefined}
     >
       <span className="system-event-icon" aria-hidden="true">{eventIcon(kind)}</span>
@@ -56,9 +137,10 @@ type SystemMessageProps = {
   item: Extract<ConversationItem, { kind: "user" }>;
   related?: Array<Extract<ConversationItem, { kind: "event" }>>;
   surface?: "task" | "team";
+  mode?: SystemNoticeMode;
 };
 
-export function SystemAuthoredMessage({ item, related = [], surface = "task" }: SystemMessageProps) {
+export function SystemAuthoredMessage({ item, related = [], surface = "task", mode = "footnote" }: SystemMessageProps) {
   const parsed = parseAttachmentText(item.text);
   const paths = [...parsed.paths, ...item.attachments];
   const text = parsed.body || item.text;
@@ -71,7 +153,7 @@ export function SystemAuthoredMessage({ item, related = [], surface = "task" }: 
   const raw = systemPromptBody(text);
   const outer = surface === "team" ? "team-feed-user" : "task-message task-message--user";
   return (
-    <article className={`${outer} is-system-authored system-action-wrap`}>
+    <article className={`${outer} is-system-authored system-action-wrap notice-mode-${mode}`}>
       <section className={`system-action-note${conflict ? " is-conflict" : ""}`} aria-label={title}>
         <span className="system-action-icon" aria-hidden="true">
           {conflict ? <WarningCircle size={12} weight="fill" /> : <Info size={12} weight="fill" />}

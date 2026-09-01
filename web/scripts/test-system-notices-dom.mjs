@@ -14,7 +14,8 @@ try {
   assert(address && typeof address === "object");
   browser = await chromium.launch(await chromeLaunchOptions());
   const page = await browser.newPage({ viewport: { width: 1000, height: 1300 } });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/system-notices.html`);
+  const fixture = `http://127.0.0.1:${address.port}/scripts/fixtures/system-notices.html`;
+  await page.goto(`${fixture}?systemNotices=footnote`);
 
   const action = page.locator(".system-action-note.is-conflict");
   await action.waitFor();
@@ -34,13 +35,37 @@ try {
   await action.getByText("流程记录 3 条", { exact: true }).click();
   assert.match(await action.innerText(), /开始验收.*验收未完成.*冲突交接/s, "原始流程记录仍可展开核对");
 
-  assert.equal(await page.locator(".system-event-row.is-progress").count(), 1);
-  assert.equal(await page.locator(".system-event-row.is-success").count(), 1);
-  assert.equal(await page.locator(".system-event-row.is-error").count(), 1);
-  assert.equal(await page.locator(".system-event-row.is-notice").count(), 1);
-  assert.equal(await page.locator(".system-event-row.is-recovery").count(), 1);
+  const digest = page.locator(".system-event-digest.is-footnote");
+  assert.equal(await digest.count(), 1, "连续系统事件应合成一条会话脚注");
+  assert.match(await digest.innerText(), /冲突交接失败.*5 条记录/s);
+  const marker = await digest.evaluate((el) => {
+    const style = getComputedStyle(el, "::before");
+    return { width: style.width, height: style.height, radius: style.borderRadius, content: style.content };
+  });
+  assert.deepEqual(marker, { width: "4px", height: "4px", radius: "50%", content: '""' }, "脚注使用无方向性的 4px 圆点，不再显示弯箭头");
+  await digest.locator("summary").click();
+  assert.match(await digest.innerText(), /已预约完成后审查.*验收阶段更新.*本回合没有交卷.*工作区已恢复/s);
+  assert.equal(await page.locator(".system-event-row").count(), 0, "任务会话不再逐条铺系统事件");
   assert.equal(await page.locator(".system-boundary").count(), 1);
   assert.equal(await page.locator(".task-message--agent").count(), 2, "普通 agent 消息结构没有改");
+  assert.equal(await page.locator(".system-notice-mode-switch a").count(), 3, "带模式参数时显示三版切换入口");
+
+  await page.goto(`${fixture}?systemNotices=collapsed`);
+  const collapsed = page.locator(".system-event-digest.is-collapsed");
+  await collapsed.waitFor();
+  assert.match(await collapsed.locator("summary").innerText(), /系统记录 · 冲突交接失败/);
+  assert.equal(await page.locator('.system-notice-mode-switch a[aria-current="page"]').innerText(), "系统记录折叠");
+
+  await page.goto(`${fixture}?systemNotices=attached`);
+  const attached = page.locator(".system-event-digest.is-attached");
+  await attached.waitFor();
+  const attachedStyle = await attached.evaluate((el) => {
+    const style = getComputedStyle(el);
+    return { marginTop: Number.parseFloat(style.marginTop), border: getComputedStyle(el.querySelector("summary")).borderTopWidth };
+  });
+  assert.ok(attachedStyle.marginTop < 0, "消息尾注应贴近上一段会话");
+  assert.notEqual(attachedStyle.border, "0px", "消息尾注用细线表达它属于上一段消息");
+  assert.equal(await page.locator('.system-notice-mode-switch a[aria-current="page"]').innerText(), "消息尾注");
 
   await page.setViewportSize({ width: 390, height: 900 });
   const geometry = await page.evaluate(() => ({

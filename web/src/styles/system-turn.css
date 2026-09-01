@@ -1,5 +1,76 @@
 /* 系统信息是会话旁注，不与用户和 agent 的正文争夺视觉层级。 */
 
+.system-notice-mode-switch {
+  position: absolute;
+  z-index: 9;
+  top: 8px;
+  right: 12px;
+  display: flex;
+  width: fit-content;
+  max-width: calc(100% - 20px);
+  align-items: center;
+  gap: 2px;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in lch, var(--panel) 94%, transparent);
+  padding: 3px;
+  box-shadow: 0 5px 18px rgb(32 35 45 / 8%);
+  backdrop-filter: blur(8px);
+  font-size: 9.5px;
+}
+.system-notice-mode-switch > span { padding: 0 7px; color: var(--faint); white-space: nowrap; }
+.system-notice-mode-switch a { border-radius: 5px; padding: 4px 8px; color: var(--faint); text-decoration: none; white-space: nowrap; }
+.system-notice-mode-switch a:hover { background: var(--raised); color: var(--muted); }
+.system-notice-mode-switch a[aria-current="page"] { background: var(--ink); color: var(--panel); }
+
+.system-event-digest {
+  width: min(760px, calc(100% - 30px));
+  margin-right: 0;
+  margin-left: 30px;
+  color: var(--faint);
+  font-size: 10.5px;
+}
+.system-event-digest details { min-width: 0; }
+.system-event-digest summary,
+.system-event-digest-line {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+}
+.system-event-digest summary::-webkit-details-marker { display: none; }
+.system-event-digest :is(summary, .system-event-digest-line) > span { min-width: 0; overflow: hidden; flex: 1; text-overflow: ellipsis; white-space: nowrap; }
+.system-event-digest :is(summary, .system-event-digest-line) small { flex: none; color: var(--faint); font-size: 9px; white-space: nowrap; }
+.system-event-digest summary time,
+.system-event-digest-line time,
+.system-event-digest li time { flex: none; opacity: .72; font-size: 9.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.system-event-digest ol { display: grid; gap: 4px; margin: 6px 0 3px 10px; border-left: 1px solid var(--line2); padding: 2px 0 2px 20px; color: var(--faint); }
+.system-event-digest li { padding-left: 2px; line-height: 1.5; }
+.system-event-digest li time { margin-left: 7px; }
+.system-event-digest li.is-error { color: color-mix(in lch, var(--red) 64%, var(--ink)); }
+
+/* 方案一：连续系统事件收成会话脚注，默认只读最终结果。 */
+.system-event-digest.is-footnote { position: relative; margin-top: 7px; margin-bottom: 11px; padding-left: 12px; }
+.system-event-digest.is-footnote::before { position: absolute; top: 6px; left: 1px; width: 4px; height: 4px; border-radius: 50%; background: var(--line2); content: ""; }
+.system-event-digest.is-footnote.is-error::before { background: color-mix(in lch, var(--red) 55%, var(--line2)); }
+.system-event-digest.is-footnote :is(summary, .system-event-digest-line) > span { color: var(--faint); }
+.system-event-digest.is-footnote.is-error :is(summary, .system-event-digest-line) > span { color: color-mix(in lch, var(--red) 58%, var(--muted)); }
+
+/* 方案二：普通生命周期只露出记录数量，异常才把结论写在折叠标题上。 */
+.system-event-digest.is-collapsed { margin-top: 6px; margin-bottom: 10px; }
+.system-event-digest.is-collapsed :is(summary, .system-event-digest-line) { width: fit-content; max-width: 100%; border-bottom: 1px dotted var(--line2); padding: 1px 0; }
+.system-event-digest.is-collapsed :is(summary, .system-event-digest-line) > span { color: var(--faint); }
+.system-event-digest.is-collapsed:is(.is-error, .is-warning) :is(summary, .system-event-digest-line) > span { color: color-mix(in lch, var(--red) 58%, var(--muted)); }
+
+/* 方案三：系统结果贴在上一段会话下面，像消息自身的运行收据。 */
+.system-event-digest.is-attached { margin-top: -9px; margin-bottom: 18px; padding-left: 30px; }
+.system-event-digest.is-attached :is(summary, .system-event-digest-line) { border-top: 1px solid color-mix(in lch, var(--line) 55%, transparent); padding-top: 5px; }
+.system-event-digest.is-attached :is(summary, .system-event-digest-line) > span { color: var(--faint); }
+.system-event-digest.is-attached.is-error :is(summary, .system-event-digest-line) > span { color: color-mix(in lch, var(--red) 58%, var(--muted)); }
+
 .system-action-wrap {
   display: flex;
   max-width: none;
@@ -40,6 +111,16 @@
 .system-action-related li { padding-left: 2px; line-height: 1.5; }
 .system-action-related time { margin-left: 7px; color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
+.system-action-wrap .system-action-icon { display: none; }
+.system-action-wrap .system-action-note { position: relative; grid-template-columns: minmax(0, 1fr); }
+.system-action-wrap.notice-mode-footnote .system-action-note { padding-left: 12px; }
+.system-action-wrap.notice-mode-footnote .system-action-note::before { position: absolute; top: 6px; left: 1px; width: 4px; height: 4px; border-radius: 50%; background: color-mix(in lch, var(--red) 55%, var(--line2)); content: ""; }
+.system-action-wrap.notice-mode-collapsed .system-action-line > p > span { display: none; }
+.system-action-wrap.notice-mode-collapsed .system-action-line b::before { color: var(--faint); content: "系统记录 · "; font-weight: 450; }
+.system-action-wrap.notice-mode-attached { margin-top: -9px; margin-bottom: 18px; }
+.system-action-wrap.notice-mode-attached .system-action-note { margin-left: 30px; border-top: 1px solid color-mix(in lch, var(--line) 55%, transparent); padding-top: 5px; }
+.system-action-wrap.notice-mode-attached .system-action-line b::before { color: var(--faint); content: "验收 · "; font-weight: 450; }
+
 /* 一行系统事实：图标负责语气，正文负责事实，不再每条都竖一根颜色不同的线。 */
 .conversation-note.system-event-row {
   display: flex;
@@ -68,6 +149,14 @@
 .system-event-row.is-error .system-event-icon { color: color-mix(in lch, var(--red) 72%, var(--ink)); }
 .system-event-row.is-recovery .system-event-icon { color: var(--muted); }
 .team-feed .system-event-row { margin-left: 0; }
+.system-event-row.notice-mode-footnote .system-event-icon,
+.system-event-row.notice-mode-collapsed .system-event-icon,
+.system-event-row.notice-mode-attached .system-event-icon { display: none; }
+.system-event-row.notice-mode-footnote { position: relative; padding-left: 12px; }
+.system-event-row.notice-mode-footnote::before { position: absolute; top: 7px; left: 1px; width: 4px; height: 4px; border-radius: 50%; background: var(--line2); content: ""; }
+.system-event-row.notice-mode-footnote.is-error::before { background: color-mix(in lch, var(--red) 55%, var(--line2)); }
+.system-event-row.notice-mode-collapsed { width: fit-content; border-bottom: 1px dotted var(--line2); }
+.system-event-row.notice-mode-attached { margin-top: -9px; margin-bottom: 18px; margin-left: 60px; border-top: 1px solid color-mix(in lch, var(--line) 55%, transparent); padding-top: 5px; }
 
 /* 回合边界只留一条很淡的分隔线和说明。 */
 .system-boundary { gap: 8px; color: var(--faint); font-size: 9.5px; }
@@ -80,9 +169,14 @@
 .team-feed-agent.is-continuation { margin-top: -6px; }
 
 @media (max-width: 680px) {
+  .system-notice-mode-switch { right: 8px; overflow-x: auto; justify-content: flex-start; }
+  .system-notice-mode-switch > span { display: none; }
+  .system-event-digest { width: calc(100% - 10px); margin-left: 10px; }
+  .system-event-digest.is-attached { padding-left: 20px; }
   .system-action-wrap { padding-right: 10px; padding-left: 10px; }
   .team-feed-user.system-action-wrap { padding-right: 10px; padding-left: 10px; }
   .system-action-line { flex-wrap: wrap; }
   .system-action-line time { margin-left: 20px; }
   .conversation-note.system-event-row { margin-left: 10px; }
+  .system-event-row.notice-mode-attached { margin-left: 30px; }
 }

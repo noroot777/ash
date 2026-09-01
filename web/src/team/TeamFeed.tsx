@@ -13,7 +13,12 @@ import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { isExecutionChainLive } from "../lib/taskAttention.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
-import { SystemAuthoredMessage, SystemBoundary, SystemEventNote } from "../task-detail/SystemNotice.tsx";
+import { SystemAuthoredMessage, SystemBoundary, SystemEventNote, SystemNoticeModeSwitch } from "../task-detail/SystemNotice.tsx";
+import {
+  INITIAL_SYSTEM_NOTICE_MODE,
+  SYSTEM_NOTICE_DEMO_REQUESTED,
+  type SystemNoticeMode,
+} from "../task-detail/systemNoticeModel.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
 import { executorLabel, parseInbound, teamLeadLabel, workerStatusText, type InboundMessage, type TeamFeedRow } from "./teamModel.ts";
 
@@ -55,12 +60,12 @@ function AgentRow({
   );
 }
 
-function UserRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"] }) {
+function UserRow({ row, noticeMode }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"]; noticeMode: SystemNoticeMode }) {
   if (row.kind !== "user") return null;
   const parsed = parseAttachmentText(row.text);
   const paths = [...parsed.paths, ...row.attachments];
   const bySystem = !!row.bySystem;
-  if (bySystem) return <SystemAuthoredMessage item={row} surface="team" />;
+  if (bySystem) return <SystemAuthoredMessage item={row} surface="team" mode={noticeMode} />;
   return (
     <article className="team-feed-user">
       <div>
@@ -175,6 +180,9 @@ export function TeamFeed({
   indicatorForTask: IndicatorForTask;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
+  const search = typeof window === "undefined" ? "" : window.location.search;
+  const noticeMode = INITIAL_SYSTEM_NOTICE_MODE;
+  const showNoticeModeSwitch = SYSTEM_NOTICE_DEMO_REQUESTED;
   const byId = new Map(workers.map((worker) => [worker.id, worker]));
   const hiddenTimes = new Set<string>();
   let previousConversationItem: Extract<TeamFeedRow, { kind: "conv" }>["item"] | null = null;
@@ -203,13 +211,14 @@ export function TeamFeed({
   return (
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region">
-        <section className="team-feed" aria-label="团队调度流" ref={scroll}>
+        <section className={`team-feed system-notice-mode-${noticeMode}`} aria-label="团队调度流" ref={scroll}>
+          {showNoticeModeSwitch && <SystemNoticeModeSwitch mode={noticeMode} search={search} />}
           {!rows.length && !activityPhase && <p className="team-feed-empty">运行后，调度者的拆解、派活、执行者提问与汇报会按发生顺序出现在这里。</p>}
           {rows.map((row) => {
             if (row.kind === "batch") return <BatchCard key={row.key} batch={row.batch} allWorkers={workers} onOpenWorker={onOpenWorker} indicatorForTask={indicatorForTask} />;
             const item = row.item;
             if (item.kind === "agent") return <AgentRow key={row.key} row={item} taskLive={taskLive} hideTime={hiddenTimes.has(item.id)} />;
-            if (item.kind === "user") return <UserRow key={row.key} row={item} />;
+            if (item.kind === "user") return <UserRow key={row.key} row={item} noticeMode={noticeMode} />;
             const inbound = parseInbound(item.text);
             if (inbound) {
               return (
@@ -235,7 +244,7 @@ export function TeamFeed({
             if (item.variant === "boundary") {
               return <SystemBoundary item={item} surface="team" key={row.key} />;
             }
-            return <SystemEventNote item={item} key={row.key} />;
+            return <SystemEventNote item={item} mode={noticeMode} key={row.key} />;
           })}
           {activityPhase && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} executor={teamLeadLabel(task)} queuePosition={task.queuePosition} />}
         </section>

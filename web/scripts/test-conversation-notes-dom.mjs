@@ -24,38 +24,41 @@ try {
   const page = await browser.newPage({ viewport: { width: 1000, height: 1400 } });
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/conversation-notes.html`);
 
-  const notes = page.locator(".conversation-note");
+  const notes = page.locator(".system-event-digest");
   await notes.first().waitFor();
-  assert.equal(await notes.count(), 10, "十条时间线通告都应进入同一套系统事件行");
+  assert.equal(await notes.count(), 5, "十条时间线通告应按相邻会话位置合成五条脚注");
+  assert.equal(
+    await notes.locator("li").count() + await notes.locator(".system-event-digest-line").count(),
+    10,
+    "脚注与折叠详情合计完整保留十条原始记录",
+  );
 
-  const recovery = page.locator(".system-recovery-row");
+  const recovery = notes.locator("li.is-recovery");
   assert.equal(await recovery.count(), 1, "worktree 重建应收成一条恢复回执");
-  assert.match(await recovery.innerText(), /工作区已恢复.*会话与用户消息均已保留/);
-  assert.equal(await recovery.evaluate((el) => getComputedStyle(el).borderLeftWidth), "0px", "恢复回执不画警告式竖线");
-  assert.equal(await recovery.evaluate((el) => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0)", "恢复回执与其他系统提示一样保持透明");
+  assert.match(await recovery.textContent(), /工作区已恢复.*会话内容已保留/);
 
   // 通告不再借用回合边界那条横贯的分隔线；边界事件本身仍然是那条线。
   const boundary = page.locator(".task-event-line");
   assert.equal(await boundary.count(), 1);
   assert.match(await boundary.innerText(), /本轮执行结束/);
-  // 两档要看得出是两种东西：一条横贯，一条只在左边立一道竖线。
+  // 两档要看得出是两种东西：一条横贯，一条只占正文宽度的脚注。
   const noteBox = await notes.first().boundingBox();
   const boundaryBox = await boundary.boundingBox();
   assert.ok(boundaryBox.width > noteBox.width, "回合边界横贯得比旁注宽");
   // 「没办成」的那条要看得出来不一样。
-  assert.equal(await page.locator(".conversation-note.is-error").count(), 1);
-  assert.match(await page.locator(".conversation-note.is-error").innerText(), /审查未通过/);
+  assert.equal(await page.locator(".system-event-digest.is-error").count(), 1);
+  assert.match(await page.locator(".system-event-digest.is-error").innerText(), /审查未通过/);
 
   // 会话轮换旁注是中性事实：一个 exit 0 的成功回合、甚至用户自己点的「停止全组」都会带
   // 一句。它既不该是红的，也不该把 Markdown 标记原样露给用户（旁注是纯文本渲染）。
-  const rotation = notes.filter({ hasText: "ash 已经把这个失效的 id 清掉" });
+  const rotation = notes.locator("li").filter({ hasText: "ash 已经把这个失效的 id 清掉" });
   assert.equal(await rotation.count(), 1, "会话轮换旁注没渲染出来");
   assert.equal(
     await rotation.evaluate((el) => el.classList.contains("is-error")),
     false,
     "会话轮换旁注被渲染成红色执行异常 —— 用户会以为这一回合失败了",
   );
-  assert.doesNotMatch(await rotation.innerText(), /\*\*/, "旁注是纯文本，Markdown 标记会原样露给用户");
+  assert.doesNotMatch(await rotation.textContent(), /\*\*/, "旁注是纯文本，Markdown 标记会原样露给用户");
 
   // 结算说明（level:"notice"）：不许是红的（它讲的是流程，不是故障），只在语气图标上
   // 留一点琥珀提示，不再铺一整条底色。
@@ -71,14 +74,11 @@ try {
     false,
     "结算说明被渲染成红色异常 —— 第一次用的人会读成「它崩了」",
   );
-  const [settlementBg, plainBg, settlementIcon, plainIcon] = await Promise.all([
+  const [settlementBg, plainBg] = await Promise.all([
     settlement.evaluate((el) => getComputedStyle(el).backgroundColor),
     notes.first().evaluate((el) => getComputedStyle(el).backgroundColor),
-    settlement.locator(".system-event-icon").evaluate((el) => getComputedStyle(el).color),
-    notes.first().locator(".system-event-icon").evaluate((el) => getComputedStyle(el).color),
   ]);
   assert.equal(settlementBg, plainBg, "结算说明不再用整条底色抢占视线");
-  assert.notEqual(settlementIcon, plainIcon, "结算说明仍需用轻微色差表达语气");
 
   const messages = page.locator(".task-message--agent");
   assert.equal(await messages.count(), 6, "实时旁注后的工具应并回当前回合，不另拆第七段");
@@ -106,7 +106,7 @@ try {
   assert.equal(await notes.last().evaluate((note) => note === note.parentElement?.lastElementChild), true, "实时旁注应稳定留在当前回合与统计条之后");
 
   await page.setViewportSize({ width: 390, height: 1000 });
-  const narrowTime = await notes.last().locator("time").evaluate((time) => {
+  const narrowTime = await notes.last().locator(".system-event-digest-line time").evaluate((time) => {
     const range = document.createRange();
     range.selectNodeContents(time);
     return { whiteSpace: getComputedStyle(time).whiteSpace, lineCount: range.getClientRects().length };
@@ -114,21 +114,18 @@ try {
   assert.deepEqual(narrowTime, { whiteSpace: "nowrap", lineCount: 1 }, "窄屏日期与时分不能从中间拆成两行");
   await page.setViewportSize({ width: 1000, height: 1400 });
 
-  // agent 输出里的引用块（「正在压缩上下文…」这类 ash 注记）跟系统事件仍保持同一阅读密度；
-  // 系统事件只保留一枚 14px 语气图标，不能再形成显眼的图标底座。
+  // agent 输出里的引用块与系统脚注都低于正文层级，脚注可以再小半档，但不能反过来更重。
   const quote = page.locator(".task-markdown blockquote").first();
   await quote.waitFor();
   const metrics = await quote.evaluate((el) => {
-    const note = document.querySelector(".conversation-note");
+    const note = document.querySelector(".system-event-digest");
     const read = (node) => {
       const s = getComputedStyle(node);
       return { size: s.fontSize, line: s.lineHeight, height: node.getBoundingClientRect().height };
     };
-    return { quote: read(el), note: read(note), icon: document.querySelector(".system-event-icon")?.getBoundingClientRect().height };
+    return { quote: read(el), note: read(note) };
   });
-  assert.equal(metrics.quote.size, metrics.note.size, "引用块字号该跟旁注一样");
-  assert.equal(metrics.quote.line, metrics.note.line, "引用块行高该跟旁注一样");
-  assert.equal(metrics.icon, 16, "系统事件的语气图标槽应保持紧凑的 16px 高度");
+  assert.ok(Number.parseFloat(metrics.note.size) <= Number.parseFloat(metrics.quote.size), "系统脚注不能比 agent 引用更抢眼");
 
   if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: true });
   console.log("conversation-notes-dom ok");

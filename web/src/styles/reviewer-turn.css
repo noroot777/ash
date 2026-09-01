@@ -113,6 +113,32 @@
 .verify-repair-requirements .task-markdown :is(h2, h3, h4) { font-size: 11px; }
 .verify-lane--repair .verify-lane-body { margin: 7px 0 0; border-top: 0; padding: 8px 0 0 15px; }
 
+/* 三种比较方案只改变审查提示的归位方式，展开后的审查正文保持一致。 */
+.verify-lane.notice-mode-footnote .verify-lane-mark,
+.verify-lane.notice-mode-footnote .verify-repair-mark,
+.verify-lane.notice-mode-collapsed .verify-lane-mark,
+.verify-lane.notice-mode-collapsed .verify-repair-mark,
+.verify-lane.notice-mode-attached .verify-lane-mark,
+.verify-lane.notice-mode-attached .verify-repair-mark { display: none; }
+.verify-lane--repair.notice-mode-footnote { position: relative; grid-template-columns: minmax(0, 1fr); padding-left: 12px; }
+.verify-lane--repair.notice-mode-footnote::after { position: absolute; top: 6px; left: 1px; width: 4px; height: 4px; border-radius: 50%; background: color-mix(in lch, var(--red) 55%, var(--line2)); content: ""; }
+
+.verify-lane.notice-mode-collapsed { margin-top: 7px; margin-bottom: 11px; }
+.verify-lane.notice-mode-collapsed .verify-lane-head { width: fit-content; max-width: 100%; border-bottom: 1px dotted var(--line2); }
+.verify-lane.notice-mode-collapsed .verify-lane-by,
+.verify-lane--repair.notice-mode-collapsed .verify-repair-head > span,
+.verify-lane--repair.notice-mode-collapsed .verify-repair-title,
+.verify-lane--repair.notice-mode-collapsed .verify-repair-actions > span { display: none; }
+.verify-lane.notice-mode-collapsed .verify-lane-head > b::before,
+.verify-lane--repair.notice-mode-collapsed .verify-repair-head > b::before { color: var(--faint); content: "系统记录 · "; font-weight: 450; }
+.verify-lane--repair.notice-mode-collapsed { grid-template-columns: minmax(0, 1fr); }
+
+.verify-lane.notice-mode-attached { width: min(760px, calc(100% - 30px)); margin: -9px 0 18px 30px; padding-left: 30px; }
+.verify-lane.notice-mode-attached .verify-lane-head { border-top: 1px solid color-mix(in lch, var(--line) 55%, transparent); padding-top: 5px; }
+.verify-lane--repair.notice-mode-attached { grid-template-columns: minmax(0, 1fr); border-top: 1px solid color-mix(in lch, var(--line) 55%, transparent); padding-top: 5px; padding-left: 30px; }
+.verify-lane.notice-mode-attached .verify-lane-head > b::before,
+.verify-lane--repair.notice-mode-attached .verify-repair-head > b::before { color: var(--faint); content: "审查 · "; font-weight: 450; }
+
 @media (max-width: 680px) {
   .verify-lane-head { flex-wrap: wrap; }
   .verify-lane-by { flex: 1 1 160px; }
@@ -120,6 +146,7 @@
   .verify-lane-actions { margin-left: auto; }
   .verify-lane-time + .verify-lane-actions { margin-left: auto; }
   .verify-lane--repair { width: calc(100% - 10px); margin-left: 10px; }
+  .verify-lane.notice-mode-attached { width: calc(100% - 10px); margin-left: 10px; padding-left: 20px; }
   .verify-repair-head { flex-wrap: wrap; }
   .verify-repair-head > span { display: none; }
   .verify-repair-head > time { margin-left: auto; }
