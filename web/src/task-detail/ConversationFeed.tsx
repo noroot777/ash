@@ -7,14 +7,13 @@ import type { ConversationItem } from "./conversationModel.ts";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { AgentRunMeta } from "../components/AgentRunMeta.tsx";
 import { AgentTurnBody } from "../components/AgentTurnBody.tsx";
-import { isExecutionChainLive } from "../lib/taskAttention.ts";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { RunActivity } from "../components/RunActivity.tsx";
 import { MessageFooter } from "../components/MessageFooter.tsx";
 import { TurnRetryButton } from "../components/TurnRetryButton.tsx";
 import { MessageAttachments } from "./Attachments.tsx";
-import { conversationFeedRows } from "./conversationReviewLanes.ts";
+import { conversationFeedRows, reviewLaneMessageRoles, type ReviewLaneMessageRole } from "./conversationReviewLanes.ts";
 import { conversationSystemRows } from "./conversationSystemRows.ts";
 import { ReviewerLane } from "./ReviewerLane.tsx";
 import {
@@ -49,22 +48,28 @@ function ReviewerBadge({ round }: { round: number | null }) {
 
 function AgentMessage({
   item,
-  taskLive,
   retry,
   hideTime,
+  laneRole,
 }: {
   item: Extract<ConversationItem, { kind: "agent" }>;
-  /** 整个任务还在跑：过程折叠块在跑的中途不自动收起。 */
-  taskLive: boolean;
   /** 这条气泡是不是「上一回合崩了」的那一条：给了就在尾栏挂重试按钮。 */
   retry?: React.ReactNode;
   /** 紧邻的旁注已经显示了同一个时间。 */
   hideTime?: boolean;
+  /** 这条气泡在审查卡里的位置：卡头已经把身份（lead 还包括时间）说过一遍了。 */
+  laneRole?: ReviewLaneMessageRole;
 }) {
   const duration = durationBetween(item.at, item.endedAt);
   const reviewer = item.reviewer;
-  const compactContinuation = !!item.continuation && !!hideTime && !duration;
-  const footerActions = compactContinuation ? (
+  const showIdentity = !item.continuation && !laneRole;
+  // 轮次徽标只是卡头标题（「第 N 轮审查」）的复读，卡里一律不出。
+  const showBadge = !!reviewer && !item.continuation && !laneRole;
+  const showTime = !hideTime && !!item.at && laneRole !== "lead";
+  const showDuration = !!duration && laneRole !== "lead";
+  // 头部一个元素都不剩时整条不渲染，复制按钮改挂尾栏——留一条空白横杠比复读还难看。
+  const headless = !showIdentity && !showBadge && !showTime && !showDuration;
+  const footerActions = headless ? (
     <>
       <button className="task-message-copy-action" type="button" onClick={() => copyText(item.markdown)} aria-label="复制这条回复">
         <Copy size={12} aria-hidden="true" />
@@ -75,25 +80,28 @@ function AgentMessage({
   ) : retry;
   return (
     <article
-      className={`task-message task-message--agent${item.continuation ? " is-continuation" : ""}${reviewer ? " is-reviewer" : ""}`}
+      className={`task-message task-message--agent${item.continuation ? " is-continuation" : ""}${reviewer ? " is-reviewer" : ""}${laneRole ? " is-lane-owned" : ""}`}
     >
-      <span className="task-message-avatar" aria-hidden="true">
-        {item.continuation ? "" : reviewer ? <ShieldCheck size={13} weight="fill" /> : item.label.slice(0, 1).toUpperCase()}
-      </span>
+      {/* 卡头左边已经有一颗同样的盾：卡里每条发言再挂一颗，只是把同一个身份画两遍。 */}
+      {!laneRole && (
+        <span className="task-message-avatar" aria-hidden="true">
+          {item.continuation ? "" : reviewer ? <ShieldCheck size={13} weight="fill" /> : item.label.slice(0, 1).toUpperCase()}
+        </span>
+      )}
       <div className="task-message-content">
-        {!compactContinuation && (
+        {!headless && (
           <header>
-            {!item.continuation && (
+            {showIdentity && (
               <span className="agent-run-identity">
                 <b>{item.label}</b>
                 <AgentRunMeta run={item.run} />
               </span>
             )}
-            {reviewer && !item.continuation && <ReviewerBadge round={reviewer.round} />}
-            {!hideTime && item.at && <time>{formatInstant(item.at)}</time>}
-            {duration && (
+            {showBadge && <ReviewerBadge round={reviewer.round} />}
+            {showTime && <time>{formatInstant(item.at)}</time>}
+            {showDuration && (
               <small className="task-turn-duration" title={`开始 ${formatInstant(item.at)} · 结束 ${formatInstant(item.endedAt)}`}>
-                {item.continuation ? "" : "· "}⏱ {duration} 用时
+                {item.continuation || laneRole ? "" : "· "}⏱ {duration} 用时
               </small>
             )}
             <button type="button" onClick={() => copyText(item.markdown)} aria-label="复制这条回复">
@@ -101,7 +109,7 @@ function AgentMessage({
             </button>
           </header>
         )}
-        <AgentTurnBody segments={item.segments} running={!item.endedAt} taskLive={taskLive} />
+        <AgentTurnBody segments={item.segments} running={!item.endedAt} />
         {/* 账目一律在尾栏，头部不放。位置不许随「是不是会话最后一条」变——
             那样同一个数会在气泡顶和气泡底之间跳，而这条规则用户看不见。 */}
         <MessageFooter
@@ -197,9 +205,6 @@ export function ConversationFeed({
   const modeFromUrl = SYSTEM_NOTICE_DEMO_REQUESTED;
   const noticeMode = systemNoticeMode ?? INITIAL_SYSTEM_NOTICE_MODE;
   const rows = conversationSystemRows(conversationFeedRows(items, { reviews }));
-  // 「执行链路还没停」用 taskAttention 那一份口径（在跑 / 卡在审查门上 / 停在检查点等人
-  // 答话都算没停），别在折叠这儿另起一套。这里只有单飞与执行者，团队走 TeamFeed。
-  const taskLive = isExecutionChainLive(task);
   const hiddenTimes = new Set<string>();
   for (let index = 1; index < items.length; index += 1) {
     const item = items[index]!;
@@ -214,14 +219,18 @@ export function ConversationFeed({
     ) hiddenTimes.add(item.id);
   }
 
-  const renderItem = (item: ConversationItem, preserveSystemStyle = false) => {
+  const renderItem = (
+    item: ConversationItem,
+    preserveSystemStyle = false,
+    laneRole?: ReviewLaneMessageRole,
+  ) => {
     if (item.kind === "agent") {
       return (
         <AgentMessage
           key={item.id}
           item={item}
-          taskLive={taskLive}
           hideTime={hiddenTimes.has(item.id)}
+          laneRole={laneRole}
           retry={retry && item.id === retryItemId ? (
             <TurnRetryButton
               exitStatus={retry.exitStatus}
@@ -259,17 +268,21 @@ export function ConversationFeed({
       <div className="conversation-scroll-region task-conversation-wrap">
         {modeFromUrl && <SystemNoticeModeSwitch mode={noticeMode} search={search} />}
         <div className={`task-conversation system-notice-mode-${noticeMode}`} ref={scroll}>
-          {rows.map((row) => row.kind === "item"
-            ? renderItem(row.item)
-            : row.kind === "system-action"
-              ? <SystemAuthoredMessage key={row.id} item={row.item} related={row.related} mode={noticeMode} />
-              : row.kind === "system-digest"
-                ? <SystemEventDigest key={row.id} items={row.items} mode={noticeMode} />
-              : (
+          {rows.map((row) => {
+            if (row.kind === "item") return renderItem(row.item);
+            if (row.kind === "system-action") {
+              return <SystemAuthoredMessage key={row.id} item={row.item} related={row.related} mode={noticeMode} />;
+            }
+            if (row.kind === "system-digest") {
+              return <SystemEventDigest key={row.id} items={row.items} mode={noticeMode} />;
+            }
+            const roles = reviewLaneMessageRoles(row);
+            return (
               <ReviewerLane key={row.id} taskId={task.id} lane={row}>
-                {row.items.map((item) => renderItem(item, true))}
+                {row.items.map((item) => renderItem(item, true, roles.get(item.id)))}
               </ReviewerLane>
-              ))}
+            );
+          })}
           {activityPhase && !loading && !error && (
             <RunActivity
               status={task.status}

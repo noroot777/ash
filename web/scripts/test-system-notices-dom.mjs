@@ -15,6 +15,11 @@ try {
   browser = await chromium.launch(await chromeLaunchOptions());
   const page = await browser.newPage({ viewport: { width: 1000, height: 1300 } });
   const fixture = `http://127.0.0.1:${address.port}/scripts/fixtures/system-notices.html`;
+  await page.goto(fixture);
+  await page.locator(".system-event-digest.is-aligned").waitFor();
+  assert.equal(await page.locator(".system-event-digest.is-aligned").count(), 1, "生产环境默认使用备选二");
+  assert.equal(await page.locator(".system-notice-mode-switch").count(), 0, "普通页面不显示方案比较开关");
+
   await page.goto(`${fixture}?systemNotices=footnote`);
 
   const action = page.locator(".system-action-note.is-conflict");

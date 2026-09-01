@@ -49,20 +49,6 @@ export function isTeamSettledLead(task: TaskListItem, workers: TaskListItem[] = 
     && isTeamSettled(task.status === "running", workers);
 }
 
-// 「这条执行链路还没停」。三段判据，缺一段就会在半路把过程折掉：
-//   · 等人动手（提问 / 检查点 paused）也是活在半路 —— server 的 ask_question、pause_task
-//     都落 paused，那不是完成确认，后面还要 resume 接着跑（见 single-run.ts 的结算）。
-//   · 团队问的是「收没收工」：调度台派完活自己就落回 idle，一屋子执行者还在干活时
-//     只读它那一行会把满负荷的团队判成静止（同 isTeamSettled，paused 的执行者也算没落地）。
-//   · 其余按 isTaskLive（含 awaiting_review —— 卡在审查门上还没走完）。
-// 会话流里凡是「跑完了才做的事」都读这一份 —— 眼下是过程折叠块的自动收起：它必须等到
-// 最后一步确认执行完了才折，中途折掉用户正读的那段过程就没了。
-export function isExecutionChainLive(task: TaskListItem, workers: TaskListItem[] = []): boolean {
-  if (awaitsYourWord(task, workers)) return true;
-  if (isTeamLead(task)) return !isTeamSettledLead(task, workers);
-  return isTaskLive(task, workers);
-}
-
 // 分堆的判据只问一句：这一行现在轮到谁动。轮到我 = todo（等答复 / 待验收 / 失败），
 // 机器在动 = run，谁也没轮到 = wait，收了尾 = done，走完验收 = accepted。
 //

@@ -11,7 +11,6 @@ import { RunActivity } from "../components/RunActivity.tsx";
 import { MessageFooter } from "../components/MessageFooter.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
-import { isExecutionChainLive } from "../lib/taskAttention.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { SystemAuthoredMessage, SystemBoundary, SystemEventNote, SystemNoticeModeSwitch } from "../task-detail/SystemNotice.tsx";
 import {
@@ -24,12 +23,9 @@ import { executorLabel, parseInbound, teamLeadLabel, workerStatusText, type Inbo
 
 function AgentRow({
   row,
-  taskLive,
   hideTime,
 }: {
   row: Extract<TeamFeedRow, { kind: "conv" }>["item"];
-  /** 调度台还在跑：过程折叠块在跑的中途不自动收起。 */
-  taskLive: boolean;
   hideTime?: boolean;
 }) {
   if (row.kind !== "agent") return null;
@@ -49,7 +45,7 @@ function AgentRow({
           {duration && <small className="task-turn-duration" title={`开始 ${formatInstant(row.at)} · 结束 ${formatInstant(row.endedAt)}`}>{row.continuation ? "" : "· "}⏱ {duration} 用时</small>}
         </header>
       )}
-      <AgentTurnBody segments={row.segments} running={!row.endedAt} taskLive={taskLive} />
+      <AgentTurnBody segments={row.segments} running={!row.endedAt} />
       <MessageFooter
         turnUsage={row.usage}
         session={row.showSessionMeta ? row.session : null}
@@ -199,10 +195,6 @@ export function TeamFeed({
     ) hiddenTimes.add(item.id);
     previousConversationItem = item;
   }
-  // 团队「跑完了」写在执行者身上：调度台派完活自己就落回 idle，只读它这一行，一屋子
-  // 执行者还在干活时过程块就先折了。口径归 isExecutionChainLive（团队那一半用的就是
-  // isTeamSettled，paused 的执行者也算这一队没落地）。
-  const taskLive = isExecutionChainLive(task, workers);
   // 派活卡片和事件行都不是「消息」:夹在末尾不该把「已收到你的消息」冲掉。
   const activityPhase = runActivityPhase(
     task.status,
@@ -217,7 +209,7 @@ export function TeamFeed({
           {rows.map((row) => {
             if (row.kind === "batch") return <BatchCard key={row.key} batch={row.batch} allWorkers={workers} onOpenWorker={onOpenWorker} indicatorForTask={indicatorForTask} />;
             const item = row.item;
-            if (item.kind === "agent") return <AgentRow key={row.key} row={item} taskLive={taskLive} hideTime={hiddenTimes.has(item.id)} />;
+            if (item.kind === "agent") return <AgentRow key={row.key} row={item} hideTime={hiddenTimes.has(item.id)} />;
             if (item.kind === "user") return <UserRow key={row.key} row={item} noticeMode={noticeMode} />;
             const inbound = parseInbound(item.text);
             if (inbound) {

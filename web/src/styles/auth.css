@@ -8,6 +8,30 @@
    在 lch 里跟它们混色会把那个没有意义的 282 号色相一起插值进来 —— 黄色警告条实测
    会配出 rgb(246,244,254) 的淡紫,红色危险条也一样。 */
 
+/* 首屏「正在确认身份」的等待态。刻意**不复用** `.auth-shell` —— 那是整块深色品牌面板,
+   而这段等待多数时候只有一个 RTT,闪一下再跳走比什么都不显示更吵(远程访问时表现为
+   「一刷新先闪一屏登录页」)。所以:底色跟工作台一致、只有一行字,而且要等到 AuthGate
+   判定「真的慢」之后才挂上来。 */
+.auth-booting {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--chrome);
+  color: var(--muted);
+  font-size: 13px;
+  animation: auth-booting-in 240ms ease-out both;
+}
+
+@keyframes auth-booting-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-booting { animation: none; }
+}
+
 .auth-shell {
   position: fixed;
   inset: 0;

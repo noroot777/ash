@@ -5,6 +5,7 @@ import type {
   ConfigBundle,
   ConfigBundleKind,
   InviteInfo,
+  PersonalAshMcp,
   PersonalCliEnv,
   ProjectInviteInfo,
   ProjectMemberView,
@@ -13,6 +14,7 @@ import type {
   UserView,
 } from "@ash/shared";
 import { id, json, request } from "./apiClient.ts";
+import { takeAuthProbe } from "./authProbe.ts";
 
 export interface UnbackedExecutor {
   id: string;
@@ -28,7 +30,9 @@ export interface SetupPreflight {
 }
 
 export const authApi = {
-  state: () => request<AuthState>("/auth/state"),
+  // 首屏那一次优先吃 index.html 预热好的结果(authProbe.ts):省掉「bundle 跑起来之后
+  // 才开始问」的那一个 RTT。预热只兑现一次,之后每一次都是真请求。
+  state: async () => (await takeAuthProbe()) ?? (await request<AuthState>("/auth/state")),
 
   login: (key: string) => request<{ user: UserView }>("/auth/login", json("POST", { key })),
   logout: () => request<{ ok: true }>("/auth/logout", json("POST")),
@@ -112,7 +116,13 @@ export const fsBrowseApi = {
 
 export const personalCliApi = {
   list: () =>
-    request<{ mode: "single" | "multi"; sharedHostCli: boolean; envs: PersonalCliEnv[] }>("/me/cli-env"),
+    request<{
+      mode: "single" | "multi";
+      sharedHostCli: boolean;
+      /** 共用档下才有：真正生效的宿主机配置里 ash MCP 登记了没有。 */
+      hostAshMcp?: ({ agentType: string } & PersonalAshMcp)[];
+      envs: PersonalCliEnv[];
+    }>("/me/cli-env"),
   one: (agentType: string) => request<PersonalCliEnv>(`/me/cli-env/${id(agentType)}`),
   readSkill: (agentType: string, name: string) =>
     request<{ name: string; body: string }>(`/me/cli-env/${id(agentType)}/skills/${id(name)}`),

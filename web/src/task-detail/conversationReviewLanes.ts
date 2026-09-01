@@ -27,6 +27,8 @@ export type ConversationReviewLane = {
   items: ConversationItem[];
   reviewerLabel: string | null;
   reviewerModel: string | null;
+  /** 卡内第一条气泡的头已经被卡头顶替，模型旁边的智能水平也得跟着搬上来，不然会丢。 */
+  reviewerEffort: string | null;
   /**
    * 派审时写的附言。它是这一轮审查的**输入**（每轮 prompt 都会带上），卡里摆出来才能
    * 拿它对着结论核对。只有自由派审 / 合并结果审查配得上 run 才知道；就地验证没有附言。
@@ -44,6 +46,33 @@ export type ConversationReviewLane = {
 export type ConversationFeedRow =
   | { kind: "item"; item: ConversationItem }
   | ConversationReviewLane;
+
+/**
+ * 卡内气泡跟卡头的关系：
+ * - `lead`  ——「这一轮审查的第一条发言」。谁在审、什么模型档位、什么时候开始跑了多久，
+ *   卡头已经原样写了一遍，气泡再顶一行只是复读，整条头部省掉。
+ * - `member` —— 同一个审查者的后续发言。身份仍然是复读，但时间和用时各不相同，留着。
+ * - `null`  —— 卡里混进来的别人（inline 卡在审查者开口前会先收着主任务的气泡），照常显示。
+ */
+export type ReviewLaneMessageRole = "lead" | "member";
+
+function laneOwnMessage(lane: ConversationReviewLane, item: ConversationItem): boolean {
+  if (item.kind !== "agent" || !item.reviewer || item.reviewer.round !== lane.round) return false;
+  if (lane.reviewerLabel && item.label !== lane.reviewerLabel) return false;
+  // 中途换了模型或智能水平的那条不算「卡头说过了」——真换了就得让它自己说。
+  const model = item.run?.model ?? null;
+  const effort = item.run?.reasoningEffort ?? null;
+  return (!model || model === lane.reviewerModel) && (!effort || effort === lane.reviewerEffort);
+}
+
+export function reviewLaneMessageRoles(lane: ConversationReviewLane): Map<string, ReviewLaneMessageRole> {
+  const roles = new Map<string, ReviewLaneMessageRole>();
+  for (const item of lane.items) {
+    if (!laneOwnMessage(lane, item)) continue;
+    roles.set(item.id, roles.size === 0 ? "lead" : "member");
+  }
+  return roles;
+}
 
 type ActiveLane = ConversationReviewLane & { reviewerSpoke: boolean };
 
@@ -139,6 +168,7 @@ function addToLane(lane: ActiveLane, item: ConversationItem): void {
   lane.reviewerSpoke = true;
   lane.reviewerLabel ??= item.label;
   lane.reviewerModel ??= item.run?.model ?? null;
+  lane.reviewerEffort ??= item.run?.reasoningEffort ?? null;
 }
 
 function finishLane(
@@ -185,6 +215,7 @@ function attachReports(lanes: ConversationReviewLane[], reviews: readonly FreeRe
       hasReport: (round.reportMarkdown ?? "").trim().length > 0,
       reviewerName: run.reviewerName,
       model: run.model,
+      effort: run.reasoningEffort,
       note: run.note ?? null,
     })))
     .sort((left, right) => left.startedAt.localeCompare(right.startedAt));
@@ -220,6 +251,7 @@ function attachReports(lanes: ConversationReviewLane[], reviews: readonly FreeRe
     // 审查者会话还没落盘时卡上没有气泡可推名字，用配到的这一 run 补齐。
     lane.reviewerLabel ??= candidate.reviewerName || null;
     lane.reviewerModel ??= candidate.model;
+    lane.reviewerEffort ??= candidate.effort;
     if (!candidate.hasReport) continue;
     lane.reportAvailable = true;
     lane.report = { kind: "free", runId: candidate.runId, round: candidate.round };
@@ -277,6 +309,7 @@ export function conversationFeedRows(
         items: [],
         reviewerLabel: null,
         reviewerModel: null,
+        reviewerEffort: null,
         note: null,
         startedAt: item.at ?? null,
         endedAt: item.at ?? null,

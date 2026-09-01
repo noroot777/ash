@@ -256,6 +256,20 @@ export interface PersonalCliEnv {
   memoryName: string | null;
   hasMemory: boolean;
   plugins: string[];
+  /** ash MCP 在这个个人配置目录里的登记状态。不支持个人配置目录的 CLI 为 null。 */
+  ashMcp: PersonalAshMcp | null;
+}
+
+/**
+ * 个人配置目录里的 ash MCP 登记。**缺了它 agent 就交不了卷** —— `complete_task` 那个
+ * 工具压根不存在,活干完了也只会显示成失败(server/src/auth/user-cli-mcp.ts 顶部)。
+ */
+export interface PersonalAshMcp {
+  configured: boolean;
+  /** 实际登记名。历史安装可能仍是 `harness`。 */
+  serverName: string | null;
+  /** 没配上时的原因,界面原样显示。 */
+  problem: string | null;
 }
 
 export interface PersonalSkill {

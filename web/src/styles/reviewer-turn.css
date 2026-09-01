@@ -33,6 +33,17 @@
   white-space: nowrap;
 }
 
+.verify-lane .conversation-note {
+  max-width: 760px;
+  margin: 10px 0;
+  border-left: 2px solid var(--line2);
+  padding: 1px 0 1px 11px;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.verify-lane .conversation-note time { margin-left: 7px; opacity: 0.72; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
 /* 验证段的起止旁注（第 N 轮验证开始 / 未通过并打回）跟着审查者一个颜色，两条旁注
    加中间的气泡才读得出是一段。未通过那条仍归红（.is-error 排在后面覆盖）—— 结论的
    成败比「它属于验证段」更要紧。 */
@@ -62,6 +73,7 @@
 .verify-lane-head {
   display: flex;
   min-height: 36px;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   border-bottom: 1px solid var(--line);
@@ -72,7 +84,17 @@
 .verify-lane.is-collapsed .verify-lane-head { border-bottom-color: transparent; }
 .verify-lane-mark { display: grid; width: 18px; height: 18px; flex: none; place-items: center; border-radius: 50%; background: color-mix(in lch, var(--cyan) 15%, var(--panel)); color: var(--cyan); }
 .verify-lane-head > b { flex: none; color: color-mix(in lch, var(--cyan) 72%, var(--ink)); font-size: 11px; font-weight: 680; }
-.verify-lane-by { min-width: 0; overflow: hidden; color: var(--faint); text-overflow: ellipsis; white-space: nowrap; }
+/* 卡内首条气泡的头省掉之后，「谁在审、什么模型、什么智能水平」只剩这一行 ——
+   它不再是气泡里那份的影子，得按正文小字的对比度来（WCAG AA 4.5:1，由 DOM 测试钉住）。
+   同理它也不能被挤成省略号：窄工作区里宁可整行换到下一行，也不能把智能水平吃掉
+   （min-width 撑住内容宽 = 不压缩就换行；真长到一行装不下时仍由 ellipsis 兜底）。 */
+.verify-lane-by {
+  min-width: min(max-content, 100%);
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .verify-lane-state { flex: none; border-radius: 999px; padding: 1px 7px; font-size: 9.5px; font-weight: 650; }
 .verify-lane-state.is-verified { background: color-mix(in lch, var(--green) 11%, var(--panel)); color: var(--green); }
 .verify-lane-state.is-failed { background: color-mix(in lch, var(--red) 11%, var(--panel)); color: var(--red); }
@@ -88,9 +110,10 @@
 .verify-lane-body > :first-child { margin-top: 0; }
 .verify-lane-body > :last-child { margin-bottom: 0; }
 .verify-lane .task-message--agent { width: 100%; margin-left: 0; border: 0; border-radius: 0; background: transparent; padding: 0; box-shadow: none; }
+/* 身份由卡头代言的那几条连头像列一起收掉——盾形在卡头已经有一颗，正文顺势对齐卡内边距。 */
+.verify-lane .task-message--agent.is-lane-owned { grid-template-columns: minmax(0, 1fr); gap: 0; }
 .verify-lane .task-message--agent::before { content: none; }
 .verify-lane .task-message--user.is-system-authored { padding-right: 0; padding-left: 0; }
-.verify-lane .conversation-note { margin-left: 0; }
 
 @media (max-width: 680px) {
   .verify-lane-head { flex-wrap: wrap; }

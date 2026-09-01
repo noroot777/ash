@@ -26,7 +26,9 @@ import {
   readPersonalSkill,
   writePersonalMemory,
   writePersonalSkill,
+  PERSONAL_CLI_TYPES,
 } from "./user-cli.js";
+import { hostAshMcp } from "./user-cli-mcp.js";
 
 /**
  * 个人 CLI 环境只对**本人**开放 —— 连实例管理员也看不了别人的(§八 个人面)。
@@ -61,7 +63,13 @@ export function mountPersonalCliRoutes(api: Hono): void {
     // 实例选了「共用宿主机 CLI」时个人配置目录压根没被注入(§八之二),这一层如实报
     // **不生效**:目录还在盘上、编辑器也还能写,但 CLI 根本不会去读它。不说清楚的话,
     // 用户会在这里装一个技能然后发现补全里没有 —— 而界面上一切正常。
-    return c.json({ mode: "multi", sharedHostCli: await isHostCliShared(), envs: listPersonalCliEnv(userId) });
+    const sharedHostCli = await isHostCliShared();
+    // 共用档下真正生效的是**宿主机**那份配置,所以「ash MCP 登记了没有」这一问也得问
+    // 到那边去(个人目录的答案在这一档下毫无意义)。只读:那是用户自己的 ~/.claude.json。
+    const hostAsh = sharedHostCli
+      ? PERSONAL_CLI_TYPES.map((agentType) => ({ agentType, ...hostAshMcp(agentType) }))
+      : [];
+    return c.json({ mode: "multi", sharedHostCli, hostAshMcp: hostAsh, envs: listPersonalCliEnv(userId) });
   });
 
   api.get("/me/cli-env/:agentType", async (c) => {

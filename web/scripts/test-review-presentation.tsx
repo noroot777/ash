@@ -3,7 +3,12 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Session } from "@ash/shared";
 import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
-import { conversationFeedRows, type ConversationReviewLane } from "../src/task-detail/conversationReviewLanes.ts";
+import {
+  conversationFeedRows,
+  reviewLaneMessageRoles,
+  type ConversationReviewLane,
+} from "../src/task-detail/conversationReviewLanes.ts";
+import { ConversationFeed } from "../src/task-detail/ConversationFeed.tsx";
 import { ReviewerLane } from "../src/task-detail/ReviewerLane.tsx";
 
 const session = {
@@ -115,5 +120,44 @@ const noteMarkup = renderToStaticMarkup(<ReviewerLane taskId="t1" lane={noteLane
 assert.match(noteMarkup, /派审附言/, "卡内正文顶部摆出附言");
 assert.match(noteMarkup, /重点看 SSE 断线重连/, "附言正文原样呈现");
 assert.match(noteMarkup, /含附言/, "卡头留标记，折叠着也看得出这一轮带附言");
+
+// —— 卡内首条气泡的头曾经是卡头的逐字复读：审查者名、模型、轮次徽标、开始时间、用时
+// 全部在卡头上写过一遍。省掉整条头之后，模型旁边的智能水平只剩卡头这一处，必须补上。
+const laneRun = (turnStartedAt: string, verifyRound?: number) => ({
+  at: turnStartedAt,
+  turnStartedAt,
+  event: { kind: "run", model: "gpt-5.5", reasoningEffort: "high", ...(verifyRound ? { verifyRound } : {}) },
+});
+const laneItems = buildConversationItems([{
+  session,
+  output: [
+    turn("system", "第 1 轮验证开始：就在这个任务的工作目录里跑。", "2026-08-11T06:00:00.000Z"),
+    "审查正文。",
+    turn("system", "第 1 轮验证通过。", "2026-08-11T06:30:00.000Z"),
+  ].join("\n"),
+  trace: [laneRun("2026-08-11T06:00:00.000Z", 1)],
+} as never], [session], []);
+const inlineLane = conversationFeedRows(laneItems)
+  .find((row): row is ConversationReviewLane => row.kind === "review-lane");
+assert.ok(inlineLane);
+assert.equal(inlineLane.reviewerEffort, "high", "智能水平跟着模型一起搬到卡头");
+const laneAgent = inlineLane.items.find((item) => item.kind === "agent");
+assert.ok(laneAgent);
+assert.equal(reviewLaneMessageRoles(inlineLane).get(laneAgent.id), "lead", "本轮第一条审查发言由卡头代言");
+
+const feedMarkup = renderToStaticMarkup(
+  <ConversationFeed
+    task={{ id: "t1", status: "done" } as never}
+    items={laneItems}
+    sessions={[session]}
+    loading={false}
+    error={null}
+  />,
+);
+assert.match(feedMarkup, /gpt-5\.5 · high/, "卡头报出模型与智能水平");
+assert.doesNotMatch(feedMarkup, /agent-run-identity/, "卡内首条气泡不再重复审查者与模型");
+assert.doesNotMatch(feedMarkup, /verify-badge/, "轮次徽标是卡头标题的复读，卡内不出");
+assert.doesNotMatch(feedMarkup, /task-turn-duration/, "用时已在卡头，首条气泡不再重复");
+assert.doesNotMatch(feedMarkup, /task-message-avatar/, "卡头左边已有一颗盾，卡内气泡不再各挂一颗");
 
 console.log("review-presentation ok");
