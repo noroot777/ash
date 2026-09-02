@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type {
   HandoffApprovalResult,
+  HandoffCapabilityGap,
   HandoffExportResult,
   HandoffTarget,
   ProjectView,
@@ -13,6 +14,7 @@ import { api, ApiError, type TaskScopedHandoffPreflightResult } from "../lib/api
 import { useDismissable } from "../lib/useDismissable.ts";
 import { HandoffPeerKeyField } from "../settings/HandoffPeerKeyField.tsx";
 import { HandoffDialogHeader, HandoffRouteCard } from "../task-detail/HandoffDialogViews.tsx";
+import { HandoffCapabilityNotice } from "../task-detail/HandoffCapabilityNotice.tsx";
 import { BulkHandoffTaskList } from "./BulkHandoffTaskList.tsx";
 import {
   bulkIdentityMismatchWarning,
@@ -127,6 +129,10 @@ export function BulkHandoffDialog({
   const [taskTargets, setTaskTargets] = useState<Map<string, HandoffTarget>>(new Map());
   const [preflightFailures, setPreflightFailures] = useState<TransferFailure[]>([]);
   const [checkedAll, setCheckedAll] = useState(false);
+  // 能力握手拦下的那些任务(目标机没装它们要用的智能体)。整批共用一个「仍然接力」,
+  // 与补 key 同待遇 —— 没勾就把它们**跳过**,而不是拦住整批:一个任务缺 CLI 不该
+  // 挡住其余那些目标机明明跑得动的任务。
+  const [capabilityAck, setCapabilityAck] = useState(false);
   const [approval, setApproval] = useState<HandoffApprovalResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   // 整批都卡在「对端是多人实例但不认识你」时,补 key 的入口也得在这儿 —— 与单任务
@@ -361,6 +367,7 @@ export function BulkHandoffDialog({
           targetProjectId,
           targetName: taskTarget.name,
           autoResume,
+          ...(capabilityAck ? { ignoreCapabilityGaps: true } : {}),
         }));
       } catch (reason) {
         // 打包阶段撞上「对端不认识你」同样能当场补 key(整批共用一把)。这时**不能**把
@@ -380,7 +387,7 @@ export function BulkHandoffDialog({
   };
 
   const run = () => {
-    const runnable = eligible.filter((task) => preflights.has(task.id) && taskTargets.has(task.id));
+    const runnable = eligible.filter((task) => isRunnable(task.id));
     if ((needsBatchProject && !projectId) || busy || !runnable.length || !checkedAll) return;
     void transfer(runnable, { successes: [], failures: [...preflightFailures] });
   };
@@ -403,7 +410,23 @@ export function BulkHandoffDialog({
     () => [...new Set([...preflights.values()].flatMap((row) => row.local.notes))],
     [preflights],
   );
-  const readyTasks = eligible.filter((task) => preflights.has(task.id) && taskTargets.has(task.id));
+  // 能力握手:哪些任务目标机跑不动,以及去重后的落差明细(整批共用一个提示块)。
+  const capabilityBlockedIds = useMemo(
+    () => new Set([...preflights.entries()].filter(([, row]) => row.capability?.blocking).map(([taskId]) => taskId)),
+    [preflights],
+  );
+  const capabilityGaps = useMemo(() => {
+    const seen = new Map<string, HandoffCapabilityGap>();
+    for (const row of preflights.values()) {
+      for (const gap of row.capability?.gaps ?? []) seen.set(`${gap.kind}-${gap.agentType}-${gap.model ?? ""}`, gap);
+    }
+    return [...seen.values()];
+  }, [preflights]);
+  const capabilitySkipped = capabilityAck ? 0 : capabilityBlockedIds.size;
+  /** 这一批真正会搬的:预检过、有目标机,且没被能力闸挡住(挡住的按跳过处理)。 */
+  const isRunnable = (taskId: string) => preflights.has(taskId) && taskTargets.has(taskId)
+    && (capabilityAck || !capabilityBlockedIds.has(taskId));
+  const readyTasks = eligible.filter((task) => isRunnable(task.id));
   const needsBatchProject = !returnOnly;
   const projectOptions = returnOnly ? [] : firstProbe?.projects ?? [];
   const selectedProject = projectOptions.find((candidate) => candidate.id === projectId) ?? null;
@@ -445,7 +468,11 @@ export function BulkHandoffDialog({
       ? canProbeWithoutApproval && !blocked ? `重新检查${returnOnly ? "来源机" : "目标机"}` : blocked ? `检查${actionName}申请状态` : `发送${actionName}申请`
       : !checkedAll
         ? `${preflightFailures.length > 0 ? "重新检查" : "检查"} ${eligible.length} 个${actionName}任务`
-        : `停止并${actionName} ${readyTasks.length} 个任务${preflightFailures.length ? `（跳过 ${preflightFailures.length} 个）` : ""}`;
+        : `停止并${actionName} ${readyTasks.length} 个任务${
+            preflightFailures.length + capabilitySkipped
+              ? `（跳过 ${preflightFailures.length + capabilitySkipped} 个）`
+              : ""
+          }`;
   const message = result
     ? peerKeyRequired
       ? `已${actionName} ${result.successes.length} 个；另外 ${peerKeyBlocked.size} 个卡在「对端不认识你」，补上下面这把 key 就能接着搬，已经过去的不会再搬一次。`
@@ -572,6 +599,19 @@ export function BulkHandoffDialog({
             <input type="checkbox" checked={autoResume} disabled={busy} onChange={(event) => setAutoResume(event.target.checked)} />
             <span>{actionName}完成后在目标机自动续跑</span>
           </label>
+        )}
+        {checkedAll && capabilityGaps.length > 0 && (
+          <HandoffCapabilityNotice
+            capability={{
+              status: "gaps",
+              unknownReason: null,
+              gaps: capabilityGaps,
+              blocking: capabilityBlockedIds.size > 0,
+            }}
+            acknowledged={capabilityAck}
+            onAcknowledge={setCapabilityAck}
+            blockedCount={capabilityBlockedIds.size}
+          />
         )}
         {notes.length > 0 && checkedAll && <ul className="handoff-bulk-notes">{notes.map((note) => <li key={note}>{note}</li>)}</ul>}
         {blocked && <p className="handoff-bulk-warning">目标机尚未批准本机。请在目标机接受申请后，再点击“检查申请状态”。</p>}

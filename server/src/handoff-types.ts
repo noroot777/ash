@@ -1,7 +1,7 @@
 // 任务接力——两端共用的传输协议类型、错误类与尺寸常量(从 handoff.ts 拆出,
 // 导出/导入/HTTP 面三处共用;业务流程见 handoff.ts 顶部注释)。
 import { isAbsolute } from "node:path";
-import type { HandoffErrorCode, HandoffPingProject } from "@ash/shared";
+import type { HandoffErrorCode, HandoffPeerCapabilities, HandoffPingProject } from "@ash/shared";
 
 export class HandoffError extends Error {
   // 导入侧专用:true = 这次失败**不证明**本机没留下半截产物(补偿回滚自身失败)。
@@ -272,6 +272,13 @@ export interface HandoffPingResponse {
   peerUser?: { id: string; name: string } | null;
   // 未获批准时故意为空:项目清单是本机的仓库布局,不该报给还没被认可的机器。
   projects: HandoffPingProject[];
+  // 本机装了哪些智能体(能力握手)。源机据此在**打包之前**判断「对端跑不跑得动这个
+  // 任务」,详见 server/src/handoff-capability.ts 顶部。老版本 ash 没有这个字段 ——
+  // 源机读到 undefined 就按「无从核对」处理,不拦。
+  //
+  // 与 projects 同档,未获批准时故意不报:装了哪些 CLI 也是本机布局的一部分,而且
+  // 那时接力本来就进行不下去,报了只是白白多讲一句自己的事。
+  capabilities?: HandoffPeerCapabilities;
   // 任务级免审批移回时，只返回该任务原项目的 refs，供持有机生成增量 bundle。
   returnRefs?: { name: string; commit: string }[];
 }

@@ -11,7 +11,7 @@
 //
 // 入站方向(谁能推进本机)在 handoff-peers.ts。
 import type { HandoffApprovalResult, HandoffIdentity, HandoffPeerIdentity } from "@ash/shared";
-import { HANDOFF_PEER_KEY_REQUIRED } from "@ash/shared/handoff";
+import { HANDOFF_CAPABILITY_BLOCKED, HANDOFF_PEER_KEY_REQUIRED } from "@ash/shared/handoff";
 import { getAppSettings } from "./app-settings.js";
 import { HandoffError } from "./handoff-types.js";
 import type { HandoffPingResponse } from "./handoff-types.js";
@@ -112,7 +112,10 @@ export async function fetchPeer<T>(
     error.remoteAsh = payload?.ash === true;
     // 原因码穿透这一跳:「对端不认识你这把 key」是对端才知道的事实,可本机的界面才是
     // 能补 key 的地方。只认白名单里的码 —— 对端是外部输入,不能让它往前端塞任意字符串。
+    // 能力握手的拒绝同样要穿透:一键移回是**对端**在跑导出,而能勾「仍然接力」的界面
+    // 在本机(见 shared 的 HANDOFF_CAPABILITY_BLOCKED)。
     if (payload?.code === HANDOFF_PEER_KEY_REQUIRED) error.code = HANDOFF_PEER_KEY_REQUIRED;
+    else if (payload?.code === HANDOFF_CAPABILITY_BLOCKED) error.code = HANDOFF_CAPABILITY_BLOCKED;
     throw error;
   }
   if (payload === null) {

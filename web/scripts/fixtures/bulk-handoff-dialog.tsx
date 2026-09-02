@@ -20,6 +20,9 @@ const preflight = (overrides: Record<string, unknown> = {}) => ({
   },
   projects: [{ id: "ash", name: "ash", repoPath: "/Users/fjh/code/ash", isRepo: true }],
   suggestedProjectId: "ash",
+  // 能力握手:这个夹具验的是信息层级,让它落在「对得上」那一档,别把握手的红块
+  // 混进排版断言里(握手自己的用例在 server 的 test-handoff-capability*)。
+  capability: { status: "ok", unknownReason: null, gaps: [], blocking: false },
   local: {
     status: "running",
     running: true,
