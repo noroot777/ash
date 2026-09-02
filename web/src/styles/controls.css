@@ -536,6 +536,11 @@
    flex-wrap 才有的位置）。它是块，不能挤在输入框旁边。 */
 .dir-pick-tree { flex: 0 0 100%; }
 
+/* 复制按钮的就地反馈（components/CopyButton.tsx）。外形归各处皮肤管，这里只管
+   「成功/失败」这两种状态怎么现形——颜色跟着 currentColor 走，图标和文字一起变。 */
+.copy-button.is-copied { color: var(--green); }
+.copy-button.is-copy-failed { color: var(--red); }
+
 @media (prefers-reduced-motion: reduce) {
   .task-pin { transition: none; }
 }
