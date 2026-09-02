@@ -20,6 +20,8 @@ import type {
   LlmProtocol,
   TaskWorkspaceLeftover,
   TaskWorkspaceDiscardResult,
+  TaskReviewInfo,
+  ReviewDispatchInput,
 } from "@ash/shared";
 import type { AuthState } from "@ash/shared/multiuser";
 import type { CliModelCatalog } from "@ash/shared/cli-presets";
@@ -173,6 +175,18 @@ export const api = {
   },
   // 删除前先问「这个任务还留着 worktree/分支吗」,有才提示要不要一起删。
   taskWorkspace: (id: string): Promise<TaskWorkspaceLeftover> => req(`/tasks/${id}/workspace`).then(j),
+  // 审查/验证：轮次与结论(GET)、再派一轮(POST)、证据截图(带鉴权头的 <Image> source)。
+  taskReview: (id: string): Promise<TaskReviewInfo> => req(`/tasks/${id}/review`).then(j),
+  dispatchTaskReview: (id: string, input: ReviewDispatchInput): Promise<{ round: number }> =>
+    req(`/tasks/${id}/review/dispatch`, { method: "POST", body: JSON.stringify(input) }).then(j),
+  taskReviewFileUrl: (id: string, round: number, name: string): string =>
+    `${base()}/api/tasks/${encodeURIComponent(id)}/review/file?round=${encodeURIComponent(String(round))}&name=${encodeURIComponent(name)}`,
+  // 截图走 <Image>，绕过了上面的 req()，所以鉴权头得在这儿补一次 —— 别让调用点各自
+  // 再拼一份 Bearer，那是 api key 逻辑的第二个副本。
+  taskReviewFileSource: (id: string, round: number, name: string): { uri: string; headers?: Record<string, string> } => ({
+    uri: api.taskReviewFileUrl(id, round, name),
+    headers: authHeader(),
+  }),
   // Local branches + current HEAD for the new-task form's base picker.
   projectBranches: (id: string): Promise<{ branches: string[]; current: string | null }> =>
     req(`/projects/${id}/branches`).then(j),

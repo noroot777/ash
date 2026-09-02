@@ -3,6 +3,14 @@ import type { TaskListItem } from "@ash/shared";
 import { statusCounts } from "@ash/shared/team";
 import { Ionicons } from "@expo/vector-icons";
 import { SignalBar } from "@/components/SignalBar";
+import {
+  attentionCounts,
+  attentionSurface,
+  StatusChip,
+  TaskStatusChips,
+  taskAttention,
+  ATTENTION_COLOR,
+} from "@/components/TaskStatusChips";
 import { TaskTimeChip } from "@/lib/time";
 import { useTheme, radius, fonts } from "@/lib/theme";
 
@@ -55,6 +63,14 @@ function TeamCard({
   onPress: () => void;
 }) {
   const theme = useTheme();
+  // 折叠的团队卡替下面的执行者喊话：执行者默认收着，只在子行标就等于没标。调度台自
+  // 己的状态由主牌负责，这里只汇总执行者，免得同一件事说两遍。
+  const attention = attentionCounts(workers);
+  const leadAttention = taskAttention(task);
+  const surface = attentionSurface(
+    leadAttention?.kind ?? (attention.questions ? "question" : attention.verifyFailed ? "verify_failed" : null),
+    theme,
+  );
   const summary = statusCounts(workers)
     .map((bucket) => `${bucket.n} ${bucket.label}`)
     .join(" · ");
@@ -70,9 +86,9 @@ function TeamCard({
         paddingHorizontal: 12,
         paddingVertical: 13,
         borderRadius: radius.lg,
-        backgroundColor: pressed ? theme.raised : theme.panel,
+        backgroundColor: pressed ? theme.raised : surface.tint ?? theme.panel,
         borderWidth: 1,
-        borderColor: theme.line,
+        borderColor: surface.borderColor,
       })}
     >
       <Pressable
@@ -99,6 +115,15 @@ function TeamCard({
         <Text style={{ color: summary ? theme.muted : theme.faint, fontSize: 12, fontFamily: fonts.mono }} numberOfLines={1}>
           {summary || "暂无执行者"}
         </Text>
+        <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+          <TaskStatusChips task={task} />
+          {attention.questions ? (
+            <StatusChip label={`${attention.questions} 人等你答复`} color={ATTENTION_COLOR} icon="help-circle" filled />
+          ) : null}
+          {attention.verifyFailed ? (
+            <StatusChip label={`${attention.verifyFailed} 人未通过验证`} color={theme.danger} icon="alert-circle" filled />
+          ) : null}
+        </View>
         <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 9 }}>
           <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.mono }}>
             调度者 {task.team?.leadExecutorLabel || task.executorLabel || task.team?.lead || task.agentType || "—"}
@@ -113,6 +138,7 @@ function TeamCard({
 function TaskCard({ task, parentTitle, onPress }: { task: TaskListItem; parentTitle?: string; onPress: () => void }) {
   const theme = useTheme();
   const nested = !!parentTitle;
+  const surface = attentionSurface(taskAttention(task)?.kind, theme);
   return (
     <Pressable
       onPress={onPress}
@@ -125,9 +151,9 @@ function TaskCard({ task, parentTitle, onPress }: { task: TaskListItem; parentTi
         paddingHorizontal: 14,
         paddingVertical: nested ? 11 : 14,
         borderRadius: radius.lg,
-        backgroundColor: pressed ? theme.raised : nested ? theme.bg : theme.panel,
+        backgroundColor: pressed ? theme.raised : surface.tint ?? (nested ? theme.bg : theme.panel),
         borderWidth: 1,
-        borderColor: theme.line,
+        borderColor: surface.borderColor,
       })}
     >
       <SignalBar status={task.status} height={nested ? 34 : 38} />
@@ -149,6 +175,9 @@ function TaskCard({ task, parentTitle, onPress }: { task: TaskListItem; parentTi
             </Text>
           </View>
         ) : null}
+        <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+          <TaskStatusChips task={task} />
+        </View>
         <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
           {task.agentType ? (
             <Text style={{ color: theme.muted, fontSize: 12, fontFamily: fonts.mono }}>@{task.agentType}</Text>

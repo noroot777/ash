@@ -19,21 +19,19 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { refreshAll } from "@/lib/data";
-import { runAction, canStopTask } from "@/lib/taskActions";
-import { STATUS_META } from "@/lib/constants";
-import { useTheme, radius, fonts } from "@/lib/theme";
+import { runAction } from "@/lib/taskActions";
+import { useTheme, radius } from "@/lib/theme";
 import { Ionicons } from "@expo/vector-icons";
 import { Conversation } from "@/components/Conversation";
 import { QuestionCard } from "@/components/QuestionCard";
 import { DuetTaskDetail } from "@/components/DuetTaskDetail";
 import { TeamTaskDetail } from "@/components/team/TeamTaskDetail";
-import { WorkerTeamLink } from "@/components/WorkerTeamLink";
+import { TaskDetailHeader } from "@/components/TaskDetailHeader";
+import { TaskReviewPanel } from "@/components/TaskReviewPanel";
 import { MarkdownText } from "@/components/MarkdownText";
-import { SignalBar } from "@/components/SignalBar";
 import { SkillSuggestions } from "@/components/SkillSuggestions";
 import { PendingMessageTray } from "@/components/PendingMessageTray";
 import { DateTimeButton } from "@/components/DateTimeField";
-import { TaskTimeChip } from "@/lib/time";
 import { canArchive } from "@ash/shared";
 import type { Session, ScheduledMessage } from "@ash/shared";
 import type { LogLine } from "@/lib/log";
@@ -62,6 +60,9 @@ export default function TaskDetail() {
   const [input, setInput] = useState("");
   const [pending, setPending] = useState<ScheduledMessage[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  // 下拉刷新的计数器：会话/任务列表由本屏自己重拉，审查区块是独立组件、拉的是另一个
+  // 端点，靠这个令牌搭一次顺风车（手机端一律轮询，不引 SSE）。
+  const [refreshTick, setRefreshTick] = useState(0);
   // 任务正文：列表不带，按 id 单取（见下面的 hydrate effect）。
   const [body, setBody] = useState<string | undefined>(undefined);
   const scrollRef = useRef<ScrollView>(null);
@@ -101,6 +102,7 @@ export default function TaskDetail() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    setRefreshTick((tick) => tick + 1);
     await Promise.all([loadConv().catch(() => {}), refreshAll().catch(() => {})]);
     setRefreshing(false);
   }, [loadConv]);
@@ -321,8 +323,6 @@ export default function TaskDetail() {
     }
   };
 
-  const meta = STATUS_META[status];
-
   if (task.mode === "team") {
     return (
       <TeamTaskDetail
@@ -387,78 +387,15 @@ export default function TaskDetail() {
         }}
       />
 
-      {/* Frozen header: status + title + metadata (stays put while conversation scrolls) */}
-      <View style={{ flexDirection: "row", paddingHorizontal: 16, paddingTop: 12, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: theme.line, gap: 13 }}>
-        <SignalBar status={status} height={52} />
-        <View style={{ flex: 1, gap: 10 }}>
-          {/* Status label + run/stop action */}
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <Text style={{ color: meta?.color, fontSize: 11, fontFamily: fonts.monoMed, letterSpacing: 1 }}>
-              {status.toUpperCase().replace(/_/g, " ")}
-            </Text>
-            <View style={{ flex: 1 }} />
-            {frozen ? (
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-                <Ionicons name="archive" size={13} color={theme.faint} />
-                <Text style={{ color: theme.faint, fontSize: 12, fontFamily: fonts.mono }}>已归档</Text>
-              </View>
-            ) : canStopTask(status) ? (
-              <Pressable
-                onPress={onStop}
-                style={{
-                  paddingHorizontal: 14,
-                  paddingVertical: 7,
-                  borderRadius: radius.md,
-                  borderWidth: 1,
-                  borderColor: theme.danger,
-                }}
-              >
-                <Text style={{ color: theme.danger, fontSize: 13, fontFamily: fonts.bodySemi }}>停止</Text>
-              </Pressable>
-            ) : (
-              <Pressable
-                onPress={action.canClick ? onPrimary : undefined}
-                style={{
-                  paddingHorizontal: 14,
-                  paddingVertical: 7,
-                  borderRadius: radius.md,
-                  backgroundColor: action.canClick ? theme.accent : theme.raised,
-                  opacity: action.canClick ? 1 : 0.6,
-                }}
-              >
-                <Text style={{ color: action.canClick ? theme.accentFg : theme.muted, fontSize: 13, fontFamily: fonts.bodySemi }}>
-                  {action.label}
-                </Text>
-              </Pressable>
-            )}
-          </View>
-
-          {/* Title */}
-          <Text style={{ color: theme.ink, fontSize: 21, fontFamily: fonts.display, lineHeight: 27 }} numberOfLines={2}>
-            {task.title || "(无标题)"}
-          </Text>
-
-          {dispatchedWorker ? (
-            <WorkerTeamLink
-              title={parentTeam?.title || "返回团队调度台"}
-              onPress={() => router.push(`/task/${task.parentId}`)}
-            />
-          ) : null}
-
-          {/* Metadata: agent + labels */}
-          <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-            {task.agentType ? (
-              <Text style={{ color: theme.muted, fontSize: 12, fontFamily: fonts.mono }}>@{task.agentType}</Text>
-            ) : null}
-            {task.labels.map((l) => (
-              <Text key={l} style={{ color: theme.faint, fontSize: 12, fontFamily: fonts.mono }}>
-                #{l}
-              </Text>
-            ))}
-            <TaskTimeChip task={task} />
-          </View>
-        </View>
-      </View>
+      {/* Frozen header: status + stage + title + metadata (stays put while conversation scrolls) */}
+      <TaskDetailHeader
+        task={task}
+        action={action}
+        parentTeamTitle={dispatchedWorker ? parentTeam?.title ?? "" : null}
+        onPrimary={onPrimary}
+        onStop={onStop}
+        onOpenTeam={() => router.push(`/task/${task.parentId}`)}
+      />
 
       <ScrollView
         ref={scrollRef}
@@ -495,6 +432,10 @@ export default function TaskDetail() {
             还没有输出 — 点上方「{action.label}」开始
           </Text>
         ) : null}
+
+        {/* 审查/验证：轮次、结论、报告、截图，以及「再派一轮」。放在最后 —— 页面初次
+            打开会自动滚到底，指挥用得最多的那个入口正好落在眼皮底下。 */}
+        <TaskReviewPanel task={task} parentTask={parentTeam} refreshToken={refreshTick} />
       </ScrollView>
 
       {/* Reply composer：归档只读→提示条;否则待发列表(定时发送)+输入行 [输入][🕐][发送] */}
