@@ -99,24 +99,10 @@ export function TeamTaskDetail({
     [workers],
   );
   const openWorker = useCallback((workerId: string) => router.push(`/task/${workerId}`), [router]);
-  // 调度者提的问题夹在概览和会话之间，一屏未必装得下；打开任务和点进输入框时都把它对
-  // 到视野里（和单飞详情同一套，见 lib/scroll.ts）。
-  const questionRegion = useRef<{ y: number; height: number } | null>(null);
-  const questionPending = useRef(false);
-  useEffect(() => {
-    questionRegion.current = null;
-    questionPending.current = !!task.question;
-  }, [task.id, task.question]);
-  const revealQuestion = useCallback(() => {
-    const region = questionRegion.current;
-    if (region) sticky.revealRegion(region.y, region.height);
-  }, [sticky]);
-  const onQuestionMeasure = useCallback((y: number, height: number) => {
-    questionRegion.current = { y, height };
-    if (!questionPending.current) return;
-    questionPending.current = false;
-    sticky.revealRegion(y, height);
-  }, [sticky]);
+  // 调度者提的问题夹在概览和会话之间，点进它的输入框时键盘会盖住下半张卡。位置当场量，
+  // 不缓存（和单飞详情同一套，见 lib/scroll.ts 的 revealNode）。
+  const questionRef = useRef<View>(null);
+  const revealQuestion = useCallback(() => sticky.revealNode(questionRef.current), [sticky]);
   const batchInsertions = useMemo<ConversationInsertion[]>(
     () => batches.map((batch, index) => ({
       key: batch.key,
@@ -280,6 +266,8 @@ export function TeamTaskDetail({
         }}
       />
 
+      {/* 量可视区用的一层，见 lib/scroll.ts。 */}
+      <View ref={sticky.viewportRef} style={{ flex: 1 }}>
       <ScrollView
         ref={scrollRef}
         style={{ flex: 1 }}
@@ -323,7 +311,7 @@ export function TeamTaskDetail({
         ) : null}
 
         {task.question ? (
-          <QuestionCard task={task} onMeasure={onQuestionMeasure} onFocusInput={revealQuestion} />
+          <QuestionCard task={task} cardRef={questionRef} onFocusInput={revealQuestion} />
         ) : null}
 
         <View style={{ gap: 9 }}>
@@ -348,6 +336,7 @@ export function TeamTaskDetail({
           ) : null}
         </View>
       </ScrollView>
+      </View>
 
       <TeamReplyBox
         input={input}

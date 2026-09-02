@@ -67,23 +67,10 @@ export default function TaskDetail() {
   // 粘底：轮询来了新内容就跟到底，正在往回翻历史时不打扰。键盘弹出/输入区叠高导致的
   // 可视区变化也算，见 lib/scroll.ts。
   const sticky = useStickyBottom(scrollRef);
-  // 待答问题卡在会话流中间。打开任务时优先把它拉进视野（而不是一律滚到最底），点进它
-  // 的输入框时也重新对一次位 —— 键盘一弹可视区少掉一半，输入框十有八九落在键盘底下。
-  const questionRegion = useRef<{ y: number; height: number } | null>(null);
-  const questionPending = useRef(false);
-
-  const revealQuestion = useCallback(() => {
-    const region = questionRegion.current;
-    if (!region) return;
-    sticky.revealRegion(region.y, region.height);
-  }, [sticky]);
-
-  const onQuestionMeasure = useCallback((y: number, height: number) => {
-    questionRegion.current = { y, height };
-    if (!questionPending.current) return;
-    questionPending.current = false;
-    sticky.revealRegion(y, height);
-  }, [sticky]);
+  // 待答问题卡夹在会话流中间，点进它的输入框时键盘会盖住下半张卡（发送键正在那儿）。
+  // 拿它的节点当场量位置再滚 —— 别缓存坐标，理由见 revealNode 的注释。
+  const questionRef = useRef<View>(null);
+  const revealQuestion = useCallback(() => sticky.revealNode(questionRef.current), [sticky]);
 
   // Pull every session's .md and rebuild the transcript. One call = one full
   // snapshot; we replace rather than append, so the same call also fills any gap.
@@ -163,14 +150,6 @@ export default function TaskDetail() {
       sub.remove();
     };
   }, [loadPending, task?.mode, task?.status]);
-
-  // 换任务、或来了一个新问题：下次这张卡量出位置时把它拉进视野。放在 effect 里而不是
-  // 直接看 task.question —— 轮询每 5 秒回来一个新对象，只有问题**内容**变了才重新定位，
-  // 否则用户每翻几秒就被拽回问题卡。
-  useEffect(() => {
-    questionRegion.current = null;
-    questionPending.current = !!task?.question;
-  }, [id, task?.question]);
 
   if (!task) {
     return (
@@ -409,6 +388,9 @@ export default function TaskDetail() {
         onOpenTeam={() => router.push(`/task/${task.parentId}`)}
       />
 
+      {/* 这一层只为量「可视区此刻在屏幕的哪一块」—— ScrollView 自己没公开
+          measureInWindow，套一层普通 View 是跨平台最省事的量法（见 lib/scroll.ts）。 */}
+      <View ref={sticky.viewportRef} style={{ flex: 1 }}>
       <ScrollView
         ref={scrollRef}
         style={{ flex: 1 }}
@@ -443,7 +425,7 @@ export default function TaskDetail() {
 
         {/* ask_question answer flow stays separate from ordinary conversation replies. */}
         {task.question ? (
-          <QuestionCard task={task} onMeasure={onQuestionMeasure} onFocusInput={revealQuestion} />
+          <QuestionCard task={task} cardRef={questionRef} onFocusInput={revealQuestion} />
         ) : null}
 
         {lines.length === 0 && !task.question ? (
@@ -456,6 +438,7 @@ export default function TaskDetail() {
             打开会自动滚到底，指挥用得最多的那个入口正好落在眼皮底下。 */}
         <TaskReviewPanel task={task} parentTask={parentTeam} refreshToken={refreshTick} />
       </ScrollView>
+      </View>
 
       {/* Reply composer：归档只读→提示条；否则待发列表(定时发送)+技能候选+输入行。
           整块在 components/ReplyComposer.tsx —— 这个文件贴着单文件行数上限。 */}

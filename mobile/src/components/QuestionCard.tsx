@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type RefObject } from "react";
 import { Alert, Pressable, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { MAX_QUESTION_ITEMS, type TaskListItem } from "@ash/shared";
@@ -14,12 +14,12 @@ const QUESTION_BORDER = "#22D3EE66";
 // user compose that payload without losing the correspondence between questions.
 export function QuestionCard({
   task,
-  onMeasure,
+  cardRef,
   onFocusInput,
 }: {
   task: TaskListItem;
-  /** 这张卡在滚动内容里的位置。外面用它把卡片拉进视野（打开任务、键盘弹出）。 */
-  onMeasure?: (y: number, height: number) => void;
+  /** 卡片根节点。外面用它当场量位置，把卡片拉进视野（见 lib/scroll.ts 的 revealNode）。 */
+  cardRef?: RefObject<View | null>;
   /** 卡里的输入框拿到焦点了 —— 它在会话流中间，键盘一弹很容易被压在下面。 */
   onFocusInput?: () => void;
 }) {
@@ -69,10 +69,7 @@ export function QuestionCard({
 
   return (
     <View
-      onLayout={(event) => {
-        const { y, height } = event.nativeEvent.layout;
-        onMeasure?.(y, height);
-      }}
+      ref={cardRef}
       style={{
         overflow: "hidden",
         borderRadius: radius.md,
