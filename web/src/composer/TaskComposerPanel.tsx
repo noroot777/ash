@@ -21,14 +21,11 @@ import {
 } from "../components/ScheduleControl.tsx";
 import { Button } from "../components/ui.tsx";
 import {
-  executorValue,
   isExecutorPickable,
   nothingRunnable,
   parseExecutorValue,
-  preferredExecutor,
   teamExecutorCandidates,
   useAgentAvailability,
-  type ExecutorSelection,
 } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
 import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
@@ -36,14 +33,17 @@ import { useSkills } from "../lib/useSkills.ts";
 import { SlashMenu } from "../components/SlashMenu.tsx";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import { ComposerFields } from "./ComposerFields.tsx";
-import { ASH_SLASH_ITEMS, MODES, SLASHES, SeedAttachmentList, defaultProfile } from "./composerParts.tsx";
+import { ASH_SLASH_ITEMS, MODES, SLASHES, SeedAttachmentList } from "./composerParts.tsx";
 import { useComposerWorkflow } from "./ComposerWorkflow.tsx";
 import { ComposerLaunchControl, type LaunchMode } from "./ComposerLaunchControl.tsx";
 import { CreateGroupDialog } from "../overlays/CreateEntityDialog.tsx";
 import {
   emptyComposerExecutorConfigs,
+  initialComposerExecutors,
   patchComposerExecutor,
+  reconcileComposerExecutors,
   setComposerExecutorProfile,
+  teamPresetExecutors,
   type ComposerExecutorRole,
 } from "./executorOverrides.ts";
 export type ComposerDraft = { body: string; attachments: string[]; noteIds?: string[] };
@@ -109,25 +109,7 @@ export function TaskComposerPanel({
     api.agents().then((agents) => {
       if (!alive) return;
       setProfiles(agents);
-      const claude = defaultProfile(agents, "claude") ?? agents[0];
-      const codex = defaultProfile(agents, "codex")
-        ?? agents.find((profile) => profile.id !== claude?.id)
-        ?? claude;
-      const claudeValue = executorValue(claude
-        ? { agentType: claude.type, executorId: claude.id }
-        : { agentType: "claude", executorId: null });
-      const codexValue = executorValue(codex
-        ? { agentType: codex.type, executorId: codex.id }
-        : { agentType: "codex", executorId: null });
-      setExecutors((current) => ({
-        ...current,
-        single: { ...current.single, profile: claudeValue },
-        lead: { ...current.lead, profile: claudeValue },
-        worker: { ...current.worker, profile: codexValue },
-        reviewer: { ...current.reviewer, profile: codexValue },
-        voiceA: { ...current.voiceA, profile: claudeValue },
-        voiceB: { ...current.voiceB, profile: codexValue },
-      }));
+      setExecutors((current) => initialComposerExecutors(current, agents));
     }).catch((error) => {
       if (alive) notify(error instanceof Error ? error.message : "执行器配置读取失败");
     }).finally(() => {
@@ -270,46 +252,12 @@ export function TaskComposerPanel({
 
   useEffect(() => {
     if (!profilesReady || detection.status === "loading") return;
-    const reconcile = (
-      value: string,
-      types: AgentType[],
-      candidates: AgentExecutorProfile[],
-      preferred: AgentType,
-      avoid?: AgentType,
-    ): ExecutorSelection | null => {
-      const current = parseExecutorValue(value, profiles, { agentType: preferred, executorId: null });
-      return value && isExecutorPickable(current, types, candidates)
-        ? current
-        : preferredExecutor(types, candidates, preferred, avoid);
-    };
-    setExecutors((current) => {
-      const single = reconcile(current.single.profile, workerTypes, profiles, "claude");
-      const lead = reconcile(current.lead.profile, leadTypes, leadProfiles, "claude");
-      const worker = reconcile(current.worker.profile, workerTypes, profiles, "codex", lead?.agentType);
-      const reviewer = reconcile(
-        current.reviewer.profile,
-        workerTypes,
-        profiles,
-        worker?.agentType ?? "codex",
-      ) ?? worker;
-      const voiceA = reconcile(current.voiceA.profile, workerTypes, profiles, "claude");
-      const voiceB = reconcile(
-        current.voiceB.profile,
-        workerTypes,
-        profiles,
-        "codex",
-        voiceA?.agentType,
-      );
-      let changed = false;
-      const next = { ...current };
-      const resolved = { single, lead, worker, reviewer, voiceA, voiceB };
-      for (const [role, selection] of Object.entries(resolved) as [ComposerExecutorRole, ExecutorSelection | null][]) {
-        if (!selection || current[role].profile === executorValue(selection)) continue;
-        next[role] = { profile: executorValue(selection), model: "", effort: "" };
-        changed = true;
-      }
-      return changed ? next : current;
-    });
+    setExecutors((current) => reconcileComposerExecutors(current, {
+      profiles,
+      workerTypes,
+      leadTypes,
+      leadProfiles,
+    }));
   }, [
     detection.status,
     leadProfiles,
@@ -335,31 +283,7 @@ export function TaskComposerPanel({
     reviewerReasoningEffort: executors.reviewer.effort || null,
   };
   const applyTeamPreset = (config: TeamPresetConfig) => {
-    const profileValue = (candidate: string | null | undefined, type: AgentType) => {
-      const candidateProfile = candidate ? profiles.find((profile) => profile.id === candidate) : null;
-      return executorValue(candidateProfile?.type === type
-        ? { agentType: type, executorId: candidate! }
-        : { agentType: type, executorId: null });
-    };
-    const reviewerType = config.reviewerAgentType ?? config.worker;
-    setExecutors((current) => ({
-      ...current,
-      lead: {
-        profile: profileValue(config.leadExecutorId, config.lead),
-        model: config.leadModel ?? "",
-        effort: config.leadReasoningEffort ?? "",
-      },
-      worker: {
-        profile: profileValue(config.workerExecutorId, config.worker),
-        model: config.workerModel ?? "",
-        effort: config.workerReasoningEffort ?? "",
-      },
-      reviewer: {
-        profile: profileValue(config.reviewerExecutorId, reviewerType),
-        model: config.reviewerModel ?? "",
-        effort: config.reviewerReasoningEffort ?? "",
-      },
-    }));
+    setExecutors((current) => teamPresetExecutors(current, config, profiles));
     setReview(config.review !== false);
   };
   const noExecutor = profilesReady && nothingRunnable(profiles);

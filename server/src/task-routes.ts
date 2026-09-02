@@ -259,13 +259,19 @@ api.post("/tasks", async (c) => {
         reviewerReasoningEffort: rawTeam.reviewerReasoningEffort || null,
       }
     : null;
+  // 讨论的正文与议题必须**逐字同一份**:详情页顶部的「完整议题」读 body,两位讨论者的
+  // 开场 prompt 读 duet.topic(loadBase 只认它)。走通用那条的话,只贴图不打字建的讨论
+  // body 里只剩一段附件块、没有兜底句 —— 详情页解析出来的正文是空的,议题那一行就只能
+  // 显示别的东西(第 1 轮审查 P1)。
+  const rawBody = taskBody(b.body, taskId);
+  const isDuet = (b.mode ?? "single") === "duet";
   const row = {
     id: taskId,
     projectId: b.projectId,
     groupId: b.groupId ?? null,
     parentId: b.parentId ?? null,
     title: b.title,
-    body: taskBody(b.body, taskId) + attachmentsPrompt(b.attachments),
+    body: isDuet ? duetTopicText(rawBody, b.attachments) : rawBody + attachmentsPrompt(b.attachments),
     mode: b.mode ?? "single",
     status: (b.status && isUserSettableStatus(b.status) ? b.status : "backlog") as TaskStatus,
     labels: JSON.stringify(b.labels ?? []),

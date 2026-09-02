@@ -1,6 +1,7 @@
 // TaskComposerPanel 的静态配料:模式表、slash 命令表、种子附件列表。
 // 从主文件拆出来纯粹为了给它腾行数(全局 700 行硬限),不承载状态。
-import type { AgentExecutorProfile, AgentType, TaskMode } from "@ash/shared";
+// 「谁来干这活」那套状态变换在 executorOverrides.ts。
+import type { TaskMode } from "@ash/shared";
 import { Paperclip, Robot, ChatsCircle, UsersThree, X } from "@phosphor-icons/react";
 import { PreviewableImage } from "../components/ImagePreview.tsx";
 import type { SlashItem } from "../lib/useSkills.ts";
@@ -25,11 +26,6 @@ export const ASH_SLASH_ITEMS: SlashItem[] = SLASHES.map((item) => ({
   label: item.label,
   kind: "ash",
 }));
-
-export function defaultProfile(profiles: AgentExecutorProfile[], type: AgentType) {
-  return profiles.find((profile) => profile.type === type && profile.isDefault)
-    ?? profiles.find((profile) => profile.type === type);
-}
 
 export function SeedAttachmentList({ paths, onRemove }: { paths: string[]; onRemove: (path: string) => void }) {
   if (!paths.length) return null;
