@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import {
   View,
   Text,
-  TextInput,
   ScrollView,
   Pressable,
   KeyboardAvoidingView,
@@ -11,8 +10,6 @@ import {
   ActivityIndicator,
   RefreshControl,
   AppState,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent,
 } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -20,6 +17,8 @@ import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { refreshAll } from "@/lib/data";
 import { runAction } from "@/lib/taskActions";
+import { useKeyboardOffset } from "@/lib/keyboard";
+import { useStickyBottom } from "@/lib/scroll";
 import { useTheme, radius } from "@/lib/theme";
 import { Ionicons } from "@expo/vector-icons";
 import { Conversation } from "@/components/Conversation";
@@ -29,9 +28,7 @@ import { TeamTaskDetail } from "@/components/team/TeamTaskDetail";
 import { TaskDetailHeader } from "@/components/TaskDetailHeader";
 import { TaskReviewPanel } from "@/components/TaskReviewPanel";
 import { MarkdownText } from "@/components/MarkdownText";
-import { SkillSuggestions } from "@/components/SkillSuggestions";
-import { PendingMessageTray } from "@/components/PendingMessageTray";
-import { DateTimeButton } from "@/components/DateTimeField";
+import { ReplyComposer } from "@/components/ReplyComposer";
 import { canArchive } from "@ash/shared";
 import type { Session, ScheduledMessage } from "@ash/shared";
 import type { LogLine } from "@/lib/log";
@@ -46,6 +43,7 @@ export default function TaskDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const keyboardOffset = useKeyboardOffset();
   const theme = useTheme();
 
   const tasks = useStore((s) => s.tasks);
@@ -66,19 +64,26 @@ export default function TaskDetail() {
   // 任务正文：列表不带，按 id 单取（见下面的 hydrate effect）。
   const [body, setBody] = useState<string | undefined>(undefined);
   const scrollRef = useRef<ScrollView>(null);
-  // 是否「粘」在底部。轮询拉到新内容时,只有粘底状态才自动滚到底,
-  // 否则别打扰正在往回翻历史的用户。初始 true,所以首次内容到达会滚到底。
-  const stickToBottomRef = useRef(true);
+  // 粘底：轮询来了新内容就跟到底，正在往回翻历史时不打扰。键盘弹出/输入区叠高导致的
+  // 可视区变化也算，见 lib/scroll.ts。
+  const sticky = useStickyBottom(scrollRef);
+  // 待答问题卡在会话流中间。打开任务时优先把它拉进视野（而不是一律滚到最底），点进它
+  // 的输入框时也重新对一次位 —— 键盘一弹可视区少掉一半，输入框十有八九落在键盘底下。
+  const questionRegion = useRef<{ y: number; height: number } | null>(null);
+  const questionPending = useRef(false);
 
-  const handleScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
-    const distanceFromBottom = contentSize.height - (layoutMeasurement.height + contentOffset.y);
-    stickToBottomRef.current = distanceFromBottom < 80;
-  }, []);
+  const revealQuestion = useCallback(() => {
+    const region = questionRegion.current;
+    if (!region) return;
+    sticky.revealRegion(region.y, region.height);
+  }, [sticky]);
 
-  const handleContentSizeChange = useCallback(() => {
-    if (stickToBottomRef.current) scrollRef.current?.scrollToEnd({ animated: true });
-  }, []);
+  const onQuestionMeasure = useCallback((y: number, height: number) => {
+    questionRegion.current = { y, height };
+    if (!questionPending.current) return;
+    questionPending.current = false;
+    sticky.revealRegion(y, height);
+  }, [sticky]);
 
   // Pull every session's .md and rebuild the transcript. One call = one full
   // snapshot; we replace rather than append, so the same call also fills any gap.
@@ -159,6 +164,14 @@ export default function TaskDetail() {
     };
   }, [loadPending, task?.mode, task?.status]);
 
+  // 换任务、或来了一个新问题：下次这张卡量出位置时把它拉进视野。放在 effect 里而不是
+  // 直接看 task.question —— 轮询每 5 秒回来一个新对象，只有问题**内容**变了才重新定位，
+  // 否则用户每翻几秒就被拽回问题卡。
+  useEffect(() => {
+    questionRegion.current = null;
+    questionPending.current = !!task?.question;
+  }, [id, task?.question]);
+
   if (!task) {
     return (
       <View style={{ flex: 1, backgroundColor: theme.bg, alignItems: "center", justifyContent: "center" }}>
@@ -178,11 +191,11 @@ export default function TaskDetail() {
 
   const onPrimary = () => {
     if (action.kind === "run") {
-      stickToBottomRef.current = true;
+      sticky.stickNow();
       setLines([]);
       api.runTask(id).then(() => refreshAll()).catch(() => {});
     } else if (action.kind === "retry") {
-      stickToBottomRef.current = true;
+      sticky.stickNow();
       api.retryTask(id).then(() => refreshAll()).catch(() => {});
     }
   };
@@ -305,7 +318,7 @@ export default function TaskDetail() {
     if (!queueing) {
       // Optimistic local bubble; the poll replaces it with the .md's own record of
       // the same turn once the reply lands.
-      stickToBottomRef.current = true;
+      sticky.stickNow();
       setLines((ls) => [...ls, { kind: "user", text, at: new Date().toISOString() }]);
     }
     try {
@@ -339,8 +352,7 @@ export default function TaskDetail() {
         onArchive={onArchive}
         onUnarchive={onUnarchive}
         onDelete={confirmDelete}
-        onScroll={handleScroll}
-        onContentSizeChange={handleContentSizeChange}
+        sticky={sticky}
       />
     );
   }
@@ -361,7 +373,7 @@ export default function TaskDetail() {
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: theme.bg }}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
-      keyboardVerticalOffset={Platform.OS === "ios" ? 88 : 0}
+      keyboardVerticalOffset={keyboardOffset}
     >
       <Stack.Screen
         options={{
@@ -371,16 +383,16 @@ export default function TaskDetail() {
             : () => (
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 18 }}>
                   {task.archived ? (
-                    <Pressable onPress={onUnarchive} hitSlop={10}>
+                    <Pressable accessibilityRole="button" accessibilityLabel="取消归档" onPress={onUnarchive} hitSlop={12}>
                       <Ionicons name="archive" size={20} color={theme.accent} />
                     </Pressable>
                   ) : canArchive(status) ? (
-                    <Pressable onPress={onArchive} hitSlop={10}>
+                    <Pressable accessibilityRole="button" accessibilityLabel="归档任务" onPress={onArchive} hitSlop={12}>
                       <Ionicons name="archive-outline" size={20} color={theme.muted} />
                     </Pressable>
                   ) : null}
-                  <Pressable onPress={confirmDelete} hitSlop={10}>
-                    <Text style={{ color: theme.danger, fontSize: 17 }}>🗑</Text>
+                  <Pressable accessibilityRole="button" accessibilityLabel="删除任务" onPress={confirmDelete} hitSlop={12}>
+                    <Ionicons name="trash-outline" size={20} color={theme.danger} />
                   </Pressable>
                 </View>
               ),
@@ -401,9 +413,14 @@ export default function TaskDetail() {
         ref={scrollRef}
         style={{ flex: 1 }}
         contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: 24 }}
-        onScroll={handleScroll}
+        onScroll={sticky.onScroll}
         scrollEventThrottle={64}
-        onContentSizeChange={handleContentSizeChange}
+        onContentSizeChange={sticky.onContentSizeChange}
+        onLayout={sticky.onLayout}
+        // 读长会话时往下一拖就把键盘收掉，不用先去点一下别处。
+        keyboardDismissMode="interactive"
+        // 键盘开着时点问题卡里的建议/发送要一下就中，别把第一下吃成「收键盘」。
+        keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.muted} />}
       >
         {/* Objective */}
@@ -425,7 +442,9 @@ export default function TaskDetail() {
         <Conversation lines={lines} sessions={sessions} taskEndedAt={task.endedAt} />
 
         {/* ask_question answer flow stays separate from ordinary conversation replies. */}
-        {task.question ? <QuestionCard task={task} /> : null}
+        {task.question ? (
+          <QuestionCard task={task} onMeasure={onQuestionMeasure} onFocusInput={revealQuestion} />
+        ) : null}
 
         {lines.length === 0 && !task.question ? (
           <Text style={{ color: theme.faint, fontSize: 13, textAlign: "center", paddingTop: 20 }}>
@@ -438,111 +457,21 @@ export default function TaskDetail() {
         <TaskReviewPanel task={task} parentTask={parentTeam} refreshToken={refreshTick} />
       </ScrollView>
 
-      {/* Reply composer：归档只读→提示条;否则待发列表(定时发送)+输入行 [输入][🕐][发送] */}
-      {frozen ? (
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 6,
-            paddingTop: 12,
-            paddingBottom: insets.bottom + 12,
-            borderTopWidth: 1,
-            borderTopColor: theme.line,
-            backgroundColor: theme.panel,
-          }}
-        >
-          <Ionicons name="archive" size={14} color={theme.faint} />
-          <Text style={{ color: theme.faint, fontSize: 13 }}>
-            {dispatchedWorker ? "已由所属团队归档" : "已归档——取消归档后可继续对话"}
-          </Text>
-        </View>
-      ) : (
-      <View
-        style={{
-          paddingHorizontal: 12,
-          paddingTop: 8,
-          paddingBottom: insets.bottom + 8,
-          borderTopWidth: 1,
-          borderTopColor: theme.line,
-          backgroundColor: theme.panel,
-          gap: 8,
-        }}
-      >
-        <PendingMessageTray
-          messages={pending}
-          onRemoved={(messageId) => setPending((ps) => ps.filter((m) => m.id !== messageId))}
-          onReload={loadPending}
-          onRestoreText={(restored) => setInput((current) => (current.trim() ? `${restored}\n\n${current}` : restored))}
-        />
-
-        <SkillSuggestions
-          agentType={task.agentType}
-          projectId={task.projectId}
-          value={input}
-          onPick={(command) => setInput(`${command} `)}
-        />
-
-        <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8 }}>
-          <TextInput
-            value={input}
-            onChangeText={setInput}
-            editable
-            placeholder={queueing ? "任务进行中，发送即排队，跑完自动发出…" : "回复（续接会话）…"}
-            placeholderTextColor={theme.faint}
-            multiline
-            style={{
-              flex: 1,
-              color: theme.ink,
-              backgroundColor: theme.bg,
-              borderWidth: 1,
-              borderColor: theme.line,
-              borderRadius: radius.lg,
-              paddingHorizontal: 12,
-              paddingVertical: 9,
-              fontSize: 15,
-              maxHeight: 120,
-            }}
-          />
-          {/* 🕐 定时发送：对 running 任务也允许排定时（后端允许），故只看是否有文字 */}
-          <DateTimeButton
-            defaultValue={() => new Date(Date.now() + 3600_000)}
-            minimumDate={new Date()}
-            disabled={!input.trim()}
-            onPick={(d) => send(d)}
-          >
-            <View
-              style={{
-                paddingHorizontal: 12,
-                paddingVertical: 10,
-                borderRadius: radius.lg,
-                borderWidth: 1,
-                borderColor: theme.line,
-                opacity: input.trim() ? 1 : 0.4,
-              }}
-            >
-              <Ionicons name="time-outline" size={18} color={theme.muted} />
-            </View>
-          </DateTimeButton>
-          <Pressable
-            onPress={() => send()}
-            disabled={!input.trim()}
-            style={{
-              paddingHorizontal: 16,
-              paddingVertical: 11,
-              borderRadius: radius.lg,
-              backgroundColor: theme.accent,
-              opacity: !input.trim() ? 0.4 : 1,
-            }}
-          >
-            <Text style={{ color: theme.accentFg, fontSize: 14, fontWeight: "600" }}>
-              {queueing ? "排队" : "发送"}
-            </Text>
-          </Pressable>
-        </View>
-      </View>
-      )}
+      {/* Reply composer：归档只读→提示条；否则待发列表(定时发送)+技能候选+输入行。
+          整块在 components/ReplyComposer.tsx —— 这个文件贴着单文件行数上限。 */}
+      <ReplyComposer
+        task={task}
+        input={input}
+        pending={pending}
+        queueing={queueing}
+        frozen={frozen}
+        dispatchedWorker={dispatchedWorker}
+        bottomInset={insets.bottom}
+        onInputChange={setInput}
+        onSend={(sendAt) => void send(sendAt)}
+        onPendingRemoved={(messageId) => setPending((ps) => ps.filter((m) => m.id !== messageId))}
+        onPendingReload={loadPending}
+      />
     </KeyboardAvoidingView>
   );
 }
