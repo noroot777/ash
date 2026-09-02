@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { advanceHiddenReveal, buildTaskTree, groupTasksByProject, orderedTopLevelTasks, previewTasksByAge } from "../src/workspace/taskTreeModel.ts";
+import { advanceHiddenReveal, buildTaskTree, groupTasksByProject, keepVisibleInPreview, orderedTopLevelTasks, previewTasksByAge } from "../src/workspace/taskTreeModel.ts";
 
 function task(id, mode, {
   pinnedAt = null,
@@ -150,6 +150,18 @@ const onlyKeeps = previewTasksByAge([
 ], now, keepVisible);
 assert.deepEqual(onlyKeeps.visible.map((row) => row.id), ["starred-old"]);
 assert.deepEqual(onlyKeeps.hidden.map((row) => row.id), ["plain-old"]);
+
+// —— 豁免名单的判据本体（TaskTree 的 keepVisible 就是它，别再各写一份）。
+// 摔了的那两条尤其要紧：failed 的行首点走 "error"，而 error 只在未读时才亮，看过一眼
+// 就熄。要是跟着点走，失败的任务只在头 24 小时露个面，之后缩进「显示更多」——
+// 那等于任务模式把它们收进来了、列表里却找不到。
+assert.ok(keepVisibleInPreview(task("x", "single", { starredAt: 7 }), null), "星标");
+assert.ok(keepVisibleInPreview(task("x", "single", { pinnedAt: 7 }), null), "置顶");
+assert.ok(keepVisibleInPreview(task("x", "single"), "unaccepted"), "没盖的章");
+assert.ok(keepVisibleInPreview({ ...task("x", "single"), status: "failed" }, null), "跑挂了，且不靠未读点");
+assert.ok(keepVisibleInPreview({ ...task("x", "single"), stage: "verify_failed" }, null), "验证没过");
+assert.ok(!keepVisibleInPreview(task("x", "single"), null), "普通的旧行照旧可以被折叠");
+assert.ok(!keepVisibleInPreview({ ...task("x", "single"), status: "done" }, "success"), "干完并盖过章的不赖着不走");
 
 // 选中藏起来的旧任务只自动展开一次；同一条上点收起后不能再被顶开。
 assert.deepEqual(advanceHiddenReveal(null, "single:old"), { lastKey: "single:old", reveal: true });
