@@ -1,13 +1,12 @@
 const taskPrompt = document.querySelector("#taskPrompt");
 const charCount = document.querySelector("#charCount");
-const promptWrap = document.querySelector(".prompt-wrap");
-const modeButtons = [...document.querySelectorAll(".mode-button")];
+const modeButtons = [...document.querySelectorAll(".composer-tabs [data-mode]")];
 const workflowButtons = [...document.querySelectorAll(".workflow-tabs button")];
-const executorCard = document.querySelector("#executorCard");
-const workflowRoute = document.querySelector("#workflowRoute");
-const workflowCaption = document.querySelector("#workflowCaption");
+const executorBlock = document.querySelector("#executorBlock");
+const presetRoute = document.querySelector("#presetRoute");
 const worktreeToggle = document.querySelector("#worktreeToggle");
 const branchValue = document.querySelector("#branchValue");
+const groupValue = document.querySelector("#groupValue");
 const advancedTrigger = document.querySelector("#advancedTrigger");
 const advancedContent = document.querySelector("#advancedContent");
 const launchMode = document.querySelector("#launchMode");
@@ -16,99 +15,113 @@ const createButton = document.querySelector("#createButton");
 const toast = document.querySelector("#toast");
 const fileInput = document.querySelector("#fileInput");
 const attachmentList = document.querySelector("#attachmentList");
+const footerAttachmentCount = document.querySelector("#footerAttachmentCount");
+const summaryText = document.querySelector("#summaryText");
+
+let currentMode = "single";
+let currentWorkflow = "free";
+let usesWorktree = true;
 
 const modeCopy = {
   single: {
-    title: "单任务",
-    placeholder: "描述目标、交付物和判断完成的标准…\n\n也可以输入 /team、/duet 或技能命令。",
+    label: "单任务",
+    caption: "告诉执行者目标、交付物，以及什么算完成。",
+    placeholder: "描述要做什么…（可输入 /team 或 /duet）",
+    workflowTitle: "工作方式",
+    workflowCaption: "自由模式按需派审和预览，完成后统一验收。",
     agent: "claude",
-    avatar: "C",
-    model: "opus-5 · 跟随",
-    hintTitle: "从一个清楚的结果开始",
-    hintBody: "例如：重做新建任务页，让信息层级更清楚，并给出可验证的 HTML demo。",
+    profile: "claude@ccb",
+    model: "claude-opus-5",
   },
   team: {
-    title: "团队任务",
-    placeholder: "给调度者一个清楚的目标、边界和最终交付物…\n\n团队会自行拆解，并行推进后汇总。",
-    agent: "codex lead + 3 workers",
-    avatar: "T",
-    model: "团队预设 · 默认",
-    hintTitle: "告诉调度者终点在哪里",
-    hintBody: "写清交付物和边界，拆解与协作方式交给团队决定。",
+    label: "团队",
+    caption: "给调度者清楚的目标、边界和最终交付物。",
+    placeholder: "给调度者的目标…（可输入 /single 或 /duet）",
+    workflowTitle: "执行模式",
+    workflowCaption: "按团队预设分配调度、执行和审查角色。",
+    agent: "codex",
+    profile: "team lead",
+    model: "gpt-5.6-codex",
   },
   duet: {
-    title: "讨论",
-    placeholder: "写下需要两种视角充分讨论，并最终形成共同结论的议题…",
+    label: "讨论",
+    caption: "写下需要两种视角讨论并形成结论的议题。",
+    placeholder: "要讨论并形成结论的议题…",
+    workflowTitle: "讨论配置",
+    workflowCaption: "两位讨论者独立思考，互相补强后形成共同方案。",
     agent: "claude × codex",
-    avatar: "D",
+    profile: "双执行器",
     model: "最多 5 轮",
-    hintTitle: "先写下真正的分歧",
-    hintBody: "说明需要比较的观点，以及最终希望形成哪种共同结论。",
   },
 };
 
+function updateSummary() {
+  const workflow = currentWorkflow === "free" ? "自由工作流" : "起手式";
+  const location = usesWorktree ? "独立 worktree" : "项目目录";
+  summaryText.textContent = `${modeCopy[currentMode].label} · ${workflow} · ${location}`;
+}
+
 function updatePromptState() {
-  const length = taskPrompt.value.length;
-  charCount.textContent = String(length);
-  promptWrap.classList.toggle("has-copy", length > 0);
+  charCount.textContent = String(taskPrompt.value.length);
 }
 
 taskPrompt.addEventListener("input", updatePromptState);
 
 modeButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    const mode = button.dataset.mode;
-    const copy = modeCopy[mode];
+    currentMode = button.dataset.mode;
+    const copy = modeCopy[currentMode];
     modeButtons.forEach((item) => {
       const active = item === button;
       item.classList.toggle("is-active", active);
       item.setAttribute("aria-selected", String(active));
     });
     taskPrompt.placeholder = copy.placeholder;
-    executorCard.querySelector(".agent-avatar").textContent = copy.avatar;
-    executorCard.querySelector("b").textContent = copy.agent;
-    executorCard.querySelector(".model-name").textContent = copy.model;
-    document.querySelector("#promptHint b").textContent = copy.hintTitle;
-    document.querySelector("#promptHint span").textContent = copy.hintBody;
+    document.querySelector("#objectiveCaption").textContent = copy.caption;
+    document.querySelector("#workflowTitle").textContent = copy.workflowTitle;
+    document.querySelector("#workflowCaption").textContent = copy.workflowCaption;
+    document.querySelector("#agentName").textContent = copy.agent;
+    document.querySelector("#agentProfile").textContent = copy.profile;
+    document.querySelector("#modelName").textContent = copy.model;
+    updateSummary();
   });
 });
 
 workflowButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    const preset = button.dataset.workflow === "preset";
+    currentWorkflow = button.dataset.workflow;
     workflowButtons.forEach((item) => {
       const active = item === button;
       item.classList.toggle("is-active", active);
-      item.setAttribute("aria-checked", String(active));
+      item.setAttribute("aria-selected", String(active));
     });
-    executorCard.hidden = preset;
-    workflowRoute.hidden = !preset;
-    workflowCaption.textContent = preset
-      ? "按标准线路自动推进：理解、实现、验证、交付。"
-      : "按需派审和预览，完成后由你统一验收。";
+    const preset = currentWorkflow === "preset";
+    executorBlock.hidden = preset;
+    presetRoute.hidden = !preset;
+    updateSummary();
   });
 });
 
 document.querySelectorAll("[data-suggestion]").forEach((button) => {
   button.addEventListener("click", () => {
-    const prefix = taskPrompt.value.trim() ? "\n\n" : "";
-    taskPrompt.value += prefix + button.dataset.suggestion;
+    taskPrompt.value += `${taskPrompt.value.trim() ? "\n\n" : ""}${button.dataset.suggestion}`;
     updatePromptState();
     taskPrompt.focus();
   });
 });
 
 worktreeToggle.addEventListener("click", () => {
-  const isOn = worktreeToggle.getAttribute("aria-checked") !== "true";
-  worktreeToggle.setAttribute("aria-checked", String(isOn));
-  worktreeToggle.classList.toggle("is-on", isOn);
-  branchValue.textContent = isOn ? "main" : "项目当前目录";
+  usesWorktree = !usesWorktree;
+  worktreeToggle.setAttribute("aria-checked", String(usesWorktree));
+  worktreeToggle.querySelector(".ui-toggle").classList.toggle("is-on", usesWorktree);
+  branchValue.textContent = usesWorktree ? "main" : "项目当前目录";
+  updateSummary();
 });
 
 const branchOptions = ["main", "develop", "release/next"];
 let branchIndex = 0;
 document.querySelector("#branchButton").addEventListener("click", () => {
-  if (worktreeToggle.getAttribute("aria-checked") !== "true") return;
+  if (!usesWorktree) return;
   branchIndex = (branchIndex + 1) % branchOptions.length;
   branchValue.textContent = branchOptions[branchIndex];
 });
@@ -117,7 +130,7 @@ const groupOptions = ["无分组", "界面体验", "九月版本"];
 let groupIndex = 0;
 document.querySelector("#groupButton").addEventListener("click", () => {
   groupIndex = (groupIndex + 1) % groupOptions.length;
-  document.querySelector("#groupValue").textContent = groupOptions[groupIndex];
+  groupValue.textContent = groupOptions[groupIndex];
 });
 
 advancedTrigger.addEventListener("click", () => {
@@ -126,25 +139,17 @@ advancedTrigger.addEventListener("click", () => {
   advancedContent.hidden = !expanded;
 });
 
-const launchLabels = {
-  run: "创建并运行",
-  create: "创建任务",
-  schedule: "创建并定时",
-};
-
-launchMode.addEventListener("change", () => {
-  createLabel.textContent = launchLabels[launchMode.value];
-});
+const launchLabels = { run: "创建并运行", create: "创建任务", schedule: "创建并定时" };
+launchMode.addEventListener("change", () => { createLabel.textContent = launchLabels[launchMode.value]; });
 
 function showToast() {
   toast.classList.add("is-visible");
   window.clearTimeout(showToast.timer);
-  showToast.timer = window.setTimeout(() => toast.classList.remove("is-visible"), 4200);
+  showToast.timer = window.setTimeout(() => toast.classList.remove("is-visible"), 3600);
 }
 
 createButton.addEventListener("click", showToast);
 toast.querySelector("button").addEventListener("click", () => toast.classList.remove("is-visible"));
-
 document.addEventListener("keydown", (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
     event.preventDefault();
@@ -152,7 +157,14 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-document.querySelector("#attachButton").addEventListener("click", () => fileInput.click());
+document.querySelectorAll("#attachButton, .composer-footer .task-reply-icon").forEach((button) => {
+  button.addEventListener("click", () => fileInput.click());
+});
+
+function updateAttachmentCount() {
+  footerAttachmentCount.textContent = String(attachmentList.children.length);
+}
+
 fileInput.addEventListener("change", () => {
   [...fileInput.files].forEach((file) => {
     const chip = document.createElement("span");
@@ -163,11 +175,13 @@ fileInput.addEventListener("change", () => {
     remove.type = "button";
     remove.setAttribute("aria-label", `移除 ${file.name}`);
     remove.textContent = "×";
-    remove.addEventListener("click", () => chip.remove());
+    remove.addEventListener("click", () => { chip.remove(); updateAttachmentCount(); });
     chip.append(name, remove);
     attachmentList.append(chip);
   });
   fileInput.value = "";
+  updateAttachmentCount();
 });
 
 updatePromptState();
+updateSummary();
