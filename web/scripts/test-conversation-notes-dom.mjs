@@ -21,7 +21,14 @@ try {
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
   browser = await chromium.launch(await chromeLaunchOptions());
-  const page = await browser.newPage({ viewport: { width: 1000, height: 1400 } });
+  // 旁注上的时间是 formatInstant 按**本地时区**渲染的，fixture 里写的是 UTC 时刻。
+  // 不钉时区的话，同一份 fixture 在 UTC 机器上显示 07:02、在 UTC+8 上显示 15:02，
+  // 断言就随跑测试的机器（甚至同一台机器改了时区）时好时坏。这里把页面时区固定住，
+  // 断言才能继续用字面量、真的去看「有没有显示自己那条的时间」。
+  const page = await browser.newPage({
+    viewport: { width: 1000, height: 1400 },
+    timezoneId: "Asia/Shanghai",
+  });
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/conversation-notes.html`);
 
   const notes = page.locator(".system-event-digest");
