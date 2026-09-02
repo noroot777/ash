@@ -1,8 +1,15 @@
-// 键盘相关的两件事：KeyboardAvoidingView 该给多大偏移，和「键盘现在开着吗」。
-import { useContext, useEffect, useState } from "react";
-import { Keyboard, Platform } from "react-native";
+// 键盘相关工具：KAV 偏移、可见状态，以及 Android edge-to-edge 下的底部重叠补偿。
+import { useContext, useEffect, useState, type RefObject } from "react";
+import { Keyboard, Platform, type KeyboardAvoidingViewProps, type KeyboardEvent, type View } from "react-native";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+export const keyboardAvoidingBehavior = Platform.select<KeyboardAvoidingViewProps["behavior"]>({
+  ios: "padding",
+});
+
+const ANDROID_KEYBOARD_TOP_GUARD = 76;
+const KEYBOARD_GAP = 8;
 
 /**
  * KeyboardAvoidingView 的 keyboardVerticalOffset —— 要的是**窗口顶到 KAV 顶**的距离。
@@ -44,4 +51,33 @@ export function useKeyboardVisible(): boolean {
     };
   }, []);
   return visible;
+}
+
+export function useAndroidKeyboardOverlap(ref: RefObject<View | null>): number {
+  const [overlap, setOverlap] = useState(0);
+
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+
+    let frame: ReturnType<typeof requestAnimationFrame> | null = null;
+    const measure = (event: KeyboardEvent) => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        ref.current?.measureInWindow((_x, y, _width, height) => {
+          const keyboardTop = Math.max(0, event.endCoordinates.screenY - ANDROID_KEYBOARD_TOP_GUARD);
+          setOverlap(Math.max(0, y + height - keyboardTop + KEYBOARD_GAP));
+        });
+      });
+    };
+
+    const shown = Keyboard.addListener("keyboardDidShow", measure);
+    const hidden = Keyboard.addListener("keyboardDidHide", () => setOverlap(0));
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      shown.remove();
+      hidden.remove();
+    };
+  }, [ref]);
+
+  return overlap;
 }

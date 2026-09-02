@@ -1,10 +1,11 @@
 // 单飞任务详情的底部回复区：待发送托盘（定时/排队消息）+ `/` 技能候选 + 输入行。
 // 从 app/task/[id].tsx 拆出来 —— 那个文件已经贴着单文件行数上限，而这一块跟会话渲染
 // 没有耦合，只吃 props。
+import { useRef } from "react";
 import { Pressable, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { ScheduledMessage, TaskListItem } from "@ash/shared";
-import { useKeyboardVisible } from "@/lib/keyboard";
+import { useAndroidKeyboardOverlap, useKeyboardVisible } from "@/lib/keyboard";
 import { fonts, radius, useTheme } from "@/lib/theme";
 import { DateTimeButton } from "@/components/DateTimeField";
 import { PendingMessageTray } from "@/components/PendingMessageTray";
@@ -38,6 +39,8 @@ export function ReplyComposer({
   onPendingReload: () => void;
 }) {
   const theme = useTheme();
+  const composerRef = useRef<View>(null);
+  const keyboardOverlap = useAndroidKeyboardOverlap(composerRef);
   // 键盘顶上来之后手势条那一段已经被盖住，再留 insets.bottom 就是输入框和键盘之间一
   // 条谁也用不上的空隙（iPhone 上白白吃掉 34pt）。
   const keyboardVisible = useKeyboardVisible();
@@ -69,10 +72,12 @@ export function ReplyComposer({
   const enabled = !!input.trim();
   return (
     <View
+      ref={composerRef}
       style={{
         paddingHorizontal: 12,
         paddingTop: 8,
         paddingBottom,
+        marginBottom: keyboardOverlap,
         borderTopWidth: 1,
         borderTopColor: theme.line,
         backgroundColor: theme.panel,

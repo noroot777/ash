@@ -88,6 +88,9 @@ export function useStickyBottom(ref: RefObject<ScrollView | null>) {
    * 才缩到最终高度，头一次算出的位置已经不够低了。第二次发现已经露全就自己收手，不抖。
    */
   const revealNode = useCallback((node: View | null) => {
+    stick.current = false;
+    quietUntil.current = Date.now() + PROGRAMMATIC_MS;
+
     const pass = () => {
       const container = viewportRef.current;
       if (!node || !container) return;
@@ -96,7 +99,6 @@ export function useStickyBottom(ref: RefObject<ScrollView | null>) {
           if (!containerHeight) return;
           const overshoot = nodeY - containerY + nodeHeight + REVEAL_PAD - containerHeight;
           if (overshoot <= 0) return; // 下缘已经在视野里，别为滚而滚
-          stick.current = false;
           quietUntil.current = Date.now() + PROGRAMMATIC_MS;
           ref.current?.scrollTo({ y: Math.max(0, offset.current + overshoot), animated: true });
         });

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } fro
 import {
   Alert,
   KeyboardAvoidingView,
-  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -27,7 +26,12 @@ import {
 } from "@ash/shared/team";
 import { api, type TeamCuaStatus } from "@/lib/api";
 import { refreshAll } from "@/lib/data";
-import { useKeyboardOffset, useKeyboardVisible } from "@/lib/keyboard";
+import {
+  keyboardAvoidingBehavior,
+  useAndroidKeyboardOverlap,
+  useKeyboardOffset,
+  useKeyboardVisible,
+} from "@/lib/keyboard";
 import type { StickyBottom } from "@/lib/scroll";
 import type { LogLine } from "@/lib/log";
 import { useStore } from "@/lib/store";
@@ -241,7 +245,7 @@ export function TeamTaskDetail({
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: theme.bg }}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      behavior={keyboardAvoidingBehavior}
       keyboardVerticalOffset={keyboardOffset}
     >
       <Stack.Screen
@@ -372,6 +376,8 @@ function TeamReplyBox({
   onSend: () => void | Promise<void>;
 }) {
   const theme = useTheme();
+  const boxRef = useRef<View>(null);
+  const keyboardOverlap = useAndroidKeyboardOverlap(boxRef);
   // 键盘顶上来之后手势条那一段已被键盘盖住，再留 insets.bottom 只是输入框和键盘之间
   // 一条用不上的空隙。
   const keyboardVisible = useKeyboardVisible();
@@ -398,10 +404,12 @@ function TeamReplyBox({
   const enabled = !!input.trim();
   return (
     <View
+      ref={boxRef}
       style={{
         paddingHorizontal: 12,
         paddingTop: 8,
         paddingBottom: (keyboardVisible ? 0 : bottomInset) + 8,
+        marginBottom: keyboardOverlap,
         borderTopWidth: 1,
         borderTopColor: theme.line,
         backgroundColor: theme.panel,

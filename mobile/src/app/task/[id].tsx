@@ -5,7 +5,6 @@ import {
   ScrollView,
   Pressable,
   KeyboardAvoidingView,
-  Platform,
   Alert,
   ActivityIndicator,
   RefreshControl,
@@ -17,7 +16,7 @@ import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { refreshAll } from "@/lib/data";
 import { runAction } from "@/lib/taskActions";
-import { useKeyboardOffset } from "@/lib/keyboard";
+import { keyboardAvoidingBehavior, useKeyboardOffset } from "@/lib/keyboard";
 import { useStickyBottom } from "@/lib/scroll";
 import { useTheme, radius } from "@/lib/theme";
 import { Ionicons } from "@expo/vector-icons";
@@ -351,7 +350,7 @@ export default function TaskDetail() {
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: theme.bg }}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      behavior={keyboardAvoidingBehavior}
       keyboardVerticalOffset={keyboardOffset}
     >
       <Stack.Screen
