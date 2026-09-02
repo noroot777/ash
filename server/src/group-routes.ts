@@ -98,7 +98,8 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
   // 冲突只认「同一处显式给出的两者」(同一个 spec 里的 executorId + agentType,或
   // defaults 里的那对)。任务自己的 agentType 撞上**继承来的** defaults.executorId
   // 不是矛盾,而是「这个任务换类型」—— 按类型默认执行器降级,与 team dispatch 同口径。
-  const defaultsExecutorId = scope.keep(b.defaults?.executorId);
+  // `?? null`:defaults 是这批任务的兜底本身,「没配」和「配成空」在这里同义。
+  const defaultsExecutorId = scope.keep(b.defaults?.executorId) ?? null;
   const defaultsExecutorType = scope.typeOf(defaultsExecutorId);
   if (defaultsExecutorType && b.defaults?.agentType && defaultsExecutorType !== b.defaults.agentType) {
     return c.json({ error: `defaults.executorId 属于 ${defaultsExecutorType},但 defaults.agentType 是 ${b.defaults.agentType}`, executorId: b.defaults.executorId }, 400);
@@ -155,6 +156,8 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
     const explicitTitle = (s.title ?? "").trim();
     const ts = new Date(base + i).toISOString();
     const pick = pickExecutor({
+      // 不能 `?? null`:任务没带 executorId 时要让 pickExecutor 看见 undefined,
+      // 它才会整份继承 defaultsRef(连同 defaults.model / reasoningEffort)。
       executorId: scope.keep(s.executorId),
       agentType: s.agentType,
       fallback: defaultsRef,

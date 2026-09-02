@@ -146,6 +146,57 @@ check(
   { executorId: null, agentType: "claude", model: null, reasoningEffort: null },
 );
 
+// ── undefined ≠ null：「没给」和「显式清空」是两件事 ─────────────────────────
+// 2026-09-02 事故：server 的 `ExecutorScope.keep()` 把两者一起压成 null，于是
+// 「dispatch 没指定执行器」被这里读成「显式清空」—— 团队默认执行者丢掉，连锁地
+// sameExecutor 判成换了执行器，workerModel/workerReasoningEffort 也跟着落 null。
+// 下面几条钉住的是本文件这一侧的契约：调用方**必须**能靠 undefined 表达「没给」。
+check(
+  "executorId: undefined（键在、值没给）等同于压根没传 → 整份继承默认执行器",
+  pickExecutor({ executorId: undefined, agentType: undefined, fallback: teamWorker, typeOf }),
+  { executorId: "codex-team", agentType: "codex" },
+);
+check(
+  "executorId: null 是显式清空 → 不继承默认 profile",
+  pickExecutor({ executorId: null, agentType: undefined, fallback: teamWorker, typeOf }),
+  { executorId: null, agentType: "codex" },
+);
+// 事故本体：团队配了 workerExecutorId + workerModel + workerReasoningEffort，
+// dispatch 的 spec 三样都不带 → 执行者必须拿到团队默认三件套。
+const untouched = pickExecutor({ executorId: undefined, agentType: undefined, fallback: teamWorker, typeOf });
+check(
+  "事故复现：spec 什么都不给 → executorId / model / effort 三件套全继承团队默认",
+  {
+    ...untouched,
+    ...inheritExecutorOverrides({
+      from: teamWorker,
+      to: untouched,
+      model: undefined,
+      reasoningEffort: undefined,
+      ...teamDefaults,
+    }),
+  },
+  { executorId: "codex-team", agentType: "codex", model: "gpt-5.6-sol", reasoningEffort: "xhigh" },
+);
+// 对照组：同一条路上 executorId 被压成 null（修复前 keep() 的行为）会退化成什么样。
+// 这条不是「期望行为」，是把病症本身钉住 —— 它一旦和上面那条结果相同，就说明
+// undefined / null 的区分又被谁抹平了。
+const flattened = pickExecutor({ executorId: null, agentType: undefined, fallback: teamWorker, typeOf });
+check(
+  "对照：executorId 被压成 null → 默认执行器连同 model/effort 一起丢失（修复前的症状）",
+  {
+    ...flattened,
+    ...inheritExecutorOverrides({
+      from: teamWorker,
+      to: flattened,
+      model: undefined,
+      reasoningEffort: undefined,
+      ...teamDefaults,
+    }),
+  },
+  { executorId: null, agentType: "codex", model: null, reasoningEffort: null },
+);
+
 if (failures) {
   console.error(`\n${failures} executor-override test(s) failed`);
   process.exit(1);

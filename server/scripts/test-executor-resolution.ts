@@ -139,4 +139,71 @@ assert.equal(await profileDrift("codex-fp", stamped.profileFingerprint), "missin
 assert.equal(await profileDrift(null, stamped.profileFingerprint), null, "没记 profile 的老会话行照旧放行");
 assert.equal(await profileDrift("codex-fp", null), null, "没记指纹的老会话行照旧放行");
 
+// ── 「没指定执行器」必须继承默认执行器,而不是被当成「显式清空」──────────────
+// 2026-09-02 事故:团队配了 codex@cpa + gpt-5.6-sol(xhigh),dispatch 出来的执行者
+// 却落到 codex@local + gpt-5.5。根因不在解析层,而在写入层 —— `ExecutorScope.keep()`
+// 把 undefined(没给)和 null(显式清空)一起压成 null,下游 pickExecutor 靠
+// `executorId !== undefined` 分辨这两件事,于是被骗进「显式给了 null」的分支:团队
+// 默认执行者丢掉,连锁地 sameExecutor 判成换了执行器,model/effort 也一起落 null。
+//
+// 纯逻辑那一侧钉在 test-executor-overrides;这里钉的是**真的建出来的任务行**,
+// 因为 keep() 那一层只有走真实写入路径才经过。两条写入路径各钉一次。
+{
+  const { tasks: taskRows, projects, groups } = await import("../src/db/schema.js");
+  const { dispatchWorkers } = await import("../src/team/dispatch.js");
+
+  const at = new Date().toISOString();
+  await db.insert(projects).values({ id: "p-team", name: "team", repoPath: "/tmp/ash-not-a-repo", createdAt: at });
+  await db.insert(agents).values({
+    id: "codex-cpa", name: "codex@cpa", type: "codex", model: "gpt-5.6-sol",
+    extraArgs: "[]", reasoningEffort: null, speed: null, providerId: null, isDefault: false,
+  });
+  const teamConfig = {
+    lead: "claude", worker: "codex",
+    workerExecutorId: "codex-cpa", workerModel: "gpt-5.6-sol", workerReasoningEffort: "xhigh",
+  };
+  await db.insert(taskRows).values([{
+    id: "lead-team", projectId: "p-team", title: "lead", body: "", mode: "team",
+    status: "idle", createdAt: at, updatedAt: at, team: JSON.stringify(teamConfig),
+  }] as never);
+
+  // 事故本体:spec 不带 executorId / agentType / model / reasoningEffort。
+  const dispatched = await dispatchWorkers("lead-team", [{ body: "干活" }], { run: false });
+  const worker = (await db.select().from(taskRows).where(eq(taskRows.id, dispatched.tasks[0]!.id))).at(0)!;
+  assert.equal(worker.executorId, "codex-cpa", "dispatch 没指定执行器 → 必须继承团队默认执行者");
+  assert.equal(worker.agentType, "codex", "类型跟着继承来的 profile 走");
+  assert.equal(worker.model, "gpt-5.6-sol", "同一个执行器 → 团队 workerModel 要继承下来");
+  assert.equal(worker.reasoningEffort, "xhigh", "同一个执行器 → 团队 workerReasoningEffort 要继承下来");
+
+  // 对照:显式传 null 才是「清空」,这条口径不能被上面那条修复顺手抹掉。
+  const cleared = await dispatchWorkers("lead-team", [{ body: "干活", executorId: null }], { run: false });
+  const clearedWorker = (await db.select().from(taskRows).where(eq(taskRows.id, cleared.tasks[0]!.id))).at(0)!;
+  assert.equal(clearedWorker.executorId, null, "显式 executorId:null 仍然是清空,按类型默认执行器降级");
+  assert.equal(clearedWorker.model, null, "换了执行器 → 团队 model 不再套上去");
+
+  // 另一条写入路径:批量建任务的 defaults 继承(group-routes),同一个 keep() 中招。
+  const { Hono } = await import("hono");
+  const { mountGroupRoutes } = await import("../src/group-routes.js");
+  const api = new Hono();
+  mountGroupRoutes(api);
+  const app = new Hono();
+  app.route("/api", api);
+  await db.insert(groups).values({ id: "g-batch", projectId: "p-team", name: "batch", mode: "parallel", createdAt: at });
+  const res = await app.fetch(new Request("http://127.0.0.1:4317/api/groups/g-batch/tasks/batch", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      tasks: [{ body: "干活" }],
+      defaults: { executorId: "codex-cpa", model: "gpt-5.6-sol", reasoningEffort: "xhigh" },
+    }),
+  }));
+  const created = await res.json() as { tasks?: Array<{ id: string }> };
+  assert.equal(res.status, 201, `批量建任务应成功:${JSON.stringify(created)}`);
+  const batched = (await db.select().from(taskRows).where(eq(taskRows.id, created.tasks![0]!.id))).at(0)!;
+  assert.equal(batched.executorId, "codex-cpa", "批量建任务没指定执行器 → 必须继承 defaults.executorId");
+  assert.equal(batched.agentType, "codex", "类型跟着继承来的 profile 走");
+  assert.equal(batched.model, "gpt-5.6-sol", "同一个执行器 → defaults.model 要继承下来");
+  assert.equal(batched.reasoningEffort, "xhigh", "同一个执行器 → defaults.reasoningEffort 要继承下来");
+}
+
 console.log("executor resolution tests passed");

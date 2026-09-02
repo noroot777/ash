@@ -60,12 +60,14 @@ export function mountTaskRoutes(api: Hono): void {
   // duet 的两位讨论者各自挑执行器(voiceA/BExecutorId),和顶层 executorId、team 三角色
   // 同属个人面资源 —— 但这份配置是整块 JSON.stringify 落库的,不逐个过 scope 就等于给
   // 外人的 id 留了一条缝(第 3 轮审查 P0:存进去之后运行侧真的会解析到别人的 profile)。
+  // `?? null`:duet 配置是整块落库的一份完整快照,没挑执行器就是 null(跟随类型默认),
+  // 这里没有「继承某个兜底」的概念,所以不必保留 undefined。
   const scopedDuet = (scope: ExecutorScope, duet: Task["duet"]): string | null =>
     duet
       ? JSON.stringify({
           ...duet,
-          voiceAExecutorId: scope.keep(duet.voiceAExecutorId),
-          voiceBExecutorId: scope.keep(duet.voiceBExecutorId),
+          voiceAExecutorId: scope.keep(duet.voiceAExecutorId) ?? null,
+          voiceBExecutorId: scope.keep(duet.voiceBExecutorId) ?? null,
         })
       : null;
 
@@ -214,7 +216,8 @@ api.post("/tasks", async (c) => {
   // 执行器降级,与悬空 id 同一条口径),否则外人的 id 会连着它的名字一起落进任务
   // (第 2 轮审查 P1)。自用模式下 scope 是恒等的。
   const scope = await executorScopeForOwner(taskOwner);
-  const executorId = scope.keep(b.executorId);
+  // `?? null`:建任务没有「兜底执行器」可继承,没给就是没有,直接落库。
+  const executorId = scope.keep(b.executorId) ?? null;
   const executorType = agentTypeForExecutor(scope, executorId);
   if (executorType && b.agentType && b.agentType !== executorType) {
     return c.json({ error: `executorId 属于 ${executorType},但 agentType 是 ${b.agentType}`, executorId: b.executorId }, 400);
@@ -226,9 +229,10 @@ api.post("/tasks", async (c) => {
   if (rawTeam?.reviewerAgentType !== undefined && !AGENT_TYPES.includes(rawTeam.reviewerAgentType)) {
     return c.json({ error: "team.reviewerAgentType 不是有效 agent 类型" }, 400);
   }
-  const teamLeadExecutorId = rawTeam ? scope.keep(rawTeam.leadExecutorId) : null;
-  const teamWorkerExecutorId = rawTeam ? scope.keep(rawTeam.workerExecutorId) : null;
-  const teamReviewerExecutorId = rawTeam ? scope.keep(rawTeam.reviewerExecutorId) : null;
+  // 同上:teamConfig 是整块落库的完整配置,三角色没挑就是 null。
+  const teamLeadExecutorId = rawTeam ? scope.keep(rawTeam.leadExecutorId) ?? null : null;
+  const teamWorkerExecutorId = rawTeam ? scope.keep(rawTeam.workerExecutorId) ?? null : null;
+  const teamReviewerExecutorId = rawTeam ? scope.keep(rawTeam.reviewerExecutorId) ?? null : null;
   const teamLeadType = agentTypeForExecutor(scope, teamLeadExecutorId);
   const teamWorkerType = agentTypeForExecutor(scope, teamWorkerExecutorId);
   const teamReviewerType = agentTypeForExecutor(scope, teamReviewerExecutorId);

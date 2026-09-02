@@ -40,13 +40,35 @@ export type ExecutorProfileRow = {
   ownerUserId: string | null;
 };
 
+/**
+ * `keep` 的返回类型:**`undefined`(压根没给)原样透传**,其余一律收敛成 `string | null`。
+ *
+ * 这个区分不是洁癖,是下游真的读它:`pickExecutor` / `inheritExecutorOverrides`
+ * (`shared/src/executor-overrides.ts`)靠 `executorId !== undefined` 分辨「没给 → 继承
+ * 默认执行器」和「显式给了(哪怕是 null)→ 就按这个来」。keep 早先把两者一起压成 null,
+ * 于是「没指定执行器」被下游读成「显式清空」:团队默认执行者丢了,连锁地 sameExecutor
+ * 判成换了执行器,workerModel / workerReasoningEffort 也跟着落 null —— 团队配的
+ * codex@cpa + gpt-5.6-sol(xhigh),派出来的执行者跑在 codex@local + gpt-5.5 上。
+ * 复现用例:`server/scripts/test-executor-resolution.ts`(真的建出来的任务行,keep 这层
+ * 只有走真实写入路径才经过)+ `test-executor-overrides.ts`(下游那一侧的契约)。
+ *
+ * 想要 `string | null` 的调用点自己写 `?? null` —— 那句话把「这里确实要塌成 null」摆在
+ * 明面上,而不是藏在 keep 里对所有调用点无差别生效。
+ */
+export type KeptExecutorId<T extends string | null | undefined> = T extends undefined
+  ? undefined
+  : string | null;
+
 export interface ExecutorScope {
   /** 这个人看得见的 profile。 */
   readonly rows: ExecutorProfileRow[];
   /** 看得见的 id → 类型;看不见的不在表里(与「不存在」同一个结果)。 */
   typeOf(executorId: string | null | undefined): AgentType | undefined;
-  /** 看得见就原样返回,看不见归一成 null。自用模式恒等。 */
-  keep(executorId: string | null | undefined): string | null;
+  /**
+   * 看得见就原样返回,看不见归一成 null;**没给(undefined)原样还回 undefined**。
+   * 自用模式下除了这条 undefined 透传之外恒等。
+   */
+  keep<T extends string | null | undefined>(executorId: T): KeptExecutorId<T>;
 }
 
 async function allProfiles(): Promise<ExecutorProfileRow[]> {
@@ -63,13 +85,16 @@ async function allProfiles(): Promise<ExecutorProfileRow[]> {
 
 function buildScope(rows: ExecutorProfileRow[], limited: boolean): ExecutorScope {
   const byId = new Map(rows.map((row) => [row.id, row] as const));
+  // 条件返回类型没法在实现里推出来,所以实现写最宽的签名、只在装配处强转一次。
+  const keep = (executorId: string | null | undefined): string | null | undefined => {
+    if (executorId === undefined) return undefined;
+    if (!executorId) return null;
+    return limited && !byId.has(executorId) ? null : executorId;
+  };
   return {
     rows,
     typeOf: (executorId) => (executorId ? (byId.get(executorId)?.type as AgentType | undefined) : undefined),
-    keep: (executorId) => {
-      if (!executorId) return null;
-      return limited && !byId.has(executorId) ? null : executorId;
-    },
+    keep: keep as ExecutorScope["keep"],
   };
 }
 
