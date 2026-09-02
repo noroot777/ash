@@ -199,7 +199,7 @@ if (fakeCliDir) {
     );
   }
 
-  // ── 上报侧的隔离档:一个字都不许问宿主机 ────────────────────────────────
+  // ── 上报侧的隔离档:一个字都不许问宿主机,而且切过去当场就得算数 ──────────
   // 判定侧已经有「对端说了没探就不能拿它拦人」那一条(上面「不许拦之二」)。这里钉的是
   // 上报侧自己:多人隔离实例**根本不该去探**宿主机装了什么 —— §八 的隔离是「宿主机那份
   // 登录态对任务不算数」,把它探出来报给对端,既是白跑一趟,也是把宿主机的安装情况
@@ -208,23 +208,34 @@ if (fakeCliDir) {
   // 「没探」的可观测判据就是结果本身:available 全 false、模型清单全是内置快照(上面
   // 那个假 grok 保证了「探了就一定看得出来」)、并且 skipped 得说明白为什么 —— 少了
   // 它,对端只会看到一台「什么都没装」的机器,于是每一条接力都被拦死。
+  //
+  // **进来之前故意不清能力缓存**:上一轮这里补了一句 resetCapabilityCache(),于是用例
+  // 测的是「冷缓存下隔离档对不对」,而真实的切换路径(单人模式先被 ping 过一次、缓存里
+  // 躺着宿主机的探测结果)一个字都没测到 —— 第 2 轮审查抓到的正是这条缝:切过去之后
+  // 60s 内照旧把宿主机能力报给对端。所以顺序是:先在单人档热一次缓存(上面那段已经
+  // 调过 localCapabilities),再切模式,然后**立刻**问。
   {
     const { patchAppSettings } = await import("../src/app-settings.ts");
     const { invalidateInstanceConfig } = await import("../src/auth/mode.ts");
-    const { resetCapabilityCache } = await import("../src/handoff-capability.ts");
     await patchAppSettings({ instanceMode: "multi", sharedHostCli: false });
     invalidateInstanceConfig();
-    resetCapabilityCache();
     const isolated = await localCapabilities();
-    assert.ok(isolated.skipped, "隔离档必须说明「我没去探宿主机」,否则对端会当成什么都没装");
+    assert.ok(isolated.skipped, "切到隔离档后仍在报旧能力 —— 宿主机装了什么正顺着 ping 漏出去");
     for (const agent of isolated.agents) {
       assert.equal(agent.available, false, `${agent.type}: 隔离档不该上报宿主机的安装情况`);
       assert.equal(agent.modelSource, "preset", `${agent.type}: 隔离档出现 probe 档说明真去问了宿主机 CLI`);
     }
-    // 收尾:后面还有别的用例共用这个库。
+
+    // 反向同样是假警报的来源:隔离档缓存着的「什么都没装」被带到切回来之后,对端每一条
+    // 接力都会被当成缺执行器拦死 —— 而拦人这一档正是本功能里代价最大的误判。
     await patchAppSettings({ instanceMode: "single", sharedHostCli: false });
     invalidateInstanceConfig();
-    resetCapabilityCache();
+    const back = await localCapabilities();
+    assert.equal(back.skipped, null, "切回自用档还在报「没去探」");
+    if (fakeCliDir) {
+      const grok = back.agents.find((agent) => agent.type === "grok")!;
+      assert.equal(grok.available, true, "切回自用档仍报没装 grok —— 会把能跑的接力拦死");
+    }
   }
 }
 

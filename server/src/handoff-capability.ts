@@ -48,9 +48,16 @@ import { isHostCliIsolated } from "./auth/mode.js";
  * 能力清单的缓存。ping 是**探活**,必须快且可预测:它在源机那边只有 15s 超时,而
  * 逐个 CLI 跑 `--version` 是十几个子进程。装没装 CLI 这件事在一个 server 进程的
  * 生命周期里几乎不变,60s 的保鲜期足够让「刚装上就重试一次」看到新结果。
+ *
+ * **隔离档是缓存键的一部分,不是缓存后面的一步**(见 `localCapabilities` 里那句判据的
+ * 位置)。这份缓存里装的恰好全是隔离档要抹掉的东西 —— 宿主机装了哪些 CLI、实时模型
+ * 清单;单人模式下探来的那份在缓存里躺满 60s,期间切成隔离档,应答仍会把宿主机的
+ * 安装情况报给对端(第 2 轮审查)。反向同样要紧:隔离档缓存着的「什么都没装」被带到
+ * 切回来之后,每一条接力都会被当成缺执行器拦死。`model-probe.ts` 的 6h 缓存上是同一条
+ * 规矩,这里是它漏掉的第二处。
  */
 const CAPS_TTL_MS = 60_000;
-let capsCache: { at: number; value: HandoffPeerCapabilities } | null = null;
+let capsCache: { at: number; isolated: boolean; value: HandoffPeerCapabilities } | null = null;
 
 /**
  * 模型清单的探测预算。
@@ -104,8 +111,12 @@ async function modelCatalogsWithBudget(): Promise<Map<AgentType, CliModelCatalog
  * 内置本地默认),所以它进不了落差判定,只在界面上说明「那边没人配过这个执行器」。
  */
 export async function localCapabilities(): Promise<HandoffPeerCapabilities> {
-  if (capsCache && Date.now() - capsCache.at < CAPS_TTL_MS) return capsCache.value;
+  // 判据排在**读缓存之前**:它决定这份缓存还算不算数(见 capsCache 的说明)。
+  // `isHostCliIsolated()` 自己读的是进程内的实例配置缓存,不是一次查库。
   const isolated = await isHostCliIsolated();
+  if (capsCache && capsCache.isolated === isolated && Date.now() - capsCache.at < CAPS_TTL_MS) {
+    return capsCache.value;
+  }
   const rows = await db.select({ type: agents.type }).from(agents);
   const profileCount = new Map<string, number>();
   for (const row of rows) profileCount.set(row.type, (profileCount.get(row.type) ?? 0) + 1);
@@ -130,7 +141,7 @@ export async function localCapabilities(): Promise<HandoffPeerCapabilities> {
     // 非空 = 这份清单只是兜底,源机据此把模型落差整档降级成提示、也不拿 available 拦人。
     skipped: isolated ? MULTI_USER_HOST_CLI_MODELS_HIDDEN : null,
   };
-  capsCache = { at: Date.now(), value };
+  capsCache = { at: Date.now(), isolated, value };
   return value;
 }
 
