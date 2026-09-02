@@ -15,11 +15,16 @@
 // 「报不出」和「报出来是空的」必须分开,否则握手自己会变成假警报的来源:
 //   · 对端是**旧版**(不带 capabilities)→ status=unknown,如实说无从核对,**不拦**。
 //     跟对端不报身份时的处理同哲学:升级路径不能被新功能一刀切断。
-//   · 对端**故意没探**(多人模式不碰宿主机 CLI,见 model-probe.ts §八)→ 模型清单只是
-//     内置兜底,拿它否定一个模型就是假警报,所以模型落差整档降级成提示。
+//   · 对端**故意没探**(多人模式不碰宿主机 CLI,见 model-probe.ts §八)→ 那份清单
+//     整个不作数,模型落差和 available 都不拿来判。
 //   · 模型清单 `source==="preset"` 同理:那是发版时抄下的快照,各家上新跟 ash 发版无关,
 //     它**不权威**。只有 `source==="probe"`(现问 CLI 的实时目录)才有资格说「没这个模型」。
 // 只有「对端明确报了它没装这个 CLI」才是硬结论 —— 那一档才拦。
+//
+// 这条规矩对上报侧提了个硬要求:**模型那一半必须真的去问**。上报固定报内置快照的话,
+// 判定侧这条规矩会让模型落差永远报不出来,整个 model-missing 分支成为死代码 —— 而缺
+// 模型正是本功能要覆盖的两种情况之一(第 1 轮审查抓到的就是这个)。探测预算见
+// `MODEL_PROBE_BUDGET_MS`。
 import { and, eq } from "drizzle-orm";
 import type { AgentType } from "@ash/shared";
 import { AGENT_TYPES } from "@ash/shared";
@@ -28,10 +33,12 @@ import type {
   HandoffPeerAgentCapability, HandoffPeerCapabilities,
 } from "@ash/shared";
 import { MULTI_USER_HOST_CLI_MODELS_HIDDEN } from "@ash/shared/multiuser";
+import type { CliModelCatalog } from "@ash/shared/cli-presets";
 import { CLI_MODEL_PRESETS } from "@ash/shared/cli-presets";
 import { db } from "./db/index.js";
 import { agents, freeWorkflowStates, scheduledMessages, sessions, tasks } from "./db/schema.js";
 import { probeBins } from "./executors/bin-probe.js";
+import { modelCatalogFor } from "./executors/model-probe.js";
 import { CLI_SPEC_BY_KEY } from "./executors/catalog/index.js";
 import { isHostCliIsolated } from "./auth/mode.js";
 
@@ -41,20 +48,53 @@ import { isHostCliIsolated } from "./auth/mode.js";
  * 能力清单的缓存。ping 是**探活**,必须快且可预测:它在源机那边只有 15s 超时,而
  * 逐个 CLI 跑 `--version` 是十几个子进程。装没装 CLI 这件事在一个 server 进程的
  * 生命周期里几乎不变,60s 的保鲜期足够让「刚装上就重试一次」看到新结果。
- *
- * **刻意不问模型清单**(`modelCatalogFor`):那条路缓存未命中时会**等**一次真实探测
- * (最长 10s/个),放进 ping 就是拿探活的确定性换一份清单。模型在握手里只用于提示档
- * 判断,内置快照够用,而 `modelSource` 字段会如实说明它只是兜底 —— 拿兜底冒充实时
- * 目录才是不能接受的那一档。
  */
 const CAPS_TTL_MS = 60_000;
 let capsCache: { at: number; value: HandoffPeerCapabilities } | null = null;
+
+/**
+ * 模型清单的探测预算。
+ *
+ * 模型这一半**必须真的去问**(`modelCatalogFor`):固定报内置快照的话,判定侧「只有实时
+ * 目录才有资格否定一个模型」那条规矩会让模型落差永远报不出来 —— 缺模型正是这个功能
+ * 要覆盖的两种情况之一,第 1 轮审查抓到的就是这个(整个 model-missing 分支成了死代码)。
+ *
+ * 但 ping 的确定性不能拿去换:`modelCatalogFor` 缓存未命中时会**等**一次真实探测
+ * (最长 10s/个)。所以给整批探测一个预算,到点就用手上有的(退内置快照并如实标
+ * `preset`)。探测本身不会被取消,它会继续跑完并写进 6h 缓存 —— 下一次 ping 就是实时
+ * 目录了。有清单命令的 CLI 目前只有 grok / pi 两家(`CLI_MODEL_PROBE_TYPES`),其余
+ * 本来就直接返回快照、不起子进程,所以这笔开销比看上去小得多。
+ */
+const MODEL_PROBE_BUDGET_MS = 3_000;
 
 /** 一种 CLI 装没装。判定走 probeBins —— 与真正派任务时同一套(候选顺序、备用名自证)。 */
 async function availabilityOf(type: AgentType): Promise<boolean> {
   const spec = CLI_SPEC_BY_KEY[type];
   if (!spec) return false;
   return !!(await probeBins(spec.bins, spec.fallbackVersionMatch));
+}
+
+/**
+ * 各 CLI 的模型清单,带预算。超时的那些拿不到就退内置快照(`source: "preset"`),
+ * 判定侧据此自动降级成「不否定任何模型」,不会因为探测慢就误报落差。
+ *
+ * 预算是**按类型各算各的**,不是给整批一个总闸:`modelCatalogs()` 是 `Promise.all`,
+ * 只要有一家要走网络(grok / pi 的清单命令是登录态查询),整批都会被它拖过预算,于是
+ * 每一家都退回快照 —— 那等于没探。各自 race 之后,缓存命中的和没有清单命令的当场就
+ * 拿到,只有真慢的那一两家退快照。
+ */
+async function modelCatalogsWithBudget(): Promise<Map<AgentType, CliModelCatalog>> {
+  const deadline = new Promise<null>((resolve) => {
+    setTimeout(() => resolve(null), MODEL_PROBE_BUDGET_MS).unref?.();
+  });
+  const out = new Map<AgentType, CliModelCatalog>();
+  await Promise.all(AGENT_TYPES.map(async (type) => {
+    // 探测**不取消**:超预算的这一次照样跑完并写进 model-probe 的 6h 缓存,
+    // 所以下一次 ping 就是实时目录了(自我修复,不需要谁去点刷新)。
+    const catalog = await Promise.race([modelCatalogFor(type).catch(() => null), deadline]);
+    if (catalog) out.set(type, catalog);
+  }));
+  return out;
 }
 
 /**
@@ -69,18 +109,25 @@ export async function localCapabilities(): Promise<HandoffPeerCapabilities> {
   const rows = await db.select({ type: agents.type }).from(agents);
   const profileCount = new Map<string, number>();
   for (const row of rows) profileCount.set(row.type, (profileCount.get(row.type) ?? 0) + 1);
-  const agentCaps = await Promise.all(AGENT_TYPES.map(async (type): Promise<HandoffPeerAgentCapability> => ({
-    type,
-    available: await availabilityOf(type),
-    profiles: profileCount.get(type) ?? 0,
-    models: [...CLI_MODEL_PRESETS[type]],
-    // 见上:ping 里不起模型探测,所以这里永远是兜底快照,如实标 preset。
-    modelSource: "preset",
-  })));
+  // 隔离档下**一次都不问宿主机**(§八「宿主订阅彻底抹去」):那时执行器必须挂自己的
+  // 供应商才跑得起来,宿主装了什么与能不能跑无关。第 1 轮审查抓到的是这里原先照样
+  // 跑 probeBins,虽然判定侧不拿它拦人,但应答里已经把「宿主机装了哪些 CLI」报出去了
+  // —— 边界是「不起那个子进程」,不是「结果不拿来用」(与 model-probe.ts 同一条判据)。
+  const catalogs = isolated ? new Map<AgentType, CliModelCatalog>() : await modelCatalogsWithBudget();
+  const agentCaps = await Promise.all(AGENT_TYPES.map(async (type): Promise<HandoffPeerAgentCapability> => {
+    const catalog = catalogs.get(type);
+    return {
+      type,
+      available: isolated ? false : await availabilityOf(type),
+      profiles: profileCount.get(type) ?? 0,
+      models: [...(catalog?.models ?? CLI_MODEL_PRESETS[type])],
+      // 只有真问出来的才敢标 probe:判定侧拿这个字段决定「有没有资格否定一个模型」。
+      modelSource: catalog?.source === "probe" ? "probe" : "preset",
+    };
+  }));
   const value: HandoffPeerCapabilities = {
     agents: agentCaps,
-    // 隔离档下连「装没装」都不该拿宿主机的事实回答(§八):那时执行器必须挂自己的
-    // 供应商才跑得起来,宿主装了什么与能不能跑无关。如实说明,让源机整档降级成提示。
+    // 非空 = 这份清单只是兜底,源机据此把模型落差整档降级成提示、也不拿 available 拦人。
     skipped: isolated ? MULTI_USER_HOST_CLI_MODELS_HIDDEN : null,
   };
   capsCache = { at: Date.now(), value };

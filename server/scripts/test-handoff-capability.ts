@@ -8,6 +8,9 @@
 // 所以下面每一条 not-blocking 的断言都对应一个具体的假警报来源:对端旧版报不出能力、
 // 对端是多人实例故意没探、模型清单只是发版时抄下的内置快照。它们全都必须放行。
 import assert from "node:assert/strict";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import type { HandoffPeerCapabilities } from "@ash/shared";
 import { compareCapabilities } from "../src/handoff-capability.ts";
 
@@ -128,5 +131,103 @@ for (const absent of [null, undefined]) {
   assert.equal(bothSlots.gaps.length, 2, "不同槽位要分别报出来");
   assert.match(bothSlots.gaps[1].detail, /预约审查/);
 }
+
+// ── 上报侧:模型那一半必须真的去问 ─────────────────────────────────────────
+// 第 1 轮审查抓到的缺口:上报固定报内置快照(modelSource 恒为 preset),而判定侧
+// 「只有实时目录才有资格否定模型」那条规矩会让模型落差**永远**报不出来 —— 整个
+// model-missing 分支成了死代码,而缺模型正是这个功能要覆盖的两种情况之一。
+//
+// 所以这里不能只钉「探到什么就如实标什么」:那在没装 grok/pi 的机器上恒真,把写死
+// preset 的旧代码也一起放行了 —— 正是那种「看机器脸色」的用例让上面那个缺口活到了
+// 审查。改成**自己造一个装了的 CLI**:临时目录里放一个假 grok(能应 `--version`,
+// `models` 印出 grok 的清单格式),PATH 前置。于是「有没有去问」在任何机器上都有确定
+// 答案 —— 探了就会拿到这份假清单,没探就只能是内置快照。
+const fakeCliDir = process.platform === "win32" ? null : mkdtempSync(join(tmpdir(), "ash-fake-cli-"));
+const FAKE_MODELS = ["fake-alpha", "fake-beta"];
+if (fakeCliDir) {
+  const bin = join(fakeCliDir, "grok");
+  writeFileSync(bin, [
+    "#!/bin/sh",
+    'if [ "$1" = "models" ]; then',
+    '  printf "Default model: fake-alpha\\nAvailable models:\\n  * fake-alpha (default)\\n  - fake-beta\\n"',
+    "else",
+    '  echo "0.0.0-fake"',
+    "fi",
+  ].join("\n"));
+  chmodSync(bin, 0o755);
+  process.env.PATH = `${fakeCliDir}${delimiter}${process.env.PATH ?? ""}`;
+}
+
+{
+  process.env.ASH_DB = process.env.ASH_DB ?? "/tmp/handoff-capability-unit.db";
+  const { ensureSchema } = await import("../src/db/index.ts");
+  await ensureSchema();
+  const { localCapabilities } = await import("../src/handoff-capability.ts");
+  const { CLI_MODEL_PRESETS } = await import("@ash/shared/cli-presets");
+  const local = await localCapabilities();
+  for (const agent of local.agents) {
+    if (agent.modelSource === "preset") {
+      // preset 就得是那份快照本身,一字不差 —— 包括 trae 这种「CLI 压根没有模型清单
+      // 概念」因而快照为空的。标 preset 又给一份别处来的清单,判定侧会当它没资格
+      // 否定模型,等于凭空多出一份谁也不认的名单。
+      assert.deepEqual([...agent.models], [...CLI_MODEL_PRESETS[agent.type]],
+        `${agent.type} 标了 preset,清单却不是内置快照`);
+      continue;
+    }
+    // 反过来:标了 probe 就必须真的是问来的那一份,不能是快照换个名字 —— 那是修复前
+    // 的原样,会让整个 model-missing 分支继续是死代码。
+    assert.notDeepEqual([...agent.models], [...CLI_MODEL_PRESETS[agent.type]],
+      `${agent.type} 标了 probe,清单却和内置快照一模一样`);
+    assert.ok(agent.models.length > 0, `${agent.type} 探到了实时目录,清单不该是空的`);
+  }
+
+  if (fakeCliDir) {
+    const grok = local.agents.find((agent) => agent.type === "grok")!;
+    assert.equal(grok.available, true, "PATH 里摆着一个能跑的 grok,却报了没装");
+    assert.equal(grok.modelSource, "probe", "上报侧没去问 CLI —— 模型落差这一半会永远报不出来");
+    assert.deepEqual([...grok.models], FAKE_MODELS, "报上来的不是问出来的那份清单");
+
+    // 判定侧与上报侧的接缝:上报标了 probe,模型落差就该真的报得出来。这条连起来才是
+    // 「model-missing 不是死代码」的完整判据 —— 两侧各自对、接缝错的情况正是修复前。
+    const report = compareCapabilities([need("grok", "fake-gamma")], { agents: [grok], skipped: null });
+    assert.equal(report.status, "gaps", "实时目录里没有的模型必须报落差");
+    assert.equal(report.gaps[0].kind, "model-missing");
+    assert.equal(report.blocking, false, "模型落差只提示不拦");
+    assert.equal(
+      compareCapabilities([need("grok", "fake-beta")], { agents: [grok], skipped: null }).status, "ok",
+      "清单里有的模型不该报落差",
+    );
+  }
+
+  // ── 上报侧的隔离档:一个字都不许问宿主机 ────────────────────────────────
+  // 判定侧已经有「对端说了没探就不能拿它拦人」那一条(上面「不许拦之二」)。这里钉的是
+  // 上报侧自己:多人隔离实例**根本不该去探**宿主机装了什么 —— §八 的隔离是「宿主机那份
+  // 登录态对任务不算数」,把它探出来报给对端,既是白跑一趟,也是把宿主机的安装情况
+  // 顺着接力握手漏给了另一台机器。
+  //
+  // 「没探」的可观测判据就是结果本身:available 全 false、模型清单全是内置快照(上面
+  // 那个假 grok 保证了「探了就一定看得出来」)、并且 skipped 得说明白为什么 —— 少了
+  // 它,对端只会看到一台「什么都没装」的机器,于是每一条接力都被拦死。
+  {
+    const { patchAppSettings } = await import("../src/app-settings.ts");
+    const { invalidateInstanceConfig } = await import("../src/auth/mode.ts");
+    const { resetCapabilityCache } = await import("../src/handoff-capability.ts");
+    await patchAppSettings({ instanceMode: "multi", sharedHostCli: false });
+    invalidateInstanceConfig();
+    resetCapabilityCache();
+    const isolated = await localCapabilities();
+    assert.ok(isolated.skipped, "隔离档必须说明「我没去探宿主机」,否则对端会当成什么都没装");
+    for (const agent of isolated.agents) {
+      assert.equal(agent.available, false, `${agent.type}: 隔离档不该上报宿主机的安装情况`);
+      assert.equal(agent.modelSource, "preset", `${agent.type}: 隔离档出现 probe 档说明真去问了宿主机 CLI`);
+    }
+    // 收尾:后面还有别的用例共用这个库。
+    await patchAppSettings({ instanceMode: "single", sharedHostCli: false });
+    invalidateInstanceConfig();
+    resetCapabilityCache();
+  }
+}
+
+if (fakeCliDir) rmSync(fakeCliDir, { recursive: true, force: true });
 
 console.log("handoff capability handshake: ok");

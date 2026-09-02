@@ -35,13 +35,26 @@ type ProxyBody = TaskReplyBody & {
   returnTransferId?: string | null;
   answer?: string;
   items?: { taskId: string; transferId?: string }[];
+  /** 能力握手的放行票(见 /handoff/proxy/task/return 里的透传说明)。 */
+  ignoreCapabilityGaps?: boolean;
 };
-type BrowserProxyBody = TaskReplyBody & { targetUrl?: string; answer?: string };
+type BrowserProxyBody = TaskReplyBody & {
+  targetUrl?: string;
+  answer?: string;
+  ignoreCapabilityGaps?: boolean;
+};
 
 function fail(c: Context, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   const status = error instanceof HandoffError ? error.status : 500;
-  return c.json({ error: message, ash: true }, status as 400 | 401 | 403 | 404 | 409 | 413 | 500 | 502);
+  // code 必须跟着一起回:它是**机器可读**的原因,前端靠它把「缺 key」「能力对不上」
+  // 变成就地能处理的追问。这条代理链上丢掉它,发起方拿到的就只剩一句没法照做的话
+  // (远程任务视图的一键移回曾因此成为死路)。
+  const code = error instanceof HandoffError ? error.code : null;
+  return c.json(
+    { error: message, ash: true, ...(code ? { code } : {}) },
+    status as 400 | 401 | 403 | 404 | 409 | 413 | 500 | 502,
+  );
 }
 
 function markerOf(raw: string | null): TaskHandoff | null {
@@ -361,6 +374,10 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
         targetUrl: target.url,
         targetProjectId,
         targetName: target.name,
+        // 能力握手的放行票要一路透传:这条路上真正跑导出的是**本机**,而能勾「仍然接力」
+        // 的界面在发起方那台(远程任务视图)。不透传的话那个入口只会反复吃 409,而它上面
+        // 根本没有勾选框 —— 闸推不开就是死路(第 1 轮审查)。
+        ignoreCapabilityGaps: body.ignoreCapabilityGaps === true,
         // 挂着提问、或者已经验收翻篇的任务回去都不该自己跑起来:前者要等人答复,后者一跑
         // 就把验收章摘了。接收侧还有一道硬闸(handoff-import),这里只是别白发一次请求。
         autoResume: !owned.row.question && !isAcceptedStage(owned.row.stage as TaskStage | null),
@@ -425,6 +442,7 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
         `${remote.targetUrl}/api/handoff/proxy/task/return`,
         { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
           taskId: remote.marker.peerTaskId, transferId: remote.marker.transferId,
+          ignoreCapabilityGaps: body.ignoreCapabilityGaps === true,
         }), timeoutMs: 600_000 },
       );
       const refreshed = (await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);

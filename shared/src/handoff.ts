@@ -32,7 +32,23 @@ export interface HandoffTarget {
  */
 export const HANDOFF_PEER_KEY_REQUIRED = "peer-key-required";
 
-export type HandoffErrorCode = typeof HANDOFF_PEER_KEY_REQUIRED;
+/**
+ * 能力握手拦下了这次接力(目标机没装任务要用的智能体)。
+ *
+ * 和上面那条同理由:界面得据此**就地**给出「仍然接力」的确认,而不是甩一句让人去别处
+ * 勾选的话。第 1 轮审查抓到的正是缺了它的后果 —— 远程任务视图的一键移回只有 toast,
+ * 拒绝文案却写着「勾选「仍然接力」」,而那个界面上根本没有那个勾选框:闸推不开,功能
+ * 成了死路。
+ */
+export const HANDOFF_CAPABILITY_BLOCKED = "capability-blocked";
+
+export type HandoffErrorCode = typeof HANDOFF_PEER_KEY_REQUIRED | typeof HANDOFF_CAPABILITY_BLOCKED;
+
+/** 应答体里带没带 `capability-blocked`。前端据此把拒绝变成一次可确认的追问。 */
+export function isCapabilityBlocked(body: unknown): boolean {
+  return typeof body === "object" && body !== null && "code" in body
+    && (body as { code?: unknown }).code === HANDOFF_CAPABILITY_BLOCKED;
+}
 
 /** 应答体里带没带 `peer-key-required`。前端与服务端共用同一份判据。 */
 export function needsPeerKey(body: unknown): boolean {

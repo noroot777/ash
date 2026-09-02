@@ -54,7 +54,7 @@ import { collectUploads, isTextRel } from "./handoff-uploads.js";
 import { readableUploads } from "./uploads.js";
 import { beginHandoffPrepare, endHandoffPrepare } from "./handoff-guard.js";
 import { capabilityReportFor } from "./handoff-capability.js";
-import { capabilityBlockMessage } from "@ash/shared/handoff";
+import { capabilityBlockMessage, HANDOFF_CAPABILITY_BLOCKED } from "@ash/shared/handoff";
 import { cancelPendingMessage } from "./pending-messages.js";
 import type { HandoffReturnContext } from "./handoff-peer-client.js";
 import { currentListeningPort } from "./listening-port.js";
@@ -394,7 +394,11 @@ export async function exportHandoff(
     if (!pendingRetry && !opts.ignoreCapabilityGaps) {
       const capability = await capabilityReportFor(taskId, ping.capabilities);
       if (capability.blocking) {
-        throw new HandoffError(capabilityBlockMessage(capability.gaps), 409);
+        const error = new HandoffError(capabilityBlockMessage(capability.gaps), 409);
+        // 机器可读原因:没有勾选框的入口(远程任务视图的一键移回)靠它把这次拒绝变成
+        // 一次可确认的追问,而不是一条推不开的死路(见 shared 的 HANDOFF_CAPABILITY_BLOCKED)。
+        error.code = HANDOFF_CAPABILITY_BLOCKED;
+        throw error;
       }
     }
     const targetProject = ping.projects.find((p) => p.id === opts.targetProjectId);

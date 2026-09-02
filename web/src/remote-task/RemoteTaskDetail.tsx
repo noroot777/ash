@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { HandoffTarget, Task, TaskListItem } from "@ash/shared";
 import { isAcceptedStage, TASK_STATUS_LABELS } from "@ash/shared";
 import { ArrowCounterClockwise, ArrowUp, DesktopTower, SpinnerGap } from "@phosphor-icons/react";
-import { api, type RemoteTaskSnapshot } from "../lib/api.ts";
+import { api, ApiError, type RemoteTaskSnapshot } from "../lib/api.ts";
+import { isCapabilityBlocked } from "@ash/shared/handoff";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { ConversationFeed } from "../task-detail/ConversationFeed.tsx";
@@ -31,6 +32,10 @@ export function RemoteTaskDetail({
   const [sendError, setSendError] = useState<string | null>(null);
   const [returnOpen, setReturnOpen] = useState(false);
   const [returning, setReturning] = useState(false);
+  // 能力握手拦下这次移回时的追问文案(非空 = 正在问「仍然移回吗」)。这个入口上没有
+  // 接力弹窗那样的勾选框,所以拒绝必须能就地变成一次确认 —— 否则用户只能反复吃同一句
+  // 「勾选「仍然接力」」,而界面上根本没有那个框(第 1 轮审查)。
+  const [capabilityBlock, setCapabilityBlock] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // 这个框沿用 .task-reply-box 的样式(resize: none,没有拖动条),高度就全交给行数自动撑。
   useAutoGrowTextarea(inputRef, { value: text });
@@ -92,16 +97,24 @@ export function RemoteTaskDetail({
     }
   };
 
-  const returnHome = async () => {
+  const returnHome = async (ignoreCapabilityGaps = false) => {
     if (returning) return;
     setReturning(true);
     try {
-      const result = await api.remoteTaskReturn(archive.id, target.url);
+      const result = await api.remoteTaskReturn(archive.id, target.url, { ignoreCapabilityGaps });
       setReturnOpen(false);
+      setCapabilityBlock(null);
       notify("任务已移回本机");
       onLocalOwnership(result.task);
     } catch (reason) {
-      notify(reason instanceof Error ? reason.message : String(reason));
+      const message = reason instanceof Error ? reason.message : String(reason);
+      // 能力对不上是**可以由用户拍板放行**的一档,不是终点:把它变成追问而不是 toast。
+      if (isCapabilityBlocked(reason instanceof ApiError ? reason.body : null)) {
+        setReturnOpen(false);
+        setCapabilityBlock(message);
+      } else {
+        notify(message);
+      }
     } finally {
       setReturning(false);
     }
@@ -186,6 +199,18 @@ export function RemoteTaskDetail({
           busy={returning}
           onConfirm={() => void returnHome()}
           onClose={() => { if (!returning) setReturnOpen(false); }}
+        />
+      )}
+
+      {capabilityBlock && (
+        <ConfirmDialog
+          title="本机跑不动这个任务的执行器"
+          message={`${capabilityBlock}\n\n仍然移回的话，任务会回到本机，但直接运行会失败；`
+            + "先在本机装上它要用的智能体，或者移回后把任务改成本机有的再运行。"}
+          confirmLabel="仍然移回"
+          busy={returning}
+          onConfirm={() => void returnHome(true)}
+          onClose={() => { if (!returning) setCapabilityBlock(null); }}
         />
       )}
     </div>

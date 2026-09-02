@@ -53,8 +53,12 @@ export const handoffApi = {
     request(`/tasks/${id(taskId)}/remote-reply`, json("POST", { targetUrl, text })),
   remoteTaskAnswer: (taskId: string, targetUrl: string, answer: string): Promise<unknown> =>
     request(`/tasks/${id(taskId)}/remote-answer`, json("POST", { targetUrl, answer })),
-  remoteTaskReturn: (taskId: string, targetUrl: string): Promise<{ task: Task }> =>
-    request(`/tasks/${id(taskId)}/remote-return`, json("POST", { targetUrl })),
+  remoteTaskReturn: (
+    taskId: string,
+    targetUrl: string,
+    options?: { ignoreCapabilityGaps?: boolean },
+  ): Promise<{ task: Task }> =>
+    request(`/tasks/${id(taskId)}/remote-return`, json("POST", { targetUrl, ...options })),
   // 恢复送达未知的本机任务前，会先让目标机确认未收到并持久登记撤销，防止旧请求晚到。
   clearHandoff: (taskId: string, force = false): Promise<{
     cleared: true;
