@@ -15,7 +15,7 @@
 //     「谁能打开这个网页」。豁免名单在 auth/middleware.ts,只列 ① 那几条(refs 带路径参数,
 //     写成路径形状的正则),别把 `/api/handoff/` 整个前缀放进去。
 import { hostname } from "node:os";
-import type { HandoffAudit, TaskHandoff } from "@ash/shared";
+import type { HandoffAudit, HandoffPeerCapabilities, TaskHandoff } from "@ash/shared";
 import type { Hono } from "hono";
 import type { Context } from "hono";
 import { and, eq } from "drizzle-orm";
@@ -35,6 +35,7 @@ import {
   unblockPeer, verifyPeerSignature,
 } from "./handoff-peers.js";
 import { importHandoff } from "./handoff-import.js";
+import { localCapabilities } from "./handoff-capability.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { now } from "./util.js";
 import { mountHandoffRemoteRoutes } from "./handoff-remote.js";
@@ -165,6 +166,7 @@ function pingPayload(
   rows: HandoffPingResponse["projects"],
   returnRefs?: HandoffPingResponse["returnRefs"],
   instance?: { mode: "single" | "multi"; userCount?: number; peerUser?: { id: string; name: string } | null },
+  capabilities?: HandoffPeerCapabilities,
 ): HandoffPingResponse {
   const identity = localIdentity();
   return {
@@ -186,6 +188,7 @@ function pingPayload(
       ...(instance.peerUser === undefined ? {} : { peerUser: instance.peerUser }),
     } : {}),
     projects: rows,
+    ...(capabilities ? { capabilities } : {}),
     ...(returnRefs ? { returnRefs } : {}),
   };
 }
@@ -306,7 +309,7 @@ export function mountHandoffRoutes(api: Hono): void {
         name: p.name,
         repoPath: p.repoPath,
         isRepo: projectHealthLight(p.repoPath).isRepo,
-      })), undefined, instance));
+      })), undefined, instance, cleared ? await localCapabilities() : undefined));
   });
 
   // 移回专用探测:不建立整机级入站授权，只验证“当前签名机器就是这条 out 存档记录的
@@ -323,7 +326,10 @@ export function mountHandoffRoutes(api: Hono): void {
       if (!body.taskId || typeof body.nonce !== "string") throw new HandoffError("移回探测参数不完整", 400);
       const archive = await returnArchiveForPeer(body.taskId, peer.fingerprint, body.returnTransferId);
       const refs = archive.project.isRepo ? await repoRefTips(archive.project.repoPath) : [];
-      return c.json(pingPayload(body.nonce, "approved", [archive.project], refs));
+      // 移回同样报能力:任务在持有机上可能已经换过智能体(那边有、原机未必有),
+      // 「移回原机」并不天然意味着原机跑得动它现在这副样子。
+      return c.json(pingPayload(body.nonce, "approved", [archive.project], refs,
+        undefined, await localCapabilities()));
     } catch (e) {
       return fail(c, e);
     }
@@ -533,6 +539,7 @@ export function mountHandoffRoutes(api: Hono): void {
       targetProjectId?: string;
       targetName?: string;
       autoResume?: boolean;
+      ignoreCapabilityGaps?: boolean;
     };
     if (!body.targetUrl || !body.targetProjectId) {
       return c.json({ error: "缺 targetUrl / targetProjectId" }, 400);
@@ -543,6 +550,7 @@ export function mountHandoffRoutes(api: Hono): void {
         targetProjectId: body.targetProjectId,
         targetName: body.targetName,
         autoResume: body.autoResume,
+        ignoreCapabilityGaps: body.ignoreCapabilityGaps,
       }));
     } catch (e) {
       return fail(c, e);

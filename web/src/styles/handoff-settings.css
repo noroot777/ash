@@ -158,3 +158,45 @@ button.handoff-fingerprint:disabled { cursor: not-allowed; opacity: 0.55; }
 
 /* 接力载荷上限:数字输入框不需要跟着行宽走，够放三位数加单位就行。 */
 .handoff-body-limit { flex: 0 0 96px; width: 96px; text-align: right; }
+
+/* 能力握手:目标机跑不跑得动这个任务。blocking 那一档用 danger 而不是 amber ——
+   它和其它提醒不是一回事:别的提醒读完就能继续,这一档不勾确认根本走不下去,
+   颜色得先把这个区别说清楚。 */
+.handoff-capability {
+  margin: 10px 0;
+  border: 1px solid color-mix(in lch, var(--amber) 45%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in lch, var(--amber) 9%, var(--panel));
+  padding: 8px 10px;
+}
+.handoff-capability.is-blocking {
+  border-color: color-mix(in lch, var(--danger) 45%, var(--line));
+  background: color-mix(in lch, var(--danger) 9%, var(--panel));
+}
+.handoff-capability .handoff-peer-line {
+  margin: 0;
+  border: 0;
+  background: none;
+  padding: 0;
+}
+.handoff-capability.is-blocking .handoff-peer-line > svg { color: var(--danger); }
+.handoff-capability-list {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+.handoff-capability-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.handoff-capability-ack input { flex: none; margin-top: 2px; }
