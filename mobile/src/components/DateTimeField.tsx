@@ -6,6 +6,7 @@
 // API 连开 date → time 两步。
 import { useState, type ReactNode } from "react";
 import { View, Text, Pressable, Platform, Modal, useColorScheme } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import DateTimePicker, { DateTimePickerAndroid } from "@react-native-community/datetimepicker";
 import { useTheme, radius, fonts } from "@/lib/theme";
 import { formatInstant } from "@/lib/time";
@@ -97,6 +98,7 @@ export function DateTimeButton({
 }) {
   const theme = useTheme();
   const scheme = useColorScheme();
+  const insets = useSafeAreaInsets();
   const [draft, setDraft] = useState<Date | null>(null); // 非 null = iOS Modal 打开中
 
   const onPress = () => {
@@ -117,8 +119,15 @@ export function DateTimeButton({
             style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "#0008" }}
             onPress={() => setDraft(null)}
           >
+            {/* 底部留白跟着手势条走：写死 32 时，34pt 手势条的机型上「确定」正好压在
+                系统上划区里，一按就退出 app。 */}
             <Pressable
-              style={{ backgroundColor: theme.panel, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 32 }}
+              style={{
+                backgroundColor: theme.panel,
+                paddingHorizontal: 16,
+                paddingTop: 8,
+                paddingBottom: insets.bottom + 16,
+              }}
               onPress={() => {}}
             >
               <DateTimePicker
@@ -129,17 +138,26 @@ export function DateTimeButton({
                 themeVariant={scheme === "light" ? "light" : "dark"}
                 onChange={(_e, d) => d && setDraft(d)}
               />
-              <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 18, marginTop: 4 }}>
-                <Pressable onPress={() => setDraft(null)} hitSlop={8}>
+              <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 10, marginTop: 4 }}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="取消定时发送"
+                  onPress={() => setDraft(null)}
+                  hitSlop={8}
+                  style={{ minWidth: 72, minHeight: 44, alignItems: "center", justifyContent: "center" }}
+                >
                   <Text style={{ color: theme.muted, fontSize: 16 }}>取消</Text>
                 </Pressable>
                 <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="确定定时发送时间"
                   onPress={() => {
                     const d = draft;
                     setDraft(null);
                     onPick(d);
                   }}
                   hitSlop={8}
+                  style={{ minWidth: 72, minHeight: 44, alignItems: "center", justifyContent: "center" }}
                 >
                   <Text style={{ color: theme.accent, fontSize: 16, fontFamily: fonts.bodySemi }}>确定</Text>
                 </Pressable>

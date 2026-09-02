@@ -51,7 +51,13 @@ export function SelectSheet(props: TextSelectSheetProps | OptionSelectSheetProps
           <Text style={{ color: optionMode ? theme.ink : theme.faint, fontSize: optionMode ? 16 : 13, fontFamily: optionMode ? fonts.bodySemi : fonts.body }}>
             {optionMode ? props.title : "长按拖动 · 可选取任意片段复制"}
           </Text>
-          <Pressable onPress={props.onClose} hitSlop={10}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="关闭"
+            onPress={props.onClose}
+            hitSlop={12}
+            style={{ minHeight: 44, justifyContent: "center", paddingLeft: 16 }}
+          >
             <Text style={{ color: theme.accent, fontSize: 15, fontWeight: "600" }}>完成</Text>
           </Pressable>
         </View>
@@ -97,7 +103,9 @@ export function SelectSheet(props: TextSelectSheetProps | OptionSelectSheetProps
             </ScrollView>
           </>
         ) : (
-          /* Read-only multiline TextInput == UITextView on iOS == real drag handles. */
+          /* Read-only multiline TextInput == UITextView on iOS == real drag handles.
+             底部补手势条留白 —— 这一页铺满到屏幕底，不补的话最后一行正文压在上划区
+             里，想选它就先把 app 划走了。 */
           <TextInput
             value={props.text}
             editable={false}
@@ -106,7 +114,8 @@ export function SelectSheet(props: TextSelectSheetProps | OptionSelectSheetProps
             style={{
               flex: 1,
               paddingHorizontal: 16,
-              paddingVertical: 14,
+              paddingTop: 14,
+              paddingBottom: insets.bottom + 14,
               color: theme.ink,
               fontSize: 15,
               lineHeight: 23,

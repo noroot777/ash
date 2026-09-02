@@ -36,14 +36,17 @@ function GroupRunChip({ label, onPress }: { label: string; onPress: () => void }
   const theme = useTheme();
   return (
     <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${label}这个分组`}
       onPress={onPress}
-      hitSlop={6}
+      hitSlop={10}
       style={{
         flexDirection: "row",
         alignItems: "center",
+        justifyContent: "center",
         gap: 4,
-        paddingHorizontal: 10,
-        paddingVertical: 5,
+        minHeight: 32,
+        paddingHorizontal: 12,
         borderRadius: radius.md,
         backgroundColor: theme.accent,
       }}
@@ -257,9 +260,19 @@ function TaskList() {
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                   <GroupRunChip label="运行" onPress={() => runGroup(section.group)} />
                   <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="暂停这个分组"
                     onPress={() => pauseGroup(section.group)}
-                    hitSlop={6}
-                    style={{ paddingHorizontal: 9, paddingVertical: 5, borderRadius: radius.md, borderWidth: 1, borderColor: theme.line }}
+                    hitSlop={10}
+                    style={{
+                      minHeight: 32,
+                      minWidth: 34,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      borderRadius: radius.md,
+                      borderWidth: 1,
+                      borderColor: theme.line,
+                    }}
                   >
                     <Ionicons name="pause" size={12} color={theme.muted} />
                   </Pressable>

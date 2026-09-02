@@ -16,6 +16,7 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type {
   AgentExecutorProfile,
   AgentType,
@@ -384,6 +385,7 @@ function ReviewRoundCard({ taskId, round }: { taskId: string; round: TaskReviewR
 
 function ReviewScreenshot({ taskId, round, name }: { taskId: string; round: number; name: string }) {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const [open, setOpen] = useState(false);
   const source = api.taskReviewFileSource(taskId, round, name);
   return (
@@ -411,12 +413,24 @@ function ReviewScreenshot({ taskId, round, name }: { taskId: string; round: numb
         </Text>
       </Pressable>
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
-        <View style={{ flex: 1, backgroundColor: "#000000DD", padding: 14, justifyContent: "center" }}>
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: "#000000DD",
+            paddingHorizontal: 14,
+            paddingTop: insets.top,
+            paddingBottom: insets.bottom + 14,
+            justifyContent: "center",
+          }}
+        >
+          {/* 关闭键原来钉在 top:48：灵动岛机型（状态栏 59）会被岛压住一角，SE（20）
+              又飘在半空。跟着 insets 走。 */}
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="关闭截图"
             onPress={() => setOpen(false)}
-            style={{ position: "absolute", top: 48, right: 18, zIndex: 1, padding: 10 }}
+            hitSlop={8}
+            style={{ position: "absolute", top: insets.top + 8, right: 14, zIndex: 1, padding: 10 }}
           >
             <Ionicons name="close" size={28} color="#FFFFFF" />
           </Pressable>

@@ -102,16 +102,21 @@ export function SkillSuggestions({
           return (
           <Pressable
             key={`${skill.source}:${skill.command}`}
+            accessibilityRole="button"
+            accessibilityLabel={`补全技能 ${skill.command}`}
             onPress={() => onPick(skill.command)}
             style={{
               flexDirection: "row",
               alignItems: "center",
               gap: 6,
               maxWidth: 260,
+              // 这条带子只在键盘开着时出现，手指离屏幕最远、瞄得最不准 —— 别让它比一行
+              // 文字还薄。
+              minHeight: 40,
               backgroundColor: theme.overlay,
               borderRadius: radius.sm,
-              paddingHorizontal: 10,
-              paddingVertical: 7,
+              paddingHorizontal: 12,
+              paddingVertical: 8,
             }}
           >
             <Text style={{ color: theme.accent, fontSize: 13, fontFamily: fonts.mono }}>

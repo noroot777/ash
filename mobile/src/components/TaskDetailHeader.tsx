@@ -61,10 +61,15 @@ export function TaskDetailHeader({
             </View>
           ) : canStopTask(status) ? (
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="停止这个任务"
               onPress={onStop}
               style={{
+                minWidth: 72,
+                minHeight: 40,
+                alignItems: "center",
+                justifyContent: "center",
                 paddingHorizontal: 14,
-                paddingVertical: 7,
                 borderRadius: radius.md,
                 borderWidth: 1,
                 borderColor: theme.danger,
@@ -74,10 +79,16 @@ export function TaskDetailHeader({
             </Pressable>
           ) : (
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={action.label}
+              accessibilityState={{ disabled: !action.canClick }}
               onPress={action.canClick ? onPrimary : undefined}
               style={{
+                minWidth: 72,
+                minHeight: 40,
+                alignItems: "center",
+                justifyContent: "center",
                 paddingHorizontal: 14,
-                paddingVertical: 7,
                 borderRadius: radius.md,
                 backgroundColor: action.canClick ? theme.accent : theme.raised,
                 opacity: action.canClick ? 1 : 0.6,
