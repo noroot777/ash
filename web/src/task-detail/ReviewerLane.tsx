@@ -46,8 +46,8 @@ export function ReviewerLane({
   // 卡内首条气泡的头整条省掉了（见 reviewLaneMessageRoles），模型和智能水平只剩这一处可看。
   const reviewerMeta = [reviewerModel, lane.reviewerEffort].filter(Boolean).join(" · ");
 
-  // 第一轮原本是“最新轮”，第二轮出现后会变成“历史轮”；只在这条默认规则发生变化时
-  // 自动折叠一次。用户随后手动展开，不会被 SSE 的普通刷新反复关回去。
+  // 轮次跑出结论后默认规则会从「展开」翻成「折叠」；只在这条默认规则发生变化时自动
+  // 折叠一次。用户随后手动展开，不会被 SSE 的普通刷新反复关回去。
   useEffect(() => setCollapsed(lane.defaultCollapsed), [lane.defaultCollapsed, lane.id]);
 
   const openReport = () => {
