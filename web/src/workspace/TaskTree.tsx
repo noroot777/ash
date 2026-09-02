@@ -22,6 +22,7 @@ import {
   type SpreadFilter,
   type WorkerIndex,
 } from "./useSidebarSpread.ts";
+import { needsYourCommand } from "../lib/taskAttention.ts";
 import { buildTaskTree, groupTasksByProject, orderedTopLevelTasks, previewTasksByAge } from "./taskTreeModel.ts";
 import { OutboundStatusBar, type OutboundBar } from "./OutboundStatusBar.tsx";
 import { HandoffMachines } from "./HandoffMachines.tsx";
@@ -87,11 +88,16 @@ function ScopedTaskTree({
     [includeElsewhere, tasks],
   );
   const { collapsed, toggle: toggleCollapsed } = useCollapsedSections();
-  // 星标和「等你验收」的行永不因为旧被藏起来：一个是用户手动按的记号，一个是没盖的章，
-  // 两者都属于「我要一直看得见」。判据跟行首那颗点同源，标出来的和留下来的必须是同一批。
+  // 星标、「等你验收」和「等你指挥」的行永不因为旧被藏起来：一个是用户手动按的记号，
+  // 一个是没盖的章，一个是停在那儿等你拍板的（提问 / 验证未通过）。判据跟行首那颗点
+  // 同源，标出来的和留下来的必须是同一批 —— 否则一条卡着等答复超过一天的任务会被折进
+  // 「显示另外 N 条」，恰好是最该一眼看见的那类行，路径反而更长。
   const keepVisible = useCallback(
-    (task: TaskListItem) => task.starredAt != null || task.pinnedAt != null || indicatorForTask(task) === "unaccepted",
-    [indicatorForTask],
+    (task: TaskListItem) => task.starredAt != null
+      || task.pinnedAt != null
+      || indicatorForTask(task) === "unaccepted"
+      || needsYourCommand(task, workersFrom(workerIndex, task.id)),
+    [indicatorForTask, workerIndex],
   );
   const keptBySection = useMemo(
     () => sections.map((section) => ({

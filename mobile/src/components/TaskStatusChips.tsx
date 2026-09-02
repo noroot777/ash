@@ -1,42 +1,35 @@
 // 任务状态的展示层：状态/阶段牌 + 「这个任务在等你」的醒目标记。列表行和任务详情
 // 共用同一副形状，文案一律走 shared 的 taskDisplayStatus / STAGE_LABELS —— status 与
 // stage 怎么合成一句话是 shared 说了算，这里只决定怎么把它画出来。
+// **哪些算「在等你」由 lib/taskAttention 说了算**，这里只挑图标和颜色：列表的年龄闸
+// 也读那一份，标出来的和留下来的必须是同一批。
 import type { ComponentProps } from "react";
 import { View, Text } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { STAGE_LABELS, taskDisplayStatus, type TaskListItem } from "@ash/shared";
+import { attentionKind, type AttentionKind } from "@/lib/taskAttention";
 import { fonts, radius, useTheme, type Theme } from "@/lib/theme";
+
+export { attentionCounts, type AttentionKind } from "@/lib/taskAttention";
 
 // 「停下来等你」那一档的信号色。与团队执行者行(TeamWorkerBatchCard)同一个青，刻意
 // 不用 accent —— accent 是「正在跑」，这一档说的正相反：它不动了，在等人。
 export const ATTENTION_COLOR = "#22D3EE";
 
-export type AttentionKind = "question" | "verify_failed";
 export type TaskAttention = {
   kind: AttentionKind;
   icon: ComponentProps<typeof Ionicons>["name"];
 };
 
-/**
- * 「这个任务在等我指挥吗」——用户打开 app 第一眼要认出来的两档：
- *   1. 有待答问题（agent 调了 ask_question，停在那儿谁也推不动）；
- *   2. 验证没通过（要么改，要么再派一轮审查）。
- * 归档任务不再等任何人，一律不标。
- */
-export function taskAttention(task: TaskListItem): TaskAttention | null {
-  if (task.archived) return null;
-  if (task.question) return { kind: "question", icon: "help-circle" };
-  if (task.stage === "verify_failed") return { kind: "verify_failed", icon: "alert-circle" };
-  return null;
-}
+const ATTENTION_ICON = {
+  question: "help-circle",
+  verify_failed: "alert-circle",
+} satisfies Record<AttentionKind, ComponentProps<typeof Ionicons>["name"]>;
 
-/** 一批任务里各有几个在等人 —— 团队卡片要在折叠状态下替执行者喊话。 */
-export function attentionCounts(tasks: TaskListItem[]): { questions: number; verifyFailed: number } {
-  const live = tasks.filter((task) => !task.archived);
-  return {
-    questions: live.filter((task) => !!task.question).length,
-    verifyFailed: live.filter((task) => task.stage === "verify_failed").length,
-  };
+/** 行内怎么标「这个任务在等我指挥」。等不等由 lib/taskAttention 判，这里只配图标。 */
+export function taskAttention(task: TaskListItem): TaskAttention | null {
+  const kind = attentionKind(task);
+  return kind ? { kind, icon: ATTENTION_ICON[kind] } : null;
 }
 
 export function attentionColor(kind: AttentionKind | null | undefined, theme: Theme): string | null {

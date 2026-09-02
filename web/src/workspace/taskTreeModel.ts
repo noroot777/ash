@@ -47,8 +47,9 @@ function sortPinned<T extends TaskListItem>(tasks: T[]): T[] {
   return [...tasks].sort((a, b) => (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0) || byUpdatedDesc(a, b));
 }
 
-// keepVisible 命中的行**永不因为旧而被藏**（星标、待你验收的）——
-// 用户给的软记号和没盖的章都属于「我要一直看得见」，24 小时的年龄闸对它们不适用。
+// keepVisible 命中的行**永不因为旧而被藏**（星标、待你验收的、停在那儿等你指挥的）——
+// 用户给的软记号、没盖的章、还有等你答复 / 验证没通过，都属于「我要一直看得见」，
+// 24 小时的年龄闸对它们不适用。名单由调用方给（见 TaskTree 的 keepVisible）。
 export function previewTasksByAge<T extends TaskListItem>(
   tasks: T[],
   nowMs = Date.now(),

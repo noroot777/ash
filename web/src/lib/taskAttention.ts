@@ -137,6 +137,21 @@ export function isTaskAwaitingAcceptance(task: TaskListItem, workers: TaskListIt
   return awaitsAcceptance(task, task.status === "done" || isTeamSettledLead(task, workers));
 }
 
+// 「停在这儿等你指挥」= 明着问你（question），或者验证没过（verify_failed）。两样都是
+// 「机器不动了，下一步得你拍板」，也都在行内标了出来 —— 所以列表的年龄闸拿它当豁免：
+// 标出来的和留下来的必须是同一批，一条卡着等答复的任务不该因为卡了超过一天反而被折起来。
+//
+// 跟 awaitsYourWord 的分工：那条收的是「等我说句话」（提问 / 停在检查点），服务的是
+// 任务模式收哪些行；这条收的是「等我指挥」，多一档验证未通过，少一档 paused —— 停在
+// 检查点是等续跑指令，行内没有跟提问同级的醒目标识，硬拉进豁免就成了「留下来的比标
+// 出来的多」，同样违反上面那条原则。
+//
+// 团队要连执行者一起看：调度台派完活自己落回 idle，问题和「验证未通过」都写在执行者身上。
+export function needsYourCommand(task: TaskListItem, workers: TaskListItem[] = []): boolean {
+  const stuck = (item: TaskListItem) => !!item.question || item.stage === "verify_failed";
+  return stuck(task) || (isTeamLead(task) && workers.some(stuck));
+}
+
 export function inTaskMode(task: TaskListItem, workers: TaskListItem[] = []): boolean {
   if (isTaskLive(task, workers)) return true;
   // 盖过章的一律出局，跟 spreadBucket 把 accepted 排在 run 之后同一个道理：事实高于

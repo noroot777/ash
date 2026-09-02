@@ -9,6 +9,7 @@
 // 置顶（pinnedAt）是唯一的例外，那是用户手动摁下去的。
 import { isAcceptedStage, type TaskListItem } from "@ash/shared";
 import { isTeamSettled, teamNeverStarted, workersOf } from "@ash/shared/team";
+import { needsYourCommand } from "@/lib/taskAttention";
 
 export const TASK_PREVIEW_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -64,7 +65,8 @@ export function buildTaskTree(tasks: TaskListItem[]): TaskTreeSection[] {
 
 /**
  * 24 小时没更新的收进折叠区。keepVisible 命中的行**永不因为旧而被藏**（星标、置顶、
- * 等你验收的）—— 用户给的软记号和没盖的章都属于「我要一直看得见」。
+ * 等你验收的、停在那儿等你指挥的）—— 用户给的软记号、没盖的章、还有等你答复 / 验证
+ * 没通过，都属于「我要一直看得见」。
  * 全都旧时至少留最新那一条露在外面，否则整节只剩一个「显示另外 N 条」。
  */
 export function previewTasksByAge(
@@ -118,10 +120,18 @@ function awaitsAcceptance(task: TaskListItem, allTasks: TaskListItem[]): boolean
 }
 
 /**
- * 年龄闸的豁免名单。判据与 web 的 keepVisible 同源：星标、置顶、等你验收的行永不因旧
- * 被藏起来 —— 一个是用户手动按的记号，一个是没盖的章，都属于「我要一直看得见」。
+ * 年龄闸的豁免名单。判据与 web 的 keepVisible 同源：星标、置顶、等你验收、等你指挥的行
+ * 永不因旧被藏 —— 用户手动按的记号、没盖的章、以及停着等你拍板的（提问 / 验证未通过）。
+ *
+ * 最后一档是补上来的：一条卡着等你答复超过一天的任务原本会被折进「显示另外 N 条」，
+ * 恰恰是最该一眼看见的那类行，路径反而更长。原则是「标出来的和留下来的必须是同一批」
+ * —— 行内亮着信号色的等待态（见 lib/taskAttention），就不该因为旧被藏起来。
+ * 注意它只管**藏不藏**：位置一概不特殊，排序仍旧只认更新时间倒序（见文件顶部）。
  */
 export function keepVisibleFor(allTasks: TaskListItem[]): (task: TaskListItem) => boolean {
   return (task) =>
-    task.starredAt != null || task.pinnedAt != null || awaitsAcceptance(task, allTasks);
+    task.starredAt != null
+    || task.pinnedAt != null
+    || needsYourCommand(task, allTasks)
+    || awaitsAcceptance(task, allTasks);
 }
