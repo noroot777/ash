@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light" />
+  <title>新建任务 · Editorial Console Demo</title>
+  <link rel="stylesheet" href="./new-task-editorial-demo.css" />
+</head>
+<body>
+  <svg class="icon-sprite" aria-hidden="true">
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 4.5 13h6L10 22l8.5-12h-6L13 2Z" /></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3v-6.5A7 7 0 0 1 10 5h7a4 4 0 0 1 4 4v6Z" /></symbol>
+    <symbol id="i-paperclip" viewBox="0 0 24 24"><path d="m21.4 11.6-8.9 8.9a6 6 0 0 1-8.5-8.5l9.5-9.5a4 4 0 0 1 5.7 5.7L9.7 17.7a2 2 0 0 1-2.8-2.8l8.8-8.8" /></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4" /></symbol>
+    <symbol id="i-git" viewBox="0 0 24 24"><circle cx="6" cy="4" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="20" r="2"/><path d="M6 6v12M8 6c3 0 2 8 6 8h2M16 14l2-2 2 2" /></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v11H3V6Z" /></symbol>
+    <symbol id="i-tag" viewBox="0 0 24 24"><path d="M20 13 13 20 4 11V4h7l9 9Z" /><circle cx="8.5" cy="8.5" r="1" /></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M14 7l5 5-5 5" /></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6" /></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6" /></symbol>
+  </svg>
+
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand-lockup">
+        <span class="brand-mark">H</span>
+        <div>
+          <b>harness</b>
+          <span>工作台 / 新建任务</span>
+        </div>
+      </div>
+      <div class="topbar-center" aria-hidden="true">
+        <span>DESIGN STUDY</span><i></i><span>01</span>
+      </div>
+      <button class="cancel-button" type="button"><kbd>Esc</kbd> 取消</button>
+    </header>
+
+    <section class="workspace">
+      <div class="intro-row">
+        <div>
+          <p class="eyebrow"><span></span>CREATE / 编排一项新工作</p>
+          <h1>把目标交代清楚，<em>剩下的交给执行单。</em></h1>
+        </div>
+        <p class="intro-note">先写目标，再确认怎么跑。<br />所有选择在创建前一眼可核对。</p>
+      </div>
+
+      <div class="mode-switch" role="tablist" aria-label="任务类型">
+        <button class="mode-button is-active" type="button" role="tab" aria-selected="true" data-mode="single">
+          <span class="mode-icon"><svg><use href="#i-bolt" /></svg></span>
+          <span><b>单任务</b><small>一个执行者，直接完成</small></span>
+        </button>
+        <button class="mode-button" type="button" role="tab" aria-selected="false" data-mode="team">
+          <span class="mode-icon"><svg><use href="#i-users" /></svg></span>
+          <span><b>团队</b><small>拆解、并行、互相审查</small></span>
+        </button>
+        <button class="mode-button" type="button" role="tab" aria-selected="false" data-mode="duet">
+          <span class="mode-icon"><svg><use href="#i-chat" /></svg></span>
+          <span><b>讨论</b><small>两种视角，合成结论</small></span>
+        </button>
+        <span class="mode-memory">切换模式不会清空正文</span>
+      </div>
+
+      <div class="composition-grid">
+        <section class="brief-card" aria-labelledby="brief-title">
+          <div class="section-index" aria-hidden="true">01</div>
+          <header class="card-heading">
+            <div>
+              <p>THE BRIEF</p>
+              <h2 id="brief-title">这次要完成什么？</h2>
+            </div>
+            <span class="project-chip"><i></i>harness · main</span>
+          </header>
+
+          <div class="prompt-wrap">
+            <textarea id="taskPrompt" autofocus spellcheck="false" aria-label="任务目标" placeholder="描述目标、交付物和判断完成的标准…"></textarea>
+            <span class="prompt-rule" aria-hidden="true"></span>
+            <div class="prompt-hint" id="promptHint">
+              <b>从一个清楚的结果开始</b>
+              <span>例如：重做新建任务页，让信息层级更清楚，并给出可验证的 HTML demo。</span>
+            </div>
+          </div>
+
+          <div class="prompt-tools">
+            <button class="attach-button" id="attachButton" type="button">
+              <svg><use href="#i-paperclip" /></svg>添加附件
+            </button>
+            <input id="fileInput" type="file" multiple hidden />
+            <div class="suggestion-list" aria-label="提示建议">
+              <button type="button" data-suggestion="补充验收标准：">＋ 验收标准</button>
+              <button type="button" data-suggestion="请先分析现状，再给出两个方案并实现更稳妥的一种。">＋ 方案对比</button>
+              <button type="button" data-suggestion="完成后请运行相关检查，并说明取舍。">＋ 验证要求</button>
+            </div>
+            <span class="char-count"><b id="charCount">0</b> / 8000</span>
+          </div>
+          <div class="attachment-list" id="attachmentList" aria-live="polite"></div>
+        </section>
+
+        <aside class="run-sheet" aria-labelledby="run-sheet-title">
+          <div class="sheet-binding" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+          <header class="sheet-heading">
+            <div>
+              <p>RUN SHEET / 执行单</p>
+              <h2 id="run-sheet-title">创建前核对</h2>
+            </div>
+            <span class="ready-stamp"><i></i>READY</span>
+          </header>
+
+          <section class="sheet-section">
+            <div class="sheet-section-label"><span>02</span><b>怎么完成</b></div>
+            <div class="workflow-tabs" role="radiogroup" aria-label="工作方式">
+              <button class="is-active" type="button" role="radio" aria-checked="true" data-workflow="free">自由工作流</button>
+              <button type="button" role="radio" aria-checked="false" data-workflow="preset">起手式</button>
+            </div>
+
+            <div class="executor-card" id="executorCard">
+              <span class="agent-avatar">C</span>
+              <div><b>claude</b><small>claude@ccb</small></div>
+              <span class="model-name">opus-5 · 跟随</span>
+              <svg><use href="#i-chevron" /></svg>
+            </div>
+
+            <div class="workflow-route" id="workflowRoute" hidden>
+              <div><i>1</i><span>理解目标</span></div><b></b>
+              <div><i>2</i><span>实现</span></div><b></b>
+              <div><i>3</i><span>验证</span></div><b></b>
+              <div><i>4</i><span>交付</span></div>
+            </div>
+            <p class="section-caption" id="workflowCaption">按需派审和预览，完成后由你统一验收。</p>
+          </section>
+
+          <section class="sheet-section location-section">
+            <div class="sheet-section-label"><span>03</span><b>在哪里运行</b></div>
+            <div class="setting-row">
+              <span class="setting-icon"><svg><use href="#i-git" /></svg></span>
+              <div><b>独立 worktree</b><small>不影响项目主目录</small></div>
+              <button class="toggle is-on" id="worktreeToggle" type="button" role="switch" aria-checked="true"><i></i></button>
+            </div>
+            <button class="setting-row is-select" type="button" id="branchButton">
+              <span class="setting-icon"><svg><use href="#i-folder" /></svg></span>
+              <div><b>Base 分支</b><small id="branchValue">main</small></div>
+              <svg><use href="#i-chevron" /></svg>
+            </button>
+            <button class="setting-row is-select" type="button" id="groupButton">
+              <span class="setting-icon"><svg><use href="#i-tag" /></svg></span>
+              <div><b>任务分组</b><small id="groupValue">无分组</small></div>
+              <svg><use href="#i-chevron" /></svg>
+            </button>
+          </section>
+
+          <section class="advanced-panel" id="advancedPanel">
+            <button class="advanced-trigger" id="advancedTrigger" type="button" aria-expanded="false">
+              <span><svg><use href="#i-sliders" /></svg>高级选项</span>
+              <small>标签、审查偏好</small>
+              <svg><use href="#i-chevron" /></svg>
+            </button>
+            <div class="advanced-content" id="advancedContent" hidden>
+              <label>任务标签<input type="text" value="frontend, design" /></label>
+              <label class="check-row"><input type="checkbox" checked /><span><b>完成后提醒验收</b><small>不自动接受结果</small></span></label>
+            </div>
+          </section>
+
+          <footer class="launch-panel">
+            <div class="launch-summary">
+              <span><i></i>创建</span><b></b><span><i></i>立即运行</span><b></b><span><i></i>等待验收</span>
+            </div>
+            <label class="launch-select">
+              <span>启动方式</span>
+              <select id="launchMode">
+                <option value="run">创建并运行</option>
+                <option value="create">仅创建</option>
+                <option value="schedule">今晚 22:00 运行</option>
+              </select>
+            </label>
+            <button class="create-button" id="createButton" type="button">
+              <span id="createLabel">创建并运行</span>
+              <svg><use href="#i-arrow" /></svg>
+            </button>
+            <p><kbd>⌘</kbd><kbd>↵</kbd> 按当前启动方式创建</p>
+          </footer>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite">
+    <span><svg><use href="#i-check" /></svg></span>
+    <div><b>演示任务已创建</b><small>这是静态 demo，没有发送真实请求。</small></div>
+    <button type="button" aria-label="关闭"><svg><use href="#i-close" /></svg></button>
+  </div>
+
+  <script src="./new-task-editorial-demo.js"></script>
+</body>
+</html>
