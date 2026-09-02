@@ -108,7 +108,7 @@
     "test:openers-windows": "tsx scripts/test-openers-windows.ts",
     "test:dir-picker": "tsx scripts/test-dir-picker.ts",
     "test:mcp-handoff": "tsx scripts/test-mcp-handoff.ts",
-    "test:duet-gate-attachments": "tsx scripts/test-duet-gate-attachments.ts",
+    "test:duet-attachments": "tsx scripts/test-duet-attachments.ts",
     "test:terminal": "tsx scripts/test-terminal.ts",
     "test:win-launch": "tsx scripts/test-win-launch.ts",
     "test:path-boundary": "tsx scripts/test-path-boundary.ts",

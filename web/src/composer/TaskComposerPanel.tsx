@@ -398,10 +398,9 @@ export function TaskComposerPanel({
     ? scheduleValidationError(launchMode, scheduleAt, scheduleCron)
     : null;
   // 有图还在传就先不放行：附件路径是上传成功才有的，这时候创建等于把刚粘的那张图
-  // 悄悄扔掉。**讨论也算**——它虽然不收附件，但创建之后这个面板就没了，在途的那张
-  // 同样没人接住；切到讨论就把「还在传」藏起来更糟，用户会以为已经传完（第 1 轮审查 P1）。
+  // 悄悄扔掉。三种模式一视同仁——切走这个面板就没人接住在途的那张了。
   const waitingUploads = uploads.uploading;
-  const canSubmit = (mode === "duet" ? !!body.trim() : !!body.trim() || allAttachments.length > 0)
+  const canSubmit = (!!body.trim() || allAttachments.length > 0)
     && !busy && !noExecutor && !roleBlocked && !scheduleError && !waitingUploads;
 
   const changeLaunchMode = (next: LaunchMode) => {
@@ -423,20 +422,30 @@ export function TaskComposerPanel({
         labels,
       };
       if (mode === "duet") {
-        task = await api.createTask({ ...common, mode, duet: {
-          ...DUET_DEFAULTS,
-          topic: body.trim(),
-          voiceA: voiceAExecutor.agentType,
-          voiceB: voiceBExecutor.agentType,
-          voiceAExecutorId: voiceAExecutor.executorId,
-          voiceBExecutorId: voiceBExecutor.executorId,
-          voiceAModel: executors.voiceA.model || null,
-          voiceAReasoningEffort: executors.voiceA.effort || null,
-          voiceBModel: executors.voiceB.model || null,
-          voiceBReasoningEffort: executors.voiceB.effort || null,
-          maxRounds: rounds ? Math.max(1, Number(rounds) || 3) : null,
-          gateG1: gate ? "on" : "off",
-        } });
+        // 议题同时送 body 和 duet.topic：后端会把附件块分别拼在两者末尾（task-routes
+        // 的 `row.body` / `scopedDuet`），于是讨论者的开场 prompt 和详情页顶部的「完整
+        // 议题」看到的是同一份东西。只送 topic 的话，详情页那句 `task.body || topic`
+        // 会拿到一段只剩附件路径、没有正文的 body。
+        task = await api.createTask({
+          ...common,
+          body: body.trim(),
+          attachments: allAttachments,
+          mode,
+          duet: {
+            ...DUET_DEFAULTS,
+            topic: body.trim(),
+            voiceA: voiceAExecutor.agentType,
+            voiceB: voiceBExecutor.agentType,
+            voiceAExecutorId: voiceAExecutor.executorId,
+            voiceBExecutorId: voiceBExecutor.executorId,
+            voiceAModel: executors.voiceA.model || null,
+            voiceAReasoningEffort: executors.voiceA.effort || null,
+            voiceBModel: executors.voiceB.model || null,
+            voiceBReasoningEffort: executors.voiceB.effort || null,
+            maxRounds: rounds ? Math.max(1, Number(rounds) || 3) : null,
+            gateG1: gate ? "on" : "off",
+          },
+        });
       } else if (mode === "team") {
         task = await api.createTask({
           ...common,
@@ -603,26 +612,19 @@ export function TaskComposerPanel({
               />
             )}
           </div>
-          {/* 已经传好的只有单任务/团队才列（讨论不收附件，由下面那句提示交代）；
-              **在途**的三种模式都列 —— 藏起来就等于告诉用户「传完了」。 */}
           <ImagePreviewGroup isolated>
             <UploadAttachmentList
-              attachments={mode === "duet" ? [] : uploads.attachments}
+              attachments={uploads.attachments}
               pending={uploads.pending}
               error={uploads.error}
               onRemove={uploads.remove}
               onCancel={uploads.cancel}
             />
-            {mode !== "duet" && (
-              <SeedAttachmentList
-                paths={seedAttachments}
-                onRemove={(path) => setSeedAttachments((current) => current.filter((item) => item !== path))}
-              />
-            )}
+            <SeedAttachmentList
+              paths={seedAttachments}
+              onRemove={(path) => setSeedAttachments((current) => current.filter((item) => item !== path))}
+            />
           </ImagePreviewGroup>
-          {mode === "duet" && allAttachments.length > 0 && (
-            <p className="composer-warning">讨论配置不接收附件；附件仍保留，切回单任务或团队后会随任务提交。</p>
-          )}
           <ComposerFields
             mode={mode}
             profiles={profiles}
@@ -664,12 +666,11 @@ export function TaskComposerPanel({
       </div>
       <footer className="composer-footer">
         <div>
-          {mode !== "duet" && <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />}
+          <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />
           <span>
             <Paperclip size={13} />
             {uploads.uploading ? `${uploadingLabel(uploads.pending)} · 传完才能创建`
-              : mode === "duet" ? "讨论不收附件 · ⌘↵ 按当前启动方式创建"
-                : `${allAttachments.length} 个附件 · ⌘↵ 按当前启动方式创建`}
+              : `${allAttachments.length} 个附件 · ⌘↵ 按当前启动方式创建`}
           </span>
         </div>
         <ComposerLaunchControl

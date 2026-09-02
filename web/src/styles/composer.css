@@ -434,15 +434,6 @@
   color: var(--faint);
 }
 
-.composer-warning {
-  margin: 9px 0 0;
-  border-radius: 8px;
-  background: rgb(181 123 0 / 8%);
-  padding: 8px 10px;
-  color: var(--amber);
-  font-size: 10px;
-}
-
 .composer-agent-availability {
   margin: 9px 0 0;
   border-radius: 8px;
