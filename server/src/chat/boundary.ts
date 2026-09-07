@@ -66,7 +66,11 @@ export async function watchChatWorkspace(cwd: string, onViolation: (error: ChatB
   const db = join(await realpath(dirname(dbFile)), basename(dbFile));
   const runs = await canonicalPath(RUNS_DIR);
   const excludedFiles = new Set([db, `${db}-wal`, `${db}-shm`, `${db}-journal`]);
-  const ignored = (path: string) => excludedFiles.has(path) || path === runs || path.startsWith(`${runs}${sep}`);
+  const ignored = (path: string) => {
+    if (excludedFiles.has(path) || path === runs || path.startsWith(`${runs}${sep}`)) return true;
+    const parts = relative(root, path).split(sep);
+    return parts.some((part, index) => part === "node_modules" || part === ".worktrees" || (part === "worktrees" && parts[index - 1] === ".claude"));
+  };
   const snapshot = async () => {
     const result = new Map<string, string>();
     const visit = async (path: string): Promise<void> => {
