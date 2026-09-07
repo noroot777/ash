@@ -385,7 +385,7 @@ export function TaskComposerPanel({
     : unavailableRole
       ? mode === "single"
         ? workflowMode === "free"
-          ? "当前任务执行器未注册，请在「谁来做」中换一个。"
+          ? "当前任务执行器未注册，请在「工作方式」中换一个。"
           : runStepParams?.executorId
             ? "起手式「让 AI 干活」那一站选的执行器未注册，请展开编排换一个。"
             : "默认执行器未注册，请到执行器设置注册，或在起手式「让 AI 干活」那一站指定一个。"

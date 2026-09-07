@@ -1,6 +1,12 @@
 .task-composer-panel.is-studio { grid-template-rows:48px minmax(0,1fr); }
 .is-studio .composer-inner { width:min(880px,calc(100% - 40px)); padding:36px 0 28px; }
 .studio-heading { margin:0 2px 22px; }
+.studio-workflow { border-top:1px solid var(--line); padding:20px; background:color-mix(in lch,var(--accent) 1.5%,var(--panel)); }
+.studio-workflow h2 { margin:0; font-size:13px; font-weight:600; }
+.studio-workflow header > p { margin:5px 0 14px; color:var(--faint); font-size:11px; line-height:1.6; }
+.studio-free-executor { margin-top:16px; }
+.studio-effective-run { margin:7px 0 0; color:var(--muted); font-size:10px; overflow-wrap:anywhere; }
+.studio-workflow > .is-workflow { padding:16px 0 0; }
 .studio-heading h1 { margin:0 0 8px; font-size:26px; font-weight:600; letter-spacing:-.7px; line-height:1.35; }
 .studio-heading p { margin:0; color:var(--faint); font-size:11px; }
 .studio-card { border:1px solid var(--line2); border-radius:13px; background:var(--panel); box-shadow:0 4px 16px rgb(25 27 50 / 3%),var(--surface-shadow); }
