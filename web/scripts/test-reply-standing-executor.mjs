@@ -70,7 +70,7 @@ try {
     await textarea.fill("第一句");
     await sendButton.click();
     await page.locator("#log li").nth(2).waitFor();
-    assert.deepEqual((await logLines()).slice(2), ["send:第一句|agent=-|model=-|effort=-"]);
+    assert.deepEqual((await logLines()).slice(2), ["send:第一句|task=claude/-|override=-/-/-"]);
     // 发完不回弹：胶囊上还是刚选的那个，不必为下一句再选一次。
     assert.match(await agentTrigger.getAttribute("aria-label") ?? "", /智能体：claude/);
 
@@ -82,7 +82,8 @@ try {
     await sendButton.click();
     await page.locator("#log li").nth(3).waitFor();
     assert.deepEqual((await logLines()).slice(3), [
-      "send:第二句|agent=codex|model=gpt-5.6-sol|effort=-",
+      // 任务常设仍是 claude，codex 只压在这一句上。
+      "send:第二句|task=claude/-|override=codex/gpt-5.6-sol/-",
     ]);
     assert.match(
       await agentTrigger.getAttribute("aria-label") ?? "",
@@ -118,6 +119,54 @@ try {
       "task:claude|model=sonnet|effort=-",
     );
     assert.match(await modelTrigger.getAttribute("aria-label") ?? "", /模型：sonnet/);
+    await page.close();
+  }
+
+  // ⑤ 改完执行器**立刻**发送：写回还在飞时发出去，服务端读到的仍是旧执行器，用户
+  //    等于改了个寂寞。发送要等写回落地。
+  {
+    const page = await fixture("?slow=1");
+    const agentTrigger = page.getByRole("button", { name: /智能体：/ });
+
+    await agentTrigger.click();
+    await page.getByRole("option", { name: /@claude/ }).click();
+    await page.keyboard.press("Escape");
+    // 不等 done1，直接发。
+    await page.getByRole("textbox", { name: "回复任务" }).fill("立即发送");
+    await page.getByRole("button", { name: "发送回复" }).click();
+    await page.locator("#log li").nth(2).waitFor({ timeout: 15_000 });
+
+    assert.deepEqual(await page.locator("#log li").allTextContents(), [
+      "start1:claude|model=-|effort=-",
+      "done1:claude|model=-|effort=-",
+      // 关键：send 排在 done1 之后，且此刻任务字段已经是 claude（不是旧的 codex）。
+      "send:立即发送|task=claude/-|override=-/-/-",
+    ]);
+    await page.close();
+  }
+
+  // ⑥ 写回失败：不能静默按旧配置发出去，得把这一句拦下来并说清楚。
+  {
+    const page = await fixture("?fail=1");
+    const agentTrigger = page.getByRole("button", { name: /智能体：/ });
+
+    await agentTrigger.click();
+    await page.getByRole("option", { name: /@claude/ }).click();
+    await page.keyboard.press("Escape");
+    await page.locator("#log li").nth(1).waitFor();
+
+    await page.getByRole("textbox", { name: "回复任务" }).fill("失败后不该发");
+    await page.getByRole("button", { name: "发送回复" }).click();
+    await page.locator(".task-reply-error").waitFor();
+    assert.match(await page.locator(".task-reply-error").textContent() ?? "", /没能改过去/);
+    assert.deepEqual(
+      await page.locator("#log li").allTextContents(),
+      ["start1:claude|model=-|effort=-", "fail1:claude|model=-|effort=-"],
+      "写回失败后不能再有 send —— 那会按旧执行器跑",
+    );
+    // 胶囊退回任务真实字段，不拿一份没写成的乐观值糊着；正文原样留着可以重发。
+    assert.match(await agentTrigger.getAttribute("aria-label") ?? "", /智能体：codex/);
+    assert.equal(await page.getByRole("textbox", { name: "回复任务" }).inputValue(), "失败后不该发");
     await page.close();
   }
 

@@ -362,6 +362,14 @@ export function ReplyBox({
     const sentText = value.trim();
     const sentPaths = uploads.attachments.map((attachment) => attachment.path);
     try {
+      // 改完执行器立刻按发送时，PATCH 可能还在飞 —— 回复的 POST 先到，服务端读到的
+      // 仍是旧执行器，这一句照旧由旧的跑。先等写回落地，落不下去就别发：静默按旧
+      // 配置发出去，等于用户改了个寂寞（第 2 轮审查实测复现）。
+      const standingError = await standing.settle();
+      if (standingError) {
+        setSendError(`执行器没能改过去（${standingError}），这一句先没发出去。重选一次执行器再发。`);
+        return;
+      }
       const result = await onSend(
         sentText,
         sentPaths,
