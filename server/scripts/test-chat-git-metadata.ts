@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import type { AgentEvent } from "@ash/shared";
@@ -85,16 +85,30 @@ try {
 
   background = false;
   release = undefined;
-  const lock = join(linkedGit, "index.lock");
-  mutate = () => { writeFileSync(lock, "index refresh"); rmSync(lock); };
-  await assert.doesNotReject(invoke(), "其他工作树的 index.lock 创建/移除不应中止主仓咨询");
+  // git 的记账目录整棵不算项目文件：主仓和其他工作树的索引、锁、HEAD、refs、logs，都会被 ash
+  // 的状态轮询、别的任务在同一个仓库里的提交、以及用户自己的终端动到，全不是被咨询者干的。
+  const gitWrites = [
+    join(linkedGit, "index.lock"), join(linkedGit, "HEAD"),
+    join(repo, ".git", "index.lock"), join(repo, ".git", "index"), join(repo, ".git", "HEAD"),
+    join(repo, ".git", "refs", "heads", "main"), join(repo, ".git", "logs", "HEAD"),
+  ].map((file) => { let before: Buffer | undefined; try { before = readFileSync(file); } catch {} return { file, before }; });
+  mutate = () => { for (const { file } of gitWrites) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, "git 记账"); } };
+  try { await assert.doesNotReject(invoke(), "git 元数据写入不应中止咨询"); }
+  finally {
+    for (const { file, before } of gitWrites) {
+      if (before) writeFileSync(file, before);
+      else rmSync(file, { force: true });
+    }
+  }
   mutate = () => {};
   toolEvent = { kind: "tool", name: "Write", detail: linkedIndex };
-  await assert.rejects(invoke(), ChatBoundaryError, "索引缓存例外不能绕过写入工具检查");
+  await assert.rejects(invoke(), ChatBoundaryError, "元数据例外不能绕过写入工具检查");
   toolEvent = undefined;
+  console.log(`chat git metadata: ${gitWrites.length} 处 .git 记账写入未误判，写入工具仍被拦下`);
 
   mkdirSync(join(repo, "node_modules", "pkg"), { recursive: true });
-  for (const path of ["source.txt", join("node_modules", "pkg", "side-effect.txt"), join(".git", "index"), join(".git", "HEAD"), join(".git", "worktrees", "linked", "HEAD"), "index.lock"]) {
+  // `.gitignore` 与 `index.lock` 是工作区里的普通文件，名字沾边不代表能跟着豁免。
+  for (const path of ["source.txt", join("node_modules", "pkg", "side-effect.txt"), ".gitignore", "index.lock"]) {
     const file = join(repo, path);
     let before: Buffer | undefined;
     try { before = readFileSync(file); } catch {}
@@ -106,7 +120,7 @@ try {
     }
   }
   assert.equal(git(repo, "status", "--short", "--untracked-files=no"), "");
-  console.log("chat git metadata: 只豁免其他工作树的 index/index.lock；当前索引、HEAD、源码、依赖及同名普通文件仍告警");
+  console.log("chat git metadata: 豁免只到 .git 边界为止；源码、依赖、.gitignore 及同名普通文件仍告警");
 } finally {
   release?.();
   CLI_SPEC_BY_KEY.codex.factory = originalFactory;

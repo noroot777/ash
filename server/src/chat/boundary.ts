@@ -77,9 +77,14 @@ export async function watchChatWorkspace(cwd: string, onViolation: (error: ChatB
   const excludedFiles = new Set([db, `${db}-wal`, `${db}-shm`, `${db}-journal`]);
   const ignored = (path: string) => {
     if (excludedFiles.has(path) || owned.some((tree) => contains(tree, path))) return true;
-    const parts = relative(root, path).split(sep);
-    return parts.length === 4 && parts[0] === ".git" && parts[1] === "worktrees"
-      && (parts[3] === "index" || parts[3] === "index.lock");
+    // `.git` 里的东西不是项目文件，是 git 的记账。项目根的 `.git/index`、`index.lock`、
+    // `refs/`、`logs/`、`objects/` 一直在被别人动：ash 轮询 `git status` 会刷新索引，别的任务
+    // 在同一个仓库提交，用户自己的终端和编辑器也在跑 git。上一轮只豁免了「其他工作树的
+    // index」，紧接着就换成主仓的 `.git/index.lock` 报同一条错——按路径一条条补永远追不上。
+    // 放宽到整棵 `.git` 不会开口子：只读白名单里根本没有 `git`，智能体的任何 git 调用都会先
+    // 在工具层中止；而真正改动内容的 git 操作（checkout / reset / stash）一定同时改工作区
+    // 文件，那些仍然照常告警。工作区里名叫 `.gitignore`、`index.lock` 的普通文件也照常受监测。
+    return relative(root, path).split(sep)[0] === ".git";
   };
   const shallow = (path: string) => {
     const parts = relative(root, path).split(sep);
