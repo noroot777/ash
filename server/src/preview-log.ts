@@ -179,10 +179,21 @@ function nodeModulesHint(
   advice: readonly NodeDepsAdvice[] = [],
   tried: readonly NodeDepsPrepared[] = [],
 ): string {
-  const head = `${what} —— 任务 worktree 是一份干净检出，node_modules 不在里面。\n`
-    + "起预览之前 ash 会**自己在项目外备一份**再挂进来（装在 ash 的 `data/deps` 下，只读你的"
-    + " package.json 和锁文件，你的项目不会被写）。这次没成：\n"
-    + `${tried.map((one) => `· \`${one.rel}\`：${one.detail}`).join("\n") || "· 这条命令没找到要备依赖的 node 包目录"}\n`;
+  const details = tried.map((one) => `· \`${one.rel}\`：${one.detail}`).join("\n")
+    || "· 这条命令没找到要备依赖的 node 包目录";
+  // 「试了没成」和「压根不会去做」得说成两句话。后者是这个任务**没开 worktree** ——
+  // 工作区就是用户自己的检出，ash 一条软链都不会往里挂（见 preview-deps.ts 的 ashWorktree），
+  // 那时再说一句「ash 会自己备一份、这次没成」是误导：他会去等一个永远不会发生的自动补救。
+  const blocked = tried.length > 0 && tried.every((one) => one.blocked === "workspace");
+  const head = blocked
+    ? `${what} —— 这个任务直接跑在项目检出里（没有开 worktree）。\n`
+      + "ash 只在自己建的任务 worktree 里挂依赖入口，**不往你的项目目录里写任何东西**，"
+      + "所以这次没有代备：\n"
+      + `${details}\n`
+    : `${what} —— 任务 worktree 是一份干净检出，node_modules 不在里面。\n`
+      + "起预览之前 ash 会**自己在项目外备一份**再挂进来（装在 ash 的 `data/deps` 下，只读你的"
+      + " package.json 和锁文件，你的项目不会被写）。这次没成：\n"
+      + `${details}\n`;
   if (!advice.length) {
     return `${head}\n手工的话，把主仓已经装好的那份借过来最省事：在任务工作区里软链一次即可，例如：\n`
       + "`ln -s <项目目录>/<子项目>/node_modules <任务工作区>/<子项目>/node_modules`"

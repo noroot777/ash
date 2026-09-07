@@ -110,6 +110,36 @@ function mainRepoOf(workspace: string): string | null {
   return repo && repo !== workspace ? repo : null;
 }
 
+/** 路径相等：Windows 上分隔符和大小写都可能不一样，比字符串会把同一个目录判成两个。 */
+function samePath(a: string, b: string): boolean {
+  const norm = (p: string) => {
+    const full = resolve(p).replaceAll("\\", "/").replace(/\/+$/, "");
+    return process.platform === "win32" ? full.toLowerCase() : full;
+  };
+  return norm(a) === norm(b);
+}
+
+/**
+ * 这个工作区**是不是 ash 自己建出来的隔离工作区**（`<主仓>/.worktrees/<taskId>`）。
+ *
+ * 这是「能不能往里挂 node_modules」的唯一判据，而且必须严到这个程度：
+ *
+ * 任务默认是**不开 worktree** 的（`tasks.use_worktree` 默认 false），那种任务的工作区
+ * 就是项目仓库本身 —— 也就是用户自己的检出。往那儿挂一条软链，哪怕最后撤得掉，也是
+ * ash 在用户的项目里写东西：他自己敲 `git status` 就会看见（前端的 `.gitignore` 写的是
+ * 带尾斜杠的 `node_modules/`，只匹配目录，匹配不上软链），而 `life: "task"` 的预览可以
+ * 挂上好几天。用户当初的原话是「怎么能因为 ash 去『污染』正常的项目呢？」，「最终会撤」
+ * 不等于「没有写」。
+ *
+ * 光看「`.git` 是不是文件」不够：用户自己 `git worktree add` 出来的检出也是 worktree，
+ * 那同样是他的目录。所以还要求它就住在主仓的 `.worktrees/` 下面 —— 那是 ash 建的，
+ * 也只有 ash 会往里放东西。
+ */
+export function ashWorktree(workspace: string): boolean {
+  const repo = mainRepoOf(workspace);
+  return repo !== null && samePath(dirname(workspace), join(repo, ".worktrees"));
+}
+
 function packageManager(dir: string): PackageManager {
   if (existsSync(join(dir, "pnpm-lock.yaml"))) return "pnpm";
   if (existsSync(join(dir, "yarn.lock"))) return "yarn";
@@ -198,6 +228,14 @@ export interface NodeDepsPrepared {
   detail: string;
   /** 这次**我们自己挂上去**的那条软链；预览收掉时要按原样撤掉（见 removePreparedLinks）。 */
   link: string | null;
+  /**
+   * 「压根没去备」的那一种，以及为什么。目前只有一个值：`"workspace"` = 工作区不是 ash
+   * 自己的隔离 worktree，所以一条软链都不挂（见 ashWorktree）。
+   *
+   * 它跟「试了没成」要分开：给用户的下一步开头那句话完全不同 —— 一个是「ash 备依赖这次
+   * 没成」，另一个是「ash 根本不会往你的项目里放东西」。
+   */
+  blocked?: "workspace";
 }
 
 /**
@@ -387,11 +425,13 @@ function closeLater(fd: number): void {
  * 子项目，等于把「点一下预览」变成一次十分钟的仪式。
  *
  * 三条路，从便宜到贵：
- *   ① 主仓里已经有一份**能用的**、而且 package.json 跟工作区里这份一模一样 → 直接软链。
- *      不用联网、瞬间完成，也不写主仓（只读它）。package.json 不一致就不借：这个任务
- *      很可能刚加了依赖，借一份旧树只会得到一个更难懂的报错。
+ *   ① 主仓里已经有一份**能用的**，而且清单、锁文件和安装配置跟工作区里这份完全一致 →
+ *      直接软链。不用联网、瞬间完成，也不写主仓（只读它）。有一样对不上就不借：这个任务
+ *      很可能刚加了依赖或者刚升过锁，借一份旧树轻则报错、重则拿错版本跑给用户看。
  *   ② ash 自己在 `data/deps` 里装过同样内容的一份 → 直接软链。
  *   ③ 都没有 → 复制 package.json + 锁文件到 `data/deps` 装一次，再软链。
+ *
+ * 前提是工作区得是 ash 自己的隔离 worktree —— 不是的话一条也不挂，见 ashWorktree。
  *
  * 任何一步失败都不抛：如实记一笔，让预览命令照常去跑（它会以 `vite: not found` 失败），
  * 由 preview-log.ts 拿着这些理由给下一步建议。**装不上不是不能预览的理由**——用户可能
@@ -405,6 +445,18 @@ export async function prepareNodeDeps(
   const all = nodeDepsAdvice(workspace, command);
   const targets = all.filter((one) => one.mentioned);
   if (!targets.length) targets.push(...all.filter((one) => one.rel === "."));
+  // 不是 ash 自己的隔离工作区就**一条软链都不挂**（判据和理由见 ashWorktree）。这条在
+  // 最前面：依赖装在项目外只解决了「依赖本体」，入口那条软链照样是写进用户的检出。
+  // 如实记一笔，让 preview-log.ts 拿着它给人工的下一步（自己装一次，或者给这个任务
+  // 打开 worktree），预览命令照常去跑。
+  if (targets.length && !ashWorktree(workspace)) {
+    return targets.map((one) => {
+      const detail = "这个任务直接跑在项目检出里（没有开 worktree），ash 不往用户的项目里挂东西，"
+        + "所以没有代备依赖：给这个任务打开 worktree，或者自己在项目里装一次";
+      note(logPath, `${one.rel}：${detail}`);
+      return { rel: one.rel, ok: false, detail, link: null, blocked: "workspace" as const };
+    });
+  }
   const done: NodeDepsPrepared[] = [];
   for (const one of targets) {
     done.push(await prepareOne(one, logPath));
@@ -426,9 +478,20 @@ async function prepareOne(one: NodeDepsAdvice, logPath: string): Promise<NodeDep
     return { rel: one.rel, ok: true, detail: how, link: one.target };
   };
 
-  // ① 主仓那份能用、而且 package.json 一致
+  const lockName = LOCKFILES[one.pm];
+  const lock = readIfPresent(join(one.dir, lockName));
+
+  // ① 主仓那份能用，而且**装出它的那几份输入跟这儿一模一样**。
+  //
+  // 「package.json 一样」远远不够：锁文件才是那棵树的实际内容。任务里常见的改动恰恰是
+  // 只动锁文件（升传递依赖、重新解析版本、解冲突），清单一个字都不变 —— 只比清单就会
+  // 绕过内容哈希缓存，直接挂上主仓按**旧锁**装的那棵树，预览页面于是由跟这次提交不一致的
+  // 依赖生成，最会掩盖的正是锁文件升级引入的回归。配置（.npmrc 里的 registry/omit=dev…）
+  // 同理，它们本来就进了缓存键，借用这条路没有理由更松。
   if (one.sourceReady && one.sourceDir !== null && one.source !== null
-    && readIfPresent(join(one.sourceDir, "package.json")) === manifest) {
+    && readIfPresent(join(one.sourceDir, "package.json")) === manifest
+    && readIfPresent(join(one.sourceDir, lockName)) === lock
+    && configOf(one.sourceDir) === configOf(one.dir)) {
     return linkTo(one.source, `借用主仓已经装好的那份（${one.source}，只读不写）`);
   }
 
@@ -447,8 +510,6 @@ async function prepareOne(one: NodeDepsAdvice, logPath: string): Promise<NodeDep
       + "搬到 ash 的隔离目录里就指空了 —— 装出来是断链而不是报错，所以 ash 没有代装");
   }
 
-  const lockName = LOCKFILES[one.pm];
-  const lock = readIfPresent(join(one.dir, lockName));
   const cache = cacheDir(one.rel, one.pm, manifest, lock, configOf(one.dir));
   const cached = join(cache, "node_modules");
 

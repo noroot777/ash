@@ -17,7 +17,8 @@ process.env.ASH_DEPS_DIR = join(root, "deps");
 process.env.ASH_DB = join(root, "ash.db");
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
-const { startPreview, stopPreview, sweepPreviews, readPreview, isPreviewStarting } = await import("../src/preview.js");
+const { startPreview, stopPreview, stopPreviewOnRerun, sweepPreviews, readPreview, isPreviewStarting }
+  = await import("../src/preview.js");
 // 清扫要读库（「这个任务还在不在」）。建好空表就够了 —— 没有任何任务行，正是「这些
 // taskId 都不在库里」的自然表达。
 await (await import("../src/db/index.js")).ensureSchema();
@@ -328,9 +329,11 @@ try {
     const serve = "require('http').createServer((q,r)=>r.end('borrowed')).listen(process.env.PORT)";
     writeFileSync(join(bin, "fakevite"), `#!/bin/sh\nexec "${process.execPath}" -e ${JSON.stringify(serve)}\n`, { mode: 0o755 });
 
-    const wt = join(root, "borrow-wt");
+    const wt = join(repo, ".worktrees", "borrow-wt");
     mkdirSync(join(wt, "front"), { recursive: true });
-    // git 的 worktree 就长这样：`.git` 是个文件，写着主仓在哪（preview-deps.ts 靠它找主仓）。
+    // ash 建出来的任务 worktree 就长这样：住在 `<主仓>/.worktrees/<taskId>`，`.git` 是个
+    // 文件、写着主仓在哪。位置是判据的一半 —— 只有 ash 自己建的这种目录才允许被挂
+    // node_modules，用户自己的检出（哪怕也是 worktree）一律不碰，见 ashWorktree。
     writeFileSync(join(wt, ".git"), `gitdir: ${join(repo, ".git", "worktrees", "borrow-wt")}\n`);
     writeFileSync(join(wt, "front", "package.json"), JSON.stringify({ name: "front", scripts: { dev: "fakevite" } }));
     symlinkSync(join(front, "node_modules"), join(wt, "front", "node_modules"));
@@ -369,7 +372,7 @@ try {
 
     const repo2 = join(root, "fresh-repo");
     mkdirSync(join(repo2, ".git"), { recursive: true });
-    const wt2 = join(root, "fresh-wt");
+    const wt2 = join(repo2, ".worktrees", "fresh-wt");
     mkdirSync(join(wt2, "front"), { recursive: true });
     writeFileSync(join(wt2, ".git"), `gitdir: ${join(repo2, ".git", "worktrees", "fresh-wt")}\n`);
     writeFileSync(join(wt2, "front", "package.json"), JSON.stringify({
@@ -403,7 +406,7 @@ try {
 
     // ① 安全拒绝（日志里出现旧协议的调度器）。原来这一支是裸 return，链留下、preview.json
     //    又不会写 —— 事后 stopPreview 连该撤什么都不知道。
-    const unsafeWt = join(root, "unsafe-wt");
+    const unsafeWt = join(repo2, ".worktrees", "unsafe-wt");
     mkdirSync(join(unsafeWt, "front"), { recursive: true });
     writeFileSync(join(unsafeWt, ".git"), `gitdir: ${join(repo2, ".git", "worktrees", "unsafe-wt")}\n`);
     writeFileSync(join(unsafeWt, "front", "package.json"), JSON.stringify({
@@ -424,7 +427,7 @@ try {
 
     // ② 起来之后服务自己退出，由清扫收尾。清扫会**删掉 preview.json**——`record.links` 是
     //    最后一份线索，那一刻不撤就永远撤不掉了。
-    const exitWt = join(root, "exit-wt");
+    const exitWt = join(repo2, ".worktrees", "exit-wt");
     mkdirSync(join(exitWt, "front"), { recursive: true });
     writeFileSync(join(exitWt, ".git"), `gitdir: ${join(repo2, ".git", "worktrees", "exit-wt")}\n`);
     writeFileSync(join(exitWt, "front", "package.json"), JSON.stringify({
@@ -445,7 +448,7 @@ try {
     // ③ 清扫顺手清备用依赖，**但正被活着的预览用着的那份不能碰**：自由预览是 `life: "task"`，
     //    一个任务等人验收等上三十天完全合法，而缓存只在挂链那一刻 touch 过一次。删掉之后
     //    工作区那条软链还在、只是断了，dev server 按需加载下一个模块时才炸，记录上它还跑着。
-    const liveWt = join(root, "live-wt");
+    const liveWt = join(repo2, ".worktrees", "live-wt");
     mkdirSync(join(liveWt, "front"), { recursive: true });
     writeFileSync(join(liveWt, ".git"), `gitdir: ${join(repo2, ".git", "worktrees", "live-wt")}\n`);
     writeFileSync(join(liveWt, "front", "package.json"), JSON.stringify({
@@ -474,6 +477,59 @@ try {
       killGroup(live.record.pid);
       await stopPreview("live-task", null);
     }
+
+    // ④ **启动那一段也必须能被摁死。** 依赖最多装 6 分钟、等就绪再 2 分钟，这八分钟里
+    //    用户点「关闭预览」、或者任务续跑走 stopPreviewOnRerun，都得抓得住它。记录只在
+    //    就绪时才写的话，这两条路径读不到东西、什么都不杀，原来那趟稍后照常上线：用户
+    //    「关掉了」的预览自己回来了，续跑那次更糟 —— 他会对着上一版代码验新改动。
+    const lateCmd = "node -e \"setTimeout(()=>{require('http').createServer((q,r)=>r.end('late'))"
+      + ".listen(process.env.PORT)},1500);setInterval(()=>{},1000)\"";
+    const cancelStep = {
+      id: "cancel", kind: "preview",
+      p: { cmd: lateCmd, mode: "frontend", ready: "port", life: "task" },
+    };
+    for (const [taskId, how, cancel] of [
+      ["cancel-stop", "用户关闭预览", () => stopPreview("cancel-stop", "测试：启动中关闭")],
+      ["cancel-rerun", "任务重新开跑", () => stopPreviewOnRerun("cancel-rerun")],
+    ] as const) {
+      const wtDir = join(repo2, ".worktrees", taskId);
+      mkdirSync(wtDir, { recursive: true });
+      const inflight = startPreview(taskId, cancelStep as never, wtDir); // 故意不 await
+      await waitFor(() => existsSync(join(root, "runs", taskId, "preview.json")), `${how}：启动记录没落盘`);
+      const startingRecord = JSON.parse(readFileSync(join(root, "runs", taskId, "preview.json"), "utf8"));
+      assert.equal(startingRecord.state, "starting", `${how}：落盘的应当是「正在启动」`);
+      await waitFor(() => JSON.parse(readFileSync(join(root, "runs", taskId, "preview.json"), "utf8")).pid > 0,
+        `${how}：pid 没被记下来（记不下就杀不掉）`);
+      const pid = JSON.parse(readFileSync(join(root, "runs", taskId, "preview.json"), "utf8")).pid as number;
+      assert.equal(readPreview(taskId), null, `${how}：还没起来就不该被当成「在跑」`);
+      assert.equal(isPreviewStarting(taskId), true, `${how}：启动中的日志应当接着续读`);
+      await cancel();
+      const result = await inflight;
+      assert.equal(result.ok, false, `${how}：被取消的那趟不能再报成功`);
+      assert.equal(readPreview(taskId), null, `${how}：取消之后又冒出一条「运行中」的记录（死灰复燃）`);
+      assert.equal(existsSync(join(root, "runs", taskId, "preview.json")), false, `${how}：记录没清掉`);
+      await waitFor(() => !isAlive(pid), `${how}：启动中的那个进程没被杀掉，它稍后还会上线`);
+    }
+
+    // ⑤ server 在启动那一段里重启：内存里那张「谁在驱动」的表没了，盘上却还留着一条
+    //    「正在启动」。它的子进程是 detached 的，可能还活着，软链也还挂在工作区里 ——
+    //    没人会再来收尾，只能由清扫认领。
+    const orphanWt = join(repo2, ".worktrees", "orphan-wt");
+    mkdirSync(orphanWt, { recursive: true });
+    const orphanLink = join(orphanWt, "node_modules");
+    symlinkSync(join(root, "deps"), orphanLink);
+    const sleeper = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { detached: true, stdio: "ignore" });
+    sleeper.unref();
+    mkdirSync(join(root, "runs", "orphan-task"), { recursive: true });
+    writeFileSync(join(root, "runs", "orphan-task", "preview.json"), JSON.stringify({
+      taskId: "orphan-task", cmd: "npm run dev", pid: sleeper.pid, url: null, port: null,
+      life: "task", startedAt: new Date().toISOString(), log: "x", links: [orphanLink],
+      state: "starting", gen: "from-a-previous-life",
+    }));
+    await sweepPreviews();
+    assert.equal(existsSync(join(root, "runs", "orphan-task", "preview.json")), false, "上一条命留下的「正在启动」没被清扫认领");
+    assert.equal(existsSync(orphanLink), false, "孤儿启动挂的软链留在了工作区里");
+    await waitFor(() => !isAlive(sleeper.pid ?? 0), "孤儿启动的进程没被杀掉");
 
     await sweepPreviews();
     assert.equal(readPreview("exit-task"), null, "清扫应当把死掉的记录收走");

@@ -4,7 +4,9 @@
 // 起、也得主动收的。所以这里的每一件事都围绕「别留孤儿」转：
 //   ① POSIX 进程 detached 自成组；Windows 不放进 job object，父进程退出也不会连坐。
 //      两边都把 pid 落盘（data/runs/<task>/preview.json），server 重启后照样杀得掉——
-//      内存里的 map 随进程一起没了，文件不会。
+//      内存里的 map 随进程一起没了，文件不会。**记录从「开始启动」那一刻就写**，不是等
+//      就绪才写：装依赖加等就绪最长八分钟，那段时间里的关闭/续跑/重启同样得抓得住它
+//      （见 PreviewRecord.state）。
 //   ② 每个任务同一时刻只有一个预览，起新的先收旧的。
 //   ③ 定时清扫既收「进程早死了但记录还在」，也收 idle30 这一档。
 //
@@ -13,6 +15,7 @@
 // 拿到之后再按用户选的那档确认——端口连得上 / 日志也说了 ready / HTTP 真返回 200。
 // 等不到就是这一站失败，绝不写一句「预览已起」骗人。
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
 import { existsSync, mkdirSync, openSync, closeSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -33,6 +36,7 @@ export type PreviewStep = Extract<WorkflowStep, { kind: "preview" }>;
 export interface PreviewRecord {
   taskId: string;
   cmd: string;
+  /** 还没 spawn 的时候是 0 —— 杀之前一律先判 `> 0`（`kill(0, …)` 打的是自己这一组）。 */
   pid: number;
   url: string | null;
   port: number | null;
@@ -41,6 +45,24 @@ export interface PreviewRecord {
   log: string;
   /** 起这次预览时 ash 自己挂上去的 node_modules 软链；收预览时按原样撤掉。 */
   links?: string[];
+  /**
+   * 这条记录是「还在启动」还是「已经起来了」。缺省（老记录）= 已经起来了。
+   *
+   * **启动那一段也必须有一条落盘的记录**，这不是为了给界面看，是为了让它可被杀掉：
+   * 依赖最多装 6 分钟、服务就绪再等 2 分钟，这八分钟里用户点「关闭预览」、或者任务
+   * 续跑触发 stopPreviewOnRerun，都得能把这一趟摁死。记录只在就绪时才写的话，那两条
+   * 路径读不到东西、什么也不杀，原来那趟稍后照常上线 —— 用户「关掉了」的预览自己
+   * 回来了，续跑的那次更糟：他会对着上一版代码验新改动。server 在这八分钟里重启也
+   * 一样，detached 的子进程和挂好的软链没有任何线索可循。
+   */
+  state?: "starting" | "ready";
+  /**
+   * 这一趟启动的代号。取消 = **把记录删掉或者换成别人的代号**，在跑的那一趟每到一个
+   * 检查点就核对一次，对不上就自己收摊。用代号而不是布尔标记，是因为「取消」和「立刻
+   * 起了新的一趟」在时间上分不开：只看「记录还在不在」，新那趟的记录会被旧那趟当成
+   * 自己的，于是旧的照样把自己写成 ready，把新的顶掉。
+   */
+  gen?: string;
 }
 
 /** 等它起来最多等多久 —— 前端构建冷启动一分钟很常见，再久就该报「起不来」了。 */
@@ -144,7 +166,14 @@ function recordPath(taskId: string): string {
   return join(RUNS_DIR, taskId, "preview.json");
 }
 
-export function readPreview(taskId: string): PreviewRecord | null {
+/**
+ * 盘上这个任务的预览记录，**不管它是在启动还是已经起来了**。
+ *
+ * 只有「要收拾它」的那几条路径该用这个（停止、续跑、清扫）。给界面看的一律用
+ * readPreview —— 一条还在启动的记录没有 url、没有 pid，被当成「预览在跑」就会变成
+ * 一句更早的谎。
+ */
+function readAnyPreview(taskId: string): PreviewRecord | null {
   try {
     const raw = readFileSync(recordPath(taskId), "utf8");
     const value = JSON.parse(raw) as PreviewRecord;
@@ -152,6 +181,28 @@ export function readPreview(taskId: string): PreviewRecord | null {
   } catch {
     return null;
   }
+}
+
+/** 已经起来了的那条记录（还在启动的不算）。 */
+export function readPreview(taskId: string): PreviewRecord | null {
+  const record = readAnyPreview(taskId);
+  return record && record.state !== "starting" ? record : null;
+}
+
+function writeRecord(record: PreviewRecord): void {
+  writeFileSync(recordPath(record.taskId), JSON.stringify(record, null, 2));
+}
+
+/**
+ * 更新「正在启动」那条记录，**前提是它还是我们这一趟的**。返回 null = 这一趟已经被取消
+ * （或者被新的一趟顶掉了），调用方就该收摊，别再往盘上写。
+ */
+function patchStart(taskId: string, gen: string, patch: Partial<PreviewRecord>): PreviewRecord | null {
+  const current = readAnyPreview(taskId);
+  if (!current || current.gen !== gen) return null;
+  const next = { ...current, ...patch };
+  writeRecord(next);
+  return next;
 }
 
 /**
@@ -220,22 +271,28 @@ function tail(path: string, banner = "", max = 4000): string {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * 正在启动、还没就绪的那几个任务。
+ * 正在启动、还没就绪的那几个任务 —— **本进程正在驱动的那几趟**。
  *
- * `preview.json` 要等服务真的连得上才写（那是对的：写早了就是一句「预览已起」的谎）。
- * 但「有没有在启动」和「起来了没有」是两件事，而**启动那一段恰恰是最需要看日志的一段**
- * —— Maven 在下依赖、前端在冷编译，一等就是一两分钟，最长可以等到 120 秒超时。只拿
- * `readPreview()` 当「在跑」的话，这整段时间对界面来说都是「没在跑」：日志接口报
- * `running: false`，弹窗因此不开轮询，用户守着一份不再更新的快照看「处理中」。
+ * 「有没有在启动」和「起来了没有」是两件事，而启动那一段恰恰是最需要看日志的一段
+ * —— Maven 在下依赖、前端在冷编译，一等就是一两分钟。只拿「起来了没有」当「在跑」的话，
+ * 这整段时间对界面来说都是「没在跑」：日志接口报 `running: false`，弹窗因此不开轮询，
+ * 用户守着一份不再更新的快照看「处理中」。
  *
- * 所以这里单独记一笔。内存里就够：进程重启后这张表没了，但那时 `startPreview` 的等待
- * 也一起没了，不会留下一个永远「正在启动」的任务。
+ * 盘上另有一条 `state: "starting"` 的记录（见 PreviewRecord.state），那是给「怎么把它
+ * 杀掉」用的，两者不重复：内存这张表回答的是「**谁在驱动**它」。清扫靠这个区分「正在
+ * 启动」和「上一条命留下的孤儿」—— 表里没有就是没人管了，收掉。
  */
 const starting = new Set<string>();
 
-/** 这个任务的预览是不是正在启动（还没就绪）。给日志接口判断要不要续读用。 */
+/**
+ * 这个任务的预览是不是正在启动（还没就绪）。给日志接口判断要不要续读用。
+ *
+ * 内存那张表之外还认盘上那条 `state: "starting"`：server 刚重启、界面又开着日志弹窗时，
+ * 内存里是空的，而那一趟的子进程可能还在（detached）。盘上那条最多活到下一次清扫
+ * （启动时立刻扫一遍），不会留下一个永远「正在启动」的任务。
+ */
 export function isPreviewStarting(taskId: string): boolean {
-  return starting.has(taskId);
+  return starting.has(taskId) || readAnyPreview(taskId)?.state === "starting";
 }
 
 export type PreviewResult =
@@ -277,6 +334,14 @@ async function runPreview(
   const injected = bannerEnv(lentAll);
   const banner = `$ ${injected ? `${injected} ` : ""}BROWSER=none ASH_PREVIEW=1 ASH_PREVIEW_MODE=${step.p.mode} ${step.p.cmd}\n`;
   writeFileSync(log, banner);
+  // **落盘的第一件事**：一条「正在启动」的记录（理由见 PreviewRecord.state）。它先于
+  // 装依赖和 spawn，因为要被杀掉的恰恰是这两段 —— 一趟启动最长可以是「装 6 分钟 + 等
+  // 2 分钟」，这八分钟里点关闭、任务续跑、server 重启，都得抓得住它。
+  const gen = randomUUID();
+  writeRecord({
+    taskId, cmd: step.p.cmd, pid: 0, url: null, port: null,
+    life: step.p.life, startedAt: now(), log, links: [], state: "starting", gen,
+  });
   // 起进程**之前**：这条命令要的 node 依赖不齐，就由 ash 自己在**项目之外**备一份挂进来
   // （怎么备、为什么必须在项目外，见 preview-deps.ts 顶部）。放在这儿有两个理由：banner
   // 已经落盘，所以 install 的输出直接进同一份预览日志，用户在弹窗里实时看得见（启动那一段
@@ -285,14 +350,31 @@ async function runPreview(
   // 备不成不拦路：照常去跑那条命令，它会以 `vite: not found` 失败，那时下面的诊断拿着
   // 这里的失败理由给人工的下一步。用户填的命令也可能压根不需要 node 依赖。
   const tried = await prepareNodeDeps(cwd, step.p.cmd, log);
-  // 我们挂上去的那几条软链**只在预览活着的这段时间存在**：起不来就当场撤掉，起来了就记进
-  // preview.json，由 stopPreview 撤（理由见 removePreparedLinks —— 用户敲 `git status`
+  // 我们挂上去的那几条软链**只在预览活着的这段时间存在**：起不来就当场撤掉，挂上了就立刻
+  // 记进 preview.json（那条「正在启动」的记录），由 stopPreview 撤（理由见 removePreparedLinks —— 用户敲 `git status`
   // 不该看见 ash 留下的东西）。依赖本体留在 data/deps，撤掉的只是入口，下次是秒挂。
   const links = tried.flatMap((one) => one.link === null ? [] : [one.link]);
   const failed = (reason: string): PreviewResult => {
     removePreparedLinks(links);
+    // 这一趟结束了，「正在启动」那条记录也就该没了 —— 但只撤**我们自己那一代**：
+    // 被取消之后可能已经有新的一趟在跑，删它的记录等于把活着的预览变成孤儿。
+    if (readAnyPreview(taskId)?.gen === gen) rmSync(recordPath(taskId), { force: true });
     return { ok: false, reason };
   };
+  /**
+   * 这一趟还算不算数。不算了就自己收摊：杀掉已经起的进程，**只在没人接手时**才撤软链。
+   *
+   * 撤链要挑时候：取消我们的那一下已经按记录撤过一轮（那时记录里有几条就撤几条），
+   * 而装依赖那几分钟里挂上的链它是不知道的，得由我们补撤。可如果此刻已经有新的一趟
+   * 开始了，同一个路径就是**它的**入口了，我们再撤就等于把别人的预览拆了。
+   */
+  const abandoned = (pid: number | null): PreviewResult => {
+    if (pid !== null && pid > 0) killByPid(pid);
+    if (readAnyPreview(taskId) === null) removePreparedLinks(links);
+    return { ok: false, reason: "预览启动被取消（关闭预览 / 任务重新开跑 / ash 重启）" };
+  };
+  // 装依赖可以走掉好几分钟，这中间被取消是常态，不是意外。
+  if (patchStart(taskId, gen, { links }) === null) return abandoned(null);
   const fd = openSync(log, "a");
   let pid: number;
   try {
@@ -324,6 +406,9 @@ async function runPreview(
     child.unref();
     if (!child.pid) return failed("预览进程没起来");
     pid = child.pid;
+    // pid 一到手立刻落盘：从这一刻起「关闭预览」杀得到它。慢一步都不行 —— 中间这一段
+    // 正是它还没监听端口、界面上什么都看不出来的时候。
+    if (patchStart(taskId, gen, { pid }) === null) return abandoned(pid);
   } catch (error) {
     return failed(error instanceof Error ? error.message : String(error));
   } finally {
@@ -333,6 +418,9 @@ async function runPreview(
   const deadline = Date.now() + READY_TIMEOUT_MS;
   while (Date.now() < deadline) {
     await sleep(POLL_MS);
+    // 每一圈都问一句「这趟还算数吗」：等就绪最长两分钟，用户在这中间点关闭是常事。
+    // 不问的话，被杀掉的只是当时那个 pid，而这个循环稍后照样会写一条 ready 记录出来。
+    if (readAnyPreview(taskId)?.gen !== gen) return abandoned(pid);
     const text = tail(log, banner);
     if (text.includes(UNSAFE_SCHEDULER_LOG)) {
       killByPid(pid);
@@ -382,10 +470,12 @@ async function runPreview(
     }
     if (!found) continue;
     if (!(await ready(step.p.ready, found.url, found.port, text))) continue;
-    const record: PreviewRecord = {
-      taskId, cmd: step.p.cmd, pid, url: found.url, port: found.port, life: step.p.life, startedAt: now(), log, links,
-    };
-    writeFileSync(recordPath(taskId), JSON.stringify(record, null, 2));
+    // 起来了。**仍然要核对代号**：就绪判定本身要跑一趟 HTTP/连通性探测，那期间照样
+    // 可能被取消，而这一步是把「正在启动」翻成「在跑」——写早了就是死灰复燃。
+    const record = patchStart(taskId, gen, {
+      pid, url: found.url, port: found.port, links, state: "ready", startedAt: now(),
+    });
+    if (record === null) return abandoned(pid);
     return { ok: true, record };
   }
   killByPid(pid);
@@ -395,10 +485,13 @@ async function runPreview(
 // 收掉一个任务的预览。reason 非空才往时间线写一行——刷新后仍能看出「预览被收了、
 // 为什么收的」，这是停止/暂停那条规矩的同一条判据。
 export async function stopPreview(taskId: string, reason: string | null): Promise<boolean> {
-  const record = readPreview(taskId);
+  // readAnyPreview：**还在启动的那一趟也得收得掉**。记录一删，那一趟自己下一个检查点
+  // 就会发现代号没了，杀掉自己起的进程、把链撤干净（见 runPreview 里的 abandoned）。
+  const record = readAnyPreview(taskId);
   if (!record) return false;
   // 不先看组长是否还活着：组长死、vite 仍留在同一进程组，正是必须回收的现场。
-  killByPid(record.pid);
+  // pid 为 0 = 还没 spawn，`kill(0, …)` 打的是**自己这一组**，绝不能放过去。
+  if (record.pid > 0) killByPid(record.pid);
   removePreparedLinks(record.links ?? []);
   rmSync(recordPath(taskId), { force: true });
   if (reason) await appendTaskTimeline(taskId, `预览已回收（${reason}）：${record.url ?? record.cmd}`);
@@ -422,7 +515,7 @@ export async function stopPreview(taskId: string, reason: string | null): Promis
  * 把线上环境开起来」）不受影响 —— 它是验收之后才有的东西。
  */
 export async function stopPreviewAtAccept(taskId: string): Promise<void> {
-  const record = readPreview(taskId);
+  const record = readAnyPreview(taskId);
   if (!record) return;
   if (record.life === "gate") await stopPreview(taskId, "人工关口已结束");
   else if (record.life === "task") await stopPreview(taskId, "任务已验收完成，按线上写的「任务结束时回收」收掉");
@@ -430,7 +523,9 @@ export async function stopPreviewAtAccept(taskId: string): Promise<void> {
 
 /** 任务又开跑了：预览指向的是上一版代码，一律收掉，免得对着旧页面验新改动。 */
 export async function stopPreviewOnRerun(taskId: string): Promise<void> {
-  if (readPreview(taskId)) await stopPreview(taskId, "任务重新开跑，旧预览指向的是上一版代码");
+  // readAnyPreview：正在启动的那一趟更得收 —— 它上线的时候任务已经在改下一版代码了，
+  // 留着它就是让用户对着上一版验新改动，而这正是这个函数唯一要防的事。
+  if (readAnyPreview(taskId)) await stopPreview(taskId, "任务重新开跑，旧预览指向的是上一版代码");
 }
 
 // 清扫：进程早死了的记录、以及 idle30 那一档到点的。启动时先扫一遍，之后每 5 分钟一次
@@ -448,9 +543,20 @@ export async function sweepPreviews(): Promise<void> {
   }
   for (const taskId of dirs) {
     if (!existsSync(recordPath(taskId))) continue;
-    const record = readPreview(taskId);
+    const record = readAnyPreview(taskId);
     if (!record) {
       rmSync(recordPath(taskId), { force: true });
+      continue;
+    }
+    if (record.state === "starting") {
+      // 「正在启动」只有本进程的 startPreview 在驱动，而它一定同时记在内存那张表里。
+      // 表里没有 = 驱动它的那个 server 已经不在了（重启/被杀），这条记录再也不会有人
+      // 收尾：它的子进程可能还活着（detached 的），软链也还挂在用户工作区里。
+      if (starting.has(taskId)) continue;
+      if (record.pid > 0) killByPid(record.pid);
+      removePreparedLinks(record.links ?? []);
+      rmSync(recordPath(taskId), { force: true });
+      await appendTaskTimeline(taskId, `预览没能起完就中断了（ash 重启），已经清理：${record.cmd}`);
       continue;
     }
     if (!alive(record.pid)) {
@@ -487,7 +593,8 @@ function heldCaches(): string[] {
   let dirs: string[];
   try { dirs = readdirSync(RUNS_DIR); } catch { return []; }
   for (const taskId of dirs) {
-    for (const link of readPreview(taskId)?.links ?? []) {
+    // readAnyPreview：正在启动那一趟挂的链同样占着缓存，别在它装到一半时把树删了。
+    for (const link of readAnyPreview(taskId)?.links ?? []) {
       const cache = heldCacheOf(link);
       if (cache) held.add(cache);
     }

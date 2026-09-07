@@ -46,12 +46,23 @@ function installed(pkgDir: string, ...bins: string[]) {
   mkdirSync(bin, { recursive: true });
   for (const name of bins) writeFileSync(join(bin, name), "#!/bin/sh\n");
 }
-/** 按 git 的真实布局搭一份 worktree：里面的 `.git` 是**文件**，写着主仓在哪。 */
+/**
+ * 按 ash 的真实布局搭一份任务 worktree：`<主仓>/.worktrees/<taskId>`，里面的 `.git` 是
+ * **文件**，写着主仓在哪。位置不能随便挑 —— 「是不是 ash 自己建的隔离工作区」正是按它
+ * 判的（见 ashWorktree），随便找个目录伪装成 worktree 会被当成用户自己的检出。
+ */
 function worktreeOf(repo: string, name: string): string {
-  const wt = dir(name);
+  const wt = join(repo, ".worktrees", name);
+  mkdirSync(wt, { recursive: true });
   file(wt, ".git", `gitdir: ${join(repo, ".git", "worktrees", name)}\n`);
   return wt;
 }
+/** worktree 里的一个子目录（建好并返回绝对路径）。 */
+const sub = (base: string, ...parts: string[]) => {
+  const p = join(base, ...parts);
+  mkdirSync(p, { recursive: true });
+  return p;
+};
 /** 把提示里那条以 prefix 开头的反引号命令抠出来。 */
 function command(hint: string, prefix: string): string {
   return [...hint.matchAll(/`([^`]+)`/g)].map((m) => m[1]).find((one) => one.startsWith(prefix)) ?? "";
@@ -66,7 +77,7 @@ try {
   file(join(repo, "front"), "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
   installed(join(repo, "front"), "vite");
   const wt = worktreeOf(repo, "wt-ready");
-  file(dir("wt-ready", "front"), "package.json", "{}");
+  file(sub(wt, "front"), "package.json", "{}");
   file(join(wt, "front"), "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
   const ready = nodeDepsAdvice(wt);
   check("只报缺依赖的那个子目录", ready.map((a) => a.rel), ["front"]);
@@ -100,7 +111,7 @@ try {
   file(dir("bare-repo", "a4sms-front"), "package.json", "{}");
   file(join(bare, "a4sms-front"), "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
   const bareWt = worktreeOf(bare, "wt-empty");
-  file(dir("wt-empty", "a4sms-front"), "package.json", "{}");
+  file(sub(bareWt, "a4sms-front"), "package.json", "{}");
   file(join(bareWt, "a4sms-front"), "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
   const empty = nodeDepsAdvice(bareWt);
   check("认出来「借不到」", empty[0]?.sourceReady, false);
@@ -150,7 +161,7 @@ try {
   file(dir("repo with space", "front app"), "package.json", "{}");
   installed(join(spaced, "front app"), "vite");
   const spacedWt = worktreeOf(spaced, "wt with space");
-  file(dir("wt with space", "front app"), "package.json", "{}");
+  file(sub(spacedWt, "front app"), "package.json", "{}");
   const spacedAdvice = nodeDepsAdvice(spacedWt, "cd 'front app' && npm run dev");
   const spacedHint = missingDepsHint("sh: 1: vite: not found\n", spacedAdvice) ?? "";
   const lnCommand = command(spacedHint, "ln -s");
@@ -172,7 +183,7 @@ try {
   file(dir("bare with space", "front app"), "package.json", "{}");
   file(join(bareSpaced, "front app"), "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
   const bareSpacedWt = worktreeOf(bareSpaced, "wt2 with space");
-  file(dir("wt2 with space", "front app"), "package.json", "{}");
+  file(sub(bareSpacedWt, "front app"), "package.json", "{}");
   file(join(bareSpacedWt, "front app"), "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
   const installHint = missingDepsHint("sh: 1: vite: not found\n", nodeDepsAdvice(bareSpacedWt)) ?? "";
   const cdCommand = command(installHint, "cd ");
@@ -212,7 +223,7 @@ try {
   const installRepo = dir("install-repo");
   mkdirSync(join(installRepo, ".git"), { recursive: true });
   const installWt = worktreeOf(installRepo, "wt-install");
-  const pkg = dir("wt-install", "front");
+  const pkg = sub(installWt, "front");
   file(pkg, "package.json", JSON.stringify({
     name: "front", version: "1.0.0", private: true, dependencies: { fakedep: `file:${dep}` },
   }));
@@ -235,7 +246,7 @@ try {
   const wsRepo = dir("ws-repo");
   mkdirSync(join(wsRepo, ".git"), { recursive: true });
   const wsWt = worktreeOf(wsRepo, "wt-ws");
-  file(dir("wt-ws", "front"), "package.json", JSON.stringify({ name: "f", workspaces: ["packages/*"] }));
+  file(sub(wsWt, "front"), "package.json", JSON.stringify({ name: "f", workspaces: ["packages/*"] }));
   const wsLog = join(root, "ws.log");
   writeFileSync(wsLog, "");
   const ws = await prepareNodeDeps(wsWt, "cd front && npm run dev", wsLog);
@@ -247,7 +258,7 @@ try {
   const keepRepo = dir("keep-repo");
   mkdirSync(join(keepRepo, ".git"), { recursive: true });
   const keepWt = worktreeOf(keepRepo, "wt-keep");
-  const keepPkg = dir("wt-keep", "front");
+  const keepPkg = sub(keepWt, "front");
   file(keepPkg, "package.json", JSON.stringify({ name: "front", version: "1.0.0", dependencies: { fakedep: `file:${dep}` } }));
   mkdirSync(join(keepPkg, "node_modules"), { recursive: true });
   file(join(keepPkg, "node_modules"), "someone-elses-file", "x");
@@ -269,7 +280,7 @@ try {
   mkdirSync(join(badRepo, ".git"), { recursive: true });
   const badWt = worktreeOf(badRepo, "wt-bad");
   // 让 install 必然失败，而且不靠网络：一份读不动的 package.json。
-  file(dir("wt-bad", "front"), "package.json", "{ this is not json }");
+  file(sub(badWt, "front"), "package.json", "{ this is not json }");
   const badLog = join(root, "bad.log");
   writeFileSync(badLog, "");
   const bad = await prepareNodeDeps(badWt, "cd front && npm run dev", badLog);
@@ -309,7 +320,7 @@ try {
     const repoDir = dir(`${name}-repo`);
     mkdirSync(join(repoDir, ".git"), { recursive: true });
     const wtDir = worktreeOf(repoDir, name);
-    file(dir(name, "front"), "package.json", parallelPkg);
+    file(sub(wtDir, "front"), "package.json", parallelPkg);
     return wtDir;
   });
   const raceLog = join(root, "race.log");
@@ -364,7 +375,7 @@ try {
   const heldRepo = dir("held-repo");
   mkdirSync(join(heldRepo, ".git"), { recursive: true });
   const heldWt = worktreeOf(heldRepo, "wt-held");
-  file(dir("wt-held", "front"), "package.json", JSON.stringify({ name: "held", version: "1.0.0", private: true }));
+  file(sub(heldWt, "front"), "package.json", JSON.stringify({ name: "held", version: "1.0.0", private: true }));
   const heldLog = join(root, "held.log");
   writeFileSync(heldLog, "");
   const heldPrepared = await withFakeNpm(() => prepareNodeDeps(heldWt, "cd front && npm run dev", heldLog));
@@ -389,8 +400,8 @@ try {
   const relRepo = dir("rel-repo");
   mkdirSync(join(relRepo, ".git"), { recursive: true });
   const relWt = worktreeOf(relRepo, "wt-rel");
-  file(dir("wt-rel", "shared"), "package.json", JSON.stringify({ name: "rel-shared", version: "1.0.0" }));
-  file(dir("wt-rel", "front"), "package.json", JSON.stringify({
+  file(sub(relWt, "shared"), "package.json", JSON.stringify({ name: "rel-shared", version: "1.0.0" }));
+  file(sub(relWt, "front"), "package.json", JSON.stringify({
     name: "front", version: "1.0.0", private: true, dependencies: { "rel-shared": "file:../shared" },
   }));
   const relLog = join(root, "rel.log");
@@ -407,7 +418,7 @@ try {
   const ghostRepo = dir("ghost-repo");
   mkdirSync(join(ghostRepo, ".git"), { recursive: true });
   const ghostWt = worktreeOf(ghostRepo, "wt-ghost");
-  file(dir("wt-ghost", "front"), "package.json", JSON.stringify({ name: "ghost", version: "1.0.0", private: true }));
+  file(sub(ghostWt, "front"), "package.json", JSON.stringify({ name: "ghost", version: "1.0.0", private: true }));
   const ghostLog = join(root, "ghost.log");
   writeFileSync(ghostLog, "");
   const savedPath = process.env.PATH;
@@ -426,7 +437,7 @@ try {
   const cfgRepo = dir("cfg-repo");
   mkdirSync(join(cfgRepo, ".git"), { recursive: true });
   const cfgWt = worktreeOf(cfgRepo, "wt-cfg");
-  const cfgPkg = dir("wt-cfg", "front");
+  const cfgPkg = sub(cfgWt, "front");
   file(cfgPkg, "package.json", JSON.stringify({ name: "cfg", version: "1.0.0", private: true }));
   file(cfgPkg, ".npmrc", "omit=dev\n");
   const cfgLog = join(root, "cfg.log");
@@ -442,6 +453,71 @@ try {
   check("配置改了就重新装，不拿旧树糊弄", cfgFixed[0]?.detail.startsWith("复用"), false);
   check("改完照样是成功的", cfgFixed[0]?.ok, true);
   removePreparedLinks([cfgFixed[0]?.link ?? ""]);
+
+  // ⑤g **不是 ash 自己的隔离工作区，就一条软链都不挂。** 任务默认不开 worktree，那种
+  //     任务的工作区就是用户的项目检出本身；依赖装在项目外只解决了「本体」，入口那条
+  //     软链照样是写进人家的目录（`git status` 看得见，`life: task` 还能挂好几天）。
+  //     用户的原话是「怎么能因为 ash 去『污染』正常的项目呢？」——「最终会撤」不是「没写」。
+  const checkout = dir("plain-checkout");
+  mkdirSync(join(checkout, ".git"), { recursive: true }); // 普通检出：.git 是目录
+  file(sub(checkout, "front"), "package.json", JSON.stringify({ name: "plain", version: "1.0.0", private: true }));
+  const checkoutLog = join(root, "plain.log");
+  writeFileSync(checkoutLog, "");
+  const depsBefore = readdirSync(join(root, "deps")).length;
+  const checkoutTried = await withFakeNpm(() => prepareNodeDeps(checkout, "cd front && npm run dev", checkoutLog));
+  check("普通检出不代备依赖", checkoutTried[0]?.ok, false);
+  check("说清楚为什么（以及怎么办）", checkoutTried[0]?.detail.includes("worktree"), true);
+  check("用户的项目里什么都没多出来", existsSync(join(checkout, "front", "node_modules")), false);
+  check("也没有偷偷装一份", readdirSync(join(root, "deps")).length, depsBefore);
+  const checkoutHint = missingDepsHint("sh: 1: vite: not found\n", nodeDepsAdvice(checkout, "cd front", "vite"), checkoutTried) ?? "";
+  check("理由进了给用户的下一步", checkoutHint.includes(checkoutTried[0]?.detail ?? "!"), true);
+  // 开头那句话也得换：这不是「ash 备依赖失败了」，是「ash 根本不会往你的项目里放东西」。
+  // 说成前者，用户会去等一个永远不会发生的自动补救。
+  check("开头不说「这次没成」那一套", checkoutHint.includes("这次没成"), false);
+  check("而是说清楚 ash 不往项目里写", checkoutHint.includes("不往你的项目目录里写任何东西"), true);
+  check("还得给出他自己能走的那条路", checkoutHint.includes("得在这儿装一次"), true);
+  // 用户自己 `git worktree add` 出来的检出也是 worktree，但那同样是**他的**目录：
+  // 判据必须严到「住在主仓的 .worktrees/ 下面」，不能只看 `.git` 是不是文件。
+  const ownRepo = dir("own-repo");
+  mkdirSync(join(ownRepo, ".git"), { recursive: true });
+  const ownWt = dir("my-own-worktree");
+  file(ownWt, ".git", `gitdir: ${join(ownRepo, ".git", "worktrees", "my-own-worktree")}\n`);
+  file(sub(ownWt, "front"), "package.json", JSON.stringify({ name: "own", version: "1.0.0", private: true }));
+  const ownTried = await withFakeNpm(() => prepareNodeDeps(ownWt, "cd front && npm run dev", checkoutLog));
+  check("用户自己开的 worktree 也不碰", [ownTried[0]?.ok, existsSync(join(ownWt, "front", "node_modules"))], [false, false]);
+
+  // ⑤h **借主仓那份，得连锁文件和安装配置一起对上。** 只比 package.json 是不够的：
+  //     任务里最常见的改动之一就是只动锁文件（升传递依赖、解冲突），清单一个字不变 ——
+  //     借一棵按旧锁装出来的树，等于把预览页面建在跟这次提交不一致的依赖上，而它最会
+  //     掩盖的恰恰是锁升级带来的回归。
+  const lockRepo = dir("lock-repo");
+  mkdirSync(join(lockRepo, ".git"), { recursive: true });
+  const lockManifest = JSON.stringify({ name: "lockcase", version: "1.0.0", private: true });
+  const repoFront = sub(lockRepo, "front");
+  file(repoFront, "package.json", lockManifest);
+  file(repoFront, "package-lock.json", JSON.stringify({ name: "lockcase", packages: { "node_modules/x": { version: "1.0.0" } } }));
+  installed(repoFront, "vite"); // 主仓那份「能用」
+  const lockWt = worktreeOf(lockRepo, "wt-lock");
+  const wtFront = sub(lockWt, "front");
+  file(wtFront, "package.json", lockManifest); // 清单完全一样
+  file(wtFront, "package-lock.json", JSON.stringify({ name: "lockcase", packages: { "node_modules/x": { version: "2.0.0" } } }));
+  const lockLog = join(root, "lock.log");
+  writeFileSync(lockLog, "");
+  const lockTried = await withFakeNpm(() => prepareNodeDeps(lockWt, "cd front && npm run dev", lockLog));
+  check("锁文件不一样就不借主仓", lockTried[0]?.detail.startsWith("借用主仓"), false);
+  check("而是按这个任务自己的锁装一份", lockTried[0]?.ok, true);
+  removePreparedLinks([lockTried[0]?.link ?? ""]);
+  // 配置同理：清单和锁都一样，`.npmrc` 不一样也不能借。
+  file(wtFront, "package-lock.json", JSON.stringify({ name: "lockcase", packages: { "node_modules/x": { version: "1.0.0" } } }));
+  file(wtFront, ".npmrc", "omit=dev\n");
+  const cfgTried = await withFakeNpm(() => prepareNodeDeps(lockWt, "cd front && npm run dev", lockLog));
+  check("安装配置不一样也不借", cfgTried[0]?.detail.startsWith("借用主仓"), false);
+  removePreparedLinks([cfgTried[0]?.link ?? ""]);
+  // 三样都对上了才借 —— 这条路本身还得是通的。
+  rmSync(join(wtFront, ".npmrc"), { force: true });
+  const borrowedNow = await withFakeNpm(() => prepareNodeDeps(lockWt, "cd front && npm run dev", lockLog));
+  check("三样都一致才借主仓", borrowedNow[0]?.detail.startsWith("借用主仓"), true);
+  removePreparedLinks([borrowedNow[0]?.link ?? ""]);
 
   // ⑥ 没有 node 包目录时什么都不做（Java 项目点预览不该被拖进 npm 的世界）。
   const java = dir("java");
