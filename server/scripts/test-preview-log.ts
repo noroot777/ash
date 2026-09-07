@@ -143,14 +143,20 @@ check("「端口被占」那行不许拿来拼地址", pickPreviewUrl("Error: Po
 check("光有个数字不算自述", pickPreviewUrl("build finished in 8080 ms\n", null), null);
 
 // —— 「没装依赖」得当场说破，而不是甩一段日志尾巴 ——
-// 任务 worktree 是干净检出，node_modules 天生不在里面。ash 不替用户装（install 会写进他的
-// 项目、还可能改写 lock 文件跟着 diff 进验收），所以能做的就是把这一句说清楚。
+// 任务 worktree 是干净检出，node_modules 天生不在里面。ash 会自己在**项目之外**备一份挂
+// 进来（preview-deps.ts），走到这个提示说明那一步没成 —— 于是提示要交代两件事：ash 试过
+// 什么、以及人工那条路的两条真实路径。
 check("npm/sh 找不到可执行文件", !!missingDepsHint("sh: 1: vite: not found\n"), true);
 check("node 找不到模块", !!missingDepsHint("Error: Cannot find module 'vite'\n"), true);
 check("ESM 版说法", !!missingDepsHint("code: 'ERR_MODULE_NOT_FOUND'\n"), true);
 check("pnpm 没有 lock", !!missingDepsHint("ERR_PNPM_NO_LOCKFILE  Cannot install with frozen-lockfile\n"), true);
 check("Windows 的说法", !!missingDepsHint("'vite' is not recognized as an internal or external command\n"), true);
-check("提示里明说 ash 不替你装", missingDepsHint("sh: vite: not found\n")?.includes("ash 不会替你装"), true);
+check("提示里交代 ash 自己在项目外备过一份", missingDepsHint("sh: vite: not found\n")?.includes("data/deps"), true);
+check(
+  "备依赖失败的理由原样带上",
+  missingDepsHint("sh: vite: not found\n", [], [{ rel: "front", ok: false, detail: "没网", link: null }])?.includes("没网"),
+  true,
+);
 check("提示里给出软链这条不写你项目的路", missingDepsHint("sh: vite: not found\n")?.includes("ln -s"), true);
 // 正常日志不许被认成缺依赖：误报会让用户去装一堆根本不缺的东西。
 check("正常启动日志", missingDepsHint("VITE ready in 81 ms\n➜ Local: http://localhost:5174/\n"), null);

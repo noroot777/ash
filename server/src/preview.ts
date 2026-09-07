@@ -21,8 +21,8 @@ import { bus } from "./bus.js";
 import { augmentedEnv, killByPid, withoutForeignNodeBins } from "./executors/spawn.js";
 import { RUNS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
-import { portConflict, pickPreviewUrl, portHint, missingDepsHint } from "./preview-log.js";
-import { nodeDepsAdvice } from "./preview-deps.js";
+import { portConflict, pickPreviewUrl, portHint, missingDepsHint, missingNodeBin } from "./preview-log.js";
+import { nodeDepsAdvice, prepareNodeDeps, pruneNodeDeps, removePreparedLinks } from "./preview-deps.js";
 import { PORT_ENV_ALIASES, PORT_SLOT } from "./preview-command.js";
 import { canConnect, ready } from "./preview-probe.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -39,6 +39,8 @@ export interface PreviewRecord {
   life: PreviewLife;
   startedAt: string;
   log: string;
+  /** 起这次预览时 ash 自己挂上去的 node_modules 软链；收预览时按原样撤掉。 */
+  links?: string[];
 }
 
 /** 等它起来最多等多久 —— 前端构建冷启动一分钟很常见，再久就该报「起不来」了。 */
@@ -275,6 +277,22 @@ async function runPreview(
   const injected = bannerEnv(lentAll);
   const banner = `$ ${injected ? `${injected} ` : ""}BROWSER=none ASH_PREVIEW=1 ASH_PREVIEW_MODE=${step.p.mode} ${step.p.cmd}\n`;
   writeFileSync(log, banner);
+  // 起进程**之前**：这条命令要的 node 依赖不齐，就由 ash 自己在**项目之外**备一份挂进来
+  // （怎么备、为什么必须在项目外，见 preview-deps.ts 顶部）。放在这儿有两个理由：banner
+  // 已经落盘，所以 install 的输出直接进同一份预览日志，用户在弹窗里实时看得见（启动那一段
+  // 是自动续读的）；而 READY_TIMEOUT 从下面才开始算，装依赖的几分钟不会被算成「起不来」。
+  //
+  // 备不成不拦路：照常去跑那条命令，它会以 `vite: not found` 失败，那时下面的诊断拿着
+  // 这里的失败理由给人工的下一步。用户填的命令也可能压根不需要 node 依赖。
+  const tried = await prepareNodeDeps(cwd, step.p.cmd, log);
+  // 我们挂上去的那几条软链**只在预览活着的这段时间存在**：起不来就当场撤掉，起来了就记进
+  // preview.json，由 stopPreview 撤（理由见 removePreparedLinks —— 用户敲 `git status`
+  // 不该看见 ash 留下的东西）。依赖本体留在 data/deps，撤掉的只是入口，下次是秒挂。
+  const links = tried.flatMap((one) => one.link === null ? [] : [one.link]);
+  const failed = (reason: string): PreviewResult => {
+    removePreparedLinks(links);
+    return { ok: false, reason };
+  };
   const fd = openSync(log, "a");
   let pid: number;
   try {
@@ -304,10 +322,10 @@ async function runPreview(
       },
     });
     child.unref();
-    if (!child.pid) return { ok: false, reason: "预览进程没起来" };
+    if (!child.pid) return failed("预览进程没起来");
     pid = child.pid;
   } catch (error) {
-    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+    return failed(error instanceof Error ? error.message : String(error));
   } finally {
     closeSync(fd);
   }
@@ -343,7 +361,7 @@ async function runPreview(
     const conflict = found?.lent ? null : portConflict(text);
     if (conflict) {
       killByPid(pid);
-      return { ok: false, reason: `${conflict}。\n\n${portHint(lent)}\n\n最后几行日志：\n${text.slice(-600)}` };
+      return failed(`${conflict}。\n\n${portHint(lent)}\n\n最后几行日志：\n${text.slice(-600)}`);
     }
     if (!alive(pid)) {
       // 组长（外层 shell / scripts/dev.mjs）先退出，不代表同组的 vite/tsx 也退出了。
@@ -354,26 +372,24 @@ async function runPreview(
       // node_modules）和一门运行时（mvn/dotnet/go…，那是 PATH 的事）下一步完全不同，
       // 详见 missingDepsHint。
       //
-      // 前一种还要**核对一遍事实再开口**：上一版直接甩一句「把主仓那份软链过来」，可它
-      // 假设了主仓那份存在 —— 目标项目的 a4sms-front 在主仓里也没有 node_modules，于是
-      // 那条建议指向一个不存在的源目录，用户照做只能得到一个断链。nodeDepsAdvice 现扫
-      // 现答，能借就把真实路径写出来，借不到就明说、并给出在他自己主仓里装一次那条路。
-      const deps = missingDepsHint(text, nodeDepsAdvice(cwd, step.p.cmd));
-      return { ok: false, reason: `预览进程已退出。${deps ? `\n\n${deps}\n` : ""}\n最后几行日志：\n${text.slice(-800)}` };
+      // 前一种要**核对一遍事实再开口**，而且核对时把「这次缺的是哪个可执行文件」一起带上：
+      // 只看「node_modules 在不在」会把 `--prod` 装出来的树、装了一半的树都判成「不缺」，
+      // 于是日志明明写着 `vite: not found`，诊断却回一句「没发现缺依赖」、退回带占位符的
+      // 通用模板。`tried` 是上面 ash 自己备依赖那一步的结果 —— 建议得先交代它为什么没成，
+      // 用户才知道自己要补的是哪一段。
+      const deps = missingDepsHint(text, nodeDepsAdvice(cwd, step.p.cmd, missingNodeBin(text)), tried);
+      return failed(`预览进程已退出。${deps ? `\n\n${deps}\n` : ""}\n最后几行日志：\n${text.slice(-800)}`);
     }
     if (!found) continue;
     if (!(await ready(step.p.ready, found.url, found.port, text))) continue;
     const record: PreviewRecord = {
-      taskId, cmd: step.p.cmd, pid, url: found.url, port: found.port, life: step.p.life, startedAt: now(), log,
+      taskId, cmd: step.p.cmd, pid, url: found.url, port: found.port, life: step.p.life, startedAt: now(), log, links,
     };
     writeFileSync(recordPath(taskId), JSON.stringify(record, null, 2));
     return { ok: true, record };
   }
   killByPid(pid);
-  return {
-    ok: false,
-    reason: `等了 ${Math.round(READY_TIMEOUT_MS / 1000)} 秒还没起来。最后几行日志：\n${tail(log, banner).slice(-800)}`,
-  };
+  return failed(`等了 ${Math.round(READY_TIMEOUT_MS / 1000)} 秒还没起来。最后几行日志：\n${tail(log, banner).slice(-800)}`);
 }
 
 // 收掉一个任务的预览。reason 非空才往时间线写一行——刷新后仍能看出「预览被收了、
@@ -383,6 +399,7 @@ export async function stopPreview(taskId: string, reason: string | null): Promis
   if (!record) return false;
   // 不先看组长是否还活着：组长死、vite 仍留在同一进程组，正是必须回收的现场。
   killByPid(record.pid);
+  removePreparedLinks(record.links ?? []);
   rmSync(recordPath(taskId), { force: true });
   if (reason) await appendTaskTimeline(taskId, `预览已回收（${reason}）：${record.url ?? record.cmd}`);
   // 自由工作流状态里的 preview.running 变了就必须发事件：那份快照的版本号只由
@@ -423,6 +440,9 @@ export async function stopPreviewOnRerun(taskId: string): Promise<void> {
 // 直接被删/归档，预览还在那儿开着」的——那种情况下没有任何一个界面还会提到它，端口却
 // 一直占着。db 走动态 import：这个模块本来只碰进程和文件，不想为一条兜底把它绑到表上。
 export async function sweepPreviews(): Promise<void> {
+  // 顺手清掉长期没人用的备用依赖：这套东西按 package.json 的内容一份一份地装，一份前端
+  // 依赖几百兆，不清就会在**用户的磁盘**上无声地涨（见 pruneNodeDeps）。
+  pruneNodeDeps();
   let dirs: string[];
   try {
     dirs = readdirSync(RUNS_DIR);

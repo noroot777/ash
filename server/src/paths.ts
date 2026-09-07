@@ -28,3 +28,9 @@ export const RUNS_FALLBACK_DIR = process.env.ASH_RUNS_FALLBACK?.trim() || null;
 export const UPLOADS_DIR = process.env.ASH_UPLOADS_DIR
   ? resolve(process.env.ASH_UPLOADS_DIR)
   : fileURLToPath(new URL("../../data/uploads", import.meta.url));
+// ash 自己给预览备的 node 依赖（见 preview-deps.ts 顶部）。**关键是它在用户项目之外**：
+// 依赖装在这儿，任务工作区只挂一条软链，用户的检出一个字节都不会被写。
+// ASH_DEPS_DIR 只给测试用。
+export const DEPS_DIR = process.env.ASH_DEPS_DIR
+  ? resolve(process.env.ASH_DEPS_DIR)
+  : fileURLToPath(new URL("../../data/deps", import.meta.url));

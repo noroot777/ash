@@ -15,7 +15,42 @@
 // 「只有正则和字符串」有一个例外的输入：`missingDepsHint` 收一份**核对过文件系统的事实**
 // （NodeDepsAdvice，由 preview-deps.ts 产出）。核对本身在那边做，这里仍然只负责措辞 ——
 // 否则这条建议就只能继续用占位符，而占位符正是它上一次没有闭环的原因。
-import type { NodeDepsAdvice } from "./preview-deps.js";
+import type { NodeDepsAdvice, NodeDepsPrepared, PackageManager } from "./preview-deps.js";
+import { previewShell } from "./preview-shell.js";
+
+/**
+ * 提示里给出的命令**也是要被粘进 shell 执行的**，所以路径一律按方言引好。
+ *
+ * 这不是洁癖：`/tmp/ash review path/front app` 这种带空格的合法路径，不引就是
+ * `cd: too many arguments`；带 `$`、`&`、`;` 的还会改变命令语义。生成的预览命令早就走
+ * preview-shell.ts 引用了（那儿有整段说明），诊断建议是同一类东西 —— 一样是 ash 写给
+ * shell 的字 —— 却漏在了外面。
+ */
+const POSIX = previewShell("linux");
+const CMD = previewShell("win32");
+
+/** 「把 source 挂到 target」这一条，按当前平台的写法给一条能整行粘走的命令。 */
+function linkCommand(source: string, target: string): string {
+  if (process.platform !== "win32") return `\`ln -s ${POSIX.quote(source)} ${POSIX.quote(target)}\``;
+  if (CMD.expressible(source) && CMD.expressible(target)) {
+    return `\`mklink /J ${CMD.quote(CMD.path(target))} ${CMD.quote(CMD.path(source))}\``;
+  }
+  // 路径里带 `%`：cmd 命令行没有可靠的转义写法（理由见 preview-shell.ts 的 expressible），
+  // 但 PowerShell 的单引号是纯字面量，写得出来 —— 写得出来就该给一条真能跑的。
+  return `\`New-Item -ItemType Junction -Path ${psQuote(target)} -Target ${psQuote(source)}\``;
+}
+
+/** 「进这个目录装一次」这一条，同样按当前平台的写法。 */
+function installCommand(dir: string, pm: PackageManager): string {
+  const shell = previewShell();
+  if (shell.expressible(dir)) return `\`${shell.cd(dir, `${pm} install`)}\``;
+  return `\`Set-Location ${psQuote(dir)}; ${pm} install\``;
+}
+
+/** PowerShell 的单引号字符串：里面只有 `'` 需要写成 `''`。 */
+function psQuote(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
 
 /**
  * ANSI 控制序列。三类都要认：CSI（`\x1b[32m` 这种颜色）、OSC（`\x1b]8;;<url>\x07`，
@@ -122,51 +157,53 @@ const MISSING_MODULE_LINES = [
 ];
 
 /**
- * ash 不替他装依赖：install 会写进他的项目 —— 少则在工作区里堆出几百兆，多则改写 lock
- * 文件，而 lock 文件是跟踪文件，会跟着任务 diff 一路走进验收。「点一下预览」不该有这种
- * 副作用。能做也该做的是把话说清楚，并指出不写他项目的那条路。
+ * ash **会**替他备依赖，但备在自己的地盘上：`data/deps/<内容哈希>`，只读项目里的
+ * package.json 和锁文件，用户的检出一个字节都不会被写（怎么备见 preview-deps.ts 顶部）。
+ * 走到这个函数说明那一步没成 —— 没网、私有源没凭据、workspaces 装不出正确的树，或者
+ * 用户的命令压根不是这么个跑法。
  *
- * **但「说清楚」不等于甩一句带占位符的模板。** 上一版写的是
- * `ln -s <项目目录>/<子项目>/node_modules <任务工作区>/<子项目>/node_modules`，它有两个
- * 假设，而目标项目两个都不成立：用户得自己把两条路径填对；更要命的是它**假设主仓那份
- * 存在**——实测 a4sms-front 在主仓里也没有 node_modules，于是这条建议指向一个不存在的
- * 源目录，照做只会得到一个断链，整件事没有闭环。
+ * 所以这里只剩「人工那条路怎么走」，而且**不能再甩一句带占位符的模板**。上一版写的是
+ * `ln -s <项目目录>/<子项目>/node_modules <任务工作区>/<子项目>/node_modules`，用户得自己
+ * 把两条路径填对，而且它假设主仓那份存在 —— 目标项目的 a4sms-front 在主仓里也没有
+ * node_modules，照做只会得到一个断链。
  *
- * 所以现在先核对事实（preview-deps.ts），再按事实分岔：
- *   · 借得到 → 把两条**真实路径**直接写出来，整行可以粘走。
- *   · 借不到 → 明说主仓那份也没有，并给出唯一不写任务工作区的那一步：在**用户自己的
- *     主仓**里装一次（那是他平时开发就要装的，node_modules 被 gitignore，不进任何任务
- *     diff），装完再软链 —— 命令同样按他的实际路径和锁文件对应的包管理器写出来。
+ * 现在先核对事实（preview-deps.ts），再按事实分岔：
+ *   · 借得到 → 把两条**真实路径**按当前 shell 的规矩引好写出来，整行可以粘走。
+ *   · 借不到 → 明说主仓那份也没有/也不全，并给出在**用户自己的主仓**里装一次那条路。
+ *     这条要连副作用一起说清楚：node_modules 被 gitignore 不进 diff，**但锁文件是跟踪
+ *     文件**，install 有可能改写它 —— 只说前半句就成了一句听着让人放心的错话。
  *   · 连工作区都没扫到（没传 advice / 不是 node 项目）→ 退回原来那句通用说法。
  */
-function nodeModulesHint(what: string, advice: readonly NodeDepsAdvice[] = []): string {
+function nodeModulesHint(
+  what: string,
+  advice: readonly NodeDepsAdvice[] = [],
+  tried: readonly NodeDepsPrepared[] = [],
+): string {
   const head = `${what} —— 任务 worktree 是一份干净检出，node_modules 不在里面。\n`
-    + "ash 不会替你装：install 会写进你的项目（工作区里堆出几百兆，还可能改写 lock 文件，"
-    + "而 lock 文件是跟踪文件，会跟着任务 diff 走进验收）。所以也别把 install 写进预览命令。\n";
+    + "起预览之前 ash 会**自己在项目外备一份**再挂进来（装在 ash 的 `data/deps` 下，只读你的"
+    + " package.json 和锁文件，你的项目不会被写）。这次没成：\n"
+    + `${tried.map((one) => `· \`${one.rel}\`：${one.detail}`).join("\n") || "· 这条命令没找到要备依赖的 node 包目录"}\n`;
   if (!advice.length) {
-    return `${head}不写你项目的做法是把主仓已经装好的那份借过来，在任务工作区里软链一次即可，例如：\n`
+    return `${head}\n手工的话，把主仓已经装好的那份借过来最省事：在任务工作区里软链一次即可，例如：\n`
       + "`ln -s <项目目录>/<子项目>/node_modules <任务工作区>/<子项目>/node_modules`"
       + "（Windows 用 `mklink /J`）。ash 认得这条软链，不会因此把工作区判成脏。";
   }
   // 一次最多说三条：并排的子项目再多，先解决看得见的这几个。
-  const shown = advice.slice(0, 3);
-  const lines = shown.map((one) => {
-    const dir = one.target.replace(/[\\/]node_modules$/, "");
-    const link = one.source === null ? "" : `\`ln -s ${one.source} ${one.target}\``;
-    const win = one.source === null ? "" : `（Windows 用 \`mklink /J ${one.target} ${one.source}\`）`;
-    if (one.sourceReady) return `· \`${one.rel}\`：主仓那份在，软链过来就行 —— ${link}${win}`;
+  const lines = advice.slice(0, 3).map((one) => {
+    const link = one.source === null ? "" : linkCommand(one.source, one.target);
+    if (one.sourceReady) return `· \`${one.rel}\`：主仓那份能用，软链过来就行 —— ${link}`;
     if (one.sourceDir === null) {
       return `· \`${one.rel}\`：这个目录就是仓库本身，没有「别处那一份」可借，`
-        + `得在这儿装一次 —— \`cd ${dir} && ${one.pm} install\``;
+        + `得在这儿装一次 —— ${installCommand(one.dir, one.pm)}`;
     }
-    return `· \`${one.rel}\`：**主仓那份也不在**（\`${one.sourceDir}\` 里没有 node_modules），`
-      + `所以现在没有可借的。在你自己的主仓里装一次就有了 —— `
-      + `\`cd ${one.sourceDir} && ${one.pm} install\`，装完再软链：${link}${win}`;
+    return `· \`${one.rel}\`：**主仓那份也不能用**（\`${one.sourceDir}\` 里的 node_modules 不在、`
+      + "是空的、或者没有这次要的那个可执行文件），所以现在没有可借的。"
+      + `在你自己的主仓里装一次就有了 —— ${installCommand(one.sourceDir, one.pm)}，装完再软链：${link}`;
   });
-  return `${head}不写你项目的做法是把主仓已经装好的那份借过来，在任务工作区里软链一次；`
-    + "ash 认得这条软链，不会因此把工作区判成脏。这个工作区里缺依赖的是：\n"
-    + `${lines.join("\n")}\n`
-    + "（主仓的 node_modules 被 gitignore，在那儿装不会进任何任务的 diff。）";
+  return `${head}\n手工要走的话，缺依赖的是这几个：\n${lines.join("\n")}\n`
+    + "（软链 ash 认得，不会因此把工作区判成脏。**在主仓里装要留意锁文件**：node_modules 被"
+    + " gitignore 不会进 diff，但锁文件是跟踪文件，install 有可能改写它 —— 装完 `git status`"
+    + " 看一眼，别让它跟着任务 diff 走进验收。）";
 }
 
 /** 找不到的是一门运行时/包管理器/构建工具：跟 node_modules 无关，是 PATH 或者压根没装。 */
@@ -192,10 +229,14 @@ function runtimeMissingHint(name: string): string {
  * 为什么 `pnpm` 属于后者）；名字都捞不出来的少数格式 → 两条都摆出来，让用户自己对号入座，
  * 也好过硬塞一条必然无效的建议。
  */
-export function missingDepsHint(log: string, advice: readonly NodeDepsAdvice[] = []): string | null {
+export function missingDepsHint(
+  log: string,
+  advice: readonly NodeDepsAdvice[] = [],
+  tried: readonly NodeDepsPrepared[] = [],
+): string | null {
   const lines = stripAnsi(log).split("\n").map((line) => line.trimEnd());
   if (lines.some((line) => MISSING_MODULE_LINES.some((re) => re.test(line)))) {
-    return nodeModulesHint("看着像这个工作区里没装依赖", advice);
+    return nodeModulesHint("看着像这个工作区里没装依赖", advice, tried);
   }
   const hit = lines.find((line) => MISSING_CMD_LINES.some((re) => re.test(line)));
   if (hit === undefined) return null;
@@ -203,18 +244,38 @@ export function missingDepsHint(log: string, advice: readonly NodeDepsAdvice[] =
   if (name === null) {
     return "启动命令里有个东西没找到（日志里那句 not found）。两种可能，对号入座：\n"
       + "① 它是这个项目 node 依赖里的可执行文件 —— 任务 worktree 是干净检出，"
-      + "node_modules 不在里面，把主仓装好的那份软链进来即可"
+      + "node_modules 不在里面。ash 起预览前会自己在项目外备一份挂进来（`data/deps`），"
+      + "这次没备成；手工的话把主仓装好的那份软链进来即可"
       + "（`ln -s <项目目录>/<子项目>/node_modules <任务工作区>/<子项目>/node_modules`，"
-      + "Windows 用 `mklink /J`）。ash 不替你装，也别把 install 写进预览命令 —— 它会改写"
-      + " lock 文件，跟着任务 diff 走进验收。\n"
+      + "Windows 用 `mklink /J`）。别把 install 写进预览命令 —— 那会在你的工作区里改写"
+      + "锁文件，跟着任务 diff 走进验收。\n"
       + "② 它是一门运行时、包管理器或构建工具（node / pnpm / mvn / dotnet / go / python…）"
       + "—— 那就是没装，或者不在 ash 起预览那个 shell 的 PATH 上，跟 node_modules 无关。";
   }
-  const bare = (name.replace(/\.(?:exe|cmd|bat|ps1)$/i, "").split(/[\\/]/).pop() ?? name).toLowerCase();
+  const bare = bareName(name);
   if (NODE_RUNTIMES.has(bare)) return runtimeMissingHint(bare);
   return NODE_BINS.has(bare)
-    ? nodeModulesHint(`\`${bare}\` 没找到，看着像这个工作区里没装依赖`, advice)
+    ? nodeModulesHint(`\`${bare}\` 没找到，看着像这个工作区里没装依赖`, advice, tried)
     : runtimeMissingHint(bare);
+}
+
+function bareName(name: string): string {
+  return (name.replace(/\.(?:exe|cmd|bat|ps1)$/i, "").split(/[\\/]/).pop() ?? name).toLowerCase();
+}
+
+/**
+ * 日志里那个没找到的东西，**如果它是项目依赖里的可执行文件**，就是它的名字；否则 null。
+ *
+ * 给 nodeDepsAdvice 当 `want` 用：知道这次缺的是 `vite`，才分得清「node_modules 在那儿」
+ * 和「node_modules 里有这次要的东西」—— `--prod` 装出来的树、装了一半的树都属于前者。
+ */
+export function missingNodeBin(log: string): string | null {
+  const lines = stripAnsi(log).split("\n").map((line) => line.trimEnd());
+  const hit = lines.find((line) => MISSING_CMD_LINES.some((re) => re.test(line)));
+  const name = hit === undefined ? null : missingCommand(hit);
+  if (name === null) return null;
+  const bare = bareName(name);
+  return NODE_BINS.has(bare) ? bare : null;
 }
 
 /** 日志里印出来的本机地址。`lent` 为真表示它就落在我们借出去的那个端口上。 */

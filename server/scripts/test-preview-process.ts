@@ -3,7 +3,7 @@
 // Run: npm -w server run test:preview-process
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,9 +11,10 @@ import { fileURLToPath } from "node:url";
 
 const root = mkdtempSync(join(tmpdir(), "ash-preview-process-"));
 process.env.ASH_RUNS_DIR = join(root, "runs");
+process.env.ASH_DEPS_DIR = join(root, "deps");
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
-const { startPreview, readPreview, isPreviewStarting } = await import("../src/preview.js");
+const { startPreview, stopPreview, readPreview, isPreviewStarting } = await import("../src/preview.js");
 const { PORT_ENV_ALIASES, PORT_SLOT } = await import("../src/preview-command.js");
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -336,6 +337,54 @@ try {
     } finally {
       if (result.ok) killGroup(result.record.pid);
     }
+  }
+
+  // 整件事的落点：**任务工作区里什么依赖都没有**，点一下预览就该能起来，而且用户的项目
+  // 一个字节都不被写。ash 在起进程之前把依赖装进自己的 data/deps（这里指到临时目录），
+  // 只从项目里读 package.json 和锁文件，再挂一条软链。这条用 `file:` 依赖，全程不联网 ——
+  // 要证的是链路，不是 npm 会不会下包。收掉预览后那条软链也必须消失（用户敲 git status
+  // 不该看见 ash 留下的东西）。
+  if (process.platform !== "win32") {
+    const dep = join(root, "fakedep");
+    mkdirSync(dep, { recursive: true });
+    writeFileSync(join(dep, "package.json"), JSON.stringify({
+      name: "fakedep", version: "1.0.0", bin: { fakevite: "cli.js" },
+    }));
+    writeFileSync(
+      join(dep, "cli.js"),
+      "#!/usr/bin/env node\nrequire('http').createServer((q,r)=>r.end('installed by ash')).listen(process.env.PORT)\n",
+    );
+
+    const repo2 = join(root, "fresh-repo");
+    mkdirSync(join(repo2, ".git"), { recursive: true });
+    const wt2 = join(root, "fresh-wt");
+    mkdirSync(join(wt2, "front"), { recursive: true });
+    writeFileSync(join(wt2, ".git"), `gitdir: ${join(repo2, ".git", "worktrees", "fresh-wt")}\n`);
+    writeFileSync(join(wt2, "front", "package.json"), JSON.stringify({
+      name: "front", version: "1.0.0", private: true,
+      scripts: { dev: "fakevite" }, dependencies: { fakedep: `file:${dep}` },
+    }));
+
+    const step = {
+      id: "fresh-preview",
+      kind: "preview",
+      p: { cmd: "cd front && npm run dev", mode: "frontend", ready: "http200", life: "gate" },
+    };
+    const result = await startPreview("fresh-task", step as never, wt2);
+    try {
+      const log = readFileSync(join(root, "runs", "fresh-task", "preview.log"), "utf8");
+      assert.equal(result.ok, true, `干净检出没能靠 ash 备的依赖起起来：\n${log}`);
+      assert.ok(result.ok);
+      assert.equal(await fetch(result.record.url ?? "").then((r) => r.text()), "installed by ash");
+      // 依赖装在 ash 自己的地盘，项目里只多了一条软链。
+      assert.ok(readdirSync(join(root, "deps")).length > 0, "依赖没装进 ASH_DEPS_DIR");
+      assert.ok(lstatSync(join(wt2, "front", "node_modules")).isSymbolicLink(), "项目里被塞了实体目录");
+      assert.deepEqual(result.record.links, [join(wt2, "front", "node_modules")]);
+    } finally {
+      if (result.ok) killGroup(result.record.pid);
+    }
+    await stopPreview("fresh-task", null);
+    assert.equal(existsSync(join(wt2, "front", "node_modules")), false, "收掉预览后 ash 挂的软链还在");
   }
 } finally {
   rmSync(root, { recursive: true, force: true });
