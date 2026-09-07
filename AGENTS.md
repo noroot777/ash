@@ -49,6 +49,8 @@
 
 浏览器/CDP/GUI 自动化这类「操作电脑」任务,一律派 codex(codex@cpa·gpt-5.6-sol)执行,不派 claude(用户 2026-07-30 指定)。
 
+**GUI 自动化按元素点,不按屏幕坐标**(用户 2026-09-07 同意)。`osascript` 的 `click at {x,y}` 对目标零校验,窗口层叠一变就点到别的 app 上,且错了没有声音——模拟器走 XcodeBuildMCP 手势/AX,浏览器走扩展或 CDP。经过见 `docs/incidents.md`「裸坐标点击」。
+
 ## Windows 真机在 192.168.1.187（用户 2026-08-18 指定）
 
 跨平台的东西（路径分隔符、PowerShell、原生窗口、`.cmd` 启动）不许只在 macOS 上读代码断言「Windows 应该也对」。那台机器上跑着一套 ash（`:4317`，仓库 `D:\ai_workspace\ash`），碰了 win32 分支就上去真跑一遍再交付。
