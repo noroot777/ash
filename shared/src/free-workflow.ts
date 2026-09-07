@@ -92,6 +92,9 @@ export interface FreeReviewRun {
 
 export interface FreeWorkflowPreviewState {
   running: boolean;
+  // 这个任务盘上有没有预览启动日志。跟 running 是两件事：**起失败的那次也留着日志**，
+  // 而那一次恰恰最需要看 —— 只按 running 给入口，用户永远看不到失败现场。
+  hasLog: boolean;
   url: string | null;
   port: number | null;
   command: string | null;

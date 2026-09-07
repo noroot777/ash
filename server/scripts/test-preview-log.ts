@@ -83,6 +83,21 @@ check("地址不带端口就按协议默认", pickPreviewUrl("running at http://
 // 于是「同一份日志问两次给两个答案」。轮询每秒都要问一次,这条必须钉住。
 check("同一份日志问两次答案一样", pickPreviewUrl(both, 54798), pickPreviewUrl(both, 54798));
 
+// —— 一条命令同时起前后端：配角的端口不能被当成预览本尊 ——
+// 后端几乎总比前端先起来（前端还在编译），它印的那句「Tomcat started on port …」如果被
+// 采信，用户点开预览看到的是一个返回 JSON 的地址。这几个端口是 ash 自己借给配角的
+// （$PORT2…），谁拿了它一清二楚，所以这里不是猜，是排除。
+const pair = "Tomcat started on port 35725 (http) with context path '/'\n";
+check("配角自述的端口不算数（前端还没起来时宁可回 null）", pickPreviewUrl(pair, 34233, [35725]), null);
+check("不告诉它哪些是配角就会挑错", pickPreviewUrl(pair, 34233)?.port, 35725);
+const pairUrl = "backend up at http://localhost:35725/\n  ➜  Local: http://localhost:34233/\n";
+check("配角印出整条地址同样排除，最后落在借出去的主端口上", pickPreviewUrl(pairUrl, 34233, [35725]), {
+  url: "http://localhost:34233/", port: 34233, lent: true,
+});
+check("配角有好几个也一样一个不认", pickPreviewUrl(pairUrl, 34233, [35725, 46401]), {
+  url: "http://localhost:34233/", port: 34233, lent: true,
+});
+
 // —— 撞车 + 自己的地址同时出现：preview.ts 的那个例外 ——
 // 后端撞上本机已在跑的那份、前端认了 $PORT 好好地起来了。两个纯函数各自照旧回答，
 // 由 preview.ts 组合成「这次不算失败」。这里钉的是它俩的输入。
@@ -140,6 +155,11 @@ check("提示里给出软链这条不写你项目的路", missingDepsHint("sh: v
 // 正常日志不许被认成缺依赖：误报会让用户去装一堆根本不缺的东西。
 check("正常启动日志", missingDepsHint("VITE ready in 81 ms\n➜ Local: http://localhost:5174/\n"), null);
 check("端口撞车不是缺依赖", missingDepsHint("Error: Port 5173 is already in use\n"), null);
+// 「这个文件不在」不是「没装依赖」：`node nope.js` 报的是同一句 Cannot find module，
+// 但引号里是一条路径。对着它说「去软链 node_modules」是把人往反方向指。
+check("缺的是自己的文件就不提装依赖", missingDepsHint("Error: Cannot find module '/repo/front/nope.js'\n"), null);
+check("相对路径同理", missingDepsHint("Error: Cannot find module './missing.js'\n"), null);
+check("缺的是包才提", missingDepsHint("Error: Cannot find module 'vite'\n") !== null, true);
 check("业务里出现 not found 字样也不算", missingDepsHint("GET /api/users 404 Not Found in 12ms\n"), null);
 
 console.log(failures ? `\n${failures} 条没过` : "\n全过");

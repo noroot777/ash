@@ -14,7 +14,7 @@
 // 等不到就是这一站失败，绝不写一句「预览已起」骗人。
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
-import { existsSync, mkdirSync, openSync, closeSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, closeSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PreviewLife, WorkflowStep } from "@ash/shared/workflow";
 import { bus } from "./bus.js";
@@ -52,7 +52,7 @@ const UNSAFE_SCHEDULER_LOG = "[ash] scheduler started";
 //（回归 test:preview-probe）。两个都不进 db，才测得动。
 
 /**
- * 借一个空闲端口，以环境变量 `PORT` 传给启动命令。
+ * 借一批空闲端口，以环境变量交给启动命令。
  *
  * 起因是一类**必然**发生的撞车：预览跑在任务自己的 worktree 里，命令却是从项目里抄来的
  * `npm run dev`，端口写死在脚本里。而同一个项目此刻多半已经有一份在跑（开发者自己那份、
@@ -62,6 +62,9 @@ const UNSAFE_SCHEDULER_LOG = "[ash] scheduler started";
  * 错开；不认的也不会更糟——那种情况下我们至少还能在日志里当场认出撞车并说人话。
  * 端口是 listen(0) 拿的，关掉再交给子进程，中间有个理论上的竞态窗口，抢不到就还是撞车
  * 那条路，不额外补偿。
+ *
+ * **借不止一个**的理由见 PORT_POOL：前后端一起起时，前端要在启动那一刻就知道后端落在
+ * 哪个端口上，而两个端口都是随机的 —— 只有 ash 同时借、同时告诉它们，这件事才成立。
  */
 function freePort(): Promise<number | null> {
   return new Promise((resolve) => {
@@ -75,18 +78,57 @@ function freePort(): Promise<number | null> {
   });
 }
 
+/**
+ * 一次借几个端口。1 个给「要看的那个」，其余给它的配角（后端、网关、mock 服务…）。
+ *
+ * 5 = 一个前端 + 四个后端，够覆盖「一个前端挂着一排微服务」的常见规模；借多了不花钱
+ * （探完就关），少了就得让用户回去写死端口，而写死端口正是这一整套要解决的问题。
+ */
+const PORT_POOL = 5;
+
+async function freePorts(count: number): Promise<number[]> {
+  const ports: number[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const port = await freePort();
+    // 借不到就停：拿到几个是几个，第一个拿不到时 portEnv 会退化成「什么都不注入」，
+    // 跟这套机制上线前的行为一致。
+    if (port === null || ports.includes(port)) break;
+    ports.push(port);
+  }
+  return ports;
+}
+
 /** 撞车时给的下一步在 preview-log.ts。 */
 
 /**
- * 借来的空闲端口要以**每种运行时自己认的方式**递进去，只给 `PORT` 是 Node 的口径：
- *   · `PORT`：Node（Next / CRA / Nest / Express）、以及一堆 PaaS 惯例。
- *   · `SERVER_PORT`：Spring Boot 的宽松绑定会把它读成 `server.port`（`spring-boot:run`
- *     fork 出来的 JVM 继承环境变量，所以这条对 Maven/Gradle 那两条命令同样成立）。
+ * 借来的端口怎么递给命令。三组名字，各有各的收件人：
+ *
+ *   · `PORT` / `SERVER_PORT`：**要看的那个**服务的端口。两个名字是因为「端口从环境变量
+ *     来」这件事每种运行时叫法不同 —— `PORT` 是 Node（Next / CRA / Nest / Express）和一堆
+ *     PaaS 的惯例，`SERVER_PORT` 被 Spring Boot 的宽松绑定读成 `server.port`（`spring-boot:run`
+ *     fork 出来的 JVM 继承环境变量，所以 Maven/Gradle 那两条命令同样吃这一套）。
+ *   · `PORT2…PORT5` / `URL2…URL5`：**配角**的端口和地址。一条命令里起前后端时，前端要在
+ *     启动那一刻就知道后端在哪 —— 两边都是随机端口，谁也猜不到谁，只能由 ash 同时借下来
+ *     一起告诉它们。`URLn` 是 `http://localhost:<PORTn>`，因为绝大多数前端的代理目标要的
+ *     是整条地址而不是一个数字（vite 的 `server.proxy.target`、`VITE_*_URL` 之类）。
+ *
  * 认不了环境变量的（Django / Go / Rust……）由命令自己带 `$PORT` —— 那也是同一个值，
  * 因为这里注进去的就是 shell 展开时看到的 PORT。
  */
-function portEnv(port: number | null): Record<string, string> {
-  return port ? { PORT: String(port), SERVER_PORT: String(port) } : {};
+function portEnv(ports: number[]): Record<string, string> {
+  const [primary, ...rest] = ports;
+  if (!primary) return {};
+  const env: Record<string, string> = { PORT: String(primary), SERVER_PORT: String(primary) };
+  rest.forEach((port, index) => {
+    env[`PORT${index + 2}`] = String(port);
+    env[`URL${index + 2}`] = `http://localhost:${port}`;
+  });
+  return env;
+}
+
+/** 日志头那一行：把注入的环境变量照实写出来，顺序稳定，好让人一眼对上。 */
+function bannerEnv(ports: number[]): string {
+  return Object.entries(portEnv(ports)).map(([key, value]) => `${key}=${value}`).join(" ");
 }
 
 function recordPath(taskId: string): string {
@@ -103,6 +145,40 @@ export function readPreview(taskId: string): PreviewRecord | null {
   }
 }
 
+/**
+ * 预览的启动日志落在哪。**banner 在 spawn 之前就写了**，所以「起失败的那一次」同样
+ * 留得下现场 —— 起不来的时候恰恰是最需要看日志的时候，而那时 preview.json 不存在。
+ */
+export function previewLogPath(taskId: string): string {
+  return join(RUNS_DIR, taskId, "preview.log");
+}
+
+export function hasPreviewLog(taskId: string): boolean {
+  return existsSync(previewLogPath(taskId));
+}
+
+/**
+ * 给界面看的启动日志：太长就只给尾巴（前端要显示的是「刚才发生了什么」，不是归档）。
+ * 没有这个文件返回 null —— 「从来没起过」和「起过但没输出」不是一回事。
+ */
+export function readPreviewLog(taskId: string, maxBytes = 200_000): {
+  text: string;
+  truncated: boolean;
+  updatedAt: string | null;
+} | null {
+  const path = previewLogPath(taskId);
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+  const truncated = text.length > maxBytes;
+  let updatedAt: string | null = null;
+  try { updatedAt = statSync(path).mtime.toISOString(); } catch { /* 文件刚被清掉，不影响正文 */ }
+  return { text: truncated ? text.slice(-maxBytes) : text, truncated, updatedAt };
+}
+
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -112,10 +188,21 @@ function alive(pid: number): boolean {
   }
 }
 
-function tail(path: string, max = 4000): string {
+/**
+ * 日志尾巴，**掐掉开头那行命令回显**。
+ *
+ * 掐它不是为了好看：那一行里有用户自己写的命令，而命令里很可能带着一个地址
+ * （`VITE_APP_API_URL=http://localhost:8082 pnpm dev`），ash 一注入 `URL2=…` 更是必然
+ * 带。地址扫描器不认得「这句是回显不是日志」，扫到就会把预览判成起在**别人**那个端口上
+ * —— 用户点开预览看到的是后端，改动却在前端。所以分析用的文本一律先减去这一行。
+ *
+ * 先减再截尾，不是先截尾再减：日志一长，回显被截掉一半留下的残句照样能匹配出地址。
+ */
+function tail(path: string, banner = "", max = 4000): string {
   try {
     const text = readFileSync(path, "utf8");
-    return text.length > max ? text.slice(-max) : text;
+    const body = text.startsWith(banner) ? text.slice(banner.length) : text;
+    return body.length > max ? body.slice(-max) : body;
   } catch {
     return "";
   }
@@ -138,12 +225,13 @@ export async function startPreview(
   const dir = join(RUNS_DIR, taskId);
   mkdirSync(dir, { recursive: true });
   const log = join(dir, "preview.log");
-  const lent = await freePort();
-  // 日志头把注入的环境变量照实写出来，不只写命令：用户翻 preview.log 时得能一眼看出
-  // 「ash 到底把什么交给了这条命令」，而不是去猜端口是谁定的。
-  const banner = lent
-    ? `$ PORT=${lent} SERVER_PORT=${lent} BROWSER=none ASH_PREVIEW=1 ASH_PREVIEW_MODE=${step.p.mode} ${step.p.cmd}\n`
-    : `$ ASH_PREVIEW=1 ASH_PREVIEW_MODE=${step.p.mode} ${step.p.cmd}\n`;
+  const lentAll = await freePorts(PORT_POOL);
+  const lent = lentAll[0] ?? null;
+  // 日志头把注入的环境变量照实写出来，不只写命令：用户翻预览日志时得能一眼看出
+  // 「ash 到底把什么交给了这条命令」，而不是去猜端口是谁定的 —— 一条同时起前后端的
+  // 命令里，配角落在哪个端口上只有这一行说得清。
+  const injected = bannerEnv(lentAll);
+  const banner = `$ ${injected ? `${injected} ` : ""}BROWSER=none ASH_PREVIEW=1 ASH_PREVIEW_MODE=${step.p.mode} ${step.p.cmd}\n`;
   writeFileSync(log, banner);
   const fd = openSync(log, "a");
   let pid: number;
@@ -169,7 +257,7 @@ export async function startPreview(
         ...withoutForeignNodeBins(augmentedEnv(), cwd),
         ASH_PREVIEW: "1",
         ASH_PREVIEW_MODE: step.p.mode,
-        ...portEnv(lent),
+        ...portEnv(lentAll),
         BROWSER: "none",
       },
     });
@@ -185,7 +273,7 @@ export async function startPreview(
   const deadline = Date.now() + READY_TIMEOUT_MS;
   while (Date.now() < deadline) {
     await sleep(POLL_MS);
-    const text = tail(log);
+    const text = tail(log, banner);
     if (text.includes(UNSAFE_SCHEDULER_LOG)) {
       killByPid(pid);
       return {
@@ -201,7 +289,7 @@ export async function startPreview(
     // `python3 -m http.server` 那句 `Serving HTTP on …` 在非 tty 下是块缓冲的，压根不落盘；
     // 一个 `go run` 写的服务可以什么都不印。服务明明起在我们指定的端口上，却因为它没吭声
     // 被判「等了 120 秒还没起来」，这跟「只有 Node 项目的预览算数」是同一回事。
-    const found = pickPreviewUrl(text, lent)
+    const found = pickPreviewUrl(text, lent, lentAll.slice(1))
       ?? (lent !== null && await canConnect(lent) ? { url: `http://localhost:${lent}/`, port: lent, lent: true } : null);
     // 顺序要紧：撞车先判，再判进程死没死、再判起没起来。见 PORT_TAKEN_RE 那儿的 ②。
     //
@@ -235,7 +323,7 @@ export async function startPreview(
   killByPid(pid);
   return {
     ok: false,
-    reason: `等了 ${Math.round(READY_TIMEOUT_MS / 1000)} 秒还没起来。最后几行日志：\n${tail(log).slice(-800)}`,
+    reason: `等了 ${Math.round(READY_TIMEOUT_MS / 1000)} 秒还没起来。最后几行日志：\n${tail(log, banner).slice(-800)}`,
   };
 }
 

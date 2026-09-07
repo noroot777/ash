@@ -120,6 +120,25 @@
 .free-workflow-generated li small { margin-top:2px; color:var(--faint); font-size:9px; }
 .free-workflow-generated > p { margin:11px 0 0; color:var(--faint); font-size:9.5px; line-height:1.55; }
 
+/* 预览日志：起不来的时候唯一的现场。等宽、可选中、默认贴底。 */
+.preview-log-dialog { display:grid; width:min(860px,calc(100vw - 28px)); max-height:min(760px,92vh); overflow:hidden; grid-template-rows:auto auto minmax(0,1fr) auto; border:1px solid var(--line2); border-radius:15px; background:var(--panel); box-shadow:var(--shadow); }
+.preview-log-dialog > header { display:grid; min-height:66px; grid-template-columns:34px minmax(0,1fr) 28px; align-items:center; gap:10px; border-bottom:1px solid var(--line); padding:10px 14px; }
+.preview-log-dialog > header > span { display:grid; width:34px; height:34px; place-items:center; border-radius:10px; background:color-mix(in lch,var(--accent) 11%,var(--raised)); color:var(--accent); }
+.preview-log-dialog h2,.preview-log-dialog p { margin:0; }
+.preview-log-dialog h2 { font-size:14px; }
+.preview-log-dialog > header p { margin-top:2px; color:var(--faint); font-size:10px; }
+.preview-log-dialog > header > button { display:grid; width:28px; height:28px; place-items:center; border:0; border-radius:7px; background:transparent; color:var(--faint); }
+.preview-log-dialog > header > button:hover { background:var(--raised); color:var(--ink); }
+.preview-log-meta { display:flex; min-width:0; align-items:center; gap:10px; border-bottom:1px solid var(--line); padding:8px 14px; }
+.preview-log-meta code { overflow:hidden; flex:1; color:var(--muted); font-size:10.5px; text-overflow:ellipsis; white-space:nowrap; }
+.preview-log-meta a { flex:0 0 auto; color:var(--accent); font-size:10.5px; }
+.preview-log-body { overflow:auto; margin:0; background:var(--canvas); padding:12px 14px; color:var(--muted); font-size:11px; line-height:1.55; tab-size:2; white-space:pre-wrap; word-break:break-word; user-select:text; }
+.preview-log-dialog > footer { display:flex; min-height:52px; align-items:center; justify-content:flex-end; gap:8px; border-top:1px solid var(--line); padding:9px 14px; }
+.preview-log-dialog > footer > span { margin-right:auto; color:var(--faint); font-size:9.5px; }
+.preview-log-dialog > footer button { display:inline-flex; height:30px; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:9px; background:var(--panel); padding:0 12px; color:var(--muted); font-size:11px; font-weight:620; }
+.preview-log-dialog > footer button:hover:not(:disabled) { border-color:color-mix(in lch,var(--accent) 40%,var(--line)); color:var(--ink); }
+.preview-log-dialog > footer button:disabled { opacity:.45; }
+
 @media (max-width:800px) {
   .free-workflow-toolbar { width:100%; }
   .free-workflow-toolbar > a { display:none; }

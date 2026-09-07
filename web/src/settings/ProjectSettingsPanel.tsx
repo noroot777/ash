@@ -135,7 +135,15 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
           Node 的 dev / start 脚本。<b>认出恰好一个才自动用</b>；前后端并排、Maven 多模块各带一个应用这种，它不替你挑，
           会把认出来的都列给你，挑一条填这儿。
         </small>
-        <small>命令在任务自己的工作区（worktree）根目录执行，用你自己的 shell，可以带 cd 和 &amp;&amp;；ash 会注入 PORT 与 SERVER_PORT（Node 与 Spring Boot 各自认一个，自动错开端口）和 BROWSER=none，认不了环境变量的命令自己带 <code className="mono">$PORT</code> 即可。</small>
+        <small>命令在任务自己的工作区（worktree）根目录执行，用你自己的 shell，可以带 cd、<code className="mono">&amp;&amp;</code> 和后台的 <code className="mono">&amp;</code>；ash 会注入 BROWSER=none。</small>
+        <small>
+          <b>端口是 ash 借的，一次借一串</b>：<code className="mono">$PORT</code>（同时给一份 <code className="mono">$SERVER_PORT</code>，Spring Boot 认这个）是<b>你要看的那个</b>服务，
+          ash 打开的就是它；配角用 <code className="mono">$PORT2</code>…<code className="mono">$PORT5</code>，各自还配一个 <code className="mono">$URL2</code>…<code className="mono">$URL5</code>
+          （即 <code className="mono">http://localhost:$PORT2</code>）。前后端一起起就写成一条：配角丢后台，要看的那个放最后 ——
+          <code className="mono">(cd back &amp;&amp; SERVER_PORT=$PORT2 mvn spring-boot:run &amp;) cd front &amp;&amp; VITE_APP_API_URL=$URL2 pnpm run dev</code>。
+          前端认哪个变量名是它自己的事（vite 项目多半是 <code className="mono">VITE_*_URL</code>），ash 只负责把地址递到手边。
+        </small>
+        <small>起没起来、为什么没起来，看任务底部那颗「预览日志」——它记着 ash 实际跑的命令、注入了哪些端口，以及命令自己的输出；起失败的那一次也留着。</small>
         {canManage && <div className="settings-card-foot"><span>改了只影响之后新开的预览，已经开着的那个不受影响。</span><Button variant="primary" disabled={!previewDirty || busy} onClick={() => void savePreviewCommand()}>{busy ? "保存中…" : "保存预览命令"}</Button></div>}
       </div></section>
       <ProjectGitSettings projectId={project.id} canManage={canManage} notify={notify} />

@@ -3,7 +3,7 @@
 // Run: npm -w server run test:preview-process
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -159,6 +159,50 @@ try {
     );
   } else {
     console.log("skip POSIX orphan-group assertion on Windows (no reparented process-group kill)");
+  }
+
+  // 一条命令同时起前后端：这是多模块项目的常态，而它卡住的地方不是命令怎么写，是端口
+  // —— 两边都是 ash 随机借的，前端要在**启动那一刻**就知道后端落在哪。所以 ash 一次借
+  // 一串：`$PORT` 给要看的那个，`$PORT2…` 给配角。这一例真起两个进程，后端只听 $PORT2，
+  // 前端先连上后端再开自己的 $PORT —— 少注入一个变量它就起不来。
+  if (process.platform !== "win32") {
+    const backCode = "require('http').createServer((q,r)=>r.end('back')).listen(process.env.PORT2)";
+    const frontCode = [
+      "const http=require('http')",
+      "console.log('[test] sidekick='+process.env.PORT2)",
+      // 后端还没起来就重试：不靠 sleep，免得把时序写进测试里。
+      // 地址用字符串拼，**不能用模板字面量**：这串最终是被 `sh -lc \"…\"` 吃进去的，
+      // 反引号在双引号里是命令替换，写成模板字面量当场被 shell 拆掉。
+      "const go=()=>http.get('http://127.0.0.1:'+process.env.PORT2+'/',()=>{"
+        + "http.createServer((q,r)=>r.end('front')).listen(process.env.PORT)"
+        + "}).on('error',()=>setTimeout(go,100))",
+      "go()",
+    ].join(";");
+    const step = {
+      id: "pair-preview",
+      kind: "preview",
+      p: {
+        cmd: `(node -e ${JSON.stringify(backCode)} &) ; node -e ${JSON.stringify(frontCode)}`,
+        mode: "frontend",
+        ready: "port",
+        life: "gate",
+      },
+    };
+    const result = await startPreview("pair-task", step as never, repo);
+    try {
+      assert.equal(result.ok, true, "前后端一起起时预览必须认成起来了（配角端口没注入就会卡到超时）");
+      assert.ok(result.ok);
+      const log = readFileSync(join(root, "runs", "pair-task", "preview.log"), "utf8");
+      assert.match(log, /^\$ PORT=\d+ SERVER_PORT=\d+ PORT2=\d+ URL2=http:\/\/localhost:\d+ /,
+        "日志头必须照实写出注入了哪些端口变量——配角落在哪个端口只有这一行说得清");
+      const sidekick = Number(/\[test\] sidekick=(\d+)/.exec(log)?.[1]);
+      assert.ok(sidekick > 0, "配角没拿到 $PORT2");
+      assert.notEqual(sidekick, result.record.port, "借出去的端口不能重样");
+      assert.equal(await fetch(`http://127.0.0.1:${result.record.port}/`).then((r) => r.text()), "front");
+      assert.equal(await fetch(`http://127.0.0.1:${sidekick}/`).then((r) => r.text()), "back");
+    } finally {
+      if (result.ok) killGroup(result.record.pid);
+    }
   }
 
   // 一行日志都不印的服务照样得算「起来了」。从日志里认地址那条路只对肯打印、且是行缓冲

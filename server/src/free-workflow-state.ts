@@ -24,7 +24,7 @@ import {
 import { freeReviewScreenshots, readFreeReviewReport } from "./free-review-files.js";
 import { headCommit, workspaceDirty, worktreePathFor } from "./git.js";
 import { existsSync } from "node:fs";
-import { readPreview } from "./preview.js";
+import { hasPreviewLog, readPreview } from "./preview.js";
 import { profilesOwnedBy } from "./auth/owned-executors.js";
 
 export type FreeWorkflowApiState = Omit<FreeWorkflowState, "merge">;
@@ -245,6 +245,7 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
     },
     preview: {
       running: !!preview,
+      hasLog: hasPreviewLog(taskId),
       url: preview?.url ?? null,
       port: preview?.port ?? null,
       command: preview?.cmd ?? null,

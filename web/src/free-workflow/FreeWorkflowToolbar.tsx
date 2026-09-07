@@ -1,16 +1,18 @@
 import { useState } from "react";
 import type { Task } from "@ash/shared";
-import { ArrowSquareOut, MagnifyingGlass, MonitorPlay, SpinnerGap, StopCircle } from "@phosphor-icons/react";
+import { ArrowSquareOut, MagnifyingGlass, MonitorPlay, SpinnerGap, StopCircle, Terminal } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { FreeReviewDialog } from "./FreeReviewDialog.tsx";
 import { FreeReviewProgress } from "./FreeReviewProgress.tsx";
 import { FreeReviewRepairButton } from "./FreeReviewRepairButton.tsx";
+import { PreviewLogDialog } from "./PreviewLogDialog.tsx";
 import { freeReviewView } from "./freeReviewCopy.ts";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
 
 export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (message: string) => void }) {
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [logOpen, setLogOpen] = useState(false);
   const [previewBusy, setPreviewBusy] = useState(false);
   const view = freeReviewView(free.state, task);
   const { latestRun, reviewing, stoppedRun, taskBusy, waiting, reservationArmed, reservationMode, repairing, stale } = view;
@@ -52,7 +54,10 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
       }
       await free.reload(true);
     } catch (error) {
+      // 起失败也要 reload：日志文件这时已经落盘了，reload 之后 `hasLog` 才会翻真、
+      // 「预览日志」那颗按钮才出得来 —— 否则用户手上只剩一句转瞬即逝的 toast。
       notify(error instanceof Error ? error.message : "预览操作失败");
+      await free.reload(true).catch(() => undefined);
     } finally {
       setPreviewBusy(false);
     }
@@ -84,7 +89,15 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
           <span>{previewBusy ? "处理中" : free.state?.preview.running ? "关闭预览" : "打开预览"}</span>
         </button>
         {free.state?.preview.running && free.state.preview.url && <a href={free.state.preview.url} target="_blank" rel="noreferrer" aria-label="在新窗口打开预览"><ArrowSquareOut size={13} /><span>预览页</span></a>}
+        {/* 日志入口按 hasLog 给，不按 running 给：预览**起不来**的那一次同样留下了日志，
+            而那正是最需要看它的时候。读日志是只读动作，接力/验收锁死也照给。 */}
+        {free.state?.preview.hasLog && (
+          <button type="button" className="is-preview-log" onClick={() => setLogOpen(true)}>
+            <Terminal size={13} weight="regular" /><span>预览日志</span>
+          </button>
+        )}
       </div>
+      {logOpen && <PreviewLogDialog taskId={task.id} onClose={() => setLogOpen(false)} notify={notify} />}
       {reviewOpen && <FreeReviewDialog taskId={task.id} state={free.state} reservationMode={reservationMode} onChanged={free.setState} onClose={() => setReviewOpen(false)} notify={notify} />}
     </>
   );

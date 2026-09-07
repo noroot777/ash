@@ -12,6 +12,7 @@
 //   ③ 项目设置里填了命令永远优先，且不再看仓库长什么样。
 //
 // 跑法：npm -w server run test:preview-command
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -143,6 +144,41 @@ try {
   checkIncludes("告诉他去哪儿填", monoError, "项目设置 → 预览命令");
   check("整段话里不提 package.json", monoError.includes("package.json"), false);
   checkIncludes("多模块首次要装依赖模块的写法也给了", monoError, "-am install -DskipTests");
+
+  // 前后端并排时最难的不是命令怎么写，是**端口**：两边都是 ash 随机借的，前端要在启动
+  // 那一刻就知道后端在哪。所以这段话里必须直接给出一条能粘的组合命令：配角丢后台吃
+  // $PORT2（Spring Boot 认 SERVER_PORT），要看的那个放最后吃 $PORT。
+  checkIncludes(
+    "前后端一起起：后端当配角丢后台，端口吃 $PORT2",
+    monoError,
+    "(cd a4sms-back && SERVER_PORT=$PORT2 mvn -pl a4sms-icis spring-boot:run &)",
+  );
+  checkIncludes("第二个后端顺延到 $PORT3", monoError, "SERVER_PORT=$PORT3 mvn -pl a4sms-wms spring-boot:run");
+  // `( … &)` 后面必须有分隔符，否则整条命令是语法错误 —— 这条是直接给人粘走的。
+  checkIncludes("要看的那个放最后，吃 $PORT", monoError, "&) ; cd a4sms-front && pnpm run dev");
+  checkIncludes("并说清楚前端怎么拿到后端地址", monoError, "$URL2");
+  // 「像是对的」不算数：这条命令是给人直接粘走的，得真能被 shell 解析。少一个分隔符
+  // 就是 `syntax error near unexpected token` —— 用户粘过去连一个字节都跑不了。
+  if (process.platform !== "win32") {
+    const combined = /\n {4}(\(cd .+)\n/.exec(monoError)?.[1] ?? "";
+    check("组合命令不是空的", combined.length > 0, true);
+    let syntaxOk = true;
+    try { execFileSync("sh", ["-n", "-c", combined], { stdio: "pipe" }); }
+    catch { syntaxOk = false; }
+    check("给出来的组合命令 shell 解析得动", syntaxOk, true);
+  }
+
+  // 只有后端、没有前端时不硬编一条组合命令 —— 那时「要看的是哪个」本来就没有答案。
+  const backOnly = dir("back-only");
+  file(dir("back-only", "svc-a"), "pom.xml", BOOT_POM);
+  file(dir("back-only", "svc-b"), "pom.xml", BOOT_POM);
+  check("说不清主角时不编组合命令", failure(backOnly).includes("$PORT2"), false);
+
+  // sidekick 的三种端口口径各走各的：环境变量的换变量，命令行参数的换参数里的 $PORT。
+  const nodeSide = detectPreviewCandidates(pnpmNode)[0];
+  check("Node 配角用 PORT=", nodeSide.sidekick(2), "(PORT=$PORT2 pnpm run dev &)");
+  const djangoSide = detectPreviewCandidates(django)[0];
+  check("命令行带端口的换成 $PORT2", djangoSide.sidekick(2), "(python manage.py runserver 0.0.0.0:$PORT2 &)");
 
   // 一个都没认出来：话里同样不能只谈 Node。
   const empty = dir("empty");

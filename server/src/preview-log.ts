@@ -55,7 +55,11 @@ const MISSING_DEPS_LINES = [
   /: (?:command )?not found\s*$/i, // sh/dash：`sh: 1: vite: not found`
   /\bcommand not found\b/i, // zsh：`zsh: command not found: vite`
   /is not recognized as an internal or external command/i, // Windows cmd
-  /Cannot find module|Cannot find package|ERR_MODULE_NOT_FOUND/i, // node 解析不到
+  // node 解析不到。**只认包名**：`Cannot find module '/x/nope.js'`（绝对路径、`./` 开头）
+  // 说的是「你这个文件不在」，跟装没装依赖无关 —— 对它说「去软链 node_modules」是把人
+  // 往反方向指。带引号的看引号里第一个字符，不带引号的（ERR_MODULE_NOT_FOUND 那类）照收。
+  /Cannot find (?:module|package) ['"](?![./]|[A-Za-z]:)/i,
+  /Cannot find (?:module|package)\s*$|ERR_MODULE_NOT_FOUND/i,
   /ERR_PNPM_NO_LOCKFILE|ERR_PNPM_NO_SCRIPT_OR_SERVER|Missing binary/i, // pnpm/yarn
   /canceled due to missing packages/i, // npx --no-install
 ];
@@ -96,12 +100,12 @@ const URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::(\d{2,5}))?[
  */
 const PORT_ANNOUNCE_RE = /\b(?:started|starting|listening|running|bound|serving)\b[^\n]{0,40}?\bport\D{0,6}(\d{2,5})\b/i;
 
-/** 日志里「起在哪个端口」的自述；没有就 null。 */
-function announcedPort(log: string): number | null {
+/** 日志里「起在哪个端口」的自述；没有就 null。`skip` 里的端口视而不见。 */
+function announcedPort(log: string, skip: ReadonlySet<number>): number | null {
   for (const line of log.split("\n")) {
     if (PORT_TAKEN_RE.test(line)) continue;
     const port = PORT_ANNOUNCE_RE.exec(line)?.[1];
-    if (port) return Number(port);
+    if (port && !skip.has(Number(port))) return Number(port);
   }
   return null;
 }
@@ -116,19 +120,31 @@ function announcedPort(log: string): number | null {
  *
  * `lent` 这个标记还兼着第二个用处，见 preview.ts 里撞车判定的那个例外。
  *
+ * `sidekicks` 是 ash 借给**配角**的那几个端口（`$PORT2…`，见 preview.ts 的 portEnv）。它们
+ * 按定义就不是要看的那个，所以一律排除：一条同时起前后端的命令里，后端多半比前端先起来
+ * 并印一句「Tomcat started on port 35725」，不排除的话预览就会稳定地指到后端上 —— 前端还在
+ * 编译，用户已经被领到一个返回 JSON 的地址前面了。这条不靠猜：那几个端口是 ash 自己借出去
+ * 的，谁拿了它一清二楚。
+ *
  * 日志里一个地址都没有时，退而求其次认「起在某个端口」的自述（见 announcedPort）——
  * 非 Node 的服务常常只说端口不说地址。
  */
-export function pickPreviewUrl(log: string, lent: number | null): PreviewUrl | null {
+export function pickPreviewUrl(
+  log: string,
+  lent: number | null,
+  sidekicks: readonly number[] = [],
+): PreviewUrl | null {
+  const skip = new Set(sidekicks.filter((port) => port !== lent));
   let first: PreviewUrl | null = null;
   for (const hit of log.matchAll(URL_RE)) {
     const url = hit[0];
     const port = Number(hit[1] ?? (url.startsWith("https") ? 443 : 80));
     if (lent !== null && port === lent) return { url, port, lent: true };
+    if (skip.has(port)) continue;
     first ??= { url, port, lent: false };
   }
   if (first) return first;
-  const port = announcedPort(log);
+  const port = announcedPort(log, skip);
   return port === null ? null : { url: `http://localhost:${port}/`, port, lent: lent === port };
 }
 

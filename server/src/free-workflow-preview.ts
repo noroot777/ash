@@ -13,7 +13,7 @@ import { resolvePreviewCommand } from "./preview-command.js";
 import { isTurnClaimed } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
-import { startPreview, stopPreview, type PreviewStep } from "./preview.js";
+import { readPreview, readPreviewLog, startPreview, stopPreview, type PreviewStep } from "./preview.js";
 
 async function startFreePreview(taskId: string) {
   if (!tryAcquireFreeWorkflowAction(taskId)) throw new Error("当前已有自由工作流操作正在进行");
@@ -68,6 +68,30 @@ export function mountFreePreviewRoutes(api: Hono): void {
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
     }
+  });
+
+  // 预览起没起来、为什么没起来，答案全在这份启动日志里。**它跟 preview.json 不是一回事**：
+  // banner 在 spawn 之前就落盘，所以起失败的那一次照样读得到（而那一次恰恰最该看）。
+  // 不设 waiting/接力门禁：读日志是只读动作，任务停在哪一步都该看得见。
+  api.get("/tasks/:id/free-workflow/preview/log", async (c) => {
+    const taskId = c.req.param("id");
+    const task = (await db.select({
+      workflowMode: tasks.workflowMode, mode: tasks.mode, parentId: tasks.parentId, reviewOf: tasks.reviewOf,
+    }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+    if (!task || task.workflowMode !== "free" || task.mode !== "single" || task.parentId || task.reviewOf) {
+      return c.json({ error: "当前任务不支持自由预览" }, 409);
+    }
+    const log = readPreviewLog(taskId);
+    const record = readPreview(taskId);
+    return c.json({
+      text: log?.text ?? "",
+      truncated: log?.truncated ?? false,
+      updatedAt: log?.updatedAt ?? null,
+      exists: log !== null,
+      running: !!record,
+      command: record?.cmd ?? null,
+      url: record?.url ?? null,
+    });
   });
 
   // 关闭预览是**控制类**动作：不设 waiting（提问/续跑）门禁——预览进程占着端口，
