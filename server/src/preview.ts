@@ -17,10 +17,10 @@ import { existsSync, mkdirSync, openSync, closeSync, readFileSync, readdirSync, 
 import { join } from "node:path";
 import type { PreviewLife, WorkflowStep } from "@ash/shared/workflow";
 import { bus } from "./bus.js";
-import { augmentedEnv, killByPid } from "./executors/spawn.js";
+import { augmentedEnv, killByPid, withoutForeignNodeBins } from "./executors/spawn.js";
 import { RUNS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
-import { portConflict, pickPreviewUrl, portHint } from "./preview-log.js";
+import { portConflict, pickPreviewUrl, portHint, missingDepsHint } from "./preview-log.js";
 import { ready } from "./preview-probe.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -149,8 +149,11 @@ export async function startPreview(
       stdio: ["ignore", fd, fd],
       // BROWSER=none：dev server 的 `--open` 会去拉一个真浏览器窗口，预览是后台起的，
       // 那扇窗户没人要。PORT 的来由见 freePort 的注释。
+      // withoutForeignNodeBins：ash 是被 npm 起来的，PATH 头上挂着 ash 自己的
+      // `node_modules/.bin`；不摘掉的话，一个依赖没装的项目会用 **ash 的** vite 起来，
+      // 报一句「预览已起」把用户领到假现场（理由全文在那个函数头部）。
       env: {
-        ...augmentedEnv(),
+        ...withoutForeignNodeBins(augmentedEnv(), cwd),
         ASH_PREVIEW: "1",
         ASH_PREVIEW_MODE: step.p.mode,
         ...(lent ? { PORT: String(lent) } : {}),
@@ -194,7 +197,10 @@ export async function startPreview(
       // 组长（外层 shell / scripts/dev.mjs）先退出，不代表同组的 vite/tsx 也退出了。
       // pid 本身虽已不在，POSIX 的进程组 -pid 仍可存在；照样发组信号，别留下孤儿。
       killByPid(pid);
-      return { ok: false, reason: `预览进程已退出。最后几行日志：\n${text.slice(-800)}` };
+      // 退出原因里最常见的一种是「这份工作区里没装依赖」，日志尾巴本身看不出所以然。
+      // 认出来就多说一句怎么办（而且明说 ash 不替你装，见 missingDepsHint）。
+      const deps = missingDepsHint(text);
+      return { ok: false, reason: `预览进程已退出。${deps ? `\n\n${deps}\n` : ""}\n最后几行日志：\n${text.slice(-800)}` };
     }
     if (!found) continue;
     if (!(await ready(step.p.ready, found.url, found.port, text))) continue;

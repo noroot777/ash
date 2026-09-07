@@ -13,7 +13,7 @@
 // 把用户领到**别人的服务**上去验收自己的改动。所以撞车判定排在就绪判定前面。
 //
 // 跑法：npm -w server run test:preview-log
-import { pickPreviewUrl, portConflict, portHint } from "../src/preview-log.js";
+import { missingDepsHint, pickPreviewUrl, portConflict, portHint } from "../src/preview-log.js";
 
 let failures = 0;
 function check(name: string, actual: unknown, expected: unknown) {
@@ -126,6 +126,21 @@ check(
 // 撞车那一行里也有端口号。照着它拼地址 = 把用户领到别人的服务上（PORT_TAKEN_RE 注释里的 ②）。
 check("「端口被占」那行不许拿来拼地址", pickPreviewUrl("Error: Port 5173 is already in use\n", null), null);
 check("光有个数字不算自述", pickPreviewUrl("build finished in 8080 ms\n", null), null);
+
+// —— 「没装依赖」得当场说破，而不是甩一段日志尾巴 ——
+// 任务 worktree 是干净检出，node_modules 天生不在里面。ash 不替用户装（install 会写进他的
+// 项目、还可能改写 lock 文件跟着 diff 进验收），所以能做的就是把这一句说清楚。
+check("npm/sh 找不到可执行文件", !!missingDepsHint("sh: 1: vite: not found\n"), true);
+check("node 找不到模块", !!missingDepsHint("Error: Cannot find module 'vite'\n"), true);
+check("ESM 版说法", !!missingDepsHint("code: 'ERR_MODULE_NOT_FOUND'\n"), true);
+check("pnpm 没有 lock", !!missingDepsHint("ERR_PNPM_NO_LOCKFILE  Cannot install with frozen-lockfile\n"), true);
+check("Windows 的说法", !!missingDepsHint("'vite' is not recognized as an internal or external command\n"), true);
+check("提示里明说 ash 不替你装", missingDepsHint("sh: vite: not found\n")?.includes("ash 不会替你装"), true);
+check("提示里给出软链这条不写你项目的路", missingDepsHint("sh: vite: not found\n")?.includes("ln -s"), true);
+// 正常日志不许被认成缺依赖：误报会让用户去装一堆根本不缺的东西。
+check("正常启动日志", missingDepsHint("VITE ready in 81 ms\n➜ Local: http://localhost:5174/\n"), null);
+check("端口撞车不是缺依赖", missingDepsHint("Error: Port 5173 is already in use\n"), null);
+check("业务里出现 not found 字样也不算", missingDepsHint("GET /api/users 404 Not Found in 12ms\n"), null);
 
 console.log(failures ? `\n${failures} 条没过` : "\n全过");
 process.exit(failures ? 1 : 0);

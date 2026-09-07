@@ -17,8 +17,8 @@
 
 import { accessSync, constants, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { extname, join } from "node:path";
-import { IS_WINDOWS, PATH_DELIMITER, boundaryKey, splitPathList, splitPathSegments } from "../platform.js";
+import { basename, dirname, extname, join, sep } from "node:path";
+import { IS_WINDOWS, PATH_DELIMITER, boundaryKey, isInsidePath, splitPathList, splitPathSegments } from "../platform.js";
 import { cmdExeLaunch } from "./win-command.js";
 
 // server 从 GUI / 预览启动(不是登录 shell)时,PATH 常常缺 CLI 所在的目录,
@@ -76,6 +76,32 @@ export function augmentedEnv(): NodeJS.ProcessEnv {
   }
   out.PATH = merged;
   return out;
+}
+
+/**
+ * 去掉 PATH 里**别人家的** `node_modules/.bin`。
+ *
+ * ash 自己是被 npm 起来的(`npm run start`),而 npm 会把自己那条依赖链上的
+ * `node_modules/.bin` 塞到 PATH 最前面。server 进程原样继承,`augmentedEnv()` 又原样
+ * 传给每一个子进程 —— 于是**在别的项目里跑的命令，第一优先级是 ash 自己的依赖**。
+ *
+ * 这不是洁癖，是一次会「谎报成功」的实测：一个依赖没装的前端项目，预览命令 `npm run dev`
+ * (脚本是 `vite`)照样起来了 —— 用的是 `<ash>/node_modules/.bin/vite`。用户拿到一个
+ * 能打开的页面，验收的却是用 ash 的 vite 版本、ash 的插件跑出来的东西，而项目自己
+ * 一个依赖都没有。宁可报「起不来」，也不能给他这个。
+ *
+ * 判据跟 node 自己找 bin 的语义一致：`<某目录>/node_modules/.bin` 只有在
+ * **它属于这次要跑的目录或其祖先**时才留着。所以在 ash 仓库里干活的任务照旧用得到
+ * ash 的 `tsx`(那时它正是「本项目的」),在别人的仓库里就一条都不剩。
+ */
+export function withoutForeignNodeBins(env: NodeJS.ProcessEnv, cwd: string): NodeJS.ProcessEnv {
+  const kept = splitPathList(env.PATH ?? "").filter((entry) => {
+    const trimmed = entry.replace(/[\\/]+$/, "");
+    if (basename(trimmed) !== ".bin" || basename(dirname(trimmed)) !== "node_modules") return true;
+    // `<owner>/node_modules/.bin` 的 owner：留还是不留，只看它罩不罩得住这次的 cwd。
+    return isInsidePath(dirname(dirname(trimmed)), cwd, sep);
+  });
+  return { ...env, PATH: kept.join(PATH_DELIMITER) };
 }
 
 // PATHEXT 的**顺序就是优先级**(cmd.exe 也按它挑),默认把 .EXE 排在 .CMD 前面 ——

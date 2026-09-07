@@ -7,11 +7,11 @@ import { EventEmitter } from "node:events";
 import { PassThrough, Readable } from "node:stream";
 import { IS_WINDOWS, isPidAlive, killOne, killTree, listProcesses } from "../platform.js";
 import { isHostCliIsolatedSync } from "../auth/multi-flag.js";
-import { augmentedEnv, resolveBin, resolveLaunch } from "./bin-resolve.js";
+import { augmentedEnv, resolveBin, resolveLaunch, withoutForeignNodeBins } from "./bin-resolve.js";
 
 // PATH 补全与命令名解析住在 bin-resolve.ts(Windows 的 PATHEXT / `.cmd` 垫片够写
 // 一整个文件)。这里转出去,是因为已有近二十处从 spawn.ts import 它们。
-export { augmentedEnv, resolveBin, resolveLaunch };
+export { augmentedEnv, resolveBin, resolveLaunch, withoutForeignNodeBins };
 export type { LaunchPlan } from "./bin-resolve.js";
 
 // ── 多人模式:server 进程自己的出站凭证不透传给 agent(docs/multi-user-plan.md §八)──

@@ -36,6 +36,42 @@ export function portHint(port: number | null): string {
     + "把这一站的启动命令改成认它的写法就能错开，例如 `npm run dev -- --port $PORT`。";
 }
 
+/**
+ * 「命令没跑起来，因为这个工作区里没装依赖」。
+ *
+ * 任务 worktree 是一份干净检出，`node_modules` 天生不在里面（它被 .gitignore 掉了）。于是
+ * 预览命令一跑就是 `vite: not found` / `Cannot find module` 一类，进程当场退出，用户拿到的
+ * 是一段看不出所以然的日志尾巴。
+ *
+ * ash **不替他装**：install 会写进他的项目 —— 少则在工作区里堆出几百兆，多则改写 lock 文件，
+ * 而 lock 文件是跟踪文件，会跟着任务 diff 一路走进验收。「点一下预览」不该有这种副作用。
+ * 能做也该做的是把话说清楚，并指出不写他项目的那条路：把主仓已经装好的那份软链进来
+ * （agent 干活时本来就是这么借的，`git.ts` 的 workspaceDirty 专门放行了这条软链）。
+ */
+// 一行一行看，而且只认**外壳/运行时自己的报错格式**。宽松地匹配 "not found" 会把
+// `GET /api/users 404 Not Found in 12ms` 这种业务日志认成缺依赖 —— 误报的代价是让人
+// 去装一堆根本不缺的东西，比不报还差（这条由 test:preview-log 钉住）。
+const MISSING_DEPS_LINES = [
+  /: (?:command )?not found\s*$/i, // sh/dash：`sh: 1: vite: not found`
+  /\bcommand not found\b/i, // zsh：`zsh: command not found: vite`
+  /is not recognized as an internal or external command/i, // Windows cmd
+  /Cannot find module|Cannot find package|ERR_MODULE_NOT_FOUND/i, // node 解析不到
+  /ERR_PNPM_NO_LOCKFILE|ERR_PNPM_NO_SCRIPT_OR_SERVER|Missing binary/i, // pnpm/yarn
+  /canceled due to missing packages/i, // npx --no-install
+];
+
+/** 日志像不像「没装依赖」；不像就 null。只在进程已经退出的失败路径上追加。 */
+export function missingDepsHint(log: string): string | null {
+  const hit = log.split("\n").some((line) => MISSING_DEPS_LINES.some((re) => re.test(line.trimEnd())));
+  if (!hit) return null;
+  return "看着像这个工作区里没装依赖 —— 任务 worktree 是一份干净检出，node_modules 不在里面。\n"
+    + "ash 不会替你装：install 会写进你的项目（工作区里堆出几百兆，还可能改写 lock 文件，"
+    + "而 lock 文件是跟踪文件，会跟着任务 diff 走进验收）。所以也别把 install 写进预览命令。\n"
+    + "不写你项目的做法是把主仓已经装好的那份借过来，在任务工作区里软链一次即可，例如：\n"
+    + "`ln -s <项目目录>/<子项目>/node_modules <任务工作区>/<子项目>/node_modules`"
+    + "（Windows 用 `mklink /J`）。ash 认得这条软链，不会因此把工作区判成脏。";
+}
+
 /** 日志里印出来的本机地址。`lent` 为真表示它就落在我们借出去的那个端口上。 */
 export interface PreviewUrl {
   url: string;
