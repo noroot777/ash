@@ -130,18 +130,26 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
         </label>
         <small>
           留空时 ash 按各语言自己的惯例去认：Maven 的 <code className="mono">spring-boot:run</code>、Gradle 的{" "}
-          <code className="mono">bootRun</code>、Django 的 <code className="mono">runserver</code>、
-          <code className="mono">go run</code>、<code className="mono">cargo run</code>、<code className="mono">dotnet run</code>、
-          Node 的 dev / start 脚本。<b>认出恰好一个才自动用</b>；前后端并排、Maven 多模块各带一个应用这种，它不替你挑，
+          <code className="mono">bootRun</code>、Django 的 <code className="mono">runserver</code>、FastAPI 的{" "}
+          <code className="mono">uvicorn</code>、Flask、<code className="mono">go run</code>、<code className="mono">cargo run</code>、
+          <code className="mono">dotnet run</code>、Laravel 的 <code className="mono">artisan</code>、Rails 的{" "}
+          <code className="mono">bin/rails</code>、Node 的 dev / start 脚本。<b>认出恰好一个才自动用</b>；前后端并排、Maven 多模块各带一个应用这种，它不替你挑，
           会把认出来的都列给你，挑一条填这儿。
         </small>
         <small>命令在任务自己的工作区（worktree）根目录执行，用你自己的 shell，可以带 cd、<code className="mono">&amp;&amp;</code> 和后台的 <code className="mono">&amp;</code>；ash 会注入 BROWSER=none。</small>
         <small>
-          <b>端口是 ash 借的，一次借一串</b>：<code className="mono">$PORT</code>（同时给一份 <code className="mono">$SERVER_PORT</code>，Spring Boot 认这个）是<b>你要看的那个</b>服务，
-          ash 打开的就是它；配角用 <code className="mono">$PORT2</code>…<code className="mono">$PORT5</code>，各自还配一个 <code className="mono">$URL2</code>…<code className="mono">$URL5</code>
+          <b>端口是 ash 借的，一次借一串</b>：<code className="mono">$PORT</code> 是<b>你要看的那个</b>服务，ash 打开的就是它；
+          配角用 <code className="mono">$PORT2</code>…<code className="mono">$PORT5</code>，各自还配一个 <code className="mono">$URL2</code>…<code className="mono">$URL5</code>
           （即 <code className="mono">http://localhost:$PORT2</code>）。前后端一起起就写成一条：配角丢后台，要看的那个放最后 ——
-          <code className="mono">(cd back &amp;&amp; SERVER_PORT=$PORT2 mvn spring-boot:run &amp;) cd front &amp;&amp; VITE_APP_API_URL=$URL2 pnpm run dev</code>。
-          前端认哪个变量名是它自己的事（vite 项目多半是 <code className="mono">VITE_*_URL</code>），ash 只负责把地址递到手边。
+          <code className="mono">(cd back &amp;&amp; SERVER_PORT=$PORT2 mvn spring-boot:run &amp;) ; cd front &amp;&amp; VITE_APP_API_URL=$URL2 pnpm run dev -- --port $PORT</code>。
+          前端认哪个变量名去找后端是它自己的事（vite 项目多半是 <code className="mono">VITE_*_URL</code>），ash 只负责把地址递到手边。
+        </small>
+        <small>
+          <b>端口怎么进到命令里，每种运行时的写法不一样</b>，ash 把同一个端口按各家的名字都递一份：
+          <code className="mono">PORT</code>（Node / Go / Rust）、<code className="mono">SERVER_PORT</code>（Spring Boot）、
+          <code className="mono">ASPNETCORE_URLS</code>（ASP.NET Core）、<code className="mono">QUARKUS_HTTP_PORT</code>、
+          <code className="mono">FLASK_RUN_PORT</code>。有些压根不读环境变量、只认参数（vite、Angular、Django、Laravel、Rails），
+          那就把 <code className="mono">$PORT</code> 写进命令行 —— 认出来的命令已经替你写好了，自己填的话照这个来。
         </small>
         <small>起没起来、为什么没起来，看任务底部那颗「预览日志」——它记着 ash 实际跑的命令、注入了哪些端口，以及命令自己的输出；起失败的那一次也留着。</small>
         {canManage && <div className="settings-card-foot"><span>改了只影响之后新开的预览，已经开着的那个不受影响。</span><Button variant="primary" disabled={!previewDirty || busy} onClick={() => void savePreviewCommand()}>{busy ? "保存中…" : "保存预览命令"}</Button></div>}

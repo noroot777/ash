@@ -22,6 +22,7 @@ import { augmentedEnv, killByPid, withoutForeignNodeBins } from "./executors/spa
 import { RUNS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
 import { portConflict, pickPreviewUrl, portHint, missingDepsHint } from "./preview-log.js";
+import { PORT_ENV_ALIASES } from "./preview-command.js";
 import { canConnect, ready } from "./preview-probe.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -58,8 +59,11 @@ const UNSAFE_SCHEDULER_LOG = "[ash] scheduler started";
  * `npm run dev`，端口写死在脚本里。而同一个项目此刻多半已经有一份在跑（开发者自己那份、
  * 或者另一个任务的预览），于是这一站不是「有时候起不来」，是**一次都起不来**。
  *
- * 认 `PORT` 的框架（Next / CRA / Nest / Express / vite 的 `--port $PORT` 写法）就此自动
- * 错开；不认的也不会更糟——那种情况下我们至少还能在日志里当场认出撞车并说人话。
+ * 端口怎么进到命令里，**每种运行时的答案都不一样**（Node 认 `PORT`、Spring Boot 认
+ * `SERVER_PORT`、vite 只认 `--port` 参数……），那张表在 preview-command.ts；这里只负责把
+ * 借到的号码按那张表铺成环境变量。识别出来的命令天生就按自己那门语言的写法拿端口，用户
+ * 自己填的命令也能从这一串名字里挑一个 —— 都不认的最差也不会更糟，那时我们至少还能在
+ * 日志里当场认出撞车并说人话。
  * 端口是 listen(0) 拿的，关掉再交给子进程，中间有个理论上的竞态窗口，抢不到就还是撞车
  * 那条路，不额外补偿。
  *
@@ -101,24 +105,26 @@ async function freePorts(count: number): Promise<number[]> {
 /** 撞车时给的下一步在 preview-log.ts。 */
 
 /**
- * 借来的端口怎么递给命令。三组名字，各有各的收件人：
+ * 借来的端口怎么递给命令。两组名字，各有各的收件人：
  *
- *   · `PORT` / `SERVER_PORT`：**要看的那个**服务的端口。两个名字是因为「端口从环境变量
- *     来」这件事每种运行时叫法不同 —— `PORT` 是 Node（Next / CRA / Nest / Express）和一堆
- *     PaaS 的惯例，`SERVER_PORT` 被 Spring Boot 的宽松绑定读成 `server.port`（`spring-boot:run`
- *     fork 出来的 JVM 继承环境变量，所以 Maven/Gradle 那两条命令同样吃这一套）。
+ *   · `PORT` / `SERVER_PORT` / `ASPNETCORE_URLS` / …：**要看的那个**服务的端口，同一个值
+ *     换好几个名字。名单和理由在 preview-command.ts 的 PORT_ENV_ALIASES —— 从那儿导入而
+ *     不是在这儿再抄一份：识别出来的命令按哪个名字拿端口，跟这里注入哪些名字，是同一件事
+ *     的两头，抄成两份迟早对不上（那时症状是「某种语言的预览永远起在写死的端口上」）。
  *   · `PORT2…PORT5` / `URL2…URL5`：**配角**的端口和地址。一条命令里起前后端时，前端要在
  *     启动那一刻就知道后端在哪 —— 两边都是随机端口，谁也猜不到谁，只能由 ash 同时借下来
  *     一起告诉它们。`URLn` 是 `http://localhost:<PORTn>`，因为绝大多数前端的代理目标要的
  *     是整条地址而不是一个数字（vite 的 `server.proxy.target`、`VITE_*_URL` 之类）。
+ *     配角要哪个名字由它自己在命令里写（`SERVER_PORT=$PORT2 …`），所以这里只给号码。
  *
- * 认不了环境变量的（Django / Go / Rust……）由命令自己带 `$PORT` —— 那也是同一个值，
- * 因为这里注进去的就是 shell 展开时看到的 PORT。
+ * 认不了环境变量的（vite / Django / Laravel / Rails……）由命令自己带 `$PORT` —— 那也是同一个
+ * 值，因为这里注进去的就是 shell 展开时看到的 PORT。
  */
 function portEnv(ports: number[]): Record<string, string> {
   const [primary, ...rest] = ports;
   if (!primary) return {};
-  const env: Record<string, string> = { PORT: String(primary), SERVER_PORT: String(primary) };
+  const env: Record<string, string> = {};
+  for (const alias of PORT_ENV_ALIASES) env[alias.name] = alias.template.replaceAll("$PORT", String(primary));
   rest.forEach((port, index) => {
     env[`PORT${index + 2}`] = String(port);
     env[`URL${index + 2}`] = `http://localhost:${port}`;

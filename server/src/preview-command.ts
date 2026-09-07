@@ -16,8 +16,9 @@
 // 「预览命令」的整行，让用户指一个。猜错的代价不是「少省一次事」，是他对着别的服务
 // 验收自己的改动。
 //
-// 端口在 preview.ts 那边注入（PORT / SERVER_PORT，同样是每种语言各自的惯例），这里生成
-// 的命令能带上 $PORT 的就带上。
+// 端口同理：**没有一个通用写法**。有的运行时读环境变量（各家变量名还不一样），有的压根
+// 不读、只认命令行参数。所以每个候选都得自己说清楚「端口怎么进来」——那件事由下面的
+// PortDelivery 表达，主角那一份的环境变量名单由 PORT_ENV_ALIASES 导出给 preview.ts 注入。
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -52,6 +53,45 @@ function read(path: string): string | null {
   try { return readFileSync(path, "utf8"); } catch { return null; }
 }
 
+/**
+ * 端口怎么进到这门运行时里。**每种运行时的答案都不一样**，而且不问清楚就没法把同一个
+ * 东西改写成「跑在另一个端口上的配角」：
+ *
+ *   · `env` —— 它认某个环境变量。名字各叫各的（Node 的 `PORT`、Spring Boot 的
+ *     `SERVER_PORT`、ASP.NET Core 的 `ASPNETCORE_URLS`），值也不一定就是个数字，
+ *     所以带一个模板（`$PORT` / `http://localhost:$PORT`）。
+ *   · `inline` —— 它根本不读环境变量，端口写在命令行参数里（Django 的 `runserver`、
+ *     Laravel 的 `--port=`、vite 的 `--port`）。换端口就是把命令里的 `$PORT` 换掉。
+ *
+ * 「随便挑一种、剩下的听天由命」是不行的：给 vite 塞 `PORT` 它照样起在配置里那个端口上
+ * （vite 6 实测），给一个只认 `PORT` 的程序塞 `--port` 则直接报未知参数。两种错法都是
+ * 「ash 借了端口、命令没吃」——用户看到的是预览起在一个谁也没约定的端口上。
+ */
+type PortDelivery =
+  | { via: "env"; name: string; template: string }
+  | { via: "inline" };
+
+const envPort = (name: string, template = "$PORT"): PortDelivery => ({ via: "env", name, template });
+const INLINE: PortDelivery = { via: "inline" };
+
+/**
+ * 「主角端口」要以哪些名字递进去（`$PORT` 换成真端口后由 preview.ts 注入环境）。
+ *
+ * 一个端口、一串名字，因为**每种运行时读的变量名都不一样**，而 ash 事先并不知道这条命令
+ * 是哪门语言 —— 填过「预览命令」的项目根本不走下面的识别，那条命令可以是任何东西。多注
+ * 几个名字的代价只是日志头长一点；漏注一个的代价是那门语言的预览一律起在写死的端口上。
+ *
+ * 名字都在各家自己的命名空间里（`ASPNETCORE_` / `QUARKUS_` / `FLASK_RUN_`），不会误伤
+ * 别人的程序；`PORT` / `SERVER_PORT` 这两个泛用名本来就是「给我一个端口」的意思。
+ */
+export const PORT_ENV_ALIASES: ReadonlyArray<{ name: string; template: string }> = [
+  { name: "PORT", template: "$PORT" }, // Node（Next/CRA/Nest/Express/Nuxt）、Go、Rust、一票 PaaS
+  { name: "SERVER_PORT", template: "$PORT" }, // Spring Boot 宽松绑定 → server.port
+  { name: "ASPNETCORE_URLS", template: "http://localhost:$PORT" }, // ASP.NET Core（它不读 PORT）
+  { name: "QUARKUS_HTTP_PORT", template: "$PORT" }, // Quarkus
+  { name: "FLASK_RUN_PORT", template: "$PORT" }, // Flask 的 CLI
+];
+
 /** 进子目录的前缀。`.` 表示就在工作区根上，不加 cd。 */
 function prefixed(rel: string, command: string): string {
   return rel === "." ? command : `cd ${rel} && ${command}`;
@@ -60,16 +100,15 @@ function prefixed(rel: string, command: string): string {
 /**
  * 把「在哪个目录、跑什么、端口怎么进去」组装成一个候选。
  *
- * `portVar` 说的是**这门运行时从哪个环境变量读端口**：Node 认 `PORT`，Spring Boot 认
- * `SERVER_PORT`，Django / Laravel / Rails 那几条压根不读环境变量、端口写在命令行参数里
- * （所以是 `inline`，换端口就是把命令里的 `$PORT` 换成 `$PORTn`）。分清这件事才谈得上
- * 「同一个东西当配角时怎么写」—— 而那正是前后端一起起时唯一麻烦的地方。
+ * `port` 说的是**这门运行时从哪儿拿端口**（见 PortDelivery）。分清这件事才谈得上「同一个
+ * 东西当配角时怎么写」—— 而那正是前后端一起起时唯一麻烦的地方：环境变量那一类换变量名
+ * 后面的值，命令行参数那一类换命令里的 `$PORT`。
  */
 function candidate(
   label: string,
   rel: string,
   bare: string,
-  portVar: "PORT" | "SERVER_PORT" | "inline",
+  port: PortDelivery,
   kind: "web" | "service",
 ): PreviewCandidate {
   return {
@@ -77,9 +116,10 @@ function candidate(
     kind,
     command: prefixed(rel, bare),
     sidekick(n: number): string {
-      const body = portVar === "inline"
-        ? bare.replaceAll("$PORT", `$PORT${n}`)
-        : `${portVar}=$PORT${n} ${bare}`;
+      const ref = `$PORT${n}`;
+      const body = port.via === "inline"
+        ? bare.replaceAll("$PORT", ref)
+        : `${port.name}=${port.template.replaceAll("$PORT", ref)} ${bare}`;
       return rel === "." ? `(${body} &)` : `(cd ${rel} && ${body} &)`;
     },
   };
@@ -98,7 +138,33 @@ function where(rel: string): string {
 // 每个探子只回答「这个目录里有没有一个能起服务的东西」。它们互不知情，顺序不代表优先级
 // —— 只有恰好一个候选时才会被自动采用，多个一律回去问用户。
 
-/** Node：dev / start 脚本 + 按锁文件选包管理器。 */
+/**
+ * 前端 dev server 里有一大半**根本不读 PORT**，端口只认命令行参数。
+ *
+ * 这条不是推测，是实测（vite 6）：`PORT=41111 vite` 起在配置里写的 3000 上，`vite --port
+ * 41111` 才落到 41111 —— 而 `port: Number(env.VITE_APP_PORT || 3000)` 正是 vite 项目最常见的
+ * 写法。也就是说，只给环境变量的话，ash 借的端口对**整个 vite 生态**都是白借的：命令起在
+ * 一个谁也没约定的端口上，「借出去的端口连得上就是它」这条就绪判据（preview.ts）当场失效。
+ *
+ * 反过来也不能一律加 `--port`：Next / CRA / Nest / Nuxt / Express 认 `PORT`，多给一个未知
+ * 参数有的直接报错退出。所以这张表只放**确认吃 `--port` 且不吃 `PORT`** 的那几个，其余
+ * 一律走环境变量。
+ */
+const PORT_ARG_TOOLS = new Set(["vite", "astro", "ng"]);
+
+/** 脚本正文的第一条命令是不是那几个「端口只认参数」的工具。 */
+function portArgTool(body: string): boolean {
+  // 复合命令不动它：`&&` 串起来的、管道、concurrently 起一排 —— 追加的 `--port` 会落到
+  // 最后一条命令或者干脆落给 concurrently 自己，写出来的是一条**看着像对的坏命令**。
+  if (/[&|;<>]/.test(body) || /\b(?:concurrently|npm-run-all|run-[ps])\b/.test(body)) return false;
+  const tokens = body.trim().split(/\s+/);
+  let i = 0;
+  // `cross-env NODE_ENV=dev vite` / `FOO=1 vite` 这种前缀跳过去再看真正的命令。
+  while (i < tokens.length && (tokens[i] === "cross-env" || /^[A-Za-z_]\w*=/.test(tokens[i]))) i += 1;
+  return PORT_ARG_TOOLS.has(tokens[i] ?? "");
+}
+
+/** Node：dev / start 脚本 + 按锁文件选包管理器；端口按脚本里跑的是谁来定怎么给。 */
 function nodeCandidates(dir: string, rel: string): PreviewCandidate[] {
   const raw = read(join(dir, "package.json"));
   if (raw === null) return [];
@@ -107,9 +173,16 @@ function nodeCandidates(dir: string, rel: string): PreviewCandidate[] {
   catch { return []; }
   const script = typeof scripts.dev === "string" ? "dev" : typeof scripts.start === "string" ? "start" : null;
   if (!script) return [];
+  const body = String(scripts[script]);
   const pm = has(dir, "pnpm-lock.yaml") ? "pnpm" : has(dir, "yarn.lock") ? "yarn" : "npm";
-  const command = pm === "yarn" ? `yarn ${script}` : `${pm} run ${script}`;
-  return [candidate(`${where(rel)}（Node · ${pm} ${script}）`, rel, command, "PORT", "web")];
+  const base = pm === "yarn" ? `yarn ${script}` : `${pm} run ${script}`;
+  const label = `${where(rel)}（Node · ${pm} ${script}）`;
+  // npm / pnpm 要一个 `--` 才把后面的参数交给脚本本身；yarn 1 直接透传。
+  if (portArgTool(body)) {
+    const command = pm === "yarn" ? `${base} --port $PORT` : `${base} -- --port $PORT`;
+    return [candidate(label, rel, command, INLINE, "web")];
+  }
+  return [candidate(label, rel, base, envPort("PORT"), "web")];
 }
 
 /** pom.xml 里声明的子模块（`<modules>` 段）。不是聚合 pom 就返回空。 */
@@ -138,7 +211,7 @@ function mavenCandidates(dir: string, rel: string, depth = 0): PreviewCandidate[
   const modules = mavenModules(pom);
   if (!modules.length) {
     return mavenRunnable(pom)
-      ? [candidate(`${where(rel)}（Maven · Spring Boot）`, rel, `${runner} spring-boot:run`, "SERVER_PORT", "service")]
+      ? [candidate(`${where(rel)}（Maven · Spring Boot）`, rel, `${runner} spring-boot:run`, envPort("SERVER_PORT"), "service")]
       : [];
   }
   if (depth >= 2) return []; // 嵌套聚合到此为止，再深就该用户自己填了
@@ -158,7 +231,7 @@ function mavenCandidates(dir: string, rel: string, depth = 0): PreviewCandidate[
       `${relJoin(rel, name)}（Maven 模块 · Spring Boot）`,
       rel,
       `${runner} -pl ${name} spring-boot:run`,
-      "SERVER_PORT",
+      envPort("SERVER_PORT"),
       "service",
     ));
   }
@@ -169,41 +242,108 @@ function mavenCandidates(dir: string, rel: string, depth = 0): PreviewCandidate[
 function gradleCandidates(dir: string, rel: string): PreviewCandidate[] {
   if (!has(dir, "build.gradle") && !has(dir, "build.gradle.kts")) return [];
   const runner = has(dir, "gradlew") ? "./gradlew" : "gradle";
-  return [candidate(`${where(rel)}（Gradle · bootRun）`, rel, `${runner} bootRun`, "SERVER_PORT", "service")];
+  return [candidate(`${where(rel)}（Gradle · bootRun）`, rel, `${runner} bootRun`, envPort("SERVER_PORT"), "service")];
 }
 
-/** Python：Django 的 manage.py 是最没有歧义的一个信号。 */
+/**
+ * POSIX 上 `python` 常常根本不存在（Debian、Ubuntu、macOS 都只给 `python3`），把它写进
+ * 命令就是一条必然失败的命令；Windows 反过来，官方安装包给的就是 `python`。
+ */
+const PY = process.platform === "win32" ? "python" : "python3";
+
+/** 源码里 `app = FastAPI()` / `app = Flask(__name__)` 那一行 —— 起命令要的就是这个名字。 */
+const ASGI_RE = /^\s*([A-Za-z_]\w*)\s*=\s*FastAPI\s*\(/m;
+const WSGI_RE = /^\s*([A-Za-z_]\w*)\s*=\s*Flask\s*\(/m;
+/** 入口文件的惯用名先看，剩下的 .py 再看几个 —— 不做全仓扫描，这只是认个门牌。 */
+const PY_ENTRIES = ["main.py", "app.py", "asgi.py", "wsgi.py", "server.py", "api.py"];
+
+/**
+ * Django 之外的 Python web 应用。
+ *
+ * 跟别的语言不一样，Python 这边**没有一个「项目文件」能说明它是个 web 服务**：
+ * `pyproject.toml` / `requirements.txt` 满仓都是，脚本、库、notebook 也长这样。真正没有
+ * 歧义的信号只有源码里那句 `app = FastAPI()` —— 而且顺带把起命令要的 `模块:变量` 也说了。
+ */
+function pythonWebApp(dir: string): { framework: "fastapi" | "flask"; target: string } | null {
+  let names: string[] = [];
+  try { names = readdirSync(dir).filter((name) => name.endsWith(".py")); } catch { return null; }
+  const ordered = [
+    ...PY_ENTRIES.filter((name) => names.includes(name)),
+    ...names.filter((name) => !PY_ENTRIES.includes(name)).sort(),
+  ];
+  for (const name of ordered.slice(0, 12)) {
+    const src = read(join(dir, name));
+    if (src === null) continue;
+    const module = name.slice(0, -3);
+    const asgi = ASGI_RE.exec(src);
+    if (asgi) return { framework: "fastapi", target: `${module}:${asgi[1]}` };
+    const wsgi = WSGI_RE.exec(src);
+    if (wsgi) return { framework: "flask", target: module };
+  }
+  return null;
+}
+
+/** Python：Django 的 manage.py 最没有歧义；没有它就去源码里找 FastAPI / Flask。 */
 function pythonCandidates(dir: string, rel: string): PreviewCandidate[] {
-  if (!has(dir, "manage.py")) return [];
-  return [candidate(`${where(rel)}（Django）`, rel, "python manage.py runserver 0.0.0.0:$PORT", "inline", "web")];
+  if (has(dir, "manage.py")) {
+    return [candidate(`${where(rel)}（Django）`, rel, `${PY} manage.py runserver 0.0.0.0:$PORT`, INLINE, "web")];
+  }
+  const app = pythonWebApp(dir);
+  if (!app) return [];
+  // 一律 `python3 -m`：uvicorn / flask 装在虚拟环境里时未必在 PATH 上，但模块一定在。
+  return app.framework === "fastapi"
+    ? [candidate(`${where(rel)}（FastAPI · uvicorn）`, rel, `${PY} -m uvicorn ${app.target} --host 0.0.0.0 --port $PORT`, INLINE, "service")]
+    : [candidate(`${where(rel)}（Flask）`, rel, `${PY} -m flask --app ${app.target} run --host 0.0.0.0 --port $PORT`, INLINE, "service")];
 }
 
+/** Go：根上的 main.go，或者 `cmd/<名字>/main.go` 这种最常见的多入口布局。 */
 function goCandidates(dir: string, rel: string): PreviewCandidate[] {
-  if (!has(dir, "go.mod") || !has(dir, "main.go")) return [];
-  return [candidate(`${where(rel)}（Go）`, rel, "go run .", "PORT", "service")];
+  if (!has(dir, "go.mod")) return [];
+  if (has(dir, "main.go")) return [candidate(`${where(rel)}（Go）`, rel, "go run .", envPort("PORT"), "service")];
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(join(dir, "cmd"), { withFileTypes: true })
+      .filter((e) => e.isDirectory() && has(join(dir, "cmd", e.name), "main.go"))
+      .map((e) => e.name)
+      .sort();
+  } catch { return []; }
+  return entries.map((name) => candidate(
+    `${relJoin(rel, `cmd/${name}`)}（Go）`,
+    rel,
+    `go run ./cmd/${name}`,
+    envPort("PORT"),
+    "service",
+  ));
 }
 
 function rustCandidates(dir: string, rel: string): PreviewCandidate[] {
   if (!has(dir, "Cargo.toml")) return [];
-  return [candidate(`${where(rel)}（Rust · cargo run）`, rel, "cargo run", "PORT", "service")];
+  return [candidate(`${where(rel)}（Rust · cargo run）`, rel, "cargo run", envPort("PORT"), "service")];
 }
 
+/** .NET：ASP.NET Core **不读 PORT**，它认 `ASPNETCORE_URLS`（要的还是整条地址，不是端口）。 */
 function dotnetCandidates(dir: string, rel: string): PreviewCandidate[] {
   let hit = false;
   try { hit = readdirSync(dir).some((name) => name.endsWith(".csproj") || name.endsWith(".fsproj")); }
   catch { return []; }
   if (!hit) return [];
-  return [candidate(`${where(rel)}（.NET）`, rel, "dotnet run", "PORT", "service")];
+  return [candidate(
+    `${where(rel)}（.NET）`,
+    rel,
+    "dotnet run",
+    envPort("ASPNETCORE_URLS", "http://localhost:$PORT"),
+    "service",
+  )];
 }
 
 function phpCandidates(dir: string, rel: string): PreviewCandidate[] {
   if (!has(dir, "artisan")) return [];
-  return [candidate(`${where(rel)}（Laravel）`, rel, "php artisan serve --port=$PORT", "inline", "web")];
+  return [candidate(`${where(rel)}（Laravel）`, rel, "php artisan serve --port=$PORT", INLINE, "web")];
 }
 
 function rubyCandidates(dir: string, rel: string): PreviewCandidate[] {
   if (!has(dir, join("bin", "rails"))) return [];
-  return [candidate(`${where(rel)}（Rails）`, rel, "bin/rails server -p $PORT", "inline", "web")];
+  return [candidate(`${where(rel)}（Rails）`, rel, "bin/rails server -p $PORT", INLINE, "web")];
 }
 
 function probeDir(dir: string, rel: string): PreviewCandidate[] {
@@ -270,9 +410,11 @@ function combinedExample(candidates: PreviewCandidate[]): string | null {
 export function ambiguousMessage(candidates: PreviewCandidate[]): string {
   if (!candidates.length) {
     return "没认出这个项目该怎么起服务（Node 的 dev/start、Maven 的 spring-boot:run、"
-      + "Gradle 的 bootRun、Django 的 runserver、go run、cargo run、dotnet run 都找过了）。\n"
+      + "Gradle 的 bootRun、Django 的 runserver、FastAPI/Flask、go run、cargo run、"
+      + "dotnet run、Laravel 的 artisan、Rails 的 bin/rails 都找过了）。\n"
       + "请在「设置 → 项目设置 → 预览命令」里填一条启动命令 —— 任何语言都行，"
-      + "它在任务工作区根目录用你自己的 shell 执行，可以带 cd。";
+      + "它在任务工作区根目录用你自己的 shell 执行，可以带 cd。\n"
+      + `端口从 ash 借的那个来：命令里写 \`$PORT\`，或者让它读这些环境变量之一（${PORT_ENV_ALIASES.map((a) => a.name).join(" / ")}）。`;
   }
   const list = candidates.map((c) => `  · ${c.label}\n    ${c.command}`).join("\n");
   const combined = combinedExample(candidates);

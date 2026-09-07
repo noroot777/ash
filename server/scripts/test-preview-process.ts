@@ -14,6 +14,7 @@ process.env.ASH_RUNS_DIR = join(root, "runs");
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const { startPreview } = await import("../src/preview.js");
+const { PORT_ENV_ALIASES } = await import("../src/preview-command.js");
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -193,11 +194,20 @@ try {
       assert.equal(result.ok, true, "前后端一起起时预览必须认成起来了（配角端口没注入就会卡到超时）");
       assert.ok(result.ok);
       const log = readFileSync(join(root, "runs", "pair-task", "preview.log"), "utf8");
-      assert.match(log, /^\$ PORT=\d+ SERVER_PORT=\d+ PORT2=\d+ URL2=http:\/\/localhost:\d+ /,
-        "日志头必须照实写出注入了哪些端口变量——配角落在哪个端口只有这一行说得清");
       const sidekick = Number(/\[test\] sidekick=(\d+)/.exec(log)?.[1]);
       assert.ok(sidekick > 0, "配角没拿到 $PORT2");
       assert.notEqual(sidekick, result.record.port, "借出去的端口不能重样");
+      // 日志头必须照实写出注入了哪些端口变量——配角落在哪个端口只有这一行说得清。
+      // 逐条按 PORT_ENV_ALIASES 对，而不是把名单抄成正则：那张表就是「各语言各自认哪个
+      // 变量名」的唯一出处，抄一份进测试只会在加一门语言时一起漏掉。
+      const head = log.split("\n")[0];
+      assert.ok(head.startsWith("$ "), "日志头第一行得是命令回显");
+      for (const alias of PORT_ENV_ALIASES) {
+        const expected = `${alias.name}=${alias.template.replaceAll("$PORT", String(result.record.port))}`;
+        assert.ok(head.includes(expected), `日志头缺 ${expected}`);
+      }
+      assert.ok(head.includes(`PORT2=${sidekick}`), "日志头缺配角端口");
+      assert.ok(head.includes(`URL2=http://localhost:${sidekick}`), "日志头缺配角地址");
       assert.equal(await fetch(`http://127.0.0.1:${result.record.port}/`).then((r) => r.text()), "front");
       assert.equal(await fetch(`http://127.0.0.1:${sidekick}/`).then((r) => r.text()), "back");
     } finally {
