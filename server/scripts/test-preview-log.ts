@@ -182,6 +182,25 @@ check("zsh 的写法也认得出名字", (missingDepsHint("zsh: command not foun
 check("绝对路径只看最后一段", (missingDepsHint("sh: 1: /usr/bin/mvn: not found\n") ?? "").includes("`mvn`"), true);
 check("模块解析错跟命令名无关，一律算没装依赖", (missingDepsHint("Error: Cannot find module 'vite'\n") ?? "").includes("ln -s"), true);
 
+// —— 「Node 那一挂」还得再分一刀 ——
+// 项目 `.bin` 里的可执行文件（vite/next/tsx…）确实由 node_modules 提供，软链是对的；
+// 但**运行时和包管理器本身**（node/npm/pnpm/yarn/bun/corepack）装在机器上，软链一百份
+// node_modules 也不会让 shell 找到 `pnpm`。而这不是假想路径：自动识别照锁文件直接写出
+// `pnpm run dev`（a4sms-front 就是 pnpm 项目），换一台没装 pnpm 的机器就是一条不可能
+// 修好的建议 —— 而且又一次把「装依赖」这件事推给了根本不缺依赖的人。
+const softlink = (line: string) => (missingDepsHint(line) ?? "").includes("ln -s");
+const onPath = (line: string) => (missingDepsHint(line) ?? "").includes("PATH");
+for (const runtime of ["node", "npm", "npx", "pnpm", "yarn", "bun", "corepack"]) {
+  check(`${runtime} 是运行时/包管理器，不提软链`, softlink(`sh: 1: ${runtime}: not found\n`), false);
+  check(`${runtime} 说的是没装 / 不在 PATH 上`, onPath(`sh: 1: ${runtime}: not found\n`), true);
+}
+for (const bin of ["vite", "next", "tsx", "nodemon", "concurrently"]) {
+  check(`${bin} 由项目 .bin 提供，走软链那条`, softlink(`sh: 1: ${bin}: not found\n`), true);
+}
+check("pnpm 顺带提一句 corepack", (missingDepsHint("sh: 1: pnpm: not found\n") ?? "").includes("corepack enable"), true);
+check("yarn 同理", (missingDepsHint("sh: 1: yarn: not found\n") ?? "").includes("corepack enable"), true);
+check("但 vite 不该被提 corepack", (missingDepsHint("sh: 1: vite: not found\n") ?? "").includes("corepack"), false);
+
 // —— 终端输出不是纯文本：判读前先剥 ANSI ——
 // dev server 基本都给地址着色。不剥的话 URL 会把控制码收进路径（端口连得上，于是判成
 // 「起好了」，浏览器打开却是 404），行尾锚定的那几条也会因为末尾多一个重置码而失效。

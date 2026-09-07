@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Task } from "@ash/shared";
 import { ArrowSquareOut, MagnifyingGlass, MonitorPlay, SpinnerGap, StopCircle, Terminal } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
@@ -15,8 +15,14 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
   const [logOpen, setLogOpen] = useState(false);
   const [previewBusy, setPreviewBusy] = useState(false);
   // 「这一轮我按过打开预览」——启动期间 hasLog 还没翻真（快照要等 POST 回来才重拉），
-  // 但日志文件其实已经在长了。见 togglePreview 里那行注释。
+  // 但日志文件其实已经在长了。见 togglePreview 里那两行注释：亮起在 POST 之前，
+  // 清回在 POST 有结论之后。
   const [logArmed, setLogArmed] = useState(false);
+  // 换了任务就作废：这一档说的是「**这个任务**这一轮按过」，跟着旧任务漂过去就是假的。
+  useEffect(() => {
+    setLogArmed(false);
+    setLogOpen(false);
+  }, [task.id]);
   const view = freeReviewView(free.state, task);
   const { latestRun, reviewing, stoppedRun, taskBusy, waiting, reservationArmed, reservationMode, repairing, stale } = view;
   const taskReady = task.status !== "backlog";
@@ -67,6 +73,11 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
       await free.reload(true).catch(() => undefined);
     } finally {
       setPreviewBusy(false);
+      // 乐观那一档到此为止，交回给 `hasLog` —— 上面两条路都已经重拉过快照了。
+      // **必须清**：有些失败发生在 spawn 之前（多候选时 resolvePreviewCommand 直接 409），
+      // 那种情况下根本没有日志文件，留着这一档就是一颗点开只会说「还没有预览日志」的
+      // 永久按钮 —— 而多候选恰恰是这个仓库没配预览命令时的默认形状。
+      setLogArmed(false);
     }
   };
 
@@ -106,7 +117,7 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
           </button>
         )}
       </div>
-      {logOpen && <PreviewLogDialog taskId={task.id} onClose={() => setLogOpen(false)} notify={notify} />}
+      {logOpen && <PreviewLogDialog taskId={task.id} awaitingStart={previewBusy} onClose={() => setLogOpen(false)} notify={notify} />}
       {reviewOpen && <FreeReviewDialog taskId={task.id} state={free.state} reservationMode={reservationMode} onChanged={free.setState} onClose={() => setReviewOpen(false)} notify={notify} />}
     </>
   );

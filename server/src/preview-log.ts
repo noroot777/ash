@@ -79,9 +79,19 @@ function missingCommand(line: string): string | null {
   return null;
 }
 
-/** 这个名字是不是 Node 那一挂的（装在 node_modules/.bin 里，或者 Node 自己的工具链）。 */
-const NODE_TOOLS = new Set([
-  "node", "npm", "npx", "pnpm", "pnpx", "yarn", "bun", "bunx", "corepack",
+/**
+ * 「Node 那一挂」还得再分一刀，因为**这两半的下一步是反的**：
+ *
+ *   · `NODE_BINS` —— 这些东西**由项目的 node_modules/.bin 提供**。任务 worktree 是干净
+ *     检出，它们天生不在，所以「把主仓那份软链进来」正是对的做法。
+ *   · `NODE_RUNTIMES` —— 运行时和包管理器**本身**。它们装在机器上，不由任何项目的
+ *     node_modules 提供：软链一百份 node_modules 也不会让 shell 找到 `pnpm`。而这条不是
+ *     假设的路径 —— 自动识别会照锁文件直接写出 `pnpm run dev` / `yarn dev`（a4sms-front
+ *     就是 pnpm 项目），换一台没装 pnpm 的机器，给的就是一条不可能修好的建议。
+ */
+const NODE_RUNTIMES = new Set(["node", "npm", "npx", "pnpm", "pnpx", "yarn", "bun", "bunx", "corepack"]);
+
+const NODE_BINS = new Set([
   "vite", "next", "nuxt", "ng", "astro", "remix", "svelte-kit", "vue-cli-service", "react-scripts",
   "tsx", "ts-node", "tsc", "nest", "nodemon", "concurrently", "webpack", "rollup", "parcel", "esbuild",
 ]);
@@ -121,25 +131,27 @@ function nodeModulesHint(what: string): string {
     + "（Windows 用 `mklink /J`）。ash 认得这条软链，不会因此把工作区判成脏。";
 }
 
-/** 找不到的是一门运行时/构建工具：跟 node_modules 无关，是 PATH 或者压根没装。 */
+/** 找不到的是一门运行时/包管理器/构建工具：跟 node_modules 无关，是 PATH 或者压根没装。 */
 function runtimeMissingHint(name: string): string {
-  // wrapper 那条只对认得出 wrapper 的那两门说 —— 对着 dotnet 提 `./mvnw` 是噪音。
-  const wrapper = /^mvn/i.test(name) ? "，又或者用项目自带的 `./mvnw`（连版本都不用自己管）"
+  // 最后这句只对认得出「自带装法」的那几个说 —— 对着 dotnet 提 `./mvnw` 是噪音。
+  const own = /^mvn/i.test(name) ? "，又或者用项目自带的 `./mvnw`（连版本都不用自己管）"
     : /^gradle/i.test(name) ? "，又或者用项目自带的 `./gradlew`（连版本都不用自己管）"
-      : "";
+      : /^(?:pnpm|yarn)$/i.test(name) ? `，又或者 \`corepack enable\`（Node 自带，直接开出 ${name}）`
+        : "";
   return `\`${name}\` 这个命令没找到。它不是这个工作区里的依赖，所以软链 node_modules 帮不上忙 —— `
     + "要么这台机器上没装它，要么它不在 ash 起预览时那个 shell 的 PATH 上"
     + "（POSIX 上是 `sh -lc`，`~/.profile` 一类登录时读的配置算数；只在图形界面或 IDE 里"
     + "设过的 PATH 不算）。\n"
     + `装上它并确认新开一个终端 \`${name} --version\` 能跑，`
-    + `或者在项目设置 → 预览命令里写它的绝对路径${wrapper}。`;
+    + `或者在项目设置 → 预览命令里写它的绝对路径${own}。`;
 }
 
 /**
  * 日志像不像「有个东西找不到」；不像就 null。只在进程已经退出的失败路径上追加。
  *
- * 认出来之后按**找不到的是什么**分岔：Node 的工具链和模块解析错 → 没装依赖那条；别的命令
- * → 运行时/PATH 那条；名字都捞不出来的少数格式 → 两条都摆出来，让用户自己对号入座，
+ * 认出来之后按**找不到的是什么**分岔：项目 `.bin` 里的可执行文件和 Node 的模块解析错
+ * → 没装依赖那条；运行时、包管理器、别的语言的工具 → PATH 那条（NODE_RUNTIMES 那儿说了
+ * 为什么 `pnpm` 属于后者）；名字都捞不出来的少数格式 → 两条都摆出来，让用户自己对号入座，
  * 也好过硬塞一条必然无效的建议。
  */
 export function missingDepsHint(log: string): string | null {
@@ -157,11 +169,12 @@ export function missingDepsHint(log: string): string | null {
       + "（`ln -s <项目目录>/<子项目>/node_modules <任务工作区>/<子项目>/node_modules`，"
       + "Windows 用 `mklink /J`）。ash 不替你装，也别把 install 写进预览命令 —— 它会改写"
       + " lock 文件，跟着任务 diff 走进验收。\n"
-      + "② 它是一门运行时或构建工具（mvn / gradle / dotnet / go / python…）—— 那就是没装，"
-      + "或者不在 ash 起预览那个 shell 的 PATH 上，跟 node_modules 无关。";
+      + "② 它是一门运行时、包管理器或构建工具（node / pnpm / mvn / dotnet / go / python…）"
+      + "—— 那就是没装，或者不在 ash 起预览那个 shell 的 PATH 上，跟 node_modules 无关。";
   }
-  const bare = name.replace(/\.(?:exe|cmd|bat|ps1)$/i, "").split(/[\\/]/).pop() ?? name;
-  return NODE_TOOLS.has(bare.toLowerCase())
+  const bare = (name.replace(/\.(?:exe|cmd|bat|ps1)$/i, "").split(/[\\/]/).pop() ?? name).toLowerCase();
+  if (NODE_RUNTIMES.has(bare)) return runtimeMissingHint(bare);
+  return NODE_BINS.has(bare)
     ? nodeModulesHint(`\`${bare}\` 没找到，看着像这个工作区里没装依赖`)
     : runtimeMissingHint(bare);
 }

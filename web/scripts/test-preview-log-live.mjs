@@ -1,10 +1,13 @@
 // 预览启动那一段（最长两分钟）不能是个黑箱。跑：npm -w web run test:preview-log-live
 //
-// 钉两条，缺一条这个坑就会原样回来：
+// 钉三条，缺一条这个坑就会原样回来：
 //   ① 一按「打开预览」，「预览日志」入口**立刻**在（不等 POST 回来）—— 那份快照里
 //      `hasLog` 还是 false，可日志文件从 spawn 之前就在长。
-//   ② 弹窗在启动期就开轮询：文案说「日志每 2 秒自动续上」，那它就得真的续上。判据是
-//      服务端的 `starting`，不是「preview.json 写了没有」。
+//   ② 弹窗在启动期就开轮询：文案说「日志每 2 秒自动续上」，那它就得真的续上。而且
+//      **第一次 GET 报「没在跑」也得接着看**：后端的 starting 是 startPreview 真开跑
+//      之后才有的，按钮却在 POST 发出那一刻就亮了，手快的用户正好落在那个窗口里。
+//   ③ 反过来，spawn **之前**就失败的那条路（多候选 409，盘上根本没有日志文件），那颗
+//      乐观按钮必须收回去——否则界面上永久留着一颗点开只会说「还没有预览日志」的按钮。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -23,10 +26,11 @@ try {
   await server.listen();
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
+  const base = `http://127.0.0.1:${address.port}/scripts/fixtures/preview-log-live.html`;
 
   browser = await chromium.launch(await chromeLaunchOptions());
   const page = await browser.newPage({ viewport: { width: 1000, height: 900 } });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/preview-log-live.html`);
+  await page.goto(base);
 
   const open = page.getByRole("button", { name: "打开预览" });
   await open.waitFor();
@@ -37,7 +41,8 @@ try {
   await page.getByTestId("preview-log-open").waitFor({ timeout: 3000 });
   assert.equal(await page.getByRole("button", { name: "处理中" }).count(), 1, "这一刻启动请求还挂着");
 
-  // ② 弹窗开轮询：正文得自己变长。
+  // ② 弹窗开轮询：第一次 GET 报的是「没在跑」（后端还没走到 startPreview），
+  //    它仍然要接着看下去，正文得自己变长。
   await page.getByTestId("preview-log-open").click();
   const state = page.getByTestId("preview-log-state");
   await state.waitFor();
@@ -56,6 +61,27 @@ try {
   assert.match(await body.textContent() ?? "", /npm run dev/, "命令回显那一行也该在");
 
   if (process.env.PREVIEW_LOG_SHOT) await page.screenshot({ path: process.env.PREVIEW_LOG_SHOT });
+
+  // ③ spawn 之前就 409：多候选时 resolvePreviewCommand 直接抛，一条命令都没跑过，
+  //    盘上没有日志文件。那颗乐观按钮必须跟着收回去。
+  const race = await browser.newPage({ viewport: { width: 1000, height: 900 } });
+  await race.goto(`${base}?mode=pre-spawn`);
+  const preOpen = race.getByRole("button", { name: "打开预览" });
+  await preOpen.waitFor();
+  await preOpen.click();
+  // 等这一轮结束（按钮从「处理中」变回「打开预览」）。
+  await race.waitForFunction(
+    () => [...document.querySelectorAll("button")].some((b) => b.textContent?.includes("打开预览")),
+    null,
+    { timeout: 8000 },
+  );
+  assert.match(await race.getByTestId("notices").textContent() ?? "", /认出了 3 个/, "409 的原因得如实说出来");
+  assert.equal(
+    await race.getByTestId("preview-log-open").count(),
+    0,
+    "spawn 之前就失败时不该留下日志入口——点开只会说「还没有预览日志」",
+  );
+
   console.log("preview log live: ok");
 } finally {
   await browser?.close();

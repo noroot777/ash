@@ -18,11 +18,20 @@ import { useDismissable } from "../lib/useDismissable.ts";
  *     「还在跑」包含**还在启动**那一段（后端的 `starting`）—— 那一段最长两分钟，Maven
  *     在下依赖、前端在冷编译，正是这扇窗唯一有用的时候。只按「预览已就绪」轮询的话，
  *     它就退化成事后查看器了。
+ *
+ *     光看后端那个标记还不够：`starting` 是 `startPreview` 真的开跑之后才有的，而按钮在
+ *     POST 发出的那一刻就亮了。中间隔着解析工作区、解析命令这几步，用户手快的话第一次
+ *     GET 会落在这个窗口里，拿到一份「没在跑」——**而轮询只在第一次响应说在跑时才建立**，
+ *     于是它再也不会去看第二眼，弹窗就永远停在「还没有预览日志」上，页面那边启动 POST
+ *     其实还挂着。所以调用方把「我这会儿正等一个启动请求」也告诉它（awaitingStart），
+ *     两个条件任一成立就续读。
  */
-export function PreviewLogDialog({ taskId, onClose, notify }: {
+export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = false }: {
   taskId: string;
   onClose: () => void;
   notify: (message: string) => void;
+  /** 调用方正等着一个启动请求返回：即便后端还没报 starting，也得续读。 */
+  awaitingStart?: boolean;
 }) {
   const scrim = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLPreElement>(null);
@@ -48,12 +57,13 @@ export function PreviewLogDialog({ taskId, onClose, notify }: {
   }, [taskId]);
 
   useEffect(() => { void load(); }, [load]);
-  // 还在跑就每 2 秒续一次。停了之后不再轮询——日志已经不会再长了。
+  // 还在跑（含还在启动）就每 2 秒续一次。都停了才不再轮询——日志已经不会再长了。
+  const live = !!meta?.starting || awaitingStart;
   useEffect(() => {
-    if (!meta?.running) return;
+    if (!meta?.running && !live) return;
     const timer = setInterval(() => { void load(); }, 2000);
     return () => clearInterval(timer);
-  }, [meta?.running, load]);
+  }, [meta?.running, live, load]);
   useEffect(() => {
     if (stick && body.current) body.current.scrollTop = body.current.scrollHeight;
   }, [text, stick]);
@@ -73,7 +83,7 @@ export function PreviewLogDialog({ taskId, onClose, notify }: {
           <div>
             <h2 id="preview-log-title">预览日志</h2>
             <p data-testid="preview-log-state">
-              {meta?.starting
+              {live
                 ? "预览正在启动，日志每 2 秒自动续上。"
                 : meta?.running
                   ? "预览正在运行，日志每 2 秒自动续上。"
@@ -98,7 +108,11 @@ export function PreviewLogDialog({ taskId, onClose, notify }: {
             setStick(el.scrollHeight - el.scrollTop - el.clientHeight < 24);
           }}
         >
-          {error ?? (loading ? "正在读取…" : text || "这个任务还没有预览日志——点一次「打开预览」就有了。")}
+          {error ?? (loading
+            ? "正在读取…"
+            : text || (live
+              ? "预览正在启动，还没有输出。"
+              : "这个任务还没有预览日志——点一次「打开预览」就有了。"))}
         </pre>
         <footer>
           <span>{stick ? "" : "已暂停自动滚动，翻到底部恢复"}</span>

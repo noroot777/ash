@@ -7,8 +7,12 @@
 //     那个文件要等就绪才写。
 // 于是最该看日志的两分钟里，用户只能守着一颗「处理中」。
 //
-// 这个 fixture 把那两分钟定格：POST 挂着不回，日志接口按次数吐出越来越长的正文，
-// 并如实报 `starting: true`。
+// 这个 fixture 把那两分钟定格，并且**第一次日志 GET 故意报「没在跑」**：后端的 starting
+// 是 startPreview 真开跑之后才有的，而按钮在 POST 发出那一刻就亮了，手快的用户第一次
+// GET 就落在这个窗口里。轮询只认第一次响应的话，弹窗就永远停在「还没有预览日志」上。
+//
+// `?mode=pre-spawn` 换另一条路：POST 在 spawn 之前就 409（多候选时
+// resolvePreviewCommand 直接抛），根本没有日志文件 —— 那一档乐观按钮必须收回去。
 import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Task } from "@ash/shared";
@@ -19,6 +23,7 @@ const reply = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 const TASK_ID = "T-preview-live";
+const preSpawn = new URLSearchParams(location.search).get("mode") === "pre-spawn";
 let logReads = 0;
 /** 启动期的日志：每读一次多一段，模拟 dev server 边跑边吐字。 */
 const phases = [
@@ -35,25 +40,36 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     return reply({
       taskId: TASK_ID,
       selectedReviewerId: null,
-      stateVersion: 1,
+      // 每次都发新版本号，否则 useFreeWorkflowState 会按「不比现值新」丢掉重拉的结果。
+      stateVersion: Date.now(),
       workspaceHead: "abc1234",
       workspaceDirty: false,
       reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null, override: null, runId: null },
-      // 关键前提：这个任务**还没有**日志文件，所以按老口径「预览日志」那颗按钮不该出现。
+      // 关键前提：这个任务**始终没有**日志文件（pre-spawn 那条路根本没起过命令），
+      // 所以按老口径「预览日志」那颗按钮不该出现、也不该留下。
       preview: { running: false, hasLog: false, url: null, port: null, command: null, startedAt: null },
       executions: [],
       reviews: [],
     });
   }
   if (pathname === `/api/tasks/${TASK_ID}/free-workflow/preview` && (init?.method ?? "GET") !== "GET") {
-    // 启动请求就这么挂着 —— 现场里它可以挂两分钟。
+    // 多候选：命令都没解析出来就 409 了，spawn 之前，盘上没有任何日志。
+    if (preSpawn) return reply({ error: "认出了 3 个能起服务的东西，请在项目设置 → 预览命令里指一个" }, 409);
+    // 正常路径：启动请求就这么挂着 —— 现场里它可以挂两分钟。
     return await new Promise<Response>(() => {});
   }
   if (pathname === `/api/tasks/${TASK_ID}/free-workflow/preview/log`) {
-    const text = phases[Math.min(logReads, phases.length - 1)];
+    const nth = logReads;
     logReads += 1;
+    // **第一次故意报空闲**：那是 POST 已发出、后端还没走到 startPreview 的那个窗口。
+    if (nth === 0) {
+      return reply({
+        text: "", truncated: false, updatedAt: null, exists: false,
+        running: false, starting: false, command: null, url: null,
+      });
+    }
     return reply({
-      text,
+      text: phases[Math.min(nth - 1, phases.length - 1)],
       truncated: false,
       updatedAt: "2026-09-07T00:00:00.000Z",
       exists: true,
