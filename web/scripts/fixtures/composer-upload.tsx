@@ -1,4 +1,4 @@
-import { StrictMode, useState } from "react";
+import { StrictMode, useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Group, GroupMode, ProjectView, Task, TaskMode } from "@ash/shared";
 import { TaskComposerPanel } from "../../src/composer/TaskComposerPanel.tsx";
@@ -10,13 +10,14 @@ const project: ProjectView = {
   repoPath: "/tmp/ash",
   workflowId: null,
   createdAt: "2026-08-28T00:00:00.000Z",
-  health: { exists: true, isRepo: false },
+  health: { exists: true, isRepo: new URLSearchParams(location.search).has("repo") },
 };
 
 function Ash() {
   const [mode, setMode] = useState<TaskMode>("single");
   const [created, setCreated] = useState<string[]>([]);
   const [notices, setNotices] = useState<string[]>([]);
+  const notify = useCallback((message: string) => setNotices((current) => [...current, message]), []);
   return (
     <div style={{ display: "flex", height: "100vh", flexDirection: "column" }}>
       <TaskComposerPanel
@@ -33,7 +34,7 @@ function Ash() {
           mode: groupMode,
           createdAt: "2026-08-28T00:00:00.000Z",
         })}
-        notify={(message: string) => setNotices((current) => [...current, message])}
+        notify={notify}
       />
       <ul data-testid="created">{created.map((title, index) => <li key={index}>{`已创建：${title}`}</li>)}</ul>
       <ul data-testid="notices">{notices.map((item, index) => <li key={index}>{`提示：${item}`}</li>)}</ul>

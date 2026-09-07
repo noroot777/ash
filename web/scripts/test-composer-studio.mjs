@@ -1,0 +1,112 @@
+import assert from "node:assert/strict";
+import { mkdir } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { chromium } from "playwright-core";
+import { createServer } from "vite";
+import { chromeLaunchOptions } from "./chrome-path.mjs";
+
+const root = fileURLToPath(new URL("..", import.meta.url));
+const output = fileURLToPath(new URL("../../output/playwright/", import.meta.url));
+const server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0 } });
+let browser;
+try {
+  await mkdir(output, { recursive: true });
+  await server.listen();
+  browser = await chromium.launch(await chromeLaunchOptions());
+  const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const created = [];
+  await page.route("**/api/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    let data = [];
+    if (path === "/api/agents") data = [{ id: "exec-claude", name: "claude@local", type: "claude", isDefault: true }];
+    if (path === "/api/settings") data = { worktreeDefault: false, defaultWorkflowId: null };
+    if (path === "/api/workflows") data = [{ id: "standard", name: "验证起手式", builtin: true, disabled: false,
+      def: { workspace: "isolated", steps: [{ id: "run", kind: "run", p: { executorId: "exec-claude", model: "test-model", reasoningEffort: null, instruction: null }, fail: null }] } }];
+    if (path.endsWith("/branches")) data = { branches: ["main", "develop"], current: "main" };
+    if (path === "/api/tasks" && request.method() === "POST") {
+      const body = request.postDataJSON();
+      created.push(body);
+      data = { ...body, id: "task-1", status: "backlog", title: body.body };
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+  });
+  await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/scripts/fixtures/composer-upload.html?repo`);
+  const objective = page.getByRole("textbox", { name: "任务目标" });
+  await objective.fill("保留我写好的目标");
+  await page.getByRole("button", { name: /谁来做.*claude@local/ }).waitFor();
+  await page.waitForFunction(() => !document.querySelector(".composer-launch-control .ui-button")?.disabled);
+  assert.equal(await page.locator(".studio-settings:visible").count(), 0);
+  await page.screenshot({ path: `${output}/composer-studio-desktop.png`, fullPage: true });
+  const people = page.getByRole("button", { name: /^谁来做/ });
+  const space = page.getByRole("button", { name: /^在哪里做/ });
+  const flow = page.getByRole("button", { name: /^如何交付/ });
+  await people.click();
+  assert.equal(await page.locator(".studio-settings:visible .run-target-picker").count(), 1);
+  await page.getByRole("button", { name: /^智能体：/ }).click();
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator(".studio-settings:visible").count(), 1);
+  await space.click();
+  assert.equal(await page.locator(".studio-settings:visible").count(), 1);
+  await page.getByRole("switch").click();
+  assert.match(await space.innerText(), /独立 worktree/);
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator(".studio-settings:visible").count(), 0);
+  assert.equal(await space.evaluate((node) => node === document.activeElement), true);
+  await page.getByRole("tab", { name: "团队" }).click();
+  assert.equal(await objective.inputValue(), "保留我写好的目标");
+  await people.click();
+  assert.equal(await page.locator(".studio-settings:visible .run-target-picker").count(), 3);
+  await page.getByText("正在加载预设…", { exact: true }).waitFor({ state: "hidden" });
+  await page.screenshot({ path: `${output}/composer-studio-team.png`, fullPage: true });
+  await flow.click();
+  await page.getByRole("switch").click();
+  assert.match(await flow.innerText(), /按需审查/);
+  await page.getByRole("tab", { name: "讨论" }).click();
+  assert.equal(await space.isDisabled(), true);
+  await flow.click();
+  await page.getByRole("switch").click();
+  assert.match(await flow.innerText(), /自动结束/);
+  await page.getByRole("button", { name: /解决一个问题/ }).click();
+  assert.match(await objective.inputValue(), /^保留我写好的目标\n\n请帮我/);
+  await page.getByRole("tab", { name: "单任务" }).click();
+  await page.locator(".studio-organization summary").click();
+  assert.equal(await page.locator(".studio-organization").getAttribute("open"), "");
+  await page.getByLabel("启动方式").selectOption("once");
+  await page.getByLabel("一次性运行时间").fill("");
+  assert.equal(await page.getByRole("button", { name: "创建并定时" }).isDisabled(), true);
+  for (const width of [320, 390, 700, 900]) {
+    await page.setViewportSize({ width, height: 1000 });
+    assert.equal(await page.locator(".studio-organization .composer-option-grid").isVisible(), true);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `overflow at ${width}`);
+  }
+  await page.getByLabel("启动方式").selectOption("create");
+  await page.setViewportSize({ width: 390, height: 1000 });
+  await page.screenshot({ path: `${output}/composer-studio-mobile.png`, fullPage: true });
+  await page.getByRole("button", { name: "创建任务", exact: true }).click();
+  await page.getByTestId("created").getByRole("listitem").waitFor();
+  assert.equal(created.length, 1);
+  assert.equal(created[0].useWorktree, true);
+  assert.match(created[0].body, /^保留我写好的目标/);
+  await page.reload();
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await objective.fill("验证起手式配置");
+  await flow.click();
+  await page.getByRole("tab", { name: "起手式", exact: true }).click();
+  await page.getByRole("button", { name: "展开编排" }).waitFor();
+  assert.match(await people.innerText(), /test-model/);
+  await people.click();
+  assert.equal(await page.getByRole("button", { name: "展开编排" }).count(), 1);
+  await page.getByLabel("启动方式").selectOption("create");
+  await page.getByRole("button", { name: "创建任务", exact: true }).click();
+  await page.getByTestId("created").getByRole("listitem").waitFor();
+  assert.equal(created[1].executorId, "exec-claude");
+  assert.equal(created[1].model, "test-model");
+  assert.deepEqual(errors, []);
+  console.log("composer studio: layout, modes, settings, focus, templates, schedule, responsive and submit passed");
+} finally {
+  await browser?.close();
+  await server.close();
+}

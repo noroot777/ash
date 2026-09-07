@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DUET_DEFAULTS } from "@ash/shared/duet";
 import type {
   AgentExecutorProfile,
@@ -33,7 +33,8 @@ import {
 import { api } from "../lib/api.ts";
 import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import { useSkills } from "../lib/useSkills.ts";
-import { SlashMenu } from "../components/SlashMenu.tsx";
+import { ComposerObjective } from "./ComposerObjective.tsx";
+import { ComposerStarters } from "./ComposerStudio.tsx";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import { ComposerFields } from "./ComposerFields.tsx";
 import { ASH_SLASH_ITEMS, MODES, SLASHES, SeedAttachmentList, defaultProfile } from "./composerParts.tsx";
@@ -69,6 +70,7 @@ export function TaskComposerPanel({
   onCreateGroup: (name: string, mode: GroupMode) => Promise<Group>;
   notify: (message: string) => void;
 }) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [body, setBody] = useState(initialDraft?.body ?? "");
   const [seedAttachments, setSeedAttachments] = useState(initialDraft?.attachments ?? []);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
@@ -381,7 +383,7 @@ export function TaskComposerPanel({
     : unavailableRole
       ? mode === "single"
         ? workflowMode === "free"
-          ? "当前任务执行器未注册，请在上方工作方式中换一个。"
+          ? "当前任务执行器未注册，请在「谁来做」中换一个。"
           : runStepParams?.executorId
             ? "起手式「让 AI 干活」那一站选的执行器未注册，请展开编排换一个。"
             : "默认执行器未注册，请到执行器设置注册，或在起手式「让 AI 干活」那一站指定一个。"
@@ -522,7 +524,7 @@ export function TaskComposerPanel({
   };
 
   return (
-    <main className="task-composer-panel">
+    <main className="task-composer-panel is-studio">
       <header className="composer-header">
         <span className="workspace-kind-chip">新建</span>
         <b>新建任务</b>
@@ -531,6 +533,8 @@ export function TaskComposerPanel({
       </header>
       <div className="composer-scroll">
         <div className="composer-inner">
+          <header className="studio-heading"><span>新建任务</span><h1>从一个目标开始。</h1><p>把想完成的事写下来，执行方式在下方随时调整。</p></header>
+          <div className="studio-card">
           <div className="composer-tabs" role="tablist" aria-label="任务模式">
             {MODES.map((item) => {
               const Icon = item.icon;
@@ -548,60 +552,14 @@ export function TaskComposerPanel({
             })}
             <span>切换模式不清空正文</span>
           </div>
-          <div className="composer-objective">
-            <textarea
-              autoFocus
-              value={body}
-              onChange={(event) => {
-                changeBody(event.target.value);
-                setSlashIndex(0);
-                setSlashDismissed(false);
-              }}
-              onPaste={uploads.onPaste}
-              placeholder={mode === "team"
-                ? "给调度者的目标…（可输入 /single 或 /duet 切换）"
-                : mode === "duet"
-                  ? "要讨论并形成结论的议题…"
-                  : "描述要做什么…（可输入 /team 或 /duet）"}
-              onKeyDown={(event) => {
-                if (slashCandidates.length) {
-                  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                    event.preventDefault();
-                    const step = event.key === "ArrowDown" ? 1 : slashCandidates.length - 1;
-                    setSlashIndex((slashSelected + step) % slashCandidates.length);
-                    return;
-                  }
-                  if (event.key === "Enter" && !event.metaKey && !event.ctrlKey) {
-                    event.preventDefault();
-                    pickSlash(slashCandidates[slashSelected]!);
-                    return;
-                  }
-                  if (event.key === "Escape") {
-                    // 只关菜单,别把整个新建面板也关了(外层 window 上挂着 Esc 关闭)。
-                    event.preventDefault();
-                    event.stopPropagation();
-                    setSlashDismissed(true);
-                    return;
-                  }
-                }
-                if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-                  event.preventDefault();
-                  void submit();
-                }
-              }}
-            />
-            {!!slashCandidates.length && (
-              <SlashMenu
-                className="composer-slash-menu"
-                ariaLabel="斜杠命令与技能"
-                hint="↑↓ 选择，回车确认，Esc 关闭"
-                items={slashCandidates}
-                selectedIndex={slashSelected}
-                token={slashQuery}
-                onHover={setSlashIndex}
-                onPick={pickSlash}
-              />
-            )}
+          <ComposerObjective body={body} mode={mode} textareaRef={textareaRef}
+            onChange={(value) => { changeBody(value); setSlashIndex(0); setSlashDismissed(false); }}
+            onPaste={uploads.onPaste} items={slashCandidates} selected={slashSelected} token={slashQuery}
+            onSelect={setSlashIndex} onPick={pickSlash} onDismiss={() => setSlashDismissed(true)} onSubmit={() => void submit()} />
+          <div className="studio-writing-toolbar">
+            {mode !== "duet" && <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />}
+            <span>{mode === "duet" ? "讨论不接收附件" : "添加上下文 · 图片、文档或参考文件"}</span>
+            <small>{body.length} 字</small>
           </div>
           {/* 已经传好的只有单任务/团队才列（讨论不收附件，由下面那句提示交代）；
               **在途**的三种模式都列 —— 藏起来就等于告诉用户「传完了」。 */}
@@ -625,6 +583,7 @@ export function TaskComposerPanel({
           )}
           <ComposerFields
             mode={mode}
+            singleRunLabel={(profiles.find((profile) => profile.id === singleRun.executorId)?.name || singleRun.agentType) + (singleRun.model ? " · " + singleRun.model : "")}
             profiles={profiles}
             workerTypes={workerTypes}
             leadTypes={leadTypes}
@@ -660,31 +619,37 @@ export function TaskComposerPanel({
             workflowMode={workflowMode}
             onWorkflowModeChange={setWorkflowMode}
           />
+          <footer className="composer-footer">
+            <div>
+              <span>
+                <Paperclip size={13} />
+                {uploads.uploading ? `${uploadingLabel(uploads.pending)} · 传完才能创建`
+                  : mode === "duet" ? "讨论不收附件 · ⌘↵ 按当前启动方式创建"
+                    : `${allAttachments.length} 个附件 · ⌘↵ 按当前启动方式创建`}
+              </span>
+            </div>
+            <ComposerLaunchControl
+              mode={launchMode}
+              at={scheduleAt}
+              cron={scheduleCron}
+              busy={busy}
+              canSubmit={canSubmit}
+              error={scheduleError}
+              onModeChange={changeLaunchMode}
+              onAtChange={setScheduleAt}
+              onCronChange={setScheduleCron}
+              onSubmit={() => void submit()}
+            />
+          </footer>
+          </div>
+          <ComposerStarters onPick={(text, nextMode) => {
+            changeBody(body.trim() ? body + "\n\n" + text : text);
+            if (nextMode === "duet") onModeChange(nextMode);
+            textareaRef.current?.focus();
+          }} />
+          <p className="studio-footnote">切换模式不清空正文与配置 · ⌘ / Ctrl + Enter 按当前启动方式创建</p>
         </div>
       </div>
-      <footer className="composer-footer">
-        <div>
-          {mode !== "duet" && <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />}
-          <span>
-            <Paperclip size={13} />
-            {uploads.uploading ? `${uploadingLabel(uploads.pending)} · 传完才能创建`
-              : mode === "duet" ? "讨论不收附件 · ⌘↵ 按当前启动方式创建"
-                : `${allAttachments.length} 个附件 · ⌘↵ 按当前启动方式创建`}
-          </span>
-        </div>
-        <ComposerLaunchControl
-          mode={launchMode}
-          at={scheduleAt}
-          cron={scheduleCron}
-          busy={busy}
-          canSubmit={canSubmit}
-          error={scheduleError}
-          onModeChange={changeLaunchMode}
-          onAtChange={setScheduleAt}
-          onCronChange={setScheduleCron}
-          onSubmit={() => void submit()}
-        />
-      </footer>
       {groupDialogOpen && <CreateGroupDialog
         onClose={() => setGroupDialogOpen(false)}
         onCreate={async (name, groupMode) => {

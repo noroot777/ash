@@ -7,7 +7,8 @@ import type {
   TaskWorkflowMode,
   TeamPresetConfig,
 } from "@ash/shared";
-import { GearSix, SlidersHorizontal } from "@phosphor-icons/react";
+import { ComposerExecution } from "./ComposerStudio.tsx";
+import { parseExecutorValue } from "../lib/agentAvailability.ts";
 import { Dropdown } from "../components/Dropdown.tsx";
 import { PillTabs, Toggle } from "../components/ui.tsx";
 import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
@@ -17,6 +18,7 @@ import { PresetBar } from "./PresetBar.tsx";
 
 export function ComposerFields({
   mode,
+  singleRunLabel,
   profiles,
   workerTypes,
   leadTypes,
@@ -53,6 +55,7 @@ export function ComposerFields({
   onWorkflowModeChange,
 }: {
   mode: TaskMode;
+  singleRunLabel: string;
   profiles: AgentExecutorProfile[];
   workerTypes: AgentType[];
   leadTypes: AgentType[];
@@ -88,171 +91,80 @@ export function ComposerFields({
   labels: string[];
   onLabelsChange: (labels: string[]) => void;
   onCreateGroup: () => void;
-  /** 「干完之后」那一节。它只在单任务下出现，位置固定在最上面（起手式即执行配置）。 */
   workflowSlot?: ReactNode;
   workflowMode: TaskWorkflowMode;
   onWorkflowModeChange: (mode: TaskWorkflowMode) => void;
 }) {
+  const nameFor = (role: ComposerExecutorRole) => {
+    const selection = parseExecutorValue(executors[role].profile, profiles, { agentType: executorTypes[role], executorId: null });
+    return profiles.find((profile) => profile.id === selection.executorId)?.name || selection.agentType;
+  };
+  const picker = (role: ComposerExecutorRole, label: string) => <ExecutorPickerField
+    label={label} value={executors[role].profile} types={role === "lead" ? leadTypes : workerTypes}
+    profiles={role === "lead" ? leadProfiles : profiles} knownProfiles={profiles}
+    fallbackType={executorTypes[role]} override={executors[role]}
+    onChange={(value, override) => onExecutorChange(role, value, override)}
+    onEffortChange={(effort) => onEffortChange(role, effort)} />;
+  const single = mode === "single";
+  const duet = mode === "duet";
+  const preset = single && workflowMode === "preset";
+  const workflowEditor = <>
+    <PillTabs label="工作方式" value={workflowMode}
+      items={[{ value: "free", label: "自由工作流" }, { value: "preset", label: "起手式" }]}
+      onChange={onWorkflowModeChange} />
+    {preset ? workflowSlot : <p className="studio-help">按需派审和预览，完成后统一验收；不会自动合并。</p>}
+  </>;
   return (
-    <div className="composer-config">
-      {/* 单任务没有「执行模式」这一节：谁来干活写在起手式的「让 AI 干活」那一站上，
-          两处各摆一个执行器选择迟早对不上（用户在这儿改了，起手式上还写着另一个）。
-          团队/讨论仍要这一节 —— 它们的角色分工（调度者/执行者/审查者、两位讨论者）不在
-          起手式里。 */}
-      {mode !== "single" && (
-      <section className="composer-config-section is-execution">
-        <header className="composer-section-heading">
-          <span><SlidersHorizontal size={14} /></span>
-          <div><h2>执行模式</h2><p>决定由谁接手，以及团队内的角色分工。</p></div>
-        </header>
-        {mode === "team" && (
-          <PresetBar currentConfig={currentTeamConfig} profiles={profiles} onApply={onApplyTeamPreset} notify={notify} />
-        )}
-        <div className={`composer-executor-grid is-${mode}`}>
-          {mode === "team" && (
-            <>
-              <ExecutorPickerField label="调度者执行器" value={executors.lead.profile} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType="claude" override={executors.lead} onChange={(value, override) => onExecutorChange("lead", value, override)} onEffortChange={(effort) => onEffortChange("lead", effort)} />
-              <ExecutorPickerField label="执行者执行器" value={executors.worker.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="codex" override={executors.worker} onChange={(value, override) => onExecutorChange("worker", value, override)} onEffortChange={(effort) => onEffortChange("worker", effort)} />
-              <ExecutorPickerField label="审查者执行器" value={executors.reviewer.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={executorTypes.worker} override={executors.reviewer} onChange={(value, override) => onExecutorChange("reviewer", value, override)} onEffortChange={(effort) => onEffortChange("reviewer", effort)} />
-            </>
-          )}
-          {mode === "duet" && (
-            <>
-              <ExecutorPickerField label="讨论者 A" value={executors.voiceA.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="claude" override={executors.voiceA} onChange={(value, override) => onExecutorChange("voiceA", value, override)} onEffortChange={(effort) => onEffortChange("voiceA", effort)} />
-              <ExecutorPickerField label="讨论者 B" value={executors.voiceB.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="codex" override={executors.voiceB} onChange={(value, override) => onExecutorChange("voiceB", value, override)} onEffortChange={(effort) => onEffortChange("voiceB", effort)} />
-            </>
-          )}
-        </div>
-        {availabilityMessage && (
-          <p className={`composer-agent-availability is-${availabilityTone ?? "warning"}`}>{availabilityMessage}</p>
-        )}
-      </section>
-      )}
-
-      {/* 单任务的执行器提示没了宿主 section，单独摆一行，别让「没有可用执行器」这类话消失。 */}
-      {mode === "single" && availabilityMessage && (
-        <p className={`composer-agent-availability is-${availabilityTone ?? "warning"}`}>{availabilityMessage}</p>
-      )}
-
-      {mode === "single" && (
-        <section className="composer-config-section is-workflow-mode">
-          <header className="composer-section-heading">
-            <span><SlidersHorizontal size={14} /></span>
-            <div><h2>工作方式</h2><p>自由模式按需派审和预览，完成后统一验收；起手式按预设线路自动推进。</p></div>
-          </header>
-          <PillTabs
-            label="工作方式"
-            value={workflowMode}
-            items={[{ value: "free", label: "自由工作流" }, { value: "preset", label: "起手式" }]}
-            onChange={onWorkflowModeChange}
-          />
-          {workflowMode === "free" && (
-            <ExecutorPickerField
-              label="任务执行器"
-              value={executors.single.profile}
-              types={workerTypes}
-              profiles={profiles}
-              knownProfiles={profiles}
-              fallbackType="claude"
-              override={executors.single}
-              onChange={(value, override) => onExecutorChange("single", value, override)}
-              onEffortChange={(effort) => onEffortChange("single", effort)}
-            />
-          )}
-        </section>
-      )}
-
-      {workflowMode === "preset" && workflowSlot}
-
-      <section className="composer-config-section is-options">
-        <header className="composer-section-heading">
-          <span><GearSix size={14} /></span>
-          <div><h2>任务选项</h2><p>运行位置、组织方式与标签。</p></div>
-        </header>
-        <div className="composer-option-grid">
-          {mode === "team" && (
-            <label className="composer-toggle-field">
-              <span>自动审查</span>
-              <Toggle checked={review} onChange={onReviewChange} label={review ? "已开启" : "已关闭"} />
-            </label>
-          )}
-          {mode === "duet" && (
-            <>
-              <div className="composer-field">
-                <span>最多轮数</span>
-                <Dropdown
-                  label="最多轮数"
-                  value={rounds}
-                  options={[
-                    { value: "", label: "不限" },
-                    ...[1, 2, 3, 5, 8].map((value) => ({ value: String(value), label: `${value} 轮` })),
-                  ]}
-                  filterable={false}
-                  placeholder="不限"
-                  onChange={onRoundsChange}
-                />
-              </div>
-              <label className="composer-toggle-field">
-                <span>共识闸门</span>
-                <Toggle checked={gate} onChange={onGateChange} label={gate ? "需要确认" : "自动结束"} />
-              </label>
-            </>
-          )}
-          {mode !== "duet" && isRepo && (
-            <>
-              <label className="composer-toggle-field">
-                <span>worktree</span>
-                <Toggle checked={useWorktree} onChange={onUseWorktreeChange} label={useWorktree ? "独立 worktree" : "直接使用项目目录"} />
-              </label>
-              <div className="composer-field">
-                <span>base 分支</span>
-                <Dropdown
-                  label="base 分支"
-                  value={base}
-                  options={[
-                    { value: "", label: "当前 HEAD" },
-                    ...branches.map((branch) => ({ value: branch, label: branch, mono: true })),
-                  ]}
-                  disabled={!useWorktree}
-                  filterable={branches.length > 6}
-                  filterPlaceholder="筛选分支…"
-                  placeholder="当前 HEAD"
-                  onChange={onBaseChange}
-                />
-              </div>
-            </>
-          )}
-          {mode !== "duet" && (
-            <div className="composer-field">
-              <span>分组</span>
-              <Dropdown
-                label="分组"
-                value={groupId}
-                options={[
-                  { value: "", label: "无分组" },
-                  ...groups.filter((group) => !group.ownerTaskId).map((group) => ({
-                    value: group.id,
-                    label: group.name,
-                    detail: group.mode === "parallel" ? "并行" : "串行",
-                  })),
-                  { value: "__new", label: "＋ 新建分组…" },
-                ]}
-                filterable={groups.length > 6}
-                filterPlaceholder="筛选分组…"
-                placeholder="无分组"
-                onChange={(value) => {
-                  if (value === "__new") onCreateGroup();
-                  else onGroupChange(value);
-                }}
-              />
+    <div className="composer-config studio-config">
+      {availabilityMessage && <p role="status" className={"composer-agent-availability is-" + (availabilityTone ?? "warning")}>{availabilityMessage}</p>}
+      <ComposerExecution key={mode} sections={[
+        {
+          id: "people", label: "谁来做",
+          value: single ? singleRunLabel : duet ? nameFor("voiceA") + " × " + nameFor("voiceB") : nameFor("lead") + " 调度",
+          detail: single ? preset ? "按起手式执行配置" : "智能体 · 模型 · 智能水平"
+            : duet ? "两种视角，共同结论" : nameFor("worker") + " 执行 · " + (review ? nameFor("reviewer") + " 审查" : "不自动审查"),
+          content: <>
+            {mode === "team" && <PresetBar currentConfig={currentTeamConfig} profiles={profiles} onApply={onApplyTeamPreset} notify={notify} />}
+            <div className="studio-executors">
+              {single && (preset ? <><p className="studio-help">执行器由起手式中的「让 AI 干活」站点决定。</p>{workflowSlot}</> : picker("single", "任务执行器"))}
+              {mode === "team" && <>{picker("lead", "调度者执行器")}{picker("worker", "执行者执行器")}{picker("reviewer", "审查者执行器")}</>}
+              {duet && <>{picker("voiceA", "讨论者 A")}{picker("voiceB", "讨论者 B")}</>}
             </div>
-          )}
-          <div className="composer-label-field">
-            <span>标签</span>
-            <TaskLabelsEditor labels={labels} onChange={onLabelsChange} />
-          </div>
+          </>,
+        },
+        {
+          id: "space", label: "在哪里做", disabled: duet || !isRepo,
+          value: duet ? "讨论会话" : isRepo && useWorktree ? "独立 worktree" : "项目目录",
+          detail: duet ? "不创建工作目录" : isRepo && useWorktree ? "基于 " + (base || "当前 HEAD") : "直接使用项目目录",
+          content: <div className="composer-option-grid">
+            <div className="composer-toggle-field"><span>worktree</span><Toggle checked={useWorktree} onChange={onUseWorktreeChange} label={useWorktree ? "独立 worktree" : "直接使用项目目录"} /></div>
+            <div className="composer-field"><span>base 分支</span><Dropdown label="base 分支" value={base}
+              options={[{ value: "", label: "当前 HEAD" }, ...branches.map((branch) => ({ value: branch, label: branch, mono: true }))]}
+              disabled={!useWorktree} filterable={branches.length > 6} filterPlaceholder="筛选分支…" placeholder="当前 HEAD" onChange={onBaseChange} /></div>
+          </div>,
+        },
+        {
+          id: "flow", label: "如何交付",
+          value: single ? preset ? "起手式" : "自由工作流" : duet ? "共同结论" : review ? "自动审查" : "按需审查",
+          detail: single ? "完成后，由你验收" : duet ? (rounds ? "最多 " + rounds + " 轮" : "不限轮数") + " · " + (gate ? "需要确认共识" : "自动结束") : review ? "执行者完成后派审" : "完成后手动派审",
+          content: single ? workflowEditor : duet ? <div className="composer-option-grid">
+            <div className="composer-field"><span>最多轮数</span><Dropdown label="最多轮数" value={rounds}
+              options={[{ value: "", label: "不限" }, ...[1, 2, 3, 5, 8].map((value) => ({ value: String(value), label: value + " 轮" }))]}
+              filterable={false} placeholder="不限" onChange={onRoundsChange} /></div>
+            <div className="composer-toggle-field"><span>共识闸门</span><Toggle checked={gate} onChange={onGateChange} label={gate ? "需要确认" : "自动结束"} /></div>
+          </div> : <div className="composer-toggle-field"><span>自动审查</span><Toggle checked={review} onChange={onReviewChange} label={review ? "已开启" : "已关闭"} /></div>,
+        },
+      ]} />
+      <details className="studio-organization">
+        <summary><span>组织与标签</span><small>{duet ? "" : (groups.find((group) => group.id === groupId)?.name || "无分组") + " · "}{labels.length ? labels.join("、") : "无标签"}</small></summary>
+        <div className="composer-option-grid">
+          {!duet && <div className="composer-field"><span>分组</span><Dropdown label="分组" value={groupId}
+            options={[{ value: "", label: "无分组" }, ...groups.filter((group) => !group.ownerTaskId).map((group) => ({ value: group.id, label: group.name, detail: group.mode === "parallel" ? "并行" : "串行" })), { value: "__new", label: "＋ 新建分组…" }]}
+            filterable={groups.length > 6} filterPlaceholder="筛选分组…" placeholder="无分组"
+            onChange={(value) => { if (value === "__new") onCreateGroup(); else onGroupChange(value); }} /></div>}
+          <div className="composer-label-field"><span>标签</span><TaskLabelsEditor labels={labels} onChange={onLabelsChange} /></div>
         </div>
-      </section>
+      </details>
     </div>
   );
 }
