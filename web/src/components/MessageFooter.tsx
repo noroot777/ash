@@ -1,10 +1,7 @@
 import type { ContextUsage, Session, TokenUsage } from "@ash/shared";
 import { ContextMeterChip } from "./ContextMeterChip.tsx";
+import { CopyButton } from "./CopyButton.tsx";
 import { TokenUsageChip } from "./TokenUsageChip.tsx";
-
-function copy(value: string) {
-  void navigator.clipboard.writeText(value);
-}
 
 /**
  * 一条 agent 气泡的尾栏：账目元信息都在这一行，气泡头部保留执行器、模型、智能水平、时间与用时。
@@ -45,14 +42,22 @@ export function MessageFooter({
   return (
     <footer className="task-message-footer">
       {session?.cliSessionId && (
-        <button type="button" title={session.cliSessionId} onClick={() => copy(session.cliSessionId!)}>
-          会话 {session.cliSessionId.slice(0, 12)}{session.cliSessionId.length > 12 ? "…" : ""}
-        </button>
+        <CopyButton
+          value={session.cliSessionId}
+          title={session.cliSessionId}
+          ariaLabel="复制会话 id"
+          doneLabel="已复制会话 id"
+          label={<>会话 {session.cliSessionId.slice(0, 12)}{session.cliSessionId.length > 12 ? "…" : ""}</>}
+        />
       )}
       {session?.resumeCommand && (
-        <button type="button" title={session.resumeCommand} onClick={() => copy(session.resumeCommand!)}>
-          复制 resume 命令
-        </button>
+        <CopyButton
+          value={session.resumeCommand}
+          title={session.resumeCommand}
+          ariaLabel="复制 resume 命令"
+          doneLabel="已复制 resume 命令"
+          label="复制 resume 命令"
+        />
       )}
       <TokenUsageChip turn={turnUsage} />
       <TokenUsageChip session={total} />

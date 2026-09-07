@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { normalizeDuetConfig } from "@ash/shared/duet";
+import { parseAttachmentText } from "@ash/shared/attachments";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { DuetConfig, DuetConsensusBy, GateAction, TaskStatus } from "@ash/shared";
@@ -381,9 +382,13 @@ async function genDuetTitle(
   runOwner: string | null,
 ): Promise<void> {
   try {
+    // 起名只看议题正文:topic 末尾可能挂着一段附件路径块(用户在新建面板贴的图),
+    // 那串绝对路径对起名毫无信息量,还会把 20 字的标题挤没。开场 prompt 仍拿完整
+    // 的 topic —— 讨论者要靠那些路径去 Read。
+    const said = parseAttachmentText(topic).body || topic;
     // 起名也是一次真的 CLI 调用 —— 同样要落在本人的配置目录里(§八),别让它成为
     // 唯一一条还摸得到宿主机 ~/.claude 的缝。
-    const handle = ex.run({ prompt: P.title(topic), cwd, env: await runEnvForOwner(runOwner, ex.type) });
+    const handle = ex.run({ prompt: P.title(said), cwd, env: await runEnvForOwner(runOwner, ex.type) });
     let text = "";
     for await (const event of handle.events) {
       if (event.kind === "text") text += event.text;

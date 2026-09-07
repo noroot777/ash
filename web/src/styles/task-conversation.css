@@ -18,6 +18,17 @@
 .task-user-bubble header button:focus-visible { opacity: 1; }
 .task-message header button:hover,
 .task-user-bubble header button:hover { background: var(--raised); color: var(--ink); }
+/* 复制反馈期间这颗必须现形：平时 opacity:0 只在悬停时露脸，可点完鼠标常常就移开了，
+   反馈跟着一起消失就等于没有反馈。类名带上 .copy-button 是为了压过上面那条 :hover，
+   否则鼠标还停在按钮上时反馈色会被 hover 的 --ink 盖掉。 */
+.task-message header button.is-copied,
+.task-user-bubble header button.is-copied,
+.task-message header button.is-copy-failed,
+.task-user-bubble header button.is-copy-failed { opacity: 1; }
+.task-message header button.copy-button.is-copied,
+.task-user-bubble header button.copy-button.is-copied { color: var(--green); }
+.task-message header button.copy-button.is-copy-failed,
+.task-user-bubble header button.copy-button.is-copy-failed { color: var(--red); }
 
 .task-message--user { display: flex; max-width: none; justify-content: flex-end; padding-left: 38px; }
 .task-user-bubble { max-width: min(680px, 88%); border: 1px solid color-mix(in lch, var(--accent) 28%, var(--line)); border-radius: 9px; background: color-mix(in lch, var(--accent) 7%, var(--panel)); padding: 8px 11px; }
@@ -144,6 +155,10 @@
 .task-message-footer button.is-retry:hover { border-color: var(--red); background: color-mix(in lch, var(--red) 12%, var(--raised)); color: var(--red); }
 .task-message-footer button.is-retry:disabled { opacity: 0.55; }
 .task-message-footer button.task-message-copy-action { display: inline-flex; align-items: center; gap: 3px; }
+/* 尾栏这几颗是描边胶囊，反馈得连边框一起变，只换字色在灰底上看不出来；
+   同样要压过上面那条 :hover。 */
+.task-message-footer button.copy-button.is-copied { border-color: color-mix(in lch, var(--green) 45%, var(--line)); background: transparent; color: var(--green); }
+.task-message-footer button.copy-button.is-copy-failed { border-color: color-mix(in lch, var(--red) 45%, var(--line)); background: transparent; color: var(--red); }
 
 /* Token 用量。三颗都在尾栏里，跟 .task-message-footer 的按钮同款外形。 */
 .token-usage-chip { display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 2px 6px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; white-space: nowrap; }

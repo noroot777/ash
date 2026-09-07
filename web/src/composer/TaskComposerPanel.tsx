@@ -21,14 +21,11 @@ import {
 } from "../components/ScheduleControl.tsx";
 import { Button } from "../components/ui.tsx";
 import {
-  executorValue,
   isExecutorPickable,
   nothingRunnable,
   parseExecutorValue,
-  preferredExecutor,
   teamExecutorCandidates,
   useAgentAvailability,
-  type ExecutorSelection,
 } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
 import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
@@ -36,14 +33,17 @@ import { useSkills } from "../lib/useSkills.ts";
 import { SlashMenu } from "../components/SlashMenu.tsx";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import { ComposerFields } from "./ComposerFields.tsx";
-import { ASH_SLASH_ITEMS, MODES, SLASHES, SeedAttachmentList, defaultProfile } from "./composerParts.tsx";
+import { ASH_SLASH_ITEMS, MODES, SLASHES, SeedAttachmentList } from "./composerParts.tsx";
 import { useComposerWorkflow } from "./ComposerWorkflow.tsx";
 import { ComposerLaunchControl, type LaunchMode } from "./ComposerLaunchControl.tsx";
 import { CreateGroupDialog } from "../overlays/CreateEntityDialog.tsx";
 import {
   emptyComposerExecutorConfigs,
+  initialComposerExecutors,
   patchComposerExecutor,
+  reconcileComposerExecutors,
   setComposerExecutorProfile,
+  teamPresetExecutors,
   type ComposerExecutorRole,
 } from "./executorOverrides.ts";
 export type ComposerDraft = { body: string; attachments: string[]; noteIds?: string[] };
@@ -109,25 +109,7 @@ export function TaskComposerPanel({
     api.agents().then((agents) => {
       if (!alive) return;
       setProfiles(agents);
-      const claude = defaultProfile(agents, "claude") ?? agents[0];
-      const codex = defaultProfile(agents, "codex")
-        ?? agents.find((profile) => profile.id !== claude?.id)
-        ?? claude;
-      const claudeValue = executorValue(claude
-        ? { agentType: claude.type, executorId: claude.id }
-        : { agentType: "claude", executorId: null });
-      const codexValue = executorValue(codex
-        ? { agentType: codex.type, executorId: codex.id }
-        : { agentType: "codex", executorId: null });
-      setExecutors((current) => ({
-        ...current,
-        single: { ...current.single, profile: claudeValue },
-        lead: { ...current.lead, profile: claudeValue },
-        worker: { ...current.worker, profile: codexValue },
-        reviewer: { ...current.reviewer, profile: codexValue },
-        voiceA: { ...current.voiceA, profile: claudeValue },
-        voiceB: { ...current.voiceB, profile: codexValue },
-      }));
+      setExecutors((current) => initialComposerExecutors(current, agents));
     }).catch((error) => {
       if (alive) notify(error instanceof Error ? error.message : "执行器配置读取失败");
     }).finally(() => {
@@ -270,46 +252,12 @@ export function TaskComposerPanel({
 
   useEffect(() => {
     if (!profilesReady || detection.status === "loading") return;
-    const reconcile = (
-      value: string,
-      types: AgentType[],
-      candidates: AgentExecutorProfile[],
-      preferred: AgentType,
-      avoid?: AgentType,
-    ): ExecutorSelection | null => {
-      const current = parseExecutorValue(value, profiles, { agentType: preferred, executorId: null });
-      return value && isExecutorPickable(current, types, candidates)
-        ? current
-        : preferredExecutor(types, candidates, preferred, avoid);
-    };
-    setExecutors((current) => {
-      const single = reconcile(current.single.profile, workerTypes, profiles, "claude");
-      const lead = reconcile(current.lead.profile, leadTypes, leadProfiles, "claude");
-      const worker = reconcile(current.worker.profile, workerTypes, profiles, "codex", lead?.agentType);
-      const reviewer = reconcile(
-        current.reviewer.profile,
-        workerTypes,
-        profiles,
-        worker?.agentType ?? "codex",
-      ) ?? worker;
-      const voiceA = reconcile(current.voiceA.profile, workerTypes, profiles, "claude");
-      const voiceB = reconcile(
-        current.voiceB.profile,
-        workerTypes,
-        profiles,
-        "codex",
-        voiceA?.agentType,
-      );
-      let changed = false;
-      const next = { ...current };
-      const resolved = { single, lead, worker, reviewer, voiceA, voiceB };
-      for (const [role, selection] of Object.entries(resolved) as [ComposerExecutorRole, ExecutorSelection | null][]) {
-        if (!selection || current[role].profile === executorValue(selection)) continue;
-        next[role] = { profile: executorValue(selection), model: "", effort: "" };
-        changed = true;
-      }
-      return changed ? next : current;
-    });
+    setExecutors((current) => reconcileComposerExecutors(current, {
+      profiles,
+      workerTypes,
+      leadTypes,
+      leadProfiles,
+    }));
   }, [
     detection.status,
     leadProfiles,
@@ -335,31 +283,7 @@ export function TaskComposerPanel({
     reviewerReasoningEffort: executors.reviewer.effort || null,
   };
   const applyTeamPreset = (config: TeamPresetConfig) => {
-    const profileValue = (candidate: string | null | undefined, type: AgentType) => {
-      const candidateProfile = candidate ? profiles.find((profile) => profile.id === candidate) : null;
-      return executorValue(candidateProfile?.type === type
-        ? { agentType: type, executorId: candidate! }
-        : { agentType: type, executorId: null });
-    };
-    const reviewerType = config.reviewerAgentType ?? config.worker;
-    setExecutors((current) => ({
-      ...current,
-      lead: {
-        profile: profileValue(config.leadExecutorId, config.lead),
-        model: config.leadModel ?? "",
-        effort: config.leadReasoningEffort ?? "",
-      },
-      worker: {
-        profile: profileValue(config.workerExecutorId, config.worker),
-        model: config.workerModel ?? "",
-        effort: config.workerReasoningEffort ?? "",
-      },
-      reviewer: {
-        profile: profileValue(config.reviewerExecutorId, reviewerType),
-        model: config.reviewerModel ?? "",
-        effort: config.reviewerReasoningEffort ?? "",
-      },
-    }));
+    setExecutors((current) => teamPresetExecutors(current, config, profiles));
     setReview(config.review !== false);
   };
   const noExecutor = profilesReady && nothingRunnable(profiles);
@@ -398,10 +322,9 @@ export function TaskComposerPanel({
     ? scheduleValidationError(launchMode, scheduleAt, scheduleCron)
     : null;
   // 有图还在传就先不放行：附件路径是上传成功才有的，这时候创建等于把刚粘的那张图
-  // 悄悄扔掉。**讨论也算**——它虽然不收附件，但创建之后这个面板就没了，在途的那张
-  // 同样没人接住；切到讨论就把「还在传」藏起来更糟，用户会以为已经传完（第 1 轮审查 P1）。
+  // 悄悄扔掉。三种模式一视同仁——切走这个面板就没人接住在途的那张了。
   const waitingUploads = uploads.uploading;
-  const canSubmit = (mode === "duet" ? !!body.trim() : !!body.trim() || allAttachments.length > 0)
+  const canSubmit = (!!body.trim() || allAttachments.length > 0)
     && !busy && !noExecutor && !roleBlocked && !scheduleError && !waitingUploads;
 
   const changeLaunchMode = (next: LaunchMode) => {
@@ -423,20 +346,30 @@ export function TaskComposerPanel({
         labels,
       };
       if (mode === "duet") {
-        task = await api.createTask({ ...common, mode, duet: {
-          ...DUET_DEFAULTS,
-          topic: body.trim(),
-          voiceA: voiceAExecutor.agentType,
-          voiceB: voiceBExecutor.agentType,
-          voiceAExecutorId: voiceAExecutor.executorId,
-          voiceBExecutorId: voiceBExecutor.executorId,
-          voiceAModel: executors.voiceA.model || null,
-          voiceAReasoningEffort: executors.voiceA.effort || null,
-          voiceBModel: executors.voiceB.model || null,
-          voiceBReasoningEffort: executors.voiceB.effort || null,
-          maxRounds: rounds ? Math.max(1, Number(rounds) || 3) : null,
-          gateG1: gate ? "on" : "off",
-        } });
+        // 议题同时送 body 和 duet.topic：后端会把附件块分别拼在两者末尾（task-routes
+        // 的 `row.body` / `scopedDuet`），于是讨论者的开场 prompt 和详情页顶部的「完整
+        // 议题」看到的是同一份东西。只送 topic 的话，详情页那句 `task.body || topic`
+        // 会拿到一段只剩附件路径、没有正文的 body。
+        task = await api.createTask({
+          ...common,
+          body: body.trim(),
+          attachments: allAttachments,
+          mode,
+          duet: {
+            ...DUET_DEFAULTS,
+            topic: body.trim(),
+            voiceA: voiceAExecutor.agentType,
+            voiceB: voiceBExecutor.agentType,
+            voiceAExecutorId: voiceAExecutor.executorId,
+            voiceBExecutorId: voiceBExecutor.executorId,
+            voiceAModel: executors.voiceA.model || null,
+            voiceAReasoningEffort: executors.voiceA.effort || null,
+            voiceBModel: executors.voiceB.model || null,
+            voiceBReasoningEffort: executors.voiceB.effort || null,
+            maxRounds: rounds ? Math.max(1, Number(rounds) || 3) : null,
+            gateG1: gate ? "on" : "off",
+          },
+        });
       } else if (mode === "team") {
         task = await api.createTask({
           ...common,
@@ -603,26 +536,19 @@ export function TaskComposerPanel({
               />
             )}
           </div>
-          {/* 已经传好的只有单任务/团队才列（讨论不收附件，由下面那句提示交代）；
-              **在途**的三种模式都列 —— 藏起来就等于告诉用户「传完了」。 */}
           <ImagePreviewGroup isolated>
             <UploadAttachmentList
-              attachments={mode === "duet" ? [] : uploads.attachments}
+              attachments={uploads.attachments}
               pending={uploads.pending}
               error={uploads.error}
               onRemove={uploads.remove}
               onCancel={uploads.cancel}
             />
-            {mode !== "duet" && (
-              <SeedAttachmentList
-                paths={seedAttachments}
-                onRemove={(path) => setSeedAttachments((current) => current.filter((item) => item !== path))}
-              />
-            )}
+            <SeedAttachmentList
+              paths={seedAttachments}
+              onRemove={(path) => setSeedAttachments((current) => current.filter((item) => item !== path))}
+            />
           </ImagePreviewGroup>
-          {mode === "duet" && allAttachments.length > 0 && (
-            <p className="composer-warning">讨论配置不接收附件；附件仍保留，切回单任务或团队后会随任务提交。</p>
-          )}
           <ComposerFields
             mode={mode}
             profiles={profiles}
@@ -664,12 +590,11 @@ export function TaskComposerPanel({
       </div>
       <footer className="composer-footer">
         <div>
-          {mode !== "duet" && <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />}
+          <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />
           <span>
             <Paperclip size={13} />
             {uploads.uploading ? `${uploadingLabel(uploads.pending)} · 传完才能创建`
-              : mode === "duet" ? "讨论不收附件 · ⌘↵ 按当前启动方式创建"
-                : `${allAttachments.length} 个附件 · ⌘↵ 按当前启动方式创建`}
+              : `${allAttachments.length} 个附件 · ⌘↵ 按当前启动方式创建`}
           </span>
         </div>
         <ComposerLaunchControl

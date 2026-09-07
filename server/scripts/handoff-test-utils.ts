@@ -3,9 +3,23 @@ import assert from "node:assert/strict";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { IS_WINDOWS } from "../src/platform.js";
 
 export const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+
+/**
+ * 进程退出时把这个子进程**所在的进程组**整个杀掉(见 startPeer 的进程组一节)。
+ * 注册在 exit 上:那一刻只能做同步事,`process.kill` 正好是同步的。
+ */
+function killPeerGroupOnExit(peer: ChildProcess): void {
+  if (IS_WINDOWS || !peer.pid) return;
+  const pid = peer.pid;
+  process.on("exit", () => {
+    // 组已经空了会抛 ESRCH —— 那正是期望结果,吞掉。
+    try { process.kill(-pid, "SIGKILL"); } catch {}
+  });
+}
 
 export function makeRepo(path: string): string {
   execFileSync("git", ["init", "-b", "main", path]);
@@ -19,7 +33,13 @@ export function makeRepo(path: string): string {
 }
 
 /** 起对端 server(PORT=0),等 ready 行,返回 baseUrl。onProc 在 spawn 后立即回调,
- * 让调用方在 ready 之前就持有进程句柄——超时/早退时也能兜底击杀。 */
+ * 让调用方在 ready 之前就持有进程句柄——超时/早退时也能兜底击杀。
+ *
+ * **进程组**:tsx 的 cli.mjs 是个包装器,它自己再 spawn 一个 node 跑真正的 server。
+ * 调用方手上的 `peer` 是外层那个,`peer.kill()` 只杀得到它 —— 内层 server 会活下来
+ * 变成 PPID=1 的孤儿,继续占着端口和临时 DB 文件(实测:一轮 test:handoff 跑完能留下
+ * 好几个)。所以这里 detached 建独立进程组,并在本进程退出时按**负 pid**杀整组:
+ * 调用方原有的 kill 照旧管用,内层由这道兜底收掉。 */
 export async function startPeer(
   env: Record<string, string>,
   onProc: (proc: ChildProcess) => void,
@@ -30,7 +50,11 @@ export async function startPeer(
     cwd: serverDir,
     env: { ...process.env, ...env, PORT: "0" },
     stdio: ["ignore", "pipe", "pipe"],
+    // Windows 没有进程组这一说(detached 只影响控制台归属),那边靠调用方的 kill +
+    // 进程退出时系统回收;POSIX 上这一位才是能杀到内层的关键。
+    detached: !IS_WINDOWS,
   });
+  killPeerGroupOnExit(peer);
   onProc(peer);
   let buf = "";
   return new Promise<string>((resolvePort, reject) => {

@@ -120,18 +120,21 @@ function awaitsAcceptance(task: TaskListItem, allTasks: TaskListItem[]): boolean
 }
 
 /**
- * 年龄闸的豁免名单。判据与 web 的 keepVisible 同源：星标、置顶、等你验收、等你指挥的行
- * 永不因旧被藏 —— 用户手动按的记号、没盖的章、以及停着等你拍板的（提问 / 验证未通过）。
+ * 年龄闸的豁免名单。判据与 web 的 keepVisibleInPreview 同源：星标、置顶、等你验收、
+ * 失败、等你指挥的行永不因旧被藏 —— 用户手动按的记号、没盖的章、坏在半路的活、
+ * 以及停着等你拍板的（提问 / 验证未通过）。
  *
- * 最后一档是补上来的：一条卡着等你答复超过一天的任务原本会被折进「显示另外 N 条」，
- * 恰恰是最该一眼看见的那类行，路径反而更长。原则是「标出来的和留下来的必须是同一批」
- * —— 行内亮着信号色的等待态（见 lib/taskAttention），就不该因为旧被藏起来。
+ * 「等你指挥」这一档是补上来的：一条卡着等你答复超过一天的任务原本会被折进
+ * 「显示另外 N 条」，恰恰是最该一眼看见的那类行，路径反而更长。原则是「标出来的和
+ * 留下来的必须是同一批」——行内亮着信号色的等待态（见 lib/taskAttention），就不该
+ * 因为旧被藏起来。失败（status=failed）同理：越老越该被人看见（web 端同此）。
  * 注意它只管**藏不藏**：位置一概不特殊，排序仍旧只认更新时间倒序（见文件顶部）。
  */
 export function keepVisibleFor(allTasks: TaskListItem[]): (task: TaskListItem) => boolean {
   return (task) =>
     task.starredAt != null
     || task.pinnedAt != null
+    || task.status === "failed"
     || needsYourCommand(task, allTasks)
     || awaitsAcceptance(task, allTasks);
 }

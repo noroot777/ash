@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node ../scripts/check-conventions.mjs && npm run test:bulk-handoff && npm run test:bulk-handoff-dialog && npm run test:remote-task && npm run test:handoff-dialog-lifetime && npm run test:conversation && npm run test:conversation-notes-dom && npm run test:system-notices-dom && npm run test:task-read-state && npm run test:scheduled-message-tray && npm run test:withdraw-scheduled && npm run test:users-role && npm run test:project-member-role && npm run test:create-project-scope && npm run test:ui-polish && npm run test:select-all-on-focus && npm run test:composer-upload && npm run test:notes-upload && npm run test:duet-upload && npm run test:shortcuts && npm run test:auth-boot && tsc -b && vite build",
+    "build": "node ../scripts/check-conventions.mjs && npm run test:bulk-handoff && npm run test:bulk-handoff-dialog && npm run test:remote-task && npm run test:handoff-dialog-lifetime && npm run test:conversation && npm run test:conversation-notes-dom && npm run test:copy-feedback-dom && npm run test:system-notices-dom && npm run test:task-read-state && npm run test:scheduled-message-tray && npm run test:withdraw-scheduled && npm run test:users-role && npm run test:project-member-role && npm run test:create-project-scope && npm run test:ui-polish && npm run test:select-all-on-focus && npm run test:composer-upload && npm run test:notes-upload && npm run test:duet-upload && npm run test:shortcuts && npm run test:auth-boot && tsc -b && vite build",
     "test:image-preview": "node scripts/test-image-preview.mjs",
     "test:inspector-shortcuts": "node --experimental-strip-types scripts/test-inspector-shortcuts.mjs",
     "test:key-chord": "node --experimental-strip-types scripts/test-key-chord.mjs",
@@ -48,6 +48,7 @@
     "test:context-compact-quick": "node scripts/test-context-compact-quick.mjs",
     "test:client-id": "node --experimental-strip-types scripts/test-client-id.mjs",
     "test:conversation-notes-dom": "node scripts/test-conversation-notes-dom.mjs",
+    "test:copy-feedback-dom": "node scripts/test-copy-feedback-dom.mjs",
     "test:system-notices-dom": "node scripts/test-system-notices-dom.mjs",
     "test:reviewer-turn": "node --experimental-strip-types scripts/test-reviewer-turn.mjs && tsx scripts/test-review-presentation.tsx",
     "test:reviewer-turn-dom": "node scripts/test-reviewer-turn-dom.mjs",

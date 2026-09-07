@@ -54,6 +54,10 @@ const BUCKET_FILTERS = SPREAD_DOT_FILTERS.filter((item) => item.key !== "starred
 const tasks = [
   task("todo-question", { status: "running", question: "选哪个？", starredAt: 1754900000000 }),
   task("todo-failed", { status: "failed" }),
+  // 失败的另外两种形状：验证没过（status 还是 done，摔在 stage 上）、以及盖过章之后重跑
+  // 又挂了的（记号是 accepted，事实是坏的）。三种都得算「还没落地的活」。
+  task("todo-verify-failed", { status: "done", stage: "verify_failed" }),
+  task("todo-accepted-failed", { status: "failed", stage: "accepted" }),
   task("todo-await", { status: "done", stage: "awaiting_acceptance" }),
   // 干完了没盖章的两种年龄。stage 是 null 才是常态 —— 自由工作流只调 complete_task。
   task("todo-fresh-done", { status: "done", updatedAt: FRESH }),
@@ -75,9 +79,9 @@ const tasks = [
 ];
 
 const counts = spreadCounts(tasks, P1);
-assert.equal(counts.all, 11);
+assert.equal(counts.all, 13);
 assert.equal(counts.starred, 2);
-assert.equal(counts.todo, 5);
+assert.equal(counts.todo, 7);
 assert.equal(counts.run, 2);
 assert.equal(counts.wait, 2);
 assert.equal(counts.done, 1);
@@ -95,6 +99,13 @@ assert.ok(!isTaskAwaitingAcceptance(task("x", { status: "done", stage: "accepted
 assert.ok(!isTaskAwaitingAcceptance(task("x", { status: "done", stage: "merged" })));
 assert.ok(!isTaskAwaitingAcceptance(task("x", { status: "canceled", updatedAt: FRESH })), "取消掉的不是等我盖章");
 assert.ok(!isTaskAwaitingAcceptance(task("x", { status: "running" })), "还在跑的不是等我盖章");
+
+// 摔了的三种形状都要进任务模式。第三条（盖过章又重跑挂了）顺带钉住判据的**顺序**：
+// failed 必须压在 isAcceptedStage 上面，否则那颗旧图章会把一条现在坏着的任务挡在外面。
+assert.ok(inTaskMode(task("x", { status: "failed" })), "跑挂了的要进任务模式");
+assert.ok(inTaskMode(task("x", { status: "done", stage: "verify_failed" })), "验证没过的要进任务模式");
+assert.ok(inTaskMode(task("x", { status: "failed", stage: "accepted" })), "盖过章又摔了的照样进");
+assert.equal(spreadBucket(task("x", { status: "failed", stage: "accepted" })), "todo", "它归「需要你处理」，不是「验收完成」");
 
 // 五个桶互斥且铺满：加起来必须正好是「全部」，否则筛选条上的数字自己就打架了。
 // 星标不进这笔账 —— 它跟桶正交，进来就会重复计。
@@ -148,24 +159,27 @@ const empty = spreadCounts(tasks, P3);
 assert.equal(empty.all, 0);
 assert.equal(SPREAD_DOT_FILTERS.reduce((sum, item) => sum + empty[item.key], 0), 0);
 
-// 「任务模式」作用域：跨项目，但只收三类顶层行 —— 在跑、等我说句话（提问 / 停在检查点）、
-// 等我盖章（干完了没点头，不看年龄）。它回答的是「此刻还没落地的活有哪些」，
-// 而不是「所有项目的任务摊开」。执行者与归档行照旧排除。
+// 「任务模式」作用域：跨项目，但只收四类顶层行 —— 在跑、摔了（跑挂 / 验证没过）、
+// 等我说句话（提问 / 停在检查点）、等我盖章（干完了没点头，不看年龄）。它回答的是
+// 「此刻还没落地的活有哪些」，而不是「所有项目的任务摊开」。执行者与归档行照旧排除。
 const taskMode = spreadCounts(tasks, TASKS);
 const taskModeRows = spreadVisibleTasks(tasks, TASKS, "all").map((row) => row.id);
 assert.deepEqual(taskModeRows.sort(), [
   "other-project",   // 别的项目，在跑 —— 单项目口径下看不见，任务模式里要看见
   "run-accepted-review", // awaiting_review：机器确实在动
   "run-running",
+  "todo-accepted-failed", // 盖过章之后重跑又挂了：事实高于记号，坏着就是没落地
   "todo-await",      // stage=awaiting_acceptance，明着停在验收关口上
+  "todo-failed",     // 跑挂了 —— 活停在半路，而且下一步只能是人来看
   "todo-fresh-done", // 刚干完、没盖章 —— 这才是「完成待验收」的常态形状（stage 是 null）
   "todo-stale-done", // 两个月前干完、也没盖章 —— 同样没落地，年龄不是判据
   "todo-question",   // status=running，在跑（被问住也还挂在 running 上）
+  "todo-verify-failed", // 验证没过，摔在 stage 上而不是 status 上，同样要看得见
   "wait-paused",     // 停在检查点，等我说句话才走得下去
   "handed-out",      // 接力出去了，但它在持有机上跑着 —— 一样是「还没落地的活」
 ].sort());
-// 排着的、失败的、已验收的、归档的、执行者、接力走了的、取消掉的，一个都不进。
-for (const id of ["wait-backlog", "todo-failed", "accepted-merged", "archived", "worker", "done-canceled"]) {
+// 排着的、已验收的、归档的、执行者、取消掉的，一个都不进。
+for (const id of ["wait-backlog", "accepted-merged", "archived", "worker", "done-canceled"]) {
   assert.ok(!taskModeRows.includes(id), `任务模式不该收 ${id}`);
 }
 assert.equal(taskMode.all, taskModeRows.length);
@@ -202,6 +216,14 @@ const teamTasks = [
   task("team-accepted-w", { status: "done", parentId: "team-accepted" }),
   task("team-asking", { mode: "team", status: "idle" }),
   task("team-asking-w", { status: "paused", question: "选哪个？", parentId: "team-asking" }),
+  // 调度台自己摔了：它落在 teamNeverStarted 上（status 既不是 running 也不是 idle），
+  // 「收工没盖章」那条接不住它 —— 只能靠 failed 这条判据放行。
+  task("team-failed", { mode: "team", status: "failed" }),
+  task("team-failed-w", { status: "done", parentId: "team-failed" }),
+  // 执行者摔了、调度台还闲着：failed 的执行者不算「活的」，整队因此被判成收工，
+  // 从「等我盖章」那条进来。这两条路各走各的，别指望其中一条兜住另一条。
+  task("team-worker-failed", { mode: "team", status: "idle" }),
+  task("team-worker-failed-w", { status: "failed", parentId: "team-worker-failed" }),
   task("team-never", { mode: "team", status: "backlog" }),
 ];
 const teamRows = scopeTasks(teamTasks, TASKS).map((row) => row.id);
@@ -209,6 +231,8 @@ assert.ok(teamRows.includes("team-live"), "执行者在跑 = 团队在跑");
 assert.ok(teamRows.includes("team-asking"), "执行者卡在提问上 = 这个团队等我说句话");
 assert.ok(teamRows.includes("team-fresh"), "刚收工没盖章的团队 = 等我盖章");
 assert.ok(teamRows.includes("team-settled"), "收工很久也没盖章的团队一样 = 等我盖章");
+assert.ok(teamRows.includes("team-failed"), "调度台自己摔了的团队要看得见");
+assert.ok(teamRows.includes("team-worker-failed"), "执行者摔了的团队也没落地");
 assert.ok(!teamRows.includes("team-accepted"), "盖过章的团队不再出现");
 assert.ok(!teamRows.includes("team-never"), "从没开过台的团队不算还没落地的活");
 // 留下的团队要把自己的执行者一起带上，否则团队行的展开箭头是灰的、执行者摘要空一片。
@@ -216,6 +240,8 @@ assert.ok(teamRows.includes("team-live-w"));
 assert.ok(teamRows.includes("team-asking-w"));
 assert.ok(teamRows.includes("team-fresh-w"));
 assert.ok(teamRows.includes("team-settled-w"));
+assert.ok(teamRows.includes("team-failed-w"));
+assert.ok(teamRows.includes("team-worker-failed-w"));
 assert.ok(!teamRows.includes("team-accepted-w"));
 
 // **入选判据和状态桶必须是同一套。** 团队调度台自己常年停在 idle，只读它那一行的话
@@ -228,11 +254,13 @@ assert.equal(bucketOf("team-settled"), "todo", "收了工没盖章 = 需要你�
 assert.equal(bucketOf("team-fresh"), "todo", "刚收工没盖章同理，年龄不是判据");
 assert.equal(bucketOf("team-accepted"), "accepted", "盖过章的团队仍归「验收完成」，别被 done 抢走");
 assert.equal(bucketOf("team-asking"), "todo", "执行者的问题最后要你来答 = 需要你处理");
+assert.equal(bucketOf("team-failed"), "todo", "摔了的调度台 = 需要你处理");
+assert.equal(bucketOf("team-worker-failed"), "todo", "执行者摔了、整队收工没盖章 = 需要你处理");
 assert.equal(bucketOf("team-never"), "wait", "从没开过台的团队才是真的「排着」");
 
 const teamCounts = spreadCounts(teamTasks, TASKS);
 assert.equal(teamCounts.run, 1);
-assert.equal(teamCounts.todo, 3, "卡在提问上的 + 两个收了工等盖章的");
+assert.equal(teamCounts.todo, 5, "卡在提问上的 + 两个收了工等盖章的 + 两个摔了的");
 assert.equal(teamCounts.done, 0, "干完的团队要么等我盖章、要么已验收，落不到「已收尾」");
 assert.equal(teamCounts.accepted, 0);
 

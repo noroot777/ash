@@ -22,8 +22,7 @@ import {
   type SpreadFilter,
   type WorkerIndex,
 } from "./useSidebarSpread.ts";
-import { needsYourCommand } from "../lib/taskAttention.ts";
-import { buildTaskTree, groupTasksByProject, orderedTopLevelTasks, previewTasksByAge } from "./taskTreeModel.ts";
+import { buildTaskTree, groupTasksByProject, keepVisibleInPreview, orderedTopLevelTasks, previewTasksByAge } from "./taskTreeModel.ts";
 import { OutboundStatusBar, type OutboundBar } from "./OutboundStatusBar.tsx";
 import { HandoffMachines } from "./HandoffMachines.tsx";
 
@@ -88,15 +87,11 @@ function ScopedTaskTree({
     [includeElsewhere, tasks],
   );
   const { collapsed, toggle: toggleCollapsed } = useCollapsedSections();
-  // 星标、「等你验收」和「等你指挥」的行永不因为旧被藏起来：一个是用户手动按的记号，
-  // 一个是没盖的章，一个是停在那儿等你拍板的（提问 / 验证未通过）。判据跟行首那颗点
-  // 同源，标出来的和留下来的必须是同一批 —— 否则一条卡着等答复超过一天的任务会被折进
-  // 「显示另外 N 条」，恰好是最该一眼看见的那类行，路径反而更长。
+  // 年龄闸的豁免名单（星标 / 置顶 / 没盖的章 / 摔了的 / 等你指挥的），判据本体在
+  // taskTreeModel 的 keepVisibleInPreview —— 跟 previewTasksByAge 挨着，测试也钉在那儿。
+  // 团队的问题写在执行者身上，所以要把 workers 一起递进去。
   const keepVisible = useCallback(
-    (task: TaskListItem) => task.starredAt != null
-      || task.pinnedAt != null
-      || indicatorForTask(task) === "unaccepted"
-      || needsYourCommand(task, workersFrom(workerIndex, task.id)),
+    (task: TaskListItem) => keepVisibleInPreview(task, indicatorForTask(task), workersFrom(workerIndex, task.id)),
     [indicatorForTask, workerIndex],
   );
   const keptBySection = useMemo(

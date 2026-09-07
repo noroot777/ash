@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { Copy, File, ShieldCheck } from "@phosphor-icons/react";
+import { File, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
 import { runActivityExecutor, runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
@@ -7,6 +7,7 @@ import type { ConversationItem } from "./conversationModel.ts";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { AgentRunMeta } from "../components/AgentRunMeta.tsx";
 import { AgentTurnBody } from "../components/AgentTurnBody.tsx";
+import { CopyButton } from "../components/CopyButton.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { RunActivity } from "../components/RunActivity.tsx";
@@ -31,10 +32,6 @@ import {
 } from "./systemNoticeModel.ts";
 import { type TurnRetryTarget, turnRetryTarget } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
-
-function copyText(text: string) {
-  void navigator.clipboard.writeText(text);
-}
 
 // 审查者的身份标：这一回合不是在做需求，是在验收刚才的产物。就地验证跑在被验任务
 // 自己的会话里（常常还是同一个执行器），不标出来的话它跟上一条实现回合长得一模一样。
@@ -72,10 +69,14 @@ function AgentMessage({
   const headless = !showIdentity && !showBadge && !showTime && !showDuration;
   const footerActions = headless ? (
     <>
-      <button className="task-message-copy-action" type="button" onClick={() => copyText(item.markdown)} aria-label="复制这条回复">
-        <Copy size={12} aria-hidden="true" />
-        复制这条回复
-      </button>
+      <CopyButton
+        className="task-message-copy-action"
+        value={item.markdown}
+        ariaLabel="复制这条回复"
+        label="复制这条回复"
+        icon
+        iconSize={12}
+      />
       {retry}
     </>
   ) : retry;
@@ -105,9 +106,7 @@ function AgentMessage({
                 {item.continuation || laneRole ? "" : "· "}⏱ {duration} 用时
               </small>
             )}
-            <button type="button" onClick={() => copyText(item.markdown)} aria-label="复制这条回复">
-              <Copy size={13} aria-hidden="true" />
-            </button>
+            <CopyButton value={item.markdown} ariaLabel="复制这条回复" icon />
           </header>
         )}
         <AgentTurnBody segments={item.segments} running={!item.endedAt} />
@@ -148,9 +147,7 @@ function UserMessage({
           <b>{bySystem ? "系统" : "你"}</b>
           {item.at && <time>{formatInstant(item.at)}</time>}
           {parsed.body && (
-            <button type="button" onClick={() => copyText(parsed.body)} aria-label="复制这条回复">
-              <Copy size={13} aria-hidden="true" />
-            </button>
+            <CopyButton value={parsed.body} ariaLabel="复制这条回复" icon />
           )}
         </header>
         {parsed.body && (bySystem ? <MarkdownBody text={parsed.body} /> : <p>{parsed.body}</p>)}
