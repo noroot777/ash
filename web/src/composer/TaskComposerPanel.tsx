@@ -47,6 +47,7 @@ import {
   setComposerExecutorProfile,
   type ComposerExecutorRole,
 } from "./executorOverrides.ts";
+import { useComposerRunSummary } from "./composerRunSummary.ts";
 export type ComposerDraft = { body: string; attachments: string[]; noteIds?: string[] };
 
 export function TaskComposerPanel({
@@ -213,6 +214,7 @@ export function TaskComposerPanel({
       model: executors.single.model || null,
       reasoningEffort: executors.single.effort || null,
     };
+  const singleRunSummary = useComposerRunSummary(singleRun, profiles);
   const leadExecutor = parseExecutorValue(
     executors.lead.profile,
     profiles,
@@ -533,7 +535,7 @@ export function TaskComposerPanel({
       </header>
       <div className="composer-scroll">
         <div className="composer-inner">
-          <header className="studio-heading"><span>新建任务</span><h1>从一个目标开始。</h1><p>把想完成的事写下来，执行方式在下方随时调整。</p></header>
+          <header className="studio-heading"><h1>从一个目标开始。</h1><p>把想完成的事写下来，执行方式在下方随时调整。</p></header>
           <div className="studio-card">
           <div className="composer-tabs" role="tablist" aria-label="任务模式">
             {MODES.map((item) => {
@@ -583,7 +585,7 @@ export function TaskComposerPanel({
           )}
           <ComposerFields
             mode={mode}
-            singleRunLabel={(profiles.find((profile) => profile.id === singleRun.executorId)?.name || singleRun.agentType) + (singleRun.model ? " · " + singleRun.model : "")}
+            singleRunSummary={singleRunSummary}
             profiles={profiles}
             workerTypes={workerTypes}
             leadTypes={leadTypes}

@@ -15,10 +15,11 @@ import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
 import type { ComposerExecutorConfigs, ComposerExecutorRole } from "./executorOverrides.ts";
 import { ExecutorPickerField } from "./ExecutorPickerField.tsx";
 import { PresetBar } from "./PresetBar.tsx";
+import type { ComposerRunSummary } from "./composerRunSummary.ts";
 
 export function ComposerFields({
   mode,
-  singleRunLabel,
+  singleRunSummary,
   profiles,
   workerTypes,
   leadTypes,
@@ -55,7 +56,7 @@ export function ComposerFields({
   onWorkflowModeChange,
 }: {
   mode: TaskMode;
-  singleRunLabel: string;
+  singleRunSummary: ComposerRunSummary;
   profiles: AgentExecutorProfile[];
   workerTypes: AgentType[];
   leadTypes: AgentType[];
@@ -120,8 +121,9 @@ export function ComposerFields({
       <ComposerExecution key={mode} sections={[
         {
           id: "people", label: "谁来做",
-          value: single ? singleRunLabel : duet ? nameFor("voiceA") + " × " + nameFor("voiceB") : nameFor("lead") + " 调度",
-          detail: single ? preset ? "按起手式执行配置" : "智能体 · 模型 · 智能水平"
+          value: single ? singleRunSummary.executor : duet ? nameFor("voiceA") + " × " + nameFor("voiceB") : nameFor("lead") + " 调度",
+          detailClassName: single ? "studio-run-summary" : undefined,
+          detail: single ? `${singleRunSummary.provider} · ${singleRunSummary.model} · ${singleRunSummary.effort}`
             : duet ? "两种视角，共同结论" : nameFor("worker") + " 执行 · " + (review ? nameFor("reviewer") + " 审查" : "不自动审查"),
           content: <>
             {mode === "team" && <PresetBar currentConfig={currentTeamConfig} profiles={profiles} onApply={onApplyTeamPreset} notify={notify} />}

@@ -1,8 +1,7 @@
 .task-composer-panel.is-studio { grid-template-rows:48px minmax(0,1fr); }
 .is-studio .composer-inner { width:min(880px,calc(100% - 40px)); padding:36px 0 28px; }
 .studio-heading { margin:0 2px 22px; }
-.studio-heading > span { color:var(--accent); font-size:10px; font-weight:600; }
-.studio-heading h1 { margin:6px 0 8px; font-size:26px; font-weight:600; letter-spacing:-.7px; line-height:1.35; }
+.studio-heading h1 { margin:0 0 8px; font-size:26px; font-weight:600; letter-spacing:-.7px; line-height:1.35; }
 .studio-heading p { margin:0; color:var(--faint); font-size:11px; }
 .studio-card { border:1px solid var(--line2); border-radius:13px; background:var(--panel); box-shadow:0 4px 16px rgb(25 27 50 / 3%),var(--surface-shadow); }
 .is-studio .composer-tabs { gap:2px; border:0; padding:16px 20px 0; }
@@ -34,6 +33,7 @@
 .studio-step-copy small { color:var(--faint); font-size:9px; }
 .studio-step-copy b { font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .studio-step-copy > span { color:var(--faint); font-size:9px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.studio-step-copy > .studio-run-summary { line-height:1.35; overflow:visible; text-overflow:clip; white-space:normal; }
 .studio-caret { flex:0 0 auto; margin-left:auto; color:var(--faint); }
 .studio-step[aria-expanded="true"] .studio-caret { transform:rotate(180deg); }
 .studio-settings { margin:12px 4px 0; border:1px solid var(--line); border-radius:9px; background:var(--panel); padding:14px; }

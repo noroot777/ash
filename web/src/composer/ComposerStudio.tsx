@@ -8,7 +8,8 @@ export type StudioSection = {
   id: StudioPanel;
   label: string;
   value: string;
-  detail: string;
+  detail: ReactNode;
+  detailClassName?: string;
   content: ReactNode;
   disabled?: boolean;
 };
@@ -37,7 +38,7 @@ export function ComposerExecution({ sections }: { sections: StudioSection[] }) {
                 aria-controls={`${id}-${section.id}`} disabled={section.disabled}
                 onClick={(event) => { triggerRef.current = event.currentTarget; setOpen(active?.id === section.id ? null : section.id); }}>
                 <span className={`studio-step-icon is-${section.id}`}><Icon size={16} /></span>
-                <span className="studio-step-copy"><small>{section.label}</small><b>{section.value}</b><span>{section.detail}</span></span>
+                <span className="studio-step-copy"><small>{section.label}</small><b>{section.value}</b><span className={section.detailClassName}>{section.detail}</span></span>
                 {!section.disabled && <CaretDown size={10} className="studio-caret" />}
               </button>
             </Fragment>

@@ -21,7 +21,8 @@ try {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     let data = [];
-    if (path === "/api/agents") data = [{ id: "exec-claude", name: "claude@local", type: "claude", isDefault: true }];
+    if (path === "/api/agents") data = [{ id: "exec-claude", name: "claude@cpa", type: "claude", model: "claude-opus-4.6", reasoningEffort: "high", providerId: "provider-cpa", isDefault: true }];
+    if (path === "/api/llm-providers") data = [{ id: "provider-cpa", name: "CPA 中转", protocol: "anthropic", baseUrl: "https://example.invalid", model: "claude-opus-4.6", protocolConversionEnabled: false, modelListMode: "pinned", pinnedModels: ["claude-opus-4.6"], context1mModels: [], hasKey: true, createdAt: "2026-09-07T00:00:00.000Z" }];
     if (path === "/api/settings") data = { worktreeDefault: false, defaultWorkflowId: null };
     if (path === "/api/workflows") data = [{ id: "standard", name: "验证起手式", builtin: true, disabled: false,
       def: { workspace: "isolated", steps: [{ id: "run", kind: "run", p: { executorId: "exec-claude", model: "test-model", reasoningEffort: null, instruction: null }, fail: null }] } }];
@@ -36,13 +37,18 @@ try {
   await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/scripts/fixtures/composer-upload.html?repo`);
   const objective = page.getByRole("textbox", { name: "任务目标" });
   await objective.fill("保留我写好的目标");
-  await page.getByRole("button", { name: /谁来做.*claude@local/ }).waitFor();
+  await page.getByRole("button", { name: /谁来做.*claude@cpa/ }).waitFor();
   await page.waitForFunction(() => !document.querySelector(".composer-launch-control .ui-button")?.disabled);
   assert.equal(await page.locator(".studio-settings:visible").count(), 0);
-  await page.screenshot({ path: `${output}/composer-studio-desktop.png`, fullPage: true });
   const people = page.getByRole("button", { name: /^谁来做/ });
   const space = page.getByRole("button", { name: /^在哪里做/ });
   const flow = page.getByRole("button", { name: /^如何交付/ });
+  await page.getByRole("button", { name: /谁来做.*CPA 中转.*claude-opus-4\.6.*high/ }).waitFor();
+  await page.screenshot({ path: `${output}/composer-studio-desktop.png`, fullPage: true });
+  assert.equal(await page.locator(".studio-heading > span").count(), 0);
+  assert.match(await people.innerText(), /CPA 中转/);
+  assert.match(await people.innerText(), /claude-opus-4\.6/);
+  assert.match(await people.innerText(), /high/);
   await people.click();
   assert.equal(await page.locator(".studio-settings:visible .run-target-picker").count(), 1);
   await page.getByRole("button", { name: /^智能体：/ }).click();
