@@ -6,9 +6,9 @@ import { visibleOnThisMachine } from "./taskTreeModel.ts";
 // 侧栏任务列表的**作用域**：只看当前项目一家，还是进「任务模式」。
 //
 // 任务模式不是「把所有项目摊开」—— 那样只是把同一堆行变多，看的人还得自己挑。它回答的
-// 是另一个问题：**此刻全公司还没落地的活有哪些**，所以只留三类行 —— 机器在动的（在跑）、
-// 等我说句话的（提问 / 停在检查点）和停在验收关口上的（待验收）。判据在
-// lib/taskAttention 的 inTaskMode。
+// 是另一个问题：**此刻全公司还没落地的活有哪些**，所以只留四类行 —— 机器在动的（在跑）、
+// 摔了的（跑挂 / 验证没过）、等我说句话的（提问 / 停在检查点）和停在验收关口上的（待验收）。
+// 判据在 lib/taskAttention 的 inTaskMode。
 //
 // 判据只有 scopeTasks 这一处 —— 计数、筛选、J/K 遍历、铺开取数全从它来，分头写迟早对不上。
 //
@@ -26,7 +26,7 @@ export const SCOPE_STORAGE_KEY = "ash:task-scope";
 // 注意别跟 Task["mode"]（单飞 / 团队 / 讨论）搞混：那个字段内部也叫 mode，但从不对用户
 // 露出「模式」两个字（它显示成「任务 / 团队 / 讨论」）。这里的「任务模式」说的是侧栏作用域。
 export const TASK_MODE_LABEL = "任务模式";
-export const TASK_MODE_SUMMARY = "所有项目里在跑、等你答复和待验收的任务";
+export const TASK_MODE_SUMMARY = "所有项目里在跑、失败、等你答复和待验收的任务";
 
 // G T 在「任务模式」和「当前项目」之间来回切（go → tasks）。用两键连打而不是单键，是因为
 // 这一档要在**任何界面**上都按得到（Inspector 的 `I …` 已经占了单键 i 的那种代价），

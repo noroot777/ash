@@ -1,16 +1,13 @@
-import { useCallback, useEffect, useMemo, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
-  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
   Text,
   TextInput,
   View,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Stack, useRouter } from "expo-router";
@@ -29,6 +26,13 @@ import {
 } from "@ash/shared/team";
 import { api, type TeamCuaStatus } from "@/lib/api";
 import { refreshAll } from "@/lib/data";
+import {
+  keyboardAvoidingBehavior,
+  useAndroidKeyboardOverlap,
+  useKeyboardOffset,
+  useKeyboardVisible,
+} from "@/lib/keyboard";
+import type { StickyBottom } from "@/lib/scroll";
 import type { LogLine } from "@/lib/log";
 import { useStore } from "@/lib/store";
 import { fonts, radius, useTheme } from "@/lib/theme";
@@ -46,14 +50,13 @@ export function TeamTaskDetail({
   input,
   refreshing,
   scrollRef,
+  sticky,
   onInputChange,
   onSend,
   onRefresh,
   onArchive,
   onUnarchive,
   onDelete,
-  onScroll,
-  onContentSizeChange,
 }: {
   task: TaskListItem;
   // 正文由任务页按 id 单取后传进来（列表接口不带它）；undefined = 还没读到。
@@ -63,17 +66,18 @@ export function TeamTaskDetail({
   input: string;
   refreshing: boolean;
   scrollRef: RefObject<ScrollView | null>;
+  /** 粘底与「把某块拉进视野」，与单飞详情共用一套（见 lib/scroll.ts）。 */
+  sticky: StickyBottom;
   onInputChange: (text: string) => void;
   onSend: () => void | Promise<void>;
   onRefresh: () => void | Promise<void>;
   onArchive: () => void;
   onUnarchive: () => void;
   onDelete: () => void;
-  onScroll: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
-  onContentSizeChange: () => void;
 }) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const keyboardOffset = useKeyboardOffset();
   const theme = useTheme();
   const allTasks = useStore((state) => state.tasks);
   const allGroups = useStore((state) => state.groups);
@@ -99,6 +103,10 @@ export function TeamTaskDetail({
     [workers],
   );
   const openWorker = useCallback((workerId: string) => router.push(`/task/${workerId}`), [router]);
+  // 调度者提的问题夹在概览和会话之间，点进它的输入框时键盘会盖住下半张卡。位置当场量，
+  // 不缓存（和单飞详情同一套，见 lib/scroll.ts 的 revealNode）。
+  const questionRef = useRef<View>(null);
+  const revealQuestion = useCallback(() => sticky.revealNode(questionRef.current), [sticky]);
   const batchInsertions = useMemo<ConversationInsertion[]>(
     () => batches.map((batch, index) => ({
       key: batch.key,
@@ -237,8 +245,8 @@ export function TeamTaskDetail({
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: theme.bg }}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-      keyboardVerticalOffset={Platform.OS === "ios" ? 88 : 0}
+      behavior={keyboardAvoidingBehavior}
+      keyboardVerticalOffset={keyboardOffset}
     >
       <Stack.Screen
         options={{
@@ -262,13 +270,18 @@ export function TeamTaskDetail({
         }}
       />
 
+      {/* 量可视区用的一层，见 lib/scroll.ts。 */}
+      <View ref={sticky.viewportRef} style={{ flex: 1 }}>
       <ScrollView
         ref={scrollRef}
         style={{ flex: 1 }}
         contentContainerStyle={{ padding: 16, gap: 14, paddingBottom: 28 }}
-        onScroll={onScroll}
+        onScroll={sticky.onScroll}
         scrollEventThrottle={64}
-        onContentSizeChange={onContentSizeChange}
+        onContentSizeChange={sticky.onContentSizeChange}
+        onLayout={sticky.onLayout}
+        keyboardDismissMode="interactive"
+        keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.muted} />}
       >
         <TeamOverview
@@ -301,7 +314,9 @@ export function TeamTaskDetail({
           </View>
         ) : null}
 
-        {task.question ? <QuestionCard task={task} /> : null}
+        {task.question ? (
+          <QuestionCard task={task} cardRef={questionRef} onFocusInput={revealQuestion} />
+        ) : null}
 
         <View style={{ gap: 9 }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -325,6 +340,7 @@ export function TeamTaskDetail({
           ) : null}
         </View>
       </ScrollView>
+      </View>
 
       <TeamReplyBox
         input={input}
@@ -360,6 +376,11 @@ function TeamReplyBox({
   onSend: () => void | Promise<void>;
 }) {
   const theme = useTheme();
+  const boxRef = useRef<View>(null);
+  const keyboardOverlap = useAndroidKeyboardOverlap(boxRef);
+  // 键盘顶上来之后手势条那一段已被键盘盖住，再留 insets.bottom 只是输入框和键盘之间
+  // 一条用不上的空隙。
+  const keyboardVisible = useKeyboardVisible();
   if (frozen) {
     return (
       <View
@@ -383,10 +404,12 @@ function TeamReplyBox({
   const enabled = !!input.trim();
   return (
     <View
+      ref={boxRef}
       style={{
         paddingHorizontal: 12,
         paddingTop: 8,
-        paddingBottom: bottomInset + 8,
+        paddingBottom: (keyboardVisible ? 0 : bottomInset) + 8,
+        marginBottom: keyboardOverlap,
         borderTopWidth: 1,
         borderTopColor: theme.line,
         backgroundColor: theme.panel,
@@ -402,6 +425,7 @@ function TeamReplyBox({
           multiline
           style={{
             flex: 1,
+            minHeight: 42,
             maxHeight: 120,
             color: theme.ink,
             backgroundColor: theme.bg,
@@ -421,10 +445,10 @@ function TeamReplyBox({
           onPress={() => void onSend()}
           style={{
             minWidth: 58,
+            height: 42,
             alignItems: "center",
             justifyContent: "center",
             paddingHorizontal: 14,
-            paddingVertical: 11,
             borderRadius: radius.lg,
             backgroundColor: theme.accent,
             opacity: enabled ? 1 : 0.4,

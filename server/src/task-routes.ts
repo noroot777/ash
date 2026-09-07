@@ -16,6 +16,7 @@ import { setTaskStatus } from "./status.js";
 import { taskBusyRejection } from "./task-busy.js";
 import { createTasks, enrichTasks, publishTaskUpdated, toTaskListItem } from "./task-store.js";
 import { bindUploadsToTask } from "./uploads.js";
+import { duetTopicText } from "./duet/user-message.js";
 import { attachmentsPrompt, id, now, taskBody } from "./util.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { canSeeProject, groupInProject, projectOfQueue, taskInProject, visibleProjectIds, visibleTaskIds } from "./auth/visibility.js";
@@ -60,12 +61,14 @@ export function mountTaskRoutes(api: Hono): void {
   // duet 的两位讨论者各自挑执行器(voiceA/BExecutorId),和顶层 executorId、team 三角色
   // 同属个人面资源 —— 但这份配置是整块 JSON.stringify 落库的,不逐个过 scope 就等于给
   // 外人的 id 留了一条缝(第 3 轮审查 P0:存进去之后运行侧真的会解析到别人的 profile)。
+  // `?? null`:duet 配置是整块落库的一份完整快照,没挑执行器就是 null(跟随类型默认),
+  // 这里没有「继承某个兜底」的概念,所以不必保留 undefined。
   const scopedDuet = (scope: ExecutorScope, duet: Task["duet"]): string | null =>
     duet
       ? JSON.stringify({
           ...duet,
-          voiceAExecutorId: scope.keep(duet.voiceAExecutorId),
-          voiceBExecutorId: scope.keep(duet.voiceBExecutorId),
+          voiceAExecutorId: scope.keep(duet.voiceAExecutorId) ?? null,
+          voiceBExecutorId: scope.keep(duet.voiceBExecutorId) ?? null,
         })
       : null;
 
@@ -214,7 +217,8 @@ api.post("/tasks", async (c) => {
   // 执行器降级,与悬空 id 同一条口径),否则外人的 id 会连着它的名字一起落进任务
   // (第 2 轮审查 P1)。自用模式下 scope 是恒等的。
   const scope = await executorScopeForOwner(taskOwner);
-  const executorId = scope.keep(b.executorId);
+  // `?? null`:建任务没有「兜底执行器」可继承,没给就是没有,直接落库。
+  const executorId = scope.keep(b.executorId) ?? null;
   const executorType = agentTypeForExecutor(scope, executorId);
   if (executorType && b.agentType && b.agentType !== executorType) {
     return c.json({ error: `executorId 属于 ${executorType},但 agentType 是 ${b.agentType}`, executorId: b.executorId }, 400);
@@ -226,9 +230,10 @@ api.post("/tasks", async (c) => {
   if (rawTeam?.reviewerAgentType !== undefined && !AGENT_TYPES.includes(rawTeam.reviewerAgentType)) {
     return c.json({ error: "team.reviewerAgentType 不是有效 agent 类型" }, 400);
   }
-  const teamLeadExecutorId = rawTeam ? scope.keep(rawTeam.leadExecutorId) : null;
-  const teamWorkerExecutorId = rawTeam ? scope.keep(rawTeam.workerExecutorId) : null;
-  const teamReviewerExecutorId = rawTeam ? scope.keep(rawTeam.reviewerExecutorId) : null;
+  // 同上:teamConfig 是整块落库的完整配置,三角色没挑就是 null。
+  const teamLeadExecutorId = rawTeam ? scope.keep(rawTeam.leadExecutorId) ?? null : null;
+  const teamWorkerExecutorId = rawTeam ? scope.keep(rawTeam.workerExecutorId) ?? null : null;
+  const teamReviewerExecutorId = rawTeam ? scope.keep(rawTeam.reviewerExecutorId) ?? null : null;
   const teamLeadType = agentTypeForExecutor(scope, teamLeadExecutorId);
   const teamWorkerType = agentTypeForExecutor(scope, teamWorkerExecutorId);
   const teamReviewerType = agentTypeForExecutor(scope, teamReviewerExecutorId);
@@ -258,13 +263,19 @@ api.post("/tasks", async (c) => {
         reviewerReasoningEffort: rawTeam.reviewerReasoningEffort || null,
       }
     : null;
+  // 讨论的正文与议题必须**逐字同一份**:详情页顶部的「完整议题」读 body,两位讨论者的
+  // 开场 prompt 读 duet.topic(loadBase 只认它)。走通用那条的话,只贴图不打字建的讨论
+  // body 里只剩一段附件块、没有兜底句 —— 详情页解析出来的正文是空的,议题那一行就只能
+  // 显示别的东西(第 1 轮审查 P1)。
+  const rawBody = taskBody(b.body, taskId);
+  const isDuet = (b.mode ?? "single") === "duet";
   const row = {
     id: taskId,
     projectId: b.projectId,
     groupId: b.groupId ?? null,
     parentId: b.parentId ?? null,
     title: b.title,
-    body: taskBody(b.body, taskId) + attachmentsPrompt(b.attachments),
+    body: isDuet ? duetTopicText(rawBody, b.attachments) : rawBody + attachmentsPrompt(b.attachments),
     mode: b.mode ?? "single",
     status: (b.status && isUserSettableStatus(b.status) ? b.status : "backlog") as TaskStatus,
     labels: JSON.stringify(b.labels ?? []),
@@ -277,7 +288,11 @@ api.post("/tasks", async (c) => {
     model: b.model || null,
     reasoningEffort: b.reasoningEffort || null,
     autoTitle: b.autoTitle ?? false,
-    duet: scopedDuet(scope, b.duet),
+    // 议题**自己也带一份**附件块（为什么：见 duet/user-message.ts `duetTopicText`）。
+    duet: scopedDuet(scope, b.duet && {
+      ...b.duet,
+      topic: duetTopicText(b.duet.topic, b.attachments),
+    }),
     // mode:"team" 的调度者/默认执行者类型(跟 duet 对称)。别漏 —— 漏了就静默退回
     // TEAM_DEFAULTS,用户在启动器上挑的那两个旋钮全白挑。
     team: teamConfig ? JSON.stringify(teamConfig) : null,

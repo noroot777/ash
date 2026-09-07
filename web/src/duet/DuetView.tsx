@@ -134,7 +134,12 @@ export function DuetView({
   notify: (message: string) => void;
 }) {
   const config = normalizeDuetConfig(task.duet);
+  // 议题里的附件块要还原成缩略图，不能把「[用户附带的文件…] - /abs/path」念给用户看。
+  // 解析不出正文时**只回退到标题**：再退回 config.topic 就等于把那段原文原样贴出来
+  // （只贴图不打字建的讨论正是这种，第 1 轮审查 P1）。body 与 topic 由服务端保证是
+  // 同一份成稿（server 的 duetTopicText），所以这里退到哪一个都不会丢正文。
   const topic = parseAttachmentText(task.body || config.topic);
+  const topicText = topic.body || task.title;
   const duet = useDuet(task.id, task.status);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [busy, setBusy] = useState(false);
@@ -330,7 +335,7 @@ export function DuetView({
       <ImagePreviewGroup isolated>
         <details className="duet-context">
           <summary>
-            <span className="duet-context-topic"><small>议题</small><b>{topic.body || config.topic || task.title}</b></span>
+            <span className="duet-context-topic"><small>议题</small><b>{topicText}</b></span>
             <span className="duet-context-meta">
               <span className="is-a"><ChatCircle size={12} weight="fill" />{sessionsByRole.voiceA?.executor || config.voiceA}</span>
               <span className="is-b"><ChatTeardrop size={12} weight="fill" />{sessionsByRole.voiceB?.executor || config.voiceB}</span>
@@ -341,7 +346,7 @@ export function DuetView({
           </summary>
           <div className="duet-context-details">
             <div className="duet-context-full-topic">
-              <small>完整议题</small><h2>{topic.body || config.topic || task.title}</h2><MessageAttachments paths={topic.paths} />
+              <small>完整议题</small><h2>{topicText}</h2><MessageAttachments paths={topic.paths} />
             </div>
             <ScheduleControl
               taskId={task.id}

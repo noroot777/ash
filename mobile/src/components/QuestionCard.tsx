@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type RefObject } from "react";
 import { Alert, Pressable, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { MAX_QUESTION_ITEMS, type TaskListItem } from "@ash/shared";
@@ -12,7 +12,17 @@ const QUESTION_BORDER = "#22D3EE66";
 
 // ask_question answers remain one text payload. Multi-question UI only helps the
 // user compose that payload without losing the correspondence between questions.
-export function QuestionCard({ task }: { task: TaskListItem }) {
+export function QuestionCard({
+  task,
+  cardRef,
+  onFocusInput,
+}: {
+  task: TaskListItem;
+  /** 卡片根节点。外面用它当场量位置，把卡片拉进视野（见 lib/scroll.ts 的 revealNode）。 */
+  cardRef?: RefObject<View | null>;
+  /** 卡里的输入框拿到焦点了 —— 它在会话流中间，键盘一弹很容易被压在下面。 */
+  onFocusInput?: () => void;
+}) {
   const theme = useTheme();
   const items = task.questionItems ?? [];
   const isMulti = items.length > 0;
@@ -59,6 +69,7 @@ export function QuestionCard({ task }: { task: TaskListItem }) {
 
   return (
     <View
+      ref={cardRef}
       style={{
         overflow: "hidden",
         borderRadius: radius.md,
@@ -122,6 +133,7 @@ export function QuestionCard({ task }: { task: TaskListItem }) {
                     disabled={disabled}
                     placeholder={settling ? "提问回合还没结束，稍候再答…" : "选择建议或填写这一题（可留空）"}
                     accessibilityLabel={`问题 ${index + 1} 的答复`}
+                    onFocus={onFocusInput}
                     onChange={(next) =>
                       setItemDrafts((current) => {
                         const copy = [...current];
@@ -149,6 +161,7 @@ export function QuestionCard({ task }: { task: TaskListItem }) {
                     : "写下答复"
               }
               accessibilityLabel="问题答复"
+              onFocus={onFocusInput}
               onChange={setDraft}
             />
           )}
@@ -188,6 +201,7 @@ function AnswerEditor({
   placeholder,
   accessibilityLabel,
   onChange,
+  onFocus,
 }: {
   value: string;
   options: string[];
@@ -195,6 +209,7 @@ function AnswerEditor({
   placeholder: string;
   accessibilityLabel: string;
   onChange: (value: string) => void;
+  onFocus?: () => void;
 }) {
   const theme = useTheme();
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
@@ -264,6 +279,7 @@ function AnswerEditor({
         }}
         editable={!disabled}
         accessibilityLabel={accessibilityLabel}
+        onFocus={onFocus}
         placeholder={placeholder}
         placeholderTextColor={theme.faint}
         multiline

@@ -27,6 +27,12 @@
 
 具名后台扩展会话“🧪 审查修复验证”创建失败，返回 `Capability is not available: visibility`，因此降级为独立无头 Chromium。`typecheck`、专项回归和完整 `npm -w web run build` 均通过，构建日志确认专项回归已进入正式闸门；浏览器和 Vite 临时服务均由脚本关闭。
 
+## 合入 main 的冲突处理
+
+`web/scripts/fixtures/composer-upload.tsx` 同时保留稳定 `notify` 回调和 main 新增的创建后重挂载夹具；`TaskComposerPanel.tsx` 保留写作台卡片结构，同时接入 main 的执行器初始化重构与讨论附件支持，删除了旧版卡片外重复 footer。讨论模式继续展示附件入口、上传列表和附件计数，并把附件送入任务创建请求。
+
+具名后台扩展会话“🔀 合并冲突验证”返回 `Capability is not available: visibility`，因此使用独立无头 Chromium。`typecheck`、`test:composer-upload`、`test:composer-studio`、`test:duet-upload` 和完整 web build 均通过；没有启动有头浏览器或操作用户普通标签。
+
 ## 初版实现（单任务三段式已由上述修正替代）
 
 - 沿用项目字体、主题变量、按钮与三段执行器选择器；将目标编辑、附件、配置摘要、启动方式组织在同一张卡片内。

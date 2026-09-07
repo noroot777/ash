@@ -1,4 +1,6 @@
 import type { TaskListItem } from "@ash/shared";
+import { hasFailed, needsYourCommand } from "../lib/taskAttention.ts";
+import type { TaskStatusIndicator } from "../lib/useTaskReadState.ts";
 
 // 排序的第一原则：**更新时间倒序**，而且只有这一条。
 // 从前这里把列表按状态切成八大块（运行中 / 暂停中 / … / 失败 / 已取消），
@@ -47,8 +49,31 @@ function sortPinned<T extends TaskListItem>(tasks: T[]): T[] {
   return [...tasks].sort((a, b) => (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0) || byUpdatedDesc(a, b));
 }
 
-// keepVisible 命中的行**永不因为旧而被藏**（星标、待你验收的）——
-// 用户给的软记号和没盖的章都属于「我要一直看得见」，24 小时的年龄闸对它们不适用。
+// 24 小时年龄闸的豁免名单：哪些行**永不因为旧而被折叠**。
+//
+// 五类，理由是同一句话「我要一直看得见」的五种形状 —— 用户手动摁下的记号（星标、置顶）、
+// 没盖的章（unaccepted）、坏在半路的活（失败）、以及停在那儿等你指挥的（提问中 /
+// 验证没通过，团队时问题写在执行者身上，所以要连 workers 一起看）。
+//
+// 失败这一档不能靠行首那颗点来认：它走 "error"，而 error 只在**未读**时才亮
+// （见 useTaskReadState），点开看过一眼就熄了。跟着点走的话，失败的任务只在头 24 小时
+// 露个面，之后缩进「显示更多」—— 而失败恰恰是越老越该被人看见的一档。
+// 等你指挥的同理：一条卡着等答复超过一天的任务被折进「显示另外 N 条」，
+// 恰好是最该一眼看见的那类行，路径反而更长。
+//
+// 判据放在这里而不是留在组件里，是为了跟 previewTasksByAge 挨着、并且能被测试直接钉住：
+// 它决定的是「列表里到底看得见谁」，跟 keepVisible 的调用点分开写迟早会漂。
+export function keepVisibleInPreview(
+  task: TaskListItem,
+  indicator: TaskStatusIndicator | null,
+  workers: TaskListItem[] = [],
+): boolean {
+  return task.starredAt != null
+    || task.pinnedAt != null
+    || hasFailed(task)
+    || indicator === "unaccepted"
+    || needsYourCommand(task, workers);
+}
 export function previewTasksByAge<T extends TaskListItem>(
   tasks: T[],
   nowMs = Date.now(),
