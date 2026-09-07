@@ -24,6 +24,7 @@ data/
 .playwright-cli/
 playwright-report/
 test-results/
+output/
 
 # 分发包产物(npm run package)
 dist-package/

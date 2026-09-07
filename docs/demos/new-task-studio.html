@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>新建任务 · 写作台方案</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="new-task-studio.css">
+</head>
+<body>
+  <svg class="symbols" aria-hidden="true">
+    <symbol id="robot" viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="13" rx="4"/><path d="M12 3v4M8 12h.01M16 12h.01M9 16h6"/></symbol>
+    <symbol id="team" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2M17 5a3 3 0 0 1 0 6M18 15a4 4 0 0 1 3 4"/></symbol>
+    <symbol id="chat" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 1-8 8H4l1-4a8 8 0 1 1 15-4Z M8 10h8M8 14h5"/></symbol>
+    <symbol id="icon-branch" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v10M18 8c0 6-12 3-12 9"/></symbol>
+    <symbol id="check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="arrow" viewBox="0 0 24 24"><path d="M4 12h15M14 7l5 5-5 5"/></symbol>
+    <symbol id="clip" viewBox="0 0 24 24"><path d="m20 11-8 8a5 5 0 0 1-7-7l9-9a3 3 0 0 1 4 4l-9 9a1 1 0 0 1-2-2l8-8"/></symbol>
+    <symbol id="chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></symbol>
+    <symbol id="close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="folder" viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v11H3Z"/></symbol>
+  </svg>
+
+  <header class="workspace-header">
+    <div class="breadcrumb"><span class="project-icon"><svg><use href="#folder"/></svg></span><b>harness</b><span>/</span><span>新建任务</span></div>
+    <div class="header-end"><span class="prototype-label">交互原型</span><button id="saveDraft" class="quiet">保存草稿</button></div>
+  </header>
+
+  <main>
+    <header class="page-heading">
+      <div><div class="eyebrow">新建任务</div><h1>从一个目标开始。</h1><p>把想完成的事写下来，执行方式在下方随时调整。</p></div>
+      <span class="project-location"><svg><use href="#icon-branch"/></svg>harness <span> / </span> main</span>
+    </header>
+
+    <form id="composer" class="composer">
+      <div class="mode-row">
+        <div class="mode-tabs" aria-label="任务模式">
+          <button type="button" data-mode="single" aria-pressed="true"><svg><use href="#robot"/></svg>单任务</button>
+          <button type="button" data-mode="team" aria-pressed="false"><svg><use href="#team"/></svg>团队</button>
+          <button type="button" data-mode="duet" aria-pressed="false"><svg><use href="#chat"/></svg>讨论</button>
+        </div>
+        <span id="modeHint">一个执行者，专注完成</span>
+      </div>
+
+      <div class="writing-area">
+        <label class="sr-only" for="objective">任务目标</label>
+        <textarea id="objective" maxlength="12000" placeholder="想完成什么？\n\n可以描述一个问题，也可以交代一个完整目标。" required></textarea>
+        <div id="files" class="files" aria-live="polite"></div>
+        <div class="writing-toolbar">
+          <button type="button" id="attach" class="quiet"><svg><use href="#clip"/></svg>添加上下文</button>
+          <input type="file" id="fileInput" multiple hidden>
+          <span class="context-hint" id="attachmentHint">图片、文档或参考文件</span>
+          <span class="count"><span id="charCount">0</span> 字</span>
+        </div>
+      </div>
+
+      <section class="execution" aria-label="执行安排">
+        <div class="execution-label"><span>执行安排</span><span>默认已就绪，按需调整</span></div>
+        <div class="execution-path">
+          <button class="path-step" type="button" data-panel="people" aria-expanded="false" aria-controls="peoplePanel">
+            <span class="step-icon agent-icon"><svg><use href="#robot"/></svg></span>
+            <span class="step-copy"><small id="peopleLabel">谁来做</small><b id="peopleSummary">Claude</b><span id="peopleDetail">跟随执行器配置</span></span>
+            <svg class="caret"><use href="#chevron"/></svg>
+          </button>
+          <svg class="path-arrow"><use href="#arrow"/></svg>
+          <button class="path-step" type="button" data-panel="space" aria-expanded="false" aria-controls="spacePanel">
+            <span class="step-icon"><svg><use href="#icon-branch"/></svg></span>
+            <span class="step-copy"><small>在哪里做</small><b id="spaceSummary">独立 worktree</b><span id="spaceDetail">基于 main · 互不干扰</span></span>
+            <svg class="caret"><use href="#chevron"/></svg>
+          </button>
+          <svg class="path-arrow"><use href="#arrow"/></svg>
+          <button class="path-step" type="button" data-panel="flow" aria-expanded="false" aria-controls="flowPanel">
+            <span class="step-icon"><svg><use href="#check"/></svg></span>
+            <span class="step-copy"><small>如何交付</small><b id="flowSummary">自由工作流</b><span id="flowDetail">完成后，由你验收</span></span>
+            <svg class="caret"><use href="#chevron"/></svg>
+          </button>
+        </div>
+
+        <section class="settings-panel" id="peoplePanel" hidden aria-label="执行者设置">
+          <header><div><b>执行者</b><span id="peopleHelp">智能体、模型与智能水平，沿用执行器默认配置。</span></div><button type="button" class="close-panel icon-button" aria-label="收起执行者设置"><svg><use href="#close"/></svg></button></header>
+          <div id="roles"></div>
+        </section>
+
+        <section class="settings-panel" id="spacePanel" hidden aria-label="运行位置设置">
+          <header><div><b>运行位置</b><span>隔离改动，让其他任务照常进行。</span></div><button type="button" class="close-panel icon-button" aria-label="收起运行位置设置"><svg><use href="#close"/></svg></button></header>
+          <div class="space-fields"><label class="switch-label"><span><b>独立 worktree</b><small>关闭后直接使用项目目录</small></span><input id="worktree" type="checkbox" role="switch" checked></label><label class="field">base 分支<select id="branch"><option>main</option><option>develop</option><option>release/next</option></select></label></div>
+        </section>
+
+        <section class="settings-panel" id="flowPanel" hidden aria-label="工作流设置">
+          <header><div><b>工作方式</b><span>决定完成后的推进方式。</span></div><button type="button" class="close-panel icon-button" aria-label="收起工作流设置"><svg><use href="#close"/></svg></button></header>
+          <div class="workflow-choices">
+            <label><input type="radio" name="workflow" value="free" checked><span><b>自由工作流</b><small>按需派审、启动预览，最后统一验收</small></span></label>
+            <label><input type="radio" name="workflow" value="preset"><span><b>起手式</b><small>按预设线路自动推进</small></span></label>
+          </div>
+          <p id="flowNote">不会自动派审或合并，由你决定下一步。</p>
+        </section>
+      </section>
+
+      <details class="organization"><summary><span>组织与标签</span><span id="organizationSummary">无分组 · 无标签</span><svg><use href="#chevron"/></svg></summary><div><label class="field">分组<select id="group"><option>无分组</option><option>界面体验</option><option>产品迭代</option></select></label><label class="field">标签<input id="tags" placeholder="例如：frontend, design" maxlength="120"></label></div></details>
+
+      <footer class="composer-footer"><span id="draftStatus" role="status"><i></i>仅本地演示，不会启动真实任务</span><div class="submit-actions"><label class="sr-only" for="launch">启动方式</label><select id="launch"><option value="run">创建并运行</option><option value="save">仅创建</option></select><button id="submit" class="primary" type="submit" disabled><span>创建并运行</span><svg><use href="#arrow"/></svg></button></div></footer>
+    </form>
+
+    <section class="starters" aria-label="任务示例"><header><span>还没想好怎么写？</span><span>选一个起点，继续补充</span></header><div>
+      <button data-starter="bug"><span class="starter-icon">⌁</span><span><b>解决一个问题</b><small>现象 → 原因 → 修复与验证</small></span><span>↗</span></button>
+      <button data-starter="feature"><span class="starter-icon">＋</span><span><b>做一个新功能</b><small>目标 → 边界 → 交付标准</small></span><span>↗</span></button>
+      <button data-starter="compare"><span class="starter-icon">⇄</span><span><b>讨论一个方案</b><small>比较取舍，形成共同结论</small></span><span>↗</span></button>
+    </div></section>
+    <div class="page-footnote"><span>切换模式会保留正文和配置</span><span><kbd>⌘ / Ctrl</kbd> + <kbd>Enter</kbd> 创建</span></div>
+    <section id="result" class="result" hidden role="status"><svg><use href="#check"/></svg><div><b>演示任务已生成</b><p id="resultText"></p><small>以上为配置预览，没有创建服务端任务或上传附件。</small></div><button id="return" class="quiet">继续编辑</button></section>
+  </main>
+  <script src="new-task-studio.js"></script>
+</body>
+</html>

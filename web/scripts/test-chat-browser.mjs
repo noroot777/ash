@@ -17,6 +17,7 @@ const fixture = spawn(process.execPath, ["--import", "tsx", "server/scripts/chat
 let browser;
 let server;
 let page;
+let releaseUpload = () => {};
 let fixtureLogs = "";
 fixture.stderr.on("data", (chunk) => { fixtureLogs += chunk.toString(); });
 try {
@@ -118,16 +119,55 @@ try {
   await page.getByRole("button", { name: "单任务", exact: true }).click();
   const objective = page.locator(".composer-objective textarea");
   await objective.fill("切换聊天后，这份任务草稿仍然保留。");
-  await page.getByRole("tab", { name: "聊天", exact: true }).click();
+  const modeTabs = page.getByRole("tablist", { name: "任务模式" });
+  const chatTab = modeTabs.getByRole("tab", { name: "聊天", exact: true });
+  assert.equal(await objective.count(), 1, "合并后只保留新版目标输入框");
+  assert.equal(await page.locator(".studio-card").count(), 1);
+  assert.equal(await modeTabs.count(), 1, "聊天与任务模式共用新版内联模式栏");
+  assert.equal(await modeTabs.getByRole("tab").count(), 4);
+  for (const name of ["团队", "讨论", "单任务"]) {
+    await modeTabs.getByRole("tab", { name, exact: true }).click();
+    assert.equal(await objective.inputValue(), "切换聊天后，这份任务草稿仍然保留。");
+    assert.equal(await chatTab.isVisible(), true, `${name} 模式保留聊天入口`);
+  }
+  await page.getByRole("button", { name: "收起侧边栏", exact: true }).click();
+  for (const width of [320, 390, 700, 900, 1440]) {
+    await page.setViewportSize({ width, height: 1000 });
+    const tabBounds = await modeTabs.boundingBox();
+    assert(tabBounds && tabBounds.x >= 0 && tabBounds.x + tabBounds.width <= width, `${width}px 侧栏收起时模式栏不越界`);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
+  }
+  await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
+  const uploadGate = new Promise((resolve) => { releaseUpload = resolve; });
+  await page.route("**/api/uploads", async (route) => {
+    await uploadGate;
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      id: "merge-draft", name: "merge-draft.txt", path: "/tmp/uploads/merge-draft.txt", kind: "file",
+    }) }).catch(() => {});
+  });
+  await page.locator(".studio-card input[type=file]").setInputFiles({
+    name: "merge-draft.txt", mimeType: "text/plain", buffer: Buffer.from("合并兼容验证附件"),
+  });
+  await page.locator(".task-upload-chip.is-uploading").waitFor();
+  assert.equal(await chatTab.isDisabled(), true, "上传期间不能切走聊天丢失在途附件");
+  releaseUpload();
+  await page.locator(".task-upload-chip.is-uploading").waitFor({ state: "detached" });
+  assert.equal(await chatTab.isEnabled(), true);
+  assert.equal(await page.locator(".task-upload-chip").count(), 1, "附件只展示一次");
+  await page.screenshot({ path: `${output}/composer-chat-merged.png`, animations: "disabled" });
+  await chatTab.click();
   await input.waitFor();
   await page.getByRole("button", { name: "单任务", exact: true }).click();
   assert.equal(await objective.inputValue(), "切换聊天后，这份任务草稿仍然保留。");
+  await page.locator(".composer-seed-attachment").getByText("merge-draft.txt", { exact: true }).waitFor();
+  assert.equal(await page.locator(".composer-seed-attachment").count(), 1, "聊天往返保留附件且不重复");
   assert.deepEqual(errors, []);
-  console.log("chat browser passed: 创建群聊、三段成员选择、键盘点名、无点名静默、禁止转发唤醒、实际模拟源码及 node_modules 写入均被标记失败且刷新保留警告、不误建任务、任务卡实时状态、停止持久化、详情回跳、390px 窄屏、减少动态效果、群间隔离、跨模式任务草稿保留；无页面异常。");
+  console.log("chat browser passed: 创建群聊、三段成员选择、键盘点名、无点名静默、禁止转发唤醒、实际模拟源码及 node_modules 写入均被标记失败且刷新保留警告、不误建任务、任务卡实时状态、停止持久化、详情回跳、390px 窄屏、减少动态效果、群间隔离、新编辑器四模式入口、320–1440px 模式栏、上传切换门禁、跨模式任务草稿与附件保留；无页面异常。");
 } catch (error) {
   await page?.screenshot({ path: `${output}/chat-failure.png` }).catch(() => {});
   throw error;
 } finally {
+  releaseUpload();
   await browser?.close();
   await server?.close();
   fixture.kill("SIGTERM");

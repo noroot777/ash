@@ -1,0 +1,314 @@
+/* 新建任务 —— 「执行摘要条」方案 demo。
+   严格沿用 harness 现有 token：灰白画布、#5e6ad2 强调色、8–12px 圆角、12px 级控件、
+   48px 顶栏 / 58px 底栏。这里不新增视觉体系，只重排信息层级。 */
+
+@font-face { font-family: InterFallback; src: local("Inter"), local("SF Pro Display"); }
+
+:root {
+  color-scheme: light;
+  --chrome: lch(94.44% 0.5 282);
+  --canvas: lch(97.94% 0.5 282);
+  --panel: lch(100% 0 282);
+  --raised: lch(96.914% 0 282);
+  --overlay: lch(95.886% 0 282);
+  --line: lch(90.55% 0 282);
+  --line2: lch(86.5% 0 282);
+  --ink: lch(9.794% 0 282);
+  --muted: lch(39.176% 1.25 282);
+  --faint: lch(64.64% 1.25 282);
+  --accent: #5e6ad2;
+  --green: #168466;
+  --amber: #b57b00;
+  --cyan: #0e9db8;
+  --hover-bg: lch(91.64% 0.5 282);
+  --sel-bg: lch(89.54% 0.5 282);
+  --surface-shadow: lch(0 0 0 / 0.02) 0 3px 6px -2px, lch(0 0 0 / 0.04) 0 1px 1px;
+  --menu-shadow: lch(0 0 0 / 0.02) 0 6px 18px, lch(0 0 0 / 0.04) 0 3px 9px, lch(0 0 0 / 0.04) 0 1px 1px;
+  --font-sans: "Inter Variable", Inter, "SF Pro Display", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; }
+body {
+  margin: 0;
+  background: var(--chrome);
+  color: var(--ink);
+  font: 450 13px/1.5 var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+button, input, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+code, .mono { font-family: var(--font-mono); }
+::placeholder { color: var(--faint); }
+
+.icon-sprite { position: absolute; width: 0; height: 0; }
+.ic {
+  width: 14px; height: 14px; flex: 0 0 auto;
+  fill: none; stroke: currentColor; stroke-width: 1.4;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.ic.is-caret { width: 12px; height: 12px; color: var(--faint); }
+
+.app { display: grid; height: 100%; place-items: stretch; padding: 14px; }
+
+/* ── 外壳：与项目一致的 48 / 1fr / 58 三段 ───────────────────────────── */
+.task-composer-panel {
+  display: grid;
+  min-height: 0;
+  grid-template-rows: 48px minmax(0, 1fr) 58px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--surface-shadow);
+}
+
+.composer-header {
+  display: flex; align-items: center; gap: 9px;
+  border-bottom: 1px solid var(--line);
+  padding: 0 14px;
+}
+.composer-header > b { font-size: 13px; font-weight: 600; }
+.workspace-kind-chip {
+  border-radius: 5px; background: var(--raised);
+  padding: 2px 6px; color: var(--muted); font-size: 10px; font-weight: 550;
+}
+.composer-project { color: var(--faint); font-size: 10px; }
+
+/* 模式是页面级选择（它决定下面出现哪些配置），所以放进顶栏，而不是正文上方
+   再堆一排 tab —— 那会让首屏出现两级并列的“选择区”。 */
+.composer-modes {
+  display: flex; gap: 2px;
+  margin: 0 auto;
+  border-radius: 9px; background: var(--raised); padding: 2px;
+}
+.composer-modes button {
+  display: inline-flex; height: 26px; align-items: center; gap: 5px;
+  border: 0; border-radius: 7px; background: transparent;
+  padding: 0 11px; color: var(--muted); font-size: 12px;
+}
+.composer-modes button:hover { color: var(--ink); }
+.composer-modes button[aria-selected="true"] {
+  background: var(--panel); color: var(--ink); font-weight: 550;
+  box-shadow: var(--surface-shadow);
+}
+.composer-modes .ic { width: 13px; height: 13px; }
+
+.ui-button.is-ghost {
+  height: 27px; border: 0; border-radius: 7px; background: transparent;
+  padding: 0 9px; color: var(--muted); font-size: 12px;
+}
+.ui-button.is-ghost:hover { background: var(--raised); color: var(--ink); }
+
+.composer-scroll { display: grid; min-height: 0; overflow-y: auto; background: var(--canvas); }
+/* 正文吃掉全部可用高度，摘要条贴在它下面：页面不再有“配置区之后的一大片空白”，
+   同时窄屏下 minmax 的下限保证正文不会被压没，整块转为滚动。 */
+.composer-inner {
+  display: grid;
+  width: min(920px, calc(100% - 40px));
+  min-height: 0;
+  grid-template-rows: minmax(180px, 560px) auto auto;
+  align-content: center;
+  margin: 0 auto;
+  padding: 24px 0 26px;
+}
+
+/* ── 正文：唯一的必填项，给它唯一的视觉焦点 ─────────────────────────── */
+.objective {
+  display: grid; min-height: 0;
+  grid-template-rows: minmax(0, 1fr) 36px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--surface-shadow);
+  transition: border-color .12s, box-shadow .12s;
+}
+.objective:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in lch, var(--accent) 12%, transparent);
+}
+.objective textarea {
+  display: block; width: 100%; height: 100%;
+  min-height: 0; resize: none; overflow-y: auto;
+  border: 0; background: transparent;
+  padding: 15px 16px 8px; outline: 0;
+  font-size: 14px; line-height: 1.75;
+}
+.objective-bar {
+  display: flex; height: 36px; align-items: center; gap: 8px;
+  border-top: 1px solid var(--line); padding: 0 8px 0 6px;
+}
+.objective-icon {
+  display: grid; width: 26px; height: 26px; place-items: center;
+  border: 0; border-radius: 7px; background: transparent; color: var(--muted);
+}
+.objective-icon:hover { background: var(--raised); color: var(--ink); }
+.objective-hint { color: var(--faint); font-size: 10px; }
+.objective-hint code {
+  border-radius: 4px; background: var(--raised);
+  padding: 1px 4px; color: var(--muted); font-size: 9.5px;
+}
+.objective-count { margin-left: auto; color: var(--faint); font-size: 10px; }
+
+.attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.attachments[hidden] { display: none; }
+.attachment {
+  display: flex; align-items: center; gap: 6px;
+  border: 1px solid var(--line); border-radius: 7px;
+  background: var(--panel); padding: 4px 6px;
+  color: var(--muted); font-size: 10px;
+}
+.attachment button { border: 0; background: none; padding: 0 2px; color: var(--faint); }
+
+/* ── 执行摘要条：把整块配置表压成一行可读的 chip ─────────────────────
+   每颗 chip 是「字段名 + 当前值」，点开就地改。默认值因此始终可见，
+   而不是像现在那样要滚到折下面才知道 worktree 开没开。 */
+.summary { margin-top: 18px; }
+.summary-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+
+.summary-chip {
+  display: inline-flex; height: 30px; align-items: center; gap: 6px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); padding: 0 8px 0 9px;
+  color: var(--ink); font-size: 12px;
+  box-shadow: var(--surface-shadow);
+  transition: border-color .12s, background .12s;
+}
+.summary-chip:hover { border-color: var(--accent); }
+.summary-chip[aria-expanded="true"] { border-color: var(--accent); background: var(--sel-bg); }
+.summary-chip > .ic:first-child { color: var(--faint); }
+.summary-chip .k { color: var(--faint); font-size: 10.5px; }
+.summary-chip .v { max-width: 190px; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.summary-chip .v.mono { font-family: var(--font-mono); font-size: 11px; }
+.summary-chip.is-off .v { color: var(--muted); font-weight: 500; }
+.summary-chip.is-accent > .ic:first-child { color: var(--accent); }
+
+.summary-sep { width: 1px; height: 16px; background: var(--line); margin: 0 2px; }
+
+/* 一句人话，把 chips 翻译成“创建之后会发生什么”。配置是名词，这句是动词。 */
+.summary-note {
+  margin: 12px 0 0;
+  color: var(--muted); font-size: 11px; line-height: 1.7;
+}
+.summary-note b { color: var(--ink); font-weight: 600; }
+.summary-note .mono { font-size: 10.5px; }
+.summary-note.is-warning { color: var(--amber); }
+
+/* ── 浮层：所有配置都在这里改，页面主体不再为它们让出垂直空间 ───────── */
+.popover {
+  position: fixed; z-index: 40;
+  min-width: 268px; max-width: 340px;
+  border: 1px solid var(--line2); border-radius: 11px;
+  background: var(--panel); padding: 10px;
+  box-shadow: var(--menu-shadow);
+}
+.pop-title {
+  display: flex; align-items: center; gap: 6px;
+  margin: 0 0 8px; padding: 0 2px;
+  color: var(--faint); font-size: 9.5px; font-weight: 650; letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.pop-group + .pop-group { margin-top: 10px; }
+.pop-group > b {
+  display: block; margin: 0 0 5px 2px;
+  color: var(--muted); font-size: 10px; font-weight: 550;
+}
+.pop-pills { display: flex; flex-wrap: wrap; gap: 4px; }
+.pop-pill {
+  display: inline-flex; height: 27px; align-items: center; gap: 5px;
+  border: 1px solid var(--line); border-radius: 7px;
+  background: var(--panel); padding: 0 9px;
+  color: var(--muted); font-size: 11.5px;
+}
+.pop-pill:hover { border-color: var(--line2); background: var(--overlay); color: var(--ink); }
+.pop-pill[aria-pressed="true"] {
+  border-color: color-mix(in lch, var(--accent) 45%, var(--line));
+  background: color-mix(in lch, var(--accent) 8%, var(--panel));
+  color: var(--accent); font-weight: 600;
+}
+.pop-pill.mono { font-family: var(--font-mono); font-size: 11px; }
+
+.pop-list { display: grid; gap: 1px; max-height: 232px; overflow-y: auto; }
+.pop-item {
+  display: flex; align-items: center; gap: 8px;
+  border: 0; border-radius: 7px; background: transparent;
+  padding: 7px 8px; text-align: left; color: var(--ink); font-size: 12px;
+}
+.pop-item:hover { background: var(--overlay); }
+.pop-item[aria-selected="true"] { background: var(--sel-bg); font-weight: 550; }
+.pop-item .ic { margin-left: auto; color: var(--accent); opacity: 0; }
+.pop-item[aria-selected="true"] .ic { opacity: 1; }
+.pop-item em { color: var(--faint); font-size: 10px; font-style: normal; }
+.pop-item .desc { display: block; margin-top: 1px; color: var(--faint); font-size: 10px; font-weight: 450; }
+
+.pop-switch {
+  display: flex; width: 100%; align-items: center; gap: 9px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); padding: 8px 10px;
+  text-align: left; font-size: 12px;
+}
+.pop-switch small { display: block; margin-top: 2px; color: var(--faint); font-size: 10px; }
+.ui-toggle {
+  position: relative; width: 30px; height: 18px; flex: 0 0 auto;
+  margin-left: auto; border-radius: 999px; background: var(--line2);
+  transition: background .14s;
+}
+.ui-toggle::after {
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: 14px; height: 14px; border-radius: 50%; background: var(--panel);
+  box-shadow: var(--surface-shadow); transition: transform .14s;
+}
+.ui-toggle.is-on { background: var(--accent); }
+.ui-toggle.is-on::after { transform: translateX(12px); }
+
+.pop-input {
+  width: 100%; height: 30px;
+  border: 1px solid var(--line); border-radius: 7px;
+  background: var(--panel); padding: 0 9px; outline: 0; font-size: 12px;
+}
+.pop-input:focus { border-color: var(--accent); }
+.pop-hint { margin: 8px 2px 0; color: var(--faint); font-size: 10px; line-height: 1.6; }
+
+/* ── 底栏：保留项目现有形状 ─────────────────────────────────────────── */
+.composer-footer {
+  display: flex; align-items: center; gap: 9px;
+  border-top: 1px solid var(--line); background: var(--panel); padding: 0 14px;
+}
+.footer-left { display: flex; min-width: 0; flex: 1; align-items: center; gap: 5px; color: var(--faint); font-size: 9.5px; }
+.footer-left .ic { width: 13px; height: 13px; }
+
+.launch-control { display: flex; align-items: center; gap: 7px; }
+.launch-mode {
+  display: inline-flex; height: 30px; align-items: center; gap: 6px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); padding: 0 9px; color: var(--muted); font-size: 12px;
+  box-shadow: var(--surface-shadow);
+}
+.launch-mode:hover { border-color: var(--accent); color: var(--ink); }
+.launch-mode .ic:first-child { color: var(--faint); }
+.launch-submit {
+  display: inline-flex; height: 30px; align-items: center; gap: 6px;
+  border: 0; border-radius: 8px; background: var(--accent);
+  padding: 0 13px; color: #fff; font-size: 12px; font-weight: 550;
+}
+.launch-submit:hover:not(:disabled) { background: color-mix(in lch, var(--accent) 88%, #000); }
+.launch-submit:disabled { opacity: .45; cursor: default; }
+
+.toast {
+  position: fixed; z-index: 60; bottom: 74px; left: 50%;
+  transform: translateX(-50%);
+  border-radius: 9px; background: var(--ink); padding: 8px 14px;
+  color: #fff; font-size: 11.5px;
+  box-shadow: var(--menu-shadow);
+}
+
+@media (max-width: 760px) {
+  .app { padding: 0; }
+  .task-composer-panel { border: 0; border-radius: 0; }
+  .composer-inner { width: calc(100% - 24px); padding-top: 18px; }
+  .composer-modes { margin: 0 0 0 auto; }
+  .composer-project, .footer-left span, .objective-hint { display: none; }
+  .composer-header .ui-button { display: none; }
+  .summary-chip .v { max-width: 120px; }
+}
