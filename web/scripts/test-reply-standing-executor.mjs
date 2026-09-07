@@ -1,6 +1,10 @@
 // 对话框底部那颗胶囊的**归属**回归：点它改的是「这个任务以后都用谁」（写回任务），
 // 而正文里 `@` 召唤仍然只作用于一次。两者在同一颗胶囊上，回归价值全在这条分界线：
 // 一旦哪次重构把胶囊改回一次性，用户就又得每发一句重选一遍执行器。
+//
+// 第二段钉的是写回的**并发**：胶囊本来就会连着提交两次（选完智能体自动向右展开模型
+// 段），两份完整配置的 PATCH 一旦并发，先发后到的那份会把数据库盖回旧配置，而界面还
+// 留着新的乐观值 —— 胶囊写着新模型、实际跑的是旧的。
 // 跑法：npm -w web run test:reply-standing-executor
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
@@ -22,63 +26,100 @@ try {
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
   browser = await chromium.launch(await chromeLaunchOptions());
-  const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
   // 两个已注册执行器（胶囊的候选来自它们），其余接口在这个 fixture 里不参与判定。
   const PROFILES = [
     { id: "profile-codex", name: "codex@local", type: "codex", isDefault: true },
     { id: "profile-claude", name: "claude@local", type: "claude", isDefault: true },
   ];
-  await page.route("**/api/**", (route) => {
-    const path = new URL(route.request().url()).pathname;
-    return route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: path.endsWith("/agents") ? JSON.stringify(PROFILES) : "[]",
+  const fixture = async (query = "") => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+    await page.route("**/api/**", (route) => {
+      const path = new URL(route.request().url()).pathname;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: path.endsWith("/agents") ? JSON.stringify(PROFILES) : "[]",
+      });
     });
-  });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/reply-standing-executor.html`);
+    await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/reply-standing-executor.html${query}`);
+    return page;
+  };
 
-  const agentTrigger = page.getByRole("button", { name: /智能体：/ });
-  const textarea = page.getByRole("textbox", { name: "回复任务" });
-  const sendButton = page.getByRole("button", { name: "发送回复" });
-  const logLines = async () => page.locator("#log li").allTextContents();
+  {
+    const page = await fixture();
+    const agentTrigger = page.getByRole("button", { name: /智能体：/ });
+    const textarea = page.getByRole("textbox", { name: "回复任务" });
+    const sendButton = page.getByRole("button", { name: "发送回复" });
+    const logLines = async () => page.locator("#log li").allTextContents();
 
-  await agentTrigger.waitFor();
-  assert.match(await agentTrigger.getAttribute("aria-label") ?? "", /智能体：codex/);
+    await agentTrigger.waitFor();
+    assert.match(await agentTrigger.getAttribute("aria-label") ?? "", /智能体：codex/);
 
-  // ① 点胶囊换智能体 = 改任务常设配置，立刻写回。
-  await agentTrigger.click();
-  await page.getByRole("option", { name: /@claude/ }).click();
-  await page.keyboard.press("Escape"); // 选完智能体会自动向右展开模型段，这里不选模型
-  assert.deepEqual(await logLines(), ["standing:claude|model=-|effort=-"]);
-  assert.match(await agentTrigger.getAttribute("aria-label") ?? "", /智能体：claude/);
+    // ① 点胶囊换智能体 = 改任务常设配置，立刻写回。
+    await agentTrigger.click();
+    await page.getByRole("option", { name: /@claude/ }).click();
+    await page.keyboard.press("Escape"); // 选完智能体会自动向右展开模型段，这里不选模型
+    await page.locator("#log li").nth(1).waitFor();
+    assert.deepEqual(await logLines(), [
+      "start1:claude|model=-|effort=-",
+      "done1:claude|model=-|effort=-",
+    ]);
+    assert.match(await agentTrigger.getAttribute("aria-label") ?? "", /智能体：claude/);
 
-  // ② 之后发送的每一条都跟着走：请求里不带一次性覆盖，服务端读任务字段即可。
-  await textarea.fill("第一句");
-  await sendButton.click();
-  await page.locator("#log li").nth(1).waitFor();
-  assert.deepEqual(await logLines(), [
-    "standing:claude|model=-|effort=-",
-    "send:第一句|agent=-|model=-|effort=-",
-  ]);
-  // 发完不回弹：胶囊上还是刚选的那个，不必为下一句再选一次。
-  assert.match(await agentTrigger.getAttribute("aria-label") ?? "", /智能体：claude/);
+    // ② 之后发送的每一条都跟着走：请求里不带一次性覆盖，服务端读任务字段即可。
+    await textarea.fill("第一句");
+    await sendButton.click();
+    await page.locator("#log li").nth(2).waitFor();
+    assert.deepEqual((await logLines()).slice(2), ["send:第一句|agent=-|model=-|effort=-"]);
+    // 发完不回弹：胶囊上还是刚选的那个，不必为下一句再选一次。
+    assert.match(await agentTrigger.getAttribute("aria-label") ?? "", /智能体：claude/);
 
-  // ③ 正文里 `@` 召唤仍是一次性：随这一句发出，发完退回常设配置。
-  await textarea.fill("第二句 @codex");
-  await page.getByRole("option", { name: /@codex/ }).click();
-  await page.getByRole("option", { name: /^gpt-5\.6-sol/ }).click();
-  assert.match(await agentTrigger.getAttribute("aria-label") ?? "", /智能体：codex/);
-  await sendButton.click();
-  await page.locator("#log li").nth(2).waitFor();
-  assert.deepEqual((await logLines()).slice(2), [
-    "send:第二句|agent=codex|model=gpt-5.6-sol|effort=-",
-  ]);
-  assert.match(
-    await agentTrigger.getAttribute("aria-label") ?? "",
-    /智能体：claude/,
-    "一次性召唤发完应退回任务常设配置，不能把 @ 的那次写成常设",
-  );
+    // ③ 正文里 `@` 召唤仍是一次性：随这一句发出，发完退回常设配置。
+    await textarea.fill("第二句 @codex");
+    await page.getByRole("option", { name: /@codex/ }).click();
+    await page.getByRole("option", { name: /^gpt-5\.6-sol/ }).click();
+    assert.match(await agentTrigger.getAttribute("aria-label") ?? "", /智能体：codex/);
+    await sendButton.click();
+    await page.locator("#log li").nth(3).waitFor();
+    assert.deepEqual((await logLines()).slice(3), [
+      "send:第二句|agent=codex|model=gpt-5.6-sol|effort=-",
+    ]);
+    assert.match(
+      await agentTrigger.getAttribute("aria-label") ?? "",
+      /智能体：claude/,
+      "一次性召唤发完应退回任务常设配置，不能把 @ 的那次写成常设",
+    );
+    await page.close();
+  }
+
+  // ④ 连着改两次（智能体 → 紧接着模型），第一次写回故意慢 1200ms。
+  {
+    const page = await fixture("?slow=1");
+    const agentTrigger = page.getByRole("button", { name: /智能体：/ });
+    const modelTrigger = page.getByRole("button", { name: /模型：/ });
+
+    await agentTrigger.click();
+    await page.getByRole("option", { name: /@claude/ }).click();
+    // 不等第一次写回落地就选模型 —— 胶囊自动展开模型段，用户本来就是这么连着点的。
+    await page.getByRole("option", { name: /^sonnet/ }).click();
+    await page.locator("#log li").nth(3).waitFor({ timeout: 15_000 });
+
+    // 串行：第二份等第一份结算完才发。并发的话 start2 会挤在 done1 前面，而后到的
+    // done1 会把任务配置盖回「claude 无模型」。
+    assert.deepEqual(await page.locator("#log li").allTextContents(), [
+      "start1:claude|model=-|effort=-",
+      "done1:claude|model=-|effort=-",
+      "start2:claude|model=sonnet|effort=-",
+      "done2:claude|model=sonnet|effort=-",
+    ]);
+    // 最终落库的是最后一次选择，界面与它一致。
+    assert.equal(
+      await page.locator("#task-config").textContent(),
+      "task:claude|model=sonnet|effort=-",
+    );
+    assert.match(await modelTrigger.getAttribute("aria-label") ?? "", /模型：sonnet/);
+    await page.close();
+  }
 
   console.log("reply standing executor test passed");
 } finally {

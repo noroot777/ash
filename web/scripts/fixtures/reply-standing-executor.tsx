@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Task } from "@ash/shared";
 import { ReplyBox } from "../../src/task-detail/ReplyBox.tsx";
@@ -27,6 +27,9 @@ function Ash() {
   const [task, setTask] = useState<Task>(BASE);
   const [log, setLog] = useState<string[]>([]);
   const record = (line: string) => setLog((current) => [...current, line]);
+  // ?slow=1：第一次写回慢 1200ms，用来验「连着改两次」不会被先发后到的旧响应盖回去。
+  const slowFirst = new URLSearchParams(window.location.search).get("slow") === "1";
+  const saves = useRef(0);
 
   return (
     // 上方留白是给浮层的：@ 选择器锚在输入框上沿往上弹，贴着视口顶会被裁掉。
@@ -39,13 +42,18 @@ function Ash() {
           return { started: true };
         }}
         onStandingExecutorChange={async (next) => {
-          record(`standing:${next.agentType}|model=${next.model ?? "-"}|effort=${next.reasoningEffort ?? "-"}`);
+          const call = ++saves.current;
+          const shape = `${next.agentType}|model=${next.model ?? "-"}|effort=${next.reasoningEffort ?? "-"}`;
+          record(`start${call}:${shape}`);
+          if (slowFirst && call === 1) await new Promise((resolve) => { setTimeout(resolve, 1200); });
+          record(`done${call}:${shape}`);
           setTask((current) => ({ ...current, ...next }));
         }}
       />
       <ul id="log">
         {log.map((line, index) => <li key={`${line}-${index}`}>{line}</li>)}
       </ul>
+      <p id="task-config">{`task:${task.agentType}|model=${task.model ?? "-"}|effort=${task.reasoningEffort ?? "-"}`}</p>
     </main>
   );
 }
