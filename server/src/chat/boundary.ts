@@ -4,7 +4,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { setTimeout as delay } from "node:timers/promises";
 import type { AgentEvent } from "@ash/shared";
 import { resolveAshDbFile } from "../db/path.js";
-import { RUNS_DIR } from "../paths.js";
+import { DATA_DIR, RUNS_DIR, UPLOADS_DIR } from "../paths.js";
 
 export class ChatBoundaryError extends Error {
   constructor(reason: string) {
@@ -65,10 +65,18 @@ export async function watchChatWorkspace(cwd: string, onViolation: (error: ChatB
   const root = await realpath(cwd);
   const dbFile = resolveAshDbFile();
   const db = join(await realpath(dirname(dbFile)), basename(dbFile));
-  const runs = await canonicalPath(RUNS_DIR);
+  const contains = (tree: string, path: string) => path === tree || path.startsWith(`${tree}${sep}`);
+  // ash 自己写进项目里的东西，一律不算智能体越界：群聊的项目常常**就是 ash 仓库本身**，而
+  // ash 一边服务这次咨询一边在写自己的 data/——server.log 每个请求都动，还有 ash.db 的
+  // -wal/-shm/.ash.lock、skill-calibrations.json、scratch/、tmp/、task-artifacts/、uploads/、
+  // runs/。逐个文件排除追不上（先漏数据库、再漏 runs、再漏校准文件，每次都是三个成员齐刷刷
+  // 报「检测到项目文件变化」），所以按整棵目录排除。位置可由 env 改，所以逐个解析而不是只看 DATA_DIR。
+  const owned = [...new Set(await Promise.all([DATA_DIR, dirname(dbFile), RUNS_DIR, UPLOADS_DIR].map(canonicalPath)))]
+    // 反过来把项目整个罩住的（比如 ASH_DB 指到项目根）只能当它不存在，否则等于把看守关掉。
+    .filter((tree) => !contains(tree, root));
   const excludedFiles = new Set([db, `${db}-wal`, `${db}-shm`, `${db}-journal`]);
   const ignored = (path: string) => {
-    if (excludedFiles.has(path) || path === runs || path.startsWith(`${runs}${sep}`)) return true;
+    if (excludedFiles.has(path) || owned.some((tree) => contains(tree, path))) return true;
     const parts = relative(root, path).split(sep);
     return parts.length === 4 && parts[0] === ".git" && parts[1] === "worktrees"
       && (parts[3] === "index" || parts[3] === "index.lock");
