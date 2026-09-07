@@ -202,6 +202,23 @@ try {
   assert.equal((await patch(allRoom.id, { members: [{ ...allMembers[0], name: "所有人" }] })).status, 400);
   assert.equal((await (await request(`/chats/${allRoom.id}`)).json() as ChatSnapshot).room.members.length, AGENT_TYPES.length);
   console.log("✓ 群聊可改名（保存前去空白）、改名与换成员各自校验，失败不写坏成员");
+
+  // 执行器 profile 被删之后，设置面板仍会把陈旧成员连同新名字一起提交；存量成员不该因此挡住改名。
+  await db.insert(agents).values({ id: "stale-profile", name: "会被删掉的执行器", type: "codex", extraArgs: "[]", createdAt: timestamp });
+  const staleMembers = [{ ...members[0]!, executorId: "stale-profile" }, members[1]!];
+  const staleRoomResponse = await request("/chats", { projectId: "project", name: "执行器会被删的群", members: staleMembers });
+  assert.equal(staleRoomResponse.status, 201);
+  const staleRoom = await staleRoomResponse.json() as { id: string };
+  await db.delete(agents).where(eq(agents.id, "stale-profile"));
+  assert.equal((await request("/chats", { projectId: "project", name: "新群不放行已删执行器", members: staleMembers })).status, 400);
+  const renamedStale = await patch(staleRoom.id, { name: "改完名的群", members: staleMembers });
+  assert.equal(renamedStale.status, 200, await renamedStale.clone().text());
+  const staleSnapshot = await (await request(`/chats/${staleRoom.id}`)).json() as ChatSnapshot;
+  assert.equal(staleSnapshot.room.name, "改完名的群");
+  assert.equal(staleSnapshot.room.members[0]!.executorId, "stale-profile");
+  assert.equal((await patch(staleRoom.id, { members: [{ ...staleMembers[0], executorId: "never-existed" }, members[1]] })).status, 400);
+  assert.equal((await patch(staleRoom.id, { members: [...staleMembers, { ...members[0], id: "another-member", name: "借用已删执行器", executorId: "stale-profile" }] })).status, 400);
+  console.log("✓ 执行器被删后仍能只改群名：存量成员原样回传放行，新填/挪用同一个已删执行器仍被拒");
   const beforeAll = invoked.length;
   await request(`/chats/${allRoom.id}/messages`, { id: "all-agents-message", body: allMembers.map((member) => `@${member.name}`).join(" ") + " 请给建议" });
   let allSnapshot: ChatSnapshot | undefined;
@@ -237,7 +254,7 @@ try {
   await db.delete(projects).where(eq(projects.id, "project"));
   assert.equal((await request(`/chats/${room.id}`)).status, 404);
   console.log("✓ 非法输出诚实失败；重启不自动唤醒；删除项目后群聊不可访问");
-  assert.equal((await db.select().from(chatRooms)).length, 4);
+  assert.equal((await db.select().from(chatRooms)).length, 5);
 } finally {
   await service.stop(room.id);
   await delay(50);
