@@ -3,10 +3,10 @@
 // Run: npm -w server run test:preview-process
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = mkdtempSync(join(tmpdir(), "ash-preview-process-"));
@@ -22,6 +22,8 @@ const { startPreview, stopPreview, sweepPreviews, readPreview, isPreviewStarting
 // taskId 都不在库里」的自然表达。
 await (await import("../src/db/index.js")).ensureSchema();
 const { PORT_ENV_ALIASES, PORT_SLOT } = await import("../src/preview-command.js");
+const { db } = await import("../src/db/index.js");
+const { tasks } = await import("../src/db/schema.js");
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -440,6 +442,39 @@ try {
     assert.ok(selfExit.ok, "这一步要先真的起来，才谈得上「起来之后自己退出」");
     assert.deepEqual(selfExit.record.links, [join(exitWt, "front", "node_modules")]);
     await waitFor(() => readPreview("exit-task") !== null && !isAlive(selfExit.record.pid), "服务没有自行退出");
+    // ③ 清扫顺手清备用依赖，**但正被活着的预览用着的那份不能碰**：自由预览是 `life: "task"`，
+    //    一个任务等人验收等上三十天完全合法，而缓存只在挂链那一刻 touch 过一次。删掉之后
+    //    工作区那条软链还在、只是断了，dev server 按需加载下一个模块时才炸，记录上它还跑着。
+    const liveWt = join(root, "live-wt");
+    mkdirSync(join(liveWt, "front"), { recursive: true });
+    writeFileSync(join(liveWt, ".git"), `gitdir: ${join(repo2, ".git", "worktrees", "live-wt")}\n`);
+    writeFileSync(join(liveWt, "front", "package.json"), JSON.stringify({
+      name: "front", version: "1.0.0", private: true,
+      scripts: { dev: "fakevite" }, dependencies: { fakedep: `file:${dep}` },
+    }));
+    // 这条得让 taskGone 说「任务还在」，否则清扫会先按「任务已被删除」把预览收掉，
+    // 缓存自然也就不再被谁持有 —— 那样测的就不是我们想测的东西了。
+    const stamp = new Date().toISOString();
+    await db.insert(tasks).values({ id: "live-task", projectId: "p", title: "live", createdAt: stamp, updatedAt: stamp });
+    const live = await startPreview("live-task", {
+      id: "live", kind: "preview",
+      p: { cmd: "cd front && npm run dev", mode: "frontend", ready: "port", life: "task" },
+    } as never, liveWt);
+    assert.ok(live.ok, "这一步要先真的起来，才谈得上「跑着的时候别把它的依赖删了」");
+    try {
+      const liveLink = live.record.links?.[0] ?? "";
+      const liveCache = dirname(realpathSync(liveLink));
+      const longAgo = new Date(Date.now() - 40 * 24 * 60 * 60_000);
+      utimesSync(liveCache, longAgo, longAgo); // 预览跑到第三十一天
+      await sweepPreviews();
+      assert.ok(existsSync(liveCache), "清扫把活着的预览正用着的依赖删了");
+      assert.ok(existsSync(join(liveLink, "fakedep")), "工作区那条软链被清成了断链");
+      assert.equal(await fetch(live.record.url ?? "").then((r) => r.text()), "installed by ash");
+    } finally {
+      killGroup(live.record.pid);
+      await stopPreview("live-task", null);
+    }
+
     await sweepPreviews();
     assert.equal(readPreview("exit-task"), null, "清扫应当把死掉的记录收走");
     assert.equal(

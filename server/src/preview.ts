@@ -22,7 +22,7 @@ import { augmentedEnv, killByPid, withoutForeignNodeBins } from "./executors/spa
 import { RUNS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
 import { portConflict, pickPreviewUrl, portHint, missingDepsHint, missingNodeBin } from "./preview-log.js";
-import { nodeDepsAdvice, prepareNodeDeps, pruneNodeDeps, removePreparedLinks } from "./preview-deps.js";
+import { heldCacheOf, nodeDepsAdvice, prepareNodeDeps, pruneNodeDeps, removePreparedLinks } from "./preview-deps.js";
 import { PORT_ENV_ALIASES, PORT_SLOT } from "./preview-command.js";
 import { canConnect, ready } from "./preview-probe.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -440,9 +440,6 @@ export async function stopPreviewOnRerun(taskId: string): Promise<void> {
 // 直接被删/归档，预览还在那儿开着」的——那种情况下没有任何一个界面还会提到它，端口却
 // 一直占着。db 走动态 import：这个模块本来只碰进程和文件，不想为一条兜底把它绑到表上。
 export async function sweepPreviews(): Promise<void> {
-  // 顺手清掉长期没人用的备用依赖：这套东西按 package.json 的内容一份一份地装，一份前端
-  // 依赖几百兆，不清就会在**用户的磁盘**上无声地涨（见 pruneNodeDeps）。
-  pruneNodeDeps();
   let dirs: string[];
   try {
     dirs = readdirSync(RUNS_DIR);
@@ -473,6 +470,29 @@ export async function sweepPreviews(): Promise<void> {
     const gone = await taskGone(taskId);
     if (gone) await stopPreview(taskId, gone);
   }
+  // 收尾再清备用依赖：这套东西按内容一份一份地装，一份前端依赖几百兆，不清就会在**用户的
+  // 磁盘**上无声地涨（见 pruneNodeDeps）。
+  //
+  // 顺序是有讲究的，**必须排在上面那一圈之后**：清理只认 mtime，而缓存只在挂链那一刻
+  // touch 过一次。自由预览是 `life: "task"`，一个任务等人验收等上三十天完全合法，那份
+  // 缓存却会在预览还跑着的时候「过期」。删掉的后果不是下次慢一点——工作区那条软链还在、
+  // 只是断了，dev server 按需加载下一个模块时才炸，记录上它还好端端地跑着。所以先把死掉的
+  // 记录和它们的软链收干净，再拿**剩下这些还活着的**记录告诉清理器哪几份动不得。
+  pruneNodeDeps(heldCaches());
+}
+
+/** 还活着的预览记录正占着哪几份依赖缓存（顺着它们挂出去的软链倒推）。 */
+function heldCaches(): string[] {
+  const held = new Set<string>();
+  let dirs: string[];
+  try { dirs = readdirSync(RUNS_DIR); } catch { return []; }
+  for (const taskId of dirs) {
+    for (const link of readPreview(taskId)?.links ?? []) {
+      const cache = heldCacheOf(link);
+      if (cache) held.add(cache);
+    }
+  }
+  return [...held];
 }
 
 /** 任务已经不在了（删了/归档了）就给个理由，否则 null。查不动库时一律当「还在」。 */

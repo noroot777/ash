@@ -14,22 +14,25 @@
 // 所以这版把依赖装到 ash 自己的地盘：`data/deps/<包名>-<内容哈希>/`，只从项目里**读**
 // `package.json` 和锁文件（复制过去，install 改写的是那份拷贝，用户的锁文件一个字节不动），
 // 装完在任务工作区里挂一条 `node_modules` 软链。用户的项目全程只被读，没有被写。
-// 哈希是 `package.json` + 锁文件的内容，所以同一份依赖多个任务、多次点预览都只装一次。
+// 哈希是清单 + 锁文件 + 一起复制过去的那几份配置 + 平台/ABI（见 cacheDir），所以同一份
+// 依赖多个任务、多次点预览都只装一次，而其中任何一样一改就自动重装。
 //
 // 挂软链而不是拷贝：`node_modules` 动辄几百兆，每个任务拷一份是纯浪费；ash 也早就认得
 // 这条软链（工作区脏判定不会因此把它算成改动）。
 //
-// 仍然会失败的几种情况（没网、私有 registry 没凭据、package.json 声明了 workspaces——
-// 隔离安装装不出正确的树），一律**如实说**并退回 preview-log.ts 那几条人工建议，不假装
-// 装好了。那几条建议里「去主仓装一次」仍然要提醒 lock 文件可能被改写：node_modules 被
+// 仍然会失败的几种情况（没网、私有 registry 没凭据、package.json 声明了 workspaces 或者
+// 有 `file:../shared` 这类相对路径依赖——隔离安装装不出正确的树），一律**如实说**并退回
+// preview-log.ts 那几条人工建议，不假装装好了；包管理器退出码 0 也不算数，装完还要扫一眼
+// 有没有断链（见 danglingLink）。那几条建议里「去主仓装一次」仍然要提醒 lock 文件可能被改写：node_modules 被
 // gitignore 不等于 install 不写跟踪文件。
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   appendFileSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, openSync,
-  readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync,
+  readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import type { Dirent } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { augmentedEnv } from "./executors/bin-resolve.js";
 import { DEPS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
@@ -252,15 +255,80 @@ function readIfPresent(path: string): string | null {
 }
 
 /**
- * 这份依赖装在哪：`data/deps/<包名>-<package.json + 锁文件的哈希>`。
+ * 这份依赖装在哪：`data/deps/<包名>-<所有影响这棵树的东西的哈希>`。
  *
- * 用内容做键有两个好处：同一份依赖被多个任务、多次点预览共用，只装一次；而 package.json
- * 或锁文件一改，键就变了，下次自动装新的，不会拿旧树糊弄人。
+ * 用内容做键有两个好处：同一份依赖被多个任务、多次点预览共用，只装一次；内容一改键就变，
+ * 下次自动装新的，不会拿旧树糊弄人。
+ *
+ * **凡是会改变装出来那棵树的东西，都必须进这个键**，否则「改了、没生效」比不缓存更坏：
+ *   · 清单和锁文件 —— 显然。
+ *   · **一起复制过去的那几份配置**（`.npmrc` / `.yarnrc*` …）。registry、私服凭据、
+ *     `omit=dev`、hoist 规则全写在里面。漏掉它们的后果是实打实的：`.npmrc` 里写着
+ *     `omit=dev` 时装出来的树没有 devDependency（vite 就在那儿），用户发现后把配置改对、
+ *     再点预览 —— 键没变，命中的还是那棵缺东西的旧树，而且 ash 还告诉他「复用之前备好的
+ *     依赖」。他要么等三十天，要么自己去翻 ash 的私有缓存目录。
+ *   · **平台、架构、Node 大版本** —— 依赖树里有原生模块（esbuild / sharp / better-sqlite3
+ *     都是），换了平台或 ABI 就装不同的二进制。同一个 data 目录被换台机器接手（备份还原、
+ *     换 Node 大版本）时，复用一份 ABI 不对的树只会得到一句看不懂的加载错误。
  */
-function cacheDir(rel: string, pm: PackageManager, manifest: string, lock: string | null): string {
-  const key = createHash("sha256").update(`${pm}\0${manifest}\0${lock ?? ""}`).digest("hex").slice(0, 12);
+function cacheDir(rel: string, pm: PackageManager, manifest: string, lock: string | null, config: string): string {
+  const abi = `${process.platform}-${process.arch}-node${process.versions.node.split(".")[0]}`;
+  const key = createHash("sha256")
+    .update(`${pm}\0${manifest}\0${lock ?? ""}\0${config}\0${abi}`)
+    .digest("hex").slice(0, 12);
   const name = (rel === "." ? "root" : rel).replaceAll(/[^A-Za-z0-9._-]/g, "-");
   return join(DEPS_DIR, `${name}-${key}`);
+}
+
+/** 跟着一起复制过去的那几份配置，按固定顺序拼成一段文本 —— 它要进缓存键（见 cacheDir）。 */
+function configOf(dir: string): string {
+  return EXTRA_FILES.map((name) => `${name}\0${readIfPresent(join(dir, name)) ?? ""}`).join("\0");
+}
+
+/**
+ * 清单里第一条**相对**路径依赖（`file:` / `link:` / `portal:`），没有就 null。
+ *
+ * 绝对路径的没问题（挪到哪儿都指得对），只有相对的会被隔离目录重新解释。
+ */
+function relativeFileDep(manifest: string): string | null {
+  let deps: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(manifest) as Record<string, Record<string, unknown> | undefined>;
+    deps = { ...parsed.dependencies, ...parsed.devDependencies, ...parsed.optionalDependencies };
+  } catch { return null; } // 读不动就交给 install 自己去报错
+  for (const [name, spec] of Object.entries(deps)) {
+    if (typeof spec !== "string") continue;
+    const path = /^(?:file|link|portal):(.*)$/.exec(spec)?.[1];
+    if (path !== undefined && path.trim() !== "" && !isAbsolute(path.trim())) return `${name}: ${spec}`;
+  }
+  return null;
+}
+
+/**
+ * 装完之后的体检：`node_modules` 顶层有没有**指向虚空**的软链。
+ *
+ * 包管理器的退出码只说明「它按清单做完了」，不说明做出来的东西能用。相对路径依赖是最
+ * 典型的一种（上面已经挡在前面了），但同类的还有别的（锁文件里记着的本地路径、装到一半
+ * 被打断的链接）。装完顺手扫一眼顶层，比事后让用户对着 `Cannot find module` 猜便宜得多。
+ */
+function danglingLink(nodeModules: string): string | null {
+  const scan = (dir: string, prefix: string): string | null => {
+    let entries: Dirent[];
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      // `@scope/pkg` 得进去一层才看得到真正的包目录。
+      if (entry.isDirectory() && entry.name.startsWith("@")) {
+        const inner = scan(full, `${prefix}${entry.name}/`);
+        if (inner) return inner;
+        continue;
+      }
+      if (!entry.isSymbolicLink()) continue;
+      if (!existsSync(full)) return `${prefix}${entry.name}`;
+    }
+    return null;
+  };
+  return scan(nodeModules, "");
 }
 
 /** 跑一条安装命令，输出直接进预览日志。返回 null = 成功，否则是失败原因。 */
@@ -369,10 +437,19 @@ async function prepareOne(one: NodeDepsAdvice, logPath: string): Promise<NodeDep
   if (/"workspaces"\s*:/.test(manifest) || existsSync(join(one.dir, "pnpm-workspace.yaml"))) {
     return fail("package.json 声明了 workspaces，隔离安装装不出正确的依赖树，ash 没有代装");
   }
+  // 同一类毛病的另一半，而且更阴：`"shared": "file:../shared"` 这种**相对**路径依赖。
+  // 隔离目录不在项目里，`../shared` 于是指到 ash 缓存目录的隔壁 —— npm 照样退出码 0，
+  // 只是给你留一条指向虚空的软链。等到应用真去 import 那个本地包才炸，而那时 ash 已经
+  // 报过「依赖装好了」。宁可现在说清楚，也不要给一句会被后面拆穿的成功。
+  const relativeDep = relativeFileDep(manifest);
+  if (relativeDep) {
+    return fail(`package.json 里有相对路径依赖（${relativeDep}），它指的是项目里的目录，`
+      + "搬到 ash 的隔离目录里就指空了 —— 装出来是断链而不是报错，所以 ash 没有代装");
+  }
 
   const lockName = LOCKFILES[one.pm];
   const lock = readIfPresent(join(one.dir, lockName));
-  const cache = cacheDir(one.rel, one.pm, manifest, lock);
+  const cache = cacheDir(one.rel, one.pm, manifest, lock, configOf(one.dir));
   const cached = join(cache, "node_modules");
 
   // ② 之前装好过同样内容的一份
@@ -428,6 +505,13 @@ async function build(
       ? `在项目外装依赖没成功（${one.pm}）：${error}`
       : `${one.pm} install 说成功了，却没装出 node_modules`;
   }
+  // 退出码 0 不等于这棵树能用（见 danglingLink）。断链就当没装成，别把它 rename 成缓存。
+  const dangling = danglingLink(join(temp, "node_modules"));
+  if (dangling) {
+    rmSync(temp, { recursive: true, force: true });
+    return `${one.pm} install 退出码是 0，但装出来的 node_modules/${dangling} 是条断链，`
+      + "这棵树用不了（多半是清单里有指向项目内目录的路径依赖），ash 没有把它当成装好了";
+  }
   try {
     writeFileSync(join(temp, READY_MARK), `${one.pm}\n`);
     renameSync(temp, cache);
@@ -476,11 +560,20 @@ const KEEP_TEMP_MS = 24 * 60 * 60_000;
  *
  * 正在被某个预览挂着的那份不会被误清：每次挂链都会 touch 一次，而预览撑不到三十天不重启。
  */
-export function pruneNodeDeps(): void {
+export function pruneNodeDeps(held: readonly string[] = []): void {
   let entries: string[];
   try { entries = readdirSync(DEPS_DIR); } catch { return; } // 还没装过任何东西
+  const inUse = new Set(held);
   for (const name of entries) {
     const dir = join(DEPS_DIR, name);
+    // **还挂在某个活着的预览上就不能删**，而且顺手续租。挂链时 touch 那一次是不够的：
+    // 自由预览是 `life: "task"` —— 一个任务等人验收等上三十天完全合法，那份缓存的 mtime
+    // 却停在挂链那一刻。删掉的后果不是「下次慢一点」：工作区那条软链还在、只是断了，
+    // dev server 按需加载下一个模块时才炸，而记录上它明明还在跑，只能重启才恢复。
+    if (inUse.has(dir)) {
+      touch(dir);
+      continue;
+    }
     try {
       // 装到一半的残骸（server 被杀在 install 中间）按天算，不按月：它谁也用不上，
       // 却照样占着几百兆。一天的余量足够让一趟还在跑的 install 跑完（上限 6 分钟）。
@@ -489,4 +582,16 @@ export function pruneNodeDeps(): void {
       rmSync(dir, { recursive: true, force: true });
     } catch { /* 清不掉就下次再说 */ }
   }
+}
+
+/**
+ * 一条我们挂出去的软链，现在指着哪个缓存目录（不指向 `data/deps` 就返回 null）。
+ *
+ * 给清扫用：活着的预览记录里存着 `links`，顺着它们就能知道哪几份缓存**正在被用**。
+ */
+export function heldCacheOf(link: string): string | null {
+  let target: string;
+  try { target = realpathSync(link); } catch { return null; } // 断链/已经撤掉了
+  const cache = dirname(target); // <缓存>/node_modules → <缓存>
+  return dirname(cache) === resolve(DEPS_DIR) ? cache : null;
 }

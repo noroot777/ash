@@ -11,14 +11,15 @@
 // ③ **「目录在」不等于「依赖齐」。** `--prod` 装出来的树没有 devDependency 里的 vite，
 //    半截的安装会先留下一个空目录 —— 两种都会让「不缺依赖」的结论把诊断整个带偏。
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const root = mkdtempSync(join(tmpdir(), "ash-preview-deps-"));
 // 装到哪由 DEPS_DIR 决定，而它在模块加载时就定了 —— 所以先设环境变量再 import。
 process.env.ASH_DEPS_DIR = join(root, "deps");
-const { nodeDepsAdvice, prepareNodeDeps, pruneNodeDeps, removePreparedLinks } = await import("../src/preview-deps.js");
+const { heldCacheOf, nodeDepsAdvice, prepareNodeDeps, pruneNodeDeps, removePreparedLinks }
+  = await import("../src/preview-deps.js");
 const { missingDepsHint } = await import("../src/preview-log.js");
 
 let failures = 0;
@@ -348,6 +349,99 @@ try {
   for (const name of cached) utimesSync(join(deps, name), longAgo, longAgo);
   pruneNodeDeps();
   check("三十天没人用的清掉", readdirSync(deps), []);
+
+  // ⑤d **正被一个活着的预览用着的那份，多老也不能删。** 清理只看 mtime，而缓存只在挂链
+  //     那一刻 touch 过一次；自由预览是 `life: "task"`，一个任务等人验收等上三十天完全合法。
+  //     删掉的后果不是下次慢一点：工作区那条软链还在、只是断了，dev server 按需加载下一个
+  //     模块时才炸，而记录上它还好端端地跑着。
+  const fastBin = dir("fastbin");
+  writeFileSync(join(fastBin, "npm"), "#!/bin/sh\nmkdir -p node_modules/.bin\ntouch node_modules/.bin/done\n", { mode: 0o755 });
+  const withFakeNpm = async <T>(work: () => Promise<T>): Promise<T> => {
+    const saved = process.env.PATH;
+    process.env.PATH = `${fastBin}:${saved ?? ""}`;
+    try { return await work(); } finally { process.env.PATH = saved; }
+  };
+  const heldRepo = dir("held-repo");
+  mkdirSync(join(heldRepo, ".git"), { recursive: true });
+  const heldWt = worktreeOf(heldRepo, "wt-held");
+  file(dir("wt-held", "front"), "package.json", JSON.stringify({ name: "held", version: "1.0.0", private: true }));
+  const heldLog = join(root, "held.log");
+  writeFileSync(heldLog, "");
+  const heldPrepared = await withFakeNpm(() => prepareNodeDeps(heldWt, "cd front && npm run dev", heldLog));
+  const heldLink = heldPrepared[0]?.link ?? "";
+  check("先装上一份并挂好", [heldPrepared[0]?.ok, existsSync(heldLink)], [true, true]);
+  const heldCache = heldCacheOf(heldLink);
+  check("顺着软链认得出是哪份缓存", heldCache !== null && readdirSync(deps).includes(heldCache.split("/").pop() ?? ""), true);
+  check("指向别处的软链不算", heldCacheOf(join(root, "real-node-modules")), null);
+  utimesSync(heldCache ?? "", longAgo, longAgo); // 预览跑到第三十一天
+  pruneNodeDeps([heldCache ?? ""]);
+  check("还被用着就不许删", existsSync(heldCache ?? ""), true);
+  check("那条软链也还指得到东西", existsSync(join(heldLink, ".bin", "done")), true);
+  check("而且顺手续了租（下一轮不会又擦边）", Date.now() - statSync(heldCache ?? "").mtimeMs < 60_000, true);
+  removePreparedLinks([heldLink]);
+  utimesSync(heldCache ?? "", longAgo, longAgo);
+  pruneNodeDeps([]); // 预览收掉之后，同一份就该按年龄清掉了
+  check("没人用了才清", existsSync(heldCache ?? ""), false);
+
+  // ⑤e **相对路径依赖装不出正确的树，而且包管理器不会报错。** `file:../shared` 相对的是
+  //     项目里的目录，搬进 ash 的隔离目录就指到隔壁去了 —— npm 退出码照样 0，只留下一条
+  //     断链，等应用真去 import 才炸，那时 ash 已经宣称「依赖装好了」。
+  const relRepo = dir("rel-repo");
+  mkdirSync(join(relRepo, ".git"), { recursive: true });
+  const relWt = worktreeOf(relRepo, "wt-rel");
+  file(dir("wt-rel", "shared"), "package.json", JSON.stringify({ name: "rel-shared", version: "1.0.0" }));
+  file(dir("wt-rel", "front"), "package.json", JSON.stringify({
+    name: "front", version: "1.0.0", private: true, dependencies: { "rel-shared": "file:../shared" },
+  }));
+  const relLog = join(root, "rel.log");
+  writeFileSync(relLog, "");
+  const rel = await prepareNodeDeps(relWt, "cd front && npm run dev", relLog);
+  check("相对路径依赖不硬装", rel[0]?.ok, false);
+  check("理由说清楚是哪一条", rel[0]?.detail.includes("rel-shared: file:../shared"), true);
+  check("也没留下一条断链给下一步", existsSync(join(relWt, "front", "node_modules")), false);
+
+  // ⑤e2 同一类毛病的兜底：退出码 0 不等于这棵树能用。装完扫一眼顶层，有断链就当没装成
+  //     （锁文件里记着本地路径、装到一半被打断，都会长这样）。
+  const ghostBin = dir("ghostbin");
+  writeFileSync(join(ghostBin, "npm"), "#!/bin/sh\nmkdir -p node_modules/@scope\nln -s ../../nowhere node_modules/@scope/ghost\n", { mode: 0o755 });
+  const ghostRepo = dir("ghost-repo");
+  mkdirSync(join(ghostRepo, ".git"), { recursive: true });
+  const ghostWt = worktreeOf(ghostRepo, "wt-ghost");
+  file(dir("wt-ghost", "front"), "package.json", JSON.stringify({ name: "ghost", version: "1.0.0", private: true }));
+  const ghostLog = join(root, "ghost.log");
+  writeFileSync(ghostLog, "");
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${ghostBin}:${savedPath ?? ""}`;
+  let ghost: Awaited<ReturnType<typeof prepareNodeDeps>>;
+  try { ghost = await prepareNodeDeps(ghostWt, "cd front && npm run dev", ghostLog); }
+  finally { process.env.PATH = savedPath; }
+  check("装出断链就不算装成了", ghost[0]?.ok, false);
+  check("说清楚断的是哪一条", ghost[0]?.detail.includes("@scope/ghost"), true);
+  check("半截的树不留下来给下次「复用」", readdirSync(deps).filter((n) => n.startsWith("front-")).length, 0);
+
+  // ⑤f **一起复制过去的配置改了，缓存就得失效。** `.npmrc` 里的 `omit=dev` 会让装出来的树
+  //     没有 devDependency（vite 就在那儿）。用户把配置改对、再点预览，如果键没变，命中的
+  //     还是那棵缺东西的旧树，ash 还会告诉他「复用之前备好的依赖」—— 他要么等三十天，要么
+  //     自己去翻 ash 的私有缓存目录。
+  const cfgRepo = dir("cfg-repo");
+  mkdirSync(join(cfgRepo, ".git"), { recursive: true });
+  const cfgWt = worktreeOf(cfgRepo, "wt-cfg");
+  const cfgPkg = dir("wt-cfg", "front");
+  file(cfgPkg, "package.json", JSON.stringify({ name: "cfg", version: "1.0.0", private: true }));
+  file(cfgPkg, ".npmrc", "omit=dev\n");
+  const cfgLog = join(root, "cfg.log");
+  writeFileSync(cfgLog, "");
+  const cfgFirst = await withFakeNpm(() => prepareNodeDeps(cfgWt, "cd front && npm run dev", cfgLog));
+  check("第一次照着当时的配置装", cfgFirst[0]?.ok, true);
+  removePreparedLinks([cfgFirst[0]?.link ?? ""]); // 收掉预览，用户去改配置
+  const cfgAgain = await withFakeNpm(() => prepareNodeDeps(cfgWt, "cd front && npm run dev", cfgLog));
+  check("配置没动就该复用", cfgAgain[0]?.detail.startsWith("复用"), true);
+  removePreparedLinks([cfgAgain[0]?.link ?? ""]);
+  file(cfgPkg, ".npmrc", "\n"); // 用户把 omit=dev 删了
+  const cfgFixed = await withFakeNpm(() => prepareNodeDeps(cfgWt, "cd front && npm run dev", cfgLog));
+  check("配置改了就重新装，不拿旧树糊弄", cfgFixed[0]?.detail.startsWith("复用"), false);
+  check("改完照样是成功的", cfgFixed[0]?.ok, true);
+  removePreparedLinks([cfgFixed[0]?.link ?? ""]);
 
   // ⑥ 没有 node 包目录时什么都不做（Java 项目点预览不该被拖进 npm 的世界）。
   const java = dir("java");
