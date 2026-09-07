@@ -24,6 +24,7 @@ import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments 
 import { SlashMenu } from "../components/SlashMenu.tsx";
 import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
+import { useStandingExecutor, type StandingExecutor } from "./useStandingExecutor.ts";
 import { useTaskReplyDraft } from "./TaskReplyDrafts.tsx";
 import {
   attachmentsFromPaths,
@@ -39,6 +40,7 @@ export function ReplyBox({
   task,
   hasConversation,
   onSend,
+  onStandingExecutorChange,
   command,
   skills = EMPTY_SKILLS,
   inlinePanel,
@@ -62,6 +64,12 @@ export function ReplyBox({
     // 返回 null = **这一句没送出去,而且不是错误**(典型:换执行器的确认框被取消)。
     // 输入框里的字、附件、@选中的执行器全部原样留着，用户点一下就能重来。
   ) => Promise<ReplyTaskResult | null>;
+  /**
+   * 点胶囊改执行器/模型/智能水平 = 改**这个任务以后都用谁**，由调用方写回任务
+   * （PATCH /tasks/:id）。不传就只剩 `@` 那条一次性召唤，胶囊变成只读。
+   * `label` 只是提示文案用的执行器名，别当业务字段使。
+   */
+  onStandingExecutorChange?: (next: StandingExecutor, label: string) => Promise<void>;
   command?: {
     matches: (text: string) => boolean;
     onSubmit: (text: string) => void;
@@ -85,6 +93,8 @@ export function ReplyBox({
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionDismissed, setMentionDismissed] = useState(false);
+  // 一次性召唤：正文里 `@某个智能体` 选出来的「就这一句由谁跑」。只随这一次 reply
+  // 发出、发完即清，不落任务 —— 「以后都用谁」是另一件事，见下面的 standing。
   const [target, setTarget] = useState<MentionTarget | null>(null);
   // 只剩 `@` 那条路会开这个浮层：正文里选中智能体之后紧接着选模型。点胶囊改配置由
   // 胶囊自己管（三段各开各的浮层，见 components/RunTargetPicker.tsx）。
@@ -99,6 +109,19 @@ export function ReplyBox({
   const [profilesReady, setProfilesReady] = useState(false);
   const [profilesFailed, setProfilesFailed] = useState(false);
   const providers = useProviders();
+  // 执行器名只用于提示文案：没钉 profile 时按「该类型的默认执行器」报，与运行侧
+  // resolveExecutorFor 的降级口径一致，别让提示说出一个跑起来根本用不上的名字。
+  const executorLabelOf = (agentType: AgentType, executorId: string | null) =>
+    profiles.find((profile) => profile.id === executorId)?.name
+    ?? profiles.find((profile) => profile.type === agentType && profile.isDefault)?.name
+    ?? agentType;
+  // 任务的常设配置（以后都用谁）。点胶囊改的是它；`target` 是压在它上面的一次性召唤。
+  const standing = useStandingExecutor(
+    task,
+    onStandingExecutorChange
+      && ((next) => onStandingExecutorChange(next, executorLabelOf(next.agentType, next.executorId))),
+    setSendError,
+  );
   const scheduled = useScheduledMessages(task.id);
   const uploads = useAttachments({
     value: draft.attachments,
@@ -191,19 +214,19 @@ export function ReplyBox({
   const mentionOpen = !disabled && !commandActive && !picker && !mentionDismissed && !!mentionMatch;
   const selectedMentionIndex = Math.min(mentionIndex, Math.max(0, mentionCandidates.length - 1));
 
-  // 底部胶囊上显示的「这一回合会由谁、用什么模型跑」：@ 选过就是那一套，
-  // 没选就是任务自己的常设配置（executorId 为空时按类型默认执行器降级，与服务端
+  // 底部胶囊上显示的「这一回合会由谁、用什么模型跑」：@ 召唤过就是那一套（一次性），
+  // 没召唤就是任务自己的常设配置（executorId 为空时按类型默认执行器降级，与服务端
   // resolveExecutorFor 同一条口径）。
-  const activeAgent = (target?.agent ?? task.agentType ?? "claude") as AgentType;
-  const activeExecutorId = (target ? target.executorId : task.executorId)
+  const activeAgent = (target?.agent ?? standing.config.agentType) as AgentType;
+  const activeExecutorId = (target ? target.executorId : standing.config.executorId)
     ?? profiles.find((profile) => profile.type === activeAgent && profile.isDefault)?.id
     ?? null;
   const summary = executorRunSummary(
     { agentType: activeAgent, executorId: activeExecutorId },
     profiles,
     {
-      model: target ? target.model : task.model,
-      effort: target ? target.reasoningEffort : task.reasoningEffort,
+      model: target ? target.model : standing.config.model,
+      effort: target ? target.reasoningEffort : standing.config.reasoningEffort,
     },
   );
   const activeModel = summary.model;
@@ -212,6 +235,11 @@ export function ReplyBox({
   // 免得它去报任务的常设执行器(@grok 干活时报 codex 就是这么来的)。
   const activeExecutorLabel = profiles.find((profile) => profile.id === activeExecutorId)?.name
     ?? activeAgent;
+  // 胶囊改的是「以后都用谁」，跟「现在能不能说话」是两件事：从没跑过的任务同样该能
+  // 先把执行器挑好（详情页没有第二个入口，TaskInspector 那节是只读的）。所以这里
+  // 不跟着 disabled 走，只挡真正改不动的：非单飞、已归档、正在发送、正在配派生命令。
+  const configDisabled = task.mode !== "single" || task.archived || sending || commandActive
+    || (!target && !onStandingExecutorChange);
 
   const pickCommand = (item: SlashItem) => {
     // 技能不是派生命令:它只是**补全**。`/名字` 原样留在正文里跟着这一轮发下去,
@@ -255,9 +283,9 @@ export function ReplyBox({
     setTarget((current) => {
       const previous = {
         agentType: current?.agent ?? activeAgent,
-        executorId: current ? current.executorId : task.executorId ?? null,
+        executorId: current ? current.executorId : standing.config.executorId,
       };
-      const kept = current ? current.reasoningEffort : task.reasoningEffort ?? null;
+      const kept = current ? current.reasoningEffort : standing.config.reasoningEffort;
       return {
         ...next,
         reasoningEffort: sameExecutor({ agentType: next.agent, executorId: next.executorId }, previous)
@@ -274,10 +302,33 @@ export function ReplyBox({
   const commitEffort = (effort: string) => {
     setTarget((current) => ({
       agent: current?.agent ?? activeAgent,
-      executorId: current ? current.executorId : task.executorId ?? null,
-      model: current ? current.model : task.model ?? null,
+      executorId: current ? current.executorId : standing.config.executorId,
+      model: current ? current.model : standing.config.model,
       reasoningEffort: effort || null,
     }));
+  };
+
+  // 点胶囊改的是**任务以后都用谁**：写回任务本身，之后每一条消息（含排队的、队列
+  // 自动续跑的那些）都按新配置跑，不用每发一句重选一次。换执行器照样把模型/智能
+  // 水平打回「跟随」，与服务端 inheritExecutorOverrides 同一条口径；比较基准取
+  // **当前真正生效的**执行器（activeExecutorId 已把「跟随类型默认」解析过），
+  // 否则在没钉 profile 的任务上换个模型会白清一次用户选好的智能水平。
+  const commitStanding = (next: AgentModelSelection) => {
+    const changed = !sameExecutor(
+      { agentType: next.agent, executorId: next.executorId },
+      { agentType: activeAgent, executorId: activeExecutorId },
+    );
+    standing.commit({
+      agentType: next.agent,
+      executorId: next.executorId,
+      model: next.model,
+      reasoningEffort: changed ? null : standing.config.reasoningEffort,
+    });
+    textareaRef.current?.focus();
+  };
+
+  const commitStandingEffort = (effort: string) => {
+    standing.commit({ ...standing.config, reasoningEffort: effort || null });
   };
 
   // 正在飞的那一次发送。撤回要排在它后面（见下面的 withdraw）：清空和合并谁先谁后
@@ -549,9 +600,11 @@ export function ReplyBox({
             <Clock size={14} />
           </button>
           {/* 一颗三段胶囊：智能体 · 模型 · 智能水平。可单独改任一段，也可选完前一段后
-              向右接着配置；跟新建面板、工作流站点用同一组件。 */}
+              向右接着配置；跟新建面板、工作流站点用同一组件。
+              没在 @ 召唤时改它 = 改任务的常设配置，之后每条消息都按新的跑；正在召唤
+              （target 非空）时改的是这一次召唤本身，点 × 取消就回到常设配置。 */}
           <RunTargetPicker
-            label="本回合由谁来跑"
+            label={target ? "本回合由谁来跑" : "这个任务以后由谁来跑"}
             types={registeredTypes.length ? registeredTypes : [activeAgent]}
             profiles={profiles}
             selection={{ agentType: activeAgent, executorId: activeExecutorId }}
@@ -559,9 +612,9 @@ export function ReplyBox({
             effort={activeEffort ?? ""}
             variant="chip"
             highlight={!!target}
-            disabled={disabled || sending || commandActive}
-            onCommit={commitTarget}
-            onEffortChange={commitEffort}
+            disabled={configDisabled}
+            onCommit={target ? commitTarget : commitStanding}
+            onEffortChange={target ? commitEffort : commitStandingEffort}
           />
           {target && (
             <button
