@@ -4,6 +4,7 @@ import { createClient } from "./node-sqlite-client.js";
 import * as schema from "./schema.js";
 import { ensureAshDbDir, resolveAshDbFile } from "./path.js";
 import { runDataMigrations } from "./migrations.js";
+import { ensureChatSchema } from "./schema-chat.js";
 
 const dbFile = resolveAshDbFile();
 ensureAshDbDir(dbFile);
@@ -37,6 +38,7 @@ export { client as dbClient };
 // Minimal bootstrap so the app runs without a separate migration step in dev.
 // `npm run db:push` (drizzle-kit) remains the source of truth for migrations.
 export async function ensureSchema() {
+  await ensureChatSchema(client);
   await client.executeMultiple(`
     CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, repo_path TEXT NOT NULL, created_at TEXT NOT NULL

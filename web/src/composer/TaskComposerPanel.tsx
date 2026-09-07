@@ -12,7 +12,7 @@ import type {
   TeamPresetConfig,
 } from "@ash/shared";
 import { DEFAULT_APP_SETTINGS } from "@ash/shared";
-import { Paperclip } from "@phosphor-icons/react";
+import { ChatCircleDots } from "@phosphor-icons/react";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import {
   DEFAULT_CRON,
@@ -31,10 +31,9 @@ import { api } from "../lib/api.ts";
 import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import { useSkills } from "../lib/useSkills.ts";
 import { ComposerObjective } from "./ComposerObjective.tsx";
-import { ComposerStarters } from "./ComposerStudio.tsx";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import { ComposerFields } from "./ComposerFields.tsx";
-import { ASH_SLASH_ITEMS, MODES, SLASHES, SeedAttachmentList } from "./composerParts.tsx";
+import { ASH_SLASH_ITEMS, SLASHES, SeedAttachmentList } from "./composerParts.tsx";
 import { useComposerWorkflow } from "./ComposerWorkflow.tsx";
 import { ComposerLaunchControl, type LaunchMode } from "./ComposerLaunchControl.tsx";
 import { CreateGroupDialog } from "../overlays/CreateEntityDialog.tsx";
@@ -56,6 +55,7 @@ export function TaskComposerPanel({
   initialDraft,
   mode,
   onModeChange,
+  onChat,
   onCancel,
   onCreated,
   onCreateGroup,
@@ -66,6 +66,7 @@ export function TaskComposerPanel({
   initialDraft?: ComposerDraft | null;
   mode: TaskMode;
   onModeChange: (mode: TaskMode) => void;
+  onChat?: (draft: ComposerDraft) => void;
   onCancel: () => void;
   onCreated: (task: Task, draft?: ComposerDraft | null) => void;
   onCreateGroup: (name: string, mode: GroupMode) => Promise<Group>;
@@ -309,11 +310,11 @@ export function TaskComposerPanel({
     : unavailableRole
       ? mode === "single"
         ? workflowMode === "free"
-          ? "当前任务执行器未注册，请在「工作方式」中换一个。"
+          ? "当前任务执行器未注册，请在输入框下方换一个。"
           : runStepParams?.executorId
-            ? "起手式「让 AI 干活」那一站选的执行器未注册，请展开编排换一个。"
+            ? "起手式「让 AI 干活」那一站选的执行器未注册，请打开「工作方式」并展开编排换一个。"
             : "默认执行器未注册，请到执行器设置注册，或在起手式「让 AI 干活」那一站指定一个。"
-        : `${unavailableRole}当前未注册或不支持该角色，请展开「谁来做」更换执行器。`
+        : `${unavailableRole}当前未注册或不支持该角色，请打开输入框下方的「${mode === "team" ? "团队配置" : "讨论者"}」更换执行器。`
       : mode === "team" && detection.status === "loading"
         ? "正在确认已注册调度者的常驻会话能力…"
         : mode === "team" && detection.status === "failed"
@@ -468,46 +469,6 @@ export function TaskComposerPanel({
       </header>
       <div className="composer-scroll">
         <div className="composer-inner">
-          <div className="studio-card">
-          <div className="composer-tabs" role="tablist" aria-label="任务模式">
-            {MODES.map((item) => {
-              const Icon = item.icon;
-              return (
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={mode === item.value}
-                  key={item.value}
-                  onClick={() => onModeChange(item.value)}
-                >
-                  <Icon size={15} />{item.label}
-                </button>
-              );
-            })}
-            <span>切换模式不清空正文</span>
-          </div>
-          <ComposerObjective body={body} mode={mode} textareaRef={textareaRef}
-            onChange={(value) => { changeBody(value); setSlashIndex(0); setSlashDismissed(false); }}
-            onPaste={uploads.onPaste} items={slashCandidates} selected={slashSelected} token={slashQuery}
-            onSelect={setSlashIndex} onPick={pickSlash} onDismiss={() => setSlashDismissed(true)} onSubmit={() => void submit()} />
-          <div className="studio-writing-toolbar">
-            <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />
-            <span>添加上下文 · 图片、文档或参考文件</span>
-            <small>{body.length} 字</small>
-          </div>
-          <ImagePreviewGroup isolated>
-            <UploadAttachmentList
-              attachments={uploads.attachments}
-              pending={uploads.pending}
-              error={uploads.error}
-              onRemove={uploads.remove}
-              onCancel={uploads.cancel}
-            />
-            <SeedAttachmentList
-              paths={seedAttachments}
-              onRemove={(path) => setSeedAttachments((current) => current.filter((item) => item !== path))}
-            />
-          </ImagePreviewGroup>
           <ComposerFields
             mode={mode}
             singleRunSummary={singleRunSummary}
@@ -545,15 +506,29 @@ export function TaskComposerPanel({
             workflowSlot={mode === "single" && workflow.slot}
             workflowMode={workflowMode}
             onWorkflowModeChange={setWorkflowMode}
-          />
+            onModeChange={onModeChange}
+            chatTab={onChat && <button type="button" role="tab" aria-selected={false} disabled={uploads.uploading}
+              onClick={() => onChat({ body, attachments: allAttachments, noteIds: initialDraft?.noteIds })}>
+              <ChatCircleDots size={14} /><span>聊天</span>
+            </button>}
+            onPickStarter={(text, nextMode) => {
+              changeBody(body.trim() ? body + "\n\n" + text : text);
+              onModeChange(nextMode);
+              textareaRef.current?.focus();
+            }}
+          >
+          {(executorTools) => <div className="studio-card">
+          <ComposerObjective body={body} mode={mode} textareaRef={textareaRef}
+            onChange={(value) => { changeBody(value); setSlashIndex(0); setSlashDismissed(false); }}
+            onPaste={uploads.onPaste} items={slashCandidates} selected={slashSelected} token={slashQuery}
+            onSelect={setSlashIndex} onPick={pickSlash} onDismiss={() => setSlashDismissed(true)} onSubmit={() => void submit()} />
+          <ImagePreviewGroup isolated>
+            <UploadAttachmentList attachments={uploads.attachments} pending={uploads.pending}
+              error={uploads.error} onRemove={uploads.remove} onCancel={uploads.cancel} />
+            <SeedAttachmentList paths={seedAttachments}
+              onRemove={(path) => setSeedAttachments((current) => current.filter((item) => item !== path))} />
+          </ImagePreviewGroup>
           <footer className="composer-footer">
-            <div>
-              <span>
-                <Paperclip size={13} />
-                {uploads.uploading ? `${uploadingLabel(uploads.pending)} · 传完才能创建`
-                  : `${allAttachments.length} 个附件 · ⌘↵ 按当前启动方式创建`}
-              </span>
-            </div>
             <ComposerLaunchControl
               mode={launchMode}
               at={scheduleAt}
@@ -565,15 +540,17 @@ export function TaskComposerPanel({
               onAtChange={setScheduleAt}
               onCronChange={setScheduleCron}
               onSubmit={() => void submit()}
+              attachmentTool={<AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />}
+              executorTools={executorTools}
             />
+            {(uploads.uploading || allAttachments.length > 0 || scheduleError) && <div className="studio-input-status" role="status">
+              {uploads.uploading ? `${uploadingLabel(uploads.pending)} · 传完才能创建`
+                : scheduleError || `${allAttachments.length} 个附件`}
+            </div>}
           </footer>
-          </div>
-          <ComposerStarters onPick={(text, nextMode) => {
-            changeBody(body.trim() ? body + "\n\n" + text : text);
-            onModeChange(nextMode);
-            textareaRef.current?.focus();
-          }} />
-          <p className="studio-footnote">切换模式不清空正文与配置 · ⌘ / Ctrl + Enter 按当前启动方式创建</p>
+          </div>}
+          </ComposerFields>
+          <div className="studio-footnote"><span>/ 调用技能 · ⌘ / Ctrl + Enter 创建</span>{body.length > 0 && <span>{body.length} 字</span>}</div>
         </div>
       </div>
       {groupDialogOpen && <CreateGroupDialog

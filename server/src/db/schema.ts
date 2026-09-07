@@ -21,6 +21,7 @@ export const projects = sqliteTable("projects", {
 // user_handoff_targets / user_settings 在 `schema-multiuser.ts`。整份原样再导出:
 // drizzle 的 `import * as schema` 要看到全部表,拆文件不能拆掉那个视图。
 export * from "./schema-multiuser.js";
+export * from "./schema-chat.js";
 
 
 

@@ -47,16 +47,17 @@ import { HandoffApprovalAlert } from "../handoff/HandoffApprovalAlert.tsx";
 import { visibleOnThisMachine } from "./taskTreeModel.ts";
 import { HandoffDialog } from "../task-detail/HandoffDialog.tsx";
 import { RemoteTaskDetail } from "../remote-task/RemoteTaskDetail.tsx";
+import { ChatView } from "../chat/ChatView.tsx";
 
 const ProjectTerminal = lazy(() => import("./ProjectTerminal.tsx").then((module) => ({ default: module.ProjectTerminal })));
 
-type ContextView = "review" | "settings" | "palette" | "notes" | "create";
+type ContextView = "review" | "settings" | "palette" | "notes" | "create" | "chat";
 
 function readUrlSelection() {
   const params = new URLSearchParams(window.location.search);
   const settings = parseSettingsSection(params.get("settings"));
   const rawView = params.get("view");
-  const view: ContextView | null = rawView === "review" || rawView === "settings" || rawView === "palette" || rawView === "notes" || rawView === "create" ? rawView : null;
+  const view: ContextView | null = rawView === "review" || rawView === "settings" || rawView === "palette" || rawView === "notes" || rawView === "create" || rawView === "chat" ? rawView : null;
   const rawMode = params.get("mode");
   const mode: TaskMode = rawMode === "team" || rawMode === "duet" ? rawMode : "single";
   return { projectId: params.get("project"), taskId: params.get("task"), settings, view, noteId: params.get("note"), mode };
@@ -73,6 +74,8 @@ export function WorkspaceShell() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(initial.settings);
   const [groups, setGroups] = useState<Group[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(initial.view === "palette");
+  const [chatOpen, setChatOpen] = useState(initial.view === "chat");
+  const [chatReturnDraft, setChatReturnDraft] = useState<{ projectId: string; draft: ComposerDraft } | null>(null);
   const [notes, setNotes] = useState<{ projectId: string; noteId: string | null } | null>(initial.view === "notes" && initial.projectId ? { projectId: initial.projectId, noteId: initial.noteId } : null);
   const [groupsPanelOpen, setGroupsPanelOpen] = useState(false);
   const [composer, setComposer] = useState<{ draft?: ComposerDraft | null; mode: TaskMode } | null>(initial.view === "create" ? { mode: initial.mode } : null);
@@ -175,12 +178,13 @@ export function WorkspaceShell() {
     if (taskId && !settingsSection) params.set("task", taskId);
     if (settingsSection) { params.set("view", "settings"); params.set("settings", settingsSection); }
     else if (notes) { params.set("view", "notes"); if (notes.noteId) params.set("note", notes.noteId); }
+    else if (chatOpen) params.set("view", "chat");
     else if (composer) { params.set("view", "create"); params.set("mode", composer.mode); }
     else if (paletteOpen) params.set("view", "palette");
     else if (reviewTaskId && reviewTaskId === taskId) params.set("view", "review");
     const query = params.toString();
     window.history.replaceState(null, "", query ? `${window.location.pathname}?${query}` : window.location.pathname);
-  }, [composer, notes, paletteOpen, projectId, projectsReady, reviewTaskId, scopeKind, settingsSection, taskId]);
+  }, [chatOpen, composer, notes, paletteOpen, projectId, projectsReady, reviewTaskId, scopeKind, settingsSection, taskId]);
 
   useEffect(() => {
     const onPopState = () => {
@@ -192,6 +196,7 @@ export function WorkspaceShell() {
       setTaskId(next.taskId);
       setSettingsSection(next.settings);
       setPaletteOpen(next.view === "palette");
+      setChatOpen(next.view === "chat");
       setNotes(next.view === "notes" && next.projectId ? { projectId: next.projectId, noteId: next.noteId } : null);
       setComposer(next.view === "create" ? { mode: next.mode } : null);
       setReviewTaskId(next.view === "review" ? next.taskId : null);
@@ -235,6 +240,7 @@ export function WorkspaceShell() {
     ? current.map((task) => task.id === updated.id ? updated : task)
     : [updated, ...current]), [setTasks]);
   const openLocalOwnership = useCallback((task: TaskListItem) => {
+    setChatOpen(false);
     updateTask(task);
     pushTaskHistoryEntry(task, window, scopeKind);
     setRemoteSelection(null);
@@ -251,7 +257,7 @@ export function WorkspaceShell() {
     setTaskId((current) => current === deletedId ? null : current);
   }, [setTasks]);
   // 选具体项目 = 退回单项目态：在下拉里点了某个项目，还继续按任务模式的口径列表的话，那次点击就白点了。
-  const selectProject = (nextProjectId: string) => { setScopeKind("project"); setProjectId(nextProjectId); setTaskId(null); setRemoteSelection(null); setComposer(null); setNotes(null); setReviewTaskId(null); setSettingsSection(null); };
+  const selectProject = (nextProjectId: string) => { setChatOpen(false); setScopeKind("project"); setProjectId(nextProjectId); setTaskId(null); setRemoteSelection(null); setComposer(null); setNotes(null); setReviewTaskId(null); setSettingsSection(null); };
   // 切到「任务模式」只换列表的口径，不动选中的任务和上下文项目 —— 你正看着的那条还在，
   // 只是周围换成了所有项目里在跑 / 待验收的行（它自己若不在这两档里，列表上不出现，但仍开着）。
   const selectTaskMode = () => { setScopeKind("tasks"); setSettingsSection(null); };
@@ -277,6 +283,7 @@ export function WorkspaceShell() {
   // keepSpread：J/K 在铺开态里只是挪选中行，右边那两列还得接着看；点行或按 Enter 才算「选定了」，
   // 那时候铺开自己收起来把主区还回去。
   const selectTask = (task: TaskListItem, options?: { keepSpread?: boolean }) => {
+    setChatOpen(false);
     if (!visibleOnThisMachine(task)) {
       void openOutboundTask(task);
       return;
@@ -292,6 +299,7 @@ export function WorkspaceShell() {
     if (!options?.keepSpread) spread.close();
   };
   const selectRemoteTask = (task: TaskListItem, target: HandoffTarget) => {
+    setChatOpen(false);
     setProjectId(task.projectId);
     setTaskId(null);
     setRemoteSelection({ task, target });
@@ -343,9 +351,22 @@ export function WorkspaceShell() {
   const openComposer = (mode: TaskMode = "single") => {
     if (!requireProject(`新建${mode === "team" ? "团队" : mode === "duet" ? "讨论" : "任务"}`)) return;
     setRemoteSelection(null);
+    setChatOpen(false);
     setSettingsSection(null);
     setNotes(null);
-    setComposer((current) => current ? { ...current, mode } : { mode });
+    setComposer((current) => current ? { ...current, mode } : { mode, draft: chatReturnDraft?.projectId === projectId ? chatReturnDraft.draft : null });
+    setChatReturnDraft(null);
+  };
+  const openChat = (draft?: ComposerDraft) => {
+    if (!requireProject("打开聊天")) return;
+    if (draft && projectId) setChatReturnDraft({ projectId, draft });
+    setTaskId(null);
+    setRemoteSelection(null);
+    setSettingsSection(null);
+    setNotes(null);
+    setComposer(null);
+    setChatOpen(true);
+    spread.close();
   };
   const createTask = (task: Task, draft?: ComposerDraft | null) => {
     setTasks((current) => current.some((row) => row.id === task.id) ? current.map((row) => row.id === task.id ? task : row) : [task, ...current]);
@@ -368,7 +389,7 @@ export function WorkspaceShell() {
   };
 
   useWorkspaceShortcuts({
-    enabled: !settingsSection && !groupsPanelOpen,
+    enabled: !settingsSection && !groupsPanelOpen && !chatOpen,
     paletteOpen,
     composerOpen: composer !== null,
     spreadOpen: spread.open,
@@ -419,11 +440,11 @@ export function WorkspaceShell() {
   /></div>{overlays}</>;
 
   return (
-    <><div className="workspace-system-layout">{handoffAlert}<div className={`workspace-shell${spread.laidOut ? " is-spread" : ""}`} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
-      <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} selectedRemoteTaskId={remoteSelection?.task.id ?? null} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTaskMode={selectTaskMode} onTask={selectTask} onRemoteTask={selectRemoteTask} onTaskStarred={applyStar} onHandoffFinished={() => refetchTasks({ silent: true }).then(() => {})} outbound={outboundBar} onGitChanged={() => setGitVersion((value) => value + 1)} onOpenTerminal={currentProject && canUseTerminal ? () => setTerminalOpen(true) : null} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={openGroups} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onSettings={() => openSettings("executors")} />
+    <><div className="workspace-system-layout">{handoffAlert}<div className={`workspace-shell${spread.laidOut ? " is-spread" : ""}${chatOpen ? " is-chat" : ""}`} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
+      <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} selectedRemoteTaskId={remoteSelection?.task.id ?? null} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTaskMode={selectTaskMode} onTask={selectTask} onRemoteTask={selectRemoteTask} onTaskStarred={applyStar} onHandoffFinished={() => refetchTasks({ silent: true }).then(() => {})} outbound={outboundBar} onGitChanged={() => setGitVersion((value) => value + 1)} onOpenTerminal={currentProject && canUseTerminal ? () => setTerminalOpen(true) : null} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={openGroups} onChat={openChat} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onSettings={() => openSettings("executors")} />
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
-        {composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onCancel={() => setComposer(null)} onCreated={createTask} onCreateGroup={createComposerGroup} notify={notify} /> : remoteSelection ? (
+        {chatOpen && currentProject ? <ChatView key={currentProject.id} project={currentProject} onTask={selectTask} onExit={() => setChatOpen(false)} onMode={openComposer} /> : composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onChat={openChat} onCancel={() => setComposer(null)} onCreated={createTask} onCreateGroup={createComposerGroup} notify={notify} /> : remoteSelection ? (
           <RemoteTaskDetail
             archive={remoteSelection.task}
             target={remoteSelection.target}

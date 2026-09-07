@@ -37,7 +37,6 @@ export default function NewTask() {
   const [groupId, setGroupId] = useState<string | null>(null);
   const [creatingGroup, setCreatingGroup] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
-  const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [executorPick, setExecutorPick] = useState<ExecutorSelection>({ agentType: "claude", executorId: null });
   const [model, setModel] = useState("");
@@ -271,8 +270,8 @@ export default function NewTask() {
       setError("请选择项目");
       return;
     }
-    if (!title.trim() && !body.trim()) {
-      setError("请填写标题或正文");
+    if (!body.trim()) {
+      setError("请填写正文");
       return;
     }
     if (launch === "cron" && !cron.trim()) {
@@ -286,7 +285,6 @@ export default function NewTask() {
     setBusy(true);
     setError(null);
     try {
-      const explicit = title.trim();
       const team = {
         lead: leadSelection.agentType,
         worker: workerSelection.agentType,
@@ -300,7 +298,7 @@ export default function NewTask() {
       const t = await api.createTask({
         projectId,
         groupId,
-        title: explicit || firstLine(body) || "新任务",
+        title: firstLine(body) || "新任务",
         body: body.trim(),
         mode: teamOn ? "team" : "single",
         agentType: teamOn ? leadSelection.agentType : executorPick.agentType,
@@ -312,7 +310,7 @@ export default function NewTask() {
               reasoningEffort: reasoningEffort || null,
             }),
         // Resident consoles do not run the single-task auto-title turn.
-        autoTitle: teamOn ? false : !explicit,
+        autoTitle: teamOn ? false : true,
         // Team worktree is opt-in too: when enabled, the resident lead and its
         // default workers share it; a worker can still request its own isolation.
         useWorktree: project?.health.isRepo ? useWorktree : false,
@@ -354,10 +352,6 @@ export default function NewTask() {
               />
             ))}
           </View>
-        </Field>
-
-        <Field label="标题（留空则自动命名）">
-          <Input value={title} onChangeText={setTitle} placeholder="任务标题" />
         </Field>
 
         <Field label="正文 / 指令">
@@ -503,13 +497,23 @@ export default function NewTask() {
           </Text>
         ) : null}
 
+      </ScrollView>
+      <View
+        style={{
+          paddingHorizontal: 16,
+          paddingTop: 10,
+          paddingBottom: Math.max(insets.bottom, 12),
+          backgroundColor: theme.bg,
+          borderTopWidth: 1,
+          borderTopColor: theme.line,
+        }}
+      >
         <Button
           label={busy ? "提交中…" : activeMode.btn}
           onPress={submit}
           disabled={busy || noExecutor || (launch === "cron" && !cron.trim())}
-          style={{ marginTop: 4 }}
         />
-      </ScrollView>
+      </View>
     </KeyboardAvoidingView>
   );
 }

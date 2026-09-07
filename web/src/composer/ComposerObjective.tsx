@@ -20,8 +20,8 @@ export function ComposerObjective({ body, mode, textareaRef, onChange, onPaste, 
   return <div className="composer-objective">
     <textarea ref={textareaRef} autoFocus aria-label="任务目标" value={body} onPaste={onPaste}
       onChange={(event) => onChange(event.target.value)}
-      placeholder={mode === "team" ? "给调度者的目标…（可输入 /single 或 /duet 切换）"
-        : mode === "duet" ? "要讨论并形成结论的议题…" : "想完成什么？\n\n可以描述一个问题，也可以交代一个完整目标。输入 / 调用技能。"}
+      placeholder={mode === "team" ? "想让团队完成什么？\n\n写下目标，剩下的交给团队。"
+        : mode === "duet" ? "有什么想一起讨论？\n\n写下背景、方案，或一个还没想清楚的问题。" : "想完成什么？\n\n一个问题、一个想法，或一个完整的目标。"}
       onKeyDown={(event) => {
         if (items.length) {
           if (event.key === "ArrowDown" || event.key === "ArrowUp") {
