@@ -7,6 +7,7 @@ import {
   Plus,
   SidebarSimple,
   Stack,
+  ChatCircleDots,
 } from "@phosphor-icons/react";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { ProjectGitContext } from "./ProjectGitContext.tsx";
@@ -44,6 +45,7 @@ export function WorkspaceSidebar({
   onToggleCollapsed,
   onSearch,
   onNotes,
+  onChat,
   onGroups,
   onCreate,
   onNewProject,
@@ -75,6 +77,7 @@ export function WorkspaceSidebar({
   onToggleCollapsed: () => void;
   onSearch: () => void;
   onNotes: () => void;
+  onChat?: () => void;
   onGroups: () => void;
   onCreate: () => void;
   onNewProject: () => void;
@@ -94,6 +97,7 @@ export function WorkspaceSidebar({
         <button className="workspace-side-icon" type="button" onClick={onToggleCollapsed} aria-label="展开侧边栏">
           <SidebarSimple size={17} weight="bold" aria-hidden="true" />
         </button>
+        {onChat && <button className="workspace-side-icon" type="button" aria-label="聊天" onClick={() => onChat()}><ChatCircleDots size={16} /></button>}
       </aside>
     );
   }
@@ -123,6 +127,7 @@ export function WorkspaceSidebar({
           )}
         </div>
         <div className="workspace-sidebar-tools" role="toolbar" aria-label="任务工具">
+          {onChat && <button className="workspace-side-icon" type="button" aria-label="聊天" onClick={() => onChat()}><ChatCircleDots size={16} /></button>}
           <SpreadFilterControls spread={spread} tasks={tasks} scope={scope} />
           <button className="workspace-side-icon" type="button" title={`搜索 ${modifier} K`} aria-label={`搜索 ${modifier} K`} onClick={onSearch}>
             <MagnifyingGlass size={15} aria-hidden="true" />

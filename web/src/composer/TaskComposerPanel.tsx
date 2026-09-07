@@ -12,7 +12,7 @@ import type {
   TeamPresetConfig,
 } from "@ash/shared";
 import { DEFAULT_APP_SETTINGS } from "@ash/shared";
-import { Paperclip } from "@phosphor-icons/react";
+import { ChatCircleDots, Paperclip } from "@phosphor-icons/react";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import {
   DEFAULT_CRON,
@@ -54,6 +54,7 @@ export function TaskComposerPanel({
   initialDraft,
   mode,
   onModeChange,
+  onChat,
   onCancel,
   onCreated,
   onCreateGroup,
@@ -64,6 +65,7 @@ export function TaskComposerPanel({
   initialDraft?: ComposerDraft | null;
   mode: TaskMode;
   onModeChange: (mode: TaskMode) => void;
+  onChat?: (draft: ComposerDraft) => void;
   onCancel: () => void;
   onCreated: (task: Task, draft?: ComposerDraft | null) => void;
   onCreateGroup: (name: string, mode: GroupMode) => Promise<Group>;
@@ -479,7 +481,8 @@ export function TaskComposerPanel({
                 </button>
               );
             })}
-            <span>切换模式不清空正文</span>
+            {onChat && <button type="button" role="tab" aria-selected={false} disabled={uploads.uploading} onClick={() => onChat({ body, attachments: allAttachments, noteIds: initialDraft?.noteIds })}><ChatCircleDots size={15} />聊天</button>}
+            <span>切换任务模式不清空正文</span>
           </div>
           <div className="composer-objective">
             <textarea

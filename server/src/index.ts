@@ -103,6 +103,8 @@ async function initializeServer() {
     ]);
 
   await ensureSchema();
+  const { chatService } = await import("./chat/service.js");
+  await chatService.recover();
   // 实例模式(自用 / 多人)要在任何路由被打之前读出来:同步派进程那条路只认
   // auth/multi-flag.ts 里的缓存镜像,而那个镜像由 instanceConfig() 负责刷新。
   const [modeModule, { authGate }, { resourceGate }, { personalWriteGate }, { withHandoffActor }, { actorOf, ownerIdOf }] =

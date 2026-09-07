@@ -6,6 +6,10 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./chat": {
+      "types": "./src/chat.ts",
+      "default": "./src/chat.ts"
+    },
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
