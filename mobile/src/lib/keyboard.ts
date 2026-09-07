@@ -28,6 +28,14 @@ const KEYBOARD_GAP = 8;
  *   · iPhone 14/15/16 Pro 状态栏 59 → 少补 15pt，输入框底下被键盘啃掉一截；
  *   · iPhone SE 状态栏 20 → 多补 24pt，输入框和键盘之间凭空浮起一条空带。
  * native-stack 把算好的真值放在 HeaderHeightContext 里（已含状态栏），读它即可。
+ *
+ * SDK 57 升级后在 iOS 26.5 模拟器上实测到的真值（任务详情页，2026-09-07）：
+ *   · iPhone 17 Pro → 116
+ *   · iPhone SE (3rd gen) → 74
+ * 留这两个数当锚点是因为这条 import 一旦拿错模块实例就毫无声响：兜底值 insets.top+44
+ * 在部分机型上碰巧接近正确，肉眼分不出来。想确认 Context 真的通着，就在两台状态栏高度
+ * 差异大的机型上各读一次 `useContext(HeaderHeightContext)` 的原始返回值 —— 必须都是
+ * 具体数字且彼此不等；出现 undefined 就是退回兜底，Context 拿的不是渲染 Stack 的那份。
  */
 export function useKeyboardOffset(): number {
   // useHeaderHeight() 在没有 header 的地方直接 throw；这里读 context 自己兜底 ——
