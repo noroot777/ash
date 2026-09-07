@@ -305,6 +305,10 @@ function ConfigTrigger({
   const bad = tone === "error";
   return (
     <Pressable
+      accessibilityRole="button"
+      // 三段共用一颗胶囊，只报 label 的话无障碍树里就是三个「智能体/模型/思考强度」，
+      // 分不出当前选的是什么；带上 value 才能被自动化定位和断言。
+      accessibilityLabel={`${label}：${value}`}
       onPress={onPress}
       style={({ pressed }) => ({
         flex: grow,
