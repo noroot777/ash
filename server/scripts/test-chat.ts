@@ -7,7 +7,7 @@ import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { AGENT_TYPES } from "@ash/shared";
 import type { ChatMember, ChatSnapshot } from "@ash/shared/chat";
-import { mentionedMembers } from "@ash/shared/chat";
+import { isAllMention, mentionedMembers } from "@ash/shared/chat";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-chat-test-"));
 process.env.ASH_DB = join(stage, "test.db");
@@ -32,6 +32,22 @@ for (const body of ["@codex 请看看", "请 @codex 看看", "请@codex 看看",
 const extended = [...members, { ...members[0]!, id: "long", name: "codex设计" }];
 assert.deepEqual(mentionedMembers("请@codex设计看看", extended).map((member) => member.id), ["long"]);
 assert.deepEqual(mentionedMembers("@codex-other @codex2 邮件mail@codex", extended), []);
+for (const body of ["@all 都来看看", "@All 都来看看", "@ALL", "请 @所有人 看看", "（@all）", "@all，请给建议"]) {
+  assert.deepEqual(mentionedMembers(body, members).map((member) => member.id), ["codex", "claude"], body);
+}
+for (const body of ["@allen 看看", "mail@all", "`@all`", "> @all"]) {
+  assert.deepEqual(mentionedMembers(body, members).map((member) => member.id), [], body);
+}
+// 汉字不算词边界（同一条规则让「@codex设计」这类中文成员名可用），所以「@所有人员」照样按全体处理。
+assert.deepEqual(mentionedMembers("@所有人员请注意", members).map((member) => member.id), ["codex", "claude"]);
+assert.deepEqual(mentionedMembers("@all 但是这个群只有一个人", [members[0]!]).map((member) => member.id), ["codex"]);
+// 别名和成员名同长时成员优先：老群里真有人叫 all，@all 仍然只叫他。
+assert.deepEqual(mentionedMembers("@all 看看", [...members, { ...members[0]!, id: "literal", name: "all" }]).map((member) => member.id), ["literal"]);
+assert.deepEqual(mentionedMembers("@al 看看", [...members, { ...members[0]!, id: "short", name: "al" }]).map((member) => member.id), ["short"]);
+assert.deepEqual(mentionedMembers("@all 看看", [...members, { ...members[0]!, id: "short", name: "al" }]).map((member) => member.id), ["codex", "claude", "short"]);
+assert.equal(isAllMention("All"), true);
+assert.equal(isAllMention("所有人"), true);
+assert.equal(isAllMention("codex"), false);
 assert.throws(() => parseChatReply('{"reply":"ok","task":{}}'));
 assert.throws(() => parseChatReply('{"reply":"ok","task":null} unexpected tail'));
 assert.deepEqual(parseChatReply('我先查看项目文件。{"reply":"建议简化导航","task":null}'), { reply: "建议简化导航", task: null });
@@ -62,6 +78,7 @@ app.use("*", async (context, next) => {
 });
 mountChatRoutes(app, service);
 const request = (path: string, body?: unknown, headers: Record<string, string> = {}) => app.request(path, { method: body ? "POST" : "GET", headers: { "Content-Type": "application/json", ...headers }, ...(body ? { body: JSON.stringify(body) } : {}) });
+const patch = (roomId: string, body: unknown) => app.request(`/chats/${roomId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const create = await request("/chats", { projectId: "project", name: "研发群", members });
 assert.equal((await request("/chats", { projectId: "project", name: "无效类型", members: [{ ...members[0], agentType: "not-an-agent" }] })).status, 400);
 assert.equal(create.status, 201);
@@ -106,6 +123,14 @@ try {
   assert.ok(invoked.every((entry) => !entry.prompt.includes("跨群秘密，不能读取")));
   console.log("✓ 多成员同时点名，历史按群隔离");
 
+  const beforeAllMention = invoked.length;
+  await send("@all 请所有人给一句建议");
+  await settled();
+  assert.equal(invoked.length - beforeAllMention, 2);
+  assert.equal((await request("/chats", { projectId: "project", name: "保留名", members: [{ ...members[0], name: "all" }] })).status, 400);
+  assert.equal((await request("/chats", { projectId: "project", name: "保留名", members: [{ ...members[0], name: "所有人" }] })).status, 400);
+  console.log("✓ @all 唤醒全部成员；all / 所有人 被保留为全体点名，不能当成员名");
+
   await send("@codex 请实现功能");
   value = await settled();
   assert.equal(started.length, 1);
@@ -137,6 +162,11 @@ try {
   await send("@codex 排队的请求");
   await delay(50);
   const beforeStop = invoked.length;
+  // 改名不碰在跑的回复，所以忙时允许（设置面板会连成员原样一起提交）；真换人才 409。
+  assert.equal((await patch(room.id, { name: "研发群 · 忙时改名", members })).status, 200);
+  assert.equal((await patch(room.id, { members: [members[0]] })).status, 409);
+  assert.equal((await snapshot()).room.name, "研发群 · 忙时改名");
+  assert.equal((await snapshot()).room.members.length, 2);
   await request(`/chats/${room.id}/stop`, {});
   await delay(50);
   value = await settled();
@@ -161,8 +191,17 @@ try {
   assert.equal(allRoomResponse.status, 201);
   const allRoom = await allRoomResponse.json() as { id: string; members: ChatMember[] };
   assert.deepEqual(allRoom.members.map((member) => member.agentType), [...AGENT_TYPES]);
-  const patched = await app.request(`/chats/${allRoom.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ members: allMembers }) });
+  const patched = await patch(allRoom.id, { members: allMembers });
   assert.equal(patched.status, 200);
+  assert.equal((await patch(allRoom.id, { name: "  全员群  " })).status, 200);
+  assert.equal((await (await request(`/chats/${allRoom.id}`)).json() as ChatSnapshot).room.name, "全员群");
+  assert.deepEqual(((await (await request("/chats?projectId=project")).json() as { id: string; name: string }[]).find((entry) => entry.id === allRoom.id))?.name, "全员群");
+  assert.equal((await patch(allRoom.id, { name: "   " })).status, 400);
+  assert.equal((await patch(allRoom.id, { name: "长".repeat(81) })).status, 400);
+  assert.equal((await patch(allRoom.id, {})).status, 400);
+  assert.equal((await patch(allRoom.id, { members: [{ ...allMembers[0], name: "所有人" }] })).status, 400);
+  assert.equal((await (await request(`/chats/${allRoom.id}`)).json() as ChatSnapshot).room.members.length, AGENT_TYPES.length);
+  console.log("✓ 群聊可改名（保存前去空白）、改名与换成员各自校验，失败不写坏成员");
   const beforeAll = invoked.length;
   await request(`/chats/${allRoom.id}/messages`, { id: "all-agents-message", body: allMembers.map((member) => `@${member.name}`).join(" ") + " 请给建议" });
   let allSnapshot: ChatSnapshot | undefined;

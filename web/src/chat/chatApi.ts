@@ -6,7 +6,7 @@ const json = (body: unknown, method = "POST"): RequestInit => ({ method, headers
 export const chatApi = {
   rooms: (projectId: string) => request<ChatRoom[]>(`/chats?projectId=${encodeURIComponent(projectId)}`),
   create: (projectId: string, name: string, members: ChatMember[]) => request<ChatRoom>("/chats", json({ projectId, name, members })),
-  members: (roomId: string, members: ChatMember[]) => request<ChatRoom>(`/chats/${roomId}`, json({ members }, "PATCH")),
+  update: (roomId: string, patch: { name?: string; members?: ChatMember[] }) => request<ChatRoom>(`/chats/${roomId}`, json(patch, "PATCH")),
   snapshot: (roomId: string) => request<ChatSnapshot>(`/chats/${roomId}`),
   send: (roomId: string, body: string, id: string) => request<ChatSnapshot>(`/chats/${roomId}/messages`, json({ body, id })),
   stop: (roomId: string) => request<ChatSnapshot>(`/chats/${roomId}/stop`, json({})),

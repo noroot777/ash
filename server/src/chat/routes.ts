@@ -3,6 +3,7 @@ import type { Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { AGENT_TYPES } from "@ash/shared";
 import type { ChatMember } from "@ash/shared/chat";
+import { isAllMention } from "@ash/shared/chat";
 import { db } from "../db/index.js";
 import { agents, chatRooms, chatMessages, projects, tasks } from "../db/schema.js";
 import { actorOf, isAccountHolder, ownerIdOf } from "../auth/context.js";
@@ -36,6 +37,7 @@ async function parseMembers(value: unknown, c: Context): Promise<ChatMember[]> {
     if (!entry || typeof entry !== "object") throw new Error("成员配置无效。");
     const raw = entry as Record<string, unknown>;
     if (typeof raw.name !== "string" || !/^[\p{L}\p{N}_·.-]{1,32}$/u.test(raw.name) || names.has(raw.name)) throw new Error("成员名须唯一，限 32 字，不含空格或 @。");
+    if (isAllMention(raw.name)) throw new Error("「all / 所有人」是召唤全体成员的保留名，请换一个成员名。");
     if (!AGENT_TYPES.includes(raw.agentType as ChatMember["agentType"])) throw new Error("请选择有效的智能体。");
     const executorId = typeof raw.executorId === "string" && raw.executorId ? raw.executorId : null;
     if (executorId && !profiles.some((profile) => profile.id === executorId && profile.type === raw.agentType)) throw new Error("所选执行器不存在或类型不匹配。");
@@ -89,13 +91,25 @@ export function mountChatRoutes(api: Hono, service: ChatService = chatService) {
   api.patch("/chats/:roomId", async (c) => {
     const room = await visibleRoom(c);
     if (!room) return c.json({ error: "chat not found" }, 404);
-    const busy = await db.select({ id: chatMessages.id }).from(chatMessages).where(and(eq(chatMessages.roomId, room.id), inArray(chatMessages.status, ["queued", "running"]))).limit(1);
-    if (busy.length) return c.json({ error: "请等待回复结束或停止回复后再修改成员。" }, 409);
     const body = await c.req.json();
+    const renaming = body.name !== undefined;
+    const rewiring = body.members !== undefined;
+    if (!renaming && !rewiring) return c.json({ error: "请提供要修改的群聊名称或成员。" }, 400);
+    if (renaming && (typeof body.name !== "string" || !body.name.trim() || body.name.length > 80)) return c.json({ error: "群聊名称限 1–80 字。" }, 400);
     try {
-      const members = await parseMembers(body.members, c);
-      await db.update(chatRooms).set({ members: JSON.stringify(members) }).where(eq(chatRooms.id, room.id));
-      return c.json(toRoom({ ...room, members: JSON.stringify(members) }));
+      const patch: { name?: string; members?: string } = {};
+      if (renaming) patch.name = (body.name as string).trim();
+      // 成员原样回传不算换人：设置面板改名时会连成员一起提交，不该被在跑的回复挡住。
+      if (rewiring) {
+        const members = JSON.stringify(await parseMembers(body.members, c));
+        if (members !== room.members) patch.members = members;
+      }
+      if (patch.members !== undefined) {
+        const busy = await db.select({ id: chatMessages.id }).from(chatMessages).where(and(eq(chatMessages.roomId, room.id), inArray(chatMessages.status, ["queued", "running"]))).limit(1);
+        if (busy.length) return c.json({ error: "请等待回复结束或停止回复后再修改成员。" }, 409);
+      }
+      if (Object.keys(patch).length) await db.update(chatRooms).set(patch).where(eq(chatRooms.id, room.id));
+      return c.json(toRoom({ ...room, ...patch }));
     } catch (error) { return c.json({ error: error instanceof Error ? error.message : "成员配置无效" }, 400); }
   });
   api.post("/chats/:roomId/messages", async (c) => {
