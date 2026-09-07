@@ -15,6 +15,9 @@ import { useDismissable } from "../lib/useDismissable.ts";
  *  ① **起失败的那一次也要能看**。日志文件在 spawn 之前就写了 banner，所以入口按
  *     `hasLog` 给，不是按 `running` 给。
  *  ② 还在跑的时候要自己刷新。dev server 是边跑边吐字的，一份静态快照等于让人一直点。
+ *     「还在跑」包含**还在启动**那一段（后端的 `starting`）—— 那一段最长两分钟，Maven
+ *     在下依赖、前端在冷编译，正是这扇窗唯一有用的时候。只按「预览已就绪」轮询的话，
+ *     它就退化成事后查看器了。
  */
 export function PreviewLogDialog({ taskId, onClose, notify }: {
   taskId: string;
@@ -24,7 +27,7 @@ export function PreviewLogDialog({ taskId, onClose, notify }: {
   const scrim = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLPreElement>(null);
   const [text, setText] = useState("");
-  const [meta, setMeta] = useState<{ running: boolean; truncated: boolean; command: string | null; url: string | null } | null>(null);
+  const [meta, setMeta] = useState<{ running: boolean; starting: boolean; truncated: boolean; command: string | null; url: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   // 人往上翻的时候不能被新日志拽回底部（跟会话贴底一个道理）。
@@ -35,7 +38,7 @@ export function PreviewLogDialog({ taskId, onClose, notify }: {
     try {
       const log = await api.freePreviewLog(taskId);
       setText(log.exists ? log.text : "");
-      setMeta({ running: log.running, truncated: log.truncated, command: log.command, url: log.url });
+      setMeta({ running: log.running, starting: log.starting, truncated: log.truncated, command: log.command, url: log.url });
       setError(null);
     } catch (fail) {
       setError(fail instanceof Error ? fail.message : "读取预览日志失败");
@@ -69,8 +72,12 @@ export function PreviewLogDialog({ taskId, onClose, notify }: {
           <span><Terminal size={17} weight="bold" /></span>
           <div>
             <h2 id="preview-log-title">预览日志</h2>
-            <p>
-              {meta?.running ? "预览正在运行，日志每 2 秒自动续上。" : "这是最近一次预览留下的输出（起失败的那次也在）。"}
+            <p data-testid="preview-log-state">
+              {meta?.starting
+                ? "预览正在启动，日志每 2 秒自动续上。"
+                : meta?.running
+                  ? "预览正在运行，日志每 2 秒自动续上。"
+                  : "这是最近一次预览留下的输出（起失败的那次也在）。"}
               {meta?.truncated ? "太长了，只显示尾部。" : ""}
             </p>
           </div>

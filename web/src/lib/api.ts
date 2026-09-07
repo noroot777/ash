@@ -346,7 +346,7 @@ export const api = {
   // 为什么起不来」的唯一现场，不能只在 running 时给。
   freePreviewLog: (taskId: string): Promise<{
     text: string; truncated: boolean; updatedAt: string | null;
-    exists: boolean; running: boolean; command: string | null; url: string | null;
+    exists: boolean; running: boolean; starting: boolean; command: string | null; url: string | null;
   }> => request(`/tasks/${id(taskId)}/free-workflow/preview/log`),
   freeReviewFileUrl: (taskId: string, runId: string, round: number, name: string): string =>
     apiPath(`/tasks/${id(taskId)}/free-workflow/review-file?run=${id(runId)}&round=${id(String(round))}&name=${id(name)}`),

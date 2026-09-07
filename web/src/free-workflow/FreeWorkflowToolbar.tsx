@@ -14,6 +14,9 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
   const [reviewOpen, setReviewOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const [previewBusy, setPreviewBusy] = useState(false);
+  // 「这一轮我按过打开预览」——启动期间 hasLog 还没翻真（快照要等 POST 回来才重拉），
+  // 但日志文件其实已经在长了。见 togglePreview 里那行注释。
+  const [logArmed, setLogArmed] = useState(false);
   const view = freeReviewView(free.state, task);
   const { latestRun, reviewing, stoppedRun, taskBusy, waiting, reservationArmed, reservationMode, repairing, stale } = view;
   const taskReady = task.status !== "backlog";
@@ -48,6 +51,10 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
         await api.stopFreePreview(task.id);
         notify("预览已关闭");
       } else {
+        // 这一行必须在 await 之前：启动会**同步等到就绪**（最长两分钟），而日志从
+        // spawn 之前就在长。等 POST 回来才让「预览日志」出来，等于把最该看日志的那两
+        // 分钟锁在门外 —— 用户守着一颗「处理中」，看不到 Maven 正在下什么、前端编到哪。
+        setLogArmed(true);
         const preview = await api.startFreePreview(task.id);
         notify(preview.url ? `预览已打开：${preview.url}` : "预览已打开");
         if (preview.url) window.open(preview.url, "_blank", "noopener,noreferrer");
@@ -90,9 +97,11 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
         </button>
         {free.state?.preview.running && free.state.preview.url && <a href={free.state.preview.url} target="_blank" rel="noreferrer" aria-label="在新窗口打开预览"><ArrowSquareOut size={13} /><span>预览页</span></a>}
         {/* 日志入口按 hasLog 给，不按 running 给：预览**起不来**的那一次同样留下了日志，
-            而那正是最需要看它的时候。读日志是只读动作，接力/验收锁死也照给。 */}
-        {free.state?.preview.hasLog && (
-          <button type="button" className="is-preview-log" onClick={() => setLogOpen(true)}>
+            而那正是最需要看它的时候。读日志是只读动作，接力/验收锁死也照给。
+            logArmed 是启动期间的那一档：hasLog 要等这次 POST 回来才翻真，可日志从
+            spawn 之前就在长，最长两分钟。 */}
+        {(free.state?.preview.hasLog || logArmed) && (
+          <button type="button" className="is-preview-log" data-testid="preview-log-open" onClick={() => setLogOpen(true)}>
             <Terminal size={13} weight="regular" /><span>预览日志</span>
           </button>
         )}

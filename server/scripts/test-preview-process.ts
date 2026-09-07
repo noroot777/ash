@@ -13,7 +13,7 @@ const root = mkdtempSync(join(tmpdir(), "ash-preview-process-"));
 process.env.ASH_RUNS_DIR = join(root, "runs");
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
-const { startPreview } = await import("../src/preview.js");
+const { startPreview, readPreview, isPreviewStarting } = await import("../src/preview.js");
 const { PORT_ENV_ALIASES, PORT_SLOT } = await import("../src/preview-command.js");
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -231,6 +231,72 @@ try {
       assert.ok(result.ok && result.record.port, "认下来的必须是 ash 借出去的那个端口");
       assert.equal(result.ok && result.record.url, `http://localhost:${result.ok && result.record.port}/`);
       assert.equal(await reachable(`http://127.0.0.1:${result.ok && result.record.port}/`), true);
+    } finally {
+      if (result.ok) killGroup(result.record.pid);
+    }
+  }
+  // 着色过的地址不能把控制码带进 preview.json。dev server 基本都给地址着色，而
+  // 「端口连得上」这条就绪判据对此毫无察觉：URL 里多了个 `\x1b[39m`，界面照样说
+  // 「预览已打开」，浏览器打开的却是 `/%1B[39m` 这条 404 路径 —— 服务是好的、根页面是
+  // 好的，用户看到的表现仍然是「预览打不开」。
+  {
+    const ESC = String.fromCharCode(27);
+    // 只有根路径返回 200，别的一律 404：地址脏了就当场看得出来。
+    const colorCode = [
+      "const http=require('http')",
+      "const s=http.createServer((q,r)=>{if(q.url==='/'){r.end('root')}else{r.statusCode=404;r.end('nope')}})",
+      "s.listen(process.env.PORT,()=>console.log("
+        + `'  \\u001b[32m➜  Local:\\u001b[39m  \\u001b[36mhttp://localhost:'+process.env.PORT+'/\\u001b[39m'))`,
+    ].join(";");
+    const step = {
+      id: "ansi-preview",
+      kind: "preview",
+      p: { cmd: `node -e ${JSON.stringify(colorCode)}`, mode: "frontend", ready: "http200", life: "gate" },
+    };
+    const result = await startPreview("ansi-task", step as never, repo);
+    try {
+      assert.equal(result.ok, true, "着色的启动日志不该让预览判失败");
+      assert.ok(result.ok);
+      const raw = readFileSync(join(root, "runs", "ansi-task", "preview.log"), "utf8");
+      assert.ok(raw.includes(ESC), "这一例的前提就是日志里真有 ANSI 控制码");
+      assert.ok(!result.record.url?.includes(ESC), `地址里混进了控制码：${JSON.stringify(result.record.url)}`);
+      assert.equal(new URL(result.record.url ?? "http://x/y").pathname, "/", "地址得指向根路径");
+      assert.equal(await fetch(result.record.url ?? "").then((r) => r.status), 200, "存下来的地址得真能打开");
+    } finally {
+      if (result.ok) killGroup(result.record.pid);
+    }
+  }
+
+  // 启动那一段（最长两分钟）必须是**看得见**的状态。preview.json 要等就绪才写，那是对的
+  // ——写早了就是一句「预览已起」的谎；但界面据此把整段启动期报成「没在跑」，日志弹窗因此
+  // 不开轮询，用户守着一份不再更新的快照看「处理中」，而这恰恰是 Maven 在下依赖、前端在
+  // 冷编译、最该看日志的那一段。
+  {
+    const slowCode = [
+      "const http=require('http')",
+      "console.log('[test] phase-1')",
+      "setTimeout(()=>console.log('[test] phase-2'),700)",
+      "setTimeout(()=>http.createServer((q,r)=>r.end('slow')).listen(process.env.PORT),2000)",
+    ].join(";");
+    const step = {
+      id: "slow-preview",
+      kind: "preview",
+      p: { cmd: `node -e ${JSON.stringify(slowCode)}`, mode: "frontend", ready: "port", life: "gate" },
+    };
+    const pending = startPreview("slow-task", step as never, repo);
+    const logPath = join(root, "runs", "slow-task", "preview.log");
+    const logged = (needle: string) => {
+      try { return readFileSync(logPath, "utf8").includes(needle); } catch { return false; }
+    };
+    await waitFor(() => logged("phase-1"), "启动期的日志没落盘");
+    assert.equal(readPreview("slow-task"), null, "这一例的前提：这时候还没就绪，preview.json 不存在");
+    assert.equal(isPreviewStarting("slow-task"), true, "启动期必须报「正在启动」，否则日志弹窗不会续读");
+    await waitFor(() => logged("phase-2"), "启动期日志还在长，界面却看不到");
+    assert.equal(isPreviewStarting("slow-task"), true, "还没就绪就不算跑完");
+    const result = await pending;
+    try {
+      assert.equal(result.ok, true, "慢启动的服务最后要算起来了");
+      assert.equal(isPreviewStarting("slow-task"), false, "有了结论就不能再挂着「正在启动」");
     } finally {
       if (result.ok) killGroup(result.record.pid);
     }

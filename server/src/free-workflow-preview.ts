@@ -13,7 +13,7 @@ import { resolvePreviewCommand } from "./preview-command.js";
 import { isTurnClaimed } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
-import { readPreview, readPreviewLog, startPreview, stopPreview, type PreviewStep } from "./preview.js";
+import { readPreview, readPreviewLog, isPreviewStarting, startPreview, stopPreview, type PreviewStep } from "./preview.js";
 
 async function startFreePreview(taskId: string) {
   if (!tryAcquireFreeWorkflowAction(taskId)) throw new Error("当前已有自由工作流操作正在进行");
@@ -83,12 +83,18 @@ export function mountFreePreviewRoutes(api: Hono): void {
     }
     const log = readPreviewLog(taskId);
     const record = readPreview(taskId);
+    // `running` 在这儿的用处只有一个：告诉界面「这份日志还会不会长」。所以它必须把
+    // **正在启动**那一段算进来 —— preview.json 要等就绪才写，而启动可以耗到 120 秒，
+    // 那一整段里日志一直在长（Maven 在下依赖、前端在冷编译），正是最该续读的时候。
+    // 只看 preview.json 的话，弹窗那句「日志每 2 秒自动续上」在最需要它的时候是假的。
+    const running = !!record || isPreviewStarting(taskId);
     return c.json({
       text: log?.text ?? "",
       truncated: log?.truncated ?? false,
       updatedAt: log?.updatedAt ?? null,
       exists: log !== null,
-      running: !!record,
+      running,
+      starting: !record && isPreviewStarting(taskId),
       command: record?.cmd ?? null,
       url: record?.url ?? null,
     });

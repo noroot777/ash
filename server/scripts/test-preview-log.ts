@@ -162,5 +162,60 @@ check("相对路径同理", missingDepsHint("Error: Cannot find module './missin
 check("缺的是包才提", missingDepsHint("Error: Cannot find module 'vite'\n") !== null, true);
 check("业务里出现 not found 字样也不算", missingDepsHint("GET /api/users 404 Not Found in 12ms\n"), null);
 
+// —— 找不到的到底是什么，决定了下一步 ——
+// 「预览不再是 Node 专属」之后，`dotnet: command not found` 跟 node_modules 一点关系都
+// 没有。对着它说「去软链 node_modules」是把人往一条不可能修好的路上指，而且恰恰重演了
+// 这一整件事要解决的毛病：拿 Node 的世界观去解释别的语言。
+const dotnet = missingDepsHint("sh: line 1: dotnet: command not found\n") ?? "";
+check("非 Node 的运行时不再叫人去软链 node_modules", dotnet.includes("ln -s"), false);
+check("而是明说那条路帮不上忙", dotnet.includes("帮不上忙"), true);
+check("非 Node 的运行时说的是 PATH / 没装", dotnet.includes("PATH"), true);
+check("并且把找不到的那个名字带上", dotnet.includes("`dotnet`"), true);
+const mvn = missingDepsHint("sh: 1: mvn: not found\n") ?? "";
+check("mvn 同理", mvn.includes("ln -s"), false);
+check("顺带指出项目自带的 wrapper", mvn.includes("./mvnw"), true);
+check("Windows 的说法也分得清", (missingDepsHint("'dotnet' is not recognized as an internal or external command\n") ?? "").includes("ln -s"), false);
+check("python3 也不是 Node 的事", (missingDepsHint("sh: 1: python3: not found\n") ?? "").includes("ln -s"), false);
+// Node 那一挂照旧走软链那条 —— 这条才是它本来要解决的问题。
+check("vite 仍然按没装依赖说", (missingDepsHint("sh: 1: vite: not found\n") ?? "").includes("ln -s"), true);
+check("zsh 的写法也认得出名字", (missingDepsHint("zsh: command not found: dotnet\n") ?? "").includes("`dotnet`"), true);
+check("绝对路径只看最后一段", (missingDepsHint("sh: 1: /usr/bin/mvn: not found\n") ?? "").includes("`mvn`"), true);
+check("模块解析错跟命令名无关，一律算没装依赖", (missingDepsHint("Error: Cannot find module 'vite'\n") ?? "").includes("ln -s"), true);
+
+// —— 终端输出不是纯文本：判读前先剥 ANSI ——
+// dev server 基本都给地址着色。不剥的话 URL 会把控制码收进路径（端口连得上，于是判成
+// 「起好了」，浏览器打开却是 404），行尾锚定的那几条也会因为末尾多一个重置码而失效。
+const ESC = String.fromCharCode(27);
+check(
+  "着色过的地址不能把控制码收进路径",
+  pickPreviewUrl(`  ➜  Local:   ${ESC}[36mhttp://localhost:43435/${ESC}[39m\n`, 43435),
+  { url: "http://localhost:43435/", port: 43435, lent: true },
+);
+check(
+  "拼出来的地址能被 URL 解析成根路径",
+  new URL(pickPreviewUrl(`${ESC}[32mhttp://localhost:5173/${ESC}[0m\n`, null)?.url ?? "http://x/").pathname,
+  "/",
+);
+check(
+  "终端超链接（OSC 8）不会把转义序列当成地址的一部分",
+  pickPreviewUrl(`${ESC}]8;;http://localhost:5173/${String.fromCharCode(7)}http://localhost:5173/${ESC}]8;;${String.fromCharCode(7)}\n`, null)?.url,
+  "http://localhost:5173/",
+);
+check(
+  "着色的撞车行照样认得出来",
+  portConflict(`${ESC}[31mError: Port 5173 is already in use${ESC}[39m\n`),
+  "端口 5173 已经被别的进程占着",
+);
+check(
+  "行尾带重置码时 not found 仍然认得出来",
+  (missingDepsHint(`${ESC}[31msh: 1: vite: not found${ESC}[0m\n`) ?? "").includes("ln -s"),
+  true,
+);
+check(
+  "着色的自述端口也认",
+  pickPreviewUrl(`${ESC}[32mTomcat started on port 8080${ESC}[0m\n`, null)?.port,
+  8080,
+);
+
 console.log(failures ? `\n${failures} 条没过` : "\n全过");
 process.exit(failures ? 1 : 0);

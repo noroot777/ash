@@ -216,13 +216,48 @@ function tail(path: string, banner = "", max = 4000): string {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * 正在启动、还没就绪的那几个任务。
+ *
+ * `preview.json` 要等服务真的连得上才写（那是对的：写早了就是一句「预览已起」的谎）。
+ * 但「有没有在启动」和「起来了没有」是两件事，而**启动那一段恰恰是最需要看日志的一段**
+ * —— Maven 在下依赖、前端在冷编译，一等就是一两分钟，最长可以等到 120 秒超时。只拿
+ * `readPreview()` 当「在跑」的话，这整段时间对界面来说都是「没在跑」：日志接口报
+ * `running: false`，弹窗因此不开轮询，用户守着一份不再更新的快照看「处理中」。
+ *
+ * 所以这里单独记一笔。内存里就够：进程重启后这张表没了，但那时 `startPreview` 的等待
+ * 也一起没了，不会留下一个永远「正在启动」的任务。
+ */
+const starting = new Set<string>();
+
+/** 这个任务的预览是不是正在启动（还没就绪）。给日志接口判断要不要续读用。 */
+export function isPreviewStarting(taskId: string): boolean {
+  return starting.has(taskId);
+}
+
 export type PreviewResult =
   | { ok: true; record: PreviewRecord }
   | { ok: false; reason: string };
 
 // 起一个预览。cwd 由调用方给（任务自己的工作区），因为「在哪儿跑」是工作区的事，
 // 不该在这里第二次推导。
+//
+// 外面这一层只做一件事：把「这个任务正在启动」记上，等这次启动有了结论再抹掉。见
+// starting 那儿的说明 —— 启动那一两分钟是日志最该被看见的一段。
 export async function startPreview(
+  taskId: string,
+  step: PreviewStep,
+  cwd: string,
+): Promise<PreviewResult> {
+  starting.add(taskId);
+  try {
+    return await runPreview(taskId, step, cwd);
+  } finally {
+    starting.delete(taskId);
+  }
+}
+
+async function runPreview(
   taskId: string,
   step: PreviewStep,
   cwd: string,
@@ -313,8 +348,10 @@ export async function startPreview(
       // 组长（外层 shell / scripts/dev.mjs）先退出，不代表同组的 vite/tsx 也退出了。
       // pid 本身虽已不在，POSIX 的进程组 -pid 仍可存在；照样发组信号，别留下孤儿。
       killByPid(pid);
-      // 退出原因里最常见的一种是「这份工作区里没装依赖」，日志尾巴本身看不出所以然。
-      // 认出来就多说一句怎么办（而且明说 ash 不替你装，见 missingDepsHint）。
+      // 退出原因里最常见的一种是「有个东西找不到」，日志尾巴本身看不出所以然。认出来就
+      // 多说一句怎么办 —— 而且**分清找不到的是什么**：Node 依赖里的可执行文件（软链
+      // node_modules）和一门运行时（mvn/dotnet/go…，那是 PATH 的事）下一步完全不同，
+      // 详见 missingDepsHint。
       const deps = missingDepsHint(text);
       return { ok: false, reason: `预览进程已退出。${deps ? `\n\n${deps}\n` : ""}\n最后几行日志：\n${text.slice(-800)}` };
     }
