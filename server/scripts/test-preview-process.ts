@@ -3,7 +3,7 @@
 // Run: npm -w server run test:preview-process
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -297,6 +297,42 @@ try {
     try {
       assert.equal(result.ok, true, "慢启动的服务最后要算起来了");
       assert.equal(isPreviewStarting("slow-task"), false, "有了结论就不能再挂着「正在启动」");
+    } finally {
+      if (result.ok) killGroup(result.record.pid);
+    }
+  }
+  // 「把主仓那份 node_modules 软链进任务工作区」——这是缺依赖时 ash 给的唯一一条不写用户
+  // 项目的路。它必须**真的能把预览起起来**，否则那句建议就只是句好听的话。这里照它说的
+  // 做一遍：主仓里有一份装好的依赖（.bin 里一个假的 dev server），任务工作区软链过去，
+  // 然后走完整启动链。ash 会把自己的 node_modules/.bin 从 PATH 上摘掉
+  // （withoutForeignNodeBins），所以这一条同时钉住「摘的时候别把项目自己那份也摘了」。
+  if (process.platform !== "win32") {
+    const repo = join(root, "borrow-repo");
+    const front = join(repo, "front");
+    const bin = join(front, "node_modules", ".bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(front, "package.json"), JSON.stringify({ name: "front", scripts: { dev: "fakevite" } }));
+    const serve = "require('http').createServer((q,r)=>r.end('borrowed')).listen(process.env.PORT)";
+    writeFileSync(join(bin, "fakevite"), `#!/bin/sh\nexec "${process.execPath}" -e ${JSON.stringify(serve)}\n`, { mode: 0o755 });
+
+    const wt = join(root, "borrow-wt");
+    mkdirSync(join(wt, "front"), { recursive: true });
+    // git 的 worktree 就长这样：`.git` 是个文件，写着主仓在哪（preview-deps.ts 靠它找主仓）。
+    writeFileSync(join(wt, ".git"), `gitdir: ${join(repo, ".git", "worktrees", "borrow-wt")}\n`);
+    writeFileSync(join(wt, "front", "package.json"), JSON.stringify({ name: "front", scripts: { dev: "fakevite" } }));
+    symlinkSync(join(front, "node_modules"), join(wt, "front", "node_modules"));
+
+    const step = {
+      id: "borrow-preview",
+      kind: "preview",
+      p: { cmd: "cd front && npm run dev", mode: "frontend", ready: "http200", life: "gate" },
+    };
+    const result = await startPreview("borrow-task", step as never, wt);
+    try {
+      const log = readFileSync(join(root, "runs", "borrow-task", "preview.log"), "utf8");
+      assert.equal(result.ok, true, `借来的依赖没能把预览起起来：\n${log}`);
+      assert.ok(result.ok);
+      assert.equal(await fetch(result.record.url ?? "").then((r) => r.text()), "borrowed");
     } finally {
       if (result.ok) killGroup(result.record.pid);
     }

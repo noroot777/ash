@@ -22,6 +22,7 @@ import { augmentedEnv, killByPid, withoutForeignNodeBins } from "./executors/spa
 import { RUNS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
 import { portConflict, pickPreviewUrl, portHint, missingDepsHint } from "./preview-log.js";
+import { nodeDepsAdvice } from "./preview-deps.js";
 import { PORT_ENV_ALIASES, PORT_SLOT } from "./preview-command.js";
 import { canConnect, ready } from "./preview-probe.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -352,7 +353,12 @@ async function runPreview(
       // 多说一句怎么办 —— 而且**分清找不到的是什么**：Node 依赖里的可执行文件（软链
       // node_modules）和一门运行时（mvn/dotnet/go…，那是 PATH 的事）下一步完全不同，
       // 详见 missingDepsHint。
-      const deps = missingDepsHint(text);
+      //
+      // 前一种还要**核对一遍事实再开口**：上一版直接甩一句「把主仓那份软链过来」，可它
+      // 假设了主仓那份存在 —— 目标项目的 a4sms-front 在主仓里也没有 node_modules，于是
+      // 那条建议指向一个不存在的源目录，用户照做只能得到一个断链。nodeDepsAdvice 现扫
+      // 现答，能借就把真实路径写出来，借不到就明说、并给出在他自己主仓里装一次那条路。
+      const deps = missingDepsHint(text, nodeDepsAdvice(cwd, step.p.cmd));
       return { ok: false, reason: `预览进程已退出。${deps ? `\n\n${deps}\n` : ""}\n最后几行日志：\n${text.slice(-800)}` };
     }
     if (!found) continue;

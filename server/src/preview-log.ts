@@ -11,6 +11,11 @@
 // URL 会把控制码收进路径（`new URL(...).pathname === "/%1B[39m"`，端口连得上，于是被判
 // 「起好了」，浏览器打开 404），而行尾锚定的那几条（`: not found$`）会因为末尾多一个
 // 重置码而整条匹配不上。
+//
+// 「只有正则和字符串」有一个例外的输入：`missingDepsHint` 收一份**核对过文件系统的事实**
+// （NodeDepsAdvice，由 preview-deps.ts 产出）。核对本身在那边做，这里仍然只负责措辞 ——
+// 否则这条建议就只能继续用占位符，而占位符正是它上一次没有闭环的原因。
+import type { NodeDepsAdvice } from "./preview-deps.js";
 
 /**
  * ANSI 控制序列。三类都要认：CSI（`\x1b[32m` 这种颜色）、OSC（`\x1b]8;;<url>\x07`，
@@ -119,16 +124,49 @@ const MISSING_MODULE_LINES = [
 /**
  * ash 不替他装依赖：install 会写进他的项目 —— 少则在工作区里堆出几百兆，多则改写 lock
  * 文件，而 lock 文件是跟踪文件，会跟着任务 diff 一路走进验收。「点一下预览」不该有这种
- * 副作用。能做也该做的是把话说清楚，并指出不写他项目的那条路：把主仓已经装好的那份软链
- * 进来（agent 干活时本来就是这么借的，`git.ts` 的 workspaceDirty 专门放行了这条软链）。
+ * 副作用。能做也该做的是把话说清楚，并指出不写他项目的那条路。
+ *
+ * **但「说清楚」不等于甩一句带占位符的模板。** 上一版写的是
+ * `ln -s <项目目录>/<子项目>/node_modules <任务工作区>/<子项目>/node_modules`，它有两个
+ * 假设，而目标项目两个都不成立：用户得自己把两条路径填对；更要命的是它**假设主仓那份
+ * 存在**——实测 a4sms-front 在主仓里也没有 node_modules，于是这条建议指向一个不存在的
+ * 源目录，照做只会得到一个断链，整件事没有闭环。
+ *
+ * 所以现在先核对事实（preview-deps.ts），再按事实分岔：
+ *   · 借得到 → 把两条**真实路径**直接写出来，整行可以粘走。
+ *   · 借不到 → 明说主仓那份也没有，并给出唯一不写任务工作区的那一步：在**用户自己的
+ *     主仓**里装一次（那是他平时开发就要装的，node_modules 被 gitignore，不进任何任务
+ *     diff），装完再软链 —— 命令同样按他的实际路径和锁文件对应的包管理器写出来。
+ *   · 连工作区都没扫到（没传 advice / 不是 node 项目）→ 退回原来那句通用说法。
  */
-function nodeModulesHint(what: string): string {
-  return `${what} —— 任务 worktree 是一份干净检出，node_modules 不在里面。\n`
+function nodeModulesHint(what: string, advice: readonly NodeDepsAdvice[] = []): string {
+  const head = `${what} —— 任务 worktree 是一份干净检出，node_modules 不在里面。\n`
     + "ash 不会替你装：install 会写进你的项目（工作区里堆出几百兆，还可能改写 lock 文件，"
-    + "而 lock 文件是跟踪文件，会跟着任务 diff 走进验收）。所以也别把 install 写进预览命令。\n"
-    + "不写你项目的做法是把主仓已经装好的那份借过来，在任务工作区里软链一次即可，例如：\n"
-    + "`ln -s <项目目录>/<子项目>/node_modules <任务工作区>/<子项目>/node_modules`"
-    + "（Windows 用 `mklink /J`）。ash 认得这条软链，不会因此把工作区判成脏。";
+    + "而 lock 文件是跟踪文件，会跟着任务 diff 走进验收）。所以也别把 install 写进预览命令。\n";
+  if (!advice.length) {
+    return `${head}不写你项目的做法是把主仓已经装好的那份借过来，在任务工作区里软链一次即可，例如：\n`
+      + "`ln -s <项目目录>/<子项目>/node_modules <任务工作区>/<子项目>/node_modules`"
+      + "（Windows 用 `mklink /J`）。ash 认得这条软链，不会因此把工作区判成脏。";
+  }
+  // 一次最多说三条：并排的子项目再多，先解决看得见的这几个。
+  const shown = advice.slice(0, 3);
+  const lines = shown.map((one) => {
+    const dir = one.target.replace(/[\\/]node_modules$/, "");
+    const link = one.source === null ? "" : `\`ln -s ${one.source} ${one.target}\``;
+    const win = one.source === null ? "" : `（Windows 用 \`mklink /J ${one.target} ${one.source}\`）`;
+    if (one.sourceReady) return `· \`${one.rel}\`：主仓那份在，软链过来就行 —— ${link}${win}`;
+    if (one.sourceDir === null) {
+      return `· \`${one.rel}\`：这个目录就是仓库本身，没有「别处那一份」可借，`
+        + `得在这儿装一次 —— \`cd ${dir} && ${one.pm} install\``;
+    }
+    return `· \`${one.rel}\`：**主仓那份也不在**（\`${one.sourceDir}\` 里没有 node_modules），`
+      + `所以现在没有可借的。在你自己的主仓里装一次就有了 —— `
+      + `\`cd ${one.sourceDir} && ${one.pm} install\`，装完再软链：${link}${win}`;
+  });
+  return `${head}不写你项目的做法是把主仓已经装好的那份借过来，在任务工作区里软链一次；`
+    + "ash 认得这条软链，不会因此把工作区判成脏。这个工作区里缺依赖的是：\n"
+    + `${lines.join("\n")}\n`
+    + "（主仓的 node_modules 被 gitignore，在那儿装不会进任何任务的 diff。）";
 }
 
 /** 找不到的是一门运行时/包管理器/构建工具：跟 node_modules 无关，是 PATH 或者压根没装。 */
@@ -154,10 +192,10 @@ function runtimeMissingHint(name: string): string {
  * 为什么 `pnpm` 属于后者）；名字都捞不出来的少数格式 → 两条都摆出来，让用户自己对号入座，
  * 也好过硬塞一条必然无效的建议。
  */
-export function missingDepsHint(log: string): string | null {
+export function missingDepsHint(log: string, advice: readonly NodeDepsAdvice[] = []): string | null {
   const lines = stripAnsi(log).split("\n").map((line) => line.trimEnd());
   if (lines.some((line) => MISSING_MODULE_LINES.some((re) => re.test(line)))) {
-    return nodeModulesHint("看着像这个工作区里没装依赖");
+    return nodeModulesHint("看着像这个工作区里没装依赖", advice);
   }
   const hit = lines.find((line) => MISSING_CMD_LINES.some((re) => re.test(line)));
   if (hit === undefined) return null;
@@ -175,7 +213,7 @@ export function missingDepsHint(log: string): string | null {
   const bare = (name.replace(/\.(?:exe|cmd|bat|ps1)$/i, "").split(/[\\/]/).pop() ?? name).toLowerCase();
   if (NODE_RUNTIMES.has(bare)) return runtimeMissingHint(bare);
   return NODE_BINS.has(bare)
-    ? nodeModulesHint(`\`${bare}\` 没找到，看着像这个工作区里没装依赖`)
+    ? nodeModulesHint(`\`${bare}\` 没找到，看着像这个工作区里没装依赖`, advice)
     : runtimeMissingHint(bare);
 }
 

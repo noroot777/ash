@@ -122,7 +122,8 @@
     "test:multi-user-agent": "tsx scripts/test-multi-user-agent.ts",
     "test:multi-user-members": "tsx scripts/test-multi-user-members.ts",
     "test:multi-user-paths": "tsx scripts/test-multi-user-paths.ts",
-    "test:missing-task-writes": "tsx scripts/test-missing-task-writes.ts"
+    "test:missing-task-writes": "tsx scripts/test-missing-task-writes.ts",
+    "test:preview-deps": "tsx scripts/test-preview-deps.ts"
   },
   "dependencies": {
     "@ash/shared": "*",
