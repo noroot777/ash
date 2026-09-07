@@ -489,6 +489,16 @@ export function TaskDetail({
                       )
                       : undefined}
                     skills={skills.skills}
+                    onStandingExecutorChange={async (next, label) => {
+                      const updated = await api.patchTask(task.id, next);
+                      onTaskUpdate(updated);
+                      const run = [label, updated.model, updated.reasoningEffort]
+                        .filter(Boolean).join(" · ");
+                      // 已经在跑的那一轮换不了人（进程都起来了），说清楚从哪一句开始算数。
+                      notify(task.status === "running" || task.status === "queued"
+                        ? `以后这个任务交给 ${run}；当前这一轮跑完后生效`
+                        : `以后这个任务交给 ${run}`);
+                    }}
                     onSend={async (text, attachments, { executorLabel, ...options }) => {
                       if (!(await confirmExecutorSwap(task.id))) return null;
                       const result = await api.replyTask(task.id, text, { attachments, ...options });
