@@ -5,10 +5,20 @@ import type { TaskListItem } from "@ash/shared";
 import { taskDisplayStatus } from "@ash/shared";
 import { ArrowDown, ArrowUpRight, CheckCircle, Hash, Lightning } from "@phosphor-icons/react";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
+import { useScrollEdges } from "../lib/useScrollEdges.ts";
 
 export function ChatMessages({ snapshot, onTask, onMention }: { snapshot: ChatSnapshot; onTask: (task: TaskListItem) => void; onMention: (name: string) => void }) {
   const scroll = useRef<HTMLDivElement>(null);
   const { resume } = useStickToBottom(scroll, snapshot.room.id);
+  // 已经贴底时没有「跳到最新」可跳，按钮只会挡住最后一条消息。
+  const { atBottom } = useScrollEdges(scroll, snapshot.room.id);
+  // resume() 只是把贴底意图设回来，真正的滚动要自己发起，否则要等下一条消息进来才跳。
+  const toBottom = () => {
+    resume();
+    const element = scroll.current;
+    if (!element) return;
+    element.scrollTo({ top: element.scrollHeight, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  };
   return <div className="chat-feed-wrap"><div className="chat-feed" ref={scroll} role="log" aria-label="群聊消息" aria-live="polite">
     <div className="chat-welcome"><span className="chat-welcome-icon"><Hash size={32} weight="bold" /></span><h2>{snapshot.room.name}，从一句话开始。</h2><p>想法留在这里，复杂的工作交给任务。<br />点名才加入对话，不点名就安静待命。</p><div>{snapshot.room.members.length > 1 && <button type="button" onClick={() => onMention(ALL_MENTION_ALIASES[0])}>@all</button>}{snapshot.room.members.map((member) => <button type="button" key={member.id} onClick={() => onMention(member.name)}>@{member.name}</button>)}</div></div>
     {snapshot.messages.length >= 500 && <p className="chat-history-note">显示最近 500 条消息；更早的消息仍保存在群聊中。</p>}
@@ -34,5 +44,5 @@ export function ChatMessages({ snapshot, onTask, onMention }: { snapshot: ChatSn
         </article>
       </div>;
     })}
-  </div><button className="chat-jump" type="button" onClick={resume} aria-label="跳到最新消息"><ArrowDown size={13} />最新消息</button></div>;
+  </div><button className={`chat-jump${atBottom ? " is-hidden" : ""}`} type="button" onClick={toBottom} tabIndex={atBottom ? -1 : 0} aria-hidden={atBottom} aria-label="跳到最新消息"><ArrowDown size={13} />最新消息</button></div>;
 }

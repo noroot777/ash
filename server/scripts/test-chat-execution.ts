@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { AGENT_TYPES, type AgentEvent } from "@ash/shared";
 import type { ChatMember } from "@ash/shared/chat";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-chat-execution-"));
+// repoPath 存的是用户写的原样，`~/…` 只有展开后才是真目录。要如实测这一步，家目录下就得
+// 真有一个目录；用完在 finally 里删掉。
+const homeProject = mkdtempSync(join(homedir(), ".ash-chat-home-"));
+const homeProjectName = basename(homeProject);
+writeFileSync(join(homeProject, "chat-context.txt"), "来自家目录项目的建议依据");
 process.env.ASH_DB = join(stage, "test.db");
 process.env.ASH_RUNS_DIR = join(stage, "runs");
 const projectDir = join(stage, "project");
@@ -23,6 +28,8 @@ const createdAt = new Date().toISOString();
 await db.insert(projects).values([
   { id: "project", name: "当前项目", repoPath: projectDir, createdAt },
   { id: "no-directory", name: "无目录项目", repoPath: "", createdAt },
+  { id: "home-directory", name: "写成 ~ 的项目", repoPath: `~/${homeProjectName}`, createdAt },
+  { id: "missing-directory", name: "目录已不在的项目", repoPath: join(stage, "已经被删掉的目录"), createdAt },
 ]);
 await db.insert(agents).values(AGENT_TYPES.map((type) => ({ id: `profile-${type}`, type, name: type, model: "profile-model", extraArgs: '["--fixture-option"]', createdAt })));
 const originals = new Map(AGENT_TYPES.map((type) => [type, CLI_SPEC_BY_KEY[type].factory]));
@@ -75,6 +82,12 @@ try {
   assert.equal(killed, starts);
   const member: ChatMember = { id: "codex", name: "codex", agentType: "codex", executorId: "profile-codex", model: "chat-model", reasoningEffort: null };
   const signal = new AbortController().signal;
+  const home = parseChatReply(await invokeChat(member, null, "咨询", signal, "home-directory"));
+  assert.deepEqual(home, { reply: "来自家目录项目的建议依据", task: null });
+  assert.equal(lastCwd, homeProject);
+  const beforeMissing = starts;
+  await assert.rejects(invokeChat(member, null, "咨询", signal, "missing-directory"), /工作目录不存在/);
+  assert.equal(starts, beforeMissing);
   await invokeChat(member, null, "未配置目录的咨询", signal, "no-directory");
   assert.notEqual(lastCwd, projectDir);
   assert.equal(existsSync(lastCwd), false);
@@ -94,9 +107,10 @@ try {
   const beforeDenied = starts;
   await assert.rejects(invokeChat(member, user.id, "咨询", signal, "project"), /失去访问权限/);
   assert.equal(starts, beforeDenied);
-  console.log(`chat execution: ${AGENT_TYPES.length} 类执行器均使用原 run 通道，保留模型与参数；工具事件不中断回复；当前项目可读且不被清理；撤权/停止不启动进程`);
+  console.log(`chat execution: ${AGENT_TYPES.length} 类执行器均使用原 run 通道，保留模型与参数；工具事件不中断回复；当前项目可读且不被清理；~ 开头的工作目录被展开、目录不存在时诚实报错；撤权/停止不启动进程`);
 } finally {
   for (const [type, factory] of originals) CLI_SPEC_BY_KEY[type].factory = factory;
   dbClient.close();
   rmSync(stage, { recursive: true, force: true });
+  rmSync(homeProject, { recursive: true, force: true });
 }

@@ -98,6 +98,21 @@ try {
   assert.equal(await replies.count(), 6, "点已经选中的群仍留在这个群，不掉回空态");
   assert.equal(await page.locator(".chat-empty").count(), 0, "重复点选当前群不掉回空态");
   await input.waitFor();
+  const jump = page.locator(".chat-jump");
+  await page.waitForFunction(() => {
+    const feed = document.querySelector(".chat-feed");
+    return feed && feed.scrollHeight - feed.clientHeight > 120;
+  });
+  assert.equal(await jump.evaluate((el) => el.classList.contains("is-hidden")), true, "已经贴底时不显示「最新消息」");
+  await page.locator(".chat-feed").evaluate((feed) => feed.scrollTo({ top: 0 }));
+  await page.waitForFunction(() => !document.querySelector(".chat-jump")?.classList.contains("is-hidden"));
+  assert.equal(await jump.isVisible(), true, "向上翻阅时才出现「最新消息」");
+  await jump.click();
+  await page.waitForFunction(() => {
+    const feed = document.querySelector(".chat-feed");
+    return feed && feed.scrollHeight - feed.scrollTop - feed.clientHeight <= 2;
+  });
+  await page.waitForFunction(() => document.querySelector(".chat-jump")?.classList.contains("is-hidden"));
   for (const [scenario, path] of [["越界验证", "unexpected-side-effect.txt"], ["依赖越界验证", "node_modules"]]) {
     await send(`@codex 你建议怎么改？${scenario}`);
     const boundary = page.locator(".chat-message.is-failed").filter({ hasText: path });
@@ -188,7 +203,7 @@ try {
   await page.locator(".composer-seed-attachment").getByText("merge-draft.txt", { exact: true }).waitFor();
   assert.equal(await page.locator(".composer-seed-attachment").count(), 1, "聊天往返保留附件且不重复");
   assert.deepEqual(errors, []);
-  console.log("chat browser passed: 创建群聊、三段成员选择、键盘点名、@all 唤醒全体、群聊改名、重复点选当前群不掉空态、无点名静默、禁止转发唤醒、实际模拟源码及 node_modules 写入均被标记失败且刷新保留警告、不误建任务、任务卡实时状态、停止持久化、详情回跳、390px 窄屏、减少动态效果、群间隔离、新编辑器四模式入口、320–1440px 模式栏、上传切换门禁、跨模式任务草稿与附件保留；无页面异常。");
+  console.log("chat browser passed: 创建群聊、三段成员选择、键盘点名、@all 唤醒全体、群聊改名、重复点选当前群不掉空态、贴底时隐藏「最新消息」且点击真的回到底部、无点名静默、禁止转发唤醒、实际模拟源码及 node_modules 写入均被标记失败且刷新保留警告、不误建任务、任务卡实时状态、停止持久化、详情回跳、390px 窄屏、减少动态效果、群间隔离、新编辑器四模式入口、320–1440px 模式栏、上传切换门禁、跨模式任务草稿与附件保留；无页面异常。");
 } catch (error) {
   await page?.screenshot({ path: `${output}/chat-failure.png` }).catch(() => {});
   throw error;

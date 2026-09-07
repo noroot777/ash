@@ -1,8 +1,9 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { ChatMember } from "@ash/shared/chat";
+import { expandHome } from "../git.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import { dispatchRejection, executorOwnerScope } from "../auth/dispatch-gate.js";
 import { runEnvForOwner } from "../auth/run-env.js";
@@ -34,7 +35,13 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
   const env = await runEnvForOwner(owner, executor.type);
   signal.throwIfAborted();
   const temporary = !project.repoPath.trim();
-  const cwd = temporary ? await mkdtemp(join(tmpdir(), "ash-chat-")) : project.repoPath;
+  // repoPath 按用户写的原样存（`~/code/x` 保持可读、可搬机器），所以每个消费点都得自己
+  // 展开——少这一步，watchChatWorkspace 的 realpath 会直接 ENOENT，被 @ 的成员一个不剩
+  // 全报同一条错，而且错在 CLI 起来之前，看着像「智能体坏了」。
+  const cwd = temporary ? await mkdtemp(join(tmpdir(), "ash-chat-")) : expandHome(project.repoPath);
+  if (!temporary && !await stat(cwd).then((entry) => entry.isDirectory()).catch(() => false)) {
+    throw new Error(`群聊项目的工作目录不存在：${project.repoPath}。请在项目设置里改成这台机器上真实存在的目录，再重新 @。`);
+  }
   let handle: ReturnType<typeof executor.run> | undefined;
   let guard: Awaited<ReturnType<typeof watchChatWorkspace>> | undefined;
   let rejectViolation: (error: ChatBoundaryError) => void;

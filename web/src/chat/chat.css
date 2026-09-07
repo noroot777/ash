@@ -95,7 +95,8 @@
 .chat-task-copy > span { font-size: 10px; color: #8e7b9a; animation: chat-arrive 220ms ease both; overflow-wrap: anywhere; }
 .chat-task-card.is-done { border-color: #cfe6df; border-left-color: #6fae9d; background: #fafdfb; }
 .chat-task-card.is-done .chat-task-symbol, .chat-task-card.is-done .chat-task-copy > span { color: #428d79; }
-.chat-jump { position: absolute; bottom: 9px; left: 50%; transform: translateX(-50%); border: 1px solid #ece6f1; border-radius: 20px; box-shadow: 0 3px 12px #382a4010; background: #fff; color: #8a7896; padding: 5px 9px; display: flex; align-items: center; gap: 4px; font-size: 10px; }
+.chat-jump { position: absolute; bottom: 9px; left: 50%; transform: translateX(-50%); border: 1px solid #ece6f1; border-radius: 20px; box-shadow: 0 3px 12px #382a4010; background: #fff; color: #8a7896; padding: 5px 9px; display: flex; align-items: center; gap: 4px; font-size: 10px; transition: opacity 200ms ease, transform 200ms ease; }
+.chat-jump.is-hidden { opacity: 0; pointer-events: none; transform: translate(-50%, 4px); }
 .chat-composer-area { padding: 0 24px 16px; }
 .chat-live-line { min-height: 26px; display: flex; align-items: center; gap: 6px; font-size: 10px; color: #a094aa; }
 .chat-live-line > button { display: flex; gap: 4px; align-items: center; margin-left: auto; padding: 2px 5px; color: #9a6877; background: none; border: 0; font-size: 10px; }
