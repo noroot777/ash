@@ -1,20 +1,18 @@
 import assert from "node:assert/strict";
-import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { createServer } from "vite";
 import { chromeLaunchOptions } from "./chrome-path.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const output = fileURLToPath(new URL("../../output/playwright/", import.meta.url));
 const server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0 } });
 let browser;
 try {
-  await mkdir(output, { recursive: true });
   await server.listen();
   browser = await chromium.launch(await chromeLaunchOptions());
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
   const errors = [];
+  let teamPresetRequests = 0;
   page.on("pageerror", (error) => errors.push(error.message));
   const created = [];
   await page.route("**/api/**", async (route) => {
@@ -24,6 +22,7 @@ try {
     if (path === "/api/agents") data = [{ id: "exec-claude", name: "claude@cpa", type: "claude", model: "claude-opus-4.6", reasoningEffort: "high", providerId: "provider-cpa", isDefault: true }];
     if (path === "/api/llm-providers") data = [{ id: "provider-cpa", name: "CPA 中转", protocol: "anthropic", baseUrl: "https://example.invalid", model: "claude-opus-4.6", protocolConversionEnabled: false, modelListMode: "pinned", pinnedModels: ["claude-opus-4.6"], context1mModels: [], hasKey: true, createdAt: "2026-09-07T00:00:00.000Z" }];
     if (path === "/api/settings") data = { worktreeDefault: false, defaultWorkflowId: null };
+    if (path === "/api/team-presets") teamPresetRequests += 1;
     if (path === "/api/workflows") data = [{ id: "standard", name: "验证起手式", builtin: true, disabled: false,
       def: { workspace: "isolated", steps: [{ id: "run", kind: "run", p: { executorId: "exec-claude", model: "test-model", reasoningEffort: null, instruction: null }, fail: null }] } }];
     if (path.endsWith("/branches")) data = { branches: ["main", "develop"], current: "main" };
@@ -43,7 +42,6 @@ try {
   const people = page.getByRole("button", { name: /^谁来做/ });
   const space = page.getByRole("button", { name: /^在哪里做/ });
   const flow = page.getByRole("button", { name: /^如何交付/ });
-  await page.screenshot({ path: `${output}/composer-studio-desktop.png`, fullPage: true });
   assert.equal(await page.locator(".studio-heading").count(), 0);
   assert.equal(await page.getByText("从一个目标开始。", { exact: true }).count(), 0);
   assert.equal(await page.locator(".studio-path").count(), 0);
@@ -53,25 +51,36 @@ try {
   await page.keyboard.press("Escape");
   assert.equal(await page.locator(".studio-workflow .run-target-picker").count(), 1);
   await page.locator(".studio-workspace-options summary").click();
-  await page.getByRole("switch").click();
+  const worktreeSwitch = page.getByRole("switch");
+  const worktreeBefore = await worktreeSwitch.getAttribute("aria-checked");
+  await page.locator(".studio-workspace-options .composer-toggle-field > span").click();
+  assert.notEqual(await worktreeSwitch.getAttribute("aria-checked"), worktreeBefore);
   assert.match(await page.locator(".studio-workspace-options summary").innerText(), /独立 worktree/);
   await page.getByRole("tab", { name: "团队" }).click();
   assert.equal(await objective.inputValue(), "保留我写好的目标");
   await people.click();
   assert.equal(await page.locator(".studio-settings:visible .run-target-picker").count(), 3);
   await page.getByText("正在加载预设…", { exact: true }).waitFor({ state: "hidden" });
-  await page.screenshot({ path: `${output}/composer-studio-team.png`, fullPage: true });
+  assert.match(await people.innerText(), /调度.*CPA 中转.*claude-opus-4\.6.*high/);
+  assert.match(await people.innerText(), /执行.*CPA 中转.*claude-opus-4\.6.*high/);
+  const loadedPresetRequests = teamPresetRequests;
+  await people.click();
+  await people.click();
+  await page.waitForTimeout(50);
+  assert.equal(teamPresetRequests, loadedPresetRequests, "重新展开不应重复拉取组合预设");
   await flow.click();
-  await page.getByRole("switch").click();
+  await page.locator(".studio-settings:visible .composer-toggle-field > span").click();
   assert.match(await flow.innerText(), /按需审查/);
   await page.getByRole("tab", { name: "讨论" }).click();
   assert.equal(await space.isDisabled(), true);
+  assert.match(await people.innerText(), /A.*CPA 中转.*claude-opus-4\.6.*high/);
+  assert.match(await people.innerText(), /B.*CPA 中转.*claude-opus-4\.6.*high/);
   await flow.click();
-  await page.getByRole("switch").click();
+  await page.locator(".studio-settings:visible .composer-toggle-field > span").click();
   assert.match(await flow.innerText(), /自动结束/);
   await page.getByRole("button", { name: /解决一个问题/ }).click();
   assert.match(await objective.inputValue(), /^保留我写好的目标\n\n请帮我/);
-  await page.getByRole("tab", { name: "单任务" }).click();
+  assert.equal(await page.getByRole("tab", { name: "单任务" }).getAttribute("aria-selected"), "true");
   const organization = page.locator(".studio-organization:not(.studio-workspace-options)");
   await organization.locator("summary").click();
   assert.equal(await organization.getAttribute("open"), "");
@@ -85,7 +94,6 @@ try {
   }
   await page.getByLabel("启动方式").selectOption("create");
   await page.setViewportSize({ width: 390, height: 1000 });
-  await page.screenshot({ path: `${output}/composer-studio-mobile.png`, fullPage: true });
   await page.getByRole("button", { name: "创建任务", exact: true }).click();
   await page.getByTestId("created").getByRole("listitem").waitFor();
   assert.equal(created.length, 1);
@@ -96,20 +104,20 @@ try {
   await objective.fill("验证起手式配置");
   await page.getByRole("tab", { name: "起手式", exact: true }).click();
   await page.getByRole("button", { name: "展开编排" }).waitFor();
+  assert.match(await page.locator(".studio-effective-run").innerText(), /test-model.*high/);
   assert.equal(await page.locator(".studio-free-executor").count(), 0);
   assert.equal(await page.locator(".studio-workflow .is-workflow").count(), 1);
   await page.getByRole("tab", { name: "自由工作流", exact: true }).click();
   assert.match(await page.locator(".studio-effective-run").innerText(), /claude-opus-4\.6.*high/);
   await page.getByRole("tab", { name: "起手式", exact: true }).click();
   assert.equal(await page.getByRole("button", { name: "展开编排" }).count(), 1);
-  await page.screenshot({ path: `${output}/composer-studio-preset.png`, fullPage: true });
   await page.getByLabel("启动方式").selectOption("create");
   await page.getByRole("button", { name: "创建任务", exact: true }).click();
   await page.getByTestId("created").getByRole("listitem").waitFor();
   assert.equal(created[1].executorId, "exec-claude");
   assert.equal(created[1].model, "test-model");
   assert.deepEqual(errors, []);
-  console.log("composer studio: layout, modes, settings, focus, templates, schedule, responsive and submit passed");
+  console.log("composer studio: hierarchy, run summaries, mounted presets, label toggles, templates, responsive and submit passed");
 } finally {
   await browser?.close();
   await server.close();

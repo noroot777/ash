@@ -36,7 +36,9 @@
 .studio-step-copy small { color:var(--faint); font-size:9px; }
 .studio-step-copy b { font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .studio-step-copy > span { color:var(--faint); font-size:9px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.studio-step-copy > .studio-run-summary { line-height:1.35; overflow:visible; text-overflow:clip; white-space:normal; }
+.studio-step-copy > .studio-role-runs { display:grid; gap:1px; line-height:1.3; overflow:visible; text-overflow:clip; white-space:normal; }
+.studio-role-runs > span { overflow-wrap:anywhere; }
+.studio-role-runs em { margin-right:4px; color:var(--muted); font-style:normal; font-weight:600; }
 .studio-caret { flex:0 0 auto; margin-left:auto; color:var(--faint); }
 .studio-step[aria-expanded="true"] .studio-caret { transform:rotate(180deg); }
 .studio-settings { margin:12px 4px 0; border:1px solid var(--line); border-radius:9px; background:var(--panel); padding:14px; }

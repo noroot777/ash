@@ -15,7 +15,8 @@ import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
 import type { ComposerExecutorConfigs, ComposerExecutorRole } from "./executorOverrides.ts";
 import { ExecutorPickerField } from "./ExecutorPickerField.tsx";
 import { PresetBar } from "./PresetBar.tsx";
-import type { ComposerRunSummary } from "./composerRunSummary.ts";
+import { composerRunSummary, type ComposerRunSummary } from "./composerRunSummary.ts";
+import { useProviders } from "../lib/modelCatalog.ts";
 
 export function ComposerFields({
   mode,
@@ -100,6 +101,21 @@ export function ComposerFields({
     const selection = parseExecutorValue(executors[role].profile, profiles, { agentType: executorTypes[role], executorId: null });
     return profiles.find((profile) => profile.id === selection.executorId)?.name || selection.agentType;
   };
+  const providers = useProviders();
+  const summaryFor = (role: ComposerExecutorRole) => {
+    const selection = parseExecutorValue(executors[role].profile, profiles, { agentType: executorTypes[role], executorId: null });
+    return composerRunSummary({
+      ...selection,
+      model: executors[role].model || null,
+      reasoningEffort: executors[role].effort || null,
+    }, profiles, providers);
+  };
+  const leadRun = summaryFor("lead");
+  const workerRun = summaryFor("worker");
+  const reviewerRun = summaryFor("reviewer");
+  const voiceARun = summaryFor("voiceA");
+  const voiceBRun = summaryFor("voiceB");
+  const runLine = (role: string, run: ComposerRunSummary) => <span><em>{role}</em>{run.provider} · {run.model} · {run.effort}</span>;
   const picker = (role: ComposerExecutorRole, label: string) => <ExecutorPickerField
     label={label} value={executors[role].profile} types={role === "lead" ? leadTypes : workerTypes}
     profiles={role === "lead" ? leadProfiles : profiles} knownProfiles={profiles}
@@ -110,7 +126,7 @@ export function ComposerFields({
   const duet = mode === "duet";
   const preset = single && workflowMode === "preset";
   const workspaceEditor = <div className="composer-option-grid">
-    <div className="composer-toggle-field"><span>worktree</span><Toggle checked={useWorktree} onChange={onUseWorktreeChange} label={useWorktree ? "独立 worktree" : "直接使用项目目录"} /></div>
+    <label className="composer-toggle-field"><span>worktree</span><Toggle checked={useWorktree} onChange={onUseWorktreeChange} label={useWorktree ? "独立 worktree" : "直接使用项目目录"} /></label>
     <div className="composer-field"><span>base 分支</span><Dropdown label="base 分支" value={base}
       options={[{ value: "", label: "当前 HEAD" }, ...branches.map((branch) => ({ value: branch, label: branch, mono: true }))]}
       disabled={!useWorktree} filterable={branches.length > 6} filterPlaceholder="筛选分支…" placeholder="当前 HEAD" onChange={onBaseChange} /></div>
@@ -120,7 +136,7 @@ export function ComposerFields({
     <PillTabs label="工作方式" value={workflowMode}
       items={[{ value: "free", label: "自由工作流" }, { value: "preset", label: "起手式" }]}
       onChange={onWorkflowModeChange} />
-    {preset ? workflowSlot : <div className="studio-free-executor">
+    {preset ? <><p className="studio-effective-run">让 AI 干活 · {singleRunSummary.provider} · {singleRunSummary.model} · {singleRunSummary.effort}</p>{workflowSlot}</> : <div className="studio-free-executor">
       {picker("single", "任务执行器")}
       <p className="studio-effective-run">{singleRunSummary.provider} · {singleRunSummary.model} · {singleRunSummary.effort}</p>
     </div>}
@@ -132,7 +148,9 @@ export function ComposerFields({
         {
           id: "people", label: "谁来做",
           value: duet ? nameFor("voiceA") + " × " + nameFor("voiceB") : nameFor("lead") + " 调度",
-          detail: duet ? "两种视角，共同结论" : nameFor("worker") + " 执行 · " + (review ? nameFor("reviewer") + " 审查" : "不自动审查"),
+          detailClassName: "studio-role-runs",
+          detail: duet ? <>{runLine("A", voiceARun)}{runLine("B", voiceBRun)}</>
+            : <>{runLine("调度", leadRun)}{runLine("执行", workerRun)}{review && runLine("审查", reviewerRun)}</>,
           content: <>
             {mode === "team" && <PresetBar currentConfig={currentTeamConfig} profiles={profiles} onApply={onApplyTeamPreset} notify={notify} />}
             <div className="studio-executors">
@@ -155,8 +173,8 @@ export function ComposerFields({
             <div className="composer-field"><span>最多轮数</span><Dropdown label="最多轮数" value={rounds}
               options={[{ value: "", label: "不限" }, ...[1, 2, 3, 5, 8].map((value) => ({ value: String(value), label: value + " 轮" }))]}
               filterable={false} placeholder="不限" onChange={onRoundsChange} /></div>
-            <div className="composer-toggle-field"><span>共识闸门</span><Toggle checked={gate} onChange={onGateChange} label={gate ? "需要确认" : "自动结束"} /></div>
-          </div> : <div className="composer-toggle-field"><span>自动审查</span><Toggle checked={review} onChange={onReviewChange} label={review ? "已开启" : "已关闭"} /></div>,
+            <label className="composer-toggle-field"><span>共识闸门</span><Toggle checked={gate} onChange={onGateChange} label={gate ? "需要确认" : "自动结束"} /></label>
+          </div> : <label className="composer-toggle-field"><span>自动审查</span><Toggle checked={review} onChange={onReviewChange} label={review ? "已开启" : "已关闭"} /></label>,
         },
       ]} />}
       {single && <details className="studio-organization studio-workspace-options">

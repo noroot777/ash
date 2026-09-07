@@ -48,11 +48,9 @@ export function ComposerExecution({ sections }: { sections: StudioSection[] }) {
       {sections.map((section) => (
         <section key={section.id} id={`${id}-${section.id}`} hidden={active?.id !== section.id}
           aria-label={section.label} className="studio-settings">
-          {active?.id === section.id && <>
-            <header><b>{section.label}</b><button type="button" className="studio-close" aria-label={`收起${section.label}`}
-              onClick={() => { setOpen(null); triggerRef.current?.focus(); }}><X size={14} /></button></header>
-            {section.content}
-          </>}
+          <header><b>{section.label}</b><button type="button" className="studio-close" aria-label={`收起${section.label}`}
+            onClick={() => { setOpen(null); triggerRef.current?.focus(); }}><X size={14} /></button></header>
+          {section.content}
         </section>
       ))}
     </div>

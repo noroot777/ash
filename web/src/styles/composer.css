@@ -210,21 +210,11 @@
   font-size: 9.5px;
 }
 
-.composer-executor-grid,
 .composer-option-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px 14px;
   margin-top: 14px;
-}
-
-.composer-executor-grid.is-team {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.composer-executor-grid.is-single {
-  grid-template-columns: minmax(0, 1fr);
-  width: min(100%, 390px);
 }
 
 /* 显式声明这一列可以被压窄。默认的隐式列是 `auto`（min-width: auto），一旦里面
@@ -505,8 +495,6 @@
 
 @media (max-width: 720px) {
   .composer-inner { width: calc(100% - 26px); }
-  .composer-executor-grid,
-  .composer-executor-grid.is-team,
   .composer-option-grid,
   .composer-tabs > span { display: none; }
   .composer-footer > div > span { display: none; }

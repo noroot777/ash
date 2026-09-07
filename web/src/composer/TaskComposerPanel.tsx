@@ -389,7 +389,7 @@ export function TaskComposerPanel({
           : runStepParams?.executorId
             ? "起手式「让 AI 干活」那一站选的执行器未注册，请展开编排换一个。"
             : "默认执行器未注册，请到执行器设置注册，或在起手式「让 AI 干活」那一站指定一个。"
-        : `${unavailableRole}当前未注册或不支持该角色，请更换执行器。`
+        : `${unavailableRole}当前未注册或不支持该角色，请展开「谁来做」更换执行器。`
       : mode === "team" && detection.status === "loading"
         ? "正在确认已注册调度者的常驻会话能力…"
         : mode === "team" && detection.status === "failed"
@@ -645,7 +645,7 @@ export function TaskComposerPanel({
           </div>
           <ComposerStarters onPick={(text, nextMode) => {
             changeBody(body.trim() ? body + "\n\n" + text : text);
-            if (nextMode === "duet") onModeChange(nextMode);
+            onModeChange(nextMode);
             textareaRef.current?.focus();
           }} />
           <p className="studio-footnote">切换模式不清空正文与配置 · ⌘ / Ctrl + Enter 按当前启动方式创建</p>
