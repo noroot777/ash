@@ -91,12 +91,14 @@ export function Button({
   variant = "primary",
   disabled,
   style,
+  accessibilityLabel,
 }: {
   label: string;
   onPress?: () => void;
   variant?: "primary" | "secondary" | "danger";
   disabled?: boolean;
   style?: StyleProp<ViewStyle>;
+  accessibilityLabel?: string;
 }) {
   const theme = useTheme();
   const bg =
@@ -105,6 +107,10 @@ export function Button({
   const border = variant === "danger" ? theme.danger : "transparent";
   return (
     <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityState={{ disabled: !!disabled }}
+      disabled={disabled}
       onPress={disabled ? undefined : onPress}
       style={[
         {
