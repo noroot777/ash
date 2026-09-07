@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { createServer } from "vite";
 import { chromeLaunchOptions } from "./chrome-path.mjs";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
-const output = fileURLToPath(new URL("../../output/playwright/", import.meta.url));
+const output = await mkdtemp(join(tmpdir(), "ash-chat-browser-"));
+console.log(`Chat screenshots: ${output}`);
 const fixture = spawn(process.execPath, ["--import", "tsx", "server/scripts/chat-browser-fixture.ts"], {
   cwd: root, env: { ...process.env, PORT: "0" }, stdio: ["ignore", "pipe", "pipe"],
 });
@@ -34,13 +37,18 @@ try {
   page.setDefaultTimeout(12000);
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await mkdir(output, { recursive: true });
   await page.goto(`http://127.0.0.1:${address.port}/?project=chat-demo&view=chat`);
   await page.getByRole("heading", { name: "创建一个聊天空间" }).waitFor();
   await page.getByLabel("群聊名称", { exact: true }).fill("产品研发");
   await page.getByRole("button", { name: "添加成员", exact: true }).click();
   await page.getByRole("button", { name: "添加成员", exact: true }).click();
   assert.equal(await page.getByLabel("点名名称", { exact: true }).count(), 2);
+  assert.equal(await page.getByLabel("点名名称", { exact: true }).nth(0).inputValue(), "claude");
+  assert.equal(await page.getByLabel("点名名称", { exact: true }).nth(1).inputValue(), "claude-2");
+  await page.getByText("即时聊天目前仅开放 Claude 无工具通道", { exact: false }).waitFor();
+  await page.screenshot({ path: `${output}/chat-members.png`, animations: "disabled" });
+  await page.getByLabel("点名名称", { exact: true }).nth(0).fill("codex");
+  await page.getByLabel("点名名称", { exact: true }).nth(1).fill("claude");
   await page.getByRole("button", { name: "创建群聊", exact: true }).click();
   const input = page.getByLabel("群聊消息输入");
   await input.waitFor();
@@ -55,7 +63,7 @@ try {
   await page.getByRole("listbox", { name: "点名成员" }).waitFor();
   await input.press("Enter");
   assert.equal(await input.inputValue(), "@codex ");
-  await send("@codex 你建议先做什么？");
+  await send("请@codex看看：你建议先做什么？");
   await page.getByText("建议先跑通点名唤醒，再连接任务状态。", { exact: false }).waitFor();
   assert.equal(await page.locator(".chat-message:not(.is-user)").count(), 1);
   assert.equal(await page.locator(".chat-task-card").count(), 0);

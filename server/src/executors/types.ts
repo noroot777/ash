@@ -134,6 +134,7 @@ export interface ResumeFields {
 // Hand-rolled adapter (no Vercel AI SDK). Each CLI type gets
 // one implementation that knows its flags, stream-json format, and resume scheme.
 export interface AgentExecutor {
+  runChat?(opts: RunOpts): RunHandle;
   readonly type: AgentType;
   readonly label: string; // e.g. "claude@local·opus"
   readonly model?: string;

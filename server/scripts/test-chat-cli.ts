@@ -6,7 +6,7 @@ import { AGENT_TYPES } from "@ash/shared";
 import type { ChatMember } from "@ash/shared/chat";
 
 if (process.env.ASH_CHAT_SMOKE !== "1") throw new Error("此测试调用真实 CLI；显式设置 ASH_CHAT_SMOKE=1 后运行。");
-const agentType = process.argv[2] ?? "codex";
+const agentType = process.argv[2] ?? "claude";
 if (!AGENT_TYPES.includes(agentType as ChatMember["agentType"])) throw new Error("未知智能体类型。");
 const stage = mkdtempSync(join(tmpdir(), "ash-chat-cli-"));
 process.env.ASH_DB = join(stage, "test.db");

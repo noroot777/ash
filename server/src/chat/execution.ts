@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { ChatMember } from "@ash/shared/chat";
+import { supportsChat, type ChatMember } from "@ash/shared/chat";
 import { resolveExecutorFor } from "../executors/index.js";
 import { dispatchRejection, executorOwnerScope } from "../auth/dispatch-gate.js";
 import { runEnvForOwner } from "../auth/run-env.js";
@@ -11,6 +11,7 @@ import { db } from "../db/index.js";
 import { agents } from "../db/schema.js";
 
 export async function invokeChat(member: ChatMember, owner: string | null, prompt: string, signal: AbortSignal): Promise<string> {
+  if (!supportsChat(member.agentType)) throw new Error("该智能体尚无可靠的无工具聊天通道，请选择 Claude 执行器。");
   const scope = await executorOwnerScope(owner);
   if (member.executorId) {
     const profile = (await db.select().from(agents).where(eq(agents.id, member.executorId))).at(0);
@@ -21,6 +22,7 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
   const rejection = await dispatchRejection({ agentType: member.agentType, executorId: member.executorId, ...scope });
   if (rejection) throw new Error(rejection);
   const executor = await resolveExecutorFor({ type: member.agentType, executorId: member.executorId, model: member.model, reasoningEffort: member.reasoningEffort, ...scope });
+  if (!executor.runChat) throw new Error("执行器不支持无工具聊天，未启动进程。");
   const env = await runEnvForOwner(owner, executor.type);
   signal.throwIfAborted();
   const cwd = await mkdtemp(join(tmpdir(), "ash-chat-"));
@@ -28,7 +30,7 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
   const abort = () => handle?.kill();
   try {
     signal.throwIfAborted();
-    handle = executor.run({
+    handle = executor.runChat({
       cwd,
       prompt: withGlobalBrowserPolicy(prompt, "full"),
       env: { ...env, ASH_TASK_ID: undefined, ASH_TURN_TOKEN: undefined, ASH_DIRECTION_TOKEN: undefined },

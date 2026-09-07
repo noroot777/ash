@@ -17,6 +17,10 @@ export interface ChatRoom {
   createdAt: string;
 }
 
+export function supportsChat(type: AgentType): boolean {
+  return type === "claude";
+}
+
 export type ChatMessageStatus = "queued" | "running" | "done" | "failed" | "stopped";
 
 export interface ChatMessage {
@@ -40,8 +44,15 @@ export interface ChatSnapshot {
 
 export function mentionedMembers(body: string, members: ChatMember[]): ChatMember[] {
   const prose = body.replace(/```[\s\S]*?(?:```|$)/gu, "").replace(/`[^`\n]*`/gu, "").replace(/^\s*>.*$/gmu, "");
-  return members.filter((member) => {
-    const name = member.name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-    return new RegExp(`(?:^|\\s)@${name}(?=$|[\\s，。！？,:：;；.!?])`, "u").test(prose);
-  });
+  if (!members.length) return [];
+  const names = [...members].sort((left, right) => right.name.length - left.name.length)
+    .map((member) => member.name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"));
+  const matched = new Set<string>();
+  const isWord = (value: string) => /[\p{L}\p{N}_·-]/u.test(value) && !/\p{Script=Han}/u.test(value);
+  for (const match of prose.matchAll(new RegExp(`@(${names.join("|")})`, "gu"))) {
+    const before = [...prose.slice(0, match.index)].at(-1) ?? "";
+    const after = [...prose.slice(match.index + match[0].length)][0] ?? "";
+    if (!isWord(before) && before !== "." && !isWord(after)) matched.add(match[1]!);
+  }
+  return members.filter((member) => matched.has(member.name));
 }

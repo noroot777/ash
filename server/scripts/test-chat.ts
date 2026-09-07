@@ -17,14 +17,22 @@ const { ChatService } = await import("../src/chat/service.js");
 const { mountChatRoutes } = await import("../src/chat/routes.js");
 const { setActor, SINGLE_ACTOR } = await import("../src/auth/context.js");
 const { parseChatReply } = await import("../src/chat/prompt.js");
+const { invokeChat } = await import("../src/chat/execution.js");
 await ensureSchema();
 const timestamp = new Date().toISOString();
 await db.insert(projects).values({ id: "project", name: "测试项目", repoPath: stage, createdAt: timestamp });
 
-const members: ChatMember[] = ["codex", "claude"].map((name) => ({ id: name, name, agentType: name as ChatMember["agentType"], executorId: null, model: null, reasoningEffort: null }));
+const members: ChatMember[] = ["codex", "claude"].map((name) => ({ id: name, name, agentType: "claude", executorId: null, model: null, reasoningEffort: null }));
 assert.deepEqual(mentionedMembers("@codex 请回答 @codex", members).map((member) => member.id), ["codex"]);
 assert.deepEqual(mentionedMembers("mail@codex @codex-other `@claude`\n> @claude\n```\n@codex\n```", members), []);
 assert.deepEqual(mentionedMembers("@codex，你好 @claude.", members).map((member) => member.id), ["codex", "claude"]);
+for (const body of ["@codex 请看看", "请 @codex 看看", "请@codex 看看", "请@codex看看", "（@codex）看看"]) {
+  assert.deepEqual(mentionedMembers(body, members).map((member) => member.id), ["codex"], body);
+}
+const extended = [...members, { ...members[0]!, id: "long", name: "codex设计" }];
+assert.deepEqual(mentionedMembers("请@codex设计看看", extended).map((member) => member.id), ["long"]);
+assert.deepEqual(mentionedMembers("@codex-other @codex2 邮件mail@codex", extended), []);
+await assert.rejects(invokeChat({ ...members[0]!, agentType: "codex" }, null, "请执行命令", new AbortController().signal), /无工具聊天通道/);
 assert.throws(() => parseChatReply('{"reply":"ok","task":{}}'));
 assert.equal(parseChatReply(JSON.stringify({ reply: "好".repeat(500), task: null })).reply.length, 300);
 
@@ -53,6 +61,7 @@ app.use("*", async (context, next) => {
 mountChatRoutes(app, service);
 const request = (path: string, body?: unknown, headers: Record<string, string> = {}) => app.request(path, { method: body ? "POST" : "GET", headers: { "Content-Type": "application/json", ...headers }, ...(body ? { body: JSON.stringify(body) } : {}) });
 const create = await request("/chats", { projectId: "project", name: "研发群", members });
+assert.equal((await request("/chats", { projectId: "project", name: "不安全", members: [{ ...members[0], agentType: "codex" }] })).status, 400);
 assert.equal(create.status, 201);
 const room = await create.json() as { id: string };
 const snapshot = async () => (await request(`/chats/${room.id}`)).json() as Promise<ChatSnapshot>;
@@ -153,7 +162,7 @@ try {
     testActors.set(name, { kind: "user", userId: user.id, role: "member", name });
     await addProjectMember({ projectId: "project", userId: user.id, role: "member", addedBy: user.id });
   }
-  await db.insert(agents).values({ id: "bob-profile", name: "Bob Private", type: "codex", extraArgs: "[]", ownerUserId: testActors.get("bob")!.userId, createdAt: timestamp });
+  await db.insert(agents).values({ id: "bob-profile", name: "Bob Private", type: "claude", extraArgs: "[]", ownerUserId: testActors.get("bob")!.userId, createdAt: timestamp });
   assert.equal((await request("/chats", { projectId: "project", name: "执行器越权", members: [{ ...members[0], executorId: "bob-profile" }] }, { "x-test-user": "alice" })).status, 400);
   const privateRoom = await request("/chats", { projectId: "project", name: "Alice 的群", members }, { "x-test-user": "alice" });
   assert.equal(privateRoom.status, 201);

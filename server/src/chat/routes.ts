@@ -2,7 +2,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import type { Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { AGENT_TYPES } from "@ash/shared";
-import type { ChatMember } from "@ash/shared/chat";
+import { supportsChat, type ChatMember } from "@ash/shared/chat";
 import { db } from "../db/index.js";
 import { agents, chatRooms, chatMessages, projects, tasks } from "../db/schema.js";
 import { actorOf, isAccountHolder, ownerIdOf } from "../auth/context.js";
@@ -37,6 +37,7 @@ async function parseMembers(value: unknown, c: Context): Promise<ChatMember[]> {
     const raw = entry as Record<string, unknown>;
     if (typeof raw.name !== "string" || !/^[\p{L}\p{N}_·.-]{1,32}$/u.test(raw.name) || names.has(raw.name)) throw new Error("成员名须唯一，限 32 字，不含空格或 @。");
     if (!AGENT_TYPES.includes(raw.agentType as ChatMember["agentType"])) throw new Error("请选择有效的智能体。");
+    if (!supportsChat(raw.agentType as ChatMember["agentType"])) throw new Error("该智能体尚不支持无工具聊天，请选择 Claude 执行器。");
     const executorId = typeof raw.executorId === "string" && raw.executorId ? raw.executorId : null;
     if (executorId && !profiles.some((profile) => profile.id === executorId && profile.type === raw.agentType)) throw new Error("所选执行器不存在或类型不匹配。");
     for (const field of ["model", "reasoningEffort"] as const) {
