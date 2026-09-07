@@ -1,7 +1,12 @@
 // 键盘相关工具：KAV 偏移、可见状态，以及 Android edge-to-edge 下的底部重叠补偿。
 import { useContext, useEffect, useState, type RefObject } from "react";
 import { Keyboard, Platform, type KeyboardAvoidingViewProps, type KeyboardEvent, type View } from "react-native";
-import { HeaderHeightContext } from "@react-navigation/elements";
+// SDK 57 起 expo-router 不再依赖 `@react-navigation/*`，而是把 react-navigation 内联进
+// 自己的 build 里，所以只能从这个子路径拿 —— 包没有 `exports` 映射，子路径可自由引入。
+// **别改回 `@react-navigation/elements`**：那样装进来的是另一个模块实例，跟渲染 Stack 的
+// 那份不是同一个 Context 对象，useContext 会永远拿到 undefined 而静默退回下面的兜底值，
+// 正好把本文件下方注释记载的 Pro / SE 机型偏移 bug 原样复活（错得没有任何声响）。
+import { HeaderHeightContext } from "expo-router/build/react-navigation/elements";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 export const keyboardAvoidingBehavior = Platform.select<KeyboardAvoidingViewProps["behavior"]>({
