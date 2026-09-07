@@ -44,7 +44,8 @@ try {
   const space = page.getByRole("button", { name: /^在哪里做/ });
   const flow = page.getByRole("button", { name: /^如何交付/ });
   await page.screenshot({ path: `${output}/composer-studio-desktop.png`, fullPage: true });
-  assert.equal(await page.locator(".studio-heading > span").count(), 0);
+  assert.equal(await page.locator(".studio-heading").count(), 0);
+  assert.equal(await page.getByText("从一个目标开始。", { exact: true }).count(), 0);
   assert.equal(await page.locator(".studio-path").count(), 0);
   assert.match(await page.locator(".studio-effective-run").innerText(), /CPA 中转.*claude-opus-4\.6.*high/);
   assert.equal(await page.locator(".studio-workflow .run-target-picker").count(), 1);

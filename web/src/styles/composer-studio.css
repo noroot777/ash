@@ -1,14 +1,11 @@
 .task-composer-panel.is-studio { grid-template-rows:48px minmax(0,1fr); }
-.is-studio .composer-inner { width:min(880px,calc(100% - 40px)); padding:36px 0 28px; }
-.studio-heading { margin:0 2px 22px; }
+.is-studio .composer-inner { width:min(880px,calc(100% - 40px)); padding:24px 0 28px; }
 .studio-workflow { border-top:1px solid var(--line); padding:20px; background:color-mix(in lch,var(--accent) 1.5%,var(--panel)); }
 .studio-workflow h2 { margin:0; font-size:13px; font-weight:600; }
 .studio-workflow header > p { margin:5px 0 14px; color:var(--faint); font-size:11px; line-height:1.6; }
 .studio-free-executor { margin-top:16px; }
 .studio-effective-run { margin:7px 0 0; color:var(--muted); font-size:10px; overflow-wrap:anywhere; }
 .studio-workflow > .is-workflow { padding:16px 0 0; }
-.studio-heading h1 { margin:0 0 8px; font-size:26px; font-weight:600; letter-spacing:-.7px; line-height:1.35; }
-.studio-heading p { margin:0; color:var(--faint); font-size:11px; }
 .studio-card { border:1px solid var(--line2); border-radius:13px; background:var(--panel); box-shadow:0 4px 16px rgb(25 27 50 / 3%),var(--surface-shadow); }
 .is-studio .composer-tabs { gap:2px; border:0; padding:16px 20px 0; }
 .is-studio .composer-tabs button { height:30px; font-size:11px; border-radius:7px; }
@@ -75,8 +72,7 @@
 .studio-starters button > svg { flex:0 0 auto; margin-left:auto; color:var(--faint); }
 .studio-footnote { color:var(--faint); font-size:9px; margin:16px 2px 0; }
 @media(max-width:700px) {
-  .is-studio .composer-inner { width:calc(100% - 28px); padding-top:25px; }
-  .studio-heading h1 { font-size:24px; }
+  .is-studio .composer-inner { width:calc(100% - 28px); padding-top:18px; }
   .is-studio .composer-tabs > span { display:none; }
   .studio-path { grid-template-columns:minmax(0,1fr) 10px minmax(0,1fr) 10px minmax(0,1fr); gap:0; }
   .studio-step { padding:7px; gap:3px; }

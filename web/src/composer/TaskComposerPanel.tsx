@@ -535,7 +535,6 @@ export function TaskComposerPanel({
       </header>
       <div className="composer-scroll">
         <div className="composer-inner">
-          <header className="studio-heading"><h1>从一个目标开始。</h1><p>把想完成的事写下来，执行方式在下方随时调整。</p></header>
           <div className="studio-card">
           <div className="composer-tabs" role="tablist" aria-label="任务模式">
             {MODES.map((item) => {
