@@ -35,10 +35,7 @@ try {
   });
   await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/scripts/fixtures/composer-upload.html?repo`);
   const objective = page.getByRole("textbox", { name: "任务目标" });
-  const switchMode = async (name) => {
-    await page.getByRole("button", { name: /^任务模式：/ }).click();
-    await page.getByRole("tab", { name: new RegExp("^" + name) }).click();
-  };
+  const switchMode = (name) => page.getByRole("tab", { name, exact: true }).click();
   const openLaunch = () => page.getByRole("button", { name: /^启动设置：/ }).click();
   const clickOutside = () => page.locator(".composer-scroll").click({ position: { x: 5, y: 5 } });
   const people = page.getByRole("button", { name: /^谁来做：/ });
@@ -52,6 +49,7 @@ try {
   assert.equal(await page.locator(".studio-card .composer-config").count(), 0);
   assert.equal(await page.locator(".studio-starters:visible").count(), 0);
   assert.equal(await page.getByLabel("启动方式").isVisible(), false);
+  assert.equal(await page.getByRole("tablist", { name: "任务模式" }).getByRole("tab").count(), 3);
 
   await page.getByRole("button", { name: /^智能体：/ }).click();
   await page.keyboard.press("Escape");
@@ -102,10 +100,10 @@ try {
   await page.getByRole("button", { name: "任务示例", exact: true }).click();
   await page.getByRole("button", { name: /解决一个问题/ }).click();
   assert.match(await objective.inputValue(), /^保留我写好的目标\n\n请帮我/);
-  assert.equal(await page.getByRole("button", { name: "任务模式：单任务", exact: true }).count(), 1);
+  assert.equal(await page.getByRole("tab", { name: "单任务", exact: true }).getAttribute("aria-selected"), "true");
   await page.getByRole("button", { name: "任务示例", exact: true }).click();
   await page.getByRole("button", { name: /讨论一个方案/ }).click();
-  assert.equal(await page.getByRole("button", { name: "任务模式：讨论", exact: true }).count(), 1);
+  assert.equal(await page.getByRole("tab", { name: "讨论", exact: true }).getAttribute("aria-selected"), "true");
   await switchMode("单任务");
   assert.equal(await objective.evaluate((element) => element.value.startsWith("保留我写好的目标")), true);
   await page.getByRole("button", { name: /^组织与标签：/ }).click();

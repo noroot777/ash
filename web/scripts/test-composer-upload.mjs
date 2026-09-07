@@ -135,14 +135,12 @@ try {
 
   // ②b 切到「讨论」不能把在途的藏起来：创建之后面板就没了，这张图同样没人接住；
   //     藏起来只会让用户以为已经传完（第 1 轮审查 P1）。
-  await page.getByRole("button", { name: /^任务模式：/ }).click();
-  await page.getByRole("tab", { name: /^讨论/ }).click();
+  await page.getByRole("tab", { name: "讨论", exact: true }).click();
   await page.waitForTimeout(200);
   assert.equal(await page.locator(".task-upload-chip.is-uploading").count(), 1, "切到讨论后在途卡片必须还在");
   assert.match(await page.locator(".studio-input-status").innerText(), /上传中 \d+%/, "讨论模式底栏也要说在传");
   assert.equal(await submit.isDisabled(), true, "讨论模式同样不能在上传未完成时创建");
-  await page.getByRole("button", { name: /^任务模式：/ }).click();
-  await page.getByRole("tab", { name: /^单任务/ }).click();
+  await page.getByRole("tab", { name: "单任务", exact: true }).click();
 
   // ③ 传完原地换成正式附件，按钮恢复。
   await release("shot.png");
@@ -153,14 +151,12 @@ try {
 
   // ③b 讨论同样收附件：议题也可以是「一句话 + 一张截图」，所以传好的那张要照常列出来，
   //     附件按钮也得在——它曾经在讨论模式下整个不渲染。
-  await page.getByRole("button", { name: /^任务模式：/ }).click();
-  await page.getByRole("tab", { name: /^讨论/ }).click();
+  await page.getByRole("tab", { name: "讨论", exact: true }).click();
   await page.waitForTimeout(200);
   assert.equal(await page.locator(".task-upload-chip img").count(), 1, "讨论模式要照常列出传好的附件");
   assert.match(await page.locator(".studio-input-status").innerText(), /1 个附件/, "讨论模式底栏也按附件计数");
   assert.equal(await page.getByRole("button", { name: "上传附件" }).count(), 1, "讨论模式必须有附件入口");
-  await page.getByRole("button", { name: /^任务模式：/ }).click();
-  await page.getByRole("tab", { name: /^单任务/ }).click();
+  await page.getByRole("tab", { name: "单任务", exact: true }).click();
 
   // ④ 传到一半反悔：取消掉在途的那个，既不留卡片也不报错，已经传好的不受影响。
   await paste("wrong.png")(page);
@@ -200,8 +196,7 @@ try {
   //    详情页顶部的「完整议题」读的是 body），只送 topic 会让那一行拿到一段没有正文的
   //    body。附件丢在请求体外面则是白贴——那正是这条链路修好之前的样子。
   //    上一条已经创建过，面板换了新的一块（见 fixture），所以正文和附件都重来一遍。
-  await page.getByRole("button", { name: /^任务模式：/ }).click();
-  await page.getByRole("tab", { name: /^讨论/ }).click();
+  await page.getByRole("tab", { name: "讨论", exact: true }).click();
   await page.locator(".composer-objective textarea").fill("这两版首页哪个更好");
   await paste("duet-shot.png")(page);
   await page.getByText("duet-shot.png", { exact: true }).waitFor();

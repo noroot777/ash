@@ -140,8 +140,6 @@ export function ComposerFields({
       options={[{ value: "", label: "当前 HEAD" }, ...branches.map((branch) => ({ value: branch, label: branch, mono: true }))]}
       disabled={!useWorktree} filterable={branches.length > 6} filterPlaceholder="筛选分支…" placeholder="当前 HEAD" onChange={onBaseChange} /></div>
   </div>;
-  const currentMode = MODES.find((item) => item.value === mode)!;
-  const ModeIcon = currentMode.icon;
   const directory = isRepo && useWorktree ? "独立 worktree" : "项目目录";
   const groupName = groups.find((group) => group.id === groupId)?.name;
   const organization = [!duet && groupName, labels.length > 0 && `${labels.length} 个标签`].filter(Boolean).join(" · ");
@@ -169,16 +167,12 @@ export function ComposerFields({
   return (
     <>
       <div className="studio-accessories" aria-label="任务辅助设置">
-        <ComposerPopover label="任务模式" value={currentMode.label} className="studio-mode-button"
-          trigger={<><ModeIcon size={15} /><span>{currentMode.label}</span></>}>
-          {(close) => <div className="studio-mode-options" role="tablist" aria-label="任务模式">
-            {MODES.map((item) => { const Icon = item.icon; return <button type="button" role="tab" key={item.value}
-              aria-selected={mode === item.value} onClick={() => { onModeChange(item.value); close(); }}>
-              <Icon size={17} /><span><b>{item.label}</b><small>{item.value === "single" ? "交给一个智能体完成" : item.value === "team" ? "调度、执行与审查协作" : "让两个智能体讨论方案"}</small></span>
-              {mode === item.value && <Check size={14} />}
-            </button>; })}
-          </div>}
-        </ComposerPopover>
+        <div className="studio-mode-tabs" role="tablist" aria-label="任务模式">
+          {MODES.map((item) => { const Icon = item.icon; return <button type="button" role="tab" key={item.value}
+            aria-selected={mode === item.value} onClick={() => onModeChange(item.value)}>
+            <Icon size={14} /><span>{item.label}</span>
+          </button>; })}
+        </div>
         <span className="studio-tool-divider" aria-hidden="true" />
         {single ? <ComposerPopover label="工作方式" value={preset ? "起手式" : "自由工作流"} wide={preset}
           trigger={<><FlowArrow size={14} /><span>{preset ? "起手式" : "自由工作流"}</span></>}>

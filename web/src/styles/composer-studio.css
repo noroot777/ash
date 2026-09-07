@@ -6,10 +6,14 @@
 .studio-aux-button > svg { flex-shrink:0; }
 .studio-aux-button:hover:not(:disabled),.studio-aux-button[aria-expanded="true"] { color:var(--ink); background:var(--raised); }
 .studio-aux-button.is-configured { color:var(--accent); }
-.studio-mode-button { color:var(--ink); font-weight:550; }
 .studio-aux-caret { color:var(--faint); }
 .studio-tool-divider { width:1px; height:14px; flex:0 0 1px; margin:0 5px; background:var(--line); }
 .studio-template-tool { margin-left:auto; }
+.studio-mode-tabs { display:flex; align-items:center; gap:2px; }
+.studio-mode-tabs > button { display:inline-flex; height:30px; align-items:center; gap:6px; border:0; border-radius:7px; padding:0 9px; background:transparent; color:var(--faint); font-size:11px; white-space:nowrap; }
+.studio-mode-tabs > button:hover { background:var(--raised); color:var(--muted); }
+.studio-mode-tabs > button[aria-selected="true"] { background:var(--raised); color:var(--ink); box-shadow:inset 0 0 0 1px color-mix(in lch,var(--line2) 70%,transparent); font-weight:550; }
+.studio-mode-tabs > button > svg { flex:0 0 auto; }
 .studio-card { border:1px solid var(--line2); border-radius:16px; background:var(--panel); box-shadow:0 6px 24px rgb(25 27 50 / 3%),var(--surface-shadow); }
 .studio-card:focus-within { border-color:color-mix(in lch,var(--accent) 42%,var(--line)); }
 .is-studio .composer-objective { margin:0; padding:0 26px; }
@@ -53,14 +57,6 @@
 .studio-popover .composer-launch-mode select { width:100%; flex:auto; }
 .studio-popover .schedule-field { width:100%; margin-top:12px; }
 .studio-popover .composer-launch-error { display:block; margin-top:8px; white-space:normal; }
-.studio-mode-options { display:grid; gap:3px; }
-.studio-mode-options > button { display:flex; align-items:center; gap:12px; width:100%; border:0; border-radius:8px; background:transparent; padding:10px; text-align:left; }
-.studio-mode-options > button:hover,.studio-mode-options > button[aria-selected="true"] { background:var(--raised); }
-.studio-mode-options > button > span { flex:1; }
-.studio-mode-options b,.studio-mode-options small { display:block; }
-.studio-mode-options b { font-size:12px; font-weight:550; }
-.studio-mode-options small { margin-top:2px; font-size:10px; color:var(--faint); }
-.studio-mode-options > button > svg:last-child { color:var(--accent); }
 .studio-workflow > .is-workflow { padding:16px 0 0; }
 .studio-workflow .composer-wf-label { flex-wrap:wrap; }
 .studio-effective-run { margin:7px 0 0; color:var(--muted); font-size:10px; overflow-wrap:anywhere; }
@@ -82,6 +78,7 @@
   .is-studio .composer-inner { width:calc(100% - 28px); padding-top:32px; }
   .studio-accessories { gap:2px; padding:0 0 8px; }
   .studio-aux-button { padding:0 6px; font-size:10px; }
+  .studio-mode-tabs > button { gap:4px; padding:0 6px; font-size:10px; }
   .studio-tool-divider { margin:0 2px; }
   .studio-template-tool { margin-left:0; }
   .is-studio .composer-objective { padding:0 18px; }
@@ -101,6 +98,7 @@
   .studio-accessories { column-gap:0; }
   .studio-accessories > .studio-tool-divider { display:none; }
   .studio-accessories .studio-aux-button { gap:4px; }
+  .studio-mode-tabs > button { padding:0 5px; }
   .studio-template-tool .studio-aux-button > span { display:none; }
   .studio-footnote { font-size:9px; }
 }
