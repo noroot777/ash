@@ -13,6 +13,7 @@ process.env.ASH_DB = join(stage, "test.db");
 process.env.ASH_RUNS_DIR = join(stage, "runs");
 const projectDir = join(stage, "project");
 mkdirSync(projectDir);
+mkdirSync(join(projectDir, "node_modules", "pkg"), { recursive: true });
 const source = join(projectDir, "source.txt");
 writeFileSync(source, "before");
 const { db, ensureSchema, dbClient } = await import("../src/db/index.js");
@@ -47,6 +48,7 @@ CLI_SPEC_BY_KEY.codex.factory = () => ({
   type: "codex", label: "fixture", resumeCommand: () => "",
   run: (opts) => {
     if (mode === "sync-write") writeFileSync(join(opts.cwd, "unexpected-side-effect.txt"), "written before any event");
+    if (mode === "dependency-write") writeFileSync(join(opts.cwd, "node_modules", "pkg", "side-effect.txt"), "written without any tool event");
     return {
       sessionId: "fixture", commandLine: "fixture", kill: () => { killed++; release?.(); }, cleanup: async () => { cleanup++; },
       events: (async function* (): AsyncGenerator<AgentEvent> {
@@ -112,16 +114,18 @@ try {
     }
     throw new Error("副作用警告未持久化");
   };
-  mode = "sync-write";
-  await request(`/chats/${room.id}/messages`, { id: "consultation-write", body: "@codex 你建议登录页怎么改？" });
-  const failed = await settle();
-  assert.match(failed.messages.at(-1)!.body, /unexpected-side-effect/);
-  assert.equal(failed.messages.at(-1)!.taskId, null);
-  const refreshed = await (await request(`/chats/${room.id}`)).json() as ChatSnapshot;
-  assert.equal(refreshed.messages.at(-1)!.body, failed.messages.at(-1)!.body);
-  await service.recover();
-  assert.equal((await (await request(`/chats/${room.id}`)).json() as ChatSnapshot).messages.at(-1)!.body, failed.messages.at(-1)!.body);
-  assert.equal((await db.select().from(tasks)).length, 0);
+  for (const [scenario, path] of [["sync-write", "unexpected-side-effect"], ["dependency-write", "node_modules"]]) {
+    mode = scenario!;
+    await request(`/chats/${room.id}/messages`, { id: `consultation-${scenario}`, body: "@codex 你建议登录页怎么改？" });
+    const failed = await settle();
+    assert.ok(failed.messages.at(-1)!.body.includes(path!));
+    assert.equal(failed.messages.at(-1)!.taskId, null);
+    const refreshed = await (await request(`/chats/${room.id}`)).json() as ChatSnapshot;
+    assert.equal(refreshed.messages.at(-1)!.body, failed.messages.at(-1)!.body);
+    await service.recover();
+    assert.equal((await (await request(`/chats/${room.id}`)).json() as ChatSnapshot).messages.at(-1)!.body, failed.messages.at(-1)!.body);
+    assert.equal((await db.select().from(tasks)).length, 0);
+  }
   rmSync(join(projectDir, "unexpected-side-effect.txt"));
   mode = "stop-write";
   let stopped: Promise<void> | undefined;
@@ -135,7 +139,7 @@ try {
   assert.equal(stored.status, "failed");
   assert.equal(readFileSync(source, "utf8"), "before");
   assert.equal((await db.select().from(chatRooms)).length, 1);
-  console.log("chat boundary: 只读工具通过；写入/未知命令失败；无工具事件的同步/流式写入、修改、删除、重命名均告警；刷新与停止后警告保留，咨询不创建任务");
+  console.log("chat boundary: 只读工具通过；写入/未知命令失败；无工具事件的同步/流式写入、修改、删除、重命名均告警；源码和依赖写入的警告刷新/恢复后保留，停止不覆盖警告，咨询不创建任务");
 } finally {
   release?.();
   CLI_SPEC_BY_KEY.codex.factory = original;

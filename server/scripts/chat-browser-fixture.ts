@@ -1,12 +1,13 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { eq } from "drizzle-orm";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-chat-browser-"));
+mkdirSync(join(stage, "node_modules", "pkg"), { recursive: true });
 process.env.ASH_DB = join(stage, "test.db");
 process.env.ASH_RUNS_DIR = join(stage, "runs");
 const { db, ensureSchema, dbClient } = await import("../src/db/index.js");
@@ -35,7 +36,8 @@ const service = new ChatService(async (member, owner, prompt, signal, projectId)
     spec.factory = () => ({
       type: member.agentType, label: "boundary fixture", resumeCommand: () => "",
       run: (opts) => {
-        writeFileSync(join(opts.cwd, "unexpected-side-effect.txt"), "浏览器验证中的模拟越界写入");
+        const file = text.includes("依赖越界验证") ? join("node_modules", "pkg", "side-effect.txt") : "unexpected-side-effect.txt";
+        writeFileSync(join(opts.cwd, file), "浏览器验证中的模拟越界写入");
         return { sessionId: "fixture", commandLine: "fixture", kill: () => {}, events: (async function* () {
           yield { kind: "text" as const, text: '{"reply":"不应显示为正常咨询","task":null}' };
           yield { kind: "done" as const, exitStatus: 0 };
