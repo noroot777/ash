@@ -43,6 +43,9 @@
 .chat-mode-bar .is-active { color: #694b8b; background: #f0e9f7; font-weight: 650; }
 .chat-header { display: flex; justify-content: space-between; align-items: center; padding: 20px 28px 16px; border-bottom: 1px solid #efedf2; }
 .chat-header h1 { display: flex; gap: 6px; align-items: center; font-size: 18px; letter-spacing: -.4px; font-weight: 700; margin: 0; }
+.chat-room-name { display: flex; gap: 6px; align-items: center; border: 0; background: none; margin: -4px -7px; padding: 4px 7px; border-radius: 7px; font: inherit; color: inherit; }
+.chat-room-name:hover { background: var(--chat-mist); }
+.chat-room-name > svg:last-child { color: #b3a4bd; }
 .chat-header p { margin: 7px 0 0; font-size: 11px; color: var(--chat-muted); display: flex; align-items: center; gap: 6px; }
 .chat-connection { width: 6px; height: 6px; border-radius: 50%; background: #c49955; }
 .chat-connection.is-connected { background: #54a490; }
@@ -98,7 +101,9 @@
 .chat-live-line > button { display: flex; gap: 4px; align-items: center; margin-left: auto; padding: 2px 5px; color: #9a6877; background: none; border: 0; font-size: 10px; }
 .chat-live-dot { width: 5px; height: 5px; background: #9c78b8; border-radius: 50%; animation: chat-dot 1.3s ease-in-out infinite; }
 .chat-composer { border: 1px solid #dcd3e3; border-radius: 10px; box-shadow: 0 2px 9px #382a4006; position: relative; transition: box-shadow 180ms ease, border-color 180ms ease; }
-.chat-composer:focus-within { border-color: #b89bca; box-shadow: 0 0 0 3px #9672b30c; }
+/* 输入框铺满整张卡，带 offset 的默认焦点环会画到卡片外面去；焦点提示改由卡片自己的 focus-within 环承担。 */
+.chat-composer:focus-within { border-color: #a985c1; box-shadow: 0 0 0 3px #9672b322; }
+.chat-shell .chat-composer textarea:focus-visible { outline: none; }
 .chat-composer textarea { display: block; width: 100%; resize: vertical; min-height: 74px; max-height: 190px; background: none; border: 0; padding: 14px 15px 8px; color: var(--chat-ink); font: inherit; font-size: 13px; line-height: 1.7; border-radius: 10px; outline: none; }
 .chat-composer textarea::placeholder { color: #aaa1b1; }
 .chat-composer footer { display: flex; align-items: center; gap: 9px; padding: 8px 11px; }

@@ -72,6 +72,32 @@ try {
   await page.getByText("建议先确认用户需求，再查看当前项目。", { exact: false }).waitFor();
   assert.equal(await page.locator(".chat-message:not(.is-user)").count(), 3);
   assert.equal(await page.locator(".chat-task-card").count(), 0);
+  const replies = page.locator(".chat-message:not(.is-user)");
+  await input.fill("@al");
+  await page.getByRole("listbox", { name: "点名成员" }).getByText("全体成员 · 3 位", { exact: true }).waitFor();
+  await input.press("Enter");
+  assert.equal(await input.inputValue(), "@all ");
+  await page.getByText("将唤醒全部 3 位成员", { exact: true }).waitFor();
+  await send("@all 请各给一句建议。");
+  await page.waitForFunction(() => document.querySelectorAll(".chat-message:not(.is-user)").length === 6 && !document.querySelector(".chat-typing"));
+  assert.equal(await replies.count(), 6, "@all 一次唤醒全部三位成员");
+  await page.locator(".chat-message.is-user mark").filter({ hasText: "@all" }).last().waitFor();
+  const settings = page.getByRole("button", { name: "群聊设置：产品研发" });
+  await settings.click();
+  const roomName = page.getByLabel("群聊名称", { exact: true });
+  assert.equal(await roomName.inputValue(), "产品研发");
+  await roomName.fill("产品研发 · 改名后");
+  await page.getByRole("button", { name: "保存设置", exact: true }).click();
+  await page.getByRole("button", { name: "群聊设置：产品研发 · 改名后" }).waitFor();
+  const channel = page.getByRole("button", { name: "产品研发 · 改名后 3", exact: true });
+  await channel.waitFor();
+  await page.reload();
+  await channel.waitFor();
+  await page.waitForFunction(() => document.querySelectorAll(".chat-message:not(.is-user)").length === 6);
+  await channel.click();
+  assert.equal(await replies.count(), 6, "点已经选中的群仍留在这个群，不掉回空态");
+  assert.equal(await page.locator(".chat-empty").count(), 0, "重复点选当前群不掉回空态");
+  await input.waitFor();
   for (const [scenario, path] of [["越界验证", "unexpected-side-effect.txt"], ["依赖越界验证", "node_modules"]]) {
     await send(`@codex 你建议怎么改？${scenario}`);
     const boundary = page.locator(".chat-message.is-failed").filter({ hasText: path });
@@ -112,7 +138,7 @@ try {
   await input.waitFor();
   assert.equal(await page.locator(".chat-message").count(), 0);
   await send("这个群的独立消息。");
-  await page.getByRole("button", { name: "产品研发 3", exact: true }).click();
+  await page.getByRole("button", { name: "产品研发 · 改名后 3", exact: true }).click();
   await page.getByText("你已停止这次回复。", { exact: false }).waitFor();
   assert.equal(await page.getByText("这个群的独立消息。", { exact: true }).count(), 0);
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -162,7 +188,7 @@ try {
   await page.locator(".composer-seed-attachment").getByText("merge-draft.txt", { exact: true }).waitFor();
   assert.equal(await page.locator(".composer-seed-attachment").count(), 1, "聊天往返保留附件且不重复");
   assert.deepEqual(errors, []);
-  console.log("chat browser passed: 创建群聊、三段成员选择、键盘点名、无点名静默、禁止转发唤醒、实际模拟源码及 node_modules 写入均被标记失败且刷新保留警告、不误建任务、任务卡实时状态、停止持久化、详情回跳、390px 窄屏、减少动态效果、群间隔离、新编辑器四模式入口、320–1440px 模式栏、上传切换门禁、跨模式任务草稿与附件保留；无页面异常。");
+  console.log("chat browser passed: 创建群聊、三段成员选择、键盘点名、@all 唤醒全体、群聊改名、重复点选当前群不掉空态、无点名静默、禁止转发唤醒、实际模拟源码及 node_modules 写入均被标记失败且刷新保留警告、不误建任务、任务卡实时状态、停止持久化、详情回跳、390px 窄屏、减少动态效果、群间隔离、新编辑器四模式入口、320–1440px 模式栏、上传切换门禁、跨模式任务草稿与附件保留；无页面异常。");
 } catch (error) {
   await page?.screenshot({ path: `${output}/chat-failure.png` }).catch(() => {});
   throw error;

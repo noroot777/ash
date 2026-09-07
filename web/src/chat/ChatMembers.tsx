@@ -7,12 +7,12 @@ import { executorValue, parseExecutorValue, registeredAgentTypes } from "../lib/
 import { api } from "../lib/api.ts";
 import { createClientId } from "../lib/clientId.ts";
 
-export function ChatMembers({ initial, onSave, onCancel, creating = false }: {
-  initial: ChatMember[]; onSave: (members: ChatMember[], name: string) => Promise<void>; onCancel: () => void; creating?: boolean;
+export function ChatMembers({ initial, initialName, onSave, onCancel, creating = false }: {
+  initial: ChatMember[]; initialName?: string; onSave: (members: ChatMember[], name: string) => Promise<void>; onCancel: () => void; creating?: boolean;
 }) {
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [members, setMembers] = useState(initial);
-  const [name, setName] = useState("协作空间");
+  const [name, setName] = useState(initialName ?? "协作空间");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   useEffect(() => {
@@ -38,12 +38,12 @@ export function ChatMembers({ initial, onSave, onCancel, creating = false }: {
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setSaving(false); }
   };
-  return <section className="chat-member-editor" aria-label={creating ? "创建群聊" : "管理群成员"}>
-    <div className="chat-editor-heading"><div><small>让合适的人参与</small><h2>{creating ? "创建一个聊天空间" : "群聊成员"}</h2></div><button type="button" aria-label="关闭成员配置" onClick={onCancel}><X size={20} /></button></div>
-    <p>选择智能体、模型与智能水平。只有你明确 @ 的成员才会收到会话并回复。</p>
+  return <section className="chat-member-editor" aria-label={creating ? "创建群聊" : "群聊设置"}>
+    <div className="chat-editor-heading"><div><small>让合适的人参与</small><h2>{creating ? "创建一个聊天空间" : "群聊设置"}</h2></div><button type="button" aria-label="关闭成员配置" onClick={onCancel}><X size={20} /></button></div>
+    <p>选择智能体、模型与智能水平。只有你明确 @ 的成员才会收到会话并回复；<strong>@all（或 @所有人）一次唤醒全部成员</strong>，所以成员名不能叫 all 或所有人。</p>
     <p>所有已注册智能体均可参与。被你 @ 后可查看当前项目、使用工具辅助回答；修改代码等执行工作需你明确委派，再创建任务。</p>
     <p>检测到文件变化或无法确认只读的工具时，会中止咨询并保留警告；可能已发生的改动不会自动撤销。</p>
-    {creating && <label className="chat-name-field">群聊名称<input maxLength={80} value={name} onChange={(event) => setName(event.target.value)} /></label>}
+    <label className="chat-name-field">群聊名称<input maxLength={80} value={name} onChange={(event) => setName(event.target.value)} /></label>
     <div className="chat-member-fields">{members.map((member, index) => <div className="chat-member-field" key={member.id}>
       <span className={`chat-avatar tone-${index % 4}`}>{member.name.slice(0, 1).toUpperCase()}</span>
       <label>点名名称<input value={member.name} maxLength={32} onChange={(event) => change(member.id, { name: event.target.value })} /></label>
@@ -56,6 +56,6 @@ export function ChatMembers({ initial, onSave, onCancel, creating = false }: {
     <button className="chat-add-member" type="button" onClick={add} disabled={!profiles.length || members.length >= 24}><Plus size={16} />添加成员</button>
     {!profiles.length && <p>暂无可选执行器。请先在 ash「执行器」设置中注册。</p>}
     {error && <p className="chat-error" role="alert">{error}</p>}
-    <footer><span>智能体之间的 @ 只展示，不会触发执行。</span><button className="chat-primary" type="button" disabled={saving || !members.length || !name.trim()} onClick={() => void save()}>{saving ? "保存中…" : creating ? "创建群聊" : "保存成员"}</button></footer>
+    <footer><span>智能体之间的 @ 只展示，不会触发执行。</span><button className="chat-primary" type="button" disabled={saving || !members.length || !name.trim()} onClick={() => void save()}>{saving ? "保存中…" : creating ? "创建群聊" : "保存设置"}</button></footer>
   </section>;
 }
