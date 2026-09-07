@@ -71,6 +71,14 @@ try {
   await page.getByText("建议先确认用户需求，再查看当前项目。", { exact: false }).waitFor();
   assert.equal(await page.locator(".chat-message:not(.is-user)").count(), 3);
   assert.equal(await page.locator(".chat-task-card").count(), 0);
+  await send("@codex 你建议怎么改？越界验证");
+  const boundary = page.locator(".chat-message.is-failed").filter({ hasText: "咨询已中止" });
+  await boundary.getByText("unexpected-side-effect.txt", { exact: false }).waitFor();
+  assert.equal(await page.getByText("不应显示为正常咨询", { exact: true }).count(), 0);
+  assert.equal(await page.locator(".chat-task-card").count(), 0);
+  await page.reload();
+  await boundary.getByText("未自动撤销改动", { exact: false }).waitFor();
+  await page.screenshot({ path: `${output}/chat-boundary.png`, animations: "disabled" });
   await send("@codex 请实现频道导航与任务状态卡。");
   await page.locator(".chat-task-card").getByText("运行中", { exact: false }).waitFor();
   await page.locator(".chat-task-card.is-done").waitFor();
@@ -113,7 +121,7 @@ try {
   await page.getByRole("button", { name: "单任务", exact: true }).click();
   assert.equal(await objective.inputValue(), "切换聊天后，这份任务草稿仍然保留。");
   assert.deepEqual(errors, []);
-  console.log("chat browser passed: 创建群聊、三段成员选择、键盘点名、无点名静默、禁止转发唤醒、任务卡实时状态、停止持久化、详情回跳、390px 窄屏、减少动态效果、群间隔离、跨模式任务草稿保留；无页面异常。");
+  console.log("chat browser passed: 创建群聊、三段成员选择、键盘点名、无点名静默、禁止转发唤醒、实际模拟写入被标记失败且刷新保留警告、不误建任务、任务卡实时状态、停止持久化、详情回跳、390px 窄屏、减少动态效果、群间隔离、跨模式任务草稿保留；无页面异常。");
 } catch (error) {
   await page?.screenshot({ path: `${output}/chat-failure.png` }).catch(() => {});
   throw error;

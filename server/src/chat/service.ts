@@ -8,6 +8,7 @@ import { createTasks } from "../task-store.js";
 import { runTask } from "../task-run.js";
 import { invokeChat } from "./execution.js";
 import { chatPrompt, parseChatReply } from "./prompt.js";
+import { ChatBoundaryError } from "./boundary.js";
 
 export type RoomRow = typeof chatRooms.$inferSelect;
 type MessageRow = typeof chatMessages.$inferSelect;
@@ -114,8 +115,9 @@ export class ChatService {
         });
       }
     } catch (error) {
-      await db.update(chatMessages).set({ status: abort.signal.aborted ? "stopped" : "failed", context: null, body: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) })
-        .where(and(eq(chatMessages.id, message.id), eq(chatMessages.status, "running")));
+      const boundary = error instanceof ChatBoundaryError;
+      await db.update(chatMessages).set({ status: boundary ? "failed" : abort.signal.aborted ? "stopped" : "failed", context: null, body: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) })
+        .where(and(eq(chatMessages.id, message.id), inArray(chatMessages.status, boundary ? ["running", "stopped"] : ["running"])));
     } finally {
       clearTimeout(timer);
     }

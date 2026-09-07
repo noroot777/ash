@@ -11,6 +11,7 @@ import { ANONYMOUS_ACTOR, SINGLE_ACTOR, type Actor } from "../auth/context.js";
 import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { db } from "../db/index.js";
 import { agents, projects, users } from "../db/schema.js";
+import { ChatBoundaryError, readOnlyChatTool, watchChatWorkspace } from "./boundary.js";
 
 export async function invokeChat(member: ChatMember, owner: string | null, prompt: string, signal: AbortSignal, projectId: string): Promise<string> {
   signal.throwIfAborted();
@@ -35,8 +36,13 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
   const temporary = !project.repoPath.trim();
   const cwd = temporary ? await mkdtemp(join(tmpdir(), "ash-chat-")) : project.repoPath;
   let handle: ReturnType<typeof executor.run> | undefined;
+  let guard: Awaited<ReturnType<typeof watchChatWorkspace>> | undefined;
+  let rejectViolation: (error: ChatBoundaryError) => void;
+  const violated = new Promise<never>((_resolve, reject) => { rejectViolation = reject; });
+  void violated.catch(() => {});
   const abort = () => handle?.kill();
   try {
+    guard = await watchChatWorkspace(cwd, (error) => { handle?.kill(); rejectViolation(error); });
     signal.throwIfAborted();
     handle = executor.run({
       cwd,
@@ -45,22 +51,35 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
     });
     signal.addEventListener("abort", abort, { once: true });
     process.once("exit", abort);
-    let text = "";
-    let exitStatus: number | undefined;
-    for await (const event of handle.events) {
-      signal.throwIfAborted();
-      if (event.kind === "text") text += event.text;
-      if (text.length > 32000) throw new Error("聊天回复过长，已中止。请把复杂工作交给任务。");
-      if (event.kind === "error" && event.level !== "notice") throw new Error(event.message);
-      if (event.kind === "done") exitStatus = event.exitStatus;
-    }
-    if (exitStatus !== 0) throw new Error(`智能体未正常结束（${exitStatus ?? "无退出状态"}），请重新 @ 重试。`);
-    return text;
+    const consume = async () => {
+      let text = "";
+      let exitStatus: number | undefined;
+      for await (const event of handle!.events) {
+        if (event.kind === "tool" && !readOnlyChatTool(event)) throw new ChatBoundaryError(`检测到写入或无法确认只读的工具（${JSON.stringify(event.name.slice(0, 80))}）`);
+        signal.throwIfAborted();
+        if (event.kind === "text") text += event.text;
+        if (text.length > 32000) throw new Error("聊天回复过长，已中止。请把复杂工作交给任务。");
+        if (event.kind === "error" && event.level !== "notice") throw new Error(event.message);
+        if (event.kind === "done") exitStatus = event.exitStatus;
+      }
+      if (exitStatus !== 0) throw new Error(`智能体未正常结束（${exitStatus ?? "无退出状态"}），请重新 @ 重试。`);
+      return text;
+    };
+    return await Promise.race([consume(), violated]);
   } finally {
     signal.removeEventListener("abort", abort);
     process.removeListener("exit", abort);
-    handle?.kill();
-    await handle?.cleanup?.();
-    if (temporary) await rm(cwd, { recursive: true, force: true });
+    try {
+      handle?.kill();
+      await handle?.cleanup?.();
+    } finally {
+      try {
+        const violation = await guard?.finish();
+        if (violation) throw violation;
+      } finally {
+        guard?.close();
+        if (temporary) await rm(cwd, { recursive: true, force: true });
+      }
+    }
   }
 }
