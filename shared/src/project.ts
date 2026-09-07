@@ -11,8 +11,8 @@ export interface Project {
   repoPath: string; // git repo this project's tasks operate on
   // 本项目新建任务默认走哪条起手式；null = 跟随全局默认（见 AppSettings）
   workflowId: string | null;
-  // 「打开预览」跑哪条命令；null = 让服务端自动推导（只认 Node 项目根目录的 dev/start）。
-  // Java/Python/Go 这类非 Node 项目、以及 front/back 并排的多项目仓库都要靠它。
+  // 「打开预览」跑哪条命令；null = 让服务端按各语言自己的惯例去认（Maven / Gradle /
+  // Django / go / cargo / dotnet / Node…），认出恰好一个才自动用，多个就回来问人。
   previewCommand: string | null;
   createdAt: string;
 }

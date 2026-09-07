@@ -160,6 +160,27 @@ try {
   } else {
     console.log("skip POSIX orphan-group assertion on Windows (no reparented process-group kill)");
   }
+
+  // 一行日志都不印的服务照样得算「起来了」。从日志里认地址那条路只对肯打印、且是行缓冲
+  // 打印的命令成立（Node 的 dev server 一贯如此，`python3 -m http.server` 在非 tty 下就
+  // 不是，Go/Rust 写的服务可以什么都不印）。端口是 ash 借出去的，连得上就是它。
+  {
+    const quietCode = "require('http').createServer((q,r)=>r.end('quiet')).listen(process.env.PORT)";
+    const step = {
+      id: "quiet-preview",
+      kind: "preview",
+      p: { cmd: `node -e ${JSON.stringify(quietCode)}`, mode: "frontend", ready: "port", life: "gate" },
+    };
+    const result = await startPreview("quiet-task", step as never, repo);
+    try {
+      assert.equal(result.ok, true, "不吭声的服务被判成没起来（只认日志里的地址就会这样）");
+      assert.ok(result.ok && result.record.port, "认下来的必须是 ash 借出去的那个端口");
+      assert.equal(result.ok && result.record.url, `http://localhost:${result.ok && result.record.port}/`);
+      assert.equal(await reachable(`http://127.0.0.1:${result.ok && result.record.port}/`), true);
+    } finally {
+      if (result.ok) killGroup(result.record.pid);
+    }
+  }
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

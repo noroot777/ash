@@ -10,8 +10,8 @@ export const projects = sqliteTable("projects", {
   apiKeys: text("api_keys"), // legacy project-level credentials, kept for compatibility
   // 本项目新建任务默认用哪条起手式（workflows.id 或内置 key）。空 = 跟随全局默认。
   workflowId: text("workflow_id"),
-  // 「打开预览」跑哪条命令。空 = 自动推导（只认 Node，见 preview-command.ts）。
-  // 非 Node 项目（Java/Python/Go…）和多项目仓库靠它，命令在任务工作区根目录执行。
+  // 「打开预览」跑哪条命令。空 = 按各语言惯例自动识别（见 preview-command.ts），
+  // 认出恰好一个才自动用；命令本身在任务工作区根目录用用户自己的 shell 执行。
   previewCommand: text("preview_command"),
   // 建这个项目的人(多人模式)。null = 自用模式建的、或转换前的存量项目。
   // 创建者自动是项目管理员,但成员关系的真源是 project_members —— 这一列只记出身。

@@ -55,11 +55,11 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
     finally { setBusy(false); }
   };
   // 预览命令单独存：它跟名称/目录不是一批东西，攒在同一颗「保存更改」里，改完命令要先
-  // 想起来还得按上面那颗按钮。空串存回 null = 回到自动推导。
+  // 想起来还得按上面那颗按钮。空串存回 null = 回到自动识别。
   const savePreviewCommand = async () => {
     if (!previewDirty) return;
     setBusy(true);
-    try { onUpdated(await api.updateProject(project.id, { previewCommand: previewCommand.trim() || null })); notify(previewCommand.trim() ? "预览命令已保存" : "预览命令已清空，恢复自动推导"); }
+    try { onUpdated(await api.updateProject(project.id, { previewCommand: previewCommand.trim() || null })); notify(previewCommand.trim() ? "预览命令已保存" : "预览命令已清空，恢复自动识别"); }
     catch (error) { notify(error instanceof Error ? error.message : "预览命令保存失败"); }
     finally { setBusy(false); }
   };
@@ -124,16 +124,18 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
             className="mono"
             value={previewCommand}
             readOnly={!canManage}
-            placeholder="留空 = 自动推导（只认 Node）"
+            placeholder="留空 = 由 ash 自己认（认出恰好一个才用）"
             onChange={(event) => setPreviewCommand(event.target.value)}
           />
         </label>
         <small>
-          留空时服务端自己推导，但推导只认 Node：工作区根目录 package.json 里的 dev / start 脚本。
-          Java、Python、Go 这类项目，以及前后端并排的多项目仓库（根目录没有 package.json），都要在这里填一条，
-          例如 <code className="mono">cd web &amp;&amp; pnpm run dev</code> 或 <code className="mono">./mvnw spring-boot:run</code>。
+          留空时 ash 按各语言自己的惯例去认：Maven 的 <code className="mono">spring-boot:run</code>、Gradle 的{" "}
+          <code className="mono">bootRun</code>、Django 的 <code className="mono">runserver</code>、
+          <code className="mono">go run</code>、<code className="mono">cargo run</code>、<code className="mono">dotnet run</code>、
+          Node 的 dev / start 脚本。<b>认出恰好一个才自动用</b>；前后端并排、Maven 多模块各带一个应用这种，它不替你挑，
+          会把认出来的都列给你，挑一条填这儿。
         </small>
-        <small>命令在任务自己的工作区（worktree）根目录执行，用你自己的 shell，可以带 cd 和 &amp;&amp;；ash 会注入 PORT（认这个变量的框架就能自动错开端口）和 BROWSER=none。</small>
+        <small>命令在任务自己的工作区（worktree）根目录执行，用你自己的 shell，可以带 cd 和 &amp;&amp;；ash 会注入 PORT 与 SERVER_PORT（Node 与 Spring Boot 各自认一个，自动错开端口）和 BROWSER=none，认不了环境变量的命令自己带 <code className="mono">$PORT</code> 即可。</small>
         {canManage && <div className="settings-card-foot"><span>改了只影响之后新开的预览，已经开着的那个不受影响。</span><Button variant="primary" disabled={!previewDirty || busy} onClick={() => void savePreviewCommand()}>{busy ? "保存中…" : "保存预览命令"}</Button></div>}
       </div></section>
       <ProjectGitSettings projectId={project.id} canManage={canManage} notify={notify} />

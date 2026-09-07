@@ -210,7 +210,7 @@ export function mountProjectRoutes(api: Hono): void {
       }
       patch.workflowId = wid || null;
     }
-    // 预览命令：空串/null 都表示「回到自动推导」，跟 workflowId 一样只存一种写法。
+    // 预览命令：空串/null 都表示「回到自动识别」，跟 workflowId 一样只存一种写法。
     // 不校验命令本身能不能跑 —— 它是一条给用户自己的 shell 的命令行，任何语言、
     // 任何 cd 都成立，能不能起来由预览那一站如实报告（preview-command.ts 顶部）。
     if (b.previewCommand !== undefined) {

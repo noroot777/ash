@@ -8,9 +8,10 @@
 //   ② 每个任务同一时刻只有一个预览，起新的先收旧的。
 //   ③ 定时清扫既收「进程早死了但记录还在」，也收 idle30 这一档。
 //
-// 就绪判定不做花活：**日志里出现地址** 是唯一的线索来源（dev server 都会打印一行
-// http://localhost:xxxx），拿到之后再按用户选的那档确认——端口连得上 / 日志也说了
-// ready / HTTP 真返回 200。等不到就是这一站失败，绝不写一句「预览已起」骗人。
+// 就绪判定不做花活：地址优先从日志里认（dev server 都会打印一行 http://localhost:xxxx），
+// 日志里没有就退回「借出去的那个端口连不连得上」——不是所有语言的服务都肯把地址印出来。
+// 拿到之后再按用户选的那档确认——端口连得上 / 日志也说了 ready / HTTP 真返回 200。
+// 等不到就是这一站失败，绝不写一句「预览已起」骗人。
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { existsSync, mkdirSync, openSync, closeSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -21,7 +22,7 @@ import { augmentedEnv, killByPid, withoutForeignNodeBins } from "./executors/spa
 import { RUNS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
 import { portConflict, pickPreviewUrl, portHint, missingDepsHint } from "./preview-log.js";
-import { ready } from "./preview-probe.js";
+import { canConnect, ready } from "./preview-probe.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 
@@ -76,6 +77,18 @@ function freePort(): Promise<number | null> {
 
 /** 撞车时给的下一步在 preview-log.ts。 */
 
+/**
+ * 借来的空闲端口要以**每种运行时自己认的方式**递进去，只给 `PORT` 是 Node 的口径：
+ *   · `PORT`：Node（Next / CRA / Nest / Express）、以及一堆 PaaS 惯例。
+ *   · `SERVER_PORT`：Spring Boot 的宽松绑定会把它读成 `server.port`（`spring-boot:run`
+ *     fork 出来的 JVM 继承环境变量，所以这条对 Maven/Gradle 那两条命令同样成立）。
+ * 认不了环境变量的（Django / Go / Rust……）由命令自己带 `$PORT` —— 那也是同一个值，
+ * 因为这里注进去的就是 shell 展开时看到的 PORT。
+ */
+function portEnv(port: number | null): Record<string, string> {
+  return port ? { PORT: String(port), SERVER_PORT: String(port) } : {};
+}
+
 function recordPath(taskId: string): string {
   return join(RUNS_DIR, taskId, "preview.json");
 }
@@ -129,7 +142,7 @@ export async function startPreview(
   // 日志头把注入的环境变量照实写出来，不只写命令：用户翻 preview.log 时得能一眼看出
   // 「ash 到底把什么交给了这条命令」，而不是去猜端口是谁定的。
   const banner = lent
-    ? `$ PORT=${lent} BROWSER=none ASH_PREVIEW=1 ASH_PREVIEW_MODE=${step.p.mode} ${step.p.cmd}\n`
+    ? `$ PORT=${lent} SERVER_PORT=${lent} BROWSER=none ASH_PREVIEW=1 ASH_PREVIEW_MODE=${step.p.mode} ${step.p.cmd}\n`
     : `$ ASH_PREVIEW=1 ASH_PREVIEW_MODE=${step.p.mode} ${step.p.cmd}\n`;
   writeFileSync(log, banner);
   const fd = openSync(log, "a");
@@ -156,7 +169,7 @@ export async function startPreview(
         ...withoutForeignNodeBins(augmentedEnv(), cwd),
         ASH_PREVIEW: "1",
         ASH_PREVIEW_MODE: step.p.mode,
-        ...(lent ? { PORT: String(lent) } : {}),
+        ...portEnv(lent),
         BROWSER: "none",
       },
     });
@@ -180,7 +193,16 @@ export async function startPreview(
         reason: "这个分支的预览后端启动了真调度器，安全协议过旧，已立即回收。请先把当前分支同步到新版预览隔离逻辑。",
       };
     }
-    const found = pickPreviewUrl(text, lent);
+    // 日志里认不出地址时，还有最后一条不依赖日志的线索：**端口是我们借出去的**。
+    // 借出去之前刚 listen(0) 探过它是空的，此刻连得上就只能是这条命令自己起的进程。
+    //
+    // 这一支不是锦上添花，是「非 Node 项目也能预览」的必要条件：从日志里认地址，前提是
+    // 那条命令肯把地址印出来、而且是行缓冲的印。这两条只有 Node 的 dev server 一贯满足 ——
+    // `python3 -m http.server` 那句 `Serving HTTP on …` 在非 tty 下是块缓冲的，压根不落盘；
+    // 一个 `go run` 写的服务可以什么都不印。服务明明起在我们指定的端口上，却因为它没吭声
+    // 被判「等了 120 秒还没起来」，这跟「只有 Node 项目的预览算数」是同一回事。
+    const found = pickPreviewUrl(text, lent)
+      ?? (lent !== null && await canConnect(lent) ? { url: `http://localhost:${lent}/`, port: lent, lent: true } : null);
     // 顺序要紧：撞车先判，再判进程死没死、再判起没起来。见 PORT_TAKEN_RE 那儿的 ②。
     //
     // 只有一个例外：日志里已经出现了**借给这条命令的那个端口**上的地址。那个端口是我们
