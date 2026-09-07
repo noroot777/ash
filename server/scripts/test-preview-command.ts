@@ -76,6 +76,23 @@ try {
   check("Java 项目根本不需要 package.json", resolvePreviewCommand(maven, null), {
     command: "mvn spring-boot:run", source: "detected",
   });
+  // pom 里出现过 `spring-boot-maven-plugin` 的地方还有两处，两处都起不来：
+  //   · 注释；
+  //   · `<pluginManagement>` —— 那只是「谁要用这个插件，版本按我说的来」，父 pom 几乎
+  //     一定有。对着这种 pom 跑 `mvn spring-boot:run` 实测是 No plugin found for prefix。
+  // 外加一条独立否决：`<packaging>pom</packaging>` 本来就没有可运行产物。
+  const mavenManaged = dir("maven-managed");
+  file(mavenManaged, "pom.xml", "<project><packaging>pom</packaging><build><pluginManagement><plugins>"
+    + "<plugin><artifactId>spring-boot-maven-plugin</artifactId><version>3.2.0</version></plugin>"
+    + "</plugins></pluginManagement></build></project>");
+  check("pluginManagement 里的插件不算挂上了", cmds(mavenManaged), []);
+  const mavenComment = dir("maven-comment");
+  file(mavenComment, "pom.xml", "<project><!-- 本模块没有 spring-boot-maven-plugin --><artifactId>lib</artifactId></project>");
+  check("注释里提到插件不算", cmds(mavenComment), []);
+  const mavenPomPackaging = dir("maven-pom-packaging");
+  file(mavenPomPackaging, "pom.xml", "<project><packaging>pom</packaging><build><plugins>"
+    + "<plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>");
+  check("packaging=pom 的聚合/父模块起不来", cmds(mavenPomPackaging), []);
 
   // 「有 build.gradle」不等于「能起服务」：库、Android、纯 Java 工具全都有这个文件，
   // 而 bootRun 只有挂了 Spring Boot 插件的才有。认错了不是少省一次事 —— 只有一个候选时
@@ -93,6 +110,24 @@ try {
   const gradleLib = dir("gradle-lib");
   file(gradleLib, "build.gradle", "plugins { id 'java-library' }\ndependencies { }\n");
   check("普通 Gradle 库不算能起服务的东西", cmds(gradleLib), []);
+  // 「文件里出现过这个词」不是判据。注释里的那句话含义常常正好是**反的**，而依赖坐标
+  // （`spring-boot-starter-web`）在库模块里天天有 —— 两种都会让一个起不来的模块变成
+  // 「唯一候选」，于是被自动选中，用户拿到一次自信的失败。
+  const gradleComment = dir("gradle-comment");
+  file(gradleComment, "build.gradle", "plugins { id 'java-library' }\n// bootRun is unavailable here\n/* org.springframework.boot 没挂 */\n");
+  check("注释里提到 bootRun 不算", cmds(gradleComment), []);
+  const gradleCommentApp = dir("gradle-comment-app");
+  file(gradleCommentApp, "build.gradle", "plugins { id 'java-library' }\n// application plugin not applied\n");
+  check("注释里提到 application 不算", cmds(gradleCommentApp), []);
+  const gradleDep = dir("gradle-dep");
+  file(gradleDep, "build.gradle", "plugins { id 'java-library' }\ndependencies {\n  api 'org.springframework.boot:spring-boot-starter-web:3.2.0'\n}\n");
+  check("依赖坐标里带 org.springframework.boot 不算挂了插件", cmds(gradleDep), []);
+  const gradleApply = dir("gradle-apply");
+  file(gradleApply, "build.gradle", "apply plugin: 'org.springframework.boot'\n");
+  check("老写法 apply plugin 照认", cmds(gradleApply), ["gradle bootRun"]);
+  const gradleTask = dir("gradle-task");
+  file(gradleTask, "build.gradle.kts", "tasks.register(\"bootRun\") {\n  doLast { }\n}\n");
+  check("脚本自己定义了 bootRun task 也认", cmds(gradleTask), ["gradle bootRun"]);
 
   const django = dir("django");
   file(django, "manage.py", "");
@@ -148,6 +183,17 @@ try {
   const dotnetLib = dir("dotnet-lib");
   file(dotnetLib, "Lib.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>");
   check(".NET 类库不算", cmds(dotnetLib), []);
+  // Web SDK 有两种合法写法，MSBuild 两种都认。只认双引号属性会把一半 ASP.NET Core 项目
+  // 判成「认不出来」——它们明明就是 web 应用。
+  const dotnetSingle = dir("dotnet-single-quote");
+  file(dotnetSingle, "App.csproj", "<Project Sdk='Microsoft.NET.Sdk.Web'></Project>");
+  check(".NET 单引号属性同样是 Web SDK", cmds(dotnetSingle), ["dotnet run"]);
+  const dotnetElement = dir("dotnet-sdk-element");
+  file(dotnetElement, "App.fsproj", "<Project>\n  <Sdk Name=\"Microsoft.NET.Sdk.Web\" />\n</Project>");
+  check(".NET 的 <Sdk Name=…> 元素写法也认", cmds(dotnetElement), ["dotnet run"]);
+  const dotnetCommented = dir("dotnet-commented");
+  file(dotnetCommented, "Lib.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <!-- 以前是 Sdk=\"Microsoft.NET.Sdk.Web\" -->\n</Project>");
+  check(".NET 注释里的 Web SDK 不算", cmds(dotnetCommented), []);
   // ASP.NET Core 不读 PORT，它认 ASPNETCORE_URLS，而且要的是整条地址不是端口号。
   check(
     ".NET 当配角时按它自己的变量名和格式",
@@ -326,6 +372,23 @@ try {
   file(dir("win-spaced", "back end"), "pom.xml", BOOT_POM);
   check("写不出安全的后台写法就不给组合示例", ambiguousMessage(detectPreviewCandidates(winSpacedBack, win), win).includes("%PORT2%"), false);
   check("同一份仓库在 POSIX 上照常给", ambiguousMessage(detectPreviewCandidates(winSpacedBack)).includes("$PORT2"), true);
+  // cmd 的 `%VAR%` 展开**在双引号里照样发生**，而 `%` 是合法的 Windows 文件名字符：
+  // `cd /d "front%PORT%"` 会被展开成 `cd /d front43123`（预览跑起来时 PORT 恰恰有值），
+  // 当场找不到目录。命令行上没有可靠的 `%` 转义写法，所以这种名字就是写不出来 ——
+  // 写不出来就别生成，让它走「认不出来，请填命令」那条安全路径。
+  const percent = dir("percent");
+  pkg(dir("percent", "front%PORT%"), { dev: "vite" });
+  check("cmd 上目录名带 % 就不生成候选", winCmds(percent), []);
+  check("POSIX 上单引号能把 % 变成字面量，照常给", cmds(percent), ["cd 'front%PORT%' && npm run dev -- --port $PORT"]);
+  const percentModule = dir("percent-mvn");
+  file(dir("percent-mvn", "back"), "pom.xml", "<project><modules><module>svc%PATH%</module><module>svc-ok</module></modules></project>");
+  file(dir("percent-mvn", "back", "svc%PATH%"), "pom.xml", BOOT_POM);
+  file(dir("percent-mvn", "back", "svc-ok"), "pom.xml", BOOT_POM);
+  check("Maven 模块名同理（`-pl` 上的字面量）", winCmds(percentModule), ["cd /d back && mvn -pl svc-ok spring-boot:run"]);
+  check("POSIX 上两个模块都在", cmds(percentModule).sort(), [
+    "cd back && mvn -pl 'svc%PATH%' spring-boot:run",
+    "cd back && mvn -pl svc-ok spring-boot:run",
+  ]);
 
   // —— ③ 填过的永远优先 ——
   check("填了就用填的（Java 仓库）", resolvePreviewCommand(maven, "java -jar target/app.jar"), {

@@ -20,6 +20,17 @@ export interface PreviewShell {
   readonly kind: ShellKind;
   /** 引用一个环境变量：`$PORT` / `%PORT%`。 */
   ref(name: string): string;
+  /**
+   * 这个字面量（目录名、模块名）在这门 shell 里**写得出来吗**。
+   *
+   * 加引号不等于变字面量：cmd 的 `%VAR%` 展开在双引号里照样发生，而 `%` 是合法的
+   * Windows 文件名字符 —— 一个叫 `front%PORT%` 的目录，`cd /d "front%PORT%"` 会被展开成
+   * `cd /d front43123`（预览跑起来时 PORT 恰恰是有值的），当场找不到目录。命令行上
+   * 没有可靠的 `%` 转义写法（`%%` 是批处理文件里的规矩，`^%` 进了引号又失效），
+   * 所以这种名字就是写不出来 —— 写不出来就别生成，让它走「认不出来，请填命令」那条
+   * 安全路径，用户自己填的命令想怎么绕都行。
+   */
+  expressible(value: string): boolean;
   /** 把一个字面量（目录名、模块名）按这门 shell 的规矩引起来。 */
   quote(value: string): string;
   /** 路径分隔符按本地写法。 */
@@ -53,6 +64,8 @@ function cmdQuote(value: string): string {
 const POSIX: PreviewShell = {
   kind: "posix",
   ref: (name) => `$${name}`,
+  // 单引号里什么都是字面量（连换行都是），唯一要处理的 `'` 由 posixQuote 拼掉了。
+  expressible: () => true,
   quote: posixQuote,
   path: (value) => value,
   cd: (rel, command) => `cd ${posixQuote(rel)} && ${command}`,
@@ -66,6 +79,9 @@ const POSIX: PreviewShell = {
 const CMD: PreviewShell = {
   kind: "cmd",
   ref: (name) => `%${name}%`,
+  // `%` 写不出来（见接口那儿的说明）。别的字符都能靠双引号裹住 —— Windows 的文件名里
+  // 本来就不允许出现 `"`。
+  expressible: (value) => !value.includes("%"),
   quote: cmdQuote,
   path: (value) => value.replaceAll("/", "\\"),
   cd: (rel, command) => `cd /d ${cmdQuote(winPath(rel))} && ${command}`,

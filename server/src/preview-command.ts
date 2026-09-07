@@ -119,6 +119,10 @@ function prefixed(shell: PreviewShell, rel: string, command: string): string {
  * `port` 说的是**这门运行时从哪儿拿端口**（见 PortDelivery）。分清这件事才谈得上「同一个
  * 东西当配角时怎么写」—— 而那正是前后端一起起时唯一麻烦的地方：环境变量那一类换变量名
  * 后面的值，命令行参数那一类换命令里的端口。
+ *
+ * **返回 null = 这个候选在这门 shell 里写不出来**（目前只有一种：cmd 上目录名带 `%`，
+ * 见 PreviewShell.expressible）。写不出来就不生成 —— 剩下的路是「认不出来，请填命令」，
+ * 那是条安全路径；生成一条必然 `cd` 失败的命令则是一次自信的失败。
  */
 function candidate(
   shell: PreviewShell,
@@ -127,7 +131,8 @@ function candidate(
   bare: string,
   port: PortDelivery,
   kind: "web" | "service",
-): PreviewCandidate {
+): PreviewCandidate | null {
+  if (rel !== "." && !shell.expressible(rel)) return null;
   const fill = (template: string, n: number) => template.replaceAll(PORT_SLOT, shell.ref(n === 1 ? "PORT" : `PORT${n}`));
   return {
     label,
@@ -140,6 +145,11 @@ function candidate(
       return shell.background(prefixed(shell, rel, body));
     },
   };
+}
+
+/** `candidate()` 可能返回 null（写不出来），探子统一用这个把它摊平。 */
+function one(found: PreviewCandidate | null): PreviewCandidate[] {
+  return found ? [found] : [];
 }
 
 function relJoin(rel: string, name: string): string {
@@ -197,21 +207,43 @@ function nodeCandidates(shell: PreviewShell, dir: string, rel: string): PreviewC
   // npm / pnpm 要一个 `--` 才把后面的参数交给脚本本身；yarn 1 直接透传。
   if (portArgTool(body)) {
     const command = pm === "yarn" ? `${base} --port {port}` : `${base} -- --port {port}`;
-    return [candidate(shell, label, rel, command, INLINE, "web")];
+    return one(candidate(shell, label, rel, command, INLINE, "web"));
   }
-  return [candidate(shell, label, rel, base, envPort("PORT"), "web")];
+  return one(candidate(shell, label, rel, base, envPort("PORT"), "web"));
+}
+
+/**
+ * 「文件里出现过这个词」不等于「这个项目真挂了这个东西」。注释里的一句
+ * `<!-- 本模块没有 spring-boot-maven-plugin -->`、README 抄进 XML 的示例，含义甚至常常
+ * 是**反的**，可字符串搜索一律算数。所以下面这几个判据一律先把注释抹掉再看。
+ */
+function stripXmlComments(xml: string): string {
+  return xml.replaceAll(/<!--[\s\S]*?-->/g, "");
 }
 
 /** pom.xml 里声明的子模块（`<modules>` 段）。不是聚合 pom 就返回空。 */
 function mavenModules(pom: string): string[] {
-  const block = /<modules>([\s\S]*?)<\/modules>/i.exec(pom)?.[1];
+  const block = /<modules>([\s\S]*?)<\/modules>/i.exec(stripXmlComments(pom))?.[1];
   if (!block) return [];
   return [...block.matchAll(/<module>\s*([^<]+?)\s*<\/module>/gi)].map((m) => m[1]);
 }
 
-/** 这个 pom 自己能不能起来（挂了 spring-boot-maven-plugin）。 */
+/**
+ * 这个 pom 自己能不能起来。要的是「**这个模块**挂了 spring-boot-maven-plugin」，而字符串
+ * 里出现过这个名字的地方还有两处，两处都起不来：
+ *
+ *  · **注释**——由 stripXmlComments 抹掉。
+ *  · **`<pluginManagement>`**——那一段只是「万一有人用这个插件，版本按我说的来」，父 pom
+ *    里几乎一定有；它自己并没有把插件挂上。对着这种 pom 跑 `mvn spring-boot:run` 实测
+ *    是 `No plugin found for prefix 'spring-boot'`（BUILD FAILURE）。
+ *
+ * 外加一条独立的否决：`<packaging>pom</packaging>` 是聚合/父模块，本来就没有可运行的产物
+ * ——哪怕它真挂了插件也起不来。
+ */
 function mavenRunnable(pom: string): boolean {
-  return /spring-boot-maven-plugin/i.test(pom);
+  const body = stripXmlComments(pom).replaceAll(/<pluginManagement>[\s\S]*?<\/pluginManagement>/gi, "");
+  if (/<packaging>\s*pom\s*<\/packaging>/i.test(body)) return false;
+  return /spring-boot-maven-plugin/i.test(body);
 }
 
 /**
@@ -228,7 +260,7 @@ function mavenCandidates(shell: PreviewShell, dir: string, rel: string, depth = 
   const modules = mavenModules(pom);
   if (!modules.length) {
     return mavenRunnable(pom)
-      ? [candidate(shell, `${where(rel)}（Maven · Spring Boot）`, rel, `${runner} spring-boot:run`, envPort("SERVER_PORT"), "service")]
+      ? one(candidate(shell, `${where(rel)}（Maven · Spring Boot）`, rel, `${runner} spring-boot:run`, envPort("SERVER_PORT"), "service"))
       : [];
   }
   if (depth >= 2) return []; // 嵌套聚合到此为止，再深就该用户自己填了
@@ -242,16 +274,40 @@ function mavenCandidates(shell: PreviewShell, dir: string, rel: string, depth = 
       continue;
     }
     if (!mavenRunnable(childPom)) continue;
+    // 模块名要原样进命令行（`-pl`），这门 shell 写不出来就跳过 —— 跟 candidate() 里对
+    // 目录名的判断同一个理由，只是这个字面量在 cd 之外。
+    if (!shell.expressible(name)) continue;
     // `-pl <模块>` 从聚合目录跑；依赖模块没装进本地仓库时要自己补 `-am`，这条写在
     // 报错文案里，不替用户塞进命令 —— `-am` 会把 spring-boot:run 也带到库模块上。
-    found.push(candidate(shell, `${relJoin(rel, name)}（Maven 模块 · Spring Boot）`,
+    found.push(...one(candidate(shell, `${relJoin(rel, name)}（Maven 模块 · Spring Boot）`,
       rel,
       `${runner} -pl ${shell.quote(name)} spring-boot:run`,
       envPort("SERVER_PORT"),
       "service",
-    ));
+    )));
   }
   return found;
+}
+
+/**
+ * Gradle 脚本里的注释。跟 XML 那边同一个理由：`// 这里没法用 bootRun` 这种句子，按字符串
+ * 搜索算「有 bootRun」，含义正好是反的。Groovy 和 Kotlin DSL 的注释写法一样。
+ */
+function stripGroovyComments(src: string): string {
+  return src.replaceAll(/\/\*[\s\S]*?\*\//g, "").replaceAll(/\/\/[^\n]*/g, "");
+}
+
+/**
+ * 这个 build 文件有没有**真的挂上**某个插件。Gradle 就那么几种写法：
+ *   · `plugins { id 'x' }` / `plugins { id("x") }` / `id 'x' version '…'`
+ *   · 老写法 `apply plugin: 'x'`
+ * 判据必须落在这几个形状上。「文件里出现过这个词」是不行的 —— 那把依赖坐标
+ * （`implementation 'org.springframework.boot:spring-boot-starter-web'`，库模块天天有）、
+ * 任务名字符串、乃至一句人话都算进来了。
+ */
+function gradlePlugin(build: string, ...ids: string[]): boolean {
+  const any = ids.map((id) => id.replaceAll(".", "\\.")).join("|");
+  return new RegExp(String.raw`(?:^|[\s{;])(?:id\s*\(?\s*|apply\s+plugin\s*:\s*)['"](?:${any})['"]`).test(build);
 }
 
 /**
@@ -260,16 +316,20 @@ function mavenCandidates(shell: PreviewShell, dir: string, rel: string, depth = 
  * 是一条必然失败的命令，更糟的是它会让「只认出一个候选就自动跑」把这条假候选选中，
  * 于是用户拿到的不是「认不出来，请配置命令」这条安全路径，而是一次自信的失败。
  * 挂了 `application` 插件的（有 `run` task）按 `gradle run` 认，那条是真能起来的。
+ *
+ * 判据是**插件声明**，不是「文件里出现过这个词」：注释、依赖坐标里都带着这些字。
+ * 唯一放行的例外是脚本里自己定义了一个 `bootRun` task —— 那是显式声明，不是提及。
  */
 function gradleCandidates(shell: PreviewShell, dir: string, rel: string): PreviewCandidate[] {
-  const build = read(join(dir, "build.gradle")) ?? read(join(dir, "build.gradle.kts"));
-  if (build === null) return [];
+  const raw = read(join(dir, "build.gradle")) ?? read(join(dir, "build.gradle.kts"));
+  if (raw === null) return [];
+  const build = stripGroovyComments(raw);
   const runner = has(dir, "gradlew") ? "./gradlew" : "gradle";
-  if (/org\.springframework\.boot|\bbootRun\b/.test(build)) {
-    return [candidate(shell, `${where(rel)}（Gradle · bootRun）`, rel, `${runner} bootRun`, envPort("SERVER_PORT"), "service")];
+  if (gradlePlugin(build, "org.springframework.boot") || /(?:^|\n)\s*(?:tasks\.)?(?:register|create)?\s*\(?\s*['"]?bootRun\b/.test(build)) {
+    return one(candidate(shell, `${where(rel)}（Gradle · bootRun）`, rel, `${runner} bootRun`, envPort("SERVER_PORT"), "service"));
   }
-  if (/\bapplication\b/.test(build)) {
-    return [candidate(shell, `${where(rel)}（Gradle · run）`, rel, `${runner} run`, envPort("PORT"), "service")];
+  if (gradlePlugin(build, "application")) {
+    return one(candidate(shell, `${where(rel)}（Gradle · run）`, rel, `${runner} run`, envPort("PORT"), "service"));
   }
   return [];
 }
@@ -321,20 +381,20 @@ function pythonWebApp(dir: string): { framework: "fastapi" | "flask"; target: st
 /** Python：Django 的 manage.py 最没有歧义；没有它就去源码里找 FastAPI / Flask。 */
 function pythonCandidates(shell: PreviewShell, dir: string, rel: string): PreviewCandidate[] {
   if (has(dir, "manage.py")) {
-    return [candidate(shell, `${where(rel)}（Django）`, rel, `${pythonBin(shell)} manage.py runserver 0.0.0.0:{port}`, INLINE, "web")];
+    return one(candidate(shell, `${where(rel)}（Django）`, rel, `${pythonBin(shell)} manage.py runserver 0.0.0.0:{port}`, INLINE, "web"));
   }
   const app = pythonWebApp(dir);
   if (!app) return [];
   // 一律 `python3 -m`：uvicorn / flask 装在虚拟环境里时未必在 PATH 上，但模块一定在。
   return app.framework === "fastapi"
-    ? [candidate(shell, `${where(rel)}（FastAPI · uvicorn）`, rel, `${pythonBin(shell)} -m uvicorn ${app.target} --host 0.0.0.0 --port {port}`, INLINE, "service")]
-    : [candidate(shell, `${where(rel)}（Flask）`, rel, `${pythonBin(shell)} -m flask --app ${app.target} run --host 0.0.0.0 --port {port}`, INLINE, "service")];
+    ? one(candidate(shell, `${where(rel)}（FastAPI · uvicorn）`, rel, `${pythonBin(shell)} -m uvicorn ${app.target} --host 0.0.0.0 --port {port}`, INLINE, "service"))
+    : one(candidate(shell, `${where(rel)}（Flask）`, rel, `${pythonBin(shell)} -m flask --app ${app.target} run --host 0.0.0.0 --port {port}`, INLINE, "service"));
 }
 
 /** Go：根上的 main.go，或者 `cmd/<名字>/main.go` 这种最常见的多入口布局。 */
 function goCandidates(shell: PreviewShell, dir: string, rel: string): PreviewCandidate[] {
   if (!has(dir, "go.mod")) return [];
-  if (has(dir, "main.go")) return [candidate(shell, `${where(rel)}（Go）`, rel, "go run .", envPort("PORT"), "service")];
+  if (has(dir, "main.go")) return one(candidate(shell, `${where(rel)}（Go）`, rel, "go run .", envPort("PORT"), "service"));
   let entries: string[] = [];
   try {
     entries = readdirSync(join(dir, "cmd"), { withFileTypes: true })
@@ -342,12 +402,12 @@ function goCandidates(shell: PreviewShell, dir: string, rel: string): PreviewCan
       .map((e) => e.name)
       .sort();
   } catch { return []; }
-  return entries.map((name) => candidate(shell, `${relJoin(rel, `cmd/${name}`)}（Go）`,
+  return entries.flatMap((name) => one(candidate(shell, `${relJoin(rel, `cmd/${name}`)}（Go）`,
     rel,
     `go run ./cmd/${name}`,
     envPort("PORT"),
     "service",
-  ));
+  )));
 }
 
 /**
@@ -358,37 +418,45 @@ function rustCandidates(shell: PreviewShell, dir: string, rel: string): PreviewC
   const manifest = read(join(dir, "Cargo.toml"));
   if (manifest === null) return [];
   if (!has(dir, join("src", "main.rs")) && !/^\s*\[\[bin\]\]/m.test(manifest)) return [];
-  return [candidate(shell, `${where(rel)}（Rust · cargo run）`, rel, "cargo run", envPort("PORT"), "service")];
+  return one(candidate(shell, `${where(rel)}（Rust · cargo run）`, rel, "cargo run", envPort("PORT"), "service"));
 }
 
 /**
  * .NET。**光有 .csproj 不算**：类库和测试项目也是 .csproj，`dotnet run` 对它们必然失败。
- * 「这是个 web 应用」在 .NET 里有一个明确的声明 —— `Sdk="Microsoft.NET.Sdk.Web"`。
+ * 「这是个 web 应用」在 .NET 里有一个明确的声明 —— Web SDK。它有两种合法写法，MSBuild
+ * 两种都认，所以两种都得认：
+ *
+ *   · 属性式 `<Project Sdk="Microsoft.NET.Sdk.Web">` —— XML 的属性**单双引号等价**，
+ *     只认双引号会把一半写法判成「不是 web 项目」，用户拿到的是「没认出这个项目该怎么
+ *     起服务」，而它明明就是个 ASP.NET Core 应用。
+ *   · 元素式 `<Sdk Name="Microsoft.NET.Sdk.Web" />` —— 顶层子元素，同样是官方写法。
  *
  * ASP.NET Core **不读 PORT**，它认 `ASPNETCORE_URLS`（要的还是整条地址，不是端口号）。
  */
+const DOTNET_WEB_SDK = /(?:<Project[^>]*\bSdk\s*=|<Sdk\b[^>]*\bName\s*=)\s*(['"])Microsoft\.NET\.Sdk\.Web\1/i;
+
 function dotnetCandidates(shell: PreviewShell, dir: string, rel: string): PreviewCandidate[] {
   let names: string[] = [];
   try { names = readdirSync(dir).filter((name) => name.endsWith(".csproj") || name.endsWith(".fsproj")); }
   catch { return []; }
-  const web = names.find((name) => /Sdk\s*=\s*"Microsoft\.NET\.Sdk\.Web"/i.test(read(join(dir, name)) ?? ""));
+  const web = names.find((name) => DOTNET_WEB_SDK.test(stripXmlComments(read(join(dir, name)) ?? "")));
   if (!web) return [];
-  return [candidate(shell, `${where(rel)}（.NET）`,
+  return one(candidate(shell, `${where(rel)}（.NET）`,
     rel,
     "dotnet run",
     envPort("ASPNETCORE_URLS", `http://localhost:${PORT_SLOT}`),
     "service",
-  )];
+  ));
 }
 
 function phpCandidates(shell: PreviewShell, dir: string, rel: string): PreviewCandidate[] {
   if (!has(dir, "artisan")) return [];
-  return [candidate(shell, `${where(rel)}（Laravel）`, rel, "php artisan serve --port={port}", INLINE, "web")];
+  return one(candidate(shell, `${where(rel)}（Laravel）`, rel, "php artisan serve --port={port}", INLINE, "web"));
 }
 
 function rubyCandidates(shell: PreviewShell, dir: string, rel: string): PreviewCandidate[] {
   if (!has(dir, join("bin", "rails"))) return [];
-  return [candidate(shell, `${where(rel)}（Rails）`, rel, `${shell.path("bin/rails")} server -p {port}`, INLINE, "web")];
+  return one(candidate(shell, `${where(rel)}（Rails）`, rel, `${shell.path("bin/rails")} server -p {port}`, INLINE, "web"));
 }
 
 function probeDir(shell: PreviewShell, dir: string, rel: string): PreviewCandidate[] {
