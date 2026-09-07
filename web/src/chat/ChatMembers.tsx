@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { AgentExecutorProfile } from "@ash/shared";
-import { supportsChat, type ChatMember } from "@ash/shared/chat";
+import type { ChatMember } from "@ash/shared/chat";
 import { Plus, X } from "@phosphor-icons/react";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import { executorValue, parseExecutorValue, registeredAgentTypes } from "../lib/agentAvailability.ts";
@@ -17,7 +17,7 @@ export function ChatMembers({ initial, onSave, onCancel, creating = false }: {
   const [saving, setSaving] = useState(false);
   useEffect(() => {
     let alive = true;
-    api.agents().then((value) => { if (alive) setProfiles(value.filter((profile) => supportsChat(profile.type))); }).catch((reason) => { if (alive) setError(String(reason)); });
+    api.agents().then((value) => { if (alive) setProfiles(value); }).catch((reason) => { if (alive) setError(String(reason)); });
     return () => { alive = false; };
   }, []);
   const change = (memberId: string, patch: Partial<ChatMember>) => setMembers((current) => current.map((member) => member.id === memberId ? { ...member, ...patch } : member));
@@ -41,7 +41,7 @@ export function ChatMembers({ initial, onSave, onCancel, creating = false }: {
   return <section className="chat-member-editor" aria-label={creating ? "创建群聊" : "管理群成员"}>
     <div className="chat-editor-heading"><div><small>让合适的人参与</small><h2>{creating ? "创建一个聊天空间" : "群聊成员"}</h2></div><button type="button" aria-label="关闭成员配置" onClick={onCancel}><X size={20} /></button></div>
     <p>选择智能体、模型与智能水平。只有你明确 @ 的成员才会收到会话并回复。</p>
-    <p>即时聊天目前仅开放 Claude 无工具通道；其他 CLI 暂不可选。自定义 CLI 参数不用于聊天回合，委派后的任务仍使用完整执行器配置。</p>
+    <p>所有已注册智能体均可参与。被你 @ 后可查看当前项目、使用工具辅助回答；修改代码等执行工作需你明确委派，再创建任务。</p>
     {creating && <label className="chat-name-field">群聊名称<input maxLength={80} value={name} onChange={(event) => setName(event.target.value)} /></label>}
     <div className="chat-member-fields">{members.map((member, index) => <div className="chat-member-field" key={member.id}>
       <span className={`chat-avatar tone-${index % 4}`}>{member.name.slice(0, 1).toUpperCase()}</span>

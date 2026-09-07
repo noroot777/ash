@@ -17,10 +17,6 @@ export interface ChatRoom {
   createdAt: string;
 }
 
-export function supportsChat(type: AgentType): boolean {
-  return type === "claude";
-}
-
 export type ChatMessageStatus = "queued" | "running" | "done" | "failed" | "stopped";
 
 export interface ChatMessage {

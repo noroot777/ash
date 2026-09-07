@@ -23,12 +23,13 @@ await db.insert(projects).values({ id: "chat-demo", name: "Studio / 研发空间
 await db.insert(agents).values([
   { id: "chat-codex", name: "Codex · 工程", type: "codex", model: "", extraArgs: "[]", createdAt: timestamp },
   { id: "chat-claude", name: "Claude · 设计", type: "claude", model: "", extraArgs: "[]", createdAt: timestamp },
+  { id: "chat-grok", name: "Grok · 调研", type: "grok", model: "", extraArgs: "[]", createdAt: timestamp },
 ]);
 const service = new ChatService(async (member, _owner, prompt, signal) => {
   const text = JSON.parse(prompt.split("【本次用户消息】\n").at(-1)!) as string;
   await delay(text.includes("等待") ? 30000 : 1200, undefined, { signal });
   return JSON.stringify({
-    reply: text.includes("实现") ? "收到，我会把这项工作建成任务。进度会在这里更新。" : member.name === "claude" ? "建议保留清晰的频道导航，把任务进度嵌入消息流。动效以入场和状态反馈为主。" : "建议先跑通点名唤醒，再连接任务状态。@claude 这条点名只展示，不会自动唤醒。",
+    reply: text.includes("实现") ? "收到，我会把这项工作建成任务。进度会在这里更新。" : member.agentType === "grok" ? "建议先确认用户需求，再查看当前项目。" : member.agentType === "claude" ? "建议保留清晰的频道导航，把任务进度嵌入消息流。动效以入场和状态反馈为主。" : "建议先跑通点名唤醒，再连接任务状态。@claude 这条点名只展示，不会自动唤醒。",
     task: text.includes("实现") ? { title: "实现频道导航与任务状态卡", body: "浏览器验证用任务，不运行真实智能体。" } : null,
   });
 }, async (taskId) => {

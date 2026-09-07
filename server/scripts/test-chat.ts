@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
+import { AGENT_TYPES } from "@ash/shared";
 import type { ChatMember, ChatSnapshot } from "@ash/shared/chat";
 import { mentionedMembers } from "@ash/shared/chat";
 
@@ -17,12 +18,11 @@ const { ChatService } = await import("../src/chat/service.js");
 const { mountChatRoutes } = await import("../src/chat/routes.js");
 const { setActor, SINGLE_ACTOR } = await import("../src/auth/context.js");
 const { parseChatReply } = await import("../src/chat/prompt.js");
-const { invokeChat } = await import("../src/chat/execution.js");
 await ensureSchema();
 const timestamp = new Date().toISOString();
 await db.insert(projects).values({ id: "project", name: "测试项目", repoPath: stage, createdAt: timestamp });
 
-const members: ChatMember[] = ["codex", "claude"].map((name) => ({ id: name, name, agentType: "claude", executorId: null, model: null, reasoningEffort: null }));
+const members: ChatMember[] = ["codex", "claude"].map((name) => ({ id: name, name, agentType: name as ChatMember["agentType"], executorId: null, model: null, reasoningEffort: null }));
 assert.deepEqual(mentionedMembers("@codex 请回答 @codex", members).map((member) => member.id), ["codex"]);
 assert.deepEqual(mentionedMembers("mail@codex @codex-other `@claude`\n> @claude\n```\n@codex\n```", members), []);
 assert.deepEqual(mentionedMembers("@codex，你好 @claude.", members).map((member) => member.id), ["codex", "claude"]);
@@ -32,8 +32,10 @@ for (const body of ["@codex 请看看", "请 @codex 看看", "请@codex 看看",
 const extended = [...members, { ...members[0]!, id: "long", name: "codex设计" }];
 assert.deepEqual(mentionedMembers("请@codex设计看看", extended).map((member) => member.id), ["long"]);
 assert.deepEqual(mentionedMembers("@codex-other @codex2 邮件mail@codex", extended), []);
-await assert.rejects(invokeChat({ ...members[0]!, agentType: "codex" }, null, "请执行命令", new AbortController().signal), /无工具聊天通道/);
 assert.throws(() => parseChatReply('{"reply":"ok","task":{}}'));
+assert.throws(() => parseChatReply('{"reply":"ok","task":null} unexpected tail'));
+assert.deepEqual(parseChatReply('我先查看项目文件。{"reply":"建议简化导航","task":null}'), { reply: "建议简化导航", task: null });
+assert.equal(parseChatReply('读取完成。```json\n{"reply":"已整理目标","task":{"title":"改登录页","body":"实现指定布局"}}\n```').task?.title, "改登录页");
 assert.equal(parseChatReply(JSON.stringify({ reply: "好".repeat(500), task: null })).reply.length, 300);
 
 const invoked: { member: string; prompt: string }[] = [];
@@ -61,7 +63,7 @@ app.use("*", async (context, next) => {
 mountChatRoutes(app, service);
 const request = (path: string, body?: unknown, headers: Record<string, string> = {}) => app.request(path, { method: body ? "POST" : "GET", headers: { "Content-Type": "application/json", ...headers }, ...(body ? { body: JSON.stringify(body) } : {}) });
 const create = await request("/chats", { projectId: "project", name: "研发群", members });
-assert.equal((await request("/chats", { projectId: "project", name: "不安全", members: [{ ...members[0], agentType: "codex" }] })).status, 400);
+assert.equal((await request("/chats", { projectId: "project", name: "无效类型", members: [{ ...members[0], agentType: "not-an-agent" }] })).status, 400);
 assert.equal(create.status, 201);
 const room = await create.json() as { id: string };
 const snapshot = async () => (await request(`/chats/${room.id}`)).json() as Promise<ChatSnapshot>;
@@ -112,6 +114,7 @@ try {
   assert.equal(task.id, started[0]);
   assert.equal(task.mode, "single");
   assert.equal(task.workflowMode, "free");
+  assert.equal(task.agentType, "codex");
   assert.ok((await db.select().from(tasks).where(eq(tasks.id, task.id)))[0]!.body.includes("@codex 请实现功能"));
   await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, task.id));
   value = await snapshot();
@@ -153,6 +156,24 @@ try {
   await service.recover();
   assert.equal((await db.select().from(chatMessages).where(eq(chatMessages.id, "restart-pending")))[0]!.status, "stopped");
   assert.equal((await request(`/chats/${otherId}`)).status, 200);
+  const allMembers = AGENT_TYPES.map((agentType) => ({ ...members[0]!, id: agentType, name: agentType, agentType }));
+  const allRoomResponse = await request("/chats", { projectId: "project", name: "所有智能体", members: allMembers });
+  assert.equal(allRoomResponse.status, 201);
+  const allRoom = await allRoomResponse.json() as { id: string; members: ChatMember[] };
+  assert.deepEqual(allRoom.members.map((member) => member.agentType), [...AGENT_TYPES]);
+  const patched = await app.request(`/chats/${allRoom.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ members: allMembers }) });
+  assert.equal(patched.status, 200);
+  const beforeAll = invoked.length;
+  await request(`/chats/${allRoom.id}/messages`, { id: "all-agents-message", body: allMembers.map((member) => `@${member.name}`).join(" ") + " 请给建议" });
+  let allSnapshot: ChatSnapshot | undefined;
+  for (let tries = 0; tries < 100; tries++) {
+    allSnapshot = await (await request(`/chats/${allRoom.id}`)).json() as ChatSnapshot;
+    if (allSnapshot.messages.every((message) => message.status === "done")) break;
+    await delay(20);
+  }
+  assert.equal(invoked.length - beforeAll, AGENT_TYPES.length);
+  assert.equal(allSnapshot!.messages.filter((message) => message.role === "agent" && message.status === "done").length, AGENT_TYPES.length);
+  console.log("✓ 所有注册类型均可创建/更新成员、被用户点名后回复；任务保留真实智能体类型");
   const { setInstanceMode } = await import("../src/auth/mode.js");
   const { createUser } = await import("../src/auth/store.js");
   const { addProjectMember } = await import("../src/auth/visibility.js");
@@ -162,7 +183,7 @@ try {
     testActors.set(name, { kind: "user", userId: user.id, role: "member", name });
     await addProjectMember({ projectId: "project", userId: user.id, role: "member", addedBy: user.id });
   }
-  await db.insert(agents).values({ id: "bob-profile", name: "Bob Private", type: "claude", extraArgs: "[]", ownerUserId: testActors.get("bob")!.userId, createdAt: timestamp });
+  await db.insert(agents).values({ id: "bob-profile", name: "Bob Private", type: "codex", extraArgs: "[]", ownerUserId: testActors.get("bob")!.userId, createdAt: timestamp });
   assert.equal((await request("/chats", { projectId: "project", name: "执行器越权", members: [{ ...members[0], executorId: "bob-profile" }] }, { "x-test-user": "alice" })).status, 400);
   const privateRoom = await request("/chats", { projectId: "project", name: "Alice 的群", members }, { "x-test-user": "alice" });
   assert.equal(privateRoom.status, 201);
@@ -177,7 +198,7 @@ try {
   await db.delete(projects).where(eq(projects.id, "project"));
   assert.equal((await request(`/chats/${room.id}`)).status, 404);
   console.log("✓ 非法输出诚实失败；重启不自动唤醒；删除项目后群聊不可访问");
-  assert.equal((await db.select().from(chatRooms)).length, 3);
+  assert.equal((await db.select().from(chatRooms)).length, 4);
 } finally {
   await service.stop(room.id);
   await delay(50);

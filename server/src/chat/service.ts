@@ -87,7 +87,7 @@ export class ChatService {
       if (!room || !message.context) throw new Error("群聊或成员不存在，请重新选择成员。");
       const context = JSON.parse(message.context) as { prompt: string; source: string; member: ChatMember };
       const member = context.member;
-      const result = parseChatReply(await this.invoke(member, room.ownerUserId, context.prompt, abort.signal));
+      const result = parseChatReply(await this.invoke(member, room.ownerUserId, context.prompt, abort.signal, room.projectId));
       abort.signal.throwIfAborted();
       let taskToStart: string | null = null;
       if (result.task) {

@@ -17,7 +17,6 @@ import { calibrateSkills } from "../skills.js";
 import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
 import { ClaudeControlBridge } from "./claude-control.js";
 import { normalizeClaudeCliError, shortJson, claudeContextUsed, claudeContextWindow, claudeUsage } from "./claude-metadata.js";
-import { claudeChatArgs } from "./claude-chat.js";
 export { claudeEffortUnsupportedMessage, claudeRootBypassMessage, normalizeClaudeCliError, claudeContextUsed, claudeContextWindow, claudeUsage } from "./claude-metadata.js";
 
 type RuntimeSettings = { arg: string | null; cleanup: () => void; error?: string };
@@ -166,9 +165,8 @@ export class ClaudeExecutor implements AgentExecutor {
     return env;
   }
 
-  private runtimeSettings(cwd: string, model?: string, textOnly = false): RuntimeSettings {
-    const payload = this.settingsPayload(cwd, model, this.relay?.apiKey);
-    const settings = textOnly ? { ...payload, disableAllHooks: true } : payload;
+  private runtimeSettings(cwd: string, model?: string): RuntimeSettings {
+    const settings = this.settingsPayload(cwd, model, this.relay?.apiKey);
     if (!settings) return { arg: null, cleanup: () => {} };
     if (!this.relay) return { arg: JSON.stringify(settings), cleanup: () => {} };
     const path = join(tmpdir(), `ash-claude-settings-${process.pid}-${randomUUID()}.json`);
@@ -189,23 +187,13 @@ export class ClaudeExecutor implements AgentExecutor {
     return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : null;
   }
 
-  runChat(opts: RunOpts): RunHandle {
-    return this.runOnce(opts, true);
-  }
-
   run(opts: RunOpts): RunHandle {
-    return this.runOnce(opts, false);
-  }
-
-  private runOnce(opts: RunOpts, textOnly: boolean): RunHandle {
     const sessionId = opts.sessionId ?? randomUUID();
     const model = opts.model ?? this.model;
     const settings = this.startupError
       ? { arg: null, cleanup: () => {} }
-      : this.runtimeSettings(opts.cwd, model, textOnly);
-    const args = textOnly
-      ? claudeChatArgs(this.relay ? withContext1mSuffix(model, this.relay.context1mModels) : model, this.reasoningEffort, settings.arg)
-      : this.buildArgs(opts, sessionId, false, model, settings.arg);
+      : this.runtimeSettings(opts.cwd, model);
+    const args = this.buildArgs(opts, sessionId, false, model, settings.arg);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
     const child = this.startupError || settings.error
       ? failedChild(this.startupError ?? settings.error!)
