@@ -139,7 +139,7 @@ export const api = {
     request("/projects/resolve", json("POST", { repoPath, name })),
   updateProject: (
     projectId: string,
-    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId">>,
+    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId" | "previewCommand">>,
   ): Promise<ProjectView> => request(`/projects/${id(projectId)}`, json("PATCH", patch)),
   deleteProject: (projectId: string): Promise<{ deleted: true }> =>
     request(`/projects/${id(projectId)}`, { method: "DELETE" }),

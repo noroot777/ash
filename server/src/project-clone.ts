@@ -172,6 +172,7 @@ export async function cloneProject(input: CloneProjectInput, actor?: Actor): Pro
     repoPath: stored,
     apiKeys: null,
     workflowId: null,
+    previewCommand: null,
     createdAt: now(),
     ownerUserId: actor ? ownerIdOf(actor) : null,
   };

@@ -104,5 +104,28 @@ check("后端那行进不了候选（scheme 已被 dev.mjs 去掉）", pickPrevi
 });
 check("前端那行还没打出来时也不会误挑后端", pickPreviewUrl("[api] [ash] server on localhost:62398\n", 62396), null);
 
+// —— 只说端口、不印地址的那一类（项目预览命令可以是任何语言之后才有的）——
+// Spring Boot 是最典型的一个：它从头到尾不印一个 URL，只说自己在 8080 上起来了。
+// 认不出来的话，一个已经在跑的服务会被干等到 120 秒超时，报一句「还没起来」。
+check(
+  "Spring Boot 只说端口",
+  pickPreviewUrl("Tomcat started on port 8080 (http) with context path ''\n", null),
+  { url: "http://localhost:8080/", port: 8080, lent: false },
+);
+check(
+  "Spring Boot 老写法 port(s)",
+  pickPreviewUrl("Tomcat started on port(s): 9090 (http)\n", null)?.port,
+  9090,
+);
+check("落在借来的端口上照样标 lent", pickPreviewUrl("Netty started on port 44017\n", 44017)?.lent, true);
+check(
+  "印了地址就用地址，不走这条兜底",
+  pickPreviewUrl("Tomcat started on port 8080\n➜  Local:   http://localhost:5173/\n", null)?.port,
+  5173,
+);
+// 撞车那一行里也有端口号。照着它拼地址 = 把用户领到别人的服务上（PORT_TAKEN_RE 注释里的 ②）。
+check("「端口被占」那行不许拿来拼地址", pickPreviewUrl("Error: Port 5173 is already in use\n", null), null);
+check("光有个数字不算自述", pickPreviewUrl("build finished in 8080 ms\n", null), null);
+
 console.log(failures ? `\n${failures} 条没过` : "\n全过");
 process.exit(failures ? 1 : 0);

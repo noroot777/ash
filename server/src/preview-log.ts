@@ -46,6 +46,31 @@ export interface PreviewUrl {
 const URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::(\d{2,5}))?[^\s'"]*/gi;
 
 /**
+ * 「我在 8080 上起来了」但**不印地址**的那一类日志。
+ *
+ * Node 那边的 dev server 无一例外会印一行 `http://localhost:xxxx`，所以一开始只认 URL 就够。
+ * 项目预览命令可以是任何语言之后就不够了 —— Spring Boot 印的是
+ * `Tomcat started on port 8080 (http) with context path ''`，一个 URL 都没有，于是一个明明
+ * 已经在跑的服务会被干等到 120 秒超时。这里把端口捞出来自己拼一个回环地址。
+ *
+ * 只认「**它自己说自己起来了**」这几种说法（started / listening / running），不认光出现一个
+ * 数字的行：日志里的端口号还可能来自「端口被占」那一行，照着它拼地址就会把用户领到别人的
+ * 服务上去 —— 那正是 PORT_TAKEN_RE 那段注释里的 ②。撞车行在这里显式排除，preview.ts 那边
+ * 的顺序（先判撞车、后判就绪）是第二道。
+ */
+const PORT_ANNOUNCE_RE = /\b(?:started|starting|listening|running|bound|serving)\b[^\n]{0,40}?\bport\D{0,6}(\d{2,5})\b/i;
+
+/** 日志里「起在哪个端口」的自述；没有就 null。 */
+function announcedPort(log: string): number | null {
+  for (const line of log.split("\n")) {
+    if (PORT_TAKEN_RE.test(line)) continue;
+    const port = PORT_ANNOUNCE_RE.exec(line)?.[1];
+    if (port) return Number(port);
+  }
+  return null;
+}
+
+/**
  * 从日志里挑出「预览本尊」的地址。
  *
  * 不能见到第一个 URL 就当它是：**一条 `npm run dev` 并排起好几个服务是常态**（concurrently
@@ -54,6 +79,9 @@ const URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::(\d{2,5}))?[
  * 命令认了它，落在上面的地址必然是这一站要看的东西。
  *
  * `lent` 这个标记还兼着第二个用处，见 preview.ts 里撞车判定的那个例外。
+ *
+ * 日志里一个地址都没有时，退而求其次认「起在某个端口」的自述（见 announcedPort）——
+ * 非 Node 的服务常常只说端口不说地址。
  */
 export function pickPreviewUrl(log: string, lent: number | null): PreviewUrl | null {
   let first: PreviewUrl | null = null;
@@ -63,6 +91,8 @@ export function pickPreviewUrl(log: string, lent: number | null): PreviewUrl | n
     if (lent !== null && port === lent) return { url, port, lent: true };
     first ??= { url, port, lent: false };
   }
-  return first;
+  if (first) return first;
+  const port = announcedPort(log);
+  return port === null ? null : { url: `http://localhost:${port}/`, port, lent: lent === port };
 }
 

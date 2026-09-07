@@ -1,6 +1,6 @@
-// 自由工作流的预览段（从 free-workflow.ts 拆出，纯行数拆分）：命令推导、启动、路由。
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+// 自由工作流的预览段（从 free-workflow.ts 拆出，纯行数拆分）：命令来源、启动、路由。
+// 「跑哪条命令」在 preview-command.ts（纯函数，回归 test:preview-command）：项目设置里
+// 填过就用那条，没填才按 Node 推导 —— 非 Node 项目只能靠填。
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
@@ -9,23 +9,11 @@ import { projects, tasks } from "./db/schema.js";
 import { assertBeforeAcceptance } from "./free-workflow.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { handoffBlockReasonById } from "./handoff-guard.js";
+import { resolvePreviewCommand } from "./preview-command.js";
 import { isTurnClaimed } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { startPreview, stopPreview, type PreviewStep } from "./preview.js";
-
-function previewCommand(cwd: string): string {
-  const packageJson = join(cwd, "package.json");
-  if (!existsSync(packageJson)) throw new Error("工作区没有 package.json，无法自动判断预览命令");
-  let scripts: Record<string, unknown> = {};
-  try { scripts = JSON.parse(readFileSync(packageJson, "utf8")).scripts ?? {}; }
-  catch { throw new Error("package.json 无法读取，无法自动判断预览命令"); }
-  const script = typeof scripts.dev === "string" ? "dev" : typeof scripts.start === "string" ? "start" : null;
-  if (!script) throw new Error("package.json 没有 dev 或 start 脚本，请先在项目中补充预览命令");
-  if (existsSync(join(cwd, "pnpm-lock.yaml"))) return `pnpm run ${script}`;
-  if (existsSync(join(cwd, "yarn.lock"))) return `yarn ${script}`;
-  return `npm run ${script}`;
-}
 
 async function startFreePreview(taskId: string) {
   if (!tryAcquireFreeWorkflowAction(taskId)) throw new Error("当前已有自由工作流操作正在进行");
@@ -42,17 +30,27 @@ async function startFreePreview(taskId: string) {
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
     if (!project) throw new Error("项目不存在");
     const workspace = await taskWorkspace(task, project.repoPath);
-    const command = previewCommand(workspace.path);
+    const { command, source } = resolvePreviewCommand(workspace.path, project.previewCommand);
+    // 就绪判据分两档，因为「日志里说了 ready」这条判据是**有语言口音的**：
+    // READY_WORDS 那张表（ready / listening / compiled …）是照着 Node dev server 的说法写的。
+    // 自动推导出来的命令必然是 Node，那张表管用，`port+log` 更稳（既连得上、它自己也说好了）。
+    // 用户自己填的命令可以是任何东西 —— Django 印的是「Starting development server at …」，
+    // Go/Rust 印什么全看作者，一个 ready 词都不沾。对它们只认「端口真的连得上」：地址是这条
+    // 命令自己印在日志里的，连得上就是它起来了。
     const step: PreviewStep = {
       id: "free-preview", kind: "preview",
-      p: { cmd: command, mode: "frontend", ready: "port+log", life: "task" },
+      p: { cmd: command, mode: "frontend", ready: source === "configured" ? "port" : "port+log", life: "task" },
       fail: null,
     };
     const result = await startPreview(taskId, step, workspace.path);
     if (!result.ok) throw new Error(result.reason);
     // 预览只是「随手开一眼」：时间线留一行让刷新后仍看得见，但不进「实际工作流」那条
-    // 线——开关预览不改变任务本身走到了哪一步。
-    await appendTaskTimeline(taskId, `自由工作流预览已打开：${result.record.url ?? command}`);
+    // 线——开关预览不改变任务本身走到了哪一步。命令是哪儿来的也写上：填过的那条跑错了
+    // 要去项目设置改，推导出来的那条跑错了是另一回事。
+    await appendTaskTimeline(
+      taskId,
+      `自由工作流预览已打开（${source === "configured" ? "项目预览命令" : "自动推导"}：${command}）：${result.record.url ?? command}`,
+    );
     bus.publish({ type: "task.review", taskId });
     return result.record;
   } finally {

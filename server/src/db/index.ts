@@ -408,6 +408,8 @@ export async function ensureSchema() {
     // 任务接力(跨机器 handoff)的持久标记(json TaskHandoff,见 db/schema.ts)。
     "ALTER TABLE tasks ADD COLUMN handoff TEXT",
     "ALTER TABLE tasks ADD COLUMN handoff_audit TEXT",
+    // 项目级预览命令。空 = 自动推导（只认 Node），非 Node 项目靠它（preview-command.ts）。
+    "ALTER TABLE projects ADD COLUMN preview_command TEXT",
     // ── 多人模式(docs/multi-user-plan.md §八)──────────────────────────────
     // 归属列。全部可空:自用模式下恒为 null,转多人时由向导一次性实名化成初始管理员。
     "ALTER TABLE tasks ADD COLUMN owner_user_id TEXT",

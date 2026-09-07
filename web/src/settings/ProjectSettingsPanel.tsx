@@ -24,6 +24,7 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
   const canManage = project.myRole === "admin";
   const [name, setName] = useState(project.name);
   const [repoPath, setRepoPath] = useState(project.repoPath);
+  const [previewCommand, setPreviewCommand] = useState(project.previewCommand ?? "");
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   // 路径体检只对**改得动路径的人**有意义:它探的是「你现在填的这条路走不走得通」。
@@ -39,13 +40,27 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
   // 库还没拉到之前(workflows 为空)不下这个结论,否则每次进页面都先闪一句假警报。
   const legacyDefault = !!project.workflowId && workflows.length > 0
     && !pickable.some((item) => item.id === project.workflowId);
-  useEffect(() => { setName(project.name); setRepoPath(project.repoPath); }, [project]);
+  useEffect(() => {
+    setName(project.name);
+    setRepoPath(project.repoPath);
+    setPreviewCommand(project.previewCommand ?? "");
+  }, [project]);
   const dirty = name.trim() !== project.name || repoPath.trim() !== project.repoPath;
+  const previewDirty = previewCommand.trim() !== (project.previewCommand ?? "");
   const save = async () => {
     if (!name.trim() || !repoPath.trim() || !dirty) return;
     setBusy(true);
     try { onUpdated(await api.updateProject(project.id, { name: name.trim(), repoPath: repoPath.trim() })); notify("项目设置已保存"); }
     catch (error) { notify(error instanceof Error ? error.message : "项目设置保存失败"); }
+    finally { setBusy(false); }
+  };
+  // 预览命令单独存：它跟名称/目录不是一批东西，攒在同一颗「保存更改」里，改完命令要先
+  // 想起来还得按上面那颗按钮。空串存回 null = 回到自动推导。
+  const savePreviewCommand = async () => {
+    if (!previewDirty) return;
+    setBusy(true);
+    try { onUpdated(await api.updateProject(project.id, { previewCommand: previewCommand.trim() || null })); notify(previewCommand.trim() ? "预览命令已保存" : "预览命令已清空，恢复自动推导"); }
+    catch (error) { notify(error instanceof Error ? error.message : "预览命令保存失败"); }
     finally { setBusy(false); }
   };
   // 起手式是下拉即存的：它没有「改到一半」的中间态，攒进「保存更改」反而让人以为没生效。
@@ -67,7 +82,7 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
         <section className="settings-section"><div className="settings-card">
           <div className="settings-row"><div>
             <b>你在这个项目里是成员</b>
-            <small>项目名称、工作目录、默认起手式、Git 身份与凭证、删除项目只有项目管理员能改；下面按只读展示。要改就找一位项目管理员。</small>
+            <small>项目名称、工作目录、默认起手式、预览命令、Git 身份与凭证、删除项目只有项目管理员能改；下面按只读展示。要改就找一位项目管理员。</small>
           </div></div>
         </div></section>
       )}
@@ -101,6 +116,25 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
             onChange={(workflowId) => void pickWorkflow(workflowId)}
           />
         </div>
+      </div></section>
+      <section className="settings-section"><h2>预览命令</h2><div className="settings-card">
+        <label className="settings-field">
+          <span>「打开预览」跑哪条命令</span>
+          <input
+            className="mono"
+            value={previewCommand}
+            readOnly={!canManage}
+            placeholder="留空 = 自动推导（只认 Node）"
+            onChange={(event) => setPreviewCommand(event.target.value)}
+          />
+        </label>
+        <small>
+          留空时服务端自己推导，但推导只认 Node：工作区根目录 package.json 里的 dev / start 脚本。
+          Java、Python、Go 这类项目，以及前后端并排的多项目仓库（根目录没有 package.json），都要在这里填一条，
+          例如 <code className="mono">cd web &amp;&amp; pnpm run dev</code> 或 <code className="mono">./mvnw spring-boot:run</code>。
+        </small>
+        <small>命令在任务自己的工作区（worktree）根目录执行，用你自己的 shell，可以带 cd 和 &amp;&amp;；ash 会注入 PORT（认这个变量的框架就能自动错开端口）和 BROWSER=none。</small>
+        {canManage && <div className="settings-card-foot"><span>改了只影响之后新开的预览，已经开着的那个不受影响。</span><Button variant="primary" disabled={!previewDirty || busy} onClick={() => void savePreviewCommand()}>{busy ? "保存中…" : "保存预览命令"}</Button></div>}
       </div></section>
       <ProjectGitSettings projectId={project.id} canManage={canManage} notify={notify} />
       {canManage && (
