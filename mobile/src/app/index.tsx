@@ -36,12 +36,12 @@ type SectionMeta =
   | { kind: "ungrouped"; key: "ungrouped"; hidden: TaskListItem[] };
 
 // 分组视图 section 头里的「运行/继续」按钮。
-function GroupRunChip({ label, onPress }: { label: string; onPress: () => void }) {
+function GroupRunChip({ label, groupName, onPress }: { label: string; groupName: string; onPress: () => void }) {
   const theme = useTheme();
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${label}这个分组`}
+      accessibilityLabel={`${label}分组：${groupName}`}
       onPress={onPress}
       hitSlop={10}
       style={{
@@ -215,7 +215,7 @@ function TaskList() {
           paddingBottom: 10,
         }}
       >
-        <Pressable onPress={() => setDrawerOpen(true)} hitSlop={10}>
+        <Pressable accessibilityRole="button" accessibilityLabel="打开项目菜单" onPress={() => setDrawerOpen(true)} hitSlop={10}>
           <Ionicons name="menu" size={26} color={theme.ink} />
         </Pressable>
         <Text style={{ color: theme.ink, fontSize: 26, fontFamily: fonts.display }}>Tasks</Text>
@@ -235,6 +235,8 @@ function TaskList() {
         <View style={{ flex: 1 }} />
         {view === "group" ? (
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="管理分组"
             onPress={() => router.push("/groups")}
             hitSlop={8}
             style={({ pressed }) => ({
@@ -281,6 +283,9 @@ function TaskList() {
         renderSectionHeader={({ section }) =>
           section.kind === "archived" ? (
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`${archivedOpen ? "收起" : "展开"}已归档任务，共 ${section.count} 个`}
+              accessibilityState={{ expanded: archivedOpen }}
               onPress={() => setArchivedOpen((v) => !v)}
               style={({ pressed }) => ({
                 flexDirection: "row",
@@ -307,13 +312,13 @@ function TaskList() {
               labelColor={theme.ink}
               count={section.data.length + section.hidden.length}
               right={section.group.paused ? (
-                <GroupRunChip label="继续" onPress={() => runGroup(section.group)} />
+                <GroupRunChip label="继续" groupName={groupLabel(section.group)} onPress={() => runGroup(section.group)} />
               ) : (
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                  <GroupRunChip label="运行" onPress={() => runGroup(section.group)} />
+                  <GroupRunChip label="运行" groupName={groupLabel(section.group)} onPress={() => runGroup(section.group)} />
                   <Pressable
                     accessibilityRole="button"
-                    accessibilityLabel="暂停这个分组"
+                    accessibilityLabel={`暂停分组：${groupLabel(section.group)}`}
                     onPress={() => pauseGroup(section.group)}
                     hitSlop={10}
                     style={{
@@ -365,6 +370,8 @@ function TaskList() {
             </Text>
             {projects.length === 0 ? (
               <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="新建项目"
                 onPress={() => router.push("/project-new")}
                 style={{
                   paddingHorizontal: 18,
@@ -385,6 +392,8 @@ function TaskList() {
       {/* Floating action button — new task */}
       {projects.length > 0 && (
         <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="新建任务"
           onPress={() => router.push("/new")}
           style={({ pressed }) => ({
             position: "absolute",

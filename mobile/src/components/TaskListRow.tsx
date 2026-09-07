@@ -76,27 +76,27 @@ function TeamCard({
     .join(" · ");
 
   return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => ({
+    <View
+      style={{
         flexDirection: "row",
-        alignItems: "center",
-        gap: 10,
+        alignItems: "stretch",
         marginHorizontal: 16,
-        paddingHorizontal: 12,
-        paddingVertical: 13,
         borderRadius: radius.lg,
-        backgroundColor: pressed ? theme.raised : surface.tint ?? theme.panel,
+        backgroundColor: surface.tint ?? theme.panel,
         borderWidth: 1,
         borderColor: surface.borderColor,
-      })}
+        overflow: "hidden",
+      }}
     >
       <Pressable
+        accessible={workers.length > 0}
+        accessibilityRole="button"
+        accessibilityLabel={`${expanded ? "收起" : "展开"}团队执行者：${task.title || "无标题"}`}
+        accessibilityState={{ expanded, disabled: workers.length === 0 }}
         onPress={workers.length ? onToggle : undefined}
         hitSlop={8}
         style={{
-          width: 22,
-          height: 38,
+          width: 46,
           alignItems: "center",
           justifyContent: "center",
           opacity: workers.length ? 1 : 0.25,
@@ -104,34 +104,49 @@ function TeamCard({
       >
         <Ionicons name={expanded ? "chevron-down" : "chevron-forward"} size={16} color={theme.faint} />
       </Pressable>
-      <SignalBar status={task.status} height={42} />
-      <View style={{ flex: 1, gap: 6 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
-          <CollaborationBadge mode="team" />
-          <Text style={{ flex: 1, color: theme.ink, fontSize: 15, fontFamily: fonts.bodySemi }} numberOfLines={2}>
-            {task.title || "(无标题)"}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`打开团队任务：${task.title || "无标题"}`}
+        onPress={onPress}
+        style={({ pressed }) => ({
+          flex: 1,
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 10,
+          paddingRight: 12,
+          paddingVertical: 13,
+          backgroundColor: pressed ? theme.raised : "transparent",
+        })}
+      >
+        <SignalBar status={task.status} height={42} />
+        <View style={{ flex: 1, gap: 6 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
+            <CollaborationBadge mode="team" />
+            <Text style={{ flex: 1, color: theme.ink, fontSize: 15, fontFamily: fonts.bodySemi }} numberOfLines={2}>
+              {task.title || "(无标题)"}
+            </Text>
+          </View>
+          <Text style={{ color: summary ? theme.muted : theme.faint, fontSize: 12, fontFamily: fonts.mono }} numberOfLines={1}>
+            {summary || "暂无执行者"}
           </Text>
+          <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+            <TaskStatusChips task={task} />
+            {attention.questions ? (
+              <StatusChip label={`${attention.questions} 人等你答复`} color={ATTENTION_COLOR} icon="help-circle" filled />
+            ) : null}
+            {attention.verifyFailed ? (
+              <StatusChip label={`${attention.verifyFailed} 人未通过验证`} color={theme.danger} icon="alert-circle" filled />
+            ) : null}
+          </View>
+          <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 9 }}>
+            <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.mono }}>
+              调度者 {task.team?.leadExecutorLabel || task.executorLabel || task.team?.lead || task.agentType || "—"}
+            </Text>
+            <TaskTimeChip task={task} />
+          </View>
         </View>
-        <Text style={{ color: summary ? theme.muted : theme.faint, fontSize: 12, fontFamily: fonts.mono }} numberOfLines={1}>
-          {summary || "暂无执行者"}
-        </Text>
-        <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
-          <TaskStatusChips task={task} />
-          {attention.questions ? (
-            <StatusChip label={`${attention.questions} 人等你答复`} color={ATTENTION_COLOR} icon="help-circle" filled />
-          ) : null}
-          {attention.verifyFailed ? (
-            <StatusChip label={`${attention.verifyFailed} 人未通过验证`} color={theme.danger} icon="alert-circle" filled />
-          ) : null}
-        </View>
-        <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 9 }}>
-          <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.mono }}>
-            调度者 {task.team?.leadExecutorLabel || task.executorLabel || task.team?.lead || task.agentType || "—"}
-          </Text>
-          <TaskTimeChip task={task} />
-        </View>
-      </View>
-    </Pressable>
+      </Pressable>
+    </View>
   );
 }
 
@@ -141,6 +156,8 @@ function TaskCard({ task, parentTitle, onPress }: { task: TaskListItem; parentTi
   const surface = attentionSurface(taskAttention(task)?.kind, theme);
   return (
     <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`打开任务：${task.title || "无标题"}${parentTitle ? `，所属团队：${parentTitle}` : ""}`}
       onPress={onPress}
       style={({ pressed }) => ({
         flexDirection: "row",

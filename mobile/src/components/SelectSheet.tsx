@@ -72,6 +72,9 @@ export function SelectSheet(props: TextSelectSheetProps | OptionSelectSheetProps
                 return (
                   <Pressable
                     key={option.value}
+                    accessibilityRole="button"
+                    accessibilityLabel={option.detail ? `${option.label}，${option.detail}` : option.label}
+                    accessibilityState={{ selected }}
                     onPress={() => {
                       props.onSelect(option.value);
                       props.onClose();

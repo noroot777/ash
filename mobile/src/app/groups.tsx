@@ -156,7 +156,7 @@ function GroupRow({
           placeholderTextColor={theme.faint}
           style={{ flex: 1, color: theme.ink, fontSize: 15, fontFamily: fonts.bodySemi, paddingVertical: 2 }}
         />
-        <Pressable onPress={onDelete} hitSlop={8}>
+        <Pressable accessibilityRole="button" accessibilityLabel={`删除分组：${group.name}`} onPress={onDelete} hitSlop={8}>
           <Ionicons name="trash-outline" size={18} color={theme.faint} />
         </Pressable>
       </View>
@@ -175,6 +175,9 @@ function GroupRow({
           {(["parallel", "serial"] as const).map((m) => (
             <Pressable
               key={m}
+              accessibilityRole="button"
+              accessibilityLabel={`${group.name}的运行模式：${m === "parallel" ? "并行" : "串行"}`}
+              accessibilityState={{ selected: group.mode === m }}
               onPress={() => group.mode !== m && onPatch({ mode: m })}
               style={{
                 paddingHorizontal: 12,
@@ -193,11 +196,13 @@ function GroupRow({
         <Text style={{ color: theme.faint, fontSize: 12, fontFamily: fonts.mono }}>{count} 个任务</Text>
         <View style={{ flex: 1 }} />
         {group.paused ? (
-          <RunBtn label="继续" onPress={onRun} />
+          <RunBtn label="继续" groupName={group.name} onPress={onRun} />
         ) : (
           <>
-            <RunBtn label="运行" onPress={onRun} />
+            <RunBtn label="运行" groupName={group.name} onPress={onRun} />
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`暂停分组：${group.name}`}
               onPress={onPause}
               hitSlop={6}
               style={{
@@ -217,10 +222,12 @@ function GroupRow({
   );
 }
 
-function RunBtn({ label, onPress }: { label: string; onPress: () => void }) {
+function RunBtn({ label, groupName, onPress }: { label: string; groupName: string; onPress: () => void }) {
   const theme = useTheme();
   return (
     <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${label}分组：${groupName}`}
       onPress={onPress}
       hitSlop={6}
       style={{

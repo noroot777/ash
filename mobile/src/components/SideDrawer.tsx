@@ -117,7 +117,7 @@ export function SideDrawer({ open, setOpen }: { open: boolean; setOpen: (v: bool
         style={[StyleSheet.absoluteFill, { backgroundColor: "#000" }, scrimStyle]}
         pointerEvents={open ? "auto" : "none"}
       >
-        <Pressable style={{ flex: 1 }} onPress={close} />
+        <Pressable accessible={false} style={{ flex: 1 }} onPress={close} />
       </Animated.View>
 
       {/* Left-edge pull zone — only active while closed (panel + back-edge cover it when open) */}
@@ -151,6 +151,9 @@ export function SideDrawer({ open, setOpen }: { open: boolean; setOpen: (v: bool
               return (
                 <Pressable
                   key={p.id}
+                  accessibilityRole="button"
+                  accessibilityLabel={`切换到项目：${p.name}`}
+                  accessibilityState={{ selected: active }}
                   onPress={() => pick(p.id)}
                   style={({ pressed }) => ({
                     flexDirection: "row",
@@ -178,6 +181,8 @@ export function SideDrawer({ open, setOpen }: { open: boolean; setOpen: (v: bool
             })}
 
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="新建项目"
               onPress={() => navAfterClose(() => router.push("/project-new"))}
               style={({ pressed }) => ({
                 flexDirection: "row",
@@ -208,6 +213,8 @@ export function SideDrawer({ open, setOpen }: { open: boolean; setOpen: (v: bool
             }}
           >
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="打开设置"
               onPress={() => navAfterClose(() => router.push("/settings"))}
               hitSlop={8}
               style={({ pressed }) => ({

@@ -254,15 +254,15 @@ export function TeamTaskDetail({
           headerRight: () => (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 18 }}>
               {task.archived ? (
-                <Pressable accessibilityLabel="取消归档" onPress={onUnarchive} hitSlop={10}>
+                <Pressable accessibilityRole="button" accessibilityLabel="取消归档" onPress={onUnarchive} hitSlop={10}>
                   <Ionicons name="archive" size={20} color={theme.accent} />
                 </Pressable>
               ) : canArchive(task.status) ? (
-                <Pressable accessibilityLabel="归档团队" onPress={onArchive} hitSlop={10}>
+                <Pressable accessibilityRole="button" accessibilityLabel="归档团队" onPress={onArchive} hitSlop={10}>
                   <Ionicons name="archive-outline" size={20} color={theme.muted} />
                 </Pressable>
               ) : null}
-              <Pressable accessibilityLabel="删除团队任务" onPress={onDelete} hitSlop={10}>
+              <Pressable accessibilityRole="button" accessibilityLabel="删除团队任务" onPress={onDelete} hitSlop={10}>
                 <Ionicons name="trash-outline" size={20} color={theme.danger} />
               </Pressable>
             </View>

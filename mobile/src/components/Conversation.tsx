@@ -267,7 +267,7 @@ function AgentBubble({
           ) : null}
         </View>
       ) : null}
-      <Pressable onPress={onTap} onLongPress={() => onSelect?.(b.text)} delayLongPress={350} style={bubbleStyle(theme)}>
+      <Pressable accessible={false} onPress={onTap} onLongPress={() => onSelect?.(b.text)} delayLongPress={350} style={bubbleStyle(theme)}>
         <MarkdownText value={b.text} selectable={false} style={{ color: theme.ink, fontSize: 14, lineHeight: 21 }} />
       </Pressable>
     </View>
