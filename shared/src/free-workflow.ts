@@ -91,7 +91,14 @@ export interface FreeReviewRun {
 }
 
 export interface FreeWorkflowPreviewState {
+  /** 起来了**或者正在起**。界面拿它决定那颗开关是「打开预览」还是「关掉」。 */
   running: boolean;
+  /**
+   * 还在启动（装依赖 / 等就绪）。这一段能长到八分钟，期间没有 url、也随时可以被收掉，
+   * 所以它跟「起来了」必须分得开：文案要说「正在启动…（点这里取消）」而不是「关闭预览」，
+   * 「预览页」那个链接也不能给。
+   */
+  starting: boolean;
   // 这个任务盘上有没有预览启动日志。跟 running 是两件事：**起失败的那次也留着日志**，
   // 而那一次恰恰最需要看 —— 只按 running 给入口，用户永远看不到失败现场。
   hasLog: boolean;

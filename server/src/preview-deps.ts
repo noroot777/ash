@@ -34,6 +34,7 @@ import {
 import type { Dirent } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { augmentedEnv } from "./executors/bin-resolve.js";
+import { killByPid } from "./executors/spawn.js";
 import { DEPS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
 
@@ -369,8 +370,20 @@ function danglingLink(nodeModules: string): string | null {
   return scan(nodeModules, "");
 }
 
-/** 跑一条安装命令，输出直接进预览日志。返回 null = 成功，否则是失败原因。 */
-async function install(pm: PackageManager, cwd: string, logPath: string): Promise<string | null> {
+/**
+ * 跑一条安装命令，输出直接进预览日志。返回 null = 成功，否则是失败原因。
+ *
+ * `onChild` 一拿到 pid 就调用（结束时再调一次 0）：**装依赖这一段也必须是可取消的**。
+ * 它可以跑满六分钟，用户在这中间点「关闭预览」、或者任务续跑，如果这个 pid 没人知道，
+ * 停止就只是删了条记录 —— 包管理器还在后台跑，项目自己的生命周期脚本（preinstall /
+ * postinstall，用户仓库里什么都可能有）也还在跑，而新一轮已经在改同一个工作区了。
+ */
+async function install(
+  pm: PackageManager,
+  cwd: string,
+  logPath: string,
+  onChild: (pid: number) => void = () => {},
+): Promise<string | null> {
   // 用户平时怎么装，这儿就怎么装（`npm install` 而不是 `npm ci`：锁文件跟 package.json
   // 对不上时 ci 直接失败，而我们宁可装出一份能跑的，也不要在这儿替他做版本仲裁）。
   const line = `${pm} install`;
@@ -384,6 +397,9 @@ async function install(pm: PackageManager, cwd: string, logPath: string): Promis
       fd = openAppend(logPath);
       const child = spawn(launch.file, launch.args, {
         cwd,
+        // POSIX 上自成进程组：包管理器底下还有一层层的 node/python/生命周期脚本，
+        // 只杀 shell 那个 pid 是杀不干净的（Windows 反过来靠 taskkill /T 按父子收树）。
+        detached: process.platform !== "win32",
         windowsHide: true,
         windowsVerbatimArguments: launch.windowsVerbatimArguments,
         stdio: ["ignore", fd, fd],
@@ -392,14 +408,18 @@ async function install(pm: PackageManager, cwd: string, logPath: string): Promis
         // 关掉（这两个 env 只有 npm 认，别的包管理器当没看见）。
         env: { ...augmentedEnv(), ASH_PREVIEW: "1", npm_config_audit: "false", npm_config_fund: "false" },
       });
+      if (child.pid) onChild(child.pid);
       const timer = setTimeout(() => {
-        child.kill("SIGKILL");
+        // 按树杀，不是 `child.kill()`：那只打得到最外层的 shell，install 自己派生的
+        // 后代（生命周期脚本、node-gyp…）会活下来，超时于是变成「放弃等待 + 留一堆孤儿」。
+        killByPid(child.pid ?? 0);
         resolve(`装了 ${Math.round(INSTALL_TIMEOUT_MS / 60_000)} 分钟还没装完，已经放弃`);
       }, INSTALL_TIMEOUT_MS);
-      child.on("error", (error) => { clearTimeout(timer); resolve(error.message); });
-      child.on("exit", (code) => {
-        clearTimeout(timer);
-        resolve(code === 0 ? null : `${line} 退出码 ${code}（输出在上面）`);
+      const done = (result: string | null) => { clearTimeout(timer); onChild(0); resolve(result); };
+      child.on("error", (error) => done(error.message));
+      child.on("exit", (code, signal) => {
+        // 被外面杀掉（取消）时退出码是 null + 信号，说清楚是「被收掉了」而不是装挂了。
+        done(code === 0 ? null : signal ? `${line} 被中止（${signal}）` : `${line} 退出码 ${code}（输出在上面）`);
       });
     } catch (error) {
       resolve(error instanceof Error ? error.message : String(error));
@@ -441,6 +461,8 @@ export async function prepareNodeDeps(
   workspace: string,
   command: string,
   logPath: string,
+  /** 装依赖的那个进程起来了/结束了（0）。调用方拿它把这一段也纳入「能被取消」的范围。 */
+  onChild: (pid: number) => void = () => {},
 ): Promise<NodeDepsPrepared[]> {
   const all = nodeDepsAdvice(workspace, command);
   const targets = all.filter((one) => one.mentioned);
@@ -459,12 +481,16 @@ export async function prepareNodeDeps(
   }
   const done: NodeDepsPrepared[] = [];
   for (const one of targets) {
-    done.push(await prepareOne(one, logPath));
+    done.push(await prepareOne(one, logPath, onChild));
   }
   return done;
 }
 
-async function prepareOne(one: NodeDepsAdvice, logPath: string): Promise<NodeDepsPrepared> {
+async function prepareOne(
+  one: NodeDepsAdvice,
+  logPath: string,
+  onChild: (pid: number) => void,
+): Promise<NodeDepsPrepared> {
   const manifest = readIfPresent(join(one.dir, "package.json"));
   if (manifest === null) return { rel: one.rel, ok: false, detail: "读不到 package.json", link: null };
   const fail = (detail: string): NodeDepsPrepared => {
@@ -520,7 +546,7 @@ async function prepareOne(one: NodeDepsAdvice, logPath: string): Promise<NodeDep
   }
 
   // ③ 现装。**只从项目里读**：清单和锁文件复制过去，install 改写的是那份拷贝。
-  const error = await once(cache, () => build(one, cache, lockName, logPath));
+  const error = await once(cache, () => build(one, cache, lockName, logPath, onChild));
   if (error) return fail(error);
   touch(cache);
   return linkTo(cached, `ash 已在项目外装好依赖（${cached}，你的项目没有被写）`);
@@ -545,6 +571,7 @@ async function build(
   cache: string,
   lockName: string,
   logPath: string,
+  onChild: (pid: number) => void,
 ): Promise<string | null> {
   const temp = `${cache}${TEMP_SUFFIX}${process.pid}-${tempSeq++}`;
   try {
@@ -559,7 +586,7 @@ async function build(
     rmSync(temp, { recursive: true, force: true });
     return `没能把 package.json 复制到 ${temp}：${error instanceof Error ? error.message : String(error)}`;
   }
-  const error = await install(one.pm, temp, logPath);
+  const error = await install(one.pm, temp, logPath, onChild);
   if (error || !populated(join(temp, "node_modules"))) {
     rmSync(temp, { recursive: true, force: true });
     return error

@@ -453,6 +453,33 @@ try {
     "当下开没开仍要报，否则工具栏那颗按钮没法显示状态",
   );
 
+  // 启动那一段（装依赖 6 分钟 + 等就绪 2 分钟）里，用户必须**从接口上就**关得掉预览。
+  // 起预览是同步等到就绪才返回的，那把自由工作流锁会被 POST 一直握着；关闭如果也要这把
+  // 锁，整个启动期只会拿到一句 409「当前已有自由工作流操作正在进行」——后端为取消做的那
+  // 一整套（starting 记录 + 代号 + 杀装依赖的进程）就永远走不到，用户只能干等八分钟。
+  {
+    const runsDir = join(root, "runs", "free-task");
+    mkdirSync(runsDir, { recursive: true });
+    writeFileSync(join(runsDir, "preview.json"), JSON.stringify({
+      taskId: "free-task", cmd: "npm run dev", pid: 0, url: null, port: null, life: "task",
+      startedAt: new Date().toISOString(), log: join(runsDir, "preview.log"), links: [],
+      state: "starting", gen: "in-flight", installPid: null,
+    }));
+    writeFileSync(join(runsDir, "preview.log"), "$ npm run dev\n");
+    // 刷新页面看到的也得是「有东西在跑、可以关掉」，而不是又一颗会撞锁的「打开预览」。
+    const startingShape = await api.request("/tasks/free-task/free-workflow")
+      .then((response) => response.json()) as { preview: { running: boolean; starting: boolean } };
+    assert.equal(startingShape.preview.running, true, "正在启动也该算「在跑」，否则界面上没有任何一处给得出「关掉它」");
+    assert.equal(startingShape.preview.starting, true, "得分得清「正在启动」和「已经起来了」：前者没有 url，还能被取消");
+
+    assert.equal(tryAcquireFreeWorkflowAction("free-task"), true, "这一刻模拟的是 POST 还握着锁");
+    const canceled = await api.request("/tasks/free-task/free-workflow/preview", { method: "DELETE" });
+    releaseFreeWorkflowAction("free-task");
+    assert.equal(canceled.status, 200, "启动请求还挂着的时候，关闭预览被锁挡回去了（用户点不到取消）");
+    assert.deepEqual(await canceled.json(), { stopped: true }, "关闭应当真的把那条启动记录收掉");
+    assert.equal(existsSync(join(runsDir, "preview.json")), false, "记录还在，说明只是嘴上说停了");
+  }
+
   const review = await api.request("/tasks/free-task/free-workflow/review", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1 }),

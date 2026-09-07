@@ -511,6 +511,74 @@ try {
       await waitFor(() => !isAlive(pid), `${how}：启动中的那个进程没被杀掉，它稍后还会上线`);
     }
 
+    // ④b **装依赖那一段也得摁得死。** 它能跑满六分钟，而那六分钟里 pid 不落盘的话，
+    //     「关闭预览」只是删了条记录：包管理器还在后台跑，项目自己的 preinstall/postinstall
+    //     （用户仓库里什么都可能有）也还在跑，任务续跑那一路更糟——新一轮已经在改同一个
+    //     工作区了。软链和 node_modules 也可能在停止之后才被写出来。
+    const installWt = join(repo2, ".worktrees", "install-wt");
+    mkdirSync(join(installWt, "front"), { recursive: true });
+    writeFileSync(join(installWt, ".git"), `gitdir: ${join(repo2, ".git", "worktrees", "install-wt")}\n`);
+    writeFileSync(join(installWt, "front", "package.json"), JSON.stringify({
+      name: "front", version: "1.0.0", private: true, scripts: { dev: "fakevite" },
+    }));
+    const slowNpm = join(root, "slow-npm");
+    mkdirSync(slowNpm, { recursive: true });
+    const grandchildPidFile = join(root, "install-grandchild.pid");
+    // 装依赖的现场：外层是包管理器，底下还挂着生命周期脚本。只杀外层那个 pid 是不够的。
+    writeFileSync(join(slowNpm, "npm"),
+      `#!/bin/sh\nsleep 300 &\necho $! > ${grandchildPidFile}\nwait\n`, { mode: 0o755 });
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${slowNpm}:${savedPath ?? ""}`;
+    let installResult: Awaited<ReturnType<typeof startPreview>>;
+    try {
+      const installing = startPreview("install-task", {
+        id: "install", kind: "preview",
+        p: { cmd: "cd front && npm run dev", mode: "frontend", ready: "port", life: "task" },
+      } as never, installWt);
+      const recordFile = join(root, "runs", "install-task", "preview.json");
+      await waitFor(() => existsSync(recordFile)
+        && (JSON.parse(readFileSync(recordFile, "utf8")).installPid ?? 0) > 0, "装依赖的 pid 没落进记录");
+      const installPid = JSON.parse(readFileSync(recordFile, "utf8")).installPid as number;
+      await waitFor(() => existsSync(grandchildPidFile), "生命周期脚本还没起来");
+      const grandchild = Number(readFileSync(grandchildPidFile, "utf8").trim());
+      assert.equal(await stopPreview("install-task", "测试：装依赖途中关闭"), true, "装依赖途中必须停得掉");
+      await waitFor(() => !isAlive(installPid), "「已停止」之后包管理器还在跑");
+      await waitFor(() => !isAlive(grandchild), "包管理器自己派生的那一层活了下来（只杀了最外面那个 pid）");
+      installResult = await installing;
+      assert.equal(installResult.ok, false, "被取消的那趟不能再报成功");
+      assert.equal(existsSync(recordFile), false, "取消之后记录还在");
+      assert.equal(existsSync(join(installWt, "front", "node_modules")), false, "停掉之后还是把软链挂上了");
+    } finally {
+      process.env.PATH = savedPath;
+    }
+
+    // ④c **两代启动重叠时，别把新的那一代当成孤儿杀掉。** 自动推进那一站刚开始冷启动、
+    //     用户又在线路图上点了一下「重启预览」，就是两代重叠。旧那代退出时如果按 taskId
+    //     抹掉「谁在驱动」的标记，抹掉的是新那代的；清扫随后看见一条没人驱动的 starting
+    //     记录，按「重启遗留的孤儿」把正在冷启动的新预览杀了。
+    const overlapWt = join(repo2, ".worktrees", "overlap-wt");
+    mkdirSync(overlapWt, { recursive: true });
+    const overlapRecord = join(root, "runs", "overlap-task", "preview.json");
+    // 记录会有一瞬间不在：第二代开跑时先 stopPreview 收掉第一代，再写自己那条。
+    const genOf = (): string | null => {
+      try { return JSON.parse(readFileSync(overlapRecord, "utf8")).gen as string; } catch { return null; }
+    };
+    const first = startPreview("overlap-task", cancelStep as never, overlapWt);
+    await waitFor(() => existsSync(overlapRecord) && JSON.parse(readFileSync(overlapRecord, "utf8")).pid > 0,
+      "第一代还没起来");
+    const firstGen = genOf();
+    const second = startPreview("overlap-task", cancelStep as never, overlapWt); // 第二代顶掉第一代
+    await waitFor(() => { const gen = genOf(); return gen !== null && gen !== firstGen; }, "第二代没有把记录顶掉");
+    const firstResult = await first;
+    assert.equal(firstResult.ok, false, "被顶掉的那一代应当自己收摊");
+    await sweepPreviews(); // 关键一刀：此刻第二代还在冷启动
+    assert.equal(existsSync(overlapRecord), true, "清扫把正在冷启动的新一代当成孤儿删了");
+    const secondResult = await second;
+    assert.ok(secondResult.ok, `新一代应当照常起来，实际：${secondResult.ok ? "" : secondResult.reason}`);
+    assert.equal(readPreview("overlap-task")?.state, "ready", "新一代没能写成「已就绪」");
+    killGroup(secondResult.record.pid);
+    await stopPreview("overlap-task", null);
+
     // ⑤ server 在启动那一段里重启：内存里那张「谁在驱动」的表没了，盘上却还留着一条
     //    「正在启动」。它的子进程是 detached 的，可能还活着，软链也还挂在工作区里 ——
     //    没人会再来收尾，只能由清扫认领。

@@ -32,6 +32,13 @@ const phases = [
   "$ PORT=45841 npm run dev\n[INFO] Downloading spring-boot-starter-web…\n[INFO] Compiling 42 source files\n",
 ];
 
+// 启动那一段是可以被**取消**的：DELETE 不跟 POST 抢锁（服务端 free-workflow-preview.ts），
+// 在跑的那趟随后自己发现代号没了、以失败返回。这里把这条时序也复现出来 —— 否则「界面上
+// 有没有一颗点得到的取消」这件事根本测不到。
+let startPosted = false;
+let canceled = false;
+let failStart: ((reason: unknown) => void) | null = null;
+
 const realFetch = window.fetch.bind(window);
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -47,16 +54,29 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
       reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null, override: null, runId: null },
       // 关键前提：这个任务**始终没有**日志文件（pre-spawn 那条路根本没起过命令），
       // 所以按老口径「预览日志」那颗按钮不该出现、也不该留下。
-      preview: { running: false, hasLog: false, url: null, port: null, command: null, startedAt: null },
+      // POST 一发出，服务端就落下一条「正在启动」的记录并发事件，所以快照里它是
+      // running + starting（别的页面、以及刷新之后，靠的就是这个看见「可以取消」）。
+      preview: {
+        running: startPosted && !canceled, starting: startPosted && !canceled,
+        hasLog: false, url: null, port: null, command: null, startedAt: null,
+      },
       executions: [],
       reviews: [],
     });
   }
+  if (pathname === `/api/tasks/${TASK_ID}/free-workflow/preview` && (init?.method ?? "GET") === "DELETE") {
+    // 关闭：服务端删掉那条 starting 记录、杀掉已经起的进程和正在装依赖的进程，
+    // 在跑的那趟 POST 随后以「启动被取消」失败返回。
+    canceled = true;
+    failStart?.(new Error("预览启动被取消（关闭预览 / 任务重新开跑 / ash 重启）"));
+    return reply({ stopped: true });
+  }
   if (pathname === `/api/tasks/${TASK_ID}/free-workflow/preview` && (init?.method ?? "GET") !== "GET") {
     // 多候选：命令都没解析出来就 409 了，spawn 之前，盘上没有任何日志。
     if (preSpawn) return reply({ error: "认出了 3 个能起服务的东西，请在项目设置 → 预览命令里指一个" }, 409);
-    // 正常路径：启动请求就这么挂着 —— 现场里它可以挂两分钟。
-    return await new Promise<Response>(() => {});
+    // 正常路径：启动请求就这么挂着 —— 现场里它可以挂两分钟（除非被取消）。
+    startPosted = true;
+    return await new Promise<Response>((_, reject) => { failStart = reject; });
   }
   if (pathname === `/api/tasks/${TASK_ID}/free-workflow/preview/log`) {
     const nth = logReads;

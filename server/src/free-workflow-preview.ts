@@ -110,13 +110,17 @@ export function mountFreePreviewRoutes(api: Hono): void {
     if (!task || task.workflowMode !== "free" || task.mode !== "single" || task.parentId || task.reviewOf) {
       return c.json({ error: "当前任务不支持自由预览" }, 409);
     }
-    if (!tryAcquireFreeWorkflowAction(taskId)) return c.json({ error: "当前已有自由工作流操作正在进行" }, 409);
-    try {
-      const stopped = await stopPreview(taskId, "用户关闭了自由工作流预览");
-      bus.publish({ type: "task.review", taskId });
-      return c.json({ stopped });
-    } finally {
-      releaseFreeWorkflowAction(taskId);
-    }
+    // **不抢那把自由工作流的锁。** 起预览是同步等到就绪的，那把锁会被 POST 一直握到
+    // 八分钟之后（装依赖 6 分钟 + 等就绪 2 分钟）；关闭如果也要那把锁，用户在整个启动
+    // 期间只会拿到一句 409「当前已有自由工作流操作正在进行」——而这一段恰恰是最需要
+    // 「我不等了，收掉」的时候，代码里为它做的那套取消（starting 记录 + 代号 + 杀装
+    // 依赖的进程）也就永远走不到。
+    //
+    // 不加锁是安全的，因为 stopPreview 本身就是按盘上记录做的幂等操作：并发两次关闭，
+    // 第二次读不到记录直接返回 false；跟启动并发时，启动那一趟会在下一个检查点发现
+    // 自己的代号没了，自己收摊（见 preview.ts 的 abandoned）。
+    const stopped = await stopPreview(taskId, "用户关闭了自由工作流预览");
+    bus.publish({ type: "task.review", taskId });
+    return c.json({ stopped });
   });
 }

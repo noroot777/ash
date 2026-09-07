@@ -57,6 +57,12 @@ export interface PreviewRecord {
    */
   state?: "starting" | "ready";
   /**
+   * 装依赖那个进程的 pid（只在装的时候有）。理由同 `state`：那一段能跑满六分钟，
+   * 停止时得连它一起收，否则「已停止」只是嘴上说说，包管理器和项目的生命周期脚本
+   * 还在后台跑。
+   */
+  installPid?: number | null;
+  /**
    * 这一趟启动的代号。取消 = **把记录删掉或者换成别人的代号**，在跑的那一趟每到一个
    * 检查点就核对一次，对不上就自己收摊。用代号而不是布尔标记，是因为「取消」和「立刻
    * 起了新的一趟」在时间上分不开：只看「记录还在不在」，新那趟的记录会被旧那趟当成
@@ -280,9 +286,35 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  *
  * 盘上另有一条 `state: "starting"` 的记录（见 PreviewRecord.state），那是给「怎么把它
  * 杀掉」用的，两者不重复：内存这张表回答的是「**谁在驱动**它」。清扫靠这个区分「正在
- * 启动」和「上一条命留下的孤儿」—— 表里没有就是没人管了，收掉。
+ * 启动」和「上一条命留下的孤儿」—— 没人驱动就是没人管了，收掉。
+ *
+ * **按代号记，不是按任务记。** 同一个任务的两趟启动完全可以重叠（自动推进那一站刚开始
+ * 冷启动，用户在线路图上又点了一下「重启预览」）：新那趟写下自己的代号、把旧那趟顶掉，
+ * 旧那趟随后发现代号变了就收摊 —— 可它退出时如果按 taskId 抹掉标记，抹掉的是**新那趟**
+ * 的。接着清扫看见一条没人驱动的 `starting` 记录，按「重启遗留的孤儿」把正在冷启动的
+ * 新预览杀了。一次五分钟一轮的清扫撞上一次八分钟的启动，这不是理论上的窗口。
  */
-const starting = new Set<string>();
+const starting = new Map<string, Set<string>>();
+
+/** 这一趟（taskId + 代号）开始由本进程驱动。 */
+function beginDriving(taskId: string, gen: string): void {
+  const gens = starting.get(taskId) ?? new Set<string>();
+  gens.add(gen);
+  starting.set(taskId, gens);
+}
+
+/** 这一趟结束了。**只撤自己那一代** —— 见 starting 上面的说明。 */
+function endDriving(taskId: string, gen: string): void {
+  const gens = starting.get(taskId);
+  if (!gens) return;
+  gens.delete(gen);
+  if (!gens.size) starting.delete(taskId);
+}
+
+/** 这一代此刻还有人驱动吗。清扫靠它区分「正在启动」和「上一条命留下的孤儿」。 */
+function driving(taskId: string, gen: string | undefined): boolean {
+  return gen !== undefined && (starting.get(taskId)?.has(gen) ?? false);
+}
 
 /**
  * 这个任务的预览是不是正在启动（还没就绪）。给日志接口判断要不要续读用。
@@ -293,6 +325,12 @@ const starting = new Set<string>();
  */
 export function isPreviewStarting(taskId: string): boolean {
   return starting.has(taskId) || readAnyPreview(taskId)?.state === "starting";
+}
+
+/** 盘上那条「正在启动」的记录（给路由/状态用：它是不是该显示成「可以关掉」）。 */
+export function previewStartingRecord(taskId: string): PreviewRecord | null {
+  const record = readAnyPreview(taskId);
+  return record?.state === "starting" ? record : null;
 }
 
 export type PreviewResult =
@@ -309,11 +347,14 @@ export async function startPreview(
   step: PreviewStep,
   cwd: string,
 ): Promise<PreviewResult> {
-  starting.add(taskId);
+  // 代号在这儿生成而不是在里面：进出内存表和写盘记录用的必须是同一个，否则「谁在驱动
+  // 这一代」就对不上（见 starting）。
+  const gen = randomUUID();
+  beginDriving(taskId, gen);
   try {
-    return await runPreview(taskId, step, cwd);
+    return await runPreview(taskId, step, cwd, gen);
   } finally {
-    starting.delete(taskId);
+    endDriving(taskId, gen);
   }
 }
 
@@ -321,6 +362,7 @@ async function runPreview(
   taskId: string,
   step: PreviewStep,
   cwd: string,
+  gen: string,
 ): Promise<PreviewResult> {
   await stopPreview(taskId, null);
   const dir = join(RUNS_DIR, taskId);
@@ -337,11 +379,15 @@ async function runPreview(
   // **落盘的第一件事**：一条「正在启动」的记录（理由见 PreviewRecord.state）。它先于
   // 装依赖和 spawn，因为要被杀掉的恰恰是这两段 —— 一趟启动最长可以是「装 6 分钟 + 等
   // 2 分钟」，这八分钟里点关闭、任务续跑、server 重启，都得抓得住它。
-  const gen = randomUUID();
   writeRecord({
     taskId, cmd: step.p.cmd, pid: 0, url: null, port: null,
-    life: step.p.life, startedAt: now(), log, links: [], state: "starting", gen,
+    life: step.p.life, startedAt: now(), log, links: [], state: "starting", gen, installPid: null,
   });
+  // 发事件，界面才知道「这个任务此刻正在起预览」。不发的话，起预览这一路是**同步等**
+  // 到就绪的（最长八分钟），期间任何一个客户端（包括发起的那个刷新之后）都只看得到
+  // 「没在跑」，于是没有任何一处显示得出「关闭预览」——而这八分钟正是最该给一个取消入口
+  // 的时候。收掉/起来了各自也会发，三处一致。
+  bus.publish({ type: "task.review", taskId });
   // 起进程**之前**：这条命令要的 node 依赖不齐，就由 ash 自己在**项目之外**备一份挂进来
   // （怎么备、为什么必须在项目外，见 preview-deps.ts 顶部）。放在这儿有两个理由：banner
   // 已经落盘，所以 install 的输出直接进同一份预览日志，用户在弹窗里实时看得见（启动那一段
@@ -349,7 +395,15 @@ async function runPreview(
   //
   // 备不成不拦路：照常去跑那条命令，它会以 `vite: not found` 失败，那时下面的诊断拿着
   // 这里的失败理由给人工的下一步。用户填的命令也可能压根不需要 node 依赖。
-  const tried = await prepareNodeDeps(cwd, step.p.cmd, log);
+  // 装依赖的那个进程一起放进记录：它可以跑满六分钟，而这六分钟里的「关闭预览」必须
+  // 真的把它杀掉 —— 只删记录的话，包管理器和项目自己的 preinstall/postinstall 还在后台
+  // 跑，任务续跑的那一路更糟：新一轮已经在改同一个工作区了。
+  let installing = 0; // 手上这一份：记录可能已经被取消的那一下删掉了，这里还得杀得到它
+  const tried = await prepareNodeDeps(cwd, step.p.cmd, log, (installPid) => {
+    installing = installPid;
+    // 记录没了/换人了就说明这一趟已经被取消：那时它正等着我们自己收摊，别再往盘上写。
+    patchStart(taskId, gen, { installPid: installPid > 0 ? installPid : null });
+  });
   // 我们挂上去的那几条软链**只在预览活着的这段时间存在**：起不来就当场撤掉，挂上了就立刻
   // 记进 preview.json（那条「正在启动」的记录），由 stopPreview 撤（理由见 removePreparedLinks —— 用户敲 `git status`
   // 不该看见 ash 留下的东西）。依赖本体留在 data/deps，撤掉的只是入口，下次是秒挂。
@@ -370,6 +424,9 @@ async function runPreview(
    */
   const abandoned = (pid: number | null): PreviewResult => {
     if (pid !== null && pid > 0) killByPid(pid);
+    // 取消我们的那一下已经按记录杀过一轮装依赖的进程；这里再补一次是为了「记录里还没
+    // 来得及写下 installPid」那半拍。killByPid 对已经死掉的 pid 是空操作。
+    if (installing > 0) killByPid(installing);
     if (readAnyPreview(taskId) === null) removePreparedLinks(links);
     return { ok: false, reason: "预览启动被取消（关闭预览 / 任务重新开跑 / ash 重启）" };
   };
@@ -473,7 +530,7 @@ async function runPreview(
     // 起来了。**仍然要核对代号**：就绪判定本身要跑一趟 HTTP/连通性探测，那期间照样
     // 可能被取消，而这一步是把「正在启动」翻成「在跑」——写早了就是死灰复燃。
     const record = patchStart(taskId, gen, {
-      pid, url: found.url, port: found.port, links, state: "ready", startedAt: now(),
+      pid, url: found.url, port: found.port, links, state: "ready", startedAt: now(), installPid: null,
     });
     if (record === null) return abandoned(pid);
     return { ok: true, record };
@@ -492,6 +549,8 @@ export async function stopPreview(taskId: string, reason: string | null): Promis
   // 不先看组长是否还活着：组长死、vite 仍留在同一进程组，正是必须回收的现场。
   // pid 为 0 = 还没 spawn，`kill(0, …)` 打的是**自己这一组**，绝不能放过去。
   if (record.pid > 0) killByPid(record.pid);
+  // 还在装依赖的话，要收的是**它**：这时候还没有 dev server，pid 是 0。
+  if (record.installPid && record.installPid > 0) killByPid(record.installPid);
   removePreparedLinks(record.links ?? []);
   rmSync(recordPath(taskId), { force: true });
   if (reason) await appendTaskTimeline(taskId, `预览已回收（${reason}）：${record.url ?? record.cmd}`);
@@ -549,11 +608,13 @@ export async function sweepPreviews(): Promise<void> {
       continue;
     }
     if (record.state === "starting") {
-      // 「正在启动」只有本进程的 startPreview 在驱动，而它一定同时记在内存那张表里。
-      // 表里没有 = 驱动它的那个 server 已经不在了（重启/被杀），这条记录再也不会有人
-      // 收尾：它的子进程可能还活着（detached 的），软链也还挂在用户工作区里。
-      if (starting.has(taskId)) continue;
+      // 「正在启动」只有本进程的 startPreview 在驱动，而它一定同时记着自己的代号。
+      // **按代号问**，不是按任务问：两趟启动重叠时按任务问会把新那趟错判成孤儿杀掉
+      // （见 starting）。这一代没人驱动 = 驱动它的那个 server 已经不在了（重启/被杀），
+      // 这条记录再也不会有人收尾：它的子进程可能还活着（detached 的），软链也还挂着。
+      if (driving(taskId, record.gen)) continue;
       if (record.pid > 0) killByPid(record.pid);
+      if (record.installPid && record.installPid > 0) killByPid(record.installPid);
       removePreparedLinks(record.links ?? []);
       rmSync(recordPath(taskId), { force: true });
       await appendTaskTimeline(taskId, `预览没能起完就中断了（ash 重启），已经清理：${record.cmd}`);

@@ -39,7 +39,12 @@ try {
   // ① 启动请求挂着不回（现场里它可以挂两分钟），入口必须已经在。
   await open.click();
   await page.getByTestId("preview-log-open").waitFor({ timeout: 3000 });
-  assert.equal(await page.getByRole("button", { name: "处理中" }).count(), 1, "这一刻启动请求还挂着");
+  // 启动请求还挂着 —— 而这一段（装依赖 6 分钟 + 等就绪 2 分钟）必须有一颗**能点的取消**，
+  // 不是一颗灰着的「处理中」：后端此刻确实收得掉（记录、pid、正在装依赖的进程都在盘上），
+  // 界面点不到就等于那套取消不存在。
+  const cancel = page.getByRole("button", { name: "启动中·点此取消" });
+  assert.equal(await cancel.count(), 1, "这一刻启动请求还挂着");
+  assert.equal(await cancel.isDisabled(), false, "启动中那颗必须是能点的");
 
   // ② 弹窗开轮询：第一次 GET 报的是「没在跑」（后端还没走到 startPreview），
   //    它仍然要接着看下去，正文得自己变长。
@@ -61,6 +66,20 @@ try {
   assert.match(await body.textContent() ?? "", /npm run dev/, "命令回显那一行也该在");
 
   if (process.env.PREVIEW_LOG_SHOT) await page.screenshot({ path: process.env.PREVIEW_LOG_SHOT });
+
+  // ②b 点下去要真的发 DELETE，并且启动那一路随之收场：界面回到「打开预览」。
+  await page.getByRole("button", { name: "关闭预览日志" }).click();
+  await cancel.click();
+  await page.waitForFunction(
+    () => document.querySelector("[data-testid=notices]")?.textContent?.includes("已取消启动预览") ?? false,
+    null,
+    { timeout: 8000 },
+  );
+  await page.waitForFunction(
+    () => [...document.querySelectorAll("button")].some((b) => b.textContent?.includes("打开预览")),
+    null,
+    { timeout: 8000 },
+  );
 
   // ③ spawn 之前就 409：多候选时 resolvePreviewCommand 直接抛，一条命令都没跑过，
   //    盘上没有日志文件。那颗乐观按钮必须跟着收回去。
