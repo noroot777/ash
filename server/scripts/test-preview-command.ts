@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { detectPreviewCandidates, resolvePreviewCommand, ambiguousMessage, PORT_ENV_ALIASES } from "../src/preview-command.js";
 import { previewShell } from "../src/preview-shell.js";
+import { userShellLaunch } from "../src/platform.js";
 
 let failures = 0;
 function check(name: string, actual: unknown, expected: unknown) {
@@ -220,7 +221,7 @@ try {
   const pnpmNode = dir("node-pnpm");
   pkg(pnpmNode, { dev: "vite" });
   file(pnpmNode, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
-  check("Node + pnpm", cmds(pnpmNode), ["pnpm run dev -- --port $PORT"]);
+  check("Node + pnpm（pnpm 不要那个 `--`，它会把分隔符也透传给脚本）", cmds(pnpmNode), ["pnpm run dev --port $PORT"]);
   const yarnNode = dir("node-yarn");
   pkg(yarnNode, { start: "node server.js" });
   file(yarnNode, "yarn.lock", "");
@@ -259,12 +260,12 @@ try {
   check("多模块 + 前端：一个都不漏，库模块不算", cmds(mono).sort(), [
     "cd a4sms-back && mvn -pl a4sms-icis spring-boot:run",
     "cd a4sms-back && mvn -pl a4sms-wms spring-boot:run",
-    "cd a4sms-front && pnpm run dev -- --port $PORT",
+    "cd a4sms-front && pnpm run dev --port $PORT",
   ]);
   const monoError = failure(mono);
   checkIncludes("说清楚为什么不替你挑", monoError, "认出了 3 个能起服务的东西");
   checkIncludes("Maven 模块按 Java 的说法列", monoError, "cd a4sms-back && mvn -pl a4sms-icis spring-boot:run");
-  checkIncludes("前端那条也在", monoError, "cd a4sms-front && pnpm run dev -- --port $PORT");
+  checkIncludes("前端那条也在", monoError, "cd a4sms-front && pnpm run dev --port $PORT");
   checkIncludes("告诉他去哪儿填", monoError, "项目设置 → 预览命令");
   check("整段话里不提 package.json", monoError.includes("package.json"), false);
   checkIncludes("多模块首次要装依赖模块的写法也给了", monoError, "-am install -DskipTests");
@@ -279,7 +280,7 @@ try {
   );
   checkIncludes("第二个后端顺延到 $PORT3", monoError, "SERVER_PORT=$PORT3 mvn -pl a4sms-wms spring-boot:run");
   // `( … &)` 后面必须有分隔符，否则整条命令是语法错误 —— 这条是直接给人粘走的。
-  checkIncludes("要看的那个放最后，吃 $PORT", monoError, "&) ; cd a4sms-front && pnpm run dev -- --port $PORT");
+  checkIncludes("要看的那个放最后，吃 $PORT", monoError, "&) ; cd a4sms-front && pnpm run dev --port $PORT");
   checkIncludes("并说清楚前端怎么拿到后端地址", monoError, "$URL2");
   // 「像是对的」不算数：这条命令是给人直接粘走的，得真能被 shell 解析。少一个分隔符
   // 就是 `syntax error near unexpected token` —— 用户粘过去连一个字节都跑不了。
@@ -301,7 +302,7 @@ try {
   // sidekick 的两种端口口径各走各的：认环境变量的换变量后面的值（名字和格式还各家不同），
   // 端口写在命令行里的换命令里的 $PORT。
   const nodeSide = detectPreviewCandidates(pnpmNode)[0];
-  check("vite 配角照样走参数", nodeSide.sidekick(2), "(pnpm run dev -- --port $PORT2 &)");
+  check("vite 配角照样走参数", nodeSide.sidekick(2), "(pnpm run dev --port $PORT2 &)");
   const nextSide = detectPreviewCandidates(nextNode)[0];
   check("认 PORT 的配角用 PORT=", nextSide.sidekick(2), "(PORT=$PORT2 npm run dev &)");
   const djangoSide = detectPreviewCandidates(django)[0];
@@ -351,11 +352,11 @@ try {
   // 也全是 POSIX 的写法。所以生成命令时一行 shell 语法都不能写死。
   const win = previewShell("win32");
   const winCmds = (p: string) => detectPreviewCandidates(p, win).map((c) => c.command);
-  check("Windows 上端口是 %PORT%", winCmds(pnpmNode), ["pnpm run dev -- --port %PORT%"]);
+  check("Windows 上端口是 %PORT%", winCmds(pnpmNode), ["pnpm run dev --port %PORT%"]);
   check("Django 同理", winCmds(django), ["python manage.py runserver 0.0.0.0:%PORT%"]);
   check("Windows 上 python 就叫 python", winCmds(django)[0].startsWith("python "), true);
   check("Rails 的路径分隔符也跟着换", winCmds(rails), ["bin\\rails server -p %PORT%"]);
-  check("进子目录用 cd /d", winCmds(mono).includes("cd /d a4sms-front && pnpm run dev -- --port %PORT%"), true);
+  check("进子目录用 cd /d", winCmds(mono).includes("cd /d a4sms-front && pnpm run dev --port %PORT%"), true);
   check("带空格的目录用双引号", winCmds(spaced), ["cd /d \"web app\" && npm run dev -- --port %PORT%"]);
   check(
     "配角开独立 cmd 会话，免得 cd/set 漏给主角",
@@ -364,7 +365,7 @@ try {
   );
   const winMono = ambiguousMessage(detectPreviewCandidates(mono, win), win);
   checkIncludes("Windows 的组合示例用 start /b 和 &", winMono, "start \"\" /b cmd /c \"cd /d a4sms-back && set SERVER_PORT=%PORT2%");
-  checkIncludes("要看的那个仍在最后", winMono, "& cd /d a4sms-front && pnpm run dev -- --port %PORT%");
+  checkIncludes("要看的那个仍在最后", winMono, "& cd /d a4sms-front && pnpm run dev --port %PORT%");
   check("整段 Windows 文案里不出现 $PORT", /\$PORT/.test(winMono), false);
   // 内层再套引号 cmd 没有可靠写法：那种情况宁可不给示例，也不给一条粘过去就坏的。
   const winSpacedBack = dir("win-spaced");
@@ -406,6 +407,48 @@ try {
   file(dir("noisy", "target", "classes"), "pom.xml", BOOT_POM);
   pkg(dir("noisy", ".cache", "thing"), { dev: "vite" });
   check("产物/依赖目录不参与识别", cmds(noisy), ["npm run dev -- --port $PORT"]);
+
+  // ================= 真跑一遍各家包管理器：脚本到底收到了什么 =================
+  // 上面全是字符串断言，而这条命令**唯一的用途**是被真的 pnpm/npm 执行。两家的规矩正好
+  // 相反，只对字符串是看不出来的：
+  //   · `npm run dev --port 3000` → 脚本收到 ["3000"]（`--port` 被 npm 吃了当配置）
+  //   · `pnpm run dev -- --port 3000` → 脚本收到 ["--","--port","3000"]（分隔符也透传）
+  // 后一条正是原目标项目一直起在写死的 4000 上、吃不到 ash 借的随机端口的原因：vite 收到
+  // 一个多余的 `--` 就不认后面那个 `--port` 了。所以这里放一个假 vite 进 `.bin`，把生成的
+  // 命令原样交给真包管理器跑，看脚本最后到手的是什么。
+  const argvProbe = dir("argv-probe");
+  const probeBin = dir("argv-probe", "node_modules", ".bin");
+  writeFileSync(
+    join(probeBin, "vite"),
+    `#!/bin/sh\nexec "${process.execPath}" -e "console.log('ARGV='+JSON.stringify(process.argv.slice(1)))" -- "$@"\n`,
+    { mode: 0o755 },
+  );
+  for (const pm of ["npm", "pnpm", "yarn"] as const) {
+    const lock = { npm: "package-lock.json", pnpm: "pnpm-lock.yaml", yarn: "yarn.lock" }[pm];
+    // 这台机器上没装就跳过，并且**把跳过说出来**：静默跳过读起来跟「测过了」一模一样。
+    // cwd 一定要给夹具目录：corepack 会照**当前目录**往上找 packageManager 声明，
+    // 在 ash 仓库里跑会被自己的 devEngines 范围声明卡住（那跟被测的东西毫无关系）。
+    try { execFileSync(pm, ["--version"], { cwd: argvProbe, stdio: "ignore" }); } catch {
+      console.log(`- 跳过 ${pm}：这台机器上没装（它的透传规矩没在这轮被真跑验证）`);
+      continue;
+    }
+    writeFileSync(join(argvProbe, lock), "");
+    pkg(argvProbe, { dev: "vite" });
+    const generated = cmds(argvProbe)[0] ?? "";
+    const line = generated.replace("$PORT", "45123");
+    const launch = userShellLaunch(line);
+    let out = "";
+    try {
+      out = execFileSync(launch.file, launch.args, {
+        cwd: argvProbe, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+        env: { ...process.env, npm_config_audit: "false", npm_config_fund: "false" },
+      });
+    } catch (error) {
+      out = String((error as { stdout?: string }).stdout ?? "");
+    }
+    check(`${pm}：脚本真正收到的参数`, /ARGV=(.+)/.exec(out)?.[1], JSON.stringify(["--port", "45123"]));
+    rmSync(join(argvProbe, lock));
+  }
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

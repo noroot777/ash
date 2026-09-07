@@ -336,10 +336,10 @@ async function runPreview(
     const text = tail(log, banner);
     if (text.includes(UNSAFE_SCHEDULER_LOG)) {
       killByPid(pid);
-      return {
-        ok: false,
-        reason: "这个分支的预览后端启动了真调度器，安全协议过旧，已立即回收。请先把当前分支同步到新版预览隔离逻辑。",
-      };
+      // 走 failed()，不是裸 return：**每一条失败出口都得把我们挂的软链撤掉**。这条安全
+      // 拒绝原来是裸的，于是「被拒绝」这一次会在用户工作区里永久留下一条 node_modules
+      // 软链 —— 而且 preview.json 不会写，事后没有任何线索能找回来撤它。
+      return failed("这个分支的预览后端启动了真调度器，安全协议过旧，已立即回收。请先把当前分支同步到新版预览隔离逻辑。");
     }
     // 日志里认不出地址时，还有最后一条不依赖日志的线索：**端口是我们借出去的**。
     // 借出去之前刚 listen(0) 探过它是空的，此刻连得上就只能是这条命令自己起的进程。
@@ -459,6 +459,9 @@ export async function sweepPreviews(): Promise<void> {
     if (!alive(record.pid)) {
       // 记录的组长死了也要向原进程组补发信号；直接删记录会永久失去唯一的 pgid 线索。
       killByPid(record.pid);
+      // 软链同理，而且**更没有第二次机会**：记录一删，`record.links` 就是最后一份线索，
+      // 此后 stopPreview 再也找不到该撤什么，那条链会永久留在用户的工作区里。
+      removePreparedLinks(record.links ?? []);
       rmSync(recordPath(taskId), { force: true });
       await appendTaskTimeline(taskId, `预览进程已自行退出：${record.url ?? record.cmd}`);
       continue;

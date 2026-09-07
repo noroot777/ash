@@ -27,7 +27,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   appendFileSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, openSync,
-  readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync,
+  readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { augmentedEnv } from "./executors/bin-resolve.js";
@@ -71,6 +71,22 @@ const SKIP_DIRS = new Set(["node_modules", "target", "dist", "build", "out", "ve
 
 /** 装一次最多等多久。装不完就算了，退回人工建议 —— 总比让「打开预览」无限期挂着强。 */
 const INSTALL_TIMEOUT_MS = 6 * 60_000;
+
+/**
+ * 「这份缓存装完了」的标记。**判据不能是「node_modules 非空」**：那样一份正装到一半的
+ * 树会被并发的另一个任务当成可用（见 build 的说明）。标记在 rename 之前写进临时目录，
+ * 所以它出现在缓存位置的那一刻，整棵树已经是完整的。
+ */
+const READY_MARK = ".ash-deps-ready";
+
+/** 装到一半的那份长这样 —— 前缀固定，好让 pruneNodeDeps 认出崩溃留下的残骸。 */
+const TEMP_SUFFIX = ".installing.";
+let tempSeq = 0;
+
+/** 这个缓存目录装完了吗。 */
+function ready(cache: string): boolean {
+  return existsSync(join(cache, READY_MARK)) && populated(join(cache, "node_modules"));
+}
 
 /**
  * 任务 worktree 对应的主仓。
@@ -359,36 +375,85 @@ async function prepareOne(one: NodeDepsAdvice, logPath: string): Promise<NodeDep
   const cache = cacheDir(one.rel, one.pm, manifest, lock);
   const cached = join(cache, "node_modules");
 
-  // ② 之前装过同样内容的一份
-  if (populated(cached)) {
+  // ② 之前装好过同样内容的一份
+  if (ready(cache)) {
     touch(cache); // 「最后一次用是什么时候」——pruneNodeDeps 按它决定谁该被清掉
     return linkTo(cached, `复用 ash 之前备好的依赖（${cached}）`);
   }
 
   // ③ 现装。**只从项目里读**：清单和锁文件复制过去，install 改写的是那份拷贝。
-  try {
-    rmSync(cache, { recursive: true, force: true });
-    mkdirSync(cache, { recursive: true });
-    copyFileSync(join(one.dir, "package.json"), join(cache, "package.json"));
-    for (const name of [lockName, ...EXTRA_FILES]) {
-      const from = join(one.dir, name);
-      if (existsSync(from)) copyFileSync(from, join(cache, name));
-    }
-  } catch (error) {
-    return fail(`没能把 package.json 复制到 ${cache}：${error instanceof Error ? error.message : String(error)}`);
-  }
-  const error = await install(one.pm, cache, logPath);
-  if (error) {
-    // 半截的树留着只会让下次「复用」到一堆残缺依赖 —— 内容哈希认不出「装了一半」。
-    rmSync(cache, { recursive: true, force: true });
-    return fail(`在项目外装依赖没成功（${one.pm}）：${error}`);
-  }
-  if (!populated(cached)) {
-    rmSync(cache, { recursive: true, force: true });
-    return fail(`${one.pm} install 说成功了，却没装出 node_modules`);
-  }
+  const error = await once(cache, () => build(one, cache, lockName, logPath));
+  if (error) return fail(error);
   touch(cache);
   return linkTo(cached, `ash 已在项目外装好依赖（${cached}，你的项目没有被写）`);
+}
+
+/**
+ * 真正装那一趟：**装在一个临时目录里，装完了才 rename 到缓存位置**。
+ *
+ * 直接往缓存目录里装是有代价的，而且代价在并发下必然兑现 —— 缓存的键是清单内容的哈希，
+ * 所以「两个任务同时第一次预览同一个前端」不是巧合，是正常路径：
+ *   · 判「装好没有」只看 node_modules 非空的话，第一个 install 刚落下第一个文件，第二个
+ *     就会认为「已经备好了」，挂上软链直接开进程 —— 拿着一棵**仍在长**的依赖树跑，症状是
+ *     随机的 module not found / `.bin` 里没有那个可执行文件。
+ *   · 更糟的是装之前那句 `rmSync(cache)`：第二个会把第一个正装到一半的目录**删掉**。
+ *
+ * 所以：临时目录里装 → 写一个完成标记 → 原子 rename。rename 到已存在的非空目录会失败，
+ * 那正好说明别人先装完了，用它们那份就是（先到先得，晚到的把自己那份丢掉）。判「装好没有」
+ * 只认完成标记，半截的树永远不会被当成可用。
+ */
+async function build(
+  one: NodeDepsAdvice,
+  cache: string,
+  lockName: string,
+  logPath: string,
+): Promise<string | null> {
+  const temp = `${cache}${TEMP_SUFFIX}${process.pid}-${tempSeq++}`;
+  try {
+    rmSync(temp, { recursive: true, force: true });
+    mkdirSync(temp, { recursive: true });
+    copyFileSync(join(one.dir, "package.json"), join(temp, "package.json"));
+    for (const name of [lockName, ...EXTRA_FILES]) {
+      const from = join(one.dir, name);
+      if (existsSync(from)) copyFileSync(from, join(temp, name));
+    }
+  } catch (error) {
+    rmSync(temp, { recursive: true, force: true });
+    return `没能把 package.json 复制到 ${temp}：${error instanceof Error ? error.message : String(error)}`;
+  }
+  const error = await install(one.pm, temp, logPath);
+  if (error || !populated(join(temp, "node_modules"))) {
+    rmSync(temp, { recursive: true, force: true });
+    return error
+      ? `在项目外装依赖没成功（${one.pm}）：${error}`
+      : `${one.pm} install 说成功了，却没装出 node_modules`;
+  }
+  try {
+    writeFileSync(join(temp, READY_MARK), `${one.pm}\n`);
+    renameSync(temp, cache);
+  } catch (moveError) {
+    rmSync(temp, { recursive: true, force: true });
+    // 挪不过去的正常原因只有一个：别人先装完了，那个位置已经被占。用它们那份。
+    if (ready(cache)) return null;
+    return `装好了却挪不到 ${cache}：${moveError instanceof Error ? moveError.message : String(moveError)}`;
+  }
+  return null;
+}
+
+/**
+ * 同一个进程里对同一个缓存目录只跑一趟。
+ *
+ * rename 那一层已经保证了正确性（谁先装完算谁的），这一层只是别做无用功：两个任务同时
+ * 点预览时不必把同一份依赖装两遍。跨进程（两个 ash 实例）仍然靠 rename 收口。
+ */
+const running = new Map<string, Promise<string | null>>();
+
+async function once(key: string, work: () => Promise<string | null>): Promise<string | null> {
+  const inFlight = running.get(key);
+  if (inFlight) return await inFlight;
+  const task = work().finally(() => running.delete(key));
+  running.set(key, task);
+  return await task;
 }
 
 /** 记一笔「最后一次用到它」。 */
@@ -399,6 +464,8 @@ function touch(dir: string): void {
 
 /** 备好的依赖多久没人用就清掉。 */
 const KEEP_MS = 30 * 24 * 60 * 60_000;
+/** 装到一半的残骸留多久（见 pruneNodeDeps）。 */
+const KEEP_TEMP_MS = 24 * 60 * 60_000;
 
 /**
  * 清掉长期没人用的那几份备用依赖。
@@ -415,7 +482,10 @@ export function pruneNodeDeps(): void {
   for (const name of entries) {
     const dir = join(DEPS_DIR, name);
     try {
-      if (Date.now() - statSync(dir).mtimeMs < KEEP_MS) continue;
+      // 装到一半的残骸（server 被杀在 install 中间）按天算，不按月：它谁也用不上，
+      // 却照样占着几百兆。一天的余量足够让一趟还在跑的 install 跑完（上限 6 分钟）。
+      const keep = name.includes(TEMP_SUFFIX) ? KEEP_TEMP_MS : KEEP_MS;
+      if (Date.now() - statSync(dir).mtimeMs < keep) continue;
       rmSync(dir, { recursive: true, force: true });
     } catch { /* 清不掉就下次再说 */ }
   }

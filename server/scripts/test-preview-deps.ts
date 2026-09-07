@@ -291,6 +291,53 @@ try {
   removePreparedLinks([realDir]);
   check("真目录一律不动", existsSync(realDir), true);
 
+  // ⑤b2 **并发**：缓存的键是清单内容的哈希，所以「两个任务同时第一次预览同一个前端」
+  //      不是巧合，是正常路径。原来判「装好没有」只看 node_modules 非空 —— 第一个 install
+  //      刚落下第一个文件，第二个就会挂软链开跑，拿着一棵仍在长的树；更糟的是装之前那句
+  //      rmSync 会把对方正装到一半的目录删掉。现在装在临时目录里、装完写标记再原子 rename。
+  const slowBin = dir("slowbin");
+  writeFileSync(
+    join(slowBin, "npm"),
+    // 先落一个文件（旧判据在这一刻就会认为「装好了」），2 秒后才补齐 .bin
+    "#!/bin/sh\nmkdir -p node_modules/half\nsleep 2\nmkdir -p node_modules/.bin\n"
+      + "touch node_modules/.bin/done\n",
+    { mode: 0o755 },
+  );
+  const parallelPkg = JSON.stringify({ name: "front", version: "1.0.0", private: true });
+  const twoTasks = ["wt-race-a", "wt-race-b"].map((name) => {
+    const repoDir = dir(`${name}-repo`);
+    mkdirSync(join(repoDir, ".git"), { recursive: true });
+    const wtDir = worktreeOf(repoDir, name);
+    file(dir(name, "front"), "package.json", parallelPkg);
+    return wtDir;
+  });
+  const raceLog = join(root, "race.log");
+  writeFileSync(raceLog, "");
+  const path0 = process.env.PATH;
+  process.env.PATH = `${slowBin}:${path0 ?? ""}`;
+  const depsDir = join(root, "deps");
+  const before = readdirSync(depsDir);
+  try {
+    const first = prepareNodeDeps(twoTasks[0], "cd front && npm run dev", raceLog);
+    await new Promise((r) => setTimeout(r, 700)); // 让第一趟装到一半
+    const midway = readdirSync(depsDir).filter((n) => !before.includes(n));
+    check("装到一半时只有临时目录", midway.every((n) => n.includes(".installing.")), true);
+    check("而且确实有一个在装", midway.length > 0, true);
+    const second = prepareNodeDeps(twoTasks[1], "cd front && npm run dev", raceLog);
+    const [a, b] = await Promise.all([first, second]);
+    check("两个都成了", [a[0]?.ok, b[0]?.ok], [true, true]);
+    // 关键断言：第二个拿到的树必须是**装完的**那棵，不是半截的。
+    for (const [i, wtDir] of twoTasks.entries()) {
+      check(`第 ${i + 1} 个任务拿到的是完整的树`, existsSync(join(wtDir, "front", "node_modules", ".bin", "done")), true);
+    }
+    const after = readdirSync(depsDir).filter((n) => !before.includes(n));
+    check("装完了不留临时目录", after.filter((n) => n.includes(".installing.")), []);
+    check("同样的内容只留一份缓存", after.length, 1);
+  } finally {
+    process.env.PATH = path0;
+  }
+  removePreparedLinks(twoTasks.map((w) => join(w, "front", "node_modules")));
+
   // ⑤c 长期没人用的那几份要清掉：一份前端依赖几百兆，涨的是**用户的磁盘**。
   const deps = join(root, "deps");
   const cached = readdirSync(deps);

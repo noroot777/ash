@@ -12,9 +12,15 @@ import { fileURLToPath } from "node:url";
 const root = mkdtempSync(join(tmpdir(), "ash-preview-process-"));
 process.env.ASH_RUNS_DIR = join(root, "runs");
 process.env.ASH_DEPS_DIR = join(root, "deps");
+// 这条测试会调 sweepPreviews()，而清扫会读库（「这个任务还在不在」）。指一份空库过去：
+// 拿正式库跑既会打出一串 SQL 报错，也没道理让一条预览测试碰用户的数据。
+process.env.ASH_DB = join(root, "ash.db");
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
-const { startPreview, stopPreview, readPreview, isPreviewStarting } = await import("../src/preview.js");
+const { startPreview, stopPreview, sweepPreviews, readPreview, isPreviewStarting } = await import("../src/preview.js");
+// 清扫要读库（「这个任务还在不在」）。建好空表就够了 —— 没有任何任务行，正是「这些
+// taskId 都不在库里」的自然表达。
+await (await import("../src/db/index.js")).ensureSchema();
 const { PORT_ENV_ALIASES, PORT_SLOT } = await import("../src/preview-command.js");
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -34,6 +40,10 @@ async function freePort(host = "127.0.0.1"): Promise<number> {
 
 async function reachable(url: string): Promise<boolean> {
   return await fetch(url).then(() => true).catch(() => false);
+}
+
+function isAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
 function killGroup(pid: number | undefined): void {
@@ -385,6 +395,58 @@ try {
     }
     await stopPreview("fresh-task", null);
     assert.equal(existsSync(join(wt2, "front", "node_modules")), false, "收掉预览后 ash 挂的软链还在");
+
+    // 撤软链这件事**每一条出口都要做到**，不是只有「正常停止」那一条。下面两条原来是漏的，
+    // 而它们漏掉的后果比一般失败更重：链会永久留在用户的工作区里，而且没有任何线索能补撤。
+
+    // ① 安全拒绝（日志里出现旧协议的调度器）。原来这一支是裸 return，链留下、preview.json
+    //    又不会写 —— 事后 stopPreview 连该撤什么都不知道。
+    const unsafeWt = join(root, "unsafe-wt");
+    mkdirSync(join(unsafeWt, "front"), { recursive: true });
+    writeFileSync(join(unsafeWt, ".git"), `gitdir: ${join(repo2, ".git", "worktrees", "unsafe-wt")}\n`);
+    writeFileSync(join(unsafeWt, "front", "package.json"), JSON.stringify({
+      name: "front", version: "1.0.0", private: true,
+      scripts: { dev: "node -e \"console.log('[ash] scheduler started');setInterval(()=>{},1000)\"" },
+      dependencies: { fakedep: `file:${dep}` },
+    }));
+    const unsafe = await startPreview("unsafe-task", {
+      id: "unsafe", kind: "preview",
+      p: { cmd: "cd front && npm run dev", mode: "frontend", ready: "port", life: "gate" },
+    } as never, unsafeWt);
+    assert.equal(unsafe.ok, false, "旧协议的调度器必须被拒");
+    assert.equal(
+      existsSync(join(unsafeWt, "front", "node_modules")),
+      false,
+      "安全拒绝这条出口也必须把 ash 挂的软链撤掉",
+    );
+
+    // ② 起来之后服务自己退出，由清扫收尾。清扫会**删掉 preview.json**——`record.links` 是
+    //    最后一份线索，那一刻不撤就永远撤不掉了。
+    const exitWt = join(root, "exit-wt");
+    mkdirSync(join(exitWt, "front"), { recursive: true });
+    writeFileSync(join(exitWt, ".git"), `gitdir: ${join(repo2, ".git", "worktrees", "exit-wt")}\n`);
+    writeFileSync(join(exitWt, "front", "package.json"), JSON.stringify({
+      name: "front", version: "1.0.0", private: true,
+      scripts: {
+        dev: "node -e \"const s=require('http').createServer((q,r)=>r.end('bye'))"
+          + ".listen(process.env.PORT);setTimeout(()=>process.exit(0),1500)\"",
+      },
+      dependencies: { fakedep: `file:${dep}` },
+    }));
+    const selfExit = await startPreview("exit-task", {
+      id: "exit", kind: "preview",
+      p: { cmd: "cd front && npm run dev", mode: "frontend", ready: "port", life: "gate" },
+    } as never, exitWt);
+    assert.ok(selfExit.ok, "这一步要先真的起来，才谈得上「起来之后自己退出」");
+    assert.deepEqual(selfExit.record.links, [join(exitWt, "front", "node_modules")]);
+    await waitFor(() => readPreview("exit-task") !== null && !isAlive(selfExit.record.pid), "服务没有自行退出");
+    await sweepPreviews();
+    assert.equal(readPreview("exit-task"), null, "清扫应当把死掉的记录收走");
+    assert.equal(
+      existsSync(join(exitWt, "front", "node_modules")),
+      false,
+      "清扫删记录的同时必须撤掉 ash 挂的软链（记录一删就没有第二次机会了）",
+    );
   }
 } finally {
   rmSync(root, { recursive: true, force: true });

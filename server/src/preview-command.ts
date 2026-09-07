@@ -204,9 +204,17 @@ function nodeCandidates(shell: PreviewShell, dir: string, rel: string): PreviewC
   const pm = has(dir, "pnpm-lock.yaml") ? "pnpm" : has(dir, "yarn.lock") ? "yarn" : "npm";
   const base = pm === "yarn" ? `yarn ${script}` : `${pm} run ${script}`;
   const label = `${where(rel)}（Node · ${pm} ${script}）`;
-  // npm / pnpm 要一个 `--` 才把后面的参数交给脚本本身；yarn 1 直接透传。
+  // 参数怎么交给脚本，**三家的规矩各不相同**（都是实测，见 test:preview-command 末尾那段
+  // 真跑各家包管理器的回归）：
+  //   · npm  `npm run dev --port 3000` → 脚本只收到 `["3000"]`（`--port` 被 npm 自己吃掉
+  //     当成配置了），必须写 `npm run dev -- --port 3000` 才是 `["--port","3000"]`。
+  //   · pnpm 反过来：`pnpm run dev --port 3000` 就是 `["--port","3000"]`，多写一个 `--`
+  //     反而**把分隔符本身也透传给脚本** —— 实测 `["--","--port","3000"]`。vite 收到一个
+  //     多余的 `--` 后就不认后面那个 `--port` 了，于是 ash 借的随机端口白借：它照配置里
+  //     写死的端口起，撞车（a4sms-front 就是这样一直起在 4000 上）。
+  //   · yarn 1 直接透传，不要 `--`。
+  const command = pm === "npm" ? `${base} -- --port {port}` : `${base} --port {port}`;
   if (portArgTool(body)) {
-    const command = pm === "yarn" ? `${base} --port {port}` : `${base} -- --port {port}`;
     return one(candidate(shell, label, rel, command, INLINE, "web"));
   }
   return one(candidate(shell, label, rel, base, envPort("PORT"), "web"));
