@@ -22,7 +22,7 @@ import { augmentedEnv, killByPid, withoutForeignNodeBins } from "./executors/spa
 import { RUNS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
 import { portConflict, pickPreviewUrl, portHint, missingDepsHint } from "./preview-log.js";
-import { PORT_ENV_ALIASES } from "./preview-command.js";
+import { PORT_ENV_ALIASES, PORT_SLOT } from "./preview-command.js";
 import { canConnect, ready } from "./preview-probe.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -124,7 +124,7 @@ function portEnv(ports: number[]): Record<string, string> {
   const [primary, ...rest] = ports;
   if (!primary) return {};
   const env: Record<string, string> = {};
-  for (const alias of PORT_ENV_ALIASES) env[alias.name] = alias.template.replaceAll("$PORT", String(primary));
+  for (const alias of PORT_ENV_ALIASES) env[alias.name] = alias.template.replaceAll(PORT_SLOT, String(primary));
   rest.forEach((port, index) => {
     env[`PORT${index + 2}`] = String(port);
     env[`URL${index + 2}`] = `http://localhost:${port}`;

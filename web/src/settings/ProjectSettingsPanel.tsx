@@ -8,6 +8,7 @@ import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { PathHealthStatus, useDebouncedPathHealth } from "./PathHealthStatus.tsx";
 import { ProjectGitSettings } from "./ProjectGitSettings.tsx";
 import { WorkflowPicker, useWorkflows } from "../workflow/WorkflowPicker.tsx";
+import { useHostInfo } from "../lib/useHostInfo.ts";
 
 // 改名 / 改目录 / 默认起手式 / 删除项目都是**项目设置**,按权限表只给项目管理员与实例
 // 管理员(§四)。后端本来就会 403,但把必然失败的控件摆在成员面前,他只会以为是自己点坏了
@@ -33,6 +34,7 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
   // **仍可尝试提交**」—— 对一个提交不了的人说的完全是反话。传空串 = 根本不发这个请求。
   const pathHealth = useDebouncedPathHealth(canManage ? repoPath : "");
   const workflows = useWorkflows();
+  const host = useHostInfo();
   // 多人模式下项目默认起手式只收系统自带那几条:自建的是个人资源,别人看不见,设成项目
   // 默认只会让别人的新任务**静默**落回系统默认(后端同样这么挡,见 project-routes.ts)。
   const pickable = state.mode === "multi" ? workflows.filter((item) => item.builtin) : workflows;
@@ -40,11 +42,21 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
   // 库还没拉到之前(workflows 为空)不下这个结论,否则每次进页面都先闪一句假警报。
   const legacyDefault = !!project.workflowId && workflows.length > 0
     && !pickable.some((item) => item.id === project.workflowId);
+  // 依赖是 **project.id**，不是整个 project：这三个输入框是编辑中的草稿，只有「换了一个
+  // 项目」才该被冲掉。以整个对象为依赖时，任何一次**对象身份变化**都会重置它们 ——
+  // WorkspaceShell 拿到项目健康结果就会 `{...project, health}` 换一个新对象，而那个请求
+  // 在进页面时发一次、之后每有任务结算（settlementVersion）还会再发。症状是：用户正在
+  // 输预览命令，两三秒后输入框自己空了、保存按钮变灰，全程没有任何提示，看上去就是
+  // 「这个框坏了」。名称和目录同样会被吞掉。
+  //
+  // 代价是「别人在服务端改了这个项目、而我正开着设置页」时我这边不跟着刷新 —— 那是显示
+  // 得旧一点，比静默吞掉用户刚敲的字轻得多。
   useEffect(() => {
     setName(project.name);
     setRepoPath(project.repoPath);
     setPreviewCommand(project.previewCommand ?? "");
-  }, [project]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
   const dirty = name.trim() !== project.name || repoPath.trim() !== project.repoPath;
   const previewDirty = previewCommand.trim() !== (project.previewCommand ?? "");
   const save = async () => {
@@ -75,6 +87,16 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
     try { await api.deleteProject(project.id); onDeleted(); }
     catch (error) { notify(error instanceof Error ? error.message : "项目删除失败"); setBusy(false); }
   };
+  // 预览命令是交给 **server 那台机器**的 shell 跑的（POSIX 是 `sh -lc`，Windows 是
+  // `cmd /d /s /c`），所以这段说明也得按那台机器的方言写：cmd 只认 `%PORT%`，`$PORT`
+  // 在那边是个字面量；后台任务、分隔符同理。照着一份 POSIX 文案抄下去的用户，在
+  // Windows 上会得到一条必然起不来的命令，而且从报错里看不出是文案的锅。
+  // 拿不到 host 信息时按 POSIX 说（绝大多数部署如此），不空着也不猜。
+  const isWindows = host?.platform === "win32";
+  const ref = (name: string) => isWindows ? `%${name}%` : `$${name}`;
+  const combinedHint = isWindows
+    ? `start "" /b cmd /c "cd /d back && set SERVER_PORT=%PORT2%&&mvn spring-boot:run" & cd /d front && set VITE_APP_API_URL=%URL2%&&pnpm run dev -- --port %PORT%`
+    : "(cd back && SERVER_PORT=$PORT2 mvn spring-boot:run &) ; cd front && VITE_APP_API_URL=$URL2 pnpm run dev -- --port $PORT";
   return (
     <>
       <header className="settings-heading"><div><h1>项目设置</h1><p>项目目录是所有任务的默认运行位置，也是 worktree 与 diff 的根。</p></div></header>
@@ -136,12 +158,13 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
           <code className="mono">bin/rails</code>、Node 的 dev / start 脚本。<b>认出恰好一个才自动用</b>；前后端并排、Maven 多模块各带一个应用这种，它不替你挑，
           会把认出来的都列给你，挑一条填这儿。
         </small>
-        <small>命令在任务自己的工作区（worktree）根目录执行，用你自己的 shell，可以带 cd、<code className="mono">&amp;&amp;</code> 和后台的 <code className="mono">&amp;</code>；ash 会注入 BROWSER=none。</small>
+        <small>命令在任务自己的工作区（worktree）根目录执行，用你自己的 shell，可以带 cd、<code className="mono">&amp;&amp;</code> 和后台任务；ash 会注入 BROWSER=none。</small>
         <small>
-          <b>端口是 ash 借的，一次借一串</b>：<code className="mono">$PORT</code> 是<b>你要看的那个</b>服务，ash 打开的就是它；
-          配角用 <code className="mono">$PORT2</code>…<code className="mono">$PORT5</code>，各自还配一个 <code className="mono">$URL2</code>…<code className="mono">$URL5</code>
-          （即 <code className="mono">http://localhost:$PORT2</code>）。前后端一起起就写成一条：配角丢后台，要看的那个放最后 ——
-          <code className="mono">(cd back &amp;&amp; SERVER_PORT=$PORT2 mvn spring-boot:run &amp;) ; cd front &amp;&amp; VITE_APP_API_URL=$URL2 pnpm run dev -- --port $PORT</code>。
+          <b>端口是 ash 借的，一次借一串</b>：<code className="mono">{ref("PORT")}</code> 是<b>你要看的那个</b>服务，ash 打开的就是它；
+          配角用 <code className="mono">{ref("PORT2")}</code>…<code className="mono">{ref("PORT5")}</code>，各自还配一个{" "}
+          <code className="mono">{ref("URL2")}</code>…<code className="mono">{ref("URL5")}</code>
+          （即 <code className="mono">http://localhost:{ref("PORT2")}</code>）。前后端一起起就写成一条：配角丢后台，要看的那个放最后 ——
+          <code className="mono">{combinedHint}</code>。
           前端认哪个变量名去找后端是它自己的事（vite 项目多半是 <code className="mono">VITE_*_URL</code>），ash 只负责把地址递到手边。
         </small>
         <small>
@@ -149,7 +172,8 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
           <code className="mono">PORT</code>（Node / Go / Rust）、<code className="mono">SERVER_PORT</code>（Spring Boot）、
           <code className="mono">ASPNETCORE_URLS</code>（ASP.NET Core）、<code className="mono">QUARKUS_HTTP_PORT</code>、
           <code className="mono">FLASK_RUN_PORT</code>。有些压根不读环境变量、只认参数（vite、Angular、Django、Laravel、Rails），
-          那就把 <code className="mono">$PORT</code> 写进命令行 —— 认出来的命令已经替你写好了，自己填的话照这个来。
+          那就把 <code className="mono">{ref("PORT")}</code> 写进命令行 —— 认出来的命令已经替你写好了，自己填的话照这个来。
+          {isWindows && " 上面这些写法是按 Windows 的 cmd 给的（ash 就跑在 Windows 上），POSIX 那套 $PORT 在这儿不展开。"}
         </small>
         <small>起没起来、为什么没起来，看任务底部那颗「预览日志」——它记着 ash 实际跑的命令、注入了哪些端口，以及命令自己的输出；起失败的那一次也留着。</small>
         {canManage && <div className="settings-card-foot"><span>改了只影响之后新开的预览，已经开着的那个不受影响。</span><Button variant="primary" disabled={!previewDirty || busy} onClick={() => void savePreviewCommand()}>{busy ? "保存中…" : "保存预览命令"}</Button></div>}

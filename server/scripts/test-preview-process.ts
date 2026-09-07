@@ -14,7 +14,7 @@ process.env.ASH_RUNS_DIR = join(root, "runs");
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const { startPreview } = await import("../src/preview.js");
-const { PORT_ENV_ALIASES } = await import("../src/preview-command.js");
+const { PORT_ENV_ALIASES, PORT_SLOT } = await import("../src/preview-command.js");
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -203,7 +203,7 @@ try {
       const head = log.split("\n")[0];
       assert.ok(head.startsWith("$ "), "日志头第一行得是命令回显");
       for (const alias of PORT_ENV_ALIASES) {
-        const expected = `${alias.name}=${alias.template.replaceAll("$PORT", String(result.record.port))}`;
+        const expected = `${alias.name}=${alias.template.replaceAll(PORT_SLOT, String(result.record.port))}`;
         assert.ok(head.includes(expected), `日志头缺 ${expected}`);
       }
       assert.ok(head.includes(`PORT2=${sidekick}`), "日志头缺配角端口");

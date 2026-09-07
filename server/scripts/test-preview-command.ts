@@ -16,7 +16,8 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { detectPreviewCandidates, resolvePreviewCommand, PORT_ENV_ALIASES } from "../src/preview-command.js";
+import { detectPreviewCandidates, resolvePreviewCommand, ambiguousMessage, PORT_ENV_ALIASES } from "../src/preview-command.js";
+import { previewShell } from "../src/preview-shell.js";
 
 let failures = 0;
 function check(name: string, actual: unknown, expected: unknown) {
@@ -76,13 +77,22 @@ try {
     command: "mvn spring-boot:run", source: "detected",
   });
 
+  // 「有 build.gradle」不等于「能起服务」：库、Android、纯 Java 工具全都有这个文件，
+  // 而 bootRun 只有挂了 Spring Boot 插件的才有。认错了不是少省一次事 —— 只有一个候选时
+  // 会被**自动选中**，用户拿到的就是一次自信的失败，而不是「认不出来，请配置命令」。
   const gradle = dir("gradle");
-  file(gradle, "build.gradle.kts", "");
+  file(gradle, "build.gradle.kts", "plugins { id(\"org.springframework.boot\") version \"3.2.0\" }\n");
   check("Gradle 没 wrapper", cmds(gradle), ["gradle bootRun"]);
   const gradleW = dir("gradle-wrapper");
-  file(gradleW, "build.gradle", "");
+  file(gradleW, "build.gradle", "plugins { id 'org.springframework.boot' }\n");
   file(gradleW, "gradlew", "#!/bin/sh\n");
   check("Gradle 有 wrapper", cmds(gradleW), ["./gradlew bootRun"]);
+  const gradleApp = dir("gradle-app");
+  file(gradleApp, "build.gradle", "plugins { id 'application' }\nmainClass = 'x.Main'\n");
+  check("挂 application 插件的按 gradle run 认", cmds(gradleApp), ["gradle run"]);
+  const gradleLib = dir("gradle-lib");
+  file(gradleLib, "build.gradle", "plugins { id 'java-library' }\ndependencies { }\n");
+  check("普通 Gradle 库不算能起服务的东西", cmds(gradleLib), []);
 
   const django = dir("django");
   file(django, "manage.py", "");
@@ -117,13 +127,27 @@ try {
   file(dir("go-cmd", "cmd", "worker"), "main.go", "package main\n");
   check("Go 的 cmd/ 布局，每个入口一条", cmds(goCmd), ["go run ./cmd/api", "go run ./cmd/worker"]);
 
+  // 库 crate 也有 Cargo.toml，但它没有可执行目标，`cargo run` 只会得到
+  // "a bin target must be available"。
   const rust = dir("rust");
-  file(rust, "Cargo.toml", "[package]\n");
+  file(rust, "Cargo.toml", "[package]\nname='x'\n");
+  file(dir("rust", "src"), "main.rs", "fn main() {}\n");
   check("Rust", cmds(rust), ["cargo run"]);
+  const rustBin = dir("rust-bin");
+  file(rustBin, "Cargo.toml", "[package]\nname='x'\n\n[[bin]]\nname='srv'\n");
+  check("显式 [[bin]] 也算", cmds(rustBin), ["cargo run"]);
+  const rustLib = dir("rust-lib");
+  file(rustLib, "Cargo.toml", "[package]\nname='x'\n");
+  file(dir("rust-lib", "src"), "lib.rs", "");
+  check("库 crate 不算", cmds(rustLib), []);
 
+  // .csproj 同理：类库、测试项目都是 .csproj。「这是个 web 应用」在 .NET 里有明确声明。
   const dotnet = dir("dotnet");
-  file(dotnet, "App.csproj", "");
+  file(dotnet, "App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>");
   check(".NET", cmds(dotnet), ["dotnet run"]);
+  const dotnetLib = dir("dotnet-lib");
+  file(dotnetLib, "Lib.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>");
+  check(".NET 类库不算", cmds(dotnetLib), []);
   // ASP.NET Core 不读 PORT，它认 ASPNETCORE_URLS，而且要的是整条地址不是端口号。
   check(
     ".NET 当配角时按它自己的变量名和格式",
@@ -254,9 +278,54 @@ try {
   const everyDir = [maven, gradle, django, fastapi, flask, go, rust, dotnet, laravel, rails, node, nextNode];
   const missing = everyDir
     .flatMap((p) => detectPreviewCandidates(p))
-    .map((c) => /^\((\w+)=/.exec(c.sidekick(2))?.[1])
+    .map((c) => /^\((\w+)=/.exec(c.sidekick(2) ?? "")?.[1])
     .filter((name): name is string => !!name && !names.has(name));
   check("认出来的命令要的变量名，注入时一个不缺", missing, []);
+
+  // —— 目录名不是标识符 ——
+  // `cd ${rel}` 直接拼的话，一个带空格的目录名就是 `cd web app` → "too many arguments"。
+  // 这条命令是要么被自动跑、要么被用户粘走的，两条路都当场失败。
+  const spaced = dir("spaced");
+  const spacedFront = dir("spaced", "web app");
+  pkg(spacedFront, { dev: "vite" });
+  check("目录名带空格就引起来", cmds(spaced), ["cd 'web app' && npm run dev -- --port $PORT"]);
+  if (process.platform !== "win32") {
+    let ok = true;
+    try { execFileSync("sh", ["-n", "-c", cmds(spaced)[0]], { stdio: "pipe" }); } catch { ok = false; }
+    check("带空格的那条 shell 也解析得动", ok, true);
+  }
+  const spacedModule = dir("spaced-mvn");
+  file(spacedModule, "pom.xml", "<project><modules><module>my svc</module></modules></project>");
+  file(dir("spaced-mvn", "my svc"), "pom.xml", BOOT_POM);
+  check("Maven 模块名同理", cmds(spacedModule)[0], "mvn -pl 'my svc' spring-boot:run");
+
+  // —— Windows 是另一门 shell ——
+  // 预览命令在 Windows 上交给 `cmd.exe /d /s /c` 跑（platform.ts 的 userShellLaunch），
+  // cmd 只认 `%PORT%`；`$PORT` 在那边是个**字面量**。后台 `&`、分隔符 `;`、`FOO=1 cmd`
+  // 也全是 POSIX 的写法。所以生成命令时一行 shell 语法都不能写死。
+  const win = previewShell("win32");
+  const winCmds = (p: string) => detectPreviewCandidates(p, win).map((c) => c.command);
+  check("Windows 上端口是 %PORT%", winCmds(pnpmNode), ["pnpm run dev -- --port %PORT%"]);
+  check("Django 同理", winCmds(django), ["python manage.py runserver 0.0.0.0:%PORT%"]);
+  check("Windows 上 python 就叫 python", winCmds(django)[0].startsWith("python "), true);
+  check("Rails 的路径分隔符也跟着换", winCmds(rails), ["bin\\rails server -p %PORT%"]);
+  check("进子目录用 cd /d", winCmds(mono).includes("cd /d a4sms-front && pnpm run dev -- --port %PORT%"), true);
+  check("带空格的目录用双引号", winCmds(spaced), ["cd /d \"web app\" && npm run dev -- --port %PORT%"]);
+  check(
+    "配角开独立 cmd 会话，免得 cd/set 漏给主角",
+    detectPreviewCandidates(maven, win)[0].sidekick(2),
+    "start \"\" /b cmd /c \"set SERVER_PORT=%PORT2%&&mvn spring-boot:run\"",
+  );
+  const winMono = ambiguousMessage(detectPreviewCandidates(mono, win), win);
+  checkIncludes("Windows 的组合示例用 start /b 和 &", winMono, "start \"\" /b cmd /c \"cd /d a4sms-back && set SERVER_PORT=%PORT2%");
+  checkIncludes("要看的那个仍在最后", winMono, "& cd /d a4sms-front && pnpm run dev -- --port %PORT%");
+  check("整段 Windows 文案里不出现 $PORT", /\$PORT/.test(winMono), false);
+  // 内层再套引号 cmd 没有可靠写法：那种情况宁可不给示例，也不给一条粘过去就坏的。
+  const winSpacedBack = dir("win-spaced");
+  pkg(dir("win-spaced", "front"), { dev: "vite" });
+  file(dir("win-spaced", "back end"), "pom.xml", BOOT_POM);
+  check("写不出安全的后台写法就不给组合示例", ambiguousMessage(detectPreviewCandidates(winSpacedBack, win), win).includes("%PORT2%"), false);
+  check("同一份仓库在 POSIX 上照常给", ambiguousMessage(detectPreviewCandidates(winSpacedBack)).includes("$PORT2"), true);
 
   // —— ③ 填过的永远优先 ——
   check("填了就用填的（Java 仓库）", resolvePreviewCommand(maven, "java -jar target/app.jar"), {
