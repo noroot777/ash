@@ -7,6 +7,7 @@ import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { PathHealthStatus, useDebouncedPathHealth } from "./PathHealthStatus.tsx";
 import { ProjectGitSettings } from "./ProjectGitSettings.tsx";
+import { PreviewCommandHelp } from "./PreviewCommandHelp.tsx";
 import { WorkflowPicker, useWorkflows } from "../workflow/WorkflowPicker.tsx";
 import { useHostInfo } from "../lib/useHostInfo.ts";
 
@@ -150,32 +151,50 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
             onChange={(event) => setPreviewCommand(event.target.value)}
           />
         </label>
-        <small>
-          留空时 ash 按各语言自己的惯例去认：Maven 的 <code className="mono">spring-boot:run</code>、Gradle 的{" "}
-          <code className="mono">bootRun</code>、Django 的 <code className="mono">runserver</code>、FastAPI 的{" "}
-          <code className="mono">uvicorn</code>、Flask、<code className="mono">go run</code>、<code className="mono">cargo run</code>、
-          <code className="mono">dotnet run</code>、Laravel 的 <code className="mono">artisan</code>、Rails 的{" "}
-          <code className="mono">bin/rails</code>、Node 的 dev / start 脚本。<b>认出恰好一个才自动用</b>；前后端并排、Maven 多模块各带一个应用这种，它不替你挑，
-          会把认出来的都列给你，挑一条填这儿。
-        </small>
-        <small>命令在任务自己的工作区（worktree）根目录执行，用你自己的 shell，可以带 cd、<code className="mono">&amp;&amp;</code> 和后台任务；ash 会注入 BROWSER=none。</small>
-        <small>
-          <b>端口是 ash 借的，一次借一串</b>：<code className="mono">{ref("PORT")}</code> 是<b>你要看的那个</b>服务，ash 打开的就是它；
-          配角用 <code className="mono">{ref("PORT2")}</code>…<code className="mono">{ref("PORT5")}</code>，各自还配一个{" "}
-          <code className="mono">{ref("URL2")}</code>…<code className="mono">{ref("URL5")}</code>
-          （即 <code className="mono">http://localhost:{ref("PORT2")}</code>）。前后端一起起就写成一条：配角丢后台，要看的那个放最后 ——
-          <code className="mono">{combinedHint}</code>。
-          前端认哪个变量名去找后端是它自己的事（vite 项目多半是 <code className="mono">VITE_*_URL</code>），ash 只负责把地址递到手边。
-        </small>
-        <small>
-          <b>端口怎么进到命令里，每种运行时的写法不一样</b>，ash 把同一个端口按各家的名字都递一份：
-          <code className="mono">PORT</code>（Node / Go / Rust）、<code className="mono">SERVER_PORT</code>（Spring Boot）、
-          <code className="mono">ASPNETCORE_URLS</code>（ASP.NET Core）、<code className="mono">QUARKUS_HTTP_PORT</code>、
-          <code className="mono">FLASK_RUN_PORT</code>。有些压根不读环境变量、只认参数（vite、Angular、Django、Laravel、Rails），
-          那就把 <code className="mono">{ref("PORT")}</code> 写进命令行 —— 认出来的命令已经替你写好了，自己填的话照这个来。
+        <PreviewCommandHelp key={project.id}>
+          <section>
+            <h3>自动识别启动命令</h3>
+            <p>
+              留空时，ash 会按各语言的惯例识别启动命令：Maven 的 <code className="mono">spring-boot:run</code>、Gradle 的{" "}
+              <code className="mono">bootRun</code>、Django 的 <code className="mono">runserver</code>、FastAPI 的{" "}
+              <code className="mono">uvicorn</code>、Flask、<code className="mono">go run</code>、<code className="mono">cargo run</code>、
+              <code className="mono">dotnet run</code>、Laravel 的 <code className="mono">artisan</code>、Rails 的{" "}
+              <code className="mono">bin/rails</code>、Node 的 dev / start 脚本。
+            </p>
+            <p><b>只有恰好识别出一个启动项时才会自动使用。</b>如果前后端并列，或 Maven 多个模块各有一个应用，ash 会列出候选项，请选择需要的命令填入输入框。</p>
+          </section>
+          <section>
+            <h3>命令在哪里执行</h3>
+            <p>命令在任务工作区（worktree）的根目录执行，使用服务端所在机器的 shell。支持 cd、<code className="mono">&amp;&amp;</code> 和后台任务；ash 会注入 <code className="mono">BROWSER=none</code>。</p>
+          </section>
+          <section>
+            <h3>预览端口与服务地址</h3>
+            <p>ash 会为预览分配一组端口。<code className="mono">{ref("PORT")}</code> 用于要在浏览器中查看的服务；辅助服务使用 <code className="mono">{ref("PORT2")}</code>…<code className="mono">{ref("PORT5")}</code>。</p>
+            <p>辅助服务还提供对应的地址变量 <code className="mono">{ref("URL2")}</code>…<code className="mono">{ref("URL5")}</code>，例如 <code className="mono">{ref("URL2")}</code> 就是 <code className="mono">http://localhost:{ref("PORT2")}</code>。</p>
+          </section>
+          <section>
+            <h3>同时启动前后端</h3>
+            <p>将启动步骤写成一条命令：辅助服务放到后台，需要预览的服务放在最后。例如：</p>
+            <pre><code className="mono">{combinedHint}</code></pre>
+            <p>前端连接后端的变量名取决于项目配置（Vite 项目通常使用 <code className="mono">VITE_*_URL</code>）。请按项目实际使用的名称填写，ash 只负责提供服务地址。</p>
+          </section>
+          <section>
+            <h3>把端口传给运行时</h3>
+            <p>
+              不同运行时的端口配置方式不同。ash 会以常见的环境变量名称传入同一个端口：
+              <code className="mono">PORT</code>（Node / Go / Rust）、<code className="mono">SERVER_PORT</code>（Spring Boot）、
+              <code className="mono">ASPNETCORE_URLS</code>（ASP.NET Core）、<code className="mono">QUARKUS_HTTP_PORT</code>、
+              <code className="mono">FLASK_RUN_PORT</code>。
+            </p>
+            <p>Vite、Angular、Django、Laravel、Rails 等需要通过命令行参数指定端口，请把 <code className="mono">{ref("PORT")}</code> 写进命令。自动识别的命令已包含这些参数，手动填写时也需要保留。
           {isWindows && " 上面这些写法是按 Windows 的 cmd 给的（ash 就跑在 Windows 上），POSIX 那套 $PORT 在这儿不展开。"}
-        </small>
-        <small>起没起来、为什么没起来，看任务底部那颗「预览日志」——它记着 ash 实际跑的命令、注入了哪些端口，以及命令自己的输出；起失败的那一次也留着。</small>
+            </p>
+          </section>
+          <section>
+            <h3>启动失败时排查</h3>
+            <p>打开任务底部的「预览日志」，可以查看实际执行的命令、注入的端口和命令输出。启动失败的日志也会保留。</p>
+          </section>
+        </PreviewCommandHelp>
         {canManage && <div className="settings-card-foot"><span>改了只影响之后新开的预览，已经开着的那个不受影响。</span><Button variant="primary" disabled={!previewDirty || busy} onClick={() => void savePreviewCommand()}>{busy ? "保存中…" : "保存预览命令"}</Button></div>}
       </div></section>
       <ProjectGitSettings projectId={project.id} canManage={canManage} notify={notify} />

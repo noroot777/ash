@@ -12,6 +12,7 @@ import { SlashMenu } from "../components/SlashMenu.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { FileViewer } from "../files/FileViewer.tsx";
 import { api, type ReplyTaskResult, type TeamCuaStatus } from "../lib/api.ts";
+import type { Notify } from "../lib/notify.ts";
 import { useTaskBody } from "../lib/useTaskBody.ts";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { useConversation } from "../lib/useConversation.ts";
@@ -277,7 +278,7 @@ function WorkerDrawer({
   onOpenTask: (taskId: string) => void;
   onTaskUpdate: (task: Task) => void;
   onDeleted: (taskId: string) => void;
-  notify: (message: string) => void;
+  notify: Notify;
 }) {
   const [closing, setClosing] = useState(false);
   const [inspectorToggleTarget, setInspectorToggleTarget] = useState<HTMLSpanElement | null>(null);
@@ -341,7 +342,7 @@ export function TeamView({
   initialReviewOpen?: boolean;
   onReviewOpenChange?: (open: boolean) => void;
   terminalToggle?: ReactNode;
-  notify: (message: string) => void;
+  notify: Notify;
 }) {
   const [groups, setGroups] = useState<Group[]>([]);
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);

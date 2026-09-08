@@ -384,11 +384,21 @@
   font-size: 11px;
 }
 
-.workspace-toast {
+/* 两句提示上下摞着：常驻那句在上，普通那句贴着角。空槽位不渲染，所以这里不留占位。 */
+.workspace-toasts {
   position: fixed;
   z-index: 120;
   right: 20px;
   bottom: 20px;
+  display: flex;
+  max-width: calc(100vw - 40px);
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.workspace-toast {
   max-width: 320px;
   transform: translateY(8px);
   border: 1px solid var(--line2);
@@ -406,6 +416,53 @@
 .workspace-toast.is-visible {
   transform: translateY(0);
   opacity: 1;
+}
+
+/* 常驻那一句：等用户自己收。它多半是一段长报错（预览起不来时连启动命令一起报回来），
+   所以按原样换行、能选中、超高就自己滚，而不是挤成一坨读不断句的字。 */
+.workspace-toast.is-sticky {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 460px;
+  max-height: min(60vh, 520px);
+  padding-right: 8px;
+  color: var(--ink);
+}
+
+.workspace-toast.is-sticky.is-visible {
+  pointer-events: auto;
+}
+
+.workspace-toast-text {
+  min-width: 0;
+  flex: 1;
+}
+
+.workspace-toast.is-sticky .workspace-toast-text {
+  overflow: auto;
+  max-height: inherit;
+  white-space: pre-wrap;
+  line-height: 1.6;
+  user-select: text;
+}
+
+.workspace-toast-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 3px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.workspace-toast-close:hover {
+  background: var(--hover-bg);
+  color: var(--ink);
 }
 
 @media (max-width: 1020px) {
