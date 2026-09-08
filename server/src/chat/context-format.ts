@@ -16,8 +16,15 @@ export function estimateChatTokens(text: string): number {
   return Math.ceil(ascii / 3 + (Buffer.byteLength(text, "utf8") - ascii) / 2);
 }
 
-export function contextMessage(message: Pick<ChatMessage, "role" | "author" | "body"> & { taskId?: string | null }): string {
-  return JSON.stringify({ role: message.role, author: message.author, body: message.body, ...(message.taskId ? { taskId: message.taskId } : {}) });
+export function contextMessage(message: Pick<ChatMessage, "role" | "author" | "body"> & { taskId?: string | null; status?: string; modelReply?: string | null }): string {
+  const content = message.role === "agent" && typeof message.modelReply === "string"
+    ? { role: "agent", author: message.author, body: message.modelReply }
+    : message.role === "agent" && (message.status === "failed" || message.status === "stopped")
+    ? { role: "system", author: "系统", body: message.taskId
+      ? `${message.author}已创建任务，后续流程未正常结束；请查看任务卡。`
+      : `${message.author}${message.status === "failed" ? "本轮未能回复。" : "本轮回复已停止。"}` }
+    : { role: message.role, author: message.author, body: message.body };
+  return JSON.stringify({ ...content, ...(message.taskId ? { taskId: message.taskId } : {}) });
 }
 
 export function summaryPrompt(previous: string, entries: string[], maxTokens: number): string {

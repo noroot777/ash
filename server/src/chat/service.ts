@@ -16,7 +16,7 @@ import type { ChatContextPolicy } from "./context-format.js";
 export type RoomRow = typeof chatRooms.$inferSelect;
 type MessageRow = typeof chatMessages.$inferSelect;
 export const toRoom = (row: RoomRow): ChatRoom => ({ id: row.id, projectId: row.projectId, name: row.name, members: JSON.parse(row.members), createdAt: row.createdAt });
-export const toMessage = ({ context: _context, ...row }: MessageRow): ChatMessage => ({ ...row, role: row.role as ChatMessage["role"], status: row.status as ChatMessage["status"], mentions: JSON.parse(row.mentions) });
+export const toMessage = ({ context: _context, modelReply: _modelReply, ...row }: MessageRow): ChatMessage => ({ ...row, role: row.role as ChatMessage["role"], status: row.status as ChatMessage["status"], mentions: JSON.parse(row.mentions) });
 
 export async function roomMessages(roomId: string) {
   const rows = await db.select().from(chatMessages).where(eq(chatMessages.roomId, roomId)).orderBy(desc(chatMessages.createdAt), desc(chatMessages.id)).limit(500);
@@ -141,7 +141,7 @@ export class ChatService {
         abort.signal.throwIfAborted();
         taskToStart = taskId;
       }
-      const settled = await db.update(chatMessages).set({ body: result.reply, status: "done", context: null })
+      const settled = await db.update(chatMessages).set({ body: result.reply, modelReply: result.reply, status: "done", context: null })
         .where(and(eq(chatMessages.id, message.id), eq(chatMessages.status, "running"))).returning();
       if (taskToStart && settled.length && !abort.signal.aborted) {
         void this.startTask(taskToStart).catch(async (error) => {
