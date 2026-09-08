@@ -67,7 +67,7 @@ export async function discardTaskWorkspace(
     if (opts.worktree && isDir(path)) {
       out.path = path;
       try {
-        if (!opts.force) await assertReadableWorktree(path);
+        if (!opts.force) await assertReadableWorktree(path, repo, branch);
         await removeWorktree(repo, path, !!opts.force);
         out.worktreeRemoved = true;
       } catch (error) {

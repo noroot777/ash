@@ -115,10 +115,28 @@ export async function checkBranchAcceptance(page, fixtureUrl) {
   await go("case13-parent");
   await page.getByRole("alert").filter({ hasText: "占用登记尚未解除" }).waitFor({ state: "visible" });
   ensure((await page.getByRole("alert").innerText()).includes("git worktree unlock"), "missing locked checkout must explain unlocking");
+  ensure(!/请先停止任务|再单独验收本任务|释放工作区目录/.test(await page.getByRole("alert").innerText()), "parent recovery must not send users back to the same panel");
   ensure(!/可继续验收子任务|工作区占用已解除/.test(await page.locator("main").innerText()), "locked checkout cannot advertise successful release");
   await go("case13-child");
   await page.getByRole("alert").filter({ hasText: "git worktree unlock" }).waitFor({ state: "visible" });
   ensure(!await review().getByRole("button", { name: "目标工作区仍被占用", exact: true }).isEnabled(), "locked target must remain blocked");
+
+  await go("case14-child");
+  await page.getByRole("alert").filter({ hasText: "gitdir:" }).waitFor({ state: "visible" });
+  ensure((await page.getByRole("alert").innerText()).includes("actual-parent-entry"), "moved missing backlink must identify the real registration");
+  await go("case14-parent");
+  await button("释放工作区目录（保留分支）").click();
+  await page.getByRole("dialog").getByRole("button", { name: "释放目录，保留分支", exact: true }).click();
+  await page.getByRole("dialog").getByRole("alert").filter({ hasText: "gitdir:" }).waitFor({ state: "visible" });
+  ensure((await page.getByRole("dialog").innerText()).includes("actual-parent-entry"), "release must provide the exact pointer content");
+  await page.getByRole("dialog").getByRole("button", { name: "取消", exact: true }).click();
+
+  await go("case15-parent");
+  await review().getByRole("button", { name: "验收通过", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "验收通过", exact: true }).click();
+  await review().getByText("标签已创建，清理未完成", { exact: true }).waitFor({ state: "visible" });
+  ensure((await review().getByRole("alert").innerText()).includes("ash-accepted/"), "tag partial success must name the created tag");
+  ensure(!/合并已完成|验收未完成/.test(await review().getByRole("alert").innerText()), "tag result must agree with its actual completed action");
 
   await go("case5-parent");
   await page.getByRole("region", { name: "派生与验收依赖" }).waitFor({ state: "visible" });

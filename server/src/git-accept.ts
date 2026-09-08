@@ -28,7 +28,7 @@ import { withRepoLock } from "./repo-lock.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
 import { execFileText as exec } from "./exec.js";
 import { findProcessesReferencingPath, type ProcessRow } from "./platform.js";
-import { assertReadableWorktree, registeredCheckout, removeMissingWorktreeRegistrations, UnreadableWorktreeError } from "./git-worktree-state.js";
+import { assertReadableWorktree, checkoutRecovery, registeredCheckout, removeMissingWorktreeRegistrations, UnreadableWorktreeError } from "./git-worktree-state.js";
 
 const isDir = (p: string) => {
   try { return statSync(p).isDirectory(); } catch { return false; }
@@ -278,7 +278,8 @@ async function inTargetCheckout(
   beforeTemp?: () => TaskMergeResult | null,
 ): Promise<TaskMergeResult> {
   await removeMissingWorktreeRegistrations(repo, { branch: targetBranch }).catch(() => {});
-  const { path: targetPath, atRepo: targetAtRepo } = await targetCheckout(repo, targetBranch);
+  const checkout = await targetCheckout(repo, targetBranch);
+  const { path: targetPath, atRepo: targetAtRepo } = checkout;
 
   if (targetAtRepo) {
     const { stdout } = await exec("git", ["-C", repo, "status", "--porcelain"]);
@@ -300,7 +301,7 @@ async function inTargetCheckout(
     return {
       ok: false,
       reason: "target_checked_out",
-      message: `目标分支 ${targetBranch} 已在另一个 worktree 检出；未操作该工作区`,
+      message: `目标分支 ${targetBranch} 已在另一个 worktree ${targetPath} 检出；未操作该工作区。${checkoutRecovery(checkout) ?? ""}`,
       sourceBranch,
       targetBranch,
       targetPath,
@@ -532,7 +533,7 @@ async function cleanupAcceptedTaskLocked(
   const hadWorktree = plan.worktree && isDir(worktreePath);
   if (hadWorktree) {
     try {
-      await assertReadableWorktree(worktreePath);
+      await assertReadableWorktree(worktreePath, repo, sourceBranch);
       await removeWorktree(repo, worktreePath, false);
     } catch (error) {
       // 真脏时列文件；Windows 的 EBUSY 则列能从命令行认出的占用进程。两者不能混:

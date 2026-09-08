@@ -46,6 +46,8 @@ async function entry(task: BranchTask, repo: string, fingerprintTarget?: string 
   const checkout = target && task.useWorktree && plan.merge && plan.merge !== "tag" && task.stage !== "accepted" && task.stage !== "merged"
     ? await reads.checkout(target) : null;
   if (!blocker && task.useWorktree && task.stage !== "accepted" && targetError) blocker = targetError;
+  const targetWorkspaceRecovery = checkout?.path && !checkout.atRepo
+    ? checkoutRecovery(checkout) ?? `分支 ${target} 的登记仍指向 ${checkout.path}，请核对该工作区的检出登记。` : null;
   const targetWorkspaceBlocker = checkout?.path && !checkout.atRepo
     ? `目标分支 ${target} 仍在工作区 ${checkout.path} 检出。${checkoutRecovery(checkout) ?? ""}${targetOwner
       ? `请先停止任务「${targetOwner.title}」的执行，在其「派生与验收」中释放工作区目录（保留分支），再单独验收本任务。`
@@ -62,7 +64,7 @@ async function entry(task: BranchTask, repo: string, fingerprintTarget?: string 
   ])).digest("hex");
   return {
     taskId: task.id, projectId: task.projectId, title: task.title, status: task.status, stage: task.stage,
-    startCommit: task.worktreeStartCommit, targetBranch: target, targetTaskId: targetOwner?.id ?? null, sourceBranch, sourceCommit, targetCommit, targetWorkspaceBlocker,
+    startCommit: task.worktreeStartCommit, targetBranch: target, targetTaskId: targetOwner?.id ?? null, sourceBranch, sourceCommit, targetCommit, targetWorkspaceBlocker, targetWorkspaceRecovery,
     strategy: plan.merge || "mark", dependency: task.baseUpdateIntent ? { taskId: task.baseTaskId, title: "父任务", state: "needs_update", message: "上次基线更新尚未结算，请重试更新基线以恢复" } : await branchDependency(task, repo, reads), blocker, blockerLabel, fingerprint, baseUpdatePending: !!task.baseUpdateIntent,
   };
 }
@@ -168,10 +170,10 @@ export function mountBranchPlanRoutes(api: Hono, accept: Accept): void {
         if (!workspace.path) {
           await removeMissingWorktreeRegistrations(expandHome(project.repoPath), { branch: workspace.branch });
           const remaining = await targetCheckout(project.repoPath, workspace.branch);
-          if (remaining.path) return c.json({ error: `工作区 ${remaining.path}：${checkoutRecovery(remaining) || `分支 ${workspace.branch} 的占用尚未解除，请先解除占用并保留分支，再重试释放。`}` }, 409);
+          if (remaining.path && !remaining.atRepo) return c.json({ error: `工作区 ${remaining.path}：${checkoutRecovery(remaining) || `分支 ${workspace.branch} 的占用尚未解除，请先解除占用并保留分支，再重试释放。`}` }, 409);
           return c.json({ ok: true });
         }
-        try { await assertReadableWorktree(workspace.path); }
+        try { await assertReadableWorktree(workspace.path, expandHome(project.repoPath), workspace.branch); }
         catch (error) {
           if (error instanceof UnreadableWorktreeError) return c.json({ error: error.message }, 409);
           throw error;

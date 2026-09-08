@@ -56,21 +56,21 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
         <div><dt>开工起点</dt><dd>{view.task.startCommit?.slice(0, 12) || "旧任务未记录"}</dd></div>
         <div><dt>最终合入</dt><dd>{view.task.targetBranch || "未确定"}</dd></div>
       </dl>
-      {view.task.blocker && <p role="alert">{view.task.blocker}</p>}
+      {view.task.blocker && <p role="alert" style={{ whiteSpace: "pre-line" }}>{view.task.blocker}</p>}
       {task.stage !== "accepted" && task.stage !== "merged" && <MergeTargetEditor key={task.id} plan={view.task}
         disabled={busy || !!task.archived || view.task.baseUpdatePending || ["running", "queued"].includes(task.status)}
         onChanged={async () => { await refresh(); if (onTaskUpdated) onTaskUpdated(await api.task(task.id)); }} />}
       {dep && <p role="status">{dep.message} {dep.taskId && <a href={taskHref(task.projectId, dep.taskId)}>查看父任务</a>}</p>}
       {dep?.state === "needs_update" && <button type="button" disabled={busy || (!!view.task.blocker && !view.task.baseUpdatePending) || task.stage === "accepted" || task.stage === "merged"} onClick={() => open("update")}>更新子分支基线</button>}
       {descendants.some(row => row.targetTaskId === task.id || row.dependency?.legacyTarget && row.dependency.taskId === task.id) && <ReleaseWorkspaceControl key={`release:${task.id}`} task={task}
-        blocker={descendants.find(row => row.targetTaskId === task.id && row.targetWorkspaceBlocker)?.targetWorkspaceBlocker ?? null}
+        blocker={descendants.find(row => row.targetTaskId === task.id && row.targetWorkspaceBlocker)?.targetWorkspaceRecovery ?? null}
         disabled={busy || !!task.archived || task.handoff?.direction === "out" || view.task.baseUpdatePending || ["running", "queued"].includes(task.status)}
         onReleased={async () => { await refresh(); if (onTaskUpdated) onTaskUpdated(await api.task(task.id)); }} />}
       {descendants.length > 0 && <>
         <p>可在这里按父子依赖顺序统一验收。勾选已核对的子任务；发生冲突时保留已完成的合并，并暂停后续步骤。</p>
         <ul>{descendants.map(row => <li key={row.taskId}>
           <label><input type="checkbox" disabled={busy || !!row.blocker} checked={checked.includes(row.taskId)} onChange={e => setChecked(ids => e.target.checked ? [...ids, row.taskId] : ids.filter(id => id !== row.taskId))} />{row.title}</label>
-          <span>{row.blocker || `${row.strategy} → ${row.targetBranch}`}</span>
+          <span style={{ whiteSpace: "pre-line" }}>{row.blocker || `${row.strategy} → ${row.targetBranch}`}</span>
           <a href={taskHref(row.projectId, row.taskId)}>查看改动</a>
           {row.dependency && <div className="branch-dependency-detail">
             <span>父任务：{row.dependency.taskId ? <a href={taskHref(row.projectId, row.dependency.taskId)}>{row.dependency.title}</a> : row.dependency.title}</span>

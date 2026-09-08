@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -125,6 +125,16 @@ try {
     await db.update(tasks).set({ mergeTargetBranch: locked.parentWs.branch }).where(eq(tasks.id, locked.child.id));
     git(locked.repo, "worktree", "lock", locked.parentWs.path);
     rmSync(locked.parentWs.path, { recursive: true });
+    const combined = await setup(); // case14: moved project plus missing parent backlink.
+    await db.update(tasks).set({ mergeTargetBranch: combined.parentWs.branch }).where(eq(tasks.id, combined.child.id));
+    writeFileSync(join(combined.parentWs.path, "PARENT_WIP.txt"), "keep moved parent WIP\n");
+    rmSync(join(combined.parentWs.path, ".git"));
+    renameSync(join(combined.repo, ".git", "worktrees", combined.parent.id), join(combined.repo, ".git", "worktrees", "actual-parent-entry"));
+    renameSync(combined.repo, `${combined.repo}-moved`);
+    await db.update(projects).set({ repoPath: `${combined.repo}-moved` }).where(eq(projects.id, combined.parent.projectId));
+    const tagOnly = await setup("tag"); // case15: tag succeeds but workspace cleanup fails.
+    rmSync(join(tagOnly.parentWs.path, ".git"));
+    writeFileSync(join(tagOnly.parentWs.path, "TAG_WIP.txt"), "keep tagged WIP\n");
     await s.newTask("unstarted", "main");
     const unreadable = await s.newTask("badstart", "main");
     await taskWorkspace(await row(unreadable.id), s.repo);

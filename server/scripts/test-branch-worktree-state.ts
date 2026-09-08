@@ -40,7 +40,7 @@ async function setup() {
   commit(repo, "seed.txt");
   const at = new Date().toISOString();
   await db.insert(projects).values({ id, name: id, repoPath: repo, createdAt: at });
-  const create = async (suffix: string, base: string, strategy: "safe" | "squash" = "safe") => {
+  const create = async (suffix: string, base: string, strategy: "safe" | "squash" | "tag" = "safe") => {
     const accept = makeStep("accept", "accept");
     if (accept.kind === "accept") accept.p = { strategy, clean: "all" };
     const [task] = await createTasks([{
@@ -61,14 +61,17 @@ async function setup() {
 const accept = (id: string) => acceptTask(id, "human", { startVerifyRound: async () => ({ round: 1 }) });
 
 try {
-  for (const mode of ["missing-link", "moved-project"] as const) {
+  for (const mode of ["missing-link", "moved-project", "moved-missing-link"] as const) {
     const s = await setup();
     const unrelated = await s.create("unrelated", "main");
     writeFileSync(join(s.parent.path, "PARENT_WIP.txt"), "keep parent WIP");
     let repo = s.repo;
     let parentPath = s.parent.path;
-    if (mode === "missing-link") rmSync(join(parentPath, ".git"));
-    else {
+    if (mode !== "moved-project") rmSync(join(parentPath, ".git"));
+    if (mode === "moved-missing-link") {
+      renameSync(join(repo, ".git", "worktrees", s.parent.task.id), join(repo, ".git", "worktrees", "actual-parent-entry"));
+    }
+    if (mode !== "missing-link") {
       repo = `${s.repo}-renamed`;
       renameSync(s.repo, repo);
       parentPath = join(repo, ".worktrees", s.parent.task.id);
@@ -82,6 +85,8 @@ try {
     assert.ok(view.blocker!.includes(parentPath) || view.blocker!.includes(readFileSync(join(repo, ".git", "worktrees", s.parent.task.id, "gitdir"), "utf8").trim().replace(/\/.git$/, "")));
     const childResult = await accept(s.child.task.id);
     assert.equal(childResult.accepted, false);
+    if (childResult.accepted) throw new Error("broken parent must block child");
+    assert.match(childResult.error, /git worktree repair/);
     assert.equal(git(repo, "rev-parse", s.parent.branch!), s.parent.head);
     const release = await api.request(`/tasks/${s.parent.task.id}/release-workspace`, {
       method: "POST", headers: { "content-type": "application/json" },
@@ -106,8 +111,21 @@ try {
       assert.ok(own.error.includes(own.completedMerge!.commit!));
       assert.equal(readFileSync(join(parentPath, "PARENT_WIP.txt"), "utf8"), "keep parent WIP");
     }
-    git(repo, "worktree", "repair");
-    if (mode === "moved-project") git(repo, "worktree", "repair", parentPath);
+    if (mode === "moved-missing-link") {
+      git(repo, "worktree", "repair");
+      assert.throws(() => git(repo, "worktree", "repair", parentPath), /git/);
+      const pointer = releaseError.match(/\ngitdir: ([^\n]+)\n/);
+      assert.ok(pointer, "combined failure must provide the exact missing pointer content");
+      assert.equal(pointer[1], git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir") + "/worktrees/actual-parent-entry");
+      assert.ok(releaseError.includes(join(parentPath, ".git")));
+      assert.ok(view.targetWorkspaceRecovery?.includes(`gitdir: ${pointer[1]}`));
+      assert.ok(childResult.error.includes(`gitdir: ${pointer[1]}`));
+      writeFileSync(join(parentPath, ".git"), `gitdir: ${pointer[1]}\n`);
+      git(repo, "worktree", "repair", parentPath);
+    } else {
+      git(repo, "worktree", "repair");
+      if (mode === "moved-project") git(repo, "worktree", "repair", parentPath);
+    }
     assert.equal(readFileSync(join(parentPath, "PARENT_WIP.txt"), "utf8"), "keep parent WIP");
     const releaseRepaired = async () => api.request(`/tasks/${s.parent.task.id}/release-workspace`, {
       method: "POST", headers: { "content-type": "application/json" },
@@ -121,7 +139,7 @@ try {
     assert.equal((await releaseRepaired()).status, 200);
     assert.equal((await readBranchPlan(s.child.task.id))!.task.targetWorkspaceBlocker, null);
     const childAcceptance = await accept(s.child.task.id);
-    if (mode === "moved-project") {
+    if (mode !== "missing-link") {
       assert.equal(childAcceptance.accepted, false);
       if (childAcceptance.accepted) throw new Error("moved child should also need link repair");
       assert.match(childAcceptance.error, /git worktree repair/);
@@ -159,7 +177,10 @@ try {
     git(s.repo, "worktree", "lock", s.parent.path);
     rmSync(s.parent.path, { recursive: true });
     assert.match((await readBranchPlan(s.child.task.id))!.task.targetWorkspaceBlocker!, /git worktree unlock/);
-    assert.equal((await accept(s.child.task.id)).accepted, false, "locked missing registration remains occupied");
+    const lockedAcceptance = await accept(s.child.task.id);
+    assert.equal(lockedAcceptance.accepted, false, "locked missing registration remains occupied");
+    if (lockedAcceptance.accepted) throw new Error("locked target must block child");
+    assert.match(lockedAcceptance.error, /git worktree unlock/);
     const lockedRelease = await api.request(`/tasks/${s.parent.task.id}/release-workspace`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ fingerprint: (await readBranchPlan(s.parent.task.id))!.task.fingerprint }),
@@ -185,6 +206,43 @@ try {
   }
   {
     const s = await setup();
+    git(s.repo, "worktree", "remove", s.parent.path);
+    writeFileSync(join(s.repo, ".git", "info", "exclude"), ".worktrees/\n");
+    git(s.repo, "checkout", s.parent.branch!);
+    const head = git(s.repo, "rev-parse", "HEAD");
+    const files = git(s.repo, "ls-files");
+    assert.equal((await readBranchPlan(s.child.task.id))!.task.blocker, null);
+    const response = await api.request(`/tasks/${s.parent.task.id}/release-workspace`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ fingerprint: (await readBranchPlan(s.parent.task.id))!.task.fingerprint }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(git(s.repo, "symbolic-ref", "--short", "HEAD"), s.parent.branch);
+    assert.equal(git(s.repo, "rev-parse", "HEAD"), head);
+    assert.equal(git(s.repo, "ls-files"), files);
+    assert.equal((await accept(s.child.task.id)).accepted, true);
+    console.log("✓ missing task directory with branch at project root: release is a no-op, child acceptance still succeeds");
+  }
+  {
+    const s = await setup();
+    const tagged = await s.create("tagged", "main", "tag");
+    const main = git(s.repo, "rev-parse", "main");
+    rmSync(join(tagged.path, ".git"));
+    writeFileSync(join(tagged.path, "WIP.txt"), "keep tagged WIP");
+    const result = await accept(tagged.task.id);
+    assert.equal(result.accepted, false);
+    if (result.accepted) throw new Error("tag cleanup should fail");
+    assert.equal(result.completedMerge, undefined);
+    assert.ok(result.completedTag);
+    assert.notEqual((await db.select().from(tasks).where(eq(tasks.id, tagged.task.id)))[0].stage, "merged");
+    assert.match(result.error, /验收标签已创建.*清理尚未完成/);
+    assert.equal(git(s.repo, "rev-parse", `${result.completedTag}^{commit}`), tagged.head);
+    assert.equal(git(s.repo, "rev-parse", "main"), main);
+    assert.equal(readFileSync(join(tagged.path, "WIP.txt"), "utf8"), "keep tagged WIP");
+    console.log("✓ tag partial success names the created tag and preserves the unchanged merge target and WIP");
+  }
+  {
+    const s = await setup();
     writeFileSync(join(s.parent.path, "WIP.txt"), "keep orphan WIP");
     rmSync(join(s.parent.path, ".git"));
     rmSync(join(s.repo, ".git", "worktrees", s.parent.task.id), { recursive: true });
@@ -193,6 +251,7 @@ try {
     const discarded = await discardTaskWorkspace(s.repo, s.parent.task.id, { worktree: true, branch: false });
     assert.equal(discarded.worktreeRemoved, false);
     assert.match(discarded.worktreeError!, /无法确认工作区/);
+    assert.doesNotMatch(discarded.worktreeError!, /gitdir: /, "missing registration must not produce a guessed pointer");
     assert.equal(readFileSync(join(s.parent.path, "WIP.txt"), "utf8"), "keep orphan WIP");
     assert.ok(existsSync(s.parent.path));
     console.log("✓ unregistered orphan: acceptance and ordinary deletion preserve files and report unreadable state");

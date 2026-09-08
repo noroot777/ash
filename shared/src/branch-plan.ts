@@ -23,6 +23,7 @@ export type BranchPlanEntry = {
   blocker: string | null;
   blockerLabel?: string;
   targetWorkspaceBlocker?: string | null;
+  targetWorkspaceRecovery?: string | null;
   baseUpdatePending: boolean;
   fingerprint: string;
 };

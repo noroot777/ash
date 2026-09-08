@@ -430,17 +430,19 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
     await appendTaskTimeline(taskId, `合并清理警告：${warning.message}`);
   }
   const completedMerge = tagged ? undefined : { targetBranch: merge.targetBranch, commit: merge.afterCommit ?? null };
+  const completedTag = tagged ? merge.tag : undefined;
   const completedSummary = completedMerge
     ? `合并已完成：成果已合入 ${completedMerge.targetBranch}${completedMerge.commit ? `（提交 ${completedMerge.commit}）` : ""}。清理尚未完成。`
-    : "验收标签已创建，清理尚未完成。";
+    : `验收标签已创建${completedTag ? `（${completedTag}）` : ""}，清理尚未完成。`;
   const cleanupGuard = await acceptanceGuard(taskId, "before_cleanup");
   if (cleanupGuard.failure) {
     const error = `${completedSummary}为避免删除正在使用或尚未结算的 worktree，清理已暂缓。${cleanupGuard.failure.error}`;
-    await appendTaskTimeline(taskId, `${error} 阶段停在 merged，稍后可重新验收继续清理。`);
+    await appendTaskTimeline(taskId, `${error} ${tagged ? "标签已保留" : "阶段停在 merged"}，稍后可重新验收继续清理。`);
     return {
       ...cleanupGuard.failure,
       error,
       completedMerge,
+      completedTag,
       sourceBranch: merge.sourceBranch,
       targetBranch: merge.targetBranch,
       warnings: merge.warnings,
@@ -471,7 +473,7 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   if (!cleanup.ok) {
     await appendTaskTimeline(
       taskId,
-      `验收清理未完成：${cleanup.message}。合并结果已保留，阶段停在 merged，status 保持 ${task.status}。`,
+      `验收清理未完成：${cleanup.message}。${tagged ? "标签已保留，尚未合并" : "合并结果已保留，阶段停在 merged"}，status 保持 ${task.status}。`,
     );
     return {
       accepted: false,
@@ -480,6 +482,7 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
       reason: cleanup.reason,
       error: `${completedSummary}${cleanup.message}`,
       completedMerge,
+      completedTag,
       status: task.status,
       sourceBranch: cleanup.sourceBranch,
       targetBranch: cleanup.targetBranch,
