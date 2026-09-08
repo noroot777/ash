@@ -447,7 +447,10 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
         }), timeoutMs: 600_000 },
       );
       const refreshed = (await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
-      if (!refreshed) throw new HandoffError("任务已移回，但本机记录读取失败", 500);
+      if (!refreshed) throw new HandoffError("移回结果未确认：本机任务记录读取失败", 500);
+      if (markerOf(refreshed.handoff)?.direction === "out") {
+        throw new HandoffError("尚未确认任务已移回本机：本机仍保留接力存档。请刷新核对任务位置后再重试，不要在两台机器上重复启动任务。", 409);
+      }
       return c.json({ task: (await enrichTasks([refreshed]))[0] });
     } catch (error) { return fail(c, error); }
   });

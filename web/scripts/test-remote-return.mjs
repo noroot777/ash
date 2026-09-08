@@ -9,6 +9,8 @@ import { chromeLaunchOptions } from "./chrome-path.mjs";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0 } });
 let browser;
+const routeErrors = [];
+const releasePending = [];
 try {
   await server.listen();
   browser = await chromium.launch(await chromeLaunchOptions());
@@ -27,19 +29,36 @@ try {
   let responses = [];
   let requests = [];
   let snapshotCount = 0;
+  let returnAvailable = true;
+  const holdReturn = (response) => {
+    const gate = Promise.withResolvers();
+    releasePending.push(gate.resolve);
+    return {
+      release: gate.resolve,
+      respond: async (route) => { await gate.promise; await route.fulfill(response); },
+    };
+  };
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (path.endsWith("/remote-snapshot")) {
-      snapshotCount += 1;
-      return route.fulfill({ json: { task, sessions: [], persisted: [], returnAvailable: true, target: { name: "远程服务器", url: targetUrl } } });
+    try {
+      if (path.endsWith("/remote-snapshot")) {
+        snapshotCount += 1;
+        const taskId = path.split("/").at(-2);
+        const selected = { ...task, id: taskId, title: taskId === task.id ? task.title : "另一条任务" };
+        return await route.fulfill({ json: { task: selected, sessions: [], persisted: [], returnAvailable, target: { name: "远程服务器", url: targetUrl } } });
+      }
+      if (path.endsWith("/remote-return")) {
+        requests.push(route.request().postDataJSON());
+        const response = responses.shift();
+        if (response) return await (typeof response === "function" ? response(route) : route.fulfill(response));
+        routeErrors.push(`移回请求不能多发或因轮询自动重试: ${path}`);
+      } else {
+        routeErrors.push(`Unexpected API request: ${path}`);
+      }
+    } catch (error) {
+      routeErrors.push(`${path}: ${error.message}`);
     }
-    if (path.endsWith("/remote-return")) {
-      requests.push(route.request().postDataJSON());
-      const response = responses.shift();
-      assert.ok(response, "移回请求不能多发或因轮询自动重试");
-      return typeof response === "function" ? response(route) : route.fulfill(response);
-    }
-    throw new Error(`Unexpected API request: ${path}`);
+    await route.fulfill({ status: 500, json: { error: routeErrors.at(-1) } }).catch(() => undefined);
   });
   const url = `http://127.0.0.1:${server.httpServer.address().port}/scripts/fixtures/remote-return.html`;
   const openReturn = async () => {
@@ -55,10 +74,9 @@ try {
   assert.match(await dialog.getByRole("alert").innerText(), /移回未完成[\s\S]*return\/ping[\s\S]*fetch failed/);
   assert.equal(await dialog.getByRole("button", { name: "重试移回", exact: true }).isEnabled(), true);
   const beforePoll = snapshotCount;
-  await page.waitForFunction(() => !document.querySelector(".workspace-toast.is-visible"));
   await page.waitForTimeout(3_200);
   assert.ok(snapshotCount > beforePoll, "覆盖错误出现后的正常远端轮询");
-  assert.equal(await dialog.getByRole("alert").isVisible(), true, "轮询与 toast 消失都不能清掉移回失败");
+  assert.equal(await dialog.getByRole("alert").isVisible(), true, "后续正常轮询不能清掉移回失败");
   assert.equal(requests.length, 1);
   const screenshot = process.env.REMOTE_RETURN_SHOT;
   if (screenshot) {
@@ -71,31 +89,52 @@ try {
   assert.ok(mobileBounds.y >= 0 && mobileBounds.y + mobileBounds.height <= 844, "窄屏仍能看到完整错误和重试按钮");
   if (screenshot) await page.screenshot({ path: screenshot.replace(/\.png$/, "-mobile.png"), fullPage: true });
   await page.setViewportSize({ width: 1180, height: 780 });
+  returnAvailable = false;
+  await page.getByRole("button", { name: "移回本机…", exact: true }).waitFor({ state: "detached" });
   await dialog.getByRole("button", { name: "取消", exact: true }).click();
   assert.equal(await page.getByRole("alert").isVisible(), true, "关闭弹窗后详情页仍保留失败原因");
-  dialog = await openReturn();
+  assert.equal(await page.getByRole("alert").getByRole("button").count(), 2, "没有原始移回入口时，横幅仍有重试和关闭出口");
+  if (screenshot) await page.screenshot({ path: screenshot.replace(/\.png$/, "-banner.png"), fullPage: true });
+  await page.getByRole("alert").getByRole("button", { name: "重试移回", exact: true }).click();
+  dialog = page.getByRole("dialog");
   assert.equal(await dialog.getByRole("alert").isVisible(), true);
-  let releaseReturn;
-  const returnGate = new Promise((resolve) => { releaseReturn = resolve; });
-  responses = [async (route) => {
-    await returnGate;
-    await route.fulfill({ json: { task: { ...task, handoff: { direction: "returned" } } } });
-  }];
+  const heldReturn = holdReturn({ json: { task: { ...task, handoff: { direction: "returned" } } } });
+  responses = [heldReturn.respond];
   await dialog.getByRole("button", { name: "重试移回", exact: true }).click();
   const busyButton = dialog.getByRole("button", { name: "处理中…", exact: true });
   await busyButton.waitFor();
   assert.equal(await busyButton.isDisabled(), true);
-  assert.equal(await dialog.getByRole("button", { name: "取消", exact: true }).isDisabled(), true);
+  assert.equal(await dialog.getByRole("button", { name: "后台等待", exact: true }).isEnabled(), true);
+  assert.equal(await dialog.getByRole("button", { name: "关闭把任务移回本机？", exact: true }).isEnabled(), true);
   assert.equal(await dialog.getByRole("alert").count(), 0, "重试时清掉上一轮错误，但保持忙碌状态");
-  releaseReturn();
+  await page.waitForFunction(() => /已等待 [1-9]\d* 秒/.test(document.querySelector(".remote-return-progress")?.textContent ?? ""));
+  assert.match(await dialog.getByRole("status").innerText(), /目前尚未收到完成确认[\s\S]*不会取消迁移/);
+  if (screenshot) await page.screenshot({ path: screenshot.replace(/\.png$/, "-waiting.png"), fullPage: true });
+  await dialog.getByRole("button", { name: "后台等待", exact: true }).click();
+  for (const close of [
+    () => page.keyboard.press("Escape"),
+    () => dialog.getByRole("button", { name: "关闭把任务移回本机？", exact: true }).click(),
+    () => page.locator(".task-modal-scrim").dispatchEvent("mousedown"),
+  ]) {
+    await page.getByRole("dialog").waitFor({ state: "detached" });
+    assert.match(await page.getByRole("status").innerText(), /正在等待移回确认/);
+    await page.getByRole("button", { name: "查看移回进度", exact: true }).click();
+    await close();
+  }
+  await page.getByRole("dialog").waitFor({ state: "detached" });
+  assert.equal(requests.length, 2, "收起和重开进行态不能重复发送移回请求");
+  if (screenshot) await page.screenshot({ path: screenshot.replace(/\.png$/, "-background.png"), fullPage: true });
+  heldReturn.release();
   await page.getByRole("status").filter({ hasText: "本机任务" }).waitFor();
   assert.equal(await page.getByRole("alert").count(), 0);
   assert.deepEqual(requests, Array.from({ length: 2 }, () => ({ targetUrl, ignoreCapabilityGaps: false })));
 
   requests = [];
+  returnAvailable = true;
+  const heldCapabilityReturn = holdReturn({ status: 502, json: { error: networkError } });
   responses = [
     { status: 409, json: { error: "本机缺少所需执行器", code: "capability-blocked" } },
-    { status: 502, json: { error: networkError } },
+    heldCapabilityReturn.respond,
     { json: { task: { ...task, handoff: { direction: "returned" } } } },
   ];
   await page.goto(url);
@@ -103,11 +142,74 @@ try {
   await dialog.getByRole("button", { name: "移回本机", exact: true }).click();
   dialog = page.getByRole("dialog", { name: "本机跑不动这个任务的执行器" });
   await dialog.getByRole("button", { name: "仍然移回", exact: true }).click();
+  await dialog.getByRole("status").waitFor();
+  await dialog.getByRole("button", { name: "后台等待", exact: true }).click();
+  heldCapabilityReturn.release();
+  await page.getByRole("alert").waitFor();
+  assert.equal(await page.getByRole("dialog").count(), 0, "后台收到失败时不强行重新打开弹窗");
+  await page.getByRole("alert").getByRole("button", { name: "重试移回", exact: true }).click();
   await dialog.getByRole("alert").waitFor();
   assert.match(await dialog.getByRole("alert").innerText(), /fetch failed/);
   await dialog.getByRole("button", { name: "仍然重试移回", exact: true }).click();
   await page.getByRole("status").filter({ hasText: "本机任务" }).waitFor();
   assert.deepEqual(requests.map((request) => request.ignoreCapabilityGaps), [false, true, true]);
+
+  const heldCapabilityBlock = holdReturn({ status: 409, json: { error: "本机缺少所需执行器", code: "capability-blocked" } });
+  responses = [heldCapabilityBlock.respond];
+  await page.goto(url);
+  dialog = await openReturn();
+  await dialog.getByRole("button", { name: "移回本机", exact: true }).click();
+  await dialog.getByRole("button", { name: "后台等待", exact: true }).click();
+  heldCapabilityBlock.release();
+  await page.getByRole("alert").waitFor();
+  assert.match(await page.getByRole("alert").innerText(), /移回需要确认/);
+  assert.equal(await page.getByRole("dialog").count(), 0);
+  await page.getByRole("button", { name: "查看移回确认", exact: true }).click();
+  dialog = page.getByRole("dialog", { name: "本机跑不动这个任务的执行器" });
+  await dialog.getByRole("button", { name: "仍然移回", exact: true }).waitFor();
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await page.getByRole("button", { name: "知道了", exact: true }).click();
+  assert.equal(await page.getByRole("alert").count(), 0);
+
+  responses = [{ status: 502, json: { error: networkError } }];
+  await page.goto(url);
+  dialog = await openReturn();
+  await dialog.getByRole("button", { name: "移回本机", exact: true }).click();
+  await dialog.getByRole("alert").waitFor();
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await page.getByRole("alert").getByRole("button", { name: "知道了", exact: true }).click();
+  assert.equal(await page.getByRole("alert").count(), 0, "失败横幅可以由用户关闭");
+
+  for (const pending of [false, true]) {
+    responses = [{ json: { task: { ...task, handoff: { direction: "out", pending } } } }];
+    await page.goto(url);
+    dialog = await openReturn();
+    await dialog.getByRole("button", { name: "移回本机", exact: true }).click();
+    await dialog.getByRole("alert").waitFor();
+    assert.match(await dialog.getByRole("alert").innerText(), /尚未确认任务已移回本机/);
+    assert.equal(await page.getByRole("status").filter({ hasText: "本机任务" }).count(), 0);
+    assert.doesNotMatch(await page.locator(".workspace-toast").innerText(), /任务已移回本机/);
+  }
+
+  for (const response of [
+    { status: 502, json: { error: networkError } },
+    { json: { task: { ...task, handoff: { direction: "returned" } } } },
+  ]) {
+    const held = holdReturn(response);
+    responses = [held.respond];
+    await page.goto(url);
+    dialog = await openReturn();
+    await dialog.getByRole("button", { name: "移回本机", exact: true }).click();
+    await dialog.getByRole("button", { name: "后台等待", exact: true }).click();
+    await page.getByRole("button", { name: "切换任务", exact: true }).click();
+    await page.locator(".task-detail-title").filter({ hasText: "另一条任务" }).waitFor();
+    const finished = page.waitForResponse((result) => result.url().endsWith("/remote-return"));
+    held.release();
+    await finished;
+    await page.waitForTimeout(100);
+    assert.equal(await page.getByRole("alert").count(), 0, "上一任务的迟到失败不能污染当前任务");
+    assert.equal(await page.getByRole("status").filter({ hasText: "本机任务" }).count(), 0, "上一任务的迟到成功不能切走当前任务");
+  }
 
   responses = [{ status: 502, json: { error: networkError } }];
   await page.goto(url);
@@ -119,8 +221,10 @@ try {
   await page.getByRole("alert").waitFor({ state: "detached" });
   assert.deepEqual(pageErrors, []);
 } finally {
+  releasePending.forEach((release) => release());
   await browser?.close();
   await server.close();
+  assert.deepEqual(routeErrors, [], "所有模拟 API 请求都应被处理；未预期请求或重复移回必须在主流程报错");
 }
 
-console.log("remote return browser tests passed: visible failure, polling, reopen, retry, capability override, task switch");
+console.log("remote return browser tests passed: visible errors, background waiting, dismiss/reopen, banner actions, capability retry, false success, late responses");
