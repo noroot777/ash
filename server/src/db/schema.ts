@@ -647,5 +647,7 @@ export const handoffLocalPeerKeys = sqliteTable("handoff_local_peer_keys", {
   url: text("url").primaryKey(),
   // 明文 key:要原样发给对端,没法只存哈希。GET 只报 hasKey。
   peerKey: text("peer_key").notNull(),
+  // 保存这把 key 时通过签名核对的机器；旧数据没有归属证明，保持 null。
+  peerFp: text("peer_fp"),
   updatedAt: text("updated_at").notNull(),
 });

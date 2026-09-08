@@ -87,6 +87,20 @@ try {
   assert.ok(calls.some((call) => call.method === "GET" && call.url === "/api/handoff/targets/sources"));
   assert.deepEqual(await page.evaluate(() => window.__handoffFixture?.unhandled ?? []), []);
   if (output) await page.screenshot({ path: `${output}/handoff-source-refreshed.png`, fullPage: true });
+
+  for (const scenario of ["return", "pending-return", "pending-out"]) {
+    await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/handoff-key-identity.html?scenario=${scenario}`);
+    const keyInput = page.getByRole("textbox", { name: "你在对端的账号 key" });
+    await keyInput.fill("wrong-key");
+    await page.getByRole("button", { name: "保存并重新检查" }).click();
+    await page.getByText("测试身份核对失败，key 未保存", { exact: true }).waitFor();
+    assert.equal(await keyInput.inputValue(), "wrong-key", "身份核对失败保留草稿");
+    await keyInput.fill("fixture-key");
+    await page.getByRole("button", { name: "保存并重新检查" }).click();
+    await page.getByLabel("保存结果").filter({ hasText: `${scenario} 已保存任务指纹 ${"a".repeat(64)}` }).waitFor();
+    await page.waitForFunction(() => document.getElementById("handoff-peer-key")?.value === "");
+    assert.equal(await keyInput.inputValue(), "", "成功保存清空 key 草稿，合成的任务目标仍可重新检查");
+  }
 } finally {
   await browser?.close();
   await server.close();

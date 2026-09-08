@@ -195,7 +195,7 @@ export async function ensureSchema() {
       approved_at TEXT, last_addr TEXT NOT NULL DEFAULT ''
     );
     CREATE TABLE IF NOT EXISTS handoff_local_peer_keys (
-      url TEXT PRIMARY KEY, peer_key TEXT NOT NULL, updated_at TEXT NOT NULL
+      url TEXT PRIMARY KEY, peer_key TEXT NOT NULL, peer_fp TEXT, updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS uploads (
       file TEXT PRIMARY KEY, owner_user_id TEXT, task_id TEXT, created_at TEXT NOT NULL
@@ -257,6 +257,7 @@ export async function ensureSchema() {
   // Run-timing columns (added later). Each ALTER is independent + tolerant so a
   // DB created before any one of them still upgrades cleanly.
   for (const sql of [
+    "ALTER TABLE handoff_local_peer_keys ADD COLUMN peer_fp TEXT",
     "ALTER TABLE tasks ADD COLUMN started_at TEXT",
     "ALTER TABLE tasks ADD COLUMN ended_at TEXT",
     "ALTER TABLE sessions ADD COLUMN ended_at TEXT",

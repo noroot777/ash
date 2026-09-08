@@ -140,9 +140,8 @@ export async function saveVerifiedTargetAddress(
   const mergedTarget = (target: { url: string; peerFp?: string | null }) => samePeer(target) || sameUrl(target.url, source.url);
   await db.transaction(async (tx) => {
     const before = multi ? [] : (await getAppSettings(tx)).handoffTargets;
-    const keys = multi ? new Map<string, string>() : new Map(
-      (await tx.select().from(handoffLocalPeerKeys)).map((row) => [row.url, row.peerKey]),
-    );
+    const localKeys = multi ? [] : await tx.select().from(handoffLocalPeerKeys);
+    const keys = new Map(localKeys.map((row) => [row.url, row.peerKey]));
     const targets: ResolvedTarget[] = multi
       ? await tx.select().from(userHandoffTargets).where(eq(userHandoffTargets.userId, owner!))
       : before.map((target) => ({ ...target, peerKey: keys.get(keyUrl(target.url)) ?? "" }));
@@ -152,7 +151,7 @@ export async function saveVerifiedTargetAddress(
     const merged = targets.filter(mergedTarget);
     const previous = merged.find(samePeer) ?? merged[0];
     // 弹窗补填的 key 可以没有目标机行；历史 URL 上现有目标行则可能属于后来占用旧 IP 的机器。
-    // 新地址刚通过签名核对；其余待迁移地址的凭据归属由全部目标行的指纹共同确认。
+    // 新地址刚通过签名核对；历史地址上的每条目标记录也参与归属冲突检查。
     const credentialUrls = new Set([
       keyUrl(source.url), ...merged.map((target) => keyUrl(target.url)), ...previousUrls.map(keyUrl),
     ].filter(Boolean));
@@ -162,6 +161,16 @@ export async function saveVerifiedTargetAddress(
       throw new HandoffError(
         `旧地址 ${conflictingTarget.url} 的目标机归属冲突，无法确认其属于同一来源机器。原地址和账号 key 未修改。`
         + "请在「设置 → 默认规则 → 任务接力」核对该目标机的地址和身份后重试。",
+        409,
+      );
+    }
+    // 任务 marker 和目标行说明地址历史，不能替没有归属证明的账号 key 背书。
+    const conflictingKey = localKeys.find((row) => credentialUrls.has(row.url) && row.peerKey
+      && (!row.peerFp || !sameFingerprint(row.peerFp, source.peerFp)));
+    if (conflictingKey) {
+      throw new HandoffError(
+        `地址 ${conflictingKey.url} 的账号 key 归属冲突，未确认属于这台来源机器；原地址和 key 未修改。`
+        + "请在「设置 → 默认规则 → 任务接力 → 接力目标机器」找到或添加这个地址，确认旧 key 不再使用后清除，再重试。",
         409,
       );
     }
@@ -190,8 +199,8 @@ export async function saveVerifiedTargetAddress(
     const value = JSON.stringify(updated);
     await tx.insert(appSettings).values({ key: "handoffTargets", value })
       .onConflictDoUpdate({ target: appSettings.key, set: { value } });
-    if (peerKey) await tx.insert(handoffLocalPeerKeys).values({ url: keyUrl(source.url), peerKey, updatedAt: now() })
-      .onConflictDoUpdate({ target: handoffLocalPeerKeys.url, set: { peerKey, updatedAt: now() } });
+    if (peerKey) await tx.insert(handoffLocalPeerKeys).values({ url: keyUrl(source.url), peerKey, peerFp: source.peerFp, updatedAt: now() })
+      .onConflictDoUpdate({ target: handoffLocalPeerKeys.url, set: { peerKey, peerFp: source.peerFp, updatedAt: now() } });
     const obsoleteUrls = [...credentialUrls].filter((url) => url !== keyUrl(source.url));
     if (obsoleteUrls.length) await tx.delete(handoffLocalPeerKeys).where(inArray(handoffLocalPeerKeys.url, obsoleteUrls));
   });
@@ -259,26 +268,41 @@ export async function addTarget(
  *
  * 空串 = 明确清空(对端转回单人实例了)。
  */
-export async function setPeerKey(actor: Actor, rawUrl: string, peerKey: string): Promise<HandoffTarget[]> {
+export async function setPeerKey(
+  actor: Actor, rawUrl: string, peerKey: string, expectedPeerFp?: string | null,
+): Promise<HandoffTarget[]> {
   const url = keyUrl(rawUrl);
   if (!url) throw new HandoffError("缺目标机地址", 400);
   if (peerKey.length > 512) throw new HandoffError("这把 key 太长了(上限 512 字符)", 400);
-  if (!(await isMultiUser())) {
+  if (expectedPeerFp != null && (typeof expectedPeerFp !== "string" || !/^[a-f0-9]{64}$/i.test(expectedPeerFp))) {
+    throw new HandoffError("机器指纹格式无效", 400);
+  }
+  const multi = await isMultiUser();
+  const owner = ownerIdOf(actor);
+  if (multi && !owner) throw new HandoffError("请先登录", 401);
+  // 保存新 key 的显式动作绑定当时签名确认的机器，覆盖写不会继承上一把 key 的归属。
+  const { probeSignedPeerFingerprint } = await import("../handoff-peer-client.js");
+  const peerFp = peerKey && (!multi || expectedPeerFp) ? await probeSignedPeerFingerprint(rawUrl) : null;
+  if (peerKey && expectedPeerFp && (!peerFp || !sameFingerprint(peerFp, expectedPeerFp))) {
+    throw new HandoffError(peerFp
+      ? "地址背后的机器指纹不一致，账号 key 未保存。请先核对来源机器地址。"
+      : "无法核对机器身份，账号 key 未保存。请确认地址和 ash 运行状态后重试。", peerFp ? 409 : 502);
+  }
+  if (!multi) {
     // 不校验「这个地址还在不在清单里」是**故意的**:pending 重放收口时,弹框会为
     // 「已从设置里删掉、但任务还挂在它身上」的地址合成一个目标,那里填的 key 必须真的
     // 能用。出站读侧直接读这张表,所以写下去就生效(见 `outboundPeerKeys`)。
     if (peerKey) {
-      await db.insert(handoffLocalPeerKeys).values({ url, peerKey, updatedAt: now() })
+      await db.insert(handoffLocalPeerKeys).values({ url, peerKey, peerFp, updatedAt: now() })
         .onConflictDoUpdate({
           target: handoffLocalPeerKeys.url,
-          set: { peerKey, updatedAt: now() },
+          set: { peerKey, peerFp, updatedAt: now() },
         });
     } else {
       await db.delete(handoffLocalPeerKeys).where(eq(handoffLocalPeerKeys.url, url));
     }
     return listTargets(actor);
   }
-  const owner = ownerIdOf(actor);
   if (!owner) throw new HandoffError("请先登录", 401);
   const rows = (await db.select().from(userHandoffTargets).where(eq(userHandoffTargets.userId, owner)))
     .filter((row) => sameUrl(row.url, url));

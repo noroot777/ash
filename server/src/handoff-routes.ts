@@ -500,12 +500,12 @@ export function mountHandoffRoutes(api: Hono): void {
   // 预检失败时要当场补 key,那里也只有选中的那台机器。两种模式的写入差异收在
   // `setPeerKey` 里(见 auth/handoff-scope.ts),路由这层只有一条路。
   api.put("/handoff/targets/key", async (c) => {
-    const b = (await c.req.json().catch(() => ({}))) as { url?: string; peerKey?: string };
+    const b = (await c.req.json().catch(() => ({}))) as { url?: string; peerKey?: string; peerFp?: string | null };
     if (typeof b.peerKey !== "string") return c.json({ error: "缺 peerKey(空串 = 清除)" }, 400);
     let url: string;
     try { url = normalizePeerUrl(b.url ?? ""); } catch (e) { return fail(c, e); }
     try {
-      return c.json({ targets: await setPeerKey(actorOf(c), url, b.peerKey.trim()) });
+      return c.json({ targets: await setPeerKey(actorOf(c), url, b.peerKey.trim(), b.peerFp) });
     } catch (e) { return fail(c, e); }
   });
 

@@ -301,6 +301,7 @@ export function HandoffSettings({
                   先不给填 —— 填进去会落到一个不存在的目标上。 */}
               <HandoffPeerKeyField
                 url={normalizeTargetUrl(item.url)}
+                peerFp={item.peerFp}
                 hasKey={keyedUrls.has(normalizeTargetUrl(item.url).toLowerCase())}
                 mode="row"
                 disabled={loading || !HANDOFF_URL_RE.test(item.url.trim())}

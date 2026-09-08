@@ -528,6 +528,7 @@ export function BulkHandoffDialog({
             {peerKeyRequired && (
               <HandoffPeerKeyField
                 url={target.url}
+                peerFp={target.peerFp}
                 hasKey={Boolean(target.hasKey)}
                 mode="block"
                 disabled={busy}
@@ -619,6 +620,7 @@ export function BulkHandoffDialog({
         {peerKeyRequired && (
           <HandoffPeerKeyField
             url={target.url}
+            peerFp={target.peerFp}
             hasKey={Boolean(target.hasKey)}
             mode="block"
             disabled={busy}

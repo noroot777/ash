@@ -163,6 +163,7 @@ export function UserHandoffTargets({ notify }: { notify: (message: string) => vo
               </Button>
               <HandoffPeerKeyField
                 url={url}
+                peerFp={target.peerFp}
                 hasKey={Boolean(target.hasKey)}
                 mode="row"
                 disabled={busy}

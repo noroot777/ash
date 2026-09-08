@@ -16,6 +16,7 @@ import { api } from "../lib/api.ts";
 // 清单住在 app_settings 里,压根没有行 id。
 export function HandoffPeerKeyField({
   url,
+  peerFp,
   hasKey,
   mode,
   disabled,
@@ -24,6 +25,7 @@ export function HandoffPeerKeyField({
   onSaved,
 }: {
   url: string;
+  peerFp?: string | null;
   hasKey: boolean;
   /** row = 设置页清单里的一行(默认收起);block = 弹窗里的补填块(默认展开)。 */
   mode: "row" | "block";
@@ -43,7 +45,7 @@ export function HandoffPeerKeyField({
   const save = async (next: string) => {
     setBusy(true);
     try {
-      onSaved(await api.setHandoffTargetKey(url, next));
+      onSaved(await api.setHandoffTargetKey(url, next, peerFp));
       setValue("");
       if (mode === "row") setEditing(false);
       return true;
