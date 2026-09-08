@@ -213,6 +213,15 @@
 .handoff-summary { color: var(--muted); }
 .handoff-notes { color: var(--faint); }
 
+.handoff-settings-link {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.handoff-settings-link:hover { text-decoration-thickness: 2px; }
+.handoff-settings-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+
 .handoff-check { display: flex; align-items: center; gap: 6px; margin: 12px 0 0; color: var(--ink); font-size: 11.5px; }
 
 .handoff-remote-link { display: inline-flex; align-items: center; gap: 3px; border: 0; background: transparent; padding: 0; color: var(--accent); cursor: pointer; }
