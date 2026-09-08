@@ -711,36 +711,6 @@ export async function stopPreviewAtAccept(taskId: string): Promise<void> {
   else if (record.life === "task") await stopPreview(taskId, "任务已验收完成，按线上写的「任务结束时回收」收掉");
 }
 
-/**
- * 「这个任务正在切进 running」。**一道同步的门**，`setTaskStatus` 在收预览之前竖起来、
- * 状态真的落库之后再放下。
- *
- * 收预览和写 `status = "running"` 是两步、中间隔着 await，而起预览那一路只看库里那一行：
- * 它在这段缝里读到的还是 `done`，于是一路放行、把预览起起来 —— 收预览那一下已经过去了，
- * 不会再来第二次。结果就是「任务正在改下一版代码，上一版的预览还开着」：用户对着旧页面
- * 验新改动，dev server 的缓存和产物还跟 agent 的写入撞在同一个工作区里。
- *
- * 计数而不是布尔：同一个任务并发走两次开跑路径时，先结束的那次不能把后一次的门放下。
- */
-const rerunning = new Map<string, number>();
-
-/** 开始切进 running：从这一刻起不许有新的预览起来。**必须在任何 await 之前调**。 */
-export function beginPreviewRerunBlock(taskId: string): void {
-  rerunning.set(taskId, (rerunning.get(taskId) ?? 0) + 1);
-}
-
-/** 状态已经落库了，门可以放下 —— 之后靠库里那一行 `running` 自己挡。 */
-export function endPreviewRerunBlock(taskId: string): void {
-  const left = (rerunning.get(taskId) ?? 0) - 1;
-  if (left > 0) rerunning.set(taskId, left);
-  else rerunning.delete(taskId);
-}
-
-/** 此刻是不是正卡在「已经开始开跑、状态还没落库」那一段。起预览的路由每过一段就问一次。 */
-export function previewBlockedByRerun(taskId: string): boolean {
-  return rerunning.has(taskId);
-}
-
 /** 任务又开跑了：预览指向的是上一版代码，一律收掉，免得对着旧页面验新改动。 */
 export async function stopPreviewOnRerun(taskId: string): Promise<void> {
   // **不设门禁。** 这里曾经拿 `readAnyPreview` 当开关，漏掉的正是「内存里已经有启动代、

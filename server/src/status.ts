@@ -3,7 +3,8 @@ import type { TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
-import { beginPreviewRerunBlock, endPreviewRerunBlock, stopPreviewOnRerun } from "./preview.js";
+import { stopPreviewOnRerun } from "./preview.js";
+import { beginRerunGate, endRerunGate } from "./rerun-gate.js";
 import { now, runsTiming } from "./util.js";
 
 const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
@@ -19,15 +20,15 @@ const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
 //   • otherwise  : leave the timestamps untouched.
 export async function setTaskStatus(taskId: string, status: TaskStatus): Promise<void> {
   const cur = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  // 又开跑了：这一段里不许有新的预览起来。**同步竖起来、状态落库之后才放下**——收预览和
-  // 写 running 是两步，中间那条缝里起预览那一路读到的还是 `done`，会一路放行（见
-  // beginPreviewRerunBlock）。
+  // 又开跑了：这一段里不许有新的自由工作流动作（起预览、验收、派审…）。**同步竖起来、
+  // 状态落库之后才放下**——收预览和写 running 是两步，中间那条缝里库里那行还是 `done`，
+  // 按状态放行的动作会一路放行（见 rerun-gate.ts）。
   const rerun = status === "running" && !!cur && cur.status !== "running";
-  if (rerun) beginPreviewRerunBlock(taskId);
+  if (rerun) beginRerunGate(taskId);
   try {
     await writeTaskStatus(taskId, status, cur, rerun);
   } finally {
-    if (rerun) endPreviewRerunBlock(taskId);
+    if (rerun) endRerunGate(taskId);
   }
 }
 

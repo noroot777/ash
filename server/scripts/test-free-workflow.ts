@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -41,6 +41,22 @@ function drainFifo(path: string): void {
   open();
 }
 
+/**
+ * 收尾时把还活着的预览进程收掉。回归退化时那一路会真的把服务起起来，断言炸在它前面，
+ * 于是既漏一个监听着端口的孤儿进程，又把事件循环吊住（同上：断言打印了，进程不退）。
+ */
+function killLeftoverPreviews(runsRoot: string): void {
+  if (!existsSync(runsRoot)) return;
+  for (const dir of readdirSync(runsRoot)) {
+    const file = join(runsRoot, dir, "preview.json");
+    if (!existsSync(file)) continue;
+    try {
+      const { pid } = JSON.parse(readFileSync(file, "utf8")) as { pid: number };
+      if (pid > 0) process.kill(-pid, "SIGKILL");
+    } catch { /* 已经走了 */ }
+  }
+}
+
 /** 等一个条件成真（用在真实路由 + 真实仓库锁那一段：时序靠等，不靠猜固定毫秒）。 */
 async function waitFor(check: () => boolean | Promise<boolean>, message: string, timeoutMs = 15_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -51,6 +67,7 @@ async function waitFor(check: () => boolean | Promise<boolean>, message: string,
   assert.fail(message);
 }
 
+let failure: unknown = null;
 try {
   const { ensureSchema, db, dbClient } = await import("../src/db/index.js");
   const { agents, freeReviewRounds, freeReviewRuns, freeWorkflowStates, projects, sessions, tasks } = await import("../src/db/schema.js");
@@ -682,6 +699,34 @@ try {
     const midway = (await db.select().from(tasks).where(eq(tasks.id, rerunId))).at(0);
     assert.equal(midway?.status, "done", "这一刻库里本来就还是旧状态（正是这条缝的成因）");
 
+    // **同一条缝里，终局动作也不能放行。** 重跑取消在途预览时会顺手把动作锁放掉（那是对的，
+    // 否则验收/派审要陪一次作废的启动干等八分钟），可这一刻库里还写着 done —— 空出来的锁加
+    // 一行过期的状态，正好够验收挤进来，把一个下一秒就要开跑的任务点成 accepted。
+    //
+    // 这两发要**在窗口里当场跑完再收结果**：放到放开 FIFO 之后去 await，退化的那一路会读到
+    // 已经落库的 running，被别的挡板顺手拦下，这条断言就永远报不出真问题（实测：退化版给出
+    // 的是 task_in_flight）。也必须排在下面那发预览 POST **之前** —— 没有这道门的话，那发
+    // POST 自己就把动作锁攥走了，验收会因为「已有操作正在进行」被拦下，同样是假通过。
+    // 先把会话删掉，这两发各自那笔时间线就不会再堵在同一条 FIFO 上；回收那一笔早就把流开
+    // 着卡在那儿了，窗口不受影响。
+    await db.delete(sessions).where(eq(sessions.id, sessionId));
+    const midAccept = await acceptTask(rerunId).then(
+      (result) => result,
+      (err: unknown) => ({ accepted: false as const, reason: `threw: ${String(err)}` }),
+    );
+    assert.equal(midAccept.accepted, false, "任务正在切进 running，验收却成功了（accepted + running 就是这么来的）");
+    if (!midAccept.accepted) {
+      assert.equal(
+        midAccept.reason, "free_workflow_action_in_progress",
+        "验收是被挡住了，但不是因为这个任务正在开跑 —— 别让别的理由替它交差",
+      );
+    }
+    const midReview = await api.request(`/tasks/${rerunId}/free-workflow/review`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1 }),
+    });
+    assert.equal(midReview.status, 409, "任务正在切进 running，派审却放行了");
+
     // 这一发不 await：挡不住的话它会一路起到底，而那时它自己的时间线也要写进同一条 FIFO。
     const midPosting = api.request(`/tasks/${rerunId}/free-workflow/preview`, { method: "POST" });
     // 先守住 FIFO 再收结果：回收那一笔写完、状态落库，退化的那一路也走得完 —— 断言才有得报。
@@ -696,11 +741,67 @@ try {
     stopDrainingFifo?.();
     const after = (await db.select().from(tasks).where(eq(tasks.id, rerunId))).at(0);
     assert.equal(after?.status, "running", "状态最终没落成 running");
+    assert.notEqual(after?.stage, "accepted", "任务被点成了已验收，可它下一秒就开跑了（界面锁死操作，执行器还在改它）");
     assert.equal(
       existsSync(join(root, "runs", rerunId, "preview.json")), false,
       "那条缝里发起的预览最终还是起来了",
     );
     assert.equal(existsSync(marker2), false, "那条缝里发起的预览把命令跑起来了");
+  }
+
+  // 「起来了」不等于「还是你的」：`startPreview` 返回成功之后，路由还要写一笔时间线才应答，
+  // 重跑回收完全可能落在这条缝里 —— 进程被杀、记录被删、任务已经 running，而这一趟手里攥
+  // 着的还是那份旧 record。就那么回 200，前端拿 200 就通知「预览已打开」并 window.open，
+  // 用户被弹到一个已经被收掉的地址上，比直接说没起来还糟。
+  {
+    const tailId = "tail-race-task";
+    await createTasks([{
+      id: tailId, projectId: "p-git", groupId: null, parentId: null,
+      title: "preview tail race", body: "test", mode: "single", status: "done",
+      labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
+      executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
+      duet: null, team: null, reportBack: false, scheduleId: null,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      useWorktree: false, worktreeBase: null, originTaskId: null, workflowMode: "free",
+    }]);
+    const tailSession = "tail-race-session";
+    await db.insert(sessions).values({
+      id: tailSession, taskId: tailId, role: "lead", agentType: "codex",
+      executor: "codex@test", startedAt: new Date().toISOString(),
+    });
+    // 时间线那一笔写进 FIFO，这一趟就定格在成功尾段上 —— 窗口是确定的，不靠抢时序。
+    const tailFifo = sessionTranscriptPath(tailId, tailSession);
+    mkdirSync(dirname(tailFifo), { recursive: true });
+    rmSync(tailFifo, { force: true });
+    execFileSync("mkfifo", [tailFifo]);
+
+    const tailRecord = join(root, "runs", tailId, "preview.json");
+    const tailPosting = api.request(`/tasks/${tailId}/free-workflow/preview`, { method: "POST" });
+    await waitFor(() => {
+      if (!existsSync(tailRecord)) return false;
+      return (JSON.parse(readFileSync(tailRecord, "utf8")) as { state: string }).state === "ready";
+    }, "预览没能起来，这一段就不是「已就绪、只差应答」了", 90_000);
+    const readyRecord = JSON.parse(readFileSync(tailRecord, "utf8")) as { pid: number };
+    assert.ok(readyRecord.pid > 0, "就绪记录里没有进程号，后面没法验证进程有没有被收掉");
+
+    // 会话删掉，重跑自己那笔回收时间线就不会跟着堵在同一条 FIFO 上（堵住的只剩这一趟）。
+    await db.delete(sessions).where(eq(sessions.id, tailSession));
+    await setTaskStatus(tailId, "running");
+    assert.equal(existsSync(tailRecord), false, "重跑没把已就绪的预览记录收掉");
+
+    drainFifo(tailFifo);
+    const tailPost = await tailPosting;
+    assert.notEqual(tailPost.status, 200, "预览已经被重跑收掉了，这一趟还是回了 200（前端照着它 window.open 一个死地址）");
+    assert.equal(tailPost.status, 409);
+    assert.match(
+      ((await tailPost.json()) as { error: string }).error, /取消/,
+      "挡是挡住了，但没说清这一趟的成果是被人收走了",
+    );
+    stopDrainingFifo?.();
+    const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    await waitFor(() => !alive(readyRecord.pid), "预览进程还活着：记录没了、任务在跑，端口却还占着");
+    const tailTask = (await db.select().from(tasks).where(eq(tasks.id, tailId))).at(0);
+    assert.equal(tailTask?.status, "running", "状态最终没落成 running");
   }
 
   const review = await api.request("/tasks/free-task/free-workflow/review", {
@@ -828,9 +929,17 @@ try {
   console.log("✓ 审查续跑保持独立 reviewer 会话与原模型配置");
   console.log("✓ 技能名与斜杠命令只进入需求参考文件，不进入自由审查 prompt");
   console.log("✓ 自由审查报告与截图接口返回正确内容类型");
+} catch (error) {
+  console.error(error);
+  failure = error;
 } finally {
   stopDrainingFifo?.();
+  killLeftoverPreviews(join(root, "runs"));
   // 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
+  // 断言炸在窗口里的时候，还有写者堵在 FIFO 的 `open()` 上 —— 那是 libuv 线程池里的一根
+  // 线程，**连 process.exit 都回不来**（实测：结论早就打印出来了，进程再也不退，看起来
+  // 跟测试挂死一模一样）。结论已经在屏幕上了，剩下的只有退场，所以直接自杀。
+  if (failure) process.kill(process.pid, "SIGKILL");
 }
