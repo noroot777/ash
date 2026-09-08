@@ -12,6 +12,7 @@ import { canUseOwned, filterOwned } from "../auth/owned.js";
 import { enrichTasks, toTaskListItem } from "../task-store.js";
 import { id, now } from "../util.js";
 import { chatService, roomMessages, toRoom, type ChatService, type RoomRow } from "./service.js";
+import { chatContextStatus } from "./context-store.js";
 
 async function visibleRoom(c: Context): Promise<RoomRow | undefined> {
   const actor = actorOf(c);
@@ -69,7 +70,7 @@ async function snapshot(room: RoomRow, c: Context) {
   const taskIds = messages.flatMap((message) => message.taskId ? [message.taskId] : []);
   const visible = await visibleTaskIds(actorOf(c), taskIds);
   const rows = visible.length ? await db.select().from(tasks).where(and(eq(tasks.projectId, room.projectId), inArray(tasks.id, visible))) : [];
-  return { room: toRoom(room), messages, tasks: (await enrichTasks(rows)).map(toTaskListItem) };
+  return { room: toRoom(room), messages, tasks: (await enrichTasks(rows)).map(toTaskListItem), context: await chatContextStatus(room.id) };
 }
 
 export function mountChatRoutes(api: Hono, service: ChatService = chatService) {
@@ -118,7 +119,7 @@ export function mountChatRoutes(api: Hono, service: ChatService = chatService) {
       }
       if (patch.members !== undefined) {
         const busy = await db.select({ id: chatMessages.id }).from(chatMessages).where(and(eq(chatMessages.roomId, room.id), inArray(chatMessages.status, ["queued", "running"]))).limit(1);
-        if (busy.length) return c.json({ error: "请等待回复结束或停止回复后再修改成员。" }, 409);
+        if (busy.length || (await chatContextStatus(room.id)).status === "compacting") return c.json({ error: "请等待回复或历史整理结束，或停止回复后再修改成员。" }, 409);
       }
       if (Object.keys(patch).length) await db.update(chatRooms).set(patch).where(eq(chatRooms.id, room.id));
       return c.json(toRoom({ ...room, ...patch }));

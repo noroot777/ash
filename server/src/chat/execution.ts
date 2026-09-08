@@ -14,7 +14,7 @@ import { db } from "../db/index.js";
 import { agents, projects, users } from "../db/schema.js";
 import { ChatBoundaryError, readOnlyChatTool, watchChatWorkspace } from "./boundary.js";
 
-export async function invokeChat(member: ChatMember, owner: string | null, prompt: string, signal: AbortSignal, projectId: string): Promise<string> {
+export async function invokeChat(member: ChatMember, owner: string | null, prompt: string, signal: AbortSignal, projectId: string, options?: { purpose: "summary" }): Promise<string> {
   signal.throwIfAborted();
   const scope = await executorOwnerScope(owner);
   const project = (await db.select().from(projects).where(eq(projects.id, projectId))).at(0);
@@ -34,7 +34,7 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
   const executor = await resolveExecutorFor({ type: member.agentType, executorId: member.executorId, model: member.model, reasoningEffort: member.reasoningEffort, ...scope });
   const env = await runEnvForOwner(owner, executor.type);
   signal.throwIfAborted();
-  const temporary = !project.repoPath.trim();
+  const temporary = options?.purpose === "summary" || !project.repoPath.trim();
   // repoPath 按用户写的原样存（`~/code/x` 保持可读、可搬机器），所以每个消费点都得自己
   // 展开——少这一步，watchChatWorkspace 的 realpath 会直接 ENOENT，被 @ 的成员一个不剩
   // 全报同一条错，而且错在 CLI 起来之前，看着像「智能体坏了」。
@@ -62,6 +62,7 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
       let text = "";
       let exitStatus: number | undefined;
       for await (const event of handle!.events) {
+        if (event.kind === "tool" && options?.purpose === "summary") throw new ChatBoundaryError("后台摘要调用使用了工具，摘要未采用");
         if (event.kind === "tool" && !readOnlyChatTool(event)) throw new ChatBoundaryError(`检测到写入或无法确认只读的工具（${JSON.stringify(event.name.slice(0, 80))}）`);
         signal.throwIfAborted();
         if (event.kind === "text") text += event.text;
