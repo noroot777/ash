@@ -139,7 +139,7 @@ export const api = {
     request("/projects/resolve", json("POST", { repoPath, name })),
   updateProject: (
     projectId: string,
-    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId">>,
+    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId" | "previewCommand">>,
   ): Promise<ProjectView> => request(`/projects/${id(projectId)}`, json("PATCH", patch)),
   deleteProject: (projectId: string): Promise<{ deleted: true }> =>
     request(`/projects/${id(projectId)}`, { method: "DELETE" }),
@@ -344,6 +344,12 @@ export const api = {
     request(`/tasks/${id(taskId)}/free-workflow/preview`, { method: "POST" }),
   stopFreePreview: (taskId: string): Promise<{ stopped: boolean }> =>
     request(`/tasks/${id(taskId)}/free-workflow/preview`, { method: "DELETE" }),
+  // 预览的启动日志。起失败时也读得到（banner 在 spawn 之前就落盘），所以这是「预览
+  // 为什么起不来」的唯一现场，不能只在 running 时给。
+  freePreviewLog: (taskId: string): Promise<{
+    text: string; truncated: boolean; updatedAt: string | null;
+    exists: boolean; running: boolean; starting: boolean; command: string | null; url: string | null;
+  }> => request(`/tasks/${id(taskId)}/free-workflow/preview/log`),
   freeReviewFileUrl: (taskId: string, runId: string, round: number, name: string): string =>
     apiPath(`/tasks/${id(taskId)}/free-workflow/review-file?run=${id(runId)}&round=${id(String(round))}&name=${id(name)}`),
   // 人工替这一站「自动验证」签字放行。**后端会接着把这一站之后那一段跑掉**——线上

@@ -1,14 +1,17 @@
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type { ChatMember, ChatMessage, ChatRoom } from "@ash/shared/chat";
-import { mentionedMembers } from "@ash/shared/chat";
+import { isChatClearCommand, mentionedMembers } from "@ash/shared/chat";
 import { db } from "../db/index.js";
 import { chatRooms, chatMessages } from "../db/schema.js";
 import { id, now } from "../util.js";
 import { createTasks } from "../task-store.js";
 import { runTask } from "../task-run.js";
 import { invokeChat } from "./execution.js";
-import { chatPrompt, parseChatReply } from "./prompt.js";
+import { parseChatReply } from "./prompt.js";
 import { ChatBoundaryError } from "./boundary.js";
+import { ChatContextManager } from "./context.js";
+import { limitedChatInvoke } from "./invocation-queue.js";
+import type { ChatContextPolicy } from "./context-format.js";
 
 export type RoomRow = typeof chatRooms.$inferSelect;
 type MessageRow = typeof chatMessages.$inferSelect;
@@ -23,36 +26,63 @@ export async function roomMessages(roomId: string) {
 export class ChatService {
   private active = new Map<string, { roomId: string; memberId: string; abort: AbortController }>();
   private pumping = false;
-  constructor(private invoke = invokeChat, private startTask = runTask) {}
+  private sending = new Map<string, Promise<void>>();
+  private stopping = new Set<string>();
+  private invoke: typeof invokeChat;
+  private contexts: ChatContextManager;
+  constructor(invoke = invokeChat, private startTask = runTask, policy?: ChatContextPolicy) {
+    this.invoke = limitedChatInvoke(invoke);
+    this.contexts = new ChatContextManager(this.invoke, policy);
+  }
 
   async recover() {
     await db.update(chatMessages).set({ status: "stopped", body: "服务重启，回复已中断。请重新 @ 该成员继续。", context: null })
       .where(inArray(chatMessages.status, ["queued", "running"]));
+    await this.contexts.recover();
   }
 
   async send(row: RoomRow, body: string, messageId: string, author: string) {
+    const previous = this.sending.get(row.id) ?? Promise.resolve();
+    const pending = previous.catch(() => {}).then(() => this.sendNow(row, body, messageId, author));
+    this.sending.set(row.id, pending);
+    try { await pending; }
+    finally { if (this.sending.get(row.id) === pending) this.sending.delete(row.id); }
+  }
+
+  private async sendNow(row: RoomRow, body: string, messageId: string, author: string) {
     const existing = (await db.select().from(chatMessages).where(eq(chatMessages.id, messageId))).at(0);
     if (existing) {
       if (existing.roomId !== row.id || existing.role !== "user" || existing.body !== body) throw new Error("消息编号冲突，请刷新后重试。");
       return;
     }
+    if (isChatClearCommand(body)) {
+      await this.stop(row.id);
+      await this.contexts.clear(row.id, { id: messageId, body, author });
+      return;
+    }
     const room = toRoom(row);
     const mentions = mentionedMembers(body, room.members);
-    const history = await roomMessages(row.id);
+    const { cutoff, tail } = mentions.length ? await this.contexts.captureSnapshot(row.id) : { cutoff: 0, tail: [] };
     const timestamp = now();
     await db.transaction(async (tx) => {
       await tx.insert(chatMessages).values({ id: messageId, roomId: row.id, role: "user", author, body, mentions: JSON.stringify(mentions.map((member) => member.id)), createdAt: timestamp });
       for (const [position, member] of mentions.entries()) {
-        await tx.insert(chatMessages).values({ id: id(), roomId: row.id, role: "agent", memberId: member.id, author: member.name, status: "queued", createdAt: new Date(Date.parse(timestamp) + position + 1).toISOString(), context: JSON.stringify({ prompt: chatPrompt(member, history, body), source: body, member }) });
+        await tx.insert(chatMessages).values({ id: id(), roomId: row.id, role: "agent", memberId: member.id, author: member.name, status: "queued", createdAt: new Date(Date.parse(timestamp) + position + 1).toISOString(), context: JSON.stringify({ cutoff, tail, source: body, member }) });
       }
     });
     void this.pump();
   }
 
   async stop(roomId: string) {
-    const stopped = await db.update(chatMessages).set({ status: "stopped", body: "你已停止这次回复。再次 @ 才会继续；已创建的任务可在任务卡中管理。", context: null })
-      .where(and(eq(chatMessages.roomId, roomId), inArray(chatMessages.status, ["queued", "running"]))).returning({ id: chatMessages.id });
-    for (const message of stopped) this.active.get(message.id)?.abort.abort();
+    this.stopping.add(roomId);
+    try {
+      const body = "你已停止这次回复。再次 @ 才会继续；已创建的任务可在任务卡中管理。";
+      const stopped = await db.update(chatMessages).set({ status: "stopped", body, context: null })
+        .where(and(eq(chatMessages.roomId, roomId), inArray(chatMessages.status, ["queued", "running"]))).returning({ id: chatMessages.id });
+      const contextStopped = this.contexts.stop(roomId);
+      for (const message of stopped) this.active.get(message.id)?.abort.abort(new Error(body));
+      await contextStopped;
+    } finally { this.stopping.delete(roomId); void this.pump(); }
   }
 
   private async pump() {
@@ -62,12 +92,15 @@ export class ChatService {
       const queued = await db.select().from(chatMessages).where(eq(chatMessages.status, "queued")).orderBy(asc(chatMessages.createdAt));
       for (const message of queued) {
         if (this.active.size >= 4) break;
+        if (this.stopping.has(message.roomId)) continue;
         if (!message.memberId || [...this.active.values()].some((entry) => entry.roomId === message.roomId && entry.memberId === message.memberId)) continue;
         const abort = new AbortController();
         this.active.set(message.id, { roomId: message.roomId, memberId: message.memberId, abort });
-        void this.reply(message, abort).finally(() => {
+        let completed: ChatMember | undefined;
+        void this.reply(message, abort).then((member) => { completed = member; }).finally(() => {
           this.active.delete(message.id);
           void this.pump();
+          if (completed) void this.contexts.prewarm(message.roomId, completed).catch((error) => console.error("[chat] background context failed", error));
         }).catch((error) => console.error("[chat] reply settlement failed", error));
       }
     } catch (error) {
@@ -86,9 +119,10 @@ export class ChatService {
       abort.signal.throwIfAborted();
       const room = (await db.select().from(chatRooms).where(eq(chatRooms.id, message.roomId))).at(0);
       if (!room || !message.context) throw new Error("群聊或成员不存在，请重新选择成员。");
-      const context = JSON.parse(message.context) as { prompt: string; source: string; member: ChatMember };
+      const context = JSON.parse(message.context) as { prompt?: string; cutoff: number; tail?: string[]; source: string; member: ChatMember };
       const member = context.member;
-      const result = parseChatReply(await this.invoke(member, room.ownerUserId, context.prompt, abort.signal, room.projectId));
+      const prompt = context.prompt ?? await this.contexts.prepare(room, member, context.cutoff, context.source, abort.signal, context.tail);
+      const result = parseChatReply(await this.invoke(member, room.ownerUserId, prompt, abort.signal, room.projectId));
       abort.signal.throwIfAborted();
       let taskToStart: string | null = null;
       if (result.task) {
@@ -114,6 +148,7 @@ export class ChatService {
           await db.update(chatMessages).set({ status: "failed", body: `任务已创建，但启动失败：${error instanceof Error ? error.message : String(error)}。请打开任务重试。` }).where(eq(chatMessages.id, message.id));
         });
       }
+      if (settled.length && !abort.signal.aborted) return member;
     } catch (error) {
       const boundary = error instanceof ChatBoundaryError;
       await db.update(chatMessages).set({ status: boundary ? "failed" : abort.signal.aborted ? "stopped" : "failed", context: null, body: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) })

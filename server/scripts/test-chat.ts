@@ -172,7 +172,8 @@ try {
   value = await settled();
   assert.equal(invoked.length, beforeStop);
   assert.equal(value.messages.filter((message) => message.status === "stopped").length, 2);
-  assert.ok(value.messages.filter((message) => message.status === "stopped").every((message) => message.body.includes("停止")));
+  assert.ok(value.messages.filter((message) => message.status === "stopped").every((message) => message.body === "你已停止这次回复。再次 @ 才会继续；已创建的任务可在任务卡中管理。"));
+  assert.deepEqual(value.context, { status: "idle", error: null, hasSummary: false, clearedAt: null });
   held = false;
   await send("@codex 重新点名");
   await settled();

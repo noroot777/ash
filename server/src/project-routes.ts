@@ -87,6 +87,7 @@ export function mountProjectRoutes(api: Hono): void {
       repoPath,
       apiKeys: null,
       workflowId: null,
+      previewCommand: null,
       createdAt: now(),
       ownerUserId: ownerIdOf(actor),
     };
@@ -153,6 +154,7 @@ export function mountProjectRoutes(api: Hono): void {
       repoPath,
       apiKeys: null,
       workflowId: null,
+      previewCommand: null,
       createdAt: now(),
       ownerUserId: ownerIdOf(actor),
     };
@@ -207,6 +209,17 @@ export function mountProjectRoutes(api: Hono): void {
         }, 400);
       }
       patch.workflowId = wid || null;
+    }
+    // 预览命令：空串/null 都表示「回到自动识别」，跟 workflowId 一样只存一种写法。
+    // 不校验命令本身能不能跑 —— 它是一条给用户自己的 shell 的命令行，任何语言、
+    // 任何 cd 都成立，能不能起来由预览那一站如实报告（preview-command.ts 顶部）。
+    if (b.previewCommand !== undefined) {
+      if (b.previewCommand !== null && typeof b.previewCommand !== "string") {
+        return c.json({ error: "previewCommand 必须是字符串或 null" }, 400);
+      }
+      const cmd = typeof b.previewCommand === "string" ? b.previewCommand.trim() : "";
+      if (cmd.length > 2000) return c.json({ error: "预览命令太长了" }, 400);
+      patch.previewCommand = cmd || null;
     }
     if (Object.keys(patch).length) await db.update(projects).set(patch).where(eq(projects.id, pid));
     const updated = (await db.select().from(projects).where(eq(projects.id, pid))).at(0)!;

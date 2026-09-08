@@ -11,7 +11,7 @@ mkdirSync(join(stage, "node_modules", "pkg"), { recursive: true });
 process.env.ASH_DB = join(stage, "test.db");
 process.env.ASH_RUNS_DIR = join(stage, "runs");
 const { db, ensureSchema, dbClient } = await import("../src/db/index.js");
-const { projects, agents, tasks } = await import("../src/db/schema.js");
+const { projects, agents, tasks, chatMessages } = await import("../src/db/schema.js");
 const { api } = await import("../src/routes.js");
 const { mountChatRoutes } = await import("../src/chat/routes.js");
 const { ChatService } = await import("../src/chat/service.js");
@@ -26,7 +26,13 @@ await db.insert(agents).values([
   { id: "chat-claude", name: "Claude · 设计", type: "claude", model: "", extraArgs: "[]", createdAt: timestamp },
   { id: "chat-grok", name: "Grok · 调研", type: "grok", model: "", extraArgs: "[]", createdAt: timestamp },
 ]);
-const service = new ChatService(async (member, owner, prompt, signal, projectId) => {
+let contextMode = "ok";
+const service = new ChatService(async (member, owner, prompt, signal, projectId, options) => {
+  if (options?.purpose === "summary") {
+    await delay(contextMode === "hold" ? 30000 : 300, undefined, { signal });
+    if (contextMode === "prefixed") return '整理完成。```json\n{"summary":"用户决定保留频道导航与任务状态卡；近期讨论继续保留原文。","extra":{"source":"fixture"}}\n```';
+    return contextMode === "invalid" ? "invalid" : '{"summary":"用户决定保留频道导航与任务状态卡；近期讨论继续保留原文。"}';
+  }
   const text = JSON.parse(prompt.split("【本次用户消息】\n").at(-1)!) as string;
   if (text.includes("越界验证")) {
     const { CLI_SPEC_BY_KEY } = await import("../src/executors/catalog/index.js");
@@ -57,8 +63,17 @@ const service = new ChatService(async (member, owner, prompt, signal, projectId)
   await delay(5000);
   await db.update(tasks).set({ body: "浏览器测试产物：频道导航和任务状态已通过模拟流程验证。" }).where(eq(tasks.id, taskId));
   await setTaskStatus(taskId, "done");
-});
+}, { inputTokens: 12000, backgroundTokens: 6000, recentTokens: 1500, summaryTokens: 500, batchTokens: 6000 });
 const fixture = new Hono();
+fixture.post("/fixture/chat-context/:roomId", async (c) => {
+  const body = await c.req.json();
+  contextMode = body.mode ?? "ok";
+  if (body.seed) {
+    const count = typeof body.count === "number" ? Math.max(0, Math.min(100, Math.floor(body.count))) : 23;
+    for (let i = 0; i < count; i++) await db.insert(chatMessages).values({ id: `context-${Date.now()}-${i}`, roomId: c.req.param("roomId"), role: "user", author: "背景资料", body: `资料-${i}:${"x".repeat(800)}`, createdAt: new Date().toISOString() });
+  }
+  return c.json({ ok: true });
+});
 mountChatRoutes(fixture, service);
 fixture.route("/", api);
 const app = new Hono();
