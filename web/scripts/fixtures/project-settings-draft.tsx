@@ -30,7 +30,17 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     return reply({ exists: true, isRepo: true, dirty: false, branch: "main" });
   }
   if (pathname === "/api/workflows") return reply([]);
-  if (pathname.endsWith("/git")) return reply({ userName: null, userEmail: null, sshKeyPath: null, credential: null });
+  if (pathname.endsWith("/git")) return reply({
+    identity: {
+      isRepo: true,
+      userName: { value: null, scope: null },
+      userEmail: { value: null, scope: null },
+      sshKeyPath: null,
+      sshCommand: { value: null, scope: null },
+      remotes: [],
+    },
+    credential: null,
+  });
   if (pathname.startsWith("/api/")) return reply({});
   return realFetch(input as never, init);
 };
@@ -51,7 +61,7 @@ const project = (id: string, name: string): ProjectView => ({
   previewCommand: null,
   createdAt: "2026-09-01T00:00:00.000Z",
   health: { exists: true, isRepo: true, dirty: false, branch: "main" },
-  myRole: "admin",
+  myRole: new URLSearchParams(location.search).has("member") ? "member" : "admin",
 });
 
 function Fixture() {
@@ -60,7 +70,7 @@ function Fixture() {
   const notify = useCallback((message: string) => setNotices((all) => [...all, message]), []);
   return (
     <AuthContext.Provider value={{ state: authState, refresh: async () => {} }}>
-      <main style={{ width: 900, margin: "24px auto" }}>
+      <main style={{ width: "min(900px, calc(100% - 32px))", margin: "24px auto" }}>
         <button
           type="button"
           data-testid="health-refresh"
