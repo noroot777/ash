@@ -5,7 +5,8 @@ import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { createServer } from "vite";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0, strictPort: false } });
+const server = await createServer({ root, logLevel: "error", define: { "import.meta.env.VITE_ASH_PREVIEW": '"1"' },
+  server: { host: "127.0.0.1", port: 0, strictPort: false } });
 
 let browser;
 try {
@@ -18,7 +19,7 @@ try {
   await page.goto(fixture);
   await page.locator(".system-event-digest.is-aligned").waitFor();
   assert.equal(await page.locator(".system-event-digest.is-aligned").count(), 1, "生产环境默认使用备选二");
-  assert.equal(await page.locator(".system-notice-mode-switch").count(), 0, "普通页面不显示方案比较开关");
+  assert.equal(await page.locator(".system-notice-mode-switch").count(), 0, "预览页面默认也不显示方案比较开关");
 
   await page.goto(`${fixture}?systemNotices=unknown`);
   assert.equal(await page.locator(".system-event-digest.is-aligned").count(), 1, "非法模式参数应回落到正式默认方案二");
@@ -164,6 +165,8 @@ try {
 
   await page.setViewportSize({ width: 1100, height: 700 });
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/review-system-prompts.html`);
+  await page.locator('[data-surface="team"] .is-system-authored').waitFor();
+  assert.equal(await page.locator(".system-notice-mode-switch").count(), 0, "任务和团队预览都不自动展示样式演示工具");
   const authoredStyles = await page.evaluate(() => {
     const read = (surface) => {
       const root = document.querySelector(`[data-surface="${surface}"]`);
