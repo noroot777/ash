@@ -1,31 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import type { BranchPlanView, Task, TaskListItem } from "@ash/shared";
 import { familyAcceptanceNotices, familySelectionBlock } from "@ash/shared/branch-plan";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { MergeTargetEditor } from "./MergeTargetEditor.tsx";
-
-export function useBranchPlan(task: TaskListItem) {
-  const [view, setView] = useState<BranchPlanView | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const refresh = useCallback(async () => {
-    try { setView(await api.branchPlan(task.id)); setError(null); }
-    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-  }, [task.id]);
-  useEffect(() => {
-    setView(null);
-    if (!task.useWorktree) return;
-    let alive = true;
-    const load = () => api.branchPlan(task.id).then(
-      value => { if (alive) { setView(value); setError(null); } },
-      reason => { if (alive) setError(String(reason)); },
-    );
-    void load();
-    const timer = setInterval(() => { void load(); }, 15_000);
-    return () => { alive = false; clearInterval(timer); };
-  }, [task.id, task.updatedAt, task.useWorktree]);
-  return { view, error, refresh };
-}
+import { useBranchPlan } from "./useBranchPlan.ts";
 
 const taskHref = (projectId: string, taskId: string) => `/?${new URLSearchParams({ project: projectId, task: taskId })}`;
 

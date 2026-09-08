@@ -14,7 +14,8 @@ import { parseAttachmentText } from "../task-detail/utils.ts";
 import { ChangeMetaBar, worktreeLabel } from "../review/ChangeMetaBar.tsx";
 import { ReviewDiffViewer } from "../review/ReviewDiffViewer.tsx";
 import { DispatchReviewEvidence } from "./ReviewEvidence.tsx";
-import { BranchAcceptancePanel, useBranchPlan } from "../review/BranchAcceptancePanel.tsx";
+import { BranchAcceptancePanel } from "../review/BranchAcceptancePanel.tsx";
+import { useBranchPlan } from "../review/useBranchPlan.ts";
 
 type ReviewData = {
   commits: TaskCommit[];
@@ -124,8 +125,11 @@ export function AcceptanceControls({
   notify: (message: string) => void;
   acceptanceBlock?: string | null;
 }) {
-  const branchPlan = useBranchPlan(task);
-  if (task.useWorktree && task.stage !== "accepted") {
+  // 停在中途那道关口时，这一按是「放行」不是「验收」：按钮、确认框、提示三处一起改口，
+  // 只改一处就会出现「按钮写着验收通过、确认框说只是放行」的自相矛盾。
+  const midGate = !isFinalHumanGate(task.workflow, task.workflowAt);
+  const branchPlan = useBranchPlan(task, !midGate && task.stage !== "accepted");
+  if (!midGate && task.useWorktree && task.stage !== "accepted") {
     acceptanceBlock ??= branchPlan.error ? "验收依赖读取失败" : !branchPlan.view ? "检查验收依赖" : null;
     acceptanceBlock ??= branchPlan.view?.task.blocker ?? null;
     const dependency = branchPlan.view?.task.dependency;
@@ -140,10 +144,6 @@ export function AcceptanceControls({
   const inFlight = task.status === "running" || task.status === "queued";
   // Archived = frozen/read-only：后端验收/打回都会 409，按钮必须一致地禁掉，不给假按钮。
   const archived = !!task.archived;
-  // 停在中途那道关口时，这一按是「放行」不是「验收」：按钮、确认框、提示三处一起改口，
-  // 只改一处就会出现「按钮写着验收通过、确认框说只是放行」的自相矛盾。
-  const midGate = !isFinalHumanGate(task.workflow, task.workflowAt);
-
   useEffect(() => {
     if (acceptanceBlock && action === "accept") setAction(null);
   }, [acceptanceBlock, action]);

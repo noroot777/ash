@@ -27,6 +27,13 @@ const { updateTaskBase } = await import("../src/task-base-update.js");
 const { claimTurn, releaseTurn } = await import("../src/runs.js");
 await ensureSchema();
 const api = new Hono();
+if (process.argv.includes("--serve")) {
+  api.post("/tasks/:id/accept", async c => {
+    const result = await acceptTask(c.req.param("id"), "human", { startVerifyRound: async () => ({ round: 1 }) });
+    return c.json(result, result.accepted ? 200 : result.httpStatus);
+  });
+  api.get("/executors", c => c.json([]));
+}
 mountTaskRoutes(api);
 mountTaskAcceptanceRoutes(api);
 mountTaskDiffRoutes(api);
@@ -84,6 +91,15 @@ try {
     await setup("squash");
     const missing = await setup();
     git(missing.repo, "branch", "-m", "main", "renamed-main");
+    const mid = await setup();
+    const workflow = JSON.stringify({ workspace: "isolated", steps: [
+      makeStep("run", "run"), makeStep("human", "human"), makeStep("verify", "verify2"),
+      makeStep("human", "human2"), makeStep("accept", "accept"),
+    ] });
+    for (const task of [mid.parent, mid.child]) {
+      await db.update(tasks).set({ workflow, workflowMode: "preset", workflowAt: "human", stage: "awaiting_acceptance" })
+        .where(eq(tasks.id, task.id));
+    }
     const { serve } = await import("@hono/node-server");
     const backend = serve({ fetch: new Hono().route("/api", api).fetch, hostname: "127.0.0.1", port: 0 });
     if (!backend.listening) await new Promise<void>(resolve => backend.once("listening", resolve));
@@ -96,9 +112,13 @@ try {
     const webAddress = frontend.httpServer!.address();
     assert.ok(webAddress && typeof webAddress === "object");
     console.log(JSON.stringify({ pid: process.pid, root, url: `http://127.0.0.1:${webAddress.port}/scripts/fixtures/branch-acceptance.html?task=${s.parent.id}`, child: s.child.id, squashChild: squash.child.id }));
-    await new Promise<void>(resolve => { process.once("SIGTERM", resolve); process.once("SIGINT", resolve); });
+    await new Promise<void>(resolve => {
+      process.once("SIGTERM", resolve); process.once("SIGINT", resolve);
+      process.on("message", message => { if (message === "close-fixture") resolve(); });
+    });
     await frontend.close();
     await new Promise<void>(resolve => backend.close(() => resolve()));
+    if (process.connected) process.disconnect();
   } else {
   {
     const s = await setup("squash");

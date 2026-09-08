@@ -46,6 +46,9 @@ try {
   assert.deepEqual(await missing.json(), { error: "来源任务不存在" });
   const external = await (await create({ title: "外部智能体创建" }, { "x-ash-client": "mcp" })).json();
   assert.deepEqual(external.creationOrigin, { kind: "agent" });
+  assert.equal(taskCreationLabel(external.creationOrigin), "智能体创建");
+  assert.equal(taskCreationLabel({ kind: "agent", taskId: source }), "智能体派生");
+  assert.equal(taskCreationLabel(derived.creationOrigin), "Codex 派生");
   assert.equal(taskCreationLabel(parseTaskCreationOrigin(null)), "来源未记录");
   assert.equal(taskCreationLabel(parseTaskCreationOrigin("broken")), "来源未记录");
   await db.insert(groups).values({ id: "origin-batch", projectId: "project", name: "batch", mode: "parallel", createdAt: at });
@@ -80,9 +83,13 @@ try {
     const webAddress = web.httpServer!.address();
     assert.ok(webAddress && typeof webAddress === "object");
     console.log(JSON.stringify({ pid: process.pid, root, url: `http://127.0.0.1:${webAddress.port}/scripts/fixtures/task-creation-origin.html` }));
-    await new Promise<void>(resolve => { process.once("SIGTERM", resolve); process.once("SIGINT", resolve); });
+    await new Promise<void>(resolve => {
+      process.once("SIGTERM", resolve); process.once("SIGINT", resolve);
+      process.on("message", message => { if (message === "close-fixture") resolve(); });
+    });
     await web.close();
     await new Promise<void>(resolve => server.close(() => resolve()));
+    if (process.connected) process.disconnect();
   }
 } finally {
   await releaseTmpDb();
