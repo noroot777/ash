@@ -10,6 +10,7 @@ import { ScmDiffViewer } from "../scm/ScmDiffViewer.tsx";
 import { ScmInspector } from "../scm/ScmInspector.tsx";
 import type { ScmDiffTarget } from "../scm/scmModel.ts";
 import { api } from "../lib/api.ts";
+import type { Notify } from "../lib/notify.ts";
 import { useConversation } from "../lib/useConversation.ts";
 import { useSkills } from "../lib/useSkills.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
@@ -58,7 +59,7 @@ interface TaskInspectorContext {
   onOpenFile: (path: string) => void;
   openScmDiff: ScmDiffTarget | null;
   onOpenScmDiff: (target: ScmDiffTarget) => void;
-  notify: (message: string) => void;
+  notify: Notify;
 }
 
 const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
@@ -149,7 +150,7 @@ export function TaskDetail({
   inspectorMode?: "page" | "drawer";
   inspectorToggleTarget?: HTMLElement | null;
   terminalToggle?: ReactNode;
-  notify: (message: string) => void;
+  notify: Notify;
 }) {
   const [groups, setGroups] = useState<Group[]>([]);
   const [busy, setBusy] = useState(false);

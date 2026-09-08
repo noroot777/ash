@@ -125,13 +125,13 @@ try {
     () => page.locator(".task-modal-scrim").dispatchEvent("mousedown"),
   ]) {
     await page.getByRole("dialog").waitFor({ state: "detached" });
-    assert.match(await page.getByRole("status").innerText(), /正在等待移回确认/);
+    assert.match(await page.locator(".remote-return-progress").innerText(), /正在等待移回确认/);
     await page.getByRole("button", { name: "查看移回进度", exact: true }).click();
     await close();
   }
   await page.getByRole("dialog").waitFor({ state: "detached" });
   assert.equal(requests.length, 2, "收起和重开进行态不能重复发送移回请求");
-  const elapsedSeconds = Number((await page.getByRole("status").innerText()).match(/已等待 (\d+) 秒/)[1]);
+  const elapsedSeconds = Number((await page.locator(".remote-return-progress").innerText()).match(/已等待 (\d+) 秒/)[1]);
   await page.getByRole("button", { name: "切换任务", exact: true }).click();
   await page.locator(".task-detail-title").filter({ hasText: "另一条任务" }).waitFor();
   assert.equal(await page.locator(".remote-return-progress").count(), 0);
@@ -322,6 +322,24 @@ try {
   await dialog.getByRole("button", { name: "取消", exact: true }).click();
   await page.getByRole("button", { name: "切换任务", exact: true }).click();
   await page.getByRole("alert").waitFor({ state: "detached" });
+
+  responses = [{ status: 502, json: { error: networkError } }];
+  await page.goto(url);
+  await page.getByRole("button", { name: "模拟预览失败", exact: true }).click();
+  const pinnedToast = page.getByTestId("workspace-toast-pinned");
+  await pinnedToast.waitFor();
+  dialog = await openReturn();
+  await dialog.getByRole("button", { name: "移回本机", exact: true }).click();
+  await dialog.getByRole("alert").waitFor();
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  assert.match(await page.getByTestId("workspace-toast-transient").innerText(), /查看理赔审核提案[\s\S]*移回未完成/);
+  assert.match(await pinnedToast.innerText(), /预览命令缺失/, "移回结果通知不能覆盖主线的常驻预览错误");
+  if (screenshot) await page.screenshot({ path: screenshot.replace(/\.png$/, "-toast-coexist.png"), fullPage: true, animations: "disabled" });
+  await page.getByTestId("workspace-toast-transient").waitFor({ state: "detached" });
+  assert.equal(await pinnedToast.isVisible(), true, "移回通知自动消失后，主线常驻错误仍保留");
+  await pinnedToast.getByRole("button", { name: "关闭提示", exact: true }).click();
+  await pinnedToast.waitFor({ state: "detached" });
+  assert.match(await page.getByRole("alert").innerText(), /移回未完成/, "关闭预览提示不能清掉移回操作的失败记录");
   assert.deepEqual(pageErrors, []);
 } finally {
   releasePending.forEach((release) => release());
@@ -330,4 +348,4 @@ try {
   assert.deepEqual(routeErrors, [], "所有模拟 API 请求都应被处理；未预期请求或重复移回必须在主流程报错");
 }
 
-console.log("remote return browser tests passed: visible errors, background waiting, task switching/remount, independent operations, fresh capability checks, override retry, false success, retained late results, new transfers");
+console.log("remote return browser tests passed: visible errors, background waiting, task switching/remount, independent operations, fresh capability checks, override retry, false success, retained late results, new transfers, workspace toast coexistence");
