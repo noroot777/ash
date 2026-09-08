@@ -7,25 +7,30 @@ import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import type { invokeChat } from "./execution.js";
 import { chatPrompt } from "./prompt.js";
 import { CHAT_CONTEXT_POLICY, estimateChatTokens, parseChatSummary, summaryPrompt, type ChatContextPolicy } from "./context-format.js";
-import { captureChatHistory, chatHasPending, contextState, readChatHistory, recoverChatContext, resetChatContext, setContextState } from "./context-store.js";
+import { captureChatHistory, captureChatSnapshot, chatHasPending, contextState, readChatHistory, recoverChatContext, resetChatContext, setContextState } from "./context-store.js";
 import { abortable } from "./invocation-queue.js";
 
 type Room = typeof chatRooms.$inferSelect;
-type Job = { abort: AbortController; promise: Promise<unknown> };
+type Job = { abort: AbortController; promise: Promise<unknown>; compacting: boolean };
 
 export class ChatContextManager {
   private jobs = new Map<string, Job>();
   private generations = new Map<string, number>();
+  private prewarmStopped = new Set<string>();
   constructor(private invoke: typeof invokeChat, private policy: ChatContextPolicy = CHAT_CONTEXT_POLICY) {}
 
   capture = captureChatHistory;
+  captureSnapshot = captureChatSnapshot;
   recover = recoverChatContext;
 
   async stop(roomId: string) {
     this.generations.set(roomId, (this.generations.get(roomId) ?? 0) + 1);
+    this.prewarmStopped.add(roomId);
     const job = this.jobs.get(roomId);
     job?.abort.abort(new Error("你已停止历史整理；摘要和原文已保留，下次点名时按需继续。"));
-    await setContextState(roomId, "stopped", "你已停止历史整理；摘要和原文已保留，下次点名时按需继续。");
+    if (job?.compacting || (await contextState(roomId))?.status === "compacting") {
+      await setContextState(roomId, "stopped", "你已停止历史整理；摘要和原文已保留，下次点名时按需继续。");
+    }
   }
 
   async clear(roomId: string, command: { id: string; body: string; author: string }) {
@@ -40,7 +45,7 @@ export class ChatContextManager {
     signal.throwIfAborted();
     const abort = new AbortController();
     const combined = AbortSignal.any([signal, abort.signal, AbortSignal.timeout(300000)]);
-    const job: Job = { abort, promise: Promise.resolve() };
+    const job: Job = { abort, promise: Promise.resolve(), compacting: false };
     job.promise = Promise.resolve().then(() => operation(combined)).finally(() => {
       if (this.jobs.get(roomId) === job) this.jobs.delete(roomId);
     });
@@ -48,20 +53,24 @@ export class ChatContextManager {
     return await job.promise as T;
   }
 
-  async prepare(room: Room, member: ChatMember, cutoff: number, request: string, signal: AbortSignal): Promise<string> {
+  async prepare(room: Room, member: ChatMember, cutoff: number, request: string, signal: AbortSignal, tail: string[] = []): Promise<string> {
     return this.locked(room.id, signal, async (sharedSignal) => {
+      sharedSignal.throwIfAborted();
+      this.prewarmStopped.delete(room.id);
       if ((await contextState(room.id))?.status === "stopped") await setContextState(room.id, "idle");
-      const overhead = estimateChatTokens(withGlobalBrowserPolicy(chatPrompt(member, [], request), "full"));
+      const overhead = estimateChatTokens(withGlobalBrowserPolicy(chatPrompt(member, tail, request), "full"));
       const budget = this.policy.inputTokens - overhead;
-      if (budget <= this.policy.summaryTokens) throw new Error("本次消息过长，无法为群聊历史保留空间，请缩短消息后重新 @。");
+      if (budget <= this.policy.summaryTokens) throw new Error(tail.length
+        ? "较早的回复尚未完成，后续消息已超出上下文预算。请等待或停止较早回复后重新 @，原文已保留。"
+        : "本次消息过长，无法为群聊历史保留空间，请缩短消息后重新 @。");
       const history = await this.compact(room, member, cutoff, budget, sharedSignal);
-      return chatPrompt(member, history.messages.map((message) => message.content), request, history.summary?.body);
+      return chatPrompt(member, [...history.messages.map((message) => message.content), ...tail], request, history.summary?.body);
     });
   }
 
   async prewarm(roomId: string, member: ChatMember): Promise<void> {
     const generation = this.generations.get(roomId) ?? 0;
-    if (this.jobs.has(roomId) || await chatHasPending(roomId)) return;
+    if (this.prewarmStopped.has(roomId) || this.jobs.has(roomId) || await chatHasPending(roomId)) return;
     const room = (await db.select().from(chatRooms).where(eq(chatRooms.id, roomId))).at(0);
     if (!room) return;
     const members = JSON.parse(room.members) as ChatMember[];
@@ -70,7 +79,7 @@ export class ChatContextManager {
     const state = await contextState(roomId);
     if (state?.status === "stopped" || (state?.status === "failed" && Date.now() - Date.parse(state.updatedAt) < 300000)) return;
     await this.locked(roomId, new AbortController().signal, async (signal) => {
-      if ((this.generations.get(roomId) ?? 0) !== generation) return;
+      if (this.prewarmStopped.has(roomId) || (this.generations.get(roomId) ?? 0) !== generation) return;
       if (await chatHasPending(roomId)) return;
       const cutoff = await this.capture(roomId);
       await this.compact(room, currentMember, cutoff, this.policy.backgroundTokens, signal);
@@ -86,6 +95,8 @@ export class ChatContextManager {
     }
     const target = Math.min(trigger, this.policy.recentTokens + this.policy.summaryTokens);
     signal.throwIfAborted();
+    const job = this.jobs.get(room.id);
+    if (job) job.compacting = true;
     await setContextState(room.id, "compacting");
     try {
       while (history.tokens > target) {
@@ -121,9 +132,15 @@ export class ChatContextManager {
       await setContextState(room.id, "idle");
       return history;
     } catch (error) {
-      const reason = signal.aborted ? String(signal.reason instanceof Error ? signal.reason.message : "历史整理已停止，原文已保留。")
+      const abortReason = signal.reason;
+      const canceled = abortReason instanceof Error && abortReason.name === "TimeoutError"
+        ? "历史整理超时，已停止；摘要和原文已保留，下次点名时按需继续。"
+        : abortReason instanceof Error && abortReason.name !== "AbortError"
+          ? abortReason.message : "历史整理已停止；摘要和原文已保留，下次点名时按需继续。";
+      const reason = signal.aborted ? canceled
         : error instanceof Error ? error.message : String(error);
       await setContextState(room.id, signal.aborted ? "stopped" : "failed", reason.slice(0, 500));
+      if (signal.aborted && error === abortReason) throw new Error(reason);
       throw error;
     }
   }

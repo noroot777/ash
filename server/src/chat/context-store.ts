@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, isNull, lte, ne } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, ne, or } from "drizzle-orm";
 import type { ChatContextStatus, ChatMessage } from "@ash/shared/chat";
 import { db } from "../db/index.js";
 import { chatContextEntries as entries, chatContextStates as states, chatContextResets as resets, chatMessages, chatSummaries as summaries } from "../db/schema.js";
@@ -7,11 +7,21 @@ import { contextMessage, estimateChatTokens } from "./context-format.js";
 
 // 完成后的消息冻结为只含正文的记录；排队状态、时间戳和后续任务状态不再反复改动提示词前缀。
 export async function captureChatHistory(roomId: string): Promise<number> {
+  return (await captureChatSnapshot(roomId)).cutoff;
+}
+
+export async function captureChatSnapshot(roomId: string): Promise<{ cutoff: number; tail: string[] }> {
   return db.transaction(async (tx) => {
+    const pending = (await tx.select({ id: chatMessages.id, createdAt: chatMessages.createdAt }).from(chatMessages)
+      .where(and(eq(chatMessages.roomId, roomId), inArray(chatMessages.status, ["queued", "running"])))
+      .orderBy(asc(chatMessages.createdAt), asc(chatMessages.id)).limit(1)).at(0);
+    const beforePending = pending ? or(lt(chatMessages.createdAt, pending.createdAt), and(eq(chatMessages.createdAt, pending.createdAt), lt(chatMessages.id, pending.id))) : undefined;
+    const fields = { id: chatMessages.id, role: chatMessages.role, author: chatMessages.author, body: chatMessages.body, taskId: chatMessages.taskId };
+    const unfrozen = and(eq(chatMessages.roomId, roomId), ne(chatMessages.role, "system"), inArray(chatMessages.status, ["done", "failed", "stopped"]), isNull(entries.sequence));
     for (;;) {
-      const missing = await tx.select({ id: chatMessages.id, role: chatMessages.role, author: chatMessages.author, body: chatMessages.body, taskId: chatMessages.taskId })
+      const missing = await tx.select(fields)
         .from(chatMessages).leftJoin(entries, eq(entries.messageId, chatMessages.id))
-        .where(and(eq(chatMessages.roomId, roomId), ne(chatMessages.role, "system"), inArray(chatMessages.status, ["done", "failed", "stopped"]), isNull(entries.sequence)))
+        .where(and(unfrozen, beforePending))
         .orderBy(asc(chatMessages.createdAt), asc(chatMessages.id)).limit(500);
       if (!missing.length) break;
       for (const message of missing) {
@@ -19,7 +29,11 @@ export async function captureChatHistory(roomId: string): Promise<number> {
         await tx.insert(entries).values({ roomId, messageId: message.id, content, tokens: estimateChatTokens(`${content}\n`) }).onConflictDoNothing();
       }
     }
-    return (await tx.select({ sequence: entries.sequence }).from(entries).where(eq(entries.roomId, roomId)).orderBy(desc(entries.sequence)).limit(1)).at(0)?.sequence ?? 0;
+    // 未完成回复之后的已完成消息只进入本次快照，等缺口补齐后再按原时间顺序冻结。
+    const tail = pending ? await tx.select(fields).from(chatMessages).leftJoin(entries, eq(entries.messageId, chatMessages.id))
+      .where(unfrozen).orderBy(asc(chatMessages.createdAt), asc(chatMessages.id)) : [];
+    const cutoff = (await tx.select({ sequence: entries.sequence }).from(entries).where(eq(entries.roomId, roomId)).orderBy(desc(entries.sequence)).limit(1)).at(0)?.sequence ?? 0;
+    return { cutoff, tail: tail.map((message) => contextMessage({ ...message, role: message.role as ChatMessage["role"] })) };
   });
 }
 

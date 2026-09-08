@@ -62,12 +62,12 @@ export class ChatService {
     }
     const room = toRoom(row);
     const mentions = mentionedMembers(body, room.members);
-    const cutoff = mentions.length ? await this.contexts.capture(row.id) : 0;
+    const { cutoff, tail } = mentions.length ? await this.contexts.captureSnapshot(row.id) : { cutoff: 0, tail: [] };
     const timestamp = now();
     await db.transaction(async (tx) => {
       await tx.insert(chatMessages).values({ id: messageId, roomId: row.id, role: "user", author, body, mentions: JSON.stringify(mentions.map((member) => member.id)), createdAt: timestamp });
       for (const [position, member] of mentions.entries()) {
-        await tx.insert(chatMessages).values({ id: id(), roomId: row.id, role: "agent", memberId: member.id, author: member.name, status: "queued", createdAt: new Date(Date.parse(timestamp) + position + 1).toISOString(), context: JSON.stringify({ cutoff, source: body, member }) });
+        await tx.insert(chatMessages).values({ id: id(), roomId: row.id, role: "agent", memberId: member.id, author: member.name, status: "queued", createdAt: new Date(Date.parse(timestamp) + position + 1).toISOString(), context: JSON.stringify({ cutoff, tail, source: body, member }) });
       }
     });
     void this.pump();
@@ -76,10 +76,12 @@ export class ChatService {
   async stop(roomId: string) {
     this.stopping.add(roomId);
     try {
-      for (const active of this.active.values()) if (active.roomId === roomId) active.abort.abort();
-      await this.contexts.stop(roomId);
-      await db.update(chatMessages).set({ status: "stopped", body: "你已停止这次回复。再次 @ 才会继续；已创建的任务可在任务卡中管理。", context: null })
-        .where(and(eq(chatMessages.roomId, roomId), inArray(chatMessages.status, ["queued", "running"])));
+      const body = "你已停止这次回复。再次 @ 才会继续；已创建的任务可在任务卡中管理。";
+      const stopped = await db.update(chatMessages).set({ status: "stopped", body, context: null })
+        .where(and(eq(chatMessages.roomId, roomId), inArray(chatMessages.status, ["queued", "running"]))).returning({ id: chatMessages.id });
+      const contextStopped = this.contexts.stop(roomId);
+      for (const message of stopped) this.active.get(message.id)?.abort.abort(new Error(body));
+      await contextStopped;
     } finally { this.stopping.delete(roomId); void this.pump(); }
   }
 
@@ -117,9 +119,9 @@ export class ChatService {
       abort.signal.throwIfAborted();
       const room = (await db.select().from(chatRooms).where(eq(chatRooms.id, message.roomId))).at(0);
       if (!room || !message.context) throw new Error("群聊或成员不存在，请重新选择成员。");
-      const context = JSON.parse(message.context) as { prompt?: string; cutoff: number; source: string; member: ChatMember };
+      const context = JSON.parse(message.context) as { prompt?: string; cutoff: number; tail?: string[]; source: string; member: ChatMember };
       const member = context.member;
-      const prompt = context.prompt ?? await this.contexts.prepare(room, member, context.cutoff, context.source, abort.signal);
+      const prompt = context.prompt ?? await this.contexts.prepare(room, member, context.cutoff, context.source, abort.signal, context.tail);
       const result = parseChatReply(await this.invoke(member, room.ownerUserId, prompt, abort.signal, room.projectId));
       abort.signal.throwIfAborted();
       let taskToStart: string | null = null;

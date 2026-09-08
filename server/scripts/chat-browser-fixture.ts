@@ -68,7 +68,8 @@ fixture.post("/fixture/chat-context/:roomId", async (c) => {
   const body = await c.req.json();
   contextMode = body.mode ?? "ok";
   if (body.seed) {
-    for (let i = 0; i < 23; i++) await db.insert(chatMessages).values({ id: `context-${Date.now()}-${i}`, roomId: c.req.param("roomId"), role: "user", author: "背景资料", body: `资料-${i}:${"x".repeat(800)}`, createdAt: new Date().toISOString() });
+    const count = typeof body.count === "number" ? Math.max(0, Math.min(100, Math.floor(body.count))) : 23;
+    for (let i = 0; i < count; i++) await db.insert(chatMessages).values({ id: `context-${Date.now()}-${i}`, roomId: c.req.param("roomId"), role: "user", author: "背景资料", body: `资料-${i}:${"x".repeat(800)}`, createdAt: new Date().toISOString() });
   }
   return c.json({ ok: true });
 });

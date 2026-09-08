@@ -54,7 +54,7 @@ try {
   const send = async (body) => {
     await input.fill(body);
     await page.getByRole("button", { name: "发送消息", exact: true }).click();
-    await page.getByText(body, { exact: true }).waitFor();
+    await page.locator(".chat-message.is-user .chat-message-body").getByText(body, { exact: true }).last().waitFor();
   };
   await send("先记下来：频道导航要清晰，任务进度留在对话里。");
   assert.equal(await page.locator(".chat-message:not(.is-user)").count(), 0);
@@ -129,10 +129,13 @@ try {
   await page.locator(".chat-task-card").getByText("ASH 任务 · codex").waitFor();
   await page.screenshot({ path: `${output}/chat-desktop.png`, animations: "disabled" });
   await send("@codex 等待一下，我要测试停止。");
+  await page.waitForFunction(() => document.querySelectorAll(".chat-message.is-running").length === 1);
   await page.getByRole("button", { name: "停止回复", exact: true }).click();
-  await page.getByText("你已停止这次回复。", { exact: false }).waitFor();
+  const stoppedBody = "你已停止这次回复。再次 @ 才会继续；已创建的任务可在任务卡中管理。";
+  await page.getByText(stoppedBody, { exact: true }).waitFor();
   await page.reload();
-  await page.getByText("你已停止这次回复。", { exact: false }).waitFor();
+  await page.getByText(stoppedBody, { exact: true }).waitFor();
+  assert.equal(await page.locator(".chat-composer-area [role=status]").count(), 0, "短群没有发生过历史整理，停止回复不显示虚构的整理提示");
   assert.equal(await page.locator(".chat-task-card.is-done").count(), 1);
   await page.locator(".chat-task-card").click();
   await page.getByText("浏览器测试产物：频道导航和任务状态已通过模拟流程验证。", { exact: false }).waitFor();
@@ -252,6 +255,36 @@ try {
   await page.screenshot({ path: `${output}/chat-context-clear.png`, animations: "disabled" });
   console.log("chat clear browser passed: /clear 命令、持久分界提示、保留旧消息、后续新对话不恢复旧摘要。");
   console.log("chat context browser passed: 后台预压缩、停止和失败状态刷新可见、成功摘要持久化、390px 提示无横向溢出。");
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole("button", { name: "新建群聊", exact: true }).click();
+  await page.getByLabel("群聊名称", { exact: true }).fill("停止整理回归");
+  for (let i = 0; i < 3; i++) await page.getByRole("button", { name: "添加成员", exact: true }).click();
+  await page.getByRole("button", { name: "创建群聊", exact: true }).click();
+  await input.waitFor();
+  const stopRoomId = await page.evaluate(() => localStorage.getItem("ash:chat:chat-demo"));
+  for (const clear of [false, true]) {
+    await page.request.post(`${fixtureUrl}/api/fixture/chat-context/${stopRoomId}`, { data: { seed: true, count: 65, mode: "hold" } });
+    await send(`@all 前台整理期间${clear ? "清空" : "停止"}`);
+    await page.getByRole("status").filter({ hasText: "正在整理较早的群聊历史" }).waitFor();
+    await page.waitForFunction(() => document.querySelectorAll(".chat-message.is-running").length === 3);
+    if (clear) await send("/clear");
+    else await page.getByRole("button", { name: "停止回复", exact: true }).click();
+    await page.waitForFunction((count) => document.querySelectorAll(".chat-message.is-stopped").length === count, clear ? 6 : 3);
+    await page.reload();
+    await page.locator(".chat-message.is-stopped").first().waitFor();
+    assert.deepEqual(await page.locator(".chat-message.is-stopped .chat-message-body").allTextContents(), Array(clear ? 6 : 3).fill(stoppedBody));
+    const status = page.locator(".chat-composer-area [role=status]");
+    if (clear) await status.filter({ hasText: "上下文已清空" }).waitFor();
+    else {
+      assert.equal(await status.textContent(), "你已停止历史整理；摘要和原文已保留，下次点名时按需继续。");
+      await page.screenshot({ path: `${output}/chat-stop-compaction-after-reload.png`, animations: "disabled" });
+      await send("/clear");
+      await status.filter({ hasText: "上下文已清空" }).waitFor();
+    }
+    assert.equal(await page.getByText("This operation was aborted", { exact: false }).count(), 0);
+  }
+  await page.screenshot({ path: `${output}/chat-clear-compaction-after-reload.png`, animations: "disabled" });
+  console.log("chat review browser passed: running 停止文案精确校验、短群无虚构整理状态、三成员前台整理时停止和 /clear 刷新后均无内部英文异常。");
   assert.deepEqual(errors, []);
   console.log("chat browser passed: 创建群聊、三段成员选择、键盘点名、@all 唤醒全体、群聊改名、重复点选当前群不掉空态、贴底时隐藏「最新消息」且点击真的回到底部、无点名静默、禁止转发唤醒、实际模拟源码及 node_modules 写入均被标记失败且刷新保留警告、不误建任务、任务卡实时状态、停止持久化、详情回跳、390px 窄屏、减少动态效果、群间隔离、新编辑器四模式入口、320–1440px 模式栏、上传切换门禁、跨模式任务草稿与附件保留；无页面异常。");
 } catch (error) {
