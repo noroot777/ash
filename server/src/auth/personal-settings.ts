@@ -10,7 +10,7 @@
 // 自用模式下这一层整个是透明的:读写都直接落 app_settings,与本功能上线前逐字节一致。
 import { and, eq } from "drizzle-orm";
 import type { AppSettings } from "@ash/shared";
-import { getAppSettings, patchAppSettings } from "../app-settings.js";
+import { getAppSettings, invalidateInstanceCache, patchAppSettings, writeAppSettingsPatch } from "../app-settings.js";
 import { db } from "../db/index.js";
 import { userSettings } from "../db/schema.js";
 import type { Actor } from "./context.js";
@@ -58,14 +58,18 @@ export const settingsForActor = (actor: Actor): Promise<AppSettings> => settings
  */
 export async function patchSettingsFor(actor: Actor, patch: Partial<AppSettings>): Promise<AppSettings> {
   if (!(await isMultiUser())) {
-    const before = await getAppSettings();
-    const next = await patchAppSettings(patch);
+    if (patch.handoffTargets === undefined) return patchAppSettings(patch);
     // 自用模式的目标机清单住在设置里,而它们的对端账号 key 单独存(见 handoff-scope.ts)。
     // 这里删掉一台机器,就把它那把 key 一起收走 —— 否则「删掉再加回同一个地址」会让旧
     // key 悄悄复活。只收走**这次被删掉的**那几个地址,别的行不碰。
-    if (patch.handoffTargets !== undefined) {
-      await forgetRemovedPeerKeys(before.handoffTargets, next.handoffTargets);
-    }
+    const next = await db.transaction(async (tx) => {
+      const before = await getAppSettings(tx);
+      await writeAppSettingsPatch(patch, tx);
+      const updated = await getAppSettings(tx);
+      await forgetRemovedPeerKeys(before.handoffTargets, updated.handoffTargets, tx);
+      return updated;
+    });
+    await invalidateInstanceCache();
     return next;
   }
   const owner = ownerIdOf(actor);

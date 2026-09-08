@@ -31,6 +31,7 @@ process.env.ASH_DB = join(root, "local.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 process.env.ASH_UPLOADS_DIR = join(root, "uploads");
 requireTmpDb("ash-handoff-peer-key");
+let signingPeer: { close(): Promise<void> } | undefined;
 
 try {
   const { ensureSchema } = await import("../src/db/index.js");
@@ -40,7 +41,10 @@ try {
   const { HANDOFF_PEER_KEY_REQUIRED } = await import("@ash/shared/handoff");
   await ensureSchema();
 
-  const url = "http://127.0.0.1:4319";
+  const { startSignedHandoffPeer } = await import("./handoff-signed-peer-fixture.js");
+  const fixture = await startSignedHandoffPeer();
+  signingPeer = fixture;
+  const url = fixture.url;
 
   // ── 1. 自用模式:清单在设置里,key 在自己的表里 ────────────────────────────
   await scope.addTarget(SINGLE_ACTOR, { name: "多人那台", url });
@@ -178,6 +182,7 @@ try {
 
   console.log("test-handoff-peer-key ok");
 } finally {
+  await signingPeer?.close();
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
 }

@@ -14,7 +14,7 @@
 // 设置页和接力对话框里正常填写。
 import { and, eq, inArray } from "drizzle-orm";
 import type { HandoffTarget } from "@ash/shared";
-import { getAppSettings, invalidateInstanceCache, parseAppSettingsPatch, patchAppSettings } from "../app-settings.js";
+import { getAppSettings, invalidateInstanceCache, parseAppSettingsPatch, patchAppSettings, writeAppSettingsPatch } from "../app-settings.js";
 import { db } from "../db/index.js";
 import { appSettings, handoffLocalPeerKeys, userHandoffTargets } from "../db/schema.js";
 import { sameFingerprint } from "../handoff-identity.js";
@@ -253,20 +253,24 @@ export async function addTarget(
   input: { name: string; url: string; peerKey?: string },
 ): Promise<HandoffTarget[]> {
   const owner = ownerIdOf(actor);
-  if (!(await isMultiUser())) {
-    const { handoffTargets } = await getAppSettings();
-    await patchAppSettings({
-      handoffTargets: [...handoffTargets, { name: input.name, url: input.url, peerFp: null }],
+  const multi = await isMultiUser();
+  if (multi && !owner) throw new HandoffError("请先登录", 401);
+  const peerKeyFp = await keyFingerprintForSave(input.url, input.peerKey ?? "");
+  if (!multi) {
+    await db.transaction(async (tx) => {
+      const { handoffTargets } = await getAppSettings(tx);
+      await writeAppSettingsPatch({
+        handoffTargets: [...handoffTargets, { name: input.name, url: input.url, peerFp: null }],
+      }, tx);
+      // 清单和 key 分表保存，但同一次添加只在两者都写入成功后提交。
+      if (input.peerKey) await writeLocalPeerKey(tx, keyUrl(input.url), input.peerKey, peerKeyFp);
     });
-    // 清单进设置,key 进单独的表 —— 自用模式同样可能要往多人对端接力。
-    if (input.peerKey) await setPeerKey(actor, input.url, input.peerKey);
+    await invalidateInstanceCache();
     return listTargets(actor);
   }
-  if (!owner) throw new HandoffError("请先登录", 401);
-  const peerKeyFp = await keyFingerprintForSave(input.url, input.peerKey ?? "");
   await db.insert(userHandoffTargets).values({
     id: id(),
-    userId: owner,
+    userId: owner!,
     name: input.name,
     url: input.url,
     peerFp: null,
@@ -285,12 +289,26 @@ async function keyFingerprintForSave(rawUrl: string, peerKey: string, expectedPe
   // 保存新 key 的显式动作绑定当时签名确认的机器，覆盖写不会继承上一把 key 的归属。
   const { probeSignedPeerFingerprint } = await import("../handoff-peer-client.js");
   const peerFp = peerKey ? await probeSignedPeerFingerprint(rawUrl) : null;
-  if (peerKey && expectedPeerFp && (!peerFp || !sameFingerprint(peerFp, expectedPeerFp))) {
+  if (peerKey && (!peerFp || (expectedPeerFp && !sameFingerprint(peerFp, expectedPeerFp)))) {
     throw new HandoffError(peerFp
       ? "地址背后的机器指纹不一致，账号 key 未保存。请先核对来源机器地址。"
       : "无法核对机器身份，账号 key 未保存。请确认地址和 ash 运行状态后重试。", peerFp ? 409 : 502);
   }
   return peerFp;
+}
+
+async function writeLocalPeerKey(
+  connection: Pick<typeof db, "insert" | "delete">, url: string, peerKey: string, peerFp: string | null,
+): Promise<void> {
+  if (peerKey) {
+    await connection.insert(handoffLocalPeerKeys).values({ url, peerKey, peerFp, updatedAt: now() })
+      .onConflictDoUpdate({
+        target: handoffLocalPeerKeys.url,
+        set: { peerKey, peerFp, updatedAt: now() },
+      });
+  } else {
+    await connection.delete(handoffLocalPeerKeys).where(eq(handoffLocalPeerKeys.url, url));
+  }
 }
 
 /**
@@ -320,15 +338,7 @@ export async function setPeerKey(
     // 不校验「这个地址还在不在清单里」是**故意的**:pending 重放收口时,弹框会为
     // 「已从设置里删掉、但任务还挂在它身上」的地址合成一个目标,那里填的 key 必须真的
     // 能用。出站读侧直接读这张表,所以写下去就生效(见 `outboundPeerKeys`)。
-    if (peerKey) {
-      await db.insert(handoffLocalPeerKeys).values({ url, peerKey, peerFp, updatedAt: now() })
-        .onConflictDoUpdate({
-          target: handoffLocalPeerKeys.url,
-          set: { peerKey, peerFp, updatedAt: now() },
-        });
-    } else {
-      await db.delete(handoffLocalPeerKeys).where(eq(handoffLocalPeerKeys.url, url));
-    }
+    await writeLocalPeerKey(db, url, peerKey, peerFp);
     return listTargets(actor);
   }
   // 同一个地址被登记了两行时一起写:「我在那台机器上的 key」只可能是同一把。
@@ -340,7 +350,7 @@ export async function setPeerKey(
 /**
  * 自用模式:目标机从设置里被删掉后,顺手把它那把 key 也删了。留着不会泄露(出站要先
  * 拿到地址才用得上),但「删掉再加回同一个地址,旧 key 悄悄复活」是会让人查半天的意外
- * 行为。由 `patchSettingsFor` 在 handoffTargets 落库后调用。
+ * 行为。由 `patchSettingsFor` 在更新 handoffTargets 的同一事务中调用。
  *
  * 入参是**改动前后的两份清单**,删的只有「这次被拿掉的那几个地址」。早先那版收的是
  * 「留下来的地址」、把一切对不上的行都当孤儿删掉,会连带清掉**故意为不在清单里的地址
@@ -349,12 +359,12 @@ export async function setPeerKey(
 export async function forgetRemovedPeerKeys(
   before: readonly { url: string }[],
   after: readonly { url: string }[],
+  connection: Pick<typeof db, "delete">,
 ): Promise<void> {
-  if (await isMultiUser()) return;
   const kept = new Set(after.map((t) => keyUrl(t.url)));
   const removed = [...new Set(before.map((t) => keyUrl(t.url)))].filter((url) => !kept.has(url));
   if (removed.length) {
-    await db.delete(handoffLocalPeerKeys).where(inArray(handoffLocalPeerKeys.url, removed));
+    await connection.delete(handoffLocalPeerKeys).where(inArray(handoffLocalPeerKeys.url, removed));
   }
 }
 

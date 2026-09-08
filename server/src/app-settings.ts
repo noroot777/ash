@@ -133,14 +133,20 @@ export function parseAppSettingsPatch(input: unknown): Partial<AppSettings> {
   return patch as Partial<AppSettings>;
 }
 
-export async function patchAppSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
+export async function writeAppSettingsPatch(
+  patch: Partial<AppSettings>, connection: Pick<typeof db, "insert">,
+): Promise<void> {
   for (const [key, value] of Object.entries(patch) as [keyof AppSettings, AppSettings[keyof AppSettings]][]) {
     const encoded = JSON.stringify(value);
-    await db
+    await connection
       .insert(appSettings)
       .values({ key, value: encoded })
       .onConflictDoUpdate({ target: appSettings.key, set: { value: encoded } });
   }
+}
+
+export async function patchAppSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
+  await writeAppSettingsPatch(patch, db);
   // 无条件失效,不按 key 挑:挑就得在这里再维护一份「哪些键进了那份缓存」的清单,
   // 而漏一个的表现是「改了不生效」——最难查的那一类。这条路每天走不了几次。
   if (Object.keys(patch).length) await invalidateInstanceCache();

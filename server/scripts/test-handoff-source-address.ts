@@ -89,11 +89,11 @@ try {
   const saveKey = (url: string, peerKey: string, peerFp?: unknown) => app.request("/api/handoff/targets/key", {
     method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ url, peerKey, peerFp }),
   });
-  // 历史快照中的 key 自带保存时核对的指纹；真实保存端点的签名绑定在下方单独覆盖。
-  const seedBoundKey = async (url: string, peerKey: string) => {
+  // 历史快照包含已绑定和未知归属的旧 key；真实保存端点的签名绑定在下方单独覆盖。
+  const seedStoredKey = async (url: string, peerKey: string, peerFp: string | null = fingerprint) => {
     if (!peerKey) { await scope.setPeerKey(actor, url, ""); return; }
-    await db.insert(handoffLocalPeerKeys).values({ url, peerKey, peerFp: fingerprint, updatedAt: at })
-      .onConflictDoUpdate({ target: handoffLocalPeerKeys.url, set: { peerKey, peerFp: fingerprint, updatedAt: at } });
+    await db.insert(handoffLocalPeerKeys).values({ url, peerKey, peerFp, updatedAt: at })
+      .onConflictDoUpdate({ target: handoffLocalPeerKeys.url, set: { peerKey, peerFp, updatedAt: at } });
   };
 
   assert.deepEqual(await sources(), [{ fingerprint, name: "LAPTOP", url: oldUrl }], "接收过的来源机不必先手工登记为目标机");
@@ -119,7 +119,7 @@ try {
   assert.equal((await db.select().from(tasks).where(eq(tasks.id, "t")))[0].handoff, JSON.stringify(marker), "地址设置不篡改历史任务身份");
 
   await patchAppSettings({ handoffTargets: [{ name: "LAPTOP", url: oldUrl, peerFp: fingerprint }] });
-  await seedBoundKey(oldUrl, "test-only-peer-key");
+  await seedStoredKey(oldUrl, "test-only-peer-key");
   assert.equal((await save(newUrl)).status, 200);
   assert.equal(await scope.peerKeyForRequest(null, newUrl), "test-only-peer-key", "已核对为同一机器后保留账号 key");
   assert.equal(await scope.peerKeyForRequest(null, oldUrl), "", "旧 IP 不再携带账号 key");
@@ -140,10 +140,10 @@ try {
   ]);
   const seedInlineKeys = async (newKey = "", historyKey = "saved-inline-key") => {
     await patchAppSettings({ handoffTargets: [] });
-    await seedBoundKey(oldUrl, "saved-inline-key");
-    await seedBoundKey(historicalUrl, historyKey);
+    await seedStoredKey(oldUrl, "saved-inline-key");
+    await seedStoredKey(historicalUrl, historyKey);
     await scope.setPeerKey(actor, newUrl, newKey);
-    await scope.setPeerKey(actor, unrelatedUrl, "unrelated-inline-key");
+    await seedStoredKey(unrelatedUrl, "unrelated-inline-key", otherFingerprint);
   };
   await seedInlineKeys();
   assert.deepEqual(await scope.listTargets(actor), [], "弹窗单独保存 key 的来源机没有目标行");
@@ -197,7 +197,7 @@ try {
   };
   await patchAppSettings({ handoffTargets: [] });
   await db.delete(handoffLocalPeerKeys);
-  await scope.setPeerKey(actor, oldUrl, "machine-b-account-key");
+  await seedStoredKey(oldUrl, "machine-b-account-key", null);
   assert.equal((await db.select().from(handoffLocalPeerKeys))[0].peerFp, null);
   await assertOwnershipConflict();
   await patchAppSettings({ handoffTargets: [{ name: "来源 A", url: oldUrl, peerFp: fingerprint }] });
@@ -249,8 +249,8 @@ try {
   const boundBeforeBadSignature = await storedTargetsAndKeys();
   assert.equal((await saveKey(addressToMove, "replacement-key", machineBFp)).status, 502);
   assert.deepEqual(await storedTargetsAndKeys(), boundBeforeBadSignature);
-  assert.equal((await saveKey(addressToMove, "legacy-replacement-key")).status, 200);
-  assert.equal((await db.select().from(handoffLocalPeerKeys))[0].peerFp, null, "无身份上下文的兼容保存无法验签时，不继承旧 key 的指纹");
+  assert.equal((await saveKey(addressToMove, "legacy-replacement-key")).status, 502, "没有预期指纹也不能在验签失败时报告保存成功");
+  assert.deepEqual(await storedTargetsAndKeys(), boundBeforeBadSignature, "无身份上下文的失败保存同样保留原 key 和绑定");
   badSignature = false;
   await assertOwnershipConflict();
 
@@ -279,7 +279,7 @@ try {
           ...otherTargets.slice(0, count - 1),
         ] });
         await db.delete(handoffLocalPeerKeys);
-        await scope.setPeerKey(actor, occupiedUrl, "machine-b-account-key");
+        await seedStoredKey(occupiedUrl, "machine-b-account-key", null);
         await assertOwnershipConflict();
       }
     }
@@ -289,13 +289,13 @@ try {
     { name: "未确认的重复记录", url: `${oldUrl}/`, peerFp: null },
   ] });
   await db.delete(handoffLocalPeerKeys);
-  await scope.setPeerKey(actor, oldUrl, "machine-b-account-key");
+  await seedStoredKey(oldUrl, "machine-b-account-key", null);
   await assertOwnershipConflict();
 
   await patchAppSettings({ handoffTargets: [
     { name: "已确认的来源机", url: oldUrl, peerFp: fingerprint }, ...otherTargets,
   ] });
-  await seedBoundKey(oldUrl, "saved-inline-key");
+  await seedStoredKey(oldUrl, "saved-inline-key");
   assert.equal((await save(newUrl)).status, 200, "目标已满 20 条时，同指纹来源机仍可原地换址");
   const fullTargets = await scope.listTargets(actor);
   assert.equal(fullTargets.length, 20);
@@ -320,9 +320,9 @@ try {
       { name: "预先添加的新地址", url: newUrl, peerFp: null },
       { name: "不相关目标", url: unrelatedUrl, peerFp: otherFingerprint },
     ] });
-    await seedBoundKey(oldUrl, "source-key");
+    await seedStoredKey(oldUrl, "source-key");
     await scope.setPeerKey(actor, newUrl, newKey);
-    await scope.setPeerKey(actor, unrelatedUrl, "unrelated-key");
+    await seedStoredKey(unrelatedUrl, "unrelated-key", otherFingerprint);
   };
   for (const newKey of ["", "source-key", "conflicting-key"]) {
     await seedSingleDuplicates(newKey);
