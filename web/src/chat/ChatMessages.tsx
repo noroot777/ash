@@ -23,6 +23,7 @@ export function ChatMessages({ snapshot, onTask, onMention }: { snapshot: ChatSn
     <div className="chat-welcome"><span className="chat-welcome-icon"><Hash size={32} weight="bold" /></span><h2>{snapshot.room.name}，从一句话开始。</h2><p>想法留在这里，复杂的工作交给任务。<br />点名才加入对话，不点名就安静待命。</p><div>{snapshot.room.members.length > 1 && <button type="button" onClick={() => onMention(ALL_MENTION_ALIASES[0])}>@all</button>}{snapshot.room.members.map((member) => <button type="button" key={member.id} onClick={() => onMention(member.name)}>@{member.name}</button>)}</div></div>
     {snapshot.messages.length >= 500 && <p className="chat-history-note">显示最近 500 条消息；更早的消息仍保存在群聊中。</p>}
     {snapshot.messages.map((message, index) => {
+      if (message.role === "system") return <p key={message.id} className="chat-history-note">{message.body}</p>;
       const memberIndex = snapshot.room.members.findIndex((member) => member.id === message.memberId);
       const task = snapshot.tasks.find((candidate) => candidate.id === message.taskId);
       const busy = message.status === "queued" || message.status === "running";

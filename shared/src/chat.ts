@@ -22,7 +22,7 @@ export type ChatMessageStatus = "queued" | "running" | "done" | "failed" | "stop
 export interface ChatMessage {
   id: string;
   roomId: string;
-  role: "user" | "agent";
+  role: "user" | "agent" | "system";
   memberId: string | null;
   author: string;
   body: string;
@@ -36,7 +36,17 @@ export interface ChatSnapshot {
   room: ChatRoom;
   messages: ChatMessage[];
   tasks: TaskListItem[];
+  context?: ChatContextStatus;
 }
+
+export interface ChatContextStatus {
+  status: "idle" | "compacting" | "failed" | "stopped";
+  error: string | null;
+  hasSummary: boolean;
+  clearedAt: string | null;
+}
+
+export const isChatClearCommand = (body: string): boolean => /^\/clear$/iu.test(body.trim());
 
 /** 召唤全体成员的保留名。成员名与别名同长时成员优先，所以老群里叫 all 的成员仍按成员匹配。 */
 export const ALL_MENTION_ALIASES = ["all", "所有人"] as const;

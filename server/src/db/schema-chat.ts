@@ -1,4 +1,4 @@
-import { index, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const chatRooms = sqliteTable("chat_rooms", {
   id: text("id").primaryKey(),
@@ -23,6 +23,36 @@ export const chatMessages = sqliteTable("chat_messages", {
   createdAt: text("created_at").notNull(),
 }, (table) => [index("chat_messages_room").on(table.roomId, table.createdAt)]);
 
+export const chatContextEntries = sqliteTable("chat_context_entries", {
+  sequence: integer("sequence").primaryKey({ autoIncrement: true }),
+  roomId: text("room_id").notNull(),
+  messageId: text("message_id").notNull().unique(),
+  content: text("content").notNull(),
+  tokens: integer("tokens").notNull(),
+}, (table) => [index("chat_context_entries_room").on(table.roomId, table.sequence)]);
+
+export const chatSummaries = sqliteTable("chat_summaries", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  roomId: text("room_id").notNull(),
+  throughSequence: integer("through_sequence").notNull(),
+  body: text("body").notNull(),
+  tokens: integer("tokens").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (table) => [index("chat_summaries_room").on(table.roomId, table.throughSequence)]);
+
+export const chatContextStates = sqliteTable("chat_context_states", {
+  roomId: text("room_id").primaryKey(),
+  status: text("status").notNull().default("idle"),
+  error: text("error"),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const chatContextResets = sqliteTable("chat_context_resets", {
+  roomId: text("room_id").primaryKey(),
+  afterSequence: integer("after_sequence").notNull(),
+  clearedAt: text("cleared_at").notNull(),
+});
+
 export async function ensureChatSchema(client: { executeMultiple(sql: string): Promise<unknown> }) {
   await client.executeMultiple(`
     CREATE TABLE IF NOT EXISTS chat_rooms (
@@ -36,5 +66,21 @@ export async function ensureChatSchema(client: { executeMultiple(sql: string): P
       status TEXT NOT NULL DEFAULT 'done', task_id TEXT, context TEXT, created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS chat_messages_room ON chat_messages(room_id, created_at);
+    CREATE TABLE IF NOT EXISTS chat_context_entries (
+      sequence INTEGER PRIMARY KEY AUTOINCREMENT, room_id TEXT NOT NULL,
+      message_id TEXT NOT NULL UNIQUE, content TEXT NOT NULL, tokens INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS chat_context_entries_room ON chat_context_entries(room_id, sequence);
+    CREATE TABLE IF NOT EXISTS chat_summaries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, room_id TEXT NOT NULL, through_sequence INTEGER NOT NULL,
+      body TEXT NOT NULL, tokens INTEGER NOT NULL, created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS chat_summaries_room ON chat_summaries(room_id, through_sequence);
+    CREATE TABLE IF NOT EXISTS chat_context_states (
+      room_id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'idle', error TEXT, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS chat_context_resets (
+      room_id TEXT PRIMARY KEY, after_sequence INTEGER NOT NULL, cleared_at TEXT NOT NULL
+    );
   `);
 }

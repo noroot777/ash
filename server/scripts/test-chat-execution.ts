@@ -58,6 +58,13 @@ try {
           kill: () => { killed++; }, cleanup: async () => { cleaned++; },
           events: (async function* (): AsyncGenerator<AgentEvent> {
             if (fail) throw new Error("fixture read failed");
+            if (opts.prompt.includes("BACKGROUND_SUMMARY_FIXTURE")) {
+              assert.notEqual(opts.cwd, projectDir);
+              assert.equal(existsSync(join(opts.cwd, "chat-context.txt")), false);
+              yield { kind: "text", text: '{"summary":"已有用户决定与待办事项"}' };
+              yield { kind: "done", exitStatus: 0 };
+              return;
+            }
             yield { kind: "text", text: "先查看当前项目。" };
             const file = join(opts.cwd, "chat-context.txt");
             const evidence = existsSync(file) ? readFileSync(file, "utf8") : "未配置目录";
@@ -82,6 +89,10 @@ try {
   assert.equal(killed, starts);
   const member: ChatMember = { id: "codex", name: "codex", agentType: "codex", executorId: "profile-codex", model: "chat-model", reasoningEffort: null };
   const signal = new AbortController().signal;
+  assert.equal(await invokeChat(member, null, "BACKGROUND_SUMMARY_FIXTURE", signal, "project", { purpose: "summary" }), '{"summary":"已有用户决定与待办事项"}');
+  assert.equal(existsSync(lastCwd), false);
+  await assert.rejects(invokeChat(member, null, "摘要禁止工具", signal, "project", { purpose: "summary" }), /后台摘要调用使用了工具/);
+  assert.equal(existsSync(lastCwd), false);
   const home = parseChatReply(await invokeChat(member, null, "咨询", signal, "home-directory"));
   assert.deepEqual(home, { reply: "来自家目录项目的建议依据", task: null });
   assert.equal(lastCwd, homeProject);
