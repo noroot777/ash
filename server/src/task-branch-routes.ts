@@ -22,7 +22,7 @@ import { now } from "./util.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 import { workspaceParticipants } from "./task-workspace.js";
 import { claimWorkspaceTurn, isTurnClaimed } from "./runs.js";
-import { execFileText as exec } from "./exec.js";
+import { removeMissingWorktreeRegistrations } from "./git-worktree-state.js";
 import { branchPlanReads } from "./branch-plan-reads.js";
 
 async function entry(task: BranchTask, repo: string, fingerprintTarget?: string | null,
@@ -163,7 +163,7 @@ export function mountBranchPlanRoutes(api: Hono, accept: Accept): void {
         const workspace = await detectTaskWorkspace(project.repoPath, taskId);
         if (!workspace.branch) return c.json({ error: "任务分支不存在，请先恢复分支再释放目录" }, 409);
         if (!workspace.path) {
-          await exec("git", ["-C", expandHome(project.repoPath), "worktree", "prune"]);
+          await removeMissingWorktreeRegistrations(expandHome(project.repoPath), { branch: workspace.branch });
           return c.json({ ok: true });
         }
         if (await symbolicBranch(workspace.path) !== workspace.branch) return c.json({ error: "工作区检出分支已变化，请先核对工作区" }, 409);

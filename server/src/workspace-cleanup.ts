@@ -3,6 +3,7 @@ import type { TaskWorkspaceLeftover, TaskWorkspaceDiscardResult } from "@ash/sha
 import { dirtyFilesAt, expandHome, gitError, listFiles, localBranchExists, removeWorktree, resolveWorktreeBranchName, worktreePathFor } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { execFileText as exec } from "./exec.js";
+import { assertReadableWorktree, removeMissingWorktreeRegistrations, UnreadableWorktreeError } from "./git-worktree-state.js";
 
 const isDir = (p: string) => {
   try { return statSync(p).isDirectory(); } catch { return false; }
@@ -36,9 +37,8 @@ export async function detectTaskWorkspace(
 /**
  * 删掉这个任务的 worktree 目录和/或分支。写型 git 操作,走仓库锁排队。
  *
- * 顺序必须是「prune → 删目录 → prune → 删分支」:分支被某个 worktree 检出时
- * `git branch -d` 必然失败,所以目录得先走;目录被手删过会留下陈旧登记(git 仍
- * 占着那个分支),prune 把它拉回可删。
+ * 先清理本任务已消失的目录登记，再删目录和分支；仍存在的目录会先确认 Git 状态，
+ * 反链断开或无法读取时保留文件。其它任务的登记不参与这次清理。
  *
  * `force` 只在**用户看到第一次失败、又点了一次**时才为真:worktree 加 `--force`
  * (有未提交改动时),分支用 `-D`(未合并时)。默认路径一律不带 force,让 git 自己
@@ -63,22 +63,23 @@ export async function discardTaskWorkspace(
   return withRepoLock(repo, async () => {
     const path = worktreePathFor(repo, taskId);
     const branch = await resolveWorktreeBranchName(repo, taskId);
-    await exec("git", ["-C", repo, "worktree", "prune"]).catch(() => {});
+    await removeMissingWorktreeRegistrations(repo, { branch }).catch(() => {});
     if (opts.worktree && isDir(path)) {
       out.path = path;
       try {
+        if (!opts.force) await assertReadableWorktree(path);
         await removeWorktree(repo, path, !!opts.force);
         out.worktreeRemoved = true;
       } catch (error) {
         // 这条报错是用户决定「要不要再点一次、这回带 force」的**唯一**依据,所以不能只
         // 转述 git 那句 "contains modified or untracked files" —— 强删掉的是哪几个文件,
         // 得当场摆在他面前。跟验收清理失败报的是同一份清单。
-        const dirty = await dirtyFilesAt(path);
+        const dirty = error instanceof UnreadableWorktreeError ? [] : await dirtyFilesAt(path);
         out.worktreeError = dirty.length > 0
           ? `${gitError(error)}（挡路的是这 ${dirty.length} 个文件：${listFiles(dirty)}）`
           : gitError(error);
       }
-      await exec("git", ["-C", repo, "worktree", "prune"]).catch(() => {});
+      await removeMissingWorktreeRegistrations(repo, { branch }).catch(() => {});
     }
     if (opts.branch && (await localBranchExists(repo, branch))) {
       out.branch = branch;

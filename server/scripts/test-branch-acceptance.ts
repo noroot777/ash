@@ -117,6 +117,10 @@ try {
     rmSync(stale.parentWs.path, { recursive: true, force: true });
     const legacySource = await setup(); // case11: own source filtering also follows harness/*.
     git(legacySource.childWs.path, "branch", "-m", legacySource.childWs.branch!.replace("ash/", "harness/"));
+    const broken = await setup(); // case12: directory and WIP survive a broken .git backlink.
+    await db.update(tasks).set({ mergeTargetBranch: broken.parentWs.branch }).where(eq(tasks.id, broken.child.id));
+    writeFileSync(join(broken.parentWs.path, "PARENT_WIP.txt"), "keep parent WIP\n");
+    rmSync(join(broken.parentWs.path, ".git"));
     await s.newTask("unstarted", "main");
     const unreadable = await s.newTask("badstart", "main");
     await taskWorkspace(await row(unreadable.id), s.repo);

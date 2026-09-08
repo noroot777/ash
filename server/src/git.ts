@@ -7,6 +7,7 @@ import { IS_WINDOWS, windowsLongPathHint } from "./platform.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 import { execFileText as exec } from "./exec.js";
+import { removeMissingWorktreeRegistrations } from "./git-worktree-state.js";
 
 const isDir = (p: string) => {
   try { return statSync(p).isDirectory(); } catch { return false; }
@@ -331,10 +332,10 @@ function worktreeLeftoverAt(repoPath: string, path: string): boolean {
   return resolve(dirname(path)) === resolve(join(expandHome(repoPath), ".worktrees"));
 }
 
-// 抹掉残骸，顺带 prune 掉 git 那边可能还留着的陈旧注册项。
+// 抹掉残骸，再清理这个路径可能还留着的陈旧注册项。
 async function discardWorktreeLeftover(repo: string, path: string): Promise<void> {
   rmSync(path, { recursive: true, force: true });
-  await exec("git", ["-C", repo, "worktree", "prune"]).catch(() => {});
+  await removeMissingWorktreeRegistrations(repo, { path }).catch(() => {});
 }
 
 // 「这个任务留下的 worktree/分支还在不在」搬到了 ./workspace-cleanup.ts

@@ -95,6 +95,19 @@ export async function checkBranchAcceptance(page, fixtureUrl) {
   ensure(await page.getByRole("option", { name: "harness/case11-c", exact: true }).count() === 0, "legacy own task branch must not be offered");
   ensure(await page.getByRole("option", { name: "main", exact: true }).count() === 1, "final target must remain selectable");
 
+  await go("case12-child");
+  await page.getByRole("alert").filter({ hasText: "目标分支 ash/case12-p 仍在工作区" }).waitFor({ state: "visible" });
+  ensure(!await review().getByRole("button", { name: "目标工作区仍被占用", exact: true }).isEnabled(), "broken backlink with surviving files must block child acceptance");
+  await go("case12-parent");
+  await button("释放工作区目录（保留分支）").click();
+  await page.getByRole("dialog").getByRole("button", { name: "释放目录，保留分支", exact: true }).click();
+  await page.getByRole("dialog").getByRole("alert").filter({ hasText: "工作区检出分支已变化" }).waitFor({ state: "visible" });
+  await page.getByRole("dialog").getByRole("button", { name: "取消", exact: true }).click();
+  await review().getByRole("button", { name: "验收通过", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "验收通过", exact: true }).click();
+  await review().getByRole("alert").filter({ hasText: "目录及文件已保留" }).waitFor({ state: "visible" });
+  ensure(await review().getByText("验收完成", { exact: true }).count() === 0, "unreadable cleanup must not report success");
+
   await go("case5-parent");
   await page.getByRole("region", { name: "派生与验收依赖" }).waitFor({ state: "visible" });
   ensure(await review().getByRole("button", { name: "放行，继续下一站" }).isEnabled(), "review mid-gate must allow release");
