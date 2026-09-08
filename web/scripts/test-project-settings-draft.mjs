@@ -31,12 +31,23 @@ try {
 
   browser = await chromium.launch(await chromeLaunchOptions());
   const page = await browser.newPage({ viewport: { width: 1000, height: 1200 } });
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/project-settings-draft.html`);
 
   const preview = page.locator("label", { hasText: "「打开预览」跑哪条命令" }).locator("input");
   const name = page.locator("label", { hasText: "项目名称" }).locator("input");
   const repoPath = page.locator("label", { hasText: "工作目录" }).locator("input");
   await preview.waitFor();
+
+  const help = page.getByRole("button", { name: "配置说明与示例" });
+  const dialog = page.getByRole("dialog", { name: "预览命令说明" });
+  const previewSection = page.locator(".settings-section").filter({ has: help });
+  assert.equal(await help.isVisible(), true, "配置说明需要有明确的按钮入口");
+  assert.equal(await help.getAttribute("aria-expanded"), "false");
+  assert.equal(await page.getByText("自动识别启动命令", { exact: true }).count(), 0, "详细说明不应默认铺在页面上");
+  assert.ok((await previewSection.boundingBox()).height < 250, "收起后的预览配置应保持紧凑");
+  if (process.env.SETTINGS_HELP_CLOSED_SHOT) await previewSection.screenshot({ path: process.env.SETTINGS_HELP_CLOSED_SHOT, animations: "disabled" });
 
   // ① 编辑三个框，然后来一次健康刷新。
   const DRAFT = "cd a4sms-front && pnpm run dev -- --port $PORT";
@@ -45,6 +56,56 @@ try {
   await repoPath.fill("/workspace/改了目录");
   const save = page.getByRole("button", { name: "保存预览命令" });
   assert.equal(await save.isDisabled(), false, "输了字之后保存按钮应该是可按的");
+
+  await help.click();
+  await dialog.waitFor();
+  assert.equal(await help.getAttribute("aria-expanded"), "true");
+  assert.deepEqual(await dialog.getByRole("heading", { level: 3 }).allTextContents(), [
+    "自动识别启动命令", "命令在哪里执行", "预览端口与服务地址", "同时启动前后端", "把端口传给运行时", "启动失败时排查",
+  ]);
+  const commandExample = await dialog.locator("pre").innerText();
+  assert.ok(commandExample.includes("SERVER_PORT=$PORT2"));
+  assert.ok(commandExample.includes("VITE_APP_API_URL=$URL2"));
+  assert.ok(commandExample.endsWith("--port $PORT"));
+  const closeHelp = dialog.getByRole("button", { name: "关闭预览命令说明" });
+  const acknowledge = dialog.getByRole("button", { name: "知道了" });
+  assert.equal(await closeHelp.evaluate((node) => node === document.activeElement), true, "打开说明后焦点应进入弹窗");
+  await page.keyboard.press("Shift+Tab");
+  assert.equal(await acknowledge.evaluate((node) => node === document.activeElement), true);
+  await page.keyboard.press("Tab");
+  assert.equal(await closeHelp.evaluate((node) => node === document.activeElement), true, "Tab 不应进入弹窗背后的输入框");
+  if (process.env.SETTINGS_HELP_OPEN_SHOT) await page.screenshot({ path: process.env.SETTINGS_HELP_OPEN_SHOT, animations: "disabled" });
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "detached" });
+  assert.equal(await help.evaluate((node) => node === document.activeElement), true, "关闭后焦点应回到说明按钮");
+  assert.equal(await preview.inputValue(), DRAFT, "查看说明不能改变未保存的命令");
+
+  await help.click();
+  await closeHelp.click();
+  await dialog.waitFor({ state: "detached" });
+  await help.click();
+  await acknowledge.click();
+  await dialog.waitFor({ state: "detached" });
+  await help.click();
+  await page.locator(".task-modal-scrim").dispatchEvent("pointerdown");
+  await dialog.waitFor({ state: "detached" });
+
+  await page.setViewportSize({ width: 390, height: 740 });
+  await help.click();
+  await dialog.waitFor();
+  const narrowDialog = await dialog.boundingBox();
+  assert.ok(narrowDialog.x >= 0 && narrowDialog.x + narrowDialog.width <= 390, "窄屏弹窗不能横向溢出");
+  assert.ok(narrowDialog.y >= 0 && narrowDialog.y + narrowDialog.height <= 740, "窄屏弹窗不能超出视口");
+  const content = dialog.getByRole("region", { name: "配置说明内容" });
+  assert.equal(await content.evaluate((node) => node.scrollWidth <= node.clientWidth), true, "长命令需要在窄屏换行");
+  assert.equal(await content.evaluate((node) => node.scrollHeight > node.clientHeight), true, "长说明应在弹窗内部滚动");
+  if (process.env.SETTINGS_HELP_NARROW_SHOT) await page.screenshot({ path: process.env.SETTINGS_HELP_NARROW_SHOT, animations: "disabled" });
+  await dialog.getByRole("heading", { name: "启动失败时排查" }).scrollIntoViewIfNeeded();
+  const acknowledgeBox = await acknowledge.boundingBox();
+  assert.ok(acknowledgeBox.y >= 0 && acknowledgeBox.y + acknowledgeBox.height <= 740, "滚动说明时关闭按钮应保持可见");
+  await acknowledge.click();
+  await dialog.waitFor({ state: "detached" });
+  await page.setViewportSize({ width: 1000, height: 1200 });
 
   await page.getByTestId("health-refresh").click();
   // 刷新是同步 setState，等一帧就够；用 waitForFunction 而不是 sleep，免得把时序写进测试。
@@ -71,7 +132,17 @@ try {
   assert.equal(await preview.inputValue(), "", "换了项目还留着上一个的预览命令草稿");
   assert.equal(await repoPath.inputValue(), "/workspace/p-two", "换了项目要显示新项目的目录");
 
-  console.log("project settings draft: ok");
+  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/project-settings-draft.html?member`);
+  await help.waitFor();
+  assert.equal(await preview.getAttribute("readonly"), "");
+  assert.equal(await save.count(), 0, "成员不能保存预览命令");
+  await help.click();
+  await dialog.waitFor();
+  assert.equal(await dialog.getByRole("heading", { name: "自动识别启动命令" }).isVisible(), true, "只读成员也能查看说明");
+  await acknowledge.click();
+  assert.deepEqual(errors, [], "项目设置页不应产生运行时异常");
+
+  console.log("project settings draft + preview help: ok (collapsed, dialog, keyboard, dismissal, narrow screen, read-only)");
 } finally {
   await browser?.close();
   await server.close();
