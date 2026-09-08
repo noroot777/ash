@@ -1,4 +1,5 @@
 import type { ChatMessage } from "@ash/shared/chat";
+import { parseLastJsonObject } from "./json-object.js";
 
 export const CHAT_CONTEXT_POLICY = {
   inputTokens: 24000,
@@ -32,13 +33,9 @@ ${entries.join("\n")}`;
 }
 
 export function parseChatSummary(text: string, maxTokens: number): string {
-  const cleaned = text.trim().replace(/^```(?:json)?\s*/u, "").replace(/\s*```$/u, "");
-  let value: unknown;
-  try { value = JSON.parse(cleaned); } catch { throw new Error("摘要格式无效，原始消息已保留。"); }
-  if (!value || typeof value !== "object" || Array.isArray(value)
-    || Object.keys(value).some((key) => key !== "summary")
-    || typeof (value as { summary?: unknown }).summary !== "string") throw new Error("摘要格式无效，原始消息已保留。");
-  const summary = (value as { summary: string }).summary.trim();
+  const value = parseLastJsonObject(text);
+  if (!value || typeof value.summary !== "string") throw new Error("摘要格式无效，原始消息已保留。");
+  const summary = value.summary.trim();
   if (!summary || estimateChatTokens(JSON.stringify(summary)) > maxTokens) throw new Error("摘要为空或超出预算，原始消息已保留。");
   return summary;
 }

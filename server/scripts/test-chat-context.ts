@@ -12,17 +12,23 @@ const stage = mkdtempSync(join(tmpdir(), "ash-chat-context-"));
 process.env.ASH_DB = join(stage, "test.db");
 process.env.ASH_RUNS_DIR = join(stage, "runs");
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
-const { projects, chatRooms, chatMessages, chatSummaries, chatContextEntries } = await import("../src/db/schema.js");
+const { projects, chatRooms, chatMessages, chatSummaries, chatContextEntries, chatContextStates } = await import("../src/db/schema.js");
 const { ChatService } = await import("../src/chat/service.js");
 const { ChatContextManager } = await import("../src/chat/context.js");
-const { captureChatHistory, readChatHistory, chatContextStatus, setContextState } = await import("../src/chat/context-store.js");
+const { captureChatHistory, readChatHistory, chatContextStatus, contextState, setContextState } = await import("../src/chat/context-store.js");
 const { estimateChatTokens, parseChatSummary, contextMessage } = await import("../src/chat/context-format.js");
+const { parseChatReply } = await import("../src/chat/prompt.js");
 const { limitedChatInvoke } = await import("../src/chat/invocation-queue.js");
 const { mountChatRoutes } = await import("../src/chat/routes.js");
 const { SINGLE_ACTOR, setActor } = await import("../src/auth/context.js");
 const { withGlobalBrowserPolicy } = await import("../src/browser-verification-policy.js");
+await dbClient.executeMultiple(`
+  CREATE TABLE chat_context_states (room_id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'idle', error TEXT, updated_at TEXT NOT NULL);
+  INSERT INTO chat_context_states VALUES ('legacy-failure', 'failed', '旧失败', '2026-09-01T00:00:00.000Z');
+`);
 await ensureSchema();
 await ensureSchema();
+assert.equal((await contextState("legacy-failure"))?.failedAt, "2026-09-01T00:00:00.000Z");
 const timestamp = "2026-09-01T00:00:00.000Z";
 await db.insert(projects).values({ id: "project", name: "上下文测试", repoPath: stage, createdAt: timestamp });
 const members: ChatMember[] = ["codex", "claude", "grok"].map((name) => ({ id: name, name, agentType: name as ChatMember["agentType"], executorId: null, model: "fixture-model", reasoningEffort: null }));
@@ -75,7 +81,12 @@ const summaries = () => calls.filter((call) => call.summary);
 
 try {
   assert.ok(estimateChatTokens("汉".repeat(100)) > estimateChatTokens("x".repeat(100)));
-  for (const text of ["oops", '{"summary":""}', '{"summary":"ok","task":{}}', JSON.stringify({ summary: "汉".repeat(1000) })]) assert.throws(() => parseChatSummary(text, 500));
+  for (const text of ["oops", "null", "[]", '{"summary":12}', '{"summary":{}}', '{"summary":""}', '{"summary":"ok"} 结语', '[{"summary":"ok"}]', JSON.stringify({ summary: "汉".repeat(1000) })]) assert.throws(() => parseChatSummary(text, 500));
+  for (const [prefix, suffix] of [["", ""], ["整理好了。\n", ""], ["```json\n", "\n```"], ["整理好了。\n```json\n", "\n```"], ['{"旧输出":"忽略"}\n', ""]]) {
+    assert.equal(parseChatSummary(`${prefix}${JSON.stringify({ summary: ' 保留决定 {A} 与 "B" ', metadata: { extra: true }, task: { title: "忽略" } })}${suffix}`, 500), '保留决定 {A} 与 "B"');
+    assert.deepEqual(parseChatReply(`${prefix}{"reply":"已处理","task":null,"extra":true}${suffix}`), { reply: "已处理", task: null });
+  }
+  console.log("✓ 摘要与回复共用最终 JSON 容错，前缀、围栏、额外字段可接受；类型、空值、预算和尾随文字仍校验");
   assert.equal(JSON.parse(contextMessage({ role: "user", author: "用户", body: '完整🙂\n"消息"' })).body, '完整🙂\n"消息"');
 
   const legacy = await createRoom("legacy");
@@ -183,6 +194,14 @@ try {
   await settled(failure.id);
   await delay(30);
   assert.equal(summaries().length, failedCount);
+  assert.deepEqual((await snapshot(failure.id)).context, { status: "idle", error: null, hasSummary: false, clearedAt: null });
+  const savedFailure = (await contextState(failure.id))?.failedAt;
+  assert.ok(savedFailure);
+  const afterFailureRestart = new ChatContextManager(invoke, policy);
+  await afterFailureRestart.recover();
+  await afterFailureRestart.prewarm(failure.id, members[0]!);
+  assert.equal(summaries().length, failedCount, "提示归位后及重启后仍保留后台五分钟冷却");
+  assert.equal((await contextState(failure.id))?.failedAt, savedFailure);
   assert.equal((await db.select().from(chatSummaries).where(eq(chatSummaries.roomId, failure.id))).length, 0);
   await seed(failure.id, 30);
   await send(failure.id, "@all 超额重试");
@@ -190,7 +209,44 @@ try {
   assert.equal(summaries().length, failedCount);
   assert.equal((await snapshot(failure.id)).messages.filter((message) => message.role === "agent").slice(-3).every((message) => message.status === "failed"), true);
   assert.ok((await db.select().from(chatContextEntries).where(eq(chatContextEntries.roomId, failure.id))).length > 50);
+  await send(failure.id, "/clear");
+  assert.equal((await contextState(failure.id))?.failedAt, null, "清空后的新上下文不继承旧失败的冷却");
   console.log("✓ 后台失败保留原文且不覆盖正常回复；失败冷却防止每轮/每成员重复付费重试，超额不静默截断");
+
+  const partial = await createRoom("partial-failure");
+  await seed(partial.id, 20, 1100);
+  let partialCalls = 0;
+  const partialManager = new ChatContextManager(async () => {
+    if (++partialCalls === 2) throw new Error("模型上游 503");
+    return '整理好了。```json\n{"summary":"保留用户决定 KEEP-0","metadata":{"extra":true}}\n```';
+  }, { ...policy, batchTokens: 3000 });
+  await partialManager.prewarm(partial.id, members[0]!);
+  assert.equal(partialCalls, 2);
+  assert.deepEqual(await chatContextStatus(partial.id), { status: "failed", error: "模型上游 503", hasSummary: true, clearedAt: null });
+  const partialCutoff = await captureChatHistory(partial.id);
+  const partialHistory = await readChatHistory(partial.id, partialCutoff);
+  assert.ok(partialHistory.tokens <= policy.backgroundTokens);
+  await db.update(chatContextStates).set({ failedAt: new Date(Date.now() - 300001).toISOString() }).where(eq(chatContextStates.roomId, partial.id));
+  await partialManager.prewarm(partial.id, members[0]!);
+  assert.equal(partialCalls, 2, "多批整理中途失败后历史已够用，不再调用模型");
+  assert.deepEqual(await chatContextStatus(partial.id), { status: "idle", error: null, hasSummary: true, clearedAt: null });
+  assert.deepEqual(await readChatHistory(partial.id, partialCutoff), partialHistory);
+  const partialPrompt = await partialManager.prepare(partial, members[0]!, partialCutoff, "继续", new AbortController().signal);
+  assert.ok(partialPrompt.includes("保留用户决定 KEEP-0"));
+  assert.ok(partialPrompt.includes("KEEP-19"));
+  console.log("✓ 分批整理中途失败后，冷却结束且历史已够用时归位提示，保留已完成摘要与近期原文");
+
+  const tolerant = await createRoom("tolerant-foreground");
+  await seed(tolerant.id, 65, 1000);
+  await setContextState(tolerant.id, "failed", "旧格式错误");
+  await db.update(chatContextStates).set({ failedAt: new Date(Date.now() - 60001).toISOString() }).where(eq(chatContextStates.roomId, tolerant.id));
+  const tolerantManager = new ChatContextManager(async () => '整理结果：\n{"summary":"KEEP-0 与 TASK-1 已确认","extra":"忽略"}', policy);
+  const tolerantPrompt = await tolerantManager.prepare(tolerant, members[0]!, await captureChatHistory(tolerant.id), "继续", new AbortController().signal);
+  assert.ok(tolerantPrompt.includes("KEEP-0 与 TASK-1 已确认"));
+  assert.ok(estimateChatTokens(withGlobalBrowserPolicy(tolerantPrompt, "full")) <= policy.inputTokens);
+  assert.equal((await chatContextStatus(tolerant.id)).status, "idle");
+  assert.equal((await contextState(tolerant.id))?.failedAt, null, "前台冷却期满后整理成功，清除旧失败时间");
+  console.log("✓ 长历史前台整理接受带说明及额外字段的合法摘要，不再因输出包装阻塞回复");
 
   const frozen = await createRoom("frozen");
   mode = "hold-reply";

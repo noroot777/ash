@@ -224,13 +224,24 @@ try {
   await page.reload();
   await page.getByRole("status").filter({ hasText: "原文已保留" }).waitFor();
   await page.screenshot({ path: `${output}/chat-context-failed.png`, animations: "disabled" });
+  await page.request.post(`${fixtureUrl}/api/fixture/chat-context/${currentRoomId}`, { data: { mode: "ok" } });
+  await send("@codex 整理失败后继续正常回复");
+  await page.waitForFunction(() => {
+    const replies = document.querySelectorAll(".chat-message:not(.is-user)");
+    return replies[replies.length - 1]?.classList.contains("is-done") && !document.querySelector(".chat-typing");
+  });
+  assert.equal(await page.locator(".chat-composer-area [role=status]").count(), 0, "上下文已足够正常回复时，旧失败提示归位");
+  await page.reload();
+  await input.waitFor();
+  assert.equal(await page.locator(".chat-composer-area [role=status]").count(), 0, "刷新不恢复旧失败提示");
+  await page.screenshot({ path: `${output}/chat-context-recovered.png`, animations: "disabled" });
   await page.getByRole("button", { name: "新建群聊", exact: true }).click();
   await page.getByLabel("群聊名称", { exact: true }).fill("摘要成功验证");
   await page.getByRole("button", { name: "添加成员", exact: true }).click();
   await page.getByRole("button", { name: "创建群聊", exact: true }).click();
   await input.waitFor();
   const summaryRoomId = await page.evaluate(() => localStorage.getItem("ash:chat:chat-demo"));
-  await page.request.post(`${fixtureUrl}/api/fixture/chat-context/${summaryRoomId}`, { data: { seed: true, mode: "ok" } });
+  await page.request.post(`${fixtureUrl}/api/fixture/chat-context/${summaryRoomId}`, { data: { seed: true, mode: "prefixed" } });
   await send("@codex 请给建议");
   await page.getByRole("status").filter({ hasText: "较早历史已整理为共享摘要" }).waitFor();
   await page.reload();
@@ -254,7 +265,7 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
   await page.screenshot({ path: `${output}/chat-context-clear.png`, animations: "disabled" });
   console.log("chat clear browser passed: /clear 命令、持久分界提示、保留旧消息、后续新对话不恢复旧摘要。");
-  console.log("chat context browser passed: 后台预压缩、停止和失败状态刷新可见、成功摘要持久化、390px 提示无横向溢出。");
+  console.log("chat context browser passed: 后台预压缩、停止和失败状态刷新可见、正常回复后旧失败提示消失且刷新不恢复、带说明及额外字段的摘要成功持久化、390px 提示无横向溢出。");
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole("button", { name: "新建群聊", exact: true }).click();
   await page.getByLabel("群聊名称", { exact: true }).fill("停止整理回归");

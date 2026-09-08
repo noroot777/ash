@@ -1,4 +1,5 @@
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import type { Client } from "./node-sqlite-client.js";
 
 export const chatRooms = sqliteTable("chat_rooms", {
   id: text("id").primaryKey(),
@@ -44,6 +45,7 @@ export const chatContextStates = sqliteTable("chat_context_states", {
   roomId: text("room_id").primaryKey(),
   status: text("status").notNull().default("idle"),
   error: text("error"),
+  failedAt: text("failed_at"),
   updatedAt: text("updated_at").notNull(),
 });
 
@@ -53,7 +55,7 @@ export const chatContextResets = sqliteTable("chat_context_resets", {
   clearedAt: text("cleared_at").notNull(),
 });
 
-export async function ensureChatSchema(client: { executeMultiple(sql: string): Promise<unknown> }) {
+export async function ensureChatSchema(client: Pick<Client, "executeMultiple" | "execute">) {
   await client.executeMultiple(`
     CREATE TABLE IF NOT EXISTS chat_rooms (
       id TEXT PRIMARY KEY, project_id TEXT NOT NULL, owner_user_id TEXT,
@@ -77,10 +79,15 @@ export async function ensureChatSchema(client: { executeMultiple(sql: string): P
     );
     CREATE INDEX IF NOT EXISTS chat_summaries_room ON chat_summaries(room_id, through_sequence);
     CREATE TABLE IF NOT EXISTS chat_context_states (
-      room_id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'idle', error TEXT, updated_at TEXT NOT NULL
+      room_id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'idle', error TEXT, failed_at TEXT, updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS chat_context_resets (
       room_id TEXT PRIMARY KEY, after_sequence INTEGER NOT NULL, cleared_at TEXT NOT NULL
     );
   `);
+  const columns = await client.execute("PRAGMA table_info(chat_context_states)");
+  if (!columns.rows.some((column) => column.name === "failed_at")) {
+    await client.execute("ALTER TABLE chat_context_states ADD COLUMN failed_at TEXT");
+  }
+  await client.execute("UPDATE chat_context_states SET failed_at=updated_at WHERE status='failed' AND failed_at IS NULL");
 }

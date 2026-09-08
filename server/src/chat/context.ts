@@ -7,7 +7,7 @@ import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import type { invokeChat } from "./execution.js";
 import { chatPrompt } from "./prompt.js";
 import { CHAT_CONTEXT_POLICY, estimateChatTokens, parseChatSummary, summaryPrompt, type ChatContextPolicy } from "./context-format.js";
-import { captureChatHistory, captureChatSnapshot, chatHasPending, contextState, readChatHistory, recoverChatContext, resetChatContext, setContextState } from "./context-store.js";
+import { acknowledgeContextFailure, captureChatHistory, captureChatSnapshot, chatHasPending, contextState, readChatHistory, recoverChatContext, resetChatContext, setContextState } from "./context-store.js";
 import { abortable } from "./invocation-queue.js";
 
 type Room = typeof chatRooms.$inferSelect;
@@ -77,7 +77,7 @@ export class ChatContextManager {
     const currentMember = members.find((entry) => entry.id === member.id);
     if (!currentMember) return;
     const state = await contextState(roomId);
-    if (state?.status === "stopped" || (state?.status === "failed" && Date.now() - Date.parse(state.updatedAt) < 300000)) return;
+    if (state?.status === "stopped" || (state?.failedAt && Date.now() - Date.parse(state.failedAt) < 300000)) return;
     await this.locked(roomId, new AbortController().signal, async (signal) => {
       if (this.prewarmStopped.has(roomId) || (this.generations.get(roomId) ?? 0) !== generation) return;
       if (await chatHasPending(roomId)) return;
@@ -88,9 +88,13 @@ export class ChatContextManager {
 
   private async compact(room: Room, member: ChatMember, cutoff: number, trigger: number, signal: AbortSignal) {
     let history = await readChatHistory(room.id, cutoff);
-    if (history.tokens <= trigger) return history;
     const state = await contextState(room.id);
-    if (state?.status === "failed" && Date.now() - Date.parse(state.updatedAt) < 60000) {
+    signal.throwIfAborted();
+    if (history.tokens <= trigger) {
+      if (state?.status === "failed") await acknowledgeContextFailure(room.id);
+      return history;
+    }
+    if (state?.failedAt && Date.now() - Date.parse(state.failedAt) < 60000) {
       throw new Error(`历史整理刚刚失败，原始消息已保留；请稍后重新 @。${state.error ?? ""}`);
     }
     const target = Math.min(trigger, this.policy.recentTokens + this.policy.summaryTokens);

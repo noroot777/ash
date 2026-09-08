@@ -30,6 +30,7 @@ let contextMode = "ok";
 const service = new ChatService(async (member, owner, prompt, signal, projectId, options) => {
   if (options?.purpose === "summary") {
     await delay(contextMode === "hold" ? 30000 : 300, undefined, { signal });
+    if (contextMode === "prefixed") return '整理完成。```json\n{"summary":"用户决定保留频道导航与任务状态卡；近期讨论继续保留原文。","extra":{"source":"fixture"}}\n```';
     return contextMode === "invalid" ? "invalid" : '{"summary":"用户决定保留频道导航与任务状态卡；近期讨论继续保留原文。"}';
   }
   const text = JSON.parse(prompt.split("【本次用户消息】\n").at(-1)!) as string;

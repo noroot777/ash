@@ -52,8 +52,15 @@ export async function contextState(roomId: string) {
 }
 
 export async function setContextState(roomId: string, status: ChatContextStatus["status"], error: string | null = null) {
-  const value = { roomId, status, error, updatedAt: now() };
+  const updatedAt = now();
+  const value = { roomId, status, error, updatedAt, failedAt: status === "failed" ? updatedAt : null };
   await db.insert(states).values(value).onConflictDoUpdate({ target: states.roomId, set: value });
+}
+
+export async function acknowledgeContextFailure(roomId: string) {
+  // 清除已不妨碍当前请求的提示，保留失败时间以维持前后台重试冷却。
+  await db.update(states).set({ status: "idle", error: null, updatedAt: now() })
+    .where(and(eq(states.roomId, roomId), eq(states.status, "failed")));
 }
 
 export async function chatContextStatus(roomId: string): Promise<ChatContextStatus> {
@@ -78,7 +85,7 @@ export async function resetChatContext(roomId: string, command: { id: string; bo
     const afterSequence = inserted[0]!.sequence;
     await tx.insert(resets).values({ roomId, afterSequence, clearedAt }).onConflictDoUpdate({ target: resets.roomId, set: { afterSequence, clearedAt } });
     await tx.insert(states).values({ roomId, status: "idle", error: null, updatedAt: clearedAt })
-      .onConflictDoUpdate({ target: states.roomId, set: { status: "idle", error: null, updatedAt: clearedAt } });
+      .onConflictDoUpdate({ target: states.roomId, set: { status: "idle", error: null, failedAt: null, updatedAt: clearedAt } });
   });
 }
 

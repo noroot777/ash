@@ -1,5 +1,6 @@
 import type { ChatMember, ChatMessage } from "@ash/shared/chat";
 import { contextMessage } from "./context-format.js";
+import { parseLastJsonObject } from "./json-object.js";
 
 export function chatPrompt(member: ChatMember, history: (Pick<ChatMessage, "author" | "body" | "role"> | string)[], request: string, summary = ""): string {
   const transcript = history.map((message) => typeof message === "string" ? message : contextMessage(message)).join("\n");
@@ -23,12 +24,7 @@ ${JSON.stringify(request)}`;
 }
 
 export function parseChatReply(text: string): { reply: string; task: { title: string; body: string } | null } {
-  const cleaned = text.trim().replace(/^```(?:json)?\s*/u, "").replace(/\s*```$/u, "");
-  let value: Record<string, unknown> | undefined;
-  for (let start = cleaned.lastIndexOf("{"); start >= 0; start = cleaned.lastIndexOf("{", start - 1)) {
-    try { value = JSON.parse(cleaned.slice(start)) as Record<string, unknown>; break; }
-    catch { if (start === 0) break; }
-  }
+  const value = parseLastJsonObject(text);
   if (!value) throw new Error("智能体未返回有效的简短回复，请重新 @ 重试。");
   if (typeof value.reply !== "string" || !value.reply.trim()) throw new Error("智能体未返回有效的简短回复，请重新 @ 重试。");
   let task: { title: string; body: string } | null = null;
