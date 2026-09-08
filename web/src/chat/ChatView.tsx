@@ -7,6 +7,7 @@ import { chatApi } from "./chatApi.ts";
 import { ChatMembers } from "./ChatMembers.tsx";
 import { ChatMessages } from "./ChatMessages.tsx";
 import { createClientId } from "../lib/clientId.ts";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { MODES } from "../composer/composerParts.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
 import "./chat.css";
@@ -27,6 +28,7 @@ export function ChatView({ project, onTask, onExit, onMode }: {
   const [mentionIndex, setMentionIndex] = useState(0);
   const input = useRef<HTMLTextAreaElement>(null);
   const mentionMenu = useRef<HTMLDivElement>(null);
+  const connectionTip = useHoverTip();
   useDismissable({ enabled: mentionOpen, containerRef: mentionMenu, restoreFocusRef: input, onClose: () => setMentionOpen(false) });
   const request = useRef<{ body: string; id: string } | null>(null);
   const selected = useRef(roomId);
@@ -130,9 +132,9 @@ export function ChatView({ project, onTask, onExit, onMode }: {
           setEditor(null);
         }
       }} /> : <>
-        <header className="chat-header"><div><h1>{room
+        <header className="chat-header"><h1>{room
           ? <button type="button" className="chat-room-name" aria-label={`群聊设置：${room.name}`} onClick={() => setEditor("members")}><Hash size={23} />{room.name}<PencilSimple size={14} /></button>
-          : <><Hash size={23} />聊天空间</>}</h1><p><span className={`chat-connection ${connected ? "is-connected" : ""}`} />{roomId ? connected ? "实时连接" : "连接中，状态可能延迟" : "创建群聊，邀请你的智能体"}</p></div>{room && <button type="button" className="chat-member-count" onClick={() => setEditor("members")}><UsersThree size={19} />{room.members.length} 位成员</button>}</header>
+          : <><Hash size={23} />聊天空间</>}{roomId && <span className={`chat-connection ${connected ? "is-connected" : ""}`} tabIndex={0} role="status" aria-label={connected ? "实时连接" : "连接中，状态可能延迟"} {...connectionTip.anchorProps} />}</h1>{room && <button type="button" className="chat-member-count" onClick={() => setEditor("members")}><UsersThree size={19} />{room.members.length} 位成员</button>}<HoverTip at={connectionTip.at}>{connected ? "实时连接" : "连接中，状态可能延迟"}</HoverTip></header>
         {snapshot ? <ChatMessages snapshot={snapshot} onTask={onTask} onMention={mention} />
           : <div className="chat-empty"><ChatCircleDots size={48} weight="duotone" /><h2>{roomId ? `正在载入 #${room?.name ?? "群聊"}…` : ready ? "把想法变成对话" : "正在载入聊天…"}</h2><p>{roomId ? "消息马上就到，这个群的历史只属于这里。" : "建立一个空间，和你的智能体一起聊。"}</p>{ready && !roomId && <button type="button" className="chat-primary" onClick={() => setEditor("create")}>新建群聊</button>}</div>}
         {room && <div className="chat-composer-area"><div className="chat-live-line">{active.length ? <><span className="chat-live-dot" />{active.map((message) => message.author).filter((name, index, all) => all.indexOf(name) === index).join("、")} 正在回复<button type="button" onClick={() => void chatApi.stop(room.id).then((result) => { if (selected.current === room.id) setSnapshot(result); }).catch((reason) => setError(String(reason)))}><Stop size={12} weight="fill" />停止回复</button></> : <span>所有成员安静待命</span>}</div>
