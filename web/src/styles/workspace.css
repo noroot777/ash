@@ -384,11 +384,21 @@
   font-size: 11px;
 }
 
-.workspace-toast {
+/* 两句提示上下摞着：常驻那句在上，普通那句贴着角。空槽位不渲染，所以这里不留占位。 */
+.workspace-toasts {
   position: fixed;
   z-index: 120;
   right: 20px;
   bottom: 20px;
+  display: flex;
+  max-width: calc(100vw - 40px);
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.workspace-toast {
   max-width: 320px;
   transform: translateY(8px);
   border: 1px solid var(--line2);

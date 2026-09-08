@@ -71,13 +71,14 @@ const task = {
 } as unknown as Task;
 
 function Fixture() {
-  const { toast, notify, dismiss } = useToast();
+  const { toasts, notify, dismiss } = useToast();
   return (
     <main style={{ width: 900, margin: "24px auto" }}>
       <FreeWorkflowToolbar task={task} notify={notify} />
-      {/* 对照组：常规提示照旧两秒多自己走，别把所有提示都改成常驻。 */}
+      {/* 对照组：常规提示照旧两秒多自己走，而且**不许顶掉**常驻那一句 —— notify 是全局
+          共享通道，用户读报错时随便哪处异步动作都可能插一句进来。 */}
       <button type="button" data-testid="plain-notice" onClick={() => notify("已复制")}>发一句常规提示</button>
-      <WorkspaceToast toast={toast} onDismiss={dismiss} />
+      <WorkspaceToast toasts={toasts} onDismiss={dismiss} />
     </main>
   );
 }
