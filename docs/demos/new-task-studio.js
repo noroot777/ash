@@ -24,7 +24,7 @@ const starters = {
 let openPanel = null;
 let attachments = [];
 let lastTrigger = null;
-const storageKey = 'harness-task-studio-draft-v1';
+const storageKey = 'ash-task-studio-draft-v1';
 query('#objective').placeholder = '想完成什么？\n\n可以描述一个问题，也可以交代一个完整目标。';
 
 function renderRoles() {

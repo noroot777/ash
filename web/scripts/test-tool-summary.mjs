@@ -5,7 +5,7 @@ const tool = (label, detail) => ({ kind: "tool", label, detail });
 
 // claude:detail 是 tool_use.input 的 JSON —— 展开后要当场看见命令,而不是「Bash」。
 assert.equal(traceSummary(tool("Bash", JSON.stringify({ command: "npm -w web run build", description: "构建前端" }))), "npm -w web run build");
-assert.equal(traceSummary(tool("Read", JSON.stringify({ file_path: "/Users/fjh/code/ash/server/src/debate/index.ts" }))), "…/debate/index.ts");
+assert.equal(traceSummary(tool("Read", JSON.stringify({ file_path: "/Users/example/code/ash/server/src/debate/index.ts" }))), "…/debate/index.ts");
 assert.equal(traceSummary(tool("Read", JSON.stringify({ file_path: "server/src/db.ts" }))), "server/src/db.ts"); // 短路径不缩
 assert.equal(traceSummary(tool("Grep", JSON.stringify({ pattern: "ExecutionDetails", path: "web/src" }))), "ExecutionDetails");
 assert.equal(traceSummary(tool("Glob", JSON.stringify({ pattern: "**/*.tsx" }))), "**/*.tsx");
@@ -31,11 +31,11 @@ assert.equal(traceSummary(tool("Bash", truncated)), 'grep -rn "ExecutionDetails"
 
 // codex:detail 是纯文本(exec 给命令原文、edit 给路径)。
 assert.equal(traceSummary(tool("exec", "bash -lc 'npm test'")), "bash -lc 'npm test'");
-assert.equal(traceSummary(tool("edit", "/Users/fjh/code/ash/web/src/lib/executionTrace.ts")), "…/lib/executionTrace.ts");
+assert.equal(traceSummary(tool("edit", "/Users/example/code/ash/web/src/lib/executionTrace.ts")), "…/lib/executionTrace.ts");
 // server 跑在 Windows 上时,同一个 edit 报上来的是盘符路径。纯文本这条路曾经只认 `/`,
 // 于是整条 `C:\...` 糊在行内摘要里,而包在 JSON 里的同一个路径是缩过的 —— 同一份 trace
 // 两种长相。JSON 与纯文本两条路都钉在这里。
-const winPath = "C:\\Users\\fjh\\code\\ash\\server\\src\\db\\index.ts";
+const winPath = "C:\\Users\\example\\code\\ash\\server\\src\\db\\index.ts";
 assert.equal(traceSummary(tool("edit", winPath)), "…\\db\\index.ts");
 assert.equal(traceSummary(tool("Edit", JSON.stringify({ file_path: winPath }))), "…\\db\\index.ts");
 // 带空格的命令原文照旧当命令,不因为里面有反斜杠就被当成路径切掉。

@@ -10,6 +10,9 @@ export const projects = sqliteTable("projects", {
   apiKeys: text("api_keys"), // legacy project-level credentials, kept for compatibility
   // 本项目新建任务默认用哪条起手式（workflows.id 或内置 key）。空 = 跟随全局默认。
   workflowId: text("workflow_id"),
+  // 「打开预览」跑哪条命令。空 = 按各语言惯例自动识别（见 preview-command.ts），
+  // 认出恰好一个才自动用；命令本身在任务工作区根目录用用户自己的 shell 执行。
+  previewCommand: text("preview_command"),
   // 建这个项目的人(多人模式)。null = 自用模式建的、或转换前的存量项目。
   // 创建者自动是项目管理员,但成员关系的真源是 project_members —— 这一列只记出身。
   ownerUserId: text("owner_user_id"),
@@ -653,6 +656,8 @@ export const handoffLocalPeerKeys = sqliteTable("handoff_local_peer_keys", {
   url: text("url").primaryKey(),
   // 明文 key:要原样发给对端,没法只存哈希。GET 只报 hasKey。
   peerKey: text("peer_key").notNull(),
+  // 保存这把 key 时通过签名核对的机器；旧数据没有归属证明，保持 null。
+  peerFp: text("peer_fp"),
   updatedAt: text("updated_at").notNull(),
 });
 
@@ -662,4 +667,9 @@ export const taskBranchReceipts = sqliteTable("task_branch_receipts", {
   sourceCommit: text("source_commit").notNull(),
   mergeCommit: text("merge_commit").notNull(),
   targetBranch: text("target_branch").notNull(),
+});
+
+export const handoffLocalKeyRevisions = sqliteTable("handoff_local_key_revisions", {
+  url: text("url").primaryKey(),
+  revision: text("revision").notNull(),
 });

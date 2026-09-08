@@ -245,8 +245,8 @@ function findLiveAshDbHolders(dbFile: string): ProcessInfo[] {
 }
 
 // 命令行长什么样两个平台差很远,分隔符、`.exe` 后缀、带空格路径的引号全不一样:
-//   POSIX:   /opt/homebrew/bin/node /Users/fjh/code/ash/server/dist/index.js
-//   Windows: "C:\Program Files\nodejs\node.exe" C:\Users\fjh\ash\server\dist\index.js
+//   POSIX:   /opt/homebrew/bin/node /Users/example/code/ash/server/dist/index.js
+//   Windows: "C:\Program Files\nodejs\node.exe" C:\Users\example\ash\server\dist\index.js
 // 所以路径分隔符两种都认,可执行名允许 `.exe` 和前置引号。宁可放宽也不能收窄 ——
 // 认不出来的后果是「把活着的 server 判成陈旧锁然后覆盖掉」,那就双实例了。
 function isAshServerCommand(command: string | null) {

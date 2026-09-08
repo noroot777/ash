@@ -11,6 +11,15 @@
 .handoff-target-row .handoff-target-name { flex: 0 1 180px; }
 .handoff-target-request { flex: none; }
 
+.handoff-source-row { flex-wrap: wrap; gap: 8px; }
+.settings-row > .handoff-source-label { flex: 1 1 100%; gap: 4px; }
+.handoff-source-label label { font-weight: 600; }
+.handoff-source-label small { font-family: var(--mono, monospace); overflow-wrap: anywhere; }
+.handoff-source-row .ui-input { flex: 1 1 230px; min-width: 0; }
+.handoff-source-feedback { flex: 1 1 100%; margin: 0; color: var(--accent); font-size: 11px; }
+.handoff-source-feedback.is-error { color: var(--red); }
+#handoff-source-addresses { scroll-margin-top: 20px; }
+
 /* 选择器带上父级不是为了好看:`.settings-row > div` 把每一个直接子 div 都设成
    `display:grid`(优先级比单个类高),不提一档权重,这一行的图标、说明和按钮会被排成
    一列竖着堆下来。 */

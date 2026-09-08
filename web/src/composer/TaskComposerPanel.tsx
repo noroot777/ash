@@ -33,7 +33,8 @@ import { useSkills } from "../lib/useSkills.ts";
 import { ComposerObjective } from "./ComposerObjective.tsx";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import { ComposerFields } from "./ComposerFields.tsx";
-import { ASH_SLASH_ITEMS, SLASHES, SeedAttachmentList } from "./composerParts.tsx";
+import { ASH_SLASH_ITEMS, SLASHES } from "./composerParts.tsx";
+import { useComposerDraft, type ComposerDraft } from "./composerDraft.ts";
 import { useComposerWorkflow } from "./ComposerWorkflow.tsx";
 import { ComposerLaunchControl, type LaunchMode } from "./ComposerLaunchControl.tsx";
 import { CreateGroupDialog } from "../overlays/CreateEntityDialog.tsx";
@@ -47,12 +48,13 @@ import {
   type ComposerExecutorRole,
 } from "./executorOverrides.ts";
 import { useComposerRunSummary } from "./composerRunSummary.ts";
-export type ComposerDraft = { body: string; attachments: string[]; noteIds?: string[] };
+export type { ComposerDraft };
 
 export function TaskComposerPanel({
   project,
   groups,
   initialDraft,
+  onDraftSeeded,
   mode,
   onModeChange,
   onChat,
@@ -64,17 +66,22 @@ export function TaskComposerPanel({
   project: ProjectView;
   groups: Group[];
   initialDraft?: ComposerDraft | null;
+  // initialDraft 并进草稿之后回调一次，调用方据此把它摘掉（一次性投递，见 composerDraft.ts）。
+  onDraftSeeded?: () => void;
   mode: TaskMode;
   onModeChange: (mode: TaskMode) => void;
-  onChat?: (draft: ComposerDraft) => void;
+  onChat?: () => void;
   onCancel: () => void;
-  onCreated: (task: Task, draft?: ComposerDraft | null) => void;
+  onCreated: (task: Task, noteIds: string[]) => void;
   onCreateGroup: (name: string, mode: GroupMode) => Promise<Group>;
   notify: (message: string) => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const [body, setBody] = useState(initialDraft?.body ?? "");
-  const [seedAttachments, setSeedAttachments] = useState(initialDraft?.attachments ?? []);
+  // 正文与附件都存在全局草稿库里（见 composerDraft.ts）：这个面板一切走就整个卸载，
+  // 存在组件 state 里等于「去看一眼别的任务」就把用户写的东西删了。
+  const draft = useComposerDraft(project.id, initialDraft, onDraftSeeded);
+  const body = draft.text;
+  const setBody = draft.setText;
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [profilesReady, setProfilesReady] = useState(false);
   const [executors, setExecutors] = useState(emptyComposerExecutorConfigs);
@@ -100,7 +107,12 @@ export function TaskComposerPanel({
     notify,
     onWorkspace: setUseWorktree,
   });
-  const uploads = useAttachments();
+  const uploads = useAttachments({
+    value: draft.attachments,
+    onChange: draft.setAttachments,
+    pending: draft.pendingUploads,
+    onPendingChange: draft.setPendingUploads,
+  });
   const detection = useAgentAvailability();
   const { workerTypes, leadTypes, leadProfiles } = useMemo(
     () => teamExecutorCandidates(detection, profiles),
@@ -146,8 +158,8 @@ export function TaskComposerPanel({
     return () => window.removeEventListener("keydown", key);
   }, [onCancel]);
   const allAttachments = useMemo(
-    () => [...new Set([...seedAttachments, ...uploads.attachments.map((item) => item.path)])],
-    [seedAttachments, uploads.attachments],
+    () => [...new Set(uploads.attachments.map((item) => item.path))],
+    [uploads.attachments],
   );
   const applySlash = (nextMode: TaskMode, rest = "") => {
     onModeChange(nextMode);
@@ -427,9 +439,13 @@ export function TaskComposerPanel({
       setBusy(false);
       return;
     }
+    // 创建成功了草稿才丢：中途任何一步失败都原样留着，用户回到面板还能接着改。
+    // 随手记回链的 id 也是这时候才交出去，交完连同正文一起清掉。
     const finishCreation = () => {
+      const noteIds = draft.noteIds;
       setLabels([]);
-      onCreated(task, initialDraft);
+      draft.clear();
+      onCreated(task, noteIds);
     };
     if (launchMode === "create") {
       finishCreation();
@@ -465,6 +481,11 @@ export function TaskComposerPanel({
         <span className="workspace-kind-chip">新建</span>
         <b>新建任务</b>
         <span>{project.name}</span>
+        {/* 草稿是「关掉也留着」的，所以必须有一个明写的丢弃口 —— 否则上一次没写完的
+            东西会一直顶在新建框里，用户只能自己全选删。 */}
+        {(!!body || allAttachments.length > 0 || uploads.uploading) && (
+          <Button variant="ghost" onClick={() => { draft.clear(); textareaRef.current?.focus(); }}>清空草稿</Button>
+        )}
         <Button variant="ghost" onClick={onCancel}>取消 Esc</Button>
       </header>
       <div className="composer-scroll">
@@ -508,7 +529,7 @@ export function TaskComposerPanel({
             onWorkflowModeChange={setWorkflowMode}
             onModeChange={onModeChange}
             chatTab={onChat && <button type="button" role="tab" aria-selected={false} disabled={uploads.uploading}
-              onClick={() => onChat({ body, attachments: allAttachments, noteIds: initialDraft?.noteIds })}>
+              onClick={() => onChat()}>
               <ChatCircleDots size={14} /><span>聊天</span>
             </button>}
             onPickStarter={(text, nextMode) => {
@@ -525,8 +546,6 @@ export function TaskComposerPanel({
           <ImagePreviewGroup isolated>
             <UploadAttachmentList attachments={uploads.attachments} pending={uploads.pending}
               error={uploads.error} onRemove={uploads.remove} onCancel={uploads.cancel} />
-            <SeedAttachmentList paths={seedAttachments}
-              onRemove={(path) => setSeedAttachments((current) => current.filter((item) => item !== path))} />
           </ImagePreviewGroup>
           <footer className="composer-footer">
             <ComposerLaunchControl

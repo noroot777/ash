@@ -12,6 +12,7 @@ import { SlashMenu } from "../components/SlashMenu.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { FileViewer } from "../files/FileViewer.tsx";
 import { api, type ReplyTaskResult, type TeamCuaStatus } from "../lib/api.ts";
+import type { Notify } from "../lib/notify.ts";
 import { useTaskBody } from "../lib/useTaskBody.ts";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { useConversation } from "../lib/useConversation.ts";
@@ -25,7 +26,7 @@ import { QuestionCard } from "../task-detail/QuestionCard.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
-import { useTaskReplyDraft } from "../task-detail/TaskReplyDrafts.tsx";
+import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
 import {
   attachmentsFromPaths,
   clearSentDraft,
@@ -277,7 +278,7 @@ function WorkerDrawer({
   onOpenTask: (taskId: string) => void;
   onTaskUpdate: (task: Task) => void;
   onDeleted: (taskId: string) => void;
-  notify: (message: string) => void;
+  notify: Notify;
 }) {
   const [closing, setClosing] = useState(false);
   const [inspectorToggleTarget, setInspectorToggleTarget] = useState<HTMLSpanElement | null>(null);
@@ -341,7 +342,7 @@ export function TeamView({
   initialReviewOpen?: boolean;
   onReviewOpenChange?: (open: boolean) => void;
   terminalToggle?: ReactNode;
-  notify: (message: string) => void;
+  notify: Notify;
 }) {
   const [groups, setGroups] = useState<Group[]>([]);
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
@@ -374,9 +375,9 @@ export function TeamView({
     && workers.length > 0
     && workers.every((worker) => worker.status === "done");
   const inspectorPolicy = useMemo(() => ({
-    stateKey: `team:${allWorkersComplete ? "complete" : "active"}`,
+    stateKey: `team:subagents:${allWorkersComplete ? "complete" : "active"}`,
     requiredTabId: "info",
-    defaultOpenTabIds: allWorkersComplete ? ["info", "review"] : ["info", "workers"],
+    defaultOpenTabIds: allWorkersComplete ? ["info", "review", "subagents"] : ["info", "workers", "subagents"],
     defaultActiveTabId: allWorkersComplete ? "review" : "workers",
   }), [allWorkersComplete]);
   const selectWorker = useCallback((taskId: string) => {
@@ -535,6 +536,7 @@ export function TeamView({
       contextKey={`team:${task.id}`}
       descriptors={TEAM_INSPECTORS}
       context={{
+        nativeWork: { items: conversation.items, status: task.status, loading: conversation.refreshing, error: conversation.error ?? conversation.traceError, onRetry: conversation.refetch },
         task,
         workers,
         groups: teamGroups,

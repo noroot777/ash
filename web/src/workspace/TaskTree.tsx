@@ -224,24 +224,14 @@ function ScopedTaskTree({
     const { section, grouped, groups } = entry;
     // 分组时这一节自己不再顶一个「任务」标题：项目那一行已经在分段了，再压一层标题
     // 就是三级帽子叠在一起，跟「弱化」正好反着来。
-    const sectionCollapsed = !grouped && collapsed.has(section.key);
+    //
+    // 「置顶」「任务」这两节**不收起**（用户 2026-09-08 指定）：它们是这份列表的主体，
+    // 顶上摆一颗能把主体整段藏起来的箭头，收益抵不上误点一下满屏消失。侧栏里唯一能
+    // 折叠的是下面那节「其他机器」——它是别处的东西，藏起来才有意义。
     return (
-      <section className={`workspace-task-section${sectionCollapsed ? " is-collapsed" : ""}${grouped ? " workspace-task-section--grouped" : ""}`} data-task-section={section.key} key={section.key}>
-        {!grouped && (
-          <button
-            className="workspace-task-section-title workspace-task-section-toggle"
-            type="button"
-            aria-expanded={!sectionCollapsed}
-            aria-label={`${sectionCollapsed ? "展开" : "折叠"}${section.label}`}
-            onClick={() => toggleCollapsed(section.key)}
-          >
-            <span>{section.label}</span>
-            <CaretRight size={10} weight="bold" aria-hidden="true" />
-          </button>
-        )}
-        {grouped
-          ? groups.map(renderProjectGroup)
-          : !sectionCollapsed && renderRows(groups[0]!, true)}
+      <section className={`workspace-task-section${grouped ? " workspace-task-section--grouped" : ""}`} data-task-section={section.key} key={section.key}>
+        {!grouped && <header className="workspace-task-section-title">{section.label}</header>}
+        {grouped ? groups.map(renderProjectGroup) : renderRows(groups[0]!, true)}
       </section>
     );
   };

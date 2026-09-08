@@ -27,8 +27,8 @@ const exec = execFileText;
 
 /**
  * claude CLI 存会话的项目目录名:cwd 中所有非字母数字字符替换成 `-`。
- * 实测样例:/Users/fjh/code/ash/.worktrees/KJN0ESTe5uBw
- *   → -Users-fjh-code-ash--worktrees-KJN0ESTe5uBw
+ * 路径示例:/Users/example/code/ash/.worktrees/KJN0ESTe5uBw
+ *   → -Users-example-code-ash--worktrees-KJN0ESTe5uBw
  * claude 代码里没有公开这个函数,格式一旦变化,后果只是对端找不到会话文件 →
  * 干净退化成全新起跑,不会出错误状态。
  */

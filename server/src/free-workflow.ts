@@ -15,7 +15,7 @@ import {
   scheduledMessages,
   tasks,
 } from "./db/schema.js";
-import { armFollowUpFreeReview, clearReservationForDispatch, disarmFreeReviewReservation, readFreeReviewReservation, consumeFreeReviewReservation, startReservedFreeReview } from "./free-review-reservations.js";
+import { armFollowUpFreeReview, clearReservationForDispatch, disarmFreeReviewReservation, noteReservationStillWaiting, readFreeReviewReservation, consumeFreeReviewReservation, startReservedFreeReview } from "./free-review-reservations.js";
 import {
   checkMode,
   overrideLabel,
@@ -96,8 +96,8 @@ export async function freeReviewReminder(taskId: string): Promise<string> {
     `不要调用 complete_task 或 accept_task。`;
 }
 
-// 预约的产品语义：**下一次确认完成（confirmedDone → done）时消费**，不论那个回合是在
-// 预约之前还是之后开跑的——任务正在跑（含已 claim、status 尚未落 running 的窗口）时挂
+// 预约在下一次执行回合正常结束时消费；任务完成确认仍由 complete_task 单独记账。
+// 不论那个回合是在预约之前还是之后开跑的——任务正在跑（含已 claim、status 尚未落 running 的窗口）时挂
 // 预约，本回合完成即触发审查，这正是「修复中先把复审预约上」的常规用法。所以这里刻意
 // **不与 turn 互斥**；预约不动工作区、不投消息，写入本身没有并发危害。
 // `actor` = 发起这次预约的人。审查者配置是**个人面**资源(§八),只能选自己那份 ——
@@ -147,8 +147,8 @@ export async function reserveFreeReview(
       target: freeWorkflowStates.taskId,
       set: slot,
     });
-    await appendTaskTimeline(taskId, `${existing?.reviewArmed ? "已更新" : "已预约"}完成后审查：${profile.name}${overrideSuffix(override)} · ` +
-      `${mode === "logic" ? "逻辑检查" : "语法检查"} · 自动复审 ${retries} 轮${note ? " · 含附言" : ""}。`);
+    await appendTaskTimeline(taskId, `${existing?.reviewArmed ? "已更新审查预约" : "已预约审查"}：${profile.name}${overrideSuffix(override)} · ` +
+      `${mode === "logic" ? "逻辑检查" : "语法检查"} · 自动复审 ${retries} 轮${note ? " · 含附言" : ""}。执行回合正常结束后自动开始。`);
     bus.publish({ type: "task.review", taskId });
     return freeWorkflowState(taskId);
   } finally {
@@ -172,7 +172,7 @@ export async function cancelFreeReviewReservation(taskId: string): Promise<FreeW
           reviewAgentType: null, reviewExecutorId: null, reviewModel: null, reviewReasoningEffort: null,
         })
         .where(eq(freeWorkflowStates.taskId, taskId));
-      await appendTaskTimeline(taskId, "已取消完成后审查预约。");
+      await appendTaskTimeline(taskId, "已取消审查预约。");
       bus.publish({ type: "task.review", taskId });
     }
     return freeWorkflowState(taskId);
@@ -264,7 +264,7 @@ export async function reportFreeReviewConclusion(
 // （TOCTOU），靠查库会把普通回合冒充成审查回合、把没有结论的审查链错杀成 failed：
 // - role=reviewer（审查旁路回合）：按 conclusion 落 round/run，未通过且还有轮数时
 //   发修复消息并挂**自动续轮预约**（runId）。
-// - 其它 role（首次完成 / 修复 / 用户续聊）：confirmedDone 且落 done 时消费预约槽；
+// - 其它 role（首次完成 / 修复 / 用户续聊）：正常收尾且不在等待态时消费预约槽；
 //   若此刻存在并发插入的 reviewing run，不碰它——审查消息还在排队，回合结束后照常开跑。
 export async function handleFreeWorkflowSettlement(
   taskId: string,
@@ -272,6 +272,7 @@ export async function handleFreeWorkflowSettlement(
   confirmedDone: boolean,
   turnOk: boolean,
   role: SessionRole = "single",
+  exitObserved = true,
 ): Promise<boolean> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task || task.workflowMode !== "free") return false;
@@ -281,10 +282,15 @@ export async function handleFreeWorkflowSettlement(
     // 存在 reviewing run 说明有一条审查在排队等这个回合结束（并发派审）：不结算它、
     // 也不消费预约（审查在跑时消费预约会双开）。
     if (run) return true;
-    if (confirmedDone && status === "done") {
+    // 缺退出事件只限制未交卷的备用触发路径，已落库的完成确认和审查结论仍各自有效。
+    if (turnOk && (confirmedDone || exitObserved) && (status === "done" || status === "failed" || status === "canceled")) {
+      const reservation = await readFreeReviewReservation(taskId);
+      const noteDispatch = async () => {
+        if (!confirmedDone) await appendTaskTimeline(taskId, "执行回合已正常结束，按预约启动审查。本回合未确认任务完成，任务完成状态仍按原结算结果保留。");
+      };
       // 槽由 startReservedFreeReview 按 CAS 消费（消费成功才启动），所以下面两条失败路径
       // 都不再补 disarm——那时槽已经空了，再清一次清掉的会是用户新保存的那条。
-      await startReservedFreeReview(taskId, await readFreeReviewReservation(taskId), {
+      await startReservedFreeReview(taskId, reservation, {
         continueRun: async (runId) => {
           const target = (await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, runId))).at(0);
           if (!target || target.status !== "stopped") {
@@ -293,6 +299,7 @@ export async function handleFreeWorkflowSettlement(
           // 续轮起不来（典型：崩溃残留的半个 round 造成唯一键冲突，run 已被判 failed）是
           // 永久性失败：槽已消费，不会再有幽灵预约反复撞同一个错误。
           await nextRound(task, target);
+          await noteDispatch();
         },
         startNew: async (input) => {
           // 预约时存下的「这次换个模型/智能水平跑」原样带上。执行器在这中间被删了就只摘
@@ -310,10 +317,15 @@ export async function handleFreeWorkflowSettlement(
           } else if (reserved.dropped === "all") {
             await appendTaskTimeline(taskId, "预约里的执行器覆盖已失效，这次按审查者自己的配置跑。");
           }
+          await noteDispatch();
           return state;
         },
       });
+      return true;
     }
+    await noteReservationStillWaiting(taskId, !turnOk
+      ? "本回合被停止或异常结束"
+      : !exitObserved ? "本回合未确认完成，且没有收到正常退出事件" : "本回合仍处于等待执行或暂停状态");
     return true;
   }
 
@@ -372,8 +384,8 @@ export async function handleFreeWorkflowSettlement(
     // 期间自己存的那条预约是更新的意思，不能被自动续轮顶掉。
     const hooked = await armFollowUpFreeReview(taskId, run, at);
     await appendTaskTimeline(taskId, hooked
-      ? `自由工作流第 ${run.currentRound} 轮审查未通过，意见已发回会话；修复确认完成后自动复审。`
-      : `自由工作流第 ${run.currentRound} 轮审查未通过，意见已发回会话；你已另外预约了一条审查，下次确认完成时按你的预约执行（本链不再自动续轮）。`);
+      ? `自由工作流第 ${run.currentRound} 轮审查未通过，意见已发回会话；修复回合正常结束后自动复审。`
+      : `自由工作流第 ${run.currentRound} 轮审查未通过，意见已发回会话；你已另外预约了一条审查，执行回合正常结束后按你的预约执行（本链不再自动续轮）。`);
     bus.publish({ type: "task.review", taskId });
     // 刚挂上的这条续轮预约的版本令牌：投递失败要撤销的是**它**。迟到的无条件清槽会把
     // 用户在这期间保存的新预约一起删掉（审查实测同型交错）。没挂上时槽里那条是用户的，

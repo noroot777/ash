@@ -199,7 +199,10 @@ export async function ensureSchema() {
       approved_at TEXT, last_addr TEXT NOT NULL DEFAULT ''
     );
     CREATE TABLE IF NOT EXISTS handoff_local_peer_keys (
-      url TEXT PRIMARY KEY, peer_key TEXT NOT NULL, updated_at TEXT NOT NULL
+      url TEXT PRIMARY KEY, peer_key TEXT NOT NULL, peer_fp TEXT, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS handoff_local_key_revisions (
+      url TEXT PRIMARY KEY, revision TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS uploads (
       file TEXT PRIMARY KEY, owner_user_id TEXT, task_id TEXT, created_at TEXT NOT NULL
@@ -239,7 +242,7 @@ export async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS project_invites_project_idx ON project_invites (project_id);
     CREATE TABLE IF NOT EXISTS user_handoff_targets (
       id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, url TEXT NOT NULL,
-      peer_fp TEXT, peer_key TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+      peer_fp TEXT, peer_key TEXT NOT NULL DEFAULT '', peer_key_fp TEXT, created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS user_handoff_targets_user_idx ON user_handoff_targets (user_id);
     CREATE TABLE IF NOT EXISTS user_settings (
@@ -261,6 +264,8 @@ export async function ensureSchema() {
   // Run-timing columns (added later). Each ALTER is independent + tolerant so a
   // DB created before any one of them still upgrades cleanly.
   for (const sql of [
+    "ALTER TABLE handoff_local_peer_keys ADD COLUMN peer_fp TEXT",
+    "ALTER TABLE user_handoff_targets ADD COLUMN peer_key_fp TEXT",
     "ALTER TABLE tasks ADD COLUMN started_at TEXT",
     "ALTER TABLE tasks ADD COLUMN ended_at TEXT",
     "ALTER TABLE sessions ADD COLUMN ended_at TEXT",
@@ -420,6 +425,8 @@ export async function ensureSchema() {
     // 任务接力(跨机器 handoff)的持久标记(json TaskHandoff,见 db/schema.ts)。
     "ALTER TABLE tasks ADD COLUMN handoff TEXT",
     "ALTER TABLE tasks ADD COLUMN handoff_audit TEXT",
+    // 项目级预览命令。空 = 按各语言惯例自动识别（preview-command.ts）。
+    "ALTER TABLE projects ADD COLUMN preview_command TEXT",
     // ── 多人模式(docs/multi-user-plan.md §八)──────────────────────────────
     // 归属列。全部可空:自用模式下恒为 null,转多人时由向导一次性实名化成初始管理员。
     "ALTER TABLE tasks ADD COLUMN owner_user_id TEXT",

@@ -78,6 +78,7 @@ export async function handoffRemoteUrl(taskId: string): Promise<string> {
   if (!projectId) {
     const peerTask = await fetchPeer<{ projectId?: string }>(
       `${targetUrl}/api/tasks/${encodeURIComponent(marker.peerTaskId)}`,
+      { expectedPeerFp: marker.peerFp },
     );
     if (!peerTask.projectId) throw new HandoffError("对端任务缺少项目信息", 502, true);
     projectId = peerTask.projectId;
@@ -431,6 +432,7 @@ export async function exportHandoff(
           ? { refs: ping.returnRefs ?? [] }
           : await fetchPeer<{ refs: { name: string; commit: string }[] }>(
               `${targetUrl}/api/handoff/projects/${targetProject.id}/refs`,
+              { expectedPeerFp: expectedFingerprint ?? peer?.fingerprint },
             );
         gitState = await packGitState(task, project.repoPath, refs.refs ?? [], notes);
       } else {
@@ -575,6 +577,7 @@ export async function exportHandoff(
             // 非 null 时载荷封给对端公钥再上路(handoff-crypto.ts)。签名照旧覆盖线上
             // 那串字节,所以加不加密对幂等收口和错误语义都没有影响。
             sealTo,
+            expectedPeerFp: expectedFingerprint ?? peer?.fingerprint,
             timeoutMs: 600_000,
           },
         );

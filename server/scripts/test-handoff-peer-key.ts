@@ -16,6 +16,7 @@
 //      地址配的那把(重放收口场景)
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { generateKeyPairSync, sign } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +31,7 @@ process.env.ASH_DB = join(root, "local.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 process.env.ASH_UPLOADS_DIR = join(root, "uploads");
 requireTmpDb("ash-handoff-peer-key");
+let signingPeer: { close(): Promise<void> } | undefined;
 
 try {
   const { ensureSchema } = await import("../src/db/index.js");
@@ -39,7 +41,10 @@ try {
   const { HANDOFF_PEER_KEY_REQUIRED } = await import("@ash/shared/handoff");
   await ensureSchema();
 
-  const url = "http://127.0.0.1:4319";
+  const { startSignedHandoffPeer } = await import("./handoff-signed-peer-fixture.js");
+  const fixture = await startSignedHandoffPeer();
+  signingPeer = fixture;
+  const url = fixture.url;
 
   // ── 1. 自用模式:清单在设置里,key 在自己的表里 ────────────────────────────
   await scope.addTarget(SINGLE_ACTOR, { name: "多人那台", url });
@@ -83,16 +88,22 @@ try {
   const { pingPeer, fetchPeer } = await import("../src/handoff-peer-client.js");
   const { HandoffError } = await import("../src/handoff-types.js");
   const { PEER_USER_KEY_HEADER } = await import("../src/auth/handoff-peer-user.js");
+  const { canonicalPingChallenge, fingerprintOf } = await import("../src/handoff-identity.js");
+  const peerKeys = generateKeyPairSync("ed25519");
+  const publicKey = peerKeys.publicKey.export({ type: "spki", format: "der" }).toString("base64");
 
   // 3a. 对端自报多人、又没认出我是谁:出站侧自己判定,不必等对端拒绝。
   const seenKeys: (string | undefined)[] = [];
   const multiPeer = createServer((req, res) => {
     seenKeys.push(req.headers[PEER_USER_KEY_HEADER] as string | undefined);
     if (req.url?.startsWith("/api/handoff/ping")) {
+      const nonce = new URL(req.url, "http://localhost").searchParams.get("nonce") ?? "";
+      const sig = sign(null, Buffer.from(canonicalPingChallenge(nonce)), peerKeys.privateKey).toString("base64");
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({
         ok: true, service: "ash", host: "peer", instanceMode: "multi", userCount: 2,
         peerUser: null, projects: [],
+        identity: { publicKey, sig },
       }));
       return;
     }
@@ -142,7 +153,7 @@ try {
     );
     seenKeys.length = 0;
     await pingPeer(peerUrl, null, undefined, { requirePeerUser: true }).catch(() => undefined);
-    assert.equal(seenKeys[0], "ash_outbound_key", "配好的 key 必须真的随请求发到对端");
+    assert.deepEqual(seenKeys, [undefined, "ash_outbound_key"], "先无凭据核对身份，再把 key 随请求发到对端");
 
     // ── 5. 目标机已从设置里删掉时,那个地址上配的 key 照样要出门 ───────────────
     // pending / 移回重放收口时,弹框会为「已经不在清单里、但任务还挂在它身上」的地址
@@ -150,12 +161,12 @@ try {
     // 下一次预检仍旧 401 —— 因为出站读侧是拿清单去 join key 表的,孤儿行谁也看不见。
     // 现在自用模式直接读那张表本身,清单只是设置页上的书签。
     await patchSettingsFor(SINGLE_ACTOR, { handoffTargets: [] });
-    await scope.setPeerKey(SINGLE_ACTOR, peerUrl, "ash_orphan_key");
+    await scope.setPeerKey(SINGLE_ACTOR, peerUrl, "ash_orphan_key", fingerprintOf(publicKey), { allowUnlisted: true });
     assert.deepEqual(await scope.listTargets(SINGLE_ACTOR), [], "它确实已经不在清单里了");
     seenKeys.length = 0;
     await pingPeer(peerUrl, null, undefined, { requirePeerUser: true }).catch(() => undefined);
     assert.equal(
-      seenKeys[0], "ash_orphan_key",
+      seenKeys.at(-1), "ash_orphan_key",
       "重放收口用的那个地址上填的 key,保存成功就必须真的能用",
     );
 
@@ -171,6 +182,7 @@ try {
 
   console.log("test-handoff-peer-key ok");
 } finally {
+  await signingPeer?.close();
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
 }

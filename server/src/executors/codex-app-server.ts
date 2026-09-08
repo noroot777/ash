@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
+import { codexChildWork, codexNativeWork, nativePlanSnapshot, NativeWorkTrace } from "./native-work.js";
 import type { AgentEvent, TokenUsage } from "@ash/shared";
 import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
 import {
@@ -54,6 +55,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const seenAgentDeltas = new Set<string>();
   const seenReasoningDeltas = new Set<string>();
   const seenImages = new Set<string>();
+  const nativeWork = new NativeWorkTrace();
   let wake: (() => void) | null = null;
   let requestId = opts.reattach ? Date.now() : 0;
   let threadId = opts.reattach?.threadId ?? opts.sessionId ?? "";
@@ -164,13 +166,20 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   };
 
   const handleItemStarted = (item: any) => {
+    for (const activity of codexNativeWork(item)) push(activity);
     if (item?.type === "commandExecution") push({ kind: "tool", name: "exec", detail: short(item.command) });
     else if (item?.type === "fileChange") push({ kind: "tool", name: "edit", detail: short(item.changes) });
     else if (item?.type === "mcpToolCall") push({ kind: "tool", name: `${item.server}/${item.tool}`, detail: short(item.arguments) });
-    else if (item?.type === "dynamicToolCall") push({ kind: "tool", name: item.tool, detail: short(item.arguments) });
+    else if (item?.type === "dynamicToolCall") push(nativeWork.call(item.tool, item.arguments, item.id)
+      ?? { kind: "tool", name: item.tool, detail: short(item.arguments) });
     else if (item?.type === "imageGeneration") push({ kind: "tool", name: "image_gen", detail: short(item.revisedPrompt) });
   };
   const handleItemCompleted = (item: any) => {
+    for (const activity of codexNativeWork(item)) push(activity);
+    if (item?.type === "dynamicToolCall") {
+      const activity = nativeWork.result(item.id, item.contentItems ?? item.result, item.success === false);
+      if (activity) push(activity);
+    }
     if (item?.type === "agentMessage" && typeof item.text === "string") {
       agentMessageCount += 1;
       push({ kind: "text", text: seenAgentDeltas.has(item.id) ? "\n\n" : `${item.text}\n\n` });
@@ -206,7 +215,15 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
 
   const handleNotification = (message: any) => {
     const p = message.params ?? {};
+    if (threadId && p.threadId && p.threadId !== threadId) {
+      for (const activity of codexChildWork(message.method, p)) push(activity);
+      return;
+    }
     switch (message.method) {
+      case "turn/plan/updated": {
+        push(nativePlanSnapshot(`plan:${p.turnId}`, p.plan, p.explanation));
+        break;
+      }
       case "thread/started": emitSession(p.thread?.id); break;
       case "turn/started": turnId = p.turn?.id ?? turnId; break;
       case "thread/tokenUsage/updated": latestUsage = p.tokenUsage ?? latestUsage; break;

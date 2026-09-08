@@ -57,6 +57,9 @@ export function HandoffReturnView({
   busy: boolean;
   onAutoResumeChange: (next: boolean) => void;
 }) {
+  const settingsQuery = new URLSearchParams(window.location.search);
+  settingsQuery.set("settings", "defaults");
+  const settingsHref = `?${settingsQuery}#handoff-source-addresses`;
   return (
     <>
       <p>
@@ -94,7 +97,10 @@ export function HandoffReturnView({
           </p>
           <ul className="handoff-summary">
             <li>确认那台机器开着、ash 正在运行，并且和本机在同一个网络里</li>
-            <li>如果它换了地址，在「设置 → 远程主机」里更新后再重新检查</li>
+            <li>
+              如果它换了地址，到「<a className="handoff-settings-link" href={settingsHref}>设置 → 默认规则 → 任务接力 → 来源机器地址</a>」
+              填写新地址并核对保存，再回到任务重新检查
+            </li>
           </ul>
         </>
       ))}

@@ -91,7 +91,7 @@ try {
   assert.equal(await freeServed.getAttribute("aria-haspopup"), "dialog", "自由审查接口 URL 也认得出是图片");
   const localDemoHref = new URL(await localDemo.getAttribute("href"));
   assert.equal(localDemoHref.pathname, "/api/open-local", "绝对本地路径的可见链接必须指向真实打开端点");
-  assert.equal(localDemoHref.searchParams.get("path"), "/Users/fjh/code/ash/.worktrees/demo/docs/baseline/index.html");
+  assert.equal(localDemoHref.searchParams.get("path"), "/Users/example/code/ash/.worktrees/demo/docs/baseline/index.html");
   assert.equal(await localDemo.getAttribute("target"), null, "本地路径由当前页面调用打开端点，不新开错误空页");
   assert.equal(new URL(await localFile.getAttribute("href")).pathname, "/api/open-local");
   assert.equal(await remote.getAttribute("aria-haspopup"), null, "站外图不接管");
@@ -110,7 +110,7 @@ try {
   const genericOpenRequest = page.waitForRequest("**/api/open-local?*");
   await localFile.click();
   await genericOpenRequest;
-  assert.deepEqual(localOpenRequests, ["/Users/fjh/Documents/demo.html"], "非 worktree 本地路径仍走通用端点");
+  assert.deepEqual(localOpenRequests, ["/Users/example/Documents/demo.html"], "非 worktree 本地路径仍走通用端点");
 
   await shot.click();
   await dialog.waitFor();

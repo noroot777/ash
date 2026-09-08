@@ -29,6 +29,12 @@
   margin-left: auto;
 }
 
+/* 头部有两颗按钮时（草稿非空会多出「清空草稿」），只让第一颗把空白吃掉，
+   两颗才是靠在一起的一组，而不是被剩余空间从中间劈开。 */
+.composer-header .ui-button + .ui-button {
+  margin-left: 0;
+}
+
 .composer-scroll {
   min-height: 0;
   overflow-y: auto;
@@ -375,53 +381,6 @@
 .composer-override-group > div {
   display: grid;
   gap: 8px;
-}
-
-.composer-seed-attachments {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.composer-seed-attachment {
-  position: relative;
-  display: flex;
-  max-width: 240px;
-  height: 48px;
-  align-items: center;
-  gap: 7px;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--panel);
-  padding: 4px 24px 4px 6px;
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.composer-seed-attachment > img {
-  width: 38px;
-  height: 38px;
-  flex: 0 0 38px;
-  border-radius: 5px;
-  object-fit: cover;
-}
-
-.composer-seed-attachment > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-.composer-seed-attachment > button {
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  display: grid;
-  width: 16px;
-  height: 16px;
-  place-items: center;
-  border: 0;
-  border-radius: 50%;
-  background: var(--raised);
-  color: var(--faint);
 }
 
 .composer-agent-availability {

@@ -14,6 +14,10 @@
       "types": "./src/task-origin.ts",
       "default": "./src/task-origin.ts"
     },
+    "./native-work": {
+      "types": "./src/native-work.ts",
+      "default": "./src/native-work.ts"
+    },
     "./chat": {
       "types": "./src/chat.ts",
       "default": "./src/chat.ts"

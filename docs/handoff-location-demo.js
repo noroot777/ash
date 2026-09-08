@@ -1,7 +1,7 @@
 const hosts = [
-  { id: "local", name: "本机", detail: "fjh’s MacBook · ~/code/harness", path: "~/code/harness", online: true, kind: "电脑" },
-  { id: "mini", name: "Mac mini", detail: "工作室节点 · ~/workspace/harness", path: "~/workspace/harness", online: true, kind: "远程" },
-  { id: "windows", name: "Windows 工作站", detail: "Build tower · D:\\ai_workspace\\harness", path: "D:\\ai_workspace\\harness", online: false, kind: "离线" },
+  { id: "local", name: "本机", detail: "开发用 MacBook · ~/code/ash", path: "~/code/ash", online: true, kind: "电脑" },
+  { id: "mini", name: "Mac mini", detail: "工作室节点 · ~/workspace/ash", path: "~/workspace/ash", online: true, kind: "远程" },
+  { id: "windows", name: "Windows 工作站", detail: "Build tower · D:\\ai_workspace\\ash", path: "D:\\ai_workspace\\ash", online: false, kind: "离线" },
 ];
 
 const hostSvg = `
@@ -59,7 +59,7 @@ function renderConnections() {
   $("#connectionList").innerHTML = hosts.map((host) => `
     <div class="connection-row">
       <span class="host-icon">${hostSvg}</span>
-      <div><b>${host.name}</b><small>${host.detail} · 项目 harness 已匹配</small></div>
+      <div><b>${host.name}</b><small>${host.detail} · 项目 ash 已匹配</small></div>
       <span class="connection-state${host.online ? "" : " offline"}">${host.online ? "在线" : "离线"}</span>
     </div>`).join("");
 }

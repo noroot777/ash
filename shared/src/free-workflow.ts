@@ -91,7 +91,17 @@ export interface FreeReviewRun {
 }
 
 export interface FreeWorkflowPreviewState {
+  /** 起来了**或者正在起**。界面拿它决定那颗开关是「打开预览」还是「关掉」。 */
   running: boolean;
+  /**
+   * 还在启动（装依赖 / 等就绪）。这一段能长到八分钟，期间没有 url、也随时可以被收掉，
+   * 所以它跟「起来了」必须分得开：文案要说「正在启动…（点这里取消）」而不是「关闭预览」，
+   * 「预览页」那个链接也不能给。
+   */
+  starting: boolean;
+  // 这个任务盘上有没有预览启动日志。跟 running 是两件事：**起失败的那次也留着日志**，
+  // 而那一次恰恰最需要看 —— 只按 running 给入口，用户永远看不到失败现场。
+  hasLog: boolean;
   url: string | null;
   port: number | null;
   command: string | null;
@@ -125,7 +135,7 @@ export interface FreeWorkflowState {
     note: string | null;
     /** 非空 = 本次预约要用的执行器覆盖（审查者配置没被改，只有这一次这么跑）。 */
     override: FreeReviewExecutorOverride | null;
-    /** 非空 = 这是自动复审链的续轮预约（修复确认完成后在该 run 上续下一轮）。 */
+    /** 非空 = 这是自动复审链的续轮预约（修复回合正常结束后在该 run 上续下一轮）。 */
     runId: string | null;
   };
   /** 预览是「随手开一眼」的看片器，不是工作流里的一步：只报当下开没开，不留开关历史。 */

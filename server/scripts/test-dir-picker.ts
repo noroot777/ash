@@ -44,8 +44,8 @@ if (process.platform === "darwin" || process.platform === "win32") {
 
 // ── 输出解析 ─────────────────────────────────────────────────────────────────
 // 认不出来必须回 null,而不是把半截 stderr 当路径填进用户的输入框。
-assert.deepEqual(parseMarker("OK/Users/fjh/code/ash\n"), { path: "/Users/fjh/code/ash", cancelled: false });
-assert.deepEqual(parseMarker("OKC:\\Users\\fjh\\代码\r\n"), { path: "C:\\Users\\fjh\\代码", cancelled: false });
+assert.deepEqual(parseMarker("OK/Users/example/code/ash\n"), { path: "/Users/example/code/ash", cancelled: false });
+assert.deepEqual(parseMarker("OKC:\\Users\\example\\代码\r\n"), { path: "C:\\Users\\example\\代码", cancelled: false });
 assert.deepEqual(parseMarker("CANCEL\r\n"), { path: null, cancelled: true });
 // PowerShell 的告警/进度会先落在前面,标记在最后一行,所以从后往前扫。
 assert.deepEqual(parseMarker("WARNING: something\nOK/tmp/x"), { path: "/tmp/x", cancelled: false });
@@ -53,14 +53,14 @@ for (const junk of ["", "\n\n", "not a marker", "OK"]) {
   assert.equal(parseMarker(junk), null, `「${junk}」不该被当成结果`);
 }
 
-// AppleScript 的 `POSIX path of` 给文件夹一律带尾斜杠(2026-08-18 真机实测:选中 server/src
-// 回来的是 `/Users/fjh/code/ash/server/src/`)。不削掉的话同一个目录会在库里存出两种写法。
-assert.deepEqual(parseMarker("OK/Users/fjh/code/ash/server/src/"), {
-  path: "/Users/fjh/code/ash/server/src",
+// AppleScript 的 `POSIX path of` 给文件夹一律带尾斜杠(例如选中 server/src
+// 得到 `/Users/example/code/ash/server/src/`)。不削掉的话同一个目录会在库里存出两种写法。
+assert.deepEqual(parseMarker("OK/Users/example/code/ash/server/src/"), {
+  path: "/Users/example/code/ash/server/src",
   cancelled: false,
 });
 assert.equal(normalizePickedPath("/tmp/x/"), "/tmp/x");
-assert.equal(normalizePickedPath("C:\\Users\\fjh\\code\\"), "C:\\Users\\fjh\\code");
+assert.equal(normalizePickedPath("C:\\Users\\example\\code\\"), "C:\\Users\\example\\code");
 // 根目录本身就是一个分隔符,削光就不是路径了。
 assert.equal(normalizePickedPath("/"), "/");
 assert.equal(normalizePickedPath("C:\\"), "C:\\");
@@ -114,7 +114,7 @@ assert.equal(Buffer.from(encoded, "base64").toString("utf16le"), win, "编码必
 assert.ok(/^[A-Za-z0-9+/]+=*$/.test(encoded), "编出来得是合法 base64");
 
 // 解析器认得出自己那段脚本会打印的东西(两边约定不能各改各的)。
-assert.deepEqual(parseMarker("OKC:\\Users\\fjh\\code"), { path: "C:\\Users\\fjh\\code", cancelled: false });
+assert.deepEqual(parseMarker("OKC:\\Users\\example\\code"), { path: "C:\\Users\\example\\code", cancelled: false });
 
 // ── 起始目录 ─────────────────────────────────────────────────────────────────
 const dir = await mkdtemp(join(tmpdir(), "ash-dir-picker-"));

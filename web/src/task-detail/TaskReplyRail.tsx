@@ -1,5 +1,6 @@
 import type { Task } from "@ash/shared";
 import { PaperPlaneTilt } from "@phosphor-icons/react";
+import type { Notify } from "../lib/notify.ts";
 import { FreeWorkflowToolbar } from "../free-workflow/FreeWorkflowToolbar.tsx";
 
 // 输入框正上方那一条快捷操作。共同点是「任务正跑着也得看得见、点得动」：自由工作流的
@@ -18,7 +19,7 @@ export function TaskReplyRail({
   /** 接力入口给不给：单飞、没归档、不在队列里、没接力出去(或还悬着)。 */
   canHandoff: boolean;
   onHandoff: () => void;
-  notify: (message: string) => void;
+  notify: Notify;
 }) {
   const returning = task.handoff?.direction === "in"
     || (task.handoff?.direction === "out" && task.handoff.pending

@@ -45,7 +45,7 @@ export function useHostInfo(): HostInfo | null {
 }
 
 /**
- * 家目录前缀缩成 `~`：`/Users/fjh/code/x` → `~/code/x`，`C:\Users\fjh\code\x` → `~\code\x`。
+ * 家目录前缀缩成 `~`：`/Users/example/code/x` → `~/code/x`，`C:\Users\example\code\x` → `~\code\x`。
  *
  * host 还没到就按常见形状猜（mac `/Users/名`、Linux `/home/名`、Windows `C:\Users\名`）——
  * 猜错的代价只是这一帧显示全路径，比等一个网络往返再渲染划算。

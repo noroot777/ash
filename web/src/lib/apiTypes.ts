@@ -68,7 +68,7 @@ export type SessionTraceEntry = {
   event:
     | { kind: "text"; text: string }
     | { kind: "thinking"; text: string }
-    | { kind: "tool"; name: string; detail?: string }
+    | Extract<import("@ash/shared").AgentEvent, { kind: "tool" }>
     | { kind: "attachment"; path: string }
     | { kind: "error"; message: string }
     // verifyRound：这一回合属于就地验证的第几轮（不是验证轮时缺省）。它是会话里

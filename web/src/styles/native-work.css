@@ -1,0 +1,28 @@
+.native-work { padding: 16px 14px 28px; color: var(--ink); font-size: 12px; }
+.native-work__intro, .native-work__hint { color: var(--muted); line-height: 1.65; margin: 0 0 14px; }
+.native-work__counts { display: flex; flex-wrap: wrap; gap: 12px; padding-bottom: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.native-work__group + .native-work__group { margin-top: 24px; }
+.native-work__group h3 { display: flex; gap: 8px; align-items: center; margin: 0 0 8px; font-size: 12px; font-weight: 600; }
+.native-work__group h3 span { color: var(--muted); font-weight: 400; }
+.native-work__row { border-bottom: 1px solid var(--line); }
+.native-work__row summary { display: flex; align-items: flex-start; gap: 8px; padding: 12px 0; cursor: pointer; list-style: none; }
+.native-work__row summary::-webkit-details-marker { display: none; }
+.native-work__row summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+.native-work__row summary > svg { flex: 0 0 auto; margin-top: 2px; color: var(--muted); }
+.native-work__title { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.6; }
+.native-work__status { flex-shrink: 0; color: var(--muted); font-size: 11px; line-height: 1.8; }
+.native-work__row[data-status="running"] summary > svg, .native-work__row[data-status="running"] .native-work__status { color: var(--accent); }
+.native-work__row[data-status="failed"] .native-work__status { color: var(--danger, #c34b4b); }
+.native-work__row[open] summary { font-weight: 500; }
+.native-work__detail { padding: 0 0 14px 23px; overflow-wrap: anywhere; }
+.native-work__detail dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 10px; margin: 0 0 14px; font-size: 11px; }
+.native-work__detail dt { color: var(--muted); }
+.native-work__detail dd { margin: 0; }
+.native-work__detail h4 { margin: 12px 0 5px; color: var(--muted); font-size: 11px; font-weight: 500; }
+.native-work__detail p { white-space: pre-wrap; line-height: 1.7; margin: 0; max-height: 400px; overflow: auto; }
+.native-work__detail .native-work__hint { margin-top: 14px; font-size: 11px; }
+.native-work__empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 38px 8px; text-align: center; color: var(--muted); }
+.native-work__empty strong { color: var(--ink); font-weight: 500; }
+.native-work__empty p { margin: 0; line-height: 1.7; }
+.native-work__error { margin-bottom: 12px; color: var(--danger, #c34b4b); }
+.native-work__error button { margin-left: 6px; text-decoration: underline; }

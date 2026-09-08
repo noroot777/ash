@@ -13,6 +13,7 @@ import type { Task } from "@ash/shared";
 import type { WorkflowStep } from "@ash/shared/workflow";
 import { ArrowClockwise, SpinnerGap } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
+import type { Notify } from "../lib/notify.ts";
 
 export function PreviewRestartButton({
   task,
@@ -21,7 +22,7 @@ export function PreviewRestartButton({
 }: {
   task: Task;
   step: Extract<WorkflowStep, { kind: "preview" }>;
-  notify: (message: string) => void;
+  notify: Notify;
 }) {
   const [busy, setBusy] = useState(false);
   const inFlight = task.status === "running" || task.status === "queued";
@@ -34,7 +35,9 @@ export function PreviewRestartButton({
       const result = await api.restartPreview(task.id, step.id);
       notify(result.url ? `预览已起：${result.url}` : `预览已起（端口 ${result.port ?? "未知"}）`);
     } catch (reason) {
-      notify(reason instanceof Error ? reason.message : String(reason));
+      // 起不来那一句同样是「认出哪几个服务、各自怎么起」的一整份说明（见 FreeWorkflowToolbar
+      // 里同一处）——留着，等用户自己收。
+      notify(reason instanceof Error ? reason.message : String(reason), { sticky: true });
     } finally {
       setBusy(false);
     }

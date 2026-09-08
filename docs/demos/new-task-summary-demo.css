@@ -1,5 +1,5 @@
 /* 新建任务 —— 「执行摘要条」方案 demo。
-   严格沿用 harness 现有 token：灰白画布、#5e6ad2 强调色、8–12px 圆角、12px 级控件、
+   严格沿用 ash 现有 token：灰白画布、#5e6ad2 强调色、8–12px 圆角、12px 级控件、
    48px 顶栏 / 58px 底栏。这里不新增视觉体系，只重排信息层级。 */
 
 @font-face { font-family: InterFallback; src: local("Inter"), local("SF Pro Display"); }

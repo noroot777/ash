@@ -2,7 +2,7 @@ import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Task } from "@ash/shared";
 import { ReplyBox } from "../../src/task-detail/ReplyBox.tsx";
-import { TaskReplyDraftProvider } from "../../src/task-detail/TaskReplyDrafts.tsx";
+import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import "../../src/styles/global.css";
 
 const task = (id: string, title: string): Task => ({
@@ -43,7 +43,7 @@ function Ash() {
 }
 
 createRoot(document.getElementById("root")!).render(
-  <TaskReplyDraftProvider>
+  <DraftProvider>
     <Ash />
-  </TaskReplyDraftProvider>,
+  </DraftProvider>,
 );

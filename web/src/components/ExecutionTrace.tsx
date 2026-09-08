@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { CaretRight, Wrench, X } from "@phosphor-icons/react";
-import { hasMoreThanSummary, traceSummary, type ExecutionEvent } from "../lib/executionTrace.ts";
+import { hasMoreThanSummary, isVisibleExecutionEvent, traceSummary, type ExecutionEvent } from "../lib/executionTrace.ts";
 
 function compact(text: string, limit = 52): string {
   const clean = text.replace(/\s+/g, " ").trim();
@@ -115,6 +115,7 @@ function EventLine({ event }: { event: ExecutionEvent }) {
 
 /** 折叠条上那句「执行过程 · 3 分析 · 5 工具」。回合级折叠和单段折叠共用同一套词。 */
 export function executionCountsLabel(events: ExecutionEvent[]): string {
+  events = events.filter(isVisibleExecutionEvent);
   const thinking = events.filter((event) => event.kind === "thinking").length;
   const tools = events.filter((event) => event.kind === "tool").length;
   const errors = events.filter((event) => event.kind === "error").length;
@@ -132,6 +133,7 @@ export function hasExecutionError(events: ExecutionEvent[]): boolean {
 
 /** `<summary>` 的内容：折角 + 运行小点 + 会临时轮播最新一步的标签。 */
 export function ExecutionSummaryLine({ events, running }: { events: ExecutionEvent[]; running: boolean }) {
+  events = events.filter(isVisibleExecutionEvent);
   return (
     <>
       <CaretRight className="task-execution-caret" size={11} weight="bold" aria-hidden="true" />
@@ -143,6 +145,7 @@ export function ExecutionSummaryLine({ events, running }: { events: ExecutionEve
 
 /** 光秃秃的事件行列表。外面已经有折叠壳时用它，别再套一层 `<details>`。 */
 export function ExecutionEventList({ events }: { events: ExecutionEvent[] }) {
+  events = events.filter(isVisibleExecutionEvent);
   if (!events.length) return null;
   return (
     <div className="task-execution-events">
@@ -154,6 +157,7 @@ export function ExecutionEventList({ events }: { events: ExecutionEvent[] }) {
 }
 
 export function ExecutionDetails({ events, running }: { events: ExecutionEvent[]; running: boolean }) {
+  events = events.filter(isVisibleExecutionEvent);
   if (!events.length) return null;
   return (
     <details className={`task-execution-block${hasExecutionError(events) ? " has-error" : ""}`}>

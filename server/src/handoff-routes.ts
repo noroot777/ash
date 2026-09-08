@@ -41,6 +41,7 @@ import { now } from "./util.js";
 import { mountHandoffRemoteRoutes } from "./handoff-remote.js";
 import { assertReturnProject, listReturnGrants, returnArchiveForPeer } from "./handoff-return.js";
 import { returnTargetForTask, sourceUrlFromPeer } from "./handoff-return-address.js";
+import { listSourceAddresses, updateSourceAddress } from "./handoff-source-address.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { isMultiUser } from "./auth/mode.js";
 import { countUsers } from "./auth/store.js";
@@ -100,6 +101,7 @@ async function cancelPendingAtPeer(marker: TaskHandoff): Promise<boolean> {
       { allowReturnFallback: false },
     );
     await fetchPeer(`${targetUrl}/api/handoff/proxy/task/cancel-pending`, {
+      expectedPeerFp: marker.peerFp,
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -444,6 +446,21 @@ export function mountHandoffRoutes(api: Hono): void {
   // 行为与本功能上线前一致。读侧永不回显 key,只报 hasKey。
   api.get("/handoff/targets", async (c) => c.json({ targets: await listTargets(actorOf(c)) }));
 
+  api.get("/handoff/targets/sources", async (c) => {
+    try { return c.json({ sources: await listSourceAddresses(actorOf(c)) }); }
+    catch (e) { return fail(c, e); }
+  });
+
+  api.put("/handoff/targets/source-address", async (c) => {
+    const body = await c.req.json().catch(() => null) as { fingerprint?: unknown; url?: unknown } | null;
+    if (typeof body?.fingerprint !== "string" || typeof body?.url !== "string") {
+      return c.json({ error: "缺来源机指纹或地址" }, 400);
+    }
+    try {
+      return c.json({ targets: await updateSourceAddress(actorOf(c), body.fingerprint, body.url) });
+    } catch (e) { return fail(c, e); }
+  });
+
   api.post("/handoff/targets", async (c) => {
     const b = (await c.req.json().catch(() => ({}))) as { name?: string; url?: string; peerKey?: string };
     const name = (b.name ?? "").trim();
@@ -484,12 +501,12 @@ export function mountHandoffRoutes(api: Hono): void {
   // 预检失败时要当场补 key,那里也只有选中的那台机器。两种模式的写入差异收在
   // `setPeerKey` 里(见 auth/handoff-scope.ts),路由这层只有一条路。
   api.put("/handoff/targets/key", async (c) => {
-    const b = (await c.req.json().catch(() => ({}))) as { url?: string; peerKey?: string };
+    const b = (await c.req.json().catch(() => ({}))) as { url?: string; peerKey?: string; peerFp?: string | null; allowUnlisted?: boolean };
     if (typeof b.peerKey !== "string") return c.json({ error: "缺 peerKey(空串 = 清除)" }, 400);
     let url: string;
     try { url = normalizePeerUrl(b.url ?? ""); } catch (e) { return fail(c, e); }
     try {
-      return c.json({ targets: await setPeerKey(actorOf(c), url, b.peerKey.trim()) });
+      return c.json({ targets: await setPeerKey(actorOf(c), url, b.peerKey.trim(), b.peerFp, { allowUnlisted: b.allowUnlisted === true }) });
     } catch (e) { return fail(c, e); }
   });
 

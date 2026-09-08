@@ -22,6 +22,9 @@ assert.deepEqual(sequence.handle("i", 4_000), { kind: "prefix" });
 assert.deepEqual(sequence.handle("x", 4_100), { kind: "none" });
 assert.deepEqual(sequence.handle("f", 4_200), { kind: "none" });
 assert.equal(inspectorShortcutLabel("r"), "I R");
+assert.deepEqual(sequence.handle("i", 5_000), { kind: "prefix" });
+assert.deepEqual(sequence.handle("s", 5_100), { kind: "chord", key: "s" });
+assert.equal(inspectorShortcutLabel("s"), "I S");
 
 const calls = [];
 const unregisterMain = registerInspectorShortcutTarget((key) => {

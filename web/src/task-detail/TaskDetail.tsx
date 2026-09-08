@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Group, Session, Task, TaskListItem } from "@ash/shared";
 import { isUserFollowUp } from "@ash/shared";
-import { FolderOpen, GitBranch, GitPullRequest, Info, MagnifyingGlass } from "@phosphor-icons/react";
+import { FolderOpen, GitBranch, GitPullRequest, Info, MagnifyingGlass, Robot } from "@phosphor-icons/react";
+import { NativeWorkInspector, type NativeWorkInspectorProps } from "./NativeWorkInspector.tsx";
 import { InspectorHost, type InspectorDescriptor } from "../inspector/index.ts";
 import { FileTreeInspector } from "../files/FileTreeInspector.tsx";
 import { FileViewer } from "../files/FileViewer.tsx";
@@ -10,6 +11,7 @@ import { ScmDiffViewer } from "../scm/ScmDiffViewer.tsx";
 import { ScmInspector } from "../scm/ScmInspector.tsx";
 import type { ScmDiffTarget } from "../scm/scmModel.ts";
 import { api } from "../lib/api.ts";
+import type { Notify } from "../lib/notify.ts";
 import { useConversation } from "../lib/useConversation.ts";
 import { useSkills } from "../lib/useSkills.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
@@ -44,6 +46,7 @@ import { freeReviewRetryable } from "./turnRetry.ts";
 import { useExecutorGate } from "./ExecutorGate.tsx";
 
 interface TaskInspectorContext {
+  nativeWork: NativeWorkInspectorProps;
   task: Task;
   groups: Group[];
   sessions: Session[];
@@ -58,10 +61,18 @@ interface TaskInspectorContext {
   onOpenFile: (path: string) => void;
   openScmDiff: ScmDiffTarget | null;
   onOpenScmDiff: (target: ScmDiffTarget) => void;
-  notify: (message: string) => void;
+  notify: Notify;
 }
 
 const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
+  {
+    id: "subagents",
+    title: "子智能体",
+    shortcut: "s",
+    icon: <Robot size={14} />,
+    defaultOpen: true,
+    render: (context) => <NativeWorkInspector {...context.nativeWork} />,
+  },
   {
     id: "info",
     title: "信息",
@@ -149,7 +160,7 @@ export function TaskDetail({
   inspectorMode?: "page" | "drawer";
   inspectorToggleTarget?: HTMLElement | null;
   terminalToggle?: ReactNode;
-  notify: (message: string) => void;
+  notify: Notify;
 }) {
   const [groups, setGroups] = useState<Group[]>([]);
   const [busy, setBusy] = useState(false);
@@ -208,9 +219,9 @@ export function TaskDetail({
   const reviewFocused = REVIEW_FOCUS_STAGES.has(task.stage ?? "")
     || allTasks.some((candidate) => candidate.reviewOf === task.id);
   const inspectorPolicy = useMemo(() => ({
-    stateKey: `single:all-tabs-v2:${task.status}:${reviewFocused ? "review" : "info"}`,
+    stateKey: `single:all-tabs-v3:${task.status}:${reviewFocused ? "review" : "info"}`,
     requiredTabId: "info",
-    defaultOpenTabIds: ["info", "files", "scm", "workflow", "review"],
+    defaultOpenTabIds: ["info", "files", "scm", "workflow", "review", "subagents"],
     defaultActiveTabId: reviewFocused ? "review" : "info",
   }), [reviewFocused, task.status]);
 
@@ -342,6 +353,7 @@ export function TaskDetail({
       contextKey={inspectorContextKey}
       descriptors={TASK_INSPECTORS}
       context={{
+        nativeWork: { items: conversation.items, status: task.status, loading: conversation.refreshing, error: conversation.error ?? conversation.traceError, onRetry: conversation.refetch },
         task,
         groups,
         sessions: conversation.sessions,

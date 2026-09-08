@@ -121,6 +121,7 @@ export const userHandoffTargets = sqliteTable(
     peerFp: text("peer_fp"),
     // 对端账号 key 的**明文**(要原样发给对端,没法只存哈希)。GET 只报 hasKey。
     peerKey: text("peer_key").notNull().default(""),
+    peerKeyFp: text("peer_key_fp"),
     createdAt: text("created_at").notNull(),
   },
   (t) => ({ userIdx: index("user_handoff_targets_user_idx").on(t.userId) }),

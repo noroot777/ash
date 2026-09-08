@@ -1,11 +1,9 @@
-// TaskComposerPanel 的静态配料:模式表、slash 命令表、种子附件列表。
+// TaskComposerPanel 的静态配料:模式表、slash 命令表。
 // 从主文件拆出来纯粹为了给它腾行数(全局 700 行硬限),不承载状态。
 // 「谁来干这活」那套状态变换在 executorOverrides.ts。
 import type { TaskMode } from "@ash/shared";
-import { Paperclip, Robot, ChatsCircle, UsersThree, X } from "@phosphor-icons/react";
-import { PreviewableImage } from "../components/ImagePreview.tsx";
+import { Robot, ChatsCircle, UsersThree } from "@phosphor-icons/react";
 import type { SlashItem } from "../lib/useSkills.ts";
-import { attachmentView } from "../task-detail/utils.ts";
 
 export const MODES: { value: TaskMode; label: string; icon: typeof Robot }[] = [
   { value: "single", label: "单任务", icon: Robot },
@@ -26,21 +24,3 @@ export const ASH_SLASH_ITEMS: SlashItem[] = SLASHES.map((item) => ({
   label: item.label,
   kind: "ash",
 }));
-
-export function SeedAttachmentList({ paths, onRemove }: { paths: string[]; onRemove: (path: string) => void }) {
-  if (!paths.length) return null;
-  return (
-    <div className="composer-seed-attachments">
-      {paths.map((path) => {
-        const view = attachmentView(path);
-        return (
-          <div className="composer-seed-attachment" key={path}>
-            {view.image && view.url ? <PreviewableImage src={view.url} alt={view.name} /> : <Paperclip size={14} aria-hidden="true" />}
-            <span>{view.name}</span>
-            <button type="button" onClick={() => onRemove(path)} aria-label={`移除 ${view.name}`}><X size={10} aria-hidden="true" /></button>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
