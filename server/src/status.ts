@@ -3,7 +3,7 @@ import type { TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
-import { stopPreviewOnRerun } from "./preview.js";
+import { beginPreviewRerunBlock, endPreviewRerunBlock, stopPreviewOnRerun } from "./preview.js";
 import { now, runsTiming } from "./util.js";
 
 const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
@@ -19,6 +19,24 @@ const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
 //   • otherwise  : leave the timestamps untouched.
 export async function setTaskStatus(taskId: string, status: TaskStatus): Promise<void> {
   const cur = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  // 又开跑了：这一段里不许有新的预览起来。**同步竖起来、状态落库之后才放下**——收预览和
+  // 写 running 是两步，中间那条缝里起预览那一路读到的还是 `done`，会一路放行（见
+  // beginPreviewRerunBlock）。
+  const rerun = status === "running" && !!cur && cur.status !== "running";
+  if (rerun) beginPreviewRerunBlock(taskId);
+  try {
+    await writeTaskStatus(taskId, status, cur, rerun);
+  } finally {
+    if (rerun) endPreviewRerunBlock(taskId);
+  }
+}
+
+async function writeTaskStatus(
+  taskId: string,
+  status: TaskStatus,
+  cur: typeof tasks.$inferSelect | undefined,
+  rerun: boolean,
+): Promise<void> {
   const updatedAt = now();
   let startedAt = cur?.startedAt ?? null;
   let endedAt = cur?.endedAt ?? null;
@@ -29,7 +47,7 @@ export async function setTaskStatus(taskId: string, status: TaskStatus): Promise
     patch.endedAt = endedAt = null;
     // 又开跑了：上一轮起的预览指向的是上一版代码，留着只会让人对着旧页面验新改动。
     // 收在这儿是因为**所有**开跑路径都经过这一个函数（手点运行、队列推进、修复续跑）。
-    if (cur && cur.status !== "running") await stopPreviewOnRerun(taskId);
+    if (rerun) await stopPreviewOnRerun(taskId);
   } else if (TERMINAL.includes(status)) {
     patch.endedAt = endedAt = updatedAt;
   }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -16,6 +16,30 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
+
+/**
+ * 「把时间线那一笔堵住」用的 FIFO（重跑交错那一段）。
+ *
+ * 读者要**一直守着**：没有读者的写入会一路挂着，进程就卡在那儿不退出——回归退化时本该
+ * 看得见的那句断言会变成「测试跑不完」。而且不能只读一次：第一个写者关掉时读端就 EOF 了，
+ * 后面那个写者（退化时那次「预览已打开」）又会重新堵住，所以 end 之后要接着开下一个。
+ * 收尾时 stopDrainingFifo 把它拆掉，否则一个永远开着的读端自己就会吊住事件循环。
+ */
+let stopDrainingFifo: (() => void) | null = null;
+function drainFifo(path: string): void {
+  let on = true;
+  let current: ReturnType<typeof createReadStream> | null = null;
+  const open = () => {
+    if (!on || !existsSync(path)) return;
+    const reader = createReadStream(path);
+    current = reader;
+    reader.resume();
+    reader.on("end", () => { reader.close(); open(); });
+    reader.on("error", () => { /* 拆掉读端时会来一发，忽略 */ });
+  };
+  stopDrainingFifo = () => { on = false; current?.destroy(); stopDrainingFifo = null; };
+  open();
+}
 
 /** 等一个条件成真（用在真实路由 + 真实仓库锁那一段：时序靠等，不靠猜固定毫秒）。 */
 async function waitFor(check: () => boolean | Promise<boolean>, message: string, timeoutMs = 15_000): Promise<void> {
@@ -51,6 +75,7 @@ try {
   const { claimTurn } = await import("../src/runs.js");
   const { prepareWorktree } = await import("../src/git.js");
   const { withRepoLock } = await import("../src/repo-lock.js");
+  const { setTaskStatus } = await import("../src/status.js");
   const { mountReviewerProfileRoutes } = await import("../src/reviewer-profiles.js");
   const { mountTaskRoutes } = await import("../src/task-routes.js");
   const { mountTaskStageRoutes } = await import("../src/task-stage.js");
@@ -512,7 +537,7 @@ try {
     ].join("\n"));
     await db.update(projects).set({ previewCommand: `node ${script}` }).where(eq(projects.id, "p-git"));
     await createTasks([{
-      id: "preview-early-cancel", projectId: "p-git", groupId: null, parentId: null,
+      id: "pv-cancel-task", projectId: "p-git", groupId: null, parentId: null,
       title: "preview early cancel", body: "test", mode: "single", status: "done",
       labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
       executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
@@ -529,21 +554,41 @@ try {
     }));
     // 锁真的到手了再发 POST，否则它可能抢在前面自己拿到锁、根本不会停在工作区那一步。
     await waitFor(() => repoLocked, "仓库锁没拿到，这一段就不是「工作区准备中」了");
-    const post = api.request("/tasks/preview-early-cancel/free-workflow/preview", { method: "POST" });
+    const post = api.request("/tasks/pv-cancel-task/free-workflow/preview", { method: "POST" });
     // 界面在这一段就该看得到「正在启动、可以取消」——它读的正是这次登记下来的代号。
     await waitFor(async () => {
-      const snapshot = await api.request("/tasks/preview-early-cancel/free-workflow")
+      const snapshot = await api.request("/tasks/pv-cancel-task/free-workflow")
         .then((response) => response.json()) as { preview: { starting: boolean } };
       return snapshot.preview.starting;
     }, "工作区还在准备时，快照里看不出「正在启动」——那一段就没有任何入口能取消");
     assert.equal(
-      existsSync(join(root, "runs", "preview-early-cancel", "preview.json")), false,
+      existsSync(join(root, "runs", "pv-cancel-task", "preview.json")), false,
       "这一刻盘上本来就还没有记录（正是老实现取消不掉的原因）",
     );
 
-    const stop = await api.request("/tasks/preview-early-cancel/free-workflow/preview", { method: "DELETE" });
+    const stop = await api.request("/tasks/pv-cancel-task/free-workflow/preview", { method: "DELETE" });
     assert.equal(stop.status, 200, "启动请求还卡在工作区准备时，关闭被挡回去了");
     assert.deepEqual(await stop.json(), { stopped: true }, "工作区还在准备时点的取消，接口却说没东西可停");
+
+    // **取消要当场收口。** 打不断那次正卡在建 worktree 上的调用，可对外的那几句话不能跟着
+    // 一起拖到它回来：仓库锁这时还握在别人手里，POST 一步都没动。
+    {
+      const stuck = await api.request("/tasks/pv-cancel-task/free-workflow")
+        .then((response) => response.json()) as { preview: { running: boolean; starting: boolean } };
+      assert.equal(stuck.preview.starting, false, "已经取消了，快照还说它正在启动（刷新后又变回「关闭预览」）");
+      assert.equal(stuck.preview.running, false, "已经取消了，快照还说预览在跑");
+      const again = await api.request("/tasks/pv-cancel-task/free-workflow/preview", { method: "DELETE" });
+      assert.deepEqual(
+        await again.json(), { stopped: false },
+        "同一次启动被反复「停到」：每点一次就再记一条「预览启动已取消」",
+      );
+      // 那把自由工作流动作锁也得当场放掉，否则验收、派审要陪着这次作废的启动干等八分钟。
+      assert.equal(
+        tryAcquireFreeWorkflowAction("pv-cancel-task"), true,
+        "取消之后动作锁还攥在那次启动手里，验收/派审全被 409 挡住",
+      );
+      releaseFreeWorkflowAction("pv-cancel-task");
+    }
 
     releaseRepo();
     await repoHeld;
@@ -555,13 +600,107 @@ try {
     );
     assert.equal(existsSync(marker), false, "取消之后预览命令还是跑起来了（没人再去关它）");
     assert.equal(
-      existsSync(join(root, "runs", "preview-early-cancel", "preview.json")), false,
+      existsSync(join(root, "runs", "pv-cancel-task", "preview.json")), false,
       "取消之后仍然写出了启动记录",
     );
     assert.equal(
-      existsSync(join(root, "runs", "preview-early-cancel", "preview.log")), false,
+      existsSync(join(root, "runs", "pv-cancel-task", "preview.log")), false,
       "取消之后仍然走进了 runPreview（日志头都写出来了）",
     );
+  }
+
+  // 「任务又开跑了」和「不许再起预览」必须是**同一道门**。收旧预览和把状态写成 running 是
+  // 两步、中间隔着 await；起预览那一路只看库里那一行，在这条缝里读到的还是 done，于是一路
+  // 放行——收预览那一下已经过去了，不会再来第二次。结果是任务正在改下一版代码，上一版的
+  // 预览却在同一个工作区里跑着：用户对着旧页面验新改动，dev server 的产物还跟 agent 的写入
+  // 撞在一起。
+  {
+    const rerunId = "rerun-race-task";
+    const marker2 = join(root, "preview-ran.txt"); // 预览命令跑起来就会写它（见上一段那个脚本）
+    await createTasks([{
+      id: rerunId, projectId: "p-git", groupId: null, parentId: null,
+      title: "preview rerun race", body: "test", mode: "single", status: "done",
+      labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
+      executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
+      duet: null, team: null, reportBack: false, scheduleId: null,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      useWorktree: true, worktreeBase: "main", originTaskId: null, workflowMode: "free",
+    }]);
+
+    // ① 先钉住「POST 已经读过任务行（那时还是 done），随后任务开跑」这条时序：仓库锁把
+    //    POST 定格在工作区准备上，中间跑完一次真实的 setTaskStatus(running)。
+    let releaseRepo2 = () => {};
+    let repoLocked2 = false;
+    const repoHeld2 = withRepoLock(repo, () => new Promise<void>((resolve) => {
+      repoLocked2 = true;
+      releaseRepo2 = resolve;
+    }));
+    await waitFor(() => repoLocked2, "仓库锁没拿到");
+    const racingPost = api.request(`/tasks/${rerunId}/free-workflow/preview`, { method: "POST" });
+    await waitFor(async () => {
+      const snapshot = await api.request(`/tasks/${rerunId}/free-workflow`)
+        .then((response) => response.json()) as { preview: { starting: boolean } };
+      return snapshot.preview.starting;
+    }, "POST 还没走到工作区准备那一步");
+    await setTaskStatus(rerunId, "running");
+    releaseRepo2();
+    await repoHeld2;
+    const racing = await racingPost;
+    assert.equal(racing.status, 409, "任务已经开跑了，那趟在途的启动还是把预览起了起来");
+    assert.match(
+      ((await racing.json()) as { error: string }).error, /取消/,
+      "挡是挡住了，但不是因为「任务开跑收掉了这一趟」——别让别的错误替它交差",
+    );
+    assert.equal(
+      existsSync(join(root, "runs", rerunId, "preview.json")), false,
+      "任务开跑之后仍然留下了预览记录",
+    );
+
+    // ② 再钉住那条缝本身：旧预览已经收掉、状态还没落库时发起的新 POST 不能放行。
+    //    用 FIFO 把回收里那次时间线写入卡住，窗口就成了确定的。
+    const sessionId = "rerun-race-session";
+    await db.insert(sessions).values({
+      id: sessionId, taskId: rerunId, role: "lead", agentType: "codex",
+      executor: "codex@test", startedAt: new Date().toISOString(),
+    });
+    await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, rerunId));
+    const fifo = sessionTranscriptPath(rerunId, sessionId);
+    mkdirSync(dirname(fifo), { recursive: true });
+    rmSync(fifo, { force: true });
+    execFileSync("mkfifo", [fifo]);
+    const runsDir = join(root, "runs", rerunId);
+    mkdirSync(runsDir, { recursive: true });
+    writeFileSync(join(runsDir, "preview.json"), JSON.stringify({
+      taskId: rerunId, cmd: "npm run dev", pid: 0, url: "http://localhost:1/", port: 1, life: "task",
+      startedAt: new Date().toISOString(), log: join(runsDir, "preview.log"), links: [],
+      state: "ready", gen: "old-gen", installPid: null,
+    }));
+
+    const flipping = setTaskStatus(rerunId, "running");
+    // 记录已经被收掉、时间线那一笔还堵在 FIFO 上 —— 正是那条缝。
+    await waitFor(() => !existsSync(join(runsDir, "preview.json")), "回收还没开始");
+    const midway = (await db.select().from(tasks).where(eq(tasks.id, rerunId))).at(0);
+    assert.equal(midway?.status, "done", "这一刻库里本来就还是旧状态（正是这条缝的成因）");
+
+    // 这一发不 await：挡不住的话它会一路起到底，而那时它自己的时间线也要写进同一条 FIFO。
+    const midPosting = api.request(`/tasks/${rerunId}/free-workflow/preview`, { method: "POST" });
+    // 先守住 FIFO 再收结果：回收那一笔写完、状态落库，退化的那一路也走得完 —— 断言才有得报。
+    drainFifo(fifo);
+    await flipping;
+    const midPost = await midPosting;
+    assert.equal(midPost.status, 409, "任务正在切进 running，这一刻还能把预览起起来");
+    assert.match(
+      ((await midPost.json()) as { error: string }).error, /任务正在修改代码/,
+      "挡是挡住了，但没说清是因为任务正在改代码",
+    );
+    stopDrainingFifo?.();
+    const after = (await db.select().from(tasks).where(eq(tasks.id, rerunId))).at(0);
+    assert.equal(after?.status, "running", "状态最终没落成 running");
+    assert.equal(
+      existsSync(join(root, "runs", rerunId, "preview.json")), false,
+      "那条缝里发起的预览最终还是起来了",
+    );
+    assert.equal(existsSync(marker2), false, "那条缝里发起的预览把命令跑起来了");
   }
 
   const review = await api.request("/tasks/free-task/free-workflow/review", {
@@ -690,6 +829,7 @@ try {
   console.log("✓ 技能名与斜杠命令只进入需求参考文件，不进入自由审查 prompt");
   console.log("✓ 自由审查报告与截图接口返回正确内容类型");
 } finally {
+  stopDrainingFifo?.();
   // 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

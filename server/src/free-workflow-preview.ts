@@ -7,21 +7,25 @@ import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { assertBeforeAcceptance } from "./free-workflow.js";
-import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
+import { acquireFreeWorkflowAction, releaseFreeWorkflowAction } from "./free-workflow-lock.js";
 import { handoffBlockReasonById } from "./handoff-guard.js";
 import { resolvePreviewCommand } from "./preview-command.js";
 import { isTurnClaimed } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
-import { readPreview, readPreviewLog, isPreviewStarting, startPreview, stopPreview, beginPreviewStart, endPreviewStart, previewStartCanceled, PREVIEW_CANCELED, type PreviewStep } from "./preview.js";
+import { readPreview, readPreviewLog, isPreviewStarting, startPreview, stopPreview, beginPreviewStart, endPreviewStart, previewStartCanceled, previewBlockedByRerun, PREVIEW_CANCELED, type PreviewStep } from "./preview.js";
 
 async function startFreePreview(taskId: string) {
-  if (!tryAcquireFreeWorkflowAction(taskId)) throw new Error("当前已有自由工作流操作正在进行");
+  const holder = acquireFreeWorkflowAction(taskId);
+  if (holder === null) throw new Error("当前已有自由工作流操作正在进行");
   // **可取消从这一行开始。** 下面查任务、查项目、解析/新建工作区全是 await，第一次开预览
   // 时建 worktree 更是要花时间；代号如果等进了 startPreview 才注册，这一整段就是取消不掉的
   // 黑窗口——用户点的取消什么也标不到，只会收到「预览已经不在跑了」，然后这一趟照常把预览
   // 起起来（见 preview.ts 的 beginPreviewStart）。同步注册，中间不能有 await。
-  const gen = beginPreviewStart(taskId);
+  //
+  // 取消打不断正卡在建 worktree（或等仓库写锁）上的那一步，所以**动作锁在取消那一刻就放**：
+  // 再攥着它，验收和派审会被一个已经作废的启动挡满八分钟。带号码牌地放，只放自己那一次。
+  const gen = beginPreviewStart(taskId, () => releaseFreeWorkflowAction(taskId, holder));
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task || task.workflowMode !== "free" || task.mode !== "single" || task.parentId || task.reviewOf) {
@@ -30,14 +34,20 @@ async function startFreePreview(taskId: string) {
     if (task.archived) throw new Error("归档任务不能打开预览");
     if (task.status === "backlog") throw new Error("任务尚未运行，完成实现后再打开预览");
     if (task.status === "running" || task.status === "queued") throw new Error("任务正在修改代码，结束后再打开预览");
+    // 库里那一行可能是**上一秒的**：任务正在切进 running 的那一段（先收旧预览、后写状态）
+    // 里，读到的还是 done。那一段结束后不会再收第二次，放行就等于让预览跟正在改代码的
+    // agent 共用同一个工作区（见 preview.ts 的 beginPreviewRerunBlock）。
+    if (previewBlockedByRerun(taskId)) throw new Error("任务正在修改代码，结束后再打开预览");
     if (isTurnClaimed(taskId)) throw new Error("任务回合正在进行（状态尚未落库），结束后再打开预览");
     assertBeforeAcceptance(task);
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
     if (!project) throw new Error("项目不存在");
     const workspace = await taskWorkspace(task, project.repoPath);
     // 工作区这一段最长（要建 worktree、可能还在等同仓库的写锁），取消八成落在这儿：
-    // 到这个检查点就收摊，别再往下认命令、更别起进程。
+    // 到这个检查点就收摊，别再往下认命令、更别起进程。开跑那道门同理——这一段里任务
+    // 完全可能已经开始跑下一轮了。
     if (previewStartCanceled(gen)) throw new Error(PREVIEW_CANCELED);
+    if (previewBlockedByRerun(taskId)) throw new Error("任务正在修改代码，结束后再打开预览");
     const { command, source } = resolvePreviewCommand(workspace.path, project.previewCommand);
     // 就绪判据只认「端口真的连得上」。**不能**再加一条「日志里说了 ready」：READY_WORDS
     // 那张表（ready / listening / compiled…）是照 Node dev server 的说法写的，Django 印的是
@@ -62,7 +72,7 @@ async function startFreePreview(taskId: string) {
     return result.record;
   } finally {
     endPreviewStart(taskId, gen);
-    releaseFreeWorkflowAction(taskId);
+    releaseFreeWorkflowAction(taskId, holder);
   }
 }
 

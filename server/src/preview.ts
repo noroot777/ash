@@ -309,6 +309,7 @@ function beginDriving(taskId: string, gen: string): void {
 /** 这一趟结束了。**只撤自己那一代** —— 见 starting 上面的说明。 */
 function endDriving(taskId: string, gen: string): void {
   canceledGens.delete(gen);
+  onCancel.delete(gen);
   const gens = starting.get(taskId);
   if (!gens) return;
   gens.delete(gen);
@@ -334,16 +335,39 @@ function driving(taskId: string, gen: string | undefined): boolean {
 const canceledGens = new Set<string>();
 
 /**
+ * 取消这一代时**立刻**要做的收口（由登记方给）。
+ *
+ * 取消打不断正卡在 await 里的那一趟（`taskWorkspace` 建 worktree 时还可能在等同仓库的
+ * 写锁），它要等那一步自己回来才收场。可对外的那些语义不能跟着一起拖：那把自由工作流
+ * 动作锁再攥着，验收和派审就被一个已经作废的启动挡满八分钟。所以登记方把「取消时先放
+ * 掉什么」交给这里，`cancelDriving` 当场执行。
+ */
+const onCancel = new Map<string, () => void>();
+
+/**
  * 把这个任务此刻正在驱动的那几代标成「取消」（`exceptGen` 是自己，不能把自己标掉）。
  * 返回标了几代 —— 调用方拿它回答「到底停到东西没有」。
+ *
+ * 标记的同时**把它从 starting 里摘掉**，两件事得分开表达：`canceledGens` 是给在跑的那趟
+ * 自己看的墓碑（它下一个检查点凭这个退出，所以要一直留到它真的结束），`starting` 是对外
+ * 说「这个任务正在起预览」的那句话 —— 已经取消掉的一代继续算在里面，用户就会在收到
+ * 「已取消」之后刷新出一颗「关闭预览」，再点一次还照样回一句「停到了」，时间线上多出
+ * 第二条「预览启动已取消」。
  */
 function cancelDriving(taskId: string, exceptGen: string | null): number {
+  const gens = starting.get(taskId);
   let marked = 0;
-  for (const gen of starting.get(taskId) ?? []) {
+  for (const gen of [...(gens ?? [])]) {
     if (gen === exceptGen) continue;
     canceledGens.add(gen);
+    gens?.delete(gen);
+    // 登记方的收口（放掉动作锁之类）在这儿当场做掉，不等那一趟自己回来。
+    const close = onCancel.get(gen);
+    onCancel.delete(gen);
+    close?.();
     marked += 1;
   }
+  if (gens && !gens.size) starting.delete(taskId);
   return marked;
 }
 
@@ -382,9 +406,11 @@ export type PreviewResult =
  * `previewStartCanceled` 问一句，代号被标了就地收摊；最后把这同一个代号交给
  * startPreview，落盘那一段接着用它（见 canceledGens）。
  */
-export function beginPreviewStart(taskId: string): string {
+export function beginPreviewStart(taskId: string, whenCanceled?: () => void): string {
   const gen = randomUUID();
   beginDriving(taskId, gen);
+  // 取消时要当场做掉的收口（放掉动作锁之类）：见 onCancel。
+  if (whenCanceled) onCancel.set(gen, whenCanceled);
   return gen;
 }
 
@@ -683,6 +709,36 @@ export async function stopPreviewAtAccept(taskId: string): Promise<void> {
   }
   if (record.life === "gate") await stopPreview(taskId, "人工关口已结束");
   else if (record.life === "task") await stopPreview(taskId, "任务已验收完成，按线上写的「任务结束时回收」收掉");
+}
+
+/**
+ * 「这个任务正在切进 running」。**一道同步的门**，`setTaskStatus` 在收预览之前竖起来、
+ * 状态真的落库之后再放下。
+ *
+ * 收预览和写 `status = "running"` 是两步、中间隔着 await，而起预览那一路只看库里那一行：
+ * 它在这段缝里读到的还是 `done`，于是一路放行、把预览起起来 —— 收预览那一下已经过去了，
+ * 不会再来第二次。结果就是「任务正在改下一版代码，上一版的预览还开着」：用户对着旧页面
+ * 验新改动，dev server 的缓存和产物还跟 agent 的写入撞在同一个工作区里。
+ *
+ * 计数而不是布尔：同一个任务并发走两次开跑路径时，先结束的那次不能把后一次的门放下。
+ */
+const rerunning = new Map<string, number>();
+
+/** 开始切进 running：从这一刻起不许有新的预览起来。**必须在任何 await 之前调**。 */
+export function beginPreviewRerunBlock(taskId: string): void {
+  rerunning.set(taskId, (rerunning.get(taskId) ?? 0) + 1);
+}
+
+/** 状态已经落库了，门可以放下 —— 之后靠库里那一行 `running` 自己挡。 */
+export function endPreviewRerunBlock(taskId: string): void {
+  const left = (rerunning.get(taskId) ?? 0) - 1;
+  if (left > 0) rerunning.set(taskId, left);
+  else rerunning.delete(taskId);
+}
+
+/** 此刻是不是正卡在「已经开始开跑、状态还没落库」那一段。起预览的路由每过一段就问一次。 */
+export function previewBlockedByRerun(taskId: string): boolean {
+  return rerunning.has(taskId);
 }
 
 /** 任务又开跑了：预览指向的是上一版代码，一律收掉，免得对着旧页面验新改动。 */
