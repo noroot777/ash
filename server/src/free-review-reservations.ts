@@ -41,6 +41,27 @@ export async function disarmFreeReviewReservation(taskId: string): Promise<boole
   return true;
 }
 
+/**
+ * 挂着预约、这一轮却没交卷时留下的那行说明。
+ *
+ * 什么都不做是对的 —— 预约的语义就是「**确认完成**之后再审」，没交卷就不能假定活干完了。
+ * 但静默是错的：用户那一侧看到的只有「预约还挂着、审查没开」，分不清是坏了还是在等他。
+ * 现场实测（QREY2SzRACXy）：审查未通过 → 修复回合结束没调 complete_task → 回落原终态
+ * （续聊回合本来就不要求确认，所以连「未交卷」的降级说明都没有）→ 预约原地不动，
+ * 前后两个回合都这样，用户只能来问「预约的审查怎么不启动」。
+ *
+ * 返回是否真写了（槽空着 = 无事发生，不写）。
+ */
+export async function noteReservationStillWaiting(taskId: string): Promise<boolean> {
+  const slot = (await db.select({ armed: freeWorkflowStates.reviewArmed })
+    .from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId))).at(0);
+  if (!slot?.armed) return false;
+  await appendTaskTimeline(taskId,
+    "完成后审查仍在等待：本回合结束时没有确认完成（complete_task），预约只在确认完成的那一轮结束后才触发。"
+    + "预约本身仍然保留——让这个任务再跑一轮并确认完成，或在审查面板里直接开审。");
+  return true;
+}
+
 /** 读一条预约槽的完整快照（含版本令牌）。 */
 export async function readFreeReviewReservation(taskId: string): Promise<ReservedFreeReview> {
   return (await db.select({

@@ -15,7 +15,7 @@ import {
   scheduledMessages,
   tasks,
 } from "./db/schema.js";
-import { armFollowUpFreeReview, clearReservationForDispatch, disarmFreeReviewReservation, readFreeReviewReservation, consumeFreeReviewReservation, startReservedFreeReview } from "./free-review-reservations.js";
+import { armFollowUpFreeReview, clearReservationForDispatch, disarmFreeReviewReservation, noteReservationStillWaiting, readFreeReviewReservation, consumeFreeReviewReservation, startReservedFreeReview } from "./free-review-reservations.js";
 import {
   checkMode,
   overrideLabel,
@@ -313,7 +313,12 @@ export async function handleFreeWorkflowSettlement(
           return state;
         },
       });
+      return true;
     }
+    // 没交卷（或没落 done）：预约照旧留着等下一轮，但得让用户看见它为什么还没动
+    // （见 noteReservationStillWaiting）。提问/检查点收尾的回合在上面就返回了，不会
+    // 走到这——那种回合本来就写着「在等答复」，不需要再说一遍。
+    await noteReservationStillWaiting(taskId);
     return true;
   }
 
