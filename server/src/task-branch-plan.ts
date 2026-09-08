@@ -1,5 +1,5 @@
 import { HTTPException } from "hono/http-exception";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { BranchDependency } from "@ash/shared/branch-plan";
 import { db } from "./db/index.js";
 import { tasks, projects, taskBranchReceipts } from "./db/schema.js";
@@ -45,11 +45,15 @@ export async function containsCommit(repo: string, ancestor: string, descendant:
 }
 
 export async function branchOwner(repo: string, projectId: string, branch: string): Promise<BranchTask | undefined> {
-  const rows = await db.select().from(tasks).where(eq(tasks.projectId, projectId));
-  for (const row of rows) {
-    if (row.useWorktree && await resolveWorktreeBranchName(repo, row.id) === branchName(branch)) return row;
-  }
-  return undefined;
+  const name = branchName(branch);
+  const match = /^(?:ash|harness)\/([^/]{1,8})$/.exec(name);
+  if (!match) return undefined;
+  // 分支由任务 ID 前八位派生，先在库中定位；归档记录仍可承载旧任务依赖。
+  const [row] = await db.select().from(tasks).where(and(
+    eq(tasks.projectId, projectId), eq(tasks.useWorktree, true),
+    eq(sql<string>`substr(${tasks.id}, 1, 8)`, match[1]),
+  )).limit(1);
+  return row && await resolveWorktreeBranchName(repo, row.id) === name ? row : undefined;
 }
 
 async function finalTarget(repo: string, row: BranchTask, seen = new Set<string>()): Promise<string | null> {

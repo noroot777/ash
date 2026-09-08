@@ -10,5 +10,6 @@ const labels: Record<string, string> = {
 };
 
 export function branchDiffReason(reason?: string | null): string {
-  return labels[reason ?? ""] ?? "未解析到可比较的工作区";
+  // 未知码保留原文，便于从后端日志或代码定位原因。
+  return labels[reason ?? ""] ?? (reason || "未解析到可比较的工作区");
 }

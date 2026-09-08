@@ -3,7 +3,8 @@ export async function checkTaskCreationOrigin(page, fixtureUrl) {
   await page.goto(fixtureUrl);
   const row = title => page.locator(".workspace-task-row").filter({ hasText: title });
   const cases = [["用户新建", "用户创建"], ["用户从父任务派生", "用户创建"],
-    ["Codex 派生的任务", "Codex 派生"], ["外部智能体创建", "智能体创建（自报）"]];
+    ["Codex 派生的任务", "Codex 派生"], ["外部智能体创建", "智能体创建（自报）"],
+    ["群聊委派的任务", "Codex 群聊委派"]];
   for (const [title, label] of cases) {
     await row(title).waitFor({ state: "visible" });
     ensure(await row(title).locator(".task-creation-badge").innerText() === label, `wrong list origin: ${title}`);
@@ -12,6 +13,9 @@ export async function checkTaskCreationOrigin(page, fixtureUrl) {
     ensure(await page.locator(".task-origin-bar .task-creation-badge").innerText() === label, `wrong detail origin: ${title}`);
     if (title === "Codex 派生的任务") {
       ensure((await page.locator(".task-origin-bar").innerText()).includes("Codex Dev"), "creator executor snapshot is missing");
+    }
+    if (title === "群聊委派的任务") {
+      ensure((await page.locator(".task-origin-bar").innerText()).includes("聊天 Codex"), "chat member snapshot is missing");
     }
   }
   await page.locator('.workspace-task-row[data-task-id="source-agent"]').click();
