@@ -1,3 +1,4 @@
+import { HTTPException } from "hono/http-exception";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks, projects, taskBranchReceipts } from "./db/schema.js";
@@ -64,6 +65,10 @@ async function finalTarget(repo: string, row: BranchTask, seen = new Set<string>
 // 起点钉住提交，目标钉住分支。私有 ref 让尚未启动的子任务在父分支清理后仍可开工。
 export async function initializeBranchPlan(row: typeof tasks.$inferInsert & { id: string }, repo: string): Promise<void> {
   if (!row.useWorktree || row.reviewOf || row.worktreeStartCommit || row.stage === "accepted" || row.stage === "merged") return;
+  const explicitTarget = row.mergeTargetBranch?.trim();
+  if (explicitTarget && !(await localBranchExists(repo, branchName(explicitTarget)))) {
+    throw new HTTPException(400, { res: Response.json({ error: `最终合入分支 ${explicitTarget} 不存在，请选择本地分支` }, { status: 400 }) });
+  }
   let base = row.worktreeBase?.trim() || null;
   let parent: BranchTask | undefined;
   if (!base && row.parentId) {
@@ -92,6 +97,11 @@ export type BranchDependency = {
   message: string;
 };
 
+export async function plannedMergeTarget(task: BranchTask, repo: string): Promise<string | null> {
+  if (task.baseTaskId && !task.mergeTargetBranch) return null;
+  return task.acceptedTargetBranch || resolveTaskMergeTarget(repo, task.mergeTargetBranch || task.worktreeBase);
+}
+
 export async function inheritedParentCommit(task: BranchTask, repo: string, parent?: BranchTask): Promise<string | null> {
   let inherited = task.worktreeStartCommit;
   if (parent && inherited) {
@@ -106,11 +116,13 @@ export async function inheritedParentCommit(task: BranchTask, repo: string, pare
 }
 
 export async function branchDependency(task: BranchTask, repo: string): Promise<BranchDependency | null> {
-  if (!task.baseTaskId || !task.worktreeStartCommit || !task.mergeTargetBranch) return null;
+  if (!task.baseTaskId) return null;
   const parent = (await db.select().from(tasks).where(eq(tasks.id, task.baseTaskId))).at(0);
   const title = parent?.title ?? task.baseTaskId;
   const result = (state: BranchDependency["state"], message: string): BranchDependency =>
     ({ taskId: parent?.id ?? null, title, state, message });
+  if (!task.mergeTargetBranch) return result("unknown", "最终合入分支未确定，请在「派生与验收」中重设合入目标，再检查父成果依赖");
+  if (!task.worktreeStartCommit) return result("unknown", "未记录继承的父提交，请恢复任务的开工记录后再验收");
   const inherited = (await inheritedParentCommit(task, repo, parent))!;
   if (await containsCommit(repo, inherited, task.mergeTargetBranch)) {
     return result("ready", `继承的父成果已进入 ${task.mergeTargetBranch}`);

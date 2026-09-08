@@ -6,8 +6,8 @@ import { familySelectionBlock } from "@ash/shared/branch-plan";
 import { acceptPlan, isFinalHumanGate } from "@ash/shared/workflow-policy";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
-import { branchDependency, commitAt, type BranchTask } from "./task-branch-plan.js";
-import { resolveTaskMergeTarget, resolveWorktreeBranchName } from "./git.js";
+import { branchDependency, branchName, commitAt, plannedMergeTarget, type BranchTask } from "./task-branch-plan.js";
+import { localBranchExists, resolveWorktreeBranchName } from "./git.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { acceptanceGuard } from "./task-accept-guard.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
@@ -16,9 +16,12 @@ import { appendTaskTimeline } from "./task-timeline.js";
 import { updateTaskBase } from "./task-base-update.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import type { AcceptTaskResult } from "./task-accept.js";
+import { beginAccepting, endAccepting } from "./acceptance-lock.js";
+import { publishTaskUpdated } from "./task-store.js";
+import { now } from "./util.js";
 
 async function entry(task: BranchTask, repo: string, fingerprintTarget?: string | null): Promise<BranchPlanEntry> {
-  const target = task.acceptedTargetBranch || task.mergeTargetBranch || await resolveTaskMergeTarget(repo, task.worktreeBase);
+  const target = await plannedMergeTarget(task, repo);
   const plan = acceptPlan(taskWorkflowDef(task.workflow), "human", task.workflowAt);
   const guard = await acceptanceGuard(task.id, "before_accept");
   let blocker = guard.failure?.error ?? null;
@@ -28,6 +31,9 @@ async function entry(task: BranchTask, repo: string, fingerprintTarget?: string 
   if (!blocker && task.workflowMode === "free" && task.stage !== "accepted" && await hasActiveFreeReview(task.id)) blocker = "审查仍在进行";
   const sourceCommit = await commitAt(repo, await resolveWorktreeBranchName(repo, task.id));
   const targetCommit = target ? await commitAt(repo, target) : null;
+  const targetError = !target ? "最终合入分支未确定，请重设合入目标"
+    : !(await localBranchExists(repo, target)) ? `目标本地分支 ${target} 不存在，请重设合入目标` : null;
+  if (!blocker && task.useWorktree && task.stage !== "accepted" && targetError) blocker = targetError;
   const fingerprint = createHash("sha256").update(JSON.stringify([
     task.id, task.updatedAt, task.stage, task.workflow, task.workflowAt, task.workflowMode,
     task.status, task.worktreeStartCommit, task.baseTaskId, target, sourceCommit,
@@ -115,6 +121,36 @@ export async function acceptFamily(
 }
 
 export function mountBranchPlanRoutes(api: Hono, accept: Accept): void {
+  api.post("/tasks/:id/merge-target", async c => {
+    if (IS_PREVIEW_INSTANCE) return c.json({ error: previewRefusal("更改合入目标") }, 409);
+    const taskId = c.req.param("id");
+    const body = await c.req.json<{ branch?: string; fingerprint?: string }>();
+    if (typeof body.branch !== "string" || !body.branch.trim() || typeof body.fingerprint !== "string") return c.json({ error: "branch and fingerprint required" }, 400);
+    if (!beginAccepting(taskId)) return c.json({ error: "任务正在验收或更新基线" }, 409);
+    try {
+      const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+      const project = task && (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
+      if (!task || !project) return c.json({ error: "任务或项目不存在" }, 404);
+      return await withRepoLock(project.repoPath, async () => {
+        const guard = await acceptanceGuard(taskId, "before_merge");
+        if (guard.failure) return c.json({ error: guard.failure.error }, 409);
+        const current = guard.task!;
+        if (!current.useWorktree || current.stage === "merged" || current.stage === "accepted" || current.acceptedMergeCommit) {
+          return c.json({ error: "只有尚未合入的独立工作区任务可以更改目标" }, 409);
+        }
+        if (await hasActiveFreeReview(taskId)) return c.json({ error: "审查仍在进行，请等审查结束后更改目标" }, 409);
+        const before = await entry(current, project.repoPath);
+        if (before.fingerprint !== body.fingerprint) return c.json({ error: "任务或目标分支已变化，请刷新后重试" }, 409);
+        const target = branchName(body.branch!);
+        if (!(await localBranchExists(project.repoPath, target))) return c.json({ error: `目标本地分支 ${target} 不存在` }, 400);
+        if (target === await resolveWorktreeBranchName(project.repoPath, taskId)) return c.json({ error: "合入目标不能是任务自身的分支" }, 400);
+        await db.update(tasks).set({ mergeTargetBranch: target, acceptedTargetBranch: null, acceptedSourceCommit: null, updatedAt: now() }).where(eq(tasks.id, taskId));
+        await appendTaskTimeline(taskId, `合入目标由 ${before.targetBranch || "未确定"} 更改为 ${target}；开工提交未变，请重新核对验收依赖与 diff。`);
+        await publishTaskUpdated(taskId);
+        return c.json({ ok: true });
+      });
+    } finally { endAccepting(taskId); }
+  });
   api.get("/tasks/:id/branch-plan", async c => {
     const view = await readBranchPlan(c.req.param("id"));
     return view ? c.json(view) : c.json({ error: "not found" }, 404);

@@ -473,7 +473,6 @@ async function prepareWorktreeLocked(
   if (worktreeLeftoverAt(repo, path)) await discardWorktreeLeftover(repo, path);
   // base 的死活先问一遍，再分路：三条路径（复用 / 恢复 / 新建）都要如实报出来，只有
   // 「这一轮的工作目录是怎么来的」各不相同 —— 复用和恢复都没新建目录，用默认值即可。
-  if (pinned && (!base || !(await commitExists(repo, base)))) throw new Error("记录的开工提交不可读，未从其它分支重建");
   const stale = pinned ? undefined : await staleBaseFallback(repo, base);
   if (isDir(path)) {
     // Re-use: read whatever branch the existing worktree is actually on (might
@@ -498,6 +497,7 @@ async function prepareWorktreeLocked(
     // 恢复：工作原样接回任务分支，跟 base 是谁无关（base 只在建分支那一刻用得上）。
     args.push(path, branch);
   } else {
+    if (pinned && (!base || !(await commitExists(repo, base)))) throw new Error("记录的开工提交不可读，未从其它分支重建");
     args.push("-b", branch, path);
     const trimmedBase = (base ?? "").trim();
     // 建目录问的是另一个问题：这个名字还解析得出一个提交吗（`worktree add <base>` 会不会

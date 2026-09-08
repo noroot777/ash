@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import type { BranchPlanView, Task, TaskListItem } from "@ash/shared";
-import { familySelectionBlock } from "@ash/shared/branch-plan";
+import { familyAcceptanceNotices, familySelectionBlock } from "@ash/shared/branch-plan";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
+import { MergeTargetEditor } from "./MergeTargetEditor.tsx";
 
 export function useBranchPlan(task: TaskListItem) {
   const [view, setView] = useState<BranchPlanView | null>(null);
@@ -41,7 +42,7 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
   if (!view) return <p>正在检查验收依赖…</p>;
   const dep = view.task.dependency;
   const descendants = view.descendants.filter(row => row.stage !== "accepted");
-  if (!view.task.startCommit && !dep && !descendants.length) return null;
+  if (!view.task.startCommit && !dep && !descendants.length && !view.task.blocker) return null;
   const selection = [view.task, ...descendants.filter(row => checked.includes(row.taskId))];
   const selectedProposal = proposal ? [proposal.task, ...proposal.descendants.filter(row => checked.includes(row.taskId))] : [];
   const selectionBlock = familySelectionBlock([view.task, ...view.descendants], new Set(selection.map(row => row.taskId)));
@@ -75,6 +76,10 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
         <div><dt>开工起点</dt><dd>{view.task.startCommit?.slice(0, 12) || "旧任务未记录"}</dd></div>
         <div><dt>最终合入</dt><dd>{view.task.targetBranch || "未确定"}</dd></div>
       </dl>
+      {view.task.blocker && <p role="alert">{view.task.blocker}</p>}
+      {task.stage !== "accepted" && task.stage !== "merged" && <MergeTargetEditor key={task.id} plan={view.task}
+        disabled={busy || !!task.archived || view.task.baseUpdatePending || ["running", "queued"].includes(task.status)}
+        onChanged={async () => { await refresh(); if (onTaskUpdated) onTaskUpdated(await api.task(task.id)); }} />}
       {dep && <p role="status">{dep.message} {dep.taskId && <a href={taskHref(task.projectId, dep.taskId)}>查看父任务</a>}</p>}
       {dep?.state === "needs_update" && <button type="button" disabled={busy || (!!view.task.blocker && !view.task.baseUpdatePending) || task.stage === "accepted" || task.stage === "merged"} onClick={() => open("update")}>更新子分支基线</button>}
       {descendants.length > 0 && <>
@@ -89,6 +94,7 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
           </div>}
         </li>)}</ul>
         {checked.length > 0 && selectionBlock && <p role="alert">{selectionBlock.error}</p>}
+        {familyAcceptanceNotices(selection).map(notice => <p key={notice} role="status">{notice}</p>)}
         <button type="button" disabled={busy || !checked.length || !!view.task.blocker || !!selectionBlock} onClick={() => open("family")}>验收父任务及所选子任务（{selection.length}）</button>
       </>}
       {message && <p role="status">{message}</p>}
@@ -99,6 +105,7 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
           : "下面列出的版本将按父子顺序执行各自的合并、清理及验收后步骤。已完成的合并不会因后续任务失败而撤销。提交或范围发生变化时会停止。"}
         confirmLabel={action === "update" ? "更新基线" : "确认统一验收"} danger busy={busy} onConfirm={() => void run()} onClose={() => { if (!busy) setAction(null); }}>
         {action === "family" && <ul>{selectedProposal.map(row => <li key={row.taskId}>{row.title} · {row.sourceCommit?.slice(0, 8) || "已验收"} · {row.strategy} → {row.targetBranch}</li>)}</ul>}
+        {action === "family" && familyAcceptanceNotices(selectedProposal).map(notice => <p key={notice}>{notice}</p>)}
       </ConfirmDialog>}
     </section>
   );

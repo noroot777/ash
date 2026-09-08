@@ -26,7 +26,7 @@ import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 import { recordBranchReceipt } from "./task-branch-receipts.js";
 import { mountBranchPlanRoutes } from "./task-branch-routes.js";
-import { branchDependency, branchOwner, commitAt, dependentTasks } from "./task-branch-plan.js";
+import { branchDependency, branchOwner, commitAt, dependentTasks, plannedMergeTarget } from "./task-branch-plan.js";
 import { resolveWorktreeBranchName } from "./git.js";
 import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
 import { beginAccepting, endAccepting } from "./acceptance-lock.js";
@@ -302,8 +302,7 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
     return { accepted: false, httpStatus: 409, taskId, reason: `base_${dependency.state}`, error: dependency.message, status: task.status };
   }
   const retrying = task.stage === "merged";
-  const intendedTarget = task.acceptedTargetBranch
-    ?? await resolveTaskMergeTarget(project.repoPath, task.mergeTargetBranch || task.worktreeBase);
+  const intendedTarget = await plannedMergeTarget(task, project.repoPath);
   if (!intendedTarget) {
     return {
       accepted: false, httpStatus: 409, taskId, reason: "target_unresolved",

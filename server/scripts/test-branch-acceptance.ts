@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { makeStep } from "@ash/shared/workflow";
+import { familyAcceptanceNotices } from "@ash/shared/branch-plan";
 import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-branch-acceptance-"));
@@ -80,6 +81,9 @@ try {
     commit(grandWs.path, "grand.txt", "grandchild\n");
     const squash = await setup("squash");
     await acceptTask(squash.parent.id);
+    await setup("squash");
+    const missing = await setup();
+    git(missing.repo, "branch", "-m", "main", "renamed-main");
     const { serve } = await import("@hono/node-server");
     const backend = serve({ fetch: new Hono().route("/api", api).fetch, hostname: "127.0.0.1", port: 0 });
     if (!backend.listening) await new Promise<void>(resolve => backend.once("listening", resolve));
@@ -91,11 +95,27 @@ try {
     await frontend.listen();
     const webAddress = frontend.httpServer!.address();
     assert.ok(webAddress && typeof webAddress === "object");
-    console.log(JSON.stringify({ pid: process.pid, url: `http://127.0.0.1:${webAddress.port}/scripts/fixtures/branch-acceptance.html?task=${s.parent.id}`, child: s.child.id, squashChild: squash.child.id }));
+    console.log(JSON.stringify({ pid: process.pid, root, url: `http://127.0.0.1:${webAddress.port}/scripts/fixtures/branch-acceptance.html?task=${s.parent.id}`, child: s.child.id, squashChild: squash.child.id }));
     await new Promise<void>(resolve => { process.once("SIGTERM", resolve); process.once("SIGINT", resolve); });
     await frontend.close();
     await new Promise<void>(resolve => backend.close(() => resolve()));
   } else {
+  {
+    const s = await setup("squash");
+    const plan = (await readBranchPlan(s.parent.id))!;
+    const entries = [plan.task, ...plan.descendants];
+    const notices = familyAcceptanceNotices(entries);
+    assert.equal(notices.length, 1);
+    assert.match(notices[0], /本次只能先合入父任务/);
+    assert.ok(notices[0].includes(s.child.title));
+    const accepted = await acceptFamily(s.parent.id, entries, acceptTask);
+    assert.equal(accepted.ok, false);
+    assert.deepEqual(accepted.completed, [s.parent.id]);
+    assert.equal(accepted.stoppedAt, s.child.id);
+    assert.equal((await updateTaskBase(s.child.id, git(s.childWs.path, "rev-parse", "HEAD"))).ok, true);
+    assert.equal((await acceptTask(s.child.id)).accepted, true);
+    console.log("✓ squash family notice predicts the pause, and baseline update permits child acceptance");
+  }
   {
     const s = await setup();
     await db.update(tasks).set({ mergeTargetBranch: null, worktreeStartCommit: null, baseTaskId: null }).where(eq(tasks.id, s.child.id));

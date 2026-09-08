@@ -38,3 +38,11 @@ export function familySelectionBlock(entries: BranchPlanEntry[], selected: Reado
   }
   return null;
 }
+
+export function familyAcceptanceNotices(entries: BranchPlanEntry[]): string[] {
+  return entries.flatMap(row => {
+    const dep = row.dependency;
+    const parent = dep?.state === "waiting" && entries.find(e => e.taskId === dep.taskId && e.stage !== "accepted" && e.strategy === "squash");
+    return parent ? [`「${parent.title}」将压缩合入；这条依赖链本次只能先合入父任务，随后暂停在「${row.title}」。请更新子分支基线并核对改动，再继续验收。`] : [];
+  });
+}

@@ -23,7 +23,7 @@ function Fixture() {
   return <main style={{ maxWidth: 920, padding: 32, margin: "auto" }}>
     <h1>父子任务验收验证</h1><p>独立临时仓库与数据库中的测试任务</p>
     <nav style={{ display: "flex", gap: 16, marginBottom: 24 }}>
-      {["case1-parent", "case1-child", "case2-child"].map(id => <a key={id} href={`?task=${id}`}>{id}</a>)}
+      {["case1-parent", "case1-child", "case2-child", "case3-parent", "case4-parent"].map(id => <a key={id} href={`?task=${id}`}>{id}</a>)}
     </nav>
     <h2>{task.title}</h2>
     <AcceptanceControls task={task} onTaskUpdated={setTask} notify={setNotice} />
