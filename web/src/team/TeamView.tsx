@@ -374,9 +374,9 @@ export function TeamView({
     && workers.length > 0
     && workers.every((worker) => worker.status === "done");
   const inspectorPolicy = useMemo(() => ({
-    stateKey: `team:${allWorkersComplete ? "complete" : "active"}`,
+    stateKey: `team:subagents:${allWorkersComplete ? "complete" : "active"}`,
     requiredTabId: "info",
-    defaultOpenTabIds: allWorkersComplete ? ["info", "review"] : ["info", "workers"],
+    defaultOpenTabIds: allWorkersComplete ? ["info", "review", "subagents"] : ["info", "workers", "subagents"],
     defaultActiveTabId: allWorkersComplete ? "review" : "workers",
   }), [allWorkersComplete]);
   const selectWorker = useCallback((taskId: string) => {
@@ -535,6 +535,7 @@ export function TeamView({
       contextKey={`team:${task.id}`}
       descriptors={TEAM_INSPECTORS}
       context={{
+        nativeWork: { items: conversation.items, status: task.status, loading: conversation.refreshing, error: conversation.error ?? conversation.traceError, onRetry: conversation.refetch },
         task,
         workers,
         groups: teamGroups,

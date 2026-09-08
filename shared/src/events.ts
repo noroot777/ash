@@ -9,6 +9,7 @@
 import type { AgentType, DuetConsensusBy, QuestionItem, Task, TaskStage, TaskStatus } from "./index.ts";
 import type { SessionRole } from "./session.ts";
 import type { ContextUsage, TokenUsage } from "./usage.ts";
+import type { NativeWorkEvent } from "./native-work.ts";
 
 // ── HITL gates (§7) ──────────────────────────────────────────────────────────
 export type GateName = "G1" | "G2"; // G2 is legacy, retained for historical events
@@ -24,7 +25,7 @@ export type GateAction =
 export type AgentEvent =
   | { kind: "thinking"; text: string }
   | { kind: "text"; text: string }
-  | { kind: "tool"; name: string; detail?: string }
+  | { kind: "tool"; name: string; detail?: string; nativeWork?: NativeWorkEvent }
   | { kind: "attachment"; path: string }
   | { kind: "session"; cliSessionId: string }
   // backend 旁注；时间与落盘 sentinel 共用，实时/刷新布局才不会漂。

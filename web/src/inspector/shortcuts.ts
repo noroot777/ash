@@ -1,12 +1,12 @@
 import { KEY_CHORD_TIMEOUT_MS, createKeyChordSequence } from "../lib/keyChord.ts";
 import type { KeyChordDecision } from "../lib/keyChord.ts";
 
-export type InspectorShortcutKey = "i" | "f" | "g" | "w" | "r" | "e";
+export type InspectorShortcutKey = "i" | "f" | "g" | "w" | "r" | "e" | "s";
 
 export const INSPECTOR_SHORTCUT_PREFIX = "i";
 export const INSPECTOR_SHORTCUT_TIMEOUT_MS = KEY_CHORD_TIMEOUT_MS;
 
-const SHORTCUT_KEYS = new Set<InspectorShortcutKey>(["i", "f", "g", "w", "r", "e"]);
+const SHORTCUT_KEYS = new Set<InspectorShortcutKey>(["i", "f", "g", "w", "r", "e", "s"]);
 
 export function inspectorShortcutLabel(key: InspectorShortcutKey): string {
   return `${INSPECTOR_SHORTCUT_PREFIX.toUpperCase()} ${key.toUpperCase()}`;

@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
+import { codexNativeWork } from "./native-work.js";
 import type { AgentEvent, TokenUsage } from "@ash/shared";
 import { cliConfigOverrideEnvPatch } from "@ash/shared/cli-overrides";
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
@@ -319,6 +320,9 @@ export async function* parseCodexStream(
     }
     lastEventType = codexEventType(ev);
     lastEventSummary = codexEventSummary(ev);
+    if (/^item\.(started|updated|completed)$/.test(ev.type)) {
+      for (const activity of codexNativeWork(ev.item)) push(activity);
+    }
     if (ev.type === "thread.started" && ev.thread_id) {
       threadId = ev.thread_id;
       push({ kind: "session", cliSessionId: ev.thread_id });
