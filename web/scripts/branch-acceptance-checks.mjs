@@ -30,6 +30,29 @@ export async function checkBranchAcceptance(page, fixtureUrl) {
   await page.getByRole("status").filter({ hasText: "旧任务仍合入父分支" }).waitFor({ state: "visible" });
   ensure(await page.getByRole("link", { name: "查看父任务", exact: true }).count() === 1, "legacy child has no parent link");
 
+  await go("case8-parent");
+  ensure(!await button("释放工作区目录（保留分支）").isEnabled(), "running parent release must be disabled");
+  await go("case7-parent");
+  await button("释放工作区目录（保留分支）").click();
+  await page.getByRole("dialog").getByRole("button", { name: "释放目录，保留分支", exact: true }).click();
+  await page.getByRole("dialog").getByRole("alert").filter({ hasText: "unsaved.txt" }).waitFor({ state: "visible" });
+  await page.getByRole("dialog").getByRole("button", { name: "取消", exact: true }).click();
+  await go("case6-parent");
+  await button("释放工作区目录（保留分支）").click();
+  const releaseDialog = page.getByRole("dialog");
+  ensure((await releaseDialog.innerText()).includes("保留父任务记录、分支及已提交的代码"), "release confirmation must explain retained data");
+  await releaseDialog.getByRole("button", { name: "取消", exact: true }).click();
+  ensure(await button("释放工作区目录（保留分支）").isEnabled(), "cancel must leave workspace available");
+  await button("释放工作区目录（保留分支）").click();
+  await releaseDialog.getByRole("button", { name: "释放目录，保留分支", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "父任务工作区目录已不存在" }).waitFor({ state: "visible" });
+  await go("case6-parent");
+  await page.getByRole("status").filter({ hasText: "父任务工作区目录已不存在" }).waitFor({ state: "visible" });
+  await go("case6-child");
+  await review().getByRole("button", { name: "验收通过", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "验收通过", exact: true }).click();
+  await review().getByText("验收完成", { exact: true }).waitFor({ state: "visible" });
+
   await go("case5-parent");
   await page.getByRole("region", { name: "派生与验收依赖" }).waitFor({ state: "visible" });
   ensure(await review().getByRole("button", { name: "放行，继续下一站" }).isEnabled(), "review mid-gate must allow release");

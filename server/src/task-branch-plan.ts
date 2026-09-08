@@ -126,7 +126,7 @@ export async function branchDependency(task: BranchTask, repo: string): Promise<
     if (!parent || branchRelationship(task, parent.id, branchName(target!)) !== "legacy") return null;
     // 旧任务直接合入父分支；ready 只代表无需等待父成果先进入另一条最终分支。
     return { taskId: parent.id, title: parent.title, state: "ready", legacyTarget: true,
-      message: `旧任务仍合入父分支 ${branchName(target!)}。请先单独处理并验收子任务，再验收父任务；父子统一验收不适用于这条旧关系。` };
+      message: `旧任务仍合入父分支 ${branchName(target!)}。若父工作区仍占用分支，请先在父任务的「派生与验收」中释放工作区目录（保留分支）；父任务执行中则先停止。释放后再验收子任务，最后继续完成并验收父任务。父子统一验收不适用于这条旧关系。` };
   }
   const parent = (await db.select().from(tasks).where(eq(tasks.id, task.baseTaskId))).at(0);
   const title = parent?.title ?? task.baseTaskId;

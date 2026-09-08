@@ -7,7 +7,7 @@ import { acceptPlan, isFinalHumanGate } from "@ash/shared/workflow-policy";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { branchDependency, branchName, branchRelationship, commitAt, plannedMergeTarget, type BranchTask } from "./task-branch-plan.js";
-import { localBranchExists, resolveWorktreeBranchName } from "./git.js";
+import { localBranchExists, resolveWorktreeBranchName, symbolicBranch } from "./git.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { acceptanceGuard } from "./task-accept-guard.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
@@ -19,6 +19,9 @@ import type { AcceptTaskResult } from "./task-accept.js";
 import { beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { now } from "./util.js";
+import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
+import { workspaceParticipants } from "./task-workspace.js";
+import { claimWorkspaceTurn, isTurnClaimed } from "./runs.js";
 
 async function entry(task: BranchTask, repo: string, fingerprintTarget?: string | null): Promise<BranchPlanEntry> {
   const target = await plannedMergeTarget(task, repo);
@@ -122,6 +125,42 @@ export async function acceptFamily(
 }
 
 export function mountBranchPlanRoutes(api: Hono, accept: Accept): void {
+  api.post("/tasks/:id/release-workspace", async c => {
+    if (IS_PREVIEW_INSTANCE) return c.json({ error: previewRefusal("释放工作区目录") }, 409);
+    const taskId = c.req.param("id");
+    const body = await c.req.json<{ fingerprint?: string }>();
+    if (typeof body?.fingerprint !== "string") return c.json({ error: "fingerprint required" }, 400);
+    if (!beginAccepting(taskId)) return c.json({ error: "任务正在验收或更新工作区，请稍后重试" }, 409);
+    try {
+      const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+      const project = task && (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
+      if (!task || !project) return c.json({ error: "任务或项目不存在" }, 404);
+      return await withRepoLock(project.repoPath, async () => {
+        const guard = await acceptanceGuard(taskId, "before_cleanup");
+        if (guard.failure) return c.json({ error: guard.failure.error }, 409);
+        const current = guard.task!;
+        if (!current.useWorktree) return c.json({ error: "只有独立工作区任务可以释放目录" }, 409);
+        if (await hasActiveFreeReview(taskId)) return c.json({ error: "审查仍在进行，请等审查结束后释放工作区" }, 409);
+        if ((await entry(current, project.repoPath)).fingerprint !== body.fingerprint) return c.json({ error: "任务或分支已变化，请刷新后重新确认" }, 409);
+        const workspace = await detectTaskWorkspace(project.repoPath, taskId);
+        if (!workspace.branch) return c.json({ error: "任务分支不存在，请先恢复分支再释放目录" }, 409);
+        if (!workspace.path) return c.json({ ok: true });
+        if (await symbolicBranch(workspace.path) !== workspace.branch) return c.json({ error: "工作区检出分支已变化，请先核对工作区" }, 409);
+        const peers = await workspaceParticipants(current, workspace.path);
+        if (peers.some(p => p.status === "running" || p.status === "queued" || isTurnClaimed(p.id))) return c.json({ error: "工作区仍有任务在执行，请先停止再释放" }, 409);
+        const release = claimWorkspaceTurn(peers.map(p => p.id));
+        if (!release) return c.json({ error: "工作区刚被其它任务占用，请稍后重试" }, 409);
+        try {
+          const result = await discardTaskWorkspace(project.repoPath, taskId, { worktree: true, branch: false, force: false });
+          if (!result.worktreeRemoved) return c.json({ error: result.worktreeError || "工作区未能释放，请刷新后重试" }, 409);
+          await db.update(tasks).set({ updatedAt: now() }).where(eq(tasks.id, taskId));
+          await appendTaskTimeline(taskId, `已释放工作区目录 ${workspace.path}，保留任务记录及分支 ${workspace.branch}；可继续处理合入这条分支的子任务。`);
+          await publishTaskUpdated(taskId);
+          return c.json({ ok: true });
+        } finally { release(); }
+      });
+    } finally { endAccepting(taskId); }
+  });
   api.post("/tasks/:id/merge-target", async c => {
     if (IS_PREVIEW_INSTANCE) return c.json({ error: previewRefusal("更改合入目标") }, 409);
     const taskId = c.req.param("id");

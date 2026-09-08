@@ -366,6 +366,7 @@ export const api = {
     throw apiError(response, body);
   },
   branchPlan: (taskId: string): Promise<BranchPlanView> => request(`/tasks/${id(taskId)}/branch-plan`),
+  releaseTaskWorkspace: (taskId: string, fingerprint: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/release-workspace`, json("POST", { fingerprint })),
   changeMergeTarget: (taskId: string, branch: string, fingerprint: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/merge-target`, json("POST", { branch, fingerprint })),
   updateTaskBase: (taskId: string, sourceCommit: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/update-base`, json("POST", { sourceCommit })),
   acceptFamily: async (taskId: string, entries: { taskId: string; fingerprint: string }[]): Promise<FamilyAcceptanceResult> => {

@@ -104,6 +104,13 @@ try {
     }
     const legacy = await setup();
     await db.update(tasks).set({ mergeTargetBranch: null, worktreeStartCommit: null, baseTaskId: null }).where(eq(tasks.id, legacy.child.id));
+    await db.update(tasks).set({ workflow: null, workflowMode: "free", status: "backlog" }).where(eq(tasks.id, legacy.parent.id));
+    const dirtyLegacy = await setup();
+    await db.update(tasks).set({ mergeTargetBranch: null, worktreeStartCommit: null, baseTaskId: null }).where(eq(tasks.id, dirtyLegacy.child.id));
+    writeFileSync(join(dirtyLegacy.parentWs.path, "unsaved.txt"), "keep my changes\n");
+    const runningLegacy = await setup();
+    await db.update(tasks).set({ mergeTargetBranch: null, worktreeStartCommit: null, baseTaskId: null }).where(eq(tasks.id, runningLegacy.child.id));
+    await db.update(tasks).set({ status: "running" }).where(eq(tasks.id, runningLegacy.parent.id));
     await s.newTask("unstarted", "main");
     const unreadable = await s.newTask("badstart", "main");
     await taskWorkspace(await row(unreadable.id), s.repo);
@@ -183,7 +190,7 @@ try {
     const family = await acceptFamily(s.parent.id, [view.task, ...view.descendants], acceptTask);
     assert.equal(family.ok, false);
     assert.deepEqual(family.completed, []);
-    assert.match(family.error!, /先单独处理并验收子任务/);
+    assert.match(family.error!, /释放工作区目录（保留分支）/);
     assert.equal(git(s.repo, "rev-parse", s.parentWs.branch!), s.parentCommit);
     const acceptBefore = await acceptTask(s.child.id);
     assert.equal(acceptBefore.accepted, false);
@@ -208,6 +215,54 @@ try {
     assert.equal((await acceptTask(s.parent.id)).accepted, true);
     assert.equal(git(s.repo, "show", "main:child.txt"), "child feature");
     console.log("✓ legacy child accepts after directory-only cleanup; record/ref, busy and pending-update protections remain");
+  }
+  {
+    const s = await setup();
+    await db.update(tasks).set({ mergeTargetBranch: null, worktreeStartCommit: null, baseTaskId: null }).where(eq(tasks.id, s.child.id));
+    await db.update(tasks).set({ workflow: null, workflowMode: "free", status: "backlog" }).where(eq(tasks.id, s.parent.id));
+    assert.equal((await acceptTask(s.parent.id)).accepted, false);
+    const release = async (fingerprint?: string) => api.request(`/tasks/${s.parent.id}/release-workspace`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ fingerprint: fingerprint ?? (await readBranchPlan(s.parent.id))!.task.fingerprint, force: true }),
+    });
+    for (const status of ["running", "queued"] as const) {
+      await db.update(tasks).set({ status }).where(eq(tasks.id, s.parent.id));
+      assert.equal((await release()).status, 409);
+    }
+    await db.update(tasks).set({ status: "backlog", archived: true }).where(eq(tasks.id, s.parent.id));
+    assert.equal((await release()).status, 409);
+    await db.update(tasks).set({ archived: false, baseUpdateIntent: "pending" }).where(eq(tasks.id, s.parent.id));
+    assert.equal((await release()).status, 409);
+    await db.update(tasks).set({ baseUpdateIntent: null }).where(eq(tasks.id, s.parent.id));
+    assert.equal(claimTurn(s.parent.id, "single"), true);
+    try { assert.equal((await release()).status, 409); } finally { releaseTurn(s.parent.id); }
+    const { beginAccepting, endAccepting } = await import("../src/acceptance-lock.js");
+    assert.equal(beginAccepting(s.parent.id), true);
+    try { assert.equal((await release()).status, 409); } finally { endAccepting(s.parent.id); }
+    const oldPlan = (await readBranchPlan(s.parent.id))!;
+    writeFileSync(join(s.parentWs.path, "unsaved.txt"), "keep my changes\n");
+    const dirty = await release();
+    assert.equal(dirty.status, 409);
+    assert.match((await dirty.json()).error, /unsaved.txt/);
+    assert.ok(existsSync(join(s.parentWs.path, "unsaved.txt")), "release has no force bypass");
+    const latestHead = commit(s.parentWs.path, "unsaved.txt", "saved parent changes\n");
+    assert.equal((await release(oldPlan.task.fingerprint)).status, 409, "changed head requires reconfirmation");
+    const released = await release();
+    assert.equal(released.status, 200);
+    assert.deepEqual(await released.json(), { ok: true });
+    assert.equal(existsSync(s.parentWs.path), false);
+    assert.equal((await row(s.parent.id)).status, "backlog", "release must not accept or finish the parent");
+    assert.equal(git(s.repo, "rev-parse", s.parentWs.branch!), latestHead);
+    assert.ok(git(s.repo, "rev-parse", `refs/ash/task-bases/${s.parent.id}`));
+    assert.equal((await release()).status, 200, "release is safe to repeat");
+    assert.equal((await acceptTask(s.child.id)).accepted, true);
+    const restored = await taskWorkspace(await row(s.parent.id), s.repo);
+    assert.equal(git(restored.path, "show", "HEAD:child.txt"), "child feature");
+    await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, s.parent.id));
+    assert.equal((await acceptTask(s.parent.id)).accepted, true);
+    assert.equal(git(s.repo, "show", "main:child.txt"), "child feature");
+    assert.equal(git(s.repo, "show", "main:unsaved.txt"), "saved parent changes");
+    console.log("✓ explicit workspace release unblocks a backlog parent's legacy child; busy, archived, claimed, pending, dirty and stale operations preserve the workspace");
   }
   {
     const s = await setup();

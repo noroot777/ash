@@ -5,6 +5,7 @@ import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { MergeTargetEditor } from "./MergeTargetEditor.tsx";
 import { useBranchPlan } from "./useBranchPlan.ts";
+import { ReleaseWorkspaceControl } from "./ReleaseWorkspaceControl.tsx";
 
 const taskHref = (projectId: string, taskId: string) => `/?${new URLSearchParams({ project: projectId, task: taskId })}`;
 
@@ -61,6 +62,9 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
         onChanged={async () => { await refresh(); if (onTaskUpdated) onTaskUpdated(await api.task(task.id)); }} />}
       {dep && <p role="status">{dep.message} {dep.taskId && <a href={taskHref(task.projectId, dep.taskId)}>查看父任务</a>}</p>}
       {dep?.state === "needs_update" && <button type="button" disabled={busy || (!!view.task.blocker && !view.task.baseUpdatePending) || task.stage === "accepted" || task.stage === "merged"} onClick={() => open("update")}>更新子分支基线</button>}
+      {descendants.some(row => row.dependency?.legacyTarget && row.dependency.taskId === task.id) && <ReleaseWorkspaceControl key={`release:${task.id}`} task={task}
+        disabled={busy || !!task.archived || task.handoff?.direction === "out" || view.task.baseUpdatePending || ["running", "queued"].includes(task.status)}
+        onReleased={async () => { await refresh(); if (onTaskUpdated) onTaskUpdated(await api.task(task.id)); }} />}
       {descendants.length > 0 && <>
         <p>可在这里按父子依赖顺序统一验收。勾选已核对的子任务；发生冲突时保留已完成的合并，并暂停后续步骤。</p>
         <ul>{descendants.map(row => <li key={row.taskId}>
