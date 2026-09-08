@@ -19,7 +19,7 @@ const servers: Server[] = [];
 
 try {
   const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
-  const { projects, tasks, users, projectMembers, handoffLocalPeerKeys } = await import("../src/db/schema.js");
+  const { projects, tasks, users, projectMembers, appSettings, handoffLocalPeerKeys, userHandoffTargets } = await import("../src/db/schema.js");
   const { eq } = await import("drizzle-orm");
   const { canonicalPingChallenge, fingerprintOf } = await import("../src/handoff-identity.js");
   const { mountHandoffRoutes } = await import("../src/handoff-routes.js");
@@ -161,6 +161,72 @@ try {
   await dbClient.executeMultiple("DROP TRIGGER fail_inline_key_delete;");
   await scope.setPeerKey(actor, historicalUrl, "");
 
+  const storedTargetsAndKeys = () => Promise.all([
+    db.select().from(appSettings).where(eq(appSettings.key, "handoffTargets")),
+    db.select().from(handoffLocalPeerKeys),
+    db.select().from(userHandoffTargets),
+  ]);
+  const assertOwnershipConflict = async () => {
+    const before = await storedTargetsAndKeys();
+    const seenBefore = seenCredentials.length;
+    const response = await save(newUrl);
+    assert.equal(response.status, 409, "旧地址目标未确认属于来源机时拒绝迁移");
+    assert.match(await response.text(), /归属冲突/);
+    assert.deepEqual(await storedTargetsAndKeys(), before, "归属冲突时所有目标和凭据原样保留");
+    assert.deepEqual(seenCredentials.slice(seenBefore), [undefined, undefined], "签名核对不发送凭据");
+    assert.equal(await scope.peerKeyForRequest(ownerIdOf(actor), newUrl), "", "其他机器的 key 不复制到新地址");
+    await withHandoffActor(ownerIdOf(actor), () => assert.rejects(
+      fetchPeer(`${newUrl}/api/handoff/import`, { method: "POST", body: "{}" }), /对端返回 401/,
+    ));
+    assert.equal(seenCredentials.length, seenBefore + 4, "实际出站请求已到达来源机");
+    assert.equal(seenCredentials.at(-2), undefined, "来源机实际收到的请求不带旧地址上其他机器的 key");
+  };
+  const otherTargets = Array.from({ length: 19 }, (_, i) => ({
+    name: `其他目标 ${i}`, url: `http://192.0.2.${i + 20}:4317`, peerFp: otherFingerprint,
+  }));
+  for (const occupiedUrl of [oldUrl, historicalUrl]) {
+    for (const peerFp of [null, otherFingerprint]) {
+      for (const count of [1, 20]) {
+        await patchAppSettings({ handoffTargets: [
+          { name: "现在占用旧 IP 的机器 B", url: `${occupiedUrl}/`, peerFp },
+          ...otherTargets.slice(0, count - 1),
+        ] });
+        await db.delete(handoffLocalPeerKeys);
+        await scope.setPeerKey(actor, occupiedUrl, "machine-b-account-key");
+        await assertOwnershipConflict();
+      }
+    }
+  }
+  await patchAppSettings({ handoffTargets: [
+    { name: "同指纹记录", url: oldUrl, peerFp: fingerprint },
+    { name: "未确认的重复记录", url: `${oldUrl}/`, peerFp: null },
+  ] });
+  await db.delete(handoffLocalPeerKeys);
+  await scope.setPeerKey(actor, oldUrl, "machine-b-account-key");
+  await assertOwnershipConflict();
+
+  await patchAppSettings({ handoffTargets: [
+    { name: "已确认的来源机", url: oldUrl, peerFp: fingerprint }, ...otherTargets,
+  ] });
+  await scope.setPeerKey(actor, oldUrl, "saved-inline-key");
+  assert.equal((await save(newUrl)).status, 200, "目标已满 20 条时，同指纹来源机仍可原地换址");
+  const fullTargets = await scope.listTargets(actor);
+  assert.equal(fullTargets.length, 20);
+  assert.deepEqual(fullTargets.filter((row) => row.peerFp !== fingerprint), otherTargets.map((row) => ({ ...row, hasKey: false })));
+  assert.deepEqual(fullTargets.find((row) => row.peerFp === fingerprint), {
+    name: "已确认的来源机", url: newUrl, peerFp: fingerprint, hasKey: true,
+  });
+  assert.equal(await scope.peerKeyForRequest(null, oldUrl), "");
+  assert.deepEqual(await fetchPeer(`${newUrl}/api/handoff/import`, { method: "POST", body: "{}" }), { ok: true });
+  assert.equal(seenCredentials.at(-2), "saved-inline-key", "确认同源后迁移的 key 仍可用于真实出站请求");
+
+  await db.insert(tasks).values({
+    id: "verified-address-history", projectId: "p", title: "Current address history", createdAt: at, updatedAt: at,
+    handoff: JSON.stringify({ ...marker, peerUrl: `${newUrl}/` }),
+  });
+  await patchAppSettings({ handoffTargets: [{ name: "待核对的新地址", url: newUrl, peerFp: null }] });
+  assert.equal((await save(newUrl)).status, 200, "新地址即使也在历史记录中，签名确认后仍可绑定其未配对目标行");
+
   const seedSingleDuplicates = async (newKey = "") => {
     await patchAppSettings({ handoffTargets: [
       { name: "旧来源地址", url: oldUrl, peerFp: fingerprint },
@@ -212,6 +278,10 @@ try {
   assert.equal((await scope.listTargets(actor))[0].id, aliceTarget.id, "多人模式编辑原目标行，不另建重复条目");
   assert.equal(await scope.peerKeyForRequest("alice", newUrl), "alice-test-key");
   assert.equal(await scope.peerKeyForRequest("alice", oldUrl), "");
+  for (const peerFp of [null, otherFingerprint]) {
+    await scope.patchTarget(actor, aliceTarget.id!, { url: oldUrl, peerFp, peerKey: "machine-b-account-key" });
+    await assertOwnershipConflict();
+  }
   const seedMultiDuplicates = async (newKey = "") => {
     for (const target of await scope.listTargets(actor)) if (target.id !== aliceTarget.id) await scope.deleteTarget(actor, target.id!);
     await scope.patchTarget(actor, aliceTarget.id!, { url: oldUrl, peerFp: fingerprint, peerKey: "source-key" });

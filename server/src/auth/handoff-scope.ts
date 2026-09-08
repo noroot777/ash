@@ -151,12 +151,20 @@ export async function saveVerifiedTargetAddress(
     }
     const merged = targets.filter(mergedTarget);
     const previous = merged.find(samePeer) ?? merged[0];
-    // 弹窗补填的 key 可以没有目标机行；同指纹任务的历史 URL 也属于本次迁移。
-    // 已在目标清单中绑定给另一指纹的旧 IP，则保留那台机器现在的凭据。
-    const historicalUrls = previousUrls.map(keyUrl).filter((url) => url && !targets.some(
-      (target) => sameUrl(target.url, url) && target.peerFp && !samePeer(target),
-    ));
-    const credentialUrls = new Set([keyUrl(source.url), ...merged.map((target) => keyUrl(target.url)), ...historicalUrls]);
+    // 弹窗补填的 key 可以没有目标机行；历史 URL 上现有目标行则可能属于后来占用旧 IP 的机器。
+    // 新地址刚通过签名核对；其余待迁移地址的凭据归属由全部目标行的指纹共同确认。
+    const credentialUrls = new Set([
+      keyUrl(source.url), ...merged.map((target) => keyUrl(target.url)), ...previousUrls.map(keyUrl),
+    ].filter(Boolean));
+    const conflictingTarget = targets.find((target) => !sameUrl(target.url, source.url)
+      && credentialUrls.has(keyUrl(target.url)) && !samePeer(target));
+    if (conflictingTarget) {
+      throw new HandoffError(
+        `旧地址 ${conflictingTarget.url} 的目标机归属冲突，无法确认其属于同一来源机器。原地址和账号 key 未修改。`
+        + "请在「设置 → 默认规则 → 任务接力」核对该目标机的地址和身份后重试。",
+        409,
+      );
+    }
     const credentials = new Set([
       ...merged.map((target) => target.peerKey), ...[...credentialUrls].map((url) => keys.get(url) ?? ""),
     ].filter(Boolean));
