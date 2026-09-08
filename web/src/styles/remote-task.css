@@ -11,6 +11,10 @@
 .remote-task-route.is-offline b,
 .remote-task-route.is-offline > svg { color: var(--red); }
 .remote-task-reply .task-reply-actions > span { margin-left: auto; }
+.remote-return-error { display: grid; gap: 7px; margin: 12px 14px; border: 1px solid color-mix(in lch, var(--red) 30%, var(--line)); border-radius: 8px; background: color-mix(in lch, var(--red) 5%, var(--panel)); padding: 12px; color: var(--red); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.remote-return-error p { margin: 0; white-space: pre-wrap; }
+.remote-return-error p:last-child { color: var(--muted); }
+.task-confirm-dialog > .remote-return-error { margin: 0; }
 @media (max-width: 720px) {
   .remote-task-route { grid-template-columns: 22px minmax(0, 1fr); }
   .remote-task-route > button { grid-column: 2; justify-self: start; }

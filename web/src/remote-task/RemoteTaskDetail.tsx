@@ -32,6 +32,7 @@ export function RemoteTaskDetail({
   const [sendError, setSendError] = useState<string | null>(null);
   const [returnOpen, setReturnOpen] = useState(false);
   const [returning, setReturning] = useState(false);
+  const [returnError, setReturnError] = useState<string | null>(null);
   // 能力握手拦下这次移回时的追问文案(非空 = 正在问「仍然移回吗」)。这个入口上没有
   // 接力弹窗那样的勾选框,所以拒绝必须能就地变成一次确认 —— 否则用户只能反复吃同一句
   // 「勾选「仍然接力」」,而界面上根本没有那个框(第 1 轮审查)。
@@ -68,6 +69,12 @@ export function RemoteTaskDetail({
     return () => window.clearInterval(timer);
   }, [refresh]);
 
+  useEffect(() => {
+    setReturnError(null);
+    setReturnOpen(false);
+    setCapabilityBlock(null);
+  }, [archive.id, target.url]);
+
   const task = snapshot?.task ?? archive;
   const items = useMemo(() => buildConversationItems(snapshot?.persisted ?? [], snapshot?.sessions ?? [], timeline), [snapshot, timeline]);
   const canReply = task.mode === "single" || task.mode === "team";
@@ -100,6 +107,7 @@ export function RemoteTaskDetail({
   const returnHome = async (ignoreCapabilityGaps = false) => {
     if (returning) return;
     setReturning(true);
+    setReturnError(null);
     try {
       const result = await api.remoteTaskReturn(archive.id, target.url, { ignoreCapabilityGaps });
       setReturnOpen(false);
@@ -113,12 +121,20 @@ export function RemoteTaskDetail({
         setReturnOpen(false);
         setCapabilityBlock(message);
       } else {
-        notify(message);
+        setReturnError(message);
       }
     } finally {
       setReturning(false);
     }
   };
+
+  const returnFailure = returnError && (
+    <div className="remote-return-error" role="alert">
+      <strong>移回未完成</strong>
+      <p>{returnError}</p>
+      <p>移回需要「{target.name}」主动连接本机。若提示连接失败，请确认本机 ash 正在运行，且来源地址能从对端访问；能查看远程会话不代表回程连通。</p>
+    </div>
+  );
 
   return (
     <div className="task-detail remote-task-detail">
@@ -141,6 +157,8 @@ export function RemoteTaskDetail({
           <button type="button" onClick={() => setReturnOpen(true)}>移回本机…</button>
         )}
       </section>
+
+      {!returnOpen && !capabilityBlock && returnFailure}
 
       <div className="task-detail-body">
         <section className="task-detail-main" aria-label="远程任务会话">
@@ -195,11 +213,13 @@ export function RemoteTaskDetail({
           title="把任务移回本机？"
           message={`任务将从「${target.name}」接力回本机，远端列表中的这条任务随后会消失。`
             + (isAcceptedStage(task.stage) ? "它已经验收完成：移回后不会自动续跑。" : "")}
-          confirmLabel="移回本机"
+          confirmLabel={returnError ? "重试移回" : "移回本机"}
           busy={returning}
           onConfirm={() => void returnHome()}
           onClose={() => { if (!returning) setReturnOpen(false); }}
-        />
+        >
+          {returnFailure}
+        </ConfirmDialog>
       )}
 
       {capabilityBlock && (
@@ -207,11 +227,13 @@ export function RemoteTaskDetail({
           title="本机跑不动这个任务的执行器"
           message={`${capabilityBlock}\n\n仍然移回的话，任务会回到本机，但直接运行会失败；`
             + "先在本机装上它要用的智能体，或者移回后把任务改成本机有的再运行。"}
-          confirmLabel="仍然移回"
+          confirmLabel={returnError ? "仍然重试移回" : "仍然移回"}
           busy={returning}
           onConfirm={() => void returnHome(true)}
           onClose={() => { if (!returning) setCapabilityBlock(null); }}
-        />
+        >
+          {returnFailure}
+        </ConfirmDialog>
       )}
     </div>
   );
