@@ -66,16 +66,14 @@ async function startFreePreview(taskId: string) {
     };
     const result = await startPreview(taskId, step, workspace.path, gen);
     if (!result.ok) throw new Error(result.reason);
-    // **起来了不等于还是我们的。** 从这里到 200 之间还有一个 await（写时间线），重跑回收
-    // 完全可能落在这条缝里：进程被杀、记录被删、任务已经 running，而这一趟手里攥着的还是
-    // 那份旧 record。就那么返回，用户会收到一句「预览已打开」外加一个已经死掉的地址（前端
-    // 拿 200 就 window.open），比直接说没起来还糟。
+    // **起来了不等于还是我们的。** 从这里到 200 之间还有一个 await（写时间线），用户点的
+    // 关闭、重跑回收都可能落在这条缝里：进程被杀、记录被删，而这一趟手里攥着的还是那份旧
+    // record。就那么返回，用户会收到一句「预览已打开」外加一个已经死掉的地址（前端拿 200
+    // 就 window.open），比直接说没起来还糟。
     //
-    // 认的是**盘上那条记录还是不是我们这一代**，不是内存里的取消标记：`startPreview` 收尾
-    // 时已经把这一代从 starting 里撤了，之后谁来取消（用户关闭、重跑回收）都标不到它，只
-    // 会把记录删掉 —— 记录没了就是「成果已经被人收走了」。再问一次开跑那道门，管的是
-    // 「记录刚被收、状态还没落库」那条缝。
-    const mine = () => readPreview(taskId)?.gen === gen && !rerunGateClosed(taskId);
+    // 三样一起认：代号还在（没被取消）、盘上那条记录还是我们这一代、开跑那道门没关上
+    // （管的是「记录刚被收、状态还没落库」那条缝）。
+    const mine = () => !previewStartCanceled(gen) && readPreview(taskId)?.gen === gen && !rerunGateClosed(taskId);
     if (!mine()) throw new Error(PREVIEW_CANCELED);
     // 预览只是「随手开一眼」：时间线留一行让刷新后仍看得见，但不进「实际工作流」那条
     // 线——开关预览不改变任务本身走到了哪一步。命令是哪儿来的也写上：填过的那条跑错了

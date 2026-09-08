@@ -448,7 +448,12 @@ export async function startPreview(
   try {
     return await runPreview(taskId, step, cwd, gen);
   } finally {
-    endDriving(taskId, gen);
+    // **别替外层收摊。** 代号是外层登记的，它的一生要跟着那次 HTTP 请求走，不是跟着
+    // 「服务起没起来」走：起来之后外层还要写一笔时间线才应答，那一段照样是可取消的
+    // （用户点关闭，进程和记录都收得掉）。这里如果顺手 endDriving，撤掉的是外层挂在这
+    // 一代上的取消收口 —— 于是关闭成功了、快照也说没在跑，验收/派审却还被那把没人放的
+    // 动作锁挡着，直到原请求自己从时间线那一步醒过来。谁登记谁撤（endPreviewStart）。
+    if (registered === undefined) endDriving(taskId, gen);
   }
 }
 

@@ -804,6 +804,72 @@ try {
     assert.equal(tailTask?.status, "running", "状态最终没落成 running");
   }
 
+  // 同一条尾巴上，**用户自己点的关闭**也得当场收干净。预览起来了、路由还在写那笔时间线，
+  // 这一刻的关闭在盘上完全生效（进程杀掉、记录删掉、刷新后也确实没预览），可代号如果已经
+  // 被内层交接时撤掉，挂在它上面的「提前放动作锁」就再也不会响：用户看到的是关闭成功，
+  // 验收/派审却还被一个已经作废的请求的锁挡着，直到它自己从时间线那一步醒过来 —— 那一步
+  // 是真的文件 I/O，磁盘或挂载出问题时可以拖到没边。
+  {
+    const cancelId = "tail-cancel-task";
+    await createTasks([{
+      id: cancelId, projectId: "p-git", groupId: null, parentId: null,
+      title: "preview tail cancel", body: "test", mode: "single", status: "done",
+      labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
+      executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
+      duet: null, team: null, reportBack: false, scheduleId: null,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      useWorktree: false, worktreeBase: null, originTaskId: null, workflowMode: "free",
+    }]);
+    const cancelSession = "tail-cancel-session";
+    await db.insert(sessions).values({
+      id: cancelSession, taskId: cancelId, role: "lead", agentType: "codex",
+      executor: "codex@test", startedAt: new Date().toISOString(),
+    });
+    const cancelFifo = sessionTranscriptPath(cancelId, cancelSession);
+    mkdirSync(dirname(cancelFifo), { recursive: true });
+    rmSync(cancelFifo, { force: true });
+    execFileSync("mkfifo", [cancelFifo]);
+
+    const cancelRecord = join(root, "runs", cancelId, "preview.json");
+    const cancelPosting = api.request(`/tasks/${cancelId}/free-workflow/preview`, { method: "POST" });
+    await waitFor(() => {
+      if (!existsSync(cancelRecord)) return false;
+      return (JSON.parse(readFileSync(cancelRecord, "utf8")) as { state: string }).state === "ready";
+    }, "预览没能起来，这一段就不是「已就绪、只差应答」了", 90_000);
+    const cancelPid = (JSON.parse(readFileSync(cancelRecord, "utf8")) as { pid: number }).pid;
+    assert.ok(cancelPid > 0, "就绪记录里没有进程号，后面没法验证进程有没有被收掉");
+
+    // 会话删掉，关闭自己那笔时间线就不会跟着堵在同一条 FIFO 上（堵住的只剩这一趟 POST）。
+    await db.delete(sessions).where(eq(sessions.id, cancelSession));
+    const closed = await api.request(`/tasks/${cancelId}/free-workflow/preview`, { method: "DELETE" });
+    assert.equal(closed.status, 200, "预览已经起来了，关闭却被挡回去了");
+    assert.deepEqual(await closed.json(), { stopped: true }, "关闭没真的把它收掉");
+    const closedShape = await api.request(`/tasks/${cancelId}/free-workflow`)
+      .then((response) => response.json()) as { preview: { running: boolean; starting: boolean } };
+    assert.equal(closedShape.preview.running, false, "关掉了，快照还说预览在跑");
+    assert.equal(closedShape.preview.starting, false, "关掉了，快照还说它正在启动");
+    const closedAgain = await api.request(`/tasks/${cancelId}/free-workflow/preview`, { method: "DELETE" });
+    assert.deepEqual(await closedAgain.json(), { stopped: false }, "同一次预览被反复「停到」");
+    // 这条是本段的要害：关闭**当场**就得把动作锁放掉，不能让验收/派审陪那个已经作废的
+    // 请求等到它写完时间线。
+    assert.equal(
+      tryAcquireFreeWorkflowAction(cancelId), true,
+      "关闭已经生效、快照也说没在跑，动作锁却还攥在那次作废的启动手里（验收/派审全被 409 挡住）",
+    );
+    releaseFreeWorkflowAction(cancelId);
+
+    drainFifo(cancelFifo);
+    const cancelPost = await cancelPosting;
+    assert.equal(cancelPost.status, 409, "关掉之后这一趟还是宣告「预览已打开」");
+    assert.match(
+      ((await cancelPost.json()) as { error: string }).error, /取消/,
+      "挡是挡住了，但没说清这一趟是被关掉的",
+    );
+    stopDrainingFifo?.();
+    const stillAlive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    await waitFor(() => !stillAlive(cancelPid), "关掉之后预览进程还活着，端口还占着");
+  }
+
   const review = await api.request("/tasks/free-task/free-workflow/review", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1 }),
