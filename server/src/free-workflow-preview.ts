@@ -13,10 +13,15 @@ import { resolvePreviewCommand } from "./preview-command.js";
 import { isTurnClaimed } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
-import { readPreview, readPreviewLog, isPreviewStarting, startPreview, stopPreview, type PreviewStep } from "./preview.js";
+import { readPreview, readPreviewLog, isPreviewStarting, startPreview, stopPreview, beginPreviewStart, endPreviewStart, previewStartCanceled, PREVIEW_CANCELED, type PreviewStep } from "./preview.js";
 
 async function startFreePreview(taskId: string) {
   if (!tryAcquireFreeWorkflowAction(taskId)) throw new Error("当前已有自由工作流操作正在进行");
+  // **可取消从这一行开始。** 下面查任务、查项目、解析/新建工作区全是 await，第一次开预览
+  // 时建 worktree 更是要花时间；代号如果等进了 startPreview 才注册，这一整段就是取消不掉的
+  // 黑窗口——用户点的取消什么也标不到，只会收到「预览已经不在跑了」，然后这一趟照常把预览
+  // 起起来（见 preview.ts 的 beginPreviewStart）。同步注册，中间不能有 await。
+  const gen = beginPreviewStart(taskId);
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task || task.workflowMode !== "free" || task.mode !== "single" || task.parentId || task.reviewOf) {
@@ -30,6 +35,9 @@ async function startFreePreview(taskId: string) {
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
     if (!project) throw new Error("项目不存在");
     const workspace = await taskWorkspace(task, project.repoPath);
+    // 工作区这一段最长（要建 worktree、可能还在等同仓库的写锁），取消八成落在这儿：
+    // 到这个检查点就收摊，别再往下认命令、更别起进程。
+    if (previewStartCanceled(gen)) throw new Error(PREVIEW_CANCELED);
     const { command, source } = resolvePreviewCommand(workspace.path, project.previewCommand);
     // 就绪判据只认「端口真的连得上」。**不能**再加一条「日志里说了 ready」：READY_WORDS
     // 那张表（ready / listening / compiled…）是照 Node dev server 的说法写的，Django 印的是
@@ -41,7 +49,7 @@ async function startFreePreview(taskId: string) {
       p: { cmd: command, mode: "frontend", ready: "port", life: "task" },
       fail: null,
     };
-    const result = await startPreview(taskId, step, workspace.path);
+    const result = await startPreview(taskId, step, workspace.path, gen);
     if (!result.ok) throw new Error(result.reason);
     // 预览只是「随手开一眼」：时间线留一行让刷新后仍看得见，但不进「实际工作流」那条
     // 线——开关预览不改变任务本身走到了哪一步。命令是哪儿来的也写上：填过的那条跑错了
@@ -53,6 +61,7 @@ async function startFreePreview(taskId: string) {
     bus.publish({ type: "task.review", taskId });
     return result.record;
   } finally {
+    endPreviewStart(taskId, gen);
     releaseFreeWorkflowAction(taskId);
   }
 }

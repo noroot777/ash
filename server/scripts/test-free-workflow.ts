@@ -15,6 +15,18 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
+const sleep = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
+
+/** 等一个条件成真（用在真实路由 + 真实仓库锁那一段：时序靠等，不靠猜固定毫秒）。 */
+async function waitFor(check: () => boolean | Promise<boolean>, message: string, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await check()) return;
+    await sleep(50);
+  }
+  assert.fail(message);
+}
+
 try {
   const { ensureSchema, db, dbClient } = await import("../src/db/index.js");
   const { agents, freeReviewRounds, freeReviewRuns, freeWorkflowStates, projects, sessions, tasks } = await import("../src/db/schema.js");
@@ -38,6 +50,7 @@ try {
   } = await import("../src/free-workflow-events.js");
   const { claimTurn } = await import("../src/runs.js");
   const { prepareWorktree } = await import("../src/git.js");
+  const { withRepoLock } = await import("../src/repo-lock.js");
   const { mountReviewerProfileRoutes } = await import("../src/reviewer-profiles.js");
   const { mountTaskRoutes } = await import("../src/task-routes.js");
   const { mountTaskStageRoutes } = await import("../src/task-stage.js");
@@ -478,6 +491,77 @@ try {
     assert.equal(canceled.status, 200, "启动请求还挂着的时候，关闭预览被锁挡回去了（用户点不到取消）");
     assert.deepEqual(await canceled.json(), { stopped: true }, "关闭应当真的把那条启动记录收掉");
     assert.equal(existsSync(join(runsDir, "preview.json")), false, "记录还在，说明只是嘴上说停了");
+  }
+
+  // 取消得从**路由的第一行**就管用。走到 startPreview 之前还有一长串 await：查任务、查
+  // 项目、解析或新建工作区（第一次开预览要建 worktree，还可能在等同仓库的写锁）。代号
+  // 如果等进了 startPreview 才注册，这一整段就是取消不掉的黑窗口 —— 用户点的取消什么也
+  // 标不到，只收到一句「预览已经不在跑了」，然后这一趟照常建工作区、照常起服务、照常
+  // 上线，而且此后没有任何一处会再去关它。
+  //
+  // 这里用真路由复现：仓库锁先被别人握着，POST 就定格在 prepareWorktree 上，取消落在这一段。
+  {
+    const marker = join(root, "preview-ran.txt");
+    const script = join(root, "preview-server.mjs");
+    writeFileSync(script, [
+      'import { writeFileSync } from "node:fs";',
+      'import http from "node:http";',
+      `writeFileSync(${JSON.stringify(marker)}, "ran");`,
+      'http.createServer((_q, res) => res.end("ok")).listen(Number(process.env.PORT));',
+      "",
+    ].join("\n"));
+    await db.update(projects).set({ previewCommand: `node ${script}` }).where(eq(projects.id, "p-git"));
+    await createTasks([{
+      id: "preview-early-cancel", projectId: "p-git", groupId: null, parentId: null,
+      title: "preview early cancel", body: "test", mode: "single", status: "done",
+      labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
+      executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
+      duet: null, team: null, reportBack: false, scheduleId: null,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      useWorktree: true, worktreeBase: "main", originTaskId: null, workflowMode: "free",
+    }]);
+
+    let releaseRepo = () => {};
+    let repoLocked = false;
+    const repoHeld = withRepoLock(repo, () => new Promise<void>((resolve) => {
+      repoLocked = true;
+      releaseRepo = resolve;
+    }));
+    // 锁真的到手了再发 POST，否则它可能抢在前面自己拿到锁、根本不会停在工作区那一步。
+    await waitFor(() => repoLocked, "仓库锁没拿到，这一段就不是「工作区准备中」了");
+    const post = api.request("/tasks/preview-early-cancel/free-workflow/preview", { method: "POST" });
+    // 界面在这一段就该看得到「正在启动、可以取消」——它读的正是这次登记下来的代号。
+    await waitFor(async () => {
+      const snapshot = await api.request("/tasks/preview-early-cancel/free-workflow")
+        .then((response) => response.json()) as { preview: { starting: boolean } };
+      return snapshot.preview.starting;
+    }, "工作区还在准备时，快照里看不出「正在启动」——那一段就没有任何入口能取消");
+    assert.equal(
+      existsSync(join(root, "runs", "preview-early-cancel", "preview.json")), false,
+      "这一刻盘上本来就还没有记录（正是老实现取消不掉的原因）",
+    );
+
+    const stop = await api.request("/tasks/preview-early-cancel/free-workflow/preview", { method: "DELETE" });
+    assert.equal(stop.status, 200, "启动请求还卡在工作区准备时，关闭被挡回去了");
+    assert.deepEqual(await stop.json(), { stopped: true }, "工作区还在准备时点的取消，接口却说没东西可停");
+
+    releaseRepo();
+    await repoHeld;
+    const response = await post;
+    assert.equal(response.status, 409, "取消之后这一趟还是把预览起起来了");
+    assert.match(
+      ((await response.json()) as { error: string }).error, /取消/,
+      "起预览这一路失败了，却没说清是被取消的",
+    );
+    assert.equal(existsSync(marker), false, "取消之后预览命令还是跑起来了（没人再去关它）");
+    assert.equal(
+      existsSync(join(root, "runs", "preview-early-cancel", "preview.json")), false,
+      "取消之后仍然写出了启动记录",
+    );
+    assert.equal(
+      existsSync(join(root, "runs", "preview-early-cancel", "preview.log")), false,
+      "取消之后仍然走进了 runPreview（日志头都写出来了）",
+    );
   }
 
   const review = await api.request("/tasks/free-task/free-workflow/review", {

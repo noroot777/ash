@@ -79,7 +79,8 @@ const IDLE_LIFE_MS = 30 * 60_000;
 const SWEEP_MS = 5 * 60_000;
 const UNSAFE_SCHEDULER_LOG = "[ash] scheduler started";
 /** 这一趟启动被人收掉了。三条路（关闭预览 / 任务重新开跑 / 清扫）说的是同一件事。 */
-const CANCELED = "预览启动被取消（关闭预览 / 任务重新开跑 / ash 重启）";
+export const PREVIEW_CANCELED = "预览启动被取消（关闭预览 / 任务重新开跑 / ash 重启）";
+const CANCELED = PREVIEW_CANCELED;
 
 // 「端口撞车怎么认、日志里哪个地址才是预览本尊、认出来说什么」都在 preview-log.ts
 //（纯函数，回归 test:preview-log）；「连不连得上、算不算起来了」在 preview-probe.ts
@@ -367,6 +368,36 @@ export type PreviewResult =
   | { ok: true; record: PreviewRecord }
   | { ok: false; reason: string };
 
+/**
+ * **在任何 await 之前**把「这个任务正在起预览」登记下来，拿到代号。
+ *
+ * 起预览的路由在走到 startPreview 之前还有一长串 await：查接力状态、查任务和项目、
+ * **解析或新建任务工作区**（第一次开预览时这一步要建 worktree，不快）、认预览命令。
+ * 代号如果等进了 startPreview 才注册，这一整段就是个取消不掉的黑窗口：用户点的取消
+ * 在盘上读不到记录、在内存里也标不到代，只能回一句「预览已经不在跑了」——然后原来那趟
+ * 照常建工作区、照常起服务、照常上线。用户明明按过停止，最后还是等来了一个他不要的
+ * 预览，而且这次没有任何一处会再去关它。
+ *
+ * 所以「可取消」从**路由的第一行**开始：拿到代号，中间每过一段 await 就用
+ * `previewStartCanceled` 问一句，代号被标了就地收摊；最后把这同一个代号交给
+ * startPreview，落盘那一段接着用它（见 canceledGens）。
+ */
+export function beginPreviewStart(taskId: string): string {
+  const gen = randomUUID();
+  beginDriving(taskId, gen);
+  return gen;
+}
+
+/** 这一趟到此为止（不管是取消、失败还是正常收尾）：撤掉登记。幂等，可以重复调。 */
+export function endPreviewStart(taskId: string, gen: string): void {
+  endDriving(taskId, gen);
+}
+
+/** 这一趟被人取消了吗 —— 路由每过一段 await 就问一次。 */
+export function previewStartCanceled(gen: string): boolean {
+  return canceledGens.has(gen);
+}
+
 // 起一个预览。cwd 由调用方给（任务自己的工作区），因为「在哪儿跑」是工作区的事，
 // 不该在这里第二次推导。
 //
@@ -376,13 +407,18 @@ export async function startPreview(
   taskId: string,
   step: PreviewStep,
   cwd: string,
+  /**
+   * 调用方已经用 `beginPreviewStart` 登记过的代号。传了就沿用它——**不能另起一个**：
+   * 用户在工作区那一段点的取消标的是那一个，这里换个新代号等于把它甩掉。
+   */
+  registered?: string,
 ): Promise<PreviewResult> {
   // 代号在这儿生成而不是在里面：进出内存表和写盘记录用的必须是同一个，否则「谁在驱动
   // 这一代」就对不上（见 starting）。
-  const gen = randomUUID();
+  const gen = registered ?? randomUUID();
   // **同步**注册，中间一个 await 都不能有：界面上那颗取消从 POST 发出那一刻就能点，
   // 而 stopPreview 只有看得见这一代才停得掉它（见 canceledGens）。
-  beginDriving(taskId, gen);
+  if (registered === undefined) beginDriving(taskId, gen);
   try {
     return await runPreview(taskId, step, cwd, gen);
   } finally {
@@ -638,16 +674,27 @@ async function stopPreviewExcept(
  */
 export async function stopPreviewAtAccept(taskId: string): Promise<void> {
   const record = readAnyPreview(taskId);
-  if (!record) return;
+  // 记录还没落盘、内存里已经有启动代的那一段同样要收：验收之后工作区就不归这个任务了，
+  // 让那一趟接着起来等于往一个已经交出去的检出里塞进程。这一段还没有 life 可读，按
+  // 「验收完就该收」处理。
+  if (!record) {
+    if (starting.has(taskId)) await stopPreview(taskId, "任务已验收完成");
+    return;
+  }
   if (record.life === "gate") await stopPreview(taskId, "人工关口已结束");
   else if (record.life === "task") await stopPreview(taskId, "任务已验收完成，按线上写的「任务结束时回收」收掉");
 }
 
 /** 任务又开跑了：预览指向的是上一版代码，一律收掉，免得对着旧页面验新改动。 */
 export async function stopPreviewOnRerun(taskId: string): Promise<void> {
-  // readAnyPreview：正在启动的那一趟更得收 —— 它上线的时候任务已经在改下一版代码了，
-  // 留着它就是让用户对着上一版验新改动，而这正是这个函数唯一要防的事。
-  if (readAnyPreview(taskId)) await stopPreview(taskId, "任务重新开跑，旧预览指向的是上一版代码");
+  // **不设门禁。** 这里曾经拿 `readAnyPreview` 当开关，漏掉的正是「内存里已经有启动代、
+  // 盘上还没有记录」那一段：任务从 done 重新开跑得足够快时（自动推进、连点重跑），上一版
+  // 的预览此刻正在冷启动，`readAnyPreview` 却读不到东西，于是这一下什么也没停——几十秒后
+  // 它照常上线，用户对着上一版代码验新改动，而这正是本函数唯一要防的事。
+  //
+  // 直接调 stopPreview 是安全的：它本身幂等，既没有记录、内存里也没有在启动的代时，
+  // 它什么都不做，也不会往时间线写字。
+  await stopPreview(taskId, "任务重新开跑，旧预览指向的是上一版代码");
 }
 
 // 清扫：进程早死了的记录、以及 idle30 那一档到点的。启动时先扫一遍，之后每 5 分钟一次

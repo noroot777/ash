@@ -529,6 +529,23 @@ try {
       "取消之后仍然写出了启动记录（写了就没人再去关它）",
     );
 
+    // ④a2 **任务重新开跑那一路，同样得摁在落盘之前。** 上面那条走的是「用户点关闭」，
+    //      这条走的是 stopPreviewOnRerun：任务从 done 再次开跑（自动推进、连点重跑）时，
+    //      上一版的预览完全可能还在冷启动。这一路曾经拿「盘上有没有记录」当门禁，读不到
+    //      就直接返回 —— 于是几十秒后那趟照常上线，用户对着上一版代码验新改动，而这正是
+    //      这个函数唯一要防的事。
+    const rerunWt = join(repo2, ".worktrees", "early-rerun-wt");
+    mkdirSync(rerunWt, { recursive: true });
+    const rerunStart = startPreview("early-rerun-task", cancelStep as never, rerunWt); // 不等记录出现
+    await stopPreviewOnRerun("early-rerun-task");
+    const rerunResult = await rerunStart;
+    assert.equal(rerunResult.ok, false, "任务已经在改下一版代码了，上一版的预览还是起起来了");
+    assert.equal(readPreview("early-rerun-task"), null, "重新开跑之后又冒出一条「运行中」的记录");
+    assert.equal(
+      existsSync(join(root, "runs", "early-rerun-task", "preview.json")), false,
+      "重新开跑之后仍然写出了启动记录（写了就没人再去关它）",
+    );
+
     // ④b **装依赖那一段也得摁得死。** 它能跑满六分钟，而那六分钟里 pid 不落盘的话，
     //     「关闭预览」只是删了条记录：包管理器还在后台跑，项目自己的 preinstall/postinstall
     //     （用户仓库里什么都可能有）也还在跑，任务续跑那一路更糟——新一轮已经在改同一个
