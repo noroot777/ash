@@ -480,6 +480,7 @@ export async function exportHandoff(
           autoTitle: task.autoTitle, useWorktree: task.useWorktree, worktreeBase: task.worktreeBase,
           worktreeStartCommit: task.worktreeStartCommit, mergeTargetBranch: task.mergeTargetBranch,
           baseTaskId: task.baseTaskId, acceptedSourceCommit: task.acceptedSourceCommit,
+          creationOrigin: task.creationOrigin,
           workflow: task.workflow, workflowMode: task.workflowMode, workflowAt: task.workflowAt,
           reviewStep: task.reviewStep, verifyRounds: task.verifyRounds, verifyStationRounds: task.verifyStationRounds,
           resumePrompt: task.resumePrompt, question: task.question,

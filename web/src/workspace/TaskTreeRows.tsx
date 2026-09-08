@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import type { ProjectView, TaskListItem } from "@ash/shared";
 import { statusCounts, workersOf } from "@ash/shared/team";
 import { CaretRight, ChatsCircle, PaperPlaneTilt, Star, UsersThree } from "@phosphor-icons/react";
-import { OriginTaskChip, taskParentLink } from "../components/TaskOrigin.tsx";
+import { OriginTaskChip, TaskCreationBadge, taskParentLink } from "../components/TaskOrigin.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api } from "../lib/api.ts";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
@@ -174,6 +174,7 @@ export function TaskRow({
       >
         {project && <TaskProjectBadge project={project} />}
         <span className="workspace-task-title">{task.title || "未命名任务"}</span>
+        <TaskCreationBadge task={task} />
         {hasMeta && (
           <span className="workspace-task-meta">
             {task.mode === "duet" && <ChatsCircle size={12} weight="bold" className="workspace-task-kind" aria-label="讨论" />}

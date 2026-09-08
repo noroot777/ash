@@ -392,6 +392,7 @@ export interface Task {
   workflowAt?: string | null;
   // Backlink used by duet ↔ team derivation chains.
   originTaskId?: string | null;
+  creationOrigin?: import("./task-origin.ts").TaskCreationOrigin | null;
   // §Pause 检查点续跑指令；非空时结算 paused，恢复后清空。
   resumePrompt?: string | null;
   // 就地验证轮的轮次号；非空 = 这一轮验证还没出结论。任务此刻多半没有进程在跑

@@ -25,6 +25,7 @@ import { executorDowngradePreflight } from "./auth/dispatch-gate.js";
 import { inheritOwner } from "./auth/run-env.js";
 import { branchDeletionBlock, deleteTaskBranchRefs } from "./task-branch-plan.js";
 import { withRepoLock } from "./repo-lock.js";
+import { requestTaskCreationOrigin } from "./task-creation-origin.js";
 
 // 任务行删除时连关联状态一起收：自由审查链(run/round)、预约槽、事件、排队/定时消息、
 // 随手记回链。没有 FK cascade,只删任务行会留下孤儿——审查实测:等答复的审查在任务
@@ -309,6 +310,7 @@ api.post("/tasks", async (c) => {
     worktreeBase: b.worktreeBase ?? null,
     mergeTargetBranch: b.mergeTargetBranch ?? null,
     originTaskId: b.originTaskId ?? null,
+    creationOrigin: await requestTaskCreationOrigin(c),
     // createTasks 把它换成 tasks.workflow 里的快照（起手式是快照不是引用）。
     // 就地改过的线已经是快照了,直接落 workflow,createTasks 不会再去库里查。
     workflowId: b.workflowId ?? null,

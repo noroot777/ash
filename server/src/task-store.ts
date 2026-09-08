@@ -14,6 +14,7 @@ import { resolveWorkflowDef } from "./workflows.js";
 import { isMultiUser } from "./auth/mode.js";
 import { settingsFor } from "./auth/personal-settings.js";
 import { profilesOwnedBy, type ExecutorProfileRow } from "./auth/owned-executors.js";
+import { parseTaskCreationOrigin } from "@ash/shared/task-origin";
 
 export type TaskRow = typeof tasks.$inferSelect;
 // workflowId 不是列：它是**创建那一刻**用来挑起手式的 id，落库时会被换成 tasks.workflow
@@ -106,6 +107,7 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   workflowMode: r.workflowMode as Task["workflowMode"],
   workflowAt: r.workflowAt ?? null,
   originTaskId: r.originTaskId ?? null,
+  creationOrigin: parseTaskCreationOrigin(r.creationOrigin),
   resumePrompt: r.resumePrompt ?? null,
   verifyRound: r.verifyRound ?? null,
   question: r.question ?? null,
@@ -243,6 +245,7 @@ export async function createTasks(
     const { workflowId, ...rest } = row;
     return {
       ...rest,
+      creationOrigin: row.creationOrigin === undefined ? JSON.stringify({ kind: "system" }) : row.creationOrigin,
       useWorktree,
       worktreeBase: useWorktree ? row.worktreeBase ?? null : null,
       // 审查任务（reviewOf 非空）不拷线：它本身就是别人那条线上「验证」那一站长出来的

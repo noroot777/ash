@@ -277,6 +277,7 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN accepted_source_commit TEXT",
     "ALTER TABLE tasks ADD COLUMN base_update_intent TEXT",
     "ALTER TABLE tasks ADD COLUMN origin_task_id TEXT",
+    "ALTER TABLE tasks ADD COLUMN creation_origin TEXT",
     "ALTER TABLE projects ADD COLUMN api_keys TEXT",
     "ALTER TABLE tasks ADD COLUMN resume_prompt TEXT",
     "ALTER TABLE tasks ADD COLUMN resume_depends_on TEXT NOT NULL DEFAULT '[]'",

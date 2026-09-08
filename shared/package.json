@@ -6,6 +6,10 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./task-origin": {
+      "types": "./src/task-origin.ts",
+      "default": "./src/task-origin.ts"
+    },
     "./chat": {
       "types": "./src/chat.ts",
       "default": "./src/chat.ts"

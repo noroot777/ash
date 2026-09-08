@@ -163,6 +163,7 @@ export const tasks = sqliteTable("tasks", {
   acceptedSourceCommit: text("accepted_source_commit"),
   baseUpdateIntent: text("base_update_intent"),
   originTaskId: text("origin_task_id"), // 回链来源任务(null = 直接创建)
+  creationOrigin: text("creation_origin"),
   // 检查点续跑：agent 调 pause_task 时填进来；下次 resume 时取出喂给 CLI 会话并清空。
   resumePrompt: text("resume_prompt"),
   // 提问：agent 调 ask_question 时填进来。结算落 paused 且队列不自动续跑，

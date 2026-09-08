@@ -62,3 +62,32 @@
   outline: none;
 }
 
+.task-creation-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--overlay);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+.task-creation-badge.is-agent { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.task-origin-bar .task-creation-badge { color: var(--muted); overflow: visible; }
+.task-origin-bar .task-creation-badge.is-agent { color: var(--accent); }
+.task-origin-bar > button {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+.task-origin-bar > button:hover { color: var(--ink); text-decoration: underline; }

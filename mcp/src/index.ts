@@ -76,7 +76,7 @@ async function call(method: string, path: string, body?: unknown, directionToken
   let res: Response;
   for (;;) {
     try {
-      const headers: Record<string, string> = {};
+      const headers: Record<string, string> = { "x-ash-client": "mcp" };
       if (body !== undefined) headers["content-type"] = "application/json";
       if (SOURCE_TASK_ID) headers["x-ash-source-task-id"] = SOURCE_TASK_ID;
       if (TURN_TOKEN) headers["x-ash-turn-token"] = TURN_TOKEN;

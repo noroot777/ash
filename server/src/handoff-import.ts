@@ -343,6 +343,7 @@ async function importValidated(
     mergeTargetBranch: useWorktree ? m.task.mergeTargetBranch ?? null : null,
     baseTaskId: m.task.baseTaskId ?? null,
     acceptedSourceCommit: m.task.acceptedSourceCommit ?? null,
+    creationOrigin: m.task.creationOrigin ?? null,
     workflow: jsonOr(m.task.workflow, "") || null,
     workflowMode: (m.task.workflowMode as "free" | "workflow" | undefined) ?? "workflow",
     workflowAt: m.task.workflowAt,

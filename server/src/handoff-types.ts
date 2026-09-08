@@ -213,6 +213,7 @@ export interface HandoffManifest {
     mergeTargetBranch?: string | null;
     baseTaskId?: string | null;
     acceptedSourceCommit?: string | null;
+    creationOrigin?: string | null;
     workflow: string | null;
     workflowMode: string;
     workflowAt: string | null;
