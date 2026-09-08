@@ -6,7 +6,8 @@ import { familySelectionBlock } from "@ash/shared/branch-plan";
 import { acceptPlan, isFinalHumanGate } from "@ash/shared/workflow-policy";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
-import { branchDependency, branchName, branchRelationship, commitAt, plannedMergeTarget, type BranchTask } from "./task-branch-plan.js";
+import { branchDependency, branchName, branchOwner, branchRelationship, commitAt, plannedMergeTarget, type BranchTask } from "./task-branch-plan.js";
+import { targetCheckout } from "./git-accept.js";
 import { localBranchExists, resolveWorktreeBranchName, symbolicBranch } from "./git.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { acceptanceGuard } from "./task-accept-guard.js";
@@ -28,6 +29,7 @@ async function entry(task: BranchTask, repo: string, fingerprintTarget?: string 
   const plan = acceptPlan(taskWorkflowDef(task.workflow), "human", task.workflowAt);
   const guard = await acceptanceGuard(task.id, "before_accept");
   let blocker = guard.failure?.error ?? null;
+  let blockerLabel: string | undefined;
   if (!blocker && !isFinalHumanGate(taskWorkflowDef(task.workflow), task.workflowAt)) blocker = "尚在中途关口，请先完成任务流程";
   if (!blocker && task.workflowMode === "free" && !["done", "failed", "canceled"].includes(task.status)
     && task.stage !== "accepted" && task.stage !== "merged") blocker = "任务尚未结束";
@@ -36,16 +38,26 @@ async function entry(task: BranchTask, repo: string, fingerprintTarget?: string 
   const targetCommit = target ? await commitAt(repo, target) : null;
   const targetError = !target ? "最终合入分支未确定，请重设合入目标"
     : !(await localBranchExists(repo, target)) ? `目标本地分支 ${target} 不存在，请重设合入目标` : null;
+  const targetOwner = target ? await branchOwner(repo, task.projectId, target) : undefined;
+  const checkout = target && task.useWorktree && plan.merge && plan.merge !== "tag" && task.stage !== "accepted" && task.stage !== "merged"
+    ? await targetCheckout(repo, target) : null;
   if (!blocker && task.useWorktree && task.stage !== "accepted" && targetError) blocker = targetError;
+  if (!blocker && checkout?.path && !checkout.atRepo) {
+    blockerLabel = "目标工作区仍被占用";
+    blocker = `目标分支 ${target} 仍在工作区 ${checkout.path} 检出。${targetOwner
+      ? `请先停止任务「${targetOwner.title}」的执行，在其「派生与验收」中释放工作区目录（保留分支），再单独验收本任务。`
+      : "请先解除该工作区对目标分支的占用并保留分支，再验收；也可重设合入目标。"}`;
+  }
   const fingerprint = createHash("sha256").update(JSON.stringify([
     task.id, task.updatedAt, task.stage, task.workflow, task.workflowAt, task.workflowMode,
     task.status, task.worktreeStartCommit, task.baseTaskId, target, sourceCommit,
     fingerprintTarget === undefined ? targetCommit : fingerprintTarget,
+    targetOwner?.id, checkout,
   ])).digest("hex");
   return {
     taskId: task.id, projectId: task.projectId, title: task.title, status: task.status, stage: task.stage,
-    startCommit: task.worktreeStartCommit, targetBranch: target, sourceCommit, targetCommit,
-    strategy: plan.merge || "mark", dependency: task.baseUpdateIntent ? { taskId: task.baseTaskId, title: "父任务", state: "needs_update", message: "上次基线更新尚未结算，请重试更新基线以恢复" } : await branchDependency(task, repo), blocker, fingerprint, baseUpdatePending: !!task.baseUpdateIntent,
+    startCommit: task.worktreeStartCommit, targetBranch: target, targetTaskId: targetOwner?.id ?? null, sourceCommit, targetCommit,
+    strategy: plan.merge || "mark", dependency: task.baseUpdateIntent ? { taskId: task.baseTaskId, title: "父任务", state: "needs_update", message: "上次基线更新尚未结算，请重试更新基线以恢复" } : await branchDependency(task, repo), blocker, blockerLabel, fingerprint, baseUpdatePending: !!task.baseUpdateIntent,
   };
 }
 

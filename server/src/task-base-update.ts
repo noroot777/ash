@@ -6,7 +6,7 @@ import { db } from "./db/index.js";
 import { projects, tasks, taskBranchReceipts } from "./db/schema.js";
 import { execFileText as exec } from "./exec.js";
 import { expandHome, symbolicBranch, worktreePathFor, resolveWorktreeBranchName } from "./git.js";
-import { branchDependency, baseRef, commitAt, inheritedParentCommit } from "./task-branch-plan.js";
+import { branchDependency, baseRef, baseUpdateBackupPrefix, commitAt, inheritedParentCommit } from "./task-branch-plan.js";
 import { withRepoLock } from "./repo-lock.js";
 import { beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { acceptanceGuard } from "./task-accept-guard.js";
@@ -92,7 +92,7 @@ export async function updateTaskBase(taskId: string, expectedHead: string): Prom
         if (!rebased || !(await clean()) || await commitAt(repo, branch) !== head || await symbolicBranch(path) !== branch) {
           return { ok: false, error: "工作区在准备期间发生变化，未更新子分支" };
         }
-        const backup = `refs/ash/base-update-backups/${encodeURIComponent(taskId)}/${head}`;
+        const backup = `${baseUpdateBackupPrefix(taskId)}${head}`;
         await exec("git", ["-C", repo, "update-ref", backup, head]);
         const intent = JSON.stringify({ head, rebased, target, branch, backup });
         await db.update(tasks).set({ baseUpdateIntent: intent, updatedAt: now() }).where(eq(tasks.id, taskId));

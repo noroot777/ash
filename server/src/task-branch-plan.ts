@@ -3,13 +3,14 @@ import { and, eq, sql } from "drizzle-orm";
 import type { BranchDependency } from "@ash/shared/branch-plan";
 import { db } from "./db/index.js";
 import { tasks, projects, taskBranchReceipts } from "./db/schema.js";
-import { expandHome, localBranchExists, resolveTaskMergeTarget, resolveWorktreeBranchName } from "./git.js";
+import { expandHome, isGitRepo, localBranchExists, resolveTaskMergeTarget, resolveWorktreeBranchName } from "./git.js";
 import { execFileText as exec } from "./exec.js";
 import { withRepoLock } from "./repo-lock.js";
 
 export type BranchTask = typeof tasks.$inferSelect;
 export const baseRef = (id: string) => `refs/ash/task-bases/${encodeURIComponent(id)}`;
 export const acceptedHeadRef = (id: string) => `refs/ash/accepted-heads/${encodeURIComponent(id)}`;
+export const baseUpdateBackupPrefix = (id: string) => `refs/ash/base-update-backups/${encodeURIComponent(id)}/`;
 export const branchName = (ref: string) => ref.trim().replace(/^refs\/heads\//, "");
 
 export async function commitAt(repo: string, ref: string): Promise<string | null> {
@@ -32,7 +33,11 @@ export async function deleteTaskBranchRefs(taskId: string): Promise<void> {
   const project = task && (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   if (!project) return;
   await withRepoLock(project.repoPath, async () => {
-    for (const ref of [baseRef(taskId), acceptedHeadRef(taskId)]) {
+    if (!(await isGitRepo(project.repoPath))) return;
+    const prefix = baseUpdateBackupPrefix(taskId);
+    const backups = (await exec("git", ["-C", expandHome(project.repoPath), "for-each-ref", "--format=%(refname)", prefix]))
+      .stdout.split("\n").filter(ref => ref.startsWith(prefix));
+    for (const ref of [baseRef(taskId), acceptedHeadRef(taskId), ...backups]) {
       const head = await commitAt(project.repoPath, ref);
       if (head) await exec("git", ["-C", expandHome(project.repoPath), "update-ref", "-d", ref, head]);
     }
@@ -97,11 +102,14 @@ export async function initializeBranchPlan(row: typeof tasks.$inferInsert & { id
 
 export type { BranchDependency } from "@ash/shared/branch-plan";
 
-export function branchRelationship(task: BranchTask, parentId: string, parentBranch: string): "pinned" | "legacy" | null {
+export function branchRelationship(task: BranchTask, parentId: string, parentBranch: string): "pinned" | "legacy" | "target" | null {
   if (task.id === parentId) return null;
   if (task.baseTaskId === parentId) return "pinned";
-  return !task.mergeTargetBranch && branchName(task.acceptedTargetBranch || task.worktreeBase || "") === parentBranch
-    ? "legacy" : null;
+  return taskTargetsBranch(task, parentBranch) ? task.mergeTargetBranch ? "target" : "legacy" : null;
+}
+
+export function taskTargetsBranch(task: BranchTask, branch: string): boolean {
+  return branchName(task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "") === branch;
 }
 
 export async function plannedMergeTarget(task: BranchTask, repo: string): Promise<string | null> {
@@ -165,6 +173,8 @@ export async function dependentTasks(repo: string, projectId: string, taskId: st
   const blocked: BranchTask[] = [];
   for (const row of rows) {
     if (row.id === taskId || row.stage === "accepted") continue;
+    // 即使父成果已满足继承关系，仍作为子任务合入目标的分支也不能清掉。
+    if (taskTargetsBranch(row, branch)) { blocked.push(row); continue; }
     const relationship = branchRelationship(row, taskId, branch);
     if (relationship === "pinned") {
       if ((await branchDependency(row, repo))?.state !== "ready") blocked.push(row);

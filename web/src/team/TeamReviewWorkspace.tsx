@@ -131,7 +131,7 @@ export function AcceptanceControls({
   const branchPlan = useBranchPlan(task, !midGate && task.stage !== "accepted");
   if (!midGate && task.useWorktree && task.stage !== "accepted") {
     acceptanceBlock ??= branchPlan.error ? "验收依赖读取失败" : !branchPlan.view ? "检查验收依赖" : null;
-    acceptanceBlock ??= branchPlan.view?.task.blocker ?? null;
+    acceptanceBlock ??= branchPlan.view?.task.blockerLabel ?? branchPlan.view?.task.blocker ?? null;
     const dependency = branchPlan.view?.task.dependency;
     if (dependency && dependency.state !== "ready" && branchPlan.view?.task.strategy !== "tag") acceptanceBlock ??= "等待父成果或更新基线";
   }

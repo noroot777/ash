@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { makeStep } from "@ash/shared/workflow";
-import { familyAcceptanceNotices } from "@ash/shared/branch-plan";
+import { familyAcceptanceNotices, familySelectionBlock } from "@ash/shared/branch-plan";
 import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-branch-acceptance-"));
@@ -22,7 +22,7 @@ const { mountTaskRoutes } = await import("../src/task-routes.js");
 const { mountTaskDiffRoutes } = await import("../src/task-diff-routes.js");
 const { mountTaskScheduleRoutes } = await import("../src/task-schedule-routes.js");
 const { mountProjectRoutes } = await import("../src/project-routes.js");
-const { branchDependency, branchDeletionBlock, dependentTasks } = await import("../src/task-branch-plan.js");
+const { branchDependency, branchDeletionBlock, dependentTasks, baseUpdateBackupPrefix } = await import("../src/task-branch-plan.js");
 const { readBranchPlan, acceptFamily } = await import("../src/task-branch-routes.js");
 const { updateTaskBase } = await import("../src/task-base-update.js");
 const { claimTurn, releaseTurn } = await import("../src/runs.js");
@@ -111,6 +111,7 @@ try {
     const runningLegacy = await setup();
     await db.update(tasks).set({ mergeTargetBranch: null, worktreeStartCommit: null, baseTaskId: null }).where(eq(tasks.id, runningLegacy.child.id));
     await db.update(tasks).set({ status: "running" }).where(eq(tasks.id, runningLegacy.parent.id));
+    await setup(); // case9: retarget a pinned child to its parent's branch from the UI.
     await s.newTask("unstarted", "main");
     const unreadable = await s.newTask("badstart", "main");
     await taskWorkspace(await row(unreadable.id), s.repo);
@@ -266,6 +267,70 @@ try {
   }
   {
     const s = await setup();
+    const initial = (await readBranchPlan(s.child.id))!.task;
+    assert.equal(initial.dependency?.state, "waiting");
+    const retarget = await api.request(`/tasks/${s.child.id}/merge-target`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ branch: s.parentWs.branch, fingerprint: initial.fingerprint }),
+    });
+    assert.equal(retarget.status, 200);
+    const blocked = (await readBranchPlan(s.child.id))!.task;
+    assert.equal(blocked.targetTaskId, s.parent.id);
+    assert.equal(blocked.startCommit, initial.startCommit);
+    assert.match(blocked.blocker!, /释放工作区目录（保留分支）/);
+    assert.ok(blocked.blocker!.includes(s.parentWs.path));
+    const selected = (view: NonNullable<Awaited<ReturnType<typeof readBranchPlan>>>) => [view.task, ...view.descendants];
+    const before = selected((await readBranchPlan(s.parent.id))!);
+    assert.equal(before[1].targetTaskId, s.parent.id, "parent panel can expose release for a pinned child");
+    assert.match(familySelectionBlock(before, new Set(before.map(t => t.taskId)))!.error, /不能一起统一验收/);
+    const rejected = await acceptFamily(s.parent.id, before, acceptTask);
+    assert.equal(rejected.ok, false);
+    assert.deepEqual(rejected.completed, []);
+    assert.equal(git(s.repo, "rev-parse", s.parentWs.branch!), s.parentCommit);
+    assert.equal((await api.request(`/tasks/${s.parent.id}?worktree=1&branch=1`, { method: "DELETE" })).status, 409);
+    const release = await api.request(`/tasks/${s.parent.id}/release-workspace`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ fingerprint: before[0].fingerprint }),
+    });
+    assert.equal(release.status, 200);
+    const ready = (await readBranchPlan(s.child.id))!.task;
+    assert.equal(ready.blocker, null);
+    assert.notEqual(ready.fingerprint, blocked.fingerprint, "checkout changes invalidate stale plans");
+    const after = selected((await readBranchPlan(s.parent.id))!);
+    const stillRejected = await acceptFamily(s.parent.id, after, acceptTask);
+    assert.equal(stillRejected.ok, false);
+    assert.deepEqual(stillRejected.completed, []);
+    assert.match(stillRejected.error!, /不能一起统一验收/);
+    assert.equal((await acceptTask(s.child.id)).accepted, true);
+    assert.equal(git(s.repo, "show", `${s.parentWs.branch}:child.txt`), "child feature");
+    assert.equal((await acceptTask(s.parent.id)).accepted, true);
+    assert.equal(git(s.repo, "show", "main:child.txt"), "child feature");
+    console.log("✓ pinned child targeting parent: occupied target blocks, parent exposes release, family rejects before writes, child then parent succeeds");
+  }
+  {
+    const s = await setup();
+    await db.update(tasks).set({ mergeTargetBranch: s.parentWs.branch }).where(eq(tasks.id, s.child.id));
+    assert.equal((await acceptTask(s.parent.id)).accepted, true);
+    assert.equal(git(s.repo, "rev-parse", s.parentWs.branch!), s.parentCommit, "parent acceptance retains an explicit child merge target");
+    assert.match((await branchDeletionBlock(s.repo, s.parent.id))!, /依赖/);
+    assert.equal((await acceptTask(s.child.id)).accepted, true);
+    assert.equal(git(s.repo, "show", `${s.parentWs.branch}:child.txt`), "child feature");
+    console.log("✓ standalone parent acceptance retains the pinned child's target branch");
+  }
+  {
+    const s = await setup();
+    const other = await s.newTask("other", "main");
+    const ws = await taskWorkspace(await row(other.id), s.repo);
+    await db.update(tasks).set({ mergeTargetBranch: ws.branch }).where(eq(tasks.id, s.child.id));
+    const view = (await readBranchPlan(other.id))!;
+    assert.equal(view.descendants[0].taskId, s.child.id, "merge target ownership also works outside the base parent");
+    assert.equal(view.descendants[0].targetTaskId, other.id);
+    assert.match(view.descendants[0].blocker!, /释放工作区目录/);
+    assert.match((await branchDeletionBlock(s.repo, other.id))!, /依赖/);
+    console.log("✓ retargeting to another task exposes that owner's dependent and protects its branch");
+  }
+  {
+    const s = await setup();
     const grand = await s.newTask("grand", s.childWs.branch);
     const legacyBranch = s.parentWs.branch!.replace(/^ash\//, "harness/");
     git(s.parentWs.path, "branch", "-m", legacyBranch);
@@ -382,6 +447,19 @@ try {
     assert.equal((await row(s.child.id)).stage, null);
     assert.equal((await acceptTask(s.child.id)).accepted, true);
     console.log("✓ squash baseline update, stale-head/dirty/in-flight guards, preserved code and acceptance");
+    const prefix = baseUpdateBackupPrefix(s.child.id);
+    assert.equal(git(s.repo, "rev-parse", `${prefix}${original}`), original);
+    git(s.repo, "update-ref", `${prefix}${s.parentCommit}`, s.parentCommit);
+    const neighbourRef = `${baseUpdateBackupPrefix(`${s.child.id}-neighbour`)}${original}`;
+    git(s.repo, "update-ref", neighbourRef, original);
+    await db.update(tasks).set({ baseUpdateIntent: "pending" }).where(eq(tasks.id, s.child.id));
+    assert.equal((await api.request(`/tasks/${s.child.id}?worktree=1&branch=1`, { method: "DELETE" })).status, 409);
+    assert.equal(git(s.repo, "rev-parse", `${prefix}${original}`), original, "blocked deletion preserves recovery backups");
+    await db.update(tasks).set({ baseUpdateIntent: null }).where(eq(tasks.id, s.child.id));
+    assert.equal((await api.request(`/tasks/${s.child.id}?worktree=1&branch=1`, { method: "DELETE" })).status, 200);
+    assert.equal(git(s.repo, "for-each-ref", "--format=%(refname)", prefix), "");
+    assert.equal(git(s.repo, "rev-parse", neighbourRef), original, "similarly prefixed tasks retain their own backups");
+    console.log("✓ deletion removes every baseline backup only for the deleted task; pending intent preserves backups");
   }
   {
     const s = await setup("squash");

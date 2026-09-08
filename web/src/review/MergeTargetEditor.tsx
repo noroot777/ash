@@ -32,6 +32,7 @@ export function MergeTargetEditor({ plan, disabled, onChanged }: { plan: BranchP
         <option value="">请选择分支</option>
         {branches.map(branch => <option key={branch} value={branch}>{branch}</option>)}
       </select></label>{" "}
+      {/^(ash|harness)\//.test(target) && <p role="status">所选目标是任务分支。如仍被工作区占用，请先在目标任务的「派生与验收」中释放工作区目录（保留分支），再单独验收本任务；不能与目标任务一起统一验收。</p>}
       <button type="button" disabled={disabled || busy || !target} onClick={() => void save()}>保存合入目标</button>{" "}
       <button type="button" disabled={busy} onClick={() => setBranches(null)}>取消</button>
       {!branches.length && <p>当前没有可选的本地分支；建立分支后重新打开此处。</p>}

@@ -164,6 +164,13 @@ async function checkedOutPath(repo: string, branch: string): Promise<string | nu
   return null;
 }
 
+export async function targetCheckout(repoPath: string, branch: string): Promise<{ path: string | null; atRepo: boolean }> {
+  const repo = expandHome(repoPath);
+  const path = await checkedOutPath(repo, branch).catch(() => null);
+  const atRepo = path !== null && sameFilesystemPath(path, repo) && await symbolicBranch(repo) === branch;
+  return { path, atRepo };
+}
+
 async function conflictFiles(cwd: string): Promise<string[]> {
   try {
     const { stdout } = await exec("git", ["-C", cwd, "diff", "--name-only", "--diff-filter=U"]);
@@ -279,9 +286,7 @@ async function inTargetCheckout(
   beforeTemp?: () => TaskMergeResult | null,
 ): Promise<TaskMergeResult> {
   await exec("git", ["-C", repo, "worktree", "prune"]).catch(() => {});
-  const targetPath = await checkedOutPath(repo, targetBranch).catch(() => null);
-  const mainBranch = await symbolicBranch(repo);
-  const targetAtRepo = targetPath !== null && sameFilesystemPath(targetPath, repo) && mainBranch === targetBranch;
+  const { path: targetPath, atRepo: targetAtRepo } = await targetCheckout(repo, targetBranch);
 
   if (targetAtRepo) {
     const { stdout } = await exec("git", ["-C", repo, "status", "--porcelain"]);

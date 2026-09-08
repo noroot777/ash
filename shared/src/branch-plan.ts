@@ -14,11 +14,13 @@ export type BranchPlanEntry = {
   stage: string | null;
   startCommit: string | null;
   targetBranch: string | null;
+  targetTaskId?: string | null;
   sourceCommit: string | null;
   targetCommit: string | null;
   strategy: string;
   dependency: BranchDependency | null;
   blocker: string | null;
+  blockerLabel?: string;
   baseUpdatePending: boolean;
   fingerprint: string;
 };
@@ -32,6 +34,9 @@ export function familySelectionBlock(entries: BranchPlanEntry[], selected: Reado
     const dep = row.dependency;
     if (dep?.legacyTarget && dep.taskId && selected.has(dep.taskId)) {
       return { taskId: row.taskId, error: `「${row.title}」：${dep.message}` };
+    }
+    if (row.targetTaskId && selected.has(row.targetTaskId) && row.strategy !== "tag") {
+      return { taskId: row.taskId, error: `「${row.title}」仍合入所选任务的分支 ${row.targetBranch}，不能一起统一验收。请先释放目标任务的工作区目录（保留分支），单独验收子任务，再继续处理目标任务。` };
     }
     if (!dep || dep.state === "ready") continue;
     if (dep.state === "waiting" && dep.taskId && selected.has(dep.taskId)) continue;
