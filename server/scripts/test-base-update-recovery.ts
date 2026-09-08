@@ -100,8 +100,8 @@ try {
       for (const missing of [null, "a".repeat(40)]) {
         await db.update(tasks).set({ worktreeStartCommit: missing }).where(eq(tasks.id, s.child.task.id));
         const blocked = await (await api.request(`/tasks/${s.child.task.id}/base-update-recovery`)).json();
-        assert.equal(blocked.resolution, "blocked");
-        assert.match(blocked.blocker, /开工提交未记录或已无法读取/);
+        assert.equal(blocked.resolution, "manual");
+        assert.ok(blocked.manual, "uncertain start must offer a reviewable manual exit");
         assert.equal((await cancel(blocked.fingerprint)).status, 409);
         assert.ok((await row(s.child.task.id)).baseUpdateIntent);
         assert.equal(git(s.repo, "rev-parse", baseRef(s.child.task.id)), intent.target);
@@ -165,6 +165,78 @@ try {
     }
     assert.equal((await api.request(`/tasks/${s.child.task.id}`, { method: "DELETE" })).status, 200, "ordinary deletion is available after explicit abandonment");
     console.log(`✓ ${mode}: recovery preserves current work, reconciles start/ref/receipt and exposes only task files in the diff; guards and exits work`);
+  }
+  for (const mode of ["amended", "reset-target", "reset-unrelated", "broken-json", "broken-shape", "legacy-gc", "missing-branch"] as const) {
+    const s = await setup();
+    assert.equal((await acceptTask(s.parent.task.id)).accepted, true);
+    commit(s.repo, "unrelated-main.txt", "another task's change");
+    const oldHead = git(s.repo, "rev-parse", s.child.branch!);
+    await dbClient.execute(`CREATE TRIGGER interrupt_manual BEFORE UPDATE ON tasks WHEN OLD.id='${s.child.task.id}' AND OLD.base_update_intent IS NOT NULL AND NEW.base_update_intent IS NULL BEGIN SELECT RAISE(ABORT, 'interrupted manual fixture'); END`);
+    await assert.rejects(() => updateTaskBase(s.child.task.id, oldHead), /interrupted manual fixture/);
+    await dbClient.execute("DROP TRIGGER interrupt_manual");
+    const intent = JSON.parse((await row(s.child.task.id)).baseUpdateIntent!);
+    const preparedRef = `refs/ash/base-update-backups/${s.child.task.id}/prepared-${intent.rebased}`;
+    assert.equal(git(s.repo, "rev-parse", preparedRef), intent.rebased, "prepared result is pinned before durable intent is written");
+    if (["amended", "legacy-gc"].includes(mode)) {
+      writeFileSync(join(s.child.path, "child.txt"), "amended work after interruption");
+      git(s.child.path, "add", "child.txt"); git(s.child.path, "commit", "--amend", "-m", "amended child");
+    }
+    if (mode === "reset-target") git(s.child.path, "reset", "--hard", intent.target);
+    if (mode === "reset-unrelated") {
+      const rootCommit = git(s.child.path, "commit-tree", "HEAD^{tree}", "-m", "rewritten unrelated history");
+      git(s.child.path, "reset", "--hard", rootCommit);
+    }
+    if (["broken-json", "broken-shape", "missing-branch"].includes(mode)) {
+      await db.update(tasks).set({ baseUpdateIntent: mode === "broken-shape" ? '{"head":42}' : "{not json" }).where(eq(tasks.id, s.child.task.id));
+      const retry = await post(`/tasks/${s.child.task.id}/update-base`, { sourceCommit: intent.rebased });
+      assert.equal(retry.status, 409);
+      assert.match((await retry.json()).error, /记录损坏.*手动解除挂起/);
+    }
+    if (mode === "legacy-gc") git(s.repo, "update-ref", "-d", preparedRef);
+    if (mode === "missing-branch") {
+      git(s.repo, "worktree", "remove", "--force", s.child.path); git(s.repo, "branch", "-D", s.child.branch!);
+      await db.update(tasks).set({ worktreeStartCommit: null }).where(eq(tasks.id, s.child.task.id));
+      git(s.repo, "update-ref", "-d", baseRef(s.child.task.id));
+    }
+    git(s.repo, "reflog", "expire", "--expire=now", "--all"); git(s.repo, "gc", "--prune=now");
+    assert.equal(git(s.repo, "rev-parse", `${intent.backup}^{commit}`), oldHead);
+    if (mode === "legacy-gc") assert.throws(() => git(s.repo, "cat-file", "-e", intent.rebased));
+    else assert.equal(git(s.repo, "rev-parse", `${preparedRef}^{commit}`), intent.rebased, "prepared result survives history rewrite and GC");
+    const read = async () => (await api.request(`/tasks/${s.child.task.id}/base-update-recovery`)).json();
+    let view = await read();
+    assert.equal(view.resolution, "manual", mode);
+    assert.ok(view.existingBackups.length, "corrupt intents still expose real repository backups");
+    for (const backup of view.existingBackups) assert.equal(git(s.repo, "rev-parse", `${backup.ref}^{commit}`), backup.commit);
+    const recover = (fingerprint: string, acknowledged = true) => post(`/tasks/${s.child.task.id}/abandon-base-update`, { fingerprint, resolution: "manual", acknowledged });
+    assert.equal((await recover(view.fingerprint, false)).status, 409, "manual recovery needs explicit scope acknowledgement");
+    if (mode === "amended") {
+      commit(s.child.path, "after-preview.txt", "new work after preview");
+      assert.equal((await recover(view.fingerprint)).status, 409);
+      view = await read();
+    }
+    const head = mode === "missing-branch" ? null : git(s.repo, "rev-parse", s.child.branch!);
+    if (head) writeFileSync(join(s.child.path, "WIP.txt"), "keep uncommitted work");
+    if (mode === "reset-unrelated") assert.match(view.manual.basis, /已有代码全部保留.*不再计入/);
+    assert.equal((await recover(view.fingerprint)).status, 200, mode);
+    assert.equal((await row(s.child.task.id)).baseUpdateIntent, null);
+    assert.equal((await row(s.child.task.id)).worktreeStartCommit, view.resolvedStartCommit);
+    assert.equal((await db.select().from(taskBranchReceipts).where(eq(taskBranchReceipts.taskId, s.child.task.id))).length, 0, "manual escape does not invent completion receipts");
+    if (head) {
+      assert.equal(git(s.repo, "rev-parse", s.child.branch!), head);
+      assert.equal(git(s.repo, "rev-parse", baseRef(s.child.task.id)), view.resolvedStartCommit);
+      git(s.repo, "merge-base", "--is-ancestor", view.resolvedStartCommit, head);
+      assert.equal(readFileSync(join(s.child.path, "WIP.txt"), "utf8"), "keep uncommitted work");
+      const diff = await (await api.request(`/tasks/${s.child.task.id}/diff`)).json();
+      assert.deepEqual(diff.files.map((f: { path: string }) => f.path), view.manual.files);
+      assert.ok(view.backups.some((b: { commit: string }) => b.commit === head), "current rewritten HEAD is also backed up");
+      if (["amended", "legacy-gc", "broken-json", "broken-shape"].includes(mode)) assert.ok(!diff.files.some((f: { path: string }) => f.path === "unrelated-main.txt"));
+    }
+    for (const backup of view.backups) assert.equal(git(s.repo, "rev-parse", `${backup.ref}^{commit}`), backup.commit);
+    const plan = (await readBranchPlan(s.child.task.id))!.task;
+    assert.equal((await post(`/tasks/${s.child.task.id}/merge-target`, { branch: "main", fingerprint: plan.fingerprint })).status, 200);
+    assert.equal((await api.request(`/tasks/${s.child.task.id}`, { method: "DELETE" })).status, 200, "manual escape restores a real deletion exit");
+    if (head) assert.equal(readFileSync(join(s.child.path, "WIP.txt"), "utf8"), "keep uncommitted work");
+    console.log(`✓ ${mode}: reviewable manual recovery unlocks target/deletion, preserves current work and real backups, and never invents a receipt`);
   }
   {
     const s = await setup();

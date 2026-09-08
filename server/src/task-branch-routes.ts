@@ -244,9 +244,9 @@ export function mountBranchPlanRoutes(api: Hono, accept: Accept): void {
   });
   api.post("/tasks/:id/abandon-base-update", async c => {
     if (IS_PREVIEW_INSTANCE) return c.json({ ok: false, error: previewRefusal("处理未完成的基线更新") }, 409);
-    const body = await c.req.json<{ fingerprint?: string; resolution?: string }>();
-    if (typeof body?.fingerprint !== "string" || (body.resolution !== "abandon" && body.resolution !== "complete")) return c.json({ error: "请刷新页面并重新确认基线更新的处理方式" }, 400);
-    const result = await abandonTaskBaseUpdate(c.req.param("id"), body.fingerprint, body.resolution);
+    const body = await c.req.json<{ fingerprint?: string; resolution?: string; acknowledged?: boolean }>();
+    if (typeof body?.fingerprint !== "string" || (body.resolution !== "abandon" && body.resolution !== "complete" && body.resolution !== "manual")) return c.json({ error: "请刷新页面并重新确认基线更新的处理方式" }, 400);
+    const result = await abandonTaskBaseUpdate(c.req.param("id"), body.fingerprint, body.resolution, body.acknowledged === true);
     return c.json(result, result.ok ? 200 : 409);
   });
   api.post("/tasks/:id/accept-family", async c => {

@@ -8,6 +8,7 @@ import { execFileText as exec } from "./exec.js";
 import { expandHome, symbolicBranch, worktreePathFor, resolveWorktreeBranchName } from "./git.js";
 import { branchDependency, baseUpdateBackupPrefix, commitAt, inheritedParentCommit } from "./task-branch-plan.js";
 import { recordCompletedBaseUpdate } from "./task-base-record.js";
+import { parseBaseUpdateIntent } from "./task-base-intent.js";
 import { withRepoLock } from "./repo-lock.js";
 import { beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { acceptanceGuard } from "./task-accept-guard.js";
@@ -20,7 +21,8 @@ import { now } from "./util.js";
 
 // 先记录目标提交再移动 Git；中断后的重试只完成同一份意图，不再次 rebase。
 async function finishBaseUpdate(task: typeof tasks.$inferSelect, repo: string, held = false): Promise<{ ok: boolean; error?: string }> {
-  const intent = JSON.parse(task.baseUpdateIntent!) as { head: string; rebased: string; target: string; branch: string; backup: string };
+  const intent = parseBaseUpdateIntent(task.baseUpdateIntent!);
+  if (!intent) return { ok: false, error: "基线更新记录损坏，无法自动重试。请点击「处理未完成的基线更新」，核对现存备份与差异后手动解除挂起；当前代码未修改。" };
   const path = worktreePathFor(repo, task.id);
   const peers = await workspaceParticipants(task, path);
   if (!held && peers.some(p => p.status === "running" || p.status === "queued")) return { ok: false, error: "工作区正在执行，无法恢复基线更新" };
@@ -92,6 +94,7 @@ export async function updateTaskBase(taskId: string, expectedHead: string): Prom
         }
         const backup = `${baseUpdateBackupPrefix(taskId)}${head}`;
         await exec("git", ["-C", repo, "update-ref", backup, head]);
+        await exec("git", ["-C", repo, "update-ref", `${baseUpdateBackupPrefix(taskId)}prepared-${rebased}`, rebased]);
         const intent = JSON.stringify({ head, rebased, target, branch, backup });
         await db.update(tasks).set({ baseUpdateIntent: intent, updatedAt: now() }).where(eq(tasks.id, taskId));
         return await finishBaseUpdate({ ...task, baseUpdateIntent: intent }, repo, true);

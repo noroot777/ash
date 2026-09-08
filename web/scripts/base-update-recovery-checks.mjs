@@ -37,4 +37,49 @@ export async function checkBaseUpdateRecovery(page, fixtureUrl, checkpoint = asy
     ensure(!(await page.getByRole("region", { name: "恢复后的分支改动", exact: true }).innerText()).includes("unrelated-main.txt"), "main's unrelated file leaked into the review diff");
     await checkpoint(`${task}-recovery-diff`);
   }
+  await checkManualBaseRecovery(page, fixtureUrl, checkpoint);
+}
+
+export async function checkManualBaseRecovery(page, fixtureUrl, checkpoint = async () => {}) {
+  const ensure = (value, message) => { if (!value) throw new Error(message); };
+  const button = name => page.getByRole("button", { name, exact: true });
+  const dialog = page.getByRole("dialog");
+  const acknowledgement = dialog.getByRole("checkbox", { name: "我已核对基点和差异范围，保留当前代码并重新审查", exact: true });
+  for (const task of ["case20-child", "case21-child", "case22-child", "case23-child"]) {
+    const url = new URL(fixtureUrl); url.search = new URLSearchParams({ task, clock: "manual" }).toString();
+    await page.goto(url.href);
+    await button("处理未完成的基线更新").waitFor({ state: "visible" });
+    if (task === "case21-child") {
+      await button("更新子分支基线").click();
+      await dialog.getByRole("button", { name: "更新基线", exact: true }).click();
+      await page.getByRole("status").filter({ hasText: /记录损坏.*手动解除挂起/ }).waitFor({ state: "visible" });
+    }
+    await button("处理未完成的基线更新").click();
+    await dialog.getByRole("heading", { name: "核对基点并手动解除挂起？", exact: true }).waitFor({ state: "visible" });
+    await dialog.getByText(/现存备份（\d+）/).click();
+    ensure((await dialog.innerText()).includes(`refs/ash/base-update-backups/${task}/`), "manual dialog must expose real existing backup coordinates");
+    ensure((await dialog.innerText()).includes("确认时将保存的备份"), "planned refs must be labelled as future backups");
+    ensure(!await dialog.getByRole("button", { name: "保留代码并解除挂起", exact: true }).isEnabled(), "scope acknowledgement must not be preselected");
+    const preview = dialog.getByRole("region", { name: "恢复差异预览", exact: true });
+    if (task !== "case23-child") {
+      ensure((await preview.innerText()).includes("child.txt"), "manual preview must disclose the recovered task delta");
+      ensure(!(await preview.innerText()).includes("unrelated-main.txt"), "manual proposal must not include unrelated main files");
+    }
+    await checkpoint(`${task}-manual-dialog`);
+    await acknowledgement.check();
+    await dialog.getByRole("button", { name: "取消", exact: true }).click();
+    await button("处理未完成的基线更新").click();
+    ensure(!await dialog.getByRole("button", { name: "保留代码并解除挂起", exact: true }).isEnabled(), "reopening must require fresh acknowledgement");
+    await acknowledgement.check();
+    await dialog.getByRole("button", { name: "保留代码并解除挂起", exact: true }).click();
+    await page.getByRole("status").filter({ hasText: "已按核对的基点手动解除挂起" }).first().waitFor({ state: "visible" });
+    await button("处理未完成的基线更新").waitFor({ state: "detached" });
+    await button("重设合入目标").and(page.locator("button:enabled")).waitFor({ state: "visible" });
+    await page.locator('output[aria-label="diff 文件"]').filter({ hasText: task === "case23-child" ? /^$/ : /^child\.txt$/ }).waitFor({ state: task === "case23-child" ? "attached" : "visible" });
+    await checkpoint(`${task}-manual-result`);
+    await button("重设合入目标").click();
+    await page.getByRole("combobox", { name: "合入目标", exact: true }).selectOption("main");
+    await button("保存合入目标").click();
+    await page.getByRole("status").filter({ hasText: "合入目标已改为 main" }).waitFor({ state: "visible" });
+  }
 }
