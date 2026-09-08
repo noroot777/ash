@@ -265,6 +265,12 @@ assert.equal(bulkPreflightIssue(scopedTwo, bulkTargetProjectId(fromTwo, scopedTw
 const bulkDialog = readSource(new URL("../src/workspace/BulkHandoffDialog.tsx", import.meta.url));
 const machines = readSource(new URL("../src/workspace/HandoffMachines.tsx", import.meta.url));
 assert.match(machines, /<BulkHandoffDialog/, "侧栏「其他机器」仍应是批量接力弹窗的唯一入口");
+// 这一节可以收起来（跟任务分节同一套 toggle 视觉），收起状态记在自己的键上；选中的
+// 远端任务落在这一节里时要自动展开，否则主区在显示它、侧栏却一行都没有。
+assert.match(machines, /workspace-task-section-toggle/, "「其他机器」标题应是可折叠的 toggle");
+assert.match(machines, /aria-expanded=\{!collapsed\}/, "折叠状态必须对读屏可见");
+assert.match(machines, /ash:handoff-machines:collapsed/, "折叠状态要单独存，不与任务分节共用一个键");
+assert.match(machines, /useRevealHiddenSelection/, "选中的远端任务被折叠藏住时应自动展开");
 assert.doesNotMatch(machines, /handoff-bulk-body/, "弹窗实现拆出去后不应留在侧栏文件里");
 assert.doesNotMatch(bulkDialog, /<ConfirmDialog/, "批量接力不应继续使用旧确认框");
 assert.match(bulkDialog, /<HandoffDialogHeader/, "批量接力应复用接力弹窗标题结构");

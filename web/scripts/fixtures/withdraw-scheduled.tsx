@@ -1,7 +1,7 @@
 import { createRoot } from "react-dom/client";
 import type { Task } from "@ash/shared";
 import { ReplyBox } from "../../src/task-detail/ReplyBox.tsx";
-import { TaskReplyDraftProvider } from "../../src/task-detail/TaskReplyDrafts.tsx";
+import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import { api } from "../../src/lib/api.ts";
 import "../../src/styles/global.css";
 
@@ -24,7 +24,7 @@ const task: Task = {
 };
 
 createRoot(document.getElementById("root")!).render(
-  <TaskReplyDraftProvider>
+  <DraftProvider>
     <main style={{ width: 720, margin: "40px auto" }}>
       <ReplyBox
         task={task}
@@ -34,5 +34,5 @@ createRoot(document.getElementById("root")!).render(
           api.replyTask(task.id, text, { attachments, sendAt: options.sendAt })}
       />
     </main>
-  </TaskReplyDraftProvider>,
+  </DraftProvider>,
 );

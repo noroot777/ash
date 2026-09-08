@@ -2,6 +2,7 @@ import { StrictMode, useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Group, GroupMode, ProjectView, Task, TaskMode } from "@ash/shared";
 import { TaskComposerPanel } from "../../src/composer/TaskComposerPanel.tsx";
+import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import "../../src/styles/global.css";
 
 const project: ProjectView = {
@@ -51,6 +52,8 @@ function Ash() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <Ash />
+    <DraftProvider>
+      <Ash />
+    </DraftProvider>
   </StrictMode>,
 );

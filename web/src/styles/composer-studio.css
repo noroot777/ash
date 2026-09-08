@@ -20,7 +20,7 @@
 .is-studio .composer-objective textarea { min-height:clamp(260px,36vh,380px); border:0; border-radius:0; padding:26px 0 18px; background:transparent; font-size:16px; line-height:1.85; box-shadow:none; }
 .is-studio .composer-objective textarea:focus-visible { outline:0; }
 .is-studio .composer-slash-menu { left:22px; max-width:calc(100% - 44px); }
-.studio-card > .task-upload-list,.studio-card > .composer-seed-attachments { padding:0 24px 10px; }
+.studio-card > .task-upload-list { padding:0 24px 10px; }
 .studio-card > .composer-warning { margin:0; padding:6px 24px 10px; }
 .studio-card .composer-footer { display:block; min-height:0; border:0; border-radius:0 0 16px 16px; padding:12px 16px 16px; background:transparent; }
 .studio-card .composer-footer > .composer-launch-control { display:flex; width:100%; min-width:0; flex-wrap:nowrap; justify-content:space-between; align-items:center; gap:12px; }

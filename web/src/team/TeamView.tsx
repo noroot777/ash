@@ -25,7 +25,7 @@ import { QuestionCard } from "../task-detail/QuestionCard.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
-import { useTaskReplyDraft } from "../task-detail/TaskReplyDrafts.tsx";
+import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
 import {
   attachmentsFromPaths,
   clearSentDraft,

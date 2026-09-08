@@ -75,9 +75,11 @@ export function WorkspaceShell() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(initial.view === "palette");
   const [chatOpen, setChatOpen] = useState(initial.view === "chat");
-  const [chatReturnDraft, setChatReturnDraft] = useState<{ projectId: string; draft: ComposerDraft } | null>(null);
   const [notes, setNotes] = useState<{ projectId: string; noteId: string | null } | null>(initial.view === "notes" && initial.projectId ? { projectId: initial.projectId, noteId: initial.noteId } : null);
   const [groupsPanelOpen, setGroupsPanelOpen] = useState(false);
+  // composer.draft 只承载「从别处带进来的一份内容」（随手记转任务）。用户自己敲的正文
+  // 和附件不走这里 —— 它们存在全局草稿库里按项目留着（见 composer/composerDraft.ts），
+  // 所以去聊天/看别的任务再回来，框里原样还在，不需要谁把它抬来抬去。
   const [composer, setComposer] = useState<{ draft?: ComposerDraft | null; mode: TaskMode } | null>(initial.view === "create" ? { mode: initial.mode } : null);
   const [reviewTaskId, setReviewTaskId] = useState<string | null>(initial.view === "review" ? initial.taskId : null);
   const [deleteTarget, setDeleteTarget] = useState<TaskListItem | null>(null);
@@ -354,12 +356,10 @@ export function WorkspaceShell() {
     setChatOpen(false);
     setSettingsSection(null);
     setNotes(null);
-    setComposer((current) => current ? { ...current, mode } : { mode, draft: chatReturnDraft?.projectId === projectId ? chatReturnDraft.draft : null });
-    setChatReturnDraft(null);
+    setComposer((current) => current ? { ...current, mode } : { mode, draft: null });
   };
-  const openChat = (draft?: ComposerDraft) => {
+  const openChat = () => {
     if (!requireProject("打开聊天")) return;
-    if (draft && projectId) setChatReturnDraft({ projectId, draft });
     setTaskId(null);
     setRemoteSelection(null);
     setSettingsSection(null);
@@ -368,14 +368,20 @@ export function WorkspaceShell() {
     setChatOpen(true);
     spread.close();
   };
-  const createTask = (task: Task, draft?: ComposerDraft | null) => {
+  const createTask = (task: Task, noteIds: string[] = []) => {
     setTasks((current) => current.some((row) => row.id === task.id) ? current.map((row) => row.id === task.id ? task : row) : [task, ...current]);
     pushTaskHistoryEntry(task, window, scopeKind);
     setTaskId(task.id);
     setRemoteSelection(null);
     setComposer(null);
-    for (const noteId of draft?.noteIds ?? []) api.patchNote(noteId, { taskId: task.id }).catch(() => notify("任务已创建，但随手记回链写入失败"));
+    for (const noteId of noteIds) api.patchNote(noteId, { taskId: task.id }).catch(() => notify("任务已创建，但随手记回链写入失败"));
   };
+  // 带进来的那份内容（随手记转任务）并进草稿之后就摘掉：它是一次性投递，留在状态里
+  // 的话面板下次重挂会把同一段再拼一遍。
+  const dropComposerSeed = useCallback(
+    () => setComposer((current) => current?.draft ? { ...current, draft: null } : current),
+    [],
+  );
   const createComposerGroup = async (name: string, mode: GroupMode): Promise<Group> => {
     if (!currentProject) throw new Error("先选择一个项目");
     const created = await api.createGroup({ projectId: currentProject.id, name, mode });
@@ -444,7 +450,7 @@ export function WorkspaceShell() {
       <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} selectedRemoteTaskId={remoteSelection?.task.id ?? null} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTaskMode={selectTaskMode} onTask={selectTask} onRemoteTask={selectRemoteTask} onTaskStarred={applyStar} onHandoffFinished={() => refetchTasks({ silent: true }).then(() => {})} outbound={outboundBar} onGitChanged={() => setGitVersion((value) => value + 1)} onOpenTerminal={currentProject && canUseTerminal ? () => setTerminalOpen(true) : null} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={openGroups} onChat={openChat} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onSettings={() => openSettings("executors")} />
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
-        {chatOpen && currentProject ? <ChatView key={currentProject.id} project={currentProject} onTask={selectTask} onExit={() => setChatOpen(false)} onMode={openComposer} /> : composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onChat={openChat} onCancel={() => setComposer(null)} onCreated={createTask} onCreateGroup={createComposerGroup} notify={notify} /> : remoteSelection ? (
+        {chatOpen && currentProject ? <ChatView key={currentProject.id} project={currentProject} onTask={selectTask} onExit={() => setChatOpen(false)} onMode={openComposer} /> : composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} onDraftSeeded={dropComposerSeed} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onChat={openChat} onCancel={() => setComposer(null)} onCreated={createTask} onCreateGroup={createComposerGroup} notify={notify} /> : remoteSelection ? (
           <RemoteTaskDetail
             archive={remoteSelection.task}
             target={remoteSelection.target}
