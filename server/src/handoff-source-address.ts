@@ -12,7 +12,9 @@ import { normalizePeerUrl, probeSignedPeerFingerprint } from "./handoff-peer-cli
 import { listPeers } from "./handoff-peers.js";
 import { HandoffError } from "./handoff-types.js";
 
-export async function listSourceAddresses(actor: Actor): Promise<HandoffSourceAddress[]> {
+type SourceAddressRecord = HandoffSourceAddress & { previousUrls: string[] };
+
+async function sourceAddressRecords(actor: Actor): Promise<SourceAddressRecord[]> {
   const [visible, targets, peers] = await Promise.all([
     visibleProjectIds(actor), listTargets(actor), listPeers(actor),
   ]);
@@ -20,21 +22,24 @@ export async function listSourceAddresses(actor: Actor): Promise<HandoffSourceAd
     .select({ handoff: tasks.handoff }).from(tasks)
     .where(visible ? inArray(tasks.projectId, [...visible]) : isNotNull(tasks.handoff))
     .orderBy(desc(tasks.updatedAt));
-  const sources = new Map<string, HandoffSourceAddress>();
+  const sources = new Map<string, SourceAddressRecord>();
   for (const row of rows) {
     if (!row.handoff) continue;
     let marker: TaskHandoff;
     try { marker = JSON.parse(row.handoff) as TaskHandoff; } catch { continue; }
     if (!marker || marker.direction !== "in" || typeof marker.peerFp !== "string" || !marker.peerFp) continue;
     const fingerprint = marker.peerFp.trim().toLowerCase();
+    const url = typeof marker.peerUrl === "string" ? marker.peerUrl : "";
     if (!sources.has(fingerprint)) sources.set(fingerprint, {
-      fingerprint, name: marker.peerName || "来源机器", url: marker.peerUrl || "",
+      fingerprint, name: marker.peerName || "来源机器", url, previousUrls: [],
     });
+    const source = sources.get(fingerprint)!;
+    if (url && !source.previousUrls.includes(url)) source.previousUrls.push(url);
   }
   for (const peer of peers) {
     if (peer.returnOnly || sources.has(peer.fingerprint)) continue;
     sources.set(peer.fingerprint, {
-      fingerprint: peer.fingerprint, name: peer.name || "来源机器", url: "",
+      fingerprint: peer.fingerprint, name: peer.name || "来源机器", url: "", previousUrls: [],
     });
   }
   return [...sources.values()].map((source) => {
@@ -44,13 +49,17 @@ export async function listSourceAddresses(actor: Actor): Promise<HandoffSourceAd
   });
 }
 
+export async function listSourceAddresses(actor: Actor): Promise<HandoffSourceAddress[]> {
+  return (await sourceAddressRecords(actor)).map(({ fingerprint, name, url }) => ({ fingerprint, name, url }));
+}
+
 export async function updateSourceAddress(
   actor: Actor,
   fingerprint: string,
   rawUrl: string,
 ): Promise<HandoffTarget[]> {
   if (!isAccountHolder(actor)) throw new HandoffError("来源机器地址只能由账号本人修改", 403);
-  const source = (await listSourceAddresses(actor))
+  const source = (await sourceAddressRecords(actor))
     .find((item) => sameFingerprint(item.fingerprint, fingerprint));
   if (!source) throw new HandoffError("没有可修改的来源机器", 404);
   const url = normalizePeerUrl(rawUrl);
@@ -61,6 +70,6 @@ export async function updateSourceAddress(
   if (!sameFingerprint(actual, source.fingerprint)) {
     throw new HandoffError("新地址的身份指纹与来源机器不一致，原地址未修改。请填写原来那台机器的新地址。", 409);
   }
-  await saveVerifiedTargetAddress(actor, { name: source.name, url, peerFp: source.fingerprint });
+  await saveVerifiedTargetAddress(actor, { name: source.name, url, peerFp: source.fingerprint }, source.previousUrls);
   return listTargets(actor);
 }

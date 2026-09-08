@@ -19,7 +19,7 @@ const servers: Server[] = [];
 
 try {
   const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
-  const { projects, tasks, users, projectMembers } = await import("../src/db/schema.js");
+  const { projects, tasks, users, projectMembers, handoffLocalPeerKeys } = await import("../src/db/schema.js");
   const { eq } = await import("drizzle-orm");
   const { canonicalPingChallenge, fingerprintOf } = await import("../src/handoff-identity.js");
   const { mountHandoffRoutes } = await import("../src/handoff-routes.js");
@@ -39,6 +39,12 @@ try {
   const peer = createServer((req, res) => {
     const url = new URL(req.url!, "http://localhost");
     seenCredentials.push(req.headers["x-ash-peer-user-key"], req.headers["x-ash-peer-key"]);
+    if (url.pathname === "/api/handoff/import") {
+      const authorized = req.headers["x-ash-peer-user-key"] === "saved-inline-key";
+      res.writeHead(authorized ? 200 : 401, { "content-type": "application/json" });
+      res.end(JSON.stringify(authorized ? { ok: true } : { error: "missing peer user key", ash: true }));
+      return;
+    }
     const sig = sign(null, Buffer.from(canonicalPingChallenge(
       badSignature ? "wrong-nonce" : url.searchParams.get("nonce")!,
     )), keys.privateKey).toString("base64");
@@ -107,6 +113,54 @@ try {
   assert.ok(!JSON.stringify(await get("/handoff/targets")).includes("test-only-peer-key"));
 
   const unrelatedUrl = "http://127.0.0.1:3";
+  const historicalUrl = "http://127.0.0.1:2";
+  await db.insert(tasks).values([
+    {
+      id: "same-source-history", projectId: "p", title: "Earlier source address", createdAt: at, updatedAt: at,
+      handoff: JSON.stringify({ ...marker, peerUrl: `${historicalUrl}/` }),
+    },
+    {
+      id: "other-source-history", projectId: "p", title: "Other source address", createdAt: at, updatedAt: at,
+      handoff: JSON.stringify({ ...marker, peerFp: otherFingerprint, peerUrl: unrelatedUrl }),
+    },
+  ]);
+  const seedInlineKeys = async (newKey = "", historyKey = "saved-inline-key") => {
+    await patchAppSettings({ handoffTargets: [] });
+    await scope.setPeerKey(actor, oldUrl, "saved-inline-key");
+    await scope.setPeerKey(actor, historicalUrl, historyKey);
+    await scope.setPeerKey(actor, newUrl, newKey);
+    await scope.setPeerKey(actor, unrelatedUrl, "unrelated-inline-key");
+  };
+  await seedInlineKeys();
+  assert.deepEqual(await scope.listTargets(actor), [], "弹窗单独保存 key 的来源机没有目标行");
+  assert.equal((await save(newUrl)).status, 200);
+  assert.deepEqual(await scope.listTargets(actor), [{ name: "LAPTOP", url: newUrl, peerFp: fingerprint, hasKey: true }]);
+  assert.equal(await scope.peerKeyForRequest(null, `${newUrl}/api/handoff/import`), "saved-inline-key", "marker-only 来源的 inline key 迁移到新 URL");
+  assert.equal(await scope.peerKeyForRequest(null, oldUrl), "");
+  assert.equal(await scope.peerKeyForRequest(null, historicalUrl), "", "同指纹历史 URL 上的旧 key 一并清理");
+  assert.equal(await scope.peerKeyForRequest(null, unrelatedUrl), "unrelated-inline-key", "其他来源指纹的 key 不参与迁移");
+  assert.equal((await sources()).find((row) => row.fingerprint === fingerprint)?.url, newUrl);
+  assert.equal((await get<{ target: HandoffTarget }>("/tasks/t/handoff/return-target")).target.url, newUrl);
+  const { fetchPeer } = await import("../src/handoff-peer-client.js");
+  assert.deepEqual(await fetchPeer(`${newUrl}/api/handoff/import`, { method: "POST", body: "{}" }), { ok: true }, "迁移后的出站请求实际携带账号 key，通过对端账号检查");
+  assert.equal(seenCredentials.at(-2), "saved-inline-key");
+
+  for (const [newKey, historyKey] of [["conflicting-key", "saved-inline-key"], ["", "conflicting-history-key"]]) {
+    await seedInlineKeys(newKey, historyKey);
+    const before = await db.select().from(handoffLocalPeerKeys);
+    assert.equal((await save(newUrl)).status, 409, "历史或新 URL 上的 inline key 冲突时拒绝迁移");
+    assert.deepEqual(await scope.listTargets(actor), []);
+    assert.deepEqual(await db.select().from(handoffLocalPeerKeys), before, "冲突时包括无目标行的凭据也原样保留");
+  }
+  await seedInlineKeys();
+  const inlineBeforeFailure = await db.select().from(handoffLocalPeerKeys);
+  await dbClient.executeMultiple("CREATE TRIGGER fail_inline_key_delete BEFORE DELETE ON handoff_local_peer_keys BEGIN SELECT RAISE(ABORT, 'test inline key rollback'); END;");
+  await assert.rejects(scope.saveVerifiedTargetAddress(actor, { name: "LAPTOP", url: newUrl, peerFp: fingerprint }, [oldUrl, historicalUrl]));
+  assert.deepEqual(await scope.listTargets(actor), [], "清理 inline key 失败时，新目标行一起回滚");
+  assert.deepEqual(await db.select().from(handoffLocalPeerKeys), inlineBeforeFailure);
+  await dbClient.executeMultiple("DROP TRIGGER fail_inline_key_delete;");
+  await scope.setPeerKey(actor, historicalUrl, "");
+
   const seedSingleDuplicates = async (newKey = "") => {
     await patchAppSettings({ handoffTargets: [
       { name: "旧来源地址", url: oldUrl, peerFp: fingerprint },

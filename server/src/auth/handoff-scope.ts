@@ -131,6 +131,7 @@ export async function listTargets(actor: Actor): Promise<HandoffTarget[]> {
 export async function saveVerifiedTargetAddress(
   actor: Actor,
   source: { name: string; url: string; peerFp: string },
+  previousUrls: readonly string[] = [],
 ): Promise<void> {
   const multi = await isMultiUser();
   const owner = ownerIdOf(actor);
@@ -150,7 +151,15 @@ export async function saveVerifiedTargetAddress(
     }
     const merged = targets.filter(mergedTarget);
     const previous = merged.find(samePeer) ?? merged[0];
-    const credentials = new Set([...merged.map((target) => target.peerKey), keys.get(keyUrl(source.url)) ?? ""].filter(Boolean));
+    // 弹窗补填的 key 可以没有目标机行；同指纹任务的历史 URL 也属于本次迁移。
+    // 已在目标清单中绑定给另一指纹的旧 IP，则保留那台机器现在的凭据。
+    const historicalUrls = previousUrls.map(keyUrl).filter((url) => url && !targets.some(
+      (target) => sameUrl(target.url, url) && target.peerFp && !samePeer(target),
+    ));
+    const credentialUrls = new Set([keyUrl(source.url), ...merged.map((target) => keyUrl(target.url)), ...historicalUrls]);
+    const credentials = new Set([
+      ...merged.map((target) => target.peerKey), ...[...credentialUrls].map((url) => keys.get(url) ?? ""),
+    ].filter(Boolean));
     if (credentials.size > 1) {
       throw new HandoffError("新旧地址配置了不同的账号 key，原地址未修改。请在「设置 → 默认规则 → 任务接力」统一或清空不再使用的 key 后重试。", 409);
     }
@@ -175,7 +184,7 @@ export async function saveVerifiedTargetAddress(
       .onConflictDoUpdate({ target: appSettings.key, set: { value } });
     if (peerKey) await tx.insert(handoffLocalPeerKeys).values({ url: keyUrl(source.url), peerKey, updatedAt: now() })
       .onConflictDoUpdate({ target: handoffLocalPeerKeys.url, set: { peerKey, updatedAt: now() } });
-    const obsoleteUrls = [...new Set(merged.map((target) => keyUrl(target.url)))].filter((url) => url !== keyUrl(source.url));
+    const obsoleteUrls = [...credentialUrls].filter((url) => url !== keyUrl(source.url));
     if (obsoleteUrls.length) await tx.delete(handoffLocalPeerKeys).where(inArray(handoffLocalPeerKeys.url, obsoleteUrls));
   });
   if (!multi) await invalidateInstanceCache();
