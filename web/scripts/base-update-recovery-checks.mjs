@@ -38,6 +38,7 @@ export async function checkBaseUpdateRecovery(page, fixtureUrl, checkpoint = asy
     await checkpoint(`${task}-recovery-diff`);
   }
   await checkManualBaseRecovery(page, fixtureUrl, checkpoint);
+  await checkRecoveredGrandchild(page, fixtureUrl, checkpoint);
 }
 
 export async function checkManualBaseRecovery(page, fixtureUrl, checkpoint = async () => {}) {
@@ -82,4 +83,43 @@ export async function checkManualBaseRecovery(page, fixtureUrl, checkpoint = asy
     await button("保存合入目标").click();
     await page.getByRole("status").filter({ hasText: "合入目标已改为 main" }).waitFor({ state: "visible" });
   }
+}
+
+export async function checkRecoveredGrandchild(page, fixtureUrl, checkpoint = async () => {}) {
+  const ensure = (value, message) => { if (!value) throw new Error(message); };
+  const button = name => page.getByRole("button", { name, exact: true });
+  const dialog = page.getByRole("dialog");
+  const go = async task => {
+    const url = new URL(fixtureUrl); url.search = new URLSearchParams({ task, clock: "manual" }).toString();
+    await page.goto(url.href);
+    await page.getByRole("heading", { name: task, exact: true }).waitFor({ state: "visible" });
+  };
+  await go("case24-grand");
+  await button("等待父成果合入").waitFor({ state: "visible" });
+  ensure(await button("更新子分支基线").count() === 0, "unmerged middle task must not authorize baseline replacement");
+  await go("case24-child");
+  await button("处理未完成的基线更新").click();
+  await dialog.getByRole("checkbox", { name: "我已核对基点和差异范围，保留当前代码并重新审查", exact: true }).check();
+  await dialog.getByRole("button", { name: "保留代码并解除挂起", exact: true }).click();
+  await button("处理未完成的基线更新").waitFor({ state: "detached" });
+  const review = page.getByRole("region", { name: "审查页入口", exact: true });
+  await review.getByRole("button", { name: "验收通过", exact: true }).click();
+  await dialog.getByRole("button", { name: "验收通过", exact: true }).click();
+  await review.getByText("验收完成", { exact: true }).waitFor({ state: "visible" });
+  await go("case24-grand");
+  await button("需更新子分支基线").waitFor({ state: "visible" });
+  ensure(await button("更新子分支基线").isEnabled(), "accepted rewritten middle task must expose an executable update action");
+  ensure((await page.getByRole("region", { name: "派生与验收依赖" }).innerText()).includes("当前版本已合入"), "dependency must not ask for a merge that already happened");
+  await checkpoint("grandchild-needs-update");
+  await button("更新子分支基线").click();
+  ensure((await dialog.innerText()).includes("用已验收版本替换旧基线"), "confirmation must disclose replacing inherited history");
+  await checkpoint("grandchild-update-confirm");
+  await dialog.getByRole("button", { name: "更新基线", exact: true }).click();
+  await page.getByText("基线已更新，请核对改动并按影响范围重新验证。", { exact: true }).waitFor({ state: "visible" });
+  await page.locator('output[aria-label="diff 文件"]').filter({ hasText: /^grand\.txt$/ }).waitFor({ state: "visible" });
+  await checkpoint("grandchild-updated-diff");
+  await review.getByRole("button", { name: "验收通过", exact: true }).click();
+  await dialog.getByRole("button", { name: "验收通过", exact: true }).click();
+  await review.getByText("验收完成", { exact: true }).waitFor({ state: "visible" });
+  await checkpoint("grandchild-accepted");
 }

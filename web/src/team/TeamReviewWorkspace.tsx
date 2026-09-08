@@ -134,7 +134,8 @@ export function AcceptanceControls({
     acceptanceBlock ??= branchPlan.error ? "验收依赖读取失败" : null;
     acceptanceBlock ??= branchPlan.view?.task.blockerLabel ?? branchPlan.view?.task.blocker ?? null;
     const dependency = branchPlan.view?.task.dependency;
-    if (dependency && dependency.state !== "ready" && branchPlan.view?.task.strategy !== "tag") acceptanceBlock ??= "等待父成果或更新基线";
+    if (dependency && dependency.state !== "ready" && branchPlan.view?.task.strategy !== "tag") acceptanceBlock ??=
+      dependency.state === "needs_update" ? "需更新子分支基线" : dependency.state === "waiting" ? "等待父成果合入" : "父成果依赖待处理";
   }
   const [action, setAction] = useState<"accept" | "return" | null>(null);
   const [feedback, setFeedback] = useState("");

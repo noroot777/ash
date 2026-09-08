@@ -179,7 +179,7 @@ export async function checkBranchAcceptance(page, fixtureUrl, checkpoint = async
   ensure(await output("工作流游标").innerText() === "verify2", "child inspector release must advance despite waiting parent");
 
   await go("case1-child");
-  const waiting = review().getByRole("button", { name: "等待父成果或更新基线" });
+  const waiting = review().getByRole("button", { name: "等待父成果合入" });
   await waiting.waitFor({ state: "visible" });
   ensure(!await waiting.isEnabled(), "final acceptance must keep dependency guard");
   await go("case4-parent");

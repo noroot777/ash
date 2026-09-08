@@ -170,6 +170,20 @@ export async function branchDependency(task: BranchTask, repo: string, reads?: B
     && await contains(inherited, parent.acceptedSourceCommit)) {
     return result("needs_update", `「${title}」已压缩合入 ${task.mergeTargetBranch}，需要更新子分支基线并核对验证结果`);
   }
+  const acceptedVersion = (parent.stage === "accepted" || parent.stage === "merged")
+    && receipts.find(receipt => receipt.sourceCommit === parent.acceptedSourceCommit
+      && receipt.mergeCommit === parent.acceptedMergeCommit && receipt.targetBranch === parent.acceptedTargetBranch);
+  if (acceptedVersion && await contains(acceptedVersion.mergeCommit, task.mergeTargetBranch)
+    && !await contains(acceptedVersion.sourceCommit, inherited)
+    && await (reads ? reads.commit(inherited) : commitAt(repo, inherited))) {
+    const parentBranch = await (reads ? reads.branch(parent.id) : resolveWorktreeBranchName(repo, parent.id));
+    const currentParent = await (reads ? reads.commit(parentBranch) : commitAt(repo, parentBranch));
+    const relatedHistory = await (reads ? reads.common(inherited, acceptedVersion.sourceCommit)
+      : exec("git", ["-C", expandHome(repo), "merge-base", inherited, acceptedVersion.sourceCommit])).then(() => true, () => false);
+    if (relatedHistory && (!currentParent || currentParent === acceptedVersion.sourceCommit)) {
+      return result("needs_update", `「${title}」的当前版本已合入 ${task.mergeTargetBranch}，但继承的旧提交不在目标历史中。请更新子分支基线，用已验收版本替换旧基线，再核对本任务改动。`);
+    }
+  }
   return result("waiting", `等待「${title}」的父成果合入 ${task.mergeTargetBranch}；任务结束或仅打标签不代表代码已合入`);
 }
 

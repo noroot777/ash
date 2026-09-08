@@ -147,6 +147,13 @@ try {
     await pendingRecovery("broken-json"); // case21
     await pendingRecovery("legacy-gc"); // case22
     await pendingRecovery("reset-target"); // case23
+    const chain = await setup("squash"); // case24: manual recovery with an existing grandchild.
+    const chainGrand = await chain.newTask("grand", chain.childWs.branch);
+    await db.update(tasks).set({ workflow: null, workflowMode: "free" }).where(eq(tasks.id, chainGrand.id));
+    const chainGrandWs = await taskWorkspace(await row(chainGrand.id), chain.repo);
+    commit(chainGrandWs.path, "grand.txt", "grandchild feature\n");
+    await seedPendingRecovery(async () => chain, "amended");
+    rmSync(join(chain.childWs.path, "WIP.txt"));
     await s.newTask("unstarted", "main");
     const unreadable = await s.newTask("badstart", "main");
     await taskWorkspace(await row(unreadable.id), s.repo);

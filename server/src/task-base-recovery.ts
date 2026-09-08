@@ -7,7 +7,8 @@ import { execFileText as exec } from "./exec.js";
 import { expandHome, resolveWorktreeBranchName, worktreePathFor } from "./git.js";
 import { baseRef, baseUpdateBackupPrefix, commitAt, containsCommit } from "./task-branch-plan.js";
 import { recordCompletedBaseUpdate } from "./task-base-record.js";
-import { commitId, parseBaseUpdateIntent } from "./task-base-intent.js";
+import { parseBaseUpdateIntent } from "./task-base-intent.js";
+import { readBaseUpdateBackups, retainBaseUpdateBackups } from "./task-base-backups.js";
 import { manualBaseProposal } from "./task-base-manual.js";
 import { beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { acceptanceGuard } from "./task-accept-guard.js";
@@ -31,12 +32,7 @@ async function recovery(task: typeof tasks.$inferSelect, repo: string): Promise<
   const preparedCommit = intent?.rebased ?? null;
   const backups: BaseUpdateRecovery["backups"] = [];
   const prefix = baseUpdateBackupPrefix(task.id);
-  const existingBackups: BaseUpdateRecovery["existingBackups"] = [];
-  const refs = (await exec("git", ["-C", repo, "for-each-ref", "--format=%(refname) %(objectname)", prefix])).stdout.trim().split("\n");
-  for (const line of refs) {
-    const [ref, commit] = line.split(" ");
-    if (ref?.startsWith(prefix) && commitId(commit) && await commitAt(repo, commit)) existingBackups.push({ ref, commit });
-  }
+  const existingBackups = await readBaseUpdateBackups(repo, task.id);
   const unavailableCommits: string[] = [];
   for (const [name, commit] of [["before", oldCommit], ["prepared", preparedCommit], [`current-${currentCommit}`, currentCommit]] as const) {
     if (!commit) continue;
@@ -58,7 +54,7 @@ async function recovery(task: typeof tasks.$inferSelect, repo: string): Promise<
   const pinned = await commitAt(repo, baseRef(task.id));
   let manual: BaseUpdateRecovery["manual"] = null;
   if (resolution === "blocked") {
-    const proposal = await manualBaseProposal(repo, branch, currentCommit, [
+    const proposal = await manualBaseProposal(repo, currentCommit, [
       [targetCommit, "拟以更新记录中的目标提交为起点。无法证明原准备结果仍对应当前分支，下面展示的是该起点到当前提交的实际差异。"],
       [pinned, "拟以仓库中仍存在的私有基点为起点。原更新记录不能自动结算，请核对下面的实际差异。"],
       [startCommit, "拟保留当前记录的开工起点。分支历史已变化，请核对下面的实际差异。"],
@@ -116,14 +112,21 @@ export async function abandonTaskBaseUpdate(taskId: string, fingerprint: string,
           await db.update(tasks).set({ baseUpdateIntent: null, updatedAt: now(), ...(resolution === "manual"
             ? { worktreeStartCommit: view.resolvedStartCommit, acceptedSourceCommit: null, stage: null } : {}) }).where(eq(tasks.id, taskId));
         }
-        const message = view.resolution === "complete"
+        const intent = parseBaseUpdateIntent(task.baseUpdateIntent!);
+        const keep = [...view.backups.map(b => b.ref), ...(intent
+          ? [intent.backup, `${baseUpdateBackupPrefix(taskId)}prepared-${intent.rebased}`]
+          : view.existingBackups.map(b => b.ref))];
+        const backupWarning = await retainBaseUpdateBackups(repo, taskId, keep);
+        const message = !view.currentCommit
+          ? "已解除本次基线更新挂起。任务分支已不存在，可读取的开工记录与备份已保留；未重建分支或工作区，请重新建立工作区或删除任务记录。"
+          : view.resolution === "complete"
           ? "本次基线更新已改写分支，已按更新后的起点完成结算。当前提交、后续提交及工作区文件均已保留，请核对更新后的 diff 并重新验证。"
           : resolution === "manual"
             ? "已按核对的基点手动解除挂起，当前提交与工作区文件已保留。原更新未记作完成，请按新的 diff 范围重新审查；也可重设合入目标、释放工作区或删除任务。"
             : "已放弃本次基线更新。当前分支、工作区文件及开工记录已保留，请重新核对验收依赖。";
-        await appendTaskTimeline(taskId, `${message} 可读取的更新前及准备结果已保存在：${view.backups.map(b => b.ref).join("、") || "无"}。`);
+        await appendTaskTimeline(taskId, `${message} 本次恢复备份：${view.backups.map(b => b.ref).join("、") || "无新增"}。${backupWarning}`);
         await publishTaskUpdated(taskId);
-        return { ok: true, message };
+        return { ok: true, message: `${message}${backupWarning}` };
       } finally { release(); }
     });
   } finally { endAccepting(taskId); }

@@ -44,7 +44,7 @@ export type BaseUpdateRecovery = {
   backups: { ref: string; commit: string }[];
   existingBackups: { ref: string; commit: string }[];
   unavailableCommits: string[];
-  manual: { basis: string; files: string[]; diff: string; truncated: boolean } | null;
+  manual: { basis: string; files: string[]; fileCount: number; diff: string; truncated: boolean } | null;
 };
 
 export function familySelectionBlock(entries: BranchPlanEntry[], selected: ReadonlySet<string>): { taskId: string; error: string } | null {

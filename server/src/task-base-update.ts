@@ -9,6 +9,7 @@ import { expandHome, symbolicBranch, worktreePathFor, resolveWorktreeBranchName 
 import { branchDependency, baseUpdateBackupPrefix, commitAt, inheritedParentCommit } from "./task-branch-plan.js";
 import { recordCompletedBaseUpdate } from "./task-base-record.js";
 import { parseBaseUpdateIntent } from "./task-base-intent.js";
+import { retainBaseUpdateBackups } from "./task-base-backups.js";
 import { withRepoLock } from "./repo-lock.js";
 import { beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { acceptanceGuard } from "./task-accept-guard.js";
@@ -35,7 +36,8 @@ async function finishBaseUpdate(task: typeof tasks.$inferSelect, repo: string, h
     if (current !== intent.head && current !== intent.rebased) return { ok: false, error: "子分支已被其它操作修改，未覆盖；请核对基线更新记录" };
     if (current === intent.head) await exec("git", ["-C", path, "reset", "--keep", intent.rebased]);
     await recordCompletedBaseUpdate(repo, task.id, task.mergeTargetBranch!, intent);
-    await appendTaskTimeline(task.id, `子分支基线已更新到 ${task.mergeTargetBranch}@${intent.target.slice(0, 8)}；旧提交保留在 ${intent.backup}。请核对 diff 并按影响范围重新验证，旧审查结论未自动沿用。`);
+    const backupWarning = await retainBaseUpdateBackups(repo, task.id, [intent.backup, `${baseUpdateBackupPrefix(task.id)}prepared-${intent.rebased}`]);
+    await appendTaskTimeline(task.id, `子分支基线已更新到 ${task.mergeTargetBranch}@${intent.target.slice(0, 8)}；旧提交保留在 ${intent.backup}。请核对 diff 并按影响范围重新验证，旧审查结论未自动沿用。${backupWarning}`);
     await publishTaskUpdated(task.id);
     return { ok: true };
   } finally { release(); }

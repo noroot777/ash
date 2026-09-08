@@ -100,6 +100,7 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
         confirmLabel={action === "update" ? "更新基线" : "确认统一验收"} danger busy={busy} confirmDisabled={checking || (action === "family" && (!!view.task.blocker || !!selectionBlock))} onConfirm={() => void run()} onClose={() => { if (!busy) setAction(null); }}>
         {loading && <p role="status">正在更新验收依赖，检查完成后可继续确认。</p>}
         {error && <p role="alert">验收依赖读取失败：{error}</p>}
+        {action === "update" && <p>{proposal.task.dependency?.message}</p>}
         {action === "family" && <ul>{selectedProposal.map(row => <li key={row.taskId}>{row.title} · {row.sourceCommit?.slice(0, 8) || "已验收"} · {row.strategy} → {row.targetBranch}</li>)}</ul>}
         {action === "family" && familyAcceptanceNotices(selectedProposal).map(notice => <p key={notice}>{notice}</p>)}
       </ConfirmDialog>}

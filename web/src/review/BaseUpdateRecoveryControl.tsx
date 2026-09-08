@@ -35,7 +35,9 @@ export function BaseUpdateRecoveryControl({ taskId, disabled, onAbandoned }: {
     {error && !proposal && <p role="alert">{error}</p>}
     {proposal && <ConfirmDialog title={proposal.resolution === "blocked" ? "暂时无法读取恢复差异" : proposal.resolution === "manual" ? "核对基点并手动解除挂起？" : proposal.resolution === "complete" ? "完成已生效的基线更新？" : "放弃本次基线更新？"}
       confirmLabel={proposal.resolution === "blocked" ? "暂时无法处理" : proposal.resolution === "manual" ? "保留代码并解除挂起" : proposal.resolution === "complete" ? "确认完成基线更新" : "确认放弃基线更新"}
-      message={proposal.resolution === "blocked"
+      message={!proposal.currentCommit
+        ? "任务分支已不存在。本次仅解除挂起并保留可读取的开工记录和备份，不会重建分支或工作区。之后可重新建立工作区或删除任务记录。"
+        : proposal.resolution === "blocked"
         ? "恢复差异暂时无法读取，目前不能确认处理后的改动范围。当前代码和挂起记录均未修改，请关闭后刷新重试。"
         : proposal.resolution === "complete"
         ? "分支已包含本次更新的准备结果。将按更新后的起点完成结算，使 diff 只展示任务自身的改动；保留当前提交、之后新增的提交和工作区文件，并保存恢复备份。完成后请核对 diff 并重新验证。"
@@ -57,9 +59,10 @@ export function BaseUpdateRecoveryControl({ taskId, disabled, onAbandoned }: {
       {proposal.unavailableCommits.length > 0 && <p role="alert">以下提交对象已无法读取，无法另存恢复备份：{proposal.unavailableCommits.join("、")}。当前代码仍会保留。</p>}
       {proposal.manual && proposal.resolution === "manual" && <section aria-label="恢复差异预览">
         <p role="status">{proposal.manual.basis}</p>
-        <p>处理后的 diff 文件：{proposal.manual.files.join("、") || "无"}</p>
+        <p style={{ maxHeight: 120, overflow: "auto", overflowWrap: "anywhere" }}>处理后的 diff 文件：{proposal.manual.files.join("、") || "无"}</p>
+        {proposal.manual.fileCount > proposal.manual.files.length && <p role="status">共 {proposal.manual.fileCount} 个改动文件，此处仅列出前 {proposal.manual.files.length} 个。请结合工作区核对完整改动范围后再确认。</p>}
         <pre style={{ maxHeight: 160, overflow: "auto", fontSize: 11 }}>{proposal.manual.diff || "该起点到当前提交没有差异。"}</pre>
-        {proposal.manual.truncated && <p role="status">此处 diff 已截断；文件清单完整，解除后请在审查页逐文件核对。</p>}
+        {proposal.manual.truncated && <p role="status">此处 diff 已截断；解除后仍需核对完整改动并重新审查。</p>}
         <label><input type="checkbox" checked={acknowledged} onChange={e => setAcknowledged(e.target.checked)} />我已核对基点和差异范围，保留当前代码并重新审查</label>
       </section>}
       {error && <p role="alert">{error}</p>}
