@@ -186,7 +186,7 @@ export function FreeReviewDialog({
       const name = reviewerId === selectedId
         ? reviewers.find((item) => item.id === selectedId)?.name ?? "审查者"
         : newName.trim();
-      notify(postMerge ? `已派出 ${name} 审查合并结果` : reservationMode ? `已预约完成后由「${name}」审查` : `已派出 ${name}`);
+      notify(postMerge ? `已派出 ${name} 审查合并结果` : reservationMode ? `已预约由「${name}」审查，执行回合正常结束后开始` : `已派出 ${name}`);
       onClose();
     } catch (error) {
       notify(error instanceof Error ? error.message : postMerge ? "合并结果审查启动失败" : reservationMode ? "预约审查失败" : "派审失败");
@@ -233,7 +233,7 @@ export function FreeReviewDialog({
       >
         <header>
           <span><MagnifyingGlass size={17} weight="bold" /></span>
-          <div><h2 id="free-review-title">{dialogTitle}</h2><p>{postMerge ? "在验收时冻结的目标分支快照上做一次可选检查；未通过时另建修复任务。" : reservationMode ? "选择审查者与检查深度；任务确认完成后自动开始。" : "选择一套审查者配置，再决定检查深度与失败后的自动复审次数。"}</p></div>
+          <div><h2 id="free-review-title">{dialogTitle}</h2><p>{postMerge ? "在验收时冻结的目标分支快照上做一次可选检查；未通过时另建修复任务。" : reservationMode ? "选择审查者与检查深度；执行回合正常结束后自动开始。停止、异常或等待答复时保留预约。" : "选择一套审查者配置，再决定检查深度与失败后的自动复审次数。"}</p></div>
           <button type="button" aria-label={`关闭${dialogTitle}`} disabled={busy} onClick={onClose}><X size={15} /></button>
         </header>
         {loading ? <div className="free-review-loading"><SpinnerGap size={15} className="is-spinning" />正在读取审查者…</div> : (

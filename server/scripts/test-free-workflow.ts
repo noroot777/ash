@@ -215,7 +215,7 @@ try {
   const manualRepair = freeManualRepairPrompt("free-exhausted-task", exhaustedRun);
   assert.match(manualRepair, /自动复审已停止/);
   assert.match(manualRepair, /不会擅自增加审查轮数/);
-  assert.match(manualRepair, /预约了复审，完成后按预约开始/);
+  assert.match(manualRepair, /预约了复审，执行回合正常结束后按预约开始/);
   assert.doesNotMatch(manualRepair, /随后会自动派同一位审查者复审/);
 
   // HTTP 修复入口与普通回合**原子互斥**（holdTurn 占位身份 dispatch）：普通回合已
@@ -260,7 +260,7 @@ try {
   reworkState = await api.request("/tasks/free-rework-task/free-workflow").then((response) => response.json()) as typeof reworkState;
   assert.equal(reworkState.reviews.length, 1, "无预约时确认完成不得自动派审");
   assert.equal(reworkState.reviews[0]?.status, "stopped");
-  // 挂续轮预约再确认完成：同一 run 续 round 2。
+  // 修复回合漏调完成工具：同一 run 仍续 round 2。
   await db.insert(freeWorkflowStates).values({
     taskId: "free-rework-task", selectedReviewerId: reviewer.id, reviewArmed: true,
     reviewCheckMode: "logic", reviewRetryLimit: 1, reviewNote: null, reviewRunId: reworkRun.id,
@@ -270,14 +270,14 @@ try {
     set: { reviewArmed: true, reviewRunId: reworkRun.id, updatedAt: new Date().toISOString() },
   });
   assert.equal(claimTurn("free-rework-task"), true);
-  await handleFreeWorkflowSettlement("free-rework-task", "done", true, true);
+  await handleFreeWorkflowSettlement("free-rework-task", "done", false, true);
   const continuedState = await api.request("/tasks/free-rework-task/free-workflow").then((response) => response.json()) as {
     reviewReservation: { armed: boolean; runId: string | null };
     reviews: Array<{ id: string; status: string; currentRound: number }>;
   };
   assert.equal(continuedState.reviews.length, 1, "续轮预约应在原 run 上续，不得开新 run");
   assert.equal(continuedState.reviews[0]?.status, "reviewing");
-  assert.equal(continuedState.reviews[0]?.currentRound, 2, "确认完成后应续到第 2 轮");
+  assert.equal(continuedState.reviews[0]?.currentRound, 2, "修复回合正常结束后应续到第 2 轮，无需完成确认");
   assert.equal(continuedState.reviewReservation.armed, false, "续轮开跑即消费预约槽");
 
   const reserveReview = async (checkMode: "logic" | "syntax", retryLimit: number, note: string | null = null) => api.request(

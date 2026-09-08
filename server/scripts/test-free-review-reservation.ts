@@ -196,9 +196,32 @@ try {
   }, { armed: true, checkMode: "syntax", retryLimit: 3, note: "清槽前抢先保存", override: rollbackOverride },
     "派审清槽不得抹掉消费之后、清槽之前保存的新预约");
 
+  // 已完成任务的续聊漏调 complete_task，仍按用户预约开审，任务完成确认另行记账。
+  await createTasks([freeTask("free-unconfirmed-task", "free unconfirmed")]);
+  await db.insert(sessions).values({
+    id: "unconfirmed-session", taskId: "free-unconfirmed-task", role: "single", agentType: "codex",
+    executor: "codex@test", startedAt: new Date().toISOString(),
+  });
+  assert.equal((await api.request("/tasks/free-unconfirmed-task/free-workflow/review-reservation", {
+    method: "PUT", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1 }),
+  })).status, 200);
+  await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, "free-unconfirmed-task"));
+  assert.equal(claimTurn("free-unconfirmed-task"), true);
+  // 续聊回合的典型落位：状态回到原终态 done，但这一轮没确认完成。
+  await handleFreeWorkflowSettlement("free-unconfirmed-task", "done", false, true);
+  const unconfirmed = await api.request("/tasks/free-unconfirmed-task/free-workflow").then((response) => response.json()) as {
+    reviewReservation: { armed: boolean }; reviews: unknown[];
+  };
+  assert.equal(unconfirmed.reviewReservation.armed, false, "正常结束的续聊不再因漏调完成工具而卡住预约");
+  assert.equal(unconfirmed.reviews.length, 1, "按用户预约派出审查");
+  assert.match(readFileSync(sessionTranscriptPath("free-unconfirmed-task", "unconfirmed-session"), "utf8"),
+    /执行回合已正常结束，按预约启动审查/, "自动启动及未确认完成的区别落在持久时间线上");
+
   console.log("✓ 预约覆盖整套存整套落，审查者配置不受影响");
   console.log("✓ 预约里的执行器失效只摘执行器那一段，模型与智能水平照用且时间线有交代");
   console.log("✓ 预约启动失败整条回滚；消费与清槽窗口内用户新保存的预约不被抹掉");
+  console.log("✓ 续聊漏调完成工具仍启动预约审查，时间线上说明完成状态没有被代确认");
 } finally {
   // 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
   await releaseTmpDb();
