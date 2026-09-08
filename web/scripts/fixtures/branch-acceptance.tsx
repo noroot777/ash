@@ -20,7 +20,11 @@ function Fixture() {
   const [guard, setGuard] = useState("none");
   const taskId = new URLSearchParams(location.search).get("task") || "case1-parent";
   useEffect(() => { void api.task(taskId).then(setTask); }, [taskId]);
-  useEffect(() => { void api.taskDiff(taskId).then(setDiff); }, [taskId]);
+  useEffect(() => {
+    let alive = true; setDiff(null);
+    void api.taskDiff(taskId).then(value => { if (alive) setDiff(value); });
+    return () => { alive = false; };
+  }, [taskId, task?.updatedAt]);
   if (!task) return <p>读取测试任务…</p>;
   const checkCreationError = async () => {
     try {
@@ -30,7 +34,7 @@ function Fixture() {
   };
   return <main style={{ maxWidth: 920, padding: 32, margin: "auto" }}>
     <h1>父子任务验收验证</h1><p>独立临时仓库与数据库中的测试任务</p>
-    <nav style={{ display: "flex", gap: 16, marginBottom: 24 }}>
+    <nav style={{ display: "flex", flexWrap: "wrap", gap: 16, marginBottom: 24 }}>
       {["case1-parent", "case1-child", "case2-child", "case3-parent", "case4-parent", "case5-parent", "case5-child", "case6-parent", "case6-child", "case7-parent", "case8-parent", "case9-parent", "case9-child", "case10-parent", "case10-child", "case11-child", "case12-parent", "case12-child", "case13-parent", "case13-child", "case14-parent", "case14-child", "case15-parent", "case16-child", "case17-child", "case18-child", "case1-unstarted", "case1-badstart"].map(id => <a key={id} href={`?task=${id}`}>{id}</a>)}
     </nav>
     <h2>{task.title}</h2>
@@ -51,6 +55,10 @@ function Fixture() {
         task={{ ...task, archived: guard === "archived", status: guard === "running" || guard === "queued" ? guard : task.status }}
         acceptanceBlock={guard === "block" ? "审查进行中" : null} onTaskUpdated={setTask} notify={setNotice} /></section>
       <BranchAcceptancePanel task={task} notify={setNotice} onTaskUpdated={setTask} />
+      {["case16-child", "case17-child", "case19-child"].includes(taskId) && diff && <section aria-label="恢复后的分支改动">
+        <output aria-label="diff 文件">{diff.files.map(file => file.path).sort().join(",")}</output>
+        <ReviewDiffViewer result={diff} />
+      </section>}
       {task.workflow && <section aria-label="工作流侧栏入口"><WorkflowInspector task={task} onTaskUpdated={setTask} notify={setNotice} /></section>}
     </>}
     <p role="status" aria-label="操作结果">{notice}</p>

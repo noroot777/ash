@@ -33,7 +33,7 @@ async function entry(task: BranchTask, repo: string, fingerprintTarget?: string 
   const plan = acceptPlan(taskWorkflowDef(task.workflow), "human", task.workflowAt);
   const guard = await acceptanceGuard(task.id, "before_accept");
   let blocker = guard.failure?.error ?? null;
-  let blockerLabel: string | undefined;
+  let blockerLabel: string | undefined = guard.failure?.reason === "base_update_pending" ? "基线更新待处理" : undefined;
   if (!blocker && !isFinalHumanGate(taskWorkflowDef(task.workflow), task.workflowAt)) blocker = "尚在中途关口，请先完成任务流程";
   if (!blocker && task.workflowMode === "free" && !["done", "failed", "canceled"].includes(task.status)
     && task.stage !== "accepted" && task.stage !== "merged") blocker = "任务尚未结束";
@@ -66,7 +66,7 @@ async function entry(task: BranchTask, repo: string, fingerprintTarget?: string 
   return {
     taskId: task.id, projectId: task.projectId, title: task.title, status: task.status, stage: task.stage,
     startCommit: task.worktreeStartCommit, targetBranch: target, targetTaskId: targetOwner?.id ?? null, sourceBranch, sourceCommit, targetCommit, targetWorkspaceBlocker, targetWorkspaceRecovery,
-    strategy: plan.merge || "mark", dependency: task.baseUpdateIntent ? { taskId: task.baseTaskId, title: "父任务", state: "needs_update", message: "上次基线更新尚未结算。可重试更新基线；无法恢复时，核对后放弃本次基线更新，保留当前代码与恢复备份。" } : await branchDependency(task, repo, reads), blocker, blockerLabel, fingerprint, baseUpdatePending: !!task.baseUpdateIntent,
+    strategy: plan.merge || "mark", dependency: task.baseUpdateIntent ? { taskId: task.baseTaskId, title: "父任务", state: "needs_update", message: "上次基线更新尚未结算。可重试更新基线，或点击「处理未完成的基线更新」：尚未改写时可放弃，已经生效时会同步开工起点，保留当前代码与恢复备份。" } : await branchDependency(task, repo, reads), blocker, blockerLabel, fingerprint, baseUpdatePending: !!task.baseUpdateIntent,
   };
 }
 
@@ -243,10 +243,10 @@ export function mountBranchPlanRoutes(api: Hono, accept: Accept): void {
     return view ? c.json(view) : c.json({ error: "没有待结算的基线更新，请刷新依赖" }, 409);
   });
   api.post("/tasks/:id/abandon-base-update", async c => {
-    if (IS_PREVIEW_INSTANCE) return c.json({ ok: false, error: previewRefusal("放弃本次基线更新") }, 409);
-    const body = await c.req.json<{ fingerprint?: string }>();
-    if (typeof body.fingerprint !== "string") return c.json({ error: "fingerprint required" }, 400);
-    const result = await abandonTaskBaseUpdate(c.req.param("id"), body.fingerprint);
+    if (IS_PREVIEW_INSTANCE) return c.json({ ok: false, error: previewRefusal("处理未完成的基线更新") }, 409);
+    const body = await c.req.json<{ fingerprint?: string; resolution?: string }>();
+    if (typeof body?.fingerprint !== "string" || (body.resolution !== "abandon" && body.resolution !== "complete")) return c.json({ error: "请刷新页面并重新确认基线更新的处理方式" }, 400);
+    const result = await abandonTaskBaseUpdate(c.req.param("id"), body.fingerprint, body.resolution);
     return c.json(result, result.ok ? 200 : 409);
   });
   api.post("/tasks/:id/accept-family", async c => {

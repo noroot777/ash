@@ -152,7 +152,7 @@ export async function acceptanceGuard(
       },
     };
   }
-  if (state.task.baseUpdateIntent && !options.allowBaseUpdatePending) return { task: state.task, failure: { accepted: false, httpStatus: 409, taskId, reason: "base_update_pending", error: "上次基线更新尚未结算，请在「派生与验收」中重试；无法恢复时可核对后放弃本次基线更新", phase } };
+  if (state.task.baseUpdateIntent && !options.allowBaseUpdatePending) return { task: state.task, failure: { accepted: false, httpStatus: 409, taskId, reason: "base_update_pending", error: "上次基线更新尚未结算，请在「派生与验收」中重试，或点击「处理未完成的基线更新」核对实际结果", phase } };
   if (state.inFlightTasks.length === 0) return { task: state.task, failure: null };
 
   const sharedWorkers = state.inFlightTasks.filter((item) => item.role === "shared_worker");

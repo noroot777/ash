@@ -38,6 +38,9 @@ export type BaseUpdateRecovery = {
   startCommit: string | null;
   oldCommit: string | null;
   preparedCommit: string | null;
+  resolution: "abandon" | "complete" | "blocked";
+  resolvedStartCommit: string | null;
+  blocker: string | null;
   backups: { ref: string; commit: string }[];
   unavailableCommits: string[];
 };

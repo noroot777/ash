@@ -3,10 +3,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { projects, tasks, taskBranchReceipts } from "./db/schema.js";
+import { projects, tasks } from "./db/schema.js";
 import { execFileText as exec } from "./exec.js";
 import { expandHome, symbolicBranch, worktreePathFor, resolveWorktreeBranchName } from "./git.js";
-import { branchDependency, baseRef, baseUpdateBackupPrefix, commitAt, inheritedParentCommit } from "./task-branch-plan.js";
+import { branchDependency, baseUpdateBackupPrefix, commitAt, inheritedParentCommit } from "./task-branch-plan.js";
+import { recordCompletedBaseUpdate } from "./task-base-record.js";
 import { withRepoLock } from "./repo-lock.js";
 import { beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { acceptanceGuard } from "./task-accept-guard.js";
@@ -31,10 +32,7 @@ async function finishBaseUpdate(task: typeof tasks.$inferSelect, repo: string, h
     const current = await commitAt(repo, intent.branch);
     if (current !== intent.head && current !== intent.rebased) return { ok: false, error: "子分支已被其它操作修改，未覆盖；请核对基线更新记录" };
     if (current === intent.head) await exec("git", ["-C", path, "reset", "--keep", intent.rebased]);
-    await exec("git", ["-C", repo, "update-ref", baseRef(task.id), intent.target]);
-    await db.insert(taskBranchReceipts).values({ id: `${task.id}:${intent.head}:${intent.rebased}`, taskId: task.id, sourceCommit: intent.head, mergeCommit: intent.rebased, targetBranch: task.mergeTargetBranch! }).onConflictDoNothing();
-    await db.update(tasks).set({ worktreeStartCommit: intent.target, acceptedSourceCommit: null,
-      baseUpdateIntent: null, stage: null, updatedAt: now() }).where(eq(tasks.id, task.id));
+    await recordCompletedBaseUpdate(repo, task.id, task.mergeTargetBranch!, intent);
     await appendTaskTimeline(task.id, `子分支基线已更新到 ${task.mergeTargetBranch}@${intent.target.slice(0, 8)}；旧提交保留在 ${intent.backup}。请核对 diff 并按影响范围重新验证，旧审查结论未自动沿用。`);
     await publishTaskUpdated(task.id);
     return { ok: true };

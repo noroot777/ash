@@ -1,3 +1,5 @@
+import { checkBaseUpdateRecovery } from "./base-update-recovery-checks.mjs";
+
 export async function checkBranchAcceptance(page, fixtureUrl, checkpoint = async () => {}) {
   const ensure = (value, message) => { if (!value) throw new Error(message); };
   const go = async task => {
@@ -138,27 +140,7 @@ export async function checkBranchAcceptance(page, fixtureUrl, checkpoint = async
   ensure((await review().getByRole("alert").innerText()).includes("ash-accepted/"), "tag partial success must name the created tag");
   ensure(!/合并已完成|验收未完成/.test(await review().getByRole("alert").innerText()), "tag result must agree with its actual completed action");
 
-  for (const task of ["case16-child", "case17-child"]) {
-    await go(task);
-    await button("放弃本次基线更新").waitFor({ state: "visible" });
-    await button("更新子分支基线").click();
-    await page.getByRole("dialog").getByRole("button", { name: "更新基线", exact: true }).click();
-    await page.getByRole("status").filter({ hasText: /工作区已变化|子分支已被其它操作修改/ }).waitFor({ state: "visible" });
-    await button("放弃本次基线更新").click();
-    await page.getByRole("dialog").getByRole("heading", { name: "放弃本次基线更新？", exact: true }).waitFor({ state: "visible" });
-    ensure((await page.getByRole("dialog").innerText()).includes("当前提交"), "abandonment must show the current branch snapshot");
-    await checkpoint(`${task}-abandon-confirm`);
-    await page.getByRole("dialog").getByRole("button", { name: "取消", exact: true }).click();
-    ensure(await button("放弃本次基线更新").isEnabled(), "cancel must preserve the pending operation");
-    await button("放弃本次基线更新").click();
-    await page.getByRole("dialog").getByRole("button", { name: "确认放弃基线更新", exact: true }).click();
-    await page.getByRole("status").filter({ hasText: "已放弃本次基线更新" }).first().waitFor({ state: "visible" });
-    await button("放弃本次基线更新").waitFor({ state: "detached" });
-    await button("重设合入目标").and(page.locator("button:enabled")).waitFor({ state: "visible" });
-    ensure(await button("重设合入目标").count() === 1, "recovery must not duplicate the target editor");
-    ensure(await button("重设合入目标").isEnabled(), "abandonment must unlock target configuration");
-    await checkpoint(`${task}-abandoned`);
-  }
+  await checkBaseUpdateRecovery(page, fixtureUrl, checkpoint);
 
   await go("case18-child");
   await page.getByRole("status").filter({ hasText: "来源任务记录已不存在" }).waitFor({ state: "visible" });

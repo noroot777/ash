@@ -194,7 +194,7 @@ export async function dependentTasks(repo: string, projectId: string, taskId: st
 export async function branchDeletionRejection(repo: string, taskId: string, projectId?: string, deleteRefs = true): Promise<{ error: string; reason: "base_update_pending" | "dependent_tasks" } | null> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task && !projectId) return null;
-  if (task?.baseUpdateIntent) return { reason: "base_update_pending", error: "上次基线更新尚未结算，请在「派生与验收」中重试或核对后放弃本次基线更新，再删除或清理" };
+  if (task?.baseUpdateIntent) return { reason: "base_update_pending", error: "上次基线更新尚未结算，请在「派生与验收」中重试或点击「处理未完成的基线更新」，再删除或清理" };
   if (!deleteRefs) return null;
   const dependents = await dependentTasks(repo, task?.projectId || projectId!, taskId);
   return dependents.length
