@@ -12,6 +12,7 @@ import { DuetView } from "../duet/DuetView.tsx";
 import { TaskPlaceholder } from "./TaskPlaceholder.tsx";
 import { useTaskBody } from "../lib/useTaskBody.ts";
 import { WorkspaceSidebar } from "./WorkspaceSidebar.tsx";
+import { useToast, WorkspaceToast } from "./WorkspaceToast.tsx";
 import {
   parseSettingsSection,
   projectSectionLabel,
@@ -86,7 +87,6 @@ export function WorkspaceShell() {
   const [createDialog, setCreateDialog] = useState<{ kind: "group" } | { kind: "project"; reason: string | null } | null>(null);
   const [collapsed, setCollapsed] = useState(() => readRenamedStorage("ash:sidebar-collapsed") === "1");
   const [sidebarWidth, setSidebarWidth] = useState(readWorkspaceSidebarWidth);
-  const [toast, setToast] = useState<string | null>(null);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const isMultiUser = useIsMultiUser();
   const isInstanceAdmin = useIsInstanceAdmin();
@@ -120,10 +120,8 @@ export function WorkspaceShell() {
   useEffect(() => { writeStoredScopeKind(scopeKind); }, [scopeKind]);
   const spread = useSidebarSpread(tasks, scope, settlementVersion);
 
-  const notify = useCallback((message: string) => {
-    setToast(message);
-    window.setTimeout(() => setToast((current) => current === message ? null : current), 2600);
-  }, []);
+  // 提示的寿命（常规两秒多自己走 / 长报错等用户收）都在 WorkspaceToast.tsx 里。
+  const { toast, notify, dismiss: dismissToast } = useToast();
 
   useEffect(() => {
     let alive = true;
@@ -423,7 +421,7 @@ export function WorkspaceShell() {
     {handoffTarget && <HandoffDialog task={handoffTarget} onClose={() => setHandoffTarget(null)} onTaskUpdate={updateTask} onOpenRemote={selectRemoteTask} notify={notify} />}
     {createDialog?.kind === "project" && <CreateProjectDialog projects={projects} reason={createDialog.reason} notify={notify} onClose={() => setCreateDialog(null)} onCreated={(created) => { setProjects((current) => [...current, created]); setProjectId(created.id); setTaskId(null); setSettingsSection(null); setCreateDialog(null); notify("项目已创建"); }} />}
     {createDialog?.kind === "group" && currentProject && <CreateGroupDialog onClose={() => setCreateDialog(null)} onCreate={async (name, mode) => { try { const created = await api.createGroup({ projectId: currentProject.id, name, mode }); setGroups((current) => [...current, created]); setCreateDialog(null); notify("分组已创建"); } catch (error) { notify(error instanceof Error ? error.message : "分组创建失败"); } }} />}
-    <div className={`workspace-toast${toast ? " is-visible" : ""}`} role="status" aria-live="polite">{toast}</div>
+    <WorkspaceToast toast={toast} onDismiss={dismissToast} />
   </>;
   if (settingsSection) return <><div className="workspace-system-layout"><div>{handoffAlert}</div><SettingsPage
     section={settingsSection}
