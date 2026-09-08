@@ -81,6 +81,7 @@ export async function acceptanceState(taskId: string): Promise<{
 export async function acceptanceGuard(
   taskId: string,
   phase: AcceptFailure["phase"],
+  options: { allowBaseUpdatePending?: boolean } = {},
 ): Promise<{ task: typeof tasks.$inferSelect | null; failure: AcceptFailure | null }> {
   const state = await acceptanceState(taskId);
   if (!state.task) {
@@ -151,7 +152,7 @@ export async function acceptanceGuard(
       },
     };
   }
-  if (state.task.baseUpdateIntent) return { task: state.task, failure: { accepted: false, httpStatus: 409, taskId, reason: "base_update_pending", error: "上次基线更新尚未结算，请先重试更新基线", phase } };
+  if (state.task.baseUpdateIntent && !options.allowBaseUpdatePending) return { task: state.task, failure: { accepted: false, httpStatus: 409, taskId, reason: "base_update_pending", error: "上次基线更新尚未结算，请在「派生与验收」中重试；无法恢复时可核对后放弃本次基线更新", phase } };
   if (state.inFlightTasks.length === 0) return { task: state.task, failure: null };
 
   const sharedWorkers = state.inFlightTasks.filter((item) => item.role === "shared_worker");

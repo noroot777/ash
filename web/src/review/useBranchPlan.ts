@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { BranchPlanView, TaskListItem } from "@ash/shared";
 import { api } from "../lib/api.ts";
 
-type Snapshot = { view: BranchPlanView | null; error: string | null };
+type Snapshot = { view: BranchPlanView | null; error: string | null; loading: boolean };
 type Entry = {
   snapshot: Snapshot;
   listeners: Set<(snapshot: Snapshot) => void>;
@@ -11,7 +11,7 @@ type Entry = {
   pending?: Promise<void>;
   timer?: ReturnType<typeof setInterval>;
 };
-const empty: Snapshot = { view: null, error: null };
+const empty: Snapshot = { view: null, error: null, loading: false };
 const entries = new Map<string, Entry>();
 
 function load(taskId: string, entry: Entry, force = false): Promise<void> {
@@ -22,9 +22,10 @@ function load(taskId: string, entry: Entry, force = false): Promise<void> {
     entry.snapshot = snapshot;
     for (const listener of entry.listeners) listener(snapshot);
   };
+  publish({ ...entry.snapshot, loading: true });
   const pending = api.branchPlan(taskId).then(
-    view => publish({ view, error: null }),
-    reason => publish({ view: entry.snapshot.view, error: reason instanceof Error ? reason.message : String(reason) }),
+    view => publish({ view, error: null, loading: false }),
+    reason => publish({ view: entry.snapshot.view, error: reason instanceof Error ? reason.message : String(reason), loading: false }),
   ).finally(() => { if (entry.pending === pending) entry.pending = undefined; });
   entry.pending = pending;
   return pending;
@@ -59,8 +60,6 @@ export function useBranchPlan(task: TaskListItem, enabled = true) {
     const entry = active && entries.get(task.id);
     if (!entry || (entry.sequence > 0 && entry.version === task.updatedAt)) return;
     entry.version = task.updatedAt;
-    entry.snapshot = empty;
-    for (const listener of entry.listeners) listener(empty);
     void load(task.id, entry, true);
   }, [task.id, task.updatedAt, active]);
   const refresh = useCallback(async () => {

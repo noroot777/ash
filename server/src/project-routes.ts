@@ -11,7 +11,7 @@ import { id, now } from "./util.js";
 import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches } from "./git.js";
 import { getGitOverview } from "./git-overview.js";
 import { discardTaskWorkspace } from "./workspace-cleanup.js";
-import { branchDeletionBlock } from "./task-branch-plan.js";
+import { branchDeletionRejection } from "./task-branch-plan.js";
 import { withRepoLock } from "./repo-lock.js";
 import { deleteTaskAssociations } from "./task-routes.js";
 import { isTaskBusy, taskBusyRejection } from "./task-busy.js";
@@ -323,8 +323,8 @@ export function mountProjectRoutes(api: Hono): void {
     const owner = await projectOfTask(b.taskId);
     if (owner !== null && owner !== row.id) return c.json({ error: "task not found", taskId: b.taskId }, 404);
     return withRepoLock(row.repoPath, async () => {
-    const dependencyError = await branchDeletionBlock(row.repoPath, b.taskId, row.id, b.branch !== false);
-    if (dependencyError) return c.json({ error: dependencyError, reason: "dependent_tasks" }, 409);
+    const rejection = await branchDeletionRejection(row.repoPath, b.taskId, row.id, b.branch !== false);
+    if (rejection) return c.json(rejection, 409);
     const busy = await taskBusyRejection(b.taskId, "清理");
     if (busy) return c.json(busy, 409);
     return c.json(

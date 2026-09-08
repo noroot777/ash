@@ -1,4 +1,4 @@
-export async function checkBranchAcceptance(page, fixtureUrl) {
+export async function checkBranchAcceptance(page, fixtureUrl, checkpoint = async () => {}) {
   const ensure = (value, message) => { if (!value) throw new Error(message); };
   const go = async task => {
     const url = new URL(fixtureUrl);
@@ -138,6 +138,39 @@ export async function checkBranchAcceptance(page, fixtureUrl) {
   ensure((await review().getByRole("alert").innerText()).includes("ash-accepted/"), "tag partial success must name the created tag");
   ensure(!/合并已完成|验收未完成/.test(await review().getByRole("alert").innerText()), "tag result must agree with its actual completed action");
 
+  for (const task of ["case16-child", "case17-child"]) {
+    await go(task);
+    await button("放弃本次基线更新").waitFor({ state: "visible" });
+    await button("更新子分支基线").click();
+    await page.getByRole("dialog").getByRole("button", { name: "更新基线", exact: true }).click();
+    await page.getByRole("status").filter({ hasText: /工作区已变化|子分支已被其它操作修改/ }).waitFor({ state: "visible" });
+    await button("放弃本次基线更新").click();
+    await page.getByRole("dialog").getByRole("heading", { name: "放弃本次基线更新？", exact: true }).waitFor({ state: "visible" });
+    ensure((await page.getByRole("dialog").innerText()).includes("当前提交"), "abandonment must show the current branch snapshot");
+    await checkpoint(`${task}-abandon-confirm`);
+    await page.getByRole("dialog").getByRole("button", { name: "取消", exact: true }).click();
+    ensure(await button("放弃本次基线更新").isEnabled(), "cancel must preserve the pending operation");
+    await button("放弃本次基线更新").click();
+    await page.getByRole("dialog").getByRole("button", { name: "确认放弃基线更新", exact: true }).click();
+    await page.getByRole("status").filter({ hasText: "已放弃本次基线更新" }).first().waitFor({ state: "visible" });
+    await button("放弃本次基线更新").waitFor({ state: "detached" });
+    await button("重设合入目标").and(page.locator("button:enabled")).waitFor({ state: "visible" });
+    ensure(await button("重设合入目标").count() === 1, "recovery must not duplicate the target editor");
+    ensure(await button("重设合入目标").isEnabled(), "abandonment must unlock target configuration");
+    await checkpoint(`${task}-abandoned`);
+  }
+
+  await go("case18-child");
+  await page.getByRole("status").filter({ hasText: "来源任务记录已不存在" }).waitFor({ state: "visible" });
+  ensure((await page.locator("main").innerText()).includes("选择已包含继承提交的本地分支"), "missing source must suggest an available action");
+  await checkpoint("missing-source-guidance");
+  await button("重设合入目标").click();
+  await page.getByRole("combobox", { name: "合入目标", exact: true }).selectOption("imported-parent");
+  await button("保存合入目标").click();
+  await review().getByRole("button", { name: "验收通过", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "验收通过", exact: true }).click();
+  await review().getByText("验收完成", { exact: true }).waitFor({ state: "visible" });
+
   await go("case5-parent");
   await page.getByRole("region", { name: "派生与验收依赖" }).waitFor({ state: "visible" });
   ensure(await review().getByRole("button", { name: "放行，继续下一站" }).isEnabled(), "review mid-gate must allow release");
@@ -203,11 +236,19 @@ export async function checkBranchAcceptance(page, fixtureUrl) {
   await button("轮询一次").click();
   await settled(9);
   await button("延迟正常依赖响应").click();
-  await button("模拟任务更新").click();
+  await button("确认框打开时更新标签").click();
+  await review().getByRole("button", { name: "验收通过", exact: true }).click();
   await output("延迟状态").filter({ hasText: "已挂起" }).waitFor({ state: "visible" });
   ensure(!await review().getByRole("button", { name: "检查验收依赖" }).isEnabled(), "updated task must await a fresh plan");
-  await button("释放旧响应").click();
+  await dialog.getByRole("heading", { name: "确认验收通过？", exact: true }).waitFor({ state: "visible" });
+  ensure(!await dialog.getByRole("button", { name: "验收通过", exact: true }).isEnabled(), "confirmation must wait for dependency refresh without disappearing");
+  ensure(await page.getByRole("region", { name: "派生与验收依赖" }).count() === 1, "refresh must preserve the existing panel");
+  await checkpoint("individual-confirm-refreshing");
+  await dialog.getByRole("button", { name: "完成测试依赖响应", exact: true }).click();
   await settled(10);
+  ensure(await dialog.getByRole("button", { name: "验收通过", exact: true }).isEnabled(), "unrelated update must preserve and restore the open confirmation");
+  await checkpoint("individual-confirm-refreshed");
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
   ensure(await review().getByRole("button", { name: "验收通过", exact: true }).isEnabled(), "fresh task plan must restore acceptance");
 
   await go("case2-child");
@@ -223,9 +264,19 @@ export async function checkBranchAcceptance(page, fixtureUrl) {
   await page.getByRole("alert").filter({ hasText: "未勾选的父任务" }).waitFor({ state: "visible" });
   ensure(!await page.getByRole("button", { name: /验收父任务及所选子任务/ }).isEnabled(), "cannot skip intermediate ancestor");
   await page.getByRole("checkbox", { name: "case1-child", exact: true }).check();
+  await button("延迟正常依赖响应").click();
+  await button("确认框打开时更新标签").click();
   await page.getByRole("button", { name: /验收父任务及所选子任务/ }).click();
   await dialog.getByRole("heading", { name: "统一验收所选任务？" }).waitFor({ state: "visible" });
+  await output("延迟状态").filter({ hasText: "已挂起" }).waitFor({ state: "visible" });
+  ensure(!await dialog.getByRole("button", { name: "确认统一验收", exact: true }).isEnabled(), "family confirmation must stay mounted but pause during refresh");
+  await checkpoint("family-confirm-refreshing");
+  await dialog.getByRole("button", { name: "完成测试依赖响应", exact: true }).click();
+  await dialog.getByRole("button", { name: "确认统一验收", exact: true }).and(page.locator("button:enabled")).waitFor({ state: "visible" });
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await page.getByRole("button", { name: /验收父任务及所选子任务/ }).click();
   for (const name of ["case1-parent", "case1-child", "case1-grand"]) ensure((await dialog.innerText()).includes(name), `missing ${name} from confirmation`);
   await dialog.getByRole("button", { name: "确认统一验收", exact: true }).click();
   await page.getByText("统一验收已完成，共 3 个任务。", { exact: true }).waitFor({ state: "visible" });
+  await checkpoint("family-accepted");
 }

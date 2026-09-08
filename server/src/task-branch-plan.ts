@@ -162,7 +162,7 @@ export async function branchDependency(task: BranchTask, repo: string, reads?: B
       return result("needs_update", `「${title}」依赖的版本经提交历史调整后已合入 ${task.mergeTargetBranch}，需要更新子分支基线并核对验证结果`);
     }
   }
-  if (!parent) return result("unknown", "来源任务记录已不存在，且无法证明继承的代码已进入目标分支；请恢复来源记录或核对并更新子分支");
+  if (!parent) return result("unknown", "来源任务记录已不存在，且无法证明继承的代码已进入目标分支；请在「派生与验收」中重设合入目标，选择已包含继承提交的本地分支，再核对验收依赖。若尚无这样的分支，请先恢复父成果提交。");
   const merged = parent.acceptedMergeCommit && parent.acceptedBaseCommit
     && parent.acceptedMergeCommit !== parent.acceptedBaseCommit
     && await contains(parent.acceptedMergeCommit, task.mergeTargetBranch);
@@ -191,13 +191,17 @@ export async function dependentTasks(repo: string, projectId: string, taskId: st
   return blocked;
 }
 
-export async function branchDeletionBlock(repo: string, taskId: string, projectId?: string, deleteRefs = true): Promise<string | null> {
+export async function branchDeletionRejection(repo: string, taskId: string, projectId?: string, deleteRefs = true): Promise<{ error: string; reason: "base_update_pending" | "dependent_tasks" } | null> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task && !projectId) return null;
-  if (task?.baseUpdateIntent) return "上次基线更新尚未结算，请先重试更新基线再删除或清理";
+  if (task?.baseUpdateIntent) return { reason: "base_update_pending", error: "上次基线更新尚未结算，请在「派生与验收」中重试或核对后放弃本次基线更新，再删除或清理" };
   if (!deleteRefs) return null;
   const dependents = await dependentTasks(repo, task?.projectId || projectId!, taskId);
   return dependents.length
-    ? `仍有 ${dependents.length} 个任务依赖此任务的分支或验收记录：${dependents.map(t => `「${t.title}」（${t.id}）${t.archived ? "［已归档，可在归档列表中处理］" : ""}`).join("、")}。先合入父成果并处理子任务依赖，再删除；清理不能解除验收依赖。`
+    ? { reason: "dependent_tasks", error: `仍有 ${dependents.length} 个任务依赖此任务的分支或验收记录：${dependents.map(t => `「${t.title}」（${t.id}）${t.archived ? "［已归档，可在归档列表中处理］" : ""}`).join("、")}。先合入父成果并处理子任务依赖，再删除；清理不能解除验收依赖。` }
     : null;
+}
+
+export async function branchDeletionBlock(repo: string, taskId: string, projectId?: string, deleteRefs = true): Promise<string | null> {
+  return (await branchDeletionRejection(repo, taskId, projectId, deleteRefs))?.error ?? null;
 }

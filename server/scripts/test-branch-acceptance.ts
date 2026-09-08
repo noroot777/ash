@@ -135,6 +135,18 @@ try {
     const tagOnly = await setup("tag"); // case15: tag succeeds but workspace cleanup fails.
     rmSync(join(tagOnly.parentWs.path, ".git"));
     writeFileSync(join(tagOnly.parentWs.path, "TAG_WIP.txt"), "keep tagged WIP\n");
+    for (const mode of ["missing", "advanced"]) { // case16/17: interrupted baseline updates that cannot finish.
+      const pending = await setup("squash");
+      await acceptTask(pending.parent.id);
+      await dbClient.execute(`CREATE TRIGGER fixture_base_interrupt BEFORE UPDATE ON tasks WHEN OLD.id='${pending.child.id}' AND OLD.base_update_intent IS NOT NULL AND NEW.base_update_intent IS NULL BEGIN SELECT RAISE(ABORT, 'fixture base interrupt'); END`);
+      await assert.rejects(() => updateTaskBase(pending.child.id, git(pending.childWs.path, "rev-parse", "HEAD")), /fixture base interrupt/);
+      await dbClient.execute("DROP TRIGGER fixture_base_interrupt");
+      if (mode === "missing") rmSync(pending.childWs.path, { recursive: true });
+      else commit(pending.childWs.path, "newer.txt", "work after interruption\n");
+    }
+    const orphan = await setup(); // case18: imported child without its source task record.
+    await db.delete(tasks).where(eq(tasks.id, orphan.parent.id));
+    git(orphan.repo, "branch", "imported-parent", orphan.parentWs.branch!);
     await s.newTask("unstarted", "main");
     const unreadable = await s.newTask("badstart", "main");
     await taskWorkspace(await row(unreadable.id), s.repo);

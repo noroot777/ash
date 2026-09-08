@@ -35,6 +35,7 @@ import type {
 } from "@ash/shared";
 
 import { DEFAULT_APP_SETTINGS } from "@ash/shared";
+import type { BaseUpdateRecovery } from "@ash/shared/branch-plan";
 import type { WorkflowDef, WorkflowItem } from "@ash/shared/workflow";
 import type { CliHostEnv } from "@ash/shared/cli-overrides";
 import type { CliModelCatalog } from "@ash/shared/cli-presets";
@@ -369,6 +370,8 @@ export const api = {
   releaseTaskWorkspace: (taskId: string, fingerprint: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/release-workspace`, json("POST", { fingerprint })),
   changeMergeTarget: (taskId: string, branch: string, fingerprint: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/merge-target`, json("POST", { branch, fingerprint })),
   updateTaskBase: (taskId: string, sourceCommit: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/update-base`, json("POST", { sourceCommit })),
+  baseUpdateRecovery: (taskId: string): Promise<BaseUpdateRecovery> => request(`/tasks/${id(taskId)}/base-update-recovery`),
+  abandonTaskBaseUpdate: (taskId: string, fingerprint: string): Promise<{ ok: boolean; message: string }> => request(`/tasks/${id(taskId)}/abandon-base-update`, json("POST", { fingerprint })),
   acceptFamily: async (taskId: string, entries: { taskId: string; fingerprint: string }[]): Promise<FamilyAcceptanceResult> => {
     const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept-family`), json("POST", { entries }));
     const body = await parseBody(response);

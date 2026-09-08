@@ -49,8 +49,8 @@ export async function updateTaskBase(taskId: string, expectedHead: string): Prom
     const project = task && (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
     if (!task || !project) return { ok: false, error: "任务或项目不存在" };
     return await withRepoLock(project.repoPath, async () => {
-      const guard = await acceptanceGuard(taskId, "before_merge");
-      if (guard.failure && guard.failure.reason !== "base_update_pending") return { ok: false, error: guard.failure.error };
+      const guard = await acceptanceGuard(taskId, "before_merge", { allowBaseUpdatePending: true });
+      if (guard.failure) return { ok: false, error: guard.failure.error };
       task = guard.task!;
       if (task.baseUpdateIntent) return finishBaseUpdate(task, project.repoPath);
       if (task.stage === "accepted" || task.stage === "merged") return { ok: false, error: "本轮已经合入，不能重写任务分支" };

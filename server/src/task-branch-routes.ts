@@ -14,6 +14,7 @@ import { hasActiveFreeReview } from "./free-workflow.js";
 import { withRepoLock } from "./repo-lock.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { updateTaskBase } from "./task-base-update.js";
+import { abandonTaskBaseUpdate, readBaseUpdateRecovery } from "./task-base-recovery.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import type { AcceptTaskResult } from "./task-accept.js";
 import { beginAccepting, endAccepting } from "./acceptance-lock.js";
@@ -65,7 +66,7 @@ async function entry(task: BranchTask, repo: string, fingerprintTarget?: string 
   return {
     taskId: task.id, projectId: task.projectId, title: task.title, status: task.status, stage: task.stage,
     startCommit: task.worktreeStartCommit, targetBranch: target, targetTaskId: targetOwner?.id ?? null, sourceBranch, sourceCommit, targetCommit, targetWorkspaceBlocker, targetWorkspaceRecovery,
-    strategy: plan.merge || "mark", dependency: task.baseUpdateIntent ? { taskId: task.baseTaskId, title: "父任务", state: "needs_update", message: "上次基线更新尚未结算，请重试更新基线以恢复" } : await branchDependency(task, repo, reads), blocker, blockerLabel, fingerprint, baseUpdatePending: !!task.baseUpdateIntent,
+    strategy: plan.merge || "mark", dependency: task.baseUpdateIntent ? { taskId: task.baseTaskId, title: "父任务", state: "needs_update", message: "上次基线更新尚未结算。可重试更新基线；无法恢复时，核对后放弃本次基线更新，保留当前代码与恢复备份。" } : await branchDependency(task, repo, reads), blocker, blockerLabel, fingerprint, baseUpdatePending: !!task.baseUpdateIntent,
   };
 }
 
@@ -235,6 +236,17 @@ export function mountBranchPlanRoutes(api: Hono, accept: Accept): void {
     const body = await c.req.json<{ sourceCommit?: string }>();
     if (!body.sourceCommit || !/^[a-f0-9]{40,64}$/.test(body.sourceCommit)) return c.json({ error: "sourceCommit required" }, 400);
     const result = await updateTaskBase(c.req.param("id"), body.sourceCommit);
+    return c.json(result, result.ok ? 200 : 409);
+  });
+  api.get("/tasks/:id/base-update-recovery", async c => {
+    const view = await readBaseUpdateRecovery(c.req.param("id"));
+    return view ? c.json(view) : c.json({ error: "没有待结算的基线更新，请刷新依赖" }, 409);
+  });
+  api.post("/tasks/:id/abandon-base-update", async c => {
+    if (IS_PREVIEW_INSTANCE) return c.json({ ok: false, error: previewRefusal("放弃本次基线更新") }, 409);
+    const body = await c.req.json<{ fingerprint?: string }>();
+    if (typeof body.fingerprint !== "string") return c.json({ error: "fingerprint required" }, 400);
+    const result = await abandonTaskBaseUpdate(c.req.param("id"), body.fingerprint);
     return c.json(result, result.ok ? 200 : 409);
   });
   api.post("/tasks/:id/accept-family", async c => {

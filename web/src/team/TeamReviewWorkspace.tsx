@@ -129,8 +129,9 @@ export function AcceptanceControls({
   // 只改一处就会出现「按钮写着验收通过、确认框说只是放行」的自相矛盾。
   const midGate = !isFinalHumanGate(task.workflow, task.workflowAt);
   const branchPlan = useBranchPlan(task, !midGate && task.stage !== "accepted");
+  const checkingDependencies = !midGate && !!task.useWorktree && task.stage !== "accepted" && (branchPlan.loading || !branchPlan.view);
   if (!midGate && task.useWorktree && task.stage !== "accepted") {
-    acceptanceBlock ??= branchPlan.error ? "验收依赖读取失败" : !branchPlan.view ? "检查验收依赖" : null;
+    acceptanceBlock ??= branchPlan.error ? "验收依赖读取失败" : null;
     acceptanceBlock ??= branchPlan.view?.task.blockerLabel ?? branchPlan.view?.task.blocker ?? null;
     const dependency = branchPlan.view?.task.dependency;
     if (dependency && dependency.state !== "ready" && branchPlan.view?.task.strategy !== "tag") acceptanceBlock ??= "等待父成果或更新基线";
@@ -161,6 +162,7 @@ export function AcceptanceControls({
     }
   };
   const accept = async () => {
+    if (checkingDependencies || acceptanceBlock || archived || inFlight || busy) return;
     // The confirmation is single-use. Keep progress on the action button so a
     // typed acceptance failure can render unobscured in the review record.
     setAction(null);
@@ -229,9 +231,9 @@ export function AcceptanceControls({
           <span><CheckCircle size={13} weight="fill" />验收完成</span>
         ) : (
           <>
-            <button type="button" className="is-primary" disabled={archived || inFlight || busy || !!acceptanceBlock} onClick={() => setAction("accept")}>
+            <button type="button" className="is-primary" disabled={archived || inFlight || busy || checkingDependencies || !!acceptanceBlock} onClick={() => setAction("accept")}>
               {busy ? <SpinnerGap size={13} className="is-spinning" /> : <CheckCircle size={13} weight="fill" />}
-              {busy ? (midGate ? "放行中" : "验收中") : archived ? "已归档（只读）" : inFlight ? "执行中" : acceptanceBlock ?? (midGate ? "放行，继续下一站" : "验收通过")}
+              {busy ? (midGate ? "放行中" : "验收中") : archived ? "已归档（只读）" : inFlight ? "执行中" : acceptanceBlock ?? (checkingDependencies ? "检查验收依赖" : midGate ? "放行，继续下一站" : "验收通过")}
             </button>
             <button type="button" disabled={archived || inFlight || busy} onClick={() => setAction("return")}><WarningCircle size={13} />{duet ? "打回再讨论" : "打回修改"}</button>
           </>
@@ -245,9 +247,12 @@ export function AcceptanceControls({
           confirmLabel={midGate ? "放行" : "验收通过"}
           danger={!midGate && !!task.useWorktree}
           busy={busy}
+          confirmDisabled={checkingDependencies || !!acceptanceBlock || archived || inFlight}
           onConfirm={() => void accept()}
           onClose={() => setAction(null)}
-        />
+        >
+          {checkingDependencies && <p role="status">正在更新验收依赖，检查完成后可继续确认。</p>}
+        </ConfirmDialog>
       )}
       {action === "return" && (
         <ConfirmDialog title={duet ? "打回继续讨论？" : "打回继续修改？"} message={duet ? "这会把验收意见送回本次讨论，原来的两位讨论者会沿现有上下文继续形成结论。" : "这会把验收意见作为真人回复送入原任务会话，执行者会在原上下文继续处理。"} confirmLabel={duet ? "打回再讨论" : "打回修改"} busy={busy} onConfirm={() => void returnTask()} onClose={() => setAction(null)}>

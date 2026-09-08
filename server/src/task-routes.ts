@@ -23,7 +23,7 @@ import { canSeeProject, groupInProject, projectOfQueue, taskInProject, visiblePr
 import { executorScopeForOwner, type ExecutorScope } from "./auth/owned-executors.js";
 import { executorDowngradePreflight } from "./auth/dispatch-gate.js";
 import { inheritOwner } from "./auth/run-env.js";
-import { branchDeletionBlock, deleteTaskBranchRefs } from "./task-branch-plan.js";
+import { branchDeletionRejection, deleteTaskBranchRefs } from "./task-branch-plan.js";
 import { withRepoLock } from "./repo-lock.js";
 import { requestTaskCreationOrigin } from "./task-creation-origin.js";
 
@@ -626,8 +626,8 @@ api.delete("/tasks/:id", async (c) => {
     : undefined;
   for (const row of [existing, ...children]) {
     if (!row || !project) continue;
-    const error = await branchDeletionBlock(project.repoPath, row.id);
-    if (error) return c.json({ error, reason: "dependent_tasks" }, 409);
+    const rejection = await branchDeletionRejection(project.repoPath, row.id);
+    if (rejection) return c.json(rejection, 409);
   }
   const wantWorktree = c.req.query("worktree") === "1";
   const wantBranch = c.req.query("branch") === "1";

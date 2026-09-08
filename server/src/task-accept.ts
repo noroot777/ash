@@ -319,7 +319,7 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   const merge = await mergeTaskBranch(project.repoPath, taskId, intendedTarget, plan.merge);
   if (!merge.ok && merge.reason === "target_checked_out" && merge.targetBranch) {
     const owner = await branchOwner(project.repoPath, task.projectId, merge.targetBranch);
-    merge.message += owner ? `；占用者是任务「${owner.title}」（${owner.id}）。任务结束后 worktree 仍会占用分支，删除分支会使验收目标丢失。请保留分支并处理验收目标。` : "；请保留目标分支，删除工作区不能替代验收目标配置。";
+    merge.message += owner ? `占用者是任务「${owner.title}」（${owner.id}）。任务结束后 worktree 仍会占用分支，删除分支会使验收目标丢失。请保留分支并处理验收目标。` : "请保留目标分支，删除工作区不能替代验收目标配置。";
   }
 
   // Retry after a previous partial success: stage=merged plus an already-removed

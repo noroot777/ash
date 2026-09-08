@@ -31,6 +31,17 @@ export type BranchPlanEntry = {
 export type BranchPlanView = { task: BranchPlanEntry; descendants: BranchPlanEntry[] };
 export type FamilyAcceptanceResult = { ok: boolean; completed: string[]; stoppedAt?: string; error?: string };
 
+export type BaseUpdateRecovery = {
+  fingerprint: string;
+  branch: string;
+  currentCommit: string | null;
+  startCommit: string | null;
+  oldCommit: string | null;
+  preparedCommit: string | null;
+  backups: { ref: string; commit: string }[];
+  unavailableCommits: string[];
+};
+
 export function familySelectionBlock(entries: BranchPlanEntry[], selected: ReadonlySet<string>): { taskId: string; error: string } | null {
   for (const row of entries) {
     if (!selected.has(row.taskId) || row.stage === "accepted") continue;
