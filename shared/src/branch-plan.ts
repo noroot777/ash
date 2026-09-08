@@ -16,6 +16,7 @@ export type BranchPlanEntry = {
   targetBranch: string | null;
   targetTaskId?: string | null;
   sourceCommit: string | null;
+  sourceBranch?: string;
   targetCommit: string | null;
   strategy: string;
   dependency: BranchDependency | null;

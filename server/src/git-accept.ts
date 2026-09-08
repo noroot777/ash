@@ -155,11 +155,13 @@ async function commitOf(repo: string, ref: string): Promise<string | null> {
 
 async function checkedOutPath(repo: string, branch: string): Promise<string | null> {
   const { stdout } = await exec("git", ["-C", repo, "worktree", "list", "--porcelain"]);
-  let path: string | null = null;
-  for (const line of stdout.split("\n")) {
-    if (line.startsWith("worktree ")) path = line.slice("worktree ".length);
-    else if (line === `branch refs/heads/${branch}`) return path;
-    else if (!line) path = null;
+  for (const record of stdout.trimEnd().split("\n\n")) {
+    const lines = record.split("\n");
+    // prunable 是 Git 已确认可清理的失效登记，合并前会 prune，不再视为活跃占用。
+    if (lines.some(line => line === "prunable" || line.startsWith("prunable "))) continue;
+    if (lines.includes(`branch refs/heads/${branch}`)) {
+      return lines.find(line => line.startsWith("worktree "))?.slice("worktree ".length) ?? null;
+    }
   }
   return null;
 }
@@ -470,6 +472,8 @@ async function mergeTaskBranchLocked(
       squashInCheckedOutTarget(cwd, sourceBranch, targetBranch));
   }
 
+  // 清掉失效登记后再尝试 fetch，避免首次 FF 被陈旧占用拒绝、第二次却能成功。
+  await exec("git", ["-C", repo, "worktree", "prune"]).catch(() => {});
   // First attempt the ref-only fast-forward. This changes no checked-out files;
   // non-FF and checked-out-target failures fall through to the guarded paths.
   try {

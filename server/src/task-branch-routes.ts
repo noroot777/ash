@@ -6,9 +6,8 @@ import { familySelectionBlock } from "@ash/shared/branch-plan";
 import { acceptPlan, isFinalHumanGate } from "@ash/shared/workflow-policy";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
-import { branchDependency, branchName, branchOwner, branchRelationship, commitAt, plannedMergeTarget, type BranchTask } from "./task-branch-plan.js";
-import { targetCheckout } from "./git-accept.js";
-import { localBranchExists, resolveWorktreeBranchName, symbolicBranch } from "./git.js";
+import { branchDependency, branchName, branchRelationship, type BranchTask } from "./task-branch-plan.js";
+import { expandHome, localBranchExists, resolveWorktreeBranchName, symbolicBranch } from "./git.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { acceptanceGuard } from "./task-accept-guard.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
@@ -23,9 +22,12 @@ import { now } from "./util.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 import { workspaceParticipants } from "./task-workspace.js";
 import { claimWorkspaceTurn, isTurnClaimed } from "./runs.js";
+import { execFileText as exec } from "./exec.js";
+import { branchPlanReads } from "./branch-plan-reads.js";
 
-async function entry(task: BranchTask, repo: string, fingerprintTarget?: string | null): Promise<BranchPlanEntry> {
-  const target = await plannedMergeTarget(task, repo);
+async function entry(task: BranchTask, repo: string, fingerprintTarget?: string | null,
+  reads = branchPlanReads(repo, task.projectId)): Promise<BranchPlanEntry> {
+  const target = await reads.target(task);
   const plan = acceptPlan(taskWorkflowDef(task.workflow), "human", task.workflowAt);
   const guard = await acceptanceGuard(task.id, "before_accept");
   let blocker = guard.failure?.error ?? null;
@@ -34,13 +36,14 @@ async function entry(task: BranchTask, repo: string, fingerprintTarget?: string 
   if (!blocker && task.workflowMode === "free" && !["done", "failed", "canceled"].includes(task.status)
     && task.stage !== "accepted" && task.stage !== "merged") blocker = "任务尚未结束";
   if (!blocker && task.workflowMode === "free" && task.stage !== "accepted" && await hasActiveFreeReview(task.id)) blocker = "审查仍在进行";
-  const sourceCommit = await commitAt(repo, await resolveWorktreeBranchName(repo, task.id));
-  const targetCommit = target ? await commitAt(repo, target) : null;
+  const sourceBranch = await reads.branch(task.id);
+  const sourceCommit = await reads.commit(sourceBranch);
+  const targetCommit = target ? await reads.commit(target) : null;
   const targetError = !target ? "最终合入分支未确定，请重设合入目标"
-    : !(await localBranchExists(repo, target)) ? `目标本地分支 ${target} 不存在，请重设合入目标` : null;
-  const targetOwner = target ? await branchOwner(repo, task.projectId, target) : undefined;
+    : !(await reads.exists(target)) ? `目标本地分支 ${target} 不存在，请重设合入目标` : null;
+  const targetOwner = target ? await reads.owner(target) : undefined;
   const checkout = target && task.useWorktree && plan.merge && plan.merge !== "tag" && task.stage !== "accepted" && task.stage !== "merged"
-    ? await targetCheckout(repo, target) : null;
+    ? await reads.checkout(target) : null;
   if (!blocker && task.useWorktree && task.stage !== "accepted" && targetError) blocker = targetError;
   if (!blocker && checkout?.path && !checkout.atRepo) {
     blockerLabel = "目标工作区仍被占用";
@@ -56,8 +59,8 @@ async function entry(task: BranchTask, repo: string, fingerprintTarget?: string 
   ])).digest("hex");
   return {
     taskId: task.id, projectId: task.projectId, title: task.title, status: task.status, stage: task.stage,
-    startCommit: task.worktreeStartCommit, targetBranch: target, targetTaskId: targetOwner?.id ?? null, sourceCommit, targetCommit,
-    strategy: plan.merge || "mark", dependency: task.baseUpdateIntent ? { taskId: task.baseTaskId, title: "父任务", state: "needs_update", message: "上次基线更新尚未结算，请重试更新基线以恢复" } : await branchDependency(task, repo), blocker, blockerLabel, fingerprint, baseUpdatePending: !!task.baseUpdateIntent,
+    startCommit: task.worktreeStartCommit, targetBranch: target, targetTaskId: targetOwner?.id ?? null, sourceBranch, sourceCommit, targetCommit,
+    strategy: plan.merge || "mark", dependency: task.baseUpdateIntent ? { taskId: task.baseTaskId, title: "父任务", state: "needs_update", message: "上次基线更新尚未结算，请重试更新基线以恢复" } : await branchDependency(task, repo, reads), blocker, blockerLabel, fingerprint, baseUpdatePending: !!task.baseUpdateIntent,
   };
 }
 
@@ -66,10 +69,11 @@ export async function readBranchPlan(taskId: string): Promise<BranchPlanView | n
   const project = task && (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   if (!task || !project) return null;
   const rows = await db.select().from(tasks).where(eq(tasks.projectId, task.projectId));
+  const reads = branchPlanReads(project.repoPath, task.projectId);
   const ordered = [task];
   const seen = new Set([task.id]);
   for (let i = 0; i < ordered.length; i++) {
-    const parentBranch = await resolveWorktreeBranchName(project.repoPath, ordered[i].id);
+    const parentBranch = await reads.branch(ordered[i].id);
     for (const child of rows) {
       if (seen.has(child.id) || !branchRelationship(child, ordered[i].id, parentBranch)) continue;
       seen.add(child.id);
@@ -77,7 +81,9 @@ export async function readBranchPlan(taskId: string): Promise<BranchPlanView | n
     }
   }
   const entries: BranchPlanEntry[] = [];
-  for (const row of ordered) entries.push(await entry(row, project.repoPath));
+  for (let offset = 0; offset < ordered.length; offset += 4) {
+    entries.push(...await Promise.all(ordered.slice(offset, offset + 4).map(row => entry(row, project.repoPath, undefined, reads))));
+  }
   return { task: entries[0], descendants: entries.slice(1) };
 }
 
@@ -156,7 +162,10 @@ export function mountBranchPlanRoutes(api: Hono, accept: Accept): void {
         if ((await entry(current, project.repoPath)).fingerprint !== body.fingerprint) return c.json({ error: "任务或分支已变化，请刷新后重新确认" }, 409);
         const workspace = await detectTaskWorkspace(project.repoPath, taskId);
         if (!workspace.branch) return c.json({ error: "任务分支不存在，请先恢复分支再释放目录" }, 409);
-        if (!workspace.path) return c.json({ ok: true });
+        if (!workspace.path) {
+          await exec("git", ["-C", expandHome(project.repoPath), "worktree", "prune"]);
+          return c.json({ ok: true });
+        }
         if (await symbolicBranch(workspace.path) !== workspace.branch) return c.json({ error: "工作区检出分支已变化，请先核对工作区" }, 409);
         const peers = await workspaceParticipants(current, workspace.path);
         if (peers.some(p => p.status === "running" || p.status === "queued" || isTurnClaimed(p.id))) return c.json({ error: "工作区仍有任务在执行，请先停止再释放" }, 409);

@@ -10,7 +10,10 @@ export function MergeTargetEditor({ plan, disabled, onChanged }: { plan: BranchP
   const [message, setMessage] = useState("");
   const open = async () => {
     setBusy(true); setMessage("");
-    try { setBranches((await api.projectBranches(plan.projectId)).branches); setTarget(""); setFingerprint(plan.fingerprint); }
+    try {
+      setBranches((await api.projectBranches(plan.projectId)).branches.filter(branch => branch !== plan.sourceBranch));
+      setTarget(""); setFingerprint(plan.fingerprint);
+    }
     catch (e) { setMessage(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };

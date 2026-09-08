@@ -112,6 +112,11 @@ try {
     await db.update(tasks).set({ mergeTargetBranch: null, worktreeStartCommit: null, baseTaskId: null }).where(eq(tasks.id, runningLegacy.child.id));
     await db.update(tasks).set({ status: "running" }).where(eq(tasks.id, runningLegacy.parent.id));
     await setup(); // case9: retarget a pinned child to its parent's branch from the UI.
+    const stale = await setup(); // case10: externally deleted directory with a prunable registration.
+    await db.update(tasks).set({ mergeTargetBranch: stale.parentWs.branch }).where(eq(tasks.id, stale.child.id));
+    rmSync(stale.parentWs.path, { recursive: true, force: true });
+    const legacySource = await setup(); // case11: own source filtering also follows harness/*.
+    git(legacySource.childWs.path, "branch", "-m", legacySource.childWs.branch!.replace("ash/", "harness/"));
     await s.newTask("unstarted", "main");
     const unreadable = await s.newTask("badstart", "main");
     await taskWorkspace(await row(unreadable.id), s.repo);
@@ -136,6 +141,32 @@ try {
     await new Promise<void>(resolve => backend.close(() => resolve()));
     if (process.connected) process.disconnect();
   } else {
+  for (const releaseFirst of [false, true]) {
+    const s = await setup();
+    await db.update(tasks).set({ mergeTargetBranch: s.parentWs.branch }).where(eq(tasks.id, s.child.id));
+    const active = (await readBranchPlan(s.child.id))!.task;
+    assert.match(active.blocker!, /目标分支.*仍在工作区/);
+    rmSync(s.parentWs.path, { recursive: true, force: true });
+    assert.match(git(s.repo, "worktree", "list", "--porcelain"), /prunable/);
+    const stale = (await readBranchPlan(s.child.id))!.task;
+    assert.equal(stale.blocker, null, "prunable entries must not block the UI");
+    assert.notEqual(stale.fingerprint, active.fingerprint);
+    assert.match(git(s.repo, "worktree", "list", "--porcelain"), /prunable/, "plan reads do not mutate Git registrations");
+    if (releaseFirst) {
+      const response = await api.request(`/tasks/${s.parent.id}/release-workspace`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ fingerprint: (await readBranchPlan(s.parent.id))!.task.fingerprint }),
+      });
+      assert.equal(response.status, 200);
+      assert.ok(!git(s.repo, "worktree", "list", "--porcelain").includes("prunable"));
+      assert.equal(git(s.repo, "rev-parse", s.parentWs.branch!), s.parentCommit);
+    }
+    const accepted = await acceptTask(s.child.id);
+    assert.equal(accepted.accepted, true, JSON.stringify(accepted));
+    assert.equal(git(s.repo, "show", `${s.parentWs.branch}:child.txt`), "child feature");
+    assert.ok(!git(s.repo, "worktree", "list", "--porcelain").includes("prunable"));
+    console.log(`✓ prunable parent: read is unblocked; ${releaseFirst ? "explicit release prunes and preserves branch" : "first acceptance prunes before fast-forward"}`);
+  }
   {
     const s = await setup();
     const task = await s.newTask("unstarted", "main");

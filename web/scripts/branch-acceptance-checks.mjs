@@ -57,6 +57,8 @@ export async function checkBranchAcceptance(page, fixtureUrl) {
 
   await go("case9-child");
   await button("重设合入目标").click();
+  await page.getByRole("combobox", { name: "合入目标", exact: true }).waitFor({ state: "visible" });
+  ensure(await page.getByRole("option", { name: "ash/case9-ch", exact: true }).count() === 0, "own task branch must not be offered as a merge target");
   await page.getByRole("combobox", { name: "合入目标", exact: true }).selectOption("ash/case9-pa");
   await page.getByRole("status").filter({ hasText: "不能与目标任务一起统一验收" }).waitFor({ state: "visible" });
   await button("保存合入目标").click();
@@ -79,6 +81,19 @@ export async function checkBranchAcceptance(page, fixtureUrl) {
   await review().getByRole("button", { name: "验收通过", exact: true }).click();
   await page.getByRole("dialog").getByRole("button", { name: "验收通过", exact: true }).click();
   await review().getByText("验收完成", { exact: true }).waitFor({ state: "visible" });
+
+  await go("case10-parent");
+  await page.getByRole("status").filter({ hasText: "父任务工作区目录已不存在" }).waitFor({ state: "visible" });
+  ensure(!/目标分支.*仍在工作区/.test(await page.locator("main").innerText()), "prunable parent must not report contradictory checkout status");
+  await go("case10-child");
+  await review().getByRole("button", { name: "验收通过", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "验收通过", exact: true }).click();
+  await review().getByText("验收完成", { exact: true }).waitFor({ state: "visible" });
+  await go("case11-child");
+  await button("重设合入目标").click();
+  await page.getByRole("combobox", { name: "合入目标", exact: true }).waitFor({ state: "visible" });
+  ensure(await page.getByRole("option", { name: "harness/case11-c", exact: true }).count() === 0, "legacy own task branch must not be offered");
+  ensure(await page.getByRole("option", { name: "main", exact: true }).count() === 1, "final target must remain selectable");
 
   await go("case5-parent");
   await page.getByRole("region", { name: "派生与验收依赖" }).waitFor({ state: "visible" });

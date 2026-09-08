@@ -26,9 +26,10 @@ const row = (id: string, extra: Partial<typeof tasks.$inferInsert> = {}) => ({
   workflowMode: "free", status: "done", createdAt: at, updatedAt: at, ...extra,
 });
 let gitCalls = 0;
+const gitCommands: string[][] = [];
 const realExecFile = childProcess.execFile;
 mock.method(childProcess, "execFile", (...args: Parameters<typeof realExecFile>) => {
-  if (args[0] === "git") gitCalls++;
+  if (args[0] === "git") { gitCalls++; gitCommands.push(args[1] as string[]); }
   return realExecFile(...args);
 });
 syncBuiltinESMExports();
@@ -39,7 +40,8 @@ async function measurePlan(id: string) {
   const response = await api.request(`/tasks/${id}/branch-plan`);
   assert.equal(response.status, 200);
   const plan = await response.json();
-  const result = { task: id, ms: Math.round(performance.now() - start), gitCalls: gitCalls - before };
+  const checkoutReads = gitCommands.slice(before).filter(args => args.includes("worktree") && args.includes("list")).length;
+  const result = { task: id, ms: Math.round(performance.now() - start), gitCalls: gitCalls - before, checkoutReads };
   console.log(JSON.stringify(result));
   return { ...result, plan };
 }
@@ -103,6 +105,40 @@ try {
   git("commit", "--allow-empty", "-m", "advance main");
   assert.notEqual((await measurePlan("old-main-task")).plan.task.fingerprint, fingerprint, "target advancement must be visible immediately");
   console.log("✓ bounded Git calls at 1,006 tasks; legacy/archived ownership, namespace precedence, literal IDs and fresh fingerprints");
+  const seed = git("rev-parse", "main");
+  const tree = git("rev-parse", "main^{tree}");
+  const parentHead = git("commit-tree", tree, "-p", seed, "-m", "family parent");
+  git("branch", "ash/family-p", parentHead);
+  await db.insert(tasks).values(row("family-parent", { mergeTargetBranch: "main", worktreeStartCommit: seed }));
+  const children = Array.from({ length: 40 }, (_, i) => `kin${String(i).padStart(5, "0")}`);
+  for (const child of children) {
+    git("branch", `ash/${child}`, git("commit-tree", tree, "-p", parentHead, "-m", child));
+    await db.insert(tasks).values(row(child, { baseTaskId: "family-parent", mergeTargetBranch: "main", worktreeStartCommit: parentHead }));
+  }
+  let first: Awaited<ReturnType<typeof measurePlan>> | undefined;
+  for (let repeat = 0; repeat < 3; repeat++) {
+    const family = await measurePlan("family-parent");
+    assert.deepEqual(family.plan.descendants.map((entry: { taskId: string }) => entry.taskId), children);
+    assert.ok(family.plan.descendants.every((entry: { dependency: { state: string } }) => entry.dependency.state === "waiting"));
+    if (first) assert.deepEqual(family.plan, first.plan, "request-scoped sharing preserves fingerprints and ordering");
+    first = family;
+    if (!process.argv.includes("--measure-family")) {
+      assert.equal(family.checkoutReads, 1, "one target checkout read per family request");
+      assert.ok(family.gitCalls <= 140, `family repeats shared Git reads: ${family.gitCalls}`);
+    }
+  }
+  git("merge", "--ff-only", "ash/family-p");
+  const integrated = await measurePlan("family-parent");
+  assert.ok(integrated.plan.descendants.every((entry: { dependency: { state: string } }) => entry.dependency.state === "ready"));
+  assert.notEqual(integrated.plan.task.fingerprint, first!.plan.task.fingerprint, "next request sees a new target commit");
+  git("checkout", "-b", "parking");
+  const occupied = join(root, "target-checkout");
+  git("worktree", "add", occupied, "main");
+  const blocked = await measurePlan("family-parent");
+  assert.ok([blocked.plan.task, ...blocked.plan.descendants].every((entry: { blocker: string }) => /仍在工作区/.test(entry.blocker)));
+  git("worktree", "remove", occupied);
+  assert.equal((await measurePlan("family-parent")).plan.task.blocker, null, "next request sees released checkout");
+  console.log("✓ 41-member family: bounded shared reads, stable plans, immediate target/checkout freshness");
 } finally {
   mock.restoreAll();
   syncBuiltinESMExports();

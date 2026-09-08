@@ -6,6 +6,7 @@ import { tasks, projects, taskBranchReceipts } from "./db/schema.js";
 import { expandHome, isGitRepo, localBranchExists, resolveTaskMergeTarget, resolveWorktreeBranchName } from "./git.js";
 import { execFileText as exec } from "./exec.js";
 import { withRepoLock } from "./repo-lock.js";
+import type { BranchPlanReads } from "./branch-plan-reads.js";
 
 export type BranchTask = typeof tasks.$inferSelect;
 export const baseRef = (id: string) => `refs/ash/task-bases/${encodeURIComponent(id)}`;
@@ -49,7 +50,8 @@ export async function containsCommit(repo: string, ancestor: string, descendant:
     .then(() => true, () => false);
 }
 
-export async function branchOwner(repo: string, projectId: string, branch: string): Promise<BranchTask | undefined> {
+export async function branchOwner(repo: string, projectId: string, branch: string,
+  resolveBranch = (id: string) => resolveWorktreeBranchName(repo, id)): Promise<BranchTask | undefined> {
   const name = branchName(branch);
   const match = /^(?:ash|harness)\/([^/]{1,8})$/.exec(name);
   if (!match) return undefined;
@@ -58,7 +60,7 @@ export async function branchOwner(repo: string, projectId: string, branch: strin
     eq(tasks.projectId, projectId), eq(tasks.useWorktree, true),
     eq(sql<string>`substr(${tasks.id}, 1, 8)`, match[1]),
   )).limit(1);
-  return row && await resolveWorktreeBranchName(repo, row.id) === name ? row : undefined;
+  return row && await resolveBranch(row.id) === name ? row : undefined;
 }
 
 async function finalTarget(repo: string, row: BranchTask, seen = new Set<string>()): Promise<string | null> {
@@ -112,29 +114,33 @@ export function taskTargetsBranch(task: BranchTask, branch: string): boolean {
   return branchName(task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "") === branch;
 }
 
-export async function plannedMergeTarget(task: BranchTask, repo: string): Promise<string | null> {
+export async function plannedMergeTarget(task: BranchTask, repo: string,
+  resolveTarget = (name: string | null) => resolveTaskMergeTarget(repo, name)): Promise<string | null> {
   if (task.baseTaskId && !task.mergeTargetBranch) return null;
-  return task.acceptedTargetBranch || resolveTaskMergeTarget(repo, task.mergeTargetBranch || task.worktreeBase);
+  return task.acceptedTargetBranch || resolveTarget(task.mergeTargetBranch || task.worktreeBase);
 }
 
-export async function inheritedParentCommit(task: BranchTask, repo: string, parent?: BranchTask): Promise<string | null> {
+export async function inheritedParentCommit(task: BranchTask, repo: string, parent?: BranchTask, reads?: BranchPlanReads): Promise<string | null> {
   let inherited = task.worktreeStartCommit;
   if (parent && inherited) {
-    const source = await resolveWorktreeBranchName(repo, task.id);
-    const parentBranch = await resolveWorktreeBranchName(repo, parent.id);
+    const branch = reads?.branch ?? ((id: string) => resolveWorktreeBranchName(repo, id));
+    const source = await branch(task.id);
+    const parentBranch = await branch(parent.id);
     try {
-      const common = (await exec("git", ["-C", expandHome(repo), "merge-base", source, parentBranch])).stdout.trim();
-      if (await containsCommit(repo, inherited, common)) inherited = common;
+      const common = reads ? await reads.common(source, parentBranch)
+        : (await exec("git", ["-C", expandHome(repo), "merge-base", source, parentBranch])).stdout.trim();
+      if (await (reads ? reads.contains(inherited, common) : containsCommit(repo, inherited, common))) inherited = common;
     } catch { /* 父分支已清理时，冻结起点仍是依赖证据。 */ }
   }
   return inherited;
 }
 
-export async function branchDependency(task: BranchTask, repo: string): Promise<BranchDependency | null> {
+export async function branchDependency(task: BranchTask, repo: string, reads?: BranchPlanReads): Promise<BranchDependency | null> {
+  const contains = reads?.contains ?? ((ancestor: string, descendant: string) => containsCommit(repo, ancestor, descendant));
   if (!task.baseTaskId) {
     if (task.mergeTargetBranch) return null;
     const target = task.acceptedTargetBranch || task.worktreeBase;
-    const parent = target ? await branchOwner(repo, task.projectId, target) : undefined;
+    const parent = target ? await (reads ? reads.owner(target) : branchOwner(repo, task.projectId, target)) : undefined;
     if (!parent || branchRelationship(task, parent.id, branchName(target!)) !== "legacy") return null;
     // 旧任务直接合入父分支；ready 只代表无需等待父成果先进入另一条最终分支。
     return { taskId: parent.id, title: parent.title, state: "ready", legacyTarget: true,
@@ -146,22 +152,22 @@ export async function branchDependency(task: BranchTask, repo: string): Promise<
     ({ taskId: parent?.id ?? null, title, state, message });
   if (!task.mergeTargetBranch) return result("unknown", "最终合入分支未确定，请在「派生与验收」中重设合入目标，再检查父成果依赖");
   if (!task.worktreeStartCommit) return result("unknown", "未记录继承的父提交，请恢复任务的开工记录后再验收");
-  const inherited = (await inheritedParentCommit(task, repo, parent))!;
-  if (await containsCommit(repo, inherited, task.mergeTargetBranch)) {
+  const inherited = (await inheritedParentCommit(task, repo, parent, reads))!;
+  if (await contains(inherited, task.mergeTargetBranch)) {
     return result("ready", `继承的父成果已进入 ${task.mergeTargetBranch}`);
   }
   const receipts = await db.select().from(taskBranchReceipts).where(eq(taskBranchReceipts.taskId, task.baseTaskId));
   for (const receipt of receipts) {
-    if (await containsCommit(repo, inherited, receipt.sourceCommit) && await containsCommit(repo, receipt.mergeCommit, task.mergeTargetBranch)) {
+    if (await contains(inherited, receipt.sourceCommit) && await contains(receipt.mergeCommit, task.mergeTargetBranch)) {
       return result("needs_update", `「${title}」依赖的版本经提交历史调整后已合入 ${task.mergeTargetBranch}，需要更新子分支基线并核对验证结果`);
     }
   }
   if (!parent) return result("unknown", "来源任务记录已不存在，且无法证明继承的代码已进入目标分支；请恢复来源记录或核对并更新子分支");
   const merged = parent.acceptedMergeCommit && parent.acceptedBaseCommit
     && parent.acceptedMergeCommit !== parent.acceptedBaseCommit
-    && await containsCommit(repo, parent.acceptedMergeCommit, task.mergeTargetBranch);
+    && await contains(parent.acceptedMergeCommit, task.mergeTargetBranch);
   if (merged && parent.acceptedSourceCommit
-    && await containsCommit(repo, inherited, parent.acceptedSourceCommit)) {
+    && await contains(inherited, parent.acceptedSourceCommit)) {
     return result("needs_update", `「${title}」已压缩合入 ${task.mergeTargetBranch}，需要更新子分支基线并核对验证结果`);
   }
   return result("waiting", `等待「${title}」的父成果合入 ${task.mergeTargetBranch}；任务结束或仅打标签不代表代码已合入`);
