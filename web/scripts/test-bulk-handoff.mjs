@@ -267,7 +267,8 @@ const machines = readSource(new URL("../src/workspace/HandoffMachines.tsx", impo
 assert.match(machines, /<BulkHandoffDialog/, "侧栏「其他机器」仍应是批量接力弹窗的唯一入口");
 // 侧栏里**只有这一节**可以收起（用户 2026-09-08 指定：置顶 / 任务两节不要折叠）。
 // 收起状态记在自己的键上；选中的远端任务落在这一节里时要自动展开，否则主区在显示它、
-// 侧栏却一行都没有。箭头常驻显示，不能做成悬停才浮出——那样看不出这一节能收起来。
+// 侧栏却一行都没有。箭头鼠标指上去才出现（展开态收起态都一样，同日指定），键盘焦点
+// 落上来时也得现形。
 assert.match(machines, /workspace-task-section-toggle/, "「其他机器」标题应是可折叠的 toggle");
 assert.match(machines, /aria-expanded=\{!collapsed\}/, "折叠状态必须对读屏可见");
 assert.match(machines, /ash:handoff-machines:collapsed/, "折叠状态要单独存，不与任务分节共用一个键");
@@ -275,10 +276,20 @@ assert.match(machines, /useRevealHiddenSelection/, "选中的远端任务被折�
 const taskTree = readSource(new URL("../src/workspace/TaskTree.tsx", import.meta.url));
 assert.doesNotMatch(taskTree, /workspace-task-section-toggle/, "「置顶」「任务」两节不该有折叠 toggle");
 const taskTreeCss = readSource(new URL("../src/styles/task-tree.css", import.meta.url));
-assert.doesNotMatch(
+assert.match(
   taskTreeCss,
   /\.workspace-task-section-toggle svg \{[^}]*opacity: 0/,
-  "折叠箭头不能默认透明（悬停才出现等于藏起来）",
+  "折叠箭头默认不显示，鼠标指上去才出现",
+);
+assert.doesNotMatch(
+  taskTreeCss,
+  /\.workspace-task-section-toggle\[aria-expanded="false"\] svg \{[^}]*opacity: 1/,
+  "收起态也不该把箭头常驻显示出来",
+);
+assert.match(
+  taskTreeCss,
+  /\.workspace-task-section-toggle:focus-visible svg[^{]*\{[^}]*opacity: 1/,
+  "键盘焦点落上来时箭头必须现形",
 );
 assert.doesNotMatch(machines, /handoff-bulk-body/, "弹窗实现拆出去后不应留在侧栏文件里");
 assert.doesNotMatch(bulkDialog, /<ConfirmDialog/, "批量接力不应继续使用旧确认框");
