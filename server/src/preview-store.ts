@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PreviewLife, WorkflowStep } from "@ash/shared/workflow";
 import type { PreviewServiceState } from "@ash/shared/preview";
@@ -85,6 +85,17 @@ export function readPreview(taskId: string): PreviewRecord | null {
 
 export function writeRecord(record: PreviewRecord): void {
   writeFileSync(recordPath(record.taskId), JSON.stringify(record, null, 2));
+}
+
+export function prunePreviewArtifacts(taskId: string, keepGen: string): void {
+  const dir = join(RUNS_DIR, taskId);
+  try {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const match = /^preview-([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})-[A-Za-z0-9_-]{1,64}\.(?:log|cmd)$/.exec(entry.name);
+      if (!entry.isFile() || !match || match[1] === keepGen) continue;
+      try { rmSync(join(dir, entry.name), { force: true }); } catch { /* 被占用的文件留到下次启动再清理。 */ }
+    }
+  } catch { /* 任务目录被回收时无需继续清理。 */ }
 }
 
 /**

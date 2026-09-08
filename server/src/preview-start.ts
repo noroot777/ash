@@ -12,7 +12,7 @@ import { missingDepsHint, missingNodeBin, pickPreviewUrl, portConflict, portHint
 import { canConnect, ready } from "./preview-probe.js";
 import { freePorts, PORT_POOL, portEnv } from "./preview-ports.js";
 import { canceledGens } from "./preview-start-state.js";
-import { alive, archivePreview, patchStart, readAnyPreview, recordPath, tail, writeRecord, type PreviewStep, type PreviewResult, type PreviewServiceRecord } from "./preview-store.js";
+import { alive, archivePreview, patchStart, prunePreviewArtifacts, readAnyPreview, recordPath, tail, writeRecord, type PreviewStep, type PreviewResult, type PreviewServiceRecord } from "./preview-store.js";
 import { previewShell } from "./preview-shell.js";
 import { now } from "./util.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -61,6 +61,7 @@ export async function runPreview(
     taskId, cmd: step.p.cmd, pid: 0, url: null, port: null, life: step.p.life, startedAt: now(),
     log, links: [], state: "starting", gen, installPid: null, services, primaryServiceId: primaryId, proxyToken,
   });
+  prunePreviewArtifacts(taskId, gen);
   bus.publish({ type: "task.review", taskId });
   const links = new Set<string>();
   let installing = 0;

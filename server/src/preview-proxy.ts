@@ -165,7 +165,10 @@ export function mountPreviewProxy(app: Hono): void {
 
 export function attachPreviewUpgrades(server: Server): void {
   server.on("upgrade", async (incoming, socket, head) => {
-    if (!incoming.url?.startsWith("/preview/")) { socket.destroy(); return; }
+    if (!incoming.url?.startsWith("/preview/")) {
+      if (server.listenerCount("upgrade") === 1) socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+      return;
+    }
     try {
       const requested = new URL(incoming.url, `http://${incoming.headers.host ?? "localhost"}`);
       const target = targetOf(requested.pathname);

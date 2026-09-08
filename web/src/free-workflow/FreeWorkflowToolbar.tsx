@@ -151,8 +151,9 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
         // 收得掉那条刚就绪的记录）。这两种情况下宣告「预览已打开」并弹开新标签页，指的都是
         // 一个此刻并不存在的预览。
         if (owns(taskId, token)) {
-          notify(preview.url ? `预览已打开：${preview.url}` : "预览已打开");
-          if (preview.url) window.open(browserPreviewUrl(preview.url), "_blank", "noopener,noreferrer");
+          const url = preview.url ? browserPreviewUrl(preview.url) : null;
+          notify(url ? `预览已打开：${url}` : "预览已打开");
+          if (url) window.open(url, "_blank", "noopener,noreferrer");
         }
       }
       if (owns(taskId, token)) await free.reload(true);

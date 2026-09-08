@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import type { IncomingMessage } from "node:http";
+import type { Duplex } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dirname } from "node:path";
@@ -25,7 +28,7 @@ const { mountPreviewProxy, attachPreviewUpgrades } = await import("../src/previe
 const { mountPreviewOpenRoutes } = await import("../src/preview-access.js");
 const { previewState } = await import("../src/preview-public.js");
 const { startPreview, stopPreview, readPreview, beginPreviewStart, endPreviewStart } = await import("../src/preview.js");
-const { lastPreview, readAnyPreview } = await import("../src/preview-store.js");
+const { lastPreview, readAnyPreview, readPreviewLog } = await import("../src/preview-store.js");
 const { nodeDepsAdvice } = await import("../src/preview-deps.js");
 const { previewShell } = await import("../src/preview-shell.js");
 const { createSession, deleteSession } = await import("../src/auth/store.js");
@@ -96,7 +99,25 @@ try {
   const singleDefault = await (await request(taskPath, "POST")).json();
   assert.equal(singleDefault.proxied, false, "单人模式默认直连");
   assert.match(singleDefault.url, /^http:\/\/localhost:/);
+  const firstRecord = readPreview("preview-task")!;
+  const taskDir = dirname(firstRecord.log);
+  const oldCmd = join(taskDir, `preview-${firstRecord.gen}-web.cmd`);
+  writeFileSync(oldCmd, "echo old launch");
+  const preserved = [join(taskDir, "preview-manual.log"), join(taskDir, `preview-${firstRecord.gen}-web.txt`)];
+  for (const file of preserved) writeFileSync(file, "unrelated");
+  const preservedDir = join(taskDir, `preview-${firstRecord.gen}-directory.log`);
+  mkdirSync(preservedDir);
   await stopPreview("preview-task", null);
+  assert.match(readPreviewLog("preview-task", 200_000, "api")!.text, /service.cjs/, "停止后仍可读取最后一轮服务日志");
+  const canceledGen = beginPreviewStart("preview-task");
+  await stopPreview("preview-task", null);
+  try {
+    const canceled = await startPreview("preview-task", { id: "cancel", kind: "preview", p: { cmd: command, mode: "frontend", ready: "port", life: "task" }, fail: null }, fixture, canceledGen, { services: config.services });
+    assert.equal(canceled.ok, false);
+    assert.equal(lastPreview("preview-task")!.gen, firstRecord.gen);
+    assert(firstRecord.services!.every((s) => existsSync(s.log)), "新一轮落盘前取消，不清理上次日志");
+    assert(existsSync(oldCmd));
+  } finally { endPreviewStart("preview-task", canceledGen); }
   const saved = await request(projPath, "PATCH", { previewConfig: config, previewCommand: command + "\n" });
   assert.equal(saved.status, 200);
   assert.deepEqual((await saved.json()).previewConfig, config);
@@ -105,6 +126,11 @@ try {
   const start = await request(taskPath, "POST");
   assert.equal(start.status, 200, await start.clone().text());
   const state = await start.json();
+  assert(firstRecord.services!.every((s) => !existsSync(s.log)), "新一轮启动清理旧代服务日志");
+  assert.equal(existsSync(oldCmd), false, "新一轮启动清理旧代命令文件");
+  assert(readPreview("preview-task")!.services!.every((s) => existsSync(s.log)), "保留当前代日志");
+  for (const file of preserved) assert.equal(readFileSync(file, "utf8"), "unrelated");
+  assert(existsSync(preservedDir), "清理不触碰同名目录");
   assert.equal(state.services.length, 2);
   assert.equal(state.services[0].status, "ready");
   assert.notEqual(state.services[0].port, state.services[1].port);
@@ -152,6 +178,44 @@ try {
     socket.once("close", () => { clearTimeout(timeout); resolve(); });
   });
   assert.equal((await request(gateway)).status, 200, "无效升级请求不影响服务存活");
+  await new Promise<void>((resolve, reject) => {
+    const socket = connect({ host: "127.0.0.1", port: address.port });
+    let response = "";
+    const timeout = setTimeout(() => { socket.destroy(); reject(new Error("未认领的升级请求没有结束")); }, 3000);
+    socket.once("connect", () => socket.write("GET /unclaimed-socket HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n"));
+    socket.on("data", (chunk) => { response += chunk.toString(); });
+    socket.on("error", (error) => { clearTimeout(timeout); reject(error); });
+    socket.once("close", () => {
+      clearTimeout(timeout);
+      try { assert.match(response, /^HTTP\/1.1 404 /); resolve(); } catch (error) { reject(error); }
+    });
+  });
+  const otherSockets = new Set<Duplex>();
+  const otherUpgrade = (incoming: IncomingMessage, socket: Duplex) => {
+    if (incoming.url !== "/other-socket") return;
+    otherSockets.add(socket);
+    const accept = createHash("sha1").update(incoming.headers["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
+    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    socket.write(Buffer.concat([Buffer.from([0x81, 14]), Buffer.from("other endpoint")]));
+    socket.on("data", () => socket.end());
+    socket.on("error", () => {});
+    socket.once("close", () => otherSockets.delete(socket));
+  };
+  server.on("upgrade", otherUpgrade);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const ws = new WebSocket(base.replace(/^http/, "ws") + "/other-socket");
+      const timeout = setTimeout(() => { ws.close(); reject(new Error("其他 WebSocket 端点超时")); }, 3000);
+      ws.addEventListener("message", (event) => {
+        clearTimeout(timeout); ws.close();
+        try { assert.equal(event.data, "other endpoint"); resolve(); } catch (error) { reject(error); }
+      });
+      ws.addEventListener("error", () => { clearTimeout(timeout); reject(new Error("预览处理器干扰了其他 WebSocket 端点")); });
+    });
+  } finally {
+    server.off("upgrade", otherUpgrade);
+    for (const socket of otherSockets) socket.destroy();
+  }
   const logs = await (await request(taskPath + "/log?service=api")).json();
   assert.match(logs.text, /service.cjs/);
   assert.equal(logs.services.length, 2);
@@ -205,6 +269,7 @@ try {
   await stopPreview("preview-task", "测试关闭");
   assert.equal(previewState("preview-task").running, false);
   assert(lastPreview("preview-task")!.services!.every((s) => s.status === "stopped"));
+  assert.match(readPreviewLog("preview-task", 200_000, "web")!.text, /service.cjs/, "清理旧代不影响最新停止日志");
   assert.equal((await request(gateway)).status, 404);
   await new Promise((resolve) => setTimeout(resolve, 1000));
   for (const pid of pids) assert.throws(() => process.kill(pid, 0), "关闭后服务进程已退出");
@@ -212,11 +277,14 @@ try {
     await db.insert(users).values({ id: "admin", name: "admin", dirName: "admin", role: "admin", status: "active", createdAt: stamp });
     const adminHeaders = { cookie: `${SESSION_COOKIE}=${await createSession("admin", "test")}` };
     for (const proxy of ["auto", "off"] as const) {
+      const previous = lastPreview("preview-task")!;
       assert.equal((await request(projPath, "PATCH", { previewConfig: { ...config, proxy } }, adminHeaders)).status, 200);
       const response = await request(taskPath, "POST", undefined, adminHeaders);
       assert.equal(response.status, 200, await response.clone().text());
       assert.equal((await response.json()).proxied, proxy === "auto", `多人模式 ${proxy} 配置已用于启动`);
+      assert(previous.services!.every((s) => !existsSync(s.log)), "连续重启不累积旧代日志");
       await stopPreview("preview-task", null);
+      assert(lastPreview("preview-task")!.services!.every((s) => existsSync(s.log)));
     }
   }
   writeFileSync(join(fixture, "fail.cjs"), 'setTimeout(()=>process.exit(17),1500);');

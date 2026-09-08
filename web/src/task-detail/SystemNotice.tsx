@@ -1,6 +1,7 @@
 import { ArrowClockwise, CheckCircle, Clock, Info, WarningCircle } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { previewNoticeText } from "../lib/previewUrl.ts";
 import { MessageAttachments } from "./Attachments.tsx";
 import type { ConversationItem } from "./conversationModel.ts";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
@@ -39,7 +40,7 @@ function eventIcon(kind: SystemEventKind): ReactNode {
 
 function cleanEventText(item: EventLike): string {
   if (systemEventKind(item.text, item.tone) === "recovery") return "工作区已恢复 · 会话内容已保留";
-  return item.text.replace(/^〔系统〕/, "").trim();
+  return previewNoticeText(item.text.replace(/^〔系统〕/, "").trim());
 }
 
 function digestLead(items: EventItem[]): { kind: SystemEventKind; text: string } {
@@ -120,7 +121,7 @@ export function SystemEventNote({ item, mode = "footnote" }: { item: EventLike; 
       <span className="system-event-icon" aria-hidden="true">{eventIcon(kind)}</span>
       <p>
         {recovery && <b>工作区已恢复</b>}
-        {recovery ? "原目录已不存在，系统已重建空工作区；会话与用户消息均已保留。" : item.text.replace(/^〔系统〕/, "").trim()}
+        {recovery ? "原目录已不存在，系统已重建空工作区；会话与用户消息均已保留。" : cleanEventText(item)}
       </p>
       {item.at && <time>{formatInstant(item.at)}</time>}
     </div>
@@ -141,7 +142,7 @@ export function SystemBoundary({
     return (
       <div className={`${surface === "team" ? "team-feed-event" : "task-event-line"} system-boundary notice-mode-aligned is-${kind}`}>
         <span className="system-event-avatar" aria-hidden="true">{eventIcon(kind)}</span>
-        <p>{item.text}{item.at ? ` · ${formatInstant(item.at)}` : ""}</p>
+        <p>{previewNoticeText(item.text)}{item.at ? ` · ${formatInstant(item.at)}` : ""}</p>
         <span className="system-boundary-rule" aria-hidden="true" />
       </div>
     );
@@ -149,7 +150,7 @@ export function SystemBoundary({
   return (
     <div className={`${surface === "team" ? "team-feed-event" : "task-event-line"} system-boundary${item.tone === "error" ? " is-error" : ""}`}>
       <span />
-      <p>{item.text}{item.at ? ` · ${formatInstant(item.at)}` : ""}</p>
+      <p>{previewNoticeText(item.text)}{item.at ? ` · ${formatInstant(item.at)}` : ""}</p>
       <span />
     </div>
   );
@@ -201,7 +202,7 @@ export function SystemAuthoredMessage({ item, related = [], surface = "task", mo
             {related.length > 0 && (
               <details className="system-action-related">
                 <summary>流程记录 {related.length} 条</summary>
-                <ol>{related.map((event) => <li key={event.id}>{event.text}{event.at ? <time>{formatInstant(event.at)}</time> : null}</li>)}</ol>
+                <ol>{related.map((event) => <li key={event.id}>{previewNoticeText(event.text)}{event.at ? <time>{formatInstant(event.at)}</time> : null}</li>)}</ol>
               </details>
             )}
           </div>

@@ -13,6 +13,7 @@ import type { Task } from "@ash/shared";
 import type { WorkflowStep } from "@ash/shared/workflow";
 import { ArrowClockwise, SpinnerGap } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
+import { browserPreviewUrl } from "../lib/previewUrl.ts";
 
 export function PreviewRestartButton({
   task,
@@ -32,7 +33,7 @@ export function PreviewRestartButton({
     setBusy(true);
     try {
       const result = await api.restartPreview(task.id, step.id);
-      notify(result.url ? `预览已起：${result.url}` : `预览已起（端口 ${result.port ?? "未知"}）`);
+      notify(result.url ? `预览已起：${browserPreviewUrl(result.url)}` : `预览已起（端口 ${result.port ?? "未知"}）`);
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {

@@ -64,8 +64,9 @@ try {
   assert.equal(await preview.inputValue(), draft, "切换启动方式后多行脚本草稿丢失");
   await servicesMode.check();
   await page.getByRole("button", { name: "检测服务" }).click();
-  await page.getByRole("status").waitFor();
-  assert.match(await page.getByRole("status").innerText(), /检测到 2 个候选/);
+  const detectionResult = page.locator(".preview-detection-result");
+  await detectionResult.filter({ hasText: /检测到 2 个候选/ }).waitFor();
+  assert.match(await detectionResult.innerText(), /检测到 2 个候选/);
 
   const webCommand = page.getByRole("textbox", { name: "网页前端 启动脚本" });
   const apiCommand = page.getByRole("textbox", { name: "接口服务 启动脚本" });

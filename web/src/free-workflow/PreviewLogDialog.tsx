@@ -113,7 +113,7 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
         {meta?.command && (
           <div className="preview-log-meta">
             <code className="mono">{meta.command}</code>
-            {meta.url && <a href={browserPreviewUrl(meta.url)} target="_blank" rel="noreferrer">{meta.url}</a>}
+            {meta.url && <a href={browserPreviewUrl(meta.url)} target="_blank" rel="noreferrer">{browserPreviewUrl(meta.url)}</a>}
           </div>
         )}
         <pre
