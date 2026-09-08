@@ -57,7 +57,16 @@ export function Pill({
       </Text>
     </View>
   );
-  return onPress ? <Pressable onPress={onPress}>{body}</Pressable> : body;
+  // 可点时必须报成 button 并带上文案——RN 不会因为套了 Pressable 就自动给出角色，
+  // 缺了它这颗胶囊在无障碍树里只是一段 text，iOS UI 自动化根本点不到（见
+  // `docs/incidents.md` 同期的按钮无障碍问题）。selected 让筛选态也能被读出来。
+  return onPress ? (
+    <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ selected: !!active }} onPress={onPress}>
+      {body}
+    </Pressable>
+  ) : (
+    body
+  );
 }
 
 // Unified text input — filled, borderless, generous padding. Used across new /
@@ -91,12 +100,14 @@ export function Button({
   variant = "primary",
   disabled,
   style,
+  accessibilityLabel,
 }: {
   label: string;
   onPress?: () => void;
   variant?: "primary" | "secondary" | "danger";
   disabled?: boolean;
   style?: StyleProp<ViewStyle>;
+  accessibilityLabel?: string;
 }) {
   const theme = useTheme();
   const bg =
@@ -105,6 +116,10 @@ export function Button({
   const border = variant === "danger" ? theme.danger : "transparent";
   return (
     <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityState={{ disabled: !!disabled }}
+      disabled={disabled}
       onPress={disabled ? undefined : onPress}
       style={[
         {

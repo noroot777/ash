@@ -53,6 +53,8 @@ import { localIdentity, shortFingerprint } from "./handoff-identity.js";
 import { collectUploads, isTextRel } from "./handoff-uploads.js";
 import { readableUploads } from "./uploads.js";
 import { beginHandoffPrepare, endHandoffPrepare } from "./handoff-guard.js";
+import { capabilityReportFor } from "./handoff-capability.js";
+import { capabilityBlockMessage, HANDOFF_CAPABILITY_BLOCKED } from "@ash/shared/handoff";
 import { cancelPendingMessage } from "./pending-messages.js";
 import type { HandoffReturnContext } from "./handoff-peer-client.js";
 import { currentListeningPort } from "./listening-port.js";
@@ -282,6 +284,10 @@ export async function preflightHandoff(
   }
   // 盘点也过授权闸:对话框里报的数字必须就是真会带走的那批(uploads.ts readableUploads)。
   const uploads = await collectUploads(uploadTexts, notes, true, await packGateFor(task));
+  // 能力握手:对端跑不跑得动这个任务。判据与身份核对同档 —— 在打包之前就要知道
+  // (详见 handoff-capability.ts 顶部)。它永不抛,读不出来就是 unknown 不拦。
+  const capability = await capabilityReportFor(taskId, ping.capabilities);
+  if (capability.status === "unknown" && capability.unknownReason) notes.push(capability.unknownReason);
   return {
     ok: true,
     target: { url: targetUrl, host: ping.host },
@@ -289,6 +295,7 @@ export async function preflightHandoff(
     peer,
     projects: ping.projects,
     suggestedProjectId: suggested?.id ?? null,
+    capability,
     local: {
       status: task.status,
       running: task.status === "running" || task.status === "queued",
@@ -305,7 +312,11 @@ export async function preflightHandoff(
 
 export async function exportHandoff(
   taskId: string,
-  opts: { targetUrl: string; targetProjectId: string; targetName?: string; autoResume?: boolean },
+  opts: {
+    targetUrl: string; targetProjectId: string; targetName?: string; autoResume?: boolean;
+    /** 用户在对话框里明确勾了「仍然接力」:绕过能力握手闸(见下面的调用点)。 */
+    ignoreCapabilityGaps?: boolean;
+  },
 ): Promise<HandoffExportResult> {
   const targetUrl = normalizePeerUrl(opts.targetUrl);
   const loaded = await loadSingleTask(taskId);
@@ -373,6 +384,23 @@ export async function exportHandoff(
       targetUrl, expectedFingerprint, returnContext, { requirePeerUser: true },
     );
     assertPeerAcceptsUs(peer);
+    // 能力握手闸:对端没装这个任务要用的智能体时,推过去的是一个在那边必然 spawn
+    // 失败的任务(判据与理由见 handoff-capability.ts 顶部)。和身份核对一样排在打包
+    // 之前 —— bundle 一个字节都不打。
+    //
+    // **收口重试一律放行**:pending 意味着上一次的送达结果未知,对端很可能已经导入
+    // 成功了。那时拦下来不会让任何任务少失败一次,只会把这条任务永远钉在 pending
+    // 上(既不能收口、也不能改派),而这正是幂等重放要解决的处境。
+    if (!pendingRetry && !opts.ignoreCapabilityGaps) {
+      const capability = await capabilityReportFor(taskId, ping.capabilities);
+      if (capability.blocking) {
+        const error = new HandoffError(capabilityBlockMessage(capability.gaps), 409);
+        // 机器可读原因:没有勾选框的入口(远程任务视图的一键移回)靠它把这次拒绝变成
+        // 一次可确认的追问,而不是一条推不开的死路(见 shared 的 HANDOFF_CAPABILITY_BLOCKED)。
+        error.code = HANDOFF_CAPABILITY_BLOCKED;
+        throw error;
+      }
+    }
     const targetProject = ping.projects.find((p) => p.id === opts.targetProjectId);
     if (!targetProject) throw new HandoffError("对端没有这个项目 id,先重新预检", 409);
 

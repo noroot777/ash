@@ -84,7 +84,7 @@ export function PendingMessageTray({
             backgroundColor: theme.overlay,
             borderRadius: radius.sm,
             paddingHorizontal: 10,
-            paddingVertical: 6,
+            paddingVertical: 4,
           }}
         >
           {/* 排队消息不看时间（跑完就发），所以那一列写「排队中」而不是一个骗人的时刻。 */}
@@ -108,24 +108,29 @@ export function PendingMessageTray({
           {m.sessionRole ? (
             <Text style={{ color: theme.faint, fontSize: 11 }}>审查会话 · 自动投递</Text>
           ) : (
+            /* 撤回可逆、丢弃不可逆，两颗挨在一起。原来图标 15 + hitSlop 8 = 31pt 见方、
+               间距 8pt，指腹一按容易点到隔壁。撑成 36pt 见方 + hitSlop 4 = 44pt 热区，
+               两颗正好在 8pt 间距的中线相接，不重叠。 */
             <>
               <Pressable
                 onPress={() => void withdraw(m)}
-                hitSlop={8}
+                hitSlop={4}
                 accessibilityRole="button"
                 accessibilityLabel={m.attachments.length
                   ? `撤回这条待发送消息；它带了 ${m.attachments.length} 个附件，需要到网页端撤回`
                   : "撤回这条待发送消息，内容放回输入框"}
+                style={{ width: 36, height: 36, alignItems: "center", justifyContent: "center" }}
               >
-                <Ionicons name="arrow-undo-outline" size={15} color={theme.faint} />
+                <Ionicons name="arrow-undo-outline" size={17} color={theme.faint} />
               </Pressable>
               <Pressable
                 onPress={() => discard(m)}
-                hitSlop={8}
+                hitSlop={4}
                 accessibilityRole="button"
                 accessibilityLabel="丢弃这条待发送消息，内容不保留"
+                style={{ width: 36, height: 36, alignItems: "center", justifyContent: "center" }}
               >
-                <Ionicons name="trash-outline" size={15} color={theme.faint} />
+                <Ionicons name="trash-outline" size={17} color={theme.faint} />
               </Pressable>
             </>
           )}

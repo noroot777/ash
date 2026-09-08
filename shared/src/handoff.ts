@@ -1,7 +1,7 @@
 // ── 任务接力（跨机器 handoff）──────────────────────────────────────────────
 // 把一个任务连同 git 分支、CLI 会话文件、会话产物整体迁到另一台 ash 上续跑。
 // 从 index.ts 拆出的纯类型模块;index.ts 做类型再导出,消费方 import 路径不变。
-import type { TaskStage, TaskStatus } from "./index.ts";
+import type { AgentType, TaskStage, TaskStatus } from "./index.ts";
 
 export interface HandoffTarget {
   name: string;
@@ -32,7 +32,23 @@ export interface HandoffTarget {
  */
 export const HANDOFF_PEER_KEY_REQUIRED = "peer-key-required";
 
-export type HandoffErrorCode = typeof HANDOFF_PEER_KEY_REQUIRED;
+/**
+ * 能力握手拦下了这次接力(目标机没装任务要用的智能体)。
+ *
+ * 和上面那条同理由:界面得据此**就地**给出「仍然接力」的确认,而不是甩一句让人去别处
+ * 勾选的话。第 1 轮审查抓到的正是缺了它的后果 —— 远程任务视图的一键移回只有 toast,
+ * 拒绝文案却写着「勾选「仍然接力」」,而那个界面上根本没有那个勾选框:闸推不开,功能
+ * 成了死路。
+ */
+export const HANDOFF_CAPABILITY_BLOCKED = "capability-blocked";
+
+export type HandoffErrorCode = typeof HANDOFF_PEER_KEY_REQUIRED | typeof HANDOFF_CAPABILITY_BLOCKED;
+
+/** 应答体里带没带 `capability-blocked`。前端据此把拒绝变成一次可确认的追问。 */
+export function isCapabilityBlocked(body: unknown): boolean {
+  return typeof body === "object" && body !== null && "code" in body
+    && (body as { code?: unknown }).code === HANDOFF_CAPABILITY_BLOCKED;
+}
 
 /** 应答体里带没带 `peer-key-required`。前端与服务端共用同一份判据。 */
 export function needsPeerKey(body: unknown): boolean {
@@ -224,6 +240,11 @@ export interface HandoffPreflightResult {
   projects: HandoffPingProject[];
   // 按仓库目录名匹配出的对端项目;null = 没匹配上,让用户自己选。
   suggestedProjectId: string | null;
+  /**
+   * 能力握手:对端跑不跑得动这个任务(装没装它要用的智能体、认不认那个模型)。
+   * `blocking` 为 true 时导出默认被拒,除非用户明确勾选「仍然接力」。
+   */
+  capability: HandoffCapabilityReport;
   local: {
     status: string;
     running: boolean;
@@ -341,4 +362,75 @@ export function outboundHolder<T extends HandoffTarget>(
   const name = marker.peerName?.trim();
   // 重名时取头一条：走到这一档说明没有指纹可依，而名字重了的两台在界面上本来也分不出来。
   return name ? candidates.find((item) => item.name.trim() === name) ?? null : null;
+}
+
+// ── 能力握手：对端跑不跑得动这个任务 ────────────────────────────────────────
+// 接力搬的是「任务 + 它选中的执行器」,而执行器是**机器本地的事实**:对端没装那个 CLI,
+// 任务落地就是一次必然失败的 spawn(ENOENT);对端 CLI 在、模型不在,更坏——有的网关会
+// 静默降级到默认模型,回合照常跑完 exit 0,从 ash 这一层完全看不出跑的已经不是你选的
+// 那个模型了。两种都发生在**载荷推过去之后**,那时任务已经不在本机了。
+//
+// 所以在打包之前先问一句对端「你有什么」,判据与身份核对同档:**能拦的在打包前拦**。
+// 诚实边界照 CliModelCatalog 的规矩来 —— 报得出的说清是问出来的还是兜底的,报不出的
+// 明说无从核对,绝不拿兜底清单假装成权威目录去否定一个模型。
+
+/** 对端一种智能体的可用性。 */
+export interface HandoffPeerAgentCapability {
+  type: AgentType;
+  /** 对端装没装这个 CLI(与它派任务时同一套 probeBins 判定)。false = 那边跑不起来。 */
+  available: boolean;
+  /** 对端该类型下注册的执行器 profile 数。0 仍可跑(退内置默认),只是没人配过。 */
+  profiles: number;
+  /** 对端该 CLI 的候选模型。 */
+  models: readonly string[];
+  /** probe=现问 CLI 的实时目录;preset=内置兜底快照(**不权威**,不能拿它否定模型)。 */
+  modelSource: "probe" | "preset";
+}
+
+/** ping 应答里对端自报的能力。老版本 ash 不带这个字段 —— 那时一律按「无从核对」处理。 */
+export interface HandoffPeerCapabilities {
+  agents: HandoffPeerAgentCapability[];
+  /**
+   * 对端**故意没探**的原因(多人模式不碰宿主机 CLI)。非空 = 模型清单只是兜底,
+   * 模型落差一律降级成提示。跟「探了但失败」不是一回事,别混。
+   */
+  skipped: string | null;
+}
+
+/** 一条能力落差的来源槽位 —— 光说「缺 codex」没用,得说清是哪儿要用它。 */
+export type HandoffCapabilitySlot = "task" | "session" | "message" | "review";
+
+export interface HandoffCapabilityGap {
+  slot: HandoffCapabilitySlot;
+  /**
+   * agent-missing = 对端没装这个 CLI,落地必然 spawn 失败(**拦**);
+   * model-missing = CLI 在但模型不在对端清单里,可能报错、也可能静默换个模型跑完(**提示**)。
+   */
+  kind: "agent-missing" | "model-missing";
+  agentType: string;
+  model: string | null;
+  /** 给人看的一句话,已经带上了槽位和后果。 */
+  detail: string;
+}
+
+export interface HandoffCapabilityReport {
+  /** ok=对得上;gaps=有落差;unknown=对端报不出能力,无从核对。 */
+  status: "ok" | "gaps" | "unknown";
+  /** status=unknown 时的原因(对端旧版 / 对端跳过了探测)。 */
+  unknownReason: string | null;
+  gaps: HandoffCapabilityGap[];
+  /**
+   * true = 存在 agent-missing 级落差,导出默认拒绝。用户在对话框里明确勾选「仍然接力」
+   * 才放行(`POST /tasks/:id/handoff` 的 `ignoreCapabilityGaps`)——判断可能过时(对端刚
+   * 装上还没重探),但**默认必须是拦**:静默推过去换来的是一个在别人机器上必然跑不动的任务。
+   */
+  blocking: boolean;
+}
+
+/** 缺智能体时的兜底文案:两端与前端共用一句,别各写各的。 */
+export function capabilityBlockMessage(gaps: HandoffCapabilityGap[]): string {
+  const missing = [...new Set(gaps.filter((g) => g.kind === "agent-missing").map((g) => g.agentType))];
+  return `目标机没有装这个任务要用的智能体(${missing.join("、")})——任务过去之后一起跑就是 ENOENT。`
+    + "先在目标机装上并注册为执行器,或者在这台机器上把任务改成对端有的智能体;确实想先把任务放过去、"
+    + "到那边再处理的话,勾选「仍然接力」。";
 }

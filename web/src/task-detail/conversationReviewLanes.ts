@@ -332,11 +332,11 @@ export function conversationFeedRows(
 
   const lanes = rows.filter((row): row is ConversationReviewLane => row.kind === "review-lane");
   attachReports(lanes, options?.reviews ?? []);
-  const latest = lanes.at(-1);
   for (const lane of lanes) {
-    // 设计稿 D 的默认规则：已有结论、且后面还有更新轮次的历史卡折起来；最新轮和
-    // 正在跑的轮次展开，避免用户只看见一张不动的卡片。
-    lane.defaultCollapsed = lane !== latest && lane.conclusion !== null;
+    // 出了结论的轮次一律折起来（最新那轮也一样，用户 2026-09-02 要求）：结论、审查者和
+    // 报告入口在卡头上已经看得见，正文只在想细看时展开。还在跑的轮次保持展开，让用户
+    // 能跟着看进度。
+    lane.defaultCollapsed = lane.conclusion !== null;
   }
   // 修复交接紧跟在被打回的卡后面。就地验证的整份内嵌报告一律由卡片入口替代；自由派审
   // 只有在 report.md 确实可打开时才隐藏原 prompt，没有报告就保留它作为证据目录兜底。

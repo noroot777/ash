@@ -286,7 +286,9 @@ export const api = {
   replyTask: (
     taskId: string,
     text: string,
-    // executorId/model 只作用于这一回合：@ 出来的那一步是显式选择，别写回任务常设配置。
+    // 这里的 executorId/model 只作用于这一回合:正文里 @ 出来的那一次显式召唤,别写回
+    // 任务常设配置。改「以后都用谁」是另一条路 —— patchTask(agentType/executorId/
+    // model/reasoningEffort),对话框底部那颗胶囊走的就是它。
     options?: {
       attachments?: string[];
       agent?: AgentType;

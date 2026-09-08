@@ -6,6 +6,7 @@ import { STATUS_META } from "@/lib/constants";
 import { formatInstant } from "@/lib/time";
 import { fonts, radius, useTheme } from "@/lib/theme";
 import { StatusDot } from "@/components/ui";
+import { attentionColor, taskAttention } from "@/components/TaskStatusChips";
 
 export function TeamWorkerBatchCard({
   batch,
@@ -95,7 +96,9 @@ function WorkerRow({
   onPress: () => void;
 }) {
   const theme = useTheme();
-  const asking = !!worker.question;
+  const attention = taskAttention(worker);
+  const asking = attention?.kind === "question";
+  const signal = attentionColor(attention?.kind, theme);
   const status = workerStatusText(worker, groupPaused);
   const executor = worker.executorLabel?.trim() || worker.agentType || "—";
 
@@ -113,7 +116,7 @@ function WorkerRow({
         paddingVertical: 9,
         borderTopWidth: 1,
         borderTopColor: theme.line,
-        backgroundColor: asking ? "#22D3EE0D" : theme.panel,
+        backgroundColor: signal ? `${signal}0D` : theme.panel,
       }}
     >
       <StatusDot status={worker.status} size={10} />
@@ -125,9 +128,11 @@ function WorkerRow({
           <Text numberOfLines={1} style={{ flex: 1, color: theme.ink, fontSize: 13, fontFamily: fonts.bodyMed }}>
             {worker.title}
           </Text>
-          {asking ? (
-            <View style={{ borderRadius: radius.sm, backgroundColor: "#22D3EE1A", paddingHorizontal: 6, paddingVertical: 2 }}>
-              <Text style={{ color: "#22D3EE", fontSize: 10, fontFamily: fonts.bodySemi }}>提问中</Text>
+          {attention ? (
+            <View style={{ borderRadius: radius.sm, backgroundColor: `${signal}1A`, paddingHorizontal: 6, paddingVertical: 2 }}>
+              <Text style={{ color: signal!, fontSize: 10, fontFamily: fonts.bodySemi }}>
+                {asking ? "提问中" : "未通过"}
+              </Text>
             </View>
           ) : null}
         </View>
@@ -135,7 +140,7 @@ function WorkerRow({
           <Text numberOfLines={1} style={{ maxWidth: "48%", color: theme.muted, fontSize: 10, fontFamily: fonts.mono }}>
             {executor}
           </Text>
-          <Text numberOfLines={1} style={{ flex: 1, color: asking ? "#22D3EE" : theme.faint, fontSize: 11, fontFamily: fonts.body }}>
+          <Text numberOfLines={1} style={{ flex: 1, color: signal ?? theme.faint, fontSize: 11, fontFamily: fonts.body }}>
             {status}
           </Text>
         </View>
@@ -147,6 +152,8 @@ function WorkerRow({
 
 function workerStatusText(worker: TaskListItem, groupPaused: boolean): string {
   if (worker.question) return "等待你的答复";
+  // 验证没过 = 等你拍板：要么让它改，要么打开它再派一轮验证。
+  if (worker.stage === "verify_failed") return "验证未通过，等你指挥";
   if (groupPaused && worker.status === "paused") return "被停止全组打断";
   if (groupPaused && (worker.status === "queued" || worker.status === "backlog")) return "所属组已停止";
   if (worker.status === "queued" && worker.queuePosition != null) return `排队第 ${worker.queuePosition + 1} 位`;

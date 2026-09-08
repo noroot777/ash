@@ -15,6 +15,7 @@ import { useDismissable } from "../lib/useDismissable.ts";
 import { HandoffPeerKeyField } from "../settings/HandoffPeerKeyField.tsx";
 import { handoffTargetsForTask, nextUntriedHandoffTarget } from "./handoffTargetPolicy.ts";
 import { HandoffReturnView, type HandoffReturnPhase } from "./HandoffReturnView.tsx";
+import { HandoffCapabilityNotice } from "./HandoffCapabilityNotice.tsx";
 import {
   HandoffDialogHeader,
   HandoffProgress,
@@ -64,6 +65,9 @@ export function HandoffDialog({
   const [autoResume, setAutoResume] = useState(pendingHandoff?.autoResume ?? !accepted);
   const autoResumeLocked = pendingHandoff?.autoResume !== undefined || accepted;
   const [busy, setBusy] = useState(false);
+  // 能力握手拦下时(目标机没装任务要用的智能体),用户明确勾过「仍然接力」没有。
+  // 每次重新预检都清掉 —— 换了目标机之后,上一台的确认不该继续替这一台背书。
+  const [capabilityAck, setCapabilityAck] = useState(false);
   const [applying, setApplying] = useState(false);
   const [approval, setApproval] = useState<HandoffApprovalResult | null>(null);
   const [draftTargetName, setDraftTargetName] = useState("");
@@ -132,6 +136,7 @@ export function HandoffDialog({
     setPreflight(null);
     setPreflightError(null);
     setPeerKeyRequired(false);
+    setCapabilityAck(false);
     setProjectId("");
     setApproval(null);
     if (!targetUrl || !shouldAutoPreflight) return () => { alive = false; };
@@ -171,6 +176,11 @@ export function HandoffDialog({
   const selectedProject = preflight?.projects.find((project) => project.id === projectId) ?? null;
   // 对端还没批准本机(或已拒绝):后端在打包前也会 409,这里先把按钮按住,省掉一次白等。
   const blockedByPeer = preflight?.peer?.peerStatus === "pending" || preflight?.peer?.peerStatus === "blocked";
+  // 能力握手拦住且用户还没勾「仍然接力」。收口重试(pendingHandoff)不受这道闸约束 ——
+  // 服务端同样放行:那时对端可能已经导入成功了,拦住只会把任务永远钉在 pending 上。
+  const blockedByCapability = Boolean(
+    preflight?.capability?.blocking && !capabilityAck && !pendingHandoff,
+  );
   // 移回只有三种状态:还在找来源机 / 找到了可以按确认 / 连不上。中间的选择项一个都没有。
   const returnPhase: HandoffReturnPhase = preflight
     ? "ready"
@@ -188,7 +198,7 @@ export function HandoffDialog({
         ...preflight.local.notes,
       ]
     : [];
-  const returnReady = returnPhase === "ready" && !blockedByPeer && Boolean(projectId);
+  const returnReady = returnPhase === "ready" && !blockedByPeer && !blockedByCapability && Boolean(projectId);
 
   const addTarget = async () => {
     const name = draftTargetName.trim();
@@ -223,6 +233,7 @@ export function HandoffDialog({
     setPreflight(null);
     setPreflightError(null);
     setFallbackNotice(null);
+    setCapabilityAck(false);
     attemptedReturnTargets.current.clear();
     automaticReturnFallback.current = true;
     setReloadKey((key) => key + 1);
@@ -235,6 +246,7 @@ export function HandoffDialog({
     setPreflight(null);
     setPreflightError(null);
     setPeerKeyRequired(false);
+    setCapabilityAck(false);
     setProjectId("");
     try {
       const requestResult = await api.requestHandoffApproval(targetUrl);
@@ -267,6 +279,7 @@ export function HandoffDialog({
     setPreflight(null);
     setPreflightError(null);
     setPeerKeyRequired(false);
+    setCapabilityAck(false);
     setProjectId("");
     try {
       const probe = await api.handoffPreflight(task.id, targetUrl);
@@ -290,6 +303,7 @@ export function HandoffDialog({
         targetProjectId: projectId,
         ...(target?.name ? { targetName: target.name } : {}),
         autoResume,
+        ...(capabilityAck ? { ignoreCapabilityGaps: true } : {}),
       });
       setResult(exported);
       // 接力已落持久标记(task.handoff)、状态也停成了终态——拉回最新任务刷新横幅和按钮。
@@ -362,6 +376,13 @@ export function HandoffDialog({
               replay={Boolean(pendingReturn)}
               busy={busy}
               onAutoResumeChange={setAutoResume}
+            />
+            {/* 移回同样要过能力握手:任务在本机可能已经换过智能体,原机未必有它 ——
+                「回原机」不天然意味着原机跑得动它现在这副样子。 */}
+            <HandoffCapabilityNotice
+              capability={preflight?.capability}
+              acknowledged={capabilityAck}
+              onAcknowledge={setCapabilityAck}
             />
             {/* 移回同样会撞上「来源机是多人实例但不认识你」——地址是系统探出来的,可 key
                 只有人能填,所以这条路上也要有输入框。 */}
@@ -525,6 +546,11 @@ export function HandoffDialog({
                     </span>
                   </p>
                 )}
+                <HandoffCapabilityNotice
+                  capability={preflight.capability}
+                  acknowledged={capabilityAck}
+                  onAcknowledge={setCapabilityAck}
+                />
                 <div className="handoff-field">
                   <label htmlFor="handoff-project">对端项目（主机 {preflight.target.host}）</label>
                   <select
@@ -620,7 +646,7 @@ export function HandoffDialog({
             <button
               className="is-primary"
               type="button"
-              disabled={busy || applying || !targetUrl || (!!preflight && !blockedByPeer && !projectId)}
+              disabled={busy || applying || !targetUrl || (!!preflight && !blockedByPeer && !projectId) || blockedByCapability}
               onClick={() => void (preflight && !blockedByPeer ? run() : target?.peerFp ? checkTarget() : requestApproval())}
             >
               {applying

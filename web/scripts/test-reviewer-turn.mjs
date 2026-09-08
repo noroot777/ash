@@ -83,7 +83,7 @@ assert.deepEqual(firstLane.items.map((item) => item.id), [verify.id, failNote.id
 assert.equal(firstLane.conclusion, "verify_failed");
 assert.equal(firstLane.complete, true);
 assert.equal(firstLane.reportAvailable, true, "跑完且审查者确实说过话，才有可看的 report.md");
-assert.equal(firstLane.defaultCollapsed, false, "唯一一轮仍是最新轮，默认展开");
+assert.equal(firstLane.defaultCollapsed, true, "出了结论就默认折叠，最新的那一轮也一样");
 
 const twoRoundItems = buildConversationItems([{
   session,
@@ -105,8 +105,8 @@ const twoRoundItems = buildConversationItems([{
 }], [session], []);
 const twoLanes = conversationFeedRows(twoRoundItems).filter((row) => row.kind === "review-lane");
 assert.equal(twoLanes.length, 2);
-assert.equal(twoLanes[0].defaultCollapsed, true, "有结论且后面已有新一轮的历史卡默认折叠");
-assert.equal(twoLanes[1].defaultCollapsed, false, "正在跑的最新轮必须默认展开");
+assert.equal(twoLanes[0].defaultCollapsed, true, "有结论的历史卡默认折叠");
+assert.equal(twoLanes[1].defaultCollapsed, false, "还在跑的轮次仍默认展开，让用户跟着看进度");
 assert.equal(twoLanes[1].complete, false);
 assert.equal(twoLanes[1].reportAvailable, false, "进行中的报告尚未必写完，不给死入口");
 
@@ -408,8 +408,8 @@ assert.deepEqual(
 assert.deepEqual(multiLanes.map((lane) => lane.conclusion), ["verify_failed", "verified", "verified"]);
 assert.deepEqual(
   multiLanes.map((lane) => lane.defaultCollapsed),
-  [true, true, false],
-  "只有最新一张展开",
+  [true, true, true],
+  "出了结论的轮次一律默认折叠，最新那一张也不例外",
 );
 
 // —— 合并结果审查：跑在验收后的只读快照上，一次就是一次，没有轮号 ——

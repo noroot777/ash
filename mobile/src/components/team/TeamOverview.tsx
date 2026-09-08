@@ -15,6 +15,7 @@ import { STATUS_META } from "@/lib/constants";
 import { TaskTimeChip } from "@/lib/time";
 import { fonts, radius, useTheme } from "@/lib/theme";
 import { StatusDot } from "@/components/ui";
+import { ATTENTION_COLOR, attentionCounts } from "@/components/TaskStatusChips";
 
 export function TeamOverview({
   task,
@@ -48,12 +49,16 @@ export function TeamOverview({
   const counts = statusCounts(workers);
   const value = (status: TaskStatus, awaitingAnswer = false) =>
     counts.find((bucket) => bucket.status === status && !!bucket.awaitingAnswer === awaitingAnswer)?.n ?? 0;
+  const verifyFailed = attentionCounts(workers).verifyFailed;
   const summary = [
     { label: "运行", n: value("running"), color: STATUS_META.running.color },
     { label: "排队", n: value("queued"), color: STATUS_META.queued.color },
     { label: "完成", n: value("done"), color: STATUS_META.done.color },
     { label: "失败", n: value("failed"), color: STATUS_META.failed.color },
-    { label: "提问", n: value("paused", true), color: "#22D3EE" },
+    { label: "提问", n: value("paused", true), color: ATTENTION_COLOR },
+    // 验证没过的那几个也在等人拍板。为 0 时不占位——五格已经够挤，别为一个常年是 0
+    // 的数字再切一刀。
+    ...(verifyFailed ? [{ label: "未过验证", n: verifyFailed, color: theme.danger }] : []),
   ];
 
   return (

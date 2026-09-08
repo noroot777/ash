@@ -23,6 +23,7 @@ config.watchFolders = [repoRoot];
 config.resolver.nodeModulesPaths = [path.resolve(projectRoot, "node_modules")];
 
 // Follow the `@ash/shared` symlink out to shared/src.
-config.resolver.unstable_enableSymlinks = true;
+// (SDK 57 起 symlink 解析已是 Metro 默认，`resolver.unstable_enableSymlinks` 显式置 true
+// 会被 expo-doctor 报为多余覆盖，故移除。)
 
 module.exports = config;

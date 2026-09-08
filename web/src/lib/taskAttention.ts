@@ -49,6 +49,14 @@ export function isTeamSettledLead(task: TaskListItem, workers: TaskListItem[] = 
     && isTeamSettled(task.status === "running", workers);
 }
 
+// 「这一行摔了」。跑挂了（status=failed）和验证没过（stage=verify_failed）是同一件事的
+// 两种记法 —— 都是活停在半路、而且下一步得人来看。判据抽出来是因为**分堆和任务模式
+// 共用它**：spreadBucket 把它归「需要你处理」，inTaskMode 据此放行，两处分头写过一次，
+// 结果就是失败的任务在筛选条上算作「需要你处理」、却进不了任务模式那份列表。
+export function hasFailed(task: Pick<TaskListItem, "status" | "stage">): boolean {
+  return task.status === "failed" || task.stage === "verify_failed";
+}
+
 // 分堆的判据只问一句：这一行现在轮到谁动。轮到我 = todo（等答复 / 待验收 / 失败），
 // 机器在动 = run，谁也没轮到 = wait，收了尾 = done，走完验收 = accepted。
 //
@@ -68,7 +76,7 @@ export function isTeamSettledLead(task: TaskListItem, workers: TaskListItem[] = 
 //     否则「排着 / 暂停」里会堆着几十个其实早就干完的团队。
 export function spreadBucket(task: TaskListItem, workers: TaskListItem[] = []): SpreadBucket {
   if (task.question) return "todo";
-  if (task.status === "failed" || task.stage === "verify_failed") return "todo";
+  if (hasFailed(task)) return "todo";
   // 等我盖章 = 轮到我动，判据跟任务模式共用一份（见下面 isTaskAwaitingAcceptance）。
   // 干完没点头的因此落「需要你处理」，而不是「已收尾」—— 后者是「这事翻篇了」的意思。
   if (isTaskAwaitingAcceptance(task, workers)) return "todo";
@@ -101,9 +109,9 @@ export function awaitsAcceptance(task: Pick<Task, "stage">, settled: boolean): b
   return settled && !isAcceptedStage(task);
 }
 
-// 「任务模式」（侧栏跨项目那一档）放行哪些行的判据，就下面这三条 —— 机器在动、等我
-// 说句话（提问 / 停在检查点）、或者盖着「待验收」的章。别的一律不进：那一档存在的意义
-// 是「此刻还没落地的活」，把收了尾又验完的一起塞进来，它跟单项目态就没区别了。
+// 「任务模式」（侧栏跨项目那一档）放行哪些行的判据，就下面这四条 —— 机器在动、摔了、
+// 等我说句话（提问 / 停在检查点）、或者盖着「待验收」的章。别的一律不进：那一档存在的
+// 意义是「此刻还没落地的活」，把收了尾又验完的一起塞进来，它跟单项目态就没区别了。
 //
 // 判据跟 spreadBucket 用的是同一批谓词，连**顺序**都一样（先看在跑、再让盖过章的出局），
 // 所以进得来的行必定落在筛选条上的 在跑 / 需要你处理 / 排着·暂停 三档里，永远不会掉进
@@ -137,8 +145,29 @@ export function isTaskAwaitingAcceptance(task: TaskListItem, workers: TaskListIt
   return awaitsAcceptance(task, task.status === "done" || isTeamSettledLead(task, workers));
 }
 
+// 「停在这儿等你指挥」= 明着问你（question），或者验证没过（verify_failed）。两样都是
+// 「机器不动了，下一步得你拍板」，也都在行内标了出来 —— 所以列表的年龄闸拿它当豁免：
+// 标出来的和留下来的必须是同一批，一条卡着等答复的任务不该因为卡了超过一天反而被折起来。
+//
+// 跟 awaitsYourWord 的分工：那条收的是「等我说句话」（提问 / 停在检查点），服务的是
+// 任务模式收哪些行；这条收的是「等我指挥」，多一档验证未通过，少一档 paused —— 停在
+// 检查点是等续跑指令，行内没有跟提问同级的醒目标识，硬拉进豁免就成了「留下来的比标
+// 出来的多」，同样违反上面那条原则。
+//
+// 团队要连执行者一起看：调度台派完活自己落回 idle，问题和「验证未通过」都写在执行者身上。
+export function needsYourCommand(task: TaskListItem, workers: TaskListItem[] = []): boolean {
+  const stuck = (item: TaskListItem) => !!item.question || item.stage === "verify_failed";
+  return stuck(task) || (isTeamLead(task) && workers.some(stuck));
+}
+
 export function inTaskMode(task: TaskListItem, workers: TaskListItem[] = []): boolean {
   if (isTaskLive(task, workers)) return true;
+  // 摔了的照收，而且排在「盖过章的出局」前面 —— 同 spreadBucket 里 failed 压在 accepted
+  // 之上的道理：验收完又重跑、这次挂了的任务，事实是它现在坏着，记号盖不住。
+  // 团队不必在这儿额外问执行者：执行者摔了不算「活的」，整队会因此被 isTeamSettled 判成
+  // 收工，从下面「等我盖章」那条进来。这里这一条管的是**调度台自己**摔了的团队 ——
+  // 它落在 teamNeverStarted 上，收工那条接不住它。
+  if (hasFailed(task)) return true;
   // 盖过章的一律出局，跟 spreadBucket 把 accepted 排在 run 之后同一个道理：事实高于
   // 记号（验收完又重新开工的上一条已经放行），但只剩记号时它就是「落地了」。
   if (isAcceptedStage(task)) return false;

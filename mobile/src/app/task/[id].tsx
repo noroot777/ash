@@ -2,38 +2,32 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import {
   View,
   Text,
-  TextInput,
   ScrollView,
   Pressable,
   KeyboardAvoidingView,
-  Platform,
   Alert,
   ActivityIndicator,
   RefreshControl,
   AppState,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent,
 } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { refreshAll } from "@/lib/data";
-import { runAction, canStopTask } from "@/lib/taskActions";
-import { STATUS_META } from "@/lib/constants";
-import { useTheme, radius, fonts } from "@/lib/theme";
+import { runAction } from "@/lib/taskActions";
+import { keyboardAvoidingBehavior, useKeyboardOffset } from "@/lib/keyboard";
+import { useStickyBottom } from "@/lib/scroll";
+import { useTheme, radius } from "@/lib/theme";
 import { Ionicons } from "@expo/vector-icons";
 import { Conversation } from "@/components/Conversation";
 import { QuestionCard } from "@/components/QuestionCard";
 import { DuetTaskDetail } from "@/components/DuetTaskDetail";
 import { TeamTaskDetail } from "@/components/team/TeamTaskDetail";
-import { WorkerTeamLink } from "@/components/WorkerTeamLink";
+import { TaskDetailHeader } from "@/components/TaskDetailHeader";
+import { TaskReviewPanel } from "@/components/TaskReviewPanel";
 import { MarkdownText } from "@/components/MarkdownText";
-import { SignalBar } from "@/components/SignalBar";
-import { SkillSuggestions } from "@/components/SkillSuggestions";
-import { PendingMessageTray } from "@/components/PendingMessageTray";
-import { DateTimeButton } from "@/components/DateTimeField";
-import { TaskTimeChip } from "@/lib/time";
+import { ReplyComposer } from "@/components/ReplyComposer";
 import { canArchive } from "@ash/shared";
 import type { Session, ScheduledMessage } from "@ash/shared";
 import type { LogLine } from "@/lib/log";
@@ -48,6 +42,7 @@ export default function TaskDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const keyboardOffset = useKeyboardOffset();
   const theme = useTheme();
 
   const tasks = useStore((s) => s.tasks);
@@ -62,22 +57,19 @@ export default function TaskDetail() {
   const [input, setInput] = useState("");
   const [pending, setPending] = useState<ScheduledMessage[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  // 下拉刷新的计数器：会话/任务列表由本屏自己重拉，审查区块是独立组件、拉的是另一个
+  // 端点，靠这个令牌搭一次顺风车（手机端一律轮询，不引 SSE）。
+  const [refreshTick, setRefreshTick] = useState(0);
   // 任务正文：列表不带，按 id 单取（见下面的 hydrate effect）。
   const [body, setBody] = useState<string | undefined>(undefined);
   const scrollRef = useRef<ScrollView>(null);
-  // 是否「粘」在底部。轮询拉到新内容时,只有粘底状态才自动滚到底,
-  // 否则别打扰正在往回翻历史的用户。初始 true,所以首次内容到达会滚到底。
-  const stickToBottomRef = useRef(true);
-
-  const handleScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
-    const distanceFromBottom = contentSize.height - (layoutMeasurement.height + contentOffset.y);
-    stickToBottomRef.current = distanceFromBottom < 80;
-  }, []);
-
-  const handleContentSizeChange = useCallback(() => {
-    if (stickToBottomRef.current) scrollRef.current?.scrollToEnd({ animated: true });
-  }, []);
+  // 粘底：轮询来了新内容就跟到底，正在往回翻历史时不打扰。键盘弹出/输入区叠高导致的
+  // 可视区变化也算，见 lib/scroll.ts。
+  const sticky = useStickyBottom(scrollRef);
+  // 待答问题卡夹在会话流中间，点进它的输入框时键盘会盖住下半张卡（发送键正在那儿）。
+  // 拿它的节点当场量位置再滚 —— 别缓存坐标，理由见 revealNode 的注释。
+  const questionRef = useRef<View>(null);
+  const revealQuestion = useCallback(() => sticky.revealNode(questionRef.current), [sticky]);
 
   // Pull every session's .md and rebuild the transcript. One call = one full
   // snapshot; we replace rather than append, so the same call also fills any gap.
@@ -101,6 +93,7 @@ export default function TaskDetail() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    setRefreshTick((tick) => tick + 1);
     await Promise.all([loadConv().catch(() => {}), refreshAll().catch(() => {})]);
     setRefreshing(false);
   }, [loadConv]);
@@ -176,11 +169,11 @@ export default function TaskDetail() {
 
   const onPrimary = () => {
     if (action.kind === "run") {
-      stickToBottomRef.current = true;
+      sticky.stickNow();
       setLines([]);
       api.runTask(id).then(() => refreshAll()).catch(() => {});
     } else if (action.kind === "retry") {
-      stickToBottomRef.current = true;
+      sticky.stickNow();
       api.retryTask(id).then(() => refreshAll()).catch(() => {});
     }
   };
@@ -303,7 +296,7 @@ export default function TaskDetail() {
     if (!queueing) {
       // Optimistic local bubble; the poll replaces it with the .md's own record of
       // the same turn once the reply lands.
-      stickToBottomRef.current = true;
+      sticky.stickNow();
       setLines((ls) => [...ls, { kind: "user", text, at: new Date().toISOString() }]);
     }
     try {
@@ -321,8 +314,6 @@ export default function TaskDetail() {
     }
   };
 
-  const meta = STATUS_META[status];
-
   if (task.mode === "team") {
     return (
       <TeamTaskDetail
@@ -339,8 +330,7 @@ export default function TaskDetail() {
         onArchive={onArchive}
         onUnarchive={onUnarchive}
         onDelete={confirmDelete}
-        onScroll={handleScroll}
-        onContentSizeChange={handleContentSizeChange}
+        sticky={sticky}
       />
     );
   }
@@ -360,8 +350,8 @@ export default function TaskDetail() {
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: theme.bg }}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-      keyboardVerticalOffset={Platform.OS === "ios" ? 88 : 0}
+      behavior={keyboardAvoidingBehavior}
+      keyboardVerticalOffset={keyboardOffset}
     >
       <Stack.Screen
         options={{
@@ -371,102 +361,47 @@ export default function TaskDetail() {
             : () => (
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 18 }}>
                   {task.archived ? (
-                    <Pressable onPress={onUnarchive} hitSlop={10}>
+                    <Pressable accessibilityRole="button" accessibilityLabel="取消归档" onPress={onUnarchive} hitSlop={12}>
                       <Ionicons name="archive" size={20} color={theme.accent} />
                     </Pressable>
                   ) : canArchive(status) ? (
-                    <Pressable onPress={onArchive} hitSlop={10}>
+                    <Pressable accessibilityRole="button" accessibilityLabel="归档任务" onPress={onArchive} hitSlop={12}>
                       <Ionicons name="archive-outline" size={20} color={theme.muted} />
                     </Pressable>
                   ) : null}
-                  <Pressable onPress={confirmDelete} hitSlop={10}>
-                    <Text style={{ color: theme.danger, fontSize: 17 }}>🗑</Text>
+                  <Pressable accessibilityRole="button" accessibilityLabel="删除任务" onPress={confirmDelete} hitSlop={12}>
+                    <Ionicons name="trash-outline" size={20} color={theme.danger} />
                   </Pressable>
                 </View>
               ),
         }}
       />
 
-      {/* Frozen header: status + title + metadata (stays put while conversation scrolls) */}
-      <View style={{ flexDirection: "row", paddingHorizontal: 16, paddingTop: 12, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: theme.line, gap: 13 }}>
-        <SignalBar status={status} height={52} />
-        <View style={{ flex: 1, gap: 10 }}>
-          {/* Status label + run/stop action */}
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <Text style={{ color: meta?.color, fontSize: 11, fontFamily: fonts.monoMed, letterSpacing: 1 }}>
-              {status.toUpperCase().replace(/_/g, " ")}
-            </Text>
-            <View style={{ flex: 1 }} />
-            {frozen ? (
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-                <Ionicons name="archive" size={13} color={theme.faint} />
-                <Text style={{ color: theme.faint, fontSize: 12, fontFamily: fonts.mono }}>已归档</Text>
-              </View>
-            ) : canStopTask(status) ? (
-              <Pressable
-                onPress={onStop}
-                style={{
-                  paddingHorizontal: 14,
-                  paddingVertical: 7,
-                  borderRadius: radius.md,
-                  borderWidth: 1,
-                  borderColor: theme.danger,
-                }}
-              >
-                <Text style={{ color: theme.danger, fontSize: 13, fontFamily: fonts.bodySemi }}>停止</Text>
-              </Pressable>
-            ) : (
-              <Pressable
-                onPress={action.canClick ? onPrimary : undefined}
-                style={{
-                  paddingHorizontal: 14,
-                  paddingVertical: 7,
-                  borderRadius: radius.md,
-                  backgroundColor: action.canClick ? theme.accent : theme.raised,
-                  opacity: action.canClick ? 1 : 0.6,
-                }}
-              >
-                <Text style={{ color: action.canClick ? theme.accentFg : theme.muted, fontSize: 13, fontFamily: fonts.bodySemi }}>
-                  {action.label}
-                </Text>
-              </Pressable>
-            )}
-          </View>
+      {/* Frozen header: status + stage + title + metadata (stays put while conversation scrolls) */}
+      <TaskDetailHeader
+        task={task}
+        action={action}
+        parentTeamTitle={dispatchedWorker ? parentTeam?.title ?? "" : null}
+        onPrimary={onPrimary}
+        onStop={onStop}
+        onOpenTeam={() => router.push(`/task/${task.parentId}`)}
+      />
 
-          {/* Title */}
-          <Text style={{ color: theme.ink, fontSize: 21, fontFamily: fonts.display, lineHeight: 27 }} numberOfLines={2}>
-            {task.title || "(无标题)"}
-          </Text>
-
-          {dispatchedWorker ? (
-            <WorkerTeamLink
-              title={parentTeam?.title || "返回团队调度台"}
-              onPress={() => router.push(`/task/${task.parentId}`)}
-            />
-          ) : null}
-
-          {/* Metadata: agent + labels */}
-          <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-            {task.agentType ? (
-              <Text style={{ color: theme.muted, fontSize: 12, fontFamily: fonts.mono }}>@{task.agentType}</Text>
-            ) : null}
-            {task.labels.map((l) => (
-              <Text key={l} style={{ color: theme.faint, fontSize: 12, fontFamily: fonts.mono }}>
-                #{l}
-              </Text>
-            ))}
-            <TaskTimeChip task={task} />
-          </View>
-        </View>
-      </View>
-
+      {/* 这一层只为量「可视区此刻在屏幕的哪一块」—— ScrollView 自己没公开
+          measureInWindow，套一层普通 View 是跨平台最省事的量法（见 lib/scroll.ts）。 */}
+      <View ref={sticky.viewportRef} style={{ flex: 1 }}>
       <ScrollView
         ref={scrollRef}
         style={{ flex: 1 }}
         contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: 24 }}
-        onScroll={handleScroll}
+        onScroll={sticky.onScroll}
         scrollEventThrottle={64}
-        onContentSizeChange={handleContentSizeChange}
+        onContentSizeChange={sticky.onContentSizeChange}
+        onLayout={sticky.onLayout}
+        // 读长会话时往下一拖就把键盘收掉，不用先去点一下别处。
+        keyboardDismissMode="interactive"
+        // 键盘开着时点问题卡里的建议/发送要一下就中，别把第一下吃成「收键盘」。
+        keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.muted} />}
       >
         {/* Objective */}
@@ -488,120 +423,37 @@ export default function TaskDetail() {
         <Conversation lines={lines} sessions={sessions} taskEndedAt={task.endedAt} />
 
         {/* ask_question answer flow stays separate from ordinary conversation replies. */}
-        {task.question ? <QuestionCard task={task} /> : null}
+        {task.question ? (
+          <QuestionCard task={task} cardRef={questionRef} onFocusInput={revealQuestion} />
+        ) : null}
 
         {lines.length === 0 && !task.question ? (
           <Text style={{ color: theme.faint, fontSize: 13, textAlign: "center", paddingTop: 20 }}>
             还没有输出 — 点上方「{action.label}」开始
           </Text>
         ) : null}
+
+        {/* 审查/验证：轮次、结论、报告、截图，以及「再派一轮」。放在最后 —— 页面初次
+            打开会自动滚到底，指挥用得最多的那个入口正好落在眼皮底下。 */}
+        <TaskReviewPanel task={task} parentTask={parentTeam} refreshToken={refreshTick} />
       </ScrollView>
-
-      {/* Reply composer：归档只读→提示条;否则待发列表(定时发送)+输入行 [输入][🕐][发送] */}
-      {frozen ? (
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 6,
-            paddingTop: 12,
-            paddingBottom: insets.bottom + 12,
-            borderTopWidth: 1,
-            borderTopColor: theme.line,
-            backgroundColor: theme.panel,
-          }}
-        >
-          <Ionicons name="archive" size={14} color={theme.faint} />
-          <Text style={{ color: theme.faint, fontSize: 13 }}>
-            {dispatchedWorker ? "已由所属团队归档" : "已归档——取消归档后可继续对话"}
-          </Text>
-        </View>
-      ) : (
-      <View
-        style={{
-          paddingHorizontal: 12,
-          paddingTop: 8,
-          paddingBottom: insets.bottom + 8,
-          borderTopWidth: 1,
-          borderTopColor: theme.line,
-          backgroundColor: theme.panel,
-          gap: 8,
-        }}
-      >
-        <PendingMessageTray
-          messages={pending}
-          onRemoved={(messageId) => setPending((ps) => ps.filter((m) => m.id !== messageId))}
-          onReload={loadPending}
-          onRestoreText={(restored) => setInput((current) => (current.trim() ? `${restored}\n\n${current}` : restored))}
-        />
-
-        <SkillSuggestions
-          agentType={task.agentType}
-          projectId={task.projectId}
-          value={input}
-          onPick={(command) => setInput(`${command} `)}
-        />
-
-        <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8 }}>
-          <TextInput
-            value={input}
-            onChangeText={setInput}
-            editable
-            placeholder={queueing ? "任务进行中，发送即排队，跑完自动发出…" : "回复（续接会话）…"}
-            placeholderTextColor={theme.faint}
-            multiline
-            style={{
-              flex: 1,
-              color: theme.ink,
-              backgroundColor: theme.bg,
-              borderWidth: 1,
-              borderColor: theme.line,
-              borderRadius: radius.lg,
-              paddingHorizontal: 12,
-              paddingVertical: 9,
-              fontSize: 15,
-              maxHeight: 120,
-            }}
-          />
-          {/* 🕐 定时发送：对 running 任务也允许排定时（后端允许），故只看是否有文字 */}
-          <DateTimeButton
-            defaultValue={() => new Date(Date.now() + 3600_000)}
-            minimumDate={new Date()}
-            disabled={!input.trim()}
-            onPick={(d) => send(d)}
-          >
-            <View
-              style={{
-                paddingHorizontal: 12,
-                paddingVertical: 10,
-                borderRadius: radius.lg,
-                borderWidth: 1,
-                borderColor: theme.line,
-                opacity: input.trim() ? 1 : 0.4,
-              }}
-            >
-              <Ionicons name="time-outline" size={18} color={theme.muted} />
-            </View>
-          </DateTimeButton>
-          <Pressable
-            onPress={() => send()}
-            disabled={!input.trim()}
-            style={{
-              paddingHorizontal: 16,
-              paddingVertical: 11,
-              borderRadius: radius.lg,
-              backgroundColor: theme.accent,
-              opacity: !input.trim() ? 0.4 : 1,
-            }}
-          >
-            <Text style={{ color: theme.accentFg, fontSize: 14, fontWeight: "600" }}>
-              {queueing ? "排队" : "发送"}
-            </Text>
-          </Pressable>
-        </View>
       </View>
-      )}
+
+      {/* Reply composer：归档只读→提示条；否则待发列表(定时发送)+技能候选+输入行。
+          整块在 components/ReplyComposer.tsx —— 这个文件贴着单文件行数上限。 */}
+      <ReplyComposer
+        task={task}
+        input={input}
+        pending={pending}
+        queueing={queueing}
+        frozen={frozen}
+        dispatchedWorker={dispatchedWorker}
+        bottomInset={insets.bottom}
+        onInputChange={setInput}
+        onSend={(sendAt) => void send(sendAt)}
+        onPendingRemoved={(messageId) => setPending((ps) => ps.filter((m) => m.id !== messageId))}
+        onPendingReload={loadPending}
+      />
     </KeyboardAvoidingView>
   );
 }

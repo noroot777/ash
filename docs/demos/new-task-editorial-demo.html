@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light" />
+  <title>新建任务 · Harness 风格布局 Demo</title>
+  <link rel="stylesheet" href="./new-task-editorial-demo.css" />
+</head>
+<body>
+  <svg class="icon-sprite" aria-hidden="true">
+    <symbol id="i-robot" viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="13" rx="3"/><path d="M12 3v4M8 12h.01M16 12h.01M8 16h8"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3v-6.5A7 7 0 0 1 10 5h7a4 4 0 0 1 4 4v6Z"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.09A1.7 1.7 0 0 0 9 19.36a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.63 15 1.7 1.7 0 0 0 3.08 14H3v-4h.09A1.7 1.7 0 0 0 4.64 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.63a1.7 1.7 0 0 0 1-1.55V3h4v.09A1.7 1.7 0 0 0 15 4.64a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.37 9 1.7 1.7 0 0 0 20.92 10H21v4h-.09A1.7 1.7 0 0 0 19.4 15Z"/></symbol>
+    <symbol id="i-paperclip" viewBox="0 0 24 24"><path d="m21.4 11.6-8.9 8.9a6 6 0 0 1-8.5-8.5l9.5-9.5a4 4 0 0 1 5.7 5.7L9.7 17.7a2 2 0 0 1-2.8-2.8l8.8-8.8"/></symbol>
+    <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="6" cy="4" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="20" r="2"/><path d="M6 6v12M8 6c5 0 4 8 8 8h2M18 8v8"/></symbol>
+    <symbol id="i-tag" viewBox="0 0 24 24"><path d="M20 13 13 20 4 11V4h7l9 9Z"/><circle cx="8.5" cy="8.5" r="1"/></symbol>
+    <symbol id="i-caret" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+  </svg>
+
+  <main class="task-composer-panel">
+    <header class="composer-header">
+      <span class="workspace-kind-chip">新建</span>
+      <b>新建任务</b>
+      <span>harness</span>
+      <button class="ui-button ui-button--ghost" type="button">取消 <kbd>Esc</kbd></button>
+    </header>
+
+    <div class="composer-scroll">
+      <div class="composer-inner">
+        <div class="composer-tabs" role="tablist" aria-label="任务模式">
+          <button class="is-active" type="button" role="tab" aria-selected="true" data-mode="single"><svg><use href="#i-robot"/></svg>单任务</button>
+          <button type="button" role="tab" aria-selected="false" data-mode="team"><svg><use href="#i-users"/></svg>团队</button>
+          <button type="button" role="tab" aria-selected="false" data-mode="duet"><svg><use href="#i-chat"/></svg>讨论</button>
+          <span>切换模式不清空正文</span>
+        </div>
+
+        <div class="composer-grid">
+          <section class="objective-section" aria-labelledby="objective-title">
+            <header class="section-heading objective-heading">
+              <div>
+                <h1 id="objective-title">任务描述</h1>
+                <p id="objectiveCaption">告诉执行者目标、交付物，以及什么算完成。</p>
+              </div>
+              <span class="project-context"><i></i>harness · main</span>
+            </header>
+
+            <div class="objective-box">
+              <textarea id="taskPrompt" autofocus spellcheck="false" aria-label="任务描述" placeholder="描述要做什么…（可输入 /team 或 /duet）"></textarea>
+              <div class="objective-toolbar">
+                <button class="task-reply-icon" id="attachButton" type="button" aria-label="添加附件"><svg><use href="#i-paperclip"/></svg></button>
+                <input id="fileInput" type="file" multiple hidden />
+                <div class="suggestion-list" aria-label="快速补充">
+                  <button type="button" data-suggestion="验收标准：">＋ 验收标准</button>
+                  <button type="button" data-suggestion="请先分析现状并比较可行方案，再实现更稳妥的一种。">＋ 方案对比</button>
+                  <button type="button" data-suggestion="完成后请运行相关检查并说明结果。">＋ 验证要求</button>
+                </div>
+                <span><b id="charCount">0</b> / 8000</span>
+              </div>
+              <div class="attachment-list" id="attachmentList" aria-live="polite"></div>
+            </div>
+
+            <div class="objective-tip">
+              <span>/</span>
+              <div><b>用斜杠命令快速切换</b><small>输入 / 可调用技能，也可以切到团队或讨论模式。</small></div>
+              <kbd>⌘ K</kbd>
+            </div>
+          </section>
+
+          <aside class="config-stack" aria-label="任务配置">
+            <section class="config-card is-workflow">
+              <header class="section-heading compact-heading">
+                <span class="heading-icon"><svg><use href="#i-sliders"/></svg></span>
+                <div><h2 id="workflowTitle">工作方式</h2><p id="workflowCaption">自由模式按需派审和预览，完成后统一验收。</p></div>
+              </header>
+
+              <div class="ui-tabs workflow-tabs" role="tablist" aria-label="工作方式">
+                <button class="is-active" type="button" role="tab" aria-selected="true" data-workflow="free">自由工作流</button>
+                <button type="button" role="tab" aria-selected="false" data-workflow="preset">起手式</button>
+              </div>
+
+              <div class="field-block" id="executorBlock">
+                <label>任务执行器</label>
+                <div class="run-target-picker" id="runTargetPicker" role="group" aria-label="任务执行器">
+                  <button class="run-target-seg run-target-seg--agent" type="button">
+                    <svg><use href="#i-robot"/></svg><b id="agentName">claude</b><span id="agentProfile">claude@ccb</span><svg class="run-target-caret"><use href="#i-caret"/></svg>
+                  </button>
+                  <button class="run-target-seg run-target-seg--model" type="button"><code id="modelName">claude-opus-5</code><svg class="run-target-caret"><use href="#i-caret"/></svg></button>
+                  <button class="run-target-seg run-target-seg--effort" type="button"><em id="effortName">跟随</em><svg class="run-target-caret"><use href="#i-caret"/></svg></button>
+                </div>
+              </div>
+
+              <div class="preset-route" id="presetRoute" hidden>
+                <div><span>1</span><b>理解任务</b></div><i></i>
+                <div><span>2</span><b>实现</b></div><i></i>
+                <div><span>3</span><b>验证</b></div><i></i>
+                <div><span>4</span><b>交付</b></div>
+              </div>
+            </section>
+
+            <section class="config-card is-options">
+              <header class="section-heading compact-heading">
+                <span class="heading-icon"><svg><use href="#i-gear"/></svg></span>
+                <div><h2>任务选项</h2><p>运行位置、组织方式与标签。</p></div>
+              </header>
+
+              <label class="option-toggle">
+                <span><b>独立 worktree</b><small>不影响项目主目录</small></span>
+                <button class="ui-choice" id="worktreeToggle" type="button" role="switch" aria-checked="true"><span class="ui-toggle is-on"></span></button>
+              </label>
+
+              <div class="field-grid">
+                <label class="select-field"><span>base 分支</span><button id="branchButton" type="button"><svg><use href="#i-branch"/></svg><b id="branchValue">main</b><svg><use href="#i-caret"/></svg></button></label>
+                <label class="select-field"><span>分组</span><button id="groupButton" type="button"><svg><use href="#i-tag"/></svg><b id="groupValue">无分组</b><svg><use href="#i-caret"/></svg></button></label>
+              </div>
+
+              <button class="advanced-trigger" id="advancedTrigger" type="button" aria-expanded="false">
+                <span>更多选项</span><small>标签、完成提醒</small><svg><use href="#i-caret"/></svg>
+              </button>
+              <div class="advanced-content" id="advancedContent" hidden>
+                <label>任务标签<input type="text" value="frontend, design" /></label>
+                <label class="check-row"><input type="checkbox" checked /><span><b>完成后提醒验收</b><small>不自动接受结果</small></span></label>
+              </div>
+            </section>
+
+            <div class="config-summary">
+              <span><i></i>配置完整</span>
+              <p id="summaryText">单任务 · 自由工作流 · 独立 worktree</p>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </div>
+
+    <footer class="composer-footer">
+      <div>
+        <button class="task-reply-icon" type="button" aria-label="添加附件"><svg><use href="#i-paperclip"/></svg></button>
+        <span><svg><use href="#i-paperclip"/></svg><b id="footerAttachmentCount">0</b> 个附件 · <kbd>⌘↵</kbd> 按当前启动方式创建</span>
+      </div>
+      <div class="composer-launch-control">
+        <label class="composer-launch-mode"><span>启动方式</span><select id="launchMode"><option value="run">创建并运行</option><option value="create">仅创建</option><option value="schedule">今晚 22:00 运行</option></select></label>
+        <button class="ui-button ui-button--primary create-button" id="createButton" type="button"><svg><use href="#i-play"/></svg><span id="createLabel">创建并运行</span></button>
+      </div>
+    </footer>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite">
+    <span><svg><use href="#i-check"/></svg></span>
+    <div><b>演示任务已创建</b><small>静态 demo，没有发送真实请求。</small></div>
+    <button type="button" aria-label="关闭"><svg><use href="#i-close"/></svg></button>
+  </div>
+
+  <script src="./new-task-editorial-demo.js"></script>
+</body>
+</html>

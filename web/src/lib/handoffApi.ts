@@ -35,7 +35,12 @@ export const handoffApi = {
     request(`/tasks/${id(taskId)}/handoff/preflight`, json("POST", { targetUrl, ...options })),
   handoffTask: (
     taskId: string,
-    body: { targetUrl: string; targetProjectId: string; targetName?: string; autoResume?: boolean },
+    body: {
+      targetUrl: string; targetProjectId: string; targetName?: string; autoResume?: boolean;
+      // 能力握手闸的放行票:目标机没装任务要用的智能体时导出默认被拒(409),
+      // 用户在对话框里明确勾了「仍然接力」才带上它。
+      ignoreCapabilityGaps?: boolean;
+    },
   ): Promise<HandoffExportResult> =>
     request(`/tasks/${id(taskId)}/handoff`, json("POST", body)),
   // 侧栏定时问一次「我交出去的那些任务，在对端现在什么样」。本机那一行的 status 停在
@@ -48,8 +53,12 @@ export const handoffApi = {
     request(`/tasks/${id(taskId)}/remote-reply`, json("POST", { targetUrl, text })),
   remoteTaskAnswer: (taskId: string, targetUrl: string, answer: string): Promise<unknown> =>
     request(`/tasks/${id(taskId)}/remote-answer`, json("POST", { targetUrl, answer })),
-  remoteTaskReturn: (taskId: string, targetUrl: string): Promise<{ task: Task }> =>
-    request(`/tasks/${id(taskId)}/remote-return`, json("POST", { targetUrl })),
+  remoteTaskReturn: (
+    taskId: string,
+    targetUrl: string,
+    options?: { ignoreCapabilityGaps?: boolean },
+  ): Promise<{ task: Task }> =>
+    request(`/tasks/${id(taskId)}/remote-return`, json("POST", { targetUrl, ...options })),
   // 恢复送达未知的本机任务前，会先让目标机确认未收到并持久登记撤销，防止旧请求晚到。
   clearHandoff: (taskId: string, force = false): Promise<{
     cleared: true;

@@ -50,6 +50,7 @@
 @import "./parity.css";
 @import "./recent-pages.css";
 @import "./dialogs.css";
+@import "./composer-studio.css";
 
 @theme {
   --font-sans: "Inter Variable", "Inter", "SF Pro Display", -apple-system,

@@ -65,11 +65,14 @@ export async function dispatchWorkers(
   const scope = await executorScopeForOwner(lead.ownerUserId);
   // 团队默认执行者 —— 既是「没指定就用它」的兜底，也是 cfg.workerModel /
   // cfg.workerReasoningEffort 这两个默认覆盖所属的执行器。
-  const workerDefault = { executorId: scope.keep(cfg.workerExecutorId), agentType: cfg.worker };
+  // `?? null`:这里要的是「团队默认解析完的样子」,没配就是没有,不需要保留 undefined。
+  const workerDefault = { executorId: scope.keep(cfg.workerExecutorId) ?? null, agentType: cfg.worker };
   const typeOf = (eid: string) => scope.typeOf(eid);
   // 每个执行者任务的「执行器 profile + 类型」。只有**同一次调用里显式给出的**两者冲突才算用户自相矛盾;
   // 单给 agentType 是「这个执行者换类型」,此时不能硬套团队默认 profile(类型对不上),按类型默认执行器走。
   const picks = specs.map((s, i) => {
+    // 这里**不能** `?? null`:spec 没带 executorId 时必须把 undefined 原样交给
+    // pickExecutor,它才知道该整份继承 workerDefault(连同 model/effort)。
     const executorId = scope.keep(s.executorId);
     const t = typeOf(executorId ?? "");
     if (t && s.agentType && t !== s.agentType) {

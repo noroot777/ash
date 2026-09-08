@@ -1,0 +1,96 @@
+// 键盘相关工具：KAV 偏移、可见状态，以及 Android edge-to-edge 下的底部重叠补偿。
+import { useContext, useEffect, useState, type RefObject } from "react";
+import { Keyboard, Platform, type KeyboardAvoidingViewProps, type KeyboardEvent, type View } from "react-native";
+// SDK 57 起 expo-router 不再依赖 `@react-navigation/*`，而是把 react-navigation 内联进
+// 自己的 build 里，所以只能从这个子路径拿 —— 包没有 `exports` 映射，子路径可自由引入。
+// **别改回 `@react-navigation/elements`**：那样装进来的是另一个模块实例，跟渲染 Stack 的
+// 那份不是同一个 Context 对象，useContext 会永远拿到 undefined 而静默退回下面的兜底值，
+// 正好把本文件下方注释记载的 Pro / SE 机型偏移 bug 原样复活（错得没有任何声响）。
+import { HeaderHeightContext } from "expo-router/build/react-navigation/elements";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+export const keyboardAvoidingBehavior = Platform.select<KeyboardAvoidingViewProps["behavior"]>({
+  ios: "padding",
+});
+
+const ANDROID_KEYBOARD_TOP_GUARD = 76;
+const KEYBOARD_GAP = 8;
+
+/**
+ * KeyboardAvoidingView 的 keyboardVerticalOffset —— 要的是**窗口顶到 KAV 顶**的距离。
+ *
+ * RN 的 KAV 用 `frame.y + frame.height - (keyboardScreenY - offset)` 算该补多少
+ * padding：`frame` 是 onLayout 量出来的、**相对父容器**的矩形（native-stack 把屏幕
+ * 内容摆在 header 下面，所以 frame.y≈0），而 `keyboardScreenY` 是**屏幕坐标**。两个
+ * 坐标系差的那一段正好是「状态栏 + 导航头」，offset 就得补这一段。
+ *
+ * 之前这里写死 88（默许状态栏 44 + 导航头 44），只有一类机型对得上：
+ *   · iPhone 14/15/16 Pro 状态栏 59 → 少补 15pt，输入框底下被键盘啃掉一截；
+ *   · iPhone SE 状态栏 20 → 多补 24pt，输入框和键盘之间凭空浮起一条空带。
+ * native-stack 把算好的真值放在 HeaderHeightContext 里（已含状态栏），读它即可。
+ *
+ * SDK 57 升级后在 iOS 26.5 模拟器上实测到的真值（任务详情页，2026-09-07）：
+ *   · iPhone 17 Pro → 116
+ *   · iPhone SE (3rd gen) → 74
+ * 留这两个数当锚点是因为这条 import 一旦拿错模块实例就毫无声响：兜底值 insets.top+44
+ * 在部分机型上碰巧接近正确，肉眼分不出来。想确认 Context 真的通着，就在两台状态栏高度
+ * 差异大的机型上各读一次 `useContext(HeaderHeightContext)` 的原始返回值 —— 必须都是
+ * 具体数字且彼此不等；出现 undefined 就是退回兜底，Context 拿的不是渲染 Stack 的那份。
+ */
+export function useKeyboardOffset(): number {
+  // useHeaderHeight() 在没有 header 的地方直接 throw；这里读 context 自己兜底 ——
+  // Expo web 导出走的 NativeStackView 不铺这个 Provider，桌面预览不该白屏。
+  const headerHeight = useContext(HeaderHeightContext);
+  const insets = useSafeAreaInsets();
+  if (Platform.OS !== "ios") return 0;
+  return headerHeight ?? insets.top + 44;
+}
+
+/**
+ * 键盘是否正展开。用来收掉输入条的手势条留白 —— 键盘顶上去之后 insets.bottom 那
+ * 34pt 已经被键盘盖住，再留着就是输入框和键盘之间一条谁也用不上的空隙。
+ */
+export function useKeyboardVisible(): boolean {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    // iOS 的 will* 与动画同步（跟着键盘一起动，不会先跳一下）；Android 只有 did*。
+    const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+    const shown = Keyboard.addListener(showEvent, () => setVisible(true));
+    const hidden = Keyboard.addListener(hideEvent, () => setVisible(false));
+    return () => {
+      shown.remove();
+      hidden.remove();
+    };
+  }, []);
+  return visible;
+}
+
+export function useAndroidKeyboardOverlap(ref: RefObject<View | null>): number {
+  const [overlap, setOverlap] = useState(0);
+
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+
+    let frame: ReturnType<typeof requestAnimationFrame> | null = null;
+    const measure = (event: KeyboardEvent) => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        ref.current?.measureInWindow((_x, y, _width, height) => {
+          const keyboardTop = Math.max(0, event.endCoordinates.screenY - ANDROID_KEYBOARD_TOP_GUARD);
+          setOverlap(Math.max(0, y + height - keyboardTop + KEYBOARD_GAP));
+        });
+      });
+    };
+
+    const shown = Keyboard.addListener("keyboardDidShow", measure);
+    const hidden = Keyboard.addListener("keyboardDidHide", () => setOverlap(0));
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      shown.remove();
+      hidden.remove();
+    };
+  }, [ref]);
+
+  return overlap;
+}
