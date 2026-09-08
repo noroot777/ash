@@ -267,7 +267,7 @@ export async function startReservedFreeReview(
         snapshot = await readFreeReviewReservation(taskId);
         continue;
       }
-      await appendTaskTimeline(taskId, "完成后审查预约已取消：预约的审查者已不可用。");
+      await appendTaskTimeline(taskId, "审查预约已取消：预约的审查者已不可用。");
       return;
     }
     const token = await consumeFreeReviewReservation(taskId, snapshot);
@@ -295,8 +295,8 @@ export async function startReservedFreeReview(
       // 否则它既没跑也不在了：用户下次执行回合正常结束时什么都不会发生，而界面上只有一行失败。
       const restored = await restoreFreeReviewReservation(taskId, consumed, token);
       await appendTaskTimeline(taskId, restored
-        ? `完成后审查启动失败：${message}；预约已保留，下次执行回合正常结束时会再试一次。`
-        : `完成后审查启动失败：${message}；预约期间已被更新，保留你最新的设置。`);
+        ? `预约审查启动失败：${message}；预约已保留，下次执行回合正常结束时会再试一次。`
+        : `预约审查启动失败：${message}；预约期间已被更新，保留你最新的设置。`);
       bus.publish({ type: "task.review", taskId });
     }
     return;

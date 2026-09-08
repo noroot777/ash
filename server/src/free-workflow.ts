@@ -147,8 +147,8 @@ export async function reserveFreeReview(
       target: freeWorkflowStates.taskId,
       set: slot,
     });
-    await appendTaskTimeline(taskId, `${existing?.reviewArmed ? "已更新" : "已预约"}完成后审查：${profile.name}${overrideSuffix(override)} · ` +
-      `${mode === "logic" ? "逻辑检查" : "语法检查"} · 自动复审 ${retries} 轮${note ? " · 含附言" : ""}。`);
+    await appendTaskTimeline(taskId, `${existing?.reviewArmed ? "已更新审查预约" : "已预约审查"}：${profile.name}${overrideSuffix(override)} · ` +
+      `${mode === "logic" ? "逻辑检查" : "语法检查"} · 自动复审 ${retries} 轮${note ? " · 含附言" : ""}。执行回合正常结束后自动开始。`);
     bus.publish({ type: "task.review", taskId });
     return freeWorkflowState(taskId);
   } finally {
@@ -172,7 +172,7 @@ export async function cancelFreeReviewReservation(taskId: string): Promise<FreeW
           reviewAgentType: null, reviewExecutorId: null, reviewModel: null, reviewReasoningEffort: null,
         })
         .where(eq(freeWorkflowStates.taskId, taskId));
-      await appendTaskTimeline(taskId, "已取消完成后审查预约。");
+      await appendTaskTimeline(taskId, "已取消审查预约。");
       bus.publish({ type: "task.review", taskId });
     }
     return freeWorkflowState(taskId);
@@ -272,6 +272,7 @@ export async function handleFreeWorkflowSettlement(
   confirmedDone: boolean,
   turnOk: boolean,
   role: SessionRole = "single",
+  exitObserved = true,
 ): Promise<boolean> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task || task.workflowMode !== "free") return false;
@@ -281,7 +282,8 @@ export async function handleFreeWorkflowSettlement(
     // 存在 reviewing run 说明有一条审查在排队等这个回合结束（并发派审）：不结算它、
     // 也不消费预约（审查在跑时消费预约会双开）。
     if (run) return true;
-    if (turnOk && (status === "done" || status === "failed" || status === "canceled")) {
+    // 缺退出事件只限制未交卷的备用触发路径，已落库的完成确认和审查结论仍各自有效。
+    if (turnOk && (confirmedDone || exitObserved) && (status === "done" || status === "failed" || status === "canceled")) {
       const reservation = await readFreeReviewReservation(taskId);
       const noteDispatch = async () => {
         if (!confirmedDone) await appendTaskTimeline(taskId, "执行回合已正常结束，按预约启动审查。本回合未确认任务完成，任务完成状态仍按原结算结果保留。");
@@ -321,9 +323,9 @@ export async function handleFreeWorkflowSettlement(
       });
       return true;
     }
-    await noteReservationStillWaiting(taskId, turnOk
-      ? "本回合仍处于等待执行或暂停状态"
-      : "本回合被停止或异常结束");
+    await noteReservationStillWaiting(taskId, !turnOk
+      ? "本回合被停止或异常结束"
+      : !exitObserved ? "本回合未确认完成，且没有收到正常退出事件" : "本回合仍处于等待执行或暂停状态");
     return true;
   }
 

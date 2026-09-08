@@ -186,7 +186,7 @@ export function FreeReviewDialog({
       const name = reviewerId === selectedId
         ? reviewers.find((item) => item.id === selectedId)?.name ?? "审查者"
         : newName.trim();
-      notify(postMerge ? `已派出 ${name} 审查合并结果` : reservationMode ? `已预约完成后由「${name}」审查` : `已派出 ${name}`);
+      notify(postMerge ? `已派出 ${name} 审查合并结果` : reservationMode ? `已预约由「${name}」审查，执行回合正常结束后开始` : `已派出 ${name}`);
       onClose();
     } catch (error) {
       notify(error instanceof Error ? error.message : postMerge ? "合并结果审查启动失败" : reservationMode ? "预约审查失败" : "派审失败");

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { createWriteStream, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createWriteStream, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -15,10 +15,11 @@ delete process.env.ASH_LAX_DONE;
 
 try {
   const { ensureSchema, db } = await import("../src/db/index.js");
-  const { agents, projects, reviewerProfiles, sessions, tasks } = await import("../src/db/schema.js");
+  const { agents, freeReviewRounds, freeReviewRuns, projects, reviewerProfiles, sessions, tasks } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
   const { consumeSingleRun } = await import("../src/single-run.js");
-  const { freeWorkflowState, handleFreeWorkflowSettlement, reserveFreeReview } = await import("../src/free-workflow.js");
+  const { freeWorkflowState, handleFreeWorkflowSettlement, reportFreeReviewConclusion, reserveFreeReview } = await import("../src/free-workflow.js");
+  const { freeReviewReportPath } = await import("../src/free-review-files.js");
   const { claimTurn, confirmDone, markStopped } = await import("../src/runs.js");
   const { sessionTranscriptPath } = await import("../src/transcript.js");
   const { FOLLOW_UP_REMINDER } = await import("../src/run-prompts.js");
@@ -32,7 +33,7 @@ try {
 
   async function runTurn(id: string, options: {
     followUp?: boolean;
-    confirmed?: boolean;
+    confirmed?: boolean | "persisted";
     exitStatus?: number;
     stopped?: "canceled" | "paused";
     question?: string;
@@ -41,6 +42,7 @@ try {
     truncated?: boolean;
     role?: "single" | "reviewer";
     reserve?: boolean;
+    reviewConclusion?: "verified" | "verify_failed" | null;
   } = {}) {
     const role = options.role ?? "single";
     await createTasks([{
@@ -62,7 +64,26 @@ try {
     if (options.reserve !== false) {
       await reserveFreeReview(id, { reviewerId: "reviewer", checkMode: "logic", retryLimit: 1 });
     }
-    if (options.confirmed) confirmDone(id);
+    if (options.reviewConclusion !== undefined) {
+      const runId = `${id}-review`;
+      await db.insert(freeReviewRuns).values({
+        id: runId, taskId: id, reviewerId: "reviewer", reviewerName: "reviewer", agentType: "codex",
+        executorId: "ex", checkMode: "logic", retryLimit: 1, currentRound: 1, status: "reviewing",
+        createdAt: at, updatedAt: at,
+      });
+      await db.insert(freeReviewRounds).values({
+        id: `${runId}-round`, runId, round: 1, status: "reviewing", startedAt: at,
+      });
+      if (options.reviewConclusion) {
+        const report = freeReviewReportPath(id, runId, 1);
+        mkdirSync(dirname(report), { recursive: true });
+        writeFileSync(report, "审查证据已核实。\n");
+        await reportFreeReviewConclusion(id, options.reviewConclusion);
+      }
+    }
+    if (options.confirmed === "persisted") {
+      await db.update(tasks).set({ completeConfirmedAt: at }).where(eq(tasks.id, id));
+    } else if (options.confirmed) confirmDone(id);
     if (options.stopped) markStopped(id, options.stopped);
     const path = sessionTranscriptPath(id, sessId);
     mkdirSync(dirname(path), { recursive: true });
@@ -90,6 +111,36 @@ try {
   }
 
   for (const followUp of [false, true]) {
+    for (const confirmed of [true, "persisted"] as const) {
+      const result = await runTurn(`confirmed-truncated-${followUp}-${confirmed}`, { followUp, confirmed, truncated: true });
+      assert.equal(result.task.status, "done");
+      assert.equal(result.state.reviewReservation.armed, false, "已交卷但缺退出事件仍消费预约");
+      assert.equal(result.state.reviews.length, 1);
+    }
+  }
+
+  for (const conclusion of ["verified", "verify_failed", null] as const) {
+    const result = await runTurn(`review-truncated-${conclusion}`, {
+      followUp: true, role: "reviewer", reserve: false, truncated: true, reviewConclusion: conclusion,
+    });
+    const review = result.state.reviews[0]!;
+    assert.equal(review.status, conclusion === "verified" ? "passed" : conclusion === "verify_failed" ? "stopped" : "failed");
+    assert.equal(review.rounds[0]?.status, conclusion === "verified" ? "passed" : conclusion === "verify_failed" ? "failed" : "error");
+    assert.equal(review.rounds[0]?.conclusion, conclusion);
+    assert.equal(result.state.reviewReservation.armed, conclusion === "verify_failed", "已交失败结论的审查仍挂自动复审预约");
+  }
+  for (const stopped of [false, true]) {
+    for (const conclusion of ["verified", "verify_failed"] as const) {
+      const result = await runTurn(`review-interrupted-${stopped}-${conclusion}`, {
+        followUp: true, role: "reviewer", reserve: false, reviewConclusion: conclusion,
+        ...(stopped ? { stopped: "canceled", truncated: true } : { exitStatus: 1 }),
+      });
+      assert.equal(result.state.reviews[0]?.status, "failed", "真实停止或异常不能被已交结论掩盖");
+      assert.equal(result.state.reviewReservation.armed, false);
+    }
+  }
+
+  for (const followUp of [false, true]) {
     const id = followUp ? "follow-up" : "fresh";
     const result = await runTurn(id, { followUp });
     assert.equal(result.task.status, followUp ? "done" : "failed", "审查启动不代替任务完成确认");
@@ -113,6 +164,7 @@ try {
     { resumePrompt: "等依赖完成" },
     { native: true },
     { truncated: true },
+    { truncated: true, confirmed: true, stopped: "canceled" as const },
     { role: "reviewer" as const },
   ]) {
     const id = `blocked-${++blockedCase}`;

@@ -215,7 +215,7 @@ try {
   const manualRepair = freeManualRepairPrompt("free-exhausted-task", exhaustedRun);
   assert.match(manualRepair, /自动复审已停止/);
   assert.match(manualRepair, /不会擅自增加审查轮数/);
-  assert.match(manualRepair, /预约了复审，完成后按预约开始/);
+  assert.match(manualRepair, /预约了复审，执行回合正常结束后按预约开始/);
   assert.doesNotMatch(manualRepair, /随后会自动派同一位审查者复审/);
 
   // HTTP 修复入口与普通回合**原子互斥**（holdTurn 占位身份 dispatch）：普通回合已
