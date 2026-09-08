@@ -101,7 +101,7 @@ async function outboundTask(taskId: string, rawTargetUrl: string) {
   const expectedFp = marker.peerFp ?? target.peerFp ?? null;
   const probe = await pingPeer(normalizedUrl(target.url), expectedFp);
   if (!probe.peer) throw new HandoffError("远端版本过旧，无法安全代理任务会话", 409);
-  return { row, marker, target, targetUrl: normalizedUrl(target.url) };
+  return { row, marker, target, targetUrl: normalizedUrl(target.url), expectedFp: expectedFp ?? probe.peer.fingerprint };
 }
 
 async function signedBody(c: Context): Promise<{ peer: NonNullable<Awaited<ReturnType<typeof requireApprovedPeer>>>; body: ProxyBody }> {
@@ -293,6 +293,7 @@ export async function outboundRemoteStates(actor: Actor): Promise<HandoffOutboun
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ items }),
+          expectedPeerFp: target.peerFp ?? (verify && "expectFp" in verify ? verify.expectFp : null),
           timeoutMs: 10_000,
         },
       );
@@ -393,7 +394,7 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
       const remote = await outboundTask(c.req.param("id"), body.targetUrl);
       const snapshot = await fetchPeer<Awaited<ReturnType<typeof snapshotFor>>>(
         `${remote.targetUrl}/api/handoff/proxy/task/snapshot`,
-        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        { expectedPeerFp: remote.expectedFp, method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
           taskId: remote.marker.peerTaskId, transferId: remote.marker.transferId,
         }) },
       );
@@ -410,7 +411,7 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
       const { targetUrl: _targetUrl, ...reply } = body;
       const result = await fetchPeer<Record<string, unknown>>(
         `${remote.targetUrl}/api/handoff/proxy/task/reply`,
-        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        { expectedPeerFp: remote.expectedFp, method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
           ...reply, taskId: remote.marker.peerTaskId, transferId: remote.marker.transferId,
         }) },
       );
@@ -425,7 +426,7 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
       const remote = await outboundTask(c.req.param("id"), body.targetUrl);
       const result = await fetchPeer<Record<string, unknown>>(
         `${remote.targetUrl}/api/handoff/proxy/task/answer`,
-        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        { expectedPeerFp: remote.expectedFp, method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
           taskId: remote.marker.peerTaskId, transferId: remote.marker.transferId, answer: body.answer,
         }) },
       );
@@ -440,7 +441,7 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
       const remote = await outboundTask(c.req.param("id"), body.targetUrl);
       await fetchPeer(
         `${remote.targetUrl}/api/handoff/proxy/task/return`,
-        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        { expectedPeerFp: remote.expectedFp, method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
           taskId: remote.marker.peerTaskId, transferId: remote.marker.transferId,
           ignoreCapabilityGaps: body.ignoreCapabilityGaps === true,
         }), timeoutMs: 600_000 },

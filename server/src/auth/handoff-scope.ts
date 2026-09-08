@@ -32,6 +32,7 @@ export interface ResolvedTarget {
   peerFp?: string | null;
   /** 我在对端的账号 key(明文)。空 = 没配。 */
   peerKey: string;
+  peerKeyFp?: string | null;
 }
 
 /** key 表的主键形态:去尾斜杠 + 小写,与 `sameUrl` 的判据是同一套。 */
@@ -39,10 +40,10 @@ const keyUrl = (raw: string): string => raw.trim().replace(/\/+$/, "").toLowerCa
 
 const sameUrl = (a: string, b: string): boolean => keyUrl(a) === keyUrl(b);
 
-/** 自用模式的 key 表:url → 明文 key。没配过的地址读回空串。 */
-async function localPeerKeys(): Promise<Map<string, string>> {
+/** 自用模式的 key 和它在保存时核对的机器指纹一起读取。 */
+async function localPeerKeys(): Promise<Map<string, typeof handoffLocalPeerKeys.$inferSelect>> {
   const rows = await db.select().from(handoffLocalPeerKeys);
-  return new Map(rows.map((row) => [row.url, row.peerKey]));
+  return new Map(rows.map((row) => [row.url, row]));
 }
 
 /** 这个人的目标机清单(**带明文 key**)。只给服务端出站路径用,绝不直接进应答。 */
@@ -53,7 +54,8 @@ export async function resolveTargetsFor(ownerUserId: string | null): Promise<Res
       name: t.name,
       url: t.url,
       peerFp: t.peerFp ?? null,
-      peerKey: keys.get(keyUrl(t.url)) ?? "",
+      peerKey: keys.get(keyUrl(t.url))?.peerKey ?? "",
+      peerKeyFp: keys.get(keyUrl(t.url))?.peerFp ?? null,
     }));
   }
   if (!ownerUserId) return [];
@@ -64,6 +66,7 @@ export async function resolveTargetsFor(ownerUserId: string | null): Promise<Res
     url: r.url,
     peerFp: r.peerFp,
     peerKey: r.peerKey,
+    peerKeyFp: r.peerKeyFp,
   }));
 }
 
@@ -80,13 +83,11 @@ export async function targetForUrl(ownerUserId: string | null, url: string): Pro
  *
  * 多人模式没有这张表,key 就是那个人目标机行上的一列,清单即存储。
  */
-async function outboundPeerKeys(ownerUserId: string | null): Promise<Map<string, string>> {
-  if (!(await isMultiUser())) return localPeerKeys();
-  return new Map(
-    (await resolveTargetsFor(ownerUserId))
-      .filter((t) => t.peerKey)
-      .map((t) => [keyUrl(t.url), t.peerKey] as const),
-  );
+async function outboundPeerKeys(ownerUserId: string | null) {
+  if (!(await isMultiUser())) return [...(await localPeerKeys()).values()];
+  return (await resolveTargetsFor(ownerUserId)).map((target) => ({
+    url: target.url, peerKey: target.peerKey, peerFp: target.peerKeyFp ?? null,
+  }));
 }
 
 /**
@@ -99,18 +100,30 @@ async function outboundPeerKeys(ownerUserId: string | null): Promise<Map<string,
  * 匹配按最长前缀:目标机地址可能带路径前缀(反代到子路径),取 origin 会把它切掉。
  * 读侧只有这一个入口 —— 两个语义略有出入的读法,正是上面那个 bug 的成因。
  */
-export async function peerKeyForRequest(ownerUserId: string | null, requestUrl: string): Promise<string> {
+export async function peerCredentialForRequest(ownerUserId: string | null, requestUrl: string) {
   const wanted = keyUrl(requestUrl);
-  let best = "";
+  const matches = (base: string) => wanted === base || wanted.startsWith(`${base}/`) || wanted.startsWith(`${base}?`);
+  let best: { url: string; peerKey: string; peerFp: string | null } | null = null;
   let bestLen = 0;
-  for (const [base, key] of await outboundPeerKeys(ownerUserId)) {
+  for (const credential of await outboundPeerKeys(ownerUserId)) {
+    const base = keyUrl(credential.url);
     if (!base || base.length < bestLen) continue;
-    if (wanted === base || wanted.startsWith(`${base}/`) || wanted.startsWith(`${base}?`)) {
-      best = key;
+    if (matches(base)) {
+      best = credential;
       bestLen = base.length;
     }
   }
-  return best;
+  if (!best?.peerKey) return null;
+  const matchingTargets = (await resolveTargetsFor(ownerUserId)).filter((target) => matches(keyUrl(target.url)));
+  const targetLength = Math.max(0, ...matchingTargets.map((target) => keyUrl(target.url).length));
+  const expectedFps = matchingTargets
+    .filter((target) => target.peerFp && keyUrl(target.url).length === targetLength).map((target) => target.peerFp!);
+  return { ...best, expectedFps };
+}
+
+/** 读取保存值；真正传输前的身份核对在 peerUserKeyHeader 中完成。 */
+export async function peerKeyForRequest(ownerUserId: string | null, requestUrl: string): Promise<string> {
+  return (await peerCredentialForRequest(ownerUserId, requestUrl))?.peerKey ?? "";
 }
 
 /** 展示用:抹掉 key,只报 hasKey。所有回给前端的路径都必须过这一层。 */
@@ -166,11 +179,12 @@ export async function saveVerifiedTargetAddress(
     }
     // 任务 marker 和目标行说明地址历史，不能替没有归属证明的账号 key 背书。
     const conflictingKey = localKeys.find((row) => credentialUrls.has(row.url) && row.peerKey
-      && (!row.peerFp || !sameFingerprint(row.peerFp, source.peerFp)));
+      && (!row.peerFp || !sameFingerprint(row.peerFp, source.peerFp)))
+      ?? (multi ? merged.find((target) => target.peerKey && !sameFingerprint(target.peerKeyFp, source.peerFp)) : undefined);
     if (conflictingKey) {
       throw new HandoffError(
         `地址 ${conflictingKey.url} 的账号 key 归属冲突，未确认属于这台来源机器；原地址和 key 未修改。`
-        + "请在「设置 → 默认规则 → 任务接力 → 接力目标机器」找到或添加这个地址，确认旧 key 不再使用后清除，再重试。",
+        + `请在「设置 → 默认规则 → 任务接力 → ${multi ? "我的接力目标机" : "接力目标机器"}」找到或添加这个地址，确认旧 key 不再使用后清除，再重试。`,
         409,
       );
     }
@@ -183,13 +197,13 @@ export async function saveVerifiedTargetAddress(
     const peerKey = [...credentials][0] ?? "";
     if (multi) {
       if (previous?.id) {
-        await tx.update(userHandoffTargets).set({ url: source.url, peerFp: source.peerFp, peerKey })
+        await tx.update(userHandoffTargets).set({ url: source.url, peerFp: source.peerFp, peerKey, peerKeyFp: peerKey ? source.peerFp : null })
           .where(and(eq(userHandoffTargets.id, previous.id), eq(userHandoffTargets.userId, owner!)));
         const duplicates = merged.filter((target) => target.id !== previous.id).map((target) => target.id!);
         if (duplicates.length) await tx.delete(userHandoffTargets)
           .where(and(eq(userHandoffTargets.userId, owner!), inArray(userHandoffTargets.id, duplicates)));
       } else {
-        await tx.insert(userHandoffTargets).values({ id: id(), userId: owner!, ...source, peerKey, createdAt: now() });
+        await tx.insert(userHandoffTargets).values({ id: id(), userId: owner!, ...source, peerKey, peerKeyFp: peerKey ? source.peerFp : null, createdAt: now() });
       }
       return;
     }
@@ -249,6 +263,7 @@ export async function addTarget(
     return listTargets(actor);
   }
   if (!owner) throw new HandoffError("请先登录", 401);
+  const peerKeyFp = await keyFingerprintForSave(input.url, input.peerKey ?? "");
   await db.insert(userHandoffTargets).values({
     id: id(),
     userId: owner,
@@ -256,9 +271,26 @@ export async function addTarget(
     url: input.url,
     peerFp: null,
     peerKey: input.peerKey ?? "",
+    peerKeyFp,
     createdAt: now(),
   });
   return listTargets(actor);
+}
+
+async function keyFingerprintForSave(rawUrl: string, peerKey: string, expectedPeerFp?: string | null): Promise<string | null> {
+  if (peerKey.length > 512) throw new HandoffError("这把 key 太长了(上限 512 字符)", 400);
+  if (expectedPeerFp != null && (typeof expectedPeerFp !== "string" || !/^[a-f0-9]{64}$/i.test(expectedPeerFp))) {
+    throw new HandoffError("机器指纹格式无效", 400);
+  }
+  // 保存新 key 的显式动作绑定当时签名确认的机器，覆盖写不会继承上一把 key 的归属。
+  const { probeSignedPeerFingerprint } = await import("../handoff-peer-client.js");
+  const peerFp = peerKey ? await probeSignedPeerFingerprint(rawUrl) : null;
+  if (peerKey && expectedPeerFp && (!peerFp || !sameFingerprint(peerFp, expectedPeerFp))) {
+    throw new HandoffError(peerFp
+      ? "地址背后的机器指纹不一致，账号 key 未保存。请先核对来源机器地址。"
+      : "无法核对机器身份，账号 key 未保存。请确认地址和 ash 运行状态后重试。", peerFp ? 409 : 502);
+  }
+  return peerFp;
 }
 
 /**
@@ -273,21 +305,17 @@ export async function setPeerKey(
 ): Promise<HandoffTarget[]> {
   const url = keyUrl(rawUrl);
   if (!url) throw new HandoffError("缺目标机地址", 400);
-  if (peerKey.length > 512) throw new HandoffError("这把 key 太长了(上限 512 字符)", 400);
-  if (expectedPeerFp != null && (typeof expectedPeerFp !== "string" || !/^[a-f0-9]{64}$/i.test(expectedPeerFp))) {
-    throw new HandoffError("机器指纹格式无效", 400);
-  }
   const multi = await isMultiUser();
   const owner = ownerIdOf(actor);
   if (multi && !owner) throw new HandoffError("请先登录", 401);
-  // 保存新 key 的显式动作绑定当时签名确认的机器，覆盖写不会继承上一把 key 的归属。
-  const { probeSignedPeerFingerprint } = await import("../handoff-peer-client.js");
-  const peerFp = peerKey && (!multi || expectedPeerFp) ? await probeSignedPeerFingerprint(rawUrl) : null;
-  if (peerKey && expectedPeerFp && (!peerFp || !sameFingerprint(peerFp, expectedPeerFp))) {
-    throw new HandoffError(peerFp
-      ? "地址背后的机器指纹不一致，账号 key 未保存。请先核对来源机器地址。"
-      : "无法核对机器身份，账号 key 未保存。请确认地址和 ash 运行状态后重试。", peerFp ? 409 : 502);
+  const rows = multi
+    ? (await db.select().from(userHandoffTargets).where(eq(userHandoffTargets.userId, owner!)))
+      .filter((row) => sameUrl(row.url, url))
+    : [];
+  if (multi && !rows.length) {
+    throw new HandoffError("先把这台目标机加进「我的接力目标机」,再给它配 key", 404);
   }
+  const peerFp = await keyFingerprintForSave(rawUrl, peerKey, expectedPeerFp);
   if (!multi) {
     // 不校验「这个地址还在不在清单里」是**故意的**:pending 重放收口时,弹框会为
     // 「已从设置里删掉、但任务还挂在它身上」的地址合成一个目标,那里填的 key 必须真的
@@ -303,14 +331,8 @@ export async function setPeerKey(
     }
     return listTargets(actor);
   }
-  if (!owner) throw new HandoffError("请先登录", 401);
-  const rows = (await db.select().from(userHandoffTargets).where(eq(userHandoffTargets.userId, owner)))
-    .filter((row) => sameUrl(row.url, url));
-  if (!rows.length) {
-    throw new HandoffError("先把这台目标机加进「我的接力目标机」,再给它配 key", 404);
-  }
   // 同一个地址被登记了两行时一起写:「我在那台机器上的 key」只可能是同一把。
-  await db.update(userHandoffTargets).set({ peerKey })
+  await db.update(userHandoffTargets).set({ peerKey, peerKeyFp: peerFp })
     .where(inArray(userHandoffTargets.id, rows.map((row) => row.id)));
   return listTargets(actor);
 }
@@ -352,7 +374,13 @@ export async function patchTarget(
     set.peerFp = null;
   }
   // 空串 = 明确清空(对端转回单人实例了);undefined = 不动这一列。
-  if (patch.peerKey !== undefined) set.peerKey = patch.peerKey;
+  if (patch.peerKey !== undefined) {
+    const target = (await db.select().from(userHandoffTargets)
+      .where(and(eq(userHandoffTargets.id, targetId), eq(userHandoffTargets.userId, owner)))).at(0);
+    if (!target) throw new HandoffError("目标机不存在", 404);
+    set.peerKey = patch.peerKey;
+    set.peerKeyFp = await keyFingerprintForSave(patch.url ?? target.url, patch.peerKey, patch.peerFp ?? (patch.url ? null : target.peerFp));
+  }
   if (patch.peerFp !== undefined) set.peerFp = patch.peerFp;
   if (Object.keys(set).length) {
     await db.update(userHandoffTargets).set(set)

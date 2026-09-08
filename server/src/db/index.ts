@@ -235,7 +235,7 @@ export async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS project_invites_project_idx ON project_invites (project_id);
     CREATE TABLE IF NOT EXISTS user_handoff_targets (
       id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, url TEXT NOT NULL,
-      peer_fp TEXT, peer_key TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+      peer_fp TEXT, peer_key TEXT NOT NULL DEFAULT '', peer_key_fp TEXT, created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS user_handoff_targets_user_idx ON user_handoff_targets (user_id);
     CREATE TABLE IF NOT EXISTS user_settings (
@@ -258,6 +258,7 @@ export async function ensureSchema() {
   // DB created before any one of them still upgrades cleanly.
   for (const sql of [
     "ALTER TABLE handoff_local_peer_keys ADD COLUMN peer_fp TEXT",
+    "ALTER TABLE user_handoff_targets ADD COLUMN peer_key_fp TEXT",
     "ALTER TABLE tasks ADD COLUMN started_at TEXT",
     "ALTER TABLE tasks ADD COLUMN ended_at TEXT",
     "ALTER TABLE sessions ADD COLUMN ended_at TEXT",

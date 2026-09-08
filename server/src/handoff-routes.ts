@@ -101,6 +101,7 @@ async function cancelPendingAtPeer(marker: TaskHandoff): Promise<boolean> {
       { allowReturnFallback: false },
     );
     await fetchPeer(`${targetUrl}/api/handoff/proxy/task/cancel-pending`, {
+      expectedPeerFp: marker.peerFp,
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({

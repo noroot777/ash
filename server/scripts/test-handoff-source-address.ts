@@ -360,18 +360,22 @@ try {
   assert.equal((await get<{ target: HandoffTarget }>("/tasks/t/handoff/return-target")).target.url, newUrl, "回程发现读取当前用户的目标机清单");
   assert.equal((await scope.listTargets(actor)).length, 1);
   const aliceTarget = (await scope.listTargets(actor))[0];
-  await scope.patchTarget(actor, aliceTarget.id!, { url: oldUrl, peerFp: fingerprint, peerKey: "alice-test-key" });
+  const seedMultiKey = async (peerKey: string, peerFp: string | null = fingerprint) => {
+    await db.update(userHandoffTargets).set({ url: oldUrl, peerFp, peerKey, peerKeyFp: peerFp })
+      .where(eq(userHandoffTargets.id, aliceTarget.id!));
+  };
+  await seedMultiKey("alice-test-key");
   assert.equal((await save(newUrl)).status, 200);
   assert.equal((await scope.listTargets(actor))[0].id, aliceTarget.id, "多人模式编辑原目标行，不另建重复条目");
   assert.equal(await scope.peerKeyForRequest("alice", newUrl), "alice-test-key");
   assert.equal(await scope.peerKeyForRequest("alice", oldUrl), "");
   for (const peerFp of [null, otherFingerprint]) {
-    await scope.patchTarget(actor, aliceTarget.id!, { url: oldUrl, peerFp, peerKey: "machine-b-account-key" });
+    await seedMultiKey("machine-b-account-key", peerFp);
     await assertOwnershipConflict();
   }
   const seedMultiDuplicates = async (newKey = "") => {
     for (const target of await scope.listTargets(actor)) if (target.id !== aliceTarget.id) await scope.deleteTarget(actor, target.id!);
-    await scope.patchTarget(actor, aliceTarget.id!, { url: oldUrl, peerFp: fingerprint, peerKey: "source-key" });
+    await seedMultiKey("source-key");
     await scope.addTarget(actor, { name: "预先添加的新地址", url: newUrl, peerKey: newKey });
   };
   for (const newKey of ["", "source-key", "conflicting-key"]) {
