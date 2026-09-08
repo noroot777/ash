@@ -47,6 +47,7 @@ import { HandoffApprovalAlert } from "../handoff/HandoffApprovalAlert.tsx";
 import { visibleOnThisMachine } from "./taskTreeModel.ts";
 import { HandoffDialog } from "../task-detail/HandoffDialog.tsx";
 import { RemoteTaskDetail } from "../remote-task/RemoteTaskDetail.tsx";
+import { useRemoteReturns } from "../remote-task/useRemoteReturns.ts";
 import { ChatView } from "../chat/ChatView.tsx";
 
 const ProjectTerminal = lazy(() => import("./ProjectTerminal.tsx").then((module) => ({ default: module.ProjectTerminal })));
@@ -124,6 +125,7 @@ export function WorkspaceShell() {
     setToast(message);
     window.setTimeout(() => setToast((current) => current === message ? null : current), 2600);
   }, []);
+  const remoteReturns = useRemoteReturns(notify);
 
   useEffect(() => {
     let alive = true;
@@ -448,6 +450,7 @@ export function WorkspaceShell() {
           <RemoteTaskDetail
             archive={remoteSelection.task}
             target={remoteSelection.target}
+            returns={remoteReturns}
             notify={notify}
             onLocalOwnership={openLocalOwnership}
           />
