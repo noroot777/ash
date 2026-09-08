@@ -1,5 +1,6 @@
 import { HTTPException } from "hono/http-exception";
 import { eq } from "drizzle-orm";
+import type { BranchDependency } from "@ash/shared/branch-plan";
 import { db } from "./db/index.js";
 import { tasks, projects, taskBranchReceipts } from "./db/schema.js";
 import { expandHome, localBranchExists, resolveTaskMergeTarget, resolveWorktreeBranchName } from "./git.js";
@@ -90,12 +91,14 @@ export async function initializeBranchPlan(row: typeof tasks.$inferInsert & { id
   await exec("git", ["-C", expandHome(repo), "update-ref", baseRef(row.id), start, ""]);
 }
 
-export type BranchDependency = {
-  taskId: string | null;
-  title: string;
-  state: "ready" | "waiting" | "needs_update" | "unknown";
-  message: string;
-};
+export type { BranchDependency } from "@ash/shared/branch-plan";
+
+export function branchRelationship(task: BranchTask, parentId: string, parentBranch: string): "pinned" | "legacy" | null {
+  if (task.id === parentId) return null;
+  if (task.baseTaskId === parentId) return "pinned";
+  return !task.mergeTargetBranch && branchName(task.acceptedTargetBranch || task.worktreeBase || "") === parentBranch
+    ? "legacy" : null;
+}
 
 export async function plannedMergeTarget(task: BranchTask, repo: string): Promise<string | null> {
   if (task.baseTaskId && !task.mergeTargetBranch) return null;
@@ -116,7 +119,15 @@ export async function inheritedParentCommit(task: BranchTask, repo: string, pare
 }
 
 export async function branchDependency(task: BranchTask, repo: string): Promise<BranchDependency | null> {
-  if (!task.baseTaskId) return null;
+  if (!task.baseTaskId) {
+    if (task.mergeTargetBranch) return null;
+    const target = task.acceptedTargetBranch || task.worktreeBase;
+    const parent = target ? await branchOwner(repo, task.projectId, target) : undefined;
+    if (!parent || branchRelationship(task, parent.id, branchName(target!)) !== "legacy") return null;
+    // 旧任务直接合入父分支；ready 只代表无需等待父成果先进入另一条最终分支。
+    return { taskId: parent.id, title: parent.title, state: "ready", legacyTarget: true,
+      message: `旧任务仍合入父分支 ${branchName(target!)}。请先单独处理并验收子任务，再验收父任务；父子统一验收不适用于这条旧关系。` };
+  }
   const parent = (await db.select().from(tasks).where(eq(tasks.id, task.baseTaskId))).at(0);
   const title = parent?.title ?? task.baseTaskId;
   const result = (state: BranchDependency["state"], message: string): BranchDependency =>
@@ -150,9 +161,10 @@ export async function dependentTasks(repo: string, projectId: string, taskId: st
   const blocked: BranchTask[] = [];
   for (const row of rows) {
     if (row.id === taskId || row.stage === "accepted") continue;
-    if (row.baseTaskId === taskId) {
+    const relationship = branchRelationship(row, taskId, branch);
+    if (relationship === "pinned") {
       if ((await branchDependency(row, repo))?.state !== "ready") blocked.push(row);
-    } else if (!row.mergeTargetBranch && branchName(row.acceptedTargetBranch || row.worktreeBase || "") === branch) {
+    } else if (relationship === "legacy") {
       blocked.push(row);
     }
   }

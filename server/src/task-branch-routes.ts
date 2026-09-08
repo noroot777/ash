@@ -6,7 +6,7 @@ import { familySelectionBlock } from "@ash/shared/branch-plan";
 import { acceptPlan, isFinalHumanGate } from "@ash/shared/workflow-policy";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
-import { branchDependency, branchName, commitAt, plannedMergeTarget, type BranchTask } from "./task-branch-plan.js";
+import { branchDependency, branchName, branchRelationship, commitAt, plannedMergeTarget, type BranchTask } from "./task-branch-plan.js";
 import { localBranchExists, resolveWorktreeBranchName } from "./git.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { acceptanceGuard } from "./task-accept-guard.js";
@@ -54,8 +54,9 @@ export async function readBranchPlan(taskId: string): Promise<BranchPlanView | n
   const ordered = [task];
   const seen = new Set([task.id]);
   for (let i = 0; i < ordered.length; i++) {
+    const parentBranch = await resolveWorktreeBranchName(project.repoPath, ordered[i].id);
     for (const child of rows) {
-      if (child.baseTaskId !== ordered[i].id || seen.has(child.id)) continue;
+      if (seen.has(child.id) || !branchRelationship(child, ordered[i].id, parentBranch)) continue;
       seen.add(child.id);
       ordered.push(child);
     }

@@ -20,8 +20,9 @@ const { taskWorkspace } = await import("../src/task-workspace.js");
 const { acceptTask, mountTaskAcceptanceRoutes } = await import("../src/task-accept.js");
 const { mountTaskRoutes } = await import("../src/task-routes.js");
 const { mountTaskDiffRoutes } = await import("../src/task-diff-routes.js");
+const { mountTaskScheduleRoutes } = await import("../src/task-schedule-routes.js");
 const { mountProjectRoutes } = await import("../src/project-routes.js");
-const { branchDependency, branchDeletionBlock } = await import("../src/task-branch-plan.js");
+const { branchDependency, branchDeletionBlock, dependentTasks } = await import("../src/task-branch-plan.js");
 const { readBranchPlan, acceptFamily } = await import("../src/task-branch-routes.js");
 const { updateTaskBase } = await import("../src/task-base-update.js");
 const { claimTurn, releaseTurn } = await import("../src/runs.js");
@@ -37,6 +38,7 @@ if (process.argv.includes("--serve")) {
 mountTaskRoutes(api);
 mountTaskAcceptanceRoutes(api);
 mountTaskDiffRoutes(api);
+mountTaskScheduleRoutes(api);
 mountProjectRoutes(api);
 let sequence = 0;
 const row = async (id: string) => (await db.select().from(tasks).where(eq(tasks.id, id)))[0];
@@ -100,6 +102,12 @@ try {
       await db.update(tasks).set({ workflow, workflowMode: "preset", workflowAt: "human", stage: "awaiting_acceptance" })
         .where(eq(tasks.id, task.id));
     }
+    const legacy = await setup();
+    await db.update(tasks).set({ mergeTargetBranch: null, worktreeStartCommit: null, baseTaskId: null }).where(eq(tasks.id, legacy.child.id));
+    await s.newTask("unstarted", "main");
+    const unreadable = await s.newTask("badstart", "main");
+    await taskWorkspace(await row(unreadable.id), s.repo);
+    await db.update(tasks).set({ worktreeStartCommit: "0".repeat(40) }).where(eq(tasks.id, unreadable.id));
     const { serve } = await import("@hono/node-server");
     const backend = serve({ fetch: new Hono().route("/api", api).fetch, hostname: "127.0.0.1", port: 0 });
     if (!backend.listening) await new Promise<void>(resolve => backend.once("listening", resolve));
@@ -121,6 +129,32 @@ try {
     if (process.connected) process.disconnect();
   } else {
   {
+    const s = await setup();
+    const task = await s.newTask("unstarted", "main");
+    assert.ok(task.worktreeStartCommit);
+    const checkDiff = async (reason: string | null) => {
+      for (const endpoint of ["diff", "diff/file?path=shared.txt"]) {
+        const response = await api.request(`/tasks/${task.id}/${endpoint}`);
+        assert.equal(response.status, 200);
+        const result = await response.json();
+        assert.equal(result.available, reason === null);
+        assert.equal(result.reason ?? null, reason);
+        assert.equal(result.error, undefined);
+      }
+    };
+    await checkDiff("source_branch_missing");
+    await taskWorkspace(await row(task.id), s.repo);
+    await checkDiff(null);
+    git(s.repo, "branch", "-m", "main", "renamed-main");
+    await checkDiff(null);
+    await db.update(tasks).set({ worktreeStartCommit: "0".repeat(40) }).where(eq(tasks.id, task.id));
+    await checkDiff("start_commit_unreadable");
+    assert.equal((await api.request(`/tasks/${task.id}/diff/file?path=../shared.txt`)).status, 400);
+    await db.update(tasks).set({ worktreeStartCommit: null }).where(eq(tasks.id, task.id));
+    await checkDiff("target_branch_missing");
+    console.log("✓ unstarted and unreadable pinned diff ranges return matching structured results; pinned diffs survive target rename");
+  }
+  {
     const s = await setup("squash");
     const plan = (await readBranchPlan(s.parent.id))!;
     const entries = [plan.task, ...plan.descendants];
@@ -139,6 +173,18 @@ try {
   {
     const s = await setup();
     await db.update(tasks).set({ mergeTargetBranch: null, worktreeStartCommit: null, baseTaskId: null }).where(eq(tasks.id, s.child.id));
+    const view = (await readBranchPlan(s.parent.id))!;
+    assert.deepEqual(view.descendants.map(t => t.taskId), (await dependentTasks(s.repo, s.parent.projectId, s.parent.id)).map(t => t.id));
+    assert.equal(view.descendants[0].targetBranch, s.parentWs.branch);
+    assert.equal(view.descendants[0].dependency?.taskId, s.parent.id);
+    assert.equal(view.descendants[0].dependency?.legacyTarget, true);
+    assert.equal(view.descendants[0].startCommit, null);
+    assert.equal((await readBranchPlan(s.child.id))!.task.dependency?.legacyTarget, true);
+    const family = await acceptFamily(s.parent.id, [view.task, ...view.descendants], acceptTask);
+    assert.equal(family.ok, false);
+    assert.deepEqual(family.completed, []);
+    assert.match(family.error!, /先单独处理并验收子任务/);
+    assert.equal(git(s.repo, "rev-parse", s.parentWs.branch!), s.parentCommit);
     const acceptBefore = await acceptTask(s.child.id);
     assert.equal(acceptBefore.accepted, false);
     if (!acceptBefore.accepted) assert.equal(acceptBefore.reason, "target_checked_out");
@@ -159,7 +205,24 @@ try {
     assert.ok(await row(s.parent.id));
     assert.equal(git(s.repo, "rev-parse", s.parentWs.branch!), s.parentCommit);
     assert.equal((await acceptTask(s.child.id)).accepted, true);
+    assert.equal((await acceptTask(s.parent.id)).accepted, true);
+    assert.equal(git(s.repo, "show", "main:child.txt"), "child feature");
     console.log("✓ legacy child accepts after directory-only cleanup; record/ref, busy and pending-update protections remain");
+  }
+  {
+    const s = await setup();
+    const grand = await s.newTask("grand", s.childWs.branch);
+    const legacyBranch = s.parentWs.branch!.replace(/^ash\//, "harness/");
+    git(s.parentWs.path, "branch", "-m", legacyBranch);
+    await db.update(tasks).set({ baseTaskId: null, worktreeStartCommit: null, mergeTargetBranch: null, worktreeBase: `refs/heads/${legacyBranch}` }).where(eq(tasks.id, s.child.id));
+    await db.update(tasks).set({ baseTaskId: null, worktreeStartCommit: null, mergeTargetBranch: null, worktreeBase: "main", acceptedTargetBranch: s.childWs.branch, archived: true }).where(eq(tasks.id, grand.id));
+    const view = (await readBranchPlan(s.parent.id))!;
+    assert.deepEqual(view.descendants.map(t => t.taskId), [s.child.id, grand.id]);
+    assert.equal(view.descendants[1].dependency?.taskId, s.child.id);
+    assert.ok(view.descendants[1].blocker);
+    assert.deepEqual((await dependentTasks(s.repo, s.parent.projectId, s.parent.id)).map(t => t.id), [s.child.id]);
+    assert.deepEqual((await dependentTasks(s.repo, s.parent.projectId, s.child.id)).map(t => t.id), [grand.id]);
+    console.log("✓ legacy refs/heads and harness branches, accepted target fallback and archived descendants stay visible");
   }
   {
     const s = await setup();

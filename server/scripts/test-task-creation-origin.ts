@@ -46,7 +46,7 @@ try {
   assert.deepEqual(await missing.json(), { error: "来源任务不存在" });
   const external = await (await create({ title: "外部智能体创建" }, { "x-ash-client": "mcp" })).json();
   assert.deepEqual(external.creationOrigin, { kind: "agent" });
-  assert.equal(taskCreationLabel(external.creationOrigin), "智能体创建");
+  assert.equal(taskCreationLabel(external.creationOrigin), "智能体创建（自报）");
   assert.equal(taskCreationLabel({ kind: "agent", taskId: source }), "智能体派生");
   assert.equal(taskCreationLabel(derived.creationOrigin), "Codex 派生");
   assert.equal(taskCreationLabel(parseTaskCreationOrigin(null)), "来源未记录");
@@ -70,6 +70,7 @@ try {
   assert.deepEqual((await (await api.request(`/tasks/${derived.id}`)).json()).creationOrigin, derived.creationOrigin, "PATCH cannot rewrite creation provenance");
   const legacy = await (await api.request(`/tasks/${source}`)).json();
   assert.equal(legacy.creationOrigin, null, "legacy task is not silently labeled user-created");
+  await db.insert(tasks).values({ id: "legacy-linked", projectId: "project", title: "旧任务保留父链接", body: "", originTaskId: source, createdAt: at, updatedAt: at });
   console.log("✓ user vs agent, user derivation, actual source session vs worker, stale identity, external MCP, batch, team dispatch, immutable provenance, legacy unknown");
   if (process.argv.includes("--serve")) {
     const { serve } = await import("@hono/node-server");

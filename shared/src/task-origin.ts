@@ -22,6 +22,7 @@ export function taskCreationLabel(origin?: TaskCreationOrigin | null): string {
   if (!origin) return "来源未记录";
   if (origin.kind === "user") return "用户创建";
   if (origin.kind === "system") return "系统创建";
+  if (!origin.taskId) return "智能体创建（自报）";
   const name = origin.agentType === "claude" ? "Claude" : origin.agentType === "codex" ? "Codex" : origin.agentType || "智能体";
-  return `${name}${name === "智能体" ? "" : " "}${origin.taskId ? "派生" : "创建"}`;
+  return `${name}${name === "智能体" ? "" : " "}派生`;
 }

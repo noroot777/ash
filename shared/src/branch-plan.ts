@@ -3,6 +3,7 @@ export type BranchDependency = {
   title: string;
   state: "ready" | "waiting" | "needs_update" | "unknown";
   message: string;
+  legacyTarget?: boolean;
 };
 
 export type BranchPlanEntry = {
@@ -29,6 +30,9 @@ export function familySelectionBlock(entries: BranchPlanEntry[], selected: Reado
   for (const row of entries) {
     if (!selected.has(row.taskId) || row.stage === "accepted") continue;
     const dep = row.dependency;
+    if (dep?.legacyTarget && dep.taskId && selected.has(dep.taskId)) {
+      return { taskId: row.taskId, error: `「${row.title}」：${dep.message}` };
+    }
     if (!dep || dep.state === "ready") continue;
     if (dep.state === "waiting" && dep.taskId && selected.has(dep.taskId)) continue;
     const canSelect = dep.state === "waiting" && entries.some(e => e.taskId === dep.taskId && e.stage !== "accepted");

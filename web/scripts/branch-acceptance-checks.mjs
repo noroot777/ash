@@ -15,6 +15,21 @@ export async function checkBranchAcceptance(page, fixtureUrl) {
     ensure(await output("依赖请求次数").innerText() === String(count), "subscribers issued duplicate requests");
   };
 
+  for (const [task, reason] of [["case1-unstarted", "任务分支不存在或已清理"], ["case1-badstart", "无法读取任务的开工提交"]]) {
+    await go(task);
+    await page.getByText(`当前无法生成分支 diff：${reason}。`, { exact: true }).waitFor({ state: "visible" });
+    await page.getByText(`无法生成分支 diff：${reason}`, { exact: true }).waitFor({ state: "visible" });
+    ensure(!/accepted_snapshot_unreadable|source_branch_missing|start_commit_unreadable/.test(await page.locator("main").innerText()), "internal diff reason leaked to UI");
+  }
+  await go("case6-parent");
+  await page.getByRole("checkbox", { name: "case6-child", exact: true }).check();
+  await page.getByRole("alert").filter({ hasText: "父子统一验收不适用于这条旧关系" }).waitFor({ state: "visible" });
+  ensure(!await page.getByRole("button", { name: /验收父任务及所选子任务/ }).isEnabled(), "legacy child must not be merged after its parent");
+  ensure(await page.getByRole("link", { name: "查看改动", exact: true }).count() === 1, "legacy child has no navigation entry");
+  await go("case6-child");
+  await page.getByRole("status").filter({ hasText: "旧任务仍合入父分支" }).waitFor({ state: "visible" });
+  ensure(await page.getByRole("link", { name: "查看父任务", exact: true }).count() === 1, "legacy child has no parent link");
+
   await go("case5-parent");
   await page.getByRole("region", { name: "派生与验收依赖" }).waitFor({ state: "visible" });
   ensure(await review().getByRole("button", { name: "放行，继续下一站" }).isEnabled(), "review mid-gate must allow release");

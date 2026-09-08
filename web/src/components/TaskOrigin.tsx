@@ -96,6 +96,7 @@ export function OriginTaskBar({
 }) {
   const link = taskParentLink(task, allTasks);
   const origin = task.creationOrigin;
+  if (!origin && !link) return null;
   const creator = origin?.kind === "agent" ? origin : null;
   const relation = link ? taskParentRelation(link) : null;
   const sourceTitle = link?.task?.title || (creator?.taskId === link?.taskId ? creator?.taskTitle : null) || link?.taskId;
