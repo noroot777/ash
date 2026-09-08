@@ -148,7 +148,7 @@ try {
       assert.ok(prompt.indexOf("FIRST-A") < prompt.indexOf("REPLY-R"));
       assert.ok(prompt.indexOf("REPLY-R") < prompt.indexOf("LATER-B"));
       summarized = true;
-      return '{"summary":"顺序正确"}';
+      return { text: '{"summary":"顺序正确"}' };
     }, { ...policy, backgroundTokens: 10, recentTokens: 0, summaryTokens: 20 });
     await manager.prewarm(row.id, members[0]!);
     assert.ok(summarized);
@@ -206,7 +206,7 @@ try {
       assert.ok(summary.includes('"role":"system"'));
       assert.ok(summary.includes("TASK-KEEP"));
       assert.ok(summary.includes("MODEL-DONE"));
-      return '{"summary":"保留对话"}';
+      return { text: '{"summary":"保留对话"}' };
     }, { ...policy, backgroundTokens: 10, recentTokens: 0, summaryTokens: 20 });
     await summaryManager.prewarm(row.id, members[0]!);
     assert.ok((await chatContextStatus(row.id)).hasSummary);
@@ -250,7 +250,7 @@ try {
     const row = await room("task-start-failure");
     let rejectStart: ((error: Error) => void) | undefined;
     const modelReply = "已为登录页创建任务，请在任务卡查看进度。";
-    const delegating = new ChatService(async () => JSON.stringify({ reply: modelReply, task: { title: "实现登录页", body: "按用户要求实现登录页" } }),
+    const delegating = new ChatService(async () => ({ text: JSON.stringify({ reply: modelReply, task: { title: "实现登录页", body: "按用户要求实现登录页" } }) }),
       async () => new Promise<void>((_resolve, reject) => { rejectStart = reject; }), policy);
     await delegating.send(row, "@codex 请实现登录页", "task-start-source", "用户");
     await eventually(async () => !!rejectStart, "模型回复成功并创建任务");
@@ -274,7 +274,7 @@ try {
       assert.ok(prompt.includes(modelReply));
       assert.ok(prompt.includes(reply.taskId!));
       assert.ok(!prompt.includes("本轮未能回复"));
-      return '{"summary":"登录页任务已创建"}';
+      return { text: '{"summary":"登录页任务已创建"}' };
     }, { ...policy, backgroundTokens: 10, recentTokens: 0, summaryTokens: 30 });
     await manager.prewarm(row.id, members[0]!);
     assert.ok((await chatContextStatus(row.id)).hasSummary);

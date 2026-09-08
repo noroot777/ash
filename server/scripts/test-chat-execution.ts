@@ -79,7 +79,7 @@ try {
     const prompt = chatPrompt(member, [], `@${type} 请查看文件后给建议`);
     assert.match(prompt, /可以使用现有工具读取当前项目文件/);
     assert.match(prompt, /不要在聊天回合修改文件/);
-    const result = parseChatReply(await invokeChat(member, null, prompt, new AbortController().signal, "project"));
+    const result = parseChatReply((await invokeChat(member, null, prompt, new AbortController().signal, "project")).text);
     assert.deepEqual(result, { reply: "来自当前项目的建议依据", task: null });
     assert.equal(lastCwd, projectDir);
     assert.ok(existsSync(projectDir));
@@ -89,11 +89,11 @@ try {
   assert.equal(killed, starts);
   const member: ChatMember = { id: "codex", name: "codex", agentType: "codex", executorId: "profile-codex", model: "chat-model", reasoningEffort: null };
   const signal = new AbortController().signal;
-  assert.equal(await invokeChat(member, null, "BACKGROUND_SUMMARY_FIXTURE", signal, "project", { purpose: "summary" }), '{"summary":"已有用户决定与待办事项"}');
+  assert.equal((await invokeChat(member, null, "BACKGROUND_SUMMARY_FIXTURE", signal, "project", { purpose: "summary" })).text, '{"summary":"已有用户决定与待办事项"}');
   assert.equal(existsSync(lastCwd), false);
   await assert.rejects(invokeChat(member, null, "摘要禁止工具", signal, "project", { purpose: "summary" }), /后台摘要调用使用了工具/);
   assert.equal(existsSync(lastCwd), false);
-  const home = parseChatReply(await invokeChat(member, null, "咨询", signal, "home-directory"));
+  const home = parseChatReply((await invokeChat(member, null, "咨询", signal, "home-directory")).text);
   assert.deepEqual(home, { reply: "来自家目录项目的建议依据", task: null });
   assert.equal(lastCwd, homeProject);
   const beforeMissing = starts;

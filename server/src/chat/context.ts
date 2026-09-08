@@ -123,7 +123,7 @@ export class ChatContextManager {
         }
         if (!batch.length) throw new Error("单条历史消息超出整理预算，原文已保留，未截断消息。");
         const prompt = summaryPrompt(previous, batch.map((entry) => entry.content), this.policy.summaryTokens);
-        const summary = parseChatSummary(await this.invoke(member, room.ownerUserId, prompt, signal, room.projectId, { purpose: "summary" }), this.policy.summaryTokens);
+        const summary = parseChatSummary((await this.invoke(member, room.ownerUserId, prompt, signal, room.projectId, { purpose: "summary" })).text, this.policy.summaryTokens);
         signal.throwIfAborted();
         const tokens = estimateChatTokens(JSON.stringify(summary));
         if (tokens >= (history.summary?.tokens ?? 0) + batchTokens) throw new Error("摘要未缩短历史，原始消息已保留。");

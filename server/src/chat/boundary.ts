@@ -1,5 +1,5 @@
 import { watch, type FSWatcher } from "node:fs";
-import { lstat, readdir, readlink, realpath } from "node:fs/promises";
+import { lstat, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { AgentEvent } from "@ash/shared";
@@ -15,7 +15,7 @@ export class ChatBoundaryError extends Error {
 
 function readCommand(command: string, depth = 0): boolean {
   if (depth > 1 || !command.trim() || /[\n\r;&|<>$`\\]/u.test(command)) return false;
-  const tokens = command.match(/'[^']*'|"[^"]*"|[^\s'"\u0060]+/gu) ?? [];
+  const tokens = command.match(/'[^']*'|"[^"]*"|[^\s'"`]+/gu) ?? [];
   if (tokens.join("") !== command.replace(/\s+(?=(?:[^'"]|'[^']*'|"[^"]*")*$)/gu, "")) return false;
   const args = tokens.map((token) => /^['"]/u.test(token) ? token.slice(1, -1) : token);
   const program = basename(args[0] ?? "");
@@ -41,18 +41,6 @@ export function readOnlyChatTool(event: Extract<AgentEvent, { kind: "tool" }>): 
   return readCommand(command);
 }
 
-async function stamp(path: string, shallow = false): Promise<string | null> {
-  try {
-    const stat = await lstat(path, { bigint: true });
-    if (stat.isDirectory()) return shallow ? `directory:${stat.mode}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.ino}` : `directory:${stat.mode}`;
-    const link = stat.isSymbolicLink() ? await readlink(path) : "";
-    return `${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.ino}:${link}`;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-}
-
 async function canonicalPath(path: string): Promise<string> {
   try { return await realpath(path); }
   catch (error) {
@@ -61,99 +49,88 @@ async function canonicalPath(path: string): Promise<string> {
   }
 }
 
-export async function watchChatWorkspace(cwd: string, onViolation: (error: ChatBoundaryError) => void) {
+export interface ChatWorkspaceObserver {
+  /** 等尾随事件落定后关闭监听，返回观察到的变更路径（相对项目根、去重）；more 表示还有没列出的。 */
+  settle(): Promise<{ paths: string[]; more: boolean }>;
+  close(): void;
+}
+
+// 目录观察只做「记录并如实上报」，不做中止：文件系统事件说不出一次改动是谁做的。被咨询的
+// 项目通常是一个活着的仓库——ash 自己的验收合并在写它的工作区（2026-09-08 一次 fast-forward
+// 就把三个成员的咨询齐刷刷杀掉）、别的任务在 .worktrees/ 里持续写、用户的编辑器和构建也在写。
+// 此前按「变化即越界、中止全员」运行的六轮补丁（排除依赖树、shallow 目录、linked worktree
+// index、ash 的 data/、整棵 .git……）每轮都在给新冒出来的合法并发写豁免，排除清单永远追不上
+// 真实世界。可归因、可中止的只读约束只有一层：工具事件闸门（readOnlyChatTool，默认拒绝）；
+// 这里观察到的变化随回复附注展示，由用户自己判断来源。
+export async function watchChatWorkspace(cwd: string): Promise<ChatWorkspaceObserver> {
   const root = await realpath(cwd);
   const dbFile = resolveAshDbFile();
   const db = join(await realpath(dirname(dbFile)), basename(dbFile));
   const contains = (tree: string, path: string) => path === tree || path.startsWith(`${tree}${sep}`);
-  // ash 自己写进项目里的东西，一律不算智能体越界：群聊的项目常常**就是 ash 仓库本身**，而
-  // ash 一边服务这次咨询一边在写自己的 data/——server.log 每个请求都动，还有 ash.db 的
-  // -wal/-shm/.ash.lock、skill-calibrations.json、scratch/、tmp/、task-artifacts/、uploads/、
-  // runs/。逐个文件排除追不上（先漏数据库、再漏 runs、再漏校准文件，每次都是三个成员齐刷刷
-  // 报「检测到项目文件变化」），所以按整棵目录排除。位置可由 env 改，所以逐个解析而不是只看 DATA_DIR。
+  // ash 自己写进项目里的东西不值得附注：群聊的项目常常**就是 ash 仓库本身**，server.log 每个
+  // 请求都动，还有 ash.db 的 -wal/-shm/.ash.lock、scratch/、task-artifacts/、uploads/、runs/。
+  // 位置可由 env 改，所以逐个解析而不是只看 DATA_DIR；反过来把项目整个罩住的（比如 ASH_DB
+  // 指到项目根）只能当它不存在，否则等于把观察关掉。
   const owned = [...new Set(await Promise.all([DATA_DIR, dirname(dbFile), RUNS_DIR, UPLOADS_DIR].map(canonicalPath)))]
-    // 反过来把项目整个罩住的（比如 ASH_DB 指到项目根）只能当它不存在，否则等于把看守关掉。
     .filter((tree) => !contains(tree, root));
   const excludedFiles = new Set([db, `${db}-wal`, `${db}-shm`, `${db}-journal`]);
   const ignored = (path: string) => {
     if (excludedFiles.has(path) || owned.some((tree) => contains(tree, path))) return true;
-    // `.git` 里的东西不是项目文件，是 git 的记账。项目根的 `.git/index`、`index.lock`、
-    // `refs/`、`logs/`、`objects/` 一直在被别人动：ash 轮询 `git status` 会刷新索引，别的任务
-    // 在同一个仓库提交，用户自己的终端和编辑器也在跑 git。上一轮只豁免了「其他工作树的
-    // index」，紧接着就换成主仓的 `.git/index.lock` 报同一条错——按路径一条条补永远追不上。
-    // 放宽到整棵 `.git` 不会开口子：只读白名单里根本没有 `git`，智能体的任何 git 调用都会先
-    // 在工具层中止；而真正改动内容的 git 操作（checkout / reset / stash）一定同时改工作区
-    // 文件，那些仍然照常告警。工作区里名叫 `.gitignore`、`index.lock` 的普通文件也照常受监测。
-    return relative(root, path).split(sep)[0] === ".git";
-  };
-  const shallow = (path: string) => {
+    if (basename(path) === ".DS_Store") return true;
     const parts = relative(root, path).split(sep);
-    return parts.some((part, index) => part === "node_modules" || part === ".worktrees" || (part === "worktrees" && parts[index - 1] === ".claude"));
+    // `.git` 里的东西不是项目文件，是 git 的记账：ash 轮询 `git status` 会刷新索引，别的任务在
+    // 同一个仓库提交，用户自己的终端和编辑器也在跑 git。工作区里名叫 `.gitignore`、`index.lock`
+    // 的普通文件不在此列，照常观察。
+    if (parts[0] === ".git") return true;
+    // 其他任务的工作树里持续有别的智能体在写，那是它们自己的工作区，不是这份检出的项目文件；
+    // 逐条附注只会把真正有用的提示淹掉。项目本身就位于某个 .worktrees 里时不受影响——这里只看
+    // 项目根以下的路径段。
+    return parts.some((part, index) => part === ".worktrees" || (part === "worktrees" && parts[index - 1] === ".claude"));
   };
-  const snapshot = async () => {
-    const result = new Map<string, string>();
-    const visit = async (path: string): Promise<void> => {
-      if (ignored(path)) return;
-      if (result.size >= 200000) throw new Error("项目条目过多，无法完整监测");
-      const value = await stamp(path, shallow(path));
-      if (value === null) return;
-      result.set(relative(root, path), value);
-      if (value.startsWith("directory:") && !shallow(path)) {
-        for (const name of await readdir(path)) await visit(join(path, name));
-      }
-    };
-    await visit(root);
-    if (!result.has("")) throw new Error("项目目录不可读取");
-    return result;
-  };
-  const before = await snapshot().catch(() => { throw new ChatBoundaryError("无法建立完整的目录基线，未启动智能体"); });
+  const seen = new Set<string>();
+  let more = false;
+  let closed = false;
+  let watcher: FSWatcher | undefined;
+  // macOS 的 FSEvents 会把 watch 启动前一瞬的事件一并吐出来，只认事件会把咨询开始前的
+  // 写入也记上；按 ctime 过滤，只报咨询期间真正发生的变化。路径已不存在（删除/改名）时
+  // 逐级看父目录——删除一定会刷新父目录的 ctime。
   const beganAt = BigInt(Math.trunc((performance.timeOrigin + performance.now()) * 1000000));
   const changedSinceStart = async (path: string): Promise<boolean> => {
     try { return (await lstat(path, { bigint: true })).ctimeNs >= beganAt; }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return true;
       return path === root || await changedSinceStart(dirname(path));
     }
   };
-  let violation: ChatBoundaryError | undefined;
-  let closed = false;
-  const pending = new Set<Promise<void>>();
-  const fail = (reason: string) => {
-    if (violation) return;
-    violation = new ChatBoundaryError(reason);
-    onViolation(violation);
+  const record = (local: string) => {
+    if (seen.has(local)) return;
+    if (seen.size >= 8) { more = true; return; }
+    seen.add(local.slice(0, 180));
   };
-  const changed = (path: string) => fail(`检测到咨询期间项目文件变化（${JSON.stringify(path.slice(0, 180) || ".")}）；变更来源可能是智能体或其他并发操作`);
-  let watcher: FSWatcher;
+  const pending = new Set<Promise<void>>();
   try {
-    watcher = watch(root, { recursive: true, persistent: false }, (event, filename) => {
-      if (closed) return;
-      if (!filename) { fail("目录监测未提供变更路径，无法确认本轮只读"); return; }
+    watcher = watch(root, { recursive: true, persistent: false }, (_event, filename) => {
+      if (closed || !filename) return;
       const path = resolve(root, filename.toString());
       const local = relative(root, path);
-      if (local.startsWith(`..${sep}`) || isAbsolute(local) || ignored(path)) return;
-      const check = (async () => {
-        if (shallow(path) || event === "rename") {
-          if (await changedSinceStart(path)) changed(local);
-        } else if (before.get(local) !== (await stamp(path) ?? undefined)) changed(local);
-      })().catch(() => fail("目录监测失败，无法确认本轮只读"));
+      if (!local || local.startsWith(`..${sep}`) || isAbsolute(local) || ignored(path)) return;
+      if (seen.has(local)) return;
+      const check = (async () => { if (await changedSinceStart(path)) record(local); })().catch(() => record(local));
       pending.add(check);
       void check.finally(() => pending.delete(check));
     });
-  } catch { throw new ChatBoundaryError("无法启动目录监测，未启动智能体"); }
-  watcher.on("error", () => fail("目录监测中断，无法确认本轮只读"));
+    watcher.on("error", (error) => { console.warn("[chat] 目录变化观察中断", error); watcher?.close(); });
+  } catch (error) {
+    console.warn("[chat] 目录变化观察不可用", error);
+  }
+  const close = () => { closed = true; watcher?.close(); };
   return {
-    async finish() {
-      try {
-        await delay(100);
-        const after = await snapshot();
-        for (const path of new Set([...before.keys(), ...after.keys()])) {
-          if (before.get(path) !== after.get(path)) { changed(path); break; }
-        }
-        while (pending.size) await Promise.all([...pending]);
-      } catch { fail("结束时无法核对项目目录，不能将本轮记为正常咨询"); }
-      return violation;
+    async settle() {
+      await delay(100);
+      while (pending.size) await Promise.all([...pending]);
+      close();
+      return { paths: [...seen], more };
     },
-    close() { closed = true; watcher.close(); },
+    close,
   };
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -40,17 +40,18 @@ for (const name of ["Write", "Edit", "apply_patch", "mcp__unknown__run"]) assert
 const original = CLI_SPEC_BY_KEY.codex.factory;
 const member: ChatMember = { id: "codex", name: "codex", agentType: "codex", executorId: null, model: null, reasoningEffort: null };
 let mode = "read";
-let killed = 0;
+let runs = 0;
 let cleanup = 0;
 let changed: (() => void) | undefined;
 let release: (() => void) | undefined;
 CLI_SPEC_BY_KEY.codex.factory = () => ({
   type: "codex", label: "fixture", resumeCommand: () => "",
   run: (opts) => {
+    runs++;
     if (mode === "sync-write") writeFileSync(join(opts.cwd, "unexpected-side-effect.txt"), "written before any event");
     if (mode === "dependency-write") writeFileSync(join(opts.cwd, "node_modules", "pkg", "side-effect.txt"), "written without any tool event");
     return {
-      sessionId: "fixture", commandLine: "fixture", kill: () => { killed++; release?.(); }, cleanup: async () => { cleanup++; },
+      sessionId: "fixture", commandLine: "fixture", kill: () => { release?.(); }, cleanup: async () => { cleanup++; },
       events: (async function* (): AsyncGenerator<AgentEvent> {
         if (mode === "runtime-write") {
           await db.update(projects).set({ name: "运行期状态更新" }).where(eq(projects.id, "project"));
@@ -68,11 +69,11 @@ CLI_SPEC_BY_KEY.codex.factory = () => ({
         }
         if (mode === "write-event") yield { kind: "tool", name: "Write", detail: "sensitive arguments not shown" };
         if (mode === "command-event") yield { kind: "tool", name: "exec", detail: "npm install something" };
-        if (mode === "stream-write" || mode === "stop-write") {
+        if (mode === "stream-write" || mode === "stop-write" || mode === "hold") {
           await delay(30);
-          writeFileSync(join(opts.cwd, "during-stream.txt"), "side effect");
+          if (mode !== "hold") writeFileSync(join(opts.cwd, "during-stream.txt"), "side effect");
           const released = new Promise<void>((resolve) => { release = resolve; });
-          const timeout = setTimeout(() => release?.(), 2000);
+          const timeout = setTimeout(() => release?.(), 1500);
           changed?.();
           try { await released; } finally { clearTimeout(timeout); }
         }
@@ -85,45 +86,76 @@ CLI_SPEC_BY_KEY.codex.factory = () => ({
 });
 const invoke = () => invokeChat(member, null, "@codex 你建议登录页怎么改？", AbortSignal.timeout(5000), "project");
 try {
-  await invoke();
-  for (const scenario of ["sync-write", "edit-existing", "delete", "rename", "transient", "write-event", "command-event", "stream-write"]) {
+  assert.equal((await invoke()).notice, undefined, "纯只读咨询不该有附注");
+
+  // 工具事件闸门可归因，照旧硬中止。
+  for (const scenario of ["write-event", "command-event"]) {
     mode = scenario;
-    const began = Date.now();
     await assert.rejects(invoke(), (error: unknown) => error instanceof ChatBoundaryError && error.message.includes("咨询已中止") && !error.message.includes("sensitive arguments"), scenario);
-    if (scenario === "stream-write") assert.ok(Date.now() - began < 1800, "流式写入须在回合结束前被监测并中止");
-    if (scenario === "sync-write") assert.ok(existsSync(join(projectDir, "unexpected-side-effect.txt")), "不自动回滚或隐藏已发生的写入");
+  }
+
+  // 无工具事件的目录变化无法归因（可能是智能体，也可能是任何并发操作）：不再中止，
+  // 回复照常返回，附注如实报出路径，也不代为回滚。
+  const observed: [string, RegExp][] = [
+    ["sync-write", /unexpected-side-effect\.txt/],
+    ["edit-existing", /source\.txt/],
+    ["delete", /source\.txt/],
+    ["rename", /renamed\.txt|source\.txt/],
+    ["transient", /transient\.txt/],
+    ["stream-write", /during-stream\.txt/],
+  ];
+  for (const [scenario, pattern] of observed) {
+    mode = scenario!;
+    const result = await invoke();
+    assert.ok(result.text.includes("这是咨询回复"), `${scenario}: 回复不得作废`);
+    assert.match(result.notice ?? "", pattern!, `${scenario}: 附注`);
+    if (scenario === "sync-write") assert.ok(existsSync(join(projectDir, "unexpected-side-effect.txt")), "不代为回滚已发生的写入");
     for (const file of ["unexpected-side-effect.txt", "during-stream.txt", "renamed.txt"]) rmSync(join(projectDir, file), { force: true });
     writeFileSync(source, "before");
     release = undefined;
   }
-  assert.ok(killed >= 9);
-  assert.equal(cleanup, 9);
+
+  // 2026-09-08 事故的回归：咨询进行中，别的进程（验收合并 / 其他任务 / 用户编辑）写了项目
+  // 文件。回复必须照常完成并附注，不得把成员中止。
+  mode = "hold";
+  changed = () => { writeFileSync(join(projectDir, "merge-artifact.txt"), "并发合并产物"); release?.(); };
+  const concurrent = await invoke();
+  assert.ok(concurrent.text.includes("这是咨询回复"), "并发变更不得作废回复");
+  assert.match(concurrent.notice ?? "", /merge-artifact\.txt/, "并发变更须附注");
+  rmSync(join(projectDir, "merge-artifact.txt"));
+  changed = undefined;
+  release = undefined;
+
   mode = "runtime-write";
   await db.insert(projects).values({ id: "runtime", name: "包含 ash 数据的项目", repoPath: stage, createdAt: new Date().toISOString() });
-  await invokeChat(member, null, "只读咨询", AbortSignal.timeout(5000), "runtime");
+  assert.equal((await invokeChat(member, null, "只读咨询", AbortSignal.timeout(5000), "runtime")).notice, undefined, "ash 自身写入不附注");
+
   const service = new ChatService(invokeChat, async () => { throw new Error("咨询不应启动任务"); });
   const app = new Hono();
   mountChatRoutes(app, service);
   const request = (path: string, body?: unknown) => app.request(path, { method: body ? "POST" : "GET", headers: { "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) });
   const room = await (await request("/chats", { projectId: "project", name: "咨询测试", members: [member] })).json() as { id: string };
-  const settle = async () => {
-    for (let tries = 0; tries < 100; tries++) {
+  const settle = async (status: string) => {
+    for (let tries = 0; tries < 150; tries++) {
       const snapshot = await (await request(`/chats/${room.id}`)).json() as ChatSnapshot;
-      if (snapshot.messages.at(-1)?.status === "failed") return snapshot;
+      if (snapshot.messages.at(-1)?.status === status) return snapshot;
       await delay(20);
     }
-    throw new Error("副作用警告未持久化");
+    throw new Error(`消息未落到 ${status}`);
   };
   for (const [scenario, path] of [["sync-write", "unexpected-side-effect"], ["dependency-write", "node_modules"]]) {
     mode = scenario!;
     await request(`/chats/${room.id}/messages`, { id: `consultation-${scenario}`, body: "@codex 你建议登录页怎么改？" });
-    const failed = await settle();
-    assert.ok(failed.messages.at(-1)!.body.includes(path!));
-    assert.equal(failed.messages.at(-1)!.taskId, null);
-    const refreshed = await (await request(`/chats/${room.id}`)).json() as ChatSnapshot;
-    assert.equal(refreshed.messages.at(-1)!.body, failed.messages.at(-1)!.body);
+    const done = await settle("done");
+    const last = done.messages.at(-1)!;
+    assert.ok(last.body.includes("这是咨询回复"), `${scenario}: 回复保留`);
+    assert.ok(last.body.includes(path!), `${scenario}: 附注持久化并包含路径`);
+    assert.equal(last.taskId, null);
+    const stored = (await db.select().from(chatMessages).where(eq(chatMessages.id, last.id))).at(0)!;
+    assert.equal(stored.modelReply, "这是咨询回复，不建任务。", "附注不得混入模型回复原文");
     await service.recover();
-    assert.equal((await (await request(`/chats/${room.id}`)).json() as ChatSnapshot).messages.at(-1)!.body, failed.messages.at(-1)!.body);
+    const refreshed = await (await request(`/chats/${room.id}`)).json() as ChatSnapshot;
+    assert.equal(refreshed.messages.at(-1)!.body, last.body, "刷新/恢复后附注保留");
     assert.equal((await db.select().from(tasks)).length, 0);
   }
   rmSync(join(projectDir, "unexpected-side-effect.txt"));
@@ -131,15 +163,12 @@ try {
   let stopped: Promise<void> | undefined;
   changed = () => { stopped = service.stop(room.id); };
   await request(`/chats/${room.id}/messages`, { id: "stop-while-writing", body: "@codex 再给建议" });
-  const stoppedResult = await settle();
+  const stoppedSnapshot = await settle("stopped");
   await stopped;
-  assert.match(stoppedResult.messages.at(-1)!.body, /咨询已中止/);
-  assert.equal(stoppedResult.messages.at(-1)!.status, "failed", "停止不能覆盖副作用警告");
-  const stored = (await db.select().from(chatMessages).where(eq(chatMessages.id, stoppedResult.messages.at(-1)!.id))).at(0)!;
-  assert.equal(stored.status, "failed");
-  assert.equal(readFileSync(source, "utf8"), "before");
+  assert.match(stoppedSnapshot.messages.at(-1)!.body, /你已停止这次回复/);
   assert.equal((await db.select().from(chatRooms)).length, 1);
-  console.log("chat boundary: 只读工具通过；写入/未知命令失败；无工具事件的同步/流式写入、修改、删除、重命名均告警；源码和依赖写入的警告刷新/恢复后保留，停止不覆盖警告，咨询不创建任务");
+  assert.equal(cleanup, runs, "每次咨询都要清理执行器会话");
+  console.log("chat boundary: 只读工具通过；写入/未知命令的工具事件仍硬中止；无工具事件的目录变化（含并发合并）不再中止、附注如实持久展示且不进模型回复；ash 自身写入不附注；停止照常生效；咨询不创建任务");
 } finally {
   release?.();
   CLI_SPEC_BY_KEY.codex.factory = original;

@@ -122,7 +122,8 @@ export class ChatService {
       const context = JSON.parse(message.context) as { prompt?: string; cutoff: number; tail?: string[]; source: string; member: ChatMember };
       const member = context.member;
       const prompt = context.prompt ?? await this.contexts.prepare(room, member, context.cutoff, context.source, abort.signal, context.tail);
-      const result = parseChatReply(await this.invoke(member, room.ownerUserId, prompt, abort.signal, room.projectId));
+      const invoked = await this.invoke(member, room.ownerUserId, prompt, abort.signal, room.projectId);
+      const result = parseChatReply(invoked.text);
       abort.signal.throwIfAborted();
       let taskToStart: string | null = null;
       if (result.task) {
@@ -141,7 +142,9 @@ export class ChatService {
         abort.signal.throwIfAborted();
         taskToStart = taskId;
       }
-      const settled = await db.update(chatMessages).set({ body: result.reply, modelReply: result.reply, status: "done", context: null })
+      // 并发变更附注只进展示用的 body，不进 modelReply：后续轮次的上下文取 modelReply，
+      // 附注混进去会被智能体当成对话内容复读。
+      const settled = await db.update(chatMessages).set({ body: invoked.notice ? `${result.reply}\n\n${invoked.notice}` : result.reply, modelReply: result.reply, status: "done", context: null })
         .where(and(eq(chatMessages.id, message.id), eq(chatMessages.status, "running"))).returning();
       if (taskToStart && settled.length && !abort.signal.aborted) {
         void this.startTask(taskToStart).catch(async (error) => {

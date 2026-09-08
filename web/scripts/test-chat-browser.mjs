@@ -115,12 +115,13 @@ try {
   await page.waitForFunction(() => document.querySelector(".chat-jump")?.classList.contains("is-hidden"));
   for (const [scenario, path] of [["越界验证", "unexpected-side-effect.txt"], ["依赖越界验证", "node_modules"]]) {
     await send(`@codex 你建议怎么改？${scenario}`);
-    const boundary = page.locator(".chat-message.is-failed").filter({ hasText: path });
-    await boundary.getByText("咨询已中止", { exact: false }).waitFor();
-    assert.equal(await page.getByText("不应显示为正常咨询", { exact: true }).count(), 0);
+    const noticed = page.locator(".chat-message").filter({ hasText: path });
+    await noticed.getByText("咨询期间项目目录出现并发变更", { exact: false }).waitFor();
+    await noticed.getByText("越界写入的目录变化会随本回复附注展示。", { exact: false }).waitFor();
+    assert.equal(await page.locator(".chat-message.is-failed").count(), 0, "目录变化不再判失败");
     assert.equal(await page.locator(".chat-task-card").count(), 0);
     await page.reload();
-    await boundary.getByText("未自动撤销改动", { exact: false }).waitFor();
+    await noticed.getByText("如非预期请检查项目", { exact: false }).waitFor();
   }
   await page.screenshot({ path: `${output}/chat-boundary.png`, animations: "disabled" });
   await send("@codex 请实现频道导航与任务状态卡。");

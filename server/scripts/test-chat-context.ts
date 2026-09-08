@@ -73,8 +73,8 @@ const invoke: ConstructorParameters<typeof ChatService>[0] = async (member, _own
     }
     signal.throwIfAborted();
     await delay(5);
-    if (summary) return mode === "invalid" ? '{"task":{"title":"不得执行"}}' : '{"summary":"用户早期决定 KEEP-0；保留任务 TASK-1 的关联，兼容性仍待验证。"}';
-    return JSON.stringify({ reply: `回复-${member.name}-已完成`, task: null });
+    if (summary) return { text: mode === "invalid" ? '{"task":{"title":"不得执行"}}' : '{"summary":"用户早期决定 KEEP-0；保留任务 TASK-1 的关联，兼容性仍待验证。"}' };
+    return { text: JSON.stringify({ reply: `回复-${member.name}-已完成`, task: null }) };
   } finally { inflight--; }
 };
 const service = new ChatService(invoke, async () => { throw new Error("摘要不能创建任务"); }, policy);
@@ -234,7 +234,7 @@ try {
   let partialCalls = 0;
   const partialManager = new ChatContextManager(async () => {
     if (++partialCalls === 2) throw new Error("模型上游 503");
-    return '整理好了。```json\n{"summary":"保留用户决定 KEEP-0","metadata":{"extra":true}}\n```';
+    return { text: '整理好了。```json\n{"summary":"保留用户决定 KEEP-0","metadata":{"extra":true}}\n```' };
   }, { ...policy, batchTokens: 3000 });
   await partialManager.prewarm(partial.id, members[0]!);
   assert.equal(partialCalls, 2);
@@ -266,7 +266,7 @@ try {
   await seed(tolerant.id, 65, 1000);
   await setContextState(tolerant.id, "failed", "旧格式错误");
   await db.update(chatContextStates).set({ failedAt: new Date(Date.now() - 60001).toISOString() }).where(eq(chatContextStates.roomId, tolerant.id));
-  const tolerantManager = new ChatContextManager(async () => '整理结果：\n{"summary":"KEEP-0 与 TASK-1 已确认","extra":"忽略"}', policy);
+  const tolerantManager = new ChatContextManager(async () => ({ text: '整理结果：\n{"summary":"KEEP-0 与 TASK-1 已确认","extra":"忽略"}' }), policy);
   const tolerantPrompt = await tolerantManager.prepare(tolerant, members[0]!, await captureChatHistory(tolerant.id), "继续", new AbortController().signal);
   assert.ok(tolerantPrompt.includes("KEEP-0 与 TASK-1 已确认"));
   assert.ok(estimateChatTokens(withGlobalBrowserPolicy(tolerantPrompt, "full")) <= policy.inputTokens);
@@ -358,7 +358,7 @@ try {
   let running = 0;
   let peak = 0;
   const limited = limitedChatInvoke(async (_member, _owner, _prompt, signal) => {
-    signal.throwIfAborted(); running++; peak = Math.max(peak, running); await delay(20); running--; return "ok";
+    signal.throwIfAborted(); running++; peak = Math.max(peak, running); await delay(20); running--; return { text: "ok" };
   });
   const canceled = new AbortController();
   const queue = Array.from({ length: 8 }, (_, i) => limited(members[0]!, null, "fixture", i === 7 ? canceled.signal : new AbortController().signal, "project", i % 2 ? { purpose: "summary" } : undefined));
