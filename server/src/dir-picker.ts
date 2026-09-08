@@ -258,7 +258,7 @@ async function pickOnLinux(start: string): Promise<PickResult> {
 
 /**
  * 削掉路径末尾的分隔符。AppleScript 的 `POSIX path of` 给文件夹的路径**一律带尾斜杠**
- * （实测:选中 `server/src` 回来的是 `/Users/fjh/code/ash/server/src/`），原样填进
+ * （例如选中 `server/src` 回来的是 `/Users/example/code/ash/server/src/`），原样填进
  * 输入框会让同一个目录在库里存出两种写法。根目录（`/`、`C:\`）本身就是分隔符,不能削。
  */
 export function normalizePickedPath(raw: string): string {

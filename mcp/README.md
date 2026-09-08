@@ -30,10 +30,10 @@ MCP 进程通过 `ASH_URL` 找 server，默认 `http://localhost:4317`。
 
 ```bash
 # 当前项目可用（local 作用域）
-claude mcp add ash -e ASH_URL=http://localhost:4317 -- node /Users/fjh/code/ash/mcp/dist/index.js
+claude mcp add ash -e ASH_URL=http://localhost:4317 -- node /Users/example/code/ash/mcp/dist/index.js
 
 # 或所有项目都可用（user 作用域）—— 推荐，编排别的仓库时也能用
-claude mcp add ash --scope user -e ASH_URL=http://localhost:4317 -- node /Users/fjh/code/ash/mcp/dist/index.js
+claude mcp add ash --scope user -e ASH_URL=http://localhost:4317 -- node /Users/example/code/ash/mcp/dist/index.js
 ```
 
 或提交进仓库、团队共享（项目根 `.mcp.json`）：
@@ -60,7 +60,7 @@ claude mcp add ash --scope user -e ASH_URL=http://localhost:4317 -- node /Users/
 同一个 server 通用。Codex 的 `mcp add` 里**服务名是必填位置参数**，env 用 `--env`：
 
 ```bash
-codex mcp add ash --env ASH_URL=http://localhost:4317 -- node /Users/fjh/code/ash/mcp/dist/index.js
+codex mcp add ash --env ASH_URL=http://localhost:4317 -- node /Users/example/code/ash/mcp/dist/index.js
 ```
 
 查看 `codex mcp list` / `codex mcp get ash`；删除 `codex mcp remove ash`。写进 `~/.codex/config.toml`：
@@ -68,13 +68,13 @@ codex mcp add ash --env ASH_URL=http://localhost:4317 -- node /Users/fjh/code/as
 ```toml
 [mcp_servers.ash]
 command = "node"
-args = ["/Users/fjh/code/ash/mcp/dist/index.js"]
+args = ["/Users/example/code/ash/mcp/dist/index.js"]
 env = { ASH_URL = "http://localhost:4317" }
 ```
 
 ## 给智能体的话术示例
 
-> 用 ash 在 `/Users/fjh/code/ash` 建一组依赖任务：先写测试、再实现、最后跑校验，三步串起来（A 完成才做 B），都用 claude，建完就开跑。
+> 用 ash 在 `/Users/example/code/ash` 建一组依赖任务：先写测试、再实现、最后跑校验，三步串起来（A 完成才做 B），都用 claude，建完就开跑。
 
 智能体会调 `create_task_chain(repoPath, tasks:[…], agentType:"claude", run:true)` 一次搞定。
 

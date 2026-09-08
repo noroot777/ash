@@ -8,7 +8,7 @@ const original = [
   "检查原始需求里的图片链接。",
   "",
   "[用户附带的文件，请用 Read 工具查看以下本地文件]",
-  "- /Users/fjh/code/ash/data/uploads/KxOxbl42hcRf-image.png",
+  "- /Users/example/code/ash/data/uploads/KxOxbl42hcRf-image.png",
 ].join("\n");
 
 createRoot(document.getElementById("root")!).render(
@@ -28,8 +28,8 @@ createRoot(document.getElementById("root")!).render(
                   <InspectorPromptContent
                     text="检查追问里的图片链接。"
                     attachments={[
-                      "/Users/fjh/code/ash/data/uploads/R4nd0mAbC123-follow-up.jpg",
-                      "/Users/fjh/code/ash/data/uploads/D0cumentAb12-spec.pdf",
+                      "/Users/example/code/ash/data/uploads/R4nd0mAbC123-follow-up.jpg",
+                      "/Users/example/code/ash/data/uploads/D0cumentAb12-spec.pdf",
                     ]}
                     emptyText="（空消息）"
                   />

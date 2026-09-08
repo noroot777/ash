@@ -1,7 +1,7 @@
 # 任务：生成 4 张高保真手机端 App 设计图（PNG）
 
 你是一名顶级移动产品设计美术总监。请**实际生成图片文件**（用你的文生图能力），不要只写描述、不要写代码。
-把生成的 PNG 保存到目录：`/Users/fjh/code/ash/mobile/design-mockups/`
+把生成的 PNG 保存到目录：`/Users/example/code/ash/mobile/design-mockups/`
 
 ## 产品背景
 这是一个面向开发者的「AI Agent 任务编排系统」(代号 Ash) 的手机 App。

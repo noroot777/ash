@@ -24,9 +24,9 @@ const originalFetch = globalThis.fetch;
 
 try {
   assert.equal(isLocalDiskImagePath("/tmp/cli-drawer.jpg"), true);
-  assert.equal(isLocalDiskImagePath("file:///Users/fjh/cli-drawer.png"), true);
+  assert.equal(isLocalDiskImagePath("file:///Users/example/cli-drawer.png"), true);
   assert.equal(isLocalDiskImagePath("/api/uploads/cli-drawer.jpg"), false);
-  assert.equal(localDiskPath("/Users/fjh/My%20Demo/index.html"), "/Users/fjh/My Demo/index.html");
+  assert.equal(localDiskPath("/Users/example/My%20Demo/index.html"), "/Users/example/My Demo/index.html");
   assert.equal(localDiskPath("file:///Volumes/demo/My%20Demo/index.html"), "/Volumes/demo/My Demo/index.html");
   assert.equal(localDiskPath("C:\\work\\demo\\index.html"), "C:\\work\\demo\\index.html");
   assert.equal(localDiskPath("/api/tasks/demo/file"), null);

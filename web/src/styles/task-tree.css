@@ -285,7 +285,7 @@
   display: none;
 }
 
-/* 铺开时项目名定宽：让它跟着字数伸缩的话，标题起点会一行一个位置（harness 一档、
+/* 铺开时项目名定宽：让它跟着字数伸缩的话，标题起点会一行一个位置（ash 一档、
    knowledge-base 另一档），整列读起来全是锯齿。定宽后标题左边缘齐平，扫得动。 */
 .workspace-sidebar.is-spread .workspace-task-project small {
   max-width: none;

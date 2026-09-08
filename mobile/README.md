@@ -11,7 +11,7 @@
 
 ```bash
 # 1) 起后端（在 ash 根目录）
-cd /Users/fjh/code/ash
+cd /Users/example/code/ash
 npm run dev          # 或 npm run build && npm start，监听 :4317（0.0.0.0）
 
 # 2) 起手机端

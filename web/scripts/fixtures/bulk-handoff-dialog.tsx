@@ -18,7 +18,7 @@ const preflight = (overrides: Record<string, unknown> = {}) => ({
     peerStatus: "approved",
     encrypted: true,
   },
-  projects: [{ id: "ash", name: "ash", repoPath: "/Users/fjh/code/ash", isRepo: true }],
+  projects: [{ id: "ash", name: "ash", repoPath: "/Users/example/code/ash", isRepo: true }],
   suggestedProjectId: "ash",
   // 能力握手:这个夹具验的是信息层级,让它落在「对得上」那一档,别把握手的红块
   // 混进排版断言里(握手自己的用例在 server 的 test-handoff-capability*)。
@@ -113,7 +113,7 @@ const liveTasks = new URLSearchParams(window.location.search).has("empty")
     ? tasks.filter((item) => item.id === "t-git" || item.id === "t-plain")
     : tasks;
 
-const project = { id: "p1", name: "knowledge-base", repoPath: "/Users/fjh/code/kb" } as unknown as ProjectView;
+const project = { id: "p1", name: "knowledge-base", repoPath: "/Users/example/code/kb" } as unknown as ProjectView;
 const target: HandoffTarget = {
   name: "mac-mini",
   url: "http://mac-mini:4317",
