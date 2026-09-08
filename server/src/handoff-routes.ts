@@ -41,6 +41,7 @@ import { now } from "./util.js";
 import { mountHandoffRemoteRoutes } from "./handoff-remote.js";
 import { assertReturnProject, listReturnGrants, returnArchiveForPeer } from "./handoff-return.js";
 import { returnTargetForTask, sourceUrlFromPeer } from "./handoff-return-address.js";
+import { listSourceAddresses, updateSourceAddress } from "./handoff-source-address.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { isMultiUser } from "./auth/mode.js";
 import { countUsers } from "./auth/store.js";
@@ -443,6 +444,21 @@ export function mountHandoffRoutes(api: Hono): void {
   // `GET /settings` 会把整份吐回前端(§十一)。自用模式仍读写 app_settings,
   // 行为与本功能上线前一致。读侧永不回显 key,只报 hasKey。
   api.get("/handoff/targets", async (c) => c.json({ targets: await listTargets(actorOf(c)) }));
+
+  api.get("/handoff/targets/sources", async (c) => {
+    try { return c.json({ sources: await listSourceAddresses(actorOf(c)) }); }
+    catch (e) { return fail(c, e); }
+  });
+
+  api.put("/handoff/targets/source-address", async (c) => {
+    const body = await c.req.json().catch(() => null) as { fingerprint?: unknown; url?: unknown } | null;
+    if (typeof body?.fingerprint !== "string" || typeof body?.url !== "string") {
+      return c.json({ error: "缺来源机指纹或地址" }, 400);
+    }
+    try {
+      return c.json({ targets: await updateSourceAddress(actorOf(c), body.fingerprint, body.url) });
+    } catch (e) { return fail(c, e); }
+  });
 
   api.post("/handoff/targets", async (c) => {
     const b = (await c.req.json().catch(() => ({}))) as { name?: string; url?: string; peerKey?: string };

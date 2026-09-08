@@ -20,6 +20,7 @@ import type {
   Task,
 } from "@ash/shared";
 import type { RemoteTaskSnapshot, ReplyTaskResult } from "./apiTypes.ts";
+import type { HandoffSourceAddress } from "@ash/shared/handoff";
 import { id, json, request } from "./apiClient.ts";
 
 export type TaskScopedHandoffPreflightResult = HandoffPreflightResult & { taskScopedReturn: boolean };
@@ -94,6 +95,10 @@ export const handoffApi = {
   // 那条路必须与本功能上线前逐字节一致,所以自用模式的编辑仍走 patchSettings。
   handoffTargets: async (): Promise<HandoffTarget[]> =>
     (await request<{ targets: HandoffTarget[] }>("/handoff/targets")).targets,
+  handoffSourceAddresses: async (): Promise<HandoffSourceAddress[]> =>
+    (await request<{ sources: HandoffSourceAddress[] }>("/handoff/targets/sources")).sources,
+  updateHandoffSourceAddress: async (fingerprint: string, url: string): Promise<HandoffTarget[]> =>
+    (await request<{ targets: HandoffTarget[] }>("/handoff/targets/source-address", json("PUT", { fingerprint, url }))).targets,
   addHandoffTarget: async (input: { name: string; url: string; peerKey?: string }): Promise<HandoffTarget[]> =>
     (await request<{ targets: HandoffTarget[] }>("/handoff/targets", json("POST", input))).targets,
   patchHandoffTarget: async (

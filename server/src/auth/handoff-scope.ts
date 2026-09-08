@@ -14,9 +14,10 @@
 // 设置页和接力对话框里正常填写。
 import { and, eq, inArray } from "drizzle-orm";
 import type { HandoffTarget } from "@ash/shared";
-import { getAppSettings, patchAppSettings } from "../app-settings.js";
+import { getAppSettings, invalidateInstanceCache, parseAppSettingsPatch, patchAppSettings } from "../app-settings.js";
 import { db } from "../db/index.js";
-import { handoffLocalPeerKeys, userHandoffTargets } from "../db/schema.js";
+import { appSettings, handoffLocalPeerKeys, userHandoffTargets } from "../db/schema.js";
+import { sameFingerprint } from "../handoff-identity.js";
 import { HandoffError } from "../handoff-types.js";
 import { id, now } from "../util.js";
 import type { Actor } from "./context.js";
@@ -125,6 +126,59 @@ export function toPublicTarget(t: ResolvedTarget): HandoffTarget {
 
 export async function listTargets(actor: Actor): Promise<HandoffTarget[]> {
   return (await resolveTargetsFor(ownerIdOf(actor))).map(toPublicTarget);
+}
+
+export async function saveVerifiedTargetAddress(
+  actor: Actor,
+  source: { name: string; url: string; peerFp: string },
+): Promise<void> {
+  const multi = await isMultiUser();
+  const owner = ownerIdOf(actor);
+  if (multi && !owner) throw new HandoffError("请先登录", 401);
+  const samePeer = (target: { peerFp?: string | null }) => !!target.peerFp && sameFingerprint(target.peerFp, source.peerFp);
+  const mergedTarget = (target: { url: string; peerFp?: string | null }) => samePeer(target) || sameUrl(target.url, source.url);
+  await db.transaction(async (tx) => {
+    const before = multi ? [] : (await getAppSettings(tx)).handoffTargets;
+    const keys = multi ? new Map<string, string>() : new Map(
+      (await tx.select().from(handoffLocalPeerKeys)).map((row) => [row.url, row.peerKey]),
+    );
+    const targets: ResolvedTarget[] = multi
+      ? await tx.select().from(userHandoffTargets).where(eq(userHandoffTargets.userId, owner!))
+      : before.map((target) => ({ ...target, peerKey: keys.get(keyUrl(target.url)) ?? "" }));
+    if (targets.some((target) => sameUrl(target.url, source.url) && target.peerFp && !samePeer(target))) {
+      throw new HandoffError("这个地址已登记为另一台机器，请先检查接力目标机设置；原地址未修改。", 409);
+    }
+    const merged = targets.filter(mergedTarget);
+    const previous = merged.find(samePeer) ?? merged[0];
+    const credentials = new Set([...merged.map((target) => target.peerKey), keys.get(keyUrl(source.url)) ?? ""].filter(Boolean));
+    if (credentials.size > 1) {
+      throw new HandoffError("新旧地址配置了不同的账号 key，原地址未修改。请在「设置 → 默认规则 → 任务接力」统一或清空不再使用的 key 后重试。", 409);
+    }
+    const peerKey = [...credentials][0] ?? "";
+    if (multi) {
+      if (previous?.id) {
+        await tx.update(userHandoffTargets).set({ url: source.url, peerFp: source.peerFp, peerKey })
+          .where(and(eq(userHandoffTargets.id, previous.id), eq(userHandoffTargets.userId, owner!)));
+        const duplicates = merged.filter((target) => target.id !== previous.id).map((target) => target.id!);
+        if (duplicates.length) await tx.delete(userHandoffTargets)
+          .where(and(eq(userHandoffTargets.userId, owner!), inArray(userHandoffTargets.id, duplicates)));
+      } else {
+        await tx.insert(userHandoffTargets).values({ id: id(), userId: owner!, ...source, peerKey, createdAt: now() });
+      }
+      return;
+    }
+    const updated = [...before.filter((target) => !mergedTarget(target)), { ...source, name: previous?.name ?? source.name }];
+    try { parseAppSettingsPatch({ handoffTargets: updated }); }
+    catch { throw new HandoffError("接力目标机设置无法保存，请检查名称、地址或目标机数量；原地址未修改。", 409); }
+    const value = JSON.stringify(updated);
+    await tx.insert(appSettings).values({ key: "handoffTargets", value })
+      .onConflictDoUpdate({ target: appSettings.key, set: { value } });
+    if (peerKey) await tx.insert(handoffLocalPeerKeys).values({ url: keyUrl(source.url), peerKey, updatedAt: now() })
+      .onConflictDoUpdate({ target: handoffLocalPeerKeys.url, set: { peerKey, updatedAt: now() } });
+    const obsoleteUrls = [...new Set(merged.map((target) => keyUrl(target.url)))].filter((url) => url !== keyUrl(source.url));
+    if (obsoleteUrls.length) await tx.delete(handoffLocalPeerKeys).where(inArray(handoffLocalPeerKeys.url, obsoleteUrls));
+  });
+  if (!multi) await invalidateInstanceCache();
 }
 
 /**

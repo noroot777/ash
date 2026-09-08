@@ -69,9 +69,9 @@ const isSettingKey = (key: string): key is keyof AppSettings =>
 
 // Ignore malformed persisted values and fall back to the factory default. The
 // PATCH boundary prevents new bad values; this only protects hand-edited/old DBs.
-export async function getAppSettings(): Promise<AppSettings> {
+export async function getAppSettings(connection: Pick<typeof db, "select"> = db): Promise<AppSettings> {
   const merged: AppSettings = { ...DEFAULT_APP_SETTINGS };
-  for (const row of await db.select().from(appSettings)) {
+  for (const row of await connection.select().from(appSettings)) {
     if (!isSettingKey(row.key)) continue;
     try {
       const value: unknown = JSON.parse(row.value);
@@ -110,7 +110,7 @@ export async function writeSystemSetting<K extends keyof AppSettings>(
  * 动态 import 是为了避开静态环:`mode.ts` 依赖本模块读设置。这条路只在写设置时走,
  * 频次极低。
  */
-async function invalidateInstanceCache(): Promise<void> {
+export async function invalidateInstanceCache(): Promise<void> {
   const { invalidateInstanceConfig, instanceConfig } = await import("./auth/mode.js");
   invalidateInstanceConfig();
   // 立刻回填:同步镜像(spawn 那条路读的那一位)只在解析实例配置时刷新,
