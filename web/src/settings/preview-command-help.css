@@ -16,7 +16,7 @@
 .task-confirm-dialog.preview-command-help-dialog {
   display: flex;
   width: min(720px, calc(100vw - 32px));
-  max-height: min(860px, calc(100dvh - 32px));
+  max-height: calc(100dvh - 32px);
   flex-direction: column;
   overflow: hidden;
 }
@@ -43,6 +43,17 @@
   margin-top: 18px;
   border-top: 1px solid var(--line);
   padding-top: 18px;
+}
+
+.preview-command-help-content[data-more-below] {
+  mask-image: linear-gradient(to bottom, black calc(100% - 20px), transparent);
+}
+
+.preview-command-help-scroll-hint {
+  align-self: center;
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .preview-command-help-content h3 {
