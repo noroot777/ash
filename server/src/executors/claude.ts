@@ -4,6 +4,7 @@ import { readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { NativeWorkTrace } from "./native-work.js";
 import type { AgentEvent, AgentType } from "@ash/shared";
 import { guessContextWindow } from "@ash/shared/usage";
 import { cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@ash/shared/cli-overrides";
@@ -480,6 +481,7 @@ export async function* parseClaudeStream(
   let contextUsed = 0;
   let contextModel: string | null = null;
   const seenImages = new Set<string>();
+  const nativeWork = new NativeWorkTrace();
 
   const rl = createInterface({ input: child.stdout! });
   rl.on("line", (line) => {
@@ -489,6 +491,17 @@ export async function* parseClaudeStream(
     try {
       ev = JSON.parse(t);
     } catch {
+      return;
+    }
+    for (const activity of nativeWork.claudeMessage(ev)) push(activity);
+    if (ev.parent_tool_use_id) {
+      for (const block of Array.isArray(ev.message?.content) ? ev.message.content : []) {
+        if (block.type === "tool_result") {
+          for (const path of persistToolResultImages(block.content, seenImages)) push({ kind: "attachment", path });
+        } else if (block.type === "text" && typeof block.text === "string") {
+          for (const path of persistMarkdownImages(block.text, seenImages)) push({ kind: "attachment", path });
+        }
+      }
       return;
     }
     if (ev.type === "control_response") {
@@ -557,7 +570,8 @@ export async function* parseClaudeStream(
         if (block.type === "text") {
           hadText = true; // 真模型的 text 已经由 deltas 流过 —— 不要再 push 一遍
           if (synthetic && block.text) push({ kind: "text", text: block.text });
-        } else if (block.type === "tool_use") push({ kind: "tool", name: block.name, detail: shortJson(block.input) });
+        } else if (block.type === "tool_use") push(nativeWork.call(block.name, block.input, block.id)
+          ?? { kind: "tool", name: block.name, detail: shortJson(block.input) });
       }
       if (hadText) push({ kind: "text", text: "\n\n" }); // paragraph break, identical live & on reload
       for (const block of ev.message.content) {
@@ -568,6 +582,8 @@ export async function* parseClaudeStream(
       flushText();
       for (const block of ev.message.content) {
         if (block?.type !== "tool_result") continue;
+        const activity = nativeWork.result(block.tool_use_id, block.content, block.is_error === true);
+        if (activity) push(activity);
         for (const path of persistToolResultImages(block.content, seenImages)) push({ kind: "attachment", path });
       }
     } else if (ev.type === "result") {

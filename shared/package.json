@@ -6,6 +6,10 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./native-work": {
+      "types": "./src/native-work.ts",
+      "default": "./src/native-work.ts"
+    },
     "./chat": {
       "types": "./src/chat.ts",
       "default": "./src/chat.ts"

@@ -54,6 +54,7 @@ export function useConversation(taskId: string, revision = 0) {
   const timelineRef = useRef<TimelineEntry[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const [traceError, setTraceError] = useState<Error | null>(null);
 
   const replaceTimeline = useCallback((next: TimelineEntry[]) => {
     timelineRef.current = next;
@@ -75,18 +76,21 @@ export function useConversation(taskId: string, revision = 0) {
     const cutoff = timelineRef.current.length;
     setRefreshing(true);
     setError(null);
+    setTraceError(null);
     try {
       const nextSessions = await api.sessions(taskId);
+      let traceFailures = 0;
       const outputs = await Promise.all(
         nextSessions.map(async (session) => {
           const [output, trace] = await Promise.all([
             api.sessionOutput(session.id).catch(() => ""),
-            api.sessionTrace(session.id).catch(() => []),
+            api.sessionTrace(session.id).catch(() => { traceFailures += 1; return []; }),
           ]);
           return { session, output, trace };
         }),
       );
       setSessions(nextSessions);
+      if (traceFailures) setTraceError(new Error(`${traceFailures} 个会话的执行过程读取失败，子智能体与内部任务记录可能不完整。`));
       setPersisted(outputs.filter((entry) => entry.output.trim() || entry.trace.length));
       if (preserveArrivals) {
         const current = timelineRef.current;
@@ -163,5 +167,5 @@ export function useConversation(taskId: string, revision = 0) {
     [persisted, sessions, timeline],
   );
 
-  return { sessions, persisted, items, connected, refreshing, error, refetch, addUser };
+  return { sessions, persisted, items, connected, refreshing, error, traceError, refetch, addUser };
 }
