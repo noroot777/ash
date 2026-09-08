@@ -1,4 +1,5 @@
 import type { AgentType } from "./index.ts";
+import type { PreviewServiceState } from "./preview.ts";
 
 export const TASK_WORKFLOW_MODES = ["free", "preset"] as const;
 export type TaskWorkflowMode = (typeof TASK_WORKFLOW_MODES)[number];
@@ -91,6 +92,8 @@ export interface FreeReviewRun {
 }
 
 export interface FreeWorkflowPreviewState {
+  services?: PreviewServiceState[];
+  proxied?: boolean;
   /** 起来了**或者正在起**。界面拿它决定那颗开关是「打开预览」还是「关掉」。 */
   running: boolean;
   /**

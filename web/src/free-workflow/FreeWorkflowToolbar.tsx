@@ -1,3 +1,4 @@
+import { browserPreviewUrl } from "../lib/previewUrl.ts";
 import { useEffect, useRef, useState } from "react";
 import type { Task } from "@ash/shared";
 import { ArrowSquareOut, MagnifyingGlass, MonitorPlay, SpinnerGap, StopCircle, Terminal } from "@phosphor-icons/react";
@@ -151,7 +152,7 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
         // 一个此刻并不存在的预览。
         if (owns(taskId, token)) {
           notify(preview.url ? `预览已打开：${preview.url}` : "预览已打开");
-          if (preview.url) window.open(preview.url, "_blank", "noopener,noreferrer");
+          if (preview.url) window.open(browserPreviewUrl(preview.url), "_blank", "noopener,noreferrer");
         }
       }
       if (owns(taskId, token)) await free.reload(true);
@@ -201,7 +202,9 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
           {previewBusy ? <SpinnerGap size={13} className="is-spinning" /> : free.state?.preview.running ? <StopCircle size={13} weight="regular" /> : <MonitorPlay size={13} weight="regular" />}
           <span>{action === "closing" ? "关闭中" : action === "canceling" ? "取消中" : previewStarting ? "启动中·点此取消" : free.state?.preview.running ? "关闭预览" : "打开预览"}</span>
         </button>
-        {free.state?.preview.running && free.state.preview.url && <a href={free.state.preview.url} target="_blank" rel="noreferrer" aria-label="在新窗口打开预览"><ArrowSquareOut size={13} /><span>预览页</span></a>}
+        {free.state?.preview.running && (free.state.preview.services?.length
+          ? free.state.preview.services.filter((s) => s.url).map((s) => <a key={s.id} href={browserPreviewUrl(s.url!)} target="_blank" rel="noreferrer" aria-label={`打开 ${s.name}`}><ArrowSquareOut size={13} /><span>{free.state!.preview.services!.length > 1 ? s.name : "预览页"}</span></a>)
+          : free.state.preview.url && <a href={browserPreviewUrl(free.state.preview.url)} target="_blank" rel="noreferrer" aria-label="在新窗口打开预览"><ArrowSquareOut size={13} /><span>预览页</span></a>)}
         {/* 日志入口按 hasLog 给，不按 running 给：预览**起不来**的那一次同样留下了日志，
             而那正是最需要看它的时候。读日志是只读动作，接力/验收锁死也照给。
             logArmed 是启动期间的那一档：hasLog 要等这次 POST 回来才翻真，可日志从

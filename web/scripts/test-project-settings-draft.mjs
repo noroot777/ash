@@ -1,15 +1,3 @@
-// 项目设置里正在编辑的草稿不能被后台刷新静默吞掉。跑：npm -w web run test:project-settings-draft
-//
-// 钉的是一次真实事故的反面：预览命令这个框刚加上，用户输到一半，界面自己把它清空了，
-// 保存按钮跟着变灰，没有任何提示 —— 看上去就是「这个框坏了」。真凶不在这个框上，在
-// 面板顶上那颗 `useEffect(..., [project])`：WorkspaceShell 收到项目健康结果会
-// `{ ...project, health }` 换一个新对象，**内容一个字没变、身份变了**，于是三个框全被
-// 重置回服务端的值。那个请求进页面时发一次，之后每有任务结算还会再发，所以它不是
-// 「首次进入」的一次性问题，是编辑期间随时会来一下。
-//
-// 两条判据必须同时成立，少一条这颗 effect 就又会被人改回去：
-//   ① 同一个项目换对象身份 → 草稿留着（名称、目录、预览命令三个都算）
-//   ② project.id 变了 → 草稿冲掉（那已经是另一个项目的设置了）
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -31,47 +19,105 @@ try {
 
   browser = await chromium.launch(await chromeLaunchOptions());
   const page = await browser.newPage({ viewport: { width: 1000, height: 1200 } });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/project-settings-draft.html`);
+  const caseId = `${process.pid}-${Date.now()}`;
+  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/project-settings-draft.html?case=${caseId}`);
 
-  const preview = page.locator("label", { hasText: "「打开预览」跑哪条命令" }).locator("input");
+  const preview = page.getByRole("textbox", { name: "启动脚本", exact: true });
   const name = page.locator("label", { hasText: "项目名称" }).locator("input");
   const repoPath = page.locator("label", { hasText: "工作目录" }).locator("input");
+  const proxy = page.getByRole("combobox", { name: "通过 ash 反向代理访问" });
+  const savePreview = page.getByRole("button", { name: "保存预览设置" });
+  const scriptMode = page.getByRole("radio", { name: "自定义脚本", exact: true });
+  const servicesMode = page.getByRole("radio", { name: "选择服务", exact: true });
   await preview.waitFor();
 
-  // ① 编辑三个框，然后来一次健康刷新。
-  const DRAFT = "cd a4sms-front && pnpm run dev -- --port $PORT";
-  await preview.fill(DRAFT);
+  assert.equal(await preview.evaluate((node) => node.tagName), "TEXTAREA", "启动脚本应使用多行编辑器");
+  await page.getByText("当前使用直连：", { exact: false }).waitFor();
+  await page.getByTestId("mode-multi").click();
+  await page.getByText("当前使用反代：", { exact: false }).waitFor();
+  await proxy.selectOption("off");
+  await page.getByText("当前使用直连：", { exact: false }).waitFor();
+  await proxy.selectOption("on");
+  await page.getByTestId("mode-single").click();
+  await page.getByText("当前使用反代：", { exact: false }).waitFor();
+  await proxy.selectOption("auto");
+
+  const draft = [
+    "cd web",
+    "if [ -n \"$PORT\" ]; then",
+    "  npm run dev -- --host 0.0.0.0 --port \"$PORT\"",
+    "fi",
+  ].join("\n");
+  await preview.fill(draft);
   await name.fill("改了名字");
   await repoPath.fill("/workspace/改了目录");
-  const save = page.getByRole("button", { name: "保存预览命令" });
-  assert.equal(await save.isDisabled(), false, "输了字之后保存按钮应该是可按的");
+  assert.equal(await savePreview.isDisabled(), false, "编辑脚本后应能保存预览设置");
 
   await page.getByTestId("health-refresh").click();
-  // 刷新是同步 setState，等一帧就够；用 waitForFunction 而不是 sleep，免得把时序写进测试。
-  await page.waitForFunction(() => document.querySelectorAll("input").length > 0);
-  assert.equal(await preview.inputValue(), DRAFT, "健康刷新把用户正在输的预览命令吞了");
-  assert.equal(await name.inputValue(), "改了名字", "健康刷新把项目名称的草稿吞了");
-  assert.equal(await repoPath.inputValue(), "/workspace/改了目录", "健康刷新把工作目录的草稿吞了");
-  assert.equal(await save.isDisabled(), false, "草稿还在，保存按钮不该变灰");
+  await page.getByTestId("health-refresh").click();
+  assert.equal(await preview.inputValue(), draft, "同项目重新渲染吞掉了多行脚本草稿");
+  assert.equal(await name.inputValue(), "改了名字", "同项目重新渲染吞掉了项目名称草稿");
+  assert.equal(await repoPath.inputValue(), "/workspace/改了目录", "同项目重新渲染吞掉了工作目录草稿");
 
-  // 连来几次也一样 —— 现场里它是跟着任务结算反复发的。
+  await servicesMode.check();
+  await scriptMode.check();
+  assert.equal(await preview.inputValue(), draft, "切换启动方式后多行脚本草稿丢失");
+  await servicesMode.check();
+  await page.getByRole("button", { name: "检测服务" }).click();
+  await page.getByRole("status").waitFor();
+  assert.match(await page.getByRole("status").innerText(), /检测到 2 个候选/);
+
+  const webCommand = page.getByRole("textbox", { name: "网页前端 启动脚本" });
+  const apiCommand = page.getByRole("textbox", { name: "接口服务 启动脚本" });
+  await page.getByRole("checkbox", { name: "启动 网页前端" }).check();
+  await page.getByRole("checkbox", { name: "启动 接口服务" }).check();
+  const editedWebCommand = [
+    "cd web",
+    "npm run dev -- --port $PORT",
+    "  --strictPort",
+  ].join("\n");
+  await webCommand.fill(editedWebCommand);
+  await apiCommand.fill("cd server\nnpm run dev -- --port $PORT");
   await page.getByTestId("health-refresh").click();
-  await page.getByTestId("health-refresh").click();
-  assert.equal(await preview.inputValue(), DRAFT, "连续刷新之后草稿仍要在");
+  assert.equal(await webCommand.inputValue(), editedWebCommand, "同项目重新渲染吞掉了服务脚本草稿");
+  assert.equal(await page.getByText("已选 2 / 8").isVisible(), true, "检测结果应支持多选");
+
+  await proxy.selectOption("auto");
+  await savePreview.click();
+  await page.waitForFunction(
+    () => document.querySelector("[data-testid=notices]")?.textContent?.includes("预览设置已保存，下次打开预览时生效") ?? false,
+  );
+  assert.equal(await name.inputValue(), "改了名字", "保存预览设置不应冲掉基本信息草稿");
+  assert.equal(await repoPath.inputValue(), "/workspace/改了目录", "保存预览设置不应冲掉目录草稿");
+
+  const stored = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)), `ash-project-settings-fixture:${caseId}`);
+  assert.equal(stored["p-one"].previewConfig.mode, "services");
+  assert.equal(stored["p-one"].previewConfig.proxy, "auto");
+  assert.deepEqual(stored["p-one"].previewConfig.services.map((service) => service.enabled), [true, true]);
+  assert.equal(stored["p-one"].previewConfig.primaryServiceId, "web");
+  assert.equal(stored["p-one"].previewConfig.services[0].command, editedWebCommand);
+  assert.equal(stored["p-one"].previewCommand, draft);
+
+  await page.reload();
+  await servicesMode.waitFor();
+  assert.equal(await servicesMode.isChecked(), true, "刷新后没有读回已存启动方式");
+  assert.equal(await page.getByRole("checkbox", { name: "启动 网页前端" }).isChecked(), true, "刷新后丢了已选服务");
+  assert.equal(await page.getByRole("checkbox", { name: "启动 接口服务" }).isChecked(), true, "刷新后丢了第二个已选服务");
+  assert.equal(await page.getByRole("textbox", { name: "网页前端 启动脚本" }).inputValue(), editedWebCommand, "刷新后丢了已存服务脚本");
+  await scriptMode.check();
+  assert.equal(await page.getByRole("textbox", { name: "启动脚本", exact: true }).inputValue(), draft, "刷新后丢了已存总脚本");
+  await servicesMode.check();
+  await page.getByTestId("mode-multi").click();
+  await page.getByText("当前使用反代：", { exact: false }).waitFor();
 
   if (process.env.SETTINGS_DRAFT_SHOT) await page.screenshot({ path: process.env.SETTINGS_DRAFT_SHOT });
 
-  // ② 换成另一个项目：这时候必须重置，否则会把上一个项目的设置写到这一个头上。
   await page.getByTestId("switch-project").click();
-  await page.waitForFunction(() => {
-    const box = [...document.querySelectorAll("label")]
-      .find((l) => l.querySelector("span")?.textContent === "项目名称")?.querySelector("input");
-    return box?.value === "第二个项目";
-  });
-  assert.equal(await preview.inputValue(), "", "换了项目还留着上一个的预览命令草稿");
-  assert.equal(await repoPath.inputValue(), "/workspace/p-two", "换了项目要显示新项目的目录");
+  await page.getByRole("textbox", { name: "启动脚本", exact: true }).waitFor();
+  assert.equal(await page.getByRole("textbox", { name: "启动脚本", exact: true }).inputValue(), "", "换项目还留着上一个项目的脚本");
+  assert.equal(await repoPath.inputValue(), "/workspace/p-two", "换项目应显示新项目的目录");
 
-  console.log("project settings draft: ok");
+  console.log("project settings draft and preview settings: ok");
 } finally {
   await browser?.close();
   await server.close();

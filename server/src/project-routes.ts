@@ -1,4 +1,7 @@
 import { eq, inArray } from "drizzle-orm";
+import { createHash } from "node:crypto";
+import { MAX_PREVIEW_SCRIPT_LENGTH, parsePreviewConfig } from "@ash/shared/preview";
+import { detectPreviewCandidates } from "./preview-command.js";
 import { rmSync } from "node:fs";
 import { join, basename } from "node:path";
 import type { Context, Hono } from "hono";
@@ -37,6 +40,26 @@ import { deleteProjectInvites } from "./auth/user-routes.js";
 // 体检、分支列表)。「从 Git 检出」那条更重的路另住 project-clone.ts。
 
 export function mountProjectRoutes(api: Hono): void {
+  api.get("/projects/:id/preview/detect", async (c) => {
+    const pid = c.req.param("id");
+    try {
+      await requireProjectAdmin(actorOf(c), pid);
+      const row = (await db.select().from(projects).where(eq(projects.id, pid))).at(0);
+      if (!row) return c.json({ error: "项目不存在" }, 404);
+      const health = projectHealthLight(row.repoPath);
+      if (!health.exists) return c.json({ error: "项目目录不存在，请先保存有效的项目目录" }, 409);
+      const found = detectPreviewCandidates(row.repoPath, undefined, 3);
+      const unique = new Map(found.map((s) => [s.command, s]));
+      return c.json({ services: [...unique.values()].slice(0, 40).map((s) => ({
+        id: createHash("sha256").update(s.command).digest("hex").slice(0, 16),
+        name: s.label, directory: s.directory, command: s.command, kind: s.kind, enabled: false,
+      })), truncated: unique.size > 40 });
+    } catch (error) {
+      const mapped = authErrorResponse(error);
+      if (mapped) return c.json(mapped.body, mapped.status);
+      throw error;
+    }
+  });
   // ── projects ───────────────────────────────────────────────────────────────
   // repoPath health is computed, never persisted (§ path-awareness). The list
   // uses the cheap sync check; per-id and path-check endpoints do the full git probe.
@@ -88,6 +111,7 @@ export function mountProjectRoutes(api: Hono): void {
       apiKeys: null,
       workflowId: null,
       previewCommand: null,
+      previewConfig: null,
       createdAt: now(),
       ownerUserId: ownerIdOf(actor),
     };
@@ -155,6 +179,7 @@ export function mountProjectRoutes(api: Hono): void {
       apiKeys: null,
       workflowId: null,
       previewCommand: null,
+      previewConfig: null,
       createdAt: now(),
       ownerUserId: ownerIdOf(actor),
     };
@@ -218,8 +243,12 @@ export function mountProjectRoutes(api: Hono): void {
         return c.json({ error: "previewCommand 必须是字符串或 null" }, 400);
       }
       const cmd = typeof b.previewCommand === "string" ? b.previewCommand.trim() : "";
-      if (cmd.length > 2000) return c.json({ error: "预览命令太长了" }, 400);
+      if (cmd.length > MAX_PREVIEW_SCRIPT_LENGTH || cmd.includes("\0")) return c.json({ error: "预览脚本无效或过长（最多 16000 字）" }, 400);
       patch.previewCommand = cmd || null;
+    }
+    if (b.previewConfig !== undefined) {
+      try { patch.previewConfig = parsePreviewConfig(b.previewConfig); }
+      catch (error) { return c.json({ error: error instanceof Error ? error.message : "预览配置无效" }, 400); }
     }
     if (Object.keys(patch).length) await db.update(projects).set(patch).where(eq(projects.id, pid));
     const updated = (await db.select().from(projects).where(eq(projects.id, pid))).at(0)!;

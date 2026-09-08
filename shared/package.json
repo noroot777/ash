@@ -98,9 +98,9 @@
       "types": "./src/repo-url.ts",
       "default": "./src/repo-url.ts"
     },
-    "./session-notes": {
-      "types": "./src/session-notes.ts",
-      "default": "./src/session-notes.ts"
+    "./preview": {
+      "types": "./src/preview.ts",
+      "default": "./src/preview.ts"
     }
   },
   "scripts": {

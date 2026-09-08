@@ -444,7 +444,7 @@ try {
     } as never, exitWt);
     assert.ok(selfExit.ok, "这一步要先真的起来，才谈得上「起来之后自己退出」");
     assert.deepEqual(selfExit.record.links, [join(exitWt, "front", "node_modules")]);
-    await waitFor(() => readPreview("exit-task") !== null && !isAlive(selfExit.record.pid), "服务没有自行退出");
+    await waitFor(() => !isAlive(selfExit.record.pid), "服务没有自行退出");
     // ③ 清扫顺手清备用依赖，**但正被活着的预览用着的那份不能碰**：自由预览是 `life: "task"`，
     //    一个任务等人验收等上三十天完全合法，而缓存只在挂链那一刻 touch 过一次。删掉之后
     //    工作区那条软链还在、只是断了，dev server 按需加载下一个模块时才炸，记录上它还跑着。

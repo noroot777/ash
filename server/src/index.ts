@@ -16,6 +16,8 @@ import { inspectPortCommand, inspectProcessSync, killPidsCommand, listenerPidsSy
 // 纯粹读一个环境变量，不碰 DB，所以可以静态 import（其余会打开库的模块一律等拿到锁之后）。
 import { IS_PREVIEW_INSTANCE } from "./preview-instance.js";
 import { recordListeningPort } from "./listening-port.js";
+import { mountPreviewProxy, attachPreviewUpgrades } from "./preview-proxy.js";
+import { mountPreviewOpenRoutes } from "./preview-access.js";
 
 let singletonLock: SingletonLock | null = null;
 let activeServer: ReturnType<typeof serve> | null = null;
@@ -174,6 +176,7 @@ async function initializeServer() {
   reviewModule.mountReviewRoutes(routesModule.api);
   // 人工替一站「自动验证」签字放行（验证器不认账时唯一的出路）。
   verifyOverrideModule.mountVerifyOverrideRoutes(routesModule.api);
+  mountPreviewOpenRoutes(routesModule.api);
   // 预览进程是 ash 主动起的长驻服务，判据全落在盘上（data/runs/<task>/preview.json），
   // 所以重启后照样收得掉：先扫一遍孤儿，之后定时收 idle 那一档。
   const { startPreviewSweeper } = await import("./preview.js");
@@ -204,8 +207,9 @@ async function initializeServer() {
 }
 
 const app = new Hono();
-// 鉴权闸。**必须排在所有路由之前** —— 它是一张正面清单:公开的那几条逐条列在
-// auth/middleware.ts 里,其余一律要身份。自用模式下它整体空转(§三)。
+// 预览资源凭证在已认证的任务入口签发；资源侧再核对有效期、运行代和项目权限。
+mountPreviewProxy(app);
+// 其它路由统一经过身份闸；公开接口在 auth/middleware.ts 中列出。
 app.use("*", authGate());
 // 认了身份之后紧接着认资源:`/api/tasks/:id/…` 这类路径一律先过可见性。逐条路由自己
 // 查是漏不完的(那条轴上的端点分散在十几个文件里且还在长),所以做成横切的一道。
@@ -448,6 +452,7 @@ activeServer = serve({ fetch: app.fetch, port }, (info) => {
   console.log(`[ash] server on http://localhost:${info.port}`);
 });
 
+attachPreviewUpgrades(activeServer as import("node:http").Server);
 activeServer.on("error", (err: NodeJS.ErrnoException) => {
   if (err.code === "EADDRINUSE") {
     exitAfterStartupFailure(portConflictMessage(port));

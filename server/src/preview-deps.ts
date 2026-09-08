@@ -37,6 +37,7 @@ import { augmentedEnv } from "./executors/bin-resolve.js";
 import { killByPid } from "./executors/spawn.js";
 import { DEPS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
+import { previewDirectories } from "./preview-directories.js";
 
 /** 一个缺依赖的包目录，以及它能从哪儿借。 */
 export interface NodeDepsAdvice {
@@ -69,9 +70,6 @@ const LOCKFILES: Record<PackageManager, string> = {
 
 /** 跟着 package.json 一起复制过去的配置：registry / 私服 / hoist 规则都写在这些文件里。 */
 const EXTRA_FILES = [".npmrc", ".yarnrc", ".yarnrc.yml", ".nvmrc", "pnpm-workspace.yaml"];
-
-/** 扫描时跳过的目录名（跟 preview-command.ts 同一份理由：产物和依赖目录里全是假信号）。 */
-const SKIP_DIRS = new Set(["node_modules", "target", "dist", "build", "out", "vendor", "venv", "__pycache__"]);
 
 /** 装一次最多等多久。装不完就算了，退回人工建议 —— 总比让「打开预览」无限期挂着强。 */
 const INSTALL_TIMEOUT_MS = 6 * 60_000;
@@ -181,8 +179,8 @@ function needsDeps(dir: string, want: string | null): boolean {
 /**
  * 工作区里缺依赖的包目录，逐个核对「主仓那份能不能借」。
  *
- * 只看根目录和往下一层 —— 跟识别预览候选同一个口径（前后端并排是常态），再深就不是
- * 「点一下预览」该替人想的事了。一个都不缺就返回空数组。
+ * 默认看根目录和下一层；命令点名的子目录可继续下探，与设置检测的三层范围一致。
+ * 一个都不缺就返回空数组。
  *
  * `command` 是这次要跑的预览命令：一个仓库里可以有好几个 node 子项目都没装依赖
  * （a4sms-allinone 有 `a4sms-app` 和 `a4sms-front` 两个），但**这次卡住的只有命令里那个**。
@@ -194,15 +192,10 @@ function needsDeps(dir: string, want: string | null): boolean {
  */
 export function nodeDepsAdvice(workspace: string, command = "", want: string | null = null): NodeDepsAdvice[] {
   const repo = mainRepoOf(workspace);
-  const rels: string[] = [];
-  if (needsDeps(workspace, want)) rels.push(".");
-  try {
-    for (const entry of readdirSync(workspace, { withFileTypes: true })) {
-      if (!entry.isDirectory() || entry.name.startsWith(".") || SKIP_DIRS.has(entry.name)) continue;
-      if (needsDeps(join(workspace, entry.name), want)) rels.push(entry.name);
-    }
-  } catch { /* 工作区读不动就只回根目录那一条 */ }
-  const mentions = (rel: string) => rel !== "." && command.includes(rel);
+  const normalized = command.replaceAll("\\", "/");
+  const mentions = (rel: string) => rel !== "." && normalized.includes(rel);
+  const rels = previewDirectories(workspace, 3, mentions)
+    .filter((rel) => needsDeps(join(workspace, rel), want));
   rels.sort((a, b) => Number(mentions(b)) - Number(mentions(a)));
   return rels.map((rel) => {
     const dir = rel === "." ? workspace : join(workspace, rel);

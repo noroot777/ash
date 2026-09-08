@@ -4,6 +4,7 @@
 // 钉着「单个代码文件不超过 700 行」。消费方的 import 路径不变 —— index.ts 仍然把这些
 // 类型原样再导出(它只能转发**类型**,见 server/CLAUDE.md)。
 import type { ProjectRole } from "./multiuser.ts";
+import type { ProjectPreviewConfig } from "./preview.ts";
 
 export interface Project {
   id: string;
@@ -14,6 +15,7 @@ export interface Project {
   // 「打开预览」跑哪条命令；null = 让服务端按各语言自己的惯例去认（Maven / Gradle /
   // Django / go / cargo / dotnet / Node…），认出恰好一个才自动用，多个就回来问人。
   previewCommand: string | null;
+  previewConfig?: ProjectPreviewConfig | null;
   createdAt: string;
 }
 

@@ -10,6 +10,9 @@ import { assertBeforeAcceptance } from "./free-workflow.js";
 import { acquireFreeWorkflowAction, releaseFreeWorkflowAction } from "./free-workflow-lock.js";
 import { handoffBlockReasonById } from "./handoff-guard.js";
 import { resolvePreviewCommand } from "./preview-command.js";
+import { parsePreviewConfig, previewProxyEnabled } from "@ash/shared/preview";
+import { isMultiUser } from "./auth/mode.js";
+import { previewState } from "./preview-public.js";
 import { isTurnClaimed } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
@@ -53,7 +56,12 @@ async function startFreePreview(taskId: string) {
     // 完全可能已经开始跑下一轮了。
     if (previewStartCanceled(gen)) throw new Error(PREVIEW_CANCELED);
     if (rerunGateClosed(taskId)) throw new Error("任务正在修改代码，结束后再打开预览");
-    const { command, source } = resolvePreviewCommand(workspace.path, project.previewCommand);
+    const config = parsePreviewConfig(project.previewConfig ?? null);
+    const selected = config?.mode === "services" ? config.services.filter((s) => s.enabled) : undefined;
+    const { command, source } = selected
+      ? { command: selected.map((s) => s.command).join("\n\n"), source: "configured" }
+      : resolvePreviewCommand(workspace.path, project.previewCommand);
+    const proxy = previewProxyEnabled(config?.proxy, await isMultiUser());
     // 就绪判据只认「端口真的连得上」。**不能**再加一条「日志里说了 ready」：READY_WORDS
     // 那张表（ready / listening / compiled…）是照 Node dev server 的说法写的，Django 印的是
     // 「Starting development server at …」、Go/Rust 印什么全看作者 —— 拿它当必要条件，等于
@@ -64,7 +72,7 @@ async function startFreePreview(taskId: string) {
       p: { cmd: command, mode: "frontend", ready: "port", life: "task" },
       fail: null,
     };
-    const result = await startPreview(taskId, step, workspace.path, gen);
+    const result = await startPreview(taskId, step, workspace.path, gen, { services: selected, primaryServiceId: config?.primaryServiceId, proxy });
     if (!result.ok) throw new Error(result.reason);
     // **起来了不等于还是我们的。** 从这里到 200 之间还有一个 await（写时间线），用户点的
     // 关闭、重跑回收都可能落在这条缝里：进程被杀、记录被删，而这一趟手里攥着的还是那份旧
@@ -80,7 +88,7 @@ async function startFreePreview(taskId: string) {
     // 要去项目设置改，认出来的那条跑错了是另一回事。
     await appendTaskTimeline(
       taskId,
-      `自由工作流预览已打开（${source === "configured" ? "项目预览命令" : "自动识别"}：${command}）：${result.record.url ?? command}`,
+      `自由工作流预览已打开（${source === "configured" ? "项目预览设置" : "自动识别"}：${command}）：${previewState(taskId).url ?? command}`,
     );
     if (!mine()) throw new Error(PREVIEW_CANCELED);
     bus.publish({ type: "task.review", taskId });
@@ -98,7 +106,7 @@ export function mountFreePreviewRoutes(api: Hono): void {
     if (handedOff) return c.json({ error: handedOff, handoff: true }, 409);
     try {
       const record = await startFreePreview(c.req.param("id"));
-      return c.json({ running: true, url: record.url, port: record.port, command: record.cmd, startedAt: record.startedAt });
+      return c.json(previewState(record.taskId));
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
     }
@@ -115,13 +123,15 @@ export function mountFreePreviewRoutes(api: Hono): void {
     if (!task || task.workflowMode !== "free" || task.mode !== "single" || task.parentId || task.reviewOf) {
       return c.json({ error: "当前任务不支持自由预览" }, 409);
     }
-    const log = readPreviewLog(taskId);
+    const log = readPreviewLog(taskId, 200_000, c.req.query("service"));
     const record = readPreview(taskId);
     // `running` 在这儿的用处只有一个：告诉界面「这份日志还会不会长」。所以它必须把
     // **正在启动**那一段算进来 —— preview.json 要等就绪才写，而启动可以耗到 120 秒，
     // 那一整段里日志一直在长（Maven 在下依赖、前端在冷编译），正是最该续读的时候。
     // 只看 preview.json 的话，弹窗那句「日志每 2 秒自动续上」在最需要它的时候是假的。
     const running = !!record || isPreviewStarting(taskId);
+    const state = previewState(taskId);
+    const selectedService = state.services?.find((s) => s.id === c.req.query("service"));
     return c.json({
       text: log?.text ?? "",
       truncated: log?.truncated ?? false,
@@ -129,8 +139,9 @@ export function mountFreePreviewRoutes(api: Hono): void {
       exists: log !== null,
       running,
       starting: !record && isPreviewStarting(taskId),
-      command: record?.cmd ?? null,
-      url: record?.url ?? null,
+      command: selectedService?.command ?? state.command,
+      url: selectedService ? selectedService.url : state.url,
+      services: state.services,
     });
   });
 

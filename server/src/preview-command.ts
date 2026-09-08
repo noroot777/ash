@@ -24,6 +24,7 @@
 // POSIX 上是 sh（`$PORT`、`( … &)`）——两边一个字都不一样，所以这里一行 shell 语法都不
 // 直接写，全部经 preview-shell.ts 的方言。
 import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { previewDirectories } from "./preview-directories.js";
 import { join } from "node:path";
 import { previewShell, type PreviewShell } from "./preview-shell.js";
 
@@ -37,6 +38,7 @@ export interface PreviewCommandResolution {
 
 /** 认出来的一个「可以起起来的东西」。label 用它自己那门语言的说法。 */
 export interface PreviewCandidate {
+  directory: string;
   label: string;
   /** 整行命令，可以直接粘进「预览命令」；需要进子目录的自带 cd。 */
   command: string;
@@ -135,6 +137,7 @@ function candidate(
   if (rel !== "." && !shell.expressible(rel)) return null;
   const fill = (template: string, n: number) => template.replaceAll(PORT_SLOT, shell.ref(n === 1 ? "PORT" : `PORT${n}`));
   return {
+    directory: rel,
     label,
     kind,
     command: prefixed(shell, rel, fill(bare, 1)),
@@ -481,27 +484,9 @@ function probeDir(shell: PreviewShell, dir: string, rel: string): PreviewCandida
   ];
 }
 
-/** 扫描时跳过的目录名：产物和依赖目录里全是假信号（node_modules 里每个包都有 package.json）。 */
-const SKIP_DIRS = new Set(["node_modules", "target", "dist", "build", "out", "vendor", "venv", "__pycache__"]);
-
-/**
- * 工作区里所有「能起服务的东西」。根目录 + 往下一层 —— 前后端并排的多项目仓库是常态，
- * 只看根目录等于对这类仓库一无所知（Maven 的子模块由 mavenCandidates 自己按 pom 下探，
- * 不受这一层限制）。
- */
-export function detectPreviewCandidates(root: string, shell: PreviewShell = previewShell()): PreviewCandidate[] {
-  const found = [...probeDir(shell, root, ".")];
-  let entries: string[] = [];
-  try {
-    entries = readdirSync(root, { withFileTypes: true })
-      .filter((e) => e.isDirectory() && !e.name.startsWith(".") && !SKIP_DIRS.has(e.name))
-      .map((e) => e.name)
-      .sort();
-  } catch {
-    return found;
-  }
-  for (const name of entries) found.push(...probeDir(shell, join(root, name), name));
-  return found;
+/** 旧自动识别扫描根目录和下一层；设置中的主动检测可扫描到第三层。 */
+export function detectPreviewCandidates(root: string, shell: PreviewShell = previewShell(), depth = 1): PreviewCandidate[] {
+  return previewDirectories(root, depth).flatMap((rel) => probeDir(shell, join(root, rel), rel));
 }
 
 /**
@@ -535,7 +520,7 @@ export function ambiguousMessage(candidates: PreviewCandidate[], shell: PreviewS
     return "没认出这个项目该怎么起服务（Node 的 dev/start、Maven 的 spring-boot:run、"
       + "Gradle 的 bootRun、Django 的 runserver、FastAPI/Flask、go run、cargo run、"
       + "dotnet run、Laravel 的 artisan、Rails 的 bin/rails 都找过了）。\n"
-      + "请在「设置 → 项目设置 → 预览命令」里填一条启动命令 —— 任何语言都行，"
+      + "请在「设置 → 项目设置 → 预览 → 自定义脚本」里填写启动脚本 —— 任何语言都行，"
       + "它在任务工作区根目录用你自己的 shell 执行，可以带 cd。\n"
       + `端口从 ash 借的那个来：命令里写 \`${port}\`，或者让它读这些环境变量之一（${PORT_ENV_ALIASES.map((a) => a.name).join(" / ")}）。`;
   }
@@ -544,9 +529,9 @@ export function ambiguousMessage(candidates: PreviewCandidate[], shell: PreviewS
   return `这个工作区里认出了 ${candidates.length} 个能起服务的东西，ash 不替你挑`
     + "（挑错的话你会对着另一个服务验收自己的改动）：\n"
     + `${list}\n`
-    + "把要看的那一条填进「设置 → 项目设置 → 预览命令」，之后这个项目就一直用它。\n"
+    + "到「设置 → 项目设置 → 预览 → 选择服务」点击检测并勾选所需服务，也可以在「自定义脚本」里填写启动方式。保存后，任务按这份配置打开预览。\n"
     + (combined
-      ? `要**前后端一起起**就写成一条：配角丢后台、用 \`${shell.ref("PORT2")}\`/\`${shell.ref("PORT3")}\`…，`
+      ? `使用**自定义脚本**一起启动前后端时，可以写成一条：配角丢后台、用 \`${shell.ref("PORT2")}\`/\`${shell.ref("PORT3")}\`…，`
         + `要看的那个放最后用 \`${port}\`。\n`
         + `    ${combined}\n`
         + `前端得知道后端地址的话，把 \`${shell.ref("URL2")}\`（= \`http://localhost:${shell.ref("PORT2")}\`）递给它自己认的那个变量，`

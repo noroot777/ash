@@ -149,6 +149,41 @@ try {
     "spawn 之前就失败时不该留下日志入口——点开只会说「还没有预览日志」",
   );
 
+  const serviceSwitch = await browser.newPage({ viewport: { width: 1000, height: 900 } });
+  await serviceSwitch.goto(`${base}?mode=service-switch`);
+  await serviceSwitch.getByTestId("preview-log-open").click();
+  const serviceBody = serviceSwitch.locator(".preview-log-body");
+  await serviceSwitch.waitForFunction(
+    () => document.querySelector(".preview-log-body")?.textContent?.includes("all service line 220") ?? false,
+  );
+  const layout = await serviceSwitch.evaluate(() => {
+    const dialog = document.querySelector(".preview-log-dialog");
+    const body = document.querySelector(".preview-log-body");
+    const footer = document.querySelector(".preview-log-dialog > footer");
+    if (!(dialog instanceof HTMLElement) || !(body instanceof HTMLElement) || !(footer instanceof HTMLElement)) return null;
+    const dialogRect = dialog.getBoundingClientRect();
+    const footerRect = footer.getBoundingClientRect();
+    return {
+      bodyClientHeight: body.clientHeight,
+      bodyScrollHeight: body.scrollHeight,
+      dialogBottom: dialogRect.bottom,
+      footerBottom: footerRect.bottom,
+      footerTop: footerRect.top,
+    };
+  });
+  assert(layout, "多服务日志对话框应完整渲染");
+  assert(layout.bodyScrollHeight > layout.bodyClientHeight, "长日志应在正文区域内滚动");
+  assert(layout.footerTop > 0 && layout.footerBottom <= layout.dialogBottom + 1, "长日志不应把底部操作按钮挤出对话框");
+
+  await serviceSwitch.getByRole("button", { name: "网页前端 · 运行中" }).click();
+  await serviceSwitch.getByRole("button", { name: "接口服务 · 运行中" }).click();
+  await serviceSwitch.waitForFunction(
+    () => document.querySelector(".preview-log-body")?.textContent === "fresh api log",
+  );
+  await serviceSwitch.waitForTimeout(600);
+  assert.equal(await serviceBody.textContent(), "fresh api log", "上一服务的延迟响应覆盖了当前服务日志");
+  await serviceSwitch.close();
+
   console.log("preview log live: ok");
 } finally {
   await browser?.close();

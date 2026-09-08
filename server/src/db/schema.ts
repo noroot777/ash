@@ -1,4 +1,5 @@
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import type { ProjectPreviewConfig } from "@ash/shared/preview";
 
 // JSON columns are stored as text and parsed in the repository layer.
 // Schema mirrors shared/src/index.ts.
@@ -13,6 +14,7 @@ export const projects = sqliteTable("projects", {
   // 「打开预览」跑哪条命令。空 = 按各语言惯例自动识别（见 preview-command.ts），
   // 认出恰好一个才自动用；命令本身在任务工作区根目录用用户自己的 shell 执行。
   previewCommand: text("preview_command"),
+  previewConfig: text("preview_config", { mode: "json" }).$type<ProjectPreviewConfig>(),
   // 建这个项目的人(多人模式)。null = 自用模式建的、或转换前的存量项目。
   // 创建者自动是项目管理员,但成员关系的真源是 project_members —— 这一列只记出身。
   ownerUserId: text("owner_user_id"),
