@@ -6,6 +6,10 @@ import { agents, projects, queueItems, sessions, tasks } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { runsTiming } from "./util.js";
 import { projectHealthLight } from "./git.js";
+import { withRepoLock } from "./repo-lock.js";
+import { execFileText as exec } from "./exec.js";
+import { expandHome } from "./git.js";
+import { baseRef, initializeBranchPlan } from "./task-branch-plan.js";
 import { resolveWorkflowDef } from "./workflows.js";
 import { isMultiUser } from "./auth/mode.js";
 import { settingsFor } from "./auth/personal-settings.js";
@@ -91,6 +95,10 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   archivedAt: r.archivedAt,
   useWorktree: r.useWorktree,
   worktreeBase: r.worktreeBase,
+  worktreeStartCommit: r.worktreeStartCommit,
+  mergeTargetBranch: r.mergeTargetBranch,
+  baseTaskId: r.baseTaskId,
+  acceptedSourceCommit: r.acceptedSourceCommit,
   acceptedTargetBranch: r.acceptedTargetBranch ?? null,
   acceptedBaseCommit: r.acceptedBaseCommit ?? null,
   acceptedMergeCommit: r.acceptedMergeCommit ?? null,
@@ -247,7 +255,23 @@ export async function createTasks(
           : await snapshotWorkflow(workflowId, row.projectId, useWorktree, row.ownerUserId ?? null)),
     };
   }));
-  await db.insert(tasks).values(normalizedRows);
+  const repos = [...new Set(projectRows.map(p => p.repoPath))].sort();
+  const insert = async (index: number): Promise<void> => {
+    if (index < repos.length) return withRepoLock(repos[index], () => insert(index + 1));
+    const pinned: typeof normalizedRows = [];
+    try {
+      for (const row of normalizedRows) {
+        const hadStart = !!row.worktreeStartCommit;
+        await initializeBranchPlan(row, repoByProject.get(row.projectId) || "");
+        if (!hadStart && row.worktreeStartCommit) pinned.push(row);
+      }
+      await db.insert(tasks).values(normalizedRows);
+    } catch (error) {
+      for (const row of pinned) await exec("git", ["-C", expandHome(repoByProject.get(row.projectId)), "update-ref", "-d", baseRef(row.id), row.worktreeStartCommit!]).catch(() => {});
+      throw error;
+    }
+  };
+  await insert(0);
   await afterInsert?.();
   const persisted = await db
     .select()

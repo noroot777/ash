@@ -373,6 +373,10 @@ export interface Task {
   // Existing worktrees are reused; cleanup is an explicit user action.
   useWorktree?: boolean;
   worktreeBase?: string | null;
+  worktreeStartCommit?: string | null;
+  mergeTargetBranch?: string | null;
+  baseTaskId?: string | null;
+  acceptedSourceCommit?: string | null;
   // 统一验收冻结的合并快照。三项齐全时才能发起合并结果审查。
   acceptedTargetBranch?: string | null;
   acceptedBaseCommit?: string | null;
@@ -674,3 +678,5 @@ export function parseSessionOutput(out: string): ConvSeg[] {
   flush();
   return segs;
 }
+
+export type { BranchPlanEntry, BranchPlanView, BranchDependency, FamilyAcceptanceResult } from "./branch-plan.ts";

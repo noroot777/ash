@@ -149,6 +149,7 @@ export async function acceptanceGuard(
       },
     };
   }
+  if (state.task.baseUpdateIntent) return { task: state.task, failure: { accepted: false, httpStatus: 409, taskId, reason: "base_update_pending", error: "上次基线更新尚未结算，请先重试更新基线", phase } };
   if (state.inFlightTasks.length === 0) return { task: state.task, failure: null };
 
   const sharedWorkers = state.inFlightTasks.filter((item) => item.role === "shared_worker");

@@ -14,6 +14,7 @@ import { parseAttachmentText } from "../task-detail/utils.ts";
 import { ChangeMetaBar, worktreeLabel } from "../review/ChangeMetaBar.tsx";
 import { ReviewDiffViewer } from "../review/ReviewDiffViewer.tsx";
 import { DispatchReviewEvidence } from "./ReviewEvidence.tsx";
+import { BranchAcceptancePanel, useBranchPlan } from "../review/BranchAcceptancePanel.tsx";
 
 type ReviewData = {
   commits: TaskCommit[];
@@ -51,7 +52,7 @@ function acceptanceMessage(task: TaskListItem): string {
   const plan = acceptPlan(task.workflow, "human", task.workflowAt);
   const branch = team ? "共享分支" : duet ? "讨论分支" : "任务分支";
   const worktree = team ? "团队 worktree" : duet ? "讨论 worktree" : "任务 worktree";
-  const target = task.worktreeBase || "项目当前分支";
+  const target = task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "项目当前分支";
   const tail = team ? "并联动验收共享执行者。" : "";
   // 手动验收永远有合并方案（acceptPlan 的 human 口径），这里只是类型兜底。
   if (!plan.merge) return `这会把该任务标记为验收完成。${tail}`;
@@ -123,6 +124,12 @@ export function AcceptanceControls({
   notify: (message: string) => void;
   acceptanceBlock?: string | null;
 }) {
+  const branchPlan = useBranchPlan(task);
+  if (task.useWorktree && task.worktreeStartCommit && task.stage !== "accepted") {
+    acceptanceBlock ??= branchPlan.error ? "验收依赖读取失败" : !branchPlan.view ? "检查验收依赖" : null;
+    const dependency = branchPlan.view?.task.dependency;
+    if (dependency && dependency.state !== "ready" && branchPlan.view?.task.strategy !== "tag") acceptanceBlock ??= "等待父成果或更新基线";
+  }
   const [action, setAction] = useState<"accept" | "return" | null>(null);
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState(false);
@@ -392,6 +399,7 @@ export function TeamReviewWorkspace({
       </header>
       <div className="team-review-scroll">
         <div className="team-review-stack">
+          <BranchAcceptancePanel task={lead} notify={notify} onTaskUpdated={onTaskUpdated} />
           <LeadChanges task={lead} onReadTask={onReadTask} />
           {/* 没有独立 worktree 执行者时整节不出现：它的空态说的就是顶上那句「随团队整体验收
               联动标记」，留一个 0 项的空壳只是把验收按钮往下推。有独立执行者时它才是唯一的

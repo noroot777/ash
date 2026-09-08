@@ -197,6 +197,7 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
       useWorktree: s.useWorktree !== undefined ? s.useWorktree : b.defaults?.useWorktree,
       worktreeBase:
         s.worktreeBase !== undefined ? s.worktreeBase : b.defaults?.worktreeBase ?? null,
+      mergeTargetBranch: s.mergeTargetBranch ?? b.defaults?.mergeTargetBranch ?? null,
       workflowId: s.workflowId !== undefined ? s.workflowId : b.defaults?.workflowId ?? null,
       ownerUserId: batchOwner,
     };

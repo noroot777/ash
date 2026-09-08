@@ -145,8 +145,14 @@ export async function taskBranchDiff(
   taskId: string,
   requestedTarget: string | null | undefined,
   limitBytes = DIFF_LIMIT_BYTES,
+  startCommit?: string | null,
 ): Promise<TaskDiffResult> {
   const repo = expandHome(repoPath);
+  if (startCommit) {
+    const sourceBranch = await resolveWorktreeBranchName(repo, taskId);
+    const result = await acceptedCommitDiff(repo, sourceBranch, startCommit, sourceBranch, limitBytes);
+    return { ...result, sourceBranch, targetBranch: await resolveTaskMergeTarget(repo, requestedTarget), mergeBase: startCommit };
+  }
   const range = await taskBranchRange(repo, taskId, requestedTarget);
   if (!range.ok) {
     return {
@@ -192,8 +198,10 @@ export async function taskBranchFileDiff(
   path: string,
   origPath: string | null = null,
   limitBytes = DIFF_LIMIT_BYTES,
+  startCommit?: string | null,
 ): Promise<TaskFileDiffResult> {
   const repo = expandHome(repoPath);
+  if (startCommit) return rangeFileDiff(repo, startCommit, await resolveWorktreeBranchName(repo, taskId), path, origPath, limitBytes);
   const range = await taskBranchRange(repo, taskId, requestedTarget);
   if (!range.ok) return fileDiffUnavailable(path, origPath, range.reason, limitBytes);
   return rangeFileDiff(repo, range.mergeBase, range.sourceBranch, path, origPath, limitBytes);

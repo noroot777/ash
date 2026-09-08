@@ -19,6 +19,7 @@ export interface BatchTaskInput {
   reasoningEffort?: string | null; // overrides defaults.reasoningEffort
   useWorktree?: boolean; // overrides defaults.useWorktree; omitted follows the global setting
   worktreeBase?: string | null; // base ref when this task uses a worktree
+  mergeTargetBranch?: string | null;
   workflowId?: string | null; // 起手式 id；省略则按项目→全局默认解析，并拷成快照
   labels?: string[];
   // Each entry is resolved against sibling `key`s first; anything that doesn't
@@ -41,6 +42,7 @@ export interface BatchCreateTasksBody {
     useWorktree?: boolean; // omitted follows DEFAULT_APP_SETTINGS.worktreeDefault
     workflowId?: string | null; // 这一批默认走哪条起手式
     worktreeBase?: string | null;
+    mergeTargetBranch?: string | null;
     labels?: string[];
   };
 }

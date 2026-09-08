@@ -24,6 +24,10 @@ import { acceptSharedTeamWorkers, sharedWorkerAcceptanceMessage, type SharedWork
 import { acceptanceGuard, type AcceptFailure, type AcceptWarning } from "./task-accept-guard.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
+import { recordBranchReceipt } from "./task-branch-receipts.js";
+import { mountBranchPlanRoutes } from "./task-branch-routes.js";
+import { branchDependency, branchOwner, commitAt, dependentTasks } from "./task-branch-plan.js";
+import { resolveWorktreeBranchName } from "./git.js";
 import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
 import { beginAccepting, endAccepting } from "./acceptance-lock.js";
 
@@ -281,7 +285,7 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
         : `开始验收：这条线上没画「合并并清理」，但你亲手点了验收通过 —— 手动验收按默认规矩`
       : `开始验收：按线上写的`) +
       `「${ACCEPT_STRATEGY_LABELS[plan.merge]}、${ACCEPT_CLEAN_LABELS[plan.clean]}」处理，` +
-      `目标 ${task.worktreeBase?.trim() || "项目当前分支"}；冲突时只报告并回滚，不会强制合并。`,
+      `目标 ${task.mergeTargetBranch || task.worktreeBase?.trim() || "项目当前分支"}；冲突时只报告并回滚，不会强制合并。`,
   );
   const mergeGuard = await acceptanceGuard(taskId, "before_merge");
   if (mergeGuard.failure) {
@@ -292,9 +296,14 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   // 「合并已改 Git、DB 还没写」的窗口里，重试若按 worktreeBase=null 动态解析会跟着项目
   // 当前 checkout 漂移——同一任务被合进两个分支（审查实测复现）。acceptedTargetBranch
   // 非空即「本生命周期已锁定的目标」（reopen 摘牌时清空，见 task-stage.ts）。
+  const dependency = plan.merge === "tag" ? null : await branchDependency(task, project.repoPath);
+  if (dependency && dependency.state !== "ready") {
+    await appendTaskTimeline(taskId, `验收暂缓：${dependency.message}`);
+    return { accepted: false, httpStatus: 409, taskId, reason: `base_${dependency.state}`, error: dependency.message, status: task.status };
+  }
   const retrying = task.stage === "merged";
   const intendedTarget = task.acceptedTargetBranch
-    ?? await resolveTaskMergeTarget(project.repoPath, task.worktreeBase);
+    ?? await resolveTaskMergeTarget(project.repoPath, task.mergeTargetBranch || task.worktreeBase);
   if (!intendedTarget) {
     return {
       accepted: false, httpStatus: 409, taskId, reason: "target_unresolved",
@@ -304,7 +313,15 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   if (!task.acceptedTargetBranch) {
     await db.update(tasks).set({ acceptedTargetBranch: intendedTarget, updatedAt: now() }).where(eq(tasks.id, taskId));
   }
+  if (!retrying) {
+    const source = await commitAt(project.repoPath, await resolveWorktreeBranchName(project.repoPath, taskId));
+    await db.update(tasks).set({ acceptedSourceCommit: source }).where(eq(tasks.id, taskId));
+  }
   const merge = await mergeTaskBranch(project.repoPath, taskId, intendedTarget, plan.merge);
+  if (!merge.ok && merge.reason === "target_checked_out" && merge.targetBranch) {
+    const owner = await branchOwner(project.repoPath, task.projectId, merge.targetBranch);
+    merge.message += owner ? `；占用者是任务「${owner.title}」（${owner.id}）。任务结束后 worktree 仍会占用分支，删除分支会使验收目标丢失。请保留分支并处理验收目标。` : "；请保留目标分支，删除工作区不能替代验收目标配置。";
+  }
 
   // Retry after a previous partial success: stage=merged plus an already-removed
   // source branch means `git branch -d` did its job; finish the stage transition.
@@ -312,7 +329,7 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   // source_branch_missing，目标被删/改名时这里若只看字符串非空就 finalize，会把任务
   // 盖成 accepted 而返回值宣称一个不存在的分支（审查实测复现）。
   if (!merge.ok && merge.reason === "source_branch_missing" && task.stage === "merged") {
-    const targetBranch = merge.targetBranch ?? await resolveTaskMergeTarget(project.repoPath, task.worktreeBase);
+    const targetBranch = merge.targetBranch ?? await resolveTaskMergeTarget(project.repoPath, task.mergeTargetBranch || task.worktreeBase);
     // 目标分支「名字存在」不够：内容可能已被 reset 回合并前——已记录的合并结果必须
     // 仍能从目标分支到达，否则 accepted 就是在为一份不存在的产物盖章（审查实测复现）。
     // acceptedMergeCommit 为 null（旧版部分成功没记录）时**不是**验证通过——没有证据
@@ -399,6 +416,7 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
     ...(tagged ? {} : { stage: "merged" }),
     updatedAt: mergedAt,
   }).where(eq(tasks.id, taskId));
+  if (!tagged) await recordBranchReceipt(taskId, true);
   if (!tagged) {
     bus.publish({ type: "task.stage", taskId, stage: "merged", updatedAt: mergedAt });
     await appendTaskTimeline(taskId, `验收阶段更新：${STAGE_LABELS.merged}（merged）`);
@@ -429,6 +447,11 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   // 提交，标签压根没合），所以 `git branch -d` 一定会被拒。删分支这一项在这两档里直接
   // 不做并说清楚原因——绝不改用 `-D`：自动流程强删分支是不可逆的，那是用户自己按的活。
   const cleanPlan = cleanupPlanFor(plan.clean);
+  const dependents = await dependentTasks(project.repoPath, task.projectId, taskId);
+  if (dependents.length && cleanPlan.branch) {
+    cleanPlan.branch = false;
+    await appendTaskTimeline(taskId, `保留来源分支：仍有 ${dependents.length} 个子任务需要处理验收依赖（${dependents.map(t => t.title).join("、")}）。`);
+  }
   // 按**计划**判而不是按本次 method：squash 计划的重试会拿到 already_merged，但分支
   // 依旧不是目标的祖先，`git branch -d` 一样删不掉——按 method 判会让重试卡死在清理
   // （审查实测：worktree 已删、分支删不动、任务永久停 merged）。
@@ -615,6 +638,7 @@ export async function acceptTask(
 }
 
 export function mountTaskAcceptanceRoutes(api: Hono): void {
+  mountBranchPlanRoutes(api, acceptTask);
   api.post("/tasks/:id/accept", async (c) => {
     const result = await acceptTask(c.req.param("id"));
     if (result.accepted) return c.json(result);

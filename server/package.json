@@ -31,6 +31,7 @@
     "test:turn-ownership": "tsx scripts/test-turn-ownership.ts",
     "test:turn-output": "tsx scripts/test-turn-output.ts",
     "test:reopen-acceptance": "tsx scripts/test-reopen-acceptance.ts",
+    "test:branch-acceptance": "tsx scripts/test-branch-acceptance.ts",
     "test:accept-merge": "tsx scripts/test-accept-merge.ts",
     "test:multi-user": "tsx scripts/test-multi-user.ts",
     "test:multi-user-setup": "tsx scripts/test-multi-user-setup.ts",

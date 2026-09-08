@@ -450,14 +450,16 @@ export async function prepareWorktree(
   repoPath: string,
   taskId: string,
   base: string | null | undefined,
+  pinned = false,
 ): Promise<Workspace> {
-  return withRepoLock(repoPath, () => prepareWorktreeLocked(repoPath, taskId, base));
+  return withRepoLock(repoPath, () => prepareWorktreeLocked(repoPath, taskId, base, pinned));
 }
 
 async function prepareWorktreeLocked(
   repoPath: string,
   taskId: string,
   base: string | null | undefined,
+  pinned = false,
 ): Promise<Workspace> {
   const repo = expandHome(repoPath);
   if (!(await isGitRepo(repo))) {
@@ -471,7 +473,8 @@ async function prepareWorktreeLocked(
   if (worktreeLeftoverAt(repo, path)) await discardWorktreeLeftover(repo, path);
   // base 的死活先问一遍，再分路：三条路径（复用 / 恢复 / 新建）都要如实报出来，只有
   // 「这一轮的工作目录是怎么来的」各不相同 —— 复用和恢复都没新建目录，用默认值即可。
-  const stale = await staleBaseFallback(repo, base);
+  if (pinned && (!base || !(await commitExists(repo, base)))) throw new Error("记录的开工提交不可读，未从其它分支重建");
+  const stale = pinned ? undefined : await staleBaseFallback(repo, base);
   if (isDir(path)) {
     // Re-use: read whatever branch the existing worktree is actually on (might
     // differ if the user manipulated it manually). isWorktree=true so callers

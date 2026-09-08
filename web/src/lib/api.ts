@@ -1,4 +1,6 @@
 import type {
+  BranchPlanView,
+  FamilyAcceptanceResult,
   AgentExecutorProfile,
   AgentType,
   AppSettings,
@@ -361,6 +363,14 @@ export const api = {
     const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept`), { method: "POST" });
     const body = await parseBody(response);
     if (isAcceptTaskResult(body)) return body;
+    throw apiError(response, body);
+  },
+  branchPlan: (taskId: string): Promise<BranchPlanView> => request(`/tasks/${id(taskId)}/branch-plan`),
+  updateTaskBase: (taskId: string, sourceCommit: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/update-base`, json("POST", { sourceCommit })),
+  acceptFamily: async (taskId: string, entries: { taskId: string; fingerprint: string }[]): Promise<FamilyAcceptanceResult> => {
+    const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept-family`), json("POST", { entries }));
+    const body = await parseBody(response);
+    if (body && typeof body === "object" && "completed" in body) return body as FamilyAcceptanceResult;
     throw apiError(response, body);
   },
   taskDiff: (taskId: string): Promise<TaskDiffResult> =>

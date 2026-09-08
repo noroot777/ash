@@ -134,7 +134,8 @@ const taskShape = z.object({
   model: z.string().nullable().optional().describe("覆盖执行器 profile 的模型；缺省/null=跟随执行器"),
   reasoningEffort: z.string().nullable().optional().describe("覆盖执行器 profile 的思考强度；缺省/null=跟随执行器"),
   useWorktree: z.boolean().optional().describe("是否在独立 worktree 中运行；缺省跟随全局默认，非 git 项目始终为 false"),
-  worktreeBase: z.string().nullable().optional().describe("worktree 的 base ref；缺省使用项目当前 HEAD"),
+  worktreeBase: z.string().nullable().optional().describe("开工起点；可选父任务分支，服务端冻结该提交并记录验收依赖"),
+  mergeTargetBranch: z.string().nullable().optional().describe("最终合入分支；派生任务默认继承父任务的最终目标，独立于开工起点"),
   labels: z.array(z.string()).optional().describe("任务标签"),
 });
 
@@ -207,6 +208,7 @@ server.registerTool(
         reasoningEffort: z.string().nullable().optional().describe("覆盖执行器 profile 的默认思考强度；缺省/null=跟随执行器，任务自身可覆盖"),
         useWorktree: z.boolean().optional().describe("默认是否使用 worktree；缺省跟随全局默认，任务自身可覆盖"),
         worktreeBase: z.string().nullable().optional().describe("默认 worktree base ref；任务自身可覆盖"),
+        mergeTargetBranch: z.string().nullable().optional().describe("默认最终合入分支，独立于开工起点"),
         labels: z.array(z.string()).optional(),
       }).optional().describe("每个任务的兜底值，任务自身可覆盖"),
     },
@@ -339,10 +341,11 @@ server.registerTool(
       reasoningEffort: z.string().nullable().optional().describe("所有任务的默认思考强度覆盖；缺省/null=跟随执行器，任务可逐个覆盖"),
       useWorktree: z.boolean().optional().describe("所有任务是否使用 worktree；缺省跟随全局默认，任务可逐个覆盖"),
       worktreeBase: z.string().nullable().optional().describe("所有任务的默认 worktree base ref；任务可逐个覆盖"),
+      mergeTargetBranch: z.string().nullable().optional().describe("所有任务的默认最终合入分支"),
       run: z.boolean().optional(),
     },
   },
-  async ({ repoPath, tasks, groupName, mode, chain, agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase, run }) => {
+  async ({ repoPath, tasks, groupName, mode, chain, agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase, mergeTargetBranch, run }) => {
     try {
       const project = (await call("POST", "/projects/resolve", { repoPath })) as { id: string; name: string };
       // resolve（找到或复用）而非每次新建，避免同名分组被反复建出重复副本。
@@ -352,8 +355,8 @@ server.registerTool(
       const batch = (await call("POST", `/groups/${group.id}/tasks/batch`, {
         chain: chain ?? true,
         run: !!run,
-        defaults: [agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase].some((v) => v !== undefined)
-          ? { agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase }
+        defaults: [agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase, mergeTargetBranch].some((v) => v !== undefined)
+          ? { agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase, mergeTargetBranch }
           : undefined,
         tasks,
       })) as { tasks: unknown[]; warning?: string };
@@ -390,7 +393,7 @@ server.registerTool(
   {
     title: "确认验收通过并合并清理",
     description:
-      "仅在用户明确表示「验收通过」「可以合并」等最终验收意图时调用。服务端会确定性执行：把任务分支合并到 worktreeBase（空则项目当前分支），确认已合并后删除任务 worktree，并用 git branch -d 安全删除任务分支，最后把 stage 标为 accepted；status 不会改变。冲突、目标工作区脏或清理失败时会返回结构化原因，绝不强制合并。不要自行运行 git merge / worktree remove / branch -d，统一调用本工具。parentId 指向团队且 useWorktree=false 的共享执行者不适用本工具，单独调用会被 409 拒绝；请验收团队整体，团队级成功会联动把全部共享执行者标为 accepted。",
+      "仅在用户明确表示「验收通过」「可以合并」等最终验收意图时调用。服务端会确定性执行：检查父成果依赖后把任务分支合并到 mergeTargetBranch（旧任务沿用原目标），确认已合并后删除任务 worktree，并用 git branch -d 安全删除任务分支，最后把 stage 标为 accepted；status 不会改变。冲突、目标工作区脏或清理失败时会返回结构化原因，绝不强制合并。不要自行运行 git merge / worktree remove / branch -d，统一调用本工具。parentId 指向团队且 useWorktree=false 的共享执行者不适用本工具，单独调用会被 409 拒绝；请验收团队整体，团队级成功会联动把全部共享执行者标为 accepted。",
     inputSchema: {
       taskId: z.string().describe("用户明确验收通过的任务 id"),
     },

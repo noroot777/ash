@@ -12,6 +12,8 @@ import {
   type Workspace,
 } from "./git.js";
 import { now } from "./util.js";
+import { withRepoLock } from "./repo-lock.js";
+import { restoreAcceptedStart } from "./task-branch-plan.js";
 
 // `repoKey` 每次都要 realpath 一路走上去，`workspaceParticipants` 一次要问几百条路径，
 // 同一个目录会被反复问到。**只在一次调用里记账**（下面每次调用现建两张表）：目录和软链
@@ -34,7 +36,7 @@ const isDirSync = (p: string) => {
 type WorkspaceTask = Pick<
   typeof tasks.$inferSelect,
   "id" | "projectId" | "parentId" | "useWorktree" | "worktreeBase" | "reviewOf"
->;
+> & { worktreeStartCommit?: string | null; mergeTargetBranch?: string | null };
 
 // base 降级(登记的基线分支已经没了，这次按仓库当前 HEAD 起的)必须**落回任务行**，
 // 不能只在返回值里说一句：diff 和验收各自拿 `task.worktreeBase` 再解析一次目标分支
@@ -67,7 +69,7 @@ async function persistBaseFallback(task: WorkspaceTask, ws: Workspace): Promise<
  * 这次没有重建任何目录，所以工作目录那两件事实都取默认的 false。
  */
 export async function refreshTaskBase(task: WorkspaceTask, repoPath: string): Promise<Workspace["baseFallback"]> {
-  if (!task.useWorktree) return undefined;
+  if (!task.useWorktree || task.worktreeStartCommit) return undefined;
   const fallback = await staleBaseFallback(repoPath, task.worktreeBase);
   if (!fallback) return undefined;
   await persistBaseFallback(task, { path: "", branch: null, isWorktree: true, baseFallback: fallback });
@@ -205,9 +207,12 @@ export async function workspaceParticipants(task: OwnerTask, rootPath: string): 
 
 async function directWorkspace(task: WorkspaceTask, repoPath: string): Promise<Workspace> {
   if (!task.useWorktree) return resolveWorkspace(repoPath, task.id);
-  const ws = await prepareWorktree(repoPath, task.id, task.worktreeBase);
-  await persistBaseFallback(task, ws);
-  return ws;
+  return withRepoLock(repoPath, async () => {
+    await restoreAcceptedStart(task, repoPath);
+    const ws = await prepareWorktree(repoPath, task.id, task.worktreeStartCommit || task.worktreeBase, !!task.worktreeStartCommit);
+    await persistBaseFallback(task, ws);
+    return ws;
+  });
 }
 
 // Resolve the cwd for every executable task through one path.
@@ -227,7 +232,7 @@ export async function taskWorkspace(task: WorkspaceTask, repoPath: string): Prom
       return taskWorkspace(target, repoPath);
     }
   }
-  if (!task.parentId) return directWorkspace(task, repoPath);
+  if (!task.parentId || (task.useWorktree && task.worktreeStartCommit)) return directWorkspace(task, repoPath);
 
   const parent = (await db.select().from(tasks).where(eq(tasks.id, task.parentId))).at(0);
   if (!parent || parent.mode !== "team" || parent.projectId !== task.projectId) {

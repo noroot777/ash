@@ -157,6 +157,11 @@ export const tasks = sqliteTable("tasks", {
   // 第一个同类锚点（shared 的 anchorAt），所以它丢了也只是退化成老行为，不会卡死。
   workflowAt: text("workflow_at"),
   worktreeBase: text("worktree_base"),
+  worktreeStartCommit: text("worktree_start_commit"),
+  mergeTargetBranch: text("merge_target_branch"),
+  baseTaskId: text("base_task_id"),
+  acceptedSourceCommit: text("accepted_source_commit"),
+  baseUpdateIntent: text("base_update_intent"),
   originTaskId: text("origin_task_id"), // 回链来源任务(null = 直接创建)
   // 检查点续跑：agent 调 pause_task 时填进来；下次 resume 时取出喂给 CLI 会话并清空。
   resumePrompt: text("resume_prompt"),
@@ -648,4 +653,12 @@ export const handoffLocalPeerKeys = sqliteTable("handoff_local_peer_keys", {
   // 明文 key:要原样发给对端,没法只存哈希。GET 只报 hasKey。
   peerKey: text("peer_key").notNull(),
   updatedAt: text("updated_at").notNull(),
+});
+
+export const taskBranchReceipts = sqliteTable("task_branch_receipts", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id").notNull(),
+  sourceCommit: text("source_commit").notNull(),
+  mergeCommit: text("merge_commit").notNull(),
+  targetBranch: text("target_branch").notNull(),
 });

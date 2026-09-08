@@ -50,7 +50,7 @@ export function mountTaskDiffRoutes(api: Hono): void {
         context.accepted.mergeCommit,
       ));
     }
-    return c.json(await taskBranchDiff(context.project.repoPath, context.task.id, context.task.worktreeBase));
+    return c.json(await taskBranchDiff(context.project.repoPath, context.task.id, context.task.mergeTargetBranch || context.task.worktreeBase, undefined, context.task.worktreeStartCommit));
   });
 
   api.get("/tasks/:id/diff/file", async (c) => {
@@ -72,7 +72,7 @@ export function mountTaskDiffRoutes(api: Hono): void {
           path,
           origPath,
         )
-        : await taskBranchFileDiff(context.project.repoPath, taskId, context.task.worktreeBase, path, origPath);
+        : await taskBranchFileDiff(context.project.repoPath, taskId, context.task.mergeTargetBranch || context.task.worktreeBase, path, origPath, undefined, context.task.worktreeStartCommit);
       return c.json(diff);
     } catch (error) {
       const status = error instanceof ScmOperationError ? error.status : 500;

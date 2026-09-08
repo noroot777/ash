@@ -7,7 +7,7 @@ import { TASK_WORKFLOW_MODES } from "@ash/shared/free-workflow";
 import { and, asc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks, teamInbound } from "./db/schema.js";
+import { freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 import { followUpsFor } from "./task-follow-up.js";
@@ -23,11 +23,15 @@ import { canSeeProject, groupInProject, projectOfQueue, taskInProject, visiblePr
 import { executorScopeForOwner, type ExecutorScope } from "./auth/owned-executors.js";
 import { executorDowngradePreflight } from "./auth/dispatch-gate.js";
 import { inheritOwner } from "./auth/run-env.js";
+import { branchDeletionBlock, deleteTaskBranchRefs } from "./task-branch-plan.js";
+import { withRepoLock } from "./repo-lock.js";
 
 // 任务行删除时连关联状态一起收：自由审查链(run/round)、预约槽、事件、排队/定时消息、
 // 随手记回链。没有 FK cascade,只删任务行会留下孤儿——审查实测:等答复的审查在任务
 // 删除后永远停在 reviewing,答复消息永远 pending(投递时任务已不存在)。
 export async function deleteTaskAssociations(taskId: string): Promise<void> {
+  await deleteTaskBranchRefs(taskId);
+  await db.delete(taskBranchReceipts).where(eq(taskBranchReceipts.taskId, taskId));
   const runIds = (await db.select({ id: freeReviewRuns.id }).from(freeReviewRuns)
     .where(eq(freeReviewRuns.taskId, taskId))).map((run) => run.id);
   if (runIds.length) await db.delete(freeReviewRounds).where(inArray(freeReviewRounds.runId, runIds));
@@ -303,6 +307,7 @@ api.post("/tasks", async (c) => {
     // preserved, and createTasks still forces false for non-repo projects.
     useWorktree: b.useWorktree,
     worktreeBase: b.worktreeBase ?? null,
+    mergeTargetBranch: b.mergeTargetBranch ?? null,
     originTaskId: b.originTaskId ?? null,
     // createTasks 把它换成 tasks.workflow 里的快照（起手式是快照不是引用）。
     // 就地改过的线已经是快照了,直接落 workflow,createTasks 不会再去库里查。
@@ -606,6 +611,8 @@ api.get("/tasks/:id/workspace", async (c) => {
 api.delete("/tasks/:id", async (c) => {
   const tid = c.req.param("id");
   const existing = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
+  const deletionProject = existing ? (await db.select().from(projects).where(eq(projects.id, existing.projectId))).at(0) : undefined;
+  return withRepoLock(deletionProject?.repoPath, async () => {
   // 正在跑 / 占着 turn / 在验收 / 有 child 在飞的任务都不能整行删掉,判据与理由见
   // task-busy.ts —— 项目级的两个入口用的是同一份,别在这里再拼一遍。
   const busy = await taskBusyRejection(tid, "删除");
@@ -615,6 +622,11 @@ api.delete("/tasks/:id", async (c) => {
   const project = existing
     ? (await db.select().from(projects).where(eq(projects.id, existing.projectId))).at(0)
     : undefined;
+  for (const row of [existing, ...children]) {
+    if (!row || !project) continue;
+    const error = await branchDeletionBlock(project.repoPath, row.id);
+    if (error) return c.json({ error, reason: "dependent_tasks" }, 409);
+  }
   const wantWorktree = c.req.query("worktree") === "1";
   const wantBranch = c.req.query("branch") === "1";
   // children 的 Git 工作区必须与它们的行一起处理：只删行的话，独立 worktree/分支会变成
@@ -660,6 +672,7 @@ api.delete("/tasks/:id", async (c) => {
     deletedTaskIds: [tid, ...children.map((child) => child.id)],
     ...(childCleanups.length ? { childCleanups } : {}),
     ...(childLeftovers.length ? { childLeftovers } : {}),
+  });
   });
 });
 
