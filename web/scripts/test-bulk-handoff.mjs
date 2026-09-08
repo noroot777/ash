@@ -265,12 +265,21 @@ assert.equal(bulkPreflightIssue(scopedTwo, bulkTargetProjectId(fromTwo, scopedTw
 const bulkDialog = readSource(new URL("../src/workspace/BulkHandoffDialog.tsx", import.meta.url));
 const machines = readSource(new URL("../src/workspace/HandoffMachines.tsx", import.meta.url));
 assert.match(machines, /<BulkHandoffDialog/, "侧栏「其他机器」仍应是批量接力弹窗的唯一入口");
-// 这一节可以收起来（跟任务分节同一套 toggle 视觉），收起状态记在自己的键上；选中的
-// 远端任务落在这一节里时要自动展开，否则主区在显示它、侧栏却一行都没有。
+// 侧栏里**只有这一节**可以收起（用户 2026-09-08 指定：置顶 / 任务两节不要折叠）。
+// 收起状态记在自己的键上；选中的远端任务落在这一节里时要自动展开，否则主区在显示它、
+// 侧栏却一行都没有。箭头常驻显示，不能做成悬停才浮出——那样看不出这一节能收起来。
 assert.match(machines, /workspace-task-section-toggle/, "「其他机器」标题应是可折叠的 toggle");
 assert.match(machines, /aria-expanded=\{!collapsed\}/, "折叠状态必须对读屏可见");
 assert.match(machines, /ash:handoff-machines:collapsed/, "折叠状态要单独存，不与任务分节共用一个键");
 assert.match(machines, /useRevealHiddenSelection/, "选中的远端任务被折叠藏住时应自动展开");
+const taskTree = readSource(new URL("../src/workspace/TaskTree.tsx", import.meta.url));
+assert.doesNotMatch(taskTree, /workspace-task-section-toggle/, "「置顶」「任务」两节不该有折叠 toggle");
+const taskTreeCss = readSource(new URL("../src/styles/task-tree.css", import.meta.url));
+assert.doesNotMatch(
+  taskTreeCss,
+  /\.workspace-task-section-toggle svg \{[^}]*opacity: 0/,
+  "折叠箭头不能默认透明（悬停才出现等于藏起来）",
+);
 assert.doesNotMatch(machines, /handoff-bulk-body/, "弹窗实现拆出去后不应留在侧栏文件里");
 assert.doesNotMatch(bulkDialog, /<ConfirmDialog/, "批量接力不应继续使用旧确认框");
 assert.match(bulkDialog, /<HandoffDialogHeader/, "批量接力应复用接力弹窗标题结构");
