@@ -204,32 +204,37 @@ const bobActor = actorOf(bob);
 // ── ⑧ 接力目标机按人 ──────────────────────────────────────────────────────
 {
   const scope = await import("../src/auth/handoff-scope.js");
-  await scope.addTarget(aliceActor, { name: "家里", url: "http://10.0.0.2:4317", peerKey: "ash_secret" });
-  const aliceTargets = await scope.listTargets(aliceActor);
-  assert.equal(aliceTargets.length, 1);
-  assert.equal(aliceTargets[0].hasKey, true);
-  assert.equal((aliceTargets[0] as { peerKey?: string }).peerKey, undefined, "key 绝不回显");
-  assert.deepEqual(await scope.listTargets(bobActor), [], "目标机清单按人隔离");
-  assert.equal(await scope.peerKeyForRequest(alice.id, "http://10.0.0.2:4317/"), "ash_secret", "尾斜杠不该影响匹配");
-  assert.equal(await scope.peerKeyForRequest(bob.id, "http://10.0.0.2:4317"), "");
+  const { startSignedHandoffPeer } = await import("./handoff-signed-peer-fixture.js");
+  const peer = await startSignedHandoffPeer();
+  const movedUrl = `${peer.url}/moved`;
+  try {
+    await scope.addTarget(aliceActor, { name: "家里", url: peer.url, peerKey: "ash_secret" });
+    const aliceTargets = await scope.listTargets(aliceActor);
+    assert.equal(aliceTargets.length, 1);
+    assert.equal(aliceTargets[0].hasKey, true);
+    assert.equal((aliceTargets[0] as { peerKey?: string }).peerKey, undefined, "key 绝不回显");
+    assert.deepEqual(await scope.listTargets(bobActor), [], "目标机清单按人隔离");
+    assert.equal(await scope.peerKeyForRequest(alice.id, `${peer.url}/`), "ash_secret", "尾斜杠不该影响匹配");
+    assert.equal(await scope.peerKeyForRequest(bob.id, peer.url), "");
 
-  // 换地址要把记住的指纹一起清掉。
-  await scope.rememberPeerFingerprint(alice.id, "http://10.0.0.2:4317", "f".repeat(64));
-  assert.equal((await scope.listTargets(aliceActor))[0].peerFp, "f".repeat(64));
-  const id0 = (await scope.listTargets(aliceActor))[0].id!;
-  await scope.patchTarget(aliceActor, id0, { url: "http://10.0.0.3:4317" });
-  assert.equal((await scope.listTargets(aliceActor))[0].peerFp, null, "换地址应清掉旧指纹");
+    // 换地址要把记住的指纹一起清掉。
+    await scope.rememberPeerFingerprint(alice.id, peer.url, peer.fingerprint);
+    assert.equal((await scope.listTargets(aliceActor))[0].peerFp, peer.fingerprint);
+    const id0 = (await scope.listTargets(aliceActor))[0].id!;
+    await scope.patchTarget(aliceActor, id0, { url: movedUrl });
+    assert.equal((await scope.listTargets(aliceActor))[0].peerFp, null, "换地址应清掉旧指纹");
 
-  // 按**地址**配 key(接力对话框里就地补 key 走的是这条路:那里只有地址,没有行 id)。
-  // 它必须仍然钉在「这个人自己的清单」上 —— 否则拿一个地址就能改别人的对端凭证。
-  await scope.setPeerKey(aliceActor, "http://10.0.0.3:4317/", "ash_by_url");
-  assert.equal(await scope.peerKeyForRequest(alice.id, "http://10.0.0.3:4317"), "ash_by_url");
-  await assert.rejects(
-    () => scope.setPeerKey(bobActor, "http://10.0.0.3:4317", "bob_tries"),
-    /先把这台目标机加进/,
-    "地址不在自己的清单里就该被拒,不能落到别人那一行上",
-  );
-  assert.equal(await scope.peerKeyForRequest(alice.id, "http://10.0.0.3:4317"), "ash_by_url", "别人的写入没有污染");
+    // 按**地址**配 key(接力对话框里就地补 key 走的是这条路:那里只有地址,没有行 id)。
+    // 它必须仍然钉在「这个人自己的清单」上 —— 否则拿一个地址就能改别人的对端凭证。
+    await scope.setPeerKey(aliceActor, `${movedUrl}/`, "ash_by_url");
+    assert.equal(await scope.peerKeyForRequest(alice.id, movedUrl), "ash_by_url");
+    await assert.rejects(
+      () => scope.setPeerKey(bobActor, movedUrl, "bob_tries"),
+      /先把这台目标机加进/,
+      "地址不在自己的清单里就该被拒,不能落到别人那一行上",
+    );
+    assert.equal(await scope.peerKeyForRequest(alice.id, movedUrl), "ash_by_url", "别人的写入没有污染");
+  } finally { await peer.close(); }
 }
 
 // ── ⑨ 全局 id 路由必须进横切闸 ────────────────────────────────────────────

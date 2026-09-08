@@ -23,7 +23,8 @@ import type { HandoffTarget, TaskHandoff } from "@ash/shared";
 import { isIP } from "node:net";
 import { domainToASCII } from "node:url";
 import { eq } from "drizzle-orm";
-import { getAppSettings } from "./app-settings.js";
+import { resolveTargetsFor, toPublicTarget } from "./auth/handoff-scope.js";
+import { handoffActorId } from "./auth/handoff-outbound.js";
 import { db } from "./db/index.js";
 import { handoffPeers, tasks } from "./db/schema.js";
 import { sameFingerprint } from "./handoff-identity.js";
@@ -70,7 +71,7 @@ function portOfUrl(raw: string): number | null {
 /**
  * 候选主机:来源机最近一次来访的 TCP 地址,加它自报的主机名(局域网里 `name` 和
  * `name.local` 两种写法都常见,mDNS 只认后者),最后兜上设置里登记过的那些主机 ——
- * 来源机换了网段时,用户能做的就是去「设置 → 远程主机」写上新地址,那条路得通。
+ * 来源机换了网段时,用户可以去「设置 → 默认规则 → 任务接力 → 来源机器地址」更新。
  * 主机名不可信,但这里只当地址用,身份仍看指纹。
  */
 function candidateHosts(marker: TaskHandoff, lastAddr: string, registeredUrls: string[]): string[] {
@@ -157,15 +158,18 @@ async function discoverReturnTarget(
 export async function returnTargetForMarker(marker: TaskHandoff): Promise<HandoffTarget | null> {
   if (marker.direction !== "in" || !marker.peerFp) return null;
   const peerFp = marker.peerFp;
+  const targets = (await resolveTargetsFor(handoffActorId())).map(toPublicTarget);
+  const registeredUrls = targets.map((target) => target.url);
+  const registered = targets.find((target) => target.peerFp && sameFingerprint(target.peerFp, peerFp));
   // 任务本次导入时从真实 TCP 来源 + 对端自报端口恢复出的地址最新,也和这条任务绑定;
   // 设置项可能是 DHCP 变化前的旧地址,只作为老记录的兜底。
   if (marker.peerUrl) {
+    if (registered && registered.url !== marker.peerUrl) {
+      const found = await firstMatchingPeer([marker.peerUrl, registered.url], peerFp);
+      if (found === registered.url) return registered;
+    }
     return { name: marker.peerName || "来源机器", url: marker.peerUrl, peerFp };
   }
-  const settings = await getAppSettings();
-  const registeredUrls = settings.handoffTargets.map((target) => target.url);
-  const registered = settings.handoffTargets.find((target) => target.peerFp
-    && sameFingerprint(target.peerFp, peerFp));
   if (registered) {
     // 登记过的地址仍然优先,但先确认它现在还指向同一台机器:DHCP 换过租约之后这里
     // 常常是个死地址,而以前一路返回它,用户只能在弹窗里手填。探不通就继续往下推断,

@@ -3,6 +3,12 @@
 // 从 index.ts 拆出的纯类型模块;index.ts 做类型再导出,消费方 import 路径不变。
 import type { AgentType, TaskStage, TaskStatus } from "./index.ts";
 
+export interface HandoffSourceAddress {
+  fingerprint: string;
+  name: string;
+  url: string;
+}
+
 export interface HandoffTarget {
   name: string;
   url: string;

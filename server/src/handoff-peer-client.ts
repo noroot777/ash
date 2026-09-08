@@ -22,7 +22,7 @@ import {
 import { PEER_HEADERS } from "./handoff-peers.js";
 import { sealForPeer } from "./handoff-crypto.js";
 import { handoffActorId, peerUserKeyHeader } from "./auth/handoff-outbound.js";
-import { localModeTag } from "./auth/handoff-peer-user.js";
+import { localModeTag, PEER_USER_KEY_HEADER } from "./auth/handoff-peer-user.js";
 import { rememberPeerFingerprint as rememberFingerprintFor, targetForUrl } from "./auth/handoff-scope.js";
 import { hostname } from "node:os";
 
@@ -61,18 +61,20 @@ export function peerRequestHeaders(url: string, method: string, body: string | B
 
 export async function fetchPeer<T>(
   url: string,
-  init?: RequestInit & { timeoutMs?: number; sealTo?: { kx: string; fingerprint: string } | null },
+  init?: RequestInit & { timeoutMs?: number; sealTo?: { kx: string; fingerprint: string } | null; expectedPeerFp?: string | null },
 ): Promise<T> {
   const method = init?.method ?? "GET";
   const plain = typeof init?.body === "string" ? init.body : "";
   // 加密在签名**之前**:线上传的是信封,验签方拿到的也是信封,两边哈希的是同一串字节。
   // 信封是二进制帧(不再 base64),所以 content-type 也要跟着换。
   const body = init?.sealTo ? sealForPeer(init.sealTo.kx, init.sealTo.fingerprint, plain) : plain;
+  const suppliedHeaders = new Headers(init?.headers);
+  suppliedHeaders.delete(PEER_USER_KEY_HEADER);
   const headers: Record<string, string> = {
-    ...(init?.headers as Record<string, string> | undefined),
+    ...Object.fromEntries(suppliedHeaders),
     // 多人模式:带上「我在对端的账号 key」。机器级签名只证明「哪台机器」,这一头才
-    // 说得清「那台机器上的哪个人」(§十一)。自用模式/没配 key 时这里是空对象。
-    ...(await peerUserKeyHeader(url)),
+    // 说得清「那台机器上的哪个人」(§十一)。没配 key 时这里是空对象。
+    ...(await peerUserKeyHeader(url, init?.expectedPeerFp ?? init?.sealTo?.fingerprint)),
     // 自报实例模式,好让对端**知情批准**(§十一)。不进签名:它本来就是自报的,
     // 签了也只是"经过完整性校验的自我声明",拿它当权限判据仍旧不成立。
     [PEER_HEADERS.mode]: await localModeTag(),
@@ -87,6 +89,7 @@ export async function fetchPeer<T>(
   try {
     res = await fetch(url, {
       ...init,
+      redirect: "error",
       ...(init?.body === undefined ? {} : { body: wire }),
       headers: { ...headers, ...peerRequestHeaders(url, method, body) },
       signal: AbortSignal.timeout(init?.timeoutMs ?? 15_000),
@@ -173,6 +176,7 @@ export async function probeSignedPeerFingerprint(
   const nonce = newNonce();
   try {
     const response = await fetch(`${base}/api/handoff/ping?nonce=${encodeURIComponent(nonce)}`, {
+      redirect: "error",
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) return null;
@@ -242,15 +246,16 @@ export async function pingPeer(
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ ...returnContext, nonce }),
+          expectedPeerFp: expectedFp,
         })
-      : await fetchPeer<HandoffPingResponse>(pingUrl);
+      : await fetchPeer<HandoffPingResponse>(pingUrl, { expectedPeerFp: expectedFp });
   } catch (error) {
     // 老版来源机没有任务级端点，或原机已删掉历史存档：退回普通接力通道。身份仍按
     // 任务来源指纹核对，但 refs/import 会恢复整机审批，不能借降级继续免审批写入。
     if (!returnContext || options.allowReturnFallback === false || !(error instanceof HandoffError)
       || error.remoteStatus !== 404) throw error;
     taskScopedReturn = false;
-    ping = await fetchPeer<HandoffPingResponse>(plainPing);
+    ping = await fetchPeer<HandoffPingResponse>(plainPing, { expectedPeerFp: expectedFp });
   }
   if (!ping?.ok || ping.service !== "ash") {
     throw new HandoffError("对端不是 ash（/api/handoff/ping 应答不对）", 502);

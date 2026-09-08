@@ -10,7 +10,10 @@
 // 静默降级 —— 不带 key 时对端会明确回「必须带上你在对端的账号 key」。
 import { AsyncLocalStorage } from "node:async_hooks";
 import { PEER_USER_KEY_HEADER } from "./handoff-peer-user.js";
-import { peerKeyForRequest } from "./handoff-scope.js";
+import { peerCredentialForRequest } from "./handoff-scope.js";
+import { sameFingerprint } from "../handoff-identity.js";
+import { HandoffError } from "../handoff-types.js";
+import { HANDOFF_PEER_KEY_REQUIRED } from "@ash/shared/handoff";
 
 const store = new AsyncLocalStorage<{ ownerUserId: string | null }>();
 
@@ -23,14 +26,30 @@ export function withHandoffActor<T>(ownerUserId: string | null, fn: () => Promis
 export const handoffActorId = (): string | null => store.getStore()?.ownerUserId ?? null;
 
 /**
- * 给一个出站请求补上「我在对端的账号 key」。自用模式、或这个目标机还没配 key 时
+ * 给一个出站请求补上「我在对端的账号 key」。这个目标机还没配 key 时
  * 返回空对象 —— 让对端来说那句「你在这台机器上没有账号」,本机不猜。
  *
  * 入参是**这条请求的完整 URL**(带 `/api/handoff/...` 路径和查询串),所以匹配走
- * `peerKeyForRequest` 的最长前缀,不能拿它去和清单里的根地址精确比 —— 那样永远匹配
+ * `peerCredentialForRequest` 的最长前缀,不能拿它去和清单里的根地址精确比 —— 那样永远匹配
  * 不上,每个出站请求都会不带 key 出门(2026-08-29 修,详见那个函数的注释)。
  */
-export async function peerUserKeyHeader(url: string): Promise<Record<string, string>> {
-  const key = await peerKeyForRequest(handoffActorId(), url);
-  return key ? { [PEER_USER_KEY_HEADER]: key } : {};
+export async function peerUserKeyHeader(url: string, expectedFp?: string | null): Promise<Record<string, string>> {
+  const credential = await peerCredentialForRequest(handoffActorId(), url);
+  if (!credential) return {};
+  if (!credential.peerFp) {
+    const error = new HandoffError(
+      "这把账号 key 尚未绑定机器身份，未发送。请确认对端运行支持签名核对的 ash，再重新填写并保存 key。", 401,
+    );
+    error.code = HANDOFF_PEER_KEY_REQUIRED;
+    throw error;
+  }
+  // 每次发送前重新核对，不复用上一次 ping 的结果；同一 IP 可以在两次请求间换机。
+  const { probeSignedPeerFingerprint } = await import("../handoff-peer-client.js");
+  const actual = await probeSignedPeerFingerprint(credential.url, 5_000);
+  if (!actual) throw new HandoffError("无法核对目标机的签名身份，账号 key 和请求内容未发送。", 502);
+  const expected = [credential.peerFp, ...credential.expectedFps, ...(expectedFp ? [expectedFp] : [])];
+  if (expected.some((fingerprint) => !sameFingerprint(actual, fingerprint))) {
+    throw new HandoffError("目标机身份与任务、目标机设置或账号 key 的绑定不一致，账号 key 和请求内容未发送。请先核对来源机器地址。", 409);
+  }
+  return { [PEER_USER_KEY_HEADER]: credential.peerKey };
 }

@@ -118,6 +118,9 @@ export function HandoffDialog({
   }, [notify, reloadKey]);
 
   const target = targets?.find((item) => item.url === targetUrl) ?? null;
+  const updateTargetKeys = (next: HandoffTarget[]) => setTargets(
+    target && !next.some((row) => row.url === targetUrl) ? [...next, { ...target, hasKey: true }] : next,
+  );
   const shouldAutoPreflight = Boolean(target?.peerFp || pendingHandoff);
 
   // 失败收口:文案照旧显示,另外记下服务端给的机器可读原因(应答体里的 code)。
@@ -389,13 +392,14 @@ export function HandoffDialog({
             {peerKeyRequired && targetUrl && (
               <HandoffPeerKeyField
                 url={targetUrl}
+                peerFp={returningHandoff.peerFp}
                 hasKey={Boolean(target?.hasKey)}
                 mode="block"
                 disabled={busy || applying}
                 saveLabel="保存并重新检查"
                 notify={notify}
                 onSaved={(next) => {
-                  setTargets(next);
+                  updateTargetKeys(next);
                   setPeerKeyRequired(false);
                   void checkTarget();
                 }}
@@ -484,13 +488,14 @@ export function HandoffDialog({
             {peerKeyRequired && targetUrl && (
               <HandoffPeerKeyField
                 url={targetUrl}
+                peerFp={pendingHandoff?.peerFp ?? target?.peerFp}
                 hasKey={Boolean(target?.hasKey)}
                 mode="block"
                 disabled={busy || applying}
                 saveLabel="保存并重新检查"
                 notify={notify}
                 onSaved={(next) => {
-                  setTargets(next);
+                  updateTargetKeys(next);
                   setPeerKeyRequired(false);
                   void checkTarget();
                 }}

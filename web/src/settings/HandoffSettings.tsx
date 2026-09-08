@@ -24,6 +24,7 @@ import {
 } from "./handoffTargetUi.ts";
 import { HandoffPeerKeyField } from "./HandoffPeerKeyField.tsx";
 import { UserHandoffTargets } from "./UserHandoffTargets.tsx";
+import { HandoffSourceAddresses } from "./HandoffSourceAddresses.tsx";
 
 // 设置页的「任务接力」整段:本机身份 + 出站目标(含记住的对端指纹)+ 入站来源审批。
 //
@@ -51,6 +52,7 @@ export function HandoffSettings({
   // 目标行另存一份草稿:半填的行(名字有了 url 还没敲完)留在本地继续编辑,
   // 只有完整合法的行才落库,所以不能每次都用服务端返回值倒灌回输入框。
   const [targets, setTargets] = useState<HandoffTarget[]>(settings.handoffTargets);
+  const [targetRevision, setTargetRevision] = useState(0);
   const [forgetIndex, setForgetIndex] = useState<number | null>(null);
   const [approvalByUrl, setApprovalByUrl] = useState<Record<string, HandoffApprovalResult>>({});
   const [approvalBusyUrl, setApprovalBusyUrl] = useState<string | null>(null);
@@ -199,7 +201,17 @@ export function HandoffSettings({
         </div>
       </div>
 
-      {isMulti ? <UserHandoffTargets notify={notify} /> : (
+      <HandoffSourceAddresses onSaved={(next) => {
+        setTargetRevision((revision) => revision + 1);
+        if (!isMulti) {
+          const saved = next.map(({ name, url, peerFp }) => ({ name, url, ...(peerFp ? { peerFp } : {}) }));
+          setTargets(saved);
+          applyTargetKeys(next);
+          onSettings({ ...settings, handoffTargets: saved });
+        }
+      }} />
+
+      {isMulti ? <UserHandoffTargets key={targetRevision} notify={notify} /> : (
         <div className="settings-card">
           <div className="settings-row">
             <div>
@@ -289,6 +301,7 @@ export function HandoffSettings({
                   先不给填 —— 填进去会落到一个不存在的目标上。 */}
               <HandoffPeerKeyField
                 url={normalizeTargetUrl(item.url)}
+                peerFp={item.peerFp}
                 hasKey={keyedUrls.has(normalizeTargetUrl(item.url).toLowerCase())}
                 mode="row"
                 disabled={loading || !HANDOFF_URL_RE.test(item.url.trim())}
