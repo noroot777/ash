@@ -147,7 +147,7 @@ function timelineAfterPersistedTurns(
 }
 
 function auxEvent(event: AgentTraceEvent): AgentAuxEvent {
-  if (event.kind === "tool") return { kind: "tool", label: event.name, detail: event.detail };
+  if (event.kind === "tool") return { kind: "tool", label: event.name, detail: event.detail, ...(event.nativeWork ? { nativeWork: event.nativeWork } : {}) };
   if (event.kind === "thinking") return { kind: "thinking", label: "思考过程", detail: event.text };
   return { kind: "error", label: event.message };
 }

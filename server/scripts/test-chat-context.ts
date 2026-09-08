@@ -25,10 +25,20 @@ const { withGlobalBrowserPolicy } = await import("../src/browser-verification-po
 await dbClient.executeMultiple(`
   CREATE TABLE chat_context_states (room_id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'idle', error TEXT, updated_at TEXT NOT NULL);
   INSERT INTO chat_context_states VALUES ('legacy-failure', 'failed', '旧失败', '2026-09-01T00:00:00.000Z');
+  CREATE TABLE chat_messages (
+    id TEXT PRIMARY KEY, room_id TEXT NOT NULL, role TEXT NOT NULL, member_id TEXT, author TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '', mentions TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'done',
+    task_id TEXT, context TEXT, created_at TEXT NOT NULL
+  );
+  INSERT INTO chat_messages (id, room_id, role, author, body, status, created_at)
+    VALUES ('legacy-reply', 'legacy-upgrade', 'agent', 'codex', '旧模型回复', 'done', '2026-09-01T00:00:00.000Z'),
+      ('legacy-system-error', 'legacy-upgrade', 'agent', 'codex', '旧系统错误', 'failed', '2026-09-01T00:00:00.001Z');
 `);
 await ensureSchema();
 await ensureSchema();
 assert.equal((await contextState("legacy-failure"))?.failedAt, "2026-09-01T00:00:00.000Z");
+assert.equal((await db.select().from(chatMessages).where(eq(chatMessages.id, "legacy-reply")))[0]!.modelReply, "旧模型回复");
+assert.equal((await db.select().from(chatMessages).where(eq(chatMessages.id, "legacy-system-error")))[0]!.modelReply, null);
 const timestamp = "2026-09-01T00:00:00.000Z";
 await db.insert(projects).values({ id: "project", name: "上下文测试", repoPath: stage, createdAt: timestamp });
 const members: ChatMember[] = ["codex", "claude", "grok"].map((name) => ({ id: name, name, agentType: name as ChatMember["agentType"], executorId: null, model: "fixture-model", reasoningEffort: null }));
@@ -196,7 +206,9 @@ try {
   assert.equal(summaries().length, failedCount);
   assert.deepEqual((await snapshot(failure.id)).context, { status: "idle", error: null, hasSummary: false, clearedAt: null });
   const savedFailure = (await contextState(failure.id))?.failedAt;
+  const savedCause = (await contextState(failure.id))?.error;
   assert.ok(savedFailure);
+  assert.equal(savedCause, "摘要格式无效，原始消息已保留。");
   const afterFailureRestart = new ChatContextManager(invoke, policy);
   await afterFailureRestart.recover();
   await afterFailureRestart.prewarm(failure.id, members[0]!);
@@ -208,6 +220,10 @@ try {
   await settled(failure.id);
   assert.equal(summaries().length, failedCount);
   assert.equal((await snapshot(failure.id)).messages.filter((message) => message.role === "agent").slice(-3).every((message) => message.status === "failed"), true);
+  assert.ok((await snapshot(failure.id)).messages.filter((message) => message.role === "agent").slice(-3).every((message) => message.body.includes(savedCause!)));
+  assert.equal((await chatContextStatus(failure.id)).error, savedCause);
+  assert.equal((await chatContextStatus(failure.id)).status, "failed");
+  assert.equal((await contextState(failure.id))?.failedAt, savedFailure, "再次显示失败提示不延长冷却");
   assert.ok((await db.select().from(chatContextEntries).where(eq(chatContextEntries.roomId, failure.id))).length > 50);
   await send(failure.id, "/clear");
   assert.equal((await contextState(failure.id))?.failedAt, null, "清空后的新上下文不继承旧失败的冷却");
@@ -234,6 +250,16 @@ try {
   const partialPrompt = await partialManager.prepare(partial, members[0]!, partialCutoff, "继续", new AbortController().signal);
   assert.ok(partialPrompt.includes("保留用户决定 KEEP-0"));
   assert.ok(partialPrompt.includes("KEEP-19"));
+  await setContextState(partial.id, "failed", "模型上游 503");
+  const partialFailureAt = (await contextState(partial.id))?.failedAt;
+  await partialManager.prepare(partial, members[0]!, partialCutoff, "正常继续", new AbortController().signal);
+  assert.deepEqual(await chatContextStatus(partial.id), { status: "idle", error: null, hasSummary: true, clearedAt: null });
+  await seed(partial.id, 40);
+  const blockedAfterRestart = new ChatContextManager(async () => { throw new Error("冷却期不能重复调用模型"); }, policy);
+  await blockedAfterRestart.recover();
+  await assert.rejects(blockedAfterRestart.prepare(partial, members[0]!, await captureChatHistory(partial.id), "超额继续", new AbortController().signal), /请稍后重新 @。模型上游 503/);
+  assert.deepEqual(await chatContextStatus(partial.id), { status: "failed", error: "模型上游 503", hasSummary: true, clearedAt: null });
+  assert.equal((await contextState(partial.id))?.failedAt, partialFailureAt);
   console.log("✓ 分批整理中途失败后，冷却结束且历史已够用时归位提示，保留已完成摘要与近期原文");
 
   const tolerant = await createRoom("tolerant-foreground");

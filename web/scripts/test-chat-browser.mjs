@@ -249,6 +249,26 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
   await page.screenshot({ path: `${output}/chat-context-mobile.png`, animations: "disabled" });
+  await page.request.post(`${fixtureUrl}/api/fixture/chat-context/${summaryRoomId}`, { data: { seed: true, count: 20, mode: "invalid" } });
+  await send("@codex 已有摘要后继续讨论");
+  const failedCause = "摘要格式无效，原始消息已保留。";
+  await page.getByRole("status").filter({ hasText: failedCause }).waitFor();
+  await page.request.post(`${fixtureUrl}/api/fixture/chat-context/${summaryRoomId}`, { data: { mode: "ok" } });
+  await send("@codex 整理失败后先正常回复");
+  await page.waitForFunction(() => {
+    const replies = document.querySelectorAll(".chat-message:not(.is-user)");
+    return replies[replies.length - 1]?.classList.contains("is-done") && !document.querySelector(".chat-typing");
+  });
+  await page.getByRole("status").filter({ hasText: "较早历史已整理为共享摘要" }).waitFor();
+  await page.request.post(`${fixtureUrl}/api/fixture/chat-context/${summaryRoomId}`, { data: { seed: true, count: 40, mode: "ok" } });
+  await send("@codex 冷却期历史再次超额");
+  const cooldownBody = `历史整理刚刚失败，原始消息已保留；请稍后重新 @。${failedCause}`;
+  await page.locator(".chat-message.is-failed").last().getByText(cooldownBody, { exact: true }).waitFor();
+  await page.getByRole("status").filter({ hasText: `历史整理失败，原文已保留。${failedCause}` }).waitFor();
+  await page.reload();
+  await page.locator(".chat-message.is-failed").last().getByText(cooldownBody, { exact: true }).waitFor();
+  await page.getByRole("status").filter({ hasText: `历史整理失败，原文已保留。${failedCause}` }).waitFor();
+  await page.screenshot({ path: `${output}/chat-context-cooldown-reason.png`, animations: "disabled" });
   await send("/clear");
   await page.getByRole("status").filter({ hasText: "上下文已清空" }).waitFor();
   await page.locator(".chat-feed .chat-history-note").filter({ hasText: "之前的消息仍可查看" }).waitFor();

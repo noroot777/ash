@@ -7,7 +7,7 @@ import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import type { invokeChat } from "./execution.js";
 import { chatPrompt } from "./prompt.js";
 import { CHAT_CONTEXT_POLICY, estimateChatTokens, parseChatSummary, summaryPrompt, type ChatContextPolicy } from "./context-format.js";
-import { acknowledgeContextFailure, captureChatHistory, captureChatSnapshot, chatHasPending, contextState, readChatHistory, recoverChatContext, resetChatContext, setContextState } from "./context-store.js";
+import { acknowledgeContextFailure, captureChatHistory, captureChatSnapshot, chatHasPending, contextState, readChatHistory, recoverChatContext, resetChatContext, setContextState, showContextFailure } from "./context-store.js";
 import { abortable } from "./invocation-queue.js";
 
 type Room = typeof chatRooms.$inferSelect;
@@ -95,7 +95,8 @@ export class ChatContextManager {
       return history;
     }
     if (state?.failedAt && Date.now() - Date.parse(state.failedAt) < 60000) {
-      throw new Error(`历史整理刚刚失败，原始消息已保留；请稍后重新 @。${state.error ?? ""}`);
+      await showContextFailure(room.id);
+      throw new Error(`历史整理刚刚失败，原始消息已保留；请稍后重新 @。${state.error ?? "上次失败原因未记录。"}`);
     }
     const target = Math.min(trigger, this.policy.recentTokens + this.policy.summaryTokens);
     signal.throwIfAborted();

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, ne, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or } from "drizzle-orm";
 import type { ChatContextStatus, ChatMessage } from "@ash/shared/chat";
 import { db } from "../db/index.js";
 import { chatContextEntries as entries, chatContextStates as states, chatContextResets as resets, chatMessages, chatSummaries as summaries } from "../db/schema.js";
@@ -16,7 +16,7 @@ export async function captureChatSnapshot(roomId: string): Promise<{ cutoff: num
       .where(and(eq(chatMessages.roomId, roomId), inArray(chatMessages.status, ["queued", "running"])))
       .orderBy(asc(chatMessages.createdAt), asc(chatMessages.id)).limit(1)).at(0);
     const beforePending = pending ? or(lt(chatMessages.createdAt, pending.createdAt), and(eq(chatMessages.createdAt, pending.createdAt), lt(chatMessages.id, pending.id))) : undefined;
-    const fields = { id: chatMessages.id, role: chatMessages.role, author: chatMessages.author, body: chatMessages.body, taskId: chatMessages.taskId };
+    const fields = { id: chatMessages.id, role: chatMessages.role, author: chatMessages.author, body: chatMessages.body, taskId: chatMessages.taskId, status: chatMessages.status, modelReply: chatMessages.modelReply };
     const unfrozen = and(eq(chatMessages.roomId, roomId), ne(chatMessages.role, "system"), inArray(chatMessages.status, ["done", "failed", "stopped"]), isNull(entries.sequence));
     for (;;) {
       const missing = await tx.select(fields)
@@ -58,16 +58,22 @@ export async function setContextState(roomId: string, status: ChatContextStatus[
 }
 
 export async function acknowledgeContextFailure(roomId: string) {
-  // 清除已不妨碍当前请求的提示，保留失败时间以维持前后台重试冷却。
-  await db.update(states).set({ status: "idle", error: null, updatedAt: now() })
+  // 提示归位后仍保留原因和时间，供冷却再次阻止回复时使用。
+  await db.update(states).set({ status: "idle", updatedAt: now() })
     .where(and(eq(states.roomId, roomId), eq(states.status, "failed")));
+}
+
+export async function showContextFailure(roomId: string) {
+  await db.update(states).set({ status: "failed", updatedAt: now() })
+    .where(and(eq(states.roomId, roomId), eq(states.status, "idle")));
 }
 
 export async function chatContextStatus(roomId: string): Promise<ChatContextStatus> {
   const state = await contextState(roomId);
   const reset = await chatContextReset(roomId);
   const summary = (await db.select({ id: summaries.id }).from(summaries).where(and(eq(summaries.roomId, roomId), gt(summaries.throughSequence, reset?.afterSequence ?? 0))).limit(1)).at(0);
-  return { status: (state?.status ?? "idle") as ChatContextStatus["status"], error: state?.error ?? null, hasSummary: !!summary, clearedAt: reset?.clearedAt ?? null };
+  const error = state?.status === "failed" || state?.status === "stopped" ? state.error : null;
+  return { status: (state?.status ?? "idle") as ChatContextStatus["status"], error, hasSummary: !!summary, clearedAt: reset?.clearedAt ?? null };
 }
 
 async function chatContextReset(roomId: string) {
@@ -95,6 +101,34 @@ export async function chatHasPending(roomId: string) {
 }
 
 export async function recoverChatContext() {
+  await repairLegacyContextMessages();
   await db.update(states).set({ status: "stopped", error: "服务重启，历史整理已中断；已保存的摘要和原文仍保留，下次点名时按需继续。", updatedAt: now() })
     .where(eq(states.status, "compacting"));
+}
+
+async function repairLegacyContextMessages() {
+  await db.transaction(async (tx) => {
+    let after = 0;
+    for (;;) {
+      const rows = await tx.select({ entry: entries, message: chatMessages, reset: resets.afterSequence }).from(entries)
+        .innerJoin(chatMessages, eq(chatMessages.id, entries.messageId)).leftJoin(resets, eq(resets.roomId, entries.roomId))
+        .where(and(gt(entries.sequence, after), eq(chatMessages.role, "agent"), inArray(chatMessages.status, ["failed", "stopped"])))
+        .orderBy(asc(entries.sequence)).limit(500);
+      if (!rows.length) break;
+      for (const { entry, message, reset } of rows) {
+        after = entry.sequence;
+        const original = contextMessage({ ...message, role: "agent", status: undefined, modelReply: undefined });
+        if (entry.content !== original) continue;
+        const content = message.taskId && !message.modelReply
+          ? contextMessage({ ...message, role: "system", author: "系统", body: `${message.author}：${message.body}` })
+          : contextMessage({ ...message, role: "agent" });
+        if (content === original) continue;
+        await tx.update(entries).set({ content, tokens: estimateChatTokens(`${content}\n`) }).where(eq(entries.sequence, entry.sequence));
+        // 原消息和序号保留；受错误归属影响的当前上下文摘要由修正后的历史按需重建。
+        if (!message.taskId && entry.sequence > (reset ?? 0)) {
+          await tx.delete(summaries).where(and(eq(summaries.roomId, entry.roomId), gte(summaries.throughSequence, entry.sequence)));
+        }
+      }
+    }
+  });
 }

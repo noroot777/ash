@@ -17,6 +17,7 @@ export const chatMessages = sqliteTable("chat_messages", {
   memberId: text("member_id"),
   author: text("author").notNull(),
   body: text("body").notNull().default(""),
+  modelReply: text("model_reply"),
   mentions: text("mentions").notNull().default("[]"),
   status: text("status").notNull().default("done"),
   taskId: text("task_id"),
@@ -64,7 +65,7 @@ export async function ensureChatSchema(client: Pick<Client, "executeMultiple" | 
     CREATE INDEX IF NOT EXISTS chat_rooms_project ON chat_rooms(project_id);
     CREATE TABLE IF NOT EXISTS chat_messages (
       id TEXT PRIMARY KEY, room_id TEXT NOT NULL, role TEXT NOT NULL, member_id TEXT,
-      author TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', mentions TEXT NOT NULL DEFAULT '[]',
+      author TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', model_reply TEXT, mentions TEXT NOT NULL DEFAULT '[]',
       status TEXT NOT NULL DEFAULT 'done', task_id TEXT, context TEXT, created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS chat_messages_room ON chat_messages(room_id, created_at);
@@ -85,6 +86,11 @@ export async function ensureChatSchema(client: Pick<Client, "executeMultiple" | 
       room_id TEXT PRIMARY KEY, after_sequence INTEGER NOT NULL, cleared_at TEXT NOT NULL
     );
   `);
+  const messageColumns = await client.execute("PRAGMA table_info(chat_messages)");
+  if (!messageColumns.rows.some((column) => column.name === "model_reply")) {
+    await client.execute("ALTER TABLE chat_messages ADD COLUMN model_reply TEXT");
+  }
+  await client.execute("UPDATE chat_messages SET model_reply=body WHERE role='agent' AND status='done' AND model_reply IS NULL");
   const columns = await client.execute("PRAGMA table_info(chat_context_states)");
   if (!columns.rows.some((column) => column.name === "failed_at")) {
     await client.execute("ALTER TABLE chat_context_states ADD COLUMN failed_at TEXT");

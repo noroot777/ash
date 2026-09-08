@@ -1,6 +1,7 @@
 import type { Group, Session, Task, TaskListItem } from "@ash/shared";
 import { agentMix } from "@ash/shared/team";
-import { Clock, FolderOpen, Info, MagnifyingGlass, UsersThree } from "@phosphor-icons/react";
+import { Clock, FolderOpen, Info, MagnifyingGlass, Robot, UsersThree } from "@phosphor-icons/react";
+import { NativeWorkInspector, type NativeWorkInspectorProps } from "../task-detail/NativeWorkInspector.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { MessageFooter } from "../components/MessageFooter.tsx";
@@ -21,6 +22,7 @@ import {
 } from "./teamModel.ts";
 
 export interface TeamInspectorContext {
+  nativeWork: NativeWorkInspectorProps;
   task: Task;
   workers: TaskListItem[];
   groups: Group[];
@@ -141,6 +143,14 @@ function TeamInfoPanel({ task, workers, sessions }: Pick<TeamInspectorContext, "
 }
 
 export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>[] = [
+  {
+    id: "subagents",
+    title: "子智能体",
+    shortcut: "s",
+    icon: <Robot size={14} />,
+    defaultOpen: true,
+    render: (context) => <NativeWorkInspector {...context.nativeWork} />,
+  },
   {
     id: "workers",
     title: "执行者",
