@@ -8,7 +8,7 @@ export function FreeReviewProgress({
   compact?: boolean;
 }) {
   const label = kind === "auto_rereview"
-    ? (compact ? "修改中，完成后自动复审" : "任务修改中，确认完成后自动复审")
+    ? (compact ? "修改中，结束后自动复审" : "任务修改中，本轮正常结束后自动复审")
     : (compact ? "任务修改中" : "任务正在修改");
   return (
     <span className={`free-review-progress is-${kind}${compact ? " is-compact" : ""}`} role="status">

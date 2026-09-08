@@ -546,7 +546,7 @@ export async function consumeSingleRun(a: {
   // 结论 —— 交给结算钩子的话,正在跑的那一轮就地验证会被当成「验完了」收掉(清轮次、
   // 涨轮数、却给不出 verified/verify_failed),自由工作流那边同理。
   if (!settled.nativeTurn) {
-    await afterSettlement(taskId, settled.status, settled.confirmedDone, !stopped && exitStatus === 0, role);
+    await afterSettlement(taskId, settled.status, settled.confirmedDone, !stopped && !!doneEvent && exitStatus === 0, role);
   }
   if (settled.note) {
     // 结算说明落成**会话旁注**（持久 system 行 + SSE），跟会话轮换旁注同一条道：

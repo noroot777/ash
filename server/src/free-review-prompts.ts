@@ -38,7 +38,7 @@ export function freeRepairPrompt(taskId: string, run: ReviewRunRow): string {
   const dir = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
   return `【自由工作流审查未通过 · 第 ${run.currentRound} 轮】\n` +
     `请先完整读取 [report.md](${freeReviewReportPath(taskId, run.id, run.currentRound)})，再按报告修复，不要扩大原任务边界。` +
-    `修复完成并验证后调用 complete_task(taskId="${taskId}")；ash 随后会自动派同一位审查者复审。\n\n` +
+    `修复完成并验证后调用 complete_task(taskId="${taskId}") 确认任务完成；已预约的复审会在修复回合正常结束后自动启动。\n\n` +
     `证据目录：${dir}`;
 }
 

@@ -196,8 +196,7 @@ try {
   }, { armed: true, checkMode: "syntax", retryLimit: 3, note: "清槽前抢先保存", override: rollbackOverride },
     "派审清槽不得抹掉消费之后、清槽之前保存的新预约");
 
-  // 挂着预约、这一轮没交卷：预约必须原样留着（不能被当成「用过了」清掉），而且时间线上
-  // 要说清它在等什么。静默的后果是用户只看到「预约还在、审查没开」，只能来问是不是坏了。
+  // 已完成任务的续聊漏调 complete_task，仍按用户预约开审，任务完成确认另行记账。
   await createTasks([freeTask("free-unconfirmed-task", "free unconfirmed")]);
   await db.insert(sessions).values({
     id: "unconfirmed-session", taskId: "free-unconfirmed-task", role: "single", agentType: "codex",
@@ -214,15 +213,15 @@ try {
   const unconfirmed = await api.request("/tasks/free-unconfirmed-task/free-workflow").then((response) => response.json()) as {
     reviewReservation: { armed: boolean }; reviews: unknown[];
   };
-  assert.equal(unconfirmed.reviewReservation.armed, true, "没交卷不等于预约作废，槽必须原样留着");
-  assert.equal(unconfirmed.reviews.length, 0, "没确认完成就派审 = 把「确认完成后再审」的语义作废");
+  assert.equal(unconfirmed.reviewReservation.armed, false, "正常结束的续聊不再因漏调完成工具而卡住预约");
+  assert.equal(unconfirmed.reviews.length, 1, "按用户预约派出审查");
   assert.match(readFileSync(sessionTranscriptPath("free-unconfirmed-task", "unconfirmed-session"), "utf8"),
-    /完成后审查仍在等待/, "预约没触发必须留下持久可见的原因，只让用户干等是缺陷");
+    /执行回合已正常结束，按预约启动审查/, "自动启动及未确认完成的区别落在持久时间线上");
 
   console.log("✓ 预约覆盖整套存整套落，审查者配置不受影响");
   console.log("✓ 预约里的执行器失效只摘执行器那一段，模型与智能水平照用且时间线有交代");
   console.log("✓ 预约启动失败整条回滚；消费与清槽窗口内用户新保存的预约不被抹掉");
-  console.log("✓ 没交卷时预约原样留着，且时间线上说清了它在等确认完成");
+  console.log("✓ 续聊漏调完成工具仍启动预约审查，时间线上说明完成状态没有被代确认");
 } finally {
   // 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
   await releaseTmpDb();

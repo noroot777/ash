@@ -41,24 +41,13 @@ export async function disarmFreeReviewReservation(taskId: string): Promise<boole
   return true;
 }
 
-/**
- * 挂着预约、这一轮却没交卷时留下的那行说明。
- *
- * 什么都不做是对的 —— 预约的语义就是「**确认完成**之后再审」，没交卷就不能假定活干完了。
- * 但静默是错的：用户那一侧看到的只有「预约还挂着、审查没开」，分不清是坏了还是在等他。
- * 现场实测（QREY2SzRACXy）：审查未通过 → 修复回合结束没调 complete_task → 回落原终态
- * （续聊回合本来就不要求确认，所以连「未交卷」的降级说明都没有）→ 预约原地不动，
- * 前后两个回合都这样，用户只能来问「预约的审查怎么不启动」。
- *
- * 返回是否真写了（槽空着 = 无事发生，不写）。
- */
-export async function noteReservationStillWaiting(taskId: string): Promise<boolean> {
+/** 中断后保留预约，同时把等待原因落在时间线上。 */
+export async function noteReservationStillWaiting(taskId: string, reason: string): Promise<boolean> {
   const slot = (await db.select({ armed: freeWorkflowStates.reviewArmed })
     .from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId))).at(0);
   if (!slot?.armed) return false;
   await appendTaskTimeline(taskId,
-    "完成后审查仍在等待：本回合结束时没有确认完成（complete_task），预约只在确认完成的那一轮结束后才触发。"
-    + "预约本身仍然保留——让这个任务再跑一轮并确认完成，或在审查面板里直接开审。");
+    `预约审查仍在等待：${reason}。预约已保留，后续执行回合正常结束后自动开始，也可在审查面板里直接开审。`);
   return true;
 }
 
@@ -98,7 +87,7 @@ const textOrNull = (value: unknown): string | null => (typeof value === "string"
  *
  * 产品明确允许用户在回合运行期间改预约。老写法是「结算读 A → 跑完无条件 armed=false」，
  * 于是用户中途保存的新预约 B 被这条迟到的清槽静默删掉（审查实测：B 的配置还在、预约位
- * 没了，下次确认完成什么都不会发生）。令牌就是 updatedAt：任何一次保存都会推进它。
+ * 没了，下次执行回合正常结束什么都不会发生）。令牌就是 updatedAt：任何一次保存都会推进它。
  */
 export async function consumeFreeReviewReservation(
   taskId: string,
@@ -129,12 +118,12 @@ export async function consumeFreeReviewReservation(
  * - 已经 armed = 别处挂了新预约（典型：自动复审链的续轮），同理不动。
  *
  * 不回滚的后果是**预约永久蒸发**：CAS 消费已经把槽清空了，启动又抛在半路，于是用户
- * 那条「完成后自动派审」既没跑也不在了，下次确认完成什么都不会发生，界面上只剩一行
+ * 那条「完成后自动派审」既没跑也不在了，下次执行回合正常结束什么都不会发生，界面上只剩一行
  * 失败时间线（审查实测）。
  *
  * 恢复的是**整条**预约而不只是 armed/runId：派审路径在启动前就把槽清成了空壳
  * （`clearReservationForDispatch`，附言与覆盖四列全为 null），只翻回 armed 会得到一条
- * 「审查者还在、附言和执行器覆盖都没了」的残缺预约——下次确认完成时按审查者自己的
+ * 「审查者还在、附言和执行器覆盖都没了」的残缺预约——下次执行回合正常结束时按审查者自己的
  * 配置跑，正好丢掉用户这次改的模型/智能水平（审查实测）。
  */
 export async function restoreFreeReviewReservation(
@@ -179,7 +168,7 @@ export async function restoreFreeReviewReservation(
  *   而时间线上写的还是「预约期间已被更新，保留你最新的设置」（审查实测）。
  * - 令牌对不上（或槽已 armed）就**整条不动**：CAS 消费和真正启动之间隔着建 run 行等好几
  *   次 await，产品又允许用户在回合运行期间改预约，于是用户在这个窗口里保存的新预约会被
- *   这条迟到的清槽连 armed 带附言、覆盖四列一起抹掉（审查实测）。它是下次确认完成该干
+ *   这条迟到的清槽连 armed 带附言、覆盖四列一起抹掉（审查实测）。它是下次执行回合正常结束该干
  *   什么的最新意思，这一轮审查照跑，槽留给它。
  *
  * 返回是否真的清了槽（false = 槽里已是别人的新预约）。
@@ -214,11 +203,11 @@ export async function clearReservationForDispatch(taskId: string, slot: {
 }
 
 /**
- * 审查未通过、还有轮数时挂上「修复确认完成后自动复审」的续轮预约。
+ * 审查未通过、还有轮数时挂上「修复回合正常结束后自动复审」的续轮预约。
  * 返回是否真的挂上了（false = 槽里已经有一条 armed 的预约，保留它）。
  *
  * `setWhere` 是这个函数的全部要点：槽里已经 armed 说明用户在这一轮审查期间自己预约了
- * 下一条（可能换了审查者、换了检查档），那是他对「下次确认完成时干什么」的最新意思。
+ * 下一条（可能换了审查者、换了检查档），那是他对「下次执行回合正常结束时干什么」的最新意思。
  * 早先这里是无条件 `onConflictDoUpdate`，把 reviewRunId 改写成本链的 run —— 用户预约
  * 的新审查链再也不会开，取而代之的是在旧 run 上续一轮（审查实测）。
  *
@@ -248,13 +237,13 @@ export async function armFollowUpFreeReview(
   return attached.length > 0;
 }
 
-// 「下次确认完成时派一轮审查」的唯一消费点。两种形态共用这一个槽位：
+// 「下次执行回合正常结束时派一轮审查」的唯一消费点。两种形态共用这一个槽位：
 // - runId 非空：自动复审链的续轮（round 未通过、还有轮数时由结算自动挂上）
 // - runId 为空：用户手动预约的新一条审查链
 //
 // **先 CAS 消费、消费成功才启动**：反过来（先启动、后清槽）无法保证清掉的就是自己读到
 // 的那一条。CAS 失败 = 槽在这中间被改过（用户保存了新预约 / 别处已消费）：重读一次按
-// 最新那条再来，两次都抢不到就放手（此时槽里的预约仍然 armed，下次确认完成照常触发），
+// 最新那条再来，两次都抢不到就放手（此时槽里的预约仍然 armed，下次执行回合正常结束照常触发），
 // 绝不把用户的新配置当成自己的那条清掉。
 export async function startReservedFreeReview(
   taskId: string,
@@ -272,7 +261,7 @@ export async function startReservedFreeReview(
   for (let attempt = 0; attempt < 2; attempt++) {
     if (!snapshot?.armed) return;
     // 预约的审查者已被删除：这条预约永远执行不了，同样按 CAS 消费掉（消费不到就是
-    // 被改过了，那条新预约自己会在下次完成时处理）。
+    // 被改过了，那条新预约自己会在下次执行回合正常结束时处理）。
     if (!snapshot.runId && !snapshot.reviewerId) {
       if (!(await consumeFreeReviewReservation(taskId, snapshot))) {
         snapshot = await readFreeReviewReservation(taskId);
@@ -303,10 +292,10 @@ export async function startReservedFreeReview(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       // 启动失败 = 这条预约没被用掉，把它放回槽里（CAS，见 restoreFreeReviewReservation）。
-      // 否则它既没跑也不在了：用户下次确认完成时什么都不会发生，而界面上只有一行失败。
+      // 否则它既没跑也不在了：用户下次执行回合正常结束时什么都不会发生，而界面上只有一行失败。
       const restored = await restoreFreeReviewReservation(taskId, consumed, token);
       await appendTaskTimeline(taskId, restored
-        ? `完成后审查启动失败：${message}；预约已保留，下次确认完成时会再试一次。`
+        ? `完成后审查启动失败：${message}；预约已保留，下次执行回合正常结束时会再试一次。`
         : `完成后审查启动失败：${message}；预约期间已被更新，保留你最新的设置。`);
       bus.publish({ type: "task.review", taskId });
     }
