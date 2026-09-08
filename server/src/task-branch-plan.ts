@@ -1,4 +1,3 @@
-import { HTTPException } from "hono/http-exception";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks, projects, taskBranchReceipts } from "./db/schema.js";
@@ -69,18 +68,16 @@ export async function initializeBranchPlan(row: typeof tasks.$inferInsert & { id
   let parent: BranchTask | undefined;
   if (!base && row.parentId) {
     const lead = (await db.select().from(tasks).where(eq(tasks.id, row.parentId))).at(0);
-    if (lead?.projectId === row.projectId && lead.mode === "team" && lead.useWorktree) {
-      base = await resolveWorktreeBranchName(repo, lead.id);
-      parent = lead;
-    }
+    // 团队默认隔离执行者在各自起跑时从共享分支开叉，串行后续执行者能看到领队的新提交。
+    if (lead?.projectId === row.projectId && lead.mode === "team") return;
   }
   if (base) parent ??= await branchOwner(repo, row.projectId, base);
+  const start = await commitAt(repo, base || "HEAD");
+  // 空仓库和失效基线沿用运行时的惰性准备 / staleBaseFallback；此刻没有可冻结的提交。
+  if (!start) return;
   const target = row.mergeTargetBranch?.trim()
     ? branchName(row.mergeTargetBranch)
     : parent ? await finalTarget(repo, parent) : await resolveTaskMergeTarget(repo, base && await localBranchExists(repo, branchName(base)) ? base : null);
-  if (!target || !(await localBranchExists(repo, target))) throw new HTTPException(400, { message: `最终合入分支 ${target || "（未指定）"} 不存在，请选择本地分支` });
-  const start = await commitAt(repo, base || "HEAD");
-  if (!start) throw new HTTPException(400, { message: `开工起点 ${base || "HEAD"} 不存在，未创建任务` });
   row.worktreeBase = base;
   row.worktreeStartCommit = start;
   row.mergeTargetBranch = target;
@@ -150,12 +147,13 @@ export async function dependentTasks(repo: string, projectId: string, taskId: st
   return blocked;
 }
 
-export async function branchDeletionBlock(repo: string, taskId: string, projectId?: string): Promise<string | null> {
+export async function branchDeletionBlock(repo: string, taskId: string, projectId?: string, deleteRefs = true): Promise<string | null> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task && !projectId) return null;
   if (task?.baseUpdateIntent) return "上次基线更新尚未结算，请先重试更新基线再删除或清理";
+  if (!deleteRefs) return null;
   const dependents = await dependentTasks(repo, task?.projectId || projectId!, taskId);
   return dependents.length
-    ? `仍有 ${dependents.length} 个任务依赖此任务的分支或验收记录：${dependents.map(t => `「${t.title}」（${t.id}）`).join("、")}。先合入父成果并处理子任务依赖，再删除；清理不能解除验收依赖。`
+    ? `仍有 ${dependents.length} 个任务依赖此任务的分支或验收记录：${dependents.map(t => `「${t.title}」（${t.id}）${t.archived ? "［已归档，可在归档列表中处理］" : ""}`).join("、")}。先合入父成果并处理子任务依赖，再删除；清理不能解除验收依赖。`
     : null;
 }

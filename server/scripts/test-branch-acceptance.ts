@@ -19,6 +19,7 @@ const { taskWorkspace } = await import("../src/task-workspace.js");
 const { acceptTask, mountTaskAcceptanceRoutes } = await import("../src/task-accept.js");
 const { mountTaskRoutes } = await import("../src/task-routes.js");
 const { mountTaskDiffRoutes } = await import("../src/task-diff-routes.js");
+const { mountProjectRoutes } = await import("../src/project-routes.js");
 const { branchDependency, branchDeletionBlock } = await import("../src/task-branch-plan.js");
 const { readBranchPlan, acceptFamily } = await import("../src/task-branch-routes.js");
 const { updateTaskBase } = await import("../src/task-base-update.js");
@@ -28,6 +29,7 @@ const api = new Hono();
 mountTaskRoutes(api);
 mountTaskAcceptanceRoutes(api);
 mountTaskDiffRoutes(api);
+mountProjectRoutes(api);
 let sequence = 0;
 const row = async (id: string) => (await db.select().from(tasks).where(eq(tasks.id, id)))[0];
 const commit = (path: string, file: string, value: string) => {
@@ -72,6 +74,10 @@ async function setup(strategy: "safe" | "squash" | "tag" = "safe") {
 try {
   if (process.argv.includes("--serve")) {
     const s = await setup();
+    const grand = await s.newTask("grand", s.childWs.branch);
+    await db.update(tasks).set({ workflow: null, workflowMode: "free" }).where(eq(tasks.id, grand.id));
+    const grandWs = await taskWorkspace(await row(grand.id), s.repo);
+    commit(grandWs.path, "grand.txt", "grandchild\n");
     const squash = await setup("squash");
     await acceptTask(squash.parent.id);
     const { serve } = await import("@hono/node-server");
@@ -90,6 +96,62 @@ try {
     await frontend.close();
     await new Promise<void>(resolve => backend.close(() => resolve()));
   } else {
+  {
+    const s = await setup();
+    await db.update(tasks).set({ mergeTargetBranch: null, worktreeStartCommit: null, baseTaskId: null }).where(eq(tasks.id, s.child.id));
+    const acceptBefore = await acceptTask(s.child.id);
+    assert.equal(acceptBefore.accepted, false);
+    if (!acceptBefore.accepted) assert.equal(acceptBefore.reason, "target_checked_out");
+    const discard = (branch = false) => api.request(`/projects/${s.parent.projectId}/workspaces/discard`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ taskId: s.parent.id, worktree: true, branch }),
+    });
+    assert.equal((await discard(true)).status, 409);
+    assert.equal((await api.request(`/tasks/${s.parent.id}?worktree=1&branch=0`, { method: "DELETE" })).status, 409, "record deletion still removes dependency receipts");
+    await db.update(tasks).set({ baseUpdateIntent: "pending" }).where(eq(tasks.id, s.parent.id));
+    assert.equal((await discard()).status, 409, "directory cleanup preserves pending baseline recovery");
+    await db.update(tasks).set({ baseUpdateIntent: null, status: "running" }).where(eq(tasks.id, s.parent.id));
+    assert.equal((await discard()).status, 409, "directory cleanup preserves busy protection");
+    await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, s.parent.id));
+    const response = await discard();
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).worktreeRemoved, true);
+    assert.ok(await row(s.parent.id));
+    assert.equal(git(s.repo, "rev-parse", s.parentWs.branch!), s.parentCommit);
+    assert.equal((await acceptTask(s.child.id)).accepted, true);
+    console.log("✓ legacy child accepts after directory-only cleanup; record/ref, busy and pending-update protections remain");
+  }
+  {
+    const s = await setup();
+    await db.update(tasks).set({ archived: true, status: "canceled" }).where(eq(tasks.id, s.child.id));
+    const response = await api.request(`/tasks/${s.parent.id}`, { method: "DELETE" });
+    assert.equal(response.status, 409);
+    const { error } = await response.json();
+    assert.ok(error.includes(s.child.title));
+    assert.match(error, /已归档，可在归档列表中处理/);
+    console.log("✓ archived canceled dependency is protected and its archive location is explained");
+  }
+  {
+    const s = await setup();
+    const grand = await s.newTask("grand", s.childWs.branch);
+    await db.update(tasks).set({ workflow: null, workflowMode: "free" }).where(eq(tasks.id, grand.id));
+    const ws = await taskWorkspace(await row(grand.id), s.repo);
+    commit(ws.path, "grand.txt", "grandchild\n");
+    const view = (await readBranchPlan(s.parent.id))!;
+    const entries = [view.task, ...view.descendants];
+    const main = git(s.repo, "rev-parse", "main");
+    const result = await acceptFamily(s.parent.id, entries.filter(e => e.taskId !== s.child.id), acceptTask);
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.completed, []);
+    assert.equal(result.stoppedAt, grand.id);
+    assert.match(result.error!, /未勾选的父任务/);
+    assert.equal(git(s.repo, "rev-parse", "main"), main);
+    assert.notEqual((await row(s.parent.id)).stage, "accepted");
+    const complete = await acceptFamily(s.parent.id, entries, acceptTask);
+    assert.equal(complete.ok, true, complete.error);
+    assert.deepEqual(complete.completed, [s.parent.id, s.child.id, grand.id]);
+    console.log("✓ omitted intermediate ancestor is rejected before any merge; complete selection accepts all three");
+  }
   {
     const s = await setup();
     assert.equal((await row(s.child.id)).mergeTargetBranch, "main");

@@ -120,3 +120,4 @@
 .branch-acceptance-panel button { border:1px solid var(--line2); border-radius:6px; padding:5px 10px; color:var(--text); background:var(--panel); cursor:pointer; }
 .branch-acceptance-panel button:disabled { opacity:.5; cursor:default; }
 .branch-acceptance-panel a { color:var(--accent); text-decoration:underline; }
+.branch-dependency-detail { display:flex; flex-direction:column; flex-basis:100%; padding-left:24px; overflow-wrap:anywhere; }

@@ -323,7 +323,7 @@ export function mountProjectRoutes(api: Hono): void {
     const owner = await projectOfTask(b.taskId);
     if (owner !== null && owner !== row.id) return c.json({ error: "task not found", taskId: b.taskId }, 404);
     return withRepoLock(row.repoPath, async () => {
-    const dependencyError = await branchDeletionBlock(row.repoPath, b.taskId, row.id);
+    const dependencyError = await branchDeletionBlock(row.repoPath, b.taskId, row.id, b.branch !== false);
     if (dependencyError) return c.json({ error: dependencyError, reason: "dependent_tasks" }, 409);
     const busy = await taskBusyRejection(b.taskId, "清理");
     if (busy) return c.json(busy, 409);

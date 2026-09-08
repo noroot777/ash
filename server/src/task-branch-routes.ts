@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import type { BranchPlanEntry, BranchPlanView, FamilyAcceptanceResult } from "@ash/shared";
+import { familySelectionBlock } from "@ash/shared/branch-plan";
 import { acceptPlan, isFinalHumanGate } from "@ash/shared/workflow-policy";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
@@ -80,6 +81,8 @@ export async function acceptFamily(
     const chosen = entries.filter(e => ids.has(e.taskId));
     const blocked = chosen.find(e => e.stage !== "accepted" && e.blocker);
     if (blocked) return { ok: false, completed: [], stoppedAt: blocked.taskId, error: blocked.blocker! };
+    const dependencyBlock = familySelectionBlock(entries, ids);
+    if (dependencyBlock) return { ok: false, completed: [], stoppedAt: dependencyBlock.taskId, error: dependencyBlock.error };
     const completed: string[] = [];
     for (const row of chosen) {
       const currentTask = (await db.select().from(tasks).where(eq(tasks.id, row.taskId))).at(0);

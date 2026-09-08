@@ -25,11 +25,11 @@ export async function requestTaskCreationOrigin(c: Context): Promise<string> {
   const sourceId = actor.kind === "agent" ? actor.taskId : c.req.header("x-ash-source-task-id")?.trim();
   if (!sourceId) return JSON.stringify({ kind: c.req.header("x-ash-client") === "mcp" ? "agent" : "user" });
   const source = (await db.select().from(tasks).where(eq(tasks.id, sourceId))).at(0);
-  if (!source || !(await canSeeProject(actor, source.projectId))) throw new HTTPException(404, { message: "来源任务不存在" });
+  if (!source || !(await canSeeProject(actor, source.projectId))) throw new HTTPException(404, { res: Response.json({ error: "来源任务不存在" }, { status: 404 }) });
   const token = c.req.header("x-ash-turn-token")?.trim();
   const valid = actor.kind === "agent" || (source.activeTurnToken
     ? token === source.activeTurnToken
     : source.mode === "team" && ["running", "idle"].includes(source.status));
-  if (!valid) throw new HTTPException(409, { message: "创建来源的回合身份已过期，请由当前智能体重试" });
+  if (!valid) throw new HTTPException(409, { res: Response.json({ error: "创建来源的回合身份已过期，请由当前智能体重试" }, { status: 409 }) });
   return agentTaskCreationOrigin(sourceId);
 }

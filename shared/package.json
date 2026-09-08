@@ -6,6 +6,10 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./branch-plan": {
+      "types": "./src/branch-plan.ts",
+      "default": "./src/branch-plan.ts"
+    },
     "./task-origin": {
       "types": "./src/task-origin.ts",
       "default": "./src/task-origin.ts"

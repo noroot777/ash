@@ -37,7 +37,13 @@ try {
   const derived = await (await create({ title: "Codex 派生的任务", agentType: "claude" }, headers)).json();
   assert.deepEqual(derived.creationOrigin, { kind: "agent", taskId: source, taskTitle: "父任务", agentType: "codex", executorLabel: "Codex Dev" });
   assert.equal(derived.agentType, "claude", "worker identity stays independent of its creator");
-  assert.equal((await create({}, { ...headers, "x-ash-turn-token": "stale" })).status, 409);
+  const stale = await create({}, { ...headers, "x-ash-turn-token": "stale" });
+  assert.equal(stale.status, 409);
+  assert.match(stale.headers.get("content-type")!, /application\/json/);
+  assert.match((await stale.json()).error, /回合身份已过期/);
+  const missing = await create({}, { ...headers, "x-ash-source-task-id": "missing-source" });
+  assert.equal(missing.status, 404);
+  assert.deepEqual(await missing.json(), { error: "来源任务不存在" });
   const external = await (await create({ title: "外部智能体创建" }, { "x-ash-client": "mcp" })).json();
   assert.deepEqual(external.creationOrigin, { kind: "agent" });
   assert.equal(taskCreationLabel(parseTaskCreationOrigin(null)), "来源未记录");

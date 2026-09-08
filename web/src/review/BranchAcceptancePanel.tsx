@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { BranchPlanView, Task, TaskListItem } from "@ash/shared";
+import { familySelectionBlock } from "@ash/shared/branch-plan";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 
@@ -43,6 +44,7 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
   if (!view.task.startCommit && !dep && !descendants.length) return null;
   const selection = [view.task, ...descendants.filter(row => checked.includes(row.taskId))];
   const selectedProposal = proposal ? [proposal.task, ...proposal.descendants.filter(row => checked.includes(row.taskId))] : [];
+  const selectionBlock = familySelectionBlock([view.task, ...view.descendants], new Set(selection.map(row => row.taskId)));
   const run = async () => {
     if (!proposal) return;
     setBusy(true);
@@ -51,6 +53,8 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
         await api.updateTaskBase(task.id, proposal.task.sourceCommit!);
         setMessage("基线已更新，请核对改动并按影响范围重新验证。");
       } else {
+        const blocked = familySelectionBlock([proposal.task, ...proposal.descendants], new Set(selectedProposal.map(row => row.taskId)));
+        if (blocked) { setMessage(blocked.error); return; }
         const result = await api.acceptFamily(task.id, selectedProposal.map(row => ({ taskId: row.taskId, fingerprint: row.fingerprint })));
         setMessage(result.ok ? `统一验收已完成，共 ${result.completed.length} 个任务。`
           : `已完成 ${result.completed.length} 个任务；其余暂停：${result.error}`);
@@ -60,7 +64,10 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
     } catch (e) { setMessage(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); setAction(null); await refresh(); }
   };
-  const open = (next: "update" | "family") => { setProposal(view); setAction(next); };
+  const open = (next: "update" | "family") => {
+    if (next === "family" && selectionBlock) { setMessage(selectionBlock.error); return; }
+    setProposal(view); setAction(next);
+  };
   return (
     <section className="branch-acceptance-panel" aria-label="派生与验收依赖">
       <header><b>派生与验收</b><button type="button" disabled={busy} onClick={() => void refresh()}>刷新依赖</button></header>
@@ -76,8 +83,13 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
           <label><input type="checkbox" disabled={busy || !!row.blocker} checked={checked.includes(row.taskId)} onChange={e => setChecked(ids => e.target.checked ? [...ids, row.taskId] : ids.filter(id => id !== row.taskId))} />{row.title}</label>
           <span>{row.blocker || `${row.strategy} → ${row.targetBranch}`}</span>
           <a href={taskHref(row.projectId, row.taskId)}>查看改动</a>
+          {row.dependency && <div className="branch-dependency-detail">
+            <span>父任务：{row.dependency.taskId ? <a href={taskHref(row.projectId, row.dependency.taskId)}>{row.dependency.title}</a> : row.dependency.title}</span>
+            <span>{row.dependency.message}</span>
+          </div>}
         </li>)}</ul>
-        <button type="button" disabled={busy || !checked.length || !!view.task.blocker} onClick={() => open("family")}>验收父任务及所选子任务（{selection.length}）</button>
+        {checked.length > 0 && selectionBlock && <p role="alert">{selectionBlock.error}</p>}
+        <button type="button" disabled={busy || !checked.length || !!view.task.blocker || !!selectionBlock} onClick={() => open("family")}>验收父任务及所选子任务（{selection.length}）</button>
       </>}
       {message && <p role="status">{message}</p>}
       {action && proposal && <ConfirmDialog
