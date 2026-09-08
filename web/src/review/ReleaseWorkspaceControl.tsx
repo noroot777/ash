@@ -3,9 +3,10 @@ import type { TaskListItem, TaskWorkspaceLeftover } from "@ash/shared";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 
-export function ReleaseWorkspaceControl({ task, disabled, onReleased }: {
+export function ReleaseWorkspaceControl({ task, disabled, blocker, onReleased }: {
   task: TaskListItem;
   disabled: boolean;
+  blocker: string | null;
   onReleased: () => Promise<void>;
 }) {
   const [workspace, setWorkspace] = useState<TaskWorkspaceLeftover | null>(null);
@@ -25,6 +26,7 @@ export function ReleaseWorkspaceControl({ task, disabled, onReleased }: {
       setWorkspace(latest);
       if (!latest.branch) { setError("任务分支不存在，请先恢复分支再释放目录。"); return; }
       if (latest.path) setProposal({ workspace: latest, fingerprint: view.task.fingerprint });
+      else await onReleased();
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
@@ -41,7 +43,9 @@ export function ReleaseWorkspaceControl({ task, disabled, onReleased }: {
   };
   return <div>
     {workspace && !workspace.path && workspace.branch
-      ? <p role="status">父任务工作区目录已不存在，分支 {workspace.branch} 仍保留。可继续验收子任务。</p>
+      ? blocker
+        ? <p role="alert">父任务工作区目录已不存在，但占用登记尚未解除。{blocker}</p>
+        : <p role="status">父任务工作区目录已不存在，分支 {workspace.branch} 仍保留。工作区占用已解除，请根据最新依赖继续验收。</p>
       : <button type="button" disabled={disabled || busy} onClick={() => void open()}>释放工作区目录（保留分支）</button>}
     {disabled && <p>父任务正在执行、只读或基线更新未结算时，暂不能释放工作区。</p>}
     {error && !proposal && <p role="alert">{error}</p>}

@@ -84,7 +84,7 @@ function AcceptanceFailureNotice({ failure }: { failure: AcceptTaskFailure }) {
       <div className="team-accept-failure-heading">
         <span>{handedOff ? <ArrowsClockwise size={14} weight="bold" /> : <WarningCircle size={14} weight="fill" />}</span>
         <div>
-          <b>{handedOff ? "合并冲突已交给任务处理" : manualConflict ? "合并冲突，未能自动交接" : "验收未完成"}</b>
+          <b>{handedOff ? "合并冲突已交给任务处理" : manualConflict ? "合并冲突，未能自动交接" : failure.completedMerge ? "合并已完成，清理未完成" : "验收未完成"}</b>
           {handedOff ? (
             <>
               {failure.conflictHandoff?.message && <p className="team-accept-handoff-message">{failure.conflictHandoff.message}</p>}
@@ -173,7 +173,8 @@ export function AcceptanceControls({
         const handedOff = result.reason === "merge_conflict" && result.conflictHandoff?.notified === true;
         notify(handedOff
           ? "合并冲突已交给任务处理"
-          : result.reason === "merge_conflict" ? "合并冲突，未能自动交接" : `验收未完成：${result.error}`);
+          : result.reason === "merge_conflict" ? "合并冲突，未能自动交接" : result.completedMerge ? result.error : `验收未完成：${result.error}`);
+        if (result.completedMerge) await refreshAfterMutation();
         return;
       }
       setAction(null);

@@ -28,7 +28,7 @@ import { withRepoLock } from "./repo-lock.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
 import { execFileText as exec } from "./exec.js";
 import { findProcessesReferencingPath, type ProcessRow } from "./platform.js";
-import { assertReadableWorktree, checkedOutPath, removeMissingWorktreeRegistrations, UnreadableWorktreeError } from "./git-worktree-state.js";
+import { assertReadableWorktree, registeredCheckout, removeMissingWorktreeRegistrations, UnreadableWorktreeError } from "./git-worktree-state.js";
 
 const isDir = (p: string) => {
   try { return statSync(p).isDirectory(); } catch { return false; }
@@ -155,11 +155,12 @@ async function commitOf(repo: string, ref: string): Promise<string | null> {
   }
 }
 
-export async function targetCheckout(repoPath: string, branch: string): Promise<{ path: string | null; atRepo: boolean }> {
+export async function targetCheckout(repoPath: string, branch: string) {
   const repo = expandHome(repoPath);
-  const path = await checkedOutPath(repo, branch).catch(() => null);
+  const checkout = await registeredCheckout(repo, branch);
+  const { path } = checkout;
   const atRepo = path !== null && sameFilesystemPath(path, repo) && await symbolicBranch(repo) === branch;
-  return { path, atRepo };
+  return { ...checkout, atRepo };
 }
 
 async function conflictFiles(cwd: string): Promise<string[]> {

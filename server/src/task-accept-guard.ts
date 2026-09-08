@@ -27,6 +27,7 @@ export type AcceptFailure = {
   taskId: string;
   reason: string;
   error: string;
+  completedMerge?: { targetBranch: string; commit: string | null };
   status?: string;
   sourceBranch?: string;
   targetBranch?: string | null;

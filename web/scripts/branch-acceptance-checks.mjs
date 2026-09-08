@@ -97,16 +97,28 @@ export async function checkBranchAcceptance(page, fixtureUrl) {
 
   await go("case12-child");
   await page.getByRole("alert").filter({ hasText: "目标分支 ash/case12-p 仍在工作区" }).waitFor({ state: "visible" });
+  ensure((await page.getByRole("alert").innerText()).includes("git worktree repair"), "broken target must explain how to repair the link");
   ensure(!await review().getByRole("button", { name: "目标工作区仍被占用", exact: true }).isEnabled(), "broken backlink with surviving files must block child acceptance");
   await go("case12-parent");
   await button("释放工作区目录（保留分支）").click();
   await page.getByRole("dialog").getByRole("button", { name: "释放目录，保留分支", exact: true }).click();
-  await page.getByRole("dialog").getByRole("alert").filter({ hasText: "工作区检出分支已变化" }).waitFor({ state: "visible" });
+  await page.getByRole("dialog").getByRole("alert").filter({ hasText: "git worktree repair" }).waitFor({ state: "visible" });
+  ensure(!(await page.getByRole("dialog").innerText()).includes("工作区检出分支已变化"), "broken link is not a branch switch");
   await page.getByRole("dialog").getByRole("button", { name: "取消", exact: true }).click();
   await review().getByRole("button", { name: "验收通过", exact: true }).click();
   await page.getByRole("dialog").getByRole("button", { name: "验收通过", exact: true }).click();
   await review().getByRole("alert").filter({ hasText: "目录及文件已保留" }).waitFor({ state: "visible" });
+  await review().getByText("合并已完成，清理未完成", { exact: true }).waitFor({ state: "visible" });
+  ensure(/成果已合入 main（提交 [a-f0-9]{40,64}）/.test(await review().getByRole("alert").innerText()), "partial success must disclose the actual target and commit");
   ensure(await review().getByText("验收完成", { exact: true }).count() === 0, "unreadable cleanup must not report success");
+
+  await go("case13-parent");
+  await page.getByRole("alert").filter({ hasText: "占用登记尚未解除" }).waitFor({ state: "visible" });
+  ensure((await page.getByRole("alert").innerText()).includes("git worktree unlock"), "missing locked checkout must explain unlocking");
+  ensure(!/可继续验收子任务|工作区占用已解除/.test(await page.locator("main").innerText()), "locked checkout cannot advertise successful release");
+  await go("case13-child");
+  await page.getByRole("alert").filter({ hasText: "git worktree unlock" }).waitFor({ state: "visible" });
+  ensure(!await review().getByRole("button", { name: "目标工作区仍被占用", exact: true }).isEnabled(), "locked target must remain blocked");
 
   await go("case5-parent");
   await page.getByRole("region", { name: "派生与验收依赖" }).waitFor({ state: "visible" });

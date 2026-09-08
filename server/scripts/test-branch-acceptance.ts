@@ -121,6 +121,10 @@ try {
     await db.update(tasks).set({ mergeTargetBranch: broken.parentWs.branch }).where(eq(tasks.id, broken.child.id));
     writeFileSync(join(broken.parentWs.path, "PARENT_WIP.txt"), "keep parent WIP\n");
     rmSync(join(broken.parentWs.path, ".git"));
+    const locked = await setup(); // case13: missing directory with a locked registration.
+    await db.update(tasks).set({ mergeTargetBranch: locked.parentWs.branch }).where(eq(tasks.id, locked.child.id));
+    git(locked.repo, "worktree", "lock", locked.parentWs.path);
+    rmSync(locked.parentWs.path, { recursive: true });
     await s.newTask("unstarted", "main");
     const unreadable = await s.newTask("badstart", "main");
     await taskWorkspace(await row(unreadable.id), s.repo);

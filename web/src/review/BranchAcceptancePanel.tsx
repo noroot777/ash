@@ -63,6 +63,7 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
       {dep && <p role="status">{dep.message} {dep.taskId && <a href={taskHref(task.projectId, dep.taskId)}>查看父任务</a>}</p>}
       {dep?.state === "needs_update" && <button type="button" disabled={busy || (!!view.task.blocker && !view.task.baseUpdatePending) || task.stage === "accepted" || task.stage === "merged"} onClick={() => open("update")}>更新子分支基线</button>}
       {descendants.some(row => row.targetTaskId === task.id || row.dependency?.legacyTarget && row.dependency.taskId === task.id) && <ReleaseWorkspaceControl key={`release:${task.id}`} task={task}
+        blocker={descendants.find(row => row.targetTaskId === task.id && row.targetWorkspaceBlocker)?.targetWorkspaceBlocker ?? null}
         disabled={busy || !!task.archived || task.handoff?.direction === "out" || view.task.baseUpdatePending || ["running", "queued"].includes(task.status)}
         onReleased={async () => { await refresh(); if (onTaskUpdated) onTaskUpdated(await api.task(task.id)); }} />}
       {descendants.length > 0 && <>

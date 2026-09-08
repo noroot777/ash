@@ -78,6 +78,7 @@ try {
     assert.match(registration, /prunable/);
     const view = (await readBranchPlan(s.child.task.id))!.task;
     assert.match(view.blocker!, /目标分支.*仍在工作区/);
+    assert.match(view.targetWorkspaceBlocker!, /git worktree repair/);
     assert.ok(view.blocker!.includes(parentPath) || view.blocker!.includes(readFileSync(join(repo, ".git", "worktrees", s.parent.task.id, "gitdir"), "utf8").trim().replace(/\/.git$/, "")));
     const childResult = await accept(s.child.task.id);
     assert.equal(childResult.accepted, false);
@@ -87,6 +88,9 @@ try {
       body: JSON.stringify({ fingerprint: (await readBranchPlan(s.parent.task.id))!.task.fingerprint }),
     });
     assert.equal(release.status, 409);
+    const releaseError = (await release.json()).error;
+    assert.match(releaseError, /git worktree repair/);
+    assert.doesNotMatch(releaseError, /检出分支已变化/);
     assert.equal(git(repo, "worktree", "list", "--porcelain", "-z"), registration);
     assert.equal(readFileSync(join(parentPath, "PARENT_WIP.txt"), "utf8"), "keep parent WIP");
     if (mode === "missing-link") {
@@ -97,9 +101,36 @@ try {
       if (own.accepted) throw new Error("unreadable workspace was accepted");
       assert.equal(own.reason, "worktree_remove_failed");
       assert.match(own.error, /无法确认工作区.*目录及文件已保留/);
+      assert.deepEqual(own.completedMerge, { targetBranch: "main", commit: git(repo, "rev-parse", "main") });
+      assert.ok(own.error.startsWith("合并已完成：成果已合入 main"));
+      assert.ok(own.error.includes(own.completedMerge!.commit!));
       assert.equal(readFileSync(join(parentPath, "PARENT_WIP.txt"), "utf8"), "keep parent WIP");
     }
-    console.log(`✓ ${mode}: child blocked, release refused, target and WIP preserved`);
+    git(repo, "worktree", "repair");
+    if (mode === "moved-project") git(repo, "worktree", "repair", parentPath);
+    assert.equal(readFileSync(join(parentPath, "PARENT_WIP.txt"), "utf8"), "keep parent WIP");
+    const releaseRepaired = async () => api.request(`/tasks/${s.parent.task.id}/release-workspace`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ fingerprint: (await readBranchPlan(s.parent.task.id))!.task.fingerprint }),
+    });
+    const dirty = await releaseRepaired();
+    assert.equal(dirty.status, 409);
+    assert.match((await dirty.json()).error, /PARENT_WIP.txt/);
+    git(parentPath, "add", "PARENT_WIP.txt");
+    git(parentPath, "commit", "-m", "preserve parent WIP");
+    assert.equal((await releaseRepaired()).status, 200);
+    assert.equal((await readBranchPlan(s.child.task.id))!.task.targetWorkspaceBlocker, null);
+    const childAcceptance = await accept(s.child.task.id);
+    if (mode === "moved-project") {
+      assert.equal(childAcceptance.accepted, false);
+      if (childAcceptance.accepted) throw new Error("moved child should also need link repair");
+      assert.match(childAcceptance.error, /git worktree repair/);
+      assert.deepEqual(childAcceptance.completedMerge, { targetBranch: s.parent.branch, commit: git(repo, "rev-parse", s.parent.branch!) });
+      git(repo, "worktree", "repair", join(repo, ".worktrees", s.child.task.id));
+      assert.equal((await accept(s.child.task.id)).accepted, true);
+    } else assert.equal(childAcceptance.accepted, true);
+    assert.equal(git(repo, "show", `${s.parent.branch}:PARENT_WIP.txt`), "keep parent WIP");
+    console.log(`✓ ${mode}: repair guidance restores dirty-file protection, release and child acceptance without changing target`);
   }
   for (const strategy of ["safe", "squash"] as const) {
     const s = await setup();
@@ -127,8 +158,15 @@ try {
     rmSync(join(unrelated.path, ".git"));
     git(s.repo, "worktree", "lock", s.parent.path);
     rmSync(s.parent.path, { recursive: true });
-    assert.match((await readBranchPlan(s.child.task.id))!.task.blocker!, /目标分支.*仍在工作区/);
+    assert.match((await readBranchPlan(s.child.task.id))!.task.targetWorkspaceBlocker!, /git worktree unlock/);
     assert.equal((await accept(s.child.task.id)).accepted, false, "locked missing registration remains occupied");
+    const lockedRelease = await api.request(`/tasks/${s.parent.task.id}/release-workspace`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ fingerprint: (await readBranchPlan(s.parent.task.id))!.task.fingerprint }),
+    });
+    assert.equal(lockedRelease.status, 409);
+    assert.match((await lockedRelease.json()).error, /git worktree unlock/);
+    assert.match(git(s.repo, "worktree", "list", "--porcelain"), /locked/);
     git(s.repo, "worktree", "unlock", s.parent.path);
     assert.equal((await readBranchPlan(s.child.task.id))!.task.blocker, null);
     if (releaseFirst) {

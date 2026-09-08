@@ -22,6 +22,7 @@ export type BranchPlanEntry = {
   dependency: BranchDependency | null;
   blocker: string | null;
   blockerLabel?: string;
+  targetWorkspaceBlocker?: string | null;
   baseUpdatePending: boolean;
   fingerprint: string;
 };

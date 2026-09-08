@@ -22,7 +22,8 @@ import { now } from "./util.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 import { workspaceParticipants } from "./task-workspace.js";
 import { claimWorkspaceTurn, isTurnClaimed } from "./runs.js";
-import { removeMissingWorktreeRegistrations } from "./git-worktree-state.js";
+import { assertReadableWorktree, checkoutRecovery, removeMissingWorktreeRegistrations, UnreadableWorktreeError } from "./git-worktree-state.js";
+import { targetCheckout } from "./git-accept.js";
 import { branchPlanReads } from "./branch-plan-reads.js";
 
 async function entry(task: BranchTask, repo: string, fingerprintTarget?: string | null,
@@ -45,11 +46,13 @@ async function entry(task: BranchTask, repo: string, fingerprintTarget?: string 
   const checkout = target && task.useWorktree && plan.merge && plan.merge !== "tag" && task.stage !== "accepted" && task.stage !== "merged"
     ? await reads.checkout(target) : null;
   if (!blocker && task.useWorktree && task.stage !== "accepted" && targetError) blocker = targetError;
-  if (!blocker && checkout?.path && !checkout.atRepo) {
-    blockerLabel = "目标工作区仍被占用";
-    blocker = `目标分支 ${target} 仍在工作区 ${checkout.path} 检出。${targetOwner
+  const targetWorkspaceBlocker = checkout?.path && !checkout.atRepo
+    ? `目标分支 ${target} 仍在工作区 ${checkout.path} 检出。${checkoutRecovery(checkout) ?? ""}${targetOwner
       ? `请先停止任务「${targetOwner.title}」的执行，在其「派生与验收」中释放工作区目录（保留分支），再单独验收本任务。`
-      : "请先解除该工作区对目标分支的占用并保留分支，再验收；也可重设合入目标。"}`;
+      : "请先解除该工作区对目标分支的占用并保留分支，再验收；也可重设合入目标。"}` : null;
+  if (!blocker && targetWorkspaceBlocker) {
+    blockerLabel = "目标工作区仍被占用";
+    blocker = targetWorkspaceBlocker;
   }
   const fingerprint = createHash("sha256").update(JSON.stringify([
     task.id, task.updatedAt, task.stage, task.workflow, task.workflowAt, task.workflowMode,
@@ -59,7 +62,7 @@ async function entry(task: BranchTask, repo: string, fingerprintTarget?: string 
   ])).digest("hex");
   return {
     taskId: task.id, projectId: task.projectId, title: task.title, status: task.status, stage: task.stage,
-    startCommit: task.worktreeStartCommit, targetBranch: target, targetTaskId: targetOwner?.id ?? null, sourceBranch, sourceCommit, targetCommit,
+    startCommit: task.worktreeStartCommit, targetBranch: target, targetTaskId: targetOwner?.id ?? null, sourceBranch, sourceCommit, targetCommit, targetWorkspaceBlocker,
     strategy: plan.merge || "mark", dependency: task.baseUpdateIntent ? { taskId: task.baseTaskId, title: "父任务", state: "needs_update", message: "上次基线更新尚未结算，请重试更新基线以恢复" } : await branchDependency(task, repo, reads), blocker, blockerLabel, fingerprint, baseUpdatePending: !!task.baseUpdateIntent,
   };
 }
@@ -164,9 +167,18 @@ export function mountBranchPlanRoutes(api: Hono, accept: Accept): void {
         if (!workspace.branch) return c.json({ error: "任务分支不存在，请先恢复分支再释放目录" }, 409);
         if (!workspace.path) {
           await removeMissingWorktreeRegistrations(expandHome(project.repoPath), { branch: workspace.branch });
+          const remaining = await targetCheckout(project.repoPath, workspace.branch);
+          if (remaining.path) return c.json({ error: `工作区 ${remaining.path}：${checkoutRecovery(remaining) || `分支 ${workspace.branch} 的占用尚未解除，请先解除占用并保留分支，再重试释放。`}` }, 409);
           return c.json({ ok: true });
         }
+        try { await assertReadableWorktree(workspace.path); }
+        catch (error) {
+          if (error instanceof UnreadableWorktreeError) return c.json({ error: error.message }, 409);
+          throw error;
+        }
         if (await symbolicBranch(workspace.path) !== workspace.branch) return c.json({ error: "工作区检出分支已变化，请先核对工作区" }, 409);
+        const checkout = await targetCheckout(project.repoPath, workspace.branch);
+        if (checkout.locked) return c.json({ error: `工作区 ${workspace.path}：${checkoutRecovery(checkout)}` }, 409);
         const peers = await workspaceParticipants(current, workspace.path);
         if (peers.some(p => p.status === "running" || p.status === "queued" || isTurnClaimed(p.id))) return c.json({ error: "工作区仍有任务在执行，请先停止再释放" }, 409);
         const release = claimWorkspaceTurn(peers.map(p => p.id));

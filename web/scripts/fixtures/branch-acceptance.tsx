@@ -31,7 +31,7 @@ function Fixture() {
   return <main style={{ maxWidth: 920, padding: 32, margin: "auto" }}>
     <h1>父子任务验收验证</h1><p>独立临时仓库与数据库中的测试任务</p>
     <nav style={{ display: "flex", gap: 16, marginBottom: 24 }}>
-      {["case1-parent", "case1-child", "case2-child", "case3-parent", "case4-parent", "case5-parent", "case5-child", "case6-parent", "case6-child", "case7-parent", "case8-parent", "case9-parent", "case9-child", "case10-parent", "case10-child", "case11-child", "case12-parent", "case12-child", "case1-unstarted", "case1-badstart"].map(id => <a key={id} href={`?task=${id}`}>{id}</a>)}
+      {["case1-parent", "case1-child", "case2-child", "case3-parent", "case4-parent", "case5-parent", "case5-child", "case6-parent", "case6-child", "case7-parent", "case8-parent", "case9-parent", "case9-child", "case10-parent", "case10-child", "case11-child", "case12-parent", "case12-child", "case13-parent", "case13-child", "case1-unstarted", "case1-badstart"].map(id => <a key={id} href={`?task=${id}`}>{id}</a>)}
     </nav>
     <h2>{task.title}</h2>
     {taskId === "case1-unstarted" || taskId === "case1-badstart" ? <>
