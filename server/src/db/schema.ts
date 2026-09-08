@@ -651,3 +651,8 @@ export const handoffLocalPeerKeys = sqliteTable("handoff_local_peer_keys", {
   peerFp: text("peer_fp"),
   updatedAt: text("updated_at").notNull(),
 });
+
+export const handoffLocalKeyRevisions = sqliteTable("handoff_local_key_revisions", {
+  url: text("url").primaryKey(),
+  revision: text("revision").notNull(),
+});

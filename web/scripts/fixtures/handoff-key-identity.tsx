@@ -2,6 +2,7 @@ import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { TaskListItem } from "@ash/shared";
 import { HandoffDialog } from "../../src/task-detail/HandoffDialog.tsx";
+import { HandoffPeerKeyField } from "../../src/settings/HandoffPeerKeyField.tsx";
 import "../../src/styles/global.css";
 
 const scenario = new URLSearchParams(location.search).get("scenario") ?? "return";
@@ -23,6 +24,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   });
   if (path === "/api/handoff/targets/key" && init?.method === "PUT") {
     const body = JSON.parse(String(init.body));
+    if (body.allowUnlisted !== (scenario !== "settings")) return response(400, { error: "保存入口语义不匹配" });
     if (body.peerFp !== fingerprint || body.url !== url) {
       showResult("缺少任务机器指纹");
       return response(409, { error: "缺少任务机器指纹" });
@@ -50,7 +52,9 @@ function Fixture() {
   const [notice, setNotice] = useState("");
   showResult = setResult;
   return <>
-    <HandoffDialog task={task} notify={setNotice} onClose={() => {}} onTaskUpdate={() => {}} onOpenRemote={() => {}} />
+    {scenario === "settings" ? <HandoffPeerKeyField
+      url={url} peerFp={fingerprint} hasKey={false} mode="row" notify={setNotice} onSaved={() => {}}
+    /> : <HandoffDialog task={task} notify={setNotice} onClose={() => {}} onTaskUpdate={() => {}} onOpenRemote={() => {}} />}
     <div style={{ position: "fixed", zIndex: 9999, bottom: 0, background: "white", color: "black" }}>
       <output aria-label="保存结果">{result}</output>
       <p role="status">{notice}</p>

@@ -6,9 +6,13 @@ export async function startSignedHandoffPeer() {
   const keys = generateKeyPairSync("ed25519");
   const publicKey = keys.publicKey.export({ type: "spki", format: "der" }).toString("base64");
   let mode: "valid" | "invalid" | "missing" = "valid";
+  let held: { received(): void; released: Promise<void> } | undefined;
   const credentials: (string | undefined)[] = [];
-  const server = createServer((req, res) => {
+  const server = createServer(async (req, res) => {
     credentials.push(req.headers["x-ash-peer-user-key"] as string | undefined);
+    const gate = held;
+    held = undefined;
+    if (gate) { gate.received(); await gate.released; }
     const nonce = new URL(req.url!, "http://localhost").searchParams.get("nonce") ?? "";
     const sig = sign(null, Buffer.from(canonicalPingChallenge(mode === "invalid" ? "wrong-nonce" : nonce)), keys.privateKey).toString("base64");
     res.setHeader("content-type", "application/json");
@@ -23,6 +27,12 @@ export async function startSignedHandoffPeer() {
     fingerprint: fingerprintOf(publicKey),
     credentials,
     setMode(next: typeof mode) { mode = next; },
+    holdNextProbe() {
+      const received = Promise.withResolvers<void>();
+      const released = Promise.withResolvers<void>();
+      held = { received: received.resolve, released: released.promise };
+      return { received: received.promise, release: released.resolve };
+    },
     async close() {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));

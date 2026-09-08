@@ -89,7 +89,7 @@ try {
   await patchAppSettings({ handoffTargets: [] });
   await db.delete(handoffLocalPeerKeys);
   await scope.addTarget(SINGLE_ACTOR, { name: "来源机", url: peer.url, peerKey: "visible-key" });
-  await scope.setPeerKey(SINGLE_ACTOR, `${peer.url}/pending`, "pending-key");
+  await scope.setPeerKey(SINGLE_ACTOR, `${peer.url}/pending`, "pending-key", peer.fingerprint, { allowUnlisted: true });
   const beforeDelete = await snapshot();
   const settingsBeforeDelete = await getAppSettings();
   await dbClient.executeMultiple("CREATE TRIGGER fail_key_delete BEFORE DELETE ON handoff_local_peer_keys BEGIN SELECT RAISE(ABORT, 'simulated key delete failure'); END;");

@@ -87,7 +87,7 @@ try {
     method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ fingerprint: fp, url }),
   });
   const saveKey = (url: string, peerKey: string, peerFp?: unknown) => app.request("/api/handoff/targets/key", {
-    method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ url, peerKey, peerFp }),
+    method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ url, peerKey, peerFp, allowUnlisted: true }),
   });
   // 历史快照包含已绑定和未知归属的旧 key；真实保存端点的签名绑定在下方单独覆盖。
   const seedStoredKey = async (url: string, peerKey: string, peerFp: string | null = fingerprint) => {
@@ -142,7 +142,7 @@ try {
     await patchAppSettings({ handoffTargets: [] });
     await seedStoredKey(oldUrl, "saved-inline-key");
     await seedStoredKey(historicalUrl, historyKey);
-    await scope.setPeerKey(actor, newUrl, newKey);
+    await scope.setPeerKey(actor, newUrl, newKey, fingerprint, { allowUnlisted: true });
     await seedStoredKey(unrelatedUrl, "unrelated-inline-key", otherFingerprint);
   };
   await seedInlineKeys();
@@ -249,7 +249,7 @@ try {
   const boundBeforeBadSignature = await storedTargetsAndKeys();
   assert.equal((await saveKey(addressToMove, "replacement-key", machineBFp)).status, 502);
   assert.deepEqual(await storedTargetsAndKeys(), boundBeforeBadSignature);
-  assert.equal((await saveKey(addressToMove, "legacy-replacement-key")).status, 502, "没有预期指纹也不能在验签失败时报告保存成功");
+  assert.equal((await saveKey(addressToMove, "legacy-replacement-key")).status, 404, "无清单任务补填缺少预期指纹时不能保存");
   assert.deepEqual(await storedTargetsAndKeys(), boundBeforeBadSignature, "无身份上下文的失败保存同样保留原 key 和绑定");
   badSignature = false;
   await assertOwnershipConflict();

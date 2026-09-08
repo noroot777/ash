@@ -45,7 +45,7 @@ export function HandoffPeerKeyField({
   const save = async (next: string) => {
     setBusy(true);
     try {
-      onSaved(await api.setHandoffTargetKey(url, next, peerFp));
+      onSaved(await api.setHandoffTargetKey(url, next, peerFp, mode === "block"));
       setValue("");
       if (mode === "row") setEditing(false);
       return true;

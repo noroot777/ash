@@ -197,6 +197,9 @@ export async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS handoff_local_peer_keys (
       url TEXT PRIMARY KEY, peer_key TEXT NOT NULL, peer_fp TEXT, updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS handoff_local_key_revisions (
+      url TEXT PRIMARY KEY, revision TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS uploads (
       file TEXT PRIMARY KEY, owner_user_id TEXT, task_id TEXT, created_at TEXT NOT NULL
     );

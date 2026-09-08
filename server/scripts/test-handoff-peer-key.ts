@@ -88,7 +88,7 @@ try {
   const { pingPeer, fetchPeer } = await import("../src/handoff-peer-client.js");
   const { HandoffError } = await import("../src/handoff-types.js");
   const { PEER_USER_KEY_HEADER } = await import("../src/auth/handoff-peer-user.js");
-  const { canonicalPingChallenge } = await import("../src/handoff-identity.js");
+  const { canonicalPingChallenge, fingerprintOf } = await import("../src/handoff-identity.js");
   const peerKeys = generateKeyPairSync("ed25519");
   const publicKey = peerKeys.publicKey.export({ type: "spki", format: "der" }).toString("base64");
 
@@ -161,7 +161,7 @@ try {
     // 下一次预检仍旧 401 —— 因为出站读侧是拿清单去 join key 表的,孤儿行谁也看不见。
     // 现在自用模式直接读那张表本身,清单只是设置页上的书签。
     await patchSettingsFor(SINGLE_ACTOR, { handoffTargets: [] });
-    await scope.setPeerKey(SINGLE_ACTOR, peerUrl, "ash_orphan_key");
+    await scope.setPeerKey(SINGLE_ACTOR, peerUrl, "ash_orphan_key", fingerprintOf(publicKey), { allowUnlisted: true });
     assert.deepEqual(await scope.listTargets(SINGLE_ACTOR), [], "它确实已经不在清单里了");
     seenKeys.length = 0;
     await pingPeer(peerUrl, null, undefined, { requirePeerUser: true }).catch(() => undefined);

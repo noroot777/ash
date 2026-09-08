@@ -111,6 +111,6 @@ export const handoffApi = {
   // 按**地址**配「我在对端的账号 key」。两种模式、三个表面(设置页两份清单 + 接力对话框
   // 里的就地补填)共用这一条:调用点手上常常只有地址——自用模式那份清单存在 app_settings
   // 里,压根没有行 id。空串 = 清除。
-  setHandoffTargetKey: async (url: string, peerKey: string, peerFp?: string | null): Promise<HandoffTarget[]> =>
-    (await request<{ targets: HandoffTarget[] }>("/handoff/targets/key", json("PUT", { url, peerKey, peerFp }))).targets,
+  setHandoffTargetKey: async (url: string, peerKey: string, peerFp?: string | null, allowUnlisted = false): Promise<HandoffTarget[]> =>
+    (await request<{ targets: HandoffTarget[] }>("/handoff/targets/key", json("PUT", { url, peerKey, peerFp, allowUnlisted }))).targets,
 };

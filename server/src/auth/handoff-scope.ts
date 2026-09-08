@@ -23,6 +23,7 @@ import { id, now } from "../util.js";
 import type { Actor } from "./context.js";
 import { ownerIdOf } from "./context.js";
 import { isMultiUser } from "./mode.js";
+import { changeLocalKeyRevisions, checkLocalKeyRevision, localKeyRevision, staleKeySave } from "./handoff-key-revision.js";
 
 /** 出站代码手上真正需要的形状:带明文 key,不出这一层。 */
 export interface ResolvedTarget {
@@ -217,6 +218,7 @@ export async function saveVerifiedTargetAddress(
       .onConflictDoUpdate({ target: handoffLocalPeerKeys.url, set: { peerKey, peerFp: source.peerFp, updatedAt: now() } });
     const obsoleteUrls = [...credentialUrls].filter((url) => url !== keyUrl(source.url));
     if (obsoleteUrls.length) await tx.delete(handoffLocalPeerKeys).where(inArray(handoffLocalPeerKeys.url, obsoleteUrls));
+    await changeLocalKeyRevisions(tx, credentialUrls);
   });
   if (!multi) await invalidateInstanceCache();
 }
@@ -255,15 +257,18 @@ export async function addTarget(
   const owner = ownerIdOf(actor);
   const multi = await isMultiUser();
   if (multi && !owner) throw new HandoffError("请先登录", 401);
+  const revision = multi ? null : await localKeyRevision(db, keyUrl(input.url));
   const peerKeyFp = await keyFingerprintForSave(input.url, input.peerKey ?? "");
   if (!multi) {
     await db.transaction(async (tx) => {
+      await checkLocalKeyRevision(tx, keyUrl(input.url), revision);
       const { handoffTargets } = await getAppSettings(tx);
       await writeAppSettingsPatch({
         handoffTargets: [...handoffTargets, { name: input.name, url: input.url, peerFp: null }],
       }, tx);
       // 清单和 key 分表保存，但同一次添加只在两者都写入成功后提交。
       if (input.peerKey) await writeLocalPeerKey(tx, keyUrl(input.url), input.peerKey, peerKeyFp);
+      else await changeLocalKeyRevisions(tx, [keyUrl(input.url)]);
     });
     await invalidateInstanceCache();
     return listTargets(actor);
@@ -309,6 +314,7 @@ async function writeLocalPeerKey(
   } else {
     await connection.delete(handoffLocalPeerKeys).where(eq(handoffLocalPeerKeys.url, url));
   }
+  await changeLocalKeyRevisions(connection, [url]);
 }
 
 /**
@@ -320,6 +326,7 @@ async function writeLocalPeerKey(
  */
 export async function setPeerKey(
   actor: Actor, rawUrl: string, peerKey: string, expectedPeerFp?: string | null,
+  options: { allowUnlisted?: boolean } = {},
 ): Promise<HandoffTarget[]> {
   const url = keyUrl(rawUrl);
   if (!url) throw new HandoffError("缺目标机地址", 400);
@@ -333,12 +340,22 @@ export async function setPeerKey(
   if (multi && !rows.length) {
     throw new HandoffError("先把这台目标机加进「我的接力目标机」,再给它配 key", 404);
   }
+  const localBefore = multi ? null : await db.transaction(async (tx) => {
+    const targets = (await getAppSettings(tx)).handoffTargets.filter((target) => sameUrl(target.url, url));
+    if (peerKey && !targets.length && !(options.allowUnlisted && expectedPeerFp)) {
+      throw new HandoffError("目标机不存在或已删除，账号 key 未保存。请刷新设置；任务补填请在接力弹窗中操作。", 404);
+    }
+    return { revision: await localKeyRevision(tx, url), targets: JSON.stringify(targets) };
+  });
   const peerFp = await keyFingerprintForSave(rawUrl, peerKey, expectedPeerFp);
   if (!multi) {
-    // 不校验「这个地址还在不在清单里」是**故意的**:pending 重放收口时,弹框会为
-    // 「已从设置里删掉、但任务还挂在它身上」的地址合成一个目标,那里填的 key 必须真的
-    // 能用。出站读侧直接读这张表,所以写下去就生效(见 `outboundPeerKeys`)。
-    await writeLocalPeerKey(db, url, peerKey, peerFp);
+    // 任务补填可以从无清单条目开始；验签等待期间发生的删除、换址和清除仍会使请求过期。
+    await db.transaction(async (tx) => {
+      await checkLocalKeyRevision(tx, url, localBefore!.revision);
+      const targets = (await getAppSettings(tx)).handoffTargets.filter((target) => sameUrl(target.url, url));
+      if (JSON.stringify(targets) !== localBefore!.targets) throw staleKeySave();
+      await writeLocalPeerKey(tx, url, peerKey, peerFp);
+    });
     return listTargets(actor);
   }
   // 同一个地址被登记了两行时一起写:「我在那台机器上的 key」只可能是同一把。
@@ -357,15 +374,19 @@ export async function setPeerKey(
  * 配的 key**(pending 重放那种):用户配完当场能用,随手改一下别的目标机就又不能用了。
  */
 export async function forgetRemovedPeerKeys(
-  before: readonly { url: string }[],
-  after: readonly { url: string }[],
-  connection: Pick<typeof db, "delete">,
+  before: readonly HandoffTarget[],
+  after: readonly HandoffTarget[],
+  connection: Pick<typeof db, "delete" | "insert">,
 ): Promise<void> {
   const kept = new Set(after.map((t) => keyUrl(t.url)));
   const removed = [...new Set(before.map((t) => keyUrl(t.url)))].filter((url) => !kept.has(url));
   if (removed.length) {
     await connection.delete(handoffLocalPeerKeys).where(inArray(handoffLocalPeerKeys.url, removed));
   }
+  const urls = new Set([...before, ...after].map((target) => keyUrl(target.url)));
+  const changed = [...urls].filter((url) => JSON.stringify(before.filter((target) => sameUrl(target.url, url)))
+    !== JSON.stringify(after.filter((target) => sameUrl(target.url, url))));
+  await changeLocalKeyRevisions(connection, changed);
 }
 
 export async function patchTarget(
