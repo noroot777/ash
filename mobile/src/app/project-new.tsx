@@ -82,7 +82,7 @@ export default function NewProject() {
       <View style={{ flex: 1, paddingHorizontal: 20, paddingTop: 18, gap: 18 }}>
         <View style={{ flexDirection: "row", alignItems: "center" }}>
           <Text style={{ color: theme.ink, fontSize: 20, fontWeight: "700", flex: 1 }}>新建项目</Text>
-          <Pressable onPress={() => router.back()} hitSlop={10}>
+          <Pressable accessibilityRole="button" accessibilityLabel="关闭新建项目" onPress={() => router.back()} hitSlop={10}>
             <Text style={{ color: theme.muted, fontSize: 22 }}>✕</Text>
           </Pressable>
         </View>

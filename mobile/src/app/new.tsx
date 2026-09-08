@@ -462,6 +462,9 @@ export default function NewTask() {
               />
               {useWorktree !== worktreeDefault ? (
                 <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={savingWorktreeDefault ? "正在保存默认 worktree 设置" : "设为默认 worktree 设置"}
+                  accessibilityState={{ disabled: savingWorktreeDefault }}
                   onPress={savingWorktreeDefault ? undefined : saveWorktreeDefault}
                   style={{ justifyContent: "center", paddingHorizontal: 6, opacity: savingWorktreeDefault ? 0.5 : 1 }}
                 >

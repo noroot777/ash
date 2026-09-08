@@ -6,6 +6,8 @@ export function WorkerTeamLink({ title, onPress }: { title: string; onPress: () 
   const theme = useTheme();
   return (
     <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`打开所属团队：${title}`}
       onPress={onPress}
       style={({ pressed }) => ({
         flexDirection: "row",

@@ -19,21 +19,23 @@ function openAndroid(from: Date, min: Date, onPick: (d: Date) => void) {
     mode: "date",
     is24Hour: true,
     minimumDate: min,
-    onChange: (e, dPicked) => {
-      if (e.type !== "set" || !dPicked) return;
+    onValueChange: (_event, dPicked) => {
       const base = new Date(from);
       base.setFullYear(dPicked.getFullYear(), dPicked.getMonth(), dPicked.getDate());
       DateTimePickerAndroid.open({
         value: base,
         mode: "time",
         is24Hour: true,
-        onChange: (e2, tPicked) => {
-          if (e2.type !== "set" || !tPicked) return;
+        onValueChange: (_event, tPicked) => {
           base.setHours(tPicked.getHours(), tPicked.getMinutes(), 0, 0);
           onPick(new Date(base));
         },
+        // 取消第二步时保留调用前的值，不提交只选了一半的日期。
+        onDismiss: () => {},
       });
     },
+    // 取消第一步时不打开时间选择器，也不写入值。
+    onDismiss: () => {},
   });
 }
 
@@ -59,12 +61,14 @@ export function DateTimeField({
         minimumDate={minimumDate}
         themeVariant={scheme === "light" ? "light" : "dark"}
         style={{ alignSelf: "stretch" }}
-        onChange={(_e, d) => d && onChange(d)}
+        onValueChange={(_event, date) => onChange(date)}
       />
     );
   }
   return (
     <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`修改日期和时间，当前为 ${formatInstant(value.toISOString())}`}
       onPress={() => openAndroid(value, minimumDate ?? new Date(), onChange)}
       style={{
         backgroundColor: theme.raised,
@@ -110,18 +114,26 @@ export function DateTimeButton({
 
   return (
     <>
-      <Pressable onPress={onPress} hitSlop={8}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="定时发送"
+        accessibilityState={{ disabled: !!disabled }}
+        onPress={onPress}
+        hitSlop={8}
+      >
         {children}
       </Pressable>
       {Platform.OS === "ios" && draft !== null && (
         <Modal visible transparent animationType="slide" onRequestClose={() => setDraft(null)}>
           <Pressable
+            accessible={false}
             style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "#0008" }}
             onPress={() => setDraft(null)}
           >
             {/* 底部留白跟着手势条走：写死 32 时，34pt 手势条的机型上「确定」正好压在
                 系统上划区里，一按就退出 app。 */}
             <Pressable
+              accessible={false}
               style={{
                 backgroundColor: theme.panel,
                 paddingHorizontal: 16,
@@ -136,7 +148,7 @@ export function DateTimeButton({
                 display="spinner"
                 minimumDate={minimumDate}
                 themeVariant={scheme === "light" ? "light" : "dark"}
-                onChange={(_e, d) => d && setDraft(d)}
+                onValueChange={(_event, date) => setDraft(date)}
               />
               <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 10, marginTop: 4 }}>
                 <Pressable

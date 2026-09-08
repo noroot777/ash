@@ -98,15 +98,15 @@ export function DuetTaskDetail({
           headerRight: () => (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 18 }}>
               {task.archived ? (
-                <Pressable onPress={onUnarchive} hitSlop={10}>
+                <Pressable accessibilityRole="button" accessibilityLabel="取消归档讨论任务" onPress={onUnarchive} hitSlop={10}>
                   <Ionicons name="archive" size={20} color={theme.accent} />
                 </Pressable>
               ) : canArchive(task.status) ? (
-                <Pressable onPress={onArchive} hitSlop={10}>
+                <Pressable accessibilityRole="button" accessibilityLabel="归档讨论任务" onPress={onArchive} hitSlop={10}>
                   <Ionicons name="archive-outline" size={20} color={theme.muted} />
                 </Pressable>
               ) : null}
-              <Pressable onPress={onDelete} hitSlop={10}>
+              <Pressable accessibilityRole="button" accessibilityLabel="删除讨论任务" onPress={onDelete} hitSlop={10}>
                 <Text style={{ color: theme.danger, fontSize: 17 }}>🗑</Text>
               </Pressable>
             </View>
