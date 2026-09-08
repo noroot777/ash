@@ -23,7 +23,14 @@ const reply = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 const TASK_ID = "T-preview-live";
-const preSpawn = new URLSearchParams(location.search).get("mode") === "pre-spawn";
+const mode = new URLSearchParams(location.search).get("mode");
+const preSpawn = mode === "pre-spawn";
+/**
+ * `?mode=ready-close`：预览**已经起来了**，用户点「关闭预览」，DELETE 挂着不回。
+ * 这一档要钉的是措辞和可点性：关一个已就绪的预览，按钮不能翻成「启动中·点此取消」
+ * （更不能还能再点一次去发第二个 DELETE），它该说「关闭中」并且是灰的。
+ */
+const readyClose = mode === "ready-close";
 let logReads = 0;
 /** 启动期的日志：每读一次多一段，模拟 dev server 边跑边吐字。 */
 const phases = [
@@ -56,15 +63,23 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
       // 所以按老口径「预览日志」那颗按钮不该出现、也不该留下。
       // POST 一发出，服务端就落下一条「正在启动」的记录并发事件，所以快照里它是
       // running + starting（别的页面、以及刷新之后，靠的就是这个看见「可以取消」）。
-      preview: {
-        running: startPosted && !canceled, starting: startPosted && !canceled,
-        hasLog: false, url: null, port: null, command: null, startedAt: null,
-      },
+      preview: readyClose
+        ? {
+          running: true, starting: false, hasLog: true,
+          url: "http://localhost:45841/", port: 45841, command: "npm run dev",
+          startedAt: "2026-09-07T00:00:00.000Z",
+        }
+        : {
+          running: startPosted && !canceled, starting: startPosted && !canceled,
+          hasLog: false, url: null, port: null, command: null, startedAt: null,
+        },
       executions: [],
       reviews: [],
     });
   }
   if (pathname === `/api/tasks/${TASK_ID}/free-workflow/preview` && (init?.method ?? "GET") === "DELETE") {
+    // 关一个已就绪的预览：真实现场里这一下要杀进程、撤软链，不是瞬间返回的。
+    if (readyClose) return await new Promise<Response>(() => {});
     // 关闭：服务端删掉那条 starting 记录、杀掉已经起的进程和正在装依赖的进程，
     // 在跑的那趟 POST 随后以「启动被取消」失败返回。
     canceled = true;

@@ -13,7 +13,14 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
   const [reviewOpen, setReviewOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
-  const [previewBusy, setPreviewBusy] = useState(false);
+  /**
+   * 这颗按钮此刻正在做的那件事。**三件事必须分开**：`opening` 是「起预览的请求挂着」
+   * （可以取消），`closing` 是「关一个已经起来的预览」，`canceling` 是「取消一次启动」。
+   * 只用一个 previewBusy 的话，关闭一个已就绪预览时按钮会翻成「启动中·点此取消」，
+   * 而且照样能点 —— 用户对着一个正在关的预览，被告知它正在启动、还能再取消一次。
+   */
+  const [previewAction, setPreviewAction] = useState<null | "opening" | "closing" | "canceling">(null);
+  const previewBusy = previewAction !== null;
   // 「这一轮我按过打开预览」——启动期间 hasLog 还没翻真（快照要等 POST 回来才重拉），
   // 但日志文件其实已经在长了。见 togglePreview 里那两行注释：亮起在 POST 之前，
   // 清回在 POST 有结论之后。
@@ -55,29 +62,31 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
   // 别的页面（或者刷新之后）则从快照里的 preview.starting 看到同一件事。两条路都要能点到
   // 关闭 —— 后端为此专门让 DELETE 不再跟 POST 抢那把锁（free-workflow-preview.ts），
   // 前端这颗按钮如果还是灰的，那套取消逻辑就等于不存在。
-  const previewStarting = (free.state?.preview.starting ?? false) || previewBusy;
-  const [previewCanceling, setPreviewCanceling] = useState(false);
+  // 「正在启动」= 服务端说它在启动，或者**我这一下正在起**（POST 还挂着）。关闭那一路
+  // 不算，否则就是上面说的那种误报。
+  const previewStarting = (free.state?.preview.starting ?? false) || previewAction === "opening";
   const cancelPreview = async () => {
-    if (previewCanceling) return;
-    setPreviewCanceling(true);
+    if (previewAction === "canceling" || previewAction === "closing") return;
+    setPreviewAction("canceling");
     try {
       const { stopped } = await api.stopFreePreview(task.id);
       notify(stopped ? "已取消启动预览" : "预览已经不在跑了");
     } catch (error) {
       notify(error instanceof Error ? error.message : "取消失败");
     } finally {
-      setPreviewCanceling(false);
       // 起预览那一路的 POST 还没回来（它要等到自己发现被取消），快照照样重拉：
       // 记录已经被删掉了，界面该立刻回到「打开预览」。
+      setPreviewAction(null);
       await free.reload(true).catch(() => undefined);
     }
   };
 
   const togglePreview = async () => {
     if (previewBusy) return;
-    setPreviewBusy(true);
+    const closing = !!free.state?.preview.running;
+    setPreviewAction(closing ? "closing" : "opening");
     try {
-      if (free.state?.preview.running) {
+      if (closing) {
         await api.stopFreePreview(task.id);
         notify("预览已关闭");
       } else {
@@ -96,7 +105,7 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
       notify(error instanceof Error ? error.message : "预览操作失败");
       await free.reload(true).catch(() => undefined);
     } finally {
-      setPreviewBusy(false);
+      setPreviewAction(null);
       // 乐观那一档到此为止，交回给 `hasLog` —— 上面两条路都已经重拉过快照了。
       // **必须清**：有些失败发生在 spawn 之前（多候选时 resolvePreviewCommand 直接 409），
       // 那种情况下根本没有日志文件，留着这一档就是一颗点开只会说「还没有预览日志」的
@@ -128,9 +137,9 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
         </button>
         {/* 启动中这颗是**可点的取消**，不是一颗灰着的「处理中」：那八分钟里用户唯一想做的
             就是「我不等了」，而后端此刻确实收得掉（记录、pid、装依赖的进程都在盘上）。 */}
-        <button type="button" className={`is-preview${previewStarting ? " is-busy" : ""}`} data-state={previewStarting ? "starting" : free.state?.preview.running ? "running" : "idle"} aria-pressed={!!free.state?.preview.running} disabled={!taskReady || taskBusy || locked || !!reviewing || previewCanceling || (waiting && !free.state?.preview.running)} onClick={() => void (previewStarting ? cancelPreview() : togglePreview())}>
-          {previewStarting ? <SpinnerGap size={13} className="is-spinning" /> : free.state?.preview.running ? <StopCircle size={13} weight="regular" /> : <MonitorPlay size={13} weight="regular" />}
-          <span>{previewStarting ? (previewCanceling ? "取消中" : "启动中·点此取消") : free.state?.preview.running ? "关闭预览" : "打开预览"}</span>
+        <button type="button" className={`is-preview${previewBusy ? " is-busy" : ""}`} data-state={previewAction === "closing" ? "closing" : previewStarting ? "starting" : free.state?.preview.running ? "running" : "idle"} aria-pressed={!!free.state?.preview.running} disabled={!taskReady || taskBusy || locked || !!reviewing || previewAction === "canceling" || previewAction === "closing" || (waiting && !free.state?.preview.running)} onClick={() => void (previewStarting ? cancelPreview() : togglePreview())}>
+          {previewBusy ? <SpinnerGap size={13} className="is-spinning" /> : free.state?.preview.running ? <StopCircle size={13} weight="regular" /> : <MonitorPlay size={13} weight="regular" />}
+          <span>{previewAction === "closing" ? "关闭中" : previewAction === "canceling" ? "取消中" : previewStarting ? "启动中·点此取消" : free.state?.preview.running ? "关闭预览" : "打开预览"}</span>
         </button>
         {free.state?.preview.running && free.state.preview.url && <a href={free.state.preview.url} target="_blank" rel="noreferrer" aria-label="在新窗口打开预览"><ArrowSquareOut size={13} /><span>预览页</span></a>}
         {/* 日志入口按 hasLog 给，不按 running 给：预览**起不来**的那一次同样留下了日志，
@@ -143,7 +152,7 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
           </button>
         )}
       </div>
-      {logOpen && <PreviewLogDialog taskId={task.id} awaitingStart={previewBusy} onClose={() => setLogOpen(false)} notify={notify} />}
+      {logOpen && <PreviewLogDialog taskId={task.id} awaitingStart={previewAction === "opening"} onClose={() => setLogOpen(false)} notify={notify} />}
       {reviewOpen && <FreeReviewDialog taskId={task.id} state={free.state} reservationMode={reservationMode} onChanged={free.setState} onClose={() => setReviewOpen(false)} notify={notify} />}
     </>
   );

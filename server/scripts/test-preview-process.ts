@@ -511,6 +511,24 @@ try {
       await waitFor(() => !isAlive(pid), `${how}：启动中的那个进程没被杀掉，它稍后还会上线`);
     }
 
+    // ④a **「点开、立刻点取消」也得停得住。** 界面上那颗取消从 POST 发出那一刻就能点，
+    //     而服务端可杀的记录要更晚才写：起预览先收旧的、再异步借五个端口，之前还有任务
+    //     和项目查询、工作区解析、预览命令探测。取消落在这一段里时，老实现从盘上什么都
+    //     读不到，回一句「预览已经不在跑了」，然后原来那趟照常写记录、照常起服务、照常
+    //     上线 —— 用户按过取消，最后还是等来一个他不要的预览，而且没人再去关它。
+    const earlyWt = join(repo2, ".worktrees", "early-wt");
+    mkdirSync(earlyWt, { recursive: true });
+    const earlyStart = startPreview("early-task", cancelStep as never, earlyWt); // 不等记录出现
+    const earlyStopped = await stopPreview("early-task", "测试：刚点开就取消");
+    const earlyResult = await earlyStart;
+    assert.equal(earlyStopped, true, "记录还没落盘时取消，接口却说什么都没停到");
+    assert.equal(earlyResult.ok, false, "取消之后那一趟还是起起来了");
+    assert.equal(readPreview("early-task"), null, "取消之后又冒出一条「运行中」的记录");
+    assert.equal(
+      existsSync(join(root, "runs", "early-task", "preview.json")), false,
+      "取消之后仍然写出了启动记录（写了就没人再去关它）",
+    );
+
     // ④b **装依赖那一段也得摁得死。** 它能跑满六分钟，而那六分钟里 pid 不落盘的话，
     //     「关闭预览」只是删了条记录：包管理器还在后台跑，项目自己的 preinstall/postinstall
     //     （用户仓库里什么都可能有）也还在跑，任务续跑那一路更糟——新一轮已经在改同一个
@@ -529,7 +547,6 @@ try {
       `#!/bin/sh\nsleep 300 &\necho $! > ${grandchildPidFile}\nwait\n`, { mode: 0o755 });
     const savedPath = process.env.PATH;
     process.env.PATH = `${slowNpm}:${savedPath ?? ""}`;
-    let installResult: Awaited<ReturnType<typeof startPreview>>;
     try {
       const installing = startPreview("install-task", {
         id: "install", kind: "preview",
@@ -544,12 +561,53 @@ try {
       assert.equal(await stopPreview("install-task", "测试：装依赖途中关闭"), true, "装依赖途中必须停得掉");
       await waitFor(() => !isAlive(installPid), "「已停止」之后包管理器还在跑");
       await waitFor(() => !isAlive(grandchild), "包管理器自己派生的那一层活了下来（只杀了最外面那个 pid）");
-      installResult = await installing;
+      const installResult = await installing;
       assert.equal(installResult.ok, false, "被取消的那趟不能再报成功");
       assert.equal(existsSync(recordFile), false, "取消之后记录还在");
       assert.equal(existsSync(join(installWt, "front", "node_modules")), false, "停掉之后还是把软链挂上了");
     } finally {
       process.env.PATH = savedPath;
+    }
+
+    // ④b2 **组长先退出、孩子赖着不走**，同样得收干净。补刀原来的条件是「两秒后组长还
+    //      活着」，可最该补刀的现场恰恰是组长已经退了：外层 shell / 包管理器老实响应
+    //      SIGTERM 退出，它派生的那个**忽略 SIGTERM** 的东西还留在原进程组里（用户仓库
+    //      的 preinstall/postinstall 是任意代码，node-gyp、自己管子进程的脚本都算）。
+    //      拿「组长还在吗」当「这一组还在吗」，那个进程就永远留下了 —— 而接口已经回过
+    //      一句「已停止」。
+    const stubbornWt = join(repo2, ".worktrees", "stubborn-wt");
+    mkdirSync(join(stubbornWt, "front"), { recursive: true });
+    writeFileSync(join(stubbornWt, ".git"), `gitdir: ${join(repo2, ".git", "worktrees", "stubborn-wt")}\n`);
+    writeFileSync(join(stubbornWt, "front", "package.json"), JSON.stringify({
+      name: "front", version: "1.0.0", private: true, scripts: { dev: "fakevite" },
+    }));
+    const stubbornNpm = join(root, "stubborn-npm");
+    mkdirSync(stubbornNpm, { recursive: true });
+    const stubbornPidFile = join(root, "stubborn-child.pid");
+    // 生命周期脚本：显式忽略 SIGTERM。外层 shell 收到 SIGTERM 就走人（组长先死）。
+    writeFileSync(join(stubbornNpm, "npm"),
+      `#!/bin/sh\n"${process.execPath}" -e "process.on('SIGTERM',()=>{});`
+      + `require('fs').writeFileSync(process.env.PIDFILE,String(process.pid));setInterval(()=>{},1000)" &\n`
+      + "wait\n", { mode: 0o755 });
+    const savedPath2 = process.env.PATH;
+    const savedPidFile = process.env.PIDFILE;
+    process.env.PATH = `${stubbornNpm}:${savedPath2 ?? ""}`;
+    process.env.PIDFILE = stubbornPidFile;
+    try {
+      const stubbornStart = startPreview("stubborn-task", {
+        id: "stubborn", kind: "preview",
+        p: { cmd: "cd front && npm run dev", mode: "frontend", ready: "port", life: "task" },
+      } as never, stubbornWt);
+      await waitFor(() => existsSync(stubbornPidFile), "赖着不走的那个子进程还没起来");
+      const stubborn = Number(readFileSync(stubbornPidFile, "utf8").trim());
+      await stopPreview("stubborn-task", "测试：装依赖途中关闭（顽固子进程）");
+      // 补刀在两秒后，这里给够时间。
+      await waitFor(() => !isAlive(stubborn), "组长先退出之后，忽略 SIGTERM 的那个子进程活了下来", 15_000);
+      assert.equal((await stubbornStart).ok, false, "被取消的那趟不能再报成功");
+    } finally {
+      process.env.PATH = savedPath2;
+      if (savedPidFile === undefined) delete process.env.PIDFILE;
+      else process.env.PIDFILE = savedPidFile;
     }
 
     // ④c **两代启动重叠时，别把新的那一代当成孤儿杀掉。** 自动推进那一站刚开始冷启动、

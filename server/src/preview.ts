@@ -78,6 +78,8 @@ const POLL_MS = 500;
 const IDLE_LIFE_MS = 30 * 60_000;
 const SWEEP_MS = 5 * 60_000;
 const UNSAFE_SCHEDULER_LOG = "[ash] scheduler started";
+/** 这一趟启动被人收掉了。三条路（关闭预览 / 任务重新开跑 / 清扫）说的是同一件事。 */
+const CANCELED = "预览启动被取消（关闭预览 / 任务重新开跑 / ash 重启）";
 
 // 「端口撞车怎么认、日志里哪个地址才是预览本尊、认出来说什么」都在 preview-log.ts
 //（纯函数，回归 test:preview-log）；「连不连得上、算不算起来了」在 preview-probe.ts
@@ -305,6 +307,7 @@ function beginDriving(taskId: string, gen: string): void {
 
 /** 这一趟结束了。**只撤自己那一代** —— 见 starting 上面的说明。 */
 function endDriving(taskId: string, gen: string): void {
+  canceledGens.delete(gen);
   const gens = starting.get(taskId);
   if (!gens) return;
   gens.delete(gen);
@@ -314,6 +317,33 @@ function endDriving(taskId: string, gen: string): void {
 /** 这一代此刻还有人驱动吗。清扫靠它区分「正在启动」和「上一条命留下的孤儿」。 */
 function driving(taskId: string, gen: string | undefined): boolean {
   return gen !== undefined && (starting.get(taskId)?.has(gen) ?? false);
+}
+
+/**
+ * 「这一代已经被取消了」的记号 —— 专门盖**记录还没落盘**的那一段。
+ *
+ * 界面上那颗取消是 POST 一发出就能点的，而服务端可杀的记录要更晚才写：起预览得先查
+ * 任务和项目、解析工作区、探测预览命令，进了 runPreview 还要先收掉旧的、再异步借五个
+ * 端口，然后才 writeRecord。这中间用户点下取消，stopPreview 从盘上什么也读不到，只能
+ * 回一句「预览已经不在跑了」——然后原来那趟照常写记录、照常起服务、照常上线。用户明明
+ * 按过取消，最后还是等来了一个他不要的预览（而且这次没人再去关它）。
+ *
+ * 内存里记就够：这一段完全活在 startPreview 这一次调用里，进程一没它也一起没了。
+ */
+const canceledGens = new Set<string>();
+
+/**
+ * 把这个任务此刻正在驱动的那几代标成「取消」（`exceptGen` 是自己，不能把自己标掉）。
+ * 返回标了几代 —— 调用方拿它回答「到底停到东西没有」。
+ */
+function cancelDriving(taskId: string, exceptGen: string | null): number {
+  let marked = 0;
+  for (const gen of starting.get(taskId) ?? []) {
+    if (gen === exceptGen) continue;
+    canceledGens.add(gen);
+    marked += 1;
+  }
+  return marked;
 }
 
 /**
@@ -350,6 +380,8 @@ export async function startPreview(
   // 代号在这儿生成而不是在里面：进出内存表和写盘记录用的必须是同一个，否则「谁在驱动
   // 这一代」就对不上（见 starting）。
   const gen = randomUUID();
+  // **同步**注册，中间一个 await 都不能有：界面上那颗取消从 POST 发出那一刻就能点，
+  // 而 stopPreview 只有看得见这一代才停得掉它（见 canceledGens）。
   beginDriving(taskId, gen);
   try {
     return await runPreview(taskId, step, cwd, gen);
@@ -364,7 +396,8 @@ async function runPreview(
   cwd: string,
   gen: string,
 ): Promise<PreviewResult> {
-  await stopPreview(taskId, null);
+  // 收旧的时候不能把自己也标成取消 —— 自己在 startPreview 里刚注册进 starting。
+  await stopPreviewExcept(taskId, null, gen);
   const dir = join(RUNS_DIR, taskId);
   mkdirSync(dir, { recursive: true });
   const log = join(dir, "preview.log");
@@ -376,6 +409,14 @@ async function runPreview(
   const injected = bannerEnv(lentAll);
   const banner = `$ ${injected ? `${injected} ` : ""}BROWSER=none ASH_PREVIEW=1 ASH_PREVIEW_MODE=${step.p.mode} ${step.p.cmd}\n`;
   writeFileSync(log, banner);
+  // 落盘之前的最后一道检查点：收旧预览、借五个端口都是 await，用户点的取消完全可能
+  // 落在这中间（界面上那颗从 POST 发出就能点）。这一刻还没挂链、没起进程，什么都不用
+  // 收 —— 但**绝不能再往盘上写**：写了就是「用户取消完，预览自己起来了」，而且那之后
+  // 没有任何一处会再去关它。
+  //
+  // 这一句到 writeRecord 之间**不能有 await**：中间让出一次事件循环，取消就可能刚好
+  // 落在检查之后、落盘之前，那一趟又变回停不掉的。
+  if (canceledGens.has(gen)) return { ok: false, reason: CANCELED };
   // **落盘的第一件事**：一条「正在启动」的记录（理由见 PreviewRecord.state）。它先于
   // 装依赖和 spawn，因为要被杀掉的恰恰是这两段 —— 一趟启动最长可以是「装 6 分钟 + 等
   // 2 分钟」，这八分钟里点关闭、任务续跑、server 重启，都得抓得住它。
@@ -428,10 +469,10 @@ async function runPreview(
     // 来得及写下 installPid」那半拍。killByPid 对已经死掉的 pid 是空操作。
     if (installing > 0) killByPid(installing);
     if (readAnyPreview(taskId) === null) removePreparedLinks(links);
-    return { ok: false, reason: "预览启动被取消（关闭预览 / 任务重新开跑 / ash 重启）" };
+    return { ok: false, reason: CANCELED };
   };
   // 装依赖可以走掉好几分钟，这中间被取消是常态，不是意外。
-  if (patchStart(taskId, gen, { links }) === null) return abandoned(null);
+  if (canceledGens.has(gen) || patchStart(taskId, gen, { links }) === null) return abandoned(null);
   const fd = openSync(log, "a");
   let pid: number;
   try {
@@ -477,7 +518,7 @@ async function runPreview(
     await sleep(POLL_MS);
     // 每一圈都问一句「这趟还算数吗」：等就绪最长两分钟，用户在这中间点关闭是常事。
     // 不问的话，被杀掉的只是当时那个 pid，而这个循环稍后照样会写一条 ready 记录出来。
-    if (readAnyPreview(taskId)?.gen !== gen) return abandoned(pid);
+    if (canceledGens.has(gen) || readAnyPreview(taskId)?.gen !== gen) return abandoned(pid);
     const text = tail(log, banner);
     if (text.includes(UNSAFE_SCHEDULER_LOG)) {
       killByPid(pid);
@@ -542,10 +583,32 @@ async function runPreview(
 // 收掉一个任务的预览。reason 非空才往时间线写一行——刷新后仍能看出「预览被收了、
 // 为什么收的」，这是停止/暂停那条规矩的同一条判据。
 export async function stopPreview(taskId: string, reason: string | null): Promise<boolean> {
+  return await stopPreviewExcept(taskId, reason, null);
+}
+
+/**
+ * 收预览的真身。`exceptGen` 只有一个用处：起新预览时先收旧的，那一下不能把**自己**
+ * 也标成取消（自己刚刚才注册进 starting）。
+ */
+async function stopPreviewExcept(
+  taskId: string,
+  reason: string | null,
+  exceptGen: string | null,
+): Promise<boolean> {
   // readAnyPreview：**还在启动的那一趟也得收得掉**。记录一删，那一趟自己下一个检查点
   // 就会发现代号没了，杀掉自己起的进程、把链撤干净（见 runPreview 里的 abandoned）。
   const record = readAnyPreview(taskId);
-  if (!record) return false;
+  // 记录还没落盘的那一段也要停得掉（见 canceledGens）：标上记号，那一趟到下一个检查点
+  // 就自己收摊，而且**永远不会写出记录**。
+  const marked = cancelDriving(taskId, exceptGen);
+  if (!record) {
+    if (!marked) return false;
+    // 这一段还没有 url、也还没有 pid，能说的只有「取消了一次启动」——但必须说，
+    // 「刷新之后仍看得出我停过」是停止/暂停那条规矩的判据。
+    if (reason) await appendTaskTimeline(taskId, `预览启动已取消（${reason}）`);
+    bus.publish({ type: "task.review", taskId });
+    return true;
+  }
   // 不先看组长是否还活着：组长死、vite 仍留在同一进程组，正是必须回收的现场。
   // pid 为 0 = 还没 spawn，`kill(0, …)` 打的是**自己这一组**，绝不能放过去。
   if (record.pid > 0) killByPid(record.pid);

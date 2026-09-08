@@ -81,6 +81,24 @@ try {
     { timeout: 8000 },
   );
 
+  // ②c 反过来那一半：关一个**已经起来的**预览时，按钮不能说自己「正在启动」。
+  //     previewBusy 同时盖着「开」和「关」两件事，直接拿它推「正在启动」，用户点下
+  //     「关闭预览」之后就会看到一颗「启动中·点此取消」，而且还能再点一次、再发一个
+  //     DELETE，提示还是「已取消启动预览」——三处都是错的。
+  const closing = await browser.newPage({ viewport: { width: 1000, height: 900 } });
+  await closing.goto(`${base}?mode=ready-close`);
+  const closeButton = closing.getByRole("button", { name: "关闭预览" });
+  await closeButton.waitFor();
+  await closeButton.click();
+  const closingButton = closing.getByRole("button", { name: "关闭中" });
+  await closingButton.waitFor({ timeout: 5000 });
+  assert.equal(await closingButton.isDisabled(), true, "关闭请求还挂着，这颗不该还能再点");
+  assert.equal(
+    await closing.getByRole("button", { name: "启动中·点此取消" }).count(), 0,
+    "关一个已就绪的预览，按钮却说它正在启动",
+  );
+  await closing.close();
+
   // ③ spawn 之前就 409：多候选时 resolvePreviewCommand 直接抛，一条命令都没跑过，
   //    盘上没有日志文件。那颗乐观按钮必须跟着收回去。
   const race = await browser.newPage({ viewport: { width: 1000, height: 900 } });

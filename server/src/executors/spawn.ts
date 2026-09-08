@@ -417,7 +417,14 @@ export function killByPid(pid: number): void {
   if (!Number.isInteger(pid) || pid <= 1) return;
   killTree(pid, "SIGTERM");
   const t = setTimeout(() => {
-    if (isPidAlive(pid)) killTree(pid, "SIGKILL");
+    // **补刀不看组长死没死。** 以前这里是 `if (isPidAlive(pid))`，等于拿「组长还在吗」
+    // 当「这一组还在吗」——可这两件事恰恰在最该补刀的现场分开：外层 shell / 包管理器
+    // 收到 SIGTERM 老老实实退了，它派生的那个**忽略 SIGTERM** 的东西（用户仓库里的
+    // preinstall/postinstall 是任意代码，node-gyp、自己管子进程的脚本都算）还留在原
+    // 进程组里。组长一死，补刀被跳过，那个进程就永远留下了——而接口已经回了句「已停止」。
+    // killTree 打的是进程组（POSIX 上 `kill(-pid)`），组空了是 ESRCH，被它自己吞掉，
+    // 所以无条件发这一刀没有副作用。
+    killTree(pid, "SIGKILL");
   }, 2000);
   (t as { unref?: () => void }).unref?.();
 }
