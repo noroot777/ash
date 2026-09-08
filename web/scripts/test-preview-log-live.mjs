@@ -8,6 +8,8 @@
 //      之后才有的，按钮却在 POST 发出那一刻就亮了，手快的用户正好落在那个窗口里。
 //   ③ 反过来，spawn **之前**就失败的那条路（多候选 409，盘上根本没有日志文件），那颗
 //      乐观按钮必须收回去——否则界面上永久留着一颗点开只会说「还没有预览日志」的按钮。
+//   ④ 取消赢了、那趟 POST 却随后 200 回来：不许再说「预览已打开」，不许开窗——它手上
+//      那个地址已经被 DELETE 停掉了。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -98,6 +100,34 @@ try {
     "关一个已就绪的预览，按钮却说它正在启动",
   );
   await closing.close();
+
+  // ②d 取消赢了，那趟 POST 却随后 200 回来：它绝不能再宣告「预览已打开」、更不能弹开
+  //     一个已经被停掉的地址。这条缝在服务端是真实存在的——POST 判定就绪后还要
+  //     `await appendTaskTimeline` 才回 200，而 DELETE 故意不抢那把锁。
+  const late = await browser.newPage({ viewport: { width: 1000, height: 900 } });
+  await late.goto(`${base}?mode=cancel-late-success`);
+  const lateOpen = late.getByRole("button", { name: "打开预览" });
+  await lateOpen.waitFor();
+  await lateOpen.click();
+  await late.getByRole("button", { name: "启动中·点此取消" }).click();
+  await late.waitForFunction(
+    () => document.querySelector("[data-testid=notices]")?.textContent?.includes("已取消启动预览") ?? false,
+    null,
+    { timeout: 8000 },
+  );
+  // 现在才让那趟启动请求成功返回。
+  await late.getByTestId("finish-start").click();
+  await late.waitForTimeout(500);
+  const afterLate = await late.evaluate(() => ({
+    opens: window.__opens,
+    notices: document.querySelector("[data-testid=notices]")?.textContent ?? "",
+    label: document.querySelector("button.is-preview")?.textContent ?? "",
+  }));
+  assert.deepEqual(afterLate.opens, [], "用户已经取消了，却还弹开了那个已被停掉的地址");
+  assert.equal(afterLate.notices.includes("预览已打开"), false, "取消之后又宣告了一句「预览已打开」");
+  assert.match(afterLate.label, /打开预览/, "取消之后按钮该停在「打开预览」上");
+  if (process.env.PREVIEW_CANCEL_LATE_SHOT) await late.screenshot({ path: process.env.PREVIEW_CANCEL_LATE_SHOT });
+  await late.close();
 
   // ③ spawn 之前就 409：多候选时 resolvePreviewCommand 直接抛，一条命令都没跑过，
   //    盘上没有日志文件。那颗乐观按钮必须跟着收回去。

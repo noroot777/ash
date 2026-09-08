@@ -51,15 +51,30 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
   const endPreview = (token: number) => {
     setPreviewAction((prev) => (prev && prev.token === token ? null : prev));
   };
-  /** 用户还在发起这次动作的那个任务上吗。异步回调要说话/开窗之前先问这一句。 */
+  /** 用户还在发起这次动作的那个任务上吗。 */
   const stillHere = (taskId: string) => currentTask.current === taskId;
+  /**
+   * 这次请求的**所有副作用**（说话、开窗、重拉快照、动日志入口）都要先过这一关：
+   * 人还在原地，而且没有更新的动作把它顶掉。
+   *
+   * 只拿 taskId 对不住同一个任务上的接力：POST 判定就绪之后还要 `await appendTaskTimeline`
+   * 才回 200，而 DELETE 是**故意不抢那把锁**的（free-workflow-preview.ts），用户就在这
+   * 段缝里点了取消 —— 记录和进程都收掉了，随后那个 200 却照旧宣告「预览已打开」，还弹开
+   * 一个已经被停掉的地址。号码牌变了就说明这次已经不作数了。
+   */
+  const owns = (taskId: string, token: number) => stillHere(taskId) && previewToken.current === token;
   // 「这一轮我按过打开预览」——启动期间 hasLog 还没翻真（快照要等 POST 回来才重拉），
   // 但日志文件其实已经在长了。见 togglePreview 里那两行注释：亮起在 POST 之前，
   // 清回在 POST 有结论之后。
-  const [logArmed, setLogArmed] = useState(false);
-  // 换了任务就作废：这一档说的是「**这个任务**这一轮按过」，跟着旧任务漂过去就是假的。
+  //
+  // **它跟动作一样是有主的。** 一个裸布尔值会被别人的 finally 关掉：A 的启动挂着，用户切到
+  // B 也点了启动，A 那趟一回来就把 B 冷启动期间唯一的日志入口抹了 —— 而 B 接下来还要装
+  // 六分钟依赖，那正是最需要看日志的时候。
+  const [logArmed, setLogArmed] = useState<{ taskId: string; token: number } | null>(null);
+  /** 这一档只对它自己那个任务算数：别的任务按过，跟这里没关系。 */
+  const logArmedHere = logArmed?.taskId === task.id;
+  // 日志窗是「此刻打开的那一扇」，换了任务就该关上（logArmed 认主，不用跟着清）。
   useEffect(() => {
-    setLogArmed(false);
     setLogOpen(false);
   }, [task.id]);
   const view = freeReviewView(free.state, task);
@@ -103,14 +118,15 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
     const token = beginPreview("canceling");
     try {
       const { stopped } = await api.stopFreePreview(taskId);
-      if (stillHere(taskId)) notify(stopped ? "已取消启动预览" : "预览已经不在跑了");
+      if (owns(taskId, token)) notify(stopped ? "已取消启动预览" : "预览已经不在跑了");
     } catch (error) {
-      if (stillHere(taskId)) notify(error instanceof Error ? error.message : "取消失败");
+      if (owns(taskId, token)) notify(error instanceof Error ? error.message : "取消失败");
     } finally {
       // 起预览那一路的 POST 还没回来（它要等到自己发现被取消），快照照样重拉：
       // 记录已经被删掉了，界面该立刻回到「打开预览」。
+      const mine = owns(taskId, token);
       endPreview(token);
-      if (stillHere(taskId)) await free.reload(true).catch(() => undefined);
+      if (mine) await free.reload(true).catch(() => undefined);
     }
   };
 
@@ -122,26 +138,27 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
     try {
       if (closing) {
         await api.stopFreePreview(taskId);
-        if (stillHere(taskId)) notify("预览已关闭");
+        if (owns(taskId, token)) notify("预览已关闭");
       } else {
         // 这一行必须在 await 之前：启动会**同步等到就绪**（最长两分钟），而日志从
         // spawn 之前就在长。等 POST 回来才让「预览日志」出来，等于把最该看日志的那两
         // 分钟锁在门外 —— 用户守着一颗「处理中」，看不到 Maven 正在下什么、前端编到哪。
-        setLogArmed(true);
+        setLogArmed({ taskId, token });
         const preview = await api.startFreePreview(taskId);
-        // **人已经走了就别在新页面上说话、更别开窗。** 启动能挂到八分钟，用户完全可能
-        // 早就切去别的任务了；那时弹一句「预览已打开」并弹开一个新标签页，对着的是他
-        // 现在根本没在看的那个任务。
-        if (stillHere(taskId)) {
+        // **人已经走了、或者这一次已经被顶掉了，就别再说话、更别开窗。** 启动能挂到八分钟：
+        // 用户可能早切去了别的任务，也可能就在这个任务上按了取消（DELETE 不抢 POST 的锁，
+        // 收得掉那条刚就绪的记录）。这两种情况下宣告「预览已打开」并弹开新标签页，指的都是
+        // 一个此刻并不存在的预览。
+        if (owns(taskId, token)) {
           notify(preview.url ? `预览已打开：${preview.url}` : "预览已打开");
           if (preview.url) window.open(preview.url, "_blank", "noopener,noreferrer");
         }
       }
-      if (stillHere(taskId)) await free.reload(true);
+      if (owns(taskId, token)) await free.reload(true);
     } catch (error) {
       // 起失败也要 reload：日志文件这时已经落盘了，reload 之后 `hasLog` 才会翻真、
       // 「预览日志」那颗按钮才出得来 —— 否则用户手上只剩一句转瞬即逝的 toast。
-      if (stillHere(taskId)) {
+      if (owns(taskId, token)) {
         notify(error instanceof Error ? error.message : "预览操作失败");
         await free.reload(true).catch(() => undefined);
       }
@@ -151,7 +168,9 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
       // **必须清**：有些失败发生在 spawn 之前（多候选时 resolvePreviewCommand 直接 409），
       // 那种情况下根本没有日志文件，留着这一档就是一颗点开只会说「还没有预览日志」的
       // 永久按钮 —— 而多候选恰恰是这个仓库没配预览命令时的默认形状。
-      setLogArmed(false);
+      // **只清自己点亮的那一次**：别人（另一个任务、或这个任务后来的一次）正亮着的，
+      // 轮不到这里替他关。
+      setLogArmed((prev) => (prev && prev.token === token ? null : prev));
     }
   };
 
@@ -187,7 +206,7 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
             而那正是最需要看它的时候。读日志是只读动作，接力/验收锁死也照给。
             logArmed 是启动期间的那一档：hasLog 要等这次 POST 回来才翻真，可日志从
             spawn 之前就在长，最长两分钟。 */}
-        {(free.state?.preview.hasLog || logArmed) && (
+        {(free.state?.preview.hasLog || logArmedHere) && (
           <button type="button" className="is-preview-log" data-testid="preview-log-open" onClick={() => setLogOpen(true)}>
             <Terminal size={13} weight="regular" /><span>预览日志</span>
           </button>

@@ -31,6 +31,15 @@ const preSpawn = mode === "pre-spawn";
  * （更不能还能再点一次去发第二个 DELETE），它该说「关闭中」并且是灰的。
  */
 const readyClose = mode === "ready-close";
+/**
+ * `?mode=cancel-late-success`：**取消赢了，可那趟 POST 随后还是 200 回来了。**
+ *
+ * 这不是编出来的时序：`startPreview` 判定就绪之后，POST 路由还要 `await appendTaskTimeline`
+ * 才回 200，而 DELETE 是故意不抢那把锁的（server/src/free-workflow-preview.ts）——用户就在
+ * 这条缝里点了取消，记录和进程都收掉了，晚一步到达的那个 200 手上却还攥着刚才那份 record。
+ * 它绝不能再宣告「预览已打开」，更不能弹开一个已经被停掉的地址。
+ */
+const cancelLate = mode === "cancel-late-success";
 let logReads = 0;
 /** 启动期的日志：每读一次多一段，模拟 dev server 边跑边吐字。 */
 const phases = [
@@ -45,6 +54,12 @@ const phases = [
 let startPosted = false;
 let canceled = false;
 let failStart: ((reason: unknown) => void) | null = null;
+/** cancel-late-success 那一路：让挂着的 POST **成功**返回（由页面上那颗控制按钮触发）。 */
+let succeedStart: ((response: Response) => void) | null = null;
+/** 开窗只记账不真开：headless 里弹标签页没意义，而「有没有开窗」正是要断言的东西。 */
+const opens: string[] = [];
+(window as unknown as { __opens: string[] }).__opens = opens;
+window.open = ((url?: string | URL) => { opens.push(String(url ?? "")); return null; }) as typeof window.open;
 
 const realFetch = window.fetch.bind(window);
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -83,7 +98,9 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     // 关闭：服务端删掉那条 starting 记录、杀掉已经起的进程和正在装依赖的进程，
     // 在跑的那趟 POST 随后以「启动被取消」失败返回。
     canceled = true;
-    failStart?.(new Error("预览启动被取消（关闭预览 / 任务重新开跑 / ash 重启）"));
+    // cancel-late-success 例外：这一路要复现「DELETE 先赢、POST 还是 200」，所以**不**把
+    // 那趟 POST 打成失败，留给页面上那颗控制按钮决定它什么时候成功返回。
+    if (!cancelLate) failStart?.(new Error("预览启动被取消（关闭预览 / 任务重新开跑 / ash 重启）"));
     return reply({ stopped: true });
   }
   if (pathname === `/api/tasks/${TASK_ID}/free-workflow/preview` && (init?.method ?? "GET") !== "GET") {
@@ -91,7 +108,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     if (preSpawn) return reply({ error: "认出了 3 个能起服务的东西，请在项目设置 → 预览命令里指一个" }, 409);
     // 正常路径：启动请求就这么挂着 —— 现场里它可以挂两分钟（除非被取消）。
     startPosted = true;
-    return await new Promise<Response>((_, reject) => { failStart = reject; });
+    return await new Promise<Response>((resolve, reject) => { failStart = reject; succeedStart = resolve; });
   }
   if (pathname === `/api/tasks/${TASK_ID}/free-workflow/preview/log`) {
     const nth = logReads;
@@ -143,6 +160,12 @@ function Fixture() {
   const notify = useCallback((message: string) => setNotices((all) => [...all, message]), []);
   return (
     <main style={{ width: 900, margin: "24px auto" }}>
+      {cancelLate && (
+        <button type="button" data-testid="finish-start" onClick={() => succeedStart?.(reply({
+          running: true, url: "http://localhost:45841/", port: 45841, command: "npm run dev",
+          startedAt: "2026-09-07T00:00:00.000Z",
+        }))}>让那趟启动请求成功返回</button>
+      )}
       <FreeWorkflowToolbar task={task} notify={notify} />
       <pre data-testid="notices">{JSON.stringify(notices)}</pre>
     </main>
