@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -290,12 +291,19 @@ function InspectorHostState<Context>({
     }));
   }, [descriptors]);
 
+  // Registration order preserves drawer priority; changing icons/titles only refresh the callback data.
+  const shortcutContext = useRef({ descriptors, openTab });
+  useLayoutEffect(() => {
+    shortcutContext.current = { descriptors, openTab };
+  }, [descriptors, openTab]);
+
   useEffect(() => registerInspectorShortcutTarget((shortcut) => {
-    const descriptor = descriptors.find((candidate) => candidate.shortcut === shortcut);
+    const current = shortcutContext.current;
+    const descriptor = current.descriptors.find((candidate) => candidate.shortcut === shortcut);
     if (!descriptor) return false;
-    openTab(descriptor.id);
+    current.openTab(descriptor.id);
     return true;
-  }), [descriptors, openTab]);
+  }), []);
 
   const toggleButton = (
     <button
