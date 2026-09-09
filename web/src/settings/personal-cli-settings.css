@@ -102,6 +102,17 @@
   line-height: 1.65;
 }
 
+.pcli .pcli-memory-editor {
+  height: 240px;
+  min-height: 160px;
+  padding: 10px 12px;
+}
+
+.pcli .pcli-memory-editor:focus {
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+}
+
 .pcli-actions {
   display: flex;
   justify-content: flex-end;

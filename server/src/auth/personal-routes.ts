@@ -24,6 +24,7 @@ import {
   personalCliEnv,
   readPersonalMemory,
   readPersonalSkill,
+  updatePersonalSkill,
   writePersonalMemory,
   writePersonalSkill,
   PERSONAL_CLI_TYPES,
@@ -93,7 +94,7 @@ export function mountPersonalCliRoutes(api: Hono): void {
     const b = await c.req.json<{ body?: string }>().catch(() => ({}) as { body?: string });
     if (typeof b.body !== "string" || !b.body.trim()) return c.json({ error: "SKILL.md 内容不能为空" }, 400);
     try {
-      writePersonalSkill(userId, c.req.param("agentType") as AgentType, c.req.param("name"), b.body);
+      updatePersonalSkill(userId, c.req.param("agentType") as AgentType, c.req.param("name"), b.body);
     } catch (error) {
       return c.json({ error: (error as Error).message }, ((error as { status?: number }).status ?? 400) as 400);
     }

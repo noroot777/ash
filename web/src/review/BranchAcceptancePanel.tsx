@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ArrowClockwise, ArrowRight, GitBranch, GitCommit, GitPullRequest } from "@phosphor-icons/react";
 import type { BranchPlanView, Task, TaskListItem } from "@ash/shared";
 import { familyAcceptanceNotices, familySelectionBlock } from "@ash/shared/branch-plan";
 import { api } from "../lib/api.ts";
@@ -53,17 +54,28 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
   };
   return (
     <section className="branch-acceptance-panel" aria-label="派生与验收依赖">
-      <header><b>派生与验收</b><button type="button" disabled={busy} onClick={() => void refresh()}>刷新依赖</button></header>
+      <header className="branch-acceptance-heading">
+        <h3><GitPullRequest size={14} aria-hidden="true" />派生与验收</h3>
+        <button className="branch-acceptance-refresh" type="button" disabled={busy} onClick={() => void refresh()}>
+          <ArrowClockwise size={12} aria-hidden="true" />刷新依赖
+        </button>
+      </header>
       {loading && <p role="status">正在更新验收依赖…</p>}
       {error && <p role="alert">验收依赖读取失败：{error}<button onClick={() => void refresh()}>重试</button></p>}
-      <dl>
-        <div><dt>开工起点</dt><dd>{view.task.startCommit?.slice(0, 12) || "旧任务未记录"}</dd></div>
-        <div><dt>最终合入</dt><dd>{view.task.targetBranch || "未确定"}</dd></div>
+      <dl className="branch-acceptance-route">
+        <div><dt>开工起点</dt><dd><GitCommit size={14} aria-hidden="true" />
+          {view.task.startCommit ? <code>{view.task.startCommit.slice(0, 12)}</code> : <span>旧任务未记录</span>}
+        </dd></div>
+        <div className="branch-acceptance-target"><dt>最终合入</dt><dd>
+          <ArrowRight className="branch-acceptance-arrow" size={16} aria-hidden="true" />
+          <GitBranch size={14} aria-hidden="true" />
+          {view.task.targetBranch ? <code>{view.task.targetBranch}</code> : <span>未确定</span>}
+        </dd></div>
       </dl>
-      {view.task.blocker && <p role="alert" style={{ whiteSpace: "pre-line" }}>{view.task.blocker}</p>}
       {task.stage !== "accepted" && task.stage !== "merged" && <MergeTargetEditor key={task.id} plan={view.task}
         disabled={busy || checking || !!task.archived || view.task.baseUpdatePending || ["running", "queued"].includes(task.status)}
         onChanged={async () => { await refresh(); if (onTaskUpdated) onTaskUpdated(await api.task(task.id)); }} />}
+      {view.task.blocker && <p role="alert" style={{ whiteSpace: "pre-line" }}>{view.task.blocker}</p>}
       {dep && <p role="status">{dep.message} {dep.taskId && <a href={taskHref(task.projectId, dep.taskId)}>查看父任务</a>}</p>}
       {dep?.state === "needs_update" && <button type="button" disabled={busy || checking || (!!view.task.blocker && !view.task.baseUpdatePending) || task.stage === "accepted" || task.stage === "merged"} onClick={() => open("update")}>更新子分支基线</button>}
       {view.task.baseUpdatePending && <BaseUpdateRecoveryControl key={`recovery:${task.id}`} taskId={task.id}
