@@ -228,7 +228,7 @@ try {
   await apiCommand.fill("cd server\nnpm run dev -- --port $PORT");
   await page.getByTestId("health-refresh").click();
   assert.equal(await webCommand.inputValue(), editedWebCommand, "同项目重新渲染吞掉了服务脚本草稿");
-  assert.equal(await page.getByText("已选 2 / 8").isVisible(), true, "检测结果应支持多选");
+  assert.equal(await page.getByText("已选 2 个 · 最多同时启动 8 个").isVisible(), true, "检测结果应支持多选");
 
   await proxy.selectOption("auto");
   await savePreview.click();
