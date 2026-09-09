@@ -16,6 +16,7 @@
 import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Task } from "@ash/shared";
+import type { PreviewServiceState } from "@ash/shared/preview";
 import "../../src/styles/global.css";
 import { FreeWorkflowToolbar } from "../../src/free-workflow/FreeWorkflowToolbar.tsx";
 
@@ -25,7 +26,8 @@ const reply = (body: unknown, status = 200) =>
 const TASK_ID = "T-preview-live";
 const mode = new URLSearchParams(location.search).get("mode");
 const preSpawn = mode === "pre-spawn";
-const serviceSwitch = mode === "service-switch";
+const longNames = mode === "services-long" || mode === "services-many";
+const serviceSwitch = mode === "service-switch" || longNames;
 /**
  * `?mode=ready-close`：预览**已经起来了**，用户点「关闭预览」，DELETE 挂着不回。
  * 这一档要钉的是措辞和可点性：关一个已就绪的预览，按钮不能翻成「启动中·点此取消」
@@ -48,7 +50,15 @@ const phases = [
   "$ PORT=45841 npm run dev\n[INFO] Downloading spring-boot-starter-web…\n",
   "$ PORT=45841 npm run dev\n[INFO] Downloading spring-boot-starter-web…\n[INFO] Compiling 42 source files\n",
 ];
-const serviceStates = [
+const serviceStates: PreviewServiceState[] = longNames ? [
+  { id: "imds", name: "a4sms-back/a4sms-imds（Maven 模块 · Spring Boot）", command: "cd a4sms-back && mvn -pl a4sms-imds spring-boot:run", status: "ready", url: "/api/tasks/T-preview-live/preview/open/imds", port: 45841 },
+  { id: "api", name: "a4sms-back/a4sms-icis（Maven 模块 · Spring Boot）", command: "cd a4sms-back && mvn -pl a4sms-icis spring-boot:run", status: "ready", url: "/api/tasks/T-preview-live/preview/open/api", port: 45842 },
+  { id: "web", name: "a4sms-front（Node · pnpm dev）", command: "cd a4sms-front && pnpm run dev --port $PORT", status: "ready", url: "/api/tasks/T-preview-live/preview/open/web", port: 45843 },
+  ...(mode === "services-many" ? Array.from({ length: 5 }, (_, index): PreviewServiceState => ({
+    id: `worker-${index}`, name: `a4sms-back/后台同步服务-${index + 1}（Maven 模块 · Spring Boot）`, command: "npm run worker",
+    status: (["starting", "failed", "stopped", "ready", "ready"] as const)[index], url: null, port: 45844 + index,
+  })) : []),
+] : [
   { id: "web", name: "网页前端", command: "npm run web", status: "ready" as const, url: "http://localhost:45841/", port: 45841 },
   { id: "api", name: "接口服务", command: "npm run api", status: "ready" as const, url: null, port: 45842 },
 ];
@@ -199,7 +209,7 @@ function Fixture() {
   const [notices, setNotices] = useState<string[]>([]);
   const notify = useCallback((message: string) => setNotices((all) => [...all, message]), []);
   return (
-    <main style={{ width: 900, margin: "24px auto" }}>
+    <main style={{ width: "calc(100% - 32px)", maxWidth: 900, margin: "24px auto" }}>
       {cancelLate && (
         <button type="button" data-testid="finish-start" onClick={() => succeedStart?.(reply({
           running: true, url: "http://localhost:45841/", port: 45841, command: "npm run dev",

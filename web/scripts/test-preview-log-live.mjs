@@ -175,8 +175,8 @@ try {
   assert(layout.bodyScrollHeight > layout.bodyClientHeight, "长日志应在正文区域内滚动");
   assert(layout.footerTop > 0 && layout.footerBottom <= layout.dialogBottom + 1, "长日志不应把底部操作按钮挤出对话框");
 
-  await serviceSwitch.getByRole("button", { name: "网页前端 · 运行中" }).click();
-  await serviceSwitch.getByRole("button", { name: "接口服务 · 运行中" }).click();
+  await serviceSwitch.getByRole("tab", { name: "网页前端 · 运行中" }).click();
+  await serviceSwitch.getByRole("tab", { name: "接口服务 · 运行中" }).click();
   await serviceSwitch.waitForFunction(
     () => document.querySelector(".preview-log-body")?.textContent === "fresh api log",
   );

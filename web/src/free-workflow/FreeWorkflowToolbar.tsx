@@ -1,13 +1,14 @@
 import { browserPreviewUrl } from "../lib/previewUrl.ts";
 import { useEffect, useRef, useState } from "react";
 import type { Task } from "@ash/shared";
-import { ArrowSquareOut, MagnifyingGlass, MonitorPlay, SpinnerGap, StopCircle, Terminal } from "@phosphor-icons/react";
+import { MagnifyingGlass, MonitorPlay, SpinnerGap, StopCircle, Terminal } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import type { Notify } from "../lib/notify.ts";
 import { FreeReviewDialog } from "./FreeReviewDialog.tsx";
 import { FreeReviewProgress } from "./FreeReviewProgress.tsx";
 import { FreeReviewRepairButton } from "./FreeReviewRepairButton.tsx";
 import { PreviewLogDialog } from "./PreviewLogDialog.tsx";
+import { PreviewServiceLinks } from "./PreviewServiceLinks.tsx";
 import { freeReviewView } from "./freeReviewCopy.ts";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
 
@@ -22,6 +23,7 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: Noti
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
   const [reviewOpen, setReviewOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
+  const logTrigger = useRef<HTMLButtonElement>(null);
   /**
    * 这颗按钮此刻正在做的那件事。**三件事必须分开**：`opening` 是「起预览的请求挂着」
    * （可以取消），`closing` 是「关一个已经起来的预览」，`canceling` 是「取消一次启动」。
@@ -207,20 +209,18 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: Noti
           {previewBusy ? <SpinnerGap size={13} className="is-spinning" /> : free.state?.preview.running ? <StopCircle size={13} weight="regular" /> : <MonitorPlay size={13} weight="regular" />}
           <span>{action === "closing" ? "关闭中" : action === "canceling" ? "取消中" : previewStarting ? "启动中·点此取消" : free.state?.preview.running ? "关闭预览" : "打开预览"}</span>
         </button>
-        {free.state?.preview.running && (free.state.preview.services?.length
-          ? free.state.preview.services.filter((s) => s.url).map((s) => <a key={s.id} href={browserPreviewUrl(s.url!)} target="_blank" rel="noreferrer" aria-label={`打开 ${s.name}`}><ArrowSquareOut size={13} /><span>{free.state!.preview.services!.length > 1 ? s.name : "预览页"}</span></a>)
-          : free.state.preview.url && <a href={browserPreviewUrl(free.state.preview.url)} target="_blank" rel="noreferrer" aria-label="在新窗口打开预览"><ArrowSquareOut size={13} /><span>预览页</span></a>)}
+        {free.state?.preview.running && <PreviewServiceLinks key={task.id} services={free.state.preview.services ?? []} url={free.state.preview.url} />}
         {/* 日志入口按 hasLog 给，不按 running 给：预览**起不来**的那一次同样留下了日志，
             而那正是最需要看它的时候。读日志是只读动作，接力/验收锁死也照给。
             logArmed 是启动期间的那一档：hasLog 要等这次 POST 回来才翻真，可日志从
             spawn 之前就在长，最长两分钟。 */}
         {(free.state?.preview.hasLog || logArmedHere) && (
-          <button type="button" className="is-preview-log" data-testid="preview-log-open" onClick={() => setLogOpen(true)}>
+          <button ref={logTrigger} type="button" className="is-preview-log" data-testid="preview-log-open" onClick={() => setLogOpen(true)}>
             <Terminal size={13} weight="regular" /><span>预览日志</span>
           </button>
         )}
       </div>
-      {logOpen && <PreviewLogDialog taskId={task.id} awaitingStart={action === "opening"} onClose={() => setLogOpen(false)} notify={notify} />}
+      {logOpen && <PreviewLogDialog taskId={task.id} awaitingStart={action === "opening"} onClose={() => { setLogOpen(false); logTrigger.current?.focus(); }} notify={notify} />}
       {reviewOpen && <FreeReviewDialog taskId={task.id} state={free.state} reservationMode={reservationMode} onChanged={free.setState} onClose={() => setReviewOpen(false)} notify={notify} />}
     </>
   );

@@ -1,10 +1,12 @@
 import type { PreviewServiceState } from "@ash/shared/preview";
 import { browserPreviewUrl } from "../lib/previewUrl.ts";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowsClockwise, Copy, Terminal, X } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
+import { previewServiceStatus } from "./previewServices.ts";
+import { PreviewServiceTabs, previewLogTabId } from "./PreviewServiceTabs.tsx";
 
 /**
  * 预览的启动日志。
@@ -36,6 +38,7 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
   awaitingStart?: boolean;
 }) {
   const scrim = useRef<HTMLDivElement>(null);
+  const panelId = useId();
   const body = useRef<HTMLPreElement>(null);
   const requestVersion = useRef(0);
   const [serviceId, setServiceId] = useState<string | undefined>();
@@ -85,6 +88,7 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
     try { await navigator.clipboard.writeText(text); notify("预览日志已复制"); }
     catch { notify("复制失败，可以手动选中日志文本"); }
   };
+  const selectedService = services.find((service) => service.id === serviceId);
 
   return createPortal(
     <div className="task-modal-scrim" ref={scrim} role="presentation" onMouseDown={(event) => {
@@ -106,9 +110,12 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
           </div>
           <button type="button" aria-label="关闭预览日志" onClick={onClose}><X size={15} /></button>
         </header>
-        {services.length > 1 && <div className="preview-service-tabs" role="group" aria-label="服务日志">
-          <button type="button" aria-pressed={!serviceId} onClick={() => setServiceId(undefined)}>全部</button>
-          {services.map((s) => <button type="button" key={s.id} aria-pressed={serviceId === s.id} onClick={() => setServiceId(s.id)}>{s.name} · {{ starting: "启动中", ready: "运行中", failed: "失败", stopped: "已停止" }[s.status]}</button>)}
+        {services.length > 1 && <div className="preview-log-services">
+          <PreviewServiceTabs services={services} serviceId={serviceId} panelId={panelId} onSelect={(id) => { setServiceId(id); setStick(true); }} />
+        </div>}
+        {selectedService && <div className="preview-log-selection">
+          <span>{selectedService.name}</span>
+          <span className="preview-service-status" data-status={selectedService.status}>{previewServiceStatus[selectedService.status]}</span>
         </div>}
         {meta?.command && (
           <div className="preview-log-meta">
@@ -118,6 +125,9 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
         )}
         <pre
           className="preview-log-body mono"
+          id={panelId}
+          role={services.length > 1 ? "tabpanel" : undefined}
+          aria-labelledby={services.length > 1 ? previewLogTabId(panelId, serviceId) : undefined}
           ref={body}
           tabIndex={0}
           onScroll={(event) => {
