@@ -38,6 +38,13 @@ const readSlots = () => {
   return { pinned: slot("workspace-toast-pinned"), transient: slot("workspace-toast-transient") };
 };
 
+// 「挂到页面上」和「加上 is-visible」是**两帧**的事（ToastSlot 先 setMounted，下一个
+// requestAnimationFrame 才 setVisible，为的是让 CSS 淡入有个起点）。只 waitFor 节点本身
+// 是不够的：opacity:0 在 Playwright 眼里照样算 visible，所以 waitFor 会在标记落上之前就
+// 返回，紧接着的 readSlots 把它读成「还没显示」拿到 undefined —— 同一份代码时快时慢，
+// 就是偶发失败的来源。这里统一等到**带 is-visible 的那个节点**出现/消失。
+const visibleSlot = (page, testId) => page.locator(`[data-testid="${testId}"].is-visible`);
+
 let browser;
 try {
   await server.listen();
@@ -50,7 +57,7 @@ try {
 
   // ① 起预览 —— 后端 409 回来一整份「认出了哪几个、各自怎么起」。
   await page.getByRole("button", { name: "打开预览" }).click();
-  await page.getByTestId("workspace-toast-pinned").waitFor({ timeout: 5000 });
+  await visibleSlot(page, "workspace-toast-pinned").waitFor({ timeout: 5000 });
   const expected = await page.evaluate(() => window.__ambiguous);
   const shown = await page.evaluate(readSlots);
   assert.equal(shown.pinned?.text, expected, "报错被截断或换了内容");
@@ -63,20 +70,20 @@ try {
 
   // ② 用户还在读报错，别处插进来一条普通提示：两句并存，报错不许被顶掉。
   await page.getByTestId("plain-notice").click();
-  await page.getByTestId("workspace-toast-transient").waitFor({ timeout: 5000 });
+  await visibleSlot(page, "workspace-toast-transient").waitFor({ timeout: 5000 });
   const both = await page.evaluate(readSlots);
   assert.equal(both.pinned?.text, expected, "一条普通提示就把常驻的预览报错顶掉了");
   assert.equal(both.transient?.text, "已复制", "普通提示没显示出来");
   assert.equal(both.transient?.closers, 0, "常规提示也长出了关闭按钮");
   // 普通提示自己走之后，报错**依然**在（老实现里正是这个定时器把整个 toast 清空的）。
-  await page.waitForTimeout(3200);
+  await visibleSlot(page, "workspace-toast-transient").waitFor({ state: "detached", timeout: 5000 });
   const after = await page.evaluate(readSlots);
   assert.equal(after.transient, null, "常规提示被一起改成了常驻");
   assert.equal(after.pinned?.text, expected, "普通提示的定时器把常驻的预览报错扫掉了");
 
-  // ③ 按那颗关闭才收得掉。
+  // ③ 按那颗关闭才收得掉。整个节点摘掉（不只是掉 is-visible）才算收干净，所以等 detached。
   await page.getByRole("button", { name: "关闭提示" }).click();
-  await page.waitForTimeout(400);
+  await page.getByTestId("workspace-toast-pinned").waitFor({ state: "detached", timeout: 5000 });
   assert.equal((await page.evaluate(readSlots)).pinned, null, "点了关闭，提示还赖着");
   assert.equal(
     await page.evaluate(() => document.querySelectorAll(".workspace-toast-close").length), 0,
