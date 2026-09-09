@@ -93,7 +93,9 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
       <div className="preview-detect-actions">
         <Button disabled={!canManage || busy || detecting} onClick={() => void detect()}><MagnifyingGlass size={13} aria-hidden="true" />{detecting ? "检测中…" : "检测服务"}</Button>
         <Button disabled={!canManage || busy || config.services.length >= 40} onClick={() => setConfig({ ...config, services: [...config.services, { id: createClientId(), name: "新服务", command: "", enabled: false, kind: "web" }] })}><Plus size={13} aria-hidden="true" />手动添加</Button>
-        <span>已选 {selected.length} / {MAX_PREVIEW_SERVICES}</span>
+        {/* 「已选 0 / 8」曾被读成「检测到 8 个候选、选中 0 个」——分数写法天然承诺分母是
+            候选数。8 是一次能同时启动的上限，跟检测结果无关，所以把它说完整。 */}
+        <span>已选 {selected.length} 个 · 最多同时启动 {MAX_PREVIEW_SERVICES} 个</span>
       </div>
       <div className="preview-help"><small>检测读取已保存的项目目录中的常见启动配置，不运行命令。总启动脚本和子服务可能同时出现，请避免重复勾选。</small></div>
       {detection && <p className="preview-detection-result" role="status">{detection}</p>}

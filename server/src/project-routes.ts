@@ -11,7 +11,7 @@ import { RUNS_DIR, DATA_DIR } from "./paths.js";
 import { db } from "./db/index.js";
 import { projects, groups, tasks, notes, noteTasks } from "./db/schema.js";
 import { id, now } from "./util.js";
-import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches } from "./git.js";
+import { expandHome, projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches } from "./git.js";
 import { getGitOverview } from "./git-overview.js";
 import { discardTaskWorkspace } from "./workspace-cleanup.js";
 import { branchDeletionRejection } from "./task-branch-plan.js";
@@ -50,7 +50,10 @@ export function mountProjectRoutes(api: Hono): void {
       if (!row) return c.json({ error: "项目不存在" }, 404);
       const health = projectHealthLight(row.repoPath);
       if (!health.exists) return c.json({ error: "项目目录不存在，请先保存有效的项目目录" }, 409);
-      const found = detectPreviewCandidates(row.repoPath, undefined, 3);
+      // repoPath 按 tidyRepoPath 的约定**原样保留 `~`**，落到文件系统前一律得展开。
+      // 漏掉这一步不会报错，只会安静地扫一个不存在的相对目录，回一句「没有识别出常见
+      // 服务」——而上面的 projectHealthLight 展开过，先放行，于是连线索都不剩。
+      const found = detectPreviewCandidates(expandHome(row.repoPath), undefined, 3);
       const unique = new Map(found.map((s) => [s.command, s]));
       return c.json({ services: [...unique.values()].slice(0, 40).map((s) => ({
         id: createHash("sha256").update(s.command).digest("hex").slice(0, 16),
