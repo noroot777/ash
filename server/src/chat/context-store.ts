@@ -85,7 +85,7 @@ export async function resetChatContext(roomId: string, command: { id: string; bo
   const clearedAt = now();
   await db.transaction(async (tx) => {
     await tx.insert(chatMessages).values({ ...command, roomId, role: "user", createdAt: clearedAt });
-    await tx.insert(chatMessages).values({ id: id(), roomId, role: "system", author: "系统", body: "上下文已清空。之后的点名从这里重新开始；之前的消息仍可查看，但不会再提供给智能体。", createdAt: new Date(Date.parse(clearedAt) + 1).toISOString() });
+    await tx.insert(chatMessages).values({ id: id(), roomId, role: "system", author: "系统", body: "上下文已清空。之后的对话从这里重新开始；之前的消息仍可查看，但不会再提供给智能体。", createdAt: new Date(Date.parse(clearedAt) + 1).toISOString() });
     const content = contextMessage({ ...command, role: "user" });
     const inserted = await tx.insert(entries).values({ roomId, messageId: command.id, content, tokens: estimateChatTokens(`${content}\n`) }).returning({ sequence: entries.sequence });
     const afterSequence = inserted[0]!.sequence;

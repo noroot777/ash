@@ -73,6 +73,9 @@ async function snapshot(room: RoomRow, c: Context) {
   const visible = await visibleTaskIds(actorOf(c), taskIds);
   const rows = visible.length ? await db.select().from(tasks).where(and(room.kind === "assistant" ? undefined : eq(tasks.projectId, room.projectId), inArray(tasks.id, visible))) : [];
   for (const message of messages) if (message.assistant) message.assistant.matches = message.assistant.matches.filter((match) => visible.includes(match.taskId));
+  const workflowIds = messages.flatMap((message) => message.assistant?.workflowId ? [message.assistant.workflowId] : []);
+  const available = new Set(workflowIds.length ? (await filterOwned(await db.select().from(workflows).where(inArray(workflows.id, workflowIds)), actorOf(c))).map((workflow) => workflow.id) : []);
+  for (const message of messages) if (message.assistant?.workflowId) message.assistant.workflowAvailable = available.has(message.assistant.workflowId);
   return { room: toRoom(room), messages, tasks: (await enrichTasks(rows)).map(toTaskListItem), context: await chatContextStatus(room.id) };
 }
 
@@ -86,8 +89,9 @@ export function mountChatRoutes(api: Hono, service: ChatService = chatService) {
     const kind = c.req.query("kind") === "assistant" ? "assistant" : "chat";
     const projectId = c.req.query("projectId") ?? "";
     if (!(kind === "assistant" && !projectId) && (!projectId || !await visibleProject(c, projectId))) return c.json({ error: "project not found" }, 404);
-    const rows = await filterOwned(await db.select().from(chatRooms).where(and(eq(chatRooms.projectId, projectId), eq(chatRooms.kind, kind))), actorOf(c));
-    return c.json(rows.map(toRoom));
+    const rows = await filterOwned(await db.select().from(chatRooms).where(and(kind === "assistant" && !projectId ? undefined : eq(chatRooms.projectId, projectId), eq(chatRooms.kind, kind))), actorOf(c));
+    const visible = await Promise.all(rows.map(async (row) => !row.projectId || await visibleProject(c, row.projectId)));
+    return c.json(rows.filter((_row, index) => visible[index]).map(toRoom));
   });
   api.post("/chats", async (c) => {
     if (!isHumanRequest(c)) return c.json({ error: "用户身份必需" }, 403);
@@ -161,14 +165,18 @@ export function mountChatRoutes(api: Hono, service: ChatService = chatService) {
       const message = (await db.select().from(chatMessages).where(and(eq(chatMessages.id, messageId), eq(chatMessages.roomId, room.id)))).at(0);
       if (!message?.assistant || message.role !== "agent" || message.status !== "done") throw new Error("没有可保存的起手式草案。");
       const result = JSON.parse(message.assistant) as AssistantResult;
-      if (result.workflowId) return c.json(await snapshot(room, c));
+      const existing = result.workflowId ? (await db.select().from(workflows).where(eq(workflows.id, result.workflowId))).at(0) : undefined;
+      if (existing) {
+        if (!await canUseOwned(existing, actorOf(c))) throw new Error("起手式不可访问。");
+        return c.json(await snapshot(room, c));
+      }
       const draft = await validateAssistantWorkflow(result.workflow, actorOf(c));
       const workflowId = `assistant-${message.id}`;
       result.workflowId = workflowId;
       await db.batch([
         db.insert(workflows).values({ id: workflowId, name: draft.name, description: draft.description, def: JSON.stringify(draft.def), ownerUserId: ownerIdOf(actorOf(c)), createdAt: now(), updatedAt: now() }).onConflictDoNothing(),
-        db.update(chatMessages).set({ assistant: JSON.stringify(result) }).where(eq(chatMessages.id, message.id)),
-        db.insert(chatMessages).values({ id: `workflow-${message.id}`, roomId: room.id, role: "system", author: "ash", body: `已将「${draft.name}」保存到起手式库（${workflowId}）。未更改默认起手式，也未运行任务。`, createdAt: now() }).onConflictDoNothing(),
+        db.update(chatMessages).set({ assistant: JSON.stringify(result), modelReply: JSON.stringify({ reply: message.body, assistant: result }) }).where(eq(chatMessages.id, message.id)),
+        db.insert(chatMessages).values({ id: `workflow-${message.id}`, roomId: room.id, role: "system", author: "ash", body: `已将「${draft.name}」保存到起手式库（${workflowId}）。未更改默认起手式，也未运行任务。`, createdAt: now() }).onConflictDoUpdate({ target: chatMessages.id, set: { createdAt: now() } }),
       ]);
       return c.json(await snapshot(room, c));
     } catch (error) { return c.json({ error: error instanceof Error ? error.message : "起手式保存失败" }, 400); }

@@ -76,12 +76,13 @@ const service = new ChatService(async (_member, _owner, prompt, signal, _project
     return { text: JSON.stringify({ reply: "等待结束。", matches: [], workflow: null, task: null }) };
   }
   if (request.includes("起手式")) {
+    const second = request.includes("第二");
     return { text: JSON.stringify({
-      reply: "已生成“前端交付”起手式草案，确认后可保存到起手式库。",
+      reply: `已生成“${second ? "后端发布" : "前端交付"}”起手式草案，确认后可保存到起手式库。`,
       matches: [],
       workflow: {
-        name: "前端交付",
-        description: "实现前端需求，自动验证，并在交付前等待确认。",
+        name: second ? "后端发布" : "前端交付",
+        description: second ? "实现后端改动，自动验证，并在交付前等待确认。" : "实现前端需求，自动验证，并在交付前等待确认。",
         def: builtinWorkflowDef("standard"),
       },
       task: null,
@@ -109,11 +110,21 @@ const service = new ChatService(async (_member, _owner, prompt, signal, _project
 });
 
 let hideProjects = false;
+let workflowSaveDelayMs = 0;
 const fixture = new Hono();
 fixture.post("/fixture/project-list", async (c) => {
   const body = await c.req.json<{ empty?: boolean }>();
   hideProjects = body.empty === true;
   return c.json({ empty: hideProjects });
+});
+fixture.post("/fixture/workflow-save-delay", async (c) => {
+  const body = await c.req.json<{ ms?: number }>();
+  workflowSaveDelayMs = Math.max(0, Math.min(10_000, Math.floor(Number(body.ms) || 0)));
+  return c.json({ ms: workflowSaveDelayMs });
+});
+fixture.use("/chats/:roomId/messages/:messageId/workflow", async (c, next) => {
+  if (c.req.method === "POST" && workflowSaveDelayMs) await delay(workflowSaveDelayMs);
+  await next();
 });
 fixture.use("/projects", async (c, next) => {
   if (hideProjects && c.req.method === "GET") return c.json([]);

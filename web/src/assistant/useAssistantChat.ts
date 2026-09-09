@@ -13,7 +13,8 @@ export function useAssistantChat(projectId: string) {
   const [error, setError] = useState("");
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
-  const [savingWorkflow, setSavingWorkflow] = useState<string | null>(null);
+  const [savingWorkflows, setSavingWorkflows] = useState<string[]>([]);
+  const saving = useRef(new Set<string>());
   const selected = useRef(roomId);
   const request = useRef<{ id: string; body: string } | null>(null);
   selected.current = roomId;
@@ -111,11 +112,12 @@ export function useAssistantChat(projectId: string) {
     catch (reason) { setError(String(reason)); }
   };
   const saveWorkflow = async (messageId: string) => {
-    if (!roomId || savingWorkflow) return;
-    setSavingWorkflow(messageId); setError("");
+    if (!roomId || saving.current.has(messageId)) return;
+    saving.current.add(messageId);
+    setSavingWorkflows([...saving.current]); setError("");
     try { apply(await chatApi.saveWorkflow(roomId, messageId)); void forgetWorkflows(); }
     catch (reason) { if (selected.current === roomId) setError(String(reason)); }
-    finally { setSavingWorkflow(null); }
+    finally { saving.current.delete(messageId); setSavingWorkflows([...saving.current]); }
   };
-  return { rooms, room, snapshot, ready, connected, error, draft, sending, busy, savingWorkflow, setDraft, select, saveMember, newConversation, send, stop, saveWorkflow };
+  return { rooms, room, snapshot, ready, connected, error, draft, sending, busy, savingWorkflows, setDraft, select, saveMember, newConversation, send, stop, saveWorkflow };
 }

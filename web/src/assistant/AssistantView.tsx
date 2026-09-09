@@ -27,6 +27,7 @@ function AssistantMessage({ message, snapshot, projects, onTask, onSave, saving,
 }) {
   const busy = message.status === "running" || message.status === "queued";
   const result = message.assistant;
+  const saved = !!result?.workflowId && result.workflowAvailable !== false;
   const linked = [...(result?.matches ?? []), ...(message.taskId ? [{ taskId: message.taskId, reason: "已创建的工作任务" }] : [])];
   return <article className={`assistant-message is-${message.role} is-${message.status}`}>
     <header><span>{message.role === "user" ? "你" : message.role === "system" ? "会话记录" : "ash 助手"}</span><time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></header>
@@ -40,11 +41,11 @@ function AssistantMessage({ message, snapshot, projects, onTask, onSave, saving,
       </button>;
     })}</div>}
     {result?.workflow && <section className="assistant-workflow" aria-label="起手式草案">
-      <header><FlowArrow size={20} /><span><small>{result.workflowId ? "已保存到起手式库" : "起手式草案"}</small><h3>{result.workflow.name}</h3></span></header>
+      <header><FlowArrow size={20} /><span><small>{saved ? "已保存到起手式库" : result.workflowId ? "起手式已删除，可重新保存" : "起手式草案"}</small><h3>{result.workflow.name}</h3></span></header>
       <p>{result.workflow.description}</p><small>{WORKSPACE_LABELS[result.workflow.def.workspace]}</small>
       <ol>{result.workflow.def.steps.map((step) => <li key={step.id}>{STEP_LABELS[step.kind]}</li>)}</ol>
       <details><summary>查看每站配置</summary><div className="assistant-workflow-rail"><WorkflowRail def={result.workflow.def} /></div></details>
-      <footer><span>{result.workflowId ? "新建任务时即可选用" : "保存后可在设置中继续编辑"}</span><button type="button" className="assistant-primary" disabled={saving} onClick={result.workflowId ? onWorkflows : onSave}>{result.workflowId ? "查看起手式库" : saving ? "保存中…" : "保存起手式"}</button></footer>
+      <footer><span>{saved ? "新建任务时即可选用" : "保存后可在设置中继续编辑"}</span><button type="button" className="assistant-primary" disabled={saving} onClick={saved ? onWorkflows : onSave}>{saved ? "查看起手式库" : saving ? "保存中…" : "保存起手式"}</button></footer>
     </section>}
   </article>;
 }
@@ -75,7 +76,7 @@ export function AssistantView({ project, projects, onTask, onSettings, onExit }:
         </div>}
         {!chat.ready && <p className="assistant-loading" role="status">正在读取助手对话…</p>}
         {configure && <AssistantConnection key={chat.room?.id ?? "new"} initial={chat.room?.members[0]} onSave={async (member) => { await chat.saveMember(member); setEditing(false); }} onCancel={() => setEditing(false)} onSettings={() => onSettings("executors")} />}
-        {!configure && chat.snapshot && <div className="assistant-feed" role="log" aria-label="助手对话" aria-live="polite">{chat.snapshot.messages.length >= 500 && <p>显示最近 500 条消息，更早内容仍保存在对话中。</p>}{chat.snapshot.messages.map((message) => <AssistantMessage key={message.id} message={message} snapshot={chat.snapshot!} projects={projects} onTask={openTask} onSave={() => void chat.saveWorkflow(message.id)} saving={!!chat.savingWorkflow} onWorkflows={() => onSettings("workflows")} />)}</div>}
+        {!configure && chat.snapshot && <div className="assistant-feed" role="log" aria-label="助手对话" aria-live="polite">{chat.snapshot.messages.length >= 500 && <p>显示最近 500 条消息，更早内容仍保存在对话中。</p>}{chat.snapshot.messages.map((message) => <AssistantMessage key={message.id} message={message} snapshot={chat.snapshot!} projects={projects} onTask={openTask} onSave={() => void chat.saveWorkflow(message.id)} saving={chat.savingWorkflows.includes(message.id)} onWorkflows={() => onSettings("workflows")} />)}</div>}
       </div>
       {chat.error && <p role="alert" className="assistant-error">{chat.error}</p>}
       {chat.room && !configure && <div className="assistant-composer-area">

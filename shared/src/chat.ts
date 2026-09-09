@@ -6,6 +6,7 @@ export interface AssistantResult {
   queries: string[];
   workflow?: { name: string; description: string; def: WorkflowDef };
   workflowId?: string;
+  workflowAvailable?: boolean;
 }
 
 export interface ChatMember {

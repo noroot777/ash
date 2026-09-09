@@ -20,6 +20,13 @@ export interface ChatInvocation {
   notice?: string;
 }
 
+export class AssistantToolError extends Error {
+  constructor(tool: string) {
+    super(`助手调用了未开放的工具（${JSON.stringify(tool.slice(0, 80))}）。查询和配置由 ash 内置能力处理；请重新发送消息重试。`);
+    this.name = "AssistantToolError";
+  }
+}
+
 function changeNotice({ paths, more, degraded }: { paths: string[]; more: boolean; degraded?: string }): string | undefined {
   if (!paths.length && !degraded) return undefined;
   // 观察器自身失效时，「没有路径」不等于「没有变化」——必须把失效本身如实附注。
@@ -69,6 +76,8 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
     handle = executor.run({
       cwd,
       prompt: withGlobalBrowserPolicy(prompt, "full"),
+      extraArgs: options?.purpose === "assistant" && executor.type === "claude"
+        ? ["--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands", "--no-chrome"] : undefined,
       env: { ...env, ASH_TASK_ID: undefined, ASH_TURN_TOKEN: undefined, ASH_DIRECTION_TOKEN: undefined },
     });
     signal.addEventListener("abort", abort, { once: true });
@@ -78,7 +87,7 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
       let exitStatus: number | undefined;
       for await (const event of handle!.events) {
         if (event.kind === "tool" && options?.purpose === "summary") throw new ChatBoundaryError("后台摘要调用使用了工具，摘要未采用");
-        if (event.kind === "tool" && options?.purpose === "assistant") throw new Error("助手调用了未开放的工具，本轮已停止。请重试；查询和配置由 ash 内置能力处理。");
+        if (event.kind === "tool" && options?.purpose === "assistant") throw new AssistantToolError(event.name);
         if (event.kind === "tool" && !readOnlyChatTool(event)) throw new ChatBoundaryError(`检测到写入或无法确认只读的工具（${JSON.stringify(event.name.slice(0, 80))}）`);
         signal.throwIfAborted();
         if (event.kind === "text") text += event.text;
