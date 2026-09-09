@@ -1,4 +1,4 @@
-import type { NativeWorkEvent, NativeWorkStatus, TaskStatus } from "@ash/shared";
+import type { NativeAgentActivity, NativeWorkEvent, NativeWorkStatus, TaskStatus } from "@ash/shared";
 import { nativeWorkStatus as workStatus } from "@ash/shared/native-work";
 export { nativeWorkStatus as workStatus } from "@ash/shared/native-work";
 import type { ConversationItem } from "./conversationModel.ts";
@@ -19,6 +19,7 @@ export interface NativeWorkItem {
   model?: string;
   agentType?: string;
   legacy?: boolean;
+  activity?: NativeAgentActivity[];
 }
 
 type Call = Extract<NativeWorkEvent, { type: "call" }>;
@@ -87,6 +88,12 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
       const activity: NativeWorkEvent = trace.nativeWork ?? {
         type: "call", id: fallbackId, name: trace.label, input: legacyInput(trace.detail ?? ""),
       };
+      if (activity.type === "activity") {
+        const id = key(activity.id);
+        const row = rows.get(id) ?? put(id, { nativeId: activity.id, status: "running" });
+        (row.activity ??= []).push(activity.event);
+        continue;
+      }
       if (activity.type === "agent") {
         const id = key(activity.id);
         const patch = Object.fromEntries(Object.entries(activity).filter(([, value]) => value !== undefined));
@@ -157,7 +164,12 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
         if (nativeId && name === "spawn_agent") {
           const row = rows.get(rowId)!;
           rows.delete(rowId);
-          rows.set(key(nativeId), { ...row, id: key(nativeId) });
+          const existing = rows.get(key(nativeId));
+          rows.set(key(nativeId), { ...row, id: key(nativeId), ...(existing ? {
+            activity: existing.activity, message: existing.message,
+            status: activity.failed ? "failed" : existing.status,
+            result: activity.failed ? row.result : existing.result ?? row.result,
+          } : {}) });
           if (endedRows.delete(rowId)) endedRows.add(key(nativeId));
         }
       } else if (!activity.failed) {

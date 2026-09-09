@@ -8,10 +8,12 @@ import { parseClaudeStream } from "../src/executors/claude.js";
 import { parseCodexStream } from "../src/executors/codex.js";
 import { openCodexAppServer } from "../src/executors/codex-app-server.js";
 import { codexChildWork, codexNativeWork, NativeWorkTrace } from "../src/executors/native-work.js";
+import { ClaudeChildActivity, CodexChildActivity } from "../src/executors/native-agent-activity.js";
 import { parseSessionTrace } from "../src/transcript.js";
 import { buildConversationItems, type TimelineEntry } from "../../web/src/task-detail/conversationModel.ts";
 import { buildNativeWork } from "../../web/src/task-detail/nativeWorkModel.ts";
 import { isVisibleExecutionEvent } from "../../web/src/lib/executionTrace.ts";
+import { nativeAgentSegments } from "../../web/src/task-detail/nativeAgentSegments.ts";
 
 const at = "2026-09-08T01:00:00.000Z";
 const session = { id: "session", role: "single", agentType: "claude", executor: "claude@test", startedAt: at,
@@ -134,7 +136,10 @@ try {
     assistant("images", "Agent", { description: "截图" }),
     { type: "user", parent_tool_use_id: "images", message: { content: [{ type: "tool_result", tool_use_id: "read-image", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: png } }] }] } },
     { type: "assistant", parent_tool_use_id: "images", message: { content: [{ type: "text", text: `![截图](${sourceImage})` }] } },
-  ]) as any)) if (event.kind === "attachment") attachments.push(event.path);
+  ]) as any)) {
+    assert.notEqual(event.kind, "attachment", "子智能体附件不混入主会话");
+    if (event.kind === "tool" && event.nativeWork?.type === "activity" && event.nativeWork.event.kind === "attachment") attachments.push(event.nativeWork.event.path);
+  }
   assert.equal(attachments.length, 2, "子智能体tool_result与Markdown图片均保留");
   assert.ok(attachments.every((path) => existsSync(path) && readFileSync(path).length > 0));
 } finally {
@@ -152,6 +157,10 @@ rl.on('line', (line) => {
   if (m.method === 'turn/start') {
     send({ id: m.id, result: { turn: { id: 'turn' } } });
     send({ method: 'item/agentMessage/delta', params: { threadId: 'child', itemId: 'child-msg', delta: 'CHILD MUST STAY SEPARATE' } });
+    send({ method: 'item/reasoning/summaryTextDelta', params: { threadId: 'child', itemId: 'child-reason', delta: '检查子会话隔离' } });
+    send({ method: 'item/completed', params: { threadId: 'child', item: { type: 'reasoning', id: 'child-reason', summary: ['检查子会话隔离'] } } });
+    send({ method: 'item/started', params: { threadId: 'child', item: { type: 'commandExecution', id: 'child-exec', command: 'npm run verify-child' } } });
+    send({ method: 'item/completed', params: { threadId: 'child', item: { type: 'commandExecution', id: 'child-exec', aggregatedOutput: '验证成功', exitCode: 0 } } });
     send({ method: 'item/completed', params: { threadId: 'child', item: { type: 'agentMessage', id: 'child-msg', text: '子结果' } } });
     send({ method: 'turn/completed', params: { threadId: 'child', turn: { status: 'completed' } } });
     send({ method: 'item/completed', params: { threadId: 'main', item: { type: 'agentMessage', id: 'main-msg', text: '主回复仍继续' } } });
@@ -164,4 +173,49 @@ for await (const event of app.events) appEvents.push(event);
 assert.equal(appEvents.filter((event) => event.kind === "text").map((event) => event.text).join(""), "主回复仍继续\n\n");
 assert.equal(appEvents.filter((event) => event.kind === "done").length, 1, "子线程结束不提前结束主回合");
 assert.equal(fromTools(appEvents)[0].status, "completed");
+const child = fromTools(appEvents)[0];
+assert.equal(child.activity?.filter((event) => event.kind === "text").map((event) => event.text).join(""), "CHILD MUST STAY SEPARATE\n\n", "完整消息不重复追加已收到的流式正文");
+assert.equal(child.activity?.filter((event) => event.kind === "thinking").map((event) => event.text).join(""), "检查子会话隔离\n\n");
+assert.ok(child.activity?.some((event) => event.kind === "tool" && event.detail === "npm run verify-child"));
+assert.ok(child.activity?.some((event) => event.kind === "tool" && event.detail?.includes("验证成功")));
+const childTrace = parseSessionTrace(appEvents.filter((event) => event.kind === "tool").map((event) => JSON.stringify({ event, at, turnStartedAt: at })).join("\n"));
+assert.deepEqual(buildNativeWork(buildConversationItems([{ session, output: "", trace: childTrace }], [session], []), "running"), [child], "子执行全文经过落盘解析后与实时会话一致");
+
+const streaming = new CodexChildActivity();
+const sendChild = (threadId: string, method: string, value: object) => streaming.notification(method, { threadId, ...value });
+const interleaved = [
+  ...sendChild("one", "item/agentMessage/delta", { itemId: "same", delta: "第一位" }),
+  ...sendChild("two", "item/completed", { item: { type: "agentMessage", id: "same", text: "第二位" } }),
+  ...sendChild("one", "item/agentMessage/delta", { itemId: "same", delta: "继续" }),
+  ...sendChild("one", "item/completed", { item: { type: "agentMessage", id: "same", text: "第一位继续" } }),
+  ...sendChild("one", "error", { error: { message: "子任务工具失败" } }),
+];
+const independent = fromTools(interleaved);
+assert.equal(independent.length, 2);
+assert.equal(nativeAgentSegments(independent[0].activity!)[0].markdown, "第一位继续\n\n");
+assert.equal(nativeAgentSegments(independent[1].activity!)[0].markdown, "第二位\n\n", "相同item id的并行子线程互不影响");
+assert.ok(nativeAgentSegments(independent[0].activity!).some((segment) => segment.events.some((event) => event.label === "子任务工具失败")));
+assert.equal(fromTools([...codexChildWork("turn/completed", { threadId: "one", turn: { status: "completed" } }),
+  ...codexChildWork("turn/started", { threadId: "one" })])[0].status, "running", "子智能体续跑及时恢复进行中状态");
+
+const claudeChild = new ClaudeChildActivity();
+const claudeMessages = [
+  { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "流式正文" } } },
+  { type: "assistant", message: { content: [{ type: "text", text: "流式正文" }, { type: "tool_use", id: "read", name: "Read", input: { file_path: "src/main.ts" } }] } },
+  { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "read", content: "文件内容" }] } },
+  { type: "assistant", message: { content: [{ type: "thinking", thinking: "下一步分析" }, { type: "text", text: "没有delta也能显示" }] } },
+].flatMap((message) => claudeChild.message({ ...message, parent_tool_use_id: "claude-child" }));
+const claudeActivity = fromTools(claudeMessages)[0].activity!;
+assert.equal(claudeActivity.filter((event) => event.kind === "text").map((event) => event.text).join(""), "流式正文\n\n没有delta也能显示\n\n");
+assert.ok(claudeActivity.some((event) => event.kind === "tool" && event.name === "Read 结果" && event.detail === "文件内容"));
+assert.ok(claudeActivity.some((event) => event.kind === "thinking" && event.text === "下一步分析"));
+const earlyChild = fromTools([
+  tracker.call("spawn_agent", { message: "先到的子消息" }, "early-spawn")!,
+  ...sendChild("early-child", "item/completed", { item: { type: "agentMessage", id: "early", text: "已经开始" } }),
+  ...codexChildWork("turn/completed", { threadId: "early-child", turn: { status: "completed" } }),
+  tracker.result("early-spawn", { agent_id: "early-child" })!,
+]);
+assert.equal(earlyChild.length, 1, "派活结果晚到时合并已出现的子线程");
+assert.equal(earlyChild[0].status, "completed");
+assert.equal(earlyChild[0].activity?.filter((event) => event.kind === "text").map((event) => event.text).join(""), "已经开始\n\n");
 console.log("子智能体解析、任务编号隔离、异步状态、计划更新、历史兼容与刷新一致性通过");

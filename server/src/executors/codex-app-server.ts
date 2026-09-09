@@ -2,6 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { codexChildWork, codexNativeWork, nativePlanSnapshot, NativeWorkTrace } from "./native-work.js";
+import { childActivity, CodexChildActivity } from "./native-agent-activity.js";
 import type { AgentEvent, TokenUsage } from "@ash/shared";
 import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
 import {
@@ -70,6 +71,8 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   let lastEventType: string | null = null;
   let lastEventSummary: string | null = null;
   let agentMessageCount = 0;
+  const childEvents = new CodexChildActivity();
+  const childImages = new Map<string, Set<string>>();
   const structuredErrors: string[] = [];
 
   const push = (event: AgentEvent) => {
@@ -216,6 +219,16 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const handleNotification = (message: any) => {
     const p = message.params ?? {};
     if (threadId && p.threadId && p.threadId !== threadId) {
+      for (const activity of childEvents.notification(message.method, p)) push(activity);
+      if (message.method === "item/completed") {
+        const item = p.item;
+        const seen = childImages.get(p.threadId) ?? new Set<string>();
+        childImages.set(p.threadId, seen);
+        const images = item?.type === "agentMessage" ? persistMarkdownImages(item.text ?? "", seen)
+          : persistToolResultImages(item?.result ?? item?.contentItems ?? item?.error, seen, { allowBareBase64: item?.type === "imageGeneration" });
+        for (const path of images) push(childActivity(p.threadId, { kind: "attachment", path }));
+        if (item?.type === "imageGeneration" && typeof item.savedPath === "string") push(childActivity(p.threadId, { kind: "attachment", path: item.savedPath }));
+      }
       for (const activity of codexChildWork(message.method, p)) push(activity);
       return;
     }
