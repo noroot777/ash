@@ -54,6 +54,43 @@ export async function checkPreviewServiceRegressions(browser, base) {
     assert.equal(shortHeight, multiHeight, "多服务 Tab 切换长短日志时窗口高度应保持稳定");
     await page.keyboard.press("Escape");
     assert(await page.getByTestId("preview-log-open").evaluate((el) => el === document.activeElement), "关闭日志后应恢复入口焦点");
+
+    await page.goto(`${base}?mode=services-many`);
+    await page.getByTestId("preview-log-open").click();
+    const logBody = page.locator(".preview-log-body");
+    await page.waitForFunction(() => document.querySelector(".preview-log-body")?.textContent?.includes("all service line 220"));
+    assert(await logBody.evaluate((el) => el === document.activeElement), "首开日志应聚焦正文，便于键盘阅读");
+    await logBody.evaluate((el) => { el.scrollTop = 0; });
+    await page.keyboard.press("PageDown");
+    await page.waitForFunction(() => document.querySelector(".preview-log-body")?.scrollTop > 0);
+    await page.keyboard.press("Space");
+    assert.equal(await page.getByRole("dialog", { name: "预览日志" }).count(), 1, "空格应翻阅日志，不能触发关闭按钮");
+
+    await page.goto(`${base}?mode=services-removed-error`);
+    await page.getByTestId("preview-log-open").click();
+    await page.getByRole("tab", { name: /a4sms-icis/ }).click();
+    await page.waitForFunction(() => document.querySelector(".preview-log-body")?.textContent === "temporary log error #1", null, { timeout: 8000 });
+    assert.match(await page.getByTestId("preview-log-state").textContent(), /正在运行/, "回退全部期间读取失败，不能把运行中的预览说成历史日志");
+    assert.equal(await page.locator(".preview-log-meta").count(), 0, "回退全部后不应保留已移除服务的命令或链接");
+    await page.waitForFunction(() => document.querySelector(".preview-log-body")?.textContent === "remaining services log", null, { timeout: 12000 });
+    assert.match(await page.getByRole("tab", { selected: true }).textContent(), /全部/);
+    assert.match(await page.getByTestId("preview-log-state").textContent(), /正在运行/);
+
+    await page.goto(`${base}?mode=services-late-short`);
+    await page.getByTestId("preview-log-open").click();
+    await page.waitForFunction(() => document.querySelector(".preview-log-body")?.textContent === "startup banner");
+    assert.equal(await page.getByRole("tab").count(), 0);
+    const geometry = () => page.locator(".preview-log-dialog").evaluate((el) => ({
+      top: el.getBoundingClientRect().top,
+      height: el.getBoundingClientRect().height,
+      footerTop: el.querySelector("footer").getBoundingClientRect().top,
+    }));
+    const beforeServices = await geometry();
+    assert(beforeServices.height > 600, "服务数未知的启动预览应在列表到达前预留阅读空间");
+    await page.getByRole("button", { name: "复制", exact: true }).focus();
+    await page.getByRole("tab", { name: /全部/ }).waitFor({ timeout: 15000 });
+    assert.deepEqual(await geometry(), beforeServices, "服务列表到达后窗口和底部按钮不能跳位");
+    assert(await page.getByRole("button", { name: "复制", exact: true }).evaluate((el) => el === document.activeElement), "短日志的服务列表迟到也不能抢焦点");
   } finally {
     await page.close();
   }

@@ -122,7 +122,7 @@
 
 /* 预览日志：起不来的时候唯一的现场。等宽、可选中、默认贴底。 */
 .preview-log-dialog { display:flex; flex-direction:column; width:min(860px,calc(100vw - 28px)); max-height:min(760px,92vh); overflow:hidden; border:1px solid var(--line2); border-radius:15px; background:var(--panel); box-shadow:var(--shadow); }
-.preview-log-dialog.has-service-tabs { height:min(760px,92vh); }
+.preview-log-dialog.is-expanded { height:min(760px,92vh); }
 .preview-log-dialog > header { display:grid; min-height:66px; grid-template-columns:34px minmax(0,1fr) 28px; align-items:center; gap:10px; border-bottom:1px solid var(--line); padding:10px 14px; }
 .preview-log-dialog > header > span { display:grid; width:34px; height:34px; place-items:center; border-radius:10px; background:color-mix(in lch,var(--accent) 11%,var(--raised)); color:var(--accent); }
 .preview-log-dialog h2,.preview-log-dialog p { margin:0; }

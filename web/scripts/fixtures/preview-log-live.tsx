@@ -26,8 +26,10 @@ const reply = (body: unknown, status = 200) =>
 const TASK_ID = "T-preview-live";
 const mode = new URLSearchParams(location.search).get("mode");
 const preSpawn = mode === "pre-spawn";
-const removedService = mode === "services-removed";
-const lateServices = mode === "services-late";
+const removalError = mode === "services-removed-error";
+const removedService = mode === "services-removed" || removalError;
+const lateShort = mode === "services-late-short";
+const lateServices = mode === "services-late" || lateShort;
 const singleShort = mode === "single-short";
 const longNames = mode === "services-long" || mode === "services-many" || removedService || lateServices;
 const serviceSwitch = mode === "service-switch" || longNames;
@@ -49,6 +51,7 @@ const cancelLate = mode === "cancel-late-success";
 let logReads = 0;
 let selectedServiceReads = 0;
 let serviceRemoved = false;
+let removalFailures = 0;
 /** 启动期的日志：每读一次多一段，模拟 dev server 边跑边吐字。 */
 const phases = [
   "$ PORT=45841 npm run dev\n",
@@ -101,9 +104,9 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
       // running + starting（别的页面、以及刷新之后，靠的就是这个看见「可以取消」）。
       preview: serviceSwitch
         ? {
-          running: true, starting: false, hasLog: true,
+          running: true, starting: lateShort, hasLog: true,
           url: "http://localhost:45841/", port: 45841, command: "multi-service",
-          startedAt: "2026-09-07T00:00:00.000Z", services: serviceStates,
+          startedAt: "2026-09-07T00:00:00.000Z", services: lateShort ? [] : serviceStates,
         }
         : readyClose
         ? {
@@ -146,8 +149,11 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     if (serviceSwitch) {
       const selectedService = new URL(href, location.origin).searchParams.get("service");
       if (removedService && selectedService === "api" && ++selectedServiceReads > 1) serviceRemoved = true;
+      if (removalError && serviceRemoved && !selectedService && ++removalFailures <= 3) {
+        return reply({ error: `temporary log error #${removalFailures}` }, 500);
+      }
       const currentServices = serviceRemoved ? serviceStates.filter((service) => service.id !== "api")
-        : lateServices && logReads++ < 5 ? serviceStates.slice(0, 1) : serviceStates;
+        : lateServices && logReads++ < 5 ? (lateShort ? [] : serviceStates.slice(0, 1)) : serviceStates;
       if (selectedService === "web") {
         return await new Promise<Response>((resolve) => setTimeout(() => resolve(reply({
           services: currentServices,
@@ -165,12 +171,12 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
       return reply({
         services: currentServices,
         text: selectedService === "api" ? (serviceRemoved ? "removed api log" : "fresh api log")
-          : serviceRemoved ? "remaining services log" : longServiceLog,
+          : serviceRemoved ? "remaining services log" : lateShort ? "startup banner" : longServiceLog,
         truncated: false,
         updatedAt: "2026-09-07T00:00:00.000Z",
         exists: true,
         running: true,
-        starting: false,
+        starting: lateShort && !currentServices.length,
         command: selected?.command ?? "all services",
         url: selected?.url ?? null,
       });

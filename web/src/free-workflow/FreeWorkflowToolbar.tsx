@@ -220,7 +220,13 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: Noti
         )}
         {free.state?.preview.running && <PreviewServiceLinks key={task.id} services={free.state.preview.services ?? []} url={free.state.preview.url} />}
       </div>
-      {logOpen && <PreviewLogDialog taskId={task.id} awaitingStart={action === "opening"} onClose={() => { setLogOpen(false); logTrigger.current?.focus(); }} notify={notify} />}
+      {logOpen && <PreviewLogDialog
+        taskId={task.id}
+        awaitingStart={action === "opening"}
+        initialExpanded={(free.state?.preview.services?.length ?? 0) > 1 || (previewStarting && !free.state?.preview.services?.length)}
+        onClose={() => { setLogOpen(false); logTrigger.current?.focus(); }}
+        notify={notify}
+      />}
       {reviewOpen && <FreeReviewDialog taskId={task.id} state={free.state} reservationMode={reservationMode} onChanged={free.setState} onClose={() => setReviewOpen(false)} notify={notify} />}
     </>
   );

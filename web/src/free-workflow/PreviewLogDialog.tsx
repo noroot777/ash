@@ -30,21 +30,23 @@ import { PreviewServiceTabs, previewLogTabId } from "./PreviewServiceTabs.tsx";
  *     其实还挂着。所以调用方把「我这会儿正等一个启动请求」也告诉它（awaitingStart），
  *     两个条件任一成立就续读。
  */
-export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = false }: {
+export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = false, initialExpanded = awaitingStart }: {
   taskId: string;
   onClose: () => void;
   notify: (message: string) => void;
   /** 调用方正等着一个启动请求返回：即便后端还没报 starting，也得续读。 */
   awaitingStart?: boolean;
+  /** 打开前已知需要的阅读空间，在本次打开期间保持，避免异步服务列表挪动底部按钮。 */
+  initialExpanded?: boolean;
 }) {
   const scrim = useRef<HTMLDivElement>(null);
-  const closeButton = useRef<HTMLButtonElement>(null);
   const restoreRemovedTabFocus = useRef(false);
   const panelId = useId();
   const body = useRef<HTMLPreElement>(null);
   const requestVersion = useRef(0);
   const [serviceId, setServiceId] = useState<string | undefined>();
   const [services, setServices] = useState<PreviewServiceState[]>([]);
+  const [expanded, setExpanded] = useState(initialExpanded);
   const [text, setText] = useState("");
   const [meta, setMeta] = useState<{ running: boolean; starting: boolean; truncated: boolean; command: string | null; url: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -52,11 +54,11 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
   // 人往上翻的时候不能被新日志拽回底部（跟会话贴底一个道理）。
   const [stick, setStick] = useState(true);
   useDismissable({ enabled: true, containerRef: scrim, onClose });
-  useEffect(() => { closeButton.current?.focus(); }, []);
+  useEffect(() => { body.current?.focus(); }, []);
   useEffect(() => {
     if (!restoreRemovedTabFocus.current) return;
     restoreRemovedTabFocus.current = false;
-    (scrim.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? closeButton.current)?.focus();
+    (scrim.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? body.current)?.focus();
   }, [serviceId, services]);
 
   const load = useCallback(async () => {
@@ -66,12 +68,13 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
       if (version !== requestVersion.current) return;
       const nextServices = log.services ?? [];
       setServices(nextServices);
+      if (nextServices.length > 1 || (!nextServices.length && (log.running || log.starting))) setExpanded(true);
       if (serviceId && !nextServices.some((service) => service.id === serviceId)) {
         restoreRemovedTabFocus.current = document.activeElement?.id === previewLogTabId(panelId, serviceId);
         requestVersion.current += 1;
         setServiceId(undefined);
         setText("");
-        setMeta(null);
+        setMeta({ running: log.running, starting: log.starting, truncated: false, command: null, url: null });
         setError(null);
         setLoading(true);
         setStick(true);
@@ -114,7 +117,7 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
     <div className="task-modal-scrim" ref={scrim} role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
-      <div className={`preview-log-dialog${services.length > 1 ? " has-service-tabs" : ""}`} role="dialog" aria-modal="true" aria-labelledby="preview-log-title" tabIndex={-1}>
+      <div className={`preview-log-dialog${expanded ? " is-expanded" : ""}`} role="dialog" aria-modal="true" aria-labelledby="preview-log-title" tabIndex={-1}>
         <header>
           <span><Terminal size={17} weight="bold" /></span>
           <div>
@@ -128,7 +131,7 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
               {meta?.truncated ? "太长了，只显示尾部。" : ""}
             </p>
           </div>
-          <button ref={closeButton} type="button" aria-label="关闭预览日志" onClick={onClose}><X size={15} /></button>
+          <button type="button" aria-label="关闭预览日志" onClick={onClose}><X size={15} /></button>
         </header>
         {services.length > 1 && <div className="preview-log-services">
           <PreviewServiceTabs services={services} serviceId={serviceId} panelId={panelId} onSelect={(id) => { setServiceId(id); setStick(true); }} />
