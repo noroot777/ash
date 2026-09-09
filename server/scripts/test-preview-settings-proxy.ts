@@ -28,7 +28,7 @@ const { mountPreviewProxy, attachPreviewUpgrades } = await import("../src/previe
 const { mountPreviewOpenRoutes } = await import("../src/preview-access.js");
 const { previewState } = await import("../src/preview-public.js");
 const { startPreview, stopPreview, readPreview, beginPreviewStart, endPreviewStart } = await import("../src/preview.js");
-const { lastPreview, readAnyPreview, readPreviewLog } = await import("../src/preview-store.js");
+const { lastPreview, readAnyPreview, readPreviewLog, writeRecord } = await import("../src/preview-store.js");
 const { nodeDepsAdvice } = await import("../src/preview-deps.js");
 const { previewShell } = await import("../src/preview-shell.js");
 const { createSession, deleteSession } = await import("../src/auth/store.js");
@@ -151,6 +151,21 @@ try {
   assert.equal(state.proxied, true);
   const open = await request(state.url);
   assert.equal(open.status, 302);
+  // 记录里的地址是从日志里认出来的，认错了就可能压根不是一个能解析的 URL（2026-09-09
+  // 真出过：日志里写「/api 打到 http://127.0.0.1:4317。」，句号被一起收了进来）。判读那侧
+  // 已经修，这里钉的是**兜底**：坏记录必须换来一句人话，而不是 Hono 的 Internal Server Error
+  // —— 那句英文既没说坏在哪，也没说重开一次就好了。
+  {
+    const good = readAnyPreview("preview-task")!;
+    const broken = { ...good, services: good.services!.map((s) => (s.id === "web" ? { ...s, url: "http://127.0.0.1:4317。" } : s)) };
+    writeRecord(broken);
+    try {
+      const response = await request(state.url);
+      assert.equal(response.status, 502, "坏地址不该变成 500");
+      assert.match(await response.text(), /重开/);
+    } finally { writeRecord(good); }
+    assert.equal((await request(state.url)).status, 302, "记录恢复后照旧能开");
+  }
   const gateway = open.headers.get("location")!;
   assert.match(gateway, /^\/preview\/preview-task\/[a-f0-9]{48}\/web\//);
   const html = await request(gateway);

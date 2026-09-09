@@ -119,6 +119,48 @@ check("后端那行进不了候选（scheme 已被 dev.mjs 去掉）", pickPrevi
 });
 check("前端那行还没打出来时也不会误挑后端", pickPreviewUrl("[api] [ash] server on localhost:62398\n", 62396), null);
 
+// —— ash 自己的预览：只起前端（scripts/dev.mjs 的 frontend 档）——
+// 2026-09-09 真出过：这一档只起前端，/api 直接打到本机那份 ash，开场那行写的是
+// 「/api 打到 http://127.0.0.1:4317。」。两处一起坏——
+//   ① 它是那几秒里日志中唯一的地址，于是 `first` 认了 4317，预览指到 ash 自己身上；
+//   ② 句号被 URL_RE 一起收了进去，存进 preview.json，用户点开预览时 `new URL()` 抛，
+//      Hono 兜底成一句 Internal Server Error（表现就是「预览打不开，还是英文的」）。
+// dev.mjs 那行现在不印 scheme 了，但这里钉的是判读侧：**哪怕它照旧印，也不许认**。
+const frontendOnly = "[dev] 预览：只起前端 37009，/api 打到 http://127.0.0.1:4317。\n";
+check("ash 自己监听的端口不进候选", pickPreviewUrl(frontendOnly, 37009, [4317]), null);
+check(
+  "排除之后照旧等前端那行",
+  pickPreviewUrl(`${frontendOnly}  ➜  Local:   http://127.0.0.1:37009/\n`, 37009, [4317]),
+  { url: "http://127.0.0.1:37009/", port: 37009, lent: true },
+);
+// 句号是中文散文里的，跟着色一样属于「日志的属性」，但坏法比着色响得多：着色顶多把
+// 用户领到一个 404 路径，标点直接让 `new URL()` 抛。所以单独钉一条。
+check(
+  "一句话里嵌的地址不许把句号收进去",
+  pickPreviewUrl("[dev] /api 打到 http://127.0.0.1:4317。\n", null)?.url,
+  "http://127.0.0.1:4317",
+);
+check(
+  "半角标点同理（英文日志里 `at http://localhost:5173.`）",
+  pickPreviewUrl("Serving at http://localhost:5173/.\n", null)?.url,
+  "http://localhost:5173/",
+);
+check(
+  "括号、逗号、顿号一样剥干净",
+  pickPreviewUrl("(见 http://localhost:5173/app)，或者 http://localhost:8080、\n", null)?.url,
+  "http://localhost:5173/app",
+);
+check(
+  "剥完仍是一个能解析的 URL",
+  new URL(pickPreviewUrl("打到 http://127.0.0.1:4317。\n", null)?.url ?? "http://x/").port,
+  "4317",
+);
+check(
+  "该留的尾巴不许剥：查询串和锚点",
+  pickPreviewUrl("open http://localhost:5173/?token=a1#top\n", null)?.url,
+  "http://localhost:5173/?token=a1#top",
+);
+
 // —— 只说端口、不印地址的那一类（项目预览命令可以是任何语言之后才有的）——
 // Spring Boot 是最典型的一个：它从头到尾不印一个 URL，只说自己在 8080 上起来了。
 // 认不出来的话，一个已经在跑的服务会被干等到 120 秒超时，报一句「还没起来」。

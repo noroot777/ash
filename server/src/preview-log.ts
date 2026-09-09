@@ -299,6 +299,19 @@ export interface PreviewUrl {
 const URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::(\d{2,5}))?[^\s'"]*/gi;
 
 /**
+ * 地址尾巴上粘着的标点。日志是写给人看的散文，`[dev] …，/api 打到 http://127.0.0.1:4317。`
+ * 这种「一句话里嵌一个地址」的写法会把句号一并收进来 —— URL_RE 认到「空白或引号为止」，
+ * 而句号既不是空白也不是引号，全角的更躲不开。
+ *
+ * 坏法跟 ANSI 那条不一样，更响：带标点的地址会原样存进 preview.json，用户点开预览时
+ * `new URL(service.url)` 当场抛，Hono 兜底成一句 **Internal Server Error** —— 服务好好地
+ * 跑着，用户只看到一句英文报错，日志里也没有一行说得清是哪一步坏的。
+ *
+ * 所以只保留 URL 末尾真正可能出现的字符，其余从尾巴上一路剥掉。
+ */
+const URL_TAIL_RE = /[^A-Za-z0-9/_~%+=&#$*@-]+$/;
+
+/**
  * 「我在 8080 上起来了」但**不印地址**的那一类日志。
  *
  * Node 那边的 dev server 无一例外会印一行 `http://localhost:xxxx`，所以一开始只认 URL 就够。
@@ -333,11 +346,14 @@ function announcedPort(log: string, skip: ReadonlySet<number>): number | null {
  *
  * `lent` 这个标记还兼着第二个用处，见 preview.ts 里撞车判定的那个例外。
  *
- * `sidekicks` 是 ash 借给**配角**的那几个端口（`$PORT2…`，见 preview.ts 的 portEnv）。它们
- * 按定义就不是要看的那个，所以一律排除：一条同时起前后端的命令里，后端多半比前端先起来
- * 并印一句「Tomcat started on port 35725」，不排除的话预览就会稳定地指到后端上 —— 前端还在
- * 编译，用户已经被领到一个返回 JSON 的地址前面了。这条不靠猜：那几个端口是 ash 自己借出去
- * 的，谁拿了它一清二楚。
+ * `excluded` 是「**按定义就不可能是预览本尊**」的那些端口，两类：
+ * ① ash 借给**配角**的那几个（`$PORT2…`，见 preview.ts 的 portEnv）——一条同时起前后端的
+ *    命令里，后端多半比前端先起来并印一句「Tomcat started on port 35725」，不排除的话预览
+ *    就会稳定地指到后端上：前端还在编译，用户已经被领到一个返回 JSON 的地址前面了；
+ * ② **ash 自己监听的那个端口**——预览的日志里出现它只有一种可能，就是命令在说「我的 /api
+ *    打到 ash 那边」（scripts/dev.mjs 的 frontend 档正是这么印的）。认了它，用户点开预览
+ *    看到的是 ash 本尊，而代理还得自己转给自己。
+ * 两类都不靠猜：端口是 ash 自己借出去 / 自己绑上的，谁拿了它一清二楚。
  *
  * 日志里一个地址都没有时，退而求其次认「起在某个端口」的自述（见 announcedPort）——
  * 非 Node 的服务常常只说端口不说地址。
@@ -345,9 +361,9 @@ function announcedPort(log: string, skip: ReadonlySet<number>): number | null {
 export function pickPreviewUrl(
   log: string,
   lent: number | null,
-  sidekicks: readonly number[] = [],
+  excluded: readonly number[] = [],
 ): PreviewUrl | null {
-  const skip = new Set(sidekicks.filter((port) => port !== lent));
+  const skip = new Set(excluded.filter((port) => port !== lent));
   let first: PreviewUrl | null = null;
   // 先剥 ANSI 再扫地址。URL_RE 收到「空白/引号为止」，而着色后的行是
   // `http://localhost:5173/\x1b[39m` —— 控制码不是空白也不是引号，会被原样收进地址，
@@ -356,7 +372,7 @@ export function pickPreviewUrl(
   // 打不开」。这一条在这儿修，不在正则里加特例 —— 着色是整段日志的属性，不是 URL 的。
   const clean = stripAnsi(log);
   for (const hit of clean.matchAll(URL_RE)) {
-    const url = hit[0];
+    const url = hit[0].replace(URL_TAIL_RE, "");
     const port = Number(hit[1] ?? (url.startsWith("https") ? 443 : 80));
     if (lent !== null && port === lent) return { url, port, lent: true };
     if (skip.has(port)) continue;

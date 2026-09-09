@@ -11,6 +11,7 @@ import { prepareNodeDeps, removePreparedLinks, nodeDepsAdvice } from "./preview-
 import { missingDepsHint, missingNodeBin, pickPreviewUrl, portConflict, portHint } from "./preview-log.js";
 import { canConnect, ready } from "./preview-probe.js";
 import { freePorts, PORT_POOL, portEnv } from "./preview-ports.js";
+import { currentListeningPort } from "./listening-port.js";
 import { canceledGens } from "./preview-start-state.js";
 import { alive, archivePreview, patchStart, prunePreviewArtifacts, readAnyPreview, recordPath, tail, writeRecord, type PreviewStep, type PreviewResult, type PreviewServiceRecord } from "./preview-store.js";
 import { previewShell } from "./preview-shell.js";
@@ -119,6 +120,9 @@ export async function runPreview(
       } finally { closeSync(fd); }
     }
     const deadline = Date.now() + 120_000;
+    // ash 自己绑的那个端口永远不是预览本尊（它就在上面跑着，别人绑不上）。日志里出现它
+    // 只可能是命令在说「我的 /api 打到 ash 那边」——认了它，预览就指到 ash 自己身上。
+    const self = currentListeningPort();
     while (Date.now() < deadline) {
       await sleep(500);
       if (!ours()) return fail(CANCELED);
@@ -131,7 +135,7 @@ export async function runPreview(
         }
         if (s.status === "ready") continue;
         const lent = ports[i] ?? null;
-        const found = pickPreviewUrl(text, lent, ports.filter((_, j) => i !== j))
+        const found = pickPreviewUrl(text, lent, [...ports.filter((_, j) => i !== j), ...(self === null ? [] : [self])])
           ?? (lent !== null && await canConnect(lent) ? { url: `http://localhost:${lent}/`, port: lent, lent: true } : null);
         if (!ours()) return fail(CANCELED);
         const conflict = found?.lent ? null : portConflict(text);
