@@ -1,79 +1,69 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type ProjectGitResult, type ProjectGitState } from "../lib/api.ts";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { api, type ProjectGitResult } from "../lib/api.ts";
+import {
+  putProjectGitState,
+  readProjectGitRun,
+  runProjectGit,
+  subscribeProjectGitRun,
+  type ProjectGitRun,
+} from "./projectGitRuns.ts";
 
 // 项目主仓 git 面板的数据层，供侧栏那颗分支胶囊点开的浮层用。
 //
-// 两条约定：
+// 三条约定：
 // ① **只在面板开着时拉。** 关着的时候胶囊显示的是 `ProjectHealth` 里那份轻量分支名
 //    （WorkspaceShell 已经在拉了），不值得为了它再打一趟 git。
 // ② **失败不清空已有状态。** 网络抖一下就把分支清单抹掉，用户看到的是「仓库没了」。
-//    错误单独放一格，清单留在原地。
+//    读取错误单独放一格，清单留在原地。
+// ③ **写操作的状态不归这个 hook 管。** 它住在 `projectGitRuns.ts` 那本账里，浮层被点没了
+//    也还在——那正是「操作跑一半浮层消失就像被打断」那件事的根。
 
-export type ProjectGitHandle = {
-  state: ProjectGitState | null;
+export type ProjectGitHandle = ProjectGitRun & {
+  /** 这份 handle 是谁的。跟着 handle 走，调用点就不可能拿 A 的状态发 B 的请求。 */
+  projectId: string | null;
   loading: boolean;
-  /** 正在跑的操作名（`checkout` / `fetch` / `pull` / `push`），空闲时为 null。 */
-  busy: string | null;
-  /** 最近一次操作的结果：成功给 message，失败给 error。两者互斥。 */
-  message: string | null;
-  error: string | null;
   refresh: () => void;
   run: (kind: string, action: () => Promise<ProjectGitResult>) => Promise<boolean>;
 };
 
 export function useProjectGit(projectId: string | null, enabled: boolean): ProjectGitHandle {
-  const [state, setState] = useState<ProjectGitState | null>(null);
+  const current = useSyncExternalStore(
+    useCallback((listener: () => void) => subscribeProjectGitRun(projectId, listener), [projectId]),
+    useCallback(() => readProjectGitRun(projectId), [projectId]),
+  );
   const [loading, setLoading] = useState(false);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
-  // StrictMode（开发态）会模拟一次「卸载再重挂」。cleanup 把 alive 置 false 之后必须在重挂时
-  // 置回 true，否则这个 ref 一去不回：往后 run() 的 setState / setMessage / setError / setBusy
-  // 全被当成「组件已经没了」跳过，面板永远停在操作之前那一份状态，错误也不显示。
-  const alive = useRef(true);
-  useEffect(() => {
-    alive.current = true;
-    return () => { alive.current = false; };
-  }, []);
 
-  // 换项目就把上一份状态和上一条消息一起丢掉：别让 A 项目的分支清单在 B 项目底下多显示
-  // 一帧，那一帧足够让人点错分支。
-  useEffect(() => { setState(null); setMessage(null); setError(null); }, [projectId]);
+  useEffect(() => setLoadError(null), [projectId]);
 
   useEffect(() => {
     if (!enabled || !projectId) return;
-    let current = true;
+    // 写操作在途时不拉：这趟 GET 只会读到 git 干到一半的样子，回来还可能盖掉操作结果
+    // （`putProjectGitState` 也拦了一道）。操作落定时结果自带一份新状态。
+    if (readProjectGitRun(projectId).busy) return;
+    let alive = true;
     setLoading(true);
     api.projectGit(projectId)
-      .then((next) => { if (current) setState(next); })
-      .catch((reason) => {
-        if (current) setError(reason instanceof Error ? reason.message : "读取 Git 状态失败");
+      .then((next) => {
+        if (!alive) return;
+        putProjectGitState(projectId, next);
+        setLoadError(null);
       })
-      .finally(() => { if (current) setLoading(false); });
-    return () => { current = false; };
+      .catch((reason) => {
+        if (alive) setLoadError(reason instanceof Error ? reason.message : "读取 Git 状态失败");
+      })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
   }, [enabled, projectId, version]);
 
   const refresh = useCallback(() => setVersion((value) => value + 1), []);
 
-  const run = useCallback(async (kind: string, action: () => Promise<ProjectGitResult>) => {
-    if (!projectId) return false;
-    setBusy(kind);
-    setMessage(null);
-    setError(null);
-    try {
-      const result = await action();
-      if (!alive.current) return true;
-      setState(result.state);
-      setMessage(result.message);
-      return true;
-    } catch (reason) {
-      if (alive.current) setError(reason instanceof Error ? reason.message : "操作失败");
-      return false;
-    } finally {
-      if (alive.current) setBusy(null);
-    }
-  }, [projectId]);
+  const run = useCallback(
+    (kind: string, action: () => Promise<ProjectGitResult>) =>
+      (projectId ? runProjectGit(projectId, kind, action) : Promise.resolve(false)),
+    [projectId],
+  );
 
-  return { state, loading, busy, message, error, refresh, run };
+  return { ...current, error: current.error ?? loadError, projectId, loading, refresh, run };
 }
