@@ -297,25 +297,42 @@ export interface PreviewUrl {
 }
 
 /**
- * 日志里印出来的本机地址。
- *
- * 地址体只收 **URI 里合法的那些 ASCII 字符**（RFC 3986 的 unreserved + reserved + `%`，
- * 再去掉日志里常用来包地址的引号）。这不是洁癖，是那条「一句话里嵌一个地址」的散文写法
- * 逼出来的：`[dev] …，/api 打到 http://127.0.0.1:4317。` —— 早先的 `[^\s'"]*` 认到「空白
- * 或引号为止」，句号既不是空白也不是引号，于是被当成地址的一部分收进来，原样存进
- * preview.json；用户点开预览时 `new URL(service.url)` 当场抛（端口成了 `4317。`），Hono
- * 兜底成一句 **Internal Server Error**：服务好好地跑着，报错却什么都没说。
- *
- * 收窄字符集而不是「事后把尾巴上的标点剥掉」，因为剥不得：`.`、`?`、`)` 在 URL 末尾都是
- * 合法的（`/releases/v1.2.`、`/search?q=what?`、`/file(name)`），一律剥掉就是把用户领到
- * 另一个路径上去 —— 那正是这个函数要防的事，只是换了个方向坏。全角标点没有这个两难：
- * URL 里的非 ASCII 一律得百分号编码，所以裸的 `。`「必然」是散文，不是地址。
+ * 日志里印出来的本机地址。地址体照旧认到「空白或引号为止」—— 路径和查询串里什么都可能有，
+ * 中日韩、重音字母、百分号编码，`new URL()` 全都收（自己会编码成 `%E4%BD%A0%E5%A5%BD`），
+ * 所以**这里不做任何字符集裁剪**。裁过一次，代价是把 `/你好` 截成 `/`、把 `?q=中文` 截成
+ * `?q=`：预览指到另一个路由上，而截出来的前缀照样解析得动，一路都看不出被改过。
  */
-const URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::(\d{2,5}))?[-A-Za-z0-9._~:/?#[\]@!$&()*+,;=%]*/gi;
+const URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::(\d{2,5}))?[^\s'"]*/gi;
 
-/** 解析不了的地址一律不当候选：与其把它存进 preview.json 再在打开预览那步抛，不如当没看见。 */
+/**
+ * 尾巴上的非 ASCII，**只在这条地址解析不动的时候**才剥。
+ *
+ * 起因是那条「一句话里嵌一个地址」的散文写法：`[dev] …，/api 打到 http://127.0.0.1:4317。`
+ * —— 句号既不是空白也不是引号，被当成地址的一部分收进来，端口成了 `4317。`，原样存进
+ * preview.json；用户点开预览时 `new URL(service.url)` 当场抛，Hono 兜底成一句
+ * **Internal Server Error**：服务好好地跑着，报错却什么都没说。
+ *
+ * 为什么门槛是「解析不动」而不是「看着像标点」：**看着像标点的一律剥不得**。`.`、`?`、`)`
+ * 在 URL 末尾都合法（`/releases/v1.2.`、`/search?q=what?`、`/file(name)`），全角字符在路径里
+ * 同样合法（`/你好。`）—— 谁也分不清 `v1.2.` 末尾那个点是版本号还是句号，分不清就不该猜，
+ * 猜错就是把用户领到另一个路径上去，跟原事故是同一种坏、只是换了个方向。
+ *
+ * 而 `new URL()` 几乎只为 **authority 坏了**才抛（路径和查询串里塞什么它都能编码过去）。
+ * 所以「解析不动」这个门槛恰好把两类分开了：能解析的一个字符都不动；解析不动的，垃圾必然
+ * 落在主机/端口上，剥掉尾巴上的非 ASCII 就是在修那一段。端口那几位是 ASCII，剥非 ASCII
+ * 后缀动不到它们，所以修完的地址不可能指到另一个端口上去。
+ */
+const TRAILING_NON_ASCII = /[^\x20-\x7e]+$/;
+
 function parsable(url: string): boolean {
   try { new URL(url); return true; } catch { return false; }
+}
+
+/** 能解析就原样返回；解析不动就试着剥掉尾巴上的非 ASCII；修不好返回 null（当没看见）。 */
+function usableUrl(raw: string): string | null {
+  if (parsable(raw)) return raw;
+  const trimmed = raw.replace(TRAILING_NON_ASCII, "");
+  return trimmed !== raw && parsable(trimmed) ? trimmed : null;
 }
 
 /**
@@ -372,17 +389,16 @@ export function pickPreviewUrl(
 ): PreviewUrl | null {
   const skip = new Set(excluded.filter((port) => port !== lent));
   let first: PreviewUrl | null = null;
-  // 先剥 ANSI 再扫地址。着色后的行是 `http://localhost:5173/\x1b[39m`，早先的 `[^\s'"]*`
-  // 会把整个转义序列收进地址（控制码不是空白也不是引号），存进 preview.json、再交给浏览器
-  // 打开：端口连得上，所以一路判成「起好了」，用户点开得到的却是 `/%1B[39m` 这条 404 路径
-  // —— 服务是好的、根页面是好的，表现仍然是「预览打不开」。现在字符集收窄了，地址会停在
-  // ESC 前面，但剥 ANSI 一条都不能省：它是这一段判读的统一前处理（行尾锚定的那几条判据
-  // 全靠它），而「地址正好停在对的位置」只是字符集的副作用，不是保证。
-  // 这一条在这儿修，不在正则里加特例 —— 着色是整段日志的属性，不是 URL 的。
+  // 先剥 ANSI 再扫地址。URL_RE 收到「空白/引号为止」，而着色后的行是
+  // `http://localhost:5173/\x1b[39m` —— 控制码不是空白也不是引号，会被原样收进地址，
+  // 存进 preview.json、再交给浏览器打开。端口连得上，所以一路判成「起好了」，用户点开
+  // 得到的却是 `/%1B[39m` 这条 404 路径：服务是好的、根页面是好的，表现仍然是「预览
+  // 打不开」。这一条在这儿修，不在正则里加特例 —— 着色是整段日志的属性，不是 URL 的
+  // （`TRAILING_NON_ASCII` 那道也指望不上：带控制码的地址 `new URL()` 照样解析得动，剥不着）。
   const clean = stripAnsi(log);
   for (const hit of clean.matchAll(URL_RE)) {
-    const url = hit[0];
-    if (!parsable(url)) continue;
+    const url = usableUrl(hit[0]);
+    if (url === null) continue;
     const port = Number(hit[1] ?? (url.startsWith("https") ? 443 : 80));
     if (lent !== null && port === lent) return { url, port, lent: true };
     if (skip.has(port)) continue;

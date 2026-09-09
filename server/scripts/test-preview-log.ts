@@ -145,16 +145,10 @@ check(
   new URL(pickPreviewUrl("打到 http://127.0.0.1:4317。\n", null)?.url ?? "http://x/").port,
   "4317",
 );
-check(
-  "全角标点在路径位置也一样停住（否则路径变成 /%E3%80%82，一个 404）",
-  pickPreviewUrl("前端在 http://localhost:5173/。\n", null)?.url,
-  "http://localhost:5173/",
-);
-// —— 但**半角标点一个都不许动** ——
-// 收窄字符集而不是「剥尾巴」，就是为了这几条：`.`、`?`、`)` 在 URL 末尾都是合法的，
-// 谁也分不清 `…/v1.2.` 里的点是版本号的一部分还是句号。一律剥掉 = 把用户领到另一个
-// 路径/查询上去 —— 跟句号那条是同一种坏，只是换了个方向。分得清的只有全角：URL 里的
-// 非 ASCII 必须百分号编码，所以裸的 `。` 必然是散文。
+// —— 但**能解析的地址一个字符都不许动** ——
+// 剥尾巴的门槛是「解析不动」，不是「看着像标点」。下面这些全都解析得动，也就全都不许改：
+// 谁也分不清 `…/v1.2.` 末尾那个点是版本号还是句号，分不清就不该猜 —— 猜错就是把用户领到
+// 另一个路径/查询上去，跟句号那条是同一种坏，只是换了个方向。
 check(
   "路径末尾的点是路径的一部分",
   pickPreviewUrl("open http://localhost:5173/releases/v1.2.\n", null)?.url,
@@ -175,10 +169,41 @@ check(
   pickPreviewUrl("open http://localhost:5173/?token=a1#top\n", null)?.url,
   "http://localhost:5173/?token=a1#top",
 );
-// 字符集收窄之后还剩一类解析不动的：端口超出范围（`\d{2,5}` 收得下 99999，`new URL` 收不下）。
-// 与其把它存进 preview.json 再在打开预览那步抛，不如当没看见——这一条兜的就是「以后又冒出
-// 一种没想到的写法」时，坏的地址不会再走到用户面前。
-check("解析不动的地址不当候选", pickPreviewUrl("listening on http://localhost:99999/\n", null), null);
+// 非 ASCII 同理，而且这一条更容易被「顺手清理一下」弄坏：路径和查询串里的中日韩、重音
+// 字母都是合法的，`new URL()` 自己会编码成 `%E4%BD%A0%E5%A5%BD`。按字符集裁剪的话，
+// `/你好` 会被截成 `/`、`?q=中文` 会被截成 `?q=` —— **截出来的前缀照样解析得动**，于是
+// 一路都看不出地址被改过，用户只是被领到了另一个路由上。
+check(
+  "路径里的中文原样保留",
+  pickPreviewUrl("➜  Local:   http://localhost:5173/你好\n", null)?.url,
+  "http://localhost:5173/你好",
+);
+check(
+  "查询串里的中文原样保留",
+  pickPreviewUrl("open http://localhost:5173/search?q=中文\n", null)?.url,
+  "http://localhost:5173/search?q=中文",
+);
+check(
+  "重音字母原样保留（不许截成 /ma）",
+  pickPreviewUrl("open http://localhost:5173/mañana\n", null)?.url,
+  "http://localhost:5173/mañana",
+);
+check(
+  "认出来的中文地址交给 new URL 就是它自己编码的那个",
+  new URL(pickPreviewUrl("open http://localhost:5173/你好\n", null)?.url ?? "http://x/").pathname,
+  "/%E4%BD%A0%E5%A5%BD",
+);
+// 路径里的全角句号同样解析得动，所以同样不许剥 —— 它跟英文日志里的 `at http://localhost:5173/.`
+// 是同一种没法分辨的情形。剥尾巴只在「authority 坏了、`new URL()` 抛了」时才轮得到。
+check(
+  "路径里的全角句号也不许剥（解析得动就不猜）",
+  pickPreviewUrl("前端在 http://localhost:5173/。\n", null)?.url,
+  "http://localhost:5173/。",
+);
+// 还剩一类修不好的：端口超出范围（`\d{2,5}` 收得下 99999，`new URL` 收不下），尾巴上又没有
+// 非 ASCII 可剥。与其把它存进 preview.json 再在打开预览那步抛，不如当没看见——这一条兜的就是
+// 「以后又冒出一种没想到的写法」时，坏的地址不会再走到用户面前。
+check("修不好的地址不当候选", pickPreviewUrl("listening on http://localhost:99999/\n", null), null);
 check(
   "但同一份日志里能解析的那个照旧认",
   pickPreviewUrl("bogus http://localhost:99999/\n➜  Local:   http://localhost:5173/\n", null)?.port,
