@@ -227,7 +227,10 @@ Restart 不是盲目的 kill + start。它会先问服务端「重启会真正�
 
 ### 回归测试
 
+`build` / `restart` 只做「约定检查 → 类型 → 打包」，**不再跑测试**；回归自己显式跑：
+
 ```bash
+npm run test:web                      # 前端全量回归（改完 web/ 交付前跑）
 npm -w server run test:queue          # 队列推进与排序
 npm -w server run test:accept-merge   # 验收合并与冲突处理
 npm -w server run test:review         # 验证轮与证据落盘
