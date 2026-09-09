@@ -4,7 +4,76 @@ const settle = page => page.waitForTimeout(320);
 
 export async function checkAssistantEntry(page, fixtureUrl) {
   await page.setViewportSize({ width: 1200, height: 820 });
+  const fixtureBase = new URL("/", fixtureUrl);
+  const configureProjects = data => page.request.post(new URL("api/fixture/project-list", fixtureBase).href, { data });
+  const footerAssistantEntry = () => page.locator(".workspace-assistant-entry");
+  const waitForAssistantEnabled = () => page.waitForFunction(() => {
+    const entry = document.querySelector(".workspace-assistant-entry");
+    return entry instanceof HTMLButtonElement && !entry.disabled;
+  });
+
+  try {
+  await configureProjects({ empty: false, delayMs: 1_200 });
   await page.goto(fixtureUrl);
+  await footerAssistantEntry().waitFor();
+  assert.equal(await footerAssistantEntry().isDisabled(), true, "assistant entry stays disabled while projects are loading");
+  assert.doesNotMatch(page.url(), /[?&]view=assistant(?:&|$)/u, "loading state does not fall back to assistant");
+  await waitForAssistantEnabled();
+  assert.equal(await footerAssistantEntry().isEnabled(), true, "assistant entry enables after projects load");
+  await footerAssistantEntry().click();
+  await page.getByRole("region", { name: "聊天模式" }).waitFor();
+  assert.match(page.url(), /[?&]view=chat(?:&|$)/u, "loaded project routes the footer entry to chat");
+
+  await configureProjects({ empty: false, fail: true });
+  const failedProjects = page.waitForResponse(response => response.url().endsWith("/api/projects") && response.status() === 503);
+  await page.goto(fixtureUrl);
+  await failedProjects;
+  await page.locator(".workspace-load-error").waitFor();
+  await footerAssistantEntry().waitFor();
+  assert.equal(await footerAssistantEntry().isDisabled(), true, "assistant entry stays disabled when projects fail to load");
+  assert.doesNotMatch(page.url(), /[?&]view=assistant(?:&|$)/u, "project error does not masquerade as an empty project list");
+
+  await configureProjects({ empty: true, delayMs: 800 });
+  await page.goto(fixtureBase.href);
+  await footerAssistantEntry().waitFor();
+  assert.equal(await footerAssistantEntry().isDisabled(), true, "empty-project fallback waits for a successful project response");
+  await waitForAssistantEnabled();
+  assert.equal(await footerAssistantEntry().isEnabled(), true);
+  await footerAssistantEntry().click();
+  await page.getByRole("region", { name: "ash 助手" }).waitFor();
+  assert.match(page.url(), /[?&]view=assistant(?:&|$)/u, "confirmed empty project list opens assistant directly");
+
+  await configureProjects({ empty: false });
+  await page.goto(fixtureUrl);
+  await page.getByRole("heading", { name: "从任务树选择一项" }).waitFor();
+
+  await footerAssistantEntry().click();
+  await page.getByRole("region", { name: "聊天模式" }).waitFor();
+  await page.getByRole("button", { name: "ash 助手" }).last().click();
+  await page.getByRole("region", { name: "ash 助手" }).waitFor();
+  await page.getByRole("button", { name: "登录认证流程重构" }).click();
+  await page.getByRole("heading", { name: "登录认证流程重构", exact: true }).waitFor();
+  await page.goBack();
+  await page.getByRole("region", { name: "ash 助手" }).waitFor();
+  await page.getByRole("button", { name: "关闭助手" }).click();
+  await page.getByRole("heading", { name: "从任务树选择一项" }).waitFor();
+  assert.doesNotMatch(page.url(), /[?&]view=chat(?:&|$)/u, "popstate clears a stale chat origin before assistant closes");
+
+  await footerAssistantEntry().click();
+  await page.getByRole("region", { name: "聊天模式" }).waitFor();
+  await page.getByRole("button", { name: "ash 助手" }).last().click();
+  assert.match(page.url(), /[?&]view=assistant(?:&|$)/u);
+  assert.match(page.url(), /[?&]from=chat(?:&|$)/u, "assistant URL records its chat origin");
+  await configureProjects({ empty: false, delayMs: 1_200 });
+  await page.reload();
+  await page.getByRole("region", { name: "ash 助手" }).waitFor();
+  await page.getByRole("button", { name: "关闭助手" }).click();
+  await page.waitForURL(/[?&]view=chat(?:&|$)/u);
+  assert.equal(await footerAssistantEntry().isDisabled(), true, "chat URL updates before the delayed project list returns");
+  await page.getByRole("region", { name: "聊天模式" }).waitFor();
+  assert.match(page.url(), /[?&]view=chat(?:&|$)/u, "assistant reload preserves the chat return path");
+  await configureProjects({ empty: false });
+  await page.getByRole("button", { name: "返回工作区" }).click();
   await page.getByRole("heading", { name: "从任务树选择一项" }).waitFor();
 
   const separator = () => page.getByRole("separator", { name: "调整任务树宽度" });
@@ -101,13 +170,17 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   await collapsedChat.click();
   assert.equal(await collapsedChat.getAttribute("aria-pressed"), "true", "collapsed chat entry reflects the current view");
 
-  await page.request.post(new URL("api/fixture/project-list", fixtureUrl).href, { data: { empty: true } });
-  await page.goto(new URL("/", fixtureUrl).href);
+  await configureProjects({ empty: true });
+  await page.goto(fixtureBase.href);
   await page.getByRole("heading", { name: "还没有可用项目" }).waitFor();
   const emptyCollapsed = page.getByRole("complementary", { name: "已收起的侧边栏" });
   assert.equal(await emptyCollapsed.getByRole("button", { name: "聊天" }).count(), 0);
   assert.equal(await emptyCollapsed.getByRole("button", { name: "ash 助手" }).count(), 1);
+  await waitForAssistantEnabled();
   await emptyCollapsed.getByRole("button", { name: "ash 助手" }).click();
   await page.getByRole("region", { name: "ash 助手" }).waitFor();
   assert.match(page.url(), /[?&]view=assistant(?:&|$)/u, "no-project assistant fallback opens directly");
+  } finally {
+    await configureProjects({ empty: false }).catch(() => {});
+  }
 }

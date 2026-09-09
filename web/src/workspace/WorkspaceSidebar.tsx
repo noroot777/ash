@@ -50,6 +50,7 @@ export function WorkspaceSidebar({
   chatOpen,
   onAssistant,
   assistantOpen,
+  assistantDisabled,
   onGroups,
   onCreate,
   onNewProject,
@@ -83,6 +84,7 @@ export function WorkspaceSidebar({
   chatOpen?: boolean;
   onAssistant?: () => void;
   assistantOpen?: boolean;
+  assistantDisabled?: boolean;
   onGroups: () => void;
   onCreate: () => void;
   onNewProject: () => void;
@@ -107,7 +109,7 @@ export function WorkspaceSidebar({
         </button>
         {currentProject && onChat
           ? <button className="workspace-side-icon" type="button" aria-label="聊天" aria-pressed={!!chatOpen} {...chatTip.anchorProps} onClick={() => { chatTip.hide(); onChat(); }}><ChatCircleDots size={16} aria-hidden="true" /></button>
-          : onAssistant && <button className="workspace-side-icon" type="button" aria-label="ash 助手" aria-pressed={!!assistantOpen} {...assistantTip.anchorProps} onClick={() => { assistantTip.hide(); onAssistant(); }}><Robot size={18} aria-hidden="true" /></button>}
+          : onAssistant && <button className="workspace-side-icon" type="button" aria-label="ash 助手" aria-pressed={!!assistantOpen} disabled={assistantDisabled} {...assistantTip.anchorProps} onClick={() => { assistantTip.hide(); onAssistant(); }}><Robot size={18} aria-hidden="true" /></button>}
         <HoverTip at={chatTip.at}>聊天</HoverTip>
         <HoverTip at={assistantTip.at}>ash 助手</HoverTip>
       </aside>
@@ -187,7 +189,7 @@ export function WorkspaceSidebar({
             {width < 240 ? "打开" : "打开任务列表"}
           </span>
         )}
-        {onAssistant && <button className="workspace-assistant-entry" type="button" aria-label="ash 助手" aria-pressed={!!assistantOpen} {...assistantTip.anchorProps} onClick={() => { assistantTip.hide(); onAssistant(); }}>
+        {onAssistant && <button className="workspace-assistant-entry" type="button" aria-label="ash 助手" aria-pressed={!!assistantOpen} disabled={assistantDisabled} {...assistantTip.anchorProps} onClick={() => { assistantTip.hide(); onAssistant(); }}>
           <Robot size={15} weight="duotone" aria-hidden="true" />
           <span className="workspace-assistant-label">助手</span>
         </button>}

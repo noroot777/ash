@@ -110,12 +110,16 @@ const service = new ChatService(async (_member, _owner, prompt, signal, _project
 });
 
 let hideProjects = false;
+let projectListDelayMs = 0;
+let failProjectList = false;
 let workflowSaveDelayMs = 0;
 const fixture = new Hono();
 fixture.post("/fixture/project-list", async (c) => {
-  const body = await c.req.json<{ empty?: boolean }>();
+  const body = await c.req.json<{ empty?: boolean; delayMs?: number; fail?: boolean }>();
   hideProjects = body.empty === true;
-  return c.json({ empty: hideProjects });
+  projectListDelayMs = Math.max(0, Math.min(10_000, Math.floor(Number(body.delayMs) || 0)));
+  failProjectList = body.fail === true;
+  return c.json({ empty: hideProjects, delayMs: projectListDelayMs, fail: failProjectList });
 });
 fixture.post("/fixture/workflow-save-delay", async (c) => {
   const body = await c.req.json<{ ms?: number }>();
@@ -127,7 +131,11 @@ fixture.use("/chats/:roomId/messages/:messageId/workflow", async (c, next) => {
   await next();
 });
 fixture.use("/projects", async (c, next) => {
-  if (hideProjects && c.req.method === "GET") return c.json([]);
+  if (c.req.method === "GET") {
+    if (projectListDelayMs) await delay(projectListDelayMs);
+    if (failProjectList) return c.json({ error: "fixture project list failed" }, 503);
+    if (hideProjects) return c.json([]);
+  }
   await next();
 });
 mountChatRoutes(fixture, service);
