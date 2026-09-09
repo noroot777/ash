@@ -35,15 +35,30 @@ function targetOf(requestPath: string) {
 
 /**
  * 浏览器**自己**会给请求盖上的那几种 `Authorization`：401 质询之后的 Basic/Digest，
- * 企业环境里的 Negotiate/NTLM，以及 `http://user:pass@host/` 这种 URL 带出来的。它们是
- * **用户对 ash 这个入口**的凭证，转给被预览的应用等于把用户的密码交给它。
- *
- * 除此之外的（`Bearer …` 之类）浏览器一律不会自动附加，只可能是页面自己 `fetch`/`XHR`
- * 设上去的——那是**应用自己的** token，必须原样转发。以前这里是「`authorization` 一律
- * 丢掉」，代价是被预览的应用**登得进去、登进去之后处处 401**（第 1 轮审查 P1：一个把
- * access token 存在 localStorage、由 Axios 加 `Bearer` 的 Java 后台，正是这个形状）。
+ * 企业环境里的 Negotiate/NTLM，以及 `http://user:pass@host/` 这种 URL 带出来的。ash 挂在
+ * 一道 Basic 认证的反代后面是常见部署，那串密码是**用户对 ash 这个入口**的凭证，转给被
+ * 预览的应用等于把它交出去。代价是被预览的应用自己要用 Basic/Digest 时也走不通（设置页
+ * 里如实写着，要用就直连）—— 这个方向上宁可错杀。
  */
 const BROWSER_ATTACHED_AUTH = /^(?:basic|digest|negotiate|ntlm)\b/i;
+
+/**
+ * 应用自己的鉴权头能不能转发，判据是**这个请求是不是预览页自己发出来的**，光看 scheme
+ * 不行。第 2 轮审查 P1 实测过一条真实的泄漏路径：拿 `Authorization: Bearer <ash 用户 key>`
+ * 打 `/api/tasks/:id/preview/open/:svc`（`bearerActor` 本来就支持这种调用形态，
+ * `preview-access.ts` 还专门为它记了 keyHash），302 是**同源**跳转，浏览器会把这个头原样
+ * 带到 `/preview/…` 上 —— 只看 scheme 就等于把用户的长期 key 交给被预览的应用，它记一行
+ * 访问日志就拿到了这个人的整个 ash 账号。
+ *
+ * 预览页在 opaque origin 里，它运行期发出的每个带鉴权头的请求都盖着 `Origin: null` +
+ * `Sec-Fetch-Site: cross-site`（带 `Authorization` 的请求必然是 cors 模式，Origin 一定在）。
+ * 上面那条泄漏链是 **ash 自己的页面**发的，盖的是 ash 的 Origin 和 `same-origin`；顶层导航
+ * 两个头都没有；curl / 手机端更是一个都没有。这两个头是**浏览器**盖的、页面伪造不了，
+ * 所以「两个都对上」才算「这是预览页运行期自己产生的凭证」。
+ */
+function sandboxOriginated(origin: string | undefined, site: string | undefined): boolean {
+  return origin === "null" && site?.toLowerCase() === "cross-site";
+}
 
 /**
  * 转发给被代理应用的请求头。除了摘掉逐跳头和 ash 自己的凭证，还有一件**必须**做的：
@@ -61,20 +76,24 @@ const BROWSER_ATTACHED_AUTH = /^(?:basic|digest|negotiate|ntlm)\b/i;
  * （`canUsePreview`）+ 外来 `Origin` 一律 403。能走到这一行的请求已经认定是本人从预览里
  * 发的，所以对内一律 `same-origin`；`none`（地址栏直接打开的顶层导航）保持原样 —— 它比
  * `same-origin` 宽松不了，改写反而会抹掉「这是用户自己敲进去的」这个事实。
+ *
+ * **改写之前先把原样的 `Origin`/`Sec-Fetch-Site` 留给 `sandboxOriginated` 用**：鉴权头转不
+ * 转发全靠这两个头认来源，归一化之后就再也分不出「预览页自己发的」和「ash 页面发的」了。
  */
 function forwardedHeaders(input: Headers | IncomingHttpHeaders, token: string): Record<string, string> {
   const entries = input instanceof Headers ? [...input.entries()] : Object.entries(input).map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : v ?? ""]);
   const result: Record<string, string> = {};
-  const connection = entries.find(([k]) => k.toLowerCase() === "connection")?.[1].toLowerCase().split(",").map((s) => s.trim()) ?? [];
+  const pick = (name: string) => entries.find(([k]) => k.toLowerCase() === name)?.[1].trim();
+  const connection = pick("connection")?.toLowerCase().split(",").map((s) => s.trim()) ?? [];
   for (const [key, value] of entries) {
     const k = key.toLowerCase();
     if (HOP_HEADERS.has(k) || connection.includes(k) || ["host", "cookie", "authorization", "origin", "referer", "accept-encoding", "content-length", "sec-fetch-site"].includes(k) || k.startsWith("x-ash-") || k.startsWith("x-forwarded-") || k === "forwarded") continue;
     result[k] = value;
   }
-  const auth = entries.find(([k]) => k.toLowerCase() === "authorization")?.[1].trim();
-  if (auth && !BROWSER_ATTACHED_AUTH.test(auth)) result.authorization = auth;
-  const site = entries.find(([k]) => k.toLowerCase() === "sec-fetch-site")?.[1].trim().toLowerCase();
-  if (site) result["sec-fetch-site"] = site === "none" ? "none" : "same-origin";
+  const site = pick("sec-fetch-site");
+  const auth = pick("authorization");
+  if (auth && sandboxOriginated(pick("origin"), site) && !BROWSER_ATTACHED_AUTH.test(auth)) result.authorization = auth;
+  if (site) result["sec-fetch-site"] = site.toLowerCase() === "none" ? "none" : "same-origin";
   const cookies = entries.find(([k]) => k.toLowerCase() === "cookie")?.[1] ?? "";
   const prefix = `ashpv_${token}_`;
   const allowed = cookies.split(";").map((s) => s.trim()).filter((s) => s.startsWith(prefix)).map((s) => {
