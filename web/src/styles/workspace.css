@@ -145,9 +145,20 @@
   margin-left: 7px;
 }
 
+.workspace-sidebar-bottom .workspace-assistant-entry {
+  margin-left: 7px;
+  white-space: nowrap;
+}
+
 .workspace-sidebar-bottom > button:hover {
   background: var(--raised);
   color: var(--ink);
+}
+
+.workspace-sidebar-bottom .workspace-assistant-entry:hover,
+.workspace-sidebar-bottom .workspace-assistant-entry[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .workspace-main {

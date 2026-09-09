@@ -12,7 +12,7 @@ import type {
   TeamPresetConfig,
 } from "@ash/shared";
 import { DEFAULT_APP_SETTINGS } from "@ash/shared";
-import { ChatCircleDots } from "@phosphor-icons/react";
+import { ChatCircleDots, Robot } from "@phosphor-icons/react";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import {
   DEFAULT_CRON,
@@ -58,6 +58,7 @@ export function TaskComposerPanel({
   mode,
   onModeChange,
   onChat,
+  onAssistant,
   onCancel,
   onCreated,
   onCreateGroup,
@@ -71,6 +72,7 @@ export function TaskComposerPanel({
   mode: TaskMode;
   onModeChange: (mode: TaskMode) => void;
   onChat?: () => void;
+  onAssistant?: () => void;
   onCancel: () => void;
   onCreated: (task: Task, noteIds: string[]) => void;
   onCreateGroup: (name: string, mode: GroupMode) => Promise<Group>;
@@ -528,10 +530,12 @@ export function TaskComposerPanel({
             workflowMode={workflowMode}
             onWorkflowModeChange={setWorkflowMode}
             onModeChange={onModeChange}
-            chatTab={onChat && <button type="button" role="tab" aria-selected={false} disabled={uploads.uploading}
+            extraModeTabs={<>{onChat && <button type="button" role="tab" aria-selected={false} disabled={uploads.uploading}
               onClick={() => onChat()}>
               <ChatCircleDots size={14} /><span>聊天</span>
-            </button>}
+            </button>}{onAssistant && <button type="button" role="tab" aria-label="ash 助手" aria-selected={false} disabled={uploads.uploading} onClick={onAssistant}>
+              <Robot size={14} aria-hidden="true" /><span>助手</span>
+            </button>}</>}
             onPickStarter={(text, nextMode) => {
               changeBody(body.trim() ? body + "\n\n" + text : text);
               onModeChange(nextMode);

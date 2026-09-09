@@ -87,6 +87,8 @@ export function WorkspaceSidebar({
 }) {
   const modifier = workspaceModifierLabel();
   const taskMode = scope.kind === "tasks";
+  const compactFooter = !spread.laidOut && width < 260;
+  const connectionLabel = connected ? "实时已连接" : "实时连接中断";
   if (collapsed) {
     return (
       <aside className="workspace-sidebar workspace-sidebar--collapsed" aria-label="已收起的侧边栏">
@@ -95,7 +97,7 @@ export function WorkspaceSidebar({
         {taskMode
           ? <span className="workspace-project-avatar workspace-project-avatar--task-mode is-large" aria-label={TASK_MODE_LABEL}><ListChecks size={17} weight="bold" /></span>
           : currentProject && <ProjectAvatar project={currentProject} size="large" />}
-        <span className={`workspace-connection-light${connected ? " is-connected" : ""}`} title={connected ? "实时已连接" : "实时连接中断"} />
+        <span className={`workspace-connection-light${connected ? " is-connected" : ""}`} title={connectionLabel} />
         <button className="workspace-side-icon" type="button" onClick={onToggleCollapsed} aria-label="展开侧边栏">
           <SidebarSimple size={17} weight="bold" aria-hidden="true" />
         </button>
@@ -146,8 +148,6 @@ export function WorkspaceSidebar({
         </div>
       </div>
 
-      {onAssistant && <button className="workspace-assistant-entry" type="button" aria-pressed={!!assistantOpen} onClick={onAssistant}><Robot size={17} weight="duotone" />ash 助手</button>}
-
       <TaskTree
         projects={projects}
         currentProjectId={currentProject?.id ?? null}
@@ -165,9 +165,9 @@ export function WorkspaceSidebar({
       />
 
       <div className="workspace-sidebar-bottom">
-        <span className={`workspace-connection${connected ? " is-connected" : ""}`}>
+        <span className={`workspace-connection${connected ? " is-connected" : ""}`} aria-label={connectionLabel}>
           <i aria-hidden="true" />
-          {connected ? "实时已连接" : "实时连接中断"}
+          {connected ? "实时已连接" : "连接已中断"}
         </span>
         {spread.open && (
           <span className="workspace-spread-hint">
@@ -177,12 +177,16 @@ export function WorkspaceSidebar({
         {!spread.open && (
           <span className="workspace-spread-shortcut" aria-label="按 F 打开任务列表">
             <kbd>F</kbd>
-            {width < 240 ? "打开" : "打开任务列表"}
+            {width < (onAssistant ? 320 : 240) ? "打开" : "打开任务列表"}
           </span>
         )}
+        {onAssistant && <button className="workspace-assistant-entry" type="button" aria-label="ash 助手" aria-pressed={!!assistantOpen} onClick={onAssistant}>
+          <Robot size={15} weight="duotone" aria-hidden="true" />
+          {!compactFooter && "助手"}
+        </button>}
         <button type="button" onClick={onToggleCollapsed} aria-label="收起侧边栏">
           <SidebarSimple size={14} weight="bold" aria-hidden="true" />
-          收起
+          {(!onAssistant || !compactFooter) && "收起"}
         </button>
       </div>
       <WorkspaceResizeHandle width={width} onChange={onWidthChange} />
