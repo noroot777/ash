@@ -17,11 +17,16 @@ const REAL_GATE = fileURLToPath(new URL("web-test-gate.mjs", import.meta.url));
 const WIN = process.platform === "win32";
 const ZERO = "0".repeat(40);
 
+// 每条用例建的临时仓库都登记在这儿,由 runner 统一清 —— 用例里各自 rmSync 的话,
+// 断言一失败就 throw 到 rmSync 之前,红一条留一个目录。
+const made = [];
+
 /** 造一个自带 scripts/web-test-gate.mjs 副本的空仓库。 */
 function makeRepo() {
   // 必须**复制**而不是软链:node 默认解析软链的真实路径,脚本的 `new URL("..")` 会指回
   // 本仓库,测出来的就不是这个临时仓库了。
   const dir = mkdtempSync(join(tmpdir(), "web-gate-"));
+  made.push(dir);
   mkdirSync(join(dir, "scripts"), { recursive: true });
   cpSync(REAL_GATE, join(dir, "scripts", "web-test-gate.mjs"));
   const git = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
@@ -107,7 +112,6 @@ test("merge commit 自身改到 web/ —— 两个父都没碰,也必须跑", ()
   assert.match(out, /web\/view\.txt/, out);
   assert.match(out, /前端回归通过/, out);
   assert.equal(status, 0);
-  rmSync(dir, { recursive: true, force: true });
 });
 
 test("只碰 server/ —— 跳过,不跑测试", () => {
@@ -128,7 +132,6 @@ test("只碰 server/ —— 跳过,不跑测试", () => {
   });
   assert.match(out, /没碰 web\/ \/ shared\/,跳过/, out);
   assert.equal(status, 0);
-  rmSync(dir, { recursive: true, force: true });
 });
 
 test("shared/ 也算,且测试红了要拦下 push", () => {
@@ -149,7 +152,6 @@ test("shared/ 也算,且测试红了要拦下 push", () => {
   assert.match(out, /前端回归没过 —— 已拦下这次 push/, out);
   assert.match(out, /--no-verify/, out);
   assert.equal(status, 1);
-  rmSync(dir, { recursive: true, force: true });
 });
 
 test("新分支(remote sha 全 0)只算未推送的提交,不退化成全仓库", () => {
@@ -172,7 +174,6 @@ test("新分支(remote sha 全 0)只算未推送的提交,不退化成全仓库"
   // 全仓库 diff 会把 base 里的 web/old.txt 算进来 → 误跑。只算新提交才是对的。
   assert.match(out, /没碰 web\/ \/ shared\/,跳过/, out);
   assert.equal(status, 0);
-  rmSync(dir, { recursive: true, force: true });
 });
 
 test("首个提交(没有父)也列得出文件", () => {
@@ -185,7 +186,6 @@ test("首个提交(没有父)也列得出文件", () => {
   fakeDeps(dir);
   const { out } = runGate(dir, [`refs/heads/main ${head} refs/heads/main ${ZERO}`], { npmBin: fakeNpm(dir, 0) });
   assert.match(out, /web\/first\.txt/, `root commit 的文件没列出来:\n${out}`);
-  rmSync(dir, { recursive: true, force: true });
 });
 
 test("没装依赖时如实警告并放行", () => {
@@ -203,7 +203,6 @@ test("没装依赖时如实警告并放行", () => {
   assert.match(out, /没有 node_modules/, out);
   assert.match(out, /前端回归没跑/, out);
   assert.equal(status, 0);
-  rmSync(dir, { recursive: true, force: true });
 });
 
 test("删除分支 / 无 stdin / SKIP_WEB_TEST 都放行", () => {
@@ -228,7 +227,6 @@ test("删除分支 / 无 stdin / SKIP_WEB_TEST 都放行", () => {
   });
   assert.match(skipped.out, /SKIP_WEB_TEST/, skipped.out);
   assert.equal(skipped.status, 0);
-  rmSync(dir, { recursive: true, force: true });
 });
 
 test("闸自己被改动时先跑它自己的回归,红了就拦下", () => {
@@ -251,7 +249,6 @@ test("闸自己被改动时先跑它自己的回归,红了就拦下", () => {
     const { out, status } = runGate(dir, [`refs/heads/main ${head} refs/heads/main ${base}`]);
     assert.match(out, expect, out);
     assert.equal(status, wantStatus, out);
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -263,6 +260,8 @@ for (const [name, fn] of cases) {
   } catch (err) {
     failed++;
     process.stdout.write(`  ✕ ${name}\n${err.message}\n`);
+  } finally {
+    while (made.length) rmSync(made.pop(), { recursive: true, force: true });
   }
 }
 process.stdout.write(failed ? `web-test-gate: ${failed}/${cases.length} 条失败\n` : `web-test-gate: ${cases.length} 条全过\n`);
