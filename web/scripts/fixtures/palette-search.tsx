@@ -27,7 +27,7 @@ const project = {
 
 // 30 条命中，足够把结果列撑出滚动条。前 20 条是标题档、后 10 条是会话档且**更新更近** ——
 // 于是两个排序档的第一条不一样，界面上一眼能验出来换档生效了。
-const hits: SearchHit[] = Array.from({ length: 30 }, (_, index) => ({
+const taskHits: SearchHit[] = Array.from({ length: 30 }, (_, index) => ({
   kind: "task",
   id: `hit-${String(index).padStart(2, "0")}`,
   title: `链接命中 ${index}`,
@@ -42,11 +42,28 @@ const hits: SearchHit[] = Array.from({ length: 30 }, (_, index) => ({
   updatedAt: iso(index < 20 ? index : index + 100),
 }));
 
+// 全场最新的一条是随手记：相关度档把它压在所有任务之后，最近更新档它该排第一。
+const noteHit: SearchHit = {
+  kind: "note",
+  id: "note-01",
+  title: "随手记里的链接",
+  projectId: "p1",
+  projectName: "harness",
+  field: "body",
+  snippet: "随手记里的链接",
+  preview: "随手记正文",
+  createdAt: iso(500),
+  updatedAt: iso(500),
+  taskCount: 0,
+};
+
+const hits = [...taskHits, noteHit];
+
 const byRelevance = [...hits];
 const byRecent = [...hits].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
 // 双击打开时面板要能从任务列表里找到这一条（找不到才会去打 `/tasks/:id`）。
-const tasks = hits.map((hit) => ({
+const tasks = taskHits.map((hit) => ({
   id: hit.id,
   title: hit.title,
   projectId: hit.projectId,

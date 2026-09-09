@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { SearchHit } from "@ash/shared";
+import type { SearchSort } from "@ash/shared/search";
 import { NotePencil } from "@phosphor-icons/react";
 import { formatInstant } from "../task-detail/utils.ts";
 
@@ -196,6 +197,7 @@ export function SearchHitList({
   active,
   startIndex,
   query,
+  sort,
   onSelect,
   onOpen,
 }: {
@@ -203,11 +205,17 @@ export function SearchHitList({
   active: number;
   startIndex: number;
   query: string;
+  sort: SearchSort;
   onSelect: (index: number) => void;
   onOpen: (hit: SearchHit) => void;
 }) {
   return <>{hits.map((hit, hitIndex) => {
-    const header = hitIndex === 0 || hits[hitIndex - 1]?.kind !== hit.kind ? (hit.kind === "task" ? "任务" : "随手记") : null;
+    // 相关度档里任务整体排在随手记之前，于是「任务 / 随手记」是两个真的分区，各挂一个
+    // 标题。最近更新档里两者按时间混排，再按 kind 挂标题就会一路「任务/随手记/任务…」
+    // 地闪 —— 那一档只在顶上说一句现在按什么排，是哪一类看行内的图标。
+    const header = sort === "recent"
+      ? (hitIndex === 0 ? "按更新时间" : null)
+      : (hitIndex === 0 || hits[hitIndex - 1]?.kind !== hit.kind ? (hit.kind === "task" ? "任务" : "随手记") : null);
     return (
       <div key={`${hit.kind}:${hit.id}`}>
         {header && <div className="palette-label">{header}</div>}

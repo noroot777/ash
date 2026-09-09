@@ -573,7 +573,7 @@ export function CommandPalette({
                   </div>
                 );
               })}
-              <SearchHitList hits={restHits} active={active} startIndex={hitStart} query={query} onSelect={setActive} onOpen={openHit} />
+              <SearchHitList hits={restHits} active={active} startIndex={hitStart} query={query} sort={sort} onSelect={setActive} onOpen={openHit} />
               {!normalTotal && <p className="palette-empty">{searching ? searchNote : query.trim().length >= 2 ? "没有匹配的命令、任务或随手记" : "无匹配命令"}</p>}
               {searching && normalTotal > 0 && <p className="px-4 py-2 text-center text-[10px] text-faint">{searchNote}</p>}
             </div>

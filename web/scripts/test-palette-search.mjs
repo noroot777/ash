@@ -37,16 +37,16 @@ try {
 
   await page.locator(".palette-input input").fill("链接");
   await page.locator('.palette-results [data-palette-index="0"]').waitFor();
-  // 「链接」谁的命令名都不沾，于是列表里 30 行全是搜索命中，索引从 0 开始。列表远比
-  // 视口高 —— 按方向键一定会走出可视区，这正是这条用例要挡的现象。
-  await page.waitForFunction(() => document.querySelectorAll(".palette-results [data-palette-index]").length === 30);
+  // 「链接」谁的命令名都不沾，于是列表里 31 行全是搜索命中（30 条任务 + 1 条随手记），
+  // 索引从 0 开始。列表远比视口高 —— 按方向键一定会走出可视区，这正是这条用例要挡的现象。
+  await page.waitForFunction(() => document.querySelectorAll(".palette-results [data-palette-index]").length === 31);
   assert.ok(
     await results.evaluate((node) => node.scrollHeight > node.clientHeight + 200),
     "结果列必须长到能滚动，否则「选中项滚出视线」这件事根本复现不了",
   );
 
   // ── 1. 键盘往下走，选中项始终在视线内 ────────────────────────────────
-  for (let step = 1; step <= 29; step += 1) {
+  for (let step = 1; step <= 30; step += 1) {
     await page.keyboard.press("ArrowDown");
     assert.equal(await selectedIndex(), String(step), "每按一下就该往下挪一行");
     assert.ok(await selectedVisible(), `按到第 ${step} 行时它跑出了可视区`);
@@ -55,7 +55,7 @@ try {
   assert.ok(scrolledDown > 0, "列表应该已经跟着滚下去了");
 
   // 往回走同理：向上滚才能把它带回来。
-  for (let step = 28; step >= 0; step -= 1) {
+  for (let step = 29; step >= 0; step -= 1) {
     await page.keyboard.press("ArrowUp");
     assert.equal(await selectedIndex(), String(step));
     assert.ok(await selectedVisible(), `退回第 ${step} 行时它跑出了可视区`);
@@ -90,16 +90,23 @@ try {
 
   // ── 4. 排序档：换档要真的换请求，列表跟着换第一条 ──────────────────────
   const requests = () => page.evaluate(() => window.__searchRequests.slice());
+  const labels = () => page.locator(".palette-results .palette-label").allInnerTexts();
   assert.deepEqual(await requests(), ["relevance"], "默认按相关度搜");
-  // 相关度档：标题档在前（会话档那 10 条更新更近，仍被压到后面），档内按更新时间倒序。
+  // 相关度档：任务在随手记之前，任务内部标题档在前（会话档那 10 条更新更近，仍被压到
+  // 后面），档内按更新时间倒序。两类各挂一个分节标题。
   assert.equal(await rowAt(0).locator(".truncate").first().innerText(), "链接命中 19");
+  assert.equal(await rowAt(30).locator(".truncate").first().innerText(), "随手记里的链接");
+  assert.deepEqual(await labels(), ["任务", "随手记"]);
 
   await page.locator(".palette-sort").click();
   await page.waitForFunction(() => window.__searchRequests.includes("recent"));
   assert.equal(await page.locator(".palette-sort").innerText(), "排序 · 最近更新");
-  // 最近更新档：会话档那 10 条最新，第 29 条排到最前。
+  // 最近更新档：整份列表一条时间轴 —— 最新的随手记排第一，任务和随手记混排，于是
+  // 「任务 / 随手记」两个分区标题也没了。
   await page.waitForFunction(() =>
-    document.querySelector('[data-palette-index="0"]')?.innerText.includes("链接命中 29"));
+    document.querySelector('[data-palette-index="0"]')?.innerText.includes("随手记里的链接"));
+  assert.equal(await rowAt(1).locator(".truncate").first().innerText(), "链接命中 29");
+  assert.deepEqual(await labels(), ["按更新时间"]);
   assert.equal(await selectedIndex(), "0", "换档后列表整个重排，选中回到第一行");
   assert.equal(await page.evaluate(() => document.activeElement?.tagName), "INPUT", "点开关不该把焦点从输入框拿走");
 

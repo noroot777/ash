@@ -19,9 +19,9 @@
 //      于是本项目的命中铁定全部排在别的项目之前，分两段扫既不会中途重排，本项目自己
 //      就收满 50 条时别的项目还能整个跳过。
 //
-// 以上是默认的 relevance 档。用户把 ⌘K 切到「最近更新」（`sort=recent`）时，排序里
-// 项目和字段这两把钥匙都没了，上面第 2、3 条的推导跟着失效 —— 那一档改成单段按
-// updatedAt 倒序扫、收满 MAX_HITS 即停（见 searchAll 末尾）。
+// 以上是默认的 relevance 档。用户把 ⌘K 切到「最近更新」（`sort=recent`）时，排序里只剩
+// 更新时间一把钥匙（随手记也跟任务混在一起排），上面第 2、3 条的推导跟着失效 —— 那一档
+// 改成单段按 updatedAt 倒序扫，扫到「第 50 名比所有没扫的行都新」为止（见 searchAll 末尾）。
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SearchHit, SearchField, TaskStatus } from "@ash/shared";
@@ -400,8 +400,9 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
   };
 
   // 随手记只在库里，判定不下盘、几乎不要钱 —— 先出，⌘K 就不会有「敲完字空着一片」的
-  // 那一秒。排序上它们本来就在所有任务之后（compareSearchHits 第一把钥匙），先到后到
-  // 不影响最终顺序。
+  // 那一秒。先到后到不影响最终顺序：emit 会按排序判据把它们插到该在的位置（相关度档它们
+  // 整体排在任务之后；最近更新档跟任务按时间混排，也正因为它们先全部到齐，那一档的早停
+  // 才能拿「第 50 名有多新」当判据）。
   const noteHits = noteRows.filter((note) => matchesSearchQuery(note.body, parsed));
   const noteTaskCounts = await visibleNoteTaskCounts(allNoteTaskRows, noteHits.map((note) => note.id), actor);
   for (const note of noteHits) {
@@ -515,17 +516,23 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
 
   // ── 扫描顺序跟着排序档走 ───────────────────────────────────────────────
   if (sort === "recent") {
-    // 排序只剩「更新时间倒序」，于是扫描就照这个顺序一路往下：收满 MAX_HITS 即停，
-    // 剩下的行全都更旧，怎么排都进不了前 50 —— 结果与全量扫一字不差。
+    // 排序只剩「更新时间倒序」（随手记也在其中），于是扫描就照这个顺序一路往下。
+    //
+    // 早停的判据不能再数「收了几条任务命中」：随手记跟任务混排，它们占的也是前 50 名的
+    // 位置。改成看**第 50 名现在有多新** —— 还没扫的行全都不比 `ordered[at]` 新，它要是
+    // 连第 50 名都比不过，后面的更比不过，可以收手。并列（同一毫秒）时不停，让它扫进来
+    // 按 kind + id 那两把兜底钥匙决胜负。
     //
     // 代价是**不能再按档位分堆**：relevance 那套「只可能落会话档的先攒着、够数就整堆
     // 不读」在这一档不成立（一个只在会话里命中的新任务就该排第一）。所以这里对每一行
     // 逐个问 needsRunText，该下盘就下盘，只有库里就能定的那些还能省掉 I/O。
     // 分段也没了：本项目不再优先，中途会被别的项目的新任务插到前面。
     const ordered = byRecent(taskRows);
-    let found = 0;
-    scanning: for (let at = 0; at < ordered.length && found < MAX_HITS; at += SCAN_CONCURRENCY) {
+    const settled = () => hits.length >= MAX_HITS && hits[MAX_HITS - 1]!.updatedAt;
+    scanning: for (let at = 0; at < ordered.length; at += SCAN_CONCURRENCY) {
       if (options.signal?.aborted) break;
+      const cutoff = settled();
+      if (cutoff && cutoff.localeCompare(ordered[at]!.updatedAt) > 0) break;
       const batch = ordered.slice(at, at + SCAN_CONCURRENCY);
       const batchHits = await Promise.all(batch.map(async (task) =>
         hitOf(task, needsRunText(task) ? await readRunText(task.id, options.signal) : "")));
@@ -533,7 +540,7 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
         // 每吐一条问一次：这一批开跑之后用户很可能又敲了一个字（吐出去这个动作本身也可能
         // 让客户端走人），那剩下的命中已经没人要了 —— 只在批次边界检查会把整批都吐出去。
         if (options.signal?.aborted) break scanning;
-        if (hit) { emit(hit); found += 1; }
+        if (hit) emit(hit);
       }
       await new Promise<void>((resolve) => { setImmediate(resolve); });
     }
