@@ -22,3 +22,7 @@ export type NativeWorkEvent =
   | { type: "result"; id: string; result: string; failed: boolean }
   | { type: "agent"; id: string; nativeId?: string; parentId?: string; title?: string; description?: string;
       status: NativeWorkStatus; closed?: boolean; message?: string; result?: string; model?: string; agentType?: string };
+
+export function isVisibleExecutionEvent(event: { nativeWork?: NativeWorkEvent }): boolean {
+  return !event.nativeWork || (event.nativeWork.type === "call" && !event.nativeWork.parentId);
+}
