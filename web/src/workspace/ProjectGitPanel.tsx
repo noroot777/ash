@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
-import { GitBranch, MagnifyingGlass, Terminal, Warning } from "@phosphor-icons/react";
+import { ArrowsClockwise, GitBranch, MagnifyingGlass, Terminal, Warning } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
-import { useProjectGit } from "./useProjectGit.ts";
+import type { ProjectGitHandle } from "./useProjectGit.ts";
 import { ProjectGitActions } from "./ProjectGitActions.tsx";
 import { ProjectGitBranchList } from "./ProjectGitBranchList.tsx";
-import { branchLabel, dirtyText } from "./projectGitModel.ts";
+import { branchLabel, dirtyText, gitOpLabel } from "./projectGitModel.ts";
 
 // 项目**主仓**的 git 浮层：切分支 / 更新 / 拉取 / 推送。挂在侧栏项目名右边的分支下拉上。
 //
@@ -14,20 +14,20 @@ import { branchLabel, dirtyText } from "./projectGitModel.ts";
 //
 // 按钮和分支行拆在 `ProjectGitActions` / `ProjectGitBranchList`；判据在 `projectGitModel.ts`，
 // 跟服务端那道硬门禁是同一套措辞。命令面板 `/git` 只读，不在那儿开第二个操作面。
+//
+// 数据层（`git`）由 `ProjectGitContext` 持有并传进来：写操作不能随这块浮层一起卸载，否则
+// 手一滑点到别处，跑着的 fetch / pull 就从界面上消失了。这里只是它的一块显示面。
 
 export function ProjectGitPanel({
-  projectId,
+  git,
   canManage,
-  onChanged,
   onOpenTerminal,
 }: {
-  projectId: string;
+  git: ProjectGitHandle;
   /** 项目管理员 / 实例管理员才动得了主仓，理由见 `projectGitModel.ts` 的 `roleBlocker`。 */
   canManage: boolean;
-  onChanged: () => void;
   onOpenTerminal: (() => void) | null;
 }) {
-  const git = useProjectGit(projectId, true);
   const { state } = git;
   const [search, setSearch] = useState("");
 
@@ -37,11 +37,8 @@ export function ProjectGitPanel({
     return query ? all.filter((row) => row.name.toLocaleLowerCase().includes(query)) : all;
   }, [search, state]);
 
-  const checkout = async (branch: string) => {
-    if (await git.run("checkout", () => api.projectGitCheckout(projectId, branch))) onChanged();
-  };
-
   const dirty = dirtyText(state);
+  const { projectId } = git;
 
   return (
     <div className="project-git-panel" role="dialog" aria-label="项目 Git">
@@ -57,9 +54,17 @@ export function ProjectGitPanel({
             </small>
           )}
         </span>
-        <ProjectGitActions projectId={projectId} git={git} canManage={canManage} onChanged={onChanged} />
+        <ProjectGitActions git={git} canManage={canManage} />
       </header>
 
+      {/* 跑着的时候点外面不收浮层（`ProjectGitContext` 的 `closeOnOutside`）。这一行是那条
+          规则的说明书——不然用户只会觉得「点了没反应」。 */}
+      {git.busy && (
+        <p className="project-git-panel__running" role="status">
+          <ArrowsClockwise size={12} className="is-spinning" aria-hidden="true" />
+          正在{gitOpLabel(git.busy)}…这期间点别处不会收起；按 Esc 可以先收着，操作照常跑完。
+        </p>
+      )}
       {state?.operation && (
         <p className="project-git-panel__warn">
           <Warning size={12} weight="fill" aria-hidden="true" />
@@ -97,7 +102,9 @@ export function ProjectGitPanel({
         busy={git.busy === "checkout"}
         loading={git.loading}
         canManage={canManage}
-        onCheckout={(branch) => void checkout(branch)}
+        onCheckout={(branch) => {
+          if (projectId) void git.run("checkout", () => api.projectGitCheckout(projectId, branch));
+        }}
       />
 
       <p className="project-git-panel__note">

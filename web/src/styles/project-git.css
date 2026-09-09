@@ -18,6 +18,10 @@
 }
 .workspace-git-context:hover,
 .workspace-git-context[aria-expanded="true"] { background:var(--hover-bg); color:var(--muted); }
+/* 浮层收起来了、操作还在跑：胶囊自己顶上去，别让「我刚点过拉取」这件事只活在那个已经
+   消失的浮层里。刷新页面就没了是另一回事——那时请求本来也断了。 */
+.workspace-git-context.is-busy { color:var(--accent); }
+.workspace-git-context.is-busy > svg:last-child { color:var(--accent); }
 .workspace-git-context > svg { flex:0 0 auto; }
 .workspace-git-context > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .workspace-git-context > i { width:5px; height:5px; flex:0 0 5px; border-radius:50%; background:var(--amber); }
@@ -81,10 +85,15 @@
 .project-git-panel__warn,
 .project-git-panel__dirty,
 .project-git-panel__error,
-.project-git-panel__ok {
+.project-git-panel__ok,
+.project-git-panel__running {
   display:flex; align-items:center; gap:5px; margin:0;
   border-radius:7px; padding:5px 7px; font-size:9.5px; line-height:1.5;
 }
+.project-git-panel__running {
+  align-items:flex-start; background:color-mix(in lch,var(--accent) 9%,var(--panel)); color:var(--muted);
+}
+.project-git-panel__running > svg { flex:0 0 auto; margin-top:1px; color:var(--accent); }
 .project-git-panel__warn { border:1px solid color-mix(in lch,var(--amber) 30%,var(--line)); background:color-mix(in lch,var(--amber) 8%,var(--panel)); color:var(--muted); }
 .project-git-panel__warn > svg { flex:0 0 auto; color:var(--amber); }
 .project-git-panel__dirty { background:var(--overlay); color:var(--muted); }
