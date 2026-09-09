@@ -53,18 +53,18 @@ export class ChatContextManager {
     return await job.promise as T;
   }
 
-  async prepare(room: Room, member: ChatMember, cutoff: number, request: string, signal: AbortSignal, tail: string[] = []): Promise<string> {
+  async prepare(room: Room, member: ChatMember, cutoff: number, request: string, signal: AbortSignal, tail: string[] = [], format = chatPrompt, reserveTokens = 0): Promise<string> {
     return this.locked(room.id, signal, async (sharedSignal) => {
       sharedSignal.throwIfAborted();
       this.prewarmStopped.delete(room.id);
       if ((await contextState(room.id))?.status === "stopped") await setContextState(room.id, "idle");
-      const overhead = estimateChatTokens(withGlobalBrowserPolicy(chatPrompt(member, tail, request), "full"));
-      const budget = this.policy.inputTokens - overhead;
+      const overhead = estimateChatTokens(withGlobalBrowserPolicy(format(member, tail, request), "full"));
+      const budget = this.policy.inputTokens - overhead - reserveTokens;
       if (budget <= this.policy.summaryTokens) throw new Error(tail.length
         ? "较早的回复尚未完成，后续消息已超出上下文预算。请等待或停止较早回复后重新 @，原文已保留。"
         : "本次消息过长，无法为群聊历史保留空间，请缩短消息后重新 @。");
       const history = await this.compact(room, member, cutoff, budget, sharedSignal);
-      return chatPrompt(member, [...history.messages.map((message) => message.content), ...tail], request, history.summary?.body);
+      return format(member, [...history.messages.map((message) => message.content), ...tail], request, history.summary?.body);
     });
   }
 

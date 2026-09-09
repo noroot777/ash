@@ -30,7 +30,7 @@ function changeNotice({ paths, more, degraded }: { paths: string[]; more: boolea
   return `⚠️ 咨询期间项目目录出现并发变更（${shown}${suffix}）。变更无法归因：可能来自其他任务、验收合并、你自己的操作，也可能是本次咨询越过了只读约定。群聊未代为撤销；如非预期请检查项目。${tail}`;
 }
 
-export async function invokeChat(member: ChatMember, owner: string | null, prompt: string, signal: AbortSignal, projectId: string, options?: { purpose: "summary" }): Promise<ChatInvocation> {
+export async function invokeChat(member: ChatMember, owner: string | null, prompt: string, signal: AbortSignal, projectId: string, options?: { purpose: "summary" | "assistant" }): Promise<ChatInvocation> {
   signal.throwIfAborted();
   const scope = await executorOwnerScope(owner);
   const project = (await db.select().from(projects).where(eq(projects.id, projectId))).at(0);
@@ -38,7 +38,7 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
   const actor: Actor = scope.owner === undefined ? SINGLE_ACTOR : user
     ? { kind: "user", userId: user.id, role: user.role as Actor["role"], name: user.name }
     : ANONYMOUS_ACTOR;
-  if (!project || !await canSeeProject(actor, projectId)) throw new Error("群聊项目不存在或你已失去访问权限。");
+  if ((!project || !await canSeeProject(actor, projectId)) && !(options && !projectId && actor.kind !== "anonymous")) throw new Error("聊天项目不存在或你已失去访问权限。");
   if (member.executorId) {
     const profile = (await db.select().from(agents).where(eq(agents.id, member.executorId))).at(0);
     if (!profile || profile.type !== member.agentType || (scope.owner !== undefined && profile.ownerUserId !== scope.owner)) {
@@ -50,13 +50,13 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
   const executor = await resolveExecutorFor({ type: member.agentType, executorId: member.executorId, model: member.model, reasoningEffort: member.reasoningEffort, ...scope });
   const env = await runEnvForOwner(owner, executor.type);
   signal.throwIfAborted();
-  const temporary = options?.purpose === "summary" || !project.repoPath.trim();
+  const temporary = !!options || !project?.repoPath.trim();
   // repoPath 按用户写的原样存（`~/code/x` 保持可读、可搬机器），所以每个消费点都得自己
   // 展开——少这一步，watchChatWorkspace 的 realpath 会直接 ENOENT，被 @ 的成员一个不剩
   // 全报同一条错，而且错在 CLI 起来之前，看着像「智能体坏了」。
-  const cwd = temporary ? await mkdtemp(join(tmpdir(), "ash-chat-")) : expandHome(project.repoPath);
+  const cwd = temporary ? await mkdtemp(join(tmpdir(), "ash-chat-")) : expandHome(project!.repoPath);
   if (!temporary && !await stat(cwd).then((entry) => entry.isDirectory()).catch(() => false)) {
-    throw new Error(`群聊项目的工作目录不存在：${project.repoPath}。请在项目设置里改成这台机器上真实存在的目录，再重新 @。`);
+    throw new Error(`群聊项目的工作目录不存在：${project!.repoPath}。请在项目设置里改成这台机器上真实存在的目录，再重新 @。`);
   }
   let handle: ReturnType<typeof executor.run> | undefined;
   let guard: ChatWorkspaceObserver | undefined;
@@ -78,6 +78,7 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
       let exitStatus: number | undefined;
       for await (const event of handle!.events) {
         if (event.kind === "tool" && options?.purpose === "summary") throw new ChatBoundaryError("后台摘要调用使用了工具，摘要未采用");
+        if (event.kind === "tool" && options?.purpose === "assistant") throw new Error("助手调用了未开放的工具，本轮已停止。请重试；查询和配置由 ash 内置能力处理。");
         if (event.kind === "tool" && !readOnlyChatTool(event)) throw new ChatBoundaryError(`检测到写入或无法确认只读的工具（${JSON.stringify(event.name.slice(0, 80))}）`);
         signal.throwIfAborted();
         if (event.kind === "text") text += event.text;

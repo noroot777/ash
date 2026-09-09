@@ -89,6 +89,15 @@ try {
   assert.equal(killed, starts);
   const member: ChatMember = { id: "codex", name: "codex", agentType: "codex", executorId: "profile-codex", model: "chat-model", reasoningEffort: null };
   const signal = new AbortController().signal;
+  for (const type of AGENT_TYPES) {
+    const assistantMember = { ...member, id: type, agentType: type, executorId: `profile-${type}` };
+    await invokeChat(assistantMember, null, "BACKGROUND_SUMMARY_FIXTURE", signal, "", { purpose: "assistant" });
+    assert.notEqual(lastCwd, projectDir);
+    assert.equal(existsSync(lastCwd), false);
+  }
+  await assert.rejects(invokeChat(member, null, "助手禁止工具", signal, "", { purpose: "assistant" }), /助手调用了未开放的工具/);
+  assert.equal(existsSync(lastCwd), false);
+  console.log("assistant execution: 全部执行器在独立临时目录运行并清理；模型和参数保留；不携带任务完成身份；工具调用明确失败");
   assert.equal((await invokeChat(member, null, "BACKGROUND_SUMMARY_FIXTURE", signal, "project", { purpose: "summary" })).text, '{"summary":"已有用户决定与待办事项"}');
   assert.equal(existsSync(lastCwd), false);
   await assert.rejects(invokeChat(member, null, "摘要禁止工具", signal, "project", { purpose: "summary" }), /后台摘要调用使用了工具/);

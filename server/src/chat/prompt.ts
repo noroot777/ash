@@ -23,7 +23,7 @@ ${transcript}
 ${JSON.stringify(request)}`;
 }
 
-export function parseChatReply(text: string): { reply: string; task: { title: string; body: string } | null } {
+export function parseChatReply(text: string, maxReply = 300): { reply: string; task: { title: string; body: string } | null } {
   const value = parseLastJsonObject(text);
   if (!value) throw new Error("智能体未返回有效的简短回复，请重新 @ 重试。");
   if (typeof value.reply !== "string" || !value.reply.trim()) throw new Error("智能体未返回有效的简短回复，请重新 @ 重试。");
@@ -36,5 +36,5 @@ export function parseChatReply(text: string): { reply: string; task: { title: st
     task = { title: raw.title.trim().slice(0, 100), body: raw.body.trim() };
   }
   const reply = value.reply.trim();
-  return { reply: reply.length > 300 ? `${reply.slice(0, 299)}…` : reply, task };
+  return { reply: reply.length > maxReply ? `${reply.slice(0, maxReply - 1)}…` : reply, task };
 }
