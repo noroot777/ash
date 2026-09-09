@@ -26,6 +26,8 @@ import { join } from "node:path";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const ZERO = /^0+$/;
+// git 的空树对象,拿它当「什么都还没有」的 diff 基准(首个提交没有父时用)。
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 // 碰了这些前缀才跑。shared/ 在内是因为前端回归里有一批直接断言 shared 的逻辑
 // (isTeamSettled、sameExecutor 之类),改了它而不跑前端测试等于漏掉真会红的那部分。
@@ -52,35 +54,65 @@ function readRefLines() {
 }
 
 /**
- * 本次推送真正新增的提交都改了哪些文件。
+ * 这次推送会让远端 ref 变成什么样 —— 净变化的文件清单。
  *
- * 分两步:先 `rev-list` 圈出「这次真正新增的提交」,再 `diff-tree` 逐个列文件。
+ * **判据是 ref 级的净 diff,不是 commit 级的**。push 改变的是远端那个 ref 的最终状态,
+ * 所以问题只有一个:`remoteSha` 的树和 `localSha` 的树差在哪。绕道去逐个提交列文件会
+ * 掉进 merge 的两个坑里,前两轮审查各撞了一个:
+ *   · `git log --name-only` 按惯例不为 merge 输出 diff → 解冲突时手改的 web/ 全漏(第 1 轮)。
+ *   · `diff-tree -c` 只列「跟**所有**父都不同」的路径 → merge 结果等同某一个父时也漏。
+ *     具体地:main 把 web/view.txt 改成 A、side 没动它,merge 时把它改回 side 那版 ——
+ *     相对远端(main 合并前)明明变了,combined diff 却是空的(第 2 轮)。
+ * `git diff --name-only <remoteSha> <localSha>` 对这两种情况都直接给出正确答案。
  *
- * ① remote sha 全 0 = 远端还没有这个分支,不能拿它当起点(会变成「和空树比」,整个仓库
- *    都算改动)。这种情况改问 git「哪些提交是所有远端分支都还没有的」,只算那一段。
- *    `--not --remotes` 是 rev-list 的语法,`git diff A..B` 写不出这一条,所以两条路统一
- *    走 rev-list。
+ * remote sha 全 0 = 远端还没有这个分支,没有「旧状态」可比。这时先圈出「所有远端 ref 都
+ * 还没有的提交」,取它们踩在远端上的那些父提交当基准(见 boundaryBases),再照样做净 diff。
  *
- * ② `diff-tree` 必须带 **`-c`**:merge commit 按 git 惯例不输出 diff,而这个仓库的主流程
- *    正是「worktree 里提交 → 主仓 merge → push」—— 解冲突时手改到 web/ 的那几行只存在于
- *    merge commit 自身,被合并进来的普通提交里没有。少了 -c,这类改动会让闸整个静默跳过
- *    (第 1 轮审查复现:两个父都只改 README、merge 时手改 web/view.txt → 报「没碰 web/」)。
- *    `-c` 给出 combined diff,正好是「跟所有父都不同」的那部分。`--root` 让没有父的首个
- *    提交也列得出文件。回归见 scripts/test-web-test-gate.mjs。
+ * 算不出来时(远端 sha 本地没有、仓库状态异常)返回 unknown —— 交由调用方保守处理:
+ * 闸的作用是拦,静默当成「没碰」正是它失效的样子。
  */
+/** 算不出来时返回 null(交给调用方标 unknown),而不是「没有新提交」的空数组。 */
+function boundaryBases(localSha) {
+  const raw = git(["rev-list", localSha, "--not", "--remotes"]);
+  if (raw === null) return null;
+  const revs = raw.split("\n").filter(Boolean);
+  if (!revs.length) return []; // 这些提交远端全都有了,没有新东西要检
+  const inRange = new Set(revs);
+  const bases = new Set();
+  for (const sha of revs) {
+    const line = git(["rev-list", "--parents", "-n", "1", sha]);
+    if (line === null) return null;
+    const parents = line.trim().split(/\s+/).slice(1);
+    // 没有父 = 仓库的首个提交,基准就是空树(整棵树都是新的)。
+    if (!parents.length) bases.add(EMPTY_TREE);
+    for (const p of parents) if (!inRange.has(p)) bases.add(p);
+  }
+  return [...bases];
+}
+
 function changedPaths(lines) {
   const paths = new Set();
+  let unknown = false;
   for (const line of lines) {
     const [, localSha, , remoteSha] = line.split(/\s+/);
     if (!localSha || ZERO.test(localSha)) continue; // 删除分支,没有内容要检
-    const revs = git(ZERO.test(remoteSha || "")
-      ? ["rev-list", localSha, "--not", "--remotes"]
-      : ["rev-list", `${remoteSha}..${localSha}`]);
-    if (!revs?.trim()) continue;
-    const out = git(["diff-tree", "-r", "-c", "--root", "--no-commit-id", "--name-only", "--stdin"], revs);
-    for (const p of (out ?? "").split("\n")) if (p) paths.add(p);
+    // 新分支可能踩在多个远端祖先上(比如这条链里带 merge),对每个基准各算一次并集 ——
+    // 宁可多列几个文件多跑一次测试,也不漏。
+    const bases = ZERO.test(remoteSha || "") ? boundaryBases(localSha) : [remoteSha];
+    if (bases === null) {
+      unknown = true;
+      continue;
+    }
+    for (const base of bases) {
+      const out = git(["diff", "--name-only", base, localSha]);
+      if (out === null) {
+        unknown = true;
+        continue;
+      }
+      for (const p of out.split("\n")) if (p) paths.add(p);
+    }
   }
-  return [...paths];
+  return { paths: [...paths], unknown };
 }
 
 /** 依赖装没装。web 的测试跑在 node/tsx/puppeteer 上,少哪一层都跑不起来。 */
@@ -99,7 +131,7 @@ if (!lines.length) {
   process.exit(0);
 }
 
-const changed = changedPaths(lines);
+const { paths: changed, unknown } = changedPaths(lines);
 
 // 闸自己被改了就先自检。它只要 node + git,不吃 node_modules —— 所以连下面那条
 // 「没装依赖就放行」都绕不过它,worktree 里照样跑得动。第 1 轮审查那个 merge 漏检
@@ -119,18 +151,22 @@ if (changed.some((p) => SELF.includes(p)) && existsSync(selfTest)) {
 }
 
 const hits = changed.filter((p) => WATCHED.some((w) => p.startsWith(w)));
-if (!hits.length) {
+// 「算不出改了哪些文件」不等于「没改」。远端 sha 本地没有(没 fetch 过)这类情况下静默
+// 跳过,正是这道闸失效的样子 —— 宁可白跑一次也要如实说出来。
+if (unknown) say("  ⚠ 有一段推送范围算不出改了哪些文件(远端 sha 本地没有?),保守起见照跑。");
+if (!hits.length && !unknown) {
   say(`  ✓ 本次推送的 ${changed.length} 处改动没碰 ${WATCHED.join(" / ")},跳过前端回归。`);
   process.exit(0);
 }
 
+const what = hits.length ? `碰了 ${hits.length} 个 ${WATCHED.join(" / ")} 下的文件` : "范围算不清";
 if (!depsReady()) {
-  say(`  ⚠ 本次推送碰了 ${hits.length} 个 ${WATCHED.join(" / ")} 下的文件,但这里没有 node_modules —— **前端回归没跑**,照旧放行。`);
+  say(`  ⚠ 本次推送${what},但这里没有 node_modules —— **前端回归没跑**,照旧放行。`);
   say("     (worktree 常态如此。想跑就先 npm install,或到主仓跑 npm run test:web。)");
   process.exit(0);
 }
 
-say(`  ▶ 本次推送碰了 ${hits.length} 个 ${WATCHED.join(" / ")} 下的文件,跑一遍前端回归(几分钟)…`);
+say(`  ▶ 本次推送${what},跑一遍前端回归(几分钟)…`);
 for (const p of hits.slice(0, 6)) say(`     · ${p}`);
 if (hits.length > 6) say(`     · …另外 ${hits.length - 6} 个`);
 

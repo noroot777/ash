@@ -114,6 +114,76 @@ test("merge commit 自身改到 web/ —— 两个父都没碰,也必须跑", ()
   assert.equal(status, 0);
 });
 
+test("merge 结果等同某一个父,但相对远端确实改了 web/ —— 也必须跑", () => {
+  // 第 2 轮审查的复现:combined diff(`diff-tree -c`)只列「跟所有父都不同」的路径,
+  // 这个场景里 web/view.txt 的最终内容跟 side 那个父一模一样,于是被整个漏掉 ——
+  // 可它相对**远端要被更新的那个 sha**(main 合并前)明明变了。
+  const { dir, git } = makeRepo();
+  write(dir, "README.md", "base");
+  write(dir, "web/view.txt", "base");
+  git("add", "-A");
+  git("commit", "-qm", "base");
+
+  git("checkout", "-qb", "side");
+  write(dir, "README.md", "side");
+  git("commit", "-qam", "side"); // side 没动 web/
+
+  git("checkout", "-q", "main");
+  write(dir, "README.md", "main");
+  write(dir, "web/view.txt", "main-web"); // 远端那一版的 web/ 是这个
+  git("commit", "-qam", "main");
+  const remote = git("rev-parse", "HEAD"); // ← 这次 push 要更新的就是这个 sha
+
+  try {
+    git("merge", "side", "-q");
+  } catch {
+    /* 冲突是预期的 */
+  }
+  write(dir, "README.md", "resolved");
+  write(dir, "web/view.txt", "base"); // 改回 side 父那一版 → combined diff 里它是空的
+  git("add", "-A");
+  git("commit", "-qm", "merge");
+  const head = git("rev-parse", "HEAD");
+
+  // 前提校验:净 diff 里确实有 web/view.txt,否则这条用例就没在测想测的东西。
+  assert.match(git("diff", "--name-only", remote, head), /web\/view\.txt/);
+
+  fakeDeps(dir);
+  const { out, status } = runGate(dir, [`refs/heads/main ${head} refs/heads/main ${remote}`], {
+    npmBin: fakeNpm(dir, 0),
+  });
+  assert.match(out, /本次推送碰了/, `merge 结果等同某个父时被漏掉了:\n${out}`);
+  assert.match(out, /web\/view\.txt/, out);
+  assert.equal(status, 0);
+});
+
+test("算不出推送范围时保守照跑,不静默跳过", () => {
+  const { dir, git } = makeRepo();
+  write(dir, "README.md", "base");
+  git("add", "-A");
+  git("commit", "-qm", "base");
+  const head = git("rev-parse", "HEAD");
+  // 远端 sha 本地根本没有(没 fetch 过对方的分支)——diff 算不出来。
+  const ghost = "1".repeat(40);
+
+  fakeDeps(dir);
+  const { out, status } = runGate(dir, [`refs/heads/main ${head} refs/heads/main ${ghost}`], {
+    npmBin: fakeNpm(dir, 0),
+  });
+  assert.match(out, /算不出改了哪些文件/, out);
+  assert.doesNotMatch(out, /跳过前端回归/, `算不出范围时静默跳过了:\n${out}`);
+  assert.match(out, /前端回归通过/, out);
+  assert.equal(status, 0);
+
+  // 新分支那条路(remote sha 全 0)也一样:local sha 本地就没有 → 算不出,同样得保守跑。
+  const ghostLocal = runGate(dir, [`refs/heads/topic ${"2".repeat(40)} refs/heads/topic ${ZERO}`], {
+    npmBin: fakeNpm(dir, 0),
+  });
+  assert.match(ghostLocal.out, /算不出改了哪些文件/, ghostLocal.out);
+  assert.doesNotMatch(ghostLocal.out, /跳过前端回归/, ghostLocal.out);
+  assert.equal(ghostLocal.status, 0);
+});
+
 test("只碰 server/ —— 跳过,不跑测试", () => {
   const { dir, git } = makeRepo();
   write(dir, "README.md", "base");
