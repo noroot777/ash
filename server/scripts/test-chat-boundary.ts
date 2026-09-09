@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -126,6 +128,21 @@ try {
   changed = undefined;
   release = undefined;
 
+  // 观察器自身失效（fs.watch 不可用）时，「没观察到」不能结算成「没有变化」：
+  // 回复照常完成，但必须附注观察不可用，不得展示一条看似确认过只读的正常回复。
+  mode = "read";
+  const realWatch = fs.watch;
+  (fs as { watch: typeof fs.watch }).watch = () => { throw Object.assign(new Error("simulated watcher unavailable"), { code: "ENOSYS" }); };
+  syncBuiltinESMExports();
+  try {
+    const blind = await invoke();
+    assert.ok(blind.text.includes("这是咨询回复"), "观察不可用时回复照常完成");
+    assert.match(blind.notice ?? "", /目录观察不可用/, "观察不可用必须如实附注");
+  } finally {
+    (fs as { watch: typeof fs.watch }).watch = realWatch;
+    syncBuiltinESMExports();
+  }
+
   mode = "runtime-write";
   await db.insert(projects).values({ id: "runtime", name: "包含 ash 数据的项目", repoPath: stage, createdAt: new Date().toISOString() });
   assert.equal((await invokeChat(member, null, "只读咨询", AbortSignal.timeout(5000), "runtime")).notice, undefined, "ash 自身写入不附注");
@@ -168,7 +185,7 @@ try {
   assert.match(stoppedSnapshot.messages.at(-1)!.body, /你已停止这次回复/);
   assert.equal((await db.select().from(chatRooms)).length, 1);
   assert.equal(cleanup, runs, "每次咨询都要清理执行器会话");
-  console.log("chat boundary: 只读工具通过；写入/未知命令的工具事件仍硬中止；无工具事件的目录变化（含并发合并）不再中止、附注如实持久展示且不进模型回复；ash 自身写入不附注；停止照常生效；咨询不创建任务");
+  console.log("chat boundary: 只读工具通过；写入/未知命令的工具事件仍硬中止；无工具事件的目录变化（含并发合并）不再中止、附注如实持久展示且不进模型回复；观察器失效时如实附注不可用；ash 自身写入不附注；停止照常生效；咨询不创建任务");
 } finally {
   release?.();
   CLI_SPEC_BY_KEY.codex.factory = original;

@@ -50,8 +50,9 @@ async function canonicalPath(path: string): Promise<string> {
 }
 
 export interface ChatWorkspaceObserver {
-  /** 等尾随事件落定后关闭监听，返回观察到的变更路径（相对项目根、去重）；more 表示还有没列出的。 */
-  settle(): Promise<{ paths: string[]; more: boolean }>;
+  /** 等尾随事件落定后关闭监听，返回观察到的变更路径（相对项目根、去重）；more 表示还有没列出的；
+   * degraded 表示观察本身不可用/中断过——此时「没有路径」不等于「没有变化」，必须如实披露。 */
+  settle(): Promise<{ paths: string[]; more: boolean; degraded?: string }>;
   close(): void;
 }
 
@@ -91,6 +92,13 @@ export async function watchChatWorkspace(cwd: string): Promise<ChatWorkspaceObse
   let more = false;
   let closed = false;
   let watcher: FSWatcher | undefined;
+  // 观察器自身失效时不能把「没观察到」结算成「没有变化」：degraded 状态随 settle 返回，
+  // 由调用方作为附注如实披露。仍不中止咨询——工具事件闸门不依赖这层。
+  let degraded: string | undefined;
+  const degrade = (reason: string, error?: unknown) => {
+    if (!degraded) degraded = reason;
+    console.warn(`[chat] ${reason}`, error ?? "");
+  };
   // macOS 的 FSEvents 会把 watch 启动前一瞬的事件一并吐出来，只认事件会把咨询开始前的
   // 写入也记上；按 ctime 过滤，只报咨询期间真正发生的变化。路径已不存在（删除/改名）时
   // 逐级看父目录——删除一定会刷新父目录的 ctime。
@@ -110,7 +118,8 @@ export async function watchChatWorkspace(cwd: string): Promise<ChatWorkspaceObse
   const pending = new Set<Promise<void>>();
   try {
     watcher = watch(root, { recursive: true, persistent: false }, (_event, filename) => {
-      if (closed || !filename) return;
+      if (closed) return;
+      if (!filename) { degrade("目录观察收到缺少路径的变更事件"); return; }
       const path = resolve(root, filename.toString());
       const local = relative(root, path);
       if (!local || local.startsWith(`..${sep}`) || isAbsolute(local) || ignored(path)) return;
@@ -119,9 +128,9 @@ export async function watchChatWorkspace(cwd: string): Promise<ChatWorkspaceObse
       pending.add(check);
       void check.finally(() => pending.delete(check));
     });
-    watcher.on("error", (error) => { console.warn("[chat] 目录变化观察中断", error); watcher?.close(); });
+    watcher.on("error", (error) => { degrade("目录观察中断", error); watcher?.close(); });
   } catch (error) {
-    console.warn("[chat] 目录变化观察不可用", error);
+    degrade("目录观察不可用", error);
   }
   const close = () => { closed = true; watcher?.close(); };
   return {
@@ -129,7 +138,7 @@ export async function watchChatWorkspace(cwd: string): Promise<ChatWorkspaceObse
       await delay(100);
       while (pending.size) await Promise.all([...pending]);
       close();
-      return { paths: [...seen], more };
+      return { paths: [...seen], more, degraded };
     },
     close,
   };

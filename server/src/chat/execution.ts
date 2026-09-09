@@ -20,11 +20,14 @@ export interface ChatInvocation {
   notice?: string;
 }
 
-function changeNotice({ paths, more }: { paths: string[]; more: boolean }): string | undefined {
-  if (!paths.length) return undefined;
+function changeNotice({ paths, more, degraded }: { paths: string[]; more: boolean; degraded?: string }): string | undefined {
+  if (!paths.length && !degraded) return undefined;
+  // 观察器自身失效时，「没有路径」不等于「没有变化」——必须把失效本身如实附注。
+  if (!paths.length) return `⚠️ 本轮${degraded}，无法确认咨询期间项目目录是否有并发变更；写入类工具调用仍会被检查并中止。如有疑虑请检查项目。`;
   const shown = paths.slice(0, 3).join("、");
   const suffix = more ? " 等多处" : paths.length > 3 ? ` 等 ${paths.length} 处` : "";
-  return `⚠️ 咨询期间项目目录出现并发变更（${shown}${suffix}）。变更无法归因：可能来自其他任务、验收合并、你自己的操作，也可能是本次咨询越过了只读约定。群聊未代为撤销；如非预期请检查项目。`;
+  const tail = degraded ? `另外，${degraded}，其间的变更可能未被完整记录。` : "";
+  return `⚠️ 咨询期间项目目录出现并发变更（${shown}${suffix}）。变更无法归因：可能来自其他任务、验收合并、你自己的操作，也可能是本次咨询越过了只读约定。群聊未代为撤销；如非预期请检查项目。${tail}`;
 }
 
 export async function invokeChat(member: ChatMember, owner: string | null, prompt: string, signal: AbortSignal, projectId: string, options?: { purpose: "summary" }): Promise<ChatInvocation> {

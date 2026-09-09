@@ -40,6 +40,7 @@ try {
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${address.port}/?project=chat-demo&view=chat`);
   await page.getByRole("heading", { name: "创建一个聊天空间" }).waitFor();
+  await page.getByText("咨询期间项目目录的并发变化不会中止回复", { exact: false }).waitFor();
   await page.getByLabel("群聊名称", { exact: true }).fill("产品研发");
   await page.getByRole("button", { name: "添加成员", exact: true }).click();
   await page.getByRole("button", { name: "添加成员", exact: true }).click();
