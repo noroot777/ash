@@ -141,6 +141,10 @@
   height: 16px;
 }
 
+.task-subagents-icon--populated {
+  color: color-mix(in srgb, var(--accent) 65%, var(--muted));
+}
+
 .inspector-host__menu-label svg {
   width: 14px;
   height: 14px;

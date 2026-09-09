@@ -4,6 +4,7 @@ import type { Group, Session, Task, TaskListItem } from "@ash/shared";
 import { isUserFollowUp } from "@ash/shared";
 import { FolderOpen, GitBranch, GitPullRequest, Info, MagnifyingGlass, Robot } from "@phosphor-icons/react";
 import { NativeWorkInspector, type NativeWorkInspectorProps } from "./NativeWorkInspector.tsx";
+import { buildNativeWork } from "./nativeWorkModel.ts";
 import { InspectorHost, type InspectorDescriptor } from "../inspector/index.ts";
 import { FileTreeInspector } from "../files/FileTreeInspector.tsx";
 import { FileViewer } from "../files/FileViewer.tsx";
@@ -184,6 +185,15 @@ export function TaskDetail({
   const [pendingExecutor, setPendingExecutor] = useState<string | null>(null);
   const { indicatorForTask } = useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
+  const hasSubagents = useMemo(
+    () => buildNativeWork(conversation.items, task.status).some((row) => row.kind === "agent"),
+    [conversation.items, task.status],
+  );
+  const inspectors = useMemo(() => TASK_INSPECTORS.map((descriptor) => (
+    descriptor.id === "subagents" && hasSubagents
+      ? { ...descriptor, icon: <Robot size={14} className="task-subagents-icon--populated" /> }
+      : descriptor
+  )), [hasSubagents]);
   // 审查链状态同时服务验收后快照入口和会话尾栏的异常回合重试；共享一份缓存与订阅。
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
   const followUps = useMemo(
@@ -351,7 +361,7 @@ export function TaskDetail({
   return (
     <InspectorHost
       contextKey={inspectorContextKey}
-      descriptors={TASK_INSPECTORS}
+      descriptors={inspectors}
       context={{
         nativeWork: { items: conversation.items, status: task.status, loading: conversation.refreshing, error: conversation.error ?? conversation.traceError, onRetry: conversation.refetch },
         task,
