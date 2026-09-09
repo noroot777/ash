@@ -17,7 +17,7 @@
 //   ③ **带 key 的首跑挂起 >120s,卡点未定位** —— 所以 seed 只写「确定无害」的最小集
 //      (onboarding 已完成标记),不预置任何会改变 CLI 行为的开关;上线前必须过
 //      `server/scripts/test-user-cli-smoke.ts` 的零交互冒烟测试。
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentType, PersonalCliEnv, PersonalSkill } from "@ash/shared";
 import { DATA_DIR } from "../paths.js";
@@ -240,6 +240,30 @@ export function readPersonalSkill(userId: string, agentType: AgentType, name: st
     return readFileSync(join(dir, "skills", name, "SKILL.md"), "utf8");
   } catch {
     return null;
+  }
+}
+
+export function updatePersonalSkill(userId: string, agentType: AgentType, name: string, body: string): void {
+  if (!SKILL_NAME_RE.test(name)) {
+    throw Object.assign(new Error("技能名非法"), { status: 400 });
+  }
+  if (!configDirEnvVar(agentType)) {
+    throw Object.assign(new Error(`${agentType} 不支持个人级技能`), { status: 400 });
+  }
+  let file: number;
+  try {
+    file = openSync(join(userCliDir(userId, agentType), "skills", name, "SKILL.md"), "r+");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw Object.assign(new Error("技能不存在，无法保存。请重新读取技能列表。"), { status: 404 });
+    }
+    throw error;
+  }
+  try {
+    writeFileSync(file, body, "utf8");
+    ftruncateSync(file, Buffer.byteLength(body, "utf8"));
+  } finally {
+    closeSync(file);
   }
 }
 

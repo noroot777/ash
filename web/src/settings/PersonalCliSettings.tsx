@@ -8,7 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { PersonalAshMcp, PersonalCliEnv } from "@ash/shared";
 import { ApiError } from "../lib/apiClient.ts";
 import { personalCliApi } from "../lib/authApi.ts";
-import { Button, TextInput } from "../components/ui.tsx";
+import { Button } from "../components/ui.tsx";
 import "./personal-cli-settings.css";
 
 export function PersonalCliSettings({ notify }: { notify: (message: string) => void }) {
@@ -140,7 +140,7 @@ function CliEnvBlock({
   onChanged: (next: PersonalCliEnv) => void;
   notify: (message: string) => void;
 }) {
-  const [editing, setEditing] = useState<{ name: string; body: string; isNew: boolean } | null>(null);
+  const [editing, setEditing] = useState<{ name: string; body: string } | null>(null);
   const [memory, setMemory] = useState<string | null>(null);
   const [memoryBusy, setMemoryBusy] = useState(false);
 
@@ -156,7 +156,7 @@ function CliEnvBlock({
   const openSkill = async (name: string) => {
     try {
       const skill = await personalCliApi.readSkill(env.agentType, name);
-      setEditing({ name, body: skill.body, isNew: false });
+      setEditing({ name, body: skill.body });
     } catch (e) {
       notify(e instanceof ApiError ? e.message : "读不出这个技能");
     }
@@ -165,7 +165,7 @@ function CliEnvBlock({
   const saveSkill = async () => {
     if (!editing) return;
     try {
-      onChanged(await personalCliApi.writeSkill(env.agentType, editing.name.trim(), editing.body));
+      onChanged(await personalCliApi.updateSkill(env.agentType, editing.name, editing.body));
       setEditing(null);
       notify("已保存");
     } catch (e) {
@@ -192,7 +192,6 @@ function CliEnvBlock({
       <div className="pcli-part">
         <div className="pcli-part-head">
           <b>个人技能</b>
-          <Button onClick={() => setEditing({ name: "", body: SKILL_TEMPLATE, isNew: true })}>新建技能</Button>
         </div>
         {env.skills.length ? (
           <ul className="pcli-skills">
@@ -216,7 +215,7 @@ function CliEnvBlock({
             ))}
           </ul>
         ) : (
-          <p className="settings-hint">还没有个人技能。新建一个，所有项目里都能用 <code>/名字</code> 调它。</p>
+          <p className="settings-hint">还没有个人技能。</p>
         )}
       </div>
 
@@ -233,7 +232,8 @@ function CliEnvBlock({
         ) : (
           <>
             <textarea
-              className="ui-input pcli-editor"
+              className="ui-input pcli-editor pcli-memory-editor"
+              aria-label={`${env.agentType} 个人全局 ${env.memoryName}`}
               rows={12}
               value={memory}
               onChange={(e) => setMemory(e.target.value)}
@@ -274,18 +274,11 @@ function CliEnvBlock({
       {editing ? (
         <div className="pcli-part pcli-part--editor">
           <div className="pcli-part-head">
-            <b>{editing.isNew ? "新建技能" : `编辑 /${editing.name}`}</b>
+            <b>编辑 /{editing.name}</b>
           </div>
-          {editing.isNew ? (
-            <TextInput
-              autoFocus
-              placeholder="技能名（会成为磁盘上的目录名，也就是 /名字）"
-              value={editing.name}
-              onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-            />
-          ) : null}
           <textarea
             className="ui-input pcli-editor"
+            aria-label={`${env.agentType} 技能 ${editing.name}`}
             rows={16}
             value={editing.body}
             onChange={(e) => setEditing({ ...editing, body: e.target.value })}
@@ -301,13 +294,3 @@ function CliEnvBlock({
     </div>
   );
 }
-
-const SKILL_TEMPLATE = `---
-name: 技能名
-description: 一句话说明什么时候该用它（agent 靠这句决定要不要调）
----
-
-# 技能名
-
-在这里写这个技能要做的事。
-`;

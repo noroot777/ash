@@ -126,7 +126,7 @@ export const personalCliApi = {
   one: (agentType: string) => request<PersonalCliEnv>(`/me/cli-env/${id(agentType)}`),
   readSkill: (agentType: string, name: string) =>
     request<{ name: string; body: string }>(`/me/cli-env/${id(agentType)}/skills/${id(name)}`),
-  writeSkill: (agentType: string, name: string, body: string) =>
+  updateSkill: (agentType: string, name: string, body: string) =>
     request<PersonalCliEnv>(`/me/cli-env/${id(agentType)}/skills/${id(name)}`, json("PUT", { body })),
   deleteSkill: (agentType: string, name: string) =>
     request<PersonalCliEnv>(`/me/cli-env/${id(agentType)}/skills/${id(name)}`, json("DELETE")),
