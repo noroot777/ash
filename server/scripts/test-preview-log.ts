@@ -119,6 +119,97 @@ check("后端那行进不了候选（scheme 已被 dev.mjs 去掉）", pickPrevi
 });
 check("前端那行还没打出来时也不会误挑后端", pickPreviewUrl("[api] [ash] server on localhost:62398\n", 62396), null);
 
+// —— ash 自己的预览：只起前端（scripts/dev.mjs 的 frontend 档）——
+// 2026-09-09 真出过：这一档只起前端，/api 直接打到本机那份 ash，开场那行写的是
+// 「/api 打到 http://127.0.0.1:4317。」。两处一起坏——
+//   ① 它是那几秒里日志中唯一的地址，于是 `first` 认了 4317，预览指到 ash 自己身上；
+//   ② 句号被 URL_RE 一起收了进去，存进 preview.json，用户点开预览时 `new URL()` 抛，
+//      Hono 兜底成一句 Internal Server Error（表现就是「预览打不开，还是英文的」）。
+// dev.mjs 那行现在不印 scheme 了，但这里钉的是判读侧：**哪怕它照旧印，也不许认**。
+const frontendOnly = "[dev] 预览：只起前端 37009，/api 打到 http://127.0.0.1:4317。\n";
+check("ash 自己监听的端口不进候选", pickPreviewUrl(frontendOnly, 37009, [4317]), null);
+check(
+  "排除之后照旧等前端那行",
+  pickPreviewUrl(`${frontendOnly}  ➜  Local:   http://127.0.0.1:37009/\n`, 37009, [4317]),
+  { url: "http://127.0.0.1:37009/", port: 37009, lent: true },
+);
+// 句号是中文散文里的，跟着色一样属于「日志的属性」，但坏法比着色响得多：着色顶多把
+// 用户领到一个 404 路径，标点直接让 `new URL()` 抛。所以单独钉一条。
+check(
+  "一句话里嵌的地址不许把句号收进去",
+  pickPreviewUrl("[dev] /api 打到 http://127.0.0.1:4317。\n", null)?.url,
+  "http://127.0.0.1:4317",
+);
+check(
+  "认出来的地址一定解析得动",
+  new URL(pickPreviewUrl("打到 http://127.0.0.1:4317。\n", null)?.url ?? "http://x/").port,
+  "4317",
+);
+// —— 但**能解析的地址一个字符都不许动** ——
+// 剥尾巴的门槛是「解析不动」，不是「看着像标点」。下面这些全都解析得动，也就全都不许改：
+// 谁也分不清 `…/v1.2.` 末尾那个点是版本号还是句号，分不清就不该猜 —— 猜错就是把用户领到
+// 另一个路径/查询上去，跟句号那条是同一种坏，只是换了个方向。
+check(
+  "路径末尾的点是路径的一部分",
+  pickPreviewUrl("open http://localhost:5173/releases/v1.2.\n", null)?.url,
+  "http://localhost:5173/releases/v1.2.",
+);
+check(
+  "查询串末尾的问号照样留着",
+  pickPreviewUrl("open http://localhost:5173/search?q=what?\n", null)?.url,
+  "http://localhost:5173/search?q=what?",
+);
+check(
+  "括号是合法的 URL 字符，不许当成散文里的括号",
+  pickPreviewUrl("open http://localhost:5173/file(name)\n", null)?.url,
+  "http://localhost:5173/file(name)",
+);
+check(
+  "查询串和锚点一并留着",
+  pickPreviewUrl("open http://localhost:5173/?token=a1#top\n", null)?.url,
+  "http://localhost:5173/?token=a1#top",
+);
+// 非 ASCII 同理，而且这一条更容易被「顺手清理一下」弄坏：路径和查询串里的中日韩、重音
+// 字母都是合法的，`new URL()` 自己会编码成 `%E4%BD%A0%E5%A5%BD`。按字符集裁剪的话，
+// `/你好` 会被截成 `/`、`?q=中文` 会被截成 `?q=` —— **截出来的前缀照样解析得动**，于是
+// 一路都看不出地址被改过，用户只是被领到了另一个路由上。
+check(
+  "路径里的中文原样保留",
+  pickPreviewUrl("➜  Local:   http://localhost:5173/你好\n", null)?.url,
+  "http://localhost:5173/你好",
+);
+check(
+  "查询串里的中文原样保留",
+  pickPreviewUrl("open http://localhost:5173/search?q=中文\n", null)?.url,
+  "http://localhost:5173/search?q=中文",
+);
+check(
+  "重音字母原样保留（不许截成 /ma）",
+  pickPreviewUrl("open http://localhost:5173/mañana\n", null)?.url,
+  "http://localhost:5173/mañana",
+);
+check(
+  "认出来的中文地址交给 new URL 就是它自己编码的那个",
+  new URL(pickPreviewUrl("open http://localhost:5173/你好\n", null)?.url ?? "http://x/").pathname,
+  "/%E4%BD%A0%E5%A5%BD",
+);
+// 路径里的全角句号同样解析得动，所以同样不许剥 —— 它跟英文日志里的 `at http://localhost:5173/.`
+// 是同一种没法分辨的情形。剥尾巴只在「authority 坏了、`new URL()` 抛了」时才轮得到。
+check(
+  "路径里的全角句号也不许剥（解析得动就不猜）",
+  pickPreviewUrl("前端在 http://localhost:5173/。\n", null)?.url,
+  "http://localhost:5173/。",
+);
+// 还剩一类修不好的：端口超出范围（`\d{2,5}` 收得下 99999，`new URL` 收不下），尾巴上又没有
+// 非 ASCII 可剥。与其把它存进 preview.json 再在打开预览那步抛，不如当没看见——这一条兜的就是
+// 「以后又冒出一种没想到的写法」时，坏的地址不会再走到用户面前。
+check("修不好的地址不当候选", pickPreviewUrl("listening on http://localhost:99999/\n", null), null);
+check(
+  "但同一份日志里能解析的那个照旧认",
+  pickPreviewUrl("bogus http://localhost:99999/\n➜  Local:   http://localhost:5173/\n", null)?.port,
+  5173,
+);
+
 // —— 只说端口、不印地址的那一类（项目预览命令可以是任何语言之后才有的）——
 // Spring Boot 是最典型的一个：它从头到尾不印一个 URL，只说自己在 8080 上起来了。
 // 认不出来的话，一个已经在跑的服务会被干等到 120 秒超时，报一句「还没起来」。

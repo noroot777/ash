@@ -61,7 +61,9 @@ function webDevArgs(webPort) {
 
 function startFrontendOnly(webPort) {
   const proxy = process.env.ASH_PROXY ?? "http://127.0.0.1:4317";
-  console.log(`[dev] 预览：只起前端 ${webPort}，/api 打到 ${proxy}。`);
+  // 打这一行时把 scheme 去掉，理由跟下面转发后端日志时一样：ash 会从预览日志里认地址，
+  // 前端那行还没打出来的那几秒里，这行是日志里唯一一个 `http://…`，会被当成预览本尊。
+  console.log(`[dev] 预览：只起前端 ${webPort}，/api 打到 ${proxy.replace(/^https?:\/\//, "")}`);
   const web = spawn(NPM, webDevArgs(webPort), {
     cwd: REPO,
     stdio: "inherit",

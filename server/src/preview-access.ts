@@ -46,6 +46,12 @@ export function mountPreviewOpenRoutes(api: Hono): void {
     const record = readAnyPreview(taskId);
     const service = record?.services?.find((s) => s.id === c.req.param("serviceId"));
     if (!record?.proxyToken || !record.gen || !service?.url || service.status !== "ready" || !alive(service.pid)) return c.text("预览不存在或已关闭", 404);
+    // 记录里的地址是从预览日志里认出来的，认错了就可能不是一个能解析的 URL（真出过：日志
+    // 里写的是「/api 打到 http://127.0.0.1:4317。」，句号被一起收了进来）。不挡的话
+    // `new URL` 在这儿抛，Hono 兜底成一句 Internal Server Error —— 用户既不知道坏在哪，
+    // 也不知道重开一次预览就好了。
+    let target: URL;
+    try { target = new URL(service.url); } catch { return c.text("预览记录里的地址不合法，请关掉预览重开一次。", 502); }
     const actor = actorOf(c);
     const { getUser } = await import("./auth/store.js");
     const grant: PreviewGrant = {
@@ -58,7 +64,6 @@ export function mountPreviewOpenRoutes(api: Hono): void {
     if (grants.size >= 1000) grants.delete(grants.keys().next().value!);
     const token = randomBytes(24).toString("hex");
     grants.set(token, grant);
-    const target = new URL(service.url);
     c.header("cache-control", "no-store");
     c.header("referrer-policy", "no-referrer");
     const view = { ...record, proxyToken: token };

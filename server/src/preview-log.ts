@@ -296,7 +296,44 @@ export interface PreviewUrl {
   lent: boolean;
 }
 
+/**
+ * 日志里印出来的本机地址。地址体照旧认到「空白或引号为止」—— 路径和查询串里什么都可能有，
+ * 中日韩、重音字母、百分号编码，`new URL()` 全都收（自己会编码成 `%E4%BD%A0%E5%A5%BD`），
+ * 所以**这里不做任何字符集裁剪**。裁过一次，代价是把 `/你好` 截成 `/`、把 `?q=中文` 截成
+ * `?q=`：预览指到另一个路由上，而截出来的前缀照样解析得动，一路都看不出被改过。
+ */
 const URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::(\d{2,5}))?[^\s'"]*/gi;
+
+/**
+ * 尾巴上的非 ASCII，**只在这条地址解析不动的时候**才剥。
+ *
+ * 起因是那条「一句话里嵌一个地址」的散文写法：`[dev] …，/api 打到 http://127.0.0.1:4317。`
+ * —— 句号既不是空白也不是引号，被当成地址的一部分收进来，端口成了 `4317。`，原样存进
+ * preview.json；用户点开预览时 `new URL(service.url)` 当场抛，Hono 兜底成一句
+ * **Internal Server Error**：服务好好地跑着，报错却什么都没说。
+ *
+ * 为什么门槛是「解析不动」而不是「看着像标点」：**看着像标点的一律剥不得**。`.`、`?`、`)`
+ * 在 URL 末尾都合法（`/releases/v1.2.`、`/search?q=what?`、`/file(name)`），全角字符在路径里
+ * 同样合法（`/你好。`）—— 谁也分不清 `v1.2.` 末尾那个点是版本号还是句号，分不清就不该猜，
+ * 猜错就是把用户领到另一个路径上去，跟原事故是同一种坏、只是换了个方向。
+ *
+ * 而 `new URL()` 几乎只为 **authority 坏了**才抛（路径和查询串里塞什么它都能编码过去）。
+ * 所以「解析不动」这个门槛恰好把两类分开了：能解析的一个字符都不动；解析不动的，垃圾必然
+ * 落在主机/端口上，剥掉尾巴上的非 ASCII 就是在修那一段。端口那几位是 ASCII，剥非 ASCII
+ * 后缀动不到它们，所以修完的地址不可能指到另一个端口上去。
+ */
+const TRAILING_NON_ASCII = /[^\x20-\x7e]+$/;
+
+function parsable(url: string): boolean {
+  try { new URL(url); return true; } catch { return false; }
+}
+
+/** 能解析就原样返回；解析不动就试着剥掉尾巴上的非 ASCII；修不好返回 null（当没看见）。 */
+function usableUrl(raw: string): string | null {
+  if (parsable(raw)) return raw;
+  const trimmed = raw.replace(TRAILING_NON_ASCII, "");
+  return trimmed !== raw && parsable(trimmed) ? trimmed : null;
+}
 
 /**
  * 「我在 8080 上起来了」但**不印地址**的那一类日志。
@@ -333,11 +370,14 @@ function announcedPort(log: string, skip: ReadonlySet<number>): number | null {
  *
  * `lent` 这个标记还兼着第二个用处，见 preview.ts 里撞车判定的那个例外。
  *
- * `sidekicks` 是 ash 借给**配角**的那几个端口（`$PORT2…`，见 preview.ts 的 portEnv）。它们
- * 按定义就不是要看的那个，所以一律排除：一条同时起前后端的命令里，后端多半比前端先起来
- * 并印一句「Tomcat started on port 35725」，不排除的话预览就会稳定地指到后端上 —— 前端还在
- * 编译，用户已经被领到一个返回 JSON 的地址前面了。这条不靠猜：那几个端口是 ash 自己借出去
- * 的，谁拿了它一清二楚。
+ * `excluded` 是「**按定义就不可能是预览本尊**」的那些端口，两类：
+ * ① ash 借给**配角**的那几个（`$PORT2…`，见 preview.ts 的 portEnv）——一条同时起前后端的
+ *    命令里，后端多半比前端先起来并印一句「Tomcat started on port 35725」，不排除的话预览
+ *    就会稳定地指到后端上：前端还在编译，用户已经被领到一个返回 JSON 的地址前面了；
+ * ② **ash 自己监听的那个端口**——预览的日志里出现它只有一种可能，就是命令在说「我的 /api
+ *    打到 ash 那边」（scripts/dev.mjs 的 frontend 档正是这么印的）。认了它，用户点开预览
+ *    看到的是 ash 本尊，而代理还得自己转给自己。
+ * 两类都不靠猜：端口是 ash 自己借出去 / 自己绑上的，谁拿了它一清二楚。
  *
  * 日志里一个地址都没有时，退而求其次认「起在某个端口」的自述（见 announcedPort）——
  * 非 Node 的服务常常只说端口不说地址。
@@ -345,18 +385,20 @@ function announcedPort(log: string, skip: ReadonlySet<number>): number | null {
 export function pickPreviewUrl(
   log: string,
   lent: number | null,
-  sidekicks: readonly number[] = [],
+  excluded: readonly number[] = [],
 ): PreviewUrl | null {
-  const skip = new Set(sidekicks.filter((port) => port !== lent));
+  const skip = new Set(excluded.filter((port) => port !== lent));
   let first: PreviewUrl | null = null;
   // 先剥 ANSI 再扫地址。URL_RE 收到「空白/引号为止」，而着色后的行是
   // `http://localhost:5173/\x1b[39m` —— 控制码不是空白也不是引号，会被原样收进地址，
   // 存进 preview.json、再交给浏览器打开。端口连得上，所以一路判成「起好了」，用户点开
   // 得到的却是 `/%1B[39m` 这条 404 路径：服务是好的、根页面是好的，表现仍然是「预览
-  // 打不开」。这一条在这儿修，不在正则里加特例 —— 着色是整段日志的属性，不是 URL 的。
+  // 打不开」。这一条在这儿修，不在正则里加特例 —— 着色是整段日志的属性，不是 URL 的
+  // （`TRAILING_NON_ASCII` 那道也指望不上：带控制码的地址 `new URL()` 照样解析得动，剥不着）。
   const clean = stripAnsi(log);
   for (const hit of clean.matchAll(URL_RE)) {
-    const url = hit[0];
+    const url = usableUrl(hit[0]);
+    if (url === null) continue;
     const port = Number(hit[1] ?? (url.startsWith("https") ? 443 : 80));
     if (lent !== null && port === lent) return { url, port, lent: true };
     if (skip.has(port)) continue;
