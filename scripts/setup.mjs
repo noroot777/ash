@@ -253,7 +253,7 @@ if (process.env.SKIP_MCP) {
 // git hooks:config 不随 clone/解包传播,必须每台机器执行一次。
 if (existsSync(join(REPO, ".git"))) {
   if (run("git", ["config", "core.hooksPath", ".githooks"]).status === 0) ok("git hooks 已指向 .githooks");
-  else warn("git config core.hooksPath 设置失败(不影响运行,只是少两道提交闸)");
+  else warn("git config core.hooksPath 设置失败(不影响运行,只是少了两道提交闸和 push 前的前端回归闸)");
 } else {
   warn("不是 git 仓库(压缩包解出来的通常如此)。ash 本身能跑,但对**它自己这个仓库**做不了 worktree/diff/合并。");
   say("      想用完整能力:git init && git add -A && git commit -m init && git config core.hooksPath .githooks");

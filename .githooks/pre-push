@@ -1,0 +1,15 @@
+#!/bin/sh
+# 前端回归闸。build 前置里那 33 条测试摘掉之后(2026-09-09),这是它们唯一的自动运行时机。
+#
+# 挂 pre-push 而不是 pre-commit:agent 每完成一个单元就提交一次,挂提交上等于把刚摘掉的
+# 等待原样搬回来。push 是「代码离开这台机器」的那一下,频率对得上一次全量回归的代价。
+#
+# 判断与文案都在 scripts/web-test-gate.mjs(要按路径算 diff、要分辨新分支,sh 里写太笨)。
+# stdin 是 git 给的 `<local ref> <local sha> <remote ref> <remote sha>` 若干行,原样透传。
+#
+# 换机器/新克隆后需要一次性执行：git config core.hooksPath .githooks
+# （config 不随 clone 传播,所以这个 hook 每次都会 echo 一行,静默失效时你能立刻发现。）
+
+echo "[pre-push] 前端回归闸"
+node scripts/web-test-gate.mjs || exit 1
+exit 0

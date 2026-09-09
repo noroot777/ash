@@ -241,6 +241,8 @@ npm -w server run test:handoff        # 跨机器接力
 > [!CAUTION]
 > 端到端测试会实际启动 agent CLI，消耗真实 API 额度。
 
+前端回归还有一道自动兜底：`.githooks/pre-push` 会在 push 前检查这批提交有没有碰 `web/` 或 `shared/`，碰了才跑 `npm run test:web`（约 4 分钟），没碰直接放行。`git push --no-verify` 或 `SKIP_WEB_TEST=1 git push` 可跳过；worktree 里没装依赖时它只警告不拦。这道闸要 `git config core.hooksPath .githooks`（`npm run setup` 会自动配）。
+
 ## 常见问题
 
 <details>
