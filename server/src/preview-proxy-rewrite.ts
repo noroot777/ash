@@ -47,9 +47,69 @@ export function rewritePreviewText(text: string, contentType: string, base: stri
  * 变成 ash 本尊的地址，页面却还是那份沙箱里的预览 —— 2026-09-09 用户就是这样对着
  * 「172.x.x.x:4317」的地址栏，把自己的 key 粘进了一个预览页里的登录框。改写之后地址栏
  * 始终留在 `/preview/<task>/<token>/<service>/` 底下，「我在看预览」这件事看得见。
+ *
+ * `localStorage`/`sessionStorage`/`document.cookie` 也在这张单子里，理由是**沙箱不许把应用
+ * 打死**：opaque origin 下这三个 API 一碰就抛 `SecurityError`（`indexedDB.open()` 同理），
+ * 而「开屏先读一次存储」是现代前端的标准动作（Pinia 的持久化插件、各家 SDK 的 token 恢复）。
+ * 2026-09-09 一个 Vue/Java 项目的预览就是这么卡死的：HTTP 200、标题都出来了，Pinia 初始化
+ * 抛在第一行，页面永远停在转圈——用户看到的只是「预览打不开」，控制台之外没有一点线索。
+ * 这里给它们换上一份**只活在这份文档里**的实现：应用照常读写，读到的永远是自己写的那份，
+ * 隔离没有松一寸（`allow-same-origin` 一加，预览页就直接拿到 ash 的 cookie 和 /api）。
+ *
+ * 已知的边界，别当成 bug 去「修」：① 存储不跨刷新、不跨标签页，重开就是空的；② 服务端下发
+ * 的 cookie 由代理按 `ashpv_` 前缀转发，浏览器这边看不见，页面自己写的 cookie 也只留在页面
+ * 里、不会跟着请求发出去；③ IndexedDB 在 opaque origin 里没法模拟，只能让它探测得出「没有」
+ * 而不是探测得出、一开就炸。
  */
 function previewBrowserBridge(base: string, record: PreviewRecord): string {
   return `(() => {
+    // 存储那一段单独 try 起来：它塌了也不能连累下面的地址改写（那才是预览的命脉）。
+    try {
+      const storage = () => {
+        const data = new Map();
+        const api = {
+          get length() { return data.size; },
+          key: (i) => [...data.keys()][i] ?? null,
+          getItem: (k) => data.has(String(k)) ? data.get(String(k)) : null,
+          setItem: (k, v) => { data.set(String(k), String(v)); },
+          removeItem: (k) => { data.delete(String(k)); },
+          clear: () => { data.clear(); },
+        };
+        const own = (p) => typeof p === 'string' && !(p in api) && data.has(p);
+        return new Proxy(api, {
+          get: (t, p) => own(p) ? data.get(p) : t[p],
+          set: (t, p, v) => { if (p in t) return false; data.set(String(p), String(v)); return true; },
+          has: (t, p) => p in t || own(p),
+          deleteProperty: (t, p) => { data.delete(String(p)); return true; },
+          ownKeys: () => [...data.keys()],
+          getOwnPropertyDescriptor: (t, p) => own(p)
+            ? { value: data.get(p), writable: true, enumerable: true, configurable: true }
+            : undefined,
+        });
+      };
+      for (const name of ['localStorage', 'sessionStorage']) {
+        Object.defineProperty(window, name, { configurable: true, value: storage() });
+      }
+      let jar = '';
+      Object.defineProperty(document, 'cookie', {
+        configurable: true,
+        get: () => jar,
+        set: (value) => {
+          const raw = String(value);
+          const pair = raw.split(';')[0];
+          const equals = pair.indexOf('=');
+          if (equals <= 0) return;
+          const name = pair.slice(0, equals).trim();
+          const rest = jar.split('; ').filter(c => c && c.slice(0, c.indexOf('=')) !== name);
+          const maxAge = /;\\s*max-age\\s*=\\s*(-?\\d+)/i.exec(raw);
+          const expires = /;\\s*expires\\s*=\\s*([^;]+)/i.exec(raw);
+          const gone = (maxAge && Number(maxAge[1]) <= 0) || (expires && Date.parse(expires[1]) <= Date.now());
+          jar = (gone ? rest : [...rest, name + '=' + pair.slice(equals + 1).trim()]).join('; ');
+        },
+      });
+      // 模拟不了，就让它探测得出「没有」——比探测得出、一 open 就抛 SecurityError 强。
+      Object.defineProperty(window, 'indexedDB', { configurable: true, value: undefined });
+    } catch {}
     const base = ${JSON.stringify(base)};
     const routes = ${JSON.stringify(previewAddressMap(record))};
     const origin = location.origin;

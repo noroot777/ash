@@ -41,7 +41,7 @@ writeFileSync(join(fixture, "service.cjs"), `
 const http = require('node:http');
 const {createHash} = require('node:crypto');
 const html = '<!doctype html><html><head><link rel="stylesheet" href="/style.css"></head><body><h1>Proxy test</h1><p id="module">waiting</p><p id="api">waiting</p><p id="sse">waiting</p><p id="ws">waiting</p><p id="slash">waiting</p><p id="isolation">waiting</p><a href="/nested/">Nested page</a><script type="module" src="/entry.js"></script></body></html>';
-const source = 'import message from "/chunk.js"; document.querySelector("#module").textContent=message; const slash="/"; document.querySelector("#slash").textContent=slash; fetch("/echo",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({ok:true})}).then(r=>r.json()).then(r=>document.querySelector("#api").textContent=r.body); const es=new EventSource("/events"); es.onmessage=e=>{document.querySelector("#sse").textContent=e.data;es.close()};const ws=new WebSocket("ws://"+location.host+"/socket");ws.onmessage=e=>{document.querySelector("#ws").textContent=e.data;ws.close()};try{localStorage.getItem("ash");document.querySelector("#isolation").textContent="shared"}catch{document.querySelector("#isolation").textContent="isolated"}';
+const source = 'import message from "/chunk.js"; document.querySelector("#module").textContent=message; const slash="/"; document.querySelector("#slash").textContent=slash; fetch("/echo",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({ok:true})}).then(r=>r.json()).then(r=>document.querySelector("#api").textContent=r.body); const es=new EventSource("/events"); es.onmessage=e=>{document.querySelector("#sse").textContent=e.data;es.close()};const ws=new WebSocket("ws://"+location.host+"/socket");ws.onmessage=e=>{document.querySelector("#ws").textContent=e.data;ws.close()};try{localStorage.setItem("ash-probe","1");document.querySelector("#isolation").textContent=localStorage.length===1?"shimmed":"shared"}catch{document.querySelector("#isolation").textContent="throws"}';
 const server=http.createServer((req,res)=>{
  if(req.url==='/style.css'){res.setHeader('content-type','text/css');return res.end('body { color: rgb(20, 50, 80); }');}
  if(req.url==='/entry.js'){res.setHeader('content-type','text/javascript');return res.end(source);}
@@ -218,7 +218,9 @@ try {
     const seen: unknown[][] = [];
     const context: Record<string, unknown> = {
       URL,
+      Date,
       location: { origin: base, href: base + gateway, protocol: "http:" },
+      document: {},
       history: {
         pushState: (...args: unknown[]) => seen.push(["push", ...args]),
         replaceState: (...args: unknown[]) => seen.push(["replace", ...args]),
@@ -238,6 +240,32 @@ try {
       ["push", null, "", gateway + "?project=p&task=t"],
       ["replace", null, "", gateway + "nested/"],
     ]);
+    // 沙箱不许把应用打死：opaque origin 下这几个 API 一碰就抛 SecurityError，而「开屏先读
+    // 一次存储」是标准动作（2026-09-09：一个 Vue/Java 项目的预览因此永远停在转圈）。桥给
+    // 它们换上一份只活在这份文档里的实现——应用照常读写，隔离一寸没松。
+    const local = context.localStorage as Storage;
+    const session = context.sessionStorage as Storage;
+    local.setItem("k", "v");
+    session.setItem("k", "other");
+    assert.equal(local.getItem("k"), "v");
+    assert.equal(local.getItem("nope"), null, "没写过的键是 null，不是 undefined");
+    assert.equal(session.getItem("k"), "other", "两份存储各管各的");
+    (local as unknown as Record<string, string>).token = "dot";
+    assert.equal(local.getItem("token"), "dot", "属性式写入也要落进同一份数据");
+    assert.deepEqual(Object.keys(local), ["k", "token"]);
+    assert.equal(local.length, 2);
+    assert.equal(local.key(0), "k");
+    local.removeItem("k");
+    assert.equal(local.getItem("k"), null);
+    local.clear();
+    assert.equal(local.length, 0);
+    const document = context.document as Document;
+    document.cookie = "a=1; Path=/";
+    document.cookie = "b=2";
+    assert.equal(document.cookie, "a=1; b=2", "页面自己写的 cookie 要读得回来");
+    document.cookie = "a=; Max-Age=0";
+    assert.equal(document.cookie, "b=2", "过期写法就是删除");
+    assert.equal(context.indexedDB, undefined, "模拟不了的让它探测得出「没有」");
   }
   assert.match(echo.headers.get("set-cookie") ?? "", /ashpv_.*Path=\/preview\//);
   assert.equal((await request(gateway + "redirect")).headers.get("location"), gateway + "nested/");
