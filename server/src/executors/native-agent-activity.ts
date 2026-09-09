@@ -4,7 +4,11 @@ export function childActivity(id: string, event: NativeAgentActivity): AgentEven
   return { kind: "tool", name: "Agent", nativeWork: { type: "activity", id, event } };
 }
 
-const short = (value: unknown) => (typeof value === "string" ? value : JSON.stringify(value ?? "")).slice(0, 32_000);
+const short = (value: unknown) => {
+  const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
+  const suffix = "\n…（内容已截断）";
+  return text.length > 1500 ? text.slice(0, 1500 - suffix.length) + suffix : text;
+};
 
 export class CodexChildActivity {
   private textDeltas = new Set<string>();
@@ -36,7 +40,7 @@ export class CodexChildActivity {
         if (this.thinkingDeltas.delete(key)) push({ kind: "thinking", text: "\n\n" });
         else if (text) push({ kind: "thinking", text: `${text}\n\n` });
       } else if (item?.type === "commandExecution" && (item.aggregatedOutput || item.exitCode != null)) {
-        push({ kind: "tool", name: "exec 结果", detail: short(`${item.aggregatedOutput ?? ""}\n退出码：${item.exitCode ?? "未知"}`) });
+        push({ kind: "tool", name: "exec 结果", detail: short(`退出码：${item.exitCode ?? "未知"}\n${item.aggregatedOutput ?? ""}`) });
       } else if (item?.type === "mcpToolCall" || item?.type === "dynamicToolCall") {
         const result = item.error ?? item.result ?? item.contentItems;
         if (result != null) push({ kind: "tool", name: `${item.tool} 结果`, detail: short(result) });

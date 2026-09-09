@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { NativeWorkTrace } from "./native-work.js";
 import { childActivity } from "./native-agent-activity.js";
+import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import type { AgentEvent, AgentType } from "@ash/shared";
 import { guessContextWindow } from "@ash/shared/usage";
 import { cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@ash/shared/cli-overrides";
@@ -454,8 +455,11 @@ export async function* parseClaudeStream(
   const queue: AgentEvent[] = [];
   let resolve: (() => void) | null = null;
   let finished = false;
+  const activityBuffer = new NativeActivityBuffer();
   const push = (e: AgentEvent) => {
-    queue.push(e);
+    const events = activityBuffer.push(e);
+    if (!events.length) return;
+    queue.push(...events);
     resolve?.();
     resolve = null;
   };

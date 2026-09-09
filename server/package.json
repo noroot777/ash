@@ -7,7 +7,7 @@
     "node": ">=22.16.0"
   },
   "scripts": {
-    "test:native-work": "tsx scripts/test-native-work.ts",
+    "test:native-work": "tsx scripts/test-native-work.ts && tsx scripts/test-native-activity-stream.ts && tsx scripts/test-native-upload-visibility.ts",
     "test:chat-context": "tsx scripts/test-chat-context.ts",
     "test:chat": "tsx scripts/test-chat-review.ts && tsx scripts/test-chat-context.ts && tsx scripts/test-chat.ts && tsx scripts/test-chat-execution.ts && tsx scripts/test-chat-boundary.ts && tsx scripts/test-chat-large-workspace.ts && tsx scripts/test-chat-git-metadata.ts && tsx scripts/test-chat-ash-data.ts",
     "postinstall": "node scripts/prepare-node-pty.mjs",

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { codexChildWork, codexNativeWork, nativePlanSnapshot, NativeWorkTrace } from "./native-work.js";
 import { childActivity, CodexChildActivity } from "./native-agent-activity.js";
+import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import type { AgentEvent, TokenUsage } from "@ash/shared";
 import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
 import {
@@ -74,9 +75,12 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const childEvents = new CodexChildActivity();
   const childImages = new Map<string, Set<string>>();
   const structuredErrors: string[] = [];
+  const activityBuffer = new NativeActivityBuffer();
 
   const push = (event: AgentEvent) => {
-    queue.push(event);
+    const events = activityBuffer.push(event);
+    if (!events.length) return;
+    queue.push(...events);
     wake?.();
     wake = null;
   };

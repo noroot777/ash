@@ -29,6 +29,8 @@ import { isMultiUser } from "./auth/mode.js";
 import { getUser } from "./auth/store.js";
 import { visibleTaskIds } from "./auth/visibility.js";
 import { now } from "./util.js";
+import type { AgentEvent } from "@ash/shared";
+import type { SessionTraceEvent } from "./transcript.js";
 
 /** 路径 / URL 段 → UPLOADS_DIR 下的文件名。Windows 的反斜杠也归一。 */
 export const uploadFileName = (pathOrName: string): string =>
@@ -141,6 +143,11 @@ export function noteAgentUpload(taskId: string, path: string): void {
     // 登记失败只影响别人能不能在界面上看到这张图,不该动摇这一轮的产出。
     console.warn("[ash] 附件归属登记失败:", error);
   });
+}
+
+export function noteAgentEventUpload(taskId: string, event: AgentEvent | SessionTraceEvent): void {
+  const content = event.kind === "tool" && event.nativeWork?.type === "activity" ? event.nativeWork.event : event;
+  if (content.kind === "attachment") noteAgentUpload(taskId, content.path);
 }
 
 /** 能读这个附件吗。找不到与没权限**回同一句话**(路由统一 404),不泄露文件存不存在。 */
