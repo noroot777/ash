@@ -17,6 +17,7 @@ import {
 import { useDismissable } from "../lib/useDismissable.ts";
 import { TaskPinButton } from "../task-detail/TaskPinButton.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
+import { TaskCreationBadge } from "../components/TaskOrigin.tsx";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { safeDownloadName } from "../task-detail/utils.ts";
@@ -125,6 +126,7 @@ export function TeamHeader({
     <>
       <header className="team-header">
         <span className="team-kind">团队</span>
+        <TaskCreationBadge task={task} />
         <TaskPinButton task={task} onTogglePin={onTogglePin} notify={notify} />
         <input
           value={title}

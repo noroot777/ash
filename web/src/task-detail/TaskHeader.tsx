@@ -18,6 +18,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
+import { TaskCreationBadge } from "../components/TaskOrigin.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { TaskPinButton } from "./TaskPinButton.tsx";
@@ -192,6 +193,7 @@ export function TaskHeader({
   return (
     <header className="task-detail-header">
       <span className="task-detail-kind">{task.mode === "single" ? "任务" : task.mode === "team" ? "团队" : "讨论"}</span>
+      <TaskCreationBadge task={task} />
       {task.parentId === null && <TaskPinButton task={task} onTogglePin={onTogglePin} notify={notify} />}
       {task.parentId !== null ? (
         <span className="task-detail-title is-readonly">{task.title || "未命名任务"}</span>

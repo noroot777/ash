@@ -20,7 +20,7 @@ import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { RunActivity } from "../components/RunActivity.tsx";
 import { ScheduleControl } from "../components/ScheduleControl.tsx";
-import { OriginTaskBar } from "../components/TaskOrigin.tsx";
+import { OriginTaskBar, TaskCreationBadge } from "../components/TaskOrigin.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api } from "../lib/api.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
@@ -314,6 +314,7 @@ export function DuetView({
       }} />
       <header className="duet-header">
         <span className="duet-kind">讨论</span>
+        <TaskCreationBadge task={task} />
         <TaskPinButton
           task={task}
           onTogglePin={async () => onTaskUpdated(await api.patchTask(task.id, { pinnedAt: task.pinnedAt != null ? null : Date.now() }))}

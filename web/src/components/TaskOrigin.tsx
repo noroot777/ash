@@ -1,6 +1,6 @@
 import { type MouseEvent } from "react";
 import type { Task, TaskListItem } from "@ash/shared";
-import { FileText, ChatsCircle, UsersThree, Robot, User } from "@phosphor-icons/react";
+import { FileText, ChatsCircle, UsersThree, Robot } from "@phosphor-icons/react";
 import { taskCreationLabel } from "@ash/shared/task-origin";
 import { HoverTip, useHoverTip } from "./HoverTip.tsx";
 
@@ -42,12 +42,13 @@ export function TaskModeIcon({ mode, size = 14 }: { mode: Task["mode"]; size?: n
   return <FileText size={size} aria-hidden="true" />;
 }
 
+/** 只标智能体开的任务：绝大多数任务是用户自己建的，给它们也挂一颗徽标等于没标。
+    用户/系统/来源未记录这几种仍能在 Inspector 的「创建来源」里查到。 */
 export function TaskCreationBadge({ task }: { task: TaskListItem }) {
   const origin = task.creationOrigin;
-  if (!origin) return null;
-  const Icon = origin.kind === "agent" ? Robot : origin.kind === "user" ? User : null;
-  return <span className={`task-creation-badge is-${origin.kind}`}>
-    {Icon && <Icon size={11} aria-hidden="true" />}{taskCreationLabel(origin)}
+  if (origin?.kind !== "agent") return null;
+  return <span className="task-creation-badge is-agent">
+    <Robot size={11} aria-hidden="true" />{taskCreationLabel(origin)}
   </span>;
 }
 
@@ -85,6 +86,8 @@ export function OriginTaskChip({
   );
 }
 
+/** 来源那一条：创建者徽标已经挪进各视图的标题栏，这里只留「谁派的 · 从哪来」。
+    没有来源关系、也没有派活的执行器时整条不出现，不再为「来源未记录」占一行。 */
 export function OriginTaskBar({
   task,
   allTasks,
@@ -96,14 +99,12 @@ export function OriginTaskBar({
 }) {
   const link = taskParentLink(task, allTasks);
   const origin = task.creationOrigin;
-  if (!origin && !link) return null;
   const creator = origin?.kind === "agent" ? origin : null;
+  if (!link && !creator?.executorLabel) return null;
   const relation = link ? taskParentRelation(link) : null;
   const sourceTitle = link?.task?.title || (creator?.taskId === link?.taskId ? creator?.taskTitle : null) || link?.taskId;
   return (
     <div className="task-origin-bar">
-      <TaskCreationBadge task={task} />
-      {!origin && <span>来源未记录</span>}
       {creator?.executorLabel && <span>{creator.executorLabel}</span>}
       {link && (link.task
         ? <button type="button" onClick={() => onOpen(link.taskId)}>{relation} · {sourceTitle}</button>

@@ -62,6 +62,7 @@
   outline: none;
 }
 
+/* 只有智能体创建的任务才有这颗徽标（见 TaskCreationBadge）。 */
 .task-creation-badge {
   display: inline-flex;
   align-items: center;
@@ -69,15 +70,12 @@
   flex: 0 0 auto;
   padding: 2px 5px;
   border-radius: 4px;
-  background: var(--overlay);
-  color: var(--muted);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
   font-size: 10px;
   line-height: 14px;
   white-space: nowrap;
 }
-.task-creation-badge.is-agent { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
-.task-origin-bar .task-creation-badge { color: var(--muted); overflow: visible; }
-.task-origin-bar .task-creation-badge.is-agent { color: var(--accent); }
 .task-origin-bar > button {
   min-width: 0;
   overflow: hidden;
