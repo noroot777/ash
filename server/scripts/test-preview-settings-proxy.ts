@@ -3,8 +3,8 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync,
 import { createHash } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { tmpdir, homedir } from "node:os";
+import { join, basename } from "node:path";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { once } from "node:events";
@@ -92,6 +92,20 @@ try {
   const detected = await request(projPath + "/preview/detect");
   assert.equal(detected.status, 200);
   assert((await detected.json()).services.some((s: { directory: string }) => s.directory === "apps/site"));
+  // repoPath 以 `~` 存盘是正常形态（tidyRepoPath 有意保留），检测端点必须自己展开：
+  // 不展开只会安静地扫一个不存在的相对目录，界面说「没有识别出常见服务」，而项目
+  // 健康检查（展开过）照样是绿的，用户手上一条线索都没有。
+  const homeFixture = mkdtempSync(join(homedir(), ".ash-preview-home-"));
+  try {
+    writeFileSync(join(homeFixture, "package.json"), JSON.stringify({ scripts: { dev: "vite" } }));
+    await db.update(projects).set({ repoPath: `~/${basename(homeFixture)}` }).where(eq(projects.id, "preview-project"));
+    const viaTilde = await request(projPath + "/preview/detect");
+    assert.equal(viaTilde.status, 200);
+    assert((await viaTilde.json()).services.length > 0, "repoPath 带 ~ 时同样能检测出服务");
+  } finally {
+    rmSync(homeFixture, { recursive: true, force: true });
+    await db.update(projects).set({ repoPath: fixture }).where(eq(projects.id, "preview-project"));
+  }
   assert.equal(nodeDepsAdvice(fixture, command).length, 0, "不为无关脚本深入扫描依赖");
   assert(nodeDepsAdvice(fixture, previewShell().cd("apps/site", "npm run dev")).some((s) => s.rel === "apps/site" && s.mentioned), "检测出的嵌套服务也能准备依赖");
   assert.equal(readPreview("preview-task"), null, "检测不启动进程");
