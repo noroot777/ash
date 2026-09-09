@@ -56,6 +56,16 @@ export interface ChatWorkspaceObserver {
   close(): void;
 }
 
+// 观察的时序参数。ARM：fs.watch 返回 ≠ FSEvents 流已启动——流在 libuv 的 CF 线程上异步
+// 创建，且只投递「创建之后」的事件，返回后立刻发生的写入可能整个落在启动缝里；武装窗口把
+// 这段竞态压到极小再放执行器开跑（彻底消除需要全树基线枚举，大仓库不可行，见
+// test-chat-large-workspace 的零枚举闸）。QUIET/MAX：结算不能拿单个固定延时当「事件已收全」
+// 的判据——4 路并发负载下 FSEvents 投递迟滞会超过固定 100ms（第 5 轮审查实测 3/12 漏报），
+// 改为等事件流静默，封顶防止持续变更的项目把结算拖住不放。
+const WATCH_ARM_MS = 75;
+const SETTLE_QUIET_MS = 500;
+const SETTLE_MAX_MS = 5000;
+
 // 目录观察只做「记录并如实上报」，不做中止：文件系统事件说不出一次改动是谁做的。被咨询的
 // 项目通常是一个活着的仓库——ash 自己的验收合并在写它的工作区（2026-09-08 一次 fast-forward
 // 就把三个成员的咨询齐刷刷杀掉）、别的任务在 .worktrees/ 里持续写、用户的编辑器和构建也在写。
@@ -116,13 +126,18 @@ export async function watchChatWorkspace(cwd: string): Promise<ChatWorkspaceObse
     seen.add(local.slice(0, 180));
   };
   const pending = new Set<Promise<void>>();
+  // 项目相关事件（滤掉 ash 自有/忽略树之后）每到一条就 +1：settle 的静默判据只看它。
+  // 故意不数被忽略的事件——群聊的项目常常就是 ash 仓库本身，data/ 里的写入永不停歇，
+  // 数上它们会让每次结算都拖到封顶并误报降级。
+  let activity = 0;
   try {
     watcher = watch(root, { recursive: true, persistent: false }, (_event, filename) => {
       if (closed) return;
-      if (!filename) { degrade("目录观察收到缺少路径的变更事件"); return; }
+      if (!filename) { activity++; degrade("目录观察收到缺少路径的变更事件"); return; }
       const path = resolve(root, filename.toString());
       const local = relative(root, path);
       if (!local || local.startsWith(`..${sep}`) || isAbsolute(local) || ignored(path)) return;
+      activity++;
       if (seen.has(local)) return;
       const check = (async () => { if (await changedSinceStart(path)) record(local); })().catch(() => record(local));
       pending.add(check);
@@ -132,11 +147,20 @@ export async function watchChatWorkspace(cwd: string): Promise<ChatWorkspaceObse
   } catch (error) {
     degrade("目录观察不可用", error);
   }
+  if (watcher) await delay(WATCH_ARM_MS);
   const close = () => { closed = true; watcher?.close(); };
   return {
     async settle() {
-      await delay(100);
-      while (pending.size) await Promise.all([...pending]);
+      // 等事件流静默：每有项目相关事件就重置静默窗口，连续 SETTLE_QUIET_MS 无事件才收口；
+      // 总时长封顶，封顶时事件仍在到达就如实降级——宁可披露「可能没记全」，不冒充「没有变化」。
+      const deadline = Date.now() + SETTLE_MAX_MS;
+      while (watcher && !closed) {
+        const before = activity;
+        await delay(SETTLE_QUIET_MS);
+        while (pending.size) await Promise.all([...pending]);
+        if (activity === before) break;
+        if (Date.now() >= deadline) { degrade("目录观察结算超时（变更事件仍在持续到达）"); break; }
+      }
       close();
       return { paths: [...seen], more, degraded };
     },
