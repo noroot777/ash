@@ -186,6 +186,34 @@ try {
     console.log("✓ stale base keeps the existing runtime fallback and can be accepted");
   }
   {
+    // repoPath 是带 `~` 存进库的（normalizeRepoPathForStorage 有意保留），验收链路上每个
+    // 拿它跑 git 的地方都必须自己展开：漏一个，`git -C '~/x'` 直接 fatal，catch 一吞就
+    // 变成「目标本地分支 main 不存在」，整个项目的任务都验收不了。
+    const home = join(root, "tilde-home");
+    const repo = join(home, "repo");
+    execFileSync("git", ["init", "-b", "main", repo], { stdio: "ignore" });
+    git(repo, "config", "user.name", "Branch Test");
+    git(repo, "config", "user.email", "branch@example.test");
+    commit(repo, "seed.txt");
+    await db.insert(projects).values({ id: "tilde", name: "tilde", repoPath: "~/repo", createdAt: at });
+    const realHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const task = await create("tilde");
+      const ws = await taskWorkspace(task, "~/repo");
+      commit(ws.path, "tilde.txt");
+      await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, task.id));
+      const plan = (await readBranchPlan(task.id))!.task;
+      assert.equal(plan.targetBranch, "main");
+      assert.equal(plan.blocker, null, "带 ~ 的仓库路径不能被读成「目标分支不存在」");
+      assert.equal((await acceptTask(task.id)).accepted, true);
+      assert.equal(git(repo, "show", "main:tilde.txt"), "tilde.txt");
+    } finally {
+      if (realHome === undefined) delete process.env.HOME; else process.env.HOME = realHome;
+    }
+    console.log("✓ repoPath stored with ~ resolves for the branch plan and merges on acceptance");
+  }
+  {
     const repo = await repository("serial");
     const [lead] = await createTasks([{ id: "serial-lead", projectId: "serial", title: "调度台", body: "", mode: "team", useWorktree: true, status: "idle", createdAt: at, updatedAt: at }]);
     const shared = await taskWorkspace(await row(lead.id), repo);

@@ -1,6 +1,6 @@
 import { cappedGitStdout } from "./git-exec.js";
 import { literalPathspec } from "./git-status.js";
-import { expandHome, isGitRepo, resolveTaskMergeTarget, resolveWorktreeBranchName } from "./git.js";
+import { expandHome, isGitRepo, localBranchExists, resolveTaskMergeTarget, resolveWorktreeBranchName } from "./git.js";
 import { execFileText as exec } from "./exec.js";
 const DIFF_LIMIT_BYTES = 1024 * 1024;
 
@@ -98,15 +98,6 @@ async function rangeFileDiff(
 
 function fileDiffUnavailable(path: string, origPath: string | null, reason: string, limitBytes: number): TaskFileDiffResult {
   return { available: false, path, origPath, diff: "", truncated: false, limitBytes, binary: false, reason };
-}
-
-async function localBranchExists(repo: string, branch: string): Promise<boolean> {
-  try {
-    await exec("git", ["-C", repo, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 type BranchRange =

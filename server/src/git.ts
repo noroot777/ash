@@ -490,7 +490,7 @@ async function prepareWorktreeLocked(
   // Ensure parent `<repo>/.worktrees/` exists; git itself won't auto-create it.
   mkdirSync(join(repo, ".worktrees"), { recursive: true });
   await ensureWorktreesIgnored(repo);
-  const restore = await branchExists(repo, branch);
+  const restore = await localBranchExists(repo, branch);
   const args = ["-C", repo, "worktree", "add"];
   // 这一轮的工作目录到底是**从 base 起的**，还是退回了仓库当前 HEAD。措辞要照它说话。
   let builtFromBase = false;
@@ -603,9 +603,12 @@ export function listFiles(files: string[], limit = 8): string {
   return files.length > limit ? `${head} 等 ${files.length} 个` : head;
 }
 
+// repoPath 按约定是**带 `~` 存进库**的（见 normalizeRepoPathForStorage），所以每个拿它
+// 跑 git 的函数都得自己 expandHome —— execFile 不经过 shell，`git -C '~/x'` 只会 fatal，
+// 而这里 catch 一吞就变成一句「分支不存在」，把路径没展开说成了分支没了。
 export async function localBranchExists(repo: string, branch: string): Promise<boolean> {
   try {
-    await exec("git", ["-C", repo, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
+    await exec("git", ["-C", expandHome(repo), "show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
     return true;
   } catch {
     return false;
@@ -615,7 +618,7 @@ export async function localBranchExists(repo: string, branch: string): Promise<b
 /** 当前检出的分支名（detached 时 null）。git-accept 判「目标分支在不在项目目录上」要用。 */
 export async function symbolicBranch(repo: string): Promise<string | null> {
   try {
-    const { stdout } = await exec("git", ["-C", repo, "symbolic-ref", "--quiet", "--short", "HEAD"]);
+    const { stdout } = await exec("git", ["-C", expandHome(repo), "symbolic-ref", "--quiet", "--short", "HEAD"]);
     return stdout.trim() || null;
   } catch {
     return null;
@@ -648,16 +651,6 @@ export async function listBranches(repoPath: string): Promise<{ branches: string
   } catch { /* leave [] */ }
   const current = await currentBranch(p);
   return { branches, current };
-}
-
-// Does this local branch exist? Decides restore-vs-create in prepareWorktree.
-async function branchExists(repo: string, branch: string): Promise<boolean> {
-  try {
-    await exec("git", ["-C", repo, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 // 这个名字现在还能解析成一个提交吗？分支、tag、远程分支、裸 SHA 一视同仁 —— 问的就是
