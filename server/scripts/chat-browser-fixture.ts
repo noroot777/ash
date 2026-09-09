@@ -30,8 +30,8 @@ let contextMode = "ok";
 const service = new ChatService(async (member, owner, prompt, signal, projectId, options) => {
   if (options?.purpose === "summary") {
     await delay(contextMode === "hold" ? 30000 : 300, undefined, { signal });
-    if (contextMode === "prefixed") return '整理完成。```json\n{"summary":"用户决定保留频道导航与任务状态卡；近期讨论继续保留原文。","extra":{"source":"fixture"}}\n```';
-    return contextMode === "invalid" ? "invalid" : '{"summary":"用户决定保留频道导航与任务状态卡；近期讨论继续保留原文。"}';
+    if (contextMode === "prefixed") return { text: '整理完成。```json\n{"summary":"用户决定保留频道导航与任务状态卡；近期讨论继续保留原文。","extra":{"source":"fixture"}}\n```' };
+    return { text: contextMode === "invalid" ? "invalid" : '{"summary":"用户决定保留频道导航与任务状态卡；近期讨论继续保留原文。"}' };
   }
   const text = JSON.parse(prompt.split("【本次用户消息】\n").at(-1)!) as string;
   if (text.includes("越界验证")) {
@@ -45,7 +45,7 @@ const service = new ChatService(async (member, owner, prompt, signal, projectId,
         const file = text.includes("依赖越界验证") ? join("node_modules", "pkg", "side-effect.txt") : "unexpected-side-effect.txt";
         writeFileSync(join(opts.cwd, file), "浏览器验证中的模拟越界写入");
         return { sessionId: "fixture", commandLine: "fixture", kill: () => {}, events: (async function* () {
-          yield { kind: "text" as const, text: '{"reply":"不应显示为正常咨询","task":null}' };
+          yield { kind: "text" as const, text: '{"reply":"越界写入的目录变化会随本回复附注展示。","task":null}' };
           yield { kind: "done" as const, exitStatus: 0 };
         })() };
       },
@@ -54,10 +54,10 @@ const service = new ChatService(async (member, owner, prompt, signal, projectId,
     finally { spec.factory = original; }
   }
   await delay(text.includes("等待") ? 30000 : 1200, undefined, { signal });
-  return JSON.stringify({
+  return { text: JSON.stringify({
     reply: text.includes("实现") ? "收到，我会把这项工作建成任务。进度会在这里更新。" : member.agentType === "grok" ? "建议先确认用户需求，再查看当前项目。" : member.agentType === "claude" ? "建议保留清晰的频道导航，把任务进度嵌入消息流。动效以入场和状态反馈为主。" : "建议先跑通点名唤醒，再连接任务状态。@claude 这条点名只展示，不会自动唤醒。",
     task: text.includes("实现") ? { title: "实现频道导航与任务状态卡", body: "浏览器验证用任务，不运行真实智能体。" } : null,
-  });
+  }) };
 }, async (taskId) => {
   await setTaskStatus(taskId, "running");
   await delay(5000);

@@ -12,9 +12,25 @@ import { ANONYMOUS_ACTOR, SINGLE_ACTOR, type Actor } from "../auth/context.js";
 import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { db } from "../db/index.js";
 import { agents, projects, users } from "../db/schema.js";
-import { ChatBoundaryError, readOnlyChatTool, watchChatWorkspace } from "./boundary.js";
+import { ChatBoundaryError, readOnlyChatTool, watchChatWorkspace, type ChatWorkspaceObserver } from "./boundary.js";
 
-export async function invokeChat(member: ChatMember, owner: string | null, prompt: string, signal: AbortSignal, projectId: string, options?: { purpose: "summary" }): Promise<string> {
+export interface ChatInvocation {
+  text: string;
+  /** 咨询期间观察到项目目录并发变更时的附注；无法归因，只随回复展示，不进模型上下文。 */
+  notice?: string;
+}
+
+function changeNotice({ paths, more, degraded }: { paths: string[]; more: boolean; degraded?: string }): string | undefined {
+  if (!paths.length && !degraded) return undefined;
+  // 观察器自身失效时，「没有路径」不等于「没有变化」——必须把失效本身如实附注。
+  if (!paths.length) return `⚠️ 本轮${degraded}，无法确认咨询期间项目目录是否有并发变更；写入类工具调用仍会被检查并中止。如有疑虑请检查项目。`;
+  const shown = paths.slice(0, 3).join("、");
+  const suffix = more ? " 等多处" : paths.length > 3 ? ` 等 ${paths.length} 处` : "";
+  const tail = degraded ? `另外，${degraded}，其间的变更可能未被完整记录。` : "";
+  return `⚠️ 咨询期间项目目录出现并发变更（${shown}${suffix}）。变更无法归因：可能来自其他任务、验收合并、你自己的操作，也可能是本次咨询越过了只读约定。群聊未代为撤销；如非预期请检查项目。${tail}`;
+}
+
+export async function invokeChat(member: ChatMember, owner: string | null, prompt: string, signal: AbortSignal, projectId: string, options?: { purpose: "summary" }): Promise<ChatInvocation> {
   signal.throwIfAborted();
   const scope = await executorOwnerScope(owner);
   const project = (await db.select().from(projects).where(eq(projects.id, projectId))).at(0);
@@ -43,13 +59,12 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
     throw new Error(`群聊项目的工作目录不存在：${project.repoPath}。请在项目设置里改成这台机器上真实存在的目录，再重新 @。`);
   }
   let handle: ReturnType<typeof executor.run> | undefined;
-  let guard: Awaited<ReturnType<typeof watchChatWorkspace>> | undefined;
-  let rejectViolation: (error: ChatBoundaryError) => void;
-  const violated = new Promise<never>((_resolve, reject) => { rejectViolation = reject; });
-  void violated.catch(() => {});
+  let guard: ChatWorkspaceObserver | undefined;
   const abort = () => handle?.kill();
   try {
-    guard = await watchChatWorkspace(cwd, (error) => { handle?.kill(); rejectViolation(error); });
+    // 观察者只记录变更、不中止（原因见 boundary.ts 顶部）；可归因的只读约束由下面
+    // consume 里的工具事件闸门执行。临时目录一次一清，没有可观察的项目。
+    if (!temporary) guard = await watchChatWorkspace(cwd);
     signal.throwIfAborted();
     handle = executor.run({
       cwd,
@@ -73,7 +88,8 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
       if (exitStatus !== 0) throw new Error(`智能体未正常结束（${exitStatus ?? "无退出状态"}），请重新 @ 重试。`);
       return text;
     };
-    return await Promise.race([consume(), violated]);
+    const text = await consume();
+    return { text, notice: guard ? changeNotice(await guard.settle()) : undefined };
   } finally {
     signal.removeEventListener("abort", abort);
     process.removeListener("exit", abort);
@@ -81,13 +97,8 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
       handle?.kill();
       await handle?.cleanup?.();
     } finally {
-      try {
-        const violation = await guard?.finish();
-        if (violation) throw violation;
-      } finally {
-        guard?.close();
-        if (temporary) await rm(cwd, { recursive: true, force: true });
-      }
+      guard?.close();
+      if (temporary) await rm(cwd, { recursive: true, force: true });
     }
   }
 }

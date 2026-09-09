@@ -67,8 +67,8 @@ const service = new ChatService(async (member, _owner, prompt, signal) => {
   });
   await delay(10);
   const request = JSON.parse(prompt.split("【本次用户消息】\n").at(-1)!) as string;
-  if (request.includes("格式错误")) return "not json";
-  return JSON.stringify({ reply: "收到。@claude 不会被我的回复唤醒。", task: request.includes("实现功能") ? { title: "实现聊天功能", body: "实现用户明确要求的聊天功能并运行测试。" } : null });
+  if (request.includes("格式错误")) return { text: "not json" };
+  return { text: JSON.stringify({ reply: "收到。@claude 不会被我的回复唤醒。", task: request.includes("实现功能") ? { title: "实现聊天功能", body: "实现用户明确要求的聊天功能并运行测试。" } : null }) };
 }, async (taskId) => { started.push(taskId); if (failStart) throw new Error("fixture 启动拒绝"); });
 const app = new Hono();
 const testActors = new Map<string, Parameters<typeof setActor>[1]>();

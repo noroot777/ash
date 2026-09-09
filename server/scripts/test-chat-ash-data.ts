@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import type { AgentEvent } from "@ash/shared";
 import type { ChatMember } from "@ash/shared/chat";
 
@@ -25,7 +25,6 @@ const { projects } = await import("../src/db/schema.js");
 const { setInstanceMode } = await import("../src/auth/mode.js");
 const { CLI_SPEC_BY_KEY } = await import("../src/executors/catalog/index.js");
 const { invokeChat } = await import("../src/chat/execution.js");
-const { ChatBoundaryError } = await import("../src/chat/boundary.js");
 await ensureSchema();
 await setInstanceMode("single", stage);
 await db.insert(projects).values({ id: "self", name: "ash 自己", repoPath: projectDir, createdAt: new Date().toISOString() });
@@ -62,14 +61,17 @@ try {
     }
   };
   const reply = await invoke();
-  assert.deepEqual(JSON.parse(reply), { reply: "只读咨询", task: null }, "ash 自己的 data/ 并发写不该中止咨询");
+  assert.deepEqual(JSON.parse(reply.text), { reply: "只读咨询", task: null }, "ash 自己的 data/ 并发写不该中止咨询");
+  assert.equal(reply.notice, undefined, "ash 自己的 data/ 并发写也不该附注");
   console.log(`chat ash data: ${ashWrites.length} 处 ash 自身写入均未误判`);
 
   for (const file of [source, join(projectDir, "data.txt"), join(projectDir, "data-report.md")]) {
     mutate = () => writeFileSync(file, "unexpected change");
-    await assert.rejects(invoke(), ChatBoundaryError, `${file} 仍须告警`);
+    const result = await invoke();
+    assert.ok(result.text.includes("只读咨询"), `${file} 的回复不得作废`);
+    assert.match(result.notice ?? "", new RegExp(basename(file).replace(/\./gu, "\\.")), `${file} 仍须如实附注`);
   }
-  console.log("chat ash data: 项目文件与 data 同前缀的兄弟文件仍照常告警");
+  console.log("chat ash data: 项目文件与 data 同前缀的兄弟文件仍照常附注");
 } finally {
   CLI_SPEC_BY_KEY.codex.factory = originalFactory;
   dbClient.close();

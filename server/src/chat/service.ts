@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { ChatMember, ChatMessage, ChatRoom } from "@ash/shared/chat";
 import { isChatClearCommand, mentionedMembers } from "@ash/shared/chat";
 import { db } from "../db/index.js";
@@ -16,7 +16,14 @@ import type { ChatContextPolicy } from "./context-format.js";
 export type RoomRow = typeof chatRooms.$inferSelect;
 type MessageRow = typeof chatMessages.$inferSelect;
 export const toRoom = (row: RoomRow): ChatRoom => ({ id: row.id, projectId: row.projectId, name: row.name, members: JSON.parse(row.members), createdAt: row.createdAt });
-export const toMessage = ({ context: _context, modelReply: _modelReply, ...row }: MessageRow): ChatMessage => ({ ...row, role: row.role as ChatMessage["role"], status: row.status as ChatMessage["status"], mentions: JSON.parse(row.mentions) });
+export const toMessage = ({ context: _context, modelReply: _modelReply, notice: _notice, ...row }: MessageRow): ChatMessage => ({ ...row, role: row.role as ChatMessage["role"], status: row.status as ChatMessage["status"], mentions: JSON.parse(row.mentions) });
+
+// stop()/recover() 用固定文案覆盖 body 时，把已持久化的目录附注（chat_messages.notice，
+// invoke 一返回就落库）拼回正文。附注是「项目可能被并发改动/观察失效」的安全信息，不能随
+// 覆盖消失；而崩溃/重启后旧进程的闭包已不存在，唯一来源就是这个列（审查第 4 轮复现：
+// task.created 时点 SIGKILL 旧进程，新进程 recover() 曾把附注连同 running 正文一起抹掉）。
+const withStoredNotice = (text: string) =>
+  sql`${text} || CASE WHEN ${chatMessages.notice} IS NULL THEN ${""} ELSE ${"\n\n"} || ${chatMessages.notice} END`;
 
 export async function roomMessages(roomId: string) {
   const rows = await db.select().from(chatMessages).where(eq(chatMessages.roomId, roomId)).orderBy(desc(chatMessages.createdAt), desc(chatMessages.id)).limit(500);
@@ -36,7 +43,7 @@ export class ChatService {
   }
 
   async recover() {
-    await db.update(chatMessages).set({ status: "stopped", body: "服务重启，回复已中断。请重新 @ 该成员继续。", context: null })
+    await db.update(chatMessages).set({ status: "stopped", body: withStoredNotice("服务重启，回复已中断。请重新 @ 该成员继续。"), context: null })
       .where(inArray(chatMessages.status, ["queued", "running"]));
     await this.contexts.recover();
   }
@@ -77,7 +84,7 @@ export class ChatService {
     this.stopping.add(roomId);
     try {
       const body = "你已停止这次回复。再次 @ 才会继续；已创建的任务可在任务卡中管理。";
-      const stopped = await db.update(chatMessages).set({ status: "stopped", body, context: null })
+      const stopped = await db.update(chatMessages).set({ status: "stopped", body: withStoredNotice(body), context: null })
         .where(and(eq(chatMessages.roomId, roomId), inArray(chatMessages.status, ["queued", "running"]))).returning({ id: chatMessages.id });
       const contextStopped = this.contexts.stop(roomId);
       for (const message of stopped) this.active.get(message.id)?.abort.abort(new Error(body));
@@ -112,6 +119,24 @@ export class ChatService {
 
   private async reply(message: MessageRow, abort: AbortController) {
     const timer = setTimeout(() => abort.abort(new Error("回复超过五分钟，已停止。请重新 @ 重试。")), 300000);
+    // 目录观察附注与结算结果正交：只要 invoke 已经返回（观察结果已取得），无论后面是
+    // 解析失败、任务创建/启动失败、停止还是进程崩溃后重启，终态正文都必须带上附注——
+    // 这些失败回合恰恰是用户最需要知道项目可能被改动/观察失效的时候。所以 notice 一
+    // 取得就写进 chat_messages.notice 持久列（跨进程的唯一来源），本回合内的终态写入
+    // 用闭包值拼接（与列值相同）。附注仍不进 modelReply（上下文取 modelReply，混入会
+    // 被智能体当对话内容复读）。
+    let notice: string | undefined;
+    const withNotice = (text: string) => notice ? `${text}\n\n${notice}` : text;
+    // 停止竞态的残余窗口：stop() 在 notice 落列之前就把本消息覆盖成停止文案（此时列还是
+    // NULL，withStoredNotice 拼不到），随后本轮的终态更新命中 0 行。已取得的附注不能跟着
+    // 消失——补写在既有文案之后；body 等值条件保证并发下只补一次、不覆盖别人的新写入。
+    const preserveNotice = async () => {
+      if (!notice) return;
+      const current = (await db.select().from(chatMessages).where(eq(chatMessages.id, message.id))).at(0);
+      if (!current || current.status !== "stopped" || current.body.includes(notice)) return;
+      await db.update(chatMessages).set({ body: `${current.body}\n\n${notice}` })
+        .where(and(eq(chatMessages.id, message.id), eq(chatMessages.body, current.body)));
+    };
     try {
       const claimed = await db.update(chatMessages).set({ status: "running" })
         .where(and(eq(chatMessages.id, message.id), eq(chatMessages.status, "queued"))).returning();
@@ -122,7 +147,18 @@ export class ChatService {
       const context = JSON.parse(message.context) as { prompt?: string; cutoff: number; tail?: string[]; source: string; member: ChatMember };
       const member = context.member;
       const prompt = context.prompt ?? await this.contexts.prepare(room, member, context.cutoff, context.source, abort.signal, context.tail);
-      const result = parseChatReply(await this.invoke(member, room.ownerUserId, prompt, abort.signal, room.projectId));
+      const invoked = await this.invoke(member, room.ownerUserId, prompt, abort.signal, room.projectId);
+      notice = invoked.notice;
+      // 落列必须和「补 stopped 正文」是同一条 UPDATE：stop() 可能已在 notice 落列之前把本消息
+      // 覆盖成不带附注的停止文案（那时列还是 NULL，withStoredNotice 拼不到）。若分两步写、
+      // 中间进程崩溃，preserveNotice 的闭包消失，而 recover() 只处理 queued/running——附注就
+      // 永久藏在列里、正文却不可见（toMessage 剥 notice 列，页面只显示 body）。原子写让
+      // 「列已落 ⇒ 终态正文可见」在任何崩溃时点都成立；instr 判重保证与 preserveNotice 幂等。
+      if (notice) await db.update(chatMessages).set({
+        notice,
+        body: sql`CASE WHEN ${chatMessages.status} = ${"stopped"} AND ${chatMessages.body} IS NOT NULL AND instr(${chatMessages.body}, ${notice}) = 0 THEN ${chatMessages.body} || ${"\n\n"} || ${notice} ELSE ${chatMessages.body} END`,
+      }).where(eq(chatMessages.id, message.id));
+      const result = parseChatReply(invoked.text);
       abort.signal.throwIfAborted();
       let taskToStart: string | null = null;
       if (result.task) {
@@ -143,18 +179,20 @@ export class ChatService {
         abort.signal.throwIfAborted();
         taskToStart = taskId;
       }
-      const settled = await db.update(chatMessages).set({ body: result.reply, modelReply: result.reply, status: "done", context: null })
+      const settled = await db.update(chatMessages).set({ body: withNotice(result.reply), modelReply: result.reply, status: "done", context: null })
         .where(and(eq(chatMessages.id, message.id), eq(chatMessages.status, "running"))).returning();
-      if (taskToStart && settled.length && !abort.signal.aborted) {
+      if (!settled.length) { await preserveNotice(); return; }
+      if (taskToStart && !abort.signal.aborted) {
         void this.startTask(taskToStart).catch(async (error) => {
-          await db.update(chatMessages).set({ status: "failed", body: `任务已创建，但启动失败：${error instanceof Error ? error.message : String(error)}。请打开任务重试。` }).where(eq(chatMessages.id, message.id));
+          await db.update(chatMessages).set({ status: "failed", body: withNotice(`任务已创建，但启动失败：${error instanceof Error ? error.message : String(error)}。请打开任务重试。`) }).where(eq(chatMessages.id, message.id));
         });
       }
-      if (settled.length && !abort.signal.aborted) return member;
+      if (!abort.signal.aborted) return member;
     } catch (error) {
       const boundary = error instanceof ChatBoundaryError;
-      await db.update(chatMessages).set({ status: boundary ? "failed" : abort.signal.aborted ? "stopped" : "failed", context: null, body: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) })
-        .where(and(eq(chatMessages.id, message.id), inArray(chatMessages.status, boundary ? ["running", "stopped"] : ["running"])));
+      const updated = await db.update(chatMessages).set({ status: boundary ? "failed" : abort.signal.aborted ? "stopped" : "failed", context: null, body: withNotice(error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500)) })
+        .where(and(eq(chatMessages.id, message.id), inArray(chatMessages.status, boundary ? ["running", "stopped"] : ["running"]))).returning({ id: chatMessages.id });
+      if (!updated.length) await preserveNotice();
     } finally {
       clearTimeout(timer);
     }

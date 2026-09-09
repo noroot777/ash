@@ -42,7 +42,7 @@ export function ChatMembers({ initial, initialName, onSave, onCancel, creating =
     <div className="chat-editor-heading"><div><small>让合适的人参与</small><h2>{creating ? "创建一个聊天空间" : "群聊设置"}</h2></div><button type="button" aria-label="关闭成员配置" onClick={onCancel}><X size={20} /></button></div>
     <p>选择智能体、模型与智能水平。只有你明确 @ 的成员才会收到会话并回复；<strong>@all（或 @所有人）一次唤醒全部成员</strong>，所以成员名不能叫 all 或所有人。</p>
     <p>所有已注册智能体均可参与。被你 @ 后可查看当前项目、使用工具辅助回答；修改代码等执行工作需你明确委派，再创建任务。</p>
-    <p>检测到文件变化或无法确认只读的工具时，会中止咨询并保留警告；可能已发生的改动不会自动撤销。</p>
+    <p>写入或无法确认只读的工具调用会中止咨询并保留警告；咨询期间项目目录的并发变化不会中止回复，只随回复附注展示。已发生的改动都不会自动撤销。</p>
     <label className="chat-name-field">群聊名称<input maxLength={80} value={name} onChange={(event) => setName(event.target.value)} /></label>
     <div className="chat-member-fields">{members.map((member, index) => <div className="chat-member-field" key={member.id}>
       <span className={`chat-avatar tone-${index % 4}`}>{member.name.slice(0, 1).toUpperCase()}</span>

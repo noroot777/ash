@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import type { AgentEvent } from "@ash/shared";
@@ -79,7 +79,8 @@ try {
   assert.notEqual(lstatSync(linkedIndex, { bigint: true }).ctimeNs, indexStamp, "真实 git status 必须实际刷新索引，不能空跑正例");
   assert.notDeepEqual(readFileSync(linkedIndex), indexBefore, "索引缓存内容应被实际刷新");
   if ("error" in settled) throw settled.error;
-  assert.deepEqual(JSON.parse(settled.result), { reply: "只读咨询", task: null });
+  assert.deepEqual(JSON.parse(settled.result.text), { reply: "只读咨询", task: null });
+  assert.equal(settled.result.notice, undefined, "linked worktree 的索引刷新不该附注");
   assert.equal(readFileSync(join(repo, "source.txt"), "utf8"), "unchanged\n");
   console.log(`chat git metadata: ${statusRuns} 次 linked worktree 只读 git status 实际刷新索引，主仓咨询仍成功`);
 
@@ -93,7 +94,11 @@ try {
     join(repo, ".git", "refs", "heads", "main"), join(repo, ".git", "logs", "HEAD"),
   ].map((file) => { let before: Buffer | undefined; try { before = readFileSync(file); } catch {} return { file, before }; });
   mutate = () => { for (const { file } of gitWrites) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, "git 记账"); } };
-  try { await assert.doesNotReject(invoke(), "git 元数据写入不应中止咨询"); }
+  try {
+    const metadata = await invoke();
+    assert.ok(metadata.text.includes("只读咨询"), "git 元数据写入不应中止咨询");
+    assert.equal(metadata.notice, undefined, "git 元数据写入不该附注");
+  }
   finally {
     for (const { file, before } of gitWrites) {
       if (before) writeFileSync(file, before);
@@ -113,14 +118,18 @@ try {
     let before: Buffer | undefined;
     try { before = readFileSync(file); } catch {}
     mutate = () => writeFileSync(file, "unexpected change");
-    try { await assert.rejects(invoke(), ChatBoundaryError, `${path} 仍须告警`); }
+    try {
+      const result = await invoke();
+      assert.ok(result.text.includes("只读咨询"), `${path} 的回复不得作废`);
+      assert.match(result.notice ?? "", new RegExp(basename(path).replace(/\./gu, "\\.")), `${path} 仍须附注`);
+    }
     finally {
       if (before) writeFileSync(file, before);
       else rmSync(file, { force: true });
     }
   }
   assert.equal(git(repo, "status", "--short", "--untracked-files=no"), "");
-  console.log("chat git metadata: 豁免只到 .git 边界为止；源码、依赖、.gitignore 及同名普通文件仍告警");
+  console.log("chat git metadata: 豁免只到 .git 边界为止；源码、依赖、.gitignore 及同名普通文件的变更仍如实附注");
 } finally {
   release?.();
   CLI_SPEC_BY_KEY.codex.factory = originalFactory;

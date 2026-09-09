@@ -21,7 +21,10 @@ export async function runServerFixture(script, check) {
   process.once("SIGTERM", stop);
   try {
     const fixture = await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`Fixture startup timed out\n${output}`)), 60_000);
+      // 启动超时要按最慢的真机定：Windows 真机（192.168.1.187）上 branch-acceptance 的
+      // fixture 光初始化就要 ~85s（十几组 git init/commit/worktree 子进程 + Defender 扫描），
+      // 60s 会让 npm run build/restart 在那台机器上固定失败；macOS 上几秒就绪，不受影响。
+      const timer = setTimeout(() => reject(new Error(`Fixture startup timed out\n${output}`)), 240_000);
       let buffer = "";
       child.once("error", error => { clearTimeout(timer); reject(error); });
       child.once("exit", code => { clearTimeout(timer); reject(new Error(`Fixture exited ${code}\n${output}`)); });
