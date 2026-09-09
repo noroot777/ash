@@ -31,6 +31,14 @@
   width: min(850px, calc(100vw - 32px));
 }
 
+/* 「选中」是键盘上下或单击定下来的状态，鼠标经过不是。指针划过时给底色——哪怕比选中态
+   更淡——用户还是会把它读成选中，一路划过去就分不清回车到底会打开哪一行（用户 2026-09-10
+   指出两次）。所以整个面板里同一时刻只有 aria-selected 那一行有底色：结果列、/ 命令、
+   选项目、选类型、Git 选项目全算在内，它们都是上下键在走的列表。「这行能点」由指针形状交代。 */
+.command-palette .ui-selectable:hover:not([aria-selected="true"]) {
+  background: transparent;
+}
+
 .palette-input {
   display: flex;
   height: 52px;
@@ -80,13 +88,6 @@
   min-height: 0;
   overflow-y: auto;
   padding: 5px;
-}
-
-/* 选中是键盘/单击定下来的状态，鼠标经过只是「指针在这儿」。全局那两档只差 2% 亮度，
-   在这份一屏几十行的列表里就分不出哪一行才是回车会打开的那行 —— 面板里把 hover 压淡，
-   把对比让给选中态。 */
-.palette-results .ui-selectable:hover:not([aria-selected="true"]) {
-  background: color-mix(in lch, var(--hover-bg) 45%, transparent);
 }
 
 .has-preview .palette-results {

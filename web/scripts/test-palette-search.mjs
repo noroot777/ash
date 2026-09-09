@@ -64,10 +64,15 @@ try {
   // block:"nearest" 只保证选中行整个可见，不会为了露出标题多滚一截。
   assert.ok(await results.evaluate((node) => node.scrollTop) < 60, "一路退回第一行时列表也该回到顶部");
 
-  // ── 2. 鼠标划过不改选中 ──────────────────────────────────────────────
+  // ── 2. 鼠标划过不改选中，也不给任何「像选中」的底色 ────────────────────
   const rowAt = (index) => page.locator(`.palette-results [data-palette-index="${index}"]`);
+  const background = (index) => rowAt(index).evaluate((node) => getComputedStyle(node).backgroundColor);
+  const idle = await background(5);
   await rowAt(3).hover();
   assert.equal(await selectedIndex(), "0", "指针经过某一行不代表用户在挑它，选中态不该跟着鼠标跑");
+  // 淡一点的底色也不行：划过去一路点亮，用户照样分不清回车会打开哪一行。
+  assert.equal(await background(3), idle, "鼠标悬停的那行不该有任何底色，跟没碰过的行一模一样");
+  assert.notEqual(await background(0), idle, "真正选中的那行才有底色");
 
   // ── 3. 搜索结果：单击只选中，双击才打开 ──────────────────────────────
   // 相关度档里同档位按更新时间倒序，所以第 4 行（索引 3）是标题档里第 4 新的 hit-16。
@@ -109,6 +114,30 @@ try {
   assert.deepEqual(await labels(), ["按更新时间"]);
   assert.equal(await selectedIndex(), "0", "换档后列表整个重排，选中回到第一行");
   assert.equal(await page.evaluate(() => document.activeElement?.tagName), "INPUT", "点开关不该把焦点从输入框拿走");
+
+  // ── 5. /scope 这类选择步骤同一套规矩 ──────────────────────────────────
+  // 它们跟结果列长得一样、也归上下键管，hover 在那儿点亮一行同样是在冒充选中。
+  await page.locator(".palette-input input").fill("/scope");
+  await page.keyboard.press("Enter");
+  await page.locator('.palette-label:text-matches("选择项目")').waitFor();
+  const stepRow = (index) => page.locator(`.command-palette [data-palette-index="${index}"]`);
+  await stepRow(1).hover();
+  assert.equal(
+    await stepRow(1).evaluate((node) => getComputedStyle(node).backgroundColor),
+    "rgba(0, 0, 0, 0)",
+    "选项目这一步，鼠标悬停的行同样不该有底色",
+  );
+  assert.equal(
+    await page.locator('.command-palette [aria-selected="true"]').getAttribute("data-palette-index"),
+    "0",
+    "选中仍停在键盘定下的第一行",
+  );
+  await page.keyboard.press("ArrowDown");
+  assert.equal(
+    await page.locator('.command-palette [aria-selected="true"]').getAttribute("data-palette-index"),
+    "1",
+    "上下键照常走",
+  );
 
   console.log("palette search tests passed");
 } finally {
