@@ -11,15 +11,19 @@ import { createServer } from "vite";
 // busy、成功消息、错误全跟着组件没了。请求其实还在飞、服务端照旧在跑，用户看到的却是
 // 「整个过程被打断」，重新点开浮层更是一点痕迹都没有。
 //
-// 判据四条：
+// 判据六条：
 //   ① 操作在途时，点浮层外面**不收起**（那几秒的点击九成是手滑）；
 //   ② 用 Esc 主动收起来之后，胶囊接着转圈——「我停不下来的那件事还在跑」得留在界面上；
 //   ③ 结果落定时，浮层开着就显示在浮层里、关着就补一句 toast，成功失败都不许无声无息；
-//   ④ **切到别的项目也算「点了别处」**：胶囊跟着当前项目卸载，旧项目的操作照样得有人认领。
+//   ④ **切到别的项目也算「点了别处」**：胶囊跟着当前项目卸载，旧项目的操作照样得有人认领；
+//   ⑤⑥ 写之前发出的那趟读，**成功也好失败也罢**，回来晚了都不许再改面板。
 //
 // ④ 守的是**播报口挂在哪一层**：现在它在 WorkspaceShell（`useProjectGitAnnouncer`），
 // 谁的操作落定都听得见。哪天有人图就近把它搬回分支胶囊里、写成「只管我这个项目」，这条
 // 就会红——那正是搬回去之后会丢的东西。
+//
+// ⑤⑥ 守的是**跨浮层缓存的代价**：缓存让按钮在后台那趟 GET 落地之前就可点，于是「读发在
+// 写之前、回来在写之后」成了日常时序。scm 面板栽过同一道题（`test-scm-race.mjs`）。
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
@@ -128,8 +132,31 @@ try {
   assert.match(await current.innerText(), /feature/, "写之前发出的那趟 GET 不许把 checkout 结果盖回 main");
   assert.match(await panel.locator(".project-git-panel__branch b").innerText(), /feature/, "浮层顶上那行也得是切过去的分支");
 
+  // ── ⑥ 过期的读**失败**了，同样不许改写刚做成的那件事 ─────────────────
+  // 跟 ⑤ 是同一条竞态的另一半。只拦成功那一路的话，剩下的失败一路照样能把「已切换到
+  // main」改写成一句读取错误——用户刚做成的事，转眼被一条过期的读说成出错了；而且面板
+  // 里 error 一非空，成功消息就被顶掉不显示，看上去就是「切分支失败了」。
+  await page.keyboard.press("Escape");
+  await until(async () => (await panel.count()) === 0, "先把浮层收起来");
+  await page.evaluate(() => window.__holdNextGet(true));
+  await pill.click();
+  await panel.waitFor();
+  await until(async () => page.evaluate(() => window.__heldGetArrived()), "被扣住的那趟 GET 到达");
+
+  await page.getByRole("button", { name: /^main/ }).click();
+  await until(
+    async () => /已切换到 main/.test(await panel.locator(".project-git-panel__ok").innerText().catch(() => "")),
+    "checkout 落定",
+  );
+
+  await page.evaluate(() => window.__releaseGet());
+  await page.waitForTimeout(400);
+  assert.equal(await panel.locator(".project-git-panel__error").count(), 0, "写之前发出的那趟读失败了，不许在面板上说话");
+  assert.match(await panel.locator(".project-git-panel__ok").innerText(), /已切换到 main/, "成功消息不许被过期读的失败顶掉");
+  assert.match(await panel.locator(".project-git-branch.is-current").innerText(), /main/, "当前分支仍是刚切过去的那条");
+
   // ── 失败一路：浮层关着时同样得说话，而且留住让人看 ──────────────────
-  // ⑤ 结束时浮层还开着，直接接着点 fetch。
+  // ⑥ 结束时浮层还开着，直接接着点 fetch。
   await page.evaluate(() => window.__failNext());
   await page.getByRole("button", { name: "更新远端信息（fetch --prune）" }).click();
   await running.waitFor();

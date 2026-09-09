@@ -47,14 +47,16 @@ const heads: Record<string, string> = { p1: "main", p2: "release" };
 
 let releaseFetch: (() => void) | null = null;
 let fetchFails = false;
-// 扣住下一趟 GET：复现「读发在写之前、回来在写之后」那条时序。
+// 扣住下一趟 GET：复现「读发在写之前、回来在写之后」那条时序。放行时可以让它成功，也可以
+// 让它失败 —— 过期的读**两种结局都不许再改面板**，所以两种都得能构造出来。
 let holdNextGet = false;
 let heldGetArrived = false;
+let heldGetFails = false;
 let releaseGet: (() => void) | null = null;
 const win = window as unknown as Record<string, unknown>;
 win.__release = () => releaseFetch?.();
 win.__failNext = () => { fetchFails = true; };
-win.__holdNextGet = () => { holdNextGet = true; heldGetArrived = false; };
+win.__holdNextGet = (fail = false) => { holdNextGet = true; heldGetArrived = false; heldGetFails = fail; };
 win.__heldGetArrived = () => heldGetArrived;
 win.__releaseGet = () => releaseGet?.();
 
@@ -70,9 +72,11 @@ window.fetch = async (input: RequestInfo | URL): Promise<Response> => {
     // 快照定格在**请求到达的那一刻** —— 这正是「过期响应」的定义。
     const snapshot = stateOf(project, heads[project]);
     if (holdNextGet) {
+      const fails = heldGetFails;
       holdNextGet = false;
       heldGetArrived = true;
       await new Promise<void>((resolve) => { releaseGet = resolve; });
+      if (fails) return reply({ error: "过期的那趟读失败了" }, 500);
     }
     return reply(snapshot);
   }

@@ -46,16 +46,25 @@ export function useProjectGit(projectId: string | null, enabled: boolean): Proje
     // 之前就可点，用户完全来得及在这几百毫秒里切一次分支。判据见 `putProjectGitState`。
     const epoch = projectGitEpoch(projectId);
     let alive = true;
+    // 这趟读还说不说得上话：组件还在，且这期间没人写过。
+    //
+    // **成功和失败都得过这道闸**：写之前发出的读，回来晚了一律不许再改面板。只拦成功那一
+    // 路的话，剩下的失败一路照样能把「已切换到 feature」改写成一句读取错误——用户刚做成的
+    // 事，转眼被一条过期的读说成出错了（而且 `error` 一非空，成功消息就被顶掉不显示）。
+    const speaksForNow = () => alive && epoch === projectGitEpoch(projectId);
     setLoading(true);
     api.projectGit(projectId)
       .then((next) => {
-        if (!alive) return;
+        if (!speaksForNow()) return;
         putProjectGitState(projectId, next, epoch);
         setLoadError(null);
       })
       .catch((reason) => {
-        if (alive) setLoadError(reason instanceof Error ? reason.message : "读取 Git 状态失败");
+        if (!speaksForNow()) return;
+        setLoadError(reason instanceof Error ? reason.message : "读取 Git 状态失败");
       })
+      // loading 说的是「我这趟读还在飞」，跟结果算不算数是两回事：过期的读也得把自己那盏灯
+      // 熄了，只看 alive。挂着不熄的话，清单为空时会一直停在「正在读取…」。
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [enabled, projectId, version]);
