@@ -149,7 +149,15 @@ export class ChatService {
       const prompt = context.prompt ?? await this.contexts.prepare(room, member, context.cutoff, context.source, abort.signal, context.tail);
       const invoked = await this.invoke(member, room.ownerUserId, prompt, abort.signal, room.projectId);
       notice = invoked.notice;
-      if (notice) await db.update(chatMessages).set({ notice }).where(eq(chatMessages.id, message.id));
+      // 落列必须和「补 stopped 正文」是同一条 UPDATE：stop() 可能已在 notice 落列之前把本消息
+      // 覆盖成不带附注的停止文案（那时列还是 NULL，withStoredNotice 拼不到）。若分两步写、
+      // 中间进程崩溃，preserveNotice 的闭包消失，而 recover() 只处理 queued/running——附注就
+      // 永久藏在列里、正文却不可见（toMessage 剥 notice 列，页面只显示 body）。原子写让
+      // 「列已落 ⇒ 终态正文可见」在任何崩溃时点都成立；instr 判重保证与 preserveNotice 幂等。
+      if (notice) await db.update(chatMessages).set({
+        notice,
+        body: sql`CASE WHEN ${chatMessages.status} = ${"stopped"} AND ${chatMessages.body} IS NOT NULL AND instr(${chatMessages.body}, ${notice}) = 0 THEN ${chatMessages.body} || ${"\n\n"} || ${notice} ELSE ${chatMessages.body} END`,
+      }).where(eq(chatMessages.id, message.id));
       const result = parseChatReply(invoked.text);
       abort.signal.throwIfAborted();
       let taskToStart: string | null = null;
