@@ -141,7 +141,7 @@
   height: 16px;
 }
 
-.task-subagents-icon--populated {
+.inspector-rail__tab:not(.is-active):not(:hover) .task-subagents-icon--populated {
   color: color-mix(in srgb, var(--accent) 65%, var(--muted));
 }
 

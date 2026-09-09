@@ -26,6 +26,7 @@ import { QuestionCard } from "../task-detail/QuestionCard.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
+import { useSubagentInspectors } from "../task-detail/useSubagentInspectors.tsx";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
 import {
   attachmentsFromPaths,
@@ -360,6 +361,14 @@ export function TeamView({
   const delegatingRef = useRef(new Set<string>());
   const { indicatorForTask, markTaskRead } = useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
+  const nativeWork = {
+    items: conversation.items,
+    status: task.status,
+    loading: conversation.refreshing,
+    error: conversation.error ?? conversation.traceError,
+    onRetry: conversation.refetch,
+  };
+  const inspectors = useSubagentInspectors(TEAM_INSPECTORS, nativeWork);
   const workers = useMemo(() => workersOf(allTasks, task.id), [allTasks, task.id]);
   const waiting = useMemo(() => waitingWorkers(workers), [workers]);
   const workerLiveLines = useWorkerLiveLines(task.id, workers);
@@ -534,9 +543,9 @@ export function TeamView({
   return (
     <InspectorHost
       contextKey={`team:${task.id}`}
-      descriptors={TEAM_INSPECTORS}
+      descriptors={inspectors}
       context={{
-        nativeWork: { items: conversation.items, status: task.status, loading: conversation.refreshing, error: conversation.error ?? conversation.traceError, onRetry: conversation.refetch },
+        nativeWork,
         task,
         workers,
         groups: teamGroups,
