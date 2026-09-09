@@ -296,20 +296,27 @@ export interface PreviewUrl {
   lent: boolean;
 }
 
-const URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::(\d{2,5}))?[^\s'"]*/gi;
-
 /**
- * 地址尾巴上粘着的标点。日志是写给人看的散文，`[dev] …，/api 打到 http://127.0.0.1:4317。`
- * 这种「一句话里嵌一个地址」的写法会把句号一并收进来 —— URL_RE 认到「空白或引号为止」，
- * 而句号既不是空白也不是引号，全角的更躲不开。
+ * 日志里印出来的本机地址。
  *
- * 坏法跟 ANSI 那条不一样，更响：带标点的地址会原样存进 preview.json，用户点开预览时
- * `new URL(service.url)` 当场抛，Hono 兜底成一句 **Internal Server Error** —— 服务好好地
- * 跑着，用户只看到一句英文报错，日志里也没有一行说得清是哪一步坏的。
+ * 地址体只收 **URI 里合法的那些 ASCII 字符**（RFC 3986 的 unreserved + reserved + `%`，
+ * 再去掉日志里常用来包地址的引号）。这不是洁癖，是那条「一句话里嵌一个地址」的散文写法
+ * 逼出来的：`[dev] …，/api 打到 http://127.0.0.1:4317。` —— 早先的 `[^\s'"]*` 认到「空白
+ * 或引号为止」，句号既不是空白也不是引号，于是被当成地址的一部分收进来，原样存进
+ * preview.json；用户点开预览时 `new URL(service.url)` 当场抛（端口成了 `4317。`），Hono
+ * 兜底成一句 **Internal Server Error**：服务好好地跑着，报错却什么都没说。
  *
- * 所以只保留 URL 末尾真正可能出现的字符，其余从尾巴上一路剥掉。
+ * 收窄字符集而不是「事后把尾巴上的标点剥掉」，因为剥不得：`.`、`?`、`)` 在 URL 末尾都是
+ * 合法的（`/releases/v1.2.`、`/search?q=what?`、`/file(name)`），一律剥掉就是把用户领到
+ * 另一个路径上去 —— 那正是这个函数要防的事，只是换了个方向坏。全角标点没有这个两难：
+ * URL 里的非 ASCII 一律得百分号编码，所以裸的 `。`「必然」是散文，不是地址。
  */
-const URL_TAIL_RE = /[^A-Za-z0-9/_~%+=&#$*@-]+$/;
+const URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::(\d{2,5}))?[-A-Za-z0-9._~:/?#[\]@!$&()*+,;=%]*/gi;
+
+/** 解析不了的地址一律不当候选：与其把它存进 preview.json 再在打开预览那步抛，不如当没看见。 */
+function parsable(url: string): boolean {
+  try { new URL(url); return true; } catch { return false; }
+}
 
 /**
  * 「我在 8080 上起来了」但**不印地址**的那一类日志。
@@ -365,14 +372,17 @@ export function pickPreviewUrl(
 ): PreviewUrl | null {
   const skip = new Set(excluded.filter((port) => port !== lent));
   let first: PreviewUrl | null = null;
-  // 先剥 ANSI 再扫地址。URL_RE 收到「空白/引号为止」，而着色后的行是
-  // `http://localhost:5173/\x1b[39m` —— 控制码不是空白也不是引号，会被原样收进地址，
-  // 存进 preview.json、再交给浏览器打开。端口连得上，所以一路判成「起好了」，用户点开
-  // 得到的却是 `/%1B[39m` 这条 404 路径：服务是好的、根页面是好的，表现仍然是「预览
-  // 打不开」。这一条在这儿修，不在正则里加特例 —— 着色是整段日志的属性，不是 URL 的。
+  // 先剥 ANSI 再扫地址。着色后的行是 `http://localhost:5173/\x1b[39m`，早先的 `[^\s'"]*`
+  // 会把整个转义序列收进地址（控制码不是空白也不是引号），存进 preview.json、再交给浏览器
+  // 打开：端口连得上，所以一路判成「起好了」，用户点开得到的却是 `/%1B[39m` 这条 404 路径
+  // —— 服务是好的、根页面是好的，表现仍然是「预览打不开」。现在字符集收窄了，地址会停在
+  // ESC 前面，但剥 ANSI 一条都不能省：它是这一段判读的统一前处理（行尾锚定的那几条判据
+  // 全靠它），而「地址正好停在对的位置」只是字符集的副作用，不是保证。
+  // 这一条在这儿修，不在正则里加特例 —— 着色是整段日志的属性，不是 URL 的。
   const clean = stripAnsi(log);
   for (const hit of clean.matchAll(URL_RE)) {
-    const url = hit[0].replace(URL_TAIL_RE, "");
+    const url = hit[0];
+    if (!parsable(url)) continue;
     const port = Number(hit[1] ?? (url.startsWith("https") ? 443 : 80));
     if (lent !== null && port === lent) return { url, port, lent: true };
     if (skip.has(port)) continue;

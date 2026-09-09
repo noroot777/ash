@@ -141,24 +141,48 @@ check(
   "http://127.0.0.1:4317",
 );
 check(
-  "半角标点同理（英文日志里 `at http://localhost:5173.`）",
-  pickPreviewUrl("Serving at http://localhost:5173/.\n", null)?.url,
-  "http://localhost:5173/",
-);
-check(
-  "括号、逗号、顿号一样剥干净",
-  pickPreviewUrl("(见 http://localhost:5173/app)，或者 http://localhost:8080、\n", null)?.url,
-  "http://localhost:5173/app",
-);
-check(
-  "剥完仍是一个能解析的 URL",
+  "认出来的地址一定解析得动",
   new URL(pickPreviewUrl("打到 http://127.0.0.1:4317。\n", null)?.url ?? "http://x/").port,
   "4317",
 );
 check(
-  "该留的尾巴不许剥：查询串和锚点",
+  "全角标点在路径位置也一样停住（否则路径变成 /%E3%80%82，一个 404）",
+  pickPreviewUrl("前端在 http://localhost:5173/。\n", null)?.url,
+  "http://localhost:5173/",
+);
+// —— 但**半角标点一个都不许动** ——
+// 收窄字符集而不是「剥尾巴」，就是为了这几条：`.`、`?`、`)` 在 URL 末尾都是合法的，
+// 谁也分不清 `…/v1.2.` 里的点是版本号的一部分还是句号。一律剥掉 = 把用户领到另一个
+// 路径/查询上去 —— 跟句号那条是同一种坏，只是换了个方向。分得清的只有全角：URL 里的
+// 非 ASCII 必须百分号编码，所以裸的 `。` 必然是散文。
+check(
+  "路径末尾的点是路径的一部分",
+  pickPreviewUrl("open http://localhost:5173/releases/v1.2.\n", null)?.url,
+  "http://localhost:5173/releases/v1.2.",
+);
+check(
+  "查询串末尾的问号照样留着",
+  pickPreviewUrl("open http://localhost:5173/search?q=what?\n", null)?.url,
+  "http://localhost:5173/search?q=what?",
+);
+check(
+  "括号是合法的 URL 字符，不许当成散文里的括号",
+  pickPreviewUrl("open http://localhost:5173/file(name)\n", null)?.url,
+  "http://localhost:5173/file(name)",
+);
+check(
+  "查询串和锚点一并留着",
   pickPreviewUrl("open http://localhost:5173/?token=a1#top\n", null)?.url,
   "http://localhost:5173/?token=a1#top",
+);
+// 字符集收窄之后还剩一类解析不动的：端口超出范围（`\d{2,5}` 收得下 99999，`new URL` 收不下）。
+// 与其把它存进 preview.json 再在打开预览那步抛，不如当没看见——这一条兜的就是「以后又冒出
+// 一种没想到的写法」时，坏的地址不会再走到用户面前。
+check("解析不动的地址不当候选", pickPreviewUrl("listening on http://localhost:99999/\n", null), null);
+check(
+  "但同一份日志里能解析的那个照旧认",
+  pickPreviewUrl("bogus http://localhost:99999/\n➜  Local:   http://localhost:5173/\n", null)?.port,
+  5173,
 );
 
 // —— 只说端口、不印地址的那一类（项目预览命令可以是任何语言之后才有的）——
