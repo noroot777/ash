@@ -52,12 +52,6 @@ npm start            # http://localhost:4317
 
 ## 核心能力
 
-🔀 **Worktree 隔离** — 每个任务自动创建独立的 git worktree 和分支，多任务并行互不干扰。
-
-📋 **完成协议** — agent 必须主动调用 `complete_task` 才算完成。进程退出 ≠ 任务完成，避免半成品被推进下游队列。
-
-🔍 **自动验证** — 任务完成后触发验证轮（可配置多轮复审），在同一会话中运行。未通过则打回修复，上下文完整保留。
-
 🎯 **智能体 · 模型 · 智能水平三段式选择** — 一颗胶囊三段，任务级粒度切换。创建任务时选定执行器（如 claude / codex / gemini），紧接着可以覆盖该执行器的默认模型和智能水平（思考强度）。已在运行的任务也能在对话框底部随时切换——下一轮回复立即生效。团队预设、Duet、派审、工作流站点均复用同一个选择器。
 
 🖥️ **实时预览** — agent 改了前端代码，一键启动预览服务查看效果。项目设置中可配置多个预览服务（最多 8 个同时运行），自动检测仓库中的常见框架脚本，端口从专用池分配。多人模式下自动挂载认证反代，外部可安全访问。预览可随任务生命周期自动管理：重新运行时关旧起新，验收后自动清理。
@@ -83,35 +77,11 @@ npm start            # http://localhost:4317
 
 📲 **移动端** — Expo 构建的 iOS/Android 客户端，查看任务、回复消息、操作团队，随时随地。
 
-## 支持的执行器
+🔀 **Worktree 隔离** — 每个任务自动创建独立的 git worktree 和分支，多任务并行互不干扰。
 
-内置 15 个 CLI 执行器配置，机器上安装了哪些就能使用哪些：
+📋 **完成协议** — agent 必须主动调用 `complete_task` 才算完成。进程退出 ≠ 任务完成，避免半成品被推进下游队列。
 
-<table>
-<tr>
-<td><code>claude</code></td><td><code>codex</code></td><td><code>gemini</code></td><td><code>cursor</code></td><td><code>copilot</code></td>
-</tr>
-<tr>
-<td><code>opencode</code></td><td><code>qwen</code></td><td><code>grok</code></td><td><code>kimi</code></td><td><code>trae</code></td>
-</tr>
-<tr>
-<td><code>kiro</code></td><td><code>kilo</code></td><td><code>qoder</code></td><td><code>antigravity</code></td><td><code>pi</code></td>
-</tr>
-</table>
-
-通过「设置 → 执行器」可为每个 CLI 创建 **profile**（固定模型与智能水平）。任务级别可在三段式胶囊中逐项覆盖：先选执行器，再选模型，最后选智能水平——任务运行中也能随时切换，下一轮回复立即生效。添加新 CLI 只需一个 TypeScript 文件 — 见 [catalog/README.md](server/src/executors/catalog/README.md)。
-
-## MCP 工具
-
-Ash 通过 [Model Context Protocol](https://modelcontextprotocol.io) 向 agent 暴露 **25 个工具**，覆盖任务全生命周期：
-
-| 类别 | 工具 |
-|---|---|
-| 项目 / 分组 | `resolve_project` `create_group` `resolve_group` `list_groups` |
-| 任务管理 | `create_task_chain` `batch_create_tasks` `get_task` `list_tasks` `patch_task` |
-| 队列 | `create_queue` `get_queue` `queue_insert` `queue_remove` `queue_reorder` `requeue_task` |
-| 生命周期 | `run_task` `run_group` `stop_task` `complete_task` `pause_task` `accept_task` |
-| 协作 | `ask_question` `answer_question` `report_stage` `dispatch` |
+🔍 **自动验证** — 任务完成后触发验证轮（可配置多轮复审），在同一会话中运行。未通过则打回修复，上下文完整保留。
 
 ## 编排模式
 
@@ -190,6 +160,36 @@ Ash 通过 [Model Context Protocol](https://modelcontextprotocol.io) 向 agent �
 
 > [!WARNING]
 > 默认监听 `0.0.0.0` 且无鉴权（终端 API 本身就是个 shell）。请仅在可信网络中使用，或自行在前端部署反向代理进行认证。
+
+## 支持的执行器
+
+内置 15 个 CLI 执行器配置，机器上安装了哪些就能使用哪些：
+
+<table>
+<tr>
+<td><code>claude</code></td><td><code>codex</code></td><td><code>gemini</code></td><td><code>cursor</code></td><td><code>copilot</code></td>
+</tr>
+<tr>
+<td><code>opencode</code></td><td><code>qwen</code></td><td><code>grok</code></td><td><code>kimi</code></td><td><code>trae</code></td>
+</tr>
+<tr>
+<td><code>kiro</code></td><td><code>kilo</code></td><td><code>qoder</code></td><td><code>antigravity</code></td><td><code>pi</code></td>
+</tr>
+</table>
+
+通过「设置 → 执行器」可为每个 CLI 创建 **profile**（固定模型与智能水平）。任务级别可在三段式胶囊中逐项覆盖：先选执行器，再选模型，最后选智能水平——任务运行中也能随时切换，下一轮回复立即生效。添加新 CLI 只需一个 TypeScript 文件 — 见 [catalog/README.md](server/src/executors/catalog/README.md)。
+
+## MCP 工具
+
+Ash 通过 [Model Context Protocol](https://modelcontextprotocol.io) 向 agent 暴露 **25 个工具**，覆盖任务全生命周期：
+
+| 类别 | 工具 |
+|---|---|
+| 项目 / 分组 | `resolve_project` `create_group` `resolve_group` `list_groups` |
+| 任务管理 | `create_task_chain` `batch_create_tasks` `get_task` `list_tasks` `patch_task` |
+| 队列 | `create_queue` `get_queue` `queue_insert` `queue_remove` `queue_reorder` `requeue_task` |
+| 生命周期 | `run_task` `run_group` `stop_task` `complete_task` `pause_task` `accept_task` |
+| 协作 | `ask_question` `answer_question` `report_stage` `dispatch` |
 
 ## 项目结构
 
