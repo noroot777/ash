@@ -56,6 +56,8 @@ import { AssistantView } from "../assistant/AssistantView.tsx";
 const ProjectTerminal = lazy(() => import("./ProjectTerminal.tsx").then((module) => ({ default: module.ProjectTerminal })));
 
 type ContextView = "review" | "settings" | "palette" | "notes" | "create" | "chat" | "assistant";
+type ComposerState = { draft?: ComposerDraft | null; mode: TaskMode };
+type AssistantOrigin = "chat" | "workspace" | { kind: "composer"; composer: ComposerState };
 
 function readUrlSelection() {
   const params = new URLSearchParams(window.location.search);
@@ -64,7 +66,10 @@ function readUrlSelection() {
   const view: ContextView | null = rawView === "review" || rawView === "settings" || rawView === "palette" || rawView === "notes" || rawView === "create" || rawView === "chat" || rawView === "assistant" ? rawView : null;
   const rawMode = params.get("mode");
   const mode: TaskMode = rawMode === "team" || rawMode === "duet" ? rawMode : "single";
-  return { projectId: params.get("project"), taskId: params.get("task"), settings, view, noteId: params.get("note"), mode, assistantFromChat: view === "assistant" && params.get("from") === "chat" };
+  const assistantOrigin: AssistantOrigin | null = view !== "assistant" ? null
+    : params.get("from") === "chat" ? "chat"
+    : params.get("from") === "composer" ? { kind: "composer", composer: { mode } } : "workspace";
+  return { projectId: params.get("project"), taskId: params.get("task"), settings, view, noteId: params.get("note"), mode, assistantOrigin };
 }
 
 export function WorkspaceShell() {
@@ -81,14 +86,14 @@ export function WorkspaceShell() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(initial.view === "palette");
   const [chatOpen, setChatOpen] = useState(initial.view === "chat");
-  const [assistantOrigin, setAssistantOrigin] = useState<"chat" | "workspace" | null>(initial.view === "assistant" ? initial.assistantFromChat ? "chat" : "workspace" : null);
+  const [assistantOrigin, setAssistantOrigin] = useState<AssistantOrigin | null>(initial.assistantOrigin);
   const assistantOpen = assistantOrigin !== null;
   const [notes, setNotes] = useState<{ projectId: string; noteId: string | null } | null>(initial.view === "notes" && initial.projectId ? { projectId: initial.projectId, noteId: initial.noteId } : null);
   const [groupsPanelOpen, setGroupsPanelOpen] = useState(false);
   // composer.draft 只承载「从别处带进来的一份内容」（随手记转任务）。用户自己敲的正文
   // 和附件不走这里 —— 它们存在全局草稿库里按项目留着（见 composer/composerDraft.ts），
   // 所以去聊天/看别的任务再回来，框里原样还在，不需要谁把它抬来抬去。
-  const [composer, setComposer] = useState<{ draft?: ComposerDraft | null; mode: TaskMode } | null>(initial.view === "create" ? { mode: initial.mode } : null);
+  const [composer, setComposer] = useState<ComposerState | null>(initial.view === "create" ? { mode: initial.mode } : null);
   const [reviewTaskId, setReviewTaskId] = useState<string | null>(initial.view === "review" ? initial.taskId : null);
   const [deleteTarget, setDeleteTarget] = useState<TaskListItem | null>(null);
   const [handoffTarget, setHandoffTarget] = useState<TaskListItem | null>(null);
@@ -188,9 +193,16 @@ export function WorkspaceShell() {
     if (taskId && !settingsSection) params.set("task", taskId);
     if (settingsSection) { params.set("view", "settings"); params.set("settings", settingsSection); }
     else if (notes) { params.set("view", "notes"); if (notes.noteId) params.set("note", notes.noteId); }
-    else if (assistantOrigin) { params.set("view", "assistant"); if (assistantOrigin === "chat") params.set("from", "chat"); }
+    else if (assistantOrigin) {
+      params.set("view", "assistant");
+      if (assistantOrigin === "chat") params.set("from", "chat");
+      else if (typeof assistantOrigin === "object") {
+        params.set("from", "composer");
+        params.set("mode", assistantOrigin.composer.mode);
+      }
+    }
     else if (chatOpen && (!projectsReady || hasCurrentProject)) params.set("view", "chat");
-    else if (composer) { params.set("view", "create"); params.set("mode", composer.mode); }
+    else if (composer && (!projectsReady || hasCurrentProject)) { params.set("view", "create"); params.set("mode", composer.mode); }
     else if (paletteOpen) params.set("view", "palette");
     else if (reviewTaskId && reviewTaskId === taskId) params.set("view", "review");
     const query = params.toString();
@@ -221,7 +233,7 @@ export function WorkspaceShell() {
   useEffect(() => { window.localStorage.setItem(WORKSPACE_SIDEBAR_STORAGE_KEY, String(sidebarWidth)); }, [sidebarWidth]);
 
   useEffect(() => {
-    if (projectsReady && !hasCurrentProject) setChatOpen(false);
+    if (projectsReady && !hasCurrentProject) { setChatOpen(false); setComposer(null); }
   }, [hasCurrentProject, projectsReady]);
   useEffect(() => {
     if (!projectId || !currentProject) return;
@@ -382,7 +394,8 @@ export function WorkspaceShell() {
     spread.close();
   };
   const openAssistant = () => {
-    setAssistantOrigin(chatOpen && hasCurrentProject ? "chat" : "workspace");
+    setAssistantOrigin((current) => current ?? (composer && hasCurrentProject
+      ? { kind: "composer", composer } : chatOpen && hasCurrentProject ? "chat" : "workspace"));
     setChatOpen(false);
     setTaskId(null);
     setRemoteSelection(null);
@@ -392,8 +405,10 @@ export function WorkspaceShell() {
     spread.close();
   };
   const closeAssistant = () => {
+    const canReturnToProject = !projectsReady || hasCurrentProject;
     setAssistantOrigin(null);
-    setChatOpen(assistantOrigin === "chat" && (!projectsReady || hasCurrentProject));
+    setChatOpen(assistantOrigin === "chat" && canReturnToProject);
+    setComposer(assistantOrigin && typeof assistantOrigin === "object" && canReturnToProject ? assistantOrigin.composer : null);
   };
   const createTask = (task: Task, noteIds: string[] = []) => {
     setTasks((current) => current.some((row) => row.id === task.id) ? current.map((row) => row.id === task.id ? task : row) : [task, ...current]);

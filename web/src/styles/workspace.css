@@ -110,6 +110,10 @@
   outline-offset: 2px;
 }
 
+.workspace-connection:focus-visible {
+  outline-offset: -2px;
+}
+
 .workspace-connection i,
 .workspace-connection-light {
   width: 6px;

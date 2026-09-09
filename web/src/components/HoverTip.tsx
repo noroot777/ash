@@ -1,4 +1,4 @@
-import { useCallback, useState, type FocusEvent, type MouseEvent, type ReactNode } from "react";
+import { useCallback, useLayoutEffect, useRef, useState, type FocusEvent, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 // 应用内的悬停提示。原生 `title` 被约定禁掉（`web/CLAUDE.md`），而「一颗纯图标按钮，
@@ -10,9 +10,6 @@ import { createPortal } from "react-dom";
 //
 // `position:fixed` + portal 到 body：锚点常常待在 `overflow:auto` 的面板里（比如 SCM 那栏），
 // 就地渲染会被裁掉，也会跟着面板一起滚。
-
-/** 贴边夹取的余量，取一半最大宽度：`translateX(-50%)` 之后气泡最多只探出这么多。 */
-const TIP_EDGE = 140;
 
 /**
  * `below` 是默认：气泡挂在锚点正下方、水平居中。
@@ -31,9 +28,8 @@ export function useHoverTip(options?: { placement?: HoverTipPlacement }) {
       setAt({ x: rect.left - 7, y: rect.top + rect.height / 2, placement });
       return;
     }
-    const edge = Math.min(TIP_EDGE, window.innerWidth / 2);
     setAt({
-      x: Math.min(Math.max(rect.left + rect.width / 2, edge), window.innerWidth - edge),
+      x: rect.left + rect.width / 2,
       y: placement === "above" ? rect.top - 6 : rect.bottom + 6,
       placement,
     });
@@ -47,16 +43,26 @@ export function useHoverTip(options?: { placement?: HoverTipPlacement }) {
   };
 }
 
-export function HoverTip({ at, children }: { at: HoverTipAnchor | null; children: ReactNode }) {
-  if (!at) return null;
-  return createPortal(
+function PositionedHoverTip({ at, children }: { at: HoverTipAnchor; children: ReactNode }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [left, setLeft] = useState(at.x);
+  useLayoutEffect(() => {
+    if (at.placement === "left") { setLeft(at.x); return; }
+    const halfWidth = (ref.current?.getBoundingClientRect().width ?? 0) / 2;
+    setLeft(Math.max(halfWidth + 8, Math.min(at.x, window.innerWidth - halfWidth - 8)));
+  }, [at, children]);
+  return (
     <span
+      ref={ref}
       className={`ui-hover-tip${at.placement === "below" ? "" : ` is-${at.placement}`}`}
       role="tooltip"
-      style={{ left: at.x, top: at.y }}
+      style={{ left, top: at.y }}
     >
       {children}
-    </span>,
-    document.body,
+    </span>
   );
+}
+
+export function HoverTip({ at, children }: { at: HoverTipAnchor | null; children: ReactNode }) {
+  return at ? createPortal(<PositionedHoverTip at={at}>{children}</PositionedHoverTip>, document.body) : null;
 }

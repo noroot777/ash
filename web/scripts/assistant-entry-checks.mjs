@@ -162,9 +162,32 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   const connection = page.getByRole("status", { name: "实时已连接" });
   assert.equal((await connection.innerText()).trim(), "", "expanded connection status only renders its dot");
   await connection.hover();
-  await page.getByRole("tooltip").filter({ hasText: "实时已连接" }).waitFor();
-  await connection.focus();
-  await page.getByRole("tooltip").filter({ hasText: "实时已连接" }).waitFor();
+  const connectionTip = page.getByRole("tooltip").filter({ hasText: "实时已连接" });
+  await connectionTip.waitFor();
+  const expandedAnchor = await connection.boundingBox();
+  const expandedTip = await connectionTip.boundingBox();
+  assert.ok(expandedAnchor && expandedTip
+    && expandedTip.x <= expandedAnchor.x + expandedAnchor.width / 2
+    && expandedTip.x + expandedTip.width >= expandedAnchor.x + expandedAnchor.width / 2,
+  `expanded connection tooltip stays attached to its dot: ${JSON.stringify({ expandedAnchor, expandedTip })}`);
+  await footerAssistant.focus();
+  await page.keyboard.press("Shift+Tab");
+  assert.equal(await connection.evaluate(node => document.activeElement === node), true,
+    "Shift+Tab from assistant reaches the connection status");
+  await connectionTip.waitFor();
+  const focusGeometry = await connection.evaluate(node => {
+    const footer = node.closest(".workspace-sidebar-bottom");
+    const rect = node.getBoundingClientRect();
+    const footerRect = footer.getBoundingClientRect();
+    const style = getComputedStyle(node);
+    const outlineWidth = Number.parseFloat(style.outlineWidth) || 0;
+    const outlineOffset = Number.parseFloat(style.outlineOffset) || 0;
+    return { footerLeft: footerRect.left, focusLeft: rect.left - Math.max(0, outlineWidth + outlineOffset),
+      outlineWidth, outlineOffset, overflowX: getComputedStyle(footer).overflowX };
+  });
+  assert.ok(focusGeometry.outlineWidth > 0, `keyboard focus renders a visible connection outline: ${JSON.stringify(focusGeometry)}`);
+  assert.ok(focusGeometry.overflowX === "visible" || focusGeometry.focusLeft >= focusGeometry.footerLeft - 0.1,
+    `connection focus ring is not clipped: ${JSON.stringify(focusGeometry)}`);
 
   const assistantAppearance = await footerAssistant.evaluate(node => {
     const style = getComputedStyle(node);
@@ -179,6 +202,7 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   assert.ok(assistantAppearance.height <= baselineHeight, `assistant button does not increase footer height: ${JSON.stringify(assistantAppearance)}`);
   await footerAssistant.hover();
   await page.getByRole("tooltip").filter({ hasText: "ash 助手" }).waitFor();
+  assert.equal(await page.getByRole("tooltip").count(), 1, "hovering assistant dismisses the focused connection tooltip");
   let tip = await page.getByRole("tooltip").filter({ hasText: "ash 助手" }).boundingBox();
   assert.ok(tip && tip.x >= 0 && tip.y >= 0 && tip.x + tip.width <= 1200 && tip.y + tip.height <= 820, "hover tooltip stays in viewport");
   await footerAssistant.focus();
@@ -204,10 +228,41 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   assert.match(page.url(), /[?&]view=chat(?:&|$)/u, "assistant exit returns to chat source");
 
   await page.getByRole("button", { name: "返回工作区" }).click();
+  await page.getByRole("button", { name: "新建任务" }).click();
+  const objective = page.getByRole("textbox", { name: "任务目标" });
+  await objective.waitFor();
+  await page.getByRole("tab", { name: "团队", exact: true }).click();
+  await objective.fill("保留这份团队任务草稿");
+  await page.getByRole("tab", { name: "ash 助手" }).click();
+  await page.getByRole("region", { name: "ash 助手" }).waitFor();
+  assert.match(page.url(), /[?&]from=composer(?:&|$)/u, "assistant URL records its composer origin");
+  assert.match(page.url(), /[?&]mode=team(?:&|$)/u, "assistant URL records the composer mode");
+  await page.getByRole("button", { name: "关闭助手" }).click();
+  await objective.waitFor();
+  assert.equal(await objective.inputValue(), "保留这份团队任务草稿", "composer draft survives an assistant round trip");
+  assert.equal(await page.getByRole("tab", { name: "团队", exact: true }).getAttribute("aria-selected"), "true",
+    "composer mode survives an assistant round trip");
+  await page.getByRole("tab", { name: "ash 助手" }).click();
+  await page.reload();
+  await page.getByRole("region", { name: "ash 助手" }).waitFor();
+  await page.getByRole("button", { name: "关闭助手" }).click();
+  await objective.waitFor();
+  assert.equal(await page.getByRole("tab", { name: "团队", exact: true }).getAttribute("aria-selected"), "true",
+    "composer mode survives an assistant page reload");
+  await page.getByRole("button", { name: "取消 Esc" }).click();
   await page.getByRole("button", { name: "收起侧边栏" }).click();
   const collapsed = page.getByRole("complementary", { name: "已收起的侧边栏" });
   assert.equal(await collapsed.getByRole("button", { name: "聊天" }).count(), 0, "collapsed sidebar has no chat-shaped duplicate");
   assert.equal(await collapsed.getByRole("button", { name: "ash 助手" }).count(), 1, "collapsed sidebar keeps one assistant entry");
+  const collapsedConnection = collapsed.getByRole("status", { name: "实时已连接" });
+  await collapsedConnection.hover();
+  await connectionTip.waitFor();
+  const collapsedAnchor = await collapsedConnection.boundingBox();
+  const collapsedTip = await connectionTip.boundingBox();
+  assert.ok(collapsedAnchor && collapsedTip
+    && collapsedTip.x <= collapsedAnchor.x + collapsedAnchor.width / 2
+    && collapsedTip.x + collapsedTip.width >= collapsedAnchor.x + collapsedAnchor.width / 2,
+  `collapsed connection tooltip stays attached to its dot: ${JSON.stringify({ collapsedAnchor, collapsedTip })}`);
   const collapsedAssistant = collapsed.getByRole("button", { name: "ash 助手" });
   await collapsedAssistant.click();
   await page.getByRole("region", { name: "ash 助手" }).waitFor();
