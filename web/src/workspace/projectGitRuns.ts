@@ -22,13 +22,32 @@ export type ProjectGitRun = {
   /** 最近一次操作的结果：成功给 message，失败给 error。两者互斥。 */
   message: string | null;
   error: string | null;
+  /**
+   * 最近一次**读**的失败。跟 `error` 分开存：那个说的是「我让它干的那件事成没成」，这个
+   * 说的是「面板上这份状态还可不可信」，清除时机完全不同——发起一次新的写操作就该把旧的
+   * 读取错误作废，但写操作自己的失败得留着。
+   *
+   * 也**必须跟账本里其它状态住在一起**。它原先是 hook 的本地 state，于是「树外的账本」和
+   * 「组件里的读取错误」成了两套各说各话的状态：checkout 成功了，账本记着成功消息，本地
+   * 那条读取错误却没人清，合并出来 `error` 仍非空——面板照着「有错就不显示成功消息」的
+   * 规矩，把一次做成了的操作显示成一直在报错。
+   */
+  loadError: string | null;
   /** 最近一次落定的是哪一步。浮层已经收起来时，靠它把 toast 说成「拉取失败：…」。 */
   settledKind: string | null;
   /** 落定次数。订阅者拿它判断「这一次的结果我提示过没有」，而不是去比对文案。 */
   settled: number;
 };
 
-const IDLE: ProjectGitRun = { state: null, busy: null, message: null, error: null, settledKind: null, settled: 0 };
+const IDLE: ProjectGitRun = {
+  state: null,
+  busy: null,
+  message: null,
+  error: null,
+  loadError: null,
+  settledKind: null,
+  settled: 0,
+};
 
 const runs = new Map<string, ProjectGitRun>();
 const listeners = new Map<string, Set<() => void>>();
@@ -125,7 +144,15 @@ function settle(projectId: string, kind: string, next: Partial<ProjectGitRun>) {
 export function putProjectGitState(projectId: string, state: ProjectGitState, epoch: number): void {
   if (readProjectGitRun(projectId).busy) return;
   if (epoch !== projectGitEpoch(projectId)) return;
-  patch(projectId, { state });
+  // 读回来了就说明状态可信，上一条读取错误跟着作废。
+  patch(projectId, { state, loadError: null });
+}
+
+/** 这趟读失败了。同样两道闸——过期的读连报错的资格都没有，理由见 `putProjectGitState`。 */
+export function putProjectGitLoadError(projectId: string, message: string, epoch: number): void {
+  if (readProjectGitRun(projectId).busy) return;
+  if (epoch !== projectGitEpoch(projectId)) return;
+  patch(projectId, { loadError: message });
 }
 
 /**
@@ -146,7 +173,10 @@ export async function runProjectGit(
   }
   // 开始就推一次世代号：此刻还在路上的那些读，全都变成「写之前发出的」，回来一律作废。
   bumpEpoch(projectId);
-  patch(projectId, { busy: kind, message: null, error: null });
+  // 连上一条读取错误一起清掉：用户已经发起了新动作，旧的「状态读不到」不再是他此刻关心的
+  // 事；留着它会在这次操作成功之后接着压住成功消息（合并出来的 `error` 一非空，面板就照
+  // 「有错不显示成功」的规矩把做成了的事显示成还在报错）。
+  patch(projectId, { busy: kind, message: null, error: null, loadError: null });
   try {
     const result = await action();
     settle(projectId, kind, { state: result.state, message: result.message, error: null });

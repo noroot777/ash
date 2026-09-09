@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { api, type ProjectGitResult } from "../lib/api.ts";
 import {
   projectGitEpoch,
+  putProjectGitLoadError,
   putProjectGitState,
   readProjectGitRun,
   runProjectGit,
@@ -16,10 +17,12 @@ import {
 //    （WorkspaceShell 已经在拉了），不值得为了它再打一趟 git。
 // ② **失败不清空已有状态。** 网络抖一下就把分支清单抹掉，用户看到的是「仓库没了」。
 //    读取错误单独放一格，清单留在原地。
-// ③ **写操作的状态不归这个 hook 管。** 它住在 `projectGitRuns.ts` 那本账里，浮层被点没了
-//    也还在——那正是「操作跑一半浮层消失就像被打断」那件事的根。
+// ③ **状态全都归账本，这个 hook 自己不留。** 写操作的结果要活过浮层卸载（那正是「操作跑
+//    一半浮层消失就像被打断」那件事的根），读取错误则必须跟写操作的结果住在一起——分家
+//    就会出现两套各说各话的状态，合并出来永远是报错。这里只剩 `loading`：它说的是「我这
+//    趟读还在飞」，本来就该按组件算。
 
-export type ProjectGitHandle = ProjectGitRun & {
+export type ProjectGitHandle = Omit<ProjectGitRun, "loadError"> & {
   /** 这份 handle 是谁的。跟着 handle 走，调用点就不可能拿 A 的状态发 B 的请求。 */
   projectId: string | null;
   loading: boolean;
@@ -33,10 +36,7 @@ export function useProjectGit(projectId: string | null, enabled: boolean): Proje
     useCallback(() => readProjectGitRun(projectId), [projectId]),
   );
   const [loading, setLoading] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
-
-  useEffect(() => setLoadError(null), [projectId]);
 
   useEffect(() => {
     if (!enabled || !projectId) return;
@@ -46,22 +46,14 @@ export function useProjectGit(projectId: string | null, enabled: boolean): Proje
     // 之前就可点，用户完全来得及在这几百毫秒里切一次分支。判据见 `putProjectGitState`。
     const epoch = projectGitEpoch(projectId);
     let alive = true;
-    // 这趟读还说不说得上话：组件还在，且这期间没人写过。
-    //
-    // **成功和失败都得过这道闸**：写之前发出的读，回来晚了一律不许再改面板。只拦成功那一
-    // 路的话，剩下的失败一路照样能把「已切换到 feature」改写成一句读取错误——用户刚做成的
-    // 事，转眼被一条过期的读说成出错了（而且 `error` 一非空，成功消息就被顶掉不显示）。
-    const speaksForNow = () => alive && epoch === projectGitEpoch(projectId);
     setLoading(true);
     api.projectGit(projectId)
-      .then((next) => {
-        if (!speaksForNow()) return;
-        putProjectGitState(projectId, next, epoch);
-        setLoadError(null);
-      })
+      // 成功和失败都写进账本，由它按同一道闸决定认不认（写之前发出的读，回来晚了一律不许
+      // 再改面板）。**读取错误不留在这个 hook 里**：它一旦跟账本分家，就会出现「账本记着
+      // checkout 成功、组件里那条读取错误没人清」的两套说法，合并出来永远是报错。
+      .then((next) => { if (alive) putProjectGitState(projectId, next, epoch); })
       .catch((reason) => {
-        if (!speaksForNow()) return;
-        setLoadError(reason instanceof Error ? reason.message : "读取 Git 状态失败");
+        if (alive) putProjectGitLoadError(projectId, reason instanceof Error ? reason.message : "读取 Git 状态失败", epoch);
       })
       // loading 说的是「我这趟读还在飞」，跟结果算不算数是两回事：过期的读也得把自己那盏灯
       // 熄了，只看 alive。挂着不熄的话，清单为空时会一直停在「正在读取…」。
@@ -77,5 +69,7 @@ export function useProjectGit(projectId: string | null, enabled: boolean): Proje
     [projectId],
   );
 
-  return { ...current, error: current.error ?? loadError, projectId, loading, refresh, run };
+  // 面板只该看到一个 error。写操作的结果排在读取错误前面：用户刚让它干的那件事，比「后台
+  // 那趟刷新没读着」更该被听见。
+  return { ...current, error: current.error ?? current.loadError, projectId, loading, refresh, run };
 }

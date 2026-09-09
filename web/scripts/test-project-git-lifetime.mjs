@@ -11,12 +11,13 @@ import { createServer } from "vite";
 // busy、成功消息、错误全跟着组件没了。请求其实还在飞、服务端照旧在跑，用户看到的却是
 // 「整个过程被打断」，重新点开浮层更是一点痕迹都没有。
 //
-// 判据六条：
+// 判据七条：
 //   ① 操作在途时，点浮层外面**不收起**（那几秒的点击九成是手滑）；
 //   ② 用 Esc 主动收起来之后，胶囊接着转圈——「我停不下来的那件事还在跑」得留在界面上；
 //   ③ 结果落定时，浮层开着就显示在浮层里、关着就补一句 toast，成功失败都不许无声无息；
 //   ④ **切到别的项目也算「点了别处」**：胶囊跟着当前项目卸载，旧项目的操作照样得有人认领；
-//   ⑤⑥ 写之前发出的那趟读，**成功也好失败也罢**，回来晚了都不许再改面板。
+//   ⑤⑥ 写之前发出的那趟读，**成功也好失败也罢**，回来晚了都不许再改面板；
+//   ⑦ 读取错误不许挂在那里，把后来做成的事说成失败。
 //
 // ④ 守的是**播报口挂在哪一层**：现在它在 WorkspaceShell（`useProjectGitAnnouncer`），
 // 谁的操作落定都听得见。哪天有人图就近把它搬回分支胶囊里、写成「只管我这个项目」，这条
@@ -24,6 +25,9 @@ import { createServer } from "vite";
 //
 // ⑤⑥ 守的是**跨浮层缓存的代价**：缓存让按钮在后台那趟 GET 落地之前就可点，于是「读发在
 // 写之前、回来在写之后」成了日常时序。scm 面板栽过同一道题（`test-scm-race.mjs`）。
+//
+// ⑦ 守的是**读取错误跟操作结果必须住在一起**：分家成两套状态，合并出来的 error 就永远
+// 非空，做成了的操作会一直显示成在报错。
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
@@ -155,8 +159,36 @@ try {
   assert.match(await panel.locator(".project-git-panel__ok").innerText(), /已切换到 main/, "成功消息不许被过期读的失败顶掉");
   assert.match(await panel.locator(".project-git-branch.is-current").innerText(), /main/, "当前分支仍是刚切过去的那条");
 
+  // ── ⑦ 读取错误不许挂在那里，把后来做成的事说成失败 ────────────────────
+  // 这条不是竞态，是**状态归属**：读取错误一旦跟账本分家（留在 hook 本地 state 里），
+  // 「账本记着 checkout 成功」和「组件里那条读取错误没人清」就成了两套说法，合并出来的
+  // error 永远非空——面板照着「有错就不显示成功消息」的规矩，把一次做成了的操作一直显示
+  // 成在报错。缓存分支清单还在，用户照样点得动，所以这条时序一点都不刁钻。
+  await page.keyboard.press("Escape");
+  await until(async () => (await panel.count()) === 0, "先把浮层收起来");
+  await page.evaluate(() => window.__holdNextGet(true));
+  await pill.click();
+  await panel.waitFor();
+  await until(async () => page.evaluate(() => window.__heldGetArrived()), "被扣住的那趟 GET 到达");
+  await page.evaluate(() => window.__releaseGet());
+  // 这一趟没人跟它抢，读取错误本来就该显示出来——先确认它真的挂上去了，后面那条断言才有
+  // 意义（否则「没有错误」可能只是因为压根没出过错）。
+  await until(async () => (await panel.locator(".project-git-panel__error").count()) === 1, "读失败要如实说");
+  assert.match(await panel.locator(".project-git-panel__error").innerText(), /过期的那趟读失败了/, "报的得是这趟读的原因");
+
+  await page.getByRole("button", { name: /^feature/ }).click();
+  // 等的是**分支行**变过去，不是成功消息：成功消息正是这条判据要测的东西（残留的读取错误
+  // 会把它整个压掉不渲染），拿它当等待条件的话，红的会是一句「等不到」而不是那条断言。
+  await until(
+    async () => /feature/.test(await panel.locator(".project-git-branch.is-current").innerText().catch(() => "")),
+    "checkout 落定（当前分支变成 feature）",
+  );
+  await page.waitForTimeout(200);
+  assert.equal(await panel.locator(".project-git-panel__error").count(), 0, "操作做成了，上一条读取错误就该作废，不能挂着继续报错");
+  assert.match(await panel.locator(".project-git-panel__ok").innerText(), /已切换到 feature/, "成功消息不许被残留的读取错误压掉");
+
   // ── 失败一路：浮层关着时同样得说话，而且留住让人看 ──────────────────
-  // ⑥ 结束时浮层还开着，直接接着点 fetch。
+  // ⑦ 结束时浮层还开着，直接接着点 fetch。
   await page.evaluate(() => window.__failNext());
   await page.getByRole("button", { name: "更新远端信息（fetch --prune）" }).click();
   await running.waitFor();
