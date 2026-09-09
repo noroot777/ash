@@ -184,6 +184,32 @@ test("算不出推送范围时保守照跑,不静默跳过", () => {
   assert.equal(ghostLocal.status, 0);
 });
 
+test("把文件从 web/ 或 shared/ 搬走 —— rename 也得算碰过", () => {
+  // 第 3 轮审查的复现:`git diff --name-only` 对纯 rename 只报目标路径,web/thing.ts →
+  // server/thing.ts 会显示成「只碰了 server/」,可前端那边确实少了一个文件。
+  for (const from of ["web/thing.ts", "shared/thing.ts"]) {
+    const { dir, git } = makeRepo();
+    write(dir, "README.md", "base");
+    write(dir, from, "export const x = 1;");
+    git("add", "-A");
+    git("commit", "-qm", "base");
+    const base = git("rev-parse", "HEAD");
+
+    mkdirSync(join(dir, "server"), { recursive: true });
+    git("mv", from, "server/thing.ts");
+    git("commit", "-qm", `move ${from} out`);
+    const head = git("rev-parse", "HEAD");
+
+    fakeDeps(dir);
+    // 假 npm 返回 1:漏检就会静默 exit 0,真跑了才会被拦下 —— 两种结果分得开。
+    const { out, status } = runGate(dir, [`refs/heads/main ${head} refs/heads/main ${base}`], {
+      npmBin: fakeNpm(dir, 1),
+    });
+    assert.match(out, /前端回归没过 —— 已拦下这次 push/, `从 ${from} 搬走被漏掉了:\n${out}`);
+    assert.equal(status, 1, out);
+  }
+});
+
 test("只碰 server/ —— 跳过,不跑测试", () => {
   const { dir, git } = makeRepo();
   write(dir, "README.md", "base");

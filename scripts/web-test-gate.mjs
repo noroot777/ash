@@ -104,7 +104,10 @@ function changedPaths(lines) {
       continue;
     }
     for (const base of bases) {
-      const out = git(["diff", "--name-only", base, localSha]);
+      // `--no-renames`:rename 默认只报**目标**路径,把文件从 web/ 搬去 server/ 会显示成
+      // 「只碰了 server/」—— 可前端那边实实在在少了一个文件。关掉检测,rename 拆成「删源
+      // 路径 + 加目标路径」,源路径才落回 web/(第 3 轮审查复现)。
+      const out = git(["diff", "--no-renames", "--name-only", base, localSha]);
       if (out === null) {
         unknown = true;
         continue;
