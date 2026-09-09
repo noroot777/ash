@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import type { AgentEvent, NativeWorkEvent, Session } from "@ash/shared";
-import { NativeWorkTrace } from "../../server/src/executors/native-work.ts";
+import { codexChildWork, codexNativeWork, nativePlanSnapshot, NativeWorkTrace } from "../../server/src/executors/native-work.ts";
+import { childActivity } from "../../server/src/executors/native-agent-activity.ts";
 import { buildConversationItems, type ConversationItem } from "../src/task-detail/conversationModel.ts";
 import { buildNativeWork } from "../src/task-detail/nativeWorkModel.ts";
 import { nativeWorkDate, nativeWorkDuration } from "../src/task-detail/nativeWorkTiming.ts";
@@ -10,15 +11,16 @@ const end = "2026-09-09T00:01:05.000Z";
 const later = "2026-09-09T01:00:00.000Z";
 const session = { id: "meta", taskId: "task", role: "single", agentType: "codex", executor: "codex@test",
   model: "gpt-5.6", startedAt: "2026-09-08T23:00:00.000Z", endedAt: null } as Session;
-const rowFrom = (events: NativeWorkEvent[], persisted = false, status: "running" | "done" = "running") => {
+const rowsFrom = (events: NativeWorkEvent[], persisted = false, status: "running" | "done" = "running") => {
   const tool = (nativeWork: NativeWorkEvent): AgentEvent => ({ kind: "tool", name: "Agent", nativeWork });
   const items = persisted
     ? buildConversationItems([{ session, output: "", trace: events.map((event) => ({ at: event.at!, event: tool(event) })) }], [session], [])
     : buildConversationItems([], [session], events.map((event, i) => ({ kind: "server", id: String(i), event: {
       type: "agent.event", taskId: "task", sessionId: session.id, role: "single", model: session.model, event: tool(event),
     } })));
-  return buildNativeWork(items, status)[0];
+  return buildNativeWork(items, status);
 };
+const rowFrom = (...args: Parameters<typeof rowsFrom>) => rowsFrom(...args)[0];
 const spawn: NativeWorkEvent = { type: "call", id: "call", name: "spawn_agent", at: start,
   input: { description: "跨日验证", model: "gpt-5.6-sol" } };
 const launched: NativeWorkEvent = { type: "result", id: "call", at: start, result: '{"agent_id":"child"}', failed: false };
@@ -77,6 +79,63 @@ const plan = (at: string, status: string): NativeWorkEvent => ({ type: "call", i
   input: { plan: [{ step: "实现", status }] } });
 assert.equal(rowFrom([plan(start, "in_progress"), plan(end, "completed")]).startedAt, start, "计划快照更新保留原始开始时间");
 assert.equal(rowFrom([plan(start, "in_progress"), plan(end, "completed")]).endedAt, end);
+for (const persisted of [false, true]) {
+  for (const name of ["TodoWrite", "update_plan"]) {
+    const snapshot = (at: string, statuses: string[]): NativeWorkEvent => ({ type: "call", id: "snapshot", name, at,
+      input: name === "TodoWrite" ? { todos: statuses.map((status, i) => ({ content: `步骤 ${i}`, status })) }
+        : { plan: statuses.map((status, i) => ({ step: `步骤 ${i}`, status })) } });
+    const initial = snapshot(start, ["completed", "in_progress", "pending", "pending"]);
+    const initialRows = rowsFrom([initial], persisted);
+    assert.equal(initialRows[0].startedAt, undefined, "首次记录即完成的步骤不能补造开始时间");
+    assert.equal(initialRows[0].endedAt, start);
+    assert.equal(nativeWorkDuration(initialRows[0], Date.parse(later)), "未记录");
+    assert.equal(initialRows[1].startedAt, start);
+    for (const row of initialRows.slice(2)) {
+      assert.equal(row.startedAt, undefined, "快照中的待处理步骤尚未开始");
+      assert.equal(row.endedAt, undefined);
+      assert.equal(nativeWorkDuration(row, Date.parse(later)), "未记录", "待处理步骤不计算实时跨度");
+    }
+    const next = snapshot(end, ["completed", "completed", "in_progress", "pending"]);
+    const nextRows = rowsFrom([initial, next], persisted);
+    assert.equal(nextRows[1].startedAt, start);
+    assert.equal(nextRows[1].endedAt, end);
+    assert.equal(nextRows[2].startedAt, end, "开始时间来自真正转为运行中的快照");
+    assert.equal(nextRows[3].startedAt, undefined);
+    const finished = rowsFrom([initial, next, snapshot(later, ["completed", "completed", "completed", "pending"])], persisted);
+    assert.equal(finished[2].startedAt, end);
+    assert.equal(finished[2].endedAt, later);
+    assert.equal(nativeWorkDuration(finished[2], Date.parse(later)), "58分 55秒");
+  }
+  const created: NativeWorkEvent[] = [
+    { type: "call", id: "create", name: "TaskCreate", at: start, input: { subject: "等候开工" } },
+    { type: "result", id: "create", at: start, result: '{"task":{"id":"17"}}', failed: false },
+  ];
+  assert.equal(rowFrom(created, persisted).startedAt, undefined, "TaskCreate 的时间不是开工时间");
+  const started = [...created,
+    { type: "call", id: "update", name: "TaskUpdate", at: end, input: { taskId: "17", status: "in_progress" } } as NativeWorkEvent,
+    { type: "result", id: "update", at: end, result: "updated", failed: false } as NativeWorkEvent,
+  ];
+  assert.equal(rowFrom(started, persisted).startedAt, end);
+  const finished = rowFrom([...started,
+    { type: "call", id: "finish", name: "TaskUpdate", at: later, input: { taskId: "17", status: "completed" } },
+    { type: "result", id: "finish", at: later, result: "updated", failed: false },
+  ], persisted);
+  assert.equal(finished.startedAt, end);
+  assert.equal(finished.endedAt, later);
+  assert.equal(nativeWorkDuration(finished, Date.parse(later)), "58分 55秒");
+}
+const queuedAgent: NativeWorkEvent = { type: "agent", id: "queued-agent", status: "pending", at: start };
+assert.equal(rowFrom([queuedAgent]).startedAt, undefined);
+assert.equal(rowFrom([queuedAgent, { ...queuedAgent, status: "running", at: end }]).startedAt, end);
+assert.equal(nativeWorkDuration({ ...running, status: "pending" }, Date.parse(later)), "未记录", "即便带有早期开始时间，待处理状态也不继续计时");
+const finalEnd = "2026-09-09T10:00:00.000Z";
+const multipleTurns = rowFrom([spawn, launched, completed,
+  { type: "agent", id: "child", at: "2026-09-09T09:00:00.000Z", status: "running" },
+  { ...completed, at: finalEnd },
+]);
+assert.equal(multipleTurns.startedAt, start);
+assert.equal(multipleTurns.endedAt, finalEnd);
+assert.equal(nativeWorkDuration(multipleTurns, Date.parse(finalEnd)), "10小时 1分", "显示首末时间跨度，包含两轮之间的空闲");
 const unknown = { ...done, startedAt: undefined };
 assert.equal(nativeWorkDuration(unknown, Date.now()), "未记录");
 assert.equal(nativeWorkDate("invalid"), null);
@@ -87,4 +146,19 @@ const reported = new NativeWorkTrace().claudeMessage({ type: "assistant", parent
   message: { model: "claude-sonnet-4-6", content: [] } });
 assert.ok(reported.some((event) => event.kind === "tool" && event.nativeWork?.type === "agent"
   && event.nativeWork.model === "claude-sonnet-4-6" && Number.isFinite(Date.parse(event.nativeWork.at!))));
-console.log("子智能体模型、跨日耗时、实时/历史时间、恢复和缺失数据回归通过");
+const tracker = new NativeWorkTrace();
+const stamped = [
+  tracker.call("Agent", { description: "验证时间戳" }, "stamp"), tracker.result("stamp", "完成"),
+  nativePlanSnapshot("plan", [{ step: "验证", status: "pending" }]),
+  ...codexNativeWork({ type: "todo_list", id: "todos", items: [{ text: "验证", completed: false }] }),
+  ...codexNativeWork({ type: "collab_tool_call", tool: "spawnAgent", receiver_thread_ids: ["child"], status: "completed" }),
+  ...codexChildWork("turn/started", { threadId: "child" }),
+  ...codexChildWork("turn/completed", { threadId: "child", turn: { status: "completed" } }),
+  childActivity("child", { kind: "text", text: "执行记录" }), ...reported,
+];
+assert.equal(stamped.length, 9);
+for (const event of stamped) {
+  assert.ok(event?.kind === "tool" && event.nativeWork?.at && Number.isFinite(Date.parse(event.nativeWork.at)),
+    "各 nativeWork 生产路径在进入实时流前均提供有效时间戳");
+}
+console.log("子智能体模型、待办开工时间、跨日跨度、实时/历史时间与缺失数据回归通过");

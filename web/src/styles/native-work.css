@@ -55,6 +55,7 @@
 .native-work__duration { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 10px 0; font-size: 10px; }
 .native-work__duration > span { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; color: var(--muted); }
 .native-work__duration strong { min-width: 0; font-size: 11px; font-weight: 550; font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; }
+.native-work__timing-note { margin: 0 0 10px; color: var(--muted); font-size: 10px; line-height: 1.6; }
 .native-work__footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--line); }
 .native-work__footer > span { min-width: 0; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .native-work__open { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; border: 0; border-radius: 5px; padding: 4px 6px; background: color-mix(in srgb, var(--accent) 7%, var(--panel)); color: var(--accent); font-size: 11px; cursor: pointer; }

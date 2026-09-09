@@ -3,7 +3,7 @@ import type { NativeWorkItem } from "./nativeWorkModel.ts";
 export function nativeWorkDuration(row: NativeWorkItem, now: number): string {
   const start = row.startedAt ? Date.parse(row.startedAt) : NaN;
   const end = row.endedAt ? Date.parse(row.endedAt)
-    : row.status === "running" || row.status === "pending" ? now : NaN;
+    : row.status === "running" ? now : NaN;
   if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return "未记录";
   const seconds = Math.floor((end - start) / 1000);
   if (seconds < 60) return `${seconds}秒`;

@@ -14,7 +14,8 @@ export function NativeAgentConversation({ row, statusLabel, onBack, error, onRet
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const segments = useMemo(() => nativeAgentSegments(row.activity ?? []), [row.activity]);
-  const running = row.status === "running" || row.status === "pending";
+  const running = row.status === "running";
+  const pending = row.status === "pending";
   const finalResult = segments.length > 0 && (row.status === "completed" || row.status === "failed")
     && row.result && !segments.map((segment) => segment.markdown).join("").includes(row.result) ? row.result : null;
   return <div className="native-agent" aria-label="子智能体执行详情">
@@ -29,11 +30,11 @@ export function NativeAgentConversation({ row, statusLabel, onBack, error, onRet
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region native-agent__scroll-region">
         <div className="native-agent__conversation" ref={scroll} tabIndex={0} aria-label="子智能体会话内容">
-          <div className="native-agent__section-label"><span>执行记录</span><span>{running ? "实时同步" : "历史记录"}</span></div>
+          <div className="native-agent__section-label"><span>执行记录</span><span>{running ? "实时同步" : pending ? "等待开始" : "历史记录"}</span></div>
           {error && <p className="native-work__error" role="alert">{error.message} {onRetry && <button type="button" onClick={onRetry}>重试</button>}</p>}
           {row.description && <details className="native-agent__assignment"><summary>任务说明</summary><MarkdownBody text={row.description} /></details>}
           {segments.length > 0 ? <AgentTurnBody segments={segments} running={running} /> : <>
-            <p className="native-work__hint">{running ? "等待子智能体的执行记录…" : "此会话未记录详细执行过程。"}</p>
+            <p className="native-work__hint">{running ? "等待子智能体的执行记录…" : pending ? "等待子智能体开始执行…" : "此会话未记录详细执行过程。"}</p>
             {row.message && <MarkdownBody text={row.message} />}
             {row.result && row.result !== row.message && <MarkdownBody text={row.result} />}
           </>}

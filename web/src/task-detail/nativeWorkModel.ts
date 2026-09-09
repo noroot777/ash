@@ -61,7 +61,7 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
       const previous = rows.get(id);
       const next = { id, kind: "agent" as const, title: `子智能体 ${id.slice(item.sessionId.length + 1, item.sessionId.length + 9)}`, status: "unknown" as const, ...base, ...previous, ...patch };
       if (observedAt) {
-        if (!next.startedAt && (next.status === "running" || next.status === "pending")) next.startedAt = observedAt;
+        if (!next.startedAt && next.status === "running") next.startedAt = observedAt;
         if (terminal(next.status) && (!previous || !terminal(previous.status))) next.endedAt = observedAt;
       }
       if (!terminal(next.status)) delete next.endedAt;

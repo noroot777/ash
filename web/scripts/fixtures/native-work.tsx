@@ -57,9 +57,14 @@ function trace(final: boolean, updates = 0) {
   return events;
 }
 
-function conversation(final: boolean, updates: number) {
+function conversation(final: boolean, updates: number, planSnapshot = false) {
   return buildConversationItems(
-    [{ session, output: "主会话正文", trace: trace(final, updates) as never }],
+    [{ session, output: "主会话正文", trace: (planSnapshot ? [native({ type: "call", id: "plan", name: "TodoWrite", input: { todos: [
+      { content: "首次记录已经完成", status: "completed" },
+      { content: "正在执行的步骤", status: "in_progress" },
+      { content: "尚未开工的第三步", status: "pending" },
+      { content: "尚未开工的第四步", status: "pending" },
+    ] } })] : trace(final, updates)) as never }],
     [session],
     [],
   );
@@ -68,14 +73,15 @@ function conversation(final: boolean, updates: number) {
 function App() {
   const [phase, setPhase] = useState(() => localStorage.getItem("native-work-phase") === "final");
   const [empty, setEmpty] = useState(false);
+  const [planSnapshot, setPlanSnapshot] = useState(false);
   const [updates, setUpdates] = useState(() => Number(localStorage.getItem("native-work-updates") ?? 0));
-  const items = useMemo(() => empty ? [] : conversation(phase, updates), [empty, phase, updates]);
+  const items = useMemo(() => empty ? [] : conversation(phase, updates, planSnapshot), [empty, phase, updates, planSnapshot]);
   const descriptors = useMemo<InspectorDescriptor<null>[]>(() => [{
     id: "native-work",
     title: "子智能体",
     icon: <Robot size={15} />,
-    render: () => <NativeWorkInspector items={items} status={phase ? "done" : "running" as TaskStatus} />,
-  }], [items, phase]);
+    render: () => <NativeWorkInspector items={items} status={phase && !planSnapshot ? "done" : "running" as TaskStatus} />,
+  }], [items, phase, planSnapshot]);
   const finish = () => {
     localStorage.setItem("native-work-phase", "final");
     setPhase(true);
@@ -87,6 +93,7 @@ function App() {
         <button type="button" onClick={() => inspector.openTab("native-work")}>打开子智能体</button>
         <button type="button" onClick={finish}>完成运行项</button>
         <button type="button" onClick={() => setEmpty((value) => !value)}>切换空状态</button>
+        <button type="button" onClick={() => { setEmpty(false); setPlanSnapshot((value) => !value); }}>切换计划快照</button>
         <button type="button" onClick={() => { localStorage.setItem("native-work-updates", String(updates + 1)); setUpdates(updates + 1); }}>推送执行进展</button>
         {inspector.toggleButton}
         <div aria-label="主会话">{items.map((item) => item.kind === "agent" && <AgentTurnBody key={item.id} segments={item.segments} running={!phase} />)}</div>
