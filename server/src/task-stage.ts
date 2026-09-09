@@ -1,3 +1,4 @@
+import { recordBranchReceipt } from "./task-branch-receipts.js";
 import type { TaskStage } from "@ash/shared";
 import { isTaskStage, STAGE_LABELS, STAGE_ORDER } from "@ash/shared";
 import { and, eq, isNull } from "drizzle-orm";
@@ -67,6 +68,7 @@ export async function clearTaskStage(taskId: string, note: string): Promise<void
 // 与下面的 restoreTaskStage）；只挂回 stage 会留下「界面显示已验收、结构化快照却空了」
 // 的组合，下一次验收会按当时 checkout 重新解析目标（审查实测：同一任务被合进两个分支）。
 export type AcceptedSnapshot = {
+  source?: string | null;
   target: string | null;
   base: string | null;
   merge: string | null;
@@ -89,6 +91,7 @@ export async function peekAcceptedStage(taskId: string): Promise<ReopenedAccepta
     stage: tasks.stage,
     target: tasks.acceptedTargetBranch,
     base: tasks.acceptedBaseCommit,
+    source: tasks.acceptedSourceCommit,
     merge: tasks.acceptedMergeCommit,
     tailPending: tasks.acceptedTailPending,
     tailDone: tasks.acceptedTailDone,
@@ -98,7 +101,7 @@ export async function peekAcceptedStage(taskId: string): Promise<ReopenedAccepta
   try { tailDone = JSON.parse(t.tailDone ?? "[]") as string[]; } catch { /* 按空清单 */ }
   return {
     stage: t.stage,
-    snapshot: { target: t.target, base: t.base, merge: t.merge, tailPending: t.tailPending, tailDone },
+    snapshot: { ...(t.source ? { source: t.source } : {}), target: t.target, base: t.base, merge: t.merge, tailPending: t.tailPending, tailDone },
   };
 }
 
@@ -115,8 +118,10 @@ export async function commitReopenAcceptedStage(taskId: string): Promise<void> {
  * pre-merge 持久化）会把新验收错误冻结到旧目标，崩溃重试还会复用旧区间。
  */
 export async function clearAcceptedSnapshot(taskId: string): Promise<void> {
+  await recordBranchReceipt(taskId);
   // 上一周期的合并事实在 git 历史与时间线里都有。
   await db.update(tasks).set({
+    acceptedSourceCommit: null,
     acceptedTargetBranch: null, acceptedBaseCommit: null, acceptedMergeCommit: null,
     acceptedTailPending: false, acceptedTailDone: "[]", updatedAt: now(),
   }).where(eq(tasks.id, taskId));
@@ -149,6 +154,7 @@ export async function restoreTaskStage(
   await db.update(tasks).set({
     stage,
     ...(snapshot ? {
+      acceptedSourceCommit: snapshot.source ?? null,
       acceptedTargetBranch: snapshot.target,
       acceptedBaseCommit: snapshot.base,
       acceptedMergeCommit: snapshot.merge,

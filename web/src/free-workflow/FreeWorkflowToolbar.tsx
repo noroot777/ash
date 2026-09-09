@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Task } from "@ash/shared";
 import { ArrowSquareOut, MagnifyingGlass, MonitorPlay, SpinnerGap, StopCircle, Terminal } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
+import type { Notify } from "../lib/notify.ts";
 import { FreeReviewDialog } from "./FreeReviewDialog.tsx";
 import { FreeReviewProgress } from "./FreeReviewProgress.tsx";
 import { FreeReviewRepairButton } from "./FreeReviewRepairButton.tsx";
@@ -17,7 +18,7 @@ interface PreviewAction {
   token: number;
 }
 
-export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (message: string) => void }) {
+export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: Notify }) {
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
   const [reviewOpen, setReviewOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
@@ -121,7 +122,7 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
       const { stopped } = await api.stopFreePreview(taskId);
       if (owns(taskId, token)) notify(stopped ? "已取消启动预览" : "预览已经不在跑了");
     } catch (error) {
-      if (owns(taskId, token)) notify(error instanceof Error ? error.message : "取消失败");
+      if (owns(taskId, token)) notify(error instanceof Error ? error.message : "取消失败", { sticky: true });
     } finally {
       // 起预览那一路的 POST 还没回来（它要等到自己发现被取消），快照照样重拉：
       // 记录已经被删掉了，界面该立刻回到「打开预览」。
@@ -161,7 +162,10 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
       // 起失败也要 reload：日志文件这时已经落盘了，reload 之后 `hasLog` 才会翻真、
       // 「预览日志」那颗按钮才出得来 —— 否则用户手上只剩一句转瞬即逝的 toast。
       if (owns(taskId, token)) {
-        notify(error instanceof Error ? error.message : "预览操作失败");
+        // **这一句必须等用户自己收掉。** 起不来时后端报回来的是一整份东西：认出了哪几个
+        // 服务、每个该怎么起、要前后端一起起该写成什么样——那是一段照着抄进「预览命令」
+        // 的文字，两秒多就走的话，用户只知道「红了一下」，得再点一次才看得见。
+        notify(error instanceof Error ? error.message : "预览操作失败", { sticky: true });
         await free.reload(true).catch(() => undefined);
       }
     } finally {

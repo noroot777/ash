@@ -110,7 +110,7 @@ async function localBranchExists(repo: string, branch: string): Promise<boolean>
 }
 
 type BranchRange =
-  | { ok: true; sourceBranch: string; targetBranch: string; mergeBase: string }
+  | { ok: true; sourceBranch: string; targetBranch: string | null; mergeBase: string }
   | { ok: false; sourceBranch: string; targetBranch: string | null; reason: string };
 
 /**
@@ -121,6 +121,7 @@ async function taskBranchRange(
   repo: string,
   taskId: string,
   requestedTarget: string | null | undefined,
+  startCommit?: string | null,
 ): Promise<BranchRange> {
   // 分支名走 resolveWorktreeBranchName：改名成 ash 之后新任务是 `ash/xxx`，改名前建的
   // 老任务还挂在 `harness/xxx` 上，这里得两边都认，否则老任务一律报 source_branch_missing。
@@ -129,8 +130,16 @@ async function taskBranchRange(
     ({ ok: false, sourceBranch, targetBranch, reason });
   if (!(await isGitRepo(repo))) return fail(null, "not_git_repo");
   const targetBranch = await resolveTaskMergeTarget(repo, requestedTarget);
-  if (!targetBranch) return fail(null, "target_unresolved");
   if (!(await localBranchExists(repo, sourceBranch))) return fail(targetBranch, "source_branch_missing");
+  if (startCommit) {
+    try {
+      const { stdout } = await exec("git", ["-C", repo, "rev-parse", "--verify", "--end-of-options", `${startCommit}^{commit}`]);
+      return { ok: true, sourceBranch, targetBranch, mergeBase: stdout.trim() };
+    } catch {
+      return fail(targetBranch, "start_commit_unreadable");
+    }
+  }
+  if (!targetBranch) return fail(null, "target_unresolved");
   if (!(await localBranchExists(repo, targetBranch))) return fail(targetBranch, "target_branch_missing");
   try {
     const { stdout } = await exec("git", ["-C", repo, "merge-base", targetBranch, sourceBranch]);
@@ -145,38 +154,42 @@ export async function taskBranchDiff(
   taskId: string,
   requestedTarget: string | null | undefined,
   limitBytes = DIFF_LIMIT_BYTES,
+  startCommit?: string | null,
 ): Promise<TaskDiffResult> {
   const repo = expandHome(repoPath);
-  const range = await taskBranchRange(repo, taskId, requestedTarget);
-  if (!range.ok) {
-    return {
-      available: false,
-      sourceBranch: range.sourceBranch,
-      targetBranch: range.targetBranch,
-      mergeBase: null,
-      diff: "",
-      files: [],
-      truncated: false,
-      limitBytes,
-      reason: range.reason,
-    };
-  }
-  const { mergeBase, sourceBranch, targetBranch } = range;
-  const [{ stdout: numstat }, diff] = await Promise.all([
-    exec("git", ["-C", repo, "diff", "--numstat", "-z", mergeBase, sourceBranch], { maxBuffer: 16 * 1024 * 1024 }),
-    cappedGitStdout(repo, ["diff", "--no-ext-diff", "--no-color", "--unified=3", mergeBase, sourceBranch], limitBytes),
-  ]);
-  const files = parseNumstat(numstat);
-  return {
-    available: true,
-    sourceBranch,
-    targetBranch,
-    mergeBase,
-    diff: diff.text,
-    files,
-    truncated: diff.truncated,
+  const range = await taskBranchRange(repo, taskId, requestedTarget, startCommit);
+  const unavailable = (reason: string): TaskDiffResult => ({
+    available: false,
+    sourceBranch: range.sourceBranch,
+    targetBranch: range.targetBranch,
+    mergeBase: null,
+    diff: "",
+    files: [],
+    truncated: false,
     limitBytes,
-  };
+    reason,
+  });
+  if (!range.ok) return unavailable(range.reason);
+  const { mergeBase, sourceBranch, targetBranch } = range;
+  try {
+    const [{ stdout: numstat }, diff] = await Promise.all([
+      exec("git", ["-C", repo, "diff", "--numstat", "-z", mergeBase, sourceBranch], { maxBuffer: 16 * 1024 * 1024 }),
+      cappedGitStdout(repo, ["diff", "--no-ext-diff", "--no-color", "--unified=3", mergeBase, sourceBranch], limitBytes),
+    ]);
+    const files = parseNumstat(numstat);
+    return {
+      available: true,
+      sourceBranch,
+      targetBranch,
+      mergeBase,
+      diff: diff.text,
+      files,
+      truncated: diff.truncated,
+      limitBytes,
+    };
+  } catch {
+    return unavailable("task_diff_unreadable");
+  }
 }
 
 /**
@@ -192,11 +205,16 @@ export async function taskBranchFileDiff(
   path: string,
   origPath: string | null = null,
   limitBytes = DIFF_LIMIT_BYTES,
+  startCommit?: string | null,
 ): Promise<TaskFileDiffResult> {
   const repo = expandHome(repoPath);
-  const range = await taskBranchRange(repo, taskId, requestedTarget);
+  const range = await taskBranchRange(repo, taskId, requestedTarget, startCommit);
   if (!range.ok) return fileDiffUnavailable(path, origPath, range.reason, limitBytes);
-  return rangeFileDiff(repo, range.mergeBase, range.sourceBranch, path, origPath, limitBytes);
+  try {
+    return await rangeFileDiff(repo, range.mergeBase, range.sourceBranch, path, origPath, limitBytes);
+  } catch {
+    return fileDiffUnavailable(path, origPath, "task_diff_unreadable", limitBytes);
+  }
 }
 
 /** 验收后原任务分支/worktree 已清理，按冻结的准确 commit 区间读取合并结果。 */

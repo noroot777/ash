@@ -28,6 +28,7 @@ import { withRepoLock } from "./repo-lock.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
 import { execFileText as exec } from "./exec.js";
 import { findProcessesReferencingPath, type ProcessRow } from "./platform.js";
+import { assertReadableWorktree, checkoutRecovery, registeredCheckout, removeMissingWorktreeRegistrations, UnreadableWorktreeError } from "./git-worktree-state.js";
 
 const isDir = (p: string) => {
   try { return statSync(p).isDirectory(); } catch { return false; }
@@ -52,6 +53,7 @@ export function worktreeRemovalBlocker(
   dirtyFiles: readonly string[],
   blockers: readonly ProcessRow[] = [],
 ): string {
+  if (error instanceof UnreadableWorktreeError) return error.message;
   if ((error as NodeJS.ErrnoException)?.code === "EBUSY") {
     const visible = blockers.slice(0, 6);
     const holders = visible.length
@@ -153,15 +155,12 @@ async function commitOf(repo: string, ref: string): Promise<string | null> {
   }
 }
 
-async function checkedOutPath(repo: string, branch: string): Promise<string | null> {
-  const { stdout } = await exec("git", ["-C", repo, "worktree", "list", "--porcelain"]);
-  let path: string | null = null;
-  for (const line of stdout.split("\n")) {
-    if (line.startsWith("worktree ")) path = line.slice("worktree ".length);
-    else if (line === `branch refs/heads/${branch}`) return path;
-    else if (!line) path = null;
-  }
-  return null;
+export async function targetCheckout(repoPath: string, branch: string) {
+  const repo = expandHome(repoPath);
+  const checkout = await registeredCheckout(repo, branch);
+  const { path } = checkout;
+  const atRepo = path !== null && sameFilesystemPath(path, repo) && await symbolicBranch(repo) === branch;
+  return { ...checkout, atRepo };
 }
 
 async function conflictFiles(cwd: string): Promise<string[]> {
@@ -199,8 +198,8 @@ async function removeTemporaryWorktree(repo: string, temp: TemporaryWorktree): P
   }
   try { rmSync(temp.root, { recursive: true, force: true }); }
   catch (error) { failures.push(`删除临时目录失败：${gitError(error)}`); }
-  try { await exec("git", ["-C", repo, "worktree", "prune"]); }
-  catch (error) { failures.push(`git worktree prune 失败：${gitError(error)}`); }
+  try { await removeMissingWorktreeRegistrations(repo, { path: temp.path }); }
+  catch (error) { failures.push(`清理临时 worktree 登记失败：${gitError(error)}`); }
   return failures.length > 0 ? failures.join("；") : null;
 }
 
@@ -210,7 +209,7 @@ export function withTemporaryCleanupOutcome(
   worktreePath: string,
 ): TaskMergeResult {
   if (!cleanupError) return result;
-  const message = `临时合并 worktree ${worktreePath} 清理失败：${cleanupError}；合并结果已保留，可手动清理该路径并执行 git worktree prune，后续验收清理步骤也会再次 prune`;
+  const message = `临时合并 worktree ${worktreePath} 清理失败：${cleanupError}；合并结果已保留，可手动核对并清理该路径及其 Git 登记，后续验收清理步骤也会再次尝试`;
   if (!result.ok) return { ...result, message: `${result.message}；${message}` };
   const warning: TaskMergeWarning = { reason: "temporary_cleanup_failed", message, worktreePath };
   return { ...result, warnings: [...(result.warnings ?? []), warning] };
@@ -278,10 +277,9 @@ async function inTargetCheckout(
   fn: (cwd: string) => Promise<TaskMergeResult>,
   beforeTemp?: () => TaskMergeResult | null,
 ): Promise<TaskMergeResult> {
-  await exec("git", ["-C", repo, "worktree", "prune"]).catch(() => {});
-  const targetPath = await checkedOutPath(repo, targetBranch).catch(() => null);
-  const mainBranch = await symbolicBranch(repo);
-  const targetAtRepo = targetPath !== null && sameFilesystemPath(targetPath, repo) && mainBranch === targetBranch;
+  await removeMissingWorktreeRegistrations(repo, { branch: targetBranch }).catch(() => {});
+  const checkout = await targetCheckout(repo, targetBranch);
+  const { path: targetPath, atRepo: targetAtRepo } = checkout;
 
   if (targetAtRepo) {
     const { stdout } = await exec("git", ["-C", repo, "status", "--porcelain"]);
@@ -303,7 +301,7 @@ async function inTargetCheckout(
     return {
       ok: false,
       reason: "target_checked_out",
-      message: `目标分支 ${targetBranch} 已在另一个 worktree 检出；未操作该工作区`,
+      message: `目标分支 ${targetBranch} 已在另一个 worktree ${targetPath} 检出；未操作该工作区。${checkoutRecovery(checkout) ?? ""}`,
       sourceBranch,
       targetBranch,
       targetPath,
@@ -465,6 +463,8 @@ async function mergeTaskBranchLocked(
       squashInCheckedOutTarget(cwd, sourceBranch, targetBranch));
   }
 
+  // 清掉失效登记后再尝试 fetch，避免首次 FF 被陈旧占用拒绝、第二次却能成功。
+  await removeMissingWorktreeRegistrations(repo, { branch: targetBranch }).catch(() => {});
   // First attempt the ref-only fast-forward. This changes no checked-out files;
   // non-FF and checked-out-target failures fall through to the guarded paths.
   try {
@@ -529,15 +529,16 @@ async function cleanupAcceptedTaskLocked(
   const repo = expandHome(repoPath);
   const sourceBranch = await resolveWorktreeBranchName(repo, taskId);
   const worktreePath = worktreePathFor(repo, taskId);
-  await exec("git", ["-C", repo, "worktree", "prune"]).catch(() => {});
+  await removeMissingWorktreeRegistrations(repo, { branch: sourceBranch }).catch(() => {});
   const hadWorktree = plan.worktree && isDir(worktreePath);
   if (hadWorktree) {
     try {
+      await assertReadableWorktree(worktreePath, repo, sourceBranch);
       await removeWorktree(repo, worktreePath, false);
     } catch (error) {
       // 真脏时列文件；Windows 的 EBUSY 则列能从命令行认出的占用进程。两者不能混:
       // 把「dev server 还在跑」说成「多半有未提交改动」只会让用户翻遍 git status 仍无解。
-      const dirtyFiles = await dirtyFilesAt(worktreePath);
+      const dirtyFiles = error instanceof UnreadableWorktreeError ? [] : await dirtyFilesAt(worktreePath);
       const blockers = (error as NodeJS.ErrnoException)?.code === "EBUSY"
         ? await findProcessesReferencingPath(worktreePath).catch(() => [])
         : [];
@@ -545,7 +546,7 @@ async function cleanupAcceptedTaskLocked(
       return {
         ok: false,
         reason: "worktree_remove_failed",
-        message: `任务 worktree 删除失败：${gitError(error)}（${blocking}）`,
+        message: error instanceof UnreadableWorktreeError ? error.message : `任务 worktree 删除失败：${gitError(error)}（${blocking}）`,
         sourceBranch,
         targetBranch,
         worktreePath,
@@ -553,7 +554,7 @@ async function cleanupAcceptedTaskLocked(
       };
     }
   }
-  await exec("git", ["-C", repo, "worktree", "prune"]).catch(() => {});
+  await removeMissingWorktreeRegistrations(repo, { branch: sourceBranch }).catch(() => {});
   // 线上写的是「分支留着」（或 squash/打标签之后根本删不掉）：到这儿就收工，下面那套
   // ancestor 校验和 `git branch -d` 一句都不跑——分支还在是**说好的结果**，不是失败。
   if (!plan.branch) {

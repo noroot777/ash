@@ -147,7 +147,7 @@ async function importValidated(
   let workspace: string | null = null;
   if (useWorktree && m.git) {
     await importGitBundle(project.repoPath, m.task.id, m.git, notes);
-    const ws = await prepareWorktree(project.repoPath, m.task.id, m.task.worktreeBase);
+    const ws = await prepareWorktree(project.repoPath, m.task.id, m.task.worktreeStartCommit || m.task.worktreeBase, !!m.task.worktreeStartCommit);
     workspace = ws.path;
     if (ws.branch !== m.git.branch) {
       // 源机的分支被手动改过名:fetch 进来的分支还在,但 worktree 挂的是标准名。
@@ -339,6 +339,11 @@ async function importValidated(
     autoTitle: m.task.autoTitle,
     useWorktree,
     worktreeBase: useWorktree ? m.task.worktreeBase : null,
+    worktreeStartCommit: useWorktree ? m.task.worktreeStartCommit ?? null : null,
+    mergeTargetBranch: useWorktree ? m.task.mergeTargetBranch ?? null : null,
+    baseTaskId: m.task.baseTaskId ?? null,
+    acceptedSourceCommit: m.task.acceptedSourceCommit ?? null,
+    creationOrigin: m.task.creationOrigin ?? null,
     workflow: jsonOr(m.task.workflow, "") || null,
     workflowMode: (m.task.workflowMode as "free" | "workflow" | undefined) ?? "workflow",
     workflowAt: m.task.workflowAt,

@@ -49,7 +49,7 @@ function writeProject(project: ProjectView) {
 }
 
 function loadProject(id: string): ProjectView {
-  return structuredClone(readProjects()[id]);
+  return { ...structuredClone(readProjects()[id]), myRole: new URLSearchParams(location.search).has("member") ? "member" : "admin" };
 }
 
 const detectedServices: DetectedPreviewService[] = [
@@ -80,7 +80,17 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     return reply({ exists: true, isRepo: true, dirty: false, branch: "main" });
   }
   if (pathname === "/api/workflows") return reply([]);
-  if (pathname.endsWith("/git")) return reply({ userName: null, userEmail: null, sshKeyPath: null, credential: null });
+  if (pathname.endsWith("/git")) return reply({
+    identity: {
+      isRepo: true,
+      userName: { value: null, scope: null },
+      userEmail: { value: null, scope: null },
+      sshKeyPath: null,
+      sshCommand: { value: null, scope: null },
+      remotes: [],
+    },
+    credential: null,
+  });
   const detection = pathname.match(/^\/api\/projects\/([^/]+)\/preview\/detect$/);
   if (detection) return reply({ services: structuredClone(detectedServices), truncated: false });
   const update = pathname.match(/^\/api\/projects\/([^/]+)$/);
@@ -110,7 +120,7 @@ function Fixture() {
   const notify = useCallback((message: string) => setNotices((all) => [...all, message]), []);
   return (
     <AuthContext.Provider value={{ state: { ...baseAuthState, mode: authMode }, refresh: async () => {} }}>
-      <main style={{ width: 900, margin: "24px auto" }}>
+      <main style={{ width: "min(900px, calc(100% - 32px))", margin: "24px auto" }}>
         <button
           type="button"
           data-testid="health-refresh"

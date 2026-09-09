@@ -6,10 +6,15 @@ import { agents, projects, queueItems, sessions, tasks } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { runsTiming } from "./util.js";
 import { projectHealthLight } from "./git.js";
+import { withRepoLock } from "./repo-lock.js";
+import { execFileText as exec } from "./exec.js";
+import { expandHome } from "./git.js";
+import { baseRef, initializeBranchPlan } from "./task-branch-plan.js";
 import { resolveWorkflowDef } from "./workflows.js";
 import { isMultiUser } from "./auth/mode.js";
 import { settingsFor } from "./auth/personal-settings.js";
 import { profilesOwnedBy, type ExecutorProfileRow } from "./auth/owned-executors.js";
+import { parseTaskCreationOrigin } from "@ash/shared/task-origin";
 
 export type TaskRow = typeof tasks.$inferSelect;
 // workflowId 不是列：它是**创建那一刻**用来挑起手式的 id，落库时会被换成 tasks.workflow
@@ -91,6 +96,10 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   archivedAt: r.archivedAt,
   useWorktree: r.useWorktree,
   worktreeBase: r.worktreeBase,
+  worktreeStartCommit: r.worktreeStartCommit,
+  mergeTargetBranch: r.mergeTargetBranch,
+  baseTaskId: r.baseTaskId,
+  acceptedSourceCommit: r.acceptedSourceCommit,
   acceptedTargetBranch: r.acceptedTargetBranch ?? null,
   acceptedBaseCommit: r.acceptedBaseCommit ?? null,
   acceptedMergeCommit: r.acceptedMergeCommit ?? null,
@@ -98,6 +107,7 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   workflowMode: r.workflowMode as Task["workflowMode"],
   workflowAt: r.workflowAt ?? null,
   originTaskId: r.originTaskId ?? null,
+  creationOrigin: parseTaskCreationOrigin(r.creationOrigin),
   resumePrompt: r.resumePrompt ?? null,
   verifyRound: r.verifyRound ?? null,
   question: r.question ?? null,
@@ -235,6 +245,7 @@ export async function createTasks(
     const { workflowId, ...rest } = row;
     return {
       ...rest,
+      creationOrigin: row.creationOrigin === undefined ? JSON.stringify({ kind: "system" }) : row.creationOrigin,
       useWorktree,
       worktreeBase: useWorktree ? row.worktreeBase ?? null : null,
       // 审查任务（reviewOf 非空）不拷线：它本身就是别人那条线上「验证」那一站长出来的
@@ -247,7 +258,23 @@ export async function createTasks(
           : await snapshotWorkflow(workflowId, row.projectId, useWorktree, row.ownerUserId ?? null)),
     };
   }));
-  await db.insert(tasks).values(normalizedRows);
+  const repos = [...new Set(projectRows.map(p => p.repoPath))].sort();
+  const insert = async (index: number): Promise<void> => {
+    if (index < repos.length) return withRepoLock(repos[index], () => insert(index + 1));
+    const pinned: typeof normalizedRows = [];
+    try {
+      for (const row of normalizedRows) {
+        const hadStart = !!row.worktreeStartCommit;
+        await initializeBranchPlan(row, repoByProject.get(row.projectId) || "");
+        if (!hadStart && row.worktreeStartCommit) pinned.push(row);
+      }
+      await db.insert(tasks).values(normalizedRows);
+    } catch (error) {
+      for (const row of pinned) await exec("git", ["-C", expandHome(repoByProject.get(row.projectId)), "update-ref", "-d", baseRef(row.id), row.worktreeStartCommit!]).catch(() => {});
+      throw error;
+    }
+  };
+  await insert(0);
   await afterInsert?.();
   const persisted = await db
     .select()

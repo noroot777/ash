@@ -20,6 +20,7 @@ import { createTasks } from "../task-store.js";
 import { reopenAcceptedStage } from "../task-stage.js";
 import { beginAccepting, endAccepting } from "../acceptance-lock.js";
 import { executorScopeForOwner } from "../auth/owned-executors.js";
+import { agentTaskCreationOrigin } from "../task-creation-origin.js";
 
 export interface DispatchSpec {
   body: string;
@@ -103,6 +104,7 @@ export async function dispatchWorkers(
   const firstLine = (body: string) =>
     body.split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 30) ?? "";
   const base = Date.parse(ts);
+  const creationOrigin = await agentTaskCreationOrigin(leadTaskId);
   const rows = specs.map((s, i) => {
     const explicitTitle = (s.title ?? "").trim();
     const at = new Date(base + i).toISOString(); // 递增时间戳,列表排序稳定
@@ -117,6 +119,7 @@ export async function dispatchWorkers(
     });
     return {
       id: id(),
+      creationOrigin,
       projectId: lead.projectId,
       groupId,
       parentId: leadTaskId,

@@ -14,6 +14,8 @@ import { parseAttachmentText } from "../task-detail/utils.ts";
 import { ChangeMetaBar, worktreeLabel } from "../review/ChangeMetaBar.tsx";
 import { ReviewDiffViewer } from "../review/ReviewDiffViewer.tsx";
 import { DispatchReviewEvidence } from "./ReviewEvidence.tsx";
+import { BranchAcceptancePanel } from "../review/BranchAcceptancePanel.tsx";
+import { useBranchPlan } from "../review/useBranchPlan.ts";
 
 type ReviewData = {
   commits: TaskCommit[];
@@ -51,7 +53,7 @@ function acceptanceMessage(task: TaskListItem): string {
   const plan = acceptPlan(task.workflow, "human", task.workflowAt);
   const branch = team ? "共享分支" : duet ? "讨论分支" : "任务分支";
   const worktree = team ? "团队 worktree" : duet ? "讨论 worktree" : "任务 worktree";
-  const target = task.worktreeBase || "项目当前分支";
+  const target = task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "项目当前分支";
   const tail = team ? "并联动验收共享执行者。" : "";
   // 手动验收永远有合并方案（acceptPlan 的 human 口径），这里只是类型兜底。
   if (!plan.merge) return `这会把该任务标记为验收完成。${tail}`;
@@ -82,7 +84,7 @@ function AcceptanceFailureNotice({ failure }: { failure: AcceptTaskFailure }) {
       <div className="team-accept-failure-heading">
         <span>{handedOff ? <ArrowsClockwise size={14} weight="bold" /> : <WarningCircle size={14} weight="fill" />}</span>
         <div>
-          <b>{handedOff ? "合并冲突已交给任务处理" : manualConflict ? "合并冲突，未能自动交接" : "验收未完成"}</b>
+          <b>{handedOff ? "合并冲突已交给任务处理" : manualConflict ? "合并冲突，未能自动交接" : failure.completedMerge ? "合并已完成，清理未完成" : failure.completedTag ? "标签已创建，清理未完成" : "验收未完成"}</b>
           {handedOff ? (
             <>
               {failure.conflictHandoff?.message && <p className="team-accept-handoff-message">{failure.conflictHandoff.message}</p>}
@@ -92,7 +94,7 @@ function AcceptanceFailureNotice({ failure }: { failure: AcceptTaskFailure }) {
             <>
               {manualConflict && <p className="team-accept-failure-guidance">未能唤醒任务，请手动解决冲突并提交，然后重新验收。</p>}
               {failure.conflictHandoff?.message && <p>{failure.conflictHandoff.message}</p>}
-              <p>{failure.error}</p>
+              <p style={{ whiteSpace: "pre-line" }}>{failure.error}</p>
             </>
           )}
         </div>
@@ -123,6 +125,18 @@ export function AcceptanceControls({
   notify: (message: string) => void;
   acceptanceBlock?: string | null;
 }) {
+  // 停在中途那道关口时，这一按是「放行」不是「验收」：按钮、确认框、提示三处一起改口，
+  // 只改一处就会出现「按钮写着验收通过、确认框说只是放行」的自相矛盾。
+  const midGate = !isFinalHumanGate(task.workflow, task.workflowAt);
+  const branchPlan = useBranchPlan(task, !midGate && task.stage !== "accepted");
+  const checkingDependencies = !midGate && !!task.useWorktree && task.stage !== "accepted" && (branchPlan.loading || !branchPlan.view);
+  if (!midGate && task.useWorktree && task.stage !== "accepted") {
+    acceptanceBlock ??= branchPlan.error ? "验收依赖读取失败" : null;
+    acceptanceBlock ??= branchPlan.view?.task.blockerLabel ?? branchPlan.view?.task.blocker ?? null;
+    const dependency = branchPlan.view?.task.dependency;
+    if (dependency && dependency.state !== "ready" && branchPlan.view?.task.strategy !== "tag") acceptanceBlock ??=
+      dependency.state === "needs_update" ? "需更新子分支基线" : dependency.state === "waiting" ? "等待父成果合入" : "父成果依赖待处理";
+  }
   const [action, setAction] = useState<"accept" | "return" | null>(null);
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState(false);
@@ -132,10 +146,6 @@ export function AcceptanceControls({
   const inFlight = task.status === "running" || task.status === "queued";
   // Archived = frozen/read-only：后端验收/打回都会 409，按钮必须一致地禁掉，不给假按钮。
   const archived = !!task.archived;
-  // 停在中途那道关口时，这一按是「放行」不是「验收」：按钮、确认框、提示三处一起改口，
-  // 只改一处就会出现「按钮写着验收通过、确认框说只是放行」的自相矛盾。
-  const midGate = !isFinalHumanGate(task.workflow, task.workflowAt);
-
   useEffect(() => {
     if (acceptanceBlock && action === "accept") setAction(null);
   }, [acceptanceBlock, action]);
@@ -153,6 +163,7 @@ export function AcceptanceControls({
     }
   };
   const accept = async () => {
+    if (checkingDependencies || acceptanceBlock || archived || inFlight || busy) return;
     // The confirmation is single-use. Keep progress on the action button so a
     // typed acceptance failure can render unobscured in the review record.
     setAction(null);
@@ -165,7 +176,8 @@ export function AcceptanceControls({
         const handedOff = result.reason === "merge_conflict" && result.conflictHandoff?.notified === true;
         notify(handedOff
           ? "合并冲突已交给任务处理"
-          : result.reason === "merge_conflict" ? "合并冲突，未能自动交接" : `验收未完成：${result.error}`);
+          : result.reason === "merge_conflict" ? "合并冲突，未能自动交接" : result.completedMerge || result.completedTag ? result.error : `验收未完成：${result.error}`);
+        if (result.completedMerge || result.completedTag) await refreshAfterMutation();
         return;
       }
       setAction(null);
@@ -220,9 +232,9 @@ export function AcceptanceControls({
           <span><CheckCircle size={13} weight="fill" />验收完成</span>
         ) : (
           <>
-            <button type="button" className="is-primary" disabled={archived || inFlight || busy || !!acceptanceBlock} onClick={() => setAction("accept")}>
+            <button type="button" className="is-primary" disabled={archived || inFlight || busy || checkingDependencies || !!acceptanceBlock} onClick={() => setAction("accept")}>
               {busy ? <SpinnerGap size={13} className="is-spinning" /> : <CheckCircle size={13} weight="fill" />}
-              {busy ? (midGate ? "放行中" : "验收中") : archived ? "已归档（只读）" : inFlight ? "执行中" : acceptanceBlock ?? (midGate ? "放行，继续下一站" : "验收通过")}
+              {busy ? (midGate ? "放行中" : "验收中") : archived ? "已归档（只读）" : inFlight ? "执行中" : acceptanceBlock ?? (checkingDependencies ? "检查验收依赖" : midGate ? "放行，继续下一站" : "验收通过")}
             </button>
             <button type="button" disabled={archived || inFlight || busy} onClick={() => setAction("return")}><WarningCircle size={13} />{duet ? "打回再讨论" : "打回修改"}</button>
           </>
@@ -236,9 +248,12 @@ export function AcceptanceControls({
           confirmLabel={midGate ? "放行" : "验收通过"}
           danger={!midGate && !!task.useWorktree}
           busy={busy}
+          confirmDisabled={checkingDependencies || !!acceptanceBlock || archived || inFlight}
           onConfirm={() => void accept()}
           onClose={() => setAction(null)}
-        />
+        >
+          {checkingDependencies && <p role="status">正在更新验收依赖，检查完成后可继续确认。</p>}
+        </ConfirmDialog>
       )}
       {action === "return" && (
         <ConfirmDialog title={duet ? "打回继续讨论？" : "打回继续修改？"} message={duet ? "这会把验收意见送回本次讨论，原来的两位讨论者会沿现有上下文继续形成结论。" : "这会把验收意见作为真人回复送入原任务会话，执行者会在原上下文继续处理。"} confirmLabel={duet ? "打回再讨论" : "打回修改"} busy={busy} onConfirm={() => void returnTask()} onClose={() => setAction(null)}>
@@ -392,6 +407,7 @@ export function TeamReviewWorkspace({
       </header>
       <div className="team-review-scroll">
         <div className="team-review-stack">
+          <BranchAcceptancePanel task={lead} notify={notify} onTaskUpdated={onTaskUpdated} />
           <LeadChanges task={lead} onReadTask={onReadTask} />
           {/* 没有独立 worktree 执行者时整节不出现：它的空态说的就是顶上那句「随团队整体验收
               联动标记」，留一个 0 项的空壳只是把验收按钮往下推。有独立执行者时它才是唯一的

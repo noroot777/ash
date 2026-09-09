@@ -1,0 +1,262 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Hono } from "hono";
+import { eq } from "drizzle-orm";
+import { makeStep } from "@ash/shared/workflow";
+import { releaseTmpDb } from "./tmp-db.js";
+
+const root = mkdtempSync(join(tmpdir(), "ash-branch-worktree-state-"));
+process.env.ASH_DB = join(root, "ash.db");
+process.env.ASH_RUNS_DIR = join(root, "runs");
+const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], {
+  encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+}).trim();
+const { db, ensureSchema } = await import("../src/db/index.js");
+const { projects, tasks } = await import("../src/db/schema.js");
+const { createTasks } = await import("../src/task-store.js");
+const { taskWorkspace } = await import("../src/task-workspace.js");
+const { acceptTask, mountTaskAcceptanceRoutes } = await import("../src/task-accept.js");
+const { readBranchPlan } = await import("../src/task-branch-routes.js");
+const { discardTaskWorkspace } = await import("../src/workspace-cleanup.js");
+await ensureSchema();
+const api = new Hono();
+mountTaskAcceptanceRoutes(api);
+const commit = (path: string, name: string) => {
+  writeFileSync(join(path, name), name);
+  git(path, "add", "--", name);
+  git(path, "commit", "-m", name);
+  return git(path, "rev-parse", "HEAD");
+};
+let sequence = 0;
+async function setup() {
+  const id = `state${++sequence}`;
+  const repo = join(root, id);
+  execFileSync("git", ["init", "-b", "main", repo], { stdio: "ignore" });
+  git(repo, "config", "user.name", "Worktree State Test");
+  git(repo, "config", "user.email", "state@example.test");
+  commit(repo, "seed.txt");
+  const at = new Date().toISOString();
+  await db.insert(projects).values({ id, name: id, repoPath: repo, createdAt: at });
+  const create = async (suffix: string, base: string, strategy: "safe" | "squash" | "tag" = "safe") => {
+    const accept = makeStep("accept", "accept");
+    if (accept.kind === "accept") accept.p = { strategy, clean: "all" };
+    const [task] = await createTasks([{
+      id: `${suffix}-${id}`, projectId: id, title: suffix, body: "test", status: "done", mode: "single",
+      useWorktree: true, worktreeBase: base, createdAt: at, updatedAt: at, workflowMode: "preset",
+      workflow: JSON.stringify({ workspace: "isolated", steps: [makeStep("run", "run"), makeStep("human", "human"), accept] }),
+      workflowAt: "human",
+    }]);
+    const workspace = await taskWorkspace(task, repo);
+    const head = commit(workspace.path, `${suffix}.txt`);
+    return { task, ...workspace, head };
+  };
+  const parent = await create("parent", "main");
+  const child = await create("child", parent.branch!);
+  await db.update(tasks).set({ mergeTargetBranch: parent.branch }).where(eq(tasks.id, child.task.id));
+  return { id, repo, parent, child, create };
+}
+const accept = (id: string) => acceptTask(id, "human", { startVerifyRound: async () => ({ round: 1 }) });
+
+try {
+  for (const mode of ["missing-link", "moved-project", "moved-missing-link"] as const) {
+    const s = await setup();
+    const unrelated = await s.create("unrelated", "main");
+    writeFileSync(join(s.parent.path, "PARENT_WIP.txt"), "keep parent WIP");
+    let repo = s.repo;
+    let parentPath = s.parent.path;
+    if (mode !== "moved-project") rmSync(join(parentPath, ".git"));
+    if (mode === "moved-missing-link") {
+      renameSync(join(repo, ".git", "worktrees", s.parent.task.id), join(repo, ".git", "worktrees", "actual-parent-entry"));
+    }
+    if (mode !== "missing-link") {
+      repo = `${s.repo}-renamed`;
+      renameSync(s.repo, repo);
+      parentPath = join(repo, ".worktrees", s.parent.task.id);
+      await db.update(projects).set({ repoPath: repo }).where(eq(projects.id, s.id));
+    }
+    const registration = git(repo, "worktree", "list", "--porcelain", "-z");
+    assert.match(registration, /prunable/);
+    const view = (await readBranchPlan(s.child.task.id))!.task;
+    assert.match(view.blocker!, /目标分支.*仍在工作区/);
+    assert.match(view.targetWorkspaceBlocker!, /git worktree repair/);
+    assert.ok(view.blocker!.includes(parentPath) || view.blocker!.includes(readFileSync(join(repo, ".git", "worktrees", s.parent.task.id, "gitdir"), "utf8").trim().replace(/\/.git$/, "")));
+    const childResult = await accept(s.child.task.id);
+    assert.equal(childResult.accepted, false);
+    if (childResult.accepted) throw new Error("broken parent must block child");
+    assert.match(childResult.error, /git worktree repair/);
+    assert.equal(git(repo, "rev-parse", s.parent.branch!), s.parent.head);
+    const release = await api.request(`/tasks/${s.parent.task.id}/release-workspace`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ fingerprint: (await readBranchPlan(s.parent.task.id))!.task.fingerprint }),
+    });
+    assert.equal(release.status, 409);
+    const releaseError = (await release.json()).error;
+    assert.match(releaseError, /git worktree repair/);
+    assert.doesNotMatch(releaseError, /检出分支已变化/);
+    assert.equal(git(repo, "worktree", "list", "--porcelain", "-z"), registration);
+    assert.equal(readFileSync(join(parentPath, "PARENT_WIP.txt"), "utf8"), "keep parent WIP");
+    if (mode === "missing-link") {
+      assert.equal((await accept(unrelated.task.id)).accepted, true);
+      assert.ok(git(repo, "worktree", "list", "--porcelain", "-z").includes(`branch refs/heads/${s.parent.branch}\0prunable`));
+      const own = await accept(s.parent.task.id);
+      assert.equal(own.accepted, false);
+      if (own.accepted) throw new Error("unreadable workspace was accepted");
+      assert.equal(own.reason, "worktree_remove_failed");
+      assert.match(own.error, /无法确认工作区.*目录及文件已保留/);
+      assert.deepEqual(own.completedMerge, { targetBranch: "main", commit: git(repo, "rev-parse", "main") });
+      assert.ok(own.error.startsWith("合并已完成：成果已合入 main"));
+      assert.ok(own.error.includes(own.completedMerge!.commit!));
+      assert.equal(readFileSync(join(parentPath, "PARENT_WIP.txt"), "utf8"), "keep parent WIP");
+    }
+    if (mode === "moved-missing-link") {
+      git(repo, "worktree", "repair");
+      assert.throws(() => git(repo, "worktree", "repair", parentPath), /git/);
+      const pointer = releaseError.match(/\ngitdir: ([^\n]+)\n/);
+      assert.ok(pointer, "combined failure must provide the exact missing pointer content");
+      assert.equal(pointer[1], git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir") + "/worktrees/actual-parent-entry");
+      assert.ok(releaseError.includes(join(parentPath, ".git")));
+      assert.ok(view.targetWorkspaceRecovery?.includes(`gitdir: ${pointer[1]}`));
+      assert.ok(childResult.error.includes(`gitdir: ${pointer[1]}`));
+      writeFileSync(join(parentPath, ".git"), `gitdir: ${pointer[1]}\n`);
+      git(repo, "worktree", "repair", parentPath);
+    } else {
+      git(repo, "worktree", "repair");
+      if (mode === "moved-project") git(repo, "worktree", "repair", parentPath);
+    }
+    assert.equal(readFileSync(join(parentPath, "PARENT_WIP.txt"), "utf8"), "keep parent WIP");
+    const releaseRepaired = async () => api.request(`/tasks/${s.parent.task.id}/release-workspace`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ fingerprint: (await readBranchPlan(s.parent.task.id))!.task.fingerprint }),
+    });
+    const dirty = await releaseRepaired();
+    assert.equal(dirty.status, 409);
+    assert.match((await dirty.json()).error, /PARENT_WIP.txt/);
+    git(parentPath, "add", "PARENT_WIP.txt");
+    git(parentPath, "commit", "-m", "preserve parent WIP");
+    assert.equal((await releaseRepaired()).status, 200);
+    assert.equal((await readBranchPlan(s.child.task.id))!.task.targetWorkspaceBlocker, null);
+    const childAcceptance = await accept(s.child.task.id);
+    if (mode !== "missing-link") {
+      assert.equal(childAcceptance.accepted, false);
+      if (childAcceptance.accepted) throw new Error("moved child should also need link repair");
+      assert.match(childAcceptance.error, /git worktree repair/);
+      assert.deepEqual(childAcceptance.completedMerge, { targetBranch: s.parent.branch, commit: git(repo, "rev-parse", s.parent.branch!) });
+      git(repo, "worktree", "repair", join(repo, ".worktrees", s.child.task.id));
+      assert.equal((await accept(s.child.task.id)).accepted, true);
+    } else assert.equal(childAcceptance.accepted, true);
+    assert.equal(git(repo, "show", `${s.parent.branch}:PARENT_WIP.txt`), "keep parent WIP");
+    console.log(`✓ ${mode}: repair guidance restores dirty-file protection, release and child acceptance without changing target`);
+  }
+  for (const strategy of ["safe", "squash"] as const) {
+    const s = await setup();
+    const unrelated = await s.create("unrelated", "main", strategy);
+    const gone = await s.create("gone", "main");
+    writeFileSync(join(s.parent.path, "WIP.txt"), "keep WIP");
+    rmSync(join(s.parent.path, ".git"));
+    rmSync(gone.path, { recursive: true });
+    commit(s.repo, "diverged.txt");
+    git(s.repo, "checkout", "-b", "parking");
+    const before = git(s.repo, "worktree", "list", "--porcelain", "-z");
+    assert.equal((await accept(unrelated.task.id)).accepted, true);
+    const after = git(s.repo, "worktree", "list", "--porcelain", "-z");
+    for (const branch of [s.parent.branch, gone.branch]) {
+      const record = before.split("\0\0").find(part => part.includes(`branch refs/heads/${branch}\0`));
+      assert.ok(record && after.includes(record), "unrelated broken and missing registrations remain unchanged");
+    }
+    assert.equal(readFileSync(join(s.parent.path, "WIP.txt"), "utf8"), "keep WIP");
+    console.log(`✓ ${strategy} temporary merge and cleanup preserve unrelated registrations`);
+  }
+  for (const releaseFirst of [false, true]) {
+    const s = await setup();
+    const unrelated = await s.create("unrelated", "main");
+    writeFileSync(join(unrelated.path, "WIP.txt"), "keep unrelated WIP");
+    rmSync(join(unrelated.path, ".git"));
+    git(s.repo, "worktree", "lock", s.parent.path);
+    rmSync(s.parent.path, { recursive: true });
+    assert.match((await readBranchPlan(s.child.task.id))!.task.targetWorkspaceBlocker!, /git worktree unlock/);
+    const lockedAcceptance = await accept(s.child.task.id);
+    assert.equal(lockedAcceptance.accepted, false, "locked missing registration remains occupied");
+    if (lockedAcceptance.accepted) throw new Error("locked target must block child");
+    assert.match(lockedAcceptance.error, /git worktree unlock/);
+    const lockedRelease = await api.request(`/tasks/${s.parent.task.id}/release-workspace`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ fingerprint: (await readBranchPlan(s.parent.task.id))!.task.fingerprint }),
+    });
+    assert.equal(lockedRelease.status, 409);
+    assert.match((await lockedRelease.json()).error, /git worktree unlock/);
+    assert.match(git(s.repo, "worktree", "list", "--porcelain"), /locked/);
+    git(s.repo, "worktree", "unlock", s.parent.path);
+    assert.equal((await readBranchPlan(s.child.task.id))!.task.blocker, null);
+    if (releaseFirst) {
+      const response = await api.request(`/tasks/${s.parent.task.id}/release-workspace`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ fingerprint: (await readBranchPlan(s.parent.task.id))!.task.fingerprint }),
+      });
+      assert.equal(response.status, 200);
+    }
+    assert.equal((await accept(s.child.task.id)).accepted, true, "first acceptance succeeds after unlocking a missing directory");
+    const registry = git(s.repo, "worktree", "list", "--porcelain", "-z");
+    assert.ok(!registry.includes(`branch refs/heads/${s.parent.branch}\0`));
+    assert.ok(registry.includes(`branch refs/heads/${unrelated.branch}\0prunable`));
+    assert.equal(readFileSync(join(unrelated.path, "WIP.txt"), "utf8"), "keep unrelated WIP");
+    console.log(`✓ missing target (${releaseFirst ? "explicit release" : "direct acceptance"}): scoped cleanup preserves unrelated broken checkout and respects locks`);
+  }
+  {
+    const s = await setup();
+    git(s.repo, "worktree", "remove", s.parent.path);
+    writeFileSync(join(s.repo, ".git", "info", "exclude"), ".worktrees/\n");
+    git(s.repo, "checkout", s.parent.branch!);
+    const head = git(s.repo, "rev-parse", "HEAD");
+    const files = git(s.repo, "ls-files");
+    assert.equal((await readBranchPlan(s.child.task.id))!.task.blocker, null);
+    const response = await api.request(`/tasks/${s.parent.task.id}/release-workspace`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ fingerprint: (await readBranchPlan(s.parent.task.id))!.task.fingerprint }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(git(s.repo, "symbolic-ref", "--short", "HEAD"), s.parent.branch);
+    assert.equal(git(s.repo, "rev-parse", "HEAD"), head);
+    assert.equal(git(s.repo, "ls-files"), files);
+    assert.equal((await accept(s.child.task.id)).accepted, true);
+    console.log("✓ missing task directory with branch at project root: release is a no-op, child acceptance still succeeds");
+  }
+  {
+    const s = await setup();
+    const tagged = await s.create("tagged", "main", "tag");
+    const main = git(s.repo, "rev-parse", "main");
+    rmSync(join(tagged.path, ".git"));
+    writeFileSync(join(tagged.path, "WIP.txt"), "keep tagged WIP");
+    const result = await accept(tagged.task.id);
+    assert.equal(result.accepted, false);
+    if (result.accepted) throw new Error("tag cleanup should fail");
+    assert.equal(result.completedMerge, undefined);
+    assert.ok(result.completedTag);
+    assert.notEqual((await db.select().from(tasks).where(eq(tasks.id, tagged.task.id)))[0].stage, "merged");
+    assert.match(result.error, /验收标签已创建.*清理尚未完成/);
+    assert.equal(git(s.repo, "rev-parse", `${result.completedTag}^{commit}`), tagged.head);
+    assert.equal(git(s.repo, "rev-parse", "main"), main);
+    assert.equal(readFileSync(join(tagged.path, "WIP.txt"), "utf8"), "keep tagged WIP");
+    console.log("✓ tag partial success names the created tag and preserves the unchanged merge target and WIP");
+  }
+  {
+    const s = await setup();
+    writeFileSync(join(s.parent.path, "WIP.txt"), "keep orphan WIP");
+    rmSync(join(s.parent.path, ".git"));
+    rmSync(join(s.repo, ".git", "worktrees", s.parent.task.id), { recursive: true });
+    const result = await accept(s.parent.task.id);
+    assert.equal(result.accepted, false, "registration loss cannot bypass cleanup protection");
+    const discarded = await discardTaskWorkspace(s.repo, s.parent.task.id, { worktree: true, branch: false });
+    assert.equal(discarded.worktreeRemoved, false);
+    assert.match(discarded.worktreeError!, /无法确认工作区/);
+    assert.doesNotMatch(discarded.worktreeError!, /gitdir: /, "missing registration must not produce a guessed pointer");
+    assert.equal(readFileSync(join(s.parent.path, "WIP.txt"), "utf8"), "keep orphan WIP");
+    assert.ok(existsSync(s.parent.path));
+    console.log("✓ unregistered orphan: acceptance and ordinary deletion preserve files and report unreadable state");
+  }
+} finally {
+  await releaseTmpDb();
+  rmSync(root, { recursive: true, force: true });
+}

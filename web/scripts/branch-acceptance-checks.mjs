@@ -1,0 +1,264 @@
+import { checkBaseUpdateRecovery } from "./base-update-recovery-checks.mjs";
+
+export async function checkBranchAcceptance(page, fixtureUrl, checkpoint = async () => {}) {
+  const ensure = (value, message) => { if (!value) throw new Error(message); };
+  const go = async task => {
+    const url = new URL(fixtureUrl);
+    url.search = new URLSearchParams({ task, clock: "manual" }).toString();
+    await page.goto(url.href);
+    await page.getByRole("heading", { name: task, exact: true }).waitFor({ state: "visible" });
+  };
+  const button = name => page.getByRole("button", { name, exact: true });
+  const review = () => page.getByRole("region", { name: "审查页入口", exact: true });
+  const inspector = () => page.getByRole("region", { name: "工作流侧栏入口", exact: true });
+  const output = name => page.locator(`output[aria-label="${name}"]`);
+  const settled = async count => {
+    await output("依赖响应次数").filter({ hasText: new RegExp(`^${count}$`) }).waitFor({ state: "visible" });
+    ensure(await output("依赖请求次数").innerText() === String(count), "subscribers issued duplicate requests");
+  };
+
+  for (const [task, reason] of [["case1-unstarted", "任务分支不存在或已清理"], ["case1-badstart", "无法读取任务的开工提交"]]) {
+    await go(task);
+    await page.getByText(`当前无法生成分支 diff：${reason}。`, { exact: true }).waitFor({ state: "visible" });
+    await page.getByText(`无法生成分支 diff：${reason}`, { exact: true }).waitFor({ state: "visible" });
+    ensure(!/accepted_snapshot_unreadable|source_branch_missing|start_commit_unreadable/.test(await page.locator("main").innerText()), "internal diff reason leaked to UI");
+  }
+  await go("case6-parent");
+  await page.getByText(/目标分支 ash\/case6-pa 仍在工作区/).waitFor({ state: "visible" });
+  ensure(!await page.getByRole("checkbox", { name: "case6-child", exact: true }).isEnabled(), "occupied legacy merge target must block selection");
+  ensure(!await page.getByRole("button", { name: /验收父任务及所选子任务/ }).isEnabled(), "legacy child must not be merged after its parent");
+  ensure(await page.getByRole("link", { name: "查看改动", exact: true }).count() === 1, "legacy child has no navigation entry");
+  await go("case6-child");
+  await page.getByRole("status").filter({ hasText: "旧任务仍合入父分支" }).waitFor({ state: "visible" });
+  ensure(await page.getByRole("link", { name: "查看父任务", exact: true }).count() === 1, "legacy child has no parent link");
+
+  await go("case8-parent");
+  ensure(!await button("释放工作区目录（保留分支）").isEnabled(), "running parent release must be disabled");
+  await go("case7-parent");
+  await button("释放工作区目录（保留分支）").click();
+  await page.getByRole("dialog").getByRole("button", { name: "释放目录，保留分支", exact: true }).click();
+  await page.getByRole("dialog").getByRole("alert").filter({ hasText: "unsaved.txt" }).waitFor({ state: "visible" });
+  await page.getByRole("dialog").getByRole("button", { name: "取消", exact: true }).click();
+  await go("case6-parent");
+  await button("释放工作区目录（保留分支）").click();
+  const releaseDialog = page.getByRole("dialog");
+  ensure((await releaseDialog.innerText()).includes("保留父任务记录、分支及已提交的代码"), "release confirmation must explain retained data");
+  await releaseDialog.getByRole("button", { name: "取消", exact: true }).click();
+  ensure(await button("释放工作区目录（保留分支）").isEnabled(), "cancel must leave workspace available");
+  await button("释放工作区目录（保留分支）").click();
+  await releaseDialog.getByRole("button", { name: "释放目录，保留分支", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "父任务工作区目录已不存在" }).waitFor({ state: "visible" });
+  await go("case6-parent");
+  await page.getByRole("status").filter({ hasText: "父任务工作区目录已不存在" }).waitFor({ state: "visible" });
+  await page.getByRole("checkbox", { name: "case6-child", exact: true }).check();
+  await page.getByRole("alert").filter({ hasText: "父子统一验收不适用于这条旧关系" }).waitFor({ state: "visible" });
+  await go("case6-child");
+  await review().getByRole("button", { name: "验收通过", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "验收通过", exact: true }).click();
+  await review().getByText("验收完成", { exact: true }).waitFor({ state: "visible" });
+
+  await go("case9-child");
+  await button("重设合入目标").click();
+  await page.getByRole("combobox", { name: "合入目标", exact: true }).waitFor({ state: "visible" });
+  ensure(await page.getByRole("option", { name: "ash/case9-ch", exact: true }).count() === 0, "own task branch must not be offered as a merge target");
+  await page.getByRole("combobox", { name: "合入目标", exact: true }).selectOption("ash/case9-pa");
+  await page.getByRole("status").filter({ hasText: "不能与目标任务一起统一验收" }).waitFor({ state: "visible" });
+  await button("保存合入目标").click();
+  await page.getByRole("alert").filter({ hasText: "目标分支 ash/case9-pa 仍在工作区" }).waitFor({ state: "visible" });
+  ensure(!await review().getByRole("button", { name: "目标工作区仍被占用", exact: true }).isEnabled(), "occupied target must block individual acceptance");
+  await go("case9-parent");
+  await button("释放工作区目录（保留分支）").click();
+  await page.getByRole("dialog").getByRole("button", { name: "释放目录，保留分支", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "父任务工作区目录已不存在" }).waitFor({ state: "visible" });
+  await go("case9-parent");
+  await page.getByRole("status").filter({ hasText: "父任务工作区目录已不存在" }).waitFor({ state: "visible" });
+  await page.getByRole("checkbox", { name: "case9-child", exact: true }).check();
+  await page.getByRole("alert").filter({ hasText: "不能一起统一验收" }).waitFor({ state: "visible" });
+  ensure(!await page.getByRole("button", { name: /验收父任务及所选子任务/ }).isEnabled(), "released target still needs child-first order");
+  await go("case9-child");
+  await review().getByRole("button", { name: "验收通过", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "验收通过", exact: true }).click();
+  await review().getByText("验收完成", { exact: true }).waitFor({ state: "visible" });
+  await go("case9-parent");
+  await review().getByRole("button", { name: "验收通过", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "验收通过", exact: true }).click();
+  await review().getByText("验收完成", { exact: true }).waitFor({ state: "visible" });
+
+  await go("case10-parent");
+  await page.getByRole("status").filter({ hasText: "父任务工作区目录已不存在" }).waitFor({ state: "visible" });
+  ensure(!/目标分支.*仍在工作区/.test(await page.locator("main").innerText()), "prunable parent must not report contradictory checkout status");
+  await go("case10-child");
+  await review().getByRole("button", { name: "验收通过", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "验收通过", exact: true }).click();
+  await review().getByText("验收完成", { exact: true }).waitFor({ state: "visible" });
+  await go("case11-child");
+  await button("重设合入目标").click();
+  await page.getByRole("combobox", { name: "合入目标", exact: true }).waitFor({ state: "visible" });
+  ensure(await page.getByRole("option", { name: "harness/case11-c", exact: true }).count() === 0, "legacy own task branch must not be offered");
+  ensure(await page.getByRole("option", { name: "main", exact: true }).count() === 1, "final target must remain selectable");
+
+  await go("case12-child");
+  await page.getByRole("alert").filter({ hasText: "目标分支 ash/case12-p 仍在工作区" }).waitFor({ state: "visible" });
+  ensure((await page.getByRole("alert").innerText()).includes("git worktree repair"), "broken target must explain how to repair the link");
+  ensure(!await review().getByRole("button", { name: "目标工作区仍被占用", exact: true }).isEnabled(), "broken backlink with surviving files must block child acceptance");
+  await go("case12-parent");
+  await button("释放工作区目录（保留分支）").click();
+  await page.getByRole("dialog").getByRole("button", { name: "释放目录，保留分支", exact: true }).click();
+  await page.getByRole("dialog").getByRole("alert").filter({ hasText: "git worktree repair" }).waitFor({ state: "visible" });
+  ensure(!(await page.getByRole("dialog").innerText()).includes("工作区检出分支已变化"), "broken link is not a branch switch");
+  await page.getByRole("dialog").getByRole("button", { name: "取消", exact: true }).click();
+  await review().getByRole("button", { name: "验收通过", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "验收通过", exact: true }).click();
+  await review().getByRole("alert").filter({ hasText: "目录及文件已保留" }).waitFor({ state: "visible" });
+  await review().getByText("合并已完成，清理未完成", { exact: true }).waitFor({ state: "visible" });
+  ensure(/成果已合入 main（提交 [a-f0-9]{40,64}）/.test(await review().getByRole("alert").innerText()), "partial success must disclose the actual target and commit");
+  ensure(await review().getByText("验收完成", { exact: true }).count() === 0, "unreadable cleanup must not report success");
+
+  await go("case13-parent");
+  await page.getByRole("alert").filter({ hasText: "占用登记尚未解除" }).waitFor({ state: "visible" });
+  ensure((await page.getByRole("alert").innerText()).includes("git worktree unlock"), "missing locked checkout must explain unlocking");
+  ensure(!/请先停止任务|再单独验收本任务|释放工作区目录/.test(await page.getByRole("alert").innerText()), "parent recovery must not send users back to the same panel");
+  ensure(!/可继续验收子任务|工作区占用已解除/.test(await page.locator("main").innerText()), "locked checkout cannot advertise successful release");
+  await go("case13-child");
+  await page.getByRole("alert").filter({ hasText: "git worktree unlock" }).waitFor({ state: "visible" });
+  ensure(!await review().getByRole("button", { name: "目标工作区仍被占用", exact: true }).isEnabled(), "locked target must remain blocked");
+
+  await go("case14-child");
+  await page.getByRole("alert").filter({ hasText: "gitdir:" }).waitFor({ state: "visible" });
+  ensure((await page.getByRole("alert").innerText()).includes("actual-parent-entry"), "moved missing backlink must identify the real registration");
+  await go("case14-parent");
+  await button("释放工作区目录（保留分支）").click();
+  await page.getByRole("dialog").getByRole("button", { name: "释放目录，保留分支", exact: true }).click();
+  await page.getByRole("dialog").getByRole("alert").filter({ hasText: "gitdir:" }).waitFor({ state: "visible" });
+  ensure((await page.getByRole("dialog").innerText()).includes("actual-parent-entry"), "release must provide the exact pointer content");
+  await page.getByRole("dialog").getByRole("button", { name: "取消", exact: true }).click();
+
+  await go("case15-parent");
+  await review().getByRole("button", { name: "验收通过", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "验收通过", exact: true }).click();
+  await review().getByText("标签已创建，清理未完成", { exact: true }).waitFor({ state: "visible" });
+  ensure((await review().getByRole("alert").innerText()).includes("ash-accepted/"), "tag partial success must name the created tag");
+  ensure(!/合并已完成|验收未完成/.test(await review().getByRole("alert").innerText()), "tag result must agree with its actual completed action");
+
+  await checkBaseUpdateRecovery(page, fixtureUrl, checkpoint);
+
+  await go("case18-child");
+  await page.getByRole("status").filter({ hasText: "来源任务记录已不存在" }).waitFor({ state: "visible" });
+  ensure((await page.locator("main").innerText()).includes("选择已包含继承提交的本地分支"), "missing source must suggest an available action");
+  await checkpoint("missing-source-guidance");
+  await button("重设合入目标").click();
+  await page.getByRole("combobox", { name: "合入目标", exact: true }).selectOption("imported-parent");
+  await button("保存合入目标").click();
+  await review().getByRole("button", { name: "验收通过", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "验收通过", exact: true }).click();
+  await review().getByText("验收完成", { exact: true }).waitFor({ state: "visible" });
+
+  await go("case5-parent");
+  await page.getByRole("region", { name: "派生与验收依赖" }).waitFor({ state: "visible" });
+  ensure(await review().getByRole("button", { name: "放行，继续下一站" }).isEnabled(), "review mid-gate must allow release");
+  ensure(await inspector().getByRole("button", { name: "放行，继续下一站" }).isEnabled(), "inspector mid-gate must allow release");
+  ensure(!await page.getByRole("button", { name: /验收父任务及所选子任务/ }).isEnabled(), "family acceptance must still reject mid-gate");
+  for (const [value, label] of [["archived", "已归档（只读）"], ["running", "执行中"], ["queued", "执行中"], ["block", "审查进行中"]]) {
+    await page.getByRole("combobox", { name: "保护状态" }).selectOption(value);
+    ensure(!await review().getByRole("button", { name: label, exact: true }).isEnabled(), `lost ${value} protection`);
+  }
+  await page.getByRole("combobox", { name: "保护状态" }).selectOption("none");
+  await review().getByRole("button", { name: "放行，继续下一站" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("heading", { name: "放行这一关？" }).waitFor({ state: "visible" });
+  ensure(!/已执行的合并和删除不可逆/.test(await dialog.innerText()), "release must not advertise final merge");
+  await dialog.getByRole("button", { name: "放行", exact: true }).click();
+  await page.getByRole("status", { name: "操作结果" }).filter({ hasText: "已放行" }).waitFor({ state: "visible" });
+  ensure(await output("工作流游标").innerText() === "verify2", "review release must advance to verify");
+
+  await go("case5-child");
+  await inspector().getByRole("button", { name: "放行，继续下一站" }).click();
+  await dialog.getByRole("heading", { name: "放行这一关？" }).waitFor({ state: "visible" });
+  await dialog.getByRole("button", { name: "放行", exact: true }).click();
+  await page.getByRole("status", { name: "操作结果" }).filter({ hasText: "已放行" }).waitFor({ state: "visible" });
+  ensure(await output("工作流游标").innerText() === "verify2", "child inspector release must advance despite waiting parent");
+
+  await go("case1-child");
+  const waiting = review().getByRole("button", { name: "等待父成果合入" });
+  await waiting.waitFor({ state: "visible" });
+  ensure(!await waiting.isEnabled(), "final acceptance must keep dependency guard");
+  await go("case4-parent");
+  const missing = review().getByRole("button", { name: /目标本地分支 main 不存在/ });
+  await missing.waitFor({ state: "visible" });
+  ensure(!await missing.isEnabled(), "final acceptance must keep target guard");
+
+  await go("case3-parent");
+  await review().getByRole("button", { name: "验收通过", exact: true }).waitFor({ state: "visible" });
+  await settled(1);
+  await button("轮询一次").click();
+  await settled(2);
+  await button("模拟任务更新").click();
+  await settled(3);
+  await button("下次依赖请求失败").click();
+  await button("刷新依赖").click();
+  await review().getByRole("button", { name: "验收依赖读取失败" }).waitFor({ state: "visible" });
+  ensure(!await review().getByRole("button", { name: "验收依赖读取失败" }).isEnabled(), "shared errors must block acceptance");
+  await settled(4);
+  await button("重试").click();
+  await settled(5);
+  await button("延迟下次依赖响应").click();
+  await button("刷新依赖").click();
+  await output("延迟状态").filter({ hasText: "已挂起" }).waitFor({ state: "visible" });
+  await button("刷新依赖").click();
+  await output("依赖响应次数").filter({ hasText: /^6$/ }).waitFor({ state: "visible" });
+  await button("释放旧响应").click();
+  await settled(7);
+  ensure(await review().getByRole("button", { name: "验收通过", exact: true }).isEnabled(), "old response overwrote newer refresh");
+  ensure(await page.getByText("过期响应不应覆盖新结果", { exact: true }).count() === 0, "panel received stale response");
+  await button("卸载验收界面").click();
+  await button("轮询一次").click();
+  await settled(7);
+  await button("恢复验收界面").click();
+  await settled(8);
+  await button("轮询一次").click();
+  await settled(9);
+  await button("延迟正常依赖响应").click();
+  await button("确认框打开时更新标签").click();
+  await review().getByRole("button", { name: "验收通过", exact: true }).click();
+  await output("延迟状态").filter({ hasText: "已挂起" }).waitFor({ state: "visible" });
+  ensure(!await review().getByRole("button", { name: "检查验收依赖" }).isEnabled(), "updated task must await a fresh plan");
+  await dialog.getByRole("heading", { name: "确认验收通过？", exact: true }).waitFor({ state: "visible" });
+  ensure(!await dialog.getByRole("button", { name: "验收通过", exact: true }).isEnabled(), "confirmation must wait for dependency refresh without disappearing");
+  ensure(await page.getByRole("region", { name: "派生与验收依赖" }).count() === 1, "refresh must preserve the existing panel");
+  await checkpoint("individual-confirm-refreshing");
+  await dialog.getByRole("button", { name: "完成测试依赖响应", exact: true }).click();
+  await settled(10);
+  ensure(await dialog.getByRole("button", { name: "验收通过", exact: true }).isEnabled(), "unrelated update must preserve and restore the open confirmation");
+  await checkpoint("individual-confirm-refreshed");
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  ensure(await review().getByRole("button", { name: "验收通过", exact: true }).isEnabled(), "fresh task plan must restore acceptance");
+
+  await go("case2-child");
+  await button("更新子分支基线").click();
+  await dialog.getByRole("heading", { name: "更新子分支基线？" }).waitFor({ state: "visible" });
+  await dialog.getByRole("button", { name: "更新基线", exact: true }).click();
+  await page.getByText("基线已更新，请核对改动并按影响范围重新验证。", { exact: true }).waitFor({ state: "visible" });
+  await review().getByRole("button", { name: "验收通过", exact: true }).and(page.locator("button:enabled")).waitFor({ state: "visible" });
+  ensure(await review().getByRole("button", { name: "验收通过", exact: true }).isEnabled(), "baseline update should unblock acceptance");
+
+  await go("case1-parent");
+  await page.getByRole("checkbox", { name: "case1-grand", exact: true }).check();
+  await page.getByRole("alert").filter({ hasText: "未勾选的父任务" }).waitFor({ state: "visible" });
+  ensure(!await page.getByRole("button", { name: /验收父任务及所选子任务/ }).isEnabled(), "cannot skip intermediate ancestor");
+  await page.getByRole("checkbox", { name: "case1-child", exact: true }).check();
+  await button("延迟正常依赖响应").click();
+  await button("确认框打开时更新标签").click();
+  await page.getByRole("button", { name: /验收父任务及所选子任务/ }).click();
+  await dialog.getByRole("heading", { name: "统一验收所选任务？" }).waitFor({ state: "visible" });
+  await output("延迟状态").filter({ hasText: "已挂起" }).waitFor({ state: "visible" });
+  ensure(!await dialog.getByRole("button", { name: "确认统一验收", exact: true }).isEnabled(), "family confirmation must stay mounted but pause during refresh");
+  await checkpoint("family-confirm-refreshing");
+  await dialog.getByRole("button", { name: "完成测试依赖响应", exact: true }).click();
+  await dialog.getByRole("button", { name: "确认统一验收", exact: true }).and(page.locator("button:enabled")).waitFor({ state: "visible" });
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await page.getByRole("button", { name: /验收父任务及所选子任务/ }).click();
+  for (const name of ["case1-parent", "case1-child", "case1-grand"]) ensure((await dialog.innerText()).includes(name), `missing ${name} from confirmation`);
+  await dialog.getByRole("button", { name: "确认统一验收", exact: true }).click();
+  await page.getByText("统一验收已完成，共 3 个任务。", { exact: true }).waitFor({ state: "visible" });
+  await checkpoint("family-accepted");
+}

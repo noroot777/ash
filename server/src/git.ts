@@ -7,6 +7,7 @@ import { IS_WINDOWS, windowsLongPathHint } from "./platform.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 import { execFileText as exec } from "./exec.js";
+import { removeMissingWorktreeRegistrations } from "./git-worktree-state.js";
 
 const isDir = (p: string) => {
   try { return statSync(p).isDirectory(); } catch { return false; }
@@ -331,10 +332,10 @@ function worktreeLeftoverAt(repoPath: string, path: string): boolean {
   return resolve(dirname(path)) === resolve(join(expandHome(repoPath), ".worktrees"));
 }
 
-// 抹掉残骸，顺带 prune 掉 git 那边可能还留着的陈旧注册项。
+// 抹掉残骸，再清理这个路径可能还留着的陈旧注册项。
 async function discardWorktreeLeftover(repo: string, path: string): Promise<void> {
   rmSync(path, { recursive: true, force: true });
-  await exec("git", ["-C", repo, "worktree", "prune"]).catch(() => {});
+  await removeMissingWorktreeRegistrations(repo, { path }).catch(() => {});
 }
 
 // 「这个任务留下的 worktree/分支还在不在」搬到了 ./workspace-cleanup.ts
@@ -450,14 +451,16 @@ export async function prepareWorktree(
   repoPath: string,
   taskId: string,
   base: string | null | undefined,
+  pinned = false,
 ): Promise<Workspace> {
-  return withRepoLock(repoPath, () => prepareWorktreeLocked(repoPath, taskId, base));
+  return withRepoLock(repoPath, () => prepareWorktreeLocked(repoPath, taskId, base, pinned));
 }
 
 async function prepareWorktreeLocked(
   repoPath: string,
   taskId: string,
   base: string | null | undefined,
+  pinned = false,
 ): Promise<Workspace> {
   const repo = expandHome(repoPath);
   if (!(await isGitRepo(repo))) {
@@ -471,7 +474,7 @@ async function prepareWorktreeLocked(
   if (worktreeLeftoverAt(repo, path)) await discardWorktreeLeftover(repo, path);
   // base 的死活先问一遍，再分路：三条路径（复用 / 恢复 / 新建）都要如实报出来，只有
   // 「这一轮的工作目录是怎么来的」各不相同 —— 复用和恢复都没新建目录，用默认值即可。
-  const stale = await staleBaseFallback(repo, base);
+  const stale = pinned ? undefined : await staleBaseFallback(repo, base);
   if (isDir(path)) {
     // Re-use: read whatever branch the existing worktree is actually on (might
     // differ if the user manipulated it manually). isWorktree=true so callers
@@ -495,6 +498,7 @@ async function prepareWorktreeLocked(
     // 恢复：工作原样接回任务分支，跟 base 是谁无关（base 只在建分支那一刻用得上）。
     args.push(path, branch);
   } else {
+    if (pinned && (!base || !(await commitExists(repo, base)))) throw new Error("记录的开工提交不可读，未从其它分支重建");
     args.push("-b", branch, path);
     const trimmedBase = (base ?? "").trim();
     // 建目录问的是另一个问题：这个名字还解析得出一个提交吗（`worktree add <base>` 会不会

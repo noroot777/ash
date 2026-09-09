@@ -13,6 +13,7 @@ import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
 import { ChangeMetaBar } from "./ChangeMetaBar.tsx";
 import { ReviewDiffViewer } from "./ReviewDiffViewer.tsx";
 import { sharedTeamParent } from "./reviewModel.ts";
+import { BranchAcceptancePanel } from "./BranchAcceptancePanel.tsx";
 
 type ReviewData = {
   branch: string | null;
@@ -143,6 +144,7 @@ export function TaskReviewWorkspace({
       </header>
       <div className="single-review-scroll">
         <div className="single-review-stack">
+          {!sharedParent && <BranchAcceptancePanel task={task} notify={notify} onTaskUpdated={onTaskUpdated} />}
           {acceptanceWarning && (
             <p className="single-review-warning" role="alert">
               <WarningCircle size={14} weight="fill" />{acceptanceWarning}

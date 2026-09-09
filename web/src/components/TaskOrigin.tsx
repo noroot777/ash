@@ -1,6 +1,7 @@
 import { type MouseEvent } from "react";
 import type { Task, TaskListItem } from "@ash/shared";
-import { FileText, ChatsCircle, UsersThree } from "@phosphor-icons/react";
+import { FileText, ChatsCircle, UsersThree, Robot, User } from "@phosphor-icons/react";
+import { taskCreationLabel } from "@ash/shared/task-origin";
 import { HoverTip, useHoverTip } from "./HoverTip.tsx";
 
 export type TaskParentLink = {
@@ -17,7 +18,8 @@ export function taskModeLabel(mode: Task["mode"]): string {
 
 export function taskParentLink(task: TaskListItem, allTasks: TaskListItem[]): TaskParentLink | null {
   // 执行者首先属于直接派出它的团队；旧数据即使同时带来源任务，也以团队为准。
-  const taskId = task.parentId ?? task.originTaskId;
+  const creator = task.creationOrigin?.kind === "agent" ? task.creationOrigin.taskId : null;
+  const taskId = task.parentId ?? task.originTaskId ?? creator ?? task.baseTaskId;
   if (!taskId) return null;
   return {
     taskId,
@@ -38,6 +40,15 @@ export function TaskModeIcon({ mode, size = 14 }: { mode: Task["mode"]; size?: n
   if (mode === "duet") return <ChatsCircle size={size} aria-hidden="true" />;
   if (mode === "team") return <UsersThree size={size} aria-hidden="true" />;
   return <FileText size={size} aria-hidden="true" />;
+}
+
+export function TaskCreationBadge({ task }: { task: TaskListItem }) {
+  const origin = task.creationOrigin;
+  if (!origin) return null;
+  const Icon = origin.kind === "agent" ? Robot : origin.kind === "user" ? User : null;
+  return <span className={`task-creation-badge is-${origin.kind}`}>
+    {Icon && <Icon size={11} aria-hidden="true" />}{taskCreationLabel(origin)}
+  </span>;
 }
 
 export function OriginTaskChip({
@@ -84,13 +95,19 @@ export function OriginTaskBar({
   onOpen: (taskId: string) => void;
 }) {
   const link = taskParentLink(task, allTasks);
-  if (!link) return null;
-  const relation = taskParentRelation(link);
+  const origin = task.creationOrigin;
+  if (!origin && !link) return null;
+  const creator = origin?.kind === "agent" ? origin : null;
+  const relation = link ? taskParentRelation(link) : null;
+  const sourceTitle = link?.task?.title || (creator?.taskId === link?.taskId ? creator?.taskTitle : null) || link?.taskId;
   return (
-    <button className="task-origin-bar" type="button" onClick={() => onOpen(link.taskId)}>
-      <TaskModeIcon mode={taskParentMode(link)} />
-      <b>{relation}</b>
-      {link.task && <span>· {link.task.title}</span>}
-    </button>
+    <div className="task-origin-bar">
+      <TaskCreationBadge task={task} />
+      {!origin && <span>来源未记录</span>}
+      {creator?.executorLabel && <span>{creator.executorLabel}</span>}
+      {link && (link.task
+        ? <button type="button" onClick={() => onOpen(link.taskId)}>{relation} · {sourceTitle}</button>
+        : <span>{relation} · {sourceTitle}</span>)}
+    </div>
   );
 }

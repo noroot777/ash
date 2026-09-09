@@ -150,8 +150,9 @@
   padding-top: 5px;
 }
 
-/* 侧栏里唯一一颗分节折叠 toggle：下方那节「其他机器」。箭头**常驻显示**——
-   悬停才浮出的话，不把鼠标放上去就看不出这一节能收起来（用户 2026-09-08 指定）。 */
+/* 侧栏里唯一一颗分节折叠 toggle：下方那节「其他机器」。箭头**鼠标指上去才出现**，
+   展开态收起态都一样（用户 2026-09-08 指定）—— 平时侧栏只留一行标题，不摆常驻图标。
+   键盘焦点落上来时同样现形，否则 Tab 过来的人看不出这里有个能按的东西。 */
 .workspace-task-section-toggle {
   width: 100%;
   gap: 5px;
@@ -166,11 +167,17 @@
 
 .workspace-task-section-toggle svg {
   flex: 0 0 auto;
-  transition: transform 150ms ease-out;
+  opacity: 0;
+  transition: opacity 130ms ease-out, transform 150ms ease-out;
 }
 
 .workspace-task-section-toggle[aria-expanded="true"] svg {
   transform: rotate(90deg);
+}
+
+.workspace-task-section-toggle:hover svg,
+.workspace-task-section-toggle:focus-visible svg {
+  opacity: 1;
 }
 
 .workspace-task-row-wrap {

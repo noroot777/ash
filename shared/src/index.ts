@@ -373,6 +373,10 @@ export interface Task {
   // Existing worktrees are reused; cleanup is an explicit user action.
   useWorktree?: boolean;
   worktreeBase?: string | null;
+  worktreeStartCommit?: string | null;
+  mergeTargetBranch?: string | null;
+  baseTaskId?: string | null;
+  acceptedSourceCommit?: string | null;
   // 统一验收冻结的合并快照。三项齐全时才能发起合并结果审查。
   acceptedTargetBranch?: string | null;
   acceptedBaseCommit?: string | null;
@@ -388,6 +392,7 @@ export interface Task {
   workflowAt?: string | null;
   // Backlink used by duet ↔ team derivation chains.
   originTaskId?: string | null;
+  creationOrigin?: import("./task-origin.ts").TaskCreationOrigin | null;
   // §Pause 检查点续跑指令；非空时结算 paused，恢复后清空。
   resumePrompt?: string | null;
   // 就地验证轮的轮次号；非空 = 这一轮验证还没出结论。任务此刻多半没有进程在跑
@@ -675,3 +680,5 @@ export function parseSessionOutput(out: string): ConvSeg[] {
   flush();
   return segs;
 }
+
+export type { BranchPlanEntry, BranchPlanView, BranchDependency, FamilyAcceptanceResult } from "./branch-plan.ts";

@@ -103,6 +103,7 @@ async function assertNotQueueMember(taskId: string): Promise<void> {
 async function loadSingleTask(taskId: string): Promise<{ task: TaskRow; project: typeof projects.$inferSelect }> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new HandoffError("任务不存在", 404);
+  if (task.baseUpdateIntent) throw new HandoffError("基线更新尚未完成，请先重试更新基线再接力", 409);
   if (task.mode !== "single") throw new HandoffError("目前只支持单飞任务接力（team/duet 待后续版本）", 409);
   if (task.archived) throw new HandoffError("任务已归档,先取消归档再接力", 409);
   if (task.verifyRound != null) throw new HandoffError("就地验证轮进行中,等它出结论再接力", 409);
@@ -479,6 +480,9 @@ export async function exportHandoff(
           status: task.status, stage: task.stage, labels: task.labels,
           agentType: task.agentType, model: task.model, reasoningEffort: task.reasoningEffort,
           autoTitle: task.autoTitle, useWorktree: task.useWorktree, worktreeBase: task.worktreeBase,
+          worktreeStartCommit: task.worktreeStartCommit, mergeTargetBranch: task.mergeTargetBranch,
+          baseTaskId: task.baseTaskId, acceptedSourceCommit: task.acceptedSourceCommit,
+          creationOrigin: task.creationOrigin,
           workflow: task.workflow, workflowMode: task.workflowMode, workflowAt: task.workflowAt,
           reviewStep: task.reviewStep, verifyRounds: task.verifyRounds, verifyStationRounds: task.verifyStationRounds,
           resumePrompt: task.resumePrompt, question: task.question,
