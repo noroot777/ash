@@ -58,7 +58,7 @@ try {
   const member = { id: "chat-codex", name: "聊天 Codex", agentType: "codex" as const, executorId: null, model: null, reasoningEffort: null };
   const [room] = await db.insert(chatRooms).values({ id: "origin-chat", projectId: "project", name: "来源群聊",
     members: JSON.stringify([member]), createdAt: at }).returning();
-  const service = new ChatService(async () => JSON.stringify({ reply: "已委派", task: { title: "群聊委派的任务", body: "实现用户要求" } }), async () => {});
+  const service = new ChatService(async () => ({ text: JSON.stringify({ reply: "已委派", task: { title: "群聊委派的任务", body: "实现用户要求" } }) }), async () => {});
   await service.send(room, "@聊天 Codex 请实现功能", "chat-request", "用户");
   let chatTaskId: string | null = null;
   for (let attempt = 0; attempt < 100; attempt++) {
