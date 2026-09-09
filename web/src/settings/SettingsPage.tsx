@@ -1,4 +1,5 @@
 import type { Group, ProjectView, Task, TaskListItem } from "@ash/shared";
+import { useEffect } from "react";
 import {
   Archive,
   ArrowLeft,
@@ -31,6 +32,13 @@ import { UsersSettings } from "./UsersSettings.tsx";
 import { WorkflowsSettings } from "./WorkflowsSettings.tsx";
 import { ReviewerProfilesSettings } from "./ReviewerProfilesSettings.tsx";
 import { useAuth } from "../auth/authContext.ts";
+import {
+  PROJECT_NAV,
+  PROJECT_SECTIONS,
+  SYSTEM_NAV,
+  type NavItem,
+  type SettingsSection,
+} from "./sections.ts";
 import "./agents-settings.css";
 // 必须排在 agents-settings.css 之后:两边有几组共用的表单基础样式留在那边,
 // 顺序换了层叠结果就变了(见 providers-settings.css 顶部)。
@@ -38,70 +46,64 @@ import "./providers-settings.css";
 import "./executors-settings.css";
 import "./reviewer-settings.css";
 
-export type SettingsSection =
-  | "project"
-  | "members"
-  | "groups"
-  | "archive"
-  | "providers"
-  | "executors"
-  | "modes"
-  | "workflows"
-  | "reviewers"
-  | "cli-env"
-  | "config"
-  | "users"
-  | "account"
-  | "defaults";
+// 这一节到底属于哪个导航组、叫什么名字、URL 里怎么写，全在 sections.ts（认路的不止这一页：
+// 报错文案里的「设置 → …」也照着那份对照表跳）。这里只补图标 —— 那是渲染的事。
+export type { SettingsSection } from "./sections.ts";
+export { parseSettingsSection, projectSectionLabel } from "./sections.ts";
 
-// `requires` 决定这一节**在导航里显不显示**,不决定它存不存在 —— 两者分开的原因见
-// 下面 SECTIONS 的注释。判据只有两种:
-//  · "multi"      多人模式才有意义(自用模式下这一节的内容是空话)
-//  · "multiAdmin" 还得是实例管理员(藏起来只是省事,真正的闸在后端)
-type NavGate = "multi" | "multiAdmin";
-type NavItem = { id: SettingsSection; label: string; icon: typeof GearSix; requires?: NavGate };
-
-const PROJECT_NAV: readonly NavItem[] = [
-  { id: "project", label: "项目设置", icon: FolderSimple },
-  { id: "members", label: "成员", icon: UsersThree, requires: "multi" },
-  { id: "groups", label: "分组", icon: Stack },
-  { id: "archive", label: "已归档", icon: Archive },
-];
-
-const SYSTEM_NAV: readonly NavItem[] = [
-  { id: "providers", label: "供应商", icon: PlugsConnected },
-  { id: "executors", label: "执行器", icon: Robot },
-  { id: "modes", label: "执行模式", icon: CirclesThreePlus },
-  { id: "workflows", label: "起手式", icon: FlowArrow },
-  { id: "reviewers", label: "审查者", icon: MagnifyingGlass },
-  { id: "cli-env", label: "个人 CLI 环境", icon: Terminal, requires: "multi" },
-  { id: "config", label: "配置搬家", icon: ArrowsLeftRight },
-  { id: "users", label: "用户", icon: UsersThree, requires: "multiAdmin" },
-  { id: "account", label: "我的账号", icon: UserCircle, requires: "multi" },
-  { id: "defaults", label: "默认规则", icon: SlidersHorizontal },
-];
-
-// 两份清单都从**完整**的 NAV 推,不受 requires 影响:URL 里带着 `?settings=users`
-// 的链接在权限不够时该走「渲染时的空态」,而不是被 parse 判成非法后静默弹回默认节
-// —— 那样看着就像「链接坏了」。
-const PROJECT_SECTIONS: SettingsSection[] = PROJECT_NAV.map((item) => item.id);
-/** 这一节要不要先有项目？要就返回它在导航里的名字（给拦下它的地方当提示词），不要就返回 null。 */
-export function projectSectionLabel(section: SettingsSection): string | null {
-  return PROJECT_NAV.find((item) => item.id === section)?.label ?? null;
-}
-// 从 SYSTEM_NAV 推出来而不是再抄一遍字面量：新加一节只改一处，不会出现「导航里
-// 有、刷新一次就掉回默认」的半接通状态。
-const SYSTEM_SECTIONS: SettingsSection[] = SYSTEM_NAV.map((item) => item.id);
+const NAV_ICONS: Record<SettingsSection, typeof GearSix> = {
+  project: FolderSimple,
+  members: UsersThree,
+  groups: Stack,
+  archive: Archive,
+  providers: PlugsConnected,
+  executors: Robot,
+  modes: CirclesThreePlus,
+  workflows: FlowArrow,
+  reviewers: MagnifyingGlass,
+  "cli-env": Terminal,
+  config: ArrowsLeftRight,
+  users: UsersThree,
+  account: UserCircle,
+  defaults: SlidersHorizontal,
+};
 
 // 内容**横着长**的那几节要更宽的栏。880px 那档是为「一行一个设置项」的竖排表单定的，
 // 起手式却是一条横版线路图：站数一多，880px 里必然出横向滚动条，而滚动条一出，用户
 // 就看不见这条线到底有几站——那正是这个页面唯一要传达的信息。
 const WIDE_SECTIONS: SettingsSection[] = ["workflows"];
 
-export function parseSettingsSection(value: string | null): SettingsSection | null {
-  if (value === "agents") return "executors";
-  const section = value as SettingsSection;
-  return PROJECT_SECTIONS.includes(section) || SYSTEM_SECTIONS.includes(section) ? section : null;
+const noop = () => {};
+
+/**
+ * 从文案里的「设置 → 项目设置 → 预览」点进来时，停在**那张卡**上，而不是把人扔在页首
+ * 自己找 —— 项目设置这一页竖着排了六七张卡，预览在中间偏下，落在页首等于只跳对了一半。
+ *
+ * 落点由目标卡自己声明（`data-settings-anchor`，取值登记在 sections.ts 的 SECTION_ANCHORS）：
+ * 这一页不认识任何一张卡的内部结构，加一处落点只用改被指的那张卡。找不到就什么都不做 ——
+ * 人已经到了正确的一节，无缘无故滚一下更让人摸不着头脑。
+ */
+function useSettingsAnchor(anchor: string | null | undefined, section: SettingsSection, onSettled: () => void) {
+  useEffect(() => {
+    if (!anchor) return;
+    // 面板自己还要再渲染一帧（项目设置那几张卡都等 project 到位），所以下一帧再找。
+    const frame = requestAnimationFrame(() => {
+      const target = document.querySelector<HTMLElement>(`[data-settings-anchor="${anchor}"]`);
+      // 落点用过就摘（否则之后每次切回这一节都再滚一遍）。摘的动作会让这个 effect 重跑，
+      // 所以**闪那一下不能挂在 effect 的清理上** —— 交给 flashAnchor 自己收尾。
+      onSettled();
+      if (!target) return;
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+      flashAnchor(target);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [anchor, section, onSettled]);
+}
+
+/** 滚过去还得说清楚「就是这张」：设置页上同款卡片长得都一样。动画自己放完自己收。 */
+function flashAnchor(target: HTMLElement) {
+  target.classList.add("is-anchor-flash");
+  target.addEventListener("animationend", () => target.classList.remove("is-anchor-flash"), { once: true });
 }
 
 function SettingsNavItems({
@@ -114,7 +116,7 @@ function SettingsNavItems({
   onSection: (section: SettingsSection) => void;
 }) {
   return items.map((item) => {
-    const Icon = item.icon;
+    const Icon = NAV_ICONS[item.id];
     return (
       <button
         key={item.id}
@@ -132,6 +134,8 @@ function SettingsNavItems({
 
 export function SettingsPage({
   section,
+  anchor,
+  onAnchorSettled,
   project,
   tasks,
   groups,
@@ -144,6 +148,10 @@ export function SettingsPage({
   notify,
 }: {
   section: SettingsSection;
+  /** 这一次是冲着某张卡来的（文案里的「设置 → 项目设置 → 预览」），到了就滚过去并点一下它。 */
+  anchor?: string | null;
+  /** 落点处理完了：调用方摘掉它，免得之后每次切回这一节都再滚一次。 */
+  onAnchorSettled?: () => void;
   project: ProjectView | null;
   tasks: TaskListItem[];
   groups: Group[];
@@ -162,6 +170,7 @@ export function SettingsPage({
     items.filter((item) =>
       item.requires === "multiAdmin" ? isMulti && isInstanceAdmin : item.requires === "multi" ? isMulti : true,
     );
+  useSettingsAnchor(anchor, section, onAnchorSettled ?? noop);
 
   return (
     <div className="settings-shell">

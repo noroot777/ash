@@ -77,7 +77,8 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
       if (active.current) setError(failure instanceof Error ? failure.message : "保存失败");
     } finally { if (active.current) setBusy(false); }
   };
-  return <section className="settings-section project-preview"><h2>预览</h2><div className="settings-card">
+  // data-settings-anchor：报错文案里的「设置 → 项目设置 → 预览」照着它落点（见 sections.ts）。
+  return <section className="settings-section project-preview" data-settings-anchor="preview"><h2>预览</h2><div className="settings-card">
     <div className="settings-row preview-launch-row"><div><b>启动方式</b><small>在这里配置一次，任务里的「打开预览」按保存的方案启动。</small></div>
       <div className="preview-mode-choice" role="group" aria-label="预览启动方式">
         {([ ["script", "自定义脚本"], ["services", "选择服务"] ] as const).map(([value, label]) => <label key={value}>

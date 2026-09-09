@@ -76,6 +76,9 @@ export function WorkspaceShell() {
   const [taskId, setTaskId] = useState<string | null>(initial.taskId);
   const [remoteSelection, setRemoteSelection] = useState<{ task: TaskListItem; target: HandoffTarget } | null>(null);
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(initial.settings);
+  // 这一次进设置是冲着某张卡去的（报错文案里那条「设置 → 项目设置 → 预览」被点了），
+  // 到位滚过去之后就摘掉，免得之后每次切回这一节都再滚一遍。
+  const [settingsAnchor, setSettingsAnchor] = useState<string | null>(null);
   const [groups, setGroups] = useState<Group[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(initial.view === "palette");
   const [chatOpen, setChatOpen] = useState(initial.view === "chat");
@@ -349,11 +352,12 @@ export function WorkspaceShell() {
   const openGroups = () => { if (requireProject("管理分组")) setGroupsPanelOpen(true); };
   // 设置页里项目那几节（项目设置 / 成员 / 分组 / 已归档）没有项目就只有一句空话，进去等于
   // 撞墙 —— 命令面板里的「分组管理」「项目设置」走的正是这里，所以门禁挡在入口而不是页内。
-  const openSettings = (section: SettingsSection = "executors") => {
+  const openSettings = (section: SettingsSection = "executors", anchor: string | null = null) => {
     const scopedLabel = projectSectionLabel(section);
     if (scopedLabel && !requireProject(`打开「${scopedLabel}」`)) return;
     setRemoteSelection(null);
     setSettingsSection(section);
+    setSettingsAnchor(anchor);
     setComposer(null);
     setNotes(null);
     setPaletteOpen(false);
@@ -428,6 +432,7 @@ export function WorkspaceShell() {
     onToggleTaskMode: toggleTaskMode,
   });
 
+  const dropSettingsAnchor = useCallback(() => setSettingsAnchor(null), []);
   const notesProject = notes ? projects.find((project) => project.id === notes.projectId) ?? null : null;
   // 终端开的是**宿主机上的一个真 shell**,项目目录只是起始 cwd(一条 `cd /` 就出去了),
   // 所以多人模式下它是实例管理员专属(§四)。后端已经 403,这里连入口一起收掉 ——
@@ -448,10 +453,12 @@ export function WorkspaceShell() {
     {handoffTarget && <HandoffDialog task={handoffTarget} onClose={() => setHandoffTarget(null)} onTaskUpdate={updateTask} onOpenRemote={selectRemoteTask} notify={notify} />}
     {createDialog?.kind === "project" && <CreateProjectDialog projects={projects} reason={createDialog.reason} notify={notify} onClose={() => setCreateDialog(null)} onCreated={(created) => { setProjects((current) => [...current, created]); setProjectId(created.id); setTaskId(null); setSettingsSection(null); setCreateDialog(null); notify("项目已创建"); }} />}
     {createDialog?.kind === "group" && currentProject && <CreateGroupDialog onClose={() => setCreateDialog(null)} onCreate={async (name, mode) => { try { const created = await api.createGroup({ projectId: currentProject.id, name, mode }); setGroups((current) => [...current, created]); setCreateDialog(null); notify("分组已创建"); } catch (error) { notify(error instanceof Error ? error.message : "分组创建失败"); } }} />}
-    <WorkspaceToast toasts={toasts} onDismiss={dismissToast} />
+    <WorkspaceToast toasts={toasts} onDismiss={dismissToast} onOpenSettings={openSettings} />
   </>;
   if (settingsSection) return <><div className="workspace-system-layout"><div>{handoffAlert}</div><SettingsPage
     section={settingsSection}
+    anchor={settingsAnchor}
+    onAnchorSettled={dropSettingsAnchor}
     project={currentProject}
     tasks={tasks}
     groups={groups}
