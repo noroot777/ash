@@ -14,27 +14,28 @@ const session = {
   agentType: "codex",
   role: "single",
   executor: "codex@fixture",
+  model: "gpt-5.6",
   startedAt: "2026-09-08T00:00:00.000Z",
   endedAt: null,
 } as unknown as Session;
 
 const longText = "需要检查一个不会自然换行的超长说明：" + "NATIVE_WORK_INSPECTOR_".repeat(35);
-const native = (nativeWork: NonNullable<Extract<AgentEvent, { kind: "tool" }>["nativeWork"]>) => ({
-  at: "2026-09-08T00:00:01.000Z",
+const native = (nativeWork: NonNullable<Extract<AgentEvent, { kind: "tool" }>["nativeWork"]>, seconds = 1) => ({
+  at: new Date(Date.parse(session.startedAt) + seconds * 1000).toISOString(),
   turnStartedAt: session.startedAt,
   event: { kind: "tool", name: "fixture", nativeWork } satisfies AgentEvent,
 });
 
 function trace(final: boolean, updates = 0) {
   const events = [
-    native({ type: "call", id: "agent-run-call", name: "spawn_agent", input: { description: "运行中的资料搜集", prompt: longText, model: "gpt-fixture" } }),
+    native({ type: "call", id: "agent-run-call", name: "spawn_agent", input: { description: "运行中的资料搜集", prompt: longText, model: "gpt-5.6-sol" } }),
     native({ type: "result", id: "agent-run-call", result: JSON.stringify({ agent_id: "agent-run" }), failed: false }),
     native({ type: "call", id: "child-task-create", parentId: "agent-run", name: "TaskCreate", input: { subject: "核对浏览器状态", description: longText } }),
     native({ type: "result", id: "child-task-create", result: JSON.stringify({ task: { id: "17" } }), failed: false }),
     native({ type: "call", id: "agent-done-call", name: "agent", input: { description: "已完成的结构检查", prompt: "检查数据结构" } }),
-    native({ type: "result", id: "agent-done-call", result: "同步执行完成", failed: false }),
+    native({ type: "result", id: "agent-done-call", result: "同步执行完成", failed: false }, 96),
     native({ type: "call", id: "agent-fail-call", name: "spawn_agent", input: { description: "启动失败的执行者", prompt: "模拟失败" } }),
-    native({ type: "result", id: "agent-fail-call", result: "fixture launch failed", failed: true }),
+    native({ type: "result", id: "agent-fail-call", result: "fixture launch failed", failed: true }, 4),
     native({ type: "agent", id: "agent-stopped", title: "用户停止的执行者", status: "stopped", message: "由用户停止" }),
     native({ type: "agent", id: "agent-unknown", title: "旧记录状态未知", status: "unknown", message: "没有最终状态" }),
     native({ type: "activity", id: "agent-run", event: { kind: "thinking", text: "核对侧栏事件的归属" } }),
@@ -49,7 +50,7 @@ function trace(final: boolean, updates = 0) {
   );
   if (final) events.push(
     native({ type: "activity", id: "agent-run", event: { kind: "text", text: "刷新后仍应保留的完成结果" } }),
-    native({ type: "agent", id: "agent-run", title: "运行中的资料搜集", status: "completed", result: "刷新后仍应保留的完成结果" }),
+    native({ type: "agent", id: "agent-run", title: "运行中的资料搜集", status: "completed", result: "刷新后仍应保留的完成结果" }, 481),
     native({ type: "call", id: "child-task-update", parentId: "agent-run", name: "TaskUpdate", input: { taskId: "17", status: "completed", owner: "agent-run" } }),
     native({ type: "result", id: "child-task-update", result: "updated", failed: false }),
   );

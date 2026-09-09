@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test:native-work": "npm -w @ash/server run test:native-work && tsx scripts/test-native-work-presentation.tsx && node scripts/test-native-work-dom.mjs",
+    "test:native-work": "npm -w @ash/server run test:native-work && tsx scripts/test-native-work-metadata.ts && tsx scripts/test-native-work-presentation.tsx && node scripts/test-native-work-dom.mjs",
     "test:chat": "node scripts/test-chat-browser.mjs",
     "dev": "vite",
     "//build": "2026-09-09:前端回归测试从 build 里摘出去了(见 test)。原因是 npm run restart 每次都要等它们跑完,而 restart 的目的只是「让改动生效」,不是「跑一遍回归」——改一行文案也得等几十个 puppeteer 用例。build 只保留必过的三段:约定检查(秒级静态扫描) → 类型 → 打包。回归改成显式跑 npm run test:web。",
