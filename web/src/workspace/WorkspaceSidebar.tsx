@@ -19,6 +19,7 @@ import { TASK_MODE_LABEL, type TaskScope } from "./taskScope.ts";
 import { type SidebarSpread } from "./useSidebarSpread.ts";
 import { workspaceModifierLabel } from "./useWorkspaceShortcuts.ts";
 import { WorkspaceResizeHandle } from "./WorkspaceResizeHandle.tsx";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 
 
 export function WorkspaceSidebar({
@@ -46,6 +47,7 @@ export function WorkspaceSidebar({
   onSearch,
   onNotes,
   onChat,
+  chatOpen,
   onAssistant,
   assistantOpen,
   onGroups,
@@ -78,6 +80,7 @@ export function WorkspaceSidebar({
   onSearch: () => void;
   onNotes: () => void;
   onChat?: () => void;
+  chatOpen?: boolean;
   onAssistant?: () => void;
   assistantOpen?: boolean;
   onGroups: () => void;
@@ -87,8 +90,9 @@ export function WorkspaceSidebar({
 }) {
   const modifier = workspaceModifierLabel();
   const taskMode = scope.kind === "tasks";
-  const compactFooter = !spread.laidOut && width < 260;
   const connectionLabel = connected ? "实时已连接" : "实时连接中断";
+  const assistantTip = useHoverTip({ placement: "above" });
+  const chatTip = useHoverTip({ placement: "above" });
   if (collapsed) {
     return (
       <aside className="workspace-sidebar workspace-sidebar--collapsed" aria-label="已收起的侧边栏">
@@ -101,8 +105,11 @@ export function WorkspaceSidebar({
         <button className="workspace-side-icon" type="button" onClick={onToggleCollapsed} aria-label="展开侧边栏">
           <SidebarSimple size={17} weight="bold" aria-hidden="true" />
         </button>
-        {onAssistant && <button className="workspace-side-icon" type="button" aria-label="ash 助手" aria-pressed={!!assistantOpen} onClick={onAssistant}><Robot size={18} /></button>}
-        {onChat && <button className="workspace-side-icon" type="button" aria-label="聊天" onClick={() => onChat()}><ChatCircleDots size={16} /></button>}
+        {currentProject && onChat
+          ? <button className="workspace-side-icon" type="button" aria-label="聊天" aria-pressed={!!chatOpen} {...chatTip.anchorProps} onClick={() => { chatTip.hide(); onChat(); }}><ChatCircleDots size={16} aria-hidden="true" /></button>
+          : onAssistant && <button className="workspace-side-icon" type="button" aria-label="ash 助手" aria-pressed={!!assistantOpen} {...assistantTip.anchorProps} onClick={() => { assistantTip.hide(); onAssistant(); }}><Robot size={18} aria-hidden="true" /></button>}
+        <HoverTip at={chatTip.at}>聊天</HoverTip>
+        <HoverTip at={assistantTip.at}>ash 助手</HoverTip>
       </aside>
     );
   }
@@ -131,7 +138,7 @@ export function WorkspaceSidebar({
           )}
         </div>
         <div className="workspace-sidebar-tools" role="toolbar" aria-label="任务工具">
-          {onChat && <button className="workspace-side-icon" type="button" aria-label="聊天" onClick={() => onChat()}><ChatCircleDots size={16} /></button>}
+          {onChat && <button className="workspace-side-icon" type="button" aria-label="聊天" aria-pressed={!!chatOpen} onClick={() => onChat()}><ChatCircleDots size={16} /></button>}
           <SpreadFilterControls spread={spread} tasks={tasks} scope={scope} />
           <button className="workspace-side-icon" type="button" title={`搜索 ${modifier} K`} aria-label={`搜索 ${modifier} K`} onClick={onSearch}>
             <MagnifyingGlass size={15} aria-hidden="true" />
@@ -164,7 +171,7 @@ export function WorkspaceSidebar({
         notify={notify}
       />
 
-      <div className="workspace-sidebar-bottom">
+      <div className={`workspace-sidebar-bottom${onAssistant ? " has-assistant" : ""}`}>
         <span className={`workspace-connection${connected ? " is-connected" : ""}`} aria-label={connectionLabel}>
           <i aria-hidden="true" />
           {connected ? "实时已连接" : "连接已中断"}
@@ -177,18 +184,19 @@ export function WorkspaceSidebar({
         {!spread.open && (
           <span className="workspace-spread-shortcut" aria-label="按 F 打开任务列表">
             <kbd>F</kbd>
-            {width < (onAssistant ? 320 : 240) ? "打开" : "打开任务列表"}
+            {width < 240 ? "打开" : "打开任务列表"}
           </span>
         )}
-        {onAssistant && <button className="workspace-assistant-entry" type="button" aria-label="ash 助手" aria-pressed={!!assistantOpen} onClick={onAssistant}>
+        {onAssistant && <button className="workspace-assistant-entry" type="button" aria-label="ash 助手" aria-pressed={!!assistantOpen} {...assistantTip.anchorProps} onClick={() => { assistantTip.hide(); onAssistant(); }}>
           <Robot size={15} weight="duotone" aria-hidden="true" />
-          {!compactFooter && "助手"}
+          <span className="workspace-assistant-label">助手</span>
         </button>}
         <button type="button" onClick={onToggleCollapsed} aria-label="收起侧边栏">
           <SidebarSimple size={14} weight="bold" aria-hidden="true" />
-          {(!onAssistant || !compactFooter) && "收起"}
+          收起
         </button>
       </div>
+      <HoverTip at={assistantTip.at}>ash 助手</HoverTip>
       <WorkspaceResizeHandle width={width} onChange={onWidthChange} />
     </aside>
   );

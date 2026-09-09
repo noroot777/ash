@@ -135,15 +135,39 @@ fixture.route("/", api);
 
 const app = new Hono();
 app.route("/api", fixture);
-const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: Number(process.env.PORT ?? 4392) }, (info) => {
-  console.log(`Assistant browser fixture: http://127.0.0.1:${info.port} · isolated database ${stage}`);
-});
+const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: process.argv.includes("--serve") ? 0 : Number(process.env.PORT ?? 4392) });
+if (!server.listening) await new Promise<void>((resolve) => server.once("listening", resolve));
+const address = server.address();
+if (!address || typeof address === "string") throw new Error("Assistant fixture did not expose a TCP port");
 
-const stop = () => {
-  server.close();
+let web: import("vite").ViteDevServer | null = null;
+if (process.argv.includes("--serve")) {
+  const { createServer } = await import("vite");
+  web = await createServer({
+    root: join(process.cwd(), "web"),
+    logLevel: "error",
+    server: { host: "127.0.0.1", port: 0, proxy: { "/api": `http://127.0.0.1:${address.port}` } },
+  });
+  await web.listen();
+  const webAddress = web.httpServer?.address();
+  if (!webAddress || typeof webAddress === "string") throw new Error("Assistant web fixture did not expose a TCP port");
+  console.log(JSON.stringify({ pid: process.pid, root: stage, url: `http://127.0.0.1:${webAddress.port}/?project=assistant-primary` }));
+} else {
+  console.log(`Assistant browser fixture: http://127.0.0.1:${address.port} · isolated database ${stage}`);
+}
+
+let stopping = false;
+const stop = async () => {
+  if (stopping) return;
+  stopping = true;
+  await web?.close();
+  server.closeAllConnections();
+  await new Promise<void>((resolve) => server.close(() => resolve()));
   dbClient.close();
   rmSync(stage, { recursive: true, force: true });
+  if (process.connected) process.disconnect();
   process.exit(0);
 };
-process.on("SIGTERM", stop);
-process.on("SIGINT", stop);
+process.on("SIGTERM", () => { void stop(); });
+process.on("SIGINT", () => { void stop(); });
+process.on("message", (message) => { if (message === "close-fixture") void stop(); });

@@ -26,6 +26,10 @@
   white-space: nowrap;
 }
 
+.ui-hover-tip.is-above {
+  transform: translate(-50%, -100%);
+}
+
 .ui-hover-tip kbd {
   border: 1px solid var(--line);
   border-radius: 4px;
