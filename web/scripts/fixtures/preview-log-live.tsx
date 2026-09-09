@@ -26,14 +26,17 @@ const reply = (body: unknown, status = 200) =>
 const TASK_ID = "T-preview-live";
 const mode = new URLSearchParams(location.search).get("mode");
 const preSpawn = mode === "pre-spawn";
-const longNames = mode === "services-long" || mode === "services-many";
+const removedService = mode === "services-removed";
+const lateServices = mode === "services-late";
+const singleShort = mode === "single-short";
+const longNames = mode === "services-long" || mode === "services-many" || removedService || lateServices;
 const serviceSwitch = mode === "service-switch" || longNames;
 /**
  * `?mode=ready-close`：预览**已经起来了**，用户点「关闭预览」，DELETE 挂着不回。
  * 这一档要钉的是措辞和可点性：关一个已就绪的预览，按钮不能翻成「启动中·点此取消」
  * （更不能还能再点一次去发第二个 DELETE），它该说「关闭中」并且是灰的。
  */
-const readyClose = mode === "ready-close";
+const readyClose = mode === "ready-close" || singleShort;
 /**
  * `?mode=cancel-late-success`：**取消赢了，可那趟 POST 随后还是 200 回来了。**
  *
@@ -44,6 +47,8 @@ const readyClose = mode === "ready-close";
  */
 const cancelLate = mode === "cancel-late-success";
 let logReads = 0;
+let selectedServiceReads = 0;
+let serviceRemoved = false;
 /** 启动期的日志：每读一次多一段，模拟 dev server 边跑边吐字。 */
 const phases = [
   "$ PORT=45841 npm run dev\n",
@@ -133,11 +138,19 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     return await new Promise<Response>((resolve, reject) => { failStart = reject; succeedStart = resolve; });
   }
   if (pathname === `/api/tasks/${TASK_ID}/free-workflow/preview/log`) {
+    if (singleShort) return reply({
+      services: serviceStates.slice(0, 1), text: "single-service banner", exists: true,
+      running: false, starting: false, truncated: false, updatedAt: null,
+      command: "npm run web", url: "http://localhost:45841/",
+    });
     if (serviceSwitch) {
       const selectedService = new URL(href, location.origin).searchParams.get("service");
+      if (removedService && selectedService === "api" && ++selectedServiceReads > 1) serviceRemoved = true;
+      const currentServices = serviceRemoved ? serviceStates.filter((service) => service.id !== "api")
+        : lateServices && logReads++ < 5 ? serviceStates.slice(0, 1) : serviceStates;
       if (selectedService === "web") {
         return await new Promise<Response>((resolve) => setTimeout(() => resolve(reply({
-          services: serviceStates,
+          services: currentServices,
           text: "stale web log",
           truncated: false,
           updatedAt: "2026-09-07T00:00:00.000Z",
@@ -148,10 +161,11 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
           url: "http://localhost:45841/",
         })), 400));
       }
-      const selected = serviceStates.find((service) => service.id === selectedService);
+      const selected = currentServices.find((service) => service.id === selectedService);
       return reply({
-        services: serviceStates,
-        text: selectedService === "api" ? "fresh api log" : longServiceLog,
+        services: currentServices,
+        text: selectedService === "api" ? (serviceRemoved ? "removed api log" : "fresh api log")
+          : serviceRemoved ? "remaining services log" : longServiceLog,
         truncated: false,
         updatedAt: "2026-09-07T00:00:00.000Z",
         exists: true,

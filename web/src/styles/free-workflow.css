@@ -121,7 +121,8 @@
 .free-workflow-generated > p { margin:11px 0 0; color:var(--faint); font-size:9.5px; line-height:1.55; }
 
 /* 预览日志：起不来的时候唯一的现场。等宽、可选中、默认贴底。 */
-.preview-log-dialog { display:flex; flex-direction:column; width:min(860px,calc(100vw - 28px)); height:min(760px,92vh); overflow:hidden; border:1px solid var(--line2); border-radius:15px; background:var(--panel); box-shadow:var(--shadow); }
+.preview-log-dialog { display:flex; flex-direction:column; width:min(860px,calc(100vw - 28px)); max-height:min(760px,92vh); overflow:hidden; border:1px solid var(--line2); border-radius:15px; background:var(--panel); box-shadow:var(--shadow); }
+.preview-log-dialog.has-service-tabs { height:min(760px,92vh); }
 .preview-log-dialog > header { display:grid; min-height:66px; grid-template-columns:34px minmax(0,1fr) 28px; align-items:center; gap:10px; border-bottom:1px solid var(--line); padding:10px 14px; }
 .preview-log-dialog > header > span { display:grid; width:34px; height:34px; place-items:center; border-radius:10px; background:color-mix(in lch,var(--accent) 11%,var(--raised)); color:var(--accent); }
 .preview-log-dialog h2,.preview-log-dialog p { margin:0; }
@@ -141,7 +142,7 @@
 
 @media (max-width:800px) {
   .free-workflow-toolbar { width:100%; }
-  .free-workflow-toolbar > a { display:none; }
+  .free-workflow-toolbar > a,.free-workflow-toolbar > .preview-service-links { display:none; }
   .free-review-dialog-body { grid-template-columns:1fr; }
   .free-review-reviewers { border-right:0; border-bottom:1px solid var(--line); }
 }
@@ -172,7 +173,7 @@
 .preview-log-selection { display:flex; min-width:0; align-items:baseline; gap:12px; padding:9px 14px 0; font-size:10.5px; }
 .preview-log-selection > span:first-child { flex:1; min-width:0; color:var(--muted); overflow-wrap:anywhere; }
 .free-workflow-toolbar:has(.preview-service-links) { width:100%; }
-.preview-service-links { display:flex; flex:1 0 100%; order:1; min-width:0; align-items:center; gap:10px; margin-top:3px; padding:2px 8px; }
+.preview-service-links { display:flex; flex:1 0 100%; min-width:0; align-items:center; gap:10px; margin-top:3px; padding:2px 8px; }
 .preview-service-links-label { flex-shrink:0; color:var(--faint); font-size:10px; }
 .preview-service-links .preview-service-scroll > a { display:flex; height:26px; max-width:230px; flex:0 0 auto; align-items:center; gap:6px; border:1px solid var(--line); border-radius:6px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:11px; font-weight:500; text-decoration:none; }
 .preview-service-links .preview-service-scroll > a:hover { border-color:var(--line2); background:var(--raised); color:var(--ink); }

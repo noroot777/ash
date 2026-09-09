@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { createServer } from "vite";
+import { checkPreviewServiceRegressions } from "./preview-service-review-checks.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({
@@ -183,6 +184,8 @@ try {
   await serviceSwitch.waitForTimeout(600);
   assert.equal(await serviceBody.textContent(), "fresh api log", "上一服务的延迟响应覆盖了当前服务日志");
   await serviceSwitch.close();
+
+  await checkPreviewServiceRegressions(browser, base);
 
   console.log("preview log live: ok");
 } finally {

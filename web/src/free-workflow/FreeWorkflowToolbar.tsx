@@ -209,7 +209,6 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: Noti
           {previewBusy ? <SpinnerGap size={13} className="is-spinning" /> : free.state?.preview.running ? <StopCircle size={13} weight="regular" /> : <MonitorPlay size={13} weight="regular" />}
           <span>{action === "closing" ? "关闭中" : action === "canceling" ? "取消中" : previewStarting ? "启动中·点此取消" : free.state?.preview.running ? "关闭预览" : "打开预览"}</span>
         </button>
-        {free.state?.preview.running && <PreviewServiceLinks key={task.id} services={free.state.preview.services ?? []} url={free.state.preview.url} />}
         {/* 日志入口按 hasLog 给，不按 running 给：预览**起不来**的那一次同样留下了日志，
             而那正是最需要看它的时候。读日志是只读动作，接力/验收锁死也照给。
             logArmed 是启动期间的那一档：hasLog 要等这次 POST 回来才翻真，可日志从
@@ -219,6 +218,7 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: Noti
             <Terminal size={13} weight="regular" /><span>预览日志</span>
           </button>
         )}
+        {free.state?.preview.running && <PreviewServiceLinks key={task.id} services={free.state.preview.services ?? []} url={free.state.preview.url} />}
       </div>
       {logOpen && <PreviewLogDialog taskId={task.id} awaitingStart={action === "opening"} onClose={() => { setLogOpen(false); logTrigger.current?.focus(); }} notify={notify} />}
       {reviewOpen && <FreeReviewDialog taskId={task.id} state={free.state} reservationMode={reservationMode} onChanged={free.setState} onClose={() => setReviewOpen(false)} notify={notify} />}

@@ -38,6 +38,8 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
   awaitingStart?: boolean;
 }) {
   const scrim = useRef<HTMLDivElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
+  const restoreRemovedTabFocus = useRef(false);
   const panelId = useId();
   const body = useRef<HTMLPreElement>(null);
   const requestVersion = useRef(0);
@@ -50,13 +52,31 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
   // 人往上翻的时候不能被新日志拽回底部（跟会话贴底一个道理）。
   const [stick, setStick] = useState(true);
   useDismissable({ enabled: true, containerRef: scrim, onClose });
+  useEffect(() => { closeButton.current?.focus(); }, []);
+  useEffect(() => {
+    if (!restoreRemovedTabFocus.current) return;
+    restoreRemovedTabFocus.current = false;
+    (scrim.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? closeButton.current)?.focus();
+  }, [serviceId, services]);
 
   const load = useCallback(async () => {
     const version = requestVersion.current;
     try {
       const log = await api.freePreviewLog(taskId, serviceId);
       if (version !== requestVersion.current) return;
-      setServices(log.services ?? []);
+      const nextServices = log.services ?? [];
+      setServices(nextServices);
+      if (serviceId && !nextServices.some((service) => service.id === serviceId)) {
+        restoreRemovedTabFocus.current = document.activeElement?.id === previewLogTabId(panelId, serviceId);
+        requestVersion.current += 1;
+        setServiceId(undefined);
+        setText("");
+        setMeta(null);
+        setError(null);
+        setLoading(true);
+        setStick(true);
+        return;
+      }
       setText(log.exists ? log.text : "");
       setMeta({ running: log.running, starting: log.starting, truncated: log.truncated, command: log.command, url: log.url });
       setError(null);
@@ -66,7 +86,7 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
     } finally {
       if (version === requestVersion.current) setLoading(false);
     }
-  }, [taskId, serviceId]);
+  }, [taskId, serviceId, panelId]);
 
   useEffect(() => {
     setLoading(true); setText("");
@@ -94,7 +114,7 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
     <div className="task-modal-scrim" ref={scrim} role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
-      <div className="preview-log-dialog" role="dialog" aria-modal="true" aria-labelledby="preview-log-title" tabIndex={-1}>
+      <div className={`preview-log-dialog${services.length > 1 ? " has-service-tabs" : ""}`} role="dialog" aria-modal="true" aria-labelledby="preview-log-title" tabIndex={-1}>
         <header>
           <span><Terminal size={17} weight="bold" /></span>
           <div>
@@ -108,7 +128,7 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
               {meta?.truncated ? "太长了，只显示尾部。" : ""}
             </p>
           </div>
-          <button type="button" aria-label="关闭预览日志" onClick={onClose}><X size={15} /></button>
+          <button ref={closeButton} type="button" aria-label="关闭预览日志" onClick={onClose}><X size={15} /></button>
         </header>
         {services.length > 1 && <div className="preview-log-services">
           <PreviewServiceTabs services={services} serviceId={serviceId} panelId={panelId} onSelect={(id) => { setServiceId(id); setStick(true); }} />

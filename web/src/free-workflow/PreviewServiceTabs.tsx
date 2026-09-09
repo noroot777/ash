@@ -15,7 +15,6 @@ export function PreviewServiceTabs({ services, serviceId, panelId, onSelect }: {
 }) {
   const selected = useRef<HTMLButtonElement>(null);
   const labels = previewServiceLabels(services);
-  useEffect(() => { selected.current?.focus(); }, []);
   useEffect(() => {
     selected.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [serviceId]);
