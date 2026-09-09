@@ -19,7 +19,7 @@ export function useSubagentInspectors<Context>(
       ...descriptor,
       title: incomplete ? `${descriptor.title}（记录读取不完整）` : descriptor.title,
       icon: hasSubagents
-        ? <Robot size={14} className="task-subagents-icon--populated" />
+        ? <Robot size={14} weight="bold" className="task-subagents-icon--populated" />
         : descriptor.icon,
     };
   }), [descriptors, hasSubagents, incomplete]);

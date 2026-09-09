@@ -141,8 +141,9 @@
   height: 16px;
 }
 
-.inspector-rail__tab:not(.is-active):not(:hover) .task-subagents-icon--populated {
-  color: color-mix(in srgb, var(--accent) 65%, var(--muted));
+.inspector-rail__tab:not(.is-active):not(:hover):has(.task-subagents-icon--populated) {
+  background: color-mix(in srgb, var(--cyan) 16%, var(--panel));
+  color: color-mix(in srgb, var(--cyan) 90%, var(--ink));
 }
 
 .inspector-host__menu-label svg {
