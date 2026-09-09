@@ -18,43 +18,77 @@ import { useProjectGitAnnouncer } from "../../src/workspace/useProjectGitAnnounc
 const reply = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-const stateOf = (head: string) => ({
+const BRANCHES: Record<string, string[]> = { p1: ["main", "feature"], p2: ["release", "hotfix"] };
+
+const stateOf = (project: string, head: string) => ({
   isRepo: true,
-  root: "/tmp/repo",
+  root: `/tmp/${project}`,
   branch: { head, detached: false, oid: "abc1234", upstream: `origin/${head}`, ahead: 2, behind: 0 },
   dirty: { staged: 0, unstaged: 0, untracked: 0, merge: 0 },
   operation: null,
   remotes: ["origin"],
-  branches: [
-    { name: head, current: true, upstream: `origin/${head}`, ahead: 2, behind: 0, gone: false, worktree: null },
-    { name: "feature", current: false, upstream: null, ahead: null, behind: null, gone: false, worktree: null },
-  ],
+  branches: BRANCHES[project].map((name) => ({
+    name,
+    current: name === head,
+    upstream: name === head ? `origin/${name}` : null,
+    ahead: name === head ? 2 : null,
+    behind: name === head ? 0 : null,
+    gone: false,
+    worktree: null,
+  })),
 });
 
 /** 谁被请求了几次 —— 断言直接读这份账（window.__calls）。 */
-const calls = { gets: 0, fetches: 0 };
+const calls = { gets: 0, fetches: 0, checkouts: 0 };
 (window as unknown as { __calls: typeof calls }).__calls = calls;
+
+// 服务端此刻真正在哪条分支上。checkout 改它，GET 读它 —— 这样「过期的读」才有东西可盖。
+const heads: Record<string, string> = { p1: "main", p2: "release" };
 
 let releaseFetch: (() => void) | null = null;
 let fetchFails = false;
-(window as unknown as { __release: () => void }).__release = () => releaseFetch?.();
-(window as unknown as { __failNext: () => void }).__failNext = () => { fetchFails = true; };
+// 扣住下一趟 GET：复现「读发在写之前、回来在写之后」那条时序。
+let holdNextGet = false;
+let heldGetArrived = false;
+let releaseGet: (() => void) | null = null;
+const win = window as unknown as Record<string, unknown>;
+win.__release = () => releaseFetch?.();
+win.__failNext = () => { fetchFails = true; };
+win.__holdNextGet = () => { holdNextGet = true; heldGetArrived = false; };
+win.__heldGetArrived = () => heldGetArrived;
+win.__releaseGet = () => releaseGet?.();
 
 window.fetch = async (input: RequestInfo | URL): Promise<Response> => {
   const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const { pathname } = new URL(href, location.origin);
-  const match = /^\/api\/projects\/(p[12])\/git(\/fetch)?$/.exec(pathname);
+  const match = /^\/api\/projects\/(p[12])\/git(\/fetch|\/checkout)?$/.exec(pathname);
   if (!match) return reply({ error: `unexpected ${pathname}` }, 404);
-  const head = match[1] === "p1" ? "main" : "release";
+  const project = match[1];
+
   if (!match[2]) {
     calls.gets += 1;
-    return reply(stateOf(head));
+    // 快照定格在**请求到达的那一刻** —— 这正是「过期响应」的定义。
+    const snapshot = stateOf(project, heads[project]);
+    if (holdNextGet) {
+      holdNextGet = false;
+      heldGetArrived = true;
+      await new Promise<void>((resolve) => { releaseGet = resolve; });
+    }
+    return reply(snapshot);
   }
+
+  if (match[2] === "/checkout") {
+    calls.checkouts += 1;
+    const target = BRANCHES[project].find((name) => name !== heads[project])!;
+    heads[project] = target;
+    return reply({ ok: true, message: `已切换到 ${target}`, state: stateOf(project, target) });
+  }
+
   calls.fetches += 1;
   // 挂着不回，直到测试自己放行 —— 现场里 fetch --prune 打一趟远端就是这个量级。
   await new Promise<void>((resolve) => { releaseFetch = resolve; });
   if (fetchFails) return reply({ error: "远端连不上：Connection timed out" }, 500);
-  return reply({ ok: true, message: `已更新 ${head} 的远端信息`, state: stateOf(head) });
+  return reply({ ok: true, message: `已更新 ${heads[project]} 的远端信息`, state: stateOf(project, heads[project]) });
 };
 
 const healthOf = (branch: string): ProjectHealth => ({ exists: true, isRepo: true, branch, dirty: false });

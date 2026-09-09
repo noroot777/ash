@@ -33,6 +33,18 @@ const IDLE: ProjectGitRun = { state: null, busy: null, message: null, error: nul
 const runs = new Map<string, ProjectGitRun>();
 const listeners = new Map<string, Set<() => void>>();
 
+// 读取世代号。每次写操作**开始和落定各推一次**，于是「跨过一次写的那趟读」必然拿着一个
+// 过期的号回来，一眼认得出来。见 `putProjectGitState`。
+const epochs = new Map<string, number>();
+
+export function projectGitEpoch(projectId: string): number {
+  return epochs.get(projectId) ?? 0;
+}
+
+function bumpEpoch(projectId: string) {
+  epochs.set(projectId, projectGitEpoch(projectId) + 1);
+}
+
 /** 引用稳定：只有 `patch` 换新对象，`useSyncExternalStore` 才不会每帧判定成变了。 */
 export function readProjectGitRun(projectId: string | null): ProjectGitRun {
   return (projectId ? runs.get(projectId) : null) ?? IDLE;
@@ -90,17 +102,29 @@ function patch(projectId: string, next: Partial<ProjectGitRun>) {
 
 /** 落定：先把账本写好（订阅者据此重渲染），再广播给上层去刷新和播报。 */
 function settle(projectId: string, kind: string, next: Partial<ProjectGitRun>) {
+  bumpEpoch(projectId);
   patch(projectId, { ...next, busy: null, settledKind: kind, settled: readProjectGitRun(projectId).settled + 1 });
   const { message, error } = readProjectGitRun(projectId);
   for (const listener of [...settleListeners]) listener({ projectId, kind, message, error });
 }
 
 /**
- * 面板拉到一份新状态。**在途操作期间一律不写**：那趟 GET 多半发在操作之前，回来晚了就把
- * 结果盖成操作之前的样子（同 scm 面板那道过期响应，判据见 `test-scm-race.mjs`）。
+ * 面板拉到一份新状态。`epoch` 是**发这趟读之前**取的世代号（`projectGitEpoch`）。
+ *
+ * 两道闸，缺一不可：
+ * ① 在途操作期间一律不写——那趟 GET 读到的是 git 干到一半的样子；
+ * ② 世代号对不上就丢弃。只看 ①（写入那一刻 busy 空不空）会漏掉最要命的一路：读发出时
+ *    还没人写、读在路上时用户切了分支、切完了读才回来——`busy` 早清空了，于是这份**写
+ *    之前**的快照被当成最新的写进去，面板从 `feature` 退回 `main`。退回去的不只是显示：
+ *    按钮门禁、分支行上的 current、pull/push 的 upstream 和 ahead/behind 全跟着回到旧
+ *    仓库状态，用户会照着一份磁盘上已经不成立的判断接着点。
+ *
+ * scm 面板栽过同一道题（判据见 `test-scm-race.mjs`），这里是同一条规矩：写之前发出的读，
+ * 回来晚了也说了不算。
  */
-export function putProjectGitState(projectId: string, state: ProjectGitState): void {
+export function putProjectGitState(projectId: string, state: ProjectGitState, epoch: number): void {
   if (readProjectGitRun(projectId).busy) return;
+  if (epoch !== projectGitEpoch(projectId)) return;
   patch(projectId, { state });
 }
 
@@ -120,6 +144,8 @@ export async function runProjectGit(
     patch(projectId, { message: null, error: `正在${gitOpLabel(running)}，等它结束再试` });
     return false;
   }
+  // 开始就推一次世代号：此刻还在路上的那些读，全都变成「写之前发出的」，回来一律作废。
+  bumpEpoch(projectId);
   patch(projectId, { busy: kind, message: null, error: null });
   try {
     const result = await action();

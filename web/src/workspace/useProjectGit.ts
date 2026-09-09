@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { api, type ProjectGitResult } from "../lib/api.ts";
 import {
+  projectGitEpoch,
   putProjectGitState,
   readProjectGitRun,
   runProjectGit,
@@ -39,15 +40,17 @@ export function useProjectGit(projectId: string | null, enabled: boolean): Proje
 
   useEffect(() => {
     if (!enabled || !projectId) return;
-    // 写操作在途时不拉：这趟 GET 只会读到 git 干到一半的样子，回来还可能盖掉操作结果
-    // （`putProjectGitState` 也拦了一道）。操作落定时结果自带一份新状态。
+    // 写操作在途时不拉：这趟 GET 只会读到 git 干到一半的样子。操作落定时结果自带一份新状态。
     if (readProjectGitRun(projectId).busy) return;
+    // 发之前记下世代号：这趟读在路上时如果有人写了，回来就得作废——缓存让按钮在 GET 落地
+    // 之前就可点，用户完全来得及在这几百毫秒里切一次分支。判据见 `putProjectGitState`。
+    const epoch = projectGitEpoch(projectId);
     let alive = true;
     setLoading(true);
     api.projectGit(projectId)
       .then((next) => {
         if (!alive) return;
-        putProjectGitState(projectId, next);
+        putProjectGitState(projectId, next, epoch);
         setLoadError(null);
       })
       .catch((reason) => {

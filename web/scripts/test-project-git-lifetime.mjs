@@ -100,10 +100,37 @@ try {
   await page.getByTestId("switch-project").click();
   await until(async () => /main/.test(await pill.innerText()), "切回原项目");
 
-  // ── 失败一路：浮层关着时同样得说话，而且留住让人看 ──────────────────
-  await page.evaluate(() => window.__failNext());
+  // ── ⑤ 缓存让按钮提前可点，那趟后台 GET 就不许再说了算 ────────────────
+  // 重开浮层时先摆缓存、后台补一趟 GET。缓存已经让分支行可点，用户完全来得及在这几百
+  // 毫秒里切一次分支——于是「读发在写之前、回来在写之后」。老实现只在写入那一刻看 busy，
+  // 那时 busy 早清空了，这份写之前的快照就把 checkout 的结果盖了回去：面板从 feature 退
+  // 回 main，连带按钮门禁和 upstream/ahead/behind 一起回到旧仓库状态。
+  await page.keyboard.press("Escape");
+  await until(async () => (await panel.count()) === 0, "先把浮层收起来");
+  await page.evaluate(() => window.__holdNextGet());
   await pill.click();
   await panel.waitFor();
+  await until(async () => page.evaluate(() => window.__heldGetArrived()), "被扣住的那趟 GET 到达");
+
+  // 分支行的可及名字是「分支名 + 上游那一小段」（feature 没有 upstream），所以按前缀匹配。
+  await page.getByRole("button", { name: /^feature/ }).click();
+  await until(
+    async () => /已切换到 feature/.test(await panel.locator(".project-git-panel__ok").innerText().catch(() => "")),
+    "checkout 落定",
+  );
+
+  await page.evaluate(() => window.__releaseGet());
+  // 响应到浏览器、fetch 落地、React 重渲染都在这之后，给它一点时间真的把状态写进去
+  // ——测的是「盖回去了没有」，所以必须等它有机会盖。
+  await page.waitForTimeout(400);
+  const current = page.locator(".project-git-branch.is-current");
+  assert.equal(await current.count(), 1, "当前分支只该有一行");
+  assert.match(await current.innerText(), /feature/, "写之前发出的那趟 GET 不许把 checkout 结果盖回 main");
+  assert.match(await panel.locator(".project-git-panel__branch b").innerText(), /feature/, "浮层顶上那行也得是切过去的分支");
+
+  // ── 失败一路：浮层关着时同样得说话，而且留住让人看 ──────────────────
+  // ⑤ 结束时浮层还开着，直接接着点 fetch。
+  await page.evaluate(() => window.__failNext());
   await page.getByRole("button", { name: "更新远端信息（fetch --prune）" }).click();
   await running.waitFor();
   const saidBeforeFail = await said();
