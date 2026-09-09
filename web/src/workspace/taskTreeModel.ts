@@ -58,7 +58,7 @@ function sortPinned<T extends TaskListItem>(tasks: T[]): T[] {
 // 失败这一档不能靠行首那颗点来认：它走 "error"，而 error 只在**未读**时才亮
 // （见 useTaskReadState），点开看过一眼就熄了。跟着点走的话，失败的任务只在头 24 小时
 // 露个面，之后缩进「显示更多」—— 而失败恰恰是越老越该被人看见的一档。
-// 等你指挥的同理：一条卡着等答复超过一天的任务被折进「显示另外 N 条」，
+// 等你指挥的同理：一条卡着等答复超过一天的任务被折进「展开(20/N)」，
 // 恰好是最该一眼看见的那类行，路径反而更长。
 //
 // 判据放在这里而不是留在组件里，是为了跟 previewTasksByAge 挨着、并且能被测试直接钉住：
@@ -98,7 +98,7 @@ export function previewTasksByAge<T extends TaskListItem>(
   };
 }
 
-// 「显示另外 N 条」一次放出多少条。（用户 2026-09-09 指定）
+// 「展开(20/N)」一次放出多少条。（用户 2026-09-09 指定）
 //
 // 这个按钮从前是一把梭：攒了几个月的旧任务点一下全铺出来，侧栏瞬间几百行 —— 想找的
 // 那条反而更难找，滚动条也失去了参照。改成一页一页放：不够就再点一下。
@@ -117,10 +117,11 @@ export function revealToIndex(index: number, total: number, page = TASK_REVEAL_P
   return Math.min(total, Math.ceil((index + 1) / Math.max(1, page)) * Math.max(1, page));
 }
 
-// 按钮上的字。剩得比一页多时必须把「还有多少没显示」说出来：否则点一下只多 20 条、
-// 用户不知道后面还剩几百条还是就这些，也就判断不了值不值得继续点。
+// 按钮上的字：`展开(20/233)` —— 前一个数是这一下放出来几条，后一个是当前还没显示的总数。
+// （用户 2026-09-09 指定这个写法）侧栏就那么窄，写成一句话「显示另外 20 条（未显示 233
+// 条）」会折成两行，把一颗按钮撑成一段话；两个数字挤在括号里，一眼扫过去就够了。
 export function revealMoreLabel(remaining: number, page = TASK_REVEAL_PAGE): string {
-  return remaining <= page ? `显示另外 ${remaining} 条` : `显示另外 ${page} 条（未显示 ${remaining} 条）`;
+  return `展开(${Math.min(page, remaining)}/${remaining})`;
 }
 
 // 选中被预览藏住的任务时，只自动展开一次。同一条选中项上用户点了收起，

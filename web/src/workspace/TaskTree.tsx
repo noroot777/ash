@@ -154,7 +154,7 @@ function ScopedTaskTree({
   // 「没有在跑、等你答复或待验收的任务」，而屏幕上本该写着「联系不上 mac-mini」。
   // 同一句话有两份拷贝，补一处漏一处；删掉那份，让所有情况都走同一条渲染路径。
   type RenderGroup = (typeof layout)[number]["groups"][number];
-  // 一个行块的内容：年龄闸筛过的那几行 +「显示另外 N 条」（一次一页，见 TaskReveal）。
+  // 一个行块的内容：年龄闸筛过的那几行 +「展开(20/N)」（一次一页，见 TaskReveal）。
   // 分节和项目分组共用它。
   const renderRows = (group: RenderGroup, showProject: boolean) => {
     const preview = previewTasksByAge(group.tasks, Date.now(), keepVisible);

@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { revealMore, revealMoreLabel, revealToIndex } from "./taskTreeModel.ts";
 
-// 侧栏三处「显示另外 N 条」共用的**分页展开**：主列表的年龄闸、团队行底下的执行者、
+// 侧栏三处「展开(20/N)」共用的**分页展开**：主列表的年龄闸、团队行底下的执行者、
 // 「其他项目」那一叠。三处从前各写一版「点一下全展开」，改一处就漏两处 —— 状态、
 // 按钮和文案都收在这里，算法本体在 taskTreeModel（那儿有测试钉着）。
 //

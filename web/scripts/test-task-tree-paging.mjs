@@ -1,4 +1,4 @@
-// 侧栏三处「显示另外 N 条」都是**分页**的：一次放 20 条，不够再点一下，不是一把梭全展开。
+// 侧栏三处「展开(20/N)」都是**分页**的：一次放 20 条，不够再点一下，不是一把梭全展开。
 // 主列表的年龄闸 / 团队行底下的执行者 / 「其他项目」那一叠 —— 三处共用 TaskReveal，
 // 所以一个用例把三处都走一遍，免得改一处漏两处。
 // 跑：npm -w web run test:task-tree-paging
@@ -30,7 +30,7 @@ try {
   const oldRows = mainList.locator('.workspace-task-row:has-text("旧任务")');
   const mainMore = mainList.locator(".workspace-task-more-row");
   const mainCollapse = mainMore.getByRole("button", { name: "收起", exact: true });
-  const firstPage = mainMore.getByRole("button", { name: "显示另外 20 条（未显示 45 条）" });
+  const firstPage = mainMore.getByRole("button", { name: "展开(20/45)" });
 
   await page.getByRole("button", { name: "今天刚改过" }).waitFor();
   assert.equal(await oldRows.count(), 0, "默认只显示 24 小时内的任务");
@@ -45,16 +45,16 @@ try {
   assert.equal(await mainCollapse.count(), 1, "翻了一页就要有收起");
 
   // 按钮上的「还剩多少」跟着走。
-  await mainMore.getByRole("button", { name: "显示另外 20 条（未显示 25 条）" }).click();
+  await mainMore.getByRole("button", { name: "展开(20/25)" }).click();
   await page.getByRole("button", { name: "旧任务 40" }).waitFor();
   assert.equal(await oldRows.count(), 40);
   assert.equal(await page.getByRole("button", { name: "旧任务 41" }).count(), 0);
 
   // 最后一页不足 20 条时按剩下的说。
-  await mainMore.getByRole("button", { name: "显示另外 5 条" }).click();
+  await mainMore.getByRole("button", { name: "展开(5/5)" }).click();
   await page.getByRole("button", { name: "旧任务 45" }).waitFor();
   assert.equal(await oldRows.count(), 45, "最后一页把剩下的放完");
-  assert.equal(await mainMore.getByRole("button", { name: /^显示另外/ }).count(), 0, "放完了就不再有展开按钮");
+  assert.equal(await mainMore.getByRole("button", { name: /^展开\(/ }).count(), 0, "放完了就不再有展开按钮");
   assert.equal(await mainCollapse.count(), 1);
 
   // 收起回到起点，且能从头再翻一次。
@@ -69,9 +69,9 @@ try {
   await workerList.waitFor();
   assert.equal(await workerRows.count(), 12, "执行者先只摆一屏");
   const workerMore = workerList.locator(".workspace-task-more-row");
-  await workerMore.getByRole("button", { name: "显示另外 18 条" }).click();
+  await workerMore.getByRole("button", { name: "展开(18/18)" }).click();
   await page.waitForFunction(() => document.querySelectorAll('.workspace-worker-list .workspace-task-row').length === 30);
-  assert.equal(await workerMore.getByRole("button", { name: /^显示另外/ }).count(), 0);
+  assert.equal(await workerMore.getByRole("button", { name: /^展开\(/ }).count(), 0);
   await workerMore.getByRole("button", { name: "收起", exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll('.workspace-worker-list .workspace-task-row').length === 12);
 
@@ -82,9 +82,9 @@ try {
   await otherList.waitFor();
   assert.equal(await otherRows.count(), 12, "别家项目也先只摆一屏");
   const otherMore = otherList.locator(".workspace-task-more-row");
-  await otherMore.getByRole("button", { name: "显示另外 20 条（未显示 28 条）" }).click();
+  await otherMore.getByRole("button", { name: "展开(20/28)" }).click();
   await page.waitForFunction(() => document.querySelectorAll('.workspace-other-project-tasks .workspace-task-row').length === 32);
-  await otherMore.getByRole("button", { name: "显示另外 8 条" }).click();
+  await otherMore.getByRole("button", { name: "展开(8/8)" }).click();
   await page.waitForFunction(() => document.querySelectorAll('.workspace-other-project-tasks .workspace-task-row').length === 40);
   await otherMore.getByRole("button", { name: "收起", exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll('.workspace-other-project-tasks .workspace-task-row').length === 12);
