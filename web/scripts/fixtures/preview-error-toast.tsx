@@ -23,7 +23,7 @@ export const AMBIGUOUS = "这个工作区里认出了 2 个能起服务的东西
   + "    cd a4sms-back && mvn -pl a4sms-imds spring-boot:run\n"
   + "  · a4sms-front（Node · pnpm dev）\n"
   + "    cd a4sms-front && pnpm run dev --port $PORT\n"
-  + "把要看的那一条填进「设置 → 项目设置 → 预览命令」，之后这个项目就一直用它。";
+  + "到「设置 → 项目设置 → 预览 → 选择服务」点击检测并勾选所需服务，也可以在「自定义脚本」里填写启动方式。保存后，任务按这份配置打开预览。";
 (window as unknown as { __ambiguous: string }).__ambiguous = AMBIGUOUS;
 
 const realFetch = window.fetch.bind(window);
@@ -78,7 +78,13 @@ function Fixture() {
       {/* 对照组：常规提示照旧两秒多自己走，而且**不许顶掉**常驻那一句 —— notify 是全局
           共享通道，用户读报错时随便哪处异步动作都可能插一句进来。 */}
       <button type="button" data-testid="plain-notice" onClick={() => notify("已复制")}>发一句常规提示</button>
-      <WorkspaceToast toasts={toasts} onDismiss={dismiss} />
+      {/* 真应用里这一下是 WorkspaceShell 的 openSettings（跳到那一节、滚到那张卡）；
+          这里只记下「跳去哪」，断言的是路径认得对不对。 */}
+      <WorkspaceToast
+        toasts={toasts}
+        onDismiss={dismiss}
+        onOpenSettings={(section, anchor) => { (window as unknown as { __opened: unknown }).__opened = { section, anchor }; }}
+      />
     </main>
   );
 }
