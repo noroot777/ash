@@ -52,6 +52,8 @@ CLI_SPEC_BY_KEY.codex.factory = () => ({
     runs++;
     if (mode === "sync-write") writeFileSync(join(opts.cwd, "unexpected-side-effect.txt"), "written before any event");
     if (mode === "dependency-write") writeFileSync(join(opts.cwd, "node_modules", "pkg", "side-effect.txt"), "written without any tool event");
+    if (mode === "invalid-reply") writeFileSync(join(opts.cwd, "invalid-reply-side-effect.txt"), "written before invalid reply");
+    if (mode === "delegate") writeFileSync(join(opts.cwd, "delegate-side-effect.txt"), "written before task delegation");
     return {
       sessionId: "fixture", commandLine: "fixture", kill: () => { release?.(); }, cleanup: async () => { cleanup++; },
       events: (async function* (): AsyncGenerator<AgentEvent> {
@@ -80,7 +82,10 @@ CLI_SPEC_BY_KEY.codex.factory = () => ({
           try { await released; } finally { clearTimeout(timeout); }
         }
         yield { kind: "tool", name: "Read", detail: source };
-        yield { kind: "text", text: '{"reply":"这是咨询回复，不建任务。","task":null}' };
+        const reply = mode === "invalid-reply" ? "这不是有效的 JSON 回复"
+          : mode === "delegate" ? '{"reply":"已整理为任务。","task":{"title":"边界委派","body":"验证附注在任务启动失败时保留。"}}'
+          : '{"reply":"这是咨询回复，不建任务。","task":null}';
+        yield { kind: "text", text: reply };
         yield { kind: "done", exitStatus: 0 };
       })(),
     };
@@ -183,9 +188,34 @@ try {
   const stoppedSnapshot = await settle("stopped");
   await stopped;
   assert.match(stoppedSnapshot.messages.at(-1)!.body, /你已停止这次回复/);
+  changed = undefined;
+  release = undefined;
+
+  // 审查第 2 轮回归：附注与结算结果正交——模型输出非法、任务启动失败这些终态的正文
+  // 也必须保留目录附注，且刷新/恢复后仍在。
+  const snapshot = async () => await (await request(`/chats/${room.id}`)).json() as ChatSnapshot;
+  mode = "invalid-reply";
+  await request(`/chats/${room.id}/messages`, { id: "invalid-with-change", body: "@codex 再给建议" });
+  const invalidFailed = (await settle("failed")).messages.at(-1)!;
+  assert.ok(invalidFailed.body.includes("未返回有效的简短回复"), "解析失败保留错误说明");
+  assert.ok(invalidFailed.body.includes("invalid-reply-side-effect"), "解析失败不得丢弃目录附注");
+  await service.recover();
+  assert.equal((await snapshot()).messages.at(-1)!.body, invalidFailed.body, "解析失败的附注恢复后保留");
+  rmSync(join(projectDir, "invalid-reply-side-effect.txt"));
+
+  mode = "delegate";
+  await request(`/chats/${room.id}/messages`, { id: "delegate-with-change", body: "@codex 建个任务" });
+  const startFailed = (await settle("failed")).messages.at(-1)!;
+  assert.ok(startFailed.body.includes("任务已创建，但启动失败"), "启动失败保留错误说明");
+  assert.ok(startFailed.body.includes("delegate-side-effect"), "启动失败的覆盖不得删掉目录附注");
+  assert.ok(startFailed.taskId, "任务回链保留");
+  assert.equal((await db.select().from(tasks)).length, 1);
+  await service.recover();
+  assert.equal((await snapshot()).messages.at(-1)!.body, startFailed.body, "启动失败的附注恢复后保留");
+  rmSync(join(projectDir, "delegate-side-effect.txt"));
   assert.equal((await db.select().from(chatRooms)).length, 1);
   assert.equal(cleanup, runs, "每次咨询都要清理执行器会话");
-  console.log("chat boundary: 只读工具通过；写入/未知命令的工具事件仍硬中止；无工具事件的目录变化（含并发合并）不再中止、附注如实持久展示且不进模型回复；观察器失效时如实附注不可用；ash 自身写入不附注；停止照常生效；咨询不创建任务");
+  console.log("chat boundary: 只读工具通过；写入/未知命令的工具事件仍硬中止；无工具事件的目录变化（含并发合并）不再中止、附注如实持久展示且不进模型回复；观察器失效时如实附注不可用；解析失败/任务启动失败的终态正文保留附注；ash 自身写入不附注；停止照常生效；咨询不创建任务");
 } finally {
   release?.();
   CLI_SPEC_BY_KEY.codex.factory = original;

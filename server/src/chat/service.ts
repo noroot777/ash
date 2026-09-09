@@ -112,6 +112,12 @@ export class ChatService {
 
   private async reply(message: MessageRow, abort: AbortController) {
     const timer = setTimeout(() => abort.abort(new Error("回复超过五分钟，已停止。请重新 @ 重试。")), 300000);
+    // 目录观察附注与结算结果正交：只要 invoke 已经返回（观察结果已取得），无论后面是
+    // 解析失败、任务创建/启动失败还是停止，终态正文都必须带上附注——这些失败回合恰恰是
+    // 用户最需要知道项目可能被改动/观察失效的时候。附注仍不进 modelReply（上下文取
+    // modelReply，混入会被智能体当对话内容复读）。
+    let notice: string | undefined;
+    const withNotice = (text: string) => notice ? `${text}\n\n${notice}` : text;
     try {
       const claimed = await db.update(chatMessages).set({ status: "running" })
         .where(and(eq(chatMessages.id, message.id), eq(chatMessages.status, "queued"))).returning();
@@ -123,6 +129,7 @@ export class ChatService {
       const member = context.member;
       const prompt = context.prompt ?? await this.contexts.prepare(room, member, context.cutoff, context.source, abort.signal, context.tail);
       const invoked = await this.invoke(member, room.ownerUserId, prompt, abort.signal, room.projectId);
+      notice = invoked.notice;
       const result = parseChatReply(invoked.text);
       abort.signal.throwIfAborted();
       let taskToStart: string | null = null;
@@ -142,19 +149,17 @@ export class ChatService {
         abort.signal.throwIfAborted();
         taskToStart = taskId;
       }
-      // 并发变更附注只进展示用的 body，不进 modelReply：后续轮次的上下文取 modelReply，
-      // 附注混进去会被智能体当成对话内容复读。
-      const settled = await db.update(chatMessages).set({ body: invoked.notice ? `${result.reply}\n\n${invoked.notice}` : result.reply, modelReply: result.reply, status: "done", context: null })
+      const settled = await db.update(chatMessages).set({ body: withNotice(result.reply), modelReply: result.reply, status: "done", context: null })
         .where(and(eq(chatMessages.id, message.id), eq(chatMessages.status, "running"))).returning();
       if (taskToStart && settled.length && !abort.signal.aborted) {
         void this.startTask(taskToStart).catch(async (error) => {
-          await db.update(chatMessages).set({ status: "failed", body: `任务已创建，但启动失败：${error instanceof Error ? error.message : String(error)}。请打开任务重试。` }).where(eq(chatMessages.id, message.id));
+          await db.update(chatMessages).set({ status: "failed", body: withNotice(`任务已创建，但启动失败：${error instanceof Error ? error.message : String(error)}。请打开任务重试。`) }).where(eq(chatMessages.id, message.id));
         });
       }
       if (settled.length && !abort.signal.aborted) return member;
     } catch (error) {
       const boundary = error instanceof ChatBoundaryError;
-      await db.update(chatMessages).set({ status: boundary ? "failed" : abort.signal.aborted ? "stopped" : "failed", context: null, body: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) })
+      await db.update(chatMessages).set({ status: boundary ? "failed" : abort.signal.aborted ? "stopped" : "failed", context: null, body: withNotice(error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500)) })
         .where(and(eq(chatMessages.id, message.id), inArray(chatMessages.status, boundary ? ["running", "stopped"] : ["running"])));
     } finally {
       clearTimeout(timer);
