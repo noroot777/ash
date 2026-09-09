@@ -1,4 +1,7 @@
+import type { DetectedPreviewService, PreviewServiceState } from "@ash/shared/preview";
 import type {
+  BranchPlanView,
+  FamilyAcceptanceResult,
   AgentExecutorProfile,
   AgentType,
   AppSettings,
@@ -33,6 +36,7 @@ import type {
 } from "@ash/shared";
 
 import { DEFAULT_APP_SETTINGS } from "@ash/shared";
+import type { BaseUpdateRecovery } from "@ash/shared/branch-plan";
 import type { WorkflowDef, WorkflowItem } from "@ash/shared/workflow";
 import type { CliHostEnv } from "@ash/shared/cli-overrides";
 import type { CliModelCatalog } from "@ash/shared/cli-presets";
@@ -137,9 +141,11 @@ export const api = {
   ): Promise<ProjectView> => request("/projects/clone", json("POST", body)),
   resolveProject: (repoPath: string, name?: string): Promise<ProjectView> =>
     request("/projects/resolve", json("POST", { repoPath, name })),
+  detectPreviewServices: (projectId: string): Promise<{ services: DetectedPreviewService[]; truncated: boolean }> =>
+    request(`/projects/${id(projectId)}/preview/detect`),
   updateProject: (
     projectId: string,
-    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId" | "previewCommand">>,
+    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId" | "previewCommand" | "previewConfig">>,
   ): Promise<ProjectView> => request(`/projects/${id(projectId)}`, json("PATCH", patch)),
   deleteProject: (projectId: string): Promise<{ deleted: true }> =>
     request(`/projects/${id(projectId)}`, { method: "DELETE" }),
@@ -346,10 +352,11 @@ export const api = {
     request(`/tasks/${id(taskId)}/free-workflow/preview`, { method: "DELETE" }),
   // 预览的启动日志。起失败时也读得到（banner 在 spawn 之前就落盘），所以这是「预览
   // 为什么起不来」的唯一现场，不能只在 running 时给。
-  freePreviewLog: (taskId: string): Promise<{
+  freePreviewLog: (taskId: string, serviceId?: string): Promise<{
+    services?: PreviewServiceState[];
     text: string; truncated: boolean; updatedAt: string | null;
     exists: boolean; running: boolean; starting: boolean; command: string | null; url: string | null;
-  }> => request(`/tasks/${id(taskId)}/free-workflow/preview/log`),
+  }> => request(`/tasks/${id(taskId)}/free-workflow/preview/log${serviceId ? `?service=${id(serviceId)}` : ""}`),
   freeReviewFileUrl: (taskId: string, runId: string, round: number, name: string): string =>
     apiPath(`/tasks/${id(taskId)}/free-workflow/review-file?run=${id(runId)}&round=${id(String(round))}&name=${id(name)}`),
   // 人工替这一站「自动验证」签字放行。**后端会接着把这一站之后那一段跑掉**——线上
@@ -367,6 +374,18 @@ export const api = {
     const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept`), { method: "POST" });
     const body = await parseBody(response);
     if (isAcceptTaskResult(body)) return body;
+    throw apiError(response, body);
+  },
+  branchPlan: (taskId: string): Promise<BranchPlanView> => request(`/tasks/${id(taskId)}/branch-plan`),
+  releaseTaskWorkspace: (taskId: string, fingerprint: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/release-workspace`, json("POST", { fingerprint })),
+  changeMergeTarget: (taskId: string, branch: string, fingerprint: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/merge-target`, json("POST", { branch, fingerprint })),
+  updateTaskBase: (taskId: string, sourceCommit: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/update-base`, json("POST", { sourceCommit })),
+  baseUpdateRecovery: (taskId: string): Promise<BaseUpdateRecovery> => request(`/tasks/${id(taskId)}/base-update-recovery`),
+  abandonTaskBaseUpdate: (taskId: string, fingerprint: string, resolution: "abandon" | "complete" | "manual", acknowledged = false): Promise<{ ok: boolean; message: string }> => request(`/tasks/${id(taskId)}/abandon-base-update`, json("POST", { fingerprint, resolution, acknowledged })),
+  acceptFamily: async (taskId: string, entries: { taskId: string; fingerprint: string }[]): Promise<FamilyAcceptanceResult> => {
+    const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept-family`), json("POST", { entries }));
+    const body = await parseBody(response);
+    if (body && typeof body === "object" && "completed" in body) return body as FamilyAcceptanceResult;
     throw apiError(response, body);
   },
   taskDiff: (taskId: string): Promise<TaskDiffResult> =>

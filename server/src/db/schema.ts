@@ -1,4 +1,5 @@
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import type { ProjectPreviewConfig } from "@ash/shared/preview";
 
 // JSON columns are stored as text and parsed in the repository layer.
 // Schema mirrors shared/src/index.ts.
@@ -13,6 +14,7 @@ export const projects = sqliteTable("projects", {
   // 「打开预览」跑哪条命令。空 = 按各语言惯例自动识别（见 preview-command.ts），
   // 认出恰好一个才自动用；命令本身在任务工作区根目录用用户自己的 shell 执行。
   previewCommand: text("preview_command"),
+  previewConfig: text("preview_config", { mode: "json" }).$type<ProjectPreviewConfig>(),
   // 建这个项目的人(多人模式)。null = 自用模式建的、或转换前的存量项目。
   // 创建者自动是项目管理员,但成员关系的真源是 project_members —— 这一列只记出身。
   ownerUserId: text("owner_user_id"),
@@ -160,7 +162,13 @@ export const tasks = sqliteTable("tasks", {
   // 第一个同类锚点（shared 的 anchorAt），所以它丢了也只是退化成老行为，不会卡死。
   workflowAt: text("workflow_at"),
   worktreeBase: text("worktree_base"),
+  worktreeStartCommit: text("worktree_start_commit"),
+  mergeTargetBranch: text("merge_target_branch"),
+  baseTaskId: text("base_task_id"),
+  acceptedSourceCommit: text("accepted_source_commit"),
+  baseUpdateIntent: text("base_update_intent"),
   originTaskId: text("origin_task_id"), // 回链来源任务(null = 直接创建)
+  creationOrigin: text("creation_origin"),
   // 检查点续跑：agent 调 pause_task 时填进来；下次 resume 时取出喂给 CLI 会话并清空。
   resumePrompt: text("resume_prompt"),
   // 提问：agent 调 ask_question 时填进来。结算落 paused 且队列不自动续跑，
@@ -653,6 +661,14 @@ export const handoffLocalPeerKeys = sqliteTable("handoff_local_peer_keys", {
   // 保存这把 key 时通过签名核对的机器；旧数据没有归属证明，保持 null。
   peerFp: text("peer_fp"),
   updatedAt: text("updated_at").notNull(),
+});
+
+export const taskBranchReceipts = sqliteTable("task_branch_receipts", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id").notNull(),
+  sourceCommit: text("source_commit").notNull(),
+  mergeCommit: text("merge_commit").notNull(),
+  targetBranch: text("target_branch").notNull(),
 });
 
 export const handoffLocalKeyRevisions = sqliteTable("handoff_local_key_revisions", {

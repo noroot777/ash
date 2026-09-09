@@ -4,7 +4,7 @@
 .native-work__group + .native-work__group { margin-top: 24px; }
 .native-work__group h3 { display: flex; gap: 8px; align-items: center; margin: 0 0 8px; font-size: 12px; font-weight: 600; }
 .native-work__group h3 span { color: var(--muted); font-weight: 400; }
-.native-work__row { border-bottom: 1px solid var(--line); }
+.native-work__entry { border-bottom: 1px solid var(--line); }
 .native-work__row summary { display: flex; align-items: flex-start; gap: 8px; padding: 12px 0; cursor: pointer; list-style: none; }
 .native-work__row summary::-webkit-details-marker { display: none; }
 .native-work__row summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
@@ -26,3 +26,20 @@
 .native-work__empty p { margin: 0; line-height: 1.7; }
 .native-work__error { margin-bottom: 12px; color: var(--danger, #c34b4b); }
 .native-work__error button { margin-left: 6px; text-decoration: underline; }
+.native-work__open { margin: 0 0 12px 23px; padding: 3px 0; color: var(--accent); font-size: 12px; cursor: pointer; }
+.native-work__open:hover { text-decoration: underline; }
+.native-agent { display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--ink); }
+.native-agent__header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 14px; border-bottom: 1px solid var(--line); }
+.native-agent__header button { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; width: fit-content; padding: 0 0 4px; color: var(--muted); font-size: 12px; cursor: pointer; }
+.native-agent__header strong { font-size: 13px; overflow-wrap: anywhere; }
+.native-agent__header small { grid-column: 1 / -1; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.native-agent__status { color: var(--muted); font-size: 11px; }
+.native-agent__status[data-status="running"] { color: var(--accent); }
+.native-agent__status[data-status="failed"] { color: var(--danger, #c34b4b); }
+.native-agent__scroll-region { flex: 1; min-height: 0; }
+.native-agent__conversation { height: 100%; overflow: auto; padding: 16px 14px 48px; overflow-wrap: anywhere; font-size: 12px; }
+.native-agent__assignment { margin-bottom: 16px; color: var(--muted); }
+.native-agent__assignment > summary { cursor: pointer; margin-bottom: 8px; font-size: 11px; }
+.native-agent__conversation .task-agent-segment { min-width: 0; }
+.native-agent__conversation .task-execution-events { max-width: 100%; }
+.native-agent__live { display: flex; align-items: center; gap: 8px; margin: 18px 0 0; color: var(--muted); font-size: 11px; }

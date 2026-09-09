@@ -225,7 +225,7 @@ try {
     assert.equal(merged.warnings?.[0]?.reason, "temporary_cleanup_failed");
     assert.equal(merged.warnings?.[0]?.worktreePath, worktreePath);
     assert.match(merged.warnings?.[0]?.message ?? "", /合并结果已保留/);
-    assert.match(merged.warnings?.[0]?.message ?? "", /git worktree prune/);
+    assert.match(merged.warnings?.[0]?.message ?? "", /清理该路径及其 Git 登记/);
   }
 
   // 7. An idle team lead cannot accept while shared-worktree workers are active.

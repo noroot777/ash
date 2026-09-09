@@ -10,6 +10,7 @@ import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { ScheduleControl } from "../components/ScheduleControl.tsx";
 import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
 import { taskParentLink } from "../components/TaskOrigin.tsx";
+import { taskCreationLabel } from "@ash/shared/task-origin";
 import {
   executorRunSummary,
   isExecutorPickable,
@@ -353,6 +354,7 @@ export function TaskInspector({
 
         <section>
           <h2>属性</h2>
+          <InspectorRow label="创建来源">{taskCreationLabel(task.creationOrigin)}</InspectorRow>
           <InspectorRow label="状态">
             <Dropdown
               label="状态"

@@ -65,6 +65,7 @@ try {
     }),
   });
   const { prepareWorktree, worktreePathFor } = await import("../src/git.js");
+  assert.deepEqual(task.creationOrigin, { kind: "user" });
   await prepareWorktree(repoA, task.id, task.worktreeBase);
 
   await api(machineA, "/settings", {
@@ -519,6 +520,7 @@ try {
   assert.ok(returnResult.notes.some((note) => /幂等收口/.test(note)), "应答中断后的原样移回应安全收口而不是重复导入");
   assert.ok(!returnResult.notes.some((note) => /整条历史|全量历史/.test(note)), "免审批移回不应误报为全量 git 历史");
   const returned = await api<Task>(machineA, `/tasks/${task.id}`);
+  assert.deepEqual(returned.creationOrigin, task.creationOrigin, "创建来源在跨机接力和移回后保持不变");
   assert.equal(returned.handoff?.direction, "returned");
   assert.deepEqual(
     readReturnLocalState(join(root, "a.db"), task.id),

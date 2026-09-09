@@ -15,6 +15,18 @@ export const PULL_LABEL: Record<PullStrategy, string> = {
   rebase: "变基拉取",
 };
 
+/** 在跑的那一步说给用户听。浮层收起来之后，胶囊和 toast 都靠它组句。 */
+const OP_LABEL: Record<string, string> = {
+  checkout: "切换分支",
+  fetch: "更新远端信息",
+  pull: "拉取",
+  push: "推送",
+};
+
+export function gitOpLabel(kind: string | null): string {
+  return kind ? OP_LABEL[kind] ?? "Git 操作" : "Git 操作";
+}
+
 export function branchLabel(state: ProjectGitState | null): string {
   if (!state?.isRepo) return "Git";
   if (state.branch.detached) return "游离 HEAD";

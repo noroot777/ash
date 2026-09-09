@@ -266,7 +266,7 @@ try {
   checkIncludes("说清楚为什么不替你挑", monoError, "认出了 3 个能起服务的东西");
   checkIncludes("Maven 模块按 Java 的说法列", monoError, "cd a4sms-back && mvn -pl a4sms-icis spring-boot:run");
   checkIncludes("前端那条也在", monoError, "cd a4sms-front && pnpm run dev --port $PORT");
-  checkIncludes("告诉他去哪儿填", monoError, "项目设置 → 预览命令");
+  checkIncludes("告诉他去哪儿配置", monoError, "项目设置 → 预览 → 选择服务");
   check("整段话里不提 package.json", monoError.includes("package.json"), false);
   checkIncludes("多模块首次要装依赖模块的写法也给了", monoError, "-am install -DskipTests");
 

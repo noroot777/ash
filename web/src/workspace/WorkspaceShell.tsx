@@ -12,6 +12,7 @@ import { DuetView } from "../duet/DuetView.tsx";
 import { TaskPlaceholder } from "./TaskPlaceholder.tsx";
 import { useTaskBody } from "../lib/useTaskBody.ts";
 import { WorkspaceSidebar } from "./WorkspaceSidebar.tsx";
+import { useToast, WorkspaceToast } from "./WorkspaceToast.tsx";
 import {
   parseSettingsSection,
   projectSectionLabel,
@@ -47,6 +48,8 @@ import { HandoffApprovalAlert } from "../handoff/HandoffApprovalAlert.tsx";
 import { visibleOnThisMachine } from "./taskTreeModel.ts";
 import { HandoffDialog } from "../task-detail/HandoffDialog.tsx";
 import { RemoteTaskDetail } from "../remote-task/RemoteTaskDetail.tsx";
+import { useRemoteReturns } from "../remote-task/useRemoteReturns.ts";
+import { useProjectGitAnnouncer } from "./useProjectGitAnnouncer.ts";
 import { ChatView } from "../chat/ChatView.tsx";
 
 const ProjectTerminal = lazy(() => import("./ProjectTerminal.tsx").then((module) => ({ default: module.ProjectTerminal })));
@@ -88,7 +91,6 @@ export function WorkspaceShell() {
   const [createDialog, setCreateDialog] = useState<{ kind: "group" } | { kind: "project"; reason: string | null } | null>(null);
   const [collapsed, setCollapsed] = useState(() => readRenamedStorage("ash:sidebar-collapsed") === "1");
   const [sidebarWidth, setSidebarWidth] = useState(readWorkspaceSidebarWidth);
-  const [toast, setToast] = useState<string | null>(null);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const isMultiUser = useIsMultiUser();
   const isInstanceAdmin = useIsInstanceAdmin();
@@ -122,10 +124,12 @@ export function WorkspaceShell() {
   useEffect(() => { writeStoredScopeKind(scopeKind); }, [scopeKind]);
   const spread = useSidebarSpread(tasks, scope, settlementVersion);
 
-  const notify = useCallback((message: string) => {
-    setToast(message);
-    window.setTimeout(() => setToast((current) => current === message ? null : current), 2600);
-  }, []);
+  // 提示的寿命（常规两秒多自己走 / 长报错等用户收，两条通道互不打断）都在 WorkspaceToast.tsx 里。
+  const { toasts, notify, dismiss: dismissToast } = useToast();
+  const remoteReturns = useRemoteReturns(notify);
+  // 主仓 git 操作落定时那一句话挂在这一层，为的是**盖得住切项目**：分支胶囊跟着当前项目
+  // 卸载，操作跑一半切走，结果就没人认领了。
+  useProjectGitAnnouncer(notify, () => setGitVersion((value) => value + 1));
 
   useEffect(() => {
     let alive = true;
@@ -429,7 +433,7 @@ export function WorkspaceShell() {
     {handoffTarget && <HandoffDialog task={handoffTarget} onClose={() => setHandoffTarget(null)} onTaskUpdate={updateTask} onOpenRemote={selectRemoteTask} notify={notify} />}
     {createDialog?.kind === "project" && <CreateProjectDialog projects={projects} reason={createDialog.reason} notify={notify} onClose={() => setCreateDialog(null)} onCreated={(created) => { setProjects((current) => [...current, created]); setProjectId(created.id); setTaskId(null); setSettingsSection(null); setCreateDialog(null); notify("项目已创建"); }} />}
     {createDialog?.kind === "group" && currentProject && <CreateGroupDialog onClose={() => setCreateDialog(null)} onCreate={async (name, mode) => { try { const created = await api.createGroup({ projectId: currentProject.id, name, mode }); setGroups((current) => [...current, created]); setCreateDialog(null); notify("分组已创建"); } catch (error) { notify(error instanceof Error ? error.message : "分组创建失败"); } }} />}
-    <div className={`workspace-toast${toast ? " is-visible" : ""}`} role="status" aria-live="polite">{toast}</div>
+    <WorkspaceToast toasts={toasts} onDismiss={dismissToast} />
   </>;
   if (settingsSection) return <><div className="workspace-system-layout"><div>{handoffAlert}</div><SettingsPage
     section={settingsSection}
@@ -447,13 +451,14 @@ export function WorkspaceShell() {
 
   return (
     <><div className="workspace-system-layout">{handoffAlert}<div className={`workspace-shell${spread.laidOut ? " is-spread" : ""}${chatOpen ? " is-chat" : ""}`} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
-      <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} selectedRemoteTaskId={remoteSelection?.task.id ?? null} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTaskMode={selectTaskMode} onTask={selectTask} onRemoteTask={selectRemoteTask} onTaskStarred={applyStar} onHandoffFinished={() => refetchTasks({ silent: true }).then(() => {})} outbound={outboundBar} onGitChanged={() => setGitVersion((value) => value + 1)} onOpenTerminal={currentProject && canUseTerminal ? () => setTerminalOpen(true) : null} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={openGroups} onChat={openChat} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onSettings={() => openSettings("executors")} />
+      <WorkspaceSidebar projects={projects} currentProject={currentProject} scope={scope} tasks={tasks} selectedTaskId={taskId} selectedRemoteTaskId={remoteSelection?.task.id ?? null} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTaskMode={selectTaskMode} onTask={selectTask} onRemoteTask={selectRemoteTask} onTaskStarred={applyStar} onHandoffFinished={() => refetchTasks({ silent: true }).then(() => {})} outbound={outboundBar} onOpenTerminal={currentProject && canUseTerminal ? () => setTerminalOpen(true) : null} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={openGroups} onChat={openChat} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onSettings={() => openSettings("executors")} />
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
         {chatOpen && currentProject ? <ChatView key={currentProject.id} project={currentProject} onTask={selectTask} onExit={() => setChatOpen(false)} onMode={openComposer} /> : composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} onDraftSeeded={dropComposerSeed} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onChat={openChat} onCancel={() => setComposer(null)} onCreated={createTask} onCreateGroup={createComposerGroup} notify={notify} /> : remoteSelection ? (
           <RemoteTaskDetail
             archive={remoteSelection.task}
             target={remoteSelection.target}
+            returns={remoteReturns}
             notify={notify}
             onLocalOwnership={openLocalOwnership}
           />

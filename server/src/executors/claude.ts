@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { NativeWorkTrace } from "./native-work.js";
+import { childActivity } from "./native-agent-activity.js";
+import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import type { AgentEvent, AgentType } from "@ash/shared";
 import { guessContextWindow } from "@ash/shared/usage";
 import { cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@ash/shared/cli-overrides";
@@ -453,8 +455,11 @@ export async function* parseClaudeStream(
   const queue: AgentEvent[] = [];
   let resolve: (() => void) | null = null;
   let finished = false;
+  const activityBuffer = new NativeActivityBuffer();
   const push = (e: AgentEvent) => {
-    queue.push(e);
+    const events = activityBuffer.push(e);
+    if (!events.length) return;
+    queue.push(...events);
     resolve?.();
     resolve = null;
   };
@@ -481,6 +486,7 @@ export async function* parseClaudeStream(
   let contextUsed = 0;
   let contextModel: string | null = null;
   const seenImages = new Set<string>();
+  const childImages = new Map<string, Set<string>>();
   const nativeWork = new NativeWorkTrace();
 
   const rl = createInterface({ input: child.stdout! });
@@ -495,11 +501,13 @@ export async function* parseClaudeStream(
     }
     for (const activity of nativeWork.claudeMessage(ev)) push(activity);
     if (ev.parent_tool_use_id) {
+      const images = childImages.get(ev.parent_tool_use_id) ?? new Set<string>();
+      childImages.set(ev.parent_tool_use_id, images);
       for (const block of Array.isArray(ev.message?.content) ? ev.message.content : []) {
         if (block.type === "tool_result") {
-          for (const path of persistToolResultImages(block.content, seenImages)) push({ kind: "attachment", path });
+          for (const path of persistToolResultImages(block.content, images)) push(childActivity(ev.parent_tool_use_id, { kind: "attachment", path }));
         } else if (block.type === "text" && typeof block.text === "string") {
-          for (const path of persistMarkdownImages(block.text, seenImages)) push({ kind: "attachment", path });
+          for (const path of persistMarkdownImages(block.text, images)) push(childActivity(ev.parent_tool_use_id, { kind: "attachment", path }));
         }
       }
       return;
@@ -636,6 +644,7 @@ export async function* parseClaudeStream(
       // 常驻:回合说完了,进程还活着等下一条消息 —— 流不结束。
       if (resident) push({ kind: "turnEnd" });
       seenImages.clear();
+      childImages.clear();
     }
   });
 

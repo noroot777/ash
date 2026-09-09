@@ -40,6 +40,10 @@ export { client as dbClient };
 export async function ensureSchema() {
   await ensureChatSchema(client);
   await client.executeMultiple(`
+    CREATE TABLE IF NOT EXISTS task_branch_receipts (
+      id TEXT PRIMARY KEY, task_id TEXT NOT NULL, source_commit TEXT NOT NULL, merge_commit TEXT NOT NULL, target_branch TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS task_branch_receipts_task ON task_branch_receipts(task_id);
     CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, repo_path TEXT NOT NULL, created_at TEXT NOT NULL
     );
@@ -272,7 +276,13 @@ export async function ensureSchema() {
     "ALTER TABLE sessions ADD COLUMN turn_started_at TEXT",
     "ALTER TABLE tasks ADD COLUMN use_worktree INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE tasks ADD COLUMN worktree_base TEXT",
+    "ALTER TABLE tasks ADD COLUMN worktree_start_commit TEXT",
+    "ALTER TABLE tasks ADD COLUMN merge_target_branch TEXT",
+    "ALTER TABLE tasks ADD COLUMN base_task_id TEXT",
+    "ALTER TABLE tasks ADD COLUMN accepted_source_commit TEXT",
+    "ALTER TABLE tasks ADD COLUMN base_update_intent TEXT",
     "ALTER TABLE tasks ADD COLUMN origin_task_id TEXT",
+    "ALTER TABLE tasks ADD COLUMN creation_origin TEXT",
     "ALTER TABLE projects ADD COLUMN api_keys TEXT",
     "ALTER TABLE tasks ADD COLUMN resume_prompt TEXT",
     "ALTER TABLE tasks ADD COLUMN resume_depends_on TEXT NOT NULL DEFAULT '[]'",
@@ -417,6 +427,7 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN handoff_audit TEXT",
     // 项目级预览命令。空 = 按各语言惯例自动识别（preview-command.ts）。
     "ALTER TABLE projects ADD COLUMN preview_command TEXT",
+    "ALTER TABLE projects ADD COLUMN preview_config TEXT",
     // ── 多人模式(docs/multi-user-plan.md §八)──────────────────────────────
     // 归属列。全部可空:自用模式下恒为 null,转多人时由向导一次性实名化成初始管理员。
     "ALTER TABLE tasks ADD COLUMN owner_user_id TEXT",

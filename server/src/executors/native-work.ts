@@ -1,5 +1,6 @@
 import type { AgentEvent, NativeWorkEvent } from "@ash/shared";
 import { nativeWorkStatus as nativeStatus } from "@ash/shared/native-work";
+import { ClaudeChildActivity } from "./native-agent-activity.js";
 
 const names = new Set(["agent", "task", "taskcreate", "taskupdate", "taskget", "tasklist", "taskoutput", "taskstop", "todowrite", "update_plan",
   "spawn_agent", "wait", "wait_agent", "send_input", "send_message", "close_agent", "resume_agent", "followup_task", "interrupt_agent", "list_agents"]);
@@ -11,6 +12,7 @@ const event = (name: string, nativeWork: NativeWorkEvent): AgentEvent => ({ kind
 });
 
 export class NativeWorkTrace {
+  private childActivity = new ClaudeChildActivity();
   private calls = new Map<string, string>();
   private taskCalls = new Map<string, string>();
   private agentCalls = new Set<string>();
@@ -40,7 +42,7 @@ export class NativeWorkTrace {
   }
 
   claudeMessage(ev: any): AgentEvent[] {
-    const out: AgentEvent[] = [];
+    const out: AgentEvent[] = this.childActivity.message(ev);
     if (ev.type === "system" && /^task_(started|progress|notification)$/.test(ev.subtype)) {
       const knownAgent = this.agentCalls.has(ev.tool_use_id) || this.taskCalls.has(ev.task_id);
       const agentType = ev.task_type === "local_agent" || ev.task_type === "remote_agent";
@@ -111,6 +113,9 @@ export function codexNativeWork(item: any): AgentEvent[] {
 export function codexChildWork(method: string, params: any): AgentEvent[] {
   const item = params.item;
   const out = codexNativeWork(item);
+  if (method === "turn/started") out.push(event("Agent", {
+    type: "agent", id: params.threadId, nativeId: params.threadId, status: "running", result: "", message: "",
+  }));
   if (method === "item/completed" && item?.type === "agentMessage") out.push(event("Agent", {
     type: "agent", id: params.threadId, nativeId: params.threadId, status: "running", message: clip(item.text ?? ""),
   }));

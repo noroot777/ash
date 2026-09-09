@@ -1,0 +1,104 @@
+.preview-command-help-row {
+  min-height: 52px;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+}
+
+.preview-command-help-trigger {
+  flex-shrink: 0;
+  height: 32px;
+  border-color: color-mix(in lch, var(--accent) 24%, var(--line));
+  background: color-mix(in lch, var(--accent) 7%, var(--panel));
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.task-confirm-dialog.preview-command-help-dialog {
+  display: flex;
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.preview-command-help-dialog > .task-confirm-header,
+.preview-command-help-dialog > .task-confirm-message,
+.preview-command-help-dialog > footer {
+  flex-shrink: 0;
+}
+
+.preview-command-help-content {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin-top: 20px;
+  padding-right: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+
+.preview-command-help-content section + section {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+
+.preview-command-help-content[data-more-below] {
+  mask-image: linear-gradient(to bottom, black calc(100% - 20px), transparent);
+}
+
+.preview-command-help-scroll-hint {
+  align-self: center;
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.preview-command-help-content h3 {
+  margin: 0 0 6px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.preview-command-help-content p {
+  margin: 0;
+}
+
+.preview-command-help-content p + p {
+  margin-top: 8px;
+}
+
+.preview-command-help-content pre {
+  margin: 10px 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--raised);
+  padding: 12px;
+  color: var(--ink);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 480px) {
+  .task-confirm-dialog.preview-command-help-dialog {
+    padding: 16px;
+  }
+
+  .preview-command-help-dialog > .task-confirm-header {
+    grid-template-columns: 36px minmax(0, 1fr) 34px;
+    gap: 8px;
+  }
+
+  .preview-command-help-dialog > .task-confirm-header > span {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+  }
+
+  .preview-command-help-dialog > .task-confirm-header h2 {
+    font-size: 18px;
+  }
+}

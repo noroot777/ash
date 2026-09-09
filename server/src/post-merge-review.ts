@@ -103,6 +103,7 @@ export async function createPostMergeRepairTask(taskId: string, runId: string): 
       updatedAt: at,
       useWorktree: true,
       worktreeBase: run.targetCommit,
+      mergeTargetBranch: run.targetBranch,
       originTaskId: source.id,
       workflowMode: "free",
     }]);

@@ -6,7 +6,10 @@
 //   codex             → 命令原文 / 文件路径(纯文本)
 // 所以先按工具名挑字段,JSON 解析失败(截断)时退回正则取值,再退回首行文本。
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import { isVisibleExecutionEvent } from "@ash/shared/native-work";
 import type { NativeWorkEvent } from "@ash/shared";
+
+export { isVisibleExecutionEvent };
 
 export type ExecutionEvent = {
   kind: "tool" | "thinking" | "error";
@@ -14,10 +17,6 @@ export type ExecutionEvent = {
   detail?: string;
   nativeWork?: NativeWorkEvent;
 };
-
-export function isVisibleExecutionEvent(event: ExecutionEvent): boolean {
-  return !event.nativeWork || (event.nativeWork.type === "call" && !event.nativeWork.parentId);
-}
 
 // 工具名(小写) → 优先展示的字段。缺省走 GENERIC_KEYS。
 const KEYS_BY_TOOL: Record<string, string[]> = {

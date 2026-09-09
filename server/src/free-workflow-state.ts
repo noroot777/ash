@@ -24,7 +24,7 @@ import {
 import { freeReviewScreenshots, readFreeReviewReport } from "./free-review-files.js";
 import { headCommit, workspaceDirty, worktreePathFor } from "./git.js";
 import { existsSync } from "node:fs";
-import { hasPreviewLog, isPreviewStarting, readPreview } from "./preview.js";
+import { previewState } from "./preview-public.js";
 import { profilesOwnedBy } from "./auth/owned-executors.js";
 
 export type FreeWorkflowApiState = Omit<FreeWorkflowState, "merge">;
@@ -201,11 +201,7 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
       endedAt: running ? null : firstReviewAt ?? task.endedAt ?? task.updatedAt,
     }];
   }
-  const preview = readPreview(taskId);
-  // 「正在启动」也算在跑：这一段最长八分钟，而它同样是可以被收掉的（记录、pid、装依赖
-  // 的进程都在盘上）。不算进来的话，用户刷新页面只会又看到一颗「打开预览」，点下去撞锁
-  // 409 —— 明明有东西在跑，却没有任何一处给得出「关掉它」。
-  const previewStarting = isPreviewStarting(taskId);
+
   // 预约可用的两种形态：续轮（runId 在，审查者配置取 run 行快照，profile 删了也能续）、
   // 新链（必须有 reviewerId）。两者都不在 → 脏 armed，对外一律当未预约。
   const reservationRunId = state?.reviewArmed ? state.reviewRunId ?? null : null;
@@ -247,15 +243,7 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
       override: reservationOverride,
       runId: reservationRunId,
     },
-    preview: {
-      running: !!preview || previewStarting,
-      starting: previewStarting && !preview,
-      hasLog: hasPreviewLog(taskId),
-      url: preview?.url ?? null,
-      port: preview?.port ?? null,
-      command: preview?.cmd ?? null,
-      startedAt: preview?.startedAt ?? null,
-    },
+    preview: previewState(taskId),
     executions,
     reviews,
   };

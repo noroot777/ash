@@ -16,7 +16,7 @@ import {
   shouldDropSession,
 } from "../executors/session-lost.js";
 import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
-import { noteAgentUpload } from "../uploads.js";
+import { noteAgentEventUpload } from "../uploads.js";
 import type { SessionTraceEvent } from "../transcript.js";
 import { isSessionScopeNotice } from "../session-notice.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
@@ -212,7 +212,7 @@ function traceLead(lead: Lead, turnStart: string, event: SessionTraceEvent, at?:
   if (lead.retired) return;
   // agent 产出的图归这个任务(uploads.ts)。单飞那条链的同一处在 single-run.ts 的
   // persistTrace —— 两条链各走各的 trace 写入,改一处记得看另一处。
-  if (event.kind === "attachment") noteAgentUpload(lead.taskId, event.path);
+  noteAgentEventUpload(lead.taskId, event);
   appendSessionTrace(lead.taskId, lead.sessId, turnStart, event, at);
 }
 

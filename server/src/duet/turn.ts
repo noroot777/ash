@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { finished } from "node:stream/promises";
 import { eq, sql } from "drizzle-orm";
 import type { DuetSpeaker, SessionRole, TurnTraceEvent } from "@ash/shared";
+import { isVisibleExecutionEvent } from "@ash/shared/native-work";
 import { db } from "../db/index.js";
 import { sessions } from "../db/schema.js";
 import { bus } from "../bus.js";
@@ -269,7 +270,7 @@ export async function runTurn(args: {
         text += event.text;
         out.write(event.text + "\n");
       } else if (event.kind === "tool") {
-        if (trace.length < TRACE_CAP) trace.push({ kind: "tool", label: event.name, detail: event.detail });
+        if (isVisibleExecutionEvent(event) && trace.length < TRACE_CAP) trace.push({ kind: "tool", label: event.name, detail: event.detail });
       } else if (event.kind === "thinking") {
         if (trace.length < TRACE_CAP) trace.push({ kind: "thinking", label: "思考过程", detail: event.text });
         out.write("〔思考〕" + event.text + "\n");

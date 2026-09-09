@@ -20,6 +20,9 @@ import { augmentedEnv } from "./executors/spawn.js";
 import { RUNS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
 import { readPreview, startPreview, type PreviewStep } from "./preview.js";
+import { previewProxyEnabled } from "@ash/shared/preview";
+import { isMultiUser } from "./auth/mode.js";
+import { previewState } from "./preview-public.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { askAboutFailure } from "./task-question.js";
 import { taskWorkspace } from "./task-workspace.js";
@@ -103,11 +106,12 @@ async function runCommand(task: TaskRow, step: CommandStep): Promise<SegmentResu
 async function runPreview(task: TaskRow, step: PreviewStep): Promise<SegmentResult> {
   const cwd = await cwdFor(task, "workspace");
   if (!cwd) return { ok: false, failed: step, reason: "找不到这个任务的工作目录" };
-  const result = await startPreview(task.id, step, cwd);
+  const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
+  const result = await startPreview(task.id, step, cwd, undefined, { proxy: previewProxyEnabled(project?.previewConfig?.proxy, await isMultiUser()) });
   if (result.ok) {
     await appendTaskTimeline(
       task.id,
-      `预览已起：${result.record.url ?? `端口 ${result.record.port}`}（\`${step.p.cmd}\`）`,
+      `预览已起：${previewState(task.id).url ?? `端口 ${result.record.port}`}（\`${step.p.cmd}\`）`,
     );
     return { ok: true };
   }
@@ -325,7 +329,7 @@ export async function restartTaskPreview(taskId: string, stepId?: string | null)
     const result = await runPreview(task, step);
     if (!result.ok) return { ok: false, reason: result.reason ?? "预览没起来", code: "failed" };
     const record = readPreview(taskId);
-    return { ok: true, url: record?.url ?? null, port: record?.port ?? null };
+    return { ok: true, url: previewState(taskId).url, port: record?.port ?? null };
   } finally {
     restartingPreview.delete(taskId);
   }

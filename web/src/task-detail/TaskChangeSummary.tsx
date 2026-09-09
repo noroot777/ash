@@ -3,6 +3,7 @@ import type { Task, TaskListItem } from "@ash/shared";
 import { CaretRight, GitBranch, GitCommit, GitDiff, SpinnerGap } from "@phosphor-icons/react";
 import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
 import { sharedTeamParent } from "../review/reviewModel.ts";
+import { branchDiffReason } from "../lib/branch-diff-reason.ts";
 
 interface ChangeData {
   branch: string | null;
@@ -61,7 +62,7 @@ export function TaskChangeSummary({
         </div>
       )}
       {sharedParent && <p className="task-inspector-note">该执行者与团队共用工作区，改动元数据按所属团队汇总。</p>}
-      {!loading && data && !data.diff.available && <p className="task-inspector-note">当前无法生成分支 diff：{data.diff.reason || "未解析到可比较的工作区"}。</p>}
+      {!loading && data && !data.diff.available && <p className="task-inspector-note">当前无法生成分支 diff：{branchDiffReason(data.diff.reason)}。</p>}
       <button className="task-inspector-action" type="button" onClick={onOpenReview}>
         <span><GitDiff size={13} />查看改动与提交</span><CaretRight size={13} />
       </button>

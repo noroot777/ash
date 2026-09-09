@@ -1,0 +1,39 @@
+.project-preview .preview-mode-choice { display: inline-flex; flex: none; align-items: center; gap: 3px; border: 1px solid var(--line); border-radius: 9px; background: var(--raised); padding: 3px; }
+.preview-mode-choice label { display: inline-flex; min-height: 28px; align-items: center; gap: 7px; border-radius: 6px; padding: 4px 10px; color: var(--muted); font-size: 12px; font-weight: 500; white-space: nowrap; cursor: pointer; }
+.preview-mode-choice label:has(input:checked) { background: var(--panel); color: var(--ink); box-shadow: var(--surface-shadow); }
+.preview-mode-choice label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.preview-mode-choice label:has(input:disabled) { opacity: .6; cursor: default; }
+.project-preview input:is([type="radio"], [type="checkbox"]) { width: 14px; height: 14px; margin: 0; flex: none; accent-color: var(--accent); }
+.project-preview .preview-script-field { align-items: flex-start; border-bottom: 0; padding-bottom: 8px; }
+.project-preview .preview-script-field > span { padding-top: 10px; }
+.project-preview .preview-script-editor { width: 100%; min-width: 0; min-height: 90px; resize: vertical; box-sizing: border-box; padding: 12px 14px; font-size: 13px; line-height: 1.65; tab-size: 2; white-space: pre; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); color: var(--ink); }
+.project-preview .preview-script-editor:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.project-preview .preview-help { display: grid; gap: 5px; color: var(--faint); font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+.project-preview .preview-help > small { display: block; font-size: inherit; }
+.preview-help code { color: var(--muted); }
+.preview-script-help, .preview-proxy-help { padding: 0 16px 14px; }
+.preview-script-help { border-bottom: 1px solid var(--line); }
+.preview-services-panel { display: grid; gap: 12px; padding: 16px; border-bottom: 1px solid var(--line); }
+.preview-detect-actions, .preview-service-heading, .preview-service-options { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.preview-service-options label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+.preview-service-list { display: grid; gap: 12px; }
+.preview-service-card { display: grid; min-width: 0; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; }
+.preview-service-card.is-selected { border-color: var(--accent); }
+.project-preview .preview-service-heading input:not([type="checkbox"]) { flex: 1; min-width: 120px; width: 0; height: 30px; border: 1px solid var(--line2); border-radius: 8px; background: var(--canvas); color: var(--ink); padding: 0 10px; font-size: 12px; }
+.project-preview .preview-service-heading input:not([type="checkbox"]):focus { outline: none; border-color: var(--accent); }
+.preview-service-heading button { margin-left: auto; }
+.preview-detect-actions > span, .preview-detection-result, .preview-services-empty { margin: 0; font-size: 12px; color: var(--muted); }
+.preview-services-empty { padding: 22px 0; text-align: center; }
+.preview-settings-error { margin: 0; padding: 12px 16px; color: var(--red); font-size: 12px; white-space: pre-wrap; }
+.project-preview .preview-proxy-field { border-bottom: 0; }
+.project-preview select { min-width: 0; max-width: 100%; height: 32px; border: 1px solid var(--line2); border-radius: 8px; background: var(--canvas); color: var(--ink); padding: 0 10px; font-size: 12px; }
+.project-preview select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.preview-service-options { font-size: 12px; }
+.project-preview .settings-card-foot { padding-inline: 16px; }
+@media (max-width: 680px) {
+  .project-preview .preview-launch-row { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .project-preview .preview-script-field { flex-direction: column; gap: 8px; }
+  .project-preview .preview-script-field > span { padding-top: 0; }
+  .project-preview .preview-proxy-field { flex-wrap: wrap; gap: 8px; }
+  .project-preview .preview-proxy-field > span, .project-preview .preview-proxy-field select { width: 100%; }
+}

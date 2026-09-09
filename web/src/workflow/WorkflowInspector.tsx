@@ -14,6 +14,7 @@ import { STEP_LABELS, WORKSPACE_LABELS } from "@ash/shared/workflow";
 import { ArrowUUpLeft, Check, Warning } from "@phosphor-icons/react";
 import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
 import { executorName, useExecutorCatalog, type ExecutorCatalog } from "./executorCatalog.ts";
+import type { Notify } from "../lib/notify.ts";
 import { PreviewRestartButton } from "./PreviewRestartButton.tsx";
 import { stepChips } from "./stepFields.ts";
 import { VerifyGateControls } from "./VerifyGateControls.tsx";
@@ -60,7 +61,7 @@ function Stop({
   verifyStationId: string | null;
   task: Task;
   onTaskUpdated: (task: Task) => void;
-  notify: (message: string) => void;
+  notify: Notify;
 }) {
   const chips = stepChips(stop.step, (id) => executorName(catalog, id));
   const fail = failText(stop.step);
@@ -127,7 +128,7 @@ export function WorkflowInspector({
 }: {
   task: Task;
   onTaskUpdated: (task: Task) => void;
-  notify: (message: string) => void;
+  notify: Notify;
 }) {
   const catalog = useExecutorCatalog();
   const def = task.workflow ?? null;

@@ -45,19 +45,14 @@ export function ActionButton({
 }
 
 export function ProjectGitActions({
-  projectId,
   git,
   canManage,
-  onChanged,
 }: {
-  projectId: string;
   git: ProjectGitHandle;
   /** 项目管理员 / 实例管理员才能动主仓，理由见 `projectGitModel.ts` 的 `roleBlocker`。 */
   canManage: boolean;
-  /** 操作成功后通知外面：胶囊上的分支名是从 `ProjectHealth` 来的，不刷就停在操作之前。 */
-  onChanged: () => void;
 }) {
-  const { state, busy } = git;
+  const { projectId, state, busy } = git;
   const [pulling, setPulling] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const pullMenu = useRef<HTMLDivElement>(null);
@@ -67,8 +62,10 @@ export function ProjectGitActions({
   useDismissable({ enabled: pulling, containerRef: pullMenu, onClose: () => setPulling(false), restoreFocusRef: pullButton });
   useDismissable({ enabled: publishing, containerRef: remoteMenu, onClose: () => setPublishing(false) });
 
-  const run = async (kind: string, action: () => Promise<Awaited<ReturnType<typeof api.projectGitFetch>>>) => {
-    if (await git.run(kind, action)) onChanged();
+  // 操作成功后刷新外面那份 `ProjectHealth` 的活归 `ProjectGitContext`：它盯着账本的落定
+  // 序号，不管发起这次操作的按钮此刻还在不在。这里只负责把请求发出去。
+  const run = (kind: string, action: () => Promise<Awaited<ReturnType<typeof api.projectGitFetch>>>) => {
+    void git.run(kind, action);
   };
 
   const pullStop = pullBlocker(state, canManage);
@@ -81,13 +78,13 @@ export function ProjectGitActions({
   // 服务端会退 409，用户看到的是一次莫名其妙的失败。
   const pull = (strategy: PullStrategy) => {
     setPulling(false);
-    if (pullStop || pullBusy) return;
-    void run("pull", () => api.projectGitPull(projectId, strategy));
+    if (!projectId || pullStop || pullBusy) return;
+    run("pull", () => api.projectGitPull(projectId, strategy));
   };
   const push = (remote: string | null) => {
     setPublishing(false);
-    if (pushStop || pushBusy) return;
-    void run("push", () => api.projectGitPush(projectId, remote));
+    if (!projectId || pushStop || pushBusy) return;
+    run("push", () => api.projectGitPush(projectId, remote));
   };
 
   // 还没 upstream 又配了多个远端时，「发布到哪儿」得让用户自己挑，不能替他猜。
@@ -99,7 +96,7 @@ export function ProjectGitActions({
         label="更新远端信息（fetch --prune）"
         blocked={fetchBlocker(state, canManage)}
         busy={busy === "fetch"}
-        onClick={() => void run("fetch", () => api.projectGitFetch(projectId, null))}
+        onClick={() => { if (projectId) run("fetch", () => api.projectGitFetch(projectId, null)); }}
       >
         <ArrowsClockwise size={13} />
       </ActionButton>

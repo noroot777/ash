@@ -29,6 +29,11 @@ export default defineConfig({
       allow: [searchForWorkspaceRoot(process.cwd()), interPackageRoot],
     },
     proxy: {
+      "/preview": {
+        target: process.env.ASH_PROXY ?? process.env.HARNESS_PROXY ?? "http://localhost:4317",
+        changeOrigin: false,
+        ws: true,
+      },
       "/api": {
         target: process.env.ASH_PROXY ?? process.env.HARNESS_PROXY ?? "http://localhost:4317",
         changeOrigin: true,

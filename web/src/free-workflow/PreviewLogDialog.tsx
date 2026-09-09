@@ -1,3 +1,5 @@
+import type { PreviewServiceState } from "@ash/shared/preview";
+import { browserPreviewUrl } from "../lib/previewUrl.ts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowsClockwise, Copy, Terminal, X } from "@phosphor-icons/react";
@@ -35,6 +37,9 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
 }) {
   const scrim = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLPreElement>(null);
+  const requestVersion = useRef(0);
+  const [serviceId, setServiceId] = useState<string | undefined>();
+  const [services, setServices] = useState<PreviewServiceState[]>([]);
   const [text, setText] = useState("");
   const [meta, setMeta] = useState<{ running: boolean; starting: boolean; truncated: boolean; command: string | null; url: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -44,19 +49,27 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
   useDismissable({ enabled: true, containerRef: scrim, onClose });
 
   const load = useCallback(async () => {
+    const version = requestVersion.current;
     try {
-      const log = await api.freePreviewLog(taskId);
+      const log = await api.freePreviewLog(taskId, serviceId);
+      if (version !== requestVersion.current) return;
+      setServices(log.services ?? []);
       setText(log.exists ? log.text : "");
       setMeta({ running: log.running, starting: log.starting, truncated: log.truncated, command: log.command, url: log.url });
       setError(null);
     } catch (fail) {
+      if (version !== requestVersion.current) return;
       setError(fail instanceof Error ? fail.message : "读取预览日志失败");
     } finally {
-      setLoading(false);
+      if (version === requestVersion.current) setLoading(false);
     }
-  }, [taskId]);
+  }, [taskId, serviceId]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    setLoading(true); setText("");
+    void load();
+    return () => { requestVersion.current += 1; };
+  }, [load]);
   // 还在跑（含还在启动）就每 2 秒续一次。都停了才不再轮询——日志已经不会再长了。
   const live = !!meta?.starting || awaitingStart;
   useEffect(() => {
@@ -93,10 +106,14 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
           </div>
           <button type="button" aria-label="关闭预览日志" onClick={onClose}><X size={15} /></button>
         </header>
+        {services.length > 1 && <div className="preview-service-tabs" role="group" aria-label="服务日志">
+          <button type="button" aria-pressed={!serviceId} onClick={() => setServiceId(undefined)}>全部</button>
+          {services.map((s) => <button type="button" key={s.id} aria-pressed={serviceId === s.id} onClick={() => setServiceId(s.id)}>{s.name} · {{ starting: "启动中", ready: "运行中", failed: "失败", stopped: "已停止" }[s.status]}</button>)}
+        </div>}
         {meta?.command && (
           <div className="preview-log-meta">
             <code className="mono">{meta.command}</code>
-            {meta.url && <a href={meta.url} target="_blank" rel="noreferrer">{meta.url}</a>}
+            {meta.url && <a href={browserPreviewUrl(meta.url)} target="_blank" rel="noreferrer">{browserPreviewUrl(meta.url)}</a>}
           </div>
         )}
         <pre

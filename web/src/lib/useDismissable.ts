@@ -43,11 +43,19 @@ export function useDismissable<
    * 菜单、气泡这类「点别处就该收起来」的浮层保持默认 true。放大视图那种「铺开一块地方
    * 长期看着、旁边的 inspector 还要接着点」的层传 false：它照样进这摞（Esc 仍按顺序一次
    * 退一层、里层的点击仍不算点外面），只是不再把「点外面」当成关闭意图。
+   *
+   * 允许**开着的时候改**：项目 Git 浮层在 fetch / pull / push 跑着的那几秒把它压成 false，
+   * 免得手一滑点到别处就把正在进行的操作从视野里抹掉。
    */
   closeOnOutside?: boolean;
 }) {
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  // 从 ref 读而不是进 effect 依赖：依赖一变就是「退出这摞再重新 push」，层序被改写成最新
+  // 打开的那个——外层浮层会跑到里层前面去，`insideInnerLayer` 和「Esc 只关最上面一层」
+  // 两条规则同时失灵。开关本身跟层序无关，不该动这摞。
+  const closeOnOutsideRef = useRef(closeOnOutside);
+  closeOnOutsideRef.current = closeOnOutside;
 
   useEffect(() => {
     if (!enabled) return;
@@ -66,6 +74,7 @@ export function useDismissable<
     };
 
     const dismissOnOutside = (event: Event) => {
+      if (!closeOnOutsideRef.current) return;
       const target = event.target;
       if (
         !(target instanceof Node)
@@ -87,10 +96,8 @@ export function useDismissable<
 
     // Capture keeps dismissal reliable when the destination stops bubbling.
     // Click covers keyboard and assistive activation paths without pointerdown.
-    if (closeOnOutside) {
-      document.addEventListener("pointerdown", dismissOnOutside, true);
-      document.addEventListener("click", dismissOnOutside, true);
-    }
+    document.addEventListener("pointerdown", dismissOnOutside, true);
+    document.addEventListener("click", dismissOnOutside, true);
     document.addEventListener("keydown", closeOnEscape, true);
     return () => {
       const at = layers.indexOf(layer);
@@ -99,5 +106,5 @@ export function useDismissable<
       document.removeEventListener("click", dismissOnOutside, true);
       document.removeEventListener("keydown", closeOnEscape, true);
     };
-  }, [closeOnOutside, containerRef, enabled, restoreFocusRef]);
+  }, [containerRef, enabled, restoreFocusRef]);
 }

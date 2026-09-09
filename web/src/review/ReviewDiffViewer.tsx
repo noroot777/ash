@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { CornersIn, CornersOut, FileCode, GitDiff, WarningCircle } from "@phosphor-icons/react";
 import type { TaskDiffResult } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
+import { branchDiffReason as diffReason } from "../lib/branch-diff-reason.ts";
 import { parseDiffLines, splitDiff, type DiffSection } from "./diffModel.ts";
 
 const INITIAL_FILE_COUNT = 120;
@@ -33,17 +34,6 @@ function enclosingLayerZ(from: Element): number {
     if (Number.isFinite(z)) top = Math.max(top, z);
   }
   return top;
-}
-
-function diffReason(reason?: string): string {
-  const labels: Record<string, string> = {
-    not_git_repo: "项目不是 Git 仓库",
-    target_unresolved: "无法确定目标分支",
-    source_branch_missing: "任务分支不存在或已清理",
-    target_branch_missing: "合入目标不存在",
-    no_merge_base: "源分支与目标分支没有共同基点",
-  };
-  return labels[reason ?? ""] ?? reason ?? "未知原因";
 }
 
 function formatBytes(value: number): string {

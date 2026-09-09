@@ -25,6 +25,7 @@ const reply = (body: unknown, status = 200) =>
 const TASK_ID = "T-preview-live";
 const mode = new URLSearchParams(location.search).get("mode");
 const preSpawn = mode === "pre-spawn";
+const serviceSwitch = mode === "service-switch";
 /**
  * `?mode=ready-close`：预览**已经起来了**，用户点「关闭预览」，DELETE 挂着不回。
  * 这一档要钉的是措辞和可点性：关一个已就绪的预览，按钮不能翻成「启动中·点此取消」
@@ -47,6 +48,11 @@ const phases = [
   "$ PORT=45841 npm run dev\n[INFO] Downloading spring-boot-starter-web…\n",
   "$ PORT=45841 npm run dev\n[INFO] Downloading spring-boot-starter-web…\n[INFO] Compiling 42 source files\n",
 ];
+const serviceStates = [
+  { id: "web", name: "网页前端", command: "npm run web", status: "ready" as const, url: "http://localhost:45841/", port: 45841 },
+  { id: "api", name: "接口服务", command: "npm run api", status: "ready" as const, url: null, port: 45842 },
+];
+const longServiceLog = Array.from({ length: 220 }, (_, index) => `all service line ${index + 1}`).join("\n");
 
 // 启动那一段是可以被**取消**的：DELETE 不跟 POST 抢锁（服务端 free-workflow-preview.ts），
 // 在跑的那趟随后自己发现代号没了、以失败返回。这里把这条时序也复现出来 —— 否则「界面上
@@ -78,7 +84,13 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
       // 所以按老口径「预览日志」那颗按钮不该出现、也不该留下。
       // POST 一发出，服务端就落下一条「正在启动」的记录并发事件，所以快照里它是
       // running + starting（别的页面、以及刷新之后，靠的就是这个看见「可以取消」）。
-      preview: readyClose
+      preview: serviceSwitch
+        ? {
+          running: true, starting: false, hasLog: true,
+          url: "http://localhost:45841/", port: 45841, command: "multi-service",
+          startedAt: "2026-09-07T00:00:00.000Z", services: serviceStates,
+        }
+        : readyClose
         ? {
           running: true, starting: false, hasLog: true,
           url: "http://localhost:45841/", port: 45841, command: "npm run dev",
@@ -111,6 +123,34 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     return await new Promise<Response>((resolve, reject) => { failStart = reject; succeedStart = resolve; });
   }
   if (pathname === `/api/tasks/${TASK_ID}/free-workflow/preview/log`) {
+    if (serviceSwitch) {
+      const selectedService = new URL(href, location.origin).searchParams.get("service");
+      if (selectedService === "web") {
+        return await new Promise<Response>((resolve) => setTimeout(() => resolve(reply({
+          services: serviceStates,
+          text: "stale web log",
+          truncated: false,
+          updatedAt: "2026-09-07T00:00:00.000Z",
+          exists: true,
+          running: true,
+          starting: false,
+          command: "npm run web",
+          url: "http://localhost:45841/",
+        })), 400));
+      }
+      const selected = serviceStates.find((service) => service.id === selectedService);
+      return reply({
+        services: serviceStates,
+        text: selectedService === "api" ? "fresh api log" : longServiceLog,
+        truncated: false,
+        updatedAt: "2026-09-07T00:00:00.000Z",
+        exists: true,
+        running: true,
+        starting: false,
+        command: selected?.command ?? "all services",
+        url: selected?.url ?? null,
+      });
+    }
     const nth = logReads;
     logReads += 1;
     // **第一次故意报空闲**：那是 POST 已发出、后端还没走到 startPreview 的那个窗口。

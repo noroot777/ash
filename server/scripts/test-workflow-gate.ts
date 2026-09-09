@@ -141,6 +141,19 @@ writeFileSync(join(ws.path, "work.txt"), "产物\n");
 git(ws.path, "add", "-A");
 git(ws.path, "commit", "-q", "-m", "干完了");
 
+const { readBranchPlan, acceptFamily } = await import("../src/task-branch-routes.js");
+const branchPlan = (await readBranchPlan(gateTask))!;
+assert.match(branchPlan.task.blocker!, /尚在中途关口/);
+const family = await acceptFamily(gateTask, [branchPlan.task], async () => {
+  assert.fail("family acceptance must reject the intermediate gate before invoking acceptTask");
+});
+assert.equal(family.ok, false);
+assert.deepEqual(family.completed, []);
+assert.match(family.error!, /尚在中途关口/);
+await db.update(tasks).set({ archived: true }).where(eq(tasks.id, gateTask));
+assert.match((await readBranchPlan(gateTask))!.task.blocker!, /已归档/, "keep the more specific guard failure");
+await db.update(tasks).set({ archived: false }).where(eq(tasks.id, gateTask));
+
 const released = await acceptTask(gateTask, "human", noAgent);
 assert.equal(released.accepted, true);
 assert.equal(released.kind, "gate_released", "关口后面还画着「自动验证」，这一按只能是放行");

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { acceptPlan } from "@ash/shared/workflow-policy";
 import { DUET_DEFAULTS } from "@ash/shared/duet";
 import type { AgentExecutorProfile, AgentType, DuetConfig, Task, TeamConfig } from "@ash/shared";
 import { DEFAULT_APP_SETTINGS, TEAM_DEFAULTS } from "@ash/shared";
@@ -518,7 +519,7 @@ export function TaskDerivationComposer({
             {availabilityMessage}
           </p>
         )}
-        <WorktreeHint context={worktreeContext} worktree={worktree} />
+        <WorktreeHint context={worktreeContext} worktree={worktree} task={task} />
         <div className="task-derivation-actions">
           <Button variant="ghost" onClick={onClose} disabled={busy}>取消 Esc</Button>
           <Button variant="primary" onClick={() => void submit()} disabled={!canSubmit}>
@@ -535,9 +536,11 @@ export function TaskDerivationComposer({
 function WorktreeHint({
   context,
   worktree,
+  task,
 }: {
   context: WorktreeContext | null;
   worktree: ReturnType<typeof derivedWorktreeDefaults>;
+  task: Task;
 }) {
   if (!context) return <span className="task-derivation-worktree"><TreeStructure size={12} />正在确认 worktree 基点…</span>;
   if (!context.isRepo) return <span className="task-derivation-worktree"><TreeStructure size={12} />项目不是 Git 仓库，将使用项目目录</span>;
@@ -550,8 +553,9 @@ function WorktreeHint({
   }
   if (worktree.inheritsSource && worktree.worktreeBase) {
     return (
-      <span className="task-derivation-worktree" title={`从 ${worktree.worktreeBase} 创建新 worktree`}>
-        <GitBranch size={12} />基于来源分支 {worktree.worktreeBase}
+      <span className="task-derivation-worktree">
+        <GitBranch size={12} />基于来源分支 {worktree.worktreeBase}；最终合入 {task.mergeTargetBranch || task.acceptedTargetBranch || "来源任务的最终目标"}
+        {acceptPlan(task.workflow, "human", task.workflowAt).merge === "squash" ? "。父任务压缩合入后，子任务需要更新基线并核对验证结果。" : acceptPlan(task.workflow, "human", task.workflowAt).merge === "tag" ? "。父任务仅打标签，子任务合入仍需等待父成果进入目标分支。" : "。可并行开发，验收按父子依赖处理。"}
       </span>
     );
   }

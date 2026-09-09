@@ -71,8 +71,7 @@ const INITIAL_SEARCH = typeof window === "undefined" ? "" : window.location.sear
 const INITIAL_HASH = typeof window === "undefined" ? "" : window.location.hash;
 const SYSTEM_NOTICE_MODE_REQUESTED = new URLSearchParams(INITIAL_SEARCH).has("systemNotices")
   || new URLSearchParams(INITIAL_HASH.replace(/^#/, "")).has("systemNotices");
-const IN_ASH_PREVIEW = !!import.meta.env?.VITE_ASH_PREVIEW;
 export const INITIAL_SYSTEM_NOTICE_MODE = SYSTEM_NOTICE_MODE_REQUESTED
   ? systemNoticeModeFromSearch(INITIAL_SEARCH, INITIAL_HASH)
   : "aligned";
-export const SYSTEM_NOTICE_DEMO_REQUESTED = SYSTEM_NOTICE_MODE_REQUESTED || IN_ASH_PREVIEW;
+export const SYSTEM_NOTICE_DEMO_REQUESTED = SYSTEM_NOTICE_MODE_REQUESTED;

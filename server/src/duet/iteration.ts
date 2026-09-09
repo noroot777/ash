@@ -13,6 +13,7 @@ import { sessionTranscriptPath } from "../transcript.js";
 import { id, now } from "../util.js";
 import { join } from "node:path";
 import { duetConsensusBy } from "./settlement.js";
+import { requestTaskCreationOrigin } from "../task-creation-origin.js";
 
 type DuetEntry = {
   type?: string;
@@ -223,6 +224,7 @@ export function mountDuetIterationRoutes(api: Hono): void {
       useWorktree: originalRow.useWorktree,
       worktreeBase: originalRow.worktreeBase,
       originTaskId: teamId,
+      creationOrigin: await requestTaskCreationOrigin(c),
     }]);
     return c.json(created!, 201);
   });

@@ -6,6 +6,14 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./branch-plan": {
+      "types": "./src/branch-plan.ts",
+      "default": "./src/branch-plan.ts"
+    },
+    "./task-origin": {
+      "types": "./src/task-origin.ts",
+      "default": "./src/task-origin.ts"
+    },
     "./native-work": {
       "types": "./src/native-work.ts",
       "default": "./src/native-work.ts"
@@ -98,9 +106,9 @@
       "types": "./src/repo-url.ts",
       "default": "./src/repo-url.ts"
     },
-    "./session-notes": {
-      "types": "./src/session-notes.ts",
-      "default": "./src/session-notes.ts"
+    "./preview": {
+      "types": "./src/preview.ts",
+      "default": "./src/preview.ts"
     }
   },
   "scripts": {

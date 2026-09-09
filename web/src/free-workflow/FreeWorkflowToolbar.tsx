@@ -1,7 +1,9 @@
+import { browserPreviewUrl } from "../lib/previewUrl.ts";
 import { useEffect, useRef, useState } from "react";
 import type { Task } from "@ash/shared";
 import { ArrowSquareOut, MagnifyingGlass, MonitorPlay, SpinnerGap, StopCircle, Terminal } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
+import type { Notify } from "../lib/notify.ts";
 import { FreeReviewDialog } from "./FreeReviewDialog.tsx";
 import { FreeReviewProgress } from "./FreeReviewProgress.tsx";
 import { FreeReviewRepairButton } from "./FreeReviewRepairButton.tsx";
@@ -16,7 +18,7 @@ interface PreviewAction {
   token: number;
 }
 
-export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (message: string) => void }) {
+export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: Notify }) {
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
   const [reviewOpen, setReviewOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
@@ -120,7 +122,7 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
       const { stopped } = await api.stopFreePreview(taskId);
       if (owns(taskId, token)) notify(stopped ? "已取消启动预览" : "预览已经不在跑了");
     } catch (error) {
-      if (owns(taskId, token)) notify(error instanceof Error ? error.message : "取消失败");
+      if (owns(taskId, token)) notify(error instanceof Error ? error.message : "取消失败", { sticky: true });
     } finally {
       // 起预览那一路的 POST 还没回来（它要等到自己发现被取消），快照照样重拉：
       // 记录已经被删掉了，界面该立刻回到「打开预览」。
@@ -150,8 +152,9 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
         // 收得掉那条刚就绪的记录）。这两种情况下宣告「预览已打开」并弹开新标签页，指的都是
         // 一个此刻并不存在的预览。
         if (owns(taskId, token)) {
-          notify(preview.url ? `预览已打开：${preview.url}` : "预览已打开");
-          if (preview.url) window.open(preview.url, "_blank", "noopener,noreferrer");
+          const url = preview.url ? browserPreviewUrl(preview.url) : null;
+          notify(url ? `预览已打开：${url}` : "预览已打开");
+          if (url) window.open(url, "_blank", "noopener,noreferrer");
         }
       }
       if (owns(taskId, token)) await free.reload(true);
@@ -159,7 +162,10 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
       // 起失败也要 reload：日志文件这时已经落盘了，reload 之后 `hasLog` 才会翻真、
       // 「预览日志」那颗按钮才出得来 —— 否则用户手上只剩一句转瞬即逝的 toast。
       if (owns(taskId, token)) {
-        notify(error instanceof Error ? error.message : "预览操作失败");
+        // **这一句必须等用户自己收掉。** 起不来时后端报回来的是一整份东西：认出了哪几个
+        // 服务、每个该怎么起、要前后端一起起该写成什么样——那是一段照着抄进「预览命令」
+        // 的文字，两秒多就走的话，用户只知道「红了一下」，得再点一次才看得见。
+        notify(error instanceof Error ? error.message : "预览操作失败", { sticky: true });
         await free.reload(true).catch(() => undefined);
       }
     } finally {
@@ -201,7 +207,9 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
           {previewBusy ? <SpinnerGap size={13} className="is-spinning" /> : free.state?.preview.running ? <StopCircle size={13} weight="regular" /> : <MonitorPlay size={13} weight="regular" />}
           <span>{action === "closing" ? "关闭中" : action === "canceling" ? "取消中" : previewStarting ? "启动中·点此取消" : free.state?.preview.running ? "关闭预览" : "打开预览"}</span>
         </button>
-        {free.state?.preview.running && free.state.preview.url && <a href={free.state.preview.url} target="_blank" rel="noreferrer" aria-label="在新窗口打开预览"><ArrowSquareOut size={13} /><span>预览页</span></a>}
+        {free.state?.preview.running && (free.state.preview.services?.length
+          ? free.state.preview.services.filter((s) => s.url).map((s) => <a key={s.id} href={browserPreviewUrl(s.url!)} target="_blank" rel="noreferrer" aria-label={`打开 ${s.name}`}><ArrowSquareOut size={13} /><span>{free.state!.preview.services!.length > 1 ? s.name : "预览页"}</span></a>)
+          : free.state.preview.url && <a href={browserPreviewUrl(free.state.preview.url)} target="_blank" rel="noreferrer" aria-label="在新窗口打开预览"><ArrowSquareOut size={13} /><span>预览页</span></a>)}
         {/* 日志入口按 hasLog 给，不按 running 给：预览**起不来**的那一次同样留下了日志，
             而那正是最需要看它的时候。读日志是只读动作，接力/验收锁死也照给。
             logArmed 是启动期间的那一档：hasLog 要等这次 POST 回来才翻真，可日志从

@@ -12,6 +12,7 @@ import { id, now, taskBody } from "./util.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { visibleProjectIds } from "./auth/visibility.js";
 import { executorScopeForOwner } from "./auth/owned-executors.js";
+import { requestTaskCreationOrigin } from "./task-creation-origin.js";
 
 // ── groups (transient batch containers, §3) ─────────────────────────────────
 // 从 task-routes.ts 拆出的分组路由:列表/运行/暂停/批量建任务/编辑/删除。
@@ -152,6 +153,7 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
     executorId: defaultsExecutorId,
     agentType: (b.defaults?.agentType ?? defaultsExecutorType ?? null) as AgentType | null,
   };
+  const creationOrigin = await requestTaskCreationOrigin(c);
   const rows = specs.map((s, i) => {
     const explicitTitle = (s.title ?? "").trim();
     const ts = new Date(base + i).toISOString();
@@ -173,6 +175,7 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
     });
     return {
       id: ids[i],
+      creationOrigin,
       projectId: g.projectId,
       groupId,
       parentId: null as string | null,
@@ -197,6 +200,7 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
       useWorktree: s.useWorktree !== undefined ? s.useWorktree : b.defaults?.useWorktree,
       worktreeBase:
         s.worktreeBase !== undefined ? s.worktreeBase : b.defaults?.worktreeBase ?? null,
+      mergeTargetBranch: s.mergeTargetBranch ?? b.defaults?.mergeTargetBranch ?? null,
       workflowId: s.workflowId !== undefined ? s.workflowId : b.defaults?.workflowId ?? null,
       ownerUserId: batchOwner,
     };
