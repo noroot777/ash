@@ -31,6 +31,7 @@ const { startPreview, stopPreview, readPreview, beginPreviewStart, endPreviewSta
 const { lastPreview, readAnyPreview, readPreviewLog, writeRecord } = await import("../src/preview-store.js");
 const { nodeDepsAdvice } = await import("../src/preview-deps.js");
 const { previewShell } = await import("../src/preview-shell.js");
+const { currentListeningPort } = await import("../src/listening-port.js");
 const { createSession, deleteSession } = await import("../src/auth/store.js");
 const { setInstanceMode } = await import("../src/auth/mode.js");
 await ensureSchema();
@@ -166,6 +167,21 @@ try {
     } finally { writeRecord(good); }
     assert.equal((await request(state.url)).status, 302, "记录恢复后照旧能开");
   }
+  // 预览指到 ash 自己 = 代理自己转给自己，用户点开看到的是自己这台 ash 的未登录态（代理
+  // 按设计不转 cookie），却长得跟本尊一模一样地问他要 key。判读那侧已经不认自己的端口，
+  // 这里钉的是兜底：存量记录 / 手填端口照样绕得过判读。
+  {
+    const good = readAnyPreview("preview-task")!;
+    const self = currentListeningPort()!;
+    const selfish = { ...good, services: good.services!.map((s) => (s.id === "web" ? { ...s, port: self, url: `http://127.0.0.1:${self}/` } : s)) };
+    writeRecord(selfish);
+    try {
+      const response = await request(state.url);
+      assert.equal(response.status, 502, "指到 ash 自己不该照常开");
+      assert.match(await response.text(), /ash 自己/);
+    } finally { writeRecord(good); }
+    assert.equal((await request(state.url)).status, 302, "记录恢复后照旧能开");
+  }
   const gateway = open.headers.get("location")!;
   assert.match(gateway, /^\/preview\/preview-task\/[a-f0-9]{48}\/web\//);
   const html = await request(gateway);
@@ -176,13 +192,53 @@ try {
   const js = await (await request(gateway + "entry.js")).text();
   assert(js.includes(`from "${gateway}chunk.js"`));
   assert(js.includes('const slash="/"'), "普通字符串不应被 URL 改写破坏");
-  const echo = await request(gateway + "echo", "POST", { message: "你好" }, { cookie: "ash_session=SECRET", authorization: "Bearer SECRET", "x-ash-turn-token": "SECRET", origin: "null" });
+  const echo = await request(gateway + "echo", "POST", { message: "你好" }, { cookie: "ash_session=SECRET", authorization: "Bearer SECRET", "x-ash-turn-token": "SECRET", origin: "null", "sec-fetch-site": "cross-site" });
   assert.equal(echo.status, 200);
   const echoed = await echo.json();
   assert.deepEqual(JSON.parse(echoed.body), { message: "你好" });
   assert.equal(echoed.headers.cookie, undefined);
   assert.equal(echoed.headers.authorization, undefined);
   assert.equal(echoed.headers["x-ash-turn-token"], undefined);
+  // 预览页是 sandbox 出来的 opaque origin，浏览器盖的章永远是 cross-site；照原样转发进去，
+  // 被代理应用只要拿它做 CSRF 判据就会拒掉预览里的每一次写操作（2026-09-09：预览 ash 前端
+  // 那一档时，登录换来一句「跨站请求已被拒绝」）。它必须跟着上面重写的 Origin/Host 一起改。
+  assert.equal(echoed.headers["sec-fetch-site"], "same-origin", "cross-site 的章要跟 Origin 一起改写");
+  assert.equal(echoed.headers.origin, `http://localhost:${echoed.port}`);
+  const typed = await request(gateway + "echo", "POST", {}, { "sec-fetch-site": "none" });
+  assert.equal((await typed.json()).headers["sec-fetch-site"], "none", "地址栏直接打开的那一类保持原样");
+  const bare = await request(gateway + "echo", "POST", {});
+  assert.equal((await bare.json()).headers["sec-fetch-site"], undefined, "本来没有的头不许凭空造一个");
+  // 地址栏不许说谎：`replaceState` 换的只是地址栏，文档还是那份 opaque origin 的预览页。
+  // 任何做 URL 归一化的前端（ash 自己就是）不拦就会把地址栏变成 ash 本尊的地址，用户对着
+  // 它把 key 粘进预览里的登录框。桥拦下来之后，地址栏始终留在预览前缀底下。
+  {
+    const bridge = /<script>([\s\S]*?)<\/script>/.exec(await (await request(gateway)).text())?.[1];
+    assert(bridge, "预览 HTML 里应注入桥");
+    const vm = await import("node:vm");
+    const seen: unknown[][] = [];
+    const context: Record<string, unknown> = {
+      URL,
+      location: { origin: base, href: base + gateway, protocol: "http:" },
+      history: {
+        pushState: (...args: unknown[]) => seen.push(["push", ...args]),
+        replaceState: (...args: unknown[]) => seen.push(["replace", ...args]),
+      },
+      fetch: () => {},
+      XMLHttpRequest: function XHR() {} as unknown as typeof XMLHttpRequest,
+    };
+    context.window = context;
+    (context.XMLHttpRequest as { prototype: Record<string, unknown> }).prototype = { open: () => {}, send: () => {} };
+    vm.runInNewContext(bridge, context);
+    const history = context.history as History;
+    history.replaceState(null, "", "/");
+    history.pushState(null, "", "/?project=p&task=t");
+    history.replaceState(null, "", gateway + "nested/");
+    assert.deepEqual(seen, [
+      ["replace", null, "", gateway],
+      ["push", null, "", gateway + "?project=p&task=t"],
+      ["replace", null, "", gateway + "nested/"],
+    ]);
+  }
   assert.match(echo.headers.get("set-cookie") ?? "", /ashpv_.*Path=\/preview\//);
   assert.equal((await request(gateway + "redirect")).headers.get("location"), gateway + "nested/");
   assert.equal((await request(gateway + "echo", "OPTIONS", undefined, { origin: "null", "access-control-request-headers": "content-type" })).status, 204);

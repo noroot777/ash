@@ -33,15 +33,34 @@ function targetOf(requestPath: string) {
   return { record, grant, service, protocol: target.protocol, port: service.port, path, base: previewBase(record, service.id) };
 }
 
+/**
+ * 转发给被代理应用的请求头。除了摘掉逐跳头和 ash 自己的凭证，还有一件**必须**做的：
+ * `Sec-Fetch-Site` 得跟着下面重写的 `Origin`/`Host` 一起改，不能原样转发。
+ *
+ * 预览页是 CSP `sandbox`（无 `allow-same-origin`）出来的 **opaque origin**，浏览器给它
+ * 发出的每一个请求盖的章都是 `cross-site`。被代理的应用只要照通行做法拿这个头做 CSRF
+ * 判据，预览里的**任何写操作**都会被它自己拒掉 —— 2026-09-09 真出过：预览的是 ash 前端
+ * 那一档（`/api` 打回本机 ash），用户在预览里粘 key 登录，换来一句「跨站请求已被拒绝
+ * （写操作只接受本站发起）」，而他明明就在自己这台 ash 上。Origin 早就重写成了应用自己
+ * 的地址，却因为 `Sec-Fetch-Site` 的优先级更高（见 auth/middleware.ts 的
+ * `crossSiteRejection`）而完全不起作用。
+ *
+ * 「是不是本人发的」这道判据在**外层**，不在这里：路径里 48 位随机 token + grant 校验
+ * （`canUsePreview`）+ 外来 `Origin` 一律 403。能走到这一行的请求已经认定是本人从预览里
+ * 发的，所以对内一律 `same-origin`；`none`（地址栏直接打开的顶层导航）保持原样 —— 它比
+ * `same-origin` 宽松不了，改写反而会抹掉「这是用户自己敲进去的」这个事实。
+ */
 function forwardedHeaders(input: Headers | IncomingHttpHeaders, token: string): Record<string, string> {
   const entries = input instanceof Headers ? [...input.entries()] : Object.entries(input).map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : v ?? ""]);
   const result: Record<string, string> = {};
   const connection = entries.find(([k]) => k.toLowerCase() === "connection")?.[1].toLowerCase().split(",").map((s) => s.trim()) ?? [];
   for (const [key, value] of entries) {
     const k = key.toLowerCase();
-    if (HOP_HEADERS.has(k) || connection.includes(k) || ["host", "cookie", "authorization", "origin", "referer", "accept-encoding", "content-length"].includes(k) || k.startsWith("x-ash-") || k.startsWith("x-forwarded-") || k === "forwarded") continue;
+    if (HOP_HEADERS.has(k) || connection.includes(k) || ["host", "cookie", "authorization", "origin", "referer", "accept-encoding", "content-length", "sec-fetch-site"].includes(k) || k.startsWith("x-ash-") || k.startsWith("x-forwarded-") || k === "forwarded") continue;
     result[k] = value;
   }
+  const site = entries.find(([k]) => k.toLowerCase() === "sec-fetch-site")?.[1].trim().toLowerCase();
+  if (site) result["sec-fetch-site"] = site === "none" ? "none" : "same-origin";
   const cookies = entries.find(([k]) => k.toLowerCase() === "cookie")?.[1] ?? "";
   const prefix = `ashpv_${token}_`;
   const allowed = cookies.split(";").map((s) => s.trim()).filter((s) => s.startsWith(prefix)).map((s) => {

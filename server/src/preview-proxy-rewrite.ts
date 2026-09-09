@@ -36,6 +36,18 @@ export function rewritePreviewText(text: string, contentType: string, base: stri
     : bootstrap + rewritten;
 }
 
+/**
+ * 注进被代理页面的那段桥。它把页面运行时现拼的地址（fetch / XHR / WebSocket / EventSource）
+ * 一律改写回预览前缀底下 —— 服务端只改得动它发出去的那份文本，剩下的只能在浏览器里拦。
+ *
+ * `history.pushState/replaceState` 也在这张单子里，理由跟前几个不一样，是**地址栏不许
+ * 说谎**：预览页在 CSP sandbox 的 opaque origin 里，而 `replaceState` 换的只是地址栏，
+ * 文档还是原来那一份。不拦的话，任何做「URL 归一化」的前端（ash 自己的
+ * `normalizedWorkspaceUrl` 就是，开屏第一件事就把非 `/` 的路径 replace 成 `/`）会让地址栏
+ * 变成 ash 本尊的地址，页面却还是那份沙箱里的预览 —— 2026-09-09 用户就是这样对着
+ * 「172.x.x.x:4317」的地址栏，把自己的 key 粘进了一个预览页里的登录框。改写之后地址栏
+ * 始终留在 `/preview/<task>/<token>/<service>/` 底下，「我在看预览」这件事看得见。
+ */
 function previewBrowserBridge(base: string, record: PreviewRecord): string {
   return `(() => {
     const base = ${JSON.stringify(base)};
@@ -79,6 +91,10 @@ function previewBrowserBridge(base: string, record: PreviewRecord): string {
           super(target.href, ...args);
         }
       };
+    }
+    for (const name of ['pushState', 'replaceState']) {
+      const original = history[name].bind(history);
+      history[name] = function (state, title, url) { return original(state, title, url == null ? url : rewrite(url)); };
     }
   })();`;
 }
