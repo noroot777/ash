@@ -52,23 +52,46 @@ export const SEARCH_MAX_HITS = 50;
 export const SEARCH_FIELD_RANK: Record<SearchField, number> = { id: 0, title: 1, body: 2, conversation: 3 };
 
 /**
+ * 排序档。两档都以「任务在随手记前」开头 —— 那是产品的分区（界面按这个分节标题），
+ * 不是相关度的一部分。
+ *   · relevance 相关度：当前项目 → 字段（id > 标题 > 正文 > 会话）→ 更新时间倒序
+ *   · recent  最近更新：更新时间倒序，不看项目也不看字段
+ */
+export type SearchSort = "relevance" | "recent";
+
+export const SEARCH_SORTS: SearchSort[] = ["relevance", "recent"];
+
+export function isSearchSort(value: string): value is SearchSort {
+  return (SEARCH_SORTS as string[]).includes(value);
+}
+
+/**
  * 搜索结果的排序判据，**只此一处**。
  *
  * 服务端拿它决定**扫描顺序**（扫描顺序 == 排序顺序，「够 50 条就停」才站得住），前端拿它
  * 把流式到达的命中插进列表。两边各写一份必然漂，而漂了就是「列表里的顺序跟服务端以为的
- * 不一样」——早停会砍错人。
+ * 不一样」——早停会砍错人。**换档时两边必须换同一档**，理由同上。
  *
- * 四把钥匙，依次：
+ * relevance（默认）四把钥匙，依次：
  *   1. 任务在随手记前（产品顺序，历来如此）
  *   2. **当前项目在前** —— ⌘K 多半是在找手头这个项目的东西；这也让「先出本项目、再搜
  *      别的项目」这种分步返回不会中途重排
  *   3. 命中在哪个字段：id > 标题 > 正文 > 会话
  *   4. 越近改过的越前
+ *
+ * recent 只留第 1 把和第 4 把：用户要的是「最近动过的在最前」，那时候「本项目优先」和
+ * 「标题命中比会话命中更像回事」都属于会把新任务压下去的偏见。
  */
-export function compareSearchHits(a: SearchHit, b: SearchHit, preferProjectId?: string | null): number {
+export function compareSearchHits(
+  a: SearchHit,
+  b: SearchHit,
+  preferProjectId?: string | null,
+  sort: SearchSort = "relevance",
+): number {
   const kind = (hit: SearchHit) => (hit.kind === "task" ? 0 : 1);
   const local = (hit: SearchHit) => (preferProjectId && hit.projectId === preferProjectId ? 0 : 1);
   const field = (hit: SearchHit) => (hit.kind === "task" ? SEARCH_FIELD_RANK[hit.field] : SEARCH_FIELD_RANK.body);
+  if (sort === "recent") return kind(a) - kind(b) || b.updatedAt.localeCompare(a.updatedAt);
   return kind(a) - kind(b)
     || local(a) - local(b)
     || field(a) - field(b)

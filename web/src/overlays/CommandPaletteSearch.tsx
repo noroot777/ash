@@ -1,4 +1,4 @@
-import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { SearchHit } from "@ash/shared";
 import { NotePencil } from "@phosphor-icons/react";
 import { formatInstant } from "../task-detail/utils.ts";
@@ -142,14 +142,14 @@ export function SearchHitRow({
   index,
   active,
   query,
-  onHover,
+  onSelect,
   onOpen,
 }: {
   hit: SearchHit;
   index: number;
   active: number;
   query: string;
-  onHover: (index: number, event: ReactMouseEvent) => void;
+  onSelect: (index: number) => void;
   onOpen: (hit: SearchHit) => void;
 }) {
   const fieldChip = FIELD_LABEL[hit.field];
@@ -157,8 +157,12 @@ export function SearchHitRow({
     <button
       type="button"
       aria-selected={index === active}
-      onMouseMove={(event) => onHover(index, event)}
-      onClick={() => onOpen(hit)}
+      data-palette-index={index}
+      // 单击只是选中（右边预览跟着换），双击才打开。鼠标划过不选中：指针经过一行不代表
+      // 用户在挑它，而选中态一路跟着鼠标跑，键盘选到哪儿就全乱了。
+      onMouseDown={(event) => event.preventDefault()} // 焦点留在输入框，点完还能继续按上下键
+      onClick={() => onSelect(index)}
+      onDoubleClick={() => onOpen(hit)}
       className="ui-selectable flex w-full flex-col gap-0.5 rounded-lg px-3 py-2 text-left outline-none"
     >
       <span className="flex w-full min-w-0 items-center gap-2 text-xs">
@@ -192,14 +196,14 @@ export function SearchHitList({
   active,
   startIndex,
   query,
-  onHover,
+  onSelect,
   onOpen,
 }: {
   hits: SearchHit[];
   active: number;
   startIndex: number;
   query: string;
-  onHover: (index: number, event: ReactMouseEvent) => void;
+  onSelect: (index: number) => void;
   onOpen: (hit: SearchHit) => void;
 }) {
   return <>{hits.map((hit, hitIndex) => {
@@ -207,7 +211,7 @@ export function SearchHitList({
     return (
       <div key={`${hit.kind}:${hit.id}`}>
         {header && <div className="palette-label">{header}</div>}
-        <SearchHitRow hit={hit} index={startIndex + hitIndex} active={active} query={query} onHover={onHover} onOpen={onOpen} />
+        <SearchHitRow hit={hit} index={startIndex + hitIndex} active={active} query={query} onSelect={onSelect} onOpen={onOpen} />
       </div>
     );
   })}</>;

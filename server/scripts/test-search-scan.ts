@@ -245,7 +245,60 @@ try {
   const idExcluded = await searchAll("abcdefgh1234 -lambdaword");
   assert.equal(idExcluded.length, 0, "排除词命中会话时，按 id 钉也要让位");
 
-  console.log("✓ search scan: 早停等价 + 跨字段 AND + 排除词 + 多词 + 纯排除 + 本项目优先 + 流式一致 + 中断即停 + id 不绕过 AND");
+  // ── 12. 最近更新档：排序只看时间，扫描顺序必须跟着换 ─────────────────────
+  // relevance 那套早停靠「档位」成立：只可能落会话档的整堆先不读，够 50 条就整堆跳过。
+  // sort=recent 里没有档位这把钥匙 —— 一条只在会话里命中的新任务就该排第一，照搬那套
+  // 早停会把它整个漏掉。这几条钉的就是「换档 == 换扫描顺序」。
+  await db.insert(tasks).values([
+    taskRow("recent-title-old", "sigma 在标题(旧)", "", 800),
+    taskRow("recent-convo-new", "只在会话里(新)", "", 1000),
+  ]);
+  writeRun("recent-convo-new", "这段会话里提到了 sigma。");
+
+  assert.deepEqual(
+    (await searchAll("sigma")).map((hit) => hit.id),
+    ["recent-title-old", "recent-convo-new"],
+    "相关度档：标题命中压过会话命中，哪怕它更旧",
+  );
+  assert.deepEqual(
+    (await searchAll("sigma", { sort: "recent" })).map((hit) => hit.id),
+    ["recent-convo-new", "recent-title-old"],
+    "最近更新档：只看更新时间，会话命中照样排前面",
+  );
+
+  // 本项目优先在这一档不存在，分段扫也就不存在：不发 local-done，别的项目的新任务
+  // 该插到本项目前面就插。
+  let recentMarker = 0;
+  const zetaRecent = await searchAll("zeta", {
+    sort: "recent",
+    preferProjectId: "project",
+    onLocalDone: () => { recentMarker += 1; },
+  });
+  assert.deepEqual(
+    zetaRecent.map((hit) => hit.id),
+    ["zeta-other", "zeta-local"],
+    "最近更新档不看 preferProjectId：别的项目那条更新，就排前面",
+  );
+  assert.equal(recentMarker, 0, "不分段扫就没有分界，local-done 这条不该发（界面据此只说「搜索中…」）");
+
+  // 早停等价：最新的那条只在会话里命中，它必须是第一条 —— 这正是相关度档那套
+  // 「会话档整堆先不读」在这一档会漏掉的人。最旧的仍被 50 条上限挤掉。
+  await db.insert(tasks).values([taskRow("recent-convo-top", "只在会话里(最新)", "", 1100)]);
+  writeRun("recent-convo-top", "这段会话里 alpha 和 beta 都出现了。");
+  const cappedRecent = await searchAll("alpha beta", { sort: "recent" });
+  assert.equal(cappedRecent.length, 50, "上限仍是 50 条");
+  assert.equal(cappedRecent[0]?.id, "recent-convo-top", "最新的那条排第一，哪怕它只在会话里命中");
+  assert.ok(
+    !cappedRecent.some((hit) => hit.id === "convo-multi"),
+    "最旧的那条会话命中仍被上限挤掉 —— 早停砍的是最后几名，不是「会话档那一堆」",
+  );
+  assert.deepEqual(
+    cappedRecent.map((hit) => hit.updatedAt),
+    [...cappedRecent.map((hit) => hit.updatedAt)].sort((a, b) => b.localeCompare(a)),
+    "整份结果就是 updatedAt 倒序",
+  );
+
+  console.log("✓ search scan: 早停等价 + 跨字段 AND + 排除词 + 多词 + 纯排除 + 本项目优先 + 流式一致 + 中断即停 + id 不绕过 AND + 最近更新档");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

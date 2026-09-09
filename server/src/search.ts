@@ -18,10 +18,14 @@
 //      项目的东西，而 compareSearchHits 里「当前项目在前」这把钥匙排在字段之前 ——
 //      于是本项目的命中铁定全部排在别的项目之前，分两段扫既不会中途重排，本项目自己
 //      就收满 50 条时别的项目还能整个跳过。
+//
+// 以上是默认的 relevance 档。用户把 ⌘K 切到「最近更新」（`sort=recent`）时，排序里
+// 项目和字段这两把钥匙都没了，上面第 2、3 条的推导跟着失效 —— 那一档改成单段按
+// updatedAt 倒序扫、收满 MAX_HITS 即停（见 searchAll 末尾）。
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SearchHit, SearchField, TaskStatus } from "@ash/shared";
-import { SEARCH_MAX_HITS, compareSearchHits } from "@ash/shared/search";
+import { SEARCH_MAX_HITS, compareSearchHits, type SearchSort } from "@ash/shared/search";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { notes, noteTasks, projects, tasks } from "./db/schema.js";
@@ -59,14 +63,18 @@ export type SearchOptions = {
   projectId?: string;
   type?: "tasks" | "notes";
   // 排序偏好 + **扫描顺序**：先把这个项目扫完，再扫别的项目。跟 projectId 是两回事 ——
-  // 后者把别的项目排除掉，这个只是让它们排后面、晚一点到。
+  // 后者把别的项目排除掉，这个只是让它们排后面、晚一点到。sort === "recent" 时不看它：
+  // 那一档的排序里没有「本项目优先」这把钥匙，分段扫就会中途重排。
   preferProjectId?: string | null;
+  // 排序档（compareSearchHits）。**扫描顺序跟着它换**，否则「够 50 条就停」砍掉的
+  // 不是最后 50 名 —— 见下面两条扫描路径。
+  sort?: SearchSort;
   // 命中一条回调一条。给了就是流式（`GET /search/stream`）；不给就只在最后整份返回。
   // 回调里的顺序不是最终顺序（同一档里按 updatedAt 扫，档位是逐条算出来的），
   // 消费方得拿 compareSearchHits 插进去 —— 那正是它跟服务端共用同一份判据的原因。
   onHit?: (hit: SearchHit) => void;
   // 本项目那一段扫完了。界面拿它说「本项目已列完，正在搜其他项目…」，不然用户看到的是
-  // 一个停在半路、不知道还有没有下文的列表。
+  // 一个停在半路、不知道还有没有下文的列表。**recent 档不分段，这个回调不会来。**
   onLocalDone?: () => void;
   // 用户又敲了一个字 / 关掉了 ⌘K。搜索是全盘扫，不中断就会几十个查询叠在一起把
   // 事件循环占死 —— 那正是这轮要修的现象本身。
@@ -378,13 +386,14 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
     };
   };
 
-  const prefer = options.preferProjectId || null;
+  const prefer = options.sort === "recent" ? null : options.preferProjectId || null;
+  const sort = options.sort ?? "relevance";
   const hits: SearchHit[] = [];
   // 收进来就按最终顺序插好，**只有还能挤进前 MAX_HITS 的那些才往外吐**。
   // 集合只增不减，所以插进来时就排在 50 名开外的，以后只会更靠后 —— 吐了也是白吐。
   // （实测：`?q=harness` 有 301 条命中，全吐是 643 KB，只吐进得了前 50 的是 ~50 行。）
   const emit = (hit: SearchHit) => {
-    const at = hits.findIndex((existing) => compareSearchHits(hit, existing, prefer) < 0);
+    const at = hits.findIndex((existing) => compareSearchHits(hit, existing, prefer, sort) < 0);
     const index = at < 0 ? hits.length : at;
     hits.splice(index, 0, hit);
     if (index < MAX_HITS) options.onHit?.(hit);
@@ -411,6 +420,8 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
     });
   }
 
+  const byRecent = (rows: TaskRow[]) => [...rows].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+
   // ── 谁必须下盘 ─────────────────────────────────────────────────────────
   //
   // 一个任务的命中能落在哪一档，光看库里的字段（标题 / 正文 / id）就能分成三类：
@@ -425,18 +436,29 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
   // 于是：settled + partial 扫完之后，如果**能排在会话档之前的**命中已经够 MAX_HITS，
   // none 那一堆整个可以不读；否则按 updatedAt 倒序补，够数就停 —— 剩下没读的都比已收的
   // 更旧、且同为最末档，不可能挤进前 50。结果集与全量扫一字不差。
+  //
+  // **这套分堆只对 relevance 档成立**（档位是它的排序钥匙之一）。recent 档见下面那条
+  // 单段扫描：那里只留 settled 那点「不用下盘」的便宜，分堆早停整个不适用。
+
+  // 一个任务的每个 OR 分组「光看库里的字段能满足几成」。一个词算「库里就能定」有两种:
+  // 在标题/正文里,或者它就是这个任务的 id。后者只满足它自己那一个词 —— 拿它给整个分组
+  // 打满分,`<id> 另一个词` 就会被误判成 settled,于是既不下盘、又被当成完整命中。
+  const groupRatios = (task: TaskRow) => {
+    const lower = `${task.title}\n${task.body}`.toLowerCase();
+    return parsed.groups.map((group) =>
+      group.filter((term) => lower.includes(term.value) || termMatchesTaskId(term, task.id)).length / group.length);
+  };
+  // 这条任务判定得下盘吗。带排除词时连 settled 也得读 —— 排除词可能只出现在会话里。
+  const needsRunText = (task: TaskRow) =>
+    parsed.excluded.length > 0 || !parsed.groups.length || !groupRatios(task).some((ratio) => ratio === 1);
+
   const classify = (rows: TaskRow[]) => {
-    const ordered = [...rows].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const ordered = byRecent(rows);
     const settled: TaskRow[] = [];
     const partial: TaskRow[] = [];
     const none: TaskRow[] = [];
     for (const task of ordered) {
-      const lower = `${task.title}\n${task.body}`.toLowerCase();
-      // 一个词算「库里就能定」有两种:在标题/正文里,或者它就是这个任务的 id。后者只
-      // 满足它自己那一个词 —— 拿它给整个分组打满分,`<id> 另一个词` 就会被误判成 settled,
-      // 于是既不下盘、又被当成完整命中。
-      const groupsHere = parsed.groups.map((group) =>
-        group.filter((term) => lower.includes(term.value) || termMatchesTaskId(term, task.id)).length / group.length);
+      const groupsHere = groupRatios(task);
       // 纯排除查询（只写了 `-foo`）没有正向词可分类：它命中的是「所有没被排除的任务」，
       // 档位算标题档，不是会话档，早停那套推导对它不成立 —— 整批当 partial 全扫。
       if (!parsed.groups.length) partial.push(task);
@@ -490,6 +512,33 @@ export async function searchAll(query: string, actor: Actor, options: SearchOpti
     if (ahead < MAX_HITS) await scan(none, sink, ahead);
     return sink;
   };
+
+  // ── 扫描顺序跟着排序档走 ───────────────────────────────────────────────
+  if (sort === "recent") {
+    // 排序只剩「更新时间倒序」，于是扫描就照这个顺序一路往下：收满 MAX_HITS 即停，
+    // 剩下的行全都更旧，怎么排都进不了前 50 —— 结果与全量扫一字不差。
+    //
+    // 代价是**不能再按档位分堆**：relevance 那套「只可能落会话档的先攒着、够数就整堆
+    // 不读」在这一档不成立（一个只在会话里命中的新任务就该排第一）。所以这里对每一行
+    // 逐个问 needsRunText，该下盘就下盘，只有库里就能定的那些还能省掉 I/O。
+    // 分段也没了：本项目不再优先，中途会被别的项目的新任务插到前面。
+    const ordered = byRecent(taskRows);
+    let found = 0;
+    scanning: for (let at = 0; at < ordered.length && found < MAX_HITS; at += SCAN_CONCURRENCY) {
+      if (options.signal?.aborted) break;
+      const batch = ordered.slice(at, at + SCAN_CONCURRENCY);
+      const batchHits = await Promise.all(batch.map(async (task) =>
+        hitOf(task, needsRunText(task) ? await readRunText(task.id, options.signal) : "")));
+      for (const hit of batchHits) {
+        // 每吐一条问一次：这一批开跑之后用户很可能又敲了一个字（吐出去这个动作本身也可能
+        // 让客户端走人），那剩下的命中已经没人要了 —— 只在批次边界检查会把整批都吐出去。
+        if (options.signal?.aborted) break scanning;
+        if (hit) { emit(hit); found += 1; }
+      }
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+    }
+    return hits.slice(0, MAX_HITS);
+  }
 
   // ── 分两段扫：先本项目，再别的项目 ─────────────────────────────────────
   // 排序判据里「当前项目在前」排在字段之前，所以本项目的命中整体压过别的项目 ——

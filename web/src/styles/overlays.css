@@ -82,6 +82,13 @@
   padding: 5px;
 }
 
+/* 选中是键盘/单击定下来的状态，鼠标经过只是「指针在这儿」。全局那两档只差 2% 亮度，
+   在这份一屏几十行的列表里就分不出哪一行才是回车会打开的那行 —— 面板里把 hover 压淡，
+   把对比让给选中态。 */
+.palette-results .ui-selectable:hover:not([aria-selected="true"]) {
+  background: color-mix(in lch, var(--hover-bg) 45%, transparent);
+}
+
 .has-preview .palette-results {
   border-right: 1px solid var(--line);
 }
@@ -202,6 +209,27 @@
   padding: 0 13px;
   color: var(--faint);
   font-size: 9px;
+}
+
+/* 排序档开关。靠右，跟左边那串键位提示分开：那些是「怎么操作」，这个是「现在按什么排」。 */
+.palette-sort {
+  display: flex;
+  margin-left: auto;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  padding: 2px 6px;
+  color: var(--muted);
+  font-size: 9px;
+  outline: 0;
+}
+
+.palette-sort:hover,
+.palette-sort:focus-visible {
+  background: var(--hover-bg);
+  color: var(--ink);
 }
 
 .notes-panel {

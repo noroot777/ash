@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
 import type { Group, ProjectView, SearchHit, TaskListItem } from "@ash/shared";
 import { canArchive, canSingleRun, TASK_STATUS_LABELS } from "@ash/shared";
@@ -34,6 +34,7 @@ import {
   type SearchScopeType,
 } from "./CommandPaletteScope.tsx";
 import { filterSlashCommands, type SlashCommand, type SlashCommandId } from "./commandPaletteCommands.ts";
+import { SearchSortToggle, usePaletteActiveScroll, useSearchSort } from "./paletteView.tsx";
 import { TASK_MODE_LABEL, TASK_MODE_SHORTCUT_LABEL, TASK_MODE_SUMMARY } from "../workspace/taskScope.ts";
 import { keysSearchText, matchesKeysQuery } from "./paletteKeys.ts";
 import { workspaceModifierLabel } from "../workspace/useWorkspaceShortcuts.ts";
@@ -104,6 +105,9 @@ export function CommandPalette({
   const [active, setActive] = useState(0);
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
+  // 排序档：相关度（默认）或最近更新。服务端拿同一个字去定扫描顺序 —— 两边必须同档，
+  // 否则它按一套顺序早停、这边按另一套插队，砍掉的就不是最后几名。
+  const [sort, setSort] = useSearchSort();
   // 扫到哪一段了。"others" = 本项目已经列完，正在搜别的项目 —— 没有这个字，用户看到的是
   // 一个停在半路、不知道还有没有下文的列表。
   const [phase, setPhase] = useState<"local" | "others" | null>(null);
@@ -114,8 +118,10 @@ export function CommandPalette({
   const [gitLoading, setGitLoading] = useState(false);
   const [gitError, setGitError] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const panel = useRef<HTMLElement>(null);
   const searchSeq = useRef(0);
-  const mouse = useRef<{ x: number; y: number } | null>(null);
+
+  usePaletteActiveScroll(panel, active, step);
 
   useEffect(() => {
     if (!open) return;
@@ -127,7 +133,6 @@ export function CommandPalette({
     setScope(null);
     setGitOverview(null);
     setGitError(null);
-    mouse.current = null;
     window.setTimeout(() => input.current?.focus(), 0);
   }, [open]);
 
@@ -174,12 +179,12 @@ export function CommandPalette({
       };
       api.searchStream(
         q,
-        { projectId: scope?.projectId ?? undefined, type: scope?.type ?? undefined, prefer },
+        { projectId: scope?.projectId ?? undefined, type: scope?.type ?? undefined, prefer, sort },
         {
           onHit: (hit) => {
             // 按 compareSearchHits 插进去 —— 服务端拿同一份判据决定扫描顺序并据此早停，
             // 前端另写一套排序就会跟它对不上，早停砍掉的那些就成了「本该排进来却没有」。
-            const at = collected.findIndex((existing) => compareSearchHits(hit, existing, prefer) < 0);
+            const at = collected.findIndex((existing) => compareSearchHits(hit, existing, prefer, sort) < 0);
             collected.splice(at < 0 ? collected.length : at, 0, hit);
             // 逐条 setState 会让一次搜索重渲染上千次；攒 60ms 一批，人眼看着仍是「一条条冒出来」。
             if (!flush) flush = window.setTimeout(() => { flush = 0; paint(); }, 60);
@@ -196,7 +201,7 @@ export function CommandPalette({
         });
     }, 180);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [currentProject?.id, open, query, scope, slashMode, step]);
+  }, [currentProject?.id, open, query, scope, slashMode, sort, step]);
 
   const items = useMemo(() => {
     if (slashMode || step !== "search") return [];
@@ -360,18 +365,15 @@ export function CommandPalette({
 
   // 搜的是某个任务的 id 时,那条命中钉在最前面——命令之前,而不只是搜索结果
   // 内部的第一条。用户给的是精确坐标,列表第一行就得是他要的那个任务,回车直达。
-  const firstHit = hits[0];
-  const idHit = step === "search" && !slashMode && firstHit?.kind === "task" && firstHit.field === "id"
-    ? firstHit
+  // 按 field 找而不是取第一条:最近更新档里排序不看字段,它可能落在列表中间。
+  const idHit = step === "search" && !slashMode
+    ? hits.find((hit) => hit.kind === "task" && hit.field === "id")
     : undefined;
   const pinned = idHit ? 1 : 0;
-  const restHits = idHit ? hits.slice(1) : hits;
+  const restHits = idHit ? hits.filter((hit) => hit !== idHit) : hits;
   const hitStart = pinned + items.length;
 
-  const resetActive = () => {
-    setActive(0);
-    mouse.current = null;
-  };
+  const resetActive = () => setActive(0);
   const focusInput = () => window.setTimeout(() => input.current?.focus(), 0);
   const enterScope = () => {
     setPendingProjectId(scope?.projectId ?? null);
@@ -452,17 +454,12 @@ export function CommandPalette({
     if (offset < items.length) runItem(items[offset]);
     else openHit(restHits[offset - items.length]);
   };
-  const hover = (index: number, event: ReactMouseEvent) => {
-    const previous = mouse.current;
-    mouse.current = { x: event.clientX, y: event.clientY };
-    if (previous && previous.x === event.clientX && previous.y === event.clientY) return;
-    setActive(index);
-  };
 
   const gitProject = projects.find((project) => project.id === gitProjectId);
   const activeHit = idHit && active === 0 ? idHit : active >= hitStart ? restHits[active - hitStart] : undefined;
   const hasHits = step === "search" && !slashMode && hits.length > 0;
   // 边扫边出的时候得说清楚现在扫到哪儿了，不然列表停住的那几秒看着就像搜完了。
+  // 最近更新档不分段扫（服务端不发 local-done），所以那一档只会看到「搜索中…」。
   const searchNote = phase === "others" ? "本项目已列完，正在搜其他项目…" : "搜索中…";
   const wide = hasHits || step === "git-overview";
   const placeholder = step === "scope-project" ? "选择项目…"
@@ -473,7 +470,7 @@ export function CommandPalette({
 
   return (
     <div className="overlay-scrim palette-scrim" role="presentation" onMouseDown={onClose}>
-      <section className={`command-palette${wide ? " has-preview" : ""}`} role="dialog" aria-modal="true" aria-label="命令面板" onMouseDown={(event) => event.stopPropagation()}>
+      <section ref={panel} className={`command-palette${wide ? " has-preview" : ""}`} role="dialog" aria-modal="true" aria-label="命令面板" onMouseDown={(event) => event.stopPropagation()}>
         <div className="palette-input">
           <MagnifyingGlass size={18} className="shrink-0" />
           {step === "search" && scope && <ScopeToken scope={scope} projects={projects} onEdit={enterScope} onRemove={() => setScope(null)} />}
@@ -518,13 +515,13 @@ export function CommandPalette({
         </div>
 
         {step === "scope-project" && (
-          <div className="min-h-0 max-h-[min(58vh,520px)] flex-1 overflow-y-auto"><ScopeProjectStep projects={projects} active={active} selectedProjectId={pendingProjectId} onChoose={chooseScopeProject} onHover={hover} /></div>
+          <div className="min-h-0 max-h-[min(58vh,520px)] flex-1 overflow-y-auto"><ScopeProjectStep projects={projects} active={active} selectedProjectId={pendingProjectId} onChoose={chooseScopeProject} /></div>
         )}
         {step === "scope-type" && (
-          <div className="min-h-0 max-h-[min(58vh,520px)] flex-1 overflow-y-auto"><ScopeTypeStep active={active} selectedType={scope?.type ?? null} onChoose={chooseScopeType} onHover={hover} /></div>
+          <div className="min-h-0 max-h-[min(58vh,520px)] flex-1 overflow-y-auto"><ScopeTypeStep active={active} selectedType={scope?.type ?? null} onChoose={chooseScopeType} /></div>
         )}
         {step === "git-project" && (
-          <div className="min-h-0 max-h-[min(58vh,520px)] flex-1 overflow-y-auto"><GitProjectStep projects={projects} active={active} onChoose={loadGitOverview} onHover={hover} /></div>
+          <div className="min-h-0 max-h-[min(58vh,520px)] flex-1 overflow-y-auto"><GitProjectStep projects={projects} active={active} onChoose={loadGitOverview} /></div>
         )}
         {step === "git-overview" && <GitOverviewPanel project={gitProject} overview={gitOverview} loading={gitLoading} error={gitError} />}
 
@@ -536,7 +533,7 @@ export function CommandPalette({
                 key={command.id}
                 type="button"
                 aria-selected={active === index}
-                onMouseMove={(event) => hover(index, event)}
+                data-palette-index={index}
                 onClick={() => chooseSlashCommand(command)}
                 className="ui-selectable flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left outline-none"
               >
@@ -557,7 +554,7 @@ export function CommandPalette({
               {idHit && (
                 <div>
                   <div className="palette-label">按 ID 命中</div>
-                  <SearchHitRow hit={idHit} index={0} active={active} query={query} onHover={hover} onOpen={openHit} />
+                  <SearchHitRow hit={idHit} index={0} active={active} query={query} onSelect={setActive} onOpen={openHit} />
                 </div>
               )}
               {items.map((item, position) => {
@@ -566,7 +563,8 @@ export function CommandPalette({
                 return (
                   <div key={item.key}>
                     {header && <div className="palette-label">{header}</div>}
-                    <button type="button" className="palette-row ui-selectable" aria-selected={active === index} onMouseMove={(event) => hover(index, event)} onClick={() => runItem(item)}>
+                    {/* 命令行仍是单击即执行：它没有「先看看再决定」这一步，右边也没有预览可给。 */}
+                    <button type="button" className="palette-row ui-selectable" aria-selected={active === index} data-palette-index={index} onClick={() => runItem(item)}>
                       <span className="palette-row-icon">{item.icon}</span>
                       <span><b>{item.label}</b>{item.detail && <small>{item.detail}</small>}</span>
                       {item.keys && <kbd>{item.keys}</kbd>}
@@ -575,7 +573,7 @@ export function CommandPalette({
                   </div>
                 );
               })}
-              <SearchHitList hits={restHits} active={active} startIndex={hitStart} query={query} onHover={hover} onOpen={openHit} />
+              <SearchHitList hits={restHits} active={active} startIndex={hitStart} query={query} onSelect={setActive} onOpen={openHit} />
               {!normalTotal && <p className="palette-empty">{searching ? searchNote : query.trim().length >= 2 ? "没有匹配的命令、任务或随手记" : "无匹配命令"}</p>}
               {searching && normalTotal > 0 && <p className="px-4 py-2 text-center text-[10px] text-faint">{searchNote}</p>}
             </div>
@@ -583,7 +581,19 @@ export function CommandPalette({
           </div>
         )}
 
-        <footer className="palette-footer"><span>↑↓ 选择</span><span>↵ 执行</span><span>esc 关闭</span></footer>
+        <footer className="palette-footer">
+          <span>↑↓ 选择</span>
+          <span>{activeHit ? "↵ 打开" : "↵ 执行"}</span>
+          {hasHits && <span>单击 选中 · 双击 打开</span>}
+          <span>esc 关闭</span>
+          {/* 排序开关只在真的在搜的时候露面：命令列表不受它影响，摆在那儿只会让人猜它管什么。 */}
+          {step === "search" && !slashMode && query.trim().length >= 2 && (
+            <SearchSortToggle
+              sort={sort}
+              onToggle={() => { setSort(sort === "relevance" ? "recent" : "relevance"); resetActive(); }}
+            />
+          )}
+        </footer>
       </section>
     </div>
   );
