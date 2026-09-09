@@ -3,6 +3,7 @@ import type { HandoffTarget, ProjectView, TaskListItem } from "@ash/shared";
 import { CaretRight } from "@phosphor-icons/react";
 import { useTaskReadState, type IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
+import { RevealMore, useKeyedReveal, useReveal } from "./TaskReveal.tsx";
 import { SpreadPeekLayer, SpreadRowProvider, useSpreadPeek } from "./TaskSpread.tsx";
 import {
   TASK_PREVIEW_LIMIT,
@@ -22,7 +23,7 @@ import {
   type SpreadFilter,
   type WorkerIndex,
 } from "./useSidebarSpread.ts";
-import { buildTaskTree, groupTasksByProject, keepVisibleInPreview, orderedTopLevelTasks, previewTasksByAge } from "./taskTreeModel.ts";
+import { buildTaskTree, groupTasksByProject, keepVisibleInPreview, orderedTopLevelTasks, previewTasksByAge, revealToIndex } from "./taskTreeModel.ts";
 import { OutboundStatusBar, type OutboundBar } from "./OutboundStatusBar.tsx";
 import { HandoffMachines } from "./HandoffMachines.tsx";
 
@@ -128,48 +129,41 @@ function ScopedTaskTree({
     if (!selectedTaskId) return null;
     for (const entry of layout) {
       for (const group of entry.groups) {
-        if (previewTasksByAge(group.tasks, Date.now(), keepVisible).hidden.some((task) => task.id === selectedTaskId)) {
-          return { sectionKey: group.key, taskId: selectedTaskId };
-        }
+        const hidden = previewTasksByAge(group.tasks, Date.now(), keepVisible).hidden;
+        const index = hidden.findIndex((task) => task.id === selectedTaskId);
+        if (index >= 0) return { sectionKey: group.key, taskId: selectedTaskId, index, hiddenCount: hidden.length };
       }
     }
     return null;
   }, [keepVisible, layout, selectedTaskId]);
-  const [previewExpandedSections, setPreviewExpandedSections] = useState<Set<string>>(
-    () => hiddenSelection ? new Set([hiddenSelection.sectionKey]) : new Set(),
-  );
+  // 分页展开的计数按行块（分节 / 项目分组）各存一份。
+  const { revealedIn, more: revealMoreIn, collapse: collapseReveal, revealAtLeast } = useKeyedReveal();
+  // 选中的行藏在隐藏区里时，只放到**够看见它的那一页**为止 —— 从前这里是整块全展开，
+  // 点开一条三个月前的旧任务，侧栏就被几百行铺满。
   const revealHiddenSection = useCallback(() => {
-    const sectionKey = hiddenSelection?.sectionKey;
-    if (!sectionKey) return;
-    setPreviewExpandedSections((current) => {
-      if (current.has(sectionKey)) return current;
-      const next = new Set(current);
-      next.add(sectionKey);
-      return next;
-    });
-  }, [hiddenSelection?.sectionKey]);
+    if (!hiddenSelection) return;
+    revealAtLeast(hiddenSelection.sectionKey, revealToIndex(hiddenSelection.index, hiddenSelection.hiddenCount));
+  }, [hiddenSelection, revealAtLeast]);
   useRevealHiddenSelection(
     hiddenSelection ? `${hiddenSelection.sectionKey}:${hiddenSelection.taskId}` : null,
     revealHiddenSection,
   );
-  const togglePreview = (sectionKey: string) => setPreviewExpandedSections((current) => {
-    const next = new Set(current);
-    if (next.has(sectionKey)) next.delete(sectionKey);
-    else next.add(sectionKey);
-    return next;
-  });
   // 空态**只有下面那一处**。这里曾经还有一个提前 return：一条行都不剩时直接返回那句
   // 「没有任务」，把后面正常分支里的东西全绕过去 —— 于是最需要解释的那一刻反而没了解释：
   // 出站行因为持有机联系不上退回冻住的状态、正好又是唯一候选时，用户看到的是
   // 「没有在跑、等你答复或待验收的任务」，而屏幕上本该写着「联系不上 mac-mini」。
   // 同一句话有两份拷贝，补一处漏一处；删掉那份，让所有情况都走同一条渲染路径。
   type RenderGroup = (typeof layout)[number]["groups"][number];
-  // 一个行块的内容：年龄闸筛过的那几行 +「显示另外 N 条」。分节和项目分组共用它。
+  // 一个行块的内容：年龄闸筛过的那几行 +「显示另外 N 条」（一次一页，见 TaskReveal）。
+  // 分节和项目分组共用它。
   const renderRows = (group: RenderGroup, showProject: boolean) => {
     const preview = previewTasksByAge(group.tasks, Date.now(), keepVisible);
-    const previewExpanded = previewExpandedSections.has(group.key);
-    const visibleTasks = previewExpanded ? group.tasks : preview.visible;
     const hiddenCount = preview.hidden.length;
+    const revealed = Math.min(revealedIn(group.key), hiddenCount);
+    // 展开是**往后接**，不是重排：新放出来的一页接在已经露着的行后面。（早先展开后整块
+    // 回到 group.tasks 的原顺序，星标之类被年龄闸豁免的旧行会当场下沉换个位置 ——
+    // 点一下「显示更多」，刚才看着的那行就跑了。）
+    const visibleTasks = revealed > 0 ? [...preview.visible, ...preview.hidden.slice(0, revealed)] : preview.visible;
     return (
       <>
         {visibleTasks.map((task) =>
@@ -188,11 +182,12 @@ function ScopedTaskTree({
             <TaskRow key={task.id} task={task} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} showProject={showProject} />
           ),
         )}
-        {hiddenCount > 0 && (
-          <button className="workspace-task-more" type="button" onClick={() => togglePreview(group.key)}>
-            {previewExpanded ? "收起" : `显示另外 ${hiddenCount} 条`}
-          </button>
-        )}
+        <RevealMore
+          revealed={revealed}
+          total={hiddenCount}
+          onMore={() => revealMoreIn(group.key, hiddenCount)}
+          onCollapse={() => collapseReveal(group.key)}
+        />
       </>
     );
   };
@@ -276,9 +271,10 @@ function OtherProject({
   indicatorForTask: IndicatorForTask;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [showAll, setShowAll] = useState(false);
   const ordered = useMemo(() => orderedTopLevelTasks(tasks), [tasks]);
-  const visible = showAll ? ordered : ordered.slice(0, TASK_PREVIEW_LIMIT);
+  const overflow = Math.max(0, ordered.length - TASK_PREVIEW_LIMIT);
+  const { revealed, more, collapse } = useReveal(overflow);
+  const visible = ordered.slice(0, TASK_PREVIEW_LIMIT + revealed);
   return (
     <div className="workspace-other-project">
       <button
@@ -297,9 +293,7 @@ function OtherProject({
             <TaskRow key={task.id} task={task} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
           ))}
           {ordered.length > TASK_PREVIEW_LIMIT && (
-            <button className="workspace-task-more" type="button" onClick={() => setShowAll((value) => !value)}>
-              {showAll ? "收起" : `显示另外 ${ordered.length - TASK_PREVIEW_LIMIT} 条`}
-            </button>
+            <RevealMore revealed={revealed} total={overflow} onMore={more} onCollapse={collapse} />
           )}
           {!ordered.length && <p>没有任务</p>}
         </div>

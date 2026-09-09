@@ -98,6 +98,31 @@ export function previewTasksByAge<T extends TaskListItem>(
   };
 }
 
+// 「显示另外 N 条」一次放出多少条。（用户 2026-09-09 指定）
+//
+// 这个按钮从前是一把梭：攒了几个月的旧任务点一下全铺出来，侧栏瞬间几百行 —— 想找的
+// 那条反而更难找，滚动条也失去了参照。改成一页一页放：不够就再点一下。
+export const TASK_REVEAL_PAGE = 20;
+
+// 再点一下之后总共放出多少条（下面这几个函数是「分页展开」的全部算法，UI 那层
+// 只负责存一个数字 —— 三处列表共用，判据不能各写一份）。
+export function revealMore(revealed: number, total: number, page = TASK_REVEAL_PAGE): number {
+  return Math.min(total, Math.max(0, revealed) + Math.max(1, page));
+}
+
+// 要让隐藏区里第 index 条露出来，至少得放到第几条。按整页对齐 —— 选中一条藏着的旧任务
+// 被自动揭示后，它周围该是完整的一页，而不是「刚好卡在最后一行」。
+export function revealToIndex(index: number, total: number, page = TASK_REVEAL_PAGE): number {
+  if (index < 0) return 0;
+  return Math.min(total, Math.ceil((index + 1) / Math.max(1, page)) * Math.max(1, page));
+}
+
+// 按钮上的字。剩得比一页多时必须把「还有多少没显示」说出来：否则点一下只多 20 条、
+// 用户不知道后面还剩几百条还是就这些，也就判断不了值不值得继续点。
+export function revealMoreLabel(remaining: number, page = TASK_REVEAL_PAGE): string {
+  return remaining <= page ? `显示另外 ${remaining} 条` : `显示另外 ${page} 条（未显示 ${remaining} 条）`;
+}
+
 // 选中被预览藏住的任务时，只自动展开一次。同一条选中项上用户点了收起，
 // 不能再拿「它还在 hidden 里」把列表顶开 —— 否则收起按钮看起来是坏的。
 export function advanceHiddenReveal(lastKey: string | null, revealKey: string | null): { lastKey: string | null; reveal: boolean } {

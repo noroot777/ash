@@ -8,6 +8,7 @@ import { api } from "../lib/api.ts";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import { type IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
+import { RevealMore, useReveal } from "./TaskReveal.tsx";
 import { SpreadRowCells, useSpreadRow } from "./TaskSpread.tsx";
 import { advanceHiddenReveal } from "./taskTreeModel.ts";
 import { spreadBucket, workersFrom, type WorkerIndex } from "./useSidebarSpread.ts";
@@ -258,12 +259,17 @@ export function TeamRow({
   const selectedWorker = selectedWorkerIndex >= 0;
   const overflowSelectedId = selectedWorkerIndex >= TASK_PREVIEW_LIMIT ? workers[selectedWorkerIndex]?.id ?? null : null;
   const [expanded, setExpanded] = useState(selectedWorker);
-  const [showAllWorkers, setShowAllWorkers] = useState(() => overflowSelectedId != null);
-  const revealOverflowWorkers = useCallback(() => setShowAllWorkers(true), []);
+  // 执行者多的时候也是一次一页（跟主列表同一套，见 TaskReveal）：几十个执行者的团队
+  // 点一下全铺出来，上下文里其它任务全被挤走。
+  const overflowWorkers = Math.max(0, workers.length - TASK_PREVIEW_LIMIT);
+  const { revealed, more, collapse, revealIndex } = useReveal(overflowWorkers);
+  const revealOverflowWorkers = useCallback(
+    () => revealIndex(selectedWorkerIndex - TASK_PREVIEW_LIMIT),
+    [revealIndex, selectedWorkerIndex],
+  );
   useRevealHiddenSelection(overflowSelectedId, revealOverflowWorkers);
   const indicator = indicatorForTask(task);
-  const workersExpanded = showAllWorkers;
-  const visibleWorkers = workersExpanded ? workers : workers.slice(0, TASK_PREVIEW_LIMIT);
+  const visibleWorkers = workers.slice(0, TASK_PREVIEW_LIMIT + revealed);
   useEffect(() => {
     if (selectedWorker) setExpanded(true);
   }, [selectedWorker]);
@@ -315,9 +321,7 @@ export function TeamRow({
             />
           ))}
           {workers.length > TASK_PREVIEW_LIMIT && (
-            <button className="workspace-task-more" type="button" onClick={() => setShowAllWorkers((value) => !value)}>
-              {workersExpanded ? "收起" : `显示另外 ${workers.length - TASK_PREVIEW_LIMIT} 条`}
-            </button>
+            <RevealMore revealed={revealed} total={overflowWorkers} onMore={more} onCollapse={collapse} />
           )}
         </div>
       )}
