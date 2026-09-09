@@ -107,17 +107,3 @@
 .single-review-more-lines { position:sticky; left:0; width:100%; min-width:612px; height:32px; border:0; border-top:1px solid var(--line); background:var(--panel); color:var(--accent); font-size:9.5px; }
 @media (max-width:760px) { .single-review-facts,.single-review-diff-layout,.accepted-snapshot-card dl { grid-template-columns:1fr; } .single-review-files > div { max-height:220px; } }
 @media (prefers-reduced-motion:reduce) { .single-review-workspace * { scroll-behavior:auto; } .review-meta-bar__toggle > svg:last-child { transition:none; } }
-
-.branch-acceptance-panel { border:1px solid var(--line); border-radius:10px; padding:14px 16px; background:var(--panel); font-size:12px; line-height:1.6; }
-.branch-acceptance-panel header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-.branch-acceptance-panel dl { display:flex; flex-wrap:wrap; gap:12px 28px; margin:10px 0; }
-.branch-acceptance-panel dt { color:var(--muted); font-size:11px; }
-.branch-acceptance-panel dd { margin:0; overflow-wrap:anywhere; }
-.branch-acceptance-panel ul { list-style:none; margin:10px 0; padding:0; }
-.branch-acceptance-panel li { display:flex; align-items:center; flex-wrap:wrap; gap:8px 12px; padding:8px 0; border-bottom:1px solid var(--line); }
-.branch-acceptance-panel li label { display:flex; align-items:center; gap:8px; flex:1; }
-.branch-acceptance-panel li span { color:var(--muted); font-size:11px; }
-.branch-acceptance-panel button { border:1px solid var(--line2); border-radius:6px; padding:5px 10px; color:var(--text); background:var(--panel); cursor:pointer; }
-.branch-acceptance-panel button:disabled { opacity:.5; cursor:default; }
-.branch-acceptance-panel a { color:var(--accent); text-decoration:underline; }
-.branch-dependency-detail { display:flex; flex-direction:column; flex-basis:100%; padding-left:24px; overflow-wrap:anywhere; }
