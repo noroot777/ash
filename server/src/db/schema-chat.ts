@@ -22,6 +22,10 @@ export const chatMessages = sqliteTable("chat_messages", {
   status: text("status").notNull().default("done"),
   taskId: text("task_id"),
   context: text("context"),
+  // 目录观察附注（execution.ts changeNotice）。invoke 一返回就落到这一列：附注是
+  // 「项目可能被并发改动/观察失效」的安全信息，不能只活在 reply() 的闭包里——进程
+  // 崩溃/重启后 stop()/recover() 的固定文案覆盖要靠它把附注拼回正文（service.ts）。
+  notice: text("notice"),
   createdAt: text("created_at").notNull(),
 }, (table) => [index("chat_messages_room").on(table.roomId, table.createdAt)]);
 
@@ -66,7 +70,7 @@ export async function ensureChatSchema(client: Pick<Client, "executeMultiple" | 
     CREATE TABLE IF NOT EXISTS chat_messages (
       id TEXT PRIMARY KEY, room_id TEXT NOT NULL, role TEXT NOT NULL, member_id TEXT,
       author TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', model_reply TEXT, mentions TEXT NOT NULL DEFAULT '[]',
-      status TEXT NOT NULL DEFAULT 'done', task_id TEXT, context TEXT, created_at TEXT NOT NULL
+      status TEXT NOT NULL DEFAULT 'done', task_id TEXT, context TEXT, notice TEXT, created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS chat_messages_room ON chat_messages(room_id, created_at);
     CREATE TABLE IF NOT EXISTS chat_context_entries (
@@ -89,6 +93,9 @@ export async function ensureChatSchema(client: Pick<Client, "executeMultiple" | 
   const messageColumns = await client.execute("PRAGMA table_info(chat_messages)");
   if (!messageColumns.rows.some((column) => column.name === "model_reply")) {
     await client.execute("ALTER TABLE chat_messages ADD COLUMN model_reply TEXT");
+  }
+  if (!messageColumns.rows.some((column) => column.name === "notice")) {
+    await client.execute("ALTER TABLE chat_messages ADD COLUMN notice TEXT");
   }
   await client.execute("UPDATE chat_messages SET model_reply=body WHERE role='agent' AND status='done' AND model_reply IS NULL");
   const columns = await client.execute("PRAGMA table_info(chat_context_states)");
