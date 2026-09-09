@@ -52,8 +52,6 @@ CLI_SPEC_BY_KEY.codex.factory = () => ({
     runs++;
     if (mode === "sync-write") writeFileSync(join(opts.cwd, "unexpected-side-effect.txt"), "written before any event");
     if (mode === "dependency-write") writeFileSync(join(opts.cwd, "node_modules", "pkg", "side-effect.txt"), "written without any tool event");
-    if (mode === "invalid-reply") writeFileSync(join(opts.cwd, "invalid-reply-side-effect.txt"), "written before invalid reply");
-    if (mode === "delegate") writeFileSync(join(opts.cwd, "delegate-side-effect.txt"), "written before task delegation");
     return {
       sessionId: "fixture", commandLine: "fixture", kill: () => { release?.(); }, cleanup: async () => { cleanup++; },
       events: (async function* (): AsyncGenerator<AgentEvent> {
@@ -192,28 +190,63 @@ try {
   release = undefined;
 
   // 审查第 2 轮回归：附注与结算结果正交——模型输出非法、任务启动失败这些终态的正文
-  // 也必须保留目录附注，且刷新/恢复后仍在。
+  // 也必须保留目录附注，且刷新/恢复后仍在。附注由包装 invoke 确定性注入（正交性是
+  // service 结算的性质，不依赖 fs.watch 的事件时序；watcher 端到端已由上面的场景覆盖）。
   const snapshot = async () => await (await request(`/chats/${room.id}`)).json() as ChatSnapshot;
+  const roomRow = (await db.select().from(chatRooms).where(eq(chatRooms.id, room.id))).at(0)!;
+  const injected = "⚠️ 注入的目录附注（injected-side-effect）";
+  const injectService = new ChatService(async (...args: Parameters<typeof invokeChat>) => {
+    const invoked = await invokeChat(...args);
+    return { ...invoked, notice: injected };
+  }, async () => { throw new Error("咨询不应启动任务"); });
   mode = "invalid-reply";
-  await request(`/chats/${room.id}/messages`, { id: "invalid-with-change", body: "@codex 再给建议" });
+  await injectService.send(roomRow, "@codex 再给建议", "invalid-with-change", "tester");
   const invalidFailed = (await settle("failed")).messages.at(-1)!;
   assert.ok(invalidFailed.body.includes("未返回有效的简短回复"), "解析失败保留错误说明");
-  assert.ok(invalidFailed.body.includes("invalid-reply-side-effect"), "解析失败不得丢弃目录附注");
-  await service.recover();
+  assert.ok(invalidFailed.body.includes("injected-side-effect"), "解析失败不得丢弃目录附注");
+  await injectService.recover();
   assert.equal((await snapshot()).messages.at(-1)!.body, invalidFailed.body, "解析失败的附注恢复后保留");
-  rmSync(join(projectDir, "invalid-reply-side-effect.txt"));
 
   mode = "delegate";
-  await request(`/chats/${room.id}/messages`, { id: "delegate-with-change", body: "@codex 建个任务" });
+  await injectService.send(roomRow, "@codex 建个任务", "delegate-with-change", "tester");
   const startFailed = (await settle("failed")).messages.at(-1)!;
   assert.ok(startFailed.body.includes("任务已创建，但启动失败"), "启动失败保留错误说明");
-  assert.ok(startFailed.body.includes("delegate-side-effect"), "启动失败的覆盖不得删掉目录附注");
+  assert.ok(startFailed.body.includes("injected-side-effect"), "启动失败的覆盖不得删掉目录附注");
   assert.ok(startFailed.taskId, "任务回链保留");
   assert.equal((await db.select().from(tasks)).length, 1);
-  await service.recover();
+  await injectService.recover();
   assert.equal((await snapshot()).messages.at(-1)!.body, startFailed.body, "启动失败的附注恢复后保留");
-  rmSync(join(projectDir, "delegate-side-effect.txt"));
-  assert.equal((await db.select().from(chatRooms)).length, 1);
+
+  // 审查第 3 轮回归：任务已创建、尚未启动的窗口内停止（task.created 总线事件触发 stop）——
+  // 停止文案落成后，本轮已取得的附注必须补写在其后，任务回链保留。
+  const { bus } = await import("../src/bus.js");
+  const raceMember: ChatMember = { id: "codex", name: "codex", agentType: "codex", executorId: null, model: null, reasoningEffort: null };
+  await db.insert(chatRooms).values({ id: "stop-race", projectId: "project", name: "停止竞态", members: JSON.stringify([raceMember]), createdAt: new Date().toISOString() });
+  const raceRoomRow = (await db.select().from(chatRooms).where(eq(chatRooms.id, "stop-race"))).at(0)!;
+  let raceStarts = 0;
+  const raceService = new ChatService(async () => ({
+    text: '{"reply":"已整理为任务。","task":{"title":"竞态任务","body":"验证停止时附注不丢失。"}}',
+    notice: "⚠️ 竞态目录附注（race-side-effect）",
+  }), async () => { raceStarts++; });
+  let raceStop: Promise<void> | undefined;
+  const unsubscribe = bus.subscribe((event) => { if (event.type === "task.created") raceStop = raceService.stop("stop-race"); });
+  await raceService.send(raceRoomRow, "@codex 建个任务", "stop-race-message", "tester");
+  let raceRow: typeof chatMessages.$inferSelect | undefined;
+  for (let tries = 0; tries < 300; tries++) {
+    const rows = await db.select().from(chatMessages).where(eq(chatMessages.roomId, "stop-race"));
+    const agentRow = rows.find((row) => row.role === "agent");
+    if (agentRow && !["queued", "running"].includes(agentRow.status ?? "") && agentRow.body.includes("race-side-effect")) { raceRow = agentRow; break; }
+    await delay(10);
+  }
+  await raceStop;
+  unsubscribe();
+  assert.ok(raceRow, "停止竞态下附注未持久化");
+  assert.equal(raceRow!.status, "stopped");
+  assert.match(raceRow!.body, /你已停止这次回复/);
+  assert.ok(raceRow!.taskId, "竞态下任务回链保留");
+  assert.equal(raceStarts, 0, "停止阻止任务启动");
+  assert.equal((await db.select().from(chatMessages).where(eq(chatMessages.id, raceRow!.id))).at(0)!.body.split("race-side-effect").length, 2, "附注只补一次");
+  assert.equal((await db.select().from(chatRooms)).length, 2);
   assert.equal(cleanup, runs, "每次咨询都要清理执行器会话");
   console.log("chat boundary: 只读工具通过；写入/未知命令的工具事件仍硬中止；无工具事件的目录变化（含并发合并）不再中止、附注如实持久展示且不进模型回复；观察器失效时如实附注不可用；解析失败/任务启动失败的终态正文保留附注；ash 自身写入不附注；停止照常生效；咨询不创建任务");
 } finally {

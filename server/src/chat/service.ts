@@ -118,6 +118,16 @@ export class ChatService {
     // modelReply，混入会被智能体当对话内容复读）。
     let notice: string | undefined;
     const withNotice = (text: string) => notice ? `${text}\n\n${notice}` : text;
+    // 停止竞态：stop()/recover() 可能抢先把本消息落成 stopped（固定停止文案），此时本轮的
+    // 终态更新命中 0 行。已取得的附注不能跟着消失——补写在既有文案之后；body 等值条件保证
+    // 并发下只补一次、不覆盖别人的新写入。
+    const preserveNotice = async () => {
+      if (!notice) return;
+      const current = (await db.select().from(chatMessages).where(eq(chatMessages.id, message.id))).at(0);
+      if (!current || current.status !== "stopped" || current.body.includes(notice)) return;
+      await db.update(chatMessages).set({ body: `${current.body}\n\n${notice}` })
+        .where(and(eq(chatMessages.id, message.id), eq(chatMessages.body, current.body)));
+    };
     try {
       const claimed = await db.update(chatMessages).set({ status: "running" })
         .where(and(eq(chatMessages.id, message.id), eq(chatMessages.status, "queued"))).returning();
@@ -151,16 +161,18 @@ export class ChatService {
       }
       const settled = await db.update(chatMessages).set({ body: withNotice(result.reply), modelReply: result.reply, status: "done", context: null })
         .where(and(eq(chatMessages.id, message.id), eq(chatMessages.status, "running"))).returning();
-      if (taskToStart && settled.length && !abort.signal.aborted) {
+      if (!settled.length) { await preserveNotice(); return; }
+      if (taskToStart && !abort.signal.aborted) {
         void this.startTask(taskToStart).catch(async (error) => {
           await db.update(chatMessages).set({ status: "failed", body: withNotice(`任务已创建，但启动失败：${error instanceof Error ? error.message : String(error)}。请打开任务重试。`) }).where(eq(chatMessages.id, message.id));
         });
       }
-      if (settled.length && !abort.signal.aborted) return member;
+      if (!abort.signal.aborted) return member;
     } catch (error) {
       const boundary = error instanceof ChatBoundaryError;
-      await db.update(chatMessages).set({ status: boundary ? "failed" : abort.signal.aborted ? "stopped" : "failed", context: null, body: withNotice(error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500)) })
-        .where(and(eq(chatMessages.id, message.id), inArray(chatMessages.status, boundary ? ["running", "stopped"] : ["running"])));
+      const updated = await db.update(chatMessages).set({ status: boundary ? "failed" : abort.signal.aborted ? "stopped" : "failed", context: null, body: withNotice(error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500)) })
+        .where(and(eq(chatMessages.id, message.id), inArray(chatMessages.status, boundary ? ["running", "stopped"] : ["running"]))).returning({ id: chatMessages.id });
+      if (!updated.length) await preserveNotice();
     } finally {
       clearTimeout(timer);
     }
