@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ProjectView } from "@ash/shared";
-import { MAX_PREVIEW_SCRIPT_LENGTH, MAX_PREVIEW_SERVICES, parsePreviewConfig, previewProxyEnabled, type ProjectPreviewConfig, type PreviewServiceConfig } from "@ash/shared/preview";
+import { MAX_PREVIEW_SCRIPT_LENGTH, MAX_PREVIEW_SERVICES, parsePreviewConfig, previewProxyEnabled, withoutBlankServices, type ProjectPreviewConfig, type PreviewServiceConfig } from "@ash/shared/preview";
 import { Button } from "../components/ui.tsx";
 import { useAuth } from "../auth/authContext.ts";
 import { useHostInfo } from "../lib/useHostInfo.ts";
@@ -10,6 +10,8 @@ import { ProjectPreviewHelp } from "./ProjectPreviewHelp.tsx";
 import "./project-preview.css";
 
 const emptyConfig = (): ProjectPreviewConfig => ({ mode: "script", proxy: "auto", services: [], primaryServiceId: null });
+// 存量配置里可能留着以前没填完的空壳服务，进来先丢掉：它不该被展示成一条已有配置。
+const loadConfig = (stored: ProjectPreviewConfig | null | undefined): ProjectPreviewConfig => stored ? withoutBlankServices(stored) : emptyConfig();
 
 export function ProjectPreviewSettings({ project, onUpdated, notify }: {
   project: ProjectView;
@@ -19,9 +21,9 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
   const { state } = useAuth();
   const host = useHostInfo();
   const canManage = project.myRole === "admin";
-  const [config, setConfig] = useState<ProjectPreviewConfig>(() => project.previewConfig ?? emptyConfig());
+  const [config, setConfig] = useState<ProjectPreviewConfig>(() => loadConfig(project.previewConfig));
   const [script, setScript] = useState(project.previewCommand ?? "");
-  const [saved, setSaved] = useState(() => JSON.stringify({ config: project.previewConfig ?? emptyConfig(), script: project.previewCommand ?? "" }));
+  const [saved, setSaved] = useState(() => JSON.stringify({ config: loadConfig(project.previewConfig), script: project.previewCommand ?? "" }));
   const [busy, setBusy] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [detection, setDetection] = useState<string | null>(null);
@@ -66,7 +68,7 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
     try {
       const result = await api.updateProject(project.id, { previewCommand: script.trim() || null, previewConfig: validated });
       if (!active.current) return;
-      const next = result.previewConfig ?? emptyConfig();
+      const next = loadConfig(result.previewConfig);
       const command = result.previewCommand ?? "";
       setConfig(next); setScript(command); setSaved(JSON.stringify({ config: next, script: command }));
       onUpdated(result); notify("预览设置已保存，下次打开预览时生效");
