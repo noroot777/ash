@@ -57,5 +57,13 @@ export function parsePreviewConfig(value: unknown): ProjectPreviewConfig | null 
   if (v.mode === "services" && !selected.length) throw new Error("请至少选择一个服务");
   const primary = v.primaryServiceId;
   if (primary !== null && (typeof primary !== "string" || !selected.some((s) => s.id === primary))) throw new Error("默认预览服务必须在已选服务中");
-  return { mode: v.mode, proxy: v.proxy, primaryServiceId: primary as string | null, services };
+  return withoutBlankServices({ mode: v.mode, proxy: v.proxy, primaryServiceId: primary as string | null, services });
+}
+
+// 「手动添加」后没填脚本又没勾选就离开，会留下一条空壳服务。它启动不了任何东西，
+// 却会被存进配置、下次打开「选择服务」时凭空出现，看着像系统自动加的。存取两头都丢掉。
+export function withoutBlankServices(config: ProjectPreviewConfig): ProjectPreviewConfig {
+  const services = config.services.filter((s) => s.command.trim() || s.enabled);
+  if (services.length === config.services.length) return config;
+  return { ...config, services, primaryServiceId: services.some((s) => s.id === config.primaryServiceId) ? config.primaryServiceId : null };
 }
