@@ -113,7 +113,7 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
         <option value="on">开启</option><option value="off">关闭</option>
       </select>
     </label>
-    <small>{proxied ? "当前使用反代：浏览器复用 ash 入口，无需开放每个服务的端口。预览页面与 ash 隔离，依赖本地存储、Service Worker 或站外接口的应用可能需要使用直连。" : "当前使用直连：浏览器直接访问服务端口。远程访问时，服务需监听可访问的网卡地址，并开放相应端口。"}</small>
+    <small>{proxied ? "当前使用反代：浏览器复用 ash 入口，无需开放每个服务的端口。预览页面与 ash 隔离，应用自己的 Authorization 鉴权头也不会转发，JavaScript 读写 Cookie（document.cookie）会报错。依赖这些能力、本地存储、Service Worker 或站外接口的应用可能需要使用直连。" : "当前使用直连：浏览器直接访问服务端口。远程访问时，服务需监听可访问的网卡地址，并开放相应端口。"}</small>
     {proxied && <small>服务需要配置资源前缀时，可读取 <code>{variable("ASH_PREVIEW_BASE")}</code>。例如 Vite 可在启动参数中使用 <code>--base {variable("ASH_PREVIEW_BASE")}</code>。</small>}
     {error && <p className="preview-settings-error" role="alert">{error}</p>}
     {canManage && <div className="settings-card-foot"><span>保存后对下次打开的预览生效。运行状态和输出可在任务的预览日志里查看。</span><Button variant="primary" disabled={!dirty || busy || detecting} onClick={() => void save()}>{busy ? "保存中…" : "保存预览设置"}</Button></div>}

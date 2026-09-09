@@ -137,6 +137,7 @@ function Fixture() {
           notify={notify}
         />
         <pre data-testid="notices">{JSON.stringify(notices)}</pre>
+        <output data-testid="stored-projects" hidden>{localStorage.getItem(storageKey)}</output>
       </main>
     </AuthContext.Provider>
   );

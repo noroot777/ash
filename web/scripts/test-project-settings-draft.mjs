@@ -29,6 +29,14 @@ try {
   const savePreview = page.getByRole("button", { name: "保存预览设置" });
   const scriptMode = page.getByRole("radio", { name: "自定义脚本", exact: true });
   const servicesMode = page.getByRole("radio", { name: "选择服务", exact: true });
+  const waitForPreviewMode = (mode) => page.waitForFunction((expected) => {
+    const radios = document.querySelectorAll('input[type="radio"][name^="preview-mode-"]');
+    const selected = radios[expected === "script" ? 0 : 1];
+    return selected instanceof HTMLInputElement && selected.checked
+      && (expected === "script"
+        ? document.querySelector('textarea[aria-label="启动脚本"]') instanceof HTMLTextAreaElement
+        : document.querySelector(".preview-detect-actions") !== null);
+  }, mode);
   await preview.waitFor();
 
   assert.equal(await preview.evaluate((node) => node.tagName), "TEXTAREA", "启动脚本应使用多行编辑器");
@@ -60,9 +68,13 @@ try {
   assert.equal(await repoPath.inputValue(), "/workspace/改了目录", "同项目重新渲染吞掉了工作目录草稿");
 
   await servicesMode.check();
+  await waitForPreviewMode("services");
   await scriptMode.check();
+  await page.waitForFunction((expected) =>
+    document.querySelector('textarea[aria-label="启动脚本"]')?.value === expected, draft);
   assert.equal(await preview.inputValue(), draft, "切换启动方式后多行脚本草稿丢失");
   await servicesMode.check();
+  await waitForPreviewMode("services");
   await page.getByRole("button", { name: "检测服务" }).click();
   const detectionResult = page.locator(".preview-detection-result");
   await detectionResult.filter({ hasText: /检测到 2 个候选/ }).waitFor();
@@ -91,7 +103,7 @@ try {
   assert.equal(await name.inputValue(), "改了名字", "保存预览设置不应冲掉基本信息草稿");
   assert.equal(await repoPath.inputValue(), "/workspace/改了目录", "保存预览设置不应冲掉目录草稿");
 
-  const stored = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)), `ash-project-settings-fixture:${caseId}`);
+  const stored = JSON.parse(await page.getByTestId("stored-projects").textContent());
   assert.equal(stored["p-one"].previewConfig.mode, "services");
   assert.equal(stored["p-one"].previewConfig.proxy, "auto");
   assert.deepEqual(stored["p-one"].previewConfig.services.map((service) => service.enabled), [true, true]);
@@ -100,22 +112,32 @@ try {
   assert.equal(stored["p-one"].previewCommand, draft);
 
   await page.reload();
-  await servicesMode.waitFor();
+  await waitForPreviewMode("services");
   assert.equal(await servicesMode.isChecked(), true, "刷新后没有读回已存启动方式");
   assert.equal(await page.getByRole("checkbox", { name: "启动 网页前端" }).isChecked(), true, "刷新后丢了已选服务");
   assert.equal(await page.getByRole("checkbox", { name: "启动 接口服务" }).isChecked(), true, "刷新后丢了第二个已选服务");
   assert.equal(await page.getByRole("textbox", { name: "网页前端 启动脚本" }).inputValue(), editedWebCommand, "刷新后丢了已存服务脚本");
   await scriptMode.check();
+  await page.waitForFunction((expected) =>
+    document.querySelector('textarea[aria-label="启动脚本"]')?.value === expected, draft);
   assert.equal(await page.getByRole("textbox", { name: "启动脚本", exact: true }).inputValue(), draft, "刷新后丢了已存总脚本");
   await servicesMode.check();
+  await waitForPreviewMode("services");
   await page.getByTestId("mode-multi").click();
   await page.getByText("当前使用反代：", { exact: false }).waitFor();
 
   if (process.env.SETTINGS_DRAFT_SHOT) await page.screenshot({ path: process.env.SETTINGS_DRAFT_SHOT });
 
   await page.getByTestId("switch-project").click();
-  await page.getByRole("textbox", { name: "启动脚本", exact: true }).waitFor();
+  await page.waitForFunction(() => {
+    const inputFor = (labelText) => Array.from(document.querySelectorAll("label"))
+      .find((label) => label.textContent?.includes(labelText))
+      ?.querySelector("input");
+    return inputFor("项目名称")?.value === "第二个项目"
+      && inputFor("工作目录")?.value === "/workspace/p-two";
+  });
   assert.equal(await page.getByRole("textbox", { name: "启动脚本", exact: true }).inputValue(), "", "换项目还留着上一个项目的脚本");
+  assert.equal(await name.inputValue(), "第二个项目", "换项目应显示新项目的名称");
   assert.equal(await repoPath.inputValue(), "/workspace/p-two", "换项目应显示新项目的目录");
 
   console.log("project settings draft and preview settings: ok");
