@@ -34,6 +34,18 @@ function targetOf(requestPath: string) {
 }
 
 /**
+ * 浏览器**自己**会给请求盖上的那几种 `Authorization`：401 质询之后的 Basic/Digest，
+ * 企业环境里的 Negotiate/NTLM，以及 `http://user:pass@host/` 这种 URL 带出来的。它们是
+ * **用户对 ash 这个入口**的凭证，转给被预览的应用等于把用户的密码交给它。
+ *
+ * 除此之外的（`Bearer …` 之类）浏览器一律不会自动附加，只可能是页面自己 `fetch`/`XHR`
+ * 设上去的——那是**应用自己的** token，必须原样转发。以前这里是「`authorization` 一律
+ * 丢掉」，代价是被预览的应用**登得进去、登进去之后处处 401**（第 1 轮审查 P1：一个把
+ * access token 存在 localStorage、由 Axios 加 `Bearer` 的 Java 后台，正是这个形状）。
+ */
+const BROWSER_ATTACHED_AUTH = /^(?:basic|digest|negotiate|ntlm)\b/i;
+
+/**
  * 转发给被代理应用的请求头。除了摘掉逐跳头和 ash 自己的凭证，还有一件**必须**做的：
  * `Sec-Fetch-Site` 得跟着下面重写的 `Origin`/`Host` 一起改，不能原样转发。
  *
@@ -59,6 +71,8 @@ function forwardedHeaders(input: Headers | IncomingHttpHeaders, token: string): 
     if (HOP_HEADERS.has(k) || connection.includes(k) || ["host", "cookie", "authorization", "origin", "referer", "accept-encoding", "content-length", "sec-fetch-site"].includes(k) || k.startsWith("x-ash-") || k.startsWith("x-forwarded-") || k === "forwarded") continue;
     result[k] = value;
   }
+  const auth = entries.find(([k]) => k.toLowerCase() === "authorization")?.[1].trim();
+  if (auth && !BROWSER_ATTACHED_AUTH.test(auth)) result.authorization = auth;
   const site = entries.find(([k]) => k.toLowerCase() === "sec-fetch-site")?.[1].trim().toLowerCase();
   if (site) result["sec-fetch-site"] = site === "none" ? "none" : "same-origin";
   const cookies = entries.find(([k]) => k.toLowerCase() === "cookie")?.[1] ?? "";

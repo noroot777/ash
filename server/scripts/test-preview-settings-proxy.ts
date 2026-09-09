@@ -192,13 +192,18 @@ try {
   const js = await (await request(gateway + "entry.js")).text();
   assert(js.includes(`from "${gateway}chunk.js"`));
   assert(js.includes('const slash="/"'), "普通字符串不应被 URL 改写破坏");
-  const echo = await request(gateway + "echo", "POST", { message: "你好" }, { cookie: "ash_session=SECRET", authorization: "Bearer SECRET", "x-ash-turn-token": "SECRET", origin: "null", "sec-fetch-site": "cross-site" });
+  const echo = await request(gateway + "echo", "POST", { message: "你好" }, { cookie: "ash_session=SECRET", authorization: "Basic YXNoOnNlY3JldA==", "x-ash-turn-token": "SECRET", origin: "null", "sec-fetch-site": "cross-site" });
   assert.equal(echo.status, 200);
   const echoed = await echo.json();
   assert.deepEqual(JSON.parse(echoed.body), { message: "你好" });
   assert.equal(echoed.headers.cookie, undefined);
-  assert.equal(echoed.headers.authorization, undefined);
   assert.equal(echoed.headers["x-ash-turn-token"], undefined);
+  // `Authorization` 分两种，只丢浏览器自己盖的那种（Basic/Digest/Negotiate/NTLM = 用户对
+  // ash 这个入口的凭证），页面自己设的 `Bearer` 必须转发 —— 以前一律丢掉，被预览的应用
+  // 于是「登得进去、登进去之后处处 401」（第 1 轮审查 P1）。
+  assert.equal(echoed.headers.authorization, undefined, "浏览器盖的 Basic 不许转给被预览应用");
+  const bearer = await request(gateway + "echo", "POST", {}, { authorization: "Bearer app-token" });
+  assert.equal((await bearer.json()).headers.authorization, "Bearer app-token", "应用自己的 Bearer 要原样到达上游");
   // 预览页是 sandbox 出来的 opaque origin，浏览器盖的章永远是 cross-site；照原样转发进去，
   // 被代理应用只要拿它做 CSRF 判据就会拒掉预览里的每一次写操作（2026-09-09：预览 ash 前端
   // 那一档时，登录换来一句「跨站请求已被拒绝」）。它必须跟着上面重写的 Origin/Host 一起改。
