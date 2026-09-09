@@ -8,7 +8,7 @@ import {
   SidebarSimple,
   Stack,
   ChatCircleDots,
-  Robot,
+  Compass,
 } from "@phosphor-icons/react";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { ProjectGitContext } from "./ProjectGitContext.tsx";
@@ -50,7 +50,6 @@ export function WorkspaceSidebar({
   chatOpen,
   onAssistant,
   assistantOpen,
-  assistantDisabled,
   onGroups,
   onCreate,
   onNewProject,
@@ -84,7 +83,6 @@ export function WorkspaceSidebar({
   chatOpen?: boolean;
   onAssistant?: () => void;
   assistantOpen?: boolean;
-  assistantDisabled?: boolean;
   onGroups: () => void;
   onCreate: () => void;
   onNewProject: () => void;
@@ -94,7 +92,7 @@ export function WorkspaceSidebar({
   const taskMode = scope.kind === "tasks";
   const connectionLabel = connected ? "实时已连接" : "实时连接中断";
   const assistantTip = useHoverTip({ placement: "above" });
-  const chatTip = useHoverTip({ placement: "above" });
+  const connectionTip = useHoverTip({ placement: "above" });
   if (collapsed) {
     return (
       <aside className="workspace-sidebar workspace-sidebar--collapsed" aria-label="已收起的侧边栏">
@@ -103,14 +101,12 @@ export function WorkspaceSidebar({
         {taskMode
           ? <span className="workspace-project-avatar workspace-project-avatar--task-mode is-large" aria-label={TASK_MODE_LABEL}><ListChecks size={17} weight="bold" /></span>
           : currentProject && <ProjectAvatar project={currentProject} size="large" />}
-        <span className={`workspace-connection-light${connected ? " is-connected" : ""}`} title={connectionLabel} />
+        <span className={`workspace-connection-light${connected ? " is-connected" : ""}`} role="status" aria-label={connectionLabel} tabIndex={0} {...connectionTip.anchorProps} />
         <button className="workspace-side-icon" type="button" onClick={onToggleCollapsed} aria-label="展开侧边栏">
           <SidebarSimple size={17} weight="bold" aria-hidden="true" />
         </button>
-        {currentProject && onChat
-          ? <button className="workspace-side-icon" type="button" aria-label="聊天" aria-pressed={!!chatOpen} {...chatTip.anchorProps} onClick={() => { chatTip.hide(); onChat(); }}><ChatCircleDots size={16} aria-hidden="true" /></button>
-          : onAssistant && <button className="workspace-side-icon" type="button" aria-label="ash 助手" aria-pressed={!!assistantOpen} disabled={assistantDisabled} {...assistantTip.anchorProps} onClick={() => { assistantTip.hide(); onAssistant(); }}><Robot size={18} aria-hidden="true" /></button>}
-        <HoverTip at={chatTip.at}>聊天</HoverTip>
+        {onAssistant && <button className="workspace-side-icon workspace-assistant-entry" type="button" aria-label="ash 助手" aria-pressed={!!assistantOpen} {...assistantTip.anchorProps} onClick={() => { assistantTip.hide(); onAssistant(); }}><Compass size={18} aria-hidden="true" /></button>}
+        <HoverTip at={connectionTip.at}>{connectionLabel}</HoverTip>
         <HoverTip at={assistantTip.at}>ash 助手</HoverTip>
       </aside>
     );
@@ -174,9 +170,8 @@ export function WorkspaceSidebar({
       />
 
       <div className={`workspace-sidebar-bottom${onAssistant ? " has-assistant" : ""}`}>
-        <span className={`workspace-connection${connected ? " is-connected" : ""}`} aria-label={connectionLabel}>
+        <span className={`workspace-connection${connected ? " is-connected" : ""}`} role="status" aria-label={connectionLabel} tabIndex={0} {...connectionTip.anchorProps}>
           <i aria-hidden="true" />
-          {connected ? "实时已连接" : "连接已中断"}
         </span>
         {spread.open && (
           <span className="workspace-spread-hint">
@@ -189,8 +184,8 @@ export function WorkspaceSidebar({
             {width < 240 ? "打开" : "打开任务列表"}
           </span>
         )}
-        {onAssistant && <button className="workspace-assistant-entry" type="button" aria-label="ash 助手" aria-pressed={!!assistantOpen} disabled={assistantDisabled} {...assistantTip.anchorProps} onClick={() => { assistantTip.hide(); onAssistant(); }}>
-          <Robot size={15} weight="duotone" aria-hidden="true" />
+        {onAssistant && <button className="workspace-assistant-entry" type="button" aria-label="ash 助手" aria-pressed={!!assistantOpen} {...assistantTip.anchorProps} onClick={() => { assistantTip.hide(); onAssistant(); }}>
+          <Compass size={15} aria-hidden="true" />
           <span className="workspace-assistant-label">助手</span>
         </button>}
         <button type="button" onClick={onToggleCollapsed} aria-label="收起侧边栏">
@@ -198,6 +193,7 @@ export function WorkspaceSidebar({
           收起
         </button>
       </div>
+      <HoverTip at={connectionTip.at}>{connectionLabel}</HoverTip>
       <HoverTip at={assistantTip.at}>ash 助手</HoverTip>
       <WorkspaceResizeHandle width={width} onChange={onWidthChange} />
     </aside>
