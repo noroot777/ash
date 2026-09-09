@@ -33,9 +33,9 @@ const WATCHED = ["web/", "shared/"];
 
 const say = (line) => process.stdout.write(`${line}\n`);
 
-const git = (args) => {
+const git = (args, input) => {
   try {
-    return execFileSync("git", args, { cwd: REPO, encoding: "utf8" });
+    return execFileSync("git", args, { cwd: REPO, encoding: "utf8", input });
   } catch {
     return null;
   }
@@ -54,24 +54,30 @@ function readRefLines() {
 /**
  * 本次推送真正新增的提交都改了哪些文件。
  *
- * remote sha 全 0 = 远端还没有这个分支,不能拿它当 diff 起点(会变成「和空树比」,
- * 整个仓库都算改动)。这种情况改问 git「这些提交里哪些是所有远端分支都还没有的」,
- * 只对那一段列文件。
+ * 分两步:先 `rev-list` 圈出「这次真正新增的提交」,再 `diff-tree` 逐个列文件。
  *
- * 用 `git log --name-only` 而不是 `git diff A..B`:两个分支的写法能统一,新分支那条
- * 才写得出来(`--not --remotes` 是 rev-list/log 的语法,diff 不认)。代价是 merge 提交
- * 按 git 惯例不列 diff —— 它带进来的改动由被合并的那些提交自己出现,只有「解冲突时手改
- * 的那几行」会漏掉,和 pre-commit 那道闸同一个已知边角。
+ * ① remote sha 全 0 = 远端还没有这个分支,不能拿它当起点(会变成「和空树比」,整个仓库
+ *    都算改动)。这种情况改问 git「哪些提交是所有远端分支都还没有的」,只算那一段。
+ *    `--not --remotes` 是 rev-list 的语法,`git diff A..B` 写不出这一条,所以两条路统一
+ *    走 rev-list。
+ *
+ * ② `diff-tree` 必须带 **`-c`**:merge commit 按 git 惯例不输出 diff,而这个仓库的主流程
+ *    正是「worktree 里提交 → 主仓 merge → push」—— 解冲突时手改到 web/ 的那几行只存在于
+ *    merge commit 自身,被合并进来的普通提交里没有。少了 -c,这类改动会让闸整个静默跳过
+ *    (第 1 轮审查复现:两个父都只改 README、merge 时手改 web/view.txt → 报「没碰 web/」)。
+ *    `-c` 给出 combined diff,正好是「跟所有父都不同」的那部分。`--root` 让没有父的首个
+ *    提交也列得出文件。回归见 scripts/test-web-test-gate.mjs。
  */
 function changedPaths(lines) {
   const paths = new Set();
   for (const line of lines) {
     const [, localSha, , remoteSha] = line.split(/\s+/);
     if (!localSha || ZERO.test(localSha)) continue; // 删除分支,没有内容要检
-    const args = ["log", "--name-only", "--pretty=format:"];
-    const out = git(ZERO.test(remoteSha || "")
-      ? [...args, localSha, "--not", "--remotes"]
-      : [...args, `${remoteSha}..${localSha}`]);
+    const revs = git(ZERO.test(remoteSha || "")
+      ? ["rev-list", localSha, "--not", "--remotes"]
+      : ["rev-list", `${remoteSha}..${localSha}`]);
+    if (!revs?.trim()) continue;
+    const out = git(["diff-tree", "-r", "-c", "--root", "--no-commit-id", "--name-only", "--stdin"], revs);
     for (const p of (out ?? "").split("\n")) if (p) paths.add(p);
   }
   return [...paths];
@@ -94,6 +100,24 @@ if (!lines.length) {
 }
 
 const changed = changedPaths(lines);
+
+// 闸自己被改了就先自检。它只要 node + git,不吃 node_modules —— 所以连下面那条
+// 「没装依赖就放行」都绕不过它,worktree 里照样跑得动。第 1 轮审查那个 merge 漏检
+// 就是这一条钉住的。
+const SELF = ["scripts/web-test-gate.mjs", "scripts/test-web-test-gate.mjs", ".githooks/pre-push"];
+const selfTest = join(REPO, "scripts", "test-web-test-gate.mjs");
+if (changed.some((p) => SELF.includes(p)) && existsSync(selfTest)) {
+  say("  ▶ 这次推送改到了闸自己,先跑它的回归…");
+  const self = spawnSync(process.execPath, [selfTest], {
+    cwd: REPO,
+    stdio: "inherit",
+  });
+  if (self.status !== 0) {
+    say("  ✕ 闸自己的回归没过 —— 已拦下这次 push。复跑:npm run test:web-gate");
+    process.exit(1);
+  }
+}
+
 const hits = changed.filter((p) => WATCHED.some((w) => p.startsWith(w)));
 if (!hits.length) {
   say(`  ✓ 本次推送的 ${changed.length} 处改动没碰 ${WATCHED.join(" / ")},跳过前端回归。`);
