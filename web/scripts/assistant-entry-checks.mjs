@@ -205,10 +205,40 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   assert.equal(await page.getByRole("tooltip").count(), 1, "hovering assistant dismisses the focused connection tooltip");
   let tip = await page.getByRole("tooltip").filter({ hasText: "ash 助手" }).boundingBox();
   assert.ok(tip && tip.x >= 0 && tip.y >= 0 && tip.x + tip.width <= 1200 && tip.y + tip.height <= 820, "hover tooltip stays in viewport");
+  await page.locator(".workspace-main").hover();
+  await connectionTip.waitFor();
+  assert.equal(await page.getByRole("tooltip").count(), 1, "connection focus tooltip returns after leaving assistant");
+  await page.locator(".workspace-main").click();
+  await page.getByRole("tooltip").waitFor({ state: "detached" });
   await footerAssistant.focus();
   await page.getByRole("tooltip").filter({ hasText: "ash 助手" }).waitFor();
   tip = await page.getByRole("tooltip").filter({ hasText: "ash 助手" }).boundingBox();
   assert.ok(tip && tip.y >= 0, "focus tooltip stays above the footer without clipping");
+
+  const objective = page.getByRole("textbox", { name: "任务目标" });
+  const convertNewNote = async body => {
+    await page.getByRole("button", { name: "随手记", exact: true }).click();
+    const notes = page.getByRole("dialog", { name: "随手记" });
+    await notes.waitFor();
+    await notes.getByRole("button", { name: "新建随手记" }).click();
+    const savedResponse = page.waitForResponse(response => response.url().endsWith("/api/notes")
+      && response.request().method() === "POST" && response.status() === 201);
+    const editor = notes.getByPlaceholder("记下临时想法、路径、验证清单…");
+    await editor.fill(body);
+    await notes.getByRole("button", { name: "转为新任务", exact: true }).click();
+    const saved = await (await savedResponse).json();
+    await objective.waitFor();
+    return saved.id;
+  };
+  const createAndCheckNoteLink = async noteId => {
+    await page.getByRole("button", { name: /启动设置/u }).click();
+    await page.getByLabel("启动方式").selectOption("create");
+    const linkedResponse = page.waitForResponse(response => response.url().endsWith(`/api/notes/${noteId}`)
+      && response.request().method() === "PATCH" && response.status() === 200);
+    await page.getByRole("button", { name: "创建任务", exact: true }).click();
+    const linkedRequest = (await linkedResponse).request();
+    assert.equal(typeof linkedRequest.postDataJSON().taskId, "string", "converted note keeps its task link id");
+  };
 
   await footerAssistant.click();
   await page.getByRole("region", { name: "ash 助手" }).waitFor();
@@ -228,8 +258,20 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   assert.match(page.url(), /[?&]view=chat(?:&|$)/u, "assistant exit returns to chat source");
 
   await page.getByRole("button", { name: "返回工作区" }).click();
+  await footerAssistant.click();
+  await page.getByRole("region", { name: "ash 助手" }).waitFor();
+  const workspaceNoteId = await convertNewNote("从工作区助手转来的随手记");
+  assert.match(page.url(), /[?&]view=create(?:&|$)/u, "workspace assistant note conversion opens composer immediately");
+  assert.equal(await objective.inputValue(), "从工作区助手转来的随手记");
+  await page.getByRole("tab", { name: "ash 助手" }).click();
+  await page.getByRole("button", { name: "关闭助手" }).click();
+  await objective.waitFor();
+  assert.equal(await objective.inputValue(), "从工作区助手转来的随手记", "workspace note seed is applied once");
+  await createAndCheckNoteLink(workspaceNoteId);
+
+  await page.goto(fixtureUrl);
+  await page.getByRole("heading", { name: "从任务树选择一项" }).waitFor();
   await page.getByRole("button", { name: "新建任务" }).click();
-  const objective = page.getByRole("textbox", { name: "任务目标" });
   await objective.waitFor();
   await page.getByRole("tab", { name: "团队", exact: true }).click();
   await objective.fill("保留这份团队任务草稿");
@@ -249,7 +291,32 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   await objective.waitFor();
   assert.equal(await page.getByRole("tab", { name: "团队", exact: true }).getAttribute("aria-selected"), "true",
     "composer mode survives an assistant page reload");
-  await page.getByRole("button", { name: "取消 Esc" }).click();
+  await page.getByRole("tab", { name: "团队", exact: true }).click();
+  await objective.fill("原有的团队草稿");
+  await page.getByRole("tab", { name: "ash 助手" }).click();
+  const composerNoteId = await convertNewNote("从原新建任务来源的助手转来的随手记");
+  assert.match(page.url(), /[?&]view=create(?:&|$)/u);
+  assert.match(page.url(), /[?&]mode=single(?:&|$)/u, "note conversion switches directly to single-task composer");
+  const mergedNoteDraft = "从原新建任务来源的助手转来的随手记\n\n原有的团队草稿";
+  assert.equal(await objective.inputValue(), mergedNoteDraft, "converted note seed and existing composer draft are both retained");
+  await page.getByRole("tab", { name: "ash 助手" }).click();
+  await page.getByRole("button", { name: "关闭助手" }).click();
+  await objective.waitFor();
+  assert.equal(await objective.inputValue(), mergedNoteDraft, "assistant round trip does not apply the note seed twice");
+  await createAndCheckNoteLink(composerNoteId);
+
+  await page.goto(fixtureUrl);
+  await page.getByRole("heading", { name: "从任务树选择一项" }).waitFor();
+  await page.getByRole("button", { name: "聊天", exact: true }).first().click();
+  await page.getByRole("region", { name: "聊天模式" }).waitFor();
+  const chatNoteId = await convertNewNote("从聊天来源转来的随手记");
+  assert.match(page.url(), /[?&]view=create(?:&|$)/u, "chat note conversion opens composer immediately");
+  assert.doesNotMatch(page.url(), /[?&]view=chat(?:&|$)/u);
+  assert.equal(await objective.inputValue(), "从聊天来源转来的随手记");
+  await createAndCheckNoteLink(chatNoteId);
+
+  await page.goto(fixtureUrl);
+  await page.getByRole("heading", { name: "从任务树选择一项" }).waitFor();
   await page.getByRole("button", { name: "收起侧边栏" }).click();
   const collapsed = page.getByRole("complementary", { name: "已收起的侧边栏" });
   assert.equal(await collapsed.getByRole("button", { name: "聊天" }).count(), 0, "collapsed sidebar has no chat-shaped duplicate");

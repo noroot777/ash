@@ -374,13 +374,13 @@ export function WorkspaceShell() {
     setNotes(null);
     setPaletteOpen(false);
   };
-  const openComposer = (mode: TaskMode = "single") => {
+  const openComposer = (mode: TaskMode = "single", draft?: ComposerDraft) => {
     if (!requireProject(`新建${mode === "team" ? "团队" : mode === "duet" ? "讨论" : "任务"}`)) return;
     setRemoteSelection(null);
     setChatOpen(false); setAssistantOrigin(null);
     setSettingsSection(null);
     setNotes(null);
-    setComposer((current) => current ? { ...current, mode } : { mode, draft: null });
+    setComposer((current) => draft ? { mode, draft } : current ? { ...current, mode } : { mode, draft: null });
   };
   const openChat = () => {
     if (!requireProject("打开聊天")) return;
@@ -408,7 +408,9 @@ export function WorkspaceShell() {
     const canReturnToProject = !projectsReady || hasCurrentProject;
     setAssistantOrigin(null);
     setChatOpen(assistantOrigin === "chat" && canReturnToProject);
-    setComposer(assistantOrigin && typeof assistantOrigin === "object" && canReturnToProject ? assistantOrigin.composer : null);
+    if (assistantOrigin && typeof assistantOrigin === "object" && canReturnToProject) {
+      setComposer((current) => current ?? assistantOrigin.composer);
+    }
   };
   const createTask = (task: Task, noteIds: string[] = []) => {
     setTasks((current) => current.some((row) => row.id === task.id) ? current.map((row) => row.id === task.id ? task : row) : [task, ...current]);
@@ -465,7 +467,7 @@ export function WorkspaceShell() {
   );
   const overlays = <>
     <CommandPalette open={paletteOpen} projects={projects} currentProject={currentProject} tasks={tasks} selectedTask={selectedTask} groups={groups} onClose={() => setPaletteOpen(false)} onProject={selectProject} onTaskMode={() => { selectTaskMode(); setPaletteOpen(false); }} onTask={selectTask} onTaskUpdated={updateTask} onNote={openNotes} onComposer={openComposer} onNewGroup={() => { if (requireProject("新建分组")) setCreateDialog({ kind: "group" }); }} onNewProject={() => setCreateDialog({ kind: "project", reason: null })} onDeleteTask={setDeleteTarget} onSettings={openSettings} notify={notify} />
-    {notes && notesProject && <NotesPanel key={`${notes.projectId}:${notes.noteId ?? "list"}`} project={notesProject} initialNoteId={notes.noteId} onClose={() => setNotes(null)} onTask={(nextTaskId) => { const task = tasks.find((row) => row.id === nextTaskId); if (task) selectTask(task); else api.task(nextTaskId).then(selectTask).catch(() => notify("关联任务读取失败")); setNotes(null); }} onConvert={(draft) => { setNotes(null); setSettingsSection(null); setComposer({ mode: "single", draft }); }} notify={notify} />}
+    {notes && notesProject && <NotesPanel key={`${notes.projectId}:${notes.noteId ?? "list"}`} project={notesProject} initialNoteId={notes.noteId} onClose={() => setNotes(null)} onTask={(nextTaskId) => { const task = tasks.find((row) => row.id === nextTaskId); if (task) selectTask(task); else api.task(nextTaskId).then(selectTask).catch(() => notify("关联任务读取失败")); setNotes(null); }} onConvert={(draft) => openComposer("single", draft)} notify={notify} />}
     {groupsPanelOpen && currentProject && <GroupsPanel project={currentProject} groups={groups} tasks={tasks} onClose={() => setGroupsPanelOpen(false)} onChanged={refreshGroups} notify={notify} />}
     {deleteTarget && <DeleteTaskDialog task={deleteTarget} onClose={() => setDeleteTarget(null)} onDeleted={(ids) => { ids.forEach(deleteTask); setDeleteTarget(null); }} notify={notify} />}
     {handoffTarget && <HandoffDialog task={handoffTarget} onClose={() => setHandoffTarget(null)} onTaskUpdate={updateTask} onOpenRemote={selectRemoteTask} notify={notify} />}

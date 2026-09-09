@@ -92,12 +92,20 @@ export function WorkspaceSidebar({
   const modifier = workspaceModifierLabel();
   const taskMode = scope.kind === "tasks";
   const connectionLabel = connected ? "实时已连接" : "实时连接中断";
-  const footerTip = useHoverTip({ placement: "above" });
-  const [tipKind, setTipKind] = useState<"assistant" | "connection">("connection");
+  const hoverTip = useHoverTip({ placement: "above" });
+  const focusTip = useHoverTip({ placement: "above" });
+  const [hoveredKind, setHoveredKind] = useState<"assistant" | "connection">("connection");
+  const [focusedKind, setFocusedKind] = useState<typeof hoveredKind>("connection");
+  const footerTip = {
+    at: hoverTip.at ?? focusTip.at,
+    hide: () => { hoverTip.hide(); focusTip.hide(); },
+  };
+  const tipKind = hoverTip.at ? hoveredKind : focusedKind;
   const tipProps = (kind: typeof tipKind) => ({
-    ...footerTip.anchorProps,
-    onMouseEnter: (event: MouseEvent<Element>) => { setTipKind(kind); footerTip.anchorProps.onMouseEnter(event); },
-    onFocus: (event: FocusEvent<Element>) => { setTipKind(kind); footerTip.anchorProps.onFocus(event); },
+    onMouseEnter: (event: MouseEvent<Element>) => { setHoveredKind(kind); hoverTip.anchorProps.onMouseEnter(event); },
+    onMouseLeave: hoverTip.hide,
+    onFocus: (event: FocusEvent<Element>) => { setFocusedKind(kind); focusTip.anchorProps.onFocus(event); },
+    onBlur: focusTip.hide,
   });
   const tipContent = tipKind === "connection" ? connectionLabel : "ash 助手";
   if (collapsed) {
