@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { ChatMember, ChatMessage, ChatRoom } from "@ash/shared/chat";
 import { isChatClearCommand, mentionedMembers } from "@ash/shared/chat";
 import { db } from "../db/index.js";
@@ -12,17 +12,18 @@ import { ChatBoundaryError } from "./boundary.js";
 import { ChatContextManager } from "./context.js";
 import { limitedChatInvoke } from "./invocation-queue.js";
 import type { ChatContextPolicy } from "./context-format.js";
+import { assistantFormatter, invokeAssistant } from "./assistant.js";
 
 export type RoomRow = typeof chatRooms.$inferSelect;
 type MessageRow = typeof chatMessages.$inferSelect;
-export const toRoom = (row: RoomRow): ChatRoom => ({ id: row.id, projectId: row.projectId, name: row.name, members: JSON.parse(row.members), createdAt: row.createdAt });
-export const toMessage = ({ context: _context, modelReply: _modelReply, notice: _notice, ...row }: MessageRow): ChatMessage => ({ ...row, role: row.role as ChatMessage["role"], status: row.status as ChatMessage["status"], mentions: JSON.parse(row.mentions) });
+export const toRoom = (row: RoomRow): ChatRoom => ({ id: row.id, projectId: row.projectId, name: row.name, members: JSON.parse(row.members), createdAt: row.createdAt, kind: row.kind === "assistant" ? "assistant" : "chat" });
+export const toMessage = ({ context: _context, modelReply: _modelReply, notice: _notice, assistant, ...row }: MessageRow): ChatMessage => ({ ...row, role: row.role as ChatMessage["role"], status: row.status as ChatMessage["status"], mentions: JSON.parse(row.mentions), ...(assistant ? { assistant: JSON.parse(assistant) } : {}) });
 
 // stop()/recover() 用固定文案覆盖 body 时，把已持久化的目录附注（chat_messages.notice，
 // invoke 一返回就落库）拼回正文。附注是「项目可能被并发改动/观察失效」的安全信息，不能随
 // 覆盖消失；而崩溃/重启后旧进程的闭包已不存在，唯一来源就是这个列（审查第 4 轮复现：
 // task.created 时点 SIGKILL 旧进程，新进程 recover() 曾把附注连同 running 正文一起抹掉）。
-const withStoredNotice = (text: string) =>
+const withStoredNotice = (text: string | SQL) =>
   sql`${text} || CASE WHEN ${chatMessages.notice} IS NULL THEN ${""} ELSE ${"\n\n"} || ${chatMessages.notice} END`;
 
 export async function roomMessages(roomId: string) {
@@ -43,20 +44,20 @@ export class ChatService {
   }
 
   async recover() {
-    await db.update(chatMessages).set({ status: "stopped", body: withStoredNotice("服务重启，回复已中断。请重新 @ 该成员继续。"), context: null })
+    await db.update(chatMessages).set({ status: "stopped", body: withStoredNotice("服务重启，回复已中断。请重新发送；群聊中需 @ 该成员。"), context: null })
       .where(inArray(chatMessages.status, ["queued", "running"]));
     await this.contexts.recover();
   }
 
-  async send(row: RoomRow, body: string, messageId: string, author: string) {
+  async send(row: RoomRow, body: string, messageId: string, author: string, projectId?: string) {
     const previous = this.sending.get(row.id) ?? Promise.resolve();
-    const pending = previous.catch(() => {}).then(() => this.sendNow(row, body, messageId, author));
+    const pending = previous.catch(() => {}).then(() => this.sendNow(row, body, messageId, author, projectId));
     this.sending.set(row.id, pending);
     try { await pending; }
     finally { if (this.sending.get(row.id) === pending) this.sending.delete(row.id); }
   }
 
-  private async sendNow(row: RoomRow, body: string, messageId: string, author: string) {
+  private async sendNow(row: RoomRow, body: string, messageId: string, author: string, projectId?: string) {
     const existing = (await db.select().from(chatMessages).where(eq(chatMessages.id, messageId))).at(0);
     if (existing) {
       if (existing.roomId !== row.id || existing.role !== "user" || existing.body !== body) throw new Error("消息编号冲突，请刷新后重试。");
@@ -68,13 +69,13 @@ export class ChatService {
       return;
     }
     const room = toRoom(row);
-    const mentions = mentionedMembers(body, room.members);
+    const mentions = room.kind === "assistant" ? room.members.slice(0, 1) : mentionedMembers(body, room.members);
     const { cutoff, tail } = mentions.length ? await this.contexts.captureSnapshot(row.id) : { cutoff: 0, tail: [] };
     const timestamp = now();
     await db.transaction(async (tx) => {
       await tx.insert(chatMessages).values({ id: messageId, roomId: row.id, role: "user", author, body, mentions: JSON.stringify(mentions.map((member) => member.id)), createdAt: timestamp });
       for (const [position, member] of mentions.entries()) {
-        await tx.insert(chatMessages).values({ id: id(), roomId: row.id, role: "agent", memberId: member.id, author: member.name, status: "queued", createdAt: new Date(Date.parse(timestamp) + position + 1).toISOString(), context: JSON.stringify({ cutoff, tail, source: body, member }) });
+        await tx.insert(chatMessages).values({ id: id(), roomId: row.id, role: "agent", memberId: member.id, author: member.name, status: "queued", createdAt: new Date(Date.parse(timestamp) + position + 1).toISOString(), context: JSON.stringify({ cutoff, tail, source: body, member, projectId: row.kind === "assistant" ? projectId ?? row.projectId : row.projectId }) });
       }
     });
     void this.pump();
@@ -83,11 +84,13 @@ export class ChatService {
   async stop(roomId: string) {
     this.stopping.add(roomId);
     try {
-      const body = "你已停止这次回复。再次 @ 才会继续；已创建的任务可在任务卡中管理。";
+      const body = sql`CASE WHEN (SELECT kind FROM chat_rooms WHERE id = ${roomId}) = 'assistant'
+        THEN ${"你已停止这次回复。发送新消息可继续；已创建的任务可在任务卡中管理。"}
+        ELSE ${"你已停止这次回复。再次 @ 才会继续；已创建的任务可在任务卡中管理。"} END`;
       const stopped = await db.update(chatMessages).set({ status: "stopped", body: withStoredNotice(body), context: null })
         .where(and(eq(chatMessages.roomId, roomId), inArray(chatMessages.status, ["queued", "running"]))).returning({ id: chatMessages.id });
       const contextStopped = this.contexts.stop(roomId);
-      for (const message of stopped) this.active.get(message.id)?.abort.abort(new Error(body));
+      for (const message of stopped) this.active.get(message.id)?.abort.abort(new Error("你已停止这次回复。"));
       await contextStopped;
     } finally { this.stopping.delete(roomId); void this.pump(); }
   }
@@ -142,12 +145,16 @@ export class ChatService {
         .where(and(eq(chatMessages.id, message.id), eq(chatMessages.status, "queued"))).returning();
       if (!claimed.length) return;
       abort.signal.throwIfAborted();
-      const room = (await db.select().from(chatRooms).where(eq(chatRooms.id, message.roomId))).at(0);
-      if (!room || !message.context) throw new Error("群聊或成员不存在，请重新选择成员。");
-      const context = JSON.parse(message.context) as { prompt?: string; cutoff: number; tail?: string[]; source: string; member: ChatMember };
+      const storedRoom = (await db.select().from(chatRooms).where(eq(chatRooms.id, message.roomId))).at(0);
+      if (!storedRoom || !message.context) throw new Error("群聊或成员不存在，请重新选择成员。");
+      const context = JSON.parse(message.context) as { prompt?: string; cutoff: number; tail?: string[]; source: string; member: ChatMember; projectId?: string };
+      const room = storedRoom.kind === "assistant" && context.projectId !== undefined ? { ...storedRoom, projectId: context.projectId } : storedRoom;
       const member = context.member;
-      const prompt = context.prompt ?? await this.contexts.prepare(room, member, context.cutoff, context.source, abort.signal, context.tail);
-      const invoked = await this.invoke(member, room.ownerUserId, prompt, abort.signal, room.projectId);
+      const isAssistant = room.kind === "assistant";
+      const format = isAssistant ? await assistantFormatter(room) : undefined;
+      const prompt = context.prompt ?? await this.contexts.prepare(room, member, context.cutoff, context.source, abort.signal, context.tail, format, isAssistant ? 9000 : 0);
+      const assistantReply = isAssistant ? await invokeAssistant(member, room, prompt, abort.signal, this.invoke) : undefined;
+      const invoked = assistantReply ? { text: "", notice: undefined } : await this.invoke(member, room.ownerUserId, prompt, abort.signal, room.projectId);
       notice = invoked.notice;
       // 落列必须和「补 stopped 正文」是同一条 UPDATE：stop() 可能已在 notice 落列之前把本消息
       // 覆盖成不带附注的停止文案（那时列还是 NULL，withStoredNotice 拼不到）。若分两步写、
@@ -158,7 +165,7 @@ export class ChatService {
         notice,
         body: sql`CASE WHEN ${chatMessages.status} = ${"stopped"} AND ${chatMessages.body} IS NOT NULL AND instr(${chatMessages.body}, ${notice}) = 0 THEN ${chatMessages.body} || ${"\n\n"} || ${notice} ELSE ${chatMessages.body} END`,
       }).where(eq(chatMessages.id, message.id));
-      const result = parseChatReply(invoked.text);
+      const result = assistantReply ?? parseChatReply(invoked.text);
       abort.signal.throwIfAborted();
       let taskToStart: string | null = null;
       if (result.task) {
@@ -179,7 +186,8 @@ export class ChatService {
         abort.signal.throwIfAborted();
         taskToStart = taskId;
       }
-      const settled = await db.update(chatMessages).set({ body: withNotice(result.reply), modelReply: result.reply, status: "done", context: null })
+      const modelReply = assistantReply ? JSON.stringify({ reply: result.reply, assistant: assistantReply.assistant }) : result.reply;
+      const settled = await db.update(chatMessages).set({ body: withNotice(result.reply), modelReply, assistant: assistantReply ? JSON.stringify(assistantReply.assistant) : null, status: "done", context: null })
         .where(and(eq(chatMessages.id, message.id), eq(chatMessages.status, "running"))).returning();
       if (!settled.length) { await preserveNotice(); return; }
       if (taskToStart && !abort.signal.aborted) {

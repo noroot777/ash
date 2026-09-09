@@ -8,6 +8,7 @@ import {
   SidebarSimple,
   Stack,
   ChatCircleDots,
+  Robot,
 } from "@phosphor-icons/react";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { ProjectGitContext } from "./ProjectGitContext.tsx";
@@ -45,6 +46,8 @@ export function WorkspaceSidebar({
   onSearch,
   onNotes,
   onChat,
+  onAssistant,
+  assistantOpen,
   onGroups,
   onCreate,
   onNewProject,
@@ -75,6 +78,8 @@ export function WorkspaceSidebar({
   onSearch: () => void;
   onNotes: () => void;
   onChat?: () => void;
+  onAssistant?: () => void;
+  assistantOpen?: boolean;
   onGroups: () => void;
   onCreate: () => void;
   onNewProject: () => void;
@@ -94,6 +99,7 @@ export function WorkspaceSidebar({
         <button className="workspace-side-icon" type="button" onClick={onToggleCollapsed} aria-label="展开侧边栏">
           <SidebarSimple size={17} weight="bold" aria-hidden="true" />
         </button>
+        {onAssistant && <button className="workspace-side-icon" type="button" aria-label="ash 助手" aria-pressed={!!assistantOpen} onClick={onAssistant}><Robot size={18} /></button>}
         {onChat && <button className="workspace-side-icon" type="button" aria-label="聊天" onClick={() => onChat()}><ChatCircleDots size={16} /></button>}
       </aside>
     );
@@ -139,6 +145,8 @@ export function WorkspaceSidebar({
           </button>
         </div>
       </div>
+
+      {onAssistant && <button className="workspace-assistant-entry" type="button" aria-pressed={!!assistantOpen} onClick={onAssistant}><Robot size={17} weight="duotone" />ash 助手</button>}
 
       <TaskTree
         projects={projects}
