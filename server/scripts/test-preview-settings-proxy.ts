@@ -25,7 +25,7 @@ const { resourceGate } = await import("../src/auth/resource-gate.js");
 const { mountProjectRoutes } = await import("../src/project-routes.js");
 const { mountFreePreviewRoutes } = await import("../src/free-workflow-preview.js");
 const { mountPreviewProxy, attachPreviewUpgrades } = await import("../src/preview-proxy.js");
-const { mountPreviewOpenRoutes } = await import("../src/preview-access.js");
+const { mountPreviewOpenRoutes, FORK_LIMIT } = await import("../src/preview-access.js");
 const { previewState } = await import("../src/preview-public.js");
 const { startPreview, stopPreview, readPreview, beginPreviewStart, endPreviewStart } = await import("../src/preview.js");
 const { lastPreview, readAnyPreview, readPreviewLog, writeRecord } = await import("../src/preview-store.js");
@@ -48,6 +48,13 @@ const server=http.createServer((req,res)=>{
  if(req.url==='/entry.js'){res.setHeader('content-type','text/javascript');return res.end(source);}
  if(req.url==='/chunk.js'){res.setHeader('content-type','text/javascript');return res.end('export default "module loaded";');}
  if(req.url==='/redirect'){res.writeHead(302,{location:'/nested/'});return res.end();}
+ if(req.url==='/whoami'){res.setHeader('content-type','application/json');return res.end(JSON.stringify({cookie:req.headers.cookie??null}));}
+ if(req.url==='/private/set'){res.setHeader('set-cookie','narrow=secret; Path=/private; HttpOnly');res.setHeader('content-type','application/json');return res.end('{}');}
+ if(req.url==='/private/whoami'||req.url==='/public/whoami'){res.setHeader('content-type','application/json');return res.end(JSON.stringify({cookie:req.headers.cookie??null}));}
+ if(req.url==='/short/set'){res.setHeader('set-cookie','short=lived; Path=/; Max-Age=1; HttpOnly');res.setHeader('content-type','application/json');return res.end('{}');}
+ if(req.url==='/dupe/set'){res.setHeader('set-cookie','dupe=live; Path=/; HttpOnly');res.setHeader('content-type','application/json');return res.end('{}');}
+ if(req.url==='/dupe/clear'){res.setHeader('set-cookie','dupe=; Path=/wrong; Path=/; Max-Age=0');res.setHeader('content-type','application/json');return res.end('{}');}
+ if(req.url==='/logout'){res.setHeader('set-cookie','session=; Path=/; Max-Age=0');res.setHeader('content-type','application/json');return res.end('{}');}
  if(req.url==='/seen'){res.setHeader('content-type','application/json');return res.end(JSON.stringify({seen:lastPageAuth}));}
  if(req.url==='/events'){res.setHeader('content-type','text/event-stream');res.write('data: stream arrived\\n\\n');const timer=setTimeout(()=>res.end(),2000);res.on('close',()=>clearTimeout(timer));return;}
  if(req.url==='/echo'){let body='';req.on('data',d=>body+=d);req.on('end',()=>{res.setHeader('content-type','application/json');res.setHeader('set-cookie','session=app-session; Path=/; HttpOnly');res.end(JSON.stringify({body,headers:req.headers,port:Number(process.env.PORT),peer:process.env.URL2}));});return;}
@@ -187,15 +194,28 @@ try {
   }
   const gateway = open.headers.get("location")!;
   assert.match(gateway, /^\/preview\/preview-task\/[a-f0-9]{48}\/web\//);
-  const html = await request(gateway);
-  assert.equal(html.status, 200);
-  assert.match(html.headers.get("content-security-policy") ?? "", /sandbox/);
-  assert.doesNotMatch(html.headers.get("content-security-policy") ?? "", /allow-same-origin/);
-  assert.match(await html.text(), new RegExp(`src="${gateway}entry.js"`));
-  const js = await (await request(gateway + "entry.js")).text();
-  assert(js.includes(`from "${gateway}chunk.js"`));
+  // `accept: text/html` + 没有 Origin 就是浏览器在开页面的样子。明文 http + 局域网 IP 下收不到
+  // `Sec-Fetch-*`，只能这么认；这一点 2026-09-10 用无头 Chromium 逐类请求实测过。
+  const navigate = (path: string, cookie?: string) => request(path, "GET", undefined, { accept: "text/html,application/xhtml+xml", ...(cookie ? { cookie } : {}) });
+  // 一张凭证有两个 token：地址栏里那个（gateway）**不带罐子**；页面内容改写到另一个上，罐子
+  // 只认它。缘由在 server/src/preview-access.ts 顶部 —— 沙箱文档的子资源带不回认领 cookie，
+  // 只按「像不像导航」判的话，拿到地址的人绕开导航直接发 XHR/WebSocket 就照样借走会话。
+  const claimed = await navigate(gateway);
+  assert.equal(claimed.status, 200);
+  assert.match(claimed.headers.get("content-security-policy") ?? "", /sandbox/);
+  assert.doesNotMatch(claimed.headers.get("content-security-policy") ?? "", /allow-same-origin/);
+  const clientCookie = /ashpv_client_[a-f0-9]{48}=[a-f0-9]+/.exec(claimed.headers.get("set-cookie") ?? "")?.[0];
+  assert(clientCookie, "第一个开页面的客户端要拿到认领 cookie");
+  const content = /src="(\/preview\/preview-task\/[a-f0-9]{48}\/web\/)entry.js"/.exec(await claimed.text())?.[1];
+  assert(content, "认领之后那份页面要改写到内容 token 上");
+  assert.notEqual(content, gateway, "内容 token 不能就是地址栏那个");
+  // 没验过客户端的请求（别人拿着地址直接 GET）只配拿到地址栏那条道上的内容 —— 内容 token
+  // 是罐子的钥匙，不能从页面里白送出去。
+  assert.match(await (await request(gateway)).text(), new RegExp(`src="${gateway}entry.js"`), "没验过客户端的请求里不出现内容 token");
+  const js = await (await request(content + "entry.js")).text();
+  assert(js.includes(`from "${content}chunk.js"`));
   assert(js.includes('const slash="/"'), "普通字符串不应被 URL 改写破坏");
-  const echo = await request(gateway + "echo", "POST", { message: "你好" }, { cookie: "ash_session=SECRET", authorization: "Basic YXNoOnNlY3JldA==", "x-ash-turn-token": "SECRET", origin: "null", "sec-fetch-site": "cross-site" });
+  const echo = await request(content + "echo", "POST", { message: "你好" }, { cookie: "ash_session=SECRET", authorization: "Basic YXNoOnNlY3JldA==", "x-ash-turn-token": "SECRET", origin: "null", "sec-fetch-site": "cross-site" });
   assert.equal(echo.status, 200);
   const echoed = await echo.json();
   assert.deepEqual(JSON.parse(echoed.body), { message: "你好" });
@@ -234,9 +254,12 @@ try {
   // 地址栏不许说谎：`replaceState` 换的只是地址栏，文档还是那份 opaque origin 的预览页。
   // 任何做 URL 归一化的前端（ash 自己就是）不拦就会把地址栏变成 ash 本尊的地址，用户对着
   // 它把 key 粘进预览里的登录框。桥拦下来之后，地址栏始终留在预览前缀底下。
+  // 用**认领过**的那份页面来验：它的资源改写在内容 token 上，而地址栏那一改必须落回地址栏
+  // 那个 token —— 否则内容 token（罐子的钥匙）会被 pushState 一路写进地址栏。
   {
-    const bridge = /<script>([\s\S]*?)<\/script>/.exec(await (await request(gateway)).text())?.[1];
+    const bridge = /<script>([\s\S]*?)<\/script>/.exec(await (await navigate(gateway, clientCookie)).text())?.[1];
     assert(bridge, "预览 HTML 里应注入桥");
+    assert(bridge.includes(content), "认领过的那份页面，资源改写在内容 token 上");
     const vm = await import("node:vm");
     const seen: unknown[][] = [];
     const context: Record<string, unknown> = {
@@ -291,16 +314,77 @@ try {
     assert.equal(context.indexedDB, undefined, "模拟不了的让它探测得出「没有」");
   }
   assert.match(echo.headers.get("set-cookie") ?? "", /ashpv_.*Path=\/preview\//);
+  // 预览里的应用**必须保得住自己的会话**。它设的 cookie 早先只改写成 `ashpv_…` 发回浏览器，
+  // 可预览文档是 CSP sandbox 的 opaque origin —— 浏览器把它发出的请求一律当跨站，明文 http
+  // 加局域网 IP（用户访问 ash 的常态）下 Lax / Strict / None / 不写 / None+Secure **五种写法
+  // 一条都带不回来**（2026-09-10 用无头 Chromium 逐个试过）。于是 ash 预览 ash 的表现是：
+  // 粘贴 key 登录成功，下一个请求又回到登录页。所以 cookie 改由代理自己记着、自己贴。
+  // 这里的 `request()` 用的是不带 cookie 罐子的 fetch，正好等价于那个沙箱文档。
+  assert.equal((await (await request(content + "whoami")).json()).cookie, "session=app-session", "上一步 /echo 设的 cookie 要由代理自己带回上游");
+  // 反过来这条是第 3 轮报告那个洞：钥匙不在地址栏里，所以拿着地址栏那串绕开导航直接发请求
+  // ——XHR、写请求、SSE、WebSocket 都算——借不到任何会话。
+  assert.equal((await (await request(gateway + "whoami")).json()).cookie, null, "地址栏那条道上的非导航请求不得借到应用会话");
+  assert.equal((await (await request(gateway + "whoami", "POST", { x: 1 })).json()).cookie, null, "写请求同理");
+  assert.equal((await (await request(gateway + "whoami", "GET", undefined, { accept: "text/event-stream" })).json()).cookie, null, "SSE 同理");
+  // 内容 token 正要落进地址栏时（页内跳转、表单跳转之后的那个 GET）换回地址栏那个 token。
+  const bounced = await navigate(content + "nested/");
+  assert.equal(bounced.status, 302);
+  assert.equal(bounced.headers.get("location"), gateway + "nested/", "内容 token 不许留在地址栏里");
+  // 罐子挂在 grant 上，所以「再打开一次预览」= 换一张凭证 = 换一个会话。这条不是洁癖：
+  // 罐子要是做成全局表，别人从任务页打开同一个预览就会直接坐进你登录好的那个会话里。
+  const reopened = await request(state.url);
+  assert.equal(reopened.status, 302);
+  const gateway2 = reopened.headers.get("location")!;
+  assert.notEqual(gateway2, gateway, "每次打开预览都是一张新凭证");
+  const content2 = /src="(\/preview\/preview-task\/[a-f0-9]{48}\/web\/)entry.js"/.exec(await (await navigate(gateway2)).text())?.[1];
+  assert(content2 && content2 !== content, "新凭证的内容 token 也是新的");
+  assert.equal((await (await request(content2 + "whoami")).json()).cookie, null, "换一次打开就是换一个会话，不继承上一次的 cookie");
+  await request(content + "logout");
+  assert.equal((await (await request(content + "whoami")).json()).cookie, null, "上游说删这条 cookie 就得真删掉");
+  // 代理替浏览器记 cookie，就得照浏览器的规矩记 —— Path 和到期一样都不能少，否则从「登不上」
+  // 换成两种更难看的坏：凭证作用域凭空放大、过期的会话继续被发出去。语义逐条钉在
+  // test:preview-cookies（注入时钟、不靠 sleep），这里走真链路各钉一条端到端的。
+  await request(content + "private/set");
+  assert.equal((await (await request(content + "private/whoami")).json()).cookie, "narrow=secret", "Path=/private 的 cookie 要发到 /private");
+  assert.equal((await (await request(content + "public/whoami")).json()).cookie, null, "Path=/private 的 cookie 不得发到 /public");
+  await request(content + "short/set");
+  assert.match((await (await request(content + "whoami")).json()).cookie ?? "", /short=lived/, "没到点照发");
+  await new Promise((done) => setTimeout(done, 1200));
+  assert.doesNotMatch((await (await request(content + "whoami")).json()).cookie ?? "", /short=lived/, "Max-Age=1 的 cookie 到期后不得继续发送");
+  // 同名属性重复出现要按最后一个算（RFC 6265 §5.2）。取第一个不是理论洁癖：框架和中间件
+  // 各追加一次 Path 时，登出删的是那条不存在的 `/wrong`，真正的会话留在罐子里继续被发。
+  await request(content + "dupe/set");
+  assert.equal((await (await request(content + "whoami")).json()).cookie, "dupe=live", "登录设的 cookie 记进罐子");
+  await request(content + "dupe/clear");
+  assert.equal((await (await request(content + "whoami")).json()).cookie, null, "重复 Path 的删除请求要按最后一个 Path 删");
+  // 另一个客户端拿同一个地址开页面：分给它一张自己的凭证、配一个空罐子。
+  await request(content + "echo", "POST", { message: "登录" });
+  assert.equal((await (await request(content + "whoami")).json()).cookie, "session=app-session");
+  const stranger = await navigate(gateway + "whoami");
+  assert.equal(stranger.status, 302, "另一个客户端拿同一个地址开页面，要分给它一张自己的凭证");
+  const strangerGateway = stranger.headers.get("location")!;
+  assert.notEqual(strangerGateway, gateway + "whoami");
+  assert.equal((await (await navigate(strangerGateway)).json()).cookie, null, "另一个客户端不得继承已经登录好的应用会话");
+  assert.equal((await (await request(content + "whoami")).json()).cookie, "session=app-session", "分叉不动原来那个客户端的会话");
+  assert.equal((await navigate(gateway + "whoami", clientCookie)).status, 200, "带着认领 cookie 的导航照旧直接放行");
+  // 明文 http 下同源 iframe 跟顶层导航长得一模一样，每加载一次就要分一张凭证 —— 所以分叉
+  // 必须能回收：不回收就只有两种下场，要么 grants 表被挤爆、连还在用的凭证一起挤掉，要么
+  // 到了预算上限直接在页面里甩一句 404。
+  for (let n = 0; n < FORK_LIMIT + 4; n++) assert.equal((await navigate(gateway)).status, 302);
+  assert.equal((await navigate(gateway, clientCookie)).status, 200, "分叉再多也不影响认领过的那个客户端");
+  assert.equal((await (await request(content + "whoami")).json()).cookie, "session=app-session", "分叉再多也不动原来的会话");
+  assert.equal((await request(content + "redirect")).headers.get("location"), content + "nested/", "跳转留在请求自己那条道上");
+  await request(content + "logout");
   assert.equal((await request(gateway + "redirect")).headers.get("location"), gateway + "nested/");
   assert.equal((await request(gateway + "echo", "OPTIONS", undefined, { origin: "null", "access-control-request-headers": "content-type" })).status, 204);
   assert.equal((await request(gateway, "GET", undefined, { origin: "https://unrelated.example" })).status, 403);
   assert.equal((await request(gateway.replace(/\/[a-f0-9]{48}\//, "/" + "0".repeat(48) + "/"))).status, 404);
-  const stream = await request(gateway + "events");
+  const stream = await request(content + "events");
   const reader = stream.body!.getReader();
   assert.match(new TextDecoder().decode((await reader.read()).value), /stream arrived/);
   await reader.cancel();
   await new Promise<void>((resolve, reject) => {
-    const ws = new WebSocket((base + gateway + "socket").replace(/^http/, "ws"));
+    const ws = new WebSocket((base + content + "socket").replace(/^http/, "ws"));
     const timeout = setTimeout(() => { ws.close(); reject(new Error("WebSocket 超时")); }, 5000);
     ws.addEventListener("message", (event) => { try { assert.equal(event.data, "socket arrived"); clearTimeout(timeout); ws.close(); resolve(); } catch (e) { reject(e); } });
     ws.addEventListener("error", () => { clearTimeout(timeout); reject(new Error("WebSocket 连接失败")); });
@@ -308,7 +392,7 @@ try {
   await new Promise<void>((resolve, reject) => {
     const socket = connect({ host: "127.0.0.1", port: address.port });
     const timeout = setTimeout(() => { socket.destroy(); reject(new Error("无效 WebSocket 请求未关闭")); }, 3000);
-    socket.once("connect", () => socket.write(`GET ${gateway}socket HTTP/1.1\r\nHost: [\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`));
+    socket.once("connect", () => socket.write(`GET ${content}socket HTTP/1.1\r\nHost: [\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`));
     socket.on("data", () => {});
     socket.on("error", () => {});
     socket.once("close", () => { clearTimeout(timeout); resolve(); });
