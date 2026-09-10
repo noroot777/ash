@@ -69,6 +69,10 @@ export function usePanelPlacement(
       const anchor = anchorRef.current;
       const rect = anchor?.getBoundingClientRect();
       if (!anchor || !rect) return;
+      // 零尺寸 = 触发器还没被布局（容器刚挂载、还没显示）。这时的 rect 全是 0，算出来
+      // 就是「视口左上角」这个人人都看得出不对、却又不会报错的位置。宁可先不定位（面板
+      // 还没打开，看不见），等真实尺寸出来再算。
+      if (!rect.width && !rect.height) return;
       const height = panelRef.current?.offsetHeight || fallbackHeight;
       const below = window.innerHeight - rect.bottom - gap;
       const above = rect.top - gap;

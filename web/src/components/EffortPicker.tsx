@@ -66,12 +66,20 @@ export function EffortPicker({
     return !type && value && !base.includes(value) ? [...base, value] : base;
   }, [model, type, value]);
   const supported = !type || isReasoningEffortSupported(type, model, value);
-  const place = usePanelPlacement(triggerRef, panelRef, { minWidth: 200, minHeight: 120, fallbackHeight: 220 });
 
   // 这个模型没有档位可选：胶囊只作说明用（选过的值仍要显示，否则用户看不见要清什么）。
   const empty = efforts.length === 0;
   const pickable = !disabled && (!empty || !!value);
   const open = (controlledOpen ?? localOpen) && pickable;
+  // enabled 必须跟着 open 走：这颗胶囊常常挂载在还没布局好的容器里（对话框、内嵌
+  // 面板），挂载那一刻量触发器会拿到一个全 0 的 rect，面板就被钉死在视口左上角，
+  // 而且面板此时还没渲染、ResizeObserver 也没东西可观察，之后永远不会自我纠正。
+  const place = usePanelPlacement(triggerRef, panelRef, {
+    minWidth: 200,
+    minHeight: 120,
+    fallbackHeight: 220,
+    enabled: open,
+  });
   const changeOpen = (next: boolean) => {
     if (controlledOpen === undefined) setLocalOpen(next);
     onOpenChange?.(next);
