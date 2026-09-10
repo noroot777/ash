@@ -498,6 +498,7 @@ export function TaskDetail({
                   {!handedOut && <ReplyBox
                     task={task}
                     hasConversation={hasConversation}
+                    conversationItems={conversation.items}
                     topRail={freeToolbarVisible || canHandoff
                       ? (
                         <TaskReplyRail

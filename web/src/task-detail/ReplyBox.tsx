@@ -26,6 +26,10 @@ import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts
 import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
 import { useStandingExecutor, type StandingExecutor } from "./useStandingExecutor.ts";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
+import { ScreenshotAnnotation } from "../page-annotation/ScreenshotAnnotation.tsx";
+import { screenshotCandidates, type AnnotationReply } from "../page-annotation/model.ts";
+import type { ConversationItem } from "./conversationModel.ts";
+import { parseAttachmentText } from "./utils.ts";
 import {
   attachmentsFromPaths,
   clearSentDraft,
@@ -45,6 +49,7 @@ export function ReplyBox({
   skills = EMPTY_SKILLS,
   inlinePanel,
   topRail,
+  conversationItems = [],
 }: {
   task: Task;
   hasConversation: boolean;
@@ -83,6 +88,7 @@ export function ReplyBox({
   skills?: SkillEntry[];
   inlinePanel?: ReactNode;
   topRail?: ReactNode;
+  conversationItems?: ConversationItem[];
 }) {
   const draft = useTaskReplyDraft(task.id);
   const value = draft.text;
@@ -336,7 +342,7 @@ export function ReplyBox({
   const inFlightSend = useRef<Promise<void> | null>(null);
 
   const send = (scheduledAt?: string): Promise<void> => {
-    const run = runSend(scheduledAt);
+    const run = runSend(scheduledAt).then(() => {});
     inFlightSend.current = run;
     void run.finally(() => {
       if (inFlightSend.current === run) inFlightSend.current = null;
@@ -344,23 +350,23 @@ export function ReplyBox({
     return run;
   };
 
-  const runSend = async (scheduledAt?: string) => {
-    if (menuOpen) {
+  const runSend = async (scheduledAt?: string, annotation?: AnnotationReply): Promise<boolean> => {
+    if (!annotation && menuOpen) {
       pickCommand(candidates[selectedIndex]!);
-      return;
+      return false;
     }
-    if (commandMatch) {
+    if (!annotation && commandMatch) {
       pickCommand({ command: value.trim(), label: "", kind: "ash" });
-      return;
+      return false;
     }
-    if (disabled || sending || uploads.uploading || (!value.trim() && !uploads.attachments.length)) return;
+    if (disabled || sending || uploads.uploading || (!annotation && !value.trim() && !uploads.attachments.length)) return false;
     setSending(true);
     setSendError(null);
     // 发出去的是这一份。成功后只在草稿**逐字还是这一份**时才清掉；动过就整份留着，
     // 绝不去猜哪一段是刚发出去的（见 withdrawDraft.ts 的 clearSentDraft）。
     const draftAtSend = value;
-    const sentText = value.trim();
-    const sentPaths = uploads.attachments.map((attachment) => attachment.path);
+    const sentText = annotation?.text ?? value.trim();
+    const sentPaths = annotation?.attachments ?? uploads.attachments.map((attachment) => attachment.path);
     try {
       // 改完执行器立刻按发送时，PATCH 可能还在飞 —— 回复的 POST 先到，服务端读到的
       // 仍是旧执行器，这一句照旧由旧的跑。先等写回落地，落不下去就别发：静默按旧
@@ -368,7 +374,8 @@ export function ReplyBox({
       const standingError = await standing.settle();
       if (standingError) {
         setSendError(`执行器没能改过去（${standingError}），这一句先没发出去。重选一次执行器再发。`);
-        return;
+        if (annotation) throw new Error(standingError);
+        return false;
       }
       const result = await onSend(
         sentText,
@@ -382,16 +389,21 @@ export function ReplyBox({
           executorLabel: activeExecutorLabel,
         },
       );
-      if (result === null) return; // 用户主动取消：什么都别清
+      if (result === null) return false; // 用户主动取消：什么都别清
       if ("scheduled" in result) scheduled.add(result.message);
-      setValue((current) => clearSentDraft(current, draftAtSend));
-      draft.setAttachments((current) => dropSentAttachments(current, sentPaths));
-      uploads.clearError();
+      if (!annotation) {
+        setValue((current) => clearSentDraft(current, draftAtSend));
+        draft.setAttachments((current) => dropSentAttachments(current, sentPaths));
+        uploads.clearError();
+        setScheduleOpen(false);
+        setSendAt("");
+      }
       setTarget(null);
-      setScheduleOpen(false);
-      setSendAt("");
+      return true;
     } catch (error) {
       setSendError(error instanceof Error ? error.message : String(error));
+      if (annotation) throw error;
+      return false;
     } finally {
       setSending(false);
     }
@@ -594,6 +606,10 @@ export function ReplyBox({
         />
         <div className="task-reply-actions">
           <AttachmentPicker addFiles={uploads.addFiles} disabled={disabled || sending || commandActive} />
+          <ScreenshotAnnotation key={task.id} taskId={task.id}
+            candidates={screenshotCandidates(conversationItems, [...parseAttachmentText(task.body).paths, ...uploads.attachments.map((attachment) => attachment.path)])}
+            disabled={disabled || sending || uploads.uploading || commandActive} queueing={queueing}
+            executorLabel={activeExecutorLabel} onSend={(reply) => runSend(undefined, reply)} />
           <button
             ref={scheduleTriggerRef}
             className="reply-schedule-button"
