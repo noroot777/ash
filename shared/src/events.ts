@@ -79,6 +79,7 @@ export type ServerEvent =
       question: string | null;
       questionOptions: string[] | null;
       questionItems: QuestionItem[] | null;
+      answeredQuestion?: import("./questions.ts").QuestionRecord;
     }
   // 待发送消息托盘(排队/定时)有变化：入队、真的发出去了、被取消。托盘的真值只能
   // 来自服务端 —— 从前前端靠「任务从 running 变成别的状态」反推「排着的那条已经

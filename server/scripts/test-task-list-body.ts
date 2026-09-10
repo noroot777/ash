@@ -16,6 +16,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
+import { setActor } from "../src/auth/context.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-task-list-body-"));
 process.env.ASH_DB = join(root, "ash.db");
@@ -29,6 +30,7 @@ const { projects, tasks } = schema;
 
 await ensureSchema();
 const at = new Date().toISOString();
+const history = [{ id: "answer-1", question: "选哪个？", answer: "甲", reply: "【答复】\n甲", answeredAt: at }];
 const taskRow = (id: string, body: string) => ({
   id,
   projectId: "project",
@@ -66,7 +68,10 @@ try {
     apiKeys: null,
     createdAt: at,
   });
-  await db.insert(tasks).values([taskRow("with-body", "把正文留在详情里"), taskRow("empty-body", "")]);
+  await db.insert(tasks).values([
+    { ...taskRow("with-body", "把正文留在详情里"), questionHistory: JSON.stringify(history) },
+    taskRow("empty-body", ""),
+  ]);
 
   const api = new Hono();
   mountTaskRoutes(api);
@@ -75,11 +80,18 @@ try {
   assert.equal(list.length, 2, "两行任务都在列表里");
   for (const row of list) {
     assert.ok(!("body" in row), `列表行不该带正文：${String(row.id)}`);
+    assert.ok(!("questionHistory" in row), `列表行不该带问答历史：${String(row.id)}`);
     assert.ok(row.title, "列表行仍带标题等身份字段");
   }
 
   const detail = await (await api.request("/tasks/with-body")).json() as { body?: string };
   assert.equal(detail.body, "把正文留在详情里", "详情接口必须带正文");
+
+  const historyResponse = await api.request("/tasks/with-body/question-history");
+  assert.equal(historyResponse.status, 200);
+  assert.deepEqual(await historyResponse.json(), history, "历史接口只返回问答记录，不重复传输任务正文");
+  assert.deepEqual(await (await api.request("/tasks/empty-body/question-history")).json(), []);
+  assert.equal((await api.request("/tasks/missing/question-history")).status, 404);
 
   const bodiesResponse = await api.request("/tasks/bodies", {
     method: "POST",
@@ -129,7 +141,20 @@ try {
     "满批里存在的那个照常返回",
   );
 
-  console.log("✓ task list omits body");
+  const { setInstanceMode } = await import("../src/auth/mode.js");
+  await setInstanceMode("multi", root);
+  const scoped = new Hono();
+  scoped.use("*", async (c, next) => {
+    setActor(c, { kind: "user", userId: "outsider", role: "member", name: "旁人" });
+    await next();
+  });
+  mountTaskRoutes(scoped);
+  const hidden = await scoped.request("/tasks/with-body/question-history");
+  assert.equal(hidden.status, 404);
+  assert.deepEqual(await hidden.json(), await (await scoped.request("/tasks/missing/question-history")).json(),
+    "不可见任务与不存在任务返回相同结果");
+
+  console.log("✓ task list omits body/history; scoped history endpoint returns only question records");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

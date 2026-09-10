@@ -68,6 +68,7 @@
     "test:executor-resolution": "tsx scripts/test-executor-resolution.ts",
     "test:ssh-retire": "tsx scripts/test-ssh-profile-retire.ts",
     "test:answer-routing": "tsx scripts/test-answer-routing.ts",
+    "test:question-history": "tsx scripts/test-question-history.ts",
     "test:team-native": "tsx scripts/test-team-native-command.ts",
     "test:team-resilience": "tsx scripts/test-team-lead-resilience.ts && tsx scripts/test-team-inbound-resilience.ts",
     "test:team-inbound-durability": "tsx scripts/test-team-inbound-durability.ts",

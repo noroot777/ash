@@ -32,6 +32,7 @@ import { generateKeyPairSync, createHash, randomBytes, sign as edSign } from "no
 import { api, makeRepo, pairWithPeer, startPeer } from "./handoff-test-utils.js";
 import { checkPayloadGuards } from "./test-handoff-payload.js";
 import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
+import { questionKey, type QuestionRecord } from "@ash/shared/questions";
 
 const root = mkdtempSync(join(tmpdir(), "ash-handoff-auth-"));
 const home = join(root, "home");
@@ -131,7 +132,7 @@ async function main(): Promise<void> {
     transferId: `transfer-${taskId}`,
     task: {
       id: taskId, title: "鉴权用例", body: "probe",
-      status: "paused", question: "远程执行器在问：选哪条路？", questionOptions: ["方案甲", "方案乙"],
+      status: "paused", question: "远程执行器在问：选哪条路？", questionOptions: JSON.stringify(["方案甲", "方案乙"]),
       createdAt: "2026-08-22T09:00:00.000Z",
     },
     sessions: [],
@@ -223,19 +224,26 @@ async function main(): Promise<void> {
   assert.equal(snapshotJson.task.question, "远程执行器在问：选哪条路？");
   assert.deepEqual(snapshotJson.sessions, []);
   assert.deepEqual(snapshotJson.persisted, []);
-  const answerBody = JSON.stringify({ taskId: "auth-replay", answer: "方案甲" });
+  const answerBody = JSON.stringify({ taskId: "auth-replay", answer: "方案甲", answers: ["方案甲"], questionKey: questionKey({
+    question: "远程执行器在问：选哪条路？", questionOptions: ["方案甲", "方案乙"],
+  }) });
   const answered = await raw(
     "/handoff/proxy/task/answer",
     signedInit("/handoff/proxy/task/answer", "POST", answerBody),
   );
-  assert.equal(answered.status, 200, "远程提问必须走 answer 语义而不是普通 reply");
+  assert.equal(answered.status, 200, `远程提问必须走 answer 语义而不是普通 reply: ${await answered.clone().text()}`);
   assert.equal((await answered.json() as { answered?: boolean }).answered, true);
   const afterAnswerBody = JSON.stringify({ taskId: "auth-replay" });
   const afterAnswer = await raw(
     "/handoff/proxy/task/snapshot",
     signedInit("/handoff/proxy/task/snapshot", "POST", afterAnswerBody),
   );
-  assert.equal((await afterAnswer.json() as { task: { question: string | null } }).task.question, null, "答复后必须 CAS 清掉远端 question");
+  const answeredTask = (await afterAnswer.json() as { task: { question: string | null; questionHistory: QuestionRecord[] } }).task;
+  assert.equal(answeredTask.question, null, "答复后必须 CAS 清掉远端 question");
+  assert.equal(answeredTask.questionHistory.length, 1);
+  assert.equal(answeredTask.questionHistory[0]!.reply, "【答复】\n方案甲");
+  assert.deepEqual(answeredTask.questionHistory[0]!.answers, ["方案甲"]);
+  assert.deepEqual(answeredTask.questionHistory[0]!.questionOptions, ["方案甲", "方案乙"]);
   const replayed = await raw("/handoff/import", init5);
   assert.equal(replayed.status, 401, "同一份签名重发必须被 nonce 挡住");
   assert.match((await replayed.json() as { error: string }).error, /重放/);

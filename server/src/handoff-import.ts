@@ -192,6 +192,7 @@ async function importValidated(
     // questionOptions/questionItems 列本身是 JSON 文档,路径在其中以转义形态出现。
     m.task.questionOptions = rwJson(m.task.questionOptions);
     m.task.questionItems = rwJson(m.task.questionItems);
+    m.task.questionHistory = rwJson(m.task.questionHistory ?? null);
     // 待发送消息:正文是纯文本,attachments 列是 JSON string[](路径以转义形态出现)。
     for (const msg of messages) {
       msg.text = applyUploadRewrites(msg.text, rewrites, "plain");
@@ -354,6 +355,7 @@ async function importValidated(
     question: m.task.question,
     questionOptions: jsonOr(m.task.questionOptions, "") || null,
     questionItems: jsonOr(m.task.questionItems, "") || null,
+    questionHistory: jsonOr(m.task.questionHistory, "") || null,
     // 验收落账随任务走(老 manifest 没有这三个字段,按缺失处理)。尾段进度位不带,
     // 理由见 handoff-types.ts。
     acceptedTargetBranch: m.task.acceptedTargetBranch ?? null,

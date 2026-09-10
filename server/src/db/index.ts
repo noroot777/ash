@@ -300,6 +300,7 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN question_options TEXT",
     // ask_question 的多问题列表（json {question, options?}[]，null=老式单问题）
     "ALTER TABLE tasks ADD COLUMN question_items TEXT",
+    "ALTER TABLE tasks ADD COLUMN question_history TEXT",
     // 任务执行器 profile。非空时按 agents.id 精确解析；空/悬空时按 agent_type 默认执行器降级。
     "ALTER TABLE tasks ADD COLUMN executor_id TEXT",
     // 任务级模型/思考强度覆盖；null 时继续跟随执行器 profile。
