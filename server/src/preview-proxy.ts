@@ -88,6 +88,18 @@ function sandboxOriginated(origin: string | undefined, site: string | undefined)
  * 发的，所以对内一律 `same-origin`；`none`（地址栏直接打开的顶层导航）保持原样 —— 它比
  * `same-origin` 宽松不了，改写反而会抹掉「这是用户自己敲进去的」这个事实。
  *
+ * **浏览器没盖章的时候也得盖。** `Sec-Fetch-*` 只发给可信来源，明文 http + 局域网 IP
+ * 一个都收不到（`looksLikeNavigation` 那段同一件事）——2026-09-10 用户在 `172.16.88.252:4317`
+ * 的预览里粘 key 登录，又吃了一次「跨站请求已被拒绝（写操作只接受本站发起）」。这一次不是
+ * 章盖错了，是**根本没有章**，于是判据落到下一档：我们自己重写的那个 `Origin`。它写的是
+ * 上游自己的地址（`localhost:<上游端口>`），直连上游时跟 `Host` 对得上；可上游是 vite，
+ * `/api` 还要再转一跳回 ash，vite 的 `changeOrigin` 只改 `Host` 不改 `Origin` —— 到 ash 手上
+ * 就成了「Origin=localhost:42651、Host=127.0.0.1:4317」，一对不上就拒。
+ *
+ * 所以 `Origin` 和这个章是一对，要造一起造：只造 `Origin` 而把章留空，等于亲手把一个对不上
+ * 的来源塞给下游，比两个都不发还糟。「本来没有的头不许凭空造」这条原则仍然管着**别的**头，
+ * 这两个是例外，因为它们描述的是「谁发的」，而这件事在这一层已经由 token + grant 判定过了。
+ *
  * **改写之前先把原样的 `Origin`/`Sec-Fetch-Site` 留给 `sandboxOriginated` 用**：鉴权头转不
  * 转发全靠这两个头认来源，归一化之后就再也分不出「预览页自己发的」和「ash 页面发的」了。
  */
@@ -104,7 +116,7 @@ function forwardedHeaders(input: Headers | IncomingHttpHeaders, jar: PreviewCook
   const site = pick("sec-fetch-site");
   const auth = pick("authorization");
   if (auth && sandboxOriginated(pick("origin"), site) && !BROWSER_ATTACHED_AUTH.test(auth)) result.authorization = auth;
-  if (site) result["sec-fetch-site"] = site.toLowerCase() === "none" ? "none" : "same-origin";
+  result["sec-fetch-site"] = site?.toLowerCase() === "none" ? "none" : "same-origin";
   // 往上游发什么 cookie，**只认罐子**，浏览器带回来的一概不作数。两条理由：
   // ① 在沙箱 opaque origin 下它本来就是空的（见 preview-cookies.ts 开头）；
   // ② 发回浏览器的那份被重挂在预览前缀上，Path 信息已经不在了 —— 拿它当来源，

@@ -20,7 +20,7 @@ process.env.ASH_RUNS_DIR = join(root, "runs");
 process.env.ASH_DEPS_DIR = join(root, "deps");
 const { db, ensureSchema, dbClient } = await import("../src/db/index.js");
 const { projects, tasks, users, projectMembers } = await import("../src/db/schema.js");
-const { authGate, SESSION_COOKIE } = await import("../src/auth/middleware.js");
+const { authGate, SESSION_COOKIE, crossSiteRejection } = await import("../src/auth/middleware.js");
 const { resourceGate } = await import("../src/auth/resource-gate.js");
 const { mountProjectRoutes } = await import("../src/project-routes.js");
 const { mountFreePreviewRoutes } = await import("../src/free-workflow-preview.js");
@@ -249,8 +249,20 @@ try {
   assert.equal(echoed.headers.origin, `http://localhost:${echoed.port}`);
   const typed = await request(gateway + "echo", "POST", {}, { "sec-fetch-site": "none" });
   assert.equal((await typed.json()).headers["sec-fetch-site"], "none", "地址栏直接打开的那一类保持原样");
-  const bare = await request(gateway + "echo", "POST", {});
-  assert.equal((await bare.json()).headers["sec-fetch-site"], undefined, "本来没有的头不许凭空造一个");
+  {
+    // 浏览器**根本没盖章**的那一档：`Sec-Fetch-*` 只发给可信来源，明文 http + 局域网 IP 一个
+    // 都收不到（2026-09-10 用户就撞在这儿，又吃了一次「跨站请求已被拒绝」）。这时候也得盖，
+    // 否则判据落到我们自己重写的那个 Origin —— 它只在直连上游时跟 Host 对得上。
+    const bare = await (await request(gateway + "echo", "POST", {})).json();
+    assert.equal(bare.headers["sec-fetch-site"], "same-origin", "浏览器没盖章时也得盖，别把判据留给对不上的 Origin");
+    // 拿 ash 自己那道闸原地验「上游再转一跳」：vite 的 /api 打回 ash，changeOrigin 只改 Host
+    // 不改 Origin，于是 ash 手上是「Origin=localhost:<上游端口>、Host=ash 自己」。
+    assert.equal(
+      crossSiteRejection({ secFetchSite: bare.headers["sec-fetch-site"], origin: bare.headers.origin, host: "127.0.0.1:4317" }),
+      null,
+      "预览里的写操作，上游再转一跳回 ash 也不能被 ash 自己的跨站闸拒掉",
+    );
+  }
   // 地址栏不许说谎：`replaceState` 换的只是地址栏，文档还是那份 opaque origin 的预览页。
   // 任何做 URL 归一化的前端（ash 自己就是）不拦就会把地址栏变成 ash 本尊的地址，用户对着
   // 它把 key 粘进预览里的登录框。桥拦下来之后，地址栏始终留在预览前缀底下。
