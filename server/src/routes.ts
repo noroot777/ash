@@ -9,7 +9,8 @@ import type {
   LlmProvider,
   LlmProtocol,
 } from "@ash/shared";
-import type { SearchStreamLine } from "@ash/shared/search";
+import type { SearchStreamLine, SearchSort } from "@ash/shared/search";
+import { isSearchSort } from "@ash/shared/search";
 import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@ash/shared/cli-presets";
 import { normalizeCliConfigOverrides, cliConfigOverrideErrors, readCliConfigOverrides } from "@ash/shared/cli-overrides";
 import { db } from "./db/index.js";
@@ -147,7 +148,7 @@ api.patch("/settings", async (c) => {
 // Global search across tasks + session transcripts (see search.ts).
 // Sub-2-char queries return empty instead of erroring — the palette calls this
 // on every keystroke.
-type SearchParams = { error: string } | { q: string; projectId?: string; preferProjectId?: string; type?: "tasks" | "notes" };
+type SearchParams = { error: string } | { q: string; projectId?: string; preferProjectId?: string; type?: "tasks" | "notes"; sort?: SearchSort };
 const searchParams = (c: Context): SearchParams => {
   const q = (c.req.query("q") ?? "").trim();
   const projectId = (c.req.query("projectId") ?? "").trim() || undefined;
@@ -155,8 +156,12 @@ const searchParams = (c: Context): SearchParams => {
   // 于是先把它扫完先吐出来，再去扫别的项目。
   const prefer = (c.req.query("prefer") ?? "").trim() || undefined;
   const type = (c.req.query("type") ?? "").trim();
+  // 排序档。乱填的值不当错误处理，落回默认档 —— 前端换档是个开关，不该因为版本对不上
+  // 就把整个 ⌘K 变成一个 400。
+  const sortParam = (c.req.query("sort") ?? "").trim();
+  const sort = isSearchSort(sortParam) ? sortParam : undefined;
   if (type && type !== "tasks" && type !== "notes") return { error: "type must be tasks or notes" as const };
-  return { q, projectId, preferProjectId: prefer, type: type === "tasks" || type === "notes" ? type : undefined };
+  return { q, projectId, preferProjectId: prefer, type: type === "tasks" || type === "notes" ? type : undefined, sort };
 };
 
 api.get("/search", async (c) => {

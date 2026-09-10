@@ -40,7 +40,7 @@ import type { BaseUpdateRecovery } from "@ash/shared/branch-plan";
 import type { WorkflowDef, WorkflowItem } from "@ash/shared/workflow";
 import type { CliHostEnv } from "@ash/shared/cli-overrides";
 import type { CliModelCatalog } from "@ash/shared/cli-presets";
-import type { SearchStreamLine } from "@ash/shared/search";
+import type { SearchStreamLine, SearchSort } from "@ash/shared/search";
 import { ApiError, apiError, apiPath, id, json, parseBody, postWithProgress, request } from "./apiClient.ts";
 import { handoffApi } from "./handoffApi.ts";
 export type { TaskScopedHandoffPreflightResult } from "./handoffApi.ts";
@@ -87,12 +87,13 @@ export type * from "./apiTypes.ts";
 // `/search`,参数完全同形,留给脚本和 curl —— 所以这里单独拎出来,两边不会漂。
 const searchQueryParams = (
   query: string,
-  scope?: { projectId?: string; type?: "tasks" | "notes"; prefer?: string | null },
+  scope?: { projectId?: string; type?: "tasks" | "notes"; prefer?: string | null; sort?: SearchSort },
 ) => {
   const params = new URLSearchParams({ q: query });
   if (scope?.projectId) params.set("projectId", scope.projectId);
   if (scope?.type) params.set("type", scope.type);
   if (scope?.prefer) params.set("prefer", scope.prefer);
+  if (scope?.sort) params.set("sort", scope.sort);
   return params;
 };
 
@@ -465,7 +466,7 @@ export const api = {
    */
   searchStream: async (
     query: string,
-    scope: { projectId?: string; type?: "tasks" | "notes"; prefer?: string | null } | undefined,
+    scope: { projectId?: string; type?: "tasks" | "notes"; prefer?: string | null; sort?: SearchSort } | undefined,
     handlers: { onHit: (hit: SearchHit) => void; onLocalDone?: () => void },
     signal: AbortSignal,
   ): Promise<void> => {

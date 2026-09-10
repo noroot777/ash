@@ -1,4 +1,4 @@
-import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { ProjectView } from "@ash/shared";
 import { Check, GitBranch, GitCommit, TreeStructure } from "@phosphor-icons/react";
 import type { GitOverview } from "../lib/api.ts";
@@ -7,12 +7,10 @@ export function GitProjectStep({
   projects,
   active,
   onChoose,
-  onHover,
 }: {
   projects: ProjectView[];
   active: number;
   onChoose: (projectId: string) => void;
-  onHover: (index: number, event: ReactMouseEvent) => void;
 }) {
   return (
     <div className="p-1">
@@ -22,7 +20,7 @@ export function GitProjectStep({
           key={project.id}
           type="button"
           aria-selected={active === index}
-          onMouseMove={(event) => onHover(index, event)}
+          data-palette-index={index}
           onClick={() => onChoose(project.id)}
           className="ui-selectable flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left outline-none"
         >
