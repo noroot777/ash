@@ -14,6 +14,7 @@ import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "../task-detail/QuestionHistory.tsx";
+import { isQuestionAnswer } from "@ash/shared/questions";
 import { SystemAuthoredMessage, SystemBoundary, SystemEventNote, SystemNoticeModeSwitch } from "../task-detail/SystemNotice.tsx";
 import {
   INITIAL_SYSTEM_NOTICE_MODE,
@@ -61,7 +62,7 @@ function AgentRow({
 
 function UserRow({ row, noticeMode }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"]; noticeMode: SystemNoticeMode }) {
   if (row.kind !== "user") return null;
-  if (row.isAnswer) return <AnsweredQuestionMessage text={row.text} id={row.id} at={row.at} />;
+  if (row.isAnswer || isQuestionAnswer(row.text)) return <AnsweredQuestionMessage text={row.text} id={row.id} at={row.at} />;
   const parsed = parseAttachmentText(row.text);
   const paths = [...parsed.paths, ...row.attachments];
   const bySystem = !!row.bySystem;

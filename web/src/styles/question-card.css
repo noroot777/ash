@@ -42,8 +42,9 @@
 .task-question-record-summary { display: grid; gap: 4px; flex: 1; min-width: 0; }
 .task-question-record-summary > span:first-child { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .task-question-record-summary b { font-size: 11px; color: var(--green); font-weight: 600; }
+.task-question-record-summary small { font-size: 10px; color: var(--muted); }
 .task-question-record-summary time { font-size: 10px; color: var(--faint); }
-.task-question-record-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.task-question-record-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; white-space: pre-line; overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; }
 .task-question-record-action { flex: 0 0 auto; color: var(--muted); font-size: 10px; }
 .task-question-record-caret { flex: 0 0 auto; color: var(--faint); }
 .task-question-record[open] .task-question-record-caret { transform: rotate(180deg); }

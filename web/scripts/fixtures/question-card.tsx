@@ -6,6 +6,7 @@ import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import { QuestionCard } from "../../src/task-detail/QuestionCard.tsx";
 import type { ConversationItem } from "../../src/task-detail/conversationModel.ts";
 import "../../src/styles/global.css";
+import { longLegacyReply } from "./question-card-long-answer.ts";
 
 const storageKey = "ash-question-card-fixture";
 const initial = {
@@ -34,6 +35,9 @@ function Fixture() {
     <header style={{ padding: 12, display: "flex", flexWrap: "wrap", gap: 12, borderBottom: "1px solid var(--line)", fontSize: 12 }}>
       <b>问答卡交互验证</b>
       <button onClick={() => { update({ task: initial, records: [], items: oldItems }); setPayload(""); setCalls(0); setFail(false); }}>重置</button>
+      <button onClick={() => update({ task: { ...initial, question: null, questionItems: null }, records: [], items: [
+        { kind: "user", id: "long-answer", text: longLegacyReply, attachments: [], at: "2026-09-10T05:58:00.000Z" },
+      ] })}>截图中的长问答</button>
       <button onClick={() => update({ ...state, task: { ...initial, question: "选择界面优化方向", questionItems: null, questionOptions: ["清楚展示问题", "优化阅读层级\n减少重复文案"] } })}>单题</button>
       <button onClick={() => update({ ...state, task: { ...initial, id: `${state.task.id}-next` } })}>切换任务</button>
       <button onClick={() => update({ ...state, task: { ...state.task, status: state.task.status === "running" ? "paused" : "running" } })}>切换提问状态</button>

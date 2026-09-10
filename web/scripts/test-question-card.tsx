@@ -7,6 +7,8 @@ import { QuestionCard } from "../src/task-detail/QuestionCard.tsx";
 import { ConversationFeed } from "../src/task-detail/ConversationFeed.tsx";
 import { TeamFeed } from "../src/team/TeamFeed.tsx";
 import type { ConversationItem } from "../src/task-detail/conversationModel.ts";
+import { longAnswer, longLegacyReply, longQuestion } from "./fixtures/question-card-long-answer.ts";
+import { legacyQuestionRecord } from "@ash/shared/questions";
 
 const task = { id: "question-card", title: "问答卡", mode: "single", status: "paused", question: "两个细节", questionItems: [
   { question: "放在哪里？", options: ["会话里", "侧栏里"] },
@@ -36,7 +38,11 @@ assert.match(recorded, /侧栏里/);
 assert.match(recorded, /已部分答复/);
 assert.match(recorded, /未答复/);
 assert.doesNotMatch(recorded, /你之前的提问|请据此/);
-assert.equal(count(recorded, "会话里"), 2, "答案和当时的选项各保留一处");
+assert.equal(count(recorded, "会话里"), 3, "摘要、答案和当时的选项各保留一处");
+const summaries = (html: string) => [...html.matchAll(/<summary>([\s\S]*?)<\/summary>/g)].map((match) => match[1]!);
+assert.match(summaries(recorded)[0]!, /你的答复/);
+assert.match(summaries(recorded)[0]!, /1\. 会话里/);
+assert.doesNotMatch(summaries(recorded)[0]!, /两个细节|放在哪里|侧栏里/);
 assert.equal(count(render([]), 'class="task-question-record"'), 1, "已保存但续跑尚未写入会话时，历史仍可查看");
 
 const repeated = { ...record, id: "record-2", answeredAt: "2026-09-10T02:00:00Z", question: "第二次确认" };
@@ -47,8 +53,8 @@ assert.match(repeatedHtml, /第二次确认/);
 const delayedHtml = renderToStaticMarkup(<ConversationFeed task={task} items={[
   { ...answer, at: "2026-09-10T03:00:00Z" }, { ...answer, id: "answer-2", at: "2026-09-10T03:01:00Z" },
 ]} questionHistory={[record, repeated]} sessions={[]} loading={false} error={null} />);
-assert.equal(count(delayedHtml, 'class="task-question-record-title">两个细节'), 1, "排队延迟送达的同文答复仍要对应各自的问题");
-assert.equal(count(delayedHtml, 'class="task-question-record-title">第二次确认'), 1);
+assert.equal(count(delayedHtml, '<p>两个细节</p>'), 1, "排队延迟送达的同文答复仍要对应各自的问题");
+assert.equal(count(delayedHtml, '<p>第二次确认</p>'), 1);
 
 const oldText = "【答复】你之前的提问:「以前的问题？」\n\n以前的答案\n\n请据此继续完成任务。";
 const legacyAnswer = { ...answer, text: oldText };
@@ -61,4 +67,18 @@ const team = renderToStaticMarkup(<TeamFeed task={{ ...task, mode: "team" }} row
 assert.match(team, /class="task-question-record"/);
 assert.match(team, /以前的问题？/);
 assert.doesNotMatch(team, /你之前的提问/);
+const longRecord = legacyQuestionRecord(longLegacyReply, "screenshot");
+assert.equal(longRecord?.question, longQuestion, "嵌套引号和空行不能截断旧题干");
+assert.equal(longRecord?.answer, longAnswer, "没有系统尾句的旧答复也可恢复真实答案");
+const crlfRecord = legacyQuestionRecord(`${longLegacyReply}\n\n请据此继续完成任务。\n`.replace(/\n/g, "\r\n"), "crlf");
+assert.equal(crlfRecord?.question, longQuestion);
+assert.equal(crlfRecord?.answer, longAnswer);
+const longHtml = render([{ ...legacyAnswer, isAnswer: undefined, bySystem: false, text: longLegacyReply }], []);
+assert.equal(count(longHtml, 'class="task-question-record"'), 1, "旧消息没有 isAnswer 标记也显示已答卡");
+assert.equal(count(longHtml, 'class="task-user-bubble"'), 0);
+assert.match(summaries(longHtml)[0]!, /你的答复/);
+assert.match(summaries(longHtml)[0]!, /A\n顺便/);
+assert.doesNotMatch(summaries(longHtml)[0]!, /跨站那个问题|三个选项|你之前的提问/);
+assert.match(longHtml, /跨站那个问题/);
+assert.match(longHtml, /还是在 ash 上预览别的项目/);
 console.log("question card: accessible inputs, collapsed durable cards, duplicate suppression and legacy/team rendering passed");

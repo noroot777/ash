@@ -33,7 +33,7 @@ import {
 import { type TurnRetryTarget, turnRetryTarget } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "./QuestionHistory.tsx";
-import type { QuestionRecord } from "@ash/shared/questions";
+import { isQuestionAnswer, type QuestionRecord } from "@ash/shared/questions";
 
 // 审查者的身份标：这一回合不是在做需求，是在验收刚才的产物。就地验证跑在被验任务
 // 自己的会话里（常常还是同一个执行器），不标出来的话它跟上一条实现回合长得一模一样。
@@ -136,7 +136,7 @@ function UserMessage({
   preserveSystemStyle?: boolean;
 }) {
   const parsed = parseAttachmentText(item.text);
-  if (item.isAnswer) return <AnsweredQuestionMessage text={item.text} id={item.id} at={item.at} />;
+  if (item.isAnswer || isQuestionAnswer(item.text)) return <AnsweredQuestionMessage text={item.text} id={item.id} at={item.at} />;
   const paths = [...parsed.paths, ...item.attachments];
   const bySystem = !!item.bySystem;
   const reviewPrompt = isReviewSystemPrompt(item.text);

@@ -45,15 +45,30 @@ export function toggleQuestionOption(value: string, option: string): string {
 }
 
 export function legacyQuestionRecord(text: string, id: string, at = ""): QuestionRecord | null {
-  const match = /^【答复】你之前的提问[:：]「([\s\S]*?)」\n\n([\s\S]*)\n\n请据此(?:继续完成任务|接着安排)。$/.exec(text);
-  if (!match) return null;
-  const [, question, answer] = match;
-  const parts = [...answer!.matchAll(/(?:^|\n\n)【\d+】([\s\S]*?)\n答：([\s\S]*?)(?=\n\n【\d+】|$)/g)];
+  const normalized = text.replace(/\r\n/g, "\n").trim();
+  const prefix = /^【答复】\s*你之前的提问[:：]\s*「/.exec(normalized);
+  if (!prefix) return null;
+  let depth = 1;
+  let end = prefix[0].length;
+  for (; end < normalized.length; end += 1) {
+    if (normalized[end] === "「") depth += 1;
+    if (normalized[end] === "」" && --depth === 0) break;
+  }
+  if (depth || !/^\s*\n/.test(normalized.slice(end + 1))) return null;
+  const question = normalized.slice(prefix[0].length, end).trim();
+  const answer = normalized.slice(end + 1).trim()
+    .replace(/\n\s*\n请据此(?:继续完成任务|接着安排)。$/, "").trim();
+  if (!answer) return null;
+  const parts = [...answer.matchAll(/(?:^|\n\n)【\d+】([\s\S]*?)\n答：([\s\S]*?)(?=\n\n【\d+】|$)/g)];
   return {
-    id, answeredAt: at, question, answer: answer!, reply: text,
+    id, answeredAt: at, question, answer, reply: text,
     ...(parts.length ? {
       questionItems: parts.map((part) => ({ question: part[1]! })),
       answers: parts.map((part) => part[2] === "(未答)" ? "" : part[2]!),
-    } : { answers: [answer!] }),
+    } : { answers: [answer] }),
   };
+}
+
+export function isQuestionAnswer(text: string): boolean {
+  return text.trimStart().startsWith("【答复】");
 }

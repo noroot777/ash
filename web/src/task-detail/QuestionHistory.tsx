@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { CaretDown, CheckCircle } from "@phosphor-icons/react";
-import { legacyQuestionRecord, questionItems, questionOptionSelected, type QuestionRecord } from "@ash/shared/questions";
+import { formatQuestionAnswers, legacyQuestionRecord, questionItems, questionOptionSelected, type QuestionRecord } from "@ash/shared/questions";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 import { CopyButton } from "../components/CopyButton.tsx";
@@ -57,13 +57,14 @@ export function AnsweredQuestionCard({ record }: { record: QuestionRecord }) {
   const items = questionItems(record);
   const answers = record.answers ?? (items.length === 1 ? [record.answer] : undefined);
   const partial = answers?.some((answer) => !answer.trim());
+  const answerText = answers ? formatQuestionAnswers(answers) : record.answer;
   return (
     <details className="task-question-record">
       <summary>
         <CheckCircle className="task-question-record-icon" size={18} weight="duotone" aria-hidden="true" />
         <span className="task-question-record-summary">
-          <span><b>{partial ? "已部分答复" : "已答复"}</b>{record.answeredAt && <time>{formatInstant(record.answeredAt)}</time>}</span>
-          <span className="task-question-record-title">{record.question || "你的答复"}</span>
+          <span><b>你的答复</b>{partial && <small>已部分答复</small>}{record.answeredAt && <time>{formatInstant(record.answeredAt)}</time>}</span>
+          <span className="task-question-record-preview">{answerText}</span>
         </span>
         <span className="task-question-record-action">查看问答</span>
         <CaretDown className="task-question-record-caret" size={14} aria-hidden="true" />
@@ -85,7 +86,7 @@ export function AnsweredQuestionCard({ record }: { record: QuestionRecord }) {
           </section>
         ))}
         {!answers && <div className="task-question-record-answer"><b>你的答案</b><p>{record.answer}</p></div>}
-        <footer><CopyButton value={record.answer} label="复制答案" ariaLabel="复制答案" icon /><span>已发送的答复</span></footer>
+        <footer><CopyButton value={answerText} label="复制答案" ariaLabel="复制答案" icon /><span>已发送的答复</span></footer>
       </div>
     </details>
   );
@@ -97,7 +98,7 @@ export function AnsweredQuestionMessage({ text, id, at }: { text: string; id: st
   const occurrence = messages.filter((message) => message.text === text).findIndex((message) => message.id === id);
   const record = matches[Math.max(0, occurrence)]
     ?? legacyQuestionRecord(text, id, at)
-    ?? { id, question: "你的答复", answer: text.replace(/^【答复】\s*/, ""), reply: text, answeredAt: at ?? "" };
+    ?? { id, question: "你的答复", answer: text.trimStart().replace(/^【答复】\s*/, ""), reply: text, answeredAt: at ?? "" };
   return <AnsweredQuestionCard record={record} />;
 }
 
