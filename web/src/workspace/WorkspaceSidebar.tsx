@@ -1,3 +1,4 @@
+import { AssistantIcon } from "../assistant/AssistantIcon.tsx";
 import { useState, type FocusEvent, type MouseEvent } from "react";
 import type { HandoffTarget, ProjectView, TaskListItem } from "@ash/shared";
 import type { OutboundBar } from "./OutboundStatusBar.tsx";
@@ -9,7 +10,6 @@ import {
   SidebarSimple,
   Stack,
   ChatCircleDots,
-  Compass,
 } from "@phosphor-icons/react";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { ProjectGitContext } from "./ProjectGitContext.tsx";
@@ -125,7 +125,7 @@ export function WorkspaceSidebar({
         <button className="workspace-side-icon" type="button" onClick={onToggleCollapsed} aria-label="展开侧边栏">
           <SidebarSimple size={17} weight="bold" aria-hidden="true" />
         </button>
-        {onAssistant && <button className="workspace-side-icon workspace-assistant-entry" type="button" aria-label="ash 助手" aria-pressed={!!assistantOpen} {...tipProps("assistant")} onClick={() => { footerTip.hide(); onAssistant(); }}><Compass size={18} aria-hidden="true" /></button>}
+        {onAssistant && <button className="workspace-side-icon workspace-assistant-entry" type="button" aria-label="ash 助手" aria-pressed={!!assistantOpen} {...tipProps("assistant")} onClick={() => { footerTip.hide(); onAssistant(); }}><AssistantIcon size={18} filled={assistantOpen} /></button>}
         <HoverTip at={footerTip.at}>{tipContent}</HoverTip>
       </aside>
     );
@@ -204,7 +204,7 @@ export function WorkspaceSidebar({
           </span>
         )}
         {onAssistant && <button className="workspace-assistant-entry" type="button" aria-label="ash 助手" aria-pressed={!!assistantOpen} {...tipProps("assistant")} onClick={() => { footerTip.hide(); onAssistant(); }}>
-          <Compass size={15} aria-hidden="true" />
+          <AssistantIcon size={15} filled={assistantOpen} />
           <span className="workspace-assistant-label">助手</span>
         </button>}
         <button type="button" onClick={onToggleCollapsed} aria-label="收起侧边栏">

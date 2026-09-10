@@ -1,3 +1,4 @@
+import { AssistantIcon } from "../assistant/AssistantIcon.tsx";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DUET_DEFAULTS } from "@ash/shared/duet";
 import type {
@@ -12,7 +13,7 @@ import type {
   TeamPresetConfig,
 } from "@ash/shared";
 import { DEFAULT_APP_SETTINGS } from "@ash/shared";
-import { ChatCircleDots, Compass } from "@phosphor-icons/react";
+import { ChatCircleDots } from "@phosphor-icons/react";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import {
   DEFAULT_CRON,
@@ -534,7 +535,7 @@ export function TaskComposerPanel({
               onClick={() => onChat()}>
               <ChatCircleDots size={14} /><span>聊天</span>
             </button>}{onAssistant && <button type="button" role="tab" aria-label="ash 助手" aria-selected={false} disabled={uploads.uploading} onClick={onAssistant}>
-              <Compass size={14} aria-hidden="true" /><span>助手</span>
+              <AssistantIcon size={14} /><span>助手</span>
             </button>}</>}
             onPickStarter={(text, nextMode) => {
               changeBody(body.trim() ? body + "\n\n" + text : text);

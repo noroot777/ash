@@ -86,6 +86,8 @@
   container: sidebar-footer / inline-size;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 4px;
   overflow: hidden;
   border-top: 1px solid var(--line);
   padding: 6px 0 1px;
@@ -133,7 +135,6 @@
   flex: 0 0 auto;
   align-items: center;
   gap: 5px;
-  margin-left: auto;
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -146,7 +147,6 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-left: auto;
   color: var(--faint);
   font-size: 10px;
   white-space: nowrap;
@@ -161,19 +161,14 @@
   font: 9px/15px var(--font-mono);
 }
 
-.workspace-spread-shortcut + button {
-  margin-left: 7px;
-}
-
 .workspace-sidebar-bottom .workspace-assistant-entry {
-  margin-left: 7px;
   white-space: nowrap;
-  background: var(--panel);
+  background: transparent;
   color: var(--muted);
 }
 
 .workspace-side-icon.workspace-assistant-entry {
-  background: var(--panel);
+  background: transparent;
 }
 
 @container sidebar-footer (max-width: 255px) {
@@ -185,8 +180,6 @@
     gap: 3px;
     padding-inline: 3px;
   }
-
-  .workspace-sidebar-bottom .workspace-assistant-entry { margin-left: 2px; }
 }
 
 .workspace-sidebar-bottom > button:hover {
@@ -198,7 +191,7 @@
 .workspace-sidebar-bottom .workspace-assistant-entry[aria-pressed="true"],
 .workspace-side-icon.workspace-assistant-entry:hover,
 .workspace-side-icon.workspace-assistant-entry[aria-pressed="true"] {
-  background: var(--panel);
+  background: transparent;
   color: var(--accent);
 }
 

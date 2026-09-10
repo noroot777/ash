@@ -214,14 +214,9 @@ export async function checkAssistantEntry(page, fixtureUrl) {
 
   const assistantAppearance = await footerAssistant.evaluate(node => {
     const style = getComputedStyle(node);
-    const sample = document.createElement("span");
-    sample.style.background = "var(--panel)";
-    document.body.append(sample);
-    const panelBackground = getComputedStyle(sample).backgroundColor;
-    sample.remove();
-    return { background: style.backgroundColor, panelBackground, height: node.getBoundingClientRect().height };
+    return { background: style.backgroundColor, height: node.getBoundingClientRect().height };
   });
-  assert.equal(assistantAppearance.background, assistantAppearance.panelBackground, "assistant entry uses the white panel background");
+  assert.equal(assistantAppearance.background, "rgba(0, 0, 0, 0)", "assistant entry has no separate background");
   assert.ok(assistantAppearance.height <= baselineHeight, `assistant button does not increase footer height: ${JSON.stringify(assistantAppearance)}`);
   await footerAssistant.hover();
   await page.getByRole("tooltip").filter({ hasText: "ash 助手" }).waitFor();

@@ -1,9 +1,10 @@
+import { AssistantIcon } from "./AssistantIcon.tsx";
 import { useRef, useState } from "react";
 import type { ProjectView, TaskListItem } from "@ash/shared";
 import { taskDisplayStatus } from "@ash/shared";
 import type { ChatMessage, ChatSnapshot } from "@ash/shared/chat";
 import { STEP_LABELS, WORKSPACE_LABELS } from "@ash/shared/workflow";
-import { ArrowDown, ArrowLeft, ArrowUp, ArrowUpRight, BookOpen, Compass, FlowArrow, MagnifyingGlass, Plus, Robot, Stop } from "@phosphor-icons/react";
+import { ArrowDown, ArrowLeft, ArrowUp, ArrowUpRight, BookOpen, FlowArrow, MagnifyingGlass, Plus, Robot, Stop } from "@phosphor-icons/react";
 import { AssistantConnection } from "./AssistantConnection.tsx";
 import { AssistantArchive } from "./AssistantArchive.tsx";
 import { useAssistantChat } from "./useAssistantChat.ts";
@@ -65,7 +66,7 @@ export function AssistantView({ project, projects, onTask, onSettings, onExit }:
   const pickStarter = (text: string) => { chat.setDraft(text); input.current?.focus(); };
   const openTask = (task: TaskListItem) => { if (task.archived) setArchiveId(task.id); else onTask(task); };
   return <section className="assistant-shell" aria-label="ash 助手">
-    <header className="assistant-header"><div className="assistant-identity"><Compass size={23} aria-hidden="true" /><div><h1>ash 助手</h1><span>{project ? `当前项目 · ${project.name}` : "你的 ash 使用助手"}</span></div></div>
+    <header className="assistant-header"><div className="assistant-identity"><AssistantIcon size={23} filled /><div><h1>ash 助手</h1><span>{project ? `当前项目 · ${project.name}` : "你的 ash 使用助手"}</span></div></div>
       <div className="assistant-header-actions">{chat.room && <><label><span className="sr-only">助手对话记录</span><select aria-label="助手对话记录" value={chat.room.id} disabled={chat.sending} onChange={(event) => { chat.select(event.target.value); setEditing(false); setArchiveId(null); }}>{chat.rooms.map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}</select></label><button type="button" disabled={chat.sending} onClick={() => { setEditing(false); setArchiveId(null); void chat.newConversation(); }}><Plus size={15} />新对话</button></>}
         <button type="button" aria-label="关闭助手" onClick={onExit}><ArrowLeft size={17} /></button></div>
     </header>
