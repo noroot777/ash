@@ -42,21 +42,29 @@ function previewBrowserBridge(base: string, record: PreviewRecord): string {
     const routes = ${JSON.stringify(previewAddressMap(record))};
     const origin = location.origin;
     const routeRoot = base.split('/').slice(0, 4).join('/') + '/';
+    // 页面地址栏上的 token 跟内容里的不是同一个（见 server/src/preview-access.ts 顶部），
+    // 所以相对地址会解析到地址栏那条道上 —— 一律按 /preview/<任务>/<任意 token>/<服务>/
+    // 拆开，换回本服务当前这条道。
+    const relane = (pathname) => {
+      const parts = pathname.split('/');
+      if (parts[1] !== 'preview' || parts[2] !== base.split('/')[2]) return null;
+      const service = routes.find(s => s.base.split('/')[4] === parts[4]);
+      return service ? service.base + parts.slice(5).join('/') : null;
+    };
     const rewrite = (value) => {
       const raw = String(value);
       if (raw.startsWith(routeRoot)) return raw;
-      const parts = raw.split('/');
-      if (parts[1] === 'preview' && parts[2] === base.split('/')[2]) {
-        const service = routes.find(s => s.base.split('/')[4] === parts[4]);
-        if (service) return service.base + parts.slice(5).join('/');
-      }
+      const direct = raw.startsWith('/') ? relane(raw) : null;
+      if (direct) return direct;
       if (raw.startsWith('/') && !raw.startsWith('//')) return base + raw.slice(1);
       try {
         const url = new URL(raw, location.href);
         const local = ['localhost','127.0.0.1','[::1]','0.0.0.0'].includes(url.hostname);
         const service = local && routes.find(s => s.port === Number(url.port));
         if (service) return origin + service.base + url.pathname.slice(1) + url.search + url.hash;
-        if (url.origin === origin && !url.pathname.startsWith(routeRoot)) return origin + base + url.pathname.slice(1) + url.search + url.hash;
+        if (url.origin === origin && !url.pathname.startsWith(routeRoot)) {
+          return origin + (relane(url.pathname) ?? base + url.pathname.slice(1)) + url.search + url.hash;
+        }
       } catch {}
       return raw;
     };

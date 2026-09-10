@@ -17,6 +17,10 @@ const HOP_HEADERS = new Set(["connection", "keep-alive", "proxy-authenticate", "
 const LIMIT = 10 * 1024 * 1024;
 const HOSTS = ["127.0.0.1", "::1"];
 
+/**
+ * 请求落在这张 grant 的哪条道上。`nav` 是地址栏里那个 token —— **不带罐子**；`content`
+ * 只出现在已认领客户端拿到的那份页面内容里，罐子只认它。缘由写在 preview-access.ts 顶部。
+ */
 function targetOf(requestPath: string) {
   const match = /^\/preview\/([A-Za-z0-9_-]{1,80})\/([a-f0-9]{48})\/([A-Za-z0-9_-]{1,64})(\/.*)?$/.exec(requestPath);
   if (!match) return null;
@@ -32,7 +36,12 @@ function targetOf(requestPath: string) {
   const startupBase = previewBase(stored, service.id);
   const suffix = match[4] ?? "/";
   const path = target.pathname.startsWith(startupBase) ? startupBase + suffix.slice(1) : suffix;
-  return { record, grant, service, protocol: target.protocol, port: service.port, path, base: previewBase(record, service.id) };
+  return {
+    record, grant, service, protocol: target.protocol, port: service.port, path, suffix,
+    lane: match[2] === grant.nav ? ("nav" as const) : ("content" as const),
+    base: previewBase(record, service.id),
+    navBase: previewBase({ ...record, proxyToken: grant.nav }, service.id),
+  };
 }
 
 function forwardedHeaders(input: Headers | IncomingHttpHeaders, jar: PreviewCookieJar, upstreamPath: string): Record<string, string> {
@@ -85,13 +94,15 @@ const clientCookieName = (token: string) => `ashpv_client_${token}`;
 /**
  * 这个请求是不是「浏览器在开一个页面」。只有这种请求才会把我们种的 Lax cookie 带回来：
  * 沙箱文档发出的子资源（脚本、样式、图片、XHR、iframe…）一律按跨站处理，一个 cookie 都不
- * 带（2026-09-10 在明文 http + 局域网 IP 上逐类实测过）。所以认领和分叉只在这种请求上判，
- * 子资源一概照旧用本凭证的罐子 —— 反过来做的话，页面自己的 XHR 会先被判成「另一个客户端」。
+ * 带（2026-09-10 在明文 http + 局域网 IP 上逐类实测过）。
+ *
+ * 判得准不准**不决定会话安不安全** —— 会话的钥匙是内容 token，不在地址栏里（见
+ * preview-access.ts 顶部）。这里只回答两件事：地址栏那条道上要不要认领/分叉；内容 token
+ * 是不是正要溜进地址栏，得把它换回地址栏那个 token。
  *
  * `Sec-Fetch-*` 只发给可信来源（明文 + 局域网 IP 收不到），于是只能「有就用，没有就退回
  * Accept + 没有 Origin」。代价是明文下同源 iframe 跟顶层导航长得一模一样，会被当成另一个
- * 客户端分走一张自己的凭证（它本来也带不回 cookie，会话本来就保不住）；换来的是复制链接
- * 的人拿不到你的应用会话。
+ * 客户端分走一张自己的凭证（它本来也带不回 cookie，会话本来就保不住）。
  */
 function looksLikeNavigation(method: string, header: (name: string) => string | undefined): boolean {
   if (method !== "GET" && method !== "HEAD") return false;
@@ -113,10 +124,12 @@ async function loopback(port: number): Promise<string> {
   throw new Error("预览服务无法连接");
 }
 
-function securityHeaders(origin: string, base: string): Record<string, string> {
-  const group = previewGroup(base);
+function securityHeaders(origin: string, bases: readonly string[]): Record<string, string> {
+  const groups = [...new Set(bases.map(previewGroup))];
+  const http = groups.map((group) => origin + group).join(" ");
+  const sockets = groups.map((group) => origin.replace(/^http/, "ws") + group).join(" ");
   return {
-    "content-security-policy": `sandbox allow-scripts allow-forms allow-modals allow-downloads allow-popups; connect-src ${origin}${group} ${origin.replace(/^http/, "ws")}${group}; form-action ${origin}${group}; frame-src ${origin}${group}; worker-src 'none'`,
+    "content-security-policy": `sandbox allow-scripts allow-forms allow-modals allow-downloads allow-popups; connect-src ${http} ${sockets}; form-action ${http}; frame-src ${http}; worker-src 'none'`,
     "referrer-policy": "no-referrer", "x-content-type-options": "nosniff", "cache-control": "no-store",
     "access-control-allow-origin": "null", "access-control-allow-credentials": "true",
     "access-control-allow-methods": "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS", "vary": "Origin",
@@ -133,18 +146,23 @@ export function mountPreviewProxy(app: Hono): void {
     if (origin && origin !== "null" && origin !== requested.origin) return c.text("预览不接受其它站点的请求", 403);
     if (!requested.pathname.endsWith("/") && requested.pathname === target.base.slice(0, -1)) return c.redirect(target.base + requested.search, 307);
     const externalOrigin = c.req.header("x-forwarded-proto") === "https" ? `https://${requested.host}` : requested.origin;
-    const safety = securityHeaders(externalOrigin, target.base);
     if (c.req.method === "OPTIONS") {
+      const preflight = securityHeaders(externalOrigin, [target.base]);
       const headers = c.req.header("access-control-request-headers");
-      if (headers) safety["access-control-allow-headers"] = headers;
-      return new Response(null, { status: 204, headers: safety });
+      if (headers) preflight["access-control-allow-headers"] = headers;
+      return new Response(null, { status: 204, headers: preflight });
     }
-    // 地址里的 token 是 bearer 凭证（谁拿到谁能看这个预览，有意为之），但罐子里的**应用
-    // 会话**不能跟着地址走：复制一份链接出去，对方不该连登录都不用就坐进你的会话。所以第
-    // 一个开页面的客户端认领这张凭证，之后拿同一个地址开页面的客户端分叉走一张自己的。
     const token = target.record.proxyToken!;
+    const navigation = looksLikeNavigation(c.req.method, (name) => c.req.header(name));
     let claim: string | null = null;
-    if (looksLikeNavigation(c.req.method, (name) => c.req.header(name))) {
+    if (navigation) {
+      if (target.lane === "content") {
+        // 内容 token 是罐子的钥匙，只该活在页面内容里。这一下是它正要落进地址栏（页内跳转、
+        // 表单跳转之后的那个 GET…），换回地址栏那个 token 再走 —— 否则用户复制出去的那串
+        // 又成了钥匙，绕开导航直接发 XHR 的人照样能借走会话。
+        c.header("cache-control", "no-store");
+        return c.redirect(target.navBase + target.suffix.slice(1) + requested.search, 302);
+      }
       if (target.grant.client === null) {
         const life = Math.max(1, Math.round((target.grant.expires - Date.now()) / 1000));
         claim = `${clientCookieName(token)}=${claimGrant(target.grant)}; Path=${previewGroup(target.base)}; Max-Age=${life}; HttpOnly; SameSite=Lax`;
@@ -155,13 +173,23 @@ export function mountPreviewProxy(app: Hono): void {
         return c.redirect(requested.pathname.replace(`/${token}/`, `/${forked}/`) + requested.search, 302);
       }
     }
+    // 能用罐子的只有两种请求：走内容 token 的（钥匙本身就是凭据），和刚在上面验过客户端的
+    // 那次导航（页面得能拿到自己的会话，上游也常在这一趟才把会话 cookie 种下来 —— 没验过的
+    // 导航在上面就分叉走了，走不到这里）。其余的 —— 地址栏那条道上的 XHR、fetch、SSE、
+    // WebSocket —— 一律配一个空罐子：它们证明不了自己是谁，而地址是可以被复制走的。
+    const trusted = target.lane === "content" || navigation;
+    const jar = trusted ? target.grant.jar : new Map();
+    // 页面内容改写到内容 token 上（认领之后才有），Location 留在请求自己这条道上。
+    const view = trusted && target.grant.content ? { ...target.record, proxyToken: target.grant.content } : target.record;
+    const viewBase = previewBase(view, target.service.id);
+    const safety = securityHeaders(externalOrigin, [target.base, viewBase]);
     try {
       const hostname = await loopback(target.port);
       if (!targetOf(requested.pathname)) return c.text("预览已关闭", 404);
-      const headers = forwardedHeaders(c.req.raw.headers, target.grant.jar, target.path);
+      const headers = forwardedHeaders(c.req.raw.headers, jar, target.path);
       headers.host = `localhost:${target.port}`;
       headers.origin = `${target.protocol}//localhost:${target.port}`;
-      headers["x-forwarded-prefix"] = target.base.slice(0, -1);
+      headers["x-forwarded-prefix"] = viewBase.slice(0, -1);
       const secure = target.protocol === "https:";
       const response = await new Promise<import("node:http").IncomingMessage>((resolve, reject) => {
         const req = (secure ? httpsRequest : httpRequest)({
@@ -183,7 +211,7 @@ export function mountPreviewProxy(app: Hono): void {
       }
       for (const cookie of response.headers["set-cookie"] ?? []) {
         // 先记进罐子（这是会话能不能活下来的那一份），再改写一份发给浏览器（能收下就收）。
-        rememberCookie(target.grant.jar, cookie, target.path);
+        rememberCookie(jar, cookie, target.path);
         const rewritten = scopedCookie(cookie, target.base, token, target.path);
         if (rewritten) result.append("set-cookie", rewritten);
       }
@@ -209,7 +237,7 @@ export function mountPreviewProxy(app: Hono): void {
         else if (encoding === "deflate") data = inflateSync(data, { maxOutputLength: LIMIT });
         else if (encoding && encoding !== "identity") throw new Error("预览资源使用了不支持的压缩格式");
         result.delete("content-encoding"); result.delete("etag");
-        return new Response(rewritePreviewText(data.toString("utf8"), type, target.base, target.record, target.path), { status, headers: result });
+        return new Response(rewritePreviewText(data.toString("utf8"), type, viewBase, view, target.path), { status, headers: result });
       }
       return new Response(Readable.toWeb(response) as ReadableStream<Uint8Array>, { status, headers: result });
     } catch {
@@ -236,7 +264,9 @@ export function attachPreviewUpgrades(server: Server): void {
       if (!target || !originMatches || !(await canUsePreview(target.grant))) { socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n"); return; }
       const hostname = await loopback(target.port);
       if (!targetOf(requested.pathname)) { socket.destroy(); return; }
-      const headers = forwardedHeaders(incoming.headers, target.grant.jar, target.path);
+      // 罐子只跟着内容 token 走：页面里的 WebSocket 地址是我们改写过的，走的就是内容那条道；
+      // 拿地址栏那串来连的，配一个空罐子（升级请求带不回认领 cookie，验不了它是谁）。
+      const headers = forwardedHeaders(incoming.headers, target.lane === "content" ? target.grant.jar : new Map(), target.path);
       headers.host = `localhost:${target.port}`;
       headers.origin = `${target.protocol}//localhost:${target.port}`;
       headers.connection = "Upgrade"; headers.upgrade = "websocket";
