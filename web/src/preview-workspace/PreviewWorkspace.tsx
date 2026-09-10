@@ -6,7 +6,14 @@ import { usePreviewServices } from "./usePreviewServices.ts";
 import { useAnnotationBatch } from "./useAnnotationBatch.ts";
 import { AnnotationBatchPanel } from "./AnnotationBatchPanel.tsx";
 import type { AnnotationDraft as Draft } from "@ash/shared/page-annotation-batch";
+import { useAnnotationReview } from "./useAnnotationReview.ts";
+import { AnnotationWaiting } from "./AnnotationWaiting.tsx";
+import { AnnotationReviewPanel } from "./AnnotationReviewPanel.tsx";
+import { AnnotationFallback } from "./AnnotationFallback.tsx";
+import type { AnnotationMatch } from "@ash/shared/page-annotation-review";
+import { createClientId } from "../lib/clientId.ts";
 import "./preview-workspace.css";
+import "./annotation-review.css";
 
 const tools = [
   { id: "element", label: "点选", icon: Cursor },
@@ -31,6 +38,10 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
   const [serviceId, setServiceId] = useState("");
   const [reload, setReload] = useState(0);
   const batch = useAnnotationBatch(taskId);
+  const review = useAnnotationReview(taskId);
+  const [match, setMatch] = useState<AnnotationMatch | null>(null);
+  const matchRequest = useRef<{ requestId: string; documentId: string; itemId: string } | null>(null);
+  const continueDrawing = useRef(false);
   const items = batch.batch?.items ?? [];
   const setItems = batch.setItems;
   const itemsRef = useRef(items);
@@ -44,14 +55,21 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
   const activeService = available.find((service) => service.id === serviceId) ?? available[0];
   const gateway = activeService && state?.proxied
     ? `/api/tasks/${encodeURIComponent(taskId)}/preview/open/${encodeURIComponent(activeService.id)}` : null;
-  const source = gateway ? `${gateway}?workspace=${encodeURIComponent(state?.startedAt ?? "")}&reload=${reload}` : null;
+  const oldGeneration = batch.records.some((record) => record.messageId && record.state !== "saved" && record.batch.gen === state?.gen);
+  const sentWaiting = batch.records.some((record) => record.messageId && ["delivered", "modifying"].includes(record.state));
+  const source = gateway && !oldGeneration && !sentWaiting ? `${gateway}?workspace=${encodeURIComponent(state?.startedAt ?? "")}&reload=${reload}` : null;
   const matchingBatch = !batch.batch || (batch.batch.gen === state?.gen && batch.batch.serviceId === activeService?.id);
   const canAnnotate = !batch.locked && matchingBatch && !!state?.gen;
+  const canReview = batch.record?.state === "reviewable" && !!batch.record.review?.releasedAt && !!review.status?.canReopen && !!source
+    && batch.batch?.serviceId === activeService?.id && batch.batch?.gen !== state?.gen;
   const nextNumber = items.reduce((max, item) => Math.max(max, item.number + 1), 1);
   const receive = (event: PreviewAnnotationEvent, documentId: string) => {
     if (event.type === "ready" || event.type === "context") {
       setPage(event.context);
       if (event.type === "ready") setError("");
+    } else if (event.type === "match") {
+      const expected = matchRequest.current;
+      if (expected?.requestId === event.match.requestId && expected.documentId === documentId && expected.itemId === event.match.id) setMatch(event.match);
     } else if (event.type === "error") setError(event.message);
     else if (event.type === "image") batch.pageImage(event.id, event.image);
     else if (event.type === "annotation") {
@@ -59,18 +77,27 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
       const existing = current.find((item) => item.id === event.annotation.id && item.documentId === documentId);
       if (batch.locked || !matchingBatch || (!existing && current.length >= 100)) {
         channel.send({ type: "remove", id: event.annotation.id });
-        channel.send({ type: "configure", mode: "browse", tool: channel.tool });
+        if (!canReview) channel.send({ type: "configure", mode: "browse", tool: channel.tool });
         return;
       }
       batch.receive(event.annotation, documentId, state?.gen ?? "", activeService?.id ?? "");
       setSelectedId(event.annotation.id); setCanSelectParent(event.canSelectParent);
-    } else if (event.type === "selection") {
+    } else if (event.type === "selection" && !canReview) {
       setSelectedId(event.id); setCanSelectParent(event.canSelectParent);
     }
   };
   const channel = usePreviewChannel(source, nextNumber, receive);
   const previousBatchId = useRef<string | undefined>(undefined);
-  useEffect(() => { if (!canAnnotate) channel.send({ type: "configure", mode: "browse", tool: channel.tool }); }, [canAnnotate]);
+  useEffect(() => { if (!canAnnotate && !canReview) channel.send({ type: "configure", mode: "browse", tool: channel.tool }); }, [canAnnotate, canReview]);
+  useEffect(() => {
+    if (continueDrawing.current && canAnnotate && channel.phase === "ready") {
+      continueDrawing.current = false;
+      channel.send({ type: "configure", mode: "annotate", tool: "element" });
+    }
+  }, [canAnnotate, channel.phase]);
+  useEffect(() => {
+    matchRequest.current = null; setMatch(null); channel.send({ type: "clear-review" });
+  }, [source, channel.documentId, batch.batch?.id, selectedId, page?.route]);
   useEffect(() => {
     if (previousBatchId.current) { setSelectedId(null); channel.send({ type: "clear" }); }
     previousBatchId.current = batch.batch?.id;
@@ -86,10 +113,26 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
     if (selectedId === item.id) { setSelectedId(null); setCanSelectParent(false); }
   };
 
+  const locate = () => {
+    if (!selected || !canReview || !ready) return;
+    const requestId = createClientId();
+    matchRequest.current = { requestId, documentId: channel.documentId, itemId: selected.id };
+    setMatch(null);
+    channel.send({ type: "locate", annotation: selected, requestId });
+  };
+  const continueItem = async () => {
+    if (!selected || !batch.record || !canReview || batch.busy || batch.review) return;
+    const result = await review.decide(batch.record, selected.id, "continue", state!.gen!);
+    if (!result) return;
+    batch.remember(result);
+    continueDrawing.current = true;
+    await batch.fresh();
+  };
+
   return <section className="preview-workspace" aria-label="预览工作区">
     <header className="preview-workspace-header">
       <Browser size={20} /><div><h2>预览工作区</h2><p>在真实页面上点选、圈画，留下修改意见</p></div>
-      <button type="button" aria-label="关闭预览工作区" onClick={onClose}><X size={16} /></button>
+      <button type="button" aria-label="关闭预览工作区" onClick={() => { review.dismiss(); onClose(); }}><X size={16} /></button>
     </header>
     <div className="preview-workspace-toolbar">
       <div className="preview-workspace-modes" aria-label="预览模式">
@@ -115,7 +158,7 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
     <p className={`preview-workspace-mode-note${channel.mode === "annotate" && ready ? " is-annotating" : ""}`} role="status">
       {items.length >= 100 ? "已暂存 100 条标注，请删除部分标注后继续。" : ready
         ? channel.mode === "annotate" ? "标注中 · 点击只选择对象；页面操作已拦截。滚轮可滚动，父容器可逐层上选。" : "浏览中 · 可以正常操作页面；切换到标注后再选择修改位置。"
-        : "等待预览连接，连接成功后可切换浏览与标注。"}
+        : "等待区展示已存批注与图像，这不是可操作页面。"}
     </p>
     {(error || serviceError) && <p className="preview-workspace-error" role="alert">{error || serviceError}</p>}
     <div className="preview-workspace-body">
@@ -129,30 +172,29 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
             {channel.phase === "failed" && <><p>页面可能已跳转或不支持标注。重载后重试，也可回到回复框使用截图批注。</p>
               <button type="button" onClick={() => setReload((value) => value + 1)}>重载预览</button></>}
           </div>}
-        </> : <div className="preview-workspace-empty">
-          <Browser size={36} />
-          <h3>{state?.starting ? "预览正在启动" : state?.running && !state.proxied ? "此预览使用直连地址" : "尚无可内嵌的预览"}</h3>
-          <p>{state?.running && !state.proxied ? "请在项目预览设置中启用代理访问，再重新打开预览。"
-            : "先通过任务的预览入口启动服务。已有标注会继续显示在右侧。"}</p>
-          <small>也可回到回复框使用截图批注。</small>
-        </div>}
-        {page && <footer className="preview-workspace-context">
+        </> : <AnnotationWaiting controller={batch} review={review} starting={!!state?.starting} />}
+        {page && source && <footer className="preview-workspace-context">
           <code>{page.route}</code><span>{Math.round(page.viewport.width)} × {Math.round(page.viewport.height)} · 滚动 {Math.round(page.scroll.x)}, {Math.round(page.scroll.y)} · {page.viewport.scale.toFixed(2)}×</span>
         </footer>}
       </div>
       <aside className="preview-workspace-notes" aria-label="页面标注列表">
+        <AnnotationFallback taskId={taskId} records={batch.records} queueing={!review.status?.canReopen} />
         <div className="preview-workspace-notes-heading"><h3>标注</h3><span>{items.length} / 100</span></div>
         <p className="preview-workspace-memory">{matchingBatch ? "创建时记录页面上下文 · 自动保存草稿" : "当前批次来自其它预览或服务；新建批次后可继续标注"}</p>
         {!items.length && <p className="preview-workspace-hint">选择「点选」后点击页面上的图标或按钮。编号会出现在页面和这里，再用「父容器」扩大选择范围。</p>}
         <ol className="preview-workspace-list">
           {items.map((item) => <li key={item.id}>
             <button type="button" aria-pressed={item.id === selectedId} className="preview-workspace-item" onClick={() => {
+              matchRequest.current = null; setMatch(null);
               setSelectedId(item.id); setCanSelectParent(false);
               if (item.documentId === channel.documentId && ready) channel.send({ type: "focus", id: item.id });
             }}><b>{item.number}</b><span><strong>{item.element ? `<${item.element.tag}> ${item.element.text || labels[item.tool]}` : labels[item.tool]}</strong>
               <small>{item.comment || item.context.route}</small></span></button>
           </li>)}
         </ol>
+        {selected && batch.record?.messageId && source && <AnnotationReviewPanel record={batch.record} item={selected}
+          match={match} ready={canReview && ready} gen={state?.gen ?? ""} controller={batch} review={review}
+          onLocate={locate} onContinue={continueItem} />}
         {selected && <div className="preview-workspace-detail">
           <label>#{selected.number} 修改意见<textarea disabled={batch.locked} value={selected.comment} maxLength={4000} placeholder="希望这里怎么改？"
             onChange={(event) => setItems((current) => current.map((item) => item.id === selected.id ? { ...item, comment: event.target.value } : item))} /></label>

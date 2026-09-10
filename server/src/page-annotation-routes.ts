@@ -9,10 +9,31 @@ import { UPLOADS_DIR } from "./paths.js";
 import { bindUploadsToTask, canReadUpload, uploadFileName } from "./uploads.js";
 import { AnnotationConflict, getAnnotationBatch, listAnnotationBatches, saveAnnotationBatch, submitAnnotationBatch } from "./page-annotation-store.js";
 import { deliverPendingMessages } from "./pending-messages.js";
+import { annotationReviewStatus, saveAnnotationDecision } from "./page-annotation-review.js";
 import { captureAnnotationReference } from "./page-annotation-reference.js";
 
 export function mountPageAnnotationRoutes(api: Hono): void {
-  api.get("/tasks/:id/annotation-batches", async (c) => c.json(await listAnnotationBatches(c.req.param("id"))));
+  api.get("/tasks/:id/annotation-review-status", async (c) => {
+    c.header("cache-control", "no-store");
+    return c.json(await annotationReviewStatus(c.req.param("id")));
+  });
+  api.put("/tasks/:id/annotation-batches/:batchId/review/:itemId", async (c) => {
+    const taskId = c.req.param("id"), batchId = c.req.param("batchId"), itemId = c.req.param("itemId");
+    const body = await c.req.json().catch(() => null);
+    if (!body || !["satisfied", "continue"].includes(body.verdict) || typeof body.gen !== "string"
+      || !/^[\w-]{1,160}$/.test(body.gen)) return c.json({ error: "复看记录无效" }, 400);
+    const record = await getAnnotationBatch(taskId, batchId);
+    if (!record?.messageId || !record.batch.items.some((item) => item.id === itemId)) return c.json({ error: "批注不存在或尚未发送" }, 404);
+    const status = await annotationReviewStatus(taskId);
+    if (!status.canReopen) return c.json({ error: status.reason }, 409);
+    if (!record.review?.releasedAt) return c.json({ error: "批次尚未进入复看阶段" }, 409);
+    await saveAnnotationDecision(batchId, itemId, body.verdict, body.gen);
+    return c.json(await getAnnotationBatch(taskId, batchId));
+  });
+  api.get("/tasks/:id/annotation-batches", async (c) => {
+    c.header("cache-control", "no-store");
+    return c.json(await listAnnotationBatches(c.req.param("id")));
+  });
   api.put("/tasks/:id/annotation-batches/:batchId", async (c) => {
     try {
       if (Number(c.req.header("content-length")) > 2_000_000) return c.json({ error: "批次过大" }, 413);

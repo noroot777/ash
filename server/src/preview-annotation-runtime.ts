@@ -1,4 +1,5 @@
 import { PREVIEW_ANNOTATION_PROTOCOL } from "@ash/shared/page-annotation";
+import { previewAnnotationReviewRuntime } from "./preview-annotation-review-runtime.js";
 import { previewAnnotationImageRuntime } from "./preview-annotation-image.js";
 
 // Runs before application scripts. The top-level preview exits before touching DOM or APIs.
@@ -154,6 +155,7 @@ export function previewAnnotationRuntime(): string {
   });
   const send = (message) => { if (port) try { post(port, message); } catch {} };
   ${previewAnnotationImageRuntime()}
+  ${previewAnnotationReviewRuntime()}
   const parentAvailable = () => !!(selected?.target && selected.data.context.route === context().route && connected(selected.target) && parentOf(selected.target));
   const reportSelection = () => send({ type: 'selection', id: selected?.data.id || null, canSelectParent: parentAvailable() });
   const emitAnnotation = (entry) => send({ type: 'annotation', annotation: entry.data, canSelectParent: parentAvailable() });
@@ -205,6 +207,7 @@ export function previewAnnotationRuntime(): string {
     };
     for (const entry of annotations) draw(entry);
     if (gesture) draw(gesture.entry, true);
+    paintReview();
   };
   const schedule = () => { if (port && !scheduled) { scheduled = true; frame(paint); } };
   const reportContext = () => {
@@ -311,7 +314,7 @@ export function previewAnnotationRuntime(): string {
     } catch {}
   }, { capture: true, passive: false });
   const disconnect = () => {
-    mode = 'browse'; gesture = null; selected = null; annotations = [];
+    mode = 'browse'; gesture = null; selected = null; annotations = []; reviewTarget = null;
     if (timer) clearTimer(timer);
     timer = null;
     if (host) {
@@ -335,6 +338,10 @@ export function previewAnnotationRuntime(): string {
           && matches(/^(element|rectangle|pen|pin)$/, command.tool)) {
           mode = command.mode; tool = command.tool; gesture = null;
           paint(); send({ type: 'configured', mode, tool });
+        } else if (command?.type === 'locate') {
+          mode = 'annotate'; gesture = null;
+          locate(command); paint(); send({ type: 'configured', mode, tool });
+        } else if (command?.type === 'clear-review') { reviewTarget = null;
         } else if (command?.type === 'parent' && selected?.target && parentAvailable()) {
           selected.target = parentOf(selected.target);
           selected.data.element = card(selected.target);

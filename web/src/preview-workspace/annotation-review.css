@@ -1,0 +1,18 @@
+.annotation-waiting { overflow: auto; padding: 22px; flex: 1; min-height: 0; line-height: 1.7; }
+.annotation-waiting h3 { margin: 0 0 12px; }
+.annotation-waiting-notice, .annotation-reopen { padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.annotation-reopen { display: flex; flex-wrap: wrap; gap: 8px; border-color: var(--accent); }
+.annotation-reopen strong { flex-basis: 100%; }
+.annotation-waiting-batch { margin-top: 24px; }
+.annotation-waiting-batch article { margin-top: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.annotation-record { overflow-wrap: anywhere; }
+.annotation-record figure { margin: 12px 0; }
+.annotation-record img { display: block; max-width: 100%; max-height: 380px; object-fit: contain; border-radius: 6px; }
+.annotation-record figcaption, .annotation-record small, .annotation-record-missing { color: var(--muted); font-size: 10px; }
+.annotation-followup { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 14px; }
+.annotation-followup label { display: block; width: 100%; }
+.annotation-followup textarea { display: block; width: 100%; min-height: 72px; margin-top: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--canvas); color: var(--ink); resize: vertical; font: inherit; }
+.annotation-review-panel { margin: 12px 0; padding: 12px 0; border-block: 1px solid var(--line); line-height: 1.7; }
+.annotation-review-actions { display: flex; gap: 8px; margin: 10px 0; }
+.annotation-fallback { margin: 10px 0; }
+.annotation-fallback button { width: 100%; text-align: left; line-height: 1.6; }

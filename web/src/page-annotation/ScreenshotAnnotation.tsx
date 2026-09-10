@@ -9,7 +9,8 @@ import { exportScreenshot, loadScreenshot } from "./image.ts";
 import { screenshotReplyText, type AnnotationImage, type AnnotationReply, type ScreenshotCandidate, type ScreenshotDraft } from "./model.ts";
 import "./annotation.css";
 
-export function ScreenshotAnnotation({ taskId, candidates, disabled, queueing, executorLabel, onSend }: {
+export function ScreenshotAnnotation({ taskId, candidates, disabled, queueing, executorLabel, onSend, triggerLabel }: {
+  triggerLabel?: string;
   taskId: string;
   candidates: ScreenshotCandidate[];
   disabled: boolean;
@@ -94,7 +95,7 @@ export function ScreenshotAnnotation({ taskId, candidates, disabled, queueing, e
   return (
     <>
       <button className="screenshot-annotation-trigger" ref={triggerRef} type="button" disabled={disabled} onClick={() => setOpen(true)}>
-        <PencilSimple size={15} />{draft ? "继续批注" : "截图批注"}
+        <PencilSimple size={15} />{triggerLabel ?? (draft ? "继续批注" : "截图批注")}
       </button>
       {open && <AnnotationDialog busy={busy} onClose={close} onPaste={(event) => {
         if (draft || busy || disabled) return;

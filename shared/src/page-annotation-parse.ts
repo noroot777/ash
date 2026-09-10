@@ -19,6 +19,12 @@ const element = (value: unknown): value is PreviewElementCard => object(value)
 
 export function parsePreviewMessage(value: unknown): PreviewAnnotationEvent | null {
   if (!object(value)) return null;
+  if (value.type === "match" && object(value.match)) {
+    const m = value.match;
+    return text(m.id, 160) && text(m.requestId, 160) && typeof m.reliable === "boolean"
+      && number(m.score) && m.score >= 0 && m.score <= 1 && text(m.reason, 300)
+      && (m.element === null || element(m.element)) && (!m.reliable || m.element !== null) ? value as PreviewAnnotationEvent : null;
+  }
   if ((value.type === "ready" || value.type === "context") && context(value.context)) return value as PreviewAnnotationEvent;
   if (value.type === "image" && text(value.id, 160) && object(value.image) && number(value.image.capturedAt)
     && (value.image.dataUrl === undefined || (text(value.image.dataUrl, 2_800_000) && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(value.image.dataUrl)))

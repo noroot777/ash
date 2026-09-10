@@ -3,9 +3,9 @@ import type { AnnotationBatch, AnnotationBatchRecord } from "@ash/shared/page-an
 import { annotationBatchPrompt } from "@ash/shared/page-annotation-batch";
 import { db, dbClient } from "./db/index.js";
 import { pageAnnotationBatches as batches } from "./db/schema-page-annotation.js";
-import { scheduledMessages, tasks } from "./db/schema.js";
+import { scheduledMessages } from "./db/schema.js";
 import { pendingMessageRow, publishPendingMessages } from "./pending-messages.js";
-import { isRunning, isTurnClaimed } from "./runs.js";
+import { annotationReviewStatus, readAnnotationReview } from "./page-annotation-review.js";
 import { now } from "./util.js";
 
 type Row = typeof batches.$inferSelect;
@@ -17,16 +17,15 @@ async function view(row: Row): Promise<AnnotationBatchRecord> {
   if (!row.messageId) return record;
   const message = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, row.messageId)))[0];
   if (!message || message.status === "canceled") {
+    record.review = await readAnnotationReview(row.id);
     record.error = "投递未完成或已取消；批注草稿仍保留。可复制为新批次后重新确认发送。";
     return record;
   }
   record.state = message.status === "sent" ? "modifying" : "delivered";
   if (message.status === "sent") {
-    const task = (await db.select().from(tasks).where(eq(tasks.id, row.taskId)))[0];
-    const pending = await db.select({ id: scheduledMessages.id }).from(scheduledMessages)
-      .where(and(eq(scheduledMessages.taskId, row.taskId), eq(scheduledMessages.status, "pending"))).limit(1);
-    if (task && task.status !== "running" && task.status !== "queued" && !isTurnClaimed(row.taskId)
-      && (task.mode === "team" || !isRunning(row.taskId)) && !pending.length) record.state = "reviewable";
+    const status = await annotationReviewStatus(row.taskId);
+    if (status.canReopen) record.state = "reviewable";
+    record.review = await readAnnotationReview(row.id, status.canReopen ? status.taskStatus : undefined);
   }
   return record;
 }

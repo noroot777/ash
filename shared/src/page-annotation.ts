@@ -1,3 +1,5 @@
+import type { AnnotationMatch } from "./page-annotation-review.ts";
+
 export const PREVIEW_ANNOTATION_PROTOCOL = "ash-preview-annotation-v1";
 
 export type PreviewAnnotationMode = "browse" | "annotate";
@@ -40,6 +42,8 @@ export interface PreviewPageImage {
 
 export type PreviewAnnotationCommand =
   | { type: "configure"; mode: PreviewAnnotationMode; tool: PreviewAnnotationTool }
+  | { type: "locate"; annotation: PreviewAnnotation; requestId: string }
+  | { type: "clear-review" }
   | { type: "parent" }
   | { type: "focus"; id: string }
   | { type: "remove"; id: string }
@@ -47,6 +51,7 @@ export type PreviewAnnotationCommand =
   | { type: "disconnect" };
 
 export type PreviewAnnotationEvent =
+  | { type: "match"; match: AnnotationMatch }
   | { type: "ready"; context: PreviewPageContext }
   | { type: "configured"; mode: PreviewAnnotationMode; tool: PreviewAnnotationTool }
   | { type: "context"; context: PreviewPageContext }

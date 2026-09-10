@@ -121,6 +121,10 @@
     "./page-annotation-parse": {
       "types": "./src/page-annotation-parse.ts",
       "default": "./src/page-annotation-parse.ts"
+    },
+    "./page-annotation-review": {
+      "types": "./src/page-annotation-review.ts",
+      "default": "./src/page-annotation-review.ts"
     }
   },
   "scripts": {

@@ -1,3 +1,4 @@
+import type { AnnotationReview } from "./page-annotation-review.ts";
 import type { PreviewAnnotation } from "./page-annotation.ts";
 import { parsePreviewMessage } from "./page-annotation-parse.ts";
 
@@ -33,6 +34,7 @@ export interface AnnotationBatchRecord {
   savedAt: string;
   deliveredAt: string | null;
   error: string | null;
+  review?: AnnotationReview;
 }
 export const evidenceLabels: Record<AnnotationImageSource, string> = {
   "page-render": "页面转图（尽力而为）",

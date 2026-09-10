@@ -5,6 +5,8 @@ import { pageImageMissing, parseAnnotationBatch } from "@ash/shared/page-annotat
 import { api } from "../lib/api.ts";
 import { json, request } from "../lib/apiClient.ts";
 import { readImageData } from "../page-annotation/image.ts";
+import { useServerEvents } from "../lib/events.ts";
+import { annotationFollowup, mergeAnnotationRecord } from "./annotationFollowup.ts";
 import { createClientId } from "../lib/clientId.ts";
 
 const uid = createClientId;
@@ -21,8 +23,18 @@ export function useAnnotationBatch(taskId: string) {
   const uploads = useRef(new Set<string>());
   const mounted = useRef(true);
   const tail = useRef<Promise<unknown>>(Promise.resolve());
+  const refreshRef = useRef<() => void>(() => {});
+  const eventVersion = useRef(0);
+  useServerEvents((event) => {
+    if ("taskId" in event && event.taskId === taskId && ["task.pendingMessages", "task.status"].includes(event.type)) {
+      eventVersion.current++;
+      setRecords((list) => list.map((r) => r.state === "reviewable" ? { ...r, state: "modifying" } : r));
+      refreshRef.current();
+    }
+  });
   const key = `ash.annotation-batch.${taskId}`;
   const remember = (record: AnnotationBatchRecord) => {
+    if (record.batch.taskId !== taskId) return;
     cache.current.set(record.batch.id, record);
     if (mounted.current) setRecords((list) => [record, ...list.filter((r) => r.batch.id !== record.batch.id)]);
   };
@@ -52,35 +64,36 @@ export function useAnnotationBatch(taskId: string) {
   };
   useEffect(() => {
     mounted.current = true;
-    let polling = false;
-    const load = async (initial = false) => {
+    let polling = false, initialized = false, active = true;
+    const load = async () => {
       if (polling) return;
       polling = true;
+      const version = eventVersion.current;
       try {
         const list = await request<AnnotationBatchRecord[]>(`/tasks/${encodeURIComponent(taskId)}/annotation-batches`);
-        if (!mounted.current) return;
-        const phases = { saved: 0, delivered: 1, modifying: 2, reviewable: 3 };
+        if (!active || version !== eventVersion.current) return;
         const merged = list.map((record) => {
           const known = cache.current.get(record.batch.id);
-          if (known && (known.revision > record.revision || (known.messageId && !record.messageId)
-            || (known.messageId && !record.error && phases[known.state] > phases[record.state]))) return known;
+          const merged = mergeAnnotationRecord(known, record);
+          if (merged !== record) return merged;
           if (!known || record.messageId || (record.batch.id !== current.current?.id && record.revision >= known.revision)) cache.current.set(record.batch.id, record);
           return record;
         });
         setRecords(merged);
-        if (initial) {
+        if (!initialized) {
           let local: AnnotationBatch | null = null;
-          try { local = parseAnnotationBatch(JSON.parse(localStorage.getItem(key) ?? "null")); } catch { /* No local draft. */ }
+          try { local = parseAnnotationBatch(JSON.parse(localStorage.getItem(key) ?? "null")); if (local.taskId !== taskId) local = null; } catch { /* No local draft. */ }
           const remote = local && list.find((r) => r.batch.id === local.id);
           update(remote?.messageId ? remote.batch : local ?? list.find((r) => !r.messageId)?.batch ?? list[0]?.batch ?? null);
-          setLoaded(true);
+          initialized = true; setLoaded(true);
         }
       } catch (reason) { if (mounted.current) setError(String(reason)); }
       finally { polling = false; }
     };
-    void load(true);
-    const timer = window.setInterval(() => void load(!current.current && !cache.current.size), 2500);
-    return () => { mounted.current = false; window.clearInterval(timer); };
+    refreshRef.current = () => void load();
+    void load();
+    const timer = window.setInterval(() => void load(), 2500);
+    return () => { active = false; mounted.current = false; refreshRef.current = () => {}; window.clearInterval(timer); };
   }, [taskId]);
   useEffect(() => {
     if (!loaded || !batch || frozen.current) return;
@@ -158,7 +171,17 @@ export function useAnnotationBatch(taskId: string) {
     catch (reason) { setError(`请先保存当前草稿：${String(reason)}`); }
     finally { setBusy(false); }
   };
-  return { batch, record, records, loaded, busy, locked, review, error, receive, pageImage, paste, send,
+  return { batch, record, records, loaded, busy, locked, review, error, receive, pageImage, paste, send, remember,
+    followup: async (source: AnnotationBatch, item: AnnotationDraft, comment: string) => {
+      if (source.taskId !== taskId || !comment.trim() || busy || review) return false;
+      setBusy(true); frozen.current = true;
+      try {
+        await save();
+        const next = annotationFollowup(source, item, comment.trim(), uid());
+        update(next); await save(next); setError(""); return true;
+      } catch (reason) { setError(`新批次保存失败，草稿保留：${String(reason)}`); return false; }
+      finally { setBusy(false); }
+    },
     preview: () => { if (!locked && batch?.items.length) { frozen.current = true; setReview(true); } },
     cancelReview: () => { if (!busy) { setReview(false); frozen.current = false; } },
     select: (record: AnnotationBatchRecord) => select(record.batch),

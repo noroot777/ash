@@ -20,5 +20,12 @@ export async function ensurePageAnnotationSchema(client: Client): Promise<void> 
       saved_at TEXT NOT NULL, delivered_at TEXT
     );
     CREATE INDEX IF NOT EXISTS page_annotation_batches_task ON page_annotation_batches(task_id);
+    CREATE TABLE IF NOT EXISTS page_annotation_rounds (
+      batch_id TEXT PRIMARY KEY, released_at TEXT NOT NULL, round_status TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS page_annotation_decisions (
+      batch_id TEXT NOT NULL, item_id TEXT NOT NULL, verdict TEXT NOT NULL,
+      saved_at TEXT NOT NULL, gen TEXT NOT NULL, PRIMARY KEY(batch_id, item_id)
+    );
   `);
 }

@@ -88,6 +88,7 @@ class TestElement extends TestNode {
   get clientHeight() { return 100; }
   get clientWidth() { return 100; }
   scrollBy({ top, left }: { top: number; left: number }) { this.scrollY += top; this.scrollX += left; }
+  scrollIntoView() {}
   setPointerCapture() {}
   releasePointerCapture() {}
   getAttribute(key: string) { return this.attrs.get(key) ?? null; }
@@ -129,7 +130,8 @@ const window = Object.assign(new TestTarget(), { parent, scrollX: 0, scrollY: 0,
 });
 const location = { pathname: '/preview/test/PRIVATE_PREVIEW_TOKEN/web/home', hash: '#section?token=hash-secret' };
 const context = vm.createContext({ window, document: { documentElement: root, createElement: (tag: string) => new TestHtml(tag),
-  createElementNS: (_ns: string, tag: string) => new TestElement(tag), elementFromPoint: () => hit },
+  createElementNS: (_ns: string, tag: string) => new TestElement(tag), elementFromPoint: () => hit,
+  querySelectorAll: (selector: string) => selector.includes('delete-button') || selector.includes('button') ? [button] : [] },
   EventTarget: TestTarget, Event: TestEvent, Node: TestNode, Element: TestElement, HTMLElement: TestHtml,
   ShadowRoot: TestNode,
   CSSStyleDeclaration: TestStyle, MessagePort: TestPort, CSS: { escape: (value: string) => value },
@@ -166,6 +168,7 @@ assert.equal(annotations().at(-1)?.number, 7);
 command({ type: 'parent' });
 assert.equal(annotations().at(-1)?.element?.tag, 'button');
 assert.equal(annotations().at(-1)?.element?.text, 'Delete');
+const oldButton = structuredClone(annotations().at(-1)!);
 const firstId = annotations()[0].id;
 assert.equal(annotations().at(-1)?.id, firstId, 'selecting parent updates the same annotation');
 command({ type: 'parent' });
@@ -200,6 +203,25 @@ assert.equal(reported?.context.route, '/next#section');
 assert.equal(reported?.context.scroll.y, 130);
 assert.equal(reported?.context.viewport.width, 800);
 for (const draw of frames.splice(0)) draw();
+location.pathname = '/preview/test/PRIVATE_PREVIEW_TOKEN/web/home';
+window.innerWidth = 1000; window.scrollY = 130;
+button.box = { x: 20, y: -90, width: 120, height: 30 };
+command({ type: 'clear' });
+command({ type: 'locate', annotation: oldButton, requestId: 'review-request' });
+const match = port.messages.map(parsePreviewMessage).filter((event) => event?.type === 'match').at(-1);
+assert(match?.match.reliable, JSON.stringify(port.messages.slice(-5)));
+assert.equal(match.match.element?.rect.y, -90, 'review uses live bounds after scrolling');
+window.fire('click'); assert.equal(pageClicks, 0, 'locating and reviewing do not activate the target');
+for (const draw of frames.splice(0)) draw();
+const overlay = root.nodes.at(-1) as TestHtml;
+const surface = overlay.shadow?.nodes.at(-1);
+assert(surface?.nodes.some((node) => (node as TestElement).attrs.get('y') === '-90'), 'highlight follows current bounds');
+label.content = 'Remove everything';
+command({ type: 'locate', annotation: oldButton, requestId: 'reused-selector' });
+const missing = port.messages.map(parsePreviewMessage).filter((event) => event?.type === 'match').at(-1);
+assert.equal(missing?.match.reliable, false, 'reused selector with different text falls back to the original record');
+for (const draw of frames.splice(0)) draw();
+assert.equal(surface?.nodes.length, 0, 'unreliable matches never draw old coordinates');
 command({ type: 'configure', mode: 'browse', tool: 'element' });
 assert.equal(window.fire('click').defaultPrevented, false);
 assert.equal(pageClicks, 1);
