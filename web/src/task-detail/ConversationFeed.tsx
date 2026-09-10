@@ -32,6 +32,8 @@ import {
 } from "./systemNoticeModel.ts";
 import { type TurnRetryTarget, turnRetryTarget } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
+import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "./QuestionHistory.tsx";
+import type { QuestionRecord } from "@ash/shared/questions";
 
 // 审查者的身份标：这一回合不是在做需求，是在验收刚才的产物。就地验证跑在被验任务
 // 自己的会话里（常常还是同一个执行器），不标出来的话它跟上一条实现回合长得一模一样。
@@ -134,6 +136,7 @@ function UserMessage({
   preserveSystemStyle?: boolean;
 }) {
   const parsed = parseAttachmentText(item.text);
+  if (item.isAnswer) return <AnsweredQuestionMessage text={item.text} id={item.id} at={item.at} />;
   const paths = [...parsed.paths, ...item.attachments];
   const bySystem = !!item.bySystem;
   const reviewPrompt = isReviewSystemPrompt(item.text);
@@ -169,6 +172,7 @@ export function ConversationFeed({
   reviewRetryable,
   reviews,
   systemNoticeMode,
+  questionHistory,
 }: {
   task: TaskListItem;
   items: ConversationItem[];
@@ -186,6 +190,7 @@ export function ConversationFeed({
   reviews?: readonly FreeReviewRun[] | null;
   /** 比较系统提示方案时覆盖 URL 模式；普通任务不传。 */
   systemNoticeMode?: SystemNoticeMode;
+  questionHistory?: QuestionRecord[];
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const activityPhase = runActivityPhase(task.status, runActivityTail(items));
@@ -262,6 +267,8 @@ export function ConversationFeed({
   };
 
   return (
+    <QuestionHistoryProvider key={task.id} taskId={task.id} history={questionHistory}
+      messages={items.flatMap((item) => item.kind === "user" ? [item] : [])}>
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region task-conversation-wrap">
         {modeFromUrl && <SystemNoticeModeSwitch mode={noticeMode} search={search} />}
@@ -298,10 +305,12 @@ export function ConversationFeed({
           )}
           {loading && !items.length && <p className="task-conversation-note">正在读取会话…</p>}
           {error && <p className="task-conversation-error">{error.message}</p>}
+          <QuestionHistoryRemainder messages={items.flatMap((item) => item.kind === "user" ? [item.text] : [])} />
           {footer}
         </div>
         <ConversationScrollControls scrollRef={scroll} resetKey={task.id} />
       </div>
     </ImagePreviewGroup>
+    </QuestionHistoryProvider>
   );
 }

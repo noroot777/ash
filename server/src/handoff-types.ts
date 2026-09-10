@@ -224,6 +224,7 @@ export interface HandoffManifest {
     question: string | null;
     questionOptions: string | null;
     questionItems: string | null;
+    questionHistory?: string | null;
     // 统一验收合并的落账三件套。老版本导出的 manifest 没有这三个字段,导入侧按缺失
     // 处理(置 null),所以新旧两端可以互相接力。
     // 不带 acceptedTailPending/acceptedTailDone:那两列是**尾段崩溃续跑**的进度位,

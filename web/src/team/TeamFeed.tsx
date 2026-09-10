@@ -13,6 +13,7 @@ import { MessageFooter } from "../components/MessageFooter.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
+import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "../task-detail/QuestionHistory.tsx";
 import { SystemAuthoredMessage, SystemBoundary, SystemEventNote, SystemNoticeModeSwitch } from "../task-detail/SystemNotice.tsx";
 import {
   INITIAL_SYSTEM_NOTICE_MODE,
@@ -60,6 +61,7 @@ function AgentRow({
 
 function UserRow({ row, noticeMode }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"]; noticeMode: SystemNoticeMode }) {
   if (row.kind !== "user") return null;
+  if (row.isAnswer) return <AnsweredQuestionMessage text={row.text} id={row.id} at={row.at} />;
   const parsed = parseAttachmentText(row.text);
   const paths = [...parsed.paths, ...row.attachments];
   const bySystem = !!row.bySystem;
@@ -205,6 +207,8 @@ export function TeamFeed({
     runActivityTail(rows.map((row) => (row.kind === "conv" ? row.item : { kind: "batch" }))),
   );
   return (
+    <QuestionHistoryProvider key={task.id} taskId={task.id}
+      messages={rows.flatMap((row) => row.kind === "conv" && row.item.kind === "user" ? [row.item] : [])}>
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region">
         <section className={`team-feed system-notice-mode-${noticeMode}`} aria-label="团队调度流" ref={scroll}>
@@ -242,10 +246,12 @@ export function TeamFeed({
             }
             return <SystemEventNote item={item} mode={noticeMode} key={row.key} />;
           })}
+          <QuestionHistoryRemainder messages={rows.flatMap((row) => row.kind === "conv" && row.item.kind === "user" ? [row.item.text] : [])} />
           {activityPhase && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} executor={teamLeadLabel(task)} queuePosition={task.queuePosition} />}
         </section>
         <ConversationScrollControls scrollRef={scroll} resetKey={task.id} />
       </div>
     </ImagePreviewGroup>
+    </QuestionHistoryProvider>
   );
 }

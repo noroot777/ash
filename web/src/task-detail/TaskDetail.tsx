@@ -487,8 +487,8 @@ export function TaskDetail({
                     footer={task.question ? (
                       <QuestionCard
                         task={task}
-                        onAnswer={async (answer) => {
-                          await api.answerTask(task.id, answer);
+                        onAnswer={async (answer, input) => {
+                          await api.answerTask(task.id, answer, input);
                           notify("已发送答复，任务正在续跑");
                         }}
                       />

@@ -288,8 +288,8 @@ export const api = {
     request(`/tasks/${id(taskId)}/archive`, { method: "POST" }),
   unarchiveTask: (taskId: string): Promise<Task> =>
     request(`/tasks/${id(taskId)}/unarchive`, { method: "POST" }),
-  answerTask: (taskId: string, answer: string): Promise<unknown> =>
-    request(`/tasks/${id(taskId)}/answer`, json("POST", { answer })),
+  answerTask: (taskId: string, answer: string, input?: import("@ash/shared/questions").QuestionAnswerInput): Promise<unknown> =>
+    request(`/tasks/${id(taskId)}/answer`, json("POST", { answer, ...input })),
   replyTask: (
     taskId: string,
     text: string,
