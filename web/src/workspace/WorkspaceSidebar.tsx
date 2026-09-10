@@ -104,7 +104,12 @@ export function WorkspaceSidebar({
   const tipProps = (kind: typeof tipKind) => ({
     onMouseEnter: (event: MouseEvent<Element>) => { setHoveredKind(kind); hoverTip.anchorProps.onMouseEnter(event); },
     onMouseLeave: hoverTip.hide,
-    onFocus: (event: FocusEvent<Element>) => { setFocusedKind(kind); focusTip.anchorProps.onFocus(event); },
+    onPointerDown: focusTip.hide,
+    onFocus: (event: FocusEvent<Element>) => {
+      if (!event.currentTarget.matches(":focus-visible")) { focusTip.hide(); return; }
+      setFocusedKind(kind);
+      focusTip.anchorProps.onFocus(event);
+    },
     onBlur: focusTip.hide,
   });
   const tipContent = tipKind === "connection" ? connectionLabel : "ash 助手";

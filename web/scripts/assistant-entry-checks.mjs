@@ -170,10 +170,33 @@ export async function checkAssistantEntry(page, fixtureUrl) {
     && expandedTip.x <= expandedAnchor.x + expandedAnchor.width / 2
     && expandedTip.x + expandedTip.width >= expandedAnchor.x + expandedAnchor.width / 2,
   `expanded connection tooltip stays attached to its dot: ${JSON.stringify({ expandedAnchor, expandedTip })}`);
-  await footerAssistant.focus();
-  await page.keyboard.press("Shift+Tab");
+  await connection.click();
+  await page.locator(".workspace-main").hover();
+  await page.getByRole("tooltip").waitFor({ state: "detached" });
+  await page.keyboard.press("f");
+  await page.locator(".workspace-sidebar.is-spread-open").waitFor();
+  assert.equal(await page.getByRole("tooltip").count(), 0, "spread view has no tooltip left by a mouse-clicked connection");
+  await page.keyboard.press("Escape");
+  await page.locator(".workspace-sidebar.is-spread").waitFor({ state: "detached" });
+  const tabTo = async (target, label) => {
+    for (let index = 0; index < 60; index += 1) {
+      await page.keyboard.press("Tab");
+      if (await target.evaluate(node => document.activeElement === node)) return;
+    }
+    assert.fail(`keyboard Tab traversal did not reach ${label}`);
+  };
+  await page.locator(".workspace-main").click();
+  await tabTo(connection, "the connection status");
   assert.equal(await connection.evaluate(node => document.activeElement === node), true,
-    "Shift+Tab from assistant reaches the connection status");
+    "keyboard Tab traversal reaches the connection status");
+  await connectionTip.waitFor();
+  await connection.click();
+  await page.locator(".workspace-main").hover();
+  await page.getByRole("tooltip").waitFor({ state: "detached" });
+  assert.equal(await connection.evaluate(node => document.activeElement === node), true,
+    "mouse click keeps the already keyboard-focused connection active without pinning its tooltip");
+  await page.locator(".workspace-main").click();
+  await tabTo(connection, "the connection status");
   await connectionTip.waitFor();
   const focusGeometry = await connection.evaluate(node => {
     const footer = node.closest(".workspace-sidebar-bottom");
@@ -210,7 +233,7 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   assert.equal(await page.getByRole("tooltip").count(), 1, "connection focus tooltip returns after leaving assistant");
   await page.locator(".workspace-main").click();
   await page.getByRole("tooltip").waitFor({ state: "detached" });
-  await footerAssistant.focus();
+  await tabTo(footerAssistant, "the assistant entry");
   await page.getByRole("tooltip").filter({ hasText: "ash 助手" }).waitFor();
   tip = await page.getByRole("tooltip").filter({ hasText: "ash 助手" }).boundingBox();
   assert.ok(tip && tip.y >= 0, "focus tooltip stays above the footer without clipping");
@@ -330,6 +353,9 @@ export async function checkAssistantEntry(page, fixtureUrl) {
     && collapsedTip.x <= collapsedAnchor.x + collapsedAnchor.width / 2
     && collapsedTip.x + collapsedTip.width >= collapsedAnchor.x + collapsedAnchor.width / 2,
   `collapsed connection tooltip stays attached to its dot: ${JSON.stringify({ collapsedAnchor, collapsedTip })}`);
+  await collapsedConnection.click();
+  await page.locator(".workspace-main").hover();
+  await page.getByRole("tooltip").waitFor({ state: "detached" });
   const collapsedAssistant = collapsed.getByRole("button", { name: "ash 助手" });
   await collapsedAssistant.click();
   await page.getByRole("region", { name: "ash 助手" }).waitFor();
