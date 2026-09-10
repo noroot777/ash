@@ -41,6 +41,10 @@ writeFileSync(join(fixture, "service.cjs"), `
 const http = require('node:http');
 const {createHash} = require('node:crypto');
 let lastPageAuth = null;
+// scripts/dev.mjs 的 frontend 档打的就是这句：「我的 /api 打到那台 ash 上」。
+// 反代只认这句自述（见 preview-log.ts 的 declaredHostApiPort），不认启动方式。
+const announce = process.argv[process.argv.indexOf('--host-api') + 1];
+if (process.argv.includes('--host-api')) console.log('[ash] preview-api-host ' + announce);
 const html = '<!doctype html><html><head><link rel="stylesheet" href="/style.css"></head><body><h1>Proxy test</h1><p id="module">waiting</p><p id="api">waiting</p><p id="sse">waiting</p><p id="ws">waiting</p><p id="slash">waiting</p><p id="isolation">waiting</p><a href="/nested/">Nested page</a><script type="module" src="/entry.js"></script></body></html>';
 const source = 'import message from "/chunk.js"; document.querySelector("#module").textContent=message; const slash="/"; document.querySelector("#slash").textContent=slash; fetch("/echo",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({ok:true})}).then(r=>r.json()).then(r=>document.querySelector("#api").textContent=r.body); const es=new EventSource("/events"); es.onmessage=e=>{document.querySelector("#sse").textContent=e.data;es.close()};const ws=new WebSocket("ws://"+location.host+"/socket");ws.onmessage=e=>{document.querySelector("#ws").textContent=e.data;ws.close()};try{localStorage.setItem("ash-probe","1");document.querySelector("#isolation").textContent=localStorage.length===1?"shimmed":"shared"}catch{document.querySelector("#isolation").textContent="throws"}';
 const server=http.createServer((req,res)=>{
@@ -500,44 +504,83 @@ try {
     assert.equal(memberOpen.status, 302);
     const memberGateway = memberOpen.headers.get("location")!;
     assert.equal((await request(memberGateway)).status, 200);
-    // A 档（用户 2026-09-10 拍板）：被预览的就是**这台 ash 自己的仓库**、而且是「只启动前端」
-    // 那一档时，代理替你带上登录态，省掉「在预览页里粘一次 key」——那才是这条链上最危险的
-    // 一步（key 是长期凭证、能外带）。
+    // A 档（用户 2026-09-10 拍板）：被预览的就是**这台 ash 自己的仓库**、而且被预览的服务
+    // 自己说了「我的 /api 打到那台 ash 上」时，代理替你带上登录态，省掉「在预览页里粘一次
+    // key」——那才是这条链上最危险的一步（key 是长期凭证、能外带）。
     //
-    // 关键在于**这条会话只走 `/api` 那一跳、直连本机 ash**：被预览的服务在这一档里是任务分支
-    // 自己启动的 dev server，它收得到这条 cookie 就等于交出一份可外带的凭证——分支里加个中间件
-    // 记下来，就能脱离预览直接登进 ash（第 1 轮审查 P1）。缘由在 preview-access.ts 顶部。
+    // 两件事各钉一遍：
+    // ① 会话**只走 /api 那一跳、直连本机 ash**。被预览的服务在这一档里是任务分支自己启动的
+    //    dev server，它收得到这条 cookie 就等于交出一份可外带的凭证（第 1 轮审查 P1）。
+    // ② **凭据只能是那句自述**，不能是启动方式：自由工作流对任意脚本和多服务配置一律写死
+    //    `frontend`，照它判就会把「前端 + 分支后端」的 /api 静默改接到主 ash 上——用户以为
+    //    在验分支后端，实际是拿自己的身份读写主库（第 2 轮审查 P1）。
+    // 缘由在 preview-access.ts 顶部。
     {
       const { REPO_DIR } = await import("../src/paths.js");
-      const laneOf = async (page: Response) => /src="(\/preview\/preview-task\/[a-f0-9]{48}\/web\/)entry.js"/.exec(await page.text())![1];
+      const laneOf = async (taskId: string, page: Response) =>
+        new RegExp(`src="(/preview/${taskId}/[a-f0-9]{48}/[a-z0-9-]+/)entry.js"`).exec(await page.text())![1];
       // 两个探针一起看才说明问题：`/whoami` 是上游夹具照实回它收到的 Cookie 头；`/api/projects`
       // 只有真的接到本机 ash 上才答得出项目列表，接在夹具上就是那页 HTML。
       const apiBody = async (lane: string) => await (await request(lane + "api/projects")).text();
-      const opened = async () => {
-        const location = (await request(state.url, "GET", undefined, memberHeaders)).headers.get("location")!;
-        const lane = await laneOf(await navigate(location));
+      const opened = async (taskId = "preview-task") => {
+        const location = (await request(previewState(taskId).url!, "GET", undefined, memberHeaders)).headers.get("location")!;
+        const lane = await laneOf(taskId, await navigate(location));
         return {
           location, lane,
           upstream: (await (await request(lane + "whoami")).json()).cookie as string | null,
           api: await apiBody(lane),
         };
       };
-      const other = await opened();
+      // 起一趟预览，命令自述打给谁（每个服务一个：null = 什么都不说）。`--host-api` 那段由
+      // 夹具原样打进日志，正是 scripts/dev.mjs 的 frontend 档打的那句。
+      const here = `127.0.0.1:${address.port}`;
+      const probe = async (taskId: string, announces: (string | null)[], expected: number | null) => {
+        await db.insert(tasks).values({ id: taskId, projectId: "preview-project", title: taskId, status: "done", workflowMode: "free", mode: "single", useWorktree: false, createdAt: stamp, updatedAt: stamp });
+        const services = announces.map((announce, i) => ({
+          id: `s${i}`, name: `服务${i}`, kind: "web" as const, enabled: true,
+          command: command + (announce === null ? "" : ` --host-api ${announce}`),
+        }));
+        const started = await startPreview(taskId, { id: "probe", kind: "preview", p: { cmd: services[0].command, mode: "frontend", ready: "port", life: "task" }, fail: null }, fixture, undefined, {
+          proxy: true, primaryServiceId: "s0", services,
+        });
+        assert(started.ok, started.ok ? "" : started.reason);
+        assert.equal(readPreview(taskId)!.hostApi ?? null, expected, `${taskId}：记下来的自述`);
+      };
+      await probe("solo-task", [here], address.port);
+      await probe("mute-task", [null], null);
+      await probe("liar-task", [`127.0.0.1:${address.port === 65001 ? 65002 : 65001}`], null);
+      // 两个服务里「谁在说」本来就分不清，而「前端 + 分支后端」那种组合的 /api 按定义就该是
+      // 分支自己的——所以哪怕两个都照着说，也一律不认。
+      await probe("duo-task", [here, here], null);
+      assert.equal(readPreview("preview-task")!.hostApi ?? null, null, "配置里选了两个服务的那趟，同样没有自述");
+      const other = await opened("solo-task");
       assert.equal(other.upstream, null, "别的项目的预览，一条 ash 会话都不许带进去");
       assert.match(other.api, /Proxy test/, "别的项目的 /api 是它自己的，不许接到本机 ash 上");
       await db.update(projects).set({ repoPath: REPO_DIR }).where(eq(projects.id, "preview-project"));
       try {
-        const own = await opened();
+        const own = await opened("solo-task");
         assert.match(own.api, /"id":"preview-project"/, "预览这台 ash 自己时，/api 那一跳直连本机 ash 并带着你的会话");
         assert.equal(own.upstream, null, "会话绝不能落到被预览的服务手上——那是任务分支自己启动的 dev server");
         assert.match(await apiBody(own.location), /needsAuth/, "地址栏那条道上的 /api 接着 ash，但一样借不到会话");
         const forked = (await navigate(own.location)).headers.get("location")!;
-        const strangerLane = await laneOf(await navigate(forked));
+        const strangerLane = await laneOf("solo-task", await navigate(forked));
         assert.match(await apiBody(strangerLane), /Proxy test/, "地址被复制走：分叉出去的那份连这条路都没有");
+        // 同一个仓库、同一份「只起前端」的意图（mode 一律写死 frontend），差别只在那句自述。
+        // 这四条钉的是第 2 轮审查 P1：能开这条路的只有自述，不是启动方式。
+        assert.match((await opened("preview-task")).api, /Proxy test/, "前端 + 分支后端两个服务：/api 是分支自己的，不许被主 ash 截走");
+        assert.match((await opened("duo-task")).api, /Proxy test/, "两个服务都照着说也不认");
+        assert.match((await opened("mute-task")).api, /Proxy test/, "没说过那句话的自定义脚本：/api 照旧走它自己");
+        assert.match((await opened("liar-task")).api, /Proxy test/, "自述的端口不是我们绑着的那个：不认");
+        // 记录是上一次启动时写的，ash 重启后可能换了端口 —— 那个数就不再作数了。
+        recordListeningPort(address.port === 65500 ? 65501 : 65500);
+        try {
+          assert.match((await opened("solo-task")).api, /Proxy test/, "ash 换了监听端口：记录里那个数不再作数");
+        } finally { recordListeningPort(address.port); }
       } finally {
         await db.update(projects).set({ repoPath: fixture }).where(eq(projects.id, "preview-project"));
       }
-      assert.match((await opened()).api, /Proxy test/, "换回别的仓库就不再接");
+      assert.match((await opened("solo-task")).api, /Proxy test/, "换回别的仓库就不再接");
+      for (const taskId of ["solo-task", "mute-task", "liar-task", "duo-task"]) await stopPreview(taskId, null);
     }
     await deleteSession(memberHeaders.cookie.slice(SESSION_COOKIE.length + 1));
     assert.equal((await request(memberGateway)).status, 404, "退出登录后旧预览凭证失效");

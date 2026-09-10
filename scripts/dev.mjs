@@ -61,9 +61,16 @@ function webDevArgs(webPort) {
 
 function startFrontendOnly(webPort) {
   const proxy = process.env.ASH_PROXY ?? "http://127.0.0.1:4317";
+  const target = proxy.replace(/^https?:\/\//, "");
   // 打这一行时把 scheme 去掉，理由跟下面转发后端日志时一样：ash 会从预览日志里认地址，
   // 前端那行还没打出来的那几秒里，这行是日志里唯一一个 `http://…`，会被当成预览本尊。
-  console.log(`[dev] 预览：只起前端 ${webPort}，/api 打到 ${proxy.replace(/^https?:\/\//, "")}`);
+  console.log(`[dev] 预览：只起前端 ${webPort}，/api 打到 ${target}`);
+  // 下面这行是**打给 ash 看的回话**：它给我们递了 ASH_PREVIEW_MODE=frontend，这句是我们
+  // 确认「照做了，我的 /api 确实打到那台 ash 上」。只有收到这句，反代才会把 /api 那一跳
+  // 接回本机 ash 并替用户带上会话（判读在 server/src/preview-log.ts 的 declaredHostApiPort，
+  // 缘由在 server/src/preview-access.ts 顶部）。递过来的那个 env 本身不算数——任意项目脚本
+  // 都可以不理它。同样不带 scheme，理由同上一行。
+  console.log(`[ash] preview-api-host ${target}`);
   const web = spawn(NPM, webDevArgs(webPort), {
     cwd: REPO,
     stdio: "inherit",

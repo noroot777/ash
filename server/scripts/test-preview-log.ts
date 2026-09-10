@@ -13,7 +13,7 @@
 // 把用户领到**别人的服务**上去验收自己的改动。所以撞车判定排在就绪判定前面。
 //
 // 跑法：npm -w server run test:preview-log
-import { missingDepsHint, pickPreviewUrl, portConflict, portHint } from "../src/preview-log.js";
+import { declaredHostApiPort, missingDepsHint, pickPreviewUrl, portConflict, portHint } from "../src/preview-log.js";
 
 let failures = 0;
 function check(name: string, actual: unknown, expected: unknown) {
@@ -331,6 +331,28 @@ check(
   "着色的自述端口也认",
   pickPreviewUrl(`${ESC}[32mTomcat started on port 8080${ESC}[0m\n`, null)?.port,
   8080,
+);
+
+// 「我的 /api 打到那台 ash 上」这句自述是 A 档唯一的凭据（见 preview-access.ts 顶部）：
+// 它一旦被误认，用户以为在验分支后端、实际是拿自己的身份读写主库（第 2 轮审查 P1）。
+check("自述打给本机 ash", declaredHostApiPort("[ash] preview-api-host 127.0.0.1:4317\n"), 4317);
+check("localhost 也算回环", declaredHostApiPort("[ash] preview-api-host localhost:4317\n"), 4317);
+check("着色的自述照样认", declaredHostApiPort(`${ESC}[36m[ash] preview-api-host 127.0.0.1:4317${ESC}[0m\n`), 4317);
+check("没说过就是没说过", declaredHostApiPort("[dev] 预览：整套起——后端 5001、前端 5173\n"), null);
+check(
+  "说的不是回环地址，不认——反代无论如何只会拨回环",
+  declaredHostApiPort("[ash] preview-api-host evil.example.com:4317\n"),
+  null,
+);
+check(
+  "夹在别的话里也认得出（前端那行先打出来的情况）",
+  declaredHostApiPort("VITE ready in 300 ms\n[ash] preview-api-host 127.0.0.1:4317\nLocal: http://localhost:5173/\n"),
+  4317,
+);
+check(
+  "这句自述不能被当成预览本尊的地址",
+  pickPreviewUrl("[ash] preview-api-host 127.0.0.1:4317\n", null),
+  null,
 );
 
 console.log(failures ? `\n${failures} 条没过` : "\n全过");

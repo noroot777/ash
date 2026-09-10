@@ -8,10 +8,10 @@ import { RUNS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
 import { augmentedEnv, killByPid, withoutForeignNodeBins } from "./executors/spawn.js";
 import { prepareNodeDeps, removePreparedLinks, nodeDepsAdvice } from "./preview-deps.js";
-import { missingDepsHint, missingNodeBin, pickPreviewUrl, portConflict, portHint } from "./preview-log.js";
+import { missingDepsHint, missingNodeBin, pickPreviewUrl, portConflict, portHint, declaredHostApiPort } from "./preview-log.js";
 import { canConnect, ready } from "./preview-probe.js";
 import { freePorts, PORT_POOL, portEnv } from "./preview-ports.js";
-import { currentListeningPort } from "./listening-port.js";
+import { boundListeningPort, currentListeningPort } from "./listening-port.js";
 import { canceledGens } from "./preview-start-state.js";
 import { alive, archivePreview, patchStart, prunePreviewArtifacts, readAnyPreview, recordPath, tail, writeRecord, type PreviewStep, type PreviewResult, type PreviewServiceRecord } from "./preview-store.js";
 import { previewShell } from "./preview-shell.js";
@@ -59,7 +59,7 @@ export async function runPreview(
   writeFileSync(log, configs.length > 1 ? `启动 ${configs.length} 个预览服务\n` : banners[0]);
   services.forEach((s, i) => { if (s.log !== log) writeFileSync(s.log, banners[i]); });
   writeRecord({
-    taskId, cmd: step.p.cmd, pid: 0, url: null, port: null, life: step.p.life, mode: step.p.mode, startedAt: now(),
+    taskId, cmd: step.p.cmd, pid: 0, url: null, port: null, life: step.p.life, startedAt: now(),
     log, links: [], state: "starting", gen, installPid: null, services, primaryServiceId: primaryId, proxyToken,
   });
   prunePreviewArtifacts(taskId, gen);
@@ -123,11 +123,19 @@ export async function runPreview(
     // ash 自己绑的那个端口永远不是预览本尊（它就在上面跑着，别人绑不上）。日志里出现它
     // 只可能是命令在说「我的 /api 打到 ash 那边」——认了它，预览就指到 ash 自己身上。
     const self = currentListeningPort();
+    // 「我的 /api 打到那台 ash 上」这句自述（见 preview-log.ts 的 declaredHostApiPort）。
+    // 记下来只为一件事：反代据此把 `/api` 那一跳接回本机 ash 并替用户带上会话。
+    // 两道都不能少——说的端口得**正是我们此刻真绑着的那个**（`boundListeningPort` 确知才有
+    // 值，不猜），而且这一趟**只起了一个服务**：多服务里「谁在说」本来就分不清，而「前端 +
+    // 分支后端」那种组合的 `/api` 按定义就该是分支自己的。
+    const bound = boundListeningPort();
+    let hostApi: number | null = null;
     while (Date.now() < deadline) {
       await sleep(500);
       if (!ours()) return fail(CANCELED);
       for (const [i, s] of services.entries()) {
         const text = tail(s.log, banners[i]);
+        if (services.length === 1 && hostApi === null && bound !== null && declaredHostApiPort(text) === bound) hostApi = bound;
         if (text.includes("[ash] scheduler started")) return fail("这个分支的预览后端启动了真调度器，安全协议过旧，已立即回收。请先同步新版预览隔离逻辑。");
         if (errors.has(s.id) || !s.pid || !alive(s.pid)) {
           const deps = missingDepsHint(text, nodeDepsAdvice(cwd, s.cmd, missingNodeBin(text)), prepared.get(s.id) ?? []);
@@ -148,7 +156,7 @@ export async function runPreview(
       }
       if (services.every((s) => s.status === "ready")) {
         const primary = services.find((s) => s.id === primaryId)!;
-        const record = patchStart(taskId, gen, { state: "ready", services, pid: primary.pid, url: primary.url, port: primary.port, installPid: null, startedAt: now() });
+        const record = patchStart(taskId, gen, { state: "ready", services, hostApi, pid: primary.pid, url: primary.url, port: primary.port, installPid: null, startedAt: now() });
         if (!record || !ours()) return fail(CANCELED);
         return { ok: true, record };
       }

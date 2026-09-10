@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { PreviewLife, PreviewMode, WorkflowStep } from "@ash/shared/workflow";
+import type { PreviewLife, WorkflowStep } from "@ash/shared/workflow";
 import type { PreviewServiceState } from "@ash/shared/preview";
 import { RUNS_DIR } from "./paths.js";
 
@@ -18,13 +18,16 @@ export interface PreviewRecord {
   port: number | null;
   life: PreviewLife;
   /**
-   * 起这一趟时选的启动方式。存下来只为一件事：**「只启动前端」这一档的 `/api` 打回的是
-   * 这台 ash 自己**（ash 的 `scripts/dev.mjs` 就是这么写的），代理据此把 `/api` 那一跳直接
-   * 接到本机 ash 上，绕开被预览的 dev server —— 见 preview-access.ts 顶部「自己的 API 那一跳」。
-   * 别的档不能这么接：`full`/`test` 的 `/api` 是预览自己那套后端，接过来就是拿主库的数据
-   * 冒充预览实例的数据。老记录没有这个字段，一律当作「不知道」，不走那条特殊路。
+   * 被预览的服务**自己在日志里说**「我的 `/api` 打到那台 ash 上」，而且说的正是我们当时
+   * 绑着的那个端口时，记下它（见 preview-log.ts 的 declaredHostApiPort）。反代据此把 `/api`
+   * 那一跳直接接回本机 ash 并带上打开者的会话——缘由和其余前提在 preview-access.ts 顶部。
+   *
+   * **不能拿启动方式（`PreviewMode`）当拓扑证据**，这个字段的存在就是为了替掉那种做法：
+   * 自由工作流对任意自定义脚本和多服务配置一律写死 `frontend`，它表示的是「我们让它只起
+   * 前端」的意图，不是它真的只起了前端。把整栈预览误认成这一档，用户以为在验分支后端，
+   * 实际是拿自己的身份读写主库（第 2 轮审查 P1）。老记录没有这个字段，一律当作「没说过」。
    */
-  mode?: PreviewMode;
+  hostApi?: number | null;
   startedAt: string;
   log: string;
   /** 起这次预览时 ash 自己挂上去的 node_modules 软链；收预览时按原样撤掉。 */

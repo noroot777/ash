@@ -48,13 +48,17 @@ import { rememberCookie, type PreviewCookieJar } from "./preview-cookies.js";
  *
  * 三个前提缺一不可，少一个就变成「把你的 ash 会话送给一个陌生上游」：
  *  · **仓库是这台 ash 自己的**（项目的 repoPath == REPO_DIR）；
- *  · **档位是「只启动前端」**（只有这一档的 `/api` 打回本机 ash；`full`/`test` 的 `/api` 是
- *    预览自己那套后端，接过来就是拿主库的数据冒充预览实例的数据）；
+ *  · **被预览的服务自己说了「我的 `/api` 打到那台 ash 上」**，而且说的正是我们此刻真绑着的
+ *    那个端口（`record.hostApi`，判读在 preview-log.ts 的 declaredHostApiPort）。**不能拿启动
+ *    方式当证据**：自由工作流对任意自定义脚本和多服务配置一律写死 `frontend`，那只是我们
+ *    「希望它只起前端」的意图。照那个判，「前端 + 分支后端」的预览的 `/api` 会被静默改接到
+ *    正在用的主 ash 上——用户以为在验分支后端，实际是拿自己的身份读写主库（第 2 轮审查 P1）。
  *  · **分叉不继承**（`forkGrant` 一律配空的，`ownApi` 也置空）。分叉的触发条件就是「另一个
  *    客户端拿同一个地址开页面」，而地址是可以被复制走的。
  *
  * 端口取 `boundListeningPort()`（确知绑上了才有值），不取会退到 `PORT ?? 4317` 的那个——猜出来
- * 的 4317 上可能坐着另一台 ash。
+ * 的 4317 上可能坐着另一台 ash。ash 重启后可能换了端口，所以开预览时还要再核一次：记录里
+ * 那个数只有等于此刻绑着的那个才认。
  *
  * 剩下的代价说在明处：页面能借这条路用你的身份调 ash 的 API —— 包括那些会吐出凭证的端点
  * （`/api/auth/rotate-key` 换一把新 key 就是）。要再收窄只能给这一跳加白名单，那是另一件事。
@@ -185,11 +189,12 @@ export function mountPreviewOpenRoutes(api: Hono): void {
       jar: new Map(), client: null, nav: "", content: null, forks: [], ownApi: null,
     };
     if (!(await canUsePreview(grant))) return c.text("预览不存在或无权访问", 404);
-    // 预览的是这台 ash 自己、而且是「只启动前端」那一档 → 给 `/api` 单独开一条直连本机 ash
-    // 的路，把你这条会话放在**那条路自己的罐子**里。为什么不能放进通用罐子（分支启动的
-    // dev server 会原样收到它）、三个前提为什么缺一不可，见文件顶部。
+    // 被预览的服务自己说了「我的 `/api` 打到这台 ash 上」、说的就是我们此刻绑着的端口、
+    // 而且这就是这台 ash 自己的仓库 → 给 `/api` 单独开一条直连本机 ash 的路，把你这条会话
+    // 放在**那条路自己的罐子**里。为什么不能放进通用罐子（分支启动的 dev server 会原样收到
+    // 它）、为什么不能拿启动方式当证据，见文件顶部。
     const bound = boundListeningPort();
-    if (grant.session && bound !== null && record.mode === "frontend" && await previewsOwnRepo(taskId)) {
+    if (grant.session && bound !== null && record.hostApi === bound && await previewsOwnRepo(taskId)) {
       const jar: PreviewCookieJar = new Map();
       rememberCookie(jar, `${SESSION_COOKIE}=${grant.session}; Path=/`, "/");
       grant.ownApi = { port: bound, jar };
