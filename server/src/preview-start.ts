@@ -59,7 +59,7 @@ export async function runPreview(
   writeFileSync(log, configs.length > 1 ? `启动 ${configs.length} 个预览服务\n` : banners[0]);
   services.forEach((s, i) => { if (s.log !== log) writeFileSync(s.log, banners[i]); });
   writeRecord({
-    taskId, cmd: step.p.cmd, pid: 0, url: null, port: null, life: step.p.life, startedAt: now(),
+    taskId, cmd: step.p.cmd, pid: 0, url: null, port: null, life: step.p.life, mode: step.p.mode, startedAt: now(),
     log, links: [], state: "starting", gen, installPid: null, services, primaryServiceId: primaryId, proxyToken,
   });
   prunePreviewArtifacts(taskId, gen);

@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { PreviewLife, WorkflowStep } from "@ash/shared/workflow";
+import type { PreviewLife, PreviewMode, WorkflowStep } from "@ash/shared/workflow";
 import type { PreviewServiceState } from "@ash/shared/preview";
 import { RUNS_DIR } from "./paths.js";
 
@@ -17,6 +17,14 @@ export interface PreviewRecord {
   url: string | null;
   port: number | null;
   life: PreviewLife;
+  /**
+   * 起这一趟时选的启动方式。存下来只为一件事：**「只启动前端」这一档的 `/api` 打回的是
+   * 这台 ash 自己**（ash 的 `scripts/dev.mjs` 就是这么写的），代理据此把 `/api` 那一跳直接
+   * 接到本机 ash 上，绕开被预览的 dev server —— 见 preview-access.ts 顶部「自己的 API 那一跳」。
+   * 别的档不能这么接：`full`/`test` 的 `/api` 是预览自己那套后端，接过来就是拿主库的数据
+   * 冒充预览实例的数据。老记录没有这个字段，一律当作「不知道」，不走那条特殊路。
+   */
+  mode?: PreviewMode;
   startedAt: string;
   log: string;
   /** 起这次预览时 ash 自己挂上去的 node_modules 软链；收预览时按原样撤掉。 */

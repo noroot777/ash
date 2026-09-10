@@ -31,7 +31,7 @@ const { startPreview, stopPreview, readPreview, beginPreviewStart, endPreviewSta
 const { lastPreview, readAnyPreview, readPreviewLog, writeRecord } = await import("../src/preview-store.js");
 const { nodeDepsAdvice } = await import("../src/preview-deps.js");
 const { previewShell } = await import("../src/preview-shell.js");
-const { currentListeningPort } = await import("../src/listening-port.js");
+const { currentListeningPort, recordListeningPort } = await import("../src/listening-port.js");
 const { createSession, deleteSession } = await import("../src/auth/store.js");
 const { setInstanceMode } = await import("../src/auth/mode.js");
 await ensureSchema();
@@ -87,6 +87,9 @@ attachPreviewUpgrades(server as import("node:http").Server);
 if (!server.listening) await once(server, "listening");
 const address = server.address();
 assert(address && typeof address === "object");
+// index.ts 在 listen 回调里做的同一件事。少了它，「预览这台 ash 自己」那一档拿不到本机
+// 端口，直连的那一跳就没法成立（它有意不猜端口，见 listening-port.ts）。
+recordListeningPort(address.port);
 const base = `http://127.0.0.1:${address.port}`;
 const request = (path: string, method = "GET", body?: unknown, headers: Record<string, string> = {}) => fetch(base + path, {
   method, redirect: "manual", headers: { ...(body === undefined ? {} : { "content-type": "application/json" }), ...headers }, body: body === undefined ? undefined : JSON.stringify(body),
@@ -497,30 +500,44 @@ try {
     assert.equal(memberOpen.status, 302);
     const memberGateway = memberOpen.headers.get("location")!;
     assert.equal((await request(memberGateway)).status, 200);
-    // A 档（用户 2026-09-10 拍板）：被预览的就是**这台 ash 自己的仓库**时，代理把打开预览的
-    // 这个人当前那条会话放进罐子，省掉「在预览页里粘一次 key」——那才是这条链上最危险的一步
-    // （key 是长期凭证、能外带）。口子只对自己的仓库开、分叉不继承，缘由在 preview-access.ts
-    // 顶部；这里把这三条各钉一遍。
+    // A 档（用户 2026-09-10 拍板）：被预览的就是**这台 ash 自己的仓库**、而且是「只启动前端」
+    // 那一档时，代理替你带上登录态，省掉「在预览页里粘一次 key」——那才是这条链上最危险的
+    // 一步（key 是长期凭证、能外带）。
+    //
+    // 关键在于**这条会话只走 `/api` 那一跳、直连本机 ash**：被预览的服务在这一档里是任务分支
+    // 自己启动的 dev server，它收得到这条 cookie 就等于交出一份可外带的凭证——分支里加个中间件
+    // 记下来，就能脱离预览直接登进 ash（第 1 轮审查 P1）。缘由在 preview-access.ts 顶部。
     {
       const { REPO_DIR } = await import("../src/paths.js");
       const laneOf = async (page: Response) => /src="(\/preview\/preview-task\/[a-f0-9]{48}\/web\/)entry.js"/.exec(await page.text())![1];
+      // 两个探针一起看才说明问题：`/whoami` 是上游夹具照实回它收到的 Cookie 头；`/api/projects`
+      // 只有真的接到本机 ash 上才答得出项目列表，接在夹具上就是那页 HTML。
+      const apiBody = async (lane: string) => await (await request(lane + "api/projects")).text();
       const opened = async () => {
         const location = (await request(state.url, "GET", undefined, memberHeaders)).headers.get("location")!;
         const lane = await laneOf(await navigate(location));
-        return { location, cookie: (await (await request(lane + "whoami")).json()).cookie as string | null };
+        return {
+          location, lane,
+          upstream: (await (await request(lane + "whoami")).json()).cookie as string | null,
+          api: await apiBody(lane),
+        };
       };
-      assert.equal((await opened()).cookie, null, "别的项目的预览，一条 ash 会话都不许带进去");
+      const other = await opened();
+      assert.equal(other.upstream, null, "别的项目的预览，一条 ash 会话都不许带进去");
+      assert.match(other.api, /Proxy test/, "别的项目的 /api 是它自己的，不许接到本机 ash 上");
       await db.update(projects).set({ repoPath: REPO_DIR }).where(eq(projects.id, "preview-project"));
       try {
         const own = await opened();
-        assert.equal(own.cookie, memberHeaders.cookie, "预览这台 ash 自己时，会话由代理替你带上");
+        assert.match(own.api, /"id":"preview-project"/, "预览这台 ash 自己时，/api 那一跳直连本机 ash 并带着你的会话");
+        assert.equal(own.upstream, null, "会话绝不能落到被预览的服务手上——那是任务分支自己启动的 dev server");
+        assert.match(await apiBody(own.location), /needsAuth/, "地址栏那条道上的 /api 接着 ash，但一样借不到会话");
         const forked = (await navigate(own.location)).headers.get("location")!;
         const strangerLane = await laneOf(await navigate(forked));
-        assert.equal((await (await request(strangerLane + "whoami")).json()).cookie, null, "地址被复制走：分叉出去的那份不继承你的 ash 会话");
+        assert.match(await apiBody(strangerLane), /Proxy test/, "地址被复制走：分叉出去的那份连这条路都没有");
       } finally {
         await db.update(projects).set({ repoPath: fixture }).where(eq(projects.id, "preview-project"));
       }
-      assert.equal((await opened()).cookie, null, "换回别的仓库就不再带");
+      assert.match((await opened()).api, /Proxy test/, "换回别的仓库就不再接");
     }
     await deleteSession(memberHeaders.cookie.slice(SESSION_COOKIE.length + 1));
     assert.equal((await request(memberGateway)).status, 404, "退出登录后旧预览凭证失效");

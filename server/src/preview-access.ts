@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import type { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import type { Actor } from "./auth/context.js";
-import { currentListeningPort } from "./listening-port.js";
+import { boundListeningPort, currentListeningPort } from "./listening-port.js";
 import { REPO_DIR } from "./paths.js";
 import { alive, readAnyPreview } from "./preview-store.js";
 import { previewBase } from "./preview-public.js";
@@ -30,27 +30,40 @@ import { rememberCookie, type PreviewCookieJar } from "./preview-cookies.js";
  * 分出去的那些，多到一定数量就回收最早的：应用里的同源 iframe 在明文 http 下跟顶层导航长得
  * 一模一样（见 preview-proxy.ts 的 looksLikeNavigation），每加载一次就要分一张。
  *
- * ## 预览的是这台 ash 自己时，罐子里先放一条你的会话
+ * ## 预览的是这台 ash 自己时：`/api` 单独走一跳，会话只活在那一跳上
  *
  * 代理一个 cookie 都不转，所以预览里的 ash 前端开屏就是未登录态，只能让用户**在预览页里粘
  * 一次 key**。那个动作才是这条链上最危险的一步：key 是长期凭证、能外带、从任何机器都登得
- * 进来，2026-09-09 已经真发生过一次。所以反过来做——`open` 的时候由代理把**打开预览的这个
- * 人当前那条 ash 会话**放进罐子（用户 2026-09-10 拍板的 A 档）。
+ * 进来，2026-09-09 已经真发生过一次。所以反过来做——由代理替他带上登录态（用户 2026-09-10
+ * 拍板的 A 档）。
  *
- * 代价说在明处：预览页里那份代码（agent 写的分支代码）能借这条通道用你的身份调 ash 的 API。
- * 换来的是用户不必再交出 key，而且页面**拿不到 cookie 本身**（罐子在服务端，发回浏览器的那
- * 份改了名且 HttpOnly，`document.cookie` 还被注入的桥挡着），登出即失效（`canUsePreview`
- * 每次都拿 `grant.session` 复核）。
+ * **但绝不能把这条会话放进那个通用罐子。**通用罐子是发给「被预览的服务」的，而在这一档里
+ * 那个服务是**任务分支自己启动的 vite**（`/api` 只是由它再转一跳回 4317）。分支里加一个
+ * 中间件就能把原始 `ash_session` 记下来外带，之后脱离预览直接登进 ash —— 那就不是「借身份
+ * 调一次 API」，而是交出一份可外带的凭证了（第 1 轮审查 P1）。
  *
- * 口子卡死在两处，少一处都会变成「把你的 ash 会话送给一个陌生上游」：
- *  · **只对这台 ash 自己的仓库播种**（项目的 repoPath == REPO_DIR）。别的项目的上游不是 ash，
- *    收到 `ash_session` 记一行访问日志就能从任何地方登进来。
- *  · **分叉不继承**（`forkGrant` 一律配空罐子）。分叉的触发条件是「另一个客户端拿同一个地址
- *    开页面」，而地址是可以被复制走的 —— 跟着复制就等于把会话交给拿到链接的人。
+ * 所以 `ownApi` 是一条**独立的路**：只有上游路径落在 `/api` 底下时才走，直接连本机 ash 的
+ * 监听端口，绕开被预览的 dev server；会话装在它自己的罐子里，只在这一跳上出现。分支代码
+ * 一个字都收不到，它能做的仅止于「让页面去调那些 API」—— 那正是用户认下的那份代价。
+ *
+ * 三个前提缺一不可，少一个就变成「把你的 ash 会话送给一个陌生上游」：
+ *  · **仓库是这台 ash 自己的**（项目的 repoPath == REPO_DIR）；
+ *  · **档位是「只启动前端」**（只有这一档的 `/api` 打回本机 ash；`full`/`test` 的 `/api` 是
+ *    预览自己那套后端，接过来就是拿主库的数据冒充预览实例的数据）；
+ *  · **分叉不继承**（`forkGrant` 一律配空的，`ownApi` 也置空）。分叉的触发条件就是「另一个
+ *    客户端拿同一个地址开页面」，而地址是可以被复制走的。
+ *
+ * 端口取 `boundListeningPort()`（确知绑上了才有值），不取会退到 `PORT ?? 4317` 的那个——猜出来
+ * 的 4317 上可能坐着另一台 ash。
+ *
+ * 剩下的代价说在明处：页面能借这条路用你的身份调 ash 的 API —— 包括那些会吐出凭证的端点
+ * （`/api/auth/rotate-key` 换一把新 key 就是）。要再收窄只能给这一跳加白名单，那是另一件事。
  */
 interface PreviewGrant {
   taskId: string; gen: string; actor: Actor; expires: number; session?: string; turn?: string; keyHash?: string | null;
   jar: PreviewCookieJar; client: string | null; nav: string; content: string | null; forks: string[];
+  /** 见上面「`/api` 单独走一跳」。null = 这一档不成立，`/api` 跟别的路径一样走被预览的服务。 */
+  ownApi: { port: number; jar: PreviewCookieJar } | null;
 }
 const grants = new Map<string, PreviewGrant>();
 const GRANT_LIFE = 8 * 60 * 60_000;
@@ -91,7 +104,7 @@ export function forkGrant(token: string): string | null {
   if (!grant) return null;
   if (grants.size >= GRANT_LIMIT) dropGrant(grants.keys().next().value!);
   const next = randomBytes(24).toString("hex");
-  grants.set(next, { ...grant, jar: new Map(), client: null, nav: next, content: null, forks: [] });
+  grants.set(next, { ...grant, jar: new Map(), client: null, nav: next, content: null, forks: [], ownApi: null });
   grant.forks.push(next);
   while (grant.forks.length > FORK_LIMIT) dropGrant(grant.forks.shift()!);
   return next;
@@ -169,13 +182,17 @@ export function mountPreviewOpenRoutes(api: Hono): void {
       taskId, gen: record.gen, actor, expires: Date.now() + GRANT_LIFE,
       session: getCookie(c, SESSION_COOKIE), turn: c.req.header("x-ash-turn-token"),
       keyHash: actor.kind === "user" && c.req.header("authorization") ? (await getUser(actor.userId!))?.keyHash : undefined,
-      jar: new Map(), client: null, nav: "", content: null, forks: [],
+      jar: new Map(), client: null, nav: "", content: null, forks: [], ownApi: null,
     };
     if (!(await canUsePreview(grant))) return c.text("预览不存在或无权访问", 404);
-    // 预览的是这台 ash 自己 → 罐子里先放一条你的会话，省掉「在预览页里粘一次 key」那个
-    // 真正危险的动作。为什么这么换、口子卡在哪两处，见文件顶部。
-    if (grant.session && await previewsOwnRepo(taskId)) {
-      rememberCookie(grant.jar, `${SESSION_COOKIE}=${grant.session}; Path=/`, "/");
+    // 预览的是这台 ash 自己、而且是「只启动前端」那一档 → 给 `/api` 单独开一条直连本机 ash
+    // 的路，把你这条会话放在**那条路自己的罐子**里。为什么不能放进通用罐子（分支启动的
+    // dev server 会原样收到它）、三个前提为什么缺一不可，见文件顶部。
+    const bound = boundListeningPort();
+    if (grant.session && bound !== null && record.mode === "frontend" && await previewsOwnRepo(taskId)) {
+      const jar: PreviewCookieJar = new Map();
+      rememberCookie(jar, `${SESSION_COOKIE}=${grant.session}; Path=/`, "/");
+      grant.ownApi = { port: bound, jar };
     }
     for (const [token, value] of grants) if (value.expires <= Date.now() || readAnyPreview(value.taskId)?.gen !== value.gen) dropGrant(token);
     if (grants.size >= GRANT_LIMIT) dropGrant(grants.keys().next().value!);

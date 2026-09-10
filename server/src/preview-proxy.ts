@@ -20,6 +20,11 @@ const HOSTS = ["127.0.0.1", "::1"];
 /**
  * 请求落在这张 grant 的哪条道上。`nav` 是地址栏里那个 token —— **不带罐子**；`content`
  * 只出现在已认领客户端拿到的那份页面内容里，罐子只认它。缘由写在 preview-access.ts 顶部。
+ *
+ * `ownApi` 非空时这一跳**不去被预览的服务**，直接连本机 ash：预览的是 ash 自己的前端那一档
+ * 时，`/api` 本来就是打回本机 ash 的（vite 只是中间转一手），而那条会话绝不能从分支启动的
+ * dev server 身上过。判据在 open 那一刻定死（见 preview-access.ts 顶部），这里只按上游路径
+ * 分流。
  */
 function targetOf(requestPath: string) {
   const match = /^\/preview\/([A-Za-z0-9_-]{1,80})\/([a-f0-9]{48})\/([A-Za-z0-9_-]{1,64})(\/.*)?$/.exec(requestPath);
@@ -36,8 +41,13 @@ function targetOf(requestPath: string) {
   const startupBase = previewBase(stored, service.id);
   const suffix = match[4] ?? "/";
   const path = target.pathname.startsWith(startupBase) ? startupBase + suffix.slice(1) : suffix;
+  const ownApi = grant.ownApi && (suffix === "/api" || suffix.startsWith("/api/")) ? grant.ownApi : null;
   return {
-    record, grant, service, protocol: target.protocol, port: service.port, path, suffix,
+    record, grant, service, ownApi,
+    protocol: ownApi ? "http:" : target.protocol,
+    port: ownApi?.port ?? service.port,
+    path: ownApi ? suffix : path,
+    suffix,
     lane: match[2] === grant.nav ? ("nav" as const) : ("content" as const),
     base: previewBase(record, service.id),
     navBase: previewBase({ ...record, proxyToken: grant.nav }, service.id),
@@ -249,7 +259,9 @@ export function mountPreviewProxy(app: Hono): void {
     // 导航在上面就分叉走了，走不到这里）。其余的 —— 地址栏那条道上的 XHR、fetch、SSE、
     // WebSocket —— 一律配一个空罐子：它们证明不了自己是谁，而地址是可以被复制走的。
     const trusted = target.lane === "content" || navigation;
-    const jar = trusted ? target.grant.jar : new Map();
+    // 走 `/api` 那一跳的用它自己的罐子（那条 ash 会话只活在那里）；其余照旧。两条道的规矩
+    // 不变：没验过客户端的请求一律配空罐子，`/api` 也不例外。
+    const jar = trusted ? target.ownApi?.jar ?? target.grant.jar : new Map();
     // 页面内容改写到内容 token 上（认领之后才有），Location 留在请求自己这条道上。
     const view = trusted && target.grant.content ? { ...target.record, proxyToken: target.grant.content } : target.record;
     const viewBase = previewBase(view, target.service.id);
@@ -337,7 +349,7 @@ export function attachPreviewUpgrades(server: Server): void {
       if (!targetOf(requested.pathname)) { socket.destroy(); return; }
       // 罐子只跟着内容 token 走：页面里的 WebSocket 地址是我们改写过的，走的就是内容那条道；
       // 拿地址栏那串来连的，配一个空罐子（升级请求带不回认领 cookie，验不了它是谁）。
-      const headers = forwardedHeaders(incoming.headers, target.lane === "content" ? target.grant.jar : new Map(), target.path);
+      const headers = forwardedHeaders(incoming.headers, target.lane === "content" ? target.ownApi?.jar ?? target.grant.jar : new Map(), target.path);
       headers.host = `localhost:${target.port}`;
       headers.origin = `${target.protocol}//localhost:${target.port}`;
       headers.connection = "Upgrade"; headers.upgrade = "websocket";
