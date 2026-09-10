@@ -113,7 +113,7 @@
     "test:verify-override": "tsx scripts/test-verify-override.ts",
     "test:foreign-bins": "tsx scripts/test-foreign-bins.ts",
     "test:preview-settings-proxy": "tsx scripts/test-preview-settings-proxy.ts",
-    "test:preview-command": "tsx scripts/test-preview-command.ts",
+    "test:preview-command": "tsx scripts/test-preview-command.ts && tsx scripts/test-preview-static.ts",
     "test:preview-log": "tsx scripts/test-preview-log.ts",
     "test:preview-process": "tsx scripts/test-preview-process.ts",
     "test:preview-seed": "tsx scripts/test-preview-seed.ts",
