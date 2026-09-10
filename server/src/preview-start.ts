@@ -46,6 +46,15 @@ export async function runPreview(
     id: s.id, name: s.name, cmd: s.command, status: "starting", pid: 0, url: null, port: null,
     log: configs.length === 1 ? log : join(dir, `preview-${gen}-${s.id}.log`),
   }));
+  // 这台 ash 自己在哪。**只有 `boundListeningPort()` 算数**（确知绑上了才有值，不猜）：
+  // 「只起前端」那一档的 `/api` 就是打回这里，而 `scripts/dev.mjs` 从前写死 4317 —— ash 一换
+  // 端口，预览的 `/api` 就整个打到别处去（4317 上正坐着另一台 ash 的话，用户以为在验分支，
+  // 实际在读写那一台；对方是单人模式还不用登录），而且它自述的端口跟我们绑着的对不上，
+  // 登录态直连也就永远开不起来（第 5 轮审查 P1）。
+  //
+  // 单开一个变量、不复用通用的 `ASH_PROXY`：那个是留给人手动跑 `npm run dev` 的旋钮，
+  // 项目脚本改得动；这个是 ash 对「我在哪」的陈述，必须由 ash 说了算。
+  const hostApiUrl = boundListeningPort() === null ? null : `http://127.0.0.1:${boundListeningPort()}`;
   const envs = services.map((s, index) => {
     const env = portEnv([ports[index], ...ports.filter((_, i) => i !== index)].filter((p): p is number => !!p));
     if (selected?.length) ports.slice(0, configs.length).forEach((p, i) => {
@@ -53,6 +62,7 @@ export async function runPreview(
       env[`URL${i + 1}`] = `http://localhost:${p}`;
     });
     env.ASH_PREVIEW_BASE = proxyToken ? `/preview/${taskId}/${proxyToken}/${s.id}/` : "/";
+    if (hostApiUrl) env.ASH_HOST_API = hostApiUrl;
     return env;
   });
   const banners = services.map((s, i) => `$ ${Object.entries(envs[i]).map(([k, v]) => `${k}=${v}`).join(" ")} BROWSER=none ASH_PREVIEW=1 ASH_PREVIEW_MODE=${step.p.mode} ${s.cmd}\n`);
