@@ -192,6 +192,10 @@
   gap: 8px;
 }
 
+.inspector-host__menu-label:has(.task-subagents-icon--populated) {
+  color: color-mix(in srgb, var(--cyan) 90%, var(--ink));
+}
+
 .inspector-host__panel {
   display: flex;
   min-width: 0;
