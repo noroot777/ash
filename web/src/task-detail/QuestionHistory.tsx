@@ -15,40 +15,60 @@ function mergeRecords(left: QuestionRecord[], right: QuestionRecord[]): Question
     .sort((a, b) => a.answeredAt.localeCompare(b.answeredAt));
 }
 
-export function QuestionHistoryProvider({ taskId, history, messages, children }: {
+export function QuestionHistoryProvider({ taskId, history, live = history === undefined, messages, children }: {
   taskId: string;
   history?: QuestionRecord[];
+  live?: boolean;
   messages: QuestionMessage[];
   children: ReactNode;
 }) {
-  if (history !== undefined) return <HistoryContext value={{ records: history, messages }}>{children}</HistoryContext>;
-  return <LocalQuestionHistory key={taskId} taskId={taskId} messages={messages}>{children}</LocalQuestionHistory>;
+  if (!live) return <HistoryContext value={{ records: history ?? [], messages }}>{children}</HistoryContext>;
+  return <LocalQuestionHistory key={taskId} taskId={taskId} history={history} messages={messages}>{children}</LocalQuestionHistory>;
 }
 
-function LocalQuestionHistory({ taskId, messages, children }: { taskId: string; messages: QuestionMessage[]; children: ReactNode }) {
-  const [state, setState] = useState<{ taskId: string; records: QuestionRecord[]; error?: string }>({ taskId, records: [] });
+function LocalQuestionHistory({ taskId, history, messages, children }: {
+  taskId: string; history?: QuestionRecord[]; messages: QuestionMessage[]; children: ReactNode;
+}) {
+  const [state, setState] = useState<{ taskId: string; records: QuestionRecord[]; error?: string }>({ taskId, records: history ?? [] });
   const generation = useRef(0);
+  const suppliedHistory = useRef(history);
+  suppliedHistory.current = history;
+  const connectedOnce = useRef(false);
+  const wasConnected = useRef(false);
+  useEffect(() => {
+    if (history !== undefined) setState((current) => ({ taskId, records: mergeRecords(current.records, history) }));
+  }, [taskId, history]);
   const reload = useCallback(() => {
     const token = ++generation.current;
-    void api.task(taskId).then((task) => {
+    void api.taskQuestionHistory(taskId).then((records) => {
       if (token !== generation.current) return;
-      setState((current) => ({ taskId, records: mergeRecords(current.taskId === taskId ? current.records : [], task.questionHistory ?? []) }));
+      setState((current) => ({ taskId, records: mergeRecords(current.taskId === taskId ? current.records : [], records) }));
     }).catch((error) => {
       if (token !== generation.current) return;
       setState((current) => ({ taskId, records: current.taskId === taskId ? current.records : [], error: String(error.message ?? error) }));
     });
   }, [taskId]);
-  useEffect(() => {
-    reload();
-    return () => { generation.current += 1; };
-  }, [reload]);
+  useEffect(() => () => { generation.current += 1; }, [taskId]);
   const connected = useServerEvents((event) => {
     const records = event.type === "task.question" && event.taskId === taskId && event.answeredQuestion
       ? [event.answeredQuestion]
       : event.type === "task.updated" && event.task.id === taskId ? event.task.questionHistory : undefined;
-    if (records) setState((current) => ({ taskId, records: mergeRecords(current.taskId === taskId ? current.records : [], records) }));
+    if (records) setState((current) => ({ ...current, taskId, records: mergeRecords(current.taskId === taskId ? current.records : [], records) }));
   });
-  useEffect(() => { if (connected) reload(); }, [connected, reload]);
+  useEffect(() => {
+    const reconnecting = connectedOnce.current && !wasConnected.current;
+    wasConnected.current = connected;
+    if (connected) {
+      connectedOnce.current = true;
+      if (!reconnecting && suppliedHistory.current !== undefined) return;
+      const timer = setTimeout(reload, 0);
+      return () => clearTimeout(timer);
+    }
+    if (connectedOnce.current || suppliedHistory.current !== undefined) return;
+    // 首次读取等事件流建立后发起，合并挂载和初次连接的两次加载；连接失败仍能回看历史。
+    const timer = setTimeout(() => { if (suppliedHistory.current === undefined) reload(); }, 1000);
+    return () => clearTimeout(timer);
+  }, [connected, reload]);
   const local = state.taskId === taskId ? state : { records: [], error: undefined };
   return <HistoryContext value={{ records: local.records, messages, error: local.error, retry: reload }}>{children}</HistoryContext>;
 }

@@ -110,7 +110,7 @@ function QuestionForm({ task, onAnswer }: Props) {
       {error && <p className="task-question-error" role="alert">{error}</p>}
       <footer>
         <span aria-live="polite">{sent ? "答复已发送" : settling ? "提问结束后即可答复" : multi
-          ? `已答 ${answered}/${items.length} 项 · 可稍后补充其余项`
+          ? `已答 ${answered}/${items.length} 项 · 留空项会标记为未答`
           : "⌘ / Ctrl + Enter 发送"}</span>
         <button type="button" disabled={unavailable || !answered} onClick={() => void submit()}>
           {sent ? <Check size={14} aria-hidden="true" /> : <PaperPlaneTilt size={14} weight="fill" aria-hidden="true" />}

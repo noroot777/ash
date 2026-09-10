@@ -173,6 +173,7 @@ export function ConversationFeed({
   reviews,
   systemNoticeMode,
   questionHistory,
+  liveQuestionHistory,
 }: {
   task: TaskListItem;
   items: ConversationItem[];
@@ -191,6 +192,7 @@ export function ConversationFeed({
   /** 比较系统提示方案时覆盖 URL 模式；普通任务不传。 */
   systemNoticeMode?: SystemNoticeMode;
   questionHistory?: QuestionRecord[];
+  liveQuestionHistory?: boolean;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const activityPhase = runActivityPhase(task.status, runActivityTail(items));
@@ -267,7 +269,7 @@ export function ConversationFeed({
   };
 
   return (
-    <QuestionHistoryProvider key={task.id} taskId={task.id} history={questionHistory}
+    <QuestionHistoryProvider key={task.id} taskId={task.id} history={questionHistory} live={liveQuestionHistory}
       messages={items.flatMap((item) => item.kind === "user" ? [item] : [])}>
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region task-conversation-wrap">

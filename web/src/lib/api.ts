@@ -234,6 +234,8 @@ export const api = {
   // 列表不带正文（见 shared 的 TaskListItem）；正文走 api.task(id)。
   tasks: (): Promise<TaskListItem[]> => request("/tasks"),
   task: (taskId: string): Promise<Task> => request(`/tasks/${id(taskId)}`),
+  taskQuestionHistory: (taskId: string): Promise<import("@ash/shared/questions").QuestionRecord[]> =>
+    request(`/tasks/${id(taskId)}/question-history`),
   // 侧边栏铺开那一下才调：一批任务各自「我发的最后一条追问」。没有的任务不在返回里。
   followUps: (taskIds: string[]): Promise<TaskFollowUp[]> =>
     request("/tasks/follow-ups", json("POST", { taskIds })),

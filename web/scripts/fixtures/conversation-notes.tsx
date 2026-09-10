@@ -131,7 +131,7 @@ const items = buildConversationItems([{ session, output, trace: [] }], [session]
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <div style={{ height: "100vh", background: "var(--bg)" }}>
-      <ConversationFeed task={task} items={items} sessions={[session]} loading={false} error={null} />
+      <ConversationFeed task={task} items={items} questionHistory={[]} sessions={[session]} loading={false} error={null} />
     </div>
   </StrictMode>,
 );

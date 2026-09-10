@@ -462,6 +462,8 @@ export function TaskDetail({
                 <section className="task-detail-main" aria-label="任务会话">
                   <ConversationFeed
                     task={task}
+                    questionHistory={task.questionHistory}
+                    liveQuestionHistory
                     items={conversation.items}
                     sessions={conversation.sessions}
                     pendingExecutor={pendingExecutor}

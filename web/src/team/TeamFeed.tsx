@@ -208,7 +208,7 @@ export function TeamFeed({
     runActivityTail(rows.map((row) => (row.kind === "conv" ? row.item : { kind: "batch" }))),
   );
   return (
-    <QuestionHistoryProvider key={task.id} taskId={task.id}
+    <QuestionHistoryProvider key={task.id} taskId={task.id} history={task.questionHistory} live
       messages={rows.flatMap((row) => row.kind === "conv" && row.item.kind === "user" ? [row.item] : [])}>
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region">

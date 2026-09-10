@@ -129,6 +129,13 @@ api.get("/tasks/:id", async (c) => {
   return c.json((await enrichTasks([r]))[0]);
 });
 
+api.get("/tasks/:id/question-history", async (c) => {
+  const r = (await db.select({ projectId: tasks.projectId, history: tasks.questionHistory })
+    .from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
+  if (!r || !(await canSeeProject(actorOf(c), r.projectId))) return c.json({ error: "not found" }, 404);
+  return c.json(r.history ? JSON.parse(r.history) : []);
+});
+
 // 「我现在动它,会不会被换掉执行器」。前端在运行/重跑/回复/继续讨论之前问一次,拿到
 // 非空就弹确认框(§八:不静默替换 —— 换执行器可能换模型档位,产出会变)。
 // 返回的是**列表**:duet 有两位讨论者,各占一格(第 6 轮审查 P1)。自用模式恒为空数组。

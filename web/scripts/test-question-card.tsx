@@ -28,6 +28,8 @@ assert.match(current, /aria-label="答复：放在哪里？"/);
 assert.equal(count(current, 'aria-pressed="false"'), 4);
 assert.match(current, /<button type="button" disabled="">[^]*发送答复/);
 assert.match(current, /已答 0\/2 项/);
+assert.match(current, /留空项会标记为未答/);
+assert.doesNotMatch(current, /可稍后补充/);
 const recorded = render([answer]);
 assert.equal(count(recorded, 'class="task-question-record"'), 1, "会话与数据库里的同一份答复只显示一张卡");
 assert.match(recorded, /<details class="task-question-record">/);
@@ -67,6 +69,10 @@ const team = renderToStaticMarkup(<TeamFeed task={{ ...task, mode: "team" }} row
 assert.match(team, /class="task-question-record"/);
 assert.match(team, /以前的问题？/);
 assert.doesNotMatch(team, /你之前的提问/);
+const teamHistory = renderToStaticMarkup(<TeamFeed task={{ ...task, mode: "team", questionHistory: [record] }} rows={[]}
+  workers={[]} onOpenWorker={() => undefined} onAskLead={() => undefined} delegatingIds={new Set()} indicatorForTask={() => null} />);
+assert.equal(count(teamHistory, 'class="task-question-record"'), 1, "团队流直接展示调用方已经持有的历史");
+assert.match(teamHistory, /放在哪里？/);
 const longRecord = legacyQuestionRecord(longLegacyReply, "screenshot");
 assert.equal(longRecord?.question, longQuestion, "嵌套引号和空行不能截断旧题干");
 assert.equal(longRecord?.answer, longAnswer, "没有系统尾句的旧答复也可恢复真实答案");
