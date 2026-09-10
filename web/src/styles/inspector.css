@@ -141,6 +141,11 @@
   height: 16px;
 }
 
+.inspector-rail__tab:not(.is-active):not(:hover):has(.task-subagents-icon--populated) {
+  background: color-mix(in srgb, var(--cyan) 16%, var(--panel));
+  color: color-mix(in srgb, var(--cyan) 90%, var(--ink));
+}
+
 .inspector-host__menu-label svg {
   width: 14px;
   height: 14px;
@@ -181,10 +186,38 @@
   width: 218px;
 }
 
+.inspector-host__menu .ui-menu-item > span {
+  min-width: 0;
+  flex: 1;
+}
+
 .inspector-host__menu-label {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 8px;
+}
+
+.inspector-host__menu-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.inspector-host__menu-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector-host__menu .ui-menu-item kbd {
+  flex: 0 0 auto;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+
+.inspector-host__menu-label .task-subagents-icon--populated {
+  color: color-mix(in srgb, var(--cyan) 90%, var(--ink));
 }
 
 .inspector-host__panel {

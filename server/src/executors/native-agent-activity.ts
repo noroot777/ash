@@ -1,7 +1,7 @@
 import type { AgentEvent, NativeAgentActivity } from "@ash/shared";
 
 export function childActivity(id: string, event: NativeAgentActivity): AgentEvent {
-  return { kind: "tool", name: "Agent", nativeWork: { type: "activity", id, event } };
+  return { kind: "tool", name: "Agent", nativeWork: { type: "activity", id, event, at: new Date().toISOString() } };
 }
 
 const short = (value: unknown) => {

@@ -16,6 +16,7 @@ try {
   browser = await chromium.launch(await chromeLaunchOptions());
   const page = await browser.newPage({ viewport: { width: 760, height: 900 } });
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/native-work.html`);
+  await page.clock.install();
 
   assert.equal(await page.getByRole("tab", { name: "子智能体" }).count(), 0, "Inspector starts hidden");
   await page.getByRole("button", { name: "打开子智能体" }).click();
@@ -25,6 +26,19 @@ try {
     ["进行中", "待处理", "已完成", "失败", "已停止", "状态未知"].sort());
 
   const running = page.locator('.native-work__row[data-status="running"]');
+  const card = page.locator('.native-work__entry[data-status="running"]');
+  assert.match(await card.locator(".native-work__model").innerText(), /gpt-5.6-sol/);
+  assert.match(await card.locator(".native-work__times").innerText(), /开始时间[\s\S]*结束时间[\s\S]*尚未结束/);
+  assert.equal(await card.locator("time").first().getAttribute("datetime"), "2026-09-08T00:00:01.000Z");
+  const pending = page.locator('.native-work__entry[data-status="pending"]');
+  assert.equal(await pending.locator("time").count(), 0, "未开工不能显示开始时间");
+  assert.equal(await pending.locator(".native-work__model").count(), 0, "内部待办没有执行模型");
+  assert.match(await pending.locator(".native-work__times").innerText(), /尚未开始/);
+  assert.equal(await pending.locator(".native-work__duration strong").innerText(), "—");
+  const activeSpan = await card.locator(".native-work__duration strong").innerText();
+  await page.clock.fastForward(60_000);
+  assert.notEqual(await card.locator(".native-work__duration strong").innerText(), activeSpan, "运行项实时更新跨度");
+  assert.equal(await pending.locator(".native-work__duration strong").innerText(), "—", "待处理项不会随时钟递增");
   await running.locator("summary").click();
   await page.getByText("核对浏览器状态", { exact: true }).click();
   assert.match(await page.locator(".native-work__detail").filter({ hasText: "所属子智能体" }).innerText(), /运行中的资料搜集/);
@@ -36,6 +50,8 @@ try {
 
   await page.getByRole("button", { name: "查看执行：运行中的资料搜集", exact: true }).click();
   const conversation = page.getByLabel("子智能体执行详情", { exact: true });
+  assert.match(await conversation.locator(".native-work__model").innerText(), /gpt-5.6-sol/);
+  assert.match(await conversation.locator(".native-work__times").innerText(), /开始时间[\s\S]*结束时间/);
   await conversation.getByText("子智能体侧栏", { exact: true }).waitFor();
   await conversation.locator(".task-execution-block > summary").click();
   assert.match(await conversation.innerText(), /思考过程|分析/);
@@ -58,7 +74,7 @@ try {
   await page.getByRole("button", { name: "完成运行项" }).click();
   await page.locator('.native-work__row[data-status="completed"] > summary').filter({ hasText: "运行中的资料搜集" }).waitFor();
   assert.equal(await page.locator('.native-work__row[data-status="completed"]').count(), 3);
-  assert.match(await page.locator(".native-work__counts").innerText(), /3 已完成/);
+  assert.match(await page.locator(".native-work__counts").innerText(), /3\s+已完成/);
 
   await page.reload();
   await page.getByRole("tab", { name: "子智能体" }).waitFor();
@@ -66,6 +82,11 @@ try {
   assert.equal(await page.locator(".native-work__title", { hasText: "运行中的资料搜集" }).locator("xpath=ancestor::details[1]").getAttribute("data-status"), "completed");
   await page.getByRole("button", { name: "查看执行：运行中的资料搜集", exact: true }).click();
   await conversation.getByText("刷新后仍应保留的完成结果", { exact: false }).waitFor();
+  assert.equal(await conversation.locator(".native-work__duration strong").innerText(), "8分 0秒");
+  assert.match(await conversation.locator(".native-work__duration").innerText(), /时间跨度/);
+  await page.clock.fastForward(60_000);
+  assert.equal(await conversation.locator(".native-work__duration strong").innerText(), "8分 0秒", "完成后跨度保持固定");
+  assert.equal(await conversation.locator("time").last().getAttribute("datetime"), "2026-09-08T00:08:01.000Z");
   assert.equal(await conversation.locator(".native-agent__live").count(), 0);
   await conversation.locator(".task-turn-process > summary").click();
   assert.match(await conversation.innerText(), /实时进展 1/);
@@ -75,6 +96,20 @@ try {
   await page.getByText("暂无子智能体或内部任务").waitFor();
   assert.equal(await page.locator(".native-work__row").count(), 0);
   await page.screenshot({ path: `${output}/native-work-empty.png`, fullPage: true });
+  await page.getByRole("button", { name: "切换计划快照", exact: true }).click();
+  assert.equal(await page.locator(".native-work__row").count(), 4);
+  assert.equal(await page.locator(".native-work__model").count(), 0);
+  const snapshotPending = page.locator('.native-work__entry[data-status="pending"]');
+  assert.equal(await snapshotPending.count(), 2);
+  assert.equal(await snapshotPending.locator("time").count(), 0);
+  assert.deepEqual(await snapshotPending.locator(".native-work__duration strong").allInnerTexts(), ["—", "—"]);
+  const firstCompleted = page.locator('.native-work__entry[data-status="completed"]');
+  assert.equal(await firstCompleted.locator("time").count(), 1, "首次快照仅知道完成时间");
+  assert.match(await firstCompleted.innerText(), /未记录开始时间，无法计算跨度/);
+  await page.clock.fastForward(60_000);
+  assert.deepEqual(await snapshotPending.locator(".native-work__duration strong").allInnerTexts(), ["—", "—"]);
+  await page.screenshot({ path: `${output}/native-work-plan-timing.png`, fullPage: true });
+  await snapshotPending.first().screenshot({ path: `${output}/native-work-pending-fixed.png` });
   console.log("native work Inspector DOM regression passed");
 } finally {
   await browser?.close();

@@ -10,6 +10,8 @@
 //      没点，要照抄的命令就没了。
 //   ③ 它能点：有一颗关闭按钮，按下去才收掉。
 //   ④ 常规提示没被带着一起改：「已复制」这类照旧自己走。
+//   ⑤ 话里那条「设置 → 项目设置 → 预览 → 选择服务」是**能点的路**：点一下就去那一节、
+//      停在预览那张卡上。而且链接不许改动原话——这段文字是拿来照抄的。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -80,6 +82,17 @@ try {
   const after = await page.evaluate(readSlots);
   assert.equal(after.transient, null, "常规提示被一起改成了常驻");
   assert.equal(after.pinned?.text, expected, "普通提示的定时器把常驻的预览报错扫掉了");
+
+  // ⑤ 话里那条路能点：去项目设置，并停在预览那张卡上（anchor）。
+  const path = page.getByRole("button", { name: "「设置 → 项目设置 → 预览 → 选择服务」" });
+  assert.equal(await path.count(), 1, "文案里的「设置 → …」没变成一颗能点的链接");
+  await path.click();
+  assert.deepEqual(
+    await page.evaluate(() => window.__opened), { section: "project", anchor: "preview" },
+    "点了那条路，跳去的不是项目设置的预览那张卡",
+  );
+  // 点完原话还在（链接只是包了一层，一个字都没改），用户仍能整段照抄。
+  assert.equal((await page.evaluate(readSlots)).pinned?.text, expected, "加了链接之后报错原文被改动了");
 
   // ③ 按那颗关闭才收得掉。整个节点摘掉（不只是掉 is-visible）才算收干净，所以等 detached。
   await page.getByRole("button", { name: "关闭提示" }).click();

@@ -14,8 +14,14 @@
 //
 // 拆成独立文件是为了让它**能被单独挂起来测**（scripts/fixtures/preview-error-toast.tsx）——
 // WorkspaceShell 整个搬进 headless 里跑不动。
+//
+// 那段话里的「设置 → 项目设置 → 预览 → 自定义脚本」是一条**能点的路**（SettingsPathText）：
+// 用户读到它的时候正卡着，没道理让他自己退出任务、翻侧栏、再一张张卡找过去。没接跳转的
+// 调用方（测试夹具之类）照旧渲染成普通文字。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { X } from "@phosphor-icons/react";
+import { SettingsPathText } from "../settings/SettingsPathText.tsx";
+import type { SettingsSection } from "../settings/sections.ts";
 import type { Notify } from "../lib/notify.ts";
 
 export interface ToastState {
@@ -62,12 +68,13 @@ export function useToast(): { toasts: ToastSlots; notify: Notify; dismiss: () =>
  * 另一句会被顶得离屏幕边老远），所以淡出要等动画走完再卸载。
  */
 function ToastSlot({
-  toast, testId, pinned = false, onDismiss,
+  toast, testId, pinned = false, onDismiss, onOpenSettings,
 }: {
   toast: ToastState | null;
   testId: string;
   pinned?: boolean;
   onDismiss?: () => void;
+  onOpenSettings?: (section: SettingsSection, anchor: string | null) => void;
 }) {
   const [mounted, setMounted] = useState<ToastState | null>(toast);
   const [visible, setVisible] = useState(false);
@@ -86,7 +93,11 @@ function ToastSlot({
   // pointer-events: none（样式里给），别挡住底下的界面。
   return (
     <div className={`workspace-toast${visible ? " is-visible" : ""}${pinned ? " is-sticky" : ""}`} data-testid={testId} role="status" aria-live="polite">
-      <span className="workspace-toast-text">{mounted.message}</span>
+      <span className="workspace-toast-text">
+        {onOpenSettings
+          ? <SettingsPathText text={mounted.message} onOpen={onOpenSettings} />
+          : mounted.message}
+      </span>
       {pinned && (
         <button type="button" className="workspace-toast-close" aria-label="关闭提示" onClick={onDismiss}>
           <X size={12} />
@@ -96,10 +107,17 @@ function ToastSlot({
   );
 }
 
-export function WorkspaceToast({ toasts, onDismiss }: { toasts: ToastSlots; onDismiss: () => void }) {
+export function WorkspaceToast({ toasts, onDismiss, onOpenSettings }: {
+  toasts: ToastSlots;
+  onDismiss: () => void;
+  /** 接上「设置 → …」那条路的跳转；不给就只当普通文字显示。 */
+  onOpenSettings?: (section: SettingsSection, anchor: string | null) => void;
+}) {
   return (
     <div className="workspace-toasts">
-      <ToastSlot toast={toasts.pinned} testId="workspace-toast-pinned" pinned onDismiss={onDismiss} />
+      <ToastSlot toast={toasts.pinned} testId="workspace-toast-pinned" pinned onDismiss={onDismiss} onOpenSettings={onOpenSettings} />
+      {/* 普通提示两秒多就走，而且整条 `pointer-events: none`（别挡住底下的界面）——
+          在那上面画一颗点不着、又马上消失的链接，比不画更糟。 */}
       <ToastSlot toast={toasts.transient} testId="workspace-toast-transient" />
     </div>
   );

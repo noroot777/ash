@@ -17,6 +17,9 @@ export interface NativeWorkItem {
   message?: string;
   owner?: string;
   model?: string;
+  sessionModel?: string;
+  startedAt?: string;
+  endedAt?: string;
   agentType?: string;
   legacy?: boolean;
   activity?: NativeAgentActivity[];
@@ -27,6 +30,7 @@ const str = (value: unknown): string => typeof value === "string" ? value : type
 const toolName = (name: string) => name.split(/[./]/).at(-1)!.toLowerCase();
 const spawnTools = new Set(["agent", "task", "spawn_agent"]);
 const legacyTools = new Set([...spawnTools, "taskcreate", "taskupdate", "todowrite", "update_plan"]);
+const terminal = (status: NativeWorkStatus) => ["completed", "failed", "stopped"].includes(status);
 function parse(raw: string): Record<string, any> {
   try { const value = JSON.parse(raw); return value && typeof value === "object" ? value : {}; } catch { return {}; }
 }
@@ -51,10 +55,16 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
   for (const item of items) {
     if (item.kind !== "agent") continue;
     const key = (id: string) => `${item.sessionId}:${id}`;
-    const base = { sessionId: item.sessionId, sessionLabel: item.label };
+    const base = { sessionId: item.sessionId, sessionLabel: item.label, sessionModel: item.run?.model || item.session?.model || undefined };
+    let observedAt: string | undefined;
     const put = (id: string, patch: Partial<NativeWorkItem>) => {
       const previous = rows.get(id);
       const next = { id, kind: "agent" as const, title: `子智能体 ${id.slice(item.sessionId.length + 1, item.sessionId.length + 9)}`, status: "unknown" as const, ...base, ...previous, ...patch };
+      if (observedAt) {
+        if (!next.startedAt && next.status === "running") next.startedAt = observedAt;
+        if (terminal(next.status) && (!previous || !terminal(previous.status))) next.endedAt = observedAt;
+      }
+      if (!terminal(next.status)) delete next.endedAt;
       if (next.result && next.message === next.result) delete next.message;
       rows.set(id, next);
       if (item.endedAt) endedRows.add(id);
@@ -88,6 +98,8 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
       const activity: NativeWorkEvent = trace.nativeWork ?? {
         type: "call", id: fallbackId, name: trace.label, input: legacyInput(trace.detail ?? ""),
       };
+      const timestamp = activity.at ?? trace.at;
+      observedAt = timestamp && Number.isFinite(Date.parse(timestamp)) ? timestamp : undefined;
       if (activity.type === "activity") {
         const id = key(activity.id);
         const row = rows.get(id) ?? put(id, { nativeId: activity.id, status: "running" });
@@ -100,6 +112,7 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
         delete patch.type;
         delete patch.id;
         delete patch.closed;
+        delete patch.at;
         const previous = rows.get(id);
         if (activity.closed && (previous?.status === "completed" || previous?.status === "failed")) patch.status = previous.status;
         if (activity.status === "unknown" && rows.has(id)) delete patch.status;
@@ -115,20 +128,24 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
           const list = input.todos ?? input.plan;
           if (!Array.isArray(list)) continue;
           const prefix = key(`${activity.parentId ?? "root"}:plan:`);
-          for (const rowId of rows.keys()) if (rowId.startsWith(prefix)) rows.delete(rowId);
+          const previousPlan = new Map([...rows].filter(([rowId]) => rowId.startsWith(prefix)));
+          for (const rowId of previousPlan.keys()) rows.delete(rowId);
           list.forEach((step, ordinal) => {
             if (!step || typeof step !== "object") return;
             const title = str(step.content ?? step.step);
-            if (title) put(`${prefix}${ordinal}`, { kind: "task", title, parentId, status: workStatus(step.status), description: str(input.explanation), legacy });
+            const rowId = `${prefix}${ordinal}`;
+            const previous = previousPlan.get(rowId);
+            if (previous?.title === title) rows.set(rowId, previous);
+            if (title) put(rowId, { kind: "task", title, parentId, status: workStatus(step.status), description: str(input.explanation), legacy });
           });
           continue;
         }
         if (calls.has(id)) continue;
         calls.set(id, { call: activity });
         if (spawnTools.has(name)) {
-          put(id, { kind: "agent", parentId, title: str(input.description ?? input.name) || str(input.prompt ?? input.message).split("\n")[0].slice(0, 100) || "子智能体",
+          put(id, { kind: "agent", parentId, title: str(input.description ?? input.name ?? input.task_name) || str(input.prompt ?? input.message).split("\n")[0].slice(0, 100) || "子智能体",
             description: str(input.prompt ?? input.message), model: str(input.model), agentType: str(input.subagent_type ?? input.agent_type),
-            status: legacy ? "unknown" : "running", legacy });
+            status: legacy ? "unknown" : "running", ...(observedAt ? { startedAt: observedAt } : {}), legacy });
           calls.get(id)!.rowId = id;
         } else if (name === "taskcreate") {
           let nativeId: string | undefined;
@@ -167,6 +184,9 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
           const existing = rows.get(key(nativeId));
           rows.set(key(nativeId), { ...row, id: key(nativeId), ...(existing ? {
             activity: existing.activity, message: existing.message,
+            model: existing.model || row.model,
+            startedAt: [row.startedAt, existing.startedAt].filter((at): at is string => !!at).sort()[0],
+            endedAt: existing.endedAt ?? row.endedAt,
             status: activity.failed ? "failed" : existing.status,
             result: activity.failed ? row.result : existing.result ?? row.result,
           } : {}) });

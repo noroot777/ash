@@ -166,8 +166,8 @@ export function InspectorRail({
                 }}
               >
                 <span className="inspector-host__menu-label">
-                  <span aria-hidden="true">{item.icon}</span>
-                  {item.title}
+                  <span className="inspector-host__menu-icon" aria-hidden="true">{item.icon}</span>
+                  <span className="inspector-host__menu-title">{item.title}</span>
                 </span>
               </MenuItem>
             ))}

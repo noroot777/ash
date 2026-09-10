@@ -685,3 +685,38 @@
   .settings-field > .git-scope { width: 100%; flex: none; }
   .git-remote-list { justify-items: start; }
 }
+
+/* 文案里那条「设置 → 项目设置 → 预览 → 自定义脚本」：它是一条能点着走过去的路
+   （SettingsPathText），所以长得像链接 —— 但**仍然要读得像原话**，颜色和下划线之外
+   不改字号、不改字重，那段话本身还得能被整段选中复制。 */
+.settings-path-link {
+  display: inline;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.settings-path-link:hover {
+  text-decoration-thickness: 2px;
+}
+
+/* 跳过去之后点一下那张卡：设置页里同款卡片长得都一样，不说破的话用户不知道停在了哪。 */
+.is-anchor-flash {
+  border-radius: 14px;
+  animation: settings-anchor-flash 1.6s ease-out;
+}
+
+@keyframes settings-anchor-flash {
+  0%, 55% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent); }
+  100% { box-shadow: 0 0 0 2px transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .is-anchor-flash { animation: none; }
+}
