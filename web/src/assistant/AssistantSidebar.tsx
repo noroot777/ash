@@ -24,7 +24,7 @@ export function AssistantSidebar({ rooms, selectedId, ready, sending, projectNam
     {searching && <label className="assistant-history-search"><MagnifyingGlass size={15} /><input type="search" autoFocus aria-label="搜索助手对话" placeholder="搜索对话名称" value={query} onChange={(event) => setQuery(event.target.value)} />{query && <button type="button" aria-label="清除对话搜索" onClick={() => setQuery("")}><X size={13} /></button>}</label>}
     <nav className="chat-channels assistant-conversations" aria-label="助手对话记录">
       {matches.map((room) => <button type="button" key={room.id} className={room.id === selectedId ? "is-selected" : ""} aria-current={room.id === selectedId ? "page" : undefined} disabled={sending} onClick={() => onSelect(room.id)}>
-        <ChatCircle size={17} /><span>{room.name}</span><small>{room.members.length}</small>
+        <ChatCircle size={17} /><span>{room.name}</span>
       </button>)}
       {!matches.length && <p role="status">{!ready ? "正在读取对话…" : query.trim() ? "没有匹配的对话，换个名称试试。" : "接入智能体后，在这里保留每次对话。"}</p>}
     </nav>

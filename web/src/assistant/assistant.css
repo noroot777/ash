@@ -4,7 +4,7 @@
 .assistant-main { min-height: 0; }
 .assistant-shell summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .assistant-heading { display: flex; flex: 1; min-width: 0; align-items: center; gap: 6px; }
-.assistant-heading h1 { min-width: 0; }
+.assistant-heading h1 { flex: 1; min-width: 0; }
 .assistant-conversation-title { min-width: 0; max-width: 100%; }
 .assistant-conversation-title > svg { flex-shrink: 0; }
 .assistant-conversation-title > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -19,7 +19,8 @@
 .assistant-message .task-markdown { font-size: 13px; line-height: 1.8; }
 .assistant-message .task-markdown > :first-child { margin-top: 0; }
 .assistant-message .task-markdown > :last-child { margin-bottom: 0; }
-.assistant-message.is-stopped .assistant-message-body,.assistant-message.is-failed .assistant-message-body { color: var(--red); }
+.assistant-message.is-stopped .assistant-message-body { color: var(--amber); }
+.assistant-message.is-failed .assistant-message-body { color: var(--red); }
 .assistant-search-note { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 11px; margin: 15px 0 8px; }
 .assistant-results { display: grid; gap: 8px; }
 .assistant-task > span { display: grid; min-width: 0; flex: 1; gap: 5px; }

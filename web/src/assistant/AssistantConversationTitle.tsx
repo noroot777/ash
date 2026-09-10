@@ -1,15 +1,15 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Check, PencilSimple, X } from "@phosphor-icons/react";
 import { AssistantIcon } from "./AssistantIcon.tsx";
 
-export function AssistantConversationTitle({ name, onRename }: { name: string; onRename: (name: string) => Promise<void> }) {
+export function AssistantConversationTitle({ name, onRename, children }: { name: string; onRename: (name: string) => Promise<void>; children: ReactNode }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(name);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const trigger = useRef<HTMLButtonElement>(null);
   const close = () => { setEditing(false); setError(""); requestAnimationFrame(() => trigger.current?.focus()); };
-  if (!editing) return <h1><button ref={trigger} type="button" className="chat-room-name assistant-conversation-title" aria-label={`重命名对话：${name}`} onClick={() => { setDraft(name); setEditing(true); }}><AssistantIcon size={23} /><span>{name}</span><PencilSimple size={14} /></button></h1>;
+  if (!editing) return <h1><button ref={trigger} type="button" className="chat-room-name assistant-conversation-title" aria-label={`重命名对话：${name}`} onClick={() => { setDraft(name); setEditing(true); }}><AssistantIcon size={23} /><span>{name}</span><PencilSimple size={14} /></button>{children}</h1>;
   return <form className="assistant-rename" onSubmit={async (event) => {
     event.preventDefault();
     if (saving || !draft.trim()) return;
