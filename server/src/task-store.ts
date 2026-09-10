@@ -113,6 +113,7 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   question: r.question ?? null,
   questionOptions: r.questionOptions ? (JSON.parse(r.questionOptions) as string[]) : null,
   questionItems: r.questionItems ? (JSON.parse(r.questionItems) as QuestionItem[]) : null,
+  questionHistory: r.questionHistory ? JSON.parse(r.questionHistory) : [],
   handoff: r.handoff ? JSON.parse(r.handoff) : null,
   handoffAudit: r.handoffAudit ? JSON.parse(r.handoffAudit) : null,
 });
@@ -162,12 +163,12 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
 }
 
 /**
- * 列表序列化：丢掉正文。
+ * 列表序列化：丢掉正文和问答历史。
  *
  * 只有 `GET /tasks` 用它。`GET /tasks/:id` 和 SSE 的 task.created/updated 仍发整份
  * `Task`——前者就是详情面取正文的地方，后者要能就地更新已经打开的任务。
  */
-export function toTaskListItem({ body: _body, ...rest }: Task): TaskListItem {
+export function toTaskListItem({ body: _body, questionHistory: _history, ...rest }: Task): TaskListItem {
   return rest;
 }
 

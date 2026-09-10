@@ -10,6 +10,10 @@
       "types": "./src/page-annotation.ts",
       "default": "./src/page-annotation.ts"
     },
+    "./questions": {
+      "types": "./src/questions.ts",
+      "default": "./src/questions.ts"
+    },
     "./branch-plan": {
       "types": "./src/branch-plan.ts",
       "default": "./src/branch-plan.ts"

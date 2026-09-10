@@ -23,13 +23,13 @@ import { requireApprovedPeer, verifyPeerSignature } from "./handoff-peers.js";
 import { HandoffError } from "./handoff-types.js";
 import { exportHandoff, preflightHandoff } from "./handoff.js";
 import { replyToTask, type TaskReplyBody } from "./task-reply.js";
-import { answerTask } from "./task-answer.js";
+import { answerTask, type TaskAnswerBody } from "./task-answer.js";
 import { sessionOutputText, sessionsForTask, sessionTraceEntries } from "./task-session-routes.js";
 import { enrichTasks } from "./task-store.js";
 import { returnTargetForMarker } from "./handoff-return-address.js";
 import { cancelPendingInboundTransfer } from "./handoff-transfer-state.js";
 
-type ProxyBody = TaskReplyBody & {
+type ProxyBody = TaskReplyBody & TaskAnswerBody & {
   taskId?: string;
   transferId?: string;
   returnTransferId?: string | null;
@@ -38,7 +38,7 @@ type ProxyBody = TaskReplyBody & {
   /** 能力握手的放行票(见 /handoff/proxy/task/return 里的透传说明)。 */
   ignoreCapabilityGaps?: boolean;
 };
-type BrowserProxyBody = TaskReplyBody & {
+type BrowserProxyBody = TaskReplyBody & TaskAnswerBody & {
   targetUrl?: string;
   answer?: string;
   ignoreCapabilityGaps?: boolean;
@@ -357,7 +357,7 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
       const { peer, body } = await signedBody(c);
       if (!body.taskId) throw new HandoffError("缺 taskId", 400);
       await ownedInboundTask(body.taskId, peer.fingerprint, body.transferId);
-      return answerTask(c, body.taskId, { answer: body.answer });
+      return answerTask(c, body.taskId, { answer: body.answer, answers: body.answers, questionKey: body.questionKey });
     } catch (error) { return fail(c, error); }
   });
 
@@ -428,6 +428,7 @@ export function mountHandoffRemoteRoutes(api: Hono): void {
         `${remote.targetUrl}/api/handoff/proxy/task/answer`,
         { expectedPeerFp: remote.expectedFp, method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
           taskId: remote.marker.peerTaskId, transferId: remote.marker.transferId, answer: body.answer,
+          answers: body.answers, questionKey: body.questionKey,
         }) },
       );
       return c.json(result);

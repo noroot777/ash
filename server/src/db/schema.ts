@@ -181,6 +181,7 @@ export const tasks = sqliteTable("tasks", {
   // 多问题提问（json {question, options?}[]）：question 字段保留为引言/背景，
   // 每个 item 在网页上有独立输入框和候选快捷填充。null/[] = 老式单问题。
   questionItems: text("question_items"),
+  questionHistory: text("question_history"),
   // 续聊（follow-up）：任务已经到终态后用户又发消息，这一轮不是「任务的执行」而是
   // 任务之后的对话。开跑时把续聊前的终态记在这里（done/failed/canceled），队列一律
   // 按它看待该成员（既不挡后面的，也不会被当 backlog 拉起），结算后清空。

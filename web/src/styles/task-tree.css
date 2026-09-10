@@ -188,6 +188,30 @@
   grid-template-columns: 22px minmax(0, 1fr);
   align-items: center;
   --task-row-surface: var(--chrome);
+  /* 行尾那点地方摞着三样东西:星标、来源徽标、meta 图标。「谁露出来」和「标题要往回
+     收多少」必须出自同一个判据 —— 两边各写一套选择器一定会漂:原来星标那套列了
+     hover / 选中 / 聚焦三种状态,标题的渐隐却只认 hover,于是选中态的行照样把文字压
+     在讨论图标和星星上(用户 2026-09-10 报的就是这个)。现在只留两个开关:
+       --tail-busy   行尾有没有东西压着标题的尾巴(星标常驻,或 hover 时星标 + meta
+                     一起上来)。标题让位、星标现形、「谁建的」徽标淡出都看它。
+       --row-active  hover / 键盘聚焦 / 选中才浮出来的那批(meta、来源徽标)
+     每个开关只写一次,所有跟着它变的东西都从它派生。 */
+  --tail-busy: 0;
+  --row-active: 0;
+  --row-events: none;
+  --task-row-tail: 0px;
+}
+
+.workspace-task-row-wrap:is(:hover, :focus-within, .is-selected) {
+  --tail-busy: 1;
+  --row-active: 1;
+  --row-events: auto;
+}
+
+/* 已加星的行:星标常驻,所以标题也得一直让着它;meta 和来源徽标仍旧只在上面那三种
+   状态下浮出 —— 不然「加了星」会变成「这一行永远摊开」。 */
+.workspace-task-row-wrap.has-star {
+  --tail-busy: 1;
 }
 
 .workspace-task-row-wrap:hover:not(.is-selected) {
@@ -224,7 +248,7 @@
   top: 50%;
   right: 3px;
   z-index: 2;
-  opacity: 0;
+  opacity: var(--row-active);
   transform: translateY(-50%);
   transition: opacity 130ms ease-out;
 }
@@ -234,13 +258,11 @@
   padding-right: 33px;
 }
 
-.workspace-task-row-wrap:hover > .task-origin-chip,
-.workspace-task-row-wrap:focus-within > .task-origin-chip,
-.workspace-task-row-wrap.is-selected > .task-origin-chip {
-  opacity: 1;
-}
-
 .workspace-task-title {
+  /* 标题右端要空出来的两段:--title-fade 是纯溢出时的渐隐长度,--title-clear 是行尾
+     被占时额外抹掉的那格(没被占就是 0,标题用满整行)。 */
+  --title-fade: 18px;
+  --title-clear: calc(var(--tail-busy) * var(--task-row-tail));
   min-width: 0;
   flex: 1;
   overflow: hidden;
@@ -248,8 +270,8 @@
   color: color-mix(in lch, var(--ink) 52%, var(--muted));
   font-size: 13px;
   font-weight: 400;
-  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent);
-  mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent);
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - var(--title-fade) - var(--title-clear)), transparent calc(100% - var(--title-clear)));
+  mask-image: linear-gradient(90deg, #000 calc(100% - var(--title-fade) - var(--title-clear)), transparent calc(100% - var(--title-clear)));
 }
 
 .workspace-task-row-wrap:hover .workspace-task-title,
@@ -303,11 +325,14 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  opacity: 0;
-  background: linear-gradient(90deg, transparent, var(--task-row-surface) 20px);
-  padding-left: 24px;
-  pointer-events: none;
-  transform: translateX(3px);
+  opacity: var(--row-active);
+  /* meta 宽度随内容变(讨论一个图标 / 团队一串执行者摘要),CSS 算不出它的左边缘,
+     所以它自带挡板:左边一段渐变把标题的尾巴吃掉,图标一定落在不透明的那截上。
+     padding-left 必须比渐变长,否则图标会骑在半透明区上,底下的字透出来。 */
+  background: linear-gradient(90deg, transparent, var(--task-row-surface) 26px);
+  padding-left: 34px;
+  pointer-events: var(--row-events);
+  transform: translateX(calc((1 - var(--row-active)) * 3px));
   transition: opacity 130ms ease-out, transform 130ms ease-out;
 }
 
@@ -315,12 +340,12 @@
   right: 28px;
 }
 
-.workspace-task-row-wrap:hover .workspace-task-meta,
-.workspace-task-row-wrap:focus-within .workspace-task-meta,
-.workspace-task-row-wrap.is-selected .workspace-task-meta {
-  opacity: 1;
-  pointer-events: auto;
-  transform: none;
+/* 「谁建的」徽标站在标题后面、行尾那块地上,跟星标、meta 图标是同一块地。都硬摆的话,
+   星标会压在它上面、meta 那层挡板还会把这枚在流里的胶囊从中间切开(圆角切一半、标签
+   只剩半个字)。所以行尾一被占它就整枚淡出 —— 位置仍占着,标题不会因此重排。 */
+.workspace-task-row .task-creation-badge {
+  opacity: calc(1 - var(--tail-busy));
+  transition: opacity 130ms ease-out;
 }
 
 .workspace-task-kind {
@@ -345,19 +370,12 @@
   background: transparent;
   padding: 0;
   color: var(--faint);
-  opacity: 0;
+  opacity: var(--tail-busy);
   transition: opacity 130ms ease-out;
 }
 
 .workspace-task-star.is-starred {
-  opacity: 1;
   color: var(--muted);
-}
-
-.workspace-task-row-wrap:hover .workspace-task-star,
-.workspace-task-row-wrap.is-selected .workspace-task-star,
-.workspace-task-star:focus-visible {
-  opacity: 1;
 }
 
 .workspace-task-star:hover,
@@ -366,18 +384,17 @@
   color: var(--muted);
 }
 
-/* 星标槽占掉行尾 24px:同一行的 hover 元素(meta、来源徽标)整体左移让位,
-   标题渐隐边界也提前,避免文字压到星星。只有可星标的行(顶层任务)让。 */
+/* 星标槽占掉行尾 24px:同一行的 hover 元素(meta、来源徽标)整体左移让位,标题也把
+   这 24px 让出来(--task-row-tail),避免文字压到星星。只有可星标的行(顶层任务)让。
+   标题右边已经站着别的东西时不用再收第二次:来源徽标那格是 padding-right 顶开的,
+   「谁建的」徽标本身就在流里占着位置,两种情况标题都够不到星标。 */
+.workspace-task-row-wrap.can-star { --task-row-tail: 24px; }
+.workspace-task-row-wrap.can-star:has(> .task-origin-chip),
+.workspace-task-row-wrap.can-star:has(.task-creation-badge) { --task-row-tail: 0px; }
 .workspace-task-row-wrap.can-star > .task-origin-chip { right: 27px; }
 .workspace-task-row-wrap.can-star .workspace-task-row--has-origin { padding-right: 52px; }
 .workspace-task-row-wrap.can-star .workspace-task-meta { right: 29px; }
 .workspace-task-row-wrap.can-star .workspace-task-row--has-origin .workspace-task-meta { right: 52px; }
-
-.workspace-task-row-wrap.can-star:hover .workspace-task-title,
-.workspace-task-row-wrap.has-star .workspace-task-title {
-  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 42px), transparent calc(100% - 22px));
-  mask-image: linear-gradient(90deg, #000 calc(100% - 42px), transparent calc(100% - 22px));
-}
 
 .workspace-status-dot {
   box-sizing: border-box;

@@ -52,8 +52,8 @@ export const handoffApi = {
     request(`/tasks/${id(taskId)}/remote-snapshot`, json("POST", { targetUrl })),
   remoteTaskReply: (taskId: string, targetUrl: string, text: string): Promise<ReplyTaskResult> =>
     request(`/tasks/${id(taskId)}/remote-reply`, json("POST", { targetUrl, text })),
-  remoteTaskAnswer: (taskId: string, targetUrl: string, answer: string): Promise<unknown> =>
-    request(`/tasks/${id(taskId)}/remote-answer`, json("POST", { targetUrl, answer })),
+  remoteTaskAnswer: (taskId: string, targetUrl: string, answer: string, input?: import("@ash/shared/questions").QuestionAnswerInput): Promise<unknown> =>
+    request(`/tasks/${id(taskId)}/remote-answer`, json("POST", { targetUrl, answer, ...input })),
   remoteTaskReturn: (
     taskId: string,
     targetUrl: string,

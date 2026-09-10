@@ -479,6 +479,8 @@ export function TaskDetail({
                 <section className="task-detail-main" aria-label="任务会话">
                   <ConversationFeed
                     task={task}
+                    questionHistory={task.questionHistory}
+                    liveQuestionHistory
                     items={conversation.items}
                     sessions={conversation.sessions}
                     pendingExecutor={pendingExecutor}
@@ -504,8 +506,8 @@ export function TaskDetail({
                     footer={task.question ? (
                       <QuestionCard
                         task={task}
-                        onAnswer={async (answer) => {
-                          await api.answerTask(task.id, answer);
+                        onAnswer={async (answer, input) => {
+                          await api.answerTask(task.id, answer, input);
                           notify("已发送答复，任务正在续跑");
                         }}
                       />

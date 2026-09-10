@@ -605,8 +605,8 @@ export function TeamView({
         <>
           {task.question && (
             <div className="team-lead-question">
-              <QuestionCard task={task} onAnswer={async (answer) => {
-                await api.answerTask(task.id, answer);
+              <QuestionCard task={task} onAnswer={async (answer, input) => {
+                await api.answerTask(task.id, answer, input);
                 await refreshTask();
                 notify("已答复调度者，原会话正在续跑");
               }} />
