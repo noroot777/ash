@@ -1,0 +1,60 @@
+.assistant-shell.chat-shell {
+  --assistant-rail: #edf2f7;
+  --assistant-rail-ink: #2d435d;
+  --assistant-rail-muted: #52657d;
+  --assistant-rail-line: #d7e1ec;
+  --assistant-rail-hover: #e2eaf3;
+  --assistant-rail-selected: #d7e5f5;
+  --accent: #386394;
+  --accent-soft: #e4edf7;
+  --chat-plum: var(--assistant-rail);
+  --chat-violet: var(--accent);
+  --chat-paper: var(--canvas);
+  --chat-mist: var(--raised);
+  --chat-ink: var(--ink);
+  --chat-muted: var(--muted);
+}
+.assistant-shell button:focus-visible,.assistant-shell input:focus-visible,.assistant-shell textarea:focus-visible,.assistant-shell .chat-connection:focus-visible { outline-color: var(--accent); }
+.assistant-shell .chat-rail,.assistant-shell .chat-channels button,.assistant-shell .chat-rail-note strong { color: var(--assistant-rail-ink); }
+.assistant-shell .chat-brand > svg { color: var(--accent); }
+.assistant-shell .chat-rail header button,.assistant-shell .chat-channel-label,.assistant-shell .chat-channel-label button,.assistant-shell .chat-project small,.assistant-shell .chat-rail-note { color: var(--assistant-rail-muted); }
+.assistant-shell .chat-rail button:hover { background: var(--assistant-rail-hover); }
+.assistant-shell .chat-channels .is-selected { background: var(--assistant-rail-selected); color: var(--assistant-rail-ink); box-shadow: inset 3px 0 var(--accent); }
+.assistant-shell .chat-rail-note { border-color: var(--assistant-rail-line); }
+.assistant-shell .chat-header { background: var(--panel); border-color: var(--line); }
+.assistant-shell .chat-room-name > svg:last-child { color: var(--faint); }
+.assistant-shell .chat-member-count { background: var(--panel); border-color: var(--line); color: var(--muted); }
+.assistant-shell .chat-member-count:hover { box-shadow: 0 3px 12px #2d435d10; }
+.assistant-shell .chat-welcome-icon,.assistant-shell .assistant-avatar { background: var(--accent-soft); color: var(--accent); }
+.assistant-shell .chat-welcome button { background: var(--panel); border-color: var(--assistant-rail-line); color: var(--accent); }
+.assistant-shell .chat-welcome button:hover { background: var(--assistant-rail-selected); }
+.assistant-shell .chat-date { color: var(--faint); }
+.assistant-shell .chat-date::before,.assistant-shell .chat-date::after { background: var(--line); }
+.assistant-shell .chat-date span { background: var(--panel); border-color: var(--line); }
+.assistant-shell .chat-message:hover { background: var(--panel); }
+.assistant-shell .tone-user { background: var(--assistant-rail-muted); }
+.assistant-shell .chat-message-content time { color: var(--faint); }
+.assistant-shell .chat-bot-label { background: var(--accent-soft); color: var(--accent); }
+.assistant-shell .chat-typing,.assistant-shell .chat-live-line,.assistant-shell .chat-history-note { color: var(--muted); }
+.assistant-shell .chat-typing i,.assistant-shell .chat-live-dot { background: var(--accent); }
+.assistant-shell .chat-task-card { background: var(--panel); border-color: var(--line); border-left-color: var(--accent); box-shadow: 0 4px 15px #2d435d06; }
+.assistant-shell .chat-task-card:hover { box-shadow: 0 6px 22px #2d435d12; }
+.assistant-shell .chat-task-card > svg { color: var(--accent); }
+.assistant-shell .chat-jump { background: var(--panel); border-color: var(--line); color: var(--accent); box-shadow: 0 3px 12px #2d435d10; }
+.assistant-shell .chat-live-line > button { color: var(--muted); }
+.assistant-shell .chat-composer { background: var(--panel); border-color: var(--line2); box-shadow: 0 2px 9px #2d435d06; }
+.assistant-shell .chat-composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px #38639422; }
+.assistant-shell .chat-composer textarea::placeholder,.assistant-shell .chat-composer footer > span,.assistant-shell .chat-composer-hint { color: var(--faint); }
+.assistant-shell .chat-composer footer > button { color: var(--muted); }
+.assistant-shell .chat-composer footer .chat-send { background: var(--accent); color: white; }
+.assistant-shell .chat-composer footer .chat-send:hover:not(:disabled) { background: #2d5079; }
+.assistant-shell .chat-error { color: var(--red); border-color: color-mix(in srgb, var(--red) 25%, var(--panel)); background: color-mix(in srgb, var(--red) 7%, var(--panel)); }
+.assistant-shell .chat-info { border-color: var(--assistant-rail-line); background: var(--canvas); }
+.assistant-shell .chat-info-title,.assistant-shell .chat-info h3,.assistant-shell .chat-presence strong { color: var(--assistant-rail-ink); }
+.assistant-shell .chat-info p,.assistant-shell .chat-presence small,.assistant-shell .chat-presence button > svg,.assistant-shell .chat-info-stat span,.assistant-shell .chat-context-note { color: var(--muted); }
+.assistant-shell .chat-presence button:hover,.assistant-shell .chat-add-member:hover { background: var(--accent-soft); }
+.assistant-shell .chat-presence i { border-color: var(--canvas); background: var(--faint); }
+.assistant-shell .chat-presence i.is-busy { background: var(--green); }
+.assistant-shell .chat-add-member { border-color: var(--assistant-rail-line); color: var(--accent); }
+.assistant-shell .chat-info-divider { background: var(--line); }
+.assistant-shell .chat-info-stat strong { color: var(--accent); }
