@@ -10,7 +10,8 @@ import { assertBeforeAcceptance } from "./free-workflow.js";
 import { acquireFreeWorkflowAction, releaseFreeWorkflowAction } from "./free-workflow-lock.js";
 import { handoffBlockReasonById } from "./handoff-guard.js";
 import { resolvePreviewCommand } from "./preview-command.js";
-import { parsePreviewConfig, previewProxyEnabled } from "@ash/shared/preview";
+import { parsePreviewConfig, previewProxyEnabled, type WorkspacePreviewInput } from "@ash/shared/preview";
+import { workspacePreviewDirectory, workspacePreviewInput } from "./preview-workspace.js";
 import { isMultiUser } from "./auth/mode.js";
 import { previewState } from "./preview-public.js";
 import { isTurnClaimed } from "./runs.js";
@@ -19,7 +20,7 @@ import { taskWorkspace } from "./task-workspace.js";
 import { readPreview, readPreviewLog, isPreviewStarting, startPreview, stopPreview, beginPreviewStart, endPreviewStart, previewStartCanceled, PREVIEW_CANCELED, type PreviewStep } from "./preview.js";
 import { rerunGateClosed } from "./rerun-gate.js";
 
-async function startFreePreview(taskId: string) {
+async function startFreePreview(taskId: string, input?: WorkspacePreviewInput) {
   // 拿锁那一步也会因为「任务正在切进 running」而失败（见 rerun-gate.ts），但它只会说一句
   // 「已有操作正在进行」——用户此刻遇到的事其实是任务又开跑了。所以先自己问一次，把话说准。
   if (rerunGateClosed(taskId)) throw new Error("任务正在修改代码，结束后再打开预览");
@@ -50,18 +51,18 @@ async function startFreePreview(taskId: string) {
     assertBeforeAcceptance(task);
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
     if (!project) throw new Error("项目不存在");
-    const workspace = await taskWorkspace(task, project.repoPath);
+    const workspace = input ? { path: await workspacePreviewDirectory(taskId) } : await taskWorkspace(task, project.repoPath);
     // 工作区这一段最长（要建 worktree、可能还在等同仓库的写锁），取消八成落在这儿：
     // 到这个检查点就收摊，别再往下认命令、更别起进程。开跑那道门同理——这一段里任务
     // 完全可能已经开始跑下一轮了。
     if (previewStartCanceled(gen)) throw new Error(PREVIEW_CANCELED);
     if (rerunGateClosed(taskId)) throw new Error("任务正在修改代码，结束后再打开预览");
-    const config = parsePreviewConfig(project.previewConfig ?? null);
+    const config = input?.config ?? (input?.command ? null : parsePreviewConfig(project.previewConfig ?? null));
     const selected = config?.mode === "services" ? config.services.filter((s) => s.enabled) : undefined;
     const { command, source } = selected
       ? { command: selected.map((s) => s.command).join("\n\n"), source: "configured" }
-      : resolvePreviewCommand(workspace.path, project.previewCommand);
-    const proxy = previewProxyEnabled(config?.proxy, await isMultiUser());
+      : resolvePreviewCommand(workspace.path, input?.command ?? project.previewCommand);
+    const proxy = !!input || previewProxyEnabled(config?.proxy, await isMultiUser());
     // 就绪判据只认「端口真的连得上」。**不能**再加一条「日志里说了 ready」：READY_WORDS
     // 那张表（ready / listening / compiled…）是照 Node dev server 的说法写的，Django 印的是
     // 「Starting development server at …」、Go/Rust 印什么全看作者 —— 拿它当必要条件，等于
@@ -88,7 +89,7 @@ async function startFreePreview(taskId: string) {
     // 要去项目设置改，认出来的那条跑错了是另一回事。
     await appendTaskTimeline(
       taskId,
-      `自由工作流预览已打开（${source === "configured" ? "项目预览设置" : "自动识别"}：${command}）：${previewState(taskId).url ?? command}`,
+      `自由工作流预览已打开（${input ? "预览工作区" : source === "configured" ? "项目预览设置" : "自动识别"}：${command}）：${previewState(taskId).url ?? command}`,
     );
     if (!mine()) throw new Error(PREVIEW_CANCELED);
     bus.publish({ type: "task.review", taskId });
@@ -105,7 +106,8 @@ export function mountFreePreviewRoutes(api: Hono): void {
     const handedOff = await handoffBlockReasonById(c.req.param("id"));
     if (handedOff) return c.json({ error: handedOff, handoff: true }, 409);
     try {
-      const record = await startFreePreview(c.req.param("id"));
+      const input = workspacePreviewInput(await c.req.json().catch(() => ({})));
+      const record = await startFreePreview(c.req.param("id"), input);
       return c.json(previewState(record.taskId));
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);

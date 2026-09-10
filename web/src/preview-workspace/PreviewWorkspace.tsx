@@ -10,10 +10,12 @@ import { useAnnotationReview } from "./useAnnotationReview.ts";
 import { AnnotationWaiting } from "./AnnotationWaiting.tsx";
 import { AnnotationReviewPanel } from "./AnnotationReviewPanel.tsx";
 import { AnnotationFallback } from "./AnnotationFallback.tsx";
+import { PreviewLauncher } from "./PreviewLauncher.tsx";
 import type { AnnotationMatch } from "@ash/shared/page-annotation-review";
 import { createClientId } from "../lib/clientId.ts";
 import "./preview-workspace.css";
 import "./annotation-review.css";
+import "./preview-launcher.css";
 
 const tools = [
   { id: "element", label: "点选", icon: Cursor },
@@ -27,14 +29,14 @@ export function PreviewWorkspaceEntry({ onOpen }: { onOpen: () => void }) {
   return <div className="preview-workspace-entry">
     <Browser size={28} />
     <h3>在页面上指出修改位置</h3>
-    <p>打开正在运行的预览，点选对象或圈画区域，再逐条填写意见。</p>
+    <p>选择候选或填写命令，在工作区启动预览，点选对象或圈画区域，再逐条填写意见。</p>
     <button type="button" onClick={onOpen}>打开预览工作区</button>
     <small>标注自动保存为批次，发送前可预览内容与图像证据。</small>
   </div>;
 }
 
 export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose: () => void }) {
-  const { state, error: serviceError } = usePreviewServices(taskId);
+  const { state, error: serviceError, refresh } = usePreviewServices(taskId);
   const [serviceId, setServiceId] = useState("");
   const [reload, setReload] = useState(0);
   const batch = useAnnotationBatch(taskId);
@@ -51,7 +53,7 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
   const [page, setPage] = useState<PreviewPageContext | null>(null);
   const [error, setError] = useState("");
   const services = state?.services ?? [];
-  const available = services.filter((service) => service.status === "ready" && service.url);
+  const available = state?.starting ? [] : services.filter((service) => service.status === "ready" && service.url);
   const activeService = available.find((service) => service.id === serviceId) ?? available[0];
   const gateway = activeService && state?.proxied
     ? `/api/tasks/${encodeURIComponent(taskId)}/preview/open/${encodeURIComponent(activeService.id)}` : null;
@@ -158,7 +160,7 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
     <p className={`preview-workspace-mode-note${channel.mode === "annotate" && ready ? " is-annotating" : ""}`} role="status">
       {items.length >= 100 ? "已暂存 100 条标注，请删除部分标注后继续。" : ready
         ? channel.mode === "annotate" ? "标注中 · 点击只选择对象；页面操作已拦截。滚轮可滚动，父容器可逐层上选。" : "浏览中 · 可以正常操作页面；切换到标注后再选择修改位置。"
-        : "等待区展示已存批注与图像，这不是可操作页面。"}
+        : !activeService ? "在下方选择并启动预览，就绪后即可浏览和标注；也可以使用右侧截图批注。" : "等待区展示已存批注与图像，这不是可操作页面。"}
     </p>
     {(error || serviceError) && <p className="preview-workspace-error" role="alert">{error || serviceError}</p>}
     <div className="preview-workspace-body">
@@ -172,13 +174,16 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
             {channel.phase === "failed" && <><p>页面可能已跳转或不支持标注。重载后重试，也可回到回复框使用截图批注。</p>
               <button type="button" onClick={() => setReload((value) => value + 1)}>重载预览</button></>}
           </div>}
-        </> : <AnnotationWaiting controller={batch} review={review} starting={!!state?.starting} />}
+        </> : <>
+          {!activeService && <PreviewLauncher taskId={taskId} preview={state} refresh={refresh} />}
+          {(activeService || batch.records.some((record) => record.messageId)) && <AnnotationWaiting controller={batch} review={review} starting={!!state?.starting} launchAvailable={!activeService} />}
+        </>}
         {page && source && <footer className="preview-workspace-context">
           <code>{page.route}</code><span>{Math.round(page.viewport.width)} × {Math.round(page.viewport.height)} · 滚动 {Math.round(page.scroll.x)}, {Math.round(page.scroll.y)} · {page.viewport.scale.toFixed(2)}×</span>
         </footer>}
       </div>
       <aside className="preview-workspace-notes" aria-label="页面标注列表">
-        <AnnotationFallback taskId={taskId} records={batch.records} queueing={!review.status?.canReopen} />
+        <AnnotationFallback taskId={taskId} records={batch.records} queueing={!review.status?.canReopen} unavailable={!source} />
         <div className="preview-workspace-notes-heading"><h3>标注</h3><span>{items.length} / 100</span></div>
         <p className="preview-workspace-memory">{matchingBatch ? "创建时记录页面上下文 · 自动保存草稿" : "当前批次来自其它预览或服务；新建批次后可继续标注"}</p>
         {!items.length && <p className="preview-workspace-hint">选择「点选」后点击页面上的图标或按钮。编号会出现在页面和这里，再用「父容器」扩大选择范围。</p>}

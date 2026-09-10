@@ -17,6 +17,23 @@ export interface DetectedPreviewService extends PreviewServiceConfig {
   directory: string;
 }
 
+export interface WorkspacePreviewInput {
+  workspace: true;
+  command?: string;
+  config?: ProjectPreviewConfig;
+  stepId?: string;
+}
+
+export interface WorkspacePreviewLaunch {
+  kind: "free" | "workflow";
+  reason: string;
+  directory: string | null;
+  candidates: Array<DetectedPreviewService & { requiresSelection?: boolean }>;
+  configured: { command: string; config?: ProjectPreviewConfig } | null;
+  steps: Array<{ id: string; command: string }>;
+  truncated: boolean;
+}
+
 export interface PreviewServiceState {
   id: string;
   name: string;

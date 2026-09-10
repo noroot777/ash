@@ -395,7 +395,11 @@ export function pickPreviewUrl(
   // 得到的却是 `/%1B[39m` 这条 404 路径：服务是好的、根页面是好的，表现仍然是「预览
   // 打不开」。这一条在这儿修，不在正则里加特例 —— 着色是整段日志的属性，不是 URL 的
   // （`TRAILING_NON_ASCII` 那道也指望不上：带控制码的地址 `new URL()` 照样解析得动，剥不着）。
-  const clean = stripAnsi(log);
+  // Python http.server 的启动横幅用括号包住根地址，右括号属于横幅，不是页面路径。
+  const clean = stripAnsi(log).replace(
+    /(\bServing HTTP on [^\n]+? port \d+ \()(https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):\d+\/)\)(?= \.\.\.)/g,
+    "$1$2 ",
+  );
   for (const hit of clean.matchAll(URL_RE)) {
     const url = usableUrl(hit[0]);
     if (url === null) continue;
@@ -408,4 +412,3 @@ export function pickPreviewUrl(
   const port = announcedPort(clean, skip);
   return port === null ? null : { url: `http://localhost:${port}/`, port, lent: lent === port };
 }
-

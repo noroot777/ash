@@ -105,7 +105,8 @@
     "test:branch-acceptance": "node scripts/test-branch-acceptance.mjs",
     "test:task-creation-origin": "node scripts/test-task-creation-origin.mjs",
     "test:project-git-lifetime": "node scripts/test-project-git-lifetime.mjs",
-    "test:annotation-review": "tsx scripts/test-annotation-review.ts && tsx scripts/test-annotation-review-presentation.tsx"
+    "test:annotation-review": "tsx scripts/test-annotation-review.ts && tsx scripts/test-annotation-review-presentation.tsx",
+    "test:preview-workspace": "tsx scripts/test-preview-workspace-launch.tsx"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",

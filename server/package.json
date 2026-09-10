@@ -142,7 +142,8 @@
     "test:missing-task-writes": "tsx scripts/test-missing-task-writes.ts",
     "test:preview-deps": "tsx scripts/test-preview-deps.ts",
     "test:page-annotation-batches": "tsx scripts/test-page-annotation-batches.ts && tsx scripts/test-preview-annotation.ts",
-    "test:annotation-batches": "tsx scripts/test-page-annotation-batches.ts"
+    "test:annotation-batches": "tsx scripts/test-page-annotation-batches.ts",
+    "test:preview-workspace": "tsx scripts/test-preview-workspace.ts"
   },
   "dependencies": {
     "@ash/shared": "*",

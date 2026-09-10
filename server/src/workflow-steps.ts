@@ -19,8 +19,11 @@ import { projects, tasks } from "./db/schema.js";
 import { augmentedEnv } from "./executors/spawn.js";
 import { RUNS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
-import { readPreview, startPreview, type PreviewStep } from "./preview.js";
-import { previewProxyEnabled } from "@ash/shared/preview";
+import { readPreview, startPreview, beginPreviewStart, endPreviewStart, previewStartCanceled, PREVIEW_CANCELED, type PreviewStep } from "./preview.js";
+import { previewProxyEnabled, type WorkspacePreviewInput } from "@ash/shared/preview";
+import { workspacePreviewDirectory } from "./preview-workspace.js";
+import { resolvePreviewCommand } from "./preview-command.js";
+import { rerunGateClosed } from "./rerun-gate.js";
 import { isMultiUser } from "./auth/mode.js";
 import { previewState } from "./preview-public.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -103,11 +106,21 @@ async function runCommand(task: TaskRow, step: CommandStep): Promise<SegmentResu
   }
 }
 
-async function runPreview(task: TaskRow, step: PreviewStep): Promise<SegmentResult> {
-  const cwd = await cwdFor(task, "workspace");
+async function runPreview(task: TaskRow, step: PreviewStep, workspace?: { input: WorkspacePreviewInput; gen: string }): Promise<SegmentResult> {
+  const cwd = workspace ? await workspacePreviewDirectory(task.id) : await cwdFor(task, "workspace");
   if (!cwd) return { ok: false, failed: step, reason: "找不到这个任务的工作目录" };
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
-  const result = await startPreview(task.id, step, cwd, undefined, { proxy: previewProxyEnabled(project?.previewConfig?.proxy, await isMultiUser()) });
+  const config = workspace?.input.config;
+  const services = config?.mode === "services" ? config.services.filter((s) => s.enabled) : undefined;
+  if (workspace) {
+    const command = services ? services.map((s) => s.command).join("\n\n")
+      : resolvePreviewCommand(cwd, workspace.input.command ?? (step.p.cmd || project?.previewCommand)).command;
+    step = { ...step, p: { ...step.p, cmd: command, ...(workspace.input.command || config ? { ready: "port" as const } : {}) } };
+    if (previewStartCanceled(workspace.gen) || rerunGateClosed(task.id)) throw new Error(PREVIEW_CANCELED);
+  }
+  const result = await startPreview(task.id, step, cwd, workspace?.gen, {
+    services, primaryServiceId: config?.primaryServiceId, proxy: !!workspace || previewProxyEnabled(project?.previewConfig?.proxy, await isMultiUser()),
+  });
   if (result.ok) {
     await appendTaskTimeline(
       task.id,
@@ -302,7 +315,23 @@ export type PreviewRestart =
  *  的孤儿，端口还占着。 */
 const restartingPreview = new Set<string>();
 
-export async function restartTaskPreview(taskId: string, stepId?: string | null): Promise<PreviewRestart> {
+export async function restartTaskPreview(taskId: string, stepId?: string | null, input?: WorkspacePreviewInput): Promise<PreviewRestart> {
+  if (restartingPreview.has(taskId)) {
+    return { ok: false, reason: "这个任务的预览正在起，等它起来（或起不来）再说", code: "busy" };
+  }
+  restartingPreview.add(taskId);
+  const gen = input ? beginPreviewStart(taskId) : undefined;
+  try {
+    return await restartPreviewStep(taskId, stepId, input, gen);
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : String(error), code: "failed" };
+  } finally {
+    if (gen) endPreviewStart(taskId, gen);
+    restartingPreview.delete(taskId);
+  }
+}
+
+async function restartPreviewStep(taskId: string, stepId?: string | null, input?: WorkspacePreviewInput, gen?: string): Promise<PreviewRestart> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) return { ok: false, reason: "这个任务不在了", code: "gone" };
   const steps = (taskWorkflowDef(task.workflow)?.steps ?? []).filter(
@@ -310,7 +339,8 @@ export async function restartTaskPreview(taskId: string, stepId?: string | null)
   );
   // 一条线上「打开预览」**不是** singleton（只有干活和合并是），所以调用方得指名道姓说
   // 重启哪一站；只有一站时才允许省略。
-  const step = stepId ? steps.find((s) => s.id === stepId) : steps.length === 1 ? steps[0] : null;
+  const step = stepId ? steps.find((s) => s.id === stepId) : steps.length === 1 ? steps[0]
+    : !steps.length && input ? { id: "workspace-preview", kind: "preview", p: { cmd: "", mode: "frontend", ready: "port", life: "task" }, fail: null } satisfies PreviewStep : null;
   if (!step) {
     return {
       ok: false,
@@ -320,17 +350,10 @@ export async function restartTaskPreview(taskId: string, stepId?: string | null)
         : steps.length ? "这条线上不止一站「打开预览」，得说清楚重启哪一站" : "这条线上没有「打开预览」这一站",
     };
   }
-  if (restartingPreview.has(taskId)) {
-    return { ok: false, reason: "这个任务的预览正在起，等它起来（或起不来）再说", code: "busy" };
-  }
-  restartingPreview.add(taskId);
-  try {
-    // 直接复用线自己跑这一站的那条路：成败两种时间线都由它写，刷新后仍看得见。
-    const result = await runPreview(task, step);
-    if (!result.ok) return { ok: false, reason: result.reason ?? "预览没起来", code: "failed" };
-    const record = readPreview(taskId);
-    return { ok: true, url: previewState(taskId).url, port: record?.port ?? null };
-  } finally {
-    restartingPreview.delete(taskId);
-  }
+  // 直接复用线自己跑这一站的那条路：成败两种时间线都由它写，刷新后仍看得见。
+  const result = await runPreview(task, step, input && gen ? { input, gen } : undefined);
+  if (!result.ok) return { ok: false, reason: result.reason ?? "预览没起来", code: "failed" };
+  if (gen && (previewStartCanceled(gen) || rerunGateClosed(taskId) || readPreview(taskId)?.gen !== gen)) throw new Error(PREVIEW_CANCELED);
+  const record = readPreview(taskId);
+  return { ok: true, url: previewState(taskId).url, port: record?.port ?? null };
 }

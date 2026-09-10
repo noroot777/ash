@@ -1,0 +1,18 @@
+.preview-launcher { flex: 1; min-height: 0; overflow: auto; padding: 24px; }
+.preview-launcher h3 { margin: 0 0 10px; font-size: 17px; }
+.preview-launcher p { line-height: 1.8; color: var(--muted); }
+.preview-launch-directory { display: block; margin: 15px 0; overflow-wrap: anywhere; color: var(--muted); }
+.preview-launch-candidates { display: grid; gap: 10px; }
+.preview-launch-candidate { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 14px; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+.preview-launch-candidate pre { max-width: 100%; margin: 0; color: var(--muted); font: 11px/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.preview-launch-candidate small, .preview-launch-custom small { line-height: 1.7; color: var(--muted); }
+.preview-workspace .preview-launch-candidate button, .preview-workspace .preview-launch-custom button { color: var(--accent); border-color: var(--accent); }
+.preview-launch-custom { margin: 18px 0; }
+.preview-launch-custom summary { cursor: pointer; }
+.preview-launch-custom label { display: grid; gap: 8px; margin: 12px 0; }
+.preview-launch-custom textarea { width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--ink); font: 12px/1.7 var(--font-mono); resize: vertical; }
+.preview-launch-custom small { display: block; margin-bottom: 10px; }
+.preview-launch-error, .preview-launch-log { max-height: 260px; overflow: auto; padding: 12px; border: 1px solid var(--line); border-radius: 7px; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.7 var(--font-mono); }
+.preview-launch-error { color: var(--red); }
+.preview-launch-log { background: var(--canvas); }
+.preview-launch-fallback { font-size: 11px; }

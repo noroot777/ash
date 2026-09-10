@@ -76,6 +76,9 @@ check("借的端口没出现在日志里也取第一个", pickPreviewUrl(both, 5
   url: "http://localhost:4317", port: 4317, lent: false,
 });
 check("没有地址", pickPreviewUrl("compiling...\n", 5173), null);
+check("Python 静态服务横幅的括号不进入根路径", pickPreviewUrl("Serving HTTP on 0.0.0.0 port 5173 (http://0.0.0.0:5173/) ...\n", 5173), {
+  url: "http://0.0.0.0:5173/", port: 5173, lent: true,
+});
 check("地址不带端口就按协议默认", pickPreviewUrl("running at http://localhost/\n", null), {
   url: "http://localhost/", port: 80, lent: false,
 });
