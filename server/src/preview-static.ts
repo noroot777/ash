@@ -84,7 +84,8 @@ export function staticPreviewCandidates(root: string, directories: string[], she
     const output = OUTPUT_DIRS.has(basename(dir).toLowerCase());
     if (output ? hasSource(dir) : inSourceTree(root, rel)) continue;
     if (!pages.every((page) => standaloneHtml(dir, page.name))) continue;
-    const python = shell.kind === "cmd" ? "python" : "python3";
+    // Windows 的 python 可能只是 Store 占位程序；py -3 能找到已安装的 Python 3。
+    const python = shell.kind === "cmd" ? "py -3" : "python3";
     const command = (n: number) => {
       const bare = `${python} -u -m http.server ${shell.ref(n === 1 ? "PORT" : `PORT${n}`)} --bind 0.0.0.0`;
       return rel === "." ? bare : shell.cd(rel, bare);

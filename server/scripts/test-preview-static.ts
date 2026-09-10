@@ -136,7 +136,7 @@ try {
   file("runtime/静态 pages & demo/style.css", "body { color: navy; }");
   file("runtime/静态 pages & demo/app.js", "console.log('ready');");
   const cmd = detectPreviewCandidates(runtime, previewShell("win32"))[0];
-  assert.equal(cmd.command, 'cd /d "静态 pages & demo" && python -u -m http.server %PORT% --bind 0.0.0.0');
+  assert.equal(cmd.command, 'cd /d "静态 pages & demo" && py -3 -u -m http.server %PORT% --bind 0.0.0.0');
   assert.equal(cmd.sidekick(2), null);
   file("percent/100%/index.html", html());
   assert.deepEqual(detectPreviewCandidates(join(root, "percent"), previewShell("win32")), []);
