@@ -11,15 +11,16 @@
 // 读 ASH_PROXY、ash 注入 ASH_HOST_API —— 中间断一环，前两条都还能各自「通过」。
 //
 // 两档一起跑，因为「ASH_PROXY 该不该说了算」的答案取决于它是**谁**写的，而这条链上只有
-// ash 组子进程环境那一步分得清：
-//   ① 宿主进程带着遗留的 `ASH_PROXY`/`HARNESS_PROXY`（见下面开头两行）→ 默认 `npm run dev`
-//      仍须打到 boundListeningPort()（第 7 轮审查 P1）
+// ash 组子进程环境、以及登录 shell 读完 profile 之后那两步分得清：
+//   ① 宿主进程继承的、以及登录 shell 从 profile 里读回来的 `ASH_PROXY`/`HARNESS_PROXY`
+//      （见下面开头那两段）→ 默认 `npm run dev` 仍须打到 boundListeningPort()
+//      （第 7、8 轮审查 P1）
 //   ② 命令现场写 `ASH_PROXY=$URL2` → 仍须打到分支自己的后端（第 6 轮审查 P1）
 //
 // 跑法：npm -w server run test:preview-host-api
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,6 +43,15 @@ await ensureSchema();
 // 提升成 `ASH_*`，只擦新名等于留了条绕道。
 process.env.ASH_PROXY = "http://127.0.0.1:1";
 process.env.HARNESS_PROXY = "http://127.0.0.1:2";
+
+// 同样两个名字的**第二条来路**：预览命令由 `sh -lc` 跑，登录 shell 会读 profile —— 谁为日常
+// 开发在 `~/.profile` 里写了一行 `export ASH_PROXY=…`，它就在 ash 擦完之后原样复活
+// （第 8 轮审查 P1）。用临时 HOME 把这条路摆出来；端口另给两个，日志里露头时一眼看得出
+// 是哪条路漏的。
+const home = join(root, "home");
+mkdirSync(home, { recursive: true });
+writeFileSync(join(home, ".profile"), "export ASH_PROXY=http://127.0.0.1:5\nexport HARNESS_PROXY=http://127.0.0.1:6\n");
+process.env.HOME = home;
 
 // 冒充「这台 ash」：随便一个空闲端口，**不是 4317**。谁打过来它都记下来。
 const seen: string[] = [];
@@ -72,7 +82,7 @@ try {
   // ① 自述和那句人话都得说出我们真绑着的端口，不是 4317，也不是继承来的那份。
   assert.match(log, new RegExp(`\\[ash\\] preview-api-host 127\\.0\\.0\\.1:${address.port}\\b`), `自述必须指向 ${address.port}\n${log.slice(0, 600)}`);
   assert(!log.includes("preview-api-host 127.0.0.1:4317"), "不许再写死 4317");
-  assert(!/127\.0\.0\.1:[12]\b/.test(log), `父进程带下来的 ASH_PROXY/HARNESS_PROXY 一个字都不该起作用\n${log.slice(0, 600)}`);
+  assert(!/127\.0\.0\.1:[1256]\b/.test(log), `父进程带下来的 ASH_PROXY/HARNESS_PROXY 一个字都不该起作用\n${log.slice(0, 600)}`);
   assert.match(log, new RegExp(`只起前端 \\d+，/api 打到 127\\.0\\.0\\.1:${address.port}`), "给人看的那行同样不许说假话");
 
   // ② 判读侧认下了，登录态直连这一档才开得起来（缘由见 preview-access.ts 顶部）。
@@ -119,7 +129,7 @@ try {
   // 自述跟着实际去向走，于是跟我们绑着的端口对不上 —— 这一档自然就没有登录态直连。
   assert.match(stackLog, new RegExp(`\\[ash\\] preview-api-host localhost:${port2}\\b`), "自述报的是它真打过去的那个");
   assert(!stackLog.includes(`preview-api-host 127.0.0.1:${address.port}`), "不许报成主 ash");
-  assert(!/127\.0\.0\.1:[12]\b/.test(stackLog), "继承来的那份在这一档同样不该露头");
+  assert(!/127\.0\.0\.1:[1256]\b/.test(stackLog), "继承来的那份在这一档同样不该露头");
   assert.equal(stackRecord.hostApi ?? null, null, "整栈脚本这一档不许产生 hostApi");
 
   // —— 第三档：这台 ash 说不出自己在哪的时候 ——
