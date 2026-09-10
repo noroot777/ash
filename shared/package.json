@@ -6,6 +6,10 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./page-annotation": {
+      "types": "./src/page-annotation.ts",
+      "default": "./src/page-annotation.ts"
+    },
     "./branch-plan": {
       "types": "./src/branch-plan.ts",
       "default": "./src/branch-plan.ts"

@@ -9,10 +9,18 @@
 import type { Hono } from "hono";
 import { handoffBlockReasonById } from "./handoff-guard.js";
 import { restartTaskPreview } from "./workflow-steps.js";
+import { previewState } from "./preview-public.js";
+import { actorOf } from "./auth/context.js";
+import { requireTaskAccess } from "./auth/visibility.js";
 
 const STATUS = { gone: 404, nostep: 400, busy: 409, failed: 502 } as const;
 
 export function mountPreviewRoutes(api: Hono): void {
+  api.get("/tasks/:id/preview", async (c) => {
+    await requireTaskAccess(actorOf(c), c.req.param("id"));
+    c.header("cache-control", "no-store");
+    return c.json(previewState(c.req.param("id")));
+  });
   api.post("/tasks/:id/preview/restart", async (c) => {
     // 重开预览会在任务工作区里跑启动命令——接力出去的「历史存档」不给开。
     const handedOff = await handoffBlockReasonById(c.req.param("id"));

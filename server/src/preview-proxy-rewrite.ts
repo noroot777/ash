@@ -1,5 +1,7 @@
 import type { PreviewRecord } from "./preview-store.js";
 import { previewBase } from "./preview-public.js";
+import { previewAnnotationRuntime } from "./preview-annotation-runtime.js";
+import { neutralizePreviewMetaCsp } from "./preview-meta-csp.js";
 
 export function previewAddressMap(record: PreviewRecord): Array<{ port: number; base: string }> {
   return (record.services ?? []).filter((s) => s.port !== null).map((s) => ({ port: s.port!, base: previewBase(record, s.id) }));
@@ -30,7 +32,9 @@ export function rewritePreviewText(text: string, contentType: string, base: stri
   if (contentType.includes("text/html")) rewritten = rewritten.replace(/(\b(?:src|href|action|poster)\s*=\s*)(["'])([^"']*)\2/gi,
     (_all, before: string, quote: string, value: string) => `${before}${quote}${rewritePreviewUrl(value, base, record)}${quote}`);
   if (!contentType.includes("text/html")) return rewritten;
-  const bootstrap = `<script>${previewBrowserBridge(base, record).replaceAll("</script", "<\\/script")}</script>`;
+  rewritten = neutralizePreviewMetaCsp(rewritten);
+  const bootstrap = [previewBrowserBridge(base, record), previewAnnotationRuntime()]
+    .map((script) => `<script>${script.replaceAll("</script", "<\\/script")}</script>`).join("");
   return /<head(?:\s[^>]*)?>/i.test(rewritten)
     ? rewritten.replace(/<head(?:\s[^>]*)?>/i, (head) => head + bootstrap)
     : bootstrap + rewritten;
