@@ -8,6 +8,7 @@ import { alive, readAnyPreview } from "./preview-store.js";
 import { previewBase } from "./preview-public.js";
 import { rewritePreviewText, rewritePreviewUrl } from "./preview-proxy-rewrite.js";
 import { grantFor, canUsePreview } from "./preview-access.js";
+import { cookieHeaderFor, defaultPath, rememberCookie, type PreviewCookieJar } from "./preview-cookies.js";
 
 const httpAgent = new Agent({ keepAlive: true });
 const httpsAgent = new HttpsAgent({ keepAlive: true, rejectUnauthorized: false });
@@ -33,7 +34,7 @@ function targetOf(requestPath: string) {
   return { record, grant, service, protocol: target.protocol, port: service.port, path, base: previewBase(record, service.id) };
 }
 
-function forwardedHeaders(input: Headers | IncomingHttpHeaders, token: string, jar: Map<string, string>): Record<string, string> {
+function forwardedHeaders(input: Headers | IncomingHttpHeaders, jar: PreviewCookieJar, upstreamPath: string): Record<string, string> {
   const entries = input instanceof Headers ? [...input.entries()] : Object.entries(input).map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : v ?? ""]);
   const result: Record<string, string> = {};
   const connection = entries.find(([k]) => k.toLowerCase() === "connection")?.[1].toLowerCase().split(",").map((s) => s.trim()) ?? [];
@@ -42,52 +43,36 @@ function forwardedHeaders(input: Headers | IncomingHttpHeaders, token: string, j
     if (HOP_HEADERS.has(k) || connection.includes(k) || ["host", "cookie", "authorization", "origin", "referer", "accept-encoding", "content-length"].includes(k) || k.startsWith("x-ash-") || k.startsWith("x-forwarded-") || k === "forwarded") continue;
     result[k] = value;
   }
-  // 罐子（服务端记的）在前，浏览器带回来的 `ashpv_…` 在后 —— 后者在沙箱 opaque origin 下
-  // 基本是空的（见 preview-access.ts 的 `jar` 注释），但预览直接开在 localhost 上时它仍然
-  // 有效，而且 `document.cookie` 那侧要靠它。同名以罐子为准：那是上游最近一次亲口说的。
-  const merged = new Map(jar);
-  const cookies = entries.find(([k]) => k.toLowerCase() === "cookie")?.[1] ?? "";
-  const prefix = `ashpv_${token}_`;
-  for (const one of cookies.split(";").map((s) => s.trim()).filter((s) => s.startsWith(prefix))) {
-    const equals = one.indexOf("=");
-    if (equals < 0) continue;
-    try {
-      const name = Buffer.from(one.slice(prefix.length, equals), "hex").toString("utf8");
-      if (name && !merged.has(name)) merged.set(name, one.slice(equals + 1));
-    } catch { /* 名字不是合法的 hex，就是别人塞的，不认 */ }
-  }
-  if (merged.size) result.cookie = [...merged].map(([name, value]) => `${name}=${value}`).join("; ");
+  // 往上游发什么 cookie，**只认罐子**，浏览器带回来的一概不作数。两条理由：
+  // ① 在沙箱 opaque origin 下它本来就是空的（见 preview-cookies.ts 开头）；
+  // ② 发回浏览器的那份被重挂在预览前缀上，Path 信息已经不在了 —— 拿它当来源，
+  //    `Path=/private` 的凭证又会从 `/public` 溜出去，正是罐子要防的事。
+  // 发回浏览器仍然照发（见 scopedCookie），那是给页面里的 `document.cookie` 看的。
+  const cookie = cookieHeaderFor(jar, upstreamPath);
+  if (cookie) result.cookie = cookie;
   result["accept-encoding"] = "identity";
   return result;
 }
 
 const COOKIE_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
-/** 把上游这一条 Set-Cookie 记进罐子；写的是「删掉我」就照删。 */
-function rememberCookie(jar: Map<string, string>, value: string): void {
-  const [pair, ...attributes] = value.split(";");
-  const equals = pair.indexOf("=");
-  if (equals <= 0) return;
-  const name = pair.slice(0, equals).trim();
-  if (!COOKIE_NAME_RE.test(name)) return;
-  const attribute = (want: string) => attributes.find((s) => new RegExp(`^\\s*${want}\\s*=`, "i").test(s))?.split("=").slice(1).join("=").trim();
-  const maxAge = attribute("max-age");
-  const expires = attribute("expires");
-  const gone = maxAge !== undefined
-    ? Number(maxAge) <= 0
-    : expires !== undefined && Date.parse(expires) <= Date.now();
-  if (gone) jar.delete(name);
-  else jar.set(name, pair.slice(equals + 1));
-}
-
-function scopedCookie(value: string, base: string, token: string): string | null {
+/**
+ * 发回浏览器的那一份。它**不是**会话赖以存活的那份（那是罐子），只是让页面里的
+ * `document.cookie` 还能读到自己设的东西；浏览器收不下也不影响预览可用。
+ *
+ * Path 按原样映射到预览前缀底下（`/private` → `<base>private`），而不是一律挂成
+ * `<base>`：挂成 `<base>` 就等于把应用自己的 Path 作用域抹平了。
+ */
+function scopedCookie(value: string, base: string, token: string, upstreamPath: string): string | null {
   const [pair, ...attributes] = value.split(";");
   const equals = pair.indexOf("=");
   if (equals <= 0) return null;
   const name = pair.slice(0, equals).trim();
   if (!COOKIE_NAME_RE.test(name)) return null;
+  const declared = attributes.find((s) => /^\s*path\s*=/i.test(s))?.split("=").slice(1).join("=").trim();
+  const path = declared?.startsWith("/") ? declared : defaultPath(upstreamPath);
   const kept = attributes.filter((s) => !/^\s*(domain|path|samesite)\s*=/i.test(s));
-  return `ashpv_${token}_${Buffer.from(name).toString("hex")}${pair.slice(equals)}; Path=${base}; SameSite=Lax;${kept.join(";")}`;
+  return `ashpv_${token}_${Buffer.from(name).toString("hex")}${pair.slice(equals)}; Path=${base}${path.slice(1)}; SameSite=Lax;${kept.join(";")}`;
 }
 
 async function loopback(port: number): Promise<string> {
@@ -132,7 +117,7 @@ export function mountPreviewProxy(app: Hono): void {
     try {
       const hostname = await loopback(target.port);
       if (!targetOf(requested.pathname)) return c.text("预览已关闭", 404);
-      const headers = forwardedHeaders(c.req.raw.headers, target.record.proxyToken!, target.grant.jar);
+      const headers = forwardedHeaders(c.req.raw.headers, target.grant.jar, target.path);
       headers.host = `localhost:${target.port}`;
       headers.origin = `${target.protocol}//localhost:${target.port}`;
       headers["x-forwarded-prefix"] = target.base.slice(0, -1);
@@ -157,8 +142,8 @@ export function mountPreviewProxy(app: Hono): void {
       }
       for (const cookie of response.headers["set-cookie"] ?? []) {
         // 先记进罐子（这是会话能不能活下来的那一份），再改写一份发给浏览器（能收下就收）。
-        rememberCookie(target.grant.jar, cookie);
-        const rewritten = scopedCookie(cookie, target.base, target.record.proxyToken!);
+        rememberCookie(target.grant.jar, cookie, target.path);
+        const rewritten = scopedCookie(cookie, target.base, target.record.proxyToken!, target.path);
         if (rewritten) result.append("set-cookie", rewritten);
       }
       const location = result.get("location");
@@ -206,7 +191,7 @@ export function attachPreviewUpgrades(server: Server): void {
       if (!target || !originMatches || !(await canUsePreview(target.grant))) { socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n"); return; }
       const hostname = await loopback(target.port);
       if (!targetOf(requested.pathname)) { socket.destroy(); return; }
-      const headers = forwardedHeaders(incoming.headers, target.record.proxyToken!, target.grant.jar);
+      const headers = forwardedHeaders(incoming.headers, target.grant.jar, target.path);
       headers.host = `localhost:${target.port}`;
       headers.origin = `${target.protocol}//localhost:${target.port}`;
       headers.connection = "Upgrade"; headers.upgrade = "websocket";

@@ -5,23 +5,15 @@ import type { Actor } from "./auth/context.js";
 import { alive, readAnyPreview } from "./preview-store.js";
 import { previewBase } from "./preview-public.js";
 import { rewritePreviewUrl } from "./preview-proxy-rewrite.js";
+import type { PreviewCookieJar } from "./preview-cookies.js";
 
 /**
- * `jar` 是这一趟预览自己的 cookie 罐子，**存在服务端**。
+ * `jar` 是这一趟预览自己的 cookie 罐子（存在服务端，规矩和缘由都在 preview-cookies.ts）。
  *
- * 被预览的应用登录后设的 cookie 本来是改写成 `ashpv_…` 发回浏览器的，但预览文档带
- * `CSP: sandbox`（没有 `allow-same-origin`），它的 origin 是 `null` —— 浏览器把它发出的
- * 每个请求都当成跨站，`SameSite=Lax` 的 cookie 一个都不带回来。实测（明文 http + 局域网
- * IP，也就是用户访问 ash 的常态）`Lax`/`Strict`/`None`/不写/`None; Secure` **五种写法全都
- * 回不来**：`None` 缺 `Secure` 会被浏览器直接丢掉，`Secure` 在非可信来源上同样被丢掉。
- * 于是预览里的应用永远保不住会话 —— ash 预览 ash 时的表现就是「粘贴 key 登录，下一个
- * 请求又回到登录页」。
- *
- * 所以 cookie 不再指望浏览器带回来，由代理自己记着、每次转发时自己贴上。罐子挂在 grant
- * 上而不是全局表里，是为了让它的寿命跟着「这一次打开预览」走：grant 一没，会话一起没，
- * 不会渗到下一次打开、更不会渗到别的任务。
+ * 它挂在 grant 上而不是全局表里，是为了让寿命跟着「这一次打开预览」走：grant 一没，会话
+ * 一起没，不会渗到下一次打开、更不会让别人从任务页点开就坐进你登录好的那个会话。
  */
-interface PreviewGrant { taskId: string; gen: string; actor: Actor; expires: number; session?: string; turn?: string; keyHash?: string | null; jar: Map<string, string> }
+interface PreviewGrant { taskId: string; gen: string; actor: Actor; expires: number; session?: string; turn?: string; keyHash?: string | null; jar: PreviewCookieJar }
 const grants = new Map<string, PreviewGrant>();
 const GRANT_LIFE = 8 * 60 * 60_000;
 
