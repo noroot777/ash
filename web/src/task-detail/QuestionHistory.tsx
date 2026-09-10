@@ -31,10 +31,7 @@ function LocalQuestionHistory({ taskId, history, messages, children }: {
 }) {
   const [state, setState] = useState<{ taskId: string; records: QuestionRecord[]; error?: string }>({ taskId, records: history ?? [] });
   const generation = useRef(0);
-  const suppliedHistory = useRef(history);
-  suppliedHistory.current = history;
   const connectedOnce = useRef(false);
-  const wasConnected = useRef(false);
   useEffect(() => {
     if (history !== undefined) setState((current) => ({ taskId, records: mergeRecords(current.records, history) }));
   }, [taskId, history]);
@@ -53,20 +50,17 @@ function LocalQuestionHistory({ taskId, history, messages, children }: {
     const records = event.type === "task.question" && event.taskId === taskId && event.answeredQuestion
       ? [event.answeredQuestion]
       : event.type === "task.updated" && event.task.id === taskId ? event.task.questionHistory : undefined;
-    if (records) setState((current) => ({ ...current, taskId, records: mergeRecords(current.taskId === taskId ? current.records : [], records) }));
+    if (records) setState((current) => ({ taskId, records: mergeRecords(current.taskId === taskId ? current.records : [], records) }));
   });
   useEffect(() => {
-    const reconnecting = connectedOnce.current && !wasConnected.current;
-    wasConnected.current = connected;
     if (connected) {
       connectedOnce.current = true;
-      if (!reconnecting && suppliedHistory.current !== undefined) return;
       const timer = setTimeout(reload, 0);
       return () => clearTimeout(timer);
     }
-    if (connectedOnce.current || suppliedHistory.current !== undefined) return;
-    // 首次读取等事件流建立后发起，合并挂载和初次连接的两次加载；连接失败仍能回看历史。
-    const timer = setTimeout(() => { if (suppliedHistory.current === undefined) reload(); }, 1000);
+    if (connectedOnce.current) return;
+    // 调用方快照可能早于最近一次答复；每次挂载用轻量读取补齐，事件流未连上时延迟兜底。
+    const timer = setTimeout(reload, 1000);
     return () => clearTimeout(timer);
   }, [connected, reload]);
   const local = state.taskId === taskId ? state : { records: [], error: undefined };

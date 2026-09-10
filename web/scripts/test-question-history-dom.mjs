@@ -64,19 +64,29 @@ try {
   };
 
   for (const mode of ["feed", "team"]) for (const supplied of ["seed", "empty"]) {
-    const { page, calls } = await open(`mode=${mode}&history=${supplied}&warm=1`);
+    let saved = [];
+    const { page, calls } = await open(`mode=${mode}&history=${supplied}&warm=1`, { respond: async () => ({ json: saved }) });
     await sse(page, "open");
     await page.getByRole("button", { name: "挂载切换" }).click();
     await count(page, supplied === "seed" ? 1 : 0);
     await page.waitForTimeout(1100);
-    assert.equal(calls.length, 0, "已有历史在 StrictMode / 初次连接不发 GET");
-    const receipt = record("live");
+    assert.deepEqual(calls, ["/api/tasks/history-a/question-history"], "已有快照也只读一次轻量历史，补齐可能过期的记录");
+    const receipt = { ...record("live"), questionOptions: ["live的答案", "其他选项"], answers: ["live的答案"] };
+    saved = [receipt];
     await answer(page, receipt);
     await answer(page, receipt);
     await count(page, supplied === "seed" ? 2 : 1);
     await page.getByRole("button", { name: "提供快照" }).click();
     await count(page, 2);
     assert.match(await page.locator("main").textContent(), /live的问题/);
+    await page.getByRole("button", { name: "挂载切换" }).click();
+    await count(page, 0);
+    await page.getByRole("button", { name: "挂载切换" }).click();
+    await count(page, 2);
+    assert.equal(calls.length, 2, "重挂载后补齐旧快照遗漏的最新答复");
+    await page.locator(".task-question-record").filter({ hasText: "live的问题" }).locator("summary").click();
+    assert.equal(await page.getByText("live的问题", { exact: true }).isVisible(), true);
+    assert.equal(await page.getByText("其他选项", { exact: true }).isVisible(), true, "回看仍有当时的完整选项");
     await page.close();
   }
 
@@ -120,6 +130,19 @@ try {
   assert.equal(retry.calls.length, 2);
   await retry.page.close();
 
+  for (const eventType of ["task.question", "task.updated"]) {
+    const recovered = await open("", { respond: async () => ({ status: 503, json: { error: "暂时不可用" } }) });
+    await recovered.page.getByText("问答记录加载失败").waitFor();
+    await answer(recovered.page, record("other"), "another-task");
+    assert.equal(await recovered.page.getByText("问答记录加载失败").count(), 1, "其他任务的事件不清除当前错误");
+    if (eventType === "task.question") await answer(recovered.page, record("recovered"));
+    else await sse(recovered.page, "message", { type: "task.updated", task: { id: "history-a", questionHistory: [record("recovered")] } });
+    await count(recovered.page, 1);
+    assert.equal(await recovered.page.getByText("问答记录加载失败").count(), 0, "实时记录恢复后清除过期的失败提示");
+    assert.equal(recovered.calls.length, 1);
+    await recovered.page.close();
+  }
+
   let releaseOld;
   const old = new Promise((resolve) => { releaseOld = resolve; });
   pending.push(() => releaseOld({ json: [] }));
@@ -148,7 +171,7 @@ try {
   assert.doesNotMatch(await form.locator("main").innerText(), /可稍后补充/);
   await form.close();
   assert.deepEqual(failures, []);
-  console.log("question history DOM: reuse, live receipts, single initial load, reconnect, stale responses, switching, retry, snapshot and truthful copy passed");
+  console.log("question history DOM: seeded history, remount recovery, live receipts, single initial load, reconnect, stale responses, switching, retry/SSE recovery, snapshot and truthful copy passed");
 } finally {
   pending.forEach((release) => release());
   await browser?.close();
