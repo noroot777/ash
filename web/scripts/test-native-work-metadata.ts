@@ -28,7 +28,8 @@ const completed: NativeWorkEvent = { type: "agent", id: "child", at: end, status
 const running = rowFrom([spawn, launched]);
 assert.equal(running.startedAt, start);
 assert.equal(running.endedAt, undefined, "派活工具返回不等于子智能体结束");
-assert.equal(running.model, "gpt-5.6-sol");
+assert.equal(running.model, undefined, "调用参数不能冒充运行记录");
+assert.equal(running.requestedModel, "gpt-5.6-sol");
 assert.equal(nativeWorkDuration(running, Date.parse(end)), "2分 5秒");
 const done = rowFrom([spawn, launched, completed]);
 assert.deepEqual(rowFrom([spawn, launched, completed], true), done, "实时流和刷新恢复的时间、模型保持一致");
@@ -57,8 +58,8 @@ assert.equal(reordered.startedAt, start);
 assert.equal(reordered.endedAt, end);
 assert.equal(reordered.model, "reported-model", "native id 合并保留已上报的实际模型与时间");
 const defaultModel = rowFrom([{ ...spawn, input: { description: "默认模型" } }, launched]);
-assert.equal(defaultModel.model, "");
-assert.equal(defaultModel.sessionModel, "gpt-5.6", "会话默认模型与子智能体已确认模型分开存放");
+assert.equal(defaultModel.model, undefined);
+assert.equal("sessionModel" in defaultModel, false, "子智能体不借用主会话模型");
 
 const historical = buildConversationItems([{ session, output: "", trace: [
   { at: start, event: { kind: "tool", name: "spawn_agent", nativeWork: { ...spawn, at: undefined } } },
@@ -67,6 +68,21 @@ const historical = buildConversationItems([{ session, output: "", trace: [
 ] }], [session], []);
 assert.equal(buildNativeWork(historical, "done")[0].endedAt, end, "旧版结构化 trace 从持久事件时间还原");
 assert.equal(buildNativeWork(historical, "done")[0].startedAt, start);
+const previousSession = { ...session, id: "previous", endedAt: end };
+const currentSession = { ...session, id: "current", startedAt: later };
+const historyTrace = (events: NativeWorkEvent[]) => events.map((nativeWork) => ({
+  at: nativeWork.at!, event: { kind: "tool" as const, name: "Agent", nativeWork },
+}));
+const allHistory = buildConversationItems([
+  { session: previousSession, output: "", trace: historyTrace([spawn, launched, completed]) },
+  { session: currentSession, output: "", trace: historyTrace([{ ...spawn, at: later }, { ...launched, at: later }]) },
+], [previousSession, currentSession], []);
+const historyRows = buildNativeWork(allHistory, "running");
+assert.equal(historyRows.length, 2, "同一任务的历史和当前会话子智能体同时保留");
+assert.equal(historyRows.find((row) => row.sessionId === "previous")?.status, "completed");
+assert.equal(historyRows.find((row) => row.sessionId === "current")?.status, "running");
+assert.equal(buildNativeWork(JSON.parse(JSON.stringify(allHistory)), "done").length, 2, "任务结束后历史记录仍可重建");
+
 const legacy: ConversationItem = { kind: "agent", id: "old", sessionId: session.id, label: "旧会话", at: session.startedAt,
   markdown: "", segments: [{ id: "old", markdown: "", attachments: [], events: [
     { kind: "tool", label: "Agent", at: start, detail: '{"description":"旧任务"}' },

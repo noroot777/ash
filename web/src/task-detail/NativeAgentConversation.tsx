@@ -1,5 +1,5 @@
 import { useMemo, useRef } from "react";
-import { ArrowLeft, Robot } from "@phosphor-icons/react";
+import { ArrowLeft, CaretDown, Robot } from "@phosphor-icons/react";
 import { AgentTurnBody } from "../components/AgentTurnBody.tsx";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
@@ -25,11 +25,14 @@ export function NativeAgentConversation({ row, statusLabel, onBack, error, onRet
         <div><strong>{row.title}</strong><small>{row.sessionLabel}</small></div>
       </div>
       <span className="native-work__status" data-status={row.status} role="status">{statusLabel}</span>
-      <NativeWorkMeta row={row} />
     </header>
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region native-agent__scroll-region">
         <div className="native-agent__conversation" ref={scroll} tabIndex={0} aria-label="子智能体会话内容">
+          <details className="native-agent__metadata">
+            <summary>模型与时间<CaretDown size={12} aria-hidden="true" /></summary>
+            <NativeWorkMeta row={row} />
+          </details>
           <div className="native-agent__section-label"><span>执行记录</span><span>{running ? "实时同步" : pending ? "等待开始" : "历史记录"}</span></div>
           {error && <p className="native-work__error" role="alert">{error.message} {onRetry && <button type="button" onClick={onRetry}>重试</button>}</p>}
           {row.description && <details className="native-agent__assignment"><summary>任务说明</summary><MarkdownBody text={row.description} /></details>}

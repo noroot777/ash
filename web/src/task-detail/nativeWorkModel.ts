@@ -17,7 +17,7 @@ export interface NativeWorkItem {
   message?: string;
   owner?: string;
   model?: string;
-  sessionModel?: string;
+  requestedModel?: string;
   startedAt?: string;
   endedAt?: string;
   agentType?: string;
@@ -55,7 +55,7 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
   for (const item of items) {
     if (item.kind !== "agent") continue;
     const key = (id: string) => `${item.sessionId}:${id}`;
-    const base = { sessionId: item.sessionId, sessionLabel: item.label, sessionModel: item.run?.model || item.session?.model || undefined };
+    const base = { sessionId: item.sessionId, sessionLabel: item.label };
     let observedAt: string | undefined;
     const put = (id: string, patch: Partial<NativeWorkItem>) => {
       const previous = rows.get(id);
@@ -113,6 +113,10 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
         delete patch.id;
         delete patch.closed;
         delete patch.at;
+        if (activity.model && ["spawnagent", "spawn_agent"].includes(toolName(trace.label))) {
+          patch.requestedModel = activity.model;
+          delete patch.model;
+        }
         const previous = rows.get(id);
         if (activity.closed && (previous?.status === "completed" || previous?.status === "failed")) patch.status = previous.status;
         if (activity.status === "unknown" && rows.has(id)) delete patch.status;
@@ -144,7 +148,7 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
         calls.set(id, { call: activity });
         if (spawnTools.has(name)) {
           put(id, { kind: "agent", parentId, title: str(input.description ?? input.name ?? input.task_name) || str(input.prompt ?? input.message).split("\n")[0].slice(0, 100) || "子智能体",
-            description: str(input.prompt ?? input.message), model: str(input.model), agentType: str(input.subagent_type ?? input.agent_type),
+            description: str(input.prompt ?? input.message), requestedModel: str(input.model), agentType: str(input.subagent_type ?? input.agent_type),
             status: legacy ? "unknown" : "running", ...(observedAt ? { startedAt: observedAt } : {}), legacy });
           calls.get(id)!.rowId = id;
         } else if (name === "taskcreate") {
@@ -185,6 +189,7 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
           rows.set(key(nativeId), { ...row, id: key(nativeId), ...(existing ? {
             activity: existing.activity, message: existing.message,
             model: existing.model || row.model,
+            requestedModel: existing.requestedModel || row.requestedModel,
             startedAt: [row.startedAt, existing.startedAt].filter((at): at is string => !!at).sort()[0],
             endedAt: existing.endedAt ?? row.endedAt,
             status: activity.failed ? "failed" : existing.status,

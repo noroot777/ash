@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { codexChildWork, codexNativeWork, nativePlanSnapshot, NativeWorkTrace } from "./native-work.js";
+import { codexChildWork, codexNativeWork, nativeAgentModel, nativePlanSnapshot, NativeWorkTrace } from "./native-work.js";
 import { childActivity, CodexChildActivity } from "./native-agent-activity.js";
 import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import type { AgentEvent, TokenUsage } from "@ash/shared";
@@ -74,6 +74,8 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   let agentMessageCount = 0;
   const childEvents = new CodexChildActivity();
   const childImages = new Map<string, Set<string>>();
+  const childModelReads = new Set<string>();
+  const childModelVersions = new Map<string, number>();
   const structuredErrors: string[] = [];
   const activityBuffer = new NativeActivityBuffer();
 
@@ -223,6 +225,17 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const handleNotification = (message: any) => {
     const p = message.params ?? {};
     if (threadId && p.threadId && p.threadId !== threadId) {
+      if (message.method === "turn/started") childModelReads.delete(p.threadId);
+      if (!childModelReads.has(p.threadId)) {
+        childModelReads.add(p.threadId);
+        const version = (childModelVersions.get(p.threadId) ?? 0) + 1;
+        childModelVersions.set(p.threadId, version);
+        void request("thread/read", { threadId: p.threadId, includeTurns: false }).then((result) => {
+          if (finished || result.thread?.id !== p.threadId || childModelVersions.get(p.threadId) !== version) return;
+          const model = nativeAgentModel(p.threadId, result.thread.model);
+          if (model) push(model);
+        }).catch(() => undefined);
+      }
       for (const activity of childEvents.notification(message.method, p)) push(activity);
       if (message.method === "item/completed") {
         const item = p.item;
