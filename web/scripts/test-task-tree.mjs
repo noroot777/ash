@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { advanceHiddenReveal, buildTaskTree, groupTasksByProject, keepVisibleInPreview, orderedTopLevelTasks, previewTasksByAge } from "../src/workspace/taskTreeModel.ts";
+import { advanceHiddenReveal, buildTaskTree, groupTasksByProject, keepVisibleInPreview, orderedTopLevelTasks, previewTasksByAge, revealMore, revealMoreLabel, revealToIndex, TASK_REVEAL_PAGE } from "../src/workspace/taskTreeModel.ts";
 
 function task(id, mode, {
   pinnedAt = null,
@@ -169,6 +169,26 @@ assert.deepEqual(advanceHiddenReveal("single:old", "single:old"), { lastKey: "si
 assert.deepEqual(advanceHiddenReveal("single:old", null), { lastKey: null, reveal: false });
 assert.deepEqual(advanceHiddenReveal(null, "single:old"), { lastKey: "single:old", reveal: true });
 assert.deepEqual(advanceHiddenReveal("single:old", "single:older"), { lastKey: "single:older", reveal: true });
+
+// —— 分页展开：「显示另外 N 条」一次放一页，不是一把梭。
+assert.equal(TASK_REVEAL_PAGE, 20);
+assert.equal(revealMore(0, 87), 20, "第一下放一页");
+assert.equal(revealMore(20, 87), 40, "再点一下再放一页");
+assert.equal(revealMore(80, 87), 87, "最后一页只放剩下的，不会超过总数");
+assert.equal(revealMore(0, 7), 7, "总共不够一页就一次放完");
+assert.equal(revealMore(87, 87), 87, "放完了还点也不越界");
+
+// 自动揭示按整页对齐：选中的旧行不该刚好卡在放出来的最后一行。
+assert.equal(revealToIndex(0, 87), 20);
+assert.equal(revealToIndex(19, 87), 20, "第 20 条正好在第一页里");
+assert.equal(revealToIndex(20, 87), 40, "第 21 条要翻到第二页");
+assert.equal(revealToIndex(80, 87), 87, "最后一页按总数收口");
+assert.equal(revealToIndex(-1, 87), 0, "没选中就别展开");
+
+// 按钮上的字是 `展开(这一下几条/还剩几条)`：侧栏窄，一句话会折成两行。
+assert.equal(revealMoreLabel(7), "展开(7/7)");
+assert.equal(revealMoreLabel(20), "展开(20/20)");
+assert.equal(revealMoreLabel(87), "展开(20/87)");
 
 // —— 任务模式里「任务」那一节再按项目分一层：项目的先后**跟着行走**（喂进来的是更新
 // 时间倒序，谁的最新一条更近谁排前），不按名字也不按创建时间 —— 否则最活跃的那家会

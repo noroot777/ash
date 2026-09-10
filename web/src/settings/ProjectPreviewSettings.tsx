@@ -77,7 +77,8 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
       if (active.current) setError(failure instanceof Error ? failure.message : "保存失败");
     } finally { if (active.current) setBusy(false); }
   };
-  return <section className="settings-section project-preview"><h2>预览</h2><div className="settings-card">
+  // data-settings-anchor：报错文案里的「设置 → 项目设置 → 预览」照着它落点（见 sections.ts）。
+  return <section className="settings-section project-preview" data-settings-anchor="preview"><h2>预览</h2><div className="settings-card">
     <div className="settings-row preview-launch-row"><div><b>启动方式</b><small>在这里配置一次，任务里的「打开预览」按保存的方案启动。</small></div>
       <div className="preview-mode-choice" role="group" aria-label="预览启动方式">
         {([ ["script", "自定义脚本"], ["services", "选择服务"] ] as const).map(([value, label]) => <label key={value}>
@@ -128,7 +129,7 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
       </select>
     </label>
     <div className="preview-help preview-proxy-help">
-      <small>{proxied ? "当前使用反代：浏览器复用 ash 入口，无需开放每个服务的端口。预览页面与 ash 隔离，应用自己的 Authorization 鉴权头也不会转发，JavaScript 读写 Cookie（document.cookie）会报错。依赖这些能力、本地存储、Service Worker 或站外接口的应用可能需要使用直连。" : "当前使用直连：浏览器直接访问服务端口。远程访问时，服务需监听可访问的网卡地址，并开放相应端口。"}</small>
+      <small>{proxied ? "当前使用反代：浏览器复用 ash 入口，无需开放每个服务的端口。预览页面跑在独立沙箱里，与 ash 的登录态隔离：预览页面自己发出的请求所带的 Authorization（Bearer 等）会照常转发，从 ash 页面或命令行带进来的鉴权头不会（否则你的 ash key 会落到被预览的应用手上）；Basic/Digest 一律不转发，需要它们的应用请改用直连。localStorage、sessionStorage 和 document.cookie 由 ash 在页面内模拟——读写正常，但只活在当前这个页面：刷新或跳转即清空，页面写的 Cookie 也不会随请求发出，所以把登录态存在本地存储的应用每次刷新都要重新登录。IndexedDB、Service Worker 和站外接口在沙箱里用不了，依赖它们的应用请改用直连。" : "当前使用直连：浏览器直接访问服务端口。远程访问时，服务需监听可访问的网卡地址，并开放相应端口。"}</small>
       {proxied && <small>服务需要配置资源前缀时，可读取 <code>{variable("ASH_PREVIEW_BASE")}</code>。例如 Vite 可在启动参数中使用 <code>--base {variable("ASH_PREVIEW_BASE")}</code>。</small>}
     </div>
     <ProjectPreviewHelp isWindows={host?.platform === "win32"} />

@@ -7,7 +7,7 @@ const names = new Set(["agent", "task", "taskcreate", "taskupdate", "taskget", "
 export const nativeToolName = (name: string) => name.split(/[./]/).at(-1)!.toLowerCase();
 const text = (value: unknown): string => typeof value === "string" ? value : JSON.stringify(value ?? "");
 const clip = (value: unknown) => { const raw = text(value); return raw.length > 32_000 ? `${raw.slice(0, 32_000)}\n…（内容已截断）` : raw; };
-const event = (name: string, nativeWork: NativeWorkEvent): AgentEvent => ({ kind: "tool", name, nativeWork,
+const event = (name: string, nativeWork: NativeWorkEvent): AgentEvent => ({ kind: "tool", name, nativeWork: { at: new Date().toISOString(), ...nativeWork },
   detail: (nativeWork.type === "result" ? nativeWork.result : nativeWork.type === "agent" ? nativeWork.result || nativeWork.message || nativeWork.title || nativeWork.status : "").slice(0, 1500) || undefined,
 });
 
@@ -63,7 +63,9 @@ export class NativeWorkTrace {
     if (ev.type === "assistant") {
       const content = Array.isArray(ev.message?.content) ? ev.message.content : [];
       const message = content.filter((block: any) => block.type === "text").map((block: any) => block.text).join("\n");
-      if (message) out.push(event("Agent", { type: "agent", id: parentId, status: "running", message: clip(message) }));
+      if (message || ev.message?.model) out.push(event("Agent", { type: "agent", id: parentId, status: "running",
+        ...(message ? { message: clip(message) } : {}), ...(ev.message?.model ? { model: ev.message.model } : {}),
+      }));
       for (const block of content) {
         if (block.type !== "tool_use") continue;
         const call = this.call(block.name, block.input, block.id, parentId);
@@ -87,9 +89,9 @@ export function nativePlanSnapshot(id: string, plan: unknown, explanation?: stri
 
 export function codexNativeWork(item: any): AgentEvent[] {
   const type = String(item?.type ?? "").replace(/_/g, "").toLowerCase();
-  if (type === "todolist") return [{ kind: "tool", name: "TodoWrite", nativeWork: {
+  if (type === "todolist") return [event("TodoWrite", {
     type: "call", id: item.id, name: "TodoWrite", input: { todos: (item.items ?? []).map((row: any) => ({ content: row.text, status: row.completed ? "completed" : "pending" })) },
-  } }];
+  })];
   if (!["collabtoolcall", "collabagenttoolcall"].includes(type)) return [];
   const tool = String(item.tool ?? "").replace(/_/g, "").toLowerCase();
   const ids: string[] = item.receiverThreadIds ?? item.receiver_thread_ids ?? [];

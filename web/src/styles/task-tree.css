@@ -606,6 +606,28 @@
   color: var(--muted);
 }
 
+/* 「展开(20/233)」+「收起」并排。分页展开之后「全部展开」不再是必经的一站，
+   收起就不能只在展完最后一页时才出现 —— 翻了两页想退回去得有路。 */
+.workspace-task-more-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.workspace-task-more-row .workspace-task-more {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+
+.workspace-task-more-row .workspace-task-more--collapse {
+  flex: 0 0 auto;
+  /* 全部展开后只剩它一个：靠右停着，不要滑到列表最左边去顶掉行的对齐。 */
+  margin-left: auto;
+  margin-right: 22px;
+  padding: 0 8px;
+}
+
 .workspace-other-projects > .workspace-task-section-title {
   margin-bottom: 4px;
 }

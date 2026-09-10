@@ -146,8 +146,8 @@ function timelineAfterPersistedTurns(
   });
 }
 
-function auxEvent(event: AgentTraceEvent): AgentAuxEvent {
-  if (event.kind === "tool") return { kind: "tool", label: event.name, detail: event.detail, ...(event.nativeWork ? { nativeWork: event.nativeWork } : {}) };
+function auxEvent(event: AgentTraceEvent, at?: string): AgentAuxEvent {
+  if (event.kind === "tool") return { kind: "tool", label: event.name, detail: event.detail, ...(at ? { at } : {}), ...(event.nativeWork ? { nativeWork: event.nativeWork } : {}) };
   if (event.kind === "thinking") return { kind: "thinking", label: "思考过程", detail: event.text };
   return { kind: "error", label: event.message };
 }
@@ -186,7 +186,7 @@ function contentSegments(
     return [{
       id: `${idPrefix}:0`,
       markdown: fallbackMarkdown,
-      events: auxEntries.map((entry) => auxEvent(entry.event as AgentTraceEvent)),
+      events: auxEntries.map((entry) => auxEvent(entry.event as AgentTraceEvent, entry.at)),
       attachments: attachmentEntries.map((entry) => entry.event.path),
     }];
   }
@@ -209,7 +209,7 @@ function contentSegments(
       continue;
     }
     if (current.markdown) pushCurrent();
-    current.events.push(auxEvent(entry.event));
+    current.events.push(auxEvent(entry.event, entry.at));
   }
   pushCurrent();
 
@@ -223,7 +223,7 @@ function contentSegments(
   return [{
     id: `${idPrefix}:fallback`,
     markdown: fallbackMarkdown || structuredMarkdown,
-    events: auxEntries.map((entry) => auxEvent(entry.event as AgentTraceEvent)),
+    events: auxEntries.map((entry) => auxEvent(entry.event as AgentTraceEvent, entry.at)),
     attachments: attachmentEntries.map((entry) => entry.event.path),
   }];
 }

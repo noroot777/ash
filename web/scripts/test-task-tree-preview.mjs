@@ -1,4 +1,4 @@
-// 任务树「显示另外 N 条 / 收起」：展开后点几条旧任务，收起必须真的收得回去。
+// 任务树「展开(N/N) / 收起」：展开后点几条旧任务，收起必须真的收得回去。
 // 回归的那个 bug：选中项落在 24h 预览之外时，用 selectedTaskIsHidden 持续顶住展开，
 // 点收起只是改了用户自己的展开集合，列表还是全开。
 // 跑：npm -w web run test:task-tree-preview
@@ -35,7 +35,7 @@ try {
   const oldBing = page.getByRole("button", { name: "很久以前的任务丙" });
   const oldStarred = page.getByRole("button", { name: "很久以前但加了星" });
   const oldUnaccepted = page.getByRole("button", { name: "很久以前但没验收" });
-  const expand = page.getByRole("button", { name: "显示另外 3 条" });
+  const expand = page.getByRole("button", { name: "展开(3/3)" });
   const collapse = page.getByRole("button", { name: "收起", exact: true });
 
   await recent.waitFor();
