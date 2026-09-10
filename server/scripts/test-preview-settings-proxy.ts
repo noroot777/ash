@@ -45,6 +45,9 @@ let lastPageAuth = null;
 // 反代只认这句自述（见 preview-log.ts 的 declaredHostApiPort），不认启动方式。
 const announce = process.argv[process.argv.indexOf('--host-api') + 1];
 if (process.argv.includes('--host-api')) console.log('[ash] preview-api-host ' + announce);
+// 自述之后、开始监听之前多打的那些字：真实的启动（装依赖回显、框架冷编译）就是这么把
+// 它挤出日志尾巴的。--noise 后面跟字符数。
+if (process.argv.includes('--noise')) console.log('x'.repeat(Number(process.argv[process.argv.indexOf('--noise') + 1])));
 const html = '<!doctype html><html><head><link rel="stylesheet" href="/style.css"></head><body><h1>Proxy test</h1><p id="module">waiting</p><p id="api">waiting</p><p id="sse">waiting</p><p id="ws">waiting</p><p id="slash">waiting</p><p id="isolation">waiting</p><a href="/nested/">Nested page</a><script type="module" src="/entry.js"></script></body></html>';
 const source = 'import message from "/chunk.js"; document.querySelector("#module").textContent=message; const slash="/"; document.querySelector("#slash").textContent=slash; fetch("/echo",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({ok:true})}).then(r=>r.json()).then(r=>document.querySelector("#api").textContent=r.body); const es=new EventSource("/events"); es.onmessage=e=>{document.querySelector("#sse").textContent=e.data;es.close()};const ws=new WebSocket("ws://"+location.host+"/socket");ws.onmessage=e=>{document.querySelector("#ws").textContent=e.data;ws.close()};try{localStorage.setItem("ash-probe","1");document.querySelector("#isolation").textContent=localStorage.length===1?"shimmed":"shared"}catch{document.querySelector("#isolation").textContent="throws"}';
 const server=http.createServer((req,res)=>{
@@ -532,13 +535,14 @@ try {
         };
       };
       // 起一趟预览，命令自述打给谁（每个服务一个：null = 什么都不说）。`--host-api` 那段由
-      // 夹具原样打进日志，正是 scripts/dev.mjs 的 frontend 档打的那句。
+      // 夹具原样打进日志，正是 scripts/dev.mjs 的 frontend 档打的那句。`noise` 是自述之后、
+      // 开始监听之前多打的字数。
       const here = `127.0.0.1:${address.port}`;
-      const probe = async (taskId: string, announces: (string | null)[], expected: number | null) => {
+      const probe = async (taskId: string, announces: (string | null)[], expected: number | null, noise = 0) => {
         await db.insert(tasks).values({ id: taskId, projectId: "preview-project", title: taskId, status: "done", workflowMode: "free", mode: "single", useWorktree: false, createdAt: stamp, updatedAt: stamp });
         const services = announces.map((announce, i) => ({
           id: `s${i}`, name: `服务${i}`, kind: "web" as const, enabled: true,
-          command: command + (announce === null ? "" : ` --host-api ${announce}`),
+          command: command + (announce === null ? "" : ` --host-api ${announce}`) + (noise ? ` --noise ${noise}` : ""),
         }));
         const started = await startPreview(taskId, { id: "probe", kind: "preview", p: { cmd: services[0].command, mode: "frontend", ready: "port", life: "task" }, fail: null }, fixture, undefined, {
           proxy: true, primaryServiceId: "s0", services,
@@ -549,6 +553,10 @@ try {
       await probe("solo-task", [here], address.port);
       await probe("mute-task", [null], null);
       await probe("liar-task", [`127.0.0.1:${address.port === 65001 ? 65002 : 65001}`], null);
+      // 自述是在开始监听**之前**打的，装依赖回显和框架冷编译紧跟着就能把它挤出日志尾巴。
+      // 判读要是跟着轮询读那 4000 字的尾巴，这一趟就会被记成「没说过」，用户又看回登录框
+      // （第 3 轮审查 P1）。数字取得比那道窗口大一截。
+      await probe("buried-task", [here], address.port, 12_000);
       // 两个服务里「谁在说」本来就分不清，而「前端 + 分支后端」那种组合的 /api 按定义就该是
       // 分支自己的——所以哪怕两个都照着说，也一律不认。
       await probe("duo-task", [here, here], null);
@@ -560,6 +568,7 @@ try {
       try {
         const own = await opened("solo-task");
         assert.match(own.api, /"id":"preview-project"/, "预览这台 ash 自己时，/api 那一跳直连本机 ash 并带着你的会话");
+        assert.match((await opened("buried-task")).api, /"id":"preview-project"/, "自述被后面的启动输出埋了也照样接得上");
         assert.equal(own.upstream, null, "会话绝不能落到被预览的服务手上——那是任务分支自己启动的 dev server");
         assert.match(await apiBody(own.location), /needsAuth/, "地址栏那条道上的 /api 接着 ash，但一样借不到会话");
         const forked = (await navigate(own.location)).headers.get("location")!;
@@ -580,7 +589,7 @@ try {
         await db.update(projects).set({ repoPath: fixture }).where(eq(projects.id, "preview-project"));
       }
       assert.match((await opened("solo-task")).api, /Proxy test/, "换回别的仓库就不再接");
-      for (const taskId of ["solo-task", "mute-task", "liar-task", "duo-task"]) await stopPreview(taskId, null);
+      for (const taskId of ["solo-task", "mute-task", "liar-task", "buried-task", "duo-task"]) await stopPreview(taskId, null);
     }
     await deleteSession(memberHeaders.cookie.slice(SESSION_COOKIE.length + 1));
     assert.equal((await request(memberGateway)).status, 404, "退出登录后旧预览凭证失效");

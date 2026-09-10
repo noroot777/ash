@@ -13,7 +13,7 @@ import { canConnect, ready } from "./preview-probe.js";
 import { freePorts, PORT_POOL, portEnv } from "./preview-ports.js";
 import { boundListeningPort, currentListeningPort } from "./listening-port.js";
 import { canceledGens } from "./preview-start-state.js";
-import { alive, archivePreview, patchStart, prunePreviewArtifacts, readAnyPreview, recordPath, tail, writeRecord, type PreviewStep, type PreviewResult, type PreviewServiceRecord } from "./preview-store.js";
+import { alive, archivePreview, patchStart, prunePreviewArtifacts, readAnyPreview, recordPath, tail, wholeLog, writeRecord, type PreviewStep, type PreviewResult, type PreviewServiceRecord } from "./preview-store.js";
 import { previewShell } from "./preview-shell.js";
 import { now } from "./util.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -128,14 +128,21 @@ export async function runPreview(
     // 两道都不能少——说的端口得**正是我们此刻真绑着的那个**（`boundListeningPort` 确知才有
     // 值，不猜），而且这一趟**只起了一个服务**：多服务里「谁在说」本来就分不清，而「前端 +
     // 分支后端」那种组合的 `/api` 按定义就该是分支自己的。
+    //
+    // 扫的是**整篇**日志、而且只在就绪那一刻扫一次（见 preview-store.ts 的 wholeLog）：这句话
+    // 打在服务开始监听之前，跟着轮询用那 4000 字的尾巴读，装依赖和冷编译多打几行就把它挤没了
+    // ——一份确实说过的启动被记成「没说过」，用户又看回登录框（第 3 轮审查 P1）。放在这一刻还
+    // 顺带解决了另一半：端口都连得上了，那句话必然早就落盘，不存在「还没打出来」的竞争。
     const bound = boundListeningPort();
-    let hostApi: number | null = null;
+    const declaredHostApi = () => {
+      if (services.length !== 1 || bound === null) return null;
+      return declaredHostApiPort(wholeLog(services[0].log, banners[0])) === bound ? bound : null;
+    };
     while (Date.now() < deadline) {
       await sleep(500);
       if (!ours()) return fail(CANCELED);
       for (const [i, s] of services.entries()) {
         const text = tail(s.log, banners[i]);
-        if (services.length === 1 && hostApi === null && bound !== null && declaredHostApiPort(text) === bound) hostApi = bound;
         if (text.includes("[ash] scheduler started")) return fail("这个分支的预览后端启动了真调度器，安全协议过旧，已立即回收。请先同步新版预览隔离逻辑。");
         if (errors.has(s.id) || !s.pid || !alive(s.pid)) {
           const deps = missingDepsHint(text, nodeDepsAdvice(cwd, s.cmd, missingNodeBin(text)), prepared.get(s.id) ?? []);
@@ -156,7 +163,7 @@ export async function runPreview(
       }
       if (services.every((s) => s.status === "ready")) {
         const primary = services.find((s) => s.id === primaryId)!;
-        const record = patchStart(taskId, gen, { state: "ready", services, hostApi, pid: primary.pid, url: primary.url, port: primary.port, installPid: null, startedAt: now() });
+        const record = patchStart(taskId, gen, { state: "ready", services, hostApi: declaredHostApi(), pid: primary.pid, url: primary.url, port: primary.port, installPid: null, startedAt: now() });
         if (!record || !ours()) return fail(CANCELED);
         return { ok: true, record };
       }
