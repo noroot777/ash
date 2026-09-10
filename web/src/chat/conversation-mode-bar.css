@@ -1,0 +1,9 @@
+.conversation-mode-bar { display: flex; flex-shrink: 0; gap: 3px; align-items: center; overflow-x: auto; border-bottom: 1px solid #efedf2; padding: 8px 24px; min-height: 45px; }
+.conversation-mode-bar button { display: flex; flex-shrink: 0; align-items: center; gap: 5px; padding: 6px 12px; border: 0; border-radius: 6px; background: none; color: var(--chat-muted, var(--muted)); font-size: 12px; white-space: nowrap; }
+.conversation-mode-bar button:hover { background: var(--chat-mist, var(--raised)); }
+.conversation-mode-bar [aria-current="page"] { color: #694b8b; background: #f0e9f7; font-weight: 650; }
+.conversation-mode-bar[data-active="assistant"] { border-color: var(--line); background: var(--panel); }
+.conversation-mode-bar[data-active="assistant"] [aria-current="page"] { color: var(--accent); background: var(--accent-soft); }
+@media (max-width: 850px) {
+  .conversation-mode-bar { padding: 6px 12px; }
+}

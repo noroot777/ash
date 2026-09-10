@@ -1,15 +1,18 @@
 import { AssistantIcon } from "./AssistantIcon.tsx";
 import { useRef, useState } from "react";
-import type { ProjectView, TaskListItem } from "@ash/shared";
+import type { ProjectView, TaskListItem, TaskMode } from "@ash/shared";
 import { taskDisplayStatus } from "@ash/shared";
 import type { ChatMessage, ChatSnapshot } from "@ash/shared/chat";
 import { STEP_LABELS, WORKSPACE_LABELS } from "@ash/shared/workflow";
-import { ArrowDown, ArrowLeft, ArrowUp, ArrowUpRight, BookOpen, FlowArrow, MagnifyingGlass, Plus, Robot, Stop } from "@phosphor-icons/react";
+import { ArrowDown, ArrowLeft, ArrowUp, ArrowUpRight, BookOpen, FlowArrow, MagnifyingGlass, SidebarSimple, Robot, Stop } from "@phosphor-icons/react";
 import { AssistantConnection } from "./AssistantConnection.tsx";
 import { AssistantArchive } from "./AssistantArchive.tsx";
+import { AssistantSidebar } from "./AssistantSidebar.tsx";
+import { AssistantConversationTitle } from "./AssistantConversationTitle.tsx";
 import { useAssistantChat } from "./useAssistantChat.ts";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { ChatContextNotice } from "../chat/ChatContextNotice.tsx";
+import { ConversationModeBar } from "../chat/ConversationModeBar.tsx";
 import { WorkflowRail } from "../workflow/WorkflowRail.tsx";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
 import { useScrollEdges } from "../lib/useScrollEdges.ts";
@@ -51,13 +54,15 @@ function AssistantMessage({ message, snapshot, projects, onTask, onSave, saving,
   </article>;
 }
 
-export function AssistantView({ project, projects, onTask, onSettings, onExit }: {
+export function AssistantView({ project, projects, onTask, onSettings, onExit, onMode, onChat }: {
   project: ProjectView | null; projects: ProjectView[]; onTask: (task: TaskListItem) => void;
   onSettings: (section: SettingsSection) => void; onExit: () => void;
+  onMode: (mode: TaskMode) => void; onChat: () => void;
 }) {
   const chat = useAssistantChat(project?.id ?? "");
   const [editing, setEditing] = useState(false);
   const [archiveId, setArchiveId] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const scroll = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const { resume } = useStickToBottom(scroll, chat.room?.id ?? "assistant");
@@ -65,9 +70,12 @@ export function AssistantView({ project, projects, onTask, onSettings, onExit }:
   const configure = editing || (chat.ready && !chat.room && !chat.error);
   const pickStarter = (text: string) => { chat.setDraft(text); input.current?.focus(); };
   const openTask = (task: TaskListItem) => { if (task.archived) setArchiveId(task.id); else onTask(task); };
-  return <section className="assistant-shell" aria-label="ash 助手">
-    <header className="assistant-header"><div className="assistant-identity"><AssistantIcon size={23} filled /><div><h1>ash 助手</h1><span>{project ? `当前项目 · ${project.name}` : "你的 ash 使用助手"}</span></div></div>
-      <div className="assistant-header-actions">{chat.room && <><label><span className="sr-only">助手对话记录</span><select aria-label="助手对话记录" value={chat.room.id} disabled={chat.sending} onChange={(event) => { chat.select(event.target.value); setEditing(false); setArchiveId(null); }}>{chat.rooms.map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}</select></label><button type="button" disabled={chat.sending} onClick={() => { setEditing(false); setArchiveId(null); void chat.newConversation(); }}><Plus size={15} />新对话</button></>}
+  return <section className={`assistant-shell${historyOpen ? " is-history-open" : ""}`} aria-label="ash 助手">
+    <AssistantSidebar rooms={chat.rooms} selectedId={chat.room?.id} ready={chat.ready} sending={chat.sending} onSelect={(id) => { chat.select(id); setEditing(false); setArchiveId(null); setHistoryOpen(false); }} onNew={() => { setEditing(false); setArchiveId(null); setHistoryOpen(false); void chat.newConversation(); }} />
+    <div className="assistant-main">
+    <ConversationModeBar active="assistant" onMode={onMode} onChat={onChat} />
+    <header className="assistant-header"><button type="button" className="assistant-history-toggle" aria-label="助手对话记录" aria-controls="assistant-history" aria-expanded={historyOpen} onClick={() => setHistoryOpen((value) => !value)}><SidebarSimple size={19} /></button><div className="assistant-identity"><AssistantIcon size={23} filled /><div>{chat.room ? <AssistantConversationTitle key={chat.room.id} name={chat.room.name} onRename={chat.renameConversation} /> : <h1>ash 助手</h1>}<span>{project ? `当前项目 · ${project.name}` : "你的 ash 使用助手"}</span></div></div>
+      <div className="assistant-header-actions">
         <button type="button" aria-label="关闭助手" onClick={onExit}><ArrowLeft size={17} /></button></div>
     </header>
     {archiveId ? <AssistantArchive key={archiveId} taskId={archiveId} onClose={() => setArchiveId(null)} /> : <>
@@ -89,5 +97,6 @@ export function AssistantView({ project, projects, onTask, onSettings, onExit }:
         </div><p className="assistant-composer-hint">搜索覆盖你可见的项目 · Enter 发送，Shift Enter 换行 · /clear 重置上下文</p>
       </div>}
     </>}
+    </div>
   </section>;
 }

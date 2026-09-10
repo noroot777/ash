@@ -40,6 +40,9 @@ const draft = { name: "交付起手式", description: "构建测试后等我确�
 const service = new ChatService(async (selected, _owner, prompt, signal, _project, options) => {
   if (options?.purpose === "summary") return { text: JSON.stringify({ summary: "历史提到了登录任务和起手式草案。" }) };
   assert.equal(options?.purpose, "assistant");
+  assert.match(prompt, /回复必须言简意赅：先给结论/);
+  assert.match(prompt, /通常不超过 200 字/);
+  assert.match(prompt, /task\.body 和 workflow\.def 保留执行所需的完整信息/);
   assert.equal(selected.executorId, member.executorId);
   assert.equal(selected.model, "model-override");
   prompts.push(prompt);

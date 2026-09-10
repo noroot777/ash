@@ -37,10 +37,6 @@
 .chat-rail-note strong { display: block; font-size: 12px; margin-top: 10px; color: #e7ddef; }
 .chat-rail-note p { font-size: 11px; line-height: 1.9; margin: 7px 0 0; }
 .chat-main { min-width: 0; flex: 1; display: flex; flex-direction: column; position: relative; }
-.chat-mode-bar { display: flex; gap: 3px; align-items: center; border-bottom: 1px solid #efedf2; padding: 8px 24px; min-height: 45px; }
-.chat-mode-bar button { border: 0; background: none; padding: 6px 12px; font-size: 12px; border-radius: 6px; color: var(--chat-muted); display: flex; gap: 5px; align-items: center; }
-.chat-mode-bar button:hover { background: var(--chat-mist); }
-.chat-mode-bar .is-active { color: #694b8b; background: #f0e9f7; font-weight: 650; }
 .chat-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 28px; border-bottom: 1px solid #efedf2; }
 .chat-header h1 { display: flex; gap: 6px; align-items: center; font-size: 16px; letter-spacing: -.4px; font-weight: 700; margin: 0; }
 .chat-room-name { display: flex; gap: 6px; align-items: center; border: 0; background: none; margin: -4px -7px; padding: 4px 7px; border-radius: 7px; font: inherit; color: inherit; }
@@ -181,7 +177,6 @@
   .chat-channels { min-height: 0; display: flex; overflow-x: auto; }
   .chat-channels button { width: auto; min-width: 100px; margin: 0; padding: 7px; }
   .chat-main { min-height: 0; }
-  .chat-mode-bar { padding: 6px 12px; }
   .chat-header { padding: 9px 16px; }
   .chat-header h1 { font-size: 15px; }
   .chat-welcome { padding: 26px 19px 20px; }
