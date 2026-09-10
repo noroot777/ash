@@ -68,6 +68,21 @@ const historical = buildConversationItems([{ session, output: "", trace: [
 ] }], [session], []);
 assert.equal(buildNativeWork(historical, "done")[0].endedAt, end, "旧版结构化 trace 从持久事件时间还原");
 assert.equal(buildNativeWork(historical, "done")[0].startedAt, start);
+const previousSession = { ...session, id: "previous", endedAt: end };
+const currentSession = { ...session, id: "current", startedAt: later };
+const historyTrace = (events: NativeWorkEvent[]) => events.map((nativeWork) => ({
+  at: nativeWork.at!, event: { kind: "tool" as const, name: "Agent", nativeWork },
+}));
+const allHistory = buildConversationItems([
+  { session: previousSession, output: "", trace: historyTrace([spawn, launched, completed]) },
+  { session: currentSession, output: "", trace: historyTrace([{ ...spawn, at: later }, { ...launched, at: later }]) },
+], [previousSession, currentSession], []);
+const historyRows = buildNativeWork(allHistory, "running");
+assert.equal(historyRows.length, 2, "同一任务的历史和当前会话子智能体同时保留");
+assert.equal(historyRows.find((row) => row.sessionId === "previous")?.status, "completed");
+assert.equal(historyRows.find((row) => row.sessionId === "current")?.status, "running");
+assert.equal(buildNativeWork(JSON.parse(JSON.stringify(allHistory)), "done").length, 2, "任务结束后历史记录仍可重建");
+
 const legacy: ConversationItem = { kind: "agent", id: "old", sessionId: session.id, label: "旧会话", at: session.startedAt,
   markdown: "", segments: [{ id: "old", markdown: "", attachments: [], events: [
     { kind: "tool", label: "Agent", at: start, detail: '{"description":"旧任务"}' },
