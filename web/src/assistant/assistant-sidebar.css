@@ -8,7 +8,7 @@
   --accent: #386394;
   --accent-soft: #e4edf7;
 }
-.assistant-sidebar { display: flex; flex: 0 0 232px; flex-direction: column; min-height: 0; padding: 25px 14px 14px; border-right: 1px solid var(--assistant-rail-line); background: var(--assistant-rail); color: var(--assistant-rail-ink); }
+.assistant-sidebar { display: flex; flex: 0 0 232px; flex-direction: column; min-width: 0; min-height: 0; padding: 25px 14px 14px; border-right: 1px solid var(--assistant-rail-line); background: var(--assistant-rail); color: var(--assistant-rail-ink); }
 .assistant-sidebar-brand { display: flex; align-items: center; gap: 10px; padding: 0 8px 25px; }
 .assistant-sidebar-brand > svg { flex-shrink: 0; color: var(--accent); }
 .assistant-sidebar-brand > span { font-size: 18px; font-weight: 700; letter-spacing: -.5px; }
