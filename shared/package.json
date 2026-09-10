@@ -113,6 +113,14 @@
     "./preview": {
       "types": "./src/preview.ts",
       "default": "./src/preview.ts"
+    },
+    "./page-annotation-batch": {
+      "types": "./src/page-annotation-batch.ts",
+      "default": "./src/page-annotation-batch.ts"
+    },
+    "./page-annotation-parse": {
+      "types": "./src/page-annotation-parse.ts",
+      "default": "./src/page-annotation-parse.ts"
     }
   },
   "scripts": {

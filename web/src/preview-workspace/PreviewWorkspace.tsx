@@ -3,10 +3,11 @@ import { ArrowClockwise, ArrowUUpLeft, Browser, Cursor, PencilSimple, PushPin, R
 import type { PreviewAnnotation, PreviewAnnotationEvent, PreviewAnnotationTool, PreviewPageContext } from "@ash/shared/page-annotation";
 import { usePreviewChannel } from "./usePreviewChannel.ts";
 import { usePreviewServices } from "./usePreviewServices.ts";
+import { useAnnotationBatch } from "./useAnnotationBatch.ts";
+import { AnnotationBatchPanel } from "./AnnotationBatchPanel.tsx";
+import type { AnnotationDraft as Draft } from "@ash/shared/page-annotation-batch";
 import "./preview-workspace.css";
 
-type Draft = PreviewAnnotation & { documentId: string; serviceId: string; comment: string };
-const drafts = new Map<string, Draft[]>();
 const tools = [
   { id: "element", label: "点选", icon: Cursor },
   { id: "rectangle", label: "矩形", icon: Rectangle },
@@ -21,7 +22,7 @@ export function PreviewWorkspaceEntry({ onOpen }: { onOpen: () => void }) {
     <h3>在页面上指出修改位置</h3>
     <p>打开正在运行的预览，点选对象或圈画区域，再逐条填写意见。</p>
     <button type="button" onClick={onOpen}>打开预览工作区</button>
-    <small>标注暂存在本次浏览中，刷新 ash 页面后清空。</small>
+    <small>标注自动保存为批次，发送前可预览内容与图像证据。</small>
   </div>;
 }
 
@@ -29,7 +30,9 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
   const { state, error: serviceError } = usePreviewServices(taskId);
   const [serviceId, setServiceId] = useState("");
   const [reload, setReload] = useState(0);
-  const [items, setItems] = useState<Draft[]>(() => drafts.get(taskId) ?? []);
+  const batch = useAnnotationBatch(taskId);
+  const items = batch.batch?.items ?? [];
+  const setItems = batch.setItems;
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -42,31 +45,36 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
   const gateway = activeService && state?.proxied
     ? `/api/tasks/${encodeURIComponent(taskId)}/preview/open/${encodeURIComponent(activeService.id)}` : null;
   const source = gateway ? `${gateway}?workspace=${encodeURIComponent(state?.startedAt ?? "")}&reload=${reload}` : null;
+  const matchingBatch = !batch.batch || (batch.batch.gen === state?.gen && batch.batch.serviceId === activeService?.id);
+  const canAnnotate = !batch.locked && matchingBatch && !!state?.gen;
   const nextNumber = items.reduce((max, item) => Math.max(max, item.number + 1), 1);
   const receive = (event: PreviewAnnotationEvent, documentId: string) => {
     if (event.type === "ready" || event.type === "context") {
       setPage(event.context);
       if (event.type === "ready") setError("");
     } else if (event.type === "error") setError(event.message);
+    else if (event.type === "image") batch.pageImage(event.id, event.image);
     else if (event.type === "annotation") {
       const current = itemsRef.current;
       const existing = current.find((item) => item.id === event.annotation.id && item.documentId === documentId);
-      if (!existing && current.length >= 100) {
+      if (batch.locked || !matchingBatch || (!existing && current.length >= 100)) {
         channel.send({ type: "remove", id: event.annotation.id });
         channel.send({ type: "configure", mode: "browse", tool: channel.tool });
         return;
       }
-      const item: Draft = { ...event.annotation, documentId, serviceId: activeService?.id ?? "", comment: existing?.comment ?? "" };
-      const next = existing ? current.map((old) => old === existing ? item : old) : [...current, item];
-      itemsRef.current = next;
-      setItems(next);
+      batch.receive(event.annotation, documentId, state?.gen ?? "", activeService?.id ?? "");
       setSelectedId(event.annotation.id); setCanSelectParent(event.canSelectParent);
     } else if (event.type === "selection") {
       setSelectedId(event.id); setCanSelectParent(event.canSelectParent);
     }
   };
   const channel = usePreviewChannel(source, nextNumber, receive);
-  useEffect(() => { drafts.set(taskId, items); }, [items, taskId]);
+  const previousBatchId = useRef<string | undefined>(undefined);
+  useEffect(() => { if (!canAnnotate) channel.send({ type: "configure", mode: "browse", tool: channel.tool }); }, [canAnnotate]);
+  useEffect(() => {
+    if (previousBatchId.current) { setSelectedId(null); channel.send({ type: "clear" }); }
+    previousBatchId.current = batch.batch?.id;
+  }, [batch.batch?.id]);
   useEffect(() => { setPage(null); setError(""); setCanSelectParent(false); }, [source]);
   const selected = items.find((item) => item.id === selectedId);
   const currentSelection = selected?.documentId === channel.documentId && selected.serviceId === activeService?.id && selected.context.route === page?.route;
@@ -87,14 +95,14 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
       <div className="preview-workspace-modes" aria-label="预览模式">
         <button type="button" disabled={!ready} aria-pressed={channel.mode === "browse"}
           onClick={() => channel.send({ type: "configure", mode: "browse", tool: channel.tool })}>浏览</button>
-        <button type="button" disabled={!ready || items.length >= 100} aria-pressed={channel.mode === "annotate"}
+        <button type="button" disabled={!ready || !canAnnotate || items.length >= 100} aria-pressed={channel.mode === "annotate"}
           onClick={() => channel.send({ type: "configure", mode: "annotate", tool: channel.tool })}>标注</button>
       </div>
       <div className="preview-workspace-tools" aria-label="标注工具">
-        {tools.map(({ id, label, icon: Icon }) => <button type="button" key={id} disabled={!ready || items.length >= 100}
+        {tools.map(({ id, label, icon: Icon }) => <button type="button" key={id} disabled={!ready || !canAnnotate || items.length >= 100}
           aria-pressed={channel.mode === "annotate" && channel.tool === id} onClick={() => changeTool(id)}><Icon size={14} />{label}</button>)}
       </div>
-      <button type="button" disabled={!ready || !currentSelection || !canSelectParent} onClick={() => channel.send({ type: "parent" })}>
+      <button type="button" disabled={!ready || !canAnnotate || !currentSelection || !canSelectParent} onClick={() => channel.send({ type: "parent" })}>
         <ArrowUUpLeft size={14} />父容器
       </button>
       <label className="preview-workspace-service">服务<select aria-label="预览服务" value={activeService?.id ?? ""}
@@ -134,7 +142,7 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
       </div>
       <aside className="preview-workspace-notes" aria-label="页面标注列表">
         <div className="preview-workspace-notes-heading"><h3>标注</h3><span>{items.length} / 100</span></div>
-        <p className="preview-workspace-memory">仅内存暂存 · 尚未发送 · 刷新 ash 后清空</p>
+        <p className="preview-workspace-memory">{matchingBatch ? "创建时记录页面上下文 · 自动保存草稿" : "当前批次来自其它预览或服务；新建批次后可继续标注"}</p>
         {!items.length && <p className="preview-workspace-hint">选择「点选」后点击页面上的图标或按钮。编号会出现在页面和这里，再用「父容器」扩大选择范围。</p>}
         <ol className="preview-workspace-list">
           {items.map((item) => <li key={item.id}>
@@ -146,15 +154,16 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
           </li>)}
         </ol>
         {selected && <div className="preview-workspace-detail">
-          <label>#{selected.number} 修改意见<textarea value={selected.comment} maxLength={4000} placeholder="希望这里怎么改？"
+          <label>#{selected.number} 修改意见<textarea disabled={batch.locked} value={selected.comment} maxLength={4000} placeholder="希望这里怎么改？"
             onChange={(event) => setItems((current) => current.map((item) => item.id === selected.id ? { ...item, comment: event.target.value } : item))} /></label>
           {!currentSelection && <p className="preview-workspace-memory">这是之前页面的标注，元素信息保留创建时的内容。</p>}
           <p className="preview-workspace-coordinates">{selected.context.route}<br />视口 {selected.context.viewport.width} × {selected.context.viewport.height}
             <br />滚动 {Math.round(selected.context.scroll.x)}, {Math.round(selected.context.scroll.y)} · {new Date(selected.context.capturedAt).toLocaleTimeString()}
             <br />文档坐标 {Math.round(selected.points[0].x)}, {Math.round(selected.points[0].y)} · {selected.points.length} 个点</p>
           {selected.element && <ElementDetails card={selected.element} />}
-          <button type="button" className="preview-workspace-remove" onClick={() => removeItem(selected)}><Trash size={13} />删除此标注</button>
+          <button type="button" className="preview-workspace-remove" disabled={batch.locked} onClick={() => removeItem(selected)}><Trash size={13} />删除此标注</button>
         </div>}
+        <AnnotationBatchPanel controller={batch} selectedId={selectedId} />
       </aside>
     </div>
   </section>;

@@ -39,7 +39,7 @@ export function publishPendingMessages(taskId: string): void {
 
 // 落一条待发送消息(排队/定时同一张表,见文件头)。**入队的单点**:`/reply` 的正常
 // 排队路径、以及「立刻发却被单飞锁挡回」的兜底都走它,免得两处各拼一份 row。
-export async function enqueueMessage(input: {
+export function pendingMessageRow(input: {
   taskId: string;
   text: string;
   attachments?: string[];
@@ -53,8 +53,8 @@ export async function enqueueMessage(input: {
   mode?: ScheduledMessageMode;
   // 排队消息不看钟点,sendAt 只用来排先后,所以默认取此刻。
   sendAt?: Date;
-}): Promise<Row> {
-  const row = {
+}): Row {
+  return {
     id: id(),
     taskId: input.taskId,
     text: input.text,
@@ -72,6 +72,10 @@ export async function enqueueMessage(input: {
     sentAt: null,
     deliveringSince: null,
   };
+}
+
+export async function enqueueMessage(input: Parameters<typeof pendingMessageRow>[0]): Promise<Row> {
+  const row = pendingMessageRow(input);
   await db.insert(scheduledMessages).values(row);
   // 附件在**入队这一刻**挂到任务上(uploads.ts):这里才知道是谁发的,投递时那条路
   // 是后端触发的、没有发起人,认不出「这个文件本来就是我的」。

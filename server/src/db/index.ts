@@ -5,6 +5,7 @@ import * as schema from "./schema.js";
 import { ensureAshDbDir, resolveAshDbFile } from "./path.js";
 import { runDataMigrations } from "./migrations.js";
 import { ensureChatSchema } from "./schema-chat.js";
+import { ensurePageAnnotationSchema } from "./schema-page-annotation.js";
 
 const dbFile = resolveAshDbFile();
 ensureAshDbDir(dbFile);
@@ -38,6 +39,7 @@ export { client as dbClient };
 // Minimal bootstrap so the app runs without a separate migration step in dev.
 // `npm run db:push` (drizzle-kit) remains the source of truth for migrations.
 export async function ensureSchema() {
+  await ensurePageAnnotationSchema(client);
   await ensureChatSchema(client);
   await client.executeMultiple(`
     CREATE TABLE IF NOT EXISTS task_branch_receipts (

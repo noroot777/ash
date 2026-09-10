@@ -1,4 +1,5 @@
 import { PREVIEW_ANNOTATION_PROTOCOL } from "@ash/shared/page-annotation";
+import { previewAnnotationImageRuntime } from "./preview-annotation-image.js";
 
 // Runs before application scripts. The top-level preview exits before touching DOM or APIs.
 export function previewAnnotationRuntime(): string {
@@ -152,6 +153,7 @@ export function previewAnnotationRuntime(): string {
     viewport: { width: window.innerWidth, height: window.innerHeight, scale: window.visualViewport?.scale || 1 }, capturedAt: now(),
   });
   const send = (message) => { if (port) try { post(port, message); } catch {} };
+  ${previewAnnotationImageRuntime()}
   const parentAvailable = () => !!(selected?.target && selected.data.context.route === context().route && connected(selected.target) && parentOf(selected.target));
   const reportSelection = () => send({ type: 'selection', id: selected?.data.id || null, canSelectParent: parentAvailable() });
   const emitAnnotation = (entry) => send({ type: 'annotation', annotation: entry.data, canSelectParent: parentAvailable() });
@@ -252,12 +254,16 @@ export function previewAnnotationRuntime(): string {
   const newEntry = (event) => {
     const target = targetAt(event);
     const random = uid(new Uint(4));
-    return { target, data: { id: 'pa-' + random[0] + '-' + random[1] + '-' + random[2] + '-' + random[3], number: nextNumber++,
+    const entry = { target, data: { id: 'pa-' + random[0] + '-' + random[1] + '-' + random[2] + '-' + random[3], number: nextNumber++,
       tool, points: [point(event)], element: target ? card(target) : null, context: context() } };
+    captureImage(entry);
+    return entry;
   };
   const commit = (entry) => {
     if (annotations.length >= 100) { send({ type: 'error', message: '当前页面最多暂存 100 条标注，请先删除部分标注。' }); return; }
-    annotations[annotations.length] = entry; selected = entry; emitAnnotation(entry); schedule();
+    annotations[annotations.length] = entry; selected = entry; entry.committed = true; emitAnnotation(entry);
+    if (entry.image) send({ type: 'image', id: entry.data.id, image: entry.image });
+    schedule();
   };
   const capture = (event) => {
     if (!port || mode !== 'annotate') return;
@@ -336,6 +342,7 @@ export function previewAnnotationRuntime(): string {
           const r = selected.data.element.rect;
           selected.data.points = [{ x: r.x + window.scrollX, y: r.y + window.scrollY }];
           emitAnnotation(selected);
+          captureImage(selected);
         } else if (command?.type === 'focus') {
           selected = null;
           for (const entry of annotations) if (entry.data.id === command.id) selected = entry;

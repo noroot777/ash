@@ -139,7 +139,8 @@
     "test:multi-user-members": "tsx scripts/test-multi-user-members.ts",
     "test:multi-user-paths": "tsx scripts/test-multi-user-paths.ts",
     "test:missing-task-writes": "tsx scripts/test-missing-task-writes.ts",
-    "test:preview-deps": "tsx scripts/test-preview-deps.ts"
+    "test:preview-deps": "tsx scripts/test-preview-deps.ts",
+    "test:page-annotation-batches": "tsx scripts/test-page-annotation-batches.ts && tsx scripts/test-preview-annotation.ts"
   },
   "dependencies": {
     "@ash/shared": "*",
@@ -153,5 +154,8 @@
     "@types/node": "^22.20.1",
     "drizzle-kit": "^0.30.1",
     "tsx": "^4.19.2"
+  },
+  "optionalDependencies": {
+    "playwright-core": "^1.62.0"
   }
 }

@@ -1,0 +1,17 @@
+.annotation-batch-panel { display: grid; gap: 8px; padding: 12px; border-top: 1px solid var(--line); font-size: 12px; }
+.annotation-batch-panel p { margin: 0; line-height: 1.6; }
+.annotation-batch-panel small { display: block; color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; }
+.annotation-batch-paste { padding: 10px; border: 1px dashed var(--line); border-radius: 6px; }
+.annotation-batch-paste:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.annotation-batch-panel button { padding: 6px 10px; }
+.annotation-batch-panel button:disabled { opacity: .45; cursor: not-allowed; }
+.annotation-batch-review { display: grid; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; }
+.annotation-batch-review h4 { margin: 0; }
+.annotation-batch-review ol { margin: 0; padding-left: 20px; }
+.annotation-batch-review li { margin-bottom: 10px; overflow-wrap: anywhere; }
+.annotation-batch-review pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; font-size: 11px; }
+.annotation-batch-evidence figure { margin: 10px 0; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.annotation-batch-evidence figcaption { margin-bottom: 6px; line-height: 1.6; }
+.annotation-batch-evidence img { display: block; max-width: 100%; max-height: 200px; object-fit: contain; margin: 6px 0; }
+.annotation-batch-actions { display: flex; gap: 6px; }
+.preview-workspace .annotation-batch-history { display: block; width: 100%; margin-top: 6px; text-align: left; }

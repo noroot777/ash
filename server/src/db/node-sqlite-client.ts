@@ -99,6 +99,7 @@ export interface Client {
   execute(stmt: InStatement): Promise<ResultSet>;
   executeMultiple(sql: string): Promise<void>;
   batch(stmts: readonly InStatement[], mode?: TransactionMode): Promise<ResultSet[]>;
+  atomicBatch(stmts: readonly InStatement[]): Promise<ResultSet[]>;
   migrate(stmts: readonly InStatement[]): Promise<ResultSet[]>;
   transaction(mode?: TransactionMode): Promise<Transaction>;
   close(): void;
@@ -258,6 +259,21 @@ class NodeSqliteClient implements Client {
         try { this.db.exec("ROLLBACK"); } catch { /* 已经不在事务里了 */ }
       },
     };
+  }
+
+  async atomicBatch(stmts: readonly InStatement[]): Promise<ResultSet[]> {
+    // Delivery receipts need their own committed transaction before a response can acknowledge them.
+    // Joining an unrelated async transaction would allow a later rollback to erase an acknowledged message.
+    if (this.db.isTransaction) throw new Error("数据库正在提交其它操作，请重试；草稿仍保留");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const results = stmts.map((stmt) => this.runSync(stmt));
+      this.db.exec("COMMIT");
+      return results;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   async batch(stmts: readonly InStatement[], mode: TransactionMode = "deferred"): Promise<ResultSet[]> {

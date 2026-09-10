@@ -32,6 +32,12 @@ export interface PreviewAnnotation {
   context: PreviewPageContext;
 }
 
+export interface PreviewPageImage {
+  capturedAt: number;
+  dataUrl?: string;
+  missing: string[];
+}
+
 export type PreviewAnnotationCommand =
   | { type: "configure"; mode: PreviewAnnotationMode; tool: PreviewAnnotationTool }
   | { type: "parent" }
@@ -45,6 +51,7 @@ export type PreviewAnnotationEvent =
   | { type: "configured"; mode: PreviewAnnotationMode; tool: PreviewAnnotationTool }
   | { type: "context"; context: PreviewPageContext }
   | { type: "annotation"; annotation: PreviewAnnotation; canSelectParent: boolean }
+  | { type: "image"; id: string; image: PreviewPageImage }
   | { type: "selection"; id: string | null; canSelectParent: boolean }
   | { type: "error"; message: string };
 
