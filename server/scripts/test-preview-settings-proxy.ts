@@ -46,6 +46,8 @@ const server=http.createServer((req,res)=>{
  if(req.url==='/entry.js'){res.setHeader('content-type','text/javascript');return res.end(source);}
  if(req.url==='/chunk.js'){res.setHeader('content-type','text/javascript');return res.end('export default "module loaded";');}
  if(req.url==='/redirect'){res.writeHead(302,{location:'/nested/'});return res.end();}
+ if(req.url==='/whoami'){res.setHeader('content-type','application/json');return res.end(JSON.stringify({cookie:req.headers.cookie??null}));}
+ if(req.url==='/logout'){res.setHeader('set-cookie','session=; Path=/; Max-Age=0');res.setHeader('content-type','application/json');return res.end('{}');}
  if(req.url==='/events'){res.setHeader('content-type','text/event-stream');res.write('data: stream arrived\\n\\n');const timer=setTimeout(()=>res.end(),2000);res.on('close',()=>clearTimeout(timer));return;}
  if(req.url==='/echo'){let body='';req.on('data',d=>body+=d);req.on('end',()=>{res.setHeader('content-type','application/json');res.setHeader('set-cookie','session=app-session; Path=/; HttpOnly');res.end(JSON.stringify({body,headers:req.headers,port:Number(process.env.PORT),peer:process.env.URL2}));});return;}
  res.setHeader('content-type','text/html');res.end(html);
@@ -184,6 +186,22 @@ try {
   assert.equal(echoed.headers.authorization, undefined);
   assert.equal(echoed.headers["x-ash-turn-token"], undefined);
   assert.match(echo.headers.get("set-cookie") ?? "", /ashpv_.*Path=\/preview\//);
+  // 预览里的应用**必须保得住自己的会话**。它设的 cookie 早先只改写成 `ashpv_…` 发回浏览器，
+  // 可预览文档是 CSP sandbox 的 opaque origin —— 浏览器把它发出的请求一律当跨站，明文 http
+  // 加局域网 IP（用户访问 ash 的常态）下 Lax / Strict / None / 不写 / None+Secure **五种写法
+  // 一条都带不回来**（2026-09-10 用无头 Chromium 逐个试过）。于是 ash 预览 ash 的表现是：
+  // 粘贴 key 登录成功，下一个请求又回到登录页。所以 cookie 改由代理自己记着、自己贴。
+  // 这里的 `request()` 用的是不带 cookie 罐子的 fetch，正好等价于那个沙箱文档。
+  assert.equal((await (await request(gateway + "whoami")).json()).cookie, "session=app-session", "上一步 /echo 设的 cookie 要由代理自己带回上游");
+  // 罐子挂在 grant 上，所以「再打开一次预览」= 换一张凭证 = 换一个会话。这条不是洁癖：
+  // 罐子要是做成全局表，别人从任务页打开同一个预览就会直接坐进你登录好的那个会话里。
+  const reopened = await request(state.url);
+  assert.equal(reopened.status, 302);
+  const gateway2 = reopened.headers.get("location")!;
+  assert.notEqual(gateway2, gateway, "每次打开预览都是一张新凭证");
+  assert.equal((await (await request(gateway2 + "whoami")).json()).cookie, null, "换一次打开就是换一个会话，不继承上一次的 cookie");
+  await request(gateway + "logout");
+  assert.equal((await (await request(gateway + "whoami")).json()).cookie, null, "上游说删这条 cookie 就得真删掉");
   assert.equal((await request(gateway + "redirect")).headers.get("location"), gateway + "nested/");
   assert.equal((await request(gateway + "echo", "OPTIONS", undefined, { origin: "null", "access-control-request-headers": "content-type" })).status, 204);
   assert.equal((await request(gateway, "GET", undefined, { origin: "https://unrelated.example" })).status, 403);
