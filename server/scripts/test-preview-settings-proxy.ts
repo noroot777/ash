@@ -538,11 +538,11 @@ try {
       // 夹具原样打进日志，正是 scripts/dev.mjs 的 frontend 档打的那句。`noise` 是自述之后、
       // 开始监听之前多打的字数。
       const here = `127.0.0.1:${address.port}`;
-      const probe = async (taskId: string, announces: (string | null)[], expected: number | null, noise = 0) => {
+      const probe = async (taskId: string, announces: (string | null)[], expected: number | null, noise = 0, extra = "") => {
         await db.insert(tasks).values({ id: taskId, projectId: "preview-project", title: taskId, status: "done", workflowMode: "free", mode: "single", useWorktree: false, createdAt: stamp, updatedAt: stamp });
         const services = announces.map((announce, i) => ({
           id: `s${i}`, name: `服务${i}`, kind: "web" as const, enabled: true,
-          command: command + (announce === null ? "" : ` --host-api ${announce}`) + (noise ? ` --noise ${noise}` : ""),
+          command: command + (announce === null ? "" : ` --host-api ${announce}`) + (noise ? ` --noise ${noise}` : "") + extra,
         }));
         const started = await startPreview(taskId, { id: "probe", kind: "preview", p: { cmd: services[0].command, mode: "frontend", ready: "port", life: "task" }, fail: null }, fixture, undefined, {
           proxy: true, primaryServiceId: "s0", services,
@@ -557,6 +557,9 @@ try {
       // 判读要是跟着轮询读那 4000 字的尾巴，这一趟就会被记成「没说过」，用户又看回登录框
       // （第 3 轮审查 P1）。数字取得比那道窗口大一截。
       await probe("buried-task", [here], address.port, 12_000);
+      // 命令行里出现那句话不算数：banner 是 ash 自己在 spawn 之前回显进日志的，跳过它就是防
+      // 这一手——否则任何项目只要把这句话写进预览命令，就能不打一个字地伪造出「我打到 ash 那边」。
+      await probe("forger-task", [null], null, 0, ` --label ${previewShell().quote(`[ash] preview-api-host ${here}`)}`);
       // 两个服务里「谁在说」本来就分不清，而「前端 + 分支后端」那种组合的 /api 按定义就该是
       // 分支自己的——所以哪怕两个都照着说，也一律不认。
       await probe("duo-task", [here, here], null);
@@ -579,6 +582,7 @@ try {
         assert.match((await opened("preview-task")).api, /Proxy test/, "前端 + 分支后端两个服务：/api 是分支自己的，不许被主 ash 截走");
         assert.match((await opened("duo-task")).api, /Proxy test/, "两个服务都照着说也不认");
         assert.match((await opened("mute-task")).api, /Proxy test/, "没说过那句话的自定义脚本：/api 照旧走它自己");
+        assert.match((await opened("forger-task")).api, /Proxy test/, "只把那句话写进命令行、一个字都没打出来：伪造不成");
         assert.match((await opened("liar-task")).api, /Proxy test/, "自述的端口不是我们绑着的那个：不认");
         // 记录是上一次启动时写的，ash 重启后可能换了端口 —— 那个数就不再作数了。
         recordListeningPort(address.port === 65500 ? 65501 : 65500);
@@ -589,7 +593,7 @@ try {
         await db.update(projects).set({ repoPath: fixture }).where(eq(projects.id, "preview-project"));
       }
       assert.match((await opened("solo-task")).api, /Proxy test/, "换回别的仓库就不再接");
-      for (const taskId of ["solo-task", "mute-task", "liar-task", "buried-task", "duo-task"]) await stopPreview(taskId, null);
+      for (const taskId of ["solo-task", "mute-task", "liar-task", "buried-task", "forger-task", "duo-task"]) await stopPreview(taskId, null);
     }
     await deleteSession(memberHeaders.cookie.slice(SESSION_COOKIE.length + 1));
     assert.equal((await request(memberGateway)).status, 404, "退出登录后旧预览凭证失效");

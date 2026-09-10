@@ -13,7 +13,7 @@ import { canConnect, ready } from "./preview-probe.js";
 import { freePorts, PORT_POOL, portEnv } from "./preview-ports.js";
 import { boundListeningPort, currentListeningPort } from "./listening-port.js";
 import { canceledGens } from "./preview-start-state.js";
-import { alive, archivePreview, patchStart, prunePreviewArtifacts, readAnyPreview, recordPath, tail, wholeLog, writeRecord, type PreviewStep, type PreviewResult, type PreviewServiceRecord } from "./preview-store.js";
+import { alive, archivePreview, logFollower, patchStart, prunePreviewArtifacts, readAnyPreview, recordPath, tail, writeRecord, type PreviewStep, type PreviewResult, type PreviewServiceRecord } from "./preview-store.js";
 import { previewShell } from "./preview-shell.js";
 import { now } from "./util.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -123,27 +123,36 @@ export async function runPreview(
     // ash 自己绑的那个端口永远不是预览本尊（它就在上面跑着，别人绑不上）。日志里出现它
     // 只可能是命令在说「我的 /api 打到 ash 那边」——认了它，预览就指到 ash 自己身上。
     const self = currentListeningPort();
-    // 「我的 /api 打到那台 ash 上」这句自述（见 preview-log.ts 的 declaredHostApiPort）。
-    // 记下来只为一件事：反代据此把 `/api` 那一跳接回本机 ash 并替用户带上会话。
-    // 两道都不能少——说的端口得**正是我们此刻真绑着的那个**（`boundListeningPort` 确知才有
-    // 值，不猜），而且这一趟**只起了一个服务**：多服务里「谁在说」本来就分不清，而「前端 +
-    // 分支后端」那种组合的 `/api` 按定义就该是分支自己的。
+    // 启动期的两个一次性信号都顺着日志往下读，一个字节读一次（见 preview-store.ts 的
+    // logFollower）。**不许用 `tail` 那 4000 字的尾巴**：这两句都打在启动最前面，装依赖回显和
+    // 冷编译多打几行就把它们挤没了——一句被挤掉的自述让用户看回登录框（第 3 轮审查 P1），
+    // 一句被挤掉的调度器警告让安全协议过旧的分支后端照常上线（第 4 轮审查 P1）。
     //
-    // 扫的是**整篇**日志、而且只在就绪那一刻扫一次（见 preview-store.ts 的 wholeLog）：这句话
-    // 打在服务开始监听之前，跟着轮询用那 4000 字的尾巴读，装依赖和冷编译多打几行就把它挤没了
-    // ——一份确实说过的启动被记成「没说过」，用户又看回登录框（第 3 轮审查 P1）。放在这一刻还
-    // 顺带解决了另一半：端口都连得上了，那句话必然早就落盘，不存在「还没打出来」的竞争。
+    // 「我的 /api 打到那台 ash 上」（判读见 preview-log.ts 的 declaredHostApiPort）记下来只为
+    // 一件事：反代据此把 `/api` 那一跳接回本机 ash 并替用户带上会话。两道都不能少——说的端口
+    // 得**正是我们此刻真绑着的那个**（`boundListeningPort` 确知才有值，不猜），而且这一趟
+    // **只起了一个服务**：多服务里「谁在说」本来就分不清，而「前端 + 分支后端」那种组合的
+    // `/api` 按定义就该是分支自己的。
     const bound = boundListeningPort();
-    const declaredHostApi = () => {
-      if (services.length !== 1 || bound === null) return null;
-      return declaredHostApiPort(wholeLog(services[0].log, banners[0])) === bound ? bound : null;
+    const follow = services.map((s, i) => logFollower(s.log, banners[i]));
+    let hostApi: number | null = null;
+    /** 收掉这个服务这一段新日志里的一次性信号；返回非 null = 这一趟必须当场收摊。 */
+    const scanFresh = (i: number): string | null => {
+      const fresh = follow[i]();
+      if (!fresh) return null;
+      if (fresh.includes("[ash] scheduler started")) {
+        return "这个分支的预览后端启动了真调度器，安全协议过旧，已立即回收。请先同步新版预览隔离逻辑。";
+      }
+      if (services.length === 1 && hostApi === null && bound !== null && declaredHostApiPort(fresh) === bound) hostApi = bound;
+      return null;
     };
     while (Date.now() < deadline) {
       await sleep(500);
       if (!ours()) return fail(CANCELED);
       for (const [i, s] of services.entries()) {
+        const unsafe = scanFresh(i);
+        if (unsafe) return fail(unsafe);
         const text = tail(s.log, banners[i]);
-        if (text.includes("[ash] scheduler started")) return fail("这个分支的预览后端启动了真调度器，安全协议过旧，已立即回收。请先同步新版预览隔离逻辑。");
         if (errors.has(s.id) || !s.pid || !alive(s.pid)) {
           const deps = missingDepsHint(text, nodeDepsAdvice(cwd, s.cmd, missingNodeBin(text)), prepared.get(s.id) ?? []);
           return fail(`${s.name}：预览进程已退出。${errors.get(s.id) ?? ""}${deps ? `\n${deps}` : ""}\n最后几行日志：\n${text.slice(-800)}`);
@@ -162,8 +171,14 @@ export async function runPreview(
         bus.publish({ type: "task.review", taskId });
       }
       if (services.every((s) => s.status === "ready")) {
+        // 上一次读日志到端口连通之间还有一道缝：那句自述可能刚好落在里面（更要紧的是调度器
+        // 那句——落在缝里就等于让它带着真调度器上线）。上线前把两边都再收一次尾。
+        for (const [i] of services.entries()) {
+          const unsafe = scanFresh(i);
+          if (unsafe) return fail(unsafe);
+        }
         const primary = services.find((s) => s.id === primaryId)!;
-        const record = patchStart(taskId, gen, { state: "ready", services, hostApi: declaredHostApi(), pid: primary.pid, url: primary.url, port: primary.port, installPid: null, startedAt: now() });
+        const record = patchStart(taskId, gen, { state: "ready", services, hostApi, pid: primary.pid, url: primary.url, port: primary.port, installPid: null, startedAt: now() });
         if (!record || !ours()) return fail(CANCELED);
         return { ok: true, record };
       }

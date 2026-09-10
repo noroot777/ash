@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PreviewLife, WorkflowStep } from "@ash/shared/workflow";
 import type { PreviewServiceState } from "@ash/shared/preview";
@@ -206,17 +206,49 @@ export function tail(path: string, banner = "", max = 4000): string {
 }
 
 /**
- * 这次启动的**整篇**日志（同样掐掉开头那行命令回显，理由见 tail）。
+ * 顺着这次启动的日志往下读：每次调用只返回**上次读到之后**的新内容（开头那行命令回显
+ * 一并跳过，理由见 tail）。
  *
- * 跟 `tail` 的分工是死的：**给人看的诊断只要尾巴**（4000 字足够回答「刚才发生了什么」，
- * 还顺带挡住了内存），而**一次性能力的判读必须看整篇**。已经栽过一次：`hostApi` 那句
- * 自述是服务在开始监听**之前**打的，装依赖的输出和框架冷编译随便多打几行就把它挤出
- * 4000 字的窗口 —— 一份**确实说过**的启动被记成「没说过」，用户又看回登录框，正是这个
- * 任务要消掉的那堵墙（第 3 轮审查 P1）。
+ * **启动期的一次性信号一律走这里，不许跟 `tail` 共用那 4000 字的尾巴。**分工是死的：
+ * 尾巴是给人看的诊断（4000 字足够回答「刚才发生了什么」，也顺带挡住了内存），而这些话
+ * 都打在启动最前面，装依赖回显和框架冷编译随便多打几行就把它们挤出窗口。已经栽过两次，
+ * 两次的坏法还不一样：
+ *  · 被挤掉的「我的 /api 打到那台 ash 上」→ 一份**确实说过**的启动被记成没说过，用户看回
+ *    登录框，正是这个任务要消掉的那堵墙（第 3 轮审查 P1）；
+ *  · 被挤掉的「这个分支起了真调度器」→ 安全协议过旧的预览后端照常上线，真调度器接着拿
+ *    真项目目录派活，而我们嘴上说的是「已立即回收」（第 4 轮审查 P1）。
  *
- * 所以它只该被那一类判读用，而且**只在就绪那一刻扫一次**：轮询里每 500ms 读一遍整篇，
- * 在话多的构建上就是几百兆的白读。
+ * 每个字节只读一次——轮询每 500ms 读一遍整篇，在话多的构建上就是几百兆白读。代价是调用方
+ * 得自己把「见过了」记住：信号只在它出现的那一次出现在返回值里。
+ *
+ * 返回值前面接一小段上次的尾巴：一句话被读边界劈成两半时，两边都匹配不上。信号全是 ASCII，
+ * 所以边界劈开多字节字符产生的替换字符不影响判读。
  */
-export function wholeLog(path: string, banner = ""): string {
-  return tail(path, banner, Number.MAX_SAFE_INTEGER);
+const FOLLOW_OVERLAP = 128;
+
+export function logFollower(path: string, banner = ""): () => string {
+  // banner 是 spawn 之前我们自己写进去的，跳过它这件事按**字节**算：命令里可能有中文路径，
+  // 按字符数偏移会错位。不跳的话更糟——那一行里就有用户写的命令，命令里但凡出现信号的
+  // 字样，就等于让被预览的一方自己伪造这些信号。
+  let offset = Buffer.byteLength(banner);
+  let carry = "";
+  return () => {
+    let chunk: string;
+    try {
+      const fd = openSync(path, "r");
+      try {
+        const size = fstatSync(fd).size;
+        if (size <= offset) return "";
+        const buffer = Buffer.allocUnsafe(size - offset);
+        const read = readSync(fd, buffer, 0, buffer.length, offset);
+        offset += read;
+        chunk = buffer.subarray(0, read).toString("utf8");
+      } finally { closeSync(fd); }
+    } catch {
+      return "";
+    }
+    const text = carry + chunk;
+    carry = text.slice(-FOLLOW_OVERLAP);
+    return text;
+  };
 }
