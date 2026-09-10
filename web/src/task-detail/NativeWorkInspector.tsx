@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
-import { CheckCircle, Circle, Robot, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
+import { ArrowUpRight, CaretDown, CheckCircle, Circle, Robot, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
 import type { NativeWorkStatus, TaskStatus } from "@ash/shared";
 import type { ConversationItem } from "./conversationModel.ts";
 import { buildNativeWork, type NativeWorkItem } from "./nativeWorkModel.ts";
 import { NativeAgentConversation } from "./NativeAgentConversation.tsx";
+import { NativeWorkMeta } from "./NativeWorkMeta.tsx";
 import "../styles/native-work.css";
 
 const labels: Record<NativeWorkStatus, string> = {
@@ -14,12 +15,14 @@ function WorkRow({ row, parent, onOpen }: { row: NativeWorkItem; parent?: Native
   const Icon = row.status === "completed" ? CheckCircle : row.status === "running" ? SpinnerGap
     : row.status === "failed" ? WarningCircle : row.kind === "agent" ? Robot : Circle;
   return (
-    <div className="native-work__entry">
+    <article className="native-work__entry" data-status={row.status}>
       <details className="native-work__row" data-status={row.status}>
         <summary>
-          <Icon size={15} aria-hidden="true" />
-          <span className="native-work__title">{row.title}</span>
-          <span className="native-work__status">{labels[row.status]}</span>
+          <span className="native-work__avatar"><Icon size={17} aria-hidden="true" /></span>
+          <span className="native-work__identity"><span className="native-work__title">{row.title}</span>
+            <span className="native-work__status" data-status={row.status}>{labels[row.status]}</span>
+          </span>
+          <CaretDown className="native-work__chevron" size={13} aria-hidden="true" />
         </summary>
         <div className="native-work__detail">
           <dl>
@@ -27,7 +30,6 @@ function WorkRow({ row, parent, onOpen }: { row: NativeWorkItem; parent?: Native
             {parent && <><dt>所属子智能体</dt><dd>{parent.title}</dd></>}
             {row.nativeId && <><dt>编号</dt><dd>{row.nativeId}</dd></>}
             {row.agentType && <><dt>类型</dt><dd>{row.agentType}</dd></>}
-            {row.model && <><dt>模型</dt><dd>{row.model}</dd></>}
             {row.owner && <><dt>负责人</dt><dd>{row.owner}</dd></>}
           </dl>
           {row.description && <section><h4>任务说明</h4><p>{row.description}</p></section>}
@@ -38,8 +40,11 @@ function WorkRow({ row, parent, onOpen }: { row: NativeWorkItem; parent?: Native
             : "历史记录仅保留派活调用，未记录最终状态。"}</p>}
         </div>
       </details>
-      {row.kind === "agent" && <button className="native-work__open" type="button" onClick={onOpen} aria-label={`查看执行：${row.title}`}>查看执行</button>}
-    </div>
+      <NativeWorkMeta row={row} />
+      <footer className="native-work__footer"><span>{row.sessionLabel}</span>
+        {row.kind === "agent" && <button className="native-work__open" type="button" onClick={onOpen} aria-label={`查看执行：${row.title}`}>查看执行<ArrowUpRight size={13} aria-hidden="true" /></button>}
+      </footer>
+    </article>
   );
 }
 
@@ -61,11 +66,11 @@ export function NativeWorkInspector({ items, status, loading, error, onRetry }: 
   if (selected) return <NativeAgentConversation key={selected.id} row={selected} statusLabel={labels[selected.status]} onBack={() => setSelectedId(null)} error={error} onRetry={onRetry} />;
   return (
     <div className="native-work">
-      <p className="native-work__intro">查看当前任务派出的子智能体和内部任务，点击「查看执行」查看实时会话。</p>
       {error && <div role="alert" className="native-work__error">{error.message} {onRetry && <button type="button" onClick={onRetry}>重试</button>}</div>}
       {loading && <p role="status" className="native-work__hint">正在读取会话记录…</p>}
       {rows.length > 0 ? <>
-        <div className="native-work__counts" aria-live="polite"><span>{rows.length} 项</span><span>{running} 进行中</span><span>{complete} 已完成</span></div>
+        <div className="native-work__counts" aria-live="polite"><span><strong>{rows.length}</strong> 项工作</span><span data-status="running"><strong>{running}</strong> 进行中</span><span data-status="completed"><strong>{complete}</strong> 已完成</span></div>
+        <p className="native-work__intro">派出的工作与进展，集中在这里。</p>
         {(["agent", "task"] as const).map((kind) => {
           const group = rows.filter((row) => row.kind === kind);
           return group.length > 0 && <section className="native-work__group" key={kind} aria-label={kind === "agent" ? "子智能体列表" : "内部任务列表"}>

@@ -1,3 +1,4 @@
+import { AssistantIcon } from "../assistant/AssistantIcon.tsx";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ProjectView, TaskListItem, TaskMode } from "@ash/shared";
 import type { ChatRoom, ChatSnapshot } from "@ash/shared/chat";
@@ -13,8 +14,9 @@ import { MODES } from "../composer/composerParts.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
 import "./chat.css";
 
-export function ChatView({ project, onTask, onExit, onMode }: {
+export function ChatView({ project, onTask, onExit, onMode, onAssistant }: {
   project: ProjectView; onTask: (task: TaskListItem) => void; onExit: () => void; onMode: (mode: TaskMode) => void;
+  onAssistant?: () => void;
 }) {
   const [rooms, setRooms] = useState<ChatRoom[]>([]);
   const [roomId, setRoomId] = useState<string | null>(null);
@@ -123,7 +125,7 @@ export function ChatView({ project, onTask, onExit, onMode }: {
       <div className="chat-channels">{rooms.map((item) => <button type="button" key={item.id} className={item.id === roomId && editor !== "create" ? "is-selected" : ""} onClick={() => selectRoom(item.id)}><Hash size={17} /><span>{item.name}</span><small>{item.members.length}</small></button>)}</div>
       <div className="chat-rail-note"><At size={22} /><strong>有需要，再叫上它。</strong><p>没有 @ 的普通消息只保存在群里。@all 唤醒全部成员；单独发送 /clear 重新开始上下文。</p></div>
     </nav>
-    <div className="chat-main"><div className="chat-mode-bar" aria-label="工作模式">{MODES.map((mode) => <button type="button" key={mode.value} onClick={() => onMode(mode.value)}>{mode.label}</button>)}<button type="button" aria-current="page" className="is-active"><ChatCircleDots size={14} />聊天</button></div>
+    <div className="chat-main"><div className="chat-mode-bar" aria-label="工作模式">{MODES.map((mode) => <button type="button" key={mode.value} onClick={() => onMode(mode.value)}>{mode.label}</button>)}<button type="button" aria-current="page" className="is-active"><ChatCircleDots size={14} />聊天</button>{onAssistant && <button type="button" aria-label="ash 助手" onClick={onAssistant}><AssistantIcon size={14} />助手</button>}</div>
       {editor ? <ChatMembers key={`${editor}-${roomId}`} creating={editor === "create"} initial={editor === "members" ? room?.members ?? [] : []} initialName={editor === "members" ? room?.name : undefined} onCancel={() => setEditor(null)} onSave={async (members, name) => {
         if (editor === "create") { const created = await chatApi.create(project.id, name, members); setRooms((current) => [...current, created]); selectRoom(created.id); }
         else if (roomId) {

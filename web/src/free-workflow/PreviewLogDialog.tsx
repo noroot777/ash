@@ -1,10 +1,12 @@
 import type { PreviewServiceState } from "@ash/shared/preview";
 import { browserPreviewUrl } from "../lib/previewUrl.ts";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowsClockwise, Copy, Terminal, X } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
+import { previewServiceStatus } from "./previewServices.ts";
+import { PreviewServiceTabs, previewLogTabId } from "./PreviewServiceTabs.tsx";
 
 /**
  * 预览的启动日志。
@@ -28,18 +30,23 @@ import { useDismissable } from "../lib/useDismissable.ts";
  *     其实还挂着。所以调用方把「我这会儿正等一个启动请求」也告诉它（awaitingStart），
  *     两个条件任一成立就续读。
  */
-export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = false }: {
+export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = false, initialExpanded = awaitingStart }: {
   taskId: string;
   onClose: () => void;
   notify: (message: string) => void;
   /** 调用方正等着一个启动请求返回：即便后端还没报 starting，也得续读。 */
   awaitingStart?: boolean;
+  /** 打开前已知需要的阅读空间，在本次打开期间保持，避免异步服务列表挪动底部按钮。 */
+  initialExpanded?: boolean;
 }) {
   const scrim = useRef<HTMLDivElement>(null);
+  const restoreRemovedTabFocus = useRef(false);
+  const panelId = useId();
   const body = useRef<HTMLPreElement>(null);
   const requestVersion = useRef(0);
   const [serviceId, setServiceId] = useState<string | undefined>();
   const [services, setServices] = useState<PreviewServiceState[]>([]);
+  const [expanded, setExpanded] = useState(initialExpanded);
   const [text, setText] = useState("");
   const [meta, setMeta] = useState<{ running: boolean; starting: boolean; truncated: boolean; command: string | null; url: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -47,13 +54,32 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
   // 人往上翻的时候不能被新日志拽回底部（跟会话贴底一个道理）。
   const [stick, setStick] = useState(true);
   useDismissable({ enabled: true, containerRef: scrim, onClose });
+  useEffect(() => { body.current?.focus(); }, []);
+  useEffect(() => {
+    if (!restoreRemovedTabFocus.current) return;
+    restoreRemovedTabFocus.current = false;
+    (scrim.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? body.current)?.focus();
+  }, [serviceId, services]);
 
   const load = useCallback(async () => {
     const version = requestVersion.current;
     try {
       const log = await api.freePreviewLog(taskId, serviceId);
       if (version !== requestVersion.current) return;
-      setServices(log.services ?? []);
+      const nextServices = log.services ?? [];
+      setServices(nextServices);
+      if (nextServices.length > 1 || (!nextServices.length && (log.running || log.starting))) setExpanded(true);
+      if (serviceId && !nextServices.some((service) => service.id === serviceId)) {
+        restoreRemovedTabFocus.current = document.activeElement?.id === previewLogTabId(panelId, serviceId);
+        requestVersion.current += 1;
+        setServiceId(undefined);
+        setText("");
+        setMeta({ running: log.running, starting: log.starting, truncated: false, command: null, url: null });
+        setError(null);
+        setLoading(true);
+        setStick(true);
+        return;
+      }
       setText(log.exists ? log.text : "");
       setMeta({ running: log.running, starting: log.starting, truncated: log.truncated, command: log.command, url: log.url });
       setError(null);
@@ -63,7 +89,7 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
     } finally {
       if (version === requestVersion.current) setLoading(false);
     }
-  }, [taskId, serviceId]);
+  }, [taskId, serviceId, panelId]);
 
   useEffect(() => {
     setLoading(true); setText("");
@@ -85,12 +111,13 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
     try { await navigator.clipboard.writeText(text); notify("预览日志已复制"); }
     catch { notify("复制失败，可以手动选中日志文本"); }
   };
+  const selectedService = services.find((service) => service.id === serviceId);
 
   return createPortal(
     <div className="task-modal-scrim" ref={scrim} role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
-      <div className="preview-log-dialog" role="dialog" aria-modal="true" aria-labelledby="preview-log-title" tabIndex={-1}>
+      <div className={`preview-log-dialog${expanded ? " is-expanded" : ""}`} role="dialog" aria-modal="true" aria-labelledby="preview-log-title" tabIndex={-1}>
         <header>
           <span><Terminal size={17} weight="bold" /></span>
           <div>
@@ -106,9 +133,12 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
           </div>
           <button type="button" aria-label="关闭预览日志" onClick={onClose}><X size={15} /></button>
         </header>
-        {services.length > 1 && <div className="preview-service-tabs" role="group" aria-label="服务日志">
-          <button type="button" aria-pressed={!serviceId} onClick={() => setServiceId(undefined)}>全部</button>
-          {services.map((s) => <button type="button" key={s.id} aria-pressed={serviceId === s.id} onClick={() => setServiceId(s.id)}>{s.name} · {{ starting: "启动中", ready: "运行中", failed: "失败", stopped: "已停止" }[s.status]}</button>)}
+        {services.length > 1 && <div className="preview-log-services">
+          <PreviewServiceTabs services={services} serviceId={serviceId} panelId={panelId} onSelect={(id) => { setServiceId(id); setStick(true); }} />
+        </div>}
+        {selectedService && <div className="preview-log-selection">
+          <span>{selectedService.name}</span>
+          <span className="preview-service-status" data-status={selectedService.status}>{previewServiceStatus[selectedService.status]}</span>
         </div>}
         {meta?.command && (
           <div className="preview-log-meta">
@@ -118,6 +148,9 @@ export function PreviewLogDialog({ taskId, onClose, notify, awaitingStart = fals
         )}
         <pre
           className="preview-log-body mono"
+          id={panelId}
+          role={services.length > 1 ? "tabpanel" : undefined}
+          aria-labelledby={services.length > 1 ? previewLogTabId(panelId, serviceId) : undefined}
           ref={body}
           tabIndex={0}
           onScroll={(event) => {

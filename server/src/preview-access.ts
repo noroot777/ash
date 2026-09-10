@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import type { Actor } from "./auth/context.js";
+import { currentListeningPort } from "./listening-port.js";
 import { alive, readAnyPreview } from "./preview-store.js";
 import { previewBase } from "./preview-public.js";
 import { rewritePreviewUrl } from "./preview-proxy-rewrite.js";
@@ -111,6 +112,13 @@ export function mountPreviewOpenRoutes(api: Hono): void {
     // 也不知道重开一次预览就好了。
     let target: URL;
     try { target = new URL(service.url); } catch { return c.text("预览记录里的地址不合法，请关掉预览重开一次。", 502); }
+    // 代理永远打回环上的 `service.port`，所以这个端口等于 ash 自己监听的那个 = 预览指到了
+    // ash 本尊：代理自己转给自己，用户点开预览看到的是自己这台 ash（未登录态，因为代理按
+    // 设计不转 cookie）。判读那侧已经不认自己的端口了（preview-log.ts 的 `excluded`），这里
+    // 是**兜底**：存量记录、手填的服务端口照样能绕过判读，而这条路一旦走通，用户面对的就是
+    // 一个长得跟 ash 一模一样、却要他重新粘 key 的页面。
+    const self = currentListeningPort();
+    if (self !== null && service.port === self) return c.text("预览记录指到了 ash 自己，请关掉预览重开一次。", 502);
     const actor = actorOf(c);
     const { getUser } = await import("./auth/store.js");
     const grant: PreviewGrant = {

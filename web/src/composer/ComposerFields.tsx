@@ -59,7 +59,7 @@ export function ComposerFields({
   workflowMode,
   onWorkflowModeChange,
   onModeChange,
-  chatTab,
+  extraModeTabs,
   onPickStarter,
   children,
 }: {
@@ -104,7 +104,7 @@ export function ComposerFields({
   workflowMode: TaskWorkflowMode;
   onWorkflowModeChange: (mode: TaskWorkflowMode) => void;
   onModeChange: (mode: TaskMode) => void;
-  chatTab?: ReactNode;
+  extraModeTabs?: ReactNode;
   onPickStarter: (body: string, mode: TaskMode) => void;
   children: (executorTools: ReactNode) => ReactNode;
 }) {
@@ -174,7 +174,7 @@ export function ComposerFields({
             aria-selected={mode === item.value} onClick={() => onModeChange(item.value)}>
             <Icon size={14} /><span>{item.label}</span>
           </button>; })}
-          {chatTab}
+          {extraModeTabs}
         </div>
         <span className="studio-tool-divider" aria-hidden="true" />
         {single ? <ComposerPopover label="工作方式" value={preset ? "起手式" : "自由工作流"} wide={preset}

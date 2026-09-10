@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <a href="#快速开始">快速开始</a> · <a href="#核心能力">核心能力</a> · <a href="#编排模式">编排模式</a> · <a href="#任务接力">任务接力</a> · <a href="#多人模式">多人模式</a> · <a href="docs/install.md">部署文档</a>
+  <a href="#快速开始">快速开始</a> · <a href="#核心能力">核心能力</a> · <a href="#编排模式">编排模式</a> · <a href="#任务接力">任务接力</a> · <a href="#实时预览">实时预览</a> · <a href="#多人模式">多人模式</a> · <a href="docs/install.md">部署文档</a>
 </p>
 
 ---
@@ -52,62 +52,32 @@ npm start            # http://localhost:4317
 
 ## 核心能力
 
-🔀 **Worktree 隔离** — 每个任务自动创建独立的 git worktree 和分支，多任务并行互不干扰。
+🎯 **智能体随意切换** — 任务运行中可随时切换不同的智能体、模型和智能水平，下一轮回复立即生效，因为上下文会跨智能体共享。
 
-📋 **完成协议** — agent 必须主动调用 `complete_task` 才算完成。进程退出 ≠ 任务完成，避免半成品被推进下游队列。
+🔗 **队列编排** — 串行队列按序推进，并行分组同时运行。失败任务自动跳过，重新排队时按规则归位。
 
 🔍 **自动验证** — 任务完成后触发验证轮（可配置多轮复审），在同一会话中运行。未通过则打回修复，上下文完整保留。
+
+🖥️ **实时预览** — agent 改了前端代码，一键启动预览服务查看效果。项目设置中可配置多个预览服务（最多 8 个同时运行），自动检测仓库中的常见框架脚本，端口从专用池分配。多人模式下自动挂载认证反代，外部可安全访问。预览可随任务生命周期自动管理：重新运行时关旧起新，验收后自动清理。
+
+✅ **一键验收** — 确认通过后自动合并到主干、清理 worktree 和临时分支。遇到冲突会唤醒来源任务处理。
+
+📝 **随手记** — 项目级别的快速笔记，列表内直接新建，多人模式下按人隔离。
+
+💬 **多智能体聊天** — 项目下的持久群聊频道，可拉入任意数量、任意类型的智能体成员（不限 Claude），用 `@成员名` 点名提问。被点名的 agent 可以读取项目文件后给出简短建议（咨询），也可以创建标准任务去真正执行修改（委派）。聊天上下文自动管理——后台预压缩长历史为摘要，不会因对话变长而丢失早期决策。`/clear` 重新开始上下文，旧消息仍可查看。
+
+🗂️ **任务模式** — 跨项目鸟瞰所有在跑和待验收的任务，按项目分组，一键展开会话。
+
+🤖 **助手** — 侧栏底部打开，选择智能体后直接对话，无需项目也能用。可按描述检索历史任务、生成起手式草案、委派工作到其它项目。对话跨项目保留，`/clear` 重置上下文。
+
+🔎 **全局搜索** — `⌘K` 搜任务标题、正文、会话内容，边打边出结果，毫秒级响应。
+
+📲 **移动端** — Expo 构建的 iOS/Android 客户端，查看任务、回复消息、操作团队，随时随地。
 
 ♻️ **重启存活** — agent 进程与 server 解耦。`npm run restart` 会自动检测在跑的任务：能接管的无感接管，不能接管的拦住不重启。**在 macOS/Linux 上，单飞任务的 agent 进程完全不受重启影响**（输出写文件而非管道）；团队调度台自动 `--resume` 接回。
 
 > [!NOTE]
 > **Windows 上重启会打断正在运行的单飞任务。** 输出落盘的 detached 机制依赖 POSIX shell 重定向（`/bin/sh -c`），Windows 上没有等价实现，因此退化为管道模式 —— server 一重启管道断开，agent 进程随之终止。被打断的任务标记为 failed，可手动重试续跑。`npm run restart` 的安全闸在 Windows 上同样生效：它会提示有多少任务将被打断，不加 `FORCE=1` 不会动手。
-
-🔗 **队列编排** — 串行队列按序推进，并行分组同时运行。失败任务自动跳过，重新排队时按规则归位。
-
-✅ **一键验收** — 确认通过后自动合并到主干、清理 worktree 和临时分支。遇到冲突会唤醒来源任务处理。
-
-🔎 **全局搜索** — `⌘K` 搜任务标题、正文、会话内容，边打边出结果，毫秒级响应。
-
-🗂️ **任务模式** — 跨项目鸟瞰所有在跑和待验收的任务，按项目分组，一键展开会话。
-
-🖼️ **图片与附件** — 粘贴图片直接上传（带进度条），附件随任务接力迁移，agent 的对话里也能渲染用户上传的图。
-
-📝 **随手记** — 项目级别的快速笔记，列表内直接新建，多人模式下按人隔离。
-
-🌿 **Git 面板** — 每个项目内置分支浏览、推送、项目级 Git 身份与 HTTPS 凭证配置。
-
-📲 **移动端** — Expo 构建的 iOS/Android 客户端，查看任务、回复消息、操作团队，随时随地。
-
-## 支持的执行器
-
-内置 15 个 CLI 执行器配置，机器上安装了哪些就能使用哪些：
-
-<table>
-<tr>
-<td><code>claude</code></td><td><code>codex</code></td><td><code>gemini</code></td><td><code>cursor</code></td><td><code>copilot</code></td>
-</tr>
-<tr>
-<td><code>opencode</code></td><td><code>qwen</code></td><td><code>grok</code></td><td><code>kimi</code></td><td><code>trae</code></td>
-</tr>
-<tr>
-<td><code>kiro</code></td><td><code>kilo</code></td><td><code>qoder</code></td><td><code>antigravity</code></td><td><code>pi</code></td>
-</tr>
-</table>
-
-通过「设置 → 执行器」可为每个 CLI 创建 **profile**（固定模型与思考强度）。任务级别也可以单独覆盖模型和思考强度。添加新 CLI 只需一个 TypeScript 文件 — 见 [catalog/README.md](server/src/executors/catalog/README.md)。
-
-## MCP 工具
-
-Ash 通过 [Model Context Protocol](https://modelcontextprotocol.io) 向 agent 暴露 **25 个工具**，覆盖任务全生命周期：
-
-| 类别 | 工具 |
-|---|---|
-| 项目 / 分组 | `resolve_project` `create_group` `resolve_group` `list_groups` |
-| 任务管理 | `create_task_chain` `batch_create_tasks` `get_task` `list_tasks` `patch_task` |
-| 队列 | `create_queue` `get_queue` `queue_insert` `queue_remove` `queue_reorder` `requeue_task` |
-| 生命周期 | `run_task` `run_group` `stop_task` `complete_task` `pause_task` `accept_task` |
-| 协作 | `ask_question` `answer_question` `report_stage` `dispatch` |
 
 ## 编排模式
 
@@ -119,7 +89,7 @@ Ash 通过 [Model Context Protocol](https://modelcontextprotocol.io) 向 agent �
 
 **团队模式** — 指派一个 agent 担任调度台（常驻会话），由它自行拆分子任务、分派执行者、汇总结果。支持团队预设和执行者配置。
 
-**Duet** — 两个 agent 协作研讨同一问题，中间设有人工闸口，最终合稿输出。可无缝转交给团队模式继续执行。
+**讨论** — 两个不同的智能体（如 Claude + Codex）围绕同一议题轮番发言，各自独立思考、互相质疑，形成共同结论。中间设有人工闸口（可关闭），轮数可限制或不限。讨论结束后输出合稿，可一键转交给团队模式继续执行。讨论者 A / B 各自独立配置执行器、模型和智能水平。
 
 **验证循环** — 实现 → 验证 → 打回 → 修复 → 再验证，轮数可配，循环至通过后由用户验收合并。
 
@@ -157,6 +127,23 @@ Ash 通过 [Model Context Protocol](https://modelcontextprotocol.io) 向 agent �
 
 > 完整的流程说明与故障排查见 **[docs/handoff.md](docs/handoff.md)**。
 
+## 实时预览
+
+任务改了前端或 Web 服务的代码后，可以直接在 Ash 里启动预览服务查看效果，不必离开界面手动起开发服务器。
+
+### 两种模式
+
+- **脚本模式** — 填一条启动命令（如 `npm run dev`），Ash 从端口池分配空闲端口注入 `$PORT`，启动后自动探测服务就绪并生成预览链接。
+- **服务列表模式** — 配置多个预览服务（最多 8 个同时运行），分别标记为 `web`（面向浏览器）或 `service`（后端依赖），Ash 并行启动并独立管理各自的生命周期。支持自动检测仓库中的常见框架脚本。
+
+### 认证反代
+
+多人模式下（或手动开启），预览链接自动挂载认证反代——带一次性 token 的 URL 可安全分享给外部访问，无需额外配置。
+
+### 生命周期
+
+预览随任务走：重新运行任务时自动关闭旧预览、启动新的；任务验收合并后自动清理预览进程和相关软链。启动过程中（依赖安装 + 服务就绪）用户随时可以取消。
+
 ## 多人模式
 
 开启多人模式后，一台 Ash 可以供多人使用，各有独立的账号、CLI 环境、项目可见性和资源隔离。
@@ -169,6 +156,36 @@ Ash 通过 [Model Context Protocol](https://modelcontextprotocol.io) 向 agent �
 
 > [!WARNING]
 > 默认监听 `0.0.0.0` 且无鉴权（终端 API 本身就是个 shell）。请仅在可信网络中使用，或自行在前端部署反向代理进行认证。
+
+## 支持的执行器
+
+内置 15 个 CLI 执行器配置，机器上安装了哪些就能使用哪些：
+
+<table>
+<tr>
+<td><code>claude</code></td><td><code>codex</code></td><td><code>gemini</code></td><td><code>cursor</code></td><td><code>copilot</code></td>
+</tr>
+<tr>
+<td><code>opencode</code></td><td><code>qwen</code></td><td><code>grok</code></td><td><code>kimi</code></td><td><code>trae</code></td>
+</tr>
+<tr>
+<td><code>kiro</code></td><td><code>kilo</code></td><td><code>qoder</code></td><td><code>antigravity</code></td><td><code>pi</code></td>
+</tr>
+</table>
+
+通过「设置 → 执行器」可为每个 CLI 创建 **profile**（固定模型与智能水平）。任务级别可在三段式胶囊中逐项覆盖：先选执行器，再选模型，最后选智能水平——任务运行中也能随时切换，下一轮回复立即生效。添加新 CLI 只需一个 TypeScript 文件 — 见 [catalog/README.md](server/src/executors/catalog/README.md)。
+
+## MCP 工具
+
+Ash 通过 [Model Context Protocol](https://modelcontextprotocol.io) 向 agent 暴露 **25 个工具**，覆盖任务全生命周期：
+
+| 类别 | 工具 |
+|---|---|
+| 项目 / 分组 | `resolve_project` `create_group` `resolve_group` `list_groups` |
+| 任务管理 | `create_task_chain` `batch_create_tasks` `get_task` `list_tasks` `patch_task` |
+| 队列 | `create_queue` `get_queue` `queue_insert` `queue_remove` `queue_reorder` `requeue_task` |
+| 生命周期 | `run_task` `run_group` `stop_task` `complete_task` `pause_task` `accept_task` |
+| 协作 | `ask_question` `answer_question` `report_stage` `dispatch` |
 
 ## 项目结构
 

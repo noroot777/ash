@@ -1,4 +1,13 @@
 import type { AgentType, TaskListItem } from "./index.ts";
+import type { WorkflowDef } from "./workflow.ts";
+
+export interface AssistantResult {
+  matches: { taskId: string; reason: string }[];
+  queries: string[];
+  workflow?: { name: string; description: string; def: WorkflowDef };
+  workflowId?: string;
+  workflowAvailable?: boolean;
+}
 
 export interface ChatMember {
   id: string;
@@ -15,6 +24,7 @@ export interface ChatRoom {
   name: string;
   members: ChatMember[];
   createdAt: string;
+  kind?: "chat" | "assistant";
 }
 
 export type ChatMessageStatus = "queued" | "running" | "done" | "failed" | "stopped";
@@ -30,6 +40,7 @@ export interface ChatMessage {
   status: ChatMessageStatus;
   taskId: string | null;
   createdAt: string;
+  assistant?: AssistantResult;
 }
 
 export interface ChatSnapshot {

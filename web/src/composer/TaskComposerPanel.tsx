@@ -1,3 +1,4 @@
+import { AssistantIcon } from "../assistant/AssistantIcon.tsx";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DUET_DEFAULTS } from "@ash/shared/duet";
 import type {
@@ -58,6 +59,7 @@ export function TaskComposerPanel({
   mode,
   onModeChange,
   onChat,
+  onAssistant,
   onCancel,
   onCreated,
   onCreateGroup,
@@ -71,6 +73,7 @@ export function TaskComposerPanel({
   mode: TaskMode;
   onModeChange: (mode: TaskMode) => void;
   onChat?: () => void;
+  onAssistant?: () => void;
   onCancel: () => void;
   onCreated: (task: Task, noteIds: string[]) => void;
   onCreateGroup: (name: string, mode: GroupMode) => Promise<Group>;
@@ -528,10 +531,12 @@ export function TaskComposerPanel({
             workflowMode={workflowMode}
             onWorkflowModeChange={setWorkflowMode}
             onModeChange={onModeChange}
-            chatTab={onChat && <button type="button" role="tab" aria-selected={false} disabled={uploads.uploading}
+            extraModeTabs={<>{onChat && <button type="button" role="tab" aria-selected={false} disabled={uploads.uploading}
               onClick={() => onChat()}>
               <ChatCircleDots size={14} /><span>聊天</span>
-            </button>}
+            </button>}{onAssistant && <button type="button" role="tab" aria-label="ash 助手" aria-selected={false} disabled={uploads.uploading} onClick={onAssistant}>
+              <AssistantIcon size={14} /><span>助手</span>
+            </button>}</>}
             onPickStarter={(text, nextMode) => {
               changeBody(body.trim() ? body + "\n\n" + text : text);
               onModeChange(nextMode);

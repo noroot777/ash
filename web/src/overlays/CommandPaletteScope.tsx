@@ -1,4 +1,3 @@
-import type { MouseEvent as ReactMouseEvent } from "react";
 import type { ProjectView } from "@ash/shared";
 import { Check, X } from "@phosphor-icons/react";
 
@@ -53,25 +52,25 @@ export function ScopeToken({
 }
 
 function ChoiceRow({
+  index,
   active,
   selected,
   label,
   description,
   onChoose,
-  onHover,
 }: {
+  index: number;
   active: boolean;
   selected: boolean;
   label: string;
   description: string;
   onChoose: () => void;
-  onHover: (event: ReactMouseEvent) => void;
 }) {
   return (
     <button
       type="button"
       aria-selected={active}
-      onMouseMove={onHover}
+      data-palette-index={index}
       onClick={onChoose}
       className="ui-selectable flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left outline-none"
     >
@@ -91,13 +90,11 @@ export function ScopeProjectStep({
   active,
   selectedProjectId,
   onChoose,
-  onHover,
 }: {
   projects: ProjectView[];
   active: number;
   selectedProjectId: string | null;
   onChoose: (projectId: string | null) => void;
-  onHover: (index: number, event: ReactMouseEvent) => void;
 }) {
   const choices = [{ id: null, name: "不限项目", repoPath: "搜索所有项目" }, ...projects];
   return (
@@ -106,12 +103,12 @@ export function ScopeProjectStep({
       {choices.map((project, index) => (
         <ChoiceRow
           key={project.id ?? "all"}
+          index={index}
           active={index === active}
           selected={project.id === selectedProjectId}
           label={project.name}
           description={project.repoPath}
           onChoose={() => onChoose(project.id)}
-          onHover={(event) => onHover(index, event)}
         />
       ))}
     </div>
@@ -122,12 +119,10 @@ export function ScopeTypeStep({
   active,
   selectedType,
   onChoose,
-  onHover,
 }: {
   active: number;
   selectedType: SearchScopeType;
   onChoose: (type: SearchScopeType) => void;
-  onHover: (index: number, event: ReactMouseEvent) => void;
 }) {
   return (
     <div className="p-1">
@@ -135,12 +130,12 @@ export function ScopeTypeStep({
       {SCOPE_TYPE_OPTIONS.map((option, index) => (
         <ChoiceRow
           key={option.value ?? "all"}
+          index={index}
           active={index === active}
           selected={option.value === selectedType}
           label={option.label}
           description={option.description}
           onChoose={() => onChoose(option.value)}
-          onHover={(event) => onHover(index, event)}
         />
       ))}
     </div>

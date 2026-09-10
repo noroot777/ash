@@ -31,6 +31,7 @@ const { startPreview, stopPreview, readPreview, beginPreviewStart, endPreviewSta
 const { lastPreview, readAnyPreview, readPreviewLog, writeRecord } = await import("../src/preview-store.js");
 const { nodeDepsAdvice } = await import("../src/preview-deps.js");
 const { previewShell } = await import("../src/preview-shell.js");
+const { currentListeningPort } = await import("../src/listening-port.js");
 const { createSession, deleteSession } = await import("../src/auth/store.js");
 const { setInstanceMode } = await import("../src/auth/mode.js");
 await ensureSchema();
@@ -39,8 +40,9 @@ mkdirSync(fixture);
 writeFileSync(join(fixture, "service.cjs"), `
 const http = require('node:http');
 const {createHash} = require('node:crypto');
+let lastPageAuth = null;
 const html = '<!doctype html><html><head><link rel="stylesheet" href="/style.css"></head><body><h1>Proxy test</h1><p id="module">waiting</p><p id="api">waiting</p><p id="sse">waiting</p><p id="ws">waiting</p><p id="slash">waiting</p><p id="isolation">waiting</p><a href="/nested/">Nested page</a><script type="module" src="/entry.js"></script></body></html>';
-const source = 'import message from "/chunk.js"; document.querySelector("#module").textContent=message; const slash="/"; document.querySelector("#slash").textContent=slash; fetch("/echo",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({ok:true})}).then(r=>r.json()).then(r=>document.querySelector("#api").textContent=r.body); const es=new EventSource("/events"); es.onmessage=e=>{document.querySelector("#sse").textContent=e.data;es.close()};const ws=new WebSocket("ws://"+location.host+"/socket");ws.onmessage=e=>{document.querySelector("#ws").textContent=e.data;ws.close()};try{localStorage.getItem("ash");document.querySelector("#isolation").textContent="shared"}catch{document.querySelector("#isolation").textContent="isolated"}';
+const source = 'import message from "/chunk.js"; document.querySelector("#module").textContent=message; const slash="/"; document.querySelector("#slash").textContent=slash; fetch("/echo",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({ok:true})}).then(r=>r.json()).then(r=>document.querySelector("#api").textContent=r.body); const es=new EventSource("/events"); es.onmessage=e=>{document.querySelector("#sse").textContent=e.data;es.close()};const ws=new WebSocket("ws://"+location.host+"/socket");ws.onmessage=e=>{document.querySelector("#ws").textContent=e.data;ws.close()};try{localStorage.setItem("ash-probe","1");document.querySelector("#isolation").textContent=localStorage.length===1?"shimmed":"shared"}catch{document.querySelector("#isolation").textContent="throws"}';
 const server=http.createServer((req,res)=>{
  if(req.url==='/style.css'){res.setHeader('content-type','text/css');return res.end('body { color: rgb(20, 50, 80); }');}
  if(req.url==='/entry.js'){res.setHeader('content-type','text/javascript');return res.end(source);}
@@ -53,8 +55,10 @@ const server=http.createServer((req,res)=>{
  if(req.url==='/dupe/set'){res.setHeader('set-cookie','dupe=live; Path=/; HttpOnly');res.setHeader('content-type','application/json');return res.end('{}');}
  if(req.url==='/dupe/clear'){res.setHeader('set-cookie','dupe=; Path=/wrong; Path=/; Max-Age=0');res.setHeader('content-type','application/json');return res.end('{}');}
  if(req.url==='/logout'){res.setHeader('set-cookie','session=; Path=/; Max-Age=0');res.setHeader('content-type','application/json');return res.end('{}');}
+ if(req.url==='/seen'){res.setHeader('content-type','application/json');return res.end(JSON.stringify({seen:lastPageAuth}));}
  if(req.url==='/events'){res.setHeader('content-type','text/event-stream');res.write('data: stream arrived\\n\\n');const timer=setTimeout(()=>res.end(),2000);res.on('close',()=>clearTimeout(timer));return;}
  if(req.url==='/echo'){let body='';req.on('data',d=>body+=d);req.on('end',()=>{res.setHeader('content-type','application/json');res.setHeader('set-cookie','session=app-session; Path=/; HttpOnly');res.end(JSON.stringify({body,headers:req.headers,port:Number(process.env.PORT),peer:process.env.URL2}));});return;}
+ lastPageAuth=req.headers.authorization??null;
  res.setHeader('content-type','text/html');res.end(html);
 });
 server.on('upgrade',(req,socket)=>{const accept=createHash('sha1').update(req.headers['sec-websocket-key']+'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');socket.write('HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Accept: '+accept+'\\r\\n\\r\\n');socket.write(Buffer.concat([Buffer.from([0x81,14]),Buffer.from('socket arrived')]));socket.on('data',()=>socket.end());socket.on('error',()=>{});});
@@ -173,6 +177,21 @@ try {
     } finally { writeRecord(good); }
     assert.equal((await request(state.url)).status, 302, "记录恢复后照旧能开");
   }
+  // 预览指到 ash 自己 = 代理自己转给自己，用户点开看到的是自己这台 ash 的未登录态（代理
+  // 按设计不转 cookie），却长得跟本尊一模一样地问他要 key。判读那侧已经不认自己的端口，
+  // 这里钉的是兜底：存量记录 / 手填端口照样绕得过判读。
+  {
+    const good = readAnyPreview("preview-task")!;
+    const self = currentListeningPort()!;
+    const selfish = { ...good, services: good.services!.map((s) => (s.id === "web" ? { ...s, port: self, url: `http://127.0.0.1:${self}/` } : s)) };
+    writeRecord(selfish);
+    try {
+      const response = await request(state.url);
+      assert.equal(response.status, 502, "指到 ash 自己不该照常开");
+      assert.match(await response.text(), /ash 自己/);
+    } finally { writeRecord(good); }
+    assert.equal((await request(state.url)).status, 302, "记录恢复后照旧能开");
+  }
   const gateway = open.headers.get("location")!;
   assert.match(gateway, /^\/preview\/preview-task\/[a-f0-9]{48}\/web\//);
   // `accept: text/html` + 没有 Origin 就是浏览器在开页面的样子。明文 http + 局域网 IP 下收不到
@@ -196,13 +215,104 @@ try {
   const js = await (await request(content + "entry.js")).text();
   assert(js.includes(`from "${content}chunk.js"`));
   assert(js.includes('const slash="/"'), "普通字符串不应被 URL 改写破坏");
-  const echo = await request(content + "echo", "POST", { message: "你好" }, { cookie: "ash_session=SECRET", authorization: "Bearer SECRET", "x-ash-turn-token": "SECRET", origin: "null" });
+  const echo = await request(content + "echo", "POST", { message: "你好" }, { cookie: "ash_session=SECRET", authorization: "Basic YXNoOnNlY3JldA==", "x-ash-turn-token": "SECRET", origin: "null", "sec-fetch-site": "cross-site" });
   assert.equal(echo.status, 200);
   const echoed = await echo.json();
   assert.deepEqual(JSON.parse(echoed.body), { message: "你好" });
   assert.equal(echoed.headers.cookie, undefined);
-  assert.equal(echoed.headers.authorization, undefined);
   assert.equal(echoed.headers["x-ash-turn-token"], undefined);
+  // `Authorization` 转不转发，判据是**这个请求是不是预览页自己发的**，不是它的 scheme：
+  // 预览页在 opaque origin 里，运行期发出的带鉴权头的请求必然是 `Origin: null` +
+  // `Sec-Fetch-Site: cross-site`（两个头都是浏览器盖的，页面伪造不了）。
+  assert.equal(echoed.headers.authorization, undefined, "浏览器盖的 Basic 不许转给被预览应用");
+  const bearer = await request(gateway + "echo", "POST", {}, { authorization: "Bearer app-token", origin: "null", "sec-fetch-site": "cross-site" });
+  assert.equal((await bearer.json()).headers.authorization, "Bearer app-token", "应用自己的 Bearer 要原样到达上游");
+  // 泄漏链的形状（第 2 轮审查 P1）：ash 自己的页面拿用户 key 打开预览端点，302 是同源跳转，
+  // 浏览器把 `Authorization` 原样带到 `/preview/…` 上。这种请求盖的是 ash 的 Origin 和
+  // `same-origin`，不是预览页发的，绝不能转给上游 —— 否则被预览的应用记一行访问日志就拿到
+  // 了这个人的整个 ash 账号。
+  const fromAsh = await request(gateway + "echo", "POST", {}, { authorization: "Bearer ash-user-key", origin: base, "sec-fetch-site": "same-origin" });
+  assert.equal((await fromAsh.json()).headers.authorization, undefined, "ash 页面带过来的 key 不许转给被预览应用");
+  const noStamp = await request(gateway + "echo", "POST", {}, { authorization: "Bearer ash-user-key" });
+  assert.equal((await noStamp.json()).headers.authorization, undefined, "没有浏览器盖章的调用方（curl / 手机端）同理");
+  {
+    // 整条链走一遍：拿 Bearer 打开预览端点，跟随同源 302（undici 与浏览器一样保留
+    // `Authorization`），上游那一页收到的必须是 null。
+    const followed = await fetch(base + state.url, { headers: { authorization: "Bearer ash-user-key-secret" }, redirect: "follow" });
+    assert.equal(followed.status, 200);
+    assert.equal((await (await request(gateway + "seen")).json()).seen, null, "Bearer 打开预览，key 不许跟着 302 落到上游");
+  }
+  // 预览页是 sandbox 出来的 opaque origin，浏览器盖的章永远是 cross-site；照原样转发进去，
+  // 被代理应用只要拿它做 CSRF 判据就会拒掉预览里的每一次写操作（2026-09-09：预览 ash 前端
+  // 那一档时，登录换来一句「跨站请求已被拒绝」）。它必须跟着上面重写的 Origin/Host 一起改。
+  assert.equal(echoed.headers["sec-fetch-site"], "same-origin", "cross-site 的章要跟 Origin 一起改写");
+  assert.equal(echoed.headers.origin, `http://localhost:${echoed.port}`);
+  const typed = await request(gateway + "echo", "POST", {}, { "sec-fetch-site": "none" });
+  assert.equal((await typed.json()).headers["sec-fetch-site"], "none", "地址栏直接打开的那一类保持原样");
+  const bare = await request(gateway + "echo", "POST", {});
+  assert.equal((await bare.json()).headers["sec-fetch-site"], undefined, "本来没有的头不许凭空造一个");
+  // 地址栏不许说谎：`replaceState` 换的只是地址栏，文档还是那份 opaque origin 的预览页。
+  // 任何做 URL 归一化的前端（ash 自己就是）不拦就会把地址栏变成 ash 本尊的地址，用户对着
+  // 它把 key 粘进预览里的登录框。桥拦下来之后，地址栏始终留在预览前缀底下。
+  // 用**认领过**的那份页面来验：它的资源改写在内容 token 上，而地址栏那一改必须落回地址栏
+  // 那个 token —— 否则内容 token（罐子的钥匙）会被 pushState 一路写进地址栏。
+  {
+    const bridge = /<script>([\s\S]*?)<\/script>/.exec(await (await navigate(gateway, clientCookie)).text())?.[1];
+    assert(bridge, "预览 HTML 里应注入桥");
+    assert(bridge.includes(content), "认领过的那份页面，资源改写在内容 token 上");
+    const vm = await import("node:vm");
+    const seen: unknown[][] = [];
+    const context: Record<string, unknown> = {
+      URL,
+      Date,
+      location: { origin: base, href: base + gateway, protocol: "http:" },
+      document: {},
+      history: {
+        pushState: (...args: unknown[]) => seen.push(["push", ...args]),
+        replaceState: (...args: unknown[]) => seen.push(["replace", ...args]),
+      },
+      fetch: () => {},
+      XMLHttpRequest: function XHR() {} as unknown as typeof XMLHttpRequest,
+    };
+    context.window = context;
+    (context.XMLHttpRequest as { prototype: Record<string, unknown> }).prototype = { open: () => {}, send: () => {} };
+    vm.runInNewContext(bridge, context);
+    const history = context.history as History;
+    history.replaceState(null, "", "/");
+    history.pushState(null, "", "/?project=p&task=t");
+    history.replaceState(null, "", gateway + "nested/");
+    assert.deepEqual(seen, [
+      ["replace", null, "", gateway],
+      ["push", null, "", gateway + "?project=p&task=t"],
+      ["replace", null, "", gateway + "nested/"],
+    ]);
+    // 沙箱不许把应用打死：opaque origin 下这几个 API 一碰就抛 SecurityError，而「开屏先读
+    // 一次存储」是标准动作（2026-09-09：一个 Vue/Java 项目的预览因此永远停在转圈）。桥给
+    // 它们换上一份只活在这份文档里的实现——应用照常读写，隔离一寸没松。
+    const local = context.localStorage as Storage;
+    const session = context.sessionStorage as Storage;
+    local.setItem("k", "v");
+    session.setItem("k", "other");
+    assert.equal(local.getItem("k"), "v");
+    assert.equal(local.getItem("nope"), null, "没写过的键是 null，不是 undefined");
+    assert.equal(session.getItem("k"), "other", "两份存储各管各的");
+    (local as unknown as Record<string, string>).token = "dot";
+    assert.equal(local.getItem("token"), "dot", "属性式写入也要落进同一份数据");
+    assert.deepEqual(Object.keys(local), ["k", "token"]);
+    assert.equal(local.length, 2);
+    assert.equal(local.key(0), "k");
+    local.removeItem("k");
+    assert.equal(local.getItem("k"), null);
+    local.clear();
+    assert.equal(local.length, 0);
+    const document = context.document as Document;
+    document.cookie = "a=1; Path=/";
+    document.cookie = "b=2";
+    assert.equal(document.cookie, "a=1; b=2", "页面自己写的 cookie 要读得回来");
+    document.cookie = "a=; Max-Age=0";
+    assert.equal(document.cookie, "b=2", "过期写法就是删除");
+    assert.equal(context.indexedDB, undefined, "模拟不了的让它探测得出「没有」");
+  }
   assert.match(echo.headers.get("set-cookie") ?? "", /ashpv_.*Path=\/preview\//);
   // 预览里的应用**必须保得住自己的会话**。它设的 cookie 早先只改写成 `ashpv_…` 发回浏览器，
   // 可预览文档是 CSP sandbox 的 opaque origin —— 浏览器把它发出的请求一律当跨站，明文 http

@@ -16,6 +16,7 @@
 import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Task } from "@ash/shared";
+import type { PreviewServiceState } from "@ash/shared/preview";
 import "../../src/styles/global.css";
 import { FreeWorkflowToolbar } from "../../src/free-workflow/FreeWorkflowToolbar.tsx";
 
@@ -25,13 +26,19 @@ const reply = (body: unknown, status = 200) =>
 const TASK_ID = "T-preview-live";
 const mode = new URLSearchParams(location.search).get("mode");
 const preSpawn = mode === "pre-spawn";
-const serviceSwitch = mode === "service-switch";
+const removalError = mode === "services-removed-error";
+const removedService = mode === "services-removed" || removalError;
+const lateShort = mode === "services-late-short";
+const lateServices = mode === "services-late" || lateShort;
+const singleShort = mode === "single-short";
+const longNames = mode === "services-long" || mode === "services-many" || removedService || lateServices;
+const serviceSwitch = mode === "service-switch" || longNames;
 /**
  * `?mode=ready-close`：预览**已经起来了**，用户点「关闭预览」，DELETE 挂着不回。
  * 这一档要钉的是措辞和可点性：关一个已就绪的预览，按钮不能翻成「启动中·点此取消」
  * （更不能还能再点一次去发第二个 DELETE），它该说「关闭中」并且是灰的。
  */
-const readyClose = mode === "ready-close";
+const readyClose = mode === "ready-close" || singleShort;
 /**
  * `?mode=cancel-late-success`：**取消赢了，可那趟 POST 随后还是 200 回来了。**
  *
@@ -42,13 +49,24 @@ const readyClose = mode === "ready-close";
  */
 const cancelLate = mode === "cancel-late-success";
 let logReads = 0;
+let selectedServiceReads = 0;
+let serviceRemoved = false;
+let removalFailures = 0;
 /** 启动期的日志：每读一次多一段，模拟 dev server 边跑边吐字。 */
 const phases = [
   "$ PORT=45841 npm run dev\n",
   "$ PORT=45841 npm run dev\n[INFO] Downloading spring-boot-starter-web…\n",
   "$ PORT=45841 npm run dev\n[INFO] Downloading spring-boot-starter-web…\n[INFO] Compiling 42 source files\n",
 ];
-const serviceStates = [
+const serviceStates: PreviewServiceState[] = longNames ? [
+  { id: "imds", name: "a4sms-back/a4sms-imds（Maven 模块 · Spring Boot）", command: "cd a4sms-back && mvn -pl a4sms-imds spring-boot:run", status: "ready", url: "/api/tasks/T-preview-live/preview/open/imds", port: 45841 },
+  { id: "api", name: "a4sms-back/a4sms-icis（Maven 模块 · Spring Boot）", command: "cd a4sms-back && mvn -pl a4sms-icis spring-boot:run", status: "ready", url: "/api/tasks/T-preview-live/preview/open/api", port: 45842 },
+  { id: "web", name: "a4sms-front（Node · pnpm dev）", command: "cd a4sms-front && pnpm run dev --port $PORT", status: "ready", url: "/api/tasks/T-preview-live/preview/open/web", port: 45843 },
+  ...(mode === "services-many" ? Array.from({ length: 5 }, (_, index): PreviewServiceState => ({
+    id: `worker-${index}`, name: `a4sms-back/后台同步服务-${index + 1}（Maven 模块 · Spring Boot）`, command: "npm run worker",
+    status: (["starting", "failed", "stopped", "ready", "ready"] as const)[index], url: null, port: 45844 + index,
+  })) : []),
+] : [
   { id: "web", name: "网页前端", command: "npm run web", status: "ready" as const, url: "http://localhost:45841/", port: 45841 },
   { id: "api", name: "接口服务", command: "npm run api", status: "ready" as const, url: null, port: 45842 },
 ];
@@ -86,9 +104,9 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
       // running + starting（别的页面、以及刷新之后，靠的就是这个看见「可以取消」）。
       preview: serviceSwitch
         ? {
-          running: true, starting: false, hasLog: true,
+          running: true, starting: lateShort, hasLog: true,
           url: "http://localhost:45841/", port: 45841, command: "multi-service",
-          startedAt: "2026-09-07T00:00:00.000Z", services: serviceStates,
+          startedAt: "2026-09-07T00:00:00.000Z", services: lateShort ? [] : serviceStates,
         }
         : readyClose
         ? {
@@ -123,11 +141,22 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     return await new Promise<Response>((resolve, reject) => { failStart = reject; succeedStart = resolve; });
   }
   if (pathname === `/api/tasks/${TASK_ID}/free-workflow/preview/log`) {
+    if (singleShort) return reply({
+      services: serviceStates.slice(0, 1), text: "single-service banner", exists: true,
+      running: false, starting: false, truncated: false, updatedAt: null,
+      command: "npm run web", url: "http://localhost:45841/",
+    });
     if (serviceSwitch) {
       const selectedService = new URL(href, location.origin).searchParams.get("service");
+      if (removedService && selectedService === "api" && ++selectedServiceReads > 1) serviceRemoved = true;
+      if (removalError && serviceRemoved && !selectedService && ++removalFailures <= 3) {
+        return reply({ error: `temporary log error #${removalFailures}` }, 500);
+      }
+      const currentServices = serviceRemoved ? serviceStates.filter((service) => service.id !== "api")
+        : lateServices && logReads++ < 5 ? (lateShort ? [] : serviceStates.slice(0, 1)) : serviceStates;
       if (selectedService === "web") {
         return await new Promise<Response>((resolve) => setTimeout(() => resolve(reply({
-          services: serviceStates,
+          services: currentServices,
           text: "stale web log",
           truncated: false,
           updatedAt: "2026-09-07T00:00:00.000Z",
@@ -138,15 +167,16 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
           url: "http://localhost:45841/",
         })), 400));
       }
-      const selected = serviceStates.find((service) => service.id === selectedService);
+      const selected = currentServices.find((service) => service.id === selectedService);
       return reply({
-        services: serviceStates,
-        text: selectedService === "api" ? "fresh api log" : longServiceLog,
+        services: currentServices,
+        text: selectedService === "api" ? (serviceRemoved ? "removed api log" : "fresh api log")
+          : serviceRemoved ? "remaining services log" : lateShort ? "startup banner" : longServiceLog,
         truncated: false,
         updatedAt: "2026-09-07T00:00:00.000Z",
         exists: true,
         running: true,
-        starting: false,
+        starting: lateShort && !currentServices.length,
         command: selected?.command ?? "all services",
         url: selected?.url ?? null,
       });
@@ -199,7 +229,7 @@ function Fixture() {
   const [notices, setNotices] = useState<string[]>([]);
   const notify = useCallback((message: string) => setNotices((all) => [...all, message]), []);
   return (
-    <main style={{ width: 900, margin: "24px auto" }}>
+    <main style={{ width: "calc(100% - 32px)", maxWidth: 900, margin: "24px auto" }}>
       {cancelLate && (
         <button type="button" data-testid="finish-start" onClick={() => succeedStart?.(reply({
           running: true, url: "http://localhost:45841/", port: 45841, command: "npm run dev",

@@ -15,6 +15,7 @@ export type ExecutionEvent = {
   kind: "tool" | "thinking" | "error";
   label: string;
   detail?: string;
+  at?: string;
   nativeWork?: NativeWorkEvent;
 };
 

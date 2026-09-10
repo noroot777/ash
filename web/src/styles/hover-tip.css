@@ -4,7 +4,8 @@
   position: fixed;
   z-index: 180;
   display: block;
-  max-width: 280px;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 16px));
   transform: translateX(-50%);
   border: 1px solid var(--line2);
   border-radius: 6px;
@@ -24,6 +25,10 @@
   gap: 7px;
   transform: translate(-100%, -50%);
   white-space: nowrap;
+}
+
+.ui-hover-tip.is-above {
+  transform: translate(-50%, -100%);
 }
 
 .ui-hover-tip kbd {
