@@ -71,10 +71,45 @@ try {
   assert.equal(answer.status, 200, body);
   assert.deepEqual(JSON.parse(body), { iAm: "host ash", url: probe }, "/api 的实际去向就是这台");
   assert(seen.includes(probe), "这台确实收到了那一发");
+
+  // —— 第二档：一条多行的整栈脚本，自己把前端指向自己起的分支后端 ——
+  //
+  // 项目设置明说支持「完整脚本」，`PORT2`/`URL2` 就是为这种写法借的。这句 `ASH_PROXY=$URL2`
+  // 是用户**明说**「前端连我这个分支后端」，宿主地址压掉它就等于把 /api 悄悄接回主 ash：
+  // 用户以为在验分支后端，实际是拿自己的身份读写主库（第 6 轮审查 P1）。
+  // 后端用一行 node 顶替（真实形状是 `PORT=$PORT2 npm -w server run dev &`）——要钉的是
+  // 「ASH_PROXY 压不压得住」，不是那套后端本身。
+  const hostSoFar = seen.length;
+  const stack = 'node -e "require(\'node:http\').createServer((q,r)=>{r.setHeader(\'content-type\',\'application/json\');'
+    + 'r.end(JSON.stringify({iAm:\'branch backend\',url:q.url}))}).listen(process.env.PORT2)" &\n'
+    + "ASH_PROXY=$URL2 npm run dev";
+  const both = await startPreview("stack-task", {
+    id: "stack", kind: "preview",
+    p: { cmd: stack, mode: "frontend", ready: "port", life: "task" },
+    fail: null,
+  } as never, REPO_DIR);
+  assert(both.ok, both.ok ? "" : both.reason);
+  const stackRecord = readPreview("stack-task")!;
+  const stackLog = tail(stackRecord.log, "", Number.MAX_SAFE_INTEGER);
+  const port2 = /\bURL2=http:\/\/localhost:(\d+)/.exec(stackLog)?.[1];
+  assert(port2, `没拿到 URL2，命令回显是：\n${stackLog.slice(0, 400)}`);
+
+  const stackProbe = "/api/_explicit_proxy_probe";
+  const stackAnswer = await fetch(`http://127.0.0.1:${stackRecord.port}${stackProbe}`);
+  const stackBody = await stackAnswer.text();
+  assert.equal(stackAnswer.status, 200, stackBody);
+  assert.deepEqual(JSON.parse(stackBody), { iAm: "branch backend", url: stackProbe }, "脚本自己写的 ASH_PROXY 说了算");
+  assert.equal(seen.length, hostSoFar, "主 ash 一发都不该收到");
+
+  // 自述跟着实际去向走，于是跟我们绑着的端口对不上 —— 这一档自然就没有登录态直连。
+  assert.match(stackLog, new RegExp(`\\[ash\\] preview-api-host localhost:${port2}\\b`), "自述报的是它真打过去的那个");
+  assert(!stackLog.includes(`preview-api-host 127.0.0.1:${address.port}`), "不许报成主 ash");
+  assert.equal(stackRecord.hostApi ?? null, null, "整栈脚本这一档不许产生 hostApi");
 } catch (error) {
   failed = error;
 }
 await stopPreview("host-api-task", null).catch(() => {});
+await stopPreview("stack-task", null).catch(() => {});
 host.close();
 dbClient.close();
 rmSync(root, { recursive: true, force: true });

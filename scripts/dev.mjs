@@ -60,11 +60,18 @@ function webDevArgs(webPort) {
 }
 
 function startFrontendOnly(webPort) {
-  // 打哪台 ash 由**启动预览的那台 ash 自己说**（`ASH_HOST_API`，见 server/src/preview-start.ts）：
-  // 它才知道自己实际绑在哪个端口上。写死 4317 曾经让「ash 不跑在 4317 上」的部署整个错位——
-  // /api 打到别处去，那个端口上要是坐着另一台 ash，用户以为在验分支、实际在读写那一台
-  // （第 5 轮审查 P1）。`ASH_PROXY` 留着是给人手动跑这条命令用的旋钮，排在它后面。
-  const proxy = process.env.ASH_HOST_API ?? process.env.ASH_PROXY ?? "http://127.0.0.1:4317";
+  // 打哪台 ash 的顺序：**脚本自己写的 `ASH_PROXY` 最大**，其次才是启动预览的那台 ash 递过来
+  // 的 `ASH_HOST_API`（见 server/src/preview-start.ts），最后才是默认的 4317。
+  //
+  // 两头都栽过，方向还相反：写死 4317 让「ash 不跑在 4317 上」的部署整个错位——/api 打到别处，
+  // 那个端口上要是坐着另一台 ash，用户以为在验分支、实际在读写那一台（第 5 轮审查 P1）。反过来
+  // 让宿主地址压过 `ASH_PROXY`，则把「一条整栈脚本」这种受支持的写法废掉了：
+  //     PORT=$PORT2 npm -w server run dev &
+  //     ASH_PROXY=$URL2 npm run dev
+  // 这句 `ASH_PROXY=$URL2` 是用户**明说**「前端连我这个分支后端」，压掉它等于把 /api 悄悄接回
+  // 主 ash——他以为在验分支后端，实际在拿自己的身份读写主库（第 6 轮审查 P1）。所以宿主地址只是
+  // 一个更聪明的默认值，不是命令。
+  const proxy = process.env.ASH_PROXY ?? process.env.ASH_HOST_API ?? "http://127.0.0.1:4317";
   const target = proxy.replace(/^https?:\/\//, "");
   // 打这一行时把 scheme 去掉，理由跟下面转发后端日志时一样：ash 会从预览日志里认地址，
   // 前端那行还没打出来的那几秒里，这行是日志里唯一一个 `http://…`，会被当成预览本尊。
