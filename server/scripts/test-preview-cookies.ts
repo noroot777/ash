@@ -114,5 +114,29 @@ check(
   "a=1",
 );
 
+// —— 同名属性重复出现时，以最后一个为准（RFC 6265 §5.2）——
+// 取第一个会栽在一类真实的登出上：框架和中间件各追加一次 Path 时，删除请求删的是那条不
+// 存在的 `/wrong`，真正的会话安然无恙地留在罐子里继续被发出去。
+const dupe = jarWith(["dupe=live; Path=/; HttpOnly", "/login"], ["dupe=; Path=/wrong; Path=/; Max-Age=0", "/logout"]);
+check("重复 Path 以最后一个为准，根 cookie 要被删掉", cookieHeaderFor(dupe, "/whoami", 1_000), null);
+check(
+  "重复 Max-Age 以最后一个为准",
+  jarWith(["a=1; Path=/", "/set"], ["a=; Path=/; Max-Age=100; Max-Age=0", "/set"]).size,
+  0,
+);
+check(
+  "重复 Expires 以最后一个为准",
+  cookieHeaderFor(
+    jarWith([`a=1; Path=/; Expires=${new Date(0).toUTCString()}; Expires=${new Date(9_000).toUTCString()}`, "/set"]),
+    "/", 2_000,
+  ),
+  "a=1",
+);
+check(
+  "属性名大小写和两侧空白都不影响",
+  cookieHeaderFor(jarWith(["a=1;  PATH = /admin ", "/set"]), "/admin/x", 1_000),
+  "a=1",
+);
+
 console.log(failures ? `\n${failures} 条没过` : "\n全过");
 process.exit(failures ? 1 : 0);

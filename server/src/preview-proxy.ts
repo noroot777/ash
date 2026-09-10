@@ -4,11 +4,12 @@ import { connect } from "node:net";
 import { Readable } from "node:stream";
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 import type { Hono } from "hono";
+import { getCookie } from "hono/cookie";
 import { alive, readAnyPreview } from "./preview-store.js";
 import { previewBase } from "./preview-public.js";
 import { rewritePreviewText, rewritePreviewUrl } from "./preview-proxy-rewrite.js";
-import { grantFor, canUsePreview } from "./preview-access.js";
-import { cookieHeaderFor, defaultPath, rememberCookie, type PreviewCookieJar } from "./preview-cookies.js";
+import { grantFor, canUsePreview, claimGrant, forkGrant } from "./preview-access.js";
+import { attributeName, cookieAttribute, cookieHeaderFor, defaultPath, rememberCookie, type PreviewCookieJar } from "./preview-cookies.js";
 
 const httpAgent = new Agent({ keepAlive: true });
 const httpsAgent = new HttpsAgent({ keepAlive: true, rejectUnauthorized: false });
@@ -69,10 +70,34 @@ function scopedCookie(value: string, base: string, token: string, upstreamPath: 
   if (equals <= 0) return null;
   const name = pair.slice(0, equals).trim();
   if (!COOKIE_NAME_RE.test(name)) return null;
-  const declared = attributes.find((s) => /^\s*path\s*=/i.test(s))?.split("=").slice(1).join("=").trim();
+  const declared = cookieAttribute(attributes, "path");
   const path = declared?.startsWith("/") ? declared : defaultPath(upstreamPath);
-  const kept = attributes.filter((s) => !/^\s*(domain|path|samesite)\s*=/i.test(s));
+  const kept = attributes.filter((s) => !["domain", "path", "samesite"].includes(attributeName(s)));
   return `ashpv_${token}_${Buffer.from(name).toString("hex")}${pair.slice(equals)}; Path=${base}${path.slice(1)}; SameSite=Lax;${kept.join(";")}`;
+}
+
+/** 预览前缀里「一张凭证」那一层：`/preview/<task>/<token>/`。 */
+const previewGroup = (base: string) => base.split("/").slice(0, 4).join("/") + "/";
+
+/** 认领暗号种在浏览器里的名字。`ashpv_client_` 撞不上改写应用 cookie 的 `ashpv_<48 位十六进制>_`。 */
+const clientCookieName = (token: string) => `ashpv_client_${token}`;
+
+/**
+ * 这个请求是不是「浏览器在开一个页面」。只有这种请求才会把我们种的 Lax cookie 带回来：
+ * 沙箱文档发出的子资源（脚本、样式、图片、XHR、iframe…）一律按跨站处理，一个 cookie 都不
+ * 带（2026-09-10 在明文 http + 局域网 IP 上逐类实测过）。所以认领和分叉只在这种请求上判，
+ * 子资源一概照旧用本凭证的罐子 —— 反过来做的话，页面自己的 XHR 会先被判成「另一个客户端」。
+ *
+ * `Sec-Fetch-*` 只发给可信来源（明文 + 局域网 IP 收不到），于是只能「有就用，没有就退回
+ * Accept + 没有 Origin」。代价是明文下同源 iframe 跟顶层导航长得一模一样，会被当成另一个
+ * 客户端分走一张自己的凭证（它本来也带不回 cookie，会话本来就保不住）；换来的是复制链接
+ * 的人拿不到你的应用会话。
+ */
+function looksLikeNavigation(method: string, header: (name: string) => string | undefined): boolean {
+  if (method !== "GET" && method !== "HEAD") return false;
+  const dest = header("sec-fetch-dest");
+  if (dest) return dest === "document";
+  return !header("origin") && (header("accept") ?? "").includes("text/html");
 }
 
 async function loopback(port: number): Promise<string> {
@@ -89,7 +114,7 @@ async function loopback(port: number): Promise<string> {
 }
 
 function securityHeaders(origin: string, base: string): Record<string, string> {
-  const group = base.split("/").slice(0, 4).join("/") + "/";
+  const group = previewGroup(base);
   return {
     "content-security-policy": `sandbox allow-scripts allow-forms allow-modals allow-downloads allow-popups; connect-src ${origin}${group} ${origin.replace(/^http/, "ws")}${group}; form-action ${origin}${group}; frame-src ${origin}${group}; worker-src 'none'`,
     "referrer-policy": "no-referrer", "x-content-type-options": "nosniff", "cache-control": "no-store",
@@ -113,6 +138,22 @@ export function mountPreviewProxy(app: Hono): void {
       const headers = c.req.header("access-control-request-headers");
       if (headers) safety["access-control-allow-headers"] = headers;
       return new Response(null, { status: 204, headers: safety });
+    }
+    // 地址里的 token 是 bearer 凭证（谁拿到谁能看这个预览，有意为之），但罐子里的**应用
+    // 会话**不能跟着地址走：复制一份链接出去，对方不该连登录都不用就坐进你的会话。所以第
+    // 一个开页面的客户端认领这张凭证，之后拿同一个地址开页面的客户端分叉走一张自己的。
+    const token = target.record.proxyToken!;
+    let claim: string | null = null;
+    if (looksLikeNavigation(c.req.method, (name) => c.req.header(name))) {
+      if (target.grant.client === null) {
+        const life = Math.max(1, Math.round((target.grant.expires - Date.now()) / 1000));
+        claim = `${clientCookieName(token)}=${claimGrant(target.grant)}; Path=${previewGroup(target.base)}; Max-Age=${life}; HttpOnly; SameSite=Lax`;
+      } else if (getCookie(c, clientCookieName(token)) !== target.grant.client) {
+        const forked = forkGrant(token);
+        if (!forked) return c.text("预览不存在、已过期或无权访问，请从任务重新打开。", 404);
+        c.header("cache-control", "no-store");
+        return c.redirect(requested.pathname.replace(`/${token}/`, `/${forked}/`) + requested.search, 302);
+      }
     }
     try {
       const hostname = await loopback(target.port);
@@ -143,13 +184,14 @@ export function mountPreviewProxy(app: Hono): void {
       for (const cookie of response.headers["set-cookie"] ?? []) {
         // 先记进罐子（这是会话能不能活下来的那一份），再改写一份发给浏览器（能收下就收）。
         rememberCookie(target.grant.jar, cookie, target.path);
-        const rewritten = scopedCookie(cookie, target.base, target.record.proxyToken!, target.path);
+        const rewritten = scopedCookie(cookie, target.base, token, target.path);
         if (rewritten) result.append("set-cookie", rewritten);
       }
       const location = result.get("location");
       if (location) result.set("location", rewritePreviewUrl(location, target.base, target.record));
       const type = result.get("content-type") ?? "";
       for (const [k, v] of Object.entries(safety)) result.set(k, v);
+      if (claim) result.append("set-cookie", claim);
       const status = response.statusCode ?? 502;
       if (c.req.method === "HEAD" || [204, 205, 304].includes(status)) { response.resume(); return new Response(null, { status, headers: result }); }
       if (/text\/html|(?:javascript|ecmascript)|text\/css/.test(type)) {
@@ -171,6 +213,9 @@ export function mountPreviewProxy(app: Hono): void {
       }
       return new Response(Readable.toWeb(response) as ReadableStream<Uint8Array>, { status, headers: result });
     } catch {
+      // 这一趟没把暗号送出去，就别把凭证钉在一个收不到暗号的客户端上 —— 否则它下次导航
+      // 会被当成「另一个客户端」分叉走。
+      if (claim) target.grant.client = null;
       return c.text("预览服务无法连接或响应异常，请查看任务的预览日志。", 502);
     }
   });

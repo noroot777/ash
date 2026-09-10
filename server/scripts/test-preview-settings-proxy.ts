@@ -25,7 +25,7 @@ const { resourceGate } = await import("../src/auth/resource-gate.js");
 const { mountProjectRoutes } = await import("../src/project-routes.js");
 const { mountFreePreviewRoutes } = await import("../src/free-workflow-preview.js");
 const { mountPreviewProxy, attachPreviewUpgrades } = await import("../src/preview-proxy.js");
-const { mountPreviewOpenRoutes } = await import("../src/preview-access.js");
+const { mountPreviewOpenRoutes, FORK_LIMIT } = await import("../src/preview-access.js");
 const { previewState } = await import("../src/preview-public.js");
 const { startPreview, stopPreview, readPreview, beginPreviewStart, endPreviewStart } = await import("../src/preview.js");
 const { lastPreview, readAnyPreview, readPreviewLog, writeRecord } = await import("../src/preview-store.js");
@@ -50,6 +50,8 @@ const server=http.createServer((req,res)=>{
  if(req.url==='/private/set'){res.setHeader('set-cookie','narrow=secret; Path=/private; HttpOnly');res.setHeader('content-type','application/json');return res.end('{}');}
  if(req.url==='/private/whoami'||req.url==='/public/whoami'){res.setHeader('content-type','application/json');return res.end(JSON.stringify({cookie:req.headers.cookie??null}));}
  if(req.url==='/short/set'){res.setHeader('set-cookie','short=lived; Path=/; Max-Age=1; HttpOnly');res.setHeader('content-type','application/json');return res.end('{}');}
+ if(req.url==='/dupe/set'){res.setHeader('set-cookie','dupe=live; Path=/; HttpOnly');res.setHeader('content-type','application/json');return res.end('{}');}
+ if(req.url==='/dupe/clear'){res.setHeader('set-cookie','dupe=; Path=/wrong; Path=/; Max-Age=0');res.setHeader('content-type','application/json');return res.end('{}');}
  if(req.url==='/logout'){res.setHeader('set-cookie','session=; Path=/; Max-Age=0');res.setHeader('content-type','application/json');return res.end('{}');}
  if(req.url==='/events'){res.setHeader('content-type','text/event-stream');res.write('data: stream arrived\\n\\n');const timer=setTimeout(()=>res.end(),2000);res.on('close',()=>clearTimeout(timer));return;}
  if(req.url==='/echo'){let body='';req.on('data',d=>body+=d);req.on('end',()=>{res.setHeader('content-type','application/json');res.setHeader('set-cookie','session=app-session; Path=/; HttpOnly');res.end(JSON.stringify({body,headers:req.headers,port:Number(process.env.PORT),peer:process.env.URL2}));});return;}
@@ -215,6 +217,40 @@ try {
   assert.match((await (await request(gateway + "whoami")).json()).cookie ?? "", /short=lived/, "没到点照发");
   await new Promise((done) => setTimeout(done, 1200));
   assert.doesNotMatch((await (await request(gateway + "whoami")).json()).cookie ?? "", /short=lived/, "Max-Age=1 的 cookie 到期后不得继续发送");
+  // 同名属性重复出现要按最后一个算（RFC 6265 §5.2）。取第一个不是理论洁癖：框架和中间件
+  // 各追加一次 Path 时，登出删的是那条不存在的 `/wrong`，真正的会话留在罐子里继续被发。
+  await request(gateway + "dupe/set");
+  assert.equal((await (await request(gateway + "whoami")).json()).cookie, "dupe=live", "登录设的 cookie 记进罐子");
+  await request(gateway + "dupe/clear");
+  assert.equal((await (await request(gateway + "whoami")).json()).cookie, null, "重复 Path 的删除请求要按最后一个 Path 删");
+  // 罐子挂在 grant 上，而 grant 只认地址里那 48 位 token。token 是 bearer 凭证：谁拿到地址
+  // 谁就能看这个预览（有意为之）；但**应用会话**不能跟着地址走 —— 链接被复制走的人不该连
+  // 登录都不用就坐进你登录好的会话里，预览 ash 自己时那就是一份 ash 用户会话。所以第一个
+  // 开页面的客户端认领这张凭证，后来的客户端分叉走一张自己的、配一个空罐子。
+  // `accept: text/html` + 没有 Origin 就是浏览器开页面的样子（明文 http + 局域网 IP 下收不到
+  // `Sec-Fetch-*`，只能这么认；这一点 2026-09-10 用无头 Chromium 逐类请求实测过）。
+  const navigate = (path: string, cookie?: string) => request(path, "GET", undefined, { accept: "text/html,application/xhtml+xml", ...(cookie ? { cookie } : {}) });
+  const claimed = await navigate(gateway);
+  assert.equal(claimed.status, 200);
+  const clientCookie = /ashpv_client_[a-f0-9]{48}=[a-f0-9]+/.exec(claimed.headers.get("set-cookie") ?? "")?.[0];
+  assert(clientCookie, "第一个开页面的客户端要拿到认领 cookie");
+  await request(gateway + "echo", "POST", { message: "登录" });
+  assert.equal((await (await request(gateway + "whoami")).json()).cookie, "session=app-session");
+  const stranger = await navigate(gateway + "whoami");
+  assert.equal(stranger.status, 302, "另一个客户端拿同一个地址开页面，要分给它一张自己的凭证");
+  const strangerGateway = stranger.headers.get("location")!;
+  assert.notEqual(strangerGateway, gateway + "whoami");
+  assert.equal((await (await navigate(strangerGateway)).json()).cookie, null, "另一个客户端不得继承已经登录好的应用会话");
+  assert.equal((await (await request(gateway + "whoami")).json()).cookie, "session=app-session", "分叉不动原来那个客户端的会话");
+  assert.equal((await navigate(gateway + "whoami", clientCookie)).status, 200, "带着认领 cookie 的导航照旧直接放行");
+  assert.equal((await request(gateway + "entry.js")).status, 200, "页面自己的子资源不参与认领，照旧走本凭证");
+  // 明文 http 下同源 iframe 跟顶层导航长得一模一样，每加载一次就要分一张凭证 —— 所以分叉
+  // 必须能回收：不回收就只有两种下场，要么 grants 表被挤爆、连还在用的凭证一起挤掉，要么
+  // 到了预算上限直接在页面里甩一句 404。
+  for (let n = 0; n < FORK_LIMIT + 4; n++) assert.equal((await navigate(gateway)).status, 302);
+  assert.equal((await navigate(gateway, clientCookie)).status, 200, "分叉再多也不影响认领过的那个客户端");
+  assert.equal((await (await request(gateway + "whoami")).json()).cookie, "session=app-session", "分叉再多也不动原来的会话");
+  await request(gateway + "logout");
   assert.equal((await request(gateway + "redirect")).headers.get("location"), gateway + "nested/");
   assert.equal((await request(gateway + "echo", "OPTIONS", undefined, { origin: "null", "access-control-request-headers": "content-type" })).status, 204);
   assert.equal((await request(gateway, "GET", undefined, { origin: "https://unrelated.example" })).status, 403);

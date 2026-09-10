@@ -57,9 +57,26 @@ export function pathMatches(cookiePath: string, requestPath: string): boolean {
   return cookiePath.endsWith("/") || path[cookiePath.length] === "/";
 }
 
-function attributeOf(attributes: readonly string[], want: string): string | undefined {
-  const hit = attributes.find((s) => s.trim().toLowerCase().startsWith(`${want}=`));
-  return hit?.slice(hit.indexOf("=") + 1).trim();
+/** 属性名，小写去空白：`Path=/x` → `path`，` HttpOnly` → `httponly`。 */
+export function attributeName(attribute: string): string {
+  const equals = attribute.indexOf("=");
+  return (equals < 0 ? attribute : attribute.slice(0, equals)).trim().toLowerCase();
+}
+
+/**
+ * 取某个属性的值。**同名属性重复出现时以最后一个为准**（RFC 6265 §5.2：解析是逐条往
+ * cookie-attribute-list 里覆盖写，后来的盖掉先来的）。取第一个会栽在一类真实的登出上：
+ * 框架和中间件各追加一次 Path，`Set-Cookie: x=; Path=/wrong; Path=/; Max-Age=0` 在浏览器
+ * 里删的是根上那条，取第一个就只去删一条根本不存在的 `/wrong`，会话安然无恙地留着。
+ */
+export function cookieAttribute(attributes: readonly string[], want: string): string | undefined {
+  let found: string | undefined;
+  for (const attribute of attributes) {
+    if (attributeName(attribute) !== want) continue;
+    const equals = attribute.indexOf("=");
+    found = equals < 0 ? "" : attribute.slice(equals + 1).trim();
+  }
+  return found;
 }
 
 /**
@@ -75,11 +92,11 @@ export function rememberCookie(
   const name = pair.slice(0, equals).trim();
   if (!NAME_RE.test(name)) return;
 
-  const declared = attributeOf(attributes, "path");
+  const declared = cookieAttribute(attributes, "path");
   const path = declared?.startsWith("/") ? declared : defaultPath(requestPath);
   // Max-Age 压过 Expires（§5.2.2）；Expires 解析不动就当没写过（§5.2.1），而不是当成已过期。
-  const maxAge = attributeOf(attributes, "max-age");
-  const expiresAt = attributeOf(attributes, "expires");
+  const maxAge = cookieAttribute(attributes, "max-age");
+  const expiresAt = cookieAttribute(attributes, "expires");
   let expires: number | null = null;
   if (maxAge !== undefined && maxAge !== "" && Number.isFinite(Number(maxAge))) expires = now + Number(maxAge) * 1000;
   else if (expiresAt !== undefined && !Number.isNaN(Date.parse(expiresAt))) expires = Date.parse(expiresAt);
