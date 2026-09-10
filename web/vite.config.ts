@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { defineConfig, searchForWorkspaceRoot } from "vite";
