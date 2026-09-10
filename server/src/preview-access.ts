@@ -1,12 +1,15 @@
 import { randomBytes } from "node:crypto";
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import type { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import type { Actor } from "./auth/context.js";
 import { currentListeningPort } from "./listening-port.js";
+import { REPO_DIR } from "./paths.js";
 import { alive, readAnyPreview } from "./preview-store.js";
 import { previewBase } from "./preview-public.js";
 import { rewritePreviewUrl } from "./preview-proxy-rewrite.js";
-import type { PreviewCookieJar } from "./preview-cookies.js";
+import { rememberCookie, type PreviewCookieJar } from "./preview-cookies.js";
 
 /**
  * `jar` 是这一趟预览自己的 cookie 罐子（存在服务端，规矩和缘由都在 preview-cookies.ts）。
@@ -26,6 +29,24 @@ import type { PreviewCookieJar } from "./preview-cookies.js";
  * cookie），之后再有客户端拿同一个地址开页面，就分叉出一张新 grant 配空罐子。`forks` 记着
  * 分出去的那些，多到一定数量就回收最早的：应用里的同源 iframe 在明文 http 下跟顶层导航长得
  * 一模一样（见 preview-proxy.ts 的 looksLikeNavigation），每加载一次就要分一张。
+ *
+ * ## 预览的是这台 ash 自己时，罐子里先放一条你的会话
+ *
+ * 代理一个 cookie 都不转，所以预览里的 ash 前端开屏就是未登录态，只能让用户**在预览页里粘
+ * 一次 key**。那个动作才是这条链上最危险的一步：key 是长期凭证、能外带、从任何机器都登得
+ * 进来，2026-09-09 已经真发生过一次。所以反过来做——`open` 的时候由代理把**打开预览的这个
+ * 人当前那条 ash 会话**放进罐子（用户 2026-09-10 拍板的 A 档）。
+ *
+ * 代价说在明处：预览页里那份代码（agent 写的分支代码）能借这条通道用你的身份调 ash 的 API。
+ * 换来的是用户不必再交出 key，而且页面**拿不到 cookie 本身**（罐子在服务端，发回浏览器的那
+ * 份改了名且 HttpOnly，`document.cookie` 还被注入的桥挡着），登出即失效（`canUsePreview`
+ * 每次都拿 `grant.session` 复核）。
+ *
+ * 口子卡死在两处，少一处都会变成「把你的 ash 会话送给一个陌生上游」：
+ *  · **只对这台 ash 自己的仓库播种**（项目的 repoPath == REPO_DIR）。别的项目的上游不是 ash，
+ *    收到 `ash_session` 记一行访问日志就能从任何地方登进来。
+ *  · **分叉不继承**（`forkGrant` 一律配空罐子）。分叉的触发条件是「另一个客户端拿同一个地址
+ *    开页面」，而地址是可以被复制走的 —— 跟着复制就等于把会话交给拿到链接的人。
  */
 interface PreviewGrant {
   taskId: string; gen: string; actor: Actor; expires: number; session?: string; turn?: string; keyHash?: string | null;
@@ -76,6 +97,28 @@ export function forkGrant(token: string): string | null {
   return next;
 }
 
+/** 两条路径指的是不是同一个地方（软链、末尾斜杠都算平）。 */
+function samePlace(a: string, b: string): boolean {
+  const real = (p: string) => { try { return realpathSync(p); } catch { return resolve(p); } };
+  return real(a) === real(b);
+}
+
+/**
+ * 被预览的仓库就是**这台 ash 自己**吗 —— 播不播那条会话就看它（缘由见文件顶部）。
+ * 判仓库而不是判「预览模式」：模式是页面上选的，而「/api 打回本机 4317」这件事只有 ash
+ * 自己的 `scripts/dev.mjs` 干得出来；别的项目哪怕也选「只启动前端」，上游也是它自己的东西。
+ */
+async function previewsOwnRepo(taskId: string): Promise<boolean> {
+  const { projectOfTask } = await import("./auth/visibility.js");
+  const projectId = await projectOfTask(taskId);
+  if (!projectId) return false;
+  const { db } = await import("./db/index.js");
+  const { projects } = await import("./db/schema.js");
+  const { eq } = await import("drizzle-orm");
+  const row = (await db.select().from(projects).where(eq(projects.id, projectId))).at(0);
+  return !!row?.repoPath && samePlace(row.repoPath, REPO_DIR);
+}
+
 export async function canUsePreview(grant: PreviewGrant): Promise<boolean> {
   const { isMultiUser } = await import("./auth/mode.js");
   const { projectOfTask, canSeeProject } = await import("./auth/visibility.js");
@@ -121,13 +164,19 @@ export function mountPreviewOpenRoutes(api: Hono): void {
     if (self !== null && service.port === self) return c.text("预览记录指到了 ash 自己，请关掉预览重开一次。", 502);
     const actor = actorOf(c);
     const { getUser } = await import("./auth/store.js");
+    const { SESSION_COOKIE } = await import("./auth/middleware.js");
     const grant: PreviewGrant = {
       taskId, gen: record.gen, actor, expires: Date.now() + GRANT_LIFE,
-      session: getCookie(c, "ash_session"), turn: c.req.header("x-ash-turn-token"),
+      session: getCookie(c, SESSION_COOKIE), turn: c.req.header("x-ash-turn-token"),
       keyHash: actor.kind === "user" && c.req.header("authorization") ? (await getUser(actor.userId!))?.keyHash : undefined,
       jar: new Map(), client: null, nav: "", content: null, forks: [],
     };
     if (!(await canUsePreview(grant))) return c.text("预览不存在或无权访问", 404);
+    // 预览的是这台 ash 自己 → 罐子里先放一条你的会话，省掉「在预览页里粘一次 key」那个
+    // 真正危险的动作。为什么这么换、口子卡在哪两处，见文件顶部。
+    if (grant.session && await previewsOwnRepo(taskId)) {
+      rememberCookie(grant.jar, `${SESSION_COOKIE}=${grant.session}; Path=/`, "/");
+    }
     for (const [token, value] of grants) if (value.expires <= Date.now() || readAnyPreview(value.taskId)?.gen !== value.gen) dropGrant(token);
     if (grants.size >= GRANT_LIMIT) dropGrant(grants.keys().next().value!);
     const token = randomBytes(24).toString("hex");

@@ -129,7 +129,7 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
       </select>
     </label>
     <div className="preview-help preview-proxy-help">
-      <small>{proxied ? "当前使用反代：浏览器复用 ash 入口，无需开放每个服务的端口。预览页面跑在独立沙箱里，与 ash 的登录态隔离：预览页面自己发出的请求所带的 Authorization（Bearer 等）会照常转发，从 ash 页面或命令行带进来的鉴权头不会（否则你的 ash key 会落到被预览的应用手上）；Basic/Digest 一律不转发，需要它们的应用请改用直连。localStorage、sessionStorage 和 document.cookie 由 ash 在页面内模拟——读写正常，但只活在当前这个页面：刷新或跳转即清空，页面写的 Cookie 也不会随请求发出，所以把登录态存在本地存储的应用每次刷新都要重新登录。IndexedDB、Service Worker 和站外接口在沙箱里用不了，依赖它们的应用请改用直连。" : "当前使用直连：浏览器直接访问服务端口。远程访问时，服务需监听可访问的网卡地址，并开放相应端口。"}</small>
+      <small>{proxied ? "当前使用反代：浏览器复用 ash 入口，无需开放每个服务的端口。预览页面跑在独立沙箱里，与 ash 的登录态隔离，只有一个例外——被预览的仓库就是这台 ash 自己时，代理会替你把当前这条 ash 会话带进预览，打开即登录态；否则你只会看到一个登录框，而在预览页里粘 key 比这危险得多（key 是长期凭证，会落到被预览的应用手上）。这条会话页面本身读不到，你一登出就失效，链接被别人拿去打开也不会继承。预览页面自己发出的请求所带的 Authorization（Bearer 等）会照常转发，从 ash 页面或命令行带进来的鉴权头不会（否则你的 ash key 会落到被预览的应用手上）；Basic/Digest 一律不转发，需要它们的应用请改用直连。localStorage、sessionStorage 和 document.cookie 由 ash 在页面内模拟——读写正常，但只活在当前这个页面：刷新或跳转即清空，页面写的 Cookie 也不会随请求发出，所以把登录态存在本地存储的应用每次刷新都要重新登录。IndexedDB、Service Worker 和站外接口在沙箱里用不了，依赖它们的应用请改用直连。" : "当前使用直连：浏览器直接访问服务端口。远程访问时，服务需监听可访问的网卡地址，并开放相应端口。"}</small>
       {proxied && <small>服务需要配置资源前缀时，可读取 <code>{variable("ASH_PREVIEW_BASE")}</code>。例如 Vite 可在启动参数中使用 <code>--base {variable("ASH_PREVIEW_BASE")}</code>。</small>}
     </div>
     <ProjectPreviewHelp isWindows={host?.platform === "win32"} />

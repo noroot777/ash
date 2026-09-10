@@ -66,9 +66,16 @@ const BROWSER_ATTACHED_AUTH = /^(?:basic|digest|negotiate|ntlm)\b/i;
  * 上面那条泄漏链是 **ash 自己的页面**发的，盖的是 ash 的 Origin 和 `same-origin`；顶层导航
  * 两个头都没有；curl / 手机端更是一个都没有。这两个头是**浏览器**盖的、页面伪造不了，
  * 所以「两个都对上」才算「这是预览页运行期自己产生的凭证」。
+ *
+ * **`Sec-Fetch-Site` 缺席时只认 `Origin`。** 它只发给可信来源，明文 http + 局域网 IP 一个
+ * 都收不到（同 `forwardedHeaders` 那段），要求它必须等于 `cross-site` 就等于在用户最常见的
+ * 部署里**永远不转发** —— 用 `Authorization` 而不是 cookie 的被预览应用，在预览里一律登不上。
+ * 放开这一档不动摇上面那条保证，因为拦住泄漏的一直是 `Origin: null` 那一半：ash 自己的页面
+ * 盖的是 ash 的 Origin，顶层导航（302 把 key 带过来的那条路）压根没有 Origin，两种都不是
+ * `null`。`null` 只有 opaque origin 的文档产生得出来，而那正是「预览页自己发的」。
  */
 function sandboxOriginated(origin: string | undefined, site: string | undefined): boolean {
-  return origin === "null" && site?.toLowerCase() === "cross-site";
+  return origin === "null" && (!site || site.toLowerCase() === "cross-site");
 }
 
 /**

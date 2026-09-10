@@ -227,6 +227,14 @@ try {
   assert.equal(echoed.headers.authorization, undefined, "浏览器盖的 Basic 不许转给被预览应用");
   const bearer = await request(gateway + "echo", "POST", {}, { authorization: "Bearer app-token", origin: "null", "sec-fetch-site": "cross-site" });
   assert.equal((await bearer.json()).headers.authorization, "Bearer app-token", "应用自己的 Bearer 要原样到达上游");
+  // 明文 http + 局域网 IP 收不到 `Sec-Fetch-*`（同下面那段），所以「必须等于 cross-site」在
+  // 用户最常见的部署里等于**永不转发** —— 用 Bearer 而不是 cookie 的被预览应用一律登不上。
+  // 缺章时只认 `Origin: null`：那一半才是拦住泄漏的，而 `null` 只有 opaque origin 的文档
+  // 产生得出来。
+  const plainHttp = await request(gateway + "echo", "POST", {}, { authorization: "Bearer app-token", origin: "null" });
+  assert.equal((await plainHttp.json()).headers.authorization, "Bearer app-token", "浏览器不盖章的明文 http 下，也得认得出这是预览页自己发的");
+  const ashPlain = await request(gateway + "echo", "POST", {}, { authorization: "Bearer ash-user-key", origin: base });
+  assert.equal((await ashPlain.json()).headers.authorization, undefined, "缺章不等于放行：ash 自己的页面盖的是 ash 的 Origin");
   // 泄漏链的形状（第 2 轮审查 P1）：ash 自己的页面拿用户 key 打开预览端点，302 是同源跳转，
   // 浏览器把 `Authorization` 原样带到 `/preview/…` 上。这种请求盖的是 ash 的 Origin 和
   // `same-origin`，不是预览页发的，绝不能转给上游 —— 否则被预览的应用记一行访问日志就拿到
@@ -489,6 +497,31 @@ try {
     assert.equal(memberOpen.status, 302);
     const memberGateway = memberOpen.headers.get("location")!;
     assert.equal((await request(memberGateway)).status, 200);
+    // A 档（用户 2026-09-10 拍板）：被预览的就是**这台 ash 自己的仓库**时，代理把打开预览的
+    // 这个人当前那条会话放进罐子，省掉「在预览页里粘一次 key」——那才是这条链上最危险的一步
+    // （key 是长期凭证、能外带）。口子只对自己的仓库开、分叉不继承，缘由在 preview-access.ts
+    // 顶部；这里把这三条各钉一遍。
+    {
+      const { REPO_DIR } = await import("../src/paths.js");
+      const laneOf = async (page: Response) => /src="(\/preview\/preview-task\/[a-f0-9]{48}\/web\/)entry.js"/.exec(await page.text())![1];
+      const opened = async () => {
+        const location = (await request(state.url, "GET", undefined, memberHeaders)).headers.get("location")!;
+        const lane = await laneOf(await navigate(location));
+        return { location, cookie: (await (await request(lane + "whoami")).json()).cookie as string | null };
+      };
+      assert.equal((await opened()).cookie, null, "别的项目的预览，一条 ash 会话都不许带进去");
+      await db.update(projects).set({ repoPath: REPO_DIR }).where(eq(projects.id, "preview-project"));
+      try {
+        const own = await opened();
+        assert.equal(own.cookie, memberHeaders.cookie, "预览这台 ash 自己时，会话由代理替你带上");
+        const forked = (await navigate(own.location)).headers.get("location")!;
+        const strangerLane = await laneOf(await navigate(forked));
+        assert.equal((await (await request(strangerLane + "whoami")).json()).cookie, null, "地址被复制走：分叉出去的那份不继承你的 ash 会话");
+      } finally {
+        await db.update(projects).set({ repoPath: fixture }).where(eq(projects.id, "preview-project"));
+      }
+      assert.equal((await opened()).cookie, null, "换回别的仓库就不再带");
+    }
     await deleteSession(memberHeaders.cookie.slice(SESSION_COOKIE.length + 1));
     assert.equal((await request(memberGateway)).status, 404, "退出登录后旧预览凭证失效");
     memberHeaders.cookie = `${SESSION_COOKIE}=${await createSession("member", "test")}`;
