@@ -21,7 +21,7 @@ export type NativeWorkEvent = (
   | { type: "call"; id: string; parentId?: string; name: string; input: Record<string, unknown> }
   | { type: "result"; id: string; result: string; failed: boolean }
   | { type: "agent"; id: string; nativeId?: string; parentId?: string; title?: string; description?: string;
-      status: NativeWorkStatus; closed?: boolean; message?: string; result?: string; model?: string; agentType?: string }
+      status: NativeWorkStatus; closed?: boolean; message?: string; result?: string; model?: string; requestedModel?: string; agentType?: string }
 ) & { at?: string };
 
 export function isVisibleExecutionEvent(event: { nativeWork?: NativeWorkEvent }): boolean {

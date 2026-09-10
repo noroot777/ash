@@ -16,6 +16,7 @@ import { parseSessionTrace, readableRunPath, sessionTracePath, sessionTranscript
 import { sessionContext, sessionUsage } from "./usage.js";
 import { readCodexCliVersion } from "./executors/codex-rollout.js";
 import { affectedCodexSessionWarning } from "./executors/version-policy.js";
+import { enrichNativeWorkModels } from "./native-work-models.js";
 
 async function toSession(
   r: typeof sessions.$inferSelect,
@@ -60,7 +61,15 @@ export async function sessionOutputText(taskId: string, sessionId: string): Prom
 export async function sessionTraceEntries(taskId: string, sessionId: string) {
   try {
     const raw = await readFile(readableRunPath(sessionTracePath(taskId, sessionId)), "utf8");
-    return parseSessionTrace(raw);
+    const trace = parseSessionTrace(raw);
+    if (!trace.some((entry) => entry.event.kind === "tool" && entry.event.nativeWork)) return trace;
+    try {
+      const row = (await db.select().from(sessions).where(eq(sessions.id, sessionId))).at(0);
+      return row && row.taskId === taskId
+        ? await enrichNativeWorkModels(trace, row, await sessionCliConfigDir(row, row.agentType)) : trace;
+    } catch {
+      return trace;
+    }
   } catch {
     return [];
   }

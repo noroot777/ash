@@ -28,7 +28,8 @@ const completed: NativeWorkEvent = { type: "agent", id: "child", at: end, status
 const running = rowFrom([spawn, launched]);
 assert.equal(running.startedAt, start);
 assert.equal(running.endedAt, undefined, "派活工具返回不等于子智能体结束");
-assert.equal(running.model, "gpt-5.6-sol");
+assert.equal(running.model, undefined, "调用参数不能冒充运行记录");
+assert.equal(running.requestedModel, "gpt-5.6-sol");
 assert.equal(nativeWorkDuration(running, Date.parse(end)), "2分 5秒");
 const done = rowFrom([spawn, launched, completed]);
 assert.deepEqual(rowFrom([spawn, launched, completed], true), done, "实时流和刷新恢复的时间、模型保持一致");
@@ -57,8 +58,8 @@ assert.equal(reordered.startedAt, start);
 assert.equal(reordered.endedAt, end);
 assert.equal(reordered.model, "reported-model", "native id 合并保留已上报的实际模型与时间");
 const defaultModel = rowFrom([{ ...spawn, input: { description: "默认模型" } }, launched]);
-assert.equal(defaultModel.model, "");
-assert.equal(defaultModel.sessionModel, "gpt-5.6", "会话默认模型与子智能体已确认模型分开存放");
+assert.equal(defaultModel.model, undefined);
+assert.equal("sessionModel" in defaultModel, false, "子智能体不借用主会话模型");
 
 const historical = buildConversationItems([{ session, output: "", trace: [
   { at: start, event: { kind: "tool", name: "spawn_agent", nativeWork: { ...spawn, at: undefined } } },

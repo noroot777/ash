@@ -59,12 +59,17 @@ export class NativeWorkTrace {
     }
     const parentId = ev.parent_tool_use_id;
     if (!parentId) return out;
+    if (ev.type === "stream_event" && ev.event?.type === "message_start") {
+      const model = nativeAgentModel(parentId, ev.event.message?.model);
+      if (model) out.push(model);
+    }
     // Nested assistant messages have their own usage and text; these belong to the child.
     if (ev.type === "assistant") {
       const content = Array.isArray(ev.message?.content) ? ev.message.content : [];
       const message = content.filter((block: any) => block.type === "text").map((block: any) => block.text).join("\n");
-      if (message || ev.message?.model) out.push(event("Agent", { type: "agent", id: parentId, status: "running",
-        ...(message ? { message: clip(message) } : {}), ...(ev.message?.model ? { model: ev.message.model } : {}),
+      const model = typeof ev.message?.model === "string" && ev.message.model !== "<synthetic>" ? ev.message.model.trim() : "";
+      if (message || model) out.push(event("Agent", { type: "agent", id: parentId, status: "running",
+        ...(message ? { message: clip(message) } : {}), ...(model ? { model } : {}),
       }));
       for (const block of content) {
         if (block.type !== "tool_use") continue;
@@ -87,6 +92,11 @@ export function nativePlanSnapshot(id: string, plan: unknown, explanation?: stri
   return event("update_plan", { type: "call", id, name: "update_plan", input: { plan, explanation } });
 }
 
+export function nativeAgentModel(id: string, model: unknown): AgentEvent | null {
+  if (typeof model !== "string" || !model.trim() || model === "<synthetic>") return null;
+  return event("Agent", { type: "agent", id, status: "unknown", model: model.trim() });
+}
+
 export function codexNativeWork(item: any): AgentEvent[] {
   const type = String(item?.type ?? "").replace(/_/g, "").toLowerCase();
   if (type === "todolist") return [event("TodoWrite", {
@@ -106,7 +116,7 @@ export function codexNativeWork(item: any): AgentEvent[] {
     if (closed && status !== "completed" && status !== "failed") status = "stopped";
     return event(item.tool ?? "Agent", {
       type: "agent", id, nativeId: id, status, closed, parentId: item.senderThreadId ?? item.sender_thread_id,
-      ...(tool === "spawnagent" ? { description: item.prompt, title: item.prompt?.split("\n")[0]?.slice(0, 120), model: item.model, agentType: item.agentType ?? item.agent_type } : {}),
+      ...(tool === "spawnagent" ? { description: item.prompt, title: item.prompt?.split("\n")[0]?.slice(0, 120), requestedModel: item.model, agentType: item.agentType ?? item.agent_type } : {}),
       ...(state?.message ? closed || status === "completed" || status === "failed" ? { result: clip(state.message) } : { message: clip(state.message) } : {}),
     });
   });

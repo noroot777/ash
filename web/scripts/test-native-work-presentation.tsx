@@ -71,7 +71,7 @@ for (const name of ["Agent", "spawn_agent"]) {
 console.log("duet 实时与刷新渲染一致：子智能体动态不产生空 Agent 行，讨论者工具、分析和旧派活记录完整保留");
 
 const pendingRow: NativeWorkItem = { id: "pending", sessionId: "session", sessionLabel: "codex@test", kind: "task",
-  title: "待处理步骤", status: "pending", sessionModel: "gpt-5.6" };
+  title: "待处理步骤", status: "pending" };
 const pendingMarkup = renderToStaticMarkup(<NativeWorkMeta row={pendingRow} />);
 assert.ok(pendingMarkup.includes("尚未开始") && pendingMarkup.includes("时间跨度") && pendingMarkup.includes('class="native-work__duration-value">—</span>'));
 assert.ok(!pendingMarkup.includes("<time") && !pendingMarkup.includes("模型") && !pendingMarkup.includes("gpt-5.6"));
@@ -82,6 +82,10 @@ for (const status of ["running", "completed", "failed", "stopped", "unknown"] as
 const firstCompleted = renderToStaticMarkup(<NativeWorkMeta row={{ ...pendingRow, status: "completed", endedAt: "2026-09-09T01:00:00.000Z" }} />);
 assert.ok(firstCompleted.includes("未记录开始时间，无法计算跨度。") && firstCompleted.includes('class="native-work__duration-value">未记录</span>'));
 const pendingAgent = renderToStaticMarkup(<NativeAgentConversation row={{ ...pendingRow, kind: "agent" }} statusLabel="待处理" onBack={() => {}} />);
-assert.ok(pendingAgent.includes("gpt-5.6") && pendingAgent.includes("会话默认") && pendingAgent.includes("等待子智能体开始执行"));
+assert.ok(pendingAgent.includes("未记录") && !pendingAgent.includes("会话默认") && pendingAgent.includes("等待子智能体开始执行"));
+const requestedAgent = renderToStaticMarkup(<NativeWorkMeta row={{ ...pendingRow, kind: "agent", requestedModel: "sonnet" }} />);
+assert.ok(requestedAgent.includes("sonnet") && requestedAgent.includes("调用指定"));
+const reportedAgent = renderToStaticMarkup(<NativeWorkMeta row={{ ...pendingRow, kind: "agent", requestedModel: "opus", model: "claude-sonnet-4-6" }} />);
+assert.ok(reportedAgent.includes("claude-sonnet-4-6") && !reportedAgent.includes("调用指定") && !reportedAgent.includes("opus"));
 assert.ok(!pendingAgent.includes("执行中，内容实时更新"));
 console.log("待处理/历史缺失时间文案、时间跨度标签及内部任务不显示模型回归通过");

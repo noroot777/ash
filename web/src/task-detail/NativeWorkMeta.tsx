@@ -21,8 +21,8 @@ export function NativeWorkMeta({ row }: { row: NativeWorkItem }) {
   return <div className="native-work__meta">
     {row.kind === "agent" && <dl className="native-work__model">
       <dt>模型</dt>
-      <dd><span>{row.model || row.sessionModel || "未记录"}</span>
-        {!row.model && row.sessionModel && <small>会话默认</small>}
+      <dd><span>{row.model || (row.requestedModel !== "inherit" && row.requestedModel) || "未记录"}</span>
+        {!row.model && row.requestedModel && row.requestedModel !== "inherit" && <small>调用指定</small>}
       </dd>
     </dl>}
     <dl className="native-work__times">
