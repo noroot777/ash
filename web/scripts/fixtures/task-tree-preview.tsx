@@ -54,6 +54,21 @@ const tasks: Task[] = [
       git: "bundle",
     },
   }),
+  // 送达未确认(pending)的转出任务:人还在本机看得见它,所以留在主列表里、带小飞机。
+  // 上面那条是已确认转出的,归下方「其他机器」那一节 —— 两条一起摆着,才钉得住
+  // 「哪种转出留在树里」这条线(见 taskTreeModel 的 visibleOnThisMachine)。
+  task("handoff-out-pending", "送达未确认的接力任务", recent, {
+    handoff: {
+      direction: "out",
+      peerUrl: "http://example.test",
+      peerName: "远端机器",
+      peerTaskId: "handoff-out-pending",
+      at: recent,
+      sessions: 1,
+      git: "bundle",
+      pending: true,
+    },
+  }),
   task("handoff-in", "刚刚转入的接力任务", recent, {
     handoff: {
       direction: "in",
