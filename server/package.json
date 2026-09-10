@@ -116,6 +116,7 @@
     "test:preview-settings-proxy": "tsx scripts/test-preview-settings-proxy.ts",
     "test:preview-command": "tsx scripts/test-preview-command.ts && tsx scripts/test-preview-static.ts",
     "test:preview-log": "tsx scripts/test-preview-log.ts",
+    "test:preview-host-api": "tsx scripts/test-preview-host-api.ts",
     "test:preview-cookies": "tsx scripts/test-preview-cookies.ts",
     "test:preview-process": "tsx scripts/test-preview-process.ts",
     "test:preview-seed": "tsx scripts/test-preview-seed.ts",

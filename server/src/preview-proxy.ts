@@ -20,6 +20,11 @@ const HOSTS = ["127.0.0.1", "::1"];
 /**
  * 请求落在这张 grant 的哪条道上。`nav` 是地址栏里那个 token —— **不带罐子**；`content`
  * 只出现在已认领客户端拿到的那份页面内容里，罐子只认它。缘由写在 preview-access.ts 顶部。
+ *
+ * `ownApi` 非空时这一跳**不去被预览的服务**，直接连本机 ash：预览的是 ash 自己的前端那一档
+ * 时，`/api` 本来就是打回本机 ash 的（vite 只是中间转一手），而那条会话绝不能从分支启动的
+ * dev server 身上过。判据在 open 那一刻定死（见 preview-access.ts 顶部），这里只按上游路径
+ * 分流。
  */
 function targetOf(requestPath: string) {
   const match = /^\/preview\/([A-Za-z0-9_-]{1,80})\/([a-f0-9]{48})\/([A-Za-z0-9_-]{1,64})(\/.*)?$/.exec(requestPath);
@@ -36,8 +41,13 @@ function targetOf(requestPath: string) {
   const startupBase = previewBase(stored, service.id);
   const suffix = match[4] ?? "/";
   const path = target.pathname.startsWith(startupBase) ? startupBase + suffix.slice(1) : suffix;
+  const ownApi = grant.ownApi && (suffix === "/api" || suffix.startsWith("/api/")) ? grant.ownApi : null;
   return {
-    record, grant, service, protocol: target.protocol, port: service.port, path, suffix,
+    record, grant, service, ownApi,
+    protocol: ownApi ? "http:" : target.protocol,
+    port: ownApi?.port ?? service.port,
+    path: ownApi ? suffix : path,
+    suffix,
     lane: match[2] === grant.nav ? ("nav" as const) : ("content" as const),
     base: previewBase(record, service.id),
     navBase: previewBase({ ...record, proxyToken: grant.nav }, service.id),
@@ -66,9 +76,16 @@ const BROWSER_ATTACHED_AUTH = /^(?:basic|digest|negotiate|ntlm)\b/i;
  * 上面那条泄漏链是 **ash 自己的页面**发的，盖的是 ash 的 Origin 和 `same-origin`；顶层导航
  * 两个头都没有；curl / 手机端更是一个都没有。这两个头是**浏览器**盖的、页面伪造不了，
  * 所以「两个都对上」才算「这是预览页运行期自己产生的凭证」。
+ *
+ * **`Sec-Fetch-Site` 缺席时只认 `Origin`。** 它只发给可信来源，明文 http + 局域网 IP 一个
+ * 都收不到（同 `forwardedHeaders` 那段），要求它必须等于 `cross-site` 就等于在用户最常见的
+ * 部署里**永远不转发** —— 用 `Authorization` 而不是 cookie 的被预览应用，在预览里一律登不上。
+ * 放开这一档不动摇上面那条保证，因为拦住泄漏的一直是 `Origin: null` 那一半：ash 自己的页面
+ * 盖的是 ash 的 Origin，顶层导航（302 把 key 带过来的那条路）压根没有 Origin，两种都不是
+ * `null`。`null` 只有 opaque origin 的文档产生得出来，而那正是「预览页自己发的」。
  */
 function sandboxOriginated(origin: string | undefined, site: string | undefined): boolean {
-  return origin === "null" && site?.toLowerCase() === "cross-site";
+  return origin === "null" && (!site || site.toLowerCase() === "cross-site");
 }
 
 /**
@@ -88,6 +105,18 @@ function sandboxOriginated(origin: string | undefined, site: string | undefined)
  * 发的，所以对内一律 `same-origin`；`none`（地址栏直接打开的顶层导航）保持原样 —— 它比
  * `same-origin` 宽松不了，改写反而会抹掉「这是用户自己敲进去的」这个事实。
  *
+ * **浏览器没盖章的时候也得盖。** `Sec-Fetch-*` 只发给可信来源，明文 http + 局域网 IP
+ * 一个都收不到（`looksLikeNavigation` 那段同一件事）——2026-09-10 用户在 `172.16.88.252:4317`
+ * 的预览里粘 key 登录，又吃了一次「跨站请求已被拒绝（写操作只接受本站发起）」。这一次不是
+ * 章盖错了，是**根本没有章**，于是判据落到下一档：我们自己重写的那个 `Origin`。它写的是
+ * 上游自己的地址（`localhost:<上游端口>`），直连上游时跟 `Host` 对得上；可上游是 vite，
+ * `/api` 还要再转一跳回 ash，vite 的 `changeOrigin` 只改 `Host` 不改 `Origin` —— 到 ash 手上
+ * 就成了「Origin=localhost:42651、Host=127.0.0.1:4317」，一对不上就拒。
+ *
+ * 所以 `Origin` 和这个章是一对，要造一起造：只造 `Origin` 而把章留空，等于亲手把一个对不上
+ * 的来源塞给下游，比两个都不发还糟。「本来没有的头不许凭空造」这条原则仍然管着**别的**头，
+ * 这两个是例外，因为它们描述的是「谁发的」，而这件事在这一层已经由 token + grant 判定过了。
+ *
  * **改写之前先把原样的 `Origin`/`Sec-Fetch-Site` 留给 `sandboxOriginated` 用**：鉴权头转不
  * 转发全靠这两个头认来源，归一化之后就再也分不出「预览页自己发的」和「ash 页面发的」了。
  */
@@ -104,7 +133,7 @@ function forwardedHeaders(input: Headers | IncomingHttpHeaders, jar: PreviewCook
   const site = pick("sec-fetch-site");
   const auth = pick("authorization");
   if (auth && sandboxOriginated(pick("origin"), site) && !BROWSER_ATTACHED_AUTH.test(auth)) result.authorization = auth;
-  if (site) result["sec-fetch-site"] = site.toLowerCase() === "none" ? "none" : "same-origin";
+  result["sec-fetch-site"] = site?.toLowerCase() === "none" ? "none" : "same-origin";
   // 往上游发什么 cookie，**只认罐子**，浏览器带回来的一概不作数。两条理由：
   // ① 在沙箱 opaque origin 下它本来就是空的（见 preview-cookies.ts 开头）；
   // ② 发回浏览器的那份被重挂在预览前缀上，Path 信息已经不在了 —— 拿它当来源，
@@ -230,7 +259,9 @@ export function mountPreviewProxy(app: Hono): void {
     // 导航在上面就分叉走了，走不到这里）。其余的 —— 地址栏那条道上的 XHR、fetch、SSE、
     // WebSocket —— 一律配一个空罐子：它们证明不了自己是谁，而地址是可以被复制走的。
     const trusted = target.lane === "content" || navigation;
-    const jar = trusted ? target.grant.jar : new Map();
+    // 走 `/api` 那一跳的用它自己的罐子（那条 ash 会话只活在那里）；其余照旧。两条道的规矩
+    // 不变：没验过客户端的请求一律配空罐子，`/api` 也不例外。
+    const jar = trusted ? target.ownApi?.jar ?? target.grant.jar : new Map();
     // 页面内容改写到内容 token 上（认领之后才有），Location 留在请求自己这条道上。
     const view = trusted && target.grant.content ? { ...target.record, proxyToken: target.grant.content } : target.record;
     const viewBase = previewBase(view, target.service.id);
@@ -318,7 +349,7 @@ export function attachPreviewUpgrades(server: Server): void {
       if (!targetOf(requested.pathname)) { socket.destroy(); return; }
       // 罐子只跟着内容 token 走：页面里的 WebSocket 地址是我们改写过的，走的就是内容那条道；
       // 拿地址栏那串来连的，配一个空罐子（升级请求带不回认领 cookie，验不了它是谁）。
-      const headers = forwardedHeaders(incoming.headers, target.lane === "content" ? target.grant.jar : new Map(), target.path);
+      const headers = forwardedHeaders(incoming.headers, target.lane === "content" ? target.ownApi?.jar ?? target.grant.jar : new Map(), target.path);
       headers.host = `localhost:${target.port}`;
       headers.origin = `${target.protocol}//localhost:${target.port}`;
       headers.connection = "Upgrade"; headers.upgrade = "websocket";

@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PreviewLife, WorkflowStep } from "@ash/shared/workflow";
 import type { PreviewServiceState } from "@ash/shared/preview";
@@ -17,6 +17,17 @@ export interface PreviewRecord {
   url: string | null;
   port: number | null;
   life: PreviewLife;
+  /**
+   * 被预览的服务**自己在日志里说**「我的 `/api` 打到那台 ash 上」，而且说的正是我们当时
+   * 绑着的那个端口时，记下它（见 preview-log.ts 的 declaredHostApiPort）。反代据此把 `/api`
+   * 那一跳直接接回本机 ash 并带上打开者的会话——缘由和其余前提在 preview-access.ts 顶部。
+   *
+   * **不能拿启动方式（`PreviewMode`）当拓扑证据**，这个字段的存在就是为了替掉那种做法：
+   * 自由工作流对任意自定义脚本和多服务配置一律写死 `frontend`，它表示的是「我们让它只起
+   * 前端」的意图，不是它真的只起了前端。把整栈预览误认成这一档，用户以为在验分支后端，
+   * 实际是拿自己的身份读写主库（第 2 轮审查 P1）。老记录没有这个字段，一律当作「没说过」。
+   */
+  hostApi?: number | null;
   startedAt: string;
   log: string;
   /** 起这次预览时 ash 自己挂上去的 node_modules 软链；收预览时按原样撤掉。 */
@@ -192,4 +203,52 @@ export function tail(path: string, banner = "", max = 4000): string {
   } catch {
     return "";
   }
+}
+
+/**
+ * 顺着这次启动的日志往下读：每次调用只返回**上次读到之后**的新内容（开头那行命令回显
+ * 一并跳过，理由见 tail）。
+ *
+ * **启动期的一次性信号一律走这里，不许跟 `tail` 共用那 4000 字的尾巴。**分工是死的：
+ * 尾巴是给人看的诊断（4000 字足够回答「刚才发生了什么」，也顺带挡住了内存），而这些话
+ * 都打在启动最前面，装依赖回显和框架冷编译随便多打几行就把它们挤出窗口。已经栽过两次，
+ * 两次的坏法还不一样：
+ *  · 被挤掉的「我的 /api 打到那台 ash 上」→ 一份**确实说过**的启动被记成没说过，用户看回
+ *    登录框，正是这个任务要消掉的那堵墙（第 3 轮审查 P1）；
+ *  · 被挤掉的「这个分支起了真调度器」→ 安全协议过旧的预览后端照常上线，真调度器接着拿
+ *    真项目目录派活，而我们嘴上说的是「已立即回收」（第 4 轮审查 P1）。
+ *
+ * 每个字节只读一次——轮询每 500ms 读一遍整篇，在话多的构建上就是几百兆白读。代价是调用方
+ * 得自己把「见过了」记住：信号只在它出现的那一次出现在返回值里。
+ *
+ * 返回值前面接一小段上次的尾巴：一句话被读边界劈成两半时，两边都匹配不上。信号全是 ASCII，
+ * 所以边界劈开多字节字符产生的替换字符不影响判读。
+ */
+const FOLLOW_OVERLAP = 128;
+
+export function logFollower(path: string, banner = ""): () => string {
+  // banner 是 spawn 之前我们自己写进去的，跳过它这件事按**字节**算：命令里可能有中文路径，
+  // 按字符数偏移会错位。不跳的话更糟——那一行里就有用户写的命令，命令里但凡出现信号的
+  // 字样，就等于让被预览的一方自己伪造这些信号。
+  let offset = Buffer.byteLength(banner);
+  let carry = "";
+  return () => {
+    let chunk: string;
+    try {
+      const fd = openSync(path, "r");
+      try {
+        const size = fstatSync(fd).size;
+        if (size <= offset) return "";
+        const buffer = Buffer.allocUnsafe(size - offset);
+        const read = readSync(fd, buffer, 0, buffer.length, offset);
+        offset += read;
+        chunk = buffer.subarray(0, read).toString("utf8");
+      } finally { closeSync(fd); }
+    } catch {
+      return "";
+    }
+    const text = carry + chunk;
+    carry = text.slice(-FOLLOW_OVERLAP);
+    return text;
+  };
 }

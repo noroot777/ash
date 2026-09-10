@@ -409,3 +409,23 @@ export function pickPreviewUrl(
   return port === null ? null : { url: `http://localhost:${port}/`, port, lent: lent === port };
 }
 
+/**
+ * 被预览的服务自述「我的 `/api` 打到那台 ash 上」时说的那个端口；没说就是 null。
+ *
+ * 这句话是**唯一**能让反代把 `/api` 那一跳接回本机 ash、并替用户带上登录态的凭据
+ * （缘由和三个前提在 preview-access.ts 顶部）。所以它必须是被预览的服务**自己说的**：
+ * ash 递过去的 `ASH_PREVIEW_MODE=frontend` 只表示「我们希望你只起前端」，任意项目脚本
+ * 都可以不理它——自由工作流对自定义整栈脚本和多服务配置一律写死这个值。拿它当拓扑证据，
+ * 「前端 + 分支后端」那种预览的 `/api` 就会被静默改接到正在用的主 ash 上：用户以为在验
+ * 分支后端，实际是拿自己的身份读写主库（第 2 轮审查 P1）。
+ *
+ * 只认回环主机名：反代无论如何只会拨回环，写着别处地址的自述对不上它将要做的事。
+ * 端口对不对得上「我们此刻真绑着的那个」由调用方核（preview-start.ts）——这里只读日志。
+ */
+const HOST_API_RE = /\[ash\] preview-api-host (?:localhost|127\.0\.0\.1|\[::1\]):(\d{2,5})\b/i;
+
+export function declaredHostApiPort(log: string): number | null {
+  const hit = HOST_API_RE.exec(stripAnsi(log));
+  return hit ? Number(hit[1]) : null;
+}
+
