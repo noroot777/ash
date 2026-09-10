@@ -71,6 +71,11 @@ function startFrontendOnly(webPort) {
   // 这句 `ASH_PROXY=$URL2` 是用户**明说**「前端连我这个分支后端」，压掉它等于把 /api 悄悄接回
   // 主 ash——他以为在验分支后端，实际在拿自己的身份读写主库（第 6 轮审查 P1）。所以宿主地址只是
   // 一个更聪明的默认值，不是命令。
+  //
+  // 这个顺序成立有个前提，**在这里看不出来、也检查不了**：能到这儿的 `ASH_PROXY` 必须只可能是
+  // 命令现场写的。宿主 ash 自己环境里带着的那份（连同旧名 `HARNESS_PROXY`）由 ash 在组预览子
+  // 进程环境时擦掉——见 server/src/preview-start.ts 的 previewBaseEnv；不擦，一个跟这次预览毫无
+  // 关系的遗留值就能压掉 ash 确知的监听端口（第 7 轮审查 P1）。
   const proxy = process.env.ASH_PROXY ?? process.env.ASH_HOST_API ?? "http://127.0.0.1:4317";
   const target = proxy.replace(/^https?:\/\//, "");
   // 打这一行时把 scheme 去掉，理由跟下面转发后端日志时一样：ash 会从预览日志里认地址，

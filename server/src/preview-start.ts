@@ -56,6 +56,9 @@ export async function runPreview(
   // 「我在这儿」，**只当默认值**；`ASH_PROXY` 是脚本作者说「前端连我指的那个后端」，那是命令。
   // 顺序在 dev.mjs 那边（`ASH_PROXY` 在前），压掉它就废掉了「一条整栈脚本」这种受支持的写法
   // ——用户以为在验分支后端，实际是拿自己的身份读写主库（第 6 轮审查 P1）。
+  //
+  // 那个顺序**只在「能到 dev.mjs 的 `ASH_PROXY` 一定是命令现场写的」时才站得住**，靠的是
+  // 下面 previewBaseEnv() 把继承来的那份擦掉。
   const hostApiUrl = boundListeningPort() === null ? null : `http://127.0.0.1:${boundListeningPort()}`;
   const envs = services.map((s, index) => {
     const env = portEnv([ports[index], ...ports.filter((_, i) => i !== index)].filter((p): p is number => !!p));
@@ -117,7 +120,7 @@ export async function runPreview(
         const child = spawn(launch.file, launch.args, {
           cwd, detached: process.platform !== "win32", windowsHide: true,
           windowsVerbatimArguments: launch.windowsVerbatimArguments, stdio: ["ignore", fd, fd],
-          env: { ...withoutForeignNodeBins(augmentedEnv(), cwd), ...envs[i], ASH_PREVIEW: "1", ASH_PREVIEW_MODE: step.p.mode, BROWSER: "none" },
+          env: { ...previewBaseEnv(cwd), ...envs[i], ASH_PREVIEW: "1", ASH_PREVIEW_MODE: step.p.mode, BROWSER: "none" },
         });
         child.on("error", (error) => errors.set(s.id, error.message));
         child.on("exit", () => {
@@ -201,6 +204,33 @@ export async function runPreview(
     return fail(error instanceof Error ? error.message : String(error));
   }
 }
+
+/**
+ * 预览子进程的基座环境。
+ *
+ * 除了去掉别人家的 `node_modules/.bin`（见 withoutForeignNodeBins），还要**擦掉从宿主 ash
+ * 进程继承下来的这三个**：`ASH_PROXY`、它的旧名 `HARNESS_PROXY`（scripts/env.mjs 会把
+ * `HARNESS_*` 提升成 `ASH_*`，留着等于绕道）、以及 `ASH_HOST_API`（嵌套预览时那份指的是外层
+ * 那台 ash）。
+ *
+ * 因为「/api 打哪台」这件事上，**继承来的值一个都不是当事人的意思**：ash 是被谁怎么起的
+ * （`ASH_PROXY=… npm run start`、systemd 里带一行、上一层预览传下来的）跟这次预览要连谁
+ * 毫无关系。dev.mjs 又只看得见环境变量、分不清哪份是命令现场写的，于是照它的顺序，
+ * 一个遗留值就能压掉我们确知的监听端口：默认「只起前端」的 /api 整个打去别处——端口关着
+ * 是一页 500，端口上坐着另一台 ash 就是拿用户的身份静默读写错实例（第 7 轮审查 P1）。
+ *
+ * 擦掉不影响脚本自己写的那份：`ASH_PROXY=$URL2 npm run dev` 是 shell 在命令现场重新设的，
+ * 照旧最大（第 6 轮审查 P1）。名字按大小写不敏感比对——Windows 的环境变量本来就不分大小写。
+ */
+function previewBaseEnv(cwd: string): NodeJS.ProcessEnv {
+  const env = withoutForeignNodeBins(augmentedEnv(), cwd);
+  for (const key of Object.keys(env)) {
+    if (INHERITED_API_TARGETS.has(key.toUpperCase())) delete env[key];
+  }
+  return env;
+}
+
+const INHERITED_API_TARGETS = new Set(["ASH_PROXY", "HARNESS_PROXY", "ASH_HOST_API"]);
 
 function previewScriptLaunch(command: string, dir: string, key: string) {
   if (process.platform !== "win32" || !/[\r\n]/.test(command)) return userShellLaunch(command);

@@ -10,6 +10,12 @@
 // 所以这条测试三样一起断言，而且**不许拿假夹具替**：dev.mjs 读环境变量、web/vite.config.ts
 // 读 ASH_PROXY、ash 注入 ASH_HOST_API —— 中间断一环，前两条都还能各自「通过」。
 //
+// 两档一起跑，因为「ASH_PROXY 该不该说了算」的答案取决于它是**谁**写的，而这条链上只有
+// ash 组子进程环境那一步分得清：
+//   ① 宿主进程带着遗留的 `ASH_PROXY`/`HARNESS_PROXY`（见下面开头两行）→ 默认 `npm run dev`
+//      仍须打到 boundListeningPort()（第 7 轮审查 P1）
+//   ② 命令现场写 `ASH_PROXY=$URL2` → 仍须打到分支自己的后端（第 6 轮审查 P1）
+//
 // 跑法：npm -w server run test:preview-host-api
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -28,6 +34,14 @@ const { recordListeningPort } = await import("../src/listening-port.js");
 const { REPO_DIR } = await import("../src/paths.js");
 const { tail } = await import("../src/preview-store.js");
 await ensureSchema();
+
+// 宿主 ash 进程自己环境里带着的「打哪台」——`ASH_PROXY=… npm run start` 起的、systemd 里
+// 写了一行、或者这台 ash 自己就跑在上一层预览里。它跟这次预览要连谁毫无关系，**一个都不许
+// 漏进预览子进程**：漏进去就压掉了下面注入的真实监听端口，默认「只起前端」的 /api 整个打去
+// 别处（第 7 轮审查 P1）。旧名 `HARNESS_PROXY` 一并预置：scripts/env.mjs 会把 `HARNESS_*`
+// 提升成 `ASH_*`，只擦新名等于留了条绕道。
+process.env.ASH_PROXY = "http://127.0.0.1:1";
+process.env.HARNESS_PROXY = "http://127.0.0.1:2";
 
 // 冒充「这台 ash」：随便一个空闲端口，**不是 4317**。谁打过来它都记下来。
 const seen: string[] = [];
@@ -55,9 +69,10 @@ try {
   const record = readPreview("host-api-task")!;
   const log = tail(record.log, "", Number.MAX_SAFE_INTEGER);
 
-  // ① 自述和那句人话都得说出我们真绑着的端口，不是 4317。
+  // ① 自述和那句人话都得说出我们真绑着的端口，不是 4317，也不是继承来的那份。
   assert.match(log, new RegExp(`\\[ash\\] preview-api-host 127\\.0\\.0\\.1:${address.port}\\b`), `自述必须指向 ${address.port}\n${log.slice(0, 600)}`);
   assert(!log.includes("preview-api-host 127.0.0.1:4317"), "不许再写死 4317");
+  assert(!/127\.0\.0\.1:[12]\b/.test(log), `父进程带下来的 ASH_PROXY/HARNESS_PROXY 一个字都不该起作用\n${log.slice(0, 600)}`);
   assert.match(log, new RegExp(`只起前端 \\d+，/api 打到 127\\.0\\.0\\.1:${address.port}`), "给人看的那行同样不许说假话");
 
   // ② 判读侧认下了，登录态直连这一档才开得起来（缘由见 preview-access.ts 顶部）。
@@ -104,12 +119,34 @@ try {
   // 自述跟着实际去向走，于是跟我们绑着的端口对不上 —— 这一档自然就没有登录态直连。
   assert.match(stackLog, new RegExp(`\\[ash\\] preview-api-host localhost:${port2}\\b`), "自述报的是它真打过去的那个");
   assert(!stackLog.includes(`preview-api-host 127.0.0.1:${address.port}`), "不许报成主 ash");
+  assert(!/127\.0\.0\.1:[12]\b/.test(stackLog), "继承来的那份在这一档同样不该露头");
   assert.equal(stackRecord.hostApi ?? null, null, "整栈脚本这一档不许产生 hostApi");
+
+  // —— 第三档：这台 ash 说不出自己在哪的时候 ——
+  //
+  // `ASH_HOST_API` 自己也会被继承：ash 跑在上一层预览里时，环境里那份指的是**外层**那台。
+  // 平时我们注入的值盖在它上面，可 `boundListeningPort()` 是 null（还没 listen 上、端口没记
+  // 成）时我们一个字都不注入 —— 漏下来就等于让这次预览默认去连外层那台 ash。
+  // 这一档不需要真前端，一行 node 把子进程**实际收到**的值打回来就够。打的时候剥掉 scheme：
+  // 日志里出现 `http://…` 会被就绪判定当成预览本尊的地址，那样漏没漏得等 120 秒超时才看得出来。
+  recordListeningPort(0);
+  process.env.ASH_HOST_API = "http://127.0.0.1:3";
+  const echo = "node -e \"console.log('[env] ASH_HOST_API=' + (process.env.ASH_HOST_API ?? '<空>').replace('http://',''));"
+    + "require('node:http').createServer((q,r)=>r.end('ok')).listen(process.env.PORT)\"";
+  const blind = await startPreview("blind-task", {
+    id: "blind", kind: "preview",
+    p: { cmd: echo, mode: "frontend", ready: "port", life: "task" },
+    fail: null,
+  } as never, REPO_DIR);
+  assert(blind.ok, blind.ok ? "" : blind.reason);
+  const blindLog = tail(readPreview("blind-task")!.log, "", Number.MAX_SAFE_INTEGER);
+  assert.match(blindLog, /\[env\] ASH_HOST_API=<空>/, `说不出自己在哪就什么都别说，别把继承来的那份递下去\n${blindLog.slice(0, 400)}`);
 } catch (error) {
   failed = error;
 }
 await stopPreview("host-api-task", null).catch(() => {});
 await stopPreview("stack-task", null).catch(() => {});
+await stopPreview("blind-task", null).catch(() => {});
 host.close();
 dbClient.close();
 rmSync(root, { recursive: true, force: true });
