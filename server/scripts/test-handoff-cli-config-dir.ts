@@ -27,9 +27,9 @@
 // 跑法(自带临时库):
 //   npm -w server run test:handoff-cli-config-dir
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-handoff-cli-dir-"));
@@ -62,7 +62,7 @@ try {
   const { claudeProjectDir, claudeSessionFilePath, collectSessionFiles } =
     await import("../src/handoff-collect.js");
   const { writePayloadFiles } = await import("../src/handoff-import-payload.js");
-  const { codexHome } = await import("../src/executors/codex-rollout.js");
+  const { codexHome, findRollout } = await import("../src/executors/codex-rollout.js");
 
   await ensureSchema();
 
@@ -341,7 +341,29 @@ try {
   assert.equal(agentBaseEnv().ANTHROPIC_API_KEY, undefined, "同步镜像也得跟着回来(spawn 走的是它)");
   delete process.env.ANTHROPIC_API_KEY;
 
-  console.log("test-handoff-cli-config-dir: OK");
+  const active = join(codexHome(codexDir), "sessions", ...codexRel(LIST_THREAD).split("/"));
+  const archive = join(codexHome(codexDir), "archived_sessions", basename(active));
+  mkdirSync(dirname(archive), { recursive: true });
+  renameSync(active, archive);
+  const originalBytes = readFileSync(archive);
+  const archivedListing = await sessionsForTask("t-cli-dir");
+  assert.ok(archivedListing[0]?.resumeCommand?.includes(`codex unarchive ${LIST_THREAD}`));
+  assert.ok(archivedListing[0]?.resumeCommand?.includes("CODEX_HOME="));
+  const exported = await collectSessionFiles([sessionRow("codex", LIST_THREAD, OWNED_CWD, user.id)], OWNED_CWD, false);
+  assert.equal(exported.files.length, 1);
+  assert.equal(exported.files[0]?.rel, codexRel(LIST_THREAD));
+  assert.ok(!exported.files[0]?.rel.includes(".."));
+  const destination = join(stage, "archive-import-destination");
+  const importNotes: string[] = [];
+  await writePayloadFiles(exported.files, "archive-import", OWNED_CWD, noRewrites, importNotes, { claude: null, codex: destination });
+  assert.deepEqual(importNotes, []);
+  const restored = await findRollout(LIST_THREAD, destination);
+  assert.equal(restored, join(destination, "sessions", ...codexRel(LIST_THREAD).split("/")));
+  assert.deepEqual(readFileSync(restored!), originalBytes);
+  assert.deepEqual(readFileSync(archive), originalBytes, "只读列表与导出不恢复、不改写源归档");
+  assert.ok(!existsSync(active));
+
+  console.log("test-handoff-cli-config-dir: OK (含归档列表与接力往返)");
 } catch (error) {
   failed = true;
   console.error(error);

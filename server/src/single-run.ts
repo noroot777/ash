@@ -432,6 +432,10 @@ export async function consumeSingleRun(a: {
           doneEvent = emittedEvent;
           continue;
         }
+        if (emittedEvent.kind === "system") {
+          noteSessionNotice(emittedEvent.text, emittedEvent.at, emittedEvent.level);
+          continue;
+        }
         if (emittedEvent.kind === "error" && isSessionScopeNotice(emittedEvent)) {
           sessionFault = mergeSessionResumeFault(sessionFault, emittedEvent.message);
           noteSessionNotice(emittedEvent.message);

@@ -169,6 +169,8 @@ export async function runTurn(args: {
     }
     resumeCliId = undefined;
   }
+  const runEnv = await runEnvForOwner(args.runOwner, executor.type);
+  await executor.prepareResume?.({ cwd, sessionId: resumeCliId || undefined, env: runEnv });
   // 版本读取与持久说明之间有 await；这期间收到停止请求也不能再起下一轮。
   if (isCanceling(taskId)) throw new CanceledRun();
   const turnStart = now();
@@ -178,7 +180,7 @@ export async function runTurn(args: {
     sessionId: resumeCliId || undefined,
     // 个人 CLI 配置目录 + git 署名(§八)。
     env: {
-      ...(await runEnvForOwner(args.runOwner, executor.type)),
+      ...runEnv,
       // **不给讨论者回合身份,并且要确保它是真的没有**:讨论者没有完成协议,duet 的结算
       // 由这条流水线自己做,凭空发一个没登记进 tasks.activeTurnToken 的令牌只会让每个
       // 消费者都拒收。但「不设」不等于「没有」—— 子进程默认继承 server 自己的环境,
@@ -274,6 +276,9 @@ export async function runTurn(args: {
       } else if (event.kind === "thinking") {
         if (trace.length < TRACE_CAP) trace.push({ kind: "thinking", label: "思考过程", detail: event.text });
         out.write("〔思考〕" + event.text + "\n");
+      } else if (event.kind === "system") {
+        noticeMsg = `${noticeMsg ?? ""}\n${event.text}`.trim();
+        out.write("⚠ " + event.text + "\n");
       } else if (event.kind === "error") {
         sessionFault = mergeSessionResumeFault(sessionFault, event.message);
         if (sessionNotice) {

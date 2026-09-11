@@ -74,6 +74,7 @@ const steps: AgentEvent[] = [
   { kind: "error", message: DIAGNOSIS, scope: "session" },
   { kind: "text", text: "这一轮正文已经完整产出。\n" },
   { kind: "error", message: TOOL_ERROR },
+  { kind: "system", text: "Codex 会话自动归档未完成：fixture timeout", level: "notice", at: AT },
   { kind: "done", exitStatus: 0 },
 ];
 
@@ -164,6 +165,10 @@ const systemTurns = md.split("\n").flatMap((line) => {
   return parsed.t === "system" ? [parsed as { text: string; level?: string }] : [];
 });
 const systemTurnTexts = systemTurns.map((turn) => turn.text);
+const archiveNotices = systemTurns.filter((turn) => turn.text === "Codex 会话自动归档未完成：fixture timeout");
+assert.equal(archiveNotices.length, 1, "执行器归档提示刷新后仍存在且只落盘一次");
+assert.equal(archiveNotices[0]?.level, "notice");
+assert.ok(!liveErrors.some((text) => text.includes("自动归档未完成")));
 assert.ok(systemTurnTexts.includes(DIAGNOSIS), `.md 里没有诊断的 system 回合行：${JSON.stringify(systemTurnTexts)}`);
 assert.ok(
   systemTurnTexts.some((text) => text.includes("全新会话")),

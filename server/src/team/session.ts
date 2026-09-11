@@ -358,6 +358,8 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
     ? LEAD_RESUMED + promptedText + (ws.fresh ? LEAD_WORKSPACE_RESET(ws.path) : "")
     : LEAD_PREAMBLE(taskId, cfg.worker) + objective + (promptedText ? `\n\n【新消息】${promptedText}` : "");
   const message = withGlobalBrowserPolicy(rawMessage, resuming ? "reminder" : "full");
+  const runEnv = { ...(await runEnvForTask(taskId, cfg.lead)), ASH_TASK_ID: taskId };
+  await ex.prepareResume?.({ cwd: ws.path, sessionId: prev?.cliSessionId ?? undefined, env: runEnv });
 
   const turnStart = now();
   const sessId = resuming ? prev!.id : id();
@@ -367,7 +369,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
     prompt: message,
     cwd: ws.path,
     sessionId: prev?.cliSessionId ?? undefined,
-    env: { ...(await runEnvForTask(taskId, cfg.lead)), ASH_TASK_ID: taskId },
+    env: runEnv,
   });
   trackRun(taskId, handle);
 

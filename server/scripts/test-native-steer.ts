@@ -193,6 +193,7 @@ class FakeAppServer extends EventEmitter {
     this.requests.push(message);
     if (message.id === undefined) return;
     if (message.method === "initialize") this.send({ id: message.id, result: { userAgent: "test" } });
+    else if (message.method === "thread/archive") this.send({ id: message.id, result: {} });
     else if (message.method === "thread/start") {
       this.send({ id: message.id, result: { thread: { id: "codex-thread" } } });
     } else if (message.method === "turn/start") {
