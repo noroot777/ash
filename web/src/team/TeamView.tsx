@@ -22,6 +22,11 @@ import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
+import {
+  ReplyResizeHandle,
+  TEAM_REPLY_PIN,
+  useReplyHeight,
+} from "../task-detail/ReplyResizeHandle.tsx";
 import { QuestionCard } from "../task-detail/QuestionCard.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
@@ -62,9 +67,11 @@ function TeamReplyBox({
   const [sendAt, setSendAt] = useState("");
   const scheduleTriggerRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  // 跟着输入行数长高;右下角原生把手拖过就以拖出来的高度为准(CSS 那边不设 max-height,
-  // 免得自动撑高的上限顺手也把用户能拖到多高给限死)。
-  useAutoGrowTextarea(inputRef, { value });
+  // 跟着输入行数长高;顶边那条拖动条拖过之后以拖出来的高度为准——跟普通任务回复框
+  // 同一套(task-detail/ReplyResizeHandle.tsx),高度只有 useAutoGrowTextarea 一个写者,
+  // 所以 CSS 那边把原生右下角把手关掉了。
+  const replyHeight = useReplyHeight(TEAM_REPLY_PIN);
+  useAutoGrowTextarea(inputRef, { value, pinned: replyHeight.height });
   const scheduled = useScheduledMessages(task.id);
   const uploads = useAttachments({
     value: draft.attachments,
@@ -178,6 +185,7 @@ function TeamReplyBox({
       />
       {error && <p>{error}</p>}
       <div className="team-reply-box">
+        <ReplyResizeHandle targetRef={inputRef} {...replyHeight} />
         <textarea
           ref={inputRef}
           rows={2}
