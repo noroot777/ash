@@ -280,7 +280,7 @@ export const api = {
   // 重跑**上一回合**（续聊/审查打回的那一句崩了，但任务还停在 done）。带上气泡上那条
   // 会话 id：服务端据此确认「用户看到的就是最新一次」，页面旧了就拒绝而不是照跑。
   // mode=review = 上一回合是自由工作流的审查回合，重跑的是**那一轮审查**（同一位审查者）。
-  retryTurn: (taskId: string, sessionId?: string): Promise<{ started: true; mode: "resend" | "resume" | "review" }> =>
+  retryTurn: (taskId: string, sessionId?: string): Promise<{ started: true; mode: "resend" | "resume" | "review"; resumed?: boolean }> =>
     request(`/tasks/${id(taskId)}/retry-turn`, json("POST", { sessionId })),
   requeueTask: (taskId: string): Promise<{ task: Task; movedToEnd: boolean }> =>
     request(`/tasks/${id(taskId)}/requeue`, { method: "POST" }),
@@ -316,8 +316,6 @@ export const api = {
     request(`/tasks/${id(taskId)}/team/cua-status`),
   killTeamCua: (taskId: string): Promise<unknown> =>
     request(`/tasks/${id(taskId)}/team/kill-cua`, { method: "POST" }),
-  iterateTeamDuet: (taskId: string): Promise<Task> =>
-    request(`/tasks/${id(taskId)}/team/iterate-duet`, { method: "POST" }),
 
   // 任务接力(跨机器 handoff)那一族在 `handoffApi.ts` —— 整份 spread 进来,
   // `api.handoffPeers()` 这类调用点一字不动。

@@ -15,6 +15,9 @@ import {
 import { detachedInfo, spawnControllableForRun, type DetachedPaths } from "./detached.js";
 import { cleanupAfterRun, forceFinishOnExit, killChild, redactSecrets, shq, spawnErrorMessage } from "./spawn.js";
 import type { RunHandle } from "./types.js";
+import { findArchivedRollout, findRollout } from "./codex-rollout.js";
+import { archiveCodexThread, codexArchiveNotice, CODEX_ARCHIVE_TIMEOUT_MS } from "./codex-session-archive.js";
+import { pruneArchivedCodexDesktopThreads } from "./codex-desktop-catalog.js";
 
 type TokenBreakdown = {
   totalTokens: number;
@@ -43,11 +46,11 @@ export type CodexAppServerOpts = {
   trace?: RunTracePaths;
   detach?: DetachedPaths;
   commandLine?: string;
-  reattach?: { threadId: string; turnId: string };
+  reattach?: { threadId: string; turnId: string; completedTurn?: { id: string; status: string; error?: unknown } };
   startProcess?: () => ChildProcess;
 };
 
-/** 一个 app-server 进程只承载当前单飞回合；turn/completed 后立即关闭。 */
+/** 一个 app-server 进程承载一个单飞回合，收尾归档后关闭；配置仍来自用户本机。 */
 export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const child = opts.startProcess?.()
     ?? spawnControllableForRun(opts.cwd, opts.bin, opts.args, "", opts.env, opts.detach);
@@ -64,6 +67,8 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   let turnId = opts.reattach?.turnId ?? "";
   let sessionEmitted = !!opts.sessionId;
   let finished = false;
+  let settling = false;
+  let connectionClosed = false;
   let stopRequested = false;
   let turnCompleted = false;
   let latestUsage: ThreadUsage | null = null;
@@ -87,17 +92,25 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     wake = null;
   };
   const write = (message: unknown) => {
-    if (finished || !child.stdin || child.stdin.destroyed || child.stdin.writableEnded) {
+    if (finished || connectionClosed || !child.stdin || child.stdin.destroyed || child.stdin.writableEnded) {
       throw new Error("Codex App Server 连接已关闭");
     }
     child.stdin.write(`${JSON.stringify(message)}\n`);
   };
   const notify = (method: string, params?: unknown) => write({ method, ...(params === undefined ? {} : { params }) });
-  const request = (method: string, params: unknown): Promise<any> => {
+  const request = (method: string, params: unknown, timeoutMs?: number): Promise<any> => {
     const id = ++requestId;
     return new Promise((resolve, reject) => {
-      pending.set(String(id), { resolve, reject });
+      const timer = timeoutMs === undefined ? undefined : setTimeout(() => {
+        pending.delete(String(id));
+        reject(new Error(`Codex ${method} 超时`));
+      }, timeoutMs);
+      pending.set(String(id), {
+        resolve: (value) => { clearTimeout(timer); resolve(value); },
+        reject: (error) => { clearTimeout(timer); reject(error); },
+      });
       try { write({ id, method, params }); } catch (error) {
+        clearTimeout(timer);
         pending.delete(String(id));
         reject(error instanceof Error ? error : new Error(String(error)));
       }
@@ -126,7 +139,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
         : { used: 0, window: null, windowEstimated: false },
     });
   };
-  const finish = (exitStatus: number, message?: string) => {
+  const finishImmediately = (exitStatus: number, message?: string) => {
     if (finished) return;
     finished = true;
     for (const waiter of pending.values()) waiter.reject(new Error(message ?? "Codex App Server 已结束"));
@@ -152,6 +165,40 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     if (sessionPoison) push({ kind: "error", message: sessionPoison, scope: "session" });
     emitContext();
     push({ kind: "done", exitStatus });
+  };
+
+  const archivedThreadIds = new Set<string>();
+  const finish = (exitStatus: number, message?: string) => {
+    if (finished || settling) return;
+    settling = true;
+    void (async () => {
+      try {
+        if (threadId) {
+          try {
+            if (connectionClosed) throw new Error("Codex App Server 连接已关闭");
+            await request("thread/archive", { threadId }, CODEX_ARCHIVE_TIMEOUT_MS);
+          } catch (error) {
+            // 超时/硬停止后先收掉旧进程，再用短连接补归档，避免同一文件仍被旧进程写入。
+            await cleanupAfterRun(child);
+            if (!(await findArchivedRollout(threadId, opts.env?.CODEX_HOME))) {
+              if (!(await findRollout(threadId, opts.env?.CODEX_HOME))) throw error;
+              await archiveCodexThread({
+                bin: opts.bin,
+                args: opts.args,
+                cwd: opts.cwd,
+                env: opts.env,
+              }, threadId);
+            }
+          }
+          await pruneArchivedCodexDesktopThreads([threadId, ...archivedThreadIds], opts.env?.CODEX_HOME);
+        }
+      } catch (error) {
+        push(codexArchiveNotice(error));
+      } finally {
+        finishImmediately(exitStatus, message);
+        closeProcess();
+      }
+    })();
   };
 
   const emitSession = (id: string) => {
@@ -206,6 +253,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   };
 
   const completeTurn = (turn: any) => {
+    if (turnCompleted || settling || finished) return;
     turnCompleted = true;
     const status = turn?.status;
     const error = typeof turn?.error?.message === "string" ? turn.error.message : null;
@@ -219,10 +267,14 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       push({ kind: "usage", usage: usageEvent(latestUsage.total) });
     }
     finish(status === "completed" ? 0 : 1);
-    closeProcess();
   };
 
   const handleNotification = (message: any) => {
+    if (message.method === "thread/archived" && typeof message.params?.threadId === "string") {
+      archivedThreadIds.add(message.params.threadId);
+      return;
+    }
+    if (settling || finished) return;
     const p = message.params ?? {};
     if (threadId && p.threadId && p.threadId !== threadId) {
       if (message.method === "turn/started") childModelReads.delete(p.threadId);
@@ -314,12 +366,24 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     trace.stderr(text);
   });
   child.on("error", (error: NodeJS.ErrnoException) => finish(1, spawnErrorMessage(opts.bin, error)));
+  child.stdin?.on?.("error", (error: Error) => {
+    connectionClosed = true;
+    for (const waiter of pending.values()) waiter.reject(error);
+    pending.clear();
+    finish(1, error.message);
+  });
   child.on("close", (code, signal) => {
+    connectionClosed = true;
+    for (const waiter of pending.values()) waiter.reject(new Error("Codex App Server 连接已关闭"));
+    pending.clear();
     if (finished) return;
     const detail = stderr.trim().slice(-2_000);
     finish(code ?? (signal ? 1 : 0), detail || "Codex App Server 在回合结束前退出");
   });
-  forceFinishOnExit(child, () => finished, (exit) => finish(exit, "Codex App Server 输出流未正常收尾"));
+  forceFinishOnExit(child, () => finished || settling, (exit) => {
+    connectionClosed = true;
+    finish(exit, "Codex App Server 输出流未正常收尾");
+  });
 
   const ready = opts.reattach ? Promise.resolve() : (async () => {
     await request("initialize", {
@@ -327,10 +391,16 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       capabilities: { experimentalApi: true, requestAttestation: false },
     });
     notify("initialized");
+    if (stopRequested) throw new Error("Codex 当前回合已停止");
+    if (opts.sessionId && await findArchivedRollout(opts.sessionId, opts.env?.CODEX_HOME)) {
+      await request("thread/unarchive", { threadId: opts.sessionId }, CODEX_ARCHIVE_TIMEOUT_MS);
+    }
+    if (stopRequested) throw new Error("Codex 当前回合已停止");
     const thread = opts.sessionId
       ? await request("thread/resume", threadParams(opts, { threadId: opts.sessionId }))
       : await request("thread/start", threadParams(opts));
     emitSession(thread.thread?.id ?? opts.sessionId ?? "");
+    if (stopRequested) throw new Error("Codex 当前回合已停止");
     const started = await request("turn/start", {
       threadId,
       input: textInput(opts.prompt),
@@ -346,8 +416,8 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   })();
   void ready.catch((error) => {
     finish(1, error instanceof Error ? error.message : String(error));
-    closeProcess();
   });
+  if (opts.reattach?.completedTurn) completeTurn(opts.reattach.completedTurn);
 
   let steerTail = Promise.resolve();
   const events = (async function* (): AsyncIterable<AgentEvent> {
@@ -370,7 +440,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     steer(text: string) {
       const operation = steerTail.then(async () => {
         await ready;
-        if (finished || stopRequested) throw new Error("Codex 当前回合已经结束");
+        if (finished || settling || stopRequested) throw new Error("Codex 当前回合已经结束");
         if (!threadId || !turnId) throw new Error("Codex App Server 重连后缺少当前 thread/turn 标识");
         const result = await request("turn/steer", {
           threadId,
@@ -383,7 +453,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       return operation;
     },
     kill() {
-      if (finished || stopRequested) return;
+      if (finished || settling || stopRequested) return;
       stopRequested = true;
       if (!threadId || !turnId) {
         killChild(child);
@@ -391,7 +461,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       }
       void request("turn/interrupt", { threadId, turnId }).catch(() => undefined);
       const timer = setTimeout(() => {
-        if (!finished) killChild(child);
+        if (!finished && !settling) killChild(child);
       }, 2_000);
       (timer as { unref?: () => void }).unref?.();
     },
@@ -432,23 +502,32 @@ const short = (value: unknown): string => {
 export function readCodexAppServerState(
   path: string,
   knownThreadId = "",
-): { threadId: string | null; turnId: string | null } {
+): { threadId: string | null; turnId: string | null; completedTurn?: { id: string; status: string; error?: unknown } } {
   let threadId: string | null = knownThreadId || null;
   let turnId: string | null = null;
+  let completedTurn: { id: string; status: string; error?: unknown } | undefined;
   let raw = "";
   try { raw = readFileSync(path, "utf8"); } catch { return { threadId, turnId }; }
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     let message: any;
     try { message = JSON.parse(line); } catch { continue; }
-    if (message.method === "thread/started" && typeof message.params?.thread?.id === "string") {
+    if (message.method === "thread/started" && !threadId && typeof message.params?.thread?.id === "string") {
       threadId = message.params.thread.id;
     } else if (message.method === "turn/started"
       && (!threadId || message.params?.threadId === threadId)
       && typeof message.params?.turn?.id === "string") {
       threadId = message.params?.threadId ?? threadId;
       turnId = message.params.turn.id;
+      completedTurn = undefined;
+    } else if (message.method === "turn/completed"
+      && message.params?.threadId === threadId
+      && typeof message.params?.turn?.id === "string"
+      && (!turnId || turnId === message.params.turn.id)
+      && typeof message.params.turn.status === "string") {
+      turnId = message.params.turn.id;
+      completedTurn = message.params.turn;
     }
   }
-  return { threadId, turnId };
+  return { threadId, turnId, ...(completedTurn ? { completedTurn } : {}) };
 }

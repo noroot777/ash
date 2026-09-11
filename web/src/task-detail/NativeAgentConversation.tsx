@@ -1,12 +1,12 @@
 import { useMemo, useRef } from "react";
-import { CaretDown, Robot } from "@phosphor-icons/react";
+import { Robot } from "@phosphor-icons/react";
 import { AgentTurnBody } from "../components/AgentTurnBody.tsx";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import type { NativeWorkItem } from "./nativeWorkModel.ts";
 import { nativeAgentSegments } from "./nativeAgentSegments.ts";
-import { NativeWorkMeta } from "./NativeWorkMeta.tsx";
+import { NativeWorkHeadline } from "./NativeWorkMeta.tsx";
 
 // 住在左侧抽屉里（见 components/SideDrawer.tsx）：返回列表靠抽屉自己那颗关闭按钮、
 // 点遮罩或 Esc —— 列表本来就一直在右侧 Inspector 里开着，这里不再重复一个「返回」。
@@ -23,17 +23,13 @@ export function NativeAgentConversation({ row, statusLabel, error, onRetry }: {
   return <div className="native-agent" aria-label="子智能体执行详情">
     <header className="native-agent__header">
       <div className="native-agent__heading"><span className="native-work__avatar"><Robot size={19} aria-hidden="true" /></span>
-        <div><strong>{row.title}</strong><small>{row.sessionLabel}</small></div>
+        <div><strong>{row.title}</strong><NativeWorkHeadline row={row} /></div>
       </div>
       <span className="native-work__status" data-status={row.status} role="status">{statusLabel}</span>
     </header>
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region native-agent__scroll-region">
         <div className="native-agent__conversation" ref={scroll} tabIndex={0} aria-label="子智能体会话内容">
-          <details className="native-agent__metadata">
-            <summary>模型与时间<CaretDown size={12} aria-hidden="true" /></summary>
-            <NativeWorkMeta row={row} />
-          </details>
           <div className="native-agent__section-label"><span>执行记录</span><span>{running ? "实时同步" : pending ? "等待开始" : "历史记录"}</span></div>
           {error && <p className="native-work__error" role="alert">{error.message} {onRetry && <button type="button" onClick={onRetry}>重试</button>}</p>}
           {row.description && <details className="native-agent__assignment"><summary>任务说明</summary><MarkdownBody text={row.description} /></details>}

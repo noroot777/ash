@@ -47,6 +47,7 @@ try {
   assert.equal(await card.locator(".native-work__times").isVisible(), true);
   assert.match(await card.locator(".native-work__times").innerText(), /开始时间[\s\S]*结束时间[\s\S]*尚未结束/);
   assert.equal(await card.locator("time").first().getAttribute("datetime"), "2026-09-08T00:00:01.000Z");
+  assert.match(await card.locator("time").first().innerText(), /^09\/08\s+08:00$/, "日期按 MM/DD HH:mm 显示，不带年份也不带秒");
   await timing.locator("summary").press("Space");
   assert.equal(await card.locator(".native-work__times").isVisible(), false, "可重新收起完整时间");
   const pending = page.locator('.native-work__entry[data-status="pending"]');
@@ -81,20 +82,21 @@ try {
   assert.ok(Math.abs(drawerBox.x - mainBox.x) <= 1, `抽屉应贴主区左缘：${JSON.stringify({ drawerBox, mainBox })}`);
   assert.ok(drawerBox.x + drawerBox.width <= mainBox.x + mainBox.width + 1, "抽屉不该盖到 Inspector 上");
   const conversation = page.getByLabel("子智能体执行详情", { exact: true });
-  const metadata = conversation.locator(".native-agent__metadata");
-  const metadataToggle = metadata.locator("summary");
   const header = conversation.locator(".native-agent__header");
-  assert.equal(await metadata.getAttribute("open"), null, "详情辅助信息默认收起");
-  assert.equal(await metadata.locator(".native-work__meta").isVisible(), false);
-  const headerHeight = (await header.boundingBox()).height;
-  await metadataToggle.press("Enter");
-  assert.equal(await metadata.locator(".native-work__meta").isVisible(), true, "键盘可以展开完整模型和时间");
-  assert.equal((await header.boundingBox()).height, headerHeight, "展开辅助信息不挤占固定头部");
-  await metadataToggle.press("Space");
-  assert.equal(await metadata.getAttribute("open"), null, "键盘可以收起辅助信息");
-  await metadataToggle.press("Enter");
-  assert.match(await conversation.locator(".native-work__model").innerText(), /gpt-5.6-sol/);
-  assert.match(await conversation.locator(".native-work__times").innerText(), /开始时间[\s\S]*结束时间/);
+  const headline = header.locator(".native-agent__headline");
+  // 模型与时间原本是正文顶上一块要点开的两列表格，现在顺着标题横向摊在抬头里。
+  assert.equal(await conversation.locator(".native-agent__metadata").count(), 0, "正文里不再有单独的「模型与时间」折叠区");
+  assert.equal(await conversation.locator(".native-work__meta").count(), 0, "抬头不复刻列表里那套两列表格");
+  // 跨度这里只验形状：运行中的项按真实时钟一直在走，写死「3天 6小时」会随日期自然失效。
+  // 具体文案由下面收工后那条（endedAt 固定）钉住。
+  assert.match(await headline.innerText(),
+    /codex@fixture\s*·\s*gpt-5\.6-sol\s*调用指定\s*·\s*09\/08 08:00 起\s*·\s*\d+\s*(?:天|小时|分|秒)/);
+  const headerBox = await header.boundingBox();
+  const headlineBox = await headline.boundingBox();
+  assert.ok(headlineBox.y >= headerBox.y - 1 && headlineBox.y + headlineBox.height <= headerBox.y + headerBox.height + 1,
+    `抬头那一条要落在固定抬头内：${JSON.stringify({ headerBox, headlineBox })}`);
+  // 横排的判据就是它只占一行：退回两列表格会立刻把这里撑高。
+  assert.ok(headlineBox.height <= 24, `抬头那一条应排成一行：${JSON.stringify(headlineBox)}`);
   await conversation.getByText("子智能体侧栏", { exact: true }).waitFor();
   await conversation.locator(".task-execution-block > summary").click();
   assert.match(await conversation.innerText(), /思考过程|分析/);
@@ -140,13 +142,9 @@ try {
   assert.equal(await page.locator(".native-work__title", { hasText: "运行中的资料搜集" }).locator("xpath=ancestor::details[1]").getAttribute("data-status"), "completed");
   await page.getByRole("button", { name: "查看执行：运行中的资料搜集", exact: true }).click();
   await conversation.getByText("刷新后仍应保留的完成结果", { exact: false }).waitFor();
-  assert.equal(await metadata.getAttribute("open"), null, "重新进入执行详情时收起辅助信息");
-  await metadataToggle.click();
-  assert.equal(await conversation.locator(".native-work__duration-value").innerText(), "8分 0秒");
-  assert.match(await conversation.locator(".native-work__duration").innerText(), /时间跨度/);
+  assert.match(await headline.innerText(), /09\/08 08:00–08:08\s*·\s*8分 0秒/, "收工后抬头给出完整区间和跨度");
   await page.clock.fastForward(60_000);
-  assert.equal(await conversation.locator(".native-work__duration-value").innerText(), "8分 0秒", "完成后跨度保持固定");
-  assert.equal(await conversation.locator("time").last().getAttribute("datetime"), "2026-09-08T00:08:01.000Z");
+  assert.match(await headline.innerText(), /8分 0秒/, "完成后跨度保持固定");
   assert.equal(await conversation.locator(".native-agent__live").count(), 0);
   await conversation.locator(".task-turn-process > summary").click();
   assert.match(await conversation.innerText(), /实时进展 1/);

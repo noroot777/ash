@@ -7,7 +7,7 @@ import { buildConversationItems, conversationToMarkdown } from "../src/task-deta
 import { taskDurationInfo } from "../src/task-detail/utils.ts";
 import { stickStateAfterScroll } from "../src/lib/useStickToBottom.ts";
 import { sharedTeamParent } from "../src/review/reviewModel.ts";
-import { gateAllowsRevision, isOpenDuetGate, runCreatedHandoffFollowUps, teamDuetIterationState } from "../src/duet/handoffPolicy.ts";
+import { gateAllowsRevision, isOpenDuetGate, runCreatedHandoffFollowUps } from "../src/duet/handoffPolicy.ts";
 import { emptyComposerExecutorConfigs, patchComposerExecutor, setComposerExecutorProfile } from "../src/composer/executorOverrides.ts";
 import { activeGroupTasks, resumeQueueModel } from "../src/settings/groupQueueModel.ts";
 import { leadTurns, teamFeedOptions } from "../src/team/teamModel.ts";
@@ -510,22 +510,6 @@ try {
   assert.equal(isOpenDuetGate(gate, "done"), false);
   assert.equal(gateAllowsRevision(), true);
   assert.equal(gateAllowsRevision({ id: "team-1" }), false);
-  const iterationOrigin = { id: "duet-1", mode: "duet" };
-  const iterationTeam = { id: "team-2", mode: "team", originTaskId: "duet-1", status: "idle" };
-  const settledWorker = { id: "worker-2", parentId: "team-2", status: "done", createdAt: "2026-07-30T01:00:00.000Z" };
-  assert.deepEqual(teamDuetIterationState(iterationTeam, [iterationOrigin, iterationTeam, settledWorker]), {
-    eligible: true,
-    existing: undefined,
-  });
-  const existingIteration = { id: "duet-2", mode: "duet", originTaskId: "team-2" };
-  assert.equal(
-    teamDuetIterationState(iterationTeam, [iterationOrigin, iterationTeam, settledWorker, existingIteration]).existing?.id,
-    "duet-2",
-  );
-  assert.equal(
-    teamDuetIterationState(iterationTeam, [iterationOrigin, iterationTeam, { ...settledWorker, status: "paused" }]).eligible,
-    false,
-  );
   const followUps = [];
   const failures = await runCreatedHandoffFollowUps({
     closeGate: async () => { followUps.push("gate"); throw new Error("gate failed"); },

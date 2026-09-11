@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { MagnifyingGlass, Plus, TerminalWindow, Trash } from "@phosphor-icons/react";
+import { MagnifyingGlass, Plus, Trash } from "@phosphor-icons/react";
 import type { ProjectView } from "@ash/shared";
-import { MAX_PREVIEW_SCRIPT_LENGTH, MAX_PREVIEW_SERVICES, parsePreviewConfig, previewProxyEnabled, withoutBlankServices, type ProjectPreviewConfig, type PreviewServiceConfig } from "@ash/shared/preview";
+import { MAX_PREVIEW_SERVICES, parsePreviewConfig, previewProxyEnabled, withoutBlankServices, type ProjectPreviewConfig, type PreviewServiceConfig } from "@ash/shared/preview";
 import { Button } from "../components/ui.tsx";
 import { useAuth } from "../auth/authContext.ts";
 import { useHostInfo } from "../lib/useHostInfo.ts";
 import { api } from "../lib/api.ts";
 import { createClientId } from "../lib/clientId.ts";
 import { ProjectPreviewHelp } from "./ProjectPreviewHelp.tsx";
+import { PreviewCommandEditor, usePreviewCommandWrapping } from "./PreviewCommandEditor.tsx";
 import "./project-preview.css";
 
 const emptyConfig = (): ProjectPreviewConfig => ({ mode: "script", proxy: "auto", services: [], primaryServiceId: null });
@@ -24,6 +25,7 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
   const canManage = project.myRole === "admin";
   const [config, setConfig] = useState<ProjectPreviewConfig>(() => loadConfig(project.previewConfig));
   const [script, setScript] = useState(project.previewCommand ?? "");
+  const [wrap, onWrapChange] = usePreviewCommandWrapping();
   const [saved, setSaved] = useState(() => JSON.stringify({ config: loadConfig(project.previewConfig), script: project.previewCommand ?? "" }));
   const [busy, setBusy] = useState(false);
   const [detecting, setDetecting] = useState(false);
@@ -87,7 +89,7 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
       </div>
     </div>
     {config.mode === "script" ? <>
-      <label className="settings-field preview-script-field"><span>启动脚本</span><ScriptEditor label="启动脚本" value={script} onChange={setScript} readOnly={!canManage || busy} rows={9} placeholder={`例如：\ncd web\nnpm run dev -- --port ${variable("PORT")}`} /></label>
+      <div className="settings-field preview-script-field"><span>启动脚本</span><PreviewCommandEditor label="启动脚本" value={script} onChange={setScript} readOnly={!canManage || busy} rows={9} wrap={wrap} onWrapChange={onWrapChange} placeholder={`例如：\ncd web\nnpm run dev -- --port ${variable("PORT")}`} /></div>
       <div className="preview-help preview-script-help">
         <small>支持多行、缩进和完整脚本，也可以调用仓库里的脚本文件。留空延续原来的行为：只在恰好识别出一个服务时自动使用。</small>
         <small>脚本在任务工作区根目录执行。主服务使用 <code>{variable("PORT")}</code>；脚本内的其它服务可使用 <code>{variable("PORT2")}</code>～<code>{variable("PORT5")}</code> 和对应的 <code>{variable("URL2")}</code>～<code>{variable("URL5")}</code>。</small>
@@ -116,8 +118,7 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
           <Button className="preview-service-remove" variant="ghost" disabled={!canManage || busy} aria-label={`移除 ${service.name}`} onClick={() => setConfig((current) => ({ ...current, services: current.services.filter((s) => s.id !== service.id), primaryServiceId: current.primaryServiceId === service.id ? null : current.primaryServiceId }))}><Trash size={14} aria-hidden="true" /></Button>
         </div>
         <div className="preview-service-command">
-          <TerminalWindow size={15} aria-hidden="true" />
-          <ScriptEditor label={`${service.name} 启动脚本`} value={service.command} onChange={(command) => patchService(service.id, { command })} readOnly={!canManage || busy} rows={Math.min(8, Math.max(1, service.command.split("\n").length))} placeholder="输入启动命令…" />
+          <PreviewCommandEditor label={`${service.name} 启动脚本`} value={service.command} onChange={(command) => patchService(service.id, { command })} readOnly={!canManage || busy} rows={Math.min(8, Math.max(2, service.command.split("\n").length))} wrap={wrap} onWrapChange={onWrapChange} placeholder="输入启动命令…" />
         </div>
       </div>)}</div>
       <div className="preview-help"><small>每条脚本都从任务工作区根目录独立执行，使用自己的 <code>{variable("PORT")}</code>。已选服务按列表顺序对应 <code>{variable("URL1")}</code>、<code>{variable("URL2")}</code>…，可传给前端开发服务器的接口代理配置。它们是服务端内部地址。</small></div>
@@ -136,17 +137,4 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
     {error && <p className="preview-settings-error" role="alert">{error}</p>}
     {canManage && <div className="settings-card-foot"><span>保存后对下次打开的预览生效。运行状态和输出可在任务的预览日志里查看。</span><Button variant="primary" disabled={!dirty || busy || detecting} onClick={() => void save()}>{busy ? "保存中…" : "保存预览设置"}</Button></div>}
   </div></section>;
-}
-
-function ScriptEditor({ label, value, onChange, readOnly, rows, placeholder }: {
-  label: string; value: string; onChange: (value: string) => void; readOnly: boolean; rows: number; placeholder?: string;
-}) {
-  return <textarea className="preview-script-editor mono" aria-label={label} value={value} rows={rows} readOnly={readOnly} placeholder={placeholder} spellCheck={false} wrap="off" maxLength={MAX_PREVIEW_SCRIPT_LENGTH} onChange={(e) => onChange(e.target.value)} onKeyDown={(e) => {
-    if (e.key !== "Tab" || e.shiftKey || readOnly) return;
-    e.preventDefault();
-    const field = e.currentTarget;
-    const start = field.selectionStart;
-    onChange(value.slice(0, start) + "  " + value.slice(field.selectionEnd));
-    requestAnimationFrame(() => field.setSelectionRange(start + 2, start + 2));
-  }} />;
 }

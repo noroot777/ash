@@ -83,6 +83,7 @@ rl.on('line', (line) => {
   const message = JSON.parse(line);
   if (message.method === 'initialize') send({ id: message.id, result: {} });
   if (message.method === 'thread/start') send({ id: message.id, result: { thread: { id: 'main' } } });
+  if (message.method === 'thread/archive') send({ id: message.id, result: {} });
   if (message.method === 'turn/start') {
     send({ id: message.id, result: { turn: { id: 'turn' } } });
     for (let index = 0; index < 2000; index++) send({ method: 'item/agentMessage/delta', params: { threadId: 'child', itemId: 'msg', delta: 'word' } });

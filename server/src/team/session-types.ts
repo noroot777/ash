@@ -19,7 +19,7 @@ export interface Lead {
   busy: boolean;
   turnStart: string | null;
   pending: PendingInbound[];
-  notices: { text: string; at: string }[];
+  notices: { text: string; at: string; level?: "notice" }[];
   pendingCredential: ({ cliSessionId: string } & ResumeFields) | null;
   wantedStatus: "running" | "idle" | null;
   statusTimer: NodeJS.Timeout | null;

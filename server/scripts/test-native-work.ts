@@ -153,6 +153,7 @@ const send = (m) => process.stdout.write(JSON.stringify(m) + '\\n');
 rl.on('line', (line) => {
   const m = JSON.parse(line);
   if (m.method === 'initialize') send({ id: m.id, result: {} });
+  if (m.method === 'thread/archive') send({ id: m.id, result: {} });
   if (m.method === 'thread/start') send({ id: m.id, result: { thread: { id: 'main' } } });
   if (m.method === 'turn/start') {
     send({ id: m.id, result: { turn: { id: 'turn' } } });

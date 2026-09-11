@@ -47,7 +47,6 @@ import { TeamAttentionBar } from "./TeamAttentionBar.tsx";
 import { TeamHeader } from "./TeamHeader.tsx";
 import { TEAM_INSPECTORS, type TeamInspectorContext } from "./TeamInspector.tsx";
 import { TeamReviewWorkspace } from "./TeamReviewWorkspace.tsx";
-import { teamDuetIterationState } from "../duet/handoffPolicy.ts";
 import { activeTeamHaltMarker, leadTurns, teamFeedOptions } from "./teamModel.ts";
 import { useWorkerLiveLines } from "./workerLiveLines.ts";
 
@@ -341,7 +340,6 @@ export function TeamView({
   const [busy, setBusy] = useState(false);
   // 「这一轮会换执行器」的确认闸(§八);对话框住在 App 层。
   const confirmExecutorSwap = useExecutorGate();
-  const [iterateBusy, setIterateBusy] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [localHalted, setLocalHalted] = useState(false);
   const [cuaStatus, setCuaStatus] = useState<TeamCuaStatus | null>(null);
@@ -423,7 +421,6 @@ export function TeamView({
   useEffect(() => {
     setSelectedWorkerId(null);
     setReviewOpen(initialReviewOpen);
-    setIterateBusy(false);
     setDeleteOpen(false);
     setLocalHalted(false);
     setCuaStatus(null);
@@ -472,39 +469,6 @@ export function TeamView({
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusy(false);
-    }
-  };
-  const iterateDuet = async () => {
-    const iteration = teamDuetIterationState(task, allTasks);
-    if (!iteration.eligible) return;
-    if (iteration.existing) {
-      onSelectTask(iteration.existing);
-      return;
-    }
-    if (iterateBusy) return;
-    setIterateBusy(true);
-    try {
-      let target = await api.iterateTeamDuet(task.id);
-      onTaskUpdate(target);
-      if (target.status === "backlog") {
-        try {
-          await api.runTask(target.id);
-          notify("已创建新一轮讨论并开跑");
-          try {
-            target = await api.task(target.id);
-            onTaskUpdate(target);
-          } catch { /* task.status 事件仍会刷新列表 */ }
-        } catch (reason) {
-          notify(`新一轮讨论已创建，但启动失败：${reason instanceof Error ? reason.message : String(reason)}`);
-        }
-      } else {
-        notify("已打开这个团队现有的下一轮讨论");
-      }
-      onSelectTask(target);
-    } catch (reason) {
-      notify(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setIterateBusy(false);
     }
   };
   const askLead = async (worker: TaskListItem) => {
@@ -565,13 +529,11 @@ export function TeamView({
       <OriginTaskBar task={task} allTasks={allTasks} onOpen={openTaskById} />
       <TeamHeader
         task={task}
-        allTasks={allTasks}
         workers={workers}
         groups={teamGroups}
         haltedByHistory={teamGroups.length === 0 && (historyHalt || localHalted)}
         conversationMarkdown={markdown}
         busy={busy}
-        iterateBusy={iterateBusy}
         reviewOpen={reviewOpen}
         onTitle={async (title) => onTaskUpdate(await api.patchTask(task.id, { title, autoTitle: false }))}
         onTogglePin={async () => onTaskUpdate(await api.patchTask(task.id, { pinnedAt: task.pinnedAt != null ? null : Date.now() }))}
@@ -579,7 +541,6 @@ export function TeamView({
         onRun={() => void perform("run")}
         onHalt={() => void perform("halt")}
         onResume={() => void perform("resume")}
-        onIterateDuet={() => void iterateDuet()}
         onArchive={() => void perform("archive")}
         onDelete={() => setDeleteOpen(true)}
         indicatorForTask={indicatorForTask}

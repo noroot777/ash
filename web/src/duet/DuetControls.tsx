@@ -12,24 +12,18 @@ export function DuetGateControls({
   maxRounds,
   busy,
   linkedTeams,
-  allTasks,
-  iterationBusyId,
   onGate,
   onOpenTeam,
   onOpenTask,
-  onIterateTeam,
 }: {
   gate: DuetGate;
   round: number;
   maxRounds: number | null;
   busy: boolean;
   linkedTeams: TaskListItem[];
-  allTasks: TaskListItem[];
-  iterationBusyId?: string | null;
   onGate: (action: GateAction) => Promise<void>;
   onOpenTeam: () => void;
   onOpenTask: (task: TaskListItem) => void;
-  onIterateTeam: (team: TaskListItem) => void;
 }) {
   const [mode, setMode] = useState<"inject" | "ask" | null>(null);
   const [text, setText] = useState("");
@@ -76,12 +70,9 @@ export function DuetGateControls({
       <div className="duet-control-actions">
         <DuetHandoffBar
           linkedTeams={linkedTeams}
-          allTasks={allTasks}
           busy={busy}
-          iterationBusyId={iterationBusyId}
           onOpenTeam={onOpenTeam}
           onOpenTask={onOpenTask}
-          onIterateTeam={onIterateTeam}
         />
         <button type="button" className="is-approve" disabled={busy || !!hold} onClick={() => void onGate({ kind: "approve" })}>{handedOff ? "结束讨论" : "放行结束"}</button>
         {!handedOff && <>

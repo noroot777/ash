@@ -75,21 +75,18 @@
 .native-work__error { margin-bottom: 12px; color: var(--red); }
 .native-work__error button { margin-left: 6px; text-decoration: underline; }
 .native-agent { display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--ink); }
-.native-agent__header { display: grid; flex-shrink: 0; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 6px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
-.native-agent__heading { display: flex; align-items: flex-start; gap: 9px; min-width: 0; }
+.native-agent__header { display: flex; flex-shrink: 0; align-items: flex-start; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.native-agent__heading { display: flex; flex: 1 1 auto; align-items: flex-start; gap: 9px; min-width: 0; }
 .native-agent__heading > div { min-width: 0; }
 .native-agent__heading strong { display: block; font-size: 13px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
-.native-agent__heading small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
-.native-agent__header > .native-work__status { margin-top: 2px; }
+/* 来源会话 · 模型 · 时间 · 跨度顺着标题横向摊开：普通文本流，窄了就自然折行。 */
+.native-agent__headline { margin: 5px 0 0; color: var(--muted); font-size: 10px; line-height: 1.7; overflow-wrap: anywhere; }
+.native-agent__headline-dot { margin: 0 7px; color: var(--faint); }
+.native-agent__headline small { margin-left: 5px; font-size: 9px; }
+.native-agent__headline-time { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.native-agent__header > .native-work__status { flex: 0 0 auto; margin-top: 2px; }
 .native-agent__scroll-region { flex: 1; min-height: 0; }
 .native-agent__conversation { height: 100%; overflow: auto; padding: 16px 14px 48px; overflow-wrap: anywhere; font-size: 12px; }
-.native-agent__metadata { margin-bottom: 14px; color: var(--muted); font-size: 10px; }
-.native-agent__metadata > summary { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 3px 0; cursor: pointer; list-style: none; }
-.native-agent__metadata > summary::-webkit-details-marker { display: none; }
-.native-agent__metadata > summary:hover { color: var(--ink); }
-.native-agent__metadata > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
-.native-agent__metadata[open] > summary svg { transform: rotate(180deg); }
-.native-agent__metadata > .native-work__meta { margin: 4px 0 0; padding: 4px 0 0; border: 0; }
 .native-agent__section-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 16px; color: var(--muted); font-size: 10px; }
 .native-agent__section-label > span:first-child { color: var(--ink); font-weight: 550; }
 .native-agent__assignment { margin-bottom: 16px; border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; background: var(--panel); color: var(--muted); }

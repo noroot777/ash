@@ -150,3 +150,13 @@ P1 / P2 / L1：采用报告建议的独立模型判定方案，删除自然语�
 `git diff --check` 与本轮全部修改、新增代码文件不超过 700 行的检查通过。
 
 64 KiB 快照限制及取舍继续保留，见上方第 2、3 轮说明。
+
+### 验收合并冲突修复
+
+在任务分支 `ash/k8Nr25lD` 合入 `main`（`a4b54c80`）。唯一冲突为 `web/package.json` 的前端全量测试清单，合并后同时保留本任务的 `test:side-chat` / `test:conversation-fork` 与 main 的 `test:preview-workspace`；核对双方所有测试入口和新增依赖均保留。自动合并的 `server/package.json` 与 `TaskDetail.tsx` 也已复核，侧聊/派生入口及审查续跑提示均在。目标分支未修改。
+
+首次构建因工作目录尚未安装 main 新增的 CodeMirror 依赖而失败；按现有锁文件补齐依赖后完整构建通过，锁文件没有额外变化。后端 `test:chat`、`test:scheduled-messages` 均通过。
+
+浏览器通道：Chrome 扩展具名后台会话「🔎 ash 合并冲突验证」返回 `unsupported Codex auth method: apikey`，随后使用独立临时 profile、`headless: true` 的 Chrome。未激活、接管或直连用户普通标签，未启动有头浏览器。侧聊 HTTP/SSE 与回复派生页面回归通过，投递使用隔离 fixture 和模拟模型，未向真实主任务发消息。
+
+合并后的 `npm run test:web` 完整运行 exit 0，包含侧聊、回复派生、main 新增的预览工作区/命令编辑器/会话分段，以及验收、任务来源和项目 Git 生命周期回归。双向差异检查确认双方独立修改完整保留；`git diff --check` 通过，合入代码文件最多 679 行。日志和侧聊/派生截图保存在 `data/runs/k8Nr25lD-XnW/acceptance-merge-a4b54c80/`，其中 `build.log` 保留首次缺依赖的失败记录，`build-final.log`、`test-web.log`、`test-chat.log`、`test-scheduled.log` 为最终通过记录。
