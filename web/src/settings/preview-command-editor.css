@@ -1,0 +1,25 @@
+.preview-command-editor { flex: 1; min-width: 0; width: 100%; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); color: var(--ink); }
+.preview-command-editor:has(.cm-focused) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.preview-command-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; min-height: 32px; padding: 5px 10px; border-bottom: 1px solid var(--line); background: var(--raised); color: var(--muted); font-size: 11px; }
+.preview-command-toolbar > span { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); }
+.preview-command-toolbar > span > span { font-family: var(--font-sans); color: var(--faint); }
+.preview-command-toolbar label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap; }
+.preview-command-toolbar input[type="checkbox"] { flex: none; width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
+.preview-command-toolbar label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+.preview-command-surface { min-width: 0; }
+.preview-command-editor .cm-editor { background: var(--canvas); font-size: 13px; }
+.preview-command-editor .cm-editor.cm-focused { outline: none; }
+.preview-command-editor .cm-scroller { min-height: var(--command-editor-min-height); max-height: 360px; overflow: auto; font-family: var(--font-mono); line-height: 21px; }
+.preview-command-editor .cm-content { padding: 8px 0; caret-color: var(--ink); }
+.preview-command-editor .cm-line { padding: 0 12px; }
+.preview-command-editor .cm-gutters { border-right: 1px solid var(--line); background: var(--raised); color: var(--faint); }
+.preview-command-editor .cm-lineNumbers .cm-gutterElement { min-width: 34px; padding: 0 8px; }
+.preview-command-editor .cm-activeLine, .preview-command-editor .cm-activeLineGutter { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.preview-command-editor .cm-activeLineGutter { color: var(--muted); }
+.preview-command-editor .cm-cursor { border-left-color: var(--ink); }
+.preview-command-editor .cm-selectionBackground, .preview-command-editor .cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground { background: var(--accent-soft); }
+.preview-command-editor .cm-placeholder { color: var(--faint); }
+.preview-command-editor .cm-matchingBracket { background: var(--accent-soft); outline: 1px solid var(--accent); }
+.preview-command-hint, .preview-command-limit { padding: 4px 10px; border-top: 1px solid var(--line); color: var(--faint); font-size: 10px; line-height: 1.6; }
+.preview-command-limit { color: var(--red); }
+.preview-command-editor[data-readonly] .cm-activeLine, .preview-command-editor[data-readonly] .cm-activeLineGutter { background: transparent; }
