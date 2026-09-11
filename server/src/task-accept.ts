@@ -30,6 +30,8 @@ import { branchDependency, branchOwner, commitAt, dependentTasks, plannedMergeTa
 import { resolveWorktreeBranchName } from "./git.js";
 import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
 import { beginAccepting, endAccepting } from "./acceptance-lock.js";
+import { unexecutedVerification } from "./task-accept-verification.js";
+import type { UnexecutedVerification } from "@ash/shared/workflow-policy";
 
 type AcceptSuccess = {
   accepted: true;
@@ -48,6 +50,7 @@ type AcceptSuccess = {
   branch?: string;
   branchDeleted?: boolean;
   warnings?: AcceptWarning[];
+  verification?: UnexecutedVerification;
   /**
    * 「点头之后」那一段（发布脚本之类）跑得怎么样。线上没写这一段就没有这个字段。
    *
@@ -119,7 +122,7 @@ async function acceptWithoutCleanup(
   };
 }
 
-async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptTaskResult> {
+async function acceptTaskUnlocked(taskId: string, by: AcceptBy, confirmUnverified: boolean): Promise<AcceptTaskResult> {
   const requestedTask = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!requestedTask) {
     return { accepted: false, httpStatus: 404, taskId, reason: "not_found", error: "not found", phase: "initial" };
@@ -218,6 +221,7 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   // 线接着往下走（往下走那一步在锁外跑，见 acceptTask）。
   // 判定单点在 shared 的 isFinalHumanGate；前端确认框读同一个判定，措辞跟着变。
   const gateDef = taskWorkflowDef(task.workflow);
+  const verification = await unexecutedVerification(task);
   if (!isFinalHumanGate(gateDef, task.workflowAt)) {
     const guard = await acceptanceGuard(taskId, "before_accept");
     if (guard.failure) return guard.failure;
@@ -228,7 +232,19 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
       `你在这一道「等我点头」放行了：${where}，所以没有合并、也没有清理，接着往下走。`,
     );
     await publishTaskUpdated(taskId);
-    return { accepted: true, taskId, status: task.status, stage: null, kind: "gate_released" };
+    return { accepted: true, taskId, status: task.status, stage: null, kind: "gate_released", ...(verification ? { verification } : {}) };
+  }
+
+  if (verification) {
+    if (!confirmUnverified) {
+      await appendTaskTimeline(taskId, `${verification.message} 本次验收未执行，需明确确认仍要验收。`);
+      return {
+        accepted: false, httpStatus: 409, taskId, reason: verification.reason,
+        error: `${verification.message} 如已知情并决定继续，请传 confirmUnverified: true。`,
+        verification, confirmationRequired: "confirmUnverified", phase: "before_accept",
+      };
+    }
+    await appendTaskTimeline(taskId, `${verification.message} 本次验收已显式确认继续，未将验证记为已执行或通过。`);
   }
 
   // A task that deliberately ran in the project's existing checkout has no
@@ -557,7 +573,7 @@ async function acceptanceContext(taskId: string): Promise<{
 export async function acceptTask(
   taskId: string,
   by: AcceptBy = "human",
-  advanceOpts: WorkflowAdvanceOptions = {},
+  advanceOpts: WorkflowAdvanceOptions & { confirmUnverified?: boolean } = {},
 ): Promise<AcceptTaskResult> {
   // 预览实例：库是主库的快照，任务行指的却是真分支、真 worktree。走结构化拒绝而不是抛
   // 异常，UI 才能把这句话原样显示在验收按钮旁边（见 preview-instance.ts）。
@@ -604,7 +620,7 @@ export async function acceptTask(
               `验收排队：同一仓库有其它验收/worktree 操作正在执行，已等待 ${(wait.waitedMs / 1000).toFixed(1)}s 后开始本次验收。`,
             );
           }
-          return acceptTaskUnlocked(taskId, by);
+          return acceptTaskUnlocked(taskId, by, advanceOpts.confirmUnverified === true);
         });
       }
     } finally {
@@ -647,8 +663,14 @@ export async function acceptTask(
 
 export function mountTaskAcceptanceRoutes(api: Hono): void {
   mountBranchPlanRoutes(api, acceptTask);
+  api.get("/tasks/:id/acceptance-check", async c => {
+    const task = (await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
+    if (!task) return c.json({ error: "not found" }, 404);
+    return c.json({ verification: await unexecutedVerification(task) });
+  });
   api.post("/tasks/:id/accept", async (c) => {
-    const result = await acceptTask(c.req.param("id"));
+    const input = await c.req.json<{ confirmUnverified?: unknown }>().catch(() => null);
+    const result = await acceptTask(c.req.param("id"), "human", { confirmUnverified: input?.confirmUnverified === true });
     if (result.accepted) return c.json(result);
     const { httpStatus, ...body } = result;
     return httpStatus === 404 ? c.json(body, 404) : c.json(body, 409);

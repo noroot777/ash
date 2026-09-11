@@ -51,6 +51,20 @@ const str = (v: unknown, max: number): v is string => typeof v === "string" && v
 const key = (v: unknown): v is string => str(v, 160) && /^[\w-]+$/.test(v);
 const time = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v > 0 && v < 1e15;
 
+function sameValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) return Array.isArray(left) && Array.isArray(right)
+    && left.length === right.length && left.every((value, index) => sameValue(value, right[index]));
+  if (!object(left) || !object(right)) return false;
+  const keys = Object.keys(left).filter((key) => left[key] !== undefined);
+  const otherKeys = Object.keys(right).filter((key) => right[key] !== undefined);
+  return keys.length === otherKeys.length && keys.every((key) => Object.hasOwn(right, key) && sameValue(left[key], right[key]));
+}
+
+export function sameAnnotationBatch(left: AnnotationBatch | null | undefined, right: AnnotationBatch | null | undefined): boolean {
+  return sameValue(left, right);
+}
+
 export function stripPreviewCredentials(value: string): string {
   return value.replace(/(?:https?:\/\/[^\s/"'<>]+)?\/preview\/[^/\s]+\/[^/\s]+\/[^/\s]+\//gi, "/")
     .replace(/\b[a-f0-9]{48}\b/gi, "[preview credential removed]");

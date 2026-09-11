@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PREVIEW_ANNOTATION_PROTOCOL } from "@ash/shared/page-annotation";
-import type { PreviewAnnotationCommand, PreviewAnnotationEvent, PreviewAnnotationHandshake, PreviewAnnotationMode, PreviewAnnotationTool } from "@ash/shared/page-annotation";
+import type { PreviewAnnotationCommand, PreviewAnnotationHandshake, PreviewAnnotationMode, PreviewAnnotationTool } from "@ash/shared/page-annotation";
 import { createClientId } from "../lib/clientId.ts";
-import { parsePreviewMessage } from "./previewMessages.ts";
+import { parsePreviewMessage, type WorkspaceAnnotationEvent } from "./previewMessages.ts";
 
 type Phase = "connecting" | "ready" | "switching" | "failed";
-export function usePreviewChannel(source: string | null, nextNumber: number, receive: (event: PreviewAnnotationEvent, documentId: string) => void) {
+export function usePreviewChannel(source: string | null, nextNumber: number, receive: (event: WorkspaceAnnotationEvent, documentId: string) => void) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const portRef = useRef<MessagePort | null>(null);
   const receiveRef = useRef(receive);
@@ -69,7 +69,7 @@ export function usePreviewChannel(source: string | null, nextNumber: number, rec
   }, [close, source]);
 
   const send = (command: PreviewAnnotationCommand) => {
-    if (phase !== "ready" || !portRef.current) return;
+    if (!portRef.current || (phase !== "ready" && command.type !== "remove")) return;
     if (command.type === "configure") { pending.current = Date.now(); setPhase("switching"); }
     portRef.current.postMessage(command);
   };

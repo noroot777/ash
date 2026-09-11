@@ -16,6 +16,7 @@ import { ReviewDiffViewer } from "../review/ReviewDiffViewer.tsx";
 import { DispatchReviewEvidence } from "./ReviewEvidence.tsx";
 import { BranchAcceptancePanel } from "../review/BranchAcceptancePanel.tsx";
 import { useBranchPlan } from "../review/useBranchPlan.ts";
+import { UnexecutedVerificationNotice, useAcceptanceVerification } from "../review/UnexecutedVerificationNotice.tsx";
 
 type ReviewData = {
   commits: TaskCommit[];
@@ -138,6 +139,8 @@ export function AcceptanceControls({
       dependency.state === "needs_update" ? "需更新子分支基线" : dependency.state === "waiting" ? "等待父成果合入" : "父成果依赖待处理";
   }
   const [action, setAction] = useState<"accept" | "return" | null>(null);
+  const verification = useAcceptanceVerification(task, action === "accept");
+  const needsVerificationConfirmation = !midGate && !!verification.verification;
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState(false);
   const confirmExecutorSwap = useExecutorGate();
@@ -164,15 +167,22 @@ export function AcceptanceControls({
   };
   const accept = async () => {
     if (checkingDependencies || acceptanceBlock || archived || inFlight || busy) return;
+    if (verification.loading || verification.error || (needsVerificationConfirmation && !verification.acknowledged)) return;
     // The confirmation is single-use. Keep progress on the action button so a
     // typed acceptance failure can render unobscured in the review record.
     setAction(null);
     setBusy(true);
     setFailure(null);
     try {
-      const result = await api.acceptTask(task.id);
+      const result = await api.acceptTask(task.id, needsVerificationConfirmation && verification.acknowledged);
       if (!result.accepted) {
         setFailure(result);
+        if (result.confirmationRequired === "confirmUnverified") {
+          verification.setAcknowledged(false);
+          await refreshAfterMutation();
+          setAction("accept");
+          return;
+        }
         const handedOff = result.reason === "merge_conflict" && result.conflictHandoff?.notified === true;
         notify(handedOff
           ? "合并冲突已交给任务处理"
@@ -241,18 +251,23 @@ export function AcceptanceControls({
         )}
       </div>
       {failure && <AcceptanceFailureNotice failure={failure} />}
+      {verification.verification && action !== "accept" && <UnexecutedVerificationNotice verification={verification.verification} continuing={midGate} />}
       {action === "accept" && (
         <ConfirmDialog
           title={midGate ? "放行这一关？" : "确认验收通过？"}
           message={midGate ? acceptanceMessage(task) : task.useWorktree ? `${acceptanceMessage(task)} 已执行的合并和删除不可逆。` : acceptanceMessage(task)}
-          confirmLabel={midGate ? "放行" : "验收通过"}
+          confirmLabel={midGate ? "放行" : needsVerificationConfirmation ? "知情并验收" : "验收通过"}
           danger={!midGate && !!task.useWorktree}
           busy={busy}
-          confirmDisabled={checkingDependencies || !!acceptanceBlock || archived || inFlight}
+          confirmDisabled={checkingDependencies || !!acceptanceBlock || archived || inFlight || verification.loading || !!verification.error || (needsVerificationConfirmation && !verification.acknowledged)}
           onConfirm={() => void accept()}
           onClose={() => setAction(null)}
         >
           {checkingDependencies && <p role="status">正在更新验收依赖，检查完成后可继续确认。</p>}
+          {verification.loading && <p role="status">正在核对独立验证执行记录…</p>}
+          {verification.error && <p role="alert">验证执行记录读取失败：{verification.error}。请关闭后重试。</p>}
+          {verification.verification && <UnexecutedVerificationNotice verification={verification.verification} continuing={midGate}
+            checked={verification.acknowledged} onChange={midGate ? undefined : verification.setAcknowledged} />}
         </ConfirmDialog>
       )}
       {action === "return" && (

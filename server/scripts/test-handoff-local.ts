@@ -28,6 +28,8 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
+import { makeStep } from "@ash/shared/workflow";
+import type { HandoffManifest } from "../src/handoff-types.js";
 import { makeRepo } from "./handoff-test-utils.js";
 import { releaseTmpDb } from "./tmp-db.js";
 
@@ -396,6 +398,7 @@ try {
   const pingGate = new Promise<void>((r) => { releasePing = r; });
   let pingSeen!: () => void;
   const pingArrived = new Promise<void>((r) => { pingSeen = r; });
+  const manifests: HandoffManifest[] = [];
   const peer = createServer((req, res) => {
     res.setHeader("content-type", "application/json");
     if (req.method === "GET" && req.url?.startsWith("/api/handoff/ping")) {
@@ -419,8 +422,12 @@ try {
       return;
     }
     if (req.method === "POST" && req.url === "/api/handoff/import") {
-      req.resume();
-      req.on("end", () => res.end(JSON.stringify({ ok: true, taskId: "fake-remote-01", autoResume: false, notes: [] })));
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        manifests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as HandoffManifest);
+        res.end(JSON.stringify({ ok: true, taskId: "fake-remote-01", autoResume: false, notes: [] }));
+      });
       return;
     }
     res.statusCode = 404;
@@ -532,6 +539,63 @@ try {
       winProbe.suggestedProjectId, "p-win",
       "对端 Windows 路径(D:\\dst-side\\acme)的同名仓库应被自动匹配",
     );
+
+    // 两站都已执行，最后一站的局部轮数不能代替前一站的持久历史。
+    const verifySourceId = "handoff-verify-source";
+    const completedSteps = JSON.stringify(["v1", "v2"]);
+    const workflow = JSON.stringify({ workspace: "isolated", steps: [
+      makeStep("run", "run"), makeStep("verify", "v1"), makeStep("human", "h1"),
+      makeStep("verify", "v2"), makeStep("human", "h2"),
+    ] });
+    await db.insert(tasks).values({
+      id: verifySourceId, projectId, title: "多站验证历史接力", body: "已执行全部验证站",
+      mode: "single", status: "done", stage: "awaiting_acceptance", useWorktree: false,
+      workflow, workflowMode: "workflow", workflowAt: "h2", reviewStep: "v2",
+      verifyRounds: 9, verifyStationRounds: 3, verifyCompletedSteps: completedSteps,
+      createdAt: qTs, updatedAt: qTs,
+    });
+    assert.equal((await exportHandoff(verifySourceId, {
+      targetUrl: `http://127.0.0.1:${peerPort}`, targetProjectId: "p-dst", autoResume: false,
+    })).ok, true);
+    const exportedManifest = manifests.find((m) => m.task.id === verifySourceId)!;
+    assert.ok(exportedManifest, "捕获实际通过 HTTP 发出的接力 manifest");
+    assert.equal(exportedManifest.task.verifyCompletedSteps, completedSteps, "导出完整保留两站执行历史");
+
+    const { mountTaskAcceptanceRoutes } = await import("../src/task-accept.js");
+    const acceptanceApi = new Hono();
+    mountTaskAcceptanceRoutes(acceptanceApi);
+    for (const scenario of ["complete", "legacy", "empty", "malformed"] as const) {
+      // 单库夹具用不同 id 表示目标机副本；其余任务字段来自实际导出的载荷。
+      const manifest = structuredClone(exportedManifest);
+      const importedId = `handoff-verify-${scenario}`;
+      manifest.targetProjectId = projectId;
+      manifest.task.id = importedId;
+      manifest.transferId = `transfer-verify-${scenario}`;
+      if (scenario === "legacy") delete manifest.task.verifyCompletedSteps;
+      if (scenario === "empty") manifest.task.verifyCompletedSteps = "[]";
+      if (scenario === "malformed") manifest.task.verifyCompletedSteps = "[invalid";
+      assert.equal((await importHandoff(manifest)).ok, true);
+      const imported = (await db.select().from(tasks).where(eq(tasks.id, importedId))).at(0)!;
+      assert.equal(imported.verifyCompletedSteps, scenario === "complete" ? completedSteps : "[]");
+      assert.equal(imported.workflow, workflow);
+      assert.equal(imported.workflowAt, "h2");
+      assert.equal(imported.stage, "awaiting_acceptance");
+      assert.equal(imported.verifyRounds, 9);
+      assert.equal(imported.reviewStep, "v2");
+      assert.equal(imported.verifyStationRounds, 3);
+      const check = await acceptanceApi.request(`/tasks/${importedId}/acceptance-check`);
+      assert.equal(check.status, 200);
+      const { verification } = await check.json();
+      if (scenario === "complete") {
+        assert.equal(verification, null, "两站历史接力导入后，验收无缺失、无需额外知情确认");
+      } else {
+        assert.deepEqual(verification.stepIds, ["v1"], "缺执行历史时不按总轮数推断前站已执行");
+        const response = await acceptanceApi.request(`/tasks/${importedId}/accept`, { method: "POST" });
+        assert.equal(response.status, 409);
+        assert.equal((await response.json()).confirmationRequired, "confirmUnverified");
+      }
+    }
+    console.log("handoff verification: exported history preserved, complete acceptance null, legacy/empty/malformed confirmation passed");
   } finally {
     await new Promise<void>((r) => peer.close(() => r()));
   }

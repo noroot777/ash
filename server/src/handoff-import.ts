@@ -351,6 +351,7 @@ async function importValidated(
     reviewStep: m.task.reviewStep,
     verifyRounds: m.task.verifyRounds ?? 0,
     verifyStationRounds: m.task.verifyStationRounds ?? 0,
+    verifyCompletedSteps: jsonOr(m.task.verifyCompletedSteps, "[]"),
     resumePrompt,
     question: m.task.question,
     questionOptions: jsonOr(m.task.questionOptions, "") || null,

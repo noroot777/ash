@@ -485,6 +485,7 @@ export async function exportHandoff(
           creationOrigin: task.creationOrigin,
           workflow: task.workflow, workflowMode: task.workflowMode, workflowAt: task.workflowAt,
           reviewStep: task.reviewStep, verifyRounds: task.verifyRounds, verifyStationRounds: task.verifyStationRounds,
+          verifyCompletedSteps: task.verifyCompletedSteps,
           resumePrompt: task.resumePrompt, question: task.question,
           questionOptions: task.questionOptions, questionItems: task.questionItems,
           questionHistory: task.questionHistory,

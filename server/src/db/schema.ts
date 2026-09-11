@@ -121,6 +121,8 @@ export const tasks = sqliteTable("tasks", {
   // verify_round 非空 = 此刻正在跑第几轮验证（结算时清空）；verify_rounds = 已经跑完几轮。
   verifyRound: integer("verify_round"),
   verifyRounds: integer("verify_rounds").notNull().default(0),
+  // 已执行的验证站 id；换站后仍保留，验收据此逐站检查遗漏。
+  verifyCompletedSteps: text("verify_completed_steps").notNull().default("[]"),
   // 这一站（review_step）已经就地验过几轮。轮数上限按站算，而就地验证轮没有独立任务
   // 行可数，所以自己记一个：开新一轮时发现换站了就归零。
   verifyStationRounds: integer("verify_station_rounds").notNull().default(0),

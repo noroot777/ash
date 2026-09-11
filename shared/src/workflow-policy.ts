@@ -12,6 +12,12 @@ import type { AcceptClean, AcceptStrategy, WorkflowDef, WorkflowStep } from "./w
 
 export type VerifyStep = Extract<WorkflowStep, { kind: "verify" }>;
 
+export type UnexecutedVerification = {
+  reason: "verify_not_run";
+  message: string;
+  stepIds: string[];
+};
+
 /** 老任务（创建于工作流之前，身上没有线）沿用的自动复审上限。 */
 export const LEGACY_AUTO_REVIEW_ROUNDS = 2;
 

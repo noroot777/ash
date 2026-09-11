@@ -8,6 +8,7 @@ import { MergeTargetEditor } from "./MergeTargetEditor.tsx";
 import { useBranchPlan } from "./useBranchPlan.ts";
 import { ReleaseWorkspaceControl } from "./ReleaseWorkspaceControl.tsx";
 import { BaseUpdateRecoveryControl } from "./BaseUpdateRecoveryControl.tsx";
+import { UnexecutedVerificationNotice } from "./UnexecutedVerificationNotice.tsx";
 
 const taskHref = (projectId: string, taskId: string) => `/?${new URLSearchParams({ project: projectId, task: taskId })}`;
 
@@ -18,6 +19,7 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
   const [message, setMessage] = useState("");
   const [checked, setChecked] = useState<string[]>([]);
   const [proposal, setProposal] = useState<BranchPlanView | null>(null);
+  const [confirmUnverified, setConfirmUnverified] = useState(false);
   useEffect(() => { setChecked([]); setAction(null); setMessage(""); }, [task.id]);
   if (!task.useWorktree) return null;
   if (!view) return error ? <p role="alert">验收依赖读取失败：{error}<button onClick={() => void refresh()}>重试</button></p> : <p>正在检查验收依赖…</p>;
@@ -27,9 +29,11 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
   if (!view.task.startCommit && !dep && !descendants.length && !view.task.blocker) return null;
   const selection = [view.task, ...descendants.filter(row => checked.includes(row.taskId))];
   const selectedProposal = proposal ? [proposal.task, ...proposal.descendants.filter(row => checked.includes(row.taskId))] : [];
+  const unverified = selectedProposal.filter(row => row.unexecutedVerification);
   const selectionBlock = familySelectionBlock([view.task, ...view.descendants], new Set(selection.map(row => row.taskId)));
   const run = async () => {
     if (!proposal || checking) return;
+    if (action === "family" && unverified.length && !confirmUnverified) return;
     setBusy(true);
     try {
       if (action === "update") {
@@ -38,7 +42,7 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
       } else {
         const blocked = familySelectionBlock([proposal.task, ...proposal.descendants], new Set(selectedProposal.map(row => row.taskId)));
         if (blocked) { setMessage(blocked.error); return; }
-        const result = await api.acceptFamily(task.id, selectedProposal.map(row => ({ taskId: row.taskId, fingerprint: row.fingerprint })));
+        const result = await api.acceptFamily(task.id, selectedProposal.map(row => ({ taskId: row.taskId, fingerprint: row.fingerprint, confirmUnverified: !!row.unexecutedVerification && confirmUnverified })));
         setMessage(result.ok ? `统一验收已完成，共 ${result.completed.length} 个任务。`
           : `已完成 ${result.completed.length} 个任务；其余暂停：${result.error}`);
       }
@@ -50,7 +54,7 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
   const open = (next: "update" | "family") => {
     if (checking) return;
     if (next === "family" && selectionBlock) { setMessage(selectionBlock.error); return; }
-    setProposal(view); setAction(next);
+    setConfirmUnverified(false); setProposal(view); setAction(next);
   };
   return (
     <section className="branch-acceptance-panel" aria-label="派生与验收依赖">
@@ -109,12 +113,15 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
         message={action === "update"
           ? "在临时工作区尝试 rebase，成功后更新子分支并保留旧提交。旧审查可能过期，需要核对改动与验证范围；发生冲突则不修改原工作区。"
           : "下面列出的版本将按父子顺序执行各自的合并、清理及验收后步骤。已完成的合并不会因后续任务失败而撤销。提交或范围发生变化时会停止。"}
-        confirmLabel={action === "update" ? "更新基线" : "确认统一验收"} danger busy={busy} confirmDisabled={checking || (action === "family" && (!!view.task.blocker || !!selectionBlock))} onConfirm={() => void run()} onClose={() => { if (!busy) setAction(null); }}>
+        confirmLabel={action === "update" ? "更新基线" : "确认统一验收"} danger busy={busy} confirmDisabled={checking || (action === "family" && (!!view.task.blocker || !!selectionBlock || (!!unverified.length && !confirmUnverified)))} onConfirm={() => void run()} onClose={() => { if (!busy) setAction(null); }}>
         {loading && <p role="status">正在更新验收依赖，检查完成后可继续确认。</p>}
         {error && <p role="alert">验收依赖读取失败：{error}</p>}
         {action === "update" && <p>{proposal.task.dependency?.message}</p>}
         {action === "family" && <ul>{selectedProposal.map(row => <li key={row.taskId}>{row.title} · {row.sourceCommit?.slice(0, 8) || "已验收"} · {row.strategy} → {row.targetBranch}</li>)}</ul>}
         {action === "family" && familyAcceptanceNotices(selectedProposal).map(notice => <p key={notice}>{notice}</p>)}
+        {action === "family" && unverified.length > 0 && <UnexecutedVerificationNotice
+          verification={{ reason: "verify_not_run", stepIds: [], message: `以下任务的独立验证尚未执行：${unverified.map(row => row.title).join("、")}。` }}
+          checked={confirmUnverified} onChange={setConfirmUnverified} />}
       </ConfirmDialog>}
     </section>
   );

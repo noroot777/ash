@@ -220,6 +220,7 @@ export interface HandoffManifest {
     reviewStep: string | null;
     verifyRounds: number;
     verifyStationRounds: number;
+    verifyCompletedSteps?: string;
     resumePrompt: string | null;
     question: string | null;
     questionOptions: string | null;

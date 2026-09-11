@@ -408,6 +408,8 @@ export type AcceptTaskFailure = {
   taskId: string;
   reason: string;
   error: string;
+  verification?: import("@ash/shared/workflow-policy").UnexecutedVerification;
+  confirmationRequired?: "confirmUnverified";
   completedMerge?: { targetBranch: string; commit: string | null };
   completedTag?: string;
   status?: string;
