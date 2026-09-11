@@ -1,32 +1,55 @@
-import { useRef, type RefObject } from "react";
+import { useCallback, useRef, useState, type RefObject } from "react";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
 
-const REPLY_HEIGHT_KEY = "ash:reply-pin-height";
+/**
+ * 一个回复框一套:拖出来的高度存在哪、这个框最矮能到多少(跟各自 CSS 里的
+ * `min-height` 对齐)。普通任务和团队调度台各记各的——两个框本来就不一样高,
+ * 共用一个值会让其中一边一打开就是另一边拖出来的样子。
+ */
+export type ReplyPin = { storageKey: string; minHeight: number };
+export const SINGLE_REPLY_PIN: ReplyPin = { storageKey: "ash:reply-pin-height", minHeight: 58 };
+export const TEAM_REPLY_PIN: ReplyPin = { storageKey: "ash:team-reply-pin-height", minHeight: 44 };
 // 自动撑高上线前那把旧钥匙:里面存的高度会把「跟着行数长」整个盖住(拖过的高度优先),
 // 所以只清不读——想固定高度再拖一次就是了,代价比「新功能看着像没生效」小得多。
 const LEGACY_HEIGHT_KEY = "ash:reply-height";
-const MIN_HEIGHT = 58;
+const DEFAULT_MIN_HEIGHT = SINGLE_REPLY_PIN.minHeight;
 
 /** 上限跟着窗口走:再怎么拖也要给上面的会话留出地方。 */
-function maximumHeight(): number {
-  return Math.max(MIN_HEIGHT, Math.min(560, window.innerHeight - 260));
+function maximumHeight(minHeight: number): number {
+  return Math.max(minHeight, Math.min(560, window.innerHeight - 260));
 }
 
-export function clampReplyHeight(value: number): number {
-  return Math.max(MIN_HEIGHT, Math.min(maximumHeight(), Math.round(value)));
+export function clampReplyHeight(value: number, minHeight = DEFAULT_MIN_HEIGHT): number {
+  return Math.max(minHeight, Math.min(maximumHeight(minHeight), Math.round(value)));
 }
 
 /** null = 没拖过,跟着输入的行数自动撑高。别在这里塞一个写死的默认值。 */
-export function readStoredReplyHeight(): number | null {
-  window.localStorage.removeItem(LEGACY_HEIGHT_KEY);
-  window.localStorage.removeItem(`harness-next:${LEGACY_HEIGHT_KEY.slice("ash:".length)}`);
-  const stored = Number(readRenamedStorage(REPLY_HEIGHT_KEY));
-  return Number.isFinite(stored) && stored > 0 ? clampReplyHeight(stored) : null;
+function readStoredHeight({ storageKey, minHeight }: ReplyPin): number | null {
+  if (storageKey === SINGLE_REPLY_PIN.storageKey) {
+    window.localStorage.removeItem(LEGACY_HEIGHT_KEY);
+    window.localStorage.removeItem(`harness-next:${LEGACY_HEIGHT_KEY.slice("ash:".length)}`);
+  }
+  const stored = Number(readRenamedStorage(storageKey));
+  return Number.isFinite(stored) && stored > 0 ? clampReplyHeight(stored, minHeight) : null;
 }
 
-export function storeReplyHeight(height: number | null): void {
-  if (height === null) window.localStorage.removeItem(REPLY_HEIGHT_KEY);
-  else window.localStorage.setItem(REPLY_HEIGHT_KEY, String(height));
+/**
+ * 「这个回复框拖到多高」这件事的全部状态:读盘、写盘,以及喂给
+ * `useAutoGrowTextarea` 的 `pinned`。返回值原样摊给 `ReplyResizeHandle` 即可。
+ */
+export function useReplyHeight(pin: ReplyPin): {
+  height: number | null;
+  minHeight: number;
+  onChange: (height: number | null) => void;
+} {
+  const [height, setHeight] = useState<number | null>(() => readStoredHeight(pin));
+  const { storageKey, minHeight } = pin;
+  const onChange = useCallback((next: number | null) => {
+    setHeight(next);
+    if (next === null) window.localStorage.removeItem(storageKey);
+    else window.localStorage.setItem(storageKey, String(next));
+  }, [storageKey]);
+  return { height, minHeight, onChange };
 }
 
 /**
@@ -38,10 +61,12 @@ export function storeReplyHeight(height: number | null): void {
 export function ReplyResizeHandle({
   targetRef,
   height,
+  minHeight = DEFAULT_MIN_HEIGHT,
   onChange,
 }: {
   targetRef: RefObject<HTMLTextAreaElement | null>;
   height: number | null;
+  minHeight?: number;
   onChange: (height: number | null) => void;
 }) {
   const dragging = useRef(false);
@@ -50,11 +75,11 @@ export function ReplyResizeHandle({
     if (event.button !== 0) return;
     event.preventDefault();
     // 起始高度按实测取:没拖过时 height 是 null,只有 DOM 知道 rows 撑出来多高。
-    const startHeight = targetRef.current?.offsetHeight ?? MIN_HEIGHT;
+    const startHeight = targetRef.current?.offsetHeight ?? minHeight;
     const startY = event.clientY;
     dragging.current = true;
     document.body.classList.add("task-reply-resizing");
-    const move = (next: PointerEvent) => onChange(clampReplyHeight(startHeight + startY - next.clientY));
+    const move = (next: PointerEvent) => onChange(clampReplyHeight(startHeight + startY - next.clientY, minHeight));
     const finish = () => {
       dragging.current = false;
       document.body.classList.remove("task-reply-resizing");
@@ -66,8 +91,8 @@ export function ReplyResizeHandle({
   };
 
   const nudge = (delta: number) => {
-    const from = height ?? targetRef.current?.offsetHeight ?? MIN_HEIGHT;
-    onChange(clampReplyHeight(from + delta));
+    const from = height ?? targetRef.current?.offsetHeight ?? minHeight;
+    onChange(clampReplyHeight(from + delta, minHeight));
   };
 
   return (
@@ -77,16 +102,16 @@ export function ReplyResizeHandle({
       tabIndex={0}
       aria-label="拖动调整回复框高度，双击恢复按输入行数自动撑高"
       aria-orientation="horizontal"
-      aria-valuemin={MIN_HEIGHT}
-      aria-valuemax={maximumHeight()}
+      aria-valuemin={minHeight}
+      aria-valuemax={maximumHeight(minHeight)}
       {...(height === null ? {} : { "aria-valuenow": height })}
       onPointerDown={begin}
       onDoubleClick={() => onChange(null)}
       onKeyDown={(event) => {
         if (event.key === "ArrowUp") nudge(10);
         else if (event.key === "ArrowDown") nudge(-10);
-        else if (event.key === "Home") onChange(MIN_HEIGHT);
-        else if (event.key === "End") onChange(maximumHeight());
+        else if (event.key === "Home") onChange(minHeight);
+        else if (event.key === "End") onChange(maximumHeight(minHeight));
         else return;
         event.preventDefault();
       }}
