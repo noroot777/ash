@@ -3,6 +3,9 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { createServer } from "vite";
+import { testPreviewCommandEditor } from "./preview-command-editor-checks.mjs";
+
+const editorText = async (editor) => editor.locator(".cm-line").evaluateAll((lines) => lines.map((line) => line.querySelector(".cm-placeholder") ? "" : line.textContent).join("\n"));
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({
@@ -37,12 +40,12 @@ try {
     const selected = radios[expected === "script" ? 0 : 1];
     return selected instanceof HTMLInputElement && selected.checked
       && (expected === "script"
-        ? document.querySelector('textarea[aria-label="启动脚本"]') instanceof HTMLTextAreaElement
+        ? document.querySelector('.cm-content[aria-label="启动脚本"]') !== null
         : document.querySelector(".preview-detect-actions") !== null);
   }, mode);
   await preview.waitFor();
 
-  assert.equal(await preview.evaluate((node) => node.tagName), "TEXTAREA", "启动脚本应使用多行编辑器");
+  assert.equal(await preview.getAttribute("aria-multiline"), "true", "启动脚本应使用多行代码编辑器");
   await page.getByText("当前使用直连：", { exact: false }).waitFor();
   await page.getByTestId("mode-multi").click();
   await page.getByText("当前使用反代：", { exact: false }).waitFor();
@@ -52,6 +55,7 @@ try {
   await page.getByTestId("mode-single").click();
   await page.getByText("当前使用反代：", { exact: false }).waitFor();
   await proxy.selectOption("auto");
+  await testPreviewCommandEditor(page, preview, savePreview);
 
   const draft = [
     "cd web",
@@ -126,7 +130,7 @@ try {
   assert.equal(await help.evaluate((node) => node === document.activeElement), true, "关闭后焦点应回到说明按钮");
   assert.equal(await page.locator("#root").evaluate((node) => node.inert), false, "关闭后背景必须恢复可交互");
   assert.equal(await page.getByTestId("already-inert").evaluate((node) => node.inert), true, "不能清掉背景原本已有的 inert 状态");
-  assert.equal(await preview.inputValue(), draft, "查看说明不能改变未保存的命令");
+  assert.equal(await editorText(preview), draft, "查看说明不能改变未保存的命令");
 
   await help.click();
   await dialog.locator("pre code").evaluate((node) => {
@@ -198,7 +202,7 @@ try {
 
   await page.getByTestId("health-refresh").click();
   await page.getByTestId("health-refresh").click();
-  assert.equal(await preview.inputValue(), draft, "同项目重新渲染吞掉了多行脚本草稿");
+  assert.equal(await editorText(preview), draft, "同项目重新渲染吞掉了多行脚本草稿");
   assert.equal(await name.inputValue(), "改了名字", "同项目重新渲染吞掉了项目名称草稿");
   assert.equal(await repoPath.inputValue(), "/workspace/改了目录", "同项目重新渲染吞掉了工作目录草稿");
 
@@ -206,8 +210,8 @@ try {
   await waitForPreviewMode("services");
   await scriptMode.check();
   await page.waitForFunction((expected) =>
-    document.querySelector('textarea[aria-label="启动脚本"]')?.value === expected, draft);
-  assert.equal(await preview.inputValue(), draft, "切换启动方式后多行脚本草稿丢失");
+    [...document.querySelectorAll('.cm-content[aria-label="启动脚本"] .cm-line')].map((line) => line.querySelector(".cm-placeholder") ? "" : line.textContent).join("\n") === expected, draft);
+  assert.equal(await editorText(preview), draft, "切换启动方式后多行脚本草稿丢失");
   await servicesMode.check();
   await waitForPreviewMode("services");
   await page.getByRole("button", { name: "检测服务" }).click();
@@ -226,14 +230,24 @@ try {
   ].join("\n");
   await webCommand.fill(editedWebCommand);
   await apiCommand.fill("cd server\nnpm run dev -- --port $PORT");
+  const serviceWrap = page.getByRole("checkbox", { name: "网页前端 启动脚本 自动换行" });
+  await serviceWrap.check();
+  assert.equal(await page.getByRole("checkbox", { name: "接口服务 启动脚本 自动换行" }).isChecked(), true, "换行偏好应同步到所有服务编辑器");
+  assert.equal(await editorText(apiCommand), "cd server\nnpm run dev -- --port $PORT", "切换换行不能改写另一服务的脚本");
+  await page.getByRole("button", { name: "手动添加" }).click();
+  const manualCommand = page.getByRole("textbox", { name: "新服务 启动脚本" });
+  await manualCommand.fill('echo "手动服务"\nnpm start');
+  assert.equal(await manualCommand.locator(".cm-line span").count() > 0, true, "手动添加的服务也应使用语法高亮编辑器");
+  assert.equal(await page.getByRole("checkbox", { name: "新服务 启动脚本 自动换行" }).isChecked(), true);
+  await page.getByRole("button", { name: "移除 新服务" }).click();
   await page.getByTestId("health-refresh").click();
-  assert.equal(await webCommand.inputValue(), editedWebCommand, "同项目重新渲染吞掉了服务脚本草稿");
+  assert.equal(await editorText(webCommand), editedWebCommand, "同项目重新渲染吞掉了服务脚本草稿");
   assert.equal(await page.getByText("已选 2 个 · 最多同时启动 8 个").isVisible(), true, "检测结果应支持多选");
 
   await proxy.selectOption("auto");
   await savePreview.click();
   await page.waitForFunction(
-    () => document.querySelector("[data-testid=notices]")?.textContent?.includes("预览设置已保存，下次打开预览时生效") ?? false,
+    () => JSON.parse(document.querySelector("[data-testid=stored-projects]").textContent)["p-one"].previewConfig.mode === "services",
   );
   assert.equal(await name.inputValue(), "改了名字", "保存预览设置不应冲掉基本信息草稿");
   assert.equal(await repoPath.inputValue(), "/workspace/改了目录", "保存预览设置不应冲掉目录草稿");
@@ -249,13 +263,14 @@ try {
   await page.reload();
   await waitForPreviewMode("services");
   assert.equal(await servicesMode.isChecked(), true, "刷新后没有读回已存启动方式");
+  assert.equal(await serviceWrap.isChecked(), true, "刷新后应记住换行偏好");
   assert.equal(await page.getByRole("checkbox", { name: "启动 网页前端" }).isChecked(), true, "刷新后丢了已选服务");
   assert.equal(await page.getByRole("checkbox", { name: "启动 接口服务" }).isChecked(), true, "刷新后丢了第二个已选服务");
-  assert.equal(await page.getByRole("textbox", { name: "网页前端 启动脚本" }).inputValue(), editedWebCommand, "刷新后丢了已存服务脚本");
+  assert.equal(await editorText(page.getByRole("textbox", { name: "网页前端 启动脚本" })), editedWebCommand, "刷新后丢了已存服务脚本");
   await scriptMode.check();
   await page.waitForFunction((expected) =>
-    document.querySelector('textarea[aria-label="启动脚本"]')?.value === expected, draft);
-  assert.equal(await page.getByRole("textbox", { name: "启动脚本", exact: true }).inputValue(), draft, "刷新后丢了已存总脚本");
+    [...document.querySelectorAll('.cm-content[aria-label="启动脚本"] .cm-line')].map((line) => line.querySelector(".cm-placeholder") ? "" : line.textContent).join("\n") === expected, draft);
+  assert.equal(await editorText(page.getByRole("textbox", { name: "启动脚本", exact: true })), draft, "刷新后丢了已存总脚本");
   await servicesMode.check();
   await waitForPreviewMode("services");
   await page.getByTestId("mode-multi").click();
@@ -277,7 +292,7 @@ try {
     return inputFor("项目名称")?.value === "第二个项目"
       && inputFor("工作目录")?.value === "/workspace/p-two";
   });
-  assert.equal(await page.getByRole("textbox", { name: "启动脚本", exact: true }).inputValue(), "", "换项目还留着上一个项目的脚本");
+  assert.equal(await editorText(page.getByRole("textbox", { name: "启动脚本", exact: true })), "", "换项目还留着上一个项目的脚本");
   assert.equal(await name.inputValue(), "第二个项目", "换项目应显示新项目的名称");
   assert.equal(await repoPath.inputValue(), "/workspace/p-two", "换项目应显示新项目的目录");
 
@@ -286,7 +301,14 @@ try {
 
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/project-settings-draft.html?case=${caseId}-member&member`);
   await help.waitFor();
-  assert.equal(await preview.getAttribute("readonly"), "");
+  assert.equal(await preview.getAttribute("aria-readonly"), "true");
+  assert.equal(await preview.getAttribute("contenteditable"), "false");
+  await preview.focus();
+  await page.keyboard.insertText("不能编辑");
+  assert.equal(await editorText(preview), "", "只读成员不能修改命令");
+  const readonlyWrap = page.getByRole("checkbox", { name: "启动脚本 自动换行" });
+  await readonlyWrap.uncheck();
+  assert.equal(await readonlyWrap.isChecked(), false, "只读成员仍能调整阅读换行方式");
   assert.equal(await savePreview.count(), 0, "成员不能保存预览设置");
   await help.click();
   await dialog.waitFor();
