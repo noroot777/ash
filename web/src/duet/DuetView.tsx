@@ -34,7 +34,7 @@ import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
 import { DuetGateControls, DuetProgressBar } from "./DuetControls.tsx";
 import { DuetHandoffBar, DuetHandoffModal, type HandoffChoice } from "./DuetHandoff.tsx";
 import { buildDuetHandoffBody, latestDuetGate } from "./duetHandoff.ts";
-import { isOpenDuetGate, runCreatedHandoffFollowUps, teamDuetIterationState } from "./handoffPolicy.ts";
+import { isOpenDuetGate, runCreatedHandoffFollowUps } from "./handoffPolicy.ts";
 import { latestActiveDuetTurn, type DuetTurn } from "./duetState.ts";
 import { useDuet } from "./useDuet.ts";
 
@@ -146,7 +146,6 @@ export function DuetView({
   // 确认闸的对话框住在 App 层(见 task-detail/ExecutorGate.tsx),这里只拿判据。
   const confirmExecutorSwap = useExecutorGate();
   const [teamBusy, setTeamBusy] = useState(false);
-  const [iterationBusyId, setIterationBusyId] = useState<string | null>(null);
   const [teamModal, setTeamModal] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [title, setTitle] = useState(task.title);
@@ -157,7 +156,6 @@ export function DuetView({
   useEffect(() => {
     setTeamModal(false);
     setDeleteOpen(false);
-    setIterationBusyId(null);
   }, [task.id]);
   useEffect(() => { void api.sessions(task.id).then(setSessions).catch(() => setSessions([])); }, [task.id, task.status]);
   const sessionsByRole = useMemo(() => latestByRole(sessions), [sessions]);
@@ -271,39 +269,6 @@ export function DuetView({
     else notify(`团队已创建，但${followUpFailures.map(({ phase, reason }) => `${phase === "gate" ? "讨论自动收尾" : "启动"}失败（${reason instanceof Error ? reason.message : String(reason)}）`).join("、")}`);
     return true;
   };
-  const iterateTeam = async (team: TaskListItem) => {
-    const iteration = teamDuetIterationState(team, allTasks);
-    if (!iteration.eligible) return;
-    if (iteration.existing) {
-      onSelectTask(iteration.existing);
-      return;
-    }
-    if (iterationBusyId) return;
-    setIterationBusyId(team.id);
-    try {
-      let target = await api.iterateTeamDuet(team.id);
-      onTaskCreated(target);
-      if (target.status === "backlog") {
-        try {
-          await api.runTask(target.id);
-          notify("已创建新一轮讨论并开跑");
-          try {
-            target = await api.task(target.id);
-            onTaskCreated(target);
-          } catch { /* task.status 事件仍会刷新列表 */ }
-        } catch (reason) {
-          notify(`新一轮讨论已创建，但启动失败：${reason instanceof Error ? reason.message : String(reason)}`);
-        }
-      } else {
-        notify("已打开这个团队现有的下一轮讨论");
-      }
-      onSelectTask(target);
-    } catch (reason) {
-      notify(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setIterationBusyId(null);
-    }
-  };
 
   return (
     <div className="duet-view">
@@ -401,14 +366,11 @@ export function DuetView({
           gate={gate}
           round={currentRound}
           maxRounds={config.maxRounds}
-          busy={busy || teamBusy || !!iterationBusyId}
+          busy={busy || teamBusy}
           linkedTeams={linkedTeams}
-          allTasks={allTasks}
-          iterationBusyId={iterationBusyId}
           onGate={gateAction}
           onOpenTeam={() => setTeamModal(true)}
           onOpenTask={onSelectTask}
-          onIterateTeam={(team) => void iterateTeam(team)}
         />
       ) : ["done", "failed", "canceled"].includes(task.status) ? (
         <div className="duet-terminal-handoff">
@@ -418,12 +380,9 @@ export function DuetView({
           </div>
           <DuetHandoffBar
             linkedTeams={linkedTeams}
-            allTasks={allTasks}
-            busy={teamBusy || !!iterationBusyId}
-            iterationBusyId={iterationBusyId}
+            busy={teamBusy}
             onOpenTeam={() => setTeamModal(true)}
             onOpenTask={onSelectTask}
-            onIterateTeam={(team) => void iterateTeam(team)}
           />
         </div>
       ) : (

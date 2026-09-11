@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { TEAM_DEFAULTS, taskDisplayStatus, type AgentExecutorProfile, type AgentType, type TaskListItem } from "@ash/shared";
-import { ArrowRight, ChatsCircle, UsersThree, Warning } from "@phosphor-icons/react";
+import { ArrowRight, UsersThree, Warning } from "@phosphor-icons/react";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import {
   executorValue,
@@ -12,7 +12,6 @@ import {
   useAgentAvailability,
 } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
-import { teamDuetIterationState } from "./handoffPolicy.ts";
 
 export type HandoffChoice = {
   note: string;
@@ -124,29 +123,21 @@ export function DuetHandoffModal({
 
 export function DuetHandoffBar({
   linkedTeams,
-  allTasks,
   busy,
-  iterationBusyId,
   onOpenTeam,
   onOpenTask,
-  onIterateTeam,
 }: {
   linkedTeams: TaskListItem[];
-  allTasks: TaskListItem[];
   busy: boolean;
-  iterationBusyId?: string | null;
   onOpenTeam: () => void;
   onOpenTask: (task: TaskListItem) => void;
-  onIterateTeam: (team: TaskListItem) => void;
 }) {
   if (linkedTeams.length > 0) {
     return (
       <div className="duet-handoff-stack">
         <div className="duet-linked-team-list" aria-label="关联团队">
           {linkedTeams.map((team) => {
-            const iteration = teamDuetIterationState(team, allTasks);
             const status = taskDisplayStatus(team.status, team.stage, !!team.question).label;
-            const iterationBusy = iterationBusyId === team.id;
             return (
               <div className="duet-linked-team" key={team.id}>
                 <button type="button" className="duet-linked-team-main" onClick={() => onOpenTask(team)}>
@@ -154,18 +145,6 @@ export function DuetHandoffBar({
                   <div><small>已接力成团</small><b>{team.title}</b></div>
                   <em>{team.archived ? "已归档" : status}</em><ArrowRight size={13} />
                 </button>
-                {iteration.eligible && (
-                  <button
-                    type="button"
-                    className="duet-iterate-team"
-                    disabled={busy}
-                    onClick={() => onIterateTeam(team)}
-                    title={iteration.existing ? "打开这个团队已经创建的下一轮讨论" : "读取团队执行记录，沿用来源讨论配置创建下一轮"}
-                  >
-                    <ChatsCircle size={12} weight="fill" />
-                    {iterationBusy ? "创建中…" : iteration.existing ? "打开下一轮" : "再讨论一轮"}
-                  </button>
-                )}
               </div>
             );
           })}

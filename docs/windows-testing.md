@@ -102,8 +102,7 @@ POSIX 仍断 `SIGKILL`,两边都先排除掉「没抢到租约」(`status === 3`
 
 **`ASH_DB` 指向临时目录**:下面几条会真写库,入口有守卫(`server/scripts/tmp-db.ts`)——
 
-`test-queue.ts`、`test-answer-routing.ts`、`test-executor-resolution.ts`、`test-cli-overrides.ts`、
-`test-duet-iteration.ts`
+`test-queue.ts`、`test-answer-routing.ts`、`test-executor-resolution.ts`、`test-cli-overrides.ts`
 
 守卫认 `os.tmpdir()`(POSIX 上额外认 `/tmp`)。Windows 上**别再照抄注释里的 `ASH_DB=/tmp/x.db`**:
 那会落到当前盘的 `\tmp\`,多半不存在。改用 `ASH_DB=%TEMP%\test-queue.db`。`win-remote.mjs test`

@@ -64,7 +64,6 @@ const WRITES: { method: string; path: string; body?: unknown }[] = [
   { method: "POST", path: "/free-workflow/review", body: {} },
   { method: "POST", path: "/review/dispatch", body: {} },
   { method: "POST", path: "/team/halt", body: {} },
-  { method: "POST", path: "/team/iterate-duet", body: {} },
 ];
 
 /** 全库每张表的行数。判「有没有落库」只能这么判:光看状态码放不过「403 但已经写进去了」。 */

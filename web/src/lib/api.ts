@@ -316,8 +316,6 @@ export const api = {
     request(`/tasks/${id(taskId)}/team/cua-status`),
   killTeamCua: (taskId: string): Promise<unknown> =>
     request(`/tasks/${id(taskId)}/team/kill-cua`, { method: "POST" }),
-  iterateTeamDuet: (taskId: string): Promise<Task> =>
-    request(`/tasks/${id(taskId)}/team/iterate-duet`, { method: "POST" }),
 
   // 任务接力(跨机器 handoff)那一族在 `handoffApi.ts` —— 整份 spread 进来,
   // `api.handoffPeers()` 这类调用点一字不动。
