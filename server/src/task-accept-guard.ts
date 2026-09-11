@@ -5,6 +5,7 @@ import { eq, or } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import type { ConflictHandoff } from "./accept-conflict.js";
+import type { UnexecutedVerification } from "@ash/shared/workflow-policy";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { isTurnClaimed } from "./runs.js";
 
@@ -41,6 +42,8 @@ export type AcceptFailure = {
   phase?: "initial" | "before_accept" | "before_merge" | "before_cleanup";
   inFlightTasks?: InFlightTask[];
   warnings?: AcceptWarning[];
+  verification?: UnexecutedVerification;
+  confirmationRequired?: "confirmUnverified";
 };
 
 export async function acceptanceState(taskId: string): Promise<{

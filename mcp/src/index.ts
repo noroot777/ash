@@ -396,10 +396,11 @@ server.registerTool(
       "仅在用户明确表示「验收通过」「可以合并」等最终验收意图时调用。服务端会确定性执行：检查父成果依赖后把任务分支合并到 mergeTargetBranch（旧任务沿用原目标），确认已合并后删除任务 worktree，并用 git branch -d 安全删除任务分支，最后把 stage 标为 accepted；status 不会改变。冲突、目标工作区脏或清理失败时会返回结构化原因，绝不强制合并。不要自行运行 git merge / worktree remove / branch -d，统一调用本工具。parentId 指向团队且 useWorktree=false 的共享执行者不适用本工具，单独调用会被 409 拒绝；请验收团队整体，团队级成功会联动把全部共享执行者标为 accepted。",
     inputSchema: {
       taskId: z.string().describe("用户明确验收通过的任务 id"),
+      confirmUnverified: z.boolean().optional().describe("返回 verify_not_run 时，只有用户知晓「独立验证尚未执行」且明确确认继续验收后才传 true；中途 human 关口会继续推进后续 verify，无需此参数"),
     },
   },
-  async ({ taskId }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/accept`, {})); }
+  async ({ taskId, confirmUnverified }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/accept`, { confirmUnverified })); }
     catch (e) { return fail(e); }
   },
 );

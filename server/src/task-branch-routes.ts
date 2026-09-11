@@ -26,6 +26,7 @@ import { claimWorkspaceTurn, isTurnClaimed } from "./runs.js";
 import { assertReadableWorktree, checkoutRecovery, removeMissingWorktreeRegistrations, UnreadableWorktreeError } from "./git-worktree-state.js";
 import { targetCheckout } from "./git-accept.js";
 import { branchPlanReads } from "./branch-plan-reads.js";
+import { unexecutedVerification } from "./task-accept-verification.js";
 
 async function entry(task: BranchTask, repo: string, fingerprintTarget?: string | null,
   reads = branchPlanReads(repo, task.projectId)): Promise<BranchPlanEntry> {
@@ -64,6 +65,7 @@ async function entry(task: BranchTask, repo: string, fingerprintTarget?: string 
     targetOwner?.id, checkout,
   ])).digest("hex");
   return {
+    unexecutedVerification: await unexecutedVerification(task),
     taskId: task.id, projectId: task.projectId, title: task.title, status: task.status, stage: task.stage,
     startCommit: task.worktreeStartCommit, targetBranch: target, targetTaskId: targetOwner?.id ?? null, sourceBranch, sourceCommit, targetCommit, targetWorkspaceBlocker, targetWorkspaceRecovery,
     strategy: plan.merge || "mark", dependency: task.baseUpdateIntent ? { taskId: task.baseTaskId, title: "父任务", state: "needs_update", message: "上次基线更新尚未结算。可重试更新基线，或点击「处理未完成的基线更新」：尚未改写时可放弃，已经生效时会同步开工起点，保留当前代码与恢复备份。" } : await branchDependency(task, repo, reads), blocker, blockerLabel, fingerprint, baseUpdatePending: !!task.baseUpdateIntent,
@@ -93,11 +95,11 @@ export async function readBranchPlan(taskId: string): Promise<BranchPlanView | n
   return { task: entries[0], descendants: entries.slice(1) };
 }
 
-type Accept = (taskId: string) => Promise<AcceptTaskResult>;
+type Accept = (taskId: string, by?: "human" | "workflow", options?: { confirmUnverified?: boolean }) => Promise<AcceptTaskResult>;
 
 export async function acceptFamily(
   taskId: string,
-  expected: { taskId: string; fingerprint: string }[],
+  expected: { taskId: string; fingerprint: string; confirmUnverified?: boolean }[],
   accept: Accept,
 ): Promise<FamilyAcceptanceResult> {
   if (IS_PREVIEW_INSTANCE) return { ok: false, completed: [], error: previewRefusal("统一验收") };
@@ -127,7 +129,7 @@ export async function acceptFamily(
         return { ok: false, completed, stoppedAt: row.taskId, error };
       }
       let result: AcceptTaskResult;
-      try { result = await accept(row.taskId); }
+      try { result = await accept(row.taskId, "human", { confirmUnverified: expected.find(e => e.taskId === row.taskId)?.confirmUnverified === true }); }
       catch (cause) {
         const after = (await db.select().from(tasks).where(eq(tasks.id, row.taskId))).at(0);
         if (after?.stage === "accepted") completed.push(row.taskId);
@@ -250,7 +252,7 @@ export function mountBranchPlanRoutes(api: Hono, accept: Accept): void {
     return c.json(result, result.ok ? 200 : 409);
   });
   api.post("/tasks/:id/accept-family", async c => {
-    const body = await c.req.json<{ entries?: { taskId: string; fingerprint: string }[] }>();
+    const body = await c.req.json<{ entries?: { taskId: string; fingerprint: string; confirmUnverified?: boolean }[] }>();
     if (!Array.isArray(body.entries) || !body.entries.length || body.entries.length > 100
       || body.entries.some(e => !e || typeof e.taskId !== "string" || typeof e.fingerprint !== "string")) return c.json({ error: "entries required" }, 400);
     const result = await acceptFamily(c.req.param("id"), body.entries, accept);

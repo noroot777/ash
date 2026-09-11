@@ -68,6 +68,7 @@ try {
   const { flushConflictHandoff, handOffConflict } = await import("../src/accept-conflict.js");
   const { acceptTask } = await import("../src/task-accept.js");
   await ensureSchema();
+  await (await import("./test-accept-verification.js")).testAcceptanceVerification(root);
 
   // EBUSY 是进程/句柄占用,绝不能再猜成「多半有未提交改动」。命令行只拿来认进程名,
   // 不整段回显(里面可能带 token)。

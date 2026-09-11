@@ -373,8 +373,9 @@ export const api = {
     stepId: string,
   ): Promise<{ ok: true; url: string | null; port: number | null }> =>
     request(`/tasks/${id(taskId)}/preview/restart`, json("POST", { stepId })),
-  acceptTask: async (taskId: string): Promise<AcceptTaskResult> => {
-    const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept`), { method: "POST" });
+  acceptanceCheck: (taskId: string): Promise<{ verification: import("@ash/shared/workflow-policy").UnexecutedVerification | null }> => request(`/tasks/${id(taskId)}/acceptance-check`),
+  acceptTask: async (taskId: string, confirmUnverified = false): Promise<AcceptTaskResult> => {
+    const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept`), json("POST", { confirmUnverified }));
     const body = await parseBody(response);
     if (isAcceptTaskResult(body)) return body;
     throw apiError(response, body);
@@ -385,7 +386,7 @@ export const api = {
   updateTaskBase: (taskId: string, sourceCommit: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/update-base`, json("POST", { sourceCommit })),
   baseUpdateRecovery: (taskId: string): Promise<BaseUpdateRecovery> => request(`/tasks/${id(taskId)}/base-update-recovery`),
   abandonTaskBaseUpdate: (taskId: string, fingerprint: string, resolution: "abandon" | "complete" | "manual", acknowledged = false): Promise<{ ok: boolean; message: string }> => request(`/tasks/${id(taskId)}/abandon-base-update`, json("POST", { fingerprint, resolution, acknowledged })),
-  acceptFamily: async (taskId: string, entries: { taskId: string; fingerprint: string }[]): Promise<FamilyAcceptanceResult> => {
+  acceptFamily: async (taskId: string, entries: { taskId: string; fingerprint: string; confirmUnverified?: boolean }[]): Promise<FamilyAcceptanceResult> => {
     const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept-family`), json("POST", { entries }));
     const body = await parseBody(response);
     if (body && typeof body === "object" && "completed" in body) return body as FamilyAcceptanceResult;

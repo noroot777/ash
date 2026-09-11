@@ -1,3 +1,5 @@
+import type { UnexecutedVerification } from "./workflow-policy.ts";
+
 export type BranchDependency = {
   taskId: string | null;
   title: string;
@@ -26,6 +28,7 @@ export type BranchPlanEntry = {
   targetWorkspaceRecovery?: string | null;
   baseUpdatePending: boolean;
   fingerprint: string;
+  unexecutedVerification?: UnexecutedVerification | null;
 };
 
 export type BranchPlanView = { task: BranchPlanEntry; descendants: BranchPlanEntry[] };
