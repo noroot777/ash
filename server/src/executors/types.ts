@@ -138,6 +138,8 @@ export interface AgentExecutor {
   readonly label: string; // e.g. "claude@local·opus"
   readonly model?: string;
   readonly reasoningEffort?: string;
+  /** 恢复归档等异步准备发生在同步 spawn 前，避免丢失起跑时的进程追踪信息。 */
+  prepareResume?(opts: Pick<RunOpts, "cwd" | "sessionId" | "env" | "extraArgs"> & { steerable?: boolean }): Promise<void>;
   run(opts: RunOpts): RunHandle;
   // 单飞专用的可引导运行。没有这项的执行器继续走 run()，用户点「引导会话」时由
   // 上层沿用 kill + resume 降级；它不等于团队常驻，也不影响 openResident 的筛选。

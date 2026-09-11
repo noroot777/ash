@@ -131,6 +131,10 @@ async function consume(lead: Lead): Promise<void> {
           ? await recordSessionUsageEvent(lead.sessId, event, lead.agentType, lead.cliSessionId)
           : event;
         flushTraceText();
+        if (emittedEvent.kind === "system") {
+          noteSessionNotice(lead, emittedEvent.text, emittedEvent.at, emittedEvent.level);
+          continue;
+        }
         // scope:"session" 说的是「这条恢复会话作废了」，不是「本回合失败了」（见
         // executors/codex.ts）。当成普通 error 会让一个正常收尾的回合在执行过程里记一笔
         // 异常；跟 duet、single-run 一样按 scope 分流,降成 system 旁注 —— 判据共用
@@ -435,18 +439,17 @@ function recordSystemTurn(lead: Lead, text: string, at = now()): void {
 // 会话轮换旁注:实时立刻播(用户正看着),落盘等 writeTurnEnd 之后由 flushSessionNotices
 // 补 —— 理由见 Lead.notices。摘牌之后一句都不再说:那条会话现在归接管的那台,这台既不
 // 该广播,攒下的也没有能落盘的地方(见 retireLead)。
-function noteSessionNotice(lead: Lead, text: string): void {
+function noteSessionNotice(lead: Lead, text: string, at = now(), level?: "notice"): void {
   if (lead.retired) return;
-  const at = now();
-  lead.notices.push({ text, at });
-  publish(lead, { kind: "system", text, at });
+  lead.notices.push({ text, at, level });
+  publish(lead, { kind: "system", text, at, ...(level ? { level } : {}) });
 }
 
 function flushSessionNotices(lead: Lead): void {
   const notices = lead.notices;
   lead.notices = [];
   for (const notice of notices) {
-    writeTurn(lead.out, { t: "system", agent: lead.agentType, text: notice.text }, notice.at);
+    writeTurn(lead.out, { t: "system", agent: lead.agentType, text: notice.text, level: notice.level }, notice.at);
   }
 }
 

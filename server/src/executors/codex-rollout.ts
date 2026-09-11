@@ -39,12 +39,26 @@ export function codexHome(configDir?: string | null): string {
 }
 
 /**
- * 按 thread id 找 rollout。当前布局是 sessions/YYYY/MM/DD/；布局变化时找不到即 null。
+ * 按 thread id 找 rollout。活动会话按日期分层，原生归档通常平铺在 archived_sessions。
  * 倒序下钻让活跃会话通常在前几个目录内命中，避免每轮完整扫描所有历史文件。
  * （任务接力 handoff.ts 也用它定位要搬走的会话文件，那条路要按任务归属人传 configDir。）
  */
 export async function findRollout(threadId: string, configDir?: string | null): Promise<string | null> {
-  const root = path.join(codexHome(configDir), "sessions");
+  return await findInSessionDirectory("sessions", threadId, configDir)
+    ?? await findArchivedRollout(threadId, configDir);
+}
+
+export function findArchivedRollout(threadId: string, configDir?: string | null): Promise<string | null> {
+  return findInSessionDirectory("archived_sessions", threadId, configDir);
+}
+
+async function findInSessionDirectory(
+  directory: "sessions" | "archived_sessions",
+  threadId: string,
+  configDir?: string | null,
+): Promise<string | null> {
+  if (!threadId || !/^[A-Za-z0-9_-]+$/.test(threadId)) return null;
+  const root = path.join(codexHome(configDir), directory);
   const suffix = `-${threadId}.jsonl`;
 
   const descend = async (dir: string, depth: number): Promise<string | null> => {
@@ -54,10 +68,9 @@ export async function findRollout(threadId: string, configDir?: string | null): 
     } catch {
       return null;
     }
-    if (depth === 3) {
-      const hit = entries.find((entry) => entry.isFile() && entry.name.endsWith(suffix));
-      return hit ? path.join(dir, hit.name) : null;
-    }
+    const hit = entries.find((entry) => entry.isFile() && entry.name.startsWith("rollout-") && entry.name.endsWith(suffix));
+    if (hit) return path.join(dir, hit.name);
+    if (depth === 3) return null;
     const dirs = entries
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
@@ -71,6 +84,20 @@ export async function findRollout(threadId: string, configDir?: string | null): 
   };
 
   return descend(root, 0);
+}
+
+/** 接力协议仍传活动目录内的相对路径；归档文件用文件名里的日期还原层级。 */
+export function rolloutExportPath(file: string, configDir?: string | null): string {
+  const inside = (rel: string) => rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+  const relative = path.relative(path.join(codexHome(configDir), "sessions"), file);
+  if (relative && inside(relative)) return relative.split(path.sep).join("/");
+  if (!inside(path.relative(path.join(codexHome(configDir), "archived_sessions"), file))) {
+    throw new Error("Codex 会话文件不在指定的配置目录中");
+  }
+  const name = path.basename(file);
+  const date = /^rollout-(\d{4})-(\d{2})-(\d{2})T/.exec(name);
+  if (!date) throw new Error(`无法识别 Codex 归档会话日期：${name}`);
+  return `${date[1]}/${date[2]}/${date[3]}/${name}`;
 }
 
 /** 只返回完整行；从文件中间切入时第一行通常是半截 JSON，必须丢掉。 */

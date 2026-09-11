@@ -6,7 +6,8 @@ import { cliConfigOverrideEnvPatch } from "@ash/shared/cli-overrides";
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { openCodexResident } from "./codex-resident.js";
-import { readCodexContext } from "./codex-rollout.js";
+import { findArchivedRollout, readCodexContext } from "./codex-rollout.js";
+import { archiveVisibleCodexSession, unarchiveCodexThread } from "./codex-session-archive.js";
 import { spawnForRun, detachedInfo, type DetachedChild } from "./detached.js";
 import { cleanupAfterRun, spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
 import { relayApi } from "../llm.js";
@@ -131,6 +132,15 @@ export class CodexExecutor implements AgentExecutor {
     return sessionId ? ["exec", ...common, "resume", sessionId, "-"] : ["exec", ...common, "-"];
   }
 
+  async prepareResume(opts: Pick<RunOpts, "cwd" | "sessionId" | "env" | "extraArgs"> & { steerable?: boolean }): Promise<void> {
+    if (opts.steerable && !this.appServerArgs(opts).ignored.length) return;
+    if (!opts.sessionId || !(await findArchivedRollout(opts.sessionId, opts.env?.CODEX_HOME))) return;
+    await unarchiveCodexThread({
+      bin: this.bin, args: this.appServerArgs(opts).args, cwd: opts.cwd,
+      env: { ...this.env(), ...opts.env },
+    }, opts.sessionId);
+  }
+
   run(opts: RunOpts): RunHandle {
     const contextNotBeforeMs = Date.now();
     const args = this.execArgs(opts, opts.sessionId ?? "");
@@ -140,13 +150,14 @@ export class CodexExecutor implements AgentExecutor {
     return {
       sessionId: opts.sessionId ?? "",
       commandLine,
-      events: parseCodexStream(child, opts.trace, lifecycle, {
+      events: archiveVisibleCodexSession(parseCodexStream(child, opts.trace, lifecycle, {
         initialThreadId: opts.sessionId ?? "",
         contextNotBeforeMs,
         // 这一轮真正生效的 CODEX_HOME(多用户模式由 auth/run-env.ts 注入),rollout 就写在
         // 它下面 —— 水位必须去同一个目录读。
         configDir: opts.env?.CODEX_HOME,
-      }),
+      }), { bin: this.bin, args: this.appServerArgs(opts).args, cwd: opts.cwd,
+        env: { ...this.env(), ...opts.env } }, opts.sessionId, () => cleanupAfterRun(child)),
       kill: () => {
         lifecycle.stopRequested = true;
         killChild(child);
@@ -195,9 +206,11 @@ export class CodexExecutor implements AgentExecutor {
     const detached = child as Partial<DetachedChild>;
     if (child.stdin && opts.commandLine.includes("app-server") && detached.ashPaths) {
       const recovered = readCodexAppServerState(detached.ashPaths.out, opts.sessionId);
+      const env = { ...this.env(), ...(opts.configDir ? { CODEX_HOME: opts.configDir } : {}) };
       return openCodexAppServer({
         bin: this.bin,
-        args: [],
+        args: this.appServerArgs({ env }).args,
+        env,
         cwd: ".",
         prompt: "",
         sessionId: opts.sessionId,
@@ -205,6 +218,7 @@ export class CodexExecutor implements AgentExecutor {
         reattach: {
           threadId: recovered.threadId ?? opts.sessionId,
           turnId: recovered.turnId ?? "",
+          completedTurn: recovered.completedTurn,
         },
         startProcess: () => child,
       });
@@ -215,11 +229,13 @@ export class CodexExecutor implements AgentExecutor {
       commandLine: opts.commandLine,
       // 接管的是上一轮留下的进程，trace 那份诊断在它自己那一轮已经写过了。
       // 重启接管拿不到原回合起点；从接管时刻算下界，宁可少一轮水位也不复用旧值。
-      events: parseCodexStream(child, undefined, lifecycle, {
+      events: archiveVisibleCodexSession(parseCodexStream(child, undefined, lifecycle, {
         initialThreadId: opts.sessionId,
         contextNotBeforeMs: Date.now(),
         configDir: opts.configDir,
-      }),
+      }), { bin: this.bin, args: this.appServerArgs({}).args, cwd: ".",
+        env: { ...this.env(), ...(opts.configDir ? { CODEX_HOME: opts.configDir } : {}) } },
+      opts.sessionId, () => cleanupAfterRun(child)),
       kill: () => {
         lifecycle.stopRequested = true;
         child.kill();
@@ -234,7 +250,8 @@ export class CodexExecutor implements AgentExecutor {
   // 在 codex 自己的 thread 里连着。取舍、实测结论与两处可见差异写在
   // executors/codex-resident.ts 头部。
   openResident(opts: RunOpts): ResidentHandle {
-    return openCodexResident({
+    let lastChild: ChildProcess | undefined;
+    const handle = openCodexResident({
       initialSessionId: opts.sessionId ?? "",
       initialPrompt: opts.prompt,
       startTurn: (prompt, sessionId) => {
@@ -244,6 +261,7 @@ export class CodexExecutor implements AgentExecutor {
         // 常驻的每一轮都是**新进程**,所以 stdin 照旧读完即关(keepStdin 是
         // claude 那种「一个进程吃多个回合」才需要的)。
         const child = spawnAgent(opts.cwd, this.bin, args, prompt, { ...this.env(), ...opts.env });
+        lastChild = child;
         return {
           child,
           commandLine: redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`),
@@ -257,6 +275,11 @@ export class CodexExecutor implements AgentExecutor {
       },
       killTurn: (child) => killChild(child),
     });
+    handle.events = archiveVisibleCodexSession(handle.events, {
+      bin: this.bin, args: this.appServerArgs(opts).args, cwd: opts.cwd,
+      env: { ...this.env(), ...opts.env },
+    }, opts.sessionId, async () => { if (lastChild) await cleanupAfterRun(lastChild); });
+    return handle;
   }
 }
 

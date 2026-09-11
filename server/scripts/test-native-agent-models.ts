@@ -93,6 +93,7 @@ rl.on('line', (line) => {
   const m = JSON.parse(line);
   if (m.method === 'initialize') send({ id: m.id, result: {} });
   if (m.method === 'thread/start') send({ id: m.id, result: { thread: { id: 'main', model: 'parent-model' } } });
+  if (m.method === 'thread/archive') send({ id: m.id, result: {} });
   if (m.method === 'turn/start') {
     send({ id: m.id, result: { turn: { id: 'turn' } } });
     send({ method: 'turn/started', params: { threadId: 'child', turn: { id: 'child-turn' } } });

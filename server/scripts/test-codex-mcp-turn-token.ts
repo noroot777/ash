@@ -67,6 +67,7 @@ if (args.includes("app-server")) {
   const receive = (message) => {
     if (message.id === undefined) return;
     if (message.method === "initialize") send({ id: message.id, result: { userAgent: "fake" } });
+    else if (message.method === "thread/archive") send({ id: message.id, result: {} });
     else if (message.method === "thread/start") {
       send({ id: message.id, result: { thread: { id: "fake-thread" } } });
       send({ method: "thread/started", params: { thread: { id: "fake-thread" } } });

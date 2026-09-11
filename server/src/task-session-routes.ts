@@ -14,7 +14,7 @@ import { resumeCommandFor } from "./executors/resume.js";
 import { sessionRunMeta } from "./session-run-meta.js";
 import { parseSessionTrace, readableRunPath, sessionTracePath, sessionTranscriptPath } from "./transcript.js";
 import { sessionContext, sessionUsage } from "./usage.js";
-import { readCodexCliVersion } from "./executors/codex-rollout.js";
+import { codexHome, findArchivedRollout, readCodexCliVersion } from "./executors/codex-rollout.js";
 import { affectedCodexSessionWarning } from "./executors/version-policy.js";
 import { enrichNativeWorkModels } from "./native-work-models.js";
 
@@ -25,16 +25,18 @@ async function toSession(
   // 版本得从**这条会话的 rollout 实际写在的那个目录**里读(会话行记着;老行按当时的
   // 规则解释)。按宿主机默认目录读的话,隔离档下列表恒为「读不出版本」,而起跑守卫那边
   // 却按个人目录判定 —— 界面和守卫会给出两套结论(第 1 轮 finding 1)。
-  const cliVersion = r.agentType === "codex" && r.cliSessionId
-    ? await readCodexCliVersion(r.cliSessionId, await sessionCliConfigDir(r, "codex"))
-    : null;
+  const configDir = r.agentType === "codex" ? await sessionCliConfigDir(r, "codex") : null;
+  const [cliVersion, archived] = r.agentType === "codex" && r.cliSessionId
+    ? await Promise.all([readCodexCliVersion(r.cliSessionId, configDir), findArchivedRollout(r.cliSessionId, configDir)])
+    : [null, null];
   return {
     ...r,
     role: r.role as Session["role"],
     agentType: r.agentType as Session["agentType"],
     transcriptPath: sessionTranscriptPath(r.taskId, r.id),
     resumeCommand: r.cliSessionId
-      ? resumeCommandFor(r.agentType, r.cwd ?? r.worktreePath ?? ".", r.cliSessionId, r.resumeEnv, r.resumeArgs)
+      ? resumeCommandFor(r.agentType, r.cwd ?? r.worktreePath ?? ".", r.cliSessionId, r.resumeEnv, r.resumeArgs,
+        archived ? { configDir: codexHome(configDir) } : undefined)
       : r.resumeCommand,
     ...run,
     usage: sessionUsage(r),

@@ -13,7 +13,7 @@ import { execFileText } from "./exec.js";
 import { expandHome, isGitRepo, worktreePathFor } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { DATA_DIR, RUNS_DIR } from "./paths.js";
-import { codexHome, findRollout } from "./executors/codex-rollout.js";
+import { findRollout, rolloutExportPath } from "./executors/codex-rollout.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
 import { HandoffError, MAX_BUNDLE_BYTES, MAX_FILE_BYTES, MB } from "./handoff-types.js";
 import type {
@@ -118,7 +118,7 @@ export async function collectSessionFiles(
       abs = await findRollout(s.cliSessionId, codexConfigDir);
       // 协议里 rel 一律 `/` 分隔:Windows 上 relative 产出反斜杠,POSIX 导入侧会把
       // 整串当成一个文件名落错地方(codex 按目录深度扫描,从此找不到这份会话)。
-      if (abs) rel = relative(join(codexHome(codexConfigDir), "sessions"), abs).split(sep).join("/");
+      if (abs) rel = rolloutExportPath(abs, codexConfigDir);
     } else {
       notes.push(`会话 ${s.id}（${s.agentType}）:该执行器的会话文件迁移暂不支持,对端只能全新起跑`);
       continue;
