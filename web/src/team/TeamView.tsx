@@ -384,9 +384,9 @@ export function TeamView({
     && workers.length > 0
     && workers.every((worker) => worker.status === "done");
   const inspectorPolicy = useMemo(() => ({
-    stateKey: `team:subagents:${allWorkersComplete ? "complete" : "active"}`,
+    stateKey: `team:timeline:${allWorkersComplete ? "complete" : "active"}`,
     requiredTabId: "info",
-    defaultOpenTabIds: allWorkersComplete ? ["info", "review", "subagents"] : ["info", "workers", "subagents"],
+    defaultOpenTabIds: allWorkersComplete ? ["info", "review", "timeline"] : ["info", "workers", "timeline"],
     defaultActiveTabId: allWorkersComplete ? "review" : "workers",
   }), [allWorkersComplete]);
   const selectWorker = useCallback((taskId: string) => {
