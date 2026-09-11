@@ -8,8 +8,8 @@ import type { AgentType } from "@ash/shared";
 import { and, desc, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
-import { freeReviewRounds, freeReviewRuns, projects, tasks } from "./db/schema.js";
-import { freeReviewPrompt } from "./free-review-prompts.js";
+import { freeReviewRounds, freeReviewRuns, projects, sessions, tasks } from "./db/schema.js";
+import { freeReviewPrompt, freeReviewResumeMessage } from "./free-review-prompts.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
 import { headCommit } from "./git.js";
@@ -17,6 +17,7 @@ import { cleanupPostMergeReviewWorktree, preparePostMergeReviewWorktree } from "
 import { claimTurn, continueWhenIdle, releaseTurn } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
+import { turnProducedWork } from "./transcript.js";
 import { id, now } from "./util.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -75,13 +76,28 @@ export async function failReviewStart(run: ReviewRunRow, message: string): Promi
   bus.publish({ type: "task.review", taskId: run.taskId });
 }
 
+/**
+ * 崩掉的那一轮能不能**从中断处接着做**：那条 CLI 会话在崩掉的那一回合里干过活吗。
+ *
+ * 干过活 = 它拿到过本轮任务书、做到一半的分析都在它自己的会话历史里，续跑只要一句
+ * 「接着做」；没干过活（CLI 压根没起来）就只能把任务书整份重发 —— 对一条没见过本轮
+ * 任务的会话说「继续」，它要么原地发呆，要么接着上一轮的事往下说。
+ */
+async function reviewTurnResumable(taskId: string, sessionId: string): Promise<boolean> {
+  const row = (await db.select({ startedAt: sessions.startedAt, turnStartedAt: sessions.turnStartedAt })
+    .from(sessions).where(eq(sessions.id, sessionId))).at(0);
+  if (!row) return false;
+  // 会话行跨回合复用，turnStartedAt 记着最近一次回合的起点；没有它（老行）就退回建会话的时刻。
+  return turnProducedWork(taskId, sessionId, row.turnStartedAt ?? row.startedAt);
+}
+
 export async function launchReviewRound(
   task: TaskRow,
   run: ReviewRunRow,
   // 重跑崩掉的那一轮时传：落回**那一条**审查会话（挑错人等于换个审查者从头看），
   // 且必须关掉 freshSession —— 第 1 轮崩了的话它本来会新开一条空会话。
   opts: { resumeSessionId?: string; retry?: boolean } = {},
-): Promise<void> {
+): Promise<{ resumed: boolean }> {
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   let cwd: string | undefined;
   // 锚定本轮结论的基准：审查启动时工作区的 HEAD。之后代码变没变、结论新不新鲜，
@@ -100,15 +116,24 @@ export async function launchReviewRound(
     }
   }
   const prompt = await freeReviewPrompt(task, run, run.currentRound, project?.repoPath ?? "(项目已不存在)");
+  // 重跑分两档，差别不在按钮而在**送进去的那句话**：上下文还在就只说「接着做」（一条崩在
+  // 10M token 上的审查，重来一次就是再烧 10M）；上下文是空的才把任务书整份重发。
+  const resumed = !!opts.retry && !!opts.resumeSessionId && await reviewTurnResumable(task.id, opts.resumeSessionId);
+  const label = run.targetKind === "accepted_merge" ? "合并结果审查" : `自由工作流第 ${run.currentRound} 轮审查`;
   await appendTaskTimeline(task.id, opts.retry
-    ? run.targetKind === "accepted_merge"
-      ? `合并结果审查重跑上一回合：${run.reviewerName}。`
-      : `自由工作流第 ${run.currentRound} 轮审查重跑上一回合：${run.reviewerName}。`
+    ? resumed
+      ? `${label}从中断处继续：${run.reviewerName}。`
+      : `${label}重跑上一回合：${run.reviewerName}。`
     : run.targetKind === "accepted_merge"
       ? `合并结果审查开始：${run.reviewerName} · ${run.targetBranch}@${run.targetCommit?.slice(0, 8)} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`
       : `自由工作流第 ${run.currentRound} 轮审查开始：${run.reviewerName} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`);
   bus.publish({ type: "task.review", taskId: task.id });
-  continueWhenIdle(task.id, opts.retry ? `上一回合异常结束，本轮审查从头继续。\n\n${prompt}` : prompt, {
+  const message = !opts.retry
+    ? prompt
+    : resumed
+      ? freeReviewResumeMessage(task, run, run.currentRound)
+      : `上一回合异常结束，本轮审查从头继续。\n\n${prompt}`;
+  continueWhenIdle(task.id, message, {
     system: "run",
     sideTurn: true,
     agent: run.agentType as AgentType,
@@ -124,6 +149,7 @@ export async function launchReviewRound(
     // 再核一遍冻结事实（turn-freeze.ts）；命中就撤回，这条链留在 failed，仍可再重试。
     freezeGuard: !!opts.retry,
   }, (error) => failReviewStart(run, error));
+  return { resumed };
 }
 
 export async function nextRound(task: TaskRow, run: ReviewRunRow): Promise<void> {
@@ -149,8 +175,11 @@ export async function nextRound(task: TaskRow, run: ReviewRunRow): Promise<void>
  * 「这条审查链能不能重跑上一回合」的唯一判据，返回拒绝文案或 null。
  *
  * 只认一种形状：最近一条 run 落在 failed、且它当前那一轮落在 error —— 那正是「审查回合
- * 异常结束（退出码非零 / 启动失败），自动链已停」留下的痕迹。已给出结论的轮次
- * （passed/stopped）不在此列：那是正常结局，要再看一遍应该派新一轮审查。
+ * 没能给出结论（崩了 / 启动失败 / 报错后照样 exit 0），自动链已停」留下的痕迹。已给出结论
+ * 的轮次（passed/stopped）不在此列：那是正常结局，要再看一遍应该派新一轮审查。
+ *
+ * 这也是审查档「上一回合崩没崩」的**唯一**判据，退出码不参与：CLI 打完
+ * 「API Error: Connection lost mid-response」仍会 exit 0，那一轮照样一个结论都没有。
  */
 export function freeReviewRetryBlocker(
   run: ReviewRunRow | null,
@@ -165,14 +194,17 @@ export function freeReviewRetryBlocker(
 /**
  * 把崩掉的那一轮审查重新拉起来（会话续跑，不是新开一轮）。
  *
- * 触发点是会话底部那颗「重跑上一回合」——审查会话异常结束时，用户看到的就是那条
+ * 触发点是会话底部那颗「继续本轮审查」——审查会话异常结束时，用户看到的就是那条
  * reviewer 会话，重试语义只能是「让**同一位审查者**接着把这一轮跑完」。走新一轮
  * （nextRound）会白白吃掉一次复审额度，还会让 report.md 落到另一个 round 目录。
+ *
+ * 返回的 `resumed` 是「这一次到底是接着做还是从头再来」（判据见 reviewTurnResumable）：
+ * 两者用户都只按了同一颗按钮，所以必须原样回给前端，让它如实说是哪一种。
  */
 export async function reopenFailedFreeReview(
   taskId: string,
   opts: { holdTurn?: boolean; resumeSessionId?: string } = {},
-): Promise<FreeWorkflowApiState> {
+): Promise<{ state: FreeWorkflowApiState; resumed: boolean }> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new Error("任务不存在");
   if (task.mode !== "single" || task.parentId || task.reviewOf || task.workflowMode !== "free") {
@@ -204,14 +236,14 @@ export async function reopenFailedFreeReview(
         .where(eq(freeReviewRuns.id, run!.id));
       const revived = { ...run!, status: "reviewing", updatedAt: at, finishedAt: null };
       try {
-        await launchReviewRound(task, revived, { resumeSessionId: opts.resumeSessionId, retry: true });
+        const { resumed } = await launchReviewRound(task, revived, { resumeSessionId: opts.resumeSessionId, retry: true });
+        return { state: await freeWorkflowState(taskId), resumed };
       } catch (error) {
         // 起不来就把 run/round 放回 failed/error（否则它会永远挂在 reviewing，验收和
         // 再派审都被 hasActiveFreeReview 挡住）。
         await failReviewStart(revived, error instanceof Error ? error.message : String(error));
         throw error;
       }
-      return await freeWorkflowState(taskId);
     } finally {
       releaseFreeWorkflowAction(taskId);
     }

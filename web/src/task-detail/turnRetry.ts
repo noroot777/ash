@@ -16,7 +16,8 @@ import type { ConversationItem } from "./conversationModel.ts";
 // 后来被改过或删了）：那三样前端手上没有权威数据，按钮照出，点下去由 409 如实说明原因。
 
 export type TurnRetryKind = "turn" | "review";
-export type TurnRetryTarget = { sessionId: string; kind: TurnRetryKind; exitStatus: number };
+/** exitStatus 可能是 0/null：审查档不看退出码（见下），按钮文案据此换说法。 */
+export type TurnRetryTarget = { sessionId: string; kind: TurnRetryKind; exitStatus: number | null };
 
 /**
  * 这条自由工作流的审查链能不能重跑上一回合（镜像服务端 `freeReviewRetryBlocker`）。
@@ -53,14 +54,19 @@ export function turnRetryTarget(
   // 它们的入口是头部那颗「运行」；只有服务端记下的 stoppedAs 分得开这两者。
   if (session.stoppedAs) return null;
   const exitStatus = session.exitStatus;
-  // exitStatus 为 null = 回合还没结算（或 server 重启时断的），那不是「异常结束」。
-  if (exitStatus == null || exitStatus === 0) return null;
   if (session.role === "reviewer") {
     // 自由工作流的审查回合崩了：按钮把**那一轮**重新拉起来（同一位审查者续跑），而不是
     // 拿任务自己的实现 agent 顶上。链本身不在「异常结束」状态就不给按钮。
+    //
+    // 这一档**不看退出码**：审查链自己记着「这一轮有没有给出结论」（run=failed +
+    // round=error），那才是权威判据。CLI 打完「API Error: Connection lost mid-response」
+    // 照样 exit 0，拿退出码当门槛的话，时间线上明写「未能正常给出结论，已停止自动链」，
+    // 界面上却一个能重来的入口都没有（2026-09-11 实测）。服务端同口径。
     if (task.workflowMode !== "free" || !opts.reviewRetryable) return null;
     return { sessionId: session.id, kind: "review", exitStatus };
   }
+  // exitStatus 为 null = 回合还没结算（或 server 重启时断的），那不是「异常结束」。
+  if (exitStatus == null || exitStatus === 0) return null;
   // 剩下的只放行普通实现回合：lead/voiceA/voiceB 这些身份连「上一回合」的形状都不同。
   if (session.role !== "single") return null;
   // 旁路回合（就地验证、`/compact` 这类 CLI 原生命令）重投会按任务当前配置另跑一段普通

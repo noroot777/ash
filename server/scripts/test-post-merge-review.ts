@@ -124,7 +124,9 @@ try {
   });
   assert.equal(claimTurn("accepted-task"), true);
   const retried = await reopenFailedFreeReview("accepted-task");
-  assert.equal(retried.reviews.find((run) => run.id === retryRun.id)?.status, "reviewing");
+  assert.equal(retried.state.reviews.find((run) => run.id === retryRun.id)?.status, "reviewing");
+  // 这一轮压根没跑过（没有 trace），接不上 —— 只能重发整份任务书。
+  assert.equal(retried.resumed, false, "没有可接着做的上下文时必须如实说是从头跑");
   assert.equal(existsSync(postMergeReviewWorktreePath(repo, "accepted-task", retryRun.id)), true,
     "验收后审查重跑必须重建准确 merge commit 的临时 worktree");
   await cleanupAcceptedMergeRun(retryRun);

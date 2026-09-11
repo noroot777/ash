@@ -294,7 +294,8 @@ export function conversationFeedRows(
 
   for (const item of items) {
     const start = laneStart(item);
-    // 同一轮的「重跑上一回合」接着原来那张卡跑，不另开一张只有半截的历史卡。
+    // 同一轮的重跑（「重跑上一回合」/「从中断处继续」）接着原来那张卡跑，不另开一张
+    // 只有半截的历史卡。
     const rerun = !!active && !!start && start.kind === active.source && start.round === active.round;
     if (active && start && !rerun) pushActive({ superseded: true });
     else if (active && closeBefore(active, item)) pushActive();
