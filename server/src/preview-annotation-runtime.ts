@@ -52,6 +52,7 @@ export function previewAnnotationRuntime(): string {
   const interval = bind(window.setInterval, window);
   const clearTimer = bind(window.clearInterval, window);
   const frame = bind(window.requestAnimationFrame, window);
+  const defer = bind(window.setTimeout, window);
   const now = Date.now.bind(Date);
   const stringify = JSON.stringify.bind(JSON);
   const String = window.String;
@@ -272,6 +273,7 @@ export function previewAnnotationRuntime(): string {
     schedule();
   };
   const capture = (event) => {
+    if (event.key === 'Escape' && (event.type === 'keydown' || event.type === 'keyup' || event.type === 'keypress')) return;
     if (!port || mode !== 'annotate') return;
     stop(event);
     if (event.cancelable) prevent(event);
@@ -300,10 +302,20 @@ export function previewAnnotationRuntime(): string {
       } else if (event.type === 'keydown' && (event.key === 'z' || event.key === 'Z') && (event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey) {
         if (gesture) { releasePointer(host, gesture.pointerId); gesture = null; }
         else send({ type: 'undo' });
-      } else if (event.type === 'pointercancel' || (event.type === 'keydown' && event.key === 'Escape')) gesture = null;
+      } else if (event.type === 'pointercancel') gesture = null;
       schedule();
     } catch { gesture = null; send({ type: 'error', message: '无法读取这个页面对象，请选择外层容器或改用截图批注。' }); }
   };
+  add(window, 'keydown', (event) => {
+    if (!port || event.key !== 'Escape' || event.defaultPrevented) return;
+    const sourcePort = port;
+    // A later task observes preventDefault from page handlers, including window listeners registered after this runtime.
+    defer(() => {
+      if (port !== sourcePort || event.defaultPrevented) return;
+      if (gesture) { try { releasePointer(host, gesture.pointerId); } catch {} gesture = null; schedule(); }
+      send({ type: 'escape' });
+    }, 0);
+  }, true);
   // These listeners precede page listeners but remain inert until a transferred parent port arrives.
   for (const type of ['pointerdown', 'pointerup', 'pointermove', 'pointercancel', 'mousedown', 'mouseup', 'mousemove', 'mouseover', 'mouseout',
     'click', 'dblclick', 'auxclick', 'contextmenu', 'touchstart', 'touchmove', 'touchend', 'keydown', 'keyup', 'keypress', 'beforeinput', 'submit', 'dragstart', 'drop']) {

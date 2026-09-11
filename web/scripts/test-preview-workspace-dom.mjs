@@ -45,7 +45,19 @@ export async function testPreviewWorkspaceDom() {
             const root = attach.call(this, options); window.annotationShadow = root; return root;
           };
           ${previewAnnotationRuntime()}
-          </script></head><body><div id="drag-target" style="margin:20px;width:400px;height:280px;background:#eee">Rectangle target</div></body></html>` });
+          </script></head><body><div id="drag-target" style="margin:20px;width:400px;height:280px;background:#eee">Rectangle target</div>
+          <input id="page-input" aria-label="Page input"><script>
+            window.escapeCount = 0;
+            for (const [phase, target, capture] of [['target', document.getElementById('page-input'), false],
+              ['document', document, false], ['window-capture', window, true], ['window', window, false]]) {
+              target.addEventListener('keydown', event => {
+                if (event.key === 'Escape' && window.consumeEscape === phase) event.preventDefault();
+              }, capture);
+            }
+            window.addEventListener('keydown', event => {
+              if (event.key === 'Escape') { window.escapeCount++; window.escapePrevented = event.defaultPrevented; }
+            });
+          </script></body></html>` });
         return route.fulfill({ contentType: "text/html", body: `<html><body><h1>Fixture preview</h1><script>
           window.commands = [];
           window.addEventListener('message', event => {
@@ -84,7 +96,8 @@ export async function testPreviewWorkspaceDom() {
         import { createRoot } from 'react-dom/client';
         import { PreviewWorkspace } from '/src/preview-workspace/PreviewWorkspace.tsx';
         import { DraftProvider } from '/src/lib/DraftStore.tsx';
-        createRoot(document.getElementById('root')).render(React.createElement(DraftProvider, {}, React.createElement(PreviewWorkspace, {taskId:'fixture',onClose:()=>{}})));
+        window.closeRequests = 0;
+        createRoot(document.getElementById('root')).render(React.createElement(DraftProvider, {}, React.createElement(PreviewWorkspace, {taskId:'fixture',onClose:()=>{window.closeRequests++;}})));
       </script></body></html>`) }));
     await page.goto(`http://127.0.0.1:${address.port}/__preview-test`);
     const button = (name) => page.getByRole("button", { name, exact: true });
@@ -219,9 +232,42 @@ export async function testPreviewWorkspaceDom() {
       await page.waitForFunction((name) => [...document.querySelectorAll('.preview-workspace-tools button')]
         .some((button) => button.textContent.includes(name) && button.getAttribute('aria-pressed') === 'true' && !button.disabled), name);
     }
+    const preservedDraft = await draft();
+    const loadsBeforeEscape = iframeLoads;
+    for (const mode of ['浏览', '标注']) {
+      await button(mode).click();
+      await page.waitForFunction((mode) => [...document.querySelectorAll('.preview-workspace-modes button')]
+        .some((button) => button.textContent === mode && button.getAttribute('aria-pressed') === 'true' && !button.disabled), mode);
+      await button('放大预览').click();
+      await runtimeFrame.evaluate(() => parent.postMessage({ type: 'escape' }, '*'));
+      await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 30)));
+      assert.equal(await button('还原预览').isVisible(), true, 'ordinary window messages cannot dismiss the workspace');
+      const input = runtimeFrame.locator('#page-input');
+      for (const phase of ['target', 'document', 'window-capture', 'window']) {
+        await runtimeFrame.evaluate((phase) => { window.consumeEscape = phase; }, phase);
+        await input.focus();
+        assert.equal(await page.evaluate(() => document.activeElement?.tagName), 'IFRAME');
+        const before = await runtimeFrame.evaluate(() => window.escapeCount);
+        await input.press('Escape');
+        await runtimeFrame.waitForFunction((before) => window.escapeCount === before + 1, before);
+        await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 30)));
+        assert.equal(await runtimeFrame.evaluate(() => window.escapePrevented), true, `${mode}: page can consume Escape at ${phase}`);
+        assert.equal(await button('还原预览').isVisible(), true, `${mode}: defaultPrevented keeps the workspace expanded`);
+      }
+      await runtimeFrame.evaluate(() => { window.consumeEscape = null; });
+      await input.press('Escape');
+      await button('放大预览').waitFor();
+      assert.equal(await runtimeFrame.evaluate(() => window.escapePrevented), false, `${mode}: runtime leaves Escape's default action alone`);
+      await input.press('Escape');
+      await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 30)));
+      assert.equal(await button('放大预览').isVisible(), true, 'Escape in compact view is idempotent');
+      assert.equal(await page.evaluate(() => window.closeRequests), 0, 'frame Escape cannot close the workspace');
+      assert.deepEqual(await draft(), preservedDraft, 'frame Escape cannot change annotation data');
+    }
+    assert.equal(iframeLoads, loadsBeforeEscape, 'frame Escape preserves the iframe document and channel');
     assert.equal(await page.getByText("未能连接页面标注", { exact: false }).count(), 0);
     assert.deepEqual(errors, []);
-    console.log("preview workspace DOM: launch/layout, undo/delete/locks, uploaded evidence saved state and deduplication, real runtime rectangle mouse drags and subsequent tools passed");
+    console.log("preview workspace DOM: launch/layout, undo/delete/locks, evidence, real runtime drawing, focused iframe Escape/defaultPrevented in browse and annotate modes passed");
   } finally {
     await browser?.close();
     await server.close();

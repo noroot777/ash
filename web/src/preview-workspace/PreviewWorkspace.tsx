@@ -51,6 +51,7 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
   itemsRef.current = items;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [notesOpen, setNotesOpen] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const [canSelectParent, setCanSelectParent] = useState(false);
   const [page, setPage] = useState<PreviewPageContext | null>(null);
   const [error, setError] = useState("");
@@ -78,6 +79,7 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
     } else if (event.type === "error") setError(event.message);
     else if (event.type === "image") batch.pageImage(event.id, event.image);
     else if (event.type === "undo") undo();
+    else if (event.type === "escape") setExpanded(false);
     else if (event.type === "annotation") {
       const current = itemsRef.current;
       const existing = current.find((item) => item.id === event.annotation.id && item.documentId === documentId);
@@ -138,7 +140,7 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
     await batch.fresh();
   };
 
-  return <PreviewWorkspaceLayout notesOpen={notesOpen} onToggleNotes={() => setNotesOpen(!notesOpen)}
+  return <PreviewWorkspaceLayout expanded={expanded} onExpandedChange={setExpanded} notesOpen={notesOpen} onToggleNotes={() => setNotesOpen(!notesOpen)}
     onClose={() => { review.dismiss(); onClose(); }} onKeyDown={(event) => {
       if (channel.mode === "annotate" && !batch.locked && isAnnotationUndo(event)) {
         event.preventDefault(); event.stopPropagation(); undo();

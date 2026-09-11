@@ -121,6 +121,8 @@ const tokenText = new TestNode(); tokenText.kind = 3; tokenText.content = 'token
 form.appendChild(input); form.appendChild(area); form.appendChild(token); root.appendChild(form);
 let hit: TestHtml = icon;
 const timers = new Set<() => void>();
+const deferred: Array<() => void> = [];
+const flushDeferred = () => { for (const callback of deferred.splice(0)) callback(); };
 const frames: Array<() => void> = [];
 const drawAll = () => { for (const draw of frames.splice(0)) draw(); };
 const parent = {};
@@ -129,6 +131,7 @@ const window = Object.assign(new TestTarget(), { parent, scrollX: 0, scrollY: 0,
   String, Math: pageMath, scrollBy: () => {},
   getComputedStyle: () => { const style = new TestStyle(); style.setProperty('overflow-y', 'auto'); return style; },
   setInterval: (fn: () => void) => { timers.add(fn); return fn; },
+  setTimeout: (fn: () => void) => deferred.push(fn),
   clearInterval: (fn: () => void) => timers.delete(fn), requestAnimationFrame: (fn: () => void) => frames.push(fn),
 });
 const location = { pathname: '/preview/test/PRIVATE_PREVIEW_TOKEN/web/home', hash: '#section?token=hash-secret' };
@@ -147,6 +150,8 @@ for (const name of Object.getOwnPropertyNames(pageMath)) {
 assert.equal(root.nodes.length, 2, 'embedded runtime is dormant before handshake');
 assert.equal(timers.size, 0);
 assert.equal(window.fire('click').defaultPrevented, false);
+assert.equal(window.fire('keydown', { key: 'Escape' }).defaultPrevented, false);
+assert.equal(deferred.length, 0, 'Escape is dormant before the parent handshake');
 const ignored = new TestPort();
 window.fire('message', { source: {}, origin: 'null', data: { protocol: PREVIEW_ANNOTATION_PROTOCOL }, ports: [ignored] });
 assert.equal(ignored.messages.length, 0, 'null origin is not identity');
@@ -156,6 +161,34 @@ assert.equal(root.nodes.length, 3);
 assert.equal(timers.size, 1);
 assert(port.messages.some((item) => (item as { type: string }).type === 'ready'));
 const command = (data: object) => port.fire('message', { data });
+const escapes = () => port.messages.filter((message) => parsePreviewMessage(message)?.type === 'escape').length;
+let pageUsesEscape = false, pageEscapes = 0;
+window.addEventListener('keydown', (event) => {
+  if ((event as TestEvent & { key: string }).key !== 'Escape') return;
+  pageEscapes++;
+  if (pageUsesEscape) event.preventDefault();
+});
+window.setTimeout = () => { throw new Error('page replaced timeout API'); };
+for (const mode of ['browse', 'annotate']) {
+  command({ type: 'configure', mode, tool: 'element' });
+  const before = escapes(), pageBefore = pageEscapes;
+  const escape = window.fire('keydown', { key: 'Escape' });
+  assert.equal(escape.defaultPrevented, false, `${mode}: runtime does not prevent Escape`);
+  assert.equal(escape.stopped, false, `${mode}: page receives Escape`);
+  assert.equal(pageEscapes, pageBefore + 1);
+  assert.equal(escapes(), before, 'Escape reporting waits until page event handlers finish');
+  flushDeferred();
+  assert.equal(escapes(), before + 1, `${mode}: unused Escape reaches the parent port`);
+  assert.equal(window.fire('keyup', { key: 'Escape' }).defaultPrevented, false);
+  pageUsesEscape = true;
+  assert.equal(window.fire('keydown', { key: 'Escape' }).defaultPrevented, true);
+  flushDeferred();
+  assert.equal(escapes(), before + 1, `${mode}: later page preventDefault suppresses the message`);
+  pageUsesEscape = false;
+  window.fire('keydown', { key: 'Escape', defaultPrevented: true });
+  flushDeferred();
+  assert.equal(escapes(), before + 1, 'an already prevented Escape is ignored');
+}
 const pointer = (type: string, x = 40, y = 60) => window.fire(type, { button: 0, pointerId: 1, clientX: x, clientY: y });
 const annotations = () => port.messages.flatMap((item) => {
   const event = parsePreviewMessage(item);
@@ -248,6 +281,9 @@ pointer('pointerdown', 200, 200); pointer('pointermove', 250, 250);
 window.fire('keydown', { key: 'z', ctrlKey: true }); pointer('pointerup', 250, 250);
 assert.equal(annotations().length, beforeSelect, 'undo cancels an unfinished stroke without committing it');
 assert.equal(requests(), count, 'canceling a stroke does not remove a previous annotation');
+pointer('pointerdown', 200, 200); pointer('pointermove', 250, 250);
+window.fire('keydown', { key: 'Escape' }); flushDeferred(); pointer('pointerup', 250, 250);
+assert.equal(annotations().length, beforeSelect, 'unhandled Escape still cancels an unfinished stroke');
 window.scrollY = 130; location.pathname = '/preview/test/PRIVATE_PREVIEW_TOKEN/web/next'; window.innerWidth = 800;
 for (const tick of timers) tick();
 const reported = port.messages.map(parsePreviewMessage).filter((item) => item?.type === 'context').at(-1);
@@ -279,7 +315,13 @@ assert.equal(window.fire('keydown', { key: 'z', ctrlKey: true }).defaultPrevente
 assert.equal(requests(), count, 'browse mode leaves page undo alone');
 assert.equal(window.fire('click').defaultPrevented, false);
 assert.equal(pageClicks, 1);
+const beforeDisconnect = escapes();
+window.fire('keydown', { key: 'Escape' });
 command({ type: 'disconnect' });
+flushDeferred();
+assert.equal(escapes(), beforeDisconnect, 'a deferred Escape cannot report after its port disconnects');
+window.fire('keydown', { key: 'Escape' });
+assert.equal(deferred.length, 0, 'disconnected runtime leaves Escape alone');
 assert.equal(root.nodes.length, 2);
 assert.equal(timers.size, 0);
 assert(port.closed);
@@ -316,4 +358,4 @@ assert(!sameAnnotationBatch(saved, null));
 const missingPath = structuredClone(saved); delete missingPath.evidence[0].path;
 const undefinedPath = structuredClone(missingPath); undefinedPath.evidence[0].path = undefined;
 assert(sameAnnotationBatch(missingPath, undefinedPath), 'omitted optional fields match JSON persistence');
-console.log('preview annotation: CSP rewrite, top-level dormancy, source/port handshake, modes, parent selection, shapes, pins, redaction, context and cleanup passed');
+console.log('preview annotation: CSP rewrite, dormancy, source/port handshake, Escape forwarding/defaultPrevented/cleanup, modes, shapes, pins, redaction and context passed');
