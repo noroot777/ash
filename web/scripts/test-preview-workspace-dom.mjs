@@ -9,6 +9,7 @@ import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { previewAnnotationRuntime } from "../../server/src/preview-annotation-runtime.ts";
 import { parseAnnotationBatch } from "../../shared/src/page-annotation-batch.ts";
 import { checkFloatingPreview, previewClearRatio } from "./preview-floating-checks.mjs";
+import { checkExpandedPreviewShortcuts, checkPreviewControlShortcuts } from "./preview-shortcut-checks.mjs";
 
 export async function testPreviewWorkspaceDom() {
   const cacheDir = await mkdtemp(join(tmpdir(), "ash-preview-workspace-test-"));
@@ -110,17 +111,37 @@ export async function testPreviewWorkspaceDom() {
         import { PreviewWorkspace, PreviewWorkspaceEntry } from '/src/preview-workspace/PreviewWorkspace.tsx';
         import { DraftProvider } from '/src/lib/DraftStore.tsx';
         import { WorkspaceToast } from '/src/workspace/WorkspaceToast.tsx';
+        import { useWorkspaceShortcuts } from '/src/workspace/useWorkspaceShortcuts.ts';
         import '/src/styles/workspace.css';
         window.closeRequests = 0;
+        window.workspaceShortcutActions = [];
+        const tasks = [{id:'previous'}, {id:'fixture'}, {id:'next'}];
+        const logShortcut = action => window.workspaceShortcutActions.push(action);
         function Fixture() {
           const [toast, setToast] = React.useState(true);
           const [open, setOpen] = React.useState(sessionStorage.getItem('preview-open') === 'true');
-          const workspace = open ? React.createElement(PreviewWorkspace, {taskId:'fixture',onClose:()=>{
+          const [selectedTaskId, setSelectedTaskId] = React.useState('fixture');
+          const openPreview = () => { sessionStorage.setItem('preview-open', 'true'); setOpen(true); };
+          useWorkspaceShortcuts({
+            enabled: true, paletteOpen: false, composerOpen: false, spreadOpen: false,
+            orderedTasks: tasks, selectedTaskId,
+            onTask: task => {
+              logShortcut('task:' + task.id); setSelectedTaskId(task.id);
+              sessionStorage.removeItem('preview-open'); setOpen(false);
+            },
+            onTogglePalette: () => logShortcut('palette'), onCreate: () => logShortcut('create'),
+            onToggleSpread: () => logShortcut('spread'), onCloseSpread: () => logShortcut('close-spread'),
+            onToggleTaskMode: () => logShortcut('task-mode'),
+          });
+          const workspace = open ? React.createElement(PreviewWorkspace, {key:selectedTaskId,taskId:selectedTaskId,onClose:()=>{
             window.closeRequests++; sessionStorage.removeItem('preview-open'); setOpen(false);
-          }}) : React.createElement(PreviewWorkspaceEntry, {onOpen:()=>{
-            sessionStorage.setItem('preview-open', 'true'); setOpen(true);
-          }});
-          return React.createElement(React.Fragment, {}, workspace, createPortal(React.createElement(WorkspaceToast, {
+          }}) : React.createElement(PreviewWorkspaceEntry, {onOpen:openPreview});
+          const sidebar = createPortal(React.createElement(React.Fragment, {},
+            React.createElement('button', {id:'preview-external-opener',onClick:openPreview}, '外部预览入口'),
+            React.createElement('output', {id:'workspace-selected-task'}, selectedTaskId),
+            React.createElement('button', {'data-workspace-run-action':true,onClick:()=>logShortcut('run')}, '运行任务'),
+          ), document.getElementById('sidebar'));
+          return React.createElement(React.Fragment, {}, workspace, sidebar, createPortal(React.createElement(WorkspaceToast, {
             toasts: { pinned: toast ? {message:'预览启动提示仍然可见'} : null, transient: null }, onDismiss:()=>setToast(false),
           }), document.getElementById('toast-root')));
         }
@@ -130,6 +151,7 @@ export async function testPreviewWorkspaceDom() {
     const button = (name) => page.getByRole("button", { name, exact: true });
     await button("打开预览工作区").click();
     assert.deepEqual(await page.locator(".preview-workspace").boundingBox(), { x: 0, y: 0, width: 1400, height: 900 }, "the entry opens the expanded workspace directly, before preview launch");
+    await checkExpandedPreviewShortcuts(page);
     await button("按已保存配置启动").waitFor({ timeout: 10000 }).catch((error) => { throw new Error(`${error.message}\n${errors.join("\n")}`); });
     assert.equal(await button("启动 静态页面").isVisible(), false, "project configuration hides alternatives by default");
     assert.equal(await button("启动工作流预览").isVisible(), false);
@@ -391,6 +413,7 @@ export async function testPreviewWorkspaceDom() {
       await button('收起意见栏').click();
     }
     await page.setViewportSize({ width: 1400, height: 900 });
+    await checkPreviewControlShortcuts(page, draft);
     await button('还原预览').click();
     await button('关闭预览工作区').click();
     await button('打开预览工作区').click();
