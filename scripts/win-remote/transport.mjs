@@ -143,11 +143,6 @@ const B64ISH = /^[A-Za-z0-9+/=]{24,}$/;
  * 改成按**内容**认:每一折都是我们发出去那串字符的连续子串,拿原文一查便知,折在哪儿都无所谓。
  * 再加一条「纯 base64 长串」兜底,防某一折被插进光标控制码后对不上原文。
  */
-export function hiddenProcessLaunchLine(hasCwd = false) {
-  return `$__p=Start-Process -FilePath $__x -ArgumentList '-NoProfile','-NonInteractive','-File',$__s -RedirectStandardOutput $__o -RedirectStandardError $__r -PassThru -WindowStyle Hidden`
-    + (hasCwd ? ` -WorkingDirectory $__d` : ``);
-}
-
 const echoFilter = (sent) => (line) => {
   const s = line.trim();
   if (s.length < 24) return false; // 太短的片段容易误伤真输出,而它也淹没不了什么
@@ -254,7 +249,7 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
       `$__nl=[Environment]::NewLine`,
       // 容器要在起进程**之前**建好(见 kill-tree.mjs 顶部:事后按父链补拍快照够不着脱链后代)。
       ...jobPreludeLines(),
-      hiddenProcessLaunchLine(Boolean(cwd)),
+      `$__p=Start-Process -FilePath $__x -ArgumentList '-NoProfile','-NonInteractive','-File',$__s -RedirectStandardOutput $__o -RedirectStandardError $__r -PassThru -NoNewWindow` + (cwd ? ` -WorkingDirectory $__d` : ``),
       jobAssignLine(),
       `$null=$__p|Wait-Process -Timeout ${secs} -ErrorAction SilentlyContinue`,
       // 超时收尾要**连整棵进程树一起杀,而且确认它真的退干净了**再往下走。
