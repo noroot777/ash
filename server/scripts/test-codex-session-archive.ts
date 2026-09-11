@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { AgentEvent } from "@ash/shared";
 import { openCodexAppServer, readCodexAppServerState } from "../src/executors/codex-app-server.js";
 import { archiveCodexThread } from "../src/executors/codex-session-archive.js";
@@ -102,7 +103,20 @@ async function waitFor(predicate: () => boolean) {
 }
 
 try {
+  mkdirSync(join(home, "sqlite"), { recursive: true });
+  const catalog = new DatabaseSync(join(home, "sqlite", "codex.db"));
+  catalog.exec(`CREATE TABLE local_thread_catalog (host_id TEXT, thread_id TEXT, missing_candidate INTEGER);
+    CREATE TABLE local_thread_catalog_sync_state (host_id TEXT, observation_sequence INTEGER);
+    CREATE TABLE local_thread_catalog_metadata (id INTEGER, catalog_revision INTEGER);
+    INSERT INTO local_thread_catalog_sync_state VALUES ('local', 1);
+    INSERT INTO local_thread_catalog_metadata VALUES (1, 1);`);
+  catalog.prepare("INSERT INTO local_thread_catalog VALUES ('local', ?, 0)").run(id);
+  catalog.close();
   const first = await consume(open());
+  const reopenedCatalog = new DatabaseSync(join(home, "sqlite", "codex.db"), { readOnly: true });
+  assert.equal(reopenedCatalog.prepare("SELECT count(*) n FROM local_thread_catalog").get()?.n, 0,
+    "app-server 正常结束在 done 前同步清理 Desktop 的持久侧栏");
+  reopenedCatalog.close();
   assert.equal(first.at(-1)?.kind, "done");
   assert.equal(first.find((event) => event.kind === "done")?.exitStatus, 0);
   assert.ok(existsSync(archived) && !existsSync(active));

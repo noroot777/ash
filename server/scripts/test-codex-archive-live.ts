@@ -4,6 +4,7 @@ import { createInterface } from "node:readline";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { AgentEvent } from "@ash/shared";
 import { CodexExecutor } from "../src/executors/codex.js";
 import { findArchivedRollout, findRollout, readCodexCliVersion } from "../src/executors/codex-rollout.js";
@@ -53,15 +54,34 @@ const skill = "---\nname: archive-live-marker\ndescription: Existing installed s
 await writeFile(join(home, "skills", "archive-live-marker", "SKILL.md"), skill);
 const env = { CODEX_HOME: home };
 const ex = new CodexExecutor();
+await mkdir(join(home, "sqlite"));
+const catalogPath = join(home, "sqlite", "codex.db");
+const catalog = new DatabaseSync(catalogPath);
+catalog.exec(`CREATE TABLE local_thread_catalog (host_id TEXT, thread_id TEXT PRIMARY KEY, missing_candidate INTEGER);
+  CREATE TABLE local_thread_catalog_sync_state (host_id TEXT, observation_sequence INTEGER);
+  CREATE TABLE local_thread_catalog_metadata (id INTEGER, catalog_revision INTEGER);
+  INSERT INTO local_thread_catalog_sync_state VALUES ('local', 1);
+  INSERT INTO local_thread_catalog_metadata VALUES (1, 1);`);
+catalog.close();
+
+function seedDesktopEntry(id: string) {
+  const db = new DatabaseSync(catalogPath);
+  try { db.prepare("INSERT OR REPLACE INTO local_thread_catalog VALUES ('local', ?, 0)").run(id); }
+  finally { db.close(); }
+}
 
 async function run(prompt: string, sessionId?: string, exec = false) {
   if (exec) await ex.prepareResume({ cwd: workspace, sessionId, env });
+  if (sessionId) seedDesktopEntry(sessionId);
   const handle = exec ? ex.run({ cwd: workspace, prompt, sessionId, env })
     : ex.runSteerable({ cwd: workspace, prompt, sessionId, env });
   const events: AgentEvent[] = [];
   const deadline = setTimeout(() => handle.kill(), 30_000);
   try {
-    for await (const event of handle.events) events.push(event);
+    for await (const event of handle.events) {
+      if (event.kind === "session") seedDesktopEntry(event.cliSessionId);
+      events.push(event);
+    }
   } finally {
     clearTimeout(deadline);
     await handle.cleanup?.();
@@ -69,6 +89,10 @@ async function run(prompt: string, sessionId?: string, exec = false) {
   assert.equal(events.find((e) => e.kind === "done")?.exitStatus, 0,
     events.filter((e) => e.kind === "error" || e.kind === "system").map((e) => JSON.stringify(e)).join("\n"));
   assert.ok(!events.some((e) => e.kind === "system" && e.text.includes("自动归档未完成")));
+  const reopened = new DatabaseSync(catalogPath, { readOnly: true });
+  try { assert.equal(reopened.prepare("SELECT count(*) n FROM local_thread_catalog").get()?.n, 0,
+    "真实 Codex 归档后，重开 Desktop 索引也不再包含此会话"); }
+  finally { reopened.close(); }
   return events.find((e) => e.kind === "session")?.cliSessionId ?? sessionId!;
 }
 
