@@ -214,11 +214,19 @@ export function previewAnnotationRuntime(): string {
     paintReview();
   };
   const schedule = () => { if (port && !scheduled) { scheduled = true; frame(paint); } };
+  const cancelGesture = (interrupted = false) => {
+    if (!gesture) return;
+    const pointerId = gesture.pointerId;
+    gesture = null;
+    try { releasePointer(host, pointerId); } catch {}
+    send({ type: 'gesture', active: false }); schedule();
+    if (interrupted) send({ type: 'error', message: '标注手势已中断，请重新圈画。' });
+  };
   const reportContext = () => {
     if (!port) return;
     const data = context();
     const key = stringify({ route: data.route, scroll: data.scroll, viewport: data.viewport });
-    if (data.route !== lastRoute) { lastRoute = data.route; selected = null; gesture = null; reportSelection(); }
+    if (data.route !== lastRoute) { lastRoute = data.route; selected = null; cancelGesture(); reportSelection(); }
     if (key !== lastContext || now() - lastHeartbeat > 2000) {
       lastContext = key; lastHeartbeat = now(); send({ type: 'context', context: data });
     }
@@ -278,7 +286,8 @@ export function previewAnnotationRuntime(): string {
     stop(event);
     if (event.cancelable) prevent(event);
     try {
-      if (event.type === 'pointerdown' && event.button === 0 && !gesture) {
+      if (event.type === 'pointerdown' && event.button === 0) {
+        cancelGesture();
         paint();
         for (let index = badges.length - 1; index >= 0; index--) {
           const badge = badges[index];
@@ -288,23 +297,25 @@ export function previewAnnotationRuntime(): string {
         }
         const entry = newEntry(event);
         if (tool === 'element' || tool === 'pin') commit(entry);
-        else { gesture = { pointerId: event.pointerId, entry }; capturePointer(host, event.pointerId); }
+        else { gesture = { pointerId: event.pointerId, entry }; capturePointer(host, event.pointerId); send({ type: 'gesture', active: true }); }
       } else if ((event.type === 'pointermove' || event.type === 'pointerup') && gesture?.pointerId === event.pointerId) {
+        if (event.type === 'pointermove' && typeof event.buttons === 'number' && !(event.buttons & 1)) { cancelGesture(true); return; }
         const points = gesture.entry.data.points, next = point(event), last = points[points.length - 1];
         if (gesture.entry.data.tool === 'rectangle') points[1] = next;
         else if (points.length < 1000 && Math.hypot(next.x - last.x, next.y - last.y) >= 2) points[points.length] = next;
         if (event.type === 'pointerup') {
           const entry = gesture.entry; gesture = null;
-          releasePointer(host, event.pointerId);
+          try { releasePointer(host, event.pointerId); } catch {}
+          send({ type: 'gesture', active: false });
           const end = points[points.length - 1];
           if (points.length > 1 && (entry.data.tool === 'pen' || Math.hypot(end.x - points[0].x, end.y - points[0].y) >= 3)) commit(entry);
         }
       } else if (event.type === 'keydown' && (event.key === 'z' || event.key === 'Z') && (event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey) {
-        if (gesture) { releasePointer(host, gesture.pointerId); gesture = null; }
+        if (gesture) cancelGesture();
         else send({ type: 'undo' });
-      } else if (event.type === 'pointercancel') gesture = null;
+      } else if ((event.type === 'pointercancel' || event.type === 'lostpointercapture') && gesture?.pointerId === event.pointerId) cancelGesture(true);
       schedule();
-    } catch { gesture = null; send({ type: 'error', message: '无法读取这个页面对象，请选择外层容器或改用截图批注。' }); }
+    } catch { cancelGesture(); send({ type: 'error', message: '无法读取这个页面对象，请选择外层容器或改用截图批注。' }); }
   };
   add(window, 'keydown', (event) => {
     if (!port || event.key !== 'Escape' || event.defaultPrevented) return;
@@ -312,15 +323,16 @@ export function previewAnnotationRuntime(): string {
     // A later task observes preventDefault from page handlers, including window listeners registered after this runtime.
     defer(() => {
       if (port !== sourcePort || event.defaultPrevented) return;
-      if (gesture) { try { releasePointer(host, gesture.pointerId); } catch {} gesture = null; schedule(); }
+      cancelGesture();
       send({ type: 'escape' });
     }, 0);
   }, true);
   // These listeners precede page listeners but remain inert until a transferred parent port arrives.
-  for (const type of ['pointerdown', 'pointerup', 'pointermove', 'pointercancel', 'mousedown', 'mouseup', 'mousemove', 'mouseover', 'mouseout',
+  for (const type of ['pointerdown', 'pointerup', 'pointermove', 'pointercancel', 'lostpointercapture', 'mousedown', 'mouseup', 'mousemove', 'mouseover', 'mouseout',
     'click', 'dblclick', 'auxclick', 'contextmenu', 'touchstart', 'touchmove', 'touchend', 'keydown', 'keyup', 'keypress', 'beforeinput', 'submit', 'dragstart', 'drop']) {
     add(window, type, capture, { capture: true, passive: false });
   }
+  add(window, 'blur', () => cancelGesture(true), true);
   add(window, 'wheel', (event) => {
     if (!port || mode !== 'annotate') return;
     stop(event); prevent(event);
@@ -339,6 +351,7 @@ export function previewAnnotationRuntime(): string {
     } catch {}
   }, { capture: true, passive: false });
   const disconnect = () => {
+    cancelGesture();
     mode = 'browse'; gesture = null; selected = null; annotations = []; badges = []; reviewTarget = null;
     if (timer) clearTimer(timer);
     timer = null;
@@ -361,10 +374,10 @@ export function previewAnnotationRuntime(): string {
       try {
         if (command?.type === 'configure' && (command.mode === 'browse' || command.mode === 'annotate')
           && matches(/^(element|rectangle|pen|pin)$/, command.tool)) {
-          mode = command.mode; tool = command.tool; gesture = null;
+          cancelGesture(); mode = command.mode; tool = command.tool;
           paint(); send({ type: 'configured', mode, tool });
         } else if (command?.type === 'locate') {
-          mode = 'annotate'; gesture = null;
+          cancelGesture(); mode = 'annotate';
           locate(command); paint(); send({ type: 'configured', mode, tool });
         } else if (command?.type === 'clear-review') { reviewTarget = null;
         } else if (command?.type === 'parent' && selected?.target && parentAvailable()) {

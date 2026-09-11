@@ -14,6 +14,7 @@ import { AnnotationReviewPanel } from "./AnnotationReviewPanel.tsx";
 import { AnnotationFallback } from "./AnnotationFallback.tsx";
 import { PreviewWorkspaceStage, previewWorkspaceLaunchHint } from "./PreviewWorkspaceStage.tsx";
 import type { AnnotationMatch } from "@ash/shared/page-annotation-review";
+import { PreviewWorkspaceControls } from "./PreviewWorkspaceControls.tsx";
 import { createClientId } from "../lib/clientId.ts";
 import "./preview-workspace.css";
 import "./annotation-review.css";
@@ -52,7 +53,15 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
   itemsRef.current = items;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [notesOpen, setNotesOpen] = useState(true);
-  const [expanded, setExpanded] = useState(false);
+  const [drawing, setDrawing] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(true);
+  useEffect(() => {
+    const compact = window.matchMedia("(max-width: 760px), (max-height: 600px)");
+    const collapse = () => { if (compact.matches) { setNotesOpen(false); setToolsOpen(false); } };
+    collapse(); compact.addEventListener("change", collapse);
+    return () => compact.removeEventListener("change", collapse);
+  }, []);
+  const [expanded, setExpanded] = useState(true);
   const [canSelectParent, setCanSelectParent] = useState(false);
   const [page, setPage] = useState<PreviewPageContext | null>(null);
   const [error, setError] = useState("");
@@ -87,9 +96,11 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
       if (expected?.requestId === event.match.requestId && expected.documentId === documentId && expected.itemId === event.match.id) setMatch(event.match);
     } else if (event.type === "error") setError(event.message);
     else if (event.type === "image") batch.pageImage(event.id, event.image);
+    else if (event.type === "gesture") setDrawing(event.active);
     else if (event.type === "undo") undo();
     else if (event.type === "escape") setExpanded(false);
     else if (event.type === "annotation") {
+      setError("");
       const current = itemsRef.current;
       const existing = current.find((item) => item.id === event.annotation.id && item.documentId === documentId);
       if (batch.locked || !matchingBatch || (!existing && current.length >= 100)) {
@@ -105,6 +116,7 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
     }
   };
   const channel = usePreviewChannel(source, nextNumber, receive);
+  useEffect(() => { if (channel.phase !== "ready") setDrawing(false); }, [channel.phase]);
   const previousBatchId = useRef<string | undefined>(undefined);
   useEffect(() => { if (!canAnnotate && !canReview) channel.send({ type: "configure", mode: "browse", tool: channel.tool }); }, [canAnnotate, canReview]);
   useEffect(() => {
@@ -120,7 +132,7 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
     if (previousBatchId.current) { setSelectedId(null); channel.send({ type: "clear" }); }
     previousBatchId.current = batch.batch?.id;
   }, [batch.batch?.id]);
-  useEffect(() => { setPage(null); setError(""); setCanSelectParent(false); }, [source]);
+  useEffect(() => { setPage(null); setError(""); setCanSelectParent(false); setDrawing(false); }, [source]);
   const selected = items.find((item) => item.id === selectedId);
   const currentSelection = selected?.documentId === channel.documentId && selected.serviceId === activeService?.id && selected.context.route === page?.route;
   const ready = !!source && channel.phase === "ready";
@@ -149,12 +161,8 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
     await batch.fresh();
   };
 
-  return <PreviewWorkspaceLayout expanded={expanded} onExpandedChange={setExpanded} notesOpen={notesOpen} onToggleNotes={() => setNotesOpen(!notesOpen)}
-    onClose={() => { review.dismiss(); onClose(); }} onKeyDown={(event) => {
-      if (channel.mode === "annotate" && !batch.locked && isAnnotationUndo(event)) {
-        event.preventDefault(); event.stopPropagation(); undo();
-      }
-    }}>
+  const controls = <PreviewWorkspaceControls floating={!!source} open={toolsOpen} onOpenChange={setToolsOpen} mode={channel.mode === "annotate" ? "标注中" : "浏览中"}
+    notice={(error || serviceError) && <p className="preview-workspace-error" role="alert">{error || serviceError}</p>}>
     <div className="preview-workspace-toolbar">
       <div className="preview-workspace-modes" aria-label="预览模式">
         <button type="button" disabled={!ready} aria-pressed={channel.mode === "browse"}
@@ -186,7 +194,18 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
         ? channel.mode === "annotate" ? "标注中 · 点击只选择对象；页面操作已拦截。滚轮可滚动，父容器可逐层上选。" : "浏览中 · 可以正常操作页面；切换到标注后再选择修改位置。"
         : "正在连接页面标注；若连接失败，可重载预览或使用右侧截图批注。"}
     </p>
-    {(error || serviceError) && <p className="preview-workspace-error" role="alert">{error || serviceError}</p>}
+    {page && source && <footer className="preview-workspace-context">
+      <code>{page.route}</code><span>{Math.round(page.viewport.width)} × {Math.round(page.viewport.height)} · 滚动 {Math.round(page.scroll.x)}, {Math.round(page.scroll.y)} · {page.viewport.scale.toFixed(2)}×</span>
+    </footer>}
+  </PreviewWorkspaceControls>;
+
+  return <PreviewWorkspaceLayout hasPreview={!!source} drawing={drawing} expanded={expanded} onExpandedChange={setExpanded} notesOpen={notesOpen} onToggleNotes={() => setNotesOpen(!notesOpen)}
+    onClose={() => { review.dismiss(); onClose(); }} onKeyDown={(event) => {
+      if (channel.mode === "annotate" && !batch.locked && isAnnotationUndo(event)) {
+        event.preventDefault(); event.stopPropagation(); undo();
+      }
+    }}>
+    {!source && controls}
     <div className="preview-workspace-body">
       <PreviewWorkspaceStage source={source} taskId={taskId} preview={state} refresh={refresh} controller={batch} review={review} hint={launchHint}>
         {source && <>
@@ -199,9 +218,6 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
               <button type="button" onClick={() => setReload((value) => value + 1)}>重载预览</button></>}
           </div>}
         </>}
-        {page && source && <footer className="preview-workspace-context">
-          <code>{page.route}</code><span>{Math.round(page.viewport.width)} × {Math.round(page.viewport.height)} · 滚动 {Math.round(page.scroll.x)}, {Math.round(page.scroll.y)} · {page.viewport.scale.toFixed(2)}×</span>
-        </footer>}
       </PreviewWorkspaceStage>
       <aside className="preview-workspace-notes" aria-label="页面标注列表" hidden={!notesOpen}>
         <AnnotationFallback taskId={taskId} records={batch.records} queueing={!review.status?.canReopen} unavailable={!source} />
@@ -236,6 +252,7 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
         <AnnotationBatchPanel controller={batch} selectedId={selectedId} mismatchReason={mismatchReason} />
       </aside>
     </div>
+    {source && controls}
   </PreviewWorkspaceLayout>;
 }
 

@@ -34,6 +34,13 @@ function hasBlockingLayer(): boolean {
   return document.querySelector('[role="dialog"][aria-modal="true"], [role="menu"]') !== null;
 }
 
+function previewOwnsNavigation(target: EventTarget | null): boolean {
+  // Expanded preview covers the workspace even with focus on its opener. Compact preview
+  // owns only its own events; its controls handle keys after this window capture listener.
+  return document.querySelector(".preview-workspace.is-expanded") !== null
+    || (target instanceof Element && target.closest(".preview-workspace") !== null);
+}
+
 // 竖排 tablist（Inspector 的图标条）里，上下键是它自己的漫游键。这个监听挂在 window 的
 // **捕获**阶段，控件自己的 preventDefault 来不及拦，得在这里先让开。让开的只有方向键：
 // j/k 是全应用的任务导航，焦点在哪儿都照旧。
@@ -81,7 +88,7 @@ export function useWorkspaceShortcuts({
         onTogglePalette();
         return;
       }
-      if (!enabled || paletteOpen || isTextEntry(event.target) || hasBlockingLayer()) {
+      if (!enabled || paletteOpen || isTextEntry(event.target) || hasBlockingLayer() || previewOwnsNavigation(event.target)) {
         inspectorSequence.current.reset();
         taskModeSequence.current.reset();
         return;
