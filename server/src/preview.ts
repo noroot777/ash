@@ -67,13 +67,12 @@ async function stopPreviewExcept(
   const marked = cancelDriving(taskId, exceptGen);
   const pending = await retryPreviewStops(taskId);
   if (!record) {
-    if (!pending.stopped && reason) await appendTaskTimeline(taskId, `${pending.message}（${reason}）`);
     if (!marked) return false;
     // 这一段还没有 url、也还没有 pid，能说的只有「取消了一次启动」——但必须说，
     // 「刷新之后仍看得出我停过」是停止/暂停那条规矩的判据。
-    if (reason) await appendTaskTimeline(taskId, `预览启动已取消（${reason}）`);
+    if (reason) await appendTaskTimeline(taskId, `预览启动已取消（${reason}）${pending.stopped ? "" : "；仍有此前请求停止的进程未退出。"}`);
     bus.publish({ type: "task.review", taskId });
-    return true;
+    return pending.stopped;
   }
   // 不先看组长是否还活着：组长死、vite 仍留在同一进程组，正是必须回收的现场。
   // pid 为 0 = 还没 spawn，`kill(0, …)` 打的是**自己这一组**，绝不能放过去。
@@ -140,35 +139,8 @@ export async function sweepPreviews(): Promise<void> {
     return;
   }
   for (const taskId of dirs) {
-    if (hasPendingPreviewStops(taskId)) await retryPreviewStops(taskId);
-    if (!existsSync(recordPath(taskId))) continue;
-    const record = readAnyPreview(taskId);
-    if (!record) {
-      rmSync(recordPath(taskId), { force: true });
-      continue;
-    }
-    const interrupted = record.state === "starting";
-    if (interrupted) {
-      // 「正在启动」只有本进程的 startPreview 在驱动，而它一定同时记着自己的代号。
-      // **按代号问**，不是按任务问：两趟启动重叠时按任务问会把新那趟错判成孤儿杀掉
-      // （见 starting）。这一代没人驱动 = 驱动它的那个 server 已经不在了（重启/被杀），
-      // 这条记录再也不会有人收尾：它的子进程可能还活着（detached 的），软链也还挂着。
-      if (driving(taskId, record.gen)) continue;
-    }
-    if (interrupted || !(record.services?.length ? record.services.every((s) => s.status === "ready" && alive(s.pid)) : alive(record.pid))) {
-      const retired = await retirePreview(record, "failed");
-      if (!retired) continue;
-      await appendTaskTimeline(taskId, !retired.stopped ? retired.message : interrupted
-        ? `预览没能起完就中断了（ash 重启），已经清理：${record.cmd}`
-        : `预览进程已自行退出：${record.url ?? record.cmd}`);
-      continue;
-    }
-    if (record.life === "idle30" && Date.now() - Date.parse(record.startedAt) > IDLE_LIFE_MS) {
-      await stopPreview(taskId, "起来满 30 分钟，按线上写的回收");
-      continue;
-    }
-    const gone = await taskGone(taskId);
-    if (gone) await stopPreview(taskId, gone);
+    try { await sweepTaskPreview(taskId); }
+    catch (error) { await appendTaskTimeline(taskId, `预览清理暂缓：${String(error)}`); }
   }
   // 收尾再清备用依赖：这套东西按内容一份一份地装，一份前端依赖几百兆，不清就会在**用户的
   // 磁盘**上无声地涨（见 pruneNodeDeps）。
@@ -179,6 +151,30 @@ export async function sweepPreviews(): Promise<void> {
   // 只是断了，dev server 按需加载下一个模块时才炸，记录上它还好端端地跑着。所以先把死掉的
   // 记录和它们的软链收干净，再拿**剩下这些还活着的**记录告诉清理器哪几份动不得。
   pruneNodeDeps(heldCaches());
+}
+
+async function sweepTaskPreview(taskId: string): Promise<void> {
+  if (hasPendingPreviewStops(taskId)) await retryPreviewStops(taskId);
+  if (!existsSync(recordPath(taskId))) return;
+  const record = readAnyPreview(taskId);
+  if (!record) { rmSync(recordPath(taskId), { force: true }); return; }
+  const interrupted = record.state === "starting";
+  // 按代号识别仍在驱动的启动；重叠启动中的新一代不会被当作上一条命留下的孤儿。
+  if (interrupted && driving(taskId, record.gen)) return;
+  if (interrupted || !(record.services?.length ? record.services.every((s) => s.status === "ready" && alive(s.pid)) : alive(record.pid))) {
+    const retired = await retirePreview(record, "failed");
+    if (!retired) return;
+    await appendTaskTimeline(taskId, !retired.stopped ? retired.message : interrupted
+      ? `预览没能起完就中断了（ash 重启），已经清理：${record.cmd}`
+      : `预览进程已自行退出：${record.url ?? record.cmd}`);
+    return;
+  }
+  if (record.life === "idle30" && Date.now() - Date.parse(record.startedAt) > IDLE_LIFE_MS) {
+    await stopPreview(taskId, "起来满 30 分钟，按线上写的回收");
+    return;
+  }
+  const gone = await taskGone(taskId);
+  if (gone) await stopPreview(taskId, gone);
 }
 
 /** 还活着的预览记录正占着哪几份依赖缓存（顺着它们挂出去的软链倒推）。 */

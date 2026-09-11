@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { inspectProcessSync, isPidAlive, isProcessGroupAlive, killTree, listProcesses } from "./platform.js";
 import { RUNS_DIR } from "./paths.js";
 import type { PreviewRecord } from "./preview-store.js";
+import { appendTaskTimeline } from "./task-timeline.js";
 
 type Target = { pid: number; startedAt: string | null };
 export type PreviewStopResult = { stopped: true } | { stopped: false; message: string };
@@ -12,11 +13,31 @@ const alive = (target: Target) => isPidAlive(target.pid) || isProcessGroupAlive(
 
 function pendingFiles(taskId: string): string[] {
   const dir = join(RUNS_DIR, taskId);
-  try { return readdirSync(dir).filter(name => /^preview-stop-[a-f0-9-]+\.json$/.test(name)).map(name => join(dir, name)); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
+  try { return readdirSync(dir, { withFileTypes: true }).filter(entry => entry.isFile() && /^preview-stop-[a-f0-9-]+\.json$/.test(entry.name)).map(entry => join(dir, entry.name)); }
+  catch (error) { if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return []; throw error; }
 }
 
 export const hasPendingPreviewStops = (taskId: string): boolean => pendingFiles(taskId).length > 0;
+
+function writeTargets(file: string, targets: Target[]): void {
+  const temp = `${file}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temp, JSON.stringify(targets), { flag: "wx" });
+    renameSync(temp, file);
+  } finally { rmSync(temp, { force: true }); }
+}
+
+function identifiedTarget(value: unknown): value is Target {
+  const target = value as Target | null;
+  return !!target && Number.isInteger(target.pid) && target.pid > 1 && target.pid !== process.pid
+    && typeof target.startedAt === "string" && target.startedAt.trim().length > 0;
+}
+
+async function discardInvalidTargets(taskId: string, file: string, reason: string, valid: Target[] = []): Promise<void> {
+  if (valid.length) writeTargets(file, valid);
+  else rmSync(file, { force: true });
+  await appendTaskTimeline(taskId, `预览停止记录 ${basename(file)}：${reason}，已移除无效条目；未向这些条目对应的 PID 发送停止信号。`);
+}
 
 async function terminate(file: string, targets: Target[], signalable = targets): Promise<PreviewStopResult> {
   for (const target of signalable) if (alive(target)) killTree(target.pid, "SIGTERM");
@@ -46,13 +67,14 @@ export async function stopPreviewProcesses(taskId: string, record: Pick<PreviewR
   }
   const targets = [...descendants].reverse().map(pid => ({ pid,
     startedAt: processes.find(row => row.pid === pid)?.startedAt ?? inspectProcessSync(pid)?.startedAt ?? null,
-  }));
+  })).filter(alive);
+  if (!targets.length) return { stopped: true };
   // 停止记录独立于当前预览代，关闭/启动失败后仍能找到已被重新托管的后台子进程。
   // 启动时间用来区分后续复查时被复用的 PID；它们不再是可回收的旧进程。
   const dir = join(RUNS_DIR, taskId);
   mkdirSync(dir, { recursive: true });
   const file = join(dir, `preview-stop-${randomUUID()}.json`);
-  writeFileSync(file, JSON.stringify(targets));
+  writeTargets(file, targets);
   return terminate(file, targets);
 }
 
@@ -60,11 +82,22 @@ export async function retryPreviewStops(taskId: string): Promise<PreviewStopResu
   const files = pendingFiles(taskId);
   if (!files.length) return { stopped: true };
   for (const file of files) {
-    let targets: Target[];
-    try { targets = JSON.parse(readFileSync(file, "utf8")); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; return { stopped: false, message: pendingMessage }; }
-    if (!Array.isArray(targets) || targets.some(target => !target || !Number.isInteger(target.pid) || target.pid <= 1 || target.pid === process.pid
-      || (target.startedAt !== null && typeof target.startedAt !== "string"))) return { stopped: false, message: pendingMessage };
+    let saved: unknown;
+    try { saved = JSON.parse(readFileSync(file, "utf8")); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      if (!(error instanceof SyntaxError)) throw error;
+      await discardInvalidTargets(taskId, file, "内容损坏，无法读取进程身份");
+      continue;
+    }
+    if (!Array.isArray(saved)) {
+      await discardInvalidTargets(taskId, file, "记录格式无效");
+      continue;
+    }
+    let targets = saved.filter(identifiedTarget);
+    if (targets.length !== saved.length) await discardInvalidTargets(taskId, file,
+      `${saved.length - targets.length} 个条目缺少有效进程身份或指向 ash 自身`, targets);
+    if (!targets.length) { rmSync(file, { force: true }); continue; }
     const processes = await listProcesses();
     const signalable: Target[] = [];
     targets = targets.filter(target => {

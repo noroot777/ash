@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
@@ -11,6 +11,7 @@ import { releaseTmpDb } from "./tmp-db.js";
 const root = mkdtempSync(join(tmpdir(), "ash-accept-cleanup-"));
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
+process.env.ASH_DEPS_DIR = join(root, "deps");
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, sessions, tasks } = await import("../src/db/schema.js");
@@ -19,13 +20,13 @@ const { taskWorkspace } = await import("../src/task-workspace.js");
 const { acceptTask } = await import("../src/task-accept.js");
 const { cleanupAcceptedTask } = await import("../src/git-accept.js");
 const { writeRecord, readAnyPreview, recordPath } = await import("../src/preview-store.js");
-const { beginPreviewStart, endPreviewStart, previewStartCanceled, startPreview, stopPreview, sweepPreviews } = await import("../src/preview.js");
+const { beginPreviewStart, endPreviewStart, previewStartCanceled, startPreview, stopPreview, stopPreviewOnRerun, sweepPreviews } = await import("../src/preview.js");
 const { hasPendingPreviewStops, retryPreviewStops } = await import("../src/preview-process-stop.js");
 const { previewState } = await import("../src/preview-public.js");
 const { setTaskStatus } = await import("../src/status.js");
 const { cancelDriving } = await import("../src/preview-start-state.js");
 const { previewShell } = await import("../src/preview-shell.js");
-const { isPidAlive } = await import("../src/platform.js");
+const { inspectProcessSync, isPidAlive } = await import("../src/platform.js");
 const { beginAccepting, endAccepting } = await import("../src/acceptance-lock.js");
 const { restartTaskPreview } = await import("../src/workflow-steps.js");
 const { killByPid } = await import("../src/executors/spawn.js");
@@ -144,6 +145,63 @@ try {
     console.log("✓ persisted stop evidence discards a reused PID without signaling its new process");
   }
 
+  {
+    const s = await setup();
+    const innocent = spawn(process.execPath, ["-e", "setInterval(()=>{},100)"], { detached: process.platform !== "win32", stdio: "ignore" });
+    const target = spawn(process.execPath, ["-e", "setInterval(()=>{},100)"], { detached: process.platform !== "win32", stdio: "ignore" });
+    children.push(innocent, target);
+    const startedAt = inspectProcessSync(target.pid!)?.startedAt;
+    assert.ok(startedAt, "fixture must have a verifiable process identity");
+    const dir = join(root, "runs", s.task.id);
+    mkdirSync(dir, { recursive: true });
+    const invalid = { pid: innocent.pid!, startedAt: null };
+    const records = [
+      '[{"pid":', "", "{}", JSON.stringify([invalid]),
+      JSON.stringify([{ pid: process.pid, startedAt }]),
+      JSON.stringify([invalid, { pid: target.pid!, startedAt }]),
+    ];
+    records.forEach((body, index) => writeFileSync(join(dir, `preview-stop-${index}.json`), body));
+    assert.equal((await retryPreviewStops(s.task.id)).stopped, true);
+    assert.equal(hasPendingPreviewStops(s.task.id), false);
+    assert.equal(isPidAlive(innocent.pid!), true, "缺少身份的 PID 不应收到停止信号");
+    assert.equal(isPidAlive(target.pid!), false, "坏记录不能阻断整批，混合记录中的有效进程仍须退出");
+    const before = timeline(s);
+    assert.match(before, /内容损坏/);
+    assert.match(before, /记录格式无效/);
+    assert.match(before, /缺少有效进程身份或指向 ash 自身/);
+    assert.match(before, /未向这些条目对应的 PID 发送停止信号/);
+    assert.equal((await retryPreviewStops(s.task.id)).stopped, true);
+    assert.equal(timeline(s), before, "失效记录只交代一次，不会无限重试或刷屏");
+    assert.equal((await accept(s.task.id)).accepted, true, "历史坏记录不能永久拦住验收");
+    console.log("✓ corrupt, unidentified and self-referencing stop records clear safely without skipping valid targets or blocking acceptance");
+  }
+
+  {
+    const broken = await setup();
+    const healthy = await setup();
+    writeFileSync(join(root, "runs", ".DS_Store"), "ordinary Finder file");
+    assert.equal(hasPendingPreviewStops(".DS_Store"), false);
+    for (const s of [broken, healthy]) {
+      mkdirSync(join(root, "runs", s.task.id), { recursive: true });
+      writeRecord({ taskId: s.task.id, gen: "interrupted", pid: 0, cmd: "interrupted preview", life: "manual", log: "", startedAt: new Date().toISOString(), port: null, url: null, state: "starting" });
+    }
+    const obstruction = join(root, "runs", broken.task.id, "preview-last.json");
+    mkdirSync(obstruction);
+    const expired = join(root, "deps", "expired-cache");
+    mkdirSync(expired, { recursive: true });
+    const old = new Date(Date.now() - 40 * 24 * 60 * 60_000);
+    utimesSync(expired, old, old);
+    await sweepPreviews();
+    assert.ok(readAnyPreview(broken.task.id), "归档失败的预览保留给后续重试");
+    assert.match(timeline(broken), /预览清理暂缓/);
+    assert.equal(readAnyPreview(healthy.task.id), null, "一个任务归档失败不能阻断其他任务的清扫");
+    assert.ok(existsSync(join(root, "runs", healthy.task.id, "preview-last.json")));
+    assert.equal(existsSync(expired), false, "普通文件和单任务异常不能阻断缓存清理");
+    rmSync(obstruction, { recursive: true });
+    assert.equal(await stopPreview(broken.task.id, null), true);
+    console.log("✓ sweep tolerates ordinary run-directory files and isolates task failures while still pruning expired caches");
+  }
+
   for (const action of ["rerun", "close", "accept"] as const) {
     const s = await setup();
     const child = await sidecar(s);
@@ -169,8 +227,11 @@ try {
     mkdirSync(cache);
     const link = join(s.path, "node_modules");
     symlinkSync(cache, link, "dir");
+    const dead = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+    children.push(dead);
+    await once(dead, "exit");
     mkdirSync(join(root, "runs", s.task.id), { recursive: true });
-    writeRecord({ taskId: s.task.id, pid: child.parent.pid!, cmd: "blocked sidecar", life: "manual", log: "", startedAt: new Date().toISOString(), port: null, url: null, links: [link] });
+    writeRecord({ taskId: s.task.id, pid: child.parent.pid!, installPid: dead.pid!, cmd: "blocked sidecar", life: "manual", log: "", startedAt: new Date().toISOString(), port: null, url: null, links: [link] });
     const originalKill = process.kill.bind(process);
     const blocked = mock.method(process, "kill", (pid: number, signal?: NodeJS.Signals | number) => {
       if (Math.abs(pid) === child.pid && (signal === "SIGTERM" || signal === "SIGKILL")) throw Object.assign(new Error("fixture permission denied"), { code: "EPERM" });
@@ -184,12 +245,27 @@ try {
       assert.equal(hasPendingPreviewStops(s.task.id), true);
       assert.equal(isPidAlive(child.parent.pid!), false);
       assert.equal(isPidAlive(child.pid), true, "fixture must retain the reparented process");
+      const dir = join(root, "runs", s.task.id);
+      const saved = readdirSync(dir).filter(name => /^preview-stop-.*\.json$/.test(name))
+        .flatMap(name => JSON.parse(readFileSync(join(dir, name), "utf8")) as { pid: number }[]);
+      assert.ok(saved.some(target => target.pid === child.pid));
+      assert.ok(saved.every(target => target.pid !== dead.pid), "快照中已死亡的 root 不应变成无身份停止记录");
       const newer = spawn(process.execPath, ["-e", "setInterval(()=>{},100)"], { detached: true, stdio: "ignore" });
       children.push(newer);
       writeRecord({ taskId: s.task.id, gen: "newer", pid: newer.pid!, cmd: "newer preview", life: "manual", log: "", startedAt: new Date().toISOString(), port: null, url: null });
       assert.equal(await stopPreview(s.task.id, "关闭新预览"), false, "旧的残留未退出时，不能仅凭当前代已退出就谎报全部回收");
       assert.equal(isPidAlive(newer.pid!), false);
       assert.doesNotMatch(timeline(s), /预览已回收/);
+      const beforeRerun = timeline(s);
+      await stopPreviewOnRerun(s.task.id);
+      await stopPreviewOnRerun(s.task.id);
+      assert.equal(timeline(s), beforeRerun, "没有新预览时重跑不应重复追加同一条未退出警告");
+      const gen = beginPreviewStart(s.task.id);
+      try {
+        assert.equal(await stopPreview(s.task.id, "取消尚未落盘的新启动"), false, "取消新启动时旧进程仍存活，不能返回已全部停止");
+        assert.equal(previewStartCanceled(gen), true);
+        assert.match(timeline(s), /预览启动已取消.*仍有此前请求停止的进程未退出/);
+      } finally { endPreviewStart(s.task.id, gen); }
       await setTaskStatus(s.task.id, "running");
       assert.equal((await db.select().from(tasks).where(eq(tasks.id, s.task.id)))[0].status, "running");
       assert.doesNotMatch(timeline(s), /重试验收/);
