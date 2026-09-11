@@ -1,15 +1,21 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { inspectProcessSync, isPidAlive, isProcessGroupAlive, killTree, listProcesses } from "./platform.js";
 import { RUNS_DIR } from "./paths.js";
 import type { PreviewRecord } from "./preview-store.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 
-type Target = { pid: number; startedAt: string | null };
+type Target = { pid: number; startedAt: string | null; observedAt?: number };
 export type PreviewStopResult = { stopped: true } | { stopped: false; message: string };
 const pendingMessage = "已请求停止预览，但仍有进程未退出；后台会继续检查。";
+const identityMessage = "预览进程仍存活，但暂时无法确认启动身份；后台会继续检查。";
 const alive = (target: Target) => isPidAlive(target.pid) || isProcessGroupAlive(target.pid);
+
+export function previewStopFailure(error: unknown): Extract<PreviewStopResult, { stopped: false }> {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return { stopped: false, message: `预览停止记录暂时无法读写${code ? `（${code}）` : ""}；请检查任务记录目录权限或磁盘状态后重试。` };
+}
 
 function pendingFiles(taskId: string): string[] {
   const dir = join(RUNS_DIR, taskId);
@@ -17,7 +23,10 @@ function pendingFiles(taskId: string): string[] {
   catch (error) { if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return []; throw error; }
 }
 
-export const hasPendingPreviewStops = (taskId: string): boolean => pendingFiles(taskId).length > 0;
+export function hasPendingPreviewStops(taskId: string): boolean {
+  try { return pendingFiles(taskId).length > 0; }
+  catch { return true; }
+}
 
 function writeTargets(file: string, targets: Target[]): void {
   const temp = `${file}.${randomUUID()}.tmp`;
@@ -27,16 +36,18 @@ function writeTargets(file: string, targets: Target[]): void {
   } finally { rmSync(temp, { force: true }); }
 }
 
-function identifiedTarget(value: unknown): value is Target {
+function recoverableTarget(value: unknown): value is Target {
   const target = value as Target | null;
   return !!target && Number.isInteger(target.pid) && target.pid > 1 && target.pid !== process.pid
-    && typeof target.startedAt === "string" && target.startedAt.trim().length > 0;
+    && ((typeof target.startedAt === "string" && target.startedAt.trim().length > 0)
+      || (target.startedAt === null && Number.isSafeInteger(target.observedAt) && target.observedAt! > 0));
 }
 
 async function discardInvalidTargets(taskId: string, file: string, reason: string, valid: Target[] = []): Promise<void> {
   if (valid.length) writeTargets(file, valid);
   else rmSync(file, { force: true });
-  await appendTaskTimeline(taskId, `预览停止记录 ${basename(file)}：${reason}，已移除无效条目；未向这些条目对应的 PID 发送停止信号。`);
+  const notice = `预览停止记录 ${basename(file)}：${reason}，已移除无效条目；未向这些条目对应的 PID 发送停止信号。`;
+  if (!await appendTaskTimeline(taskId, notice)) appendFileSync(join(RUNS_DIR, taskId, "preview.log"), `${notice}\n`);
 }
 
 async function terminate(file: string, targets: Target[], signalable = targets): Promise<PreviewStopResult> {
@@ -50,7 +61,7 @@ async function terminate(file: string, targets: Target[], signalable = targets):
     }
     await new Promise(resolve => setTimeout(resolve, 50));
   }
-  if (targets.some(alive)) return { stopped: false, message: pendingMessage };
+  if (targets.some(alive)) return { stopped: false, message: targets.some(target => !target.startedAt && alive(target)) ? identityMessage : pendingMessage };
   rmSync(file, { force: true });
   return { stopped: true };
 }
@@ -65,7 +76,8 @@ export async function stopPreviewProcesses(taskId: string, record: Pick<PreviewR
     previous = descendants.size;
     for (const row of processes) if (descendants.has(row.ppid) && row.pid !== process.pid) descendants.add(row.pid);
   }
-  const targets = [...descendants].reverse().map(pid => ({ pid,
+  const observedAt = Date.now();
+  const targets = [...descendants].reverse().map(pid => ({ pid, observedAt,
     startedAt: processes.find(row => row.pid === pid)?.startedAt ?? inspectProcessSync(pid)?.startedAt ?? null,
   })).filter(alive);
   if (!targets.length) return { stopped: true };
@@ -79,35 +91,53 @@ export async function stopPreviewProcesses(taskId: string, record: Pick<PreviewR
 }
 
 export async function retryPreviewStops(taskId: string): Promise<PreviewStopResult> {
-  const files = pendingFiles(taskId);
-  if (!files.length) return { stopped: true };
+  let files: string[];
+  try { files = pendingFiles(taskId); }
+  catch (error) { return previewStopFailure(error); }
+  let pending: PreviewStopResult = { stopped: true };
   for (const file of files) {
-    let saved: unknown;
-    try { saved = JSON.parse(readFileSync(file, "utf8")); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-      if (!(error instanceof SyntaxError)) throw error;
-      await discardInvalidTargets(taskId, file, "内容损坏，无法读取进程身份");
-      continue;
-    }
-    if (!Array.isArray(saved)) {
-      await discardInvalidTargets(taskId, file, "记录格式无效");
-      continue;
-    }
-    let targets = saved.filter(identifiedTarget);
-    if (targets.length !== saved.length) await discardInvalidTargets(taskId, file,
-      `${saved.length - targets.length} 个条目缺少有效进程身份或指向 ash 自身`, targets);
-    if (!targets.length) { rmSync(file, { force: true }); continue; }
-    const processes = await listProcesses();
-    const signalable: Target[] = [];
-    targets = targets.filter(target => {
-      if (!isPidAlive(target.pid)) { signalable.push(target); return isProcessGroupAlive(target.pid); }
-      const startedAt = processes.find(row => row.pid === target.pid)?.startedAt ?? inspectProcessSync(target.pid)?.startedAt;
-      if (target.startedAt && startedAt && target.startedAt !== startedAt) return false;
-      if (target.startedAt && startedAt) signalable.push(target);
-      return true;
-    });
-    await terminate(file, targets, signalable);
+    try {
+      const result = await retryStopFile(taskId, file);
+      if (!result.stopped && pending.stopped) pending = result;
+    } catch (error) { pending = previewStopFailure(error); }
   }
-  return hasPendingPreviewStops(taskId) ? { stopped: false, message: pendingMessage } : { stopped: true };
+  if (!pending.stopped) return pending;
+  try { return pendingFiles(taskId).length ? { stopped: false, message: pendingMessage } : pending; }
+  catch (error) { return previewStopFailure(error); }
+}
+
+async function retryStopFile(taskId: string, file: string): Promise<PreviewStopResult> {
+  let saved: unknown;
+  try { saved = JSON.parse(readFileSync(file, "utf8")); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { stopped: true };
+    if (!(error instanceof SyntaxError)) throw error;
+    await discardInvalidTargets(taskId, file, "内容损坏，无法读取进程身份");
+    return { stopped: true };
+  }
+  if (!Array.isArray(saved)) {
+    await discardInvalidTargets(taskId, file, "记录格式无效");
+    return { stopped: true };
+  }
+  let targets = saved.filter(recoverableTarget);
+  if (targets.length !== saved.length) await discardInvalidTargets(taskId, file,
+    `${saved.length - targets.length} 个条目缺少有效进程身份或指向 ash 自身`, targets);
+  if (!targets.length) { rmSync(file, { force: true }); return { stopped: true }; }
+  const processes = await listProcesses();
+  const signalable: Target[] = [];
+  targets = targets.filter(target => {
+    if (!isPidAlive(target.pid)) { signalable.push(target); return isProcessGroupAlive(target.pid); }
+    const startedAt = processes.find(row => row.pid === target.pid)?.startedAt ?? inspectProcessSync(target.pid)?.startedAt;
+    if (!target.startedAt && startedAt) {
+      const created = Date.parse(startedAt);
+      // 观测后出生的进程复用了 PID；更早出生才属于当时捕获的那条命。
+      if (Number.isFinite(created) && created > target.observedAt!) return false;
+      if (Number.isFinite(created)) target.startedAt = startedAt;
+    }
+    if (target.startedAt && startedAt && target.startedAt !== startedAt) return false;
+    if (target.startedAt && startedAt) signalable.push(target);
+    return true;
+  });
+  writeTargets(file, targets);
+  return terminate(file, targets, signalable);
 }

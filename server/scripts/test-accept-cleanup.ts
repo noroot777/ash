@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import childProcess, { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import fs, { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
@@ -24,6 +25,7 @@ const { beginPreviewStart, endPreviewStart, previewStartCanceled, startPreview, 
 const { hasPendingPreviewStops, retryPreviewStops } = await import("../src/preview-process-stop.js");
 const { previewState } = await import("../src/preview-public.js");
 const { setTaskStatus } = await import("../src/status.js");
+const { rerunGateClosed } = await import("../src/rerun-gate.js");
 const { cancelDriving } = await import("../src/preview-start-state.js");
 const { previewShell } = await import("../src/preview-shell.js");
 const { inspectProcessSync, isPidAlive } = await import("../src/platform.js");
@@ -142,6 +144,9 @@ try {
     assert.equal((await retryPreviewStops(s.task.id)).stopped, true);
     assert.equal(isPidAlive(child.pid!), true, "复用 PID 的新进程不属于已关闭的预览，不能误杀");
     assert.equal(existsSync(pending), false);
+    writeFileSync(pending, JSON.stringify([{ pid: child.pid!, startedAt: null, observedAt: Date.now() - 60_000 }]));
+    assert.equal((await retryPreviewStops(s.task.id)).stopped, true);
+    assert.equal(isPidAlive(child.pid!), true, "观测后新生的进程也应按复用 PID 放过");
     console.log("✓ persisted stop evidence discards a reused PID without signaling its new process");
   }
 
@@ -177,6 +182,121 @@ try {
   }
 
   {
+    const s = await setup();
+    await db.delete(sessions).where(eq(sessions.taskId, s.task.id));
+    const dir = join(root, "runs", s.task.id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "preview-stop-0.json"), "[");
+    assert.equal((await retryPreviewStops(s.task.id)).stopped, true);
+    assert.match(readFileSync(join(dir, "preview.log"), "utf8"), /内容损坏.*未向这些条目对应的 PID 发送停止信号/);
+    assert.equal(previewState(s.task.id).hasLog, true, "无会话任务也能从预览日志看到失效记录的处理说明");
+    console.log("✓ discarded legacy evidence leaves a visible preview log when no session timeline exists");
+  }
+
+  for (const location of ["file", "directory"] as const) {
+    const s = await setup();
+    const dir = join(root, "runs", s.task.id);
+    mkdirSync(dir, { recursive: true });
+    const pending = join(dir, "preview-stop-0.json");
+    writeFileSync(pending, "[]");
+    const child = spawn(process.execPath, ["-e", "setInterval(()=>{},100)"], { detached: process.platform !== "win32", stdio: "ignore" });
+    children.push(child);
+    const startedAt = inspectProcessSync(child.pid!)?.startedAt;
+    assert.ok(startedAt);
+    writeFileSync(join(dir, "preview-stop-1.json"), JSON.stringify([{ pid: child.pid!, startedAt }]));
+    const blockedPath = location === "file" ? pending : dir;
+    const method = location === "file" ? "readFileSync" : "readdirSync";
+    const original = fs[method];
+    const blocked = process.platform === "win32" ? mock.method(fs, method, (...args: any[]) => {
+      if (args[0] === blockedPath) throw Object.assign(new Error("fixture read denied"), { code: "EACCES" });
+      return (original as (...args: any[]) => any)(...args);
+    }) : null;
+    if (!blocked) chmodSync(blockedPath, 0);
+    syncBuiltinESMExports();
+    try {
+      const result = await retryPreviewStops(s.task.id);
+      assert.equal(result.stopped, false);
+      if (result.stopped) throw new Error("unreadable stop evidence ignored");
+      assert.match(result.message, /停止记录暂时无法读写.*EACCES/);
+      assert.equal(isPidAlive(child.pid!), location === "directory", "单份记录不可读时其余有效目标仍应停止，目录不可读则保留线索");
+      assert.equal(hasPendingPreviewStops(s.task.id), true);
+      await setTaskStatus(s.task.id, "running");
+      assert.equal((await db.select().from(tasks).where(eq(tasks.id, s.task.id)))[0].status, "running");
+      assert.equal(rerunGateClosed(s.task.id), false);
+      await setTaskStatus(s.task.id, "done");
+      const denied = await accept(s.task.id);
+      assert.equal(denied.accepted, false);
+      if (denied.accepted) throw new Error("unreadable stop evidence accepted");
+      assert.equal(denied.reason, "preview_cleanup_pending");
+      assert.match(denied.error, /停止记录暂时无法读写.*目录权限或磁盘状态/);
+      assert.doesNotMatch(denied.error, /进程尚未完全退出|permission denied, (open|scandir)/);
+      assert.ok(existsSync(s.path));
+    } finally {
+      if (blocked) blocked.mock.restore();
+      else chmodSync(blockedPath, location === "file" ? 0o600 : 0o700);
+      syncBuiltinESMExports();
+    }
+    assert.equal((await accept(s.task.id)).accepted, true);
+    console.log(`✓ unreadable stop ${location} preserves acceptance evidence without failing rerun; restored access resumes cleanup`);
+  }
+
+  {
+    const s = await setup();
+    const child = spawn(process.execPath, ["-e", "setInterval(()=>{},100)"], { detached: process.platform !== "win32", stdio: "ignore" });
+    children.push(child);
+    await waitFor(() => isPidAlive(child.pid!));
+    mkdirSync(join(root, "runs", s.task.id), { recursive: true });
+    writeRecord({ taskId: s.task.id, pid: child.pid!, cmd: "unidentified live preview", life: "manual", log: "", startedAt: new Date().toISOString(), port: null, url: null });
+    let hideIdentity = true;
+    let denyKill = true;
+    const inspecting = (file: string, args: string[]) => file === "ps" || (/^(pwsh|powershell)\.exe$/i.test(file) && args.includes("-EncodedCommand"));
+    const originalExec = childProcess.execFile;
+    const originalSync = childProcess.execFileSync;
+    const originalKill = process.kill.bind(process);
+    const probes = [
+      mock.method(childProcess, "execFileSync", (file: string, args: string[], ...rest: any[]) => {
+        if (hideIdentity && inspecting(file, args)) throw new Error("fixture identity lookup unavailable");
+        return (originalSync as (...args: any[]) => any)(file, args, ...rest);
+      }),
+      mock.method(childProcess, "execFile", (file: string, args: string[], ...rest: any[]) => {
+        if ((hideIdentity && inspecting(file, args)) || (denyKill && file === "taskkill" && args.includes(String(child.pid)))) {
+          queueMicrotask(() => rest.at(-1)(new Error("fixture process operation denied"), "", ""));
+          return undefined as unknown as ChildProcess;
+        }
+        return (originalExec as (...args: any[]) => any)(file, args, ...rest);
+      }),
+      mock.method(process, "kill", (pid: number, signal?: NodeJS.Signals | number) => {
+        if (denyKill && Math.abs(pid) === child.pid && (signal === "SIGTERM" || signal === "SIGKILL")) throw Object.assign(new Error("fixture stop denied"), { code: "EPERM" });
+        return originalKill(pid, signal);
+      }),
+    ];
+    syncBuiltinESMExports();
+    try {
+      assert.equal(await stopPreview(s.task.id, "关闭身份暂时不可查的预览"), false);
+      assert.equal(readAnyPreview(s.task.id), null);
+      const fresh = await import(`../src/preview-process-stop.js?identity-restart=${Date.now()}`);
+      const result = await fresh.retryPreviewStops(s.task.id);
+      assert.equal(result.stopped, false, "模块重载后仍不能丢弃新捕获的无身份活进程");
+      const denied = await accept(s.task.id);
+      assert.equal(denied.accepted, false);
+      if (denied.accepted) throw new Error("unidentified live preview accepted");
+      assert.match(denied.error, /进程仍存活.*无法确认启动身份/);
+      assert.equal(isPidAlive(child.pid!), true);
+      assert.ok(existsSync(s.path));
+      hideIdentity = false;
+      denyKill = false;
+      assert.equal((await accept(s.task.id)).accepted, true, "身份查询恢复后能识别原进程并完成停止和验收");
+      assert.equal(isPidAlive(child.pid!), false);
+      assert.equal(hasPendingPreviewStops(s.task.id), false);
+    } finally {
+      for (const probe of probes) probe.mock.restore();
+      syncBuiltinESMExports();
+      killByPid(child.pid!);
+    }
+    console.log("✓ newly captured live processes survive identity-query failure and module reload as pending evidence, then stop safely after recovery");
+  }
+
+  {
     const broken = await setup();
     const healthy = await setup();
     writeFileSync(join(root, "runs", ".DS_Store"), "ordinary Finder file");
@@ -197,6 +317,10 @@ try {
     assert.equal(readAnyPreview(healthy.task.id), null, "一个任务归档失败不能阻断其他任务的清扫");
     assert.ok(existsSync(join(root, "runs", healthy.task.id, "preview-last.json")));
     assert.equal(existsSync(expired), false, "普通文件和单任务异常不能阻断缓存清理");
+    await setTaskStatus(broken.task.id, "running");
+    assert.equal((await db.select().from(tasks).where(eq(tasks.id, broken.task.id)))[0].status, "running", "归档抛异常也不能让任务重跑失败");
+    assert.equal(rerunGateClosed(broken.task.id), false);
+    assert.match(timeline(broken), /旧预览回收暂缓，任务继续运行/);
     rmSync(obstruction, { recursive: true });
     assert.equal(await stopPreview(broken.task.id, null), true);
     console.log("✓ sweep tolerates ordinary run-directory files and isolates task failures while still pruning expired caches");
@@ -264,7 +388,7 @@ try {
       try {
         assert.equal(await stopPreview(s.task.id, "取消尚未落盘的新启动"), false, "取消新启动时旧进程仍存活，不能返回已全部停止");
         assert.equal(previewStartCanceled(gen), true);
-        assert.match(timeline(s), /预览启动已取消.*仍有此前请求停止的进程未退出/);
+        assert.match(timeline(s), /预览启动已取消.*仍有进程未退出/);
       } finally { endPreviewStart(s.task.id, gen); }
       await setTaskStatus(s.task.id, "running");
       assert.equal((await db.select().from(tasks).where(eq(tasks.id, s.task.id)))[0].status, "running");

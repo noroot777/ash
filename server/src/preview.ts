@@ -7,7 +7,7 @@ import { heldCacheOf, pruneNodeDeps, removePreparedLinks } from "./preview-deps.
 import { appendTaskTimeline } from "./task-timeline.js";
 import { readAnyPreview, recordPath, alive, archivePreview, type PreviewStep, type PreviewResult, type PreviewRecord } from "./preview-store.js";
 import { starting, beginDriving, endDriving, driving, cancelDriving, hasUnfinishedPreviewStart } from "./preview-start-state.js";
-import { hasPendingPreviewStops, retryPreviewStops, stopPreviewProcesses, type PreviewStopResult } from "./preview-process-stop.js";
+import { hasPendingPreviewStops, previewStopFailure, retryPreviewStops, stopPreviewProcesses, type PreviewStopResult } from "./preview-process-stop.js";
 import { runPreview, type PreviewStartOptions } from "./preview-start.js";
 export { readPreview, readPreviewLog, hasPreviewLog, previewLogPath } from "./preview-store.js";
 export type { PreviewStep, PreviewRecord, PreviewResult } from "./preview-store.js";
@@ -30,7 +30,7 @@ export async function startPreview(taskId: string, step: PreviewStep, cwd: strin
   const gen = registered ?? randomUUID();
   if (registered === undefined) beginDriving(taskId, gen);
   try {
-    return await runPreview(taskId, step, cwd, gen, options, () => stopPreviewExcept(taskId, null, gen));
+    return await runPreview(taskId, step, cwd, gen, options, async () => (await stopPreviewExcept(taskId, null, gen)).stopped);
   } finally {
     if (registered === undefined) endDriving(taskId, gen);
   }
@@ -39,16 +39,24 @@ export async function startPreview(taskId: string, step: PreviewStep, cwd: strin
 // 收掉一个任务的预览。reason 非空才往时间线写一行——刷新后仍能看出「预览被收了、
 // 为什么收的」，这是停止/暂停那条规矩的同一条判据。
 export async function stopPreview(taskId: string, reason: string | null): Promise<boolean> {
-  return await stopPreviewExcept(taskId, reason, null);
+  return (await stopPreviewExcept(taskId, reason, null)).stopped;
 }
 
 export async function stopPreviewForWorktreeCleanup(taskId: string): Promise<boolean> {
-  const stopped = await stopPreviewExcept(taskId, "验收清理工作区前回收预览", null);
+  let result: StopOutcome;
+  try { result = await stopPreviewExcept(taskId, "验收清理工作区前回收预览", null); }
+  catch (error) { throw new Error(`${previewStopFailure(error).message}工作区已保留。`); }
+  if (result.problem) throw new Error(`${result.problem}工作区已保留；请稍后重试验收。`);
   if (hasPendingPreviewStops(taskId)) throw new Error("预览进程尚未完全退出，工作区已保留；请稍后重试验收。");
   if (hasUnfinishedPreviewStart(taskId)) throw new Error("预览启动正在退出，工作区已保留；请稍后重试验收。");
   if (readAnyPreview(taskId)) throw new Error("预览已被另一趟启动替换，工作区已保留；请稍后重试验收。");
-  return stopped;
+  return result.stopped;
 }
+
+type StopOutcome = { stopped: boolean; problem?: string };
+const stopOutcome = (result: PreviewStopResult, acted = true): StopOutcome => ({
+  stopped: acted && result.stopped, ...(!result.stopped ? { problem: result.message } : {}),
+});
 
 /**
  * 收预览的真身。`exceptGen` 只有一个用处：起新预览时先收旧的，那一下不能把**自己**
@@ -58,7 +66,7 @@ async function stopPreviewExcept(
   taskId: string,
   reason: string | null,
   exceptGen: string | null,
-): Promise<boolean> {
+): Promise<StopOutcome> {
   // readAnyPreview：**还在启动的那一趟也得收得掉**。记录一删，那一趟自己下一个检查点
   // 就会发现代号没了，杀掉自己起的进程、把链撤干净（见 runPreview 里的 abandoned）。
   const record = readAnyPreview(taskId);
@@ -67,17 +75,17 @@ async function stopPreviewExcept(
   const marked = cancelDriving(taskId, exceptGen);
   const pending = await retryPreviewStops(taskId);
   if (!record) {
-    if (!marked) return false;
+    if (!marked) return stopOutcome(pending, false);
     // 这一段还没有 url、也还没有 pid，能说的只有「取消了一次启动」——但必须说，
     // 「刷新之后仍看得出我停过」是停止/暂停那条规矩的判据。
-    if (reason) await appendTaskTimeline(taskId, `预览启动已取消（${reason}）${pending.stopped ? "" : "；仍有此前请求停止的进程未退出。"}`);
+    if (reason) await appendTaskTimeline(taskId, `预览启动已取消（${reason}）${pending.stopped ? "" : `；${pending.message}`}`);
     bus.publish({ type: "task.review", taskId });
-    return pending.stopped;
+    return stopOutcome(pending);
   }
   // 不先看组长是否还活着：组长死、vite 仍留在同一进程组，正是必须回收的现场。
   // pid 为 0 = 还没 spawn，`kill(0, …)` 打的是**自己这一组**，绝不能放过去。
   const retired = await retirePreview(record, "stopped");
-  if (!retired) return false;
+  if (!retired) return stopOutcome(pending, false);
   const result = retired.stopped ? pending : retired;
   if (reason) await appendTaskTimeline(taskId, result.stopped
     ? `预览已回收（${reason}）：${record.url ?? record.cmd}` : `${result.message}（${reason}）`);
@@ -85,7 +93,7 @@ async function stopPreviewExcept(
   // task.review / task.status 递增，不发的话前端拿到的新快照版本相等，会被当成
   // 「不比现值新」丢掉——按钮就一直停在「关闭预览」上。
   bus.publish({ type: "task.review", taskId });
-  return result.stopped;
+  return stopOutcome(result);
 }
 
 /**
