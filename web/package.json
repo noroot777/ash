@@ -48,7 +48,7 @@
     "test:tool-summary": "node --experimental-strip-types scripts/test-tool-summary.mjs",
     "test:duet-timeline": "node --experimental-strip-types scripts/test-duet-timeline.mjs",
     "test:conversation-notes": "node --experimental-strip-types scripts/test-conversation-notes.mjs",
-    "test:conversation": "npm run test:client-id && npm run test:conversation-notes && npm run test:conversation-continuation && npm run test:conversation-steer && npm run test:conversation-system-note && npm run test:settlement-note && npm run test:turn-fold && npm run test:context-meter && npm run test:context-compact-quick && npm run test:reviewer-turn",
+    "test:conversation": "npm run test:client-id && npm run test:conversation-notes && npm run test:conversation-continuation && npm run test:conversation-steer && npm run test:conversation-self-turn && npm run test:conversation-system-note && npm run test:settlement-note && npm run test:turn-fold && npm run test:context-meter && npm run test:context-compact-quick && npm run test:reviewer-turn",
     "test:conversation-system-note": "node --experimental-strip-types scripts/test-conversation-system-note.mjs",
     "test:settlement-note": "node --experimental-strip-types scripts/test-settlement-note.mjs",
     "test:turn-fold": "node --experimental-strip-types scripts/test-turn-fold.mjs",
@@ -106,7 +106,8 @@
     "test:task-creation-origin": "node scripts/test-task-creation-origin.mjs",
     "test:project-git-lifetime": "node scripts/test-project-git-lifetime.mjs",
     "test:annotation-review": "tsx scripts/test-annotation-review.ts && tsx scripts/test-annotation-review-presentation.tsx",
-    "test:preview-workspace": "tsx scripts/test-preview-workspace-launch.tsx"
+    "test:preview-workspace": "tsx scripts/test-preview-workspace-launch.tsx",
+    "test:conversation-self-turn": "node --experimental-strip-types scripts/test-conversation-self-turn.mjs"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",

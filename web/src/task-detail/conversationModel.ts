@@ -1,12 +1,13 @@
-import type { AgentEvent, ContextUsage, ServerEvent, Session, TokenUsage } from "@ash/shared";
+import type { ContextUsage, ServerEvent, Session, TokenUsage } from "@ash/shared";
 import { ANSWER_PREFIX, parseSessionOutput } from "@ash/shared";
 import { addUsage, usageTotal } from "@ash/shared/usage";
 import { normalizeSessionNoteText } from "@ash/shared/session-notes";
 import type { SessionTraceEntry } from "../lib/api.ts";
-import type { ExecutionEvent } from "../lib/executionTrace.ts";
 import type { ConversationEventTone, ConversationEventVariant } from "./conversationNotes.ts";
 import { isVerifyNote, noteTone } from "./conversationNotes.ts";
 import { applyVerifySpans, reviewerKey, reviewerKeyOf, reviewerOf, traceVerifyRound } from "./conversationReviewer.ts";
+import type { AgentContentSegment, AgentTraceEvent } from "./conversationSegments.ts";
+import { auxEvent, contentSegments } from "./conversationSegments.ts";
 import {
   groupedTrace,
   normalizedPersistedTrace,
@@ -16,23 +17,14 @@ import {
   traceUsage,
 } from "./conversationTraceGroups.ts";
 export { conversationToMarkdown } from "./conversationMarkdown.ts";
+// 分段那一族住在 conversationSegments:这里转出去,别处 import 的路径不用跟着改。
+export type { AgentAuxEvent, AgentContentSegment } from "./conversationSegments.ts";
 
 export type LiveAgentEvent = Extract<ServerEvent, { type: "agent.event" }>;
 
 export type TimelineEntry =
   | { kind: "user"; id: string; text: string; attachments: string[]; at: string; isAnswer?: boolean; bySystem?: boolean; source?: "optimistic" | "server" }
   | { kind: "server"; id: string; event: LiveAgentEvent };
-
-// 「执行过程」块里的一行(工具 / 思考 / 异常)。形状与渲染都归 lib/executionTrace,
-// 普通任务、团队、辩论共用同一份 —— 这里只保留旧名字的别名。
-export type AgentAuxEvent = ExecutionEvent;
-
-export type AgentContentSegment = {
-  id: string;
-  markdown: string;
-  events: AgentAuxEvent[];
-  attachments: string[];
-};
 
 export type ConversationItem =
   | {
@@ -83,13 +75,6 @@ export type ConversationItem =
 export type PersistedConversation = { session: Session; output: string; trace?: SessionTraceEntry[] };
 
 type ConversationEventItem = Extract<ConversationItem, { kind: "event" }>;
-type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
-type TracedContentEntry = SessionTraceEntry & {
-  event: Exclude<SessionTraceEntry["event"], { kind: "usage" | "run" }>;
-};
-type TracedAttachmentEntry = TracedContentEntry & {
-  event: Extract<SessionTraceEntry["event"], { kind: "attachment" }>;
-};
 type PersistedTurnTimes = Map<string, number[]>;
 type SessionRunBounds = {
   endedAt: string | null;
@@ -146,12 +131,6 @@ function timelineAfterPersistedTurns(
   });
 }
 
-function auxEvent(event: AgentTraceEvent, at?: string): AgentAuxEvent {
-  if (event.kind === "tool") return { kind: "tool", label: event.name, detail: event.detail, ...(at ? { at } : {}), ...(event.nativeWork ? { nativeWork: event.nativeWork } : {}) };
-  if (event.kind === "thinking") return { kind: "thinking", label: "思考过程", detail: event.text };
-  return { kind: "error", label: event.message };
-}
-
 function liveRun(event: LiveAgentEvent): { model: string | null; reasoningEffort: string | null } | undefined {
   if (event.model === undefined && event.reasoningEffort === undefined) return undefined;
   return {
@@ -166,111 +145,6 @@ function sessionRun(session: Session | undefined): { model: string | null; reaso
     model: session.model?.trim() || null,
     reasoningEffort: session.reasoningEffort?.trim() || null,
   };
-}
-
-function contentSegments(
-  traced: SessionTraceEntry[],
-  fallbackMarkdown: string,
-  idPrefix: string,
-): AgentContentSegment[] {
-  // usage 只是这一回合的账,不是执行过程的一步 —— 漏掉这道过滤它会被 auxEvent
-  // 当成未知事件渲染成一行异常。
-  const entries = traced.filter((entry): entry is TracedContentEntry => (
-    entry.event.kind !== "usage" && entry.event.kind !== "run"
-  ));
-  const auxEntries = entries.filter((entry) => entry.event.kind !== "text" && entry.event.kind !== "attachment");
-  const attachmentEntries = entries.filter(
-    (entry): entry is TracedAttachmentEntry => entry.event.kind === "attachment",
-  );
-  if (!entries.some((entry) => entry.event.kind === "text")) {
-    return [{
-      id: `${idPrefix}:0`,
-      markdown: fallbackMarkdown,
-      events: auxEntries.map((entry) => auxEvent(entry.event as AgentTraceEvent, entry.at)),
-      attachments: attachmentEntries.map((entry) => entry.event.path),
-    }];
-  }
-
-  const segments: AgentContentSegment[] = [];
-  let current: AgentContentSegment = { id: `${idPrefix}:0`, markdown: "", events: [], attachments: [] };
-  const pushCurrent = () => {
-    if (!current.markdown && !current.events.length && !current.attachments.length) return;
-    segments.push(current);
-    current = { id: `${idPrefix}:${segments.length}`, markdown: "", events: [], attachments: [] };
-  };
-  for (const entry of entries) {
-    if (entry.event.kind === "text") {
-      current.markdown += entry.event.text;
-      continue;
-    }
-    if (entry.event.kind === "attachment") {
-      if (current.markdown) pushCurrent();
-      if (!current.attachments.includes(entry.event.path)) current.attachments.push(entry.event.path);
-      continue;
-    }
-    if (current.markdown) pushCurrent();
-    current.events.push(auxEvent(entry.event, entry.at));
-  }
-  pushCurrent();
-
-  const structuredMarkdown = segments.map((segment) => segment.markdown).join("");
-  if (structuredMarkdown.trim() === fallbackMarkdown.trim()) return segments;
-  const aligned = alignedSegments(segments, fallbackMarkdown);
-  if (aligned) return aligned;
-  // Partially written/legacy trace is still useful, but it cannot safely split
-  // the body. Keep one process block with the intact Markdown rather than drop or
-  // duplicate text.
-  return [{
-    id: `${idPrefix}:fallback`,
-    markdown: fallbackMarkdown || structuredMarkdown,
-    events: auxEntries.map((entry) => auxEvent(entry.event as AgentTraceEvent, entry.at)),
-    attachments: attachmentEntries.map((entry) => entry.event.path),
-  }];
-}
-
-/**
- * trace 与 .md 对同一段正文的**原子边界并不总是一致**，于是拼出来的整串常常差一点点，
- * 逐字相等这道闸就把整条回合打回单段（几百次工具糊成一个块，正文一句都拆不开）。
- *
- * 现场最常见的一种：旁注（预约审查…）落盘时 .md 已经把「我」冲进了上一段，而 trace 把
- * 相邻 delta 合并成了一条、时间戳落在旁注之后，于是这一段的 trace 正文比 .md 多一个
- * 「我」字。全库 1881 段里有 172 段是这种一方包含另一方的关系。
- *
- * 只要一方包含另一方，两串就能按偏移对上：**.md 是正文的权威**（它决定这颗气泡该显示
- * 哪些字），trace 只用来定位工具插在正文的第几个字之后。按 trace 的切点换算到 .md 坐标
- * 上重新分段即可。真发散（trace 被截断之类）返回 null，照旧退回单段。
- *
- * 不变量：各段正文拼回去必须**恰好等于** `fallbackMarkdown.trim()` —— 一个字都不能丢、
- * 不能重。最后一段兜到末尾就是为了保证这一点。
- */
-function alignedSegments(
-  segments: AgentContentSegment[],
-  fallbackMarkdown: string,
-): AgentContentSegment[] | null {
-  const body = fallbackMarkdown.trim();
-  const raw = segments.map((segment) => segment.markdown).join("");
-  const flat = raw.trim();
-  // 兜底气泡那一路会拿空正文来调（trace-only），此时对齐没有意义：indexOf("") 恒为 0,
-  // 会把每一段的正文都抹成空串。
-  if (!body || !flat) return null;
-
-  const ahead = flat.indexOf(body);
-  const behind = body.indexOf(flat);
-  const delta = ahead >= 0 ? ahead : behind >= 0 ? -behind : null;
-  if (delta === null) return null;
-
-  const lead = raw.length - raw.trimStart().length;
-  let consumed = 0;
-  let previous = 0;
-  return segments.map((segment, index) => {
-    consumed += segment.markdown.length;
-    const cut = index === segments.length - 1
-      ? body.length
-      : Math.min(Math.max(consumed - lead - delta, previous), body.length);
-    const markdown = body.slice(previous, cut);
-    previous = cut;
-    return { ...segment, markdown };
-  });
 }
 
 function currentSegment(agent: Extract<ConversationItem, { kind: "agent" }>): AgentContentSegment {
@@ -492,16 +366,40 @@ export function buildConversationItems(
     });
     // A failed turn can contain only tools/errors and no assistant prose. Keep
     // its execution block visible instead of dropping the persisted trace.
-    for (const [traceTurn, entries] of traceGroups) {
-      if (consumedTrace.has(traceTurn)) continue;
-      if (!entries.some((entry) => entry.event.kind !== "run" && entry.event.kind !== "usage")) continue;
-      const segments = contentSegments(entries, "", `persisted:trace-segment:${session.id}:${traceTurn}`);
+    //
+    // 另一类没有正文的组是**同一个回合的碎片**:常驻调度台被 CLI 自己唤醒续跑(后台监控
+    // 回调)时,服务端补上回合起点之前落的 trace,每条事件都拿自己的时刻当回合起点(修在
+    // server/src/team/session-consumer.ts,老数据仍是碎的)。一条条渲染就是一串「1 工具」
+    // 的空气泡。它们的共同特征是**没有 run 事件** —— 真回合起点一定写 run —— 所以顺着
+    // 时间粘回同一条,直到下一个 run 或下一段已经有正文的回合。
+    // 正文的权威来源只有 .md:兜底气泡里的 text 事件多半已经被上面某条气泡渲染过了
+    // （回合边界对不上时,同一段话会同时落在 .md 段落和无人认领的 trace 组里）。原样带
+    // 上就是一段话连说两遍,所以只留执行过程。
+    const persistedProse = segments
+      .filter((segment) => segment.kind === "agent")
+      .map((segment) => compactTurnText(segment.text))
+      .join("\0");
+    const withoutEchoedProse = (entries: SessionTraceEntry[]): SessionTraceEntry[] => entries.filter((entry) => {
+      if (entry.event.kind !== "text") return true;
+      const compact = compactTurnText(entry.event.text);
+      return !!compact && !persistedProse.includes(compact);
+    });
+    let fragment: { turn: string; entries: SessionTraceEntry[] } | null = null;
+    const flushFragment = (): void => {
+      const pending = fragment;
+      fragment = null;
+      if (!pending) return;
+      const entries = withoutEchoedProse(pending.entries);
+      if (!entries.some((entry) => entry.event.kind !== "run" && entry.event.kind !== "usage")) return;
+      const segments = contentSegments(entries, "", `persisted:trace-segment:${session.id}:${pending.turn}`);
       items.push({
         kind: "agent",
-        id: `persisted:trace:${session.id}:${traceTurn}`,
+        id: `persisted:trace:${session.id}:${pending.turn}`,
         sessionId: session.id,
         label: agentLabel(session),
-        at: traceTurn,
+        // 起点取第一条实质事件:被丢掉的复读正文往往比工具早好几分钟,拿组的 key 当起点
+        // 会把「模型在写字」的时间算进这条执行过程的用时里。
+        at: entries.find((entry) => entry.event.kind !== "usage")?.at ?? pending.turn,
         endedAt: null,
         markerEndedAt: null,
         session,
@@ -511,7 +409,14 @@ export function buildConversationItems(
         markdown: segments.map((segment) => segment.markdown).join(""),
         segments,
       });
+    };
+    for (const [traceTurn, entries] of traceGroups) {
+      if (consumedTrace.has(traceTurn) || entries.some((entry) => entry.event.kind === "run")) flushFragment();
+      if (consumedTrace.has(traceTurn)) continue;
+      if (fragment) fragment.entries.push(...entries);
+      else fragment = { turn: traceTurn, entries: [...entries] };
     }
+    flushFragment();
   }
 
   // Sessions are reusable and can overlap: an older Claude session may resume
@@ -630,6 +535,10 @@ export function buildConversationItems(
   }
 
   let nextInterjectionAt: string | null = null;
+  // 同一条会话里紧挨着它的下一条发言的开始时刻。没有回合结束标记时(CLI 自己唤醒续跑
+  // 的那些回合就没有)拿它当上界:再往下兜底的是整条会话的 endedAt,一串气泡就会同时以
+  // 会话结束时刻收尾,用时排成一列越往下越短、末条 0s 的假数据。
+  let nextAgentAt: string | null = null;
   let rightSessionId: string | undefined;
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index]!;
@@ -637,11 +546,14 @@ export function buildConversationItems(
     if (item.kind !== "agent") continue;
     if (item.sessionId !== rightSessionId) {
       nextInterjectionAt = null;
+      nextAgentAt = null;
       rightSessionId = item.sessionId;
     }
     item.endedAt = item.markerEndedAt
       ?? nextInterjectionAt
+      ?? nextAgentAt
       ?? inferredRunEnd(item.at, runBounds.get(item.sessionId));
+    nextAgentAt = item.at ?? nextAgentAt;
   }
 
   // 会话累计有两个来源：sessions 行是服务端账本（权威、跨刷新），但它要等下一次
