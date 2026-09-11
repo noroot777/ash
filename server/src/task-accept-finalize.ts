@@ -17,16 +17,20 @@ type Finalization = { sharedWorkers: SharedWorkerAcceptance | null; failure?: ne
 export async function finalizeAcceptance(
   task: typeof tasks.$inferSelect,
   message: string,
+  removesWorktree: boolean,
   completed: Pick<AcceptFailure, "completedMerge" | "completedTag"> = {},
 ): Promise<Finalization> {
   // 预览回收可能因记录权限失败，放在 accepted 落章前使重试仍能到达收尾。
   // 这时尾段还没执行，其中刻意开启的新预览不会被旧预览回收误伤。
   const preview = await stopPreviewAtAccept(task.id);
-  if (!preview.stopped) {
+  if (!preview.stopped && (removesWorktree || preview.reason !== "process_pending")) {
     const error = `${completed.completedMerge ? "合并已完成，结果已保留。" : completed.completedTag ? "标签已保留。" : ""}${preview.message}验收收尾暂缓，处理后可再次验收。`;
     await appendTaskTimeline(task.id, error);
     return { failure: { accepted: false, httpStatus: 409, taskId: task.id,
       reason: "preview_cleanup_pending", error, status: task.status, phase: "before_accept", ...completed } };
+  }
+  if (!preview.stopped) {
+    await appendTaskTimeline(task.id, `本次验收保留工作区，继续完成验收。${preview.message}停止记录已保留。`);
   }
   await setTaskStage(task.id, "accepted");
   // 尾段 durable 进度：stage=accepted 先落、尾段后跑，进程死在中间的话重试会走

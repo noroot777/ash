@@ -7,14 +7,18 @@ import type { PreviewRecord } from "./preview-store.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 
 type Target = { pid: number; startedAt: string | null; observedAt?: number };
-export type PreviewStopResult = { stopped: true } | { stopped: false; message: string };
+export type PreviewStopResult = { stopped: true } | {
+  stopped: false;
+  reason: "process_pending" | "record_error" | "start_pending" | "replaced";
+  message: string;
+};
 const pendingMessage = "已请求停止预览，但仍有进程未退出；后台会继续检查。";
 const identityMessage = "预览进程仍存活，但暂时无法确认启动身份；后台会继续检查。";
 const alive = (target: Target) => isPidAlive(target.pid) || isProcessGroupAlive(target.pid);
 
 export function previewStopFailure(error: unknown): Extract<PreviewStopResult, { stopped: false }> {
   const code = (error as NodeJS.ErrnoException | null)?.code;
-  return { stopped: false, message: `预览停止记录暂时无法读写${code ? `（${code}）` : ""}；请检查任务记录目录权限或磁盘状态后重试。` };
+  return { stopped: false, reason: "record_error", message: `预览停止记录暂时无法读写${code ? `（${code}）` : ""}；请检查任务记录目录权限或磁盘状态后重试。` };
 }
 
 function pendingFiles(taskId: string): string[] {
@@ -61,7 +65,7 @@ async function terminate(file: string, targets: Target[], signalable = targets):
     }
     await new Promise(resolve => setTimeout(resolve, 50));
   }
-  if (targets.some(alive)) return { stopped: false, message: targets.some(target => !target.startedAt && alive(target)) ? identityMessage : pendingMessage };
+  if (targets.some(alive)) return { stopped: false, reason: "process_pending", message: targets.some(target => !target.startedAt && alive(target)) ? identityMessage : pendingMessage };
   rmSync(file, { force: true });
   return { stopped: true };
 }
@@ -102,7 +106,7 @@ export async function retryPreviewStops(taskId: string): Promise<PreviewStopResu
     } catch (error) { pending = previewStopFailure(error); }
   }
   if (!pending.stopped) return pending;
-  try { return pendingFiles(taskId).length ? { stopped: false, message: pendingMessage } : pending; }
+  try { return pendingFiles(taskId).length ? { stopped: false, reason: "process_pending", message: pendingMessage } : pending; }
   catch (error) { return previewStopFailure(error); }
 }
 

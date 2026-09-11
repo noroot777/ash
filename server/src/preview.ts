@@ -46,16 +46,16 @@ export async function stopPreviewForWorktreeCleanup(taskId: string): Promise<boo
   let result: StopOutcome;
   try { result = await stopPreviewExcept(taskId, "验收清理工作区前回收预览", null); }
   catch (error) { throw new Error(`${previewStopFailure(error).message}工作区已保留。`); }
-  if (result.problem) throw new Error(`${result.problem}工作区已保留；请稍后重试验收。`);
+  if (result.problem) throw new Error(`${result.problem.message}工作区已保留；请稍后重试验收。`);
   if (hasPendingPreviewStops(taskId)) throw new Error("预览进程尚未完全退出，工作区已保留；请稍后重试验收。");
   if (hasUnfinishedPreviewStart(taskId)) throw new Error("预览启动正在退出，工作区已保留；请稍后重试验收。");
   if (readAnyPreview(taskId)) throw new Error("预览已被另一趟启动替换，工作区已保留；请稍后重试验收。");
   return result.stopped;
 }
 
-type StopOutcome = { stopped: boolean; problem?: string };
+type StopOutcome = { stopped: boolean; problem?: Extract<PreviewStopResult, { stopped: false }> };
 const stopOutcome = (result: PreviewStopResult, acted = true): StopOutcome => ({
-  stopped: acted && result.stopped, ...(!result.stopped ? { problem: result.message } : {}),
+  stopped: acted && result.stopped, ...(!result.stopped ? { problem: result } : {}),
 });
 
 /**
@@ -86,7 +86,7 @@ async function stopPreviewExcept(
   // pid 为 0 = 还没 spawn，`kill(0, …)` 打的是**自己这一组**，绝不能放过去。
   const retired = await retirePreview(record, "stopped");
   if (!retired) return stopOutcome(pending, false);
-  const result = retired.stopped ? pending : retired;
+  const result = !pending.stopped && pending.reason === "record_error" ? pending : retired.stopped ? pending : retired;
   if (reason) await appendTaskTimeline(taskId, result.stopped
     ? `预览已回收（${reason}）：${record.url ?? record.cmd}` : `${result.message}（${reason}）`);
   // 自由工作流状态里的 preview.running 变了就必须发事件：那份快照的版本号只由
@@ -114,10 +114,10 @@ export async function stopPreviewAtAccept(taskId: string): Promise<PreviewStopRe
     if (record && record.life !== "gate" && record.life !== "task") return { stopped: true };
     // 没有当前记录时也检查此前归档的停止记录，以及尚未落盘的启动。
     const result = await stopPreviewExcept(taskId, "验收时按预览回收设置关闭", null);
-    if (result.problem) return { stopped: false, message: result.problem };
-    if (hasUnfinishedPreviewStart(taskId)) return { stopped: false, message: "预览启动正在退出，请稍后重试。" };
-    if (readAnyPreview(taskId)) return { stopped: false, message: "预览已被另一趟启动替换，请稍后重试。" };
-    return { stopped: true };
+    if (result.problem?.reason === "record_error") return result.problem;
+    if (hasUnfinishedPreviewStart(taskId)) return { stopped: false, reason: "start_pending", message: "预览启动正在退出，请稍后重试。" };
+    if (readAnyPreview(taskId)) return { stopped: false, reason: "replaced", message: "预览已被另一趟启动替换，请稍后重试。" };
+    return result.problem ?? { stopped: true };
   } catch (error) { return previewStopFailure(error); }
 }
 

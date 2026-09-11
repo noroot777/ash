@@ -82,7 +82,7 @@ async function acceptWithoutCleanup(
   kind: AcceptSuccess["kind"],
   message: string,
 ): Promise<AcceptTaskResult> {
-  const finalized = await finalizeAcceptance(task, message);
+  const finalized = await finalizeAcceptance(task, message, false);
   if (finalized.failure) return finalized.failure;
   const { sharedWorkers } = finalized;
   return {
@@ -331,6 +331,7 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy, confirmUnverifie
       const finalized = await finalizeAcceptance(
         task,
         `任务分支已在先前清理中删除；沿用已记录的 merged 阶段，继续完成验收标记（目标 ${targetBranch}）。`,
+        cleanupPlanFor(plan.clean).worktree,
         { completedMerge: { targetBranch, commit: task.acceptedMergeCommit } },
       );
       if (finalized.failure) return finalized.failure;
@@ -512,6 +513,7 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy, confirmUnverifie
   const finalized = await finalizeAcceptance(
     task,
     `验收完成：目标分支 ${merge.targetBranch}；任务 status 保持 ${task.status}。`,
+    cleanPlan.worktree,
     { completedMerge, completedTag },
   );
   if (finalized.failure) return finalized.failure;

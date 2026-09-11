@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import childProcess, { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import fs, { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { once } from "node:events";
@@ -17,6 +17,8 @@ import { readAnyPreview, writeRecord } from "../src/preview-store.js";
 import { previewShell } from "../src/preview-shell.js";
 import { isPidAlive } from "../src/platform.js";
 import { killByPid } from "../src/executors/spawn.js";
+import { hasPendingPreviewStops } from "../src/preview-process-stop.js";
+import { sweepPreviews } from "../src/preview.js";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
@@ -142,6 +144,125 @@ export async function testAcceptanceFinalization(root: string): Promise<void> {
         if (process.exitCode !== null || process.signalCode !== null) continue;
         killByPid(process.pid!);
         await Promise.race([once(process, "exit"), new Promise(resolve => setTimeout(resolve, 4000))]);
+      }
+    }
+  }
+  await testPendingAcceptance(root);
+}
+
+async function testPendingAcceptance(root: string): Promise<void> {
+  for (const mode of ["in-place", "marked-only", "keep", "keep-unreadable", "worktree", "all"] as const) {
+    const id = `pending-finalize-${mode}`;
+    const repo = join(root, id);
+    git(root, "init", "-b", "main", repo);
+    git(repo, "config", "user.name", "Pending Acceptance Test");
+    git(repo, "config", "user.email", "pending@example.test");
+    writeFileSync(join(repo, "seed.txt"), "seed\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-m", "seed");
+    const at = new Date().toISOString();
+    await db.insert(projects).values({ id, name: id, repoPath: repo, createdAt: at });
+    const [task] = await createTasks([{ id, projectId: id, title: id, status: "done", mode: "team",
+      useWorktree: mode !== "in-place", worktreeBase: "main", workflowMode: "free", createdAt: at, updatedAt: at }]);
+    const workspace = await taskWorkspace(task, repo);
+    writeFileSync(join(workspace.path, "feature.txt"), "feature\n");
+    git(workspace.path, "add", ".");
+    git(workspace.path, "commit", "-m", "feature");
+    await createTasks([{ id: `${id}-worker`, projectId: id, parentId: id, title: "shared worker", status: "done",
+      mode: "single", useWorktree: false, workflowMode: "free", createdAt: at, updatedAt: at }]);
+    await db.insert(sessions).values({ id, taskId: id, role: "lead", agentType: "codex", executor: "codex", startedAt: at, endedAt: at, exitCode: 0 });
+    await db.insert(freeWorkflowStates).values({ taskId: id, reviewArmed: true, updatedAt: at });
+    const removesWorktree = mode === "worktree" || mode === "all";
+    const accept = makeStep("accept", "accept");
+    if (accept.kind === "accept") accept.p = { strategy: "safe", clean: removesWorktree ? mode : "none" };
+    const counter = join(root, `${id}-tail-count`);
+    const script = join(root, `${id}-tail.cjs`);
+    writeFileSync(script, `require('fs').appendFileSync(${JSON.stringify(counter)}, '1');`);
+    const command = makeStep("command", "after-accept");
+    if (command.kind === "command") command.p = { cmd: `${previewShell().quote(process.execPath)} ${previewShell().quote(script)}`, where: "repo" };
+    await db.update(tasks).set({ workflowAt: "gate", workflow: JSON.stringify({ workspace: task.useWorktree ? "isolated" : "shared",
+      steps: [makeStep("run", "run"), makeStep("human", "gate"), ...(mode === "marked-only" ? [] : [accept]), command] }),
+    }).where(eq(tasks.id, id));
+    const dir = join(root, "runs", id);
+    mkdirSync(dir, { recursive: true });
+    const child = spawn(process.execPath, ["-e", "setInterval(()=>{},100)"], { cwd: workspace.path, detached: process.platform !== "win32", stdio: "ignore" });
+    writeRecord({ taskId: id, gen: "pending", pid: child.pid!, cmd: "pending preview", life: "task", log: "", startedAt: at, port: null, url: null });
+    const unreadable = join(dir, "preview-stop-0.json");
+    if (mode === "keep-unreadable") writeFileSync(unreadable, "[]");
+    let denyRead = mode === "keep-unreadable";
+    const originalRead = fs.readFileSync;
+    const originalKill = process.kill.bind(process);
+    const originalExec = childProcess.execFile;
+    const faults = [
+      mock.method(fs, "readFileSync", (...args: any[]) => {
+        if (denyRead && args[0] === unreadable) throw Object.assign(new Error("fixture unreadable stop record"), { code: "EACCES" });
+        return (originalRead as (...args: any[]) => any)(...args);
+      }),
+      mock.method(process, "kill", (pid: number, signal?: NodeJS.Signals | number) => {
+        if (Math.abs(pid) === child.pid && (signal === "SIGTERM" || signal === "SIGKILL")) throw Object.assign(new Error("fixture stop denied"), { code: "EPERM" });
+        return originalKill(pid, signal);
+      }),
+      mock.method(childProcess, "execFile", (file: string, args: string[], ...rest: any[]) => {
+        if (file === "taskkill" && args.includes(String(child.pid))) {
+          queueMicrotask(() => rest.at(-1)(new Error("fixture stop denied"), "", ""));
+          return undefined as unknown as ChildProcess;
+        }
+        return (originalExec as (...args: any[]) => any)(file, args, ...rest);
+      }),
+    ];
+    syncBuiltinESMExports();
+    const restore = () => { faults.forEach(fault => fault.mock.restore()); syncBuiltinESMExports(); };
+    const acceptNow = () => acceptTask(id, mode === "marked-only" ? "workflow" : "human", { confirmUnverified: true });
+    try {
+      let result = await acceptNow();
+      if (mode === "keep-unreadable") {
+        assert.equal(result.accepted, false, "进程未退出不能掩盖另一份记录的读写错误");
+        if (result.accepted) throw new Error("unreadable evidence accepted");
+        assert.match(result.error, /停止记录暂时无法读写.*EACCES/);
+        denyRead = false;
+        result = await acceptNow();
+      }
+      assert.equal(hasPendingPreviewStops(id), true);
+      assert.equal(isPidAlive(child.pid!), true);
+      assert.ok(existsSync(workspace.path));
+      if (removesWorktree) {
+        assert.equal(result.accepted, false, "删除工作区前仍需等进程退出");
+        if (result.accepted) throw new Error("live process workspace deleted");
+        assert.equal(result.reason, "preview_cleanup_pending");
+        assert.notEqual((await db.select().from(tasks).where(eq(tasks.id, id)))[0].stage, "accepted");
+        assert.equal(existsSync(counter), false);
+        restore();
+        assert.equal((await acceptNow()).accepted, true);
+        assert.equal(existsSync(workspace.path), false);
+      } else {
+        assert.equal(result.accepted, true, JSON.stringify(result));
+        if (!result.accepted) throw new Error(result.error);
+        assert.equal(result.kind, mode === "in-place" ? "in_place" : mode === "marked-only" ? "marked_only" : "isolated_worktree");
+        assert.equal(result.tail?.ok, true);
+        assert.equal(result.sharedWorkersAccepted, 1);
+        assert.equal(readAnyPreview(id), null);
+        assert.equal((await db.select().from(tasks).where(eq(tasks.id, id)))[0].stage, "accepted");
+        assert.equal((await db.select().from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, id)))[0].reviewArmed, false);
+        assert.equal((await db.select().from(tasks).where(eq(tasks.id, `${id}-worker`)))[0].stage, "accepted");
+        const log = readFileSync(join(dir, `${id}.md`), "utf8");
+        assert.match(log, /本次验收保留工作区，继续完成验收/);
+        assert.match(log, /仍有进程未退出.*后台会继续检查/);
+        const again = await acceptNow();
+        assert.equal(again.accepted && again.kind, "already_accepted");
+        assert.equal(hasPendingPreviewStops(id), true, "验收完成后后台重试证据仍然存在");
+        restore();
+        await sweepPreviews();
+        assert.ok(existsSync(workspace.path));
+      }
+      assert.equal(readFileSync(counter, "utf8"), "1", "尾段完成且重复验收不重跑");
+      assert.equal(isPidAlive(child.pid!), false);
+      assert.equal(hasPendingPreviewStops(id), false);
+      console.log(`✓ ${mode}: pending stops ${removesWorktree ? "block workspace deletion" : "allow acceptance and all finalization"}, then background/retry cleanup recovers`);
+    } finally {
+      restore();
+      if (child.exitCode === null && child.signalCode === null) {
+        killByPid(child.pid!);
+        await Promise.race([once(child, "exit"), new Promise(resolve => setTimeout(resolve, 4000))]);
       }
     }
   }
