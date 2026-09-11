@@ -60,10 +60,33 @@ function webDevArgs(webPort) {
 }
 
 function startFrontendOnly(webPort) {
-  const proxy = process.env.ASH_PROXY ?? "http://127.0.0.1:4317";
+  // 打哪台 ash 的顺序：**脚本自己写的 `ASH_PROXY` 最大**，其次才是启动预览的那台 ash 递过来
+  // 的 `ASH_HOST_API`（见 server/src/preview-start.ts），最后才是默认的 4317。
+  //
+  // 两头都栽过，方向还相反：写死 4317 让「ash 不跑在 4317 上」的部署整个错位——/api 打到别处，
+  // 那个端口上要是坐着另一台 ash，用户以为在验分支、实际在读写那一台（第 5 轮审查 P1）。反过来
+  // 让宿主地址压过 `ASH_PROXY`，则把「一条整栈脚本」这种受支持的写法废掉了：
+  //     PORT=$PORT2 npm -w server run dev &
+  //     ASH_PROXY=$URL2 npm run dev
+  // 这句 `ASH_PROXY=$URL2` 是用户**明说**「前端连我这个分支后端」，压掉它等于把 /api 悄悄接回
+  // 主 ash——他以为在验分支后端，实际在拿自己的身份读写主库（第 6 轮审查 P1）。所以宿主地址只是
+  // 一个更聪明的默认值，不是命令。
+  //
+  // 这个顺序成立有个前提，**在这里看不出来、也检查不了**：能到这儿的 `ASH_PROXY` 必须只可能是
+  // 命令现场写的。宿主 ash 自己环境里带着的那份（连同旧名 `HARNESS_PROXY`）由 ash 在组预览子
+  // 进程环境时擦掉——见 server/src/preview-start.ts 的 previewBaseEnv；不擦，一个跟这次预览毫无
+  // 关系的遗留值就能压掉 ash 确知的监听端口（第 7 轮审查 P1）。
+  const proxy = process.env.ASH_PROXY ?? process.env.ASH_HOST_API ?? "http://127.0.0.1:4317";
+  const target = proxy.replace(/^https?:\/\//, "");
   // 打这一行时把 scheme 去掉，理由跟下面转发后端日志时一样：ash 会从预览日志里认地址，
   // 前端那行还没打出来的那几秒里，这行是日志里唯一一个 `http://…`，会被当成预览本尊。
-  console.log(`[dev] 预览：只起前端 ${webPort}，/api 打到 ${proxy.replace(/^https?:\/\//, "")}`);
+  console.log(`[dev] 预览：只起前端 ${webPort}，/api 打到 ${target}`);
+  // 下面这行是**打给 ash 看的回话**：它给我们递了 ASH_PREVIEW_MODE=frontend，这句是我们
+  // 确认「照做了，我的 /api 确实打到那台 ash 上」。只有收到这句，反代才会把 /api 那一跳
+  // 接回本机 ash 并替用户带上会话（判读在 server/src/preview-log.ts 的 declaredHostApiPort，
+  // 缘由在 server/src/preview-access.ts 顶部）。递过来的那个 env 本身不算数——任意项目脚本
+  // 都可以不理它。同样不带 scheme，理由同上一行。
+  console.log(`[ash] preview-api-host ${target}`);
   const web = spawn(NPM, webDevArgs(webPort), {
     cwd: REPO,
     stdio: "inherit",
@@ -72,7 +95,7 @@ function startFrontendOnly(webPort) {
       ...process.env,
       PORT: String(webPort),
       ASH_PROXY: proxy,
-      VITE_ASH_PREVIEW: "预览实例 · 只启动这个分支的前端 · API 连本机 4317",
+      VITE_ASH_PREVIEW: `预览实例 · 只启动这个分支的前端 · API 连本机 ${target}`,
     },
     ...NPM_SPAWN_OPTS,
   });

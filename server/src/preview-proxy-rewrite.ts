@@ -19,7 +19,7 @@ export function rewritePreviewUrl(value: string, base: string, record: PreviewRe
   return target ? target.base + (match![2] ?? "/").slice(1) : value;
 }
 
-export function rewritePreviewText(text: string, contentType: string, base: string, record: PreviewRecord, resourcePath = ""): string {
+export function rewritePreviewText(text: string, contentType: string, base: string, record: PreviewRecord, resourcePath = "", navBase = base): string {
   let rewritten = text.replace(new RegExp(`/preview/${record.taskId}/[a-f0-9]{48}/[A-Za-z0-9_-]+/`, "g"), (value) => rewritePreviewUrl(value, base, record));
   if (resourcePath.endsWith("/@vite/client")) {
     rewritten = rewritten.replace(/(const base(?:\$[\w]+)?\s*=\s*)(["'])([^"']*)\2/g,
@@ -33,7 +33,7 @@ export function rewritePreviewText(text: string, contentType: string, base: stri
     (_all, before: string, quote: string, value: string) => `${before}${quote}${rewritePreviewUrl(value, base, record)}${quote}`);
   if (!contentType.includes("text/html")) return rewritten;
   rewritten = neutralizePreviewMetaCsp(rewritten);
-  const bootstrap = [previewBrowserBridge(base, record), previewAnnotationRuntime()]
+  const bootstrap = [previewBrowserBridge(base, record, navBase), previewAnnotationRuntime()]
     .map((script) => `<script>${script.replaceAll("</script", "<\\/script")}</script>`).join("");
   return /<head(?:\s[^>]*)?>/i.test(rewritten)
     ? rewritten.replace(/<head(?:\s[^>]*)?>/i, (head) => head + bootstrap)
@@ -65,7 +65,7 @@ export function rewritePreviewText(text: string, contentType: string, base: stri
  * 里、不会跟着请求发出去；③ IndexedDB 在 opaque origin 里没法模拟，只能让它探测得出「没有」
  * 而不是探测得出、一开就炸。
  */
-function previewBrowserBridge(base: string, record: PreviewRecord): string {
+function previewBrowserBridge(base: string, record: PreviewRecord, navBase: string): string {
   return `(() => {
     // 存储那一段单独 try 起来：它塌了也不能连累下面的地址改写（那才是预览的命脉）。
     try {
@@ -118,21 +118,29 @@ function previewBrowserBridge(base: string, record: PreviewRecord): string {
     const routes = ${JSON.stringify(previewAddressMap(record))};
     const origin = location.origin;
     const routeRoot = base.split('/').slice(0, 4).join('/') + '/';
+    // 页面地址栏上的 token 跟内容里的不是同一个（见 server/src/preview-access.ts 顶部），
+    // 所以相对地址会解析到地址栏那条道上 —— 一律按 /preview/<任务>/<任意 token>/<服务>/
+    // 拆开，换回本服务当前这条道。
+    const relane = (pathname) => {
+      const parts = pathname.split('/');
+      if (parts[1] !== 'preview' || parts[2] !== base.split('/')[2]) return null;
+      const service = routes.find(s => s.base.split('/')[4] === parts[4]);
+      return service ? service.base + parts.slice(5).join('/') : null;
+    };
     const rewrite = (value) => {
       const raw = String(value);
       if (raw.startsWith(routeRoot)) return raw;
-      const parts = raw.split('/');
-      if (parts[1] === 'preview' && parts[2] === base.split('/')[2]) {
-        const service = routes.find(s => s.base.split('/')[4] === parts[4]);
-        if (service) return service.base + parts.slice(5).join('/');
-      }
+      const direct = raw.startsWith('/') ? relane(raw) : null;
+      if (direct) return direct;
       if (raw.startsWith('/') && !raw.startsWith('//')) return base + raw.slice(1);
       try {
         const url = new URL(raw, location.href);
         const local = ['localhost','127.0.0.1','[::1]','0.0.0.0'].includes(url.hostname);
         const service = local && routes.find(s => s.port === Number(url.port));
         if (service) return origin + service.base + url.pathname.slice(1) + url.search + url.hash;
-        if (url.origin === origin && !url.pathname.startsWith(routeRoot)) return origin + base + url.pathname.slice(1) + url.search + url.hash;
+        if (url.origin === origin && !url.pathname.startsWith(routeRoot)) {
+          return origin + (relane(url.pathname) ?? base + url.pathname.slice(1)) + url.search + url.hash;
+        }
       } catch {}
       return raw;
     };
@@ -156,9 +164,18 @@ function previewBrowserBridge(base: string, record: PreviewRecord): string {
         }
       };
     }
+    // 地址栏那一改要落在**地址栏那个 token** 上，不是内容 token：内容 token 是罐子的钥匙，
+    // 被 pushState 写进地址栏就等于贴到门上了（见 server/src/preview-access.ts 顶部）。
+    // 没认领过的那份页面里两者本来就是同一个，这一步是恒等的。
+    const navRoot = ${JSON.stringify(navBase)}.split('/').slice(0, 4).join('/') + '/';
+    const toNav = (value) => {
+      const target = rewrite(value);
+      const cut = target.indexOf(routeRoot);
+      return cut < 0 ? target : target.slice(0, cut) + navRoot + target.slice(cut + routeRoot.length);
+    };
     for (const name of ['pushState', 'replaceState']) {
       const original = history[name].bind(history);
-      history[name] = function (state, title, url) { return original(state, title, url == null ? url : rewrite(url)); };
+      history[name] = function (state, title, url) { return original(state, title, url == null ? url : toNav(url)); };
     }
   })();`;
 }
