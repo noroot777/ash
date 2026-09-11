@@ -34,6 +34,10 @@ import type { Lead } from "./session-types.js";
 
 const IDLE_MS = Number(process.env.ASH_TEAM_IDLE_MS ?? 30 * 60_000);
 const CLOSE_GRACE_MS = 10_000;
+// 待命中的常驻会话冒出这几种事件 = CLI 自己又开工了(见 consume 里的补开回合)。只认
+// agent 真正在产出的这四种:usage / error / context 多半是上一个回合的收尾统计与诊断,
+// 拿它们开回合只会凭空多一个空气泡。
+const SELF_STARTED_TURN_EVENTS: ReadonlySet<AgentEvent["kind"]> = new Set(["text", "thinking", "tool", "attachment"]);
 const RECYCLE_NOTE = (min: number, resumable: boolean) =>
   `〔系统〕调度台空闲超过 ${min} 分钟,进程已回收(待命)。`
   + (resumable
@@ -102,6 +106,15 @@ async function consume(lead: Lead): Promise<void> {
         if (await flushPendingCredential(lead)) rotation = onFreshSession(rotation);
         publish(lead, event);
         continue;
+      }
+      // CLI 自己开的新一轮:常驻会话里挂了后台监控/子任务的 agent,通知一到就接着干活,
+      // 而 harness 一条消息都没 send 过 —— 上一个 turnEnd 已经把这台落成待命、turnStart
+      // 也清空了。不在这儿补一个回合起点,后果有两层:trace 的 turnStartedAt 只能兜底成
+      // 各自的 now(),一个回合在页面上碎成一串「1 工具」的空气泡(每条都没正文,用时还全
+      // 按会话结束时刻倒推);空闲回收计时也还在跑,一台正在干活的调度台会被当成闲置收掉。
+      if (!lead.busy && SELF_STARTED_TURN_EVENTS.has(event.kind)) {
+        clearIdle(lead);
+        await beginTurn(lead);
       }
       if (event.kind === "text") {
         lead.out.write(event.text);

@@ -492,16 +492,40 @@ export function buildConversationItems(
     });
     // A failed turn can contain only tools/errors and no assistant prose. Keep
     // its execution block visible instead of dropping the persisted trace.
-    for (const [traceTurn, entries] of traceGroups) {
-      if (consumedTrace.has(traceTurn)) continue;
-      if (!entries.some((entry) => entry.event.kind !== "run" && entry.event.kind !== "usage")) continue;
-      const segments = contentSegments(entries, "", `persisted:trace-segment:${session.id}:${traceTurn}`);
+    //
+    // 另一类没有正文的组是**同一个回合的碎片**:常驻调度台被 CLI 自己唤醒续跑(后台监控
+    // 回调)时,服务端补上回合起点之前落的 trace,每条事件都拿自己的时刻当回合起点(修在
+    // server/src/team/session-consumer.ts,老数据仍是碎的)。一条条渲染就是一串「1 工具」
+    // 的空气泡。它们的共同特征是**没有 run 事件** —— 真回合起点一定写 run —— 所以顺着
+    // 时间粘回同一条,直到下一个 run 或下一段已经有正文的回合。
+    // 正文的权威来源只有 .md:兜底气泡里的 text 事件多半已经被上面某条气泡渲染过了
+    // （回合边界对不上时,同一段话会同时落在 .md 段落和无人认领的 trace 组里）。原样带
+    // 上就是一段话连说两遍,所以只留执行过程。
+    const persistedProse = segments
+      .filter((segment) => segment.kind === "agent")
+      .map((segment) => compactTurnText(segment.text))
+      .join(" ");
+    const withoutEchoedProse = (entries: SessionTraceEntry[]): SessionTraceEntry[] => entries.filter((entry) => {
+      if (entry.event.kind !== "text") return true;
+      const compact = compactTurnText(entry.event.text);
+      return !!compact && !persistedProse.includes(compact);
+    });
+    let fragment: { turn: string; entries: SessionTraceEntry[] } | null = null;
+    const flushFragment = (): void => {
+      const pending = fragment;
+      fragment = null;
+      if (!pending) return;
+      const entries = withoutEchoedProse(pending.entries);
+      if (!entries.some((entry) => entry.event.kind !== "run" && entry.event.kind !== "usage")) return;
+      const segments = contentSegments(entries, "", `persisted:trace-segment:${session.id}:${pending.turn}`);
       items.push({
         kind: "agent",
-        id: `persisted:trace:${session.id}:${traceTurn}`,
+        id: `persisted:trace:${session.id}:${pending.turn}`,
         sessionId: session.id,
         label: agentLabel(session),
-        at: traceTurn,
+        // 起点取第一条实质事件:被丢掉的复读正文往往比工具早好几分钟,拿组的 key 当起点
+        // 会把「模型在写字」的时间算进这条执行过程的用时里。
+        at: entries.find((entry) => entry.event.kind !== "usage")?.at ?? pending.turn,
         endedAt: null,
         markerEndedAt: null,
         session,
@@ -511,7 +535,14 @@ export function buildConversationItems(
         markdown: segments.map((segment) => segment.markdown).join(""),
         segments,
       });
+    };
+    for (const [traceTurn, entries] of traceGroups) {
+      if (consumedTrace.has(traceTurn) || entries.some((entry) => entry.event.kind === "run")) flushFragment();
+      if (consumedTrace.has(traceTurn)) continue;
+      if (fragment) fragment.entries.push(...entries);
+      else fragment = { turn: traceTurn, entries: [...entries] };
     }
+    flushFragment();
   }
 
   // Sessions are reusable and can overlap: an older Claude session may resume
@@ -630,6 +661,10 @@ export function buildConversationItems(
   }
 
   let nextInterjectionAt: string | null = null;
+  // 同一条会话里紧挨着它的下一条发言的开始时刻。没有回合结束标记时(CLI 自己唤醒续跑
+  // 的那些回合就没有)拿它当上界:再往下兜底的是整条会话的 endedAt,一串气泡就会同时以
+  // 会话结束时刻收尾,用时排成一列越往下越短、末条 0s 的假数据。
+  let nextAgentAt: string | null = null;
   let rightSessionId: string | undefined;
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index]!;
@@ -637,11 +672,14 @@ export function buildConversationItems(
     if (item.kind !== "agent") continue;
     if (item.sessionId !== rightSessionId) {
       nextInterjectionAt = null;
+      nextAgentAt = null;
       rightSessionId = item.sessionId;
     }
     item.endedAt = item.markerEndedAt
       ?? nextInterjectionAt
+      ?? nextAgentAt
       ?? inferredRunEnd(item.at, runBounds.get(item.sessionId));
+    nextAgentAt = item.at ?? nextAgentAt;
   }
 
   // 会话累计有两个来源：sessions 行是服务端账本（权威、跨刷新），但它要等下一次

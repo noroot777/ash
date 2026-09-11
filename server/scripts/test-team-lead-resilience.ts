@@ -374,6 +374,42 @@ try {
   assert.deepEqual(seen.filter((e) => e.kind === "error"), [], "旧台的收尾诊断不该广播给正在看新会话的用户");
   ok("被接管的旧调度台不再污染共用的 .md 与实时事件流");
 
+  // ── ⑧ CLI 自己开的新一轮:回合起点必须补上 ───────────────────────────────────
+  // 常驻会话里挂了后台监控的 agent,通知一到就接着干活,harness 一条消息都没 send 过。
+  // 不补 beginTurn 的话 lead.turnStart 还是 null,trace 只能拿各自的 now() 当回合起点:
+  // 一个回合在页面上碎成一串「1 工具」的空气泡,用时全按会话结束时刻倒推(越往下越短、
+  // 末条 0s);任务状态也停在待命,空闲回收会把一台正在干活的调度台收掉。
+  const selfStarted = await runLead("self-started-turn", {
+    cliSessionId: "resident-thread",
+    script: async function* () {
+      yield { kind: "text", text: "第一轮说完了。" };
+      yield { kind: "tool", name: "Bash", detail: "{\"command\":\"first\"}" };
+      yield { kind: "turnEnd" }; // 落待命:turnStart 清空
+      // 这里开始没有任何 send —— CLI 自己被后台监控叫醒,接着说话、接着跑工具。
+      yield { kind: "text", text: "监听回来了,接着核对。" };
+      yield { kind: "tool", name: "Bash", detail: "{\"command\":\"second\"}" };
+      yield { kind: "tool", name: "Bash", detail: "{\"command\":\"third\"}" };
+      yield { kind: "turnEnd" };
+      yield { kind: "done", exitStatus: 0 };
+    },
+  });
+  const selfTrace = selfStarted.trace.trim().split("\n").filter(Boolean)
+    .map((line) => JSON.parse(line) as { turnStartedAt: string; event: { kind: string } });
+  const turnsOf = (kinds: string[]) =>
+    new Set(selfTrace.filter((entry) => kinds.includes(entry.event.kind)).map((entry) => entry.turnStartedAt));
+  assert.equal(
+    turnsOf(["text", "tool"]).size,
+    2,
+    `自己开的这一轮被拆成了 ${turnsOf(["text", "tool"]).size} 个回合 —— 页面上就是一串「1 工具」的空气泡,用时还按会话结束时刻倒推`,
+  );
+  const secondTurn = selfTrace.filter((entry) => entry.turnStartedAt !== at);
+  assert.deepEqual(
+    secondTurn.map((entry) => entry.event.kind),
+    ["run", "text", "tool", "tool"],
+    "自己开的这一轮要有自己的回合起点(run),后面的正文和工具全都归它",
+  );
+  ok("CLI 自己唤醒续跑时补上回合起点,一轮就是一条气泡");
+
   console.log("test:team-resilience core ok");
 } finally {
   healSessionWrites();
