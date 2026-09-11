@@ -22,13 +22,17 @@ export async function testPreviewWorkspaceDom() {
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
     let record = null, iframeLoads = 0, running = false, realRuntime = false;
+    const savedRecords = new Map();
     const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==';
     const launches = [];
     const config = { services: [{ id: "web", name: "Project web", command: "npm run project", port: 4321, kind: "web", enabled: true }] };
     const launchInfo = { kind: "workflow", reason: "", directory: "/task/worktree", steps: [{ id: "step", command: "npm run workflow" }],
       configured: { command: "npm run project", config }, candidates: [{ id: "static", name: "静态页面", command: "serve dist" }], truncated: false };
     const preview = () => ({ running, starting: false, hasLog: false, proxied: true, gen: "generation", startedAt: "session",
-      services: running ? [{ id: "web", name: "Web", status: "ready", url: "http://example.test", command: "npm run project" }] : [] });
+      services: running ? [
+        { id: "web", name: "Web", status: "ready", url: "http://example.test", command: "npm run project" },
+        { id: "admin", name: "Admin", status: "ready", url: "http://admin.test", command: "npm run admin" },
+      ] : [] });
     await page.route("**/api/**", async (route) => {
       const request = route.request(), path = new URL(request.url()).pathname;
       const reply = (body) => route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
@@ -75,14 +79,16 @@ export async function testPreviewWorkspaceDom() {
       if (path.endsWith("/annotation-reference")) return reply({ capturedAt: 1, missing: ["fixture image unavailable"] });
       if (path === "/api/uploads") return reply({ id: "image", path: "/uploads/fixture.png", url: "/api/uploads/fixture.png", name: "fixture.png", kind: "image" });
       if (path === "/api/uploads/fixture.png") return route.fulfill({ contentType: "image/png", body: Buffer.from(png, "base64") });
-      if (path.endsWith("/annotation-batches")) return reply(record ? [record] : []);
+      if (path.endsWith("/annotation-batches")) return reply([...savedRecords.values()]);
       if (path.includes("/annotation-batches/") && request.method() === "PUT") {
         const data = request.postDataJSON();
         record = { ...data, batch: parseAnnotationBatch(data.batch), state: "saved", messageId: null, error: null, savedAt: "2026-09-11" };
+        savedRecords.set(record.batch.id, record);
         return reply(record);
       }
       if (path.endsWith("/reply")) {
         record = { ...record, messageId: "sent", state: "delivered" };
+        savedRecords.set(record.batch.id, record);
         return reply({ annotationBatch: record });
       }
       return reply([]);
@@ -125,7 +131,7 @@ export async function testPreviewWorkspaceDom() {
     await button("标注").click();
     const draft = () => page.evaluate(() => JSON.parse(localStorage.getItem("ash.annotation-batch.fixture")));
     const emit = async (number, tool = "element") => {
-      await frame.evaluate(({ number, tool }) => window.emit({ type: "annotation", canSelectParent: false, annotation: {
+      await page.frames().find((frame) => frame.url().includes("/preview/open/")).evaluate(({ number, tool }) => window.emit({ type: "annotation", canSelectParent: false, annotation: {
         id: `item-${number}`, number, tool, points: [{x:100,y:100}], element: null,
         context: {route:"/",scroll:{x:0,y:0},viewport:{width:innerWidth,height:innerHeight,scale:1},capturedAt:number},
       } }), { number, tool });
@@ -198,8 +204,78 @@ export async function testPreviewWorkspaceDom() {
     assert.equal(await button("删除标注 #1").isDisabled(), true, "restored sent batches remain immutable");
     assert.equal(record.batch.items.length, 1);
 
+    const sampleBatch = structuredClone(record.batch);
+    const mismatchNotice = page.locator(".preview-workspace-toolbar .annotation-batch-mismatch");
+    const panelNotice = page.locator(".annotation-batch-panel .annotation-batch-mismatch");
+    const waitForTools = () => page.waitForFunction(() => [...document.querySelectorAll('.preview-workspace-tools button')]
+      .every((button) => !button.disabled));
+    for (const scenario of ["restart", "service"]) {
+      const oldBatch = { ...structuredClone(sampleBatch), id: `old-${scenario}`, createdAt: 1,
+        gen: scenario === "restart" ? "previous-generation" : "generation" };
+      oldBatch.items = oldBatch.items.map((item) => ({ ...item, gen: oldBatch.gen }));
+      record = { batch: oldBatch, revision: 1, state: "saved", messageId: null, error: null, savedAt: "2026-09-11" };
+      savedRecords.clear(); savedRecords.set(oldBatch.id, record);
+      await page.evaluate((batch) => localStorage.setItem("ash.annotation-batch.fixture", JSON.stringify(batch)), oldBatch);
+      await page.reload();
+      await page.waitForFunction(() => document.querySelector('.preview-workspace-modes button')?.disabled === false);
+      if (scenario === "service") {
+        await waitForTools();
+        assert.equal(await page.locator(".annotation-batch-mismatch").count(), 0, "matching drafts have no mismatch notice");
+        await page.getByRole("combobox", { name: "预览服务" }).selectOption("admin");
+      }
+      const reason = scenario === "restart" ? /服务「Web」已重启或更新页面.*之前的预览/ : /属于服务「Web」.*切换到服务「Admin」/;
+      await mismatchNotice.waitFor();
+      assert.match(await mismatchNotice.textContent(), reason);
+      assert.equal(await panelNotice.isVisible(), true, "the send entry has the same local explanation and recovery action");
+      assert.match(await panelNotice.textContent(), reason);
+      assert.equal(await panelNotice.getByRole("button", { name: "新建批次继续标注" }).isEnabled(), true);
+      assert.equal(await button("预览批次并发送").isEnabled(), true, "existing comments remain sendable across previews");
+      for (const name of ["标注", "点选", "矩形", "画笔", "Pin", "父容器"]) {
+        assert.equal(await button(name).isDisabled(), true, `${scenario}: ${name} stays locked until a fresh batch`);
+        assert.match(await button(name).getAttribute("aria-describedby"), /.+/, "locked tools refer to the visible reason");
+      }
+      if (scenario === "restart") {
+        await page.reload();
+        await mismatchNotice.waitFor();
+        assert.match(await mismatchNotice.textContent(), reason, "restored mismatched drafts keep a persistent explanation");
+      } else {
+        await page.getByRole("combobox", { name: "预览服务" }).selectOption("web");
+        await waitForTools();
+        assert.equal(await mismatchNotice.count(), 0, "returning to the original service removes the mismatch");
+        await page.getByRole("combobox", { name: "预览服务" }).selectOption("admin");
+        await mismatchNotice.waitFor();
+      }
+      const recovery = scenario === "restart" ? mismatchNotice : panelNotice;
+      if (scenario === "restart") {
+        await button("收起意见栏").click();
+        assert.equal(await mismatchNotice.isVisible(), true, "toolbar recovery remains visible with the sidebar closed");
+      }
+      await recovery.getByRole("button", { name: "新建批次继续标注" }).click();
+      await waitForTools();
+      assert.equal(await mismatchNotice.count(), 0, "one recovery click removes the mismatch and unlocks tools");
+      assert.equal(await draft(), null, "the fresh batch starts with no old annotations");
+      assert.deepEqual(savedRecords.get(oldBatch.id).batch, oldBatch, "fresh saves and preserves the old batch");
+      await button("点选").click();
+      await emit(1);
+      await page.locator(".preview-workspace-detail textarea").fill("当前页面的新意见");
+      await page.getByRole("status").filter({ hasText: "已保存 · 草稿" }).waitFor();
+      const freshBatch = await draft();
+      assert.notEqual(freshBatch.id, oldBatch.id);
+      assert.equal(freshBatch.gen, "generation");
+      assert.equal(freshBatch.serviceId, scenario === "restart" ? "web" : "admin");
+      assert.equal(freshBatch.items[0].comment, "当前页面的新意见");
+      assert.equal(savedRecords.size, 2, "old and new batches are persisted separately");
+      await page.getByText("已保存批次（2）", { exact: true }).click();
+      const oldTimestamp = await page.evaluate(() => new Date(1).toLocaleString());
+      await page.locator(".annotation-batch-history").filter({ hasText: oldTimestamp }).click();
+      await mismatchNotice.waitFor();
+      assert.equal((await draft()).id, oldBatch.id, "the saved old batch can still be reopened");
+      await page.locator(".preview-workspace-item").click();
+      assert.equal(await page.locator(".preview-workspace-detail textarea").inputValue(), "最终意见");
+    }
+
     await page.evaluate(() => localStorage.removeItem("ash.annotation-batch.fixture"));
-    record = null; realRuntime = true;
+    record = null; savedRecords.clear(); realRuntime = true;
     await page.reload();
     await page.waitForFunction(() => document.querySelector('.preview-workspace-modes button')?.disabled === false);
     await button("矩形").click();
@@ -267,7 +343,7 @@ export async function testPreviewWorkspaceDom() {
     assert.equal(iframeLoads, loadsBeforeEscape, 'frame Escape preserves the iframe document and channel');
     assert.equal(await page.getByText("未能连接页面标注", { exact: false }).count(), 0);
     assert.deepEqual(errors, []);
-    console.log("preview workspace DOM: launch/layout, undo/delete/locks, evidence, real runtime drawing, focused iframe Escape/defaultPrevented in browse and annotate modes passed");
+    console.log("preview workspace DOM: launch/layout, undo/delete/locks, evidence, restart/service mismatch recovery and saved history, real runtime drawing, focused iframe Escape/defaultPrevented in browse and annotate modes passed");
   } finally {
     await browser?.close();
     await server.close();

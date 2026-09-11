@@ -129,6 +129,7 @@ export async function testAcceptanceVerification(root: string) {
   assert.equal((await acceptFamily("familyverify", [{ ...familyPlan.task, confirmUnverified: true }], acceptTask)).ok, true);
 
   await testVerificationStations();
+  await (await import("./test-team-accept-verification.js")).testTeamAcceptanceVerification();
   await make("mcpverify");
   await make("mcpmultiverify", { workflow: multiVerifyWorkflow, workflowAt: "h2", reviewStep: "v1", verifyRounds: 1, verifyStationRounds: 1 });
   const backend = serve({ fetch: new Hono().route("/api", api).fetch, hostname: "127.0.0.1", port: 0 });

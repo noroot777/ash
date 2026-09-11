@@ -1,9 +1,12 @@
 import { annotationBatchPrompt, batchStateLabels, evidenceLabels, sameAnnotationBatch } from "@ash/shared/page-annotation-batch";
 import { useAnnotationBatch } from "./useAnnotationBatch.ts";
+import { AnnotationBatchMismatch } from "./AnnotationBatchMismatch.tsx";
 import "./annotation-batch.css";
 
 type BatchController = ReturnType<typeof useAnnotationBatch>;
-export function AnnotationBatchPanel({ controller: c, selectedId }: { controller: BatchController; selectedId: string | null }) {
+export function AnnotationBatchPanel({ controller: c, selectedId, mismatchReason = null }: {
+  controller: BatchController; selectedId: string | null; mismatchReason?: string | null;
+}) {
   const { batch, record } = c;
   const saved = sameAnnotationBatch(record?.batch, batch);
   return <div className="annotation-batch-panel">
@@ -22,6 +25,7 @@ export function AnnotationBatchPanel({ controller: c, selectedId }: { controller
         <p>{selectedId ? "点击这里后按 ⌘V / Ctrl+V，将截图附到选中的批注。" : "先选中一条标注，再在这里粘贴截图。"}</p>
         <small>页面转图可能缺少输入值、Canvas、Shadow DOM、登录态、外部图片或字体。服务端参考图是非用户现场，失败也可发送。</small>
       </div>
+      <AnnotationBatchMismatch reason={mismatchReason} controller={c} />
       <button type="button" disabled={c.locked || !batch.items.length || batch.items.some((item) => !item.comment.trim())} onClick={c.preview}>预览批次并发送</button>
     </>}
     {c.review && batch && <section className="annotation-batch-review" aria-label="发送前批次预览">

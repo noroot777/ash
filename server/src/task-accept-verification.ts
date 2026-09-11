@@ -6,6 +6,27 @@ import { taskWorkflowDef } from "./workflows.js";
 import { completedInlineVerificationSteps } from "./review-execution.js";
 
 export async function unexecutedVerification(task: typeof tasks.$inferSelect): Promise<UnexecutedVerification | null> {
+  if (task.mode !== "team") return taskUnexecutedVerification(task);
+  if (task.stage === "accepted") return null;
+  // 调度台常驻且不执行自己的验证站；本次整体验收联动的是共享工作区执行者。
+  const workers = (await db.select().from(tasks).where(eq(tasks.parentId, task.id)))
+    .filter(worker => !worker.useWorktree);
+  const unverifiedTasks: NonNullable<UnexecutedVerification["unverifiedTasks"]> = [];
+  for (const worker of workers) {
+    const missing = await taskUnexecutedVerification(worker);
+    if (missing) unverifiedTasks.push({ taskId: worker.id, title: worker.title, stepIds: missing.stepIds });
+  }
+  if (!unverifiedTasks.length) return null;
+  return {
+    reason: "verify_not_run",
+    message: `以下团队执行者的独立验证尚未执行：${unverifiedTasks.map(worker =>
+      `「${worker.title}」（${worker.taskId}，未执行步骤：${worker.stepIds.join("、")}）`).join("；")}。`,
+    stepIds: [],
+    unverifiedTasks,
+  };
+}
+
+async function taskUnexecutedVerification(task: typeof tasks.$inferSelect): Promise<UnexecutedVerification | null> {
   const steps = taskWorkflowDef(task.workflow)?.steps.filter(step => step.kind === "verify") ?? [];
   if (!steps.length || task.stage === "accepted") return null;
   const completed = completedInlineVerificationSteps(task);

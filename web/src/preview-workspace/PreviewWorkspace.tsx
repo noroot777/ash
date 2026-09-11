@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { ArrowClockwise, ArrowCounterClockwise, ArrowUUpLeft, Browser, Cursor, PencilSimple, PushPin, Rectangle, Trash } from "@phosphor-icons/react";
 import type { PreviewAnnotation, PreviewAnnotationTool, PreviewPageContext } from "@ash/shared/page-annotation";
 import type { WorkspaceAnnotationEvent } from "./previewMessages.ts";
@@ -7,6 +7,7 @@ import { usePreviewChannel } from "./usePreviewChannel.ts";
 import { usePreviewServices } from "./usePreviewServices.ts";
 import { useAnnotationBatch } from "./useAnnotationBatch.ts";
 import { AnnotationBatchPanel } from "./AnnotationBatchPanel.tsx";
+import { AnnotationBatchMismatch } from "./AnnotationBatchMismatch.tsx";
 import type { AnnotationDraft as Draft } from "@ash/shared/page-annotation-batch";
 import { useAnnotationReview } from "./useAnnotationReview.ts";
 import { AnnotationReviewPanel } from "./AnnotationReviewPanel.tsx";
@@ -66,6 +67,14 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
   const launchHint = previewWorkspaceLaunchHint(state, activeService, sentWaiting, oldGeneration);
   const matchingBatch = !batch.batch || (batch.batch.gen === state?.gen && batch.batch.serviceId === activeService?.id);
   const canAnnotate = !batch.locked && matchingBatch && !!state?.gen;
+  const previousServiceName = services.find((service) => service.id === batch.batch?.serviceId)?.name ?? batch.batch?.serviceId;
+  const mismatchReason = batch.loaded && batch.batch && !batch.record?.messageId && !matchingBatch && activeService && state?.gen
+    ? batch.batch.serviceId !== activeService.id
+      ? `这批标注属于服务「${previousServiceName}」，当前已切换到服务「${activeService.name}」，暂不能继续标注。`
+      : `服务「${activeService.name}」已重启或更新页面，这批标注属于之前的预览，暂不能继续标注。`
+    : null;
+  const mismatchId = useId();
+  const annotationDescription = mismatchReason ? mismatchId : undefined;
   const canReview = batch.record?.state === "reviewable" && !!batch.record.review?.releasedAt && !!review.status?.canReopen && !!source
     && batch.batch?.serviceId === activeService?.id && batch.batch?.gen !== state?.gen;
   const nextNumber = items.reduce((max, item) => Math.max(max, item.number + 1), 1);
@@ -150,14 +159,14 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
       <div className="preview-workspace-modes" aria-label="预览模式">
         <button type="button" disabled={!ready} aria-pressed={channel.mode === "browse"}
           onClick={() => channel.send({ type: "configure", mode: "browse", tool: channel.tool })}>浏览</button>
-        <button type="button" disabled={!ready || !canAnnotate || items.length >= 100} aria-pressed={channel.mode === "annotate"}
+        <button type="button" disabled={!ready || !canAnnotate || items.length >= 100} aria-pressed={channel.mode === "annotate"} aria-describedby={annotationDescription}
           onClick={() => channel.send({ type: "configure", mode: "annotate", tool: channel.tool })}>标注</button>
       </div>
       <div className="preview-workspace-tools" aria-label="标注工具">
         {tools.map(({ id, label, icon: Icon }) => <button type="button" key={id} disabled={!ready || !canAnnotate || items.length >= 100}
-          aria-pressed={channel.mode === "annotate" && channel.tool === id} onClick={() => changeTool(id)}><Icon size={14} />{label}</button>)}
+          aria-pressed={channel.mode === "annotate" && channel.tool === id} aria-describedby={annotationDescription} onClick={() => changeTool(id)}><Icon size={14} />{label}</button>)}
       </div>
-      <button type="button" disabled={!ready || !canAnnotate || !currentSelection || !canSelectParent} onClick={() => channel.send({ type: "parent" })}>
+      <button type="button" disabled={!ready || !canAnnotate || !currentSelection || !canSelectParent} aria-describedby={annotationDescription} onClick={() => channel.send({ type: "parent" })}>
         <ArrowUUpLeft size={14} />父容器
       </button>
       <button type="button" aria-keyshortcuts="Meta+Z Control+Z" disabled={batch.locked || channel.mode !== "annotate" || !items.length}
@@ -170,9 +179,10 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
         {available.map((service) => <option key={service.id} value={service.id}>{service.name}</option>)}
       </select></label>
       <button type="button" disabled={!source} onClick={() => setReload((value) => value + 1)}><ArrowClockwise size={14} />重载</button>
+      <AnnotationBatchMismatch reason={mismatchReason} controller={batch} id={mismatchId} />
     </div>
     <p className={`preview-workspace-mode-note${channel.mode === "annotate" && ready ? " is-annotating" : ""}`} role="status">
-      {!source ? launchHint : items.length >= 100 ? "已暂存 100 条标注，请删除部分标注后继续。" : ready
+      {!source ? launchHint : mismatchReason ? "浏览中 · 可以正常操作当前页面；新建批次后可继续标注。" : items.length >= 100 ? "已暂存 100 条标注，请删除部分标注后继续。" : ready
         ? channel.mode === "annotate" ? "标注中 · 点击只选择对象；页面操作已拦截。滚轮可滚动，父容器可逐层上选。" : "浏览中 · 可以正常操作页面；切换到标注后再选择修改位置。"
         : "正在连接页面标注；若连接失败，可重载预览或使用右侧截图批注。"}
     </p>
@@ -196,7 +206,7 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
       <aside className="preview-workspace-notes" aria-label="页面标注列表" hidden={!notesOpen}>
         <AnnotationFallback taskId={taskId} records={batch.records} queueing={!review.status?.canReopen} unavailable={!source} />
         <div className="preview-workspace-notes-heading"><h3>标注</h3><span>{items.length} / 100</span></div>
-        <p className="preview-workspace-memory">{matchingBatch ? "创建时记录页面上下文 · 自动保存草稿" : "当前批次来自其它预览或服务；新建批次后可继续标注"}</p>
+        <p className="preview-workspace-memory">创建时记录页面上下文 · 自动保存草稿</p>
         {!items.length && <p className="preview-workspace-hint">选择「点选」后点击页面上的图标或按钮。编号会出现在页面和这里，再用「父容器」扩大选择范围。</p>}
         <ol className="preview-workspace-list">
           {items.map((item) => <li key={item.id} className="preview-workspace-list-row">
@@ -223,7 +233,7 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
           {selected.element && <ElementDetails card={selected.element} />}
           <button type="button" className="preview-workspace-remove" disabled={batch.locked} onClick={() => removeItem(selected)}><Trash size={13} />删除此标注</button>
         </div>}
-        <AnnotationBatchPanel controller={batch} selectedId={selectedId} />
+        <AnnotationBatchPanel controller={batch} selectedId={selectedId} mismatchReason={mismatchReason} />
       </aside>
     </div>
   </PreviewWorkspaceLayout>;

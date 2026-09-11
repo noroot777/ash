@@ -2,12 +2,18 @@ import { useEffect, useState } from "react";
 import type { TaskListItem } from "@ash/shared";
 import type { UnexecutedVerification } from "@ash/shared/workflow-policy";
 import { api } from "../lib/api.ts";
+import { useServerEvents } from "../lib/events.ts";
 
 export function useAcceptanceVerification(task: TaskListItem, confirming: boolean) {
   const [snapshot, setSnapshot] = useState<{ key: string; verification: UnexecutedVerification | null; error: string | null } | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
-  const needed = task.stage !== "accepted" && !!task.workflow?.steps.some(step => step.kind === "verify");
-  const key = `${task.id}:${task.updatedAt}:${confirming}`;
+  const [workersVersion, setWorkersVersion] = useState(0);
+  const needed = task.stage !== "accepted" && (task.mode === "team" || !!task.workflow?.steps.some(step => step.kind === "verify"));
+  useServerEvents(event => {
+    if (task.mode === "team" && (event.type === "task.created" || event.type === "task.updated")
+      && event.task.parentId === task.id && !event.task.useWorktree) setWorkersVersion(version => version + 1);
+  });
+  const key = `${task.id}:${task.updatedAt}:${confirming}:${workersVersion}`;
   useEffect(() => {
     setAcknowledged(false);
     if (!needed) return;
