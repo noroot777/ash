@@ -8,6 +8,7 @@ import { chromium } from "playwright-core";
 import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { previewAnnotationRuntime } from "../../server/src/preview-annotation-runtime.ts";
 import { parseAnnotationBatch } from "../../shared/src/page-annotation-batch.ts";
+import { checkFloatingPreview, previewClearRatio } from "./preview-floating-checks.mjs";
 
 export async function testPreviewWorkspaceDom() {
   const cacheDir = await mkdtemp(join(tmpdir(), "ash-preview-workspace-test-"));
@@ -43,14 +44,19 @@ export async function testPreviewWorkspaceDom() {
       if (path.endsWith("/annotation-review-status")) return reply({ canReopen: true, reason: "", previewKind: "workflow" });
       if (path.includes("/preview/open/")) {
         iframeLoads++;
-        if (realRuntime) return route.fulfill({ contentType: "text/html", body: `<!doctype html><html><head><script>
+        if (realRuntime) return route.fulfill({ contentType: "text/html; charset=utf-8", body: `<!doctype html><html><head><meta charset="utf-8"><script>
+          const capture = Element.prototype.setPointerCapture;
+          Element.prototype.setPointerCapture = function(id) { window.capturedPointerId = id; return capture.call(this, id); };
           const attach = Element.prototype.attachShadow;
           Element.prototype.attachShadow = function(options) {
             const root = attach.call(this, options); window.annotationShadow = root; return root;
           };
           ${previewAnnotationRuntime()}
           </script></head><body><div id="drag-target" style="margin:20px;width:400px;height:280px;background:#eee">Rectangle target</div>
-          <input id="page-input" aria-label="Page input"><script>
+          <input id="page-input" aria-label="Page input">
+          <button id="fixed-bottom" style="position:fixed;bottom:0;left:calc(50% - 90px);width:180px;height:48px">页面固定底栏</button>
+          <button id="fixed-top" style="position:fixed;right:15px;top:20px;height:30px;width:120px">页面固定顶栏</button>
+          <button id="bottom-edge" style="position:fixed;bottom:0;left:20px;height:18px">页面最底部</button><script>
             window.escapeCount = 0;
             for (const [phase, target, capture] of [['target', document.getElementById('page-input'), false],
               ['document', document, false], ['window-capture', window, true], ['window', window, false]]) {
@@ -97,19 +103,26 @@ export async function testPreviewWorkspaceDom() {
       <style>:root { --panel:#fff;--raised:#eee;--ink:#222;--muted:#555;--line:#ddd;--line2:#ccc;--accent:#5566bb;--red:#b22;--canvas:#fafafa;--font-sans:system-ui;--font-mono:monospace; }
         * {box-sizing:border-box} body {margin:0} .workspace-main {isolation:isolate} #sidebar {position:fixed;inset:0 auto 0 0;width:220px;z-index:5;background:#ddd}
         #root {display:flex;position:absolute;left:220px;top:80px;width:900px;height:760px}</style>
-      </head><body class="workspace-shell"><div id="sidebar"></div><div class="workspace-main" id="root"></div><script type="module">
+      </head><body><div class="workspace-shell"><div id="sidebar"></div><div class="workspace-main" id="root"></div></div><div id="toast-root"></div><script type="module">
         import React from 'react';
+        import { createPortal } from 'react-dom';
         import { createRoot } from 'react-dom/client';
         import { PreviewWorkspace, PreviewWorkspaceEntry } from '/src/preview-workspace/PreviewWorkspace.tsx';
         import { DraftProvider } from '/src/lib/DraftStore.tsx';
+        import { WorkspaceToast } from '/src/workspace/WorkspaceToast.tsx';
+        import '/src/styles/workspace.css';
         window.closeRequests = 0;
         function Fixture() {
+          const [toast, setToast] = React.useState(true);
           const [open, setOpen] = React.useState(sessionStorage.getItem('preview-open') === 'true');
-          return open ? React.createElement(PreviewWorkspace, {taskId:'fixture',onClose:()=>{
+          const workspace = open ? React.createElement(PreviewWorkspace, {taskId:'fixture',onClose:()=>{
             window.closeRequests++; sessionStorage.removeItem('preview-open'); setOpen(false);
           }}) : React.createElement(PreviewWorkspaceEntry, {onOpen:()=>{
             sessionStorage.setItem('preview-open', 'true'); setOpen(true);
           }});
+          return React.createElement(React.Fragment, {}, workspace, createPortal(React.createElement(WorkspaceToast, {
+            toasts: { pinned: toast ? {message:'预览启动提示仍然可见'} : null, transient: null }, onDismiss:()=>setToast(false),
+          }), document.getElementById('toast-root')));
         }
         createRoot(document.getElementById('root')).render(React.createElement(DraftProvider, {}, React.createElement(Fixture)));
       </script></body></html>`) }));
@@ -131,6 +144,10 @@ export async function testPreviewWorkspaceDom() {
     const iframe = page.locator('iframe[title="任务页面预览"]');
     const frame = page.frames().find((frame) => frame.url().includes("/preview/open/"));
     assert.deepEqual(await iframe.boundingBox(), { x: 0, y: 0, width: 1400, height: 900 }, "the preview fills the window with tools and notes open");
+    const toast = page.getByTestId('workspace-toast-pinned');
+    await toast.waitFor();
+    assert(await toast.evaluate((element) => { const box = element.getBoundingClientRect(); return element.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)); }), 'sticky notifications remain above the expanded preview');
+    await page.getByRole('button', { name: '关闭提示', exact: true }).click();
     if (process.env.PREVIEW_WORKSPACE_SCREENSHOTS) await page.screenshot({ path: join(process.env.PREVIEW_WORKSPACE_SCREENSHOTS, "expanded.png") });
     await button("还原预览").click();
     const compact = await iframe.boundingBox();
@@ -358,15 +375,20 @@ export async function testPreviewWorkspaceDom() {
       assert.deepEqual(await draft(), preservedDraft, 'frame Escape cannot change annotation data');
     }
     assert.equal(iframeLoads, loadsBeforeEscape, 'frame Escape preserves the iframe document and channel');
-    await button('放大预览').click();
-    for (const viewport of [{ width: 760, height: 850 }, { width: 390, height: 844 }]) {
+    await checkFloatingPreview(page, runtimeFrame, draft);
+    for (const viewport of [{ width: 900, height: 600 }, { width: 760, height: 500 }, { width: 390, height: 844 }]) {
       await page.setViewportSize(viewport);
       assert.deepEqual(await iframe.boundingBox(), { x: 0, y: 0, ...viewport });
+      await button('展开标注工具').waitFor();
+      assert.equal(await page.locator('.preview-workspace-notes').isVisible(), false);
+      assert(await previewClearRatio(page) > .7, 'compact view keeps at least 70% of the page unobstructed by default');
       const controls = await page.locator('.preview-workspace-controls').boundingBox();
+      await button('展开意见栏').click();
       const notes = await page.locator('.preview-workspace-notes').boundingBox();
       assert(controls.x >= 0 && controls.x + controls.width <= viewport.width);
-      assert(notes.height > 100 && notes.y + notes.height <= controls.y, 'notes remain scrollable above the tools on narrow screens');
+      assert(notes.height > 100 && notes.height <= viewport.height * .45 + 1, 'notes remain scrollable without covering the whole small preview');
       if (process.env.PREVIEW_WORKSPACE_SCREENSHOTS) await page.screenshot({ path: join(process.env.PREVIEW_WORKSPACE_SCREENSHOTS, `narrow-${viewport.width}.png`) });
+      await button('收起意见栏').click();
     }
     await page.setViewportSize({ width: 1400, height: 900 });
     await button('还原预览').click();

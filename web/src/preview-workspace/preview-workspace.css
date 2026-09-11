@@ -11,6 +11,7 @@
 .preview-workspace-layout-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
 .preview-workspace.is-expanded { position: fixed; inset: 0; z-index: 180; width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; }
 .workspace-shell .workspace-main:has(.preview-workspace.is-expanded) { isolation: auto; }
+body:has(.preview-workspace.is-expanded) .workspace-toasts { z-index: 190; }
 .preview-workspace.notes-collapsed .preview-workspace-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
 .preview-workspace-notes[hidden] { display: none; }
 .preview-workspace-toolbar { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); }
@@ -107,13 +108,12 @@
 .preview-workspace.has-preview .preview-workspace-header h2 { font-size: 12px; white-space: nowrap; }
 .preview-workspace.has-preview .preview-workspace-header p { display: none; }
 .preview-workspace.has-preview .preview-workspace-controls {
-  order: 1;
   flex-shrink: 0;
   align-self: center;
   width: max-content;
   max-width: calc(100% - 24px);
   max-height: 45%;
-  margin: 12px 12px 30px;
+  margin: 12px;
   overflow: auto;
 }
 .preview-workspace.has-preview .preview-workspace-toolbar { padding: 8px; }
@@ -128,10 +128,21 @@
   overscroll-behavior: contain;
 }
 .preview-workspace.has-preview .preview-workspace-context {
-  position: absolute;
-  inset: auto 0 0;
   padding: 4px 10px;
-  pointer-events: none;
+}
+.preview-workspace-controls-heading { display: flex; align-items: center; gap: 8px; padding: 5px 8px; }
+.preview-workspace-controls-heading > span { color: var(--muted); font-size: 11px; }
+.preview-workspace-controls-heading > button:last-child { margin-left: auto; }
+.preview-workspace .preview-workspace-drag { cursor: grab; touch-action: none; }
+.preview-workspace .preview-workspace-drag:active { cursor: grabbing; }
+.preview-workspace.has-preview:has(.is-moving)::after { content: ""; position: absolute; inset: 0; z-index: 1; }
+.preview-workspace.has-preview .is-moving { z-index: 3; }
+.preview-workspace.is-drawing .preview-workspace-header,
+.preview-workspace.is-drawing .preview-workspace-controls,
+.preview-workspace.is-drawing .preview-workspace-notes { pointer-events: none; opacity: .2; }
+body:has(.preview-workspace.is-drawing) .workspace-toast { pointer-events: none; }
+@media (max-width: 760px), (max-height: 600px) {
+  .preview-workspace.has-preview .preview-workspace-notes { max-height: min(100%, 45dvh); }
 }
 @media (max-width: 760px) {
   .preview-workspace.has-preview .preview-workspace-header { gap: 6px; padding: 6px; }

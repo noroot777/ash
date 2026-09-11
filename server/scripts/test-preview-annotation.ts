@@ -239,6 +239,21 @@ for (const [start, end] of [[{ x: 10, y: 10 }, { x: 50, y: 70 }], [{ x: 300, y: 
   assert.equal(annotations().at(-1)?.tool, 'rectangle');
   assert.deepEqual(annotations().at(-1)?.points, [start, end]);
 }
+const interruptedErrors: object[] = [];
+command({ type: 'configure', mode: 'annotate', tool: 'rectangle' });
+const beforeInterrupted = annotations().length;
+pointer('pointerdown', 300, 300); pointer('pointermove', 340, 350);
+window.fire('pointermove', { pointerId: 1, buttons: 0, clientX: 360, clientY: 370 });
+drawAll();
+assert.equal(annotations().length, beforeInterrupted, 'moving after a missed release cancels the unfinished rectangle');
+const interrupted = port.messages.filter((item) => parsePreviewMessage(item)?.type === 'error').at(-1);
+assert.deepEqual(interrupted, { type: 'error', message: '标注手势已中断，请重新圈画。' });
+interruptedErrors.push(interrupted!);
+pointer('pointerdown', 500, 300); pointer('pointermove', 530, 320);
+pointer('pointerdown', 600, 400); pointer('pointerup', 640, 440);
+assert.deepEqual(annotations().at(-1)?.points, [{ x: 600, y: 400 }, { x: 640, y: 440 }], 'a fresh pointerdown replaces an orphaned gesture start');
+assert.deepEqual(parsePreviewMessage({ type: 'gesture', active: true }), { type: 'gesture', active: true });
+assert.equal(parsePreviewMessage({ type: 'gesture', active: 'true' }), null);
 command({ type: 'configure', mode: 'annotate', tool: 'pen' });
 pointer('pointerdown'); pointer('pointermove', 45, 70); pointer('pointerup', 50, 80);
 assert.equal(annotations().at(-1)?.points.length, 3);
@@ -327,7 +342,7 @@ assert.equal(timers.size, 0);
 assert(port.closed);
 assert.equal(parsePreviewMessage({ type: 'annotation', annotation: { id: 'malformed' } }), null);
 assert.equal(parsePreviewMessage({ type: 'context', context: { route: '/x', scroll: { x: NaN, y: 0 } } }), null);
-assert.deepEqual(port.messages.filter((message) => parsePreviewMessage(message)?.type === 'error'), [], 'drawing and later tools keep the channel healthy');
+assert.deepEqual(port.messages.filter((message) => parsePreviewMessage(message)?.type === 'error'), interruptedErrors, 'only the deliberately interrupted gesture reports an error');
 const draft: AnnotationBatch = {
   id: 'batch', taskId: 'task', createdAt: 1, gen: 'gen', serviceId: 'web',
   items: [{ ...oldButton, gen: 'gen', serviceId: 'web', documentId: 'doc', comment: '修改按钮',
