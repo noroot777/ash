@@ -5,7 +5,7 @@ import { ExecutionDetails, executionCountsLabel } from "../src/components/Execut
 import type { ExecutionEvent } from "../src/lib/executionTrace.ts";
 import type { AgentEvent, ServerEvent } from "@ash/shared";
 import { applyDuetEvent, emptyDuet, rebuildDuetState } from "../src/duet/duetState.ts";
-import { NativeWorkMeta } from "../src/task-detail/NativeWorkMeta.tsx";
+import { NativeWorkHeadline, NativeWorkMeta } from "../src/task-detail/NativeWorkMeta.tsx";
 import { NativeAgentConversation } from "../src/task-detail/NativeAgentConversation.tsx";
 import type { NativeWorkItem } from "../src/task-detail/nativeWorkModel.ts";
 
@@ -73,14 +73,18 @@ console.log("duet 实时与刷新渲染一致：子智能体动态不产生空 A
 const pendingRow: NativeWorkItem = { id: "pending", sessionId: "session", sessionLabel: "codex@test", kind: "task",
   title: "待处理步骤", status: "pending" };
 const pendingMarkup = renderToStaticMarkup(<NativeWorkMeta row={pendingRow} />);
-assert.ok(pendingMarkup.includes("尚未开始") && pendingMarkup.includes("时间跨度") && pendingMarkup.includes('class="native-work__duration-value">—</span>'));
+assert.ok(pendingMarkup.includes("尚未开始") && !pendingMarkup.includes("native-work__duration-value"), "没开工就没有跨度可报");
 assert.ok(!pendingMarkup.includes("<time") && !pendingMarkup.includes("模型") && !pendingMarkup.includes("gpt-5.6"));
 for (const status of ["running", "completed", "failed", "stopped", "unknown"] as const) {
   const markup = renderToStaticMarkup(<NativeWorkMeta row={{ ...pendingRow, status }} />);
-  assert.ok(markup.includes("时间跨度") && !/总耗时|已用时|模型/.test(markup));
+  assert.ok(!/总耗时|已用时|模型/.test(markup));
 }
+const timedRow = { ...pendingRow, status: "completed" as const,
+  startedAt: "2026-09-09T00:00:00.000Z", endedAt: "2026-09-09T00:08:00.000Z" };
+const timedMarkup = renderToStaticMarkup(<NativeWorkMeta row={timedRow} />);
+assert.ok(timedMarkup.includes("时间跨度：8分 0秒"), "摘要的无障碍名里统一叫时间跨度");
 const firstCompleted = renderToStaticMarkup(<NativeWorkMeta row={{ ...pendingRow, status: "completed", endedAt: "2026-09-09T01:00:00.000Z" }} />);
-assert.ok(firstCompleted.includes("未记录开始时间，无法计算跨度。") && firstCompleted.includes('class="native-work__duration-value">未记录</span>'));
+assert.ok(firstCompleted.includes("未记录开始时间，无法计算跨度。") && !firstCompleted.includes("native-work__duration-value"));
 const pendingAgent = renderToStaticMarkup(<NativeAgentConversation row={{ ...pendingRow, kind: "agent" }} statusLabel="待处理" />);
 assert.ok(pendingAgent.includes("未记录") && !pendingAgent.includes("会话默认") && pendingAgent.includes("等待子智能体开始执行"));
 const requestedAgent = renderToStaticMarkup(<NativeWorkMeta row={{ ...pendingRow, kind: "agent", requestedModel: "sonnet" }} />);
@@ -88,4 +92,18 @@ assert.ok(requestedAgent.includes("sonnet") && requestedAgent.includes("调用�
 const reportedAgent = renderToStaticMarkup(<NativeWorkMeta row={{ ...pendingRow, kind: "agent", requestedModel: "opus", model: "claude-sonnet-4-6" }} />);
 assert.ok(reportedAgent.includes("claude-sonnet-4-6") && !reportedAgent.includes("调用指定") && !reportedAgent.includes("opus"));
 assert.ok(!pendingAgent.includes("执行中，内容实时更新"));
-console.log("待处理/历史缺失时间文案、时间跨度标签及内部任务不显示模型回归通过");
+
+// 抬头那条是横向摊开的一句，不是列表里那套两列表格。
+const headline = renderToStaticMarkup(<NativeWorkHeadline row={{ ...timedRow, kind: "agent", model: "gpt-5.6-sol" }} />);
+assert.ok(!headline.includes("native-work__meta") && !headline.includes("<dl") && !headline.includes("开始时间"),
+  "抬头不复刻两列表格");
+for (const piece of ["codex@test", "gpt-5.6-sol", "09/09 08:00–08:08", "8分 0秒"]) {
+  assert.ok(headline.includes(piece), `抬头该带上 ${piece}`);
+}
+const runningHeadline = renderToStaticMarkup(<NativeWorkHeadline
+  row={{ ...timedRow, kind: "agent", status: "running", endedAt: undefined }} />);
+assert.ok(runningHeadline.includes("09/09 08:00 起") && !runningHeadline.includes("尚未结束"),
+  "还在跑的用「起」收尾，不占一行去说尚未结束");
+const pendingHeadline = renderToStaticMarkup(<NativeWorkHeadline row={{ ...pendingRow, kind: "agent" }} />);
+assert.ok(pendingHeadline.includes("尚未开始") && !pendingHeadline.includes("—"), "没时间可报时不留破折号占位");
+console.log("待处理/历史缺失时间文案、时间跨度标签、内部任务不显示模型及抬头横排回归通过");
