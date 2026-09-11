@@ -4,6 +4,7 @@ import { createInterface } from "node:readline";
 import type { AgentEvent } from "@ash/shared";
 import { cleanupAfterRun, redactSecrets, spawnAgent } from "./spawn.js";
 import { findArchivedRollout, findRollout } from "./codex-rollout.js";
+import { pruneArchivedCodexDesktopThreads } from "./codex-desktop-catalog.js";
 
 export const CODEX_ARCHIVE_TIMEOUT_MS = 5_000;
 
@@ -17,11 +18,12 @@ export type CodexArchiveProcess = {
 
 /** 异常退出后的归档只操作持久会话，不 resume、不启动模型回合或 MCP 工具。 */
 export async function archiveCodexThread(opts: CodexArchiveProcess, threadId: string): Promise<void> {
-  return updateCodexThreadArchive(opts, threadId, "thread/archive");
+  const archivedIds = await updateCodexThreadArchive(opts, threadId, "thread/archive");
+  await pruneArchivedCodexDesktopThreads([threadId, ...archivedIds], opts.env?.CODEX_HOME);
 }
 
 export async function unarchiveCodexThread(opts: CodexArchiveProcess, threadId: string): Promise<void> {
-  return updateCodexThreadArchive(opts, threadId, "thread/unarchive");
+  await updateCodexThreadArchive(opts, threadId, "thread/unarchive");
 }
 
 export function codexArchiveNotice(error: unknown): AgentEvent {
@@ -66,6 +68,7 @@ export async function* archiveVisibleCodexSession(
     if (threadId && await visibleInDesktop(threadId, opts.env?.CODEX_HOME)) {
       await cleanup?.();
       if (!(await findArchivedRollout(threadId, opts.env?.CODEX_HOME))) await archiveCodexThread(opts, threadId);
+      else await pruneArchivedCodexDesktopThreads([threadId], opts.env?.CODEX_HOME);
     }
   } catch (error) { yield codexArchiveNotice(error); }
   if (done) yield done;
@@ -73,13 +76,14 @@ export async function* archiveVisibleCodexSession(
 
 async function updateCodexThreadArchive(
   opts: CodexArchiveProcess, threadId: string, method: "thread/archive" | "thread/unarchive",
-): Promise<void> {
+): Promise<string[]> {
   const action = method === "thread/archive" ? "归档" : "恢复归档";
   const child = opts.startProcess?.()
     ?? spawnAgent(opts.cwd, opts.bin, opts.args, "", opts.env, { keepStdin: true });
   const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
   let requestId = 0;
   let closed = false;
+  const archivedIds = new Set<string>();
   const rejectAll = (error: Error) => {
     closed = true;
     for (const waiter of pending.values()) waiter.reject(error);
@@ -101,6 +105,9 @@ async function updateCodexThreadArchive(
   lines.on("line", (line) => {
     let message: any;
     try { message = JSON.parse(line); } catch { return; }
+    if (message.method === "thread/archived" && typeof message.params?.threadId === "string") {
+      archivedIds.add(message.params.threadId);
+    }
     const waiter = pending.get(message.id);
     if (!waiter) return;
     pending.delete(message.id);
@@ -120,6 +127,7 @@ async function updateCodexThreadArchive(
     });
     child.stdin?.write(`${JSON.stringify({ method: "initialized" })}\n`);
     await request(method, { threadId });
+    return [...archivedIds];
   } finally {
     clearTimeout(timer);
     lines.close();

@@ -17,6 +17,7 @@ import { cleanupAfterRun, forceFinishOnExit, killChild, redactSecrets, shq, spaw
 import type { RunHandle } from "./types.js";
 import { findArchivedRollout, findRollout } from "./codex-rollout.js";
 import { archiveCodexThread, codexArchiveNotice, CODEX_ARCHIVE_TIMEOUT_MS } from "./codex-session-archive.js";
+import { pruneArchivedCodexDesktopThreads } from "./codex-desktop-catalog.js";
 
 type TokenBreakdown = {
   totalTokens: number;
@@ -166,6 +167,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     push({ kind: "done", exitStatus });
   };
 
+  const archivedThreadIds = new Set<string>();
   const finish = (exitStatus: number, message?: string) => {
     if (finished || settling) return;
     settling = true;
@@ -188,6 +190,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
               }, threadId);
             }
           }
+          await pruneArchivedCodexDesktopThreads([threadId, ...archivedThreadIds], opts.env?.CODEX_HOME);
         }
       } catch (error) {
         push(codexArchiveNotice(error));
@@ -267,6 +270,10 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   };
 
   const handleNotification = (message: any) => {
+    if (message.method === "thread/archived" && typeof message.params?.threadId === "string") {
+      archivedThreadIds.add(message.params.threadId);
+      return;
+    }
     if (settling || finished) return;
     const p = message.params ?? {};
     if (threadId && p.threadId && p.threadId !== threadId) {

@@ -93,7 +93,7 @@
     "test:duet-session-lost": "tsx scripts/test-duet-session-lost.ts",
     "test:session-notice": "tsx scripts/test-session-notice.ts && tsx scripts/test-team-session-notice.ts",
     "test:codex-resident": "tsx scripts/test-codex-resident.ts",
-    "test:codex-archive": "tsx scripts/test-codex-session-archive.ts && tsx scripts/test-codex-resume-command.ts",
+    "test:codex-archive": "tsx scripts/test-codex-session-archive.ts && tsx scripts/test-codex-resume-command.ts && tsx scripts/test-codex-desktop-catalog.ts",
     "test:codex-archive-live": "tsx scripts/test-codex-archive-live.ts",
     "test:session-trace": "tsx scripts/test-session-trace.ts",
     "test:conversation-turn": "tsx scripts/test-conversation-turn.ts",
