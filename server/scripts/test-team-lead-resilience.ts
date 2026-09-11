@@ -410,6 +410,57 @@ try {
   );
   ok("CLI 自己唤醒续跑时补上回合起点,一轮就是一条气泡");
 
+  // ── ⑨ 自发续跑的第一条事件是报错:同样要开回合,不能等到第二条才补 ─────────────
+  // 后台回调回来第一件事就是报错(工具炸了、API 拒了)很常见。要是只认正文和工具,这一
+  // 轮就从第二条事件才算起:trace 照样裂成两个 turn,而报错到下一条事件之间的这段时间
+  // 里,空闲回收还按「待命」在倒计时。scope:"session" 那种(会话已作废)不在此列。
+  const errorFirst = await runLead("self-started-error-first", {
+    cliSessionId: "resident-thread",
+    script: async function* () {
+      yield { kind: "text", text: "第一轮说完了。" };
+      yield { kind: "turnEnd" };
+      yield { kind: "error", message: "后台回调回来第一件事就是报错" };
+      yield { kind: "tool", name: "Bash", detail: "{\"command\":\"after-error\"}" };
+      yield { kind: "turnEnd" };
+      yield { kind: "done", exitStatus: 0 };
+    },
+  });
+  const errorFirstTrace = errorFirst.trace.trim().split("\n").filter(Boolean)
+    .map((line) => JSON.parse(line) as { turnStartedAt: string; event: { kind: string } });
+  const errorFirstTurns = new Set(errorFirstTrace.filter((entry) => entry.turnStartedAt !== at).map((entry) => entry.turnStartedAt));
+  assert.equal(
+    errorFirstTurns.size,
+    1,
+    `报错开头的这一轮被拆成了 ${errorFirstTurns.size} 个回合 —— 报错和它后面的工具会落进两颗气泡`,
+  );
+  assert.deepEqual(
+    errorFirstTrace.filter((entry) => entry.turnStartedAt !== at).map((entry) => entry.event.kind),
+    ["run", "error", "tool"],
+    "报错也要能开回合:run 必须排在这条 error 之前",
+  );
+  ok("自发续跑第一条就是报错时,回合起点照样补在它前面");
+
+  // ── ⑩ 待命时飘来的会话级旁注不算开工 ────────────────────────────────────────
+  // scope:"session" 说的是「这条会话作废了」,不是 agent 在产出。给它开一个回合的话,
+  // 页面上会凭空多一颗什么都没有的气泡,任务状态还会从待命跳回运行中。
+  const sessionNoticeIdle = await runLead("self-started-session-notice", {
+    cliSessionId: "poisoned-thread",
+    script: async function* () {
+      yield { kind: "text", text: "第一轮说完了。" };
+      yield { kind: "turnEnd" };
+      yield { kind: "error", message: POISON, scope: "session" };
+      yield { kind: "done", exitStatus: 0 };
+    },
+  });
+  const noticeTrace = sessionNoticeIdle.trace.trim().split("\n").filter(Boolean)
+    .map((line) => JSON.parse(line) as { turnStartedAt: string; event: { kind: string } });
+  assert.deepEqual(
+    noticeTrace.filter((entry) => entry.turnStartedAt !== at),
+    [],
+    "会话作废旁注开了一个新回合 —— 页面上会多一颗空气泡,任务还会从待命跳回运行中",
+  );
+  ok("待命时飘来的会话级旁注不算开工");
+
   console.log("test:team-resilience core ok");
 } finally {
   healSessionWrites();
