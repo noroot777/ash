@@ -6,7 +6,7 @@ import type { SessionTraceEntry } from "../../src/lib/api.ts";
 import { InspectorHost, type InspectorDescriptor } from "../../src/inspector/index.ts";
 import { activateInspectorShortcut, hasInspectorShortcutTarget, type InspectorShortcutKey } from "../../src/inspector/shortcuts.ts";
 import { buildConversationItems } from "../../src/task-detail/conversationModel.ts";
-import { useSubagentInspectors } from "../../src/task-detail/useSubagentInspectors.tsx";
+import { useSubagents } from "../../src/task-detail/useSubagents.tsx";
 import "../../src/styles/global.css";
 
 type Context = null;
@@ -29,7 +29,7 @@ function App() {
   const [populated, setPopulated] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [remapped, setRemapped] = useState(false);
-  const outer = useSubagentInspectors(outerBase, { items: populated ? populatedItems : [], status: "running", error });
+  const outer = useSubagents(outerBase, { items: populated ? populatedItems : [], status: "running", error }).inspectors;
   const drawerDescriptors = useMemo<InspectorDescriptor<Context>[]>(() => remapped ? [
     { id: "drawer-fresh", title: "抽屉最新映射", shortcut: "f", icon: <Robot size={14} />, render: panel("drawer-fresh") },
     { id: "drawer-info", title: "抽屉信息", shortcut: "i", icon: <Robot size={14} />, render: panel("drawer-info") },

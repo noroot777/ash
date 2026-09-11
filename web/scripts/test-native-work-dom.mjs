@@ -14,7 +14,19 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object");
   browser = await chromium.launch(await chromeLaunchOptions());
-  const page = await browser.newPage({ viewport: { width: 760, height: 900 } });
+  const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
+  // 抽屉是滑进来的：量位置前先等它的 CSS 动画跑完（fake clock 不影响 CSS 动画时间线）。
+  const settled = async (locator) => {
+    await locator.evaluate((el) => Promise.all(el.getAnimations().map((animation) => animation.finished)));
+    return locator;
+  };
+  // 关闭抽屉走滑出动画；reduced-motion 那条路靠 setTimeout，所以连 fake clock 一起推一下，
+  // 再等它真的从 DOM 上消失。
+  const closeDrawer = async () => {
+    await page.getByRole("button", { name: "关闭子智能体抽屉", exact: true }).click();
+    await page.clock.runFor(200);
+    await page.getByLabel("子智能体执行详情", { exact: true }).waitFor({ state: "detached" });
+  };
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/native-work.html`);
   await page.clock.install();
 
@@ -56,6 +68,18 @@ try {
   await page.screenshot({ path: `${output}/native-work-initial.png`, fullPage: true });
 
   await page.getByRole("button", { name: "查看执行：运行中的资料搜集", exact: true }).click();
+  // 执行详情从左侧抽屉推出来（和团队模式点执行者同一套外壳）：只盖住主区那一栏，
+  // 右侧 Inspector 的列表仍然看得见、点得到，并回显正在看的是哪一个。
+  const drawer = page.getByLabel("子智能体执行详情：运行中的资料搜集", { exact: true });
+  await drawer.waitFor();
+  assert.equal(await drawer.locator(".side-drawer__kind").innerText(), "子智能体");
+  assert.equal(await page.locator(".native-work__entry.is-open").count(), 1);
+  assert.equal(await page.getByRole("button", { name: "查看执行：运行中的资料搜集", exact: true })
+    .getAttribute("aria-pressed"), "true");
+  const mainBox = await page.locator("main > div > section").boundingBox();
+  const drawerBox = await (await settled(drawer)).boundingBox();
+  assert.ok(Math.abs(drawerBox.x - mainBox.x) <= 1, `抽屉应贴主区左缘：${JSON.stringify({ drawerBox, mainBox })}`);
+  assert.ok(drawerBox.x + drawerBox.width <= mainBox.x + mainBox.width + 1, "抽屉不该盖到 Inspector 上");
   const conversation = page.getByLabel("子智能体执行详情", { exact: true });
   const metadata = conversation.locator(".native-agent__metadata");
   const metadataToggle = metadata.locator("summary");
@@ -82,13 +106,14 @@ try {
   const parentText = await page.getByLabel("主会话", { exact: true }).innerText();
   assert.ok(!parentText.includes("实时进展") && !parentText.includes("子智能体侧栏"));
   const detailSize = await conversation.evaluate((el) => ({ width: el.clientWidth, scroll: el.scrollWidth }));
-  assert.ok(detailSize.scroll <= detailSize.width + 1, "execution details fit narrow Inspector");
+  assert.ok(detailSize.scroll <= detailSize.width + 1, "execution details fit the drawer");
   await page.screenshot({ path: `${output}/native-work-live.png`, fullPage: true });
-  await page.getByRole("button", { name: "返回列表", exact: true }).click();
+  // 不关抽屉直接点列表里的下一个：换人不该被关闭动画吞掉。
   await page.getByRole("button", { name: "查看执行：用户停止的执行者", exact: true }).click();
+  await page.getByLabel("子智能体执行详情：用户停止的执行者", { exact: true }).waitFor();
   assert.match(await conversation.innerText(), /另一个子智能体的独立记录/);
   assert.ok(!(await conversation.innerText()).includes("实时进展"));
-  await page.getByRole("button", { name: "返回列表", exact: true }).click();
+  await closeDrawer();
 
   await page.getByRole("button", { name: "完成运行项" }).click();
   await page.locator('.native-work__row[data-status="completed"] > summary').filter({ hasText: "运行中的资料搜集" }).waitFor();
@@ -111,7 +136,8 @@ try {
   assert.equal(await conversation.locator(".native-agent__live").count(), 0);
   await conversation.locator(".task-turn-process > summary").click();
   assert.match(await conversation.innerText(), /实时进展 1/);
-  await page.getByRole("button", { name: "返回列表", exact: true }).click();
+  await closeDrawer();
+  assert.equal(await page.locator(".native-work__entry.is-open").count(), 0, "抽屉关掉后列表不再回显选中");
 
   await page.getByRole("button", { name: "切换空状态" }).click();
   await page.getByText("暂无子智能体或内部任务").waitFor();

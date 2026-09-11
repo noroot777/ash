@@ -81,7 +81,7 @@ for (const status of ["running", "completed", "failed", "stopped", "unknown"] as
 }
 const firstCompleted = renderToStaticMarkup(<NativeWorkMeta row={{ ...pendingRow, status: "completed", endedAt: "2026-09-09T01:00:00.000Z" }} />);
 assert.ok(firstCompleted.includes("未记录开始时间，无法计算跨度。") && firstCompleted.includes('class="native-work__duration-value">未记录</span>'));
-const pendingAgent = renderToStaticMarkup(<NativeAgentConversation row={{ ...pendingRow, kind: "agent" }} statusLabel="待处理" onBack={() => {}} />);
+const pendingAgent = renderToStaticMarkup(<NativeAgentConversation row={{ ...pendingRow, kind: "agent" }} statusLabel="待处理" />);
 assert.ok(pendingAgent.includes("未记录") && !pendingAgent.includes("会话默认") && pendingAgent.includes("等待子智能体开始执行"));
 const requestedAgent = renderToStaticMarkup(<NativeWorkMeta row={{ ...pendingRow, kind: "agent", requestedModel: "sonnet" }} />);
 assert.ok(requestedAgent.includes("sonnet") && requestedAgent.includes("调用指定"));

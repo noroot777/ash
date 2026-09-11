@@ -23,6 +23,7 @@
 @import "./agent-plate.css";
 @import "./agent-run-meta.css";
 @import "./team.css";
+@import "./side-drawer.css";
 @import "./system-turn.css";
 @import "./reviewer-turn.css";
 @import "./inspector.css";

@@ -1,21 +1,13 @@
-import { useMemo, useState } from "react";
 import { ArrowUpRight, CaretDown, CheckCircle, Circle, Robot, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
-import type { NativeWorkStatus, TaskStatus } from "@ash/shared";
-import type { ConversationItem } from "./conversationModel.ts";
-import { buildNativeWork, type NativeWorkItem } from "./nativeWorkModel.ts";
-import { NativeAgentConversation } from "./NativeAgentConversation.tsx";
+import { NATIVE_WORK_STATUS_LABELS as labels, type NativeWorkItem } from "./nativeWorkModel.ts";
 import { NativeWorkMeta } from "./NativeWorkMeta.tsx";
 import "../styles/native-work.css";
 
-const labels: Record<NativeWorkStatus, string> = {
-  pending: "待处理", running: "进行中", completed: "已完成", failed: "失败", stopped: "已停止", unknown: "状态未知",
-};
-
-function WorkRow({ row, parent, onOpen }: { row: NativeWorkItem; parent?: NativeWorkItem; onOpen: () => void }) {
+function WorkRow({ row, parent, open, onOpen }: { row: NativeWorkItem; parent?: NativeWorkItem; open: boolean; onOpen: () => void }) {
   const Icon = row.status === "completed" ? CheckCircle : row.status === "running" ? SpinnerGap
     : row.status === "failed" ? WarningCircle : row.kind === "agent" ? Robot : Circle;
   return (
-    <article className="native-work__entry" data-status={row.status}>
+    <article className={`native-work__entry${open ? " is-open" : ""}`} data-status={row.status}>
       <details className="native-work__row" data-status={row.status}>
         <summary>
           <span className="native-work__avatar"><Icon size={17} aria-hidden="true" /></span>
@@ -42,40 +34,39 @@ function WorkRow({ row, parent, onOpen }: { row: NativeWorkItem; parent?: Native
       </details>
       <NativeWorkMeta row={row} compact />
       <footer className="native-work__footer"><span>{row.sessionLabel}</span>
-        {row.kind === "agent" && <button className="native-work__open" type="button" onClick={onOpen} aria-label={`查看执行：${row.title}`}>查看执行<ArrowUpRight size={13} aria-hidden="true" /></button>}
+        {row.kind === "agent" && <button className="native-work__open" type="button" onClick={onOpen} aria-pressed={open} aria-label={`查看执行：${row.title}`}>查看执行<ArrowUpRight size={13} aria-hidden="true" /></button>}
       </footer>
     </article>
   );
 }
 
 export interface NativeWorkInspectorProps {
-  items: ConversationItem[];
-  status: TaskStatus;
+  /** 由宿主（useSubagents）算好传进来：抽屉和列表必须认同一份行。 */
+  rows: NativeWorkItem[];
   loading?: boolean;
   error?: Error | null;
   onRetry?: () => void;
+  /** 正从左侧抽屉里看着的那个子智能体，用来在列表上回显。 */
+  openAgentId: string | null;
+  onOpenAgent: (id: string) => void;
 }
 
-export function NativeWorkInspector({ items, status, loading, error, onRetry }: NativeWorkInspectorProps) {
-  const rows = useMemo(() => buildNativeWork(items, status), [items, status]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const selected = rows.find((row) => row.id === selectedId);
+export function NativeWorkInspector({ rows, loading, error, onRetry, openAgentId, onOpenAgent }: NativeWorkInspectorProps) {
   const byId = new Map(rows.map((row) => [row.id, row]));
   const running = rows.filter((row) => row.status === "running").length;
   const complete = rows.filter((row) => row.status === "completed").length;
-  if (selected) return <NativeAgentConversation key={selected.id} row={selected} statusLabel={labels[selected.status]} onBack={() => setSelectedId(null)} error={error} onRetry={onRetry} />;
   return (
     <div className="native-work">
       {error && <div role="alert" className="native-work__error">{error.message} {onRetry && <button type="button" onClick={onRetry}>重试</button>}</div>}
       {loading && <p role="status" className="native-work__hint">正在读取会话记录…</p>}
       {rows.length > 0 ? <>
         <div className="native-work__counts" aria-live="polite"><span><strong>{rows.length}</strong> 项工作</span><span data-status="running"><strong>{running}</strong> 进行中</span><span data-status="completed"><strong>{complete}</strong> 已完成</span></div>
-        <p className="native-work__intro">派出的工作与进展，集中在这里。</p>
+        <p className="native-work__intro">派出的工作与进展，集中在这里。点「查看执行」从左侧展开它的执行详情。</p>
         {(["agent", "task"] as const).map((kind) => {
           const group = rows.filter((row) => row.kind === kind);
           return group.length > 0 && <section className="native-work__group" key={kind} aria-label={kind === "agent" ? "子智能体列表" : "内部任务列表"}>
             <h3>{kind === "agent" ? "子智能体" : "内部任务"}<span>{group.length}</span></h3>
-            {group.map((row) => <WorkRow key={row.id} row={row} parent={byId.get(row.parentId ?? "")} onOpen={() => setSelectedId(row.id)} />)}
+            {group.map((row) => <WorkRow key={row.id} row={row} parent={byId.get(row.parentId ?? "")} open={row.id === openAgentId} onOpen={() => onOpenAgent(row.id)} />)}
           </section>;
         })}
       </> : !loading && !error && <div className="native-work__empty"><Robot size={28} aria-hidden="true" /><strong>暂无子智能体或内部任务</strong><p>智能体派出子任务或创建待办后，会自动显示在这里。</p></div>}

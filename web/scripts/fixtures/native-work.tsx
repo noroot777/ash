@@ -3,7 +3,8 @@ import { createRoot } from "react-dom/client";
 import { Robot } from "@phosphor-icons/react";
 import type { AgentEvent, Session, TaskStatus } from "@ash/shared";
 import { InspectorHost, type InspectorDescriptor } from "../../src/inspector/index.ts";
-import { NativeWorkInspector } from "../../src/task-detail/NativeWorkInspector.tsx";
+import { NativeWorkInspector, type NativeWorkInspectorProps } from "../../src/task-detail/NativeWorkInspector.tsx";
+import { useSubagents } from "../../src/task-detail/useSubagents.tsx";
 import { AgentTurnBody } from "../../src/components/AgentTurnBody.tsx";
 import { buildConversationItems } from "../../src/task-detail/conversationModel.ts";
 import "../../src/styles/global.css";
@@ -70,35 +71,48 @@ function conversation(final: boolean, updates: number, planSnapshot = false) {
   );
 }
 
+// 和生产一样：描述符是模块级常量（useSubagents 按它的身份做 memo），列表从 context 拿 props。
+interface Ctx { nativeWork: NativeWorkInspectorProps }
+const DESCRIPTORS: InspectorDescriptor<Ctx>[] = [{
+  id: "subagents",
+  title: "子智能体",
+  icon: <Robot size={15} />,
+  render: (ctx) => <NativeWorkInspector {...ctx.nativeWork} />,
+}];
+
 function App() {
   const [phase, setPhase] = useState(() => localStorage.getItem("native-work-phase") === "final");
   const [empty, setEmpty] = useState(false);
   const [planSnapshot, setPlanSnapshot] = useState(false);
   const [updates, setUpdates] = useState(() => Number(localStorage.getItem("native-work-updates") ?? 0));
   const items = useMemo(() => empty ? [] : conversation(phase, updates, planSnapshot), [empty, phase, updates, planSnapshot]);
-  const descriptors = useMemo<InspectorDescriptor<null>[]>(() => [{
-    id: "native-work",
-    title: "子智能体",
-    icon: <Robot size={15} />,
-    render: () => <NativeWorkInspector items={items} status={phase && !planSnapshot ? "done" : "running" as TaskStatus} />,
-  }], [items, phase, planSnapshot]);
+  const subagents = useSubagents(DESCRIPTORS, {
+    items,
+    status: phase && !planSnapshot ? "done" : "running" as TaskStatus,
+  });
   const finish = () => {
     localStorage.setItem("native-work-phase", "final");
     setPhase(true);
   };
-  return <div style={{ height: "100vh", display: "flex", overflow: "hidden" }}><InspectorHost contextKey="native-work-fixture" descriptors={descriptors} context={null} defaultVisible={false}>
-    {(inspector) => <main style={{ minHeight: "100vh", display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto" }}>
-      <section style={{ padding: 24 }}>
-        <h1>原生子工作 Inspector fixture</h1>
-        <button type="button" onClick={() => inspector.openTab("native-work")}>打开子智能体</button>
-        <button type="button" onClick={finish}>完成运行项</button>
-        <button type="button" onClick={() => setEmpty((value) => !value)}>切换空状态</button>
-        <button type="button" onClick={() => { setEmpty(false); setPlanSnapshot((value) => !value); }}>切换计划快照</button>
-        <button type="button" onClick={() => { localStorage.setItem("native-work-updates", String(updates + 1)); setUpdates(updates + 1); }}>推送执行进展</button>
-        {inspector.toggleButton}
-        <div aria-label="主会话">{items.map((item) => item.kind === "agent" && <AgentTurnBody key={item.id} segments={item.segments} running={!phase} />)}</div>
-      </section>
-      {inspector.visible && <aside style={{ width: 320, minWidth: 0 }}>{/* InspectorHost renders its panel beside children. */}</aside>}
+  return <div style={{ height: "100vh", display: "flex", overflow: "hidden" }}><InspectorHost contextKey="native-work-fixture" descriptors={subagents.inspectors} context={{ nativeWork: subagents.nativeWork }} defaultVisible={false}>
+    {(inspector) => <main style={{ minWidth: 0, minHeight: 0, flex: 1, display: "flex" }}>
+      <div style={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column" }}>
+        {/* 夹具的控制按钮放在抽屉覆盖范围之外，这样抽屉开着也能继续推进展、切状态。 */}
+        <header style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "12px 24px" }}>
+          <button type="button" onClick={() => inspector.openTab("subagents")}>打开子智能体</button>
+          <button type="button" onClick={finish}>完成运行项</button>
+          <button type="button" onClick={() => setEmpty((value) => !value)}>切换空状态</button>
+          <button type="button" onClick={() => { setEmpty(false); setPlanSnapshot((value) => !value); }}>切换计划快照</button>
+          <button type="button" onClick={() => { localStorage.setItem("native-work-updates", String(updates + 1)); setUpdates(updates + 1); }}>推送执行进展</button>
+          {inspector.toggleButton}
+        </header>
+        {/* 执行详情抽屉以主区这一栏为定位基准（生产里是 .task-detail / .team-view）。 */}
+        <section style={{ padding: 24, position: "relative", overflow: "hidden", flex: 1, minHeight: 0 }}>
+          <h1>原生子工作 Inspector fixture</h1>
+          <div aria-label="主会话">{items.map((item) => item.kind === "agent" && <AgentTurnBody key={item.id} segments={item.segments} running={!phase} />)}</div>
+          {subagents.drawer}
+        </section>
+      </div>
     </main>}
   </InspectorHost></div>;
 }

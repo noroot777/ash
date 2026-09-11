@@ -5,7 +5,7 @@ import { isUserFollowUp } from "@ash/shared";
 import { Browser, FolderOpen, GitBranch, GitPullRequest, Info, MagnifyingGlass, Robot } from "@phosphor-icons/react";
 import { PreviewWorkspace, PreviewWorkspaceEntry } from "../preview-workspace/PreviewWorkspace.tsx";
 import { NativeWorkInspector, type NativeWorkInspectorProps } from "./NativeWorkInspector.tsx";
-import { useSubagentInspectors } from "./useSubagentInspectors.tsx";
+import { useSubagents } from "./useSubagents.tsx";
 import { InspectorHost, type InspectorDescriptor } from "../inspector/index.ts";
 import { FileTreeInspector } from "../files/FileTreeInspector.tsx";
 import { FileViewer } from "../files/FileViewer.tsx";
@@ -195,14 +195,15 @@ export function TaskDetail({
   const [pendingExecutor, setPendingExecutor] = useState<string | null>(null);
   const { indicatorForTask } = useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
-  const nativeWork = {
+  // 子智能体：列表在 Inspector 里，执行详情从左侧抽屉推出来（与团队模式点执行者同一套外壳）。
+  const subagents = useSubagents(TASK_INSPECTORS, {
     items: conversation.items,
     status: task.status,
     loading: conversation.refreshing,
     error: conversation.error ?? conversation.traceError,
     onRetry: conversation.refetch,
-  };
-  const inspectors = useSubagentInspectors(TASK_INSPECTORS, nativeWork);
+  });
+  const inspectors = subagents.inspectors;
   // 审查链状态同时服务验收后快照入口和会话尾栏的异常回合重试；共享一份缓存与订阅。
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
   const followUps = useMemo(
@@ -374,7 +375,7 @@ export function TaskDetail({
       contextKey={inspectorContextKey}
       descriptors={inspectors}
       context={{
-        nativeWork,
+        nativeWork: subagents.nativeWork,
         task,
         groups,
         sessions: conversation.sessions,
@@ -624,6 +625,8 @@ export function TaskDetail({
                 notify={notify}
               />
             )}
+            {/* 子智能体执行详情：盖住中间那一栏，右侧 Inspector 的列表仍然看得见。 */}
+            {subagents.drawer}
           </div>
           {inspectorMode === "drawer" && inspectorToggleTarget
             ? createPortal(toggleButton, inspectorToggleTarget)

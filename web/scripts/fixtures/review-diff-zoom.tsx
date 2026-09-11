@@ -64,7 +64,7 @@ function Fixture() {
         </div>
         {/* 团队的执行者抽屉：里面还嵌着一份 TaskDetail，也能放大它的 diff。抽屉自己是
             z-index 95，放大层要抬到它上面，同时让开的仍是窗口右缘那条 inspector。 */}
-        <div id="fixture-drawer" className="team-worker-drawer" style={{ padding: 12 }}>
+        <div id="fixture-drawer" className="side-drawer side-drawer--worker" style={{ padding: 12 }}>
           <ReviewDiffViewer result={diff} />
         </div>
       </div>

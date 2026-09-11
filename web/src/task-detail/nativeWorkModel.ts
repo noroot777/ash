@@ -25,6 +25,11 @@ export interface NativeWorkItem {
   activity?: NativeAgentActivity[];
 }
 
+// 子智能体列表与执行详情抽屉共用同一套状态文案。
+export const NATIVE_WORK_STATUS_LABELS: Record<NativeWorkStatus, string> = {
+  pending: "待处理", running: "进行中", completed: "已完成", failed: "失败", stopped: "已停止", unknown: "状态未知",
+};
+
 type Call = Extract<NativeWorkEvent, { type: "call" }>;
 const str = (value: unknown): string => typeof value === "string" ? value : typeof value === "number" ? String(value) : "";
 const toolName = (name: string) => name.split(/[./]/).at(-1)!.toLowerCase();

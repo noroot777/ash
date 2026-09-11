@@ -1,6 +1,9 @@
 /* 任务详情的外壳：头部那一行、主体两栏布局、右侧 Inspector、队列抽屉与确认框。
    会话流在 task-conversation.css，回复框与派生面板在 task-reply.css，动效在 task-motion.css。 */
 .task-detail {
+  /* 子智能体执行详情那个左侧抽屉（side-drawer.css）以这一层为定位基准：它只盖住中间
+     那一栏，右侧 Inspector 照样看得见、点得到。 */
+  position: relative;
   display: flex;
   min-height: 0;
   flex: 1;

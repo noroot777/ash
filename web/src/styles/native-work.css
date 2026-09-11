@@ -13,6 +13,8 @@
 .native-work__group h3 span { display: grid; min-width: 18px; height: 18px; place-items: center; border-radius: 5px; background: var(--raised); color: var(--muted); font-size: 10px; }
 .native-work__entry { min-width: 0; margin-bottom: 10px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); box-shadow: 0 2px 3px rgb(0 0 0 / 2%); }
 .native-work__entry[data-status="running"] { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+/* 执行详情正在左侧抽屉里打开着的那一项（与团队执行者列表的 is-selected 同一个意思）。 */
+.native-work__entry.is-open { border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
 .native-work__row > summary { display: flex; align-items: flex-start; gap: 9px; padding: 13px 12px 11px; cursor: pointer; list-style: none; }
 .native-work__row > summary::-webkit-details-marker { display: none; }
 .native-work__row > summary:hover { background: color-mix(in srgb, var(--canvas) 75%, transparent); }
@@ -66,16 +68,14 @@
 .native-work__footer > span { min-width: 0; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .native-work__open { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; border: 0; border-radius: 5px; padding: 4px 6px; background: color-mix(in srgb, var(--accent) 7%, var(--panel)); color: var(--accent); font-size: 11px; cursor: pointer; }
 .native-work__open:hover { background: color-mix(in srgb, var(--accent) 13%, var(--panel)); }
-.native-work__open:focus-visible, .native-agent__header > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.native-work__open:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .native-work__empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 38px 8px; color: var(--muted); text-align: center; }
 .native-work__empty strong { color: var(--ink); font-weight: 500; }
 .native-work__empty p { margin: 0; line-height: 1.7; }
 .native-work__error { margin-bottom: 12px; color: var(--red); }
 .native-work__error button { margin-left: 6px; text-decoration: underline; }
 .native-agent { display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--ink); }
-.native-agent__header { display: grid; flex-shrink: 0; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px 6px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
-.native-agent__header > button { grid-column: 1 / -1; display: flex; align-items: center; gap: 5px; width: fit-content; border: 0; border-radius: 4px; padding: 3px 0; background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; }
-.native-agent__header > button:hover { color: var(--accent); }
+.native-agent__header { display: grid; flex-shrink: 0; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 6px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
 .native-agent__heading { display: flex; align-items: flex-start; gap: 9px; min-width: 0; }
 .native-agent__heading > div { min-width: 0; }
 .native-agent__heading strong { display: block; font-size: 13px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
