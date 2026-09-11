@@ -335,12 +335,14 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
       if (kind === "review") {
         // 我们占着 turn 调用（holdTurn 交给这里做）：审查投递在 continueWhenIdle 里排队，
         // finally 释放这把锁之后才真正开跑，和派审同一条路。
+        // resumed = 这一次是「从中断处接着做」还是「重发整份任务书从头再来」，由崩掉那一
+        // 回合留下的痕迹决定（见 reviewTurnResumable）。同一颗按钮两种结果，得如实回给前端。
         try {
-          await reopenFailedFreeReview(taskId, { resumeSessionId: latest.id });
+          const { resumed } = await reopenFailedFreeReview(taskId, { resumeSessionId: latest.id });
+          return c.json({ started: true, mode: "review", resumed }, 202);
         } catch (error) {
           return c.json({ error: errorText(error) }, 409);
         }
-        return c.json({ started: true, mode: "review" }, 202);
       }
 
       // 崩掉的那一回合可能跑在**被召唤来的**执行器上（@codex 续聊），也可能任务的配置在

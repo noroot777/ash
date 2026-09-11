@@ -34,6 +34,25 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
     `这是旁路审查回合，不要调用 complete_task，也不要调用 accept_task。`;
 }
 
+/**
+ * 崩掉的那一轮**从中断处接着做**时送的那句话（判据见 `transcript.ts` 的 turnProducedWork）。
+ *
+ * 刻意只有几行：审查者的上文里已经有整份任务书和它自己做到一半的分析，把任务书再发一遍
+ * 等于让它从头再读一遍代码 —— 这一轮崩在 10M token 上，重来一次就是再烧 10M。
+ * 只补两样上文尾巴最可能被截断、丢了就收不了尾的东西：报告落盘路径，和上报结论的调用。
+ */
+export function freeReviewResumeMessage(task: TaskRow, run: ReviewRunRow, round: number): string {
+  const what = run.targetKind === "accepted_merge" ? "合并结果审查" : `第 ${round} 轮审查`;
+  return `【自由工作流 · ${what} · 从中断处继续】\n` +
+    `上一回合在中途异常结束（多半是 CLI 与模型之间掉线），不是你做错了什么。` +
+    `你这一轮已经做过的分析都还在上文里。\n\n` +
+    `请**接着往下把这一轮做完**，不要从头重看一遍已经看过的东西；` +
+    `只有确实被打断、结论悬空的那几步才值得重跑。\n\n` +
+    `收尾照旧：报告写到 ${freeReviewReportPath(task.id, run.id, round)}；` +
+    `结束前调用 report_stage(taskId="${task.id}", stage="verified"|"verify_failed", directionToken="<最新【当前方向身份】token>") 给出结论。` +
+    `这是旁路审查回合，不要调用 complete_task，也不要调用 accept_task。`;
+}
+
 export function freeRepairPrompt(taskId: string, run: ReviewRunRow): string {
   const dir = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
   return `【自由工作流审查未通过 · 第 ${run.currentRound} 轮】\n` +

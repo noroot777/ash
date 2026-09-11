@@ -3,6 +3,7 @@
 // 与常驻调度台都走这里，因此刷新能把每组 thinking/tool 放回它所启动的正文片段，
 // 同时非正文事件绝不会混进 assistant Markdown。
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { open, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { AgentEvent, AgentType } from "@ash/shared";
 import { RUNS_DIR, RUNS_FALLBACK_DIR } from "./paths.js";
@@ -64,6 +65,44 @@ export function appendSessionTrace(
     // executor's outcome, but it must remain visible to operators.
     console.warn(`[ash] failed to persist session trace ${sessionId}:`, error);
   }
+}
+
+// 只读尾巴：判据要的那条事件属于**最后一回合**，它一定贴在文件末尾；整份读进来对长会话
+// 是白白几 MB。切口那半行 JSON 解析不过，parseSessionTrace 自己会丢掉。
+const TRACE_TAIL_BYTES = 256 * 1024;
+
+/**
+ * 这一回合的 CLI 到底干没干活 —— 本回合的 trace 里有没有正文 / 工具调用 / 落盘附件。
+ *
+ * 用处是「崩掉的回合能不能**从中断处**接着说」：干过活就证明 CLI 真的起来了、本回合的
+ * 任务书已经在它手里、产出也进了 CLI 自己的会话历史，于是续跑只需要一句「接着做」；
+ * 反之（只剩 run/error —— 503 起不来、启动就挂）那条 CLI 会话压根没见过本回合的任务，
+ * 对它说「继续」等于什么都没说，必须把任务书整份重发。
+ *
+ * 判据取 trace 不取 `.md`：trace 每条都带 turnStartedAt，天然按回合分得开；`.md` 里的
+ * agent 段没有自己的时间戳，得靠前后段落推，跨轮复用的会话上尤其容易推错。
+ */
+export async function turnProducedWork(taskId: string, sessionId: string, turnStartedAt: string): Promise<boolean> {
+  const path = readableRunPath(sessionTracePath(taskId, sessionId));
+  let raw: string;
+  try {
+    const info = await stat(path);
+    const length = Math.min(info.size, TRACE_TAIL_BYTES);
+    const handle = await open(path, "r");
+    try {
+      const buffer = Buffer.alloc(length);
+      await handle.read(buffer, 0, length, info.size - length);
+      raw = buffer.toString("utf8");
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    // 没有 trace（老会话、产物被清过）= 无从证明它干过活。默认走「重发整份任务书」那档，
+    // 那一档在任何上下文状态下都是对的，只是费一点 token。
+    return false;
+  }
+  return parseSessionTrace(raw).some((entry) => entry.turnStartedAt === turnStartedAt
+    && (entry.event.kind === "text" || entry.event.kind === "tool" || entry.event.kind === "attachment"));
 }
 
 export function parseSessionTrace(raw: string): SessionTraceEntry[] {
