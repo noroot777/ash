@@ -84,6 +84,7 @@ export async function ensureSchema() {
       status TEXT NOT NULL DEFAULT 'backlog', stage TEXT, pinned_at INTEGER,
       review_of TEXT, review_round INTEGER, review_requested INTEGER NOT NULL DEFAULT 0,
       verify_round INTEGER, verify_rounds INTEGER NOT NULL DEFAULT 0,
+      verify_completed_steps TEXT NOT NULL DEFAULT '[]',
       verify_station_rounds INTEGER NOT NULL DEFAULT 0,
       labels TEXT NOT NULL DEFAULT '[]', depends_on TEXT NOT NULL DEFAULT '[]',
       resume_depends_on TEXT NOT NULL DEFAULT '[]',
@@ -332,6 +333,7 @@ export async function ensureSchema() {
     // review_of/review_round 保留，只为让历史那批独立审查任务仍能读出来。
     "ALTER TABLE tasks ADD COLUMN verify_round INTEGER",
     "ALTER TABLE tasks ADD COLUMN verify_rounds INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE tasks ADD COLUMN verify_completed_steps TEXT NOT NULL DEFAULT '[]'",
     // 就地验证轮没有独立任务行可数，所以「这一站验过几轮」得自己记：换一站就归零，
     // 站号记在同一行的 review_step 上。
     "ALTER TABLE tasks ADD COLUMN verify_station_rounds INTEGER NOT NULL DEFAULT 0",

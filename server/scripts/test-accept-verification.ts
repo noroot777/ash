@@ -17,6 +17,7 @@ export async function testAcceptanceVerification(root: string) {
   const { prepareWorktree, worktreeBranchName } = await import("../src/git.js");
   const { sessionTranscriptPath } = await import("../src/transcript.js");
   const { acceptFamily, readBranchPlan } = await import("../src/task-branch-routes.js");
+  const { testVerificationStations, multiVerifyWorkflow } = await import("./test-accept-verification-stations.js");
   const repo = join(root, "verification");
   execFileSync("git", ["init", "-q", "-b", "main", repo]);
   const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -127,7 +128,9 @@ export async function testAcceptanceVerification(root: string) {
   assert.deepEqual(family.completed, []);
   assert.equal((await acceptFamily("familyverify", [{ ...familyPlan.task, confirmUnverified: true }], acceptTask)).ok, true);
 
+  await testVerificationStations();
   await make("mcpverify");
+  await make("mcpmultiverify", { workflow: multiVerifyWorkflow, workflowAt: "h2", reviewStep: "v1", verifyRounds: 1, verifyStationRounds: 1 });
   const backend = serve({ fetch: new Hono().route("/api", api).fetch, hostname: "127.0.0.1", port: 0 });
   if (!backend.listening) await new Promise<void>(resolve => backend.once("listening", resolve));
   const address = backend.address();
@@ -137,13 +140,16 @@ export async function testAcceptanceVerification(root: string) {
     const transport = new StdioClientTransport({ command: process.execPath, args: ["--import", "tsx", fileURLToPath(new URL("../../mcp/src/index.ts", import.meta.url))],
       env: { ...process.env, ASH_URL: `http://127.0.0.1:${address.port}`, ASH_TASK_ID: "", ASH_TURN_TOKEN: "", ASH_DIRECTION_TOKEN: "" } as Record<string, string>, stderr: "pipe" });
     await client.connect(transport);
-    const result = await client.callTool({ name: "accept_task", arguments: { taskId: "mcpverify" } });
-    assert.equal(result.isError, true);
-    assert.match(JSON.stringify(result.content), /verify_not_run/);
-    assert.match(JSON.stringify(result.content), /confirmUnverified/);
-    const confirmed = await client.callTool({ name: "accept_task", arguments: { taskId: "mcpverify", confirmUnverified: true } });
-    assert.notEqual(confirmed.isError, true);
-    assert.equal((await row("mcpverify")).stage, "accepted");
+    for (const [taskId, missingStep] of [["mcpverify", "s2"], ["mcpmultiverify", "v2"]] as const) {
+      const result = await client.callTool({ name: "accept_task", arguments: { taskId } });
+      assert.equal(result.isError, true);
+      assert.match(JSON.stringify(result.content), /verify_not_run/);
+      assert.match(JSON.stringify(result.content), /confirmUnverified/);
+      assert.ok(JSON.stringify(result.content).includes(missingStep));
+      const confirmed = await client.callTool({ name: "accept_task", arguments: { taskId, confirmUnverified: true } });
+      assert.notEqual(confirmed.isError, true);
+      assert.equal((await row(taskId)).stage, "accepted");
+    }
   } finally {
     await client.close();
     await new Promise<void>((resolve, reject) => backend.close(error => error ? reject(error) : resolve()));

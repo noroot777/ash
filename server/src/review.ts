@@ -63,6 +63,7 @@ import { taskWorkflowDef } from "./workflows.js";
 import { advanceWorkflowFrom, settleFrom } from "./workflow-advance.js";
 import { applyRunFailPolicy } from "./workflow-steps.js";
 import { now } from "./util.js";
+import { completedInlineVerificationSteps, verificationStepsAfterRound } from "./review-execution.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
@@ -202,6 +203,7 @@ export async function startVerifyRound(
     .update(tasks)
     .set({
       verifyRound: round,
+      verifyCompletedSteps: JSON.stringify([...completedInlineVerificationSteps(target)]),
       reviewStep: station,
       verifyStationRounds: target.reviewStep === station ? (target.verifyStationRounds ?? 0) : 0,
       updatedAt: now(),
@@ -229,6 +231,7 @@ export async function startVerifyRound(
       await db.update(tasks).set({
         verifyRound: null,
         reviewStep: target.reviewStep ?? null,
+        verifyCompletedSteps: target.verifyCompletedSteps,
         verifyStationRounds: target.verifyStationRounds ?? 0,
         updatedAt: now(),
       }).where(eq(tasks.id, targetId));
@@ -415,6 +418,7 @@ async function finishVerifyRound(target: TaskRow, turnOk: boolean): Promise<void
     .set({
       verifyRound: null,
       verifyRounds: (target.verifyRounds ?? 0) + 1,
+      verifyCompletedSteps: verificationStepsAfterRound(target),
       verifyStationRounds: stationRound,
       updatedAt: now(),
     })
