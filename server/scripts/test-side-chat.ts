@@ -1,3 +1,4 @@
+import { acceptedSideRequests, rejectedSideRequests } from "./side-authorization-cases.js";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,6 +34,7 @@ mkdirSync(parentPath, { recursive: true });
 writeFileSync(join(parentPath, "session.md"), '方案 A 简单。\n\x1e{"t":"user","text":"请比较 B"}\n方案 B 更灵活。\n\x1e{"t":"system","text":"隐藏系统状态"}\n');
 let held = false;
 let invalidForward = false;
+let authorizeWholeMessage = false;
 let fakeReply = "保留主任务节奏，在这里比较方案。";
 const prompts: string[] = [];
 let summaryCalls = 0;
@@ -42,7 +44,7 @@ const service = new ChatService(async (_member, _owner, prompt, signal, _project
   if (held) await delay(10000, undefined, { signal });
   const source = JSON.parse(prompt.split("【当前用户消息】\n").at(-1)!) as string;
   await delay(5);
-  return { text: JSON.stringify({ reply: fakeReply, forward: source.includes("告诉主任务") || invalidForward ? { text: "按方案 B 继续，先补验证。", authorization: invalidForward ? "把结论告诉主任务" : source } : null }) };
+  return { text: JSON.stringify({ reply: fakeReply, forward: source.includes("告诉主任务") || invalidForward ? { text: "按方案 B 继续，先补验证。", authorization: authorizeWholeMessage ? source : invalidForward ? "把结论告诉主任务" : source } : null }) };
 }, async () => { throw new Error("侧聊不应创建任务"); });
 const app = new Hono();
 app.use("*", async (c, next) => {
@@ -105,6 +107,34 @@ try {
   assert.match(rejected.forwardError!, /没有明确/);
   assert.equal(rejected.forward, undefined);
   assert.match((await db.select().from(chatMessages).where(eq(chatMessages.id, rejected.id)))[0]!.modelReply!, /继续分析的详细结论.*未发送/s);
+  for (const command of acceptedSideRequests) assert.equal(sideForwardAuthorized(command, command), true, command);
+  for (const command of rejectedSideRequests) {
+    assert.equal(sideForwardAuthorized(command, command), false, command);
+    for (const excerpt of ["把结论告诉主任务", "告诉主任务", "发给主任务"]) {
+      if (command.includes(excerpt)) assert.equal(sideForwardAuthorized(command, excerpt), false, `${command} / 模型只引用 ${excerpt}`);
+    }
+  }
+  for (const separator of ["，", "。", "！", "\n", "; "]) {
+    for (const withdrawal of ["哦不对，先不要", "等等，我再想想", "除非它已经开始做了", "不过要等我确认", "不过这条只是我随口说的", "暂且搁置"]) {
+      const command = `把结论告诉主任务${separator}${withdrawal}`;
+      assert.equal(sideForwardAuthorized(command, "把结论告诉主任务"), false, command);
+      assert.equal(sideForwardAuthorized(command, command), false, command);
+    }
+  }
+  authorizeWholeMessage = true;
+  runs.untrackRun("parent", handle); runs.trackRun("parent", native);
+  runs.bindNativeSteer("parent", native, { agentType: "codex", record: () => {} });
+  for (const [index, command] of rejectedSideRequests.entries()) {
+    const rejected = await send(command, `review-rejected-${index}`);
+    assert.equal(rejected.status, "done");
+    assert.equal(rejected.body, fakeReply);
+    assert.ok(rejected.forwardError, command);
+    assert.equal(rejected.forward, undefined);
+    assert.equal((await db.select().from(scheduledMessages)).length, count, "拒绝回传不入队");
+    assert.equal(delivered.length, 1, "即使 native 可用也不投递");
+  }
+  runs.untrackRun("parent", native); runs.trackRun("parent", handle);
+  authorizeWholeMessage = false;
   for (const text of ["不要把结论告诉主任务", "如果把结论告诉主任务会怎样", "引用：『把结论告诉主任务』", "`把结论告诉主任务`", "> 把结论告诉主任务", "请解释如何把结论告诉主任务", "稍后把结论告诉主任务", "把结论告诉主任务，是不是会影响当前执行？"]) {
     assert.equal(sideForwardAuthorized(text, "把结论告诉主任务"), false, text);
   }

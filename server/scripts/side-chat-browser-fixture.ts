@@ -22,6 +22,8 @@ await db.insert(agents).values({ id: "side-codex", name: "Codex", type: "codex",
 for (const id of ["parent", "other"]) await db.insert(tasks).values({ id, projectId: "p", title: id === "parent" ? "实现任务消息回传" : "另一个主任务", body: `${id} 的主任务背景：比较方案 A 和 B。`, mode: "single", status: "running", agentType: "codex", executorId: "side-codex", activeTurnToken: "turn", activeDirectionToken: "direction", createdAt: timestamp, updatedAt: timestamp });
 const delivered: string[] = [];
 let kills = 0;
+let forceForward = false;
+let excerptAuthorization = false;
 const native = { kill: () => { kills++; }, steer: async (text: string) => { delivered.push(text); } };
 const plain = { kill: () => { kills++; } };
 function bind(enabled: boolean) {
@@ -36,12 +38,13 @@ const service = new ChatService(async (_member, _owner, prompt, signal, _project
   const source = JSON.parse(prompt.split("【当前用户消息】\n").at(-1)!) as string;
   await delay(source.includes("等待") ? 30000 : 350, undefined, { signal });
   return { text: JSON.stringify({ reply: source.includes("告诉主任务") ? "回传结论：选择方案 B，复用现有消息队列，并补上投递回执。" : "**建议选择方案 B。**\n\n主任务继续实现，这里可以单独讨论。\n\n- 复用已持久化的消息队列\n- 支持实时追加时立即送达\n- 回执显示实际投递状态",
-    forward: source.includes("告诉主任务") ? { text: "选择方案 B，复用现有消息队列，补上投递回执。", authorization: source } : null }) };
+    forward: source.includes("告诉主任务") || forceForward ? { text: "选择方案 B，复用现有消息队列，补上投递回执。", authorization: excerptAuthorization ? "把结论告诉主任务" : source } : null }) };
 });
 const api = new Hono();
 mountChatRoutes(api, service);
 api.get("/agents", async (c) => c.json(await db.select().from(agents)));
 api.get("/fixture/state", async (c) => c.json({ delivered, kills, pending: await db.select().from(scheduledMessages) }));
+api.post("/fixture/forward-mode", async (c) => { const mode = await c.req.json(); forceForward = !!mode.forced; excerptAuthorization = !!mode.excerpt; return c.json({ ok: true }); });
 api.post("/fixture/native", async (c) => { bind((await c.req.json()).enabled); return c.json({ ok: true }); });
 api.post("/fixture/archive", async (c) => { await db.update(tasks).set({ archived: (await c.req.json()).archived }).where(eq(tasks.id, "parent")); return c.json({ ok: true }); });
 api.post("/fixture/large-history", async (c) => { await db.update(tasks).set({ body: "背景".repeat(50000) }).where(eq(tasks.id, "parent")); return c.json({ ok: true }); });

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { Task, Session } from "@ash/shared";
 import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
-import { canForkReply, forkTaskBody, forkBodyProblem, snapshotConversationFork } from "../src/task-detail/conversationFork.ts";
+import { canForkReply, forkTaskBody, forkBodyProblem, forkContextBytes, snapshotConversationFork } from "../src/task-detail/conversationFork.ts";
 
 const task = { id: "source", title: "来源任务", body: "原始需求", mode: "single" } as Task;
 const session = {
@@ -46,4 +46,18 @@ assert.match(forkBodyProblem(oversized, "继续")!, /128 KiB/);
 assert.throws(() => forkTaskBody(oversized, "继续"), /超过/);
 assert.equal(forkBodyProblem(seed.fork, "继续"), null);
 assert.equal(forkTaskBody(undefined, " 普通新任务 "), "普通新任务");
+const countEncoding = TextEncoder.prototype.encode;
+let encodedCharacters = 0;
+TextEncoder.prototype.encode = function (value = "") { encodedCharacters += value.length; return countEncoding.call(this, value); };
+try {
+  const repeated = { ...seed.fork, context: "超长历史".repeat(150000) };
+  for (let index = 0; index < 100; index++) {
+    assert.ok(forkBodyProblem(repeated, `继续 ${index}`));
+    assert.equal(forkContextBytes(repeated), 1800000);
+  }
+  assert.ok(encodedCharacters < repeated.context.length * 2, "连续输入不反复编码整份超长历史");
+  repeated.context = "已换成短背景";
+  assert.equal(forkContextBytes(repeated), countEncoding.call(new TextEncoder(), repeated.context).length);
+  assert.equal(forkBodyProblem(repeated, "继续"), null);
+} finally { TextEncoder.prototype.encode = countEncoding; }
 console.log("conversation fork boundaries, immutable history, attachments, fresh context: passed");

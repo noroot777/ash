@@ -89,3 +89,22 @@
 `npm run test:web` 首跑在已有 `test:preview-log-live` 用例出现 `Target page, context or browser has been closed` 并中断。该用例单独重跑通过，其后的 `test:preview-task-switch`、`test:preview-error-toast`、`test:settings-path-jump`、`test:branch-acceptance`、`test:task-creation-origin`、`test:project-git-lifetime` 全部补跑通过；至此全量清单各项均完成，但不声称全量命令首跑 exit 0。未查明浏览器关闭原因，未改动预览代码。
 
 首跑完整日志及修复截图位于审查证据目录的 `round-1/repair/`（`test-web.log`、`side-chat-reply-preserved.png`、`side-chat-mobile.png`、`fork-composer.png` 等）。`git diff --check` 和所有修改代码文件不超过 700 行的检查通过。
+
+
+### 第 2 轮审查修复
+
+审查报告：`data/runs/k8Nr25lD-XnW/free-review/4C_DY_wNahjD/round-2/report.md`。
+
+- P1：授权检查拆到 `side-authorization.ts`。检查范围始终是整条当前用户消息，不随模型引用的授权片段缩小；先检查撤回、条件、等待和追述等信号，再核对明确的发送句式及直接接收对象。每个剩余子句也需要能识别为后续指令，未知表达保守拒绝，避免“发送子句一命中就返回成功”。“告诉我主任务的结论”、主任务的负责人和历史追述不会作为发给绑定主任务的指令。拒绝仍完整保留回答与未发送原因。
+- 既有合法说法继续覆盖：逗号后“以后都按这个来”“说一下怎么改”“等它跑完再看”“比如先补一版验证”、带引号方案名、整句复制示例以及中英文直接发送要求。更复杂或混合疑问的表达可能被保守拒绝；用户可以另发一条清晰的发送指令，不会自动投递模糊要求。
+- L2：派生历史按快照对象缓存 UTF-8 体积，输入时只编码本次指令与短包装文本。180 万字节历史连续模拟输入 100 次，没有重复编码整份历史；快照正文改变时缓存重算。
+- P2 的产品取舍：本轮保留 64 KiB 新侧聊快照上限，超限主任务仍无法直接创建侧聊，需要先提供精简背景。审查的原始记录样本中约 2.8% 超过 64 KiB；实际创建还包含任务正文和序列化开销，这个比例不等于产品可用率承诺。本轮选择维持可控成本及完整快照，不新增“最近历史 + 摘要”机制；这是无人值守修复中的保守取舍，没有声称已取得用户对这一限制的确认。
+- L1：继续保留模型提示中的 12000 字要求与执行层累计 32000 字硬上限；解析层不再因回答超过建议长度而整条丢弃，避免恢复第 1 轮已修复的数据丢失。
+
+验证覆盖：后端 20 条合法说法、21 条拒绝说法；撤回分别接逗号、句号、感叹号、换行和分号，分别用完整授权与只引用前半句核验。模拟模型对拒绝说法仍返回 `forward`，通过真实 ChatService 和 native 投递链验证没有新增队列行或实际投递。浏览器同样强制模拟错误模型授权，复现并拦住报告的 9 条说法、只引用前半句及跨句撤回，刷新后回答和未发送状态保留，随后普通发送依然成功。
+
+浏览器通道：先尝试 Chrome 扩展具名后台会话「🔎 ash 回传授权复验」，返回 `unsupported Codex auth method: apikey`。随后使用独立临时 profile、`headless: true` 的 Chrome；未激活、接管或直连用户普通标签，未启动有头浏览器。证据在本轮审查目录的 `round-2/repair/`，关键截图为 `side-chat-retraction-blocked.png`。全部投递测试使用隔离临时数据库和模拟模型，没有向用户真实主任务注入消息。
+
+`npm run build`、`npm -w web run test:side-chat`、`npm -w web run test:conversation-fork`、`npm -w server run test:chat`、`test:scheduled-messages`、`test:assistant` 均通过。最终 `npm run test:web` 完整运行 exit 0，日志为 `round-2/repair/test-web-final.log`。首跑在新浏览器用例中读到了上一条回复的状态，断言随后遇到本条“等待回复”；已将等待定位固定到本次新增回复，单独侧聊回归和最终全量均通过。首跑日志 `test-web.log` 保留，未删除失败证据。构建保留已有大 chunk 提示。
+
+`git diff --check` 与所有修改代码文件不超过 700 行的检查通过。

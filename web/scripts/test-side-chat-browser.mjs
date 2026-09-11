@@ -39,8 +39,40 @@ try {
   await page.getByRole("button", { name: "开始侧聊", exact: true }).click();
   const input = page.getByRole("textbox", { name: "侧聊消息输入" });
   const send = page.getByRole("button", { name: "发送侧聊消息" });
+  const sendForReply = async (body) => {
+    const position = await page.locator(".side-chat-message.is-agent").count();
+    await input.fill(body); await send.click();
+    const reply = page.locator(".side-chat-message.is-agent").nth(position);
+    await reply.waitFor();
+    return reply;
+  };
+  await control("forward-mode", { forced: true });
+  const rejected = [
+    "把结论告诉主任务，哦不对，先不要", "把结论告诉主任务，等等，我再想想",
+    "把结论告诉主任务，除非它已经开始做了", "发给主任务，不过要等我确认",
+    "把结论告诉主任务，不过这条只是我随口说的", "告诉我主任务的结论",
+    "告诉我主任务现在的结论是什么", "你之前不是已经把结论告诉主任务了吗",
+    "上一轮我让你把结论告诉主任务了",
+  ];
+  for (const [index, command] of rejected.entries()) {
+    const last = await sendForReply(command);
+    await last.getByText(/未发送到主任务/).waitFor();
+    assert.match(await last.innerText(), /方案 B/);
+    assert.equal((await state()).delivered.length, 0, "撤回、条件、疑问和追述不触发 native steer");
+    assert.equal((await state()).pending.length, 0, "不生成待发送消息");
+    if (index === 0) await page.screenshot({ path: join(artifacts, "side-chat-retraction-blocked.png") });
+  }
+  await control("forward-mode", { forced: true, excerpt: true });
+  const multiSentence = "把结论告诉主任务。\n等等，我再想想";
+  const excerptReply = await sendForReply(multiSentence);
+  await excerptReply.getByText(/未发送到主任务/).waitFor();
+  await page.reload();
+  await page.locator(".side-chat-message.is-agent").last().getByText(/未发送到主任务/).waitFor();
+  assert.equal((await state()).delivered.length, 0);
+  assert.equal((await state()).pending.length, 0);
+  await control("forward-mode", {});
   await input.fill("比较方案 A 和 B"); await send.click();
-  await page.getByText("建议选择方案 B。", { exact: true }).waitFor();
+  await page.locator(".side-chat-message.is-agent").last().getByText("建议选择方案 B。", { exact: true }).waitFor();
   assert.equal((await state()).delivered.length, 0);
   const firstRoom = await page.getByRole("combobox", { name: "切换侧聊" }).inputValue();
   await page.getByRole("button", { name: "切换主任务状态" }).click();
@@ -77,8 +109,7 @@ try {
   assert.equal((await state()).delivered.length, 1);
   const replyText = "回传结论：选择方案 B，复用现有消息队列，并补上投递回执。";
   for (const condition of ["把结论告诉主任务，如果它已经开始做了就算了", "不要把结论告诉主任务"]) {
-    await input.fill(condition); await send.click();
-    const last = page.locator(".side-chat-message.is-agent").last();
+    const last = await sendForReply(condition);
     await last.getByText(/未发送到主任务/).waitFor();
     assert.match(await last.innerText(), /回传结论：选择方案 B/);
     assert.equal((await state()).pending.length, 2, "拒绝回传不入队");

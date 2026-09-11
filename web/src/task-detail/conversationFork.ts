@@ -3,10 +3,18 @@ import type { ConversationItem } from "./conversationModel.ts";
 import { parseAttachmentText } from "./utils.ts";
 
 export const FORK_BODY_MAX_BYTES = 128 * 1024;
-export const forkContextBytes = (fork: ConversationFork) => new TextEncoder().encode(fork.context).length;
+const encoder = new TextEncoder();
+const contextSizes = new WeakMap<ConversationFork, { context: string; bytes: number }>();
+export function forkContextBytes(fork: ConversationFork): number {
+  const cached = contextSizes.get(fork);
+  if (cached?.context === fork.context) return cached.bytes;
+  const bytes = encoder.encode(fork.context).length;
+  contextSizes.set(fork, { context: fork.context, bytes });
+  return bytes;
+}
 export function forkBodyProblem(fork: ConversationFork | undefined, instruction: string): string | null {
   if (!fork) return null;
-  const bytes = new TextEncoder().encode(formatForkBody(fork, instruction)).length;
+  const bytes = forkContextBytes(fork) + encoder.encode(formatForkBody({ ...fork, context: "" }, instruction)).length;
   return bytes > FORK_BODY_MAX_BYTES ? `派生正文约 ${Math.ceil(bytes / 1024)} KiB，超过 ${FORK_BODY_MAX_BYTES / 1024} KiB 上限。请选择更早的回复，或新建任务填写精简背景。` : null;
 }
 
