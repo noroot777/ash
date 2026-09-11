@@ -87,7 +87,10 @@ try {
   // 模型与时间原本是正文顶上一块要点开的两列表格，现在顺着标题横向摊在抬头里。
   assert.equal(await conversation.locator(".native-agent__metadata").count(), 0, "正文里不再有单独的「模型与时间」折叠区");
   assert.equal(await conversation.locator(".native-work__meta").count(), 0, "抬头不复刻列表里那套两列表格");
-  assert.match(await headline.innerText(), /codex@fixture[\s\S]*gpt-5\.6-sol[\s\S]*调用指定[\s\S]*09\/08 08:00 起[\s\S]*3天 6小时/);
+  // 跨度这里只验形状：运行中的项按真实时钟一直在走，写死「3天 6小时」会随日期自然失效。
+  // 具体文案由下面收工后那条（endedAt 固定）钉住。
+  assert.match(await headline.innerText(),
+    /codex@fixture\s*·\s*gpt-5\.6-sol\s*调用指定\s*·\s*09\/08 08:00 起\s*·\s*\d+\s*(?:天|小时|分|秒)/);
   const headerBox = await header.boundingBox();
   const headlineBox = await headline.boundingBox();
   assert.ok(headlineBox.y >= headerBox.y - 1 && headlineBox.y + headlineBox.height <= headerBox.y + headerBox.height + 1,
