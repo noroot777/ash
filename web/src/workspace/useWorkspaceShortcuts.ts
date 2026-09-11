@@ -30,10 +30,14 @@ function isTextEntry(target: EventTarget | null): boolean {
   return target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT";
 }
 
-function hasBlockingLayer(target: EventTarget | null): boolean {
+function hasBlockingLayer(): boolean {
+  return document.querySelector('[role="dialog"][aria-modal="true"], [role="menu"]') !== null;
+}
+
+function previewOwnsNavigation(target: EventTarget | null): boolean {
   // Expanded preview covers the workspace even with focus on its opener. Compact preview
   // owns only its own events; its controls handle keys after this window capture listener.
-  return document.querySelector('[role="dialog"][aria-modal="true"], [role="menu"], .preview-workspace.is-expanded') !== null
+  return document.querySelector(".preview-workspace.is-expanded") !== null
     || (target instanceof Element && target.closest(".preview-workspace") !== null);
 }
 
@@ -79,12 +83,12 @@ export function useWorkspaceShortcuts({
         inspectorSequence.current.reset();
         taskModeSequence.current.reset();
         // The palette is global; enabled only gates the workspace navigation keys below.
-        if (!paletteOpen && hasBlockingLayer(event.target)) return;
+        if (!paletteOpen && hasBlockingLayer()) return;
         event.preventDefault();
         onTogglePalette();
         return;
       }
-      if (!enabled || paletteOpen || isTextEntry(event.target) || hasBlockingLayer(event.target)) {
+      if (!enabled || paletteOpen || isTextEntry(event.target) || hasBlockingLayer() || previewOwnsNavigation(event.target)) {
         inspectorSequence.current.reset();
         taskModeSequence.current.reset();
         return;

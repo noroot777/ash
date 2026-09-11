@@ -9,7 +9,8 @@ import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { previewAnnotationRuntime } from "../../server/src/preview-annotation-runtime.ts";
 import { parseAnnotationBatch } from "../../shared/src/page-annotation-batch.ts";
 import { checkFloatingPreview, previewClearRatio } from "./preview-floating-checks.mjs";
-import { checkExpandedPreviewShortcuts, checkPreviewControlShortcuts } from "./preview-shortcut-checks.mjs";
+import { checkExpandedPreviewShortcuts, checkPreviewControlShortcuts, checkPreviewPalette } from "./preview-shortcut-checks.mjs";
+import { checkPreviewPanelOverlap } from "./preview-panel-overlap-checks.mjs";
 
 export async function testPreviewWorkspaceDom() {
   const cacheDir = await mkdtemp(join(tmpdir(), "ash-preview-workspace-test-"));
@@ -112,7 +113,10 @@ export async function testPreviewWorkspaceDom() {
         import { DraftProvider } from '/src/lib/DraftStore.tsx';
         import { WorkspaceToast } from '/src/workspace/WorkspaceToast.tsx';
         import { useWorkspaceShortcuts } from '/src/workspace/useWorkspaceShortcuts.ts';
+        import { CommandPalette } from '/src/overlays/CommandPalette.tsx';
         import '/src/styles/workspace.css';
+        import '/src/styles/overlays.css';
+        import '/src/styles/dialogs.css';
         window.closeRequests = 0;
         window.workspaceShortcutActions = [];
         const tasks = [{id:'previous'}, {id:'fixture'}, {id:'next'}];
@@ -121,15 +125,16 @@ export async function testPreviewWorkspaceDom() {
           const [toast, setToast] = React.useState(true);
           const [open, setOpen] = React.useState(sessionStorage.getItem('preview-open') === 'true');
           const [selectedTaskId, setSelectedTaskId] = React.useState('fixture');
+          const [paletteOpen, setPaletteOpen] = React.useState(false);
           const openPreview = () => { sessionStorage.setItem('preview-open', 'true'); setOpen(true); };
           useWorkspaceShortcuts({
-            enabled: true, paletteOpen: false, composerOpen: false, spreadOpen: false,
+            enabled: true, paletteOpen, composerOpen: false, spreadOpen: false,
             orderedTasks: tasks, selectedTaskId,
             onTask: task => {
               logShortcut('task:' + task.id); setSelectedTaskId(task.id);
               sessionStorage.removeItem('preview-open'); setOpen(false);
             },
-            onTogglePalette: () => logShortcut('palette'), onCreate: () => logShortcut('create'),
+            onTogglePalette: () => { logShortcut('palette'); setPaletteOpen(value => !value); }, onCreate: () => logShortcut('create'),
             onToggleSpread: () => logShortcut('spread'), onCloseSpread: () => logShortcut('close-spread'),
             onToggleTaskMode: () => logShortcut('task-mode'),
           });
@@ -138,10 +143,18 @@ export async function testPreviewWorkspaceDom() {
           }}) : React.createElement(PreviewWorkspaceEntry, {onOpen:openPreview});
           const sidebar = createPortal(React.createElement(React.Fragment, {},
             React.createElement('button', {id:'preview-external-opener',onClick:openPreview}, '外部预览入口'),
+            React.createElement('input', {id:'preview-external-input','aria-label':'预览外输入框'}),
             React.createElement('output', {id:'workspace-selected-task'}, selectedTaskId),
             React.createElement('button', {'data-workspace-run-action':true,onClick:()=>logShortcut('run')}, '运行任务'),
           ), document.getElementById('sidebar'));
-          return React.createElement(React.Fragment, {}, workspace, sidebar, createPortal(React.createElement(WorkspaceToast, {
+          const palette = createPortal(React.createElement(CommandPalette, {
+            open: paletteOpen, projects: [], currentProject: null, tasks: [], selectedTask: null, groups: [],
+            onClose: () => setPaletteOpen(false), onComposer: () => logShortcut('create'),
+            onProject: () => {}, onTaskMode: () => {}, onTask: () => {}, onTaskUpdated: () => {},
+            onNote: () => {}, onNewGroup: () => {}, onNewProject: () => {}, onDeleteTask: () => {},
+            onSettings: () => {}, notify: () => {},
+          }), document.getElementById('toast-root'));
+          return React.createElement(React.Fragment, {}, workspace, sidebar, palette, createPortal(React.createElement(WorkspaceToast, {
             toasts: { pinned: toast ? {message:'预览启动提示仍然可见'} : null, transient: null }, onDismiss:()=>setToast(false),
           }), document.getElementById('toast-root')));
         }
@@ -149,6 +162,8 @@ export async function testPreviewWorkspaceDom() {
       </script></body></html>`) }));
     await page.goto(`http://127.0.0.1:${address.port}/__preview-test`);
     const button = (name) => page.getByRole("button", { name, exact: true });
+    await button("打开预览工作区").waitFor();
+    await checkPreviewPalette(page);
     await button("打开预览工作区").click();
     assert.deepEqual(await page.locator(".preview-workspace").boundingBox(), { x: 0, y: 0, width: 1400, height: 900 }, "the entry opens the expanded workspace directly, before preview launch");
     await checkExpandedPreviewShortcuts(page);
@@ -398,6 +413,7 @@ export async function testPreviewWorkspaceDom() {
     }
     assert.equal(iframeLoads, loadsBeforeEscape, 'frame Escape preserves the iframe document and channel');
     await checkFloatingPreview(page, runtimeFrame, draft);
+    await checkPreviewPanelOverlap(page, draft);
     for (const viewport of [{ width: 900, height: 600 }, { width: 760, height: 500 }, { width: 390, height: 844 }]) {
       await page.setViewportSize(viewport);
       assert.deepEqual(await iframe.boundingBox(), { x: 0, y: 0, ...viewport });

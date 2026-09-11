@@ -12,9 +12,41 @@ async function assertPreviewRetained(page, context) {
 export async function checkExpandedPreviewShortcuts(page) {
   // The opener remains outside the overlay, as it can in TaskDetail after opening a preview.
   await page.locator("#preview-external-opener").focus();
-  for (const key of [...navigationKeys, "Control+k", "Meta+k"]) {
+  for (const key of navigationKeys) {
     await page.keyboard.press(key);
     await assertPreviewRetained(page, `expanded preview, external focus, ${key}`);
+  }
+  await checkPreviewPalette(page);
+}
+
+export async function checkPreviewPalette(page) {
+  const expanded = await page.locator(".preview-workspace.is-expanded").count();
+  const preview = await page.locator(".preview-workspace").count() ? await page.locator(".preview-workspace").elementHandle() : null;
+  const before = await shortcutActions(page);
+  for (const target of [page.locator("#preview-external-opener"), page.locator("#preview-external-input"),
+    page.getByRole("button", { name: "关闭预览工作区", exact: true })]) {
+    if (!await target.count()) continue;
+    for (const key of ["Meta+k", "Control+k"]) {
+      await target.focus();
+      await page.keyboard.press(key);
+      const dialog = page.getByRole("dialog", { name: "命令面板", exact: true });
+      await dialog.waitFor({ timeout: 2000 });
+      const input = dialog.locator("input");
+      await input.click({ timeout: 2000 });
+      assert(await input.evaluate(element => {
+        const box = element.getBoundingClientRect();
+        return element.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+      }), "the actual command palette is above the preview and receives pointer events");
+      await input.fill("/");
+      await input.press("ArrowDown");
+      assert.equal(await dialog.locator('[aria-selected="true"]').getAttribute("data-palette-index"), "1", "palette arrows navigate commands");
+      assert.deepEqual(await shortcutActions(page), [...before, "palette"], "palette navigation does not switch tasks");
+      await input.press("Escape");
+      await dialog.waitFor({ state: "hidden" });
+      assert.equal(await page.locator(".preview-workspace.is-expanded").count(), expanded, "Escape closes only the palette");
+      if (preview) assert(await preview.evaluate(element => element.isConnected), "palette dismissal keeps the preview mounted");
+      await page.evaluate(actions => { window.workspaceShortcutActions = actions; }, before);
+    }
   }
 }
 
@@ -26,6 +58,7 @@ export async function checkPreviewControlShortcuts(page, draft) {
   await button("展开标注工具").click();
   for (const expanded of [true, false]) {
     if (!expanded) await button("还原预览").click();
+    await checkPreviewPalette(page);
     for (const [name, selector] of [
       ["移动预览操作栏（拖动或方向键）", ".preview-workspace-header"],
       ["移动标注工具（拖动或方向键）", ".preview-workspace-controls"],

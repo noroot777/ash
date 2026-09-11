@@ -1,4 +1,7 @@
 import { useLayoutEffect, useRef, useState, type PointerEvent, type KeyboardEvent } from "react";
+import { floatingPanelPosition } from "./floatingPanelPosition.ts";
+
+const panels = ".preview-workspace-header, .preview-workspace-controls, .preview-workspace-notes";
 
 export function useFloatingPanel<T extends HTMLElement>(enabled: boolean) {
   const ref = useRef<T>(null);
@@ -12,12 +15,16 @@ export function useFloatingPanel<T extends HTMLElement>(enabled: boolean) {
     if (!panel || !workspace) return;
     const bounds = workspace.getBoundingClientRect(), box = panel.getBoundingClientRect();
     const left = box.left - offset.current.x, top = box.top - offset.current.y;
-    const next = {
-      x: Math.max(bounds.left - left, Math.min(x, bounds.right - left - box.width)),
-      y: Math.max(bounds.top - top, Math.min(y, bounds.bottom - top - box.height)),
-    };
+    const obstacles = [...workspace.querySelectorAll<HTMLElement>(panels)]
+      .filter(other => other !== panel)
+      .map(other => other.getBoundingClientRect())
+      .filter(other => other.width > 0 && other.height > 0);
+    const placed = floatingPanelPosition({ left: left + x, top: top + y, width: box.width, height: box.height }, bounds, obstacles);
+    const next = { x: placed.left - left, y: placed.top - top };
     if (next.x !== offset.current.x || next.y !== offset.current.y) {
       offset.current = next;
+      // Other panels' resize callbacks see this placement in the same observer delivery.
+      panel.style.transform = `translate(${next.x}px, ${next.y}px)`;
       setPosition(next);
     }
   };
@@ -27,6 +34,7 @@ export function useFloatingPanel<T extends HTMLElement>(enabled: boolean) {
     if (!panel || !workspace) return;
     const observer = new ResizeObserver(() => move(offset.current.x, offset.current.y));
     observer.observe(panel); observer.observe(workspace);
+    workspace.querySelectorAll(panels).forEach(other => observer.observe(other));
     return () => observer.disconnect();
   }, [enabled]);
   const finish = (event: PointerEvent<HTMLButtonElement>) => {
