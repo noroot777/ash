@@ -12,8 +12,8 @@ import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
 import { AgentPlate } from "../components/AgentPlate.tsx";
 import {
   ReplyResizeHandle,
-  readStoredReplyHeight,
-  storeReplyHeight,
+  SINGLE_REPLY_PIN,
+  useReplyHeight,
 } from "./ReplyResizeHandle.tsx";
 import { executorRunSummary, registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
@@ -110,7 +110,7 @@ export function ReplyBox({
   const scheduleTriggerRef = useRef<HTMLButtonElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // null = 没拖过,交给行数自动撑高(useAutoGrowTextarea)
-  const [replyHeight, setReplyHeight] = useState<number | null>(readStoredReplyHeight);
+  const replyHeight = useReplyHeight(SINGLE_REPLY_PIN);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [profilesReady, setProfilesReady] = useState(false);
   const [profilesFailed, setProfilesFailed] = useState(false);
@@ -136,7 +136,7 @@ export function ReplyBox({
     onPendingChange: draft.setPendingUploads,
   });
   // 输入几行就撑几行高,撑到上限为止;拖过之后以拖出来的高度为准(拖动条自己的上限更宽)。
-  useAutoGrowTextarea(textareaRef, { value, pinned: replyHeight });
+  useAutoGrowTextarea(textareaRef, { value, pinned: replyHeight.height });
   // 任务正在跑不再是「不能说话」,而是「说了先排队」:发出去的消息落成一条待发送
   // 消息(mode=queued),这一轮一结束由服务端自动送进同一个会话。所以 disabled 只留
   // 真正没得说的情况——不是单任务、已归档、以及从没跑过因而没有会话可续。
@@ -521,14 +521,7 @@ export function ReplyBox({
       {sendError && <p className="task-reply-error">{sendError}</p>}
       {topRail}
       <div className="task-reply-box">
-        <ReplyResizeHandle
-          targetRef={textareaRef}
-          height={replyHeight}
-          onChange={(next) => {
-            setReplyHeight(next);
-            storeReplyHeight(next);
-          }}
-        />
+        <ReplyResizeHandle targetRef={textareaRef} {...replyHeight} />
         <AgentPlate name={activeAgent} />
         <textarea
           ref={textareaRef}
