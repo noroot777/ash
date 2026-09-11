@@ -149,8 +149,11 @@ export async function nextRound(task: TaskRow, run: ReviewRunRow): Promise<void>
  * 「这条审查链能不能重跑上一回合」的唯一判据，返回拒绝文案或 null。
  *
  * 只认一种形状：最近一条 run 落在 failed、且它当前那一轮落在 error —— 那正是「审查回合
- * 异常结束（退出码非零 / 启动失败），自动链已停」留下的痕迹。已给出结论的轮次
- * （passed/stopped）不在此列：那是正常结局，要再看一遍应该派新一轮审查。
+ * 没能给出结论（崩了 / 启动失败 / 报错后照样 exit 0），自动链已停」留下的痕迹。已给出结论
+ * 的轮次（passed/stopped）不在此列：那是正常结局，要再看一遍应该派新一轮审查。
+ *
+ * 这也是审查档「上一回合崩没崩」的**唯一**判据，退出码不参与：CLI 打完
+ * 「API Error: Connection lost mid-response」仍会 exit 0，那一轮照样一个结论都没有。
  */
 export function freeReviewRetryBlocker(
   run: ReviewRunRow | null,

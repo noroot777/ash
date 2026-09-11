@@ -10,24 +10,28 @@ import type { TurnRetryKind } from "../task-detail/turnRetry.ts";
  *
  * 审查会话上的这颗跑的是**那一轮审查**（同一位审查者续跑），跟重投一句话不是一回事，
  * 文案必须分开写 —— 用户点之前得知道自己要开的是哪台机器。
+ *
+ * 括号里那半句是**这颗按钮为什么会出现**的证据，所以不能写死「exit N」：审查档认的是
+ * 「这一轮没给出结论」，而 CLI 报完 API Error 照样 exit 0，写「exit 0」等于自相矛盾。
  */
 export function TurnRetryButton({
   exitStatus,
   kind = "turn",
   onRetry,
 }: {
-  exitStatus: number;
+  exitStatus: number | null;
   kind?: TurnRetryKind;
   onRetry: () => Promise<void> | void;
 }) {
   const [busy, setBusy] = useState(false);
   const what = kind === "review" ? "这一轮审查" : "这一回合";
+  const why = exitStatus != null && exitStatus !== 0 ? `上一回合 exit ${exitStatus}` : "上一轮未出结论";
   return (
     <button
       type="button"
       className="is-retry"
       disabled={busy}
-      aria-label={`上一回合异常结束（退出码 ${exitStatus}），重跑${what}`}
+      aria-label={`上一回合异常结束（${why}），重跑${what}`}
       onClick={async () => {
         setBusy(true);
         try {
@@ -38,7 +42,7 @@ export function TurnRetryButton({
       }}
     >
       <ArrowCounterClockwise size={11} aria-hidden="true" />
-      {busy ? "重试中…" : `${kind === "review" ? "重跑本轮审查" : "重试"}（上一回合 exit ${exitStatus}）`}
+      {busy ? "重试中…" : `${kind === "review" ? "重跑本轮审查" : "重试"}（${why}）`}
     </button>
   );
 }

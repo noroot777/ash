@@ -160,8 +160,32 @@ assert.equal(
   null,
   "审查档不要求任务停在 done",
 );
+// 审查档不看退出码：CLI 报错后照样 exit 0（实测「API Error: Connection lost mid-response」），
+// 而那一轮一个结论都没给，审查链已经停在 failed 并在时间线上写了「未能正常给出结论」。
+// 拿退出码当门槛的话，这种局面下整页没有任何重来的入口 —— 用户看到的就是「按钮坏了」。
+assert.equal(
+  why(task({ workflowMode: "free" }), sess({ id: "a", role: "reviewer", exitStatus: 0 }), { reviewBlocker: null }),
+  null,
+  "审查回合 exit 0 但这一轮没出结论 → 放行(判据是审查链自己的 error/failed)",
+);
+assert.equal(
+  why(task({ workflowMode: "free" }), sess({ id: "a", role: "reviewer", exitStatus: null }), { reviewBlocker: null }),
+  null,
+  "审查回合连退出码都没落 → 仍看审查链的判据",
+);
+assert.ok(
+  why(task({ workflowMode: "free" }), sess({ id: "a", role: "reviewer", exitStatus: 0 }), { reviewBlocker: "最近一轮审查没有停在异常结束状态" }),
+  "审查链正常收尾的 exit 0 照旧拒绝",
+);
+assert.ok(
+  why(task({ workflowMode: "free" }), sess({ id: "a", role: "reviewer", exitStatus: 0, stoppedAs: "canceled" }), { reviewBlocker: null }),
+  "手动停掉的审查回合仍不算崩溃",
+);
 // 其余身份(团队调度台、duet 双声道)连「上一回合」的形状都不一样。
 assert.ok(why(task(), sess({ id: "a", role: "lead" })), "调度台会话不归这颗按钮");
 assert.ok(why(task(), sess({ id: "a", role: "voiceA" })), "duet 会话不归这颗按钮");
+// 重投档不跟着放松：续聊聊天回合本来就不调 complete_task，exit 0 给按钮等于每次闲聊后
+// 都挂一颗「重试」。
+assert.ok(why(task(), sess({ id: "a", role: "single", exitStatus: 0 })), "普通回合 exit 0 仍然不给");
 
 console.log("✓ retry-turn gate");

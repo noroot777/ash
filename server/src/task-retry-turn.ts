@@ -28,6 +28,9 @@
 // ② 旁路回合（就地验证、`/compact` 这类原生命令）→ 认 `sessions.side_turn`，它们各有
 //    自己的重来入口，重投会顶着同一个轮号另跑一段普通回合（finding 6）；
 // ③ 就地验证轮还挂着（`verifyRound` 非空 = 那一轮没 concludeRound）→ 同上。
+//
+// 反过来，「崩了」的判据两档不同：重投档只有退出码可认；审查档认的是**那一轮有没有给出
+// 结论**（审查链自己的 error/failed），因为 CLI 报错后照样 exit 0，退出码会漏判。
 import { open, stat } from "node:fs/promises";
 import type { AgentType, ConvSeg } from "@ash/shared";
 import { parseSessionOutput } from "@ash/shared";
@@ -185,7 +188,12 @@ export function retryTurnRejection(facts: RetryTurnFacts): { error: string; deta
   if (latest.stoppedAs) {
     return { error: "上一回合是你手动停止的，不是异常结束；要继续请用运行", detail: { stoppedAs: latest.stoppedAs } };
   }
-  if (latest.exitStatus === 0 || latest.exitStatus == null) {
+  // 退出码只在**重投档**上当「崩没崩」的判据。审查档另有权威判据，而且更准：那一轮到底
+  // 有没有给出结论（`free_review_rounds.status='error'` + run `failed`，见
+  // freeReviewRetryBlocker）。两者会分家 —— CLI 打完「API Error: Connection lost
+  // mid-response」照样 exit 0（2026-09-11 实测：reviewer 会话 exit 0、审查链却停在 failed，
+  // 时间线上明写「未能正常给出结论，已停止自动链」，界面却一个重跑入口都没有）。
+  if (retryTurnKindOf(latest) !== "review" && (latest.exitStatus === 0 || latest.exitStatus == null)) {
     return { error: "上一回合不是异常结束，不需要重跑", detail: { exitStatus: latest.exitStatus } };
   }
   if (facts.groupPaused) return { error: "所在分组已暂停，先恢复分组再重试", detail: { groupPaused: true } };
