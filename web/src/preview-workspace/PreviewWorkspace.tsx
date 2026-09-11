@@ -7,10 +7,9 @@ import { useAnnotationBatch } from "./useAnnotationBatch.ts";
 import { AnnotationBatchPanel } from "./AnnotationBatchPanel.tsx";
 import type { AnnotationDraft as Draft } from "@ash/shared/page-annotation-batch";
 import { useAnnotationReview } from "./useAnnotationReview.ts";
-import { AnnotationWaiting } from "./AnnotationWaiting.tsx";
 import { AnnotationReviewPanel } from "./AnnotationReviewPanel.tsx";
 import { AnnotationFallback } from "./AnnotationFallback.tsx";
-import { PreviewLauncher } from "./PreviewLauncher.tsx";
+import { PreviewWorkspaceStage, previewWorkspaceLaunchHint } from "./PreviewWorkspaceStage.tsx";
 import type { AnnotationMatch } from "@ash/shared/page-annotation-review";
 import { createClientId } from "../lib/clientId.ts";
 import "./preview-workspace.css";
@@ -60,6 +59,7 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
   const oldGeneration = batch.records.some((record) => record.messageId && record.state !== "saved" && record.batch.gen === state?.gen);
   const sentWaiting = batch.records.some((record) => record.messageId && ["delivered", "modifying"].includes(record.state));
   const source = gateway && !oldGeneration && !sentWaiting ? `${gateway}?workspace=${encodeURIComponent(state?.startedAt ?? "")}&reload=${reload}` : null;
+  const launchHint = previewWorkspaceLaunchHint(state, activeService, sentWaiting, oldGeneration);
   const matchingBatch = !batch.batch || (batch.batch.gen === state?.gen && batch.batch.serviceId === activeService?.id);
   const canAnnotate = !batch.locked && matchingBatch && !!state?.gen;
   const canReview = batch.record?.state === "reviewable" && !!batch.record.review?.releasedAt && !!review.status?.canReopen && !!source
@@ -158,14 +158,14 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
       <button type="button" disabled={!source} onClick={() => setReload((value) => value + 1)}><ArrowClockwise size={14} />重载</button>
     </div>
     <p className={`preview-workspace-mode-note${channel.mode === "annotate" && ready ? " is-annotating" : ""}`} role="status">
-      {items.length >= 100 ? "已暂存 100 条标注，请删除部分标注后继续。" : ready
+      {!source ? launchHint : items.length >= 100 ? "已暂存 100 条标注，请删除部分标注后继续。" : ready
         ? channel.mode === "annotate" ? "标注中 · 点击只选择对象；页面操作已拦截。滚轮可滚动，父容器可逐层上选。" : "浏览中 · 可以正常操作页面；切换到标注后再选择修改位置。"
-        : !activeService ? "在下方选择并启动预览，就绪后即可浏览和标注；也可以使用右侧截图批注。" : "等待区展示已存批注与图像，这不是可操作页面。"}
+        : "正在连接页面标注；若连接失败，可重载预览或使用右侧截图批注。"}
     </p>
     {(error || serviceError) && <p className="preview-workspace-error" role="alert">{error || serviceError}</p>}
     <div className="preview-workspace-body">
-      <div className="preview-workspace-stage">
-        {source ? <>
+      <PreviewWorkspaceStage source={source} taskId={taskId} preview={state} refresh={refresh} controller={batch} review={review} hint={launchHint}>
+        {source && <>
           <iframe key={source} ref={channel.iframeRef} src={source} title="任务页面预览"
             sandbox="allow-scripts allow-forms allow-modals allow-downloads allow-popups"
             referrerPolicy="no-referrer" onLoad={channel.connect} />
@@ -174,14 +174,11 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
             {channel.phase === "failed" && <><p>页面可能已跳转或不支持标注。重载后重试，也可回到回复框使用截图批注。</p>
               <button type="button" onClick={() => setReload((value) => value + 1)}>重载预览</button></>}
           </div>}
-        </> : <>
-          {!activeService && <PreviewLauncher taskId={taskId} preview={state} refresh={refresh} />}
-          {(activeService || batch.records.some((record) => record.messageId)) && <AnnotationWaiting controller={batch} review={review} starting={!!state?.starting} launchAvailable={!activeService} />}
         </>}
         {page && source && <footer className="preview-workspace-context">
           <code>{page.route}</code><span>{Math.round(page.viewport.width)} × {Math.round(page.viewport.height)} · 滚动 {Math.round(page.scroll.x)}, {Math.round(page.scroll.y)} · {page.viewport.scale.toFixed(2)}×</span>
         </footer>}
-      </div>
+      </PreviewWorkspaceStage>
       <aside className="preview-workspace-notes" aria-label="页面标注列表">
         <AnnotationFallback taskId={taskId} records={batch.records} queueing={!review.status?.canReopen} unavailable={!source} />
         <div className="preview-workspace-notes-heading"><h3>标注</h3><span>{items.length} / 100</span></div>

@@ -1,4 +1,5 @@
 import type { WorkspacePreviewInput, WorkspacePreviewLaunch } from "@ash/shared/preview";
+import type { FreeWorkflowPreviewState } from "@ash/shared/free-workflow";
 import { json, request } from "../lib/apiClient.ts";
 
 export interface PreviewLaunchState {
@@ -39,8 +40,8 @@ export function createPreviewLaunchController(taskId: string, refresh: () => Pro
     activate() { active = true; void load(); },
     dispose() { active = false; ++operation; ++reading; pendingLoad = null; },
     load,
-    async start(input: Omit<WorkspacePreviewInput, "workspace">, starting: boolean) {
-      if (!active || starting || state.action || !state.info || state.info.reason) return;
+    async start(input: Omit<WorkspacePreviewInput, "workspace">, preview: FreeWorkflowPreviewState | null) {
+      if (!active || !preview || preview.starting || state.action || !state.info || state.info.reason) return;
       const ticket = ++operation;
       patch({ action: "opening", error: "", notice: "" });
       try {

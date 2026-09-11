@@ -1,4 +1,6 @@
 .preview-launcher { flex: 1; min-height: 0; overflow: auto; padding: 24px; }
+.preview-workspace-launch-area { flex: 1; min-height: 0; overflow: auto; }
+.preview-workspace-launch-area > .preview-launcher, .preview-workspace-launch-area > .annotation-waiting { overflow: visible; }
 .preview-launcher h3 { margin: 0 0 10px; font-size: 17px; }
 .preview-launcher p { line-height: 1.8; color: var(--muted); }
 .preview-launch-directory { display: block; margin: 15px 0; overflow-wrap: anywhere; color: var(--muted); }
