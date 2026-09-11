@@ -108,17 +108,17 @@ async function stopPreviewExcept(
  * 调用点在**「点头之后」那一段开跑之前**，所以那一段又起的预览（用户特意编排的「验收完
  * 把线上环境开起来」）不受影响 —— 它是验收之后才有的东西。
  */
-export async function stopPreviewAtAccept(taskId: string): Promise<void> {
-  const record = readAnyPreview(taskId);
-  // 记录还没落盘、内存里已经有启动代的那一段同样要收：验收之后工作区就不归这个任务了，
-  // 让那一趟接着起来等于往一个已经交出去的检出里塞进程。这一段还没有 life 可读，按
-  // 「验收完就该收」处理。
-  if (!record) {
-    if (starting.has(taskId)) await stopPreview(taskId, "任务已验收完成");
-    return;
-  }
-  if (record.life === "gate") await stopPreview(taskId, "人工关口已结束");
-  else if (record.life === "task") await stopPreview(taskId, "任务已验收完成，按线上写的「任务结束时回收」收掉");
+export async function stopPreviewAtAccept(taskId: string): Promise<PreviewStopResult> {
+  try {
+    const record = readAnyPreview(taskId);
+    if (record && record.life !== "gate" && record.life !== "task") return { stopped: true };
+    // 没有当前记录时也检查此前归档的停止记录，以及尚未落盘的启动。
+    const result = await stopPreviewExcept(taskId, "验收时按预览回收设置关闭", null);
+    if (result.problem) return { stopped: false, message: result.problem };
+    if (hasUnfinishedPreviewStart(taskId)) return { stopped: false, message: "预览启动正在退出，请稍后重试。" };
+    if (readAnyPreview(taskId)) return { stopped: false, message: "预览已被另一趟启动替换，请稍后重试。" };
+    return { stopped: true };
+  } catch (error) { return previewStopFailure(error); }
 }
 
 /** 任务又开跑了：预览指向的是上一版代码，一律收掉，免得对着旧页面验新改动。 */

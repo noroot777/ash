@@ -15,12 +15,13 @@ import { disarmFreeReviewReservation } from "./free-review-reservations.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { publishTaskUpdated } from "./task-store.js";
-import { stopPreviewAtAccept, stopPreviewForWorktreeCleanup } from "./preview.js";
+import { stopPreviewForWorktreeCleanup } from "./preview.js";
+import { finalizeAcceptance } from "./task-accept-finalize.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
-import { setTaskStage, clearTaskStage } from "./task-stage.js";
-import { hasAcceptedTail, releaseGate, runAcceptedTail, type AcceptTail } from "./task-accept-tail.js";
-import { acceptSharedTeamWorkers, sharedWorkerAcceptanceMessage, type SharedWorkerAcceptance } from "./task-accept-shared-workers.js";
+import { clearTaskStage } from "./task-stage.js";
+import { releaseGate, runAcceptedTail, type AcceptTail } from "./task-accept-tail.js";
+import { acceptSharedTeamWorkers, sharedWorkerAcceptanceMessage } from "./task-accept-shared-workers.js";
 import { acceptanceGuard, type AcceptFailure, type AcceptWarning } from "./task-accept-guard.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -76,42 +77,14 @@ const mergeLabel: Record<string, string> = {
 
 
 
-async function finalizeAcceptance(
-  task: typeof tasks.$inferSelect,
-  message: string,
-): Promise<SharedWorkerAcceptance | null> {
-  await setTaskStage(task.id, "accepted");
-  // 尾段 durable 进度：stage=accepted 先落、尾段后跑，进程死在中间的话重试会走
-  // already_accepted 快路——不留痕迹，发布步骤就被静默永久漏掉。置位在这里、清零在
-  // 尾段真正跑完之后，重试发现它还挂着就补跑。
-  if (hasAcceptedTail(task)) {
-    await db.update(tasks).set({ acceptedTailPending: true, acceptedTailDone: "[]", updatedAt: now() }).where(eq(tasks.id, task.id));
-  }
-  // 人工关口到此结束，这条线也走到终点了：线上写着「下一个人工关口结束时回收」和
-  // 「任务结束时回收」的预览都在这儿收掉。「点头之后」那一段还没开跑，所以那一段
-  // 特意编排的预览不会被这一下误伤。
-  await stopPreviewAtAccept(task.id);
-  // 自由工作流：验收即终局，挂着的复审预约一并注销 —— 否则它会在任务日后被唤醒的
-  // 某个回合里突然触发一场语境全变的审查（幽灵预约）。
-  if (task.workflowMode === "free" && await disarmFreeReviewReservation(task.id)) {
-    await appendTaskTimeline(task.id, "验收已完成，未消费的复审预约已一并取消。");
-  }
-  const sharedWorkers = task.mode === "team" ? await acceptSharedTeamWorkers(task.id) : null;
-  await appendTaskTimeline(
-    task.id,
-    `${message}${sharedWorkers ? ` ${sharedWorkerAcceptanceMessage(sharedWorkers)}` : ""}`,
-  );
-  await publishTaskUpdated(task.id);
-  return sharedWorkers;
-}
-
-
 async function acceptWithoutCleanup(
   task: typeof tasks.$inferSelect,
   kind: AcceptSuccess["kind"],
   message: string,
-): Promise<AcceptSuccess> {
-  const sharedWorkers = await finalizeAcceptance(task, message);
+): Promise<AcceptTaskResult> {
+  const finalized = await finalizeAcceptance(task, message);
+  if (finalized.failure) return finalized.failure;
+  const { sharedWorkers } = finalized;
   return {
     accepted: true,
     taskId: task.id,
@@ -355,10 +328,13 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy, confirmUnverifie
     if (mergeReachable) {
       const guard = await acceptanceGuard(taskId, "before_accept");
       if (guard.failure) return guard.failure;
-      const sharedWorkers = await finalizeAcceptance(
+      const finalized = await finalizeAcceptance(
         task,
         `任务分支已在先前清理中删除；沿用已记录的 merged 阶段，继续完成验收标记（目标 ${targetBranch}）。`,
+        { completedMerge: { targetBranch, commit: task.acceptedMergeCommit } },
       );
+      if (finalized.failure) return finalized.failure;
+      const { sharedWorkers } = finalized;
       return {
         accepted: true,
         taskId,
@@ -533,10 +509,13 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy, confirmUnverifie
           : `分支 ${cleanup.sourceBranch} 已不存在`
     }。`,
   );
-  const sharedWorkers = await finalizeAcceptance(
+  const finalized = await finalizeAcceptance(
     task,
     `验收完成：目标分支 ${merge.targetBranch}；任务 status 保持 ${task.status}。`,
+    { completedMerge, completedTag },
   );
+  if (finalized.failure) return finalized.failure;
+  const { sharedWorkers } = finalized;
   return {
     accepted: true,
     taskId,

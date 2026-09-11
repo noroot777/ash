@@ -82,6 +82,7 @@ async function sidecar(s: Awaited<ReturnType<typeof setup>>) {
 }
 
 try {
+  await (await import("./test-accept-finalize.js")).testAcceptanceFinalization(root);
   // 持续写入 ignored 缓存，并故意延迟退出；停止发生时工作区必须还在。
   for (const mode of ["task", "manual", "closed", "closing", "dirty"] as const) {
     const life = mode === "task" ? "task" : "manual";
