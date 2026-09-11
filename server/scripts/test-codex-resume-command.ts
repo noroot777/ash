@@ -26,9 +26,13 @@ writeFileSync(join(root, windows ? "codex.cmd" : "codex"), windows
   : `#!/bin/sh\nexec ${shq(process.execPath)} ${shq(stub)} "$@"\n`, { mode: 0o755 });
 const command = resumeCommandFor("codex", cwd, "fixture-thread", "ASH_RELAY_KEY=placeholder ", null, { configDir: home });
 const env = { ...process.env, PATH: `${root}${delimiter}${process.env.PATH ?? ""}`, ASH_RESUME_FIXTURE_LOG: log };
+const hiddenConsoleGuard = `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class AshConsoleWindow { [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow(); [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr handle); }'
+if ([AshConsoleWindow]::IsWindowVisible([AshConsoleWindow]::GetConsoleWindow())) { [Console]::Error.WriteLine('spawned PowerShell console is visible'); exit 97 }
+`;
 const run = (fail: boolean) => windows
   ? spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand",
-    Buffer.from(`${command}; exit $LASTEXITCODE`, "utf16le").toString("base64")], { env: { ...env, ASH_RESUME_FIXTURE_FAIL: fail ? "1" : "0" } })
+    Buffer.from(`${hiddenConsoleGuard}${command}; exit $LASTEXITCODE`, "utf16le").toString("base64")],
+    { env: { ...env, ASH_RESUME_FIXTURE_FAIL: fail ? "1" : "0" }, windowsHide: true })
   : spawnSync("sh", ["-c", command], { env: { ...env, ASH_RESUME_FIXTURE_FAIL: fail ? "1" : "0" } });
 try {
   const success = run(false);
