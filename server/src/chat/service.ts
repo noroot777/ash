@@ -14,6 +14,7 @@ import { limitedChatInvoke } from "./invocation-queue.js";
 import type { ChatContextPolicy } from "./context-format.js";
 import { assistantFormatter, invokeAssistant } from "./assistant.js";
 import { parseSideChatReply, sideChatPrompt } from "./side-prompt.js";
+import { verifySideChatReply } from "./side-authorization.js";
 import { sideChatParent, settleSideChat, dispatchSideMessage, sideMessageReceipts } from "./side-delivery.js";
 
 export type RoomRow = typeof chatRooms.$inferSelect;
@@ -181,7 +182,9 @@ export class ChatService {
       }).where(eq(chatMessages.id, message.id));
       if (room.kind === "side") {
         sideResult = parseSideChatReply(invoked.text, context.source);
-        const pending = await settleSideChat(room, message.id, sideResult, notice, abort.signal);
+        const verified = await verifySideChatReply(sideResult, context.source,
+          (prompt, signal) => this.invoke(member, room.ownerUserId, prompt, signal, room.projectId, { purpose: "side-authorization" }), abort.signal);
+        const pending = await settleSideChat(room, message.id, verified, notice, abort.signal);
         if (pending) void dispatchSideMessage(pending.id, pending.taskId).catch((error) => console.error("[side-chat] delivery deferred", error));
         await preserveNotice();
         return abort.signal.aborted ? undefined : member;

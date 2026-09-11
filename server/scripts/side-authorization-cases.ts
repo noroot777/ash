@@ -1,4 +1,17 @@
+export const reviewFourRejectedRequests = [
+  "把结论告诉主任务，回头再发", "把结论告诉主任务，回头说", "把结论告诉主任务，明天吧",
+  "把结论告诉主任务，改成后天", "把结论告诉主任务，等会儿再说", "把结论告诉主任务，一会儿再说",
+  "把结论告诉主任务，待会儿吧", "把结论告诉主任务，过两天再说", "把结论告诉主任务，先放着",
+  "把结论告诉主任务\n回头再发吧",
+  "我不会告诉主任务", "我没告诉主任务", "不许告诉主任务", "没必要告诉主任务", "甭告诉主任务",
+  "犯不着告诉主任务", "何必告诉主任务", "用不着告诉主任务", "我拒绝把结论告诉主任务",
+  "免得告诉主任务", "省得告诉主任务", "懒得告诉主任务",
+  "所以你的意思是把结论告诉主任务", "你是说把结论告诉主任务",
+  "也就是说要把结论告诉主任务", "我理解的是把结论告诉主任务",
+];
+
 export const naturalSideRequests = [
+  "让主任务知道我们选 B", "Send the conclusion to the main task now", "Tell the main task we picked B",
   "你把结论告诉主任务",
   "麻烦你把结论发给主任务",
   "现在就把结论发给主任务",
@@ -30,6 +43,7 @@ export const deferredSideRequests = [
 ];
 
 export const rejectedSideRequests = [
+  ...reviewFourRejectedRequests,
   ...deferredSideRequests,
   "把结论告诉主任务，哦不对，先不要",
   "把结论告诉主任务，等等，我再想想",
@@ -70,6 +84,15 @@ export const rejectedSideRequests = [
   "把结论告诉主任务和我的负责人",
   "我说：你把结论告诉主任务",
   "上轮要求：麻烦你把结论发给主任务",
+  "不要把结论告诉主任务", "如果把结论告诉主任务会怎样", "引用：『把结论告诉主任务』",
+  "`把结论告诉主任务`", "> 把结论告诉主任务", "请解释如何把结论告诉主任务", "稍后把结论告诉主任务",
+  "把结论告诉主任务，是不是会影响当前执行？", "把结论告诉主任务，如果它已经开始做了就算了",
+  "之前把结论告诉主任务", "别， 把结论告诉主任务", "比如，把结论告诉主任务",
+  "把结论告诉主任务，不能发了", "把结论告诉主任务，不用了", "把结论告诉主任务，等我确认再发",
+  "把结论告诉主任务，稍后发送", "Send the conclusion to the main task tomorrow",
+  "Send it to the main thread. Actually, make that next week.", "So you mean tell the main task we picked B",
+  "I won't send the conclusion to the main task", "把结论告诉主任务，等上线那天吧",
+  "把结论告诉主任务，到时候再讲", "我只是复述：通知主任务选 B",
 ];
 
 export const acceptedSideRequests = [

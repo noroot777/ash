@@ -17,7 +17,8 @@ const { ChatService, roomMessages } = await import("../src/chat/service.js");
 const { mountChatRoutes } = await import("../src/chat/routes.js");
 const { sideChatHistory } = await import("../src/chat/side-routes.js");
 const { settleSideChat } = await import("../src/chat/side-delivery.js");
-const { sideForwardAuthorized, parseSideChatReply } = await import("../src/chat/side-prompt.js");
+const { parseSideChatReply } = await import("../src/chat/side-prompt.js");
+const { verifySideChatReply } = await import("../src/chat/side-authorization.js");
 const { setActor, SINGLE_ACTOR } = await import("../src/auth/context.js");
 const { setInstanceMode } = await import("../src/auth/mode.js");
 const runs = await import("../src/runs.js");
@@ -36,10 +37,20 @@ let held = false;
 let invalidForward = false;
 let authorizeWholeMessage = false;
 let fakeReply = "保留主任务节奏，在这里比较方案。";
+let judgeFailure = "";
+const judgedSources: string[] = [];
 const prompts: string[] = [];
 let summaryCalls = 0;
 const service = new ChatService(async (_member, _owner, prompt, signal, _project, options) => {
   if (options?.purpose === "summary") { summaryCalls++; return { text: '{"summary":"主任务原始目标，比较方案 A/B；其余为重复背景。"}' }; }
+  if (options?.purpose === "side-authorization") {
+    const source = JSON.parse(prompt.split("【当前用户消息】\n").at(-1)!) as string;
+    judgedSources.push(source);
+    if (judgeFailure === "error") throw new Error("核验服务不可用");
+    if (judgeFailure === "invalid") return { text: '{"decision":"send_now"}' };
+    if (judgeFailure === "held") await delay(10000, undefined, { signal });
+    return { text: JSON.stringify({ decision: judgeFailure === "unclear" ? "unclear" : acceptedSideRequests.includes(source) ? "send_now" : "do_not_send", reason: "模拟独立语义核验结果" }) };
+  }
   prompts.push(prompt);
   if (held) await delay(10000, undefined, { signal });
   const source = JSON.parse(prompt.split("【当前用户消息】\n").at(-1)!) as string;
@@ -78,6 +89,7 @@ try {
   assert.doesNotMatch(prompts[0]!, /后续主任务新内容/);
   fakeReply = "继续分析的详细结论。";
   await send("接着说", "user-second");
+  assert.equal(judgedSources.length, 0, "普通侧聊不额外调用授权核验");
   assert.match(prompts[1]!, /保留主任务节奏/);
   assert.equal((await send("把结论告诉主任务", "user-forward")).forward?.status, "queued");
   assert.equal(kills, 0, "不支持 native 时不能 kill 主任务");
@@ -117,28 +129,9 @@ try {
   const rejected = await send("上轮发过了，请解释方案", "user-history");
   assert.equal(rejected.status, "done");
   assert.equal(rejected.body, fakeReply);
-  assert.match(rejected.forwardError!, /没有明确/);
+  assert.match(rejected.forwardError!, /原话不在/);
   assert.equal(rejected.forward, undefined);
   assert.match((await db.select().from(chatMessages).where(eq(chatMessages.id, rejected.id)))[0]!.modelReply!, /继续分析的详细结论.*未发送/s);
-  for (const command of acceptedSideRequests) {
-    assert.equal(sideForwardAuthorized(command, command), true, command);
-    for (const excerpt of ["把结论告诉主任务", "发给主任务"]) {
-      if (command.includes(excerpt)) assert.equal(sideForwardAuthorized(command, excerpt), true, `${command} / 摘录`);
-    }
-  }
-  for (const command of rejectedSideRequests) {
-    assert.equal(sideForwardAuthorized(command, command), false, command);
-    for (const excerpt of ["把结论告诉主任务", "告诉主任务", "发给主任务"]) {
-      if (command.includes(excerpt)) assert.equal(sideForwardAuthorized(command, excerpt), false, `${command} / 模型只引用 ${excerpt}`);
-    }
-  }
-  for (const separator of ["，", "。", "！", "\n", "; "]) {
-    for (const withdrawal of ["哦不对，先不要", "等等，我再想想", "除非它已经开始做了", "不过要等我确认", "不过这条只是我随口说的", "暂且搁置", ...deferredSideRequests.map((command) => command.split("，")[1]!)]) {
-      const command = `把结论告诉主任务${separator}${withdrawal}`;
-      assert.equal(sideForwardAuthorized(command, "把结论告诉主任务"), false, command);
-      assert.equal(sideForwardAuthorized(command, command), false, command);
-    }
-  }
   authorizeWholeMessage = true;
   runs.untrackRun("parent", handle); runs.trackRun("parent", native);
   runs.bindNativeSteer("parent", native, { agentType: "codex", record: () => {} });
@@ -147,6 +140,7 @@ try {
     assert.equal(rejected.status, "done");
     assert.equal(rejected.body, fakeReply);
     assert.ok(rejected.forwardError, command);
+    assert.equal(judgedSources.at(-1), command, "独立核验收到完整当前消息");
     assert.equal(rejected.forward, undefined);
     assert.equal((await db.select().from(scheduledMessages)).length, count, "拒绝回传不入队");
     assert.equal(delivered.length, nativeCount, "即使 native 可用也不投递");
@@ -156,35 +150,36 @@ try {
     const reply = await send(command, `review-deferred-excerpt-${index}`);
     assert.equal(reply.body, fakeReply);
     assert.ok(reply.forwardError, command);
+    assert.equal(judgedSources.at(-1), command, "半句授权不会缩小独立核验输入");
     assert.equal((await db.select().from(scheduledMessages)).length, count, "仅引用发送半句也不入队");
     assert.equal(delivered.length, nativeCount, "仅引用发送半句也不投递");
   }
+  for (const failure of ["error", "invalid", "unclear"]) {
+    judgeFailure = failure;
+    const reply = await send("把结论告诉主任务", `judge-${failure}`);
+    assert.equal(reply.body, fakeReply);
+    assert.ok(reply.forwardError);
+    assert.equal((await db.select().from(scheduledMessages)).length, count);
+    assert.equal(delivered.length, nativeCount);
+  }
+  judgeFailure = "held";
+  const beforeJudge = judgedSources.length;
+  await req("/chats/side-room/messages", { body: "把结论告诉主任务", id: "judge-stop" });
+  await until(async () => judgedSources.length > beforeJudge);
+  await req("/chats/side-room/stop", {});
+  await delay(30);
+  assert.equal((await snapshot("side-room")).messages.at(-1)?.status, "stopped");
+  assert.equal((await db.select().from(scheduledMessages)).length, count);
+  assert.equal(delivered.length, nativeCount);
+  judgeFailure = "";
   runs.untrackRun("parent", native); runs.trackRun("parent", handle);
   authorizeWholeMessage = false;
-  for (const text of ["不要把结论告诉主任务", "如果把结论告诉主任务会怎样", "引用：『把结论告诉主任务』", "`把结论告诉主任务`", "> 把结论告诉主任务", "请解释如何把结论告诉主任务", "稍后把结论告诉主任务", "把结论告诉主任务，是不是会影响当前执行？"]) {
-    assert.equal(sideForwardAuthorized(text, "把结论告诉主任务"), false, text);
-  }
-  assert.equal(sideForwardAuthorized("把结论告诉主任务，后续按方案 B 做", "把结论告诉主任务"), true);
-  for (const suffix of ["以后都按这个来", "说一下怎么改", "等它跑完再看", "比如先补一版验证"]) {
-    const command = `把结论告诉主任务，${suffix}`;
-    assert.equal(sideForwardAuthorized(command, command), true, command);
-    assert.equal(sideForwardAuthorized(command, "把结论告诉主任务"), true, command);
-  }
-  for (const command of ['把「方案 B」的结论告诉主任务', '把"方案 B"的结论告诉主任务', "「把结论告诉主任务」", "「把结论告诉主任务」。", "把刚才的结论告诉主任务", "把之前讨论的方案告诉主任务"]) {
-    assert.equal(sideForwardAuthorized(command, command), true, command);
-  }
-  for (const command of ["把结论告诉主任务，如果它已经开始做了就算了", "之前把结论告诉主任务", "别， 把结论告诉主任务", "比如，把结论告诉主任务", "把结论告诉主任务，不能发了", "把结论告诉主任务，不用了", "把结论告诉主任务，等我确认再发", "把结论告诉主任务，稍后发送"]) {
-    assert.equal(sideForwardAuthorized(command, "把结论告诉主任务"), false, command);
-  }
   const overlong = "保留正文".repeat(4000);
   assert.equal(parseSideChatReply(JSON.stringify({ reply: overlong }), "解释方案").reply, overlong);
   const malformed = parseSideChatReply(JSON.stringify({ reply: fakeReply, forward: { text: "x".repeat(8001), authorization: "把结论告诉主任务" } }), "把结论告诉主任务");
   assert.equal(malformed.reply, fakeReply);
   assert.equal(malformed.forward, null);
   assert.match(malformed.forwardError!, /8000/);
-  for (const command of ["把结论告诉主任务。", "请给主聊天发一条消息，后续用方案 B。", "把结论交给主任务", "Please send the conclusion to the main thread."]) {
-    assert.equal(sideForwardAuthorized(command, command), true, command);
-  }
   invalidForward = false;
   held = true;
   await req("/chats/side-room/messages", { body: "等待长回复", id: "user-stop" });
@@ -199,7 +194,7 @@ try {
   await send("停止后继续", "user-after-stop");
   const room = (await db.select().from(chatRooms).where(eq(chatRooms.id, "side-room")))[0]!;
   await db.insert(chatMessages).values({ id: "race-stopped", roomId: room.id, role: "agent", author: "侧聊", status: "stopped", body: "已停止", createdAt: timestamp });
-  assert.equal(await settleSideChat(room, "race-stopped", { reply: "ok", task: null, forward: { text: "不能发", authorization: "把结论告诉主任务" } }, undefined, new AbortController().signal), undefined);
+  assert.equal(await settleSideChat(room, "race-stopped", await verifySideChatReply({ reply: "ok", task: null, forward: { text: "不能发", authorization: "把结论告诉主任务" } }, "把结论告诉主任务", async () => ({ text: '{"decision":"send_now","reason":"fixture"}' }), new AbortController().signal), undefined, new AbortController().signal), undefined);
   assert.equal((await db.select().from(scheduledMessages)).length, count);
   await db.insert(chatMessages).values({ id: "recover-running", roomId: room.id, role: "agent", author: "侧聊", status: "running", body: "", createdAt: timestamp });
   await new ChatService().recover();

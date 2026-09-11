@@ -38,7 +38,7 @@ function changeNotice({ paths, more, degraded }: { paths: string[]; more: boolea
   return `⚠️ 咨询期间项目目录出现并发变更（${shown}${suffix}）。变更无法归因：可能来自其他任务、验收合并、你自己的操作，也可能是本次咨询越过了只读约定。群聊未代为撤销；如非预期请检查项目。${tail}`;
 }
 
-export async function invokeChat(member: ChatMember, owner: string | null, prompt: string, signal: AbortSignal, projectId: string, options?: { purpose: "summary" | "assistant" } | { purpose: "side"; taskId: string }): Promise<ChatInvocation> {
+export async function invokeChat(member: ChatMember, owner: string | null, prompt: string, signal: AbortSignal, projectId: string, options?: { purpose: "summary" | "assistant" | "side-authorization" } | { purpose: "side"; taskId: string }): Promise<ChatInvocation> {
   signal.throwIfAborted();
   const scope = await executorOwnerScope(owner);
   const project = (await db.select().from(projects).where(eq(projects.id, projectId))).at(0);
@@ -83,7 +83,7 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
     handle = executor.run({
       cwd,
       prompt: withGlobalBrowserPolicy(prompt, "full"),
-      extraArgs: options?.purpose === "assistant" && executor.type === "claude"
+      extraArgs: (options?.purpose === "assistant" || options?.purpose === "side-authorization") && executor.type === "claude"
         ? ["--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands", "--no-chrome"] : undefined,
       env: { ...env, ASH_TASK_ID: undefined, ASH_TURN_TOKEN: undefined, ASH_DIRECTION_TOKEN: undefined },
     });
@@ -93,6 +93,7 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
       let text = "";
       let exitStatus: number | undefined;
       for await (const event of handle!.events) {
+        if (event.kind === "tool" && options?.purpose === "side-authorization") throw new ChatBoundaryError("回传授权核验调用使用了工具，核验未采用");
         if (event.kind === "tool" && options?.purpose === "summary") throw new ChatBoundaryError("后台摘要调用使用了工具，摘要未采用");
         if (event.kind === "tool" && options?.purpose === "assistant") throw new AssistantToolError(event.name);
         if (event.kind === "tool" && !readOnlyChatTool(event)) throw new ChatBoundaryError(`检测到写入或无法确认只读的工具（${JSON.stringify(event.name.slice(0, 80))}）`);

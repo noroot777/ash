@@ -8,7 +8,7 @@ import { canSeeProject } from "../auth/visibility.js";
 import { handoffBlockReason } from "../handoff-guard.js";
 import { pendingMessageRow, publishPendingMessages, flushPendingForTask } from "../pending-messages.js";
 import { steerQueuedMessage } from "../task-steer.js";
-import type { parseSideChatReply } from "./side-prompt.js";
+import type { VerifiedSideChatReply } from "./side-authorization.js";
 
 type Room = typeof chatRooms.$inferSelect;
 
@@ -24,7 +24,7 @@ export async function sideChatParent(room: Room) {
   return parent;
 }
 
-export async function settleSideChat(room: Room, messageId: string, result: ReturnType<typeof parseSideChatReply>, notice: string | undefined, signal: AbortSignal) {
+export async function settleSideChat(room: Room, messageId: string, result: VerifiedSideChatReply, notice: string | undefined, signal: AbortSignal) {
   let forwardError = result.forwardError ?? null;
   let parent: Awaited<ReturnType<typeof sideChatParent>> | undefined;
   try {

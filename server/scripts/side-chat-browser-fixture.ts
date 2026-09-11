@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { eq } from "drizzle-orm";
+import { acceptedSideRequests } from "./side-authorization-cases.js";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-side-browser-"));
 process.env.ASH_DB = join(stage, "test.db");
@@ -24,6 +25,8 @@ const delivered: string[] = [];
 let kills = 0;
 let forceForward = false;
 let excerptAuthorization = false;
+let judgeMode = "auto";
+const judgedSources: string[] = [];
 const native = { kill: () => { kills++; }, steer: async (text: string) => { delivered.push(text); } };
 const plain = { kill: () => { kills++; } };
 function bind(enabled: boolean) {
@@ -36,14 +39,22 @@ runs.claimTurn("parent", "single"); bind(true);
 const service = new ChatService(async (_member, _owner, prompt, signal, _project, options) => {
   if (options?.purpose === "summary") return { text: '{"summary":"对比方案 A/B"}' };
   const source = JSON.parse(prompt.split("【当前用户消息】\n").at(-1)!) as string;
+  if (options?.purpose === "side-authorization") {
+    judgedSources.push(source);
+    if (judgeMode === "error") throw new Error("核验服务不可用");
+    if (judgeMode === "invalid") return { text: '{"decision":"send_now"}' };
+    const allowed = acceptedSideRequests.includes(source) || source === "方案 B 更省事。把结论告诉主任务，谢谢";
+    return { text: JSON.stringify({ decision: judgeMode === "unclear" ? "unclear" : allowed ? "send_now" : "do_not_send", reason: "模拟独立核验结果" }) };
+  }
   await delay(source.includes("等待") ? 30000 : 350, undefined, { signal });
   return { text: JSON.stringify({ reply: source.includes("告诉主任务") ? "回传结论：选择方案 B，复用现有消息队列，并补上投递回执。" : "**建议选择方案 B。**\n\n主任务继续实现，这里可以单独讨论。\n\n- 复用已持久化的消息队列\n- 支持实时追加时立即送达\n- 回执显示实际投递状态",
-    forward: source.includes("告诉主任务") || forceForward ? { text: "选择方案 B，复用现有消息队列，补上投递回执。", authorization: excerptAuthorization ? "把结论告诉主任务" : source } : null }) };
+    forward: source.includes("告诉主任务") || forceForward ? { text: "选择方案 B，复用现有消息队列，补上投递回执。", authorization: excerptAuthorization ? (source.includes("把结论告诉主任务") ? "把结论告诉主任务" : "告诉主任务") : source } : null }) };
 });
 const api = new Hono();
 mountChatRoutes(api, service);
 api.get("/agents", async (c) => c.json(await db.select().from(agents)));
-api.get("/fixture/state", async (c) => c.json({ delivered, kills, pending: await db.select().from(scheduledMessages) }));
+api.get("/fixture/state", async (c) => c.json({ delivered, kills, judgedSources, pending: await db.select().from(scheduledMessages) }));
+api.post("/fixture/authorization-mode", async (c) => { judgeMode = (await c.req.json()).mode ?? "auto"; return c.json({ ok: true }); });
 api.post("/fixture/forward-mode", async (c) => { const mode = await c.req.json(); forceForward = !!mode.forced; excerptAuthorization = !!mode.excerpt; return c.json({ ok: true }); });
 api.post("/fixture/native", async (c) => { bind((await c.req.json()).enabled); return c.json({ ok: true }); });
 api.post("/fixture/archive", async (c) => { await db.update(tasks).set({ archived: (await c.req.json()).archived }).where(eq(tasks.id, "parent")); return c.json({ ok: true }); });

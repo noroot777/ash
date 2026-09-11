@@ -150,6 +150,7 @@ try {
     "方案 B 更省事。把结论告诉主任务，谢谢",
     "把结论告诉主任务，不过要说清楚理由",
     "把结论发给主任务和我", "把结论告诉“主任务”",
+    "让主任务知道我们选 B", "Send the conclusion to the main task now", "Tell the main task we picked B",
   ];
   for (const [index, command] of natural.entries()) {
     const reply = await sendForReply(command);
@@ -161,14 +162,30 @@ try {
   const beforeDeferral = await state();
   for (const excerpt of [false, true]) {
     await control("forward-mode", { forced: true, excerpt });
-    for (const suffix of ["改成明天再说", "用不着这么急", "先按兵不动", "继续观望", "让它忽略"]) {
+    for (const suffix of ["改成明天再说", "用不着这么急", "先按兵不动", "继续观望", "让它忽略", "回头再发", "明天吧", "改成后天", "等会儿再说", "一会儿再说", "待会儿吧", "过两天再说", "先放着"]) {
       const reply = await sendForReply(`把结论告诉主任务，${suffix}`);
       await reply.getByText(/未发送到主任务/).waitFor();
       assert.match(await reply.innerText(), /回传结论：选择方案 B/);
       assert.equal((await state()).delivered.length, beforeDeferral.delivered.length, "延后指令不投递，即使只引用前半句");
       assert.equal((await state()).pending.length, beforeDeferral.pending.length, "延后指令不入队");
+      assert.equal((await state()).judgedSources.at(-1), `把结论告诉主任务，${suffix}`);
     }
   }
+  await control("forward-mode", { forced: true });
+  for (const command of ["我不会告诉主任务", "不许告诉主任务", "犯不着告诉主任务", "所以你的意思是把结论告诉主任务", "你是说把结论告诉主任务", "Send the conclusion to the main task tomorrow"]) {
+    const reply = await sendForReply(command);
+    await reply.getByText(/未发送到主任务/).waitFor();
+    assert.equal((await state()).delivered.length, beforeDeferral.delivered.length);
+  }
+  for (const mode of ["error", "invalid", "unclear"]) {
+    await control("authorization-mode", { mode });
+    const reply = await sendForReply("把结论告诉主任务");
+    await reply.getByText(/未发送到主任务/).waitFor();
+    assert.match(await reply.innerText(), /回传结论：选择方案 B/);
+    assert.equal((await state()).delivered.length, beforeDeferral.delivered.length);
+    assert.equal((await state()).pending.length, beforeDeferral.pending.length);
+  }
+  await control("authorization-mode", {});
   await page.reload();
   await page.locator(".side-chat-message.is-agent").last().getByText(/未发送到主任务/).waitFor();
   assert.equal(await page.getByText("已送达主任务", { exact: true }).count(), beforeDeferral.delivered.length);

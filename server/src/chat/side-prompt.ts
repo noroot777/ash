@@ -1,7 +1,6 @@
 import type { ChatMember } from "@ash/shared/chat";
 import type { chatPrompt } from "./prompt.js";
-import { sideForwardAuthorized } from "./side-authorization.js";
-export { sideForwardAuthorized } from "./side-authorization.js";
+import { authorizationIsFromSource } from "./side-authorization.js";
 import { parseLastJsonObject } from "./json-object.js";
 
 export function sideChatPrompt(member: ChatMember, history: Parameters<typeof chatPrompt>[1], request: string, summary = "") {
@@ -30,6 +29,6 @@ export function parseSideChatReply(text: string, source: string): SideChatReply 
   const action = raw.forward as Record<string, unknown>;
   const rejected = (forwardError: string) => ({ reply: raw.reply as string, forward: null, forwardError, task: null });
   if (typeof action.text !== "string" || !action.text.trim() || action.text.length > 8000 || typeof action.authorization !== "string") return rejected("回传内容格式无效或超过 8000 字。");
-  if (!sideForwardAuthorized(source, action.authorization)) return rejected("本条消息没有明确、无条件的回传指令。可以直接说：把刚才的结论告诉主任务。");
+  if (!authorizationIsFromSource(source, action.authorization)) return rejected("回传授权原话不在当前用户消息中，未发送到主任务。");
   return { reply: raw.reply, forward: { text: action.text.trim(), authorization: action.authorization }, task: null };
 }
