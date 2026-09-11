@@ -2,15 +2,15 @@ import { useRef, type KeyboardEvent, type ReactNode } from "react";
 import { ArrowsIn, ArrowsOut, Browser, SidebarSimple, X } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
 
-export function PreviewWorkspaceLayout({ children, expanded, onExpandedChange, notesOpen, onToggleNotes, onClose, onKeyDown }: {
+export function PreviewWorkspaceLayout({ children, hasPreview, expanded, onExpandedChange, notesOpen, onToggleNotes, onClose, onKeyDown }: {
   children: ReactNode; notesOpen: boolean; onToggleNotes: () => void; onClose: () => void;
-  expanded: boolean; onExpandedChange: (expanded: boolean) => void;
+  hasPreview: boolean; expanded: boolean; onExpandedChange: (expanded: boolean) => void;
   onKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
 }) {
   const containerRef = useRef<HTMLElement>(null);
   const expandRef = useRef<HTMLButtonElement>(null);
   useDismissable({ enabled: expanded, containerRef, restoreFocusRef: expandRef, closeOnOutside: false, onClose: () => onExpandedChange(false) });
-  return <section ref={containerRef} className={`preview-workspace${expanded ? " is-expanded" : ""}${notesOpen ? "" : " notes-collapsed"}`}
+  return <section ref={containerRef} className={`preview-workspace${hasPreview ? " has-preview" : ""}${expanded ? " is-expanded" : ""}${notesOpen ? "" : " notes-collapsed"}`}
     aria-label="预览工作区" onKeyDown={onKeyDown}>
     <header className="preview-workspace-header">
       <Browser size={20} /><div><h2>预览工作区</h2><p>在真实页面上点选、圈画，留下修改意见</p></div>

@@ -100,13 +100,23 @@ export async function testPreviewWorkspaceDom() {
       </head><body class="workspace-shell"><div id="sidebar"></div><div class="workspace-main" id="root"></div><script type="module">
         import React from 'react';
         import { createRoot } from 'react-dom/client';
-        import { PreviewWorkspace } from '/src/preview-workspace/PreviewWorkspace.tsx';
+        import { PreviewWorkspace, PreviewWorkspaceEntry } from '/src/preview-workspace/PreviewWorkspace.tsx';
         import { DraftProvider } from '/src/lib/DraftStore.tsx';
         window.closeRequests = 0;
-        createRoot(document.getElementById('root')).render(React.createElement(DraftProvider, {}, React.createElement(PreviewWorkspace, {taskId:'fixture',onClose:()=>{window.closeRequests++;}})));
+        function Fixture() {
+          const [open, setOpen] = React.useState(sessionStorage.getItem('preview-open') === 'true');
+          return open ? React.createElement(PreviewWorkspace, {taskId:'fixture',onClose:()=>{
+            window.closeRequests++; sessionStorage.removeItem('preview-open'); setOpen(false);
+          }}) : React.createElement(PreviewWorkspaceEntry, {onOpen:()=>{
+            sessionStorage.setItem('preview-open', 'true'); setOpen(true);
+          }});
+        }
+        createRoot(document.getElementById('root')).render(React.createElement(DraftProvider, {}, React.createElement(Fixture)));
       </script></body></html>`) }));
     await page.goto(`http://127.0.0.1:${address.port}/__preview-test`);
     const button = (name) => page.getByRole("button", { name, exact: true });
+    await button("打开预览工作区").click();
+    assert.deepEqual(await page.locator(".preview-workspace").boundingBox(), { x: 0, y: 0, width: 1400, height: 900 }, "the entry opens the expanded workspace directly, before preview launch");
     await button("按已保存配置启动").waitFor({ timeout: 10000 }).catch((error) => { throw new Error(`${error.message}\n${errors.join("\n")}`); });
     assert.equal(await button("启动 静态页面").isVisible(), false, "project configuration hides alternatives by default");
     assert.equal(await button("启动工作流预览").isVisible(), false);
@@ -120,14 +130,19 @@ export async function testPreviewWorkspaceDom() {
     assert.deepEqual(launches, [{ command: "npm run project", config, stepId: "step", workspace: true }]);
     const iframe = page.locator('iframe[title="任务页面预览"]');
     const frame = page.frames().find((frame) => frame.url().includes("/preview/open/"));
+    assert.deepEqual(await iframe.boundingBox(), { x: 0, y: 0, width: 1400, height: 900 }, "the preview fills the window with tools and notes open");
+    if (process.env.PREVIEW_WORKSPACE_SCREENSHOTS) await page.screenshot({ path: join(process.env.PREVIEW_WORKSPACE_SCREENSHOTS, "expanded.png") });
+    await button("还原预览").click();
     const compact = await iframe.boundingBox();
+    assert.deepEqual(compact, await page.locator(".preview-workspace").boundingBox(), "floating controls preserve the entire compact preview area too");
     await button("放大预览").click();
     let box = await page.locator(".preview-workspace").boundingBox();
     assert.deepEqual(box, { x: 0, y: 0, width: 1400, height: 900 });
     assert(await page.evaluate(() => !!document.elementFromPoint(10, 10)?.closest(".preview-workspace")), "expanded workspace covers the app sidebar stacking context");
     assert((await iframe.boundingBox()).width > compact.width + 400);
     await button("收起意见栏").click();
-    assert.equal((await iframe.boundingBox()).width, 1400);
+    assert.deepEqual(await iframe.boundingBox(), box, "collapsing notes does not resize the embedded page");
+    assert(await page.evaluate(() => document.elementFromPoint(700, 400)?.tagName === "IFRAME"), "empty space between floating controls remains interactive");
     await button("标注").click();
     const draft = () => page.evaluate(() => JSON.parse(localStorage.getItem("ash.annotation-batch.fixture")));
     const emit = async (number, tool = "element") => {
@@ -139,6 +154,7 @@ export async function testPreviewWorkspaceDom() {
     };
     await emit(1);
     assert.equal(await page.getByRole("complementary", { name: "页面标注列表" }).isVisible(), true, "new annotation reveals comments while expanded");
+    assert.deepEqual(await iframe.boundingBox(), box, "revealing annotation details does not move the page or its annotation coordinates");
     await page.locator(".preview-workspace-detail textarea").fill("保留这条意见");
     await emit(2, "rectangle"); await emit(3, "pen"); await emit(4, "pin");
     await button("还原预览").click();
@@ -310,6 +326,7 @@ export async function testPreviewWorkspaceDom() {
     }
     const preservedDraft = await draft();
     const loadsBeforeEscape = iframeLoads;
+    await button('还原预览').click();
     for (const mode of ['浏览', '标注']) {
       await button(mode).click();
       await page.waitForFunction((mode) => [...document.querySelectorAll('.preview-workspace-modes button')]
@@ -341,6 +358,21 @@ export async function testPreviewWorkspaceDom() {
       assert.deepEqual(await draft(), preservedDraft, 'frame Escape cannot change annotation data');
     }
     assert.equal(iframeLoads, loadsBeforeEscape, 'frame Escape preserves the iframe document and channel');
+    await button('放大预览').click();
+    for (const viewport of [{ width: 760, height: 850 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport);
+      assert.deepEqual(await iframe.boundingBox(), { x: 0, y: 0, ...viewport });
+      const controls = await page.locator('.preview-workspace-controls').boundingBox();
+      const notes = await page.locator('.preview-workspace-notes').boundingBox();
+      assert(controls.x >= 0 && controls.x + controls.width <= viewport.width);
+      assert(notes.height > 100 && notes.y + notes.height <= controls.y, 'notes remain scrollable above the tools on narrow screens');
+      if (process.env.PREVIEW_WORKSPACE_SCREENSHOTS) await page.screenshot({ path: join(process.env.PREVIEW_WORKSPACE_SCREENSHOTS, `narrow-${viewport.width}.png`) });
+    }
+    await page.setViewportSize({ width: 1400, height: 900 });
+    await button('还原预览').click();
+    await button('关闭预览工作区').click();
+    await button('打开预览工作区').click();
+    assert.equal(await button('还原预览').isVisible(), true, 'reopening starts expanded even after the previous workspace was restored');
     assert.equal(await page.getByText("未能连接页面标注", { exact: false }).count(), 0);
     assert.deepEqual(errors, []);
     console.log("preview workspace DOM: launch/layout, undo/delete/locks, evidence, restart/service mismatch recovery and saved history, real runtime drawing, focused iframe Escape/defaultPrevented in browse and annotate modes passed");

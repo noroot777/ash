@@ -52,7 +52,7 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
   itemsRef.current = items;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [notesOpen, setNotesOpen] = useState(true);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const [canSelectParent, setCanSelectParent] = useState(false);
   const [page, setPage] = useState<PreviewPageContext | null>(null);
   const [error, setError] = useState("");
@@ -149,44 +149,46 @@ export function PreviewWorkspace({ taskId, onClose }: { taskId: string; onClose:
     await batch.fresh();
   };
 
-  return <PreviewWorkspaceLayout expanded={expanded} onExpandedChange={setExpanded} notesOpen={notesOpen} onToggleNotes={() => setNotesOpen(!notesOpen)}
+  return <PreviewWorkspaceLayout hasPreview={!!source} expanded={expanded} onExpandedChange={setExpanded} notesOpen={notesOpen} onToggleNotes={() => setNotesOpen(!notesOpen)}
     onClose={() => { review.dismiss(); onClose(); }} onKeyDown={(event) => {
       if (channel.mode === "annotate" && !batch.locked && isAnnotationUndo(event)) {
         event.preventDefault(); event.stopPropagation(); undo();
       }
     }}>
-    <div className="preview-workspace-toolbar">
-      <div className="preview-workspace-modes" aria-label="预览模式">
-        <button type="button" disabled={!ready} aria-pressed={channel.mode === "browse"}
-          onClick={() => channel.send({ type: "configure", mode: "browse", tool: channel.tool })}>浏览</button>
-        <button type="button" disabled={!ready || !canAnnotate || items.length >= 100} aria-pressed={channel.mode === "annotate"} aria-describedby={annotationDescription}
-          onClick={() => channel.send({ type: "configure", mode: "annotate", tool: channel.tool })}>标注</button>
+    <div className="preview-workspace-controls">
+      <div className="preview-workspace-toolbar">
+        <div className="preview-workspace-modes" aria-label="预览模式">
+          <button type="button" disabled={!ready} aria-pressed={channel.mode === "browse"}
+            onClick={() => channel.send({ type: "configure", mode: "browse", tool: channel.tool })}>浏览</button>
+          <button type="button" disabled={!ready || !canAnnotate || items.length >= 100} aria-pressed={channel.mode === "annotate"} aria-describedby={annotationDescription}
+            onClick={() => channel.send({ type: "configure", mode: "annotate", tool: channel.tool })}>标注</button>
+        </div>
+        <div className="preview-workspace-tools" aria-label="标注工具">
+          {tools.map(({ id, label, icon: Icon }) => <button type="button" key={id} disabled={!ready || !canAnnotate || items.length >= 100}
+            aria-pressed={channel.mode === "annotate" && channel.tool === id} aria-describedby={annotationDescription} onClick={() => changeTool(id)}><Icon size={14} />{label}</button>)}
+        </div>
+        <button type="button" disabled={!ready || !canAnnotate || !currentSelection || !canSelectParent} aria-describedby={annotationDescription} onClick={() => channel.send({ type: "parent" })}>
+          <ArrowUUpLeft size={14} />父容器
+        </button>
+        <button type="button" aria-keyshortcuts="Meta+Z Control+Z" disabled={batch.locked || channel.mode !== "annotate" || !items.length}
+          onClick={undo}><ArrowCounterClockwise size={14} />撤销</button>
+        <button type="button" className="preview-workspace-delete" disabled={batch.locked || !selected}
+          onClick={() => selected && removeItem(selected)}><Trash size={14} />{selected ? `删除 #${selected.number}` : "删除标注"}</button>
+        <label className="preview-workspace-service">服务<select aria-label="预览服务" value={activeService?.id ?? ""}
+          disabled={!available.length} onChange={(event) => setServiceId(event.target.value)}>
+          {!available.length && <option value="">暂无运行中的服务</option>}
+          {available.map((service) => <option key={service.id} value={service.id}>{service.name}</option>)}
+        </select></label>
+        <button type="button" disabled={!source} onClick={() => setReload((value) => value + 1)}><ArrowClockwise size={14} />重载</button>
+        <AnnotationBatchMismatch reason={mismatchReason} controller={batch} id={mismatchId} />
       </div>
-      <div className="preview-workspace-tools" aria-label="标注工具">
-        {tools.map(({ id, label, icon: Icon }) => <button type="button" key={id} disabled={!ready || !canAnnotate || items.length >= 100}
-          aria-pressed={channel.mode === "annotate" && channel.tool === id} aria-describedby={annotationDescription} onClick={() => changeTool(id)}><Icon size={14} />{label}</button>)}
-      </div>
-      <button type="button" disabled={!ready || !canAnnotate || !currentSelection || !canSelectParent} aria-describedby={annotationDescription} onClick={() => channel.send({ type: "parent" })}>
-        <ArrowUUpLeft size={14} />父容器
-      </button>
-      <button type="button" aria-keyshortcuts="Meta+Z Control+Z" disabled={batch.locked || channel.mode !== "annotate" || !items.length}
-        onClick={undo}><ArrowCounterClockwise size={14} />撤销</button>
-      <button type="button" className="preview-workspace-delete" disabled={batch.locked || !selected}
-        onClick={() => selected && removeItem(selected)}><Trash size={14} />{selected ? `删除 #${selected.number}` : "删除标注"}</button>
-      <label className="preview-workspace-service">服务<select aria-label="预览服务" value={activeService?.id ?? ""}
-        disabled={!available.length} onChange={(event) => setServiceId(event.target.value)}>
-        {!available.length && <option value="">暂无运行中的服务</option>}
-        {available.map((service) => <option key={service.id} value={service.id}>{service.name}</option>)}
-      </select></label>
-      <button type="button" disabled={!source} onClick={() => setReload((value) => value + 1)}><ArrowClockwise size={14} />重载</button>
-      <AnnotationBatchMismatch reason={mismatchReason} controller={batch} id={mismatchId} />
+      <p className={`preview-workspace-mode-note${channel.mode === "annotate" && ready ? " is-annotating" : ""}`} role="status">
+        {!source ? launchHint : mismatchReason ? "浏览中 · 可以正常操作当前页面；新建批次后可继续标注。" : items.length >= 100 ? "已暂存 100 条标注，请删除部分标注后继续。" : ready
+          ? channel.mode === "annotate" ? "标注中 · 点击只选择对象；页面操作已拦截。滚轮可滚动，父容器可逐层上选。" : "浏览中 · 可以正常操作页面；切换到标注后再选择修改位置。"
+          : "正在连接页面标注；若连接失败，可重载预览或使用右侧截图批注。"}
+      </p>
+      {(error || serviceError) && <p className="preview-workspace-error" role="alert">{error || serviceError}</p>}
     </div>
-    <p className={`preview-workspace-mode-note${channel.mode === "annotate" && ready ? " is-annotating" : ""}`} role="status">
-      {!source ? launchHint : mismatchReason ? "浏览中 · 可以正常操作当前页面；新建批次后可继续标注。" : items.length >= 100 ? "已暂存 100 条标注，请删除部分标注后继续。" : ready
-        ? channel.mode === "annotate" ? "标注中 · 点击只选择对象；页面操作已拦截。滚轮可滚动，父容器可逐层上选。" : "浏览中 · 可以正常操作页面；切换到标注后再选择修改位置。"
-        : "正在连接页面标注；若连接失败，可重载预览或使用右侧截图批注。"}
-    </p>
-    {(error || serviceError) && <p className="preview-workspace-error" role="alert">{error || serviceError}</p>}
     <div className="preview-workspace-body">
       <PreviewWorkspaceStage source={source} taskId={taskId} preview={state} refresh={refresh} controller={batch} review={review} hint={launchHint}>
         {source && <>
