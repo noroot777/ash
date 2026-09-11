@@ -10,7 +10,6 @@ import {
   DotsThree,
   DownloadSimple,
   Play,
-  ChatsCircle,
   Stop,
   Trash,
 } from "@phosphor-icons/react";
@@ -21,17 +20,14 @@ import { TaskCreationBadge } from "../components/TaskOrigin.tsx";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { safeDownloadName } from "../task-detail/utils.ts";
-import { teamDuetIterationState } from "../duet/handoffPolicy.ts";
 
 export function TeamHeader({
   task,
-  allTasks,
   workers,
   groups,
   haltedByHistory,
   conversationMarkdown,
   busy,
-  iterateBusy,
   reviewOpen,
   onTitle,
   onTogglePin,
@@ -39,7 +35,6 @@ export function TeamHeader({
   onRun,
   onHalt,
   onResume,
-  onIterateDuet,
   onArchive,
   onDelete,
   indicatorForTask,
@@ -48,13 +43,11 @@ export function TeamHeader({
   notify,
 }: {
   task: Task;
-  allTasks: TaskListItem[];
   workers: TaskListItem[];
   groups: Group[];
   haltedByHistory: boolean;
   conversationMarkdown: string;
   busy: boolean;
-  iterateBusy: boolean;
   reviewOpen: boolean;
   onTitle: (title: string) => Promise<void>;
   onTogglePin: () => Promise<void>;
@@ -62,7 +55,6 @@ export function TeamHeader({
   onRun: () => void;
   onHalt: () => void;
   onResume: () => void;
-  onIterateDuet: () => void;
   onArchive: () => void;
   onDelete: () => void;
   indicatorForTask: IndicatorForTask;
@@ -79,7 +71,6 @@ export function TeamHeader({
   const pausedGroups = groups.filter((group) => group.paused);
   const stopped = pausedGroups.length > 0 || haltedByHistory;
   const settled = isTeamSettled(task.status === "running", workers);
-  const iteration = teamDuetIterationState(task, allTasks);
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
   const indicator = indicatorForTask(task);
 
@@ -147,18 +138,6 @@ export function TeamHeader({
           <button type="button" className={reviewOpen ? "is-primary" : ""} onClick={onReview}>
             <CheckCircle size={14} weight="fill" />{reviewOpen ? "返回协作" : "验收"}
           </button>
-          {iteration.eligible && (
-            <button
-              type="button"
-              className="is-iterate"
-              disabled={busy || iterateBusy}
-              onClick={onIterateDuet}
-              title={iteration.existing ? "打开这个团队已经创建的下一轮讨论" : "读取团队执行记录，沿用来源讨论配置创建下一轮"}
-            >
-              <ChatsCircle size={13} weight="fill" />
-              {iterateBusy ? "创建中…" : iteration.existing ? "打开下一轮" : "再讨论一轮"}
-            </button>
-          )}
           {!task.archived && !settled && !stopped && !teamNeverStarted(task.status) && (
             <button type="button" className="is-danger" disabled={busy} onClick={() => setHaltOpen(true)}><Stop size={13} weight="fill" />停止全组</button>
           )}

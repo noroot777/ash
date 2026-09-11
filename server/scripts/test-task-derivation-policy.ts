@@ -83,7 +83,7 @@ try {
   assert.equal(response.status, 201, "ordinary top-level tasks may still derive duets");
 
   response = await createDerived({ mode: "duet", originTaskId: "lead", useWorktree: false });
-  assert.equal(response.status, 201, "top-level duet/team iteration chains must stay supported");
+  assert.equal(response.status, 201, "团队调度台这类顶层任务仍可派生讨论");
 
   console.log("task derivation policy tests passed");
 } finally {

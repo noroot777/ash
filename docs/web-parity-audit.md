@@ -87,6 +87,7 @@
 - 历史判断：旧版 `3bcdb21 feat: close debate team iteration loop`；web 从未迁入。
 - 修复入手点：DebateHandoffBar 支持“关联团队列表 + 再开一组”；TeamHeader 和关联团队卡按 settled/origin/iteration 条件调用 `iterateTeamDebate`，防重复创建并跳转到已有迭代任务。
 - 修复结果：辩论页展示全部关联团队并可继续“再开一组”；已收工且来源为辩论的团队可从团队页或关联卡创建/打开下一轮，前端先复用已有迭代，服务端幂等兜底，创建后自动启动并跳转。
+- 后记（2026-09-11）：用户判定“再讨论一轮 / 打开下一轮”鸡肋，整条复盘迭代链已整体删除（按钮、`POST /tasks/:id/team/iterate-duet`、`server/src/duet/iteration.ts` 及其回归用例）。这里的“已修”只是历史记录，**不要据此再把它加回来**；“接力成团”和“再开一组”不受影响，仍在。
 
 ### 9. 执行者提问缺少置顶提醒和“让调度者答”（已修）
 

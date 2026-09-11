@@ -83,7 +83,6 @@
     "test:task-derivation": "tsx scripts/test-task-derivation-policy.ts",
     "test:task-creation-origin": "tsx scripts/test-task-creation-origin.ts",
     "test:task-list-body": "tsx scripts/test-task-list-body.ts",
-    "test:duet-iteration": "tsx scripts/test-duet-iteration.ts",
     "test:task-event-timestamps": "tsx scripts/test-task-event-timestamps.ts",
     "test:notes": "tsx scripts/test-note-task-history.ts",
     "test:star": "tsx scripts/test-task-star.ts",
