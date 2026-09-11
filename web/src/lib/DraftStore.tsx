@@ -9,11 +9,13 @@ import {
   type SetStateAction,
 } from "react";
 import type { UploadAttachment, UploadingFile } from "../task-detail/Attachments.tsx";
+import type { ScreenshotDraft } from "../page-annotation/model.ts";
 
 // 「还没发出去的那份东西」统一放这里：对话框的回复草稿、主工作区新建任务框里的草稿，
 // 都是同一件事 —— 组件卸载（切任务、去设置、开聊天）不该把用户敲的字和粘的图弄丢。
 // 存活范围是**这一次会话**（provider 挂在 App 上），刷新页面即清空，跟对话框一致。
 type Draft = {
+  screenshot?: ScreenshotDraft | null;
   text: string;
   attachments: UploadAttachment[];
   // 在途上传也留在草稿里：切走再切回来，那张图该还在传、进度条该接着走。
@@ -42,7 +44,7 @@ export function DraftProvider({ children }: { children: ReactNode }) {
       const previous = current[key] ?? EMPTY_DRAFT;
       const next = update(previous);
       if (!next.text && next.attachments.length === 0 && next.pendingUploads.length === 0
-        && next.noteIds.length === 0) {
+        && next.noteIds.length === 0 && !next.screenshot) {
         if (!(key in current)) return current;
         const { [key]: _removed, ...remaining } = current;
         return remaining;
@@ -50,7 +52,8 @@ export function DraftProvider({ children }: { children: ReactNode }) {
       if (next.text === previous.text
         && next.attachments === previous.attachments
         && next.pendingUploads === previous.pendingUploads
-        && next.noteIds === previous.noteIds) return current;
+        && next.noteIds === previous.noteIds
+        && next.screenshot === previous.screenshot) return current;
       return { ...current, [key]: next };
     });
   }, []);
@@ -59,6 +62,8 @@ export function DraftProvider({ children }: { children: ReactNode }) {
 }
 
 export type DraftHandle = {
+  screenshot: ScreenshotDraft | null;
+  setScreenshot: Dispatch<SetStateAction<ScreenshotDraft | null>>;
   text: string;
   attachments: UploadAttachment[];
   pendingUploads: UploadingFile[];
@@ -76,6 +81,12 @@ export function useDraft(key: string): DraftHandle {
   if (!context) throw new Error("useDraft must be used inside DraftProvider");
   const draft = context.drafts[key] ?? EMPTY_DRAFT;
   const { updateDraft } = context;
+  const setScreenshot = useCallback<Dispatch<SetStateAction<ScreenshotDraft | null>>>((next) => {
+    updateDraft(key, (current) => ({
+      ...current,
+      screenshot: typeof next === "function" ? next(current.screenshot ?? null) : next,
+    }));
+  }, [key, updateDraft]);
   const setText = useCallback<Dispatch<SetStateAction<string>>>((next) => {
     updateDraft(key, (current) => ({
       ...current,
@@ -106,6 +117,8 @@ export function useDraft(key: string): DraftHandle {
     updateDraft(key, () => EMPTY_DRAFT);
   }, [draft.pendingUploads, key, updateDraft]);
   return {
+    screenshot: draft.screenshot ?? null,
+    setScreenshot,
     text: draft.text,
     attachments: draft.attachments,
     pendingUploads: draft.pendingUploads,

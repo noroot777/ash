@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Group, Session, Task, TaskListItem } from "@ash/shared";
 import { isUserFollowUp } from "@ash/shared";
-import { FolderOpen, GitBranch, GitPullRequest, Info, MagnifyingGlass, Robot } from "@phosphor-icons/react";
+import { Browser, FolderOpen, GitBranch, GitPullRequest, Info, MagnifyingGlass, Robot } from "@phosphor-icons/react";
+import { PreviewWorkspace, PreviewWorkspaceEntry } from "../preview-workspace/PreviewWorkspace.tsx";
 import { NativeWorkInspector, type NativeWorkInspectorProps } from "./NativeWorkInspector.tsx";
 import { useSubagentInspectors } from "./useSubagentInspectors.tsx";
 import { InspectorHost, type InspectorDescriptor } from "../inspector/index.ts";
@@ -55,6 +56,7 @@ interface TaskInspectorContext {
   followUps: { text: string; attachments: string[]; at?: string }[];
   onOpenTask: (taskId: string) => void;
   onOpenReview: () => void;
+  onOpenPreview: () => void;
   onTaskUpdated: (task: Task) => void;
   onPatch: (patch: Partial<Task>) => Promise<void>;
   onQueueChanged: (updatedTask?: Task) => void;
@@ -66,6 +68,13 @@ interface TaskInspectorContext {
 }
 
 const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
+  {
+    id: "preview",
+    title: "预览工作区",
+    icon: <Browser size={14} />,
+    defaultOpen: true,
+    render: (context) => <PreviewWorkspaceEntry onOpen={context.onOpenPreview} />,
+  },
   {
     id: "subagents",
     title: "子智能体",
@@ -169,6 +178,7 @@ export function TaskDetail({
   // 确认闸的对话框住在 App 层(见 ExecutorGate.tsx),这里只拿判据。
   const confirmExecutorSwap = useExecutorGate();
   const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
+  const [previewOpen, setPreviewOpen] = useState(false);
   // 中间那一栏同一时刻只放一样东西：会话 / 审查工作区 / 文件 / 工作区 diff。
   const [openFilePath, setOpenFilePath] = useState<string | null>(null);
   const [openScmDiff, setOpenScmDiff] = useState<ScmDiffTarget | null>(null);
@@ -249,6 +259,7 @@ export function TaskDetail({
   }, [task.projectId]);
   useEffect(() => {
     setReviewOpen(initialReviewOpen);
+    setPreviewOpen(false);
     setDeleteOpen(false);
     setMarkDoneOpen(false);
     setPostMergeDialogOpen(false);
@@ -266,6 +277,7 @@ export function TaskDetail({
   const changeReviewOpen = (open: boolean) => {
     setReviewOpen(open);
     if (open) {
+      setPreviewOpen(false);
       setOpenFilePath(null);
       setOpenScmDiff(null);
     }
@@ -370,6 +382,7 @@ export function TaskDetail({
         followUps,
         onOpenTask,
         onOpenReview: () => changeReviewOpen(true),
+        onOpenPreview: () => { setPreviewOpen(true); changeReviewOpen(false); setOpenFilePath(null); setOpenScmDiff(null); },
         onTaskUpdated: onTaskUpdate,
         onPatch: patch,
         onQueueChanged: (updatedTask) => {
@@ -378,12 +391,14 @@ export function TaskDetail({
         },
         openFilePath,
         onOpenFile: (path: string) => {
+          setPreviewOpen(false);
           setOpenFilePath(path);
           setOpenScmDiff(null);
           if (reviewOpen) changeReviewOpen(false);
         },
         openScmDiff,
         onOpenScmDiff: (target: ScmDiffTarget) => {
+          setPreviewOpen(false);
           setOpenScmDiff(target);
           setOpenFilePath(null);
           if (reviewOpen) changeReviewOpen(false);
@@ -431,7 +446,9 @@ export function TaskDetail({
                 onTaskUpdate={onTaskUpdate}
               />
             )}
-            {reviewOpen ? (
+            {previewOpen ? (
+              <PreviewWorkspace key={task.id} taskId={task.id} onClose={() => setPreviewOpen(false)} />
+            ) : reviewOpen ? (
               <TaskReviewWorkspace
                 task={task}
                 allTasks={allTasks}
@@ -462,6 +479,8 @@ export function TaskDetail({
                 <section className="task-detail-main" aria-label="任务会话">
                   <ConversationFeed
                     task={task}
+                    questionHistory={task.questionHistory}
+                    liveQuestionHistory
                     items={conversation.items}
                     sessions={conversation.sessions}
                     pendingExecutor={pendingExecutor}
@@ -487,8 +506,8 @@ export function TaskDetail({
                     footer={task.question ? (
                       <QuestionCard
                         task={task}
-                        onAnswer={async (answer) => {
-                          await api.answerTask(task.id, answer);
+                        onAnswer={async (answer, input) => {
+                          await api.answerTask(task.id, answer, input);
                           notify("已发送答复，任务正在续跑");
                         }}
                       />
@@ -498,6 +517,7 @@ export function TaskDetail({
                   {!handedOut && <ReplyBox
                     task={task}
                     hasConversation={hasConversation}
+                    conversationItems={conversation.items}
                     topRail={freeToolbarVisible || canHandoff
                       ? (
                         <TaskReplyRail

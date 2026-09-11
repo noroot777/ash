@@ -19,6 +19,7 @@ process.env.ASH_DB = join(root, "ash.db");
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const { startPreview, stopPreview, stopPreviewOnRerun, sweepPreviews, readPreview, isPreviewStarting }
   = await import("../src/preview.js");
+const { readAnyPreview } = await import("../src/preview-store.js");
 // 清扫要读库（「这个任务还在不在」）。建好空表就够了 —— 没有任何任务行，正是「这些
 // taskId 都不在库里」的自然表达。
 await (await import("../src/db/index.js")).ensureSchema();
@@ -423,6 +424,33 @@ try {
       existsSync(join(unsafeWt, "front", "node_modules")),
       false,
       "安全拒绝这条出口也必须把 ash 挂的软链撤掉",
+    );
+
+    // 同一条保护，换成**它会真的遇到的那种日志**：警告打完之后，旧分支后端还会接着刷迁移、
+    // 路由、构建，把那句话挤出 4000 字的诊断尾巴，然后端口起来了。判读要是跟着尾巴走，这一
+    // 趟就会被判成「起好了」放行——嘴上说的是「已立即回收」，实际上那个真调度器还在跑，拿真
+    // 项目目录派活（第 4 轮审查 P1）。所以这里让它**先喊、再刷、最后真的监听**。
+    const buriedWt = join(repo2, ".worktrees", "buried-wt");
+    mkdirSync(join(buriedWt, "front"), { recursive: true });
+    writeFileSync(join(buriedWt, ".git"), `gitdir: ${join(repo2, ".git", "worktrees", "buried-wt")}\n`);
+    writeFileSync(join(buriedWt, "front", "package.json"), JSON.stringify({
+      name: "front", version: "1.0.0", private: true,
+      scripts: {
+        dev: "node -e \"console.log('[ash] scheduler started');console.log('x'.repeat(12000));"
+          + "require('http').createServer((q,r)=>r.end('ok')).listen(process.env.PORT)\"",
+      },
+      dependencies: { fakedep: `file:${dep}` },
+    }));
+    const buried = await startPreview("buried-task", {
+      id: "buried", kind: "preview",
+      p: { cmd: "cd front && npm run dev", mode: "frontend", ready: "port", life: "gate" },
+    } as never, buriedWt);
+    assert.equal(buried.ok, false, "警告被后面的启动输出埋了，照样得拒");
+    assert.equal(readAnyPreview("buried-task"), null, "拒了就不许在盘上留一条记录");
+    assert.equal(
+      existsSync(join(buriedWt, "front", "node_modules")),
+      false,
+      "这条出口同样要把 ash 挂的软链撤掉",
     );
 
     // ② 起来之后服务自己退出，由清扫收尾。清扫会**删掉 preview.json**——`record.links` 是

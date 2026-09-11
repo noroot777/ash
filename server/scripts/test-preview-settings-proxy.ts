@@ -20,7 +20,7 @@ process.env.ASH_RUNS_DIR = join(root, "runs");
 process.env.ASH_DEPS_DIR = join(root, "deps");
 const { db, ensureSchema, dbClient } = await import("../src/db/index.js");
 const { projects, tasks, users, projectMembers } = await import("../src/db/schema.js");
-const { authGate, SESSION_COOKIE } = await import("../src/auth/middleware.js");
+const { authGate, SESSION_COOKIE, crossSiteRejection } = await import("../src/auth/middleware.js");
 const { resourceGate } = await import("../src/auth/resource-gate.js");
 const { mountProjectRoutes } = await import("../src/project-routes.js");
 const { mountFreePreviewRoutes } = await import("../src/free-workflow-preview.js");
@@ -31,7 +31,7 @@ const { startPreview, stopPreview, readPreview, beginPreviewStart, endPreviewSta
 const { lastPreview, readAnyPreview, readPreviewLog, writeRecord } = await import("../src/preview-store.js");
 const { nodeDepsAdvice } = await import("../src/preview-deps.js");
 const { previewShell } = await import("../src/preview-shell.js");
-const { currentListeningPort } = await import("../src/listening-port.js");
+const { currentListeningPort, recordListeningPort } = await import("../src/listening-port.js");
 const { createSession, deleteSession } = await import("../src/auth/store.js");
 const { setInstanceMode } = await import("../src/auth/mode.js");
 await ensureSchema();
@@ -41,6 +41,13 @@ writeFileSync(join(fixture, "service.cjs"), `
 const http = require('node:http');
 const {createHash} = require('node:crypto');
 let lastPageAuth = null;
+// scripts/dev.mjs 的 frontend 档打的就是这句：「我的 /api 打到那台 ash 上」。
+// 反代只认这句自述（见 preview-log.ts 的 declaredHostApiPort），不认启动方式。
+const announce = process.argv[process.argv.indexOf('--host-api') + 1];
+if (process.argv.includes('--host-api')) console.log('[ash] preview-api-host ' + announce);
+// 自述之后、开始监听之前多打的那些字：真实的启动（装依赖回显、框架冷编译）就是这么把
+// 它挤出日志尾巴的。--noise 后面跟字符数。
+if (process.argv.includes('--noise')) console.log('x'.repeat(Number(process.argv[process.argv.indexOf('--noise') + 1])));
 const html = '<!doctype html><html><head><link rel="stylesheet" href="/style.css"></head><body><h1>Proxy test</h1><p id="module">waiting</p><p id="api">waiting</p><p id="sse">waiting</p><p id="ws">waiting</p><p id="slash">waiting</p><p id="isolation">waiting</p><a href="/nested/">Nested page</a><script type="module" src="/entry.js"></script></body></html>';
 const source = 'import message from "/chunk.js"; document.querySelector("#module").textContent=message; const slash="/"; document.querySelector("#slash").textContent=slash; fetch("/echo",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({ok:true})}).then(r=>r.json()).then(r=>document.querySelector("#api").textContent=r.body); const es=new EventSource("/events"); es.onmessage=e=>{document.querySelector("#sse").textContent=e.data;es.close()};const ws=new WebSocket("ws://"+location.host+"/socket");ws.onmessage=e=>{document.querySelector("#ws").textContent=e.data;ws.close()};try{localStorage.setItem("ash-probe","1");document.querySelector("#isolation").textContent=localStorage.length===1?"shimmed":"shared"}catch{document.querySelector("#isolation").textContent="throws"}';
 const server=http.createServer((req,res)=>{
@@ -87,6 +94,9 @@ attachPreviewUpgrades(server as import("node:http").Server);
 if (!server.listening) await once(server, "listening");
 const address = server.address();
 assert(address && typeof address === "object");
+// index.ts 在 listen 回调里做的同一件事。少了它，「预览这台 ash 自己」那一档拿不到本机
+// 端口，直连的那一跳就没法成立（它有意不猜端口，见 listening-port.ts）。
+recordListeningPort(address.port);
 const base = `http://127.0.0.1:${address.port}`;
 const request = (path: string, method = "GET", body?: unknown, headers: Record<string, string> = {}) => fetch(base + path, {
   method, redirect: "manual", headers: { ...(body === undefined ? {} : { "content-type": "application/json" }), ...headers }, body: body === undefined ? undefined : JSON.stringify(body),
@@ -227,6 +237,14 @@ try {
   assert.equal(echoed.headers.authorization, undefined, "浏览器盖的 Basic 不许转给被预览应用");
   const bearer = await request(gateway + "echo", "POST", {}, { authorization: "Bearer app-token", origin: "null", "sec-fetch-site": "cross-site" });
   assert.equal((await bearer.json()).headers.authorization, "Bearer app-token", "应用自己的 Bearer 要原样到达上游");
+  // 明文 http + 局域网 IP 收不到 `Sec-Fetch-*`（同下面那段），所以「必须等于 cross-site」在
+  // 用户最常见的部署里等于**永不转发** —— 用 Bearer 而不是 cookie 的被预览应用一律登不上。
+  // 缺章时只认 `Origin: null`：那一半才是拦住泄漏的，而 `null` 只有 opaque origin 的文档
+  // 产生得出来。
+  const plainHttp = await request(gateway + "echo", "POST", {}, { authorization: "Bearer app-token", origin: "null" });
+  assert.equal((await plainHttp.json()).headers.authorization, "Bearer app-token", "浏览器不盖章的明文 http 下，也得认得出这是预览页自己发的");
+  const ashPlain = await request(gateway + "echo", "POST", {}, { authorization: "Bearer ash-user-key", origin: base });
+  assert.equal((await ashPlain.json()).headers.authorization, undefined, "缺章不等于放行：ash 自己的页面盖的是 ash 的 Origin");
   // 泄漏链的形状（第 2 轮审查 P1）：ash 自己的页面拿用户 key 打开预览端点，302 是同源跳转，
   // 浏览器把 `Authorization` 原样带到 `/preview/…` 上。这种请求盖的是 ash 的 Origin 和
   // `same-origin`，不是预览页发的，绝不能转给上游 —— 否则被预览的应用记一行访问日志就拿到
@@ -249,8 +267,20 @@ try {
   assert.equal(echoed.headers.origin, `http://localhost:${echoed.port}`);
   const typed = await request(gateway + "echo", "POST", {}, { "sec-fetch-site": "none" });
   assert.equal((await typed.json()).headers["sec-fetch-site"], "none", "地址栏直接打开的那一类保持原样");
-  const bare = await request(gateway + "echo", "POST", {});
-  assert.equal((await bare.json()).headers["sec-fetch-site"], undefined, "本来没有的头不许凭空造一个");
+  {
+    // 浏览器**根本没盖章**的那一档：`Sec-Fetch-*` 只发给可信来源，明文 http + 局域网 IP 一个
+    // 都收不到（2026-09-10 用户就撞在这儿，又吃了一次「跨站请求已被拒绝」）。这时候也得盖，
+    // 否则判据落到我们自己重写的那个 Origin —— 它只在直连上游时跟 Host 对得上。
+    const bare = await (await request(gateway + "echo", "POST", {})).json();
+    assert.equal(bare.headers["sec-fetch-site"], "same-origin", "浏览器没盖章时也得盖，别把判据留给对不上的 Origin");
+    // 拿 ash 自己那道闸原地验「上游再转一跳」：vite 的 /api 打回 ash，changeOrigin 只改 Host
+    // 不改 Origin，于是 ash 手上是「Origin=localhost:<上游端口>、Host=ash 自己」。
+    assert.equal(
+      crossSiteRejection({ secFetchSite: bare.headers["sec-fetch-site"], origin: bare.headers.origin, host: "127.0.0.1:4317" }),
+      null,
+      "预览里的写操作，上游再转一跳回 ash 也不能被 ash 自己的跨站闸拒掉",
+    );
+  }
   // 地址栏不许说谎：`replaceState` 换的只是地址栏，文档还是那份 opaque origin 的预览页。
   // 任何做 URL 归一化的前端（ash 自己就是）不拦就会把地址栏变成 ash 本尊的地址，用户对着
   // 它把 key 粘进预览里的登录框。桥拦下来之后，地址栏始终留在预览前缀底下。
@@ -477,6 +507,94 @@ try {
     assert.equal(memberOpen.status, 302);
     const memberGateway = memberOpen.headers.get("location")!;
     assert.equal((await request(memberGateway)).status, 200);
+    // A 档（用户 2026-09-10 拍板）：被预览的就是**这台 ash 自己的仓库**、而且被预览的服务
+    // 自己说了「我的 /api 打到那台 ash 上」时，代理替你带上登录态，省掉「在预览页里粘一次
+    // key」——那才是这条链上最危险的一步（key 是长期凭证、能外带）。
+    //
+    // 两件事各钉一遍：
+    // ① 会话**只走 /api 那一跳、直连本机 ash**。被预览的服务在这一档里是任务分支自己启动的
+    //    dev server，它收得到这条 cookie 就等于交出一份可外带的凭证（第 1 轮审查 P1）。
+    // ② **凭据只能是那句自述**，不能是启动方式：自由工作流对任意脚本和多服务配置一律写死
+    //    `frontend`，照它判就会把「前端 + 分支后端」的 /api 静默改接到主 ash 上——用户以为
+    //    在验分支后端，实际是拿自己的身份读写主库（第 2 轮审查 P1）。
+    // 缘由在 preview-access.ts 顶部。
+    {
+      const { REPO_DIR } = await import("../src/paths.js");
+      const laneOf = async (taskId: string, page: Response) =>
+        new RegExp(`src="(/preview/${taskId}/[a-f0-9]{48}/[a-z0-9-]+/)entry.js"`).exec(await page.text())![1];
+      // 两个探针一起看才说明问题：`/whoami` 是上游夹具照实回它收到的 Cookie 头；`/api/projects`
+      // 只有真的接到本机 ash 上才答得出项目列表，接在夹具上就是那页 HTML。
+      const apiBody = async (lane: string) => await (await request(lane + "api/projects")).text();
+      const opened = async (taskId = "preview-task") => {
+        const location = (await request(previewState(taskId).url!, "GET", undefined, memberHeaders)).headers.get("location")!;
+        const lane = await laneOf(taskId, await navigate(location));
+        return {
+          location, lane,
+          upstream: (await (await request(lane + "whoami")).json()).cookie as string | null,
+          api: await apiBody(lane),
+        };
+      };
+      // 起一趟预览，命令自述打给谁（每个服务一个：null = 什么都不说）。`--host-api` 那段由
+      // 夹具原样打进日志，正是 scripts/dev.mjs 的 frontend 档打的那句。`noise` 是自述之后、
+      // 开始监听之前多打的字数。
+      const here = `127.0.0.1:${address.port}`;
+      const probe = async (taskId: string, announces: (string | null)[], expected: number | null, noise = 0, extra = "") => {
+        await db.insert(tasks).values({ id: taskId, projectId: "preview-project", title: taskId, status: "done", workflowMode: "free", mode: "single", useWorktree: false, createdAt: stamp, updatedAt: stamp });
+        const services = announces.map((announce, i) => ({
+          id: `s${i}`, name: `服务${i}`, kind: "web" as const, enabled: true,
+          command: command + (announce === null ? "" : ` --host-api ${announce}`) + (noise ? ` --noise ${noise}` : "") + extra,
+        }));
+        const started = await startPreview(taskId, { id: "probe", kind: "preview", p: { cmd: services[0].command, mode: "frontend", ready: "port", life: "task" }, fail: null }, fixture, undefined, {
+          proxy: true, primaryServiceId: "s0", services,
+        });
+        assert(started.ok, started.ok ? "" : started.reason);
+        assert.equal(readPreview(taskId)!.hostApi ?? null, expected, `${taskId}：记下来的自述`);
+      };
+      await probe("solo-task", [here], address.port);
+      await probe("mute-task", [null], null);
+      await probe("liar-task", [`127.0.0.1:${address.port === 65001 ? 65002 : 65001}`], null);
+      // 自述是在开始监听**之前**打的，装依赖回显和框架冷编译紧跟着就能把它挤出日志尾巴。
+      // 判读要是跟着轮询读那 4000 字的尾巴，这一趟就会被记成「没说过」，用户又看回登录框
+      // （第 3 轮审查 P1）。数字取得比那道窗口大一截。
+      await probe("buried-task", [here], address.port, 12_000);
+      // 命令行里出现那句话不算数：banner 是 ash 自己在 spawn 之前回显进日志的，跳过它就是防
+      // 这一手——否则任何项目只要把这句话写进预览命令，就能不打一个字地伪造出「我打到 ash 那边」。
+      await probe("forger-task", [null], null, 0, ` --label ${previewShell().quote(`[ash] preview-api-host ${here}`)}`);
+      // 两个服务里「谁在说」本来就分不清，而「前端 + 分支后端」那种组合的 /api 按定义就该是
+      // 分支自己的——所以哪怕两个都照着说，也一律不认。
+      await probe("duo-task", [here, here], null);
+      assert.equal(readPreview("preview-task")!.hostApi ?? null, null, "配置里选了两个服务的那趟，同样没有自述");
+      const other = await opened("solo-task");
+      assert.equal(other.upstream, null, "别的项目的预览，一条 ash 会话都不许带进去");
+      assert.match(other.api, /Proxy test/, "别的项目的 /api 是它自己的，不许接到本机 ash 上");
+      await db.update(projects).set({ repoPath: REPO_DIR }).where(eq(projects.id, "preview-project"));
+      try {
+        const own = await opened("solo-task");
+        assert.match(own.api, /"id":"preview-project"/, "预览这台 ash 自己时，/api 那一跳直连本机 ash 并带着你的会话");
+        assert.match((await opened("buried-task")).api, /"id":"preview-project"/, "自述被后面的启动输出埋了也照样接得上");
+        assert.equal(own.upstream, null, "会话绝不能落到被预览的服务手上——那是任务分支自己启动的 dev server");
+        assert.match(await apiBody(own.location), /needsAuth/, "地址栏那条道上的 /api 接着 ash，但一样借不到会话");
+        const forked = (await navigate(own.location)).headers.get("location")!;
+        const strangerLane = await laneOf("solo-task", await navigate(forked));
+        assert.match(await apiBody(strangerLane), /Proxy test/, "地址被复制走：分叉出去的那份连这条路都没有");
+        // 同一个仓库、同一份「只起前端」的意图（mode 一律写死 frontend），差别只在那句自述。
+        // 这四条钉的是第 2 轮审查 P1：能开这条路的只有自述，不是启动方式。
+        assert.match((await opened("preview-task")).api, /Proxy test/, "前端 + 分支后端两个服务：/api 是分支自己的，不许被主 ash 截走");
+        assert.match((await opened("duo-task")).api, /Proxy test/, "两个服务都照着说也不认");
+        assert.match((await opened("mute-task")).api, /Proxy test/, "没说过那句话的自定义脚本：/api 照旧走它自己");
+        assert.match((await opened("forger-task")).api, /Proxy test/, "只把那句话写进命令行、一个字都没打出来：伪造不成");
+        assert.match((await opened("liar-task")).api, /Proxy test/, "自述的端口不是我们绑着的那个：不认");
+        // 记录是上一次启动时写的，ash 重启后可能换了端口 —— 那个数就不再作数了。
+        recordListeningPort(address.port === 65500 ? 65501 : 65500);
+        try {
+          assert.match((await opened("solo-task")).api, /Proxy test/, "ash 换了监听端口：记录里那个数不再作数");
+        } finally { recordListeningPort(address.port); }
+      } finally {
+        await db.update(projects).set({ repoPath: fixture }).where(eq(projects.id, "preview-project"));
+      }
+      assert.match((await opened("solo-task")).api, /Proxy test/, "换回别的仓库就不再接");
+      for (const taskId of ["solo-task", "mute-task", "liar-task", "buried-task", "forger-task", "duo-task"]) await stopPreview(taskId, null);
+    }
     await deleteSession(memberHeaders.cookie.slice(SESSION_COOKIE.length + 1));
     assert.equal((await request(memberGateway)).status, 404, "退出登录后旧预览凭证失效");
     memberHeaders.cookie = `${SESSION_COOKIE}=${await createSession("member", "test")}`;

@@ -94,6 +94,12 @@ export function useAssistantChat(projectId: string) {
     } catch (reason) { setError(String(reason)); }
     finally { setSending(false); }
   };
+  const renameConversation = async (name: string) => {
+    if (!roomId) return;
+    const updated = await chatApi.update(roomId, { name });
+    setRooms((rows) => rows.map((row) => row.id === updated.id ? updated : row));
+    setSnapshot((value) => value?.room.id === updated.id ? { ...value, room: updated } : value);
+  };
   const send = async () => {
     const body = draft.trim();
     if (!roomId || !body || body.length > 8000 || sending || busy || !snapshot) return;
@@ -119,5 +125,5 @@ export function useAssistantChat(projectId: string) {
     catch (reason) { if (selected.current === roomId) setError(String(reason)); }
     finally { saving.current.delete(messageId); setSavingWorkflows([...saving.current]); }
   };
-  return { rooms, room, snapshot, ready, connected, error, draft, sending, busy, savingWorkflows, setDraft, select, saveMember, newConversation, send, stop, saveWorkflow };
+  return { rooms, room, snapshot, ready, connected, error, draft, sending, busy, savingWorkflows, setDraft, select, saveMember, newConversation, renameConversation, send, stop, saveWorkflow };
 }

@@ -10,6 +10,7 @@ import { continueTask } from "./orchestrator.js";
 import { enqueueMessage } from "./pending-messages.js";
 import { nativeCliCommand } from "./skills.js";
 import { leadTypeOf } from "./team/session.js";
+import { replyWithAnnotationBatch } from "./page-annotation-routes.js";
 
 export type TaskReplyBody = {
   text?: string;
@@ -19,6 +20,8 @@ export type TaskReplyBody = {
   model?: string | null;
   reasoningEffort?: string | null;
   sendAt?: string;
+  annotationBatchId?: string;
+  annotationRevision?: number;
 };
 
 function toScheduledMessage(r: typeof scheduledMessages.$inferSelect): ScheduledMessage {
@@ -39,7 +42,7 @@ function toScheduledMessage(r: typeof scheduledMessages.$inferSelect): Scheduled
  */
 export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBody): Promise<Response> {
   const b = body ?? await c.req.json<TaskReplyBody>();
-  if (!b.text?.trim() && !b.attachments?.length) return c.json({ error: "empty" }, 400);
+  if (!b.annotationBatchId && !b.text?.trim() && !b.attachments?.length) return c.json({ error: "empty" }, 400);
   if (b.agent && !AGENT_TYPES.includes(b.agent)) return c.json({ error: "未知的 agent", agent: b.agent }, 400);
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
@@ -48,6 +51,7 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
   if (blocked) return c.json({ error: blocked, handoff: true }, 409);
   const isTeam = r.mode === "team";
   if (!isTeam && r.mode !== "single") return c.json({ error: "仅单任务支持回复" }, 409);
+  if (b.annotationBatchId) return replyWithAnnotationBatch(c, taskId, b.annotationBatchId, b.annotationRevision ?? 0);
 
   const queueWhileRunning = !isTeam && (r.status === "running" || r.status === "queued");
   if (b.sendAt || queueWhileRunning) {

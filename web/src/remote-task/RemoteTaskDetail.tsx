@@ -184,14 +184,15 @@ export function RemoteTaskDetail({
           <ConversationFeed
             task={task}
             items={items}
+            questionHistory={snapshot?.task.questionHistory ?? []}
             sessions={snapshot?.sessions ?? []}
             loading={loading}
             error={error}
             footer={task.question ? (
               <QuestionCard
                 task={task}
-                onAnswer={async (answer) => {
-                  await api.remoteTaskAnswer(archive.id, target.url, answer);
+                onAnswer={async (answer, input) => {
+                  await api.remoteTaskAnswer(archive.id, target.url, answer, input);
                   notify("已发送答复，任务正在远端续跑");
                   await refresh(true);
                 }}

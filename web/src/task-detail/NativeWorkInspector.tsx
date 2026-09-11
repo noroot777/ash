@@ -40,7 +40,7 @@ function WorkRow({ row, parent, onOpen }: { row: NativeWorkItem; parent?: Native
             : "历史记录仅保留派活调用，未记录最终状态。"}</p>}
         </div>
       </details>
-      <NativeWorkMeta row={row} />
+      <NativeWorkMeta row={row} compact />
       <footer className="native-work__footer"><span>{row.sessionLabel}</span>
         {row.kind === "agent" && <button className="native-work__open" type="button" onClick={onOpen} aria-label={`查看执行：${row.title}`}>查看执行<ArrowUpRight size={13} aria-hidden="true" /></button>}
       </footer>

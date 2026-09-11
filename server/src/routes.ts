@@ -29,6 +29,7 @@ import { mountChatRoutes } from "./chat/routes.js";
 import { mountTeamPresetRoutes } from "./team-presets.js";
 import { mountWorkflowRoutes } from "./workflows.js";
 import { mountPreviewRoutes } from "./preview-routes.js";
+import { mountPageAnnotationRoutes } from "./page-annotation-routes.js";
 import { parseAppSettingsPatch } from "./app-settings.js";
 import { hostInfo } from "./platform.js";
 import { secretsEqual } from "./openai-converter/common.js";
@@ -80,6 +81,7 @@ mountFsBrowseRoutes(api);
 mountProjectRoutes(api);
 mountProjectCloneRoutes(api);
 mountUploadRoutes(api);
+mountPageAnnotationRoutes(api);
 
 // ── health ───────────────────────────────────────────────────────────────
 // `pid` 是给 scripts/restart.mjs 认人用的:它重启完要确认「端口上应答的是我刚起的

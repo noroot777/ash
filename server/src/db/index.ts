@@ -5,6 +5,7 @@ import * as schema from "./schema.js";
 import { ensureAshDbDir, resolveAshDbFile } from "./path.js";
 import { runDataMigrations } from "./migrations.js";
 import { ensureChatSchema } from "./schema-chat.js";
+import { ensurePageAnnotationSchema } from "./schema-page-annotation.js";
 
 const dbFile = resolveAshDbFile();
 ensureAshDbDir(dbFile);
@@ -38,6 +39,7 @@ export { client as dbClient };
 // Minimal bootstrap so the app runs without a separate migration step in dev.
 // `npm run db:push` (drizzle-kit) remains the source of truth for migrations.
 export async function ensureSchema() {
+  await ensurePageAnnotationSchema(client);
   await ensureChatSchema(client);
   await client.executeMultiple(`
     CREATE TABLE IF NOT EXISTS task_branch_receipts (
@@ -300,6 +302,7 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN question_options TEXT",
     // ask_question 的多问题列表（json {question, options?}[]，null=老式单问题）
     "ALTER TABLE tasks ADD COLUMN question_items TEXT",
+    "ALTER TABLE tasks ADD COLUMN question_history TEXT",
     // 任务执行器 profile。非空时按 agents.id 精确解析；空/悬空时按 agent_type 默认执行器降级。
     "ALTER TABLE tasks ADD COLUMN executor_id TEXT",
     // 任务级模型/思考强度覆盖；null 时继续跟随执行器 profile。

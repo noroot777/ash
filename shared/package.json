@@ -6,6 +6,14 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./page-annotation": {
+      "types": "./src/page-annotation.ts",
+      "default": "./src/page-annotation.ts"
+    },
+    "./questions": {
+      "types": "./src/questions.ts",
+      "default": "./src/questions.ts"
+    },
     "./branch-plan": {
       "types": "./src/branch-plan.ts",
       "default": "./src/branch-plan.ts"
@@ -109,6 +117,18 @@
     "./preview": {
       "types": "./src/preview.ts",
       "default": "./src/preview.ts"
+    },
+    "./page-annotation-batch": {
+      "types": "./src/page-annotation-batch.ts",
+      "default": "./src/page-annotation-batch.ts"
+    },
+    "./page-annotation-parse": {
+      "types": "./src/page-annotation-parse.ts",
+      "default": "./src/page-annotation-parse.ts"
+    },
+    "./page-annotation-review": {
+      "types": "./src/page-annotation-review.ts",
+      "default": "./src/page-annotation-review.ts"
     }
   },
   "scripts": {

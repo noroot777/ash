@@ -1,3 +1,4 @@
+import { setReopenDismissed } from "../preview-workspace/reopenPreference.ts";
 import { browserPreviewUrl } from "../lib/previewUrl.ts";
 import { useEffect, useRef, useState } from "react";
 import type { Task } from "@ash/shared";
@@ -121,6 +122,7 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: Noti
     const taskId = task.id;
     const token = beginPreview("canceling");
     try {
+      setReopenDismissed(taskId, true);
       const { stopped } = await api.stopFreePreview(taskId);
       if (owns(taskId, token)) notify(stopped ? "已取消启动预览" : "预览已经不在跑了");
     } catch (error) {
@@ -141,6 +143,7 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: Noti
     const token = beginPreview(closing ? "closing" : "opening");
     try {
       if (closing) {
+        setReopenDismissed(taskId, true);
         await api.stopFreePreview(taskId);
         if (owns(taskId, token)) notify("预览已关闭");
       } else {

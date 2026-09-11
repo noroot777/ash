@@ -450,7 +450,7 @@ export async function exportHandoff(
       const uploads = await collectUploads(
         [
           task.body, task.resumePrompt ?? "", task.question ?? "",
-          task.questionOptions ?? "", task.questionItems ?? "",
+          task.questionOptions ?? "", task.questionItems ?? "", task.questionHistory ?? "",
           ...pendingMsgs.flatMap((x) => [x.text, x.attachments]),
           ...[...sessionFiles, ...artifacts]
             .filter((f) => isTextRel(f.rel))
@@ -487,6 +487,7 @@ export async function exportHandoff(
           reviewStep: task.reviewStep, verifyRounds: task.verifyRounds, verifyStationRounds: task.verifyStationRounds,
           resumePrompt: task.resumePrompt, question: task.question,
           questionOptions: task.questionOptions, questionItems: task.questionItems,
+          questionHistory: task.questionHistory,
           acceptedTargetBranch: task.acceptedTargetBranch,
           acceptedBaseCommit: task.acceptedBaseCommit,
           acceptedMergeCommit: task.acceptedMergeCommit,

@@ -11,7 +11,8 @@
 //      Gradle 的 bootRun、Django 的 runserver、go run、cargo run、dotnet run…… Node 的
 //      package.json 只是这张表里的一行，不再是这件事的定义。
 //
-// 找出来的候选 **只有恰好一个时才自动用**。多于一个（前后端并排、Maven 多模块各带一个
+// 找出来的框架候选 **只有恰好一个时才自动用**。静态产物候选先展示给用户确认；
+// 多于一个（前后端并排、Maven 多模块各带一个
 // 可启动应用）就不猜：把认出来的东西按它自己的说法列出来，每条都是可以直接粘进
 // 「预览命令」的整行，让用户指一个。猜错的代价不是「少省一次事」，是他对着别的服务
 // 验收自己的改动。
@@ -27,6 +28,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { previewDirectories } from "./preview-directories.js";
 import { join } from "node:path";
 import { previewShell, type PreviewShell } from "./preview-shell.js";
+import { staticPreviewCandidates } from "./preview-static.js";
 
 /** 命令从哪儿来的。时间线与报错文案要分得开「你填的」和「我认出来的」。 */
 export type PreviewCommandSource = "configured" | "detected";
@@ -47,6 +49,8 @@ export interface PreviewCandidate {
    * 组合示例该把谁放在最后（ash 打开的是主角端口上那个，也就是最后那个）。
    */
   kind: "web" | "service";
+  /** 静态文件可能来自旧构建，候选即使唯一也先展示给用户确认。 */
+  requiresSelection?: boolean;
   /**
    * 当**配角**跑在第 n 个借来的端口上时的写法（n 从 2 起，对应 `PORTn` / `URLn`）。
    * 丢后台的写法按平台来（POSIX 是 `( … &)`，cmd 是 `start "" /b cmd /c "…"`）。
@@ -486,7 +490,9 @@ function probeDir(shell: PreviewShell, dir: string, rel: string): PreviewCandida
 
 /** 旧自动识别扫描根目录和下一层；设置中的主动检测可扫描到第三层。 */
 export function detectPreviewCandidates(root: string, shell: PreviewShell = previewShell(), depth = 1): PreviewCandidate[] {
-  return previewDirectories(root, depth).flatMap((rel) => probeDir(shell, join(root, rel), rel));
+  const directories = previewDirectories(root, depth);
+  const frameworks = directories.flatMap((rel) => probeDir(shell, join(root, rel), rel));
+  return frameworks.length ? frameworks : staticPreviewCandidates(root, directories, shell);
 }
 
 /**
@@ -519,12 +525,17 @@ export function ambiguousMessage(candidates: PreviewCandidate[], shell: PreviewS
   if (!candidates.length) {
     return "没认出这个项目该怎么起服务（Node 的 dev/start、Maven 的 spring-boot:run、"
       + "Gradle 的 bootRun、Django 的 runserver、FastAPI/Flask、go run、cargo run、"
-      + "dotnet run、Laravel 的 artisan、Rails 的 bin/rails 都找过了）。\n"
+      + "dotnet run、Laravel 的 artisan、Rails 的 bin/rails 和明确的静态 HTML 产物都找过了）。\n"
       + "请在「设置 → 项目设置 → 预览 → 自定义脚本」里填写启动脚本 —— 任何语言都行，"
       + "它在任务工作区根目录用你自己的 shell 执行，可以带 cd。\n"
       + `端口从 ash 借的那个来：命令里写 \`${port}\`，或者让它读这些环境变量之一（${PORT_ENV_ALIASES.map((a) => a.name).join(" / ")}）。`;
   }
   const list = candidates.map((c) => `  · ${c.label}\n    ${c.command}`).join("\n");
+  if (candidates.every((c) => c.requiresSelection)) {
+    return `发现 ${candidates.length} 个静态 HTML 产物候选，尚未启动：\n${list}\n`
+      + "这些文件不经过构建，已有构建可能过期；请确认目录和页面是否是本次产物。启动需要 Python 3，目录内没有 index.html 时会显示文件列表。\n"
+      + "到「设置 → 项目设置 → 预览 → 选择服务」点击检测并勾选所需服务，保存后再打开预览。";
+  }
   const combined = combinedExample(shell, candidates);
   return `这个工作区里认出了 ${candidates.length} 个能起服务的东西，ash 不替你挑`
     + "（挑错的话你会对着另一个服务验收自己的改动）：\n"
@@ -544,7 +555,7 @@ export function ambiguousMessage(candidates: PreviewCandidate[], shell: PreviewS
 /**
  * 定下这次预览跑什么。
  *
- * 填过的原样用；没填就看认出几个 —— **恰好一个才自动用**，其余情况抛出上面那段话。
+ * 填过的原样用；没填就看认出几个 —— **恰好一个且无需确认才自动用**，其余情况抛出上面那段话。
  * cwd 是任务自己的工作区（worktree），不是项目仓库根：子目录、子模块都得跟着它算。
  */
 export function resolvePreviewCommand(
@@ -555,6 +566,8 @@ export function resolvePreviewCommand(
   const chosen = (configured ?? "").trim();
   if (chosen) return { command: chosen, source: "configured" };
   const candidates = detectPreviewCandidates(cwd, shell);
-  if (candidates.length === 1) return { command: candidates[0].command, source: "detected" };
+  if (candidates.length === 1 && !candidates[0].requiresSelection) {
+    return { command: candidates[0].command, source: "detected" };
+  }
   throw new Error(ambiguousMessage(candidates, shell));
 }

@@ -8,12 +8,13 @@
   },
   "scripts": {
     "test:assistant": "tsx scripts/test-assistant.ts",
-    "test:native-work": "tsx scripts/test-native-work.ts && tsx scripts/test-native-activity-stream.ts && tsx scripts/test-native-upload-visibility.ts && tsx scripts/test-duet-native-trace.ts",
+    "test:native-work": "tsx scripts/test-native-work.ts && tsx scripts/test-native-agent-models.ts && tsx scripts/test-native-activity-stream.ts && tsx scripts/test-native-upload-visibility.ts && tsx scripts/test-duet-native-trace.ts",
     "test:chat-context": "tsx scripts/test-chat-context.ts",
     "test:chat": "tsx scripts/test-chat-review.ts && tsx scripts/test-chat-context.ts && tsx scripts/test-chat.ts && tsx scripts/test-chat-execution.ts && tsx scripts/test-chat-boundary.ts && tsx scripts/test-chat-recovery.ts && tsx scripts/test-chat-watch-load.ts && tsx scripts/test-chat-large-workspace.ts && tsx scripts/test-chat-git-metadata.ts && tsx scripts/test-chat-ash-data.ts",
     "postinstall": "node scripts/prepare-node-pty.mjs",
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
+    "test:preview-annotation": "tsx scripts/test-preview-annotation.ts",
     "prestart": "node ../scripts/check-built.mjs",
     "start": "node dist/index.js",
     "db:push": "drizzle-kit push",
@@ -68,6 +69,7 @@
     "test:executor-resolution": "tsx scripts/test-executor-resolution.ts",
     "test:ssh-retire": "tsx scripts/test-ssh-profile-retire.ts",
     "test:answer-routing": "tsx scripts/test-answer-routing.ts",
+    "test:question-history": "tsx scripts/test-question-history.ts",
     "test:team-native": "tsx scripts/test-team-native-command.ts",
     "test:team-resilience": "tsx scripts/test-team-lead-resilience.ts && tsx scripts/test-team-inbound-resilience.ts",
     "test:team-inbound-durability": "tsx scripts/test-team-inbound-durability.ts",
@@ -112,8 +114,9 @@
     "test:verify-override": "tsx scripts/test-verify-override.ts",
     "test:foreign-bins": "tsx scripts/test-foreign-bins.ts",
     "test:preview-settings-proxy": "tsx scripts/test-preview-settings-proxy.ts",
-    "test:preview-command": "tsx scripts/test-preview-command.ts",
+    "test:preview-command": "tsx scripts/test-preview-command.ts && tsx scripts/test-preview-static.ts",
     "test:preview-log": "tsx scripts/test-preview-log.ts",
+    "test:preview-host-api": "tsx scripts/test-preview-host-api.ts",
     "test:preview-cookies": "tsx scripts/test-preview-cookies.ts",
     "test:preview-process": "tsx scripts/test-preview-process.ts",
     "test:preview-seed": "tsx scripts/test-preview-seed.ts",
@@ -139,7 +142,9 @@
     "test:multi-user-members": "tsx scripts/test-multi-user-members.ts",
     "test:multi-user-paths": "tsx scripts/test-multi-user-paths.ts",
     "test:missing-task-writes": "tsx scripts/test-missing-task-writes.ts",
-    "test:preview-deps": "tsx scripts/test-preview-deps.ts"
+    "test:preview-deps": "tsx scripts/test-preview-deps.ts",
+    "test:page-annotation-batches": "tsx scripts/test-page-annotation-batches.ts && tsx scripts/test-preview-annotation.ts",
+    "test:annotation-batches": "tsx scripts/test-page-annotation-batches.ts"
   },
   "dependencies": {
     "@ash/shared": "*",
@@ -153,5 +158,8 @@
     "@types/node": "^22.20.1",
     "drizzle-kit": "^0.30.1",
     "tsx": "^4.19.2"
+  },
+  "optionalDependencies": {
+    "playwright-core": "^1.62.0"
   }
 }

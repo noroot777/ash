@@ -92,6 +92,7 @@ export interface FreeReviewRun {
 }
 
 export interface FreeWorkflowPreviewState {
+  gen?: string | null;
   services?: PreviewServiceState[];
   proxied?: boolean;
   /** 起来了**或者正在起**。界面拿它决定那颗开关是「打开预览」还是「关掉」。 */

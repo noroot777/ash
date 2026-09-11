@@ -1,5 +1,6 @@
 // Core domain types shared between server and web.
 import type { TeamConfig } from "./team.ts";
+import type { QuestionRecord } from "./questions.ts";
 import type { DuetConfig } from "./duet.ts";
 import type { WorkflowDef } from "./workflow.ts";
 import type { TaskWorkflowMode } from "./free-workflow.ts";
@@ -405,6 +406,7 @@ export interface Task {
   questionOptions?: string[] | null;
   // 多问题列表；null/[] 沿用单问题 question + questionOptions。
   questionItems?: QuestionItem[] | null;
+  questionHistory?: QuestionRecord[];
   // 任务接力标记（见 TaskHandoff）。null = 从未接力。
   handoff?: TaskHandoff | null;
   // 强制恢复清掉 handoff 后仍保留的风险审计；刷新后必须持续可见。
@@ -412,7 +414,7 @@ export interface Task {
 }
 
 /**
- * 任务**列表**行：`Task` 去掉正文。
+ * 任务**列表**行：`Task` 去掉正文和问答历史。
  *
  * `GET /tasks` 一次要吐一千多行，正文占了整个响应的一半（实测 2.45 MB 里 1.25 MB），
  * 而侧栏、树、命令面板没有一处用得上它——正文只有选中那一个任务的详情面需要。列表
@@ -422,7 +424,7 @@ export interface Task {
  * 需要正文的地方（详情、派生、导出、duet 议题）都过不了类型检查，不会在运行时静默
  * 变成一句「这个任务没有正文说明」。
  */
-export type TaskListItem = Omit<Task, "body">;
+export type TaskListItem = Omit<Task, "body" | "questionHistory">;
 
 export interface QuestionItem {
   question: string;

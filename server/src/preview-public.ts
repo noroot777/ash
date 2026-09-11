@@ -19,6 +19,7 @@ export function previewState(taskId: string): FreeWorkflowPreviewState {
   })) ?? [];
   const primary = services.find((s) => s.id === record?.primaryServiceId) ?? services[0];
   return {
+    gen: current?.gen ?? null,
     running: !!current || launching, starting: launching && current?.state !== "ready", hasLog: hasPreviewLog(taskId),
     url: current?.state !== "starting" ? services.length ? primary?.url ?? null : current?.url ?? null : null,
     port: current?.port ?? null, command: record?.cmd ?? null, startedAt: current?.startedAt ?? null,

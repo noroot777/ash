@@ -27,6 +27,7 @@ try {
 
   const recent = page.getByRole("button", { name: "今天刚改过" });
   const handoffOutRow = page.getByRole("button", { name: "已经转出的接力任务" });
+  const handoffPendingRow = page.getByRole("button", { name: "送达未确认的接力任务" });
   const handoffInRow = page.getByRole("button", { name: "刚刚转入的接力任务" });
   const handoffOutMark = page.locator('[aria-label="接力转出"]');
   const handoffInMark = page.locator('[aria-label="接力转入"]');
@@ -39,15 +40,39 @@ try {
   const collapse = page.getByRole("button", { name: "收起", exact: true });
 
   await recent.waitFor();
-  assert.equal(await handoffOutMark.count(), 1, "转出任务应带小飞机标记");
-  assert.equal(await handoffInMark.count(), 1, "转入任务应带小飞机标记");
+  // 接力的三种行各有各的去处（d2070cf0 起）：已确认转出的只出现在「其他机器」那一节，
+  // 主任务树里根本没有；送达未确认的还在本机，留在树里带小飞机；转入的已经是本机任务，
+  // 按普通行展示、不再挂标记。三条一起断言，少哪条都会让下面的 opacity 检查跑空。
+  assert.equal(await handoffOutRow.count(), 0, "已确认转出的任务不留在主任务树里");
+  assert.equal(await handoffPendingRow.count(), 1, "送达未确认的转出任务仍在主任务树里");
+  assert.equal(await handoffOutMark.count(), 1, "送达未确认的转出任务应带小飞机标记");
+  assert.equal(await handoffInRow.count(), 1, "转入的任务按普通任务展示");
+  assert.equal(await handoffInMark.count(), 0, "转入的任务不再挂接力标记");
   assert.equal(await handoffOutMark.locator("..").evaluate((node) => getComputedStyle(node).opacity), "0");
-  await handoffOutRow.hover();
+  // 行尾那批(meta 图标、星标)在 hover 和**选中**两种状态下都要浮出来,标题必须同步让开
+  // 它们。曾经只有 hover 让位、选中不让:鼠标一移开,标题就叠印在小飞机和星星上。
+  // 判据用同一行在三种状态下的标题遮罩:选中态必须和 hover 态一模一样,且都不同于静置。
+  const titleMask = () => handoffPendingRow.evaluate((node) =>
+    getComputedStyle(node.closest(".workspace-task-row-wrap").querySelector(".workspace-task-title")).maskImage);
+  const idleMask = await titleMask();
+  await handoffPendingRow.hover();
   await page.waitForTimeout(180);
   assert.equal(await handoffOutMark.locator("..").evaluate((node) => getComputedStyle(node).opacity), "1", "指向转出任务时标记应显示");
-  await handoffInRow.hover();
+  const hoverMask = await titleMask();
+  assert.notEqual(hoverMask, idleMask, "指到时标题要额外让开星标那格");
+  await handoffPendingRow.click();
+  await page.mouse.move(4, 4);
   await page.waitForTimeout(180);
-  assert.equal(await handoffInMark.locator("..").evaluate((node) => getComputedStyle(node).opacity), "1", "指向转入任务时标记应显示");
+  const selectedTail = await handoffPendingRow.evaluate((node) => {
+    const wrap = node.closest(".workspace-task-row-wrap");
+    return {
+      meta: getComputedStyle(wrap.querySelector(".workspace-task-meta")).opacity,
+      star: getComputedStyle(wrap.querySelector(".workspace-task-star")).opacity,
+    };
+  });
+  assert.equal(selectedTail.meta, "1", "选中的行也要露出 meta 图标");
+  assert.equal(selectedTail.star, "1", "选中的行也要露出星标");
+  assert.equal(await titleMask(), hoverMask, "选中态的标题让位必须和 hover 一致,否则鼠标一移开文字就压在图标上");
   assert.equal(await oldJia.count(), 0, "默认只显示 24 小时内的任务");
   assert.equal(await oldStarred.count(), 1, "星标的任务再旧也不进折叠");
   assert.equal(await oldUnaccepted.count(), 1, "还没验收的任务再旧也不进折叠");
