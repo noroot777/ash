@@ -32,6 +32,7 @@
     "check:workspaces": "node scripts/workspace-check.mjs",
     "package": "node scripts/package.mjs",
     "test:restart": "node scripts/test-restart.mjs",
+    "test:win-remote": "node scripts/test-win-remote.mjs",
     "test:web-gate": "node scripts/test-web-test-gate.mjs",
     "//test:web": "前端全量回归。2026-09-09 之前它挂在 web 的 build 前置,npm run restart 每次都得等它跑完;现在 build 只做检查+类型+打包,回归靠这条显式跑。",
     "test:web": "npm -w web run test",
