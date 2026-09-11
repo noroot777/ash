@@ -113,6 +113,20 @@ try {
   await page.getByLabel("子智能体执行详情：用户停止的执行者", { exact: true }).waitFor();
   assert.match(await conversation.innerText(), /另一个子智能体的独立记录/);
   assert.ok(!(await conversation.innerText()).includes("实时进展"));
+
+  // 切到别的任务再切回来：抽屉必须保持关着。宿主组件跨任务复用，选中状态只按 row id
+  // 记的话，切回来时这一条又能匹配上，抽屉会自己弹回来（用户根本没点过）。
+  const switchTask = page.getByRole("button", { name: "切换任务", exact: true });
+  await switchTask.click();
+  await page.getByLabel("子智能体执行详情", { exact: true }).waitFor({ state: "detached" });
+  await switchTask.click();
+  assert.equal(await page.locator("[data-task-id='native-work-task']").count(), 1, "该切回原任务");
+  assert.equal(await page.getByLabel("子智能体执行详情", { exact: true }).count(), 0,
+    "切走再切回来，抽屉不该自己重新打开");
+  assert.equal(await page.locator(".native-work__entry.is-open").count(), 0, "列表也不该还回显选中");
+  // 切回来之后照样能重新打开。
+  await page.getByRole("button", { name: "查看执行：运行中的资料搜集", exact: true }).click();
+  await page.getByLabel("子智能体执行详情：运行中的资料搜集", { exact: true }).waitFor();
   await closeDrawer();
 
   await page.getByRole("button", { name: "完成运行项" }).click();

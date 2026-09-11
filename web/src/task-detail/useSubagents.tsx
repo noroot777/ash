@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Robot } from "@phosphor-icons/react";
 import type { TaskStatus } from "@ash/shared";
 import { SideDrawer } from "../components/SideDrawer.tsx";
@@ -9,6 +9,8 @@ import type { NativeWorkInspectorProps } from "./NativeWorkInspector.tsx";
 import { buildNativeWork, NATIVE_WORK_STATUS_LABELS } from "./nativeWorkModel.ts";
 
 export interface SubagentSource {
+  /** 这份记录属于哪个任务。抽屉的选中状态按它作废——宿主组件是跨任务复用的。 */
+  taskId: string;
   items: ConversationItem[];
   status: TaskStatus;
   loading?: boolean;
@@ -30,23 +32,27 @@ export function useSubagents<Context>(
   source: SubagentSource,
   options: { onOpen?: () => void } = {},
 ) {
-  const { items, status, loading, error, onRetry } = source;
+  const { taskId, items, status, loading, error, onRetry } = source;
   const rows = useMemo(() => buildNativeWork(items, status), [items, status]);
-  const [openId, setOpenId] = useState<string | null>(null);
+  // 连任务一起记：`TaskDetail` / `TeamView` 不按 task 重挂载，只记 id 的话切到别的任务
+  // 再切回来，这一条又能匹配上，抽屉会自己弹回来（用户根本没点过）。换任务时一律作废，
+  // 派生判据 + effect 清理两头都做：前者保证换任务那一帧就不渲染，后者保证切回来不复活。
+  const [opened, setOpened] = useState<{ taskId: string; id: string } | null>(null);
+  useEffect(() => setOpened(null), [taskId]);
   // 宿主传进来的回调每轮渲染都是新的，进 ref 以免 open 的身份跟着抖。
   const onOpenRef = useRef(options.onOpen);
   onOpenRef.current = options.onOpen;
-  // 会话记录重取后这一行可能已经不在了（换了任务、或记录读不全）：认不出来就等于抽屉该关。
-  const openAgent = openId
-    ? rows.find((row) => row.id === openId && row.kind === "agent") ?? null
+  // 会话记录重取后这一行可能已经不在了（记录读不全）：认不出来就等于抽屉该关。
+  const openAgent = opened?.taskId === taskId
+    ? rows.find((row) => row.id === opened.id && row.kind === "agent") ?? null
     : null;
   const hasSubagents = rows.some((row) => row.kind === "agent");
   const incomplete = !!error;
-  const close = useCallback(() => setOpenId(null), []);
+  const close = useCallback(() => setOpened(null), []);
   const open = useCallback((id: string) => {
     onOpenRef.current?.();
-    setOpenId(id);
-  }, []);
+    setOpened({ taskId, id });
+  }, [taskId]);
 
   const inspectors = useMemo(() => descriptors.map((descriptor) => {
     if (descriptor.id !== "subagents" || (!hasSubagents && !incomplete)) return descriptor;

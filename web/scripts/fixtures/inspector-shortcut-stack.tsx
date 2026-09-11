@@ -29,7 +29,7 @@ function App() {
   const [populated, setPopulated] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [remapped, setRemapped] = useState(false);
-  const outer = useSubagents(outerBase, { items: populated ? populatedItems : [], status: "running", error }).inspectors;
+  const outer = useSubagents(outerBase, { taskId: "outer", items: populated ? populatedItems : [], status: "running", error }).inspectors;
   const drawerDescriptors = useMemo<InspectorDescriptor<Context>[]>(() => remapped ? [
     { id: "drawer-fresh", title: "抽屉最新映射", shortcut: "f", icon: <Robot size={14} />, render: panel("drawer-fresh") },
     { id: "drawer-info", title: "抽屉信息", shortcut: "i", icon: <Robot size={14} />, render: panel("drawer-info") },

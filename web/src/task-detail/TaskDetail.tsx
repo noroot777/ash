@@ -197,6 +197,7 @@ export function TaskDetail({
   const conversation = useConversation(task.id);
   // 子智能体：列表在 Inspector 里，执行详情从左侧抽屉推出来（与团队模式点执行者同一套外壳）。
   const subagents = useSubagents(TASK_INSPECTORS, {
+    taskId: task.id,
     items: conversation.items,
     status: task.status,
     loading: conversation.refreshing,

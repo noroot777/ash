@@ -343,6 +343,7 @@ export function TeamView({
   const conversation = useConversation(task.id);
   // 子智能体执行详情和执行者详情都是从左侧推出来的抽屉，一次只留一个。
   const subagents = useSubagents(TEAM_INSPECTORS, {
+    taskId: task.id,
     items: conversation.items,
     status: task.status,
     loading: conversation.refreshing,

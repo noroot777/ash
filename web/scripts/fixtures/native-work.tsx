@@ -85,8 +85,12 @@ function App() {
   const [empty, setEmpty] = useState(false);
   const [planSnapshot, setPlanSnapshot] = useState(false);
   const [updates, setUpdates] = useState(() => Number(localStorage.getItem("native-work-updates") ?? 0));
+  // 换任务：宿主组件在真实工作区里是跨任务复用的（TaskDetail 没有按 task.id 传 key），
+  // 所以这里故意让两个任务共用同一份记录——抽屉不该靠「row 还在不在」侥幸关上。
+  const [taskId, setTaskId] = useState("native-work-task");
   const items = useMemo(() => empty ? [] : conversation(phase, updates, planSnapshot), [empty, phase, updates, planSnapshot]);
   const subagents = useSubagents(DESCRIPTORS, {
+    taskId,
     items,
     status: phase && !planSnapshot ? "done" : "running" as TaskStatus,
   });
@@ -104,6 +108,8 @@ function App() {
           <button type="button" onClick={() => setEmpty((value) => !value)}>切换空状态</button>
           <button type="button" onClick={() => { setEmpty(false); setPlanSnapshot((value) => !value); }}>切换计划快照</button>
           <button type="button" onClick={() => { localStorage.setItem("native-work-updates", String(updates + 1)); setUpdates(updates + 1); }}>推送执行进展</button>
+          <button type="button" onClick={() => setTaskId((current) => current === "native-work-task" ? "other-task" : "native-work-task")}>切换任务</button>
+          <span data-task-id={taskId}>{taskId}</span>
           {inspector.toggleButton}
         </header>
         {/* 执行详情抽屉以主区这一栏为定位基准（生产里是 .task-detail / .team-view）。 */}
