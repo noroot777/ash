@@ -11,13 +11,16 @@ process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const { db, ensureSchema } = await import("../src/db/index.js");
-const { projects } = await import("../src/db/schema.js");
+const { projects, sessions } = await import("../src/db/schema.js");
 const { createTasks } = await import("../src/task-store.js");
 const { taskWorkspace } = await import("../src/task-workspace.js");
 const { acceptTask } = await import("../src/task-accept.js");
 const { cleanupAcceptedTask } = await import("../src/git-accept.js");
 const { writeRecord, readAnyPreview, recordPath } = await import("../src/preview-store.js");
-const { beginPreviewStart, endPreviewStart, previewStartCanceled } = await import("../src/preview.js");
+const { beginPreviewStart, endPreviewStart, previewStartCanceled, startPreview, stopPreview } = await import("../src/preview.js");
+const { cancelDriving } = await import("../src/preview-start-state.js");
+const { previewShell } = await import("../src/preview-shell.js");
+const { isPidAlive } = await import("../src/platform.js");
 const { beginAccepting, endAccepting } = await import("../src/acceptance-lock.js");
 const { restartTaskPreview } = await import("../src/workflow-steps.js");
 const { killByPid } = await import("../src/executors/spawn.js");
@@ -45,9 +48,11 @@ async function setup() {
   writeFileSync(join(workspace.path, "feature.txt"), "committed feature\n");
   git(workspace.path, "add", ".");
   git(workspace.path, "commit", "-m", "feature");
+  await db.insert(sessions).values({ id, taskId: task.id, role: "single", agentType: "codex", executor: "codex", startedAt: at, endedAt: at, exitCode: 0 });
   return { repo, task, ...workspace };
 }
 
+const timeline = (s: Awaited<ReturnType<typeof setup>>) => readFileSync(join(root, "runs", s.task.id, `${s.task.projectId}.md`), "utf8");
 const accept = (id: string) => acceptTask(id, "human", { confirmUnverified: true });
 const waitFor = async (check: () => boolean) => {
   const deadline = Date.now() + 5000;
@@ -57,7 +62,8 @@ const waitFor = async (check: () => boolean) => {
 
 try {
   // 持续写入 ignored 缓存，并故意延迟退出；停止发生时工作区必须还在。
-  for (const life of ["task", "manual"] as const) {
+  for (const mode of ["task", "manual", "closed", "closing", "dirty"] as const) {
+    const life = mode === "task" ? "task" : "manual";
     const s = await setup();
     const stopped = join(root, `${s.task.id}-stopped`);
     const ready = join(root, `${s.task.id}-ready`);
@@ -65,10 +71,12 @@ try {
       const fs = require('fs'), path = require('path');
       const cwd = process.cwd();
       fs.mkdirSync('node_modules/.vite', { recursive: true });
-      const timer = setInterval(() => fs.writeFileSync('node_modules/.vite/cache.json', '{}'), 5);
+      const timer = setInterval(() => {
+        try { fs.mkdirSync('node_modules/.vite', { recursive: true }); fs.writeFileSync('node_modules/.vite/cache.json', '{}'); } catch {}
+      }, 5);
       process.on('SIGTERM', () => {
         fs.writeFileSync(${JSON.stringify(stopped)}, String(fs.existsSync(path.join(cwd, '.git'))));
-        setTimeout(() => { clearInterval(timer); process.exit(0); }, 250);
+        setTimeout(() => { clearInterval(timer); process.exit(0); }, 3000);
       });
       fs.writeFileSync(${JSON.stringify(ready)}, 'ready');
     `;
@@ -77,14 +85,59 @@ try {
     await waitFor(() => existsSync(ready));
     mkdirSync(join(root, "runs", s.task.id), { recursive: true });
     writeRecord({ taskId: s.task.id, pid: child.pid!, cmd: "fixture writer", life, log: "", startedAt: new Date().toISOString(), port: null, url: null, state: "ready" });
+    if (mode === "closed") {
+      await stopPreview(s.task.id, "用户关闭预览");
+      assert.equal(isPidAlive(child.pid!), false, "关闭返回时进程仍在退出，验收将失去等待线索");
+    }
+    const closing = mode === "closing" ? stopPreview(s.task.id, "用户关闭预览") : undefined;
+    if (mode === "dirty") writeFileSync(join(s.path, "feature.txt"), "uncommitted changes");
     const result = await accept(s.task.id);
+    await closing;
+    if (mode === "dirty") {
+      assert.equal(result.accepted, false);
+      if (result.accepted) throw new Error("dirty workspace unexpectedly accepted");
+      assert.match(result.error, /预览已在清理前关闭.*可重新启动/);
+      assert.match(timeline(s), /预览已在清理前关闭.*可重新启动/);
+      assert.equal(isPidAlive(child.pid!), false);
+      assert.equal(readFileSync(join(s.path, "feature.txt"), "utf8"), "uncommitted changes");
+      console.log("✓ failed cleanup preserves dirty files and explains how to restart the stopped preview");
+      continue;
+    }
     assert.equal(result.accepted, true, JSON.stringify(result));
     assert.ok(child.exitCode !== null || child.signalCode !== null, "验收返回前进程应确实退出");
     if (process.platform !== "win32") assert.equal(readFileSync(stopped, "utf8"), "true", "停止信号必须先于工作区删除");
     assert.equal(existsSync(s.path), false);
     assert.equal(readAnyPreview(s.task.id), null);
     assert.equal(git(s.repo, "show", "main:feature.txt"), "committed feature");
-    console.log(`✓ ${life} preview stops before workspace deletion; late cache writes cannot recreate the directory`);
+    assert.equal(existsSync(join(s.repo, ".git", "ash-worktree-backups")), false, "正常停止不能依靠半删除备份掩盖竞态");
+    console.log(`✓ ${mode} preview stops before workspace deletion; late cache writes cannot recreate the directory`);
+  }
+
+  {
+    const s = await setup();
+    const ready = join(root, "canceled-ready");
+    const script = join(root, "canceled-preview.cjs");
+    writeFileSync(script, `
+      const fs = require('fs');
+      process.on('SIGTERM', () => {});
+      setInterval(() => {
+        try { fs.mkdirSync('node_modules/.vite', { recursive: true }); fs.writeFileSync('node_modules/.vite/cache.json', '{}'); } catch {}
+      }, 5);
+      fs.writeFileSync(${JSON.stringify(ready)}, String(process.pid));
+    `);
+    const command = `${previewShell().quote(process.execPath)} ${previewShell().quote(script)}`;
+    const pending = startPreview(s.task.id, { id: "preview", kind: "preview", p: { cmd: command, mode: "frontend", life: "manual", ready: "port" } }, s.path);
+    await waitFor(() => existsSync(ready));
+    const record = readAnyPreview(s.task.id)!;
+    try {
+      cancelDriving(s.task.id, null);
+      assert.equal((await pending).ok, false);
+      assert.equal(isPidAlive(Number(readFileSync(ready, "utf8"))), false, "启动已结束时取消的进程必须也已退出");
+      assert.equal((await accept(s.task.id)).accepted, true);
+      assert.equal(existsSync(s.path), false);
+      assert.equal(existsSync(join(s.repo, ".git", "ash-worktree-backups")), false);
+    } finally { killByPid(record.pid); }
+    console.log("✓ canceled startup waits for TERM-resistant processes before ending its generation and accepting a retry");
   }
 
   if (process.platform !== "win32") {
@@ -127,14 +180,21 @@ try {
     console.log("✓ canceled starts retain the workspace until unwound; cleanup retries and concurrent preview gating work");
   }
 
-  for (const mode of ["clean", "modified", "untracked", "foreign", "registered"] as const) {
+  for (const mode of ["clean", "modified", "untracked", "foreign", "registered", "main-checkout", "other-checkout"] as const) {
     const s = await setup();
     git(s.repo, "merge", "--no-ff", "--no-edit", s.branch!);
     const main = git(s.repo, "rev-parse", "main");
-    const index = readFileSync(join(s.repo, ".git", "index"));
     const pointer = readFileSync(join(s.path, ".git"), "utf8");
     const admin = pointer.trim().slice("gitdir: ".length);
     if (mode !== "registered") rmSync(admin, { recursive: true });
+    if (mode === "main-checkout") {
+      git(s.repo, "checkout", s.branch!);
+      writeFileSync(join(s.repo, "feature.txt"), "main checkout edits");
+    }
+    if (mode === "other-checkout") git(s.repo, "worktree", "add", join(root, "other-checkout"), s.branch!);
+    const index = readFileSync(join(s.repo, ".git", "index"));
+    const head = git(s.repo, "rev-parse", "HEAD");
+    const status = git(s.repo, "--no-optional-locks", "status", "--short");
     rmSync(join(s.path, "seed.txt"));
     mkdirSync(join(s.path, "node_modules", ".vite"), { recursive: true });
     writeFileSync(join(s.path, "node_modules", ".vite", "cache.json"), "preserved cache");
@@ -145,15 +205,21 @@ try {
       writeFileSync(join(s.path, ".git"), `gitdir: ${join(root, "other-repo", "worktrees", "entry")}\n`);
     }
     const result = await cleanupAcceptedTask(s.repo, s.task.id, "main");
-    if (mode === "clean") {
-      assert.equal(result.ok, true, JSON.stringify(result));
+    if (mode === "clean" || mode === "main-checkout") {
+      if (mode === "clean") assert.equal(result.ok, true, JSON.stringify(result));
+      else {
+        assert.equal(result.ok, false);
+        if (result.ok) throw new Error("checked-out branch unexpectedly deleted");
+        assert.equal(result.reason, "branch_delete_failed", "主仓检出任务分支不应阻挡残骸备份，但该分支仍不能被删除");
+        assert.equal(readFileSync(join(s.repo, "feature.txt"), "utf8"), "main checkout edits");
+      }
       assert.ok(result.worktreeBackupPath);
       assert.equal(existsSync(s.path), false);
       assert.equal(readFileSync(join(result.worktreeBackupPath, "feature.txt"), "utf8"), "committed feature\n");
       assert.equal(readFileSync(join(result.worktreeBackupPath, "node_modules", ".vite", "cache.json"), "utf8"), "preserved cache");
       assert.equal(readFileSync(`${result.worktreeBackupPath}.git-pointer`, "utf8"), pointer);
       assert.equal(existsSync(join(result.worktreeBackupPath, ".git")), false);
-      assert.equal((await cleanupAcceptedTask(s.repo, s.task.id, "main")).ok, true);
+      assert.equal((await cleanupAcceptedTask(s.repo, s.task.id, "main", { worktree: true, branch: false })).ok, true);
     } else {
       assert.equal(result.ok, false, `${mode} must be retained`);
       assert.ok(existsSync(s.path));
@@ -162,8 +228,20 @@ try {
       if (mode === "untracked") assert.equal(readFileSync(join(s.path, "WIP.txt"), "utf8"), "untracked work");
     }
     assert.equal(git(s.repo, "rev-parse", "main"), main);
+    assert.equal(git(s.repo, "rev-parse", "HEAD"), head);
+    assert.equal(git(s.repo, "--no-optional-locks", "status", "--short"), status);
     assert.deepEqual(readFileSync(join(s.repo, ".git", "index")), index, "恢复检查不能改主仓 index");
     console.log(`✓ dangling registration ${mode}: safe recovery and main checkout protection`);
+  }
+  {
+    const s = await setup();
+    git(s.repo, "merge", "--no-ff", "--no-edit", s.branch!);
+    const admin = readFileSync(join(s.path, ".git"), "utf8").trim().slice("gitdir: ".length);
+    rmSync(admin, { recursive: true });
+    rmSync(join(s.path, "seed.txt"));
+    assert.equal((await accept(s.task.id)).accepted, true);
+    assert.match(timeline(s), /备份包含依赖缓存.*不会自动清理.*确认无误后可直接删除.*\.git-pointer/);
+    console.log("✓ acceptance leaves persistent backup location, disk usage and manual deletion guidance");
   }
   assert.equal(existsSync(recordPath("not-a-task")), false);
   console.log("accept cleanup regression passed");

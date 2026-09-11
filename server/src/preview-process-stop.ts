@@ -2,7 +2,7 @@ import { isPidAlive, isProcessGroupAlive, listProcesses } from "./platform.js";
 import { killByPid } from "./executors/spawn.js";
 import type { PreviewRecord } from "./preview-store.js";
 
-export async function stopPreviewProcesses(record: PreviewRecord): Promise<void> {
+export async function stopPreviewProcesses(record: Pick<PreviewRecord, "pid" | "installPid" | "services">): Promise<void> {
   const roots = [...new Set([record.pid, record.installPid ?? 0, ...(record.services ?? []).map(service => service.pid)])].filter(pid => pid > 1);
   if (!roots.length) return;
   const processes = await listProcesses();

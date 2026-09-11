@@ -2,7 +2,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { bus } from "./bus.js";
-import { killByPid } from "./executors/spawn.js";
 import { RUNS_DIR } from "./paths.js";
 import { heldCacheOf, pruneNodeDeps, removePreparedLinks } from "./preview-deps.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -43,9 +42,10 @@ export async function stopPreview(taskId: string, reason: string | null): Promis
   return await stopPreviewExcept(taskId, reason, null);
 }
 
-export async function stopPreviewForWorktreeCleanup(taskId: string): Promise<void> {
-  await stopPreviewExcept(taskId, "验收清理工作区前回收预览", null, true);
+export async function stopPreviewForWorktreeCleanup(taskId: string): Promise<boolean> {
+  const stopped = await stopPreviewExcept(taskId, "验收清理工作区前回收预览", null);
   if (hasUnfinishedPreviewStart(taskId)) throw new Error("预览启动正在退出，工作区已保留；请稍后重试验收。");
+  return stopped;
 }
 
 /**
@@ -56,7 +56,6 @@ async function stopPreviewExcept(
   taskId: string,
   reason: string | null,
   exceptGen: string | null,
-  waitForExit = false,
 ): Promise<boolean> {
   // readAnyPreview：**还在启动的那一趟也得收得掉**。记录一删，那一趟自己下一个检查点
   // 就会发现代号没了，杀掉自己起的进程、把链撤干净（见 runPreview 里的 abandoned）。
@@ -74,13 +73,7 @@ async function stopPreviewExcept(
   }
   // 不先看组长是否还活着：组长死、vite 仍留在同一进程组，正是必须回收的现场。
   // pid 为 0 = 还没 spawn，`kill(0, …)` 打的是**自己这一组**，绝不能放过去。
-  if (waitForExit) await stopPreviewProcesses(record);
-  else killPreviewProcesses(record);
-  // 还在装依赖的话，要收的是**它**：这时候还没有 dev server，pid 是 0。
-  if (!waitForExit && record.installPid && record.installPid > 0) killByPid(record.installPid);
-  removePreparedLinks(record.links ?? []);
-  archivePreview(record, "stopped");
-  rmSync(recordPath(taskId), { force: true });
+  await retirePreview(record, "stopped");
   if (reason) await appendTaskTimeline(taskId, `预览已回收（${reason}）：${record.url ?? record.cmd}`);
   // 自由工作流状态里的 preview.running 变了就必须发事件：那份快照的版本号只由
   // task.review / task.status 递增，不发的话前端拿到的新快照版本相等，会被当成
@@ -146,29 +139,20 @@ export async function sweepPreviews(): Promise<void> {
       rmSync(recordPath(taskId), { force: true });
       continue;
     }
-    if (record.state === "starting") {
+    const interrupted = record.state === "starting";
+    if (interrupted) {
       // 「正在启动」只有本进程的 startPreview 在驱动，而它一定同时记着自己的代号。
       // **按代号问**，不是按任务问：两趟启动重叠时按任务问会把新那趟错判成孤儿杀掉
       // （见 starting）。这一代没人驱动 = 驱动它的那个 server 已经不在了（重启/被杀），
       // 这条记录再也不会有人收尾：它的子进程可能还活着（detached 的），软链也还挂着。
       if (driving(taskId, record.gen)) continue;
-      killPreviewProcesses(record);
-      if (record.installPid && record.installPid > 0) killByPid(record.installPid);
-      removePreparedLinks(record.links ?? []);
-      archivePreview(record, "failed");
-      rmSync(recordPath(taskId), { force: true });
-      await appendTaskTimeline(taskId, `预览没能起完就中断了（ash 重启），已经清理：${record.cmd}`);
-      continue;
     }
-    if (!(record.services?.length ? record.services.every((s) => s.status === "ready" && alive(s.pid)) : alive(record.pid))) {
-      // 记录的组长死了也要向原进程组补发信号；直接删记录会永久失去唯一的 pgid 线索。
-      killPreviewProcesses(record);
-      // 软链同理，而且**更没有第二次机会**：记录一删，`record.links` 就是最后一份线索，
-      // 此后 stopPreview 再也找不到该撤什么，那条链会永久留在用户的工作区里。
-      removePreparedLinks(record.links ?? []);
-      archivePreview(record, "failed");
-      rmSync(recordPath(taskId), { force: true });
-      await appendTaskTimeline(taskId, `预览进程已自行退出：${record.url ?? record.cmd}`);
+    if (interrupted || !(record.services?.length ? record.services.every((s) => s.status === "ready" && alive(s.pid)) : alive(record.pid))) {
+      try { if (!await retirePreview(record, "failed")) continue; }
+      catch (error) { await appendTaskTimeline(taskId, `预览清理暂缓：${String(error)}`); continue; }
+      await appendTaskTimeline(taskId, interrupted
+        ? `预览没能起完就中断了（ash 重启），已经清理：${record.cmd}`
+        : `预览进程已自行退出：${record.url ?? record.cmd}`);
       continue;
     }
     if (record.life === "idle30" && Date.now() - Date.parse(record.startedAt) > IDLE_LIFE_MS) {
@@ -230,8 +214,13 @@ export function startPreviewSweeper(): NodeJS.Timeout {
   return timer;
 }
 
-function killPreviewProcesses(record: PreviewRecord): void {
-  for (const pid of new Set([record.pid, ...(record.services ?? []).map((s) => s.pid)])) {
-    if (pid > 0) killByPid(pid);
-  }
+async function retirePreview(record: PreviewRecord, status: "stopped" | "failed"): Promise<boolean> {
+  // 手动关闭、清扫与验收共享退出确认；保留记录到退出后，紧接着的验收才能找到进程。
+  await stopPreviewProcesses(record);
+  const current = readAnyPreview(record.taskId);
+  if (!current || current.gen !== record.gen || current.pid !== record.pid) return false;
+  removePreparedLinks(record.links ?? []);
+  archivePreview(record, status);
+  rmSync(recordPath(record.taskId), { force: true });
+  return true;
 }

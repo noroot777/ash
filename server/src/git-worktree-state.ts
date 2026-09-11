@@ -111,7 +111,8 @@ export async function removeMissingWorktreeRegistrations(repo: string, scope: Sc
 export class UnreadableWorktreeError extends Error {}
 
 export async function hasWorktreeRegistration(repo: string, path: string, branch: string): Promise<boolean> {
-  return (await registrations(repo)).some(record => samePath(record.path, path) || record.branch === branch);
+  return (await registrations(repo)).some(record => samePath(record.path, path)
+    || (record.branch === branch && !samePath(record.path, repo)));
 }
 
 export async function assertReadableWorktree(path: string, repo: string, branch: string): Promise<void> {

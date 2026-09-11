@@ -485,8 +485,9 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy, confirmUnverifie
       : null;
   if (branchUnmergeable) cleanPlan.branch = false;
 
+  let previewStopped = false;
   if (cleanPlan.worktree) {
-    try { await stopPreviewForWorktreeCleanup(taskId); }
+    try { previewStopped = await stopPreviewForWorktreeCleanup(taskId); }
     catch (failure) {
       const error = `${completedSummary}${failure instanceof Error ? failure.message : String(failure)}`;
       await appendTaskTimeline(taskId, error);
@@ -494,18 +495,19 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy, confirmUnverifie
     }
   }
   const cleanup = await cleanupAcceptedTask(project.repoPath, taskId, merge.targetBranch, cleanPlan);
-  if (cleanup.worktreeBackupPath) await appendTaskTimeline(taskId, `半删除工作区的剩余源码已与任务提交核对，全部残留文件已备份到 ${cleanup.worktreeBackupPath}。`);
+  if (cleanup.worktreeBackupPath) await appendTaskTimeline(taskId, `半删除工作区的剩余源码已与任务提交核对，全部残留文件已备份到 ${cleanup.worktreeBackupPath}。备份包含依赖缓存、会占用磁盘，不会自动清理；确认无误后可直接删除该目录及同名 .git-pointer 文件。`);
   if (!cleanup.ok) {
+    const previewNotice = previewStopped ? "预览已在清理前关闭，处理清理问题后可重新启动。" : "";
     await appendTaskTimeline(
       taskId,
-      `验收清理未完成：${cleanup.message}。${tagged ? "标签已保留，尚未合并" : "合并结果已保留，阶段停在 merged"}，status 保持 ${task.status}。`,
+      `验收清理未完成：${cleanup.message}。${tagged ? "标签已保留，尚未合并" : "合并结果已保留，阶段停在 merged"}，status 保持 ${task.status}。${previewNotice}`,
     );
     return {
       accepted: false,
       httpStatus: 409,
       taskId,
       reason: cleanup.reason,
-      error: `${completedSummary}${cleanup.message}`,
+      error: `${completedSummary}${cleanup.message}${previewNotice}`,
       completedMerge,
       completedTag,
       status: task.status,
