@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { composerDraftKey, useDraft, type DraftHandle } from "../lib/DraftStore.tsx";
 import { attachmentsFromPaths, joinDraftText, mergeAttachments } from "../task-detail/withdrawDraft.ts";
+import type { ConversationFork } from "../task-detail/conversationFork.ts";
 
 /**
  * 新建任务框的草稿。
@@ -14,14 +15,15 @@ import { attachmentsFromPaths, joinDraftText, mergeAttachments } from "../task-d
  * 没了，同一份种子还挂在上面时再开一次会被并第二遍。并法与对话框撤回同一套：种子在前、
  * 已有草稿在后，附件按路径去重，一个字都不覆盖。
  */
-export type ComposerDraft = { body: string; attachments: string[]; noteIds?: string[] };
+export type ComposerDraft = { body: string; attachments: string[]; noteIds?: string[]; fork?: ConversationFork };
 
 export function useComposerDraft(
   projectId: string,
   seed?: ComposerDraft | null,
   onSeeded?: () => void,
 ): DraftHandle {
-  const draft = useDraft(composerDraftKey(projectId));
+  const key = composerDraftKey(projectId);
+  const draft = useDraft(seed?.fork ? `${key}:fork:${seed.fork.sourceTaskId}:${seed.fork.replyId}` : key);
   const seeded = useRef<ComposerDraft | null>(null);
   const { setAttachments, setNoteIds, setText } = draft;
   useEffect(() => {
@@ -31,7 +33,7 @@ export function useComposerDraft(
     setAttachments((current) => mergeAttachments(attachmentsFromPaths(seed.attachments), current));
     const noteIds = seed.noteIds ?? [];
     if (noteIds.length) setNoteIds((current) => [...new Set([...current, ...noteIds])]);
-    onSeeded?.();
+    if (!seed.fork) onSeeded?.();
   }, [onSeeded, seed, setAttachments, setNoteIds, setText]);
   return draft;
 }

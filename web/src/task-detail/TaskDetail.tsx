@@ -46,6 +46,8 @@ import { FreeReviewDialog } from "../free-workflow/FreeReviewDialog.tsx";
 import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import { freeReviewRetryable } from "./turnRetry.ts";
 import { useExecutorGate } from "./ExecutorGate.tsx";
+import type { ComposerDraft } from "../composer/composerDraft.ts";
+import { snapshotConversationFork } from "./conversationFork.ts";
 
 interface TaskInspectorContext {
   nativeWork: NativeWorkInspectorProps;
@@ -152,6 +154,7 @@ export function TaskDetail({
   onDeleted,
   onOpenTask,
   onHandoff,
+  onForkTask,
   initialReviewOpen = false,
   onReviewOpenChange,
   inspectorMode = "page",
@@ -165,6 +168,7 @@ export function TaskDetail({
   onDeleted: (taskId: string) => void;
   onOpenTask: (taskId: string) => void;
   onHandoff?: (task: Task) => void;
+  onForkTask?: (draft: ComposerDraft) => void;
   initialReviewOpen?: boolean;
   onReviewOpenChange?: (open: boolean) => void;
   inspectorMode?: "page" | "drawer";
@@ -493,6 +497,11 @@ export function TaskDetail({
                     pendingExecutor={pendingExecutor}
                     loading={conversation.refreshing}
                     error={conversation.error}
+                    onForkReply={onForkTask && !conversation.traceError && !handedOut
+                      && conversation.sessions.every((session) => session.taskId === task.id) ? (replyId) => {
+                      try { onForkTask(snapshotConversationFork(task, conversation.items, replyId)); }
+                      catch (reason) { notify(reason instanceof Error ? reason.message : String(reason)); }
+                    } : undefined}
                     onRetryTurn={async (target) => {
                       try {
                         if (!(await confirmExecutorSwap(task.id))) return;

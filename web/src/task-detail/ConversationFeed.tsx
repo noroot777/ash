@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { File, ShieldCheck } from "@phosphor-icons/react";
+import { File, ShieldCheck, GitFork } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
 import { runActivityExecutor, runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
@@ -34,6 +34,7 @@ import { type TurnRetryTarget, turnRetryTarget } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "./QuestionHistory.tsx";
 import { isQuestionAnswer, type QuestionRecord } from "@ash/shared/questions";
+import { canForkReply } from "./conversationFork.ts";
 
 // 审查者的身份标：这一回合不是在做需求，是在验收刚才的产物。就地验证跑在被验任务
 // 自己的会话里（常常还是同一个执行器），不标出来的话它跟上一条实现回合长得一模一样。
@@ -51,6 +52,7 @@ function AgentMessage({
   retry,
   hideTime,
   laneRole,
+  onFork,
 }: {
   item: Extract<ConversationItem, { kind: "agent" }>;
   /** 这条气泡是不是「上一回合崩了」的那一条：给了就在尾栏挂重试按钮。 */
@@ -59,6 +61,7 @@ function AgentMessage({
   hideTime?: boolean;
   /** 这条气泡在审查卡里的位置：卡头已经把身份（lead 还包括时间）说过一遍了。 */
   laneRole?: ReviewLaneMessageRole;
+  onFork?: () => void;
 }) {
   const duration = durationBetween(item.at, item.endedAt);
   const reviewer = item.reviewer;
@@ -69,19 +72,22 @@ function AgentMessage({
   const showDuration = !!duration && laneRole !== "lead";
   // 头部一个元素都不剩时整条不渲染，复制按钮改挂尾栏——留一条空白横杠比复读还难看。
   const headless = !showIdentity && !showBadge && !showTime && !showDuration;
-  const footerActions = headless ? (
+  const footerActions = headless || onFork || retry ? (
     <>
-      <CopyButton
+      {headless && <CopyButton
         className="task-message-copy-action"
         value={item.markdown}
         ariaLabel="复制这条回复"
         label="复制这条回复"
         icon
         iconSize={12}
-      />
+      />}
+      {onFork && <button type="button" className="task-message-copy-action" onClick={onFork}>
+        <GitFork size={12} aria-hidden="true" />派生新任务
+      </button>}
       {retry}
     </>
-  ) : retry;
+  ) : undefined;
   return (
     <article
       className={`task-message task-message--agent${item.continuation ? " is-continuation" : ""}${reviewer ? " is-reviewer" : ""}${laneRole ? " is-lane-owned" : ""}`}
@@ -169,6 +175,7 @@ export function ConversationFeed({
   error,
   footer,
   onRetryTurn,
+  onForkReply,
   reviewRetryable,
   reviews,
   systemNoticeMode,
@@ -185,6 +192,7 @@ export function ConversationFeed({
   footer?: React.ReactNode;
   /** 重跑上一回合。不给就不出重试按钮（只读的会话视图用得上）。 */
   onRetryTurn?: (target: TurnRetryTarget) => Promise<void> | void;
+  onForkReply?: (replyId: string) => void;
   /** 自由工作流的审查链停在「异常结束」——只有它为真，审查会话上才出重跑按钮。 */
   reviewRetryable?: boolean;
   /** 自由派审的落盘记录：折叠卡靠它反查报告的 runId（旁注里只有轮号）。 */
@@ -236,6 +244,7 @@ export function ConversationFeed({
           item={item}
           hideTime={hiddenTimes.has(item.id)}
           laneRole={laneRole}
+          onFork={onForkReply && !loading && !error && canForkReply(item) ? () => onForkReply(item.id) : undefined}
           retry={retry && item.id === retryItemId ? (
             <TurnRetryButton
               exitStatus={retry.exitStatus}

@@ -80,16 +80,18 @@ export function useConversation(taskId: string, revision = 0) {
     try {
       const nextSessions = await api.sessions(taskId);
       let traceFailures = 0;
+      let outputFailures = 0;
       const outputs = await Promise.all(
         nextSessions.map(async (session) => {
           const [output, trace] = await Promise.all([
-            api.sessionOutput(session.id).catch(() => ""),
+            api.sessionOutput(session.id).catch(() => { outputFailures += 1; return ""; }),
             api.sessionTrace(session.id).catch(() => { traceFailures += 1; return []; }),
           ]);
           return { session, output, trace };
         }),
       );
       setSessions(nextSessions);
+      if (outputFailures) setError(new Error(`${outputFailures} 个会话的正文读取失败，请刷新后再派生任务。`));
       if (traceFailures) setTraceError(new Error(`${traceFailures} 个会话的执行过程读取失败，子智能体与内部任务记录可能不完整。`));
       setPersisted(outputs.filter((entry) => entry.output.trim() || entry.trace.length));
       if (preserveArrivals) {

@@ -49,6 +49,8 @@ import {
   type ComposerExecutorRole,
 } from "./executorOverrides.ts";
 import { useComposerRunSummary } from "./composerRunSummary.ts";
+import { ComposerForkContext } from "./ComposerForkContext.tsx";
+import { forkTaskBody } from "../task-detail/conversationFork.ts";
 export type { ComposerDraft };
 
 export function TaskComposerPanel({
@@ -85,6 +87,7 @@ export function TaskComposerPanel({
   const draft = useComposerDraft(project.id, initialDraft, onDraftSeeded);
   const body = draft.text;
   const setBody = draft.setText;
+  const fork = initialDraft?.fork;
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [profilesReady, setProfilesReady] = useState(false);
   const [executors, setExecutors] = useState(emptyComposerExecutorConfigs);
@@ -161,8 +164,8 @@ export function TaskComposerPanel({
     return () => window.removeEventListener("keydown", key);
   }, [onCancel]);
   const allAttachments = useMemo(
-    () => [...new Set(uploads.attachments.map((item) => item.path))],
-    [uploads.attachments],
+    () => [...new Set([...uploads.attachments.map((item) => item.path), ...(fork?.attachmentPaths ?? [])])],
+    [uploads.attachments, fork],
   );
   const applySlash = (nextMode: TaskMode, rest = "") => {
     onModeChange(nextMode);
@@ -344,7 +347,7 @@ export function TaskComposerPanel({
   // 有图还在传就先不放行：附件路径是上传成功才有的，这时候创建等于把刚粘的那张图
   // 悄悄扔掉。三种模式一视同仁——切走这个面板就没人接住在途的那张了。
   const waitingUploads = uploads.uploading;
-  const canSubmit = (!!body.trim() || allAttachments.length > 0)
+  const canSubmit = (fork ? !!body.trim() : !!body.trim() || allAttachments.length > 0)
     && !busy && !noExecutor && !roleBlocked && !scheduleError && !waitingUploads;
 
   const changeLaunchMode = (next: LaunchMode) => {
@@ -364,6 +367,7 @@ export function TaskComposerPanel({
         autoTitle: mode === "single",
         groupId: groupId || null,
         labels,
+        originTaskId: fork?.sourceTaskId,
       };
       if (mode === "duet") {
         // 议题同时送 body 和 duet.topic：后端会把附件块分别拼在两者末尾（task-routes
@@ -372,12 +376,12 @@ export function TaskComposerPanel({
         // 会拿到一段只剩附件路径、没有正文的 body。
         task = await api.createTask({
           ...common,
-          body: body.trim(),
+          body: forkTaskBody(fork, body),
           attachments: allAttachments,
           mode,
           duet: {
             ...DUET_DEFAULTS,
-            topic: body.trim(),
+            topic: forkTaskBody(fork, body),
             voiceA: voiceAExecutor.agentType,
             voiceB: voiceBExecutor.agentType,
             voiceAExecutorId: voiceAExecutor.executorId,
@@ -393,7 +397,7 @@ export function TaskComposerPanel({
       } else if (mode === "team") {
         task = await api.createTask({
           ...common,
-          body: body.trim(),
+          body: forkTaskBody(fork, body),
           attachments: allAttachments,
           mode,
           agentType: executorTypes.lead,
@@ -418,7 +422,7 @@ export function TaskComposerPanel({
       } else {
         task = await api.createTask({
           ...common,
-          body: body.trim(),
+          body: forkTaskBody(fork, body),
           attachments: allAttachments,
           mode,
           agentType: singleRun.agentType,
@@ -482,17 +486,18 @@ export function TaskComposerPanel({
     <main className="task-composer-panel is-studio">
       <header className="composer-header">
         <span className="workspace-kind-chip">新建</span>
-        <b>新建任务</b>
+        <b>{fork ? "派生新任务" : "新建任务"}</b>
         <span>{project.name}</span>
         {/* 草稿是「关掉也留着」的，所以必须有一个明写的丢弃口 —— 否则上一次没写完的
             东西会一直顶在新建框里，用户只能自己全选删。 */}
-        {(!!body || allAttachments.length > 0 || uploads.uploading) && (
+        {(!!body || uploads.attachments.length > 0 || uploads.uploading) && (
           <Button variant="ghost" onClick={() => { draft.clear(); textareaRef.current?.focus(); }}>清空草稿</Button>
         )}
         <Button variant="ghost" onClick={onCancel}>取消 Esc</Button>
       </header>
       <div className="composer-scroll">
         <div className="composer-inner">
+          {fork && <ComposerForkContext fork={fork} />}
           <ComposerFields
             mode={mode}
             singleRunSummary={singleRunSummary}
