@@ -275,12 +275,15 @@ export function TaskDetail({
     if (task.status !== "running" && task.status !== "queued") setPendingExecutor(null);
   }, [task.status]);
 
+  // 中间那一栏换内容时，子智能体抽屉必须跟着收起来 —— 它盖在主区上面，不收的话用户
+  // 点了「审查」/ 文件 / diff 只会看到原来那份执行详情（与 TeamView 同一口径）。
   const changeReviewOpen = (open: boolean) => {
     setReviewOpen(open);
     if (open) {
       setPreviewOpen(false);
       setOpenFilePath(null);
       setOpenScmDiff(null);
+      subagents.closeAgent();
     }
     onReviewOpenChange?.(open);
   };
@@ -383,7 +386,7 @@ export function TaskDetail({
         followUps,
         onOpenTask,
         onOpenReview: () => changeReviewOpen(true),
-        onOpenPreview: () => { setPreviewOpen(true); changeReviewOpen(false); setOpenFilePath(null); setOpenScmDiff(null); },
+        onOpenPreview: () => { setPreviewOpen(true); changeReviewOpen(false); setOpenFilePath(null); setOpenScmDiff(null); subagents.closeAgent(); },
         onTaskUpdated: onTaskUpdate,
         onPatch: patch,
         onQueueChanged: (updatedTask) => {
@@ -395,6 +398,7 @@ export function TaskDetail({
           setPreviewOpen(false);
           setOpenFilePath(path);
           setOpenScmDiff(null);
+          subagents.closeAgent();
           if (reviewOpen) changeReviewOpen(false);
         },
         openScmDiff,
@@ -402,6 +406,7 @@ export function TaskDetail({
           setPreviewOpen(false);
           setOpenScmDiff(target);
           setOpenFilePath(null);
+          subagents.closeAgent();
           if (reviewOpen) changeReviewOpen(false);
         },
         notify,
