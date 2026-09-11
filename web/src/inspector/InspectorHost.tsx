@@ -66,7 +66,9 @@ function applyTabPolicy<Context>(
     ...policy.defaultOpenTabIds,
     policy.defaultActiveTabId,
   ], descriptors);
-  const activeTab = descriptorIds.has(policy.defaultActiveTabId)
+  const activeTab = state.activeTab && descriptorIds.has(state.activeTab) && policy.preserveActiveTabIds?.includes(state.activeTab)
+    ? state.activeTab
+    : descriptorIds.has(policy.defaultActiveTabId)
     ? policy.defaultActiveTabId
     : openTabs[0] ?? null;
   return {

@@ -498,7 +498,7 @@ function sideTurnReason(task: typeof tasks.$inferSelect): string | null {
 }
 
 /** 升级队首 queued 消息；导出给回归测试，HTTP 端点只是薄封装。 */
-export async function steerQueuedMessage(messageId: string): Promise<SteerQueuedMessageResult> {
+export async function steerQueuedMessage(messageId: string, options: { nativeOnly?: boolean } = {}): Promise<SteerQueuedMessageResult> {
   const message = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, messageId))).at(0);
   if (!message) return { ok: false, status: 404, error: "待发送消息不存在" };
   if (message.status !== "pending" || message.mode !== "queued") {
@@ -544,6 +544,8 @@ export async function steerQueuedMessage(messageId: string): Promise<SteerQueued
     if (nativeMessageCanSteer(message, native.agentType)) return deliverNativeSteer(message, native);
     native.cancel();
   }
+
+  if (options.nativeOnly) return { ok: false, status: 409, error: "当前执行器不能实时接收，消息等待本轮结束后发送" };
 
   let resolveDelivery!: (result: SteerQueuedMessageResult) => void;
   const delivery = new Promise<SteerQueuedMessageResult>((resolve) => { resolveDelivery = resolve; });

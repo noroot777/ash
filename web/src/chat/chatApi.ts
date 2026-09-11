@@ -4,6 +4,8 @@ import { request } from "../lib/apiClient.ts";
 const json = (body: unknown, method = "POST"): RequestInit => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 export const chatApi = {
+  sideChats: (taskId: string) => request<ChatRoom[]>(`/tasks/${encodeURIComponent(taskId)}/side-chats`),
+  createSideChat: (taskId: string, member: ChatMember, id: string) => request<ChatRoom>(`/tasks/${encodeURIComponent(taskId)}/side-chats`, json({ member, id })),
   rooms: (projectId: string) => request<ChatRoom[]>(`/chats?projectId=${encodeURIComponent(projectId)}`),
   create: (projectId: string, name: string, members: ChatMember[]) => request<ChatRoom>("/chats", json({ projectId, name, members })),
   update: (roomId: string, patch: { name?: string; members?: ChatMember[] }) => request<ChatRoom>(`/chats/${roomId}`, json(patch, "PATCH")),

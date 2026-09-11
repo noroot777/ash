@@ -7,6 +7,7 @@
     "node": ">=22.16.0"
   },
   "scripts": {
+    "test:side-chat": "tsx scripts/test-side-chat.ts",
     "test:assistant": "tsx scripts/test-assistant.ts",
     "test:native-work": "tsx scripts/test-native-work.ts && tsx scripts/test-native-agent-models.ts && tsx scripts/test-native-activity-stream.ts && tsx scripts/test-native-upload-visibility.ts && tsx scripts/test-duet-native-trace.ts",
     "test:chat-context": "tsx scripts/test-chat-context.ts",

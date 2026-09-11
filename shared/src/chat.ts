@@ -24,7 +24,8 @@ export interface ChatRoom {
   name: string;
   members: ChatMember[];
   createdAt: string;
-  kind?: "chat" | "assistant";
+  kind?: "chat" | "assistant" | "side";
+  parentTaskId?: string | null;
 }
 
 export type ChatMessageStatus = "queued" | "running" | "done" | "failed" | "stopped";
@@ -41,6 +42,12 @@ export interface ChatMessage {
   taskId: string | null;
   createdAt: string;
   assistant?: AssistantResult;
+  forward?: {
+    messageId: string;
+    taskId: string;
+    text: string;
+    status: "queued" | "delivering" | "sent" | "canceled" | "unavailable";
+  };
 }
 
 export interface ChatSnapshot {

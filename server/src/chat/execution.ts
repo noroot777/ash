@@ -11,7 +11,8 @@ import { canSeeProject } from "../auth/visibility.js";
 import { ANONYMOUS_ACTOR, SINGLE_ACTOR, type Actor } from "../auth/context.js";
 import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { db } from "../db/index.js";
-import { agents, projects, users } from "../db/schema.js";
+import { agents, projects, users, tasks } from "../db/schema.js";
+import { taskFileRoot } from "../file-browser.js";
 import { ChatBoundaryError, readOnlyChatTool, watchChatWorkspace, type ChatWorkspaceObserver } from "./boundary.js";
 
 export interface ChatInvocation {
@@ -37,7 +38,7 @@ function changeNotice({ paths, more, degraded }: { paths: string[]; more: boolea
   return `⚠️ 咨询期间项目目录出现并发变更（${shown}${suffix}）。变更无法归因：可能来自其他任务、验收合并、你自己的操作，也可能是本次咨询越过了只读约定。群聊未代为撤销；如非预期请检查项目。${tail}`;
 }
 
-export async function invokeChat(member: ChatMember, owner: string | null, prompt: string, signal: AbortSignal, projectId: string, options?: { purpose: "summary" | "assistant" }): Promise<ChatInvocation> {
+export async function invokeChat(member: ChatMember, owner: string | null, prompt: string, signal: AbortSignal, projectId: string, options?: { purpose: "summary" | "assistant" } | { purpose: "side"; taskId: string }): Promise<ChatInvocation> {
   signal.throwIfAborted();
   const scope = await executorOwnerScope(owner);
   const project = (await db.select().from(projects).where(eq(projects.id, projectId))).at(0);
@@ -57,11 +58,17 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
   const executor = await resolveExecutorFor({ type: member.agentType, executorId: member.executorId, model: member.model, reasoningEffort: member.reasoningEffort, ...scope });
   const env = await runEnvForOwner(owner, executor.type);
   signal.throwIfAborted();
-  const temporary = !!options || !project?.repoPath.trim();
+  let sideCwd: string | undefined;
+  if (options?.purpose === "side") {
+    const parent = (await db.select().from(tasks).where(eq(tasks.id, options.taskId))).at(0);
+    if (!parent || parent.projectId !== projectId) throw new Error("侧聊的主任务已不可访问。");
+    sideCwd = (await taskFileRoot(parent.id))?.path;
+  }
+  const temporary = (options && options.purpose !== "side") || (!sideCwd && !project?.repoPath.trim());
   // repoPath 按用户写的原样存（`~/code/x` 保持可读、可搬机器），所以每个消费点都得自己
   // 展开——少这一步，watchChatWorkspace 的 realpath 会直接 ENOENT，被 @ 的成员一个不剩
   // 全报同一条错，而且错在 CLI 起来之前，看着像「智能体坏了」。
-  const cwd = temporary ? await mkdtemp(join(tmpdir(), "ash-chat-")) : expandHome(project!.repoPath);
+  const cwd = temporary ? await mkdtemp(join(tmpdir(), "ash-chat-")) : sideCwd ?? expandHome(project!.repoPath);
   if (!temporary && !await stat(cwd).then((entry) => entry.isDirectory()).catch(() => false)) {
     throw new Error(`群聊项目的工作目录不存在：${project!.repoPath}。请在项目设置里改成这台机器上真实存在的目录，再重新 @。`);
   }

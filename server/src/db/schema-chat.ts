@@ -8,8 +8,9 @@ export const chatRooms = sqliteTable("chat_rooms", {
   name: text("name").notNull(),
   members: text("members").notNull(),
   kind: text("kind").notNull().default("chat"),
+  parentTaskId: text("parent_task_id"),
   createdAt: text("created_at").notNull(),
-}, (table) => [index("chat_rooms_project").on(table.projectId)]);
+}, (table) => [index("chat_rooms_project").on(table.projectId), index("chat_rooms_parent").on(table.parentTaskId)]);
 
 export const chatMessages = sqliteTable("chat_messages", {
   id: text("id").primaryKey(),
@@ -24,6 +25,7 @@ export const chatMessages = sqliteTable("chat_messages", {
   taskId: text("task_id"),
   context: text("context"),
   assistant: text("assistant"),
+  forwardMessageId: text("forward_message_id"),
   // 目录观察附注（execution.ts changeNotice）。invoke 一返回就落到这一列：附注是
   // 「项目可能被并发改动/观察失效」的安全信息，不能只活在 reply() 的闭包里——进程
   // 崩溃/重启后 stop()/recover() 的固定文案覆盖要靠它把附注拼回正文（service.ts）。
@@ -96,6 +98,13 @@ export async function ensureChatSchema(client: Pick<Client, "executeMultiple" | 
   const roomColumns = await client.execute("PRAGMA table_info(chat_rooms)");
   if (!roomColumns.rows.some((column) => column.name === "kind")) {
     await client.execute("ALTER TABLE chat_rooms ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat'");
+  }
+  if (!roomColumns.rows.some((column) => column.name === "parent_task_id")) {
+    await client.execute("ALTER TABLE chat_rooms ADD COLUMN parent_task_id TEXT");
+  }
+  await client.execute("CREATE INDEX IF NOT EXISTS chat_rooms_parent ON chat_rooms(parent_task_id)");
+  if (!messageColumns.rows.some((column) => column.name === "forward_message_id")) {
+    await client.execute("ALTER TABLE chat_messages ADD COLUMN forward_message_id TEXT");
   }
   if (!messageColumns.rows.some((column) => column.name === "assistant")) {
     await client.execute("ALTER TABLE chat_messages ADD COLUMN assistant TEXT");

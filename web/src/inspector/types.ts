@@ -19,6 +19,7 @@ export interface InspectorTabPolicy {
   defaultOpenTabIds: readonly string[];
   /** Focused once when stateKey changes; manual focus wins until then. */
   defaultActiveTabId: string;
+  preserveActiveTabIds?: readonly string[];
 }
 
 export interface InspectorHostControls {

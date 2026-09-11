@@ -13,11 +13,13 @@ import { ChatContextManager } from "./context.js";
 import { limitedChatInvoke } from "./invocation-queue.js";
 import type { ChatContextPolicy } from "./context-format.js";
 import { assistantFormatter, invokeAssistant } from "./assistant.js";
+import { parseSideChatReply, sideChatPrompt } from "./side-prompt.js";
+import { sideChatParent, settleSideChat, dispatchSideMessage, sideMessageReceipts } from "./side-delivery.js";
 
 export type RoomRow = typeof chatRooms.$inferSelect;
 type MessageRow = typeof chatMessages.$inferSelect;
-export const toRoom = (row: RoomRow): ChatRoom => ({ id: row.id, projectId: row.projectId, name: row.name, members: JSON.parse(row.members), createdAt: row.createdAt, kind: row.kind === "assistant" ? "assistant" : "chat" });
-export const toMessage = ({ context: _context, modelReply: _modelReply, notice: _notice, assistant, ...row }: MessageRow): ChatMessage => ({ ...row, role: row.role as ChatMessage["role"], status: row.status as ChatMessage["status"], mentions: JSON.parse(row.mentions), ...(assistant ? { assistant: JSON.parse(assistant) } : {}) });
+export const toRoom = (row: RoomRow): ChatRoom => ({ id: row.id, projectId: row.projectId, name: row.name, members: JSON.parse(row.members), createdAt: row.createdAt, kind: row.kind === "side" ? "side" : row.kind === "assistant" ? "assistant" : "chat", parentTaskId: row.parentTaskId });
+export const toMessage = ({ context: _context, modelReply: _modelReply, notice: _notice, forwardMessageId: _forwardMessageId, assistant, ...row }: MessageRow): ChatMessage => ({ ...row, role: row.role as ChatMessage["role"], status: row.status as ChatMessage["status"], mentions: JSON.parse(row.mentions), ...(assistant ? { assistant: JSON.parse(assistant) } : {}) });
 
 // stop()/recover() 用固定文案覆盖 body 时，把已持久化的目录附注（chat_messages.notice，
 // invoke 一返回就落库）拼回正文。附注是「项目可能被并发改动/观察失效」的安全信息，不能随
@@ -28,7 +30,9 @@ const withStoredNotice = (text: string | SQL) =>
 
 export async function roomMessages(roomId: string) {
   const rows = await db.select().from(chatMessages).where(eq(chatMessages.roomId, roomId)).orderBy(desc(chatMessages.createdAt), desc(chatMessages.id)).limit(500);
-  return rows.reverse().map(toMessage);
+  const messages = rows.reverse().map(toMessage);
+  await sideMessageReceipts(messages, rows.flatMap((row) => row.forwardMessageId ? [row.forwardMessageId] : []));
+  return messages;
 }
 
 export class ChatService {
@@ -63,13 +67,18 @@ export class ChatService {
       if (existing.roomId !== row.id || existing.role !== "user" || existing.body !== body) throw new Error("消息编号冲突，请刷新后重试。");
       return;
     }
-    if (isChatClearCommand(body)) {
+    if (row.kind === "side") {
+      await sideChatParent(row);
+      const busy = await db.select({ id: chatMessages.id }).from(chatMessages).where(and(eq(chatMessages.roomId, row.id), inArray(chatMessages.status, ["queued", "running"]))).limit(1);
+      if (busy.length) throw new Error("请等待侧聊回复结束，或先停止回复再发送。");
+    }
+    if (row.kind !== "side" && isChatClearCommand(body)) {
       await this.stop(row.id);
       await this.contexts.clear(row.id, { id: messageId, body, author });
       return;
     }
     const room = toRoom(row);
-    const mentions = room.kind === "assistant" ? room.members.slice(0, 1) : mentionedMembers(body, room.members);
+    const mentions = room.kind !== "chat" ? room.members.slice(0, 1) : mentionedMembers(body, room.members);
     const { cutoff, tail } = mentions.length ? await this.contexts.captureSnapshot(row.id) : { cutoff: 0, tail: [] };
     const timestamp = now();
     await db.transaction(async (tx) => {
@@ -84,7 +93,9 @@ export class ChatService {
   async stop(roomId: string) {
     this.stopping.add(roomId);
     try {
-      const body = sql`CASE WHEN (SELECT kind FROM chat_rooms WHERE id = ${roomId}) = 'assistant'
+      const body = sql`CASE WHEN (SELECT kind FROM chat_rooms WHERE id = ${roomId}) = 'side'
+        THEN ${"你已停止侧聊回复，主任务不受影响。已回传的消息仍以回执为准；发送新消息可继续。"}
+        WHEN (SELECT kind FROM chat_rooms WHERE id = ${roomId}) = 'assistant'
         THEN ${"你已停止这次回复。发送新消息可继续；已创建的任务可在任务卡中管理。"}
         ELSE ${"你已停止这次回复。再次 @ 才会继续；已创建的任务可在任务卡中管理。"} END`;
       const stopped = await db.update(chatMessages).set({ status: "stopped", body: withStoredNotice(body), context: null })
@@ -151,10 +162,11 @@ export class ChatService {
       const room = storedRoom.kind === "assistant" && context.projectId !== undefined ? { ...storedRoom, projectId: context.projectId } : storedRoom;
       const member = context.member;
       const isAssistant = room.kind === "assistant";
-      const format = isAssistant ? await assistantFormatter(room) : undefined;
+      if (room.kind === "side") await sideChatParent(room);
+      const format = room.kind === "side" ? sideChatPrompt : isAssistant ? await assistantFormatter(room) : undefined;
       const prompt = context.prompt ?? await this.contexts.prepare(room, member, context.cutoff, context.source, abort.signal, context.tail, format, isAssistant ? 9000 : 0);
       const assistantReply = isAssistant ? await invokeAssistant(member, room, prompt, abort.signal, this.invoke) : undefined;
-      const invoked = assistantReply ? { text: "", notice: undefined } : await this.invoke(member, room.ownerUserId, prompt, abort.signal, room.projectId);
+      const invoked = assistantReply ? { text: "", notice: undefined } : await this.invoke(member, room.ownerUserId, prompt, abort.signal, room.projectId, room.kind === "side" ? { purpose: "side", taskId: room.parentTaskId! } : undefined);
       notice = invoked.notice;
       // 落列必须和「补 stopped 正文」是同一条 UPDATE：stop() 可能已在 notice 落列之前把本消息
       // 覆盖成不带附注的停止文案（那时列还是 NULL，withStoredNotice 拼不到）。若分两步写、
@@ -165,6 +177,12 @@ export class ChatService {
         notice,
         body: sql`CASE WHEN ${chatMessages.status} = ${"stopped"} AND ${chatMessages.body} IS NOT NULL AND instr(${chatMessages.body}, ${notice}) = 0 THEN ${chatMessages.body} || ${"\n\n"} || ${notice} ELSE ${chatMessages.body} END`,
       }).where(eq(chatMessages.id, message.id));
+      if (room.kind === "side") {
+        const pending = await settleSideChat(room, message.id, parseSideChatReply(invoked.text, context.source), notice, abort.signal);
+        if (pending) void dispatchSideMessage(pending.id, pending.taskId).catch((error) => console.error("[side-chat] delivery deferred", error));
+        await preserveNotice();
+        return abort.signal.aborted ? undefined : member;
+      }
       const result = assistantReply ?? parseChatReply(invoked.text);
       abort.signal.throwIfAborted();
       let taskToStart: string | null = null;
