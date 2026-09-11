@@ -120,7 +120,7 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
         {action === "family" && <ul>{selectedProposal.map(row => <li key={row.taskId}>{row.title} · {row.sourceCommit?.slice(0, 8) || "已验收"} · {row.strategy} → {row.targetBranch}</li>)}</ul>}
         {action === "family" && familyAcceptanceNotices(selectedProposal).map(notice => <p key={notice}>{notice}</p>)}
         {action === "family" && unverified.length > 0 && <UnexecutedVerificationNotice
-          verification={{ reason: "verify_not_run", stepIds: [], message: `以下任务的独立验证尚未执行：${unverified.map(row => row.title).join("、")}。` }}
+          verification={{ reason: "verify_not_run", stepIds: [], message: unverified.map(row => `「${row.title}」：${row.unexecutedVerification!.message}`).join(" ") }}
           checked={confirmUnverified} onChange={setConfirmUnverified} />}
       </ConfirmDialog>}
     </section>
