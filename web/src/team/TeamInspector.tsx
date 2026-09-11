@@ -6,7 +6,7 @@ import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { MessageFooter } from "../components/MessageFooter.tsx";
 import { FileTreeInspector } from "../files/FileTreeInspector.tsx";
-import type { InspectorDescriptor } from "../inspector/index.ts";
+import { retireInspectorTab, type InspectorDescriptor } from "../inspector/index.ts";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { TaskTimeMeta } from "../task-detail/TaskTimeMeta.tsx";
@@ -142,15 +142,11 @@ function TeamInfoPanel({ task, workers, sessions }: Pick<TeamInspectorContext, "
   );
 }
 
+// 团队模式的默认面板里不放子智能体：调度台自己那点工具调用远不如「谁跟谁在并行」有用，
+// 时间轴顶上它的位置；子智能体改成按需从图标条的「+」或 I S 打开。
+retireInspectorTab("team-subagents-default", /^(?:ash|harness-next):inspector:team:/, "subagents");
+
 export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>[] = [
-  {
-    id: "subagents",
-    title: "子智能体",
-    shortcut: "s",
-    icon: <Robot size={14} />,
-    defaultOpen: true,
-    render: (context) => <NativeWorkInspector {...context.nativeWork} />,
-  },
   {
     id: "workers",
     title: "执行者",
@@ -175,6 +171,22 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
     defaultOpen: true,
     shortcut: "i",
     render: (context) => <TeamInfoPanel {...context} />,
+  },
+  {
+    id: "timeline",
+    title: "时间轴",
+    icon: <Clock size={14} />,
+    defaultOpen: true,
+    render: (context) => (
+      <TeamTimeline
+        lead={context.task}
+        leadTurns={context.leadTurns}
+        workers={context.workers}
+        groups={context.groups}
+        onOpenWorker={context.onSelectWorker}
+        defaultOpen
+      />
+    ),
   },
   {
     id: "review",
@@ -205,18 +217,10 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
     ),
   },
   {
-    id: "timeline",
-    title: "时间轴",
-    icon: <Clock size={14} />,
-    render: (context) => (
-      <TeamTimeline
-        lead={context.task}
-        leadTurns={context.leadTurns}
-        workers={context.workers}
-        groups={context.groups}
-        onOpenWorker={context.onSelectWorker}
-        defaultOpen
-      />
-    ),
+    id: "subagents",
+    title: "子智能体",
+    shortcut: "s",
+    icon: <Robot size={14} />,
+    render: (context) => <NativeWorkInspector {...context.nativeWork} />,
   },
 ];
