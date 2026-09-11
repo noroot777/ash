@@ -397,7 +397,8 @@ export function TaskDetail({
                     pendingExecutor={pendingExecutor}
                     loading={conversation.refreshing}
                     error={conversation.error}
-                    onForkReply={onForkTask && !conversation.traceError && !handedOut
+                    forkBlockedReason={conversation.forkBlockedReason}
+                    onForkReply={onForkTask && !conversation.traceError && !conversation.forkBlockedReason && !handedOut
                       && conversation.sessions.every((session) => session.taskId === task.id) ? (replyId) => {
                       try { onForkTask(snapshotConversationFork(task, conversation.items, replyId)); }
                       catch (reason) { notify(reason instanceof Error ? reason.message : String(reason)); }

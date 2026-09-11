@@ -26,11 +26,13 @@ import { inheritOwner } from "./auth/run-env.js";
 import { branchDeletionRejection, deleteTaskBranchRefs } from "./task-branch-plan.js";
 import { withRepoLock } from "./repo-lock.js";
 import { requestTaskCreationOrigin } from "./task-creation-origin.js";
+import { deleteTaskSideChats } from "./chat/lifecycle.js";
 
 // 任务行删除时连关联状态一起收：自由审查链(run/round)、预约槽、事件、排队/定时消息、
 // 随手记回链。没有 FK cascade,只删任务行会留下孤儿——审查实测:等答复的审查在任务
 // 删除后永远停在 reviewing,答复消息永远 pending(投递时任务已不存在)。
 export async function deleteTaskAssociations(taskId: string): Promise<void> {
+  await deleteTaskSideChats(taskId);
   await deleteTaskBranchRefs(taskId);
   await db.delete(taskBranchReceipts).where(eq(taskBranchReceipts.taskId, taskId));
   const runIds = (await db.select({ id: freeReviewRuns.id }).from(freeReviewRuns)

@@ -26,6 +26,7 @@ export const chatMessages = sqliteTable("chat_messages", {
   context: text("context"),
   assistant: text("assistant"),
   forwardMessageId: text("forward_message_id"),
+  forwardError: text("forward_error"),
   // 目录观察附注（execution.ts changeNotice）。invoke 一返回就落到这一列：附注是
   // 「项目可能被并发改动/观察失效」的安全信息，不能只活在 reply() 的闭包里——进程
   // 崩溃/重启后 stop()/recover() 的固定文案覆盖要靠它把附注拼回正文（service.ts）。
@@ -106,6 +107,9 @@ export async function ensureChatSchema(client: Pick<Client, "executeMultiple" | 
   if (!messageColumns.rows.some((column) => column.name === "forward_message_id")) {
     await client.execute("ALTER TABLE chat_messages ADD COLUMN forward_message_id TEXT");
   }
+  if (!messageColumns.rows.some((column) => column.name === "forward_error")) {
+    await client.execute("ALTER TABLE chat_messages ADD COLUMN forward_error TEXT");
+  }
   if (!messageColumns.rows.some((column) => column.name === "assistant")) {
     await client.execute("ALTER TABLE chat_messages ADD COLUMN assistant TEXT");
   }
@@ -121,4 +125,17 @@ export async function ensureChatSchema(client: Pick<Client, "executeMultiple" | 
     await client.execute("ALTER TABLE chat_context_states ADD COLUMN failed_at TEXT");
   }
   await client.execute("UPDATE chat_context_states SET failed_at=updated_at WHERE status='failed' AND failed_at IS NULL");
+  await client.executeMultiple(`
+    CREATE TRIGGER IF NOT EXISTS task_side_chats_deleted AFTER DELETE ON tasks BEGIN
+      DELETE FROM chat_rooms WHERE parent_task_id = OLD.id;
+      DELETE FROM scheduled_messages WHERE task_id = OLD.id;
+    END;
+    CREATE TRIGGER IF NOT EXISTS chat_room_contents_deleted AFTER DELETE ON chat_rooms BEGIN
+      DELETE FROM chat_messages WHERE room_id = OLD.id;
+      DELETE FROM chat_context_entries WHERE room_id = OLD.id;
+      DELETE FROM chat_summaries WHERE room_id = OLD.id;
+      DELETE FROM chat_context_states WHERE room_id = OLD.id;
+      DELETE FROM chat_context_resets WHERE room_id = OLD.id;
+    END;
+  `);
 }

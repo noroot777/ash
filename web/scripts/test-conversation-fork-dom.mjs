@@ -20,6 +20,7 @@ try {
   page.on("pageerror", (error) => errors.push(error.message));
   const posts = [];
   let rejectCreation = true;
+  let failOutput = true;
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -30,6 +31,8 @@ try {
       if (rejectCreation) return json({ error: "测试创建失败" }, 500);
       return json({ ...task, id: "forked", status: "backlog", parentId: null });
     }
+    if (path === "/api/tasks/source/sessions") return json([{ id: "s1", taskId: "source", role: "single", agentType: "codex", startedAt: "2026-09-10T01:00:00Z", endedAt: "2026-09-10T01:01:00Z" }]);
+    if (path === "/api/sessions/s1/output") return failOutput ? json({ error: "暂时不可读" }, 503) : route.fulfill({ body: "已恢复的回复" });
     if (path === "/api/agents") return json([{ id: "exec-codex", name: "codex@local", type: "codex", isDefault: true }]);
     if (path === "/api/settings") return json({ worktreeDefault: false, defaultWorkflowId: null });
     if (path.endsWith("/run")) return json({ ok: true });
@@ -84,6 +87,23 @@ try {
   await page.getByRole("button", { name: "普通新建", exact: true }).click();
   assert.equal(await objective.inputValue(), "原有草稿，不能混入派生任务");
   assert.equal(await page.locator(".composer-fork-context").count(), 0);
+  await page.getByRole("button", { name: "超长派生", exact: true }).click();
+  await objective.fill("继续讨论");
+  await page.getByRole("alert").filter({ hasText: "超过 128 KiB 上限" }).waitFor();
+  assert.match(await page.locator(".composer-fork-context > summary").innerText(), /KiB/);
+  assert.ok(await submit.isDisabled());
+  const beforeOversize = posts.length;
+  await objective.press("Control+Enter");
+  assert.equal(posts.length, beforeOversize, "快捷键也不能提交过大的派生正文");
+  await page.getByRole("button", { name: "正文读取失败", exact: true }).click();
+  await page.getByText(/正文暂未读全/).waitFor();
+  await page.locator(".run-activity").waitFor();
+  assert.equal(await forks.count(), 0);
+  failOutput = false;
+  await page.getByRole("button", { name: "刷新正文", exact: true }).click();
+  await page.getByText("已恢复的回复", { exact: true }).waitFor();
+  await page.waitForFunction(() => !document.body.innerText.includes("正文暂未读全"));
+  assert.equal(await forks.count(), 1);
   assert.deepEqual(errors, []);
   console.log(`conversation fork UI, creation failure/retry, draft isolation, narrow screen: passed (${artifacts})`);
 } finally {

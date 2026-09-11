@@ -82,6 +82,7 @@ export class ChatService {
     const { cutoff, tail } = mentions.length ? await this.contexts.captureSnapshot(row.id) : { cutoff: 0, tail: [] };
     const timestamp = now();
     await db.transaction(async (tx) => {
+      if (!(await tx.select({ id: chatRooms.id }).from(chatRooms).where(eq(chatRooms.id, row.id))).length) throw new Error("聊天已删除。");
       await tx.insert(chatMessages).values({ id: messageId, roomId: row.id, role: "user", author, body, mentions: JSON.stringify(mentions.map((member) => member.id)), createdAt: timestamp });
       for (const [position, member] of mentions.entries()) {
         await tx.insert(chatMessages).values({ id: id(), roomId: row.id, role: "agent", memberId: member.id, author: member.name, status: "queued", createdAt: new Date(Date.parse(timestamp) + position + 1).toISOString(), context: JSON.stringify({ cutoff, tail, source: body, member, projectId: row.kind === "assistant" ? projectId ?? row.projectId : row.projectId }) });
@@ -140,6 +141,7 @@ export class ChatService {
     // 用闭包值拼接（与列值相同）。附注仍不进 modelReply（上下文取 modelReply，混入会
     // 被智能体当对话内容复读）。
     let notice: string | undefined;
+    let sideResult: ReturnType<typeof parseSideChatReply> | undefined;
     const withNotice = (text: string) => notice ? `${text}\n\n${notice}` : text;
     // 停止竞态的残余窗口：stop() 在 notice 落列之前就把本消息覆盖成停止文案（此时列还是
     // NULL，withStoredNotice 拼不到），随后本轮的终态更新命中 0 行。已取得的附注不能跟着
@@ -178,7 +180,8 @@ export class ChatService {
         body: sql`CASE WHEN ${chatMessages.status} = ${"stopped"} AND ${chatMessages.body} IS NOT NULL AND instr(${chatMessages.body}, ${notice}) = 0 THEN ${chatMessages.body} || ${"\n\n"} || ${notice} ELSE ${chatMessages.body} END`,
       }).where(eq(chatMessages.id, message.id));
       if (room.kind === "side") {
-        const pending = await settleSideChat(room, message.id, parseSideChatReply(invoked.text, context.source), notice, abort.signal);
+        sideResult = parseSideChatReply(invoked.text, context.source);
+        const pending = await settleSideChat(room, message.id, sideResult, notice, abort.signal);
         if (pending) void dispatchSideMessage(pending.id, pending.taskId).catch((error) => console.error("[side-chat] delivery deferred", error));
         await preserveNotice();
         return abort.signal.aborted ? undefined : member;
@@ -216,7 +219,11 @@ export class ChatService {
       if (!abort.signal.aborted) return member;
     } catch (error) {
       const boundary = error instanceof ChatBoundaryError;
-      const updated = await db.update(chatMessages).set({ status: boundary ? "failed" : abort.signal.aborted ? "stopped" : "failed", context: null, body: withNotice(error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500)) })
+      const reason = error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500);
+      const preserved = !boundary && !abort.signal.aborted ? sideResult : undefined;
+      const updated = await db.update(chatMessages).set({ status: preserved ? "done" : boundary ? "failed" : abort.signal.aborted ? "stopped" : "failed", context: null, body: withNotice(preserved ? preserved.reply : reason),
+        ...(preserved ? { modelReply: `${preserved.reply}\n[未发送到主任务：${reason}]`, forwardError: reason } : {}),
+      })
         .where(and(eq(chatMessages.id, message.id), inArray(chatMessages.status, boundary ? ["running", "stopped"] : ["running"]))).returning({ id: chatMessages.id });
       if (!updated.length) await preserveNotice();
     } finally {

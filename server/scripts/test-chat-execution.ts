@@ -38,6 +38,8 @@ let killed = 0;
 let cleaned = 0;
 let lastCwd = "";
 let fail = false;
+let writeFromMain = false;
+let sideWriteTool = false;
 try {
   for (const type of AGENT_TYPES) {
     CLI_SPEC_BY_KEY[type].factory = (built) => ({
@@ -59,6 +61,8 @@ try {
           sessionId: "fixture", commandLine: "fixture",
           kill: () => { killed++; }, cleanup: async () => { cleaned++; },
           events: (async function* (): AsyncGenerator<AgentEvent> {
+            if (writeFromMain) writeFileSync(join(opts.cwd, "main-task-change.ts"), "主任务正在正常写入");
+            if (sideWriteTool) yield { kind: "tool", name: "Write", detail: join(opts.cwd, "forbidden.ts") };
             if (fail) throw new Error("fixture read failed");
             if (opts.prompt.includes("BACKGROUND_SUMMARY_FIXTURE") || opts.prompt.includes("ASSISTANT_FIXTURE")) {
               assert.notEqual(opts.cwd, projectDir);
@@ -124,11 +128,18 @@ try {
   writeFileSync(join(sideWorktree, "chat-context.txt"), "主任务工作区的代码，而非项目主仓");
   await db.insert(tasks).values({ id: "side-parent", projectId: "project", title: "侧聊目录", body: "", mode: "single", createdAt, updatedAt: createdAt });
   await db.insert(sessions).values({ id: "side-session", taskId: "side-parent", role: "single", executor: "fixture", agentType: "codex", cwd: sideWorktree, startedAt: createdAt });
-  const sideReply = parseChatReply((await invokeChat(member, null, "侧聊读取主任务代码", signal, "project", { purpose: "side", taskId: "side-parent" })).text);
+  writeFromMain = true;
+  const sideInvocation = await invokeChat(member, null, "侧聊读取主任务代码", signal, "project", { purpose: "side", taskId: "side-parent" });
+  writeFromMain = false;
+  assert.equal(sideInvocation.notice, undefined, "主任务并发写入不触发侧聊越界警告");
+  const sideReply = parseChatReply(sideInvocation.text);
   assert.equal(sideReply.reply, "主任务工作区的代码，而非项目主仓");
   assert.equal(lastCwd, sideWorktree);
   assert.ok(existsSync(sideWorktree), "侧聊结束不清理主任务的工作区");
   await assert.rejects(invokeChat(member, null, "错误父项目", signal, "home-directory", { purpose: "side", taskId: "side-parent" }), /主任务已不可访问/);
+  sideWriteTool = true;
+  await assert.rejects(invokeChat(member, null, "侧聊不能写入", signal, "project", { purpose: "side", taskId: "side-parent" }), /写入或无法确认只读/);
+  sideWriteTool = false;
   console.log("side execution: 只读解析主任务会话 cwd，不继承 CLI 身份，不创建或删除工作区，跨项目绑定拒绝");
   fail = true;
   await assert.rejects(invokeChat(member, null, "咨询", signal, "project"), /fixture read failed/);

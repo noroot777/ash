@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { Task, Session } from "@ash/shared";
 import { buildConversationItems } from "../src/task-detail/conversationModel.ts";
-import { canForkReply, forkTaskBody, snapshotConversationFork } from "../src/task-detail/conversationFork.ts";
+import { canForkReply, forkTaskBody, forkBodyProblem, snapshotConversationFork } from "../src/task-detail/conversationFork.ts";
 
 const task = { id: "source", title: "来源任务", body: "原始需求", mode: "single" } as Task;
 const session = {
@@ -41,5 +41,9 @@ assert.equal(canForkReply({ ...target, markdown: "" }), false);
 assert.throws(() => snapshotConversationFork(task, [{ ...target, endedAt: null }], target.id));
 const longReply = { ...target, markdown: "长文本".repeat(50_000) };
 assert.ok(snapshotConversationFork(task, [longReply], target.id).fork.context.includes(longReply.markdown));
+const oversized = snapshotConversationFork(task, [longReply], target.id).fork;
+assert.match(forkBodyProblem(oversized, "继续")!, /128 KiB/);
+assert.throws(() => forkTaskBody(oversized, "继续"), /超过/);
+assert.equal(forkBodyProblem(seed.fork, "继续"), null);
 assert.equal(forkTaskBody(undefined, " 普通新任务 "), "普通新任务");
 console.log("conversation fork boundaries, immutable history, attachments, fresh context: passed");

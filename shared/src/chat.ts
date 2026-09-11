@@ -1,6 +1,8 @@
 import type { AgentType, TaskListItem } from "./index.ts";
 import type { WorkflowDef } from "./workflow.ts";
 
+export const SIDE_CHAT_HISTORY_MAX_BYTES = 64 * 1024;
+
 export interface AssistantResult {
   matches: { taskId: string; reason: string }[];
   queries: string[];
@@ -42,6 +44,7 @@ export interface ChatMessage {
   taskId: string | null;
   createdAt: string;
   assistant?: AssistantResult;
+  forwardError?: string | null;
   forward?: {
     messageId: string;
     taskId: string;

@@ -78,7 +78,7 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
   try {
     // 观察者只记录变更、不中止（原因见 boundary.ts 顶部）；可归因的只读约束由下面
     // consume 里的工具事件闸门执行。临时目录一次一清，没有可观察的项目。
-    if (!temporary) guard = await watchChatWorkspace(cwd);
+    if (!temporary && options?.purpose !== "side") guard = await watchChatWorkspace(cwd);
     signal.throwIfAborted();
     handle = executor.run({
       cwd,

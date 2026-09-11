@@ -50,7 +50,7 @@ import {
 } from "./executorOverrides.ts";
 import { useComposerRunSummary } from "./composerRunSummary.ts";
 import { ComposerForkContext } from "./ComposerForkContext.tsx";
-import { forkTaskBody } from "../task-detail/conversationFork.ts";
+import { forkTaskBody, forkBodyProblem } from "../task-detail/conversationFork.ts";
 export type { ComposerDraft };
 
 export function TaskComposerPanel({
@@ -347,8 +347,9 @@ export function TaskComposerPanel({
   // 有图还在传就先不放行：附件路径是上传成功才有的，这时候创建等于把刚粘的那张图
   // 悄悄扔掉。三种模式一视同仁——切走这个面板就没人接住在途的那张了。
   const waitingUploads = uploads.uploading;
+  const forkError = forkBodyProblem(fork, body);
   const canSubmit = (fork ? !!body.trim() : !!body.trim() || allAttachments.length > 0)
-    && !busy && !noExecutor && !roleBlocked && !scheduleError && !waitingUploads;
+    && !forkError && !busy && !noExecutor && !roleBlocked && !scheduleError && !waitingUploads;
 
   const changeLaunchMode = (next: LaunchMode) => {
     setLaunchMode(next);
@@ -498,6 +499,7 @@ export function TaskComposerPanel({
       <div className="composer-scroll">
         <div className="composer-inner">
           {fork && <ComposerForkContext fork={fork} />}
+          {forkError && <p role="alert" className="task-conversation-error">{forkError}</p>}
           <ComposerFields
             mode={mode}
             singleRunSummary={singleRunSummary}

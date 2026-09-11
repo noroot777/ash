@@ -54,6 +54,7 @@ export function useConversation(taskId: string, revision = 0) {
   const timelineRef = useRef<TimelineEntry[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const [forkBlockedReason, setForkBlockedReason] = useState<string | null>(null);
   const [traceError, setTraceError] = useState<Error | null>(null);
 
   const replaceTimeline = useCallback((next: TimelineEntry[]) => {
@@ -77,6 +78,7 @@ export function useConversation(taskId: string, revision = 0) {
     setRefreshing(true);
     setError(null);
     setTraceError(null);
+    setForkBlockedReason(null);
     try {
       const nextSessions = await api.sessions(taskId);
       let traceFailures = 0;
@@ -91,7 +93,7 @@ export function useConversation(taskId: string, revision = 0) {
         }),
       );
       setSessions(nextSessions);
-      if (outputFailures) setError(new Error(`${outputFailures} 个会话的正文读取失败，请刷新后再派生任务。`));
+      if (outputFailures) setForkBlockedReason(`${outputFailures} 个会话的正文暂未读全，派生功能暂不可用；刷新会话可重试。`);
       if (traceFailures) setTraceError(new Error(`${traceFailures} 个会话的执行过程读取失败，子智能体与内部任务记录可能不完整。`));
       setPersisted(outputs.filter((entry) => entry.output.trim() || entry.trace.length));
       if (preserveArrivals) {
@@ -169,5 +171,5 @@ export function useConversation(taskId: string, revision = 0) {
     [persisted, sessions, timeline],
   );
 
-  return { sessions, persisted, items, connected, refreshing, error, traceError, refetch, addUser };
+  return { sessions, persisted, items, connected, refreshing, error, traceError, forkBlockedReason, refetch, addUser };
 }

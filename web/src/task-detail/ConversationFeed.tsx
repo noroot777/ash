@@ -173,6 +173,7 @@ export function ConversationFeed({
   pendingExecutor,
   loading,
   error,
+  forkBlockedReason,
   footer,
   onRetryTurn,
   onForkReply,
@@ -189,6 +190,7 @@ export function ConversationFeed({
   pendingExecutor?: string | null;
   loading: boolean;
   error: Error | null;
+  forkBlockedReason?: string | null;
   footer?: React.ReactNode;
   /** 重跑上一回合。不给就不出重试按钮（只读的会话视图用得上）。 */
   onRetryTurn?: (target: TurnRetryTarget) => Promise<void> | void;
@@ -244,7 +246,7 @@ export function ConversationFeed({
           item={item}
           hideTime={hiddenTimes.has(item.id)}
           laneRole={laneRole}
-          onFork={onForkReply && !loading && !error && canForkReply(item) ? () => onForkReply(item.id) : undefined}
+          onFork={onForkReply && !loading && !error && !forkBlockedReason && canForkReply(item) ? () => onForkReply(item.id) : undefined}
           retry={retry && item.id === retryItemId ? (
             <TurnRetryButton
               exitStatus={retry.exitStatus}
@@ -315,6 +317,7 @@ export function ConversationFeed({
             </div>
           )}
           {loading && !items.length && <p className="task-conversation-note">正在读取会话…</p>}
+          {forkBlockedReason && <p className="task-conversation-error" role="status">{forkBlockedReason}</p>}
           {error && <p className="task-conversation-error">{error.message}</p>}
           <QuestionHistoryRemainder messages={items.flatMap((item) => item.kind === "user" ? [item.text] : [])} />
           {footer}

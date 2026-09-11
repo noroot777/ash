@@ -40,7 +40,6 @@ export { client as dbClient };
 // `npm run db:push` (drizzle-kit) remains the source of truth for migrations.
 export async function ensureSchema() {
   await ensurePageAnnotationSchema(client);
-  await ensureChatSchema(client);
   await client.executeMultiple(`
     CREATE TABLE IF NOT EXISTS task_branch_receipts (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, source_commit TEXT NOT NULL, merge_commit TEXT NOT NULL, target_branch TEXT NOT NULL
@@ -469,6 +468,7 @@ export async function ensureSchema() {
       /* column already exists */
     }
   }
+  await ensureChatSchema(client);
   // DDL 到此为止。剩下那一半(一次性数据搬运 + 退役字段/表清理)在 `migrations.ts`。
   await runDataMigrations(client);
 }

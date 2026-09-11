@@ -36,13 +36,15 @@ const service = new ChatService(async (_member, _owner, prompt, signal, _project
   const source = JSON.parse(prompt.split("【当前用户消息】\n").at(-1)!) as string;
   await delay(source.includes("等待") ? 30000 : 350, undefined, { signal });
   return { text: JSON.stringify({ reply: source.includes("告诉主任务") ? "回传结论：选择方案 B，复用现有消息队列，并补上投递回执。" : "**建议选择方案 B。**\n\n主任务继续实现，这里可以单独讨论。\n\n- 复用已持久化的消息队列\n- 支持实时追加时立即送达\n- 回执显示实际投递状态",
-    forward: source.includes("告诉主任务") ? { text: "选择方案 B，复用现有消息队列，补上投递回执。", authorization: "把结论告诉主任务" } : null }) };
+    forward: source.includes("告诉主任务") ? { text: "选择方案 B，复用现有消息队列，补上投递回执。", authorization: source } : null }) };
 });
 const api = new Hono();
 mountChatRoutes(api, service);
 api.get("/agents", async (c) => c.json(await db.select().from(agents)));
 api.get("/fixture/state", async (c) => c.json({ delivered, kills, pending: await db.select().from(scheduledMessages) }));
 api.post("/fixture/native", async (c) => { bind((await c.req.json()).enabled); return c.json({ ok: true }); });
+api.post("/fixture/archive", async (c) => { await db.update(tasks).set({ archived: (await c.req.json()).archived }).where(eq(tasks.id, "parent")); return c.json({ ok: true }); });
+api.post("/fixture/large-history", async (c) => { await db.update(tasks).set({ body: "背景".repeat(50000) }).where(eq(tasks.id, "parent")); return c.json({ ok: true }); });
 api.post("/fixture/cancel", async (c) => { await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.status, "pending")); return c.json({ ok: true }); });
 const app = new Hono(); app.route("/api", api);
 const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 }, (info) => console.log(`SIDE_FIXTURE_URL=http://127.0.0.1:${info.port}`));

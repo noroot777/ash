@@ -35,6 +35,7 @@ try {
   const state = async () => await (await page.request.get(`${backend}/api/fixture/state`)).json();
   await page.goto(url);
   await page.getByRole("button", { name: "打开侧聊", exact: true }).click();
+  await page.getByText(/主会话快照最多 64 KiB/).waitFor();
   await page.getByRole("button", { name: "开始侧聊", exact: true }).click();
   const input = page.getByRole("textbox", { name: "侧聊消息输入" });
   const send = page.getByRole("button", { name: "发送侧聊消息" });
@@ -44,7 +45,7 @@ try {
   const firstRoom = await page.getByRole("combobox", { name: "切换侧聊" }).inputValue();
   await page.getByRole("button", { name: "切换主任务状态" }).click();
   assert.equal(await input.count(), 1, "主任务状态变化不抢走侧聊焦点");
-  await input.fill("把结论告诉主任务，后续按方案 B 做"); await send.click();
+  await input.fill("把结论告诉主任务，以后都按这个来"); await send.click();
   await page.getByText("已送达主任务", { exact: true }).waitFor();
   assert.equal((await state()).delivered.length, 1);
   assert.equal((await state()).kills, 0);
@@ -69,11 +70,28 @@ try {
   await page.getByText(/你已停止侧聊回复/).waitFor();
   assert.equal((await state()).kills, 0);
   await control("native", { enabled: false });
-  await input.fill("把结论告诉主任务"); await send.click();
+  await input.fill("「把结论告诉主任务」"); await send.click();
   await page.getByText("已排队 · 主任务空闲后发送", { exact: true }).waitFor();
   await control("cancel", {});
   await page.getByText("未送达 · 已取消", { exact: true }).waitFor();
   assert.equal((await state()).delivered.length, 1);
+  const replyText = "回传结论：选择方案 B，复用现有消息队列，并补上投递回执。";
+  for (const condition of ["把结论告诉主任务，如果它已经开始做了就算了", "不要把结论告诉主任务"]) {
+    await input.fill(condition); await send.click();
+    const last = page.locator(".side-chat-message.is-agent").last();
+    await last.getByText(/未发送到主任务/).waitFor();
+    assert.match(await last.innerText(), /回传结论：选择方案 B/);
+    assert.equal((await state()).pending.length, 2, "拒绝回传不入队");
+  }
+  await control("archive", { archived: true });
+  await input.fill("把结论告诉主任务"); await send.click();
+  await page.getByText(/未发送到主任务：主任务已归档/).waitFor();
+  await page.reload();
+  await page.getByText(/未发送到主任务：主任务已归档/).waitFor();
+  assert.match(await page.locator(".side-chat-message.is-agent").last().innerText(), new RegExp(replyText));
+  assert.equal((await state()).pending.length, 2);
+  await page.screenshot({ path: join(artifacts, "side-chat-reply-preserved.png") });
+  await control("archive", { archived: false });
   await page.getByRole("button", { name: "新建侧聊", exact: true }).click();
   await page.waitForFunction((id) => document.querySelector('[aria-label="切换侧聊"]')?.value !== id, firstRoom);
   await input.waitFor();
@@ -101,6 +119,10 @@ try {
   await input.fill("窄屏输入可见");
   await send.click();
   await page.getByText("窄屏输入可见", { exact: true }).waitFor();
+  await control("large-history", {});
+  await page.getByRole("button", { name: "新建侧聊", exact: true }).click();
+  await page.getByText(/超过侧聊的 64 KiB 上限/).waitFor();
+  assert.equal(await page.getByRole("combobox", { name: "切换侧聊" }).inputValue(), firstRoom);
   assert.equal(errors.length, 0, errors.join("\n"));
   console.log(`✓ 真实侧聊 API + headless Chrome：连续对话、自然回传、回执、排队取消、停止/刷新、草稿/任务隔离、390px 通过\n截图：${artifacts}`);
 } finally {

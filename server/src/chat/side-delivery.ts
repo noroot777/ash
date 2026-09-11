@@ -25,19 +25,27 @@ export async function sideChatParent(room: Room) {
 }
 
 export async function settleSideChat(room: Room, messageId: string, result: ReturnType<typeof parseSideChatReply>, notice: string | undefined, signal: AbortSignal) {
-  const parent = await sideChatParent(room);
-  if (result.forward) {
-    const blocked = handoffBlockReason(parent.handoff);
-    if (blocked || parent.archived || parent.mode !== "single") throw new Error(blocked ?? "主任务已归档或不支持回传，未发送。");
+  let forwardError = result.forwardError ?? null;
+  let parent: Awaited<ReturnType<typeof sideChatParent>> | undefined;
+  try {
+    parent = await sideChatParent(room);
+    if (result.forward) {
+      forwardError = handoffBlockReason(parent.handoff)
+        ?? (parent.archived || parent.mode !== "single" ? "主任务已归档或不支持回传。" : null);
+    }
+  } catch (error) {
+    if (result.forward) forwardError = error instanceof Error ? error.message : "主任务不可访问。";
   }
-  const text = result.forward ? `【来自侧聊 · ${room.name}】\n${result.forward.text}` : null;
-  const pending = text ? { ...pendingMessageRow({ taskId: parent.id, text, ownerUserId: room.ownerUserId }), id: `side-${messageId}` } : null;
+  const text = result.forward && !forwardError ? `【来自侧聊 · ${room.name}】\n${result.forward.text}` : null;
+  const pending = text && parent ? { ...pendingMessageRow({ taskId: parent.id, text, ownerUserId: room.ownerUserId }), id: `side-${messageId}` } : null;
   const settled = await db.transaction(async (tx) => {
     signal.throwIfAborted();
     const updated = await tx.update(chatMessages).set({
       status: "done", context: null, body: notice ? `${result.reply}\n\n${notice}` : result.reply,
-      modelReply: result.reply + (result.forward ? `\n[本轮已请求回传主任务，正文：${result.forward.text}；实际投递状态以 ash 回执为准]` : ""),
+      modelReply: result.reply + (forwardError ? `\n[未发送到主任务：${forwardError}]`
+        : pending ? `\n[本轮已请求回传主任务，正文：${result.forward!.text}；实际投递状态以 ash 回执为准]` : ""),
       forwardMessageId: pending?.id ?? null,
+      forwardError,
     }).where(and(eq(chatMessages.id, messageId), eq(chatMessages.roomId, room.id), eq(chatMessages.status, "running"))).returning({ id: chatMessages.id });
     if (!updated.length) return false;
     if (pending) await tx.insert(scheduledMessages).values(pending);

@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or } from "drizzle-orm";
 import type { ChatContextStatus, ChatMessage } from "@ash/shared/chat";
 import { db } from "../db/index.js";
-import { chatContextEntries as entries, chatContextStates as states, chatContextResets as resets, chatMessages, chatSummaries as summaries } from "../db/schema.js";
+import { chatContextEntries as entries, chatContextStates as states, chatContextResets as resets, chatMessages, chatRooms, chatSummaries as summaries } from "../db/schema.js";
 import { id, now } from "../util.js";
 import { contextMessage, estimateChatTokens } from "./context-format.js";
 
@@ -54,7 +54,10 @@ export async function contextState(roomId: string) {
 export async function setContextState(roomId: string, status: ChatContextStatus["status"], error: string | null = null) {
   const updatedAt = now();
   const value = { roomId, status, error, updatedAt, failedAt: status === "failed" ? updatedAt : null };
-  await db.insert(states).values(value).onConflictDoUpdate({ target: states.roomId, set: value });
+  await db.transaction(async (tx) => {
+    if (!(await tx.select({ id: chatRooms.id }).from(chatRooms).where(eq(chatRooms.id, roomId))).length) return;
+    await tx.insert(states).values(value).onConflictDoUpdate({ target: states.roomId, set: value });
+  });
 }
 
 export async function acknowledgeContextFailure(roomId: string) {
@@ -84,6 +87,7 @@ export async function resetChatContext(roomId: string, command: { id: string; bo
   await captureChatHistory(roomId);
   const clearedAt = now();
   await db.transaction(async (tx) => {
+    if (!(await tx.select({ id: chatRooms.id }).from(chatRooms).where(eq(chatRooms.id, roomId))).length) throw new Error("聊天已删除。");
     await tx.insert(chatMessages).values({ ...command, roomId, role: "user", createdAt: clearedAt });
     await tx.insert(chatMessages).values({ id: id(), roomId, role: "system", author: "系统", body: "上下文已清空。之后的对话从这里重新开始；之前的消息仍可查看，但不会再提供给智能体。", createdAt: new Date(Date.parse(clearedAt) + 1).toISOString() });
     const content = contextMessage({ ...command, role: "user" });

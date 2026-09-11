@@ -129,6 +129,7 @@ export class ChatContextManager {
         if (tokens >= (history.summary?.tokens ?? 0) + batchTokens) throw new Error("摘要未缩短历史，原始消息已保留。");
         await db.transaction(async (tx) => {
           signal.throwIfAborted();
+          if (!(await tx.select({ id: chatRooms.id }).from(chatRooms).where(eq(chatRooms.id, room.id))).length) throw new Error("聊天已删除。");
           await tx.insert(chatSummaries).values({ roomId: room.id, throughSequence: batch.at(-1)!.sequence, body: summary, tokens, createdAt: now() });
         });
         history = await readChatHistory(room.id, cutoff);

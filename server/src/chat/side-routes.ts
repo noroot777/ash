@@ -1,6 +1,7 @@
 import { open } from "node:fs/promises";
 import { and, asc, desc, eq } from "drizzle-orm";
 import type { Context, Hono } from "hono";
+import { SIDE_CHAT_HISTORY_MAX_BYTES } from "@ash/shared/chat";
 import { parseSessionOutput } from "@ash/shared";
 import { db } from "../db/index.js";
 import { chatContextEntries, chatRooms, sessions, tasks } from "../db/schema.js";
@@ -47,13 +48,16 @@ export async function sideChatHistory(task: typeof tasks.$inferSelect) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT" || session.endedAt) throw error;
     } finally { await handle?.close(); }
   }
-  return history.flatMap((message) => {
+  const entries = history.flatMap((message) => {
     const parts: string[] = [];
     for (let start = 0; start < message.body.length; start += 4000) {
       parts.push(JSON.stringify({ ...message, source: "主会话快照，仅供参考", body: message.body.slice(start, start + 4000) }));
     }
     return parts;
   });
+  const bytes = entries.reduce((sum, content) => sum + Buffer.byteLength(content), 0);
+  if (bytes > SIDE_CHAT_HISTORY_MAX_BYTES) throw new Error(`主会话快照约 ${Math.ceil(bytes / 1024)} KiB，超过侧聊的 ${SIDE_CHAT_HISTORY_MAX_BYTES / 1024} KiB 上限。未创建侧聊，也未调用摘要；可新建简短任务整理要讨论的背景。`);
+  return entries;
 }
 
 export function mountSideChatRoutes(api: Hono) {
@@ -81,6 +85,7 @@ export function mountSideChatRoutes(api: Hono) {
       const row = { id: body.id as string, kind: "side", parentTaskId: task.id, projectId: task.projectId,
         name: "侧聊", members: JSON.stringify(members), ownerUserId: ownerIdOf(actorOf(c)), createdAt: now() };
       await db.transaction(async (tx) => {
+        if (!(await tx.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, task.id))).length) throw new Error("主任务已删除。");
         await tx.insert(chatRooms).values(row);
         for (const content of history) await tx.insert(chatContextEntries).values({ roomId: row.id, messageId: id(), content, tokens: estimateChatTokens(`${content}\n`) });
       });

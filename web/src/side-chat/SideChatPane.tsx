@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import type { Task } from "@ash/shared";
+import { SIDE_CHAT_HISTORY_MAX_BYTES } from "@ash/shared/chat";
 import type { ChatMessage } from "@ash/shared/chat";
 import { ArrowDown, ArrowUp, ArrowBendUpLeft, ChatCircleDots, GearSix, Plus, Stop } from "@phosphor-icons/react";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
@@ -17,6 +18,7 @@ function SideMessage({ message }: { message: ChatMessage }) {
   return <article className={`side-chat-message is-${message.role} is-${message.status}`}>
     <header><strong>{message.role === "user" ? "你" : message.role === "system" ? "ash" : "侧聊助手"}</strong><time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></header>
     {busy ? <p className="side-chat-thinking" role="status">{message.status === "queued" ? "等待回复…" : "正在思考…"}</p> : <MarkdownBody text={message.body} />}
+    {message.forwardError && <p className="side-chat-error" role="status">未发送到主任务：{message.forwardError}</p>}
     {message.forward && <details className={`side-chat-receipt is-${message.forward.status}`}>
       <summary><ArrowBendUpLeft size={14} /><span>{receiptLabels[message.forward.status]}</span></summary>
       <p>{message.forward.text}</p>
@@ -52,7 +54,7 @@ export function SideChatPane({ task }: { task: Task }) {
       <div className="side-chat-scroll" ref={scroll}>
         {!chat.ready && <p className="side-chat-note" role="status">正在读取侧聊…</p>}
         {configure ? <SideChatConnection key={chat.room?.id ?? "new"} task={task} initial={chat.room?.members[0]} onSave={async (member) => { await chat.saveMember(member); setEditing(false); }} onCancel={chat.room ? () => setEditing(false) : undefined} /> : chat.room && <>
-          <div className="side-chat-intro"><ChatCircleDots size={22} weight="duotone" /><strong>这里聊，不打断思路</strong><p>已带入创建时的主会话。需要回传时，直接说「把结论告诉主任务」。</p><small>关闭面板后仍会保留，停止侧聊不影响主任务。</small></div>
+          <div className="side-chat-intro"><ChatCircleDots size={22} weight="duotone" /><strong>这里聊，不打断思路</strong><p>已带入创建时的主会话。需要回传时，直接说：<code>把结论告诉主任务</code>。</p><small>关闭面板后仍会保留，停止侧聊不影响主任务。新侧聊快照上限 {SIDE_CHAT_HISTORY_MAX_BYTES / 1024} KiB，历史整理会增加等待时间和用量。</small></div>
           {!chat.snapshot && <p className="side-chat-note" role="status">正在读取消息…</p>}
           <div role="log" aria-label="侧聊消息" aria-live="polite">
             {(chat.snapshot?.messages.length ?? 0) >= 500 && <p className="side-chat-note">显示最近 500 条消息，更早记录仍保留。</p>}

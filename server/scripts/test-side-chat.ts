@@ -16,7 +16,7 @@ const { ChatService, roomMessages } = await import("../src/chat/service.js");
 const { mountChatRoutes } = await import("../src/chat/routes.js");
 const { sideChatHistory } = await import("../src/chat/side-routes.js");
 const { settleSideChat } = await import("../src/chat/side-delivery.js");
-const { sideForwardAuthorized } = await import("../src/chat/side-prompt.js");
+const { sideForwardAuthorized, parseSideChatReply } = await import("../src/chat/side-prompt.js");
 const { setActor, SINGLE_ACTOR } = await import("../src/auth/context.js");
 const { setInstanceMode } = await import("../src/auth/mode.js");
 const runs = await import("../src/runs.js");
@@ -42,7 +42,7 @@ const service = new ChatService(async (_member, _owner, prompt, signal, _project
   if (held) await delay(10000, undefined, { signal });
   const source = JSON.parse(prompt.split("【当前用户消息】\n").at(-1)!) as string;
   await delay(5);
-  return { text: JSON.stringify({ reply: fakeReply, forward: source.includes("告诉主任务") || invalidForward ? { text: "按方案 B 继续，先补验证。", authorization: "把结论告诉主任务" } : null }) };
+  return { text: JSON.stringify({ reply: fakeReply, forward: source.includes("告诉主任务") || invalidForward ? { text: "按方案 B 继续，先补验证。", authorization: invalidForward ? "把结论告诉主任务" : source } : null }) };
 }, async () => { throw new Error("侧聊不应创建任务"); });
 const app = new Hono();
 app.use("*", async (c, next) => {
@@ -92,18 +92,40 @@ try {
   const native = { kill: () => { kills++; }, steer: async (text: string) => { delivered.push(text); } };
   runs.untrackRun("parent", handle); runs.trackRun("parent", native);
   runs.bindNativeSteer("parent", native, { agentType: "codex", record: (text) => { assert.match(text, /来自侧聊/); } });
-  await send("把结论告诉主任务", "user-native");
+  await send("把结论告诉主任务，以后都按这个来", "user-native");
   await until(async () => (await snapshot("side-room")).messages.at(-1)?.forward?.status === "sent");
   assert.equal(delivered.length, 1); assert.equal(kills, 0);
   assert.match(delivered[0]!, /当前方向身份/);
   runs.untrackRun("parent", native); runs.trackRun("parent", handle);
   const count = (await db.select().from(scheduledMessages)).length;
   invalidForward = true;
-  assert.equal((await send("上轮发过了，请解释方案", "user-history")).status, "failed");
+  const rejected = await send("上轮发过了，请解释方案", "user-history");
+  assert.equal(rejected.status, "done");
+  assert.equal(rejected.body, fakeReply);
+  assert.match(rejected.forwardError!, /没有明确/);
+  assert.equal(rejected.forward, undefined);
+  assert.match((await db.select().from(chatMessages).where(eq(chatMessages.id, rejected.id)))[0]!.modelReply!, /继续分析的详细结论.*未发送/s);
   for (const text of ["不要把结论告诉主任务", "如果把结论告诉主任务会怎样", "引用：『把结论告诉主任务』", "`把结论告诉主任务`", "> 把结论告诉主任务", "请解释如何把结论告诉主任务", "稍后把结论告诉主任务", "把结论告诉主任务，是不是会影响当前执行？"]) {
     assert.equal(sideForwardAuthorized(text, "把结论告诉主任务"), false, text);
   }
   assert.equal(sideForwardAuthorized("把结论告诉主任务，后续按方案 B 做", "把结论告诉主任务"), true);
+  for (const suffix of ["以后都按这个来", "说一下怎么改", "等它跑完再看", "比如先补一版验证"]) {
+    const command = `把结论告诉主任务，${suffix}`;
+    assert.equal(sideForwardAuthorized(command, command), true, command);
+    assert.equal(sideForwardAuthorized(command, "把结论告诉主任务"), true, command);
+  }
+  for (const command of ['把「方案 B」的结论告诉主任务', '把"方案 B"的结论告诉主任务', "「把结论告诉主任务」", "「把结论告诉主任务」。", "把刚才的结论告诉主任务", "把之前讨论的方案告诉主任务"]) {
+    assert.equal(sideForwardAuthorized(command, command), true, command);
+  }
+  for (const command of ["把结论告诉主任务，如果它已经开始做了就算了", "之前把结论告诉主任务", "别， 把结论告诉主任务", "比如，把结论告诉主任务", "把结论告诉主任务，不能发了", "把结论告诉主任务，不用了", "把结论告诉主任务，等我确认再发", "把结论告诉主任务，稍后发送"]) {
+    assert.equal(sideForwardAuthorized(command, "把结论告诉主任务"), false, command);
+  }
+  const overlong = "保留正文".repeat(4000);
+  assert.equal(parseSideChatReply(JSON.stringify({ reply: overlong }), "解释方案").reply, overlong);
+  const malformed = parseSideChatReply(JSON.stringify({ reply: fakeReply, forward: { text: "x".repeat(8001), authorization: "把结论告诉主任务" } }), "把结论告诉主任务");
+  assert.equal(malformed.reply, fakeReply);
+  assert.equal(malformed.forward, null);
+  assert.match(malformed.forwardError!, /8000/);
   for (const command of ["把结论告诉主任务。", "请给主聊天发一条消息，后续用方案 B。", "把结论交给主任务", "Please send the conclusion to the main thread."]) {
     assert.equal(sideForwardAuthorized(command, command), true, command);
   }
@@ -128,13 +150,34 @@ try {
   assert.equal((await roomMessages(room.id)).find((row) => row.id === "recover-running")?.status, "stopped");
   assert.equal((await roomMessages(room.id)).filter((row) => row.forward).length, 2, "重启后回执仍在");
   await db.update(tasks).set({ archived: true }).where(eq(tasks.id, "parent"));
-  assert.equal((await send("把结论告诉主任务", "user-archived")).status, "failed");
+  const archived = await send("把结论告诉主任务", "user-archived");
+  assert.equal(archived.status, "done");
+  assert.equal(archived.body, fakeReply);
+  assert.match(archived.forwardError!, /归档/);
   assert.equal((await db.select().from(scheduledMessages)).length, count);
   await db.update(tasks).set({ archived: false }).where(eq(tasks.id, "parent"));
-  writeFileSync(join(parentPath, "session.md"), "长篇资料。".repeat(12000));
+  await db.update(tasks).set({ handoff: JSON.stringify({ direction: "out" }) }).where(eq(tasks.id, "parent"));
+  const handoff = await send("把结论告诉主任务", "user-handoff");
+  assert.equal(handoff.body, fakeReply);
+  assert.match(handoff.forwardError!, /接力/);
+  assert.equal((await db.select().from(scheduledMessages)).length, count);
+  await db.update(tasks).set({ handoff: null }).where(eq(tasks.id, "parent"));
+  fakeReply = "回答正文".repeat(3100);
+  assert.equal((await send("长回答", "user-long-answer")).body, fakeReply);
+  fakeReply = "继续分析的详细结论。";
+  const callsBeforeScale = summaryCalls;
+  for (const bytes of [256 * 1024, 1024 * 1024, 4 * 1024 * 1024]) {
+    writeFileSync(join(parentPath, "session.md"), "A".repeat(bytes));
+    const response = await req("/tasks/parent/side-chats", { id: `scale-room-${bytes}`, member });
+    assert.equal(response.status, 400);
+    assert.match(await response.text(), /超过/);
+    assert.equal((await db.select().from(chatRooms).where(eq(chatRooms.id, `scale-room-${bytes}`))).length, 0);
+  }
+  assert.equal(summaryCalls, callsBeforeScale, "大体积创建拒绝不调用模型");
+  writeFileSync(join(parentPath, "session.md"), "长篇资料。".repeat(4000));
   assert.equal((await req("/tasks/parent/side-chats", { id: "long-room", member })).status, 201);
   await send("总结主任务", "user-long", "long-room");
-  assert.ok(summaryCalls > 0, "长主会话进入共享历史整理，而不是截掉前文");
+  assert.ok(summaryCalls > callsBeforeScale && summaryCalls - callsBeforeScale <= 3, "允许的近上限快照首次回复最多整理三批，不截断历史");
   const parent = (await db.select().from(tasks).where(eq(tasks.id, "parent")))[0]!;
   rmSync(join(parentPath, "session.md"));
   await assert.rejects(sideChatHistory(parent), /ENOENT/, "已结束的会话正文丢失时不能生成不完整快照");

@@ -5,6 +5,7 @@ import { DraftProvider } from "../../src/lib/DraftStore.tsx";
 import { TaskComposerPanel, type ComposerDraft } from "../../src/composer/TaskComposerPanel.tsx";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import type { ConversationItem } from "../../src/task-detail/conversationModel.ts";
+import { useConversation } from "../../src/lib/useConversation.ts";
 import { snapshotConversationFork } from "../../src/task-detail/conversationFork.ts";
 import "../../src/styles/global.css";
 
@@ -21,16 +22,26 @@ const items: ConversationItem[] = [
   reply("a2", "方案 C 的后续结论"), reply("streaming", "正在生成的回复", false),
 ];
 
+function IncompleteConversation() {
+  const conversation = useConversation("source");
+  return <><button onClick={() => void conversation.refetch()}>刷新正文</button>
+    <ConversationFeed task={{ ...task, status: "running" }} items={conversation.items} sessions={conversation.sessions}
+      loading={conversation.refreshing} error={conversation.error} forkBlockedReason={conversation.forkBlockedReason} onForkReply={() => {}} />
+  </>;
+}
+
 function Fixture() {
-  const [view, setView] = useState<"feed" | "composer">("feed");
+  const [view, setView] = useState<"feed" | "composer" | "incomplete">("feed");
   const [seed, setSeed] = useState<ComposerDraft | null>(null);
   const [created, setCreated] = useState<Task | null>(null);
   const [notice, setNotice] = useState("");
   return <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
     <nav><button onClick={() => { setSeed(null); setView("composer"); }}>普通新建</button>
       <button onClick={() => setView("feed")}>返回会话</button>
-      <button onClick={() => setView("composer")}>回到草稿</button></nav>
-    {view === "feed" ? <ConversationFeed task={task} items={items} sessions={[]} loading={false} error={null}
+      <button onClick={() => setView("composer")}>回到草稿</button>
+      <button onClick={() => setView("incomplete")}>正文读取失败</button>
+      <button onClick={() => { const long = reply("long", "长会话".repeat(50000)); setSeed(snapshotConversationFork(task, [long], "long")); setView("composer"); }}>超长派生</button></nav>
+    {view === "incomplete" ? <IncompleteConversation /> : view === "feed" ? <ConversationFeed task={task} items={items} sessions={[]} loading={false} error={null}
       onForkReply={(id) => { setSeed(snapshotConversationFork(task, items, id)); setView("composer"); }} />
       : <TaskComposerPanel project={project} groups={[]} mode="single" onModeChange={() => {}}
         initialDraft={seed} onDraftSeeded={() => setSeed(null)} onCancel={() => setView("feed")}
