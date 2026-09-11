@@ -84,10 +84,9 @@ export async function runPreview(
   let installing = 0;
   const ours = () => !canceledGens.has(gen) && readAnyPreview(taskId)?.gen === gen;
   const patch = () => patchStart(taskId, gen, { services: [...services], links: [...links], pid: services.find((s) => s.id === primaryId)?.pid ?? 0 });
-  let failing: Promise<PreviewResult> | undefined;
-  const fail = (reason: string): Promise<PreviewResult> => failing ??= (async () => {
-    try { await stopPreviewProcesses({ pid: 0, services, installPid: installing }); }
-    catch (error) { return { ok: false, reason: `${reason}\n${String(error)}` }; }
+  let failing: Promise<Extract<PreviewResult, { ok: false }>> | undefined;
+  const fail = (reason: string): Promise<Extract<PreviewResult, { ok: false }>> => failing ??= (async () => {
+    const stopped = await stopPreviewProcesses(taskId, { pid: 0, services, installPid: installing });
     const current = readAnyPreview(taskId);
     if (current?.gen === gen) {
       archivePreview({ ...current, services }, "failed");
@@ -95,7 +94,7 @@ export async function runPreview(
     }
     if (!current || current.gen === gen) removePreparedLinks([...links]);
     bus.publish({ type: "task.review", taskId });
-    return { ok: false, reason };
+    return { ok: false, reason: stopped.stopped ? reason : `${reason}\n${stopped.message}` };
   })();
   const prepared = new Map<string, Awaited<ReturnType<typeof prepareNodeDeps>>>();
   const errors = new Map<string, string>();
@@ -125,7 +124,7 @@ export async function runPreview(
         child.on("exit", () => {
           if (ours() && readAnyPreview(taskId)?.state === "ready") {
             void fail(`${s.name}：预览进程已自行退出`).then(result =>
-              appendTaskTimeline(taskId, `预览异常：${result.ok ? s.name : result.reason}`)).catch(() => {});
+              appendTaskTimeline(taskId, `预览异常：${result.reason}`)).catch(() => {});
           }
         });
         child.unref();

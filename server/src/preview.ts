@@ -7,7 +7,7 @@ import { heldCacheOf, pruneNodeDeps, removePreparedLinks } from "./preview-deps.
 import { appendTaskTimeline } from "./task-timeline.js";
 import { readAnyPreview, recordPath, alive, archivePreview, type PreviewStep, type PreviewResult, type PreviewRecord } from "./preview-store.js";
 import { starting, beginDriving, endDriving, driving, cancelDriving, hasUnfinishedPreviewStart } from "./preview-start-state.js";
-import { stopPreviewProcesses } from "./preview-process-stop.js";
+import { hasPendingPreviewStops, retryPreviewStops, stopPreviewProcesses, type PreviewStopResult } from "./preview-process-stop.js";
 import { runPreview, type PreviewStartOptions } from "./preview-start.js";
 export { readPreview, readPreviewLog, hasPreviewLog, previewLogPath } from "./preview-store.js";
 export type { PreviewStep, PreviewRecord, PreviewResult } from "./preview-store.js";
@@ -44,7 +44,9 @@ export async function stopPreview(taskId: string, reason: string | null): Promis
 
 export async function stopPreviewForWorktreeCleanup(taskId: string): Promise<boolean> {
   const stopped = await stopPreviewExcept(taskId, "验收清理工作区前回收预览", null);
+  if (hasPendingPreviewStops(taskId)) throw new Error("预览进程尚未完全退出，工作区已保留；请稍后重试验收。");
   if (hasUnfinishedPreviewStart(taskId)) throw new Error("预览启动正在退出，工作区已保留；请稍后重试验收。");
+  if (readAnyPreview(taskId)) throw new Error("预览已被另一趟启动替换，工作区已保留；请稍后重试验收。");
   return stopped;
 }
 
@@ -63,7 +65,9 @@ async function stopPreviewExcept(
   // 记录还没落盘的那一段也要停得掉（见 canceledGens）：标上记号，那一趟到下一个检查点
   // 就自己收摊，而且**永远不会写出记录**。
   const marked = cancelDriving(taskId, exceptGen);
+  const pending = await retryPreviewStops(taskId);
   if (!record) {
+    if (!pending.stopped && reason) await appendTaskTimeline(taskId, `${pending.message}（${reason}）`);
     if (!marked) return false;
     // 这一段还没有 url、也还没有 pid，能说的只有「取消了一次启动」——但必须说，
     // 「刷新之后仍看得出我停过」是停止/暂停那条规矩的判据。
@@ -73,13 +77,16 @@ async function stopPreviewExcept(
   }
   // 不先看组长是否还活着：组长死、vite 仍留在同一进程组，正是必须回收的现场。
   // pid 为 0 = 还没 spawn，`kill(0, …)` 打的是**自己这一组**，绝不能放过去。
-  await retirePreview(record, "stopped");
-  if (reason) await appendTaskTimeline(taskId, `预览已回收（${reason}）：${record.url ?? record.cmd}`);
+  const retired = await retirePreview(record, "stopped");
+  if (!retired) return false;
+  const result = retired.stopped ? pending : retired;
+  if (reason) await appendTaskTimeline(taskId, result.stopped
+    ? `预览已回收（${reason}）：${record.url ?? record.cmd}` : `${result.message}（${reason}）`);
   // 自由工作流状态里的 preview.running 变了就必须发事件：那份快照的版本号只由
   // task.review / task.status 递增，不发的话前端拿到的新快照版本相等，会被当成
   // 「不比现值新」丢掉——按钮就一直停在「关闭预览」上。
   bus.publish({ type: "task.review", taskId });
-  return true;
+  return result.stopped;
 }
 
 /**
@@ -133,6 +140,7 @@ export async function sweepPreviews(): Promise<void> {
     return;
   }
   for (const taskId of dirs) {
+    if (hasPendingPreviewStops(taskId)) await retryPreviewStops(taskId);
     if (!existsSync(recordPath(taskId))) continue;
     const record = readAnyPreview(taskId);
     if (!record) {
@@ -148,9 +156,9 @@ export async function sweepPreviews(): Promise<void> {
       if (driving(taskId, record.gen)) continue;
     }
     if (interrupted || !(record.services?.length ? record.services.every((s) => s.status === "ready" && alive(s.pid)) : alive(record.pid))) {
-      try { if (!await retirePreview(record, "failed")) continue; }
-      catch (error) { await appendTaskTimeline(taskId, `预览清理暂缓：${String(error)}`); continue; }
-      await appendTaskTimeline(taskId, interrupted
+      const retired = await retirePreview(record, "failed");
+      if (!retired) continue;
+      await appendTaskTimeline(taskId, !retired.stopped ? retired.message : interrupted
         ? `预览没能起完就中断了（ash 重启），已经清理：${record.cmd}`
         : `预览进程已自行退出：${record.url ?? record.cmd}`);
       continue;
@@ -214,13 +222,14 @@ export function startPreviewSweeper(): NodeJS.Timeout {
   return timer;
 }
 
-async function retirePreview(record: PreviewRecord, status: "stopped" | "failed"): Promise<boolean> {
-  // 手动关闭、清扫与验收共享退出确认；保留记录到退出后，紧接着的验收才能找到进程。
-  await stopPreviewProcesses(record);
+async function retirePreview(record: PreviewRecord, status: "stopped" | "failed"): Promise<PreviewStopResult | null> {
+  // 各入口共享退出确认；未退出的进程另存停止记录，当前预览代仍可正常归档。
+  const result = await stopPreviewProcesses(record.taskId, record);
   const current = readAnyPreview(record.taskId);
-  if (!current || current.gen !== record.gen || current.pid !== record.pid) return false;
+  if (!current) return result; // 被取消的启动可能已经完成了同一趟归档。
+  if (current.gen !== record.gen || current.pid !== record.pid) return null;
   removePreparedLinks(record.links ?? []);
   archivePreview(record, status);
   rmSync(recordPath(record.taskId), { force: true });
-  return true;
+  return result;
 }
