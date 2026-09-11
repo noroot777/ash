@@ -142,6 +142,39 @@ try {
   assert.equal(await input.inputValue(), "新侧聊草稿");
   await page.getByRole("combobox", { name: "切换侧聊" }).selectOption(firstRoom);
   await page.getByText("已送达主任务", { exact: true }).waitFor();
+  await control("native", { enabled: true });
+  await control("forward-mode", { forced: true });
+  const beforeNatural = await state();
+  const natural = [
+    "你把结论告诉主任务", "麻烦你把结论发给主任务",
+    "方案 B 更省事。把结论告诉主任务，谢谢",
+    "把结论告诉主任务，不过要说清楚理由",
+    "把结论发给主任务和我", "把结论告诉“主任务”",
+  ];
+  for (const [index, command] of natural.entries()) {
+    const reply = await sendForReply(command);
+    await reply.getByText("已送达主任务", { exact: true }).waitFor();
+    assert.equal((await state()).delivered.length, beforeNatural.delivered.length + index + 1, command);
+    assert.equal(await reply.getByText(/未发送到主任务/).count(), 0);
+    if (index === 0) await page.screenshot({ path: join(artifacts, "side-chat-natural-delivered.png") });
+  }
+  const beforeDeferral = await state();
+  for (const excerpt of [false, true]) {
+    await control("forward-mode", { forced: true, excerpt });
+    for (const suffix of ["改成明天再说", "用不着这么急", "先按兵不动", "继续观望", "让它忽略"]) {
+      const reply = await sendForReply(`把结论告诉主任务，${suffix}`);
+      await reply.getByText(/未发送到主任务/).waitFor();
+      assert.match(await reply.innerText(), /回传结论：选择方案 B/);
+      assert.equal((await state()).delivered.length, beforeDeferral.delivered.length, "延后指令不投递，即使只引用前半句");
+      assert.equal((await state()).pending.length, beforeDeferral.pending.length, "延后指令不入队");
+    }
+  }
+  await page.reload();
+  await page.locator(".side-chat-message.is-agent").last().getByText(/未发送到主任务/).waitFor();
+  assert.equal(await page.getByText("已送达主任务", { exact: true }).count(), beforeDeferral.delivered.length);
+  assert.equal((await state()).kills, 0);
+  await page.screenshot({ path: join(artifacts, "side-chat-deferral-preserved.png") });
+  await control("forward-mode", {});
   await page.setViewportSize({ width: 390, height: 844 });
   const pane = await page.getByRole("region", { name: "任务侧聊", exact: true }).boundingBox();
   assert.ok(pane && pane.width > 250 && pane.x >= 0 && pane.x + pane.width <= 391);

@@ -108,3 +108,20 @@
 `npm run build`、`npm -w web run test:side-chat`、`npm -w web run test:conversation-fork`、`npm -w server run test:chat`、`test:scheduled-messages`、`test:assistant` 均通过。最终 `npm run test:web` 完整运行 exit 0，日志为 `round-2/repair/test-web-final.log`。首跑在新浏览器用例中读到了上一条回复的状态，断言随后遇到本条“等待回复”；已将等待定位固定到本次新增回复，单独侧聊回归和最终全量均通过。首跑日志 `test-web.log` 保留，未删除失败证据。构建保留已有大 chunk 提示。
 
 `git diff --check` 与所有修改代码文件不超过 700 行的检查通过。
+
+### 第 3 轮审查修复
+
+审查报告：`data/runs/k8Nr25lD-XnW/free-review/4C_DY_wNahjD/round-3/report.md`。
+
+- P1：移除其余分句的动词白名单，中文发送动作不再受句首客套词模板限制。“你把……”“麻烦你……”“现在就……”“赶紧……”“那就……”以及前置理由、句尾谢谢、补充说明都可识别。“不过／但是”本身不再取消授权，后面实际的等待、否定和条件仍会取消。发送动作前的追述、引用和功能讨论继续排除。
+- 接收对象与提示词对齐：“主任务”、「主任务」和直引号中的主任务都可识别。“发给主任务和我”只向绑定主任务投递一次，给用户的结论仍在侧聊回答中；“主任务的负责人”等其他对象仍拒绝。引用中的整条指令、代码块和旧授权不会因放宽句首而获得授权。
+- P2：整条当前消息的检查范围保留，新增日期加“再说／再发”等延后结构、搁置、未定、观望和让主任务忽略当前指令的识别；模型只引用发送半句也不绕过检查。“明天补测试”和“让它忽略旧方案”作为明确的后续安排仍可发送。单独带引号的撤回或“改成「明天再说」”也拦住；引号作为待发送正文时不被误读成指令。延后判断针对发送动作或独立搁置要求，不因“延迟指标”“减少延迟”“建议推迟发布”等技术内容拒绝回传。
+- L1 的取舍已记录在上方“第 2 轮审查修复 / P2 的产品取舍”，本轮重申：继续保留序列化快照 64 KiB 上限，超限主任务无法直接开始侧聊。当前选择维持首次整理成本和快照完整性，没有新增摘要共享或截取最近历史，也没有声称用户已确认这一产品限制。
+
+回归矩阵扩展到 50 条合法说法、44 条拒绝说法，保留前两轮全部用例，并检查完整授权和模型截取的片段。报告的 18 种自然说法及另外两种接收对象引号，均通过真实 ChatService / 临时数据库 / 模拟 native 接收验证；拒绝用例不新增队列行、不投递、完整保留回答。浏览器验证覆盖自然句首、前置理由、正常转折补充、双接收对象、接收对象引号，以及 5 条延后要求在完整和半句授权下均被拦住；刷新后回执、回答和未发送状态仍在。测试使用模拟模型和隔离任务，没有向用户真实主任务发消息。
+
+浏览器通道：先尝试 Chrome 扩展具名后台会话「🔎 ash 侧聊三轮修复」，返回 `unsupported Codex auth method: apikey`，无法建立扩展标签；随后使用独立临时 profile、`headless: true` 的 Chrome。未激活、接管或直连用户普通标签，未启动有头浏览器。日志与截图位于 `round-3/repair/`，包括 `authorization-matrix.json`、`side-chat-natural-delivered.png`、`side-chat-deferral-preserved.png`。
+
+验证结果：`npm run build`、最终后端构建、`npm -w web run test:side-chat`、`npm -w server run test:chat`、`test:scheduled-messages`、`test:assistant` 均通过。最终 `npm run test:web` 完整运行 exit 0，包含回复派生与侧聊全部回归，日志为 `test-web-final.log`。首跑在既有 `test:system-notices-dom` 输出断言成功后，清理阶段数分钟未退出；已终止本轮测试进程（exit 143），单独复跑与完整重跑均正常通过，未修改系统提示功能；首跑日志 `test-web.log` 和单项日志保留。构建仅有原有大 chunk 提示。
+
+`git diff --check` 通过；本轮修改的 4 个代码文件分别为 75、107、254、195 行，均低于 700 行。

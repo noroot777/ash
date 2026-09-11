@@ -1,4 +1,4 @@
-import { acceptedSideRequests, rejectedSideRequests } from "./side-authorization-cases.js";
+import { acceptedSideRequests, deferredSideRequests, naturalSideRequests, rejectedSideRequests } from "./side-authorization-cases.js";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -98,6 +98,19 @@ try {
   await until(async () => (await snapshot("side-room")).messages.at(-1)?.forward?.status === "sent");
   assert.equal(delivered.length, 1); assert.equal(kills, 0);
   assert.match(delivered[0]!, /当前方向身份/);
+  invalidForward = true;
+  authorizeWholeMessage = true;
+  for (const [index, command] of naturalSideRequests.entries()) {
+    const reply = await send(command, `review-natural-${index}`);
+    await until(async () => (await snapshot("side-room")).messages.at(-1)?.forward?.status === "sent");
+    assert.equal(reply.body, fakeReply);
+    assert.equal(reply.forwardError ?? null, null, command);
+    assert.equal(delivered.length, index + 2, command);
+    const queued = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, reply.forward!.messageId)))[0]!;
+    assert.equal(queued.taskId, "parent", "自然措辞及主任务和我只投递给绑定主任务");
+  }
+  authorizeWholeMessage = false;
+  const nativeCount = delivered.length;
   runs.untrackRun("parent", native); runs.trackRun("parent", handle);
   const count = (await db.select().from(scheduledMessages)).length;
   invalidForward = true;
@@ -107,7 +120,12 @@ try {
   assert.match(rejected.forwardError!, /没有明确/);
   assert.equal(rejected.forward, undefined);
   assert.match((await db.select().from(chatMessages).where(eq(chatMessages.id, rejected.id)))[0]!.modelReply!, /继续分析的详细结论.*未发送/s);
-  for (const command of acceptedSideRequests) assert.equal(sideForwardAuthorized(command, command), true, command);
+  for (const command of acceptedSideRequests) {
+    assert.equal(sideForwardAuthorized(command, command), true, command);
+    for (const excerpt of ["把结论告诉主任务", "发给主任务"]) {
+      if (command.includes(excerpt)) assert.equal(sideForwardAuthorized(command, excerpt), true, `${command} / 摘录`);
+    }
+  }
   for (const command of rejectedSideRequests) {
     assert.equal(sideForwardAuthorized(command, command), false, command);
     for (const excerpt of ["把结论告诉主任务", "告诉主任务", "发给主任务"]) {
@@ -115,7 +133,7 @@ try {
     }
   }
   for (const separator of ["，", "。", "！", "\n", "; "]) {
-    for (const withdrawal of ["哦不对，先不要", "等等，我再想想", "除非它已经开始做了", "不过要等我确认", "不过这条只是我随口说的", "暂且搁置"]) {
+    for (const withdrawal of ["哦不对，先不要", "等等，我再想想", "除非它已经开始做了", "不过要等我确认", "不过这条只是我随口说的", "暂且搁置", ...deferredSideRequests.map((command) => command.split("，")[1]!)]) {
       const command = `把结论告诉主任务${separator}${withdrawal}`;
       assert.equal(sideForwardAuthorized(command, "把结论告诉主任务"), false, command);
       assert.equal(sideForwardAuthorized(command, command), false, command);
@@ -131,7 +149,15 @@ try {
     assert.ok(rejected.forwardError, command);
     assert.equal(rejected.forward, undefined);
     assert.equal((await db.select().from(scheduledMessages)).length, count, "拒绝回传不入队");
-    assert.equal(delivered.length, 1, "即使 native 可用也不投递");
+    assert.equal(delivered.length, nativeCount, "即使 native 可用也不投递");
+  }
+  authorizeWholeMessage = false;
+  for (const [index, command] of deferredSideRequests.entries()) {
+    const reply = await send(command, `review-deferred-excerpt-${index}`);
+    assert.equal(reply.body, fakeReply);
+    assert.ok(reply.forwardError, command);
+    assert.equal((await db.select().from(scheduledMessages)).length, count, "仅引用发送半句也不入队");
+    assert.equal(delivered.length, nativeCount, "仅引用发送半句也不投递");
   }
   runs.untrackRun("parent", native); runs.trackRun("parent", handle);
   authorizeWholeMessage = false;
@@ -178,7 +204,7 @@ try {
   await db.insert(chatMessages).values({ id: "recover-running", roomId: room.id, role: "agent", author: "侧聊", status: "running", body: "", createdAt: timestamp });
   await new ChatService().recover();
   assert.equal((await roomMessages(room.id)).find((row) => row.id === "recover-running")?.status, "stopped");
-  assert.equal((await roomMessages(room.id)).filter((row) => row.forward).length, 2, "重启后回执仍在");
+  assert.equal((await roomMessages(room.id)).filter((row) => row.forward).length, count, "重启后回执仍在");
   await db.update(tasks).set({ archived: true }).where(eq(tasks.id, "parent"));
   const archived = await send("把结论告诉主任务", "user-archived");
   assert.equal(archived.status, "done");
