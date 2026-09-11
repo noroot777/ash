@@ -1,6 +1,11 @@
+/* 这张遮罩盖的是**整个窗口**，所以底价得高过所有「只盖一块地方」的面板级浮层：主区里的团队
+   执行者抽屉（95）、审查证据抽屉（96）、任务队列抽屉（95），以及侧栏顶行开着下拉时抬起的那
+   一档（100，见 `project-git.css`）。随手记（210）和分组（205）各自加过码，所以一直没事；
+   命令面板吃的是这里的底价，原来 80/95 比侧栏那档低——无头浏览器实测：开着分支下拉按 ⌘K，
+   下拉会从面板遮罩上面戳出来。底价抬到 110 之后命令面板不必再自己声明一遍。 */
 .overlay-scrim {
   position: fixed;
-  z-index: 80;
+  z-index: 110;
   inset: 0;
   display: flex;
   align-items: center;
@@ -10,7 +15,6 @@
 }
 
 .palette-scrim {
-  z-index: 95;
   align-items: flex-start;
   padding-top: min(15vh, 132px);
 }

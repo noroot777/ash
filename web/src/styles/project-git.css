@@ -4,12 +4,19 @@
 
 .workspace-git-context-host { position:relative; min-width:0; max-width:46%; flex:0 1 auto; }
 
-/* 侧栏右边缘那条拖宽手柄（`.workspace-sidebar-resize-handle`，z-index 20）比顶部那一行
-   （`.workspace-sidebar-top`，z-index 2）高，会横穿浮层、把落在它底下的按钮全部吃掉点击
-   ——无头浏览器实测点不到「拉取」。浮层开着的时候把整行抬到手柄之上；关着时不动，免得
-   顶部这段拖不了宽。项目切换菜单是同一个毛病，一起治。 */
+/* 这两个浮层（308px / 304px）都比侧栏宽，右半边探进主区，于是要跟两样东西比高低：
+   ① 侧栏右边缘那条拖宽手柄（`.workspace-sidebar-resize-handle`，z-index 20）比顶部那一行
+      （`.workspace-sidebar-top`，z-index 2）高，会横穿浮层、把落在它底下的按钮全部吃掉点击
+      ——无头浏览器实测点不到「拉取」；
+   ② 主区里那些**面板级**浮层：团队执行者抽屉（`.team-worker-drawer` 95）和它的遮罩（90）、
+      审查证据抽屉（96）……它们的遮罩只铺满主区，侧栏照旧点得动，所以抽屉开着时点分支下拉
+      是正当操作——但抽屉在根层叠上下文里就是比 30 高，探出去那半边会被整块盖掉（实测面板
+      右下角的命中测试落在抽屉的正文上，绘制和点击一起输）。
+   所以浮层开着时把整行抬到 100：压过主区所有面板级浮层，又低于视口级遮罩（`.overlay-scrim`
+   110）和 toast（120）——那几样盖的是整个窗口，本来就该连侧栏一起盖住。关着时不动，免得顶部
+   这段拖不了宽。项目切换菜单是同一个毛病，一起治。 */
 .workspace-sidebar-top:has(.project-git-panel),
-.workspace-sidebar-top:has(.workspace-project-menu) { z-index:30; }
+.workspace-sidebar-top:has(.workspace-project-menu) { z-index:100; }
 
 .workspace-git-context {
   display:flex; max-width:100%; min-width:0; height:36px; align-items:center; gap:5px;
