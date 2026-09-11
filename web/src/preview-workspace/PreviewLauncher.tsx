@@ -37,6 +37,27 @@ export function PreviewLaunchOptions({ state, starting, stopped, failed = false,
   const busy = starting || !!action;
   const blocked = busy || state.loading || !info || !!info.reason;
   const start = (input: Omit<WorkspacePreviewInput, "workspace">) => onStart({ ...input, stepId: selectedStep?.id });
+  const alternatives = info && <>
+    {info.kind === "workflow" && info.steps.length > 1 && <label>预览步骤<select aria-label="预览步骤" value={selectedStep?.id} disabled={busy} onChange={(e) => setStepId(e.target.value)}>
+      {info.steps.map((step, index) => <option key={step.id} value={step.id}>预览 {index + 1} · {step.command}</option>)}
+    </select></label>}
+    {selectedStep && <div className="preview-launch-candidate"><strong>工作流预览命令</strong><pre>{selectedStep.command}</pre>
+      <button type="button" disabled={blocked} onClick={() => start({})}>{restarting ? "重启工作流预览" : "启动工作流预览"}</button></div>}
+    <div className="preview-launch-candidates" aria-label="可用预览候选">{info.candidates.map((candidate) => <div className="preview-launch-candidate" key={candidate.id}>
+      <strong>{candidate.name}</strong><pre>{candidate.command}</pre>
+      {candidate.requiresSelection && <small>静态 HTML 不经过构建，已有产物可能过期；请确认这是本次页面。启动需要 Python 3，没有 index.html 时会显示文件列表。</small>}
+      <button type="button" disabled={blocked} onClick={() => start({ command: candidate.command })}>启动 {candidate.name}</button>
+    </div>)}</div>
+    {!info.candidates.length && !info.configured && !selectedStep && <p>未识别出常见服务或静态页面，可填写启动命令。</p>}
+    {info.truncated && <small>仅显示前 40 个候选。</small>}
+    <details className="preview-launch-custom" open={!info.candidates.length && !info.configured && !selectedStep}>
+      <summary>自填启动命令</summary>
+      <label>本次预览命令<textarea aria-label="本次预览命令" value={command} maxLength={MAX_PREVIEW_SCRIPT_LENGTH} disabled={busy}
+        rows={4} spellCheck={false} onChange={(e) => setCommand(e.target.value)} placeholder="输入在任务目录执行的启动脚本，可包含 cd 和多行命令" /></label>
+      <small>仅用于本次预览。脚本从任务目录运行，端口使用 ash 提供的 PORT 环境变量。</small>
+      <button type="button" disabled={blocked || !command.trim()} onClick={() => start({ command: command.trim() })}>启动自填命令</button>
+    </details>
+  </>;
   return <>
     <h3>{starting ? "正在启动页面预览…" : info?.directory === null ? "无法启动页面预览" : restarting ? "以代理方式在工作区重启" : "在工作区启动预览"}</h3>
     <p role="status">{state.loading ? "正在检查任务工作目录与预览候选…" : starting
@@ -48,27 +69,10 @@ export function PreviewLaunchOptions({ state, starting, stopped, failed = false,
     {!state.loading && !info && <button type="button" onClick={onRetry}>重新读取候选</button>}
     {info?.directory && !info.reason && <>
       <small className="preview-launch-directory">任务目录：{info.directory}</small>
-      {info.kind === "workflow" && info.steps.length > 1 && <label>预览步骤<select aria-label="预览步骤" value={selectedStep?.id} disabled={busy} onChange={(e) => setStepId(e.target.value)}>
-        {info.steps.map((step, index) => <option key={step.id} value={step.id}>预览 {index + 1} · {step.command}</option>)}
-      </select></label>}
-      {selectedStep && <div className="preview-launch-candidate"><strong>工作流预览命令</strong><pre>{selectedStep.command}</pre>
-        <button type="button" disabled={blocked} onClick={() => start({})}>{restarting ? "重启工作流预览" : "启动工作流预览"}</button></div>}
-      {info.configured && <div className="preview-launch-candidate"><strong>已保存的项目预览配置</strong><pre>{info.configured.command}</pre>
+      {info.configured && <div className="preview-launch-candidate preview-launch-preferred"><strong>项目预览配置 · 默认启动</strong><pre>{info.configured.command}</pre>
+        <small>直接使用项目设置中的启动项，无需重新配置。</small>
         <button type="button" disabled={blocked} onClick={() => start(info.configured!)}>{restarting ? "按已保存配置重启" : "按已保存配置启动"}</button></div>}
-      <div className="preview-launch-candidates" aria-label="可用预览候选">{info.candidates.map((candidate) => <div className="preview-launch-candidate" key={candidate.id}>
-        <strong>{candidate.name}</strong><pre>{candidate.command}</pre>
-        {candidate.requiresSelection && <small>静态 HTML 不经过构建，已有产物可能过期；请确认这是本次页面。启动需要 Python 3，没有 index.html 时会显示文件列表。</small>}
-        <button type="button" disabled={blocked} onClick={() => start({ command: candidate.command })}>启动 {candidate.name}</button>
-      </div>)}</div>
-      {!info.candidates.length && <p>未识别出常见服务或静态页面，可填写启动命令。</p>}
-      {info.truncated && <small>仅显示前 40 个候选。</small>}
-      <details className="preview-launch-custom" open={!info.candidates.length && !info.configured && !selectedStep}>
-        <summary>自填启动命令</summary>
-        <label>本次预览命令<textarea aria-label="本次预览命令" value={command} maxLength={MAX_PREVIEW_SCRIPT_LENGTH} disabled={busy}
-          rows={4} spellCheck={false} onChange={(e) => setCommand(e.target.value)} placeholder="输入在任务目录执行的启动脚本，可包含 cd 和多行命令" /></label>
-        <small>仅用于本次预览。脚本从任务目录运行，端口使用 ash 提供的 PORT 环境变量。</small>
-        <button type="button" disabled={blocked || !command.trim()} onClick={() => start({ command: command.trim() })}>启动自填命令</button>
-      </details>
+      {info.configured ? <details className="preview-launch-alternatives"><summary>换其它候选 / 自填命令</summary>{alternatives}</details> : alternatives}
     </>}
     {!starting && <p className="preview-launch-fallback">无法启动或页面不支持内嵌预览时，可使用右侧「改用截图批注」。</p>}
   </>;

@@ -65,11 +65,12 @@ export function previewAnnotationRuntime(): string {
   const hide = HTMLElement.prototype.hidePopover && call(HTMLElement.prototype.hidePopover);
   const uid = bind(crypto.getRandomValues, crypto);
   const Uint = Uint32Array;
-  const Math = { min: window.Math.min, max: window.Math.max, ceil: window.Math.ceil, hypot: window.Math.hypot };
+  const Math = { min: window.Math.min, max: window.Math.max, ceil: window.Math.ceil, hypot: window.Math.hypot, abs: window.Math.abs };
   const SVG = 'http://www.w3.org/2000/svg';
   let port = null, host = null, surface = null, timer = null;
   let mode = 'browse', tool = 'element', selected = null, gesture = null;
   let annotations = [], nextNumber = 1, scheduled = false, lastContext = '';
+  let badges = [];
   let lastRoute = '', lastHeartbeat = 0;
   const clean = (value, limit = 240) => slice(trim(replace(replace(replace(replace(String(value || ''),
     /\/preview\/[^/\s]+\/[^/\s]+\/[^/\s]+\//g, '/'),
@@ -173,6 +174,7 @@ export function previewAnnotationRuntime(): string {
     css(host, 'pointer-events', mode === 'annotate' ? 'auto' : 'none');
     css(host, 'cursor', mode === 'annotate' ? tool === 'element' ? 'default' : 'crosshair' : 'auto');
     setText(surface, '');
+    badges = [];
     const current = context();
     const draw = (entry, draft = false) => {
       if (entry.data.context.route !== current.route) return;
@@ -202,6 +204,7 @@ export function previewAnnotationRuntime(): string {
       x = Math.max(13, Math.min(current.viewport.width - 13, x));
       if (y < -24 || y > current.viewport.height + 24) return;
       y = Math.max(13, Math.min(current.viewport.height - 13, y));
+      badges[badges.length] = { entry, x, y };
       svg('circle', { cx: x, cy: y, r: 12, fill: color, stroke: '#fff', 'stroke-width': 2 });
       setText(svg('text', { x, y: y + 4, fill: '#fff', 'text-anchor': 'middle', 'font-size': 11, 'font-family': 'system-ui', 'font-weight': 700 }), String(entry.data.number));
     };
@@ -274,6 +277,13 @@ export function previewAnnotationRuntime(): string {
     if (event.cancelable) prevent(event);
     try {
       if (event.type === 'pointerdown' && event.button === 0 && !gesture) {
+        paint();
+        for (let index = badges.length - 1; index >= 0; index--) {
+          const badge = badges[index];
+          if (Math.hypot(event.clientX - badge.x, event.clientY - badge.y) <= 14) {
+            selected = badge.entry; reportSelection(); schedule(); return;
+          }
+        }
         const entry = newEntry(event);
         if (tool === 'element' || tool === 'pin') commit(entry);
         else { gesture = { pointerId: event.pointerId, entry }; capturePointer(host, event.pointerId); }
@@ -287,6 +297,9 @@ export function previewAnnotationRuntime(): string {
           const end = points[points.length - 1];
           if (points.length > 1 && (entry.data.tool === 'pen' || Math.hypot(end.x - points[0].x, end.y - points[0].y) >= 3)) commit(entry);
         }
+      } else if (event.type === 'keydown' && (event.key === 'z' || event.key === 'Z') && (event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey) {
+        if (gesture) { releasePointer(host, gesture.pointerId); gesture = null; }
+        else send({ type: 'undo' });
       } else if (event.type === 'pointercancel' || (event.type === 'keydown' && event.key === 'Escape')) gesture = null;
       schedule();
     } catch { gesture = null; send({ type: 'error', message: '无法读取这个页面对象，请选择外层容器或改用截图批注。' }); }
@@ -314,7 +327,7 @@ export function previewAnnotationRuntime(): string {
     } catch {}
   }, { capture: true, passive: false });
   const disconnect = () => {
-    mode = 'browse'; gesture = null; selected = null; annotations = []; reviewTarget = null;
+    mode = 'browse'; gesture = null; selected = null; annotations = []; badges = []; reviewTarget = null;
     if (timer) clearTimer(timer);
     timer = null;
     if (host) {

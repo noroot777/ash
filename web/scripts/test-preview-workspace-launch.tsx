@@ -10,6 +10,7 @@ import { createPreviewLaunchController, type PreviewLaunchState } from "../src/p
 import type { useAnnotationBatch } from "../src/preview-workspace/useAnnotationBatch.ts";
 import type { useAnnotationReview } from "../src/preview-workspace/useAnnotationReview.ts";
 import type { request } from "../src/lib/apiClient.ts";
+import { testPreviewWorkspaceDom } from "./test-preview-workspace-dom.mjs";
 
 Object.assign(globalThis, { React });
 const info: WorkspacePreviewLaunch = { kind: "free", reason: "", directory: "/task/worktree", steps: [], configured: null, truncated: false,
@@ -136,3 +137,4 @@ async function scenario(kind: WorkspacePreviewLaunch["kind"]) {
 }
 await scenario("free"); await scenario("workflow");
 console.log("preview workspace: ready direct restart, source-less launch states, delivered history priority, embedded page, candidates, guards, free/workflow launch and duplicate/cancel/task-switch races passed");
+await testPreviewWorkspaceDom();

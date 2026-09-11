@@ -171,7 +171,16 @@ export function useAnnotationBatch(taskId: string) {
     catch (reason) { setError(`请先保存当前草稿：${String(reason)}`); }
     finally { setBusy(false); }
   };
-  return { batch, record, records, loaded, busy, locked, review, error, receive, pageImage, paste, send, remember,
+  const removeItem = (id: string | undefined) => {
+    const value = current.current;
+    if (!value || frozen.current || cache.current.get(value.id)?.messageId) return null;
+    const item = value.items.find((entry) => entry.id === id);
+    if (!item) return null;
+    update({ ...value, items: value.items.filter((entry) => entry.id !== id), evidence: value.evidence.filter((entry) => entry.annotationId !== id) });
+    return item;
+  };
+  return { batch, record, records, loaded, busy, locked, review, error, receive, pageImage, paste, send, remember, removeItem,
+    undo: () => removeItem(current.current?.items.at(-1)?.id),
     followup: async (source: AnnotationBatch, item: AnnotationDraft, comment: string) => {
       if (source.taskId !== taskId || !comment.trim() || busy || review) return false;
       setBusy(true); frozen.current = true;

@@ -8,7 +8,11 @@
 .preview-workspace-header > svg { color: var(--accent); }
 .preview-workspace-header h2 { margin: 0; font-size: 17px; }
 .preview-workspace-header p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
-.preview-workspace-header > button { margin-left: auto; }
+.preview-workspace-layout-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.preview-workspace.is-expanded { position: fixed; inset: 0; z-index: 180; width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; }
+.workspace-shell .workspace-main:has(.preview-workspace.is-expanded) { isolation: auto; }
+.preview-workspace.notes-collapsed .preview-workspace-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+.preview-workspace-notes[hidden] { display: none; }
 .preview-workspace-toolbar { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); }
 .preview-workspace-modes, .preview-workspace-tools { display: flex; gap: 4px; }
 .preview-workspace-modes { border-right: 1px solid var(--line); padding-right: 8px; }
@@ -36,6 +40,9 @@
 .preview-workspace-memory { color: var(--muted); font-size: 10px; line-height: 1.7; }
 .preview-workspace-hint { margin: 24px 0; color: var(--muted); font-size: 12px; line-height: 1.9; }
 .preview-workspace-list { display: grid; gap: 7px; padding: 0; margin: 14px 0; list-style: none; }
+.preview-workspace-list-row { display: flex; align-items: stretch; gap: 4px; min-width: 0; }
+.preview-workspace-list-row .preview-workspace-item { flex: 1; min-width: 0; }
+.preview-workspace .preview-workspace-delete { color: var(--red); flex-shrink: 0; }
 .preview-workspace .preview-workspace-item { width: 100%; justify-content: flex-start; padding: 9px; text-align: left; }
 .preview-workspace-item > b { display: grid; place-items: center; width: 25px; height: 25px; flex-shrink: 0; background: #d93d4c; color: white; border-radius: 50%; font: 700 11px var(--font-mono); }
 .preview-workspace-item[aria-pressed="true"] > b { background: #5e6ad2; }
