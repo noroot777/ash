@@ -1,11 +1,11 @@
-import { annotationBatchPrompt, batchStateLabels, evidenceLabels } from "@ash/shared/page-annotation-batch";
+import { annotationBatchPrompt, batchStateLabels, evidenceLabels, sameAnnotationBatch } from "@ash/shared/page-annotation-batch";
 import { useAnnotationBatch } from "./useAnnotationBatch.ts";
 import "./annotation-batch.css";
 
 type BatchController = ReturnType<typeof useAnnotationBatch>;
 export function AnnotationBatchPanel({ controller: c, selectedId }: { controller: BatchController; selectedId: string | null }) {
   const { batch, record } = c;
-  const saved = JSON.stringify(record?.batch) === JSON.stringify(batch);
+  const saved = sameAnnotationBatch(record?.batch, batch);
   return <div className="annotation-batch-panel">
     <p role="status">{!c.loaded ? "正在恢复批次…" : record?.messageId ? batchStateLabels[record.state] : saved ? "已保存 · 草稿" : batch ? "正在保存草稿…" : "新标注将自动保存为批次"}</p>
     {batch && <small>批次 {batch.id} · gen {batch.gen} · 服务 {batch.serviceId}</small>}

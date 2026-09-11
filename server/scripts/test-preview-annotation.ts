@@ -4,6 +4,7 @@ import { previewAnnotationRuntime } from "../src/preview-annotation-runtime.js";
 import { neutralizePreviewMetaCsp } from "../src/preview-meta-csp.js";
 import { rewritePreviewText } from "../src/preview-proxy-rewrite.js";
 import { PREVIEW_ANNOTATION_PROTOCOL } from "../../shared/src/page-annotation.ts";
+import { parseAnnotationBatch, sameAnnotationBatch, type AnnotationBatch } from "../../shared/src/page-annotation-batch.ts";
 import { parsePreviewMessage } from "../../web/src/preview-workspace/previewMessages.ts";
 import type { PreviewRecord } from "../src/preview-store.js";
 
@@ -121,9 +122,11 @@ form.appendChild(input); form.appendChild(area); form.appendChild(token); root.a
 let hit: TestHtml = icon;
 const timers = new Set<() => void>();
 const frames: Array<() => void> = [];
+const drawAll = () => { for (const draw of frames.splice(0)) draw(); };
 const parent = {};
+const pageMath = Object.create(null, Object.getOwnPropertyDescriptors(Math));
 const window = Object.assign(new TestTarget(), { parent, scrollX: 0, scrollY: 0, innerWidth: 1000, innerHeight: 700,
-  String, Math, scrollBy: () => {},
+  String, Math: pageMath, scrollBy: () => {},
   getComputedStyle: () => { const style = new TestStyle(); style.setProperty('overflow-y', 'auto'); return style; },
   setInterval: (fn: () => void) => { timers.add(fn); return fn; },
   clearInterval: (fn: () => void) => timers.delete(fn), requestAnimationFrame: (fn: () => void) => frames.push(fn),
@@ -138,6 +141,9 @@ const context = vm.createContext({ window, document: { documentElement: root, cr
   crypto: { getRandomValues: (array: Uint32Array) => crypto.getRandomValues(array) }, location,
 });
 vm.runInContext(runtime, context);
+for (const name of Object.getOwnPropertyNames(pageMath)) {
+  if (typeof pageMath[name] === 'function') pageMath[name] = () => { throw new Error(`page replaced Math.${name}`); };
+}
 assert.equal(root.nodes.length, 2, 'embedded runtime is dormant before handshake');
 assert.equal(timers.size, 0);
 assert.equal(window.fire('click').defaultPrevented, false);
@@ -181,9 +187,25 @@ for (const secret of ['PRIVATE_PASSWORD', 'UNRELATED_FORM_CONTENT', 'SUPER_SECRE
 }
 assert(sanitized.includes('[redacted]'));
 command({ type: 'configure', mode: 'annotate', tool: 'rectangle' });
-pointer('pointerdown', 10, 10); pointer('pointermove', 50, 70); pointer('pointerup', 50, 70);
-assert.equal(annotations().at(-1)?.tool, 'rectangle');
-assert.deepEqual(annotations().at(-1)?.points, [{ x: 10, y: 10 }, { x: 50, y: 70 }]);
+const drawnRectangle = () => ((root.nodes.at(-1) as TestHtml).shadow?.nodes.at(-1)?.nodes ?? [])
+  .filter((node) => (node as TestElement).localName === 'rect').at(-1) as TestElement;
+for (const [start, end] of [[{ x: 10, y: 10 }, { x: 50, y: 70 }], [{ x: 300, y: 200 }, { x: 230, y: 110 }]]) {
+  const countBefore = annotations().length;
+  for (const [phase, point] of [['down', start], ['move', end], ['up', end]] as const) {
+    pointer(`pointer${phase}`, point.x, point.y);
+    pointer(`mouse${phase}`, point.x, point.y);
+    assert.doesNotThrow(drawAll, `rectangle mouse${phase} animation frame`);
+    const rect = drawnRectangle();
+    const current = phase === 'down' ? start : end;
+    assert.deepEqual(Object.fromEntries(['x', 'y', 'width', 'height'].map((key) => [key, Number(rect.attrs.get(key))])), {
+      x: Math.min(start.x, current.x), y: Math.min(start.y, current.y),
+      width: Math.abs(current.x - start.x), height: Math.abs(current.y - start.y),
+    });
+    assert.equal(annotations().length, countBefore + (phase === 'up' ? 1 : 0), 'only mouseup commits the rectangle');
+  }
+  assert.equal(annotations().at(-1)?.tool, 'rectangle');
+  assert.deepEqual(annotations().at(-1)?.points, [start, end]);
+}
 command({ type: 'configure', mode: 'annotate', tool: 'pen' });
 pointer('pointerdown'); pointer('pointermove', 45, 70); pointer('pointerup', 50, 80);
 assert.equal(annotations().at(-1)?.points.length, 3);
@@ -193,7 +215,6 @@ assert.equal(annotations().at(-1)?.tool, 'pin');
 assert.equal(window.fire('wheel', { clientX: 40, clientY: 60, deltaMode: 0, deltaY: 35, deltaX: 0 }).defaultPrevented, true);
 assert.equal(form.scrollY, 35, 'wheel scrolls the underlying nested container');
 const latestId = annotations().at(-1)!.id;
-const drawAll = () => { for (const draw of frames.splice(0)) draw(); };
 const markerCount = () => ((root.nodes.at(-1) as TestHtml).shadow?.nodes.at(-1)?.nodes ?? [])
   .filter((node) => (node as TestElement).localName === 'circle').length;
 drawAll();
@@ -264,4 +285,35 @@ assert.equal(timers.size, 0);
 assert(port.closed);
 assert.equal(parsePreviewMessage({ type: 'annotation', annotation: { id: 'malformed' } }), null);
 assert.equal(parsePreviewMessage({ type: 'context', context: { route: '/x', scroll: { x: NaN, y: 0 } } }), null);
+assert.deepEqual(port.messages.filter((message) => parsePreviewMessage(message)?.type === 'error'), [], 'drawing and later tools keep the channel healthy');
+const draft: AnnotationBatch = {
+  id: 'batch', taskId: 'task', createdAt: 1, gen: 'gen', serviceId: 'web',
+  items: [{ ...oldButton, gen: 'gen', serviceId: 'web', documentId: 'doc', comment: '修改按钮',
+    points: [{ x: 10, y: 20 }, { x: 50, y: 60 }] }],
+  evidence: [{ id: 'image', annotationId: oldButton.id, source: 'page-render', capturedAt: 1,
+    missing: ['Canvas', 'fonts'], path: '/uploads/image.png' }],
+};
+const saved = parseAnnotationBatch(draft);
+assert.notEqual(JSON.stringify(draft), JSON.stringify(saved), 'fixture reproduces upload field reordering');
+assert(sameAnnotationBatch(draft, saved), 'parsed uploaded evidence is already saved despite key order');
+const reverseKeys = (value: unknown): unknown => Array.isArray(value) ? value.map(reverseKeys)
+  : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).reverse().map(([key, item]) => [key, reverseKeys(item)])) : value;
+assert(sameAnnotationBatch(draft, reverseKeys(saved) as AnnotationBatch), 'nested context, element and evidence key order is irrelevant');
+for (const mutate of [
+  (batch: AnnotationBatch) => { batch.items[0].comment += ' changed'; },
+  (batch: AnnotationBatch) => { batch.items[0].points.reverse(); },
+  (batch: AnnotationBatch) => { batch.items[0].context.scroll.y++; },
+  (batch: AnnotationBatch) => { batch.items[0].element!.computedStyle.color = 'red'; },
+  (batch: AnnotationBatch) => { batch.evidence[0].path = '/uploads/other.png'; },
+  (batch: AnnotationBatch) => { batch.evidence[0].missing.reverse(); },
+  (batch: AnnotationBatch) => { batch.evidence.pop(); },
+]) {
+  const changed = structuredClone(saved); mutate(changed);
+  assert(!sameAnnotationBatch(draft, changed), 'content changes and array order remain unsaved');
+}
+assert(!sameAnnotationBatch(undefined, draft));
+assert(!sameAnnotationBatch(saved, null));
+const missingPath = structuredClone(saved); delete missingPath.evidence[0].path;
+const undefinedPath = structuredClone(missingPath); undefinedPath.evidence[0].path = undefined;
+assert(sameAnnotationBatch(missingPath, undefinedPath), 'omitted optional fields match JSON persistence');
 console.log('preview annotation: CSP rewrite, top-level dormancy, source/port handshake, modes, parent selection, shapes, pins, redaction, context and cleanup passed');

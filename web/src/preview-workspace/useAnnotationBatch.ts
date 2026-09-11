@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PreviewAnnotation, PreviewPageImage } from "@ash/shared/page-annotation";
 import type { AnnotationBatch, AnnotationBatchRecord, AnnotationDraft, AnnotationEvidence } from "@ash/shared/page-annotation-batch";
-import { pageImageMissing, parseAnnotationBatch } from "@ash/shared/page-annotation-batch";
+import { pageImageMissing, parseAnnotationBatch, sameAnnotationBatch } from "@ash/shared/page-annotation-batch";
 import { api } from "../lib/api.ts";
 import { json, request } from "../lib/apiClient.ts";
 import { readImageData } from "../page-annotation/image.ts";
@@ -52,7 +52,7 @@ export function useAnnotationBatch(taskId: string) {
     if (!snapshot) return Promise.resolve(null);
     const work = tail.current.catch(() => {}).then(async () => {
       const previous = cache.current.get(snapshot.id);
-      if (previous?.messageId || JSON.stringify(previous?.batch) === JSON.stringify(snapshot)) return previous ?? null;
+      if (previous?.messageId || sameAnnotationBatch(previous?.batch, snapshot)) return previous ?? null;
       const result = await request<AnnotationBatchRecord>(`/tasks/${encodeURIComponent(taskId)}/annotation-batches/${encodeURIComponent(snapshot.id)}`,
         json("PUT", { batch: snapshot, revision: (previous?.revision ?? 0) + 1 }));
       remember(result);

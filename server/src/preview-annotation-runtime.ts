@@ -65,7 +65,7 @@ export function previewAnnotationRuntime(): string {
   const hide = HTMLElement.prototype.hidePopover && call(HTMLElement.prototype.hidePopover);
   const uid = bind(crypto.getRandomValues, crypto);
   const Uint = Uint32Array;
-  const Math = { min: window.Math.min, max: window.Math.max, ceil: window.Math.ceil, hypot: window.Math.hypot, abs: window.Math.abs };
+  const Math = Object.create(null, Object.getOwnPropertyDescriptors(window.Math));
   const SVG = 'http://www.w3.org/2000/svg';
   let port = null, host = null, surface = null, timer = null;
   let mode = 'browse', tool = 'element', selected = null, gesture = null;

@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { createServer } from "vite";
 import { chromium } from "playwright-core";
 import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { previewAnnotationRuntime } from "../../server/src/preview-annotation-runtime.ts";
+import { parseAnnotationBatch } from "../../shared/src/page-annotation-batch.ts";
 
 export async function testPreviewWorkspaceDom() {
   const cacheDir = await mkdtemp(join(tmpdir(), "ash-preview-workspace-test-"));
@@ -19,7 +21,8 @@ export async function testPreviewWorkspaceDom() {
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    let record = null, iframeLoads = 0, running = false;
+    let record = null, iframeLoads = 0, running = false, realRuntime = false;
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==';
     const launches = [];
     const config = { services: [{ id: "web", name: "Project web", command: "npm run project", port: 4321, kind: "web", enabled: true }] };
     const launchInfo = { kind: "workflow", reason: "", directory: "/task/worktree", steps: [{ id: "step", command: "npm run workflow" }],
@@ -36,6 +39,13 @@ export async function testPreviewWorkspaceDom() {
       if (path.endsWith("/annotation-review-status")) return reply({ canReopen: true, reason: "", previewKind: "workflow" });
       if (path.includes("/preview/open/")) {
         iframeLoads++;
+        if (realRuntime) return route.fulfill({ contentType: "text/html", body: `<!doctype html><html><head><script>
+          const attach = Element.prototype.attachShadow;
+          Element.prototype.attachShadow = function(options) {
+            const root = attach.call(this, options); window.annotationShadow = root; return root;
+          };
+          ${previewAnnotationRuntime()}
+          </script></head><body><div id="drag-target" style="margin:20px;width:400px;height:280px;background:#eee">Rectangle target</div></body></html>` });
         return route.fulfill({ contentType: "text/html", body: `<html><body><h1>Fixture preview</h1><script>
           window.commands = [];
           window.addEventListener('message', event => {
@@ -51,10 +61,12 @@ export async function testPreviewWorkspaceDom() {
         </script></body></html>` });
       }
       if (path.endsWith("/annotation-reference")) return reply({ capturedAt: 1, missing: ["fixture image unavailable"] });
+      if (path === "/api/uploads") return reply({ id: "image", path: "/uploads/fixture.png", url: "/api/uploads/fixture.png", name: "fixture.png", kind: "image" });
+      if (path === "/api/uploads/fixture.png") return route.fulfill({ contentType: "image/png", body: Buffer.from(png, "base64") });
       if (path.endsWith("/annotation-batches")) return reply(record ? [record] : []);
       if (path.includes("/annotation-batches/") && request.method() === "PUT") {
         const data = request.postDataJSON();
-        record = { ...data, state: "saved", messageId: null, error: null, savedAt: "2026-09-11" };
+        record = { ...data, batch: parseAnnotationBatch(data.batch), state: "saved", messageId: null, error: null, savedAt: "2026-09-11" };
         return reply(record);
       }
       if (path.endsWith("/reply")) {
@@ -148,6 +160,14 @@ export async function testPreviewWorkspaceDom() {
     assert.deepEqual((await undoCommands()).slice(-2), ["item-1", "item-2"]);
     await emit(1);
     await page.locator(".preview-workspace-detail textarea").fill("最终意见");
+    await frame.evaluate((png) => window.emit({ type: "image", id: "item-1", image: {
+      capturedAt: 1, dataUrl: `data:image/png;base64,${png}`, missing: ["Canvas", "fonts"],
+    } }), png);
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem("ash.annotation-batch.fixture"))?.evidence.some((item) => item.path));
+    await page.getByRole("status").filter({ hasText: "已保存 · 草稿" }).waitFor();
+    assert.deepEqual((await draft()).evidence, record.batch.evidence, "uploaded evidence and server record have the same content");
+    assert.notEqual(JSON.stringify((await draft()).evidence), JSON.stringify(record.batch.evidence), "server normalization reorders path/missing");
+    const savedRevision = record.revision;
     await button("预览批次并发送").click();
     assert.equal(await button("撤销").isDisabled(), true);
     assert.equal(await button("删除标注 #1").isDisabled(), true);
@@ -158,13 +178,50 @@ export async function testPreviewWorkspaceDom() {
     await button("确认发送此批次").click();
     await page.waitForFunction(() => !document.querySelector('iframe[title="任务页面预览"]'));
     assert.equal(record.messageId, "sent");
+    assert.equal(record.revision, savedRevision, "sending an equivalent draft does not save a redundant revision");
     assert.equal(await button("删除标注 #1").isDisabled(), true);
     await page.reload();
     await button("删除标注 #1").waitFor();
     assert.equal(await button("删除标注 #1").isDisabled(), true, "restored sent batches remain immutable");
     assert.equal(record.batch.items.length, 1);
+
+    await page.evaluate(() => localStorage.removeItem("ash.annotation-batch.fixture"));
+    record = null; realRuntime = true;
+    await page.reload();
+    await page.waitForFunction(() => document.querySelector('.preview-workspace-modes button')?.disabled === false);
+    await button("矩形").click();
+    await page.waitForFunction(() => [...document.querySelectorAll('.preview-workspace-tools button')]
+      .some((button) => button.textContent.includes('矩形') && button.getAttribute('aria-pressed') === 'true' && !button.disabled));
+    const runtimeFrame = page.frames().find((frame) => frame.url().includes("/preview/open/"));
+    const target = await runtimeFrame.locator("#drag-target").boundingBox();
+    assert(target, "real runtime fixture has a drawable target");
+    const paint = () => runtimeFrame.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const drawn = () => runtimeFrame.evaluate(() => [...window.annotationShadow.querySelectorAll('rect')].map((rect) =>
+      Object.fromEntries(['x', 'y', 'width', 'height'].map((key) => [key, Number(rect.getAttribute(key))]))));
+    for (const [index, start, end] of [[0, { x: 180, y: 150 }, { x: 60, y: 70 }], [1, { x: 220, y: 180 }, { x: 320, y: 250 }]]) {
+      const before = (await draft())?.items.length ?? 0;
+      await page.mouse.move(target.x + start.x, target.y + start.y);
+      await page.mouse.down(); await paint();
+      assert.equal((await drawn()).at(-1).width, 0, "mousedown paints the draft rectangle");
+      await page.mouse.move(target.x + end.x, target.y + end.y, { steps: 5 }); await paint();
+      const expected = { width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y) };
+      const moving = (await drawn()).at(-1);
+      assert.equal(moving.width, expected.width); assert.equal(moving.height, expected.height);
+      assert.equal((await draft())?.items.length ?? 0, before, "mousemove has not committed the rectangle");
+      await page.mouse.up(); await paint();
+      await page.waitForFunction((count) => document.querySelectorAll('.preview-workspace-list-row').length === count, index + 1);
+      assert.deepEqual((await drawn()).at(-1), moving, "mouseup commits the visible rectangle");
+      assert.equal((await draft()).items.at(-1).tool, "rectangle");
+    }
+    for (const name of ["画笔", "Pin", "点选"]) {
+      assert.equal(await button(name).isEnabled(), true);
+      await button(name).click();
+      await page.waitForFunction((name) => [...document.querySelectorAll('.preview-workspace-tools button')]
+        .some((button) => button.textContent.includes(name) && button.getAttribute('aria-pressed') === 'true' && !button.disabled), name);
+    }
+    assert.equal(await page.getByText("未能连接页面标注", { exact: false }).count(), 0);
     assert.deepEqual(errors, []);
-    console.log("preview workspace DOM: configured launch, alternatives, full viewport/restore, iframe continuity, comment flow, undo both contexts, direct delete, evidence cleanup and sent locks passed");
+    console.log("preview workspace DOM: launch/layout, undo/delete/locks, uploaded evidence saved state and deduplication, real runtime rectangle mouse drags and subsequent tools passed");
   } finally {
     await browser?.close();
     await server.close();
