@@ -26,7 +26,7 @@ function physicalPath(path: string): string {
   }
 }
 
-function samePath(a: string, b: string): boolean {
+export function samePath(a: string, b: string): boolean {
   return physicalPath(a) === physicalPath(b);
 }
 
@@ -109,6 +109,10 @@ export async function removeMissingWorktreeRegistrations(repo: string, scope: Sc
 }
 
 export class UnreadableWorktreeError extends Error {}
+
+export async function hasWorktreeRegistration(repo: string, path: string, branch: string): Promise<boolean> {
+  return (await registrations(repo)).some(record => samePath(record.path, path) || record.branch === branch);
+}
 
 export async function assertReadableWorktree(path: string, repo: string, branch: string): Promise<void> {
   try {

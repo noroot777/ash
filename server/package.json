@@ -37,7 +37,7 @@
     "test:reopen-acceptance": "tsx scripts/test-reopen-acceptance.ts",
     "test:branch-acceptance": "tsx scripts/test-branch-acceptance.ts && tsx scripts/test-branch-worktree-state.ts && tsx scripts/test-base-update-recovery.ts && tsx scripts/test-base-update-followups.ts && tsx scripts/test-branch-plan-scale.ts",
     "test:branch-plan-creation": "tsx scripts/test-branch-plan-creation.ts",
-    "test:accept-merge": "tsx scripts/test-accept-merge.ts",
+    "test:accept-merge": "tsx scripts/test-accept-merge.ts && tsx scripts/test-accept-cleanup.ts",
     "test:multi-user": "tsx scripts/test-multi-user.ts",
     "test:multi-user-setup": "tsx scripts/test-multi-user-setup.ts",
     "test:user-cli-smoke": "tsx scripts/test-user-cli-smoke.ts",

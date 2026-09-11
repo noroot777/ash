@@ -7,7 +7,8 @@ import { RUNS_DIR } from "./paths.js";
 import { heldCacheOf, pruneNodeDeps, removePreparedLinks } from "./preview-deps.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { readAnyPreview, recordPath, alive, archivePreview, type PreviewStep, type PreviewResult, type PreviewRecord } from "./preview-store.js";
-import { starting, beginDriving, endDriving, driving, cancelDriving } from "./preview-start-state.js";
+import { starting, beginDriving, endDriving, driving, cancelDriving, hasUnfinishedPreviewStart } from "./preview-start-state.js";
+import { stopPreviewProcesses } from "./preview-process-stop.js";
 import { runPreview, type PreviewStartOptions } from "./preview-start.js";
 export { readPreview, readPreviewLog, hasPreviewLog, previewLogPath } from "./preview-store.js";
 export type { PreviewStep, PreviewRecord, PreviewResult } from "./preview-store.js";
@@ -42,6 +43,11 @@ export async function stopPreview(taskId: string, reason: string | null): Promis
   return await stopPreviewExcept(taskId, reason, null);
 }
 
+export async function stopPreviewForWorktreeCleanup(taskId: string): Promise<void> {
+  await stopPreviewExcept(taskId, "验收清理工作区前回收预览", null, true);
+  if (hasUnfinishedPreviewStart(taskId)) throw new Error("预览启动正在退出，工作区已保留；请稍后重试验收。");
+}
+
 /**
  * 收预览的真身。`exceptGen` 只有一个用处：起新预览时先收旧的，那一下不能把**自己**
  * 也标成取消（自己刚刚才注册进 starting）。
@@ -50,6 +56,7 @@ async function stopPreviewExcept(
   taskId: string,
   reason: string | null,
   exceptGen: string | null,
+  waitForExit = false,
 ): Promise<boolean> {
   // readAnyPreview：**还在启动的那一趟也得收得掉**。记录一删，那一趟自己下一个检查点
   // 就会发现代号没了，杀掉自己起的进程、把链撤干净（见 runPreview 里的 abandoned）。
@@ -67,9 +74,10 @@ async function stopPreviewExcept(
   }
   // 不先看组长是否还活着：组长死、vite 仍留在同一进程组，正是必须回收的现场。
   // pid 为 0 = 还没 spawn，`kill(0, …)` 打的是**自己这一组**，绝不能放过去。
-  killPreviewProcesses(record);
+  if (waitForExit) await stopPreviewProcesses(record);
+  else killPreviewProcesses(record);
   // 还在装依赖的话，要收的是**它**：这时候还没有 dev server，pid 是 0。
-  if (record.installPid && record.installPid > 0) killByPid(record.installPid);
+  if (!waitForExit && record.installPid && record.installPid > 0) killByPid(record.installPid);
   removePreparedLinks(record.links ?? []);
   archivePreview(record, "stopped");
   rmSync(recordPath(taskId), { force: true });

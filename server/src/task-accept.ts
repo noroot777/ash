@@ -15,7 +15,7 @@ import { disarmFreeReviewReservation } from "./free-review-reservations.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { publishTaskUpdated } from "./task-store.js";
-import { stopPreviewAtAccept } from "./preview.js";
+import { stopPreviewAtAccept, stopPreviewForWorktreeCleanup } from "./preview.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 import { setTaskStage, clearTaskStage } from "./task-stage.js";
@@ -485,7 +485,16 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy, confirmUnverifie
       : null;
   if (branchUnmergeable) cleanPlan.branch = false;
 
+  if (cleanPlan.worktree) {
+    try { await stopPreviewForWorktreeCleanup(taskId); }
+    catch (failure) {
+      const error = `${completedSummary}${failure instanceof Error ? failure.message : String(failure)}`;
+      await appendTaskTimeline(taskId, error);
+      return { accepted: false, httpStatus: 409, taskId, reason: "preview_cleanup_pending", error, completedMerge, completedTag, status: task.status, phase: "before_cleanup" };
+    }
+  }
   const cleanup = await cleanupAcceptedTask(project.repoPath, taskId, merge.targetBranch, cleanPlan);
+  if (cleanup.worktreeBackupPath) await appendTaskTimeline(taskId, `半删除工作区的剩余源码已与任务提交核对，全部残留文件已备份到 ${cleanup.worktreeBackupPath}。`);
   if (!cleanup.ok) {
     await appendTaskTimeline(
       taskId,
