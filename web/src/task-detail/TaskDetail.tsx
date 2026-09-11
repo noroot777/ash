@@ -5,7 +5,7 @@ import { isUserFollowUp } from "@ash/shared";
 import { Browser, FolderOpen, GitBranch, GitPullRequest, Info, MagnifyingGlass, Robot } from "@phosphor-icons/react";
 import { PreviewWorkspace, PreviewWorkspaceEntry } from "../preview-workspace/PreviewWorkspace.tsx";
 import { NativeWorkInspector, type NativeWorkInspectorProps } from "./NativeWorkInspector.tsx";
-import { useSubagentInspectors } from "./useSubagentInspectors.tsx";
+import { useSubagents } from "./useSubagents.tsx";
 import { InspectorHost, type InspectorDescriptor } from "../inspector/index.ts";
 import { FileTreeInspector } from "../files/FileTreeInspector.tsx";
 import { FileViewer } from "../files/FileViewer.tsx";
@@ -195,14 +195,16 @@ export function TaskDetail({
   const [pendingExecutor, setPendingExecutor] = useState<string | null>(null);
   const { indicatorForTask } = useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
-  const nativeWork = {
+  // 子智能体：列表在 Inspector 里，执行详情从左侧抽屉推出来（与团队模式点执行者同一套外壳）。
+  const subagents = useSubagents(TASK_INSPECTORS, {
+    taskId: task.id,
     items: conversation.items,
     status: task.status,
     loading: conversation.refreshing,
     error: conversation.error ?? conversation.traceError,
     onRetry: conversation.refetch,
-  };
-  const inspectors = useSubagentInspectors(TASK_INSPECTORS, nativeWork);
+  });
+  const inspectors = subagents.inspectors;
   // 审查链状态同时服务验收后快照入口和会话尾栏的异常回合重试；共享一份缓存与订阅。
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
   const followUps = useMemo(
@@ -274,12 +276,15 @@ export function TaskDetail({
     if (task.status !== "running" && task.status !== "queued") setPendingExecutor(null);
   }, [task.status]);
 
+  // 中间那一栏换内容时，子智能体抽屉必须跟着收起来 —— 它盖在主区上面，不收的话用户
+  // 点了「审查」/ 文件 / diff 只会看到原来那份执行详情（与 TeamView 同一口径）。
   const changeReviewOpen = (open: boolean) => {
     setReviewOpen(open);
     if (open) {
       setPreviewOpen(false);
       setOpenFilePath(null);
       setOpenScmDiff(null);
+      subagents.closeAgent();
     }
     onReviewOpenChange?.(open);
   };
@@ -374,7 +379,7 @@ export function TaskDetail({
       contextKey={inspectorContextKey}
       descriptors={inspectors}
       context={{
-        nativeWork,
+        nativeWork: subagents.nativeWork,
         task,
         groups,
         sessions: conversation.sessions,
@@ -382,7 +387,7 @@ export function TaskDetail({
         followUps,
         onOpenTask,
         onOpenReview: () => changeReviewOpen(true),
-        onOpenPreview: () => { setPreviewOpen(true); changeReviewOpen(false); setOpenFilePath(null); setOpenScmDiff(null); },
+        onOpenPreview: () => { setPreviewOpen(true); changeReviewOpen(false); setOpenFilePath(null); setOpenScmDiff(null); subagents.closeAgent(); },
         onTaskUpdated: onTaskUpdate,
         onPatch: patch,
         onQueueChanged: (updatedTask) => {
@@ -394,6 +399,7 @@ export function TaskDetail({
           setPreviewOpen(false);
           setOpenFilePath(path);
           setOpenScmDiff(null);
+          subagents.closeAgent();
           if (reviewOpen) changeReviewOpen(false);
         },
         openScmDiff,
@@ -401,6 +407,7 @@ export function TaskDetail({
           setPreviewOpen(false);
           setOpenScmDiff(target);
           setOpenFilePath(null);
+          subagents.closeAgent();
           if (reviewOpen) changeReviewOpen(false);
         },
         notify,
@@ -624,6 +631,8 @@ export function TaskDetail({
                 notify={notify}
               />
             )}
+            {/* 子智能体执行详情：盖住中间那一栏，右侧 Inspector 的列表仍然看得见。 */}
+            {subagents.drawer}
           </div>
           {inspectorMode === "drawer" && inspectorToggleTarget
             ? createPortal(toggleButton, inspectorToggleTarget)

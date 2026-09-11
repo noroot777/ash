@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Group, ScheduledMessage, Task, TaskListItem } from "@ash/shared";
 import { batchesOf, mergeFeed, teamGroupsOf, waitingWorkers, workerHaltStats, workersOf } from "@ash/shared/team";
-import { ArrowSquareOut, Broom, Clock, PaperPlaneTilt, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
+import { ArrowSquareOut, Broom, Clock, PaperPlaneTilt, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
 import {
   ScheduledMessageTray,
   ScheduledSendPanel,
   useScheduledMessages,
 } from "../components/ScheduledMessages.tsx";
+import { SideDrawer } from "../components/SideDrawer.tsx";
 import { defaultOnceTime, toLocalDateTime } from "../components/ScheduleControl.tsx";
 import { SlashMenu } from "../components/SlashMenu.tsx";
 import { InspectorHost } from "../inspector/index.ts";
@@ -31,7 +32,7 @@ import { QuestionCard } from "../task-detail/QuestionCard.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
-import { useSubagentInspectors } from "../task-detail/useSubagentInspectors.tsx";
+import { useSubagents } from "../task-detail/useSubagents.tsx";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
 import {
   attachmentsFromPaths,
@@ -289,46 +290,25 @@ function WorkerDrawer({
   onDeleted: (taskId: string) => void;
   notify: Notify;
 }) {
-  const [closing, setClosing] = useState(false);
   const [inspectorToggleTarget, setInspectorToggleTarget] = useState<HTMLSpanElement | null>(null);
   // 抽屉里是完整的 TaskDetail，要正文；执行者行来自列表（不带正文），按需补。
   const fullWorker = useTaskBody(worker);
-  const closingRef = useRef(false);
-  const closeTimer = useRef<number | null>(null);
-  const requestClose = useCallback(() => {
-    if (closingRef.current) return;
-    closingRef.current = true;
-    setClosing(true);
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reducedMotion) closeTimer.current = window.setTimeout(onClose, 0);
-  }, [onClose]);
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") requestClose(); };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [requestClose]);
-  useEffect(() => () => {
-    if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
-  }, []);
   return (
-    <>
-      <div className={`team-worker-scrim${closing ? " is-closing" : ""}`} onClick={requestClose} />
-      <aside
-        className={`team-worker-drawer${closing ? " is-closing" : ""}`}
-        aria-label={`执行者详情：${worker.title}`}
-        onAnimationEnd={(event) => {
-          if (closing && event.animationName === "team-worker-drawer-out") onClose();
-        }}
-      >
-        <header>
-          <span className="team-worker-drawer__kind">执行者</span><b>{worker.title}</b>
-          <button type="button" onClick={onOpenFull}><ArrowSquareOut size={13} />整页打开</button>
-          <span className="team-worker-drawer__inspector-toggle" ref={setInspectorToggleTarget} />
-          <button type="button" aria-label="关闭执行者抽屉" onClick={requestClose}><X size={14} weight="bold" /></button>
-        </header>
-        {fullWorker && <TaskDetail key={fullWorker.id} task={fullWorker} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} inspectorMode="drawer" inspectorToggleTarget={inspectorToggleTarget} notify={notify} />}
-      </aside>
-    </>
+    <SideDrawer
+      variant="worker"
+      contentKey={worker.id}
+      kind="执行者"
+      title={worker.title}
+      ariaLabel={`执行者详情：${worker.title}`}
+      closeLabel="关闭执行者抽屉"
+      onClose={onClose}
+      actions={<>
+        <button type="button" onClick={onOpenFull}><ArrowSquareOut size={13} />整页打开</button>
+        <span className="side-drawer__slot" ref={setInspectorToggleTarget} />
+      </>}
+    >
+      {fullWorker && <TaskDetail key={fullWorker.id} task={fullWorker} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} inspectorMode="drawer" inspectorToggleTarget={inspectorToggleTarget} notify={notify} />}
+    </SideDrawer>
   );
 }
 
@@ -369,14 +349,16 @@ export function TeamView({
   const delegatingRef = useRef(new Set<string>());
   const { indicatorForTask, markTaskRead } = useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
-  const nativeWork = {
+  // 子智能体执行详情和执行者详情都是从左侧推出来的抽屉，一次只留一个。
+  const subagents = useSubagents(TEAM_INSPECTORS, {
+    taskId: task.id,
     items: conversation.items,
     status: task.status,
     loading: conversation.refreshing,
     error: conversation.error ?? conversation.traceError,
     onRetry: conversation.refetch,
-  };
-  const inspectors = useSubagentInspectors(TEAM_INSPECTORS, nativeWork);
+  }, { onOpen: () => setSelectedWorkerId(null) });
+  const inspectors = subagents.inspectors;
   const workers = useMemo(() => workersOf(allTasks, task.id), [allTasks, task.id]);
   const waiting = useMemo(() => waitingWorkers(workers), [workers]);
   const workerLiveLines = useWorkerLiveLines(task.id, workers);
@@ -400,8 +382,9 @@ export function TeamView({
   const selectWorker = useCallback((taskId: string) => {
     const worker = workers.find((item) => item.id === taskId);
     if (worker) markTaskRead(worker);
+    subagents.closeAgent();
     setSelectedWorkerId(taskId);
-  }, [markTaskRead, workers]);
+  }, [markTaskRead, subagents.closeAgent, workers]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -451,7 +434,10 @@ export function TeamView({
 
   const changeReviewOpen = (open: boolean) => {
     setReviewOpen(open);
-    if (open) setOpenFilePath(null);
+    if (open) {
+      setOpenFilePath(null);
+      subagents.closeAgent();
+    }
     onReviewOpenChange?.(open);
   };
   useEffect(() => {
@@ -553,7 +539,7 @@ export function TeamView({
       contextKey={`team:${task.id}`}
       descriptors={inspectors}
       context={{
-        nativeWork,
+        nativeWork: subagents.nativeWork,
         task,
         workers,
         groups: teamGroups,
@@ -569,6 +555,7 @@ export function TeamView({
         onOpenFile: (path: string) => {
           setOpenFilePath(path);
           setSelectedWorkerId(null);
+          subagents.closeAgent();
           if (reviewOpen) changeReviewOpen(false);
         },
       } satisfies TeamInspectorContext}
@@ -668,6 +655,9 @@ export function TeamView({
           notify={notify}
         />
       )}
+      {/* 子智能体抽屉不跟着验收台让位：那一格列表在验收台开着时也点得到，按了就得有反应
+          （反过来打开验收台会先收起它，见 changeReviewOpen）。 */}
+      {subagents.drawer}
       {deleteOpen && (
         <DeleteTaskDialog
           task={task}

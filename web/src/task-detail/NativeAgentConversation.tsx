@@ -1,5 +1,5 @@
 import { useMemo, useRef } from "react";
-import { ArrowLeft, CaretDown, Robot } from "@phosphor-icons/react";
+import { CaretDown, Robot } from "@phosphor-icons/react";
 import { AgentTurnBody } from "../components/AgentTurnBody.tsx";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
@@ -8,8 +8,10 @@ import type { NativeWorkItem } from "./nativeWorkModel.ts";
 import { nativeAgentSegments } from "./nativeAgentSegments.ts";
 import { NativeWorkMeta } from "./NativeWorkMeta.tsx";
 
-export function NativeAgentConversation({ row, statusLabel, onBack, error, onRetry }: {
-  row: NativeWorkItem; statusLabel: string; onBack: () => void;
+// 住在左侧抽屉里（见 components/SideDrawer.tsx）：返回列表靠抽屉自己那颗关闭按钮、
+// 点遮罩或 Esc —— 列表本来就一直在右侧 Inspector 里开着，这里不再重复一个「返回」。
+export function NativeAgentConversation({ row, statusLabel, error, onRetry }: {
+  row: NativeWorkItem; statusLabel: string;
   error?: Error | null; onRetry?: () => void;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
@@ -20,7 +22,6 @@ export function NativeAgentConversation({ row, statusLabel, onBack, error, onRet
     && row.result && !segments.map((segment) => segment.markdown).join("").includes(row.result) ? row.result : null;
   return <div className="native-agent" aria-label="子智能体执行详情">
     <header className="native-agent__header">
-      <button type="button" onClick={onBack}><ArrowLeft size={14} aria-hidden="true" />返回列表</button>
       <div className="native-agent__heading"><span className="native-work__avatar"><Robot size={19} aria-hidden="true" /></span>
         <div><strong>{row.title}</strong><small>{row.sessionLabel}</small></div>
       </div>
