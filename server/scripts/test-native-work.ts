@@ -119,6 +119,25 @@ assert.ok(!isVisibleExecutionEvent({ ...subAgent("started", "sub", "grandchild")
 assert.deepEqual(codexSubAgentWork("item/completed", { threadId: "root", item: { type: "subAgentActivity", kind: "completed", agentThreadId: "sub" } }, "root"), [],
   "started/completed 成对上报，只认一次免得重复建行");
 
+// 两条派活记录同时在（subAgentActivity 给明文名字、spawn_agent 工具调用只有密文正文）:
+// 合并时逐项挑好的那个，密文既不当标题也不当「收到的输入」。
+const cipher = "gAAAAABqo_u_VtwGeVm-UUnyDT6WzBrO2w8cC0tvngRe22ckG80toEp82YynFdQxfkIMT3M4YHHi";
+const ciphered = new NativeWorkTrace();
+const bothChannels = fromTools([
+  ciphered.call("spawn_agent", { message: cipher }, "cipher-call")!,
+  ...subAgent("started", "root", "sub", "/root/page_audit"),
+  ciphered.result("cipher-call", { agent_id: "sub" })!,
+]);
+assert.equal(bothChannels.length, 1, "同一次派活的两条记录合成一行");
+assert.equal(bothChannels[0].title, "page_audit", "明文名字不得被密文正文盖掉");
+assert.equal(bothChannels[0].description, "", "密文不是可展示的输入");
+const cipherOnly = fromTools([
+  ciphered.call("spawn_agent", { message: cipher }, "lonely-call")!,
+  ciphered.result("lonely-call", { agent_id: "lonely" })!,
+]);
+assert.equal(cipherOnly[0].description, "", "只有密文时如实留空，由界面说明原因");
+assert.equal(cipherOnly[0].title, "子智能体 lonely", "没有明文名字就退回占位标题，不拿密文当标题");
+
 const plan = [tracker.call("update_plan", { plan: [{ step: "实现", status: "in_progress" }, { step: "验证", status: "pending" }] }, "p")!,
   tracker.call("update_plan", { plan: [{ step: "实现", status: "completed" }, { step: "验证", status: "in_progress" }] }, "p")!];
 assert.deepEqual(fromTools(plan).map((row) => [row.title, row.status]), [["实现", "completed"], ["验证", "running"]]);
