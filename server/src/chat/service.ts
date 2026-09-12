@@ -202,7 +202,10 @@ export class ChatService {
           body: `来源群聊：${room.name}；委派成员：${member.name}\n\n${result.task.body}\n\n【用户原始委派，供核对上下文】\n${context.source}`,
           agentType: member.agentType, executorId: member.executorId, model: member.model,
           reasoningEffort: member.reasoningEffort, ownerUserId: room.ownerUserId,
-          mode: "single", workflowMode: "free", useWorktree: true,
+          // 工作目录不写死：群聊委派出来的就是一张普通任务，跟着「设置 → 默认规则」那颗
+          // 全局开关走（createTasks 里统一兜底）。写死 true 的后果是用户把全局 worktree
+          // 关掉之后，唯独群聊派的任务还在偷偷开 worktree，而界面上没有任何地方说得清。
+          mode: "single", workflowMode: "free",
           createdAt: timestamp, updatedAt: timestamp,
         }], async () => {
           await db.update(chatMessages).set({ taskId }).where(eq(chatMessages.id, message.id));

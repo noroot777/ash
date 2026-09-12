@@ -97,6 +97,10 @@ export function TaskComposerPanel({
   const [groupId, setGroupId] = useState("");
   const [labels, setLabels] = useState<string[]>([]);
   const [useWorktree, setUseWorktree] = useState(DEFAULT_APP_SETTINGS.worktreeDefault);
+  // 全局默认那一份单独留着（而不是只拿它当初值）：工作目录弹层要能说出「你这次跟默认
+  // 不一样」，并给一颗把本次选择写回全局的按钮 —— 否则用户只能每建一个任务翻一次开关。
+  const [worktreeDefault, setWorktreeDefault] = useState(DEFAULT_APP_SETTINGS.worktreeDefault);
+  const [savingWorktreeDefault, setSavingWorktreeDefault] = useState(false);
   const [branches, setBranches] = useState<string[]>([]);
   const [base, setBase] = useState("");
   const [busy, setBusy] = useState(false);
@@ -145,6 +149,7 @@ export function TaskComposerPanel({
     ]).then(([settings, refs]) => {
       if (!alive) return;
       setUseWorktree(project.health.isRepo && settings.worktreeDefault);
+      setWorktreeDefault(settings.worktreeDefault);
       workflow.setGlobalDefaultId(settings.defaultWorkflowId ?? "");
       setBranches(refs.branches);
       setBase(refs.current ?? "");
@@ -167,6 +172,21 @@ export function TaskComposerPanel({
     () => [...new Set([...uploads.attachments.map((item) => item.path), ...(fork?.attachmentPaths ?? [])])],
     [uploads.attachments, fork],
   );
+  // 把「这次的工作目录选择」写回全局默认。成功文案里那句「设置 → 默认规则」会被
+  // WorkspaceToast 渲染成能点的路径，所以用户改完这一次还知道以后去哪儿再改。
+  const saveWorktreeDefault = async () => {
+    if (savingWorktreeDefault || useWorktree === worktreeDefault) return;
+    setSavingWorktreeDefault(true);
+    try {
+      const settings = await api.patchSettings({ worktreeDefault: useWorktree });
+      setWorktreeDefault(settings.worktreeDefault);
+      notify(`已设为默认：新建任务默认${settings.worktreeDefault ? "用独立 worktree" : "直接使用项目目录"}。以后可在「设置 → 默认规则」里改。`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "默认规则保存失败");
+    } finally {
+      setSavingWorktreeDefault(false);
+    }
+  };
   const applySlash = (nextMode: TaskMode, rest = "") => {
     onModeChange(nextMode);
     setBody(rest);
@@ -525,6 +545,9 @@ export function TaskComposerPanel({
             isRepo={project.health.isRepo}
             useWorktree={useWorktree}
             onUseWorktreeChange={setUseWorktree}
+            worktreeDefault={worktreeDefault}
+            savingWorktreeDefault={savingWorktreeDefault}
+            onSaveWorktreeDefault={saveWorktreeDefault}
             branches={branches}
             base={base}
             onBaseChange={setBase}
