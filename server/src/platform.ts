@@ -265,6 +265,12 @@ export function killOne(pid: number, sig: NodeJS.Signals): void {
  * signum 0 直接 return 0,不会 TerminateProcess),所以两个平台同一条实现;
  * EPERM = 进程在、只是没权限看。
  */
+export function isProcessGroupAlive(pid: number): boolean {
+  if (IS_WINDOWS || !Number.isInteger(pid) || pid <= 1) return false;
+  try { process.kill(-pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
+}
+
 export function isPidAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {

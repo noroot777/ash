@@ -6,8 +6,9 @@ import type { PreviewServiceConfig } from "@ash/shared/preview";
 import { bus } from "./bus.js";
 import { RUNS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
-import { augmentedEnv, killByPid, withoutForeignNodeBins } from "./executors/spawn.js";
-import { prepareNodeDeps, removePreparedLinks, nodeDepsAdvice } from "./preview-deps.js";
+import { augmentedEnv, withoutForeignNodeBins } from "./executors/spawn.js";
+import { stopPreviewProcesses } from "./preview-process-stop.js";
+import { prepareNodeDeps, nodeDepsAdvice } from "./preview-deps.js";
 import { missingDepsHint, missingNodeBin, pickPreviewUrl, portConflict, portHint, declaredHostApiPort } from "./preview-log.js";
 import { canConnect, ready } from "./preview-probe.js";
 import { freePorts, PORT_POOL, portEnv } from "./preview-ports.js";
@@ -83,21 +84,17 @@ export async function runPreview(
   let installing = 0;
   const ours = () => !canceledGens.has(gen) && readAnyPreview(taskId)?.gen === gen;
   const patch = () => patchStart(taskId, gen, { services: [...services], links: [...links], pid: services.find((s) => s.id === primaryId)?.pid ?? 0 });
-  const kill = () => {
-    for (const s of services) if (s.pid > 0) killByPid(s.pid);
-    if (installing > 0) killByPid(installing);
-  };
-  const fail = (reason: string): PreviewResult => {
-    kill();
+  let failing: Promise<Extract<PreviewResult, { ok: false }>> | undefined;
+  const fail = (reason: string): Promise<Extract<PreviewResult, { ok: false }>> => failing ??= (async () => {
+    const stopped = await stopPreviewProcesses(taskId, { pid: services.find(s => s.id === primaryId)?.pid ?? 0, services, installPid: installing, links: [...links], gen });
     const current = readAnyPreview(taskId);
     if (current?.gen === gen) {
       archivePreview({ ...current, services }, "failed");
       rmSync(recordPath(taskId), { force: true });
     }
-    if (!current || current.gen === gen) removePreparedLinks([...links]);
     bus.publish({ type: "task.review", taskId });
-    return { ok: false, reason };
-  };
+    return { ok: false, reason: stopped.stopped ? reason : `${reason}\n${stopped.message}` };
+  })();
   const prepared = new Map<string, Awaited<ReturnType<typeof prepareNodeDeps>>>();
   const errors = new Map<string, string>();
   try {
@@ -125,8 +122,8 @@ export async function runPreview(
         child.on("error", (error) => errors.set(s.id, error.message));
         child.on("exit", () => {
           if (ours() && readAnyPreview(taskId)?.state === "ready") {
-            fail(`${s.name}：预览进程已自行退出`);
-            void appendTaskTimeline(taskId, `预览已回收：${s.name} 的进程已自行退出，其它服务一并关闭`).catch(() => {});
+            void fail(`${s.name}：预览进程已自行退出`).then(result =>
+              appendTaskTimeline(taskId, `预览异常：${result.reason}`)).catch(() => {});
           }
         });
         child.unref();

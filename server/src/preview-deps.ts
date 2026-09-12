@@ -651,11 +651,11 @@ export function pruneNodeDeps(held: readonly string[] = []): void {
     // 自由预览是 `life: "task"` —— 一个任务等人验收等上三十天完全合法，那份缓存的 mtime
     // 却停在挂链那一刻。删掉的后果不是「下次慢一点」：工作区那条软链还在、只是断了，
     // dev server 按需加载下一个模块时才炸，而记录上它明明还在跑，只能重启才恢复。
-    if (inUse.has(dir)) {
-      touch(dir);
-      continue;
-    }
     try {
+      if (inUse.has(realpathSync(dir))) {
+        touch(dir);
+        continue;
+      }
       // 装到一半的残骸（server 被杀在 install 中间）按天算，不按月：它谁也用不上，
       // 却照样占着几百兆。一天的余量足够让一趟还在跑的 install 跑完（上限 6 分钟）。
       const keep = name.includes(TEMP_SUFFIX) ? KEEP_TEMP_MS : KEEP_MS;
@@ -674,5 +674,6 @@ export function heldCacheOf(link: string): string | null {
   let target: string;
   try { target = realpathSync(link); } catch { return null; } // 断链/已经撤掉了
   const cache = dirname(target); // <缓存>/node_modules → <缓存>
-  return dirname(cache) === resolve(DEPS_DIR) ? cache : null;
+  try { return dirname(cache) === realpathSync(DEPS_DIR) ? cache : null; }
+  catch { return null; }
 }

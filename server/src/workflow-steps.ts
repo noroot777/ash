@@ -24,6 +24,7 @@ import { previewProxyEnabled, type WorkspacePreviewInput } from "@ash/shared/pre
 import { workspacePreviewDirectory } from "./preview-workspace.js";
 import { resolvePreviewCommand } from "./preview-command.js";
 import { rerunGateClosed } from "./rerun-gate.js";
+import { isAcceptingTask } from "./acceptance-lock.js";
 import { isMultiUser } from "./auth/mode.js";
 import { previewState } from "./preview-public.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -106,7 +107,8 @@ async function runCommand(task: TaskRow, step: CommandStep): Promise<SegmentResu
   }
 }
 
-async function runPreview(task: TaskRow, step: PreviewStep, workspace?: { input: WorkspacePreviewInput; gen: string }): Promise<SegmentResult> {
+async function runPreview(task: TaskRow, step: PreviewStep, workspace?: { input: WorkspacePreviewInput; gen: string }, registered?: string): Promise<SegmentResult> {
+  const gen = workspace?.gen ?? registered;
   const cwd = workspace ? await workspacePreviewDirectory(task.id) : await cwdFor(task, "workspace");
   if (!cwd) return { ok: false, failed: step, reason: "找不到这个任务的工作目录" };
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
@@ -118,7 +120,8 @@ async function runPreview(task: TaskRow, step: PreviewStep, workspace?: { input:
     step = { ...step, p: { ...step.p, cmd: command, ...(workspace.input.command || config ? { ready: "port" as const } : {}) } };
     if (previewStartCanceled(workspace.gen) || rerunGateClosed(task.id)) throw new Error(PREVIEW_CANCELED);
   }
-  const result = await startPreview(task.id, step, cwd, workspace?.gen, {
+  if (gen && (previewStartCanceled(gen) || isAcceptingTask(task.id))) throw new Error(PREVIEW_CANCELED);
+  const result = await startPreview(task.id, step, cwd, gen, {
     services, primaryServiceId: config?.primaryServiceId, proxy: !!workspace || previewProxyEnabled(project?.previewConfig?.proxy, await isMultiUser()),
   });
   if (result.ok) {
@@ -316,11 +319,12 @@ export type PreviewRestart =
 const restartingPreview = new Set<string>();
 
 export async function restartTaskPreview(taskId: string, stepId?: string | null, input?: WorkspacePreviewInput): Promise<PreviewRestart> {
+  if (isAcceptingTask(taskId)) return { ok: false, reason: "任务正在验收，暂时不能重开预览", code: "busy" };
   if (restartingPreview.has(taskId)) {
     return { ok: false, reason: "这个任务的预览正在起，等它起来（或起不来）再说", code: "busy" };
   }
   restartingPreview.add(taskId);
-  const gen = input ? beginPreviewStart(taskId) : undefined;
+  const gen = beginPreviewStart(taskId);
   try {
     return await restartPreviewStep(taskId, stepId, input, gen);
   } catch (error) {
@@ -351,7 +355,7 @@ async function restartPreviewStep(taskId: string, stepId?: string | null, input?
     };
   }
   // 直接复用线自己跑这一站的那条路：成败两种时间线都由它写，刷新后仍看得见。
-  const result = await runPreview(task, step, input && gen ? { input, gen } : undefined);
+  const result = await runPreview(task, step, input && gen ? { input, gen } : undefined, gen);
   if (!result.ok) return { ok: false, reason: result.reason ?? "预览没起来", code: "failed" };
   if (gen && (previewStartCanceled(gen) || rerunGateClosed(taskId) || readPreview(taskId)?.gen !== gen)) throw new Error(PREVIEW_CANCELED);
   const record = readPreview(taskId);
