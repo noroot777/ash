@@ -146,8 +146,23 @@ export type FileListing = {
   truncated: boolean;
 };
 
-export type FileContent = {
+/** 输入框敲 `@` 时的一条文件候选（见 server/src/file-search.ts）。 */
+export type FileSearchHit = {
+  /** 相对工作区根、posix 分隔符的相对路径 —— 写进正文的就是它。 */
   path: string;
+  name: string;
+  dir: string;
+  kind: "file" | "dir";
+};
+
+export type FileSearchResult = {
+  /** 没有可搜的工作目录时为 null（任务还没跑过、项目不是仓库），不是错误。 */
+  root: { path: string } | null;
+  hits: FileSearchHit[];
+  truncated: boolean;
+};
+
+export type FileContent = {  path: string;
   name: string;
   size: number;
   mtime: string | null;

@@ -32,6 +32,8 @@ import { api } from "../lib/api.ts";
 import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import { useSkills } from "../lib/useSkills.ts";
 import { ComposerObjective } from "./ComposerObjective.tsx";
+import { FileMentionMenu } from "../components/MentionMenu.tsx";
+import { useFileMention } from "../lib/useFileMention.ts";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import { ComposerFields } from "./ComposerFields.tsx";
 import { ASH_SLASH_ITEMS, SLASHES } from "./composerParts.tsx";
@@ -252,6 +254,15 @@ export function TaskComposerPanel({
   });
   const slashQuery = slashDismissed ? null : slashToken(body);
   const slashCandidates = mergeSlashItems(ASH_SLASH_ITEMS, skills.skills, slashQuery);
+  // `@` 引用项目里的文件：任务还不存在，所以按项目仓库搜。选中的路径原样写进正文，
+  // 跑起来之后 agent 在自己的工作目录（worktree 或主仓）里按同一条相对路径找得到。
+  // 非 git 项目照样给：服务端那边会退回自己走一遍目录（file-search.ts 的 walk）。
+  const mention = useFileMention({
+    value: body,
+    setValue: (next) => { changeBody(next); setSlashIndex(0); },
+    scope: { kind: "project", projectId: project.id },
+    onPicked: () => textareaRef.current?.focus(),
+  });
   const slashSelected = Math.min(slashIndex, Math.max(0, slashCandidates.length - 1));
   const pickSlash = (item: SlashItem) => {
     const ash = SLASHES.find((entry) => entry.command === item.command);
@@ -552,9 +563,15 @@ export function TaskComposerPanel({
           >
           {(executorTools) => <div className="studio-card">
           <ComposerObjective body={body} mode={mode} textareaRef={textareaRef}
-            onChange={(value) => { changeBody(value); setSlashIndex(0); setSlashDismissed(false); }}
+            onChange={(value) => { changeBody(value); setSlashIndex(0); setSlashDismissed(false); mention.onValueChange(); }}
             onPaste={uploads.onPaste} items={slashCandidates} selected={slashSelected} token={slashQuery}
-            onSelect={setSlashIndex} onPick={pickSlash} onDismiss={() => setSlashDismissed(true)} onSubmit={() => void submit()} />
+            onSelect={setSlashIndex} onPick={pickSlash} onDismiss={() => setSlashDismissed(true)} onSubmit={() => void submit()}
+            mention={{
+              onKeyDown: mention.onKeyDown,
+              menu: mention.open && (
+                <FileMentionMenu mention={mention} label="引用项目里的文件" className="composer-mention-menu" />
+              ),
+            }} />
           <ImagePreviewGroup isolated>
             <UploadAttachmentList attachments={uploads.attachments} pending={uploads.pending}
               error={uploads.error} onRemove={uploads.remove} onCancel={uploads.cancel} />
@@ -581,7 +598,7 @@ export function TaskComposerPanel({
           </footer>
           </div>}
           </ComposerFields>
-          <div className="studio-footnote"><span>/ 调用技能 · ⌘ / Ctrl + Enter 创建</span>{body.length > 0 && <span>{body.length} 字</span>}</div>
+          <div className="studio-footnote"><span>/ 调用技能 · @ 引用项目文件 · ⌘ / Ctrl + Enter 创建</span>{body.length > 0 && <span>{body.length} 字</span>}</div>
         </div>
       </div>
       {groupDialogOpen && <CreateGroupDialog

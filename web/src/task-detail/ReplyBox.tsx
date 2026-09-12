@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentExecutorProfile, AgentType, ScheduledMessage, SkillEntry, Task } from "@ash/shared";
 import { sameExecutor } from "@ash/shared/executors";
-import { ArrowUp, Clock, Robot, SpinnerGap, X } from "@phosphor-icons/react";
+import { ArrowUp, Clock, SpinnerGap, X } from "@phosphor-icons/react";
 import {
   ScheduledMessageTray,
   ScheduledSendPanel,
@@ -22,6 +22,8 @@ import { useProviders } from "../lib/modelCatalog.ts";
 import { AgentModelPicker } from "./AgentModelPicker.tsx";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "./Attachments.tsx";
 import { SlashMenu } from "../components/SlashMenu.tsx";
+import { MentionMenu } from "../components/MentionMenu.tsx";
+import { useReplyMention } from "./replyMention.ts";
 import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
 import { useStandingExecutor, type StandingExecutor } from "./useStandingExecutor.ts";
@@ -97,8 +99,6 @@ export function ReplyBox({
   const [sendError, setSendError] = useState<string | null>(null);
   const [commandIndex, setCommandIndex] = useState(0);
   const [menuDismissed, setMenuDismissed] = useState(false);
-  const [mentionIndex, setMentionIndex] = useState(0);
-  const [mentionDismissed, setMentionDismissed] = useState(false);
   // 一次性召唤：正文里 `@某个智能体` 选出来的「就这一句由谁跑」。只随这一次 reply
   // 发出、发完即清，不落任务 —— 「以后都用谁」是另一件事，见下面的 standing。
   const [target, setTarget] = useState<MentionTarget | null>(null);
@@ -156,8 +156,7 @@ export function ReplyBox({
   const resetComposerState = () => {
     setCommandIndex(0);
     setMenuDismissed(false);
-    setMentionIndex(0);
-    setMentionDismissed(false);
+    mention.reset();
     setTarget(null);
     setPicker(null);
     setScheduleOpen(false);
@@ -212,13 +211,20 @@ export function ReplyBox({
   const commandMatch = !!command && command.matches(value);
   const selectedIsSkill = candidates[selectedIndex]?.kind === "skill";
   const commandActive = commandMatch || menuOpen;
-  const mentionMatch = /(?:^|\s)@([a-z0-9_-]*)$/i.exec(value);
+  // 选模型那个浮层和底部胶囊的候选都取它；`@` 那张菜单里的智能体候选在 replyMention.ts
+  // 里自己算（它还要按 token 过滤）。
   const registeredTypes = registeredAgentTypes(profiles);
-  const mentionCandidates = mentionMatch
-    ? registeredTypes.filter((type) => type.startsWith((mentionMatch[1] ?? "").toLowerCase()))
-    : [];
-  const mentionOpen = !disabled && !commandActive && !picker && !mentionDismissed && !!mentionMatch;
-  const selectedMentionIndex = Math.min(mentionIndex, Math.max(0, mentionCandidates.length - 1));
+  const mention = useReplyMention({
+    value,
+    setValue,
+    taskId: task.id,
+    profiles,
+    profilesReady,
+    profilesFailed,
+    disabled: disabled || commandActive || !!picker,
+    onPickAgent: (agent) => pickMention(agent),
+    onPicked: () => textareaRef.current?.focus(),
+  });
 
   // 底部胶囊上显示的「这一回合会由谁、用什么模型跑」：@ 召唤过就是那一套（一次性），
   // 没召唤就是任务自己的常设配置（executorId 为空时按类型默认执行器降级，与服务端
@@ -277,9 +283,8 @@ export function ReplyBox({
 
   // 第一步选中智能体：把 @xxx 从正文里摘掉（它是指令不是内容），紧接着弹第二步选模型。
   const pickMention = (agent: AgentType) => {
-    setValue((current) => current.replace(/@[a-z0-9_-]*$/i, ""));
-    setMentionIndex(0);
-    setMentionDismissed(false);
+    setValue((current) => current.replace(/@[^\s@]*$/, ""));
+    mention.reset();
     setPicker({ agent });
   };
 
@@ -453,26 +458,18 @@ export function ReplyBox({
           onPick={pickCommand}
         />
       )}
-      {mentionOpen && !menuOpen && (
-        <div className="task-reply-mention-menu" role="listbox" aria-label="召唤智能体">
-          <small>召唤智能体加入 · ↑↓ 选择，回车后继续选模型</small>
-          {!profilesReady && <p>正在读取已注册智能体…</p>}
-          {profilesFailed && <p>执行器列表读取失败，暂不提供候选</p>}
-          {profilesReady && !profilesFailed && mentionCandidates.length === 0 && <p>没有匹配的已注册智能体</p>}
-          {mentionCandidates.map((agent, index) => (
-            <button
-              type="button"
-              role="option"
-              aria-selected={index === selectedMentionIndex}
-              key={agent}
-              onMouseEnter={() => setMentionIndex(index)}
-              onClick={() => pickMention(agent)}
-            >
-              <Robot size={14} aria-hidden="true" />
-              <b>@{agent}</b>
-            </button>
-          ))}
-        </div>
+      {mention.open && !menuOpen && (
+        <MentionMenu
+          className="task-reply-mention-menu"
+          ariaLabel="召唤智能体或引用文件"
+          hint={mention.hint}
+          rows={mention.rows}
+          token={mention.token}
+          status={mention.status}
+          selectedIndex={mention.index}
+          onHover={mention.setIndex}
+          onPick={mention.pick}
+        />
       )}
       {picker && (
         <AgentModelPicker
@@ -490,7 +487,7 @@ export function ReplyBox({
           }}
         />
       )}
-      {scheduleOpen && !menuOpen && !mentionOpen && !picker && (
+      {scheduleOpen && !menuOpen && !mention.open && !picker && (
         <ScheduledSendPanel
           value={sendAt}
           busy={sending}
@@ -501,7 +498,7 @@ export function ReplyBox({
           onSubmit={() => void send(new Date(sendAt).toISOString())}
         />
       )}
-      {inlinePanel && !menuOpen && !mentionOpen && !picker && !scheduleOpen && <div className="task-reply-inline-panel">{inlinePanel}</div>}
+      {inlinePanel && !menuOpen && !mention.open && !picker && !scheduleOpen && <div className="task-reply-inline-panel">{inlinePanel}</div>}
       <ScheduledMessageTray
         messages={scheduled.messages}
         loading={scheduled.loading}
@@ -534,9 +531,8 @@ export function ReplyBox({
             const next = event.target.value;
             setValue(next);
             setMenuDismissed(false);
-            setMentionDismissed(false);
             setCommandIndex(0);
-            setMentionIndex(0);
+            mention.onValueChange();
             setScheduleOpen(false);
             command?.onChange?.(commandCandidates(next).length > 0 ? "" : next);
           }}
@@ -569,28 +565,7 @@ export function ReplyBox({
               cancelCommand();
               return;
             }
-            if (mentionOpen) {
-              if (event.key === "ArrowDown" && mentionCandidates.length) {
-                event.preventDefault();
-                setMentionIndex((selectedMentionIndex + 1) % mentionCandidates.length);
-                return;
-              }
-              if (event.key === "ArrowUp" && mentionCandidates.length) {
-                event.preventDefault();
-                setMentionIndex((selectedMentionIndex - 1 + mentionCandidates.length) % mentionCandidates.length);
-                return;
-              }
-              if (event.key === "Enter" && !event.metaKey && !event.ctrlKey && mentionCandidates.length) {
-                event.preventDefault();
-                pickMention(mentionCandidates[selectedMentionIndex]!);
-                return;
-              }
-              if (event.key === "Escape") {
-                event.preventDefault();
-                setMentionDismissed(true);
-                return;
-              }
-            }
+            if (mention.onKeyDown(event)) return;
             if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
               event.preventDefault();
               void send();
@@ -607,7 +582,7 @@ export function ReplyBox({
             ref={scheduleTriggerRef}
             className="reply-schedule-button"
             type="button"
-            disabled={disabled || sending || uploads.uploading || commandActive || mentionOpen}
+            disabled={disabled || sending || uploads.uploading || commandActive || mention.open}
             aria-label="选择定时发送时间"
             onClick={() => {
               if (!sendAt) setSendAt(defaultOnceTime());
