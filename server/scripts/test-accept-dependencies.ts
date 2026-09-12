@@ -14,11 +14,12 @@ const snapshot = (repo: string) => ({ head: git(repo, "rev-parse", "HEAD"), stat
 const linkExists = (path: string) => { try { return lstatSync(path).isSymbolicLink(); } catch { return false; } };
 
 export async function testAcceptanceDependencies(root: string, setup: () => Promise<Fixture>): Promise<void> {
+  await (await import("./test-accept-ignored-links.js")).testIgnoredDependencyLinks(root, setup);
   for (const mode of ["root", "nested", "relative", "dangling", "ignored", "untracked-parent", "modified", "untracked", "internal", "tracked", "real-untracked"] as const) {
     const s = await setup();
     const nested = mode === "nested" || mode === "untracked-parent";
     const link = join(s.path, ...(nested ? ["packages", "app one"] : []), "node_modules");
-    const external = ["tracked", "real-untracked"].includes(mode) ? join(root, `${s.task.id}-dependencies`) : join(s.repo, "node_modules");
+    const external = ["tracked", "real-untracked", "internal"].includes(mode) ? join(root, `${s.task.id}-dependencies`) : join(s.repo, "node_modules");
     mkdirSync(external);
     writeFileSync(join(external, "fixture.txt"), "original dependency data");
     if (nested) mkdirSync(dirname(link), { recursive: true });
@@ -28,13 +29,14 @@ export async function testAcceptanceDependencies(root: string, setup: () => Prom
       writeFileSync(join(s.path, "local-deps", "fixture.txt"), "local source");
     }
     if (mode === "ignored") writeFileSync(join(s.path, ".gitignore"), "node_modules\n");
-    if (mode === "real-untracked") writeFileSync(join(s.path, ".gitignore"), "");
+    if (mode === "real-untracked" || mode === "internal") writeFileSync(join(s.path, ".gitignore"), "");
     if (mode === "tracked") writeFileSync(link, "tracked file");
     git(s.path, "add", "-A");
     if (mode === "tracked") git(s.path, "add", "-f", "node_modules");
     if (git(s.path, "status", "--porcelain")) git(s.path, "commit", "-m", "dependency fixture");
     git(s.repo, "merge", "--no-ff", "--no-edit", s.branch!);
     const before = snapshot(s.repo);
+    assert.equal(before.status, "", `${mode}: main checkout is clean`);
     const target = mode === "internal" ? join(s.path, "local-deps") : mode === "dangling" ? join(external, "missing") : external;
     if (mode === "tracked") rmSync(link);
     if (mode === "real-untracked") {
@@ -46,11 +48,13 @@ export async function testAcceptanceDependencies(root: string, setup: () => Prom
     }
     if (mode === "modified") writeFileSync(join(s.path, "feature.txt"), "uncommitted source");
     if (mode === "untracked") writeFileSync(join(s.path, "WIP.txt"), "untracked source");
+    if (mode === "internal") assert.match(git(s.path, "status", "--porcelain", "--untracked-files=all"), /\?\? node_modules/, "internal 对照组在两端都必须是真正未跟踪的链接");
     const blocked = ["modified", "untracked", "internal", "tracked", "real-untracked"].includes(mode);
     const pointer = mode === "real-untracked" ? null : readlinkSync(link);
     for (let attempt = 0; attempt < 2; attempt++) {
       const result = await acceptTask(s.task.id, "human", { confirmUnverified: true });
       assert.equal(result.accepted, !blocked, `${mode}: ${JSON.stringify(result)}`);
+      if (mode === "internal" && !result.accepted) assert.match(result.error, /依赖链接 node_modules 指向工作区内部/);
       assert.equal(readFileSync(join(external, "fixture.txt"), "utf8"), "original dependency data");
       assert.deepEqual(snapshot(s.repo), before, "依赖清理不修改主仓 HEAD、文件或索引");
       if (blocked) {

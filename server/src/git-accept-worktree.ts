@@ -31,7 +31,7 @@ export async function removeAcceptedWorktree(repo: string, worktree: string, not
   const { stdout } = await exec("git", ["-C", worktree, "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all", "--ignored=matching"], { maxBuffer: 16 * 1024 * 1024 });
   const rows = stdout.split("\0").filter(Boolean).map(row => ({ kind: row.slice(0, 2), path: row.slice(3).replace(/\/$/, "") }));
   const ignored = rows.filter(row => row.kind === "!!").map(row => row.path);
-  const links = new Map<string, Link>();
+  const links = new Map<string, Link & { required: boolean }>();
   if (rows.every(row => row.kind === "??" || row.kind === "!!")) {
     for (const row of rows) {
       const parts = row.path.split("/");
@@ -39,10 +39,16 @@ export async function removeAcceptedWorktree(repo: string, worktree: string, not
       const candidates = parts.flatMap((part, i) => part === "node_modules" ? [parts.slice(0, i + 1).join("/")] : []);
       candidates.push(row.path);
       for (const candidate of candidates) {
-        if (links.has(candidate)) break;
-        const link = await borrowedLink(worktree, candidate);
-        if (link) { links.set(candidate, link); break; }
-        if ((await stat(join(worktree, candidate)))?.isSymbolicLink()) throw new UnreadableWorktreeError(`依赖链接 ${candidate} 指向工作区内部或涉及已跟踪文件，目录及文件已保留；请先核对并处理该链接，再重试验收。`);
+        const required = row.kind === "??";
+        const planned = links.get(candidate);
+        if (planned) { planned.required ||= required; break; }
+        try {
+          const link = await borrowedLink(worktree, candidate);
+          if (link) { links.set(candidate, { ...link, required }); break; }
+          if (required && (await stat(join(worktree, candidate)))?.isSymbolicLink()) throw new UnreadableWorktreeError(`依赖链接 ${candidate} 指向工作区内部或涉及已跟踪文件，目录及文件已保留；请先核对并处理该链接，再重试验收。`);
+        } catch (error) {
+          if (required) throw error;
+        }
       }
     }
   }
@@ -50,10 +56,15 @@ export async function removeAcceptedWorktree(repo: string, worktree: string, not
   try {
     if (rows.every(row => row.kind === "!!" || (row.kind === "??" && [...links.keys()].some(link => under(row.path, link))))) {
       for (const link of links.values()) {
-        const current = await borrowedLink(worktree, link.path);
-        if (!current || current.target !== link.target) throw new Error(`依赖链接 ${link.path} 在清理前发生变化，已保留，请重试验收`);
-        await unlink(join(worktree, link.path));
-        removed.push(link.path);
+        try {
+          const current = await borrowedLink(worktree, link.path);
+          if (!current || current.target !== link.target) throw new Error(`依赖链接 ${link.path} 在清理前发生变化，已保留，请重试验收`);
+          await unlink(join(worktree, link.path));
+          removed.push(link.path);
+        } catch (error) {
+          // ignored 条目不阻塞 Git 的非 force 删除，撤链接失败时仍交回原生清理。
+          if (link.required) throw error;
+        }
       }
     }
     await removeWorktree(repo, worktree, false);
@@ -61,7 +72,8 @@ export async function removeAcceptedWorktree(repo: string, worktree: string, not
     if (removed.length) notices.push(`已撤下借用的依赖符号链接：${listed(removed)}。链接目标未删除。`);
     const deleted: string[] = [];
     for (const path of ignored) {
-      if (!removed.some(link => under(path, link)) && !(await stat(join(worktree, path)))) deleted.push(path);
+      if (removed.some(link => under(path, link))) continue;
+      if (await stat(join(worktree, path)).catch(() => undefined) === null) deleted.push(path);
     }
     if (deleted.length) notices.push(`随 worktree 一并删除了 Git 忽略的本地文件或目录：${listed(deleted)}；这些本地数据未另行备份。`);
   }
