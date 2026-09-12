@@ -230,6 +230,7 @@ async function testPendingAcceptance(root: string): Promise<void> {
     syncBuiltinESMExports();
     const restore = () => { faults.forEach(fault => fault.mock.restore()); syncBuiltinESMExports(); };
     const acceptNow = () => acceptTask(id, mode === "marked-only" ? "workflow" : "human", { confirmUnverified: true });
+    let later: ChildProcess | undefined;
     try {
       let result = await acceptNow();
       if (mode === "keep-unreadable") {
@@ -258,7 +259,19 @@ async function testPendingAcceptance(root: string): Promise<void> {
         assert.notEqual((await db.select().from(tasks).where(eq(tasks.id, id)))[0].stage, "accepted");
         assert.equal(existsSync(counter), false);
         restore();
-        assert.equal((await acceptNow()).accepted, true);
+        if (mode === "all") {
+          killByPid(child.pid!);
+          await Promise.race([once(child, "exit"), new Promise(resolve => setTimeout(resolve, 4000))]);
+          assert.equal(isPidAlive(child.pid!), false);
+          later = spawn(process.execPath, ["-e", "setInterval(()=>{},100)"], { cwd: repo, detached: process.platform !== "win32", stdio: "ignore" });
+          writeRecord({ taskId: id, gen: "new", pid: later.pid!, cmd: "replacement preview", life: "task", log: "", startedAt: new Date().toISOString(), port: null, url: "http://localhost:12345/", links: [] });
+        }
+        const resumed = await acceptNow();
+        assert.equal(resumed.accepted, true, JSON.stringify(resumed));
+        if (later) {
+          assert.equal(isPidAlive(later.pid!), false);
+          assert.ok(readFileSync(join(dir, `${id}.md`), "utf8").includes("预览已回收（验收清理工作区前回收预览）：http://localhost:12345/"));
+        }
         assert.equal(existsSync(workspace.path), false);
       } else {
         assert.equal(result.accepted, true, JSON.stringify(result));
@@ -293,9 +306,10 @@ async function testPendingAcceptance(root: string): Promise<void> {
       console.log(`✓ ${mode}: pending stops ${removesWorktree ? "block workspace deletion" : "allow acceptance and all finalization"}, then background/retry cleanup recovers`);
     } finally {
       restore();
-      if (child.exitCode === null && child.signalCode === null) {
-        killByPid(child.pid!);
-        await Promise.race([once(child, "exit"), new Promise(resolve => setTimeout(resolve, 4000))]);
+      for (const process of [child, later]) {
+        if (!process || process.exitCode !== null || process.signalCode !== null) continue;
+        killByPid(process.pid!);
+        await Promise.race([once(process, "exit"), new Promise(resolve => setTimeout(resolve, 4000))]);
       }
     }
   }

@@ -73,7 +73,7 @@ async function stopPreviewExcept(
   // 记录还没落盘的那一段也要停得掉（见 canceledGens）：标上记号，那一趟到下一个检查点
   // 就自己收摊，而且**永远不会写出记录**。
   const marked = cancelDriving(taskId, exceptGen);
-  const pending = await retryPreviewStops(taskId);
+  let pending = await retryPreviewStops(taskId);
   if (!record) {
     if (!marked) return stopOutcome(pending, false);
     // 这一段还没有 url、也还没有 pid，能说的只有「取消了一次启动」——但必须说，
@@ -86,6 +86,10 @@ async function stopPreviewExcept(
   // pid 为 0 = 还没 spawn，`kill(0, …)` 打的是**自己这一组**，绝不能放过去。
   const retired = await retirePreview(record, "stopped");
   if (!retired) return stopOutcome(pending, false);
+  // 先前的待退出结论可能只是在保护当前代复用的依赖；当前代已归档后重新核对。
+  if (retired.stopped && !pending.stopped && pending.reason === "process_pending") {
+    pending = await retryPreviewStops(taskId);
+  }
   const result = !pending.stopped && pending.reason === "record_error" ? pending : retired.stopped ? pending : retired;
   if (reason) await appendTaskTimeline(taskId, result.stopped
     ? `预览已回收（${reason}）：${record.url ?? record.cmd}` : `${result.message}（${reason}）`);

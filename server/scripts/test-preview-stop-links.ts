@@ -6,7 +6,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { mock } from "node:test";
 import { db } from "../src/db/index.js";
-import { projects } from "../src/db/schema.js";
+import { projects, sessions } from "../src/db/schema.js";
 import { createTasks } from "../src/task-store.js";
 import { isPidAlive } from "../src/platform.js";
 import { killByPid } from "../src/executors/spawn.js";
@@ -28,6 +28,7 @@ export async function testPreviewStopLinks(root: string): Promise<void> {
     const at = new Date().toISOString();
     await db.insert(projects).values({ id, name: id, repoPath: workspace, createdAt: at });
     await createTasks([{ id, projectId: id, title: id, status: "done", mode: "single", useWorktree: false, createdAt: at, updatedAt: at }]);
+    await db.insert(sessions).values({ id, taskId: id, role: "single", agentType: "codex", executor: "codex", startedAt: at, endedAt: at, exitCode: 0 });
     const children: ChildProcess[] = [];
     const child = spawn(process.execPath, ["-e", "setInterval(()=>{},100)"], { detached: process.platform !== "win32", stdio: "ignore" });
     children.push(child);
@@ -66,7 +67,8 @@ export async function testPreviewStopLinks(root: string): Promise<void> {
         assert.ok(existsSync(link));
         const newer = spawn(process.execPath, ["-e", "setInterval(()=>{},100)"], { detached: process.platform !== "win32", stdio: "ignore" });
         children.push(newer);
-        writeRecord({ ...record, gen: "new", pid: newer.pid!, links: [] });
+        const url = "http://localhost:12345/";
+        writeRecord({ ...record, gen: "new", pid: newer.pid!, url, links: [] });
         denyStop = false;
         assert.equal((await retryPreviewStops(id)).stopped, false);
         assert.equal(isPidAlive(child.pid!), false);
@@ -75,8 +77,12 @@ export async function testPreviewStopLinks(root: string): Promise<void> {
         await sweepPreviews();
         assert.equal(readFileSync(join(link, "fixture.txt"), "utf8"), "dependency", "新一代复用旧软链时继续保管资源");
         assert.equal(readAnyPreview(id)?.gen, "new");
-        await stopPreview(id, null);
-        await sweepPreviews();
+        assert.equal(await stopPreview(id, "用户关闭预览"), true, "当前代退出后重新核对历史依赖记录，本次关闭应直接成功");
+        assert.equal(hasPendingPreviewStops(id), false, "关闭完成即释放已无人使用的历史资源，无需再点关闭或等清扫");
+        assert.equal(readAnyPreview(id), null);
+        const log = readFileSync(join(dir, `${id}.md`), "utf8");
+        assert.ok(log.includes(`预览已回收（用户关闭预览）：${url}`), "成功时间线包含被关闭的预览地址");
+        assert.doesNotMatch(log, /依赖仍被其他预览进程使用/);
         assert.equal(existsSync(link), false);
         assert.equal(isPidAlive(newer.pid!), false);
       } else {
