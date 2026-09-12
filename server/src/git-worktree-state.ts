@@ -12,7 +12,7 @@ type Checkout = {
   missingBacklink?: { file: string; content: string };
 };
 
-function physicalPath(path: string): string {
+export function physicalPath(path: string): string {
   let head = resolve(path);
   const tail: string[] = [];
   for (;;) {

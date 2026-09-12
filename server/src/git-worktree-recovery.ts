@@ -47,14 +47,17 @@ export async function preserveRemovedWorktree(repo: string, path: string, branch
     }
     // Git 可从 skip-worktree 索引项读取缺失的 .gitignore，保留各层目录及反向规则语义。
     // 标记只写入临时索引，并放在源码差异检查之后，避免掩盖尚存 .gitignore 的修改。
-    const ignores = (await exec("git", [...args, "ls-files", "--stage", "-z", "--", ":(glob)**/.gitignore"], options)).stdout
-      .split("\0").filter(entry => entry.startsWith("100644 ") || entry.startsWith("100755 "))
+    const ignoreEntries = (await exec("git", [...args, "ls-files", "--stage", "-z", "--", ":(glob)**/.gitignore"], options)).stdout.split("\0");
+    const linkedIgnores = ignoreEntries.filter(entry => entry.startsWith("120000 ")).map(entry => entry.slice(entry.indexOf("\t") + 1));
+    const ignores = ignoreEntries.filter(entry => entry.startsWith("100644 ") || entry.startsWith("100755 "))
       .map(entry => entry.slice(entry.indexOf("\t") + 1));
     for (let i = 0; i < ignores.length; i += 32) {
       await exec("git", [...args, "update-index", "--skip-worktree", "--", ...ignores.slice(i, i + 32)], options);
     }
     const untracked = (await exec("git", [...args, "ls-files", "--others", "--exclude-standard", "-z", "--"], options)).stdout.split("\0").filter(Boolean);
     dirty.push(...untracked);
+    const unavailable = linkedIgnores.filter(file => untracked.some(path => path.startsWith(file.slice(0, -".gitignore".length))));
+    if (unavailable.length) throw new UnreadableWorktreeError(`无法确认工作区 ${path} 已清理：提交中的 ${unavailable.join("、")} 是符号链接，Git 不读取这类 .gitignore 的忽略规则，无法据此判断残留文件是否属于可清理缓存。仍有修改或未跟踪文件（${dirty.slice(0, 20).join("、")}），目录及文件已保留；请先核对并将需要保留的残留文件移出该工作区，再重试清理。`);
     if (dirty.length) throw new UnreadableWorktreeError(`无法确认工作区 ${path} 已清理：Git 登记已丢失，但仍有修改或未跟踪文件（${dirty.slice(0, 20).join("、")}）。目录及文件已保留，请先保存这些改动。`);
   } finally {
     await rm(scratch, { recursive: true, force: true });

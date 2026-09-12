@@ -82,6 +82,7 @@ async function sidecar(s: Awaited<ReturnType<typeof setup>>) {
 }
 
 try {
+  await (await import("./test-accept-dependencies.js")).testAcceptanceDependencies(root, setup);
   await (await import("./test-accept-remnants.js")).testRemovedWorktrees(root, setup);
   await (await import("./test-accept-finalize.js")).testAcceptanceFinalization(root);
   await (await import("./test-preview-stop-links.js")).testPreviewStopLinks(root);

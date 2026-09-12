@@ -18,7 +18,6 @@ import {
   listFiles,
   localBranchExists,
   porcelainFiles,
-  removeWorktree,
   resolveTaskMergeTarget,
   resolveWorktreeBranchName,
   symbolicBranch,
@@ -30,6 +29,7 @@ import { execFileText as exec } from "./exec.js";
 import { findProcessesReferencingPath, type ProcessRow } from "./platform.js";
 import { assertReadableWorktree, checkoutRecovery, registeredCheckout, removeMissingWorktreeRegistrations, UnreadableWorktreeError } from "./git-worktree-state.js";
 import { preserveRemovedWorktree } from "./git-worktree-recovery.js";
+import { removeAcceptedWorktree } from "./git-accept-worktree.js";
 
 const isDir = (p: string) => {
   try { return statSync(p).isDirectory(); } catch { return false; }
@@ -117,7 +117,7 @@ export type TaskMergeResult =
       targetPath?: string;
     };
 
-export type TaskCleanupResult = { worktreeBackupPath?: string } & (
+export type TaskCleanupResult = { worktreeBackupPath?: string; notices?: string[] } & (
   | {
       ok: true;
       sourceBranch: string;
@@ -533,11 +533,12 @@ async function cleanupAcceptedTaskLocked(
   await removeMissingWorktreeRegistrations(repo, { branch: sourceBranch }).catch(() => {});
   const hadWorktree = plan.worktree && isDir(worktreePath);
   let worktreeBackupPath: string | undefined;
+  const notices: string[] = [];
   if (hadWorktree) {
     try {
       try {
         await assertReadableWorktree(worktreePath, repo, sourceBranch);
-        await removeWorktree(repo, worktreePath, false);
+        await removeAcceptedWorktree(repo, worktreePath, notices);
       } catch (error) {
         worktreeBackupPath = await preserveRemovedWorktree(repo, worktreePath, sourceBranch) ?? undefined;
         if (!worktreeBackupPath) throw error;
@@ -558,6 +559,7 @@ async function cleanupAcceptedTaskLocked(
         targetBranch,
         worktreePath,
         dirtyFiles,
+        notices,
       };
     }
   }
@@ -565,16 +567,17 @@ async function cleanupAcceptedTaskLocked(
   // 线上写的是「分支留着」（或 squash/打标签之后根本删不掉）：到这儿就收工，下面那套
   // ancestor 校验和 `git branch -d` 一句都不跑——分支还在是**说好的结果**，不是失败。
   if (!plan.branch) {
-    return { ok: true, sourceBranch, targetBranch, worktreePath, worktreeRemoved: hadWorktree, branchDeleted: false, worktreeBackupPath };
+    return { ok: true, sourceBranch, targetBranch, worktreePath, worktreeRemoved: hadWorktree, branchDeleted: false, worktreeBackupPath, notices };
   }
   if (!(await localBranchExists(repo, sourceBranch))) {
-    return { ok: true, sourceBranch, targetBranch, worktreePath, worktreeRemoved: hadWorktree, branchDeleted: false, worktreeBackupPath };
+    return { ok: true, sourceBranch, targetBranch, worktreePath, worktreeRemoved: hadWorktree, branchDeleted: false, worktreeBackupPath, notices };
   }
   if (!(await isAncestor(repo, sourceBranch, targetBranch))) {
     return {
       ok: false,
       reason: "branch_not_merged",
       worktreeBackupPath,
+      notices,
       message: `任务分支 ${sourceBranch} 尚未合并进 ${targetBranch}，拒绝删除`,
       sourceBranch,
       targetBranch,
@@ -595,6 +598,7 @@ async function cleanupAcceptedTaskLocked(
         ok: false,
         reason: "branch_delete_failed",
         worktreeBackupPath,
+        notices,
         message: `为安全执行 git branch -d 创建校验 worktree 失败：${gitError(error)}`,
         sourceBranch,
         targetBranch,
@@ -614,6 +618,7 @@ async function cleanupAcceptedTaskLocked(
       ok: false,
       reason: "branch_delete_failed",
       worktreeBackupPath,
+      notices,
       message: `git branch -d ${sourceBranch} 失败：${deleteError}`,
       sourceBranch,
       targetBranch,
@@ -625,11 +630,12 @@ async function cleanupAcceptedTaskLocked(
       ok: false,
       reason: "temporary_cleanup_failed",
       worktreeBackupPath,
+      notices,
       message: `分支已删除，但临时校验 worktree 清理失败：${cleanupError}`,
       sourceBranch,
       targetBranch,
       worktreePath,
     };
   }
-  return { ok: true, sourceBranch, targetBranch, worktreePath, worktreeRemoved: hadWorktree, branchDeleted: true, worktreeBackupPath };
+  return { ok: true, sourceBranch, targetBranch, worktreePath, worktreeRemoved: hadWorktree, branchDeleted: true, worktreeBackupPath, notices };
 }
