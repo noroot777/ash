@@ -82,6 +82,7 @@ async function sidecar(s: Awaited<ReturnType<typeof setup>>) {
 }
 
 try {
+  await (await import("./test-accept-remnants.js")).testRemovedWorktrees(root, setup);
   await (await import("./test-accept-finalize.js")).testAcceptanceFinalization(root);
   await (await import("./test-preview-stop-links.js")).testPreviewStopLinks(root);
   // 持续写入 ignored 缓存，并故意延迟退出；停止发生时工作区必须还在。

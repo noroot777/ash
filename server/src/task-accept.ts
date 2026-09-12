@@ -472,7 +472,7 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy, confirmUnverifie
     }
   }
   const cleanup = await cleanupAcceptedTask(project.repoPath, taskId, merge.targetBranch, cleanPlan);
-  if (cleanup.worktreeBackupPath) await appendTaskTimeline(taskId, `半删除工作区的剩余源码已与任务提交核对，全部残留文件已备份到 ${cleanup.worktreeBackupPath}。备份包含依赖缓存、会占用磁盘，不会自动清理；确认无误后可直接删除该目录及同名 .git-pointer 文件。`);
+  if (cleanup.worktreeBackupPath) await appendTaskTimeline(taskId, `半删除工作区的剩余源码已与任务提交核对，全部残留文件已备份到 ${cleanup.worktreeBackupPath}。备份包含依赖缓存、会占用磁盘，不会自动清理；确认无误后可直接删除该目录及同名 .git-pointer 文件（如有）。`);
   if (!cleanup.ok) {
     const previewNotice = previewStopped ? "预览已在清理前关闭，处理清理问题后可重新启动。" : "";
     await appendTaskTimeline(
