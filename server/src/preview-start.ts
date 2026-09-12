@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, writeFileSync, openSync, closeSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, openSync, closeSync, rmSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PreviewServiceConfig } from "@ash/shared/preview";
 import { bus } from "./bus.js";
@@ -8,7 +8,7 @@ import { RUNS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
 import { augmentedEnv, killByPid, withoutForeignNodeBins } from "./executors/spawn.js";
 import { prepareNodeDeps, removePreparedLinks, nodeDepsAdvice } from "./preview-deps.js";
-import { missingDepsHint, missingNodeBin, pickPreviewUrl, portConflict, portHint, declaredHostApiPort } from "./preview-log.js";
+import { missingDepsHint, missingNodeBin, pickPreviewUrl, portConflict, portHint, lentPortIgnoredHint, declaredHostApiPort } from "./preview-log.js";
 import { canConnect, ready } from "./preview-probe.js";
 import { freePorts, PORT_POOL, portEnv } from "./preview-ports.js";
 import { boundListeningPort, currentListeningPort } from "./listening-port.js";
@@ -181,6 +181,11 @@ export async function runPreview(
         if (conflict) return fail(`${s.name}：${conflict}。\n${portHint(lent)}\n${text.slice(-600)}`);
         if (!found || !(await ready(step.p.ready, found.url, found.port, text))) continue;
         if (!ours()) return fail(CANCELED);
+        // 借出去的端口没人听：不判失败（命令是用户的），但要在这儿留一句 —— 详见
+        // lentPortIgnoredHint。追加在 logFollower 的游标之后，只是多一段日志，不影响判读。
+        if (lent !== null && found.port !== lent) {
+          try { appendFileSync(s.log, lentPortIgnoredHint(lent, found.port)); } catch { /* 日志写不进去不该拖垮一次成功的启动 */ }
+        }
         Object.assign(s, { status: "ready", url: found.url, port: found.port });
         patch();
         bus.publish({ type: "task.review", taskId });

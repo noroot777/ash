@@ -77,6 +77,107 @@ export function parsePreviewConfig(value: unknown): ProjectPreviewConfig | null 
   return withoutBlankServices({ mode: v.mode, proxy: v.proxy, primaryServiceId: primary as string | null, services });
 }
 
+// ── 端口怎么写进启动命令 ────────────────────────────────────────────────────
+//
+// 新用户在「自填启动命令」里写的第一条命令几乎一定是 `npm run dev`，然后预览要么起在一个
+// ash 不知道的端口上，要么跟他自己已经在跑的那份撞车。这不是他填错了 —— 是**填字的地方
+// 没人告诉他这件事**：`$PORT` 的完整说明只在设置页的「配置说明与示例」对话框里，而打开
+// 预览的人根本不会路过那儿。
+//
+// 所以下面这几样东西给**两个填字现场共用**（任务里的自填框、项目设置的启动脚本）：
+//
+//   · 变量引用按 shell 方言写（POSIX `$PORT`、Windows cmd `%PORT%`）。写错方言不会报错，
+//     `$PORT` 在 cmd 上就是个**字面量**，端口静默失效 —— 那正是 preview-shell.ts 顶上记的
+//     那次漏判，所以示例文案一个字都不硬编码方言。
+//   · 一句判据排在示例前面。判据比示例要紧得多：运行时分两半，**一半自己读 PORT 环境
+//     变量、根本不用写**（Next / Nest / Express / Spring Boot / Go），另一半只认命令行参数、
+//     不写就白借（Vite / Angular / Astro / Django / Rails / Laravel）。只给示例不给判据，
+//     用户要么照抄一条不适合自己框架的，要么以为所有命令都得加 `--port`——给只认 PORT 的
+//     程序多塞一个未知参数，有的直接报错退出（见 server/src/preview-command.ts 的 PORT_ARG_TOOLS）。
+//
+// 这里**故意不做「命令里没写 $PORT 就报警」那种检查**：那一半不用写的命令会全部被误报，
+// 而误报会让用户学到一条错规则（「都得加 --port」），比不提示更糟。唯一确定无疑、因此值得
+// 当场拦的只有方言错配 —— 见 wrongPortDialectHint。
+
+export type PreviewPortDialect = "posix" | "cmd";
+
+/** 服务端那台机器的 shell 方言。预览命令跑在 server 上，浏览器所在的系统不算数。 */
+export function previewPortDialect(platform: string | null | undefined): PreviewPortDialect {
+  return platform === "win32" ? "cmd" : "posix";
+}
+
+/** 一个预览变量的引用写法：`$PORT` / `%PORT%`。 */
+export function previewPortRef(name: string, dialect: PreviewPortDialect): string {
+  return dialect === "cmd" ? `%${name}%` : `$${name}`;
+}
+
+/**
+ * 「这条命令要不要写端口」的判据。
+ *
+ * 拆成「引子 + 两个分支」而不是一整句话，是因为这块的价值全在**对照**上：用户要在自己的
+ * 框架属于哪一半上做一次判断，而一段三行长的连续散文读不出「这是二选一」。放得下的地方
+ * 摆成两行（任务里的自填框），只有一行小字的地方用 previewPortRuleText 拼回一句。
+ */
+export interface PreviewPortRule {
+  lead: string;
+  branches: Array<{ when: string; then: string }>;
+}
+
+export function previewPortRule(dialect: PreviewPortDialect): PreviewPortRule {
+  const port = previewPortRef("PORT", dialect);
+  return {
+    lead: `ash 每次开预览都借一个空闲端口，用 ${port} 传给你的命令。`,
+    branches: [
+      {
+        when: "服务自己读 PORT 环境变量（Next、Nest、Express、Spring Boot、Go…）",
+        then: "不用写，npm run dev 就行",
+      },
+      {
+        when: "服务只认命令行参数（Vite、Angular、Astro、Django、Rails、Laravel…）",
+        then: `必须把 ${port} 写进命令，否则它照配置里写死的端口起 —— 同一个项目已经有一份在跑时必然撞车`,
+      },
+    ],
+  };
+}
+
+/** 判据拼成一句话。给只放得下一行小字的地方（项目设置里的脚本说明）。 */
+export function previewPortRuleText(dialect: PreviewPortDialect): string {
+  const rule = previewPortRule(dialect);
+  return `${rule.lead}${rule.branches.map(({ when, then }) => `${when}：${then}`).join("；")}。`;
+}
+
+export interface PreviewCommandSample {
+  /** 这条示例适用于哪一类。 */
+  label: string;
+  /** 整行命令，可以直接填进输入框。 */
+  command: string;
+}
+
+/** 可以直接点进输入框的起手式。三条覆盖两类运行时 + 一条进子目录的写法。 */
+export function previewCommandSamples(dialect: PreviewPortDialect): PreviewCommandSample[] {
+  const port = previewPortRef("PORT", dialect);
+  return [
+    { label: "Vite / Angular / Astro", command: `npm run dev -- --port ${port}` },
+    { label: "Next / Nest / Express（读 PORT，不用写）", command: "npm run dev" },
+    { label: "前端在子目录里", command: `cd web && npm run dev -- --port ${port}` },
+  ];
+}
+
+/**
+ * 方言写反了就当场说。**这是唯一一条零误报的检查**，所以也是唯一一条会主动弹出来的：
+ * `$PORT` 在 cmd 上、`%PORT%` 在 sh 上都不是「引用一个变量」，而是一串原样传下去的字面量，
+ * 跑起来不报任何错，只是端口没进去。照抄别处文档的人一定会踩，而踩了看不出来。
+ */
+export function wrongPortDialectHint(command: string, dialect: PreviewPortDialect): string | null {
+  if (dialect === "cmd" && /\$\{?PORT\d?\}?/.test(command)) {
+    return "这台 ash 跑在 Windows 上，命令交给 cmd 执行：$PORT 在那儿是一串字面量，不是变量。请改写成 %PORT%。";
+  }
+  if (dialect === "posix" && /%PORT\d?%/.test(command)) {
+    return "这台 ash 跑在类 Unix 系统上，命令交给 sh 执行：%PORT% 在那儿是一串字面量，不是变量。请改写成 $PORT。";
+  }
+  return null;
+}
+
 // 「手动添加」后没填脚本又没勾选就离开，会留下一条空壳服务。它启动不了任何东西，
 // 却会被存进配置、下次打开「选择服务」时凭空出现，看着像系统自动加的。存取两头都丢掉。
 export function withoutBlankServices(config: ProjectPreviewConfig): ProjectPreviewConfig {

@@ -16,6 +16,20 @@
 .preview-launch-custom label { display: grid; gap: 8px; margin: 12px 0; }
 .preview-launch-custom textarea { width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--ink); font: 12px/1.7 var(--font-mono); resize: vertical; }
 .preview-launch-custom small { display: block; margin-bottom: 10px; }
+.preview-port-guide { margin: 12px 0 14px; }
+.preview-port-guide .preview-port-rule { margin: 0 0 8px; font-size: 11px; line-height: 1.8; }
+.preview-port-branches { display: grid; gap: 6px; margin: 0 0 10px; }
+.preview-port-branches > div { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; padding-left: 11px; border-left: 2px solid var(--line); }
+.preview-port-branches dt { font-size: 11px; color: var(--ink); }
+.preview-port-branches dd { margin: 0; font-size: 11px; line-height: 1.7; color: var(--muted); }
+.preview-port-guide .preview-port-mismatch { margin: 0 0 10px; font-size: 11px; line-height: 1.8; color: var(--red); }
+.preview-port-guide > small code, .preview-port-rule code { font-family: var(--font-mono); }
+.preview-port-samples { display: grid; gap: 7px; margin-bottom: 10px; }
+.preview-port-samples > span { font-size: 11px; color: var(--muted); }
+.preview-port-samples > div { display: flex; flex-wrap: wrap; gap: 7px; }
+.preview-workspace .preview-port-samples button { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 7px 10px; text-align: left; color: var(--ink); border-color: var(--line); }
+.preview-port-samples button b { font-size: 11px; font-weight: 600; }
+.preview-port-samples button code { font: 11px/1.5 var(--font-mono); color: var(--muted); overflow-wrap: anywhere; }
 .preview-launch-error, .preview-launch-log { max-height: 260px; overflow: auto; padding: 12px; border: 1px solid var(--line); border-radius: 7px; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.7 var(--font-mono); }
 .preview-launch-error { color: var(--red); }
 .preview-launch-log { background: var(--canvas); }

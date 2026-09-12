@@ -13,7 +13,7 @@
 // 把用户领到**别人的服务**上去验收自己的改动。所以撞车判定排在就绪判定前面。
 //
 // 跑法：npm -w server run test:preview-log
-import { declaredHostApiPort, missingDepsHint, pickPreviewUrl, portConflict, portHint } from "../src/preview-log.js";
+import { declaredHostApiPort, lentPortIgnoredHint, missingDepsHint, pickPreviewUrl, portConflict, portHint } from "../src/preview-log.js";
 
 let failures = 0;
 function check(name: string, actual: unknown, expected: unknown) {
@@ -60,6 +60,22 @@ const hint = portHint(51234);
 check("借到端口时把端口写进提示", hint.includes("PORT=51234"), true);
 check("提示带上认 $PORT 的写法", hint.includes("--port $PORT"), true);
 check("没借到端口就只说变量名", portHint(null).includes("环境变量 PORT"), true);
+
+// —— 「起来了，但没起在我借的那个端口上」——
+// 这一句以前是完全沉默的：预览照样能接上，所以系统放行，用户永远学不到 $PORT 这回事，
+// 直到某天第二份预览起不来。它写进日志、不判失败（命令是用户的），所以断言的是内容，
+// 不是有没有拦下来。
+const ignored = lentPortIgnoredHint(45843, 5173);
+check("两个端口都得写出来，用户才对得上", ignored.includes("5173") && ignored.includes("45843"), true);
+check("给的是可以直接照抄的改法", ignored.includes("--port $PORT"), true);
+check("Windows 的写法也说一句，不然照抄的 $PORT 在 cmd 上是字面量", ignored.includes("%PORT%"), true);
+// 「读 PORT 环境变量的那一半不用改命令」必须一起说：少了这句，用户会给 Next 加一个
+// 它不认的 --port，学到一条错规则。
+check("读 PORT 那一半的出路也给", ignored.includes("不用改命令"), true);
+check("每行都带 [ash] 前缀，混在应用日志里认得出", ignored.trimEnd().split("\n").every((line) => line.startsWith("[ash] ")), true);
+// 这段会被 logFollower 当成新日志读一遍，不能撞上那两个一次性信号的判据。
+check("不冒充调度器自述", ignored.includes("[ash] scheduler started"), false);
+check("不冒充 /api 打回本机的自述", declaredHostApiPort(ignored), null);
 
 // —— 日志里哪个地址才是预览本尊 ——
 // 一条 `npm run dev` 并排起好几个服务是常态，谁先把地址打出来纯看运气；挑错了就是把

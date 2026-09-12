@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { FreeWorkflowPreviewState } from "@ash/shared/free-workflow";
-import { MAX_PREVIEW_SCRIPT_LENGTH, type WorkspacePreviewInput } from "@ash/shared/preview";
+import { MAX_PREVIEW_SCRIPT_LENGTH, previewPortDialect, previewPortRef, type PreviewPortDialect, type WorkspacePreviewInput } from "@ash/shared/preview";
 import { request } from "../lib/apiClient.ts";
+import { useHostInfo } from "../lib/useHostInfo.ts";
+import { PreviewPortGuide } from "./PreviewPortGuide.tsx";
 import { createPreviewLaunchController, type PreviewLaunchState } from "./previewLaunchController.ts";
 
 export function PreviewLauncher({ taskId, preview, refresh, hint }: {
@@ -10,6 +12,10 @@ export function PreviewLauncher({ taskId, preview, refresh, hint }: {
   const controller = useMemo(() => createPreviewLaunchController(taskId, refresh), [taskId, refresh]);
   const state = useSyncExternalStore(controller.subscribe, controller.snapshot, controller.snapshot);
   const [logs, setLogs] = useState(false);
+  // 方言按**服务端**那台机器来：预览命令跑在它上面，浏览器所在的系统不算数。host 还没拉到
+  // 时按 POSIX 展示（useHostInfo 模块内共享缓存，通常上一处表面已经拉过了），跟
+  // shortenHomePath 那边同一个取舍：猜错的代价只是这一帧的变量写法，比等一个往返划算。
+  const host = useHostInfo();
   useEffect(() => {
     controller.activate();
     const timer = window.setInterval(() => void controller.load(), 5000);
@@ -19,15 +25,16 @@ export function PreviewLauncher({ taskId, preview, refresh, hint }: {
   return <section className="preview-launcher" aria-label="启动页面预览">
     <PreviewLaunchOptions state={preview ? state : { ...state, loading: true }} starting={starting} stopped={preview?.services?.some((s) => s.status === "stopped") ?? false}
       failed={preview?.services?.some((s) => s.status === "failed") ?? false}
-      hint={hint} restarting={!!preview?.running && !preview.starting}
+      hint={hint} restarting={!!preview?.running && !preview.starting} dialect={previewPortDialect(host?.platform)}
       onStart={(input) => void controller.start(input, preview)} onCancel={() => void controller.cancel()} onRetry={() => void controller.load()} />
     {(preview?.hasLog || starting || state.error) && <button type="button" aria-expanded={logs} onClick={() => setLogs(!logs)}>{logs ? "收起预览日志" : "查看预览日志"}</button>}
     {logs && <PreviewLaunchLog taskId={taskId} />}
   </section>;
 }
 
-export function PreviewLaunchOptions({ state, starting, stopped, failed = false, hint, restarting = false, onStart, onCancel, onRetry }: {
+export function PreviewLaunchOptions({ state, starting, stopped, failed = false, hint, restarting = false, dialect = "posix", onStart, onCancel, onRetry }: {
   state: PreviewLaunchState; starting: boolean; stopped: boolean; failed?: boolean; hint?: string; restarting?: boolean;
+  dialect?: PreviewPortDialect;
   onStart: (input: Omit<WorkspacePreviewInput, "workspace">) => void; onCancel: () => void; onRetry: () => void;
 }) {
   const [command, setCommand] = useState("");
@@ -53,8 +60,10 @@ export function PreviewLaunchOptions({ state, starting, stopped, failed = false,
     <details className="preview-launch-custom" open={!info.candidates.length && !info.configured && !selectedStep}>
       <summary>自填启动命令</summary>
       <label>本次预览命令<textarea aria-label="本次预览命令" value={command} maxLength={MAX_PREVIEW_SCRIPT_LENGTH} disabled={busy}
-        rows={4} spellCheck={false} onChange={(e) => setCommand(e.target.value)} placeholder="输入在任务目录执行的启动脚本，可包含 cd 和多行命令" /></label>
-      <small>仅用于本次预览。脚本从任务目录运行，端口使用 ash 提供的 PORT 环境变量。</small>
+        rows={4} spellCheck={false} onChange={(e) => setCommand(e.target.value)}
+        placeholder={`在任务目录执行的启动脚本，可包含 cd 和多行命令，例如：\nnpm run dev -- --port ${previewPortRef("PORT", dialect)}`} /></label>
+      <PreviewPortGuide dialect={dialect} command={command} disabled={busy} onFill={setCommand} />
+      <small>仅用于本次预览，不会写进项目设置。脚本从任务目录运行。</small>
       <button type="button" disabled={blocked || !command.trim()} onClick={() => start({ command: command.trim() })}>启动自填命令</button>
     </details>
   </>;

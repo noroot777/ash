@@ -2,6 +2,7 @@ import React from "react";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { WorkspacePreviewLaunch } from "../../shared/src/preview.ts";
+import { wrongPortDialectHint } from "../../shared/src/preview.ts";
 import type { FreeWorkflowPreviewState } from "../../shared/src/free-workflow.ts";
 import type { AnnotationBatchRecord } from "../../shared/src/page-annotation-batch.ts";
 import { PreviewLaunchOptions } from "../src/preview-workspace/PreviewLauncher.tsx";
@@ -22,6 +23,30 @@ assert.match(html(), /启动 dist 静态页面/);
 assert.match(html(), /不经过构建/);
 assert.match(html(), /本次预览命令/);
 assert.match(html(), /改用截图批注/);
+
+// —— 打开预览的现场必须教会 $PORT ——
+// 这块以前只有一句「端口使用 ash 提供的 PORT 环境变量」，读起来像「ash 会替你处理」，
+// 真实意思却是「你得把它写进命令」；完整说明只在设置页的对话框里，而打开预览的人不路过那儿。
+const posix = html();
+assert.match(posix, /服务只认命令行参数（Vite、Angular、Astro、Django、Rails、Laravel…）/);
+assert.match(posix, /必须把 \$PORT 写进命令/);
+// 判据的另一半同样要紧：少了它，用户会给只读 PORT 的框架加一个它不认的 --port。
+assert.match(posix, /服务自己读 PORT 环境变量（Next、Nest、Express、Spring Boot、Go…）/);
+assert.match(posix, /不用写，npm run dev 就行/);
+assert.match(posix, /npm run dev -- --port \$PORT/, "起手式必须是可以直接填进去的整行命令");
+// 方言按**服务端**那台机器来。`$PORT` 在 cmd 上是字面量、端口静默失效，所以 Windows 上
+// 一个 `$PORT` 都不许出现（这正是 preview-shell.ts 记的那次漏判）。
+const win = renderToStaticMarkup(<PreviewLaunchOptions state={state} starting={false} stopped={false} dialect="cmd"
+  onStart={() => {}} onCancel={() => {}} onRetry={() => {}} />);
+assert.match(win, /%PORT%/);
+assert(!/\$PORT/.test(win), "Windows 方言下不许出现 $PORT —— 它在 cmd 上是字面量");
+// 唯一零误报、因此唯一会主动弹出来的检查：方言写反了。
+assert.match(wrongPortDialectHint("npm run dev -- --port $PORT", "cmd")!, /cmd/);
+assert.match(wrongPortDialectHint("npm run dev -- --port %PORT%", "posix")!, /sh/);
+assert.equal(wrongPortDialectHint("npm run dev -- --port $PORT", "posix"), null);
+assert.equal(wrongPortDialectHint("npm run dev", "cmd"), null,
+  "没写端口不算错：一半的运行时自己读 PORT 环境变量，报出来就是教用户一条错规则");
+
 assert.match(html({ loading: true, info: null }), /正在检查任务工作目录/);
 assert.match(html({ action: "opening" }, true), /就绪后会自动接入/);
 assert.match(html({ error: "进程已退出\nMODULE_NOT_FOUND" }), /role="alert"[^>]*>进程已退出\nMODULE_NOT_FOUND/);
