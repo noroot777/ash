@@ -8,7 +8,7 @@ import { RUNS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
 import { augmentedEnv, withoutForeignNodeBins } from "./executors/spawn.js";
 import { stopPreviewProcesses } from "./preview-process-stop.js";
-import { prepareNodeDeps, removePreparedLinks, nodeDepsAdvice } from "./preview-deps.js";
+import { prepareNodeDeps, nodeDepsAdvice } from "./preview-deps.js";
 import { missingDepsHint, missingNodeBin, pickPreviewUrl, portConflict, portHint, declaredHostApiPort } from "./preview-log.js";
 import { canConnect, ready } from "./preview-probe.js";
 import { freePorts, PORT_POOL, portEnv } from "./preview-ports.js";
@@ -86,13 +86,12 @@ export async function runPreview(
   const patch = () => patchStart(taskId, gen, { services: [...services], links: [...links], pid: services.find((s) => s.id === primaryId)?.pid ?? 0 });
   let failing: Promise<Extract<PreviewResult, { ok: false }>> | undefined;
   const fail = (reason: string): Promise<Extract<PreviewResult, { ok: false }>> => failing ??= (async () => {
-    const stopped = await stopPreviewProcesses(taskId, { pid: 0, services, installPid: installing });
+    const stopped = await stopPreviewProcesses(taskId, { pid: services.find(s => s.id === primaryId)?.pid ?? 0, services, installPid: installing, links: [...links], gen });
     const current = readAnyPreview(taskId);
     if (current?.gen === gen) {
       archivePreview({ ...current, services }, "failed");
       rmSync(recordPath(taskId), { force: true });
     }
-    if (!current || current.gen === gen) removePreparedLinks([...links]);
     bus.publish({ type: "task.review", taskId });
     return { ok: false, reason: stopped.stopped ? reason : `${reason}\n${stopped.message}` };
   })();

@@ -331,7 +331,7 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy, confirmUnverifie
       const finalized = await finalizeAcceptance(
         task,
         `任务分支已在先前清理中删除；沿用已记录的 merged 阶段，继续完成验收标记（目标 ${targetBranch}）。`,
-        cleanupPlanFor(plan.clean).worktree,
+        false,
         { completedMerge: { targetBranch, commit: task.acceptedMergeCommit } },
       );
       if (finalized.failure) return finalized.failure;

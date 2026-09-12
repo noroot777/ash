@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import childProcess, { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import fs, { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs, { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { once } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
@@ -151,7 +151,7 @@ export async function testAcceptanceFinalization(root: string): Promise<void> {
 }
 
 async function testPendingAcceptance(root: string): Promise<void> {
-  for (const mode of ["in-place", "marked-only", "keep", "keep-unreadable", "worktree", "all"] as const) {
+  for (const mode of ["in-place", "marked-only", "keep", "keep-unreadable", "worktree", "all", "cleaned"] as const) {
     const id = `pending-finalize-${mode}`;
     const repo = join(root, id);
     git(root, "init", "-b", "main", repo);
@@ -174,7 +174,7 @@ async function testPendingAcceptance(root: string): Promise<void> {
     await db.insert(freeWorkflowStates).values({ taskId: id, reviewArmed: true, updatedAt: at });
     const removesWorktree = mode === "worktree" || mode === "all";
     const accept = makeStep("accept", "accept");
-    if (accept.kind === "accept") accept.p = { strategy: "safe", clean: removesWorktree ? mode : "none" };
+    if (accept.kind === "accept") accept.p = { strategy: "safe", clean: mode === "cleaned" ? "all" : removesWorktree ? mode : "none" };
     const counter = join(root, `${id}-tail-count`);
     const script = join(root, `${id}-tail.cjs`);
     writeFileSync(script, `require('fs').appendFileSync(${JSON.stringify(counter)}, '1');`);
@@ -185,8 +185,25 @@ async function testPendingAcceptance(root: string): Promise<void> {
     }).where(eq(tasks.id, id));
     const dir = join(root, "runs", id);
     mkdirSync(dir, { recursive: true });
-    const child = spawn(process.execPath, ["-e", "setInterval(()=>{},100)"], { cwd: workspace.path, detached: process.platform !== "win32", stdio: "ignore" });
-    writeRecord({ taskId: id, gen: "pending", pid: child.pid!, cmd: "pending preview", life: "task", log: "", startedAt: at, port: null, url: null });
+    if (mode === "cleaned") {
+      const source = git(workspace.path, "rev-parse", "HEAD");
+      git(repo, "merge", "--ff-only", workspace.branch!);
+      await db.update(tasks).set({ stage: "merged", acceptedTargetBranch: "main", acceptedMergeCommit: git(repo, "rev-parse", "main"), acceptedSourceCommit: source }).where(eq(tasks.id, id));
+      git(repo, "worktree", "remove", workspace.path);
+      git(repo, "branch", "-d", workspace.branch!);
+    }
+    const cache = join(root, "deps", `${id}-cache`);
+    const link = join(workspace.path, "node_modules");
+    const missing = join(root, `${id}-missing-dependency`);
+    const expired = new Date(Date.now() - 40 * 24 * 60 * 60_000);
+    if (mode !== "cleaned") {
+      mkdirSync(join(cache, "node_modules"), { recursive: true });
+      writeFileSync(join(cache, "node_modules", "fixture.txt"), "dependency");
+      symlinkSync(join(cache, "node_modules"), link, process.platform === "win32" ? "junction" : "dir");
+    }
+    const source = mode === "cleaned" ? "setInterval(()=>{},100)" : `setInterval(()=>{try{require('fs').readFileSync(${JSON.stringify(join(link, "fixture.txt"))})}catch{require('fs').writeFileSync(${JSON.stringify(missing)},'missing')}},25)`;
+    const child = spawn(process.execPath, ["-e", source], { cwd: repo, detached: process.platform !== "win32", stdio: "ignore" });
+    writeRecord({ taskId: id, gen: "pending", pid: child.pid!, cmd: "pending preview", life: "task", log: "", startedAt: at, port: null, url: null, links: mode === "cleaned" ? [] : [link] });
     const unreadable = join(dir, "preview-stop-0.json");
     if (mode === "keep-unreadable") writeFileSync(unreadable, "[]");
     let denyRead = mode === "keep-unreadable";
@@ -224,7 +241,16 @@ async function testPendingAcceptance(root: string): Promise<void> {
       }
       assert.equal(hasPendingPreviewStops(id), true);
       assert.equal(isPidAlive(child.pid!), true);
-      assert.ok(existsSync(workspace.path));
+      assert.equal(existsSync(workspace.path), mode !== "cleaned");
+      if (mode !== "cleaned") {
+        assert.equal(readFileSync(join(link, "fixture.txt"), "utf8"), "dependency", "进程未退出前依赖软链仍可读");
+        utimesSync(cache, expired, expired);
+        const fresh = await import(`../src/preview.js?pending-links-restart=${id}`);
+        await fresh.sweepPreviews();
+        assert.equal(isPidAlive(child.pid!), true);
+        assert.equal(readFileSync(join(link, "fixture.txt"), "utf8"), "dependency", "重载后的清扫仍保护待退出进程的过期依赖缓存");
+        assert.equal(existsSync(missing), false);
+      }
       if (removesWorktree) {
         assert.equal(result.accepted, false, "删除工作区前仍需等进程退出");
         if (result.accepted) throw new Error("live process workspace deleted");
@@ -252,11 +278,18 @@ async function testPendingAcceptance(root: string): Promise<void> {
         assert.equal(hasPendingPreviewStops(id), true, "验收完成后后台重试证据仍然存在");
         restore();
         await sweepPreviews();
-        assert.ok(existsSync(workspace.path));
+        assert.equal(existsSync(workspace.path), mode !== "cleaned");
       }
       assert.equal(readFileSync(counter, "utf8"), "1", "尾段完成且重复验收不重跑");
       assert.equal(isPidAlive(child.pid!), false);
       assert.equal(hasPendingPreviewStops(id), false);
+      if (mode !== "cleaned") {
+        assert.equal(existsSync(link), false, "退出确认后释放依赖软链");
+        assert.equal(existsSync(missing), false, "依赖释放不能早于进程退出");
+        utimesSync(cache, expired, expired);
+        await sweepPreviews();
+        assert.equal(existsSync(cache), false, "停止记录释放后过期缓存可正常清理");
+      }
       console.log(`✓ ${mode}: pending stops ${removesWorktree ? "block workspace deletion" : "allow acceptance and all finalization"}, then background/retry cleanup recovers`);
     } finally {
       restore();

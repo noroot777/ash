@@ -3,11 +3,11 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { bus } from "./bus.js";
 import { RUNS_DIR } from "./paths.js";
-import { heldCacheOf, pruneNodeDeps, removePreparedLinks } from "./preview-deps.js";
+import { heldCacheOf, pruneNodeDeps } from "./preview-deps.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { readAnyPreview, recordPath, alive, archivePreview, type PreviewStep, type PreviewResult, type PreviewRecord } from "./preview-store.js";
 import { starting, beginDriving, endDriving, driving, cancelDriving, hasUnfinishedPreviewStart } from "./preview-start-state.js";
-import { hasPendingPreviewStops, previewStopFailure, retryPreviewStops, stopPreviewProcesses, type PreviewStopResult } from "./preview-process-stop.js";
+import { hasPendingPreviewStops, pendingPreviewCaches, previewStopFailure, retryPreviewStops, stopPreviewProcesses, type PreviewStopResult } from "./preview-process-stop.js";
 import { runPreview, type PreviewStartOptions } from "./preview-start.js";
 export { readPreview, readPreviewLog, hasPreviewLog, previewLogPath } from "./preview-store.js";
 export type { PreviewStep, PreviewRecord, PreviewResult } from "./preview-store.js";
@@ -158,7 +158,8 @@ export async function sweepPreviews(): Promise<void> {
   // 缓存却会在预览还跑着的时候「过期」。删掉的后果不是下次慢一点——工作区那条软链还在、
   // 只是断了，dev server 按需加载下一个模块时才炸，记录上它还好端端地跑着。所以先把死掉的
   // 记录和它们的软链收干净，再拿**剩下这些还活着的**记录告诉清理器哪几份动不得。
-  pruneNodeDeps(heldCaches());
+  const held = heldCaches();
+  if (held) pruneNodeDeps(held);
 }
 
 async function sweepTaskPreview(taskId: string): Promise<void> {
@@ -186,11 +187,14 @@ async function sweepTaskPreview(taskId: string): Promise<void> {
 }
 
 /** 还活着的预览记录正占着哪几份依赖缓存（顺着它们挂出去的软链倒推）。 */
-function heldCaches(): string[] {
+function heldCaches(): string[] | null {
   const held = new Set<string>();
   let dirs: string[];
-  try { dirs = readdirSync(RUNS_DIR); } catch { return []; }
+  try { dirs = readdirSync(RUNS_DIR); } catch { return null; }
   for (const taskId of dirs) {
+    const pending = pendingPreviewCaches(taskId);
+    if (pending === null) return null;
+    for (const cache of pending) held.add(cache);
     // readAnyPreview：正在启动那一趟挂的链同样占着缓存，别在它装到一半时把树删了。
     for (const link of readAnyPreview(taskId)?.links ?? []) {
       const cache = heldCacheOf(link);
@@ -232,7 +236,6 @@ async function retirePreview(record: PreviewRecord, status: "stopped" | "failed"
   const current = readAnyPreview(record.taskId);
   if (!current) return result; // 被取消的启动可能已经完成了同一趟归档。
   if (current.gen !== record.gen || current.pid !== record.pid) return null;
-  removePreparedLinks(record.links ?? []);
   archivePreview(record, status);
   rmSync(recordPath(record.taskId), { force: true });
   return result;

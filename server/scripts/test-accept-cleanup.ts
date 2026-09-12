@@ -83,6 +83,7 @@ async function sidecar(s: Awaited<ReturnType<typeof setup>>) {
 
 try {
   await (await import("./test-accept-finalize.js")).testAcceptanceFinalization(root);
+  await (await import("./test-preview-stop-links.js")).testPreviewStopLinks(root);
   // 持续写入 ignored 缓存，并故意延迟退出；停止发生时工作区必须还在。
   for (const mode of ["task", "manual", "closed", "closing", "dirty"] as const) {
     const life = mode === "task" ? "task" : "manual";
@@ -365,14 +366,14 @@ try {
     try {
       assert.equal(await stopPreview(s.task.id, "用户关闭预览"), false);
       assert.equal(readAnyPreview(s.task.id), null);
-      assert.equal(existsSync(link), false);
+      assert.equal(existsSync(link), true, "残留进程退出前保留依赖软链");
       assert.equal(previewState(s.task.id).running, false);
       assert.equal(hasPendingPreviewStops(s.task.id), true);
       assert.equal(isPidAlive(child.parent.pid!), false);
       assert.equal(isPidAlive(child.pid), true, "fixture must retain the reparented process");
       const dir = join(root, "runs", s.task.id);
       const saved = readdirSync(dir).filter(name => /^preview-stop-.*\.json$/.test(name))
-        .flatMap(name => JSON.parse(readFileSync(join(dir, name), "utf8")) as { pid: number }[]);
+        .flatMap(name => JSON.parse(readFileSync(join(dir, name), "utf8")).targets as { pid: number }[]);
       assert.ok(saved.some(target => target.pid === child.pid));
       assert.ok(saved.every(target => target.pid !== dead.pid), "快照中已死亡的 root 不应变成无身份停止记录");
       const newer = spawn(process.execPath, ["-e", "setInterval(()=>{},100)"], { detached: true, stdio: "ignore" });
