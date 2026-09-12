@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { codexChildWork, codexNativeWork, nativeAgentModel, nativePlanSnapshot, NativeWorkTrace } from "./native-work.js";
+import { codexChildWork, codexNativeWork, codexSubAgentWork, nativeAgentProfile, nativePlanSnapshot, NativeWorkTrace } from "./native-work.js";
 import { childActivity, CodexChildActivity } from "./native-agent-activity.js";
 import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import type { AgentEvent, TokenUsage } from "@ash/shared";
@@ -276,6 +276,8 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     }
     if (settling || finished) return;
     const p = message.params ?? {};
+    // 派出/收回子智能体的记录在父线程上,拿回来的状态挂在子线程 id 上 —— 两条流都要过一遍。
+    for (const activity of codexSubAgentWork(message.method, p, threadId)) push(activity);
     if (threadId && p.threadId && p.threadId !== threadId) {
       if (message.method === "turn/started") childModelReads.delete(p.threadId);
       if (!childModelReads.has(p.threadId)) {
@@ -284,8 +286,13 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
         childModelVersions.set(p.threadId, version);
         void request("thread/read", { threadId: p.threadId, includeTurns: false }).then((result) => {
           if (finished || result.thread?.id !== p.threadId || childModelVersions.get(p.threadId) !== version) return;
-          const model = nativeAgentModel(p.threadId, result.thread.model);
-          if (model) push(model);
+          const spawn = result.thread.source?.subAgent?.thread_spawn ?? result.thread.source?.sub_agent?.thread_spawn;
+          const agentPath: unknown = spawn?.agent_path ?? spawn?.agentPath;
+          const profile = nativeAgentProfile(p.threadId, {
+            model: result.thread.model, effort: result.thread.reasoningEffort ?? result.thread.effort,
+            title: typeof agentPath === "string" ? agentPath.split("/").filter(Boolean).at(-1) : undefined,
+          });
+          if (profile) push(profile);
         }).catch(() => undefined);
       }
       for (const activity of childEvents.notification(message.method, p)) push(activity);

@@ -1,5 +1,5 @@
 import { ArrowUpRight, CaretDown, CheckCircle, Circle, Robot, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
-import { NATIVE_WORK_STATUS_LABELS as labels, type NativeWorkItem } from "./nativeWorkModel.ts";
+import { NATIVE_WORK_NO_ASSIGNMENT, NATIVE_WORK_STATUS_LABELS as labels, type NativeWorkItem } from "./nativeWorkModel.ts";
 import { NativeWorkMeta } from "./NativeWorkMeta.tsx";
 import "../styles/native-work.css";
 
@@ -24,7 +24,8 @@ function WorkRow({ row, parent, open, onOpen }: { row: NativeWorkItem; parent?: 
             {row.agentType && <><dt>类型</dt><dd>{row.agentType}</dd></>}
             {row.owner && <><dt>负责人</dt><dd>{row.owner}</dd></>}
           </dl>
-          {row.description && <section><h4>任务说明</h4><p>{row.description}</p></section>}
+          {row.description && <section><h4>{row.kind === "agent" ? "收到的输入" : "任务说明"}</h4><p>{row.description}</p></section>}
+          {row.kind === "agent" && !row.description && <p className="native-work__hint">{NATIVE_WORK_NO_ASSIGNMENT}</p>}
           {row.message && <section><h4>最近动态</h4><p>{row.message}</p></section>}
           {row.result && <section><h4>返回结果</h4><p>{row.result}</p></section>}
           {row.legacy && <p className="native-work__hint">{row.kind === "task"

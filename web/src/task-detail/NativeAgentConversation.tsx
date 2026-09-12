@@ -5,6 +5,7 @@ import { ConversationScrollControls } from "../components/ConversationScrollCont
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import type { NativeWorkItem } from "./nativeWorkModel.ts";
+import { NATIVE_WORK_NO_ASSIGNMENT } from "./nativeWorkModel.ts";
 import { nativeAgentSegments } from "./nativeAgentSegments.ts";
 import { NativeWorkHeadline } from "./NativeWorkMeta.tsx";
 
@@ -32,7 +33,9 @@ export function NativeAgentConversation({ row, statusLabel, error, onRetry }: {
         <div className="native-agent__conversation" ref={scroll} tabIndex={0} aria-label="子智能体会话内容">
           <div className="native-agent__section-label"><span>执行记录</span><span>{running ? "实时同步" : pending ? "等待开始" : "历史记录"}</span></div>
           {error && <p className="native-work__error" role="alert">{error.message} {onRetry && <button type="button" onClick={onRetry}>重试</button>}</p>}
-          {row.description && <details className="native-agent__assignment"><summary>任务说明</summary><MarkdownBody text={row.description} /></details>}
+          {row.description
+            ? <details className="native-agent__assignment"><summary>收到的输入</summary><MarkdownBody text={row.description} /></details>
+            : <p className="native-work__hint">{NATIVE_WORK_NO_ASSIGNMENT}</p>}
           {segments.length > 0 ? <AgentTurnBody segments={segments} running={running} /> : <>
             <p className="native-work__hint">{running ? "等待子智能体的执行记录…" : pending ? "等待子智能体开始执行…" : "此会话未记录详细执行过程。"}</p>
             {row.message && <MarkdownBody text={row.message} />}

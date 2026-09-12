@@ -18,6 +18,9 @@ export interface NativeWorkItem {
   owner?: string;
   model?: string;
   requestedModel?: string;
+  /** 智能水平（内部仍叫 effort）：实跑档位与派活时点的档位分开记。 */
+  effort?: string;
+  requestedEffort?: string;
   startedAt?: string;
   endedAt?: string;
   agentType?: string;
@@ -29,6 +32,13 @@ export interface NativeWorkItem {
 export const NATIVE_WORK_STATUS_LABELS: Record<NativeWorkStatus, string> = {
   pending: "待处理", running: "进行中", completed: "已完成", failed: "失败", stopped: "已停止", unknown: "状态未知",
 };
+
+/**
+ * 没有派活正文时照实说，别留一片空白让人以为是界面漏了。
+ * codex 的 `spawn_agent` 正文在上游就被整段加密（父子两份 rollout 里都只有密文），
+ * 所以那条路是真拿不到；claude 的 Agent 工具入参是明文，会原样记下来。
+ */
+export const NATIVE_WORK_NO_ASSIGNMENT = "未记录主会话给它的输入：codex 的派活正文在上游已加密，ash 取不到；claude 的派活正文会原样记录。";
 
 type Call = Extract<NativeWorkEvent, { type: "call" }>;
 const str = (value: unknown): string => typeof value === "string" ? value : typeof value === "number" ? String(value) : "";
@@ -122,6 +132,10 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
           patch.requestedModel = activity.model;
           delete patch.model;
         }
+        if (activity.effort && ["spawnagent", "spawn_agent"].includes(toolName(trace.label))) {
+          patch.requestedEffort = activity.effort;
+          delete patch.effort;
+        }
         const previous = rows.get(id);
         if (activity.closed && (previous?.status === "completed" || previous?.status === "failed")) patch.status = previous.status;
         if (activity.status === "unknown" && rows.has(id)) delete patch.status;
@@ -153,7 +167,8 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
         calls.set(id, { call: activity });
         if (spawnTools.has(name)) {
           put(id, { kind: "agent", parentId, title: str(input.description ?? input.name ?? input.task_name) || str(input.prompt ?? input.message).split("\n")[0].slice(0, 100) || "子智能体",
-            description: str(input.prompt ?? input.message), requestedModel: str(input.model), agentType: str(input.subagent_type ?? input.agent_type),
+            description: str(input.prompt ?? input.message), requestedModel: str(input.model),
+            requestedEffort: str(input.reasoningEffort ?? input.reasoning_effort ?? input.effort), agentType: str(input.subagent_type ?? input.agent_type),
             status: legacy ? "unknown" : "running", ...(observedAt ? { startedAt: observedAt } : {}), legacy });
           calls.get(id)!.rowId = id;
         } else if (name === "taskcreate") {
@@ -195,6 +210,8 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
             activity: existing.activity, message: existing.message,
             model: existing.model || row.model,
             requestedModel: existing.requestedModel || row.requestedModel,
+            effort: existing.effort || row.effort,
+            requestedEffort: existing.requestedEffort || row.requestedEffort,
             startedAt: [row.startedAt, existing.startedAt].filter((at): at is string => !!at).sort()[0],
             endedAt: existing.endedAt ?? row.endedAt,
             status: activity.failed ? "failed" : existing.status,

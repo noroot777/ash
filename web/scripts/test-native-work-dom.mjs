@@ -39,7 +39,11 @@ try {
 
   const running = page.locator('.native-work__row[data-status="running"]');
   const card = page.locator('.native-work__entry[data-status="running"]');
-  assert.match(await card.locator(".native-work__model").innerText(), /gpt-5.6-sol/);
+  // 模型和智能水平各占一行：实跑值优先，只有退回到派活时点的那个才标「调用指定」。
+  assert.match(await card.locator(".native-work__meta").innerText(),
+    /模型\s*gpt-5\.6-sol\s*调用指定[\s\S]*智能水平\s*xhigh/);
+  assert.equal((await card.locator(".native-work__meta").innerText()).match(/调用指定/g).length, 1,
+    "已上报实跑智能水平的那一项不该再标调用指定");
   const timing = card.locator(".native-work__timing");
   assert.equal(await timing.getAttribute("open"), null, "卡片默认只显示时间摘要");
   assert.equal(await card.locator(".native-work__times").isVisible(), false);
@@ -90,7 +94,7 @@ try {
   // 跨度这里只验形状：运行中的项按真实时钟一直在走，写死「3天 6小时」会随日期自然失效。
   // 具体文案由下面收工后那条（endedAt 固定）钉住。
   assert.match(await headline.innerText(),
-    /codex@fixture\s*·\s*gpt-5\.6-sol\s*调用指定\s*·\s*09\/08 08:00 起\s*·\s*\d+\s*(?:天|小时|分|秒)/);
+    /codex@fixture\s*·\s*gpt-5\.6-sol\s*调用指定\s*·\s*xhigh\s*·\s*09\/08 08:00 起\s*·\s*\d+\s*(?:天|小时|分|秒)/);
   const headerBox = await header.boundingBox();
   const headlineBox = await headline.boundingBox();
   assert.ok(headlineBox.y >= headerBox.y - 1 && headlineBox.y + headlineBox.height <= headerBox.y + headerBox.height + 1,
@@ -98,6 +102,10 @@ try {
   // 横排的判据就是它只占一行：退回两列表格会立刻把这里撑高。
   assert.ok(headlineBox.height <= 24, `抬头那一条应排成一行：${JSON.stringify(headlineBox)}`);
   await conversation.getByText("子智能体侧栏", { exact: true }).waitFor();
+  // 主会话发给它的那段输入:有就折在抬头下面（点开看全），没有就照实说为什么没有。
+  await conversation.locator(".native-agent__assignment > summary").click();
+  assert.match(await conversation.innerText(), /收到的输入[\s\S]*需要检查一个不会自然换行的超长说明/);
+  assert.ok(!(await conversation.innerText()).includes("未记录主会话给它的输入"));
   await conversation.locator(".task-execution-block > summary").click();
   assert.match(await conversation.innerText(), /思考过程|分析/);
   assert.match(await conversation.innerText(), /NativeWorkInspector.tsx/);
@@ -114,6 +122,8 @@ try {
   await page.getByRole("button", { name: "查看执行：用户停止的执行者", exact: true }).click();
   await page.getByLabel("子智能体执行详情：用户停止的执行者", { exact: true }).waitFor();
   assert.match(await conversation.innerText(), /另一个子智能体的独立记录/);
+  assert.match(await conversation.innerText(), /未记录主会话给它的输入[\s\S]*加密/,
+    "执行器没上报派活正文时，抽屉里要说清为什么空着");
   assert.ok(!(await conversation.innerText()).includes("实时进展"));
 
   // 切到别的任务再切回来：抽屉必须保持关着。宿主组件跨任务复用，选中状态只按 row id
