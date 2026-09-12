@@ -39,50 +39,46 @@ export function useFileMention({
 }) {
   const [index, setIndex] = useState(0);
   const [dismissed, setDismissed] = useState(false);
-  const [hits, setHits] = useState<FileSearchHit[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [failed, setFailed] = useState(false);
-  // 搜过的 token 记着：删掉一个字母退回上一个查询时不必再跑一趟网络。
+  // 候选**连着它是哪次查询的结果一起存**。只存 hits 的话，token 变了而新结果还在路上
+  // 的那一两百毫秒里，菜单显示的是上一个 token 的候选，回车就把那条插进正文了
+  // （敲 `@src/lib/` 看到候选、改成 `@README` 立刻回车 → 插进去的是 apiClient.ts）。
+  // 绑上 key 之后「还没到货」和「到的是别人的货」是同一种状态：一律不给选。
+  const [result, setResult] = useState<{ key: string; hits: FileSearchHit[]; failed: boolean }>(
+    { key: "", hits: [], failed: false },
+  );
+  // 搜过的查询记着：删掉一个字母退回上一个查询时不必再跑一趟网络。
   const cache = useRef(new Map<string, FileSearchHit[]>());
   const scopeKey = scope ? `${scope.kind}:${scope.kind === "task" ? scope.taskId : scope.projectId}` : "";
   const token = disabled || dismissed || !scope ? null : fileMentionToken(value);
+  // 一次查询的身份：换了工作区，同样的 token 也是另一次查询。
+  const key = token === null ? null : `${scopeKey}|${token}`;
 
   useEffect(() => {
     cache.current.clear();
   }, [scopeKey]);
 
   useEffect(() => {
-    if (token === null || !scope) {
-      setLoading(false);
-      return;
-    }
-    const cached = cache.current.get(token);
+    if (key === null || token === null || !scope) return;
+    const cached = cache.current.get(key);
     if (cached) {
-      setHits(cached);
-      setLoading(false);
-      setFailed(false);
+      setResult({ key, hits: cached, failed: false });
       return;
     }
     const controller = new AbortController();
-    setLoading(true);
     const timer = setTimeout(() => {
       const request = scope.kind === "task"
         ? api.taskFileSearch(scope.taskId, token, controller.signal)
         : api.projectFileSearch(scope.projectId, token, controller.signal);
       request.then(
-        (result) => {
+        (response) => {
           if (controller.signal.aborted) return;
-          cache.current.set(token, result.hits);
-          setHits(result.hits);
-          setFailed(false);
-          setLoading(false);
+          cache.current.set(key, response.hits);
+          setResult({ key, hits: response.hits, failed: false });
         },
         () => {
           // 中止不是失败：正在打字，这一趟本来就该作废。
           if (controller.signal.aborted) return;
-          setHits([]);
-          setFailed(true);
-          setLoading(false);
+          setResult({ key, hits: [], failed: true });
         },
       );
     }, DEBOUNCE_MS);
@@ -90,9 +86,13 @@ export function useFileMention({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [token, scopeKey]);
+  }, [key]);
 
-  const visible = token === null ? [] : hits;
+  // 「手上这份结果正是这次查询的」才算数，否则一律按「还在搜」处理。
+  const settled = key !== null && result.key === key;
+  const visible = settled && !result.failed ? result.hits : [];
+  const loading = key !== null && !settled;
+  const failed = settled && result.failed;
   const selectedIndex = Math.min(index, Math.max(0, visible.length - 1));
   // 搜不到时也留着菜单：它得说出「没有匹配的文件」，否则用户分不清是没匹配还是功能没生效。
   const open = token !== null && (visible.length > 0 || loading || failed);
@@ -113,8 +113,7 @@ export function useFileMention({
   const reset = () => {
     setIndex(0);
     setDismissed(false);
-    setHits([]);
-    setFailed(false);
+    setResult({ key: "", hits: [], failed: false });
   };
 
   /** 返回 true = 这个按键已经被菜单吃掉了，调用方不要再处理。 */
@@ -125,9 +124,11 @@ export function useFileMention({
       setIndex((selectedIndex + (event.key === "ArrowDown" ? 1 : visible.length - 1)) % visible.length);
       return true;
     }
-    if (event.key === "Enter" && !event.metaKey && !event.ctrlKey && visible.length) {
+    if (event.key === "Enter" && !event.metaKey && !event.ctrlKey) {
+      // 菜单开着时回车一律归菜单，哪怕这会儿还没有候选可选：这时候插进去的换行会把
+      // `@token` 顶到非行尾，菜单当场收起，用户还得退回来重敲。等一下再按就是了。
       event.preventDefault();
-      pick(visible[selectedIndex]!);
+      if (visible.length) pick(visible[selectedIndex]!);
       return true;
     }
     if (event.key === "Escape") {

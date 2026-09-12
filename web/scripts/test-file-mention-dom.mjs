@@ -41,12 +41,17 @@ try {
 
   browser = await chromium.launch(await chromeLaunchOptions());
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
-  await page.route("**/api/**", (route) => {
+  // 让某一个查询慢下来：验「旧候选不许被新 token 的回车选中」那一条时打开。
+  let slowQuery = null;
+  await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     const json = (body) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
     if (url.pathname.endsWith("/agents")) return json(PROFILES);
     if (url.pathname.endsWith("/file-search")) {
       const query = (url.searchParams.get("q") ?? "").toLowerCase();
+      if (slowQuery && query.includes(slowQuery)) {
+        await new Promise((resolve) => { setTimeout(resolve, 1500); });
+      }
       const matched = FILES.filter((path) => !query || path.toLowerCase().includes(query));
       return json({
         root: { path: "/repo" },
@@ -128,6 +133,46 @@ try {
   await page.keyboard.press("Escape");
   await menu.waitFor({ state: "detached" });
   assert.equal(await textarea.inputValue(), "@src");
+
+  // ⑧ 改了 token、新结果还在路上时，**上一轮的候选一条都不许被选中**。
+  //    （第 1 轮审查复现：敲 `@src/lib/` 看到候选后改成 `@README` 立刻回车，
+  //      插进正文的是上一轮的 apiClient.ts。）
+  await textarea.fill("");
+  await textarea.type("看 @src/lib/");
+  await settled(["apiClient.ts", "useFileMention.ts"]);
+  slowQuery = "readme";
+  await textarea.fill("");
+  await textarea.type("读 @README");
+  // 新查询还没回来：菜单只该说「正在搜索」，一条旧候选都不该留着。
+  await page.waitForFunction(
+    () => document.querySelector(".mention-menu p")?.textContent?.includes("正在搜索"),
+    null,
+    { timeout: 4000 },
+  );
+  assert.equal(await options.count(), 0, "新 token 还没出结果时不许留着上一轮的候选");
+  await page.keyboard.press("Enter");
+  assert.equal(
+    await textarea.inputValue(),
+    "读 @README",
+    "候选还没到货时回车既不能插旧路径，也不能插换行把 token 顶走",
+  );
+  // 到货之后照常能选。
+  await settled(["README.md"]);
+  await page.keyboard.press("Enter");
+  assert.equal(await textarea.inputValue(), "读 @README.md ");
+  slowQuery = null;
+
+  // ⑨ 菜单开着时 `⌘↵` 仍然是发送：光标那条回车归菜单，带修饰键的那条不归。
+  await textarea.fill("");
+  await textarea.type("看 @src");
+  await options.first().waitFor();
+  await page.keyboard.press("Meta+Enter");
+  await page.locator("#log li").nth(1).waitFor();
+  assert.deepEqual(
+    (await page.locator("#log li").allTextContents()).at(-1),
+    "send:看 @src",
+    "菜单开着也不能把 ⌘↵ 吃掉",
+  );
 
   console.log("file-mention-dom: ok");
 } finally {

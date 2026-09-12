@@ -92,9 +92,11 @@ export function useReplyMention({
       setIndex((selectedIndex + (event.key === "ArrowDown" ? 1 : rows.length - 1)) % rows.length);
       return true;
     }
-    if (event.key === "Enter" && !event.metaKey && !event.ctrlKey && rows.length) {
+    if (event.key === "Enter" && !event.metaKey && !event.ctrlKey) {
+      // 菜单开着时回车归菜单，哪怕文件那半边还没到货（智能体那半边是同步算的，有就直接
+      // 选）。放它去插换行会把 `@token` 顶到非行尾，菜单当场收起，用户还得退回来重敲。
       event.preventDefault();
-      pick(rows[selectedIndex]!);
+      if (rows.length) pick(rows[selectedIndex]!);
       return true;
     }
     if (event.key === "Escape") {
