@@ -142,4 +142,35 @@ const verify = agents(buildConversationItems([{
 assert.equal(verify.length, 2, "验证轮是另一个人在说话，不能并进实现回合");
 assert.equal(verify[1].reviewer?.round, 2);
 
+// 9. trace 整条缺失时（没落盘 / 写盘失败，服务端把 trace 写失败当非致命处理）认服务端的
+//    aside 标：此时两截连 run 身份都读不出来，劈开只剩坏处 —— 上半截凭空得到结束时刻，
+//    于是提前折叠、还挂出「派生新任务」。
+const NO_TRACE_NOTE_AT = "2026-09-14T00:01:00.000Z";
+const noTrace = buildConversationItems([{
+  session: { ...session, endedAt: null, turnStartedAt: SESSION_STARTED },
+  output: [
+    "上半截",
+    sentinel({ t: "system", agent: "claude", text: "已预约审查：5.5审查。", at: NO_TRACE_NOTE_AT, aside: true }),
+    "下半截",
+  ].join("\n"),
+  trace: [],
+}], [{ ...session, endedAt: null, turnStartedAt: SESSION_STARTED }], []);
+assert.equal(agents(noTrace).length, 1, "trace 缺失时 aside 标也该把两截并回一颗气泡");
+assert.equal(agents(noTrace)[0].markdown, "上半截\n\n下半截");
+assert.equal(agents(noTrace)[0].endedAt, null, "回合还在飞，旁注不能替它宣布结束");
+assert.equal(events(noTrace)[0].aside, true);
+
+// 10. 同样缺 trace、但**没有** aside 标的老会话（2026-09-14 之前）无证据可依，维持老排法：
+//     无端合并会把落在两回合之间的旁注也吃掉，把两轮发言粘成一条。
+const legacy = agents(buildConversationItems([{
+  session,
+  output: [
+    "上半截",
+    sentinel({ t: "system", agent: "claude", text: "已预约审查：5.5审查。", at: NO_TRACE_NOTE_AT }),
+    "下半截",
+  ].join("\n"),
+  trace: [],
+}], [session], []));
+assert.equal(legacy.length, 2, "老会话没有 aside 标也没有 trace，不猜，维持原样");
+
 console.log("conversation system-note tests passed");
