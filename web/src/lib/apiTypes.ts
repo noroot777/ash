@@ -144,6 +144,13 @@ export type FileListing = {
   path: string;
   entries: FileEntry[];
   truncated: boolean;
+  git?: FileGitStatus | null;
+};
+
+export type FileGitStatus = {
+  changes: Pick<ScmChange, "path" | "origPath" | "kind">[];
+  truncated: boolean;
+  error: string | null;
 };
 
 /** 输入框敲 `@` 时的一条文件候选（见 server/src/file-search.ts）。 */

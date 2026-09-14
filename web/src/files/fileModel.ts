@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type FileEntry, type FileWorkspaceRoot } from "../lib/api.ts";
+import { api, type FileEntry, type FileGitStatus, type FileWorkspaceRoot } from "../lib/api.ts";
 
 export const ROOT_SOURCE_LABEL: Record<FileWorkspaceRoot["source"], string> = {
   session: "任务运行目录",
@@ -42,38 +42,60 @@ export function useFileTree(taskId: string) {
   const [children, setChildren] = useState<Record<string, FileEntry[]>>({});
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set<string>());
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set<string>());
-  const [error, setError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [truncated, setTruncated] = useState<ReadonlySet<string>>(new Set<string>());
+  const [git, setGit] = useState<FileGitStatus | null>(null);
   const loaded = useRef(new Set<string>());
+  const generation = useRef(0);
+  const requests = useRef(new Map<string, number>());
   const expandedRef = useRef<ReadonlySet<string>>(expanded);
   expandedRef.current = expanded;
 
   const load = useCallback(async (path: string, force = false) => {
     if (!force && loaded.current.has(path)) return;
+    const epoch = generation.current;
+    const ticket = (requests.current.get(path) ?? 0) + 1;
+    requests.current.set(path, ticket);
+    const current = () => epoch === generation.current && requests.current.get(path) === ticket;
     loaded.current.add(path);
     setBusy((current) => withAdded(current, path));
     try {
       const listing = await api.taskFiles(taskId, path);
-      setRoot(listing.root);
+      if (!current()) return;
+      if (path === "") {
+        setRoot(listing.root);
+        setGit(listing.git ?? null);
+      }
       setChildren((current) => ({ ...current, [path]: listing.entries }));
       setTruncated((current) => listing.truncated ? withAdded(current, path) : withRemoved(current, path));
-      setError(null);
+      setErrors((current) => {
+        const next = { ...current };
+        delete next[path];
+        return next;
+      });
     } catch (reason) {
+      if (!current()) return;
       loaded.current.delete(path);
-      setError(messageOf(reason));
+      setErrors((current) => ({ ...current, [path]: messageOf(reason) }));
+      if (path === "") setGit(null);
     } finally {
-      setBusy((current) => withRemoved(current, path));
+      if (current()) setBusy((current) => withRemoved(current, path));
     }
   }, [taskId]);
 
   useEffect(() => {
+    generation.current += 1;
+    requests.current.clear();
     loaded.current = new Set();
     setRoot(null);
     setChildren({});
     setExpanded(new Set<string>());
     setTruncated(new Set<string>());
-    setError(null);
+    setErrors({});
+    setGit(null);
+    setBusy(new Set());
     void load("");
+    return () => { generation.current += 1; };
   }, [load]);
 
   const toggle = useCallback((path: string) => {
@@ -91,13 +113,29 @@ export function useFileTree(taskId: string) {
     await Promise.all(paths.map((path) => load(path, true)));
   }, [load]);
 
+  useEffect(() => {
+    let refreshing = false;
+    const tick = async () => {
+      if (document.visibilityState !== "visible" || refreshing) return;
+      refreshing = true;
+      try { await refresh(); } finally { refreshing = false; }
+    };
+    const timer = window.setInterval(() => void tick(), 5000);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", tick);
+    };
+  }, [refresh]);
+
   return {
     root,
     children,
     expanded,
     busy,
-    error,
+    error: Object.values(errors).join("；") || null,
     truncated,
+    git,
     refresh,
     toggle,
     /** 展开到某个文件所在的目录（用于「在文件树中定位」）。 */
