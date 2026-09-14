@@ -9,6 +9,7 @@ const project: ProjectView = {
   name: "ash",
   repoPath: "/tmp/ash",
   workflowId: null,
+  useWorktreeDefault: false,
   createdAt: "2026-08-28T00:00:00.000Z",
   health: { exists: true, isRepo: false },
 };

@@ -323,6 +323,10 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN starred_at INTEGER",
     // §工作流：项目默认起手式 + 任务创建时拷下的那条线（快照，不是引用）
     "ALTER TABLE projects ADD COLUMN workflow_id TEXT",
+    // 「新任务默认开不开 worktree」从 app_settings 搬到项目这一层（2026-09-14）。
+    // 老库的那颗全局值由 migrations.ts 的 migrateWorktreeDefaultToProjects 灌进存量
+    // 项目 —— 它必须跑在这句 ADD COLUMN 之后，所以别把数据迁移挪到 DDL 前面。
+    "ALTER TABLE projects ADD COLUMN use_worktree_default INTEGER NOT NULL DEFAULT 1",
     "ALTER TABLE tasks ADD COLUMN workflow TEXT",
     // 独立审查任务与被审目标的关系；review_requested 只在团队 dispatch worker 上置位。
     "ALTER TABLE tasks ADD COLUMN review_of TEXT",

@@ -21,7 +21,7 @@ try {
     let data = [];
     if (path === "/api/agents") data = [{ id: "exec-claude", name: "claude@cpa", type: "claude", model: "claude-opus-4.6", reasoningEffort: "high", providerId: "provider-cpa", isDefault: true }];
     if (path === "/api/llm-providers") data = [{ id: "provider-cpa", name: "CPA 中转", protocol: "anthropic", baseUrl: "https://example.invalid", model: "claude-opus-4.6", protocolConversionEnabled: false, modelListMode: "pinned", pinnedModels: ["claude-opus-4.6"], context1mModels: [], hasKey: true, createdAt: "2026-09-07T00:00:00.000Z" }];
-    if (path === "/api/settings") data = { worktreeDefault: false, defaultWorkflowId: null };
+    if (path === "/api/settings") data = { defaultWorkflowId: null };
     if (path === "/api/team-presets") teamPresetRequests += 1;
     if (path === "/api/workflows") data = [{ id: "standard", name: "验证起手式", builtin: true, disabled: false,
       def: { workspace: "isolated", steps: [{ id: "run", kind: "run", p: { executorId: "exec-claude", model: "test-model", reasoningEffort: null, instruction: null }, fail: null }] } }];

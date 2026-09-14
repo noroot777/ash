@@ -12,7 +12,6 @@ import { expandHome } from "./git.js";
 import { baseRef, initializeBranchPlan } from "./task-branch-plan.js";
 import { resolveWorkflowDef } from "./workflows.js";
 import { isMultiUser } from "./auth/mode.js";
-import { settingsFor } from "./auth/personal-settings.js";
 import { profilesOwnedBy, type ExecutorProfileRow } from "./auth/owned-executors.js";
 import { parseTaskCreationOrigin } from "@ash/shared/task-origin";
 
@@ -178,7 +177,7 @@ export function toTaskListItem({ body: _body, questionHistory: _history, ...rest
 //
 // workspace 这一栏刻意**跟着 useWorktree 走，而不是反过来**：这一期只落数据、不接管
 // 执行链。让起手式来决定「要不要开 worktree」得等前端真能选起手式的那一期，否则用户在
-// 全局设置里关掉的 worktree，会被一条他还看不见的线悄悄打开。
+// 项目设置里关掉的 worktree，会被一条他还看不见的线悄悄打开。
 async function snapshotWorkflow(
   workflowId: string | null | undefined,
   projectId: string,
@@ -225,23 +224,18 @@ export async function createTasks(
   // Creation defaults belong here so every ordinary path (HTTP single, batch /
   // chain, duet handoff, future clients) gets the same behavior. Explicit
   // true/false wins, but a non-repo project can never materialize a worktree.
-  // worktree 默认是**个人面**设置(§八):同一批任务理论上可以来自不同归属人(接力导入、
-  // 派生),所以按 owner 各查各的,别用「第一行的归属人」代表整批。
-  const worktreeDefaults = new Map<string, boolean>();
-  for (const row of rows) {
-    if (row.useWorktree !== undefined) continue;
-    const owner = row.ownerUserId ?? "";
-    if (worktreeDefaults.has(owner)) continue;
-    worktreeDefaults.set(owner, (await settingsFor(row.ownerUserId ?? null)).worktreeDefault);
-  }
+  // worktree 默认住在**项目**上(projects.use_worktree_default),所以同一批里跨项目的任务
+  // 各按各自项目的那一位算 —— 它不是个人口味,也不是这台机器的性质,而是「这个仓库吃不吃
+  // 得住 worktree」。
   const projectIds = [...new Set(rows.map((row) => row.projectId))];
   const projectRows = await db
-    .select({ id: projects.id, repoPath: projects.repoPath })
+    .select({ id: projects.id, repoPath: projects.repoPath, useWorktreeDefault: projects.useWorktreeDefault })
     .from(projects)
     .where(inArray(projects.id, projectIds));
   const repoByProject = new Map(projectRows.map((project) => [project.id, project.repoPath] as const));
+  const worktreeDefaultByProject = new Map(projectRows.map((project) => [project.id, project.useWorktreeDefault] as const));
   const normalizedRows = await Promise.all(rows.map(async (row): Promise<typeof tasks.$inferInsert & { id: string }> => {
-    const requested = row.useWorktree ?? worktreeDefaults.get(row.ownerUserId ?? "") ?? false;
+    const requested = row.useWorktree ?? worktreeDefaultByProject.get(row.projectId) ?? false;
     const useWorktree = requested && projectHealthLight(repoByProject.get(row.projectId)).isRepo;
     const { workflowId, ...rest } = row;
     return {

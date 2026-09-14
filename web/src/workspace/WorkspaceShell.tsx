@@ -487,7 +487,7 @@ export function WorkspaceShell() {
     project={currentProject}
     tasks={tasks}
     groups={groups}
-    onSection={setSettingsSection}
+    onSection={(section, anchor) => { setSettingsSection(section); setSettingsAnchor(anchor ?? null); }}
     onBack={() => setSettingsSection(null)}
     onProjectUpdated={(updated) => setProjects((current) => current.map((project) => project.id === updated.id ? updated : project))}
     onProjectDeleted={(deletedId) => { setProjects((current) => { const next = current.filter((project) => project.id !== deletedId); setProjectId(next[0]?.id ?? null); return next; }); setSettingsSection(null); }}

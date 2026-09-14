@@ -21,6 +21,7 @@ const freshProject = (id: string, name: string): ProjectView => ({
   name,
   repoPath: `/workspace/${id}`,
   workflowId: null,
+  useWorktreeDefault: false,
   previewCommand: null,
   previewConfig: emptyPreview(),
   createdAt: "2026-09-01T00:00:00.000Z",

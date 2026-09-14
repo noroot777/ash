@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateActio
 import { acceptPlan } from "@ash/shared/workflow-policy";
 import { DUET_DEFAULTS } from "@ash/shared/duet";
 import type { AgentExecutorProfile, AgentType, DuetConfig, Task, TeamConfig } from "@ash/shared";
-import { DEFAULT_APP_SETTINGS, TEAM_DEFAULTS } from "@ash/shared";
+import { TEAM_DEFAULTS } from "@ash/shared";
 import {
   GitBranch,
   ChatsCircle,
@@ -45,8 +45,13 @@ type WorktreeContext = {
   isRepo: boolean;
   branches: string[];
   current: string | null;
+  /** 本项目的默认工作目录（projects.useWorktreeDefault）。 */
   worktreeDefault: boolean;
 };
+
+// 项目还没读回来 / 读失败时用它顶一下。只影响「派生面板打开那一瞬间预填什么」，真正落库
+// 的默认值在服务端按项目行算（createTasks），所以这里猜错也不会造出一个错的任务。
+const FALLBACK_WORKTREE_DEFAULT = true;
 
 const emptyChoice = (): ExecutorChoice => ({ profile: "", model: "", effort: "" });
 
@@ -209,9 +214,17 @@ export function TaskDerivationComposer({
 
   useEffect(() => {
     let alive = true;
-    Promise.all([api.projectHealth(task.projectId), api.projectBranches(task.projectId), api.settings()]).then(
-      ([health, branches, settings]) => {
-        if (alive) setWorktreeContext({ isRepo: health.isRepo, ...branches, worktreeDefault: settings.worktreeDefault });
+    // worktree 默认值住在项目行上（projects.useWorktreeDefault），所以这里要的是项目本身，
+    // 不是全局设置。没有单取一个项目的端点，列表本来就小，取回来按 id 认。
+    Promise.all([api.projectHealth(task.projectId), api.projectBranches(task.projectId), api.projects()]).then(
+      ([health, branches, allProjects]) => {
+        if (!alive) return;
+        const project = allProjects.find((item) => item.id === task.projectId);
+        setWorktreeContext({
+          isRepo: health.isRepo,
+          ...branches,
+          worktreeDefault: project?.useWorktreeDefault ?? FALLBACK_WORKTREE_DEFAULT,
+        });
       },
       (error) => {
         if (!alive) return;
@@ -219,7 +232,7 @@ export function TaskDerivationComposer({
           isRepo: false,
           branches: [],
           current: null,
-          worktreeDefault: DEFAULT_APP_SETTINGS.worktreeDefault,
+          worktreeDefault: FALLBACK_WORKTREE_DEFAULT,
         });
         notify(`无法确认 worktree 基点：${error instanceof Error ? error.message : String(error)}`);
       },
@@ -256,7 +269,7 @@ export function TaskDerivationComposer({
     task,
     worktreeContext?.branches ?? [],
     !!worktreeContext?.isRepo,
-    worktreeContext?.worktreeDefault ?? DEFAULT_APP_SETTINGS.worktreeDefault,
+    worktreeContext?.worktreeDefault ?? FALLBACK_WORKTREE_DEFAULT,
   );
   const noExecutor = executorsReady && nothingRunnable(profiles);
   const unavailableRole = !executorsReady ? null : teamMode

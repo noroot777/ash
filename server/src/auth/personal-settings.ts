@@ -2,8 +2,9 @@
 //
 // app_settings 原本是一张扁平的全局表。多人模式下它必须裂成两半,因为里面躺着两类
 // 完全不同的东西:
-//  · **个人面**——worktree 默认、默认起手式。它们描述「我建任务时想要什么」,一人一份
-//    才对;共用一份的话,A 关掉 worktree,B 下一次新建任务就莫名其妙不带 worktree 了。
+//  · **个人面**——默认起手式。它描述「我建任务时想要什么」,一人一份才对。
+//    (worktree 默认曾经也在这里,2026-09-14 搬去了项目级 projects.use_worktree_default:
+//     一个项目吃不吃得住 worktree 是项目自己的性质,不是个人口味。)
 //  · **实例面**——根目录、实例模式、技能扫描间隔、接力审批/加密/载荷上限。它们描述
 //    **这台机器**的行为,一人一份没有意义,而且改了会影响所有人,所以只有实例管理员能改。
 //
@@ -19,7 +20,7 @@ import { forgetRemovedPeerKeys } from "./handoff-scope.js";
 import { isMultiUser } from "./mode.js";
 
 /** 一人一份的那几项。加一项就往这里加,读写两侧同时生效。 */
-export const PERSONAL_SETTING_KEYS = ["worktreeDefault", "defaultWorkflowId"] as const;
+export const PERSONAL_SETTING_KEYS = ["defaultWorkflowId"] as const;
 export type PersonalSettingKey = (typeof PERSONAL_SETTING_KEYS)[number];
 
 const isPersonalKey = (key: string): key is PersonalSettingKey =>
@@ -39,7 +40,7 @@ export async function settingsFor(ownerUserId: string | null): Promise<AppSettin
     try {
       const value: unknown = JSON.parse(row.value);
       // 类型由写侧的 parseAppSettingsPatch 把关;这里只防手改过的库。
-      if (row.key === "worktreeDefault" ? typeof value === "boolean" : typeof value === "string") {
+      if (typeof value === "string") {
         (merged as unknown as Record<string, unknown>)[row.key] = value;
       }
     } catch {

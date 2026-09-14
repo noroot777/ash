@@ -9,7 +9,7 @@ import { useConversation } from "../../src/lib/useConversation.ts";
 import { snapshotConversationFork } from "../../src/task-detail/conversationFork.ts";
 import "../../src/styles/global.css";
 
-const project = { id: "p1", name: "ash", repoPath: "/tmp/ash", workflowId: null, health: { exists: true, isRepo: false } } as ProjectView;
+const project = { id: "p1", name: "ash", repoPath: "/tmp/ash", workflowId: null, useWorktreeDefault: false, health: { exists: true, isRepo: false } } as ProjectView;
 const task = { id: "source", projectId: "p1", title: "对比两种方案", body: "研究方案 A 与 B", mode: "single", status: "done" } as Task;
 const reply = (id: string, markdown: string, done = true): ConversationItem => ({
   kind: "agent", id, sessionId: "s1", label: "Codex", markdown,

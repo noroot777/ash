@@ -299,6 +299,17 @@ try {
   assert.equal(await page.getByTestId("already-inert").evaluate((node) => node.inert), true, "切换项目后应保留背景原有的 inert 状态");
   await page.getByTestId("already-inert").evaluate((node) => node.remove());
 
+  // worktree 默认值是**项目**的一位（2026-09-14 从「设置 → 默认规则」搬下来）：拨一下就
+  // 落库，没有「保存更改」这一步，所以刷新回来必须还在原位；拨错了整个项目的新任务都会
+  // 多出一个分支和一个目录，静默回弹是看不出来的。
+  const worktreeSection = page.locator('[data-settings-anchor="worktree"]');
+  const worktreeToggle = worktreeSection.getByRole("switch");
+  assert.equal(await worktreeToggle.getAttribute("aria-checked"), "false");
+  await worktreeToggle.click();
+  await page.waitForFunction(() => document.querySelector('[data-settings-anchor="worktree"] [role="switch"]')?.getAttribute("aria-checked") === "true");
+  await page.getByTestId("server-refresh").click();
+  assert.equal(await worktreeToggle.getAttribute("aria-checked"), "true", "worktree 默认值必须真的落库，刷新后不能回弹");
+
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/project-settings-draft.html?case=${caseId}-member&member`);
   await help.waitFor();
   assert.equal(await preview.getAttribute("aria-readonly"), "true");
@@ -310,6 +321,7 @@ try {
   await readonlyWrap.uncheck();
   assert.equal(await readonlyWrap.isChecked(), false, "只读成员仍能调整阅读换行方式");
   assert.equal(await savePreview.count(), 0, "成员不能保存预览设置");
+  assert.equal(await page.locator('[data-settings-anchor="worktree"] [role="switch"]').isDisabled(), true, "成员改不动项目的 worktree 默认值");
   await help.click();
   await dialog.waitFor();
   assert.equal(await dialog.getByRole("heading", { name: "自动识别启动命令" }).isVisible(), true, "只读成员也能查看说明");

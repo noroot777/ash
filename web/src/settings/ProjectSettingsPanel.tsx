@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ProjectView } from "@ash/shared";
-import { Button } from "../components/ui.tsx";
+import { Button, Toggle } from "../components/ui.tsx";
 import { DirectoryPickerButton } from "../components/DirectoryPickerButton.tsx";
 import { useAuth } from "../auth/authContext.ts";
 import { api } from "../lib/api.ts";
@@ -69,6 +69,13 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
     catch (error) { notify(error instanceof Error ? error.message : "默认起手式保存失败"); }
     finally { setBusy(false); }
   };
+  // worktree 默认值同理：拨一下就是最终意思，没有中间态。
+  const setWorktreeDefault = async (useWorktreeDefault: boolean) => {
+    setBusy(true);
+    try { onUpdated(await api.updateProject(project.id, { useWorktreeDefault })); }
+    catch (error) { notify(error instanceof Error ? error.message : "默认工作目录保存失败"); }
+    finally { setBusy(false); }
+  };
   const remove = async () => {
     setBusy(true);
     try { await api.deleteProject(project.id); onDeleted(); }
@@ -81,7 +88,7 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
         <section className="settings-section"><div className="settings-card">
           <div className="settings-row"><div>
             <b>你在这个项目里是成员</b>
-            <small>项目名称、工作目录、默认起手式、预览命令、Git 身份与凭证、删除项目只有项目管理员能改；下面按只读展示。要改就找一位项目管理员。</small>
+            <small>项目名称、工作目录、默认起手式、默认 worktree、预览命令、Git 身份与凭证、删除项目只有项目管理员能改；下面按只读展示。要改就找一位项目管理员。</small>
           </div></div>
         </div></section>
       )}
@@ -113,6 +120,28 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
             inheritLabel="跟着系统默认走"
             disabled={busy || !canManage}
             onChange={(workflowId) => void pickWorkflow(workflowId)}
+          />
+        </div>
+      </div></section>
+      {/* data-settings-anchor：文案里的「设置 → 项目设置 → 工作目录」照着它落点（见 sections.ts）。 */}
+      <section className="settings-section" data-settings-anchor="worktree"><h2>工作目录</h2><div className="settings-card">
+        <div className="settings-row">
+          <div>
+            <b>这个项目的新任务默认开独立 worktree</b>
+            <small>
+              {project.health.isRepo
+                ? "开：每张任务拉一个 ash/<id8> 分支、跑在 .worktrees/<id>/ 里，互不打扰；关：所有任务直接在项目目录里跑。每张新任务仍可单独覆盖。"
+                : "当前目录不是 Git 仓库，这个项目的任务一律直接在项目目录里跑；这一位先存着，等目录换成仓库就生效。"}
+            </small>
+            {/* 项目自己的性质,不是个人口味:构建脚本写死绝对路径、依赖装在仓库根、产物要
+                落回原目录的项目吃不住 worktree,而同一个人的另一个项目完全没这问题。 */}
+            <small>按项目分开设，不跟随任何全局默认。</small>
+          </div>
+          <Toggle
+            label={project.useWorktreeDefault ? "已开启" : "已关闭"}
+            checked={project.useWorktreeDefault}
+            disabled={busy || !canManage}
+            onChange={(checked) => void setWorktreeDefault(checked)}
           />
         </div>
       </div></section>

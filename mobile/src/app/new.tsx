@@ -4,7 +4,6 @@ import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   AGENT_TYPES,
-  DEFAULT_APP_SETTINGS,
   TEAM_DEFAULTS,
   type AgentExecutorProfile,
   type AgentType,
@@ -20,6 +19,10 @@ import { ScheduleFields } from "@/components/ScheduleFields";
 import { TeamTaskOptions, type ExecutorSelection } from "@/components/TeamTaskOptions";
 import { ExecutionConfig } from "@/components/ExecutionConfig";
 
+// 项目列表还没到手时顶一下的出厂值。真正的默认值在服务端按项目行算（createTasks），
+// 所以这里猜错只影响开屏那一瞬间预填什么，不会造出一个错的任务。
+const FALLBACK_WORKTREE_DEFAULT = true;
+
 const firstLine = (s: string) =>
   s.split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 40) ?? "";
 
@@ -30,6 +33,7 @@ export default function NewTask() {
   const projects = useStore((s) => s.projects);
   const storeProjectId = useStore((s) => s.projectId);
   const upsertTask = useStore((s) => s.upsertTask);
+  const upsertProject = useStore((s) => s.upsertProject);
   const groups = useStore((s) => s.groups);
   const upsertGroup = useStore((s) => s.upsertGroup);
 
@@ -59,11 +63,10 @@ export default function NewTask() {
   const [cron, setCron] = useState("0 9 * * *");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Apply the factory default immediately, then hydrate the server-side global
-  // setting. A failed read deliberately stays at true. As on web, a choice the
-  // user makes before hydration completes is never overwritten.
-  const [worktreeDefault, setWorktreeDefault] = useState(DEFAULT_APP_SETTINGS.worktreeDefault);
-  const [useWorktree, setUseWorktree] = useState(DEFAULT_APP_SETTINGS.worktreeDefault);
+  // worktree 默认值住在**项目**行上（projects.useWorktreeDefault），换项目就换一份。项目
+  // 列表还没到手时先用出厂值顶着；用户在那之前自己拨过的选择永不被覆盖（与 web 一致）。
+  const [worktreeDefault, setWorktreeDefault] = useState(FALLBACK_WORKTREE_DEFAULT);
+  const [useWorktree, setUseWorktree] = useState(FALLBACK_WORKTREE_DEFAULT);
   const [savingWorktreeDefault, setSavingWorktreeDefault] = useState(false);
   const worktreeChoiceTouched = useRef(false);
   const [base, setBase] = useState("");
@@ -71,20 +74,12 @@ export default function NewTask() {
   const [branchesLoaded, setBranchesLoaded] = useState(false);
   // Project the form is targeting determines which branch list we fetch.
   const project = projects.find((p) => p.id === projectId) ?? null;
+  // 项目一确定（或换了一个），默认值就跟着换：它是项目的性质，不是这台手机或这个人的。
   useEffect(() => {
-    let alive = true;
-    void (async () => {
-      try {
-        const settings = await api.settings();
-        if (!alive) return;
-        setWorktreeDefault(settings.worktreeDefault);
-        if (!worktreeChoiceTouched.current) setUseWorktree(settings.worktreeDefault);
-      } catch {
-        // Factory fallback is already applied; task creation can continue.
-      }
-    })();
-    return () => { alive = false; };
-  }, []);
+    if (!project) return;
+    setWorktreeDefault(project.useWorktreeDefault);
+    if (!worktreeChoiceTouched.current) setUseWorktree(project.useWorktreeDefault);
+  }, [project]);
   // Lazy-load branches when the toggle opens for the current project; reset
   // when the user switches projects.
   useEffect(() => {
@@ -225,15 +220,17 @@ export default function NewTask() {
     setUseWorktree((value) => !value);
   };
 
+  // 写回的是**这个项目**的默认值，不是一份全局设置：换个项目它就该是另一个答案。
   const saveWorktreeDefault = async () => {
-    if (savingWorktreeDefault || useWorktree === worktreeDefault) return;
+    if (savingWorktreeDefault || !project || useWorktree === worktreeDefault) return;
     setSavingWorktreeDefault(true);
     try {
-      const settings = await api.patchSettings({ worktreeDefault: useWorktree });
-      setWorktreeDefault(settings.worktreeDefault);
+      const updated = await api.updateProject(project.id, { useWorktreeDefault: useWorktree });
+      upsertProject(updated);
+      setWorktreeDefault(updated.useWorktreeDefault);
       Alert.alert(
-        "已设为默认",
-        `以后新建任务将默认${useWorktree ? "使用 worktree" : "直接在项目运行"}`,
+        "已设为本项目默认",
+        `「${updated.name}」以后的新任务将默认${updated.useWorktreeDefault ? "使用 worktree" : "直接在项目运行"}`,
       );
     } catch (e) {
       Alert.alert("保存失败", e instanceof Error ? e.message : String(e));
@@ -463,13 +460,13 @@ export default function NewTask() {
               {useWorktree !== worktreeDefault ? (
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel={savingWorktreeDefault ? "正在保存默认 worktree 设置" : "设为默认 worktree 设置"}
+                  accessibilityLabel={savingWorktreeDefault ? "正在保存本项目的默认 worktree 设置" : "设为本项目默认 worktree 设置"}
                   accessibilityState={{ disabled: savingWorktreeDefault }}
                   onPress={savingWorktreeDefault ? undefined : saveWorktreeDefault}
                   style={{ justifyContent: "center", paddingHorizontal: 6, opacity: savingWorktreeDefault ? 0.5 : 1 }}
                 >
                   <Text style={{ color: theme.faint, fontSize: 12 }}>
-                    {savingWorktreeDefault ? "保存中…" : "设为默认"}
+                    {savingWorktreeDefault ? "保存中…" : "设为本项目默认"}
                   </Text>
                 </Pressable>
               ) : null}

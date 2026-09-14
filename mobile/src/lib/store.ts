@@ -16,6 +16,7 @@ interface State {
 
   setOnline: (b: boolean) => void;
   setProjects: (p: ProjectView[]) => void;
+  upsertProject: (p: ProjectView) => void;
   setProjectId: (id: string | null) => void;
   setTasks: (t: TaskListItem[]) => void;
   upsertTask: (t: TaskListItem) => void;
@@ -34,6 +35,10 @@ export const useStore = create<State>((set) => ({
 
   setOnline: (online) => set({ online }),
   setProjects: (projects) => set({ projects }),
+  upsertProject: (p) =>
+    set((s) => ({
+      projects: s.projects.some((x) => x.id === p.id) ? s.projects.map((x) => (x.id === p.id ? p : x)) : [...s.projects, p],
+    })),
   setProjectId: (projectId) => set({ projectId }),
   setTasks: (tasks) => set({ tasks }),
   upsertTask: (t) =>
