@@ -25,6 +25,14 @@ export function hasOpenLayer(): boolean {
   return layers.length > 0;
 }
 
+/**
+ * 这一层是不是最上面那一层。给「Esc 之外的整层快捷键」用：确认框的回车要和 Esc 一样
+ * 一次只作用于最上面那层——里面又开了选择器之类的浮层时，回车归它，别越过它去确认。
+ */
+export function isTopLayer(containerRef: RefObject<HTMLElement | null>): boolean {
+  return layers.length > 0 && layers[layers.length - 1]?.containerRef === containerRef;
+}
+
 export function useDismissable<
   Container extends HTMLElement,
   RestoreFocus extends HTMLElement = HTMLElement,
