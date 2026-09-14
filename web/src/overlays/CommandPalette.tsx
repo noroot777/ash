@@ -313,8 +313,9 @@ export function CommandPalette({
       { key: "new:group", group: "新建", label: "新建分组", icon: <Stack size={15} />, run: closeRun(onNewGroup) },
       { key: "new:project", group: "新建", label: "新建项目", icon: <FolderPlus size={15} />, run: closeRun(onNewProject) },
       { key: "manage:notes", group: "管理", label: "随手记列表", keys: "NL", icon: <NotePencil size={15} />, run: closeRun(() => onNote(currentProject?.id ?? null, null)) },
-      { key: "manage:agents", group: "管理", label: "管理智能体执行器", icon: <GearSix size={15} />, run: closeRun(() => onSettings("executors")) },
-      { key: "manage:settings", group: "管理", label: "项目设置", keys: SETTINGS_SHORTCUT_LABEL, icon: <GearSix size={15} />, run: closeRun(() => onSettings("project")) },
+      // G S 开的是设置页首页，也就是这一条（项目下拉里那颗「设置」同一个落点）。
+      { key: "manage:agents", group: "管理", label: "管理智能体执行器", keys: SETTINGS_SHORTCUT_LABEL, icon: <GearSix size={15} />, run: closeRun(() => onSettings("executors")) },
+      { key: "manage:settings", group: "管理", label: "项目设置", icon: <GearSix size={15} />, run: closeRun(() => onSettings("project")) },
       { key: "manage:groups", group: "管理", label: "分组管理", icon: <Stack size={15} />, run: closeRun(() => onSettings("groups")) },
     );
     // 「任务模式」和具体项目并排放在同一组里：它回答的是同一个问题（列表在看谁），
