@@ -14,6 +14,7 @@ const emptyPreview = (): ProjectPreviewConfig => ({
   proxy: "auto",
   services: [],
   primaryServiceId: null,
+  launch: "frontend",
 });
 
 const freshProject = (id: string, name: string): ProjectView => ({

@@ -10,7 +10,7 @@ import { assertBeforeAcceptance } from "./free-workflow.js";
 import { acquireFreeWorkflowAction, releaseFreeWorkflowAction } from "./free-workflow-lock.js";
 import { handoffBlockReasonById } from "./handoff-guard.js";
 import { resolvePreviewCommand } from "./preview-command.js";
-import { parsePreviewConfig, previewProxyEnabled, type WorkspacePreviewInput } from "@ash/shared/preview";
+import { parsePreviewConfig, previewLaunchOf, previewProxyEnabled, type WorkspacePreviewInput } from "@ash/shared/preview";
 import { workspacePreviewDirectory, workspacePreviewInput } from "./preview-workspace.js";
 import { isMultiUser } from "./auth/mode.js";
 import { previewState } from "./preview-public.js";
@@ -63,6 +63,11 @@ async function startFreePreview(taskId: string, input?: WorkspacePreviewInput) {
       ? { command: selected.map((s) => s.command).join("\n\n"), source: "configured" }
       : resolvePreviewCommand(workspace.path, input?.command ?? project.previewCommand);
     const proxy = !!input || previewProxyEnabled(config?.proxy, await isMultiUser());
+    // 起多大一摊照**项目配置**来，别在这儿替项目宣称意图。这里曾经写死 `"frontend"`：
+    // 自由预览于是永远只起前端、`/api` 接回本机这台 ash，用户改完后端来预览里验，看到的
+    // 是主实例上的旧行为 —— 而界面上没有一个字提过这件事，症状只是「我改的东西没生效」。
+    // 跟这次跑哪条命令无关，所以任务里临时填的命令也照项目配的来。
+    const launch = config?.launch ?? previewLaunchOf(project.previewConfig);
     // 就绪判据只认「端口真的连得上」。**不能**再加一条「日志里说了 ready」：READY_WORDS
     // 那张表（ready / listening / compiled…）是照 Node dev server 的说法写的，Django 印的是
     // 「Starting development server at …」、Go/Rust 印什么全看作者 —— 拿它当必要条件，等于
@@ -70,7 +75,7 @@ async function startFreePreview(taskId: string, input?: WorkspacePreviewInput) {
     // 日志里的（或它自述的端口，见 preview-log.ts），连得上就是它起来了。
     const step: PreviewStep = {
       id: "free-preview", kind: "preview",
-      p: { cmd: command, mode: "frontend", ready: "port", life: "task" },
+      p: { cmd: command, mode: launch, ready: "port", life: "task" },
       fail: null,
     };
     const result = await startPreview(taskId, step, workspace.path, gen, { services: selected, primaryServiceId: config?.primaryServiceId, proxy });

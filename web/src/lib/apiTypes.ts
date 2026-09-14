@@ -153,13 +153,22 @@ export type FileSearchHit = {
   name: string;
   dir: string;
   kind: "file" | "dir";
+  /** .gitignore 挡着的（构建产物、本地数据…）。照样能选，只是一律排在未忽略的后面。 */
+  ignored?: boolean;
 };
 
 export type FileSearchResult = {
   /** 没有可搜的工作目录时为 null（任务还没跑过、项目不是仓库），不是错误。 */
   root: { path: string } | null;
+  /**
+   * 这批结果是怎么来的：`dir` = 某个目录的直接子项（树），`search` = 全局搜。
+   * **缺这个字段 = 服务端是旧版**（它不认 `?dir=`，把请求当搜索处理了）。
+   */
+  mode?: "search" | "dir";
   hits: FileSearchHit[];
   truncated: boolean;
+  /** 还有匹配上的没列出来（被条数上限截了）。界面据此提示「再敲几个字缩小范围」。 */
+  more?: boolean;
 };
 
 export type FileContent = {  path: string;

@@ -74,7 +74,7 @@ server.listen(Number(process.env.PORT),'127.0.0.1',()=>console.log('http://local
 mkdirSync(join(fixture, "apps", "site"), { recursive: true });
 writeFileSync(join(fixture, "apps", "site", "package.json"), JSON.stringify({ scripts: { dev: "vite" } }));
 const command = `${previewShell().quote(process.execPath)} service.cjs`;
-const config: ProjectPreviewConfig = { mode: "services", proxy: "on", primaryServiceId: "web", services: [
+const config: ProjectPreviewConfig = { mode: "services", proxy: "on", primaryServiceId: "web", launch: "frontend", services: [
   { id: "web", name: "网站", command, kind: "web", enabled: true },
   { id: "api", name: "接口", command, kind: "service", enabled: true },
   { id: "disabled", name: "未选服务", command: "exit 19", kind: "service", enabled: false },

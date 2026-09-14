@@ -245,6 +245,10 @@ try {
   assert.equal(await page.getByText("已选 2 个 · 最多同时启动 8 个").isVisible(), true, "检测结果应支持多选");
 
   await proxy.selectOption("auto");
+  // 起多大一摊是个**能选的**项：它曾经写死在服务端，项目配什么都没用，而界面上看不出来。
+  const launch = page.getByRole("combobox", { name: "预览启动范围" });
+  assert.equal(await launch.inputValue(), "frontend", "没配过的项目按老行为显示只起前端");
+  await launch.selectOption("test");
   await savePreview.click();
   await page.waitForFunction(
     () => JSON.parse(document.querySelector("[data-testid=stored-projects]").textContent)["p-one"].previewConfig.mode === "services",
@@ -255,6 +259,7 @@ try {
   const stored = JSON.parse(await page.getByTestId("stored-projects").textContent());
   assert.equal(stored["p-one"].previewConfig.mode, "services");
   assert.equal(stored["p-one"].previewConfig.proxy, "auto");
+  assert.equal(stored["p-one"].previewConfig.launch, "test", "选的启动范围要真的存下去");
   assert.deepEqual(stored["p-one"].previewConfig.services.map((service) => service.enabled), [true, true]);
   assert.equal(stored["p-one"].previewConfig.primaryServiceId, "web");
   assert.equal(stored["p-one"].previewConfig.services[0].command, editedWebCommand);

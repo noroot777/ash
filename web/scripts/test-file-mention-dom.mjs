@@ -31,7 +31,10 @@ const FILES = [
   "src/lib/apiClient.ts",
   "src/lib/useFileMention.ts",
   "docs/计划 A.md",
+  "dist/api.js",
 ];
+// .gitignore 挡着的：照样能搜到、能选，只是排在最后并标出来（空查询时不给）。
+const IGNORED = new Set(["dist/api.js"]);
 
 let browser;
 try {
@@ -43,18 +46,59 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
   // 让某一个查询慢下来：验「旧候选不许被新 token 的回车选中」那一条时打开。
   let slowQuery = null;
+  // 让某一个查询报「还有更多没列出来」：验那句提示有没有接上。
+  let moreQuery = null;
+  // 装成没更新过的服务端（不认 `dir`、回平铺清单且不报 mode）。
+  let legacyServer = false;
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     const json = (body) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
     if (url.pathname.endsWith("/agents")) return json(PROFILES);
     if (url.pathname.endsWith("/file-search")) {
+      // `dir` = 树里展开一层：只回这个目录的直接子项，跟服务端一个口径。
+      const dir = url.searchParams.get("dir");
+      if (dir !== null) {
+        const prefix = dir ? `${dir}/` : "";
+        const dirs = new Set();
+        const plain = [];
+        for (const path of FILES) {
+          if (prefix && !path.startsWith(prefix)) continue;
+          const rest = path.slice(prefix.length);
+          const at = rest.indexOf("/");
+          if (at < 0) plain.push(rest);
+          else dirs.add(rest.slice(0, at));
+        }
+        if (legacyServer) {
+          // 旧服务端不认 `dir`，把它当搜索处理：回一张平铺清单，而且没有 mode。
+          return json({ root: { path: "/repo" }, truncated: false, more: false, hits: FILES.map(hit) });
+        }
+        return json({
+          root: { path: "/repo" },
+          mode: "dir",
+          truncated: false,
+          more: false,
+          hits: [
+            ...[...dirs].sort().map((name) => ({ path: prefix + name, name, dir, kind: "dir" })),
+            ...plain.sort().map((name) => ({
+              path: prefix + name,
+              name,
+              dir,
+              kind: "file",
+              ...(IGNORED.has(prefix + name) ? { ignored: true } : {}),
+            })),
+          ],
+        });
+      }
       const query = (url.searchParams.get("q") ?? "").toLowerCase();
       if (slowQuery && query.includes(slowQuery)) {
         await new Promise((resolve) => { setTimeout(resolve, 1500); });
       }
-      const matched = FILES.filter((path) => !query || path.toLowerCase().includes(query));
+      const matched = FILES
+        .filter((path) => (query ? path.toLowerCase().includes(query) : !IGNORED.has(path)))
+        .sort((a, b) => Number(IGNORED.has(a)) - Number(IGNORED.has(b)));
       return json({
         root: { path: "/repo" },
+        mode: "search",
         hits: matched.map((path) => {
           const at = path.lastIndexOf("/");
           return {
@@ -62,9 +106,11 @@ try {
             name: at < 0 ? path : path.slice(at + 1),
             dir: at < 0 ? "" : path.slice(0, at),
             kind: "file",
+            ...(IGNORED.has(path) ? { ignored: true } : {}),
           };
         }),
         truncated: false,
+        more: !!moreQuery && query.includes(moreQuery),
       });
     }
     return route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
@@ -79,6 +125,10 @@ try {
   // 边打边搜会连着发好几趟（`s` → `sr` → `src`…），中间那几趟的结果同样会进菜单。
   // 所以每次判定前都等到列表**正好**是最后那趟该有的样子，否则上下键走的是一张
   // 过期列表 —— 这不是产品 bug，是夹具自己的观测偏差。
+  const hit = (path) => {
+    const at = path.lastIndexOf("/");
+    return { path, name: at < 0 ? path : path.slice(at + 1), dir: at < 0 ? "" : path.slice(0, at), kind: "file" };
+  };
   const settled = (expected) => page.waitForFunction(
     (want) => {
       const texts = [...document.querySelectorAll('[role="option"]')].map((node) => node.textContent ?? "");
@@ -88,10 +138,11 @@ try {
     { timeout: 5000 },
   );
 
-  // ① 只敲一个 @：两类候选都在，智能体排在文件前面。
+  // ① 只敲一个 @：两类候选都在，文件那半边是**根这一层**（目录 + 根下的文件），
+  //    深处的文件一条都不该平铺出来 —— 那正是「一屏四十条读不过来」的老样子。
   await textarea.fill("");
   await textarea.type("@");
-  await settled(["@claude", "@codex", "README.md", "api.ts", "apiClient.ts", "useFileMention.ts", "计划 A.md"]);
+  await settled(["@claude", "@codex", "dist/", "docs/", "src/", "README.md"]);
 
   // ② token 里出现 `/`：智能体整个让位，只剩文件。
   await textarea.fill("");
@@ -173,6 +224,79 @@ try {
     "send:看 @src",
     "菜单开着也不能把 ⌘↵ 吃掉",
   );
+
+  // ⑩ 被 .gitignore 挡着的文件：排在最后、标着「已忽略」，但照样选得中。
+  //    （改之前它们压根搜不出来 —— `data/`、`dist/` 里的产物一个都 @ 不到。）
+  await textarea.fill("");
+  await textarea.type("看 @api");
+  await settled(["api.ts", "apiClient.ts", "api.js"]);
+  const ignoredRow = options.nth(2);
+  assert.match(await ignoredRow.textContent() ?? "", /已忽略/, "忽略项要标出来，否则用户看不懂它为什么在最后");
+  await ignoredRow.click();
+  assert.equal(await textarea.inputValue(), "看 @dist/api.js ", "忽略项也得能选中");
+
+  // ⑪ 候选被条数上限截了要说一声，不然用户以为「就这几个」。
+  // 用一个前面没搜过的 token：搜过的那几个还躺在 hook 的缓存里，不会再问服务端。
+  moreQuery = "usef";
+  await textarea.fill("");
+  await textarea.type("再看 @useF");
+  await page.waitForFunction(
+    () => document.querySelector(".mention-menu p")?.textContent?.includes("再敲几个字"),
+    null,
+    { timeout: 4000 },
+  );
+  moreQuery = null;
+
+  // ⑫ 树：目录能就地展开，子项缩进挂在下面，回车插的是子项自己的完整路径。
+  //    （改之前这里是一张平铺的全量路径清单，深处的文件和门面文件混在一起。）
+  await textarea.fill("");
+  await textarea.type("@");
+  await settled(["@claude", "@codex", "dist/", "docs/", "src/", "README.md"]);
+  const srcRow = options.filter({ hasText: "src/" }).first();
+  await srcRow.click(); // 点目录 = 展开，不是插入
+  await settled(["@claude", "@codex", "dist/", "docs/", "src/", "lib/", "api.ts", "README.md"]);
+  assert.equal(await textarea.inputValue(), "@", "点一个收着的目录只该展开，不该往正文里插东西");
+  assert.equal(await srcRow.getAttribute("aria-expanded"), "true");
+  // 子项缩进比它爹深
+  const pad = (row) => row.evaluate((node) => parseFloat(getComputedStyle(node).paddingLeft));
+  assert.ok(
+    await pad(options.filter({ hasText: "api.ts" }).first()) > await pad(srcRow),
+    "展开出来的子项必须看得出缩进，否则跟平铺没区别",
+  );
+  await options.filter({ hasText: "api.ts" }).first().click();
+  assert.equal(await textarea.inputValue(), "@src/api.ts ", "插进正文的是完整路径，不是那一层的短名字");
+
+  // ⑬ 搜索态按目录归堆：目录头只是标签，上下键和回车都不该落在它身上。
+  await textarea.fill("");
+  await textarea.type("看 @useFile");
+  await settled(["useFileMention.ts"]);
+  const groups = menu.locator(".mention-menu-group");
+  assert.equal(await groups.count(), 1, "同一目录的命中要有个目录头");
+  assert.match(await groups.first().textContent() ?? "", /src\/lib/);
+  await page.keyboard.press("Enter");
+  assert.equal(
+    await textarea.inputValue(),
+    "看 @src/lib/useFileMention.ts ",
+    "回车选的是文件，不是那一行目录头",
+  );
+
+  // ⑭ 服务端还没更新时**必须说出来**。不说的话界面就是一列没有层级的文件，看着像
+  //    树压根没做 —— 这一条正是这么被误判过一次的（前端新、:4317 还是旧进程）。
+  legacyServer = true;
+  await textarea.fill("");
+  // 换一个这一轮没浏览过的目录：浏览过的那几层还在 hook 的缓存里，不会再问服务端。
+  await textarea.type("@docs/");
+  await page.waitForFunction(
+    () => document.querySelector(".mention-menu p")?.textContent?.includes("重启 ash 服务"),
+    null,
+    { timeout: 4000 },
+  );
+  assert.equal(
+    await menu.getByRole("option").filter({ hasText: "README.md" }).count(),
+    1,
+    "退化了也得能用：平铺清单照样能选",
+  );
+  legacyServer = false;
 
   console.log("file-mention-dom: ok");
 } finally {

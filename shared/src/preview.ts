@@ -6,11 +6,33 @@ export interface PreviewServiceConfig {
   kind: "web" | "service";
 }
 
+/**
+ * 启动命令跑起来之后，**它自己**该起多大一摊。ash 只把这个选择作为 `$ASH_PREVIEW_MODE`
+ * 递给命令，起不起后端是命令自己的事 —— 不认这个变量的项目，四档全都一样。
+ *
+ * 值域里那几个「独立新库 / 测试库快照」的说法是照 ash 自带的 `scripts/dev.mjs` 写的：
+ * 它是目前唯一认这个变量的脚本，而这几档正是照着「验一个 ash 分支要什么」定的。
+ */
+export const PREVIEW_MODE = ["command", "frontend", "full", "test"] as const;
+export type PreviewMode = (typeof PREVIEW_MODE)[number];
+export const PREVIEW_MODE_LABELS: Record<PreviewMode, string> = {
+  command: "按项目启动命令",
+  frontend: "只启动前端",
+  full: "前后端全启动（独立新库）",
+  test: "前后端 + 测试库快照",
+};
+
 export interface ProjectPreviewConfig {
   mode: "script" | "services";
   proxy: "auto" | "on" | "off";
   primaryServiceId: string | null;
   services: PreviewServiceConfig[];
+  /**
+   * 递给启动命令的 `$ASH_PREVIEW_MODE`。**老配置里没有这个字段**，读出来一律补
+   * `"frontend"` —— 那是这个字段存在之前写死的值，补别的会让所有存量项目的预览
+   * 在一次升级里悄悄换一种起法。
+   */
+  launch: PreviewMode;
 }
 
 export interface DetectedPreviewService extends PreviewServiceConfig {
@@ -56,6 +78,20 @@ export function previewProxyEnabled(setting: ProjectPreviewConfig["proxy"] | und
   return setting === "on" || (setting !== "off" && multi);
 }
 
+/**
+ * 存着的项目预览配置里那一档启动范围，**宽容读**：整份配置坏掉、字段没有、值不认识，
+ * 一律当 `"frontend"`。
+ *
+ * 为什么不复用会抛的 `parsePreviewConfig`：这个值的用处是「递一个 env 给启动命令」，
+ * 一份历史遗留的坏配置不该因此挡住任务里临时填的那条命令 —— 真要报配置错，是保存
+ * 那一刻的事，不是开预览这一刻。
+ */
+export function previewLaunchOf(stored: unknown): PreviewMode {
+  const value = stored && typeof stored === "object" && !Array.isArray(stored)
+    ? (stored as Record<string, unknown>).launch : undefined;
+  return PREVIEW_MODE.includes(value as PreviewMode) ? value as PreviewMode : "frontend";
+}
+
 export function parsePreviewConfig(value: unknown): ProjectPreviewConfig | null {
   if (value === null) return null;
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("预览配置格式不正确");
@@ -80,7 +116,10 @@ export function parsePreviewConfig(value: unknown): ProjectPreviewConfig | null 
   if (v.mode === "services" && !selected.length) throw new Error("请至少选择一个服务");
   const primary = v.primaryServiceId;
   if (primary !== null && (typeof primary !== "string" || !selected.some((s) => s.id === primary))) throw new Error("默认预览服务必须在已选服务中");
-  return withoutBlankServices({ mode: v.mode, proxy: v.proxy, primaryServiceId: primary as string | null, services });
+  // 缺省而不是报错：这个字段是后加的，存量配置里一条都没有，按老行为补齐。
+  const launch = v.launch === undefined || v.launch === null ? "frontend" : v.launch;
+  if (!PREVIEW_MODE.includes(launch as PreviewMode)) throw new Error("请选择预览的启动范围");
+  return withoutBlankServices({ mode: v.mode, proxy: v.proxy, primaryServiceId: primary as string | null, services, launch: launch as PreviewMode });
 }
 
 // ── 端口怎么写进启动命令 ────────────────────────────────────────────────────

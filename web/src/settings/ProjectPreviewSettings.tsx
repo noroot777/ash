@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { MagnifyingGlass, Plus, Trash } from "@phosphor-icons/react";
 import type { ProjectView } from "@ash/shared";
-import { MAX_PREVIEW_SERVICES, parsePreviewConfig, previewPortDialect, previewPortRef, previewPortRuleText, previewProxyEnabled, withoutBlankServices, type ProjectPreviewConfig, type PreviewServiceConfig } from "@ash/shared/preview";
+import { MAX_PREVIEW_SERVICES, parsePreviewConfig, PREVIEW_MODE, PREVIEW_MODE_LABELS, previewPortDialect, previewPortRef, previewPortRuleText, previewProxyEnabled, withoutBlankServices, type ProjectPreviewConfig, type PreviewServiceConfig } from "@ash/shared/preview";
 import { Button } from "../components/ui.tsx";
 import { useAuth } from "../auth/authContext.ts";
 import { useHostInfo } from "../lib/useHostInfo.ts";
@@ -11,9 +11,12 @@ import { ProjectPreviewHelp } from "./ProjectPreviewHelp.tsx";
 import { PreviewCommandEditor, usePreviewCommandWrapping } from "./PreviewCommandEditor.tsx";
 import "./project-preview.css";
 
-const emptyConfig = (): ProjectPreviewConfig => ({ mode: "script", proxy: "auto", services: [], primaryServiceId: null });
+const emptyConfig = (): ProjectPreviewConfig => ({ mode: "script", proxy: "auto", services: [], primaryServiceId: null, launch: "frontend" });
 // 存量配置里可能留着以前没填完的空壳服务，进来先丢掉：它不该被展示成一条已有配置。
-const loadConfig = (stored: ProjectPreviewConfig | null | undefined): ProjectPreviewConfig => stored ? withoutBlankServices(stored) : emptyConfig();
+// launch 是后加的字段，老配置读出来没有，按老行为补 frontend（别让升级改掉起法）。
+const loadConfig = (stored: ProjectPreviewConfig | null | undefined): ProjectPreviewConfig => stored
+  ? { ...withoutBlankServices(stored), launch: stored.launch ?? "frontend" }
+  : emptyConfig();
 
 export function ProjectPreviewSettings({ project, onUpdated, notify }: {
   project: ProjectView;
@@ -126,6 +129,18 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
       </div>)}</div>
       <div className="preview-help"><small>每条脚本都从任务工作区根目录独立执行，使用自己的 <code>{variable("PORT")}</code>。已选服务按列表顺序对应 <code>{variable("URL1")}</code>、<code>{variable("URL2")}</code>…，可传给前端开发服务器的接口代理配置。它们是服务端内部地址。</small></div>
     </div>}
+    <label className="settings-field preview-launch-scope-field"><span>启动范围</span>
+      <select aria-label="预览启动范围" value={config.launch} disabled={!canManage || busy} onChange={(e) => setConfig({ ...config, launch: e.target.value as ProjectPreviewConfig["launch"] })}>
+        {PREVIEW_MODE.map((value) => <option key={value} value={value}>{PREVIEW_MODE_LABELS[value]}</option>)}
+      </select>
+    </label>
+    <div className="preview-help preview-launch-scope-help">
+      <small>ash 把这个选择作为 <code>{variable("ASH_PREVIEW_MODE")}</code> 递给上面的启动脚本，<b>起不起后端是脚本自己的事</b> —— 脚本不读这个变量时，四档没有区别（大多数项目都是这样，选哪个都行）。</small>
+      {/* 这一句是这个选项存在的全部理由：选「只起前端」时预览里的后端根本不是这个分支的，
+          而页面上看不出来——改了后端跑来预览里验，看到的是主实例的旧行为，症状只是「我改的
+          东西没生效」。界面不说，用户无从知道该去看哪儿。 */}
+      <small>选「只启动前端」时，脚本通常会把 <code>/api</code> 打回正在跑的这台 ash：<b>你在预览里验的是主实例的后端，不是这个分支的</b>。要验后端改动，请选前后端全启动的那两档，或在脚本里自己起后端。</small>
+    </div>
     <label className="settings-field preview-proxy-field"><span>通过 ash 反向代理访问</span>
       <select aria-label="通过 ash 反向代理访问" value={config.proxy} disabled={!canManage || busy} onChange={(e) => setConfig({ ...config, proxy: e.target.value as ProjectPreviewConfig["proxy"] })}>
         <option value="auto">跟随模式默认（{state.mode === "multi" ? "多人模式：开启" : "单人模式：关闭"}）</option>

@@ -9,7 +9,7 @@ import {
   type WorkspaceRoot,
 } from "./file-browser.js";
 import { openWithApp, probeOpeners, revealInFileManager } from "./openers/index.js";
-import { searchWorkspaceFiles } from "./file-search.js";
+import { listWorkspaceDir, searchWorkspaceFiles } from "./file-search.js";
 
 // 任务文件浏览。全部是只读视角 + 三个「交给本机去做」的动作（在文件夹中显示、
 // 用某个应用打开、拿原始字节预览），任何一个都不写工作区。
@@ -87,13 +87,21 @@ export function mountFileRoutes(api: Hono) {
   // 静默不弹菜单就好，弹一条红字说「没有工作目录」是在打断一次普通的打字。
   api.get("/tasks/:id/file-search", async (c) => {
     const root = await rootFor(c.req.param("id"));
-    if (!root) return c.json({ root: null, hits: [], truncated: false });
+    if (!root) return c.json({ root: null, mode: "dir", hits: [], truncated: false, more: false });
     try {
-      const found = await searchWorkspaceFiles(root.path, {
-        gitRepo: root.gitRepo,
-        query: c.req.query("q") ?? "",
-        limit: Number(c.req.query("limit")) || undefined,
-      });
+      // `dir` = 树里展开某一层；`q` = 全局搜。两条同源（共用枚举缓存），只是取法不同。
+      const dir = c.req.query("dir");
+      const found = dir === undefined
+        ? await searchWorkspaceFiles(root.path, {
+          gitRepo: root.gitRepo,
+          query: c.req.query("q") ?? "",
+          limit: Number(c.req.query("limit")) || undefined,
+        })
+        : await listWorkspaceDir(root.path, {
+          gitRepo: root.gitRepo,
+          dir,
+          limit: Number(c.req.query("limit")) || undefined,
+        });
       return c.json({ root: publicRoot(root), ...found });
     } catch (error) {
       return c.json({ error: messageOf(error) }, statusOf(error) as 400);

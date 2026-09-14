@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, type ReactNode } from "react";
-import { File, FolderSimple, Robot } from "@phosphor-icons/react";
-import type { FileSearchHit } from "../lib/api.ts";
+import { CaretDown, CaretRight, File, FolderSimple, Robot } from "@phosphor-icons/react";
 import type { FileMentionState } from "../lib/useFileMention.ts";
+import type { MentionTreeRow } from "../lib/fileMentionTree.ts";
 
 // 输入框敲 `@` 弹出来的那张菜单：新建任务、单飞对话框、团队对话框共用一份。
 //
@@ -9,13 +9,17 @@ import type { FileMentionState } from "../lib/useFileMention.ts";
 // 是「引用点什么东西」，而不是「我现在要用智能体选择器还是文件选择器」。谁排前面由候选
 // 本身决定——`@cl` 那样的纯字母 token 两边都可能命中，智能体在前（它改的是「谁来干」，
 // 代价大、要一眼看见）；一旦 token 里出现 `/` 或 `.`，智能体那段自然就空了。
+//
+// 文件那半边是**一棵树**而不是一张平铺的路径清单：一层一层列，目录能就地展开，子项缩进
+// 挂在下面（形状怎么算在 lib/fileMentionTree.ts）。缩进这一条不是装饰 —— 四十条深路径
+// 平铺在一起，人读到第五条就已经分不清谁跟谁是一家的了。
 
 export type MentionRow =
   | { kind: "agent"; key: string; agent: string; detail?: string }
-  | { kind: "file"; key: string; hit: FileSearchHit };
+  | { kind: "file"; key: string; row: MentionTreeRow };
 
-export function fileMentionRows(hits: FileSearchHit[]): MentionRow[] {
-  return hits.map((hit) => ({ kind: "file", key: `file:${hit.path}`, hit }));
+export function fileMentionRows(rows: MentionTreeRow[]): MentionRow[] {
+  return rows.map((row) => ({ kind: "file", key: `file:${row.hit.path}`, row }));
 }
 
 /** 命中的那几个字标出来：子串命中常在名字中段，不标就看不出这条为什么在列表里。 */
@@ -33,12 +37,37 @@ function Highlighted({ text, token }: { text: string; token: string }) {
 }
 
 /** 深路径从左边截：`…/task-detail` 比 `web/src/ta…` 有用得多。 */
-function tailPath(dir: string): string {
-  const LIMIT = 34;
-  if (dir.length <= LIMIT) return dir;
-  const cut = dir.slice(dir.length - LIMIT);
+function tailPath(dir: string, limit = 34): string {
+  if (dir.length <= limit) return dir;
+  const cut = dir.slice(dir.length - limit);
   const at = cut.indexOf("/");
   return `…${at >= 0 ? cut.slice(at) : cut}`;
+}
+
+/** 一行文件/目录。缩进用 padding 给，别用空格 —— 名字要能正常省略号截断。 */
+function FileRow({ row, token }: { row: MentionTreeRow; token: string }) {
+  const { hit } = row;
+  const isDir = hit.kind === "dir";
+  return (
+    <>
+      {row.expandable
+        ? (row.expanded
+          ? <CaretDown size={11} weight="bold" className="mention-menu-caret" aria-hidden="true" />
+          : <CaretRight size={11} weight="bold" className="mention-menu-caret" aria-hidden="true" />)
+        : <span className="mention-menu-caret" aria-hidden="true" />}
+      {isDir
+        ? <FolderSimple size={14} weight="fill" aria-hidden="true" />
+        : <File size={14} aria-hidden="true" />}
+      <b><Highlighted text={hit.name} token={token} />{isDir && "/"}</b>
+      {/* 搜索态里同名文件靠这一段分辨（三个 index.ts 长得一模一样）；浏览态不写，
+          目录就摆在这一行的上面。 */}
+      {row.showDir && hit.dir && <em>{tailPath(hit.dir)}/</em>}
+      {row.loading && <em>展开中…</em>}
+      {/* 被 .gitignore 挡着的照样能选，但得说一声：否则用户只会觉得「这条怎么排这么
+          后面」，还会怀疑自己引用的是不是一个不该存在的文件。 */}
+      {hit.ignored && <span className="mention-menu-tag">已忽略</span>}
+    </>
+  );
 }
 
 export function MentionMenu({
@@ -79,11 +108,26 @@ export function MentionMenu({
           {index === firstFileIndex && firstFileIndex > 0 && (
             <small className="mention-menu-divider">工作区文件 · 路径会写进正文</small>
           )}
+          {row.kind === "file" && row.row.label ? (
+            // 分组标签：搜索结果里「这几条同属这个目录」的那一行。不是选项，所以不进
+            // 上下键序列，也不该被读屏当成可选项念出来。
+            <small className="mention-menu-group">
+              <FolderSimple size={12} weight="fill" aria-hidden="true" />
+              {/* 深路径同样从左边截：右边那几段才是区分度所在。 */}
+              {tailPath(row.row.hit.path, 42)}/
+            </small>
+          ) : (
           <button
             ref={index === selectedIndex ? selectedRef : undefined}
             type="button"
             role="option"
             aria-selected={index === selectedIndex}
+            aria-expanded={row.kind === "file" && row.row.expandable ? row.row.expanded : undefined}
+            /* 缩进走 padding，不插占位元素：占位元素会多吃一份 flex gap，第一层就跟没
+               缩进的行左右错开。 */
+            style={row.kind === "file" && row.row.depth
+              ? { paddingLeft: `${8 + row.row.depth * 14}px` }
+              : undefined}
             onMouseEnter={() => onHover?.(index)}
             onClick={() => onPick(row)}
           >
@@ -93,18 +137,9 @@ export function MentionMenu({
                 <b>@{row.agent}</b>
                 {row.detail && <em>{row.detail}</em>}
               </>
-            ) : (
-              <>
-                {row.hit.kind === "dir"
-                  ? <FolderSimple size={14} aria-hidden="true" />
-                  : <File size={14} aria-hidden="true" />}
-                <b><Highlighted text={row.hit.name} token={token} /></b>
-                {/* 同名文件靠这一段分辨（三个 index.ts 长得一模一样），所以路径不能省，
-                    太长时从**左边**截 —— 右边那几段才是区分度所在。 */}
-                {row.hit.dir && <em>{tailPath(row.hit.dir)}/</em>}
-              </>
-            )}
+            ) : <FileRow row={row.row} token={token} />}
           </button>
+          )}
         </Fragment>
       ))}
       {status && <p>{status}</p>}
@@ -133,15 +168,35 @@ export function FileMentionMenu({
     <MentionMenu
       className={className}
       ariaLabel={label}
-      hint={`${label} · ↑↓ 选择，回车插入路径，Esc 关闭`}
-      rows={fileMentionRows(mention.hits)}
+      hint={`${label} · ${mentionHint(mention.selected)}`}
+      rows={fileMentionRows(mention.rows)}
       token={mention.token ?? ""}
-      status={mention.loading && !mention.hits.length ? "正在搜索工作区文件…"
-        : mention.failed ? "工作区文件搜索失败，仍可直接手打路径"
-          : mention.hits.length === 0 ? "没有匹配的文件" : null}
+      status={mention.treeUnsupported ? TREE_UNSUPPORTED
+        : mention.loading && !mention.rows.length
+        ? (mention.browsing ? "正在读取这个目录…" : "正在搜索工作区文件…")
+        : mention.failed ? "工作区文件读取失败，仍可直接手打路径"
+          : mention.rows.length === 0
+            ? (mention.browsing ? "这个目录是空的" : "没有匹配的文件")
+            : mention.more ? "匹配的还有更多，再敲几个字缩小范围" : null}
       selectedIndex={mention.index}
       onHover={mention.setIndex}
-      onPick={(row) => { if (row.kind === "file") mention.pick(row.hit); }}
+      onPick={(row) => { if (row.kind === "file") mention.activate(row.row); }}
     />
   );
+}
+
+/**
+ * 提示行跟着**选中的那一行**改口：同一颗回车在树里做两件事（展开目录 / 插入路径），
+ * 不写清楚用户按下去才知道自己刚才干了什么。
+ */
+/**
+ * 服务端还不认 `?dir=` 时说的那句话。**必须说出来**：不说的话界面就是一列没有层级的
+ * 文件，看着像树这个功能压根没做 —— 这一条正是这么被误判过一次的。
+ */
+export const TREE_UNSUPPORTED = "服务端是旧版，暂时只能平铺；重启 ash 服务后才有树形浏览";
+
+export function mentionHint(selected: MentionTreeRow | undefined): string {
+  if (selected?.expandable && !selected.expanded) return "↑↓ 选择，回车或 → 展开目录";
+  if (selected?.expandable) return "↑↓ 选择，回车引用这个目录，← 收起";
+  return "↑↓ 选择，回车插入路径，Esc 关闭";
 }

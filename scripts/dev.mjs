@@ -1,10 +1,15 @@
 // `npm run dev` 被人手调用时照旧启动 4317 + 前端；被 ash 预览站调用时，
-// `PORT` 是借来的前端端口，`ASH_PREVIEW_MODE` 是页面上选的启动方式：
+// `PORT` 是借来的前端端口，`ASH_PREVIEW_MODE` 是那次预览选的启动范围：
 //
 //   frontend  只起这个 worktree 的前端，/api 打回本机 4317
 //   full      起这个 worktree 的前后端，用 `<worktree>/data/preview-empty.db`，只播种设置
 //   test      起这个 worktree 的前后端，用 `<worktree>/data/preview.db`，首次从主库播种
 //   command   项目自定义；对本脚本来说沿用 test 这个安全默认
+//
+// 那个值从哪来：编排工作流看「打开预览」那一站的设置，自由预览看**项目设置 → 预览 →
+// 启动范围**（存在 previewConfig.launch，缺省 frontend）。自由预览这一档曾经写死
+// `frontend`，于是验一个改了后端的分支时，预览里的 /api 全打回主实例、看到的是旧行为
+// —— ash 是目前唯一读这个变量的项目，这条链断在哪儿都只表现成「我改的东西没生效」。
 //
 // 每个 worktree 的 DB 文件路径不同，所以各预览后端可并行；单实例锁仍保证同一份库
 // 不会被两个 server 同时调度。测试库每次启动都洗掉 pid/running/定时任务，预览实例也
