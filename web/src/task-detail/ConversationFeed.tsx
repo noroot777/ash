@@ -292,7 +292,7 @@ export function ConversationFeed({
               return <SystemAuthoredMessage key={row.id} item={row.item} related={row.related} mode={noticeMode} />;
             }
             if (row.kind === "system-digest") {
-              return <SystemEventDigest key={row.id} items={row.items} mode={noticeMode} />;
+              return <SystemEventDigest key={row.id} items={row.items} mode={noticeMode} attached={row.attached} />;
             }
             const roles = reviewLaneMessageRoles(row);
             return (

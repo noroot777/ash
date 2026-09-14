@@ -70,6 +70,20 @@ export type ConversationItem =
       variant?: ConversationEventVariant;
       /** 这条旁注在讲验证轮的事（开始 / 未通过 / 打回修复）：跟审查者的气泡同一套配色。 */
       verify?: boolean;
+      /**
+       * 这条只是**任务时间线的一条记录**（预约审查、验收阶段更新、预览起停…），不是会话
+       * 里的一个回合 —— agent 从没见过这些字，它落在哪一秒也纯属偶然，多半正砸在某个回合
+       * 说到一半的地方。
+       *
+       * 所以它**不许当回合边界用**：不切气泡（见下面的 mergeTurnChunk）、不定回合的起止
+       * 时刻（见 at / endedAt 两轮）。拿它当边界的后果是一条回复被劈成两半，上半截平白得
+       * 到一个「结束时刻」于是提前折叠、还挂上「派生新任务」——而那半截根本不是一条完整
+       * 回复（用户 2026-09-14 反馈）。
+       *
+       * 来源：服务端 appendTaskTimeline 写的 `aside` 标；老会话没有这个标，落盘那一路改按
+       * trace 的回合分组推（见 noteInsideTurn）。
+       */
+      aside?: boolean;
     };
 
 export type PersistedConversation = { session: Session; output: string; trace?: SessionTraceEntry[] };
@@ -267,6 +281,65 @@ function conversationItemTime(item: ConversationItem): number {
   return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
 }
 
+/**
+ * 这条旁注落下来的时候，这条会话的某个回合**还在飞**吗。
+ *
+ * 判据是 trace 的回合分组：某一组的 `turnStartedAt` **严格早于**旁注、组里又还有旁注
+ * 之后的事件 —— 那就是砸进了一个正在进行的回合，它上下两截 .md 正文是同一个人同一轮
+ * 说的话。真正的回合起点（「继续（从中断处）」那类系统行）时刻**恰好等于**某一组的
+ * `turnStartedAt`，「严格早于」这一刀就把两者分开了，不用去猜文案。
+ *
+ * 老会话没有服务端的 `aside` 标（2026-09-14 之前），全靠这条推断；新会话两者都有，
+ * 互为印证。整条会话一条 trace 都没有时它恒为 false，于是维持老版排法。
+ *
+ * **必须在 splitTraceGroupAt 动手之前调用** —— 那一步会按旁注改写分组，之后再问就问不
+ * 出「原本是同一组」了。
+ */
+function noteInsideTurn(groups: Map<string, SessionTraceEntry[]>, at: string | undefined): boolean {
+  const time = Date.parse(at ?? "");
+  if (!Number.isFinite(time)) return false;
+  for (const [turnStartedAt, entries] of groups) {
+    const start = Date.parse(turnStartedAt);
+    if (!Number.isFinite(start) || start >= time) continue;
+    if (entries.some((entry) => Date.parse(entry.at) >= time)) return true;
+  }
+  return false;
+}
+
+/**
+ * 把「被旁注劈开的下半截」并回上一颗气泡 —— 它们本来就是同一回合、同一个人说的一段话。
+ *
+ * 只把两截**接起来**，分段一个都不动：每一截的 events / 正文早已各自跟自己那一小组
+ * trace 对齐过（见 contentSegments 的 alignedSegments），接在一起就是这一回合完整的交错
+ * 结构，折叠（turnLayout）也才有得切 —— 否则「最后一次动手」只能在半截里找，整轮折不出
+ * 结论。分段各自渲染成独立的块，接缝处不需要补空行；补的那一下只归 `markdown`（复制、
+ * 派生快照读的是它），两截之间空一行才是一段话原来的样子。
+ */
+function mergeTurnChunk(
+  target: Extract<ConversationItem, { kind: "agent" }>,
+  chunk: Extract<ConversationItem, { kind: "agent" }>,
+): void {
+  target.markdown = [target.markdown, chunk.markdown].filter((text) => text.trim()).join("\n\n");
+  target.segments.push(...chunk.segments);
+  // 收口标记跟着后一截走：回合真正结束在哪一刻，只有最后那一截知道。
+  target.markerEndedAt = chunk.markerEndedAt ?? target.markerEndedAt;
+  target.usage = target.usage && chunk.usage ? addUsage(target.usage, chunk.usage) : chunk.usage ?? target.usage;
+  target.run = target.run ?? chunk.run;
+}
+
+/**
+ * 这条时间线项目算不算「插话」—— 能给相邻回合定起止时刻的那种。
+ *
+ * 真人回复、系统发给 agent 的话、回合边界都算；任务时间线旁注（aside）不算：它不开也
+ * 不收一个回合，拿它定起止，一条还在跑的回合会平白得到一个结束时刻（于是提前折叠、
+ * 还挂上「派生新任务」）。
+ */
+function isTurnInterjection(item: ConversationItem | null | undefined): boolean {
+  if (!item) return false;
+  if (item.kind === "user") return true;
+  return item.kind === "event" && !item.aside;
+}
+
 export function buildConversationItems(
   persisted: PersistedConversation[],
   sessions: Session[],
@@ -299,6 +372,19 @@ export function buildConversationItems(
       if (segment.kind === "system" && !segments.slice(index + 1).some((later) => later.kind === "agent")) return;
       splitPoints.add(segment.at);
     });
+    // 谁是「任务时间线旁注」要在切分**之前**认完：noteInsideTurn 读的正是即将被改写的
+    // 那份分组。两套判据各管一头 —— 服务端的 aside 标覆盖全部 appendTaskTimeline 旁注
+    // （含落在两个回合之间的，比如「第 N 轮验证开始」），它只决定「不拿它定回合起止」；
+    // 而要不要把上下两截并回一颗气泡，只认 insideTurn ——「那一刻回合确实还在飞」才是
+    // 同一段话的证据，否则验证轮那条旁注会把实现者和审查者的发言粘成一条。
+    const asideAt = new Set<string>();
+    const midTurnAt = new Set<string>();
+    for (const segment of segments) {
+      if (segment.kind !== "system" || !segment.at) continue;
+      const inside = noteInsideTurn(traceGroups, segment.at);
+      if (inside) midTurnAt.add(segment.at);
+      if (inside || segment.aside) asideAt.add(segment.at);
+    }
     let splitFrom = session.startedAt;
     for (const segment of segments) {
       if (segment.kind === "agent" || !segment.at || !splitPoints.has(segment.at)) continue;
@@ -306,6 +392,9 @@ export function buildConversationItems(
       splitFrom = segment.at;
     }
     let turnStartedAt = session.startedAt;
+    // 这一回合还没说完的那颗气泡（被旁注劈开的上半截），以及「中间只隔着旁注」这件事。
+    let openTurn: Extract<ConversationItem, { kind: "agent" }> | null = null;
+    let acrossAside = false;
     segments.forEach((segment, index) => {
       if (segment.kind === "user") {
         recordPersistedTurn(persistedTurns, "user", segment.text, segment.at);
@@ -321,6 +410,8 @@ export function buildConversationItems(
           bySystem: segment.bySystem,
         });
         turnStartedAt = segment.at ?? turnStartedAt;
+        openTurn = null;
+        acrossAside = false;
       } else if (segment.kind === "system") {
         recordPersistedTurn(persistedTurns, "system", segment.text, segment.at, session.id);
         // 旧版轮换文案落在用户 .md 里的原文带 Markdown 标记、措辞也不一样；旁注是纯文本
@@ -336,8 +427,13 @@ export function buildConversationItems(
           tone: segment.level === "notice" ? "notice" : noteTone(text),
           variant: "note",
           verify: isVerifyNote(text),
+          aside: asideAt.has(segment.at ?? ""),
         });
+        // 回合起点仍然跟着旁注走：trace 已经在这一刻切成了独立一组，下半截要靠它认领
+        // 自己那几条事件。合并发生在气泡层面（见下面的 mergeTurnChunk），两者不冲突。
         turnStartedAt = segment.at ?? turnStartedAt;
+        if (midTurnAt.has(segment.at ?? "")) acrossAside = !!openTurn;
+        else { openTurn = null; acrossAside = false; }
       } else {
         const next = segments[index + 1];
         // 下一段的 trace 已经被上面切成独立一组了，这一段不许靠 ±2 秒兜底把它捞过来。
@@ -347,7 +443,7 @@ export function buildConversationItems(
           ? next.at
           : undefined;
         const traceEntries = takeTraceGroup(traceGroups, consumedTrace, turnStartedAt, boundary);
-        items.push({
+        const chunk: Extract<ConversationItem, { kind: "agent" }> = {
           kind: "agent",
           id: `persisted:agent:${session.id}:${index}`,
           sessionId: session.id,
@@ -361,7 +457,22 @@ export function buildConversationItems(
           usage: traceUsage(traceEntries),
           markdown: segment.text,
           segments: contentSegments(traceEntries, segment.text, `persisted:segment:${session.id}:${index}`),
-        });
+        };
+        // 中间只隔着一条「那一刻回合还在飞」的旁注 —— 这就是同一回合的下半截，并回去。
+        // 身份再核一道：同一条会话上换轮验证也算换人（reviewerKey），换了人就不是同一段
+        // 话，哪怕旁注骗过了上面那道结构判据也粘不到一起。只有**自己带 run 事件**的那截
+        // 才有资格报身份：回合起点才写 run，下半截通常一条都没有（就地验证的审查者在自己
+        // 回合中间调 report_stage 就是这形状），拿它那份空身份去比就会把一个人的话劈成两
+        // 半、后半截还丢掉模型信息。
+        const ownIdentity = traceEntries.some((entry) => entry.event.kind === "run");
+        const sameSpeaker = !ownIdentity || reviewerKeyOf(openTurn?.reviewer) === reviewerKeyOf(chunk.reviewer);
+        if (openTurn && acrossAside && sameSpeaker) {
+          mergeTurnChunk(openTurn, chunk);
+        } else {
+          items.push(chunk);
+          openTurn = chunk;
+        }
+        acrossAside = false;
       }
     });
     // A failed turn can contain only tools/errors and no assistant prose. Keep
@@ -452,6 +563,9 @@ export function buildConversationItems(
         tone: event.level === "notice" ? "notice" : noteTone(text),
         variant: "note",
         verify: isVerifyNote(text),
+        // 直播这一路认服务端的标就够了：旁注本来就不拆气泡（见 appendAgent 跨旁注回捞
+        // 当前回合），带上它只是为了同样别去定这一回合的结束时刻。
+        aside: event.aside === true,
       });
       continue;
     }
@@ -516,10 +630,10 @@ export function buildConversationItems(
   let previousItem: ConversationItem | null = null;
   const seenSessions = new Set<string>();
   for (const item of items) {
-    const adjacentInterjectionAt = previousItem?.kind === "user" || previousItem?.kind === "event"
-      ? previousItem.at ?? null
-      : null;
-    if (item.kind === "user" || item.kind === "event") previousInterjectionAt = item.at ?? previousInterjectionAt;
+    // 任务时间线旁注整条跳过：回合的起止跟它无关（见 isTurnInterjection）。
+    if (item.kind === "event" && item.aside) continue;
+    const adjacentInterjectionAt = isTurnInterjection(previousItem) ? previousItem?.at ?? null : null;
+    if (isTurnInterjection(item)) previousInterjectionAt = item.at ?? previousInterjectionAt;
     if (item.kind !== "agent") { previousItem = item; continue; }
     const firstTurn = !seenSessions.has(item.sessionId);
     seenSessions.add(item.sessionId);
@@ -542,6 +656,9 @@ export function buildConversationItems(
   let rightSessionId: string | undefined;
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index]!;
+    // 旁注不收回合：一条还在飞的回合被它按上结束时刻，就会当场折叠、还挂出「派生新任务」
+    //（用户 2026-09-14 反馈）。真回合结束自有 markerEndedAt / 回合边界事件来报。
+    if (item.kind === "event" && item.aside) continue;
     if (item.kind === "user" || item.kind === "event") nextInterjectionAt = item.at ?? nextInterjectionAt;
     if (item.kind !== "agent") continue;
     if (item.sessionId !== rightSessionId) {

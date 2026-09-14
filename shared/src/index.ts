@@ -588,7 +588,10 @@ export type ConvSeg =
   | { kind: "user"; text: string; at?: string; bySystem?: true }
   // level:"notice" = 结算说明（「这一轮为什么落成这个状态」），由 server 结算时写下。
   // 展示端据此上「提示」的语气，而不是让关键词表去猜——说明里天然带着「未完成」这种词。
-  | { kind: "system"; text: string; at?: string; level?: "notice" };
+  // aside:true = 任务时间线旁注（appendTaskTimeline 写的那些：预约审查、验收阶段更新、
+  // 预览起停…）。它不是说给 agent 听的话，也不开/不收一个回合——落在哪一秒纯属偶然，
+  // 常常正砸在某一回合说到一半的地方，所以展示端不能拿它当回合边界（见 events.ts）。
+  | { kind: "system"; text: string; at?: string; level?: "notice"; aside?: true };
 
 // 「答复」是回答 agent 提问的那条，走 /tasks/:id/answer 时由服务端加的前缀。
 export const ANSWER_PREFIX = "【答复】";
@@ -645,7 +648,7 @@ export function parseSessionOutput(out: string): ConvSeg[] {
     if (trimmed.startsWith("> 续聊回合异常结束(")) continue;
     if (line.startsWith("\x1e")) {
       try {
-        const j = JSON.parse(line.slice(1)) as { t?: string; text?: string; at?: string; by?: string; level?: string };
+        const j = JSON.parse(line.slice(1)) as { t?: string; text?: string; at?: string; by?: string; level?: string; aside?: boolean };
         flush();
         if (j.t === "agentEnd") {
           // Not a new bubble — it stamps where the agent turn that just flushed
@@ -656,7 +659,13 @@ export function parseSessionOutput(out: string): ConvSeg[] {
         }
         segs.push(
           j.t === "system"
-            ? { kind: "system", text: j.text || LEGACY_SYS_MARKER, at: j.at, ...(j.level === "notice" ? { level: "notice" as const } : {}) }
+            ? {
+                kind: "system",
+                text: j.text || LEGACY_SYS_MARKER,
+                at: j.at,
+                ...(j.level === "notice" ? { level: "notice" as const } : {}),
+                ...(j.aside === true ? { aside: true as const } : {}),
+              }
             : { kind: "user", text: j.text ?? "", at: j.at, ...(j.by === "system" ? { bySystem: true as const } : {}) },
         );
         continue;

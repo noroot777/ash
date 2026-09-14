@@ -13,6 +13,12 @@ export type ConversationSystemDigestRow = {
   kind: "system-digest";
   id: string;
   items: Array<Extract<ConversationItem, { kind: "event" }>>;
+  /**
+   * 这几条全是任务时间线旁注（aside），而且上面紧挨着一颗 agent 气泡 —— 它们讲的就是
+   * 「那一回合跑着的时候顺带发生的事」，所以贴着那颗气泡排成尾注，而不是在两段对话之间
+   * 横一道。旁注本来就不该看起来像「这里换了一段」（用户 2026-09-14 反馈）。
+   */
+  attached?: boolean;
 };
 
 export type ConversationDisplayRow = ConversationFeedRow | ConversationSystemActionRow | ConversationSystemDigestRow;
@@ -45,9 +51,18 @@ export function conversationSystemRows(rows: ConversationFeedRow[]): Conversatio
 
   const display: ConversationDisplayRow[] = [];
   let pending: Array<Extract<ConversationItem, { kind: "event" }>> = [];
+  const afterAgentTurn = () => {
+    const previous = display.at(-1);
+    return previous?.kind === "item" && previous.item.kind === "agent";
+  };
   const flush = () => {
     if (!pending.length) return;
-    display.push({ kind: "system-digest", id: `system-digest:${pending[0]!.id}`, items: pending });
+    display.push({
+      kind: "system-digest",
+      id: `system-digest:${pending[0]!.id}`,
+      items: pending,
+      attached: pending.every((item) => item.aside) && afterAgentTurn(),
+    });
     pending = [];
   };
   for (const row of grouped) {

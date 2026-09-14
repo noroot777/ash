@@ -122,6 +122,12 @@
 .system-event-digest.is-aligned :is(summary, .system-event-digest-line) > span { color: var(--muted); }
 .system-event-digest.is-aligned:is(.is-error, .is-warning) :is(summary, .system-event-digest-line) > span { color: color-mix(in lch, var(--red) 64%, var(--muted)); }
 
+/* 回合尾注：这几条讲的是「上面那一回合跑着的时候顺带发生的事」（预约审查、验收阶段
+   更新…）。它们既不开也不收一个回合，所以贴着上一颗气泡排，不在两段对话之间横一道；
+   头像轴上那颗圈也卸掉底色 —— 那身打扮是给「又一位发言者」用的。 */
+.system-event-digest.is-aligned.is-turn-aside { margin-top: -12px; }
+.system-event-digest.is-aligned.is-turn-aside > .system-event-avatar { border-color: transparent; background: transparent; }
+
 .system-action-wrap {
   display: flex;
   max-width: none;

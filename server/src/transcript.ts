@@ -151,7 +151,10 @@ export function writeTurn(
   // 一条追问」那类读端只能看着一模一样的 user 回合瞎猜。
   // level:"notice" = 结算说明（这一轮为什么落成这个状态）。落盘也要带着，否则刷新之后
   // 展示端只剩正文可读，又得回到「按关键词猜语气」那条路上去。
-  turn: { t: "user" | "system"; agent: AgentType; text: string; by?: "system"; level?: "notice" },
+  // aside:true = 任务时间线旁注（appendTaskTimeline 那一路）。同样必须落盘：它跟「继续
+  // （从中断处）」那类真回合起点在盘上长得一模一样，而两者的读法正相反——旁注砸在回合
+  // 中间纯属偶然，拿它当回合边界就会把一条回复劈成两半（见 shared/src/events.ts）。
+  turn: { t: "user" | "system"; agent: AgentType; text: string; by?: "system"; level?: "notice"; aside?: true },
   at: string,
 ): void {
   out.write(`\n${TURN_SENTINEL}${JSON.stringify({ ...turn, at })}\n`);
