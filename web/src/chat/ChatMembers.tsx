@@ -1,20 +1,24 @@
 import { useEffect, useState } from "react";
 import type { AgentExecutorProfile } from "@ash/shared";
 import type { ChatMember } from "@ash/shared/chat";
-import { Plus, X } from "@phosphor-icons/react";
+import { Plus, Trash, X } from "@phosphor-icons/react";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import { executorValue, parseExecutorValue, registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
 import { createClientId } from "../lib/clientId.ts";
+import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 
-export function ChatMembers({ initial, initialName, onSave, onCancel, creating = false }: {
-  initial: ChatMember[]; initialName?: string; onSave: (members: ChatMember[], name: string) => Promise<void>; onCancel: () => void; creating?: boolean;
+export function ChatMembers({ initial, initialName, onSave, onCancel, onDelete, creating = false }: {
+  initial: ChatMember[]; initialName?: string; onSave: (members: ChatMember[], name: string) => Promise<void>; onCancel: () => void;
+  onDelete?: () => Promise<void>; creating?: boolean;
 }) {
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [members, setMembers] = useState(initial);
   const [name, setName] = useState(initialName ?? "协作空间");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   useEffect(() => {
     let alive = true;
     api.agents().then((value) => { if (alive) setProfiles(value); }).catch((reason) => { if (alive) setError(String(reason)); });
@@ -38,6 +42,14 @@ export function ChatMembers({ initial, initialName, onSave, onCancel, creating =
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setSaving(false); }
   };
+  const remove = async () => {
+    if (!onDelete || deleting) return;
+    setDeleting(true);
+    setError("");
+    try { await onDelete(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); setConfirmingDelete(false); }
+    finally { setDeleting(false); }
+  };
   return <section className="chat-member-editor" aria-label={creating ? "创建群聊" : "群聊设置"}>
     <div className="chat-editor-heading"><div><small>让合适的人参与</small><h2>{creating ? "创建一个聊天空间" : "群聊设置"}</h2></div><button type="button" aria-label="关闭成员配置" onClick={onCancel}><X size={20} /></button></div>
     <p>选择智能体、模型与智能水平。只有你明确 @ 的成员才会收到会话并回复；<strong>@all（或 @所有人）一次唤醒全部成员</strong>，所以成员名不能叫 all 或所有人。</p>
@@ -56,6 +68,12 @@ export function ChatMembers({ initial, initialName, onSave, onCancel, creating =
     <button className="chat-add-member" type="button" onClick={add} disabled={!profiles.length || members.length >= 24}><Plus size={16} />添加成员</button>
     {!profiles.length && <p>暂无可选执行器。请先在 ash「执行器」设置中注册。</p>}
     {error && <p className="chat-error" role="alert">{error}</p>}
-    <footer><span>智能体之间的 @ 只展示，不会触发执行。</span><button className="chat-primary" type="button" disabled={saving || !members.length || !name.trim()} onClick={() => void save()}>{saving ? "保存中…" : creating ? "创建群聊" : "保存设置"}</button></footer>
+    <footer>{onDelete && !creating
+      ? <button className="chat-danger" type="button" disabled={saving || deleting} onClick={() => setConfirmingDelete(true)}><Trash size={14} />删除群聊</button>
+      : <span>智能体之间的 @ 只展示，不会触发执行。</span>}
+      <button className="chat-primary" type="button" disabled={saving || deleting || !members.length || !name.trim()} onClick={() => void save()}>{saving ? "保存中…" : creating ? "创建群聊" : "保存设置"}</button></footer>
+    {confirmingDelete && <ConfirmDialog title={`删除群聊「${initialName ?? name}」`} danger busy={deleting} confirmLabel="删除群聊"
+      message="这个群的全部消息和历史摘要会一起删除，无法恢复。正在进行的回复会先停止；由这个群创建过的任务不受影响，仍留在任务列表里。"
+      onConfirm={() => void remove()} onClose={() => { if (!deleting) setConfirmingDelete(false); }} />}
   </section>;
 }

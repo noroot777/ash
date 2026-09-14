@@ -17,6 +17,8 @@ export function useAssistantChat(projectId: string) {
   const saving = useRef(new Set<string>());
   const selected = useRef(roomId);
   const request = useRef<{ id: string; body: string } | null>(null);
+  // 自己删掉的对话：SSE 关闭前还会推一次 revoked，不记下来就会弹「这段对话已不可访问」。
+  const dismissed = useRef(new Set<string>());
   selected.current = roomId;
   const select = useCallback((id: string) => {
     if (selected.current === id) return;
@@ -70,7 +72,7 @@ export function useAssistantChat(projectId: string) {
     });
     source.onopen = () => { if (alive) setConnected(true); };
     source.onerror = () => { if (alive) setConnected(false); };
-    source.addEventListener("revoked", () => { source.close(); if (alive) { setSnapshot(null); setConnected(false); setError("这段对话已不可访问，请切换项目或重新登录。"); } });
+    source.addEventListener("revoked", () => { source.close(); if (alive && !dismissed.current.has(roomId)) { setSnapshot(null); setConnected(false); setError("这段对话已不可访问，请切换项目或重新登录。"); } });
     return () => { alive = false; source.close(); };
   }, [roomId, apply]);
   const room = snapshot?.room ?? rooms.find((value) => value.id === roomId);
@@ -100,6 +102,22 @@ export function useAssistantChat(projectId: string) {
     setRooms((rows) => rows.map((row) => row.id === updated.id ? updated : row));
     setSnapshot((value) => value?.room.id === updated.id ? { ...value, room: updated } : value);
   };
+  const removeConversation = async (targetId: string) => {
+    dismissed.current.add(targetId);
+    try { await chatApi.remove(targetId); }
+    catch (reason) { dismissed.current.delete(targetId); throw reason; }
+    window.sessionStorage.removeItem(`ash:assistant-draft:${targetId}`);
+    const rest = rooms.filter((row) => row.id !== targetId);
+    setRooms(rest);
+    if (selected.current !== targetId) return;
+    // 删掉当前这段就落到最近一次对话上，和首次进入时的选中规则一致。
+    const next = [...rest].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).at(-1);
+    if (next) { select(next.id); return; }
+    window.localStorage.removeItem("ash:assistant:global");
+    selected.current = null;
+    request.current = null;
+    setRoomId(null); setSnapshot(null); setDraft(""); setError("");
+  };
   const send = async () => {
     const body = draft.trim();
     if (!roomId || !body || body.length > 8000 || sending || busy || !snapshot) return;
@@ -125,5 +143,5 @@ export function useAssistantChat(projectId: string) {
     catch (reason) { if (selected.current === roomId) setError(String(reason)); }
     finally { saving.current.delete(messageId); setSavingWorkflows([...saving.current]); }
   };
-  return { rooms, room, snapshot, ready, connected, error, draft, sending, busy, savingWorkflows, setDraft, select, saveMember, newConversation, renameConversation, send, stop, saveWorkflow };
+  return { rooms, room, snapshot, ready, connected, error, draft, sending, busy, savingWorkflows, setDraft, select, saveMember, newConversation, renameConversation, removeConversation, send, stop, saveWorkflow };
 }

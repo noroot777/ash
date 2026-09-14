@@ -37,10 +37,16 @@ export async function roomMessages(roomId: string) {
 }
 
 export class ChatService {
-  private active = new Map<string, { roomId: string; memberId: string; abort: AbortController }>();
+  private active = new Map<string, { roomId: string; memberId: string; abort: AbortController; settled: Promise<unknown> }>();
   private pumping = false;
   private sending = new Map<string, Promise<void>>();
   private stopping = new Set<string>();
+  // 正在被删除的房间。`stop()` 只清算「此刻已在跑的」，它返回到真正 DELETE 那一行之间还有
+  // 窗口：并发的 POST messages 在事务里看到房间还在，插一条 queued 就被 pump 泵起来，而这条
+  // 回复不在刚才 stop 的 stopped 集合里，永远等不到 abort，会一路跑到 createTasks()——房间
+  // 没了、消息没了，却留下一个来自已删聊天的派生任务，还白烧一次执行器。所以闸要在 stop()
+  // 之前落下、删完才抬起，把「不再收新消息、不再泵回复、删房间」关进同一段（见 discard()）。
+  private discarded = new Set<string>();
   private invoke: typeof invokeChat;
   private contexts: ChatContextManager;
   constructor(invoke = invokeChat, private startTask = runTask, policy?: ChatContextPolicy) {
@@ -63,6 +69,7 @@ export class ChatService {
   }
 
   private async sendNow(row: RoomRow, body: string, messageId: string, author: string, projectId?: string) {
+    if (this.discarded.has(row.id)) throw new Error("聊天已删除。");
     const existing = (await db.select().from(chatMessages).where(eq(chatMessages.id, messageId))).at(0);
     if (existing) {
       if (existing.roomId !== row.id || existing.role !== "user" || existing.body !== body) throw new Error("消息编号冲突，请刷新后重试。");
@@ -108,6 +115,32 @@ export class ChatService {
     } finally { this.stopping.delete(roomId); void this.pump(); }
   }
 
+  /**
+   * 删掉一个群聊/助手对话本身。**删除必须走这里**，别在别处直接 `db.delete(chatRooms)`：
+   * 闸（`discarded`）要罩住「停回复 → 删房间」这整段，中途进来的发送会被当场拒掉，泵也不
+   * 会替它起新回复。原因见 `discarded` 字段上的注释。
+   *
+   * 闸挡不住**已经在跑**的那一条：它可能早越过了中止检查，正卡在 `createTasks()` 里等 repo
+   * lock；锁一放它就把任务插进去，而那时房间和消息已经没了——删除返回 200 之后凭空多出一个
+   * 来自已删聊天的任务（审查第 2 轮复现）。所以两头都要堵，缺一头都漏（两半各有回归用例）：
+   * ① `reply()` 借 `createTasks` 的 beforeInsert，在锁到手、还没落副作用时复查中止信号；
+   * ② 这里等本房间在跑的回复**真正收尾**再删行——否则「复查通过」和「插入」之间仍有一个微
+   *    任务的缝，删除恰好落在缝里就又漏了。等待期间 stop() 的中止信号已经发出，①保证卡在
+   *    锁上的那条一拿到锁就抛错退出，删除不会白等一整个锁。
+   * 抢在删行之前收尾的那条回复照常建它的任务：任务本就不随群聊删除（见 lifecycle.ts）。
+   *
+   * 删房间只落 chat_rooms 一行，消息、上下文条目、摘要、整理状态、清空点由
+   * `chat_room_contents_deleted` 触发器连带清理；抬闸后补一次 pump，让别的房间该跑的接着跑。
+   */
+  async discard(roomId: string) {
+    this.discarded.add(roomId);
+    try {
+      await this.stop(roomId);
+      await Promise.all([...this.active.values()].filter((entry) => entry.roomId === roomId).map((entry) => entry.settled));
+      await db.delete(chatRooms).where(eq(chatRooms.id, roomId));
+    } finally { this.discarded.delete(roomId); void this.pump(); }
+  }
+
   private async pump() {
     if (this.pumping) return;
     this.pumping = true;
@@ -115,12 +148,15 @@ export class ChatService {
       const queued = await db.select().from(chatMessages).where(eq(chatMessages.status, "queued")).orderBy(asc(chatMessages.createdAt));
       for (const message of queued) {
         if (this.active.size >= 4) break;
-        if (this.stopping.has(message.roomId)) continue;
+        if (this.stopping.has(message.roomId) || this.discarded.has(message.roomId)) continue;
         if (!message.memberId || [...this.active.values()].some((entry) => entry.roomId === message.roomId && entry.memberId === message.memberId)) continue;
         const abort = new AbortController();
-        this.active.set(message.id, { roomId: message.roomId, memberId: message.memberId, abort });
+        const entry = { roomId: message.roomId, memberId: message.memberId, abort, settled: Promise.resolve() as Promise<unknown> };
+        this.active.set(message.id, entry);
         let completed: ChatMember | undefined;
-        void this.reply(message, abort).then((member) => { completed = member; }).finally(() => {
+        // settled 留给 discard()：它要等这一轮真正收尾才能删房间（见 discard 注释）。末尾的
+        // catch 让它只会兑现、不会拒绝，等它的人不必自己包 try。
+        entry.settled = this.reply(message, abort).then((member) => { completed = member; }).finally(() => {
           this.active.delete(message.id);
           void this.pump();
           if (completed) void this.contexts.prewarm(message.roomId, completed).catch((error) => console.error("[chat] background context failed", error));
@@ -209,6 +245,12 @@ export class ChatService {
           createdAt: timestamp, updatedAt: timestamp,
         }], async () => {
           await db.update(chatMessages).set({ taskId }).where(eq(chatMessages.id, message.id));
+        }, () => {
+          // 等 repo lock 可能等很久，等出来时这个群聊可能已经在删了（`discard()` 的 stop()
+          // 早把中止信号发了，而这条正卡在锁上，走不到任何一处中止检查）。锁一拿到、还没落
+          // 任何副作用的这一刻复查，抛出即取消创建——等 createTasks 返回之后再查太晚，那时
+          // 任务已经插进库里了（审查第 2 轮复现）。
+          abort.signal.throwIfAborted();
         });
         abort.signal.throwIfAborted();
         taskToStart = taskId;

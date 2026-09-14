@@ -217,9 +217,15 @@ async function snapshotExecutor(row: NewTaskRow): Promise<string | null> {
 
 // All task creation paths go through here. afterInsert lets callers persist
 // queue membership before serialization/broadcast, so the event matches GET /tasks.
+//
+// beforeInsert 是**拿到全部 repo lock 之后、产生任何副作用之前**的最后一次「现在还该建吗」。
+// 等锁可能等很久，等着的这段时间里委派来源可能已经不作数了（聊天派生的任务：群聊被删了），
+// 而 createTasks 一旦越过这里就只管把行插进去。抛出即取消创建，此时还没有分支计划、没有
+// 插入，无需回滚。放在这里而不是调用方 `await createTasks()` 之前——那太早，锁还没拿到。
 export async function createTasks(
   rows: NewTaskRow[],
   afterInsert?: () => Promise<void>,
+  beforeInsert?: () => Promise<void> | void,
 ): Promise<Task[]> {
   if (rows.length === 0) return [];
   // Creation defaults belong here so every ordinary path (HTTP single, batch /
@@ -262,6 +268,7 @@ export async function createTasks(
   const repos = [...new Set(projectRows.map(p => p.repoPath))].sort();
   const insert = async (index: number): Promise<void> => {
     if (index < repos.length) return withRepoLock(repos[index], () => insert(index + 1));
+    await beforeInsert?.();
     const pinned: typeof normalizedRows = [];
     try {
       for (const row of normalizedRows) {
