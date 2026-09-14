@@ -1,5 +1,10 @@
 .team-presets-settings-card {
   overflow: visible;
+  /* 这张卡里的「窄了就换排法」全部按**卡片自己的宽度**判（下面的 @container），不按视口。
+     视口宽度在这里根本不是单调的：设置页侧栏在 680px 处从 240 换成 176，所以视口 700 时
+     卡片只有 396，比视口 680 时的 476 还窄 —— 按视口写断点，必然出现「更宽的视口反而
+     触发不了窄屏排版」的档位，那一档里三段胶囊的字会被自己的控件切掉。 */
+  container-type: inline-size;
 }
 
 .team-presets-loading {
@@ -347,20 +352,20 @@
   gap: 0;
 }
 
-@media (max-width: 900px) {
+@container (max-width: 600px) {
   .team-presets-settings-layout {
     grid-template-columns: 180px minmax(0, 1fr);
   }
 }
 
-@media (max-width: 820px) {
+@container (max-width: 520px) {
   .team-preset-role {
     grid-template-columns: 96px minmax(0, 1fr);
   }
 
 }
 
-@media (max-width: 680px) {
+@container (max-width: 480px) {
   .team-presets-settings-layout {
     grid-template-columns: 1fr;
   }
@@ -396,7 +401,7 @@
 
 }
 
-@media (max-width: 460px) {
+@container (max-width: 260px) {
   .team-preset-role {
     grid-template-columns: 1fr;
     align-items: stretch;

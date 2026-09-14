@@ -640,19 +640,26 @@
   flex: 1 1 auto;
   color: var(--faint);
   font-size: 11px;
+  /* 「继承自全局：someone@example.com」里的邮箱是一整个不可断的词，卡片窄下来时
+     它撑着这一行往右顶，末尾被卡片直接切掉（卡片 overflow:hidden）。允许在词中断行。 */
+  overflow-wrap: anywhere;
 }
 
 .git-remote-list {
   display: grid;
   min-width: 0;
   gap: 4px;
-  justify-items: end;
+  /* 每一行都**撑满**这一格，靠右对齐交给行内的 justify-content。写成 justify-items:end
+     的话每行按自己的 max-content 定宽，怎么都不肯收缩：URL 的省略号永远轮不到触发，
+     行尾那枚「HTTPS / SSH」标记被卡片切掉。 */
+  justify-items: stretch;
 }
 
 .git-remote-row {
   display: flex;
   min-width: 0;
   align-items: baseline;
+  justify-content: flex-end;
   gap: 8px;
   font-size: 12px;
 }
@@ -660,6 +667,9 @@
 .git-remote-row b { font-weight: 550; }
 
 .git-remote-row code {
+  /* flex 子项默认 min-width:auto，不给 0 的话 URL 再长也不肯收缩：省略号永远不触发，
+     整行被顶宽，行尾那枚「HTTPS / SSH」标记被卡片切掉（卡片 overflow:hidden）。 */
+  min-width: 0;
   overflow: hidden;
   color: var(--muted);
   font-size: 11px;
@@ -683,7 +693,7 @@
 
 @media (max-width: 680px) {
   .settings-field > .git-scope { width: 100%; flex: none; }
-  .git-remote-list { justify-items: start; }
+  .git-remote-row { justify-content: flex-start; }
 }
 
 /* 文案里那条「设置 → 项目设置 → 预览 → 自定义脚本」：它是一条能点着走过去的路

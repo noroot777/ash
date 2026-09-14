@@ -12,11 +12,18 @@
   gap: 11px;
   border-bottom: 1px solid var(--line);
   padding: 12px;
+  /* 下面那张 profile 表「窄了就横向滚动」的判据挂在这儿：要按**卡片自己的宽度**判，
+     不能按视口 —— 卡片宽度是工作区布局给的（侧栏 176/240 + 内边距），1000px 视口下
+     卡片只有 700 出头，已经比表窄了，而按视口写的断点还没到，表就直接顶穿卡片。 */
+  container-type: inline-size;
 }
 
 .agent-profile-group {
   --agent-color: #6d685f;
   position: relative;
+  /* grid 子项默认 min-width:auto，不给 0 的话这张分组卡会被里面的表撑到内容宽度，
+     连同「新增」按钮一起顶到设置卡片外面。 */
+  min-width: 0;
   overflow: visible;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -450,7 +457,11 @@
   gap: 7px;
 }
 
-@media (max-width: 900px) {
+/* 行内弹层改成屏幕居中的一档。判据必须跟「表开始横向滚动」那一档**同一个**（见
+   executors-settings.css 的 @container 730）：表一旦成了滚动容器，绝对定位的弹层就会
+   被它裁掉，所以那一刻起弹层必须脱出来。两边都挂在 .agent-profile-groups 这个容器上，
+   才不会再出现「表滚了、弹层还没脱」的中间档。 */
+@container (max-width: 730px) {
   .agent-profile-args-popover {
     position: fixed;
     top: 50%;

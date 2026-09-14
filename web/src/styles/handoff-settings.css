@@ -93,6 +93,13 @@
   color: var(--red);
 }
 
+/* 指纹芯片不换行也不收缩（那串要能整段读、整段对），所以卡片窄下来时得让**这一行**
+   换行：不换的话芯片被说明文字顶出卡片，指纹反而是最看不见的那一段。 */
+.handoff-identity {
+  flex-wrap: wrap;
+  gap: 10px 28px;
+}
+
 /* 身份指纹芯片:等宽字体,和另一台机器设置页上那串肉眼对得起来。 */
 .handoff-fingerprint {
   display: inline-flex;

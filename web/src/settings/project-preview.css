@@ -9,8 +9,14 @@
 .project-preview .preview-help { display: grid; gap: 5px; color: var(--faint); font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
 .project-preview .preview-help > small { display: block; font-size: inherit; }
 .preview-help code { color: var(--muted); }
-.preview-script-help, .preview-proxy-help { padding: 0 16px 14px; }
-.preview-script-help { border-bottom: 1px solid var(--line); }
+/* 说明块的左右内边距按「挂在哪儿」给，不按名字点名：卡片自己不带内边距（见
+   settings.css，行要把分隔线画满整张卡），所以直接挂在卡片上的说明段必须自己补出
+   那 16px 才跟上下各行对齐；服务面板里的说明由面板的 16px 管，再补一次就多一层。
+   点名的写法漏过一次 ——「启动范围」那段说明没被点到，整段贴着卡片边框排。 */
+.project-preview .settings-card > .preview-help { padding: 0 16px 14px; }
+/* 说明跟着它解释的那一行走：分隔线画在说明**之后**，而不是卡在行和它的说明之间。 */
+.project-preview .preview-launch-scope-field { border-bottom: 0; }
+.preview-script-help, .preview-launch-scope-help { border-bottom: 1px solid var(--line); }
 .preview-services-panel { display: grid; gap: 12px; padding: 16px; border-bottom: 1px solid var(--line); }
 .preview-detect-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .preview-detect-actions > span { margin-left:auto; border-radius:5px; background:var(--raised); padding:3px 7px; color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
