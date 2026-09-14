@@ -43,6 +43,9 @@ const obedient: PreviewServiceState[] = [
 function Fixture() {
   const [dialect, setDialect] = useState<PreviewPortDialect>("posix");
   const [services, setServices] = useState<PreviewServiceState[]>(drifted);
+  // 「又起了一趟」——真实世界里重开预览就是换一个 gen。dismiss 的作用域必须跟着它走，
+  // 否则点过一次「知道了」就等于把这个服务这辈子的漂移都吞了（第 1 轮审查 P1）。
+  const [gen, setGen] = useState("gen-1");
   return <div className="preview-workspace">
     <button type="button" data-testid="switch-dialect" onClick={() => setDialect(dialect === "posix" ? "cmd" : "posix")}>
       切到 {dialect === "posix" ? "Windows" : "POSIX"}
@@ -50,8 +53,9 @@ function Fixture() {
     <button type="button" data-testid="services-pinned" onClick={() => setServices(drifted)}>端口写在命令里</button>
     <button type="button" data-testid="services-config" onClick={() => setServices(fromConfig)}>端口写在配置里</button>
     <button type="button" data-testid="services-ok" onClick={() => setServices(obedient)}>命令写对了</button>
+    <button type="button" data-testid="restart-preview" onClick={() => { setGen(`gen-${Date.now()}`); setServices(drifted); }}>重开一趟预览</button>
     <div className="preview-workspace-stage">
-      <PreviewPortDriftNotice services={services} dialect={dialect} />
+      <PreviewPortDriftNotice services={services} dialect={dialect} gen={gen} />
     </div>
     <section className="preview-launcher" aria-label="启动页面预览">
       <PreviewLaunchOptions state={state} starting={false} stopped={false} dialect={dialect}

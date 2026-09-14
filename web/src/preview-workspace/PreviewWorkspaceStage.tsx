@@ -26,7 +26,7 @@ export function PreviewWorkspaceStage({ source, taskId, preview, refresh, contro
   return <div className="preview-workspace-stage">
     {/* 端口对不上那一条摆在最外面：内嵌和直连两种形态下都看得见，也不跟着启动器一起被
         iframe 顶掉——它说的是「已经起好的这个服务有个隐患」，而不是启动时的说明。 */}
-    <PreviewPortDriftNotice services={preview?.services ?? []} dialect={previewPortDialect(host?.platform)} />
+    <PreviewPortDriftNotice services={preview?.services ?? []} dialect={previewPortDialect(host?.platform)} gen={preview?.gen} />
     {source ? children : <div className="preview-workspace-launch-area">
       <PreviewLauncher taskId={taskId} preview={preview} refresh={refresh} hint={hint} />
       {controller.records.some((record) => record.messageId) && <AnnotationWaiting controller={controller} review={review}

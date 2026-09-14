@@ -106,7 +106,25 @@ try {
   await page.getByTestId("services-ok").click();
   assert.equal(await drift.count(), 0, "命令写对了还在报警——那它就成了新的背景噪音");
 
-  console.log("preview port guide: rule both halves, one-click samples, host dialect, mismatch-only warning, and on-screen port drift (fixable / config-pinned / silent-when-correct) passed");
+  // —— 「知道了」只关掉眼前这一条，不是把这个服务这辈子的漂移都关掉（第 1 轮审查 P1）——
+  // 这个组件在页面里一直挂着不卸载，所以 dismiss 存成什么作用域是会露馅的：原先只按服务 id
+  // 存，点一次就把后面所有同 id 的漂移都吞了，而那恰恰是这个功能唯一要说话的时刻。
+  await page.getByTestId("services-pinned").click();
+  await drift.waitFor({ timeout: 5000 });
+  await page.getByRole("button", { name: /不再提示/ }).click();
+  assert.equal(await drift.count(), 0, "点了「知道了」当下这条还在");
+  // ① 审查报告里的那条复现：漂移消失（命令改对了）之后又回来 —— 这是**又一次**事实。
+  await page.getByTestId("services-ok").click();
+  assert.equal(await drift.count(), 0, "命令写对的那一档本来就不该有");
+  await page.getByTestId("services-pinned").click();
+  assert.equal(await drift.count(), 1, "关掉过一次之后，同一个服务再漂移就再也不提了");
+  // ② 生产里真正的形状：重开一趟预览（换 gen）。同样必须重新提醒。
+  await page.getByRole("button", { name: /不再提示/ }).click();
+  assert.equal(await drift.count(), 0, "点了「知道了」当下这条还在");
+  await page.getByTestId("restart-preview").click();
+  assert.equal(await drift.count(), 1, "重开一趟预览还漂移，却被上一趟的「知道了」吞掉了");
+
+  console.log("preview port guide: rule both halves, one-click samples, host dialect, mismatch-only warning, on-screen port drift (fixable / config-pinned / silent-when-correct) and per-occurrence dismissal passed");
 } finally {
   await browser?.close();
   await server.close();
