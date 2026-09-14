@@ -15,6 +15,8 @@ import {
 } from "@phosphor-icons/react";
 import type { FileEntry } from "../lib/api.ts";
 import { formatSize, ROOT_SOURCE_LABEL, useFileTree } from "./fileModel.ts";
+import { KIND_BADGE, KIND_LABEL } from "../scm/scmModel.ts";
+import { fileGitDecorations, type FileGitDecoration } from "./fileGitDecorations.ts";
 
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico", "svg", "heic", "tif", "tiff"]);
 
@@ -32,6 +34,7 @@ function Level({
   showIgnored,
   activePath,
   onOpenFile,
+  decorations,
 }: {
   path: string;
   depth: number;
@@ -39,6 +42,7 @@ function Level({
   showIgnored: boolean;
   activePath: string | null;
   onOpenFile: (entry: FileEntry) => void;
+  decorations: ReadonlyMap<string, FileGitDecoration>;
 }) {
   const entries = tree.children[path];
   if (tree.busy.has(path) && !entries) {
@@ -59,11 +63,16 @@ function Level({
       {visible.map((entry) => {
         const open = tree.expanded.has(entry.path);
         const active = entry.path === activePath;
+        const decoration = decorations.get(entry.path);
+        const gitLabel = decoration && (decoration.descendant || entry.kind === "dir"
+          ? `包含未提交改动：${KIND_LABEL[decoration.kind]}` : KIND_LABEL[decoration.kind]);
         return (
           <div key={entry.path} className="file-tree__node">
             <button
               type="button"
               className={`file-tree__row${active ? " is-active" : ""}${entry.ignored ? " is-ignored" : ""}`}
+              data-git-kind={decoration?.kind}
+              aria-label={gitLabel ? `${entry.name}，${gitLabel}` : undefined}
               style={{ paddingLeft: 6 + depth * 12 }}
               aria-expanded={entry.kind === "dir" ? open : undefined}
               onClick={() => entry.kind === "dir" ? tree.toggle(entry.path) : onOpenFile(entry)}
@@ -80,6 +89,9 @@ function Level({
               </span>
               <span className="file-tree__name">{entry.name}</span>
               {entry.symlink && <em className="file-tree__tag">软链</em>}
+              {decoration && <span className="file-tree__git-badge" aria-hidden="true">
+                {entry.kind === "dir" ? "●" : KIND_BADGE[decoration.kind]}
+              </span>}
               {entry.kind === "file" && <small>{formatSize(entry.size)}</small>}
             </button>
             {entry.kind === "dir" && open && (
@@ -90,6 +102,7 @@ function Level({
                 showIgnored={showIgnored}
                 activePath={activePath}
                 onOpenFile={onOpenFile}
+                decorations={decorations}
               />
             )}
           </div>
@@ -123,6 +136,7 @@ export function FileTreeInspector({
   const tree = useFileTree(taskId);
   const [showIgnored, setShowIgnored] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const decorations = useMemo(() => fileGitDecorations(tree.git), [tree.git]);
   const rootLabel = useMemo(() => tree.root ? ROOT_SOURCE_LABEL[tree.root.source] : null, [tree.root]);
 
   const refresh = async () => {
@@ -136,7 +150,7 @@ export function FileTreeInspector({
 
   return (
     <div className="file-tree" aria-label="工作目录文件">
-      <header className="file-tree__head">
+      <header className="file-tree__head" data-git-kind={decorations.get("")?.kind}>
         <div className="file-tree__where">
           <b>
             <GitBranch size={11} aria-hidden="true" />
@@ -171,6 +185,9 @@ export function FileTreeInspector({
         </p>
       )}
 
+      {tree.git?.error && <p className="file-tree__error" role="status">Git 状态读取失败，改动标识暂不可用：{tree.git.error}</p>}
+      {tree.git?.truncated && <p className="file-tree__hint">Git 改动过多，部分文件和目录的标识未显示</p>}
+
       <div className="file-tree__body">
         <Level
           path=""
@@ -179,6 +196,7 @@ export function FileTreeInspector({
           showIgnored={showIgnored}
           activePath={activePath}
           onOpenFile={(entry) => onOpenFile(entry.path)}
+          decorations={decorations}
         />
       </div>
     </div>

@@ -10,6 +10,7 @@ import {
 } from "./file-browser.js";
 import { openWithApp, probeOpeners, revealInFileManager } from "./openers/index.js";
 import { listWorkspaceDir, searchWorkspaceFiles } from "./file-search.js";
+import { readFileGitStatus } from "./file-git-status.js";
 
 // 任务文件浏览。全部是只读视角 + 三个「交给本机去做」的动作（在文件夹中显示、
 // 用某个应用打开、拿原始字节预览），任何一个都不写工作区。
@@ -35,8 +36,12 @@ export function mountFileRoutes(api: Hono) {
     const root = await rootFor(c.req.param("id"));
     if (!root) return c.json({ error: "这个任务还没有可浏览的工作目录" }, 404);
     try {
-      const listing = await listDirectory(root, c.req.query("path") ?? "");
-      return c.json({ root: publicRoot(root), ...listing });
+      const path = c.req.query("path") ?? "";
+      const [listing, git] = await Promise.all([
+        listDirectory(root, path),
+        path === "" && root.gitRepo ? readFileGitStatus(root.path) : null,
+      ]);
+      return c.json({ root: publicRoot(root), ...listing, git });
     } catch (error) {
       return c.json({ error: messageOf(error) }, statusOf(error) as 400);
     }
