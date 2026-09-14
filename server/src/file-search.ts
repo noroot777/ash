@@ -59,6 +59,18 @@ const SKIP_DIRS = new Set([
   ".cache", ".turbo", ".gradle", "Pods", ".DS_Store",
 ]);
 
+/**
+ * 两种取法回同一个形状，但**必须自报是哪一种**：前端据此判断「这台服务端到底认不认
+ * `dir`」。不报的话，旧服务端会把 `?dir=` 当没有、回一张平铺的搜索结果，前端照单全收
+ * 渲染成一列没有层级的文件 —— 界面上看着就是「树没做出来」，而不是「服务端是旧的」。
+ */
+export interface SearchResult {
+  mode: "search" | "dir";
+  hits: FileSearchHit[];
+  truncated: boolean;
+  more: boolean;
+}
+
 interface Listing {
   files: string[];
   /** files 里哪些是 .gitignore 挡着的。非 git 目录下恒为空。 */
@@ -263,7 +275,7 @@ function directoriesOf(files: string[]): string[] {
 export async function searchWorkspaceFiles(
   root: string,
   options: { gitRepo?: boolean; query?: string; limit?: number } = {},
-): Promise<{ hits: FileSearchHit[]; truncated: boolean; more: boolean }> {
+): Promise<SearchResult> {
   const { files, ignored, truncated } = await listFiles(root, options.gitRepo !== false);
   const limit = Math.min(Math.max(1, options.limit ?? DEFAULT_LIMIT), MAX_LIMIT);
   const query = (options.query ?? "").trim().toLowerCase().replace(/\\/g, "/");
@@ -276,7 +288,7 @@ export async function searchWorkspaceFiles(
       .filter((path) => !ignored.has(path))
       .map((path) => ({ path, ...splitPath(path), kind: "file" as const }))
       .sort((a, b) => depthOf(a.path) - depthOf(b.path) || a.path.localeCompare(b.path));
-    return { hits: ranked.slice(0, limit), truncated, more: ranked.length > limit };
+    return { mode: "search", hits: ranked.slice(0, limit), truncated, more: ranked.length > limit };
   }
 
   const scored: { hit: FileSearchHit; score: number }[] = [];
@@ -298,7 +310,12 @@ export async function searchWorkspaceFiles(
 
   scored.sort((a, b) => b.score - a.score || a.hit.path.length - b.hit.path.length
     || a.hit.path.localeCompare(b.hit.path));
-  return { hits: scored.slice(0, limit).map((entry) => entry.hit), truncated, more: scored.length > limit };
+  return {
+    mode: "search",
+    hits: scored.slice(0, limit).map((entry) => entry.hit),
+    truncated,
+    more: scored.length > limit,
+  };
 }
 
 /**
@@ -310,7 +327,7 @@ export async function searchWorkspaceFiles(
 export async function listWorkspaceDir(
   root: string,
   options: { gitRepo?: boolean; dir?: string; limit?: number } = {},
-): Promise<{ hits: FileSearchHit[]; truncated: boolean; more: boolean }> {
+): Promise<SearchResult> {
   const { files, ignored, truncated } = await listFiles(root, options.gitRepo !== false);
   const limit = Math.min(Math.max(1, options.limit ?? DIR_LIMIT), MAX_DIR_LIMIT);
   const dir = (options.dir ?? "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
@@ -346,5 +363,5 @@ export async function listWorkspaceDir(
   take(childDirs, "dir", true);
   take(childFiles, "file", true);
 
-  return { hits: hits.slice(0, limit), truncated, more: hits.length > limit };
+  return { mode: "dir", hits: hits.slice(0, limit), truncated, more: hits.length > limit };
 }

@@ -48,6 +48,8 @@ try {
   let slowQuery = null;
   // 让某一个查询报「还有更多没列出来」：验那句提示有没有接上。
   let moreQuery = null;
+  // 装成没更新过的服务端（不认 `dir`、回平铺清单且不报 mode）。
+  let legacyServer = false;
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     const json = (body) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
@@ -66,8 +68,13 @@ try {
           if (at < 0) plain.push(rest);
           else dirs.add(rest.slice(0, at));
         }
+        if (legacyServer) {
+          // 旧服务端不认 `dir`，把它当搜索处理：回一张平铺清单，而且没有 mode。
+          return json({ root: { path: "/repo" }, truncated: false, more: false, hits: FILES.map(hit) });
+        }
         return json({
           root: { path: "/repo" },
+          mode: "dir",
           truncated: false,
           more: false,
           hits: [
@@ -91,6 +98,7 @@ try {
         .sort((a, b) => Number(IGNORED.has(a)) - Number(IGNORED.has(b)));
       return json({
         root: { path: "/repo" },
+        mode: "search",
         hits: matched.map((path) => {
           const at = path.lastIndexOf("/");
           return {
@@ -117,6 +125,10 @@ try {
   // 边打边搜会连着发好几趟（`s` → `sr` → `src`…），中间那几趟的结果同样会进菜单。
   // 所以每次判定前都等到列表**正好**是最后那趟该有的样子，否则上下键走的是一张
   // 过期列表 —— 这不是产品 bug，是夹具自己的观测偏差。
+  const hit = (path) => {
+    const at = path.lastIndexOf("/");
+    return { path, name: at < 0 ? path : path.slice(at + 1), dir: at < 0 ? "" : path.slice(0, at), kind: "file" };
+  };
   const settled = (expected) => page.waitForFunction(
     (want) => {
       const texts = [...document.querySelectorAll('[role="option"]')].map((node) => node.textContent ?? "");
@@ -267,6 +279,24 @@ try {
     "看 @src/lib/useFileMention.ts ",
     "回车选的是文件，不是那一行目录头",
   );
+
+  // ⑭ 服务端还没更新时**必须说出来**。不说的话界面就是一列没有层级的文件，看着像
+  //    树压根没做 —— 这一条正是这么被误判过一次的（前端新、:4317 还是旧进程）。
+  legacyServer = true;
+  await textarea.fill("");
+  // 换一个这一轮没浏览过的目录：浏览过的那几层还在 hook 的缓存里，不会再问服务端。
+  await textarea.type("@docs/");
+  await page.waitForFunction(
+    () => document.querySelector(".mention-menu p")?.textContent?.includes("重启 ash 服务"),
+    null,
+    { timeout: 4000 },
+  );
+  assert.equal(
+    await menu.getByRole("option").filter({ hasText: "README.md" }).count(),
+    1,
+    "退化了也得能用：平铺清单照样能选",
+  );
+  legacyServer = false;
 
   console.log("file-mention-dom: ok");
 } finally {

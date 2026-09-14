@@ -1,7 +1,9 @@
 import { useState, type KeyboardEvent } from "react";
 import type { AgentExecutorProfile, AgentType } from "@ash/shared";
 import { registeredAgentTypes } from "../lib/agentAvailability.ts";
-import { fileMentionRows, mentionHint, type MentionRow } from "../components/MentionMenu.tsx";
+import {
+  fileMentionRows, mentionHint, TREE_UNSUPPORTED, type MentionRow,
+} from "../components/MentionMenu.tsx";
 import { useFileMention } from "../lib/useFileMention.ts";
 import { firstSelectable, stepIndex } from "../lib/fileMentionTree.ts";
 
@@ -67,7 +69,8 @@ export function useReplyMention({
   const clamped = Math.min(index, Math.max(0, rows.length - 1));
   const selectedIndex = selectable(clamped) ? clamped : firstSelectable(rows.length, selectable);
   // 文件那半边还没回来时要说一句，否则「@ 了一下什么都没有」看着像功能坏了。
-  const status = files.loading && !files.rows.length
+  const status = files.treeUnsupported ? TREE_UNSUPPORTED
+    : files.loading && !files.rows.length
     ? (files.browsing ? "正在读取这个目录…" : "正在搜索工作区文件…")
     : files.failed ? "工作区文件读取失败，仍可直接手打路径"
       : rows.length === 0 ? (!profilesReady ? "正在读取已注册智能体…"

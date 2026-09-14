@@ -66,6 +66,9 @@ export function useFileMention({
   const [levels, setLevels] = useState<Map<string, FileSearchHit[]>>(new Map());
   const [levelFailed, setLevelFailed] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // 服务端认不认 `?dir=`。旧版把它当没有、回一张平铺的搜索结果 —— 照单全收就是一列没有
+  // 层级的文件，界面上看着是「树没做出来」，实则是那个进程还没重启。
+  const [treeUnsupported, setTreeUnsupported] = useState(false);
   // 搜过的查询记着：删掉一个字母退回上一个查询时不必再跑一趟网络。
   const cache = useRef(new Map<string, { hits: FileSearchHit[]; more: boolean }>());
   const inflight = useRef(new Set<string>());
@@ -82,6 +85,7 @@ export function useFileMention({
     setLevels(new Map());
     setLevelFailed(new Set());
     setExpanded(new Set());
+    setTreeUnsupported(false);
   }, [scopeKey]);
 
   // ── 搜索态：防抖 + 中止，结果连着 key 一起落地 ──────────────────────────────
@@ -134,6 +138,7 @@ export function useFileMention({
         (response) => {
           inflight.current.delete(mark);
           if (at !== scopeKey) return; // 中途换了工作区，这份是旧的
+          if (response.mode !== "dir") setTreeUnsupported(true);
           setLevels((prev) => new Map(prev).set(dir, response.hits));
         },
         () => {
@@ -150,7 +155,11 @@ export function useFileMention({
     ? levels.has(browseDir) || levelFailed.has(browseDir)
     : key !== null && result.key === key;
   const rows: MentionTreeRow[] = browseDir !== null
-    ? browseRows(browseDir, levels, expanded)
+    // 服务端给不了层级时退回按目录归堆：那批东西本来就是一张平铺清单，硬当成「这一层」
+    // 画出来只会是一列没有缩进的文件。
+    ? (treeUnsupported
+      ? searchRows(levels.get(browseDir) ?? [])
+      : browseRows(browseDir, levels, expanded))
     : searchRows(settled && !result.failed ? result.hits : []);
   // 「还有更多没列出来」只在这批候选确实是这次查询的结果时才说得准。
   const more = browseDir === null && settled && !result.failed && result.more;
@@ -248,7 +257,8 @@ export function useFileMention({
   };
 
   return {
-    token, rows, more, loading, failed, open, browsing: browseDir !== null,
+    token, rows, more, loading, failed, open, treeUnsupported,
+    browsing: browseDir !== null && !treeUnsupported,
     index: selectedIndex, selected, setIndex,
     pick, activate, onTreeKey, onKeyDown, onValueChange, reset,
   };

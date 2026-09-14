@@ -171,7 +171,8 @@ export function FileMentionMenu({
       hint={`${label} · ${mentionHint(mention.selected)}`}
       rows={fileMentionRows(mention.rows)}
       token={mention.token ?? ""}
-      status={mention.loading && !mention.rows.length
+      status={mention.treeUnsupported ? TREE_UNSUPPORTED
+        : mention.loading && !mention.rows.length
         ? (mention.browsing ? "正在读取这个目录…" : "正在搜索工作区文件…")
         : mention.failed ? "工作区文件读取失败，仍可直接手打路径"
           : mention.rows.length === 0
@@ -188,6 +189,12 @@ export function FileMentionMenu({
  * 提示行跟着**选中的那一行**改口：同一颗回车在树里做两件事（展开目录 / 插入路径），
  * 不写清楚用户按下去才知道自己刚才干了什么。
  */
+/**
+ * 服务端还不认 `?dir=` 时说的那句话。**必须说出来**：不说的话界面就是一列没有层级的
+ * 文件，看着像树这个功能压根没做 —— 这一条正是这么被误判过一次的。
+ */
+export const TREE_UNSUPPORTED = "服务端是旧版，暂时只能平铺；重启 ash 服务后才有树形浏览";
+
 export function mentionHint(selected: MentionTreeRow | undefined): string {
   if (selected?.expandable && !selected.expanded) return "↑↓ 选择，回车或 → 展开目录";
   if (selected?.expandable) return "↑↓ 选择，回车引用这个目录，← 收起";
