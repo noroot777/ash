@@ -6,7 +6,7 @@ import { RUNS_DIR } from "./paths.js";
 import { heldCacheOf, pruneNodeDeps } from "./preview-deps.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { readAnyPreview, recordPath, alive, archivePreview, type PreviewStep, type PreviewResult, type PreviewRecord } from "./preview-store.js";
-import { starting, beginDriving, endDriving, driving, cancelDriving, hasUnfinishedPreviewStart } from "./preview-start-state.js";
+import { starting, beginDriving, endDriving, driving, cancelDriving, hasUnfinishedPreviewStart, whileRetiringPreview } from "./preview-start-state.js";
 import { hasPendingPreviewStops, pendingPreviewCaches, previewStopFailure, retryPreviewStops, stopPreviewProcesses, type PreviewStopResult } from "./preview-process-stop.js";
 import { runPreview, type PreviewStartOptions } from "./preview-start.js";
 export { readPreview, readPreviewLog, hasPreviewLog, previewLogPath } from "./preview-store.js";
@@ -235,12 +235,17 @@ export function startPreviewSweeper(): NodeJS.Timeout {
 }
 
 async function retirePreview(record: PreviewRecord, status: "stopped" | "failed"): Promise<PreviewStopResult | null> {
-  // 各入口共享退出确认；未退出的进程另存停止记录，当前预览代仍可正常归档。
-  const result = await stopPreviewProcesses(record.taskId, record);
-  const current = readAnyPreview(record.taskId);
-  if (!current) return result; // 被取消的启动可能已经完成了同一趟归档。
-  if (current.gen !== record.gen || current.pid !== record.pid) return null;
-  archivePreview(record, status);
-  rmSync(recordPath(record.taskId), { force: true });
-  return result;
+  // 杀到归档这一整段都标成「人为收的」：杀那一下子进程会触发 exit 事件，而记录要等杀完
+  // 才归档，不标的话那一下会被 runPreview 的看门狗读成「预览进程自行退出」——用户主动
+  // 关掉的预览，反而在时间线上多出一条「预览异常」（见 whileRetiringPreview）。
+  return whileRetiringPreview(record.gen, async () => {
+    // 各入口共享退出确认；未退出的进程另存停止记录，当前预览代仍可正常归档。
+    const result = await stopPreviewProcesses(record.taskId, record);
+    const current = readAnyPreview(record.taskId);
+    if (!current) return result; // 被取消的启动可能已经完成了同一趟归档。
+    if (current.gen !== record.gen || current.pid !== record.pid) return null;
+    archivePreview(record, status);
+    rmSync(recordPath(record.taskId), { force: true });
+    return result;
+  });
 }
