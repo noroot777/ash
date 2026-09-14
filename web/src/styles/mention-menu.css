@@ -13,6 +13,18 @@
   box-shadow: var(--menu-shadow);
 }
 .mention-menu > small { display: block; padding: 4px 7px 5px; color: var(--faint); font-size: 9.5px; }
+/* 搜索结果里的目录分组标签。跟候选行明显不同 —— 它不是能选的东西。 */
+.mention-menu > .mention-menu-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 8px 3px;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.mention-menu > .mention-menu-group > svg { flex: 0 0 auto; }
+.mention-menu > .mention-menu-group { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mention-menu > .mention-menu-divider { margin-top: 3px; border-top: 1px solid var(--line2); padding-top: 6px; }
 .mention-menu > p { margin: 4px 7px 7px; color: var(--faint); font-size: 10.5px; }
 .mention-menu > button {
@@ -30,6 +42,10 @@
 .mention-menu > button:hover,
 .mention-menu > button[aria-selected="true"] { background: var(--sel-bg); }
 .mention-menu > button > svg { flex: 0 0 auto; color: var(--muted); }
+/* 折叠箭头那一格**不管有没有箭头都占着**，否则同一层的文件和目录会左右错开半格，
+   看着像两棵树。缩进本身是按钮的 padding-left（见 MentionMenu.tsx）。 */
+.mention-menu > button > .mention-menu-caret { flex: 0 0 auto; width: 11px; color: var(--faint); }
+.mention-menu > button[aria-expanded] > svg:not(.mention-menu-caret) { color: var(--accent); }
 .mention-menu b {
   min-width: 0;
   flex: 0 1 auto;

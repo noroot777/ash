@@ -42,6 +42,9 @@ const WALK_BUDGET_MS = 2_000;
 /** 一次最多回多少条候选。 */
 const DEFAULT_LIMIT = 40;
 const MAX_LIMIT = 80;
+/** 树里展开一层给多少条。比搜索结果宽松：浏览时用户是在「翻」，不是在「挑前几名」。 */
+const DIR_LIMIT = 120;
+const MAX_DIR_LIMIT = 300;
 /** 枚举结果的缓存寿命。边打边搜期间够用，久到用户察觉不到文件列表旧了之前就过期。 */
 const CACHE_TTL_MS = 5_000;
 
@@ -94,6 +97,9 @@ function gitListFiles(root: string): Promise<Scan | null> {
       // `--cached --others` 会让同一个路径出现两次（索引里有、工作区也有），去重。
       for (const line of out.split("\0")) {
         if (!line) continue;
+        // 以 `/` 收尾的是**目录**条目：`--others` 碰上一个嵌套仓库时报的就是这个。
+        // 它不是文件，留着会变成一条名字为空的候选。
+        if (line.endsWith("/")) continue;
         seen.add(line);
         if (seen.size >= MAX_FILES) { overflow = true; break; }
       }
@@ -293,4 +299,52 @@ export async function searchWorkspaceFiles(
   scored.sort((a, b) => b.score - a.score || a.hit.path.length - b.hit.path.length
     || a.hit.path.localeCompare(b.hit.path));
   return { hits: scored.slice(0, limit).map((entry) => entry.hit), truncated, more: scored.length > limit };
+}
+
+/**
+ * 列一个目录的**直接子项**：树形浏览用的那一半。
+ *
+ * 跟 searchWorkspaceFiles 共用同一份枚举缓存，所以展开一个目录不额外扫盘。目录在前、
+ * 未忽略的在前，同档按名字排 —— 浏览时用户找的是「我知道它在哪」，相关度打分帮不上忙。
+ */
+export async function listWorkspaceDir(
+  root: string,
+  options: { gitRepo?: boolean; dir?: string; limit?: number } = {},
+): Promise<{ hits: FileSearchHit[]; truncated: boolean; more: boolean }> {
+  const { files, ignored, truncated } = await listFiles(root, options.gitRepo !== false);
+  const limit = Math.min(Math.max(1, options.limit ?? DIR_LIMIT), MAX_DIR_LIMIT);
+  const dir = (options.dir ?? "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  const prefix = dir ? `${dir}/` : "";
+
+  const childFiles = new Map<string, boolean>(); // 名字 → 被忽略了吗
+  const childDirs = new Map<string, boolean>(); // 名字 → 整块都被忽略了吗
+  for (const path of files) {
+    if (prefix && !path.startsWith(prefix)) continue;
+    const rest = path.slice(prefix.length);
+    const at = rest.indexOf("/");
+    if (at < 0) {
+      childFiles.set(rest, ignored.has(path));
+      continue;
+    }
+    const name = rest.slice(0, at);
+    // 里面还有一个没被忽略的文件，这个目录就不算忽略（`web/` 底下有 `web/dist/`，
+    // 但 `web/` 当然该跟源码排在一起）。
+    childDirs.set(name, (childDirs.get(name) ?? true) && ignored.has(path));
+  }
+
+  // 目录在前、未忽略的在前，同档按名字排 —— 一眼扫下去跟文件管理器一个样。
+  const hits: FileSearchHit[] = [];
+  const take = (from: Map<string, boolean>, kind: "file" | "dir", ignore: boolean) => {
+    for (const name of [...from].filter(([, mine]) => mine === ignore).map(([name]) => name).sort(
+      (a, b) => a.localeCompare(b),
+    )) {
+      hits.push({ path: prefix + name, name, dir, kind, ...(ignore ? { ignored: true } : {}) });
+    }
+  };
+  take(childDirs, "dir", false);
+  take(childFiles, "file", false);
+  take(childDirs, "dir", true);
+  take(childFiles, "file", true);
+
+  return { hits: hits.slice(0, limit), truncated, more: hits.length > limit };
 }

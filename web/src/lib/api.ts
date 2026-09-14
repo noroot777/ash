@@ -408,6 +408,11 @@ export const api = {
     request(`/tasks/${id(taskId)}/file-search?q=${id(query)}`, { signal }),
   projectFileSearch: (projectId: string, query: string, signal?: AbortSignal): Promise<FileSearchResult> =>
     request(`/projects/${id(projectId)}/file-search?q=${id(query)}`, { signal }),
+  // 树里展开一层。`dir=""` 就是仓库根，所以参数一律要带上，不能因为空就省掉。
+  taskFileDir: (taskId: string, dir: string, signal?: AbortSignal): Promise<FileSearchResult> =>
+    request(`/tasks/${id(taskId)}/file-search?dir=${id(dir)}`, { signal }),
+  projectFileDir: (projectId: string, dir: string, signal?: AbortSignal): Promise<FileSearchResult> =>
+    request(`/projects/${id(projectId)}/file-search?dir=${id(dir)}`, { signal }),
   taskFile: (taskId: string, path: string): Promise<{ root: FileWorkspaceRoot; file: FileContent }> =>
     request(`/tasks/${id(taskId)}/file?path=${id(path)}`),
   // 图片/PDF 预览直接把这个地址交给 <img>/<iframe>，不经过 JSON。

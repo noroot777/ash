@@ -12,7 +12,7 @@ import { db } from "./db/index.js";
 import { projects, groups, tasks, notes, noteTasks } from "./db/schema.js";
 import { id, now } from "./util.js";
 import { expandHome, projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches, isGitRepo } from "./git.js";
-import { searchWorkspaceFiles } from "./file-search.js";
+import { listWorkspaceDir, searchWorkspaceFiles } from "./file-search.js";
 import { getGitOverview } from "./git-overview.js";
 import { discardTaskWorkspace } from "./workspace-cleanup.js";
 import { branchDeletionRejection } from "./task-branch-plan.js";
@@ -348,11 +348,13 @@ export function mountProjectRoutes(api: Hono): void {
     if (error) return error;
     const repoPath = expandHome(row.repoPath);
     if (!repoPath) return c.json({ root: null, hits: [], truncated: false, more: false });
-    const found = await searchWorkspaceFiles(repoPath, {
-      gitRepo: await isGitRepo(repoPath),
-      query: c.req.query("q") ?? "",
-      limit: Number(c.req.query("limit")) || undefined,
-    }).catch(() => ({ hits: [], truncated: false, more: false }));
+    const dir = c.req.query("dir");
+    const gitRepo = await isGitRepo(repoPath);
+    const limit = Number(c.req.query("limit")) || undefined;
+    const found = await (dir === undefined
+      ? searchWorkspaceFiles(repoPath, { gitRepo, query: c.req.query("q") ?? "", limit })
+      : listWorkspaceDir(repoPath, { gitRepo, dir, limit })
+    ).catch(() => ({ hits: [], truncated: false, more: false }));
     return c.json({ root: { path: repoPath }, ...found });
   });
 

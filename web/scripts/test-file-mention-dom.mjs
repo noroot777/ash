@@ -53,6 +53,35 @@ try {
     const json = (body) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
     if (url.pathname.endsWith("/agents")) return json(PROFILES);
     if (url.pathname.endsWith("/file-search")) {
+      // `dir` = 树里展开一层：只回这个目录的直接子项，跟服务端一个口径。
+      const dir = url.searchParams.get("dir");
+      if (dir !== null) {
+        const prefix = dir ? `${dir}/` : "";
+        const dirs = new Set();
+        const plain = [];
+        for (const path of FILES) {
+          if (prefix && !path.startsWith(prefix)) continue;
+          const rest = path.slice(prefix.length);
+          const at = rest.indexOf("/");
+          if (at < 0) plain.push(rest);
+          else dirs.add(rest.slice(0, at));
+        }
+        return json({
+          root: { path: "/repo" },
+          truncated: false,
+          more: false,
+          hits: [
+            ...[...dirs].sort().map((name) => ({ path: prefix + name, name, dir, kind: "dir" })),
+            ...plain.sort().map((name) => ({
+              path: prefix + name,
+              name,
+              dir,
+              kind: "file",
+              ...(IGNORED.has(prefix + name) ? { ignored: true } : {}),
+            })),
+          ],
+        });
+      }
       const query = (url.searchParams.get("q") ?? "").toLowerCase();
       if (slowQuery && query.includes(slowQuery)) {
         await new Promise((resolve) => { setTimeout(resolve, 1500); });
@@ -97,10 +126,11 @@ try {
     { timeout: 5000 },
   );
 
-  // ① 只敲一个 @：两类候选都在，智能体排在文件前面。
+  // ① 只敲一个 @：两类候选都在，文件那半边是**根这一层**（目录 + 根下的文件），
+  //    深处的文件一条都不该平铺出来 —— 那正是「一屏四十条读不过来」的老样子。
   await textarea.fill("");
   await textarea.type("@");
-  await settled(["@claude", "@codex", "README.md", "api.ts", "apiClient.ts", "useFileMention.ts", "计划 A.md"]);
+  await settled(["@claude", "@codex", "dist/", "docs/", "src/", "README.md"]);
 
   // ② token 里出现 `/`：智能体整个让位，只剩文件。
   await textarea.fill("");
@@ -204,6 +234,39 @@ try {
     { timeout: 4000 },
   );
   moreQuery = null;
+
+  // ⑫ 树：目录能就地展开，子项缩进挂在下面，回车插的是子项自己的完整路径。
+  //    （改之前这里是一张平铺的全量路径清单，深处的文件和门面文件混在一起。）
+  await textarea.fill("");
+  await textarea.type("@");
+  await settled(["@claude", "@codex", "dist/", "docs/", "src/", "README.md"]);
+  const srcRow = options.filter({ hasText: "src/" }).first();
+  await srcRow.click(); // 点目录 = 展开，不是插入
+  await settled(["@claude", "@codex", "dist/", "docs/", "src/", "lib/", "api.ts", "README.md"]);
+  assert.equal(await textarea.inputValue(), "@", "点一个收着的目录只该展开，不该往正文里插东西");
+  assert.equal(await srcRow.getAttribute("aria-expanded"), "true");
+  // 子项缩进比它爹深
+  const pad = (row) => row.evaluate((node) => parseFloat(getComputedStyle(node).paddingLeft));
+  assert.ok(
+    await pad(options.filter({ hasText: "api.ts" }).first()) > await pad(srcRow),
+    "展开出来的子项必须看得出缩进，否则跟平铺没区别",
+  );
+  await options.filter({ hasText: "api.ts" }).first().click();
+  assert.equal(await textarea.inputValue(), "@src/api.ts ", "插进正文的是完整路径，不是那一层的短名字");
+
+  // ⑬ 搜索态按目录归堆：目录头只是标签，上下键和回车都不该落在它身上。
+  await textarea.fill("");
+  await textarea.type("看 @useFile");
+  await settled(["useFileMention.ts"]);
+  const groups = menu.locator(".mention-menu-group");
+  assert.equal(await groups.count(), 1, "同一目录的命中要有个目录头");
+  assert.match(await groups.first().textContent() ?? "", /src\/lib/);
+  await page.keyboard.press("Enter");
+  assert.equal(
+    await textarea.inputValue(),
+    "看 @src/lib/useFileMention.ts ",
+    "回车选的是文件，不是那一行目录头",
+  );
 
   console.log("file-mention-dom: ok");
 } finally {

@@ -8,6 +8,7 @@
 //   3. 子序列能捞出深处的文件（`ftr` → FileTreeInspector.tsx）
 //   4. 目录也是候选（git 只吐文件，目录得自己补）
 //   5. 子目录里另有 `.git` 的是别人家的仓库，不跟进（否则同一份源码出现好几遍）
+//   6. 树形浏览只列**直接子项**（列多了就不是树了，缩进也白搭）
 // 跑：npm -w server run test:file-search
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -40,7 +41,7 @@ try {
 
   execFileSync("git", ["-C", repo, "init", "-q"]);
 
-  const { searchWorkspaceFiles, forgetFileListing } = await import("../src/file-search.js");
+  const { searchWorkspaceFiles, listWorkspaceDir, forgetFileListing } = await import("../src/file-search.js");
 
   // ── 1. 被 gitignore 挡住的搜得到，但一律排在未忽略的后面 ───────────────────
   const api = await searchWorkspaceFiles(repo, { query: "api" });
@@ -113,6 +114,38 @@ try {
   forgetFileListing(plain);
   const after = await searchWorkspaceFiles(plain, { gitRepo: false, query: "later" });
   assert.deepEqual(paths(after.hits), ["notes/later.md"], "作废缓存后要看得见新文件");
+
+  // ── 8. 树形浏览：只列直接子项，目录在前、忽略的在后 ────────────────────────
+  const rootLevel = await listWorkspaceDir(repo, { dir: "" });
+  assert.deepEqual(
+    paths(rootLevel.hits),
+    ["src", ".gitignore", "package.json", "README.md", "dist"],
+    "根这一层：目录在前、文件在后，被忽略的 dist 垫底，同档按名字排",
+  );
+  assert.ok(
+    !paths(rootLevel.hits).includes("vendor-repo"),
+    "别人家的仓库在树里也不该冒出来（git 会把它报成一条目录条目）",
+  );
+  assert.equal(
+    rootLevel.hits.find((hit) => hit.path === "dist")?.ignored,
+    true,
+    "整块都被忽略的目录自己也标上",
+  );
+  for (const hit of rootLevel.hits) {
+    assert.ok(!hit.path.includes("/"), `只该列直接子项，不该有深路径：${hit.path}`);
+  }
+  assert.ok(
+    !paths(rootLevel.hits).includes("node_modules"),
+    "永不枚举的目录在树里同样不出现",
+  );
+
+  const srcLevel = await listWorkspaceDir(repo, { dir: "src" });
+  assert.deepEqual(paths(srcLevel.hits), ["src/files", "src/lib", "src/api.ts"], "展开一层就是这个目录自己的孩子");
+  assert.equal(srcLevel.hits[0]?.kind, "dir");
+  assert.equal(srcLevel.hits[0]?.name, "files", "名字是末段，路径才是全的 —— 界面靠这个缩进显示");
+
+  // 尾随斜杠、反斜杠都当同一个目录（前端的 token 是用户边打边给的，什么样都有）
+  assert.deepEqual(paths((await listWorkspaceDir(repo, { dir: "src/" })).hits), paths(srcLevel.hits));
 
   console.log("file-search: ok");
 } finally {
