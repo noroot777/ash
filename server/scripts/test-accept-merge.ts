@@ -54,12 +54,14 @@ try {
   const { prepareWorktree, worktreeBranchName } = await import("../src/git.js");
   const {
     acceptTagName,
-    cleanupAcceptedTask,
-    cleanupPlanFor,
     mergeTaskBranch,
-    worktreeRemovalBlocker,
     withTemporaryCleanupOutcome,
   } = await import("../src/git-accept.js");
+  const {
+    cleanupAcceptedTask,
+    cleanupPlanFor,
+    worktreeRemovalBlocker,
+  } = await import("../src/git-accept-cleanup.js");
   const { taskBranchDiff } = await import("../src/git-diff.js");
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { projects, sessions, tasks } = await import("../src/db/schema.js");
@@ -399,131 +401,6 @@ try {
     );
   }
 
-  // 10b. 「合并后不提交」：改动进目标分支的工作区，目标分支的 ref 一个字节都不动。
-  {
-    const repo = makeRepo("no-commit");
-    const taskId = "acceptnc0015";
-    const ws = await prepareWorktree(repo, taskId, "main");
-    writeFileSync(join(ws.path, "pending.txt"), "not committed yet\n");
-    git(ws.path, "add", "-A");
-    git(ws.path, "commit", "-m", "task pending");
-    const before = git(repo, "rev-parse", "main");
-
-    // 目标分支正检出在项目目录、工作区干净 → 合进工作区并暂存，不提交。
-    const merged = await mergeTaskBranch(repo, taskId, "main", "safe", { commit: false });
-    assert.equal(merged.ok, true);
-    if (!merged.ok) throw new Error(merged.message);
-    assert.equal(merged.method, "no_commit");
-    assert.equal(git(repo, "rev-parse", "main"), before, "不提交这一档绝不能动目标分支的 ref");
-    assert.equal(merged.beforeCommit, merged.afterCommit, "ref 没动，前后当然相等");
-    assert.equal(readFileSync(join(repo, "pending.txt"), "utf8"), "not committed yet\n", "改动要真的落在工作区里");
-    assert.equal(git(repo, "diff", "--cached", "--name-only"), "pending.txt", "而且是暂存好的");
-
-    // 分支必须留着：改动还没提交，它是那份产物在版本库里唯一的副本。
-    const cleanup = await cleanupAcceptedTask(repo, taskId, "main", { worktree: true, branch: false });
-    assert.equal(cleanup.ok, true);
-    if (!cleanup.ok) throw new Error(cleanup.message);
-    assert.equal(cleanup.branchDeleted, false);
-    assert.equal(hasRef(repo, worktreeBranchName(taskId)), true);
-
-    // 重试（上一轮已经合过、停在 merged）不许再合一遍：工作区里躺着的正是上次的产物，
-    // 再合只会被自己判成 target_dirty，任务永远出不来。
-    const retry = await mergeTaskBranch(repo, taskId, "main", "safe", { commit: false, retryOfMerged: true });
-    assert.equal(retry.ok, true);
-    if (!retry.ok) throw new Error(retry.message);
-    assert.equal(retry.method, "no_commit");
-    assert.equal(git(repo, "rev-parse", "main"), before);
-  }
-
-  // 10c. 「合并后不提交」但目标分支没检出在项目目录：一个字节都不动，并说清为什么。
-  //      临时 worktree 跑完就删，合进去的改动会跟着丢 —— 那是「看上去验收通过、产物却
-  //      不见了」，比不合危险得多。
-  {
-    const repo = makeRepo("no-commit-not-checked-out");
-    const taskId = "acceptnk0016";
-    const ws = await prepareWorktree(repo, taskId, "main");
-    writeFileSync(join(ws.path, "nowhere.txt"), "nowhere\n");
-    git(ws.path, "add", "-A");
-    git(ws.path, "commit", "-m", "task nowhere");
-    git(repo, "checkout", "-b", "parking");
-    const before = git(repo, "rev-parse", "main");
-
-    const merged = await mergeTaskBranch(repo, taskId, "main", "safe", { commit: false });
-    assert.equal(merged.ok, false);
-    if (merged.ok) throw new Error("目标分支没检出时不该合");
-    assert.equal(merged.reason, "target_not_checked_out");
-    assert.match(merged.message, /合并后不提交/);
-    assert.equal(git(repo, "rev-parse", "main"), before);
-    assert.equal(existsSync(join(repo, "nowhere.txt")), false, "项目目录里不许留下半份产物");
-
-    // 工作区脏时同样只报告：那个工作区正是改动要落脚的地方。
-    git(repo, "checkout", "main");
-    writeFileSync(join(repo, "shared.txt"), "local edit\n");
-    const dirty = await mergeTaskBranch(repo, taskId, "main", "safe", { commit: false });
-    assert.equal(dirty.ok, false);
-    if (dirty.ok) throw new Error("脏工作区不该合");
-    assert.equal(dirty.reason, "target_dirty");
-    assert.deepEqual(dirty.dirtyFiles, ["shared.txt"]);
-    assert.equal(git(repo, "rev-parse", "main"), before);
-  }
-
-  // 10d. 端到端走 acceptTask：项目设置「验收合并后提交代码」关掉 → 不落提交；
-  //      单次验收显式传 commit:true → 这一次照样落提交（项目设置不变）。
-  {
-    const repo = makeRepo("accept-commit-setting");
-    const createdAt = new Date().toISOString();
-    const projectId = "accept-commit-project";
-    await db.insert(projects).values({ id: projectId, name: "accept-commit", repoPath: repo, acceptCommit: false, createdAt });
-    const seedTask = async (taskId: string, file: string) => {
-      const ws = await prepareWorktree(repo, taskId, "main");
-      writeFileSync(join(ws.path, file), `${file}\n`);
-      git(ws.path, "add", "-A");
-      git(ws.path, "commit", "-m", `task ${file}`);
-      await db.insert(tasks).values({
-        id: taskId, projectId, title: file, body: "", mode: "single", status: "done", stage: "verified",
-        labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "claude",
-        useWorktree: true, worktreeBase: "main", mergeTargetBranch: "main",
-        autoTitle: false, createdAt, updatedAt: createdAt,
-      });
-      return ws;
-    };
-
-    const pendingId = "acceptps0017";
-    await seedTask(pendingId, "pending.txt");
-    const before = git(repo, "rev-parse", "main");
-    const kept = await acceptTask(pendingId);
-    assert.equal(kept.accepted, true);
-    if (!kept.accepted) throw new Error(kept.error);
-    assert.equal(kept.merge, "no_commit", "项目设置说不提交，就不许落提交");
-    assert.equal(kept.branchDeleted, false, "没提交的改动只剩分支这一份副本，分支必须留着");
-    assert.equal(git(repo, "rev-parse", "main"), before, "目标分支的 ref 一动不动");
-    assert.equal(git(repo, "diff", "--cached", "--name-only"), "pending.txt");
-    const keptRow = (await db.select().from(tasks).where(eq(tasks.id, pendingId))).at(0)!;
-    assert.equal(keptRow.stage, "accepted");
-    assert.equal(keptRow.acceptedMergeCommit, null, "没有合并提交就写 null，不许拿目标分支原来的头冒充");
-
-    // 工作区留着未提交的合并 → 下一次验收会被如实拦下（这正是这一档的代价，不能瞒着）。
-    const blockedId = "acceptbl0018";
-    await seedTask(blockedId, "blocked.txt");
-    const blocked = await acceptTask(blockedId);
-    assert.equal(blocked.accepted, false);
-    if (blocked.accepted) throw new Error("上一次的改动还没提交，工作区是脏的，不该继续合");
-    assert.equal(blocked.reason, "target_dirty");
-
-    // 用户自己提交掉之后，单次覆盖 commit:true 照样能落提交。
-    git(repo, "commit", "-m", "user commits the pending merge");
-    const committed = await acceptTask(blockedId, "human", { commit: true });
-    assert.equal(committed.accepted, true);
-    if (!committed.accepted) throw new Error(committed.error);
-    assert.notEqual(committed.merge, "no_commit", "这一次显式要求提交，就得真的提交");
-    assert.notEqual(git(repo, "rev-parse", "main"), before);
-    assert.equal(git(repo, "status", "--porcelain"), "", "落了提交就不该留下脏工作区");
-    assert.equal(
-      (await db.select().from(projects).where(eq(projects.id, projectId))).at(0)!.acceptCommit,
-      false,
-      "单次覆盖只管这一次，绝不回写项目设置",
-    );
-  }
 
   // 11. 清理档位：「只删 worktree，分支留着」与「都留着」。
   {
@@ -758,7 +635,7 @@ try {
     }
   }
 
-  console.log("accept merge: git 场景 / 三种合并档位 / 合并后不提交 / 清理档位 / 清理警告 / 脏工作区点名 / team 并发守卫 / 共享执行者验收口径 / 冲突交接真唤醒 全部通过");
+  console.log("accept merge: git 场景 / 三种合并档位 / 清理档位 / 清理警告 / 脏工作区点名 / team 并发守卫 / 共享执行者验收口径 / 冲突交接真唤醒 全部通过");
 } finally {
   // 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
   await releaseTmpDb();

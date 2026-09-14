@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import { db } from "../src/db/index.js";
 import { tasks } from "../src/db/schema.js";
 import { acceptTask } from "../src/task-accept.js";
-import { cleanupAcceptedTask } from "../src/git-accept.js";
+import { cleanupAcceptedTask } from "../src/git-accept-cleanup.js";
 
 type Fixture = { repo: string; path: string; branch: string | null; task: { id: string; projectId: string } };
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();

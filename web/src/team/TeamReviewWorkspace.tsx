@@ -17,6 +17,7 @@ import { DispatchReviewEvidence } from "./ReviewEvidence.tsx";
 import { BranchAcceptancePanel } from "../review/BranchAcceptancePanel.tsx";
 import { useBranchPlan } from "../review/useBranchPlan.ts";
 import { UnexecutedVerificationNotice, useAcceptanceVerification } from "../review/UnexecutedVerificationNotice.tsx";
+import { AcceptCommitChoice, useAcceptCommitDefault } from "../review/AcceptCommitChoice.tsx";
 
 type ReviewData = {
   commits: TaskCommit[];
@@ -85,39 +86,6 @@ function acceptanceMessage(task: TaskListItem, commit = true): string {
 const mergeTargetLabel = (task: TaskListItem): string =>
   task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "项目当前分支";
 
-// 「这一次合并完要不要替我提交」。默认勾成项目设置的值（项目设置里那一项默认开），
-// 在这儿取消只管这一次 —— 所以文案必须把两件事都说清：改了什么、改的是不是只有这次。
-//
-// 只在**真的会合并**的那几档出现：中途放行、不用 worktree 的任务、「只打标签不合并」
-// 都不产生提交，摆一个勾在那儿只会让人以为还有别的差别。
-function AcceptCommitChoice({ checked, projectDefault, target, disabled, onChange }: {
-  checked: boolean;
-  projectDefault: boolean | null;
-  target: string;
-  disabled: boolean;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <label className="team-accept-commit">
-      <input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} />
-      <span>
-        <b>合并后提交代码</b>
-        <small>
-          {checked
-            ? `合并结果直接落成 ${target} 上的提交（老规矩）。`
-            : `只把改动合进 ${target} 的工作区并暂存，不产生提交：${target} 的提交历史一动不动，由你自己 git commit 或丢弃。`
-              + `这一档要求 ${target} 此刻正检出在项目目录、且工作区干净；任务分支一律保留（没提交的东西，分支是它唯一的副本）。`}
-        </small>
-        <small>
-          {projectDefault === null
-            ? "正在读项目默认…"
-            : `项目设置的默认是「${projectDefault ? "合并后提交" : "合并后不提交"}」，在这里改只影响本次验收。`}
-        </small>
-      </span>
-    </label>
-  );
-}
-
 function AcceptanceFailureNotice({ failure }: { failure: AcceptTaskFailure }) {  const handedOff = failure.reason === "merge_conflict" && failure.conflictHandoff?.notified === true;
   const manualConflict = failure.reason === "merge_conflict" && !handedOff;
   return (
@@ -181,13 +149,14 @@ export function AcceptanceControls({
   const [action, setAction] = useState<"accept" | "return" | null>(null);
   const verification = useAcceptanceVerification(task, action === "accept");
   const needsVerificationConfirmation = !midGate && !!verification.verification;
-  // 本次验收「合并后提交代码」的选择。null = 没动过，跟项目设置走（读到之前一律按会提交
-  // 显示，与后端「不传 commit 就读项目设置」的口径一致）。
+  // 本次验收「合并后提交代码」的选择。null = 没动过，跟项目设置走。项目默认没读到之前
+  // **不许确认**（见 AcceptCommitChoice 顶部：框里写的和后端要做的曾经能相反）。
   const [commitChoice, setCommitChoice] = useState<boolean | null>(null);
   const acceptPlanNow = acceptPlan(task.workflow, "human", task.workflowAt);
   const canChooseCommit = !midGate && !!task.useWorktree && task.stage !== "accepted"
     && !!acceptPlanNow.merge && acceptPlanNow.merge !== "tag";
-  const commitChecked = commitChoice ?? verification.commitDefault ?? true;
+  const commitDefault = useAcceptCommitDefault(task.projectId, canChooseCommit && action === "accept");
+  const commitChecked = commitChoice ?? commitDefault.value ?? true;
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState(false);
   const confirmExecutorSwap = useExecutorGate();
@@ -220,6 +189,8 @@ export function AcceptanceControls({
   const accept = async () => {
     if (checkingDependencies || acceptanceBlock || archived || inFlight || busy) return;
     if (verification.loading || verification.error || (needsVerificationConfirmation && !verification.acknowledged)) return;
+    // 项目默认还没读到（或读失败）时绝不发：那一刻界面上那句话是没有依据的。
+    if (canChooseCommit && commitChoice === null && commitDefault.value === null) return;
     // The confirmation is single-use. Keep progress on the action button so a
     // typed acceptance failure can render unobscured in the review record.
     setAction(null);
@@ -230,9 +201,9 @@ export function AcceptanceControls({
         task.id,
         needsVerificationConfirmation && verification.acknowledged,
         // 发的是**用户在框里看到的那个值**，而不是让后端再读一次项目设置：他看见勾着
-        // 「会提交」就该提交，哪怕这中间有人改了项目设置。还没读到默认值时不传，
-        // 后端按项目设置办（那正是此刻界面显示的口径）。
-        canChooseCommit ? commitChoice ?? verification.commitDefault ?? undefined : undefined,
+        // 「会提交」就该提交，哪怕这中间有人改了项目设置。上面那道门禁保证了走到这里
+        // 一定已经读到默认值，所以这里不会退化成 undefined。
+        canChooseCommit ? commitChoice ?? commitDefault.value ?? undefined : undefined,
       );
       if (!result.accepted) {
         setFailure(result);
@@ -326,7 +297,7 @@ export function AcceptanceControls({
           confirmLabel={midGate ? "放行" : needsVerificationConfirmation ? "知情并验收" : commitChecked ? "验收通过" : "验收通过（不提交）"}
           danger={!midGate && !!task.useWorktree}
           busy={busy}
-          confirmDisabled={checkingDependencies || !!acceptanceBlock || archived || inFlight || verification.loading || !!verification.error || (needsVerificationConfirmation && !verification.acknowledged)}
+          confirmDisabled={checkingDependencies || !!acceptanceBlock || archived || inFlight || verification.loading || !!verification.error || (needsVerificationConfirmation && !verification.acknowledged) || commitDefault.pending}
           onConfirm={() => void accept()}
           onClose={() => setAction(null)}
         >
@@ -338,10 +309,12 @@ export function AcceptanceControls({
           {canChooseCommit && (
             <AcceptCommitChoice
               checked={commitChecked}
-              projectDefault={verification.commitDefault}
+              projectDefault={commitDefault.value}
+              error={commitDefault.error}
               target={mergeTargetLabel(task)}
               disabled={busy}
               onChange={setCommitChoice}
+              onRetry={commitDefault.reload}
             />
           )}
         </ConfirmDialog>

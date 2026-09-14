@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { eq } from "drizzle-orm";
 import { db } from "../src/db/index.js";
 import { tasks } from "../src/db/schema.js";
-import { cleanupAcceptedTask } from "../src/git-accept.js";
+import { cleanupAcceptedTask } from "../src/git-accept-cleanup.js";
 import { acceptTask } from "../src/task-accept.js";
 
 type Fixture = { repo: string; path: string; branch: string | null; task: { id: string; projectId: string } };

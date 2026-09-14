@@ -95,12 +95,13 @@ export async function readBranchPlan(taskId: string): Promise<BranchPlanView | n
   return { task: entries[0], descendants: entries.slice(1) };
 }
 
-type Accept = (taskId: string, by?: "human" | "workflow", options?: { confirmUnverified?: boolean }) => Promise<AcceptTaskResult>;
+type Accept = (taskId: string, by?: "human" | "workflow", options?: { confirmUnverified?: boolean; commit?: boolean }) => Promise<AcceptTaskResult>;
 
 export async function acceptFamily(
   taskId: string,
   expected: { taskId: string; fingerprint: string; confirmUnverified?: boolean }[],
   accept: Accept,
+  commit?: boolean,
 ): Promise<FamilyAcceptanceResult> {
   if (IS_PREVIEW_INSTANCE) return { ok: false, completed: [], error: previewRefusal("统一验收") };
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -123,15 +124,17 @@ export async function acceptFamily(
     // 时那个工作区必然是脏的 —— 第一个合进去，第二个当场被自己的前一位判成 target_dirty。
     // 与其让用户看着「完成 1 个、剩下全停」去猜，不如按下去之前就说清：这一档一次只合
     // 得了一个。已经验收过的不算（它们走幂等快路，不动 git）。
+    // 判的是**本次生效值**：调用方可以在验收框里临时改这一勾，项目设置只是它没说时的默认。
     const merging = chosen.filter(e => e.stage !== "accepted");
-    if (project.acceptCommit === false && merging.length > 1) {
+    const committing = commit ?? project.acceptCommit !== false;
+    if (!committing && merging.length > 1) {
       return {
         ok: false,
         completed: [],
         stoppedAt: merging[1].taskId,
-        error: `这个项目的设置是「验收合并后不提交代码」：改动会留在目标分支的工作区里等你自己提交，`
+        error: `这次验收选的是「合并后不提交代码」：改动会留在目标分支的工作区里等你自己提交，`
           + `所以一次只能合一个任务（这次选了 ${merging.length} 个）。请逐个验收——合完一个、`
-          + "自己提交掉，再验收下一个；或者在项目设置里改回「合并后提交代码」。",
+          + "自己提交掉，再验收下一个；或者把「合并后提交代码」勾上。",
       };
     }
     const completed: string[] = [];
@@ -144,7 +147,7 @@ export async function acceptFamily(
         return { ok: false, completed, stoppedAt: row.taskId, error };
       }
       let result: AcceptTaskResult;
-      try { result = await accept(row.taskId, "human", { confirmUnverified: expected.find(e => e.taskId === row.taskId)?.confirmUnverified === true }); }
+      try { result = await accept(row.taskId, "human", { confirmUnverified: expected.find(e => e.taskId === row.taskId)?.confirmUnverified === true, commit }); }
       catch (cause) {
         const after = (await db.select().from(tasks).where(eq(tasks.id, row.taskId))).at(0);
         if (after?.stage === "accepted") completed.push(row.taskId);
@@ -267,10 +270,12 @@ export function mountBranchPlanRoutes(api: Hono, accept: Accept): void {
     return c.json(result, result.ok ? 200 : 409);
   });
   api.post("/tasks/:id/accept-family", async c => {
-    const body = await c.req.json<{ entries?: { taskId: string; fingerprint: string; confirmUnverified?: boolean }[] }>();
+    const body = await c.req.json<{ entries?: { taskId: string; fingerprint: string; confirmUnverified?: boolean }[]; commit?: boolean }>();
     if (!Array.isArray(body.entries) || !body.entries.length || body.entries.length > 100
       || body.entries.some(e => !e || typeof e.taskId !== "string" || typeof e.fingerprint !== "string")) return c.json({ error: "entries required" }, 400);
-    const result = await acceptFamily(c.req.param("id"), body.entries, accept);
+    // commit 省略 = 跟项目设置；给了就是本次覆盖，不回写设置。
+    const commit = typeof body.commit === "boolean" ? body.commit : undefined;
+    const result = await acceptFamily(c.req.param("id"), body.entries, accept, commit);
     return c.json(result, result.ok ? 200 : 409);
   });
 }

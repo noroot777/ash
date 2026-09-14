@@ -50,6 +50,10 @@
 .team-accept-commit small { color: var(--muted); font-size: 10px; line-height: 1.5; }
 .team-accept-commit small + small { color: var(--faint); }
 .team-accept-commit:has(> input:not(:checked)) { border-color: color-mix(in lch,var(--amber) 34%,var(--line2)); background: color-mix(in lch,var(--amber) 6%,var(--canvas)); }
+/* 项目默认还没读到：不给勾（显示成什么都可能跟后端要做的事相反），确认按钮同时禁掉。 */
+.team-accept-commit.is-pending { color: var(--faint); }
+.team-accept-commit.is-pending[role="alert"] { border-color: color-mix(in lch,var(--red) 30%,var(--line2)); background: color-mix(in lch,var(--red) 5%,var(--canvas)); }
+.team-accept-commit-retry { border: 0; background: transparent; color: inherit; font: inherit; text-decoration: underline; }
 
 .team-review-change { display: grid; min-width: 0; gap: 10px; }
 .team-review-loading { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--faint); font-size: 10.5px; }

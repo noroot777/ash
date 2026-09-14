@@ -9,8 +9,8 @@ import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { flushConflictHandoff, handOffConflict } from "./accept-conflict.js";
 import { localBranchExists, resolveTaskMergeTarget } from "./git.js";
-import { cleanupAcceptedTask, cleanupPlanFor, isAncestor, mergeTaskBranch } from "./git-accept.js";
-import { hasActiveFreeReview } from "./free-workflow.js";
+import { isAncestor, mergeTaskBranch } from "./git-accept.js";
+import { cleanupAcceptedTask, cleanupPlanFor } from "./git-accept-cleanup.js";
 import { disarmFreeReviewReservation } from "./free-review-reservations.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { taskWorkflowDef } from "./workflows.js";
@@ -32,6 +32,7 @@ import { resolveWorktreeBranchName } from "./git.js";
 import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
 import { beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { unexecutedVerification } from "./task-accept-verification.js";
+import { acceptancePreflight } from "./task-accept-preflight.js";
 import type { UnexecutedVerification } from "@ash/shared/workflow-policy";
 
 type AcceptSuccess = {
@@ -102,71 +103,8 @@ async function acceptTaskUnlocked(
   confirmUnverified: boolean,
   commitOverride?: boolean,
 ): Promise<AcceptTaskResult> {
-  const requestedTask = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!requestedTask) {
-    return { accepted: false, httpStatus: 404, taskId, reason: "not_found", error: "not found", phase: "initial" };
-  }
-  // Archived = frozen/read-only（task-routes 的约定）：验收会合并、清理、改 stage，
-  // 全是写操作，归档任务一律拒——run/reply/review/repair/preview 的门禁都这么做。
-  if (requestedTask.archived) {
-    return {
-      accepted: false,
-      httpStatus: 409,
-      taskId,
-      reason: "task_archived",
-      error: "任务已归档（只读）；先取消归档再验收",
-      status: requestedTask.status,
-      phase: "initial",
-    };
-  }
-  // 自由任务在任何**终态**都可验收：done 是正常路径；failed/canceled 是「修复失败/被
-  // 手停后我接受上一版直接合并」——轮数用尽的时间线明确承诺过「由你决定验收」，只放行
-  // done 会让那句话在修复失败分支变成假承诺（验收页按钮可见却 409）。
-  if (
-    requestedTask.workflowMode === "free"
-    && requestedTask.stage !== "accepted"
-    && requestedTask.stage !== "merged"
-    && !["done", "failed", "canceled"].includes(requestedTask.status)
-  ) {
-    return {
-      accepted: false,
-      httpStatus: 409,
-      taskId,
-      reason: "free_workflow_not_ready_for_acceptance",
-      error: "自由工作流尚未到可验收的状态；任务结束后再进入验收页处理",
-      status: requestedTask.status,
-      phase: "initial",
-    };
-  }
-  if (
-    requestedTask.workflowMode === "free"
-    && requestedTask.stage !== "accepted"
-    && await hasActiveFreeReview(taskId)
-  ) {
-    return {
-      accepted: false,
-      httpStatus: 409,
-      taskId,
-      reason: "free_review_in_progress",
-      error: "自由工作流审查回合正在进行，结束后再验收",
-      status: requestedTask.status,
-      phase: "initial",
-    };
-  }
-  const requestedParent = requestedTask.parentId
-    ? (await db.select().from(tasks).where(eq(tasks.id, requestedTask.parentId))).at(0)
-    : null;
-  if (requestedTask.parentId && requestedParent?.mode === "team" && !requestedTask.useWorktree) {
-    return {
-      accepted: false,
-      httpStatus: 409,
-      taskId,
-      reason: "shared_worker_acceptance_not_applicable",
-      error: "执行者不需人工验收，请对团队整体验收",
-      status: requestedTask.status,
-      phase: "initial",
-    };
-  }
+  const preflight = await acceptancePreflight(taskId);
+  if (preflight) return preflight;
 
   const initial = await acceptanceGuard(taskId, "initial");
   if (initial.failure) return initial.failure;
@@ -697,13 +635,7 @@ export function mountTaskAcceptanceRoutes(api: Hono): void {
   api.get("/tasks/:id/acceptance-check", async c => {
     const task = (await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
     if (!task) return c.json({ error: "not found" }, 404);
-    const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
-    return c.json({
-      verification: await unexecutedVerification(task),
-      // 验收确认框里那个「合并后提交代码」的勾**默认勾成什么**。它是项目设置的当前值，
-      // 不是这次验收的结论——用户在框里改了勾，改的只有这一次（POST 的 commit 参数）。
-      commitDefault: project?.acceptCommit !== false,
-    });
+    return c.json({ verification: await unexecutedVerification(task) });
   });
   api.post("/tasks/:id/accept", async (c) => {
     const input = await c.req.json<{ confirmUnverified?: unknown; commit?: unknown }>().catch(() => null);
