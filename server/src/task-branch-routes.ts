@@ -95,12 +95,13 @@ export async function readBranchPlan(taskId: string): Promise<BranchPlanView | n
   return { task: entries[0], descendants: entries.slice(1) };
 }
 
-type Accept = (taskId: string, by?: "human" | "workflow", options?: { confirmUnverified?: boolean }) => Promise<AcceptTaskResult>;
+type Accept = (taskId: string, by?: "human" | "workflow", options?: { confirmUnverified?: boolean; commit?: boolean }) => Promise<AcceptTaskResult>;
 
 export async function acceptFamily(
   taskId: string,
   expected: { taskId: string; fingerprint: string; confirmUnverified?: boolean }[],
   accept: Accept,
+  commit?: boolean,
 ): Promise<FamilyAcceptanceResult> {
   if (IS_PREVIEW_INSTANCE) return { ok: false, completed: [], error: previewRefusal("统一验收") };
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -119,6 +120,28 @@ export async function acceptFamily(
     if (blocked) return { ok: false, completed: [], stoppedAt: blocked.taskId, error: blocked.blocker! };
     const dependencyBlock = familySelectionBlock(entries, ids);
     if (dependencyBlock) return { ok: false, completed: [], stoppedAt: dependencyBlock.taskId, error: dependencyBlock.error };
+    // 「合并后不提交」把改动留在目标分支的工作区里不落提交，于是这一串的下一个任务开合
+    // 时那个工作区必然是脏的 —— 第一个合进去，第二个当场被自己的前一位判成 target_dirty。
+    // 与其让用户看着「完成 1 个、剩下全停」去猜，不如按下去之前就说清：这一档一次只合
+    // 得了一个。
+    // 数的必须是**真的会把改动合进目标工作区**的那些：已验收的走幂等快路不动 git；
+    // 「只打标签不合并」那一档连提交都不产生（task-accept.ts 里 tag 直接强制 commit=true），
+    // 把它算进来就会拦下「一个真合并 + 一个 tag 子任务」这种明明做得了的组合（第 2 轮审查
+    // P1 实测：前端放行、后端 409，且一个都没合）。前端 BranchAcceptancePanel 用的是同一
+    // 条口径，两边必须一起改。
+    // 判的是**本次生效值**：调用方可以在验收框里临时改这一勾，项目设置只是它没说时的默认。
+    const merging = chosen.filter(e => e.stage !== "accepted" && e.strategy !== "tag");
+    const committing = commit ?? project.acceptCommit !== false;
+    if (!committing && merging.length > 1) {
+      return {
+        ok: false,
+        completed: [],
+        stoppedAt: merging[1].taskId,
+        error: `这次验收选的是「合并后不提交代码」：改动会留在目标分支的工作区里等你自己提交，`
+          + `所以一次只能合一个任务（这次选了 ${merging.length} 个）。请逐个验收——合完一个、`
+          + "自己提交掉，再验收下一个；或者把「合并后提交代码」勾上。",
+      };
+    }
     const completed: string[] = [];
     for (const row of chosen) {
       const currentTask = (await db.select().from(tasks).where(eq(tasks.id, row.taskId))).at(0);
@@ -129,7 +152,7 @@ export async function acceptFamily(
         return { ok: false, completed, stoppedAt: row.taskId, error };
       }
       let result: AcceptTaskResult;
-      try { result = await accept(row.taskId, "human", { confirmUnverified: expected.find(e => e.taskId === row.taskId)?.confirmUnverified === true }); }
+      try { result = await accept(row.taskId, "human", { confirmUnverified: expected.find(e => e.taskId === row.taskId)?.confirmUnverified === true, commit }); }
       catch (cause) {
         const after = (await db.select().from(tasks).where(eq(tasks.id, row.taskId))).at(0);
         if (after?.stage === "accepted") completed.push(row.taskId);
@@ -252,10 +275,12 @@ export function mountBranchPlanRoutes(api: Hono, accept: Accept): void {
     return c.json(result, result.ok ? 200 : 409);
   });
   api.post("/tasks/:id/accept-family", async c => {
-    const body = await c.req.json<{ entries?: { taskId: string; fingerprint: string; confirmUnverified?: boolean }[] }>();
+    const body = await c.req.json<{ entries?: { taskId: string; fingerprint: string; confirmUnverified?: boolean }[]; commit?: boolean }>();
     if (!Array.isArray(body.entries) || !body.entries.length || body.entries.length > 100
       || body.entries.some(e => !e || typeof e.taskId !== "string" || typeof e.fingerprint !== "string")) return c.json({ error: "entries required" }, 400);
-    const result = await acceptFamily(c.req.param("id"), body.entries, accept);
+    // commit 省略 = 跟项目设置；给了就是本次覆盖，不回写设置。
+    const commit = typeof body.commit === "boolean" ? body.commit : undefined;
+    const result = await acceptFamily(c.req.param("id"), body.entries, accept, commit);
     return c.json(result, result.ok ? 200 : 409);
   });
 }

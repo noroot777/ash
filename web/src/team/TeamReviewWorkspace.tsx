@@ -17,6 +17,7 @@ import { DispatchReviewEvidence } from "./ReviewEvidence.tsx";
 import { BranchAcceptancePanel } from "../review/BranchAcceptancePanel.tsx";
 import { useBranchPlan } from "../review/useBranchPlan.ts";
 import { UnexecutedVerificationNotice, useAcceptanceVerification } from "../review/UnexecutedVerificationNotice.tsx";
+import { AcceptCommitChoice, useAcceptCommitDefault } from "../review/AcceptCommitChoice.tsx";
 
 type ReviewData = {
   commits: TaskCommit[];
@@ -33,7 +34,10 @@ type ReviewData = {
 // 线上没画「合并并清理」时**手动验收照样合**（手按覆盖线上写没写，理由见 shared 的
 // acceptPlan）——这时更要把话说全：既说清会发生什么，也说清这不是线上写的。这道确认
 // 框就是那条规则的安全兜底，措辞含糊等于把兜底拆了。
-function acceptanceMessage(task: TaskListItem): string {
+// 口径与服务端一致：squash 和「只打标签」之后 git 不认为分支已合并，所以那两档即便
+// 选了「删 worktree 和任务分支」，分支也会保留（绝不 -D），这里就照实说。**「合并后
+// 不提交」同理**：那一档连提交都没落，分支是那份改动唯一的版本库副本，必然保留。
+function acceptanceMessage(task: TaskListItem, commit = true): string {
   const team = task.mode === "team";
   const duet = task.mode === "duet";
   // 后面还有站要走的那道「等我点头」：这一按只是放行，不合并、不清理，线接着往下走。措辞
@@ -54,7 +58,7 @@ function acceptanceMessage(task: TaskListItem): string {
   const plan = acceptPlan(task.workflow, "human", task.workflowAt);
   const branch = team ? "共享分支" : duet ? "讨论分支" : "任务分支";
   const worktree = team ? "团队 worktree" : duet ? "讨论 worktree" : "任务 worktree";
-  const target = task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "项目当前分支";
+  const target = mergeTargetLabel(task);
   const tail = team ? "并联动验收共享执行者。" : "";
   // 手动验收永远有合并方案（acceptPlan 的 human 口径），这里只是类型兜底。
   if (!plan.merge) return `这会把该任务标记为验收完成。${tail}`;
@@ -65,20 +69,24 @@ function acceptanceMessage(task: TaskListItem): string {
       : "";
   const merge = plan.merge === "tag"
     ? `不合并，只在${branch}头上打一个 ash-accepted 标签（${target} 一动不动）`
-    : plan.merge === "squash"
-      ? `${branch}将 squash 成一个提交合并回 ${target}`
-      : `${branch}将合并回 ${target}`;
-  const keepsBranch = plan.merge !== "safe";
+    : !commit
+      ? `${branch}的改动将合进 ${target} 的工作区并暂存，但不提交（${target} 的提交历史一动不动，提交或丢弃由你自己决定）`
+      : plan.merge === "squash"
+        ? `${branch}将 squash 成一个提交合并回 ${target}`
+        : `${branch}将合并回 ${target}`;
+  const keepsBranch = plan.merge !== "safe" || !commit;
   const clean = plan.clean === "none"
     ? `，${worktree}与分支都保留`
     : plan.clean === "worktree" || keepsBranch
-      ? `，随后清理 ${worktree}，分支保留${keepsBranch && plan.clean === "all" ? "（这一档 git 不认为它已合并，不强删）" : ""}`
+      ? `，随后清理 ${worktree}，分支保留${keepsBranch && plan.clean === "all" ? `（${commit ? "这一档 git 不认为它已合并" : "改动还没提交，分支是它唯一的副本"}，不强删）` : ""}`
       : `，随后清理 ${worktree} 与分支`;
   return `${offScript}${merge}${clean}。${tail}`;
 }
 
-function AcceptanceFailureNotice({ failure }: { failure: AcceptTaskFailure }) {
-  const handedOff = failure.reason === "merge_conflict" && failure.conflictHandoff?.notified === true;
+const mergeTargetLabel = (task: TaskListItem): string =>
+  task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "项目当前分支";
+
+function AcceptanceFailureNotice({ failure }: { failure: AcceptTaskFailure }) {  const handedOff = failure.reason === "merge_conflict" && failure.conflictHandoff?.notified === true;
   const manualConflict = failure.reason === "merge_conflict" && !handedOff;
   return (
     <div className={`team-accept-failure${handedOff ? " is-handed-off" : ""}`} role={handedOff ? "status" : "alert"}>
@@ -141,6 +149,14 @@ export function AcceptanceControls({
   const [action, setAction] = useState<"accept" | "return" | null>(null);
   const verification = useAcceptanceVerification(task, action === "accept");
   const needsVerificationConfirmation = !midGate && !!verification.verification;
+  // 本次验收「合并后提交代码」的选择。null = 没动过，跟项目设置走。项目默认没读到之前
+  // **不许确认**（见 AcceptCommitChoice 顶部：框里写的和后端要做的曾经能相反）。
+  const [commitChoice, setCommitChoice] = useState<boolean | null>(null);
+  const acceptPlanNow = acceptPlan(task.workflow, "human", task.workflowAt);
+  const canChooseCommit = !midGate && !!task.useWorktree && task.stage !== "accepted"
+    && !!acceptPlanNow.merge && acceptPlanNow.merge !== "tag";
+  const commitDefault = useAcceptCommitDefault(task.projectId, canChooseCommit && action === "accept");
+  const commitChecked = commitChoice ?? commitDefault.value ?? true;
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState(false);
   const confirmExecutorSwap = useExecutorGate();
@@ -152,6 +168,11 @@ export function AcceptanceControls({
   useEffect(() => {
     if (acceptanceBlock && action === "accept") setAction(null);
   }, [acceptanceBlock, action]);
+  // 关掉确认框就把这一次的选择还原成项目默认：这个勾的语义是「本次」，下次打开还留着
+  // 上次的选择，就成了一个没人记得自己设过的隐形开关。
+  useEffect(() => {
+    if (action !== "accept") setCommitChoice(null);
+  }, [action]);
 
   // 动作成功之后的「再拉一遍任务」是**另一件事**：POST 已经 200、合并/打回都已发生,
   // 这一步只决定页面跟不跟得上。和 mutation 共用一个 try 就会把「已经打回」报成
@@ -168,13 +189,22 @@ export function AcceptanceControls({
   const accept = async () => {
     if (checkingDependencies || acceptanceBlock || archived || inFlight || busy) return;
     if (verification.loading || verification.error || (needsVerificationConfirmation && !verification.acknowledged)) return;
+    // 项目默认还没读到（或读失败）时绝不发：那一刻界面上那句话是没有依据的。
+    if (canChooseCommit && commitChoice === null && commitDefault.value === null) return;
     // The confirmation is single-use. Keep progress on the action button so a
     // typed acceptance failure can render unobscured in the review record.
     setAction(null);
     setBusy(true);
     setFailure(null);
     try {
-      const result = await api.acceptTask(task.id, needsVerificationConfirmation && verification.acknowledged);
+      const result = await api.acceptTask(
+        task.id,
+        needsVerificationConfirmation && verification.acknowledged,
+        // 发的是**用户在框里看到的那个值**，而不是让后端再读一次项目设置：他看见勾着
+        // 「会提交」就该提交，哪怕这中间有人改了项目设置。上面那道门禁保证了走到这里
+        // 一定已经读到默认值，所以这里不会退化成 undefined。
+        canChooseCommit ? commitChoice ?? commitDefault.value ?? undefined : undefined,
+      );
       if (!result.accepted) {
         setFailure(result);
         if (result.confirmationRequired === "confirmUnverified") {
@@ -198,7 +228,11 @@ export function AcceptanceControls({
         ? "已放行，这条线继续往下走"
         : result.tail && !result.tail.ok
           ? `已合并，但「${result.tail.step ?? "点头之后那一段"}」没跑过，详情见任务时间线`
-          : result.warnings?.length ? `验收通过，但有 ${result.warnings.length} 条清理警告` : "验收通过") + stale);
+          // 不提交那一档必须在提示里就说破：否则用户看见「验收通过」就以为合完了，
+          // 而改动其实还躺在他的工作区里没提交。
+          : result.merge === "no_commit"
+            ? "验收通过：改动已合进目标分支工作区并暂存，还没提交"
+            : result.warnings?.length ? `验收通过，但有 ${result.warnings.length} 条清理警告` : "验收通过") + stale);
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -255,11 +289,15 @@ export function AcceptanceControls({
       {action === "accept" && (
         <ConfirmDialog
           title={midGate ? "放行这一关？" : "确认验收通过？"}
-          message={midGate ? acceptanceMessage(task) : task.useWorktree ? `${acceptanceMessage(task)} 已执行的合并和删除不可逆。` : acceptanceMessage(task)}
-          confirmLabel={midGate ? "放行" : needsVerificationConfirmation ? "知情并验收" : "验收通过"}
+          message={midGate
+            ? acceptanceMessage(task)
+            : task.useWorktree
+              ? `${acceptanceMessage(task, commitChecked)} ${commitChecked ? "已执行的合并和删除不可逆。" : "已删除的 worktree 不可逆；合并结果会留在工作区等你自己提交或丢弃。"}`
+              : acceptanceMessage(task)}
+          confirmLabel={midGate ? "放行" : needsVerificationConfirmation ? "知情并验收" : commitChecked ? "验收通过" : "验收通过（不提交）"}
           danger={!midGate && !!task.useWorktree}
           busy={busy}
-          confirmDisabled={checkingDependencies || !!acceptanceBlock || archived || inFlight || verification.loading || !!verification.error || (needsVerificationConfirmation && !verification.acknowledged)}
+          confirmDisabled={checkingDependencies || !!acceptanceBlock || archived || inFlight || verification.loading || !!verification.error || (needsVerificationConfirmation && !verification.acknowledged) || commitDefault.pending}
           onConfirm={() => void accept()}
           onClose={() => setAction(null)}
         >
@@ -268,6 +306,17 @@ export function AcceptanceControls({
           {verification.error && <p role="alert">验证执行记录读取失败：{verification.error}。请关闭后重试。</p>}
           {verification.verification && <UnexecutedVerificationNotice verification={verification.verification} continuing={midGate}
             checked={verification.acknowledged} onChange={midGate ? undefined : verification.setAcknowledged} />}
+          {canChooseCommit && (
+            <AcceptCommitChoice
+              checked={commitChecked}
+              projectDefault={commitDefault.value}
+              error={commitDefault.error}
+              target={mergeTargetLabel(task)}
+              disabled={busy}
+              onChange={setCommitChoice}
+              onRetry={commitDefault.reload}
+            />
+          )}
         </ConfirmDialog>
       )}
       {action === "return" && (

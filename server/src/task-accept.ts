@@ -9,8 +9,8 @@ import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { flushConflictHandoff, handOffConflict } from "./accept-conflict.js";
 import { localBranchExists, resolveTaskMergeTarget } from "./git.js";
-import { cleanupAcceptedTask, cleanupPlanFor, isAncestor, mergeTaskBranch } from "./git-accept.js";
-import { hasActiveFreeReview } from "./free-workflow.js";
+import { isAncestor, mergeTaskBranch } from "./git-accept.js";
+import { cleanupAcceptedTask, cleanupPlanFor } from "./git-accept-cleanup.js";
 import { disarmFreeReviewReservation } from "./free-review-reservations.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { taskWorkflowDef } from "./workflows.js";
@@ -32,6 +32,7 @@ import { resolveWorktreeBranchName } from "./git.js";
 import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
 import { beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { unexecutedVerification } from "./task-accept-verification.js";
+import { acceptancePreflight } from "./task-accept-preflight.js";
 import type { UnexecutedVerification } from "@ash/shared/workflow-policy";
 
 type AcceptSuccess = {
@@ -72,6 +73,7 @@ const mergeLabel: Record<string, string> = {
   merge_commit: "--no-ff 合并提交",
   squash: "squash 合并（压成一个提交）",
   tagged: "只打标签，未合并",
+  no_commit: "已合进目标分支工作区，未提交",
 };
 
 
@@ -95,72 +97,14 @@ async function acceptWithoutCleanup(
   };
 }
 
-async function acceptTaskUnlocked(taskId: string, by: AcceptBy, confirmUnverified: boolean): Promise<AcceptTaskResult> {
-  const requestedTask = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!requestedTask) {
-    return { accepted: false, httpStatus: 404, taskId, reason: "not_found", error: "not found", phase: "initial" };
-  }
-  // Archived = frozen/read-only（task-routes 的约定）：验收会合并、清理、改 stage，
-  // 全是写操作，归档任务一律拒——run/reply/review/repair/preview 的门禁都这么做。
-  if (requestedTask.archived) {
-    return {
-      accepted: false,
-      httpStatus: 409,
-      taskId,
-      reason: "task_archived",
-      error: "任务已归档（只读）；先取消归档再验收",
-      status: requestedTask.status,
-      phase: "initial",
-    };
-  }
-  // 自由任务在任何**终态**都可验收：done 是正常路径；failed/canceled 是「修复失败/被
-  // 手停后我接受上一版直接合并」——轮数用尽的时间线明确承诺过「由你决定验收」，只放行
-  // done 会让那句话在修复失败分支变成假承诺（验收页按钮可见却 409）。
-  if (
-    requestedTask.workflowMode === "free"
-    && requestedTask.stage !== "accepted"
-    && requestedTask.stage !== "merged"
-    && !["done", "failed", "canceled"].includes(requestedTask.status)
-  ) {
-    return {
-      accepted: false,
-      httpStatus: 409,
-      taskId,
-      reason: "free_workflow_not_ready_for_acceptance",
-      error: "自由工作流尚未到可验收的状态；任务结束后再进入验收页处理",
-      status: requestedTask.status,
-      phase: "initial",
-    };
-  }
-  if (
-    requestedTask.workflowMode === "free"
-    && requestedTask.stage !== "accepted"
-    && await hasActiveFreeReview(taskId)
-  ) {
-    return {
-      accepted: false,
-      httpStatus: 409,
-      taskId,
-      reason: "free_review_in_progress",
-      error: "自由工作流审查回合正在进行，结束后再验收",
-      status: requestedTask.status,
-      phase: "initial",
-    };
-  }
-  const requestedParent = requestedTask.parentId
-    ? (await db.select().from(tasks).where(eq(tasks.id, requestedTask.parentId))).at(0)
-    : null;
-  if (requestedTask.parentId && requestedParent?.mode === "team" && !requestedTask.useWorktree) {
-    return {
-      accepted: false,
-      httpStatus: 409,
-      taskId,
-      reason: "shared_worker_acceptance_not_applicable",
-      error: "执行者不需人工验收，请对团队整体验收",
-      status: requestedTask.status,
-      phase: "initial",
-    };
-  }
+async function acceptTaskUnlocked(
+  taskId: string,
+  by: AcceptBy,
+  confirmUnverified: boolean,
+  commitOverride?: boolean,
+): Promise<AcceptTaskResult> {
+  const preflight = await acceptancePreflight(taskId);
+  if (preflight) return preflight;
 
   const initial = await acceptanceGuard(taskId, "initial");
   if (initial.failure) return initial.failure;
@@ -266,6 +210,10 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy, confirmUnverifie
   // 线上没画这一站、却是人亲手点的 → 照老规矩合，但必须说清「这不是线上写的，是你按的」，
   // 否则用户回头看时间线会以为编排里有一站他没印象加过。
   const offScript = by === "human" && !hasAcceptStation(def);
+  // 合完落不落提交：单次验收传了就听这一次的，没传就按项目设置（默认落提交）。这一项
+  // 跟 strategy 是两个正交的问题——strategy 说「怎么合」，它说「合完要不要替你提交」。
+  // 「只打标签不合并」那一档本来就不产生提交，说它「不提交」只会让人以为还有别的差别。
+  const commitOnAccept = plan.merge === "tag" ? true : commitOverride ?? project.acceptCommit !== false;
   await appendTaskTimeline(
     taskId,
     (offScript
@@ -274,7 +222,9 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy, confirmUnverifie
         : `开始验收：这条线上没画「合并并清理」，但你亲手点了验收通过 —— 手动验收按默认规矩`
       : `开始验收：按线上写的`) +
       `「${ACCEPT_STRATEGY_LABELS[plan.merge]}、${ACCEPT_CLEAN_LABELS[plan.clean]}」处理，` +
-      `目标 ${task.mergeTargetBranch || task.worktreeBase?.trim() || "项目当前分支"}；冲突时只报告并回滚，不会强制合并。`,
+      `目标 ${task.mergeTargetBranch || task.worktreeBase?.trim() || "项目当前分支"}；冲突时只报告并回滚，不会强制合并。` +
+      (commitOnAccept ? "" : `本次${commitOverride === false && project.acceptCommit !== false ? "单独选了" : "按项目设置"}「合并后不提交」：`
+        + "改动会合进目标分支的工作区并暂存，目标分支的提交历史一动不动，提交或丢弃由你自己决定。"),
   );
   const mergeGuard = await acceptanceGuard(taskId, "before_merge");
   if (mergeGuard.failure) {
@@ -305,7 +255,10 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy, confirmUnverifie
     const source = await commitAt(project.repoPath, await resolveWorktreeBranchName(project.repoPath, taskId));
     await db.update(tasks).set({ acceptedSourceCommit: source }).where(eq(tasks.id, taskId));
   }
-  const merge = await mergeTaskBranch(project.repoPath, taskId, intendedTarget, plan.merge);
+  const merge = await mergeTaskBranch(project.repoPath, taskId, intendedTarget, plan.merge, {
+    commit: commitOnAccept,
+    retryOfMerged: retrying,
+  });
   if (!merge.ok && merge.reason === "target_checked_out" && merge.targetBranch) {
     const owner = await branchOwner(project.repoPath, task.projectId, merge.targetBranch);
     merge.message += owner ? `占用者是任务「${owner.title}」（${owner.id}）。任务结束后 worktree 仍会占用分支，删除分支会使验收目标丢失。请保留分支并处理验收目标。` : "请保留目标分支，删除工作区不能替代验收目标配置。";
@@ -376,6 +329,8 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy, confirmUnverifie
   }
 
   const tagged = merge.method === "tagged";
+  // 「合并后不提交」：改动进了目标分支的工作区，目标分支的 ref 一个字节没动。
+  const noCommit = merge.method === "no_commit";
   // stage=merged 与快照三列**同一条 UPDATE** 落库（SQLite 单语句原子）：分两次写的话，
   // 进程死在中间会留下「stage=merged、快照还是上一生命周期」的组合，重试便把第二版
   // 产物合回旧目标分支（审查实测复现）。
@@ -396,6 +351,10 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy, confirmUnverifie
     acceptedBaseCommit: merge.beforeCommit ?? null,
     acceptedMergeCommit: merge.afterCommit ?? null,
   };
+  // 不提交这一档**没有合并提交**。afterCommit 此刻等于目标分支原来的头，写进去就是把
+  // 一个跟本次验收毫无关系的提交冒充成「我们合出来的那一个」——合并结果审查会照着它去
+  // 派活，看到的是别人的改动而不是这次的（区间还恰好是空的）。没有就写 null。
+  if (noCommit) snapshot.acceptedMergeCommit = null;
   if (merge.method === "already_merged" && !task.acceptedBaseCommit) {
     await appendTaskTimeline(
       taskId,
@@ -417,16 +376,22 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy, confirmUnverifie
     taskId,
     tagged
       ? `已按线上写的「只打标签不合并」在 ${merge.sourceBranch} 上打下标签 ${merge.tag}；目标分支 ${merge.targetBranch} 一个字节都没动。`
-      : `合并完成：${merge.sourceBranch} → ${merge.targetBranch}（${mergeLabel[merge.method] ?? merge.method}）。`,
+      : noCommit
+        ? `合并完成（未提交）：${merge.sourceBranch} 的改动已合进 ${merge.targetBranch} 的工作区并暂存，`
+          + `${merge.targetBranch} 的提交历史一动没动。去项目目录 git commit 落成提交，或 git reset --hard 丢弃；`
+          + `在你自己提交之前，这个工作区都是「脏」的，下一次验收会因此暂停。来源分支 ${merge.sourceBranch} 保留着，改动没提交也丢不了。`
+        : `合并完成：${merge.sourceBranch} → ${merge.targetBranch}（${mergeLabel[merge.method] ?? merge.method}）。`,
   );
   for (const warning of merge.warnings ?? []) {
     await appendTaskTimeline(taskId, `合并清理警告：${warning.message}`);
   }
-  const completedMerge = tagged ? undefined : { targetBranch: merge.targetBranch, commit: merge.afterCommit ?? null };
+  const completedMerge = tagged ? undefined : { targetBranch: merge.targetBranch, commit: noCommit ? null : merge.afterCommit ?? null };
   const completedTag = tagged ? merge.tag : undefined;
-  const completedSummary = completedMerge
-    ? `合并已完成：成果已合入 ${completedMerge.targetBranch}${completedMerge.commit ? `（提交 ${completedMerge.commit}）` : ""}。清理尚未完成。`
-    : `验收标签已创建${completedTag ? `（${completedTag}）` : ""}，清理尚未完成。`;
+  const completedSummary = noCommit
+    ? `合并已完成但按你的选择没有提交：改动在 ${merge.targetBranch} 的工作区里等你自己提交。清理尚未完成。`
+    : completedMerge
+      ? `合并已完成：成果已合入 ${completedMerge.targetBranch}${completedMerge.commit ? `（提交 ${completedMerge.commit}）` : ""}。清理尚未完成。`
+      : `验收标签已创建${completedTag ? `（${completedTag}）` : ""}，清理尚未完成。`;
   const cleanupGuard = await acceptanceGuard(taskId, "before_cleanup");
   if (cleanupGuard.failure) {
     const error = `${completedSummary}为避免删除正在使用或尚未结算的 worktree，清理已暂缓。${cleanupGuard.failure.error}`;
@@ -445,20 +410,28 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy, confirmUnverifie
   // squash 和「只打标签」之后，任务分支在 git 眼里**并没有**被合并（squash 是新造一个
   // 提交，标签压根没合），所以 `git branch -d` 一定会被拒。删分支这一项在这两档里直接
   // 不做并说清楚原因——绝不改用 `-D`：自动流程强删分支是不可逆的，那是用户自己按的活。
+  // 「合并后不提交」同理，而且更硬：那一档连提交都还没落，分支是那份改动**唯一**还在
+  // 版本库里的副本，删了它等于把用户没来得及提交的东西推下悬崖。
   const cleanPlan = cleanupPlanFor(plan.clean);
   const dependents = await dependentTasks(project.repoPath, task.projectId, taskId);
   if (dependents.length && cleanPlan.branch) {
     cleanPlan.branch = false;
     await appendTaskTimeline(taskId, `保留来源分支：仍有 ${dependents.length} 个子任务需要处理验收依赖（${dependents.map(t => t.title).join("、")}）。`);
   }
+  if (noCommit && dependents.length) {
+    await appendTaskTimeline(
+      taskId,
+      `注意：本次合并没有落提交，${dependents.length} 个子任务的「父成果依赖」会一直显示等待，直到你自己把这次合并提交到 ${merge.targetBranch}。`,
+    );
+  }
   // 按**计划**判而不是按本次 method：squash 计划的重试会拿到 already_merged，但分支
   // 依旧不是目标的祖先，`git branch -d` 一样删不掉——按 method 判会让重试卡死在清理
   // （审查实测：worktree 已删、分支删不动、任务永久停 merged）。
-  const branchUnmergeable = plan.merge === "squash" || plan.merge === "tag" || merge.method === "squash" || tagged;
+  const branchUnmergeable = plan.merge === "squash" || plan.merge === "tag" || merge.method === "squash" || tagged || noCommit;
   const branchKeptReason = !cleanPlan.branch
     ? `线上写的是「${ACCEPT_CLEAN_LABELS[plan.clean]}」`
     : branchUnmergeable
-      ? `${tagged ? "只打了标签没合并" : "squash 之后 git 不认为它已合并"}，按约定不强删`
+      ? `${tagged ? "只打了标签没合并" : noCommit ? "这次合并没有落提交，分支是那份改动唯一的版本库副本" : "squash 之后 git 不认为它已合并"}，按约定不强删`
       : null;
   if (branchUnmergeable) cleanPlan.branch = false;
 
@@ -513,7 +486,7 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy, confirmUnverifie
   );
   const finalized = await finalizeAcceptance(
     task,
-    `验收完成：目标分支 ${merge.targetBranch}；任务 status 保持 ${task.status}。`,
+    `验收完成：目标分支 ${merge.targetBranch}${noCommit ? "（改动已合入其工作区，等你自己提交）" : ""}；任务 status 保持 ${task.status}。`,
     cleanPlan.worktree,
     { completedMerge, completedTag },
   );
@@ -563,10 +536,13 @@ async function acceptanceContext(taskId: string): Promise<{
 
 // `by` 默认 human：这个函数的调用方绝大多数是「用户按了验收通过」（HTTP 路由、MCP
 // accept_task），只有 workflow-steps 里那条「线自己走到这一站」要显式传 "workflow"。
+//
+// `commit` 是**单次覆盖**：传 true/false 就按这一次说的办，不传就读项目设置
+// （projects.accept_commit，默认 true = 合并后落提交）。
 export async function acceptTask(
   taskId: string,
   by: AcceptBy = "human",
-  advanceOpts: WorkflowAdvanceOptions & { confirmUnverified?: boolean } = {},
+  advanceOpts: WorkflowAdvanceOptions & { confirmUnverified?: boolean; commit?: boolean } = {},
 ): Promise<AcceptTaskResult> {
   // 预览实例：库是主库的快照，任务行指的却是真分支、真 worktree。走结构化拒绝而不是抛
   // 异常，UI 才能把这句话原样显示在验收按钮旁边（见 preview-instance.ts）。
@@ -613,7 +589,7 @@ export async function acceptTask(
               `验收排队：同一仓库有其它验收/worktree 操作正在执行，已等待 ${(wait.waitedMs / 1000).toFixed(1)}s 后开始本次验收。`,
             );
           }
-          return acceptTaskUnlocked(taskId, by, advanceOpts.confirmUnverified === true);
+          return acceptTaskUnlocked(taskId, by, advanceOpts.confirmUnverified === true, advanceOpts.commit);
         });
       }
     } finally {
@@ -662,8 +638,11 @@ export function mountTaskAcceptanceRoutes(api: Hono): void {
     return c.json({ verification: await unexecutedVerification(task) });
   });
   api.post("/tasks/:id/accept", async (c) => {
-    const input = await c.req.json<{ confirmUnverified?: unknown }>().catch(() => null);
-    const result = await acceptTask(c.req.param("id"), "human", { confirmUnverified: input?.confirmUnverified === true });
+    const input = await c.req.json<{ confirmUnverified?: unknown; commit?: unknown }>().catch(() => null);
+    // commit 只认真正的布尔：别的一律当「没传」= 跟项目设置走。含糊的真值转换在这儿
+    // 就是替用户决定要不要在他的目标分支上产生提交。
+    const commit = typeof input?.commit === "boolean" ? input.commit : undefined;
+    const result = await acceptTask(c.req.param("id"), "human", { confirmUnverified: input?.confirmUnverified === true, commit });
     if (result.accepted) return c.json(result);
     const { httpStatus, ...body } = result;
     return httpStatus === 404 ? c.json(body, 404) : c.json(body, 409);

@@ -76,6 +76,18 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
     catch (error) { notify(error instanceof Error ? error.message : "默认工作目录保存失败"); }
     finally { setBusy(false); }
   };
+  // 同理，这个开关也是拨完即存。
+  const setAcceptCommit = async (acceptCommit: boolean) => {
+    setBusy(true);
+    try {
+      onUpdated(await api.updateProject(project.id, { acceptCommit }));
+      notify(acceptCommit
+        ? "以后验收合并会直接提交"
+        : "以后验收合并只把改动留在目标分支工作区，提交由你自己来");
+    }
+    catch (error) { notify(error instanceof Error ? error.message : "验收设置保存失败"); }
+    finally { setBusy(false); }
+  };
   const remove = async () => {
     setBusy(true);
     try { await api.deleteProject(project.id); onDeleted(); }
@@ -88,7 +100,7 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
         <section className="settings-section"><div className="settings-card">
           <div className="settings-row"><div>
             <b>你在这个项目里是成员</b>
-            <small>项目名称、工作目录、默认起手式、默认 worktree、预览命令、Git 身份与凭证、删除项目只有项目管理员能改；下面按只读展示。要改就找一位项目管理员。</small>
+            <small>项目名称、工作目录、默认起手式、默认 worktree、预览命令、验收合并设置、Git 身份与凭证、删除项目只有项目管理员能改；下面按只读展示。要改就找一位项目管理员。</small>
           </div></div>
         </div></section>
       )}
@@ -146,6 +158,34 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
         </div>
       </div></section>
       <ProjectPreviewSettings key={project.id} project={project} onUpdated={onUpdated} notify={notify} />
+      <section className="settings-section"><h2>验收</h2><div className="settings-card">
+        <div className="settings-row">
+          <div>
+            <b>验收合并后提交代码</b>
+            <small>
+              {project.acceptCommit
+                ? "开着 = 老规矩：验收通过时把任务分支合进目标分支并落成提交。"
+                : "关着 = 验收只把改动合进目标分支的工作区并暂存，不产生提交；目标分支的提交历史一动不动，提交或丢弃由你自己决定。"}
+            </small>
+            {/* 关掉之后的两条硬约束。它们不是「可能会遇到」，是这一档的**前提**：改动
+                要留在用户看得见的工作区里，就只能合在项目目录上；没提交的改动只剩任务
+                分支这一份副本，所以分支一律保留。不先说清，用户第一次用就会撞上 409。 */}
+            {!project.acceptCommit && (
+              <small>
+                这一档要求目标分支此刻正检出在项目目录、且工作区干净（上次没提交的合并也算脏），
+                任务分支一律保留，统一验收一次只合得了一个任务。
+              </small>
+            )}
+            <small>每次验收都能在确认框里单独改这一次，不改这里的默认。</small>
+          </div>
+          <Toggle
+            label={project.acceptCommit ? "提交" : "不提交"}
+            checked={project.acceptCommit}
+            disabled={busy || !canManage}
+            onChange={(checked) => void setAcceptCommit(checked)}
+          />
+        </div>
+      </div></section>
       <ProjectGitSettings projectId={project.id} canManage={canManage} notify={notify} />
       {canManage && (
         <section className="settings-section"><h2>危险操作</h2><div className="settings-card settings-danger-row"><div><b>删除项目</b><small>删除项目记录，以及它下面的任务、分组和运行记录；不会删除仓库目录。</small></div><Button variant="danger" disabled={busy} onClick={() => setConfirmDelete(true)}>删除项目</Button></div></section>

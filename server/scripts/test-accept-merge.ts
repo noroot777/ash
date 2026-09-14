@@ -54,12 +54,14 @@ try {
   const { prepareWorktree, worktreeBranchName } = await import("../src/git.js");
   const {
     acceptTagName,
-    cleanupAcceptedTask,
-    cleanupPlanFor,
     mergeTaskBranch,
-    worktreeRemovalBlocker,
     withTemporaryCleanupOutcome,
   } = await import("../src/git-accept.js");
+  const {
+    cleanupAcceptedTask,
+    cleanupPlanFor,
+    worktreeRemovalBlocker,
+  } = await import("../src/git-accept-cleanup.js");
   const { taskBranchDiff } = await import("../src/git-diff.js");
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { projects, sessions, tasks } = await import("../src/db/schema.js");
@@ -398,6 +400,7 @@ try {
       "标签原样没动",
     );
   }
+
 
   // 11. 清理档位：「只删 worktree，分支留着」与「都留着」。
   {

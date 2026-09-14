@@ -147,7 +147,7 @@ export const api = {
     request(`/projects/${id(projectId)}/preview/detect`),
   updateProject: (
     projectId: string,
-    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId" | "useWorktreeDefault" | "previewCommand" | "previewConfig">>,
+    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId" | "useWorktreeDefault" | "previewCommand" | "previewConfig" | "acceptCommit">>,
   ): Promise<ProjectView> => request(`/projects/${id(projectId)}`, json("PATCH", patch)),
   deleteProject: (projectId: string): Promise<{ deleted: true }> =>
     request(`/projects/${id(projectId)}`, { method: "DELETE" }),
@@ -372,9 +372,12 @@ export const api = {
     stepId: string,
   ): Promise<{ ok: true; url: string | null; port: number | null }> =>
     request(`/tasks/${id(taskId)}/preview/restart`, json("POST", { stepId })),
-  acceptanceCheck: (taskId: string): Promise<{ verification: import("@ash/shared/workflow-policy").UnexecutedVerification | null }> => request(`/tasks/${id(taskId)}/acceptance-check`),
-  acceptTask: async (taskId: string, confirmUnverified = false): Promise<AcceptTaskResult> => {
-    const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept`), json("POST", { confirmUnverified }));
+  acceptanceCheck: (taskId: string): Promise<{
+    verification: import("@ash/shared/workflow-policy").UnexecutedVerification | null;
+  }> => request(`/tasks/${id(taskId)}/acceptance-check`),
+  // `commit` 只覆盖这一次：不传 = 跟项目设置走（默认合并后提交）。
+  acceptTask: async (taskId: string, confirmUnverified = false, commit?: boolean): Promise<AcceptTaskResult> => {
+    const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept`), json("POST", { confirmUnverified, commit }));
     const body = await parseBody(response);
     if (isAcceptTaskResult(body)) return body;
     throw apiError(response, body);
@@ -385,8 +388,13 @@ export const api = {
   updateTaskBase: (taskId: string, sourceCommit: string): Promise<{ ok: boolean }> => request(`/tasks/${id(taskId)}/update-base`, json("POST", { sourceCommit })),
   baseUpdateRecovery: (taskId: string): Promise<BaseUpdateRecovery> => request(`/tasks/${id(taskId)}/base-update-recovery`),
   abandonTaskBaseUpdate: (taskId: string, fingerprint: string, resolution: "abandon" | "complete" | "manual", acknowledged = false): Promise<{ ok: boolean; message: string }> => request(`/tasks/${id(taskId)}/abandon-base-update`, json("POST", { fingerprint, resolution, acknowledged })),
-  acceptFamily: async (taskId: string, entries: { taskId: string; fingerprint: string; confirmUnverified?: boolean }[]): Promise<FamilyAcceptanceResult> => {
-    const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept-family`), json("POST", { entries }));
+  acceptFamily: async (
+    taskId: string,
+    entries: { taskId: string; fingerprint: string; confirmUnverified?: boolean }[],
+    // 这一次统一验收合完落不落提交；不传 = 跟项目设置走。
+    commit?: boolean,
+  ): Promise<FamilyAcceptanceResult> => {
+    const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept-family`), json("POST", { entries, commit }));
     const body = await parseBody(response);
     if (body && typeof body === "object" && "completed" in body) return body as FamilyAcceptanceResult;
     throw apiError(response, body);

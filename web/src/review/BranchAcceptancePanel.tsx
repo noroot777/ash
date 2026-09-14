@@ -9,6 +9,7 @@ import { useBranchPlan } from "./useBranchPlan.ts";
 import { ReleaseWorkspaceControl } from "./ReleaseWorkspaceControl.tsx";
 import { BaseUpdateRecoveryControl } from "./BaseUpdateRecoveryControl.tsx";
 import { UnexecutedVerificationNotice } from "./UnexecutedVerificationNotice.tsx";
+import { AcceptCommitChoice, useAcceptCommitDefault } from "./AcceptCommitChoice.tsx";
 
 const taskHref = (projectId: string, taskId: string) => `/?${new URLSearchParams({ project: projectId, task: taskId })}`;
 
@@ -20,6 +21,10 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
   const [checked, setChecked] = useState<string[]>([]);
   const [proposal, setProposal] = useState<BranchPlanView | null>(null);
   const [confirmUnverified, setConfirmUnverified] = useState(false);
+  // 本次统一验收「合并后提交代码」的选择。null = 没动过，跟项目设置走；默认值没读到之前
+  // 不许确认（见 AcceptCommitChoice 顶部）。
+  const [commitChoice, setCommitChoice] = useState<boolean | null>(null);
+  const commitDefault = useAcceptCommitDefault(task.projectId, action === "family");
   useEffect(() => { setChecked([]); setAction(null); setMessage(""); }, [task.id]);
   if (!task.useWorktree) return null;
   if (!view) return error ? <p role="alert">验收依赖读取失败：{error}<button onClick={() => void refresh()}>重试</button></p> : <p>正在检查验收依赖…</p>;
@@ -30,10 +35,24 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
   const selection = [view.task, ...descendants.filter(row => checked.includes(row.taskId))];
   const selectedProposal = proposal ? [proposal.task, ...proposal.descendants.filter(row => checked.includes(row.taskId))] : [];
   const unverified = selectedProposal.filter(row => row.unexecutedVerification);
+  // 这一勾只对**真的要合并**的任务有意义：已验收的走幂等快路不动 git，tag 策略压根不产生
+  // 合并提交。目标分支取这批要合的那个；口径不一致时不硬编一个具体分支名。
+  const mergingRows = selectedProposal.filter(row => row.stage !== "accepted" && row.strategy !== "tag");
+  const canChooseCommit = mergingRows.length > 0;
+  const commitTarget = mergingRows.every(row => row.targetBranch === mergingRows[0]?.targetBranch)
+    ? mergingRows[0]?.targetBranch || "目标分支" : "目标分支";
+  const commitChecked = commitChoice ?? commitDefault.value ?? true;
+  // 不提交时改动留在目标分支工作区里不落提交，第二个任务开合时必被自己的前一位判成脏工作区
+  // （后端也会拦）。在按下去之前就说清，别让用户看着「完成 1 个、剩下全停」去猜。
+  const commitBatchBlock = canChooseCommit && !commitChecked && mergingRows.length > 1
+    ? `「合并后不提交代码」时改动会留在 ${commitTarget} 的工作区里等你自己提交，所以一次只能合一个任务`
+      + `（这次选了 ${mergingRows.length} 个）。请逐个验收，或把「合并后提交代码」勾上。`
+    : null;
   const selectionBlock = familySelectionBlock([view.task, ...view.descendants], new Set(selection.map(row => row.taskId)));
   const run = async () => {
     if (!proposal || checking) return;
     if (action === "family" && unverified.length && !confirmUnverified) return;
+    if (action === "family" && canChooseCommit && (commitDefault.pending || commitBatchBlock)) return;
     setBusy(true);
     try {
       if (action === "update") {
@@ -42,7 +61,13 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
       } else {
         const blocked = familySelectionBlock([proposal.task, ...proposal.descendants], new Set(selectedProposal.map(row => row.taskId)));
         if (blocked) { setMessage(blocked.error); return; }
-        const result = await api.acceptFamily(task.id, selectedProposal.map(row => ({ taskId: row.taskId, fingerprint: row.fingerprint, confirmUnverified: !!row.unexecutedVerification && confirmUnverified })));
+        const result = await api.acceptFamily(
+          task.id,
+          selectedProposal.map(row => ({ taskId: row.taskId, fingerprint: row.fingerprint, confirmUnverified: !!row.unexecutedVerification && confirmUnverified })),
+          // 发的是用户在框里看到的那个值，而不是让后端再读一次项目设置。上面那道门禁保证
+          // 走到这里一定已经读到默认值。
+          canChooseCommit ? commitChoice ?? commitDefault.value ?? undefined : undefined,
+        );
         setMessage(result.ok ? `统一验收已完成，共 ${result.completed.length} 个任务。`
           : `已完成 ${result.completed.length} 个任务；其余暂停：${result.error}`);
       }
@@ -54,7 +79,7 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
   const open = (next: "update" | "family") => {
     if (checking) return;
     if (next === "family" && selectionBlock) { setMessage(selectionBlock.error); return; }
-    setConfirmUnverified(false); setProposal(view); setAction(next);
+    setConfirmUnverified(false); setCommitChoice(null); setProposal(view); setAction(next);
   };
   return (
     <section className="branch-acceptance-panel" aria-label="派生与验收依赖">
@@ -113,7 +138,9 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
         message={action === "update"
           ? "在临时工作区尝试 rebase，成功后更新子分支并保留旧提交。旧审查可能过期，需要核对改动与验证范围；发生冲突则不修改原工作区。"
           : "下面列出的版本将按父子顺序执行各自的合并、清理及验收后步骤。已完成的合并不会因后续任务失败而撤销。提交或范围发生变化时会停止。"}
-        confirmLabel={action === "update" ? "更新基线" : "确认统一验收"} danger busy={busy} confirmDisabled={checking || (action === "family" && (!!view.task.blocker || !!selectionBlock || (!!unverified.length && !confirmUnverified)))} onConfirm={() => void run()} onClose={() => { if (!busy) setAction(null); }}>
+        confirmLabel={action === "update" ? "更新基线" : canChooseCommit && !commitChecked ? "确认统一验收（不提交）" : "确认统一验收"} danger busy={busy}
+        confirmDisabled={checking || (action === "family" && (!!view.task.blocker || !!selectionBlock || (!!unverified.length && !confirmUnverified) || (canChooseCommit && (commitDefault.pending || !!commitBatchBlock))))}
+        onConfirm={() => void run()} onClose={() => { if (!busy) setAction(null); }}>
         {loading && <p role="status">正在更新验收依赖，检查完成后可继续确认。</p>}
         {error && <p role="alert">验收依赖读取失败：{error}</p>}
         {action === "update" && <p>{proposal.task.dependency?.message}</p>}
@@ -122,6 +149,15 @@ export function BranchAcceptancePanel({ task, notify, onTaskUpdated }: { task: T
         {action === "family" && unverified.length > 0 && <UnexecutedVerificationNotice
           verification={{ reason: "verify_not_run", stepIds: [], message: unverified.map(row => `「${row.title}」：${row.unexecutedVerification!.message}`).join(" ") }}
           checked={confirmUnverified} onChange={setConfirmUnverified} />}
+        {action === "family" && canChooseCommit && <AcceptCommitChoice
+          checked={commitChecked}
+          projectDefault={commitDefault.value}
+          error={commitDefault.error}
+          target={commitTarget}
+          disabled={busy}
+          onChange={setCommitChoice}
+          onRetry={commitDefault.reload} />}
+        {action === "family" && commitBatchBlock && <p role="alert">{commitBatchBlock}</p>}
       </ConfirmDialog>}
     </section>
   );

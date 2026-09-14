@@ -19,6 +19,10 @@ export const projects = sqliteTable("projects", {
   // 认出恰好一个才自动用；命令本身在任务工作区根目录用用户自己的 shell 执行。
   previewCommand: text("preview_command"),
   previewConfig: text("preview_config", { mode: "json" }).$type<ProjectPreviewConfig>(),
+  // 验收合并完要不要落提交。true（默认，也是老行为）= 合并产生提交；false = 只把改动
+  // 合进目标分支的工作区并暂存，目标分支的 ref 一个字节都不动，由人自己提交或丢弃。
+  // 单次验收可以覆盖它（POST /tasks/:id/accept 的 commit 参数），这里只是默认值。
+  acceptCommit: integer("accept_commit", { mode: "boolean" }).notNull().default(true),
   // 建这个项目的人(多人模式)。null = 自用模式建的、或转换前的存量项目。
   // 创建者自动是项目管理员,但成员关系的真源是 project_members —— 这一列只记出身。
   ownerUserId: text("owner_user_id"),

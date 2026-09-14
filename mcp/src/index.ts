@@ -397,10 +397,11 @@ server.registerTool(
     inputSchema: {
       taskId: z.string().describe("用户明确验收通过的任务 id"),
       confirmUnverified: z.boolean().optional().describe("返回 verify_not_run 时，只有用户知晓「独立验证尚未执行」且明确确认继续验收后才传 true；中途 human 关口会继续推进后续 verify，无需此参数"),
+      commit: z.boolean().optional().describe("这一次合并完落不落提交。不传 = 按项目设置（默认落提交）；false = 只把改动合进目标分支的工作区并暂存、目标分支的提交历史一动不动，此时要求目标分支正检出在项目目录且工作区干净，任务分支一律保留。只有用户明确说了「先别提交」之类才传"),
     },
   },
-  async ({ taskId, confirmUnverified }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/accept`, { confirmUnverified })); }
+  async ({ taskId, confirmUnverified, commit }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/accept`, { confirmUnverified, commit })); }
     catch (e) { return fail(e); }
   },
 );
