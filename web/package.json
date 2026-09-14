@@ -77,6 +77,8 @@
     "test:outbound-state": "node --experimental-strip-types scripts/test-outbound-state.mjs",
     "test:notes-filter": "node --experimental-strip-types scripts/test-notes-filter.mjs",
     "test:slash-match": "node --experimental-strip-types scripts/test-slash-match.mjs",
+    "test:file-mention": "node --experimental-strip-types scripts/test-file-mention.mjs",
+    "test:file-mention-dom": "node scripts/test-file-mention-dom.mjs",
     "test:workspace-history": "node --experimental-strip-types scripts/test-workspace-history.mjs",
     "test:reply-drafts": "node scripts/test-reply-drafts.mjs",
     "test:composer-upload": "node scripts/test-composer-upload.mjs",

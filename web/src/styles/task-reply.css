@@ -53,8 +53,7 @@
   left: clamp(14px, 3vw, 34px);
   margin-bottom: 7px;
 }
-.task-reply-command-menu,
-.task-reply-mention-menu {
+.task-reply-command-menu {
   width: min(390px, calc(100% - 28px));
   overflow: hidden;
   border: 1px solid var(--line2);
@@ -63,10 +62,8 @@
   padding: 5px;
   box-shadow: var(--menu-shadow);
 }
-.task-reply-command-menu > small,
-.task-reply-mention-menu > small { display: block; padding: 4px 7px 5px; color: var(--faint); font-size: 9.5px; }
-.task-reply-command-menu > button,
-.task-reply-mention-menu > button {
+.task-reply-command-menu > small { display: block; padding: 4px 7px 5px; color: var(--faint); font-size: 9.5px; }
+.task-reply-command-menu > button {
   display: flex;
   width: 100%;
   min-height: 35px;
@@ -79,19 +76,13 @@
   text-align: left;
 }
 .task-reply-command-menu > button:hover,
-.task-reply-command-menu > button[aria-selected="true"],
-.task-reply-mention-menu > button:hover,
-.task-reply-mention-menu > button[aria-selected="true"] { background: var(--sel-bg); }
+.task-reply-command-menu > button[aria-selected="true"] { background: var(--sel-bg); }
 .task-reply-command-menu b { flex: 0 0 auto; color: var(--accent); font-family: var(--font-mono); font-size: 11.5px; }
 .task-reply-command-menu span { flex: 0 0 auto; font-size: 11.5px; font-weight: 600; }
 .task-reply-command-menu em { min-width: 0; overflow: hidden; color: var(--faint); font-size: 10px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 /* 技能一多这张菜单就得能滚（本机 57 条）；键盘选中项的 scrollIntoView 在 SlashMenu 里。 */
 .task-reply-command-menu { max-height: min(46vh, 340px); overflow-y: auto; }
-.task-reply-mention-menu { width: min(270px, calc(100% - 28px)); }
-.task-reply-mention-menu > p { margin: 4px 7px 7px; color: var(--faint); font-size: 10.5px; }
-.task-reply-mention-menu > button { align-items: center; }
-.task-reply-mention-menu > button > svg { color: var(--muted); }
-.task-reply-mention-menu b { color: var(--ink); font-family: var(--font-mono); font-size: 11.5px; }
+/* `@` 菜单的盒子在 mention-menu.css，这里只管把它贴在输入框上方。 */
 .task-reply-inline-panel {
   right: clamp(14px, 3vw, 34px);
   max-height: min(64vh, 610px);
@@ -175,6 +166,17 @@
 .task-derivation-slash-menu > button[aria-selected="true"] { background: var(--sel-bg); }
 .task-derivation-slash-menu b { flex: 0 0 auto; color: var(--accent); font-family: var(--font-mono); font-size: 11.5px; }
 .task-derivation-slash-menu em { min-width: 0; overflow: hidden; color: var(--faint); font-size: 10px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+
+/* `@` 引用文件的菜单同样往下挂（理由同上），盒子样式来自 mention-menu.css。
+   `font-weight` 要压回来：外面那层 <label> 是加粗的小标题，继承下来整张菜单都会变粗。 */
+.task-derivation-note .mention-menu {
+  position: absolute;
+  z-index: 24;
+  top: 100%;
+  left: 0;
+  margin-top: 5px;
+  font-weight: 450;
+}
 .task-derivation-duet-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .task-derivation-gate { display: grid; gap: 6px; }
 .task-derivation-gate > span { color: var(--muted); font-size: 10px; font-weight: 550; }

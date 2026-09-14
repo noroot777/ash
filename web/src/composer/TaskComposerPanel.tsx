@@ -32,6 +32,8 @@ import { api } from "../lib/api.ts";
 import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import { useSkills } from "../lib/useSkills.ts";
 import { ComposerObjective } from "./ComposerObjective.tsx";
+import { FileMentionMenu } from "../components/MentionMenu.tsx";
+import { useFileMention } from "../lib/useFileMention.ts";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import { ComposerFields } from "./ComposerFields.tsx";
 import { ASH_SLASH_ITEMS, SLASHES } from "./composerParts.tsx";
@@ -97,6 +99,10 @@ export function TaskComposerPanel({
   const [groupId, setGroupId] = useState("");
   const [labels, setLabels] = useState<string[]>([]);
   const [useWorktree, setUseWorktree] = useState(DEFAULT_APP_SETTINGS.worktreeDefault);
+  // 全局默认那一份单独留着（而不是只拿它当初值）：工作目录弹层要能说出「你这次跟默认
+  // 不一样」，并给一颗把本次选择写回全局的按钮 —— 否则用户只能每建一个任务翻一次开关。
+  const [worktreeDefault, setWorktreeDefault] = useState(DEFAULT_APP_SETTINGS.worktreeDefault);
+  const [savingWorktreeDefault, setSavingWorktreeDefault] = useState(false);
   const [branches, setBranches] = useState<string[]>([]);
   const [base, setBase] = useState("");
   const [busy, setBusy] = useState(false);
@@ -145,6 +151,7 @@ export function TaskComposerPanel({
     ]).then(([settings, refs]) => {
       if (!alive) return;
       setUseWorktree(project.health.isRepo && settings.worktreeDefault);
+      setWorktreeDefault(settings.worktreeDefault);
       workflow.setGlobalDefaultId(settings.defaultWorkflowId ?? "");
       setBranches(refs.branches);
       setBase(refs.current ?? "");
@@ -167,6 +174,21 @@ export function TaskComposerPanel({
     () => [...new Set([...uploads.attachments.map((item) => item.path), ...(fork?.attachmentPaths ?? [])])],
     [uploads.attachments, fork],
   );
+  // 把「这次的工作目录选择」写回全局默认。成功文案里那句「设置 → 默认规则」会被
+  // WorkspaceToast 渲染成能点的路径，所以用户改完这一次还知道以后去哪儿再改。
+  const saveWorktreeDefault = async () => {
+    if (savingWorktreeDefault || useWorktree === worktreeDefault) return;
+    setSavingWorktreeDefault(true);
+    try {
+      const settings = await api.patchSettings({ worktreeDefault: useWorktree });
+      setWorktreeDefault(settings.worktreeDefault);
+      notify(`已设为默认：新建任务默认${settings.worktreeDefault ? "用独立 worktree" : "直接使用项目目录"}。以后可在「设置 → 默认规则」里改。`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "默认规则保存失败");
+    } finally {
+      setSavingWorktreeDefault(false);
+    }
+  };
   const applySlash = (nextMode: TaskMode, rest = "") => {
     onModeChange(nextMode);
     setBody(rest);
@@ -252,6 +274,15 @@ export function TaskComposerPanel({
   });
   const slashQuery = slashDismissed ? null : slashToken(body);
   const slashCandidates = mergeSlashItems(ASH_SLASH_ITEMS, skills.skills, slashQuery);
+  // `@` 引用项目里的文件：任务还不存在，所以按项目仓库搜。选中的路径原样写进正文，
+  // 跑起来之后 agent 在自己的工作目录（worktree 或主仓）里按同一条相对路径找得到。
+  // 非 git 项目照样给：服务端那边会退回自己走一遍目录（file-search.ts 的 walk）。
+  const mention = useFileMention({
+    value: body,
+    setValue: (next) => { changeBody(next); setSlashIndex(0); },
+    scope: { kind: "project", projectId: project.id },
+    onPicked: () => textareaRef.current?.focus(),
+  });
   const slashSelected = Math.min(slashIndex, Math.max(0, slashCandidates.length - 1));
   const pickSlash = (item: SlashItem) => {
     const ash = SLASHES.find((entry) => entry.command === item.command);
@@ -525,6 +556,9 @@ export function TaskComposerPanel({
             isRepo={project.health.isRepo}
             useWorktree={useWorktree}
             onUseWorktreeChange={setUseWorktree}
+            worktreeDefault={worktreeDefault}
+            savingWorktreeDefault={savingWorktreeDefault}
+            onSaveWorktreeDefault={saveWorktreeDefault}
             branches={branches}
             base={base}
             onBaseChange={setBase}
@@ -552,9 +586,15 @@ export function TaskComposerPanel({
           >
           {(executorTools) => <div className="studio-card">
           <ComposerObjective body={body} mode={mode} textareaRef={textareaRef}
-            onChange={(value) => { changeBody(value); setSlashIndex(0); setSlashDismissed(false); }}
+            onChange={(value) => { changeBody(value); setSlashIndex(0); setSlashDismissed(false); mention.onValueChange(); }}
             onPaste={uploads.onPaste} items={slashCandidates} selected={slashSelected} token={slashQuery}
-            onSelect={setSlashIndex} onPick={pickSlash} onDismiss={() => setSlashDismissed(true)} onSubmit={() => void submit()} />
+            onSelect={setSlashIndex} onPick={pickSlash} onDismiss={() => setSlashDismissed(true)} onSubmit={() => void submit()}
+            mention={{
+              onKeyDown: mention.onKeyDown,
+              menu: mention.open && (
+                <FileMentionMenu mention={mention} label="引用项目里的文件" className="composer-mention-menu" />
+              ),
+            }} />
           <ImagePreviewGroup isolated>
             <UploadAttachmentList attachments={uploads.attachments} pending={uploads.pending}
               error={uploads.error} onRemove={uploads.remove} onCancel={uploads.cancel} />
@@ -581,7 +621,7 @@ export function TaskComposerPanel({
           </footer>
           </div>}
           </ComposerFields>
-          <div className="studio-footnote"><span>/ 调用技能 · ⌘ / Ctrl + Enter 创建</span>{body.length > 0 && <span>{body.length} 字</span>}</div>
+          <div className="studio-footnote"><span>/ 调用技能 · @ 引用项目文件 · ⌘ / Ctrl + Enter 创建</span>{body.length > 0 && <span>{body.length} 字</span>}</div>
         </div>
       </div>
       {groupDialogOpen && <CreateGroupDialog

@@ -1,16 +1,24 @@
 import { randomUUID } from "node:crypto";
 
 export const starting = new Map<string, Set<string>>();
+const unfinished = new Map<string, Set<string>>();
+
+export const hasUnfinishedPreviewStart = (taskId: string): boolean => !!unfinished.get(taskId)?.size;
 
 /** 这一趟（taskId + 代号）开始由本进程驱动。 */
 export function beginDriving(taskId: string, gen: string): void {
   const gens = starting.get(taskId) ?? new Set<string>();
   gens.add(gen);
   starting.set(taskId, gens);
+  const pending = unfinished.get(taskId) ?? new Set<string>();
+  pending.add(gen);
+  unfinished.set(taskId, pending);
 }
 
 /** 这一趟结束了。**只撤自己那一代** —— 见 starting 上面的说明。 */
 export function endDriving(taskId: string, gen: string): void {
+  unfinished.get(taskId)?.delete(gen);
+  if (!unfinished.get(taskId)?.size) unfinished.delete(taskId);
   canceledGens.delete(gen);
   onCancel.delete(gen);
   const gens = starting.get(taskId);

@@ -1,0 +1,55 @@
+/* 输入框敲 `@` 弹出来的候选菜单（components/MentionMenu.tsx）。
+   盒子和行长什么样在这里，「贴在哪个输入框上方」由各表面自己的定位类给
+   （.task-reply-mention-menu / .composer-mention-menu / .team-reply-mention-menu）—— 三处
+   输入框的位置各不相同，但列表本身必须一眼看出是同一个东西。 */
+.mention-menu {
+  width: min(330px, calc(100% - 28px));
+  max-height: min(46vh, 320px);
+  overflow-y: auto;
+  border: 1px solid var(--line2);
+  border-radius: 11px;
+  background: var(--panel);
+  padding: 5px;
+  box-shadow: var(--menu-shadow);
+}
+.mention-menu > small { display: block; padding: 4px 7px 5px; color: var(--faint); font-size: 9.5px; }
+.mention-menu > .mention-menu-divider { margin-top: 3px; border-top: 1px solid var(--line2); padding-top: 6px; }
+.mention-menu > p { margin: 4px 7px 7px; color: var(--faint); font-size: 10.5px; }
+.mention-menu > button {
+  display: flex;
+  width: 100%;
+  min-height: 32px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  padding: 6px 8px;
+  text-align: left;
+}
+.mention-menu > button:hover,
+.mention-menu > button[aria-selected="true"] { background: var(--sel-bg); }
+.mention-menu > button > svg { flex: 0 0 auto; color: var(--muted); }
+.mention-menu b {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 路径这一段可以被挤窄（名字才是主角），但不能挤到一个字都不剩。 */
+.mention-menu em {
+  min-width: 40px;
+  overflow: hidden;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-menu .mention-menu-hit { background: transparent; color: var(--accent); font-weight: 700; }

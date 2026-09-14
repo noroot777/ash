@@ -9,6 +9,7 @@ import {
   type WorkspaceRoot,
 } from "./file-browser.js";
 import { openWithApp, probeOpeners, revealInFileManager } from "./openers/index.js";
+import { searchWorkspaceFiles } from "./file-search.js";
 
 // 任务文件浏览。全部是只读视角 + 三个「交给本机去做」的动作（在文件夹中显示、
 // 用某个应用打开、拿原始字节预览），任何一个都不写工作区。
@@ -76,6 +77,24 @@ export function mountFileRoutes(api: Hono) {
     try {
       const target = await resolveTarget(root, c.req.query("path") ?? "");
       return c.json(await probeOpeners(target.absPath, c.req.query("refresh") === "1"));
+    } catch (error) {
+      return c.json({ error: messageOf(error) }, statusOf(error) as 400);
+    }
+  });
+
+  // 对话框里敲 `@` 时的候选来源：只读、只回相对路径，不碰工作区。
+  // 没有工作目录（任务还没跑过、项目也不是仓库）时回空表而不是 404 —— 输入框据此
+  // 静默不弹菜单就好，弹一条红字说「没有工作目录」是在打断一次普通的打字。
+  api.get("/tasks/:id/file-search", async (c) => {
+    const root = await rootFor(c.req.param("id"));
+    if (!root) return c.json({ root: null, hits: [], truncated: false });
+    try {
+      const found = await searchWorkspaceFiles(root.path, {
+        gitRepo: root.gitRepo,
+        query: c.req.query("q") ?? "",
+        limit: Number(c.req.query("limit")) || undefined,
+      });
+      return c.json({ root: publicRoot(root), ...found });
     } catch (error) {
       return c.json({ error: messageOf(error) }, statusOf(error) as 400);
     }

@@ -14,6 +14,8 @@ import {
 } from "@phosphor-icons/react";
 import { Dropdown } from "../components/Dropdown.tsx";
 import { SlashMenu } from "../components/SlashMenu.tsx";
+import { FileMentionMenu } from "../components/MentionMenu.tsx";
+import { useFileMention } from "../lib/useFileMention.ts";
 import { Button, Toggle } from "../components/ui.tsx";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import {
@@ -251,6 +253,22 @@ export function TaskDerivationComposer({
     skills: leadSkills.skills,
     disabled: !teamMode,
   });
+  // 附言和议题都可以 `@` 引用文件：派生出来的任务在同一个项目里干活，路径通用。
+  // 两个输入框各要一份状态（各自的 token、各自的高亮行），所以 hook 调两次。
+  const noteMention = useFileMention({
+    value: note,
+    setValue: (next) => { noteTouched.current = true; setNote(next); },
+    scope: { kind: "task", taskId: task.id },
+    disabled: !teamMode || noteSlash.open,
+    onPicked: () => noteRef.current?.focus(),
+  });
+  const topicMention = useFileMention({
+    value: topic,
+    setValue: (next) => { topicTouched.current = true; setTopic(next); },
+    scope: { kind: "task", taskId: task.id },
+    disabled: teamMode,
+    onPicked: () => topicRef.current?.focus(),
+  });
 
   const worktree = derivedWorktreeDefaults(
     task,
@@ -452,10 +470,17 @@ export function TaskDerivationComposer({
                   noteTouched.current = true;
                   setNote(event.target.value);
                   noteSlash.onValueChange();
+                  noteMention.onValueChange();
                 }}
-                onKeyDown={(event) => { noteSlash.onKeyDown(event); }}
+                onKeyDown={(event) => {
+                  if (noteSlash.onKeyDown(event)) return;
+                  noteMention.onKeyDown(event);
+                }}
                 placeholder="补充执行重点、边界或验收要求…"
               />
+              {noteMention.open && !noteSlash.open && (
+                <FileMentionMenu mention={noteMention} label="给调度者引用工作区文件" />
+              )}
               {noteSlash.open && (
                 <SlashMenu
                   className="task-derivation-slash-menu"
@@ -481,9 +506,14 @@ export function TaskDerivationComposer({
                 onChange={(event) => {
                   topicTouched.current = true;
                   setTopic(event.target.value);
+                  topicMention.onValueChange();
                 }}
+                onKeyDown={(event) => { topicMention.onKeyDown(event); }}
                 placeholder="让两个 AI 围绕什么展开讨论…"
               />
+              {topicMention.open && (
+                <FileMentionMenu mention={topicMention} label="引用工作区文件" />
+              )}
             </label>
             <div className="task-derivation-duet-grid">
               <ExecutorField label="讨论者 A" choice={voiceA} types={availableTypes} profiles={profiles} knownProfiles={profiles} fallbackType={DUET_DEFAULTS.voiceA} onChange={setVoiceA} />

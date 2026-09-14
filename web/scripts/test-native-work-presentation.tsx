@@ -93,13 +93,37 @@ const reportedAgent = renderToStaticMarkup(<NativeWorkMeta row={{ ...pendingRow,
 assert.ok(reportedAgent.includes("claude-sonnet-4-6") && !reportedAgent.includes("调用指定") && !reportedAgent.includes("opus"));
 assert.ok(!pendingAgent.includes("执行中，内容实时更新"));
 
+// 智能水平和模型是一对:卡片里逐项列清楚（没有就说未记录），实跑值压过调用时点的档位。
+const effortRow = { ...pendingRow, kind: "agent" as const, model: "gpt-5.6-sol", effort: "low" };
+const withEffort = renderToStaticMarkup(<NativeWorkMeta row={effortRow} />);
+assert.ok(withEffort.includes("智能水平") && withEffort.includes("low") && !withEffort.includes("思考强度"), "用户可见文案只叫智能水平");
+assert.ok(!withEffort.includes("未记录"), "两项都问出来了就不该有未记录");
+const askedEffort = renderToStaticMarkup(<NativeWorkMeta row={{ ...pendingRow, kind: "agent", requestedEffort: "xhigh" }} />);
+assert.equal((askedEffort.match(/调用指定/g) ?? []).length, 1, "只有没上报实跑值的那一项标调用指定");
+assert.ok(askedEffort.includes("xhigh") && askedEffort.includes("未记录"), "智能水平点了名、模型没上报，两件事各自如实说");
+const reportedEffort = renderToStaticMarkup(<NativeWorkMeta row={{ ...effortRow, requestedEffort: "high" }} />);
+assert.ok(reportedEffort.includes("low") && !reportedEffort.includes("high") && !reportedEffort.includes("调用指定"));
+assert.ok(!renderToStaticMarkup(<NativeWorkMeta row={{ ...pendingRow, effort: "low" }} />).includes("智能水平"), "内部任务没有自己的智能水平");
+
+// 没有派活正文时照实说明,别留一片空白让人以为界面漏了。
+const noAssignment = renderToStaticMarkup(<NativeAgentConversation row={{ ...effortRow, kind: "agent" }} statusLabel="待处理" />);
+assert.ok(noAssignment.includes("未记录主会话给它的输入") && noAssignment.includes("加密"), "拿不到就说清为什么拿不到");
+const assigned = renderToStaticMarkup(<NativeAgentConversation row={{ ...effortRow, description: "去验证登录页" }} statusLabel="进行中" />);
+assert.ok(assigned.includes("收到的输入") && assigned.includes("去验证登录页") && !assigned.includes("未记录主会话给它的输入"));
+assert.ok(!assigned.includes("任务说明"), "子智能体那一份是「收到的输入」，和内部任务的说明不是一件事");
+
 // 抬头那条是横向摊开的一句，不是列表里那套两列表格。
-const headline = renderToStaticMarkup(<NativeWorkHeadline row={{ ...timedRow, kind: "agent", model: "gpt-5.6-sol" }} />);
+const headline = renderToStaticMarkup(<NativeWorkHeadline row={{ ...timedRow, kind: "agent", model: "gpt-5.6-sol", effort: "xhigh" }} />);
 assert.ok(!headline.includes("native-work__meta") && !headline.includes("<dl") && !headline.includes("开始时间"),
   "抬头不复刻两列表格");
-for (const piece of ["codex@test", "gpt-5.6-sol", "09/09 08:00–08:08", "8分 0秒"]) {
+for (const piece of ["codex@test", "gpt-5.6-sol", "xhigh", "09/09 08:00–08:08", "8分 0秒"]) {
   assert.ok(headline.includes(piece), `抬头该带上 ${piece}`);
 }
+// 抬头是摘要：问出来几项就摊开几项，一项都没问出来才留一个「未记录」。
+const halfKnown = renderToStaticMarkup(<NativeWorkHeadline row={{ ...timedRow, kind: "agent", model: "gpt-5.6-sol" }} />);
+assert.ok(!halfKnown.includes("未记录"), "模型有了就不必为智能水平占一格空位");
+const nothingKnown = renderToStaticMarkup(<NativeWorkHeadline row={{ ...timedRow, kind: "agent" }} />);
+assert.equal((nothingKnown.match(/未记录/g) ?? []).length, 1, "一项都没有时只说一次未记录");
 const runningHeadline = renderToStaticMarkup(<NativeWorkHeadline
   row={{ ...timedRow, kind: "agent", status: "running", endedAt: undefined }} />);
 assert.ok(runningHeadline.includes("09/09 08:00 起") && !runningHeadline.includes("尚未结束"),

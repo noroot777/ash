@@ -2,12 +2,12 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { bus } from "./bus.js";
-import { killByPid } from "./executors/spawn.js";
 import { RUNS_DIR } from "./paths.js";
-import { heldCacheOf, pruneNodeDeps, removePreparedLinks } from "./preview-deps.js";
+import { heldCacheOf, pruneNodeDeps } from "./preview-deps.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { readAnyPreview, recordPath, alive, archivePreview, type PreviewStep, type PreviewResult, type PreviewRecord } from "./preview-store.js";
-import { starting, beginDriving, endDriving, driving, cancelDriving } from "./preview-start-state.js";
+import { starting, beginDriving, endDriving, driving, cancelDriving, hasUnfinishedPreviewStart } from "./preview-start-state.js";
+import { hasPendingPreviewStops, pendingPreviewCaches, previewStopFailure, retryPreviewStops, stopPreviewProcesses, type PreviewStopResult } from "./preview-process-stop.js";
 import { runPreview, type PreviewStartOptions } from "./preview-start.js";
 export { readPreview, readPreviewLog, hasPreviewLog, previewLogPath } from "./preview-store.js";
 export type { PreviewStep, PreviewRecord, PreviewResult } from "./preview-store.js";
@@ -30,7 +30,7 @@ export async function startPreview(taskId: string, step: PreviewStep, cwd: strin
   const gen = registered ?? randomUUID();
   if (registered === undefined) beginDriving(taskId, gen);
   try {
-    return await runPreview(taskId, step, cwd, gen, options, () => stopPreviewExcept(taskId, null, gen));
+    return await runPreview(taskId, step, cwd, gen, options, async () => (await stopPreviewExcept(taskId, null, gen)).stopped);
   } finally {
     if (registered === undefined) endDriving(taskId, gen);
   }
@@ -39,8 +39,24 @@ export async function startPreview(taskId: string, step: PreviewStep, cwd: strin
 // 收掉一个任务的预览。reason 非空才往时间线写一行——刷新后仍能看出「预览被收了、
 // 为什么收的」，这是停止/暂停那条规矩的同一条判据。
 export async function stopPreview(taskId: string, reason: string | null): Promise<boolean> {
-  return await stopPreviewExcept(taskId, reason, null);
+  return (await stopPreviewExcept(taskId, reason, null)).stopped;
 }
+
+export async function stopPreviewForWorktreeCleanup(taskId: string): Promise<boolean> {
+  let result: StopOutcome;
+  try { result = await stopPreviewExcept(taskId, "验收清理工作区前回收预览", null); }
+  catch (error) { throw new Error(`${previewStopFailure(error).message}工作区已保留。`); }
+  if (result.problem) throw new Error(`${result.problem.message}工作区已保留；请稍后重试验收。`);
+  if (hasPendingPreviewStops(taskId)) throw new Error("预览进程尚未完全退出，工作区已保留；请稍后重试验收。");
+  if (hasUnfinishedPreviewStart(taskId)) throw new Error("预览启动正在退出，工作区已保留；请稍后重试验收。");
+  if (readAnyPreview(taskId)) throw new Error("预览已被另一趟启动替换，工作区已保留；请稍后重试验收。");
+  return result.stopped;
+}
+
+type StopOutcome = { stopped: boolean; problem?: Extract<PreviewStopResult, { stopped: false }> };
+const stopOutcome = (result: PreviewStopResult, acted = true): StopOutcome => ({
+  stopped: acted && result.stopped, ...(!result.stopped ? { problem: result } : {}),
+});
 
 /**
  * 收预览的真身。`exceptGen` 只有一个用处：起新预览时先收旧的，那一下不能把**自己**
@@ -50,35 +66,38 @@ async function stopPreviewExcept(
   taskId: string,
   reason: string | null,
   exceptGen: string | null,
-): Promise<boolean> {
+): Promise<StopOutcome> {
   // readAnyPreview：**还在启动的那一趟也得收得掉**。记录一删，那一趟自己下一个检查点
   // 就会发现代号没了，杀掉自己起的进程、把链撤干净（见 runPreview 里的 abandoned）。
   const record = readAnyPreview(taskId);
   // 记录还没落盘的那一段也要停得掉（见 canceledGens）：标上记号，那一趟到下一个检查点
   // 就自己收摊，而且**永远不会写出记录**。
   const marked = cancelDriving(taskId, exceptGen);
+  let pending = await retryPreviewStops(taskId);
   if (!record) {
-    if (!marked) return false;
+    if (!marked) return stopOutcome(pending, false);
     // 这一段还没有 url、也还没有 pid，能说的只有「取消了一次启动」——但必须说，
     // 「刷新之后仍看得出我停过」是停止/暂停那条规矩的判据。
-    if (reason) await appendTaskTimeline(taskId, `预览启动已取消（${reason}）`);
+    if (reason) await appendTaskTimeline(taskId, `预览启动已取消（${reason}）${pending.stopped ? "" : `；${pending.message}`}`);
     bus.publish({ type: "task.review", taskId });
-    return true;
+    return stopOutcome(pending);
   }
   // 不先看组长是否还活着：组长死、vite 仍留在同一进程组，正是必须回收的现场。
   // pid 为 0 = 还没 spawn，`kill(0, …)` 打的是**自己这一组**，绝不能放过去。
-  killPreviewProcesses(record);
-  // 还在装依赖的话，要收的是**它**：这时候还没有 dev server，pid 是 0。
-  if (record.installPid && record.installPid > 0) killByPid(record.installPid);
-  removePreparedLinks(record.links ?? []);
-  archivePreview(record, "stopped");
-  rmSync(recordPath(taskId), { force: true });
-  if (reason) await appendTaskTimeline(taskId, `预览已回收（${reason}）：${record.url ?? record.cmd}`);
+  const retired = await retirePreview(record, "stopped");
+  if (!retired) return stopOutcome(pending, false);
+  // 先前的待退出结论可能只是在保护当前代复用的依赖；当前代已归档后重新核对。
+  if (retired.stopped && !pending.stopped && pending.reason === "process_pending") {
+    pending = await retryPreviewStops(taskId);
+  }
+  const result = !pending.stopped && pending.reason === "record_error" ? pending : retired.stopped ? pending : retired;
+  if (reason) await appendTaskTimeline(taskId, result.stopped
+    ? `预览已回收（${reason}）：${record.url ?? record.cmd}` : `${result.message}（${reason}）`);
   // 自由工作流状态里的 preview.running 变了就必须发事件：那份快照的版本号只由
   // task.review / task.status 递增，不发的话前端拿到的新快照版本相等，会被当成
   // 「不比现值新」丢掉——按钮就一直停在「关闭预览」上。
   bus.publish({ type: "task.review", taskId });
-  return true;
+  return stopOutcome(result);
 }
 
 /**
@@ -93,17 +112,17 @@ async function stopPreviewExcept(
  * 调用点在**「点头之后」那一段开跑之前**，所以那一段又起的预览（用户特意编排的「验收完
  * 把线上环境开起来」）不受影响 —— 它是验收之后才有的东西。
  */
-export async function stopPreviewAtAccept(taskId: string): Promise<void> {
-  const record = readAnyPreview(taskId);
-  // 记录还没落盘、内存里已经有启动代的那一段同样要收：验收之后工作区就不归这个任务了，
-  // 让那一趟接着起来等于往一个已经交出去的检出里塞进程。这一段还没有 life 可读，按
-  // 「验收完就该收」处理。
-  if (!record) {
-    if (starting.has(taskId)) await stopPreview(taskId, "任务已验收完成");
-    return;
-  }
-  if (record.life === "gate") await stopPreview(taskId, "人工关口已结束");
-  else if (record.life === "task") await stopPreview(taskId, "任务已验收完成，按线上写的「任务结束时回收」收掉");
+export async function stopPreviewAtAccept(taskId: string): Promise<PreviewStopResult> {
+  try {
+    const record = readAnyPreview(taskId);
+    if (record && record.life !== "gate" && record.life !== "task") return { stopped: true };
+    // 没有当前记录时也检查此前归档的停止记录，以及尚未落盘的启动。
+    const result = await stopPreviewExcept(taskId, "验收时按预览回收设置关闭", null);
+    if (result.problem?.reason === "record_error") return result.problem;
+    if (hasUnfinishedPreviewStart(taskId)) return { stopped: false, reason: "start_pending", message: "预览启动正在退出，请稍后重试。" };
+    if (readAnyPreview(taskId)) return { stopped: false, reason: "replaced", message: "预览已被另一趟启动替换，请稍后重试。" };
+    return result.problem ?? { stopped: true };
+  } catch (error) { return previewStopFailure(error); }
 }
 
 /** 任务又开跑了：预览指向的是上一版代码，一律收掉，免得对着旧页面验新改动。 */
@@ -132,43 +151,8 @@ export async function sweepPreviews(): Promise<void> {
     return;
   }
   for (const taskId of dirs) {
-    if (!existsSync(recordPath(taskId))) continue;
-    const record = readAnyPreview(taskId);
-    if (!record) {
-      rmSync(recordPath(taskId), { force: true });
-      continue;
-    }
-    if (record.state === "starting") {
-      // 「正在启动」只有本进程的 startPreview 在驱动，而它一定同时记着自己的代号。
-      // **按代号问**，不是按任务问：两趟启动重叠时按任务问会把新那趟错判成孤儿杀掉
-      // （见 starting）。这一代没人驱动 = 驱动它的那个 server 已经不在了（重启/被杀），
-      // 这条记录再也不会有人收尾：它的子进程可能还活着（detached 的），软链也还挂着。
-      if (driving(taskId, record.gen)) continue;
-      killPreviewProcesses(record);
-      if (record.installPid && record.installPid > 0) killByPid(record.installPid);
-      removePreparedLinks(record.links ?? []);
-      archivePreview(record, "failed");
-      rmSync(recordPath(taskId), { force: true });
-      await appendTaskTimeline(taskId, `预览没能起完就中断了（ash 重启），已经清理：${record.cmd}`);
-      continue;
-    }
-    if (!(record.services?.length ? record.services.every((s) => s.status === "ready" && alive(s.pid)) : alive(record.pid))) {
-      // 记录的组长死了也要向原进程组补发信号；直接删记录会永久失去唯一的 pgid 线索。
-      killPreviewProcesses(record);
-      // 软链同理，而且**更没有第二次机会**：记录一删，`record.links` 就是最后一份线索，
-      // 此后 stopPreview 再也找不到该撤什么，那条链会永久留在用户的工作区里。
-      removePreparedLinks(record.links ?? []);
-      archivePreview(record, "failed");
-      rmSync(recordPath(taskId), { force: true });
-      await appendTaskTimeline(taskId, `预览进程已自行退出：${record.url ?? record.cmd}`);
-      continue;
-    }
-    if (record.life === "idle30" && Date.now() - Date.parse(record.startedAt) > IDLE_LIFE_MS) {
-      await stopPreview(taskId, "起来满 30 分钟，按线上写的回收");
-      continue;
-    }
-    const gone = await taskGone(taskId);
-    if (gone) await stopPreview(taskId, gone);
+    try { await sweepTaskPreview(taskId); }
+    catch (error) { await appendTaskTimeline(taskId, `预览清理暂缓：${String(error)}`); }
   }
   // 收尾再清备用依赖：这套东西按内容一份一份地装，一份前端依赖几百兆，不清就会在**用户的
   // 磁盘**上无声地涨（见 pruneNodeDeps）。
@@ -178,15 +162,43 @@ export async function sweepPreviews(): Promise<void> {
   // 缓存却会在预览还跑着的时候「过期」。删掉的后果不是下次慢一点——工作区那条软链还在、
   // 只是断了，dev server 按需加载下一个模块时才炸，记录上它还好端端地跑着。所以先把死掉的
   // 记录和它们的软链收干净，再拿**剩下这些还活着的**记录告诉清理器哪几份动不得。
-  pruneNodeDeps(heldCaches());
+  const held = heldCaches();
+  if (held) pruneNodeDeps(held);
+}
+
+async function sweepTaskPreview(taskId: string): Promise<void> {
+  if (hasPendingPreviewStops(taskId)) await retryPreviewStops(taskId);
+  if (!existsSync(recordPath(taskId))) return;
+  const record = readAnyPreview(taskId);
+  if (!record) { rmSync(recordPath(taskId), { force: true }); return; }
+  const interrupted = record.state === "starting";
+  // 按代号识别仍在驱动的启动；重叠启动中的新一代不会被当作上一条命留下的孤儿。
+  if (interrupted && driving(taskId, record.gen)) return;
+  if (interrupted || !(record.services?.length ? record.services.every((s) => s.status === "ready" && alive(s.pid)) : alive(record.pid))) {
+    const retired = await retirePreview(record, "failed");
+    if (!retired) return;
+    await appendTaskTimeline(taskId, !retired.stopped ? retired.message : interrupted
+      ? `预览没能起完就中断了（ash 重启），已经清理：${record.cmd}`
+      : `预览进程已自行退出：${record.url ?? record.cmd}`);
+    return;
+  }
+  if (record.life === "idle30" && Date.now() - Date.parse(record.startedAt) > IDLE_LIFE_MS) {
+    await stopPreview(taskId, "起来满 30 分钟，按线上写的回收");
+    return;
+  }
+  const gone = await taskGone(taskId);
+  if (gone) await stopPreview(taskId, gone);
 }
 
 /** 还活着的预览记录正占着哪几份依赖缓存（顺着它们挂出去的软链倒推）。 */
-function heldCaches(): string[] {
+function heldCaches(): string[] | null {
   const held = new Set<string>();
   let dirs: string[];
-  try { dirs = readdirSync(RUNS_DIR); } catch { return []; }
+  try { dirs = readdirSync(RUNS_DIR); } catch { return null; }
   for (const taskId of dirs) {
+    const pending = pendingPreviewCaches(taskId);
+    if (pending === null) return null;
+    for (const cache of pending) held.add(cache);
     // readAnyPreview：正在启动那一趟挂的链同样占着缓存，别在它装到一半时把树删了。
     for (const link of readAnyPreview(taskId)?.links ?? []) {
       const cache = heldCacheOf(link);
@@ -222,8 +234,13 @@ export function startPreviewSweeper(): NodeJS.Timeout {
   return timer;
 }
 
-function killPreviewProcesses(record: PreviewRecord): void {
-  for (const pid of new Set([record.pid, ...(record.services ?? []).map((s) => s.pid)])) {
-    if (pid > 0) killByPid(pid);
-  }
+async function retirePreview(record: PreviewRecord, status: "stopped" | "failed"): Promise<PreviewStopResult | null> {
+  // 各入口共享退出确认；未退出的进程另存停止记录，当前预览代仍可正常归档。
+  const result = await stopPreviewProcesses(record.taskId, record);
+  const current = readAnyPreview(record.taskId);
+  if (!current) return result; // 被取消的启动可能已经完成了同一趟归档。
+  if (current.gen !== record.gen || current.pid !== record.pid) return null;
+  archivePreview(record, status);
+  rmSync(recordPath(record.taskId), { force: true });
+  return result;
 }

@@ -194,6 +194,15 @@
 .team-reply-command-menu b { flex: 0 0 auto; color: var(--accent); font-family: var(--font-mono); font-size: 11.5px; }
 .team-reply-command-menu em { min-width: 0; overflow: hidden; color: var(--faint); font-size: 10px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 
+/* `@` 引用文件的菜单：盒子在 mention-menu.css，这里只把它贴到输入框上方。 */
+.team-reply-mention-menu {
+  position: absolute;
+  z-index: 24;
+  bottom: 100%;
+  left: clamp(14px,3vw,34px);
+  margin-bottom: 7px;
+}
+
 /* 执行者详情抽屉的外壳在 side-drawer.css（与子智能体执行详情共用一套）。 */
 
 @media (max-width: 720px) {

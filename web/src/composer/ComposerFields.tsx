@@ -46,6 +46,9 @@ export function ComposerFields({
   isRepo,
   useWorktree,
   onUseWorktreeChange,
+  worktreeDefault,
+  savingWorktreeDefault,
+  onSaveWorktreeDefault,
   branches,
   base,
   onBaseChange,
@@ -91,6 +94,10 @@ export function ComposerFields({
   isRepo: boolean;
   useWorktree: boolean;
   onUseWorktreeChange: (value: boolean) => void;
+  /** 「设置 → 默认规则」里那一份全局开关的现值，用来判断这次选择是不是在临时偏离它。 */
+  worktreeDefault: boolean;
+  savingWorktreeDefault: boolean;
+  onSaveWorktreeDefault: () => void;
   branches: string[];
   base: string;
   onBaseChange: (value: string) => void;
@@ -136,12 +143,27 @@ export function ComposerFields({
   const single = mode === "single";
   const duet = mode === "duet";
   const preset = single && workflowMode === "preset";
-  const workspaceEditor = <div className="composer-option-grid">
-    <label className="composer-toggle-field"><span>worktree</span><Toggle checked={useWorktree} onChange={onUseWorktreeChange} label={useWorktree ? "独立 worktree" : "直接使用项目目录"} /></label>
-    <div className="composer-field"><span>base 分支</span><Dropdown label="base 分支" value={base}
-      options={[{ value: "", label: "当前 HEAD" }, ...branches.map((branch) => ({ value: branch, label: branch, mono: true }))]}
-      disabled={!useWorktree} filterable={branches.length > 6} filterPlaceholder="筛选分支…" placeholder="当前 HEAD" onChange={onBaseChange} /></div>
-  </div>;
+  const workspaceLabel = (on: boolean) => (on ? "独立 worktree" : "项目目录");
+  // 这颗开关每次新建任务都要面对一遍，所以把「全局默认是什么」和「把这次的选择变成默认」
+  // 就放在改它的地方 —— 手机端(mobile/src/app/new.tsx)早就是这样，桌面端此前只能翻到
+  // 设置页去改，用户只好每建一个任务手动拨一次。
+  const workspaceEditor = <>
+    <div className="composer-option-grid">
+      <label className="composer-toggle-field"><span>worktree</span><Toggle checked={useWorktree} onChange={onUseWorktreeChange} label={useWorktree ? "独立 worktree" : "直接使用项目目录"} /></label>
+      <div className="composer-field"><span>base 分支</span><Dropdown label="base 分支" value={base}
+        options={[{ value: "", label: "当前 HEAD" }, ...branches.map((branch) => ({ value: branch, label: branch, mono: true }))]}
+        disabled={!useWorktree} filterable={branches.length > 6} filterPlaceholder="筛选分支…" placeholder="当前 HEAD" onChange={onBaseChange} /></div>
+    </div>
+    <p className="studio-help composer-workspace-default">
+      {useWorktree === worktreeDefault
+        ? <>全局默认就是「{workspaceLabel(worktreeDefault)}」，到「设置 → 默认规则」可随时改。</>
+        : <>全局默认是「{workspaceLabel(worktreeDefault)}」，这次只对本任务生效。
+          <button type="button" className="composer-workspace-default-save"
+            disabled={savingWorktreeDefault} onClick={onSaveWorktreeDefault}>
+            {savingWorktreeDefault ? "保存中…" : "设为默认"}
+          </button></>}
+    </p>
+  </>;
   const directory = isRepo && useWorktree ? "独立 worktree" : "项目目录";
   const groupName = groups.find((group) => group.id === groupId)?.name;
   const organization = [!duet && groupName, labels.length > 0 && `${labels.length} 个标签`].filter(Boolean).join(" · ");

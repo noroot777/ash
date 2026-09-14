@@ -12,7 +12,7 @@ type Checkout = {
   missingBacklink?: { file: string; content: string };
 };
 
-function physicalPath(path: string): string {
+export function physicalPath(path: string): string {
   let head = resolve(path);
   const tail: string[] = [];
   for (;;) {
@@ -26,7 +26,7 @@ function physicalPath(path: string): string {
   }
 }
 
-function samePath(a: string, b: string): boolean {
+export function samePath(a: string, b: string): boolean {
   return physicalPath(a) === physicalPath(b);
 }
 
@@ -109,6 +109,11 @@ export async function removeMissingWorktreeRegistrations(repo: string, scope: Sc
 }
 
 export class UnreadableWorktreeError extends Error {}
+
+export async function hasWorktreeRegistration(repo: string, path: string, branch: string): Promise<boolean> {
+  return (await registrations(repo)).some(record => samePath(record.path, path)
+    || (record.branch === branch && !samePath(record.path, repo)));
+}
 
 export async function assertReadableWorktree(path: string, repo: string, branch: string): Promise<void> {
   try {

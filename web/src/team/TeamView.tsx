@@ -19,6 +19,8 @@ import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { useConversation } from "../lib/useConversation.ts";
 import { useSkills } from "../lib/useSkills.ts";
 import { useSlashCompletion } from "../lib/useSlashCompletion.ts";
+import { useFileMention } from "../lib/useFileMention.ts";
+import { FileMentionMenu } from "../components/MentionMenu.tsx";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
@@ -88,6 +90,14 @@ function TeamReplyBox({
     enabled: !disabled,
   });
   const slash = useSlashCompletion({ value, setValue, skills: skills.skills, disabled });
+  // `@` 引用团队工作区里的文件：团队共享一个工作目录，执行者拿到的相对路径和这里一致。
+  const mention = useFileMention({
+    value,
+    setValue,
+    scope: { kind: "task", taskId: task.id },
+    disabled: disabled || slash.open,
+    onPicked: () => inputRef.current?.focus(),
+  });
   useEffect(() => {
     setError(null);
     setScheduleOpen(false);
@@ -158,6 +168,9 @@ function TeamReplyBox({
           onPick={slash.pick}
         />
       )}
+      {mention.open && !slash.open && (
+        <FileMentionMenu mention={mention} label="引用工作区文件" className="team-reply-mention-menu" />
+      )}
       {scheduleOpen && (
         <ScheduledSendPanel
           value={sendAt}
@@ -192,10 +205,11 @@ function TeamReplyBox({
           value={value}
           disabled={disabled}
           placeholder={disabled ? "团队已归档（只读）" : task.status === "idle" ? "调度者待命中，说句话就接回同一会话…" : "插一句话（改方向、加要求、直接替它拍板）…"}
-          onChange={(event) => { setValue(event.target.value); setScheduleOpen(false); slash.onValueChange(); }}
+          onChange={(event) => { setValue(event.target.value); setScheduleOpen(false); slash.onValueChange(); mention.onValueChange(); }}
           onPaste={uploads.onPaste}
           onKeyDown={(event) => {
             if (slash.onKeyDown(event)) return;
+            if (mention.onKeyDown(event)) return;
             if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); void send(); }
           }}
         />
