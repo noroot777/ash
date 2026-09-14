@@ -12,6 +12,8 @@ export function previewState(taskId: string): FreeWorkflowPreviewState {
   const launching = starting.has(taskId) || current?.state === "starting";
   const services = record?.services?.map((s) => ({
     id: s.id, name: s.name, command: s.cmd, port: s.port,
+    // 老记录里没这个字段（读出来 undefined）——归一成 null，界面据此当「不知道」，不发表意见。
+    lentPort: s.lentPort ?? null,
     status: current && s.status === "ready" && !alive(s.pid) ? "failed" as const : s.status,
     url: current && s.status === "ready" && alive(s.pid) && s.url
       ? record.proxyToken ? `/api/tasks/${record.taskId}/preview/open/${s.id}` : s.url

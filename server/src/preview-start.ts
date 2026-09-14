@@ -42,8 +42,11 @@ export async function runPreview(
   mkdirSync(dir, { recursive: true });
   const log = join(dir, "preview.log");
   const proxyToken = options?.proxy ? randomBytes(24).toString("hex") : undefined;
-  const services: PreviewServiceRecord[] = configs.map((s) => ({
+  const services: PreviewServiceRecord[] = configs.map((s, i) => ({
     id: s.id, name: s.name, cmd: s.command, status: "starting", pid: 0, url: null, port: null,
+    // 借给这个服务的那个端口。记下来只为一件事：起好之后能跟它**实际**听的那个对一下——
+    // 对不上就是命令没吃 $PORT（见 shared 的 previewPortDrift），而界面要拿这两个数字说话。
+    lentPort: ports[i] ?? null,
     log: configs.length === 1 ? log : join(dir, `preview-${gen}-${s.id}.log`),
   }));
   // 这台 ash 自己在哪。**只有 `boundListeningPort()` 算数**（确知绑上了才有值，不猜）：

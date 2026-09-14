@@ -34,3 +34,16 @@
 .preview-launch-error { color: var(--red); }
 .preview-launch-log { background: var(--canvas); }
 .preview-launch-fallback { font-size: 11px; }
+
+/* 端口对不上那一条。摆在舞台顶上、不挡预览本体；命令写对时整块不渲染，所以敢用强调色。 */
+.preview-port-drift { display: grid; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.preview-port-drift-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: start; }
+.preview-port-drift-item > svg { margin-top: 2px; color: var(--amber); }
+.preview-port-drift-item > div { display: grid; gap: 4px; min-width: 0; }
+.preview-port-drift-item b { font-size: 12px; }
+.preview-port-drift-item small { font-size: 11px; line-height: 1.7; color: var(--muted); }
+.preview-port-drift-item small code { font-family: var(--font-mono); }
+.preview-port-drift-fix { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 2px 0; }
+.preview-port-drift-fix code { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--canvas); font: 11px/1.6 var(--font-mono); overflow-wrap: anywhere; }
+.preview-workspace .preview-port-drift-fix button { display: inline-flex; gap: 4px; align-items: center; flex: none; color: var(--accent); border-color: var(--accent); }
+.preview-workspace .preview-port-drift-dismiss { flex: none; color: var(--muted); }

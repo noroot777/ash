@@ -41,6 +41,12 @@ export interface PreviewServiceState {
   status: "starting" | "ready" | "stopped" | "failed";
   url: string | null;
   port: number | null;
+  /**
+   * ash 借给这个服务的端口。跟 `port` 不一样时说明**命令没吃它**，自己挑了一个 —— 那正是
+   * 「$PORT 没写进命令」的唯一症状（判读与后果见 previewPortDrift）。老记录里没有这个字段，
+   * 读出来是 null，那时一律当成「不知道」，不提任何意见。
+   */
+  lentPort: number | null;
 }
 
 export const MAX_PREVIEW_SCRIPT_LENGTH = 16_000;
@@ -164,9 +170,9 @@ export function previewCommandSamples(dialect: PreviewPortDialect): PreviewComma
 }
 
 /**
- * 方言写反了就当场说。**这是唯一一条零误报的检查**，所以也是唯一一条会主动弹出来的：
- * `$PORT` 在 cmd 上、`%PORT%` 在 sh 上都不是「引用一个变量」，而是一串原样传下去的字面量，
- * 跑起来不报任何错，只是端口没进去。照抄别处文档的人一定会踩，而踩了看不出来。
+ * 方言写反了就当场说。**这是唯一一条零误报的静态检查**，所以也是唯一一条填字时会主动弹
+ * 出来的：`$PORT` 在 cmd 上、`%PORT%` 在 sh 上都不是「引用一个变量」，而是一串原样传下去
+ * 的字面量，跑起来不报任何错，只是端口没进去。照抄别处文档的人一定会踩，而踩了看不出来。
  */
 export function wrongPortDialectHint(command: string, dialect: PreviewPortDialect): string | null {
   if (dialect === "cmd" && /\$\{?PORT\d?\}?/.test(command)) {
@@ -176,6 +182,76 @@ export function wrongPortDialectHint(command: string, dialect: PreviewPortDialec
     return "这台 ash 跑在类 Unix 系统上，命令交给 sh 执行：%PORT% 在那儿是一串字面量，不是变量。请改写成 $PORT。";
   }
   return null;
+}
+
+// ── 端口漂移：命令没吃 ash 借的那个端口 ────────────────────────────────────
+//
+// 填字时的那些提示（判据、起手式、方言检查）本质都是**说明**——用户可以不读，而且大部分
+// 时候他确实不读。这一节是另一回事：它不是推断出来的规则，是**已经发生的事实**——服务此刻
+// 真的听在 5173 上，ash 借出去的 45843 真的没人要。
+//
+// 这条信号有三个别处都拿不到的性质：
+//   · **零误报**，因为它不是猜的。静态看命令永远分不清 `npm run dev` 背后是 vite 还是 next；
+//     跑起来之后不用分——端口对不上就是对不上。
+//   · **不挑语言**。不用读 package.json、不用认框架，Java / Go / Rails / 一段私有脚本全都覆盖。
+//   · **平时完全不出现**。命令写对了就没有这回事，所以它不占版面、不构成噪音——这正是
+//     「常驻文案」做不到的：文案永远在那儿，久了就成了背景。
+//
+// 代价是它只能**事后**说。但事后说反而更值：这时候用户正看着一个刚起好的预览，话里的
+// 两个端口号都是他自己的，比任何通用示例都具体。
+//
+// `fixed` 是这一节真正的分量所在：命令文本里出现过那个写死的端口号时，把它换成 $PORT 是
+// 一次**确定的改写**——那个数字就是服务实际绑上的端口，不是猜的。换不出来（端口写在
+// vite.config.ts / application.yml 里）就老实给 null，由界面改口说「它来自配置文件」，
+// 而不是编一条看着像对的命令。
+
+export interface PreviewPortDrift {
+  serviceId: string;
+  serviceName: string;
+  /** ash 借出去的那个。 */
+  lent: number;
+  /** 服务实际听的那个。 */
+  actual: number;
+  /** 把命令里写死的那个端口号换成端口变量之后的整行命令；命令里没有它就是 null。 */
+  fixed: string | null;
+}
+
+/**
+ * 哪些服务没吃 ash 借的端口。`lentPort` 缺失（老记录）或状态不是 ready 的一律跳过 ——
+ * 还没起来的服务谈不上「起在哪儿」。
+ */
+export function previewPortDrift(
+  services: readonly PreviewServiceState[],
+  dialect: PreviewPortDialect,
+): PreviewPortDrift[] {
+  return services.flatMap((service) => {
+    const { lentPort: lent, port: actual } = service;
+    // 用真值判断而不是 `=== null`：这两个字段的来源是盘上的 preview.json 和跨版本的接口，
+    // 老记录里 lentPort 压根不存在（是 undefined，`=== null` 拦不住），漏过去就会渲染出一条
+    // 「起在 5173，不是 ash 借的 undefined」。端口不可能是 0，所以真值判断在这里没有代价。
+    if (service.status !== "ready" || !lent || !actual || lent === actual) return [];
+    return [{
+      serviceId: service.id,
+      serviceName: service.name,
+      lent,
+      actual,
+      fixed: rewritePinnedPort(service.command, actual, dialect),
+    }];
+  });
+}
+
+/**
+ * 命令里那个写死的端口号 → 端口变量。命令里根本没有这个数字就返回 null。
+ *
+ * 边界只用一条 `\b`：`--port 5173`、`-p 5173`、`PORT=5173`、`0.0.0.0:5173`、
+ * `http://localhost:5173/` 全都该换，而 `cd project5173` 不该 —— 后者的 `5173` 两边都是
+ * 词字符，`\b` 天然不匹配。多处出现就全换：一条命令里同一个端口号出现两次（自己听 + 打给
+ * 自己的地址），换一处留一处才是坏的。
+ */
+function rewritePinnedPort(command: string, actual: number, dialect: PreviewPortDialect): string | null {
+  const pattern = new RegExp(`\\b${actual}\\b`, "g");
+  if (!pattern.test(command)) return null;
+  return command.replace(new RegExp(`\\b${actual}\\b`, "g"), previewPortRef("PORT", dialect));
 }
 
 // 「手动添加」后没填脚本又没勾选就离开，会留下一条空壳服务。它启动不了任何东西，

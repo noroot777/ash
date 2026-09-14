@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import { once } from "node:events";
+import { previewPortDrift } from "@ash/shared/preview";
 
 const root = mkdtempSync(join(realpathSync(tmpdir()), "ash-preview-lent-"));
 process.env.ASH_DB = join(root, "test.db");
@@ -76,7 +77,44 @@ try {
   check("ash 借的那个也写出来了，用户才对得上", own.log.includes(`借给它的 ${lent}`), true);
   // 不判失败：命令是用户的，他有权让服务听一个固定端口。预览照常可用。
   check("没因此把预览判死", own.record.state, "ready");
+
+  // ③ 界面靠 lentPort 说话 —— 日志里那句只有想起来去翻的人看得到，所以这个数字必须**同时**
+  //    落进记录里，界面才能把「借的 vs 实际」两个数摆在用户面前（shared 的 previewPortDrift）。
+  const stubbornService = own.record.services?.[0];
+  check("记录里带上了借出去的那个端口", stubbornService?.lentPort, lent);
+  check("记录里的实际端口就是命令写死的那个", stubbornService?.port, pinned);
+  const drift = previewPortDrift(
+    [{ id: stubbornService!.id, name: stubbornService!.name, command: stubbornService!.cmd,
+      status: "ready", url: stubbornService!.url, port: stubbornService!.port, lentPort: stubbornService!.lentPort }],
+    "posix",
+  );
+  check("界面这边判出一条漂移", drift.length, 1);
+  check("两个端口原样传给界面", [drift[0]?.lent, drift[0]?.actual], [lent, pinned]);
+  // 这条命令把端口写在命令文本里，所以改写是确定的 —— 敢把整行给用户抄走。
+  check("给出的改法是把那个数字换成 $PORT", drift[0]?.fixed?.includes("$PORT"), true);
+  check("改法里不再留着写死的端口", drift[0]?.fixed?.includes(String(pinned)), false);
   await stopPreview("stubborn", null);
+
+  // ④ 正常那一档在界面上必须**完全不出现**。命令写对时还冒出一条警告，它就成了背景噪音，
+  //    跟「常驻文案」一个下场。
+  check("认了 $PORT 的服务界面上不提", previewPortDrift(
+    [{ id: "ok", name: "预览脚本", command: "x", status: "ready", url: "u", port: 45843, lentPort: 45843 }], "posix",
+  ).length, 0);
+  // 老记录没有 lentPort（undefined，不是 null）—— 不许据此编出「不是 ash 借的 undefined」。
+  check("老记录一律当成不知道", previewPortDrift(
+    [{ id: "old", name: "预览脚本", command: "x", status: "ready", url: "u", port: 5173 } as never], "posix",
+  ).length, 0);
+  // 端口写在 vite.config.ts 里、命令文本里没有那个数字 → 编不出改法就老实给 null。
+  check("端口不在命令里就不编改法", previewPortDrift(
+    [{ id: "cfg", name: "预览脚本", command: "npm run dev", status: "ready", url: "u", port: 5173, lentPort: 45843 }], "posix",
+  )[0]?.fixed, null);
+  // `cd project5173` 里的 5173 两边都是词字符，不该被换掉。
+  check("目录名里的同名数字不许动", previewPortDrift(
+    [{ id: "dir", name: "预览脚本", command: "cd project5173 && npm run dev", status: "ready", url: "u", port: 5173, lentPort: 45843 }], "posix",
+  )[0]?.fixed, null);
+  check("Windows 上给的是 %PORT%", previewPortDrift(
+    [{ id: "win", name: "预览脚本", command: "npm run dev -- --port 5173", status: "ready", url: "u", port: 5173, lentPort: 45843 }], "cmd",
+  )[0]?.fixed, "npm run dev -- --port %PORT%");
 } finally {
   dbClient.close();
   rmSync(root, { recursive: true, force: true });

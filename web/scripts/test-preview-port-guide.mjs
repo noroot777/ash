@@ -80,7 +80,33 @@ try {
   await page.locator(".preview-port-mismatch").waitFor({ timeout: 5000 });
   assert.match(await page.locator(".preview-port-mismatch").textContent(), /cmd/, "方言写反了却没说是 cmd 的事");
 
-  console.log("preview port guide: rule both halves, one-click samples, host dialect and mismatch-only warning passed");
+  // —— 起好之后：端口对不上那一条必须在**屏幕上**，不是只在日志里 ——
+  // 这条跟上面那些不是一类东西：上面是说明（可以不读），这条是已经发生的事实。它零误报、
+  // 不挑语言，代价是只能事后说 —— 但事后说反而更具体，话里两个端口号都是用户自己的。
+  await page.getByTestId("switch-dialect").click(); // 切回 POSIX
+  const drift = page.locator(".preview-port-drift");
+  await drift.waitFor({ timeout: 5000 });
+  const driftText = await drift.innerText();
+  assert.match(driftText, /起在 5173/, "没说它实际起在哪儿");
+  assert.match(driftText, /借给它的 45843/, "没说 ash 借的是哪个——只给一个数字，用户对不上");
+  assert.match(driftText, /抢 5173/, "没说清后果，这条就只是个红字");
+  // 端口写在命令里 → 改写是确定的（那个数字就是它实际绑上的端口），敢给整行让他抄走。
+  assert.equal(await drift.locator("code").first().textContent(), "npm run dev -- --port $PORT",
+    "没给出改好的整行命令");
+  assert.equal(await drift.getByRole("button", { name: /复制改好的启动命令/ }).count(), 1, "改好的命令不能一键带走");
+
+  // 端口写在 vite.config.ts 里 → ash 编不出改法，必须老实改口，不许编一条看着像对的命令。
+  await page.getByTestId("services-config").click();
+  const fromConfig = await drift.innerText();
+  assert.match(fromConfig, /来自项目的配置文件/, "编不出改法时没改口");
+  assert(!/npm run dev -- --port \$PORT/.test(fromConfig), "端口不在命令里，却凭空编了一条改好的命令");
+
+  // 命令写对时**整块不渲染**。这一条是这套设计敢占版面的前提：常驻文案永远在那儿，久了
+  // 就成了背景；这条只在真出事时出现，所以它才「明显」。
+  await page.getByTestId("services-ok").click();
+  assert.equal(await drift.count(), 0, "命令写对了还在报警——那它就成了新的背景噪音");
+
+  console.log("preview port guide: rule both halves, one-click samples, host dialect, mismatch-only warning, and on-screen port drift (fixable / config-pinned / silent-when-correct) passed");
 } finally {
   await browser?.close();
   await server.close();

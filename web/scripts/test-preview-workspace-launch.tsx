@@ -59,7 +59,7 @@ assert.match(preset, /预览步骤/); assert.match(preset, /启动工作流预�
 
 const idle: FreeWorkflowPreviewState = { running: false, starting: false, hasLog: false, url: null, port: null, command: null, startedAt: null };
 const direct: FreeWorkflowPreviewState = { ...idle, running: true, proxied: false, url: "http://localhost:5173", command: "npm run dev",
-  services: [{ id: "main", name: "预览脚本", command: "npm run dev", status: "ready", url: "http://localhost:5173", port: 5173 }] };
+  services: [{ id: "main", name: "预览脚本", command: "npm run dev", status: "ready", url: "http://localhost:5173", port: 5173, lentPort: 5173 }] };
 const current = direct.services![0];
 const directHint = previewWorkspaceLaunchHint(direct, current, false, false);
 assert.match(directHint, /直连方式运行.*代理方式重启/);
