@@ -22,6 +22,7 @@ const { projects, tasks, chatRooms, chatMessages, chatContextEntries, chatSummar
 const { ChatService } = await import("../src/chat/service.js");
 const { mountChatRoutes } = await import("../src/chat/routes.js");
 const { setActor, SINGLE_ACTOR } = await import("../src/auth/context.js");
+const { withRepoLock } = await import("../src/repo-lock.js");
 const { setInstanceMode } = await import("../src/auth/mode.js");
 await ensureSchema();
 await setInstanceMode("single", stage);
@@ -130,7 +131,48 @@ try {
   assert.equal(raceAborted, false);
   assert.match(String(raceSend), /聊天已删除/, "删除窗口内的发送要被当场拒绝");
 
-  console.log("✓ 删群聊清空全部关联数据、中止在跑回复、保留派生任务与其他群，挡住任务旁聊、agent 身份与删除窗口内的发送");
+  // 相邻的第二个窗口：回复已经拿到模型结果、解出 result.task，正卡在 createTasks() 里等
+  // repo lock。这条早就越过了 abort 检查，删除闸拦不住它——锁一放它就把任务插进去，而那时
+  // 房间和消息已经没了，删除返回 200 之后凭空多出一个来自已删聊天的任务。
+  // （审查第 2 轮复现：after release { rooms: 0, messages: 0, tasks: 1 }）
+  let lockedInvoked!: () => void;
+  const lockedEntered = new Promise<void>((resolve) => { lockedInvoked = resolve; });
+  let startedAfterDelete = false;
+  const locked = new ChatService(async () => {
+    lockedInvoked();
+    return { text: '{"reply":"已委派","task":{"title":"锁后不该存在的任务","body":"来自已删群聊"}}' };
+  }, async () => { startedAfterDelete = true; });
+  const lockedApp = new Hono();
+  lockedApp.use("*", async (context, next) => { setActor(context, SINGLE_ACTOR); await next(); });
+  mountChatRoutes(lockedApp, locked);
+  const lockedCreated = await lockedApp.request("/chats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectId: "project", name: "锁竞态群", members }) });
+  const lockedRoomId = (await lockedCreated.json() as { id: string }).id;
+  const lockedRoom = (await db.select().from(chatRooms).where(eq(chatRooms.id, lockedRoomId))).at(0)!;
+  const tasksBeforeLock = (await db.select().from(tasks)).length;
+
+  // 先由别人占住这个仓库的锁，把回复钉在 createTasks() 的等待里。
+  let releaseLock!: () => void;
+  const lockHeld = new Promise<void>((resolve) => { releaseLock = resolve; });
+  const lockDone = withRepoLock(stage, () => lockHeld);
+  await locked.send(lockedRoom, "@codex 帮我实现一下", "locked-question", "本机");
+  await lockedEntered;
+  await delay(50); // 让 reply 走到 createTasks 并真正排进锁队列
+
+  // 删除此时必须等这条回复收尾——锁还没放，它就不该先把房间删了然后由回复补出一个任务。
+  const lockedDelete = lockedApp.request(`/chats/${lockedRoomId}`, { method: "DELETE" });
+  await delay(50);
+  assert.equal((await db.select().from(chatRooms).where(eq(chatRooms.id, lockedRoomId))).length, 1, "锁没放时删除应当还在等这条回复收尾");
+  releaseLock();
+  await lockDone;
+  const lockedDeleted = await lockedDelete;
+  assert.equal(lockedDeleted.status, 200, await lockedDeleted.text());
+  await delay(80);
+  assert.equal((await db.select().from(tasks)).length, tasksBeforeLock, "等锁期间被删的群聊不能在锁放开后补出任务");
+  assert.equal(startedAfterDelete, false, "更不该去启动它");
+  assert.equal((await db.select().from(chatRooms).where(eq(chatRooms.id, lockedRoomId))).length, 0);
+  assert.equal((await db.select().from(chatMessages).where(eq(chatMessages.roomId, lockedRoomId))).length, 0);
+
+  console.log("✓ 删群聊清空全部关联数据、中止在跑回复、保留派生任务与其他群，挡住任务旁聊、agent 身份、删除窗口内的发送与卡在 repo lock 上的任务创建");
 } finally {
   await delay(30); dbClient.close(); rmSync(stage, { recursive: true, force: true });
 }
