@@ -6,6 +6,10 @@
 //
 // 术语对齐产品口径：用户看到的是「起手式」（一条线的模板），代码里叫 workflow。
 import type { TaskStage, TaskStatus } from "./index.ts";
+// 启动方式住在 ./preview.ts —— 它不只是编排里的一个字段，项目预览配置也存一份
+// （自由预览没有线路图，那一档就是从项目配置里读的）。两边共用一个值域，别抄第二份。
+import { PREVIEW_MODE, PREVIEW_MODE_LABELS, type PreviewMode } from "./preview.ts";
+export { PREVIEW_MODE, PREVIEW_MODE_LABELS, type PreviewMode };
 
 export const STEP_KINDS = ["run", "verify", "preview", "human", "command", "accept"] as const;
 export type StepKind = (typeof STEP_KINDS)[number];
@@ -81,8 +85,6 @@ export const VERIFY_CHECK_LABELS: Record<VerifyCheck, string> = {
 
 export const PREVIEW_READY = ["port", "port+log", "http200"] as const;
 export type PreviewReady = (typeof PREVIEW_READY)[number];
-export const PREVIEW_MODE = ["command", "frontend", "full", "test"] as const;
-export type PreviewMode = (typeof PREVIEW_MODE)[number];
 export const PREVIEW_LIFE = ["gate", "task", "idle30"] as const;
 export type PreviewLife = (typeof PREVIEW_LIFE)[number];
 
@@ -103,12 +105,6 @@ export type AcceptClean = (typeof ACCEPT_CLEAN)[number];
 // 文案都从这儿取，谁也别再自己写一份。
 export const PREVIEW_READY_LABELS: Record<PreviewReady, string> = {
   port: "端口可连就算起来了", "port+log": "端口可连 + 日志 ready", http200: "HTTP 返回 200",
-};
-export const PREVIEW_MODE_LABELS: Record<PreviewMode, string> = {
-  command: "按项目启动命令",
-  frontend: "只启动前端",
-  full: "前后端全启动（独立新库）",
-  test: "前后端 + 测试库快照",
 };
 export const PREVIEW_LIFE_LABELS: Record<PreviewLife, string> = {
   gate: "下一个人工关口结束时回收", task: "任务结束时回收",

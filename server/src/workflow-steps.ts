@@ -20,7 +20,7 @@ import { augmentedEnv } from "./executors/spawn.js";
 import { RUNS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
 import { readPreview, startPreview, beginPreviewStart, endPreviewStart, previewStartCanceled, PREVIEW_CANCELED, type PreviewStep } from "./preview.js";
-import { previewProxyEnabled, type WorkspacePreviewInput } from "@ash/shared/preview";
+import { previewLaunchOf, previewProxyEnabled, type WorkspacePreviewInput } from "@ash/shared/preview";
 import { workspacePreviewDirectory } from "./preview-workspace.js";
 import { resolvePreviewCommand } from "./preview-command.js";
 import { rerunGateClosed } from "./rerun-gate.js";
@@ -343,8 +343,22 @@ async function restartPreviewStep(taskId: string, stepId?: string | null, input?
   );
   // 一条线上「打开预览」**不是** singleton（只有干活和合并是），所以调用方得指名道姓说
   // 重启哪一站；只有一站时才允许省略。
-  const step = stepId ? steps.find((s) => s.id === stepId) : steps.length === 1 ? steps[0]
-    : !steps.length && input ? { id: "workspace-preview", kind: "preview", p: { cmd: "", mode: "frontend", ready: "port", life: "task" }, fail: null } satisfies PreviewStep : null;
+  //
+  // 线上一站都没有、而用户从工作区开了一个：那实际上是一次自由预览，起多大一摊照**项目
+  // 配置**来（跟 free-workflow-preview.ts 同一条规矩）。这里原来写死 `"frontend"`，于是
+  // 项目配了整栈也没用，还得看自己是从哪个入口点开的预览。
+  const workspaceStep = !steps.length && input
+    ? {
+      id: "workspace-preview", kind: "preview", fail: null,
+      p: {
+        cmd: "", ready: "port", life: "task",
+        mode: input.config?.launch
+          ?? previewLaunchOf((await db.select({ previewConfig: projects.previewConfig })
+            .from(projects).where(eq(projects.id, task.projectId))).at(0)?.previewConfig),
+      },
+    } satisfies PreviewStep
+    : null;
+  const step = stepId ? steps.find((s) => s.id === stepId) : steps.length === 1 ? steps[0] : workspaceStep;
   if (!step) {
     return {
       ok: false,
