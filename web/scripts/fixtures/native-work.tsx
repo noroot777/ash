@@ -29,8 +29,10 @@ const native = (nativeWork: NonNullable<Extract<AgentEvent, { kind: "tool" }>["n
 
 function trace(final: boolean, updates = 0) {
   const events = [
-    native({ type: "call", id: "agent-run-call", name: "spawn_agent", input: { description: "运行中的资料搜集", prompt: longText, model: "gpt-5.6-sol" } }),
+    native({ type: "call", id: "agent-run-call", name: "spawn_agent", input: { description: "运行中的资料搜集", prompt: longText, model: "gpt-5.6-sol", reasoningEffort: "high" } }),
     native({ type: "result", id: "agent-run-call", result: JSON.stringify({ agent_id: "agent-run" }), failed: false }),
+    // 实跑档位是执行器后来上报的（codex 走 thread/read），压过派活时点的那个 high。
+    native({ type: "agent", id: "agent-run", status: "unknown", effort: "xhigh" }),
     native({ type: "call", id: "child-task-create", parentId: "agent-run", name: "TaskCreate", input: { subject: "核对浏览器状态", description: longText } }),
     native({ type: "result", id: "child-task-create", result: JSON.stringify({ task: { id: "17" } }), failed: false }),
     native({ type: "call", id: "agent-done-call", name: "agent", input: { description: "已完成的结构检查", prompt: "检查数据结构" } }),

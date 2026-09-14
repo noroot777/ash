@@ -18,6 +18,9 @@ export interface NativeWorkItem {
   owner?: string;
   model?: string;
   requestedModel?: string;
+  /** 智能水平（内部仍叫 effort）：实跑档位与派活时点的档位分开记。 */
+  effort?: string;
+  requestedEffort?: string;
   startedAt?: string;
   endedAt?: string;
   agentType?: string;
@@ -30,12 +33,31 @@ export const NATIVE_WORK_STATUS_LABELS: Record<NativeWorkStatus, string> = {
   pending: "待处理", running: "进行中", completed: "已完成", failed: "失败", stopped: "已停止", unknown: "状态未知",
 };
 
+/**
+ * 没有派活正文时照实说，别留一片空白让人以为是界面漏了。
+ * codex 的 `spawn_agent` 正文在上游就被整段加密（父子两份 rollout 里都只有密文），
+ * 所以那条路是真拿不到；claude 的 Agent 工具入参是明文，会原样记下来。
+ */
+export const NATIVE_WORK_NO_ASSIGNMENT = "未记录主会话给它的输入：codex 的派活正文在上游已加密，ash 取不到；claude 的派活正文会原样记录。";
+
 type Call = Extract<NativeWorkEvent, { type: "call" }>;
 const str = (value: unknown): string => typeof value === "string" ? value : typeof value === "number" ? String(value) : "";
 const toolName = (name: string) => name.split(/[./]/).at(-1)!.toLowerCase();
 const spawnTools = new Set(["agent", "task", "spawn_agent"]);
 const legacyTools = new Set([...spawnTools, "taskcreate", "taskupdate", "todowrite", "update_plan"]);
 const terminal = (status: NativeWorkStatus) => ["completed", "failed", "stopped"].includes(status);
+/** 没有真名字时用的占位标题。合并两条记录时靠它分辨哪个标题是真问出来的。 */
+const placeholderTitle = (sessionId: string, id: string) => `子智能体 ${id.slice(sessionId.length + 1, sessionId.length + 9)}`;
+const named = (row: NativeWorkItem) => row.title !== placeholderTitle(row.sessionId, row.id);
+/**
+ * codex 派给子智能体的正文是上游下发的密文（Fernet：`gAAAA…` 开头的单段 base64url）。
+ * 它既不是标题也不是「收到的输入」——贴出来只会让人以为记录坏了，所以当它不存在，
+ * 由 NATIVE_WORK_NO_ASSIGNMENT 说明为什么空着。
+ */
+const assignmentText = (value: unknown): string => {
+  const text = str(value);
+  return /^gAAAA[A-Za-z0-9_-]{32,}={0,2}$/.test(text) ? "" : text;
+};
 function parse(raw: string): Record<string, any> {
   try { const value = JSON.parse(raw); return value && typeof value === "object" ? value : {}; } catch { return {}; }
 }
@@ -64,7 +86,7 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
     let observedAt: string | undefined;
     const put = (id: string, patch: Partial<NativeWorkItem>) => {
       const previous = rows.get(id);
-      const next = { id, kind: "agent" as const, title: `子智能体 ${id.slice(item.sessionId.length + 1, item.sessionId.length + 9)}`, status: "unknown" as const, ...base, ...previous, ...patch };
+      const next = { id, kind: "agent" as const, title: placeholderTitle(item.sessionId, id), status: "unknown" as const, ...base, ...previous, ...patch };
       if (observedAt) {
         if (!next.startedAt && next.status === "running") next.startedAt = observedAt;
         if (terminal(next.status) && (!previous || !terminal(previous.status))) next.endedAt = observedAt;
@@ -122,6 +144,10 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
           patch.requestedModel = activity.model;
           delete patch.model;
         }
+        if (activity.effort && ["spawnagent", "spawn_agent"].includes(toolName(trace.label))) {
+          patch.requestedEffort = activity.effort;
+          delete patch.effort;
+        }
         const previous = rows.get(id);
         if (activity.closed && (previous?.status === "completed" || previous?.status === "failed")) patch.status = previous.status;
         if (activity.status === "unknown" && rows.has(id)) delete patch.status;
@@ -152,8 +178,13 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
         if (calls.has(id)) continue;
         calls.set(id, { call: activity });
         if (spawnTools.has(name)) {
-          put(id, { kind: "agent", parentId, title: str(input.description ?? input.name ?? input.task_name) || str(input.prompt ?? input.message).split("\n")[0].slice(0, 100) || "子智能体",
-            description: str(input.prompt ?? input.message), requestedModel: str(input.model), agentType: str(input.subagent_type ?? input.agent_type),
+          const assignment = assignmentText(input.prompt ?? input.message);
+          // 一个字都没问出来时不写 title，让 put 的占位标题生效（带一截 id，多行并排还分得开，
+          // 也让 named() 如实说「这行还没有真名字」）。
+          const title = str(input.description ?? input.name ?? input.task_name) || assignment.split("\n")[0].slice(0, 100);
+          put(id, { kind: "agent", parentId, ...(title ? { title } : {}),
+            description: assignment, requestedModel: str(input.model),
+            requestedEffort: str(input.reasoningEffort ?? input.reasoning_effort ?? input.effort), agentType: str(input.subagent_type ?? input.agent_type),
             status: legacy ? "unknown" : "running", ...(observedAt ? { startedAt: observedAt } : {}), legacy });
           calls.get(id)!.rowId = id;
         } else if (name === "taskcreate") {
@@ -191,10 +222,18 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
           const row = rows.get(rowId)!;
           rows.delete(rowId);
           const existing = rows.get(key(nativeId));
-          rows.set(key(nativeId), { ...row, id: key(nativeId), ...(existing ? {
+          // 两边各有一半:派活调用带着调用参数,子线程那条带着执行器后来报上来的真名字与实跑
+          // 档位。合并时逐项挑好的那个,别让后到的派活结果把已问出来的盖回去;两边都没名字时
+          // 按合并后的 id 重算占位标题,免得留着派活调用那一截 id。
+          const title = existing && named(existing) ? existing.title
+            : named(row) ? row.title : placeholderTitle(row.sessionId, key(nativeId));
+          rows.set(key(nativeId), { ...row, id: key(nativeId), title, ...(existing ? {
             activity: existing.activity, message: existing.message,
+            description: existing.description || row.description,
             model: existing.model || row.model,
             requestedModel: existing.requestedModel || row.requestedModel,
+            effort: existing.effort || row.effort,
+            requestedEffort: existing.requestedEffort || row.requestedEffort,
             startedAt: [row.startedAt, existing.startedAt].filter((at): at is string => !!at).sort()[0],
             endedAt: existing.endedAt ?? row.endedAt,
             status: activity.failed ? "failed" : existing.status,
