@@ -12,7 +12,6 @@ import type {
   TaskWorkflowMode,
   TeamPresetConfig,
 } from "@ash/shared";
-import { DEFAULT_APP_SETTINGS } from "@ash/shared";
 import { ChatCircleDots } from "@phosphor-icons/react";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import {
@@ -67,6 +66,7 @@ export function TaskComposerPanel({
   onCancel,
   onCreated,
   onCreateGroup,
+  onProjectUpdated,
   notify,
 }: {
   project: ProjectView;
@@ -81,6 +81,8 @@ export function TaskComposerPanel({
   onCancel: () => void;
   onCreated: (task: Task, noteIds: string[]) => void;
   onCreateGroup: (name: string, mode: GroupMode) => Promise<Group>;
+  /** 「设为本项目默认」写回之后，把新的项目行交回上层 —— 否则下次打开这块面板还按旧值预填。 */
+  onProjectUpdated: (project: ProjectView) => void;
   notify: (message: string) => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -98,10 +100,12 @@ export function TaskComposerPanel({
   const [gate, setGate] = useState(true);
   const [groupId, setGroupId] = useState("");
   const [labels, setLabels] = useState<string[]>([]);
-  const [useWorktree, setUseWorktree] = useState(DEFAULT_APP_SETTINGS.worktreeDefault);
-  // 全局默认那一份单独留着（而不是只拿它当初值）：工作目录弹层要能说出「你这次跟默认
-  // 不一样」，并给一颗把本次选择写回全局的按钮 —— 否则用户只能每建一个任务翻一次开关。
-  const [worktreeDefault, setWorktreeDefault] = useState(DEFAULT_APP_SETTINGS.worktreeDefault);
+  const [useWorktree, setUseWorktree] = useState(project.useWorktreeDefault);
+  // 项目那一份单独留着（而不是只拿它当初值）：工作目录弹层要能说出「你这次跟本项目的默认
+  // 不一样」，并给一颗把本次选择写回项目的按钮 —— 否则用户只能每建一个任务翻一次开关。
+  // 用本地 state 而不是直接读 project.useWorktreeDefault：`project` 由上层持有，写回之后
+  // 它什么时候刷新不归这里管，弹层上的提示不能等它。
+  const [worktreeDefault, setWorktreeDefault] = useState(project.useWorktreeDefault);
   const [savingWorktreeDefault, setSavingWorktreeDefault] = useState(false);
   const [branches, setBranches] = useState<string[]>([]);
   const [base, setBase] = useState("");
@@ -143,6 +147,10 @@ export function TaskComposerPanel({
     }).finally(() => {
       if (alive) setProfilesReady(true);
     });
+    // worktree 默认值住在项目行上（随 project 一起到手），不必等任何请求；换项目时这个
+    // effect 会重跑，于是选择跟着新项目走而不是留着上一个项目的。
+    setUseWorktree(project.health.isRepo && project.useWorktreeDefault);
+    setWorktreeDefault(project.useWorktreeDefault);
     Promise.all([
       api.settings(),
       project.health.isRepo
@@ -150,8 +158,6 @@ export function TaskComposerPanel({
         : Promise.resolve({ branches: [], current: null }),
     ]).then(([settings, refs]) => {
       if (!alive) return;
-      setUseWorktree(project.health.isRepo && settings.worktreeDefault);
-      setWorktreeDefault(settings.worktreeDefault);
       workflow.setGlobalDefaultId(settings.defaultWorkflowId ?? "");
       setBranches(refs.branches);
       setBase(refs.current ?? "");
@@ -159,6 +165,7 @@ export function TaskComposerPanel({
       if (alive) notify(error instanceof Error ? error.message : "新建任务配置读取失败");
     });
     return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notify, project.health.isRepo, project.id]);
 
   useEffect(() => {
@@ -174,17 +181,20 @@ export function TaskComposerPanel({
     () => [...new Set([...uploads.attachments.map((item) => item.path), ...(fork?.attachmentPaths ?? [])])],
     [uploads.attachments, fork],
   );
-  // 把「这次的工作目录选择」写回全局默认。成功文案里那句「设置 → 默认规则」会被
-  // WorkspaceToast 渲染成能点的路径，所以用户改完这一次还知道以后去哪儿再改。
+  // 把「这次的工作目录选择」写回**本项目**的默认值。文案里那句「设置 → 项目设置 → 工作
+  // 目录」指的是同一颗开关，改到哪儿去后面还找得着。
   const saveWorktreeDefault = async () => {
     if (savingWorktreeDefault || useWorktree === worktreeDefault) return;
     setSavingWorktreeDefault(true);
     try {
-      const settings = await api.patchSettings({ worktreeDefault: useWorktree });
-      setWorktreeDefault(settings.worktreeDefault);
-      notify(`已设为默认：新建任务默认${settings.worktreeDefault ? "用独立 worktree" : "直接使用项目目录"}。以后可在「设置 → 默认规则」里改。`);
+      const updated = await api.updateProject(project.id, { useWorktreeDefault: useWorktree });
+      setWorktreeDefault(updated.useWorktreeDefault);
+      // 上层那份 projects 也得换 —— 这块面板一关就整个卸载，下次打开是拿 project 重新
+      // 初始化的。不回传的话，用户刚设成默认、重开新建任务却还预填着旧值（第 1 轮审查 P1）。
+      onProjectUpdated(updated);
+      notify(`已设为本项目默认：「${project.name}」的新任务默认${updated.useWorktreeDefault ? "用独立 worktree" : "直接使用项目目录"}。以后可在「设置 → 项目设置 → 工作目录」里改。`);
     } catch (error) {
-      notify(error instanceof Error ? error.message : "默认规则保存失败");
+      notify(error instanceof Error ? error.message : "默认工作目录保存失败");
     } finally {
       setSavingWorktreeDefault(false);
     }

@@ -146,6 +146,8 @@ export const api = {
   me: (): Promise<AuthState> => req("/auth/state").then(j),
 
   projects: (): Promise<ProjectView[]> => req("/projects").then(j),
+  updateProject: (projectId: string, patch: Partial<Pick<ProjectView, "useWorktreeDefault">>): Promise<ProjectView> =>
+    req(`/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", body: JSON.stringify(patch) }).then(j),
   createProject: (b: { name: string; repoPath?: string }): Promise<ProjectView> =>
     req("/projects", { method: "POST", body: JSON.stringify(b) }).then(j),
 

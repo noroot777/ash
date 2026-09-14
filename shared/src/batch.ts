@@ -39,7 +39,7 @@ export interface BatchCreateTasksBody {
     executorId?: string | null;
     model?: string | null;
     reasoningEffort?: string | null;
-    useWorktree?: boolean; // omitted follows DEFAULT_APP_SETTINGS.worktreeDefault
+    useWorktree?: boolean; // omitted follows the project's useWorktreeDefault
     workflowId?: string | null; // 这一批默认走哪条起手式
     worktreeBase?: string | null;
     mergeTargetBranch?: string | null;

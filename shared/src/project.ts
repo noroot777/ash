@@ -12,6 +12,11 @@ export interface Project {
   repoPath: string; // git repo this project's tasks operate on
   // 本项目新建任务默认走哪条起手式；null = 跟随全局默认（见 AppSettings）
   workflowId: string | null;
+  // 本项目新建任务默认开不开独立 worktree。**只有项目这一层**，没有全局默认可跟随：
+  // 一个项目吃不吃得住 worktree 是它自己的性质（构建脚本写死绝对路径、依赖装在仓库
+  // 根、产物要落回原目录……），不是「我这个人喜欢怎样」，也不是「这台机器怎样」。
+  // 非 Git 项目里这一位无论是什么都开不出 worktree，由服务端统一钳死。
+  useWorktreeDefault: boolean;
   // 「打开预览」跑哪条命令；null = 让服务端按各语言自己的惯例去认（Maven / Gradle /
   // Django / go / cargo / dotnet / Node…），认出恰好一个才自动用，多个就回来问人。
   previewCommand: string | null;

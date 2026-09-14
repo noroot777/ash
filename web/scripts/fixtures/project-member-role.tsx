@@ -82,6 +82,7 @@ const project: ProjectView = {
   name: "示例项目",
   repoPath: "D:/ash-root/demo",
   workflowId: null,
+  useWorktreeDefault: false,
   createdAt: "2026-08-01T00:00:00.000Z",
   health: { exists: true, isRepo: true },
   myRole: "admin",

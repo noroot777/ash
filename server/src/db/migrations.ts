@@ -82,6 +82,44 @@ async function migrateFreeReviewStatuses(client: Client): Promise<void> {
 // migrateFreeWorkflowMergeStates() 从旧 merge_status 列恢复;只在它之前清一遍,匹配不到
 // 任何行,而旧 merge 列随后就被删了,预约永久留存(审查实测:old-merged/old-merging 两条
 // 升级后都还 armed)。幂等,匹配 0 行就是空转。
+// 「新任务默认开不开 worktree」从系统级搬到项目级（2026-09-14，用户拍板：一个项目吃不吃
+// 得住 worktree 是项目自己的性质，不是个人口味也不是这台机器的性质）。
+//
+// DDL 那句 `ADD COLUMN ... NOT NULL DEFAULT 1` 会把**所有**存量项目置成「开」，所以紧跟着
+// 要把老库那颗全局值灌回去，否则关掉过 worktree 的用户升级后会突然开始到处长 worktree。
+//
+// 幂等靠 app_settings 里那一行的存废当标记：灌完就删掉它，第二次启动匹配 0 行即空转。
+// 多人模式下 user_settings 里还有一人一份的旧值 —— 合并不出一个项目值（两个人可以设得
+// 相反），所以只用实例那份当种子，把个人行删掉并在日志里点名，让管理员知道该去项目设置
+// 里复核一遍；不声不响地挑一个人的值当全项目的值才是真的坑。
+async function migrateWorktreeDefaultToProjects(client: Client): Promise<void> {
+  try {
+    const info = await client.execute("PRAGMA table_info(projects)");
+    if (!info.rows.some((r) => r.name === "use_worktree_default")) return; // DDL 还没跑到
+    const legacy = await client.execute(
+      "SELECT value FROM app_settings WHERE key = 'worktreeDefault'",
+    );
+    const personal = await client.execute(
+      "SELECT COUNT(*) AS n FROM user_settings WHERE key = 'worktreeDefault'",
+    ).catch(() => null); // 没转过多人模式的库没有这张表
+    const personalCount = Number(personal?.rows.at(0)?.n ?? 0);
+    if (!legacy.rows.length && !personalCount) return; // 新库，或早就迁过了
+    if (legacy.rows.length) {
+      // 存的是 JSON，所以 'false' 才是假；别的值（手改坏的）一律当默认「开」。
+      const on = String(legacy.rows[0].value) === "false" ? 0 : 1;
+      await client.execute(`UPDATE projects SET use_worktree_default = ${on}`);
+      await client.execute("DELETE FROM app_settings WHERE key = 'worktreeDefault'");
+      console.log(`[ash] worktree 默认值已从全局设置搬进各项目（统一置为${on ? "开" : "关"}，之后按项目单独改）`);
+    }
+    if (personalCount) {
+      await client.execute("DELETE FROM user_settings WHERE key = 'worktreeDefault'");
+      console.log(`[ash] 多人模式下 ${personalCount} 份个人 worktree 默认值已作废：这颗开关改成项目级，请到「项目设置 → 工作目录」复核`);
+    }
+  } catch (e) {
+    console.warn("[ash] worktree 默认值搬迁失败,忽略:", e);
+  }
+}
+
 async function disarmReservationsOnAcceptedTasks(client: Client): Promise<void> {
   await client.execute(
     `UPDATE free_workflow_states SET review_armed=0, review_run_id=NULL, review_note=NULL
@@ -340,6 +378,7 @@ async function dropRetiredColumns(client: Client, skip?: ReadonlySet<string>): P
 export async function runDataMigrations(client: Client): Promise<void> {
   await widenWorkflowBuiltinIndex(client);
   await migrateLegacyNoteTaskLinks(client);
+  await migrateWorktreeDefaultToProjects(client);
   await migrateDebateToDuet(client);
   await migrateFreeReviewStatuses(client);
   const mergeStatesMigrated = await migrateFreeWorkflowMergeStates(client);

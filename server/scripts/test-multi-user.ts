@@ -64,9 +64,9 @@ const actorOf = (user: store.UserRow) => ({
   assert.equal(await visibility.projectRoleOf(SINGLE_ACTOR, "whatever"), "admin");
   assert.equal(await owned.ownedScope(SINGLE_ACTOR), null, "自用模式的资源不分归属");
   // 设置写入仍旧直落 app_settings。
-  await personal.patchSettingsFor(SINGLE_ACTOR, { worktreeDefault: false });
-  assert.equal((await appSettings.getAppSettings()).worktreeDefault, false);
-  await personal.patchSettingsFor(SINGLE_ACTOR, { worktreeDefault: true });
+  await personal.patchSettingsFor(SINGLE_ACTOR, { defaultWorkflowId: "solo-flow" });
+  assert.equal((await appSettings.getAppSettings()).defaultWorkflowId, "solo-flow");
+  await personal.patchSettingsFor(SINGLE_ACTOR, { defaultWorkflowId: "" });
 }
 
 // ── 转多人 ────────────────────────────────────────────────────────────────
@@ -170,10 +170,10 @@ const bobActor = actorOf(bob);
 
 // ── ⑥ 设置分面 ────────────────────────────────────────────────────────────
 {
-  await personal.patchSettingsFor(aliceActor, { worktreeDefault: false });
-  assert.equal((await personal.settingsFor(alice.id)).worktreeDefault, false);
-  assert.equal((await personal.settingsFor(bob.id)).worktreeDefault, true, "个人面互不影响");
-  assert.equal((await appSettings.getAppSettings()).worktreeDefault, true, "个人面不该写进全局那份");
+  await personal.patchSettingsFor(aliceActor, { defaultWorkflowId: "alice-flow" });
+  assert.equal((await personal.settingsFor(alice.id)).defaultWorkflowId, "alice-flow");
+  assert.equal((await personal.settingsFor(bob.id)).defaultWorkflowId, "", "个人面互不影响");
+  assert.equal((await appSettings.getAppSettings()).defaultWorkflowId, "", "个人面不该写进全局那份");
 
   // 实例面:普通用户改不动,管理员可以。
   await assert.rejects(

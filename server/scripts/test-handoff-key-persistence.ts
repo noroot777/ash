@@ -93,7 +93,7 @@ try {
   const beforeDelete = await snapshot();
   const settingsBeforeDelete = await getAppSettings();
   await dbClient.executeMultiple("CREATE TRIGGER fail_key_delete BEFORE DELETE ON handoff_local_peer_keys BEGIN SELECT RAISE(ABORT, 'simulated key delete failure'); END;");
-  const deletion = { handoffTargets: [], worktreeDefault: !settingsBeforeDelete.worktreeDefault };
+  const deletion = { handoffTargets: [], defaultWorkflowId: `${settingsBeforeDelete.defaultWorkflowId}-changed` };
   await assert.rejects(patchSettingsFor(SINGLE_ACTOR, deletion), /simulated key delete failure/);
   assert.deepEqual(await snapshot(), beforeDelete, "删除 key 失败时目标机和同批设置一起回滚，凭证仍可见");
   assert.deepEqual(await getAppSettings(), settingsBeforeDelete);

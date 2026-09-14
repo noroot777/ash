@@ -94,7 +94,7 @@ export function ComposerFields({
   isRepo: boolean;
   useWorktree: boolean;
   onUseWorktreeChange: (value: boolean) => void;
-  /** 「设置 → 默认规则」里那一份全局开关的现值，用来判断这次选择是不是在临时偏离它。 */
+  /** 本项目的默认工作目录（projects.useWorktreeDefault），用来判断这次选择是不是在临时偏离它。 */
   worktreeDefault: boolean;
   savingWorktreeDefault: boolean;
   onSaveWorktreeDefault: () => void;
@@ -144,8 +144,8 @@ export function ComposerFields({
   const duet = mode === "duet";
   const preset = single && workflowMode === "preset";
   const workspaceLabel = (on: boolean) => (on ? "独立 worktree" : "项目目录");
-  // 这颗开关每次新建任务都要面对一遍，所以把「全局默认是什么」和「把这次的选择变成默认」
-  // 就放在改它的地方 —— 手机端(mobile/src/app/new.tsx)早就是这样，桌面端此前只能翻到
+  // 这颗开关每次新建任务都要面对一遍，所以把「本项目默认是什么」和「把这次的选择变成本项目
+  // 默认」就放在改它的地方 —— 手机端(mobile/src/app/new.tsx)早就是这样，桌面端此前只能翻到
   // 设置页去改，用户只好每建一个任务手动拨一次。
   const workspaceEditor = <>
     <div className="composer-option-grid">
@@ -156,11 +156,11 @@ export function ComposerFields({
     </div>
     <p className="studio-help composer-workspace-default">
       {useWorktree === worktreeDefault
-        ? <>全局默认就是「{workspaceLabel(worktreeDefault)}」，到「设置 → 默认规则」可随时改。</>
-        : <>全局默认是「{workspaceLabel(worktreeDefault)}」，这次只对本任务生效。
+        ? <>本项目默认就是「{workspaceLabel(worktreeDefault)}」，到「设置 → 项目设置 → 工作目录」可随时改。</>
+        : <>本项目默认是「{workspaceLabel(worktreeDefault)}」，这次只对本任务生效。
           <button type="button" className="composer-workspace-default-save"
             disabled={savingWorktreeDefault} onClick={onSaveWorktreeDefault}>
-            {savingWorktreeDefault ? "保存中…" : "设为默认"}
+            {savingWorktreeDefault ? "保存中…" : "设为本项目默认"}
           </button></>}
     </p>
   </>;

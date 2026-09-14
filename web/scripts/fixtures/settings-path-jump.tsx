@@ -10,6 +10,7 @@
 import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { AuthState, ProjectView } from "@ash/shared";
+import { DEFAULT_APP_SETTINGS } from "@ash/shared";
 import type { ProjectPreviewConfig } from "@ash/shared/preview";
 import "../../src/styles/global.css";
 import "../../src/styles/workspace.css";
@@ -28,6 +29,7 @@ const project: ProjectView = {
   name: "第一个项目",
   repoPath: "/workspace/p-one",
   workflowId: null,
+  useWorktreeDefault: false,
   previewCommand: null,
   previewConfig: previewConfig(),
   createdAt: "2026-09-01T00:00:00.000Z",
@@ -51,6 +53,15 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
   if (pathname === "/api/host") return reply({ platform: "linux", sep: "/", home: "/root", canPickDirectory: false });
   if (pathname === "/api/projects/check") return reply({ exists: true, isRepo: true, dirty: false, branch: "main" });
   if (pathname === "/api/workflows") return reply([]);
+  if (pathname === "/api/settings") return reply(DEFAULT_APP_SETTINGS);
+  // 「默认规则」那一节底下还挂着接力设置，这几条空着它才渲染得出来。
+  if (pathname === "/api/handoff/identity") return reply({ fingerprint: "", publicKey: "", addresses: [] });
+  if (pathname === "/api/handoff/peers") return reply({ peers: [] });
+  if (pathname === "/api/handoff/return-grants") return reply({ grants: [] });
+  if (pathname === "/api/handoff/targets") return reply({ targets: [] });
+  if (pathname === "/api/handoff/targets/sources") return reply({ sources: [] });
+  if (pathname === "/api/projects") return reply([]);
+  if (pathname === "/api/skills/overview") return reply({ rows: [], scannedAt: null });
   if (pathname.endsWith("/git")) return reply({
     identity: { isRepo: true, userName: { value: null, scope: null }, userEmail: { value: null, scope: null }, sshKeyPath: null, sshCommand: { value: null, scope: null }, remotes: [] },
     credential: null,
@@ -72,6 +83,9 @@ function Fixture() {
       <main style={{ width: "min(900px, calc(100% - 32px))", margin: "24px auto" }}>
         <button type="button" data-testid="raise-ambiguous" onClick={() => notify(AMBIGUOUS, { sticky: true })}>报一句预览起不来</button>
         <button type="button" data-testid="raise-unknown" onClick={() => notify(UNKNOWN_PATH, { sticky: true })}>报一句指向不存在设置的话</button>
+        {/* 设置页**自己**也会指路：worktree 默认值搬去项目级之后，「默认规则」那一节留了
+            一句指向「设置 → 项目设置 → 工作目录」的话，走的是同一套 SettingsPathText。 */}
+        <button type="button" data-testid="open-defaults" onClick={() => { setSection("defaults"); setAnchor(null); }}>进默认规则</button>
         {section && <SettingsPage
           section={section}
           anchor={anchor}
@@ -79,7 +93,7 @@ function Fixture() {
           project={project}
           tasks={[]}
           groups={[]}
-          onSection={setSection}
+          onSection={(next, nextAnchor) => { setSection(next); setAnchor(nextAnchor ?? null); }}
           onBack={() => setSection(null)}
           onProjectUpdated={() => {}}
           onProjectDeleted={() => {}}

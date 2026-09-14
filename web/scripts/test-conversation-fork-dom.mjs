@@ -34,7 +34,7 @@ try {
     if (path === "/api/tasks/source/sessions") return json([{ id: "s1", taskId: "source", role: "single", agentType: "codex", startedAt: "2026-09-10T01:00:00Z", endedAt: "2026-09-10T01:01:00Z" }]);
     if (path === "/api/sessions/s1/output") return failOutput ? json({ error: "暂时不可读" }, 503) : route.fulfill({ body: "已恢复的回复" });
     if (path === "/api/agents") return json([{ id: "exec-codex", name: "codex@local", type: "codex", isDefault: true }]);
-    if (path === "/api/settings") return json({ worktreeDefault: false, defaultWorkflowId: null });
+    if (path === "/api/settings") return json({ defaultWorkflowId: null });
     if (path.endsWith("/run")) return json({ ok: true });
     return json([]);
   });

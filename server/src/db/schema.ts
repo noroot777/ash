@@ -11,6 +11,10 @@ export const projects = sqliteTable("projects", {
   apiKeys: text("api_keys"), // legacy project-level credentials, kept for compatibility
   // 本项目新建任务默认用哪条起手式（workflows.id 或内置 key）。空 = 跟随全局默认。
   workflowId: text("workflow_id"),
+  // 本项目新建任务默认开不开独立 worktree。没有「跟随全局」这一档 —— 这颗开关只住在
+  // 项目这一层（曾经是 app_settings.worktreeDefault，2026-09-14 搬下来，迁移见
+  // db/migrations.ts `migrateWorktreeDefaultToProjects`）。
+  useWorktreeDefault: integer("use_worktree_default", { mode: "boolean" }).notNull().default(true),
   // 「打开预览」跑哪条命令。空 = 按各语言惯例自动识别（见 preview-command.ts），
   // 认出恰好一个才自动用；命令本身在任务工作区根目录用用户自己的 shell 执行。
   previewCommand: text("preview_command"),

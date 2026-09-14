@@ -113,7 +113,7 @@ function SettingsNavItems({
 }: {
   items: readonly NavItem[];
   section: SettingsSection;
-  onSection: (section: SettingsSection) => void;
+  onSection: (section: SettingsSection, anchor?: string | null) => void;
 }) {
   return items.map((item) => {
     const Icon = NAV_ICONS[item.id];
@@ -155,7 +155,7 @@ export function SettingsPage({
   project: ProjectView | null;
   tasks: TaskListItem[];
   groups: Group[];
-  onSection: (section: SettingsSection) => void;
+  onSection: (section: SettingsSection, anchor?: string | null) => void;
   onBack: () => void;
   onProjectUpdated: (project: ProjectView) => void;
   onProjectDeleted: (projectId: string) => void;
@@ -202,7 +202,7 @@ export function SettingsPage({
           {section === "config" && <ConfigTransferSettings notify={notify} />}
           {section === "users" && <UsersSettings notify={notify} onAccount={() => onSection("account")} />}
           {section === "account" && <AccountSettings notify={notify} />}
-          {section === "defaults" && <DefaultsSettings notify={notify} />}
+          {section === "defaults" && <DefaultsSettings notify={notify} onOpen={onSection} />}
           {section === "project" && project && (
             <ProjectSettingsPanel
               project={project}

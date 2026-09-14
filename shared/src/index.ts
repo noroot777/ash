@@ -38,7 +38,6 @@ export type {
 // merge persisted values over this object so a fresh/older database gets the
 // current factory defaults without requiring seed rows.
 export interface AppSettings {
-  worktreeDefault: boolean;
   // 新建任务默认用哪条起手式（workflows.id 或内置 key）。空串 = 没设过，服务端落到
   // DEFAULT_WORKFLOW_KEY —— 那个 key 是运行时常量，这里不能 import（见上面的说明）。
   defaultWorkflowId: string;
@@ -77,7 +76,6 @@ export interface AppSettings {
 }
 
 export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
-  worktreeDefault: true,
   defaultWorkflowId: "",
   skillRefreshSeconds: 3600,
   handoffTargets: [],
