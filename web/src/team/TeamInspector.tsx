@@ -177,6 +177,7 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
     title: "时间轴",
     icon: <Clock size={14} />,
     defaultOpen: true,
+    shortcut: "t",
     render: (context) => (
       <TeamTimeline
         lead={context.task}
@@ -217,6 +218,7 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
     ),
   },
   {
+    // 和单飞任务同一条判据：调度台自己没派过子智能体时这一格不存在（useSubagents 决定）。
     id: "subagents",
     title: "子智能体",
     shortcut: "s",

@@ -58,6 +58,11 @@ try {
   await assertScope("project", "跨 Inspector 序列的 g 与 t 不能串成 G T");
   assert.match(await log.textContent(), /inspector:f$/, "Inspector 的 I F 仍应照常触发");
 
+  // 同一个前缀下的另一档：G S 进设置，且不能顺手把作用域也切了。
+  await type(["g", "s"]);
+  assert.match(await log.textContent(), /settings$/, "G S 应打开设置");
+  await assertScope("project", "G S 不应顺带切模式");
+
   // 半截 G 之后，别的单键快捷键仍然照常：c 该新建就新建。
   await type(["g", "c"]);
   assert.match(await log.textContent(), /create$/, "半截 G T 之后的单键快捷键仍应生效");

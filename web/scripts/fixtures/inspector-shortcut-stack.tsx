@@ -19,7 +19,7 @@ const populatedItems = buildConversationItems([{ session, output: "fixture", tra
 ] }], [session], []);
 const panel = (name: string) => () => <p data-panel={name}>{name}</p>;
 const outerBase: InspectorDescriptor<Context>[] = [
-  { id: "subagents", title: "子智能体", shortcut: "s", icon: <Robot size={14} />, render: panel("outer-subagents") },
+  { id: "subagents", title: "子智能体", shortcut: "s", icon: <Robot size={14} />, defaultOpen: true, render: panel("outer-subagents") },
   { id: "outer-info", title: "外层信息", shortcut: "i", icon: <Robot size={14} />, render: panel("outer-info") },
   { id: "outer-extra", title: "外层专属", shortcut: "e", icon: <Robot size={14} />, render: panel("outer-extra") },
 ];
@@ -63,6 +63,7 @@ const activate = async (key: InspectorShortcutKey) => {
   return handled;
 };
 const active = (host: string) => document.querySelector(`[data-host="${host}"] [role="tab"][aria-selected="true"]`)?.getAttribute("data-tab-id") ?? null;
+const hasTab = (host: string, id: string) => !!document.querySelector(`[data-host="${host}"] [role="tab"][data-tab-id="${id}"]`);
 const visible = (host: string) => !!document.querySelector(`[data-host="${host}"] .inspector-host`);
 const panelVisible = (name: string) => !!document.querySelector(`[data-panel="${name}"]`);
 const expect = (condition: unknown, message: string) => { if (!condition) throw new Error(message); };
@@ -71,8 +72,25 @@ async function run() {
   const log: string[] = [];
   await act(async () => root.render(<StrictMode><App /></StrictMode>));
   expect(hasInspectorShortcutTarget(), "outer should register on mount");
+
+  // 没派过子智能体、记录也读全了：那一格根本不该存在，快捷键自然也开不出东西来。
+  expect(!hasTab("outer", "subagents"), "subagents tab must be absent without subagents");
+  expect(!await activate("s"), "I S should do nothing while the subagents tab is absent");
+
+  // 真派出子智能体之后它自己冒出来（默认面板），但不抢当前焦点。
+  const focusedBefore = active("outer");
+  await click("agent-on");
+  expect(hasTab("outer", "subagents"), "subagents tab should appear once a subagent exists");
+  expect(active("outer") === focusedBefore, "an appearing tab must not steal focus");
   expect(await activate("s"), "outer should handle s");
   expect(active("outer") === "subagents", "outer should open subagents");
+
+  // 子智能体又没了（记录重取后读不到）：那一格随之收掉，焦点退回别处。
+  await click("agent-off");
+  expect(!hasTab("outer", "subagents"), "subagents tab should disappear again");
+  expect(active("outer") !== "subagents", "focus must leave the removed tab");
+  expect(await activate("i"), "outer should handle i");
+  expect(active("outer") === "outer-info", "outer should settle on its info panel");
 
   await click("drawer-on");
   expect(!visible("drawer"), "drawer inspector should start collapsed");
@@ -83,7 +101,7 @@ async function run() {
     await click(id);
     const key = id === "error-on" || id === "agent-on" ? "i" : "f";
     expect(await activate(key), `drawer should keep priority after ${id}`);
-    expect(active("outer") === "subagents", `outer must stay unchanged after ${id}`);
+    expect(active("outer") === "outer-info", `outer must stay unchanged after ${id}`);
     expect(active("drawer") === (key === "i" ? "drawer-info" : "drawer-files"), `drawer should handle ${key} after ${id}`);
     log.push(id);
   }

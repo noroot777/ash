@@ -142,10 +142,12 @@ export function TaskDetail({
   const reviewFocused = REVIEW_FOCUS_STAGES.has(task.stage ?? "")
     || allTasks.some((candidate) => candidate.reviewOf === task.id);
   const inspectorPolicy = useMemo(() => ({
-    stateKey: `single:all-tabs-v3:${task.status}:${reviewFocused ? "review" : "info"}`,
+    stateKey: `single:all-tabs-v4:${task.status}:${reviewFocused ? "review" : "info"}`,
     requiredTabId: "info",
     preserveActiveTabIds: ["side-chat"],
-    defaultOpenTabIds: ["side-chat", "info", "files", "scm", "workflow", "review", "subagents"],
+    // 顺序由 TASK_INSPECTORS 定，这里只说「默认哪几格开着」；子智能体那一格没派过就不存在，
+    // 列在这里也只是等它出现的那天顺手带上。
+    defaultOpenTabIds: ["info", "files", "scm", "subagents", "side-chat", "workflow", "review", "preview"],
     defaultActiveTabId: reviewFocused ? "review" : "info",
   }), [reviewFocused, task.status]);
 

@@ -30,7 +30,7 @@ export function mountPreviewRoutes(api: Hono): void {
   });
   api.delete("/tasks/:id/preview", async (c) => {
     await requireTaskAccess(actorOf(c), c.req.param("id"));
-    return c.json({ stopped: await stopPreview(c.req.param("id"), "用户在预览工作区取消启动") });
+    return c.json({ stopped: await stopPreview(c.req.param("id"), "用户在预览指正取消启动") });
   });
   api.post("/tasks/:id/preview/restart", async (c) => {
     // 重开预览会在任务工作区里跑启动命令——接力出去的「历史存档」不给开。

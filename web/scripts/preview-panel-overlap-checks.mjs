@@ -19,7 +19,7 @@ export async function checkPreviewPanelOverlap(page, draft) {
   const accessible = async (context) => {
     // Allow resize observers to finish positioning, then hit-test the actual buttons.
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-    for (const name of ["关闭预览工作区", "移动预览操作栏（拖动或方向键）", "移动标注工具（拖动或方向键）",
+    for (const name of ["关闭预览指正", "移动预览操作栏（拖动或方向键）", "移动标注工具（拖动或方向键）",
       await button("还原预览").count() ? "还原预览" : "放大预览",
       await button("收起标注工具").count() ? "收起标注工具" : "展开标注工具"]) {
       assert(await button(name).evaluate(element => {
@@ -58,9 +58,9 @@ export async function checkPreviewPanelOverlap(page, draft) {
   await accessible("narrow viewport");
   await page.setViewportSize({ width: 1400, height: 900 });
   await accessible("restoring desktop viewport");
-  await button("关闭预览工作区").click();
+  await button("关闭预览指正").click();
   assert.equal(await page.locator(".preview-workspace").count(), 0, "the close button remains operable after moving and resizing");
-  await button("打开预览工作区").click();
+  await button("打开预览指正").click();
   await page.waitForFunction(() => document.querySelector('.preview-workspace-modes button')?.disabled === false);
   console.log("floating panel overlap: drag in both directions, compact clamp, tool expansion, keyboard collision, notes, viewport resize and closing passed");
 }

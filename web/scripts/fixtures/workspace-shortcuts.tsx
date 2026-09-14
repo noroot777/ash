@@ -33,6 +33,7 @@ function Ash() {
       setLog((current) => [...current, "task-mode"]);
       setScope((current) => current === "tasks" ? "project" : "tasks");
     },
+    onOpenSettings: () => setLog((current) => [...current, "settings"]),
   });
 
   return (

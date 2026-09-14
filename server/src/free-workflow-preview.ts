@@ -89,7 +89,7 @@ async function startFreePreview(taskId: string, input?: WorkspacePreviewInput) {
     // 要去项目设置改，认出来的那条跑错了是另一回事。
     await appendTaskTimeline(
       taskId,
-      `自由工作流预览已打开（${input ? "预览工作区" : source === "configured" ? "项目预览设置" : "自动识别"}：${command}）：${previewState(taskId).url ?? command}`,
+      `自由工作流预览已打开（${input ? "预览指正" : source === "configured" ? "项目预览设置" : "自动识别"}：${command}）：${previewState(taskId).url ?? command}`,
     );
     if (!mine()) throw new Error(PREVIEW_CANCELED);
     bus.publish({ type: "task.review", taskId });

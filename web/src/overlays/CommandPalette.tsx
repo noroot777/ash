@@ -35,6 +35,7 @@ import {
 } from "./CommandPaletteScope.tsx";
 import { filterSlashCommands, type SlashCommand, type SlashCommandId } from "./commandPaletteCommands.ts";
 import { SearchSortToggle, usePaletteActiveScroll, useSearchSort } from "./paletteView.tsx";
+import { SETTINGS_SHORTCUT_LABEL } from "../workspace/goChord.ts";
 import { TASK_MODE_LABEL, TASK_MODE_SHORTCUT_LABEL, TASK_MODE_SUMMARY } from "../workspace/taskScope.ts";
 import { keysSearchText, matchesKeysQuery } from "./paletteKeys.ts";
 import { workspaceModifierLabel } from "../workspace/useWorkspaceShortcuts.ts";
@@ -313,7 +314,7 @@ export function CommandPalette({
       { key: "new:project", group: "新建", label: "新建项目", icon: <FolderPlus size={15} />, run: closeRun(onNewProject) },
       { key: "manage:notes", group: "管理", label: "随手记列表", keys: "NL", icon: <NotePencil size={15} />, run: closeRun(() => onNote(currentProject?.id ?? null, null)) },
       { key: "manage:agents", group: "管理", label: "管理智能体执行器", icon: <GearSix size={15} />, run: closeRun(() => onSettings("executors")) },
-      { key: "manage:settings", group: "管理", label: "项目设置", icon: <GearSix size={15} />, run: closeRun(() => onSettings("project")) },
+      { key: "manage:settings", group: "管理", label: "项目设置", keys: SETTINGS_SHORTCUT_LABEL, icon: <GearSix size={15} />, run: closeRun(() => onSettings("project")) },
       { key: "manage:groups", group: "管理", label: "分组管理", icon: <Stack size={15} />, run: closeRun(() => onSettings("groups")) },
     );
     // 「任务模式」和具体项目并排放在同一组里：它回答的是同一个问题（列表在看谁），

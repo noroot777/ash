@@ -162,9 +162,9 @@ export async function testPreviewWorkspaceDom() {
       </script></body></html>`) }));
     await page.goto(`http://127.0.0.1:${address.port}/__preview-test`);
     const button = (name) => page.getByRole("button", { name, exact: true });
-    await button("打开预览工作区").waitFor();
+    await button("打开预览指正").waitFor();
     await checkPreviewPalette(page);
-    await button("打开预览工作区").click();
+    await button("打开预览指正").click();
     assert.deepEqual(await page.locator(".preview-workspace").boundingBox(), { x: 0, y: 0, width: 1400, height: 900 }, "the entry opens the expanded workspace directly, before preview launch");
     await checkExpandedPreviewShortcuts(page);
     await button("按已保存配置启动").waitFor({ timeout: 10000 }).catch((error) => { throw new Error(`${error.message}\n${errors.join("\n")}`); });
@@ -431,8 +431,8 @@ export async function testPreviewWorkspaceDom() {
     await page.setViewportSize({ width: 1400, height: 900 });
     await checkPreviewControlShortcuts(page, draft);
     await button('还原预览').click();
-    await button('关闭预览工作区').click();
-    await button('打开预览工作区').click();
+    await button('关闭预览指正').click();
+    await button('打开预览指正').click();
     assert.equal(await button('还原预览').isVisible(), true, 'reopening starts expanded even after the previous workspace was restored');
     assert.equal(await page.getByText("未能连接页面标注", { exact: false }).count(), 0);
     assert.deepEqual(errors, []);

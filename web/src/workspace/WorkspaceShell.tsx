@@ -455,6 +455,9 @@ export function WorkspaceShell() {
     onToggleSpread: () => { if (collapsed) setCollapsed(false); spread.toggle(); },
     onCloseSpread: spread.close,
     onToggleTaskMode: toggleTaskMode,
+    // G S 进设置。手上有项目就落在「项目设置」那一节（快捷键说的就是它）；一个项目都没有时
+    // 落回系统那半边 —— 一个纯导航的快捷键不该反手弹出「先建个项目」的对话框。
+    onOpenSettings: () => openSettings(hasCurrentProject ? "project" : "executors"),
   });
 
   const dropSettingsAnchor = useCallback(() => setSettingsAnchor(null), []);
