@@ -60,6 +60,7 @@ function Ash() {
             mode: groupMode,
             createdAt: "2026-08-28T00:00:00.000Z",
           })}
+          onProjectUpdated={() => {}}
           notify={notify}
         />
       )}

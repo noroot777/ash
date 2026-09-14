@@ -15,6 +15,7 @@ try {
   let teamPresetRequests = 0;
   page.on("pageerror", (error) => errors.push(error.message));
   const created = [];
+  const projectPatches = [];
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -26,6 +27,13 @@ try {
     if (path === "/api/workflows") data = [{ id: "standard", name: "验证起手式", builtin: true, disabled: false,
       def: { workspace: "isolated", steps: [{ id: "run", kind: "run", p: { executorId: "exec-claude", model: "test-model", reasoningEffort: null, instruction: null }, fail: null }] } }];
     if (path.endsWith("/branches")) data = { branches: ["main", "develop"], current: "main" };
+    // 「设为本项目默认」写的是项目行本身，不是一份全局设置。
+    if (path === "/api/projects/p1" && request.method() === "PATCH") {
+      const patch = request.postDataJSON();
+      projectPatches.push(patch);
+      data = { id: "p1", name: "ash", repoPath: "/tmp/ash", workflowId: null, createdAt: "2026-08-28T00:00:00.000Z",
+        health: { exists: true, isRepo: true }, ...patch };
+    }
     if (path === "/api/tasks" && request.method() === "POST") {
       const body = request.postDataJSON();
       created.push(body);
@@ -174,8 +182,26 @@ try {
   assert.equal(created[1].executorId, "exec-claude");
   assert.equal(created[1].model, "test-model");
   assert.equal(created[1].workflowMode, "preset");
+  // 「设为本项目默认」：写的是项目行，而且要**把新的项目行交回上层** —— 这块面板一关就
+  // 整个卸载，下次打开是按 project 重新初始化的。只更新面板内部那份的话，用户刚设完默认、
+  // 重开新建任务却还预填着旧值（第 1 轮审查 P1）。
+  await page.reload();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.getByRole("button", { name: /^智能体：/ }).waitFor();
+  assert.match(await space.getAttribute("aria-label"), /项目目录/, "项目默认是「关」，面板该预填项目目录");
+  await space.click();
+  const workspacePanel = page.getByRole("dialog", { name: "工作目录", exact: true });
+  await workspacePanel.locator(".composer-toggle-field > span").click();
+  await workspacePanel.getByRole("button", { name: "设为本项目默认" }).click();
+  await page.waitForFunction(() => document.querySelector('[data-testid="project-worktree-default"]')?.textContent === "开");
+  assert.deepEqual(projectPatches, [{ useWorktreeDefault: true }], "只写这一位，别捎带别的字段");
+  await page.keyboard.press("Escape");
+  await page.getByTestId("reopen").click();
+  await page.getByRole("button", { name: /^智能体：/ }).waitFor();
+  assert.match(await space.getAttribute("aria-label"), /独立 worktree/, "重开面板必须按刚设成的项目默认预填");
+
   assert.deepEqual(errors, []);
-  console.log("composer studio: auxiliary popovers, nested dismissal, persistent config, templates, responsive layout and payload passed");
+  console.log("composer studio: auxiliary popovers, nested dismissal, persistent config, templates, responsive layout, payload and project worktree default passed");
 } finally {
   await browser?.close();
   await server.close();

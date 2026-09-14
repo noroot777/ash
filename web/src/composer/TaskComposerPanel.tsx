@@ -64,6 +64,7 @@ export function TaskComposerPanel({
   onCancel,
   onCreated,
   onCreateGroup,
+  onProjectUpdated,
   notify,
 }: {
   project: ProjectView;
@@ -78,6 +79,8 @@ export function TaskComposerPanel({
   onCancel: () => void;
   onCreated: (task: Task, noteIds: string[]) => void;
   onCreateGroup: (name: string, mode: GroupMode) => Promise<Group>;
+  /** 「设为本项目默认」写回之后，把新的项目行交回上层 —— 否则下次打开这块面板还按旧值预填。 */
+  onProjectUpdated: (project: ProjectView) => void;
   notify: (message: string) => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -184,6 +187,9 @@ export function TaskComposerPanel({
     try {
       const updated = await api.updateProject(project.id, { useWorktreeDefault: useWorktree });
       setWorktreeDefault(updated.useWorktreeDefault);
+      // 上层那份 projects 也得换 —— 这块面板一关就整个卸载，下次打开是拿 project 重新
+      // 初始化的。不回传的话，用户刚设成默认、重开新建任务却还预填着旧值（第 1 轮审查 P1）。
+      onProjectUpdated(updated);
       notify(`已设为本项目默认：「${project.name}」的新任务默认${updated.useWorktreeDefault ? "用独立 worktree" : "直接使用项目目录"}。以后可在「设置 → 项目设置 → 工作目录」里改。`);
     } catch (error) {
       notify(error instanceof Error ? error.message : "默认工作目录保存失败");
