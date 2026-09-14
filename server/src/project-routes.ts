@@ -11,7 +11,8 @@ import { RUNS_DIR, DATA_DIR } from "./paths.js";
 import { db } from "./db/index.js";
 import { projects, groups, tasks, notes, noteTasks } from "./db/schema.js";
 import { id, now } from "./util.js";
-import { expandHome, projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches } from "./git.js";
+import { expandHome, projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches, isGitRepo } from "./git.js";
+import { searchWorkspaceFiles } from "./file-search.js";
 import { getGitOverview } from "./git-overview.js";
 import { discardTaskWorkspace } from "./workspace-cleanup.js";
 import { branchDeletionRejection } from "./task-branch-plan.js";
@@ -338,6 +339,21 @@ export function mountProjectRoutes(api: Hono): void {
     const { row, error } = await loadVisible(c, c.req.param("id"));
     if (error) return error;
     return c.json(await listBranches(row.repoPath));
+  });
+
+  // 新建任务的输入框敲 `@` 时的候选来源：任务还不存在，所以按项目仓库本身来搜。
+  // 与 `/tasks/:id/file-search` 是同一份实现（file-search.ts），区别只在根目录怎么定。
+  api.get("/projects/:id/file-search", async (c) => {
+    const { row, error } = await loadVisible(c, c.req.param("id"));
+    if (error) return error;
+    const repoPath = expandHome(row.repoPath);
+    if (!repoPath) return c.json({ root: null, hits: [], truncated: false });
+    const found = await searchWorkspaceFiles(repoPath, {
+      gitRepo: await isGitRepo(repoPath),
+      query: c.req.query("q") ?? "",
+      limit: Number(c.req.query("limit")) || undefined,
+    }).catch(() => ({ hits: [], truncated: false }));
+    return c.json({ root: { path: repoPath }, ...found });
   });
 
   // Read-only command-palette view: local branches plus every registered worktree.

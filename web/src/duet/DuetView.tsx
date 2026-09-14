@@ -388,7 +388,7 @@ export function DuetView({
       ) : (
         <DuetProgressBar round={currentRound} maxRounds={config.maxRounds} gateEnabled={config.gateG1 === "on"} />
       )}
-      {teamModal && <DuetHandoffModal busy={teamBusy} onClose={() => setTeamModal(false)} onConfirm={handoff} />}
+      {teamModal && <DuetHandoffModal taskId={task.id} busy={teamBusy} onClose={() => setTeamModal(false)} onConfirm={handoff} />}
       {deleteOpen && <DeleteTaskDialog task={task} notify={notify} onDeleted={(ids) => ids.forEach(onTaskDeleted)} onClose={() => setDeleteOpen(false)} />}
     </div>
   );

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { TEAM_DEFAULTS, taskDisplayStatus, type AgentExecutorProfile, type AgentType, type TaskListItem } from "@ash/shared";
 import { ArrowRight, UsersThree, Warning } from "@phosphor-icons/react";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
@@ -12,6 +12,8 @@ import {
   useAgentAvailability,
 } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
+import { useFileMention } from "../lib/useFileMention.ts";
+import { FileMentionMenu } from "../components/MentionMenu.tsx";
 
 export type HandoffChoice = {
   note: string;
@@ -28,10 +30,13 @@ const emptyChoice = (agentType: AgentType): Choice => ({
 });
 
 export function DuetHandoffModal({
+  taskId,
   busy,
   onClose,
   onConfirm,
 }: {
+  /** 这场讨论自己的任务 id —— 附言里 `@` 引用的文件按它的工作目录搜。 */
+  taskId: string;
   busy: boolean;
   onClose: () => void;
   onConfirm: (choice: HandoffChoice) => Promise<boolean>;
@@ -41,6 +46,13 @@ export function DuetHandoffModal({
   const [lead, setLead] = useState<Choice>(() => emptyChoice(TEAM_DEFAULTS.lead));
   const [worker, setWorker] = useState<Choice>(() => emptyChoice(TEAM_DEFAULTS.worker));
   const [note, setNote] = useState("");
+  const noteRef = useRef<HTMLTextAreaElement>(null);
+  const mention = useFileMention({
+    value: note,
+    setValue: setNote,
+    scope: { kind: "task", taskId },
+    onPicked: () => noteRef.current?.focus(),
+  });
   const detection = useAgentAvailability();
   const { workerTypes, leadTypes, leadProfiles } = useMemo(
     () => teamExecutorCandidates(detection, profiles),
@@ -103,8 +115,7 @@ export function DuetHandoffModal({
         : detection.status === "failed"
           ? "常驻能力检测失败；调度者候选仅保留系统已知支持的已注册类型。"
           : null;
-  const canConfirm = !busy && !noExecutor && !roleBlocked;
-  const submitHandoff = async () => { if (canConfirm && await onConfirm(choice)) onClose(); };
+  const canConfirm = !busy && !noExecutor && !roleBlocked;  const submitHandoff = async () => { if (canConfirm && await onConfirm(choice)) onClose(); };
   return (
     <div className="duet-handoff-scrim" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}>
       <section className="duet-handoff-modal" role="dialog" aria-modal="true" aria-labelledby="duet-handoff-title">
@@ -114,7 +125,11 @@ export function DuetHandoffModal({
           <ExecutorPickerField label="默认执行者" value={worker.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.worker} override={worker} onChange={(profile, override) => setWorker({ profile, ...override })} onEffortChange={(effort) => setWorker((current) => ({ ...current, effort }))} />
         </div>
         {availabilityMessage && <p className="duet-handoff-warning"><Warning size={13} />{availabilityMessage}</p>}
-        <label className="duet-handoff-note"><span>可选附言</span><textarea rows={4} value={note} placeholder="补充执行重点、边界或验收要求…" onChange={(event) => setNote(event.target.value)} /></label>
+        <label className="duet-handoff-note"><span>可选附言</span><textarea ref={noteRef} rows={4} value={note} placeholder="补充执行重点、边界或验收要求…（@ 可引用工作区文件）"
+          onChange={(event) => { setNote(event.target.value); mention.onValueChange(); }}
+          onKeyDown={(event) => { mention.onKeyDown(event); }} />
+          {mention.open && <FileMentionMenu mention={mention} label="引用工作区文件" />}
+        </label>
         <footer><button type="button" disabled={busy} onClick={onClose}>取消</button><button type="button" className="is-primary" disabled={!canConfirm} onClick={() => void submitHandoff()}>{busy ? "创建中…" : "创建并开干"}</button></footer>
       </section>
     </div>

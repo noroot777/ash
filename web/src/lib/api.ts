@@ -52,6 +52,7 @@ import type {
   DirectoryPick,
   FileContent,
   FileListing,
+  FileSearchResult,
   FileWorkspaceRoot,
   FreeWorkflowApiState,
   GitOverview,
@@ -401,6 +402,12 @@ export const api = {
 
   taskFiles: (taskId: string, path = ""): Promise<FileListing> =>
     request(`/tasks/${id(taskId)}/files?path=${id(path)}`),
+  // 输入框敲 `@` 的候选。两条同形，区别只在「在哪搜」：已有任务按它实际的工作目录
+  // （worktree 里改的文件才是用户要引用的那些），新建任务只能按项目仓库本身。
+  taskFileSearch: (taskId: string, query: string, signal?: AbortSignal): Promise<FileSearchResult> =>
+    request(`/tasks/${id(taskId)}/file-search?q=${id(query)}`, { signal }),
+  projectFileSearch: (projectId: string, query: string, signal?: AbortSignal): Promise<FileSearchResult> =>
+    request(`/projects/${id(projectId)}/file-search?q=${id(query)}`, { signal }),
   taskFile: (taskId: string, path: string): Promise<{ root: FileWorkspaceRoot; file: FileContent }> =>
     request(`/tasks/${id(taskId)}/file?path=${id(path)}`),
   // 图片/PDF 预览直接把这个地址交给 <img>/<iframe>，不经过 JSON。

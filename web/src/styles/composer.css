@@ -126,6 +126,18 @@
   box-shadow: var(--menu-shadow);
 }
 
+/* `@` 引用文件的菜单：盒子在 mention-menu.css，这里只定位。
+   挂在目标框**下沿**而不是浮在框里 —— 这个框很高、候选能列十来行，浮在里面一长就
+   盖住用户正在写的字；挂下面只压住底部那排动作按钮，选文件的这几秒里不碍事。
+   （`/` 那张不同：它只在正文开头那一下弹，贴顶最顺手。） */
+.composer-mention-menu {
+  position: absolute;
+  z-index: 3;
+  top: 100%;
+  left: 12px;
+  margin-top: 6px;
+}
+
 .composer-slash-menu > small {
   display: block;
   padding: 4px 7px;
