@@ -7,7 +7,7 @@ import {
 } from "../inspector/shortcuts.ts";
 import { createKeyChordSequence } from "../lib/keyChord.ts";
 import { hasOpenLayer } from "../lib/useDismissable.ts";
-import { TASK_MODE_CHORD_PREFIX, isTaskModeChordKey } from "./taskScope.ts";
+import { GO_CHORD_KEYS, GO_CHORD_PREFIX, isGoChordKey } from "./goChord.ts";
 
 type ShortcutOptions = {
   enabled: boolean;
@@ -22,6 +22,7 @@ type ShortcutOptions = {
   onToggleSpread: () => void;
   onCloseSpread: () => void;
   onToggleTaskMode: () => void;
+  onOpenSettings: () => void;
 };
 
 function isTextEntry(target: EventTarget | null): boolean {
@@ -72,16 +73,17 @@ export function useWorkspaceShortcuts({
   onToggleSpread,
   onCloseSpread,
   onToggleTaskMode,
+  onOpenSettings,
 }: ShortcutOptions): void {
   const inspectorSequence = useRef(createInspectorShortcutSequence());
-  const taskModeSequence = useRef(createKeyChordSequence(TASK_MODE_CHORD_PREFIX, isTaskModeChordKey));
+  const goSequence = useRef(createKeyChordSequence(GO_CHORD_PREFIX, isGoChordKey));
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const commandPalette = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k";
       if (commandPalette) {
         inspectorSequence.current.reset();
-        taskModeSequence.current.reset();
+        goSequence.current.reset();
         // The palette is global; enabled only gates the workspace navigation keys below.
         if (!paletteOpen && hasBlockingLayer()) return;
         event.preventDefault();
@@ -90,12 +92,12 @@ export function useWorkspaceShortcuts({
       }
       if (!enabled || paletteOpen || isTextEntry(event.target) || hasBlockingLayer() || previewOwnsNavigation(event.target)) {
         inspectorSequence.current.reset();
-        taskModeSequence.current.reset();
+        goSequence.current.reset();
         return;
       }
       if (event.metaKey || event.ctrlKey || event.altKey) {
         inspectorSequence.current.reset();
-        taskModeSequence.current.reset();
+        goSequence.current.reset();
         return;
       }
 
@@ -105,13 +107,13 @@ export function useWorkspaceShortcuts({
       if (hasInspectorShortcutTarget() && !event.repeat) {
         const inspectorShortcut = inspectorSequence.current.handle(event.key);
         if (inspectorShortcut.kind === "prefix") {
-          taskModeSequence.current.reset();
+          goSequence.current.reset();
           event.preventDefault();
           event.stopImmediatePropagation();
           return;
         }
         if (inspectorShortcut.kind === "chord") {
-          taskModeSequence.current.reset();
+          goSequence.current.reset();
           event.preventDefault();
           event.stopImmediatePropagation();
           activateInspectorShortcut(inspectorShortcut.key);
@@ -121,21 +123,22 @@ export function useWorkspaceShortcuts({
         inspectorSequence.current.reset();
       }
 
-      // G T 在「任务模式」和当前项目之间来回切。两条序列互相清对方的半截状态：不清的话
-      // `g i f t` 会被串成一次切换 —— 中间整条 Inspector 序列本该把那个 g 作废掉。
+      // `G …` 那一族（G T 切任务模式、G S 进项目设置）。两条序列互相清对方的半截状态：
+      // 不清的话 `g i f t` 会被串成一次切换 —— 中间整条 Inspector 序列本该把那个 g 作废掉。
       if (!event.repeat) {
-        const taskModeChord = taskModeSequence.current.handle(event.key);
-        if (taskModeChord.kind === "prefix") {
+        const goChord = goSequence.current.handle(event.key);
+        if (goChord.kind === "prefix") {
           inspectorSequence.current.reset();
           event.preventDefault();
           event.stopImmediatePropagation();
           return;
         }
-        if (taskModeChord.kind === "chord") {
+        if (goChord.kind === "chord") {
           inspectorSequence.current.reset();
           event.preventDefault();
           event.stopImmediatePropagation();
-          onToggleTaskMode();
+          if (goChord.key === GO_CHORD_KEYS.taskMode) onToggleTaskMode();
+          else if (goChord.key === GO_CHORD_KEYS.settings) onOpenSettings();
           return;
         }
       }
@@ -188,7 +191,7 @@ export function useWorkspaceShortcuts({
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [composerOpen, enabled, onCloseSpread, onCreate, onTask, onToggleSpread, onToggleTaskMode, onTogglePalette, orderedTasks, paletteOpen, selectedTaskId, spreadOpen]);
+  }, [composerOpen, enabled, onCloseSpread, onCreate, onOpenSettings, onTask, onToggleSpread, onToggleTaskMode, onTogglePalette, orderedTasks, paletteOpen, selectedTaskId, spreadOpen]);
 
   useEffect(() => {
     if (!selectedTaskId) return;

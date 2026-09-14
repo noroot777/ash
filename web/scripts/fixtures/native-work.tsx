@@ -100,7 +100,11 @@ function App() {
     localStorage.setItem("native-work-phase", "final");
     setPhase(true);
   };
-  return <div style={{ height: "100vh", display: "flex", overflow: "hidden" }}><InspectorHost contextKey="native-work-fixture" descriptors={subagents.inspectors} context={{ nativeWork: subagents.nativeWork }} defaultVisible={false}>
+  // 生产里「没有子智能体 → 整格不给」（判据与它的回归都在 useSubagents / inspector-shortcut-stack）。
+  // 这个夹具管的是**面板内部**怎么画，所以空态和计划快照这两档要把面板留在原地，否则这两段
+  // 渲染就再也测不到了。
+  const descriptors = subagents.inspectors.length > 0 ? subagents.inspectors : DESCRIPTORS;
+  return <div style={{ height: "100vh", display: "flex", overflow: "hidden" }}><InspectorHost contextKey="native-work-fixture" descriptors={descriptors} context={{ nativeWork: subagents.nativeWork }} defaultVisible={false}>
     {(inspector) => <main style={{ minWidth: 0, minHeight: 0, flex: 1, display: "flex" }}>
       <div style={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column" }}>
         {/* 夹具的控制按钮放在抽屉覆盖范围之外，这样抽屉开着也能继续推进展、切状态。 */}

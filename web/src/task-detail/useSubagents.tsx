@@ -54,15 +54,21 @@ export function useSubagents<Context>(
     setOpened({ taskId, id });
   }, [taskId]);
 
-  const inspectors = useMemo(() => descriptors.map((descriptor) => {
-    if (descriptor.id !== "subagents" || (!hasSubagents && !incomplete)) return descriptor;
-    return {
+  // 没派过子智能体就整格不给：那种任务点进去只有一句空话，白占图标条一格。记录读不全
+  // （incomplete）时反过来必须留着——「读不到」和「没有」是两回事，把它藏了就成了默默谎报。
+  // 面板是后来才出现的，由 InspectorHost 负责让它自己冒到图标条上（不抢当前焦点）。
+  // 代价说清楚：只写过待办、没派过子智能体的任务，待办清单这一栏也跟着不显示，那份清单
+  // 仍在会话的过程折叠里。
+  const inspectors = useMemo(() => descriptors.flatMap((descriptor) => {
+    if (descriptor.id !== "subagents") return [descriptor];
+    if (!hasSubagents && !incomplete) return [];
+    return [{
       ...descriptor,
       title: incomplete ? `${descriptor.title}（记录读取不完整）` : descriptor.title,
       icon: hasSubagents
         ? <Robot size={14} weight="bold" className="task-subagents-icon--populated" />
         : descriptor.icon,
-    };
+    }];
   }), [descriptors, hasSubagents, incomplete]);
 
   const nativeWork: NativeWorkInspectorProps = {

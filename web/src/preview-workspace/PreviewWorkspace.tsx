@@ -33,7 +33,7 @@ export function PreviewWorkspaceEntry({ onOpen }: { onOpen: () => void }) {
     <Browser size={28} />
     <h3>在页面上指出修改位置</h3>
     <p>使用项目预览配置或选择启动命令，在工作区打开预览，点选对象或圈画区域，再逐条填写意见。</p>
-    <button type="button" onClick={onOpen}>打开预览工作区</button>
+    <button type="button" onClick={onOpen}>打开预览指正</button>
     <small>标注自动保存为批次，发送前可预览内容与图像证据。</small>
   </div>;
 }

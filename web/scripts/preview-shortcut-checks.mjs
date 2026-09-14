@@ -24,7 +24,7 @@ export async function checkPreviewPalette(page) {
   const preview = await page.locator(".preview-workspace").count() ? await page.locator(".preview-workspace").elementHandle() : null;
   const before = await shortcutActions(page);
   for (const target of [page.locator("#preview-external-opener"), page.locator("#preview-external-input"),
-    page.getByRole("button", { name: "关闭预览工作区", exact: true })]) {
+    page.getByRole("button", { name: "关闭预览指正", exact: true })]) {
     if (!await target.count()) continue;
     for (const key of ["Meta+k", "Control+k"]) {
       await target.focus();
@@ -88,7 +88,7 @@ export async function checkPreviewControlShortcuts(page, draft) {
       }
       await movePanel(box.x, box.y);
     }
-    await button("关闭预览工作区").focus();
+    await button("关闭预览指正").focus();
     for (const key of navigationKeys) {
       await page.keyboard.press(key);
       await assertPreviewRetained(page, `${expanded ? "expanded" : "compact"} preview button, ${key}`);
@@ -105,14 +105,14 @@ export async function checkPreviewControlShortcuts(page, draft) {
   for (const key of ["ArrowUp", "k", "j"]) await page.keyboard.press(key);
   assert.deepEqual(await shortcutActions(page), ["task:next", "task:fixture", "task:previous", "task:fixture"]);
   await page.evaluate(() => { window.workspaceShortcutActions = []; });
-  await button("打开预览工作区").click();
+  await button("打开预览指正").click();
   await button("还原预览").waitFor();
-  await button("关闭预览工作区").click();
+  await button("关闭预览指正").click();
   await page.locator("#preview-external-opener").focus();
   await page.keyboard.press("ArrowDown"); await page.keyboard.press("ArrowUp");
   assert.deepEqual(await shortcutActions(page), ["task:next", "task:fixture"], "closing expanded preview restores workspace navigation");
   await page.evaluate(() => { window.workspaceShortcutActions = []; });
-  await button("打开预览工作区").click();
+  await button("打开预览指正").click();
   await button("还原预览").waitFor();
   console.log("preview keyboard scope: real window-capture shortcuts, external focus, both handles in expanded/compact views, draft retention and navigation after closing passed");
 }

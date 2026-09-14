@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { keysSearchText, matchesKeysQuery, normalizeKeys } from "../src/overlays/paletteKeys.ts";
-import { TASK_MODE_SHORTCUT_LABEL } from "../src/workspace/taskScope.ts";
+import { SETTINGS_SHORTCUT_LABEL, TASK_MODE_SHORTCUT_LABEL } from "../src/workspace/goChord.ts";
 
 // 两种写法都得筛得到：`G T` 是显示出来的样子，`gt` 是照着敲进去的样子。
 const haystack = (keys) => keysSearchText(keys).toLocaleLowerCase();
@@ -14,6 +14,10 @@ assert.equal(matchesKeysQuery(TASK_MODE_SHORTCUT_LABEL, "gt"), true);
 assert.equal(matchesKeysQuery(TASK_MODE_SHORTCUT_LABEL, "G T"), true);
 assert.equal(matchesKeysQuery(TASK_MODE_SHORTCUT_LABEL, "GT"), true);
 assert.equal(matchesKeysQuery("NI", "ni"), true);
+// 同一族的另一档也照这条路走：命令面板是 G S 唯一的成文出处，筛不到就等于没有这个快捷键。
+assert.equal(haystack(SETTINGS_SHORTCUT_LABEL).includes("gs"), true);
+assert.equal(matchesKeysQuery(SETTINGS_SHORTCUT_LABEL, "gs"), true);
+assert.equal(matchesKeysQuery(SETTINGS_SHORTCUT_LABEL, "gt"), false);
 
 // 半截、多打一个字符、以及没有键位的条目都不能被直达劫走。
 assert.equal(matchesKeysQuery(TASK_MODE_SHORTCUT_LABEL, "g"), false);

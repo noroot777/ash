@@ -196,9 +196,18 @@ function InspectorHostState<Context>({
   const tabIdFor = useCallback((id: string) => `${panelId}-tab-${safeDomId(id)}`, [panelId]);
   const contentIdFor = useCallback((id: string) => `${panelId}-panel-${safeDomId(id)}`, [panelId]);
 
+  // 面板集合是会变的（子智能体那一格要等真派出子智能体才存在）。这里同时做两件事：
+  // 把已经不在的页签摘掉，以及让**刚刚才出现**的默认面板自己冒到图标条上。后者只认
+  // 「这一格以前根本不存在」，所以用户手动关掉的面板不会被它反复拽回来；出现时也不抢
+  // 当前焦点——面板多冒出来一个可以不看，正读着的东西被换走则一定是打扰。
+  const knownTabIds = useRef(new Set(descriptors.map((descriptor) => descriptor.id)));
   useEffect(() => {
+    const appeared = descriptors
+      .filter((descriptor) => descriptor.defaultOpen && !knownTabIds.current.has(descriptor.id))
+      .map((descriptor) => descriptor.id);
+    for (const descriptor of descriptors) knownTabIds.current.add(descriptor.id);
     setState((current) => {
-      const openTabs = orderedValidTabs(current.openTabs, descriptors);
+      const openTabs = orderedValidTabs([...current.openTabs, ...appeared], descriptors);
       const activeTab = current.activeTab && openTabs.includes(current.activeTab)
         ? current.activeTab
         : openTabs[0] ?? null;

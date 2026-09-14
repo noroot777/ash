@@ -33,29 +33,11 @@ export interface TaskInspectorContext {
   notify: Notify;
 }
 
+// 图标条的顺序就是这个数组的顺序（`orderedValidTabs` 按它归位，localStorage 里存的次序
+// 不作数）。排法是「看任务本身 → 看它改了什么 → 跟它一起干活」：
+// 信息 · 文件 · 改动 · 子智能体 · 侧聊 · 工作流 · 审查 · 预览指正。
+// 每一格都带快捷键（`I` 加面板名首字母），键位表在 inspector/shortcuts.ts。
 export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
-  {
-    id: "side-chat",
-    title: "侧聊",
-    icon: <Chats size={14} />,
-    defaultOpen: true,
-    render: (context) => <SideChatPane key={context.task.id} task={context.task} />,
-  },
-  {
-    id: "preview",
-    title: "预览工作区",
-    icon: <Browser size={14} />,
-    defaultOpen: true,
-    render: (context) => <PreviewWorkspaceEntry onOpen={context.onOpenPreview} />,
-  },
-  {
-    id: "subagents",
-    title: "子智能体",
-    shortcut: "s",
-    icon: <Robot size={14} />,
-    defaultOpen: true,
-    render: (context) => <NativeWorkInspector {...context.nativeWork} />,
-  },
   {
     id: "info",
     title: "信息",
@@ -95,6 +77,24 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     ),
   },
   {
+    // 这一格由 useSubagents 按「这个任务到底有没有派出子智能体」决定在不在：没有就整格不给，
+    // 免得图标条上常年挂着一个点进去必然是空的面板。
+    id: "subagents",
+    title: "子智能体",
+    icon: <Robot size={14} />,
+    defaultOpen: true,
+    shortcut: "s",
+    render: (context) => <NativeWorkInspector {...context.nativeWork} />,
+  },
+  {
+    id: "side-chat",
+    title: "侧聊",
+    icon: <Chats size={14} />,
+    defaultOpen: true,
+    shortcut: "c",
+    render: (context) => <SideChatPane key={context.task.id} task={context.task} />,
+  },
+  {
     id: "workflow",
     title: "工作流",
     icon: <GitBranch size={14} />,
@@ -113,6 +113,14 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     render: (context) => context.task.workflowMode === "free"
       ? <FreeWorkflowInspector task={context.task} reviewOnly onOpenReview={context.onOpenReview} onOpenTask={context.onOpenTask} notify={context.notify} />
       : <TaskReviewInspector {...context} />,
+  },
+  {
+    id: "preview",
+    title: "预览指正",
+    icon: <Browser size={14} />,
+    defaultOpen: true,
+    shortcut: "p",
+    render: (context) => <PreviewWorkspaceEntry onOpen={context.onOpenPreview} />,
   },
 ];
 
