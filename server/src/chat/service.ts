@@ -41,6 +41,12 @@ export class ChatService {
   private pumping = false;
   private sending = new Map<string, Promise<void>>();
   private stopping = new Set<string>();
+  // 正在被删除的房间。`stop()` 只清算「此刻已在跑的」，它返回到真正 DELETE 那一行之间还有
+  // 窗口：并发的 POST messages 在事务里看到房间还在，插一条 queued 就被 pump 泵起来，而这条
+  // 回复不在刚才 stop 的 stopped 集合里，永远等不到 abort，会一路跑到 createTasks()——房间
+  // 没了、消息没了，却留下一个来自已删聊天的派生任务，还白烧一次执行器。所以闸要在 stop()
+  // 之前落下、删完才抬起，把「不再收新消息、不再泵回复、删房间」关进同一段（见 discard()）。
+  private discarded = new Set<string>();
   private invoke: typeof invokeChat;
   private contexts: ChatContextManager;
   constructor(invoke = invokeChat, private startTask = runTask, policy?: ChatContextPolicy) {
@@ -63,6 +69,7 @@ export class ChatService {
   }
 
   private async sendNow(row: RoomRow, body: string, messageId: string, author: string, projectId?: string) {
+    if (this.discarded.has(row.id)) throw new Error("聊天已删除。");
     const existing = (await db.select().from(chatMessages).where(eq(chatMessages.id, messageId))).at(0);
     if (existing) {
       if (existing.roomId !== row.id || existing.role !== "user" || existing.body !== body) throw new Error("消息编号冲突，请刷新后重试。");
@@ -108,6 +115,22 @@ export class ChatService {
     } finally { this.stopping.delete(roomId); void this.pump(); }
   }
 
+  /**
+   * 删掉一个群聊/助手对话本身。**删除必须走这里**，别在别处直接 `db.delete(chatRooms)`：
+   * 闸（`discarded`）要罩住「停回复 → 删房间」这整段，中途进来的发送会被当场拒掉，泵也不
+   * 会替它起新回复。原因见 `discarded` 字段上的注释。
+   *
+   * 删房间只落 chat_rooms 一行，消息、上下文条目、摘要、整理状态、清空点由
+   * `chat_room_contents_deleted` 触发器连带清理；抬闸后补一次 pump，让别的房间该跑的接着跑。
+   */
+  async discard(roomId: string) {
+    this.discarded.add(roomId);
+    try {
+      await this.stop(roomId);
+      await db.delete(chatRooms).where(eq(chatRooms.id, roomId));
+    } finally { this.discarded.delete(roomId); void this.pump(); }
+  }
+
   private async pump() {
     if (this.pumping) return;
     this.pumping = true;
@@ -115,7 +138,7 @@ export class ChatService {
       const queued = await db.select().from(chatMessages).where(eq(chatMessages.status, "queued")).orderBy(asc(chatMessages.createdAt));
       for (const message of queued) {
         if (this.active.size >= 4) break;
-        if (this.stopping.has(message.roomId)) continue;
+        if (this.stopping.has(message.roomId) || this.discarded.has(message.roomId)) continue;
         if (!message.memberId || [...this.active.values()].some((entry) => entry.roomId === message.roomId && entry.memberId === message.memberId)) continue;
         const abort = new AbortController();
         this.active.set(message.id, { roomId: message.roomId, memberId: message.memberId, abort });

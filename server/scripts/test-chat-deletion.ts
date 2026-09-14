@@ -2,7 +2,9 @@
 // ① 房间连同消息、上下文条目、摘要、整理状态、清空点一起消失，别的群一行不动；
 // ② 正在跑的回复先被中止，不留一个还在烧执行器、回来写空房间的调用；
 // ③ 群里创建过的任务不跟着删——任务有自己的删除入口，聊天记录没了不等于干过的活也该没；
-// ④ 任务旁聊不走这条路（它随任务删除，单独删只会在下次打开面板时重建）。
+// ④ 任务旁聊不走这条路（它随任务删除，单独删只会在下次打开面板时重建）；
+// ⑤ 「停回复算完、房间还没删掉」那一瞬间挤进来的发送被当场拒掉——不排队、不起执行器、
+//    更不会跑到 createTasks() 留下一个来自已删聊天的派生任务。
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -87,7 +89,48 @@ try {
   assert.match(refusal.error, /随任务一起删除/);
   assert.equal((await db.select().from(chatRooms).where(eq(chatRooms.id, side.id))).length, 1, "被拒绝的旁聊仍在");
 
-  console.log("✓ 删群聊清空全部关联数据、中止在跑回复、保留派生任务与其他群，挡住任务旁聊与 agent 身份");
+  // 删除竞态：stop() 已经算完、房间还没真删掉的那一瞬间又挤进来一条发送。没有删除闸的话，
+  // 这条会被插成 queued 再被 pump 泵起来，而它不在刚才 stop 的 stopped 集合里——谁也中止不
+  // 了它，一路跑到 createTasks()，删除返回 200 之后仍留下一个来自已删聊天的派生任务。
+  // （审查第 1 轮复现：aborted=false、tasks created by late reply = 1）
+  let raceAborted = false;
+  let raceInvoked = false;
+  let raceSend: unknown = "没有发生";
+  let raceRoom: typeof chatRooms.$inferSelect | undefined;
+  class RacingService extends ChatService {
+    override async stop(roomId: string) {
+      await super.stop(roomId);
+      if (!raceRoom || roomId !== raceRoom.id) return;
+      // 此刻已在 discard() 的闸内、房间行还没删。结论留到删除返回后一起断言，别在这儿抛：
+      // 抛出去会被路由吞成 500，掩盖掉「到底有没有派生任务」这个真正要看的后果。
+      await this.send(raceRoom, "@codex 挤进删除窗口", "racing", "本机").then(() => { raceSend = null; }, (error) => { raceSend = error; });
+    }
+  }
+  const racing = new RacingService(async (_member, _owner, _prompt, signal) => {
+    raceInvoked = true;
+    try { await delay(10000, undefined, { signal }); }
+    catch (error) { raceAborted = signal.aborted; throw error; }
+    return { text: '{"reply":"删除窗口里的迟到回答","task":{"title":"不该存在的任务","body":"来自已删群聊"}}' };
+  }, async () => {});
+  const raceApp = new Hono();
+  raceApp.use("*", async (context, next) => { setActor(context, SINGLE_ACTOR); await next(); });
+  mountChatRoutes(raceApp, racing);
+  const raceCreated = await raceApp.request("/chats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectId: "project", name: "竞态群", members }) });
+  const raceRoomId = (await raceCreated.json() as { id: string }).id;
+  raceRoom = (await db.select().from(chatRooms).where(eq(chatRooms.id, raceRoomId))).at(0)!;
+  const tasksBefore = (await db.select().from(tasks)).length;
+
+  const raceDeleted = await raceApp.request(`/chats/${raceRoomId}`, { method: "DELETE" });
+  assert.equal(raceDeleted.status, 200, await raceDeleted.text());
+  await delay(120);
+  assert.equal((await db.select().from(chatRooms).where(eq(chatRooms.id, raceRoomId))).length, 0);
+  assert.equal((await db.select().from(chatMessages).where(eq(chatMessages.roomId, raceRoomId))).length, 0, "窗口内的发送不留消息");
+  assert.equal((await db.select().from(tasks)).length, tasksBefore, "删除窗口里挤进来的发送不能派生任务");
+  assert.equal(raceInvoked, false, "删除窗口里的发送不该起执行器");
+  assert.equal(raceAborted, false);
+  assert.match(String(raceSend), /聊天已删除/, "删除窗口内的发送要被当场拒绝");
+
+  console.log("✓ 删群聊清空全部关联数据、中止在跑回复、保留派生任务与其他群，挡住任务旁聊、agent 身份与删除窗口内的发送");
 } finally {
   await delay(30); dbClient.close(); rmSync(stage, { recursive: true, force: true });
 }
