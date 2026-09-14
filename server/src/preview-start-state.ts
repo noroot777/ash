@@ -82,6 +82,32 @@ export function cancelDriving(taskId: string, exceptGen: string | null): number 
   return marked;
 }
 
+/**
+ * 「这一代正在被**我们**收掉」的记号 —— 盖的是「杀进程」到「归档记录」之间那一段。
+ *
+ * 预览的子进程是 ash 自己 spawn 的，`child.on("exit")` 那条看门狗因此两种情况都会响：服务
+ * 自己崩了，和用户点「关闭预览」/ 任务重新开跑 / 验收回收把它杀了。两者在事件里长得一模
+ * 一样，而记录要等进程确认退出之后才归档 —— 于是「我们杀它」的那一下正落在「记录还挂着
+ * ready」的窗口里，被看门狗读成「预览进程已自行退出」：用户主动关掉的预览，回头在会话里
+ * 多出一条红色的「预览异常」，归档记录也被写成 failed（日志弹窗上那个服务显示「失败」）。
+ *
+ * 所以凡是主动收的路径，都在杀之前把这一代标上、收完再撤。**撤必须排在归档之后**：那时
+ * 记录已经不是 ready 了，晚到的 exit 事件本来就判不成「自行退出」，标记撤早了等于没标。
+ */
+const retiringGens = new Set<string>();
+
+/** 这一代此刻正在被人为收掉吗 —— 看门狗凭它区分「我杀的」和「它自己死的」。 */
+export function previewRetiring(gen: string | undefined): boolean {
+  return gen !== undefined && retiringGens.has(gen);
+}
+
+/** 收掉这一代的整个过程（杀进程 + 归档）都算「人为收的」。 */
+export async function whileRetiringPreview<T>(gen: string | undefined, run: () => Promise<T>): Promise<T> {
+  if (gen === undefined) return run();
+  retiringGens.add(gen);
+  try { return await run(); } finally { retiringGens.delete(gen); }
+}
+
 export function beginPreviewStart(taskId: string, whenCanceled?: () => void): string {
   const gen = randomUUID();
   beginDriving(taskId, gen);

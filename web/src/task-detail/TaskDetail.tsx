@@ -42,6 +42,7 @@ import { useExecutorGate } from "./ExecutorGate.tsx";
 import type { ComposerDraft } from "../composer/composerDraft.ts";
 import { snapshotConversationFork } from "./conversationFork.ts";
 import { TASK_INSPECTORS } from "./taskInspectors.tsx";
+import { ConversationSelection } from "../side-chat/ConversationSelection.tsx";
 
 const REVIEW_FOCUS_STAGES = new Set(["verifying", "verified", "verify_failed", "awaiting_acceptance"]);
 
@@ -390,6 +391,7 @@ export function TaskDetail({
             ) : (
               <div className="task-detail-body">
                 <section className="task-detail-main" aria-label="任务会话">
+                  <ConversationSelection key={task.id} taskId={task.id} onAsk={() => openTab("side-chat")}>
                   <ConversationFeed
                     task={task}
                     questionHistory={task.questionHistory}
@@ -437,6 +439,7 @@ export function TaskDetail({
                       />
                     ) : undefined}
                   />
+                  </ConversationSelection>
                   <DerivedTaskLinks sourceTaskId={task.id} allTasks={allTasks} onOpen={onOpenTask} />
                   {!handedOut && <ReplyBox
                     task={task}

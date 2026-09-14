@@ -125,6 +125,7 @@
     "test:preview-host-api": "tsx scripts/test-preview-host-api.ts",
     "test:preview-cookies": "tsx scripts/test-preview-cookies.ts",
     "test:preview-process": "tsx scripts/test-preview-process.ts",
+    "test:preview-stop-notice": "tsx scripts/test-preview-stop-notice.ts",
     "test:preview-seed": "tsx scripts/test-preview-seed.ts",
     "test:preview-probe": "tsx scripts/test-preview-probe.ts",
     "test:openai-converter": "tsx scripts/test-openai-converter.ts",

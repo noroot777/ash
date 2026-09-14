@@ -1,0 +1,6 @@
+.conversation-selection-scope { display: contents; }
+.conversation-selection-action { position: fixed; z-index: 60; max-width: calc(100vw - 16px); }
+.conversation-selection-action button { display: flex; align-items: center; gap: 7px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); color: var(--ink); box-shadow: 0 4px 18px #0002; font: inherit; font-size: 12px; cursor: pointer; }
+.conversation-selection-action button:hover { background: var(--hover-bg); }
+.conversation-selection-action svg { color: var(--accent); }
+.conversation-selection-action button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
