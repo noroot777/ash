@@ -4,7 +4,7 @@ import { addUsage, usageTotal } from "@ash/shared/usage";
 import { normalizeSessionNoteText } from "@ash/shared/session-notes";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ConversationEventTone, ConversationEventVariant } from "./conversationNotes.ts";
-import { isVerifyNote, noteTone } from "./conversationNotes.ts";
+import { isVerifyNote, noteTone, verifyNoteOf } from "./conversationNotes.ts";
 import { applyVerifySpans, reviewerKey, reviewerKeyOf, reviewerOf, traceVerifyRound } from "./conversationReviewer.ts";
 import type { AgentContentSegment } from "./conversationSegments.ts";
 import { contentSegments } from "./conversationSegments.ts";
@@ -218,13 +218,26 @@ function appendPersistedSession(
   //   aside 就说明这本来就不是回合边界；此时两截连 run 身份都读不出来，劈开只剩坏处：
   //   上半截平白得到结束时刻，于是提前折叠、还挂出「派生新任务」。老会话没这个标，无
   //   证据可依，维持老排法。
+  //
+  // 但 aside 标只说「不是回合起点」，**不说「回合还在飞」**，所以 trace 哑了的时候还要
+  // 另外两样**跟 trace 各走各路**的证据把边界旁注挡在外面，否则审查者的结论会被并进被审
+  // 的实现回合（第 2 轮审查报的）：
+  //
+  // - 上一段正文已经落了 agentEnd → 这一回合真收口了（服务端每个回合结束时写，见
+  //   transcript.ts 的 writeTurnEnd），后面的话是新一轮。
+  // - 这条旁注自己就是「第 N 轮验证/审查开始」那一类 → 它开的是**另一个人**的一轮
+  //   （白名单在 conversationNotes，applyVerifySpans 拿同一份划审查区间）。
   const asideAt = new Set<string>();
   const midTurnAt = new Set<string>();
+  let closedTurn = true;
   for (const segment of segments) {
-    if (segment.kind !== "system" || !segment.at) continue;
+    if (segment.kind === "agent") { closedTurn = !!segment.endedAt; continue; }
+    if (segment.kind === "user") { closedTurn = true; continue; }
+    if (!segment.at) continue;
     const placement = notePlacement(traceGroups, segment.at);
+    if (placement === "inside" || segment.aside) asideAt.add(segment.at);
+    if (closedTurn || verifyNoteOf(normalizeSessionNoteText(segment.text))?.phase === "start") continue;
     if (placement === "inside" || (placement === "unknown" && segment.aside)) midTurnAt.add(segment.at);
-    if (midTurnAt.has(segment.at) || segment.aside) asideAt.add(segment.at);
   }
   let splitFrom = session.startedAt;
   for (const segment of segments) {

@@ -173,4 +173,27 @@ const legacy = agents(buildConversationItems([{
 }], [session], []));
 assert.equal(legacy.length, 2, "老会话没有 aside 标也没有 trace，不猜，维持原样");
 
+// 11. trace 哑了的时候，aside 标只说「这不是回合起点」，**不说「回合还在飞」**。落在两
+//     回合之间的那类旁注必须另有证据挡住，否则审查者的结论会被并进被审的实现回合。
+//     两样证据都跟 trace 各走各路：
+//     a) 旁注自己就是「第 N 轮验证开始」—— 它开的是另一个人的一轮；
+//     b) 上一段正文已经落了 agentEnd —— 这一回合真收口了（服务端 writeTurnEnd 写的）。
+const agentEnd = (at) => `\n\x1e${JSON.stringify({ t: "agentEnd", at })}\n`;
+const noTraceBoundary = (noteText, closeTurn) => agents(buildConversationItems([{
+  session,
+  output: [
+    "实现完了。",
+    closeTurn ? agentEnd("2026-09-14T00:05:00.000Z") : "",
+    sentinel({ t: "system", agent: "claude", text: noteText, at: "2026-09-14T00:10:00.000Z", aside: true }),
+    "第 2 轮结论：verified。",
+  ].join("\n"),
+  trace: [],
+}], [session], []));
+assert.equal(noTraceBoundary("第 2 轮验证开始：就在这个任务的工作目录里跑。", false).length, 2,
+  "「第 N 轮验证开始」开的是另一个人的一轮，trace 缺失也不能并");
+assert.equal(noTraceBoundary("预览已停止。", true).length, 2,
+  "上一段已落 agentEnd = 回合收口了，后面的话是新一轮，trace 缺失也不能并");
+// 反面对照：同样缺 trace，回合没收口、旁注也不开新一轮 —— 这才是该并的那种（第 9 条）。
+assert.equal(noTraceBoundary("预览已停止。", false).length, 1, "回合还在飞的旁注照旧并回一颗气泡");
+
 console.log("conversation system-note tests passed");
