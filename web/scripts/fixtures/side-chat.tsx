@@ -15,7 +15,7 @@ const agentMarkdown = "侧聊中可以继续对比方案，\n把结论送回这�
 function Fixture() {
   const [taskId, setTaskId] = useState("parent");
   const [status, setStatus] = useState("running");
-  const task = { id: taskId, projectId: "p", title: "实现任务消息回传", mode: "single", agentType: "codex", executorId: "side-codex", status } as Task;
+  const task = { id: taskId, projectId: "p", title: "实现任务消息回传", mode: "single", agentType: "codex", executorId: "side-codex", model: "gpt-5.6-sol", reasoningEffort: "high", status } as Task;
   const items: ConversationItem[] = [
     { kind: "user", id: `${taskId}-user`, text: "主任务正在实现方案 A，并记录验证结果。", attachments: [], at: "2026-09-14T08:00:00.000Z" },
     { kind: "agent", id: `${taskId}-agent`, sessionId: `${taskId}-session`, label: "Codex", at: "2026-09-14T08:00:01.000Z", endedAt: "2026-09-14T08:00:02.000Z", markdown: agentMarkdown, segments: [{ id: `${taskId}-segment`, markdown: agentMarkdown, events: [], attachments: [] }] },

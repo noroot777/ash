@@ -82,6 +82,7 @@ try {
   });
   const url = `http://127.0.0.1:${address.port}/scripts/fixtures/side-chat.html`;
   const state = async () => await (await page.request.get(`${backend}/api/fixture/state`)).json();
+  const roomsFor = async (taskId) => await (await page.request.get(`${backend}/api/tasks/${taskId}/side-chats`)).json();
   const ask = page.getByRole("button", { name: "在侧聊中提问", exact: true });
   const primary = page.locator("main .task-message--user p").filter({ hasText: "主任务正在实现方案 A，并记录验证结果。" });
   const secondary = page.locator(".task-message--agent .task-markdown p").first();
@@ -116,32 +117,42 @@ try {
   const reference = page.getByRole("region", { name: "主会话引用", exact: true });
   await reference.waitFor();
   assert.equal(await reference.locator("blockquote").innerText(), firstSelection);
-  await page.getByRole("button", { name: "开始侧聊", exact: true }).waitFor();
+  const input = page.getByRole("textbox", { name: "侧聊消息输入" });
+  const send = page.getByRole("button", { name: "发送侧聊消息" });
+  const roomPicker = page.getByRole("combobox", { name: "切换侧聊" });
+  await input.waitFor();
+  await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "侧聊消息输入");
+  assert.equal((await roomsFor("parent")).length, 0, "选文打开侧聊不会提前建房");
+  assert.equal(await page.getByRole("button", { name: "开始侧聊", exact: true }).count(), 0);
+  assert.equal(await page.getByText("这里聊，不打断思路", { exact: true }).count(), 0);
+  await page.getByRole("group", { name: "侧聊执行器", exact: true }).waitFor();
+  assert.equal(await reference.evaluate((element) => element.nextElementSibling?.classList.contains("side-chat-input")), true, "引用紧邻输入框上方");
   await page.screenshot({ path: join(artifacts, "selection-first-config.png") });
 
   await page.reload();
   await ensureSideChatOpen(page);
   await reference.waitFor();
   assert.equal(await reference.locator("blockquote").innerText(), firstSelection, "首次建房前引用刷新后仍保留");
-  await page.getByRole("button", { name: "开始侧聊", exact: true }).click();
-  const input = page.getByRole("textbox", { name: "侧聊消息输入" });
-  const send = page.getByRole("button", { name: "发送侧聊消息" });
-  const roomPicker = page.getByRole("combobox", { name: "切换侧聊" });
   await input.waitFor();
-  const firstRoom = await roomPicker.inputValue();
   await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "侧聊消息输入");
+  assert.equal((await roomsFor("parent")).length, 0);
   assert.equal(await reference.locator("blockquote").innerText(), firstSelection);
 
   const firstQuestion = "这段进展还缺什么验证？";
   await input.fill(firstQuestion);
   const expectedBody = `【主会话选文，仅作参考】\n> ${firstSelection}\n\n【当前问题】\n${firstQuestion}`;
+  const createPromise = page.waitForRequest((request) => request.method() === "POST" && /\/api\/tasks\/parent\/side-chats$/.test(request.url()));
   const requestPromise = page.waitForRequest((request) => request.method() === "POST" && /\/api\/chats\/[^/]+\/messages$/.test(request.url()));
   await send.click();
+  await createPromise;
   const sentRequest = await requestPromise;
   assert.equal(sentRequest.postDataJSON().body, expectedBody, "引用与问题按约定格式发送");
   await page.locator(".side-chat-message.is-agent.is-done").last().waitFor();
   assert.equal(await reference.count(), 0, "发送成功后清理引用");
   assert.equal(await input.inputValue(), "");
+  const firstRoom = await roomPicker.inputValue();
+  assert.notEqual(firstRoom, "");
+  assert.equal((await roomsFor("parent")).length, 1);
   assert.equal((await state()).delivered.length, 0, "选文提问不投递到主任务");
   await page.screenshot({ path: join(artifacts, "selection-sent.png") });
 
@@ -203,7 +214,7 @@ try {
   await page.getByRole("button", { name: "移除主会话引用", exact: true }).click();
   assert.equal(await reference.count(), 0);
 
-  await selectContents(page.getByText("这里聊，不打断思路", { exact: true }));
+  await selectContents(page.getByText("侧聊说明", { exact: true }));
   assert.equal(await ask.isVisible().catch(() => false), false, "侧聊正文选区不能出现主会话选文入口");
   await selectContents(primary);
   await ask.waitFor();
@@ -228,12 +239,27 @@ try {
   await page.getByText("展开超长选文测试", { exact: true }).click();
 
   await page.getByRole("button", { name: "新建侧聊", exact: true }).click();
-  await page.waitForFunction((oldRoom) => document.querySelector('[aria-label="切换侧聊"]')?.value !== oldRoom, firstRoom);
-  const secondRoom = await roomPicker.inputValue();
+  await page.waitForFunction(() => document.querySelector('[aria-label="切换侧聊"]')?.value === "");
   assert.equal(await reference.count(), 0, "新侧聊不继承旧房间的引用");
+  await page.getByText("展开超长选文测试", { exact: true }).click();
+  await selectContents(page.getByTestId("selection-long"));
+  await ask.click();
+  await input.fill("新草稿里的超长引用也不能发送");
+  await input.press("Enter");
+  await page.waitForTimeout(100);
+  assert.equal((await roomsFor("parent")).length, 1, "超长引用门禁不能创建新房间");
+  await page.getByRole("button", { name: "移除主会话引用", exact: true }).click();
+  await page.getByText("展开超长选文测试", { exact: true }).click();
   await selectContents(primary);
   await ask.click();
   assert.equal(await reference.locator("blockquote").innerText(), firstSelection);
+  await input.fill("新侧聊首问");
+  await send.click();
+  await page.locator(".side-chat-message.is-agent.is-done").last().waitFor();
+  const secondRoom = await roomPicker.inputValue();
+  assert.notEqual(secondRoom, "");
+  await selectContents(primary);
+  await ask.click();
   await roomPicker.selectOption(firstRoom);
   assert.equal(await reference.locator("blockquote").innerText(), longSelection, "切回旧侧聊恢复旧房间引用");
   assert.equal(await input.inputValue(), "请解释这段内容");

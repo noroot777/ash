@@ -5,6 +5,7 @@ export const SIDE_CHAT_MESSAGE_LIMIT = 8000;
 export type SideChatQuote = { id: string; text: string };
 const pendingKey = (taskId: string) => `ash:side-chat:quote:task:${taskId}`;
 const roomKey = (roomId: string) => `ash:side-chat:quote:room:${roomId}`;
+const newKey = (taskId: string) => `ash:side-chat:quote:new:${taskId}`;
 const cache = new Map<string, string>();
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((listener) => listener());
@@ -52,22 +53,28 @@ export function stageSideChatQuote(taskId: string, text: string) {
 }
 
 export function clearSideChatQuote(taskId: string, roomId: string | null, id: string) {
-  for (const key of [pendingKey(taskId), ...(roomId ? [roomKey(roomId)] : [])]) {
+  for (const key of [pendingKey(taskId), roomId ? roomKey(roomId) : newKey(taskId)]) {
     if (parse(read(key))?.id === id) write(key, "");
   }
   emit();
 }
 
-export function useSideChatQuote(taskId: string, roomId: string | null) {
-  const raw = useSyncExternalStore(subscribe, () => read(pendingKey(taskId)) || (roomId ? read(roomKey(roomId)) : ""), () => "");
+export function moveNewSideChatQuote(taskId: string, roomId: string) {
+  const draft = read(newKey(taskId));
+  if (draft) { write(roomKey(roomId), draft); write(newKey(taskId), ""); }
+  emit();
+}
+
+export function useSideChatQuote(taskId: string, roomId: string | null, ready = true) {
+  const raw = useSyncExternalStore(subscribe, () => read(pendingKey(taskId)) || read(roomId ? roomKey(roomId) : newKey(taskId)), () => "");
   const quote = useMemo(() => parse(raw), [raw]);
   useEffect(() => {
     const pending = read(pendingKey(taskId));
-    if (!roomId || !pending) return;
-    write(roomKey(roomId), pending);
+    if (!ready || !pending) return;
+    write(roomId ? roomKey(roomId) : newKey(taskId), pending);
     write(pendingKey(taskId), "");
     emit();
-  }, [taskId, roomId, raw]);
+  }, [taskId, roomId, raw, ready]);
   return quote;
 }
 

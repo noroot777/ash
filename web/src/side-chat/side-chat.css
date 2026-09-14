@@ -9,11 +9,6 @@
 .side-chat-toolbar button:hover { background: var(--hover-bg); color: var(--ink); }
 .side-chat-scroll-wrap { flex: 1; min-height: 0; position: relative; }
 .side-chat-scroll { height: 100%; overflow: auto; overscroll-behavior: contain; padding: 18px 14px; }
-.side-chat-intro { display: grid; justify-items: start; gap: 8px; margin-bottom: 24px; color: var(--muted); }
-.side-chat-intro > svg { color: var(--accent); }
-.side-chat-intro strong { font-size: 15px; font-weight: 600; color: var(--ink); }
-.side-chat-intro p { margin: 0; line-height: 1.7; }
-.side-chat-intro small { line-height: 1.6; font-size: 11px; }
 .side-chat-message { padding: 14px 0; overflow-wrap: anywhere; border-top: 1px solid var(--line); }
 .side-chat-message > header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
 .side-chat-message strong { font-weight: 600; }
@@ -29,13 +24,19 @@
 .side-chat-receipt.is-sent > summary { color: var(--accent); }
 .side-chat-receipt p { white-space: pre-wrap; line-height: 1.7; margin: 8px 0; }
 .side-chat-receipt small { color: var(--muted); }
-.side-chat-compose { padding: 10px 12px 12px; border-top: 1px solid var(--line); }
-.side-chat-quote { flex-shrink: 0; margin: 10px 12px 0; padding: 9px 10px; border-left: 2px solid var(--accent); border-radius: 0 6px 6px 0; background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.side-chat-compose { flex: 0 0 auto; max-height: min(75%, 540px); overflow: auto; padding: 10px 12px 12px; border-top: 1px solid var(--line); }
+.side-chat-quote { margin: 0 0 10px; padding: 9px 10px; border-left: 2px solid var(--accent); border-radius: 0 6px 6px 0; background: color-mix(in srgb, var(--accent) 6%, transparent); }
 .side-chat-quote > header { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
 .side-chat-quote button { display: grid; place-items: center; margin-left: auto; padding: 4px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); }
 .side-chat-quote button:hover { color: var(--ink); background: var(--hover-bg); }
-.side-chat-quote blockquote { margin: 7px 0 0; max-height: 130px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; }
-.side-chat-quote small { display: block; margin-top: 8px; color: var(--muted); font-size: 11px; }
+.side-chat-quote blockquote { margin: 7px 0 0; max-height: 72px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; }
+.side-chat-quote.is-expanded blockquote { max-height: 160px; }
+.side-chat-quote .side-chat-quote-expand { margin: 6px 0 0; padding: 2px 0; font-size: 11px; color: var(--accent); }
+.side-chat-model { min-width: 0; margin-top: 10px; }
+.side-chat-model .run-target-picker { width: 100%; max-width: 100%; }
+.side-chat-help { margin-top: 8px; color: var(--muted); font-size: 11px; }
+.side-chat-help summary { width: fit-content; cursor: pointer; }
+.side-chat-help p { margin: 6px 0 0; line-height: 1.6; }
 .side-chat-limit { margin: 8px 0 0; font-size: 11px; color: var(--muted); line-height: 1.6; }
 .side-chat-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 22px; margin-bottom: 6px; font-size: 11px; color: var(--muted); }
 .side-chat-status button { display: flex; align-items: center; gap: 4px; color: var(--ink); background: transparent; border: 0; padding: 4px 0; font-size: 11px; }
@@ -48,10 +49,6 @@
 .side-chat-note { color: var(--muted); font-size: 12px; }
 .side-chat-error { padding: 10px 12px; line-height: 1.6; overflow-wrap: anywhere; color: var(--ink); background: color-mix(in srgb, var(--accent) 6%, transparent); }
 .side-chat-error button { display: block; border: 0; background: transparent; color: var(--accent); padding: 5px 0; }
-.side-chat-connection h3 { font-size: 15px; font-weight: 600; margin: 4px 0 12px; }
-.side-chat-connection > p { color: var(--muted); line-height: 1.7; }
-.side-chat-connection footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
-.side-chat-connection footer > button:not(.side-chat-primary) { background: transparent; color: var(--muted); border: 0; }
 .side-chat-latest { display: flex; align-items: center; gap: 4px; position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); color: var(--ink); background: var(--canvas); border: 1px solid var(--line); border-radius: 20px; padding: 5px 10px; font-size: 11px; }
 @media (max-width: 720px) {
   .inspector-host:has(.side-chat-pane) { position: absolute; right: 0; top: 0; bottom: 0; width: min(100%, 430px); min-width: 0; z-index: 12; box-shadow: -8px 0 28px #0002; }
