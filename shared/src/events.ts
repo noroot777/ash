@@ -33,7 +33,12 @@ export type AgentEvent =
   // 展示端据此上「提示」那身琥珀,而不是让关键词表去猜语气(noteTone)——「没交卷」这类
   // 说明里天然带着「未完成」,猜出来永远是红的,而第一次用 ash 的人读到红字只有一个
   // 结论:它崩了。
-  | { kind: "system"; text: string; at: string; level?: "notice" }
+  // aside=true = 这条只是**任务时间线的一条记录**(预约审查、验收阶段更新、预览起停…),
+  // 由 appendTaskTimeline 写下,agent 从没见过它。它既不开一个回合也不结束一个回合,所以
+  // 展示端不能拿它当回合边界用 —— 它落在哪一秒纯属偶然,常常正砸在某一回合说到一半的
+  // 地方。不带这个标的 system 行是真的说给 agent 听的(「继续(从中断处)」那类),照旧当
+  // 回合起点。
+  | { kind: "system"; text: string; at: string; level?: "notice"; aside?: true }
   // 本回合的 token 用量,由执行器从 CLI 的收尾事件(claude 的 result / codex 的
   // turn.completed)解析。每回合至多一条,恒在该回合的 turnEnd/done 之前。拿不到
   // 用量的 CLI 一条都不发 —— 展示端据此判断「这家报不报账」。

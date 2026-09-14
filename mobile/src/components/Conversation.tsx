@@ -27,7 +27,7 @@ type Block =
   | { kind: "error"; text: string; agent?: string; sessionId?: string; key: string }
   | { kind: "done"; text: string; at?: string; key: string }
   | { kind: "user"; text: string; at?: string; key: string }
-  | { kind: "system"; text: string; at?: string; key: string };
+  | { kind: "system"; text: string; at?: string; key: string; aside?: boolean };
 
 type Timing = { time: string | null; endedAt: string | null };
 
@@ -41,9 +41,16 @@ export type ConversationInsertion = {
 function toBlocks(lines: LogLine[]): Block[] {
   const out: Block[] = [];
   let buf: { text: string; agent?: string; sessionId?: string; endedAt?: string; key: string } | null = null;
+  // 任务时间线旁注先攒着，等这颗气泡收口再吐出来（见 LogLine.aside）：它砸在回合中间纯属
+  // 偶然，原地渲染就把一条回复劈成两半，而它讲的其实是「这一回合跑着的时候顺带发生的事」。
+  let asides: Block[] = [];
   const flush = () => {
     if (buf && buf.text.trim()) out.push({ kind: "agentText", ...buf });
     buf = null;
+    if (asides.length) {
+      out.push(...asides);
+      asides = [];
+    }
   };
   lines.forEach((l, i) => {
     const key = `${l.sessionId ?? "s"}-${i}`;
@@ -58,6 +65,12 @@ function toBlocks(lines: LogLine[]): Block[] {
         flush();
         buf = { text: l.text, agent: l.agent, sessionId: l.sessionId, endedAt: l.endedAt, key };
       }
+      return;
+    }
+    if (l.kind === "system" && l.aside) {
+      const block: Block = { kind: "system", text: l.text, at: l.at, key, aside: true };
+      if (buf) asides.push(block);
+      else out.push(block);
       return;
     }
     flush();
@@ -107,6 +120,8 @@ export function Conversation({
   const seen = new Set<string>();
   let prevAt: string | null = null;
   for (const b of blocks) {
+    // 旁注不开也不收一个回合，起止时刻一律不看它（和 web 的 isTurnInterjection 同一条）。
+    if (b.kind === "system" && b.aside) continue;
     if (b.kind === "user" || b.kind === "system") {
       if (b.at) prevAt = b.at;
       continue;
@@ -124,6 +139,7 @@ export function Conversation({
   let rightRunSet = false;
   for (let i = blocks.length - 1; i >= 0; i--) {
     const b = blocks[i];
+    if (b.kind === "system" && b.aside) continue;
     if (b.kind === "user" || b.kind === "system" || b.kind === "done") {
       const at = (b as { at?: string }).at;
       if (at) nextAt = at;

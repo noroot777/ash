@@ -73,7 +73,16 @@ export function SystemNoticeModeSwitch({ mode, search }: { mode: SystemNoticeMod
   );
 }
 
-export function SystemEventDigest({ items, mode }: { items: EventItem[]; mode: SystemNoticeMode }) {
+export function SystemEventDigest({
+  items,
+  mode,
+  attached = false,
+}: {
+  items: EventItem[];
+  mode: SystemNoticeMode;
+  /** 贴着上一颗气泡排成这一回合的尾注（见 ConversationSystemDigestRow.attached）。 */
+  attached?: boolean;
+}) {
   const lead = digestLead(items);
   const lastAt = items.at(-1)?.at;
   const hiddenIssueCount = items.slice(0, -1).filter((item) => {
@@ -91,7 +100,7 @@ export function SystemEventDigest({ items, mode }: { items: EventItem[]; mode: S
     </>
   );
   return (
-    <div className={`system-event-digest is-${mode} is-${lead.kind}`} role={lead.kind === "error" ? "status" : undefined}>
+    <div className={`system-event-digest is-${mode} is-${lead.kind}${attached ? " is-turn-aside" : ""}`} role={lead.kind === "error" ? "status" : undefined}>
       {mode === "aligned" && (
         <span className="system-event-avatar" aria-hidden="true">{eventIcon(lead.kind)}</span>
       )}

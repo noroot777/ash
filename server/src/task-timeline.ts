@@ -12,6 +12,12 @@ import { now } from "./util.js";
 // Tasks that have never run have no conversation timeline yet; callers still
 // update the task itself and receive false so the API can report that honestly.
 //
+// 这里写的每一条都标 `aside`：它们是**任务**的时间线（预约审查、验收阶段更新、预览
+// 起停…），不是会话里的一个回合——agent 从没见过这些字，它们落在哪一秒也纯属偶然，
+// 多半正砸在某一回合说到一半的地方。读端据此不拿它当回合边界（见 shared/src/events.ts
+// 的 `aside`、web 的 conversationModel）。说给 agent 听的那种「继续（从中断处）」由
+// orchestrator / task-run 直接 writeTurn，不带这个标。
+//
 // `target` 是给「这条说明属于某一位智能体」的调用方用的。默认挑最新会话在单飞任务上
 // 一直够用，但一个任务里可以有多条会话（用户 @ 谁谁就多一条）：起跑失败的交代要是按
 // 「最新」投递，用户 @codex 却看见 claude 的时间线里冒出一条不属于它的失败，而被 @
@@ -44,7 +50,7 @@ export async function appendTaskTimeline(
       const out = createWriteStream(transcriptPath, { flags: "a" });
       out.once("error", reject);
       out.once("finish", resolve);
-      writeTurn(out, { t: "system", agent: session.agentType as AgentType, text }, at);
+      writeTurn(out, { t: "system", agent: session.agentType as AgentType, text, aside: true }, at);
       out.end();
     });
     bus.publish({
@@ -53,7 +59,7 @@ export async function appendTaskTimeline(
       sessionId: session.id,
       role: session.role as SessionRole,
       agentType: session.agentType as AgentType,
-      event: { kind: "system", text, at },
+      event: { kind: "system", text, at, aside: true },
     });
     return true;
   } catch (error) {
