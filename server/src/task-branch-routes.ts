@@ -123,9 +123,14 @@ export async function acceptFamily(
     // 「合并后不提交」把改动留在目标分支的工作区里不落提交，于是这一串的下一个任务开合
     // 时那个工作区必然是脏的 —— 第一个合进去，第二个当场被自己的前一位判成 target_dirty。
     // 与其让用户看着「完成 1 个、剩下全停」去猜，不如按下去之前就说清：这一档一次只合
-    // 得了一个。已经验收过的不算（它们走幂等快路，不动 git）。
+    // 得了一个。
+    // 数的必须是**真的会把改动合进目标工作区**的那些：已验收的走幂等快路不动 git；
+    // 「只打标签不合并」那一档连提交都不产生（task-accept.ts 里 tag 直接强制 commit=true），
+    // 把它算进来就会拦下「一个真合并 + 一个 tag 子任务」这种明明做得了的组合（第 2 轮审查
+    // P1 实测：前端放行、后端 409，且一个都没合）。前端 BranchAcceptancePanel 用的是同一
+    // 条口径，两边必须一起改。
     // 判的是**本次生效值**：调用方可以在验收框里临时改这一勾，项目设置只是它没说时的默认。
-    const merging = chosen.filter(e => e.stage !== "accepted");
+    const merging = chosen.filter(e => e.stage !== "accepted" && e.strategy !== "tag");
     const committing = commit ?? project.acceptCommit !== false;
     if (!committing && merging.length > 1) {
       return {

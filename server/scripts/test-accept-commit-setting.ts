@@ -10,6 +10,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
+import { makeStep } from "@ash/shared/workflow";
 import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-accept-commit-test-"));
@@ -253,6 +254,51 @@ try {
     assert.equal(git(repo, "rev-parse", "main"), before, "不提交这一档绝不动目标分支的 ref");
     assert.equal(git(repo, "diff", "--cached", "--name-only"), "solo.txt", "改动合进工作区并暂存");
     assert.equal((await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!.acceptedMergeCommit, null);
+  }
+
+  // 6. 「一次只能合一个」数的是**真会合进目标工作区**的那些：「只打标签不合并」不产生
+  //    提交、也不碰目标工作区，把它算进去就会拦下「一个真合并 + 一个 tag 子任务」这种
+  //    明明做得了的组合（第 2 轮审查 P1）。
+  {
+    const repo = makeRepo("accept-commit-family-tag");
+    const projectId = "accept-commit-family-tag-project";
+    const createdAt = new Date().toISOString();
+    await db.insert(projects).values({ id: projectId, name: "family-tag", repoPath: repo, createdAt });
+    const row = async (id: string) => (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!;
+    const tagStep = makeStep("accept", "accept");
+    if (tagStep.kind === "accept") tagStep.p = { strategy: "tag", clean: "all" };
+    const tagWorkflow = JSON.stringify({ workspace: "isolated", steps: [makeStep("run", "run"), makeStep("human", "human"), tagStep] });
+    const parentId = "accepttp0022";
+    const childId = "accepttc0023";
+    await createTasks([{
+      id: parentId, projectId, title: parentId, body: "test", mode: "single", status: "done",
+      createdAt, updatedAt: createdAt, useWorktree: true, worktreeBase: "main", workflowMode: "free",
+    }]);
+    const parentWs = await taskWorkspace(await row(parentId), repo);
+    writeFileSync(join(parentWs.path, "tagparent.txt"), "parent\n");
+    git(parentWs.path, "add", "-A");
+    git(parentWs.path, "commit", "-m", "tag parent");
+    await createTasks([{
+      id: childId, projectId, title: childId, body: "test", mode: "single", status: "done",
+      createdAt, updatedAt: createdAt, useWorktree: true, worktreeBase: parentWs.branch!,
+      workflow: tagWorkflow, workflowAt: "human",
+    }]);
+    const childWs = await taskWorkspace(await row(childId), repo);
+    writeFileSync(join(childWs.path, "tagchild.txt"), "child\n");
+    git(childWs.path, "add", "-A");
+    git(childWs.path, "commit", "-m", "tag child");
+
+    const view = (await readBranchPlan(parentId))!;
+    assert.equal(view.descendants[0]?.strategy, "tag", "子任务这一档应当是「只打标签不合并」");
+    const expected = [view.task, ...view.descendants].map(t => ({ taskId: t.taskId, fingerprint: t.fingerprint }));
+    const before = git(repo, "rev-parse", "main");
+    const result = await acceptFamily(parentId, expected, acceptTask, false);
+    assert.equal(result.ok, true, result.error);
+    assert.deepEqual(result.completed, [parentId, childId]);
+    assert.equal(git(repo, "rev-parse", "main"), before, "父任务这一档不提交，main 的 ref 不动");
+    assert.equal(git(repo, "diff", "--cached", "--name-only"), "tagparent.txt");
+    assert.equal((await row(childId)).stage, "accepted");
+    assert.match(git(repo, "tag", "--list"), /ash-accepted\//, "tag 那一档照常打标签");
   }
 
   console.log("accept commit setting: 合并后不提交 / 目标分支前提 / 项目默认与单次覆盖 / 统一验收本次覆盖 全部通过");

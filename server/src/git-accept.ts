@@ -503,4 +503,3 @@ async function mergeTaskBranchLocked(
     );
   }
 }
-
