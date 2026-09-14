@@ -118,6 +118,7 @@ export function mountProjectRoutes(api: Hono): void {
       workflowId: null,
       previewCommand: null,
       previewConfig: null,
+      acceptCommit: true,
       createdAt: now(),
       ownerUserId: ownerIdOf(actor),
     };
@@ -186,6 +187,7 @@ export function mountProjectRoutes(api: Hono): void {
       workflowId: null,
       previewCommand: null,
       previewConfig: null,
+      acceptCommit: true,
       createdAt: now(),
       ownerUserId: ownerIdOf(actor),
     };
@@ -255,6 +257,12 @@ export function mountProjectRoutes(api: Hono): void {
     if (b.previewConfig !== undefined) {
       try { patch.previewConfig = parsePreviewConfig(b.previewConfig); }
       catch (error) { return c.json({ error: error instanceof Error ? error.message : "预览配置无效" }, 400); }
+    }
+    // 验收合并完落不落提交。只收布尔:这一项决定的是「会不会在用户的目标分支上产生提交」,
+    // 一个含糊的真值转换(空串/0/"false")在这儿就是替他改 git 历史,宁可 400。
+    if (b.acceptCommit !== undefined) {
+      if (typeof b.acceptCommit !== "boolean") return c.json({ error: "acceptCommit 必须是布尔值" }, 400);
+      patch.acceptCommit = b.acceptCommit;
     }
     if (Object.keys(patch).length) await db.update(projects).set(patch).where(eq(projects.id, pid));
     const updated = (await db.select().from(projects).where(eq(projects.id, pid))).at(0)!;

@@ -173,6 +173,7 @@ export async function cloneProject(input: CloneProjectInput, actor?: Actor): Pro
     apiKeys: null,
     workflowId: null,
     previewCommand: null,
+    acceptCommit: true,
     createdAt: now(),
     ownerUserId: actor ? ownerIdOf(actor) : null,
   };

@@ -119,6 +119,21 @@ export async function acceptFamily(
     if (blocked) return { ok: false, completed: [], stoppedAt: blocked.taskId, error: blocked.blocker! };
     const dependencyBlock = familySelectionBlock(entries, ids);
     if (dependencyBlock) return { ok: false, completed: [], stoppedAt: dependencyBlock.taskId, error: dependencyBlock.error };
+    // 「合并后不提交」把改动留在目标分支的工作区里不落提交，于是这一串的下一个任务开合
+    // 时那个工作区必然是脏的 —— 第一个合进去，第二个当场被自己的前一位判成 target_dirty。
+    // 与其让用户看着「完成 1 个、剩下全停」去猜，不如按下去之前就说清：这一档一次只合
+    // 得了一个。已经验收过的不算（它们走幂等快路，不动 git）。
+    const merging = chosen.filter(e => e.stage !== "accepted");
+    if (project.acceptCommit === false && merging.length > 1) {
+      return {
+        ok: false,
+        completed: [],
+        stoppedAt: merging[1].taskId,
+        error: `这个项目的设置是「验收合并后不提交代码」：改动会留在目标分支的工作区里等你自己提交，`
+          + `所以一次只能合一个任务（这次选了 ${merging.length} 个）。请逐个验收——合完一个、`
+          + "自己提交掉，再验收下一个；或者在项目设置里改回「合并后提交代码」。",
+      };
+    }
     const completed: string[] = [];
     for (const row of chosen) {
       const currentTask = (await db.select().from(tasks).where(eq(tasks.id, row.taskId))).at(0);

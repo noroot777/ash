@@ -147,7 +147,7 @@ export const api = {
     request(`/projects/${id(projectId)}/preview/detect`),
   updateProject: (
     projectId: string,
-    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId" | "previewCommand" | "previewConfig">>,
+    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId" | "previewCommand" | "previewConfig" | "acceptCommit">>,
   ): Promise<ProjectView> => request(`/projects/${id(projectId)}`, json("PATCH", patch)),
   deleteProject: (projectId: string): Promise<{ deleted: true }> =>
     request(`/projects/${id(projectId)}`, { method: "DELETE" }),
@@ -372,9 +372,14 @@ export const api = {
     stepId: string,
   ): Promise<{ ok: true; url: string | null; port: number | null }> =>
     request(`/tasks/${id(taskId)}/preview/restart`, json("POST", { stepId })),
-  acceptanceCheck: (taskId: string): Promise<{ verification: import("@ash/shared/workflow-policy").UnexecutedVerification | null }> => request(`/tasks/${id(taskId)}/acceptance-check`),
-  acceptTask: async (taskId: string, confirmUnverified = false): Promise<AcceptTaskResult> => {
-    const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept`), json("POST", { confirmUnverified }));
+  acceptanceCheck: (taskId: string): Promise<{
+    verification: import("@ash/shared/workflow-policy").UnexecutedVerification | null;
+    // 「合并后提交代码」这一勾的默认值 = 项目设置的当前值。改勾只影响这一次验收。
+    commitDefault: boolean;
+  }> => request(`/tasks/${id(taskId)}/acceptance-check`),
+  // `commit` 只覆盖这一次：不传 = 跟项目设置走（默认合并后提交）。
+  acceptTask: async (taskId: string, confirmUnverified = false, commit?: boolean): Promise<AcceptTaskResult> => {
+    const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept`), json("POST", { confirmUnverified, commit }));
     const body = await parseBody(response);
     if (isAcceptTaskResult(body)) return body;
     throw apiError(response, body);
