@@ -2,12 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatMember, ChatRoom, ChatSnapshot } from "@ash/shared/chat";
 import { chatApi } from "../chat/chatApi.ts";
 import { createClientId } from "../lib/clientId.ts";
+import { clearSideChatQuote, SIDE_CHAT_MESSAGE_LIMIT, sideChatMessageBody, useSideChatQuote } from "./sideChatQuote.ts";
 
 const read = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };
 const write = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* Storage can be unavailable. */ } };
 const draftKey = (id: string) => `ash:side-chat:draft:${id}`;
 const requestKey = (id: string) => `ash:side-chat:send:${id}`;
 const finished = (status: string) => ["done", "failed", "stopped"].includes(status);
+type SendRequest = { id: string; body: string; draft?: string; quoteId?: string };
 
 export function mergeSideSnapshot(previous: ChatSnapshot | null, next: ChatSnapshot): ChatSnapshot {
   if (!previous || previous.room.id !== next.room.id) return next;
@@ -25,6 +27,7 @@ export function mergeSideSnapshot(previous: ChatSnapshot | null, next: ChatSnaps
 export function useSideChat(taskId: string) {
   const [rooms, setRooms] = useState<ChatRoom[]>([]);
   const [roomId, setRoomId] = useState<string | null>(null);
+  const quote = useSideChatQuote(taskId, roomId);
   const [snapshot, setSnapshot] = useState<ChatSnapshot | null>(null);
   const [ready, setReady] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -48,11 +51,12 @@ export function useSideChat(taskId: string) {
     setRooms((rows) => rows.map((row) => row.id === value.room.id ? value.room : row));
     setError("");
     try {
-      const request = JSON.parse(read(requestKey(value.room.id)) ?? "null") as { id: string; body: string } | null;
+      const request = JSON.parse(read(requestKey(value.room.id)) ?? "null") as SendRequest | null;
       if (request && value.messages.some((message) => message.id === request.id && message.role === "user")) {
-        if (read(draftKey(value.room.id)) === request.body) {
+        if (read(draftKey(value.room.id)) === (request.draft ?? request.body)) {
           write(draftKey(value.room.id), ""); setDraftState("");
         }
+        if (request.quoteId) clearSideChatQuote(taskId, value.room.id, request.quoteId);
         write(requestKey(value.room.id), "null");
       }
     } catch { /* Invalid local drafts do not affect server history. */ }
@@ -90,6 +94,8 @@ export function useSideChat(taskId: string) {
   }, [roomId, apply]);
   const room = snapshot?.room ?? rooms.find((row) => row.id === roomId);
   const busy = !!snapshot?.messages.some((message) => !finished(message.status)) || snapshot?.context?.status === "compacting";
+  const body = sideChatMessageBody(draft, quote);
+  const overLimit = body.length > SIDE_CHAT_MESSAGE_LIMIT;
   const setDraft = (value: string) => {
     if (roomId) write(draftKey(roomId), value);
     setDraftState(value);
@@ -115,14 +121,13 @@ export function useSideChat(taskId: string) {
     setSnapshot((value) => value ? { ...value, room: updated } : value);
   };
   const send = async () => {
-    const body = draft.trim();
-    if (!roomId || !snapshot || busy || locked.current || !body) return;
+    if (!roomId || !snapshot || busy || locked.current || !draft.trim() || overLimit) return;
     locked.current = true; setSending(true); setError("");
-    let request: { id: string; body: string } | null = null;
+    let request: SendRequest | null = null;
     try { request = JSON.parse(read(requestKey(roomId)) ?? "null"); } catch { /* Recreate invalid local metadata. */ }
-    if (!request || request.body !== body) request = { id: createClientId(), body };
+    request = { id: request?.body === body ? request.id : createClientId(), body, draft: draft.trim(), quoteId: quote?.id };
     write(requestKey(roomId), JSON.stringify(request));
-    write(draftKey(roomId), body);
+    write(draftKey(roomId), request.draft!);
     try { apply(await chatApi.send(roomId, body, request.id)); }
     catch (reason) { if (alive.current && selected.current === roomId && read(requestKey(roomId)) !== "null") setError(String(reason)); }
     finally { locked.current = false; if (alive.current) setSending(false); }
@@ -132,5 +137,6 @@ export function useSideChat(taskId: string) {
     try { apply(await chatApi.stop(roomId)); }
     catch (reason) { if (alive.current && selected.current === roomId) setError(String(reason)); }
   };
-  return { rooms, room, snapshot, ready, connected, error, draft, sending, busy, select, setDraft, create, saveMember, send, stop, reload };
+  const removeQuote = () => { if (quote) clearSideChatQuote(taskId, roomId, quote.id); };
+  return { rooms, room, snapshot, ready, connected, error, draft, quote, removeQuote, overLimit, messageLength: body.length, sending, busy, select, setDraft, create, saveMember, send, stop, reload };
 }

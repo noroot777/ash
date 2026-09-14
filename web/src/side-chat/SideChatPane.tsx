@@ -1,14 +1,15 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Task } from "@ash/shared";
 import { SIDE_CHAT_HISTORY_MAX_BYTES } from "@ash/shared/chat";
 import type { ChatMessage } from "@ash/shared/chat";
-import { ArrowDown, ArrowUp, ArrowBendUpLeft, ChatCircleDots, GearSix, Plus, Stop } from "@phosphor-icons/react";
+import { ArrowDown, ArrowUp, ArrowBendUpLeft, ChatCircleDots, GearSix, Plus, Stop, Quotes, X } from "@phosphor-icons/react";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { ChatContextNotice } from "../chat/ChatContextNotice.tsx";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
 import { useScrollEdges } from "../lib/useScrollEdges.ts";
 import { SideChatConnection } from "./SideChatConnection.tsx";
 import { useSideChat } from "./useSideChat.ts";
+import { SIDE_CHAT_MESSAGE_LIMIT } from "./sideChatQuote.ts";
 import "./side-chat.css";
 
 const receiptLabels = { queued: "已排队 · 主任务空闲后发送", delivering: "正在投递", sent: "已送达主任务", canceled: "未送达 · 已取消", unavailable: "回执不可用" };
@@ -36,6 +37,10 @@ export function SideChatPane({ task }: { task: Task }) {
   const { resume } = useStickToBottom(scroll, chat.room?.id ?? task.id);
   const { atBottom } = useScrollEdges(scroll, chat.room?.id ?? task.id);
   const configure = editing || (chat.ready && !chat.room && !chat.error);
+  useEffect(() => { if (chat.quote) setEditing(false); }, [chat.quote?.id]);
+  useEffect(() => {
+    if (chat.quote && !configure) input.current?.focus({ preventScroll: true });
+  }, [chat.quote?.id, configure, chat.room?.id]);
   const newChat = async () => {
     if (!chat.room?.members[0]) return;
     setCreatingError("");
@@ -65,12 +70,18 @@ export function SideChatPane({ task }: { task: Task }) {
       {!atBottom && <button type="button" className="side-chat-latest" aria-label="跳到侧聊最新消息" onClick={() => { resume(); scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: "auto" }); }}><ArrowDown size={13} />最新消息</button>}
     </div>
     {(chat.error || creatingError) && <div className="side-chat-error" role="alert">{chat.error || creatingError}<button type="button" onClick={() => { void chat.reload(); setCreatingError(""); }}>重新连接</button></div>}
+    {chat.quote && <section className="side-chat-quote" aria-label="主会话引用">
+      <header><Quotes size={14} /><span>来自主会话</span><button type="button" aria-label="移除主会话引用" onClick={chat.removeQuote}><X size={14} /></button></header>
+      <blockquote>{chat.quote.text}</blockquote>
+      {!chat.room && <small>选文已保留，开始侧聊后可填写问题。</small>}
+    </section>}
     {chat.room && !configure && <div className="side-chat-compose">
       <div className="side-chat-status" role="status"><span>{chat.connected ? chat.busy ? "侧聊正在回复" : `${chat.room.members[0]?.agentType} · 独立会话` : "连接中，状态可能延迟"}</span>{chat.busy && <button type="button" disabled={chat.sending} onClick={() => void chat.stop()}><Stop size={12} weight="fill" />停止侧聊</button>}</div>
       <ChatContextNotice context={chat.snapshot?.context} />
-      <div className="side-chat-input"><textarea ref={input} aria-label="侧聊消息输入" placeholder="问个问题，或把结论交给主任务…" maxLength={8000} value={chat.draft} onChange={(event) => chat.setDraft(event.target.value)} onKeyDown={(event) => {
+      <div className="side-chat-input"><textarea ref={input} aria-label="侧聊消息输入" placeholder={chat.quote ? "想问这段内容什么？" : "问个问题，或把结论交给主任务…"} maxLength={SIDE_CHAT_MESSAGE_LIMIT} value={chat.draft} onChange={(event) => chat.setDraft(event.target.value)} onKeyDown={(event) => {
         if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void chat.send(); }
-      }} /><footer><span>Enter 发送 · Shift Enter 换行</span><button type="button" className="side-chat-primary" aria-label="发送侧聊消息" disabled={!chat.snapshot || !chat.draft.trim() || chat.busy || chat.sending} onClick={() => void chat.send()}><ArrowUp size={17} weight="bold" /></button></footer></div>
+      }} /><footer><span>Enter 发送 · Shift Enter 换行</span><button type="button" className="side-chat-primary" aria-label="发送侧聊消息" disabled={!chat.snapshot || !chat.draft.trim() || chat.overLimit || chat.busy || chat.sending} onClick={() => void chat.send()}><ArrowUp size={17} weight="bold" /></button></footer></div>
+      {chat.overLimit && <p className="side-chat-limit" role="alert">引用与问题合计 {chat.messageLength} 字，超过 {SIDE_CHAT_MESSAGE_LIMIT} 字上限。请缩短问题，或移除引用后重新选择较短的内容。</p>}
     </div>}
   </section>;
 }
