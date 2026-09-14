@@ -87,7 +87,7 @@ export function mountFileRoutes(api: Hono) {
   // 静默不弹菜单就好，弹一条红字说「没有工作目录」是在打断一次普通的打字。
   api.get("/tasks/:id/file-search", async (c) => {
     const root = await rootFor(c.req.param("id"));
-    if (!root) return c.json({ root: null, hits: [], truncated: false });
+    if (!root) return c.json({ root: null, hits: [], truncated: false, more: false });
     try {
       const found = await searchWorkspaceFiles(root.path, {
         gitRepo: root.gitRepo,

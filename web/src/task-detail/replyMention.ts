@@ -63,10 +63,10 @@ export function useReplyMention({
   // 文件那半边还没回来时要说一句，否则「@ 了一下什么都没有」看着像功能坏了。
   const status = files.loading && !files.hits.length ? "正在搜索工作区文件…"
     : files.failed ? "工作区文件搜索失败，仍可直接手打路径"
-      : rows.length > 0 ? null
-        : !profilesReady ? "正在读取已注册智能体…"
-          : profilesFailed ? "执行器列表读取失败；也没有匹配的文件"
-            : "没有匹配的智能体或文件";
+      : rows.length === 0 ? (!profilesReady ? "正在读取已注册智能体…"
+        : profilesFailed ? "执行器列表读取失败；也没有匹配的文件"
+          : "没有匹配的智能体或文件")
+        : files.more ? "匹配的文件还有更多，再敲几个字缩小范围" : null;
 
   const pick = (row: MentionRow) => {
     if (row.kind === "agent") onPickAgent(row.agent as AgentType);

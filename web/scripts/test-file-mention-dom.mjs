@@ -31,7 +31,10 @@ const FILES = [
   "src/lib/apiClient.ts",
   "src/lib/useFileMention.ts",
   "docs/计划 A.md",
+  "dist/api.js",
 ];
+// .gitignore 挡着的：照样能搜到、能选，只是排在最后并标出来（空查询时不给）。
+const IGNORED = new Set(["dist/api.js"]);
 
 let browser;
 try {
@@ -43,6 +46,8 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
   // 让某一个查询慢下来：验「旧候选不许被新 token 的回车选中」那一条时打开。
   let slowQuery = null;
+  // 让某一个查询报「还有更多没列出来」：验那句提示有没有接上。
+  let moreQuery = null;
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     const json = (body) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
@@ -52,7 +57,9 @@ try {
       if (slowQuery && query.includes(slowQuery)) {
         await new Promise((resolve) => { setTimeout(resolve, 1500); });
       }
-      const matched = FILES.filter((path) => !query || path.toLowerCase().includes(query));
+      const matched = FILES
+        .filter((path) => (query ? path.toLowerCase().includes(query) : !IGNORED.has(path)))
+        .sort((a, b) => Number(IGNORED.has(a)) - Number(IGNORED.has(b)));
       return json({
         root: { path: "/repo" },
         hits: matched.map((path) => {
@@ -62,9 +69,11 @@ try {
             name: at < 0 ? path : path.slice(at + 1),
             dir: at < 0 ? "" : path.slice(0, at),
             kind: "file",
+            ...(IGNORED.has(path) ? { ignored: true } : {}),
           };
         }),
         truncated: false,
+        more: !!moreQuery && query.includes(moreQuery),
       });
     }
     return route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
@@ -173,6 +182,28 @@ try {
     "send:看 @src",
     "菜单开着也不能把 ⌘↵ 吃掉",
   );
+
+  // ⑩ 被 .gitignore 挡着的文件：排在最后、标着「已忽略」，但照样选得中。
+  //    （改之前它们压根搜不出来 —— `data/`、`dist/` 里的产物一个都 @ 不到。）
+  await textarea.fill("");
+  await textarea.type("看 @api");
+  await settled(["api.ts", "apiClient.ts", "api.js"]);
+  const ignoredRow = options.nth(2);
+  assert.match(await ignoredRow.textContent() ?? "", /已忽略/, "忽略项要标出来，否则用户看不懂它为什么在最后");
+  await ignoredRow.click();
+  assert.equal(await textarea.inputValue(), "看 @dist/api.js ", "忽略项也得能选中");
+
+  // ⑪ 候选被条数上限截了要说一声，不然用户以为「就这几个」。
+  // 用一个前面没搜过的 token：搜过的那几个还躺在 hook 的缓存里，不会再问服务端。
+  moreQuery = "usef";
+  await textarea.fill("");
+  await textarea.type("再看 @useF");
+  await page.waitForFunction(
+    () => document.querySelector(".mention-menu p")?.textContent?.includes("再敲几个字"),
+    null,
+    { timeout: 4000 },
+  );
+  moreQuery = null;
 
   console.log("file-mention-dom: ok");
 } finally {

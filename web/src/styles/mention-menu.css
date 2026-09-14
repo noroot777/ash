@@ -53,3 +53,14 @@
   white-space: nowrap;
 }
 .mention-menu .mention-menu-hit { background: transparent; color: var(--accent); font-weight: 700; }
+/* 「已忽略」这类小标：靠右挤在行尾，绝不跟名字抢宽度。 */
+.mention-menu .mention-menu-tag {
+  flex: 0 0 auto;
+  margin-left: auto;
+  border-radius: 4px;
+  background: var(--sel-bg);
+  padding: 1px 5px;
+  color: var(--faint);
+  font-size: 9px;
+  white-space: nowrap;
+}

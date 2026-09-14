@@ -153,6 +153,8 @@ export type FileSearchHit = {
   name: string;
   dir: string;
   kind: "file" | "dir";
+  /** .gitignore 挡着的（构建产物、本地数据…）。照样能选，只是一律排在未忽略的后面。 */
+  ignored?: boolean;
 };
 
 export type FileSearchResult = {
@@ -160,6 +162,8 @@ export type FileSearchResult = {
   root: { path: string } | null;
   hits: FileSearchHit[];
   truncated: boolean;
+  /** 还有匹配上的没列出来（被条数上限截了）。界面据此提示「再敲几个字缩小范围」。 */
+  more?: boolean;
 };
 
 export type FileContent = {  path: string;

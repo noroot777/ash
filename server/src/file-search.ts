@@ -6,12 +6,17 @@
 // 这里根本不接受调用方给的相对路径，只吐我们自己枚举出来的，所以没有越狱面）。
 //
 // 取数按两条规矩：
-//   1. **git 仓库一律问 git**（`ls-files --cached --others --exclude-standard`）：它自带
-//      .gitignore 语义，node_modules / dist / 构建产物不会挤掉用户真正想引用的源码。
-//   2. 非 git 目录才自己走 readdir，并且硬性跳过那几个已知会把树撑爆的目录。
+//   1. **枚举始终是整棵树**（自己走 readdir），因为「工作区里的文件」就该全都能被 @ 到。
+//   2. git 仓库另外问一次 git（`ls-files --cached --others --exclude-standard`），但那份
+//      名单只用来**排序**：不在里面的就是 .gitignore 挡着的，排到所有未忽略候选之后。
 //
-// 枚举结果按根目录缓存几秒：`@` 是边打边搜，不缓存的话每敲一个字母就 spawn 一次 git，
-// 大仓库上那是每次 100ms+ 的进程开销，而文件列表在几秒内几乎不会变。
+// 第 2 条曾经是过滤而不是排序 —— .gitignore 挡住的直接不进候选。那等于替用户认定「被
+// 忽略 = 不想引用」，可 `data/`、`output/`、`dist/` 里全是跑出来的产物和报告，正是会想
+// 让 agent 去读的东西，而用户在界面上只会看到「敲了半天搜不出来」，也猜不到是 git 在挡。
+// 现在改成分档：源码永远在前，忽略的在后但一定找得到，且界面上标出来它为什么靠后。
+//
+// 枚举结果按根目录缓存几秒：`@` 是边打边搜，不缓存的话每敲一个字母就重扫一遍整棵树，
+// 大仓库上那是每次上百毫秒，而文件列表在几秒内几乎不会变。
 import { spawn } from "node:child_process";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -24,34 +29,49 @@ export interface FileSearchHit {
   /** 除末段之外的部分，`""` 表示就在根下。界面上灰着显示，用来区分同名文件。 */
   dir: string;
   kind: "file" | "dir";
+  /** .gitignore 挡着的（构建产物、本地数据…）。照样能选，但排在所有未忽略候选之后。 */
+  ignored?: boolean;
 }
 
 /** 枚举上限。超过就截断并如实告诉前端（`truncated`），不假装列全了。 */
 const MAX_FILES = 40_000;
-/** 自己走 readdir 时的深度上限，防一条软链把扫描带进无底洞。 */
+/** 走 readdir 时的深度上限，防一条软链把扫描带进无底洞。 */
 const MAX_DEPTH = 12;
+/** 整棵树扫描的时间预算：根目录选到 home 这种地方时，宁可少列也不能把请求拖死。 */
+const WALK_BUDGET_MS = 2_000;
 /** 一次最多回多少条候选。 */
-const DEFAULT_LIMIT = 30;
-const MAX_LIMIT = 60;
+const DEFAULT_LIMIT = 40;
+const MAX_LIMIT = 80;
 /** 枚举结果的缓存寿命。边打边搜期间够用，久到用户察觉不到文件列表旧了之前就过期。 */
 const CACHE_TTL_MS = 5_000;
 
-/** 非 git 目录下自己扫时跳过的目录名：它们要么不是用户想引用的，要么能把树撑爆。 */
+/**
+ * 永不枚举的目录。判据只有一条：**体量大到能把整棵树淹掉几个数量级**。
+ *
+ * `dist` / `build` / `out` / `target` 这些**故意不在**这里 —— 它们多半被 .gitignore 挡着，
+ * 现在按「已忽略」排到后面就够了，用户真要引用一份构建产物仍然找得到。
+ */
 const SKIP_DIRS = new Set([
-  ".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", "out",
-  "target", ".next", ".nuxt", ".cache", ".turbo", ".gradle", ".idea", ".vscode",
-  "vendor", "Pods", ".DS_Store",
+  ".git", "node_modules", ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache",
+  ".cache", ".turbo", ".gradle", "Pods", ".DS_Store",
 ]);
 
 interface Listing {
   files: string[];
+  /** files 里哪些是 .gitignore 挡着的。非 git 目录下恒为空。 */
+  ignored: Set<string>;
   truncated: boolean;
 }
 
 const cache = new Map<string, { at: number; value: Promise<Listing> }>();
 
-/** `git ls-files`：已跟踪 + 未跟踪但没被 ignore 的，一次问全。 */
-function gitListFiles(root: string): Promise<Listing | null> {
+interface Scan {
+  files: string[];
+  truncated: boolean;
+}
+
+/** `git ls-files`：已跟踪 + 未跟踪但没被 ignore 的，一次问全。回 null = 这儿问不出来。 */
+function gitListFiles(root: string): Promise<Scan | null> {
   return new Promise((done) => {
     const child = spawn(
       "git",
@@ -82,10 +102,11 @@ function gitListFiles(root: string): Promise<Listing | null> {
   });
 }
 
-/** 非 git 目录的兜底：自己走一遍，按 SKIP_DIRS 和深度刹车。 */
-async function walk(root: string): Promise<Listing> {
+/** 整棵树走一遍，按 SKIP_DIRS、深度和时间预算刹车。被 .gitignore 挡着的也照列。 */
+async function walk(root: string): Promise<Scan> {
   const files: string[] = [];
   let truncated = false;
+  const deadline = Date.now() + WALK_BUDGET_MS;
   const visit = async (rel: string, depth: number): Promise<void> => {
     if (truncated || depth > MAX_DEPTH) return;
     let entries;
@@ -94,8 +115,13 @@ async function walk(root: string): Promise<Listing> {
     } catch {
       return; // 权限不足 / 刚被删：当作空目录，不让整次枚举塌掉
     }
+    // 里面另有 `.git` 的是**另一个仓库**（子模块、别的 worktree、顺手 clone 在工作区里的
+    // 东西）。它的文件归它自己那个根管，跟着列进来只会让同一份源码在候选里出现好几遍
+    // —— harness 自己的 `.worktrees/` 下就躺着九个完整检出。
+    if (rel && entries.some((entry) => entry.name === ".git")) return;
     for (const entry of entries) {
       if (truncated) return;
+      if (Date.now() > deadline) { truncated = true; return; }
       if (SKIP_DIRS.has(entry.name)) continue;
       const next = rel ? `${rel}/${entry.name}` : entry.name;
       // 软链不跟进：跟进就可能绕出根目录，也可能转圈。
@@ -116,9 +142,26 @@ async function walk(root: string): Promise<Listing> {
 async function listFiles(root: string, gitRepo: boolean): Promise<Listing> {
   const hit = cache.get(root);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
-  const value = (async () => {
-    const fromGit = gitRepo ? await gitListFiles(root) : null;
-    return fromGit ?? await walk(root);
+  const value = (async (): Promise<Listing> => {
+    // 两件事同时问：git 那份是「哪些没被忽略」，自己走的那份是「到底有哪些」。
+    const [fromGit, walked] = await Promise.all([
+      gitRepo ? gitListFiles(root) : Promise.resolve(null),
+      walk(root),
+    ]);
+    // git 报了、自己却扫不到的也留着（SKIP_DIRS 里被 tracked 的文件就是这种），它们是
+    // 正经源码，不该因为目录名撞上黑名单就消失。
+    const visible = new Set(fromGit?.files ?? []);
+    const files = [...visible];
+    const ignored = new Set<string>();
+    for (const path of walked.files) {
+      if (visible.has(path)) continue;
+      // 有 git 名单却没报这一条 = 被 .gitignore 挡着；没 git 名单就谈不上忽略。
+      if (fromGit) ignored.add(path);
+      files.push(path);
+      if (files.length >= MAX_FILES) break;
+    }
+    const truncated = walked.truncated || (fromGit?.truncated ?? false) || files.length >= MAX_FILES;
+    return { files, ignored, truncated };
   })();
   cache.set(root, { at: Date.now(), value });
   // 缓存只为「边打边搜的这几秒」，不是长驻内存的索引：根目录一多就把最老的挤掉。
@@ -180,6 +223,13 @@ function scoreOf(path: string, name: string, query: string): number | null {
   return null;
 }
 
+/**
+ * 被忽略的候选统一往下压这么多分。压到「任何忽略项都低于任何未忽略项」是刻意的：
+ * 分档比精细混排可预期得多 —— 用户敲 `report` 时先看到 docs 里那几篇，想要 `data/runs`
+ * 里跑出来的那份就往下翻或者多敲两段路径，而不是每次都得猜这回排序会把谁提上来。
+ */
+const IGNORED_PENALTY = 1_000;
+
 /** 路径深度：没查询词时用它排序，浅的先出来（README、package.json 这类）。 */
 function depthOf(path: string): number {
   let depth = 0;
@@ -207,33 +257,40 @@ function directoriesOf(files: string[]): string[] {
 export async function searchWorkspaceFiles(
   root: string,
   options: { gitRepo?: boolean; query?: string; limit?: number } = {},
-): Promise<{ hits: FileSearchHit[]; truncated: boolean }> {
-  const { files, truncated } = await listFiles(root, options.gitRepo !== false);
+): Promise<{ hits: FileSearchHit[]; truncated: boolean; more: boolean }> {
+  const { files, ignored, truncated } = await listFiles(root, options.gitRepo !== false);
   const limit = Math.min(Math.max(1, options.limit ?? DEFAULT_LIMIT), MAX_LIMIT);
   const query = (options.query ?? "").trim().toLowerCase().replace(/\\/g, "/");
 
   if (!query) {
     // 还没敲字：给浅层的一把，按「目录层级浅 → 路径字典序」排，第一眼看到的是仓库门面
-    // 那几个文件，而不是随机深处的某个 .svg。
-    const hits = files
+    // 那几个文件，而不是随机深处的某个 .svg。被忽略的这会儿一条都不给 —— 还没有查询词，
+    // 它们只会把门面挤掉；敲出字来照样搜得到。
+    const ranked = files
+      .filter((path) => !ignored.has(path))
       .map((path) => ({ path, ...splitPath(path), kind: "file" as const }))
-      .sort((a, b) => depthOf(a.path) - depthOf(b.path) || a.path.localeCompare(b.path))
-      .slice(0, limit);
-    return { hits, truncated };
+      .sort((a, b) => depthOf(a.path) - depthOf(b.path) || a.path.localeCompare(b.path));
+    return { hits: ranked.slice(0, limit), truncated, more: ranked.length > limit };
   }
 
   const scored: { hit: FileSearchHit; score: number }[] = [];
-  const consider = (path: string, kind: "file" | "dir") => {
+  const consider = (path: string, kind: "file" | "dir", ignore: boolean) => {
     const { name, dir } = splitPath(path);
     const score = scoreOf(path, name, query);
     if (score === null) return;
-    // 目录略微让位给文件：同名时用户多半想要的是那个文件。
-    scored.push({ hit: { path, name, dir, kind }, score: kind === "dir" ? score - 20 : score });
+    scored.push({
+      hit: { path, name, dir, kind, ...(ignore ? { ignored: true } : {}) },
+      // 目录略微让位给文件：同名时用户多半想要的是那个文件。
+      score: score - (kind === "dir" ? 20 : 0) - (ignore ? IGNORED_PENALTY : 0),
+    });
   };
-  for (const path of files) consider(path, "file");
-  for (const path of directoriesOf(files)) consider(path, "dir");
+  for (const path of files) consider(path, "file", ignored.has(path));
+  // 目录的「忽略与否」跟着它底下的文件走：里面还有没被忽略的文件，它就不算忽略
+  // （`web/` 底下有 `web/dist/`，但 `web/` 本身当然该跟源码排在一起）。
+  const liveDirs = new Set(directoriesOf(files.filter((path) => !ignored.has(path))));
+  for (const path of directoriesOf(files)) consider(path, "dir", !liveDirs.has(path));
 
   scored.sort((a, b) => b.score - a.score || a.hit.path.length - b.hit.path.length
     || a.hit.path.localeCompare(b.hit.path));
-  return { hits: scored.slice(0, limit).map((entry) => entry.hit), truncated };
+  return { hits: scored.slice(0, limit).map((entry) => entry.hit), truncated, more: scored.length > limit };
 }

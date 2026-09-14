@@ -102,6 +102,9 @@ export function MentionMenu({
                 {/* 同名文件靠这一段分辨（三个 index.ts 长得一模一样），所以路径不能省，
                     太长时从**左边**截 —— 右边那几段才是区分度所在。 */}
                 {row.hit.dir && <em>{tailPath(row.hit.dir)}/</em>}
+                {/* 被 .gitignore 挡着的照样能选，但得说一声：否则用户只会觉得「这条怎么
+                    排这么后面」，还会怀疑自己引用的是不是一个不该存在的文件。 */}
+                {row.hit.ignored && <span className="mention-menu-tag">已忽略</span>}
               </>
             )}
           </button>
@@ -138,7 +141,8 @@ export function FileMentionMenu({
       token={mention.token ?? ""}
       status={mention.loading && !mention.hits.length ? "正在搜索工作区文件…"
         : mention.failed ? "工作区文件搜索失败，仍可直接手打路径"
-          : mention.hits.length === 0 ? "没有匹配的文件" : null}
+          : mention.hits.length === 0 ? "没有匹配的文件"
+            : mention.more ? "匹配的还有更多，再敲几个字缩小范围" : null}
       selectedIndex={mention.index}
       onHover={mention.setIndex}
       onPick={(row) => { if (row.kind === "file") mention.pick(row.hit); }}

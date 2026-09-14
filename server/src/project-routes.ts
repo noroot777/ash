@@ -347,12 +347,12 @@ export function mountProjectRoutes(api: Hono): void {
     const { row, error } = await loadVisible(c, c.req.param("id"));
     if (error) return error;
     const repoPath = expandHome(row.repoPath);
-    if (!repoPath) return c.json({ root: null, hits: [], truncated: false });
+    if (!repoPath) return c.json({ root: null, hits: [], truncated: false, more: false });
     const found = await searchWorkspaceFiles(repoPath, {
       gitRepo: await isGitRepo(repoPath),
       query: c.req.query("q") ?? "",
       limit: Number(c.req.query("limit")) || undefined,
-    }).catch(() => ({ hits: [], truncated: false }));
+    }).catch(() => ({ hits: [], truncated: false, more: false }));
     return c.json({ root: { path: repoPath }, ...found });
   });
 

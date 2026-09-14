@@ -43,11 +43,11 @@ export function useFileMention({
   // 的那一两百毫秒里，菜单显示的是上一个 token 的候选，回车就把那条插进正文了
   // （敲 `@src/lib/` 看到候选、改成 `@README` 立刻回车 → 插进去的是 apiClient.ts）。
   // 绑上 key 之后「还没到货」和「到的是别人的货」是同一种状态：一律不给选。
-  const [result, setResult] = useState<{ key: string; hits: FileSearchHit[]; failed: boolean }>(
-    { key: "", hits: [], failed: false },
-  );
+  const [result, setResult] = useState<
+    { key: string; hits: FileSearchHit[]; more: boolean; failed: boolean }
+  >({ key: "", hits: [], more: false, failed: false });
   // 搜过的查询记着：删掉一个字母退回上一个查询时不必再跑一趟网络。
-  const cache = useRef(new Map<string, FileSearchHit[]>());
+  const cache = useRef(new Map<string, { hits: FileSearchHit[]; more: boolean }>());
   const scopeKey = scope ? `${scope.kind}:${scope.kind === "task" ? scope.taskId : scope.projectId}` : "";
   const token = disabled || dismissed || !scope ? null : fileMentionToken(value);
   // 一次查询的身份：换了工作区，同样的 token 也是另一次查询。
@@ -61,7 +61,7 @@ export function useFileMention({
     if (key === null || token === null || !scope) return;
     const cached = cache.current.get(key);
     if (cached) {
-      setResult({ key, hits: cached, failed: false });
+      setResult({ key, ...cached, failed: false });
       return;
     }
     const controller = new AbortController();
@@ -72,13 +72,14 @@ export function useFileMention({
       request.then(
         (response) => {
           if (controller.signal.aborted) return;
-          cache.current.set(key, response.hits);
-          setResult({ key, hits: response.hits, failed: false });
+          const settledHits = { hits: response.hits, more: response.more === true };
+          cache.current.set(key, settledHits);
+          setResult({ key, ...settledHits, failed: false });
         },
         () => {
           // 中止不是失败：正在打字，这一趟本来就该作废。
           if (controller.signal.aborted) return;
-          setResult({ key, hits: [], failed: true });
+          setResult({ key, hits: [], more: false, failed: true });
         },
       );
     }, DEBOUNCE_MS);
@@ -91,6 +92,8 @@ export function useFileMention({
   // 「手上这份结果正是这次查询的」才算数，否则一律按「还在搜」处理。
   const settled = key !== null && result.key === key;
   const visible = settled && !result.failed ? result.hits : [];
+  // 「还有更多没列出来」只在这批候选确实是这次查询的结果时才说得准。
+  const more = settled && !result.failed && result.more;
   const loading = key !== null && !settled;
   const failed = settled && result.failed;
   const selectedIndex = Math.min(index, Math.max(0, visible.length - 1));
@@ -113,7 +116,7 @@ export function useFileMention({
   const reset = () => {
     setIndex(0);
     setDismissed(false);
-    setResult({ key: "", hits: [], failed: false });
+    setResult({ key: "", hits: [], more: false, failed: false });
   };
 
   /** 返回 true = 这个按键已经被菜单吃掉了，调用方不要再处理。 */
@@ -141,5 +144,8 @@ export function useFileMention({
     return false;
   };
 
-  return { token, hits: visible, loading, failed, open, index: selectedIndex, setIndex, pick, onKeyDown, onValueChange, reset };
+  return {
+    token, hits: visible, more, loading, failed, open,
+    index: selectedIndex, setIndex, pick, onKeyDown, onValueChange, reset,
+  };
 }
