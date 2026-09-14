@@ -1,6 +1,6 @@
 import type { SessionTraceEntry } from "./transcript.js";
-import { readClaudeAgentModel, readCodexAgentModel } from "./executors/native-agent-models.js";
-import { nativeAgentModel, nativeToolName } from "./executors/native-work.js";
+import { readClaudeAgentProfile, readCodexAgentProfile } from "./executors/native-agent-models.js";
+import { nativeAgentProfile, nativeToolName } from "./executors/native-work.js";
 
 interface NativeModelSession {
   agentType: string;
@@ -36,10 +36,10 @@ export async function enrichNativeWorkModels(
   const entries = [...children].slice(0, 64);
   for (let index = 0; index < entries.length; index += 4) {
     const batch = await Promise.all(entries.slice(index, index + 4).map(async ([id, { nativeId, entry }]) => {
-      const model = session.agentType === "codex"
-        ? await readCodexAgentModel(nativeId, parent, configDir)
-        : await readClaudeAgentModel(nativeId, parent, session.cwd || session.worktreePath || "", configDir);
-      const event = nativeAgentModel(id, model);
+      const profile = session.agentType === "codex"
+        ? await readCodexAgentProfile(nativeId, parent, configDir)
+        : await readClaudeAgentProfile(nativeId, parent, session.cwd || session.worktreePath || "", configDir);
+      const event = nativeAgentProfile(id, profile);
       return event?.kind === "tool" ? { ...entry, event: { ...event, nativeWork: { ...event.nativeWork!, at: entry.at } } } : null;
     }));
     for (const entry of batch) if (entry) additions.push(entry);

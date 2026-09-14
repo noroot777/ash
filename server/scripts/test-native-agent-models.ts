@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AgentEvent, Session } from "@ash/shared";
-import { readClaudeAgentModel, readCodexAgentModel } from "../src/executors/native-agent-models.js";
+import { readClaudeAgentProfile, readCodexAgentProfile } from "../src/executors/native-agent-models.js";
 import { openCodexAppServer } from "../src/executors/codex-app-server.js";
 import { NativeWorkTrace } from "../src/executors/native-work.js";
 import { enrichNativeWorkModels } from "../src/native-work-models.js";
@@ -19,21 +19,26 @@ const at = "2026-09-10T00:00:00.000Z";
 const jsonl = (rows: unknown[]) => rows.map((row) => JSON.stringify(row)).join("\n") + "\n";
 const file = join(root, "codex", "sessions", "2026", "09", "10", `rollout-${child}.jsonl`);
 const meta = { type: "session_meta", payload: { id: child, session_id: parent, parent_thread_id: parent,
-  forked_from_id: parent, subagent_history_start_ordinal: 2 } };
-const inherited = { type: "turn_context", payload: { model: "parent-model" } };
-const context = (model: string) => ({ type: "turn_context", payload: { model } });
+  forked_from_id: parent, subagent_history_start_ordinal: 2, agent_path: "/root/browser_check" } };
+const inherited = { type: "turn_context", payload: { model: "parent-model", effort: "parent-effort" } };
+const context = (model: string, effort?: string) => ({ type: "turn_context", payload: { model, effort } });
 try {
   await mkdir(dirname(file), { recursive: true });
   await writeFile(file, jsonl([meta, inherited]));
-  assert.equal(await readCodexAgentModel(child, parent, join(root, "codex")), null, "复制来的主会话模型不算子代理记录");
-  await writeFile(file, jsonl([meta, inherited, context("actual-codex")]) + '{"type":"turn_context"');
-  assert.equal(await readCodexAgentModel(child, parent, join(root, "codex")), "actual-codex", "容忍日志尾部未写完");
-  assert.equal(await readCodexAgentModel(child, child, join(root, "codex")), null);
-  assert.equal(await readCodexAgentModel(child, "33333333-3333-3333-3333-333333333333", join(root, "codex")), null);
-  assert.equal(await readCodexAgentModel(child, parent, join(root, "other-owner")), null, "不回落到其他用户目录");
-  assert.equal(await readCodexAgentModel("../../other", parent, root), null);
-  await writeFile(file, jsonl([meta, inherited, context("actual-codex"), context("new-codex-model")]));
-  assert.equal(await readCodexAgentModel(child, parent, join(root, "codex")), "new-codex-model", "日志增长后更新缓存");
+  assert.equal((await readCodexAgentProfile(child, parent, join(root, "codex"))).model, null, "复制来的主会话模型不算子代理记录");
+  assert.equal((await readCodexAgentProfile(child, parent, join(root, "codex"))).effort, null, "继承边界之前的智能水平也不算子代理的");
+  await writeFile(file, jsonl([meta, inherited, context("actual-codex", "xhigh")]) + '{"type":"turn_context"');
+  assert.equal((await readCodexAgentProfile(child, parent, join(root, "codex"))).model, "actual-codex", "容忍日志尾部未写完");
+  const profile = await readCodexAgentProfile(child, parent, join(root, "codex"));
+  assert.equal(profile.effort, "xhigh", "智能水平和模型同住一条 turn_context，一次扫描一起拿");
+  assert.equal(profile.title, "browser_check", "派活时起的名字就是子智能体的标题");
+  assert.equal((await readCodexAgentProfile(child, child, join(root, "codex"))).model, null);
+  assert.equal((await readCodexAgentProfile(child, "33333333-3333-3333-3333-333333333333", join(root, "codex"))).model, null);
+  assert.equal((await readCodexAgentProfile(child, parent, join(root, "other-owner"))).model, null, "不回落到其他用户目录");
+  assert.equal((await readCodexAgentProfile("../../other", parent, root)).model, null);
+  await writeFile(file, jsonl([meta, inherited, context("actual-codex", "xhigh"), context("new-codex-model")]));
+  assert.equal((await readCodexAgentProfile(child, parent, join(root, "codex"))).model, "new-codex-model", "日志增长后更新缓存");
+  assert.equal((await readCodexAgentProfile(child, parent, join(root, "codex"))).effort, "xhigh", "后续回合没带智能水平时保留上一次读到的");
 
   const events: AgentEvent[] = [
     { kind: "tool", name: "spawn_agent", nativeWork: { type: "call", id: "call", name: "spawn_agent", input: { model: "requested-model" } } },
@@ -48,6 +53,8 @@ try {
   assert.equal(trace.length, 3, "历史读取不改写原始记录");
   assert.equal(rows.length, 1);
   assert.equal(rows[0].model, "new-codex-model");
+  assert.equal(rows[0].effort, "xhigh", "历史记录里的智能水平也一并补回来");
+  assert.equal(rows[0].title, "browser_check");
   assert.equal(rows[0].requestedModel, "requested-model");
   assert.equal(rows[0].status, "completed", "补模型不把已完成项改成运行中");
   assert.equal(rows[0].result, "保留结果");
@@ -55,7 +62,7 @@ try {
   assert.equal("sessionModel" in rows[0], false);
 
   await writeFile(file, jsonl([{ ...meta, payload: { ...meta.payload, subagent_history_start_ordinal: undefined } }, inherited]));
-  assert.equal(await readCodexAgentModel(child, parent, join(root, "codex")), null, "不知道继承边界时不猜测");
+  assert.equal((await readCodexAgentProfile(child, parent, join(root, "codex"))).model, null, "不知道继承边界时不猜测");
   const unknown = await enrichNativeWorkModels(trace, session, join(root, "missing"));
   assert.deepEqual(unknown, trace, "日志不可读不影响原有执行记录");
 
@@ -64,9 +71,9 @@ try {
   await mkdir(dirname(claudeFile), { recursive: true });
   const response = (model: string, agentId = agent, sessionId = parent) => ({ type: "assistant", agentId, sessionId, message: { model } });
   await writeFile(claudeFile, jsonl([response("actual-claude"), response("other-agent", "another"), response("other-session", agent, child), response("<synthetic>")]));
-  assert.equal(await readClaudeAgentModel(agent, parent, root, join(root, "claude")), "actual-claude");
-  assert.equal(await readClaudeAgentModel(agent, parent, root, join(root, "other-owner")), null);
-  assert.equal(await readClaudeAgentModel("../a12345", parent, root, join(root, "claude")), null);
+  assert.equal((await readClaudeAgentProfile(agent, parent, root, join(root, "claude"))).model, "actual-claude");
+  assert.equal((await readClaudeAgentProfile(agent, parent, root, join(root, "other-owner"))).model, null);
+  assert.equal((await readClaudeAgentProfile("../a12345", parent, root, join(root, "claude"))).model, null);
   const claudeTrace = parseSessionTrace(jsonl([
     { kind: "tool", name: "Agent", nativeWork: { type: "call", id: "toolu-child", name: "Agent", input: { model: "sonnet" } } },
     { kind: "tool", name: "Agent", nativeWork: { type: "result", id: "toolu-child", result: `agentId: ${agent}`, failed: false } },
@@ -101,7 +108,8 @@ rl.on('line', (line) => {
   if (m.method === 'thread/read') {
     if (m.params.threadId !== 'child' || m.params.includeTurns !== false) process.exit(3);
     if ('${mode}' === 'unsupported') send({ id: m.id, error: { message: 'unsupported method' } });
-    else send({ id: m.id, result: { thread: { id: '${mode}' === 'wrong-thread' ? 'main' : 'child', model: '${mode}' === 'missing-model' ? undefined : 'actual-child-model' } } });
+    else send({ id: m.id, result: { thread: { id: '${mode}' === 'wrong-thread' ? 'main' : 'child', model: '${mode}' === 'missing-model' ? undefined : 'actual-child-model',
+      reasoningEffort: 'xhigh', source: { subAgent: { thread_spawn: { agent_path: '/root/page_audit' } } } } } });
     setTimeout(() => send({ method: 'turn/completed', params: { threadId: 'main', turn: { status: 'completed' } } }), 20);
   }
 });
@@ -110,6 +118,10 @@ rl.on('line', (line) => {
   for await (const event of handle.events) events.push(event);
   const models = events.flatMap((event) => event.kind === "tool" && event.nativeWork?.type === "agent" && event.nativeWork.model ? [event.nativeWork.model] : []);
   assert.deepEqual(models, mode === "reported" ? ["actual-child-model"] : []);
+  // 模型缺失不代表智能水平和名字也要一起丢:同一次 thread/read 里有什么就报什么。
+  const reported = events.flatMap((event) => event.kind === "tool" && event.nativeWork?.type === "agent"
+    && (event.nativeWork.effort || event.nativeWork.title) ? [[event.nativeWork.effort, event.nativeWork.title]] : []);
+  assert.deepEqual(reported, ["reported", "missing-model"].includes(mode) ? [["xhigh", "page_audit"]] : []);
   assert.equal(events.some((event) => event.kind === "error"), false, "可选模型查询失败不影响执行");
   assert.ok(events.some((event) => event.kind === "done" && event.exitStatus === 0));
 }

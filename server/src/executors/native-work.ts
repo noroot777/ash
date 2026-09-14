@@ -93,8 +93,23 @@ export function nativePlanSnapshot(id: string, plan: unknown, explanation?: stri
 }
 
 export function nativeAgentModel(id: string, model: unknown): AgentEvent | null {
-  if (typeof model !== "string" || !model.trim() || model === "<synthetic>") return null;
-  return event("Agent", { type: "agent", id, status: "unknown", model: model.trim() });
+  return nativeAgentProfile(id, { model });
+}
+
+/**
+ * 子智能体的「身份」：实跑模型、智能水平、名字。
+ *
+ * codex 的 `thread/read` 一次就把三样都给了（`model` / `reasoningEffort` / `source.subAgent`），
+ * 所以别再为某一样单开一条通道 —— 2026-09-12 之前这里只取了 model，界面上的智能水平一直空着。
+ */
+export function nativeAgentProfile(id: string, fields: { model?: unknown; effort?: unknown; title?: unknown }): AgentEvent | null {
+  const clean = (value: unknown) => typeof value === "string" && value.trim() && value !== "<synthetic>" ? value.trim() : "";
+  const model = clean(fields.model);
+  const effort = clean(fields.effort);
+  const title = clean(fields.title);
+  if (!model && !effort && !title) return null;
+  return event("Agent", { type: "agent", id, status: "unknown",
+    ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(title ? { title } : {}) });
 }
 
 export function codexNativeWork(item: any): AgentEvent[] {
@@ -116,10 +131,43 @@ export function codexNativeWork(item: any): AgentEvent[] {
     if (closed && status !== "completed" && status !== "failed") status = "stopped";
     return event(item.tool ?? "Agent", {
       type: "agent", id, nativeId: id, status, closed, parentId: item.senderThreadId ?? item.sender_thread_id,
-      ...(tool === "spawnagent" ? { description: item.prompt, title: item.prompt?.split("\n")[0]?.slice(0, 120), requestedModel: item.model, agentType: item.agentType ?? item.agent_type } : {}),
+      ...(tool === "spawnagent" ? { description: item.prompt, title: item.prompt?.split("\n")[0]?.slice(0, 120),
+        requestedModel: item.model, requestedEffort: item.reasoningEffort ?? item.reasoning_effort, agentType: item.agentType ?? item.agent_type } : {}),
       ...(state?.message ? closed || status === "completed" || status === "failed" ? { result: clip(state.message) } : { message: clip(state.message) } : {}),
     });
   });
+}
+
+/**
+ * codex 0.153+ 的派活通道：`subAgentActivity`。
+ *
+ * 这条协议**不带派活正文** —— `spawn_agent` 的 `message` 参数在上游就被整段加密
+ * （`gAAAAA…`），父子两边的 rollout 里都只有密文，codex CLI 自己也只转发不解密。所以
+ * 「主会话对子智能体说了什么」ash 在任何通道都拿不到，只有 `agentPath` 这一个明文标签。
+ * 别再去 rollout 里找正文（2026-09-12 已查遍父/子两份记录与事件流）。
+ *
+ * `interacted` 故意不产出事件：它既不是开工也不是收工，拿它改状态会把已完成的子智能体
+ * 重新翻成「进行中」，而且一次派活能刷出上百条。
+ */
+export function codexSubAgentWork(method: string, params: any, rootThreadId?: string): AgentEvent[] {
+  const item = params?.item;
+  if (method !== "item/started" || item?.type !== "subAgentActivity") return [];
+  const id = typeof item.agentThreadId === "string" ? item.agentThreadId : "";
+  // 子智能体反过来找主会话（agentPath `/root`）不是一条新工作。
+  if (!id || id === rootThreadId) return [];
+  const path = typeof item.agentPath === "string" ? item.agentPath : "";
+  const name = path.split("/").filter(Boolean).at(-1) ?? "";
+  const sender = typeof params.threadId === "string" && params.threadId !== rootThreadId ? params.threadId : undefined;
+  if (item.kind === "started") {
+    // call 事件:既在主会话执行过程里留下一行「派出了谁」,也让侧栏那行有真名字而不是一截线程 id。
+    return [{ ...event("spawn_agent", { type: "call", id, parentId: sender, name: "spawn_agent",
+      input: { name, agent_path: path, thread_id: id } }), detail: name || path || undefined } as AgentEvent];
+  }
+  if (item.kind === "completed" || item.kind === "interrupted") {
+    return [event("Agent", { type: "agent", id, nativeId: id, parentId: sender,
+      status: item.kind === "completed" ? "completed" : "stopped", ...(name ? { title: name } : {}) })];
+  }
+  return [];
 }
 
 export function codexChildWork(method: string, params: any): AgentEvent[] {

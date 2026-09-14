@@ -1,7 +1,10 @@
 import type { ReactNode } from "react";
 import type { FreeWorkflowPreviewState } from "@ash/shared/free-workflow";
 import type { PreviewServiceState } from "@ash/shared/preview";
+import { previewPortDialect } from "@ash/shared/preview";
+import { useHostInfo } from "../lib/useHostInfo.ts";
 import { PreviewLauncher } from "./PreviewLauncher.tsx";
+import { PreviewPortDriftNotice } from "./PreviewPortDriftNotice.tsx";
 import { AnnotationWaiting } from "./AnnotationWaiting.tsx";
 import type { useAnnotationBatch } from "./useAnnotationBatch.ts";
 import type { useAnnotationReview } from "./useAnnotationReview.ts";
@@ -19,7 +22,11 @@ export function PreviewWorkspaceStage({ source, taskId, preview, refresh, contro
   source: string | null; taskId: string; preview: FreeWorkflowPreviewState | null; refresh: () => Promise<void>;
   controller: ReturnType<typeof useAnnotationBatch>; review: ReturnType<typeof useAnnotationReview>; hint: string; children: ReactNode;
 }) {
+  const host = useHostInfo();
   return <div className="preview-workspace-stage">
+    {/* 端口对不上那一条摆在最外面：内嵌和直连两种形态下都看得见，也不跟着启动器一起被
+        iframe 顶掉——它说的是「已经起好的这个服务有个隐患」，而不是启动时的说明。 */}
+    <PreviewPortDriftNotice services={preview?.services ?? []} dialect={previewPortDialect(host?.platform)} gen={preview?.gen} />
     {source ? children : <div className="preview-workspace-launch-area">
       <PreviewLauncher taskId={taskId} preview={preview} refresh={refresh} hint={hint} />
       {controller.records.some((record) => record.messageId) && <AnnotationWaiting controller={controller} review={review}

@@ -7,7 +7,7 @@ import type { AgentEvent, Session } from "@ash/shared";
 import { parseClaudeStream } from "../src/executors/claude.js";
 import { parseCodexStream } from "../src/executors/codex.js";
 import { openCodexAppServer } from "../src/executors/codex-app-server.js";
-import { codexChildWork, codexNativeWork, NativeWorkTrace } from "../src/executors/native-work.js";
+import { codexChildWork, codexNativeWork, codexSubAgentWork, NativeWorkTrace } from "../src/executors/native-work.js";
 import { ClaudeChildActivity, CodexChildActivity } from "../src/executors/native-agent-activity.js";
 import { parseSessionTrace } from "../src/transcript.js";
 import { buildConversationItems, type TimelineEntry } from "../../web/src/task-detail/conversationModel.ts";
@@ -96,6 +96,48 @@ assert.equal(fromTools([...codexEvents, ...codexNativeWork({ type: "collabAgentT
 assert.equal(fromTools(codexNativeWork({ type: "collabAgentToolCall", tool: "closeAgent", receiverThreadIds: ["interrupted"], status: "completed" }))[0].status, "stopped");
 assert.equal(codexChildWork("turn/completed", { threadId: "child", turn: { status: "failed" } })[0].kind, "tool");
 
+// codex 0.153+ 的派活通道:subAgentActivity。正文拿不到(上游加密),但名字、状态、父子关系都在。
+const subAgent = (kind: string, threadId = "root", agentThreadId = "sub", agentPath = "/root/page_audit") =>
+  codexSubAgentWork("item/started", { threadId, item: { type: "subAgentActivity", id: `call-${kind}`, kind, agentThreadId, agentPath } }, "root");
+const spawnRow = fromTools(subAgent("started"))[0];
+assert.equal(spawnRow.title, "page_audit", "派活那一刻就有真名字，不留一截线程 id");
+assert.equal(spawnRow.status, "running");
+assert.equal(spawnRow.description, "", "codex 的派活正文在上游已加密，不编造一份");
+assert.equal(subAgent("started")[0].detail, "page_audit", "主会话那一行要看得出派的是谁");
+assert.ok(subAgent("started").every((event) => isVisibleExecutionEvent({ ...event, label: event.name })),
+  "主会话执行过程里要看得见「派出了谁」");
+assert.equal(fromTools([...subAgent("started"), ...subAgent("completed")])[0].status, "completed");
+assert.equal(fromTools([...subAgent("started"), ...subAgent("interrupted")])[0].status, "stopped");
+assert.equal(fromTools([...subAgent("started"), ...subAgent("completed"), ...subAgent("interacted")])[0].status, "completed",
+  "来回交互既不算开工也不算收工，不得把已完成的子智能体翻回进行中");
+assert.deepEqual(subAgent("started", "sub", "root", "/root"), [], "子智能体反过来找主会话不是一条新工作");
+const grandchild = fromTools([...subAgent("started"), ...subAgent("started", "sub", "grandchild", "/root/page_audit/deep")]);
+assert.equal(grandchild.length, 2);
+assert.equal(grandchild[1].parentId, `${session.id}:sub`, "孙子辈挂在它自己的上级身上");
+assert.ok(!isVisibleExecutionEvent({ ...subAgent("started", "sub", "grandchild")[0], label: "spawn_agent" } as any),
+  "子智能体内部的派活只在它自己的抽屉里，不冒到主会话");
+assert.deepEqual(codexSubAgentWork("item/completed", { threadId: "root", item: { type: "subAgentActivity", kind: "completed", agentThreadId: "sub" } }, "root"), [],
+  "started/completed 成对上报，只认一次免得重复建行");
+
+// 两条派活记录同时在（subAgentActivity 给明文名字、spawn_agent 工具调用只有密文正文）:
+// 合并时逐项挑好的那个，密文既不当标题也不当「收到的输入」。
+const cipher = "gAAAAABqo_u_VtwGeVm-UUnyDT6WzBrO2w8cC0tvngRe22ckG80toEp82YynFdQxfkIMT3M4YHHi";
+const ciphered = new NativeWorkTrace();
+const bothChannels = fromTools([
+  ciphered.call("spawn_agent", { message: cipher }, "cipher-call")!,
+  ...subAgent("started", "root", "sub", "/root/page_audit"),
+  ciphered.result("cipher-call", { agent_id: "sub" })!,
+]);
+assert.equal(bothChannels.length, 1, "同一次派活的两条记录合成一行");
+assert.equal(bothChannels[0].title, "page_audit", "明文名字不得被密文正文盖掉");
+assert.equal(bothChannels[0].description, "", "密文不是可展示的输入");
+const cipherOnly = fromTools([
+  ciphered.call("spawn_agent", { message: cipher }, "lonely-call")!,
+  ciphered.result("lonely-call", { agent_id: "lonely" })!,
+]);
+assert.equal(cipherOnly[0].description, "", "只有密文时如实留空，由界面说明原因");
+assert.equal(cipherOnly[0].title, "子智能体 lonely", "没有明文名字就退回占位标题，不拿密文当标题");
+
 const plan = [tracker.call("update_plan", { plan: [{ step: "实现", status: "in_progress" }, { step: "验证", status: "pending" }] }, "p")!,
   tracker.call("update_plan", { plan: [{ step: "实现", status: "completed" }, { step: "验证", status: "in_progress" }] }, "p")!];
 assert.deepEqual(fromTools(plan).map((row) => [row.title, row.status]), [["实现", "completed"], ["验证", "running"]]);
@@ -157,6 +199,7 @@ rl.on('line', (line) => {
   if (m.method === 'thread/start') send({ id: m.id, result: { thread: { id: 'main' } } });
   if (m.method === 'turn/start') {
     send({ id: m.id, result: { turn: { id: 'turn' } } });
+    send({ method: 'item/started', params: { threadId: 'main', item: { type: 'subAgentActivity', id: 'spawn', kind: 'started', agentThreadId: 'child', agentPath: '/root/verify_child' } } });
     send({ method: 'item/agentMessage/delta', params: { threadId: 'child', itemId: 'child-msg', delta: 'CHILD MUST STAY SEPARATE' } });
     send({ method: 'item/reasoning/summaryTextDelta', params: { threadId: 'child', itemId: 'child-reason', delta: '检查子会话隔离' } });
     send({ method: 'item/completed', params: { threadId: 'child', item: { type: 'reasoning', id: 'child-reason', summary: ['检查子会话隔离'] } } });
@@ -175,6 +218,8 @@ assert.equal(appEvents.filter((event) => event.kind === "text").map((event) => e
 assert.equal(appEvents.filter((event) => event.kind === "done").length, 1, "子线程结束不提前结束主回合");
 assert.equal(fromTools(appEvents)[0].status, "completed");
 const child = fromTools(appEvents)[0];
+assert.equal(child.title, "verify_child", "App Server 的派活记录给子智能体一个真名字");
+assert.equal(fromTools(appEvents).length, 1, "派活记录与子线程事件合成同一行，不建两份");
 assert.equal(child.activity?.filter((event) => event.kind === "text").map((event) => event.text).join(""), "CHILD MUST STAY SEPARATE\n\n", "完整消息不重复追加已收到的流式正文");
 assert.equal(child.activity?.filter((event) => event.kind === "thinking").map((event) => event.text).join(""), "检查子会话隔离\n\n");
 assert.ok(child.activity?.some((event) => event.kind === "tool" && event.detail === "npm run verify-child"));

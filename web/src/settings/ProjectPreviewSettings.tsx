@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { MagnifyingGlass, Plus, Trash } from "@phosphor-icons/react";
 import type { ProjectView } from "@ash/shared";
-import { MAX_PREVIEW_SERVICES, parsePreviewConfig, previewProxyEnabled, withoutBlankServices, type ProjectPreviewConfig, type PreviewServiceConfig } from "@ash/shared/preview";
+import { MAX_PREVIEW_SERVICES, parsePreviewConfig, previewPortDialect, previewPortRef, previewPortRuleText, previewProxyEnabled, withoutBlankServices, type ProjectPreviewConfig, type PreviewServiceConfig } from "@ash/shared/preview";
 import { Button } from "../components/ui.tsx";
 import { useAuth } from "../auth/authContext.ts";
 import { useHostInfo } from "../lib/useHostInfo.ts";
@@ -33,7 +33,7 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
   const [error, setError] = useState<string | null>(null);
   const active = useRef(true);
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
-  const variable = (name: string) => host?.platform === "win32" ? `%${name}%` : `$${name}`;
+  const variable = (name: string) => previewPortRef(name, previewPortDialect(host?.platform));
   const selected = config.services.filter((s) => s.enabled);
   const dirty = saved !== JSON.stringify({ config, script });
   const proxied = previewProxyEnabled(config.proxy, state.mode === "multi");
@@ -92,7 +92,10 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
       <div className="settings-field preview-script-field"><span>启动脚本</span><PreviewCommandEditor label="启动脚本" value={script} onChange={setScript} readOnly={!canManage || busy} rows={9} wrap={wrap} onWrapChange={onWrapChange} placeholder={`例如：\ncd web\nnpm run dev -- --port ${variable("PORT")}`} /></div>
       <div className="preview-help preview-script-help">
         <small>支持多行、缩进和完整脚本，也可以调用仓库里的脚本文件。留空延续原来的行为：只在恰好识别出一个服务时自动使用。</small>
-        <small>脚本在任务工作区根目录执行。主服务使用 <code>{variable("PORT")}</code>；脚本内的其它服务可使用 <code>{variable("PORT2")}</code>～<code>{variable("PORT5")}</code> 和对应的 <code>{variable("URL2")}</code>～<code>{variable("URL5")}</code>。</small>
+        {/* 「主服务使用 $PORT」只说了变量叫什么，没说**要不要写**——一半的运行时自己读 PORT
+            环境变量，另一半不写就白借。判据那句跟任务里的自填框共用同一份文案（shared/preview.ts）。 */}
+        <small>脚本在任务工作区根目录执行。{previewPortRuleText(previewPortDialect(host?.platform))}</small>
+        <small>脚本内的其它服务可使用 <code>{variable("PORT2")}</code>～<code>{variable("PORT5")}</code> 和对应的 <code>{variable("URL2")}</code>～<code>{variable("URL5")}</code>。</small>
       </div>
     </> : <div className="preview-services-panel">
       <div className="preview-detect-actions">
@@ -118,7 +121,7 @@ export function ProjectPreviewSettings({ project, onUpdated, notify }: {
           <Button className="preview-service-remove" variant="ghost" disabled={!canManage || busy} aria-label={`移除 ${service.name}`} onClick={() => setConfig((current) => ({ ...current, services: current.services.filter((s) => s.id !== service.id), primaryServiceId: current.primaryServiceId === service.id ? null : current.primaryServiceId }))}><Trash size={14} aria-hidden="true" /></Button>
         </div>
         <div className="preview-service-command">
-          <PreviewCommandEditor label={`${service.name} 启动脚本`} value={service.command} onChange={(command) => patchService(service.id, { command })} readOnly={!canManage || busy} rows={Math.min(8, Math.max(2, service.command.split("\n").length))} wrap={wrap} onWrapChange={onWrapChange} placeholder="输入启动命令…" />
+          <PreviewCommandEditor label={`${service.name} 启动脚本`} value={service.command} onChange={(command) => patchService(service.id, { command })} readOnly={!canManage || busy} rows={Math.min(8, Math.max(2, service.command.split("\n").length))} wrap={wrap} onWrapChange={onWrapChange} placeholder={`启动命令，例如 npm run dev -- --port ${variable("PORT")}`} />
         </div>
       </div>)}</div>
       <div className="preview-help"><small>每条脚本都从任务工作区根目录独立执行，使用自己的 <code>{variable("PORT")}</code>。已选服务按列表顺序对应 <code>{variable("URL1")}</code>、<code>{variable("URL2")}</code>…，可传给前端开发服务器的接口代理配置。它们是服务端内部地址。</small></div>
