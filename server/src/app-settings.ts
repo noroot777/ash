@@ -8,7 +8,6 @@ import { appSettings } from "./db/schema.js";
 // `satisfies` 保证漏登记一个字段就编译不过 —— 以前三处逐字段 if 是三份得同时想起来改
 // 的拷贝，漏一处的表现是「设置能存进去但读不出来」。
 const SETTING_SPECS = {
-  worktreeDefault: { ok: (v: unknown) => typeof v === "boolean", hint: "必须是 boolean" },
   defaultWorkflowId: {
     ok: (v: unknown) => typeof v === "string" && v.length <= 64,
     hint: "必须是字符串（起手式 id，空串 = 跟随系统推荐）",

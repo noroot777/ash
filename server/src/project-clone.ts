@@ -172,6 +172,8 @@ export async function cloneProject(input: CloneProjectInput, actor?: Actor): Pro
     repoPath: stored,
     apiKeys: null,
     workflowId: null,
+    // 新项目默认开 worktree（出厂值住在项目这一列上，没有全局默认可跟随）。
+    useWorktreeDefault: true,
     previewCommand: null,
     acceptCommit: true,
     createdAt: now(),

@@ -116,6 +116,8 @@ export function mountProjectRoutes(api: Hono): void {
       repoPath,
       apiKeys: null,
       workflowId: null,
+      // 新项目默认开 worktree（出厂值就住在这一列上，没有全局默认可跟随）。
+      useWorktreeDefault: true,
       previewCommand: null,
       previewConfig: null,
       acceptCommit: true,
@@ -185,6 +187,8 @@ export function mountProjectRoutes(api: Hono): void {
       repoPath,
       apiKeys: null,
       workflowId: null,
+      // 新项目默认开 worktree（出厂值就住在这一列上，没有全局默认可跟随）。
+      useWorktreeDefault: true,
       previewCommand: null,
       previewConfig: null,
       acceptCommit: true,
@@ -242,6 +246,16 @@ export function mountProjectRoutes(api: Hono): void {
         }, 400);
       }
       patch.workflowId = wid || null;
+    }
+    // 新任务默认开不开 worktree。这颗开关**只住在项目这一层**，没有「跟随全局」可选 ——
+    // 所以它是个纯布尔，不接受 null（null 会变成第三档「未设置」，而那一档没有归宿）。
+    // 非 Git 项目照存不误：路径随时可能改成一个仓库，那时这一位就该算数了；真正的钳制
+    // 在 createTasks（isRepo 为假一律开不出 worktree）。
+    if (b.useWorktreeDefault !== undefined) {
+      if (typeof b.useWorktreeDefault !== "boolean") {
+        return c.json({ error: "useWorktreeDefault 必须是 boolean" }, 400);
+      }
+      patch.useWorktreeDefault = b.useWorktreeDefault;
     }
     // 预览命令：空串/null 都表示「回到自动识别」，跟 workflowId 一样只存一种写法。
     // 不校验命令本身能不能跑 —— 它是一条给用户自己的 shell 的命令行，任何语言、

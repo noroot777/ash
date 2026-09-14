@@ -26,6 +26,13 @@
 .file-tree__row.is-active .file-tree__name { color:var(--ink); font-weight:600; }
 .file-tree__tag { flex:0 0 auto; border-radius:3px; background:var(--overlay); padding:0 3px; color:var(--faint); font-size:8px; font-style:normal; }
 .file-tree__row small { flex:0 0 auto; color:var(--faint); font-family:var(--font-mono); font-size:8.5px; }
+:is(.file-tree__head, .file-tree__row)[data-git-kind] { --file-git-color:var(--amber); }
+:is(.file-tree__head, .file-tree__row):is([data-git-kind="added"], [data-git-kind="untracked"]) { --file-git-color:var(--green); }
+:is(.file-tree__head, .file-tree__row):is([data-git-kind="deleted"], [data-git-kind="unmerged"]) { --file-git-color:var(--red); }
+:is(.file-tree__head, .file-tree__row):is([data-git-kind="renamed"], [data-git-kind="copied"]) { --file-git-color:var(--accent); }
+.file-tree__head[data-git-kind] .file-tree__where b, .file-tree__head[data-git-kind] .file-tree__where svg { color:var(--file-git-color); }
+.file-tree__row[data-git-kind] .file-tree__name, .file-tree__row[data-git-kind] .file-tree__glyph { color:var(--file-git-color); }
+.file-tree__git-badge { width:12px; flex:0 0 12px; color:var(--file-git-color); text-align:center; font-family:var(--font-mono); font-size:9px; font-weight:600; }
 
 .file-viewer { display:flex; min-width:0; min-height:0; flex:1; flex-direction:column; background:var(--canvas); }
 .file-viewer__bar { display:flex; min-height:52px; flex:0 0 auto; align-items:center; gap:8px; border-bottom:.5px solid var(--line); background:var(--panel); padding:8px 16px; }

@@ -6,6 +6,8 @@
 //   ② 点一下就进项目设置那一节。
 //   ③ 而且停在**预览那张卡**上（滚进视口 + 点一下它），不是把人扔在页首自己找。
 //   ④ 认不出去处的路径（设置里没有那一节）照旧是普通文字，不给一颗点了去错地方的链接。
+//   ⑤ 设置页自己指的路同样能点：「默认规则」里那句「worktree 默认值搬去项目级了」一点
+//      就落到项目设置的工作目录那张卡上。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -65,6 +67,16 @@ try {
   assert.equal(
     await page.evaluate(() => document.querySelectorAll(".workspace-toast .settings-path-link").length), 0,
     "认不出去处的路径也被画成了链接",
+  );
+
+  // ⑤ 设置页内部指路：默认规则 → 项目设置 → 工作目录，同样要真的停在那张卡上。
+  await page.getByTestId("open-defaults").click();
+  const moved = page.getByRole("button", { name: "「设置 → 项目设置 → 工作目录」" });
+  await moved.waitFor({ timeout: 5000 });
+  await moved.click();
+  await page.waitForFunction(
+    () => document.querySelector('[data-settings-anchor="worktree"]')?.classList.contains("is-anchor-flash") ?? false,
+    undefined, { timeout: 5000 },
   );
 
   console.log("settings path jump: ok");

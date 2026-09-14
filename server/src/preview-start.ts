@@ -13,7 +13,7 @@ import { missingDepsHint, missingNodeBin, pickPreviewUrl, portConflict, portHint
 import { canConnect, ready } from "./preview-probe.js";
 import { freePorts, PORT_POOL, portEnv } from "./preview-ports.js";
 import { boundListeningPort, currentListeningPort } from "./listening-port.js";
-import { canceledGens } from "./preview-start-state.js";
+import { canceledGens, previewRetiring, whileRetiringPreview } from "./preview-start-state.js";
 import { alive, archivePreview, logFollower, patchStart, prunePreviewArtifacts, readAnyPreview, recordPath, tail, writeRecord, type PreviewStep, type PreviewResult, type PreviewServiceRecord } from "./preview-store.js";
 import { previewShell } from "./preview-shell.js";
 import { now } from "./util.js";
@@ -88,7 +88,9 @@ export async function runPreview(
   const ours = () => !canceledGens.has(gen) && readAnyPreview(taskId)?.gen === gen;
   const patch = () => patchStart(taskId, gen, { services: [...services], links: [...links], pid: services.find((s) => s.id === primaryId)?.pid ?? 0 });
   let failing: Promise<Extract<PreviewResult, { ok: false }>> | undefined;
-  const fail = (reason: string): Promise<Extract<PreviewResult, { ok: false }>> => failing ??= (async () => {
+  // 收摊也是「人为收的」：它杀掉的那些兄弟服务同样会触发下面那条看门狗，不标的话第一份
+  // 失败原因会被它们原样再写一遍（见 whileRetiringPreview）。
+  const fail = (reason: string): Promise<Extract<PreviewResult, { ok: false }>> => failing ??= whileRetiringPreview(gen, async () => {
     const stopped = await stopPreviewProcesses(taskId, { pid: services.find(s => s.id === primaryId)?.pid ?? 0, services, installPid: installing, links: [...links], gen });
     const current = readAnyPreview(taskId);
     if (current?.gen === gen) {
@@ -97,7 +99,7 @@ export async function runPreview(
     }
     bus.publish({ type: "task.review", taskId });
     return { ok: false, reason: stopped.stopped ? reason : `${reason}\n${stopped.message}` };
-  })();
+  });
   const prepared = new Map<string, Awaited<ReturnType<typeof prepareNodeDeps>>>();
   const errors = new Map<string, string>();
   try {
@@ -124,6 +126,10 @@ export async function runPreview(
         });
         child.on("error", (error) => errors.set(s.id, error.message));
         child.on("exit", () => {
+          // 「自行退出」的前提是**没人在收它**：用户点关闭、任务重新开跑、验收回收，以及
+          // 这一趟自己走 fail() 收摊，都会先把这一代标上记号再杀 —— 那一下的 exit 是我们
+          // 下的手，报成异常就是把用户主动关掉的预览说成出了事（见 whileRetiringPreview）。
+          if (previewRetiring(gen)) return;
           if (ours() && readAnyPreview(taskId)?.state === "ready") {
             void fail(`${s.name}：预览进程已自行退出`).then(result =>
               appendTaskTimeline(taskId, `预览异常：${result.reason}`)).catch(() => {});

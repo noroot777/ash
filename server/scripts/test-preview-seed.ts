@@ -72,7 +72,7 @@ try {
     CREATE TABLE free_workflow_events (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL, source TEXT NOT NULL, detail TEXT, occurred_at TEXT NOT NULL);
     CREATE TABLE schedules (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, cron TEXT);
     CREATE TABLE scheduled_messages (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, status TEXT NOT NULL);
-    INSERT INTO app_settings VALUES ('worktreeDefault', 'true');
+    INSERT INTO app_settings VALUES ('handoffRequireApproval', 'true');
     INSERT INTO llm_providers VALUES ('p1', 'cpa', 'sk-real-key');
     INSERT INTO agents VALUES ('a1', 'claude@local', 'claude', NULL, 1, NULL);
     INSERT INTO agents VALUES ('a2', 'codex@cpa', 'codex', 'p1', 0, 'fast');

@@ -248,6 +248,8 @@
    否则从那些层里弹出的确认框会被自己的来源盖住。 */
 .task-modal-scrim { position: fixed; z-index: 230; inset: 0; display: grid; place-items: center; background: rgb(40 42 48 / 34%); padding: 20px; }
 .task-confirm-dialog { width: min(480px, 94vw); border: 1px solid var(--line2); border-radius: 13px; background: var(--panel); padding: 16px; box-shadow: var(--shadow); }
+/* 打开时焦点落在容器上（见 ConfirmDialog.tsx），那是为了接管键盘而不是指人看这里，别画框。 */
+.task-confirm-dialog:focus { outline: none; }
 .task-confirm-dialog > header { display: flex; align-items: center; gap: 9px; }
 .task-confirm-dialog > header > span { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 8px; background: var(--accent-soft); color: var(--accent); }
 .task-confirm-dialog > header > span.is-danger { background: rgb(217 61 76 / 10%); color: var(--red); }

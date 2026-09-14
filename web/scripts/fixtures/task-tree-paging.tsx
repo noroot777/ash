@@ -18,6 +18,7 @@ const project: ProjectView = {
   name: "ash",
   repoPath: "/tmp/ash",
   workflowId: null,
+  useWorktreeDefault: false,
   createdAt: recent,
   health: { exists: true, isRepo: true },
 };
@@ -27,6 +28,7 @@ const other: ProjectView = {
   name: "隔壁项目",
   repoPath: "/tmp/other",
   workflowId: null,
+  useWorktreeDefault: false,
   createdAt: recent,
   health: { exists: true, isRepo: true },
 };

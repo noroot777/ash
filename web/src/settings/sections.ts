@@ -78,5 +78,5 @@ export function settingsSectionByLabel(label: string): SettingsSection | null {
  */
 export const SECTION_ANCHORS: Partial<Record<SettingsSection, Record<string, string>>> = {
   // 「预览命令」是这张卡的旧名字，存量文案里还有（改成「自定义脚本 / 选择服务」之前的说法）。
-  project: { 预览: "preview", 预览命令: "preview" },
+  project: { 预览: "preview", 预览命令: "preview", 工作目录: "worktree" },
 };
