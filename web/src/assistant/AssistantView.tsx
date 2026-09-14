@@ -5,7 +5,7 @@ import type { ProjectView, TaskListItem, TaskMode } from "@ash/shared";
 import { taskDisplayStatus } from "@ash/shared";
 import type { ChatMessage, ChatSnapshot } from "@ash/shared/chat";
 import { STEP_LABELS, WORKSPACE_LABELS } from "@ash/shared/workflow";
-import { ArrowUp, ArrowUpRight, FlowArrow, MagnifyingGlass, Robot, Stop } from "@phosphor-icons/react";
+import { ArrowUp, ArrowUpRight, FlowArrow, MagnifyingGlass, Robot, Stop, Trash } from "@phosphor-icons/react";
 import { AssistantConnection } from "./AssistantConnection.tsx";
 import { AssistantArchive } from "./AssistantArchive.tsx";
 import { AssistantSidebar } from "./AssistantSidebar.tsx";
@@ -17,6 +17,7 @@ import { useAssistantChat } from "./useAssistantChat.ts";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { ChatContextNotice } from "../chat/ChatContextNotice.tsx";
+import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { ConversationModeBar } from "../chat/ConversationModeBar.tsx";
 import { WorkflowRail } from "../workflow/WorkflowRail.tsx";
 import type { SettingsSection } from "../settings/SettingsPage.tsx";
@@ -68,19 +69,34 @@ export function AssistantView({ project, projects, onTask, onSettings, onExit, o
   const chat = useAssistantChat(project?.id ?? "");
   const [editing, setEditing] = useState(false);
   const [archiveId, setArchiveId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const connectionTip = useHoverTip();
   const input = useRef<HTMLTextAreaElement>(null);
   const configure = editing || (chat.ready && !chat.room && !chat.error);
   const pickStarter = (text: string) => { chat.setDraft(text); input.current?.focus(); };
   const openTask = (task: TaskListItem) => { if (task.archived) setArchiveId(task.id); else onTask(task); };
+  const removeConversation = async () => {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    setDeleteError("");
+    try { await chat.removeConversation(deleteTarget.id); setDeleteTarget(null); setEditing(false); setArchiveId(null); }
+    catch (reason) { setDeleteError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setDeleting(false); }
+  };
   return <section className="chat-shell assistant-shell" aria-label="ash 助手">
     <AssistantSidebar rooms={chat.rooms} selectedId={chat.room?.id} ready={chat.ready} sending={chat.sending} projectName={project?.name} onExit={onExit} onSelect={(id) => { chat.select(id); setEditing(false); setArchiveId(null); }} onNew={() => { setEditing(false); setArchiveId(null); void chat.newConversation(); }} />
     <div className="chat-main assistant-main">
     <ConversationModeBar active="assistant" onMode={onMode} onChat={onChat} />
     {!configure && <header className="chat-header assistant-header"><div className="assistant-heading">{chat.room ? <AssistantConversationTitle key={chat.room.id} name={chat.room.name} onRename={chat.renameConversation}><span className={`chat-connection${chat.connected ? " is-connected" : ""}`} tabIndex={0} role="status" aria-label={chat.connected ? "实时连接" : "连接中，状态可能延迟"} {...connectionTip.anchorProps} /></AssistantConversationTitle> : <h1><AssistantIcon size={23} />ash 助手</h1>}</div>
       {chat.room && <button type="button" className="chat-member-count" aria-label="更换助手智能体" disabled={chat.busy || chat.sending} onClick={() => setEditing(true)}><Robot size={19} /><span>{chat.room.members[0]?.agentType}</span></button>}
+      {chat.room && <button type="button" className="chat-member-count assistant-delete" aria-label={`删除对话：${chat.room.name}`} onClick={() => { setDeleteError(""); setDeleteTarget({ id: chat.room!.id, name: chat.room!.name }); }}><Trash size={17} /></button>}
       <HoverTip at={connectionTip.at}>{chat.connected ? "实时连接" : "连接中，状态可能延迟"}</HoverTip>
     </header>}
+    {deleteTarget && <ConfirmDialog title={`删除对话「${deleteTarget.name}」`} danger busy={deleting} confirmLabel="删除对话"
+      message={`这段对话的全部消息和历史摘要会一起删除，无法恢复。正在进行的回复会先停止；对话中创建过的任务不受影响，仍留在任务列表里。${deleteError ? `\n\n${deleteError}` : ""}`}
+      onConfirm={() => void removeConversation()} onClose={() => { if (!deleting) { setDeleteTarget(null); setDeleteError(""); } }} />}
     {archiveId ? <AssistantArchive key={archiveId} taskId={archiveId} onClose={() => setArchiveId(null)} /> : <>
       <AssistantScroll conversationId={chat.room?.id ?? "assistant"} followMessages={!!chat.snapshot?.messages.length && !configure}>
         {!configure && <div className="chat-welcome"><span className="chat-welcome-icon"><AssistantIcon size={32} filled /></span><h2>ash 助手，从一句话开始。</h2><p>问 ash 怎么用，找回一个任务，或搭好起手式。<br />直接发送，先说结论，只讲重点。</p>

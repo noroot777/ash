@@ -9,6 +9,9 @@
 .assistant-conversation-title > svg { flex-shrink: 0; }
 .assistant-conversation-title > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .assistant-header > .chat-member-count { flex-shrink: 0; white-space: nowrap; }
+/* 删除对话是纯图标胶囊：和换智能体那颗同形，只有指上去才变红，免得一进页面就有个红按钮盯着人。 */
+.assistant-header > .assistant-delete { padding: 5px 9px; color: #6f6579; }
+.assistant-header > .assistant-delete:hover { border-color: color-mix(in lch, var(--red) 34%, #e9e4ed); color: var(--red); }
 .assistant-rename { max-width: 100%; }
 .assistant-rename > div { display: flex; gap: 5px; }
 .assistant-rename input { min-width: 0; width: 220px; max-width: 100%; border: 1px solid var(--line2); border-radius: 5px; padding: 5px 7px; background: var(--panel); color: var(--ink); font-size: 13px; }

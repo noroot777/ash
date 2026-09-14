@@ -9,6 +9,7 @@ export const chatApi = {
   rooms: (projectId: string) => request<ChatRoom[]>(`/chats?projectId=${encodeURIComponent(projectId)}`),
   create: (projectId: string, name: string, members: ChatMember[]) => request<ChatRoom>("/chats", json({ projectId, name, members })),
   update: (roomId: string, patch: { name?: string; members?: ChatMember[] }) => request<ChatRoom>(`/chats/${roomId}`, json(patch, "PATCH")),
+  remove: (roomId: string) => request<{ deleted: true }>(`/chats/${roomId}`, { method: "DELETE" }),
   snapshot: (roomId: string) => request<ChatSnapshot>(`/chats/${roomId}`),
   send: (roomId: string, body: string, id: string, projectId?: string) => request<ChatSnapshot>(`/chats/${roomId}/messages`, json({ body, id, projectId })),
   stop: (roomId: string) => request<ChatSnapshot>(`/chats/${roomId}/stop`, json({})),

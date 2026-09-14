@@ -12,6 +12,7 @@ import { chatService, roomMessages, toRoom, type ChatService, type RoomRow } fro
 import { chatContextStatus } from "./context-store.js";
 import { validateAssistantWorkflow } from "./assistant.js";
 import { visibleRoom, visibleProject, isHumanRequest, parseMembers } from "./route-access.js";
+import { deleteChatRoom } from "./lifecycle.js";
 import { mountSideChatRoutes } from "./side-routes.js";
 import type { AssistantResult } from "@ash/shared/chat";
 
@@ -86,6 +87,16 @@ export function mountChatRoutes(api: Hono, service: ChatService = chatService) {
       if (Object.keys(patch).length) await db.update(chatRooms).set(patch).where(eq(chatRooms.id, room.id));
       return c.json(toRoom({ ...room, ...patch }));
     } catch (error) { return c.json({ error: error instanceof Error ? error.message : "成员配置无效" }, 400); }
+  });
+  api.delete("/chats/:roomId", async (c) => {
+    const room = await visibleRoom(c);
+    if (!room) return c.json({ error: "chat not found" }, 404);
+    // 旁聊的生命周期挂在任务上（deleteTaskSideChats + task_side_chats_deleted 触发器），
+    // 单独删掉只会在下次打开侧聊面板时按成员原地重建，所以这里不开这条路。
+    if (room.kind === "side") return c.json({ error: "任务旁聊随任务一起删除；只想清空上下文请在旁聊里发送 /clear。" }, 400);
+    // 不设「回复中」409：删除本身就含停止的意思，让用户先去点停止回复只是多一道手续。
+    await deleteChatRoom(room.id, service);
+    return c.json({ deleted: true });
   });
   api.post("/chats/:roomId/messages", async (c) => {
     const room = await visibleRoom(c);

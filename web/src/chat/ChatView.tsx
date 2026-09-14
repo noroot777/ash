@@ -33,6 +33,9 @@ export function ChatView({ project, onTask, onExit, onMode, onAssistant }: {
   const connectionTip = useHoverTip();
   useDismissable({ enabled: mentionOpen, containerRef: mentionMenu, restoreFocusRef: input, onClose: () => setMentionOpen(false) });
   const request = useRef<{ body: string; id: string } | null>(null);
+  // 自己删掉的群：SSE 还会在关闭前推一次 revoked，不记下来就会弹「群聊已不可访问」——
+  // 那句话是给「别处被删/权限被收走」准备的，对刚按下删除的人是噪音。
+  const dismissed = useRef(new Set<string>());
   const selected = useRef(roomId);
   selected.current = roomId;
   const selectRoom = useCallback((nextId: string) => {
@@ -79,7 +82,7 @@ export function ChatView({ project, onTask, onExit, onMode, onAssistant }: {
     const source = new EventSource(`/api/chats/${roomId}/events`);
     source.addEventListener("snapshot", (event) => { streamed = true; apply(JSON.parse((event as MessageEvent).data) as ChatSnapshot); if (alive) setConnected(true); });
     source.addEventListener("ping", () => { if (alive) setConnected(true); });
-    source.addEventListener("revoked", () => { source.close(); setSnapshot(null); setError("群聊已不可访问，请返回项目重新选择。"); });
+    source.addEventListener("revoked", () => { source.close(); if (dismissed.current.has(roomId)) return; setSnapshot(null); setError("群聊已不可访问，请返回项目重新选择。"); });
     source.onopen = () => { if (alive) setConnected(true); };
     source.onerror = () => { if (alive) setConnected(false); };
     return () => { alive = false; source.close(); };
@@ -106,6 +109,24 @@ export function ChatView({ project, onTask, onExit, onMode, onAssistant }: {
     } catch (reason) { if (selected.current === roomId) setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setSending(false); }
   };
+  const removeRoom = async (targetId: string) => {
+    dismissed.current.add(targetId);
+    try { await chatApi.remove(targetId); }
+    catch (reason) { dismissed.current.delete(targetId); throw reason; }
+    window.sessionStorage.removeItem(`ash:chat-draft:${targetId}`);
+    const rest = rooms.filter((item) => item.id !== targetId);
+    setRooms(rest);
+    setEditor(null);
+    if (selected.current !== targetId) return;
+    if (rest[0]) { selectRoom(rest[0].id); return; }
+    window.localStorage.removeItem(`ash:chat:${project.id}`);
+    selected.current = null;
+    request.current = null;
+    setRoomId(null);
+    setSnapshot(null);
+    setDraft("");
+    setEditor("create");
+  };
   // 快照还没到时先用频道列表里的群兜底，标题、成员和输入框不必空等，只有消息流显示载入中。
   const room = snapshot?.room ?? rooms.find((item) => item.id === roomId);
   const mentioned = room ? mentionedMembers(draft, room.members) : [];
@@ -125,7 +146,7 @@ export function ChatView({ project, onTask, onExit, onMode, onAssistant }: {
       <div className="chat-rail-note"><At size={22} /><strong>有需要，再叫上它。</strong><p>没有 @ 的普通消息只保存在群里。@all 唤醒全部成员；单独发送 /clear 重新开始上下文。</p></div>
     </nav>
     <div className="chat-main"><ConversationModeBar active="chat" onMode={onMode} onAssistant={onAssistant} />
-      {editor ? <ChatMembers key={`${editor}-${roomId}`} creating={editor === "create"} initial={editor === "members" ? room?.members ?? [] : []} initialName={editor === "members" ? room?.name : undefined} onCancel={() => setEditor(null)} onSave={async (members, name) => {
+      {editor ? <ChatMembers key={`${editor}-${roomId}`} creating={editor === "create"} initial={editor === "members" ? room?.members ?? [] : []} initialName={editor === "members" ? room?.name : undefined} onCancel={() => setEditor(null)} onDelete={editor === "members" && roomId ? () => removeRoom(roomId) : undefined} onSave={async (members, name) => {
         if (editor === "create") { const created = await chatApi.create(project.id, name, members); setRooms((current) => [...current, created]); selectRoom(created.id); }
         else if (roomId) {
           const updated = await chatApi.update(roomId, { name, members });
