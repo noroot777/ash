@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Git 工作台 · ash 设计 demo</title>
+<link rel="stylesheet" href="base.css">
+<link rel="stylesheet" href="views.css">
+<link rel="stylesheet" href="overlays.css">
+</head>
+<body>
+
+<header id="topbar" class="topbar"></header>
+<div id="opbanner"></div>
+
+<main class="shell">
+  <nav id="sidenav" class="sidenav"></nav>
+  <section id="view" class="view"></section>
+</main>
+
+<div id="overlay-root"></div>
+<div id="toast-root" class="toast-root"></div>
+
+<script src="data.js"></script>
+<script src="ui.js"></script>
+<script src="engine.js"></script>
+<script src="engine-extra.js"></script>
+<script src="view-changes.js"></script>
+<script src="view-history.js"></script>
+<script src="view-branches.js"></script>
+<script src="view-stash.js"></script>
+<script src="view-refs.js"></script>
+<script src="view-oplog.js"></script>
+<script src="overlay-conflict.js"></script>
+<script src="overlay-rebase.js"></script>
+<script src="about.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
