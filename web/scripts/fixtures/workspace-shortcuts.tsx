@@ -10,6 +10,8 @@ import { useWorkspaceShortcuts } from "../../src/workspace/useWorkspaceShortcuts
 function Ash() {
   const [log, setLog] = useState<string[]>([]);
   const [scope, setScope] = useState<"project" | "tasks">("project");
+  // 聊天 / 助手 / 设置页把列表导航键关掉（enabled=false），但 `G …` 一族在那儿照样按得到。
+  const [enabled, setEnabled] = useState(true);
   const orderedTasks = useMemo<TaskListItem[]>(() => [], []);
 
   useEffect(() => registerInspectorShortcutTarget((key) => {
@@ -18,7 +20,7 @@ function Ash() {
   }), []);
 
   useWorkspaceShortcuts({
-    enabled: true,
+    enabled,
     paletteOpen: false,
     composerOpen: false,
     spreadOpen: false,
@@ -40,6 +42,8 @@ function Ash() {
     <main>
       <p data-testid="scope">{scope}</p>
       <p data-testid="log">{log.join(" ")}</p>
+      <p data-testid="enabled">{enabled ? "on" : "off"}</p>
+      <button type="button" data-testid="toggle-enabled" onClick={() => setEnabled((current) => !current)}>切换列表导航</button>
       <input data-testid="text-entry" aria-label="文本输入" />
     </main>
   );

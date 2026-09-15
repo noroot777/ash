@@ -68,6 +68,29 @@ try {
   assert.match(await log.textContent(), /create$/, "半截 G T 之后的单键快捷键仍应生效");
   await assertScope("project", "g c 不应切模式");
 
+  // 聊天 / 助手 / 设置页把列表导航键关掉（enabled=false）。`G …` 一族的整个存在理由就是
+  // 「在任何界面都按得到」，所以它必须穿过这道开关 —— 否则在聊天页按 G T 什么都不会发生。
+  await toggleListNavigation("off");
+  await type(["g", "t"]);
+  await assertScope("tasks", "列表导航关掉后 G T 仍应切进任务模式");
+  await type(["g", "t"]);
+  await assertScope("project", "列表导航关掉后 G T 仍应能按同样两下退回来");
+  await type(["g", "s"]);
+  assert.match(await log.textContent(), /settings$/, "列表导航关掉后 G S 仍应打开设置");
+
+  // 反过来，列表导航那几颗单键在那些界面上没有落点，一颗都不能响。
+  const quiet = await log.textContent();
+  await type(["c", "f", "j", "k", "r", "Escape", "Enter"]);
+  assert.equal(await log.textContent(), quiet, "列表导航键在聊天 / 助手 / 设置页不应触发");
+  // Inspector 的 `I …` 同理：那些界面上根本没有那块面板。
+  await type(["i", "g"]);
+  assert.equal(await log.textContent(), quiet, "列表导航关掉后 Inspector 快捷键不应触发");
+  // 上一行那个 g 被 G 族当成了前缀，用一个无关键把它作废掉，后面的 t 才不会凑成一次切换。
+  await type(["x", "t"]);
+  await assertScope("project", "无关键之后的 t 不该接上早先的半截 g");
+
+  await toggleListNavigation("on");
+
   // 输入框里 g t 是两个字符，不是快捷键。
   const entry = page.getByTestId("text-entry");
   await entry.click();
@@ -84,6 +107,15 @@ try {
       { timeout: 2_000 },
     ).catch(() => {});
     assert.equal(await scope.textContent(), expected, message);
+  }
+
+  // 切完必须**把焦点交还给页面**：焦点留在那颗按钮上时，后面按的 Enter 会当成点它，
+  // 开关就在测试中途被偷偷拨回去了（这条断言因此假绿过一次）。
+  async function toggleListNavigation(expected) {
+    const toggle = page.getByTestId("toggle-enabled");
+    await toggle.click();
+    await toggle.evaluate((element) => element.blur());
+    assert.equal(await page.getByTestId("enabled").textContent(), expected);
   }
 } finally {
   await browser?.close();
