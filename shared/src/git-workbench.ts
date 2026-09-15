@@ -196,25 +196,28 @@ type GitProgressStatus = Pick<
   "operation" | "merge" | "staged" | "unstaged" | "truncated"
 >;
 
-export const EMPTY_CHERRY_PICK_MESSAGE =
-  "当前拣选没有可提交的改动。请选择「跳过」处理后续提交，或「中止操作」恢复操作前状态。";
-
-export function isEmptyCherryPick(status: GitProgressStatus): boolean {
-  return (
-    status.operation === "cherry-pick" &&
+export function emptyCommitGuidance(status: GitProgressStatus): string | null {
+  if (
+    (status.operation === "cherry-pick" || status.operation === "revert") &&
     !status.merge.length &&
     !status.staged.length &&
     !status.unstaged.length &&
     !status.truncated
-  );
+  ) {
+    const label = status.operation === "revert" ? "反做" : "拣选";
+    return `当前${label}没有可提交的改动。请选择「跳过」处理后续提交，或「中止操作」恢复操作前状态。`;
+  }
+  return null;
 }
 
 export function gitActionBlockReason(
   status: GitProgressStatus,
   kind?: GitAction["kind"],
 ): string | null {
-  if (kind === "continue" && isEmptyCherryPick(status))
-    return EMPTY_CHERRY_PICK_MESSAGE;
+  if (kind === "continue") {
+    const guidance = emptyCommitGuidance(status);
+    if (guidance) return guidance;
+  }
   if (kind === "discard-conflicts")
     return !status.operation && status.merge.length
       ? null

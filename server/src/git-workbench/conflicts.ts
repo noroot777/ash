@@ -8,10 +8,7 @@ import {
 } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
 import type { GitAction, GitConflict } from "@ash/shared/git-workbench";
-import {
-  EMPTY_CHERRY_PICK_MESSAGE,
-  isEmptyCherryPick,
-} from "@ash/shared/git-workbench";
+import { emptyCommitGuidance } from "@ash/shared/git-workbench";
 import { assertPathShape } from "../scm-paths.js";
 import { literalPathspec, readScmStatus } from "../git-status.js";
 import { cappedGitStdout } from "../git-exec.js";
@@ -153,8 +150,8 @@ export async function continueOperation(
       "当前没有可继续或中止的 Git 操作；未解决的冲突可解决并暂存后提交，或在冲突面板放弃冲突改动",
     );
   if (action === "continue" && status.merge.length) fail("还有未解决的冲突");
-  if (action === "continue" && isEmptyCherryPick(status))
-    fail(EMPTY_CHERRY_PICK_MESSAGE);
+  const emptyGuidance = emptyCommitGuidance(status);
+  if (action === "continue" && emptyGuidance) fail(emptyGuidance);
   if (action === "skip" && status.operation === "merge")
     fail("合并不能跳过提交", 400);
   try {

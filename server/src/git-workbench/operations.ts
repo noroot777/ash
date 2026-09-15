@@ -5,9 +5,8 @@ import type {
   GitJournalEntry,
 } from "@ash/shared/git-workbench";
 import {
-  EMPTY_CHERRY_PICK_MESSAGE,
+  emptyCommitGuidance,
   gitActionBlockReason,
-  isEmptyCherryPick,
 } from "@ash/shared/git-workbench";
 import { withRepoLock } from "../repo-lock.js";
 import { readScmStatus, type ScmStatus } from "../git-status.js";
@@ -281,14 +280,30 @@ export async function executeWorkbench(
         entry.after = status?.branch.oid || undefined;
         const inProgress =
           attemptedSequence && (status?.operation || status?.merge.length);
+        const rawMessage =
+          error instanceof Error ? error.message : String(error);
+        const emptyGuidance = status ? emptyCommitGuidance(status) : null;
+        const noChangeRevert =
+          attemptedSequence &&
+          request.action.kind === "revert" &&
+          status &&
+          !status.operation &&
+          !status.merge.length &&
+          !status.staged.length &&
+          !status.unstaged.length &&
+          !status.truncated &&
+          entry.before === entry.after &&
+          /\bnothing to commit\b/i.test(rawMessage) &&
+          !/^(?:fatal|error):/im.test(rawMessage);
         entry.state = inProgress ? "conflict" : "failed";
         entry.message =
-          safeGitMessage(
-            error instanceof Error ? error.message : String(error),
-          ) +
+          (noChangeRevert
+            ? "本次反做未完成：没有产生可提交的改动，未创建新提交。目标改动可能已经撤销，当前没有待处理的 Git 操作。\n"
+            : "") +
+          safeGitMessage(rawMessage) +
           (inProgress
-            ? status && isEmptyCherryPick(status)
-              ? `\nGit 操作尚未完成。${EMPTY_CHERRY_PICK_MESSAGE}`
+            ? emptyGuidance
+              ? `\nGit 操作尚未完成。${emptyGuidance}`
               : status?.operation
                 ? "\nGit 操作尚未完成，请在冲突面板继续或中止。"
                 : "\nGit 操作尚未完成，请解决并暂存冲突后提交，或在冲突面板放弃冲突改动。"

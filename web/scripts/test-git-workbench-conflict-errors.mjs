@@ -136,6 +136,10 @@ const assertNoStatusCliGuidance = (message, label) => {
 };
 const emptyCherryPickMessage =
   "当前拣选没有可提交的改动。请选择「跳过」处理后续提交，或「中止操作」恢复操作前状态。";
+const emptyRevertMessage =
+  "当前反做没有可提交的改动。请选择「跳过」处理后续提交，或「中止操作」恢复操作前状态。";
+const directEmptyRevertMessage =
+  "本次反做未完成：没有产生可提交的改动，未创建新提交。目标改动可能已经撤销，当前没有待处理的 Git 操作。";
 const assertEmptyCherryPickGuidance = (message, label) => {
   assert.match(message, new RegExp(emptyCherryPickMessage), `${label} should explain the empty pick`);
   assert.doesNotMatch(message, /CONFLICT \(/, `${label} should not invent a file conflict`);
@@ -145,6 +149,16 @@ const assertEmptyCherryPickGuidance = (message, label) => {
     /git (?:cherry-pick|commit)\s+--(?:continue|skip|abort|allow-empty)/i,
     `${label} should hide sequencer CLI commands`,
   );
+  assertNoStatusCliGuidance(message, label);
+};
+const assertDirectEmptyRevertGuidance = (message, label) => {
+  assert.equal(
+    message.includes(directEmptyRevertMessage),
+    true,
+    `${label} should explain the direct empty revert`,
+  );
+  assert.doesNotMatch(message, /跳过/, `${label} should not suggest skip without an operation`);
+  assert.doesNotMatch(message, /git revert --/i, `${label} should hide revert CLI commands`);
   assertNoStatusCliGuidance(message, label);
 };
 const assertDiscardGuidance = (message, label) => {
@@ -285,13 +299,116 @@ try {
   assert.equal(git(info.root, "rev-parse", "HEAD"), cherryPickHead);
   assert.equal(git(info.root, "status", "--porcelain"), "");
 
+  // 反做冲突选择整份采用我方后会变为空序列；跳过是唯一主路径，中止也应可恢复。
+  writeFileSync(join(info.root, "conflict.txt"), "browser revert target\n");
+  git(info.root, "add", "--", "conflict.txt");
+  git(info.root, "commit", "-qm", "browser revert target");
+  const revertTarget = git(info.root, "rev-parse", "HEAD");
+  writeFileSync(join(info.root, "conflict.txt"), "browser revert later\n");
+  git(info.root, "add", "--", "conflict.txt");
+  git(info.root, "commit", "-qm", "browser revert later");
+  const revertHead = git(info.root, "rev-parse", "HEAD");
+  await refresh();
+
+  const triggerEmptyRevert = async () => {
+    await tab("历史").click();
+    await page.locator(".gwb-commit-row", { hasText: "browser revert target" }).click();
+    await page.getByLabel("提交操作").selectOption("revert");
+    const revertDialog = dialog("反做此提交");
+    const failure = await performAction(
+      () => revertDialog.getByRole("button", { name: "反做此提交", exact: true }).click(),
+      false,
+    );
+    assertConflictDiagnostic(String(failure?.error || ""), "revert conflict response");
+    await revertDialog.getByRole("button", { name: "关闭反做此提交" }).click();
+    await page.getByRole("button", { name: /conflict\.txt/ }).click();
+    const conflictDialog = dialog(/解决冲突/);
+    await conflictDialog.getByRole("button", { name: "整份采用我方", exact: true }).click();
+    await performAction(() =>
+      conflictDialog.getByRole("button", { name: "保存结果并暂存", exact: true }).click());
+    await conflictDialog.waitFor({ state: "detached" });
+    assert.equal(git(info.root, "rev-parse", "--verify", "REVERT_HEAD"), revertTarget);
+    assert.equal(git(info.root, "status", "--porcelain"), "");
+    const operation = page.locator(".gwb-operation");
+    assert.match(await operation.innerText(), /revert 尚未完成[\s\S]*没有可提交的改动/);
+    assert.match(await operation.innerText(), new RegExp(emptyRevertMessage));
+    assert.equal(
+      await operation.getByRole("button", { name: "继续操作", exact: true }).count(),
+      0,
+      "empty revert must hide continue",
+    );
+    const skipButton = operation.getByRole("button", { name: "跳过", exact: true });
+    assert.equal(await skipButton.isEnabled(), true, "empty revert skip must be enabled");
+    assert.equal(
+      await skipButton.evaluate((button) => button.classList.contains("gwb-primary")),
+      true,
+      "empty revert skip must be the primary action",
+    );
+    return { operation, skipButton };
+  };
+
+  let emptyRevert = await triggerEmptyRevert();
+  await refresh();
+  assert.match(await emptyRevert.operation.innerText(), new RegExp(emptyRevertMessage));
+  await tab("变更").click();
+  const emptyRevertChanges = await page.getByRole("region", { name: "工作区变更" }).innerText();
+  assert.match(emptyRevertChanges, /当前反做没有可提交的改动 · 请在上方跳过或中止/);
+  assert.doesNotMatch(emptyRevertChanges, /继续/);
+  await emptyRevert.skipButton.click();
+  await submitDialog("跳过当前提交");
+  await page.locator(".gwb-operation").waitFor({ state: "detached" });
+  assert.equal(git(info.root, "rev-parse", "HEAD"), revertHead);
+  assert.equal(git(info.root, "status", "--porcelain"), "");
+
+  emptyRevert = await triggerEmptyRevert();
+  await refresh();
+  await emptyRevert.operation.getByRole("button", { name: "中止操作", exact: true }).click();
+  await submitDialog("中止 Git 操作");
+  await page.locator(".gwb-operation").waitFor({ state: "detached" });
+  assert.equal(git(info.root, "rev-parse", "HEAD"), revertHead);
+  assert.equal(git(info.root, "status", "--porcelain"), "");
+
+  // 直接反做已被后续提交手动撤销的内容不会创建 operation，应明确失败而不建议跳过。
+  writeFileSync(join(info.root, "direct-empty-revert.txt"), "added then manually removed\n");
+  git(info.root, "add", "--", "direct-empty-revert.txt");
+  git(info.root, "commit", "-qm", "browser direct empty revert target");
+  const directRevertTarget = git(info.root, "rev-parse", "HEAD");
+  git(info.root, "rm", "-q", "--", "direct-empty-revert.txt");
+  git(info.root, "commit", "-qm", "browser manually undo revert target");
+  const directRevertHead = git(info.root, "rev-parse", "HEAD");
+  await refresh();
+  await tab("历史").click();
+  await page.locator(".gwb-commit-row", { hasText: "browser direct empty revert target" }).click();
+  await page.getByLabel("提交操作").selectOption("revert");
+  const directRevertDialog = dialog("反做此提交");
+  const directRevertFailure = await performAction(
+    () => directRevertDialog.getByRole("button", { name: "反做此提交", exact: true }).click(),
+    false,
+  );
+  const directRevertMessage = String(directRevertFailure?.error || "");
+  assertDirectEmptyRevertGuidance(directRevertMessage, "direct empty revert response");
+  assertDirectEmptyRevertGuidance(
+    await page.locator(".gwb-result").innerText(),
+    "direct empty revert page result",
+  );
+  await directRevertDialog.getByRole("button", { name: "关闭反做此提交" }).click();
+  assert.equal(await page.locator(".gwb-operation").count(), 0);
+  assert.throws(() => git(info.root, "rev-parse", "--verify", "REVERT_HEAD"));
+  assert.equal(git(info.root, "rev-parse", "HEAD"), directRevertHead);
+  assert.equal(git(info.root, "status", "--porcelain"), "");
+  await tab("操作日志").click();
+  const directRevertLog = page.locator(".gwb-journal-entry.is-failed", { hasText: "反做" }).first();
+  await directRevertLog.waitFor();
+  assertDirectEmptyRevertGuidance(await directRevertLog.innerText(), "direct empty revert journal");
+  assert.equal(git(info.root, "cat-file", "-e", `${directRevertTarget}^{commit}`), "");
+
   // 同一持久状态也必须能从页面中止，覆盖两条有效出口。
   emptyPick = await triggerEmptyCherryPick();
   await refresh();
   await emptyPick.operation.getByRole("button", { name: "中止操作", exact: true }).click();
   await submitDialog("中止 Git 操作");
   await page.locator(".gwb-operation").waitFor({ state: "detached" });
-  assert.equal(git(info.root, "rev-parse", "HEAD"), cherryPickHead);
+  assert.equal(git(info.root, "rev-parse", "HEAD"), directRevertHead);
   assert.equal(git(info.root, "status", "--porcelain"), "");
 
   // squash 合入新增文件后再改成 AM，安全放弃应失败且完整保留现场。
@@ -416,7 +533,9 @@ try {
     actionKinds,
     [
       "rebase", "abort",
-      "cherry-pick", "skip", "cherry-pick", "abort",
+      "cherry-pick", "skip",
+      "revert", "resolve", "skip", "revert", "resolve", "abort", "revert",
+      "cherry-pick", "abort",
       "merge", "discard-conflicts", "stage", "discard-conflicts",
       "stash-save", "stash-apply", "discard-conflicts",
     ],

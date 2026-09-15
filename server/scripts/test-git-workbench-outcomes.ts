@@ -12,9 +12,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GitAction, GitActionRequest } from "@ash/shared/git-workbench";
 import {
-  EMPTY_CHERRY_PICK_MESSAGE,
   gitActionBlockReason,
-  isEmptyCherryPick,
+  emptyCommitGuidance,
 } from "@ash/shared/git-workbench";
 
 const directory = realpathSync(
@@ -107,10 +106,10 @@ try {
         assert.match(message, /CONFLICT[^\n]*file\.txt/);
       } else {
         assert(
-          isEmptyCherryPick(current.status),
-          "expected an empty cherry-pick pause",
+          emptyCommitGuidance(current.status),
+          "expected an empty replay pause",
         );
-        assert(message.includes(EMPTY_CHERRY_PICK_MESSAGE));
+        assert(message.includes(emptyCommitGuidance(current.status)!));
         assert.doesNotMatch(message, /CONFLICT/);
       }
       assert.doesNotMatch(message, /Command failed: git -C/);
@@ -366,17 +365,16 @@ try {
     await rejected(repo, { kind: "cherry-pick", target }, "conflict");
     if (source === "resolved-empty") await resolve(repo, "main");
     const paused = await state(repo);
-    assert(isEmptyCherryPick(paused.status));
-    assert.equal(
-      gitActionBlockReason(paused.status, "continue"),
-      EMPTY_CHERRY_PICK_MESSAGE,
-    );
+    const guidance =
+      "当前拣选没有可提交的改动。请选择「跳过」处理后续提交，或「中止操作」恢复操作前状态。";
+    assert(emptyCommitGuidance(paused.status));
+    assert.equal(gitActionBlockReason(paused.status, "continue"), guidance);
     assert.equal(gitActionBlockReason(paused.status, "skip"), null);
     const pausedSnapshot = await snapshot(repo);
     const refused = await rejected(repo, { kind: "continue" }, "failed");
-    assert.equal(refused.journal[0].message, EMPTY_CHERRY_PICK_MESSAGE);
+    assert.equal(refused.journal[0].message, guidance);
     await assert.rejects(() => continueOperation(repo, "continue"), {
-      message: EMPTY_CHERRY_PICK_MESSAGE,
+      message: guidance,
     });
     assert.deepEqual(await snapshot(repo), pausedSnapshot);
     await run(repo, { kind: source === "resolved-empty" ? "abort" : "skip" });
@@ -391,9 +389,9 @@ try {
     "conflict",
   );
   writeFileSync(join(stagedPick, "note.txt"), "untracked note\n");
-  assert(isEmptyCherryPick((await state(stagedPick)).status));
+  assert(emptyCommitGuidance((await state(stagedPick)).status));
   write(stagedPick, "manual resolution");
-  assert.equal(isEmptyCherryPick((await state(stagedPick)).status), false);
+  assert.equal(emptyCommitGuidance((await state(stagedPick)).status), null);
   await run(stagedPick, { kind: "stage", paths: ["file.txt"] });
   assert.equal(
     gitActionBlockReason((await state(stagedPick)).status, "continue"),
@@ -408,6 +406,76 @@ try {
   );
   console.log(
     "ok · already-applied, originally empty and resolved-empty cherry-picks guide skip/abort; real staged changes still continue",
+  );
+
+  for (const finish of ["skip", "abort", "continue"] as const) {
+    const repo = seed(`empty-revert-${finish}`);
+    const target = commit(repo, "applied");
+    const head = commit(repo, "main");
+    await rejected(repo, { kind: "revert", target }, "conflict");
+    await resolve(repo, "main");
+    const paused = await state(repo);
+    const guidance =
+      "当前反做没有可提交的改动。请选择「跳过」处理后续提交，或「中止操作」恢复操作前状态。";
+    assert.equal(paused.status.operation, "revert");
+    assert.equal(emptyCommitGuidance(paused.status), guidance);
+    assert.equal(gitActionBlockReason(paused.status, "continue"), guidance);
+    assert.equal(gitActionBlockReason(paused.status, "skip"), null);
+    const original = await snapshot(repo);
+    const refused = await rejected(repo, { kind: "continue" }, "failed");
+    assert.equal(refused.journal[0].message, guidance);
+    await assert.rejects(() => continueOperation(repo, "continue"), {
+      message: guidance,
+    });
+    assert.deepEqual(await snapshot(repo), original);
+    if (finish === "continue") {
+      write(repo, "manual revert resolution");
+      await run(repo, { kind: "stage", paths: ["file.txt"] });
+      assert.equal(emptyCommitGuidance((await state(repo)).status), null);
+      assert.equal(
+        gitActionBlockReason((await state(repo)).status, "continue"),
+        null,
+      );
+    }
+    await run(repo, { kind: finish });
+    assert.equal((await state(repo)).status.operation, null);
+    assert.equal(git(repo, "status", "--porcelain"), "");
+    if (finish === "continue") {
+      assert.notEqual(git(repo, "rev-parse", "HEAD"), head);
+      assert.equal(
+        git(repo, "show", "HEAD:file.txt"),
+        "manual revert resolution",
+      );
+    } else assert.equal(git(repo, "rev-parse", "HEAD"), head);
+  }
+  const undone = seed("already-undone-revert");
+  const undoTarget = commit(undone, "applied");
+  commit(undone, "base");
+  const beforeNoop = await snapshot(undone);
+  const noChange = await rejected(
+    undone,
+    { kind: "revert", target: undoTarget },
+    "failed",
+  );
+  assert.match(
+    noChange.journal[0].message,
+    /^本次反做未完成：没有产生可提交的改动，未创建新提交/,
+  );
+  assert.match(noChange.journal[0].message, /目标改动可能已经撤销/);
+  assert.doesNotMatch(noChange.journal[0].message, /「跳过」|「中止操作」/);
+  assert.equal(noChange.status.operation, null);
+  assert.equal(emptyCommitGuidance(noChange.status), null);
+  const afterNoop = await snapshot(undone);
+  for (const field of ["head", "status", "index", "files"] as const)
+    assert.deepEqual(afterNoop[field], beforeNoop[field]);
+  const otherFailure = await rejected(
+    undone,
+    { kind: "revert", target: undoTarget, mainline: 2 },
+    "failed",
+  );
+  assert.doesNotMatch(otherFailure.journal[0].message, /没有产生可提交的改动/);
+  console.log(
+    "ok · empty revert pauses guide skip/abort and allow real staged continuation; already-undone reverts fail clearly without a pending operation",
   );
 
   const replay = seed("continuation");

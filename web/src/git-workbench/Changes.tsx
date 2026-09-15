@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { File, Minus, Plus, Trash, GitCommit } from "@phosphor-icons/react";
 import type { GitDiff, GitFile } from "@ash/shared/git-workbench";
-import { gitChangeCount, isEmptyCherryPick } from "@ash/shared/git-workbench";
+import { gitChangeCount, emptyCommitGuidance } from "@ash/shared/git-workbench";
 import type { Workbench } from "./useWorkbench.ts";
 import type { AskAction } from "./ActionDialog.tsx";
 import { workbenchApi } from "./api.ts";
@@ -44,8 +44,8 @@ export function Changes({
   const clean = gitChangeCount(data.status) === 0 && !data.status.truncated;
   const summary = data.status.merge.length
     ? `${data.status.merge.length} 个冲突待解决 · 请在上方冲突面板处理`
-    : isEmptyCherryPick(data.status)
-      ? "当前拣选没有可提交的改动 · 请在上方跳过或中止"
+    : emptyCommitGuidance(data.status)
+      ? `当前${data.status.operation === "revert" ? "反做" : "拣选"}没有可提交的改动 · 请在上方跳过或中止`
       : data.status.operation
         ? "Git 操作尚未完成 · 请在上方继续或中止"
         : clean

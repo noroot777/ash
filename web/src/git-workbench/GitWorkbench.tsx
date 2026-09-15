@@ -13,11 +13,7 @@ import {
   Warning,
 } from "@phosphor-icons/react";
 import type { GitActionRequest, GitView } from "@ash/shared/git-workbench";
-import {
-  EMPTY_CHERRY_PICK_MESSAGE,
-  gitChangeCount,
-  isEmptyCherryPick,
-} from "@ash/shared/git-workbench";
+import { emptyCommitGuidance, gitChangeCount } from "@ash/shared/git-workbench";
 import {
   ActionDialog,
   initialActionValues,
@@ -72,7 +68,7 @@ export function GitWorkbench({
   } | null>(null);
   const [conflict, setConflict] = useState<string | null>(null);
   const data = w.data;
-  const emptyPick = data ? isEmptyCherryPick(data.status) : false;
+  const emptyGuidance = data ? emptyCommitGuidance(data.status) : null;
   const managed = data?.worktrees.some(
     (tree) => tree.path === data.root && tree.managed,
   );
@@ -342,12 +338,12 @@ export function GitWorkbench({
                 : "还有未解决的冲突"}
             </strong>
             <span>
-              {emptyPick
+              {emptyGuidance
                 ? "没有可提交的改动"
                 : `${data.status.merge.length} 个文件待解决`}
             </span>
             <div className="gwb-inline-actions">
-              {!emptyPick && (
+              {!emptyGuidance && (
                 <button
                   disabled={
                     w.isBlocked("continue") ||
@@ -361,7 +357,7 @@ export function GitWorkbench({
               )}
               {data.status.operation && data.status.operation !== "merge" && (
                 <button
-                  className={emptyPick ? "gwb-primary" : undefined}
+                  className={emptyGuidance ? "gwb-primary" : undefined}
                   disabled={w.isBlocked("skip")}
                   onClick={() =>
                     ask({
@@ -413,7 +409,7 @@ export function GitWorkbench({
               )}
             </div>
           </header>
-          {emptyPick && <p>{EMPTY_CHERRY_PICK_MESSAGE}</p>}
+          {emptyGuidance && <p>{emptyGuidance}</p>}
           {data.status.merge.map((file) => (
             <button
               key={file.path}
