@@ -5,6 +5,7 @@ import { tasks, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { stopPreviewOnRerun } from "./preview.js";
 import { beginRerunGate, endRerunGate } from "./rerun-gate.js";
+import { reviewTurnInFlight } from "./review-turn.js";
 import { now, runsTiming } from "./util.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { previewStopFailure } from "./preview-process-stop.js";
@@ -50,7 +51,12 @@ async function writeTaskStatus(
     patch.endedAt = endedAt = null;
     // 又开跑了：上一轮起的预览指向的是上一版代码，留着只会让人对着旧页面验新改动。
     // 收在这儿是因为**所有**开跑路径都经过这一个函数（手点运行、队列推进、修复续跑）。
-    if (rerun) {
+    //
+    // **旁路回合例外**：审查轮/验证轮只读工作区、不产出新一版代码，页面不会在用户眼皮
+    // 底下变成别的东西。收掉它等于每派一次审查就把用户正看着的预览关掉——而那十几分钟
+    // 恰恰是最该自己点开看一眼的时候（见 review-turn.ts）。身份在这一刻已经落下：
+    // claimTurn/reclaimTurn 都排在 setStatus(running) 之前。
+    if (rerun && !reviewTurnInFlight(taskId)) {
       try { await stopPreviewOnRerun(taskId); }
       catch (error) { await appendTaskTimeline(taskId, `旧预览回收暂缓，任务继续运行。${previewStopFailure(error).message}`); }
     }

@@ -8,6 +8,7 @@ import { isolatedWorkspaceOwner } from "./task-workspace.js";
 import { annotationReviewStatus } from "./page-annotation-review.js";
 import { handoffBlockReasonById } from "./handoff-guard.js";
 import { detectPreviewCandidates } from "./preview-command.js";
+import { reviewTurnInFlight } from "./review-turn.js";
 import { taskWorkflowDef } from "./workflows.js";
 
 export function workspacePreviewInput(body: unknown): WorkspacePreviewInput | undefined {
@@ -29,7 +30,13 @@ async function workspaceContext(taskId: string) {
   const missing = !root || (root.source === "repo" && !!await isolatedWorkspaceOwner(task));
   const status = await annotationReviewStatus(taskId);
   const reason = missing ? "任务工作目录已不存在，可能已在验收后清理，无法启动页面预览。请改用截图批注。"
-    : await handoffBlockReasonById(taskId) || status.reason
+    : await handoffBlockReasonById(taskId)
+    || (task.archived ? "任务已归档，无法在此启动预览。请改用截图批注。" : "")
+    // 「智能体回合尚未释放」对**旁路回合**不成立：审查轮/验证轮只读工作区，预览照常起
+    // （口径与 free-workflow-preview.ts 同源，见 review-turn.ts）。批注复看那道门不吃这条
+    // 豁免——那问的是「这批意见有没有交还给用户」，跟能不能起预览不是一件事，所以归档
+    // 这类与回合无关的理由在上一行单独挡，不靠 status.reason 代劳。
+    || (reviewTurnInFlight(taskId) ? "" : status.reason)
     || (task.stage === "accepted" || task.stage === "merged" ? "任务已验收，无法在此启动预览。请改用截图批注。" : "")
     || (task.status === "backlog" ? "任务尚未运行，完成实现后再打开预览。也可以先使用截图批注。" : "")
     || (task.workflowMode === "free" && (task.mode !== "single" || task.parentId || task.reviewOf) ? "当前任务不支持自由预览，请使用截图批注。" : "");

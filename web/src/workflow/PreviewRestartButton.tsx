@@ -8,6 +8,10 @@
 //    一个打不开的地址才发现。
 // ② **任务在跑时灰掉**。那一刻代码改到一半，起出来的页面既不是上一版也不是下一版；
 //    何况下一次状态切换会立刻把它收掉（`stopPreviewOnRerun`），按了也白按。
+//    **就地验证轮不算**：那是旁路回合，只读工作区、给结论，不产出新一版代码——预览起出来
+//    的正是被验的那一版，而这恰恰是用户最想自己点开看一眼的时候。后端从来就放行
+//    （`restartTaskPreview` 没有 running 门禁），收预览那一路也已经为旁路回合让开
+//    （server 的 review-turn.ts）。
 import { useState } from "react";
 import type { Task } from "@ash/shared";
 import type { WorkflowStep } from "@ash/shared/workflow";
@@ -26,7 +30,10 @@ export function PreviewRestartButton({
   notify: Notify;
 }) {
   const [busy, setBusy] = useState(false);
-  const inFlight = task.status === "running" || task.status === "queued";
+  // 挂着轮次号 = 这一刻在跑的是就地验证轮（旁路回合，见文件头 ②）。verifyRound 在派验证
+  // 之前写下、结算时清掉，正好覆盖整轮。
+  const verifying = task.verifyRound != null;
+  const inFlight = (task.status === "running" || task.status === "queued") && !verifying;
   // 接力出去的任务在本机只是历史存档,重启预览会往它的工作区里跑启动命令,后端已 409。
   const handedOff = task.handoff?.direction === "out";
 
@@ -59,7 +66,9 @@ export function PreviewRestartButton({
             ? "任务正在跑，跑完再重启——这会儿代码改到一半，起出来的页面谁也代表不了。"
             : busy
               ? "正在跑这一站的命令，等它打印出地址；起不来的话最多两分钟后报错。"
-              : "按原样再跑一次这一站，地址照常写进时间线（端口每次现借，跟上次不一样）。"}
+              : verifying
+                ? `第 ${task.verifyRound} 轮验证正在跑，但那一轮只读代码——现在起的预览就是被验的这一版，可以自己点开看。`
+                : "按原样再跑一次这一站，地址照常写进时间线（端口每次现借，跟上次不一样）。"}
       </p>
     </>
   );
