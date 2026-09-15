@@ -285,6 +285,24 @@ export async function handleFreeWorkflowSettlement(
     // 缺退出事件只限制未交卷的备用触发路径，已落库的完成确认和审查结论仍各自有效。
     if (turnOk && (confirmedDone || exitObserved) && (status === "done" || status === "failed" || status === "canceled")) {
       const reservation = await readFreeReviewReservation(taskId);
+      // ── 排队消息优先于预约审查 ──
+      // 托盘里还有该发的消息，就这一轮不开审：用户排的那几句是**给实现会话的后续指令**，
+      // 审查该看的是它们都说完之后的工作区，而不是半截的。
+      //
+      // 让路必须发生在这里（结算内），不能指望两条路在释放点上「公平竞争」——它们抢的是
+      // 同一把单飞锁，而审查走的 `continueWhenIdle` 排到队头就**同步** claimTurn
+      // （runs.ts），消息投递第一步却是 `await beginDelivery`，于是审查一定赢、消息被挡回
+      // 托盘（`abortDelivery`）等下一轮。谁先注册 waiter 都改不了这个结果。
+      //
+      // 预约原样留在槽里：消息送进会话 → 那一轮执行回合正常结束 → 再次走到这里时托盘已空，
+      // 审查自然开跑。托盘里剩的若是没到钟点的定时消息则不算数（hasDeliverablePendingMessages）。
+      if (reservation?.armed) {
+        const { hasDeliverablePendingMessages } = await import("./pending-messages.js");
+        if (await hasDeliverablePendingMessages(taskId)) {
+          await noteReservationStillWaiting(taskId, "还有排队消息没送进会话，先把它们发完");
+          return true;
+        }
+      }
       const noteDispatch = async () => {
         if (!confirmedDone) await appendTaskTimeline(taskId, "执行回合已正常结束，按预约启动审查。本回合未确认任务完成，任务完成状态仍按原结算结果保留。");
       };
