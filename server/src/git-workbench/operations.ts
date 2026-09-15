@@ -4,7 +4,11 @@ import type {
   GitActionResult,
   GitJournalEntry,
 } from "@ash/shared/git-workbench";
-import { gitActionBlockReason } from "@ash/shared/git-workbench";
+import {
+  EMPTY_CHERRY_PICK_MESSAGE,
+  gitActionBlockReason,
+  isEmptyCherryPick,
+} from "@ash/shared/git-workbench";
 import { withRepoLock } from "../repo-lock.js";
 import { readScmStatus, type ScmStatus } from "../git-status.js";
 import {
@@ -283,9 +287,11 @@ export async function executeWorkbench(
             error instanceof Error ? error.message : String(error),
           ) +
           (inProgress
-            ? status?.operation
-              ? "\nGit 操作尚未完成，请在冲突面板继续或中止。"
-              : "\nGit 操作尚未完成，请解决并暂存冲突后提交，或在冲突面板放弃冲突改动。"
+            ? status && isEmptyCherryPick(status)
+              ? `\nGit 操作尚未完成。${EMPTY_CHERRY_PICK_MESSAGE}`
+              : status?.operation
+                ? "\nGit 操作尚未完成，请在冲突面板继续或中止。"
+                : "\nGit 操作尚未完成，请解决并暂存冲突后提交，或在冲突面板放弃冲突改动。"
             : "");
         await appendEntry(repo, entry).catch(() => {});
         throw new ScmOperationError(

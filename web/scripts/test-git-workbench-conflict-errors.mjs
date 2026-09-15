@@ -126,6 +126,27 @@ const assertConflictDiagnostic = (message, label) => {
   assert.doesNotMatch(message, /^hint:/m, `${label} should hide Git CLI hints`);
   assert.doesNotMatch(message, /git (rebase|cherry-pick|revert) --(continue|skip|abort)/, label);
 };
+const assertNoStatusCliGuidance = (message, label) => {
+  assert.doesNotMatch(message, /^hint:/m, `${label} should hide Git CLI hints`);
+  assert.doesNotMatch(
+    message,
+    /\([^)]*\bgit (?:restore|add|commit)\b[^)]*\)/i,
+    `${label} should hide parenthesized Git status commands`,
+  );
+};
+const emptyCherryPickMessage =
+  "当前拣选没有可提交的改动。请选择「跳过」处理后续提交，或「中止操作」恢复操作前状态。";
+const assertEmptyCherryPickGuidance = (message, label) => {
+  assert.match(message, new RegExp(emptyCherryPickMessage), `${label} should explain the empty pick`);
+  assert.doesNotMatch(message, /CONFLICT \(/, `${label} should not invent a file conflict`);
+  assert.doesNotMatch(message, /allow-empty/i, `${label} should hide unsupported allow-empty advice`);
+  assert.doesNotMatch(
+    message,
+    /git (?:cherry-pick|commit)\s+--(?:continue|skip|abort|allow-empty)/i,
+    `${label} should hide sequencer CLI commands`,
+  );
+  assertNoStatusCliGuidance(message, label);
+};
 const assertDiscardGuidance = (message, label) => {
   assert.match(message, /incoming\.txt/, `${label} should name the blocking file`);
   assert.match(
@@ -211,6 +232,68 @@ try {
   await submitDialog("中止 Git 操作");
   await page.locator(".gwb-operation").waitFor({ state: "detached" });
 
+  // 拣选当前 HEAD 会留下无文件冲突的空序列；页面应指向跳过或中止，而不是 CLI。
+  const cherryPickHead = git(info.root, "rev-parse", "HEAD");
+  const triggerEmptyCherryPick = async () => {
+    await tab("历史").click();
+    await page.getByRole("button", { name: /历史提交 3/ }).click();
+    await page.getByLabel("提交操作").selectOption("cherry-pick");
+    const pickDialog = dialog("拣选提交到当前分支");
+    const failure = await performAction(
+      () => pickDialog.getByRole("button", { name: "拣选提交到当前分支", exact: true }).click(),
+      false,
+    );
+    const message = String(failure?.error || "");
+    assertEmptyCherryPickGuidance(message, "empty cherry-pick response");
+    assertEmptyCherryPickGuidance(
+      await page.locator(".gwb-result").innerText(),
+      "empty cherry-pick page result",
+    );
+    await pickDialog.getByRole("button", { name: "关闭拣选提交到当前分支" }).click();
+    assert.equal(git(info.root, "rev-parse", "--verify", "CHERRY_PICK_HEAD"), cherryPickHead);
+    assert.equal(git(info.root, "status", "--porcelain"), "");
+    const operation = page.locator(".gwb-operation");
+    assert.match(await operation.innerText(), /cherry-pick 尚未完成[\s\S]*没有可提交的改动/);
+    assert.match(await operation.innerText(), new RegExp(emptyCherryPickMessage));
+    const continueButton = operation.getByRole("button", { name: "继续操作", exact: true });
+    if (await continueButton.count())
+      assert.equal(await continueButton.isDisabled(), true, "empty cherry-pick continue must be disabled");
+    const skipButton = operation.getByRole("button", { name: "跳过", exact: true });
+    assert.equal(await skipButton.isEnabled(), true, "empty cherry-pick skip must be enabled");
+    assert.equal(
+      await skipButton.evaluate((button) => button.classList.contains("gwb-primary")),
+      true,
+      "empty cherry-pick skip must be the primary action",
+    );
+    return { operation, skipButton };
+  };
+
+  let emptyPick = await triggerEmptyCherryPick();
+  await refresh();
+  assert.match(await emptyPick.operation.innerText(), new RegExp(emptyCherryPickMessage));
+  await tab("变更").click();
+  const emptyPickChanges = await page.getByRole("region", { name: "工作区变更" }).innerText();
+  assert.match(emptyPickChanges, /当前拣选没有可提交的改动 · 请在上方跳过或中止/);
+  assert.doesNotMatch(emptyPickChanges, /继续/);
+  await tab("操作日志").click();
+  const emptyPickLog = page.locator(".gwb-journal-entry.is-conflict", { hasText: "拣选" }).first();
+  await emptyPickLog.waitFor();
+  assertEmptyCherryPickGuidance(await emptyPickLog.innerText(), "empty cherry-pick journal");
+  await emptyPick.skipButton.click();
+  await submitDialog("跳过当前提交");
+  await page.locator(".gwb-operation").waitFor({ state: "detached" });
+  assert.equal(git(info.root, "rev-parse", "HEAD"), cherryPickHead);
+  assert.equal(git(info.root, "status", "--porcelain"), "");
+
+  // 同一持久状态也必须能从页面中止，覆盖两条有效出口。
+  emptyPick = await triggerEmptyCherryPick();
+  await refresh();
+  await emptyPick.operation.getByRole("button", { name: "中止操作", exact: true }).click();
+  await submitDialog("中止 Git 操作");
+  await page.locator(".gwb-operation").waitFor({ state: "detached" });
+  assert.equal(git(info.root, "rev-parse", "HEAD"), cherryPickHead);
+  assert.equal(git(info.root, "status", "--porcelain"), "");
+
   // squash 合入新增文件后再改成 AM，安全放弃应失败且完整保留现场。
   git(info.root, "checkout", "-qb", "browser/squash-am");
   writeFileSync(join(info.root, "conflict.txt"), "squash side\n");
@@ -293,9 +376,50 @@ try {
   assert.equal(git(info.root, "status", "--porcelain"), "");
   assert.equal(existsSync(join(info.root, "incoming.txt")), false);
   assert.equal(readFileSync(join(info.root, "conflict.txt"), "utf8"), "squash main\n");
+
+  // stash apply 冲突保留文件诊断和中文页面指引，但隐藏 Git status 的括号命令。
+  writeFileSync(join(info.root, "conflict.txt"), "stash apply version\n");
+  await refresh();
+  await tab("贮藏").click();
+  await page.getByRole("button", { name: "贮藏改动", exact: true }).click();
+  await dialog("贮藏当前改动").getByRole("textbox").fill("status hints apply stash");
+  await submitDialog("贮藏当前改动");
+  writeFileSync(join(info.root, "conflict.txt"), "committed against stash apply\n");
+  git(info.root, "add", "--", "conflict.txt");
+  git(info.root, "commit", "-qm", "conflict against stash apply");
+  await refresh();
+  const applyStash = page.locator(".gwb-ref-row", { hasText: "status hints apply stash" });
+  await applyStash.getByRole("button", { name: "应用", exact: true }).click();
+  const applyDialog = dialog("应用贮藏");
+  const applyFailure = await performAction(
+    () => applyDialog.getByRole("button", { name: "应用贮藏", exact: true }).click(),
+    false,
+  );
+  const applyMessage = String(applyFailure?.error || "");
+  assertConflictDiagnostic(applyMessage, "stash apply response");
+  assertNoStatusCliGuidance(applyMessage, "stash apply response");
+  const applyPageResult = await page.locator(".gwb-result").innerText();
+  assertConflictDiagnostic(applyPageResult, "stash apply page result");
+  assertNoStatusCliGuidance(applyPageResult, "stash apply page result");
+  await applyDialog.getByRole("button", { name: "关闭应用贮藏" }).click();
+  await tab("操作日志").click();
+  const applyLog = page.locator(".gwb-journal-entry.is-conflict", { hasText: "应用贮藏" }).first();
+  await applyLog.waitFor();
+  assertNoStatusCliGuidance(await applyLog.innerText(), "stash apply journal");
+  await page.getByRole("button", { name: "放弃冲突改动", exact: true }).click();
+  discardDialog = dialog("放弃冲突改动");
+  await discardDialog.getByLabel("输入目标以确认").fill("放弃冲突改动");
+  await submitDialog("放弃冲突改动");
+  await page.locator(".gwb-operation").waitFor({ state: "detached" });
+  assert.equal(git(info.root, "status", "--porcelain"), "");
   assert.deepEqual(
     actionKinds,
-    ["rebase", "abort", "merge", "discard-conflicts", "stage", "discard-conflicts"],
+    [
+      "rebase", "abort",
+      "cherry-pick", "skip", "cherry-pick", "abort",
+      "merge", "discard-conflicts", "stage", "discard-conflicts",
+      "stash-save", "stash-apply", "discard-conflicts",
+    ],
   );
   assert.deepEqual(browserErrors, [], `browser errors:\n${browserErrors.join("\n")}`);
   assert.deepEqual(requestFailures, [], `failed requests:\n${requestFailures.join("\n")}`);

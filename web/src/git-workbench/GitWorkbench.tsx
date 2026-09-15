@@ -13,7 +13,11 @@ import {
   Warning,
 } from "@phosphor-icons/react";
 import type { GitActionRequest, GitView } from "@ash/shared/git-workbench";
-import { gitChangeCount } from "@ash/shared/git-workbench";
+import {
+  EMPTY_CHERRY_PICK_MESSAGE,
+  gitChangeCount,
+  isEmptyCherryPick,
+} from "@ash/shared/git-workbench";
 import {
   ActionDialog,
   initialActionValues,
@@ -68,6 +72,7 @@ export function GitWorkbench({
   } | null>(null);
   const [conflict, setConflict] = useState<string | null>(null);
   const data = w.data;
+  const emptyPick = data ? isEmptyCherryPick(data.status) : false;
   const managed = data?.worktrees.some(
     (tree) => tree.path === data.root && tree.managed,
   );
@@ -336,20 +341,27 @@ export function GitWorkbench({
                 ? `${data.status.operation} 尚未完成`
                 : "还有未解决的冲突"}
             </strong>
-            <span>{data.status.merge.length} 个文件待解决</span>
+            <span>
+              {emptyPick
+                ? "没有可提交的改动"
+                : `${data.status.merge.length} 个文件待解决`}
+            </span>
             <div className="gwb-inline-actions">
-              <button
-                disabled={
-                  w.isBlocked("continue") ||
-                  !!data.status.merge.length ||
-                  !data.status.operation
-                }
-                onClick={() => void w.run({ kind: "continue" })}
-              >
-                继续操作
-              </button>
+              {!emptyPick && (
+                <button
+                  disabled={
+                    w.isBlocked("continue") ||
+                    !!data.status.merge.length ||
+                    !data.status.operation
+                  }
+                  onClick={() => void w.run({ kind: "continue" })}
+                >
+                  继续操作
+                </button>
+              )}
               {data.status.operation && data.status.operation !== "merge" && (
                 <button
+                  className={emptyPick ? "gwb-primary" : undefined}
                   disabled={w.isBlocked("skip")}
                   onClick={() =>
                     ask({
@@ -401,6 +413,7 @@ export function GitWorkbench({
               )}
             </div>
           </header>
+          {emptyPick && <p>{EMPTY_CHERRY_PICK_MESSAGE}</p>}
           {data.status.merge.map((file) => (
             <button
               key={file.path}

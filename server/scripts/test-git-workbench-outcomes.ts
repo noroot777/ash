@@ -11,6 +11,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GitAction, GitActionRequest } from "@ash/shared/git-workbench";
+import {
+  EMPTY_CHERRY_PICK_MESSAGE,
+  gitActionBlockReason,
+  isEmptyCherryPick,
+} from "@ash/shared/git-workbench";
 
 const directory = realpathSync(
   mkdtempSync(join(tmpdir(), "ash-workbench-outcomes-")),
@@ -48,7 +53,9 @@ try {
   const { executeWorkbench } = await import(
     "../src/git-workbench/operations.js"
   );
-  const { readConflict } = await import("../src/git-workbench/conflicts.js");
+  const { readConflict, continueOperation } = await import(
+    "../src/git-workbench/conflicts.js"
+  );
   const { confirmationFor } = await import("../src/git-workbench/core.js");
   await ensureSchema();
   const state = (root: string) => readWorkbench(root, root, "tester");
@@ -96,9 +103,23 @@ try {
     assert.equal(entry.state, outcome);
     assert.equal(entry.message, message);
     if (outcome === "conflict") {
-      assert.match(message, /CONFLICT[^\n]*file\.txt/);
+      if (current.status.merge.length) {
+        assert.match(message, /CONFLICT[^\n]*file\.txt/);
+      } else {
+        assert(
+          isEmptyCherryPick(current.status),
+          "expected an empty cherry-pick pause",
+        );
+        assert(message.includes(EMPTY_CHERRY_PICK_MESSAGE));
+        assert.doesNotMatch(message, /CONFLICT/);
+      }
       assert.doesNotMatch(message, /Command failed: git -C/);
       assert.doesNotMatch(message, /(?:^|\n)hint:/);
+      assert.doesNotMatch(message, /\((?:use|all conflicts fixed:)[^\n]*git /);
+      assert.doesNotMatch(
+        message,
+        /git (?:restore|add|commit)\b|--allow-empty/,
+      );
       assert.doesNotMatch(
         message,
         /git (?:rebase|cherry-pick|revert) --(?:continue|skip|abort)/,
@@ -321,6 +342,72 @@ try {
   }
   console.log(
     "ok · rebase/cherry-pick/revert retain both conflict stdout and failure stderr without command-line hints or persistent config changes",
+  );
+
+  for (const source of [
+    "already-applied",
+    "originally-empty",
+    "resolved-empty",
+  ] as const) {
+    const repo = seed(source);
+    let target: string;
+    if (source === "resolved-empty") {
+      git(repo, "checkout", "-qb", "other");
+      target = commit(repo, "other");
+      git(repo, "checkout", "-q", "main");
+      commit(repo, "main");
+    } else {
+      if (source === "originally-empty")
+        git(repo, "commit", "--allow-empty", "-qm", "empty source");
+      else commit(repo, "already applied");
+      target = git(repo, "rev-parse", "HEAD");
+    }
+    const head = git(repo, "rev-parse", "HEAD");
+    await rejected(repo, { kind: "cherry-pick", target }, "conflict");
+    if (source === "resolved-empty") await resolve(repo, "main");
+    const paused = await state(repo);
+    assert(isEmptyCherryPick(paused.status));
+    assert.equal(
+      gitActionBlockReason(paused.status, "continue"),
+      EMPTY_CHERRY_PICK_MESSAGE,
+    );
+    assert.equal(gitActionBlockReason(paused.status, "skip"), null);
+    const pausedSnapshot = await snapshot(repo);
+    const refused = await rejected(repo, { kind: "continue" }, "failed");
+    assert.equal(refused.journal[0].message, EMPTY_CHERRY_PICK_MESSAGE);
+    await assert.rejects(() => continueOperation(repo, "continue"), {
+      message: EMPTY_CHERRY_PICK_MESSAGE,
+    });
+    assert.deepEqual(await snapshot(repo), pausedSnapshot);
+    await run(repo, { kind: source === "resolved-empty" ? "abort" : "skip" });
+    assert.equal((await state(repo)).status.operation, null);
+    assert.equal(git(repo, "status", "--porcelain"), "");
+    assert.equal(git(repo, "rev-parse", "HEAD"), head);
+  }
+  const stagedPick = seed("empty-then-staged");
+  await rejected(
+    stagedPick,
+    { kind: "cherry-pick", target: "HEAD" },
+    "conflict",
+  );
+  writeFileSync(join(stagedPick, "note.txt"), "untracked note\n");
+  assert(isEmptyCherryPick((await state(stagedPick)).status));
+  write(stagedPick, "manual resolution");
+  assert.equal(isEmptyCherryPick((await state(stagedPick)).status), false);
+  await run(stagedPick, { kind: "stage", paths: ["file.txt"] });
+  assert.equal(
+    gitActionBlockReason((await state(stagedPick)).status, "continue"),
+    null,
+  );
+  await run(stagedPick, { kind: "continue" });
+  assert.equal((await state(stagedPick)).status.operation, null);
+  assert.equal(git(stagedPick, "show", "HEAD:file.txt"), "manual resolution");
+  assert.equal(
+    readFileSync(join(stagedPick, "note.txt"), "utf8"),
+    "untracked note\n",
+  );
+  console.log(
+    "ok · already-applied, originally empty and resolved-empty cherry-picks guide skip/abort; real staged changes still continue",
   );
 
   const replay = seed("continuation");

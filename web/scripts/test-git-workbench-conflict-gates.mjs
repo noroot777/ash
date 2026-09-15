@@ -469,14 +469,23 @@ try {
     () => popDialog.getByRole("button", { name: "弹出贮藏", exact: true }).click(),
     false,
   );
+  const popMessage = String(popFailure?.error || "");
   assert.match(
-    String(popFailure?.error || ""),
+    popMessage,
     /CONFLICT \(content\): Merge conflict in conflict\.txt/,
   );
-  assert.doesNotMatch(String(popFailure?.error || ""), /Command failed: git -C/);
-  assert.match(
-    await page.locator(".gwb-result").innerText(),
-    /CONFLICT \(content\): Merge conflict in conflict\.txt/,
+  assert.doesNotMatch(popMessage, /Command failed: git -C/);
+  assert.doesNotMatch(
+    popMessage,
+    /\([^)]*\bgit (?:restore|add|commit)\b[^)]*\)/i,
+    "stash pop response should hide parenthesized Git status commands",
+  );
+  const popPageResult = await page.locator(".gwb-result").innerText();
+  assert.match(popPageResult, /CONFLICT \(content\): Merge conflict in conflict\.txt/);
+  assert.doesNotMatch(
+    popPageResult,
+    /\([^)]*\bgit (?:restore|add|commit)\b[^)]*\)/i,
+    "stash pop page result should hide parenthesized Git status commands",
   );
   await popDialog.getByRole("button", { name: "关闭弹出贮藏" }).click();
   await page.getByText("还有未解决的冲突", { exact: true }).waitFor();

@@ -134,3 +134,15 @@ Windows 真机本轮验证：通过局域网传输 `git format-patch`，校验 S
 新增 `test-git-workbench-conflict-errors.mjs` 独立通过，接入后的 `web test:git-workbench` 四套全部退出码 0。页面驱动的变基冲突在响应、页面结果条和日志中保留文件诊断，并核对 stderr 失败原因及没有命令行冲突提示。squash 合入新增文件后再修改它，首次确认放弃被安全拒绝：HEAD、状态、索引及文件内容未变，响应/页面/失败日志保留原始文件名和中文指引。随后完全通过页面暂存该文件，再输入确认文字放弃，仓库恢复干净。
 
 浏览器先尝试 Chrome 扩展具名后台会话，命名失败原因为 `unsupported Codex auth method: apikey`，因此使用独立临时 profile 的无头 Chromium；未接管普通标签、激活 Chrome 或使用有头浏览器。Chromium、Vite、fixture 进程及临时目录已清理。本轮未修改平台路径或 win32 分支，验证在本机执行。新增浏览器脚本 314 行，所有修改的代码文件少于 700 行；`git diff --check` 通过。
+
+## 第 6 轮审查修复（2026-09-15）
+
+空拣选由 shared 的 `isEmptyCherryPick` 根据当前 Git 状态判断：正在 cherry-pick、没有未合并/暂存/未暂存改动，且列表未截断。前后端共用判据；页面给出中文说明，隐藏无效的继续按钮，把「跳过」放在首位并使用主按钮样式，同时保留中止。变更视图摘要也指向跳过/中止，刷新后仍能从仓库状态还原这一提示。API 和直接继续函数均拒绝空状态的继续请求；暂存实际改动后仍可继续，不会把正常冲突解决后的提交挡住。
+
+工作台 Git 调用增加单次 `advice.statusHints=false`，关闭 stash apply/pop 和 sequencer 长格式状态里的括号命令提示。Git 另外输出的标准空拣选建议块（含 `git commit --allow-empty`）替换为中文空提交诊断；其他原始 stdout/stderr 诊断继续保留，最终日志仍做脱敏和截断。空拣选的操作结果明确引导跳过或中止，不再要求不存在的冲突文件。
+
+本轮本机 `shared/server/web build` 和后端 `test:git-workbench` 全部通过：15 个核心场景、4 组安全、4 组维护及 7 组结果回归。新增已应用提交、原本为空的提交、冲突解决后变为空三种场景，核对空继续预检失败且现场不变、跳过/中止后状态结束且 HEAD 不变，以及新增实际暂存内容后继续成功、无关未跟踪文件保留。诊断断言按实际未合并文件与空暂停状态区分，stash apply/pop 等冲突也检查括号式 restore/add/commit 指令已消失。
+
+两个扩展后的浏览器脚本独立通过，完整 `web test:git-workbench` 四套全部退出码 0。真实页面拣选已应用提交，核对响应、页面结果条和日志的中文指引，无伪造的 `CONFLICT` 文件消息、无 allow-empty 或命令行操作提示；刷新后操作状态与变更摘要仍正确，继续入口隐藏，跳过为主按钮且执行成功，再次拣选后也可正常中止。真实 stash apply/pop 的响应与页面均检查括号式 Git 指令消失。
+
+浏览器沿用本任务会话中已实测的扩展不可用状态：具名 Chrome 后台会话命名返回 `unsupported Codex auth method: apikey`，因此使用独立临时 profile 的无头 Chromium。未接管普通标签、激活用户 Chrome 或使用有头浏览器。Chromium、Vite、fixture 及临时目录已清理；本轮未修改平台路径或 win32 分支，验证在本机执行。修改的代码文件均少于 700 行，最长 600 行；`git diff --check` 通过。
