@@ -96,11 +96,11 @@ export function ConversationSelection({ taskId, onAsk, onAddToReply, children }:
     {children}
     {selected && createPortal(<div className="conversation-selection-action" ref={toolbar} style={{ left, top: selected.top }}>
       {onAddToReply && <button type="button" onPointerDown={(event) => event.preventDefault()}
-        onClick={take(onAddToReply)}><Quotes size={16} />添加到对话</button>}
+        onClick={take(onAddToReply)}><Quotes size={13} />添加到对话</button>}
       <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={take((text) => {
         stageSideChatQuote(taskId, text);
         onAsk();
-      })}><Chats size={16} />在侧聊中提问</button>
+      })}><Chats size={13} />在侧聊中提问</button>
     </div>, document.body)}
   </div>;
 }
