@@ -173,6 +173,10 @@ async function runAction(
     case "resolve":
       await resolveConflict(root, action);
       return "冲突文件已保存并暂存";
+    case "discard-conflicts":
+      if (!status.branch.oid) fail("当前 HEAD 尚无提交，无法恢复冲突文件");
+      await git(root, ["reset", "--merge", "HEAD"]);
+      return "已放弃冲突及暂存改动，HEAD 未改变";
     case "continue":
     case "abort":
     case "skip":
@@ -272,7 +276,11 @@ export async function executeWorkbench(
           safeGitMessage(
             error instanceof Error ? error.message : String(error),
           ) +
-          (inProgress ? "\nGit 操作尚未完成，请在冲突面板继续或中止。" : "");
+          (inProgress
+            ? status?.operation
+              ? "\nGit 操作尚未完成，请在冲突面板继续或中止。"
+              : "\nGit 操作尚未完成，请解决并暂存冲突后提交，或在冲突面板放弃冲突改动。"
+            : "");
         await appendEntry(repo, entry).catch(() => {});
         throw new ScmOperationError(
           entry.message,

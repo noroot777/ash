@@ -36,6 +36,7 @@ export const actionLabels: Record<string, string> = {
   "rebase-plan": "交互式变基",
   continue: "继续操作",
   abort: "中止操作",
+  "discard-conflicts": "放弃冲突改动",
   skip: "跳过提交",
   resolve: "解决冲突",
   "stash-save": "贮藏改动",

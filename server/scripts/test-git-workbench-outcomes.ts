@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+  existsSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -9,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { GitAction } from "@ash/shared/git-workbench";
+import type { GitAction, GitActionRequest } from "@ash/shared/git-workbench";
 
 const directory = realpathSync(
   mkdtempSync(join(tmpdir(), "ash-workbench-outcomes-")),
@@ -51,7 +52,14 @@ try {
   const { confirmationFor } = await import("../src/git-workbench/core.js");
   await ensureSchema();
   const state = (root: string) => readWorkbench(root, root, "tester");
-  const run = async (root: string, action: GitAction) => {
+  type RequestOverrides = Partial<
+    Pick<GitActionRequest, "version" | "confirmation">
+  >;
+  const run = async (
+    root: string,
+    action: GitAction,
+    overrides: RequestOverrides = {},
+  ) => {
     const current = await state(root);
     return executeWorkbench(
       root,
@@ -62,6 +70,7 @@ try {
         version: current.version,
         action,
         confirmation: confirmationFor(action, current.status) || undefined,
+        ...overrides,
       },
     );
   };
@@ -70,11 +79,14 @@ try {
     action: GitAction,
     outcome: "failed" | "conflict",
     status = 409,
+    overrides: RequestOverrides = {},
   ) => {
+    let message = "";
     await assert.rejects(
-      () => run(root, action),
+      () => run(root, action, overrides),
       (error: unknown) => {
         assert.equal((error as { status: number }).status, status);
+        message = (error as Error).message;
         return true;
       },
     );
@@ -82,6 +94,14 @@ try {
     const entry = current.journal[0];
     assert.equal(entry.action, action.kind);
     assert.equal(entry.state, outcome);
+    assert.equal(entry.message, message);
+    if (
+      outcome === "conflict" &&
+      ["merge", "stash-apply", "stash-pop"].includes(action.kind)
+    ) {
+      assert.match(message, /CONFLICT[^\n]*file\.txt/);
+      assert.doesNotMatch(message, /Command failed: git -C/);
+    }
     assert.equal(
       entry.message.includes("Git 操作尚未完成"),
       outcome === "conflict",
@@ -104,7 +124,27 @@ try {
       head: git(root, "rev-parse", "HEAD"),
       refs: git(root, "show-ref"),
       index: git(root, "ls-files", "--stage"),
-      content: readFileSync(join(root, "file.txt"), "utf8"),
+      files: Object.fromEntries(
+        [
+          ...new Set(
+            git(
+              root,
+              "ls-files",
+              "--cached",
+              "--others",
+              "--exclude-standard",
+              "-z",
+            )
+              .split("\0")
+              .filter(Boolean),
+          ),
+        ].map((path) => [
+          path,
+          existsSync(join(root, path))
+            ? readFileSync(join(root, path), "utf8")
+            : null,
+        ]),
+      ),
     };
   };
 
@@ -144,6 +184,7 @@ try {
     ],
     [{ kind: "continue" }, 409],
     [{ kind: "skip" }, 400],
+    [{ kind: "discard-conflicts" }, 409],
   ];
   for (const [action, status] of invalid) {
     const current = await rejected(root, action, "failed", status);
@@ -157,8 +198,98 @@ try {
   }
   await run(root, { kind: "abort" });
   await rejected(root, { kind: "stage", paths: ["missing.txt"] }, "failed");
+  const cleanSnapshot = await snapshot(root);
+  await rejected(root, { kind: "discard-conflicts" }, "failed");
+  assert.deepEqual(await snapshot(root), cleanSnapshot);
   console.log(
     "ok · allow-list validation failures preserve existing conflict and log failed in both conflicted and clean repositories",
+  );
+
+  const squash = seed("squash-discard");
+  for (const file of ["staged.txt", "unstaged.txt"])
+    writeFileSync(join(squash, file), "base\n");
+  git(squash, "add", ".");
+  git(squash, "commit", "-qm", "unrelated files");
+  git(squash, "checkout", "-qb", "other");
+  writeFileSync(join(squash, "incoming.txt"), "incoming\n");
+  git(squash, "add", "incoming.txt");
+  commit(squash, "other");
+  git(squash, "checkout", "-q", "main");
+  const squashHead = commit(squash, "main");
+  const squashed = await rejected(
+    squash,
+    { kind: "merge", target: "other", strategy: "squash" },
+    "conflict",
+  );
+  assert.equal(squashed.status.operation, null);
+  assert.equal(squashed.status.merge.length, 1);
+  assert.equal(squashed.backups.length, 1);
+  write(squash, "unfinished conflict draft");
+  writeFileSync(join(squash, "staged.txt"), "staged edits\n");
+  git(squash, "add", "staged.txt");
+  writeFileSync(join(squash, "unstaged.txt"), "keep unstaged\n");
+  writeFileSync(join(squash, "untracked.txt"), "keep untracked\n");
+  const pending = await snapshot(squash);
+  for (const confirmation of [undefined, "wrong text"]) {
+    await rejected(squash, { kind: "discard-conflicts" }, "failed", 400, {
+      confirmation,
+    });
+    assert.deepEqual(await snapshot(squash), pending);
+  }
+  await rejected(squash, { kind: "discard-conflicts" }, "failed", 409, {
+    version: squashed.version,
+  });
+  assert.deepEqual(await snapshot(squash), pending);
+  await rejected(
+    squash,
+    { kind: "reset", target: "HEAD", mode: "hard" },
+    "failed",
+  );
+  assert.deepEqual(await snapshot(squash), pending);
+  // An unstaged edit to an incoming indexed file prevents a safe reset.
+  writeFileSync(join(squash, "incoming.txt"), "keep incoming draft\n");
+  const unsafe = await snapshot(squash);
+  const refusedDiscard = await rejected(
+    squash,
+    { kind: "discard-conflicts" },
+    "failed",
+  );
+  assert.match(refusedDiscard.journal[0].message, /incoming\.txt/);
+  assert.deepEqual(await snapshot(squash), unsafe);
+  writeFileSync(join(squash, "incoming.txt"), "incoming\n");
+  const discarded = await run(squash, { kind: "discard-conflicts" });
+  assert.equal(discarded.entry.state, "succeeded");
+  assert.equal(discarded.entry.command, "git reset --merge HEAD");
+  assert.equal(discarded.entry.before, squashHead);
+  assert.equal(discarded.entry.after, squashHead);
+  const reset = await state(squash);
+  assert.equal(reset.status.operation, null);
+  assert.equal(reset.status.merge.length, 0);
+  assert.equal(reset.status.staged.length, 0);
+  assert.equal(git(squash, "ls-files", "--unmerged"), "");
+  assert.equal(readFileSync(join(squash, "file.txt"), "utf8"), "main\n");
+  assert.equal(readFileSync(join(squash, "staged.txt"), "utf8"), "base\n");
+  assert.equal(
+    readFileSync(join(squash, "unstaged.txt"), "utf8"),
+    "keep unstaged\n",
+  );
+  assert.equal(
+    readFileSync(join(squash, "untracked.txt"), "utf8"),
+    "keep untracked\n",
+  );
+  assert.equal(existsSync(join(squash, "incoming.txt")), false);
+  assert.deepEqual(reset.backups, squashed.backups);
+  await run(squash, {
+    kind: "stage",
+    paths: ["unstaged.txt", "untracked.txt"],
+  });
+  await run(squash, {
+    kind: "commit",
+    message: "preserved work",
+    amend: false,
+  });
+  console.log(
+    "ok · squash conflict discard requires fresh typed confirmation, preserves HEAD and unrelated work, and safely refuses overlapping unstaged edits",
   );
 
   const replay = seed("continuation");
@@ -192,6 +323,9 @@ try {
     },
     "conflict",
   );
+  const rebaseSnapshot = await snapshot(planned);
+  await rejected(planned, { kind: "discard-conflicts" }, "failed");
+  assert.deepEqual(await snapshot(planned), rebaseSnapshot);
   await run(planned, { kind: "abort" });
   console.log(
     "ok · real continue/skip attempts reaching another conflict and interactive rebase keep conflict outcomes",
@@ -215,10 +349,15 @@ try {
     assert.equal(conflicted.status.operation, null);
     assert.equal(conflicted.status.merge.length, 1);
     assert.equal(conflicted.stashes[0].sha, stash.sha);
-    git(repo, "reset", "--hard", "HEAD");
+    await run(repo, { kind: "discard-conflicts" });
+    const discarded = await state(repo);
+    assert.equal(discarded.status.merge.length, 0);
+    assert.equal(discarded.status.branch.oid, conflicted.status.branch.oid);
+    assert.equal(discarded.stashes[0].sha, stash.sha);
+    assert.equal(readFileSync(join(repo, "file.txt"), "utf8"), "main\n");
   }
   console.log(
-    "ok · stash apply/pop conflicts without an active sequencer keep conflict outcomes and retain the stash",
+    "ok · stash apply/pop diagnostics survive and conflict discard restores HEAD contents while retaining the stash",
   );
 
   for (const strategy of ["merge", "rebase"] as const) {

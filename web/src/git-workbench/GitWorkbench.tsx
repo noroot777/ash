@@ -381,6 +381,24 @@ export function GitWorkbench({
                   中止操作
                 </button>
               )}
+              {!data.status.operation && (
+                <button
+                  className="gwb-danger"
+                  disabled={w.isBlocked("discard-conflicts")}
+                  onClick={() =>
+                    ask({
+                      title: "放弃冲突改动",
+                      danger: true,
+                      typed: "放弃冲突改动",
+                      message:
+                        "把索引和冲突文件恢复到当前 HEAD。当前暂存的改动及冲突解决结果会被丢弃；无法安全保留的其他工作区改动会使 Git 拒绝操作。历史备份不包含未提交内容，请先复制需要保留的内容。",
+                      action: () => ({ kind: "discard-conflicts" }),
+                    })
+                  }
+                >
+                  放弃冲突改动
+                </button>
+              )}
             </div>
           </header>
           {data.status.merge.map((file) => (
@@ -395,7 +413,9 @@ export function GitWorkbench({
             </button>
           ))}
           {!data.status.operation && (
-            <p>贮藏等操作的冲突解决后，可到变更视图提交结果。</p>
+            <p>
+              解决并暂存所有冲突后，可到变更视图提交结果；也可放弃当前冲突及暂存改动。
+            </p>
           )}
         </section>
       )}

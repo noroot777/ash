@@ -37,6 +37,7 @@ const fields: Record<string, Record<string, string>> = {
   continue: {},
   abort: {},
   skip: {},
+  "discard-conflicts": {},
   resolve: {
     path: "string",
     version: "string",

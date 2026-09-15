@@ -159,6 +159,7 @@ export type GitAction =
   | { kind: "rebase"; target: string }
   | { kind: "rebase-plan"; target: string; steps: RebaseStep[] }
   | { kind: "continue" | "abort" | "skip" }
+  | { kind: "discard-conflicts" }
   | {
       kind: "resolve";
       path: string;
@@ -194,6 +195,10 @@ export function gitActionBlockReason(
   status: Pick<GitStatus, "operation" | "merge">,
   kind?: GitAction["kind"],
 ): string | null {
+  if (kind === "discard-conflicts")
+    return !status.operation && status.merge.length
+      ? null
+      : "仅在没有进行中的 Git 操作且仍有未解决冲突时，可放弃冲突改动";
   if (!status.operation && !status.merge.length) return null;
   switch (kind) {
     case "resolve":

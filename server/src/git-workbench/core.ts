@@ -31,7 +31,10 @@ export async function git(
     });
     return result.stdout;
   } catch (error) {
-    return fail(gitError(error));
+    const output = error as { stderr?: string; stdout?: string };
+    return fail(
+      output.stderr?.trim() || output.stdout?.trim() || gitError(error),
+    );
   }
 }
 
@@ -150,6 +153,8 @@ export function confirmationFor(
   status: ScmStatus,
 ): string | null {
   switch (action.kind) {
+    case "discard-conflicts":
+      return "放弃冲突改动";
     case "backup-delete":
       return action.ref;
     case "remote-remove":

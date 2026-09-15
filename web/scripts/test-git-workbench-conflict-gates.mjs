@@ -249,6 +249,12 @@ try {
   const mergeOnlyChanges = await page.getByRole("region", { name: "工作区变更" }).innerText();
   assert.match(mergeOnlyChanges, /1 个冲突待解决 · 请在上方冲突面板处理/);
   assert.doesNotMatch(mergeOnlyChanges, /所有改动已提交/);
+  await expectEnabled(page.getByRole("button", { name: "中止操作", exact: true }), "abort regular merge");
+  assert.equal(
+    await page.getByRole("button", { name: "放弃冲突改动", exact: true }).count(),
+    0,
+    "regular merge must keep its abort path instead of discard-conflicts",
+  );
   await page.setViewportSize({ width: 390, height: 844 });
   assert(
     (await page.evaluate(() => document.documentElement.scrollWidth)) <= 390,
@@ -374,8 +380,25 @@ try {
   // 再造一次冲突，真实保存选边结果并继续合并。
   git(info.root, "reset", "--hard", "HEAD");
   git(info.root, "clean", "-fd");
-  mergeConflict(info.root);
   await refresh();
+  await tab("分支").click();
+  const conflictBranch = page.locator(".gwb-ref-row", { hasText: "feature/conflict" });
+  await conflictBranch.getByLabel("feature/conflict 分支操作").selectOption("merge");
+  const mergeDialog = dialog("合并 feature/conflict");
+  const mergeFailure = await performAction(
+    () => mergeDialog.getByRole("button", { name: "合并 feature/conflict", exact: true }).click(),
+    false,
+  );
+  assert.match(
+    String(mergeFailure?.error || ""),
+    /CONFLICT \(content\): Merge conflict in conflict\.txt/,
+  );
+  assert.doesNotMatch(String(mergeFailure?.error || ""), /Command failed: git -C/);
+  assert.match(
+    await page.locator(".gwb-result").innerText(),
+    /CONFLICT \(content\): Merge conflict in conflict\.txt/,
+  );
+  await mergeDialog.getByRole("button", { name: "关闭合并 feature/conflict" }).click();
   await page.getByRole("button", { name: /conflict\.txt/ }).click();
   const conflictDialog = dialog(/解决冲突/);
   await expectEnabled(conflictDialog.getByRole("button", { name: "采用我方", exact: true }), "choose conflict side");
@@ -424,8 +447,8 @@ try {
   assert.equal(git(info.root, "status", "--porcelain"), "", "skipped rebase should leave a clean worktree");
   assert.deepEqual(
     actionPosts.slice(conflictActionStart),
-    ["stage", "unstage", "abort", "resolve", "continue", "skip"],
-    "conflict periods should only POST shared allow-list actions",
+    ["stage", "unstage", "abort", "merge", "resolve", "continue", "skip"],
+    "conflict periods should only POST allow-list actions after the clean-state merge trigger",
   );
 
   // stash pop 冲突没有 operation；变更视图仍须指向上方冲突面板，解决并提交后才显示干净。
@@ -446,7 +469,15 @@ try {
     () => popDialog.getByRole("button", { name: "弹出贮藏", exact: true }).click(),
     false,
   );
-  assert.match(String(popFailure?.error || ""), /CONFLICT|冲突/i);
+  assert.match(
+    String(popFailure?.error || ""),
+    /CONFLICT \(content\): Merge conflict in conflict\.txt/,
+  );
+  assert.doesNotMatch(String(popFailure?.error || ""), /Command failed: git -C/);
+  assert.match(
+    await page.locator(".gwb-result").innerText(),
+    /CONFLICT \(content\): Merge conflict in conflict\.txt/,
+  );
   await popDialog.getByRole("button", { name: "关闭弹出贮藏" }).click();
   await page.getByText("还有未解决的冲突", { exact: true }).waitFor();
   await tab("变更").click();
@@ -467,6 +498,76 @@ try {
     await page.getByRole("region", { name: "工作区变更" }).innerText(),
     /所有改动已提交/,
   );
+
+  // squash merge 冲突没有 MERGE_HEAD，必须提供带打字确认的独立放弃入口。
+  git(info.root, "checkout", "-qb", "browser/squash-side");
+  writeFileSync(join(info.root, "conflict.txt"), "squash side\n");
+  git(info.root, "add", "--", "conflict.txt");
+  git(info.root, "commit", "-qm", "squash side conflict");
+  git(info.root, "checkout", "-q", "main");
+  writeFileSync(join(info.root, "conflict.txt"), "squash main\n");
+  git(info.root, "add", "--", "conflict.txt");
+  git(info.root, "commit", "-qm", "squash main conflict");
+  await refresh();
+  await tab("分支").click();
+  const squashBranch = page.locator(".gwb-ref-row", { hasText: "browser/squash-side" });
+  await squashBranch.getByLabel("browser/squash-side 分支操作").selectOption("merge");
+  const squashDialog = dialog("合并 browser/squash-side");
+  await squashDialog.locator("select").selectOption("squash");
+  const squashFailure = await performAction(
+    () => squashDialog.getByRole("button", { name: "合并 browser/squash-side", exact: true }).click(),
+    false,
+  );
+  assert.match(
+    String(squashFailure?.error || ""),
+    /CONFLICT \(content\): Merge conflict in conflict\.txt/,
+  );
+  assert.doesNotMatch(String(squashFailure?.error || ""), /Command failed: git -C/);
+  assert.match(
+    await page.locator(".gwb-result").innerText(),
+    /CONFLICT \(content\): Merge conflict in conflict\.txt/,
+  );
+  await squashDialog.getByRole("button", { name: "关闭合并 browser/squash-side" }).click();
+  await page.getByText("还有未解决的冲突", { exact: true }).waitFor();
+  assert.equal(
+    await page.getByRole("button", { name: "中止操作", exact: true }).count(),
+    0,
+    "squash conflict must not offer merge --abort",
+  );
+  const discardConflicts = page.getByRole("button", { name: "放弃冲突改动", exact: true });
+  await expectEnabled(discardConflicts, "discard squash conflict");
+  assert.doesNotMatch(await page.locator(".gwb-operation").innerText(), /贮藏等操作/);
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert(
+    (await page.evaluate(() => document.documentElement.scrollWidth)) <= 390,
+    "mobile squash conflict actions should not overflow horizontally",
+  );
+  await page.screenshot({
+    path: join(info.directory, "squash-conflict-mobile.png"),
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await discardConflicts.click();
+  let discardDialog = dialog("放弃冲突改动");
+  let discardConfirm = discardDialog.getByRole("button", { name: "放弃冲突改动", exact: true });
+  await expectDisabled(discardConfirm, "discard confirmation before typed phrase");
+  await discardDialog.getByLabel("输入目标以确认").fill("错误确认");
+  await expectDisabled(discardConfirm, "discard confirmation with wrong phrase");
+  await discardDialog.getByRole("button", { name: "取消", exact: true }).click();
+  await discardDialog.waitFor({ state: "detached" });
+  await page.getByText("还有未解决的冲突", { exact: true }).waitFor();
+  assert.match(git(info.root, "status", "--porcelain"), /^UU conflict\.txt$/m);
+  await discardConflicts.click();
+  discardDialog = dialog("放弃冲突改动");
+  discardConfirm = discardDialog.getByRole("button", { name: "放弃冲突改动", exact: true });
+  await discardDialog.getByLabel("输入目标以确认").fill("放弃冲突改动");
+  await expectEnabled(discardConfirm, "discard confirmation with exact phrase");
+  await performAction(() => discardConfirm.click());
+  await discardDialog.waitFor({ state: "detached" });
+  await page.locator(".gwb-operation").waitFor({ state: "detached" });
+  assert.equal(git(info.root, "status", "--porcelain"), "", "discarded squash conflict should be clean");
+  await tab("分支").click();
+  await expectEnabled(page.getByRole("button", { name: "新建分支", exact: true }), "normal actions after discard");
   assert.notEqual(
     spawnSync("git", ["-C", info.root, "show-ref", "--verify", "refs/heads/must-not-be-created"]).status,
     0,

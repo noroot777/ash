@@ -55,6 +55,8 @@ export function displayCommand(action: GitAction): string {
       return `git ${action.kind} ${action.mainline ? `-m ${action.mainline} ` : ""}${target}`;
     case "reset":
       return `git reset --${action.mode} ${target}`;
+    case "discard-conflicts":
+      return "git reset --merge HEAD";
     case "continue":
     case "abort":
     case "skip":

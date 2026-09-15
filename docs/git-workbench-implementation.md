@@ -108,3 +108,17 @@ Windows 真机本轮验证：通过局域网传输 `git format-patch`，校验 S
 本轮 `shared/server/web build` 均通过，最终 `web test:git-workbench` 三套浏览器回归全部退出码 0。新增断言覆盖仅 UU 的 merge 冲突、已解决但尚待 continue、无 operation 的 stash pop 冲突，以及继续或提交后的真实干净状态。390px 冲突页面无横向溢出。完整回归首轮在旧长流程的 abort 遇到一次 Git `index.lock`；该用例单独复跑和随后的完整回归均通过。旧长流程的截图目录也已补上 finally 清理。
 
 浏览器先尝试扩展具名后台会话，命名失败原文为 `unsupported Codex auth method: apikey`，随后采用独立临时 profile 的无头 Chromium；未接管普通标签、激活用户 Chrome 或使用有头浏览器。本轮 fixture、Vite、Chromium、截图和临时目录均已清理，`git diff --check` 通过。验证在本机执行，未修改平台路径或 win32 分支。
+
+## 第 4 轮审查修复（2026-09-15）
+
+工作台的 Git 命令错误先取非空 stderr，再取 stdout，最后回退到原错误消息；改动仅限工作台，不影响全服务端共用的 `gitError`。因此 merge、squash merge、stash apply/pop 的真实 `CONFLICT` 诊断及文件名会进入响应、页面结果条、通知和操作日志，仍经过现有凭证脱敏及长度限制。
+
+无进行中操作、但仍有未合并文件时，冲突面板提供「放弃冲突改动」。该动作要求输入同名确认文字，在仓库锁内核对最新状态、权限及任务占用后执行 `git reset --merge HEAD`。普通 merge/rebase 仍使用原来的中止入口，普通 reset 的冲突限制保持不变；干净仓库和已有进行中操作均拒绝新动作。失败记为 `failed`，不会借用原现场记为新冲突。
+
+页面及错误指引改为通用的「解决并暂存后提交，或放弃冲突改动」，不推测冲突来自贮藏还是合并。确认弹窗明确说明当前暂存改动及冲突编辑将被丢弃，历史备份不包含未提交内容。新动作不改 HEAD；Git 无法安全保留其他未暂存改动时拒绝执行。
+
+本轮本机 `shared/server/web build` 均通过；后端 `test:git-workbench` 的 15 个核心场景、4 组安全、4 组维护及 5 组结果回归全部通过。新增真实仓库断言覆盖 merge/squash/stash 的 Git 原始诊断与文件名、响应和日志消息一致、缺失/错误确认及过期页面不改现场、普通 merge/rebase/干净状态拒绝放弃、HEAD 和已有备份不变、冲突及暂存内容撤回、无关未暂存与未跟踪文件保留、重叠未暂存改动使 reset 安全拒绝，以及放弃 stash 冲突后贮藏记录仍保留。
+
+新增浏览器冲突回归单独通过，完整 `web test:git-workbench` 三套也全部退出码 0。页面驱动的 merge、stash pop、squash merge 均验证真实诊断出现在响应及页面结果条；普通 merge 仍使用中止入口。squash 冲突验证空/错误确认禁用、取消保留冲突、完整文字确认后清除冲突并恢复普通操作。390px 页面自动断言无横向溢出；截图仅用于捕获，未进行人工视觉审阅。初次新测试误将确认弹窗的通用失败指引当作诊断显示位置，改为检查实际页面结果条后通过。
+
+浏览器通道先探测并选择 Chrome 扩展，创建具名后台会话的命名步骤返回 `unsupported Codex auth method: apikey`，因此降级到独立临时 profile 的无头 Chromium。未接管普通标签、激活用户 Chrome 或使用有头浏览器。fixture、Vite、Chromium、截图和临时 profile 已退出或清理。本轮没有修改平台路径或 win32 分支，验证在本机执行。修改的代码文件均少于 700 行，最长 591 行；`git diff --check` 通过。
