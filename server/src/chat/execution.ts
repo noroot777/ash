@@ -96,7 +96,13 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
         if (event.kind === "tool" && options?.purpose === "side-authorization") throw new ChatBoundaryError("回传授权核验调用使用了工具，核验未采用");
         if (event.kind === "tool" && options?.purpose === "summary") throw new ChatBoundaryError("后台摘要调用使用了工具，摘要未采用");
         if (event.kind === "tool" && options?.purpose === "assistant") throw new AssistantToolError(event.name);
-        if (event.kind === "tool" && !readOnlyChatTool(event)) throw new ChatBoundaryError(`检测到写入或无法确认只读的工具（${JSON.stringify(event.name.slice(0, 80))}）`);
+        // 侧聊不走只读闸门（用户 2026-09-15 指定）：它跑在主任务自己的工作目录里，用户在侧栏
+        // 让它「去核查一下」时就是要它跑命令、必要时动手改。闸门的分类器只认白名单里的裸命令，
+        // 一个 `git log --oneline | head` 就被判成「无法确认只读」，把整次咨询连回复一起中止。
+        // 群聊/助手/摘要仍受闸门约束——那些跑在项目主仓或临时目录里，和任务无绑定关系。
+        // 任务结算类写入不靠这条闸门挡：侧聊的 env 不带 ASH_TURN_TOKEN，complete_task 一类
+        // MCP 写入在服务端就会被拒。
+        if (event.kind === "tool" && options?.purpose !== "side" && !readOnlyChatTool(event)) throw new ChatBoundaryError(`检测到写入或无法确认只读的工具（${JSON.stringify(event.name.slice(0, 80))}）`);
         signal.throwIfAborted();
         if (event.kind === "text") text += event.text;
         if (text.length > 32000) throw new Error("聊天回复过长，已中止。请把复杂工作交给任务。");

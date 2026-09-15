@@ -146,9 +146,10 @@ try {
   assert.ok(existsSync(sideWorktree), "侧聊结束不清理主任务的工作区");
   await assert.rejects(invokeChat(member, null, "错误父项目", signal, "home-directory", { purpose: "side", taskId: "side-parent" }), /主任务已不可访问/);
   sideWriteTool = true;
-  await assert.rejects(invokeChat(member, null, "侧聊不能写入", signal, "project", { purpose: "side", taskId: "side-parent" }), /写入或无法确认只读/);
+  const sideWrite = parseChatReply((await invokeChat(member, null, "侧聊可以动手", signal, "project", { purpose: "side", taskId: "side-parent" })).text);
+  assert.equal(sideWrite.reply, "主任务工作区的代码，而非项目主仓", "侧聊的写入类工具事件不再中止咨询");
   sideWriteTool = false;
-  console.log("side execution: 只读解析主任务会话 cwd，不继承 CLI 身份，不创建或删除工作区，跨项目绑定拒绝");
+  console.log("side execution: 解析主任务会话 cwd，工具不受只读闸门限制，不继承 CLI 身份，不创建或删除工作区，跨项目绑定拒绝");
   fail = true;
   await assert.rejects(invokeChat(member, null, "咨询", signal, "project"), /fixture read failed/);
   assert.ok(existsSync(projectDir));
