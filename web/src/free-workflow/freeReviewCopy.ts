@@ -55,6 +55,14 @@ export type FreeReviewView = {
   /** 最近一条链异常停止（验收页要警示，不能静默当成没审过） */
   failedRun: FreeReviewRun | null;
   taskBusy: boolean;
+  /**
+   * 此刻在跑的是**审查/验证旁路回合**（服务端的运行时事实，不是从 reviews 里猜的）。
+   *
+   * 预览类动作按它放行：那种回合只读工作区、不产出新一版代码，`taskBusy` 那条「代码改到
+   * 一半，预览没有意义」的理由对它不成立。判据必须与后端完全一致（server 的
+   * review-turn.ts），否则就是「后端允许、按钮却灰着」或者「按钮能点、请求吃 409」。
+   */
+  reviewTurn: boolean;
   /** 任务挂着待答复的提问或待续跑的检查点指令 —— 「立即派审/修复/开预览」后端必拒（409）。 */
   waiting: boolean;
   reservationArmed: boolean;
@@ -93,6 +101,7 @@ export function freeReviewView(state: FreeWorkflowState | null | undefined, task
     stoppedRun,
     failedRun,
     taskBusy,
+    reviewTurn: !!state?.reviewTurn,
     waiting,
     reservationArmed,
     reservationMode: taskBusy || waiting || reservationArmed,

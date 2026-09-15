@@ -231,6 +231,20 @@ const pausedCheckpointState: FreeWorkflowApiState = {
   reviews: [],
 };
 
+// 审查旁路回合正在跑的样子：任务 status 是 running（审查跑在被审任务自己身上），但服务端
+// 报出 reviewTurn=true —— 那一轮只读代码，预览照常开得了（后端同样放行）。
+const reviewTurnState: FreeWorkflowApiState = {
+  ...repairState,
+  taskId: "free-review-turn-task",
+  reviewTurn: true,
+  reviews: repairState.reviews.map((run) => ({
+    ...run,
+    id: "run-review-turn",
+    status: "reviewing" as const,
+    rounds: [{ ...run.rounds[0], status: "reviewing" as const, conclusion: null, endedAt: null }],
+  })),
+};
+
 const reviewer = {
   id: "reviewer-one", name: "Codex 审查", agentType: "codex", executorId: "reviewer-executor",
   executorLabel: "codex@test", model: "gpt-test", reasoningEffort: "high",
@@ -323,6 +337,12 @@ window.fetch = (input, init) => {
       headers: { "content-type": "application/json" },
     }));
   }
+  if (url.pathname.startsWith("/api/tasks/free-review-turn-task/free-workflow")) {
+    return Promise.resolve(new Response(JSON.stringify(reviewTurnState), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+  }
   if (url.pathname === "/api/tasks/free-accept-ui/commits" || url.pathname === "/api/tasks/free-reviewing-ui/commits" || url.pathname === "/api/tasks/post-merge-ui/commits") {
     return Promise.resolve(new Response(JSON.stringify({ branch: "ash/free-accept-ui", commits: [] }), {
       status: 200,
@@ -343,6 +363,21 @@ window.fetch = (input, init) => {
       status: 200,
       headers: { "content-type": "application/json" },
     }));
+  }
+  // 验收按钮在按下之前要先等一次**验收依赖检查**（`useBranchPlan` → GET /branch-plan）。
+  // 这几个 fixture 任务都开着 worktree，缺这条 mock 的话请求会漏到静态服务器上吃 404，
+  // 按钮就永远停在「检查验收依赖」/「验收依赖读取失败」，压根走不到「验收通过」。
+  if (url.pathname.startsWith("/api/tasks/") && url.pathname.endsWith("/branch-plan")) {
+    const taskId = url.pathname.split("/").at(-2) ?? "free-accept-ui";
+    return Promise.resolve(new Response(JSON.stringify({
+      task: {
+        taskId, projectId: "project-fixture", title: "自由任务", status: "done", stage: null,
+        startCommit: "0123456789abcdef", targetBranch: "main", sourceCommit: "0123456789abcdef",
+        targetCommit: "0123456789abcdef", strategy: "merge",
+        dependency: null, blocker: null, baseUpdatePending: false, fingerprint: "fixture",
+      },
+      descendants: [],
+    }), { status: 200, headers: { "content-type": "application/json" } }));
   }
   if (url.pathname === "/api/reviewer-profiles") {
     return Promise.resolve(new Response(JSON.stringify([reviewer]), {
@@ -512,6 +547,18 @@ const waitingChatTask = {
   resumePrompt: "【任务接力】本任务从另一台机器接力到本机继续。",
 } as Task;
 
+// 审查进行中的任务：status=running 是因为审查旁路回合跑在它自己身上，而那一轮只读代码。
+// 「打开预览」不能跟着灰掉——审查那十几分钟正是用户最想自己点开页面看一眼的时候。
+const reviewTurnTask = {
+  id: "free-review-turn-task",
+  title: "审查进行中的任务",
+  status: "running",
+  mode: "single",
+  parentId: null,
+  reviewOf: null,
+  workflowMode: "free",
+} as Task;
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <div>
@@ -544,6 +591,11 @@ createRoot(document.getElementById("root")!).render(
       <aside className="inspector-host reservation-inspector-fixture" style={{ width: 380, height: 360, marginTop: 20, marginLeft: "auto" }}>
         <FreeWorkflowInspector task={manualChatTask} reviewOnly notify={() => undefined} />
       </aside>
+      {/* 摆在最后、不进顶部那条网格：往顶上加一行会把下面所有东西推下去，审查证据抽屉里
+          的截图就被挤出视口，点不着了（实测）。 */}
+      <div className="toolbar-review-turn-fixture" style={{ width: 760, marginTop: 20, marginLeft: "auto", background: "white", padding: 8 }}>
+        <FreeWorkflowToolbar task={reviewTurnTask} notify={() => undefined} />
+      </div>
     </div>
   </StrictMode>,
 );

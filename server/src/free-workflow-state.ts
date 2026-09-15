@@ -25,6 +25,7 @@ import { freeReviewScreenshots, readFreeReviewReport } from "./free-review-files
 import { headCommit, workspaceDirty, worktreePathFor } from "./git.js";
 import { existsSync } from "node:fs";
 import { previewState } from "./preview-public.js";
+import { reviewTurnInFlight } from "./review-turn.js";
 import { profilesOwnedBy } from "./auth/owned-executors.js";
 
 export type FreeWorkflowApiState = Omit<FreeWorkflowState, "merge">;
@@ -218,11 +219,15 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
     }
     : null;
   const workspace = await workspaceStateOf(task);
+  // 旁路回合的运行时身份（见 review-turn.ts）。前端拿它决定预览那颗按钮灰不灰——两边同
+  // 一个判据，才不会出现「后端放行、按钮却灰着」或者反过来的假按钮。
+  const reviewTurn = reviewTurnInFlight(taskId);
   // workspace（HEAD/dirty）不经 task.review 事件也会变（agent/用户直接改工作区）：指纹
   // 变化时也 bump，否则两份不同内容的快照拿同一版本、迟到的旧响应能抹掉「结论过期」
   // 警示（审查实测）。版本在指纹核对后取——DB 读取期间的变更会由随后的事件 bump +
-  // SSE 重取覆盖，方向自愈。
-  const fp = `${workspace.head}|${workspace.dirty}|${task.status}`;
+  // SSE 重取覆盖，方向自愈。reviewTurn 一并入指纹：它不落库、也不单独发事件，靠状态
+  // 变更顺带 bump 的话，旁路回合起落那一下前端可能拿不到新版本。
+  const fp = `${workspace.head}|${workspace.dirty}|${task.status}|${reviewTurn}`;
   if (workspaceFingerprints.get(taskId) !== fp) {
     workspaceFingerprints.set(taskId, fp);
     revisions.set(taskId, Math.max(revisionOf(taskId) + 1, Date.now()));
@@ -244,6 +249,7 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
       runId: reservationRunId,
     },
     preview: previewState(taskId),
+    reviewTurn,
     executions,
     reviews,
   };

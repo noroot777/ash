@@ -83,17 +83,21 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: Noti
     setLogOpen(false);
   }, [task.id]);
   const view = freeReviewView(free.state, task);
-  const { latestRun, reviewing, stoppedRun, taskBusy, waiting, reservationArmed, reservationMode, repairing, stale } = view;
+  const { latestRun, reviewing, stoppedRun, taskBusy, waiting, reservationArmed, reservationMode, repairing, stale, reviewTurn } = view;
   const taskReady = task.status !== "backlog";
-  // 等待答复/续跑期间**立即发起**的动作（派审/修复/打开预览）后端必拒（409），按钮同步
-  // 禁用；「预约」不在其列——后端 reserveFreeReview 根本没有这道门禁，任务正等续跑时预约
-  // 一轮「跑完就审」恰恰是该允许的。取消预约、关闭预览是控制类动作，同样不能锁死。
+  // 等待答复/续跑期间**立即发起**的派审/修复后端必拒（409），按钮同步禁用；「预约」不在
+  // 其列——后端 reserveFreeReview 根本没有这道门禁，任务正等续跑时预约一轮「跑完就审」
+  // 恰恰是该允许的。取消预约、关闭预览是控制类动作，同样不能锁死。
   // waiting / reservationMode 的定义在 freeReviewCopy.ts 里,和 Inspector 共用一份:
   // 两边各写一份的时候就漂过——底部那颗灰、侧栏那颗能点。
   // 接力出去的任务在本机是历史存档:派审/修复/开预览这些发起类动作后端一律 409,
   // 这里按同一口径锁死(取消预约、关预览是清理,照常可点)。
   const locked = task.stage === "accepted" || task.stage === "merged" || task.archived
     || task.handoff?.direction === "out";
+  // 预览那颗**不**跟着 waiting 走：后端起预览这一路压根没有提问/续跑门禁（对着一个停在
+  // 检查点的任务开预览没有任何危险，工作区没人在动），跟着锁死只会让用户在最想照着页面
+  // 回答审查者提问的那一刻点不动按钮。它只认「有没有一个会改代码的回合在飞」。
+  const previewBlocked = taskBusy && !reviewTurn;
   const reviewLabel = reviewing
     ? "审查中"
     : reservationArmed
@@ -207,8 +211,10 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: Noti
           {reservationArmed && <i className="free-review-armed-dot" aria-hidden="true" />}
         </button>
         {/* 启动中这颗是**可点的取消**，不是一颗灰着的「处理中」：那八分钟里用户唯一想做的
-            就是「我不等了」，而后端此刻确实收得掉（记录、pid、装依赖的进程都在盘上）。 */}
-        <button type="button" className={`is-preview${previewBusy ? " is-busy" : ""}`} data-state={action === "closing" ? "closing" : previewStarting ? "starting" : free.state?.preview.running ? "running" : "idle"} aria-pressed={!!free.state?.preview.running} disabled={!taskReady || taskBusy || locked || !!reviewing || action === "canceling" || action === "closing" || (waiting && !free.state?.preview.running)} onClick={() => void (previewStarting ? cancelPreview() : togglePreview())}>
+            就是「我不等了」，而后端此刻确实收得掉（记录、pid、装依赖的进程都在盘上）。
+            审查/验证旁路回合进行中照样可点（previewBlocked 已经把它放过去了）：那种回合
+            只读工作区，用户此刻正该自己打开页面看一眼，后端为此同样放行。 */}
+        <button type="button" className={`is-preview${previewBusy ? " is-busy" : ""}`} data-state={action === "closing" ? "closing" : previewStarting ? "starting" : free.state?.preview.running ? "running" : "idle"} aria-pressed={!!free.state?.preview.running} disabled={!taskReady || previewBlocked || locked || action === "canceling" || action === "closing"} onClick={() => void (previewStarting ? cancelPreview() : togglePreview())}>
           {previewBusy ? <SpinnerGap size={13} className="is-spinning" /> : free.state?.preview.running ? <StopCircle size={13} weight="regular" /> : <MonitorPlay size={13} weight="regular" />}
           <span>{action === "closing" ? "关闭中" : action === "canceling" ? "取消中" : previewStarting ? "启动中·点此取消" : free.state?.preview.running ? "关闭预览" : "打开预览"}</span>
         </button>
