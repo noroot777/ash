@@ -355,6 +355,14 @@
   font-size: 10px;
   overflow-wrap: anywhere;
 }
+.gwb-backups > .gwb-section-head {
+  margin: 0;
+  padding: 17px;
+  border-bottom: 1px solid var(--line);
+}
+.gwb-backups .gwb-ref-info > code {
+  overflow-wrap: anywhere;
+}
 .gwb-operation {
   flex: none;
   max-height: 240px;

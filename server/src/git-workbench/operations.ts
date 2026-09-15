@@ -37,6 +37,7 @@ import { continueOperation, resolveConflict } from "./conflicts.js";
 import { rebasePlan } from "./rebase.js";
 import { displayCommand, safeGitMessage } from "./command.js";
 import { runRemoteAction } from "./remotes.js";
+import { cleanupRebaseHelpers, deleteBackup } from "./maintenance.js";
 
 const historyActions = new Set([
   "merge",
@@ -87,6 +88,14 @@ async function runAction(
   if (await runSyncAction(repo, root, projectId, action))
     return "远端操作已完成";
   switch (action.kind) {
+    case "backup-delete":
+      await deleteBackup(root, action.ref, action.sha);
+      return "备份已删除，其独有历史可由 Git 垃圾回收释放";
+    case "rebase-cleanup": {
+      const result = await cleanupRebaseHelpers(root);
+      if (result.blocked) fail(result.blocked);
+      return `已清理 ${result.removed} 个已结束变基的辅助目录`;
+    }
     case "stage": {
       const result = await stagePaths(root, repo, action.paths);
       return `已暂存 ${result.affected} 个路径${result.note ? `；${result.note}` : ""}`;

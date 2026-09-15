@@ -63,6 +63,7 @@ export function GitWorkbench({
   } | null>(null);
   const [conflict, setConflict] = useState<string | null>(null);
   const data = w.data;
+  const inProgress = !!data?.status.operation || !!data?.status.merge.length;
   const managed = data?.worktrees.some(
     (tree) => tree.path === data.root && tree.managed,
   );
@@ -199,14 +200,14 @@ export function GitWorkbench({
             </button>
           )}
           <button
-            disabled={w.blocked || !data?.remotes.length}
+            disabled={w.blocked || inProgress || !data?.remotes.length}
             onClick={() => void w.run({ kind: "fetch", remote: "" })}
           >
             <ArrowClockwise size={14} />
             获取
           </button>
           <button
-            disabled={w.blocked || !data?.status.branch.upstream}
+            disabled={w.blocked || inProgress || !data?.status.branch.upstream}
             onClick={pull}
           >
             <ArrowDown size={14} />
@@ -214,7 +215,10 @@ export function GitWorkbench({
           </button>
           <button
             disabled={
-              w.blocked || !data?.remotes.length || !data?.status.branch.oid
+              w.blocked ||
+              inProgress ||
+              !data?.remotes.length ||
+              !data?.status.branch.oid
             }
             onClick={() => push()}
           >
@@ -266,6 +270,7 @@ export function GitWorkbench({
             <button
               disabled={
                 w.blocked ||
+                inProgress ||
                 !data.refs.some(
                   (r) =>
                     r.kind === "remote" &&

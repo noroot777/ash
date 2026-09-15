@@ -1,6 +1,7 @@
 import { ClockCounterClockwise } from "@phosphor-icons/react";
 import type { AskAction } from "./ActionDialog.tsx";
 import type { Workbench } from "./useWorkbench.ts";
+import { Backups } from "./Backups.tsx";
 
 const states = {
   queued: "排队中",
@@ -11,6 +12,8 @@ const states = {
   interrupted: "服务曾中断",
 };
 export const actionLabels: Record<string, string> = {
+  "backup-delete": "删除备份",
+  "rebase-cleanup": "清理变基辅助文件",
   "remote-add": "添加远端",
   "remote-url": "修改远端地址",
   "remote-remove": "移除远端",
@@ -61,6 +64,7 @@ export function OperationLog({
   const data = w.data!;
   return (
     <section className="gwb-page">
+      <Backups workbench={w} ask={ask} />
       <div className="gwb-section-head">
         <div>
           <h2>操作日志</h2>
@@ -69,8 +73,11 @@ export function OperationLog({
       </div>
       <div className="gwb-journal">
         {data.journal.map((entry) => {
+          const backupAvailable = data.backups.some(
+            (backup) => backup.ref === entry.backup,
+          );
           const undoable =
-            !!entry.backup &&
+            backupAvailable &&
             entry.recovery === "head" &&
             entry.state === "succeeded" &&
             entry.root === data.root &&
@@ -108,7 +115,10 @@ export function OperationLog({
                     </code>
                   </small>
                 )}
-                {entry.backup && (
+                {entry.backup && !backupAvailable && (
+                  <small>历史备份已删除</small>
+                )}
+                {entry.backup && backupAvailable && (
                   <div className="gwb-backup">
                     <span>
                       历史备份 <code>{entry.backup}</code>

@@ -2,6 +2,8 @@ import type { GitActionRequest } from "@ash/shared/git-workbench";
 import { fail } from "./core.js";
 
 const fields: Record<string, Record<string, string>> = {
+  "backup-delete": { ref: "string", sha: "sha" },
+  "rebase-cleanup": {},
   "remote-add": { name: "string", url: "string" },
   "remote-url": { name: "string", url: "string", version: "sha" },
   "remote-remove": { name: "string", version: "sha" },

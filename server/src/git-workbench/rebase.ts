@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { RebaseStep } from "@ash/shared/git-workbench";
 import { commitOid, fail, git } from "./core.js";
 import { journalDirectory } from "./journal.js";
+import { cleanupRebaseHelpers } from "./maintenance.js";
 
 const shellWord = (word: string) =>
   `'${word.replace(/\\/g, "/").replace(/'/g, `'"'"'`)}'`;
@@ -56,27 +57,33 @@ export async function rebasePlan(
     `rebase-${randomUUID()}`,
   );
   await mkdir(directory, { recursive: true });
-  const node = shellWord(process.execPath);
-  const amend = join(directory, "amend.cjs");
-  await writeFile(
-    amend,
-    "const {spawnSync}=require('node:child_process');const r=spawnSync('git',['commit','--amend','--file',process.argv[2]],{stdio:'inherit',windowsHide:true});process.exit(r.status??1);\n",
-  );
-  const todo: string[] = [];
-  for (const [i, step] of steps.entries()) {
-    todo.push(`${step.action === "reword" ? "pick" : step.action} ${step.sha}`);
-    if (step.action === "reword") {
-      const message = join(directory, `message-${i}.txt`);
-      await writeFile(message, step.message + "\n");
-      todo.push(`exec ${node} ${shellWord(amend)} ${shellWord(message)}`);
+  try {
+    const node = shellWord(process.execPath);
+    const amend = join(directory, "amend.cjs");
+    await writeFile(
+      amend,
+      "const {spawnSync}=require('node:child_process');const r=spawnSync('git',['commit','--amend','--file',process.argv[2]],{stdio:'inherit',windowsHide:true});process.exit(r.status??1);\n",
+    );
+    const todo: string[] = [];
+    for (const [i, step] of steps.entries()) {
+      todo.push(
+        `${step.action === "reword" ? "pick" : step.action} ${step.sha}`,
+      );
+      if (step.action === "reword") {
+        const message = join(directory, `message-${i}.txt`);
+        await writeFile(message, step.message + "\n");
+        todo.push(`exec ${node} ${shellWord(amend)} ${shellWord(message)}`);
+      }
     }
+    const editor = join(directory, "sequence.cjs");
+    await writeFile(
+      editor,
+      `require('node:fs').writeFileSync(process.argv[2],${JSON.stringify(todo.join("\n") + "\n")});\n`,
+    );
+    await git(root, ["rebase", "-i", base], {
+      GIT_SEQUENCE_EDITOR: `${node} ${shellWord(editor)}`,
+    });
+  } finally {
+    await cleanupRebaseHelpers(root);
   }
-  const editor = join(directory, "sequence.cjs");
-  await writeFile(
-    editor,
-    `require('node:fs').writeFileSync(process.argv[2],${JSON.stringify(todo.join("\n") + "\n")});\n`,
-  );
-  await git(root, ["rebase", "-i", base], {
-    GIT_SEQUENCE_EDITOR: `${node} ${shellWord(editor)}`,
-  });
 }

@@ -8,6 +8,7 @@ function conflictBlocks(content: string) {
   const pattern =
     /^<<<<<<<[^\n]*\n([\s\S]*?)^=======[^\n]*\n([\s\S]*?)^>>>>>>>[^\n]*(?:\n|$)/gm;
   return [...content.matchAll(pattern)].map((match) => ({
+    start: match.index,
     text: match[0],
     ours: match[1].split(/^\|{7}[^\n]*\n/m)[0],
     theirs: match[2],
@@ -47,6 +48,12 @@ export function ConflictDialog({
     };
   }, [projectId, w.data!.root, path]);
   const blocks = conflictBlocks(draft);
+  const applyBlock = (block: (typeof blocks)[number], content: string) =>
+    setDraft(
+      draft.slice(0, block.start) +
+        content +
+        draft.slice(block.start + block.text.length),
+    );
   const save = async (choice: "ours" | "theirs" | "content" | "delete") => {
     if (!conflict || busy || w.blocked) return;
     setBusy(true);
@@ -162,29 +169,20 @@ export function ConflictDialog({
                         <div className="gwb-inline-actions">
                           <button
                             disabled={busy}
-                            onClick={() =>
-                              setDraft(draft.replace(block.text, block.ours))
-                            }
+                            onClick={() => applyBlock(block, block.ours)}
                           >
                             采用我方
                           </button>
                           <button
                             disabled={busy}
-                            onClick={() =>
-                              setDraft(draft.replace(block.text, block.theirs))
-                            }
+                            onClick={() => applyBlock(block, block.theirs)}
                           >
                             采用对方
                           </button>
                           <button
                             disabled={busy}
                             onClick={() =>
-                              setDraft(
-                                draft.replace(
-                                  block.text,
-                                  block.ours + block.theirs,
-                                ),
-                              )
+                              applyBlock(block, block.ours + block.theirs)
                             }
                           >
                             两者都要

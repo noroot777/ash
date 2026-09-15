@@ -13,6 +13,7 @@ import { literalPathspec, readScmStatus } from "../git-status.js";
 import { cappedGitStdout } from "../git-exec.js";
 import { isInsidePath } from "../platform.js";
 import { digest, fail, git } from "./core.js";
+import { cleanupRebaseHelpers } from "./maintenance.js";
 
 async function conflictStages(root: string, path: string) {
   assertPathShape([path]);
@@ -147,5 +148,9 @@ export async function continueOperation(
   if (action === "continue" && status.merge.length) fail("还有未解决的冲突");
   if (action === "skip" && status.operation === "merge")
     fail("合并不能跳过提交", 400);
-  await git(root, [status.operation, `--${action}`]);
+  try {
+    await git(root, [status.operation, `--${action}`]);
+  } finally {
+    if (status.operation === "rebase") await cleanupRebaseHelpers(root);
+  }
 }

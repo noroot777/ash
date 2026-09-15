@@ -100,6 +100,7 @@ export interface GitWorkbenchState {
   worktrees: GitWorktree[];
   stashes: GitStash[];
   journal: GitJournalEntry[];
+  backups: { ref: string; sha: string; subject: string }[];
   busy: boolean;
   readOnly: string | null;
 }
@@ -125,6 +126,8 @@ export interface RebaseStep {
   message: string;
 }
 export type GitAction =
+  | { kind: "backup-delete"; ref: string; sha: string }
+  | { kind: "rebase-cleanup" }
   | { kind: "remote-add"; name: string; url: string }
   | { kind: "remote-url"; name: string; url: string; version: string }
   | { kind: "remote-remove"; name: string; version: string }

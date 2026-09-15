@@ -25,6 +25,7 @@ import { lockedRepoKeys } from "../repo-lock.js";
 import { git, digest, commitOid, fail, stateVersion } from "./core.js";
 import { readJournal } from "./journal.js";
 import { readRemoteDetails } from "./remotes.js";
+import { readBackups } from "./maintenance.js";
 
 export const ownerPrefix = (actor: string) =>
   `[ash:${digest(actor).slice(0, 12)}]`;
@@ -87,16 +88,25 @@ export async function readWorkbench(
   actor: string,
 ): Promise<GitWorkbenchState> {
   const status = await readScmStatus(root);
-  const [refs, remotes, overview, stashes, journal, version, porcelain] =
-    await Promise.all([
-      readRefs(root),
-      readScmRemotes(root),
-      getGitOverview(repo),
-      readStashes(root, actor),
-      readJournal(repo),
-      stateVersion(root, status),
-      git(repo, ["worktree", "list", "--porcelain", "-z"]),
-    ]);
+  const [
+    refs,
+    remotes,
+    overview,
+    stashes,
+    journal,
+    version,
+    porcelain,
+    backups,
+  ] = await Promise.all([
+    readRefs(root),
+    readScmRemotes(root),
+    getGitOverview(repo),
+    readStashes(root, actor),
+    readJournal(repo),
+    stateVersion(root, status),
+    git(repo, ["worktree", "list", "--porcelain", "-z"]),
+    readBackups(root),
+  ]);
   const locked = new Set(
     porcelain
       .split("\0\0")
@@ -113,6 +123,7 @@ export async function readWorkbench(
     version,
     stashes,
     journal,
+    backups,
     worktrees: await Promise.all(
       overview.worktrees.map(async (w) => ({
         ...w,

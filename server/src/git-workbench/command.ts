@@ -12,6 +12,10 @@ export function displayCommand(action: GitAction): string {
         (action.paths.length > 20 ? " …" : "")
       : "";
   switch (action.kind) {
+    case "backup-delete":
+      return `git update-ref -d ${quote(action.ref)} ${quote(action.sha)}`;
+    case "rebase-cleanup":
+      return "清理已结束变基的工作台辅助文件";
     case "remote-add":
       return `git remote add ${name} <url>`;
     case "remote-url":

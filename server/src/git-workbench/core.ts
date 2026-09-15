@@ -150,6 +150,8 @@ export function confirmationFor(
   status: ScmStatus,
 ): string | null {
   switch (action.kind) {
+    case "backup-delete":
+      return action.ref;
     case "remote-remove":
       return action.name;
     case "remote-delete-ref":
