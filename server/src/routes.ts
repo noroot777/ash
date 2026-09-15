@@ -41,6 +41,7 @@ import { mountTaskRunRoutes } from "./task-run-routes.js";
 import { mountHandoffRoutes } from "./handoff-routes.js";
 import { mountFileRoutes } from "./file-routes.js";
 import { mountProjectGitRoutes } from "./project-git-routes.js";
+import { mountGitWorkbenchRoutes } from "./git-workbench/routes.js";
 import { mountScmRoutes } from "./scm-routes.js";
 import { mountTaskDiffRoutes } from "./task-diff-routes.js";
 import { mountOpenAiConverterRoutes } from "./openai-converter/routes.js";
@@ -454,6 +455,7 @@ mountHandoffRoutes(api);
 mountFileRoutes(api);
 mountScmRoutes(api);
 mountProjectGitRoutes(api);
+mountGitWorkbenchRoutes(api);
 // 任务分支相对合入目标的只读 diff:整份 + 单文件(从 task-accept.ts 拆出,它管的是验收本身)。
 mountTaskDiffRoutes(api);
 // ── 供应商 (relay, system-level) — 挂给执行器用,ash 不直连它跑推理 ────────

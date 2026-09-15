@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Git workbench browser regression</title>
+    <style>
+      html, body, #root { min-height: 100%; }
+      body { margin: 0; }
+      .fixture-project { min-height: 100vh; padding: 32px; }
+      .fixture-project-card { width: min(520px, calc(100vw - 64px)); padding: 24px; }
+      .fixture-workbench { min-height: 100vh; }
+      [data-testid="fixture-notice"], [data-testid="fixture-opened-task"] {
+        position: fixed; left: 8px; bottom: 8px; z-index: 100; max-width: 50vw;
+        font: 11px/1.4 ui-monospace, monospace; opacity: .65;
+      }
+      [data-testid="fixture-opened-task"] { bottom: 26px; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/scripts/fixtures/git-workbench.tsx"></script>
+  </body>
+</html>

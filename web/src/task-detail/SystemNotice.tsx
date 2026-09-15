@@ -1,5 +1,6 @@
 import { ArrowClockwise, CheckCircle, Clock, Info, WarningCircle } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
+import { openGitWorkbench } from "../git-workbench/navigation.ts";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { previewNoticeText } from "../lib/previewUrl.ts";
 import { MessageAttachments } from "./Attachments.tsx";
@@ -177,6 +178,9 @@ export function SystemAuthoredMessage({ item, related = [], surface = "task", mo
   const paths = [...parsed.paths, ...item.attachments];
   const text = parsed.body || item.text;
   const conflict = isConflictHandoff(text);
+  const location = new URLSearchParams(typeof window === "undefined" ? "" : window.location.search);
+  const projectId = location.get("project");
+  const taskId = location.get("task");
   const files = conflict ? conflictFiles(text) : [];
   const title = conflict ? "验收遇到冲突" : systemPromptTitle(text);
   const summary = conflict
@@ -196,6 +200,7 @@ export function SystemAuthoredMessage({ item, related = [], surface = "task", mo
             {item.at && <time>{formatInstant(item.at)}</time>}
           </div>
           <div className="system-action-meta">
+            {conflict && projectId && taskId && <button type="button" onClick={() => openGitWorkbench({ projectId, taskId, view: "branches" })}>打开 Git 工作台处理</button>}
             {!!files.length && <span>{files.length} 个冲突文件</span>}
             <details className="system-action-details">
               <summary>{conflict ? "查看处理步骤" : "查看完整内容"}</summary>

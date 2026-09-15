@@ -392,7 +392,7 @@ export async function taskCommits(
 // `target_dirty` 挡掉：这个项目从此再也验收不成功。写进 `.git/info/exclude` 而不是
 // `.gitignore`：忽略是 ash 自己的实现细节，不该往用户仓库里塞一个待提交的改动。
 // 幂等（已有同样一行就不再写），失败只警告——它不该拦住任务开工。
-async function ensureWorktreesIgnored(repo: string): Promise<void> {
+export async function ensureWorktreesIgnored(repo: string): Promise<void> {
   const entry = ".worktrees/";
   try {
     // worktree 里的 .git 是文件而不是目录，exclude 只存在于 common dir。

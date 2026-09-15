@@ -1,3 +1,5 @@
+import { api } from "../lib/api.ts";
+import { openGitWorkbench } from "../git-workbench/navigation.ts";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowClockwise,
@@ -417,6 +419,8 @@ export function ScmInspector({
           改动条目太多，下面这份没有列全。
         </p>
       )}
+
+      <button type="button" className="project-git-workbench-entry" onClick={() => { void api.task(taskId).then((task) => openGitWorkbench({ projectId: task.projectId, taskId })).catch((error: Error) => notify(error.message)); }}>打开此工作区的 Git 工作台 →</button>
 
       {!readOnly && (
         <section className="scm-commit">

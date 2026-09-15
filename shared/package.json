@@ -133,6 +133,10 @@
     "./page-annotation-review": {
       "types": "./src/page-annotation-review.ts",
       "default": "./src/page-annotation-review.ts"
+    },
+    "./git-workbench": {
+      "types": "./src/git-workbench.ts",
+      "default": "./src/git-workbench.ts"
     }
   },
   "scripts": {

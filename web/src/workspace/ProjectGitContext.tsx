@@ -38,6 +38,7 @@ export function ProjectGitContext({
   onOpenTerminal: (() => void) | null;
 }) {
   const [open, setOpen] = useState(false);
+  useEffect(() => { const close = () => setOpen(false); window.addEventListener("popstate", close); return () => window.removeEventListener("popstate", close); }, []);
   const root = useRef<HTMLSpanElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const git = useProjectGit(projectId, open);

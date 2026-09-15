@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { ArrowsClockwise, GitBranch, MagnifyingGlass, Terminal, Warning } from "@phosphor-icons/react";
+import { openGitWorkbench } from "../git-workbench/navigation.ts";
 import { api } from "../lib/api.ts";
 import type { ProjectGitHandle } from "./useProjectGit.ts";
 import { ProjectGitActions } from "./ProjectGitActions.tsx";
@@ -68,7 +69,7 @@ export function ProjectGitPanel({
       {state?.operation && (
         <p className="project-git-panel__warn">
           <Warning size={12} weight="fill" aria-hidden="true" />
-          仓库停在 {state.operation} 中途，先到终端把它收尾或 abort。
+          仓库停在 {state.operation} 中途，请打开 Git 工作台继续或中止。
         </p>
       )}
       {dirty && (
@@ -107,6 +108,7 @@ export function ProjectGitPanel({
         }}
       />
 
+      <button type="button" className="project-git-workbench-entry" onClick={() => { if (projectId) openGitWorkbench({ projectId }); }}>打开 Git 工作台 →</button>
       <p className="project-git-panel__note">
         {canManage
           ? "这里改的是项目主仓，所有任务共用它：切换分支会改变新建任务的默认 base 分支，也会改变没有独立 worktree 的任务看到的内容。已经建好的 worktree 不受影响。"

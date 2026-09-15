@@ -1,0 +1,304 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { chromium } from "playwright-core";
+import { createServer } from "vite";
+import { chromeLaunchOptions } from "./chrome-path.mjs";
+
+const repo = fileURLToPath(new URL("../..", import.meta.url));
+const webRoot = fileURLToPath(new URL("..", import.meta.url));
+const fixturePath = join(repo, "server/scripts/fixtures/git-workbench-server.ts");
+
+const until = async (probe, hint, attempts = 160) => {
+  for (let i = 0; i < attempts; i += 1) {
+    if (await probe()) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`等不到：${hint}`);
+};
+
+function startBackend() {
+  const child = spawn(process.execPath, ["--import", "tsx", fixturePath], {
+    cwd: repo,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, FORCE_COLOR: "0" },
+  });
+  let stdout = "";
+  let stderr = "";
+  const ready = new Promise((resolve, reject) => {
+    const fail = (message) => reject(new Error(`${message}\n${stderr}\n${stdout}`));
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      for (const line of stdout.split(/\r?\n/)) {
+        try {
+          const value = JSON.parse(line);
+          if (value?.port && value?.projectId && value?.root) return resolve(value);
+        } catch { /* wait for the JSON readiness line */ }
+      }
+    });
+    child.once("error", reject);
+    child.once("exit", (code, signal) => fail(`Git workbench fixture exited before readiness (${code ?? signal})`));
+    setTimeout(() => fail("Git workbench fixture did not become ready"), 15_000).unref();
+  });
+  const close = async () => {
+    if (child.exitCode !== null || child.signalCode) return;
+    child.kill("SIGTERM");
+    await Promise.race([
+      new Promise((resolve) => child.once("exit", resolve)),
+      new Promise((resolve) => setTimeout(resolve, 5_000)),
+    ]);
+    if (child.exitCode === null && !child.signalCode) child.kill("SIGKILL");
+  };
+  return { child, ready, close, diagnostics: () => ({ stdout, stderr }) };
+}
+
+const backend = startBackend();
+let vite;
+let browser;
+let page;
+const browserErrors = [];
+const requestFailures = [];
+let screenshotDirectory;
+
+const tab = (name) => page.getByRole("navigation", { name: "Git 工作台视图" }).getByRole("button", { name: new RegExp(`^${name}`) });
+const dialog = (name) => page.getByRole("dialog", { name });
+const currentView = async () => new URL(page.url()).searchParams.get("gitView");
+const waitIdle = () => until(async () => page.getByLabel("选择工作树").isEnabled(), "Git 工作台操作结束");
+const performAction = async (trigger, expectedOk = true) => {
+  let actionReceived = false;
+  const pending = page.waitForResponse((response) => response.request().method() === "POST" && /\/git\/workbench\/actions$/.test(new URL(response.url()).pathname));
+  const refreshed = page.waitForResponse((response) => actionReceived && response.request().method() === "GET" && /\/git\/workbench$/.test(new URL(response.url()).pathname));
+  await trigger();
+  const response = await pending;
+  actionReceived = true;
+  const body = await response.json().catch(() => null);
+  assert.equal(response.ok(), expectedOk, `Git action HTTP ${response.status()}: ${JSON.stringify(body)}`);
+  await refreshed;
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await waitIdle();
+  return body;
+};
+const waitMessage = async (pattern) => {
+  await until(async () => pattern.test(await page.getByTestId("fixture-notice").innerText()), pattern.toString());
+};
+const submitDialog = async (title, button = title) => {
+  const box = dialog(title);
+  await performAction(() => box.getByRole("button", { name: button, exact: true }).click());
+  await box.waitFor({ state: "detached" });
+};
+
+try {
+  const info = await backend.ready;
+  vite = await createServer({
+    root: webRoot,
+    logLevel: "error",
+    server: {
+      host: "127.0.0.1",
+      port: 0,
+      strictPort: false,
+      proxy: { "/api": { target: `http://127.0.0.1:${info.port}` } },
+    },
+  });
+  await vite.listen();
+  const address = vite.httpServer?.address();
+  assert(address && typeof address === "object", "Vite test server did not expose a port");
+  const url = `http://127.0.0.1:${address.port}/scripts/fixtures/git-workbench.html?project=${encodeURIComponent(info.projectId)}`;
+
+  browser = await chromium.launch(await chromeLaunchOptions());
+  page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error" && !message.text().startsWith("Failed to load resource:")) browserErrors.push(message.text());
+  });
+  page.on("requestfailed", (request) => requestFailures.push(`${request.method()} ${request.url()} · ${request.failure()?.errorText}`));
+  await page.goto(url);
+
+  // 项目侧栏分支胶囊是工作台入口；进入后 URL 成为可后退、可刷新的真实路由。
+  const pill = page.locator(".workspace-git-context");
+  await pill.waitFor();
+  assert.match(await pill.getAttribute("aria-label"), /分支 main.*有未提交改动/);
+  await pill.click();
+  await page.getByRole("button", { name: "打开 Git 工作台 →", exact: true }).click();
+  await page.getByRole("heading", { name: /Git 工作台/ }).waitFor();
+  assert.equal(await currentView(), "changes");
+  for (const name of ["变更", "历史", "分支", "贮藏", "标签", "工作树", "操作日志"]) {
+    await tab(name).waitFor();
+  }
+
+  await tab("历史").click();
+  assert.equal(await currentView(), "history");
+  await page.goBack();
+  await page.getByRole("region", { name: "工作区变更" }).waitFor();
+  assert.equal(await currentView(), "changes");
+  await page.reload();
+  await page.getByRole("region", { name: "工作区变更" }).waitFor();
+  assert.equal(await currentView(), "changes", "刷新保留 Git 工作台视图");
+
+  // 同一文件两处修改：先按单行暂存 BETA，再按剩余块暂存 IOTA；新增文件按整文件暂存。
+  await page.getByRole("button", { name: /sample\.txt/ }).first().click();
+  const betaRemoved = page.getByRole("button", { name: /行 .*-beta$/ });
+  const betaAdded = page.getByRole("button", { name: /行 .*\+BETA$/ });
+  await betaRemoved.waitFor();
+  await betaRemoved.click();
+  await betaAdded.click();
+  await performAction(() => page.getByRole("button", { name: "暂存所选改动", exact: true }).click());
+  await waitMessage(/已暂存所选改动/);
+
+  const unstagedGroup = page.locator(".gwb-file-group", { has: page.locator("header", { hasText: "未暂存" }) });
+  await unstagedGroup.getByRole("button", { name: "sample.txt modified", exact: true }).click();
+  const hunk = page.getByRole("button", { name: /选择改动块/ }).last();
+  await hunk.waitFor();
+  await hunk.click();
+  await performAction(() => page.getByRole("button", { name: "暂存所选改动", exact: true }).click());
+  await waitMessage(/已暂存所选改动/);
+
+  await performAction(() => page.getByRole("button", { name: "暂存 新增文件.txt", exact: true }).click());
+  const stagedGroup = page.locator(".gwb-file-group", { has: page.locator("header", { hasText: "已暂存" }) });
+  await stagedGroup.getByRole("button", { name: /新增文件\.txt/ }).first().waitFor();
+  await page.getByLabel("提交信息").fill("浏览器提交");
+  await performAction(() => page.getByRole("button", { name: /提交已暂存/ }).click());
+  await waitMessage(/已提交暂存区内容/);
+  await waitIdle();
+  assert.match(await page.getByRole("region", { name: "工作区变更" }).innerText(), /所有改动已提交/);
+
+  // 历史详情可建分支和标签；历史筛选、详情和路由都来自真实 Git。
+  await tab("历史").click();
+  const browserCommit = page.getByRole("button", { name: /浏览器提交/ });
+  await browserCommit.waitFor();
+  await browserCommit.click();
+  await page.getByLabel("提交操作").selectOption("branch");
+  await dialog("从提交新建分支").getByText("分支名").locator("..").getByRole("textbox").fill("browser/history-branch");
+  await submitDialog("从提交新建分支");
+  await waitMessage(/操作已完成/);
+
+  await browserCommit.click();
+  await page.getByLabel("提交操作").selectOption("tag");
+  const tagDialog = dialog("为提交打标签");
+  await tagDialog.getByText("标签名").locator("..").getByRole("textbox").fill("browser-v1");
+  await tagDialog.getByRole("textbox").nth(1).fill("浏览器标签");
+  await submitDialog("为提交打标签");
+
+  // 制造一份新的真实改动，从 UI 贮藏并查看差异。
+  await writeFile(join(info.root, "stash-browser.txt"), "stash from browser test\n");
+  await page.getByRole("button", { name: "刷新 Git 工作台", exact: true }).click();
+  await until(async () => /1/.test(await tab("变更").innerText()), "刷新后看到新改动");
+  await tab("贮藏").click();
+  await page.getByRole("button", { name: "贮藏改动", exact: true }).click();
+  const stashDialog = dialog("贮藏当前改动");
+  await stashDialog.getByText("说明").locator("..").getByRole("textbox").fill("browser stash");
+  await submitDialog("贮藏当前改动");
+  const stashRow = page.locator(".gwb-ref-row", { hasText: "browser stash" });
+  await stashRow.waitFor();
+  await stashRow.getByRole("button", { name: "查看差异", exact: true }).click();
+  await page.getByText(/stash-browser\.txt/).first().waitFor();
+
+  // 一次必然失败的删除留进日志，刷新后仍在；随后进入真实 merge 冲突。
+  await tab("分支").click();
+  const conflictBranch = page.locator(".gwb-ref-row", { hasText: "feature/conflict" });
+  await conflictBranch.getByLabel("feature/conflict 分支操作").selectOption("delete");
+  await performAction(() => dialog("删除已合并分支").getByRole("button", { name: "删除已合并分支", exact: true }).click(), false);
+  await dialog("删除已合并分支").getByRole("alert").waitFor();
+  await dialog("删除已合并分支").getByRole("button", { name: "关闭删除已合并分支" }).click();
+  await tab("操作日志").click();
+  await page.locator(".gwb-journal-entry.is-failed").filter({ hasText: "删除分支" }).waitFor();
+  await page.reload();
+  await page.locator(".gwb-journal-entry.is-failed").filter({ hasText: "删除分支" }).waitFor();
+
+  await tab("分支").click();
+  await conflictBranch.getByLabel("feature/conflict 分支操作").selectOption("merge");
+  const mergeDialog = dialog("合并 feature/conflict");
+  await performAction(() => mergeDialog.getByRole("button", { name: "合并 feature/conflict", exact: true }).click(), false);
+  await mergeDialog.getByRole("alert").waitFor();
+  await mergeDialog.getByRole("button", { name: "关闭合并 feature/conflict" }).click();
+  await waitIdle();
+  await page.locator(".gwb-operation").waitFor();
+  await page.getByRole("button", { name: /conflict\.txt/ }).click();
+  const conflictDialog = dialog(/解决冲突/);
+  await conflictDialog.getByText("冲突块 1").waitFor();
+  await conflictDialog.getByRole("button", { name: "采用我方", exact: true }).click();
+  const conflictEditor = conflictDialog.getByLabel("冲突解决结果");
+  await conflictEditor.fill(`${await conflictEditor.inputValue()}resolved in browser\n`);
+  await performAction(() => conflictDialog.getByRole("button", { name: "保存结果并暂存", exact: true }).click());
+  await conflictDialog.waitFor({ state: "detached" });
+  await performAction(() => page.getByRole("button", { name: "继续操作", exact: true }).click());
+  await waitMessage(/Git 已继续执行/);
+  await page.locator(".gwb-operation").waitFor({ state: "detached" });
+
+  // 通过带 typed 确认的 hard reset 回到合并前，再造同一冲突并中止。
+  await tab("历史").click();
+  await page.getByRole("button", { name: /浏览器提交/ }).click();
+  await page.getByLabel("提交操作").selectOption("reset");
+  const resetDialog = dialog("重置当前分支");
+  await resetDialog.locator("select").selectOption("hard");
+  const resetConfirm = resetDialog.getByRole("button", { name: "重置当前分支", exact: true });
+  assert.equal(await resetConfirm.isDisabled(), true);
+  await resetDialog.getByLabel("输入目标以确认").fill("wrong");
+  assert.equal(await resetConfirm.isDisabled(), true);
+  await resetDialog.getByLabel("输入目标以确认").fill("main");
+  assert.equal(await resetConfirm.isEnabled(), true);
+  await submitDialog("重置当前分支");
+  await tab("分支").click();
+  await conflictBranch.getByLabel("feature/conflict 分支操作").selectOption("merge");
+  const mergeAgain = dialog("合并 feature/conflict");
+  await performAction(() => mergeAgain.getByRole("button", { name: "合并 feature/conflict", exact: true }).click(), false);
+  await mergeAgain.getByRole("alert").waitFor();
+  await mergeAgain.getByRole("button", { name: "关闭合并 feature/conflict" }).click();
+  await waitIdle();
+  await page.locator(".gwb-operation").waitFor();
+  await page.getByRole("button", { name: "中止操作", exact: true }).click();
+  await submitDialog("中止 Git 操作");
+  await page.locator(".gwb-operation").waitFor({ state: "detached" });
+
+  // 编辑线性历史：一条 fixup，一条 reword，最终结果仍能正常刷新。
+  await tab("历史").click();
+  await page.getByRole("button", { name: /历史提交 1/ }).click();
+  await page.getByLabel("提交操作").selectOption("rebase-plan");
+  const rebaseDialog = dialog("交互式变基");
+  await rebaseDialog.getByLabel("提交 1 的动作").waitFor();
+  await rebaseDialog.getByLabel("提交 2 的动作").selectOption("fixup");
+  await rebaseDialog.getByLabel("提交 3 的动作").selectOption("reword");
+  await rebaseDialog.getByLabel("提交 3 的信息").fill("浏览器改写提交");
+  await performAction(() => rebaseDialog.getByRole("button", { name: "执行变基计划", exact: true }).click());
+  await rebaseDialog.waitFor({ state: "detached" });
+  await waitMessage(/交互式变基完成/);
+  await page.getByRole("button", { name: /浏览器改写提交/ }).waitFor();
+
+  // 创建独立工作树，打开它后 URL 带根路径；浏览器后退回到工作树列表。
+  await tab("工作树").click();
+  await page.getByRole("button", { name: "新建工作树", exact: true }).click();
+  const worktreeDialog = dialog("新建手动工作树");
+  await worktreeDialog.getByText("新分支名").locator("..").getByRole("textbox").fill("browser/manual-worktree");
+  await submitDialog("新建手动工作树");
+  const worktreeRow = page.locator(".gwb-worktree-card", { hasText: "browser/manual-worktree" });
+  await worktreeRow.waitFor();
+  await worktreeRow.getByRole("button", { name: "打开工作树", exact: true }).click();
+  await until(async () => new URL(page.url()).searchParams.has("gitRoot"), "工作树路径写入 URL");
+  assert.match(await page.locator(".gwb-context").innerText(), /browser\/manual-worktree/);
+  await page.goBack();
+  await page.getByRole("heading", { name: "工作树" }).waitFor();
+
+  // 移动布局必须保持单列可操作；截图留在系统临时目录供人工复核。
+  await page.setViewportSize({ width: 390, height: 844 });
+  await tab("变更").click();
+  await page.getByRole("region", { name: "工作区变更" }).waitFor();
+  const bodyWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+  assert(bodyWidth <= 390, `移动布局横向溢出：${bodyWidth}px`);
+  assert.equal(await page.locator(".gwb-tabs").evaluate((node) => getComputedStyle(node).overflowX), "auto");
+  screenshotDirectory = await mkdtemp(join(tmpdir(), "ash-git-workbench-browser-"));
+  await page.screenshot({ path: join(screenshotDirectory, "mobile.png"), fullPage: true });
+
+  assert.deepEqual(browserErrors, [], `浏览器控制台错误：\n${browserErrors.join("\n")}`);
+  assert.deepEqual(requestFailures, [], `失败请求：\n${requestFailures.join("\n")}`);
+  console.log(`Git workbench browser test passed · screenshot ${join(screenshotDirectory, "mobile.png")}`);
+} catch (error) {
+  const diagnostics = backend.diagnostics();
+  throw new Error(`${error instanceof Error ? error.stack || error.message : String(error)}\nbackend stderr:\n${diagnostics.stderr}\nbackend stdout:\n${diagnostics.stdout}`);
+} finally {
+  await browser?.close();
+  await vite?.close();
+  await backend.close();
+}

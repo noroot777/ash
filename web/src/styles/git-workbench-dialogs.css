@@ -1,0 +1,153 @@
+.gwb-form {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  margin: 20px 0;
+}
+.gwb-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.gwb-form label input[type="checkbox"] {
+  align-self: flex-start;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+}
+.gwb-form label code {
+  overflow-wrap: anywhere;
+}
+.gwb-form textarea {
+  resize: vertical;
+}
+.gwb-rebase-dialog {
+  width: min(950px, 94vw);
+  max-width: 950px;
+}
+.gwb-rebase-steps {
+  max-height: 50vh;
+  overflow: auto;
+  margin: 18px 0;
+}
+.gwb-rebase-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+  padding: 9px 0;
+  font-size: 11px;
+}
+.gwb-rebase-step > code {
+  color: var(--faint);
+  font-size: 10px;
+}
+.gwb-rebase-step > span,
+.gwb-rebase-step > input {
+  flex: 1;
+  min-width: 0;
+}
+.gwb-rebase-step.is-dropped > span {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+.gwb-rebase-step select {
+  font-size: 10px;
+}
+.gwb-hint {
+  font-size: 11px;
+  color: var(--muted);
+}
+.gwb-conflict-dialog {
+  width: min(1280px, 96vw);
+  max-width: 1280px;
+}
+.gwb-conflict-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 17px 0 12px;
+  flex-wrap: wrap;
+}
+.gwb-conflict-toolbar button,
+.gwb-conflict-block button,
+.gwb-rebase-step button {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--raised);
+  color: var(--ink);
+  min-height: 25px;
+  padding: 3px 7px;
+  font-size: 10px;
+  cursor: pointer;
+}
+.gwb-conflict-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  height: 56vh;
+  min-height: 260px;
+}
+.gwb-conflict-context {
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+}
+.gwb-conflict-context section {
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.gwb-conflict-context h3 {
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.gwb-conflict-context pre {
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.7;
+  margin: 0;
+  white-space: pre;
+}
+.gwb-conflict-block > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 10px;
+}
+.gwb-conflict-block pre {
+  padding: 9px;
+}
+.gwb-conflict-block .is-ours {
+  background: color-mix(in srgb, #2d9685 10%, var(--canvas));
+}
+.gwb-conflict-block .is-theirs {
+  background: color-mix(in srgb, var(--accent) 10%, var(--canvas));
+}
+.gwb-conflict-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+  font-size: 11px;
+}
+.gwb-conflict-editor textarea {
+  flex: 1;
+  resize: none;
+  min-height: 0;
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  border-radius: 5px;
+  padding: 12px;
+  font-size: 11px;
+  line-height: 1.7;
+  white-space: pre;
+  overflow: auto;
+}

@@ -1,3 +1,4 @@
+import { openGitWorkbench } from "../git-workbench/navigation.ts";
 import type { ReactNode } from "react";
 import type { ProjectView } from "@ash/shared";
 import { Check, GitBranch, GitCommit, TreeStructure } from "@phosphor-icons/react";
@@ -72,11 +73,11 @@ export function GitOverviewPanel({
           {overview.branches.map((branch) => {
             const current = branch === overview.current;
             return (
-              <div key={branch} className={`flex min-w-0 items-center gap-2 rounded-md px-2.5 py-2 ${current ? "bg-accent/10" : ""}`}>
+              <button type="button" onClick={() => { if (project) openGitWorkbench({ projectId: project.id, view: "branches", ref: branch }); }} key={branch} className={`flex min-w-0 items-center gap-2 rounded-md px-2.5 py-2 ${current ? "bg-accent/10" : ""}`}>
                 {current ? <Check size={13} weight="bold" className="shrink-0 text-accent" /> : <GitBranch size={13} className="shrink-0 text-faint" />}
                 <span className={`min-w-0 truncate font-mono text-xs ${current ? "font-medium text-accent" : "text-muted"}`}>{branch}</span>
                 {current && <span className="ml-auto shrink-0 text-[9px] text-accent/75">当前</span>}
-              </div>
+              </button>
             );
           })}
           {!overview.branches.length && <p className="px-2.5 py-6 text-center text-xs text-faint">未发现本地分支</p>}
@@ -86,7 +87,7 @@ export function GitOverviewPanel({
       <Section title="Worktrees" count={overview.worktrees.length}>
         <div className="space-y-1.5">
           {overview.worktrees.map((worktree) => (
-            <div key={worktree.path} className="rounded-lg border border-line bg-raised/45 px-3 py-2.5">
+            <button type="button" onClick={() => { if (project) openGitWorkbench({ projectId: project.id, view: "worktrees", root: worktree.path }); }} key={worktree.path} className="w-full text-left rounded-lg border border-line bg-raised/45 px-3 py-2.5">
               <div className="flex min-w-0 items-center gap-2">
                 <TreeStructure size={14} className="shrink-0 text-accent" />
                 <span className="min-w-0 truncate font-mono text-xs text-ink">{worktree.path}</span>
@@ -102,7 +103,7 @@ export function GitOverviewPanel({
                   </span>
                 )}
               </div>
-            </div>
+            </button>
           ))}
           {!overview.worktrees.length && <p className="px-2.5 py-6 text-center text-xs text-faint">未发现 worktree</p>}
         </div>
