@@ -38,12 +38,19 @@ export function splitDiff(result: TaskDiffResult): DiffSection[] {
  *
  * 行号只在 hunk 头之后才有意义（`inHunk`）：文件头的 `--- a/x` / `+++ b/x` 也以 -/+
  * 开头，当成增删行会把整段行号推错一位。
+ *
+ * `git diff` 的 stdout 以换行收尾，`split` 出来的最后那个空字符串是**行分隔符的尾巴，
+ * 不是一行内容**——留着它会在 hunk 里多出一条并不存在的空上下文行，还把行号多推一位
+ * （并排视图里表现为末尾凭空多一行左右都标着行号的空行）。只丢这一个：diff 里真正的
+ * 空上下文行是一个空格（`" "`），不会被误伤。
  */
 export function parseDiffLines(text: string): DiffLine[] {
   let oldLine = 0;
   let newLine = 0;
   let inHunk = false;
-  return text.split("\n").map((line): DiffLine => {
+  const rows = text.split("\n");
+  if (rows.at(-1) === "") rows.pop();
+  return rows.map((line): DiffLine => {
     const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
     if (hunk) {
       oldLine = Number(hunk[1]);

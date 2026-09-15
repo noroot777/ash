@@ -20,18 +20,21 @@ const server = await createServer({
 
 const FILE_TEXT = "const keep = 0;\nexport const value = 2;\n";
 // 删 2 行、加 3 行：并排视图要把它们对齐成 3 行，最后一行左边补空。
+// 中间那条 `" "` 是**文件里真有的空行**（上下文），它必须留着——跟末尾那个由 stdout
+// 结尾换行产生的空 token 是两回事，后者不该变成一行。
 const DIFF_TEXT = [
   "diff --git a/changed.ts b/changed.ts",
   "index 1111111..2222222 100644",
   "--- a/changed.ts",
   "+++ b/changed.ts",
-  "@@ -1,4 +1,5 @@",
+  "@@ -1,5 +1,6 @@",
   " const keep = 0;",
   "-export const value = 1;",
   "-export const gone = 3;",
   "+export const value = 2;",
   "+export const added = 4;",
   "+export const extra = 5;",
+  " ",
   " const tail = 9;",
   "",
 ].join("\n");
@@ -160,8 +163,9 @@ try {
   const pairs = center.locator(".single-review-line.is-pair");
   const sideText = async (index, side) => (await pairs.nth(index).locator(".single-review-side").nth(side).locator("code").innerText()).trim();
   const sideLine = async (index, side) => (await pairs.nth(index).locator(".single-review-side").nth(side).locator("span").innerText()).trim();
-  // 上下文 1 行 + 配对后的 3 行改动 + 上下文 1 行，再加 diff 文本末尾那个换行带出来的空行。
-  assert.equal(await pairs.count(), 6, "删 2 加 3 没有被对齐成 3 行");
+  // 上下文 1 行 + 配对后的 3 行改动 + 文件里真有的那条空行 + 上下文 1 行。diff 文本末尾
+  // 那个换行是行分隔符的尾巴，不该再变成第 7 行。
+  assert.equal(await pairs.count(), 6, "删 2 加 3 没有被对齐成 3 行，或末尾多出了不存在的空行");
   assert.equal(await sideText(0, 0), "const keep = 0;");
   assert.equal(await sideText(0, 1), "const keep = 0;");
   assert.equal(await sideText(1, 0), "export const value = 1;", "左栏应当是改之前那一份");
@@ -171,15 +175,21 @@ try {
   assert.equal(await pairs.nth(3).locator(".single-review-side").first().getAttribute("class").then((v) => v?.includes("is-empty")), true,
     "补出来的空位没有标成 is-empty");
   assert.equal(await sideLine(1, 0), "2", "左栏行号应当按旧文件数");
-  assert.equal(await sideLine(4, 1), "5", "右栏行号应当按新文件数");
+  assert.equal(await sideLine(5, 1), "6", "右栏行号应当按新文件数");
+  // 文件里真有的空行照常占一行、两侧都有行号，不能被「丢掉结尾空 token」顺手吞掉。
+  assert.equal(await sideText(4, 0), "", "真实的空上下文行不见了");
+  assert.equal(await sideLine(4, 0), "4");
+  assert.equal(await sideLine(4, 1), "5");
+  assert.equal(await pairs.nth(4).locator(".single-review-side").first().getAttribute("class").then((v) => v?.includes("is-empty")), false,
+    "真实的空上下文行被当成了补出来的空位");
   // 段头横跨两栏，不该被塞进某一侧。
-  assert.equal(await center.locator(".single-review-line.is-span.is-hunk code").innerText(), "@@ -1,4 +1,5 @@");
+  assert.equal(await center.locator(".single-review-line.is-span.is-hunk code").innerText(), "@@ -1,5 +1,6 @@");
   await page.screenshot({ path: "/tmp/ash-file-diff-view-split.png", fullPage: true });
 
   // 无尾换行的文件：`\ No newline` 是上一行的属性，不能把同一处替换顶成上下两行。
   await row("nonl.ts").click();
   await center.getByText("old value", { exact: false }).waitFor();
-  assert.equal(await pairs.count(), 2, "`\\ No newline` 把同一处替换拆成了两行");
+  assert.equal(await pairs.count(), 1, "`\\ No newline` 把同一处替换拆成了两行，或末尾多出了不存在的空行");
   // innerText 不给 margin 留空格，所以标记是紧跟在正文后面的。
   assert.equal(await sideText(0, 0), "old value无尾换行", "左栏丢了改之前那一行或它的无尾换行标记");
   assert.equal(await sideText(0, 1), "new value无尾换行", "右栏丢了改之后那一行或它的无尾换行标记");
