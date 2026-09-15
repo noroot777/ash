@@ -11,26 +11,24 @@
 .native-work__group + .native-work__group { margin-top: 22px; }
 .native-work__group h3 { display: flex; align-items: center; gap: 7px; margin: 0 0 9px; color: var(--muted); font-size: 11px; font-weight: 550; }
 .native-work__group h3 span { display: grid; min-width: 18px; height: 18px; place-items: center; border-radius: 5px; background: var(--raised); color: var(--muted); font-size: 10px; }
-.native-work__entry { min-width: 0; margin-bottom: 10px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); box-shadow: 0 2px 3px rgb(0 0 0 / 2%); }
+.native-work__entry { position: relative; container-type: inline-size; min-width: 0; margin-bottom: 6px; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); }
 .native-work__entry[data-status="running"] { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
 /* 执行详情正在左侧抽屉里打开着的那一项（与团队执行者列表的 is-selected 同一个意思）。 */
 .native-work__entry.is-open { border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
-.native-work__row > summary { display: flex; align-items: flex-start; gap: 9px; padding: 13px 12px 11px; cursor: pointer; list-style: none; }
+.native-work__row > summary { display: flex; align-items: flex-start; gap: 6px; min-height: 38px; padding: 9px 10px; cursor: pointer; list-style: none; }
+.native-work__entry[data-kind="agent"] > .native-work__row > summary { padding-right: 90px; }
 .native-work__row > summary::-webkit-details-marker { display: none; }
 .native-work__row > summary:hover { background: color-mix(in srgb, var(--canvas) 75%, transparent); }
 .native-work__row > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; border-radius: 8px; }
-.native-work__avatar { display: grid; flex: 0 0 30px; width: 30px; height: 30px; place-items: center; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); color: var(--muted); }
-.native-work__entry[data-status="running"] .native-work__avatar { border-color: transparent; background: color-mix(in srgb, var(--accent) 9%, var(--panel)); color: var(--accent); }
-.native-work__entry[data-status="completed"] .native-work__avatar { border-color: transparent; background: color-mix(in srgb, var(--green) 8%, var(--panel)); color: var(--green); }
-.native-work__identity { display: flex; flex: 1; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
-.native-work__title { display: block; min-width: 0; color: var(--ink); font-size: 12px; font-weight: 550; line-height: 1.5; overflow-wrap: anywhere; }
+.native-work__title { display: -webkit-box; flex: 1; min-width: 0; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: var(--ink); font-size: 12px; font-weight: 550; line-height: 18px; overflow-wrap: anywhere; }
+.native-work__full-title { margin: 0; padding: 2px 12px 8px; font-weight: 550; line-height: 1.5; overflow-wrap: anywhere; }
 .native-work__status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; width: fit-content; padding: 2px 6px; border-radius: 4px; background: var(--raised); color: var(--muted); font-size: 10px; font-weight: 450; line-height: 1.4; white-space: nowrap; }
 .native-work__status::before { width: 4px; height: 4px; border-radius: 50%; background: currentColor; content: ""; }
 .native-work__status[data-status="running"] { background: color-mix(in srgb, var(--accent) 9%, var(--panel)); color: var(--accent); }
 .native-work__status[data-status="completed"] { background: color-mix(in srgb, var(--green) 8%, var(--panel)); color: var(--green); }
 .native-work__status[data-status="failed"] { background: color-mix(in srgb, var(--red) 8%, var(--panel)); color: var(--red); }
 .native-work__status[data-status="pending"] { background: color-mix(in srgb, var(--amber) 8%, var(--panel)); color: var(--amber); }
-.native-work__chevron { flex: 0 0 auto; margin-top: 4px; color: var(--muted); }
+.native-work__chevron { flex: 0 0 auto; margin-top: 3px; color: var(--muted); }
 .native-work__row[open] .native-work__chevron { transform: rotate(180deg); }
 .native-work__detail { padding: 0 12px 12px; overflow-wrap: anywhere; }
 .native-work__detail dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 10px; margin: 0 0 14px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 11px; }
@@ -64,11 +62,16 @@
 .native-work__timing > summary svg { flex: 0 0 auto; align-self: center; margin-left: auto; }
 .native-work__timing[open] > summary svg { transform: rotate(180deg); }
 .native-work__timing[open] > summary { margin-bottom: 6px; }
-.native-work__footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--line); }
-.native-work__footer > span { min-width: 0; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.native-work__open { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; border: 0; border-radius: 5px; padding: 4px 6px; background: color-mix(in srgb, var(--accent) 7%, var(--panel)); color: var(--accent); font-size: 11px; cursor: pointer; }
+.native-work__open { position: absolute; top: 6px; right: 6px; display: inline-flex; align-items: center; gap: 4px; min-height: 26px; border: 0; border-radius: 5px; padding: 4px 6px; background: color-mix(in srgb, var(--accent) 7%, var(--panel)); color: var(--accent); font-size: 11px; white-space: nowrap; cursor: pointer; }
 .native-work__open:hover { background: color-mix(in srgb, var(--accent) 13%, var(--panel)); }
 .native-work__open:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@container (max-width: 250px) {
+  .native-work__entry[data-kind="agent"] > .native-work__row > summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title chevron" "status ."; gap: 2px 6px; padding: 7px 10px; }
+  .native-work__entry[data-kind="agent"] .native-work__title { grid-area: title; -webkit-line-clamp: 1; }
+  .native-work__entry[data-kind="agent"] .native-work__status { grid-area: status; }
+  .native-work__entry[data-kind="agent"] .native-work__chevron { grid-area: chevron; }
+  .native-work__open { top: 26px; min-height: 22px; padding-block: 2px; }
+}
 .native-work__empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 38px 8px; color: var(--muted); text-align: center; }
 .native-work__empty strong { color: var(--ink); font-weight: 500; }
 .native-work__empty p { margin: 0; line-height: 1.7; }

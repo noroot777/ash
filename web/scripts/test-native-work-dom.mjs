@@ -39,6 +39,7 @@ try {
 
   const running = page.locator('.native-work__row[data-status="running"]');
   const card = page.locator('.native-work__entry[data-status="running"]');
+  await running.locator(":scope > summary").press("Enter");
   // 模型和智能水平各占一行：实跑值优先，只有退回到派活时点的那个才标「调用指定」。
   assert.match(await card.locator(".native-work__meta").innerText(),
     /模型\s*gpt-5\.6-sol\s*调用指定[\s\S]*智能水平\s*xhigh/);
@@ -55,6 +56,7 @@ try {
   await timing.locator("summary").press("Space");
   assert.equal(await card.locator(".native-work__times").isVisible(), false, "可重新收起完整时间");
   const pending = page.locator('.native-work__entry[data-status="pending"]');
+  await pending.locator(".native-work__row > summary").click();
   assert.equal(await pending.locator("time").count(), 0, "未开工不能显示开始时间");
   assert.equal(await pending.locator(".native-work__model").count(), 0, "内部待办没有执行模型");
   assert.match(await pending.locator(".native-work__timing > summary").innerText(), /尚未开始/);
@@ -63,14 +65,14 @@ try {
   await page.clock.fastForward(60_000);
   assert.notEqual(await card.locator(".native-work__duration-value").innerText(), activeSpan, "运行项实时更新跨度");
   assert.equal(await pending.locator(".native-work__duration-value").count(), 0, "待处理项不会随时钟递增");
-  await running.locator("summary").click();
-  await page.getByText("核对浏览器状态", { exact: true }).click();
   assert.match(await page.locator(".native-work__detail").filter({ hasText: "所属子智能体" }).innerText(), /运行中的资料搜集/);
 
   const overflow = await page.locator(".native-work").evaluate((el) => ({ width: el.clientWidth, scroll: el.scrollWidth }));
   assert.ok(overflow.scroll <= overflow.width + 1, `narrow Inspector overflowed: ${JSON.stringify(overflow)}`);
   await mkdir(output, { recursive: true });
   await page.screenshot({ path: `${output}/native-work-initial.png`, fullPage: true });
+  await running.locator(":scope > summary").press("Space");
+  await pending.locator(".native-work__row > summary").click();
 
   await page.getByRole("button", { name: "查看执行：运行中的资料搜集", exact: true }).click();
   // 执行详情从左侧抽屉推出来（和团队模式点执行者同一套外壳）：只盖住主区那一栏，
@@ -174,6 +176,7 @@ try {
   assert.equal(await snapshotPending.locator(".native-work__duration-value").count(), 0);
   const firstCompleted = page.locator('.native-work__entry[data-status="completed"]');
   assert.equal(await firstCompleted.locator("time").count(), 1, "首次快照仅知道完成时间");
+  await firstCompleted.locator(".native-work__row > summary").click();
   await firstCompleted.locator(".native-work__timing > summary").click();
   assert.match(await firstCompleted.innerText(), /未记录开始时间，无法计算跨度/);
   await page.clock.fastForward(60_000);
