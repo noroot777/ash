@@ -139,8 +139,9 @@
   .team-review-record svg { transition: none; }
 }
 
-/* 「合并后不提交」那一档欠着的那一步：常驻卡 + 动作行上那个「待提交」徽记。
-   判据与来由见 web/src/review/PendingMergeCard.tsx 顶部（刷新后仍看得出，才算留下状态）。 */
+/* 「合并后不提交」那一档欠着的那一步：验收台里的状态卡 + 动作行上那个「待提交」徽记。
+   判据与来由见 web/src/review/PendingMergeCard.tsx 顶部（对话区那一侧只留 TaskHeader
+   的「待提交」徽记，样式在 task-detail.css）。 */
 .team-accept-actions > span.is-pending-commit { border-color: color-mix(in lch,var(--amber) 36%,var(--line)); background: color-mix(in lch,var(--amber) 9%,var(--panel)); color: var(--amber); }
 .pending-merge-card { display: grid; gap: 8px; margin: 8px 12px 0; border: 1px solid color-mix(in lch,var(--amber) 34%,var(--line)); border-radius: 10px; background: color-mix(in lch,var(--amber) 6%,var(--panel)); padding: 9px 11px; font-size: 10.5px; }
 .pending-merge-card.is-settled { border-color: color-mix(in lch,var(--green) 26%,var(--line)); background: var(--green-bg); }

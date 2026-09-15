@@ -18,7 +18,6 @@ import { ConversationFeed } from "./ConversationFeed.tsx";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { DeleteTaskDialog } from "./DeleteTaskDialog.tsx";
 import { HandoffBanner } from "./HandoffBanner.tsx";
-import { PendingMergeCard } from "../review/PendingMergeCard.tsx";
 import { HandoffAuditBanner } from "./HandoffAuditBanner.tsx";
 import { QuestionCard } from "./QuestionCard.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
@@ -354,10 +353,6 @@ export function TaskDetail({
               notify={notify}
             />
             {task.handoffAudit && <HandoffAuditBanner audit={task.handoffAudit} />}
-            {/* 「合并后不提交」那一档欠着的那一步：在任务详情里也得**常驻**看得见，不能只
-                活在验收台里（用户从对话区回来时看不到那一屏）。验收台开着时就让那一份显示，
-                别在同一屏上画两张同样的卡。 */}
-            {!reviewOpen && <PendingMergeCard task={task} notify={notify} onTaskUpdated={onTaskUpdate} />}
             {task.handoff && (
               <HandoffBanner
                 taskId={task.id}

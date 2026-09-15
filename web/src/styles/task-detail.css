@@ -68,7 +68,27 @@
   font-weight: 650;
 }
 
+/* 「合并后不提交」那一档欠着的提交：对话区只留这一颗可点的徽记，详情与出路都在验收台
+   的 PendingMergeCard 里（见该文件顶部）。 */
+.task-pending-commit {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid color-mix(in lch,var(--amber) 36%,var(--line));
+  border-radius: 999px;
+  background: color-mix(in lch,var(--amber) 9%,var(--panel));
+  padding: 3px 7px;
+  color: var(--amber);
+  font-size: 10px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.task-pending-commit:hover { background: color-mix(in lch,var(--amber) 15%,var(--panel)); }
+
 .task-time-meta { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; color: var(--faint); font-family: var(--font-mono); font-size: 9.5px; white-space: nowrap; }
+
 .task-time-meta > svg { flex: 0 0 auto; }
 .task-time-meta > i { color: var(--line2); font-style: normal; }
 
