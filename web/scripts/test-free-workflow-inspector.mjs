@@ -54,6 +54,28 @@ try {
   const pausedReserve = pausedToolbar.getByRole("button", { name: "预约复审" });
   await pausedReserve.waitFor();
   assert.equal(await pausedReserve.isEnabled(), true, "停在检查点的任务仍应允许预约复审");
+  // 预览那颗**不**跟着「等答复/等续跑」走：后端起预览这一路压根没有这道门禁，任务停在
+  // 检查点时工作区也没人在动。跟着锁死的话，用户最想照着页面回答提问的那一刻反而点不动。
+  // （上面那个 waiting fixture 的任务是真的在 running，它该灰着，判据是「有没有回合在飞」
+  // 而不是「有没有挂着续跑指令」。）
+  assert.equal(
+    await pausedToolbar.getByRole("button", { name: "打开预览" }).isEnabled(), true,
+    "停在检查点的任务不该锁预览——后端放行，按钮却灰着",
+  );
+
+  // 审查旁路回合进行中：任务 status 是 running（审查跑在被审任务自己身上），但那一轮只读
+  // 代码。预览必须可点——后端为此专门放行（server 的 review-turn.ts），两边判据得一致。
+  const reviewTurnToolbar = page.locator(".toolbar-review-turn-fixture");
+  const reviewTurnPreview = reviewTurnToolbar.getByRole("button", { name: "打开预览" });
+  await reviewTurnPreview.waitFor();
+  assert.equal(
+    await reviewTurnPreview.isEnabled(), true,
+    "审查进行中「打开预览」灰着——后端已经放行，这里就是一颗假禁用",
+  );
+  assert.equal(
+    await reviewTurnToolbar.getByRole("button", { name: "审查中" }).isEnabled(), false,
+    "审查进行中不该还能再派一轮",
+  );
 
   // 预约模式属于「任务在跑」的场景：修复/修改开跑后从这里预约完成后的复审。
   const chatToolbar = page.locator(".toolbar-chat-rework-fixture");
@@ -62,6 +84,12 @@ try {
   const reserveButton = chatToolbar.getByRole("button", { name: "预约复审" });
   await reserveButton.waitFor();
   assert.equal(await reserveButton.isEnabled(), true, "任务修改中应允许预约复审");
+  // 反面：真的在改代码的那一轮，预览那道门一点都不能松——起出来的页面既不是上一版也不是
+  // 下一版，何况下一次状态切换会立刻把它收掉。
+  assert.equal(
+    await chatToolbar.getByRole("button", { name: "打开预览" }).isEnabled(), false,
+    "任务正在改代码，预览却能点",
+  );
   await reserveButton.click();
   const reviewDialog = page.locator(".free-review-dialog");
   await reviewDialog.getByRole("heading", { name: "预约审查" }).waitFor();
