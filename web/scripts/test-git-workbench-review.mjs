@@ -177,6 +177,7 @@ const submitActionDialog = async (title) => {
 try {
   const info = await backend.ready;
   backendDirectory = info.directory;
+  git(info.root, "config", "core.autocrlf", "false");
   vite = await createServer({
     root: webRoot,
     logLevel: "error",
