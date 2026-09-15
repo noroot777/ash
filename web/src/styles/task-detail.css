@@ -203,6 +203,8 @@
 .task-inspector-action span:last-child,
 .task-inspector-action > svg:last-child { margin-left: auto; }
 .task-inspector details { margin-top: 5px; border-top: 0.5px solid var(--line); padding-top: 7px; }
+/* 顶线是用来隔开兄弟节的；一节里的头一个 details 上面没有兄弟，画线只会在面板标题下留一道空档。 */
+.task-inspector section > details:first-child { margin-top: 0; border-top: 0; padding-top: 0; }
 .task-inspector details pre { max-height: 240px; overflow: auto; margin: 7px 0 0; white-space: pre-wrap; word-break: break-word; color: var(--muted); font-family: var(--font-sans); font-size: 10.5px; line-height: 1.55; }
 .task-inspector-attachment-links { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 7px; margin-top: 6px; font-size: 10.5px; }
 .task-inspector-attachment-links > span:first-child { color: var(--faint); }
