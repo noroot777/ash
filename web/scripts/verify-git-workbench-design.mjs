@@ -101,7 +101,10 @@ try {
   const report = { url: url.href, viewport, output, views: {} };
   for (const [key, label] of Object.entries(views)) {
     await navigation.getByRole("button", { name: new RegExp(`^${label}`) }).click();
-    if (key === "history") await page.getByRole("region", { name: "提交历史" }).locator(".commit-row").first().waitFor();
+    if (key === "history") {
+      await page.getByRole("region", { name: "提交历史" }).locator(".commit-row").first().waitFor();
+      await page.getByText("正在读取差异…").waitFor({ state: "detached" });
+    }
     else if (key === "changes") await page.locator(".changes-list").waitFor();
     else await page.locator(".scroll-col").waitFor();
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));

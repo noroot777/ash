@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { existsSync, rmSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -122,6 +122,20 @@ const submitDialog = async (title, button = title) => {
 try {
   const info = await backend.ready;
   backendDirectory = info.directory;
+  const discardPath = join(info.root, "partial-discard.txt");
+  const discardBase = Array.from({ length: 30 }, (_, index) => `line ${index + 1}`).join("\n") + "\n";
+  const discardModified = discardBase.replace("line 2\n", "LINE TWO\n").replace("line 25\n", "LINE TWENTY FIVE\n");
+  const isolatedGit = {
+    env: {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: join(info.directory, "gitconfig"),
+      GIT_CONFIG_NOSYSTEM: "1",
+    },
+  };
+  writeFileSync(discardPath, discardBase);
+  execFileSync("git", ["-C", info.root, "add", "--", "partial-discard.txt"], isolatedGit);
+  execFileSync("git", ["-C", info.root, "commit", "-qm", "add partial discard fixture"], isolatedGit);
+  writeFileSync(discardPath, discardModified);
   vite = await createServer({
     root: webRoot,
     logLevel: "error",
@@ -184,6 +198,27 @@ try {
   await page.getByRole("region", { name: "工作区变更" }).waitFor();
 
   // 同一文件两处修改：先按单行暂存 BETA，再按剩余块暂存 IOTA；新增文件按整文件暂存。
+  await page.getByRole("button", { name: /partial-discard\.txt/ }).first().click();
+  const firstHunkDiscard = page.getByRole("button", { name: "丢弃此块", exact: true }).first();
+  await firstHunkDiscard.click();
+  const discardDialog = dialog("丢弃这个改动块");
+  if (screenshotDirectory) await page.screenshot({ path: join(screenshotDirectory, "partial-discard-cancel.png") });
+  await discardDialog.getByRole("button", { name: "取消", exact: true }).click();
+  assert.equal(readFileSync(discardPath, "utf8"), discardModified, "取消丢弃必须保留文件");
+  await firstHunkDiscard.click();
+  const discardConfirm = discardDialog.getByRole("button", { name: "丢弃这个改动块", exact: true });
+  assert.equal(await discardConfirm.isDisabled(), true);
+  await discardDialog.getByLabel("输入目标以确认").fill("错误");
+  assert.equal(await discardConfirm.isDisabled(), true);
+  await discardDialog.getByLabel("输入目标以确认").fill("丢弃");
+  assert.equal(await discardConfirm.isEnabled(), true);
+  if (screenshotDirectory) await page.screenshot({ path: join(screenshotDirectory, "partial-discard-confirm.png") });
+  await submitDialog("丢弃这个改动块");
+  const fileAfterDiscard = readFileSync(discardPath, "utf8");
+  assert.match(fileAfterDiscard, /\nline 2\n/, "选中块应恢复为原内容");
+  assert.match(fileAfterDiscard, /\nLINE TWENTY FIVE\n/, "未选中的块必须保留");
+  execFileSync("git", ["-C", info.root, "checkout", "--", "partial-discard.txt"], isolatedGit);
+  await chooseMenuItem(page.getByLabel("工作台选项"), "刷新 Git 工作台");
   await page.getByRole("button", { name: /sample\.txt/ }).first().click();
   const betaRemoved = page.getByRole("button", { name: /行 .*-beta$/ });
   const betaAdded = page.getByRole("button", { name: /行 .*\+BETA$/ });
@@ -351,6 +386,9 @@ try {
   await rebaseDialog.getByLabel("提交 1 的动作").waitFor();
   if (screenshotDirectory) await page.screenshot({ path: join(screenshotDirectory, "rebase-dialog-720px.png") });
   assert.equal(Math.round((await rebaseDialog.boundingBox())?.width || 0), 720, "desktop rebase dialog width");
+  assert.equal(await rebaseDialog.locator(".task-confirm-header h2").evaluate((node) => getComputedStyle(node).fontSize), "13px");
+  assert.equal(await rebaseDialog.locator(".task-confirm-header > span").evaluate((node) => getComputedStyle(node).display), "none");
+  assert.equal(Math.round((await rebaseDialog.getByRole("button", { name: "执行变基计划", exact: true }).boundingBox())?.height || 0), 28);
   await rebaseDialog.getByLabel("提交 2 的动作").selectOption("fixup");
   await rebaseDialog.getByLabel("提交 3 的动作").selectOption("reword");
   await rebaseDialog.getByLabel("提交 3 的信息").fill("浏览器改写提交");
@@ -382,6 +420,20 @@ try {
   await page.getByRole("region", { name: "工作区变更" }).waitFor();
   const bodyWidth = await page.evaluate(() => document.documentElement.scrollWidth);
   assert(bodyWidth <= 390, `移动布局横向溢出：${bodyWidth}px`);
+  const mobileHeader = await page.evaluate(() => {
+    const box = (selector) => {
+      const rect = document.querySelector(selector)?.getBoundingClientRect();
+      return rect ? { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom } : null;
+    };
+    return { repo: box(".repo-name"), sync: box(".gwb-sync") };
+  });
+  assert(mobileHeader.repo && mobileHeader.sync);
+  assert(
+    mobileHeader.repo.right <= mobileHeader.sync.left ||
+      mobileHeader.repo.bottom <= mobileHeader.sync.top ||
+      mobileHeader.sync.bottom <= mobileHeader.repo.top,
+    "mobile repository selector and sync controls must not overlap",
+  );
   if (!screenshotDirectory) screenshotDirectory = await mkdtemp(join(tmpdir(), "ash-git-workbench-browser-"));
   await page.screenshot({ path: join(screenshotDirectory, "mobile.png"), fullPage: true });
 
