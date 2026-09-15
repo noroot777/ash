@@ -40,12 +40,14 @@ export function DiffView({
       </div>
     );
   const lines = value.diff.split("\n");
+  const noFinalNewline = lines.some((line) => line.startsWith("\\"));
   const eligible = (line: string) =>
     /^[+-]/.test(line) && !/^---|^\+\+\+/.test(line);
   const canSelect =
     select &&
     !value.truncated &&
     !value.binary &&
+    !noFinalNewline &&
     !/^(rename|copy|new file mode|deleted file mode|old mode|new mode)/m.test(
       value.diff,
     );
@@ -104,6 +106,17 @@ export function DiffView({
       )}
       {value.binary && (
         <p className="gwb-banner">二进制文件，按整个文件操作。</p>
+      )}
+      {select && noFinalNewline && (
+        <p className="gwb-banner">
+          此差异包含无末尾换行的内容，请使用上方的
+          {select.onDiscard
+            ? "「暂存」或「丢弃改动」"
+            : select.label.startsWith("取消")
+              ? "「取消暂存」"
+              : "「暂存」"}
+          按整个文件操作。
+        </p>
       )}
       {!value.diff && (
         <div className="gwb-empty empty-hint">没有可显示的文本差异</div>

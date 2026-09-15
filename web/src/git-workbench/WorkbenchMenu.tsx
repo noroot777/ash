@@ -42,8 +42,16 @@ export function WorkbenchMenu({
     panel.current
       ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
       ?.focus();
+    const closeOnScroll = (event: Event) => {
+      if (event.target instanceof Node && panel.current?.contains(event.target)) return;
+      close();
+    };
+    window.addEventListener("scroll", closeOnScroll, true);
     window.addEventListener("resize", close);
-    return () => window.removeEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", closeOnScroll, true);
+      window.removeEventListener("resize", close);
+    };
   }, [position]);
   return (
     <>

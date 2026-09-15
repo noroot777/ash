@@ -6,8 +6,10 @@ import { fail } from "./core.js";
 export function selectedPatch(
   diff: string,
   selected: number[],
-  reverse = false,
+  operation: "stage" | "unstage" | "discard",
 ): string {
+  const reverse = operation !== "stage";
+  const label = { stage: "暂存", unstage: "取消暂存", discard: "丢弃" }[operation];
   const lines = diff.split("\n");
   const selectedSet = new Set(selected);
   if (
@@ -27,9 +29,9 @@ export function selectedPatch(
       diff,
     )
   )
-    fail("新增、删除、重命名或二进制文件请按整个文件暂存");
+    fail(`新增、删除、重命名或二进制文件请按整个文件${label}`);
   const first = lines.findIndex((line) => line.startsWith("@@ "));
-  if (first < 0) fail("没有可暂存的改动块");
+  if (first < 0) fail(`没有可${label}的改动块`);
   const result = lines.slice(0, first);
   let delta = 0;
   for (let start = first; start < lines.length; ) {
@@ -45,7 +47,7 @@ export function selectedPatch(
     for (let i = start + 1; i < end; i++) {
       const line = lines[i];
       if (!line && i === lines.length - 1) continue;
-      if (line.startsWith("\\")) fail("无末尾换行的改动请按整个文件暂存");
+      if (line.startsWith("\\")) fail(`无末尾换行的改动请按整个文件${label}`);
       const sign = reverse
         ? line[0] === "+"
           ? "-"
@@ -132,7 +134,7 @@ export async function stageSelected(
   const current = await readScmFileDiff(root, path, source);
   if (current.truncated || current.binary || current.diff !== diff)
     fail("差异已变化或不能部分暂存，请重新打开文件");
-  await applyPatch(root, selectedPatch(diff, lines, source === "staged"), true);
+  await applyPatch(root, selectedPatch(diff, lines, source === "staged" ? "unstage" : "stage"), true);
 }
 
 export async function discardSelected(
@@ -146,5 +148,5 @@ export async function discardSelected(
   const current = await readScmFileDiff(root, path, "unstaged");
   if (current.truncated || current.binary || current.diff !== diff)
     fail("差异已变化或不能部分丢弃，请重新打开文件");
-  await applyPatch(root, selectedPatch(diff, lines, true), false);
+  await applyPatch(root, selectedPatch(diff, lines, "discard"), false);
 }
