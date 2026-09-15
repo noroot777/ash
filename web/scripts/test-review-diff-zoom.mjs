@@ -129,6 +129,20 @@ try {
   await page.keyboard.press("Escape");
   await zoomLayer.waitFor({ state: "detached" });
 
+  // 单栏 / 并排是「我习惯怎么读 diff」而不是某一块 diff 的属性：一处切了，同一页里的另一
+  // 份（这里是抽屉里那份）跟着变，放大之后也还是并排。
+  // 从抽屉里那份切（main 的标题栏被抽屉压着，真实页面里也点不到）。
+  await page.locator("#fixture-drawer").getByRole("button", { name: "并排对比（左右分栏）" }).click();
+  await page.locator("#fixture-main .single-review-code.is-split").waitFor();
+  await page.locator("#fixture-drawer .single-review-code.is-split").waitFor();
+  await zoomButton.click();
+  await zoomLayer.waitFor();
+  await zoomLayer.locator(".single-review-code.is-split").waitFor();
+  await page.keyboard.press("Escape");
+  await zoomLayer.waitFor({ state: "detached" });
+  await page.locator("#fixture-drawer").getByRole("button", { name: "单栏对比（统一视图）" }).click();
+  await page.waitForFunction(() => document.querySelectorAll(".single-review-code.is-split").length === 0);
+
   console.log("review diff zoom test passed");
 } finally {
   await browser?.close();

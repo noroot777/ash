@@ -85,3 +85,70 @@ export function countDiffLines(lines: readonly DiffLine[]): { additions: number;
   }
   return { additions, deletions };
 }
+
+/** 并排视图里的一格：左栏放旧的，右栏放新的，某一侧没有对应行时是 `empty`。 */
+export interface DiffCell {
+  kind: "add" | "delete" | "context" | "empty";
+  line: number | null;
+  text: string;
+}
+
+export type DiffRow =
+  /** 文件头和 `@@` 段头在并排视图里横跨两栏——它们不属于任何一侧。 */
+  | { kind: "hunk" | "meta"; text: string }
+  | { kind: "pair"; left: DiffCell; right: DiffCell };
+
+const EMPTY_CELL: DiffCell = { kind: "empty", line: null, text: "" };
+
+/** 并排视图里每格只放正文，`+`/`-` 由它在哪一栏表达，再留个符号是噪声。 */
+function cellOf(line: DiffLine | undefined): DiffCell {
+  if (!line) return EMPTY_CELL;
+  return {
+    kind: line.kind === "add" || line.kind === "delete" ? line.kind : "context",
+    line: line.kind === "delete" ? line.oldLine : line.kind === "add" ? line.newLine : line.oldLine,
+    text: line.text.slice(1),
+  };
+}
+
+/**
+ * 统一 diff 的行序列折成并排两栏。
+ *
+ * 一段连续的删除和紧随其后的一段连续新增是**同一处改动的两面**，所以要按位置两两对齐
+ * （第 i 条删对第 i 条增），长的一侧多出来的部分对空格。逐行交替配对会把「删 3 行、加 5
+ * 行」排成锯齿，正是并排视图要消掉的东西。
+ */
+export function toSideBySideRows(lines: readonly DiffLine[]): DiffRow[] {
+  const rows: DiffRow[] = [];
+  let deletes: DiffLine[] = [];
+  let adds: DiffLine[] = [];
+  const flush = () => {
+    for (let index = 0; index < Math.max(deletes.length, adds.length); index += 1) {
+      rows.push({ kind: "pair", left: cellOf(deletes[index]), right: cellOf(adds[index]) });
+    }
+    deletes = [];
+    adds = [];
+  };
+  for (const line of lines) {
+    if (line.kind === "delete") {
+      deletes.push(line);
+      continue;
+    }
+    if (line.kind === "add") {
+      adds.push(line);
+      continue;
+    }
+    flush();
+    if (line.kind === "context") {
+      const text = line.text.slice(1);
+      rows.push({
+        kind: "pair",
+        left: { kind: "context", line: line.oldLine, text },
+        right: { kind: "context", line: line.newLine, text },
+      });
+    } else {
+      rows.push({ kind: line.kind, text: line.text });
+    }
+  }
+  flush();
+  return rows;
+}

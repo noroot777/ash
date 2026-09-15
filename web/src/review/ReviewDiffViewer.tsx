@@ -5,6 +5,8 @@ import type { TaskDiffResult } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { branchDiffReason as diffReason } from "../lib/branch-diff-reason.ts";
 import { parseDiffLines, splitDiff, type DiffSection } from "./diffModel.ts";
+import { DiffBody, DiffLayoutToggle } from "./DiffBody.tsx";
+import { useDiffLayout } from "./diffLayout.ts";
 
 const INITIAL_FILE_COUNT = 120;
 const INITIAL_LINE_COUNT = 360;
@@ -83,6 +85,7 @@ export function ReviewDiffViewer({ result }: { result: TaskDiffResult }) {
   const [selected, setSelected] = useState(0);
   const [visibleLines, setVisibleLines] = useState(INITIAL_LINE_COUNT);
   const [zoomed, setZoomed] = useState(false);
+  const [diffLayout, setDiffLayout] = useDiffLayout();
   const [gutter, setGutter] = useState(0);
   const [zoomZ, setZoomZ] = useState(ZOOM_BASE_Z);
   const zoomBox = useRef<HTMLDivElement>(null);
@@ -138,6 +141,7 @@ export function ReviewDiffViewer({ result }: { result: TaskDiffResult }) {
           <div><GitDiff size={14} /><b>{section.file.path}</b></div>
           <span><i>+{section.file.additions ?? "?"}</i><em>−{section.file.deletions ?? "?"}</em></span>
           <small>总计 +{additions} −{deletions}</small>
+          <DiffLayoutToggle layout={diffLayout} onChange={setDiffLayout} />
           <button
             type="button"
             className="single-review-zoom"
@@ -162,20 +166,14 @@ export function ReviewDiffViewer({ result }: { result: TaskDiffResult }) {
         {!section.body ? (
           <p className="single-review-empty">{result.truncated ? "该文件未包含在截断响应中。" : "没有文本 diff，可能是二进制文件。"}</p>
         ) : (
-          <div className="single-review-code" role="table" aria-label={`${section.file.path} diff`}>
-            {lines.slice(0, visibleLines).map((line, index) => (
-              <div className={`single-review-line is-${line.kind}`} role="row" key={index}>
-                <span className="single-review-old" role="cell">{line.oldLine ?? ""}</span>
-                <span className="single-review-new" role="cell">{line.newLine ?? ""}</span>
-                <code role="cell">{line.text || " "}</code>
-              </div>
-            ))}
-            {visibleLines < lines.length && (
-              <button type="button" className="single-review-more-lines" onClick={() => setVisibleLines((count) => count + INITIAL_LINE_COUNT)}>
-                展开后续 {Math.min(INITIAL_LINE_COUNT, lines.length - visibleLines)} 行
-              </button>
-            )}
-          </div>
+          <DiffBody
+            lines={lines}
+            layout={diffLayout}
+            visible={visibleLines}
+            step={INITIAL_LINE_COUNT}
+            onMore={() => setVisibleLines((count) => count + INITIAL_LINE_COUNT)}
+            label={`${section.file.path} diff`}
+          />
         )}
       </section>
     </div>

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { FileText, GitDiff, SpinnerGap, Warning, X } from "@phosphor-icons/react";
 import { api, type ScmChangeKind } from "../lib/api.ts";
 import { countDiffLines, parseDiffLines } from "../review/diffModel.ts";
+import { DiffBody, DiffLayoutToggle } from "../review/DiffBody.tsx";
+import { useDiffLayout } from "../review/diffLayout.ts";
 import { branchDiffReason, type ScmDiffKind } from "./scmModel.ts";
 
 // 单个文件的 diff，摆在中间那一栏（跟 FileViewer 同一个位置，也沿用它的外壳样式：
@@ -53,6 +55,7 @@ export function ScmDiffViewer({
   const [diff, setDiff] = useState<ViewerDiff | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [visible, setVisible] = useState(INITIAL_LINES);
+  const [layout, setLayout] = useDiffLayout();
 
   useEffect(() => {
     let alive = true;
@@ -96,6 +99,7 @@ export function ScmDiffViewer({
         {diff && !diff.binary && !diff.unavailable && (
           <span className="scm-diff__counts"><i>+{counts.additions}</i><em>−{counts.deletions}</em></span>
         )}
+        {diff && !empty && !diff.unavailable && <DiffLayoutToggle layout={layout} onChange={setLayout} />}
         {/* 删掉的文件没有全文可看，这个入口就不给——给了只会点出一句「读不到」。 */}
         {onOpenFile && kind !== "deleted" && (
           <button type="button" className="file-viewer__action" onClick={onOpenFile}>
@@ -127,20 +131,14 @@ export function ScmDiffViewer({
           </p>
         )}
         {diff && !empty && !diff.unavailable && (
-          <div className="single-review-code" role="table" aria-label={`${path} 的改动`}>
-            {lines.slice(0, visible).map((line, index) => (
-              <div className={`single-review-line is-${line.kind}`} role="row" key={index}>
-                <span className="single-review-old" role="cell">{line.oldLine ?? ""}</span>
-                <span className="single-review-new" role="cell">{line.newLine ?? ""}</span>
-                <code role="cell">{line.text || " "}</code>
-              </div>
-            ))}
-            {visible < lines.length && (
-              <button type="button" className="single-review-more-lines" onClick={() => setVisible((count) => count + INITIAL_LINES)}>
-                展开后续 {Math.min(INITIAL_LINES, lines.length - visible)} 行
-              </button>
-            )}
-          </div>
+          <DiffBody
+            lines={lines}
+            layout={layout}
+            visible={visible}
+            step={INITIAL_LINES}
+            onMore={() => setVisible((count) => count + INITIAL_LINES)}
+            label={`${path} 的改动`}
+          />
         )}
       </div>
     </div>

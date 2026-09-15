@@ -106,6 +106,30 @@
 .single-review-line.is-hunk { background:#eef0fb; }
 .single-review-line.is-hunk > code { color:#4f58a8; }
 .single-review-line.is-meta > code { color:#a1a1aa; }
+/* 并排（左右分栏）：每一行是「旧的一格 + 新的一格」，两格各自带行号；一侧没有对应行时
+   那一格是 is-empty，用斜纹底表示「这里本来就没东西」，而不是留一块白让人以为是空行。
+   两栏各自 minmax 定宽 + 整行 min-width:max-content，长行横向滚动时两侧同步移动。 */
+.single-review-code.is-split .single-review-line.is-pair { grid-template-columns:repeat(2,minmax(340px,1fr)); }
+.single-review-code.is-split .single-review-side { display:grid; min-width:0; grid-template-columns:46px minmax(294px,1fr); }
+.single-review-code.is-split .single-review-side + .single-review-side { border-left:1px solid var(--line); }
+.single-review-code.is-split .single-review-side.is-add { background:#eaf7f1; }
+.single-review-code.is-split .single-review-side.is-add > code { color:#17634f; }
+.single-review-code.is-split .single-review-side.is-delete { background:#fcecef; }
+.single-review-code.is-split .single-review-side.is-delete > code { color:#8f2733; }
+.single-review-code.is-split .single-review-side.is-empty { background:repeating-linear-gradient(135deg,#fafafb,#fafafb 4px,#f2f2f4 4px,#f2f2f4 8px); }
+.single-review-code.is-split .single-review-line.is-span { grid-template-columns:1fr; }
+.single-review-code.is-split .single-review-line.is-span.is-hunk { background:#eef0fb; }
+.single-review-code.is-split .single-review-line.is-span.is-hunk > code { color:#4f58a8; }
+.single-review-code.is-split .single-review-line.is-span.is-meta > code { color:#a1a1aa; }
+/* 行号跟着自己那一侧走：并排时两栏各自横向滚动，单栏那种 sticky 到最左会让右栏的行号
+   贴到左栏上去。底色继承所在格，一眼能看出这一行属于删还是增。 */
+.single-review-code.is-split .single-review-side > span { position:static; border-right:1px solid var(--line); padding:0 7px; color:#a1a1aa; text-align:right; user-select:none; }
+/* 单栏 / 并排的切换。摆在 diff 标题栏上，两段只有一个是按下的。 */
+.diff-layout-toggle { display:inline-flex; flex:0 0 auto; overflow:hidden; border:1px solid var(--line2); border-radius:6px; background:var(--panel); }
+.diff-layout-toggle button { display:inline-flex; height:24px; align-items:center; gap:4px; border:0; background:transparent; padding:0 7px; color:var(--muted); font-size:9.5px; }
+.diff-layout-toggle button + button { border-left:1px solid var(--line2); }
+.diff-layout-toggle button:hover { background:var(--raised); color:var(--ink); }
+.diff-layout-toggle button[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent); }
 .single-review-more-lines { position:sticky; left:0; width:100%; min-width:612px; height:32px; border:0; border-top:1px solid var(--line); background:var(--panel); color:var(--accent); font-size:9.5px; }
 @media (max-width:760px) { .single-review-facts,.single-review-diff-layout,.accepted-snapshot-card dl { grid-template-columns:1fr; } .single-review-files > div { max-height:220px; } }
 @media (prefers-reduced-motion:reduce) { .single-review-workspace * { scroll-behavior:auto; } .review-meta-bar__toggle > svg:last-child { transition:none; } }
