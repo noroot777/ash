@@ -9,6 +9,10 @@ import { createKeyChordSequence } from "../lib/keyChord.ts";
 import { hasOpenLayer } from "../lib/useDismissable.ts";
 import { GO_CHORD_KEYS, GO_CHORD_PREFIX, isGoChordKey } from "./goChord.ts";
 
+// enabled 只关**列表导航那几颗单键**（j/k/f/c/r 和铺开态的 Esc/Enter）：它们要么改选中行、
+// 要么按在主工作区的按钮上，换了界面就没有落点。`G …` 一族相反 —— 它的整个存在理由就是
+// 「在任何界面上都按得到」（见 goChord.ts），所以它排在 enabled 之前，聊天 / 助手 / 设置页
+// 照样认。护栏仍然有：在输入框里打字、命令面板开着、模态层盖着、带修饰键，一律不算数。
 type ShortcutOptions = {
   enabled: boolean;
   paletteOpen: boolean;
@@ -90,7 +94,7 @@ export function useWorkspaceShortcuts({
         onTogglePalette();
         return;
       }
-      if (!enabled || paletteOpen || isTextEntry(event.target) || hasBlockingLayer() || previewOwnsNavigation(event.target)) {
+      if (paletteOpen || isTextEntry(event.target) || hasBlockingLayer() || previewOwnsNavigation(event.target)) {
         inspectorSequence.current.reset();
         goSequence.current.reset();
         return;
@@ -104,7 +108,7 @@ export function useWorkspaceShortcuts({
       // Inspector 的 `I …` 先跑：g 是它的第二键（`I G` 是 Git 那一档），任务模式的和弦要是
       // 抢在前面把 g 吞了，那一档就再也开不出来。反过来让它先跑不吃亏 —— Inspector 手上
       // 没有半截序列时，handle 会把 g 原样让下去。
-      if (hasInspectorShortcutTarget() && !event.repeat) {
+      if (enabled && hasInspectorShortcutTarget() && !event.repeat) {
         const inspectorShortcut = inspectorSequence.current.handle(event.key);
         if (inspectorShortcut.kind === "prefix") {
           goSequence.current.reset();
@@ -119,7 +123,7 @@ export function useWorkspaceShortcuts({
           activateInspectorShortcut(inspectorShortcut.key);
           return;
         }
-      } else if (!hasInspectorShortcutTarget()) {
+      } else if (!enabled || !hasInspectorShortcutTarget()) {
         inspectorSequence.current.reset();
       }
 
@@ -142,6 +146,10 @@ export function useWorkspaceShortcuts({
           return;
         }
       }
+
+      // 到这儿为止都是全局键。下面几颗单键只在主工作区认 —— 聊天 / 助手 / 设置页里
+      // 它们没有落点（既没有那份列表，也没有主区那颗运行按钮）。
+      if (!enabled) return;
 
       // 大图开着时 hasBlockingLayer() 已经把这里整段挡掉了，所以 Esc 只关大图、
       // 不会顺手把铺开也收了 —— 这条不需要在这里再判一次。

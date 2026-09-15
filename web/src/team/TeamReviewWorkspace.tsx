@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Session, Task, TaskListItem } from "@ash/shared";
-import { taskDisplayStatus } from "@ash/shared";
+import { hasPendingAcceptCommit, taskDisplayStatus } from "@ash/shared";
 import { acceptPlan, hasAcceptStation, isFinalHumanGate, nextAnchor } from "@ash/shared/workflow-policy";
 import { STEP_LABELS } from "@ash/shared/workflow";
 import { ArrowsClockwise, CaretDown, CheckCircle, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
@@ -149,7 +149,7 @@ export function AcceptanceControls({
   }
   const [action, setAction] = useState<"accept" | "return" | null>(null);
   // 事实列判，不猜：no_commit + 还没记下合并提交 = 那份改动还躺在目标分支工作区里。
-  const pendingCommit = task.acceptedMergeMethod === "no_commit" && !task.acceptedMergeCommit;
+  const pendingCommit = hasPendingAcceptCommit(task);
   const verification = useAcceptanceVerification(task, action === "accept");
   const needsVerificationConfirmation = !midGate && !!verification.verification;
   // 本次验收「合并后提交代码」的选择。null = 没动过，跟项目设置走。项目默认没读到之前

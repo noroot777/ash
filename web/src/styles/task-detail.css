@@ -68,7 +68,27 @@
   font-weight: 650;
 }
 
+/* 「合并后不提交」那一档欠着的提交：对话区只留这一颗可点的徽记，详情与出路都在验收台
+   的 PendingMergeCard 里（见该文件顶部）。 */
+.task-pending-commit {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid color-mix(in lch,var(--amber) 36%,var(--line));
+  border-radius: 999px;
+  background: color-mix(in lch,var(--amber) 9%,var(--panel));
+  padding: 3px 7px;
+  color: var(--amber);
+  font-size: 10px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.task-pending-commit:hover { background: color-mix(in lch,var(--amber) 15%,var(--panel)); }
+
 .task-time-meta { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; color: var(--faint); font-family: var(--font-mono); font-size: 9.5px; white-space: nowrap; }
+
 .task-time-meta > svg { flex: 0 0 auto; }
 .task-time-meta > i { color: var(--line2); font-style: normal; }
 
@@ -183,6 +203,8 @@
 .task-inspector-action span:last-child,
 .task-inspector-action > svg:last-child { margin-left: auto; }
 .task-inspector details { margin-top: 5px; border-top: 0.5px solid var(--line); padding-top: 7px; }
+/* 顶线是用来隔开兄弟节的；一节里的头一个 details 上面没有兄弟，画线只会在面板标题下留一道空档。 */
+.task-inspector section > details:first-child { margin-top: 0; border-top: 0; padding-top: 0; }
 .task-inspector details pre { max-height: 240px; overflow: auto; margin: 7px 0 0; white-space: pre-wrap; word-break: break-word; color: var(--muted); font-family: var(--font-sans); font-size: 10.5px; line-height: 1.55; }
 .task-inspector-attachment-links { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 7px; margin-top: 6px; font-size: 10.5px; }
 .task-inspector-attachment-links > span:first-child { color: var(--faint); }

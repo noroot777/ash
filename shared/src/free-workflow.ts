@@ -142,6 +142,14 @@ export interface FreeWorkflowState {
     /** 非空 = 这是自动复审链的续轮预约（修复回合正常结束后在该 run 上续下一轮）。 */
     runId: string | null;
   };
+  /**
+   * 此刻在跑的是**审查/验证旁路回合**（只读工作区、写报告、给结论，不产出新一版代码）。
+   *
+   * 界面拿它给预览类动作开门：「任务在跑 = 代码改到一半，预览没有意义」这条对旁路回合
+   * 不成立——审查那十几分钟恰恰是最想自己打开页面看一眼的时候。判据取服务端的运行时
+   * 事实（turn 的 role），不是「库里有没有 reviewing run」，理由见 server/review-turn.ts。
+   */
+  reviewTurn: boolean;
   /** 预览是「随手开一眼」的看片器，不是工作流里的一步：只报当下开没开，不留开关历史。 */
   preview: FreeWorkflowPreviewState;
   executions: FreeWorkflowExecution[];

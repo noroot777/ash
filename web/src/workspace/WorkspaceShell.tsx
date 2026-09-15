@@ -303,9 +303,14 @@ export function WorkspaceShell() {
   const selectTaskMode = () => { setScopeKind("tasks"); setSettingsSection(null); };
   // G T 是**来回**切而不是单向进入：一个按两下就能进的档位，得能用同样两下退出去，否则
   // 第二次按下去没反应，只会被读成「快捷键坏了」。退回单项目态时同样不动选中的任务 ——
-  // 上下文项目一直跟着它走，所以退出去看到的就是它所在的那个项目。设置页不用在这里让路：
-  // 快捷键在那儿本来就是关的（见下面 useWorkspaceShortcuts 的 enabled）。
-  const toggleTaskMode = () => setScopeKind((kind) => kind === "tasks" ? "project" : "tasks");
+  // 上下文项目一直跟着它走，所以退出去看到的就是它所在的那个项目。
+  //
+  // 设置页要让路：它是**整页替换**，侧栏根本不在屏幕上，只切口径等于按下去什么都没发生。
+  // 聊天 / 助手页不用让路 —— 侧栏还在旁边，列表换没换一眼就看得见，把人踢出对话反而更糟。
+  const toggleTaskMode = () => {
+    setSettingsSection(null);
+    setScopeKind((kind) => kind === "tasks" ? "project" : "tasks");
+  };
   // 任务模式里出站行就摆在列表里，点开当然得能进去 —— 进的是持有机上那份实时会话
   // （RemoteTaskDetail），跟点开本机任务一样是「打开这条任务」，只是活在别的机器上。
   // 认哪台机器由 shared 的 outboundHolder 说了算（换过地址的按名字认回同一台）。
@@ -466,6 +471,8 @@ export function WorkspaceShell() {
   };
 
   useWorkspaceShortcuts({
+    // 这颗开关只管列表导航那几颗单键（j/k/f/c/r）：换了界面它们就没有落点。
+    // `G …` 一族不受它约束，在聊天 / 助手 / 设置页照样按得到（见 useWorkspaceShortcuts）。
     enabled: !gitOpen && !settingsSection && !groupsPanelOpen && !chatOpen && !assistantOpen,
     paletteOpen,
     composerOpen: composer !== null,

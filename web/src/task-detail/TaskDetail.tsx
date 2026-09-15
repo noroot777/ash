@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Group, Task, TaskListItem } from "@ash/shared";
 import { isUserFollowUp } from "@ash/shared";
-import { Chats } from "@phosphor-icons/react";
 import { PreviewWorkspace } from "../preview-workspace/PreviewWorkspace.tsx";
 import { useSubagents } from "./useSubagents.tsx";
 import { InspectorHost } from "../inspector/index.ts";
@@ -19,7 +18,6 @@ import { ConversationFeed } from "./ConversationFeed.tsx";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { DeleteTaskDialog } from "./DeleteTaskDialog.tsx";
 import { HandoffBanner } from "./HandoffBanner.tsx";
-import { PendingMergeCard } from "../review/PendingMergeCard.tsx";
 import { HandoffAuditBanner } from "./HandoffAuditBanner.tsx";
 import { QuestionCard } from "./QuestionCard.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
@@ -350,16 +348,11 @@ export function TaskDetail({
               } : undefined}
               onDelete={() => setDeleteOpen(true)}
               indicatorForTask={indicatorForTask}
-              sideChatToggle={<button type="button" className="inspector-toggle" aria-label="打开侧聊" onClick={() => openTab("side-chat")}><Chats size={16} /></button>}
               terminalToggle={terminalToggle}
               inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
               notify={notify}
             />
             {task.handoffAudit && <HandoffAuditBanner audit={task.handoffAudit} />}
-            {/* 「合并后不提交」那一档欠着的那一步：在任务详情里也得**常驻**看得见，不能只
-                活在验收台里（用户从对话区回来时看不到那一屏）。验收台开着时就让那一份显示，
-                别在同一屏上画两张同样的卡。 */}
-            {!reviewOpen && <PendingMergeCard task={task} notify={notify} onTaskUpdated={onTaskUpdate} />}
             {task.handoff && (
               <HandoffBanner
                 taskId={task.id}

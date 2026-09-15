@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Task } from "@ash/shared";
-import { canArchive, taskDisplayStatus } from "@ash/shared";
+import { canArchive, hasPendingAcceptCommit, taskDisplayStatus } from "@ash/shared";
 import {
   Archive,
   ArrowCounterClockwise,
@@ -93,7 +93,6 @@ export function TaskHeader({
   onPostMergeReview,
   onDelete,
   indicatorForTask,
-  sideChatToggle,
   terminalToggle,
   inspectorToggle,
   notify,
@@ -116,7 +115,6 @@ export function TaskHeader({
   onPostMergeReview?: () => void;
   onDelete: () => void;
   indicatorForTask: IndicatorForTask;
-  sideChatToggle?: ReactNode;
   terminalToggle?: ReactNode;
   inspectorToggle?: ReactNode;
   notify: (message: string) => void;
@@ -217,6 +215,19 @@ export function TaskHeader({
         {indicator && <TaskStatusDot indicator={indicator} surface="team" />}
         {display.label}
       </span>
+      {/* 「合并后不提交」那一档欠着的那一步。收尾的卡片只住在验收台里（用户 2026-09-15：
+          那张卡不用在对话区永远铺着），所以对话区留这一颗徽记——一眼看得出还欠一步，
+          点一下就进验收台。验收台开着时那张卡自己就在，这里不再重复。 */}
+      {!reviewOpen && hasPendingAcceptCommit(task) && (
+        <button
+          type="button"
+          className="task-pending-commit"
+          aria-label="这次验收还欠一步提交，打开验收台收尾"
+          onClick={onReview}
+        >
+          <GitCommit size={12} weight="fill" aria-hidden="true" />待提交
+        </button>
+      )}
       <TaskTimeMeta task={task} />
       {!hidePrimaryForReview && (
         <button
@@ -330,7 +341,6 @@ export function TaskHeader({
           </div>
         )}
       </div>
-      {sideChatToggle}
       {terminalToggle}
       {inspectorToggle}
     </header>

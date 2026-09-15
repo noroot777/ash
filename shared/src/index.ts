@@ -282,6 +282,17 @@ export function isTaskStage(value: unknown): value is TaskStage {
 export function isAcceptedStage(stage: TaskStage | null | undefined): boolean {
   return stage === "accepted" || stage === "merged";
 }
+/**
+ * 「合并后不提交」那一档验收完，那份改动还躺在目标分支的工作区里等人提交。判据按事实列
+ * `acceptedMergeMethod` 走，不靠 `acceptedMergeCommit` 为 null 去猜——那个 null 还兼着
+ * 「合并早已发生、快照不可知」。好几处表面都要这一句（验收台的徽记、任务顶栏、手机的
+ * 状态牌），各写各的必然漂移，所以只留这一份。收尾的动作在验收台的 PendingMergeCard。
+ */
+export function hasPendingAcceptCommit(
+  task: Pick<Task, "acceptedMergeMethod" | "acceptedMergeCommit">,
+): boolean {
+  return task.acceptedMergeMethod === "no_commit" && !task.acceptedMergeCommit;
+}
 export function taskDisplayStatus(
   status: TaskStatus, stage: TaskStage | null | undefined, awaitingAnswer: boolean,
 ): TaskDisplayStatus {

@@ -37,8 +37,45 @@ try {
   assert.deepEqual((await page.locator(".native-work__status").allInnerTexts()).sort(),
     ["进行中", "待处理", "已完成", "失败", "已停止", "状态未知"].sort());
 
+  await mkdir(output, { recursive: true });
+  const inspector = page.locator(".inspector-host");
+  const inspectorStyle = await inspector.getAttribute("style");
+  const longTitle = page.locator('.native-work__entry[data-status="unknown"] .native-work__title');
+  assert.ok((await longTitle.innerText()).length >= 50, "夹具覆盖超长标题");
+  let previousCapacity = 0;
+  for (const width of [280, 314, 316, 318, 340, 446, 448, 480, 720]) {
+    await inspector.evaluate((el, width) => {
+      el.style.setProperty("--inspector-width", `${width}px`);
+      el.style.transition = "none";
+    }, width);
+    const cards = await page.locator(".native-work__entry").evaluateAll((entries) => entries.map((entry) => {
+      const title = entry.querySelector(".native-work__title");
+      const titleBox = title.getBoundingClientRect();
+      return { height: entry.getBoundingClientRect().height,
+        lines: titleBox.height / parseFloat(getComputedStyle(title).lineHeight),
+        overflow: entry.scrollWidth > entry.clientWidth,
+        expanded: entry.querySelector(".native-work__row").open };
+    }));
+    assert.ok(cards.every((card) => !card.expanded && card.height <= 60 && card.lines <= 2 && !card.overflow),
+      `折叠卡片最多两行且无横向溢出：${JSON.stringify({ width, cards })}`);
+    const capacity = await longTitle.evaluate((title) => {
+      const box = title.getBoundingClientRect();
+      return box.width * box.height / parseFloat(getComputedStyle(title).lineHeight);
+    });
+    assert.ok(capacity >= previousCapacity - 1,
+      `拉宽面板不应减少标题的可显示长度：${JSON.stringify({ width, previousCapacity, capacity })}`);
+    previousCapacity = capacity;
+    if ([340, 446, 448].includes(width)) await inspector.screenshot({ path: `${output}/native-work-compact-${width}.png` });
+  }
+  await inspector.evaluate((el, style) => {
+    if (style === null) el.removeAttribute("style");
+    else el.setAttribute("style", style);
+  }, inspectorStyle);
+  await settled(inspector);
+
   const running = page.locator('.native-work__row[data-status="running"]');
   const card = page.locator('.native-work__entry[data-status="running"]');
+  await running.locator(":scope > summary").press("Enter");
   // 模型和智能水平各占一行：实跑值优先，只有退回到派活时点的那个才标「调用指定」。
   assert.match(await card.locator(".native-work__meta").innerText(),
     /模型\s*gpt-5\.6-sol\s*调用指定[\s\S]*智能水平\s*xhigh/);
@@ -55,6 +92,7 @@ try {
   await timing.locator("summary").press("Space");
   assert.equal(await card.locator(".native-work__times").isVisible(), false, "可重新收起完整时间");
   const pending = page.locator('.native-work__entry[data-status="pending"]');
+  await pending.locator(".native-work__row > summary").click();
   assert.equal(await pending.locator("time").count(), 0, "未开工不能显示开始时间");
   assert.equal(await pending.locator(".native-work__model").count(), 0, "内部待办没有执行模型");
   assert.match(await pending.locator(".native-work__timing > summary").innerText(), /尚未开始/);
@@ -63,14 +101,14 @@ try {
   await page.clock.fastForward(60_000);
   assert.notEqual(await card.locator(".native-work__duration-value").innerText(), activeSpan, "运行项实时更新跨度");
   assert.equal(await pending.locator(".native-work__duration-value").count(), 0, "待处理项不会随时钟递增");
-  await running.locator("summary").click();
-  await page.getByText("核对浏览器状态", { exact: true }).click();
   assert.match(await page.locator(".native-work__detail").filter({ hasText: "所属子智能体" }).innerText(), /运行中的资料搜集/);
 
   const overflow = await page.locator(".native-work").evaluate((el) => ({ width: el.clientWidth, scroll: el.scrollWidth }));
   assert.ok(overflow.scroll <= overflow.width + 1, `narrow Inspector overflowed: ${JSON.stringify(overflow)}`);
   await mkdir(output, { recursive: true });
   await page.screenshot({ path: `${output}/native-work-initial.png`, fullPage: true });
+  await running.locator(":scope > summary").press("Space");
+  await pending.locator(".native-work__row > summary").click();
 
   await page.getByRole("button", { name: "查看执行：运行中的资料搜集", exact: true }).click();
   // 执行详情从左侧抽屉推出来（和团队模式点执行者同一套外壳）：只盖住主区那一栏，
@@ -88,6 +126,16 @@ try {
   const conversation = page.getByLabel("子智能体执行详情", { exact: true });
   const header = conversation.locator(".native-agent__header");
   const headline = header.locator(".native-agent__headline");
+  const avatar = await header.locator(".native-agent__avatar").evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    return { width: box.width, height: box.height, display: style.display,
+      border: style.borderTopWidth, radius: style.borderTopLeftRadius, background: style.backgroundColor };
+  });
+  assert.deepEqual({ width: avatar.width, height: avatar.height, display: avatar.display, border: avatar.border, radius: avatar.radius },
+    { width: 30, height: 30, display: "grid", border: "1px", radius: "8px" }, "抽屉抬头保留圆角方块图标");
+  assert.notEqual(avatar.background, "rgba(0, 0, 0, 0)");
+  await header.screenshot({ path: `${output}/native-agent-drawer-header.png` });
   // 模型与时间原本是正文顶上一块要点开的两列表格，现在顺着标题横向摊在抬头里。
   assert.equal(await conversation.locator(".native-agent__metadata").count(), 0, "正文里不再有单独的「模型与时间」折叠区");
   assert.equal(await conversation.locator(".native-work__meta").count(), 0, "抬头不复刻列表里那套两列表格");
@@ -174,6 +222,7 @@ try {
   assert.equal(await snapshotPending.locator(".native-work__duration-value").count(), 0);
   const firstCompleted = page.locator('.native-work__entry[data-status="completed"]');
   assert.equal(await firstCompleted.locator("time").count(), 1, "首次快照仅知道完成时间");
+  await firstCompleted.locator(".native-work__row > summary").click();
   await firstCompleted.locator(".native-work__timing > summary").click();
   assert.match(await firstCompleted.innerText(), /未记录开始时间，无法计算跨度/);
   await page.clock.fastForward(60_000);

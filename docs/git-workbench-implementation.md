@@ -158,3 +158,13 @@ Windows 真机本轮验证：通过局域网传输 `git format-patch`，校验 S
 扩展后的浏览器错误流程独立通过，完整 `web test:git-workbench` 四套全部退出码 0。真实页面反做发生冲突后选择「整份采用我方」，核对空反做面板、刷新后状态、变更摘要、继续隐藏和跳过主按钮，并分别执行跳过与中止。直接反做已撤销内容的响应、页面与失败日志均显示准确的中文说明，未出现操作面板，HEAD 与工作区保持不变。测试新增提交后，后续空拣选中止用例的旧 HEAD 期望已修正为本次触发前的 HEAD；最终各流程通过。
 
 浏览器沿用本任务会话中已实测的扩展不可用状态：具名 Chrome 后台会话命名返回 `unsupported Codex auth method: apikey`，因此使用独立临时 profile 的无头 Chromium。未接管普通标签、激活用户 Chrome 或使用有头浏览器。Chromium、Vite、fixture 及临时目录已清理。本轮未修改平台路径或 win32 分支，验证在本机执行；修改的代码文件均少于 700 行，`git diff --check` 通过。
+
+## 验收合并冲突修复（2026-09-15）
+
+在任务分支 `ash/Y_sgd0mN` 合入 `main` 的 `7fef0542`，解决 `WorkspaceShell.tsx` 的快捷键开关冲突。保留 Git 工作台禁用列表单键的 `!gitOpen` 条件，也保留 main 中 `G T / G S` 不受列表开关限制、从设置页切换任务模式时关闭设置页的行为。双方同时改动的 `server/package.json` 保留各自新增的回归脚本。逐文件核对任务分支独有的 76 个文件和 main 独有的 30 个文件，合并结果均与各自来源一致；冲突文件为 555 行。
+
+合并后 `shared/server/web build` 全部通过（含类型检查）；后端 Git 工作台的 15 个核心场景、4 组安全、4 组维护和 8 组结果回归，以及 main 新增的 `test-free-preview-review-turn.ts` 均通过。`web test:shortcuts` 六组全部通过，覆盖列表导航关闭后单键与 Inspector 静默、`G T / G S` 仍可用。
+
+完整 `web test:git-workbench` 最终四套全部通过。首轮 conflict-gates 在 stash pop 解决后提交处有一次页面旧状态断言失败：提交请求成功且磁盘状态已干净，页面瞬间仍显示已暂存 1 项。该组独立重跑通过，随后完整四套重跑全部退出码 0；本轮未因此修改产品或测试代码。
+
+本轮重新探测 Chrome 扩展具名后台会话，浏览器列表为空，错误原文为 `Browsers: Error: unsupported Codex auth method: apikey`，因此降级到独立临时 profile 的无头 Chromium。未接管普通标签、激活用户 Chrome 或使用有头浏览器。Chromium、Vite、fixture 及临时目录已清理，暂存区与工作区的 `git diff --check` 均通过。所有合并操作均在任务分支执行，未修改目标分支。

@@ -19,11 +19,18 @@ import { appendTaskTimeline } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { readPreview, readPreviewLog, isPreviewStarting, startPreview, stopPreview, beginPreviewStart, endPreviewStart, previewStartCanceled, PREVIEW_CANCELED, type PreviewStep } from "./preview.js";
 import { rerunGateClosed } from "./rerun-gate.js";
+import { reviewTurnInFlight } from "./review-turn.js";
 
 async function startFreePreview(taskId: string, input?: WorkspacePreviewInput) {
+  // 「任务在跑」这一整组门禁对**旁路回合**（审查轮/验证轮）一律不成立：那种回合只读工作
+  // 区、不产出新一版代码，用户在这十几分钟里最想做的就是自己打开页面看一眼（见
+  // review-turn.ts）。每一处门都得跟着同一个判据走——只放行一半的话，按钮能点、请求照吃
+  // 409。判据**每次现问**，不在函数开头存一个副本：审查未通过会当场把修复消息发回会话，
+  // 下一秒在跑的就是一个真的在改代码的回合了。
+  const busyGate = () => rerunGateClosed(taskId) && !reviewTurnInFlight(taskId);
   // 拿锁那一步也会因为「任务正在切进 running」而失败（见 rerun-gate.ts），但它只会说一句
   // 「已有操作正在进行」——用户此刻遇到的事其实是任务又开跑了。所以先自己问一次，把话说准。
-  if (rerunGateClosed(taskId)) throw new Error("任务正在修改代码，结束后再打开预览");
+  if (busyGate()) throw new Error("任务正在修改代码，结束后再打开预览");
   const holder = acquireFreeWorkflowAction(taskId);
   if (holder === null) throw new Error("当前已有自由工作流操作正在进行");
   // **可取消从这一行开始。** 下面查任务、查项目、解析/新建工作区全是 await，第一次开预览
@@ -41,13 +48,17 @@ async function startFreePreview(taskId: string, input?: WorkspacePreviewInput) {
     }
     if (task.archived) throw new Error("归档任务不能打开预览");
     if (task.status === "backlog") throw new Error("任务尚未运行，完成实现后再打开预览");
-    if (task.status === "running" || task.status === "queued") throw new Error("任务正在修改代码，结束后再打开预览");
+    if (!reviewTurnInFlight(taskId) && (task.status === "running" || task.status === "queued")) {
+      throw new Error("任务正在修改代码，结束后再打开预览");
+    }
     // 库里那一行可能是**上一秒的**：任务正在切进 running 的那一段（先收旧预览、后写状态）
     // 里，读到的还是 done。那一段结束后不会再收第二次，放行就等于让预览跟正在改代码的
     // agent 共用同一个工作区（见 rerun-gate.ts）。上面那次问的是发车前，这次问的是「读完
     // 任务行之后门才关上」。
-    if (rerunGateClosed(taskId)) throw new Error("任务正在修改代码，结束后再打开预览");
-    if (isTurnClaimed(taskId)) throw new Error("任务回合正在进行（状态尚未落库），结束后再打开预览");
+    if (busyGate()) throw new Error("任务正在修改代码，结束后再打开预览");
+    if (isTurnClaimed(taskId) && !reviewTurnInFlight(taskId)) {
+      throw new Error("任务回合正在进行（状态尚未落库），结束后再打开预览");
+    }
     assertBeforeAcceptance(task);
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
     if (!project) throw new Error("项目不存在");
@@ -56,7 +67,7 @@ async function startFreePreview(taskId: string, input?: WorkspacePreviewInput) {
     // 到这个检查点就收摊，别再往下认命令、更别起进程。开跑那道门同理——这一段里任务
     // 完全可能已经开始跑下一轮了。
     if (previewStartCanceled(gen)) throw new Error(PREVIEW_CANCELED);
-    if (rerunGateClosed(taskId)) throw new Error("任务正在修改代码，结束后再打开预览");
+    if (busyGate()) throw new Error("任务正在修改代码，结束后再打开预览");
     const config = input?.config ?? (input?.command ? null : parsePreviewConfig(project.previewConfig ?? null));
     const selected = config?.mode === "services" ? config.services.filter((s) => s.enabled) : undefined;
     const { command, source } = selected
@@ -87,7 +98,7 @@ async function startFreePreview(taskId: string, input?: WorkspacePreviewInput) {
     //
     // 三样一起认：代号还在（没被取消）、盘上那条记录还是我们这一代、开跑那道门没关上
     // （管的是「记录刚被收、状态还没落库」那条缝）。
-    const mine = () => !previewStartCanceled(gen) && readPreview(taskId)?.gen === gen && !rerunGateClosed(taskId);
+    const mine = () => !previewStartCanceled(gen) && readPreview(taskId)?.gen === gen && !busyGate();
     if (!mine()) throw new Error(PREVIEW_CANCELED);
     // 预览只是「随手开一眼」：时间线留一行让刷新后仍看得见，但不进「实际工作流」那条
     // 线——开关预览不改变任务本身走到了哪一步。命令是哪儿来的也写上：填过的那条跑错了

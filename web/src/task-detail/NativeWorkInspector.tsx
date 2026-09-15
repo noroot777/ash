@@ -1,21 +1,19 @@
-import { ArrowUpRight, CaretDown, CheckCircle, Circle, Robot, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
+import { ArrowUpRight, CaretDown, Robot } from "@phosphor-icons/react";
 import { NATIVE_WORK_NO_ASSIGNMENT, NATIVE_WORK_STATUS_LABELS as labels, type NativeWorkItem } from "./nativeWorkModel.ts";
 import { NativeWorkMeta } from "./NativeWorkMeta.tsx";
 import "../styles/native-work.css";
 
 function WorkRow({ row, parent, open, onOpen }: { row: NativeWorkItem; parent?: NativeWorkItem; open: boolean; onOpen: () => void }) {
-  const Icon = row.status === "completed" ? CheckCircle : row.status === "running" ? SpinnerGap
-    : row.status === "failed" ? WarningCircle : row.kind === "agent" ? Robot : Circle;
   return (
-    <article className={`native-work__entry${open ? " is-open" : ""}`} data-status={row.status}>
+    <article className={`native-work__entry${open ? " is-open" : ""}`} data-status={row.status} data-kind={row.kind}>
       <details className="native-work__row" data-status={row.status}>
         <summary>
-          <span className="native-work__avatar"><Icon size={17} aria-hidden="true" /></span>
-          <span className="native-work__identity"><span className="native-work__title">{row.title}</span>
-            <span className="native-work__status" data-status={row.status}>{labels[row.status]}</span>
-          </span>
+          <span className="native-work__title">{row.title}</span>
+          <span className="native-work__status" data-status={row.status}>{labels[row.status]}</span>
           <CaretDown className="native-work__chevron" size={13} aria-hidden="true" />
         </summary>
+        <p className="native-work__full-title">{row.title}</p>
+        <NativeWorkMeta row={row} />
         <div className="native-work__detail">
           <dl>
             <dt>来源会话</dt><dd>{row.sessionLabel}</dd>
@@ -33,10 +31,7 @@ function WorkRow({ row, parent, open, onOpen }: { row: NativeWorkItem; parent?: 
             : "历史记录仅保留派活调用，未记录最终状态。"}</p>}
         </div>
       </details>
-      <NativeWorkMeta row={row} />
-      <footer className="native-work__footer"><span>{row.sessionLabel}</span>
-        {row.kind === "agent" && <button className="native-work__open" type="button" onClick={onOpen} aria-pressed={open} aria-label={`查看执行：${row.title}`}>查看执行<ArrowUpRight size={13} aria-hidden="true" /></button>}
-      </footer>
+      {row.kind === "agent" && <button className="native-work__open" type="button" onClick={onOpen} aria-pressed={open} aria-label={`查看执行：${row.title}`}>查看执行<ArrowUpRight size={13} aria-hidden="true" /></button>}
     </article>
   );
 }

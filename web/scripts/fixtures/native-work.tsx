@@ -40,7 +40,7 @@ function trace(final: boolean, updates = 0) {
     native({ type: "call", id: "agent-fail-call", name: "spawn_agent", input: { description: "启动失败的执行者", prompt: "模拟失败" } }),
     native({ type: "result", id: "agent-fail-call", result: "fixture launch failed", failed: true }, 4),
     native({ type: "agent", id: "agent-stopped", title: "用户停止的执行者", status: "stopped", message: "由用户停止" }),
-    native({ type: "agent", id: "agent-unknown", title: "旧记录状态未知", status: "unknown", message: "没有最终状态" }),
+    native({ type: "agent", id: "agent-unknown", title: "调研 ash 现有 git 能力并给出一份把分支管理、提交记录、差异查看、冲突处理与工作区隔离串起来的完整说明，同时核对各项能力在界面中的实际入口", status: "unknown", message: "没有最终状态" }),
     native({ type: "activity", id: "agent-run", event: { kind: "thinking", text: "核对侧栏事件的归属" } }),
     native({ type: "activity", id: "agent-run", event: { kind: "tool", name: "Read", detail: JSON.stringify({ file_path: "web/src/task-detail/NativeWorkInspector.tsx" }) } }),
     native({ type: "activity", id: "agent-run", event: { kind: "text", text: "已经找到**子智能体侧栏**，正在读取执行记录。\n\n" } }),
