@@ -113,7 +113,7 @@
     "test:branch-acceptance": "node scripts/test-branch-acceptance.mjs",
     "test:task-creation-origin": "node scripts/test-task-creation-origin.mjs",
     "test:project-git-lifetime": "node scripts/test-project-git-lifetime.mjs",
-    "test:git-workbench": "node scripts/test-git-workbench.mjs && node scripts/test-git-workbench-review.mjs && node scripts/test-git-workbench-conflict-gates.mjs",
+    "test:git-workbench": "node scripts/test-git-workbench.mjs && node scripts/test-git-workbench-review.mjs && node scripts/test-git-workbench-conflict-gates.mjs && node scripts/test-git-workbench-conflict-errors.mjs",
     "test:annotation-review": "tsx scripts/test-annotation-review.ts && tsx scripts/test-annotation-review-presentation.tsx",
     "test:preview-workspace": "tsx scripts/test-preview-workspace-launch.tsx",
     "test:conversation-self-turn": "node --experimental-strip-types scripts/test-conversation-self-turn.mjs"

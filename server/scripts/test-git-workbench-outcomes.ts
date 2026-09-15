@@ -95,12 +95,14 @@ try {
     assert.equal(entry.action, action.kind);
     assert.equal(entry.state, outcome);
     assert.equal(entry.message, message);
-    if (
-      outcome === "conflict" &&
-      ["merge", "stash-apply", "stash-pop"].includes(action.kind)
-    ) {
+    if (outcome === "conflict") {
       assert.match(message, /CONFLICT[^\n]*file\.txt/);
       assert.doesNotMatch(message, /Command failed: git -C/);
+      assert.doesNotMatch(message, /(?:^|\n)hint:/);
+      assert.doesNotMatch(
+        message,
+        /git (?:rebase|cherry-pick|revert) --(?:continue|skip|abort)/,
+      );
     }
     assert.equal(
       entry.message.includes("Git 操作尚未完成"),
@@ -255,8 +257,17 @@ try {
     "failed",
   );
   assert.match(refusedDiscard.journal[0].message, /incoming\.txt/);
+  assert.match(refusedDiscard.journal[0].message, /安全回退未完成/);
+  assert.match(
+    refusedDiscard.journal[0].message,
+    /变更视图暂存该文件.*重试「放弃冲突改动」.*会被丢弃/,
+  );
+  assert.match(
+    refusedDiscard.journal[0].message,
+    /解决并暂存所有冲突.*变更视图提交/,
+  );
   assert.deepEqual(await snapshot(squash), unsafe);
-  writeFileSync(join(squash, "incoming.txt"), "incoming\n");
+  await run(squash, { kind: "stage", paths: ["incoming.txt"] });
   const discarded = await run(squash, { kind: "discard-conflicts" });
   assert.equal(discarded.entry.state, "succeeded");
   assert.equal(discarded.entry.command, "git reset --merge HEAD");
@@ -290,6 +301,26 @@ try {
   });
   console.log(
     "ok · squash conflict discard requires fresh typed confirmation, preserves HEAD and unrelated work, and safely refuses overlapping unstaged edits",
+  );
+
+  for (const kind of ["rebase", "cherry-pick", "revert"] as const) {
+    const repo = seed(`diagnostic-${kind}`);
+    if (kind !== "revert") git(repo, "checkout", "-qb", "other");
+    const target = commit(repo, "applied");
+    if (kind !== "revert") git(repo, "checkout", "-q", "main");
+    commit(repo, "main");
+    const config = git(repo, "config", "--local", "--list");
+    const conflicted = await rejected(repo, { kind, target }, "conflict");
+    assert.equal(conflicted.status.operation, kind);
+    assert.match(
+      conflicted.journal[0].message,
+      /error: could not (?:apply|revert)/,
+    );
+    assert.equal(git(repo, "config", "--local", "--list"), config);
+    await run(repo, { kind: "abort" });
+  }
+  console.log(
+    "ok · rebase/cherry-pick/revert retain both conflict stdout and failure stderr without command-line hints or persistent config changes",
   );
 
   const replay = seed("continuation");

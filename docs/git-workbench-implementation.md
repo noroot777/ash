@@ -122,3 +122,15 @@ Windows 真机本轮验证：通过局域网传输 `git format-patch`，校验 S
 新增浏览器冲突回归单独通过，完整 `web test:git-workbench` 三套也全部退出码 0。页面驱动的 merge、stash pop、squash merge 均验证真实诊断出现在响应及页面结果条；普通 merge 仍使用中止入口。squash 冲突验证空/错误确认禁用、取消保留冲突、完整文字确认后清除冲突并恢复普通操作。390px 页面自动断言无横向溢出；截图仅用于捕获，未进行人工视觉审阅。初次新测试误将确认弹窗的通用失败指引当作诊断显示位置，改为检查实际页面结果条后通过。
 
 浏览器通道先探测并选择 Chrome 扩展，创建具名后台会话的命名步骤返回 `unsupported Codex auth method: apikey`，因此降级到独立临时 profile 的无头 Chromium。未接管普通标签、激活用户 Chrome 或使用有头浏览器。fixture、Vite、Chromium、截图和临时 profile 已退出或清理。本轮没有修改平台路径或 win32 分支，验证在本机执行。修改的代码文件均少于 700 行，最长 591 行；`git diff --check` 通过。
+
+## 第 5 轮审查修复（2026-09-15）
+
+工作台 Git 失败时合并 stdout 与 stderr，再回退到无输出时的原始错误，保留冲突文件诊断和具体失败原因。rebase、cherry-pick、revert 及其继续/跳过调用使用单次 `-c advice.mergeConflict=false`，关闭 Git 的冲突命令行提示，沿用页面的继续/跳过/中止指引；不修改仓库或用户的持久 Git 配置。合并后的错误仍经过原有脱敏和长度限制。
+
+「放弃冲突改动」执行失败时保留 Git 原文和报错文件名，并追加中文后续操作：先复制需要保留的内容；如果未暂存改动阻碍安全回退，可在变更视图暂存报错文件，再确认放弃（明确这些内容会被丢弃），或者解决并暂存所有冲突后提交。其他原因的失败提示按 Git 原因处理后重试，不把所有失败都归结为未暂存文件。失败仍记为 `failed`。
+
+本轮本机 `shared/server/web build` 均通过。后端 `test:git-workbench` 的 15 个核心场景、4 组安全、4 组维护及 6 组结果回归全部通过。结果回归不再按动作名筛选冲突诊断断言：所有构造的冲突都要求真实 `CONFLICT` 和文件名，且没有命令行冲突 hint，覆盖 merge/squash、rebase/cherry-pick/revert、继续/跳过、交互式变基、stash、pull 整合。新增案例同时核对 stderr 失败原因仍在、配置未改变；安全回退被拒后现场快照不变，按中文指引暂存阻塞文件后可成功放弃，HEAD 及无关工作内容按原有约定保留。
+
+新增 `test-git-workbench-conflict-errors.mjs` 独立通过，接入后的 `web test:git-workbench` 四套全部退出码 0。页面驱动的变基冲突在响应、页面结果条和日志中保留文件诊断，并核对 stderr 失败原因及没有命令行冲突提示。squash 合入新增文件后再修改它，首次确认放弃被安全拒绝：HEAD、状态、索引及文件内容未变，响应/页面/失败日志保留原始文件名和中文指引。随后完全通过页面暂存该文件，再输入确认文字放弃，仓库恢复干净。
+
+浏览器先尝试 Chrome 扩展具名后台会话，命名失败原因为 `unsupported Codex auth method: apikey`，因此使用独立临时 profile 的无头 Chromium；未接管普通标签、激活 Chrome 或使用有头浏览器。Chromium、Vite、fixture 进程及临时目录已清理。本轮未修改平台路径或 win32 分支，验证在本机执行。新增浏览器脚本 314 行，所有修改的代码文件少于 700 行；`git diff --check` 通过。

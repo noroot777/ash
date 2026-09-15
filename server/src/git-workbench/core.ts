@@ -19,7 +19,10 @@ export async function git(
   env: NodeJS.ProcessEnv = {},
 ): Promise<string> {
   try {
-    const result = await execFileText("git", ["-C", root, ...args], {
+    const advice = ["rebase", "cherry-pick", "revert"].includes(args[0])
+      ? ["-c", "advice.mergeConflict=false"]
+      : [];
+    const result = await execFileText("git", ["-C", root, ...advice, ...args], {
       env: {
         ...process.env,
         GIT_TERMINAL_PROMPT: "0",
@@ -33,7 +36,9 @@ export async function git(
   } catch (error) {
     const output = error as { stderr?: string; stdout?: string };
     return fail(
-      output.stderr?.trim() || output.stdout?.trim() || gitError(error),
+      [output.stdout?.trim(), output.stderr?.trim()]
+        .filter(Boolean)
+        .join("\n") || gitError(error),
     );
   }
 }

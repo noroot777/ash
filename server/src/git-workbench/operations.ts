@@ -175,7 +175,13 @@ async function runAction(
       return "冲突文件已保存并暂存";
     case "discard-conflicts":
       if (!status.branch.oid) fail("当前 HEAD 尚无提交，无法恢复冲突文件");
-      await git(root, ["reset", "--merge", "HEAD"]);
+      try {
+        await git(root, ["reset", "--merge", "HEAD"]);
+      } catch (error) {
+        fail(
+          `${error instanceof Error ? error.message : String(error)}\n安全回退未完成，请先复制需要保留的未提交内容。若上方报错文件有未暂存改动：想放弃这些改动，可到变更视图暂存该文件，再重试「放弃冲突改动」，这些内容会被丢弃；想保留改动，可解决并暂存所有冲突，再到变更视图提交。其他失败请按上方 Git 原因处理后重试。`,
+        );
+      }
       return "已放弃冲突及暂存改动，HEAD 未改变";
     case "continue":
     case "abort":
