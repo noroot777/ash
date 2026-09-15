@@ -80,3 +80,7 @@
 `web test:git-workbench` 的原有完整流程与新增审查回归均通过。新增场景逐字比较三种冲突选边的编辑器、磁盘、索引内容，覆盖 `$$`、`$&`、`` $` ``、`$'` 等源码、重复块的位置、冲突期间同步控件禁用且没有动作请求，以及真实备份恢复/确认删除/辅助文件清理。桌面和 390px 备份页面截图已检查，无横向溢出。
 
 本轮再次检查扩展通道，返回 `Browsers: Error: unsupported Codex auth method: apikey`，浏览器列表为空，因此降级到独立临时 profile 的无头 Chromium；没有接管普通标签、激活 Chrome 或使用有头浏览器。
+
+Windows 真机本轮验证：通过局域网传输 `git format-patch`，校验 SHA-256 后应用到独立 detached worktree；依赖安装、新增 `test-git-workbench-maintenance.ts`（4 组）、shared/server/web build 均退出码 0。新增 `test-git-workbench-review.mjs` 最终退出码 0，Chrome 正常退出并清理临时 profile。浏览器首轮被测试夹具的 CRLF/LF 预期差异拦下，特殊字符保持原样；为隔离用户全局 Git 配置，在临时仓库设置 `core.autocrlf=false` 后通过，生产换行处理未改动。
+
+本轮清理已核对：远端隔离工作树、依赖、补丁、截图、测试夹具和终端会话，以及本机传输服务与辅助文件均已清理；浏览器 PID 与临时 profile 不再存在。修改的 18 个代码文件均未超过 700 行，最长 455 行；`git diff --check` 通过。
