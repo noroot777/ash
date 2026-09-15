@@ -23,7 +23,7 @@ export function NativeAgentConversation({ row, statusLabel, error, onRetry }: {
     && row.result && !segments.map((segment) => segment.markdown).join("").includes(row.result) ? row.result : null;
   return <div className="native-agent" aria-label="子智能体执行详情">
     <header className="native-agent__header">
-      <div className="native-agent__heading"><span className="native-work__avatar"><Robot size={19} aria-hidden="true" /></span>
+      <div className="native-agent__heading"><span className="native-agent__avatar"><Robot size={19} aria-hidden="true" /></span>
         <div><strong>{row.title}</strong><NativeWorkHeadline row={row} /></div>
       </div>
       <span className="native-work__status" data-status={row.status} role="status">{statusLabel}</span>
