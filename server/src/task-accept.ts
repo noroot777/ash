@@ -27,6 +27,7 @@ import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 import { recordBranchReceipt } from "./task-branch-receipts.js";
 import { mountBranchPlanRoutes } from "./task-branch-routes.js";
+import { mountPendingMergeRoutes } from "./task-accept-pending.js";
 import { branchDependency, branchOwner, commitAt, dependentTasks, plannedMergeTarget } from "./task-branch-plan.js";
 import { resolveWorktreeBranchName } from "./git.js";
 import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
@@ -346,10 +347,16 @@ async function acceptTaskUnlocked(
     acceptedBaseCommit: task.acceptedBaseCommit
       ?? (merge.method === "already_merged" ? null : merge.beforeCommit ?? null),
     acceptedMergeCommit: task.acceptedMergeCommit ?? merge.afterCommit ?? null,
+    // 「怎么合的」与「不提交那一档的内容指纹」同属这一生命周期的事实：重试时本次
+    // method 可能退化成 already_merged/no_commit 的短路返回，已记下的才是真实那次。
+    acceptedMergeMethod: task.acceptedMergeMethod ?? merge.method,
+    acceptedPendingTree: task.acceptedPendingTree ?? merge.stagedTree ?? null,
   } : {
     acceptedTargetBranch: merge.targetBranch,
     acceptedBaseCommit: merge.beforeCommit ?? null,
     acceptedMergeCommit: merge.afterCommit ?? null,
+    acceptedMergeMethod: merge.method,
+    acceptedPendingTree: merge.stagedTree ?? null,
   };
   // 不提交这一档**没有合并提交**。afterCommit 此刻等于目标分支原来的头，写进去就是把
   // 一个跟本次验收毫无关系的提交冒充成「我们合出来的那一个」——合并结果审查会照着它去
@@ -377,9 +384,16 @@ async function acceptTaskUnlocked(
     tagged
       ? `已按线上写的「只打标签不合并」在 ${merge.sourceBranch} 上打下标签 ${merge.tag}；目标分支 ${merge.targetBranch} 一个字节都没动。`
       : noCommit
+        // 用户是从这句话里找下一步怎么走的，所以命令要给全、能直接粘（带 -C，不假设
+        // 他此刻在哪个目录）。三条出路都写上，别让他自己拼。
         ? `合并完成（未提交）：${merge.sourceBranch} 的改动已合进 ${merge.targetBranch} 的工作区并暂存，`
-          + `${merge.targetBranch} 的提交历史一动没动。去项目目录 git commit 落成提交，或 git reset --hard 丢弃；`
-          + `在你自己提交之前，这个工作区都是「脏」的，下一次验收会因此暂停。来源分支 ${merge.sourceBranch} 保留着，改动没提交也丢不了。`
+          + `${merge.targetBranch} 的提交历史一动没动。三条出路，任选一条：`
+          + `① 在验收台点「现在提交」，ash 会先核对索引里确实只有这次合并的改动再替你落成提交；`
+          + `② 自己落成提交 —— git -C ${project.repoPath} commit -m "squash 合并 ${merge.sourceBranch}"；`
+          + `③ 丢弃这次合并 —— git -C ${project.repoPath} reset --hard`
+          + `（会把暂存区和工作区一起退回 ${merge.targetBranch} 当前提交，这次合进来的改动就没了）。`
+          + `在你收尾之前，这个工作区都是「脏」的，下一次验收会因此暂停。`
+          + `来源分支 ${merge.sourceBranch} 保留着，改动没提交也丢不了。`
         : `合并完成：${merge.sourceBranch} → ${merge.targetBranch}（${mergeLabel[merge.method] ?? merge.method}）。`,
   );
   for (const warning of merge.warnings ?? []) {
@@ -632,6 +646,8 @@ export async function acceptTask(
 
 export function mountTaskAcceptanceRoutes(api: Hono): void {
   mountBranchPlanRoutes(api, acceptTask);
+  // 「合并后不提交」那一档的收尾（核对现场 / 现在提交 / 重新合一次），自成一套退路。
+  mountPendingMergeRoutes(api);
   api.get("/tasks/:id/acceptance-check", async c => {
     const task = (await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
     if (!task) return c.json({ error: "not found" }, 404);

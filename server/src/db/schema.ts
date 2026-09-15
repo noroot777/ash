@@ -219,6 +219,21 @@ export const tasks = sqliteTable("tasks", {
   acceptedTargetBranch: text("accepted_target_branch"),
   acceptedBaseCommit: text("accepted_base_commit"),
   acceptedMergeCommit: text("accepted_merge_commit"),
+  // 这次验收**到底怎么合的**（TaskMergeMethod：already_merged / fast_forward /
+  // merge_commit / squash / tagged / no_commit）。
+  //
+  // 为什么非要单独一列：`accepted_merge_commit` 为 null 有**两种**完全不同的含义 ——
+  // 「合了，但按你的选择没落提交」（no_commit）和「合并早已发生、本生命周期没留下快照」
+  // （already_merged 的「不可知」，见 task-accept.ts 那段注释）。同一个 null 让 UI 只能
+  // 靠猜，现场后果是：用户选了「合并后不提交」，界面给了一句和正常验收一模一样的
+  // 「验收完成」，他看不出还欠一步提交（2026-09-15）。事实列不让 UI 猜。
+  acceptedMergeMethod: text("accepted_merge_method"),
+  // 「合并后不提交」那一档合完那一刻，目标分支索引的内容指纹（`git write-tree`）。
+  // 事后要回答「索引里现在躺着的还是不是当初合进来的那份」只有内容证据算得上证据：
+  // 一致才敢替用户 `git commit`，否则就是把他后来自己 `git add` 的东西一起裹进这次
+  // 合并。也是「改动被 reset --hard 丢了」与「用户自己提交了」的判据（见
+  // task-accept-pending.ts）。其它档为 null。
+  acceptedPendingTree: text("accepted_pending_tree"),
   // 验收尾段（点头之后的发布/命令步骤）的 durable 进度：finalize 时线上真有尾段就置 1，
   // 尾段跑完（无论成败，结果已报告）清 0。进程死在两者之间时，重启后的重复验收会发现
   // 它还挂着并补跑——否则发布步骤被 already_accepted 快路静默永久漏掉（审查实测复现）。

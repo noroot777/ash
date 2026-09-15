@@ -380,6 +380,12 @@ export interface Task {
   acceptedTargetBranch?: string | null;
   acceptedBaseCommit?: string | null;
   acceptedMergeCommit?: string | null;
+  // 这次验收怎么合的。`acceptedMergeCommit` 为 null 有两种含义（「合了但没提交」与「合并
+  // 早已发生、快照不可知」），UI 只看那一列分不出来，所以按方法本身判：no_commit +
+  // acceptedMergeCommit 为 null = 改动还躺在目标分支工作区里等人提交。`acceptedPendingTree`
+  // 是那一档留在索引里的内容指纹（核对现场用，前端只当它「有/没有」看）。
+  acceptedMergeMethod?: "already_merged" | "fast_forward" | "merge_commit" | "squash" | "tagged" | "no_commit" | null;
+  acceptedPendingTree?: string | null;
   // §Workflow 这个任务当初挑的那条线，**创建时拷下来的快照**（改起手式库不会追着改
   // 它）。老任务为 null —— 那时还没有这个概念，按写死的老流程走。
   workflow?: WorkflowDef | null;

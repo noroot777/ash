@@ -72,6 +72,10 @@ export type AcceptedSnapshot = {
   target: string | null;
   base: string | null;
   merge: string | null;
+  /** 怎么合的（TaskMergeMethod）；缺省 = 旧版基线，按「不记得」恢复。 */
+  method?: string | null;
+  /** 「合并后不提交」那一档留在索引里的内容指纹。 */
+  pendingTree?: string | null;
   tailPending: boolean;
   /** 尾段逐站进度（step id 清单）；缺省 = 旧版基线，按空清单恢复。 */
   tailDone?: string[];
@@ -93,6 +97,8 @@ export async function peekAcceptedStage(taskId: string): Promise<ReopenedAccepta
     base: tasks.acceptedBaseCommit,
     source: tasks.acceptedSourceCommit,
     merge: tasks.acceptedMergeCommit,
+    method: tasks.acceptedMergeMethod,
+    pendingTree: tasks.acceptedPendingTree,
     tailPending: tasks.acceptedTailPending,
     tailDone: tasks.acceptedTailDone,
   }).from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -101,7 +107,12 @@ export async function peekAcceptedStage(taskId: string): Promise<ReopenedAccepta
   try { tailDone = JSON.parse(t.tailDone ?? "[]") as string[]; } catch { /* 按空清单 */ }
   return {
     stage: t.stage,
-    snapshot: { ...(t.source ? { source: t.source } : {}), target: t.target, base: t.base, merge: t.merge, tailPending: t.tailPending, tailDone },
+    snapshot: {
+      ...(t.source ? { source: t.source } : {}),
+      target: t.target, base: t.base, merge: t.merge,
+      method: t.method, pendingTree: t.pendingTree,
+      tailPending: t.tailPending, tailDone,
+    },
   };
 }
 
@@ -123,6 +134,7 @@ export async function clearAcceptedSnapshot(taskId: string): Promise<void> {
   await db.update(tasks).set({
     acceptedSourceCommit: null,
     acceptedTargetBranch: null, acceptedBaseCommit: null, acceptedMergeCommit: null,
+    acceptedMergeMethod: null, acceptedPendingTree: null,
     acceptedTailPending: false, acceptedTailDone: "[]", updatedAt: now(),
   }).where(eq(tasks.id, taskId));
 }
@@ -158,6 +170,8 @@ export async function restoreTaskStage(
       acceptedTargetBranch: snapshot.target,
       acceptedBaseCommit: snapshot.base,
       acceptedMergeCommit: snapshot.merge,
+      acceptedMergeMethod: snapshot.method ?? null,
+      acceptedPendingTree: snapshot.pendingTree ?? null,
       acceptedTailPending: snapshot.tailPending,
       acceptedTailDone: JSON.stringify(snapshot.tailDone ?? []),
     } : {}),

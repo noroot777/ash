@@ -138,3 +138,31 @@
 @media (prefers-reduced-motion: reduce) {
   .team-review-record svg { transition: none; }
 }
+
+/* 「合并后不提交」那一档欠着的那一步：常驻卡 + 动作行上那个「待提交」徽记。
+   判据与来由见 web/src/review/PendingMergeCard.tsx 顶部（刷新后仍看得出，才算留下状态）。 */
+.team-accept-actions > span.is-pending-commit { border-color: color-mix(in lch,var(--amber) 36%,var(--line)); background: color-mix(in lch,var(--amber) 9%,var(--panel)); color: var(--amber); }
+.pending-merge-card { display: grid; gap: 8px; margin: 8px 12px 0; border: 1px solid color-mix(in lch,var(--amber) 34%,var(--line)); border-radius: 10px; background: color-mix(in lch,var(--amber) 6%,var(--panel)); padding: 9px 11px; font-size: 10.5px; }
+.pending-merge-card.is-settled { border-color: color-mix(in lch,var(--green) 26%,var(--line)); background: var(--green-bg); }
+.pending-merge-card > header { display: flex; align-items: flex-start; gap: 8px; }
+.pending-merge-card > header > span:first-child { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; border-radius: 7px; background: color-mix(in lch,var(--amber) 13%,var(--panel)); color: var(--amber); }
+.pending-merge-card.is-settled > header > span:first-child { background: color-mix(in lch,var(--green) 13%,var(--panel)); color: var(--green); }
+.pending-merge-card > header > div { min-width: 0; flex: 1; }
+.pending-merge-card b { display: block; color: color-mix(in lch,var(--amber) 70%,var(--ink)); font-size: 11px; }
+.pending-merge-card.is-settled b { color: color-mix(in lch,var(--green) 70%,var(--ink)); }
+.pending-merge-card p { margin: 3px 0 0; color: var(--muted); line-height: 1.55; }
+.pending-merge-refresh { display: inline-flex; height: 22px; flex: 0 0 auto; align-items: center; gap: 4px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); padding: 0 7px; color: var(--muted); font-size: 9.5px; }
+.pending-merge-refresh:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
+.pending-merge-refresh:disabled { cursor: not-allowed; opacity: .5; }
+.pending-merge-files, .pending-merge-commands { border-top: .5px solid color-mix(in lch,var(--amber) 18%,var(--line)); padding-top: 7px; }
+.pending-merge-files > span, .pending-merge-commands > span { display: block; color: var(--faint); font-size: 9.5px; font-weight: 650; }
+.pending-merge-files ul, .pending-merge-commands ul { display: grid; gap: 2px; margin: 4px 0 0; padding: 0; list-style: none; }
+.pending-merge-files code { display: block; overflow-wrap: anywhere; color: var(--muted); font-size: 9.5px; }
+.pending-merge-files small { display: block; margin-top: 3px; color: var(--faint); font-size: 9px; }
+/* 命令是要被粘走的：一次点选就整条选中，别让用户在一行里拖。 */
+.pending-merge-commands code { display: block; overflow-wrap: anywhere; border-radius: 5px; background: var(--canvas); padding: 3px 6px; color: var(--muted); font-size: 9.5px; user-select: all; }
+.pending-merge-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.pending-merge-actions > button { display: inline-flex; height: 27px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 9px; color: var(--muted); font-size: 10.5px; font-weight: 600; }
+.pending-merge-actions > button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
+.pending-merge-actions > button.is-primary { border-color: var(--accent); background: var(--accent); color: white; }
+.pending-merge-actions > button:disabled { cursor: not-allowed; opacity: .52; }

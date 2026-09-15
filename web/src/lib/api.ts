@@ -43,6 +43,7 @@ import type { CliModelCatalog } from "@ash/shared/cli-presets";
 import type { SearchStreamLine, SearchSort } from "@ash/shared/search";
 import { ApiError, apiError, apiPath, id, json, parseBody, postWithProgress, request } from "./apiClient.ts";
 import { handoffApi } from "./handoffApi.ts";
+import { pendingMergeApi } from "./pendingMergeApi.ts";
 export type { TaskScopedHandoffPreflightResult } from "./handoffApi.ts";
 
 import type {
@@ -321,6 +322,8 @@ export const api = {
   // 任务接力(跨机器 handoff)那一族在 `handoffApi.ts` —— 整份 spread 进来,
   // `api.handoffPeers()` 这类调用点一字不动。
   ...handoffApi,
+  // 「合并后不提交」那一档的收尾那一族同理,在 `pendingMergeApi.ts`。
+  ...pendingMergeApi,
 
   taskWorkspace: (taskId: string): Promise<TaskWorkspaceProbe> =>
     request(`/tasks/${id(taskId)}/workspace`),

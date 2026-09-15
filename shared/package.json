@@ -18,6 +18,10 @@
       "types": "./src/branch-plan.ts",
       "default": "./src/branch-plan.ts"
     },
+    "./accept-pending": {
+      "types": "./src/accept-pending.ts",
+      "default": "./src/accept-pending.ts"
+    },
     "./task-origin": {
       "types": "./src/task-origin.ts",
       "default": "./src/task-origin.ts"

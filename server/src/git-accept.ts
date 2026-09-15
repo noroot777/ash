@@ -69,6 +69,14 @@ export type TaskMergeResult =
       /** 合并前后目标分支的 commit（结构化落账，供合并后基线审查用）。already_merged/tagged 时两者相等。 */
       beforeCommit?: string | null;
       afterCommit?: string | null;
+      /**
+       * 「合并后不提交」那一档合完那一刻索引的内容指纹（`git write-tree`）。
+       *
+       * 留它是为了事后能回答一个只有内容能回答的问题：索引里现在躺着的，还是不是当初
+       * 合进来的那份？一致才敢替用户提交（见 task-accept-pending.ts）。别的档没有它
+       * ——那些档合完就已经是提交了。
+       */
+      stagedTree?: string | null;
       warnings?: TaskMergeWarning[];
     }
   | {
@@ -100,6 +108,39 @@ async function commitOf(repo: string, ref: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * 索引此刻的内容指纹。`git write-tree` 只把索引写成一个 tree 对象，**不动索引、不动
+ * 工作区**（写出来的游离 tree 由 gc 自行回收）。索引里有未解决的冲突时它会失败 —— 那
+ * 也是一个有用的结论：这时候什么都不该替用户做，所以返回 null 让调用方按「认不出」处理。
+ */
+export async function writeIndexTree(cwd: string): Promise<string | null> {
+  try {
+    const { stdout } = await exec("git", ["-C", cwd, "write-tree"]);
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** 某个 commit 的根 tree；认不出返回 null。 */
+export async function treeOfCommit(repo: string, commit: string): Promise<string | null> {
+  try {
+    const { stdout } = await exec("git", ["-C", repo, "rev-parse", "--verify", "--quiet", `${commit}^{tree}`]);
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * squash 合并那个提交的消息。**「合并后不提交」那一档事后补提交也用这一条** ——
+ * 同一件事（把这个任务分支的改动压成一个提交落到目标分支）在历史里该长一个样子，
+ * 谁按下的那一下不该改变提交消息。
+ */
+export function squashCommitMessage(sourceBranch: string): string {
+  return `squash 合并 ${sourceBranch}`;
 }
 
 export async function targetCheckout(repoPath: string, branch: string) {
@@ -315,9 +356,12 @@ async function squashInCheckedOutTarget(
   }
   // 不提交这一档到此为止：改动就留在工作区和暂存区里，**绝不 reset**（那会把刚合进来的
   // 东西全扔了）。目标分支的 ref 一动没动，这一点由调用方如实记账（见 task-accept.ts）。
-  if (!commit) return { ok: true, sourceBranch, targetBranch, method: "no_commit" };
+  // 顺手记下索引的内容指纹：事后要替用户提交时，只有内容一致才敢动手。
+  if (!commit) {
+    return { ok: true, sourceBranch, targetBranch, method: "no_commit", stagedTree: await writeIndexTree(cwd) };
+  }
   try {
-    await exec("git", ["-C", cwd, "commit", "-m", `squash 合并 ${sourceBranch}`]);
+    await exec("git", ["-C", cwd, "commit", "-m", squashCommitMessage(sourceBranch)]);
     return { ok: true, sourceBranch, targetBranch, method: "squash" };
   } catch (error) {
     // 到这里 staged 一定非空过：commit 失败就是真失败（hook 拒绝/环境问题），如实报错。
