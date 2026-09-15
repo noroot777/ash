@@ -55,7 +55,7 @@ export function ConflictDialog({
         draft.slice(block.start + block.text.length),
     );
   const save = async (choice: "ours" | "theirs" | "content" | "delete") => {
-    if (!conflict || busy || w.blocked) return;
+    if (!conflict || busy || w.isBlocked("resolve")) return;
     setBusy(true);
     setError(null);
     const ok = await w.run({
@@ -81,7 +81,11 @@ export function ConflictDialog({
       confirmLabel="保存结果并暂存"
       busy={busy}
       confirmDisabled={
-        !conflict || conflict.binary || !!blocks.length || !!error || w.blocked
+        !conflict ||
+        conflict.binary ||
+        !!blocks.length ||
+        !!error ||
+        w.isBlocked("resolve")
       }
       onClose={close}
       onConfirm={() => void save("content")}
@@ -112,7 +116,9 @@ export function ConflictDialog({
             </div>
             <div className="gwb-inline-actions">
               <button
-                disabled={busy || w.blocked || !conflict.available.ours}
+                disabled={
+                  busy || w.isBlocked("resolve") || !conflict.available.ours
+                }
                 onClick={() => {
                   if (conflict.binary) void save("ours");
                   else setDraft(conflict.ours || "");
@@ -121,7 +127,9 @@ export function ConflictDialog({
                 整份采用我方
               </button>
               <button
-                disabled={busy || w.blocked || !conflict.available.theirs}
+                disabled={
+                  busy || w.isBlocked("resolve") || !conflict.available.theirs
+                }
                 onClick={() => {
                   if (conflict.binary) void save("theirs");
                   else setDraft(conflict.theirs || "");
@@ -132,7 +140,7 @@ export function ConflictDialog({
               {(!conflict.available.ours || !conflict.available.theirs) && (
                 <button
                   className="gwb-danger"
-                  disabled={busy || w.blocked}
+                  disabled={busy || w.isBlocked("resolve")}
                   onClick={() => void save("delete")}
                 >
                   删除文件并解决

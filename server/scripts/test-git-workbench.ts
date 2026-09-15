@@ -262,6 +262,90 @@ try {
       (await readWorkbench(repo, repo, "tester")).journal[0].state,
       "conflict",
     );
+    if (kind === "merge") {
+      const snapshot = () =>
+        JSON.stringify({
+          head: rawGit(repo, "rev-parse", "HEAD"),
+          refs: rawGit(repo, "show-ref"),
+          index: rawGit(repo, "ls-files", "--stage"),
+          content: readFileSync(join(repo, "file.txt"), "utf8"),
+          trees: rawGit(repo, "worktree", "list", "--porcelain"),
+        });
+      const beforeRejected = snapshot();
+      const rejected: GitAction[] = [
+        {
+          kind: "branch-create",
+          name: "not-created",
+          target: "HEAD",
+          checkout: false,
+        },
+        {
+          kind: "tag-create",
+          name: "not-created",
+          target: "HEAD",
+          message: "",
+        },
+        { kind: "stash-save", message: "not-created", untracked: true },
+        { kind: "fetch", remote: "" },
+        { kind: "remote-add", name: "not-created", url: repo },
+        { kind: "cherry-pick", target: theirs },
+        { kind: "reset", target: original, mode: "hard" },
+        { kind: "discard", paths: ["file.txt"], deleteUntracked: [] },
+        {
+          kind: "patch",
+          path: "file.txt",
+          source: "unstaged",
+          diff: "",
+          lines: [],
+        },
+        { kind: "worktree-add", name: "not-created", target: "HEAD" },
+        { kind: "undo", id: "not-created" },
+        { kind: "rebase-cleanup" },
+      ];
+      for (const action of rejected) {
+        await assert.rejects(
+          () => run(repo, action),
+          (error: unknown) => {
+            assert.equal((error as { status: number }).status, 409);
+            assert.equal(
+              (error as Error).message,
+              "仓库正在处理冲突或中途操作，请先解决、继续或中止",
+            );
+            return true;
+          },
+        );
+        const latest = (await readWorkbench(repo, repo, "tester")).journal[0];
+        assert.equal(latest.action, action.kind);
+        assert.equal(latest.state, "failed");
+        assert.equal(latest.before, before);
+        assert.equal(latest.after, before);
+        assert.doesNotMatch(latest.message, /Git 操作尚未完成/);
+        const events = readFileSync(
+          join(repo, ".git", "ash-workbench", "operations.jsonl"),
+          "utf8",
+        )
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+          .filter((entry) => entry.id === latest.id);
+        assert.deepEqual(
+          events.map((entry) => entry.state),
+          ["queued", "failed"],
+        );
+        assert.equal(
+          snapshot(),
+          beforeRejected,
+          `${action.kind} must have no repository side effects`,
+        );
+      }
+      write(repo, "allowed staging\n", "extra.txt");
+      await run(repo, { kind: "stage", paths: ["extra.txt"] });
+      assert.equal(rawGit(repo, "show", ":extra.txt"), "allowed staging");
+      await run(repo, { kind: "unstage", paths: ["extra.txt"] });
+      assert.equal(rawGit(repo, "ls-files", "--", "extra.txt"), "");
+      rmSync(join(repo, "extra.txt"));
+      check("冲突预检拒绝记为 failed 且零副作用，整文件暂存与取消暂存仍可用");
+    }
     await run(repo, {
       kind: "resolve",
       path: "file.txt",

@@ -124,7 +124,9 @@ export function Changes({
                   <div className="gwb-inline-actions">
                     {!!actionable.length && (
                       <button
-                        disabled={w.blocked}
+                        disabled={w.isBlocked(
+                          source === "staged" ? "unstage" : "stage",
+                        )}
                         onClick={() =>
                           void w.run({
                             kind: source === "staged" ? "unstage" : "stage",
@@ -171,7 +173,9 @@ export function Changes({
                     {!file.nested && (
                       <div className="gwb-inline-actions">
                         <button
-                          disabled={w.blocked}
+                          disabled={w.isBlocked(
+                            source === "staged" ? "unstage" : "stage",
+                          )}
                           aria-label={`${source === "staged" ? "取消暂存" : "暂存"} ${file.path}`}
                           onClick={() =>
                             void w.run({

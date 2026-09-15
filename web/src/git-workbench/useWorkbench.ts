@@ -5,6 +5,7 @@ import type {
   GitWorkbenchState,
 } from "@ash/shared/git-workbench";
 import { workbenchApi } from "./api.ts";
+import { gitActionBlockReason } from "@ash/shared/git-workbench";
 
 export function useWorkbench(
   projectId: string,
@@ -53,12 +54,18 @@ export function useWorkbench(
       sequence.current++;
     };
   }, [refresh]);
+  const isBlocked = (kind?: GitAction["kind"]) =>
+    busy ||
+    !!error ||
+    !data ||
+    !!data.readOnly ||
+    !!gitActionBlockReason(data.status, kind);
   const run = async (
     action: GitAction,
     confirmation?: string,
     snapshot?: Pick<GitActionRequest, "root" | "version">,
   ): Promise<boolean> => {
-    if (!data || data.readOnly || error || running.current) return false;
+    if (!data || isBlocked(action.kind) || running.current) return false;
     running.current = true;
     sequence.current++;
     setBusy(true);
@@ -102,7 +109,8 @@ export function useWorkbench(
     revision,
     refresh,
     run,
-    blocked: busy || !!error || !!data?.readOnly,
+    isBlocked,
+    blocked: isBlocked(),
   };
 }
 export type Workbench = ReturnType<typeof useWorkbench>;

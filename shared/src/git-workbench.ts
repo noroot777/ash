@@ -189,3 +189,21 @@ export interface GitActionResult {
   message: string;
   entry: GitJournalEntry;
 }
+
+export function gitActionBlockReason(
+  status: Pick<GitStatus, "operation" | "merge">,
+  kind?: GitAction["kind"],
+): string | null {
+  if (!status.operation && !status.merge.length) return null;
+  switch (kind) {
+    case "resolve":
+    case "continue":
+    case "abort":
+    case "skip":
+    case "stage":
+    case "unstage":
+      return null;
+    default:
+      return "仓库正在处理冲突或中途操作，请先解决、继续或中止";
+  }
+}

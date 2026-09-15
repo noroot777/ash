@@ -4,8 +4,9 @@ import type {
   GitActionResult,
   GitJournalEntry,
 } from "@ash/shared/git-workbench";
+import { gitActionBlockReason } from "@ash/shared/git-workbench";
 import { withRepoLock } from "../repo-lock.js";
-import { readScmStatus } from "../git-status.js";
+import { readScmStatus, type ScmStatus } from "../git-status.js";
 import {
   stagePaths,
   unstagePaths,
@@ -56,15 +57,8 @@ async function runAction(
   actor: string,
   action: GitAction,
   entry: GitJournalEntry,
+  status: ScmStatus,
 ): Promise<string> {
-  const status = await readScmStatus(root);
-  if (
-    (status.operation || status.merge.length) &&
-    !["resolve", "continue", "abort", "skip", "stage", "unstage"].includes(
-      action.kind,
-    )
-  )
-    fail("仓库正在处理冲突或中途操作，请先解决、继续或中止");
   if (historyActions.has(action.kind)) requireClean(status);
   if (
     historyActions.has(action.kind) ||
@@ -228,13 +222,15 @@ export async function executeWorkbench(
         const { root } = await selectRoot(repo, request.root);
         release = await guard?.(root, request.action);
         const status = await freshStatus(root, request.version);
+        entry.before = status.branch.oid || undefined;
+        entry.branch = status.branch.head;
+        const blocked = gitActionBlockReason(status, request.action.kind);
+        if (blocked) fail(blocked);
         const expected = confirmationFor(request.action, status);
         if (expected !== null && request.confirmation !== expected)
           fail(`请先输入「${expected}」确认这个操作`, 400);
         entry.state = "running";
         entry.message = "正在执行";
-        entry.before = status.branch.oid || undefined;
-        entry.branch = status.branch.head;
         await appendEntry(repo, entry);
         const message = await runAction(
           repo,
@@ -243,6 +239,7 @@ export async function executeWorkbench(
           actor.id,
           request.action,
           entry,
+          status,
         );
         entry.after =
           (await readScmStatus(root).catch(() => null))?.branch.oid ||

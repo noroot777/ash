@@ -21,10 +21,15 @@ export interface ActionPrompt {
   action: (values: Record<string, string>) => GitAction;
 }
 export type AskAction = (prompt: ActionPrompt) => void;
+export const initialActionValues = (prompt: ActionPrompt) =>
+  Object.fromEntries(
+    (prompt.fields || []).map((field) => [field.key, field.initial || ""]),
+  );
 export function ActionDialog({
   prompt,
   snapshot,
   run,
+  isBlocked,
   close,
 }: {
   prompt: ActionPrompt;
@@ -34,18 +39,18 @@ export function ActionDialog({
     confirmation: string | undefined,
     snapshot: Pick<GitActionRequest, "root" | "version">,
   ) => Promise<boolean>;
+  isBlocked: (kind: GitAction["kind"]) => boolean;
   close: () => void;
 }) {
   const [values, setValues] = useState<Record<string, string>>(() =>
-    Object.fromEntries(
-      (prompt.fields || []).map((field) => [field.key, field.initial || ""]),
-    ),
+    initialActionValues(prompt),
   );
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const valid =
     !failed &&
+    !isBlocked(prompt.action(values).kind) &&
     (!prompt.typed || prompt.typed === typed) &&
     (prompt.fields || []).every(
       (field) => !field.required || values[field.key]?.trim(),

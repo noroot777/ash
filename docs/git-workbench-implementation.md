@@ -84,3 +84,15 @@
 Windows 真机本轮验证：通过局域网传输 `git format-patch`，校验 SHA-256 后应用到独立 detached worktree；依赖安装、新增 `test-git-workbench-maintenance.ts`（4 组）、shared/server/web build 均退出码 0。新增 `test-git-workbench-review.mjs` 最终退出码 0，Chrome 正常退出并清理临时 profile。浏览器首轮被测试夹具的 CRLF/LF 预期差异拦下，特殊字符保持原样；为隔离用户全局 Git 配置，在临时仓库设置 `core.autocrlf=false` 后通过，生产换行处理未改动。
 
 本轮清理已核对：远端隔离工作树、依赖、补丁、截图、测试夹具和终端会话，以及本机传输服务与辅助文件均已清理；浏览器 PID 与临时 profile 不再存在。修改的 18 个代码文件均未超过 700 行，最长 455 行；`git diff --check` 通过。
+
+## 第 2 轮审查修复（2026-09-15）
+
+冲突期间的动作判定集中到 shared 的 `gitActionBlockReason`，前后端共同使用。工作台所有视图的普通写入口统一禁用；整文件暂存、取消暂存、冲突解决、继续、中止和跳过按同一允许列表放行。视图切换、历史和差异查看仍可用。动作执行函数及弹窗确认也检查当前状态，覆盖打开弹窗之后仓库进入冲突的情况。
+
+服务端用仓库锁内取得的 `freshStatus` 先做冲突预检，再把日志设为 `running`。被既有冲突挡下的请求记录为 `failed`，不追加暗示本次操作留下冲突的文案；真正执行后留下冲突的合并、拣选、变基和反做保留原来的处理状态。
+
+本轮本机 `shared/server/web build` 通过；`server test:git-workbench` 的 15 个核心场景、4 组安全回归、4 组维护回归均通过。新增案例覆盖 12 种跨视图动作的预检拒绝：409、日志仅 `queued → failed`、无误导追加文案，且 HEAD、引用、索引、冲突文件、工作树列表均未变化；整文件暂存和取消暂存仍能实际执行。
+
+新增 `test-git-workbench-conflict-gates.mjs` 单独通过，挂接后的 `web test:git-workbench` 三套浏览器回归也全部退出码 0。真实冲突场景遍历七视图，核对报告所列写入口禁用、差异和历史查看可用；冲突期间实际写请求严格为 `stage / unstage / abort / resolve / continue / skip`，六种允许动作均成功。冲突结束后代表入口恢复；普通动作弹窗打开后外部发生冲突，自动刷新使确认按钮禁用，模拟点击没有请求，也没有创建分支。
+
+本轮浏览器先选择 Chrome 扩展通道，创建具名后台会话时返回 `unsupported Codex auth method: apikey`，因此使用独立临时 profile 的无头 Chromium。未接管普通标签、激活用户 Chrome 或使用有头浏览器。fixture、Vite、Chromium 及测试截图临时目录均已退出或清理；`git diff --check` 通过。本轮没有修改平台路径或 win32 分支，验证在本机执行。

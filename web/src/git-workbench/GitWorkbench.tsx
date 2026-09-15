@@ -13,7 +13,11 @@ import {
   Warning,
 } from "@phosphor-icons/react";
 import type { GitActionRequest, GitView } from "@ash/shared/git-workbench";
-import { ActionDialog, type ActionPrompt } from "./ActionDialog.tsx";
+import {
+  ActionDialog,
+  initialActionValues,
+  type ActionPrompt,
+} from "./ActionDialog.tsx";
 import { useWorkbench } from "./useWorkbench.ts";
 import { Changes } from "./Changes.tsx";
 import { History } from "./History.tsx";
@@ -63,7 +67,6 @@ export function GitWorkbench({
   } | null>(null);
   const [conflict, setConflict] = useState<string | null>(null);
   const data = w.data;
-  const inProgress = !!data?.status.operation || !!data?.status.merge.length;
   const managed = data?.worktrees.some(
     (tree) => tree.path === data.root && tree.managed,
   );
@@ -80,7 +83,7 @@ export function GitWorkbench({
           )
       : undefined;
   const ask = (value: ActionPrompt) => {
-    if (data && !w.blocked)
+    if (data && !w.isBlocked(value.action(initialActionValues(value)).kind))
       setPrompt({
         value,
         snapshot: { root: data.root, version: data.version },
@@ -200,14 +203,14 @@ export function GitWorkbench({
             </button>
           )}
           <button
-            disabled={w.blocked || inProgress || !data?.remotes.length}
+            disabled={w.blocked || !data?.remotes.length}
             onClick={() => void w.run({ kind: "fetch", remote: "" })}
           >
             <ArrowClockwise size={14} />
             获取
           </button>
           <button
-            disabled={w.blocked || inProgress || !data?.status.branch.upstream}
+            disabled={w.blocked || !data?.status.branch.upstream}
             onClick={pull}
           >
             <ArrowDown size={14} />
@@ -215,10 +218,7 @@ export function GitWorkbench({
           </button>
           <button
             disabled={
-              w.blocked ||
-              inProgress ||
-              !data?.remotes.length ||
-              !data?.status.branch.oid
+              w.blocked || !data?.remotes.length || !data?.status.branch.oid
             }
             onClick={() => push()}
           >
@@ -270,7 +270,6 @@ export function GitWorkbench({
             <button
               disabled={
                 w.blocked ||
-                inProgress ||
                 !data.refs.some(
                   (r) =>
                     r.kind === "remote" &&
@@ -343,7 +342,7 @@ export function GitWorkbench({
             <div className="gwb-inline-actions">
               <button
                 disabled={
-                  w.blocked ||
+                  w.isBlocked("continue") ||
                   !!data.status.merge.length ||
                   !data.status.operation
                 }
@@ -353,7 +352,7 @@ export function GitWorkbench({
               </button>
               {data.status.operation && data.status.operation !== "merge" && (
                 <button
-                  disabled={w.blocked}
+                  disabled={w.isBlocked("skip")}
                   onClick={() =>
                     ask({
                       title: "跳过当前提交",
@@ -370,7 +369,7 @@ export function GitWorkbench({
               {data.status.operation && (
                 <button
                   className="gwb-danger"
-                  disabled={w.blocked}
+                  disabled={w.isBlocked("abort")}
                   onClick={() =>
                     ask({
                       title: "中止 Git 操作",
@@ -390,6 +389,7 @@ export function GitWorkbench({
             <button
               key={file.path}
               className="gwb-conflict-file"
+              disabled={w.isBlocked("resolve")}
               onClick={() => setConflict(file.path)}
             >
               <code>{file.path}</code>
@@ -439,6 +439,7 @@ export function GitWorkbench({
           prompt={prompt.value}
           snapshot={prompt.snapshot}
           run={w.run}
+          isBlocked={w.isBlocked}
           close={() => setPrompt(null)}
         />
       )}

@@ -9,8 +9,7 @@ export function Backups({
   ask: AskAction;
 }) {
   const data = w.data!;
-  const disabled =
-    w.blocked || !!data.status.operation || !!data.status.merge.length;
+  const disabled = w.blocked;
   return (
     <section aria-label="历史备份" className="gwb-ref-section gwb-backups">
       <div className="gwb-section-head">
