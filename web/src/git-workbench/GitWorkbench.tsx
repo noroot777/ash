@@ -89,7 +89,7 @@ export function GitWorkbench({
     openGitWorkbench({
       projectId,
       root: data?.root || root,
-      taskId: data ? undefined : taskId,
+      taskId,
       view: next,
     });
   const pull = () =>

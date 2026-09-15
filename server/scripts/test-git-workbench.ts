@@ -413,14 +413,12 @@ try {
   );
   const { projects } = await import("../src/db/schema.js");
   const { setActor } = await import("../src/auth/context.js");
-  await db
-    .insert(projects)
-    .values({
-      id: "project-test",
-      name: "test",
-      repoPath: root,
-      createdAt: new Date().toISOString(),
-    });
+  await db.insert(projects).values({
+    id: "project-test",
+    name: "test",
+    repoPath: root,
+    createdAt: new Date().toISOString(),
+  });
   const app = new Hono();
   mountGitWorkbenchRoutes(app);
   const read = await app.request("/projects/project-test/git/workbench");
@@ -469,5 +467,7 @@ try {
   check("HTTP 路由、授权、请求校验与路径越界拒绝");
   console.log(`Git workbench: ${checks} scenarios passed`);
 } finally {
+  const { dbClient } = await import("../src/db/index.js");
+  dbClient.close();
   rmSync(directory, { recursive: true, force: true });
 }

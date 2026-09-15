@@ -55,7 +55,7 @@ write(
 write("新增文件.txt", "new file\n");
 const { Hono } = await import("hono");
 const { serve } = await import("@hono/node-server");
-const { db, ensureSchema } = await import("../../src/db/index.js");
+const { db, dbClient, ensureSchema } = await import("../../src/db/index.js");
 const { projects } = await import("../../src/db/schema.js");
 const { mountGitWorkbenchRoutes } = await import(
   "../../src/git-workbench/routes.js"
@@ -91,9 +91,21 @@ const close = () => {
   if (closed) return;
   closed = true;
   server.close(() => {
+    dbClient.close();
     rmSync(directory, { recursive: true, force: true });
+    if (process.connected) process.disconnect();
     process.exit(0);
   });
 };
 process.on("SIGINT", close);
 process.on("SIGTERM", close);
+process.on("message", (message) => {
+  if (
+    typeof message === "object" &&
+    message !== null &&
+    "type" in message &&
+    message.type === "close"
+  ) {
+    close();
+  }
+});

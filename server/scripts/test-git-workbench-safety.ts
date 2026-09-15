@@ -430,5 +430,7 @@ try {
   );
   console.log("ok · project members can read but cannot mutate Git");
 } finally {
+  const { dbClient } = await import("../src/db/index.js");
+  dbClient.close();
   rmSync(directory, { recursive: true, force: true });
 }

@@ -18,12 +18,19 @@ export const GIT_VIEWS: GitView[] = [
 ];
 export function gitWorkbenchUrl(location: GitLocation): string {
   const url = new URL(window.location.href);
+  const taskId =
+    location.taskId ||
+    (location.root &&
+    location.root === url.searchParams.get("gitRoot") &&
+    location.projectId === url.searchParams.get("project")
+      ? url.searchParams.get("gitTask")
+      : null);
   url.search = new URLSearchParams({
     project: location.projectId,
     view: "git",
     gitView: location.view || "changes",
     ...(location.root ? { gitRoot: location.root } : {}),
-    ...(location.taskId ? { gitTask: location.taskId } : {}),
+    ...(taskId ? { gitTask: taskId } : {}),
     ...(location.ref ? { gitRef: location.ref } : {}),
   }).toString();
   return url.pathname + url.search;

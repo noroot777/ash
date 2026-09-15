@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,7 +24,7 @@ const until = async (probe, hint, attempts = 160) => {
 function startBackend() {
   const child = spawn(process.execPath, ["--import", "tsx", fixturePath], {
     cwd: repo,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
     env: { ...process.env, FORCE_COLOR: "0" },
   });
   let stdout = "";
@@ -45,13 +46,23 @@ function startBackend() {
     setTimeout(() => fail("Git workbench fixture did not become ready"), 15_000).unref();
   });
   const close = async () => {
-    if (child.exitCode !== null || child.signalCode) return;
-    child.kill("SIGTERM");
-    await Promise.race([
-      new Promise((resolve) => child.once("exit", resolve)),
-      new Promise((resolve) => setTimeout(resolve, 5_000)),
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exited = new Promise((resolve) => child.once("exit", resolve));
+    if (child.connected) {
+      child.send({ type: "close" }, (error) => {
+        if (error && child.exitCode === null) child.kill("SIGTERM");
+      });
+    } else {
+      child.kill("SIGTERM");
+    }
+    const didExit = await Promise.race([
+      exited.then(() => true),
+      new Promise((resolve) => setTimeout(() => resolve(false), 5_000)),
     ]);
-    if (child.exitCode === null && !child.signalCode) child.kill("SIGKILL");
+    if (!didExit && child.exitCode === null) {
+      child.kill("SIGKILL");
+      await exited;
+    }
   };
   return { child, ready, close, diagnostics: () => ({ stdout, stderr }) };
 }
@@ -60,6 +71,7 @@ const backend = startBackend();
 let vite;
 let browser;
 let page;
+let backendDirectory;
 const browserErrors = [];
 const requestFailures = [];
 let screenshotDirectory;
@@ -93,6 +105,7 @@ const submitDialog = async (title, button = title) => {
 
 try {
   const info = await backend.ready;
+  backendDirectory = info.directory;
   vite = await createServer({
     root: webRoot,
     logLevel: "error",
@@ -137,6 +150,18 @@ try {
   await page.reload();
   await page.getByRole("region", { name: "工作区变更" }).waitFor();
   assert.equal(await currentView(), "changes", "刷新保留 Git 工作台视图");
+
+  // 从任务进入已有工作树后，同一工作树内的视图和引用跳转必须保留返回任务。
+  const taskContextUrl = new URL(page.url());
+  taskContextUrl.searchParams.set("gitRoot", info.root);
+  taskContextUrl.searchParams.set("gitTask", "browser-origin");
+  await page.goto(taskContextUrl.href);
+  await page.getByRole("region", { name: "工作区变更" }).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get("gitTask"), "browser-origin");
+  await tab("历史").click();
+  assert.equal(new URL(page.url()).searchParams.get("gitTask"), "browser-origin");
+  await page.goBack();
+  await page.getByRole("region", { name: "工作区变更" }).waitFor();
 
   // 同一文件两处修改：先按单行暂存 BETA，再按剩余块暂存 IOTA；新增文件按整文件暂存。
   await page.getByRole("button", { name: /sample\.txt/ }).first().click();
@@ -199,6 +224,11 @@ try {
   // 一次必然失败的删除留进日志，刷新后仍在；随后进入真实 merge 冲突。
   await tab("分支").click();
   const conflictBranch = page.locator(".gwb-ref-row", { hasText: "feature/conflict" });
+  await conflictBranch.getByRole("button", { name: "历史", exact: true }).click();
+  await page.getByRole("region", { name: "提交历史" }).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get("gitTask"), "browser-origin");
+  await page.goBack();
+  await conflictBranch.waitFor();
   await conflictBranch.getByLabel("feature/conflict 分支操作").selectOption("delete");
   await performAction(() => dialog("删除已合并分支").getByRole("button", { name: "删除已合并分支", exact: true }).click(), false);
   await dialog("删除已合并分支").getByRole("alert").waitFor();
@@ -278,6 +308,7 @@ try {
   await worktreeRow.getByRole("button", { name: "打开工作树", exact: true }).click();
   await until(async () => new URL(page.url()).searchParams.has("gitRoot"), "工作树路径写入 URL");
   assert.match(await page.locator(".gwb-context").innerText(), /browser\/manual-worktree/);
+  assert.equal(new URL(page.url()).searchParams.has("gitTask"), false, "切换工作树清除返回任务");
   await page.goBack();
   await page.getByRole("heading", { name: "工作树" }).waitFor();
 
@@ -301,4 +332,11 @@ try {
   await browser?.close();
   await vite?.close();
   await backend.close();
+  if (backendDirectory) {
+    assert.equal(
+      existsSync(backendDirectory),
+      false,
+      `Git workbench fixture did not clean up ${backendDirectory}`,
+    );
+  }
 }
