@@ -147,8 +147,12 @@ export type FileListing = {
   git?: FileGitStatus | null;
 };
 
+/**
+ * 文件树把 git status 的四组拍平成一个列表，每条都记住自己出自哪一组——「点开这个文件」
+ * 才知道该比哪一段。冲突文件读的是工作树，所以后端把 `merge` 归进 `unstaged`。
+ */
 export type FileGitStatus = {
-  changes: Pick<ScmChange, "path" | "origPath" | "kind">[];
+  changes: (Pick<ScmChange, "path" | "origPath" | "kind"> & { source: ScmDiffSource })[];
   truncated: boolean;
   error: string | null;
 };

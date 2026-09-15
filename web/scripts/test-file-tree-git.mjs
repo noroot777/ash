@@ -21,7 +21,7 @@ const entry = (path, kind = "file", options = {}) => ({
   symlink: false,
   ...options,
 });
-const change = (path, kind, origPath = null) => ({ path, origPath, kind });
+const change = (path, kind, source, origPath = null) => ({ path, origPath, kind, source });
 const treeA = {
   root: [
     entry("src", "dir"),
@@ -44,10 +44,10 @@ const treeB = {
 let treeAVersion = 0;
 let gitA = {
   changes: [
-    change("src/features/deep/changed.ts", "modified"),
-    change("staged.ts", "added"),
-    change("new-note.md", "untracked"),
-    change("conflict.txt", "unmerged"),
+    change("src/features/deep/changed.ts", "modified", "unstaged"),
+    change("staged.ts", "added", "staged"),
+    change("new-note.md", "untracked", "untracked"),
+    change("conflict.txt", "unmerged", "unstaged"),
   ],
   truncated: false,
   error: null,
@@ -194,6 +194,24 @@ try {
   assert.equal(await exactRow("changed.ts").getAttribute("class").then((value) => value?.includes("is-active")), true);
   assert.equal(await nameColor("changed.ts"), await tokenColor("--amber"), "选中背景盖掉了文件的 Git 色");
 
+  // 有颜色的文件点开走对比；改动在哪一侧就比哪一侧。干净的文件仍然摊全文。
+  const openedAs = () => page.getByTestId("opened-as").innerText();
+  assert.equal(await openedAs(), "diff:unstaged", "工作区改动的文件没有用对比打开");
+  await exactRow("staged.ts").click();
+  await page.getByTestId("active-path").filter({ hasText: "staged.ts" }).waitFor();
+  assert.equal(await openedAs(), "diff:staged", "已暂存的文件没有比暂存那一侧");
+  await exactRow("new-note.md").click();
+  await page.getByTestId("active-path").filter({ hasText: "new-note.md" }).waitFor();
+  assert.equal(await openedAs(), "diff:untracked", "未跟踪文件没有用对比打开");
+  await exactRow("conflict.txt").click();
+  await page.getByTestId("active-path").filter({ hasText: "conflict.txt" }).waitFor();
+  assert.equal(await openedAs(), "diff:unstaged", "冲突文件应当比工作树那一侧");
+  await exactRow("clean.ts").click();
+  await page.getByTestId("active-path").filter({ hasText: "src/clean.ts" }).waitFor();
+  assert.equal(await openedAs(), "file", "没有改动的文件不该被当成对比打开");
+  await exactRow("changed.ts").click();
+  await page.getByTestId("active-path").filter({ hasText: "src/features/deep/changed.ts" }).waitFor();
+
   // 手动刷新会刷新根和所有展开层，并保留展开状态。
   const beforeManual = calls.length;
   const manualResponses = Promise.all(["", "src", "src/features", "src/features/deep"].map(waitForAPathResponse));
@@ -243,10 +261,10 @@ try {
   // 回到有装饰的 A，深浅主题都检查布局边界并保存可审阅截图。
   gitA = {
     changes: [
-      change("src/features/deep/changed.ts", "modified"),
-      change("staged.ts", "added"),
-      change("new-note.md", "untracked"),
-      change("conflict.txt", "unmerged"),
+      change("src/features/deep/changed.ts", "modified", "unstaged"),
+      change("staged.ts", "added", "staged"),
+      change("new-note.md", "untracked", "untracked"),
+      change("conflict.txt", "unmerged", "unstaged"),
     ],
     truncated: false,
     error: null,

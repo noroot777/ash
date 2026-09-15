@@ -460,7 +460,7 @@ export function ScmInspector({
             activeGroup={activeGroup}
             hint="解决冲突后暂存，即等于标记为已解决。冲突文件不提供丢弃。"
             actions={{
-              onOpen: (change) => onOpenDiff({ path: change.path, source: diffSourceOf("merge"), origPath: null }),
+              onOpen: (change) => onOpenDiff({ path: change.path, source: diffSourceOf("merge"), origPath: null, kind: change.kind }),
               onStage: writable((paths: string[]) => void perform({ kind: "stage", paths })),
             }}
           />
@@ -471,7 +471,7 @@ export function ScmInspector({
             activePath={activeDiff?.path ?? null}
             activeGroup={activeGroup}
             actions={{
-              onOpen: (change) => onOpenDiff({ path: change.path, source: "staged", origPath: change.origPath }),
+              onOpen: (change) => onOpenDiff({ path: change.path, source: "staged", origPath: change.origPath, kind: change.kind }),
               onUnstage: writable((paths: string[]) => void perform({ kind: "unstage", paths })),
             }}
           />
@@ -482,7 +482,7 @@ export function ScmInspector({
             activePath={activeDiff?.path ?? null}
             activeGroup={activeGroup}
             actions={{
-              onOpen: (change) => onOpenDiff({ path: change.path, source: "unstaged", origPath: null }),
+              onOpen: (change) => onOpenDiff({ path: change.path, source: "unstaged", origPath: null, kind: change.kind }),
               onStage: writable((paths: string[]) => void perform({ kind: "stage", paths })),
               onDiscard: writable((changes: ScmChange[]) => askDiscard(changes, "unstaged")),
             }}
@@ -494,7 +494,7 @@ export function ScmInspector({
             activePath={activeDiff?.path ?? null}
             activeGroup={activeGroup}
             actions={{
-              onOpen: (change) => onOpenDiff({ path: change.path, source: "untracked", origPath: null }),
+              onOpen: (change) => onOpenDiff({ path: change.path, source: "untracked", origPath: null, kind: change.kind }),
               onStage: writable((paths: string[]) => void perform({ kind: "stage", paths })),
               onDiscard: writable((changes: ScmChange[]) => askDiscard(changes, "untracked")),
             }}

@@ -6,6 +6,7 @@ import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { MessageFooter } from "../components/MessageFooter.tsx";
 import { FileTreeInspector } from "../files/FileTreeInspector.tsx";
+import type { ScmDiffTarget } from "../scm/scmModel.ts";
 import { retireInspectorTab, type InspectorDescriptor } from "../inspector/index.ts";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
@@ -34,8 +35,10 @@ export interface TeamInspectorContext {
   onOpenTask: (taskId: string) => void;
   indicatorForTask: IndicatorForTask;
   workerLiveLines: Record<string, string>;
-  openFilePath: string | null;
+  /** 文件树该高亮哪一行：摊的是全文还是 diff，对它来说是同一个文件。 */
+  activeFilePath: string | null;
   onOpenFile: (path: string) => void;
+  onOpenDiff: (target: ScmDiffTarget) => void;
 }
 
 function ConfigValue({ label, value }: { label: string; value: string }) {
@@ -212,8 +215,9 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
     render: (context) => (
       <FileTreeInspector
         taskId={context.task.id}
-        activePath={context.openFilePath}
+        activePath={context.activeFilePath}
         onOpenFile={context.onOpenFile}
+        onOpenDiff={context.onOpenDiff}
       />
     ),
   },

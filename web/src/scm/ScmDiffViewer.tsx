@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { GitDiff, SpinnerGap, Warning, X } from "@phosphor-icons/react";
-import { api } from "../lib/api.ts";
+import { FileText, GitDiff, SpinnerGap, Warning, X } from "@phosphor-icons/react";
+import { api, type ScmChangeKind } from "../lib/api.ts";
 import { countDiffLines, parseDiffLines } from "../review/diffModel.ts";
 import { branchDiffReason, type ScmDiffKind } from "./scmModel.ts";
 
@@ -37,12 +37,17 @@ export function ScmDiffViewer({
   path,
   source,
   origPath,
+  kind,
+  onOpenFile,
   onClose,
 }: {
   taskId: string;
   path: string;
   source: ScmDiffKind;
   origPath: string | null;
+  kind?: ScmChangeKind;
+  /** 「查看文件全文」。文件树把有改动的文件直接摊成 diff，全文的入口就落在这里。 */
+  onOpenFile?: () => void;
   onClose: () => void;
 }) {
   const [diff, setDiff] = useState<ViewerDiff | null>(null);
@@ -90,6 +95,13 @@ export function ScmDiffViewer({
         </div>
         {diff && !diff.binary && !diff.unavailable && (
           <span className="scm-diff__counts"><i>+{counts.additions}</i><em>−{counts.deletions}</em></span>
+        )}
+        {/* 删掉的文件没有全文可看，这个入口就不给——给了只会点出一句「读不到」。 */}
+        {onOpenFile && kind !== "deleted" && (
+          <button type="button" className="file-viewer__action" onClick={onOpenFile}>
+            <FileText size={13} aria-hidden="true" />
+            查看文件全文
+          </button>
         )}
         <button type="button" className="file-viewer__action" aria-label="关闭 diff，回到会话" onClick={onClose}>
           <X size={13} aria-hidden="true" />

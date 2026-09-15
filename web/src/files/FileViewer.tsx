@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Copy, FolderOpen, SpinnerGap, Warning, X } from "@phosphor-icons/react";
+import { Copy, FolderOpen, GitDiff, SpinnerGap, Warning, X } from "@phosphor-icons/react";
 import { api, type FileContent } from "../lib/api.ts";
 import { formatSize } from "./fileModel.ts";
 import { OpenWithMenu } from "./OpenWithMenu.tsx";
@@ -49,11 +49,14 @@ function Body({ taskId, file }: { taskId: string; file: FileContent }) {
 export function FileViewer({
   taskId,
   path,
+  onOpenDiff,
   onClose,
   notify,
 }: {
   taskId: string;
   path: string;
+  /** 「查看改动」：从 diff 切过来的那次才有，点回去还是刚才那一份 diff。 */
+  onOpenDiff?: () => void;
   onClose: () => void;
   notify: (message: string) => void;
 }) {
@@ -96,6 +99,12 @@ export function FileViewer({
           <b>{file?.name ?? path.split("/").pop()}</b>
           <small>{path}{file ? ` · ${formatSize(file.size)}` : ""}</small>
         </div>
+        {onOpenDiff && (
+          <button type="button" className="file-viewer__action" onClick={onOpenDiff}>
+            <GitDiff size={13} aria-hidden="true" />
+            查看改动
+          </button>
+        )}
         <button
           type="button"
           className="file-viewer__action"

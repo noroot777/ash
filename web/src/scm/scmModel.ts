@@ -33,6 +33,11 @@ export type ScmDiffTarget = {
   path: string;
   source: ScmDiffKind;
   origPath: string | null;
+  /**
+   * 这一条是哪种改动。只用来决定 diff 视图给不给「查看文件全文」——已删除的文件在工作
+   * 目录里已经没有全文可读了，给了只会点出一个 404。缺省当作「还在磁盘上」。
+   */
+  kind?: ScmChangeKind;
 };
 
 export { branchDiffReason } from "../lib/branch-diff-reason.ts";

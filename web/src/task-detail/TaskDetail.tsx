@@ -6,6 +6,7 @@ import { PreviewWorkspace } from "../preview-workspace/PreviewWorkspace.tsx";
 import { useSubagents } from "./useSubagents.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { FileViewer } from "../files/FileViewer.tsx";
+import { useFileView } from "../files/useFileView.ts";
 import { ScmDiffViewer } from "../scm/ScmDiffViewer.tsx";
 import type { ScmDiffTarget } from "../scm/scmModel.ts";
 import { api } from "../lib/api.ts";
@@ -83,8 +84,8 @@ export function TaskDetail({
   const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
   const [previewOpen, setPreviewOpen] = useState(false);
   // 中间那一栏同一时刻只放一样东西：会话 / 审查工作区 / 文件 / 工作区 diff。
-  const [openFilePath, setOpenFilePath] = useState<string | null>(null);
-  const [openScmDiff, setOpenScmDiff] = useState<ScmDiffTarget | null>(null);
+  // 文件与 diff 互为对方的另一种读法，合在一个 hook 里（见 files/useFileView.ts）。
+  const fileView = useFileView(task.id);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [markDoneOpen, setMarkDoneOpen] = useState(false);
   const [postMergeDialogOpen, setPostMergeDialogOpen] = useState(false);
@@ -174,9 +175,8 @@ export function TaskDetail({
     setMarkDoneOpen(false);
     setPostMergeDialogOpen(false);
     setDerivation(null);
-    setOpenFilePath(null);
-    setOpenScmDiff(null);
-  }, [initialReviewOpen, task.id]);
+    fileView.close();
+  }, [fileView.close, initialReviewOpen, task.id]);
   // 换任务一律作废(别把上一个任务的目标念到这一个头上);同一个任务停下来也作废,
   // 免得下一次「运行」照抄旧目标。
   useEffect(() => setPendingExecutor(null), [task.id]);
@@ -190,8 +190,7 @@ export function TaskDetail({
     setReviewOpen(open);
     if (open) {
       setPreviewOpen(false);
-      setOpenFilePath(null);
-      setOpenScmDiff(null);
+      fileView.close();
       subagents.closeAgent();
     }
     onReviewOpenChange?.(open);
@@ -295,26 +294,24 @@ export function TaskDetail({
         followUps,
         onOpenTask,
         onOpenReview: () => changeReviewOpen(true),
-        onOpenPreview: () => { setPreviewOpen(true); changeReviewOpen(false); setOpenFilePath(null); setOpenScmDiff(null); subagents.closeAgent(); },
+        onOpenPreview: () => { setPreviewOpen(true); changeReviewOpen(false); fileView.close(); subagents.closeAgent(); },
         onTaskUpdated: onTaskUpdate,
         onPatch: patch,
         onQueueChanged: (updatedTask) => {
           if (updatedTask) onTaskUpdate(updatedTask);
           else void refreshTask();
         },
-        openFilePath,
         onOpenFile: (path: string) => {
           setPreviewOpen(false);
-          setOpenFilePath(path);
-          setOpenScmDiff(null);
+          fileView.openFile(path);
           subagents.closeAgent();
           if (reviewOpen) changeReviewOpen(false);
         },
-        openScmDiff,
+        activeFilePath: fileView.activePath,
+        openScmDiff: fileView.diff,
         onOpenScmDiff: (target: ScmDiffTarget) => {
           setPreviewOpen(false);
-          setOpenScmDiff(target);
-          setOpenFilePath(null);
+          fileView.openDiff(target);
           subagents.closeAgent();
           if (reviewOpen) changeReviewOpen(false);
         },
@@ -374,20 +371,23 @@ export function TaskDetail({
                   else setPostMergeDialogOpen(true);
                 } : undefined}
               />
-            ) : openFilePath ? (
+            ) : fileView.filePath ? (
               <FileViewer
                 taskId={task.id}
-                path={openFilePath}
-                onClose={() => setOpenFilePath(null)}
+                path={fileView.filePath}
+                onOpenDiff={fileView.canShowDiff ? fileView.showDiff : undefined}
+                onClose={fileView.close}
                 notify={notify}
               />
-            ) : openScmDiff ? (
+            ) : fileView.diff ? (
               <ScmDiffViewer
                 taskId={task.id}
-                path={openScmDiff.path}
-                source={openScmDiff.source}
-                origPath={openScmDiff.origPath}
-                onClose={() => setOpenScmDiff(null)}
+                path={fileView.diff.path}
+                source={fileView.diff.source}
+                origPath={fileView.diff.origPath}
+                kind={fileView.diff.kind}
+                onOpenFile={fileView.showFile}
+                onClose={fileView.close}
               />
             ) : (
               <div className="task-detail-body">

@@ -15,7 +15,7 @@ import {
 } from "@phosphor-icons/react";
 import type { FileEntry } from "../lib/api.ts";
 import { formatSize, ROOT_SOURCE_LABEL, useFileTree } from "./fileModel.ts";
-import { KIND_BADGE, KIND_LABEL } from "../scm/scmModel.ts";
+import { KIND_BADGE, KIND_LABEL, type ScmDiffTarget } from "../scm/scmModel.ts";
 import { fileGitDecorations, type FileGitDecoration } from "./fileGitDecorations.ts";
 
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico", "svg", "heic", "tif", "tiff"]);
@@ -34,6 +34,7 @@ function Level({
   showIgnored,
   activePath,
   onOpenFile,
+  onOpenDiff,
   decorations,
 }: {
   path: string;
@@ -42,6 +43,7 @@ function Level({
   showIgnored: boolean;
   activePath: string | null;
   onOpenFile: (entry: FileEntry) => void;
+  onOpenDiff: ((target: ScmDiffTarget) => void) | undefined;
   decorations: ReadonlyMap<string, FileGitDecoration>;
 }) {
   const entries = tree.children[path];
@@ -66,16 +68,25 @@ function Level({
         const decoration = decorations.get(entry.path);
         const gitLabel = decoration && (decoration.descendant || entry.kind === "dir"
           ? `包含未提交改动：${KIND_LABEL[decoration.kind]}` : KIND_LABEL[decoration.kind]);
+        // 有颜色的文件点开直接摊 diff：那是用户点它时真正想看的东西。
+        // 全文没丢——diff 视图里有「查看文件全文」切回去。
+        const diffTarget = entry.kind === "file" && onOpenDiff ? decoration?.diff ?? null : null;
         return (
           <div key={entry.path} className="file-tree__node">
             <button
               type="button"
               className={`file-tree__row${active ? " is-active" : ""}${entry.ignored ? " is-ignored" : ""}`}
               data-git-kind={decoration?.kind}
-              aria-label={gitLabel ? `${entry.name}，${gitLabel}` : undefined}
+              aria-label={gitLabel
+                ? `${entry.name}，${gitLabel}${diffTarget ? "，打开对比" : ""}`
+                : undefined}
               style={{ paddingLeft: 6 + depth * 12 }}
               aria-expanded={entry.kind === "dir" ? open : undefined}
-              onClick={() => entry.kind === "dir" ? tree.toggle(entry.path) : onOpenFile(entry)}
+              onClick={() => {
+                if (entry.kind === "dir") tree.toggle(entry.path);
+                else if (diffTarget && onOpenDiff) onOpenDiff(diffTarget);
+                else onOpenFile(entry);
+              }}
             >
               <span className="file-tree__caret" aria-hidden="true">
                 {entry.kind === "dir"
@@ -102,6 +113,7 @@ function Level({
                 showIgnored={showIgnored}
                 activePath={activePath}
                 onOpenFile={onOpenFile}
+                onOpenDiff={onOpenDiff}
                 decorations={decorations}
               />
             )}
@@ -123,15 +135,20 @@ function Level({
  * 「当前所在分支的文件」在实现上就是**任务实际干活的那个目录**：worktree 任务看到
  * 的自然是它那条分支的检出，共享目录的任务看到的是项目仓库本身 —— 所以头部要把
  * 「你看的是哪儿、它在哪条分支上」明说，否则用户分不清面前这份文件属于谁。
+ *
+ * 带 git 标识（有颜色）的文件点开走 `onOpenDiff`：改过的文件，用户点它是想看改了什么。
+ * 没接 `onOpenDiff` 的表面退回全文，行为跟以前一样。
  */
 export function FileTreeInspector({
   taskId,
   activePath,
   onOpenFile,
+  onOpenDiff,
 }: {
   taskId: string;
   activePath: string | null;
   onOpenFile: (path: string) => void;
+  onOpenDiff?: (target: ScmDiffTarget) => void;
 }) {
   const tree = useFileTree(taskId);
   const [showIgnored, setShowIgnored] = useState(false);
@@ -196,6 +213,7 @@ export function FileTreeInspector({
           showIgnored={showIgnored}
           activePath={activePath}
           onOpenFile={(entry) => onOpenFile(entry.path)}
+          onOpenDiff={onOpenDiff}
           decorations={decorations}
         />
       </div>

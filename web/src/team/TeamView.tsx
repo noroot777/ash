@@ -12,6 +12,9 @@ import { defaultOnceTime, toLocalDateTime } from "../components/ScheduleControl.
 import { SlashMenu } from "../components/SlashMenu.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { FileViewer } from "../files/FileViewer.tsx";
+import { useFileView } from "../files/useFileView.ts";
+import { ScmDiffViewer } from "../scm/ScmDiffViewer.tsx";
+import type { ScmDiffTarget } from "../scm/scmModel.ts";
 import { api, type ReplyTaskResult, type TeamCuaStatus } from "../lib/api.ts";
 import type { Notify } from "../lib/notify.ts";
 import { useTaskBody } from "../lib/useTaskBody.ts";
@@ -349,8 +352,8 @@ export function TeamView({
   const [groups, setGroups] = useState<Group[]>([]);
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
   const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
-  // 中间那一栏同一时刻只放一样东西：团队会话 / 验收台 / 文件。
-  const [openFilePath, setOpenFilePath] = useState<string | null>(null);
+  // 中间那一栏同一时刻只放一样东西：团队会话 / 验收台 / 文件（全文或 diff）。
+  const fileView = useFileView(task.id);
   const [busy, setBusy] = useState(false);
   // 「这一轮会换执行器」的确认闸(§八);对话框住在 App 层。
   const confirmExecutorSwap = useExecutorGate();
@@ -446,7 +449,7 @@ export function TeamView({
   const changeReviewOpen = (open: boolean) => {
     setReviewOpen(open);
     if (open) {
-      setOpenFilePath(null);
+      fileView.close();
       subagents.closeAgent();
     }
     onReviewOpenChange?.(open);
@@ -529,9 +532,15 @@ export function TeamView({
         onOpenTask: openTaskById,
         indicatorForTask,
         workerLiveLines,
-        openFilePath,
+        activeFilePath: fileView.activePath,
         onOpenFile: (path: string) => {
-          setOpenFilePath(path);
+          fileView.openFile(path);
+          setSelectedWorkerId(null);
+          subagents.closeAgent();
+          if (reviewOpen) changeReviewOpen(false);
+        },
+        onOpenDiff: (target: ScmDiffTarget) => {
+          fileView.openDiff(target);
           setSelectedWorkerId(null);
           subagents.closeAgent();
           if (reviewOpen) changeReviewOpen(false);
@@ -564,12 +573,23 @@ export function TeamView({
       />
       {reviewOpen ? (
         <TeamReviewWorkspace lead={task} workers={workers} onTaskUpdated={onTaskUpdate} indicatorForTask={indicatorForTask} onReadTask={markTaskRead} notify={notify} />
-      ) : openFilePath ? (
+      ) : fileView.filePath ? (
         <FileViewer
           taskId={task.id}
-          path={openFilePath}
-          onClose={() => setOpenFilePath(null)}
+          path={fileView.filePath}
+          onOpenDiff={fileView.canShowDiff ? fileView.showDiff : undefined}
+          onClose={fileView.close}
           notify={notify}
+        />
+      ) : fileView.diff ? (
+        <ScmDiffViewer
+          taskId={task.id}
+          path={fileView.diff.path}
+          source={fileView.diff.source}
+          origPath={fileView.diff.origPath}
+          kind={fileView.diff.kind}
+          onOpenFile={fileView.showFile}
+          onClose={fileView.close}
         />
       ) : (
         <>
