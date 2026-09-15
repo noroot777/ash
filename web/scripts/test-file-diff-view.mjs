@@ -36,6 +36,21 @@ const DIFF_TEXT = [
   "",
 ].join("\n");
 
+// 无尾换行文件的一次替换：git 会在旧行和新行后面各插一条 `\ No newline`，它们不该把
+// 这一处替换在并排视图里顶成上下两行。
+const NO_NEWLINE_DIFF = [
+  "diff --git a/nonl.ts b/nonl.ts",
+  "index 3333333..4444444 100644",
+  "--- a/nonl.ts",
+  "+++ b/nonl.ts",
+  "@@ -1 +1 @@",
+  "-old value",
+  "\\ No newline at end of file",
+  "+new value",
+  "\\ No newline at end of file",
+  "",
+].join("\n");
+
 const entry = (path, options = {}) => ({
   name: path.split("/").at(-1),
   path,
@@ -50,10 +65,13 @@ const entry = (path, options = {}) => ({
 const listing = {
   root: { path: "/tmp/file-diff-view", branch: "feature/open-diff", gitRepo: true, source: "session" },
   path: "",
-  entries: [entry("changed.ts"), entry("clean.ts")],
+  entries: [entry("changed.ts"), entry("nonl.ts"), entry("clean.ts")],
   truncated: false,
   git: {
-    changes: [{ path: "changed.ts", origPath: null, kind: "modified", source: "unstaged" }],
+    changes: [
+      { path: "changed.ts", origPath: null, kind: "modified", source: "unstaged" },
+      { path: "nonl.ts", origPath: null, kind: "modified", source: "unstaged" },
+    ],
     truncated: false,
     error: null,
   },
@@ -78,7 +96,7 @@ try {
         path: url.searchParams.get("path"),
         origPath: null,
         source: url.searchParams.get("source"),
-        diff: DIFF_TEXT,
+        diff: url.searchParams.get("path") === "nonl.ts" ? NO_NEWLINE_DIFF : DIFF_TEXT,
         truncated: false,
         limitBytes: 256 * 1024,
         binary: false,
@@ -158,12 +176,30 @@ try {
   assert.equal(await center.locator(".single-review-line.is-span.is-hunk code").innerText(), "@@ -1,4 +1,5 @@");
   await page.screenshot({ path: "/tmp/ash-file-diff-view-split.png", fullPage: true });
 
+  // 无尾换行的文件：`\ No newline` 是上一行的属性，不能把同一处替换顶成上下两行。
+  await row("nonl.ts").click();
+  await center.getByText("old value", { exact: false }).waitFor();
+  assert.equal(await pairs.count(), 2, "`\\ No newline` 把同一处替换拆成了两行");
+  // innerText 不给 margin 留空格，所以标记是紧跟在正文后面的。
+  assert.equal(await sideText(0, 0), "old value无尾换行", "左栏丢了改之前那一行或它的无尾换行标记");
+  assert.equal(await sideText(0, 1), "new value无尾换行", "右栏丢了改之后那一行或它的无尾换行标记");
+  assert.equal(await center.locator(".single-review-line.is-span.is-meta code")
+    .filter({ hasText: "No newline" }).count(), 0, "无尾换行标记不该再单独占一行");
+  await page.screenshot({ path: "/tmp/ash-file-diff-view-no-newline.png", fullPage: true });
+  await row("changed.ts").click();
+  await center.getByText("const keep = 0;", { exact: false }).first().waitFor();
+
   // 选择跨刷新保留，是「我习惯怎么读 diff」而不是某个文件的属性。
   await page.reload();
   await row("changed.ts").click();
   await center.locator(".single-review-code.is-split").waitFor();
   await toUnified.click();
   await center.locator(".single-review-code.is-split").waitFor({ state: "detached" });
+  await center.getByText("-export const gone = 3;", { exact: false }).waitFor();
+  // 单栏里 `\ No newline` 仍旧是独立的一行——并排只是把它换了个挂法，不是把它吞掉。
+  await row("nonl.ts").click();
+  await center.getByText("No newline at end of file", { exact: false }).first().waitFor();
+  await row("changed.ts").click();
   await center.getByText("-export const gone = 3;", { exact: false }).waitFor();
 
   // diff → 全文 → 再切回 diff。

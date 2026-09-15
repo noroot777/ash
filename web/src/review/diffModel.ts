@@ -91,6 +91,8 @@ export interface DiffCell {
   kind: "add" | "delete" | "context" | "empty";
   line: number | null;
   text: string;
+  /** 这一行后面没有换行符（git 的 `\ No newline at end of file`）。 */
+  noNewline: boolean;
 }
 
 export type DiffRow =
@@ -98,15 +100,21 @@ export type DiffRow =
   | { kind: "hunk" | "meta"; text: string }
   | { kind: "pair"; left: DiffCell; right: DiffCell };
 
-const EMPTY_CELL: DiffCell = { kind: "empty", line: null, text: "" };
+const EMPTY_CELL: DiffCell = { kind: "empty", line: null, text: "", noNewline: false };
+
+/** `\ No newline at end of file` —— 它不是独立的一行内容，而是**上一行的属性**。 */
+function isNoNewlineMarker(line: DiffLine): boolean {
+  return line.kind === "meta" && line.text.startsWith("\\ No newline");
+}
 
 /** 并排视图里每格只放正文，`+`/`-` 由它在哪一栏表达，再留个符号是噪声。 */
-function cellOf(line: DiffLine | undefined): DiffCell {
+function cellOf(line: DiffLine | undefined, noNewline: ReadonlySet<DiffLine>): DiffCell {
   if (!line) return EMPTY_CELL;
   return {
     kind: line.kind === "add" || line.kind === "delete" ? line.kind : "context",
     line: line.kind === "delete" ? line.oldLine : line.kind === "add" ? line.newLine : line.oldLine,
     text: line.text.slice(1),
+    noNewline: noNewline.has(line),
   };
 }
 
@@ -116,14 +124,20 @@ function cellOf(line: DiffLine | undefined): DiffCell {
  * 一段连续的删除和紧随其后的一段连续新增是**同一处改动的两面**，所以要按位置两两对齐
  * （第 i 条删对第 i 条增），长的一侧多出来的部分对空格。逐行交替配对会把「删 3 行、加 5
  * 行」排成锯齿，正是并排视图要消掉的东西。
+ *
+ * `\ No newline at end of file` 是唯一一种**不能打断这个收集过程**的 meta：改一个没有
+ * 尾换行的文件，git 会输出「-旧行 / \No newline / +新行 / \No newline」，照常 flush
+ * 就把同一处替换拆成上下两行（左边一行旧的、右边空，再下一行左边空、右边新的），并排
+ * 视图正好在它最该对齐的地方失效。它依附于上一行，所以挂到那一行的格子上。
  */
 export function toSideBySideRows(lines: readonly DiffLine[]): DiffRow[] {
   const rows: DiffRow[] = [];
+  const noNewline = new Set<DiffLine>();
   let deletes: DiffLine[] = [];
   let adds: DiffLine[] = [];
   const flush = () => {
     for (let index = 0; index < Math.max(deletes.length, adds.length); index += 1) {
-      rows.push({ kind: "pair", left: cellOf(deletes[index]), right: cellOf(adds[index]) });
+      rows.push({ kind: "pair", left: cellOf(deletes[index], noNewline), right: cellOf(adds[index], noNewline) });
     }
     deletes = [];
     adds = [];
@@ -137,13 +151,31 @@ export function toSideBySideRows(lines: readonly DiffLine[]): DiffRow[] {
       adds.push(line);
       continue;
     }
+    if (isNoNewlineMarker(line)) {
+      // 正在收集的那一侧的最后一行就是它说的那一行（+ 在 - 之后，所以先看 adds）。
+      const pending = adds.at(-1) ?? deletes.at(-1);
+      if (pending) {
+        noNewline.add(pending);
+        continue;
+      }
+      // 没在收集，说明它跟的是一条上下文行：那一行两侧是同一行，两边都标。
+      const last = rows.at(-1);
+      if (last?.kind === "pair") {
+        last.left = { ...last.left, noNewline: last.left.kind !== "empty" };
+        last.right = { ...last.right, noNewline: last.right.kind !== "empty" };
+        continue;
+      }
+      // 前面一行都没有（不该出现的 diff），照旧当跨栏 meta 摆出来，别把它吞掉。
+      rows.push({ kind: "meta", text: line.text });
+      continue;
+    }
     flush();
     if (line.kind === "context") {
       const text = line.text.slice(1);
       rows.push({
         kind: "pair",
-        left: { kind: "context", line: line.oldLine, text },
-        right: { kind: "context", line: line.newLine, text },
+        left: { kind: "context", line: line.oldLine, text, noNewline: false },
+        right: { kind: "context", line: line.newLine, text, noNewline: false },
       });
     } else {
       rows.push({ kind: line.kind, text: line.text });

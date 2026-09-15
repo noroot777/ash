@@ -36,7 +36,12 @@ function Cell({ cell, side }: { cell: DiffCell; side: "old" | "new" }) {
   return (
     <>
       <span className={`single-review-${side}`} role="cell">{cell.line ?? ""}</span>
-      <code role="cell">{cell.text || " "}</code>
+      <code role="cell">
+        {cell.text || " "}
+        {/* 单栏里这是独立的一行 `\ No newline at end of file`；并排里它属于这一格，
+            跟着正文走才不会把同一处替换顶开。 */}
+        {cell.noNewline && <i className="single-review-nonl">无尾换行</i>}
+      </code>
     </>
   );
 }

@@ -124,6 +124,8 @@
 /* 行号跟着自己那一侧走：并排时两栏各自横向滚动，单栏那种 sticky 到最左会让右栏的行号
    贴到左栏上去。底色继承所在格，一眼能看出这一行属于删还是增。 */
 .single-review-code.is-split .single-review-side > span { position:static; border-right:1px solid var(--line); padding:0 7px; color:#a1a1aa; text-align:right; user-select:none; }
+/* 「这一行后面没有换行符」。并排里它是正文的尾巴而不是单独一行，所以做成一枚淡标签。 */
+.single-review-code.is-split .single-review-nonl { margin-left:8px; border-radius:4px; background:#ecedf1; padding:0 4px; color:#8b8f9a; font-size:8.5px; font-style:normal; user-select:none; }
 /* 单栏 / 并排的切换。摆在 diff 标题栏上，两段只有一个是按下的。 */
 .diff-layout-toggle { display:inline-flex; flex:0 0 auto; overflow:hidden; border:1px solid var(--line2); border-radius:6px; background:var(--panel); }
 .diff-layout-toggle button { display:inline-flex; height:24px; align-items:center; gap:4px; border:0; background:transparent; padding:0 7px; color:var(--muted); font-size:9.5px; }
