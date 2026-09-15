@@ -27,6 +27,7 @@ import { useReplyMention } from "./replyMention.ts";
 import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
 import { useStandingExecutor, type StandingExecutor } from "./useStandingExecutor.ts";
+import { registerReplyInput } from "./replyQuote.ts";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
 import { ScreenshotAnnotation } from "../page-annotation/ScreenshotAnnotation.tsx";
 import { screenshotCandidates, type AnnotationReply } from "../page-annotation/model.ts";
@@ -167,6 +168,9 @@ export function ReplyBox({
     resetComposerState();
     setSendError(null);
   }, [task.id]);
+
+  // 会话里选中一段话点「添加到对话」时，浮条要把光标送回这个输入框（见 replyQuote.ts）。
+  useEffect(() => registerReplyInput(task.id, textareaRef.current), [task.id]);
 
   const commandReset = useRef({ taskId: task.id, key: command?.resetKey });
   useEffect(() => {

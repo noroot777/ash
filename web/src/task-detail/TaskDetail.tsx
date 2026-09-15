@@ -43,6 +43,7 @@ import type { ComposerDraft } from "../composer/composerDraft.ts";
 import { snapshotConversationFork } from "./conversationFork.ts";
 import { TASK_INSPECTORS } from "./taskInspectors.tsx";
 import { ConversationSelection } from "../side-chat/ConversationSelection.tsx";
+import { useAddReplyQuote } from "./replyQuote.ts";
 
 const REVIEW_FOCUS_STAGES = new Set(["verifying", "verified", "verify_failed", "awaiting_acceptance"]);
 
@@ -136,6 +137,8 @@ export function TaskDetail({
   const canHandoff = task.mode === "single" && task.parentId === null && !task.archived && task.queueId == null
     && (task.handoff?.direction !== "out" || !!task.handoff.pending);
   const handedOut = task.handoff?.direction === "out" && !task.handoff.pending;
+  // 选中会话正文后的「添加到对话」：写进这个任务的回复草稿。没有对话框的任务不给这个入口。
+  const addToReply = useAddReplyQuote(task.id);
   // 与 FreeWorkflowToolbar 自己的判据一致:两处都得知道这一条 rail 里到底有没有东西,
   // 空的时候不能给 ReplyBox 挂 has-top-rail(那会白留一条内边距)。
   const freeToolbarVisible = task.workflowMode === "free" && task.mode === "single"
@@ -391,7 +394,7 @@ export function TaskDetail({
             ) : (
               <div className="task-detail-body">
                 <section className="task-detail-main" aria-label="任务会话">
-                  <ConversationSelection key={task.id} taskId={task.id} onAsk={() => openTab("side-chat")}>
+                  <ConversationSelection key={task.id} taskId={task.id} onAsk={() => openTab("side-chat")} onAddToReply={handedOut ? undefined : addToReply}>
                   <ConversationFeed
                     task={task}
                     questionHistory={task.questionHistory}
