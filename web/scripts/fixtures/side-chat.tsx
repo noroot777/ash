@@ -1,4 +1,4 @@
-import { StrictMode, useState } from "react";
+import { StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Task } from "@ash/shared";
 import { Chats, Info } from "@phosphor-icons/react";
@@ -6,15 +6,28 @@ import { InspectorHost } from "../../src/inspector/index.ts";
 import { ConversationSelection } from "../../src/side-chat/ConversationSelection.tsx";
 import { SideChatPane } from "../../src/side-chat/SideChatPane.tsx";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
+import { registerReplyInput, useAddReplyQuote } from "../../src/task-detail/replyQuote.ts";
+import { DraftProvider, useTaskReplyDraft } from "../../src/lib/DraftStore.tsx";
 import type { ConversationItem } from "../../src/task-detail/conversationModel.ts";
 import "../../src/styles/global.css";
 
 const longSelection = `超长主会话原文：${"完整引用不能截断。".repeat(900)}`;
 const agentMarkdown = "侧聊中可以继续对比方案，\n把结论送回这里。\n\n```ts\nconst selected = true;\n```";
 
+// 主对话框的最小替身：只要跟 ReplyBox 一样用同一份草稿、登记同一处输入框，
+// 「添加到对话」走的就是线上那条路（写进草稿 + 光标归位）。
+function FixtureReply({ taskId }: { taskId: string }) {
+  const draft = useTaskReplyDraft(taskId);
+  const input = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => registerReplyInput(taskId, input.current), [taskId]);
+  return <textarea ref={input} aria-label="回复任务" rows={4} style={{ width: "100%", marginTop: 12 }}
+    value={draft.text} onChange={(event) => draft.setText(event.target.value)} />;
+}
+
 function Fixture() {
   const [taskId, setTaskId] = useState("parent");
   const [status, setStatus] = useState("running");
+  const addToReply = useAddReplyQuote(taskId);
   const task = { id: taskId, projectId: "p", title: "实现任务消息回传", mode: "single", agentType: "codex", executorId: "side-codex", model: "gpt-5.6-sol", reasoningEffort: "high", status } as Task;
   const items: ConversationItem[] = [
     { kind: "user", id: `${taskId}-user`, text: "主任务正在实现方案 A，并记录验证结果。", attachments: [], at: "2026-09-14T08:00:00.000Z" },
@@ -26,7 +39,7 @@ function Fixture() {
   ]} context={task} tabPolicy={{ stateKey: status, requiredTabId: "info", defaultOpenTabIds: ["info", "side-chat"], defaultActiveTabId: "info", preserveActiveTabIds: ["side-chat"] }}>
     {({ openTab }) => <main style={{ padding: 24, flex: 1, minWidth: 0, overflow: "auto" }}>
       <h2>{task.title}</h2>
-      <ConversationSelection taskId={task.id} onAsk={() => openTab("side-chat")}>
+      <ConversationSelection taskId={task.id} onAsk={() => openTab("side-chat")} onAddToReply={addToReply}>
         <div style={{ height: 360 }}>
           <ConversationFeed task={task} items={items} sessions={[]} questionHistory={[]} loading={false} error={null} footer={<>
             <p data-testid="selection-other">{taskId === "parent" ? "当前属于主任务 parent 的会话内容。" : "当前属于主任务 other 的会话内容。"}</p>
@@ -34,6 +47,7 @@ function Fixture() {
           </>} />
         </div>
       </ConversationSelection>
+      <FixtureReply key={task.id} taskId={task.id} />
       <label data-testid="non-conversation-label">主任务控制标签 <input aria-label="主任务消息输入" defaultValue="主输入里的文字不能成为引用" /></label>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
         <button onClick={() => openTab("side-chat")}>打开侧聊</button>
@@ -45,4 +59,4 @@ function Fixture() {
     </main>}
   </InspectorHost></div>;
 }
-createRoot(document.getElementById("root")!).render(<StrictMode><Fixture /></StrictMode>);
+createRoot(document.getElementById("root")!).render(<StrictMode><DraftProvider><Fixture /></DraftProvider></StrictMode>);

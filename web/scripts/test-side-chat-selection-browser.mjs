@@ -84,6 +84,9 @@ try {
   const state = async () => await (await page.request.get(`${backend}/api/fixture/state`)).json();
   const roomsFor = async (taskId) => await (await page.request.get(`${backend}/api/tasks/${taskId}/side-chats`)).json();
   const ask = page.getByRole("button", { name: "在侧聊中提问", exact: true });
+  const addToReply = page.getByRole("button", { name: "添加到对话", exact: true });
+  const reply = page.getByRole("textbox", { name: "回复任务", exact: true });
+  const quoted = (text) => text.replace(/\s+$/u, "").split("\n").map((line) => `> ${line}`).join("\n");
   const primary = page.locator("main .task-message--user p").filter({ hasText: "主任务正在实现方案 A，并记录验证结果。" });
   const secondary = page.locator(".task-message--agent .task-markdown p").first();
 
@@ -100,6 +103,9 @@ try {
 
   await selectContents(primary);
   await ask.waitFor();
+  await addToReply.waitFor();
+  const toolbarBox = await page.locator(".conversation-selection-action").boundingBox();
+  assert.ok(toolbarBox && toolbarBox.x >= 0 && toolbarBox.x + toolbarBox.width <= 1280, "两颗按钮的浮条完整落在视口内");
   await page.screenshot({ path: join(artifacts, "selection-action.png") });
   await page.keyboard.press("Escape");
   await ask.waitFor({ state: "hidden" });
@@ -108,11 +114,30 @@ try {
   await page.getByTestId("outside-target").click();
   await ask.waitFor({ state: "hidden" });
 
+  // 选文送进主对话框:写进草稿、光标落到引用下面、既有草稿原样保留,且一路不碰侧聊。
+  const replySelection = await selectContents(primary);
+  await addToReply.waitFor();
+  await addToReply.click();
+  await addToReply.waitFor({ state: "hidden" });
+  assert.equal(await reply.inputValue(), `${quoted(replySelection)}\n\n`, "引用按 Markdown 引用块写进对话框");
+  await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "回复任务");
+  assert.equal(await reply.evaluate((element) => element.selectionStart === element.value.length), true, "光标落在引用下面那一行");
+  assert.equal(await page.getByRole("region", { name: "主会话引用", exact: true }).count(), 0, "添加到对话不改动侧聊引用");
+  await reply.fill("已经写了一半的回复");
+  const replySecond = await selectContents(secondary);
+  await addToReply.click();
+  assert.equal(await reply.inputValue(), `已经写了一半的回复\n\n${quoted(replySecond)}\n\n`, "引用接在已有草稿后面,不覆盖");
+  await page.screenshot({ path: join(artifacts, "selection-add-to-reply.png") });
+  await reply.fill("");
+  assert.equal((await roomsFor("parent")).length, 0, "添加到对话不建侧聊房间");
+
   const firstSelection = await selectContents(primary);
   assert.equal(firstSelection, "主任务正在实现方案 A，并记录验证结果。");
   await ask.waitFor();
   await page.keyboard.press("Tab");
-  assert.equal(await ask.evaluate((element) => element === document.activeElement), true, "Tab 将焦点送到选文入口");
+  assert.equal(await addToReply.evaluate((element) => element === document.activeElement), true, "Tab 先落在浮条第一颗按钮");
+  await page.keyboard.press("Tab");
+  assert.equal(await ask.evaluate((element) => element === document.activeElement), true, "再按 Tab 到侧聊入口");
   await page.keyboard.press("Enter");
   const reference = page.getByRole("region", { name: "主会话引用", exact: true });
   await reference.waitFor();
@@ -287,7 +312,7 @@ try {
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
   await page.screenshot({ path: join(artifacts, "selection-long-mobile.png") });
   assert.equal(errors.length, 0, errors.join("\n"));
-  console.log(`✓ 主会话选文进入侧聊：键盘入口、首次配置、引用持久化/替换/失败保留、草稿与房间/任务隔离、8000 字门禁、390px 通过\n截图：${artifacts}`);
+  console.log(`✓ 主会话选文两条去处：添加到对话（草稿追加/光标/不建房）、进入侧聊的键盘入口、首次配置、引用持久化/替换/失败保留、草稿与房间/任务隔离、8000 字门禁、390px 通过\n截图：${artifacts}`);
 } finally {
   await browser?.close();
   await server?.close();
