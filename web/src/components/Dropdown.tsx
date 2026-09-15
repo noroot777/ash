@@ -37,7 +37,7 @@ export type DropdownOption = {
 
 export type DropdownStatus = "idle" | "loading" | "ready" | "failed";
 
-type Placement = { left: number; top: number; width: number; maxHeight: number };
+type Placement = { left: number; top?: number; bottom?: number; width: number; maxHeight: number };
 
 const GAP = 4;
 const MIN_PANEL = 160;
@@ -127,10 +127,17 @@ export function Dropdown({
     const above = rect.top - 10;
     const flip = below < MIN_PANEL && above > below;
     const maxHeight = Math.max(MIN_PANEL, Math.min(320, flip ? above : below));
+    const width = Math.max(rect.width, 200);
     setPlace({
-      left: Math.max(8, Math.min(rect.left, window.innerWidth - rect.width - 8)),
-      top: flip ? rect.top - GAP - maxHeight : rect.bottom + GAP,
-      width: Math.max(rect.width, 200),
+      // 夹取要按浮层自己的宽度算：浮层有 200px 下限，比 trigger 宽时按 trigger 宽度
+      // 夹取会让右边溢出视口。
+      left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
+      // 往上翻时改用 bottom 贴住 trigger 上沿。按 `rect.top - maxHeight` 反推 top 的话，
+      // 实际高度不足 maxHeight 的矮浮层会悬在 trigger 上方一大截。
+      ...(flip
+        ? { bottom: Math.max(8, window.innerHeight - rect.top + GAP) }
+        : { top: rect.bottom + GAP }),
+      width,
       maxHeight,
     });
   };
@@ -205,7 +212,7 @@ export function Dropdown({
           ref={panelRef}
           tabIndex={-1}
           onKeyDown={onKeyDown}
-          style={{ left: place.left, top: place.top, width: place.width }}
+          style={{ left: place.left, top: place.top, bottom: place.bottom, width: place.width }}
         >
           {filterable && (
             <div className="ui-dropdown-search">

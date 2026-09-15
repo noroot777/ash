@@ -339,20 +339,6 @@ export function TaskInspector({
         </section>
 
         <section>
-          <h2>调度与续跑</h2>
-          <ScheduleControl
-            taskId={task.id}
-            notify={notify}
-            disabled={task.parentId !== null || !!task.archived}
-          />
-          <ResumePromptEditor
-            value={task.resumePrompt ?? ""}
-            editable={task.parentId === null && task.status === "paused" && !task.question}
-            onSave={saveResumePrompt}
-          />
-        </section>
-
-        <section>
           <h2>属性</h2>
           <InspectorRow label="创建来源">{taskCreationLabel(task.creationOrigin)}</InspectorRow>
           <InspectorRow label="状态">
@@ -405,6 +391,20 @@ export function TaskInspector({
               )}
             </>
           )}
+        </section>
+
+        <section>
+          <h2>调度与续跑</h2>
+          <ScheduleControl
+            taskId={task.id}
+            notify={notify}
+            disabled={task.parentId !== null || !!task.archived}
+          />
+          <ResumePromptEditor
+            value={task.resumePrompt ?? ""}
+            editable={task.parentId === null && task.status === "paused" && !task.question}
+            onSave={saveResumePrompt}
+          />
         </section>
       </div>
       {queueOpen && task.queueId && (
