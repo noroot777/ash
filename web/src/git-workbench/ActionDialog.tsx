@@ -77,7 +77,7 @@ export function ActionDialog({
       confirmDisabled={!valid}
       onConfirm={() => void submitAction()}
       onClose={close}
-      className="git-action-dialog"
+      className="git-action-dialog gwb-design"
     >
       <div className="gwb-form">
         {prompt.fields?.map((field) => (

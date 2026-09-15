@@ -36,7 +36,7 @@ import {
 } from "./journal.js";
 import { runRefAction } from "./refs.js";
 import { runSyncAction } from "./sync.js";
-import { stageSelected } from "./patch.js";
+import { stageSelected, discardSelected } from "./patch.js";
 import { continueOperation, resolveConflict } from "./conflicts.js";
 import { rebasePlan } from "./rebase.js";
 import { displayCommand, safeGitMessage } from "./command.js";
@@ -105,6 +105,9 @@ async function runAction(
     case "discard":
       await discardPaths(root, repo, action.paths, action.deleteUntracked);
       return "已丢弃指定改动";
+    case "discard-patch":
+      await discardSelected(root, action.path, action.diff, action.lines);
+      return "已丢弃选定改动，其他工作区改动与暂存区保持不变";
     case "patch":
       await stageSelected(
         root,

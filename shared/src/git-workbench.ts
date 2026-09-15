@@ -8,6 +8,8 @@ export type GitView =
   | "log";
 export interface GitFile {
   path: string;
+  additions?: number;
+  deletions?: number;
   origPath: string | null;
   kind: string;
   conflict: string | null;
@@ -140,6 +142,7 @@ export type GitAction =
     }
   | { kind: "stage" | "unstage"; paths: string[] }
   | { kind: "discard"; paths: string[]; deleteUntracked: string[] }
+  | { kind: "discard-patch"; path: string; diff: string; lines: number[] }
   | {
       kind: "patch";
       path: string;

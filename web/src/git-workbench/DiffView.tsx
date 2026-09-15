@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Plus, Sparkle, Trash } from "@phosphor-icons/react";
 import type { GitDiff } from "@ash/shared/git-workbench";
 
 export function DiffView({
@@ -11,25 +12,29 @@ export function DiffView({
   value: GitDiff | null;
   loading?: boolean;
   error?: string | null;
-  select?: { label: string; onApply: (lines: number[]) => void };
+  select?: {
+    label: string;
+    onApply: (lines: number[]) => void;
+    onDiscard?: (lines: number[]) => void;
+  };
   disabled?: boolean;
 }) {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   if (loading)
     return (
-      <div className="gwb-empty" role="status">
+      <div className="gwb-empty empty-hint" role="status">
         正在读取差异…
       </div>
     );
   if (error)
     return (
-      <div className="gwb-empty gwb-error" role="alert">
+      <div className="gwb-empty empty-hint gwb-error" role="alert">
         {error}
       </div>
     );
   if (!value)
     return (
-      <div className="gwb-empty">
+      <div className="gwb-empty empty-hint">
         <strong>选择一个文件或提交</strong>
         <span>在这里查看完整差异与提交详情</span>
       </div>
@@ -44,7 +49,7 @@ export function DiffView({
     !/^(rename|copy|new file mode|deleted file mode|old mode|new mode)/m.test(
       value.diff,
     );
-  const toggle = (indices: number[]) => {
+  const toggle = (indices: number[]) =>
     setSelected((current) => {
       const next = new Set(current);
       const remove = indices.every((index) => next.has(index));
@@ -53,13 +58,167 @@ export function DiffView({
       );
       return next;
     });
-  };
+  const hunks: {
+    header: string;
+    index: number;
+    path: string;
+    rows: {
+      index: number;
+      text: string;
+      old: number | null;
+      next: number | null;
+    }[];
+  }[] = [];
+  let path = "",
+    old = 0,
+    next = 0,
+    hunk: (typeof hunks)[number] | undefined;
+  lines.forEach((line, index) => {
+    if (line.startsWith("diff --git ")) {
+      hunk = undefined;
+      path = "";
+    } else if (line.startsWith("+++ "))
+      path = line.slice(4).replace(/^b\//, "");
+    else if (line.startsWith("@@ ")) {
+      const range = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+      old = Number(range?.[1] || 0);
+      next = Number(range?.[2] || 0);
+      hunk = { header: line, index, path, rows: [] };
+      hunks.push(hunk);
+    } else if (hunk && /^[ +\\-]/.test(line)) {
+      const sign = line[0];
+      hunk.rows.push({
+        index,
+        text: line,
+        old: sign === "+" || sign === "\\" ? null : old++,
+        next: sign === "-" || sign === "\\" ? null : next++,
+      });
+    }
+  });
   return (
-    <div className="gwb-diff-shell">
+    <div className="gwb-diff-shell diff-scroll">
+      {value.truncated && (
+        <p className="gwb-banner">
+          差异超过 1 MB，仅显示前一部分；部分暂存已停用。
+        </p>
+      )}
+      {value.binary && (
+        <p className="gwb-banner">二进制文件，按整个文件操作。</p>
+      )}
+      {!value.diff && (
+        <div className="gwb-empty empty-hint">没有可显示的文本差异</div>
+      )}
+      <div className="gwb-diff diff" aria-label="Git 差异">
+        {hunks.map((part, index) => {
+          const indices = part.rows
+            .filter((row) => eligible(row.text))
+            .map((row) => row.index);
+          return (
+            <div key={part.index}>
+              {part.path &&
+                part.path !== hunks[index - 1]?.path &&
+                hunks.some((h) => h.path !== part.path) && (
+                  <div className="detail-file-head">
+                    <code>{part.path}</code>
+                  </div>
+                )}
+              <section className="diff-hunk">
+                <header className="diff-hunk-head">
+                  {canSelect ? (
+                    <button
+                      className="gwb-diff-line is-hunk diff-hunk-header"
+                      disabled={disabled}
+                      aria-label={`选择改动块 ${part.header}`}
+                      aria-pressed={
+                        indices.length > 0 &&
+                        indices.every((i) => selected.has(i))
+                      }
+                      onClick={() => toggle(indices)}
+                    >
+                      {part.header}
+                    </button>
+                  ) : (
+                    <code className="diff-hunk-header">{part.header}</code>
+                  )}
+                  {canSelect && (
+                    <div className="diff-hunk-actions">
+                      <button
+                        className="mini-btn"
+                        disabled={disabled || !indices.length}
+                        onClick={() => {
+                          select.onApply(indices);
+                          setSelected(new Set());
+                        }}
+                      >
+                        <Plus size={12} />
+                        {select.label.startsWith("取消")
+                          ? "取消暂存此块"
+                          : "暂存此块"}
+                      </button>
+                      {select.onDiscard && (
+                        <button
+                          className="mini-btn tone-danger"
+                          disabled={disabled || !indices.length}
+                          onClick={() => select.onDiscard?.(indices)}
+                        >
+                          <Trash size={12} />
+                          丢弃此块
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </header>
+                <div className="diff-lines">
+                  {part.rows.map((row) => {
+                    const change = eligible(row.text);
+                    const cls = `gwb-diff-line diff-line ${change ? (row.text[0] === "+" ? "is-add t-add" : "is-remove t-del") : ""}${canSelect && change ? " is-pickable" : ""}${selected.has(row.index) ? " is-selected is-picked" : ""}`;
+                    const contents = (
+                      <>
+                        <span className="gwb-diff-number diff-no">
+                          {row.old}
+                        </span>
+                        <span className="diff-no">{row.next}</span>
+                        <span className="diff-sign">
+                          {change ? row.text[0] : " "}
+                        </span>
+                        <code className="diff-code">
+                          {row.text.slice(1) || " "}
+                        </code>
+                      </>
+                    );
+                    return canSelect && change ? (
+                      <button
+                        type="button"
+                        key={row.index}
+                        className={cls}
+                        aria-pressed={selected.has(row.index)}
+                        aria-label={`选择第 ${row.index + 1} 行 ${row.text}`}
+                        disabled={disabled}
+                        onClick={() => toggle([row.index])}
+                      >
+                        {contents}
+                      </button>
+                    ) : (
+                      <div key={row.index} className={cls}>
+                        {contents}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            </div>
+          );
+        })}
+        {!hunks.length && value.diff && (
+          <pre className="gwb-raw-diff">{value.diff}</pre>
+        )}
+      </div>
       {canSelect && (
-        <div className="gwb-diff-tools">
-          <span>点改动行或块标题选择 · 已选 {selected.size} 行</span>
+        <div className="gwb-diff-tools diff-tip">
+          <Sparkle size={12} />
+          <span>点选具体改动行可只暂存那几行 · 已选 {selected.size} 行</span>
           <button
+            className="mini-btn tone-accent"
             disabled={disabled || !selected.size}
             onClick={() => {
               select.onApply([...selected]);
@@ -70,63 +229,6 @@ export function DiffView({
           </button>
         </div>
       )}
-      {value.truncated && (
-        <p className="gwb-banner">
-          差异超过 1 MB，仅显示前一部分；部分暂存已停用。
-        </p>
-      )}
-      {value.binary && (
-        <p className="gwb-banner">二进制文件，按整个文件操作。</p>
-      )}
-      {!value.diff && <div className="gwb-empty">没有可显示的文本差异</div>}
-      <div className="gwb-diff" aria-label="Git 差异">
-        {lines.map((line, index) => {
-          const change = eligible(line);
-          const hunk = line.startsWith("@@ ");
-          const className = `gwb-diff-line ${change ? (line[0] === "+" ? "is-add" : "is-remove") : hunk ? "is-hunk" : ""}${selected.has(index) ? " is-selected" : ""}`;
-          if (canSelect && (change || hunk))
-            return (
-              <button
-                type="button"
-                key={index}
-                className={className}
-                aria-pressed={selected.has(index)}
-                aria-label={
-                  hunk ? `选择改动块 ${line}` : `选择第 ${index + 1} 行 ${line}`
-                }
-                disabled={disabled}
-                onClick={() => {
-                  if (!hunk) {
-                    toggle([index]);
-                    return;
-                  }
-                  const nextHunk = lines.findIndex(
-                    (next, i) => i > index && next.startsWith("@@ "),
-                  );
-                  toggle(
-                    lines
-                      .map((_, i) => i)
-                      .filter(
-                        (i) =>
-                          i > index &&
-                          (nextHunk < 0 || i < nextHunk) &&
-                          eligible(lines[i]),
-                      ),
-                  );
-                }}
-              >
-                <span className="gwb-diff-number">{index + 1}</span>
-                <code>{line || " "}</code>
-              </button>
-            );
-          return (
-            <div key={index} className={className}>
-              <span className="gwb-diff-number">{index + 1}</span>
-              <code>{line || " "}</code>
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }

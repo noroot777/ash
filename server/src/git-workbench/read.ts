@@ -26,6 +26,7 @@ import { git, digest, commitOid, fail, stateVersion } from "./core.js";
 import { readJournal } from "./journal.js";
 import { readRemoteDetails } from "./remotes.js";
 import { readBackups } from "./maintenance.js";
+import { readChangeStats, withChangeStats } from "./change-stats.js";
 
 export const ownerPrefix = (actor: string) =>
   `[ash:${digest(actor).slice(0, 12)}]`;
@@ -97,6 +98,8 @@ export async function readWorkbench(
     version,
     porcelain,
     backups,
+    stagedStats,
+    unstagedStats,
   ] = await Promise.all([
     readRefs(root),
     readScmRemotes(root),
@@ -106,6 +109,8 @@ export async function readWorkbench(
     stateVersion(root, status),
     git(repo, ["worktree", "list", "--porcelain", "-z"]),
     readBackups(root),
+    readChangeStats(root, true),
+    readChangeStats(root, false),
   ]);
   const locked = new Set(
     porcelain
@@ -117,7 +122,11 @@ export async function readWorkbench(
     remoteDetails: await readRemoteDetails(root),
     root,
     repo,
-    status,
+    status: {
+      ...status,
+      staged: withChangeStats(status.staged, stagedStats),
+      unstaged: withChangeStats(status.unstaged, unstagedStats),
+    },
     refs,
     remotes,
     version,

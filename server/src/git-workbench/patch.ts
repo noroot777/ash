@@ -85,7 +85,11 @@ export function selectedPatch(
   }
   return result.join("\n") + "\n";
 }
-async function applyIndex(root: string, patch: string): Promise<void> {
+async function applyPatch(
+  root: string,
+  patch: string,
+  cached: boolean,
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(
       "git",
@@ -93,7 +97,7 @@ async function applyIndex(root: string, patch: string): Promise<void> {
         "-C",
         root,
         "apply",
-        "--cached",
+        ...(cached ? ["--cached"] : []),
         "--recount",
         "--whitespace=nowarn",
         "-",
@@ -128,5 +132,19 @@ export async function stageSelected(
   const current = await readScmFileDiff(root, path, source);
   if (current.truncated || current.binary || current.diff !== diff)
     fail("差异已变化或不能部分暂存，请重新打开文件");
-  await applyIndex(root, selectedPatch(diff, lines, source === "staged"));
+  await applyPatch(root, selectedPatch(diff, lines, source === "staged"), true);
+}
+
+export async function discardSelected(
+  root: string,
+  path: string,
+  diff: string,
+  lines: number[],
+): Promise<void> {
+  assertPathShape([path]);
+  await gateScmPaths(root, { paths: [path], rejectConflicted: true });
+  const current = await readScmFileDiff(root, path, "unstaged");
+  if (current.truncated || current.binary || current.diff !== diff)
+    fail("差异已变化或不能部分丢弃，请重新打开文件");
+  await applyPatch(root, selectedPatch(diff, lines, true), false);
 }

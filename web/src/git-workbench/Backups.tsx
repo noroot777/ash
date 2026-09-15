@@ -65,7 +65,7 @@ export function Backups({
               恢复为新分支
             </button>
             <button
-              className="gwb-danger"
+              className="gwb-danger mini-btn tone-danger"
               disabled={disabled}
               onClick={() =>
                 ask({
