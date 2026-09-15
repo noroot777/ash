@@ -4,6 +4,7 @@ import { CaretDown, Check, FolderPlus, GearSix, ListChecks, MagnifyingGlass } fr
 import { useDismissable } from "../lib/useDismissable.ts";
 import { shortenHomePath, useHostInfo } from "../lib/useHostInfo.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
+import { SETTINGS_SHORTCUT_LABEL } from "./goChord.ts";
 import { TASK_MODE_LABEL, TASK_MODE_SHORTCUT_LABEL, TASK_MODE_SUMMARY } from "./taskScope.ts";
 
 // 「任务模式」和某个具体项目是同一个下拉里的**同一排选项**，不是另开一个模式开关：
@@ -102,6 +103,9 @@ export function ProjectSwitcher({
               设置
               <small>智能体 · 项目 · 分组 · 归档</small>
             </span>
+            {/* 和下面「任务模式」那行同一个待遇：这个下拉是进设置的必经之地，键位就写在门上。
+                它开的是设置页首页，G S 走的也是这里——两处绝不能各去各的地方。 */}
+            <kbd>{SETTINGS_SHORTCUT_LABEL}</kbd>
           </button>
 
           <label className="workspace-project-search">
