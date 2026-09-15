@@ -21,6 +21,7 @@ export function useWorkbench(
   const sequence = useRef(0);
   const mounted = useRef(true);
   const running = useRef(false);
+  const refreshingAfterWrite = useRef(false);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -45,7 +46,7 @@ export function useWorkbench(
   useEffect(() => {
     void refresh();
     const timer = setInterval(() => {
-      if (!document.hidden) void refresh();
+      if (!document.hidden && !refreshingAfterWrite.current) void refresh();
     }, 5000);
     return () => {
       clearInterval(timer);
@@ -84,11 +85,11 @@ export function useWorkbench(
       if (mounted.current) setMessage(text);
       notify(text);
     } finally {
+      refreshingAfterWrite.current = true;
+      if (mounted.current) await refresh();
+      refreshingAfterWrite.current = false;
       running.current = false;
-      if (mounted.current) {
-        setBusy(false);
-        await refresh();
-      }
+      if (mounted.current) setBusy(false);
     }
     return succeeded;
   };

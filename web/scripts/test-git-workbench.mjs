@@ -74,6 +74,7 @@ let page;
 let backendDirectory;
 const browserErrors = [];
 const requestFailures = [];
+const actionResults = [];
 let screenshotDirectory;
 
 const tab = (name) => page.getByRole("navigation", { name: "Git 工作台视图" }).getByRole("button", { name: new RegExp(`^${name}`) });
@@ -84,10 +85,18 @@ const performAction = async (trigger, expectedOk = true) => {
   let actionReceived = false;
   const pending = page.waitForResponse((response) => response.request().method() === "POST" && /\/git\/workbench\/actions$/.test(new URL(response.url()).pathname));
   const refreshed = page.waitForResponse((response) => actionReceived && response.request().method() === "GET" && /\/git\/workbench$/.test(new URL(response.url()).pathname));
+  void pending.catch(() => undefined);
+  void refreshed.catch(() => undefined);
   await trigger();
   const response = await pending;
   actionReceived = true;
   const body = await response.json().catch(() => null);
+  const requestBody = response.request().postDataJSON();
+  actionResults.push({
+    kind: requestBody?.action?.kind || "unknown",
+    status: response.status(),
+    body,
+  });
   assert.equal(response.ok(), expectedOk, `Git action HTTP ${response.status()}: ${JSON.stringify(body)}`);
   await refreshed;
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -170,7 +179,34 @@ try {
   await betaRemoved.waitFor();
   await betaRemoved.click();
   await betaAdded.click();
-  await performAction(() => page.getByRole("button", { name: "暂存所选改动", exact: true }).click());
+  let releaseHeldRefresh;
+  let markRefreshHeld;
+  const heldRefresh = new Promise((resolve) => { releaseHeldRefresh = resolve; });
+  const refreshHeld = new Promise((resolve) => { markRefreshHeld = resolve; });
+  let holdAfterAction = false;
+  const stateRequest = /\/api\/projects\/[^/]+\/git\/workbench\?/;
+  const actionRequest = /\/api\/projects\/[^/]+\/git\/workbench\/actions$/;
+  await page.route(stateRequest, async (route) => {
+    if (!holdAfterAction || route.request().method() !== "GET") return route.continue();
+    holdAfterAction = false;
+    markRefreshHeld();
+    await heldRefresh;
+    await route.continue();
+  });
+  await page.route(actionRequest, async (route) => {
+    const response = await route.fetch();
+    holdAfterAction = true;
+    await route.fulfill({ response });
+  }, { times: 1 });
+  const stageSelected = performAction(() => page.getByRole("button", { name: "暂存所选改动", exact: true }).click());
+  try {
+    await refreshHeld;
+    assert.equal(await page.getByLabel("选择工作树").isDisabled(), true, "写后状态刷新完成前保持操作锁定");
+  } finally {
+    releaseHeldRefresh();
+  }
+  await stageSelected;
+  await page.unroute(stateRequest);
   await waitMessage(/已暂存所选改动/);
 
   const unstagedGroup = page.locator(".gwb-file-group", { has: page.locator("header", { hasText: "未暂存" }) });
@@ -241,7 +277,8 @@ try {
   await tab("分支").click();
   await conflictBranch.getByLabel("feature/conflict 分支操作").selectOption("merge");
   const mergeDialog = dialog("合并 feature/conflict");
-  await performAction(() => mergeDialog.getByRole("button", { name: "合并 feature/conflict", exact: true }).click(), false);
+  const mergeFailure = await performAction(() => mergeDialog.getByRole("button", { name: "合并 feature/conflict", exact: true }).click(), false);
+  assert.match(String(mergeFailure?.error || ""), /CONFLICT|冲突/i);
   await mergeDialog.getByRole("alert").waitFor();
   await mergeDialog.getByRole("button", { name: "关闭合并 feature/conflict" }).click();
   await waitIdle();
@@ -274,7 +311,8 @@ try {
   await tab("分支").click();
   await conflictBranch.getByLabel("feature/conflict 分支操作").selectOption("merge");
   const mergeAgain = dialog("合并 feature/conflict");
-  await performAction(() => mergeAgain.getByRole("button", { name: "合并 feature/conflict", exact: true }).click(), false);
+  const secondMergeFailure = await performAction(() => mergeAgain.getByRole("button", { name: "合并 feature/conflict", exact: true }).click(), false);
+  assert.match(String(secondMergeFailure?.error || ""), /CONFLICT|冲突/i);
   await mergeAgain.getByRole("alert").waitFor();
   await mergeAgain.getByRole("button", { name: "关闭合并 feature/conflict" }).click();
   await waitIdle();
@@ -327,7 +365,7 @@ try {
   console.log(`Git workbench browser test passed · screenshot ${join(screenshotDirectory, "mobile.png")}`);
 } catch (error) {
   const diagnostics = backend.diagnostics();
-  throw new Error(`${error instanceof Error ? error.stack || error.message : String(error)}\nbackend stderr:\n${diagnostics.stderr}\nbackend stdout:\n${diagnostics.stdout}`);
+  throw new Error(`${error instanceof Error ? error.stack || error.message : String(error)}\nactions:\n${JSON.stringify(actionResults, null, 2)}\nbackend stderr:\n${diagnostics.stderr}\nbackend stdout:\n${diagnostics.stdout}`);
 } finally {
   await browser?.close();
   await vite?.close();

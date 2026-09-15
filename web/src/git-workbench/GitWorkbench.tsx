@@ -225,7 +225,7 @@ export function GitWorkbench({
             className="gwb-icon-button"
             aria-label="刷新 Git 工作台"
             onClick={() => void w.refresh()}
-            disabled={w.loading}
+            disabled={w.loading || w.busy}
           >
             <ArrowClockwise
               size={15}
@@ -296,7 +296,9 @@ export function GitWorkbench({
       {w.error && (
         <p className="gwb-banner is-error" role="alert">
           {w.error}
-          <button onClick={() => void w.refresh()}>重新读取</button>
+          <button disabled={w.busy} onClick={() => void w.refresh()}>
+            重新读取
+          </button>
           {taskId && (
             <button onClick={() => openGitWorkbench({ projectId })}>
               改为查看项目主仓
