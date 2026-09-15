@@ -99,6 +99,12 @@ const tab = (name) =>
     .getByRole("navigation", { name: "Git 工作台视图" })
     .getByRole("button", { name: new RegExp(`^${name}`) });
 const dialog = (name) => page.getByRole("dialog", { name });
+const chooseMenuItem = async (trigger, item) => {
+  const label = await trigger.getAttribute("aria-label");
+  assert(label, "Workbench menu trigger must have an accessible label");
+  await trigger.click();
+  await page.getByRole("menu", { name: label }).getByRole("menuitem", { name: item, exact: true }).click();
+};
 const expectDisabled = async (locator, label) => {
   await locator.waitFor();
   assert.equal(await locator.isDisabled(), true, `${label} should be disabled`);
@@ -147,7 +153,10 @@ const refresh = async (throughDialog = false) => {
     response.request().method() === "GET" &&
     /\/git\/workbench$/.test(new URL(response.url()).pathname));
   void pending.catch(() => undefined);
-  const button = page.getByLabel("刷新 Git 工作台");
+  const trigger = page.getByLabel("工作台选项");
+  if (throughDialog) await trigger.evaluate((element) => element.click());
+  else await trigger.click();
+  const button = page.getByRole("menu", { name: "工作台选项" }).getByRole("menuitem", { name: "刷新 Git 工作台" });
   if (throughDialog) await button.evaluate((element) => element.click());
   else await button.click();
   const response = await pending;
@@ -210,7 +219,7 @@ try {
   url.searchParams.set("gitView", "changes");
   url.searchParams.set("gitRoot", info.root);
   await page.goto(url.href);
-  await page.getByRole("heading", { name: /Git 工作台/ }).waitFor();
+  await page.getByRole("navigation", { name: "Git 工作台视图" }).waitFor();
 
   // 用真实工作台动作留下自有贮藏和带备份的可撤销日志。
   await tab("贮藏").click();
@@ -219,7 +228,7 @@ try {
   await submitDialog("贮藏当前改动");
   await tab("历史").click();
   await page.getByRole("button", { name: /历史提交 2/ }).click();
-  await page.getByLabel("提交操作").selectOption("reset");
+  await chooseMenuItem(page.getByLabel("提交操作", { exact: true }), "重置到这里…");
   const resetDialog = dialog("重置当前分支");
   await resetDialog.locator("select").selectOption("hard");
   await resetDialog.getByLabel("输入目标以确认").fill("main");
@@ -277,10 +286,15 @@ try {
   const sync = page.locator(".gwb-sync");
   for (const name of ["获取", "拉取", "推送"])
     await expectDisabled(sync.getByRole("button", { name, exact: true }), `top ${name}`);
-  await expectDisabled(page.getByRole("button", { name: "保护强推…", exact: true }), "force push");
+  await page.getByLabel("工作台选项").click();
+  await expectDisabled(
+    page.getByRole("menu", { name: "工作台选项" }).getByRole("menuitem", { name: "保护强推…" }),
+    "force push",
+  );
+  await page.keyboard.press("Escape");
 
   await tab("变更").click();
-  const changedFile = page.getByRole("button", { name: "history-1.txt modified", exact: true });
+  const changedFile = page.getByRole("button", { name: "history-1.txt", exact: true });
   await expectEnabled(changedFile, "open file diff");
   await changedFile.click();
   await page.getByLabel("Git 差异").waitFor();
@@ -288,11 +302,14 @@ try {
   await expectDisabled(page.getByRole("button", { name: "暂存所选改动", exact: true }), "apply partial patch");
   await expectAllDisabled(page.getByRole("button", { name: /^丢弃/ }), "discard controls");
   await expectDisabled(page.getByLabel("提交信息").locator("..").getByRole("button"), "commit");
-  const stageFile = page.getByRole("button", { name: "暂存 history-1.txt", exact: true });
+  await changedFile.hover();
+  const stageFile = changedFile.locator("..").getByLabel("暂存 history-1.txt");
   await expectEnabled(stageFile, "stage during conflict");
   await performAction(() => stageFile.click());
   assert.equal(git(info.root, "diff", "--cached", "--name-only", "--", "history-1.txt"), "history-1.txt");
-  const unstageFile = page.getByRole("button", { name: "取消暂存 history-1.txt", exact: true });
+  const stagedFile = page.locator(".gwb-file-group", { has: page.locator("header", { hasText: "已暂存" }) }).getByRole("button", { name: "history-1.txt", exact: true });
+  await stagedFile.hover();
+  const unstageFile = stagedFile.locator("..").getByLabel("取消暂存 history-1.txt");
   await expectEnabled(unstageFile, "unstage during conflict");
   await performAction(() => unstageFile.click());
   assert.equal(git(info.root, "diff", "--cached", "--name-only", "--", "history-1.txt"), "");
@@ -303,7 +320,7 @@ try {
   await expectEnabled(historyCommit, "history commit details");
   await historyCommit.click();
   await page.getByLabel("Git 差异").waitFor();
-  await expectDisabled(page.getByLabel("提交操作"), "history action menu");
+  await expectDisabled(page.getByLabel("提交操作", { exact: true }), "history action menu");
 
   await tab("分支").click();
   await expectDisabled(page.getByRole("button", { name: "新建分支", exact: true }), "new branch");
@@ -314,6 +331,7 @@ try {
   await cleanBranch.getByRole("button", { name: "历史", exact: true }).click();
   await page.getByRole("region", { name: "提交历史" }).waitFor();
   await tab("分支").click();
+  await page.getByText("远端配置", { exact: true }).click();
   const remotes = page.locator(".gwb-ref-section", { has: page.getByRole("heading", { name: /远端配置/ }) });
   for (const name of ["添加远端", "获取", "修改地址", "移除"])
     await expectAllDisabled(remotes.getByRole("button", { name, exact: true }), `remote ${name}`);
@@ -321,11 +339,10 @@ try {
   await tab("贮藏").click();
   await expectDisabled(page.getByRole("button", { name: "贮藏改动", exact: true }), "save stash");
   const stashRow = page.locator(".gwb-ref-row", { hasText: "conflict gate stash" });
-  await expectEnabled(stashRow.getByRole("button", { name: "查看差异", exact: true }), "stash diff");
+  await expectEnabled(stashRow.getByRole("button", { name: /^查看差异 stash@/ }), "stash diff");
   for (const name of ["应用", "弹出", "删除"])
     await expectDisabled(stashRow.getByRole("button", { name, exact: true }), `stash ${name}`);
-  await stashRow.getByRole("button", { name: "查看差异", exact: true }).click();
-  await page.getByText(/贮藏差异/).waitFor();
+  await stashRow.getByRole("button", { name: /^查看差异 stash@/ }).click();
   await page.getByLabel("Git 差异").waitFor();
 
   await tab("标签").click();
@@ -347,9 +364,15 @@ try {
   await expectDisabled(worktree.getByRole("button", { name: "移除", exact: true }), "remove worktree");
 
   await tab("操作日志").click();
+  const backupDetails = page.locator("details.gwb-backup-section");
+  if (await backupDetails.getAttribute("open") === null)
+    await backupDetails.getByText("历史备份与维护", { exact: true }).click();
   const backups = page.getByRole("region", { name: "历史备份" });
   await backups.getByRole("heading", { name: /历史备份 · [1-9]/ }).waitFor();
   await expectDisabled(backups.getByRole("button", { name: "清理变基辅助文件", exact: true }), "cleanup helpers");
+  await page.locator(".gwb-journal-entry details").evaluateAll((details) => {
+    for (const detail of details) detail.open = true;
+  });
   await expectAllDisabled(page.getByRole("button", { name: "恢复为新分支", exact: true }), "restore backup");
   await expectDisabled(backups.getByRole("button", { name: "删除备份", exact: true }).first(), "delete backup");
   await expectAllDisabled(page.getByRole("button", { name: "撤销", exact: true }), "journal undo");
@@ -383,7 +406,7 @@ try {
   await refresh();
   await tab("分支").click();
   const conflictBranch = page.locator(".gwb-ref-row", { hasText: "feature/conflict" });
-  await conflictBranch.getByLabel("feature/conflict 分支操作").selectOption("merge");
+  await chooseMenuItem(conflictBranch.getByLabel("feature/conflict 分支操作"), "合入当前分支");
   const mergeDialog = dialog("合并 feature/conflict");
   const mergeFailure = await performAction(
     () => mergeDialog.getByRole("button", { name: "合并 feature/conflict", exact: true }).click(),
@@ -399,13 +422,15 @@ try {
     /CONFLICT \(content\): Merge conflict in conflict\.txt/,
   );
   await mergeDialog.getByRole("button", { name: "关闭合并 feature/conflict" }).click();
-  await page.getByRole("button", { name: /conflict\.txt/ }).click();
+  await page.getByRole("button", { name: "打开冲突解决器", exact: true }).click();
   const conflictDialog = dialog(/解决冲突/);
   await expectEnabled(conflictDialog.getByRole("button", { name: "采用我方", exact: true }), "choose conflict side");
   await conflictDialog.getByRole("button", { name: "采用我方", exact: true }).click();
   await expectEnabled(conflictDialog.getByRole("button", { name: "保存结果并暂存", exact: true }), "save conflict result");
   await performAction(() =>
     conflictDialog.getByRole("button", { name: "保存结果并暂存", exact: true }).click());
+  await conflictDialog.locator("strong", { hasText: "所有冲突文件已解决" }).waitFor();
+  await conflictDialog.getByRole("button", { name: "返回工作台", exact: true }).click();
   await conflictDialog.waitFor({ state: "detached" });
   await tab("变更").click();
   const pendingMergeChanges = await page.getByRole("region", { name: "工作区变更" }).innerText();
@@ -438,7 +463,7 @@ try {
   );
   assert.notEqual(rebase.status, 0, "fixture rebase should produce a conflict");
   await refresh();
-  const skipButton = page.getByRole("button", { name: "跳过", exact: true });
+  const skipButton = page.getByRole("button", { name: /^跳过/ });
   await expectEnabled(skipButton, "skip during rebase conflict");
   await skipButton.click();
   await expectEnabled(dialog("跳过当前提交").getByRole("button", { name: "跳过当前提交", exact: true }), "skip confirmation");
@@ -493,15 +518,17 @@ try {
   const stashConflictChanges = await page.getByRole("region", { name: "工作区变更" }).innerText();
   assert.match(stashConflictChanges, /1 个冲突待解决 · 请在上方冲突面板处理/);
   assert.doesNotMatch(stashConflictChanges, /所有改动已提交/);
-  await page.getByRole("button", { name: /conflict\.txt/ }).click();
+  await page.getByRole("button", { name: "打开冲突解决器", exact: true }).click();
   const stashConflictDialog = dialog(/解决冲突/);
   await stashConflictDialog.getByRole("button", { name: "采用对方", exact: true }).click();
   await performAction(() =>
     stashConflictDialog.getByRole("button", { name: "保存结果并暂存", exact: true }).click());
+  await stashConflictDialog.locator("strong", { hasText: "所有冲突文件已解决" }).waitFor();
+  await stashConflictDialog.getByRole("button", { name: "返回工作台", exact: true }).click();
   await stashConflictDialog.waitFor({ state: "detached" });
   await page.getByLabel("提交信息").fill("commit resolved stash conflict");
   await performAction(() =>
-    page.getByRole("button", { name: /提交已暂存/ }).click());
+    page.getByRole("button", { name: /^提交（\d+ 个文件）$/ }).click());
   assert.equal(git(info.root, "status", "--porcelain"), "", "committed stash resolution should be clean");
   assert.match(
     await page.getByRole("region", { name: "工作区变更" }).innerText(),
@@ -520,7 +547,7 @@ try {
   await refresh();
   await tab("分支").click();
   const squashBranch = page.locator(".gwb-ref-row", { hasText: "browser/squash-side" });
-  await squashBranch.getByLabel("browser/squash-side 分支操作").selectOption("merge");
+  await chooseMenuItem(squashBranch.getByLabel("browser/squash-side 分支操作"), "合入当前分支");
   const squashDialog = dialog("合并 browser/squash-side");
   await squashDialog.locator("select").selectOption("squash");
   const squashFailure = await performAction(

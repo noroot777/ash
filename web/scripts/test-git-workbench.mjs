@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -76,9 +76,16 @@ const browserErrors = [];
 const requestFailures = [];
 const actionResults = [];
 let screenshotDirectory;
+const persistentScreenshots = process.env.GIT_WORKBENCH_EVIDENCE_OUTPUT || "";
 
 const tab = (name) => page.getByRole("navigation", { name: "Git 工作台视图" }).getByRole("button", { name: new RegExp(`^${name}`) });
 const dialog = (name) => page.getByRole("dialog", { name });
+const chooseMenuItem = async (trigger, item) => {
+  const label = await trigger.getAttribute("aria-label");
+  assert(label, "Workbench menu trigger must have an accessible label");
+  await trigger.click();
+  await page.getByRole("menu", { name: label }).getByRole("menuitem", { name: item, exact: true }).click();
+};
 const currentView = async () => new URL(page.url()).searchParams.get("gitView");
 const waitIdle = () => until(async () => page.getByLabel("选择工作树").isEnabled(), "Git 工作台操作结束");
 const performAction = async (trigger, expectedOk = true) => {
@@ -145,7 +152,11 @@ try {
   assert.match(await pill.getAttribute("aria-label"), /分支 main.*有未提交改动/);
   await pill.click();
   await page.getByRole("button", { name: "打开 Git 工作台 →", exact: true }).click();
-  await page.getByRole("heading", { name: /Git 工作台/ }).waitFor();
+  await page.getByRole("navigation", { name: "Git 工作台视图" }).waitFor();
+  if (persistentScreenshots) {
+    screenshotDirectory = persistentScreenshots;
+    await mkdir(screenshotDirectory, { recursive: true });
+  }
   assert.equal(await currentView(), "changes");
   for (const name of ["变更", "历史", "分支", "贮藏", "标签", "工作树", "操作日志"]) {
     await tab(name).waitFor();
@@ -210,18 +221,21 @@ try {
   await waitMessage(/已暂存所选改动/);
 
   const unstagedGroup = page.locator(".gwb-file-group", { has: page.locator("header", { hasText: "未暂存" }) });
-  await unstagedGroup.getByRole("button", { name: "sample.txt modified", exact: true }).click();
+  await unstagedGroup.getByRole("button", { name: /sample\.txt/ }).click();
   const hunk = page.getByRole("button", { name: /选择改动块/ }).last();
   await hunk.waitFor();
   await hunk.click();
   await performAction(() => page.getByRole("button", { name: "暂存所选改动", exact: true }).click());
   await waitMessage(/已暂存所选改动/);
 
-  await performAction(() => page.getByRole("button", { name: "暂存 新增文件.txt", exact: true }).click());
+  const untrackedGroup = page.locator(".gwb-file-group", { has: page.locator("header", { hasText: "未跟踪" }) });
+  const untrackedRow = untrackedGroup.getByRole("button", { name: /新增文件\.txt/ }).first();
+  await untrackedRow.hover();
+  await performAction(() => untrackedGroup.getByLabel("暂存 新增文件.txt").click());
   const stagedGroup = page.locator(".gwb-file-group", { has: page.locator("header", { hasText: "已暂存" }) });
   await stagedGroup.getByRole("button", { name: /新增文件\.txt/ }).first().waitFor();
   await page.getByLabel("提交信息").fill("浏览器提交");
-  await performAction(() => page.getByRole("button", { name: /提交已暂存/ }).click());
+  await performAction(() => page.getByRole("button", { name: /^提交（\d+ 个文件）$/ }).click());
   await waitMessage(/已提交暂存区内容/);
   await waitIdle();
   assert.match(await page.getByRole("region", { name: "工作区变更" }).innerText(), /所有改动已提交/);
@@ -231,13 +245,13 @@ try {
   const browserCommit = page.getByRole("button", { name: /浏览器提交/ });
   await browserCommit.waitFor();
   await browserCommit.click();
-  await page.getByLabel("提交操作").selectOption("branch");
+  await chooseMenuItem(page.getByLabel("提交操作", { exact: true }), "从这里建分支");
   await dialog("从提交新建分支").getByText("分支名").locator("..").getByRole("textbox").fill("browser/history-branch");
   await submitDialog("从提交新建分支");
   await waitMessage(/操作已完成/);
 
   await browserCommit.click();
-  await page.getByLabel("提交操作").selectOption("tag");
+  await chooseMenuItem(page.getByLabel("提交操作", { exact: true }), "打标签");
   const tagDialog = dialog("为提交打标签");
   await tagDialog.getByText("标签名").locator("..").getByRole("textbox").fill("browser-v1");
   await tagDialog.getByRole("textbox").nth(1).fill("浏览器标签");
@@ -245,7 +259,7 @@ try {
 
   // 制造一份新的真实改动，从 UI 贮藏并查看差异。
   await writeFile(join(info.root, "stash-browser.txt"), "stash from browser test\n");
-  await page.getByRole("button", { name: "刷新 Git 工作台", exact: true }).click();
+  await chooseMenuItem(page.getByLabel("工作台选项"), "刷新 Git 工作台");
   await until(async () => /1/.test(await tab("变更").innerText()), "刷新后看到新改动");
   await tab("贮藏").click();
   await page.getByRole("button", { name: "贮藏改动", exact: true }).click();
@@ -254,8 +268,11 @@ try {
   await submitDialog("贮藏当前改动");
   const stashRow = page.locator(".gwb-ref-row", { hasText: "browser stash" });
   await stashRow.waitFor();
-  await stashRow.getByRole("button", { name: "查看差异", exact: true }).click();
-  await page.getByText(/stash-browser\.txt/).first().waitFor();
+  await stashRow.getByRole("button", { name: /^查看差异 stash@/ }).click();
+  const stashDiff = stashRow.locator(".gwb-stash-diff");
+  await stashDiff.waitFor();
+  await until(async () => /stash-browser\.txt|stash from browser test/.test(await stashDiff.innerText()), "贮藏差异内容");
+  if (screenshotDirectory) await page.screenshot({ path: join(screenshotDirectory, "stash-non-empty.png") });
 
   // 一次必然失败的删除留进日志，刷新后仍在；随后进入真实 merge 冲突。
   await tab("分支").click();
@@ -265,17 +282,18 @@ try {
   assert.equal(new URL(page.url()).searchParams.get("gitTask"), "browser-origin");
   await page.goBack();
   await conflictBranch.waitFor();
-  await conflictBranch.getByLabel("feature/conflict 分支操作").selectOption("delete");
+  await chooseMenuItem(conflictBranch.getByLabel("feature/conflict 分支操作"), "删除已合并分支");
   await performAction(() => dialog("删除已合并分支").getByRole("button", { name: "删除已合并分支", exact: true }).click(), false);
   await dialog("删除已合并分支").getByRole("alert").waitFor();
   await dialog("删除已合并分支").getByRole("button", { name: "关闭删除已合并分支" }).click();
   await tab("操作日志").click();
   await page.locator(".gwb-journal-entry.is-failed").filter({ hasText: "删除分支" }).waitFor();
+  if (screenshotDirectory) await page.screenshot({ path: join(screenshotDirectory, "operation-log-non-empty.png") });
   await page.reload();
   await page.locator(".gwb-journal-entry.is-failed").filter({ hasText: "删除分支" }).waitFor();
 
   await tab("分支").click();
-  await conflictBranch.getByLabel("feature/conflict 分支操作").selectOption("merge");
+  await chooseMenuItem(conflictBranch.getByLabel("feature/conflict 分支操作"), "合入当前分支");
   const mergeDialog = dialog("合并 feature/conflict");
   const mergeFailure = await performAction(() => mergeDialog.getByRole("button", { name: "合并 feature/conflict", exact: true }).click(), false);
   assert.match(String(mergeFailure?.error || ""), /CONFLICT|冲突/i);
@@ -283,13 +301,17 @@ try {
   await mergeDialog.getByRole("button", { name: "关闭合并 feature/conflict" }).click();
   await waitIdle();
   await page.locator(".gwb-operation").waitFor();
-  await page.getByRole("button", { name: /conflict\.txt/ }).click();
+  await page.getByRole("button", { name: "打开冲突解决器", exact: true }).click();
   const conflictDialog = dialog(/解决冲突/);
   await conflictDialog.getByText("冲突块 1").waitFor();
+  if (screenshotDirectory) await page.screenshot({ path: join(screenshotDirectory, "merge-conflict-overlay.png") });
   await conflictDialog.getByRole("button", { name: "采用我方", exact: true }).click();
   const conflictEditor = conflictDialog.getByLabel("冲突解决结果");
   await conflictEditor.fill(`${await conflictEditor.inputValue()}resolved in browser\n`);
   await performAction(() => conflictDialog.getByRole("button", { name: "保存结果并暂存", exact: true }).click());
+  await conflictDialog.locator("strong", { hasText: "所有冲突文件已解决" }).waitFor();
+  if (screenshotDirectory) await page.screenshot({ path: join(screenshotDirectory, "merge-conflict-saved.png") });
+  await conflictDialog.getByRole("button", { name: "返回工作台", exact: true }).click();
   await conflictDialog.waitFor({ state: "detached" });
   await performAction(() => page.getByRole("button", { name: "继续操作", exact: true }).click());
   await waitMessage(/Git 已继续执行/);
@@ -298,7 +320,7 @@ try {
   // 通过带 typed 确认的 hard reset 回到合并前，再造同一冲突并中止。
   await tab("历史").click();
   await page.getByRole("button", { name: /浏览器提交/ }).click();
-  await page.getByLabel("提交操作").selectOption("reset");
+  await chooseMenuItem(page.getByLabel("提交操作", { exact: true }), "重置到这里…");
   const resetDialog = dialog("重置当前分支");
   await resetDialog.locator("select").selectOption("hard");
   const resetConfirm = resetDialog.getByRole("button", { name: "重置当前分支", exact: true });
@@ -309,7 +331,7 @@ try {
   assert.equal(await resetConfirm.isEnabled(), true);
   await submitDialog("重置当前分支");
   await tab("分支").click();
-  await conflictBranch.getByLabel("feature/conflict 分支操作").selectOption("merge");
+  await chooseMenuItem(conflictBranch.getByLabel("feature/conflict 分支操作"), "合入当前分支");
   const mergeAgain = dialog("合并 feature/conflict");
   const secondMergeFailure = await performAction(() => mergeAgain.getByRole("button", { name: "合并 feature/conflict", exact: true }).click(), false);
   assert.match(String(secondMergeFailure?.error || ""), /CONFLICT|冲突/i);
@@ -324,9 +346,11 @@ try {
   // 编辑线性历史：一条 fixup，一条 reword，最终结果仍能正常刷新。
   await tab("历史").click();
   await page.getByRole("button", { name: /历史提交 1/ }).click();
-  await page.getByLabel("提交操作").selectOption("rebase-plan");
+  await chooseMenuItem(page.getByLabel("提交操作", { exact: true }), "编辑此提交之后的历史…");
   const rebaseDialog = dialog("交互式变基");
   await rebaseDialog.getByLabel("提交 1 的动作").waitFor();
+  if (screenshotDirectory) await page.screenshot({ path: join(screenshotDirectory, "rebase-dialog-720px.png") });
+  assert.equal(Math.round((await rebaseDialog.boundingBox())?.width || 0), 720, "desktop rebase dialog width");
   await rebaseDialog.getByLabel("提交 2 的动作").selectOption("fixup");
   await rebaseDialog.getByLabel("提交 3 的动作").selectOption("reword");
   await rebaseDialog.getByLabel("提交 3 的信息").fill("浏览器改写提交");
@@ -343,9 +367,11 @@ try {
   await submitDialog("新建手动工作树");
   const worktreeRow = page.locator(".gwb-worktree-card", { hasText: "browser/manual-worktree" });
   await worktreeRow.waitFor();
+  if (screenshotDirectory) await page.screenshot({ path: join(screenshotDirectory, "worktree-real-data.png") });
   await worktreeRow.getByRole("button", { name: "打开工作树", exact: true }).click();
   await until(async () => new URL(page.url()).searchParams.has("gitRoot"), "工作树路径写入 URL");
-  assert.match(await page.locator(".gwb-context").innerText(), /browser\/manual-worktree/);
+  const openedRoot = new URL(page.url()).searchParams.get("gitRoot");
+  assert(openedRoot && openedRoot !== info.root, "打开工作树必须切换根路径");
   assert.equal(new URL(page.url()).searchParams.has("gitTask"), false, "切换工作树清除返回任务");
   await page.goBack();
   await page.getByRole("heading", { name: "工作树" }).waitFor();
@@ -356,8 +382,7 @@ try {
   await page.getByRole("region", { name: "工作区变更" }).waitFor();
   const bodyWidth = await page.evaluate(() => document.documentElement.scrollWidth);
   assert(bodyWidth <= 390, `移动布局横向溢出：${bodyWidth}px`);
-  assert.equal(await page.locator(".gwb-tabs").evaluate((node) => getComputedStyle(node).overflowX), "auto");
-  screenshotDirectory = await mkdtemp(join(tmpdir(), "ash-git-workbench-browser-"));
+  if (!screenshotDirectory) screenshotDirectory = await mkdtemp(join(tmpdir(), "ash-git-workbench-browser-"));
   await page.screenshot({ path: join(screenshotDirectory, "mobile.png"), fullPage: true });
 
   assert.deepEqual(browserErrors, [], `浏览器控制台错误：\n${browserErrors.join("\n")}`);
@@ -370,7 +395,7 @@ try {
   await browser?.close();
   await vite?.close();
   await backend.close();
-  if (screenshotDirectory)
+  if (screenshotDirectory && !persistentScreenshots)
     rmSync(screenshotDirectory, { recursive: true, force: true });
   if (backendDirectory) {
     assert.equal(
