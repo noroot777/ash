@@ -58,6 +58,7 @@ async function runAction(
   action: GitAction,
   entry: GitJournalEntry,
   status: ScmStatus,
+  executeSequence: typeof git,
 ): Promise<string> {
   if (historyActions.has(action.kind)) requireClean(status);
   if (
@@ -76,10 +77,11 @@ async function runAction(
     await git(repo, ["update-ref", entry.backup, sha, ""]);
     await appendEntry(repo, entry);
   }
-  if (await runRefAction(repo, root, action, actor)) return "操作已完成";
+  if (await runRefAction(repo, root, action, actor, executeSequence))
+    return "操作已完成";
   if (await runRemoteAction(root, projectId, action))
     return "远端配置或引用操作已完成";
-  if (await runSyncAction(repo, root, projectId, action))
+  if (await runSyncAction(repo, root, projectId, action, executeSequence))
     return "远端操作已完成";
   switch (action.kind) {
     case "backup-delete":
@@ -122,7 +124,7 @@ async function runAction(
         ? "已修订最近一次提交，原提交已保留备份"
         : "已提交暂存区内容";
     case "merge":
-      await git(root, [
+      await executeSequence(root, [
         "merge",
         "--no-edit",
         ...(action.strategy === "no-ff"
@@ -136,10 +138,13 @@ async function runAction(
         ? "合并结果已暂存，请在变更视图填写信息并提交"
         : "合并完成";
     case "rebase":
-      await git(root, ["rebase", await commitOid(root, action.target)]);
+      await executeSequence(root, [
+        "rebase",
+        await commitOid(root, action.target),
+      ]);
       return "变基完成";
     case "rebase-plan":
-      await rebasePlan(root, action.target, action.steps);
+      await rebasePlan(root, action.target, action.steps, executeSequence);
       return "交互式变基完成";
     case "cherry-pick":
     case "revert": {
@@ -150,7 +155,7 @@ async function runAction(
           .split(" ").length - 1;
       if (parents > 1 && !action.mainline)
         fail("这是合并提交，请明确选择作为主线的父提交编号", 400);
-      await git(root, [
+      await executeSequence(root, [
         action.kind,
         ...(action.mainline ? ["-m", String(action.mainline)] : []),
         ...(action.kind === "revert" ? ["--no-edit"] : []),
@@ -171,7 +176,7 @@ async function runAction(
     case "continue":
     case "abort":
     case "skip":
-      await continueOperation(root, action.kind);
+      await continueOperation(root, action.kind, executeSequence);
       return action.kind === "abort"
         ? "已中止操作，Git 已恢复操作前状态"
         : "Git 已继续执行";
@@ -218,6 +223,11 @@ export async function executeWorkbench(
     await appendEntry(repo, entry);
     return await withRepoLock(repo, async () => {
       let release: (() => void) | undefined;
+      let attemptedSequence = false;
+      const executeSequence: typeof git = (...args) => {
+        attemptedSequence = true;
+        return git(...args);
+      };
       try {
         const { root } = await selectRoot(repo, request.root);
         release = await guard?.(root, request.action);
@@ -240,6 +250,7 @@ export async function executeWorkbench(
           request.action,
           entry,
           status,
+          executeSequence,
         );
         entry.after =
           (await readScmStatus(root).catch(() => null))?.branch.oid ||
@@ -255,8 +266,7 @@ export async function executeWorkbench(
         const status = await readScmStatus(request.root).catch(() => null);
         entry.after = status?.branch.oid || undefined;
         const inProgress =
-          entry.state === "running" &&
-          (status?.operation || status?.merge.length);
+          attemptedSequence && (status?.operation || status?.merge.length);
         entry.state = inProgress ? "conflict" : "failed";
         entry.message =
           safeGitMessage(

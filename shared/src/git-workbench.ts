@@ -207,3 +207,14 @@ export function gitActionBlockReason(
       return "仓库正在处理冲突或中途操作，请先解决、继续或中止";
   }
 }
+
+export function gitChangeCount(
+  status: Pick<GitStatus, "staged" | "unstaged" | "untracked" | "merge">,
+): number {
+  return (
+    status.staged.length +
+    status.unstaged.length +
+    status.untracked.length +
+    status.merge.length
+  );
+}

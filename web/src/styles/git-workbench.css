@@ -318,6 +318,11 @@
   font-size: 10px;
   flex: none;
 }
+.gwb-file-pane > .gwb-pane-title > span {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+}
 .gwb-file-groups {
   flex: 1;
   min-height: 0;

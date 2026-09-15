@@ -12,6 +12,7 @@ export async function rebasePlan(
   root: string,
   target: string,
   steps: RebaseStep[],
+  executeSequence: typeof git = git,
 ): Promise<void> {
   const base = await commitOid(root, target);
   await git(root, ["merge-base", "--is-ancestor", base, "HEAD"]);
@@ -80,7 +81,7 @@ export async function rebasePlan(
       editor,
       `require('node:fs').writeFileSync(process.argv[2],${JSON.stringify(todo.join("\n") + "\n")});\n`,
     );
-    await git(root, ["rebase", "-i", base], {
+    await executeSequence(root, ["rebase", "-i", base], {
       GIT_SEQUENCE_EDITOR: `${node} ${shellWord(editor)}`,
     });
   } finally {

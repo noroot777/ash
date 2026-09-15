@@ -13,6 +13,7 @@ import {
   Warning,
 } from "@phosphor-icons/react";
 import type { GitActionRequest, GitView } from "@ash/shared/git-workbench";
+import { gitChangeCount } from "@ash/shared/git-workbench";
 import {
   ActionDialog,
   initialActionValues,
@@ -163,10 +164,7 @@ export function GitWorkbench({
     !data
       ? undefined
       : id === "changes"
-        ? data.status.staged.length +
-          data.status.unstaged.length +
-          data.status.untracked.length +
-          data.status.merge.length
+        ? gitChangeCount(data.status)
         : id === "branches"
           ? data.refs.filter((r) => r.kind === "branch").length
           : id === "stash"

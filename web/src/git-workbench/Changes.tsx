@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { File, Minus, Plus, Trash, GitCommit } from "@phosphor-icons/react";
 import type { GitDiff, GitFile } from "@ash/shared/git-workbench";
+import { gitChangeCount } from "@ash/shared/git-workbench";
 import type { Workbench } from "./useWorkbench.ts";
 import type { AskAction } from "./ActionDialog.tsx";
 import { workbenchApi } from "./api.ts";
@@ -40,10 +41,14 @@ export function Changes({
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [amend, setAmend] = useState(false);
-  const clean =
-    !data.status.staged.length &&
-    !data.status.unstaged.length &&
-    !data.status.untracked.length;
+  const clean = gitChangeCount(data.status) === 0 && !data.status.truncated;
+  const summary = data.status.merge.length
+    ? `${data.status.merge.length} 个冲突待解决 · 请在上方冲突面板处理`
+    : data.status.operation
+      ? "Git 操作尚未完成 · 请在上方继续或中止"
+      : clean
+        ? "所有改动已提交"
+        : "选择要提交的内容";
   useEffect(() => {
     let alive = true;
     setDiff(null);
@@ -109,7 +114,7 @@ export function Changes({
       <section className="gwb-file-pane" aria-label="工作区变更">
         <div className="gwb-pane-title">
           <strong>工作区</strong>
-          <span>{clean ? "所有改动已提交" : "选择要提交的内容"}</span>
+          <span>{summary}</span>
         </div>
         <div className="gwb-file-groups">
           {(["staged", "unstaged", "untracked"] as const).map((source) => {

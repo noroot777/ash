@@ -21,6 +21,7 @@ export async function runRefAction(
   root: string,
   action: GitAction,
   actor: string,
+  executeSequence: typeof git = git,
 ): Promise<boolean> {
   switch (action.kind) {
     case "checkout":
@@ -120,7 +121,8 @@ export async function runRefAction(
       if (action.kind !== "stash-apply" && !entry!.owned)
         fail("这份贮藏不属于当前用户，只能应用副本");
       if (action.kind !== "stash-drop") requireClean(await readScmStatus(root));
-      await git(root, ["stash", action.kind.slice(6), entry!.ref]);
+      const execute = action.kind === "stash-drop" ? git : executeSequence;
+      await execute(root, ["stash", action.kind.slice(6), entry!.ref]);
       return true;
     }
     case "worktree-add": {

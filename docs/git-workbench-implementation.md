@@ -96,3 +96,15 @@ Windows 真机本轮验证：通过局域网传输 `git format-patch`，校验 S
 新增 `test-git-workbench-conflict-gates.mjs` 单独通过，挂接后的 `web test:git-workbench` 三套浏览器回归也全部退出码 0。真实冲突场景遍历七视图，核对报告所列写入口禁用、差异和历史查看可用；冲突期间实际写请求严格为 `stage / unstage / abort / resolve / continue / skip`，六种允许动作均成功。冲突结束后代表入口恢复；普通动作弹窗打开后外部发生冲突，自动刷新使确认按钮禁用，模拟点击没有请求，也没有创建分支。
 
 本轮浏览器先选择 Chrome 扩展通道，创建具名后台会话时返回 `unsupported Codex auth method: apikey`，因此使用独立临时 profile 的无头 Chromium。未接管普通标签、激活用户 Chrome 或使用有头浏览器。fixture、Vite、Chromium 及测试截图临时目录均已退出或清理；`git diff --check` 通过。本轮没有修改平台路径或 win32 分支，验证在本机执行。
+
+## 第 3 轮审查修复（2026-09-15）
+
+变更标签计数与工作区摘要共用 `gitChangeCount`，包含未合并文件。存在冲突时摘要明确显示待解决数量并指向上方冲突面板；冲突已解决但 Git 操作尚未结束时，显示继续或中止指引。只有没有变更、没有中途操作且状态未截断时才显示「所有改动已提交」。长摘要可在窄文件面板内换行。
+
+日志归因改为显式记录本次是否实际尝试了合并或重放命令。标记只在调用 merge、rebase（含计划及 pull 整合）、cherry-pick、revert、stash apply/pop、continue/skip 的 Git 命令时设置；这些命令失败后仍有冲突或中途操作，才记为 `conflict`。暂存或冲突保存失败、继续/跳过的前置校验拒绝，以及中止失败均记为 `failed`，不会借用已有冲突追加误导文案。
+
+本轮本机后端 `test:git-workbench` 全部通过：15 个核心场景、4 组安全、4 组维护及新增 4 组结果归因回归。新增回归比较错误请求前后的 Git 状态、引用、索引和冲突文件，验证原现场未变；同时验证真正推进到下一处冲突的 continue/skip、交互式 rebase、stash apply/pop、pull merge/rebase 保留 `conflict`，无冲突的 ff-only 拒绝记录为 `failed`。
+
+本轮 `shared/server/web build` 均通过，最终 `web test:git-workbench` 三套浏览器回归全部退出码 0。新增断言覆盖仅 UU 的 merge 冲突、已解决但尚待 continue、无 operation 的 stash pop 冲突，以及继续或提交后的真实干净状态。390px 冲突页面无横向溢出。完整回归首轮在旧长流程的 abort 遇到一次 Git `index.lock`；该用例单独复跑和随后的完整回归均通过。旧长流程的截图目录也已补上 finally 清理。
+
+浏览器先尝试扩展具名后台会话，命名失败原文为 `unsupported Codex auth method: apikey`，随后采用独立临时 profile 的无头 Chromium；未接管普通标签、激活用户 Chrome 或使用有头浏览器。本轮 fixture、Vite、Chromium、截图和临时目录均已清理，`git diff --check` 通过。验证在本机执行，未修改平台路径或 win32 分支。

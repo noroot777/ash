@@ -36,6 +36,7 @@ export async function runSyncAction(
   root: string,
   projectId: string,
   action: GitAction,
+  executeSequence: typeof git = git,
 ): Promise<boolean> {
   switch (action.kind) {
     case "fetch":
@@ -61,11 +62,12 @@ export async function runSyncAction(
       await checkRemote(root, remote);
       await network(root, projectId, ["fetch", "--", remote]);
       const target = await commitOid(root, status.branch.upstream!);
-      if (action.strategy === "rebase") await git(root, ["rebase", target]);
+      if (action.strategy === "rebase")
+        await executeSequence(root, ["rebase", target]);
       else if (action.strategy === "merge")
-        await git(root, ["merge", "--no-edit", target]);
+        await executeSequence(root, ["merge", "--no-edit", target]);
       else if (action.strategy === "ff-only")
-        await git(root, ["merge", "--ff-only", target]);
+        await executeSequence(root, ["merge", "--ff-only", target]);
       else fail("未知的拉取策略", 400);
       return true;
     }

@@ -113,7 +113,7 @@ const expectAllDisabled = async (locator, label) => {
   for (let index = 0; index < count; index += 1)
     await expectDisabled(locator.nth(index), `${label} ${index + 1}`);
 };
-const performAction = async (trigger) => {
+const performAction = async (trigger, expectedOk = true) => {
   let received = false;
   const action = page.waitForResponse((response) =>
     response.request().method() === "POST" &&
@@ -127,7 +127,11 @@ const performAction = async (trigger) => {
   const response = await action;
   received = true;
   const body = await response.json().catch(() => null);
-  assert.equal(response.ok(), true, `action failed: ${JSON.stringify(body)}`);
+  assert.equal(
+    response.ok(),
+    expectedOk,
+    `action HTTP ${response.status()}: ${JSON.stringify(body)}`,
+  );
   await state;
   await page.getByLabel("选择工作树").waitFor({ state: "visible" });
   return body;
@@ -240,6 +244,21 @@ try {
   await staleConfirm.evaluate((element) => element.click());
   assert.equal(actionPosts.length, beforeStaleClick, "blocked stale dialog must not POST");
   await staleDialog.getByRole("button", { name: "关闭新建分支" }).click();
+
+  await tab("变更").click();
+  const mergeOnlyChanges = await page.getByRole("region", { name: "工作区变更" }).innerText();
+  assert.match(mergeOnlyChanges, /1 个冲突待解决 · 请在上方冲突面板处理/);
+  assert.doesNotMatch(mergeOnlyChanges, /所有改动已提交/);
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert(
+    (await page.evaluate(() => document.documentElement.scrollWidth)) <= 390,
+    "mobile conflict summary should not overflow horizontally",
+  );
+  await page.screenshot({
+    path: join(info.directory, "conflict-summary-mobile.png"),
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 1440, height: 960 });
 
   writeFileSync(join(info.root, "history-1.txt"), "history 1\nconflict gate edit\n");
   writeFileSync(join(info.root, "conflict-scratch.txt"), "untracked during conflict\n");
@@ -365,12 +384,20 @@ try {
   await performAction(() =>
     conflictDialog.getByRole("button", { name: "保存结果并暂存", exact: true }).click());
   await conflictDialog.waitFor({ state: "detached" });
+  await tab("变更").click();
+  const pendingMergeChanges = await page.getByRole("region", { name: "工作区变更" }).innerText();
+  assert.match(pendingMergeChanges, /Git 操作尚未完成 · 请在上方继续或中止/);
+  assert.doesNotMatch(pendingMergeChanges, /所有改动已提交/);
   const continueButton = page.getByRole("button", { name: "继续操作", exact: true });
   await expectEnabled(continueButton, "continue after resolving conflicts");
   await performAction(() => continueButton.click());
   await page.locator(".gwb-operation").waitFor({ state: "detached" });
   await expectEnabled(sync.getByRole("button", { name: "获取", exact: true }), "fetch after continue");
   assert.equal(git(info.root, "status", "--porcelain"), "", "continued merge should leave a clean worktree");
+  assert.match(
+    await page.getByRole("region", { name: "工作区变更" }).innerText(),
+    /所有改动已提交/,
+  );
 
   // rebase 冲突里的跳过按钮也走白名单弹窗，确认后真实结束操作。
   git(info.root, "checkout", "-qb", "browser/rebase-target");
@@ -399,6 +426,46 @@ try {
     actionPosts.slice(conflictActionStart),
     ["stage", "unstage", "abort", "resolve", "continue", "skip"],
     "conflict periods should only POST shared allow-list actions",
+  );
+
+  // stash pop 冲突没有 operation；变更视图仍须指向上方冲突面板，解决并提交后才显示干净。
+  writeFileSync(join(info.root, "conflict.txt"), "stash conflict version\n");
+  await refresh();
+  await tab("贮藏").click();
+  await page.getByRole("button", { name: "贮藏改动", exact: true }).click();
+  await dialog("贮藏当前改动").getByRole("textbox").fill("wording conflict stash");
+  await submitDialog("贮藏当前改动");
+  writeFileSync(join(info.root, "conflict.txt"), "committed after stash\n");
+  git(info.root, "add", "--", "conflict.txt");
+  git(info.root, "commit", "-qm", "conflict against saved stash");
+  await refresh();
+  const wordingStash = page.locator(".gwb-ref-row", { hasText: "wording conflict stash" });
+  await wordingStash.getByRole("button", { name: "弹出", exact: true }).click();
+  const popDialog = dialog("弹出贮藏");
+  const popFailure = await performAction(
+    () => popDialog.getByRole("button", { name: "弹出贮藏", exact: true }).click(),
+    false,
+  );
+  assert.match(String(popFailure?.error || ""), /CONFLICT|冲突/i);
+  await popDialog.getByRole("button", { name: "关闭弹出贮藏" }).click();
+  await page.getByText("还有未解决的冲突", { exact: true }).waitFor();
+  await tab("变更").click();
+  const stashConflictChanges = await page.getByRole("region", { name: "工作区变更" }).innerText();
+  assert.match(stashConflictChanges, /1 个冲突待解决 · 请在上方冲突面板处理/);
+  assert.doesNotMatch(stashConflictChanges, /所有改动已提交/);
+  await page.getByRole("button", { name: /conflict\.txt/ }).click();
+  const stashConflictDialog = dialog(/解决冲突/);
+  await stashConflictDialog.getByRole("button", { name: "采用对方", exact: true }).click();
+  await performAction(() =>
+    stashConflictDialog.getByRole("button", { name: "保存结果并暂存", exact: true }).click());
+  await stashConflictDialog.waitFor({ state: "detached" });
+  await page.getByLabel("提交信息").fill("commit resolved stash conflict");
+  await performAction(() =>
+    page.getByRole("button", { name: /提交已暂存/ }).click());
+  assert.equal(git(info.root, "status", "--porcelain"), "", "committed stash resolution should be clean");
+  assert.match(
+    await page.getByRole("region", { name: "工作区变更" }).innerText(),
+    /所有改动已提交/,
   );
   assert.notEqual(
     spawnSync("git", ["-C", info.root, "show-ref", "--verify", "refs/heads/must-not-be-created"]).status,

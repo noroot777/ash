@@ -57,7 +57,7 @@
     "test:handoff-notice": "tsx scripts/test-handoff-notice.ts",
     "test:repo-lock": "tsx scripts/test-repo-lock.ts",
     "test:project-git": "tsx scripts/test-project-git.ts",
-    "test:git-workbench": "tsx scripts/test-git-workbench.ts && tsx scripts/test-git-workbench-safety.ts && tsx scripts/test-git-workbench-maintenance.ts",
+    "test:git-workbench": "tsx scripts/test-git-workbench.ts && tsx scripts/test-git-workbench-safety.ts && tsx scripts/test-git-workbench-maintenance.ts && tsx scripts/test-git-workbench-outcomes.ts",
     "test:project-clone": "tsx scripts/test-project-clone.ts",
     "test:project-dir": "tsx scripts/test-project-dir.ts",
     "test:project-git-config": "tsx scripts/test-project-git-config.ts",

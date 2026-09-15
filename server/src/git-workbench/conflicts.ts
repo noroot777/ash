@@ -141,6 +141,7 @@ export async function resolveConflict(
 export async function continueOperation(
   root: string,
   action: "continue" | "abort" | "skip",
+  executeSequence: typeof git = git,
 ): Promise<void> {
   const status = await readScmStatus(root);
   if (!status.operation)
@@ -149,7 +150,8 @@ export async function continueOperation(
   if (action === "skip" && status.operation === "merge")
     fail("合并不能跳过提交", 400);
   try {
-    await git(root, [status.operation, `--${action}`]);
+    const execute = action === "abort" ? git : executeSequence;
+    await execute(root, [status.operation, `--${action}`]);
   } finally {
     if (status.operation === "rebase") await cleanupRebaseHelpers(root);
   }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -350,7 +350,7 @@ try {
   await page.goBack();
   await page.getByRole("heading", { name: "工作树" }).waitFor();
 
-  // 移动布局必须保持单列可操作；截图留在系统临时目录供人工复核。
+  // 移动布局保持单列可操作，临时截图随测试结束清理。
   await page.setViewportSize({ width: 390, height: 844 });
   await tab("变更").click();
   await page.getByRole("region", { name: "工作区变更" }).waitFor();
@@ -362,7 +362,7 @@ try {
 
   assert.deepEqual(browserErrors, [], `浏览器控制台错误：\n${browserErrors.join("\n")}`);
   assert.deepEqual(requestFailures, [], `失败请求：\n${requestFailures.join("\n")}`);
-  console.log(`Git workbench browser test passed · screenshot ${join(screenshotDirectory, "mobile.png")}`);
+  console.log("Git workbench browser test passed");
 } catch (error) {
   const diagnostics = backend.diagnostics();
   throw new Error(`${error instanceof Error ? error.stack || error.message : String(error)}\nactions:\n${JSON.stringify(actionResults, null, 2)}\nbackend stderr:\n${diagnostics.stderr}\nbackend stdout:\n${diagnostics.stdout}`);
@@ -370,6 +370,8 @@ try {
   await browser?.close();
   await vite?.close();
   await backend.close();
+  if (screenshotDirectory)
+    rmSync(screenshotDirectory, { recursive: true, force: true });
   if (backendDirectory) {
     assert.equal(
       existsSync(backendDirectory),
