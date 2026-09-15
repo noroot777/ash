@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { GitDiff, GitHistoryCommit } from "@ash/shared/git-workbench";
 import type { AskAction } from "./ActionDialog.tsx";
 import type { Workbench } from "./useWorkbench.ts";
@@ -20,7 +20,9 @@ export function History({
 }) {
   const data = w.data!;
   const [ref, setRef] = useState(initialRef || "");
-  useEffect(() => { setRef(initialRef || ""); }, [initialRef]);
+  useEffect(() => {
+    setRef(initialRef || "");
+  }, [initialRef]);
   const [path, setPath] = useState("");
   const [pathDraft, setPathDraft] = useState("");
   const [commits, setCommits] = useState<GitHistoryCommit[]>([]);
@@ -33,9 +35,11 @@ export function History({
   const [detailLoading, setDetailLoading] = useState(false);
   const [blame, setBlame] = useState(false);
   const [rebase, setRebase] = useState<GitHistoryCommit | null>(null);
+  const historyRequest = useRef(0);
   const refsVersion = data.refs.map((r) => r.sha + r.name).join(":");
   useEffect(() => {
     let alive = true;
+    historyRequest.current++;
     setLoading(true);
     setError(null);
     setCommits([]);
@@ -60,6 +64,7 @@ export function History({
       });
     return () => {
       alive = false;
+      historyRequest.current++;
     };
   }, [
     projectId,
@@ -269,6 +274,7 @@ export function History({
               className="gwb-load-more"
               disabled={loading}
               onClick={() => {
+                const request = historyRequest.current;
                 setLoading(true);
                 void workbenchApi
                   .history(projectId, data.root, {
@@ -277,11 +283,17 @@ export function History({
                     skip: commits.length,
                   })
                   .then((next) => {
+                    if (request !== historyRequest.current) return;
                     setCommits((old) => [...old, ...next.commits]);
                     setMore(next.more);
                   })
-                  .catch((reason: Error) => setError(reason.message))
-                  .finally(() => setLoading(false));
+                  .catch((reason: Error) => {
+                    if (request === historyRequest.current)
+                      setError(reason.message);
+                  })
+                  .finally(() => {
+                    if (request === historyRequest.current) setLoading(false);
+                  });
               }}
             >
               加载更早提交
