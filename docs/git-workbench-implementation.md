@@ -54,9 +54,13 @@
 - 既有 `test:repo-lock`、`test:project-git`、`test:scm`、`test:scm-guard`、`test:scm-nested`：通过。
 - `npm -w web run test:git-workbench`：真实后端浏览器回归通过，包含入口、后退/刷新、七视图、部分暂存、提交、贮藏、失败持久化、冲突继续/中止、hard reset、交互式 rebase 和工作树切换。
 - 任务返回上下文回归：同工作树内切视图/查看分支历史保留 `gitTask`，切换工作树后清除。浏览器夹具通过 IPC 关闭数据库与服务，父测试检查临时目录确实删除。
+- 连续操作回归：挂起写入后的状态请求，确认控件继续禁用；放行最新状态后才恢复操作。执行与排队期间仍轮询日志，最终状态重读期间暂停轮询竞争。
 - 前端全量回归：首次执行在既有 `test-remote-return.mjs` 的「后续正常轮询不能清掉移回失败」断言停止；单独重跑 `test:remote-task` 通过，其后的全部子套件按顺序执行通过。
 - 桌面和 390px 移动布局已查看截图；移动页面无横向溢出。
 - Windows 真机 `192.168.1.187`：在独立 detached worktree 中通过 `git format-patch` / 局域网传输应用当前实现；`npm -w server run test:git-workbench` 退出码 0，14 个核心场景与 4 组安全回归通过。POSIX 符号链接专用案例由 macOS 覆盖。
+- Windows 隔离目录安装完整依赖后，server/web build 均退出码 0；最终专用无头浏览器回归退出码 0，Chrome 正常退出并完成 profile 清理。
+- Windows 初轮暴露测试数据库句柄未关闭的问题，已补关闭与目录删除断言。浏览器前两轮曾出现页面关闭及等待冲突栏超时；随后补齐请求诊断、提前观察 Promise 拒绝，并修复写入后状态尚未刷新就开放下一次操作的窗口。最终以明确的冲突错误断言和延迟响应场景完成全流程验证。
+- 清理审计退出码 0：Windows 隔离工作树已删除并取消注册，测试/浏览器临时目录和补丁无残留，已知进程及精确匹配的测试进程为 0，所有远端终端会话已删除。本机传输服务已停止，传输目录、辅助脚本和截图临时目录已清理。
 
 浏览器通道降级原因：扩展入口返回 `Browsers: Error: unsupported Codex auth method: apikey`，因此使用独立临时 profile 的无头 Chromium。验证没有接管普通 Chrome 标签，也没有激活用户的浏览器窗口。
 
