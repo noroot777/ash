@@ -7,6 +7,8 @@
 /* 验收动作提到顶栏:它是这一屏唯一的动作,不该跟着卡片一起被折叠收走。失败详情排在
    整行操作之后再换行铺满顶栏下沿,不去挤验收按钮那一行。 */
 .single-review-subbar .team-accept-failure,.team-review-subbar .team-accept-failure { order:1; flex:1 0 100%; margin:0; }
+/* 「合并后不提交」那张常驻卡同理:它是一整段说明加动作,排在验收按钮那一行之后铺满顶栏下沿。 */
+.single-review-subbar .pending-merge-card,.team-review-subbar .pending-merge-card { order:2; flex:1 0 100%; margin:0; }
 .single-review-subbar > div:first-child,.team-review-subbar > div:first-child { min-width:0; flex:1; }
 .single-review-subbar b,.single-review-subbar small,.team-review-subbar b,.team-review-subbar small { display:block; }
 .single-review-subbar b,.team-review-subbar b { font-size:12.5px; }

@@ -18,6 +18,7 @@ import { BranchAcceptancePanel } from "../review/BranchAcceptancePanel.tsx";
 import { useBranchPlan } from "../review/useBranchPlan.ts";
 import { UnexecutedVerificationNotice, useAcceptanceVerification } from "../review/UnexecutedVerificationNotice.tsx";
 import { AcceptCommitChoice, useAcceptCommitDefault } from "../review/AcceptCommitChoice.tsx";
+import { PendingMergeCard } from "../review/PendingMergeCard.tsx";
 
 type ReviewData = {
   commits: TaskCommit[];
@@ -147,6 +148,8 @@ export function AcceptanceControls({
       dependency.state === "needs_update" ? "需更新子分支基线" : dependency.state === "waiting" ? "等待父成果合入" : "父成果依赖待处理";
   }
   const [action, setAction] = useState<"accept" | "return" | null>(null);
+  // 事实列判，不猜：no_commit + 还没记下合并提交 = 那份改动还躺在目标分支工作区里。
+  const pendingCommit = task.acceptedMergeMethod === "no_commit" && !task.acceptedMergeCommit;
   const verification = useAcceptanceVerification(task, action === "accept");
   const needsVerificationConfirmation = !midGate && !!verification.verification;
   // 本次验收「合并后提交代码」的选择。null = 没动过，跟项目设置走。项目默认没读到之前
@@ -273,7 +276,11 @@ export function AcceptanceControls({
     <>
       <div className="team-accept-actions">
         {task.stage === "accepted" ? (
-          <span><CheckCircle size={13} weight="fill" />验收完成</span>
+          // 「合并后不提交」那一档欠着一步提交，这里跟正常验收长一个样就是把它藏起来
+          // （现场：用户因此完全看不出还欠一步）。详情与出路在下面那张常驻卡片里。
+          pendingCommit ? (
+            <span className="is-pending-commit"><WarningCircle size={13} weight="fill" />验收完成 · 待提交</span>
+          ) : <span><CheckCircle size={13} weight="fill" />验收完成</span>
         ) : (
           <>
             <button type="button" className="is-primary" disabled={archived || inFlight || busy || checkingDependencies || !!acceptanceBlock} onClick={() => setAction("accept")}>
@@ -285,6 +292,9 @@ export function AcceptanceControls({
         )}
       </div>
       {failure && <AcceptanceFailureNotice failure={failure} />}
+      {/* 「合并后不提交」那一档的常驻状态与出路。它自己判要不要出现（不适用就渲染 null），
+          所以每个有验收动作的表面都自动带上，不用各处再判一遍。 */}
+      <PendingMergeCard task={task} notify={notify} onTaskUpdated={onTaskUpdated} />
       {verification.verification && action !== "accept" && <UnexecutedVerificationNotice verification={verification.verification} continuing={midGate} />}
       {action === "accept" && (
         <ConfirmDialog

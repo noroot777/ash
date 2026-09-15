@@ -102,6 +102,8 @@ const toTaskWith = (r: TaskRow, profiles: AgentLabelRow[]): Task => ({
   acceptedTargetBranch: r.acceptedTargetBranch ?? null,
   acceptedBaseCommit: r.acceptedBaseCommit ?? null,
   acceptedMergeCommit: r.acceptedMergeCommit ?? null,
+  acceptedMergeMethod: (r.acceptedMergeMethod as Task["acceptedMergeMethod"]) ?? null,
+  acceptedPendingTree: r.acceptedPendingTree ?? null,
   workflow: r.workflow ? JSON.parse(r.workflow) : null,
   workflowMode: r.workflowMode as Task["workflowMode"],
   workflowAt: r.workflowAt ?? null,

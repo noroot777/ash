@@ -233,6 +233,10 @@ export interface HandoffManifest {
     acceptedTargetBranch?: string | null;
     acceptedBaseCommit?: string | null;
     acceptedMergeCommit?: string | null;
+    // 「怎么合的」也随任务走：对端要靠它分清「合了但没提交」和「合并早已发生、不可知」。
+    // **acceptedPendingTree 不带**：那是本机项目目录索引的内容指纹,搬到另一台机器上没有
+    // 任何可核对的对象,带过去只会让对端拿一个假指纹去判「还躺着没提交」。
+    acceptedMergeMethod?: string | null;
     pinnedAt: number | null;
     starredAt: number | null;
     createdAt: string;

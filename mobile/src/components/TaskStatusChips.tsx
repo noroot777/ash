@@ -96,9 +96,14 @@ export function TaskStatusChips({ task }: { task: TaskListItem }) {
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
   const attention = taskAttention(task);
   const color = attentionColor(attention?.kind, theme);
+  // 「合并后不提交」那一档验收完还欠一步提交：只显示「已验收」就把这一步藏了（web 那边
+  // 的现场事故）。判据用事实列，不靠 acceptedMergeCommit 为 null 去猜——那个 null 还有
+  // 「合并早已发生、快照不可知」那层含义。手机上只报事实，收尾动作在 web 的验收台。
+  const pendingCommit = task.acceptedMergeMethod === "no_commit" && !task.acceptedMergeCommit;
   return (
     <>
       <StatusChip label={display.label} color={color} icon={attention?.icon} filled={!!attention} />
+      {pendingCommit ? <StatusChip label="待提交" color={ATTENTION_COLOR} icon="git-commit" filled /> : null}
       {attention?.kind === "question" && task.stage === "verify_failed" ? (
         <StatusChip label={STAGE_LABELS.verify_failed} color={theme.danger} icon="alert-circle" filled />
       ) : null}

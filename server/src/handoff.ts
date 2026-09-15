@@ -492,6 +492,7 @@ export async function exportHandoff(
           acceptedTargetBranch: task.acceptedTargetBranch,
           acceptedBaseCommit: task.acceptedBaseCommit,
           acceptedMergeCommit: task.acceptedMergeCommit,
+          acceptedMergeMethod: task.acceptedMergeMethod,
           pinnedAt: task.pinnedAt, starredAt: task.starredAt,
           createdAt: task.createdAt, startedAt: task.startedAt, endedAt: task.endedAt,
         },

@@ -398,6 +398,10 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN accepted_merge_commit TEXT",
     "ALTER TABLE tasks ADD COLUMN accepted_tail_pending INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE tasks ADD COLUMN accepted_tail_done TEXT NOT NULL DEFAULT '[]'",
+    // 「怎么合的」与「不提交那一档留在索引里的内容指纹」：null 的 accepted_merge_commit
+    // 有两种含义，UI 不能靠猜（见 schema.ts 上那两段注释）。
+    "ALTER TABLE tasks ADD COLUMN accepted_merge_method TEXT",
+    "ALTER TABLE tasks ADD COLUMN accepted_pending_tree TEXT",
     // Token 用量:一条会话行按回合累加(口径统一在 shared/src/usage.ts)。全 null
     // = 这条会话建在本功能之前、或那家 CLI 不报账——**不能当 0 展示**。
     "ALTER TABLE sessions ADD COLUMN usage_input INTEGER",

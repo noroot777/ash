@@ -357,11 +357,12 @@ async function importValidated(
     questionOptions: jsonOr(m.task.questionOptions, "") || null,
     questionItems: jsonOr(m.task.questionItems, "") || null,
     questionHistory: jsonOr(m.task.questionHistory, "") || null,
-    // 验收落账随任务走(老 manifest 没有这三个字段,按缺失处理)。尾段进度位不带,
-    // 理由见 handoff-types.ts。
+    // 验收落账随任务走(老 manifest 没有这几个字段,按缺失处理)。尾段进度位与
+    // 「不提交那一档的索引指纹」不带,理由见 handoff-types.ts。
     acceptedTargetBranch: m.task.acceptedTargetBranch ?? null,
     acceptedBaseCommit: m.task.acceptedBaseCommit ?? null,
     acceptedMergeCommit: m.task.acceptedMergeCommit ?? null,
+    acceptedMergeMethod: m.task.acceptedMergeMethod ?? null,
     pinnedAt: m.task.pinnedAt,
     starredAt: m.task.starredAt,
     createdAt: m.task.createdAt,
