@@ -93,7 +93,6 @@ export function TaskHeader({
   onPostMergeReview,
   onDelete,
   indicatorForTask,
-  sideChatToggle,
   terminalToggle,
   inspectorToggle,
   notify,
@@ -116,7 +115,6 @@ export function TaskHeader({
   onPostMergeReview?: () => void;
   onDelete: () => void;
   indicatorForTask: IndicatorForTask;
-  sideChatToggle?: ReactNode;
   terminalToggle?: ReactNode;
   inspectorToggle?: ReactNode;
   notify: (message: string) => void;
@@ -330,7 +328,6 @@ export function TaskHeader({
           </div>
         )}
       </div>
-      {sideChatToggle}
       {terminalToggle}
       {inspectorToggle}
     </header>

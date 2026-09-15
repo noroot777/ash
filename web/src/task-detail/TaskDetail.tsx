@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Group, Task, TaskListItem } from "@ash/shared";
 import { isUserFollowUp } from "@ash/shared";
-import { Chats } from "@phosphor-icons/react";
 import { PreviewWorkspace } from "../preview-workspace/PreviewWorkspace.tsx";
 import { useSubagents } from "./useSubagents.tsx";
 import { InspectorHost } from "../inspector/index.ts";
@@ -350,7 +349,6 @@ export function TaskDetail({
               } : undefined}
               onDelete={() => setDeleteOpen(true)}
               indicatorForTask={indicatorForTask}
-              sideChatToggle={<button type="button" className="inspector-toggle" aria-label="打开侧聊" onClick={() => openTab("side-chat")}><Chats size={16} /></button>}
               terminalToggle={terminalToggle}
               inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
               notify={notify}
