@@ -3,12 +3,16 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowUp,
+  CaretDown,
   CaretRight,
+  Check,
   GitBranch,
   Lock,
   Plus,
   Sparkle,
+  TreeStructure,
 } from "@phosphor-icons/react";
+import type { ProjectView } from "@ash/shared";
 import type { GitView } from "@ash/shared/git-workbench";
 import type { Workbench } from "./useWorkbench.ts";
 import type { AskAction } from "./ActionDialog.tsx";
@@ -18,6 +22,7 @@ import { openGitWorkbench } from "./navigation.ts";
 export function WorkbenchHeader({
   projectId,
   projectName,
+  projects,
   view,
   workbench: w,
   ask,
@@ -27,6 +32,7 @@ export function WorkbenchHeader({
 }: {
   projectId: string;
   projectName: string;
+  projects?: readonly ProjectView[];
   view: GitView;
   workbench: Workbench;
   ask: AskAction;
@@ -42,21 +48,27 @@ export function WorkbenchHeader({
   return (
     <header className="gwb-header topbar">
       <div className="top-left">
-        <button type="button" className="top-btn" aria-label="返回 ash 工作区" onClick={onExit}>
-          <ArrowLeft size={14} />
-          <span>返回</span>
-        </button>
         <WorkbenchMenu
           className="repo-name"
-          label="选择工作树"
-          disabled={w.busy || !data}
-          items={(data?.worktrees || []).map((tree) => ({
-            label: `${tree.branch || "游离 HEAD"} · ${tree.path === data?.repo ? "项目主仓" : tree.taskTitle || "手动工作树"}`,
-            onClick: () =>
-              openGitWorkbench({ projectId, root: tree.path, view }),
-          }))}
+          label="选择 Git 项目"
+          disabled={w.busy}
+          items={
+            projects
+              ? projects
+                  .filter((project) => project.health.exists && project.health.isRepo)
+                  .map((project) => ({
+                    label: `${project.name} · ${project.repoPath}`,
+                    icon: project.id === projectId ? <Check size={14} /> : <GitBranch size={14} />,
+                    disabled: project.id === projectId,
+                    onClick: () => openGitWorkbench({ projectId: project.id, view }),
+                  }))
+              : [{ label: projectName, disabled: true, onClick: () => {} }]
+          }
         >
-          <b>{projectName}</b>
+          <b>
+            <span>{projectName}</span>
+            <CaretDown size={12} />
+          </b>
           <i>{data?.root || "正在读取工作目录…"}</i>
         </WorkbenchMenu>
         <WorkbenchMenu
@@ -107,9 +119,25 @@ export function WorkbenchHeader({
           </b>
           <CaretRight size={12} />
         </WorkbenchMenu>
+        <WorkbenchMenu
+          className="top-btn gwb-worktree-picker"
+          label="选择工作树"
+          disabled={w.busy || !data}
+          items={(data?.worktrees || []).map((tree) => ({
+            label: `${tree.branch || "游离 HEAD"} · ${tree.path === data?.repo ? "项目主仓" : tree.taskTitle || "手动工作树"}`,
+            onClick: () => openGitWorkbench({ projectId, root: tree.path, view }),
+          }))}
+        >
+          <TreeStructure size={16} />
+          <CaretDown size={12} />
+        </WorkbenchMenu>
       </div>
       <span className="flex-1" />
       <div className="gwb-sync sync-group">
+        <button type="button" className="top-btn gwb-back-btn" aria-label="返回 ash 工作区" onClick={onExit}>
+          <ArrowLeft size={14} />
+          <span>返回</span>
+        </button>
         <button
           className="top-btn"
           aria-label="获取"

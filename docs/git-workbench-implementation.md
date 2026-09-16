@@ -214,3 +214,13 @@ Windows 真机本轮验证：通过局域网传输 `git format-patch`，校验 S
 左上角返回入口改为可见的左箭头和「返回」文字，沿用退出工作台、恢复 ash 工作区及原任务上下文的现有逻辑。`web build` 与现有 `test:git-workbench-design` 均通过；真实 `WorkspaceShell` 验证点击按钮后侧栏恢复，截图已核对。
 
 本轮具名后台扩展重试返回 `unsupported Codex auth method: apikey`，因此采用独立临时 profile 的无头 Chromium。截图、日志与扩展错误原文保存在 `/Users/fjh/code/harness/data/runs/Y_sgd0mNlRXp/back-button-20260916/`；测试后端、Vite 和 Chromium 已清理。
+
+## 截图标注调整（2026-09-16）
+
+顶部项目名改为项目选择器，复用 ash 已授权的项目列表，展示可访问的 Git 项目名称与路径，排除非 Git 或目录不存在的项目。切换保留当前 Git 视图，清除旧项目的工作树、任务和提交筛选上下文；原工作树切换保留在分支旁的独立入口。「返回」移到右侧「拉取引用」前，采用深蓝底白字，继续恢复 ash 工作区。
+
+历史列表与提交详情之间可拖动调宽，桌面两侧至少保留 280px，并记住分栏比例。支持方向键调整和双击恢复设计稿默认比例；窄屏仍上下排列，隐藏水平调宽入口。人工核对后修正中等宽度下按钮文字换行及分支名被挤没的问题。
+
+`npm -w web run build` 通过，包含类型与前端约定检查，只有既有打包体积提示。新增 `npm -w web run test:git-workbench-header-resize` 通过：两个独立真实 Git 仓库验证项目切换、历史与路径更新、刷新、返回，以及非 Git 项目过滤；页面实际拖动验证两端宽度限制、键盘调宽和双击复位，并检查 1440/1024/820/390px 布局。既有 `test:git-workbench-design` 通过，保留七视图尺寸与真实 WorkspaceShell 进出回归；最后的分支宽度微调由专项再次验证。所有修改代码文件均不超过 700 行，`git diff --check` 通过。
+
+本轮先重试 Chrome 扩展具名后台会话，失败原文为 `unsupported Codex auth method: apikey`，因此降级为独立临时 profile 的无头 Chromium。没有接管普通标签、激活 Chrome 或使用有头浏览器。构建日志、浏览器记录、尺寸和截图保存于 `/Users/fjh/code/harness/data/runs/Y_sgd0mNlRXp/header-resize-20260916/`；已人工查看项目下拉、桌面分栏、中等宽度顶部及手机截图。测试后端、Vite、浏览器和临时仓库已清理。

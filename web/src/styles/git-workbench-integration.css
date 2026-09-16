@@ -2,9 +2,18 @@
 .gwb.gwb-design { width: 100%; height: 100dvh; min-width: 0; min-height: 0; flex: 1; }
 .gwb-design .shell, .gwb-design .view { min-height: 0; }
 .gwb-design .view { flex-direction: column; overflow: hidden; }
-.gwb-design .topbar .repo-name { text-align: left; max-width: 240px; }
+.gwb-design .topbar .repo-name { text-align: left; min-width: 0; max-width: 240px; }
+.gwb-design .top-btn { white-space: nowrap; flex-shrink: 0; }
+.gwb-design .topbar .sync-group, .gwb-design .topbar .top-right { flex-shrink: 0; }
 .gwb-design .repo-name i { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-.gwb-design .branch-pill b { max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gwb-design .repo-name b { display: flex; align-items: center; gap: 6px; max-width: 100%; }
+.gwb-design .repo-name b span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gwb-design .repo-name b svg, .gwb-design .gwb-worktree-picker { flex-shrink: 0; }
+.gwb-design .top-btn.gwb-back-btn { background: #1e3a8a; color: #fff; }
+.gwb-design .top-btn.gwb-back-btn:hover { background: #1e40af; color: #fff; }
+.gwb-design .branch-pill { min-width: 0; flex-shrink: 0; max-width: 25vw; }
+.gwb-design .branch-pill svg { flex-shrink: 0; }
+.gwb-design .branch-pill b { min-width: 0; max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gwb-design .topbar .logo { padding: 0; flex-shrink: 0; }
 .gwb-design .gwb-tabs { overflow-y: auto; }
 .gwb-design .gwb-tabs .nav-item { flex-shrink: 0; }
@@ -30,8 +39,13 @@
 .gwb-design .gwb-diff-number { user-select: none; }
 .gwb-design .gwb-raw-diff { font: 10.5px/1.6 var(--font-mono); white-space: pre; overflow: auto; margin: 0; padding: 10px; border: .5px solid var(--line); border-radius: 8px; }
 .gwb-design .diff-tip { flex-wrap: wrap; }
-.gwb-design .gwb-history-split { display: flex; flex: 1; min-height: 0; }
-.gwb-design .gwb-history-list { overflow: hidden; }
+.gwb-design .gwb-history-split { display: flex; flex: 1; min-height: 0; position: relative; }
+.gwb-design .gwb-history-list { overflow: hidden; flex: 0 0 var(--gwb-history-width); }
+.gwb-design .gwb-history-resize { position: absolute; z-index: 2; top: 0; bottom: 0; left: var(--gwb-history-width); width: 8px; transform: translateX(-50%); cursor: col-resize; touch-action: none; }
+.gwb-design .gwb-history-resize::after { content: ""; position: absolute; inset: 0 3px; background: transparent; }
+.gwb-design .gwb-history-resize:hover::after, .gwb-design .gwb-history-resize:focus-visible::after, .gwb-design .is-resizing .gwb-history-resize::after { background: var(--accent); }
+.gwb-design .gwb-history-resize:focus-visible { outline: none; }
+.gwb-design .gwb-history-split.is-resizing, .gwb-design .gwb-history-split.is-resizing * { cursor: col-resize; user-select: none; }
 .gwb-design .history-rows { min-height: 0; }
 .gwb-design .history-bar { display: flex; gap: 6px; flex-direction: column; }
 .gwb-design .history-bar > div, .gwb-design .history-bar form { display: flex; align-items: center; gap: 6px; }
@@ -147,6 +161,7 @@ section.gwb-rebase-dialog.gwb-design { width: 720px; }
   .gwb-design .changes-list { width: 100%; max-height: 46%; flex: 0 0 auto; border-right: 0; border-bottom: .5px solid var(--line); padding: 10px; }
   .gwb-design .changes-list .commit-box { margin-top: 8px; }
   .gwb-design .history-list { flex: 0 0 40%; border-right: 0; border-bottom: .5px solid var(--line); }
+  .gwb-design .gwb-history-resize { display: none; }
   .gwb-design .gwb-page { padding: 12px 10px; }
   .gwb-design .gwb-section-head, .gwb-design .gwb-section-head > div { flex-wrap: wrap; }
   .gwb-design .gwb-section-head p { display: none; }
@@ -160,7 +175,7 @@ section.gwb-rebase-dialog.gwb-design { width: 720px; }
   .gwb-design .gwb-rebase-step { flex-wrap: wrap; }
   .gwb-design .oplog-time { flex: 0 0 45px; }
 }
-@media (max-width: 480px) { .gwb-design .sync-group .top-btn span { display: none; } }
+@media (max-width: 480px) { .gwb-design .sync-group .top-btn:not(.gwb-back-btn) span { display: none; } }
 @media (prefers-reduced-motion: reduce) { .gwb-design *, .gwb-design *::before, .gwb-design *::after { transition: none !important; animation: none !important; } }
 .gwb-design .gwb-tag-info { display: flex; align-items: center; flex: 1; gap: 12px; min-width: 0; }
 .gwb-design .gwb-tag-info strong { font: 600 11.5px var(--font-mono); min-width: 120px; }

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Warning } from "@phosphor-icons/react";
+import type { ProjectView } from "@ash/shared";
 import type { GitActionRequest, GitView } from "@ash/shared/git-workbench";
 import { emptyCommitGuidance, gitChangeCount } from "@ash/shared/git-workbench";
 import {
@@ -31,6 +32,7 @@ const views = [
 export function GitWorkbench({
   projectId,
   projectName,
+  projects,
   root,
   taskId,
   view = "changes",
@@ -42,6 +44,7 @@ export function GitWorkbench({
 }: {
   projectId: string;
   projectName: string;
+  projects?: readonly ProjectView[];
   root?: string;
   taskId?: string;
   view?: GitView;
@@ -140,6 +143,7 @@ export function GitWorkbench({
       <WorkbenchHeader
         projectId={projectId}
         projectName={projectName}
+        projects={projects}
         view={view}
         workbench={w}
         ask={ask}

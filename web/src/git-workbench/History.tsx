@@ -7,6 +7,7 @@ import { DiffView } from "./DiffView.tsx";
 import { CommitGraphRow, useCommitGraph } from "./CommitGraph.tsx";
 import { WorkbenchMenu } from "./WorkbenchMenu.tsx";
 import { RebaseDialog } from "./RebaseDialog.tsx";
+import { HistorySplit } from "./HistorySplit.tsx";
 
 export function History({
   projectId,
@@ -219,7 +220,7 @@ export function History({
     }));
   return (
     <>
-      <div className="gwb-split gwb-history-split history-view">
+      <HistorySplit>
         <section
           className="gwb-history-list history-list"
           aria-label="提交历史"
@@ -419,7 +420,7 @@ export function History({
             error={detailError}
           />
         </section>
-      </div>
+      </HistorySplit>
       {rebase && (
         <RebaseDialog
           projectId={projectId}
