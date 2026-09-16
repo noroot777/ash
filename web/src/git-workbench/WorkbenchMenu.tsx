@@ -36,23 +36,31 @@ export function WorkbenchMenu({
   } | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const open = position !== null;
   const close = () => setPosition(null);
   useDismissable({
-    enabled: !!position,
+    enabled: open,
     containerRef: panel,
     onClose: close,
     restoreFocusRef: trigger,
   });
   useLayoutEffect(() => {
-    if (!position || variant !== "picker" || !panel.current) return;
-    const rect = panel.current.getBoundingClientRect();
-    const anchor = trigger.current!.getBoundingClientRect();
-    const left = Math.max(8, Math.min(anchor.left, window.innerWidth - rect.width - 8));
-    const top = Math.max(8, Math.min(anchor.bottom + 6, window.innerHeight - rect.height - 8));
-    if (left !== position.left || top !== position.top) setPosition({ left, top });
-  }, [position, variant]);
+    if (!open || variant !== "picker" || !panel.current) return;
+    const menu = panel.current;
+    const reposition = () => {
+      const rect = menu.getBoundingClientRect();
+      const anchor = trigger.current!.getBoundingClientRect();
+      const left = Math.max(8, Math.min(anchor.left, window.innerWidth - rect.width - 8));
+      const top = Math.max(8, Math.min(anchor.bottom + 6, window.innerHeight - rect.height - 8));
+      setPosition((current) => !current || (left === current.left && top === current.top) ? current : { left, top });
+    };
+    reposition();
+    const observer = new ResizeObserver(reposition);
+    observer.observe(menu);
+    return () => observer.disconnect();
+  }, [open, variant]);
   useEffect(() => {
-    if (!position) return;
+    if (!open) return;
     (panel.current?.querySelector<HTMLButtonElement>("button:not(:disabled)") || panel.current)?.focus();
     const closeOnScroll = (event: Event) => {
       if (event.target instanceof Node && panel.current?.contains(event.target)) return;
@@ -64,7 +72,7 @@ export function WorkbenchMenu({
       window.removeEventListener("scroll", closeOnScroll, true);
       window.removeEventListener("resize", close);
     };
-  }, [position]);
+  }, [open]);
   return (
     <>
       <button

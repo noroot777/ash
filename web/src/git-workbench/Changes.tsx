@@ -419,12 +419,12 @@ export function Changes({
                       : "暂存所选改动",
                   onDiscard:
                     selection.source === "unstaged"
-                      ? (lines) =>
+                      ? (lines, scope) =>
                           ask({
-                            title: "丢弃这个改动块",
+                            title: scope === "selection" ? "丢弃所选改动" : "丢弃这个改动块",
                             danger: true,
                             typed: "丢弃",
-                            message: `${selection.path}：仅还原选定改动块，保留其他未暂存改动及暂存区。未提交内容无法从历史备份找回。`,
+                            message: `${selection.path}：${scope === "selection" ? `仅还原勾选的 ${lines.length} 行改动` : "还原这个改动块内的全部改动"}，保留其他未暂存改动及暂存区。未提交内容无法从历史备份找回。`,
                             action: () => ({
                               kind: "discard-patch",
                               path: selection.path,

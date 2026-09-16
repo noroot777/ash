@@ -15,7 +15,7 @@ export function DiffView({
   select?: {
     label: string;
     onApply: (lines: number[]) => void;
-    onDiscard?: (lines: number[]) => void;
+    onDiscard?: (lines: number[], scope: "hunk" | "selection") => void;
   };
   disabled?: boolean;
 }) {
@@ -171,8 +171,8 @@ export function DiffView({
                       {select.onDiscard && (
                         <button
                           className="mini-btn tone-danger"
-                          disabled={disabled || !indices.length}
-                          onClick={() => select.onDiscard?.(indices)}
+                          disabled={disabled || !indices.length || selected.size > 0}
+                          onClick={() => select.onDiscard?.(indices, "hunk")}
                         >
                           <Trash size={12} />
                           丢弃此块
@@ -229,7 +229,9 @@ export function DiffView({
       {canSelect && (
         <div className="gwb-diff-tools diff-tip">
           <Sparkle size={12} />
-          <span>点选具体改动行可只暂存那几行 · 已选 {selected.size} 行</span>
+          <span>
+            点选具体改动行可{select.onDiscard ? "暂存或丢弃所选内容" : "只操作那几行"} · 已选 {selected.size} 行
+          </span>
           <button
             className="mini-btn tone-accent"
             disabled={disabled || !selected.size}
@@ -240,6 +242,21 @@ export function DiffView({
           >
             {select.label}
           </button>
+          {select.onDiscard && (
+            <button
+              className="mini-btn tone-danger"
+              disabled={disabled || !selected.size}
+              onClick={() => select.onDiscard?.([...selected], "selection")}
+            >
+              <Trash size={12} />
+              丢弃所选改动
+            </button>
+          )}
+          {!!selected.size && (
+            <button className="mini-btn" disabled={disabled} onClick={() => setSelected(new Set())}>
+              清除选择
+            </button>
+          )}
         </div>
       )}
     </div>

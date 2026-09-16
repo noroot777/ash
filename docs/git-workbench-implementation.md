@@ -232,3 +232,15 @@ Windows 真机本轮验证：通过局域网传输 `git format-patch`，校验 S
 `npm -w web run build` 与既有 `test:git-workbench-header-resize` 均通过，保留真实临时仓库的项目切换、刷新与返回验证。另用本工作目录的前端读取真实 ash 的 6 个项目和 11 个工作树，人工核对桌面两个菜单、320px 项目菜单及 390px 工作树菜单。验证了工作树选择后 URL 与分支更新、Esc 恢复触发器焦点、外部点击关闭，以及 End 键选中末项并自动滚动。长中文任务说明与路径均能保持清楚的层级。未新增永久测试文件；修改代码均少于 700 行，`git diff --check` 通过。
 
 本轮 Chrome 扩展探测仍返回 `unsupported Codex auth method: apikey`，界面验证使用独立临时 profile 的无头 Chromium，没有接管普通标签、激活 Chrome 或使用有头浏览器。截图和验证记录位于 `/Users/fjh/code/harness/data/runs/Y_sgd0mNlRXp/picker-polish-20260916/`。 验证时真实后端曾短暂不可达，出现一次 Git 状态读取 500，随后恢复并成功切换工作树；隔离仓库回归通过。临时浏览器、Vite 服务与浏览器会话文件已清理。
+
+## 选择范围与弹层定位审查修复（2026-09-16）
+
+本轮修复审查 `1Ytj0A98L0hh/round-1` 的 F2、F3。勾选差异行后禁用「丢弃此块」，新增「丢弃所选改动」并只传递勾选行号；确认框明确区分整块和所选行，保留输入「丢弃」与原有状态校验。取消确认保留勾选，「清除选择」恢复整块操作。后端沿用已有部分丢弃实现。
+
+项目与工作树选择器通过 `ResizeObserver` 跟踪实际面板尺寸，列表在打开期间增长或缩短时重新定位。焦点初始化与位置变化分离，重新定位不会抢走键盘焦点；关闭时清理观察器。
+
+`npm -w web run build` 通过（含类型与前端约定检查，仅有既有打包体积提示），后端 `test-git-workbench-partial-discard.ts` 与新增 `npm -w web run test:git-workbench-discard-menu` 均通过。新增浏览器回归已接入工作台测试入口：同一块内只选择 A，核对实际请求仅含该行、A 被还原而 B/暂存区/HEAD/其他文件保留；取消和错误确认不写入，清除选择后仍可整块丢弃。1200×460 视口下，打开的工作树列表从 1 项增长至 9 项再缩短至 3 项，面板底部始终位于视口内，内部滚动与焦点保持正常。脚本语法及 `git diff --check` 通过，修改的代码文件均少于 700 行。
+
+审查 F1 已在 `main` 独立复现，属于既有端到端等待不稳定问题，本轮没有改动该流程，也没有重跑或宣称完整旧测试链通过。
+
+浏览器先探测 Chrome 扩展具名后台会话，返回 `unsupported Codex auth method: apikey`，因此降级使用独立临时 profile 的无头 Chromium。未接管普通标签、激活 Chrome 或使用有头模式；验证使用独立真实 Git 仓库与后端，没有访问正在运行的 `:4317` 实例。浏览器、Vite、测试后端及临时仓库已关闭或清理。截图、尺寸、请求行号、通过记录与扩展错误保存在 `/Users/fjh/code/harness/data/runs/Y_sgd0mNlRXp/review-f2-f3-20260916/`，已人工核对丢弃确认、丢弃结果与增长后的弹层截图。
