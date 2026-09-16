@@ -6,8 +6,8 @@
 //   parseAppSettingsPatch —— 刷新间隔按小时计的边界
 // 跑:npm -w server run test:skills
 //
-// 只用**项目级**技能根(`<cwd>/.claude/skills`、`<cwd>/.codex/skills`),
-// 这样不会读写用户真实的 ~/.claude;末尾那段会开 DB,库也指在临时目录里。
+// 项目级技能根与 Codex 用户目录都关在临时目录里，不读写用户真实配置；
+// 末尾那段会开 DB，库也同样指在临时目录里。
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
@@ -16,10 +16,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = mkdtempSync(join(tmpdir(), "ash-skills-"));
+const codexHome = join(root, "codex-home");
 
 // 先把库指到临时目录再 import:init 校准的冷启动来源就落在库文件旁边(见
 // skill-calibration-store.ts),不这么做这条测试会去写真实的 data/。
 process.env.ASH_DB = join(root, "settings-test.db");
+process.env.CODEX_HOME = codexHome;
 
 // 收尾要删的目录里就装着那个库文件,而 Windows 删不掉还开着的文件(理由见
 // tmp-db.ts 的 releaseTmpDb)——断言全过,却在退出时抛 EBUSY 把整条测试判红。
@@ -46,6 +48,13 @@ function writeSkill(cli: "claude" | "codex", name: string, description: string):
   mkdirSync(dir, { recursive: true });
   const file = join(dir, "SKILL.md");
   writeFileSync(file, `---\nname: ${name}\ndescription: ${description}\n---\n\n正文\n`);
+  return dir;
+}
+
+function writeCodexSystemSkill(name: string, description: string): string {
+  const dir = join(codexHome, "skills", ".system", name);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: ${description}\n---\n\n正文\n`);
   return dir;
 }
 
@@ -94,12 +103,20 @@ assert.equal(find(list, ALPHA)?.description, "改过的描述", "改了 descript
 
 // ── 软链 + 跨 CLI 去重:同一份物理技能给 codex 也挂一个,claude 侧打「也在」角标 ──
 // 用 statSync 跟随软链才看得见;readdirSync(withFileTypes).isDirectory() 会静默漏掉。
+writeCodexSystemSkill("imagegen", "生成或编辑图片");
 mkdirSync(join(root, ".codex", "skills"), { recursive: true });
 symlinkSync(alphaDir, join(root, ".codex", "skills", ALPHA));
 resetSkillCache();
 const codex = listSkills({ agentType: "codex", cwd: root });
 assert.ok(find(codex, ALPHA), "软链过来的技能目录必须被 codex 看见");
 assert.ok(!find(codex, BETA), "没软链过来的不该出现在 codex 清单里");
+assert.equal(find(codex, "imagegen")?.command, "/imagegen", "Codex 系统技能应该出现在斜杠菜单里");
+assert.equal(find(codex, "imagegen")?.source, "builtin", "`.system` 下的技能要标成内置来源");
+const imagegenInvocation = withSkillInvocation({ agentType: "codex", cwd: root, text: "/imagegen 画一张图" });
+assert.ok(
+  imagegenInvocation.includes(JSON.stringify(join(find(codex, "imagegen")!.realPath!, "SKILL.md"))),
+  "选择 Codex 系统技能时要注入准确的 SKILL.md 路径",
+);
 list = listSkills({ agentType: "claude", cwd: root });
 assert.deepEqual(find(list, ALPHA)?.alsoIn, ["codex"], "同一份物理技能要标出还在哪个 CLI 里");
 assert.deepEqual(find(list, BETA)?.alsoIn, [], "只有一处的不该标角标");

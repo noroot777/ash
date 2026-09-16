@@ -165,6 +165,9 @@ function rootsFor(agentType: Scannable, cwd: string, userId: string | null): Roo
       return [
         { dir: join(cwd, ".codex", "skills"), source: "project", prefix: "" },
         { dir: join(home, "skills"), source: "user", prefix: "" },
+        // Codex 自带的系统技能住在隐藏的 `.system` 子目录；把它单列成根，
+        // 既不用让通用 walker 递归隐藏目录，也能在菜单里如实标成「内置」。
+        { dir: join(home, "skills", ".system"), source: "builtin", prefix: "" },
       ];
     case "gemini":
       return [
