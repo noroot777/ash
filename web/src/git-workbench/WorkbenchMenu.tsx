@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { DotsThree } from "@phosphor-icons/react";
+import { Check, DotsThree } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
 
 export type MenuItem = {
@@ -10,6 +10,10 @@ export type MenuItem = {
   danger?: boolean;
   separator?: boolean;
   icon?: ReactNode;
+  description?: string;
+  selected?: boolean;
+  labelMono?: boolean;
+  descriptionMono?: boolean;
 };
 export function WorkbenchMenu({
   label,
@@ -17,12 +21,14 @@ export function WorkbenchMenu({
   items,
   disabled,
   className = "icon-btn",
+  variant = "menu",
 }: {
   label: string;
   children?: ReactNode;
   items: MenuItem[];
   disabled?: boolean;
   className?: string;
+  variant?: "menu" | "picker";
 }) {
   const [position, setPosition] = useState<{
     left: number;
@@ -37,11 +43,17 @@ export function WorkbenchMenu({
     onClose: close,
     restoreFocusRef: trigger,
   });
+  useLayoutEffect(() => {
+    if (!position || variant !== "picker" || !panel.current) return;
+    const rect = panel.current.getBoundingClientRect();
+    const anchor = trigger.current!.getBoundingClientRect();
+    const left = Math.max(8, Math.min(anchor.left, window.innerWidth - rect.width - 8));
+    const top = Math.max(8, Math.min(anchor.bottom + 6, window.innerHeight - rect.height - 8));
+    if (left !== position.left || top !== position.top) setPosition({ left, top });
+  }, [position, variant]);
   useEffect(() => {
     if (!position) return;
-    panel.current
-      ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
-      ?.focus();
+    (panel.current?.querySelector<HTMLButtonElement>("button:not(:disabled)") || panel.current)?.focus();
     const closeOnScroll = (event: Event) => {
       if (event.target instanceof Node && panel.current?.contains(event.target)) return;
       close();
@@ -86,9 +98,10 @@ export function WorkbenchMenu({
           <div className="gwb-design gwb-menu-portal">
             <div
               ref={panel}
-              className="menu"
+              className={`menu${variant === "picker" ? " gwb-picker-menu" : ""}`}
               role="menu"
               aria-label={label}
+              tabIndex={-1}
               style={position}
               onKeyDown={(event) => {
                 if (
@@ -116,26 +129,44 @@ export function WorkbenchMenu({
                 buttons[next]?.focus();
               }}
             >
-              {items.map((item, index) => (
-                <div key={index}>
-                  {item.separator && (
-                    <div className="menu-sep" role="separator" />
-                  )}
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className={`menu-item${item.danger ? " tone-danger" : ""}`}
-                    disabled={item.disabled}
-                    onClick={() => {
-                      close();
-                      item.onClick();
-                    }}
-                  >
-                    {item.icon}
-                    {item.label}
-                  </button>
+              {variant === "picker" && (
+                <div className="gwb-picker-heading" aria-hidden="true">
+                  <strong>{label}</strong>
+                  <span>{items.length}</span>
                 </div>
-              ))}
+              )}
+              <div className={variant === "picker" ? "gwb-picker-list" : undefined}>
+                {items.map((item, index) => (
+                  <div key={index}>
+                    {item.separator && (
+                      <div className="menu-sep" role="separator" />
+                    )}
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={`menu-item${item.danger ? " tone-danger" : ""}${item.selected ? " is-current" : ""}`}
+                      aria-label={item.description ? `${item.label} · ${item.description}` : undefined}
+                      aria-current={item.selected || undefined}
+                      disabled={item.disabled}
+                      onClick={() => {
+                        close();
+                        item.onClick();
+                      }}
+                    >
+                      {variant === "picker" ? (
+                        <>
+                          <span className="gwb-picker-icon" aria-hidden="true">{item.icon}</span>
+                          <span className="gwb-picker-copy">
+                            <span className={`gwb-picker-name${item.labelMono ? " is-mono" : ""}`}>{item.label}</span>
+                            {item.description && <span className={`gwb-picker-description${item.descriptionMono ? " is-mono" : ""}`}>{item.description}</span>}
+                          </span>
+                          {item.selected && <span className="gwb-picker-current" aria-hidden="true"><Check size={11} weight="bold" />当前</span>}
+                        </>
+                      ) : <>{item.icon}{item.label}</>}
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>,
           document.body,

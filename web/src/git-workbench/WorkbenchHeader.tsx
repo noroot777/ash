@@ -5,7 +5,6 @@ import {
   ArrowUp,
   CaretDown,
   CaretRight,
-  Check,
   GitBranch,
   Lock,
   Plus,
@@ -51,18 +50,22 @@ export function WorkbenchHeader({
         <WorkbenchMenu
           className="repo-name"
           label="选择 Git 项目"
+          variant="picker"
           disabled={w.busy}
           items={
             projects
               ? projects
                   .filter((project) => project.health.exists && project.health.isRepo)
                   .map((project) => ({
-                    label: `${project.name} · ${project.repoPath}`,
-                    icon: project.id === projectId ? <Check size={14} /> : <GitBranch size={14} />,
+                    label: project.name,
+                    description: project.repoPath,
+                    descriptionMono: true,
+                    icon: <GitBranch size={16} />,
+                    selected: project.id === projectId,
                     disabled: project.id === projectId,
                     onClick: () => openGitWorkbench({ projectId: project.id, view }),
                   }))
-              : [{ label: projectName, disabled: true, onClick: () => {} }]
+              : [{ label: projectName, selected: true, icon: <GitBranch size={16} />, disabled: true, onClick: () => {} }]
           }
         >
           <b>
@@ -122,9 +125,15 @@ export function WorkbenchHeader({
         <WorkbenchMenu
           className="top-btn gwb-worktree-picker"
           label="选择工作树"
+          variant="picker"
           disabled={w.busy || !data}
           items={(data?.worktrees || []).map((tree) => ({
-            label: `${tree.branch || "游离 HEAD"} · ${tree.path === data?.repo ? "项目主仓" : tree.taskTitle || "手动工作树"}`,
+            label: tree.branch || "游离 HEAD",
+            labelMono: true,
+            description: tree.path === data?.repo ? "项目主仓" : tree.taskTitle || "手动工作树",
+            icon: <TreeStructure size={16} />,
+            selected: tree.path === data?.root,
+            disabled: tree.path === data?.root,
             onClick: () => openGitWorkbench({ projectId, root: tree.path, view }),
           }))}
         >

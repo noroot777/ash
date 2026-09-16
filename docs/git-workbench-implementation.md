@@ -224,3 +224,11 @@ Windows 真机本轮验证：通过局域网传输 `git format-patch`，校验 S
 `npm -w web run build` 通过，包含类型与前端约定检查，只有既有打包体积提示。新增 `npm -w web run test:git-workbench-header-resize` 通过：两个独立真实 Git 仓库验证项目切换、历史与路径更新、刷新、返回，以及非 Git 项目过滤；页面实际拖动验证两端宽度限制、键盘调宽和双击复位，并检查 1440/1024/820/390px 布局。既有 `test:git-workbench-design` 通过，保留七视图尺寸与真实 WorkspaceShell 进出回归；最后的分支宽度微调由专项再次验证。所有修改代码文件均不超过 700 行，`git diff --check` 通过。
 
 本轮先重试 Chrome 扩展具名后台会话，失败原文为 `unsupported Codex auth method: apikey`，因此降级为独立临时 profile 的无头 Chromium。没有接管普通标签、激活 Chrome 或使用有头浏览器。构建日志、浏览器记录、尺寸和截图保存于 `/Users/fjh/code/harness/data/runs/Y_sgd0mNlRXp/header-resize-20260916/`；已人工查看项目下拉、桌面分栏、中等宽度顶部及手机截图。测试后端、Vite、浏览器和临时仓库已清理。
+
+## 项目与工作树选择弹层美化（2026-09-16）
+
+两个选择器使用统一的两行列表：主行展示项目名或分支，副行展示路径或任务说明；路径与分支使用等宽字体。增加标题、数量、图标底块及明确的「当前」标记，当前项保持正常可读的对比度。菜单宽度增加至 360px，窄屏保留两侧边距；描述最多两行，长列表在固定标题下滚动。其他操作菜单继续使用原有紧凑样式。
+
+`npm -w web run build` 与既有 `test:git-workbench-header-resize` 均通过，保留真实临时仓库的项目切换、刷新与返回验证。另用本工作目录的前端读取真实 ash 的 6 个项目和 11 个工作树，人工核对桌面两个菜单、320px 项目菜单及 390px 工作树菜单。验证了工作树选择后 URL 与分支更新、Esc 恢复触发器焦点、外部点击关闭，以及 End 键选中末项并自动滚动。长中文任务说明与路径均能保持清楚的层级。未新增永久测试文件；修改代码均少于 700 行，`git diff --check` 通过。
+
+本轮 Chrome 扩展探测仍返回 `unsupported Codex auth method: apikey`，界面验证使用独立临时 profile 的无头 Chromium，没有接管普通标签、激活 Chrome 或使用有头浏览器。截图和验证记录位于 `/Users/fjh/code/harness/data/runs/Y_sgd0mNlRXp/picker-polish-20260916/`。 验证时真实后端曾短暂不可达，出现一次 Git 状态读取 500，随后恢复并成功切换工作树；隔离仓库回归通过。临时浏览器、Vite 服务与浏览器会话文件已清理。
