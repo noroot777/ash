@@ -12,7 +12,7 @@ import { gitChangeCount, emptyCommitGuidance } from "@ash/shared/git-workbench";
 import type { Workbench } from "./useWorkbench.ts";
 import type { AskAction } from "./ActionDialog.tsx";
 import { workbenchApi } from "./api.ts";
-import { DiffView } from "./DiffView.tsx";
+import { DiffView, discardLineGuidance } from "./DiffView.tsx";
 
 type Source = "staged" | "unstaged" | "untracked";
 const labels: Record<Source, string> = {
@@ -424,7 +424,7 @@ export function Changes({
                             title: scope === "selection" ? "丢弃所选改动" : "丢弃这个改动块",
                             danger: true,
                             typed: "丢弃",
-                            message: `${selection.path}：${scope === "selection" ? `仅还原勾选的 ${lines.length} 行改动` : "还原这个改动块内的全部改动"}，保留其他未暂存改动及暂存区。未提交内容无法从历史备份找回。`,
+                            message: `${selection.path}：${scope === "selection" ? `逐行撤销勾选的 ${lines.length} 行差异。${discardLineGuidance}` : "还原这个改动块内的全部改动。"}保留其他未暂存改动及暂存区。未提交内容无法从历史备份找回。`,
                             action: () => ({
                               kind: "discard-patch",
                               path: selection.path,

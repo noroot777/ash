@@ -2,6 +2,9 @@ import { useState } from "react";
 import { Plus, Sparkle, Trash } from "@phosphor-icons/react";
 import type { GitDiff } from "@ash/shared/git-workbench";
 
+export const discardLineGuidance =
+  "丢弃时，所选＋行会从文件中删除，所选−行会恢复。修改只选＋行时，被替换的原始行不会恢复；只选−行时，新增内容会保留。完整还原修改需同时勾选对应的 − / + 行。";
+
 export function DiffView({
   value,
   loading,
@@ -258,6 +261,11 @@ export function DiffView({
             </button>
           )}
         </div>
+      )}
+      {canSelect && select.onDiscard && selected.size > 0 && (
+        <p className="gwb-diff-discard-hint" role="note">
+          {discardLineGuidance}
+        </p>
       )}
     </div>
   );

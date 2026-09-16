@@ -39,6 +39,7 @@
 .gwb-design .gwb-diff-number { user-select: none; }
 .gwb-design .gwb-raw-diff { font: 10.5px/1.6 var(--font-mono); white-space: pre; overflow: auto; margin: 0; padding: 10px; border: .5px solid var(--line); border-radius: 8px; }
 .gwb-design .diff-tip { flex-wrap: wrap; }
+.gwb-design .gwb-diff-discard-hint { margin: 8px 2px 0; color: var(--muted); font-size: 11px; line-height: 1.65; overflow-wrap: anywhere; }
 .gwb-design .gwb-history-split { display: flex; flex: 1; min-height: 0; position: relative; }
 .gwb-design .gwb-history-list { overflow: hidden; flex: 0 0 var(--gwb-history-width); }
 .gwb-design .gwb-history-resize { position: absolute; z-index: 2; top: 0; bottom: 0; left: var(--gwb-history-width); width: 8px; transform: translateX(-50%); cursor: col-resize; touch-action: none; }

@@ -69,6 +69,29 @@ const box = locator => locator.evaluate(element => {
     height: rect.height,
   };
 });
+const discardGuidance = [
+  "所选＋行会从文件中删除",
+  "所选−行会恢复",
+  "修改只选＋行时，被替换的原始行不会恢复",
+  "只选−行时，新增内容会保留",
+  "完整还原修改需同时勾选对应的 − / + 行",
+];
+const assertGuidance = async locator => {
+  const text = await locator.innerText();
+  for (const phrase of discardGuidance) assert(text.includes(phrase), `missing guidance: ${phrase}`);
+};
+const assertInsideViewport = async (locator, width, height, label) => {
+  const rect = await box(locator);
+  assert(rect.left >= 0 && rect.right <= width, `${label} must fit viewport width: ${JSON.stringify(rect)}`);
+  assert(rect.top >= 0 && rect.bottom <= height, `${label} must fit viewport height: ${JSON.stringify(rect)}`);
+  return rect;
+};
+const diffIndex = async locator => {
+  const label = await locator.getAttribute("aria-label");
+  const index = Number(/选择第 (\d+) 行/.exec(label || "")?.[1]) - 1;
+  assert(Number.isInteger(index) && index >= 0, `diff row must expose its index: ${label}`);
+  return index;
+};
 
 const backend = startBackend();
 let browser;
@@ -91,17 +114,43 @@ try {
   const baseLines = Array.from({ length: 30 }, (_, index) => `line ${index + 1}`);
   const basePair = `${baseLines.join("\n")}\n`;
   const pairPath = join(info.root, "pair.txt");
+  const plusOnlyPath = join(info.root, "modify-plus.txt");
+  const minusOnlyPath = join(info.root, "modify-minus.txt");
+  const pairedPath = join(info.root, "modify-paired.txt");
   const stagedPath = join(info.root, "staged.txt");
   const otherPath = join(info.root, "other.txt");
+  const modificationBase = prefix => Array.from(
+    { length: 30 },
+    (_, index) => `${prefix} ${index + 1}`,
+  );
+  const plusOnlyBase = modificationBase("plus");
+  const minusOnlyBase = modificationBase("minus");
+  const pairedBase = modificationBase("paired");
   writeFileSync(pairPath, basePair);
+  writeFileSync(plusOnlyPath, `${plusOnlyBase.join("\n")}\n`);
+  writeFileSync(minusOnlyPath, `${minusOnlyBase.join("\n")}\n`);
+  writeFileSync(pairedPath, `${pairedBase.join("\n")}\n`);
   writeFileSync(stagedPath, "staged base\n");
   writeFileSync(otherPath, "other base\n");
-  git("add", "--", "pair.txt", "staged.txt", "other.txt");
+  git(
+    "add", "--",
+    "pair.txt", "modify-plus.txt", "modify-minus.txt", "modify-paired.txt",
+    "staged.txt", "other.txt",
+  );
   git("commit", "-qm", "add discard browser fixtures");
   const changedLines = [...baseLines];
   changedLines.splice(10, 0, "CHANGE-A");
   changedLines.splice(14, 0, "CHANGE-B");
   writeFileSync(pairPath, `${changedLines.join("\n")}\n`);
+  const plusOnlyChanged = [...plusOnlyBase];
+  plusOnlyChanged[19] = "plus 20 EDITED";
+  writeFileSync(plusOnlyPath, `${plusOnlyChanged.join("\n")}\n`);
+  const minusOnlyChanged = [...minusOnlyBase];
+  minusOnlyChanged[19] = "minus 20 EDITED";
+  writeFileSync(minusOnlyPath, `${minusOnlyChanged.join("\n")}\n`);
+  const pairedChanged = [...pairedBase];
+  pairedChanged[19] = "paired 20 EDITED";
+  writeFileSync(pairedPath, `${pairedChanged.join("\n")}\n`);
   writeFileSync(stagedPath, "staged change\n");
   git("add", "--", "staged.txt");
   writeFileSync(otherPath, "other worktree change\n");
@@ -150,25 +199,42 @@ try {
   });
   await page.goto(url.href);
   await page.getByRole("navigation", { name: "Git 工作台视图" }).waitFor();
+  const submitSelectionDiscard = async (currentDialog, expectedLines) => {
+    await currentDialog.getByLabel("输入目标以确认").fill("丢弃");
+    const actionRequest = page.waitForRequest(request =>
+      request.method() === "POST" && /\/git\/workbench\/actions$/.test(request.url()),
+    );
+    const actionResponse = page.waitForResponse(response =>
+      response.request().method() === "POST" && /\/git\/workbench\/actions$/.test(response.url()),
+    );
+    await currentDialog.getByRole("button", { name: "丢弃所选改动", exact: true }).click();
+    const body = (await actionRequest).postDataJSON();
+    assert.equal(body.action.kind, "discard-patch");
+    assert.deepEqual(body.action.lines, expectedLines);
+    assert.equal((await actionResponse).ok(), true);
+    await currentDialog.waitFor({ state: "detached" });
+    return body;
+  };
   await page.getByLabel("pair.txt", { exact: true }).click();
   await page.getByLabel("Git 差异").waitFor();
 
   const selectedA = page.getByRole("button", { name: /选择第 .* 行 \+CHANGE-A$/ });
   await selectedA.waitFor();
-  const selectedLabel = await selectedA.getAttribute("aria-label");
-  const selectedLine = Number(/选择第 (\d+) 行/.exec(selectedLabel || "")?.[1]) - 1;
-  assert(Number.isInteger(selectedLine) && selectedLine >= 0, "selected A must expose its diff line index");
+  const selectedLine = await diffIndex(selectedA);
   await selectedA.click();
   const hunkDiscard = page.getByRole("button", { name: "丢弃此块", exact: true });
   assert.equal(await hunkDiscard.count(), 1, "A and B must share one hunk");
   assert.equal(await hunkDiscard.isDisabled(), true, "hunk discard must disable while any row is selected");
   await page.getByText("已选 1 行", { exact: false }).waitFor();
+  await assertGuidance(page.getByRole("note"));
 
   const beforeConfirm = fingerprint();
   await page.getByRole("button", { name: "丢弃所选改动", exact: true }).click();
   let dialog = page.getByRole("dialog", { name: "丢弃所选改动" });
   await dialog.waitFor();
-  assert.match(await dialog.innerText(), /仅还原勾选的 1 行改动/);
+  assert.match(await dialog.innerText(), /逐行撤销勾选的 1 行差异/);
+  await assertGuidance(dialog);
+  await assertInsideViewport(dialog, 1200, 760, "desktop selection confirmation");
   await page.screenshot({ path: join(output, "discard-selection-confirm.png") });
   await dialog.getByRole("button", { name: "取消", exact: true }).click();
   await dialog.waitFor({ state: "detached" });
@@ -228,6 +294,111 @@ try {
   assert.equal((await hunkResponse).ok(), true);
   await dialog.waitFor({ state: "detached" });
   assert.equal(readFileSync(pairPath, "utf8"), basePair, "hunk discard must remove the remaining B change");
+  assert.equal(git("rev-parse", "HEAD"), preserved.head);
+  assert.equal(git("write-tree"), preserved.index);
+  assert.equal(git("diff", "--cached", "--binary"), preserved.cached);
+  assert.equal(readFileSync(otherPath, "utf8"), preserved.other);
+
+  // 修改型差异只选 +：逐行撤销会删除新行，但不会恢复未选中的原始行。
+  await page.setViewportSize({ width: 1200, height: 760 });
+  await page.getByLabel("modify-plus.txt", { exact: true }).click();
+  const plusOld = page.getByRole("button", { name: /选择第 .* 行 -plus 20$/ });
+  const plusNew = page.getByRole("button", { name: /选择第 .* 行 \+plus 20 EDITED$/ });
+  await Promise.all([plusOld.waitFor(), plusNew.waitFor()]);
+  const plusIndex = await diffIndex(plusNew);
+  await plusNew.click();
+  let guidance = page.getByRole("note");
+  await guidance.waitFor();
+  await assertGuidance(guidance);
+  await guidance.scrollIntoViewIfNeeded();
+  await assertInsideViewport(guidance, 1200, 760, "desktop discard guidance");
+  await page.screenshot({ path: join(output, "modify-plus-selected-desktop.png") });
+  await page.getByRole("button", { name: "丢弃所选改动", exact: true }).click();
+  dialog = page.getByRole("dialog", { name: "丢弃所选改动" });
+  await dialog.waitFor();
+  assert.match(await dialog.innerText(), /逐行撤销勾选的 1 行差异/);
+  await assertGuidance(dialog);
+  const plusDialogRect = await assertInsideViewport(
+    dialog, 1200, 760, "desktop modification confirmation",
+  );
+  await page.screenshot({ path: join(output, "modify-plus-confirm-desktop.png") });
+  const plusBody = await submitSelectionDiscard(dialog, [plusIndex]);
+  const plusExpected = plusOnlyBase.filter((_, index) => index !== 19);
+  assert.equal(
+    readFileSync(plusOnlyPath, "utf8"),
+    `${plusExpected.join("\n")}\n`,
+    "selecting only + must delete the edited line without restoring the unselected original",
+  );
+  assert.equal(git("status", "--porcelain", "--", "modify-plus.txt"), "M modify-plus.txt");
+  assert.equal(git("rev-parse", "HEAD"), preserved.head);
+  assert.equal(git("write-tree"), preserved.index);
+  assert.equal(git("diff", "--cached", "--binary"), preserved.cached);
+  assert.equal(readFileSync(otherPath, "utf8"), preserved.other);
+  await page.screenshot({ path: join(output, "modify-plus-result.png") });
+
+  // 修改型差异只选 -：恢复原始行，同时保留未选中的新增内容。
+  await page.getByLabel("modify-minus.txt", { exact: true }).click();
+  const minusOld = page.getByRole("button", { name: /选择第 .* 行 -minus 20$/ });
+  const minusNew = page.getByRole("button", { name: /选择第 .* 行 \+minus 20 EDITED$/ });
+  await Promise.all([minusOld.waitFor(), minusNew.waitFor()]);
+  const minusIndex = await diffIndex(minusOld);
+  await minusOld.click();
+  guidance = page.getByRole("note");
+  await assertGuidance(guidance);
+  await page.getByRole("button", { name: "丢弃所选改动", exact: true }).click();
+  dialog = page.getByRole("dialog", { name: "丢弃所选改动" });
+  await dialog.waitFor();
+  assert.match(await dialog.innerText(), /逐行撤销勾选的 1 行差异/);
+  await assertGuidance(dialog);
+  const minusBody = await submitSelectionDiscard(dialog, [minusIndex]);
+  const minusExpected = [...minusOnlyChanged];
+  minusExpected.splice(19, 0, "minus 20");
+  assert.equal(
+    readFileSync(minusOnlyPath, "utf8"),
+    `${minusExpected.join("\n")}\n`,
+    "selecting only - must restore the original and preserve the unselected edited line",
+  );
+  assert.equal(git("status", "--porcelain", "--", "modify-minus.txt"), "M modify-minus.txt");
+  assert.equal(git("write-tree"), preserved.index, "line discard must not change staged content");
+
+  // 修改型差异同时选择 -/+：在 390px 下完整还原，提示和确认框均不得裁切。
+  await page.getByLabel("modify-paired.txt", { exact: true }).click();
+  const pairedOld = page.getByRole("button", { name: /选择第 .* 行 -paired 20$/ });
+  const pairedNew = page.getByRole("button", { name: /选择第 .* 行 \+paired 20 EDITED$/ });
+  await Promise.all([pairedOld.waitFor(), pairedNew.waitFor()]);
+  const pairedIndices = [await diffIndex(pairedOld), await diffIndex(pairedNew)];
+  await page.setViewportSize({ width: 390, height: 844 });
+  await pairedOld.click();
+  await pairedNew.click();
+  guidance = page.getByRole("note");
+  await guidance.waitFor();
+  await assertGuidance(guidance);
+  await guidance.scrollIntoViewIfNeeded();
+  const narrowGuidanceRect = await assertInsideViewport(
+    guidance, 390, 844, "390px discard guidance",
+  );
+  const narrowLayout = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+  }));
+  assert.equal(narrowLayout.scrollWidth, narrowLayout.clientWidth, "390px selection must not overflow horizontally");
+  await page.screenshot({ path: join(output, "modify-paired-selected-390.png") });
+  await page.getByRole("button", { name: "丢弃所选改动", exact: true }).click();
+  dialog = page.getByRole("dialog", { name: "丢弃所选改动" });
+  await dialog.waitFor();
+  assert.match(await dialog.innerText(), /逐行撤销勾选的 2 行差异/);
+  await assertGuidance(dialog);
+  const narrowDialogRect = await assertInsideViewport(
+    dialog, 390, 844, "390px modification confirmation",
+  );
+  await page.screenshot({ path: join(output, "modify-paired-confirm-390.png") });
+  const pairedBody = await submitSelectionDiscard(dialog, pairedIndices);
+  assert.equal(
+    readFileSync(pairedPath, "utf8"),
+    `${pairedBase.join("\n")}\n`,
+    "selecting both sides of a modification must restore the original file",
+  );
+  assert.equal(git("status", "--porcelain", "--", "modify-paired.txt"), "");
   assert.equal(git("rev-parse", "HEAD"), preserved.head);
   assert.equal(git("write-tree"), preserved.index);
   assert.equal(git("diff", "--cached", "--binary"), preserved.cached);
@@ -310,6 +481,26 @@ try {
       index: preserved.index,
       cachedDiffPreserved: git("diff", "--cached", "--binary") === preserved.cached,
       otherFilePreserved: readFileSync(otherPath, "utf8") === preserved.other,
+      modificationPlusOnly: {
+        selectedLines: plusBody.action.lines,
+        originalRestored: readFileSync(plusOnlyPath, "utf8").includes("plus 20\n"),
+        editedPresent: readFileSync(plusOnlyPath, "utf8").includes("plus 20 EDITED"),
+        lineCount: readFileSync(plusOnlyPath, "utf8").trimEnd().split("\n").length,
+        dialog: plusDialogRect,
+      },
+      modificationMinusOnly: {
+        selectedLines: minusBody.action.lines,
+        originalPresent: readFileSync(minusOnlyPath, "utf8").includes("minus 20\n"),
+        editedPresent: readFileSync(minusOnlyPath, "utf8").includes("minus 20 EDITED"),
+        lineCount: readFileSync(minusOnlyPath, "utf8").trimEnd().split("\n").length,
+      },
+      modificationPaired: {
+        selectedLines: pairedBody.action.lines,
+        clean: git("status", "--porcelain", "--", "modify-paired.txt") === "",
+        narrowGuidance: narrowGuidanceRect,
+        narrowDialog: narrowDialogRect,
+        narrowLayout,
+      },
     },
     picker: {
       viewport: { width: 1200, height: 460 },
@@ -341,6 +532,7 @@ if (passed) {
     join(output, "browser-run.txt"),
     [
       "Browser mode: isolated temporary-profile headless Chromium",
+      "R2-1 line-discard guidance and modification semantics regression: passed",
       "F2 selected-row and restored hunk browser regression: passed",
       "F3 live worktree growth/shrink picker regression: passed",
       "Cleanup: browser, Vite server, fixture backend, and temporary repositories completed",
