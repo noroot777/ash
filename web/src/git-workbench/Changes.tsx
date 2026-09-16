@@ -47,7 +47,14 @@ export function Changes({
     path: string;
     source: Source;
   } | null>(null);
-  const [diff, setDiff] = useState<GitDiff | null>(null);
+  const [diffResult, setDiffResult] = useState<{
+    selectionKey: string;
+    version: string;
+    value: GitDiff;
+  } | null>(null);
+  const selectionKey = JSON.stringify([projectId, data.root, selection?.source, selection?.path]);
+  const diff = diffResult?.selectionKey === selectionKey ? diffResult.value : null;
+  const diffReady = !!diff && diffResult?.version === data.version;
   const [diffError, setDiffError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
@@ -64,7 +71,6 @@ export function Changes({
           : "选择要提交的内容";
   useEffect(() => {
     let alive = true;
-    setDiff(null);
     setDiffError(null);
     if (
       !selection ||
@@ -72,6 +78,7 @@ export function Changes({
         (file) => file.path === selection.path,
       )
     ) {
+      setDiffResult(null);
       const source = (["unstaged", "staged", "untracked"] as const).find(
         (key) => data.status[key].some((file) => !file.nested),
       );
@@ -84,7 +91,7 @@ export function Changes({
     workbenchApi
       .diff(projectId, data.root, selection)
       .then((value) => {
-        if (alive) setDiff(value);
+        if (alive) setDiffResult({ selectionKey, version: data.version, value });
       })
       .catch((error: Error) => {
         if (alive) setDiffError(error.message);
@@ -95,7 +102,7 @@ export function Changes({
     return () => {
       alive = false;
     };
-  }, [projectId, data.root, data.version, selection]);
+  }, [projectId, data.root, data.version, selection, selectionKey]);
   const discard = (files: GitFile[], source: Source) =>
     ask({
       title: source === "untracked" ? "删除未跟踪文件" : "丢弃未暂存改动",
@@ -405,13 +412,13 @@ export function Changes({
           )}
         </div>
         <DiffView
-          key={`${selection?.path}:${selection?.source}:${diff?.diff}`}
+          key={`${selectionKey}:${diff?.diff}`}
           value={diff}
-          loading={loading}
+          loading={loading && !diff}
           error={diffError}
-          disabled={w.blocked}
+          disabled={w.blocked || loading || !diffReady}
           select={
-            selection && selection.source !== "untracked" && diff
+            selection && currentFile && selection.source !== "untracked" && diff
               ? {
                   label:
                     selection.source === "staged"

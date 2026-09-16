@@ -74,6 +74,7 @@ export function DiffView({
     }[];
   }[] = [];
   let path = "",
+    oldPath = "",
     old = 0,
     next = 0,
     hunk: (typeof hunks)[number] | undefined;
@@ -81,9 +82,13 @@ export function DiffView({
     if (line.startsWith("diff --git ")) {
       hunk = undefined;
       path = "";
-    } else if (!hunk && line.startsWith("+++ "))
-      path = line.slice(4).replace(/^b\//, "");
-    else if (line.startsWith("@@ ")) {
+      oldPath = "";
+    } else if (!hunk && line.startsWith("--- "))
+      oldPath = line.slice(4).replace(/^a\//, "");
+    else if (!hunk && line.startsWith("+++ ")) {
+      const nextPath = line.slice(4).replace(/^b\//, "");
+      path = nextPath === "/dev/null" ? oldPath : nextPath;
+    } else if (line.startsWith("@@ ")) {
       const range = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
       old = Number(range?.[1] || 0);
       next = Number(range?.[2] || 0);
