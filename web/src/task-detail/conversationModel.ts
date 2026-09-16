@@ -14,6 +14,7 @@ import {
   splitTraceGroupAt,
   takeTraceGroup,
   traceRun,
+  traceTurnStartAt,
   traceUsage,
 } from "./conversationTraceGroups.ts";
 import type { LiveAgentEvent, PersistedTurnTimes } from "./conversationTurnParts.ts";
@@ -306,6 +307,13 @@ function appendPersistedSession(
     splitFrom = segment.at;
   }
   let turnStartedAt = session.startedAt;
+  // 一段之后的下一个切点（不只看紧邻那一段）：它是这一段认领 trace 时的上界。
+  const nextSplitAt = (index: number): string | undefined => {
+    for (const later of segments.slice(index + 1)) {
+      if (later.kind !== "agent" && later.at && splitPoints.has(later.at)) return later.at;
+    }
+    return undefined;
+  };
   // 这一回合还没说完的那颗气泡（被旁注劈开的上半截），以及「中间只隔着旁注」这件事。
   let openTurn: AgentItem | null = null;
   let acrossAside = false;
@@ -347,7 +355,12 @@ function appendPersistedSession(
       // 自己那几条事件。合并发生在气泡层面（见下面的 mergeTurnChunk），两者不冲突。
       // 没切的旁注一步都不能动它：那一组 trace 还是完整的一份，起点一挪，后面那段正文就
       // 拿着一个根本不存在的键去领，整组当场变成没人认领的兜底气泡。
-      if (splitPoints.has(segment.at ?? "")) turnStartedAt = segment.at ?? turnStartedAt;
+      // 起点取 trace 里实际那一组、而不是 sentinel 自己那一刻：写旁注到真起跑之间隔着
+      // 排队和拉起执行器，差出几秒是常态，照 sentinel 认就同样领不到（见 traceTurnStartAt）。
+      const sentinelAt = segment.at;
+      if (sentinelAt && splitPoints.has(sentinelAt)) {
+        turnStartedAt = traceTurnStartAt(traceGroups, consumedTrace, sentinelAt, nextSplitAt(index)) ?? sentinelAt;
+      }
       if (midTurnAt.has(segment.at ?? "")) acrossAside = !!openTurn;
       else { openTurn = null; acrossAside = false; }
     } else {

@@ -268,30 +268,42 @@ for (const item of agents(mid).concat(agents(lead(leadNote)))) {
 //     aside 标：appendTaskTimeline 写的旁注全带标，这一条也带。拿标当判据就会把它一起挡掉，
 //     审查者的正文退回普通气泡——丢掉 reviewer 身份，验证开始旁注还被排到正文后面
 //     （第 1 轮审查报的）。
+//
+//     旁注跟真起跑之间**差多久都得一样**：服务端是先写这条旁注，再去等会话空闲、动态
+//     import、查冻结、解析执行器、prepareResume，最后才生成 turnStart 落进 trace。几秒钟
+//     是正常路径，不是构造出来的极端值。差出兜底窗口时正文就领不到自己那组事件，工具掉进
+//     一颗空正文兜底气泡，同一轮又被拆成两颗（第 2 轮审查报的）。
 const VERIFY_LEAD_SESSION = "2026-09-16T01:00:00.000Z";
 const VERIFY_LEAD_NOTE_AT = "2026-09-16T01:05:00.000Z";
 const VERIFY_LEAD_TURN_AT = "2026-09-16T01:05:00.400Z";
+const verifyLeadCase = (turnAt, gap) => {
+  const s = { ...session, startedAt: VERIFY_LEAD_SESSION, turnStartedAt: turnAt, endedAt: null };
+  const items = buildConversationItems([{
+    session: s,
+    output: [
+      sentinel({ t: "system", agent: "claude", text: "第 1 轮验证开始：就在这个任务的工作目录里跑。", at: VERIFY_LEAD_NOTE_AT, aside: true }),
+      "第 1 轮结论：verified。",
+    ].join(""),
+    trace: [
+      traced(turnAt, { kind: "run", model: "claude-opus-5", reasoningEffort: "high", verifyRound: 1 }, turnAt),
+      traced("2026-09-16T01:06:00.000Z", { kind: "tool", name: "Bash", detail: "npm test" }, turnAt),
+      traced("2026-09-16T01:07:00.000Z", { kind: "text", text: "第 1 轮结论：verified。" }, turnAt),
+    ],
+  }], [s], []);
+  const [turn] = agents(items);
+  assert.equal(agents(items).length, 1, `验证轮只该有审查者这一颗气泡（起跑晚 ${gap}）`);
+  assert.equal(turn.reviewer?.round, 1, `开头那条「第 N 轮验证开始」是真边界，切掉就丢了审查者身份（起跑晚 ${gap}）`);
+  assert.ok(items.indexOf(events(items)[0]) < items.indexOf(turn),
+    `验证开始旁注开的是下一轮，该排在审查者发言**前面**（起跑晚 ${gap}）`);
+  assert.deepEqual(turn.segments.flatMap((seg) => seg.events).map((e) => e.label), ["Bash"],
+    `审查者该认领自己那一组 trace（起跑晚 ${gap}）`);
+  assert.deepEqual(turn.run, { model: "claude-opus-5", reasoningEffort: "high" }, `run 该跟着 trace 走（起跑晚 ${gap}）`);
+  assert.ok(turn.markdown.includes("第 1 轮结论"), `正文该留在审查者这颗气泡里（起跑晚 ${gap}）`);
+};
+verifyLeadCase(VERIFY_LEAD_TURN_AT, "0.4 秒");
+verifyLeadCase("2026-09-16T01:05:05.000Z", "5 秒");
+verifyLeadCase("2026-09-16T01:05:45.000Z", "45 秒");
 const verifyLeadSession = { ...session, startedAt: VERIFY_LEAD_SESSION, turnStartedAt: VERIFY_LEAD_TURN_AT, endedAt: null };
-const verifyLead = buildConversationItems([{
-  session: verifyLeadSession,
-  output: [
-    sentinel({ t: "system", agent: "claude", text: "第 1 轮验证开始：就在这个任务的工作目录里跑。", at: VERIFY_LEAD_NOTE_AT, aside: true }),
-    "第 1 轮结论：verified。",
-  ].join(""),
-  trace: [
-    traced(VERIFY_LEAD_TURN_AT, { kind: "run", model: "claude-opus-5", reasoningEffort: "high", verifyRound: 1 }, VERIFY_LEAD_TURN_AT),
-    traced("2026-09-16T01:06:00.000Z", { kind: "tool", name: "Bash", detail: "npm test" }, VERIFY_LEAD_TURN_AT),
-    traced("2026-09-16T01:07:00.000Z", { kind: "text", text: "第 1 轮结论：verified。" }, VERIFY_LEAD_TURN_AT),
-  ],
-}], [verifyLeadSession], []);
-const [verifyLeadTurn] = agents(verifyLead);
-assert.equal(agents(verifyLead).length, 1, "验证轮只该有审查者这一颗气泡");
-assert.equal(verifyLeadTurn.reviewer?.round, 1, "开头那条「第 N 轮验证开始」是真边界，切掉就丢了审查者身份");
-assert.ok(verifyLead.indexOf(events(verifyLead)[0]) < verifyLead.indexOf(verifyLeadTurn),
-  "验证开始旁注开的是下一轮，该排在审查者发言**前面**");
-assert.deepEqual(verifyLeadTurn.segments.flatMap((s) => s.events).map((e) => e.label), ["Bash"],
-  "审查者该认领自己那一组 trace");
-assert.deepEqual(verifyLeadTurn.run, { model: "claude-opus-5", reasoningEffort: "high" });
 
 // 16. 两种旁注前后脚落在同一条会话上：先是真边界（验证轮起头），紧接着审查者在自己回合里
 //     一个字没吐就又落了一条任务时间线旁注。后者必须按第 12 条处理（不切），否则审查者
