@@ -262,4 +262,59 @@ for (const item of agents(mid).concat(agents(lead(leadNote)))) {
   assert.ok(Date.parse(item.endedAt) >= Date.parse(item.at), "回合不可能在开始之前就结束");
 }
 
+// 15. 「第 N 轮验证开始」落在 .md 的**第一行**（独立验证、或新会话一上来就先写这条）。
+//     它跟第 12 条长得很像——前面都没有本回合正文——但它是落在两个回合**之间**的真边界，
+//     必须照切不误。判据只能问 trace（下一组正从这一刻起头 = boundary），不能问服务端那个
+//     aside 标：appendTaskTimeline 写的旁注全带标，这一条也带。拿标当判据就会把它一起挡掉，
+//     审查者的正文退回普通气泡——丢掉 reviewer 身份，验证开始旁注还被排到正文后面
+//     （第 1 轮审查报的）。
+const VERIFY_LEAD_SESSION = "2026-09-16T01:00:00.000Z";
+const VERIFY_LEAD_NOTE_AT = "2026-09-16T01:05:00.000Z";
+const VERIFY_LEAD_TURN_AT = "2026-09-16T01:05:00.400Z";
+const verifyLeadSession = { ...session, startedAt: VERIFY_LEAD_SESSION, turnStartedAt: VERIFY_LEAD_TURN_AT, endedAt: null };
+const verifyLead = buildConversationItems([{
+  session: verifyLeadSession,
+  output: [
+    sentinel({ t: "system", agent: "claude", text: "第 1 轮验证开始：就在这个任务的工作目录里跑。", at: VERIFY_LEAD_NOTE_AT, aside: true }),
+    "第 1 轮结论：verified。",
+  ].join(""),
+  trace: [
+    traced(VERIFY_LEAD_TURN_AT, { kind: "run", model: "claude-opus-5", reasoningEffort: "high", verifyRound: 1 }, VERIFY_LEAD_TURN_AT),
+    traced("2026-09-16T01:06:00.000Z", { kind: "tool", name: "Bash", detail: "npm test" }, VERIFY_LEAD_TURN_AT),
+    traced("2026-09-16T01:07:00.000Z", { kind: "text", text: "第 1 轮结论：verified。" }, VERIFY_LEAD_TURN_AT),
+  ],
+}], [verifyLeadSession], []);
+const [verifyLeadTurn] = agents(verifyLead);
+assert.equal(agents(verifyLead).length, 1, "验证轮只该有审查者这一颗气泡");
+assert.equal(verifyLeadTurn.reviewer?.round, 1, "开头那条「第 N 轮验证开始」是真边界，切掉就丢了审查者身份");
+assert.ok(verifyLead.indexOf(events(verifyLead)[0]) < verifyLead.indexOf(verifyLeadTurn),
+  "验证开始旁注开的是下一轮，该排在审查者发言**前面**");
+assert.deepEqual(verifyLeadTurn.segments.flatMap((s) => s.events).map((e) => e.label), ["Bash"],
+  "审查者该认领自己那一组 trace");
+assert.deepEqual(verifyLeadTurn.run, { model: "claude-opus-5", reasoningEffort: "high" });
+
+// 16. 两种旁注前后脚落在同一条会话上：先是真边界（验证轮起头），紧接着审查者在自己回合里
+//     一个字没吐就又落了一条任务时间线旁注。后者必须按第 12 条处理（不切），否则审查者
+//     回合的前半截工具又会掉进一颗兜底气泡。
+const mixed = buildConversationItems([{
+  session: verifyLeadSession,
+  output: [
+    "实现完了。",
+    sentinel({ t: "system", agent: "claude", text: "第 1 轮验证开始：就在这个任务的工作目录里跑。", at: VERIFY_LEAD_NOTE_AT, aside: true }),
+    sentinel({ t: "system", agent: "claude", text: "预览已停止。", at: "2026-09-16T01:06:30.000Z", aside: true }),
+    "第 1 轮结论：verified。",
+  ].join("\n"),
+  trace: [
+    traced("2026-09-16T01:01:00.000Z", { kind: "text", text: "实现完了。" }, VERIFY_LEAD_SESSION),
+    traced(VERIFY_LEAD_TURN_AT, { kind: "run", model: "claude-opus-5", reasoningEffort: "high", verifyRound: 1 }, VERIFY_LEAD_TURN_AT),
+    traced("2026-09-16T01:06:00.000Z", { kind: "tool", name: "Bash", detail: "npm test" }, VERIFY_LEAD_TURN_AT),
+    traced("2026-09-16T01:07:00.000Z", { kind: "tool", name: "Read", detail: "report.md" }, VERIFY_LEAD_TURN_AT),
+    traced("2026-09-16T01:08:00.000Z", { kind: "text", text: "第 1 轮结论：verified。" }, VERIFY_LEAD_TURN_AT),
+  ],
+}], [verifyLeadSession], []);
+assert.equal(agents(mixed).length, 2, "实现者一颗、审查者一颗，不该多出兜底气泡");
+assert.equal(agents(mixed)[1].reviewer?.round, 1);
+assert.deepEqual(agents(mixed)[1].segments.flatMap((s) => s.events).map((e) => e.label), ["Bash", "Read"],
+  "审查者回合被旁注砸中的前半截工具要留在自己这颗气泡里");
+
 console.log("conversation system-note tests passed");

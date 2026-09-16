@@ -237,7 +237,8 @@ function appendPersistedSession(
   // agent 段认领之前：原生引导那一路插话前常常一个字都没吐（agent 正连着跑工具），既没有
   // .md 正文能顺手触发切分，等上一段领走整组之后也已经晚了。
   //
-  // 插话一律是切点。**旁注只在它前后都有本回合正文时才是切点**：
+  // 插话一律是切点。**砸进回合中间的注记（trace 判 inside）只在它前后都有本回合正文时
+  // 才是切点**：
   // - 后面有正文：那种情形下 parseSessionOutput 已经在 sentinel 处把正文切成了两段 agent，
   //   trace 不跟着切，前面那截（旁注常常正好落在 agent 刚吐出一两个字的时候）就会把整组
   //   trace 连同几百次工具调用一起领走，真正写正文的那一段一个事件都拿不到。
@@ -251,8 +252,11 @@ function appendPersistedSession(
   //   同一条会话会在吐字的那一瞬当场变形。不切则整组 trace 完整留给后面那段正文，旁注照旧
   //   排成这一回合的尾注，吐字前后长得一样。
   //
-  // 真回合边界（真人插话、「继续（从中断处）」这类说给 agent 听的系统注记）不受这条约束：
-  // 它们**就是**新一轮的开头，前面没正文时那组 trace 本来就该单独成一颗气泡。
+  // 真回合边界不受这条约束，它们**就是**新一轮的开头，前面没正文时那组 trace 本来就该单独
+  // 成一颗气泡：真人插话、「继续（从中断处）」这类说给 agent 听的系统注记，以及**带着 aside
+  // 标、却落在两个回合之间的**那种——「第 N 轮验证开始」就是（写完旁注才拉起验证回合，
+  // trace 判 boundary）。所以这里认的是 trace 的 inside，不是服务端的 aside 标：拿标当判据
+  // 会把这类真边界一起挡掉，审查者的正文退回普通气泡、连 reviewer 身份都丢了（第 1 轮审查报的）。
   const asideAt = new Set<string>();
   const midTurnAt = new Set<string>();
   const splitPoints = new Set<string>();
@@ -272,20 +276,25 @@ function appendPersistedSession(
       return;
     }
     const placement = notePlacement(traceGroups, segment.at);
-    const aside = placement === "inside" || segment.aside === true;
+    // **砸进某一回合中间**，判据只认 trace。服务端那个 aside 标管的是另一头：它覆盖全部
+    // appendTaskTimeline 旁注，连落在两回合**之间**的「第 N 轮验证开始」都带标——拿标去判
+    // 「切不切」，就会把那种真边界一起挡掉（第 1 轮审查报的）。
+    const midTurn = placement === "inside";
     if (segment.at) {
-      if (aside) asideAt.add(segment.at);
+      if (midTurn || segment.aside === true) asideAt.add(segment.at);
       if (!(closedTurn && proseSinceTurnStart)
         && verifyNoteOf(normalizeSessionNoteText(segment.text))?.phase !== "start"
-        && (placement === "inside" || (placement === "unknown" && segment.aside))) {
+        && (midTurn || (placement === "unknown" && segment.aside))) {
         midTurnAt.add(segment.at);
       }
-      if (segments.slice(index + 1).some((later) => later.kind === "agent") && (!aside || proseSinceTurnStart)) {
+      if (segments.slice(index + 1).some((later) => later.kind === "agent")
+        && (!midTurn || proseSinceTurnStart)) {
         splitPoints.add(segment.at);
       }
     }
-    // 说给 agent 听的系统注记是回合边界，重置这两样；旁注不是边界，一样都不动。
-    if (!aside) {
+    // 只有「砸进回合中间」那种不开新一轮；其余的（trace 认下的边界、说给 agent 听的注记、
+    // trace 哑了没话说的）都按新一轮起头算，两样证据一起归零。
+    if (!midTurn) {
       closedTurn = true;
       proseSinceTurnStart = false;
     }
