@@ -20,6 +20,8 @@ const items: ConversationItem[] = [
   reply("a1", "方案 A 实现简单，适合先做原型。"),
   { kind: "user", id: "u2", text: "改为方案 C（后续内容）", attachments: ["/tmp/later.png"] },
   reply("a2", "方案 C 的后续结论"), reply("streaming", "正在生成的回复", false),
+  // 被引导打断的半截：有结束时刻，但话没说完，不该挂派生入口。
+  { ...reply("steered", "刚查到一半就被打断的回复"), interrupted: true },
 ];
 
 function IncompleteConversation() {
