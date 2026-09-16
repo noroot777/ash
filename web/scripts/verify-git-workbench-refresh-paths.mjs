@@ -198,13 +198,20 @@ try {
   });
 
   let diffControl = null;
-  const armDelay = () => {
+  const armDelay = (persistent = false) => {
     let startedResolve;
     let releaseResolve;
     const started = new Promise(resolve => { startedResolve = resolve; });
     const gate = new Promise(resolve => { releaseResolve = resolve; });
-    diffControl = { kind: "delay", startedResolve, gate };
-    return { started, release: releaseResolve };
+    const control = { kind: "delay", startedResolve, gate, persistent };
+    diffControl = control;
+    return {
+      started,
+      release: () => {
+        if (diffControl === control) diffControl = null;
+        releaseResolve();
+      },
+    };
   };
   const armFailure = () => {
     let seenResolve;
@@ -219,7 +226,7 @@ try {
       return;
     }
     const control = diffControl;
-    diffControl = null;
+    if (!control.persistent) diffControl = null;
     if (control.kind === "delay") {
       control.startedResolve();
       await control.gate;
@@ -352,7 +359,7 @@ try {
   await selectedB.click();
 
   // Staging another file through the UI keeps pick.txt active and selected.
-  const delayedAfterWrite = armDelay();
+  const delayedAfterWrite = armDelay(true);
   const pickAfterOther = waitForPickDiff();
   const actionAfterOther = page.waitForResponse(response =>
     response.request().method() === "POST" && /\/git\/workbench\/actions$/.test(response.url()),

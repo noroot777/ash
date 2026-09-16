@@ -23,7 +23,7 @@ export function DiffView({
     source: "staged" | "unstaged";
     label: string;
     onApply: (lines: number[]) => void;
-    onDiscard?: (lines: number[], scope: "hunk" | "selection") => void;
+    onDiscard?: (lines: number[], scope: "hunk" | "selection", onSuccess: () => void) => void;
   };
   actionsDisabled?: boolean;
   selectionDisabled?: boolean;
@@ -32,6 +32,10 @@ export function DiffView({
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [previousDiff, setPreviousDiff] = useState(value?.diff);
   const [selectionCleared, setSelectionCleared] = useState(false);
+  const clearCompletedSelection = () => {
+    setSelected(new Set());
+    setSelectionCleared(false);
+  };
   if (previousDiff !== value?.diff) {
     setPreviousDiff(value?.diff);
     if (selected.size > 0) setSelectionCleared(true);
@@ -199,7 +203,7 @@ export function DiffView({
                           <button
                             className="mini-btn tone-danger"
                             disabled={actionsDisabled || !indices.length || selected.size > 0}
-                            onClick={() => select.onDiscard?.(indices, "hunk")}
+                            onClick={() => select.onDiscard?.(indices, "hunk", clearCompletedSelection)}
                           >
                             <Trash size={12} />
                             丢弃此块
@@ -290,7 +294,7 @@ export function DiffView({
               <button
                 className="mini-btn tone-danger"
                 disabled={actionsDisabled || !selected.size}
-                onClick={() => select.onDiscard?.([...selected], "selection")}
+                onClick={() => select.onDiscard?.([...selected], "selection", clearCompletedSelection)}
               >
                 <Trash size={12} />
                 丢弃所选改动

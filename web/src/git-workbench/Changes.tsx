@@ -50,12 +50,13 @@ export function Changes({
   const [diffResult, setDiffResult] = useState<{
     selectionKey: string;
     version: string;
-    revision: number;
+    revision: number | null;
     value: GitDiff;
   } | null>(null);
   const selectionKey = JSON.stringify([projectId, data.root, selection?.source, selection?.path]);
   const diff = diffResult?.selectionKey === selectionKey ? diffResult.value : null;
-  const diffReady = !!diff && diffResult?.version === data.version;
+  const diffReady = !!diff && diffResult?.version === data.version
+    && diffResult.revision === w.revision;
   const [diffError, setDiffError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
@@ -89,11 +90,12 @@ export function Changes({
       return;
     }
     setLoading(true);
-    if (w.busy) return;
     workbenchApi
       .diff(projectId, data.root, selection)
       .then((value) => {
-        if (alive) setDiffResult({ selectionKey, version: data.version, revision: w.revision, value });
+        if (alive) setDiffResult({
+          selectionKey, version: data.version, revision: w.busy ? null : w.revision, value,
+        });
       })
       .catch((error: Error) => {
         if (alive) setDiffError(error.message);
@@ -420,7 +422,7 @@ export function Changes({
           error={diffError}
           actionsDisabled={w.blocked || loading || !diffReady}
           selectionDisabled={w.blocked || diffResult?.revision !== w.revision}
-          refreshing={!!diff && (loading || !diffReady)}
+          refreshing={!!diff && !w.busy && (loading || !diffReady)}
           select={
             selection && currentFile && selection.source !== "untracked" && diff
               ? {
@@ -431,11 +433,12 @@ export function Changes({
                       : "暂存所选改动",
                   onDiscard:
                     selection.source === "unstaged"
-                      ? (lines, scope) =>
+                      ? (lines, scope, onSuccess) =>
                           ask({
                             title: scope === "selection" ? "丢弃所选改动" : "丢弃这个改动块",
                             danger: true,
                             typed: "丢弃",
+                            onSuccess,
                             message: `${selection.path}：${scope === "selection" ? `逐行撤销勾选的 ${lines.length} 行差异。${discardLineGuidance}` : "还原这个改动块内的全部改动。"}保留其他未暂存改动及暂存区。未提交内容无法从历史备份找回。`,
                             action: () => ({
                               kind: "discard-patch",
